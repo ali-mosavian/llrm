@@ -16,8 +16,17 @@
 //! instructions read that stand outside it, plus the phis of its header, plus
 //! one register to work in. The room left under the register count the target
 //! states (`Tti::number_of_gpr_registers`) is what promotions may take, one
-//! each, the most-accessed locations first. Floating values are not counted:
-//! they live in the target's float file.
+//! each, the most-accessed locations first. Floating values are not counted
+//! there: they live in the target's float file.
+//!
+//! DEVIATE LP1-FP (owner x86-m32, exit 2026-11-30): the same count over the
+//! float file prices the hoisting of a float load
+//! (`Tti::licm_float_register_limit`, the x87 stack's eight). LLVM's LICM
+//! hoists every invariant load; GCC's `loop-invariant.cc` with
+//! `-fira-loop-pressure` (-O3) moves an invariant only while its class has
+//! registers left. x_ld_matmul -O3: twelve `A[i][k]` hoisted across the `j`
+//! loop on an eight-slot stack cost ten `fstp` and ten `fxch` per iteration,
+//! where reading the element in the loop is one `fld`.
 
 use llrm_mir::dense::IdSet;
 use llrm_mir::module::{InstId, Operand, ValueId};
@@ -30,6 +39,13 @@ use super::LoopCtx;
 #[cfg(test)]
 thread_local! {
     pub static COUNTED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The register file a held value takes.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Class {
+    General,
+    Float,
 }
 
 /// One loop's held values.
@@ -47,9 +63,23 @@ impl Pressure {
         outer: &Outer,
         ctx: &LoopCtx,
     ) -> Option<Self> {
+        Self::of_class(unit, outer, ctx, Class::General)
+    }
+
+    /// [`Pressure::of`] over the values of one register file.
+    pub fn of_class(
+        unit: &passes::Unit,
+        outer: &Outer,
+        ctx: &LoopCtx,
+        class: Class,
+    ) -> Option<Self> {
         #[cfg(test)]
         COUNTED.with(|count| count.set(count.get() + 1));
-        let limit = outer.target().tti()?.licm_register_limit()? as usize;
+        let tti = outer.target().tti()?;
+        let limit = match class {
+            Class::General => tti.licm_register_limit()?,
+            Class::Float => tti.licm_float_register_limit()?,
+        } as usize;
         if limit == 0 {
             return None;
         }
@@ -60,7 +90,7 @@ impl Pressure {
         let mut count = |inst: InstId| {
             for operand in &unit.function.instruction(inst).operands {
                 if let Operand::Value(value) = *operand
-                    && counted(unit, value)
+                    && counted(unit, value, class)
                 {
                     if reads.insert(value) {
                         order.push(value);
@@ -75,7 +105,8 @@ impl Pressure {
                     continue;
                 }
                 let data = unit.function.instruction(inst);
-                if block == header && data.opcode == Opcode::Phi && data.result.is_some_and(|r| counted(unit, r)) {
+                if block == header && data.opcode == Opcode::Phi && data.result.is_some_and(|r| counted(unit, r, class))
+                {
                     phis += 1;
                 }
                 count(inst);
@@ -114,11 +145,24 @@ pub fn counts_type(
     }
 }
 
-/// Whether `value` takes a general register: an integer wider than a flag, or
-/// a pointer.
+/// Whether a value of type `ty` takes a register of the float file.
+pub fn counts_float_type(
+    unit: &passes::Unit,
+    ty: llrm_mir::types::TypeId,
+) -> bool {
+    matches!(unit.context.types.get(ty), Type::Float(_))
+}
+
+/// Whether `value` takes a register of `class`: a general one for an integer
+/// wider than a flag or a pointer, a float one for a floating value.
 fn counted(
     unit: &passes::Unit,
     value: ValueId,
+    class: Class,
 ) -> bool {
-    counts_type(unit, unit.function.value(value).ty)
+    let ty = unit.function.value(value).ty;
+    match class {
+        Class::General => counts_type(unit, ty),
+        Class::Float => counts_float_type(unit, ty),
+    }
 }

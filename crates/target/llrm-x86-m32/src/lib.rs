@@ -242,6 +242,9 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         jump_threading_latch_trial_at_size: true,
         switch_lookup_trial_at_size: true,
         jump_table_size_growth_ratio: Some(300),
+        // The x87 stack: the pin's RFP80 class has FP0..FP6, the eighth slot is
+        // the stackifier's.
+        licm_float_register_limit: Some(7),
         loop_idiom_copy_trial_at_size: true,
         // DEVIATE OB1 (owner w12, exit 2026-11-27, `unrollbound.rs`): gcc
         // completely peels a loop whose trips the object it indexes bounds

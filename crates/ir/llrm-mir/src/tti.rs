@@ -3172,6 +3172,13 @@ pub trait Tti {
         Some(self.number_of_gpr_registers())
     }
 
+    /// DEVIATE LP1-FP: the values LICM may hold in the float file across a
+    /// loop before it stops hoisting float loads (`licm/pressure.rs`); `None`:
+    /// no limit, as the pin.
+    fn licm_float_register_limit(&self) -> Option<u32> {
+        None
+    }
+
     /// DEVIATE IND-MASK (beyond the pin; exit 2026-11-24): whether `indvars`
     /// also widens a counter of an illegal narrow width whose chain is
     /// masked by a constant and then extended (`(i*5+3)&1023` indexing a

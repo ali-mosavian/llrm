@@ -2828,3 +2828,96 @@ loop:\n  %i = phi i64 [ 0, %entry ], [ %i.next, %loop ]\n\
 exit:\n  ret void\n}\n";
     let _ = decided(text);
 }
+
+/// An i486 whose float file LICM may fill with `float_limit` hoisted loads.
+struct FloatFile {
+    inner: llrm_mir::target::Neutral,
+    float_limit: Option<u32>,
+}
+
+impl llrm_mir::target::Machine for FloatFile {
+    fn tti(&self) -> Option<std::rc::Rc<dyn llrm_mir::tti::Tti>> {
+        let tuning =
+            llrm_mir::target::Tuning { licm_float_register_limit: self.float_limit, ..llrm_mir::target::Tuning::PIN };
+        Some(std::rc::Rc::new(llrm_x86::tti::X86::of_cpu("i486").unwrap().with_tuning(tuning)))
+    }
+
+    fn foreign_span(
+        &self,
+        selectors: (i64, i64),
+        offsets: (i64, i64),
+        width: i64,
+    ) -> Option<(i64, i64)> {
+        self.inner.foreign_span(selectors, offsets, width)
+    }
+
+    fn spaces(&self) -> llrm_mir::spaces::Spaces {
+        self.inner.spaces()
+    }
+
+    fn costs(&self) -> llrm_mir::target::OperationCosts {
+        self.inner.costs()
+    }
+
+    fn registers(&self) -> i64 {
+        self.inner.registers()
+    }
+
+    fn call_registers(&self) -> i64 {
+        self.inner.call_registers()
+    }
+
+    fn address_forms(&self) -> Vec<llrm_mir::target::AddressForm> {
+        self.inner.address_forms()
+    }
+}
+
+/// x_ld_matmul -O3 m32: twelve `A[i][k]` long doubles, invariant in the `j`
+/// loop, were all hoisted across it onto the eight-slot x87 stack: ten `fstp`
+/// and ten `fxch` an iteration, 96,600 clk against gcc's 84,571 (which reads
+/// them in the loop). A float load is hoisted only while the float file has
+/// room for it.
+#[test]
+fn test_float_loads_are_hoisted_only_while_the_float_file_has_room() {
+    let mut body = String::new();
+    let mut sum = String::from("0.0");
+    for k in 0..12 {
+        body += &format!(
+            "  %p{k} = getelementptr i8, ptr @a, i32 {off}\n  %a{k} = load x86_fp80, ptr %p{k}\n  %q{k} = getelementptr x86_fp80, ptr @b, i32 %i\n  %b{k} = load x86_fp80, ptr %q{k}\n  %m{k} = fmul x86_fp80 %a{k}, %b{k}\n  %t{k} = fadd x86_fp80 {sum}, %m{k}\n",
+            off = k * 12
+        );
+        sum = format!("%t{k}");
+    }
+    let text = format!(
+        "target datalayout = \"e-p:32:32-i64:32-f80:32-n8:16:32\"
+
+@a = global [12 x x86_fp80] zeroinitializer
+@b = global [12 x x86_fp80] zeroinitializer
+
+define x86_fp80 @f(i32 %n) {{
+b0:
+  br label %b1
+
+b1:
+  %i = phi i32 [ 0, %b0 ], [ %i1, %b1 ]
+  %s = phi x86_fp80 [ 0.0, %b0 ], [ %e, %b1 ]
+{body}  %e = fadd x86_fp80 %s, {sum}
+  %i1 = add i32 %i, 1
+  %c = icmp slt i32 %i1, %n
+  br i1 %c, label %b1, label %b2
+
+b2:
+  ret x86_fp80 %e
+}}
+"
+    );
+    let hoisted = |float_limit| {
+        named_on(&text, FloatFile { inner: llrm_mir::target::Neutral, float_limit }, |all| all.hoisted.clone())
+            .iter()
+            .filter(|name| name.starts_with('a'))
+            .count()
+    };
+    assert_eq!(hoisted(None), 12, "premise: with no float limit every invariant load goes");
+    let held = hoisted(Some(8));
+    assert!(held < 8, "{held} of 12 loads hoisted onto an eight-slot stack");
+}

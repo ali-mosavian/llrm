@@ -475,6 +475,11 @@ pub struct Tuning {
     /// `getMinimumJumpTableDensity`, in percent, at every level; none: the
     /// pin's 10 (40 when tuned for size).
     pub min_jump_table_density: Option<u64>,
+    /// DEVIATE LP1-FP (owner x86-m32, exit 2026-11-30): the float registers
+    /// LICM may fill with hoisted float loads
+    /// (`Tti::licm_float_register_limit`); none: it hoists every invariant
+    /// load, as the pin.
+    pub licm_float_register_limit: Option<u32>,
     /// DEVIATE SWITCH-SIZE-RATIO (owner x86-m32, exit 2026-11-30): GCC's
     /// `jump-table-max-growth-ratio-for-size`, in percent: tuned for size, a
     /// jump table's range may be at most this share of the compares its
@@ -883,6 +888,7 @@ impl Tuning {
         cold_site_ignores_sinks: false,
         read_only_in_code: false,
         min_jump_table_density: None,
+        licm_float_register_limit: None,
         jump_table_size_growth_ratio: None,
         split_merged_conditions: false,
         merged_condition_clocks: 0,
