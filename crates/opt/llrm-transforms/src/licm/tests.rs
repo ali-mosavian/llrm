@@ -2877,6 +2877,6 @@ b2:
         .count()
     };
     assert_eq!(hoisted(None), 12, "premise: with no float limit every invariant load goes");
-    let held = hoisted(Some(8));
-    assert!(held < 8, "{held} of 12 loads hoisted onto an eight-slot stack");
+    let held = hoisted(Some(5));
+    assert!(held < 5, "{held} of 12 loads hoisted with five float values allowed across the loop");
 }

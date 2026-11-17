@@ -21,7 +21,9 @@
 //!
 //! DEVIATE LP1-FP (owner x86-m32, exit 2026-11-30): the same count over the
 //! float file prices the hoisting of a float load
-//! (`Tti::licm_float_register_limit`, the x87 stack's eight). LLVM's LICM
+//! (`Tti::licm_float_register_limit`: the values a loop may hold across its
+//! trips, the x87 stack's eight slots less the three an operation's two
+//! operands and result take, as `MachineLICM`'s `CARRY_RESERVE`). LLVM's LICM
 //! hoists every invariant load; GCC's `loop-invariant.cc` with
 //! `-fira-loop-pressure` (-O3) moves an invariant only while its class has
 //! registers left. x_ld_matmul -O3: twelve `A[i][k]` hoisted across the `j`
@@ -51,6 +53,10 @@ pub enum Class {
 /// One loop's held values.
 pub struct Pressure {
     limit: usize,
+    /// What the loop needs besides what it holds: one register to work in on
+    /// the general file; none on the float file, whose limit already leaves
+    /// the operands' slots.
+    work: usize,
     phis: usize,
     /// The values defined outside the loop that it reads.
     held: IdSet<ValueId>,
@@ -123,13 +129,13 @@ impl Pressure {
         for value in order.into_iter().filter(|&value| ctx.is_loop_invariant(Operand::Value(value))) {
             held.insert(value);
         }
-        Some(Self { limit, phis, held })
+        Some(Self { limit, work: usize::from(class == Class::General), phis, held })
     }
 
     /// How many more values the loop can hold in registers: what the target
     /// has, less the invariants, the header phis and the one to work in.
     pub fn room(&self) -> usize {
-        self.limit.saturating_sub(self.held.len() + self.phis + 1)
+        self.limit.saturating_sub(self.held.len() + self.phis + self.work)
     }
 }
 

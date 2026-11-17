@@ -723,7 +723,7 @@ impl GvnPass<'_> {
     /// across every trip; LLVM's GVN prices no register, and the x87 stack has
     /// eight. gcc's `tree-ssa-pre.cc` does not carry a load around a loop it
     /// has not hoisted. The room is the target's `licm_float_register_limit`
-    /// less the float phis the header has and one to work in.
+    /// less the float phis the header has.
     fn float_carry_fits(
         &mut self,
         load: InstId,
@@ -770,7 +770,7 @@ impl GvnPass<'_> {
                 })
                 .count(),
         };
-        if held + 1 >= limit as usize {
+        if held + 1 > limit as usize {
             return false;
         }
         self.carried_floats.insert(header, held + 1);

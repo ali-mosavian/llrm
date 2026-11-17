@@ -242,10 +242,12 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         jump_threading_latch_trial_at_size: true,
         switch_lookup_trial_at_size: true,
         jump_table_size_growth_ratio: Some(300),
-        // The x87 stack's seven allocatable slots less one for the stackifier's
-        // exchange: 7 loses x_matmul_f's O3 clocks bar (64,485 against gcc's
-        // 61,005), 6 and under keep it (61,150).
-        licm_float_register_limit: Some(6),
+        // The x87 stack has eight slots; an operation in a loop needs three of
+        // them (its two operands and its result: `CARRY_RESERVE` of
+        // `machinelicm.rs`), so five values may cross the loop. The x_matmul_f
+        // O3 clocks bar (gcc 61,005) is kept at 5 (61,150) and lost at 6
+        // (64,485): the machine count and the measured flip agree.
+        licm_float_register_limit: Some(5),
         loop_idiom_copy_trial_at_size: true,
         // DEVIATE OB1 (owner w12, exit 2026-11-27, `unrollbound.rs`): gcc
         // completely peels a loop whose trips the object it indexes bounds

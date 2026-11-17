@@ -616,6 +616,9 @@ b4:
         header.matches("load double").count()
     };
     let free = loads_left(None);
-    let priced = loads_left(Some(6));
-    assert!(priced > free, "{priced} loads stay in the loop with a six-slot float file, {free} with none");
+    let priced = loads_left(Some(5));
+    assert!(
+        priced > free,
+        "{priced} loads stay in the loop with five float values allowed across the loop, {free} with none"
+    );
 }
