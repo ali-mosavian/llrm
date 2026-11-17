@@ -653,7 +653,7 @@ pub fn lower_vector_shuffle(
     // `SVN->isSplat()`: every defined lane picks the one lane.
     let lane = mask.iter().copied().find(|&lane| lane >= 0).unwrap_or(0);
     if !mask.iter().all(|&one| one < 0 || one == lane) {
-        return super::permute::lower(dag, op);
+        return super::permute::lower(dag, op).or_else(|| generate_tbl(dag, op));
     }
     // "If this is undef splat, generate it via "just" vdup, if possible."
     if lane == 0 && dag.opcode(v1) == ISD::ScalarToVector {
@@ -1096,4 +1096,69 @@ pub fn lower_zero_extend_vector_inreg(
     let zeros = dag.get_splat_build_vector(source_vt, zero);
     let zipped = dag.get_node(ISD::Target(aarch64_isd::ZIP1), source_vt, &[source, zeros]);
     Some(dag.get_node(ISD::BitCast, vt, &[zipped]))
+}
+
+/// Whether `value` is zeros (`isZerosVector`, as far as a `BUILD_VECTOR`).
+fn is_zeros_vector(
+    dag: &SelectionDAG,
+    value: SDValue,
+) -> bool {
+    dag.opcode(value) == ISD::BuildVector && dag.is_build_vector_all(value, false)
+}
+
+/// `GenerateTBL`
+/// ([AArch64ISelLowering.cpp#L15828](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L15828)):
+/// "Check to see if we can use the TBL instruction": a shuffle of bytes by a
+/// constant index vector, `tbl1` where the second operand is undef or zero
+/// (it fills an index past the table with 0). DEVIATE TBL1 (owner w11, exit
+/// 2026-11-27): the two-table `tbl2` needs the tuple register the arm64
+/// register-tuple work (#10201) brings; a shuffle of two vectors is declined.
+pub fn generate_tbl(
+    dag: &mut SelectionDAG,
+    op: SDValue,
+) -> Option<SDValue> {
+    use llrm_dagisel::generated::aarch64::ids::opcode as ids;
+    let vt = dag.value_type(op);
+    if !matches!(vt.size_in_bits(), 64 | 128) || dag.value_type(dag.operand(op, 0)) != vt {
+        return None;
+    }
+    let (mut v1, mut v2) = (dag.operand(op, 0), dag.operand(op, 1));
+    let bytes_per_element = vt.element().size_in_bits() / 8;
+    let mut swap = false;
+    if dag.is_undef(v1) || is_zeros_vector(dag, v1) {
+        std::mem::swap(&mut v1, &mut v2);
+        swap = true;
+    }
+    if !(dag.is_undef(v2) || is_zeros_vector(dag, v2)) {
+        return None;
+    }
+    let index_len: u32 = if vt.size_in_bits() == 128 { 16 } else { 8 };
+    let mut indices = Vec::with_capacity(index_len as usize);
+    for &lane in &dag.shuffle_mask(op).to_vec() {
+        for byte in 0..bytes_per_element {
+            // "unsigned Offset = Byte + Val * BytesPerElt": an undefined
+            // lane wraps out of range.
+            let mut offset = byte.wrapping_add((lane as u32).wrapping_mul(bytes_per_element));
+            if swap {
+                offset =
+                    if offset < index_len { offset.wrapping_add(index_len) } else { offset.wrapping_sub(index_len) };
+            }
+            if offset >= index_len {
+                offset = 255;
+            }
+            indices.push(offset);
+        }
+    }
+    let index_vt = EVT::vector(MVT::I8, vt.size_in_bits() / 8);
+    let lanes: Vec<SDValue> = indices.iter().map(|&at| dag.get_constant(u128::from(at & 0xff), EVT::I8)).collect();
+    let mask = dag.get_build_vector(index_vt, &lanes);
+    let table = dag.get_node(ISD::BitCast, index_vt, &[v1]);
+    let (code, table) = if index_len == 16 {
+        (ids::TBLv16i8One, table)
+    } else {
+        let wide = dag.get_node(ISD::ConcatVectors, EVT::vector(MVT::I8, 16), &[table, table]);
+        (ids::TBLv8i8One, wide)
+    };
+    let shuffled = dag.get_node(ISD::Machine(u32::from(code)), index_vt, &[table, mask]);
+    Some(dag.get_node(ISD::BitCast, vt, &[shuffled]))
 }
