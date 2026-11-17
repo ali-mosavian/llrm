@@ -201,7 +201,9 @@ fn _facts(module: &model::Module) -> Result<(), InvalidHIR> {
         }
         let function = |id: i64| index.function(id);
         let found = match subject {
-            Subject::Callable(id) => callables.contains(&id),
+            // A routine called, or one the module defines (its entry, which no
+            // statement calls).
+            Subject::Callable(id) => callables.contains(&id) || function(id).is_some(),
             Subject::Param { function: id, index } => {
                 function(id).is_some_and(|one| (0..one.parameters.len() as i64).contains(&index))
             }
