@@ -1177,7 +1177,9 @@ fn fold_icmp_shr_constant(
         return None;
     }
     // If the bits shifted out are known zero, compare the unshifted value.
-    if exact {
+    // DEVIATE: the pin does so for any exact shift; with another user the
+    // shift stays, and folding keeps `x` live beside it.
+    if exact && has_one_use(c, shr) {
         let bound = c.int(ty, shl(value));
         return Some(new_icmp(c, inst, pred, x, bound));
     }

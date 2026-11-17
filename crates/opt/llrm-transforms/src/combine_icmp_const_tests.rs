@@ -371,3 +371,17 @@ fn an_add_of_a_negated_operand_compared_with_zero_is_a_compare_of_the_operands()
         &["icmp eq i8 %a, %b"],
     );
 }
+
+/// DEVIATE from `foldICmpShrConstant`: an exact shift another user needs stays
+/// the compare's operand. Folded to `x == 2`, the compare held `x` live beside
+/// the shifted value: m32 x_collatz's loop copied `x` twice a trip, 136,825 clk
+/// against 119,524.
+#[test]
+fn an_exact_shift_with_another_user_is_still_what_the_compare_tests() {
+    check(
+        "i32 %x, ptr %p",
+        "  %s = lshr exact i32 %x, 1\n  store i32 %s, ptr %p\n  %r = icmp eq i32 %s, 1\n",
+        &["icmp eq i32 %s, 1"],
+    );
+    check("i32 %x", "  %s = lshr exact i32 %x, 1\n  %r = icmp eq i32 %s, 1\n", &["icmp eq i32 %x, 2"]);
+}
