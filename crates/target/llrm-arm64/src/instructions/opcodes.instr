@@ -495,6 +495,8 @@ ZIP1v2i64                  binary   x/x,x         -                        fp_ar
 ZIP1v8i8                  binary   x/x,x         -                        fp_arith   - - - -/-                ZIP1v8i8
 ZIP1v4i16                 binary   x/x,x         -                        fp_arith   - - - -/-                ZIP1v4i16
 ZIP1v2i32                 binary   x/x,x         -                        fp_arith   - - - -/-                ZIP1v2i32
+TBLv16i8One               binary   x/x,x         -                        fp_arith   - - - -/-                TBLv16i8One
+TBLv8i8One                binary   x/x,x         -                        fp_arith   - - - -/-                TBLv8i8One
 ZIP2v16i8                  binary   x/x,x         -                        fp_arith   - - - -/-                ZIP2v16i8
 ZIP2v8i16                  binary   x/x,x         -                        fp_arith   - - - -/-                ZIP2v8i16
 ZIP2v4i32                  binary   x/x,x         -                        fp_arith   - - - -/-                ZIP2v4i32

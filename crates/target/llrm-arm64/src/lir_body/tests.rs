@@ -314,6 +314,9 @@ pub(super) fn instructions() -> Vec<Inst> {
             out.push(Inst::VectorPermute { kind, lanes, rd: v(0), rn: v(1), rm: v(2) });
         }
     }
+    for lanes in [Arrangement::B16, Arrangement::B8] {
+        out.push(Inst::VectorTable { lanes, rd: v(0), rn: v(1), rm: v(2) });
+    }
     for lanes in [Arrangement::B16, Arrangement::H8, Arrangement::S4, Arrangement::D2] {
         out.push(Inst::VectorInsGpr { lanes, rd: v(0), rn: Gpr(3), index: 1 });
         out.push(Inst::VectorInsLane { lanes, rd: v(0), rn: v(1), index: 1, src: 0 });
@@ -459,6 +462,7 @@ fn variant(inst: &Inst) -> &'static str {
         Inst::VectorMulLane { .. } => "VectorMulLane",
         Inst::VectorNarrow { .. } => "VectorNarrow",
         Inst::VectorPermute { .. } => "VectorPermute",
+        Inst::VectorTable { .. } => "VectorTable",
         Inst::VectorDupScalar { .. } => "VectorDupScalar",
         Inst::VectorReduce { .. } => "VectorReduce",
         Inst::VectorDupLane { .. } => "VectorDupLane",
@@ -546,6 +550,7 @@ const ALL: [&str; 80] = [
     "VectorMulLane",
     "VectorNarrow",
     "VectorPermute",
+    "VectorTable",
     "VectorDupScalar",
     "VectorReduce",
     "VectorDupLane",

@@ -411,6 +411,9 @@ fn branches() {
             all.push(Inst::VectorPermute { kind, lanes, rd: Vreg(5), rn: Vreg(17), rm: Vreg(30) });
         }
     }
+    for lanes in [Arrangement::B16, Arrangement::B8] {
+        all.push(Inst::VectorTable { lanes, rd: Vreg(5), rn: Vreg(17), rm: Vreg(30) });
+    }
     for (lanes, index) in [(Arrangement::S4, 3), (Arrangement::S4, 1), (Arrangement::D2, 1), (Arrangement::D2, 0)] {
         all.push(Inst::VectorFmulLane { lanes, rd: Vreg(5), rn: Vreg(6), rm: Vreg(17), index });
         all.push(Inst::VectorMulLane { rd: Vreg(5), rn: Vreg(6), rm: Vreg(17), index });

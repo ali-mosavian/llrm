@@ -1732,6 +1732,15 @@ pub enum Inst {
         rn: Vreg,
         rm: Vreg,
     },
+    /// `tbl v.16b, {v.16b}, v.16b` (`TBLv16i8One`, `TBLv8i8One`): each byte of
+    /// `rm` indexes the table `rn`; an index past 15 is zero. `lanes` is
+    /// `B16` or `B8` (the indices' and the result's).
+    VectorTable {
+        lanes: Arrangement,
+        rd: Vreg,
+        rn: Vreg,
+        rm: Vreg,
+    },
     /// `xtn{2} v.8b, v.8h`: each lane of `rn` (`wide`'s lanes) halved, into
     /// the low half of `rd` or, `high`, its top half (`rd` is then read too).
     /// `shift`: `shrn{2}`, each lane shifted right by it first.

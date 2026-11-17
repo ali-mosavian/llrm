@@ -472,6 +472,10 @@ impl fmt::Display for Inst {
                 let s = lanes.suffix();
                 write!(out, "{name} v{}.{s}, v{}.{s}, v{}.{s}", rd.0, rn.0, rm.0)
             }
+            Inst::VectorTable { lanes, rd, rn, rm } => {
+                let s = lanes.suffix();
+                write!(out, "tbl v{}.{s}, {{v{}.16b}}, v{}.{s}", rd.0, rn.0, rm.0)
+            }
             Inst::VectorNarrow { high, shift, wide, rd, rn } => {
                 let two = if *high { "2" } else { "" };
                 let (name, amount) = match shift {
@@ -524,7 +528,8 @@ impl fmt::Display for Inst {
             Inst::VectorLoadLane { lanes, rt, index, base } => {
                 write!(out, "ld1 {{ v{}.{} }}[{index}], [{}]", rt.0, lane_letter(*lanes), gpr(*base, Width::X, true))
             }
-            Inst::VectorLoadStructure { count, lanes, rt, base } | Inst::VectorStoreStructure { count, lanes, rt, base } => {
+            Inst::VectorLoadStructure { count, lanes, rt, base }
+            | Inst::VectorStoreStructure { count, lanes, rt, base } => {
                 let name = if matches!(self, Inst::VectorLoadStructure { .. }) { "ld" } else { "st" };
                 let list: Vec<String> =
                     (0..u32::from(*count)).map(|at| format!("v{}.{}", rt.in_run(at).0, lanes.suffix())).collect();

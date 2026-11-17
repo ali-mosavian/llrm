@@ -266,6 +266,13 @@ pub(super) fn to(inst: &Inst) -> Option<Semantics> {
             vec![vreg_loc(*rd, 128), vreg_loc(*rn, 128), vreg_loc(*rm, 128), imm(i64::from(*index))],
             None,
         ),
+        Inst::VectorTable { lanes, rd, rn, rm } => semantics(
+            Operation::Binary,
+            table_name(*lanes),
+            vec![vreg_loc(*rd, 128)],
+            vec![vreg_loc(*rn, 128), vreg_loc(*rm, 128)],
+            None,
+        ),
         Inst::VectorPermute { kind, lanes, rd, rn, rm } => semantics(
             Operation::Binary,
             permute_name(*kind, *lanes),
@@ -588,6 +595,10 @@ fn vector_fp_name(
 }
 
 /// `UZP1v8i16`: the pin's name of a permute.
+fn table_name(lanes: Arrangement) -> &'static str {
+    if lanes == Arrangement::B8 { "TBLv8i8One" } else { "TBLv16i8One" }
+}
+
 fn permute_name(
     kind: Permute,
     lanes: Arrangement,
@@ -807,6 +818,11 @@ pub(super) fn back(what: &Semantics) -> Option<Inst> {
                 rd: vreg_of(dest?),
                 rn: vreg_of(&s[at]),
             });
+        }
+    }
+    for lanes in [Arrangement::B16, Arrangement::B8] {
+        if name == table_name(lanes) {
+            return Some(Inst::VectorTable { lanes, rd: vreg_of(dest?), rn: vreg_of(&s[0]), rm: vreg_of(&s[1]) });
         }
     }
     for (kind, lanes) in

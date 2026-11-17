@@ -334,7 +334,7 @@ impl Inst {
                 f(Fpr(rd), Role::Def);
                 f(Fpr(rn), Role::Use);
             }
-            Inst::VectorPermute { rd, rn, rm, .. } => {
+            Inst::VectorPermute { rd, rn, rm, .. } | Inst::VectorTable { rd, rn, rm, .. } => {
                 f(Fpr(rd), Role::Def);
                 f(Fpr(rn), Role::Use);
                 f(Fpr(rm), Role::Use);
