@@ -38,6 +38,42 @@ thread_local! {
     static MORE: Cell<bool> = const { Cell::new(false) };
     /// The functions, and loops together, ROTATION-HOT left unrotated.
     static LEFT: RefCell<(Vec<String>, usize)> = const { RefCell::new((Vec::new(), 0)) };
+    /// Set while the trial compile of JT-LATCH-TRIAL runs: JumpThreading does
+    /// not copy a loop latch.
+    static LATCH_KEPT: Cell<bool> = const { Cell::new(false) };
+    /// The functions in which JumpThreading copied a latch.
+    static LATCH_COPIED: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+}
+
+/// DEVIATE JT-LATCH-TRIAL (beyond the pin; gcc's `-Os` backward threader
+/// refuses a path through a loop latch; owner x86-m32, exit 2026-11-30):
+/// whether the trial compile that does not copy a loop latch is running.
+pub fn keeping_latches() -> bool {
+    LATCH_KEPT.with(Cell::get)
+}
+
+/// Runs `body` with loop latches kept in one copy.
+pub fn with_kept_latches<T>(body: impl FnOnce() -> T) -> T {
+    let before = LATCH_KEPT.with(|cell| cell.replace(true));
+    let value = body();
+    LATCH_KEPT.with(|cell| cell.set(before));
+    value
+}
+
+/// Notes that JumpThreading copied a loop latch of `function`, which a trial
+/// may refuse.
+pub(crate) fn note_latch_copy(function: &str) {
+    LATCH_COPIED.with(|list| {
+        let mut list = list.borrow_mut();
+        if !list.iter().any(|one| one == function) {
+            list.push(function.to_owned());
+        }
+    });
+}
+
+/// The functions [`note_latch_copy`] saw since the last call.
+pub fn take_latch_copies() -> Vec<String> {
+    LATCH_COPIED.with(|list| std::mem::take(&mut *list.borrow_mut()))
 }
 
 thread_local! {
