@@ -1168,6 +1168,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             ISD::Freeze => self.visit_freeze(node),
             ISD::InsertVectorElt => self.visit_insert_vector_elt(node),
             ISD::VectorShuffle => self.visit_vector_shuffle(node),
+            ISD::ZeroExtendVectorInreg => self.visit_zero_extend_vector_inreg(node),
             ISD::ExtractElement => self.visit_extract_vector_elt(node),
             ISD::SetCC => self.visit_setcc(node),
             ISD::BrCond => self.visit_brcond(node),
@@ -4880,7 +4881,8 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         if self.dag.is_undef(n0) || self.dag.is_undef(n1) {
             return Some(self.dag.get_constant(0, vt));
         }
-        // `isConstOrConstSplat`: a vector of one constant is the constant, at the width of its lane.
+        // `isConstOrConstSplat`: a vector of one constant is the constant, at
+        // the width of its lane.
         let is_const = |dag: &SelectionDAG, v: SDValue| dag.const_or_splat(v).is_some() && !dag.is_opaque(v);
         if is_const(self.dag, n0) && !is_const(self.dag, n1) {
             return Some(self.dag.get_node(ISD::Mul, vt, &[n1, n0]));

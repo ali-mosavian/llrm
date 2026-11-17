@@ -505,6 +505,8 @@ impl LegalizeHooks for Aarch64Lowering {
             ISD::Mul => return super::vector::lower_mul(dag, node),
             // Declined: the legalizer expands it, as the pin's `SDValue()`.
             ISD::FShl | ISD::FShr => return super::lowering::lower_funnel_shift(dag, node),
+            // Declined for a step wider than two: the legalizer expands it.
+            ISD::ZeroExtendVectorInreg => return super::vector::lower_zero_extend_vector_inreg(dag, node),
             ISD::BrCond => super::lowering::lower_brcond(dag, node),
             ISD::BrCC => super::lowering::lower_br_cc_node(dag, node),
             ISD::SIntToFp | ISD::UIntToFp if dag.value_type(node).is_vector() => {
