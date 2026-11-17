@@ -2195,6 +2195,12 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE IPACP-O2: whether the clones are also made at -O2, where gcc
+    /// has none; default: as at -O3.
+    fn ipa_cp_clones_at_o2(&self) -> bool {
+        self.ipa_cp_clones_at_speed()
+    }
+
     /// DEVIATE IPACP-DEPTH: the most clones ipa-cp makes of one function
     /// (gcc's `ipa-cp-max-recursive-depth` is 8).
     fn ipa_cp_max_clones(&self) -> usize {
