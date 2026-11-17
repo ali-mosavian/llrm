@@ -538,6 +538,11 @@ pub struct Tuning {
     /// DEVIATE LSR-SIZE (owner x86-m32, exit 2026-11-24): see
     /// `Tti::lsr_size_model` (`LsrSizeModel::X86`).
     pub lsr_size_order: bool,
+    /// DEVIATE X86V3 (owner llrm-target-x86-m64-b, exit 2026-11-30): price
+    /// vectors of float lanes (memory, `fadd`..`fneg`, the casts to and from
+    /// integer lanes) with the pin's x86-64 rows (`tti_vector_oracle.txt`),
+    /// so the loop vectorizer forms them. Off: such a loop stays scalar.
+    pub vector_float_costs: bool,
     /// DEVIATE LSR-DROP-AT-SIZE (owner llrm-target-x86-m64-b, exit 2026-11-30):
     /// see `Tti::lsr_drops_worse_solution_at_size`.
     pub lsr_drop_worse_at_size: bool,
@@ -871,6 +876,7 @@ impl Tuning {
         unroll_promotion_fits_registers: false,
         unroll_store_immediate_bits: 0,
         lsr_size_order: false,
+        vector_float_costs: false,
         lsr_drop_worse_at_size: false,
         add_to_or_disjoint: false,
         vectorize_at_size: true,

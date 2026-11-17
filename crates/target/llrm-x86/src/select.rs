@@ -2420,7 +2420,14 @@ fn scalar_sse(
     // `cmpss xmm0, xmm1, 0`: the predicate rides as an immediate byte.
     if let ([Loc::Reg(into)], [_, source, Loc::Imm(predicate)]) = (dests.as_slice(), sources.as_slice()) {
         let upper = Upper(name);
-        let bits = if name.ends_with("sd") { 64 } else { 32 };
+        // `shufps`/`shufpd` read the whole register.
+        let bits = if name.ends_with("sd") {
+            64
+        } else if name.ends_with("ss") {
+            32
+        } else {
+            128
+        };
         let code = code_of!(upper, "_XMM_XMMM", bits, "_IMM8")?;
         return match source {
             Loc::Reg(outof) => {
@@ -2451,6 +2458,8 @@ fn scalar_sse(
     };
     let read =
         match name.strip_prefix("cvtt").or_else(|| name.strip_prefix("cvt")).and_then(|rest| rest.split_once('2')) {
+            // The two lanes `cvtdq2pd` and `cvtps2pd` widen are 64 bits.
+            _ if matches!(name, "cvtdq2pd" | "cvtps2pd") => 64,
             Some((source, _)) => scalar(source),
             None => scalar(&name[name.len().saturating_sub(2)..]),
         };

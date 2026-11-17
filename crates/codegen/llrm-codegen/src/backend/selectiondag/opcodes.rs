@@ -252,15 +252,19 @@ fn gpr_xmm_move(name: &str) -> Option<&'static str> {
 /// is `movsd_x`. `SQRTSDr` names its tied source too. A pin name that is none
 /// of these is `None`.
 fn sse(name: &str) -> Option<(String, Option<u32>, Option<u32>, Vec<char>)> {
-    const ARITHMETIC: [&str; 58] = [
+    const ARITHMETIC: [&str; 82] = [
         "ADDSS", "ADDSD", "SUBSS", "SUBSD", "MULSS", "MULSD", "DIVSS", "DIVSD", "MINSS", "MINSD", "MAXSS", "MAXSD",
         "SQRTSS", "SQRTSD", "MOVSS", "MOVSD", "UCOMISS", "UCOMISD", "XORPS", "ANDPS", "ANDNPS", "ORPS", "CMPSS",
         "CMPSD", "PADDB", "PADDW", "PADDD", "PADDQ", "PSUBB", "PSUBW", "PSUBD", "PSUBQ", "PAND", "PANDN", "POR",
         "PXOR", "PMULLW", "PSLLW", "PSLLD", "PSLLQ", "PSRLW", "PSRLD", "PSRLQ", "PSRAW", "PSRAD", "PSHUFD", "PUNPCKLQDQ", "PMULUDQ", "PUNPCKLDQ",
         "PUNPCKLBW", "PUNPCKHBW", "PACKUSWB", "PACKSSWB", "PUNPCKLWD", "PUNPCKHWD", "PUNPCKHDQ", "PUNPCKHQDQ", "PACKSSDW",
+        // The packed float forms of the float vectors.
+        "ADDPS", "ADDPD", "SUBPS", "SUBPD", "MULPS", "MULPD", "DIVPS", "DIVPD", "MINPS", "MINPD", "MAXPS", "MAXPD",
+        "SQRTPS", "SQRTPD", "ANDPD", "ANDNPD", "ORPD", "XORPD", "UNPCKLPD", "UNPCKHPD", "UNPCKLPS", "UNPCKHPS", "SHUFPS",
+        "SHUFPD",
     ];
-    const MOVES: [&str; 2] = ["MOVAPS", "MOVUPS"];
-    const CONVERTS: [(&str, &str, Option<u32>); 8] = [
+    const MOVES: [&str; 4] = ["MOVAPS", "MOVUPS", "MOVAPD", "MOVUPD"];
+    const CONVERTS: [(&str, &str, Option<u32>); 14] = [
         ("CVTSS2SD", "cvtss2sd", None),
         ("CVTSD2SS", "cvtsd2ss", None),
         ("CVTSI2SS", "cvtsi2ss", Some(32)),
@@ -269,6 +273,12 @@ fn sse(name: &str) -> Option<(String, Option<u32>, Option<u32>, Vec<char>)> {
         ("CVTSI642SD", "cvtsi2sd", Some(64)),
         ("CVTSD2SS", "cvtsd2ss", None),
         ("CVTSS2SD", "cvtss2sd", None),
+        ("CVTDQ2PS", "cvtdq2ps", None),
+        ("CVTDQ2PD", "cvtdq2pd", None),
+        ("CVTPS2PD", "cvtps2pd", None),
+        ("CVTPD2PS", "cvtpd2ps", None),
+        ("CVTTPS2DQ", "cvttps2dq", None),
+        ("CVTTPD2DQ", "cvttpd2dq", None),
     ];
     // The result's width is in the name: `CVTTSD2SIrr` 32 bits, `CVTTSD2SI64rr`
     // 64.
@@ -330,7 +340,17 @@ pub fn memory_bytes(name: &str) -> Option<u32> {
         // A conversion reads its source's size: the float named first, or the
         // integer.
         for (prefix, bytes) in
-            [("CVTTSD2SI", 8), ("CVTTSS2SI", 4), ("CVTSD2SS", 8), ("CVTSS2SD", 4), ("CVTSI642", 8), ("CVTSI2", 4)]
+            [
+                ("CVTTSD2SI", 8),
+                ("CVTTSS2SI", 4),
+                ("CVTSD2SS", 8),
+                ("CVTSS2SD", 4),
+                ("CVTSI642", 8),
+                ("CVTSI2", 4),
+                // The two lanes of a packed conversion read 8 bytes.
+                ("CVTDQ2PD", 8),
+                ("CVTPS2PD", 8),
+            ]
         {
             if name.starts_with(prefix) {
                 return Some(bytes);
