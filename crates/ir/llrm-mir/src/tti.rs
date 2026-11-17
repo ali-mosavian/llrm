@@ -2781,6 +2781,17 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE LSR-POSTINC-PAIR (target flag): the pair form of a load or
+    /// store (`ldp`/`stp`) folds a pointer's bump only into its first access,
+    /// so a post-indexed walk rates the lower access of an adjacent pair
+    /// before the pointer (a negative offset) as costlier. The pin's
+    /// two's complement `ImmCost` rates `-4` below `4` and starts the walk at
+    /// the second access (gcc's ivopts starts it at the first). `false`: the
+    /// pin's rating.
+    fn lsr_pair_first_walk(&self) -> bool {
+        false
+    }
+
     /// `isIndexedLoadLegal(MIM_PostInc, ty)`: a load that steps its pointer by
     /// the access size after it (`(An)+`).
     fn is_post_inc_load_legal(

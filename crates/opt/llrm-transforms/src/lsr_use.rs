@@ -530,6 +530,22 @@ pub struct Cost {
     pub size_bytes: u32,
 }
 
+/// DEVIATE LSR-POSTINC-PAIR: the two a pointer's accesses cost more when they
+/// are exactly an adjacent pair with the lower one before the pointer.
+fn pair_walk_penalty(
+    walked: &[(Vec<Scev>, i64, i64)],
+    base: &[Scev],
+) -> u32 {
+    let mut same = walked.iter().filter(|(regs, _, _)| regs == base);
+    match (same.next(), same.next(), same.next()) {
+        (Some(&(_, a, size)), Some(&(_, b, other)), None) if size == other => {
+            let (low, high) = (a.min(b), a.max(b));
+            if low < 0 && high == low + size { 2 } else { 0 }
+        }
+        _ => 0,
+    }
+}
+
 impl Cost {
     pub fn new() -> Self {
         Self::default()
@@ -762,23 +778,25 @@ impl Cost {
             }
             // DEVIATE LSR-POSTINC-PAIR (owner arm64, exit 2026-11-30): a
             // walked pointer's writeback folds into the first access of an
-            // adjacent pair (`ldp [p], #n`), so the walk starts there: the
-            // lower access of a pair before the pointer (a negative offset)
-            // costs two more. The pin's two's complement width rates `-4`
-            // cheaper than `4` and starts the walk at the second access.
-            if lu.kind == Kind::Address && r.amk.has_post_indexed() && !f.has_global() && f.scaled_reg.is_none() {
+            // adjacent pair (`ldp [p], #n`), so the walk starts there: a pair
+            // that is all a pointer reaches, its lower access before the
+            // pointer (a negative offset), costs two more; a third access
+            // takes the bump alone from the last, as the pin starts it. The
+            // pin's two's complement width rates `-4` cheaper than `4` and
+            // starts every walk at the last access.
+            if lu.kind == Kind::Address
+                && r.amk.has_post_indexed()
+                && r.tti.lsr_pair_first_walk()
+                && !f.has_global()
+                && f.scaled_reg.is_none()
+            {
                 let size = lu.access_ty.bytes as i64;
-                if size > 0 {
-                    let at = offset.0;
-                    let pair = self.walked.iter().any(|(regs, other, bytes)| {
-                        *regs == f.base_regs
-                            && *bytes == size
-                            && ((*other + size == at && *other < 0) || (at + size == *other && at < 0))
-                    });
-                    if pair {
-                        self.c.imm_cost += 2;
-                    }
-                    self.walked.push((f.base_regs.clone(), at, size));
+                // Only a 4-, 8- or 16-byte access has a pair form (`ldp`).
+                if matches!(size, 4 | 8 | 16) {
+                    let before = pair_walk_penalty(&self.walked, &f.base_regs);
+                    self.walked.push((f.base_regs.clone(), offset.0, size));
+                    let after = pair_walk_penalty(&self.walked, &f.base_regs);
+                    self.c.imm_cost = (self.c.imm_cost + after).saturating_sub(before);
                 }
             }
             // The target may not support this offset for this instruction.
