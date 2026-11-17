@@ -66,9 +66,25 @@ fn the_68000_never_calls_the_library_for_a_short_chain() {
     // 1000 is a 12 B chain: it beats the call's clocks, not its bytes
     let out = compile_loop("68000", Level::O2, 1000);
     assert!(!out.contains("__mulsi3"), "68000 -O2 loop x*1000: a call:\n{out}");
+    // alone, the function is charged the 54 B routine its call links (#9982,
+    // #10053): the chain is the smaller program at every level
     for level in [Level::O1, Level::Os] {
         let out = compile("68000", level, 1000);
-        assert!(out.contains("__mulsi3"), "68000 {level:?} x*1000: a chain larger than the call site:\n{out}");
+        assert!(
+            !out.contains("__mulsi3"),
+            "68000 {level:?} x*1000 alone: a call links the routine for nothing else:\n{out}"
+        );
+    }
+    // where another function multiplies two variables the routine is linked
+    // anyway, and the chain is larger than the call site in bytes
+    let linked = mul_by(1000) + "define i32 @v(i32 %a, i32 %b) {\n  %r = mul i32 %a, %b\n  ret i32 %r\n}\n";
+    for level in [Level::O1, Level::Os] {
+        let out = assembly(&linked, cpu_of("68000").unwrap(), level).expect("compiles");
+        let f = out.split("v:").next().unwrap();
+        assert!(
+            f.contains("__mulsi3"),
+            "68000 {level:?} x*1000 beside a variable multiply: a chain larger than the call site:\n{out}"
+        );
     }
 }
 
