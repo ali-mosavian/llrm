@@ -1219,7 +1219,8 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             ISD::MulHU => self.simplify_demanded(node),
             ISD::SRem | ISD::URem => self.visit_rem(node),
             ISD::ZeroExtend | ISD::SignExtend | ISD::AnyExtend => self
-                .fold_sext_setcc(node)
+                .fold_extended_sign_bit_test(node)
+                .or_else(|| self.fold_sext_setcc(node))
                 .or_else(|| self.fold_zext_setcc(node))
                 .or_else(|| self.fold_extend_of_cast(node))
                 .or_else(|| self.visit_extend(node))
@@ -2370,6 +2371,41 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         }
         self.replace_value(SDValue { node: load.node, res: 1 }, SDValue { node: new.node, res: 1 });
         Some(new)
+    }
+
+    /// `foldExtendedSignBitTest` (DAGCombiner.cpp, called by `visitSIGN_EXTEND`
+    /// and `visitZERO_EXTEND`): an extension of the sign test `setgt X, -1`
+    /// to X's own width is the sign bit of the complement: `zext i1 (setgt
+    /// iN X, -1)` is `srl (not X), N-1`, `sext` the same with `sra`. No target
+    /// here overrides `shouldAvoidTransformToShift` (the pin's MSP430
+    /// does).
+    ///
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L15936>
+    fn fold_extended_sign_bit_test(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let (op, vt, setcc) = (self.dag.opcode(node), self.dag.value_type(node), self.dag.operand(node, 0));
+        if !matches!(op, ISD::ZeroExtend | ISD::SignExtend)
+            || self.legal_operations()
+            || self.dag.opcode(setcc) != ISD::SetCC
+            || !self.dag.has_one_use(setcc.node)
+            || self.dag.value_type(setcc) != EVT::I1
+        {
+            return None;
+        }
+        let (x, ones) = (self.dag.operand(setcc, 0), self.dag.operand(setcc, 1));
+        let NodeData::CondCode(cc) = self.dag.node(self.dag.operand(setcc, 2)).data else { return None };
+        if cc != CondCode::SetGt
+            || self.dag.value_type(x) != vt
+            || self.dag.constant(ones) != Some(super::fold::mask(vt.size_in_bits()))
+        {
+            return None;
+        }
+        let not_x = self.dag.get_not(x, vt);
+        let shift = self.dag.get_constant(u128::from(vt.size_in_bits() - 1), vt);
+        let opcode = if op == ISD::SignExtend { ISD::Sra } else { ISD::Srl };
+        Some(self.dag.get_node(opcode, vt, &[not_x, shift]))
     }
 
     /// `foldSextSetcc`: where a vector compare's result is as wide as its
