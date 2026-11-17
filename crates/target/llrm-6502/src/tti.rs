@@ -257,6 +257,11 @@ impl Tti for Mos6502 {
         Some(1100)
     }
 
+    /// DEVIATE UNROLL-SPEED-TRIAL: see `no_grow_variant` in `driver.rs`.
+    fn unroll_speed_trial(&self) -> bool {
+        true
+    }
+
     /// DEVIATE UNROLL-TRIAL-NEST: see `Tti::unroll_trial_analyzed_at_speed`.
     fn unroll_trial_analyzed_at_speed(&self) -> bool {
         true

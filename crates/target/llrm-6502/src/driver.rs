@@ -213,6 +213,7 @@ fn program(
     text: &str,
     request: &Request,
 ) -> Result<Program, String> {
+    MID_END_RUNS.with(|runs| runs.set(runs.get() + 1));
     let mut module =
         llrm_mir::parse::module(&without_reserved_symbols(&without_triple(text), &request.platform.c_symbol_prefix))
             .map_err(|error| error.to_string())?;
@@ -263,9 +264,63 @@ pub fn assembly(
     text: &str,
     request: &Request,
 ) -> Result<String, String> {
+    llrm_transforms::trial::take_speed_unrolls();
     let built = program(text, request)?;
+    let built = no_grow_variant(built, text, request)?;
     let (built, inlined, assembled, joint) = trial_inlined(built, text, request)?;
     llrm_transforms::trial::with_inlined(&inlined, || trial_unrolled(built, assembled, joint, text, request))
+}
+
+/// DEVIATE UNROLL-SPEED-TRIAL (owner 6502, exit 2026-11-24, row
+/// 6502-UNROLL-INLINABLE; the z80's, `unroll_choice` in its `compile.rs`): at
+/// -O2 and -O3 the module compiled again where the unrolls that add bytes are
+/// refused and the early pass's bypass for a callee the inliner may take is
+/// off, kept if its bytes are fewer; a tie keeps the pin's decisions. Only a
+/// compile that made such an unroll (`UnrollDecisions::made`) is compiled
+/// twice. The early unroll of an inlinable callee's loop stands unpriced where
+/// the inliner then takes none of its sites (memmove_overlap -O3: `fill`, 32
+/// constant stores, +147 B) and is what folds the caller where it does
+/// (write_through_parameter: 44 B kept, 250 B refused).
+fn no_grow_variant(
+    built: Program,
+    text: &str,
+    request: &Request,
+) -> Result<Program, String> {
+    use llrm_transforms::trial::{self, SpeedUnroll};
+    let decisions = trial::take_speed_unrolls();
+    let wanted = matches!(request.level, Level::O2 | Level::O3)
+        && decisions.made > 0
+        && built.target.tti().is_some_and(|tti| tti.unroll_speed_trial());
+    if !wanted {
+        return Ok(built);
+    }
+    let base = (trial::take(), trial::take_refused());
+    let variant = trial::with_speed_unroll(Some(SpeedUnroll::NoGrow), || program(text, request));
+    let other = (trial::take(), trial::take_refused());
+    trial::take_speed_unrolls();
+    let debug = std::env::var_os("LLRM_DEBUG_TRIAL").is_some();
+    let kept = match variant {
+        Ok(variant) => {
+            let fewer = match (tail(built.clone(), request, true, false), tail(variant.clone(), request, true, false)) {
+                (Ok(kept), Ok(tried)) => {
+                    if debug {
+                        eprintln!("trial no-grow unroll: {} B against {} B", tried.bytes, kept.bytes);
+                    }
+                    tried.bytes < kept.bytes
+                }
+                _ => false,
+            };
+            if fewer {
+                NO_GROW_KEPT.with(|kept| kept.set(kept.get() + 1));
+            }
+            fewer.then_some((variant, other))
+        }
+        Err(_) => None,
+    };
+    let (program, (eligible, refused)) = kept.unwrap_or((built, base));
+    trial::restore(eligible);
+    trial::restore_refused(refused);
+    Ok(program)
 }
 
 /// DEVIATE OS-INLINE-TRIAL (owner 6502-c, exit 2026-12-05): the copies the -Os
@@ -416,6 +471,20 @@ pub fn size_audit(
 
 thread_local! {
     static SELECTED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static MID_END_RUNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static NO_GROW_KEPT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The modules this thread kept as the no-grow variant compiled them
+/// (`no_grow_variant`).
+pub fn no_grow_variants_kept() -> usize {
+    NO_GROW_KEPT.with(std::cell::Cell::get)
+}
+
+/// The mid-end compiles this thread has made: a module compiled once has no
+/// trial, a variant or a second compile in it.
+pub fn mid_end_runs() -> usize {
+    MID_END_RUNS.with(std::cell::Cell::get)
 }
 
 /// The functions this thread has selected: the cost of a compile, which the

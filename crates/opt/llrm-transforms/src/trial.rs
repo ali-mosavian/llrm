@@ -409,6 +409,12 @@ pub fn take_refused() -> Vec<Site> {
     REFUSED.with(|list| std::mem::take(&mut *list.borrow_mut()))
 }
 
+/// Puts back what [`take_refused`] returned, for the compile whose refusals
+/// they were.
+pub fn restore_refused(sites: Vec<Site>) {
+    REFUSED.with(|list| *list.borrow_mut() = sites);
+}
+
 /// Which of the sites' groups the finished code keeps: sites that share a
 /// function (a caller or a callee) are one group, kept whole if the bytes of
 /// its functions are fewer in the second compile (`other`) than in the first
