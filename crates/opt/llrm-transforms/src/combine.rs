@@ -549,7 +549,7 @@ fn simplifies_itself(opcode: &Opcode) -> bool {
 /// The binary operations whose visitors run on vectors: those audited lane by
 /// lane (DEVIATE COMBINE-VEC), each with its own identity sweep.
 fn vector_visited(op: BinaryOp) -> bool {
-    matches!(op, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul)
+    matches!(op, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::And)
 }
 
 /// `InstCombinerImpl::run`'s per-instruction step: what the instruction
