@@ -356,7 +356,7 @@ fn stores_through_index(
 }
 
 /// The fixed vector the cost hooks see: `count` lanes of a scalar type.
-fn vector_of(
+pub fn vector_of(
     context: &Context,
     ty: TypeId,
 ) -> Option<VectorTy> {
@@ -389,7 +389,7 @@ fn extended_operand(
 /// What reads the extension `value`, for `GetUserAbsorbedCastCost`: an `add`,
 /// `sub` or `mul` shows the extensions among its operands to the widening
 /// rules (`isBinExtWideningInstruction`).
-fn ext_users(
+pub fn ext_users(
     context: &Context,
     function: &Function,
     value: ValueId,

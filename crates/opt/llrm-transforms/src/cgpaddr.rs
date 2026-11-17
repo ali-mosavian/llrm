@@ -267,6 +267,28 @@ impl CgpAddr {
             let outer = std::rc::Rc::clone(analyses.outer());
             crate::cgpmemalign::raised(unit.context, unit.layout, &outer.globals, unit.function)
         };
+        // `optimizeInst`'s `optimizeExtendOrTruncateConversion` hook: the zero
+        // extensions in a loop's header, not at -Os.
+        let tbl = if analyses.outer().target().lowering().is_some_and(|lowering| lowering.rewrites_extends_for_tbl())
+            && !crate::loopvectorize::has_opt_size(unit.function)
+        {
+            match analyses.outer().target().tti() {
+                Some(tti) => {
+                    let info = analyses.get::<Loops>(&*unit.context, unit.layout, unit.function);
+                    let headers: Vec<_> = unit
+                        .function
+                        .layout()
+                        .iter()
+                        .copied()
+                        .filter(|&block| info.get_loop_for(block).is_some_and(|one| one.get_header() == block))
+                        .collect();
+                    crate::cgpexttotbl::zexts_through_tbl(unit.context, unit.function, &*tti, &headers)
+                }
+                None => false,
+            }
+        } else {
+            false
+        };
         let sunk_operands = match analyses.outer().target().tti() {
             Some(tti) => crate::cgpsinkops::free_operands_sunk(unit.context, &*tti, unit.function),
             None => false,
@@ -342,6 +364,7 @@ impl CgpAddr {
             || sunk_operands
             || resunk
             || split
+            || tbl
             || remainders
             || compares
             || switches

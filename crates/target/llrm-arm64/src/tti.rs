@@ -1697,6 +1697,12 @@ impl AArch64Lowering {
 }
 
 impl Lowering for AArch64Lowering {
+    // `AArch64TargetLowering::optimizeExtendOrTruncateConversion`
+    // (`EnableExtToTBL`, little endian, no SVE for fixed vectors).
+    fn rewrites_extends_for_tbl(&self) -> bool {
+        true
+    }
+
     // The register classes: GPR32 and GPR64 (AArch64ISelLowering.cpp,
     // addRegisterClass).
     fn is_type_legal(

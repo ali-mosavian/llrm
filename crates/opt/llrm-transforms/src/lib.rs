@@ -96,6 +96,9 @@ pub mod cfg;
 pub mod cgpaddr;
 pub mod cgpbranch;
 pub mod cgpcondsplit;
+pub mod cgpexttotbl;
+#[cfg(test)]
+mod cgpexttotbl_tests;
 pub mod cgpmath;
 pub mod cgpmemalign;
 #[cfg(test)]
