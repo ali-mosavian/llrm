@@ -94,7 +94,7 @@ pub fn target_lowering_with(
     let int = [MVT::I8, MVT::I16, MVT::I32];
     let m68020 = cpu.at_least(Cpu::M68020);
     let mut tl =
-        TargetLowering::empty(TargetLoweringInfo::new(&int, false).with_shift_by_value_type().with_soft_float());
+        TargetLowering::empty(TargetLoweringInfo::new(&int, false).with_shift_by_value_type().with_soft_float().with_soft_compare_classes());
     tl.init_actions();
     // no FPU at any CPU: every float operation is a compiler-rt call
     tl.set_soft_float_libcall_names();
