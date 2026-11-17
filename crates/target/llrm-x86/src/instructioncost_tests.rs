@@ -141,10 +141,12 @@ fn test_a_gep_asked_with_constant_operands_costs_what_they_make_it() {
     assert_eq!((cost(&own), cost(&[own[0], constant(3), constant(1)])), (1, 0));
 }
 
-/// The `insertelement`, broadcast `shufflevector` and vector `fmuladd` of a loop were `Invalid` at code size: the
-/// unroller read a loop vectorized to `<2 x double>` as "size not computed" and kept its 6 trips rolled
-/// (object_extent_loop -O2, +6% executed instructions). The pin's `print<cost-model>`: 0 for an insert into poison,
-/// 1 for the next, 1 for the broadcast, 2 for the `fmuladd` (4 for throughput).
+/// The `insertelement`, broadcast `shufflevector` and vector `fmuladd` of a
+/// loop were `Invalid` at code size: the unroller read a loop vectorized to `<2
+/// x double>` as "size not computed" and kept its 6 trips rolled
+/// (object_extent_loop -O2, +6% executed instructions). The pin's
+/// `print<cost-model>`: 0 for an insert into poison, 1 for the next, 1 for the
+/// broadcast, 2 for the `fmuladd` (4 for throughput).
 #[test]
 fn a_vector_insert_broadcast_and_fmuladd_cost_what_the_pin_says() {
     let source = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\

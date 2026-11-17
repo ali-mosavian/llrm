@@ -4,13 +4,13 @@
 //!
 //! # How it works
 //! The pin's rows are read off its `opt -passes='print<cost-model>'` for every
-//! shape the planner forms (`tti_vector_oracle.py` writes `tti_vector_oracle.txt`):
-//! a cast between integer and float lanes, an integer width change, `fadd`,
-//! `fsub`, `fmul`, `fdiv`, `fneg`, and a load or store of float lanes, per cost
-//! kind. A type that is wider than a register is the pin's own split: the
-//! rows hold the answer for it, so no splitting is redone here. A shape with
-//! no row is not priced (`None`), which the planner reads as "do not
-//! vectorize".
+//! shape the planner forms (`tti_vector_oracle.py` writes
+//! `tti_vector_oracle.txt`): a cast between integer and float lanes, an integer
+//! width change, `fadd`, `fsub`, `fmul`, `fdiv`, `fneg`, and a load or store of
+//! float lanes, per cost kind. A type that is wider than a register is the
+//! pin's own split: the rows hold the answer for it, so no splitting is redone
+//! here. A shape with no row is not priced (`None`), which the planner reads as
+//! "do not vectorize".
 //!
 //! # Example
 //! `sitofp <2 x i32> to <2 x double>` is 4 at throughput, `fadd <2 x double>`
@@ -19,9 +19,9 @@
 //!
 //! # Runs
 //! Read by the loop vectorizer's cost model through `Tti::vector_cast_cost`,
-//! `vector_arithmetic_cost` and `vector_memory_op_cost`, and by the SLP vectorizer's gathers
-//! (`vector_instr_cost`, `shuffle_cost`), where the target takes
-//! vector values (x86-64).
+//! `vector_arithmetic_cost` and `vector_memory_op_cost`, and by the SLP
+//! vectorizer's gathers (`vector_instr_cost`, `shuffle_cost`), where the target
+//! takes vector values (x86-64).
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
@@ -120,8 +120,9 @@ pub(crate) fn float_memory_op_cost(
     lookup(format!("{} {op} {}", kind_name(cost_kind), type_name(ty)?))
 }
 
-/// `getVectorInstrCost` of an `insertelement` or `extractelement` at a constant lane. An insert into poison is a
-/// different row (`insertp`): the pin prices the first lane of a build as the cheaper `movd`.
+/// `getVectorInstrCost` of an `insertelement` or `extractelement` at a constant
+/// lane. An insert into poison is a different row (`insertp`): the pin prices
+/// the first lane of a build as the cheaper `movd`.
 pub(crate) fn lane_cost(
     op: LaneOp,
     ty: VectorTy,

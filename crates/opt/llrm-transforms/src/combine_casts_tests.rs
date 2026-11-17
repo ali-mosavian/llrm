@@ -630,8 +630,9 @@ fn a_vector_cast_is_left_alone() {
     check("<8 x i16>", "<8 x i16> %x", body, body);
 }
 
-/// `narrowBinOp` on vectors: LoopVectorize's `trunc (add <2 x i64> %splat, <0, 1>)` stayed 64-bit (`paddq` and a
-/// `pshufd` a vector, object_extent_loop's init, +3% over clang 20 at -O2); it is the add of the truncated splat.
+/// `narrowBinOp` on vectors: LoopVectorize's `trunc (add <2 x i64> %splat, <0,
+/// 1>)` stayed 64-bit (`paddq` and a `pshufd` a vector, object_extent_loop's
+/// init, +3% over clang 20 at -O2); it is the add of the truncated splat.
 #[test]
 fn a_truncated_vector_binop_with_a_constant_is_narrow() {
     check(

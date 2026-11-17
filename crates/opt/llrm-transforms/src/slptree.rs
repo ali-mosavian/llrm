@@ -29,8 +29,8 @@
 //! graph is not built: the loads must all stand before the first store, and
 //! nothing else between the first load and the last store may write memory, nor
 //! read it after the first store. A load or store between the window's stores
-//! that `BasicAA`, scoped-noalias and TBAA say cannot touch their bytes may stay
-//! (`StoreSeparation`); a call may not.
+//! that `BasicAA`, scoped-noalias and TBAA say cannot touch their bytes may
+//! stay (`StoreSeparation`); a call may not.
 //!
 //! # Runs
 //! Under `slpvectorize`, on a window of stores whose values are not all
@@ -465,12 +465,18 @@ pub(crate) fn try_window(
     let costs = costs_of(unit, function, &tree, &made, align, tti, scaler)?;
     let cost = costs.total();
     llrm_support::debug!("slp", "tree of {} entries x{}: cost {cost}", tree.entries.len(), stores.len());
-    // `getTreeCost`: the tree with its unprofitable subtrees gathered, if that costs less.
+    // `getTreeCost`: the tree with its unprofitable subtrees gathered, if that
+    // costs less.
     if let Some((trimmed, trimmed_made)) = trim(unit, function, &tree, &costs, tti, scaler) {
         let trimmed_cost = costs_of(unit, function, &trimmed, &trimmed_made, align, tti, scaler)?.total();
         llrm_support::debug!("slp", "Trimmed tree cost = {trimmed_cost}, restored tree cost = {cost}");
         if trimmed_cost < cost && schedulable(unit, function, &trimmed, &trimmed_made, &position) {
-            llrm_support::debug!("slp", "tree of {} entries x{}: cost {trimmed_cost}", trimmed.entries.len(), stores.len());
+            llrm_support::debug!(
+                "slp",
+                "tree of {} entries x{}: cost {trimmed_cost}",
+                trimmed.entries.len(),
+                stores.len()
+            );
             return (trimmed_cost < -COST_THRESHOLD).then_some(trimmed);
         }
     }
@@ -546,7 +552,8 @@ fn schedulable(
         Opcode::Store { .. } | Opcode::Invoke(_) | Opcode::Atomic(_) | Opcode::VaArg | Opcode::Load { .. } => true,
         _ => false,
     };
-    // The stores move to the last: nothing else between them touches their bytes.
+    // The stores move to the last: nothing else between them touches their
+    // bytes.
     let mut separation = StoreSeparation::new(unit, root.insts.iter().copied());
     for (order, inst) in function.iter_block(seed).enumerate() {
         if order > first_store
@@ -859,7 +866,8 @@ fn trim(
         if total < size {
             continue;
         }
-        // `getScalarizationOverhead`: an insert of each lane that is no constant.
+        // `getScalarizationOverhead`: an insert of each lane that is no
+        // constant.
         let lane = lane_ty_of(context, entry.lane_ty)?;
         let vector = VectorTy { lane, count: size as u32 };
         let mut gather = 0i64;
@@ -877,8 +885,7 @@ fn trim(
             }
         }
         let gathered_elsewhere = |value: &Operand| {
-            constant_of(*value)
-                || tree.entries.iter().any(|one| one.kind == Kind::Gather && one.lanes.contains(value))
+            constant_of(*value) || tree.entries.iter().any(|one| one.kind == Kind::Gather && one.lanes.contains(value))
         };
         if entry.lanes.iter().all(gathered_elsewhere) {
             gather *= 2;

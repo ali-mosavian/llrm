@@ -66,11 +66,11 @@ store i16 1, ptr getelementptr inbounds (i8, ptr @bmp, i64 2), align 2\n  ret vo
 
 const INTERLEAVED: &str = include_str!("../tests/slp/interleaved_object_stores.ll");
 
-/// matmul -O2 (arm64): the stores of `a` and of `b` alternate, and ours took any
-/// store between a window's own as a dependence, so `a` got four-lane windows
-/// and `b` stayed scalar (943 executed instructions against clang's 840); the
-/// pin's scheduler orders stores to different objects freely and makes one
-/// `<8 x i16>` store of each.
+/// matmul -O2 (arm64): the stores of `a` and of `b` alternate, and ours took
+/// any store between a window's own as a dependence, so `a` got four-lane
+/// windows and `b` stayed scalar (943 executed instructions against clang's
+/// 840); the pin's scheduler orders stores to different objects freely and
+/// makes one `<8 x i16>` store of each.
 #[test]
 fn stores_to_another_object_between_a_window_do_not_split_it() {
     let text = run(INTERLEAVED);
@@ -176,9 +176,11 @@ define void @f() {
     assert!(text.contains("store <4 x i32> <i32 0, i32 0, i32 2, i32 5>"), "{text}");
 }
 
-/// object_extent_loop's init at x86-64 (`BoUpSLP::getTreeCost`): a pair `(i + k) * 0.5` stored in a loop. The tree
-/// costs more than it saves as written (the conversions and the gather of the counters are dearer); the pin cuts the
-/// conversions out (scalar `uitofp`, one `insertelement` a lane) and keeps `fmul` and the store packed.
+/// object_extent_loop's init at x86-64 (`BoUpSLP::getTreeCost`): a pair `(i +
+/// k) * 0.5` stored in a loop. The tree costs more than it saves as written
+/// (the conversions and the gather of the counters are dearer); the pin cuts
+/// the conversions out (scalar `uitofp`, one `insertelement` a lane) and keeps
+/// `fmul` and the store packed.
 #[test]
 fn a_pair_of_converted_counters_in_a_loop_is_a_packed_multiply_and_store_with_the_conversions_gathered() {
     let mut tuning = llrm_mir::target::Tuning::PIN;

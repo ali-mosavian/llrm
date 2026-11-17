@@ -1553,8 +1553,9 @@ impl Tti for X86 {
         }
     }
 
-    /// `X86TTIImpl::getVectorInstrCost` at a constant lane: the pin's row (`tti_vector_oracle.txt`), for the gathers
-    /// the SLP vectorizer builds. DEVIATE X86V3.
+    /// `X86TTIImpl::getVectorInstrCost` at a constant lane: the pin's row
+    /// (`tti_vector_oracle.txt`), for the gathers the SLP vectorizer
+    /// builds. DEVIATE X86V3.
     fn vector_instr_cost(
         &self,
         op: LaneOp,
@@ -1570,7 +1571,8 @@ impl Tti for X86 {
         crate::tti_vector::lane_cost(op, ty, index, into_poison, cost_kind)
     }
 
-    /// `X86TTIImpl::getShuffleCost` of a broadcast of lane 0; any other shuffle is not priced. DEVIATE X86V3.
+    /// `X86TTIImpl::getShuffleCost` of a broadcast of lane 0; any other shuffle
+    /// is not priced. DEVIATE X86V3.
     fn shuffle_cost(
         &self,
         kind: ShuffleKind,
@@ -1587,9 +1589,11 @@ impl Tti for X86 {
         crate::tti_vector::broadcast_cost(ty, cost_kind)
     }
 
-    /// `X86TTIImpl::getCastInstrCost` for the integer extends and truncates (the SSE2 rows): the row of the exact
-    /// types, else of the legalized ones times the larger register count; a truncate to the type it already is, once
-    /// legalized, is free. Anything else (a mask, a scalarized cast) is not priced; a float is `tti_vector`'s.
+    /// `X86TTIImpl::getCastInstrCost` for the integer extends and truncates
+    /// (the SSE2 rows): the row of the exact types, else of the legalized
+    /// ones times the larger register count; a truncate to the type it already
+    /// is, once legalized, is free. Anything else (a mask, a scalarized
+    /// cast) is not priced; a float is `tti_vector`'s.
     fn vector_cast_cost(
         &self,
         kind: CastKind,
@@ -1597,7 +1601,8 @@ impl Tti for X86 {
         src: VectorTy,
         cost_kind: CostKind,
     ) -> Option<Cost> {
-        // DEVIATE X86V3: a cast to or from float lanes is the pin's row (`tti_vector_oracle.txt`).
+        // DEVIATE X86V3: a cast to or from float lanes is the pin's row
+        // (`tti_vector_oracle.txt`).
         if matches!(dst.lane, Ty::Float | Ty::Double) || matches!(src.lane, Ty::Float | Ty::Double) {
             if !self.vector_values() || !self.tuning.vector_float_costs {
                 return None;

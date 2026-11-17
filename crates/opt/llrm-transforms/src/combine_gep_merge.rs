@@ -242,8 +242,10 @@ impl Combiner<'_> {
         // Does the source GEP end with a sequential index?
         let Some(steps) = self.steps(source.source, &source.indices) else { return Visit::None };
         if !matches!(steps.last(), Some(Step::Sequence(_))) {
-            // DEVIATE GEP-SPLIT: LLVM 20's `else if (first index is zero && Src has indices)`: the second
-            // GEP's own indices follow the first's (`gep T, p, i` then `gep U, q, 0, j` is `gep T, p, i, j`).
+            // DEVIATE GEP-SPLIT: LLVM 20's `else if (first index is zero && Src
+            // has indices)`: the second GEP's own indices follow
+            // the first's (`gep T, p, i` then `gep U, q, 0, j` is `gep T, p, i,
+            // j`).
             if self.env.hooks.keeps_multi_index_gep
                 && gep.indices.first().is_some_and(|&first| self.is_zero_constant(first))
                 && !source.indices.is_empty()
