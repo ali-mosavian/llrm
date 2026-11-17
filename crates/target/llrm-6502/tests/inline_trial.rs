@@ -82,3 +82,15 @@ fn a_refused_copy_and_the_unroll_it_enables_are_priced_together() {
         }
     }
 }
+
+/// local_initializers at -O1 kept `sum` as a call (316 B; the pin inlines it at
+/// cost 5 under its threshold of 225, llvm-mos 96 B): the -O1 rule keeps a
+/// modeled shrink only if it is an eighth of the caller, and no trial priced
+/// the finished chain. With the chain priced by the backend, and the loops it
+/// brings unrolled, the program folds to constants (72 B).
+#[test]
+fn a_callee_the_pin_inlines_at_o1_is_inlined_when_the_finished_chain_is_smaller() {
+    let text = driver::assembly(include_str!("data/local_initializers_o1.ll"), &Request::new(Level::O1)).unwrap();
+    let calls = text.lines().filter(|line| line.trim() == "jsr sum").count();
+    assert_eq!(calls, 0, "{calls} calls to sum stay:\n{text}");
+}

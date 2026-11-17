@@ -1512,6 +1512,130 @@ fn a_function_with_no_folded_read_is_not_allocated_again_unfolded() {
     assert_eq!(trials, 0, "{trials} allocations with the folds refused");
 }
 
+/// A block of many calls with stack arguments was rebuilt whole for each call
+/// frame (`push_arguments`): the pushes of straight-line code with 400 calls
+/// took a quarter of its compile, 99.2G instructions for 400 calls against
+/// 11.0G for 100 (9x for 4x). Each frame rewrites its own span: the
+/// instructions gone over grow with the calls.
+#[test]
+fn a_block_of_many_calls_is_not_rebuilt_whole_for_each_frame() {
+    let calls = |count: usize| {
+        let mut ir = format!("target datalayout = \"{DATALAYOUT}\"\ndeclare void @f(i16, i16, i16, i16, i16, i16)\n");
+        ir.push_str("define void @g(i16 %a) {\n");
+        for _ in 0..count {
+            ir.push_str("  call void @f(i16 %a, i16 1, i16 2, i16 3, i16 4, i16 5)\n");
+        }
+        ir.push_str("  ret void\n}\n");
+        llrm_z80::expand::take_push_span();
+        text(&ir, "g", 0, &Request::new(Level::Os)).expect("compiles");
+        llrm_z80::expand::take_push_span()
+    };
+    let (few, many) = (calls(20), calls(80));
+    assert!(few > 0 && many < few * 6, "{few} instructions gone over for 20 calls, {many} for 80");
+}
+
+/// Branch folding found a block's predecessors by looking at every instruction
+/// of every block, 3.1% of fixed_point -O2. Only the terminators at a block's
+/// end can name a block: the instructions looked at do not grow with the block
+/// length.
+#[test]
+fn finding_predecessors_does_not_read_the_whole_function() {
+    let diamonds = |adds: usize| {
+        let mut ir = format!(
+            "target datalayout = \"{DATALAYOUT}\"\ndeclare i16 @h(i16)\ndefine i16 @g(i16 %a, i16 %c) {{\n  br label %j0\n"
+        );
+        let mut input = "%a".to_string();
+        for d in 0..16 {
+            ir.push_str(&format!(
+                "j{d}:\n  %t{d} = icmp eq i16 {input}, %c\n  br i1 %t{d}, label %l{d}, label %r{d}\n"
+            ));
+            let mut out = Vec::new();
+            for side in ["l", "r"] {
+                ir.push_str(&format!("{side}{d}:\n"));
+                let mut v = input.clone();
+                for step in 0..adds {
+                    ir.push_str(&format!("  %{side}{d}_{step} = call i16 @h(i16 {v})\n"));
+                    v = format!("%{side}{d}_{step}");
+                }
+                let offset = usize::from(side == "r") * 100 + d;
+                ir.push_str(&format!("  %{side}{d}_add = add i16 {v}, {offset}\n"));
+                v = format!("%{side}{d}_add");
+                ir.push_str(&format!("  %{side}{d}_call = call i16 @h(i16 {v})\n  br label %e{d}\n"));
+                out.push(format!("%{side}{d}_call"));
+            }
+            ir.push_str(&format!(
+                "e{d}:\n  %o{d} = phi i16 [ {}, %l{d} ], [ {}, %r{d} ]\n  br label %j{}\n",
+                out[0],
+                out[1],
+                d + 1
+            ));
+            input = format!("%o{d}");
+        }
+        ir.push_str(&format!("j16:\n  ret i16 {input}\n}}\n"));
+        llrm_spike_mf::fold::take_scanned();
+        text(&ir, "g", 0, &Request::new(Level::O2)).expect("compiles");
+        llrm_spike_mf::fold::take_scanned()
+    };
+    let (short, long) = (diamonds(2), diamonds(24));
+    assert!(short > 0 && long < short * 2, "{short} instructions looked at with 2 calls in each arm, {long} with 24");
+}
+
+/// A callee whose loop bound the call's constant fixes was exempt from the byte rate, as a copy that unrolls and folds.
+/// Only an innermost loop is copied out whole: `total(300)` holds two gcd loops of unknown trip count inside the
+/// counted one, so the inlined copy kept `total` beside it (idiv_loop_os -O2: 385 B, -Os 257 B).
+#[test]
+fn a_counted_outer_loop_over_inner_loops_does_not_earn_a_copy_at_o2() {
+    let ir = format!(
+        "target datalayout = \"{DATALAYOUT}\"
+define i32 @total(i16 %n) {{
+entry:
+  %skip = icmp slt i16 %n, 1
+  br i1 %skip, label %out, label %outer
+outer:
+  %i = phi i16 [ 1, %entry ], [ %i1, %latch ]
+  %sum = phi i32 [ 0, %entry ], [ %sum1, %latch ]
+  %a = mul i16 %i, 7
+  %b = add i16 %a, 3
+  %c = mul i16 %i, 5
+  %d = add i16 %c, 2
+  br label %first
+first:
+  %p = phi i16 [ %q, %first ], [ %d, %outer ]
+  %o = phi i16 [ %p, %first ], [ %b, %outer ]
+  %q = srem i16 %o, %p
+  %z = icmp eq i16 %q, 0
+  br i1 %z, label %second.in, label %first
+second.in:
+  %w = add i16 %i, 90
+  br label %second
+second:
+  %t = phi i16 [ %u, %second ], [ 360, %second.in ]
+  %s = phi i16 [ %t, %second ], [ %w, %second.in ]
+  %u = srem i16 %s, %t
+  %y = icmp eq i16 %u, 0
+  br i1 %y, label %latch, label %second
+latch:
+  %both = add i16 %t, %p
+  %wide = sext i16 %both to i32
+  %sum1 = add i32 %sum, %wide
+  %i1 = add i16 %i, 1
+  %last = icmp eq i16 %i, %n
+  br i1 %last, label %out, label %outer
+out:
+  %result = phi i32 [ 0, %entry ], [ %sum1, %latch ]
+  ret i32 %result
+}}
+define i16 @main() {{
+  %t = call i32 @total(i16 300)
+  %r = trunc i32 %t to i16
+  ret i16 %r
+}}
+"
+    );
+    let asm = text(&ir, "main", 1, &Request::new(Level::O2)).expect("compiles");
+    assert!(asm.contains("call _total"), "the counted outer loop was copied into main beside `total`:\n{asm}");
+}
+
 /// The same allocation was priced again (finished into text and priced)
 /// wherever a candidate came out as one already seen: `settle` prices up to six
 /// stack choices of one function, most of them alike, and each pricing is a

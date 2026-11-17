@@ -50,23 +50,46 @@
 //! https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/LivePhysRegs.cpp#L141
 
 use llrm_lir::registers::{Info, RegId};
-use llrm_support::hash::HashMap;
 
 use crate::mfunc::{Inst, MFunction, Operand, Reg};
 use crate::regalloc::{Assignment, Target, successors};
 
-/// The live lanes of each root register.
+/// The live lanes of each root register, by root. A register file has a few
+/// dozen roots and few are live at once: a sorted list is searched and copied
+/// faster than a hash map.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub struct LiveLanes(HashMap<RegId, i64>);
+pub struct LiveLanes(Vec<(RegId, i64)>);
 
 impl LiveLanes {
+    fn find(
+        &self,
+        root: RegId,
+    ) -> Result<usize, usize> {
+        self.0.binary_search_by_key(&root, |(one, _)| *one)
+    }
+
+    /// The lanes of `root`, made an entry (of none) where it has none.
+    fn entry(
+        &mut self,
+        root: RegId,
+    ) -> &mut i64 {
+        let at = match self.find(root) {
+            Ok(at) => at,
+            Err(at) => {
+                self.0.insert(at, (root, 0));
+                at
+            }
+        };
+        &mut self.0[at].1
+    }
+
     /// `addReg`.
     pub fn add(
         &mut self,
         info: &Info,
         register: RegId,
     ) {
-        *self.0.entry(info.root(register)).or_default() |= info.lanes(register);
+        *self.entry(info.root(register)) |= info.lanes(register);
     }
 
     /// `removeReg`.
@@ -76,10 +99,10 @@ impl LiveLanes {
         register: RegId,
     ) {
         let root = info.root(register);
-        if let Some(live) = self.0.get_mut(&root) {
-            *live &= !info.lanes(register);
-            if *live == 0 {
-                self.0.remove(&root);
+        if let Ok(at) = self.find(root) {
+            self.0[at].1 &= !info.lanes(register);
+            if self.0[at].1 == 0 {
+                self.0.remove(at);
             }
         }
     }
@@ -90,7 +113,7 @@ impl LiveLanes {
         info: &Info,
         register: RegId,
     ) -> bool {
-        self.0.get(&info.root(register)).is_some_and(|live| live & info.lanes(register) != 0)
+        self.find(info.root(register)).is_ok_and(|at| self.0[at].1 & info.lanes(register) != 0)
     }
 
     fn union(
@@ -99,7 +122,7 @@ impl LiveLanes {
     ) -> bool {
         let mut changed = false;
         for (root, lanes) in &other.0 {
-            let mine = self.0.entry(*root).or_default();
+            let mine = self.entry(*root);
             if *mine | lanes != *mine {
                 *mine |= lanes;
                 changed = true;
@@ -166,6 +189,17 @@ pub struct PhysLiveness {
     checkpoints: std::cell::RefCell<Vec<Option<Checkpoints>>>,
 }
 
+thread_local! {
+    /// Functions [`PhysLiveness::of`] solved on this thread since the last
+    /// [`take_solved`].
+    static SOLVED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The functions solved on this thread since the last call.
+pub fn take_solved() -> usize {
+    SOLVED.with(|one| one.replace(0))
+}
+
 impl PhysLiveness {
     /// Solves the live-outs of every block: a block's live-in is its live-out
     /// stepped back over its instructions.
@@ -174,6 +208,7 @@ impl PhysLiveness {
         assignment: &Assignment,
         info: &Info,
     ) -> PhysLiveness {
+        SOLVED.with(|one| one.set(one.get() + 1));
         let succs = successors(function);
         let blocks = function.blocks.len();
         let mut preds: Vec<Vec<usize>> = vec![Vec::new(); blocks];

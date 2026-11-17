@@ -68,3 +68,8 @@ def test_two_builds_in_one_run_each_link_from_their_own_llrm_bin(monkeypatch):
     monkeypatch.setattr(ab_bins.subprocess, "run", lambda argv, **kw: (seen.append((argv[2:3], kw["env"]["LLRM_BIN"])), Done())[1])
     ab_bins.compare("/dist/base", "/dist/head", CELLS[:1], ["-O2"], 500)
     assert seen == [(["--measure"], "/dist/base"), (["--measure"], "/dist/head")]
+
+
+def test_the_compile_line_names_no_march():
+    """-march=i386 priced the 386 table: the memset-priced-limit A/B (#10164) saw only lru move at i386, where jpeg_* grow +145 B at the gate's default CPU (the 486)."""
+    assert not [a for a in ab_bins.compile_command("d", "-O2", "bench/a/a.c", "o.obj") if a.startswith("-march")]

@@ -2274,6 +2274,10 @@ impl Tti for X86 {
         self.real_mode.is_some()
     }
 
+    fn lsr_drops_worse_solution_at_size(&self) -> bool {
+        self.tuning.lsr_drop_worse_at_size
+    }
+
     /// DEVIATE LU14: real mode searches both use orders (rcflip's RAMP loop:
     /// 4 instructions in the pin's order, 2 in the other). owner:
     /// llrm-target-x86-m16, exit: 2026-11-30, or when the pin's search is

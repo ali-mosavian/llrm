@@ -1747,6 +1747,7 @@ pub fn recorded(
                 inline: applied.options.inline,
                 cloning: cloning.clone(),
                 speed_rate: applied.options.prices_bytes(),
+                for_size: applied.options.prefers_size(),
             });
         }
     }

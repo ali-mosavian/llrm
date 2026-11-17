@@ -538,6 +538,9 @@ pub struct Tuning {
     /// DEVIATE LSR-SIZE (owner x86-m32, exit 2026-11-24): see
     /// `Tti::lsr_size_model` (`LsrSizeModel::X86`).
     pub lsr_size_order: bool,
+    /// DEVIATE LSR-DROP-AT-SIZE (owner llrm-target-x86-m64-b, exit 2026-11-30):
+    /// see `Tti::lsr_drops_worse_solution_at_size`.
+    pub lsr_drop_worse_at_size: bool,
     /// `visitADD`'s `(add a, b)` -> `(or disjoint a, b)` for operands that
     /// share no bits, which runs before the target's `combineAdd` (so
     /// `pushAddIntoCmovOfConsts` meets only the adds that stay adds). Off:
@@ -868,6 +871,7 @@ impl Tuning {
         unroll_promotion_fits_registers: false,
         unroll_store_immediate_bits: 0,
         lsr_size_order: false,
+        lsr_drop_worse_at_size: false,
         add_to_or_disjoint: false,
         vectorize_at_size: true,
         maximize_vector_bandwidth: false,
@@ -1426,6 +1430,10 @@ pub struct OperationCosts {
     /// What a copy of a length known only at run time adds to `copy`: the
     /// count in dwords and the odd bytes after it, a second `rep movs`.
     pub copy_variable: i64,
+    /// The code bytes of the library routine a copy as a call links in, once
+    /// per program: paid by the first call, not the next; 0 where the copy is
+    /// an instruction.
+    pub copy_member: i64,
     pub direction: i64,
     /// How many operations a completely unrolled loop may total before the work
     /// it saves is boosted (`peelsize::Limits`); 0: the target states none
@@ -1645,6 +1653,7 @@ impl Default for OperationCosts {
             copy: 1,
             copy_cell: 1,
             copy_variable: 0,
+            copy_member: 0,
             direction: 1,
             unroll_budget: 0,
             pieces_set: 0,
