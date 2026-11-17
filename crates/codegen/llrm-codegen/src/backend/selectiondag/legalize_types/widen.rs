@@ -363,6 +363,33 @@ impl TypeLegalizer<'_> {
                 let wide: Vec<SDValue> = ops.into_iter().map(|operand| self.widened_vector(operand)).collect();
                 self.dag.get_node_flags(op, widen_vt, &wide, flags)
             }
+            // `WidenVecRes_Convert`: the input has the result's lane count (widened if it must be), or is
+            // concatenated with undefined vectors up to it; the type legalizer splits an illegal concatenation.
+            ISD::Truncate | ISD::SIntToFp | ISD::UIntToFp | ISD::FpToSInt | ISD::FpToUInt | ISD::FpExtend
+            | ISD::FpRound => {
+                let input = self.dag.operand(value, 0);
+                let input = if self.tli.types.type_conversion(self.dag.value_type(input)).0 == TypeAction::WidenVector {
+                    self.widened_vector(input)
+                } else {
+                    input
+                };
+                let input_vt = self.dag.value_type(input);
+                let (wide_lanes, input_lanes) = (widen_vt.lanes(), input_vt.lanes());
+                if !input_vt.is_vector() || wide_lanes % input_lanes != 0 {
+                    return Err(unsupported("widen conversion"));
+                }
+                let input = if wide_lanes == input_lanes {
+                    input
+                } else {
+                    let undef = self.dag.get_undef(input_vt);
+                    let mut parts = vec![undef; (wide_lanes / input_lanes) as usize];
+                    parts[0] = input;
+                    let EVT::Simple(lane) = input_vt.element() else { return Err(unsupported("widen conversion")) };
+                    let joined = MVT::vector(lane, wide_lanes).map(EVT::Simple).ok_or_else(|| unsupported("widen conversion"))?;
+                    self.dag.get_node(ISD::ConcatVectors, joined, &parts)
+                };
+                self.dag.get_node_flags(op, widen_vt, &[input], flags)
+            }
             // `WidenVecRes_EXTRACT_SUBVECTOR`: the input itself, or a subvector of it as wide as the result;
             // otherwise the lanes one by one, then undefined ones.
             ISD::ExtractSubvector => {

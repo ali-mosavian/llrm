@@ -4004,6 +4004,11 @@ fn lower_vector_truncate(
                 dag.get_node(x86isd::PSHUFD, v128(32), &[doublewords, even])
             })
             .collect();
+        // The parts after the first are undefined (a narrow vector widened): its `pshufd` is the answer.
+        let ops = dag.node(source).ops.clone();
+        if dag.opcode(source) == ISD::ConcatVectors && ops[1..].iter().all(|part| dag.is_undef(*part)) {
+            return Some(reinterpreted(dag, vt, regs[0]));
+        }
         regs = regs.chunks(2).map(|pair| {
             let (a, b) = (reinterpreted(dag, v128(64), pair[0]), reinterpreted(dag, v128(64), pair[1]));
             dag.get_node(x86isd::UNPCKL, v128(64), &[a, b])
