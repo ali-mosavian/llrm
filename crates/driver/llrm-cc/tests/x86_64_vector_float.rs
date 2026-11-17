@@ -73,3 +73,11 @@ fn a_loop_filling_doubles_from_an_int_counter_is_vector_code_at_x86_64() {
     assert!(text.contains("cvtdq2pd"), "no packed conversion:\n{text}");
     assert!(text.contains("mulpd"), "no packed multiply:\n{text}");
 }
+
+/// A run-time-length dot product is unrolled (two or more `mulsd` in the loop), as the pin's `UP.Runtime`, clang 20 and
+/// gcc do; the recurrence veto kept one: +4.6% executed instructions on loop_countdown_sum, +1.8% on object_extent_loop.
+#[test]
+fn a_runtime_dot_product_is_unrolled_at_x86_64() {
+    let text = compile("unroll_dot.c");
+    assert!(text.matches("mulsd").count() >= 2, "the loop is not unrolled:\n{text}");
+}
