@@ -454,6 +454,12 @@ impl TypeLegalizer<'_> {
                 let wide = self.widened_vector(operand);
                 self.dag.get_node(ISD::ExtractElement, self.dag.value_type(node), &[wide, index])
             }
+            // `WidenVecOp_EXTRACT_SUBVECTOR`: the same lanes of the wide source.
+            ISD::ExtractSubvector if at == 0 => {
+                let wide = self.widened_vector(operand);
+                let index = self.dag.operand(node, 1);
+                self.dag.get_node(ISD::ExtractSubvector, self.dag.value_type(node), &[wide, index])
+            }
             // `WidenVecOp_EXTEND`: the wide source extended whole, to as many
             // lanes as it has, then the low ones kept. The pin's
             // `*_EXTEND_VECTOR_INREG` node is that extension of the low lanes;
