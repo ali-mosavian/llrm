@@ -48,7 +48,8 @@ fn tuple_id(
 /// The first vector of a tuple register, if `register` is one.
 fn tuple_first(register: RegId) -> Option<u32> {
     let info = &crate::REGISTER_INFO;
-    (info.is_composite(register)).then(|| (info.subreg(register, 0).expect("a tuple has members").index() - crate::reg::V0.index()) as u32)
+    (info.is_composite(register))
+        .then(|| (info.subreg(register, 0).expect("a tuple has members").index() - crate::reg::V0.index()) as u32)
 }
 
 /// The register file's id of machine register `n` of a class: `x0..x30` and
@@ -858,7 +859,8 @@ fn built_order((class, darwin, scratch_free, frame_pointer_free): Flags) -> Vec<
         Class::Gpr => gpr_order(darwin, scratch_free, frame_pointer_free),
         Class::Fpr => fpr_order(),
         Class::Quad => fpr_order().into_iter().filter(|id| !callee_saved_fpr(*id)).collect(),
-        // A tuple is read whole, as a `Quad` is: none takes a callee-saved vector.
+        // A tuple is read whole, as a `Quad` is: none takes a callee-saved
+        // vector.
         Class::Tuple(count) => (16..=31u32)
             .chain(0..=7)
             .filter(|first| (0..u32::from(count)).all(|at| !(8..=15).contains(&((first + at) % 32))))
@@ -989,6 +991,31 @@ impl AllocTarget for Arm64 {
         }
         let Some(&(_, at)) = members.iter().find(|&&(member, _)| member == virt) else { return Vec::new() };
         assigned(tuple).and_then(|tuple| info.subreg(tuple, at)).into_iter().collect()
+    }
+
+    /// A tuple is built a member at a time (`eliminateRegSequence`): the
+    /// coalescer joins a member into its lane of the tuple.
+    fn lane_moves(inst: &LirInst) -> Option<(usize, Vec<(usize, u32, u32)>)> {
+        matches!(inst.kind, Kind::Op("VectorTupleBuild")).then(|| {
+            let members = inst.operands.iter().filter(|one| matches!(one, Operand::Use(_))).count();
+            (0, (0..members).map(|at| (1 + at, 16 * at as u32, 16)).collect())
+        })
+    }
+
+    /// A `TupleExtract` reads one member of its tuple.
+    fn read_lanes(inst: &LirInst) -> Option<(usize, u32, u32)> {
+        match (inst.kind, inst.operands.get(2)) {
+            (Kind::Op("VectorTupleExtract"), Some(Operand::Imm(index))) => Some((1, 16 * *index as u32, 16)),
+            _ => None,
+        }
+    }
+
+    fn lowers_lanes() -> bool {
+        true
+    }
+
+    fn joins_lanes() -> bool {
+        true
     }
 
     fn view(

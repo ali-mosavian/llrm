@@ -252,10 +252,13 @@ impl TargetEnv {
         wide.iter()
             .copied()
             .filter(|&big| {
-                // A tuple's lanes are its members: `offset` counts them, and
-                // the narrow value is the member there (`getSubReg`).
+                // A tuple's lanes are its members, one after another: the
+                // narrow value is the member `offset` bytes in
+                // (`getSubReg`).
                 if regs.is_composite(big) {
-                    return regs.subreg(big, offset as usize).is_some_and(|member| narrow.contains(&member));
+                    return narrow.iter().any(|&small| {
+                        regs.lane_register(big, offset, regs.bytes(small).unwrap_or(0) as u32) == Some(small)
+                    });
                 }
                 narrow
                     .iter()

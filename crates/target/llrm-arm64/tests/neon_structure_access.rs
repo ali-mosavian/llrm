@@ -122,3 +122,40 @@ define void @f(ptr %p, ptr %o, ptr %q) {
     let moves = asm.lines().filter(|line| line.trim_start().starts_with("mov v")).count();
     assert!(moves <= 1, "{moves} moves building the stored pair twice:\n{asm}");
 }
+
+/// textfill's fill loop: a loop-carried vector and an invariant stored as a
+/// pair twice a trip. The members were copied into the tuple, 2 `mov`s a
+/// trip, 11 instructions to the pin's 9; the coalescer joins each member into
+/// its lane of the tuple.
+#[test]
+fn a_loop_carried_pair_stored_twice_is_not_copied_into_its_tuple() {
+    let ir = r#"
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128-Fn32"
+target triple = "aarch64-unknown-linux-gnu"
+declare void @llvm.aarch64.neon.st2.v16i8.p0(<16 x i8>, <16 x i8>, ptr)
+define void @f(ptr %o, ptr %p, i64 %n) {
+entry:
+  %a = load <16 x i8>, ptr %p
+  %pb = getelementptr <16 x i8>, ptr %p, i64 1
+  %b = load <16 x i8>, ptr %pb
+  br label %loop
+loop:
+  %i = phi i64 [ 0, %entry ], [ %i.next, %loop ]
+  %x = phi <16 x i8> [ %b, %entry ], [ %x.next, %loop ]
+  %d = phi ptr [ %o, %entry ], [ %d.next, %loop ]
+  call void @llvm.aarch64.neon.st2.v16i8.p0(<16 x i8> %x, <16 x i8> %a, ptr %d)
+  %d2 = getelementptr <16 x i8>, ptr %d, i64 2
+  call void @llvm.aarch64.neon.st2.v16i8.p0(<16 x i8> %x, <16 x i8> %a, ptr %d2)
+  %x.next = add <16 x i8> %x, %a
+  %d.next = getelementptr <16 x i8>, ptr %d, i64 4
+  %i.next = add i64 %i, 4
+  %c = icmp ult i64 %i.next, %n
+  br i1 %c, label %loop, label %exit
+exit:
+  ret void
+}
+"#;
+    let asm = driver::assembly(ir, Platform::Linux, true).expect("lowers");
+    let moves = asm.lines().filter(|line| line.trim_start().starts_with("mov v")).count();
+    assert_eq!(moves, 0, "{moves} moves into the stored pair's tuple:\n{asm}");
+}
