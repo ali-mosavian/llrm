@@ -97,6 +97,7 @@ fn rated_by(
         size: false,
         bytes_counted: false,
         across_call: false,
+        amk: tti.preferred_addressing_mode(),
     };
     let (mut cost, mut regs) = (Cost::new(), HashSet::default());
     cost.rate_formula(&mut rating, f, &mut regs, visited, lu, None);
@@ -238,6 +239,7 @@ fn a_visited_register_loses_and_a_chosen_one_is_free() {
             size: false,
             bytes_counted: false,
             across_call: false,
+            amk: tti.preferred_addressing_mode(),
         };
         let (mut cost, mut regs) = (Cost::new(), [a].into_iter().collect::<HashSet<Scev>>());
         cost.rate_formula(&mut rating, &f, &mut regs, &HashSet::default(), &lu, None);
@@ -460,6 +462,7 @@ fn a_scaled_index_costs_its_instructions_once_for_each_scaled_register() {
                 size: false,
                 bytes_counted: false,
                 across_call: false,
+                amk: tti.preferred_addressing_mode(),
             };
             let (mut cost, mut regs, visited) = (Cost::new(), HashSet::default(), HashSet::default());
             cost.rate_formula(&mut rating, &fa, &mut regs, &visited, &lu, None);
@@ -613,6 +616,7 @@ fn a_pointer_stepping_by_a_constant_is_free_where_post_indexed_access_is_favored
                 size: false,
                 bytes_counted: false,
                 across_call: false,
+                amk: tti.preferred_addressing_mode(),
             };
             let (mut cost, mut regs) = (Cost::new(), HashSet::default());
             cost.rate_formula(&mut rating, &f, &mut regs, &HashSet::default(), &lu, None);
@@ -647,6 +651,7 @@ fn a_zero_ending_counter_pays_the_targets_zero_test() {
                 size: false,
                 bytes_counted: false,
                 across_call: false,
+                amk: tti.preferred_addressing_mode(),
             };
             let (mut cost, mut regs) = (Cost::new(), HashSet::default());
             cost.rate_formula(&mut rating, &f, &mut regs, &HashSet::default(), &lu, None);
@@ -813,6 +818,7 @@ fn the_loop_as_written_pays_for_the_multiply_that_forms_a_recurrence() {
                 size: false,
                 bytes_counted: false,
                 across_call: false,
+                amk: tti.preferred_addressing_mode(),
             };
             let (mut cost, mut regs) = (Cost::new(), HashSet::default());
             cost.rate_formula(&mut rating, &f, &mut regs, &HashSet::default(), &use_of(Kind::Address, &[0]), None);
@@ -852,6 +858,7 @@ fn the_loop_as_written_keeps_the_exit_bound_live() {
                 size: false,
                 bytes_counted: false,
                 across_call: false,
+                amk: tti.preferred_addressing_mode(),
             };
             let f = Formula { base_regs: vec![reg], has_base_reg: true, ..Formula::default() };
             let (mut cost, mut seen) = (Cost::new(), HashSet::default());
@@ -949,6 +956,7 @@ fn the_loop_as_written_pays_no_setup_for_a_recurrence_it_derives_from_its_counte
                 size: true,
                 bytes_counted: true,
                 across_call: false,
+                amk: tti.preferred_addressing_mode(),
             };
             let (mut cost, mut regs) = (Cost::new(), HashSet::default());
             cost.rate_formula(&mut rating, &f, &mut regs, &HashSet::default(), &use_of(Kind::Basic, &[0]), None);
@@ -982,6 +990,7 @@ fn a_target_without_the_fact_pays_setup_for_a_derived_recurrence() {
                 size: true,
                 bytes_counted: true,
                 across_call: false,
+                amk: tti.preferred_addressing_mode(),
             };
             let (mut cost, mut regs) = (Cost::new(), HashSet::default());
             cost.rate_formula(&mut rating, &f, &mut regs, &HashSet::default(), &use_of(Kind::Basic, &[0]), None);

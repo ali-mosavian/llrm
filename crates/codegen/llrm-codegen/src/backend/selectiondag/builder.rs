@@ -84,6 +84,8 @@ pub struct BuilderTarget {
     pub min_jump_table_entries: usize,
     /// `getMinimumJumpTableDensity`, where the target states one.
     pub min_jump_table_density: Option<u64>,
+    /// `SwitchTarget::size_growth_ratio`.
+    pub jump_table_size_growth_ratio: Option<u64>,
     /// Name prefix of the blocks the target added to the IR before selection
     /// (phi edges): the pin has none at this point, so a switch's layout
     /// successor is the next block without it.
@@ -429,6 +431,15 @@ impl BuilderTarget {
         self
     }
 
+    /// This target with GCC's size growth ratio for jump tables.
+    pub fn with_jump_table_size_growth_ratio(
+        mut self,
+        percent: Option<u64>,
+    ) -> BuilderTarget {
+        self.jump_table_size_growth_ratio = percent;
+        self
+    }
+
     /// This target with `getMinimumJumpTableDensity` stated at every level.
     pub fn with_min_jump_table_density(
         mut self,
@@ -530,6 +541,7 @@ impl BuilderTarget {
             shift_amount_of: None,
             min_jump_table_entries: 4,
             min_jump_table_density: None,
+            jump_table_size_growth_ratio: None,
             preselection_blocks: None,
             refuse_unknown_intrinsics: false,
             variable_shift_legal: true,

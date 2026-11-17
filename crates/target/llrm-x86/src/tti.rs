@@ -1005,6 +1005,10 @@ impl Tti for X86 {
         self.tuning.inline_never_grows_without_rate
     }
 
+    fn switch_lookup_trial_at_size(&self) -> bool {
+        self.tuning.switch_lookup_trial_at_size
+    }
+
     fn loop_idiom_copy_trial_at_size(&self) -> bool {
         self.tuning.loop_idiom_copy_trial_at_size
     }
@@ -1269,6 +1273,10 @@ impl Tti for X86 {
 
     fn min_jump_table_density(&self) -> Option<u64> {
         self.tuning.min_jump_table_density
+    }
+
+    fn jump_table_size_growth_ratio(&self) -> Option<u64> {
+        self.tuning.jump_table_size_growth_ratio
     }
 
     fn recursive_inlining(&self) -> Option<(u32, i64)> {

@@ -20,6 +20,8 @@ import bench  # noqa: E402
 C_REFS = ("ow", "bcc", "tc", "tcpp")
 BAS_REFS = ("bc", "pds71", "vbdos")
 OURS = ("c", "nib", "bas", "bq16")
+# The CPU llrm measures at m16: no -march, the default (the 486, the table the judge counts); -march=i386 prices the 386 table. The gate passes no flag.
+OURS_ISA = "i486"
 
 
 def counts(row: dict | None, program: str = "", name: str = "") -> dict | None:
@@ -114,7 +116,7 @@ def render(table: dict, dist: Path, harness: str, now: datetime.datetime) -> str
     header = [
         f"# x86-m16 owner table {now:%Y-%m-%dT%H:%MZ} (date -u)",
         f"# dist {dist}; md5: {md5_lines(dist)}",
-        f"# harness commit {harness}; bench.py --opt O1 O2 Os --references --no-judge; flags -march=i386",
+        f"# harness commit {harness}; bench.py --opt O1 O2 O3 Os --references --no-judge; no -march: the default CPU ({OURS_ISA})",
         "# net_code: a Nib cell with file I/O less the std.io skeleton's fixed bytes (io_skeleton/fixed.toml, not this build's measure); net_vs_plain_code: net_code less plain_ext_code (strict at O1/Os, priced at O2)",
         "# bytes: code (CODE), data (initialised), static (data+bss); judged (ruling 2026-11-14): Os on total bytes (code+data; BASIC code+static) and clocks; O1/O2/O3 on clocks only, bytes reported in findings;"
         " best external per language: C = ow/bcc/tc/tcpp, Nib = the C compilers on the C twin with the Nib semantics (NAME~init, NAME~bounds; the plain source's best in plain_ext_*), BASIC = bc/pds71/vbdos (O2 key)",
@@ -122,7 +124,7 @@ def render(table: dict, dist: Path, harness: str, now: datetime.datetime) -> str
         "# counts: " + ", ".join(f"{level}:{verdict}={n}" for (level, verdict), n in sorted(tally.items())),
     ]
     columns = "prog\tlang\tlevel\tcode_B\tdata_B\tstatic_B\tclk\tbest_ext_code\tbest_ext_clk\trefs_missing\tverdict\tfindings\tplain_ext_code\tplain_ext_clk\tnet_code\tnet_vs_plain_code\tours_isa\trefs_isa"
-    lines = ["\t".join(str(x) for x in (*row, "i386", "ow486/bcc386/tc186/tcpp286" if row[1] in ("c", "nib") else "bc86/pds86/vbdos86")) for row in body]
+    lines = ["\t".join(str(x) for x in (*row, OURS_ISA, "ow486/bcc386/tc186/tcpp286" if row[1] in ("c", "nib") else "bc86/pds86/vbdos86")) for row in body]
     return "\n".join(header) + "\n" + columns + "\n" + "\n".join(lines) + "\n"
 
 
