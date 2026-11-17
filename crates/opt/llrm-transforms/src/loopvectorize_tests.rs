@@ -65,6 +65,19 @@ fn a_copy_loop_is_widened_by_the_pins_factors() {
     assert_eq!(count(&text, "llvm.loop.isvectorized"), 1, "{text}");
 }
 
+const COPY_SINGLE_TRIP: &str = include_str!("../tests/lv/copy_single_trip.ll");
+
+/// A copy of 8 `i16` is one vector iteration (VF 8, IC 1), but its latch still
+/// compared the index with 8: a loop that ran once kept its back edge (matmul's
+/// `j` loop, +20 instructions at O2). The pin's
+/// `simplifyBranchConditionForVFAndUF` makes the latch `br i1 true`.
+#[test]
+fn a_vector_loop_that_runs_once_leaves_on_its_first_iteration() {
+    let text = run(COPY_SINGLE_TRIP);
+    assert_eq!(count(&text, "load <8 x i16>"), 1, "{text}");
+    assert!(text.contains("br i1 true,"), "{text}");
+}
+
 const ADD: &str = include_str!("../tests/lv/binop_add.ll");
 const CHAIN: &str = include_str!("../tests/lv/binop_chain.ll");
 const SPLAT: &str = include_str!("../tests/lv/binop_splat.ll");

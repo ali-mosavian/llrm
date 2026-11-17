@@ -2547,6 +2547,9 @@ impl FunctionPass for LoopVectorize {
                     let kind = if forced.is_some() { "epilogue vectorized" } else { "vectorized" };
                     why(unit, &outer, header, &format!("{kind} VF {} IC {}", chosen.vf, chosen.ic));
                     execute(unit.context, unit.function, unit.declared, &widening, chosen, &skeleton, accumulator_bits);
+                    if forced.is_none() && trip_count == lanes {
+                        skeleton::exit_on_first_iteration(unit.context, unit.function, header);
+                    }
                     if forced.is_some() {
                         skeleton::check_epilogue_first(unit.context, unit.function, shape.preheader, header, &skeleton);
                     }
