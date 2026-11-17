@@ -91,6 +91,11 @@ pub struct TypeLegalizer<'a> {
     /// A float value and the integer of its width that stands for it
     /// (`SoftenedFloats`).
     softened: HashMap<SDValue, SDValue>,
+    /// The result of a compare routine already called on these operands: the
+    /// routines are pure (`const` in libgcc), so a second compare of the same
+    /// pair reads it instead of calling again. DEVIATE SOFT-CMP-CSE (the pin
+    /// calls one routine per predicate): owner w8, exit 2026-11-27.
+    compare_results: HashMap<(&'static str, SDValue, SDValue), SDValue>,
     /// The target whose routines a division calls (`None`: no library calls).
     target: Option<&'a dyn llrm_target::Target>,
     /// The target's custom lowerings, asked before a node with an illegal type
@@ -148,6 +153,7 @@ impl<'a> TypeLegalizer<'a> {
             split: HashMap::default(),
             widened: HashMap::default(),
             softened: HashMap::default(),
+            compare_results: HashMap::default(),
             target: None,
             hooks: None,
         }
@@ -768,14 +774,31 @@ impl<'a> TypeLegalizer<'a> {
         let (a, b) = (self.softened_float(lhs), self.softened_float(rhs));
         let vt = self.dag.value_type(node);
         let EVT::Simple(float_mvt) = float_vt else { return Err(unsupported("soften a compare of this float")) };
-        let pick = |cmp: Cmp3| libcalls::name(Libcall::Fcmp3(cmp, float_mvt));
+        // DEVIATE SOFT-CMP-CSE: by class, where the target's runtime has them.
+        let classes = self.tli.types.soft_compare_classes();
+        let pick = |cmp: Cmp3| {
+            let cmp = match cmp {
+                Cmp3::Oeq | Cmp3::Une | Cmp3::Olt if classes => Cmp3::Ole,
+                Cmp3::Ogt if classes => Cmp3::Oge,
+                other => other,
+            };
+            libcalls::name(Libcall::Fcmp3(cmp, float_mvt))
+        };
         let compare = |this: &mut Self, cmp: Cmp3, cc: CondCode| -> Result<SDValue, LegalizeError> {
             // The routines return a C `int`: the pointer's width up to a long
             // (16 at m16, 32 above).
             let int = EVT::integer(this.dag.config().pointer.size_in_bits().min(32));
-            let result = pick(cmp)
-                .and_then(|name| this.soft_call(name, &[a, b], int))
-                .ok_or_else(|| unsupported("the compare routine cannot be called"))?;
+            let name = pick(cmp).ok_or_else(|| unsupported("the compare routine cannot be called"))?;
+            let result = match this.compare_results.get(&(name, a, b)) {
+                Some(&done) => done,
+                None => {
+                    let call = this
+                        .soft_call(name, &[a, b], int)
+                        .ok_or_else(|| unsupported("the compare routine cannot be called"))?;
+                    this.compare_results.insert((name, a, b), call);
+                    call
+                }
+            };
             let zero = this.dag.get_constant(0, int);
             Ok(this.dag.get_setcc(vt, result, zero, cc))
         };
@@ -1589,6 +1612,15 @@ impl<'a> TypeLegalizer<'a> {
                 let operand = self.promoted_integer(self.dag.operand(node, 1));
                 self.dag.get_atomic_store(chain, ptr, operand, info)
             }
+            // `PromoteIntOp_VECREDUCE` (`PromoteIntOpVectorReduction`): `add`, `mul`, `and`, `or`, `xor` of the
+            // promoted lanes, whose extra bits the truncate of the result drops.
+            ISD::VecReduceAdd | ISD::VecReduceMul | ISD::VecReduceAnd | ISD::VecReduceOr | ISD::VecReduceXor => {
+                let operand = self.promoted_integer(self.dag.operand(node, at));
+                let lane = self.dag.value_type(operand).element();
+                let reduced = self.dag.get_node(self.dag.opcode(node), lane, &[operand]);
+                let vt = self.dag.value_type(node);
+                self.dag.get_node(ISD::Truncate, vt, &[reduced])
+            }
             ISD::Truncate => {
                 let operand = self.promoted_integer(self.dag.operand(node, at));
                 let vt = self.dag.value_type(node);
@@ -1922,6 +1954,17 @@ impl<'a> TypeLegalizer<'a> {
     }
 
     // --- expansion -------------------------------------------------------
+
+    /// The two-lane vector of an expanded integer's halves, if it is legal
+    /// (`ExpandOp_BITCAST`'s `NVT`).
+    fn legal_pair_vector(
+        &self,
+        integer: EVT,
+    ) -> Option<EVT> {
+        let EVT::Simple(half) = self.tli.types.type_conversion(integer).1 else { return None };
+        let pair = EVT::Simple(MVT::vector(half, 2)?);
+        self.tli.types.is_type_legal(pair).then_some(pair)
+    }
 
     /// `GetExpandedInteger`: low and high halves.
     fn expanded_integer(
@@ -3470,6 +3513,21 @@ impl<'a> TypeLegalizer<'a> {
     ) -> (SDValue, SDValue) {
         let (chain, ptr) = (self.dag.operand(value, 0), self.dag.operand(value, 1));
         let NodeData::Mem(info) = self.dag.node(value).data else { unreachable!("a load has a memory operand") };
+        if let Some(ext) = info.ext
+            && info.mem_vt.size_in_bits() > half.size_in_bits()
+            && !self.dag.config().big_endian
+        {
+            // `ExpandIntRes_LOAD`, an extending load from memory wider than the half: the low half
+            // is a plain load, the high an extending load of the bits left over at +half.
+            let lo = self.dag.get_load(half, chain, ptr, super::dag::MemInfo { ext: None, mem_vt: half, ..info });
+            let excess = EVT::integer(info.mem_vt.size_in_bits() - half.size_in_bits());
+            let high_ptr = self.address_plus(ptr, u128::from(half.size_in_bits() / 8));
+            let hi = self.dag.get_ext_load(ext, half, chain, high_ptr, super::dag::MemInfo { mem_vt: excess, ..info });
+            let chains =
+                self.dag.get_token_factor(&[SDValue { node: lo.node, res: 1 }, SDValue { node: hi.node, res: 1 }]);
+            self.replace_value_with(SDValue { node: value.node, res: 1 }, chains);
+            return (lo, hi);
+        }
         if let Some(ext) = info.ext {
             // `ExpandIntRes_LOAD`, an extending load from memory no wider than
             // the half: the low half is the (extending) load of
@@ -4065,9 +4123,22 @@ impl<'a> TypeLegalizer<'a> {
             ISD::Store if at == 2 => self.expand_far_address(node, at),
             op if at == 1 && Some(op) == self.dag.config().nodes.call => self.expand_far_call(node),
             op if Some(op) == self.dag.config().nodes.ptrdiff => self.expand_ptrdiff(node)?,
-            ISD::BitCast if self.dag.value_type(node).is_floating_point() => {
-                // `ExpandOp_BITCAST` to a float: the halves stored to a stack
-                // slot, the float loaded from it.
+            ISD::BitCast
+                if self.dag.value_type(node).is_vector()
+                    && self.legal_pair_vector(self.dag.value_type(self.dag.operand(node, 0))).is_some() =>
+            {
+                // `ExpandOp_BITCAST` to a vector: the halves as the two lanes
+                // of a legal vector, bitcast to the result.
+                let (lo, hi) = self.expanded_integer(self.dag.operand(node, 0));
+                let pair = self.legal_pair_vector(self.dag.value_type(self.dag.operand(node, 0))).expect("checked");
+                let lanes = self.dag.get_build_vector(pair, &[lo, hi]);
+                let vt = self.dag.value_type(node);
+                self.dag.get_node(ISD::BitCast, vt, &[lanes])
+            }
+            ISD::BitCast if self.dag.value_type(node).is_floating_point() || self.dag.value_type(node).is_vector() => {
+                // `ExpandOp_BITCAST` to a float, or to a vector with no legal
+                // two-lane form: the halves stored to a stack slot, the value
+                // loaded from it.
                 let (lo, hi) = self.expanded_integer(self.dag.operand(node, 0));
                 let vt = self.dag.value_type(node);
                 let size = vt.size_in_bits().div_ceil(8);

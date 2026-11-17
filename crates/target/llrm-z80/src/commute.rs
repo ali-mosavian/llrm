@@ -36,40 +36,55 @@
 
 use llrm_spike_mf::regalloc::successors;
 use llrm_spike_mf::{Kind, Operand, Reg};
-use llrm_support::hash::{HashMap, HashSet};
+use llrm_support::hash::HashMap;
 
 use crate::mfunc::MFunction;
+
+/// A set of virtual registers, a bit each.
+type Bits = Vec<u64>;
+
+fn bit(
+    set: &Bits,
+    v: u32,
+) -> bool {
+    set[v as usize / 64] >> (v % 64) & 1 != 0
+}
+
+fn set_bit(
+    set: &mut Bits,
+    v: u32,
+) {
+    set[v as usize / 64] |= 1 << (v % 64);
+}
 
 /// The virtual registers live out of each block, to a fixed point.
 fn live_out(
     function: &MFunction,
     dead: &dyn Fn(&llrm_spike_mf::Inst) -> bool,
-) -> Vec<HashSet<u32>> {
-    let blocks = function.blocks.len();
-    let (mut reads, mut writes) = (vec![HashSet::default(); blocks], vec![HashSet::default(); blocks]);
+) -> Vec<Bits> {
+    let (blocks, words) = (function.blocks.len(), function.classes.len().div_ceil(64));
+    let (mut reads, mut writes) = (vec![vec![0u64; words]; blocks], vec![vec![0u64; words]; blocks]);
     for (at, block) in function.blocks.iter().enumerate() {
         for inst in block.insts.iter().filter(|inst| !dead(inst)) {
             for operand in &inst.operands {
                 match operand {
-                    Operand::Use(Reg::Virt(v)) if !writes[at].contains(v) => {
-                        reads[at].insert(*v);
-                    }
-                    Operand::Def(Reg::Virt(v)) => {
-                        writes[at].insert(*v);
-                    }
+                    Operand::Use(Reg::Virt(v)) if !bit(&writes[at], *v) => set_bit(&mut reads[at], *v),
+                    Operand::Def(Reg::Virt(v)) => set_bit(&mut writes[at], *v),
                     _ => {}
                 }
             }
         }
     }
     let succs = successors(function);
-    let (mut live_in, mut live_out) = (reads.clone(), vec![HashSet::default(); blocks]);
+    let (mut live_in, mut live_out) = (reads.clone(), vec![vec![0u64; words]; blocks]);
     loop {
         let mut changed = false;
         for at in (0..blocks).rev() {
-            let out: HashSet<u32> = succs[at].iter().flat_map(|next| live_in[*next].iter().copied()).collect();
-            let into: HashSet<u32> =
-                reads[at].iter().copied().chain(out.iter().copied().filter(|v| !writes[at].contains(v))).collect();
+            let mut out = vec![0u64; words];
+            for next in &succs[at] {
+                out.iter_mut().zip(&live_in[*next]).for_each(|(to, from)| *to |= from);
+            }
+            let into: Bits = (0..words).map(|w| reads[at][w] | (out[w] & !writes[at][w])).collect();
             changed |= out != live_out[at] || into != live_in[at];
             live_out[at] = out;
             live_in[at] = into;
@@ -156,7 +171,7 @@ pub fn commute_to_the_dying_source(function: &mut MFunction) {
                 .find(|i| i.operands.iter().any(|o| matches!(o, Operand::Def(Reg::Virt(w)) if *w == dying)))
                 .is_some_and(|i| i.kind != Kind::Copy);
             let dies = made_here && reads.get(&dying) == Some(&1) && defs.get(&dying) == Some(&1);
-            let after = reads_in(&block.insts[at + 1..], kept) > 0 || live_out[b].contains(&kept);
+            let after = reads_in(&block.insts[at + 1..], kept) > 0 || bit(&live_out[b], kept);
             // a call after it takes every register: the first source is in the
             // frame by then, and the copy is wasted
             let across_call = block.insts[at + 1..].iter().any(|i| i.call);

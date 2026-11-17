@@ -47,6 +47,10 @@ impl Level {
     }
 
     fn options(self) -> Options {
+        Options { backward_threading: false, ..self.mid_end() }
+    }
+
+    fn mid_end(self) -> Options {
         match self {
             Self::O0 => Options::none(),
             Self::O1 => Options::basic(),
@@ -288,7 +292,7 @@ fn trial_inlined(
         .map_or(0, |(_, instructions)| instructions);
     let at_speed = matches!(request.level, Level::O2 | Level::O3)
         && built.target.tti().is_some_and(|tti| tti.speed_inline_finished_trial());
-    if !(request.level == Level::Os || at_speed) || sites.is_empty() {
+    if !(matches!(request.level, Level::O1 | Level::Os) || at_speed) || sites.is_empty() {
         return Ok((built, Vec::new(), None, false));
     }
     if instructions(&built) > limit {
@@ -318,7 +322,7 @@ fn trial_inlined(
     let other_unroll = trial::take();
     // The loops the inlined copies hold that the threshold refused: the unroll
     // trial may take them with the pin's inlines made (`trial_unrolled`).
-    let joint = at_speed && !other_unroll.0.is_empty();
+    let joint = (at_speed || request.level == Level::Os) && !other_unroll.0.is_empty();
     let cut = trial::differing(&built.modules[0], &other.modules[0]);
     // The kept side is priced from its own assembly, which the result carries
     // to the unroll trial and the output; only the second compile's chain
@@ -659,6 +663,7 @@ fn tail(
     // 6502-OUTLINE-CLOCKS). At -Os the pass is the pin's, bytes alone.
     let rate = (request.level == Level::O1).then(|| request.level.tuning().clocks_per_byte);
     let text = if outlined { crate::outline::run_at(&text, rate) } else { text };
+    let text = if request.level != Level::O0 { crate::peephole::after_outlining(&text) } else { text };
     Ok(Assembled { text: equates(&request.platform) + &files + &text + &data.0, clocks, bytes, functions })
 }
 
@@ -760,7 +765,17 @@ fn trial_unrolled(
             None => tail(built.take().expect("the program"), request, true, false)?,
         },
     };
-    let Ok(both) = llrm_transforms::trial::with_pin_inlines(|| trial::with(limit, || program(text, request))) else {
+    // -Os prices the -O2 pair too: its size rule refuses the callees whose
+    // bodies the unrolled loops fold away, and the backend prices the result.
+    let pair_request = Request {
+        platform: request.platform.clone(),
+        cpu: request.cpu,
+        level: if request.level == Level::Os { Level::O2 } else { request.level },
+        passes: request.passes.clone(),
+        debug: request.debug,
+    };
+    let Ok(both) = llrm_transforms::trial::with_pin_inlines(|| trial::with(limit, || program(text, &pair_request)))
+    else {
         return Ok(priced.text);
     };
     // Priced by the backend only where the byte model finds it smaller: the
@@ -911,6 +926,22 @@ pub fn machine() -> Rc<dyn llrm_mir::target::Machine> {
     Rc::new(Mos6502Machine)
 }
 
+/// DEVIATE 6502-MEM-LIMITS (owner 6502, exit 2026-11-24): bytes first at every
+/// level (6502-UNROLL-RATE). The pin's `MaxStoresPerMemcpy` and
+/// `MaxStoresPerMemmove` are 8 at speed and 4 tuned for size
+/// (X86ISelLowering.cpp); a constant copy of more than four pieces is a call
+/// at -Os (memmove_overlap's 27 bytes: about 14 word pairs inline against a
+/// 6-byte call) and stays inline at -O1..-O3. This target takes the size
+/// limits at every level.
+pub(crate) fn bytes_first_tuning() -> llrm_mir::target::Tuning {
+    let pin = llrm_mir::target::Tuning::PIN;
+    llrm_mir::target::Tuning {
+        max_stores_per_memcpy: pin.max_stores_per_memcpy_opt_size,
+        max_stores_per_memmove: pin.max_stores_per_memmove_opt_size,
+        ..pin
+    }
+}
+
 struct Mos6502Machine;
 
 impl llrm_mir::target::Machine for Mos6502Machine {
@@ -945,6 +976,10 @@ impl llrm_mir::target::Machine for Mos6502Machine {
 
     fn spaces(&self) -> llrm_mir::spaces::Spaces {
         llrm_mir::target::Neutral.spaces()
+    }
+
+    fn tuning(&self) -> llrm_mir::target::Tuning {
+        bytes_first_tuning()
     }
 
     /// Clocks and bytes of the sequences the backend emits, per native byte

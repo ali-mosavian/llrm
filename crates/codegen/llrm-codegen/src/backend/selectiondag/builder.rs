@@ -84,6 +84,8 @@ pub struct BuilderTarget {
     pub min_jump_table_entries: usize,
     /// `getMinimumJumpTableDensity`, where the target states one.
     pub min_jump_table_density: Option<u64>,
+    /// `SwitchTarget::size_growth_ratio`.
+    pub jump_table_size_growth_ratio: Option<u64>,
     /// Name prefix of the blocks the target added to the IR before selection
     /// (phi edges): the pin has none at this point, so a switch's layout
     /// successor is the next block without it.
@@ -429,6 +431,15 @@ impl BuilderTarget {
         self
     }
 
+    /// This target with GCC's size growth ratio for jump tables.
+    pub fn with_jump_table_size_growth_ratio(
+        mut self,
+        percent: Option<u64>,
+    ) -> BuilderTarget {
+        self.jump_table_size_growth_ratio = percent;
+        self
+    }
+
     /// This target with `getMinimumJumpTableDensity` stated at every level.
     pub fn with_min_jump_table_density(
         mut self,
@@ -530,6 +541,7 @@ impl BuilderTarget {
             shift_amount_of: None,
             min_jump_table_entries: 4,
             min_jump_table_density: None,
+            jump_table_size_growth_ratio: None,
             preselection_blocks: None,
             refuse_unknown_intrinsics: false,
             variable_shift_legal: true,
@@ -611,6 +623,11 @@ pub fn build_block(
     );
     if Some(block) == function.entry() {
         builder.lower_arguments()?;
+    } else if builder.target.dag.fixed_args_in_every_block
+        && let Some((offsets, objects)) = builder.info.fixed_args.clone()
+    {
+        builder.dag.fixed_offsets.extend(offsets);
+        builder.dag.fixed_objects.extend(objects);
     }
     // selection starts at the first non-phi (`getFirstNonPHIIt`)
     for inst in
@@ -980,9 +997,19 @@ impl Builder<'_> {
             Type::Vector { element, count } if self.target.dag.vectors => {
                 // `v16i8`, `v8i16`, `v4i32`, `v2i64`: the vectors VR128 holds.
                 match self.module.context.types.get(*element) {
+                    // A lane count no `MVT` has (`<3 x i8>`) is an extended
+                    // vector type: the type legalizer widens it.
                     Type::Int(bits) => MVT::integer(*bits)
-                        .and_then(|lane| MVT::vector(lane, *count))
-                        .map(EVT::Simple)
+                        .and_then(|lane| {
+                            MVT::vector(lane, *count)
+                                .map(EVT::Simple)
+                                .or_else(
+                                    || (EVT::Simple(lane).size_in_bits() % 8 == 0
+                                        && !count.is_power_of_two()
+                                        && MVT::vector(lane, count.next_power_of_two()).is_some())
+                                    .then(|| EVT::vector(lane, *count)),
+                                )
+                        })
                         .ok_or(Refused("vector with no register class")),
                     // `v4f32`, `v2f64`
                     Type::Float(kind @ (llrm_mir::types::FloatKind::Float | llrm_mir::types::FloatKind::Double)) => {
@@ -1588,10 +1615,15 @@ impl Builder<'_> {
             let copy = self.dag.get_copy_to_reg(self.dag.entry_node(), reg, hidden);
             self.dag.set_root(copy);
         }
+        let (mut slot_offsets, mut slot_objects) =
+            (std::collections::BTreeMap::new(), std::collections::BTreeMap::new());
         for (at, offset) in offsets.iter().enumerate() {
             self.dag.fixed_offsets.insert(-(at as i32 + 1), *offset);
             self.dag.fixed_objects.insert(-(at as i32 + 1), objects[at]);
+            slot_offsets.insert(-(at as i32 + 1), *offset);
+            slot_objects.insert(-(at as i32 + 1), objects[at]);
         }
+        self.info.fixed_args = Some((slot_offsets, slot_objects));
         let mut next = 0;
         for (at, (&arg, leaves)) in parameters.iter().zip(shapes).enumerate() {
             let attrs = self.function.parameter_attrs.get(at).map_or(&[][..], Vec::as_slice);
@@ -4333,6 +4365,8 @@ impl Builder<'_> {
         let result = self.type_of(instruction.ty)?;
         let input = self.dag.value_type(first);
         let (mut sources, lanes) = (input.lanes() as usize, mask.len());
+        let mut remapped: Vec<i32> = Vec::new();
+        let mut mask = mask;
         let node = 'shuffled: {
             if sources == lanes {
                 break 'shuffled self.dag.get_vector_shuffle(result, first, second, mask);
@@ -4367,23 +4401,42 @@ impl Builder<'_> {
                 }
                 // Both inputs padded with undefined lanes to the mask's length.
                 let count = lanes.div_ceil(sources);
-                let padded = match input {
-                    EVT::Simple(mvt) => mvt.element().and_then(|lane| MVT::vector(lane, (count * sources) as u32)),
-                    EVT::Int(_) => None,
-                }
-                .map(EVT::Simple)
-                .ok_or(Refused("a shufflevector padded to a vector with no register class"))?;
-                for operand in [&mut first, &mut second] {
-                    if self.dag.is_undef(*operand) {
-                        *operand = self.dag.get_undef(padded);
-                    } else {
-                        let undef = self.dag.get_undef(input);
-                        let mut pieces = vec![undef; count];
-                        pieces[0] = *operand;
-                        *operand = self.dag.get_node(ISD::ConcatVectors, padded, &pieces);
+                let padded = match input.is_vector().then(|| input.element()) {
+                    Some(EVT::Simple(lane)) => {
+                        let lanes = (count * sources) as u32;
+                        (MVT::vector(lane, lanes).is_some()
+                            || !lanes.is_power_of_two() && MVT::vector(lane, lanes.next_power_of_two()).is_some())
+                        .then(|| EVT::vector(lane, lanes))
                     }
+                    _ => None,
                 }
-                sources = count * sources;
+                .ok_or(Refused("a shufflevector padded to a vector with no register class"))?;
+                // DEVIATE: no padding past a register (the pin widens `v18i8`
+                // to `v32i8` and splits it); the
+                // lanes are built one at a time instead. Exit: splitting an
+                // extended vector type; owner x87-cordic-2;
+                // review 2026-11-27.
+                if padded.size_in_bits() <= 128 {
+                    for operand in [&mut first, &mut second] {
+                        if self.dag.is_undef(*operand) {
+                            *operand = self.dag.get_undef(padded);
+                        } else {
+                            let undef = self.dag.get_undef(input);
+                            let mut pieces = vec![undef; count];
+                            pieces[0] = *operand;
+                            *operand = self.dag.get_node(ISD::ConcatVectors, padded, &pieces);
+                        }
+                    }
+                    // Readjust the mask for the padded inputs: the second
+                    // input's lanes follow the first's padded length.
+                    let padded_lanes = (count * sources) as i32;
+                    remapped = mask
+                        .iter()
+                        .map(|&lane| if lane >= sources as i32 { lane - sources as i32 + padded_lanes } else { lane })
+                        .collect();
+                    mask = &remapped;
+                    sources = count * sources;
+                }
             }
             if sources > lanes {
                 // Each input a subvector of the mask's width, at one start.

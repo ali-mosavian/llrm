@@ -445,6 +445,8 @@ impl llrm_target::Target for M64 {
                             // `Tti::lsr_phi_users_first`.
                             lsr_phi_users_first: true,
                             lsr_size_order: true,
+                            // DEVIATE LSR-DROP-AT-SIZE (owner llrm-target-x86-m64-b, exit 2026-11-30): see Tuning.
+                            lsr_drop_worse_at_size: true,
                             // Pin order: visitADD's or-disjoint, then pushAddIntoCmovOfConsts; see Tuning.
                             add_to_or_disjoint: true,
                             // DEVIATE LV-OS (owner llrm-target-x86-m64, exit 2026-11-24): see Tuning.
@@ -481,7 +483,7 @@ impl llrm_target::Target for M64 {
                             carry_slot_indexes: false,
                             // DEVIATE LSR-CONST (owner llrm-target-x86-m64-b, exit 2026-11-30): see Tuning.
                             lsr_constant_setup_is_one: true,
-                            // DEVIATE RU-REC (owner x86-m64, exit 2026-11-20): see Tuning.
+                            // DEVIATE RU-REC (owner x86-m64, exit 2026-11-24): see Tuning.
                             unroll_recurrence_veto: true,
                             // DEVIATE SZ2 (owner m64, exit 2026-11-19): the bound holds a
                             // callee with one site too; the pin copies it (crc, floats,
@@ -584,6 +586,10 @@ impl llrm_target::Target for M64 {
                             immediate_forms_at_size: true,
                             // DEVIATE IPACP-O2 (owner w10, exit 2026-11-24): see Tuning.
                             ipa_cp_clones_at_speed: true,
+                            // DEVIATE IPACP-O3-M64 (owner x87-cordic-2, exit 2026-12-20): gcc clones `place`
+                            // for each row of queens; 4 left rows 4.. generic (+4.3% clk). 8 clones grow
+                            // each body past the unroll threshold: queens -O3 +2% instructions, so 7.
+                            ipa_cp_max_clones: 7,
                             // DEVIATE UNROLL-O3 (owner llrm-target-x86-m64-b, exit 2026-11-30): see Tuning.
                             unroll_threshold_at_o3: Some(400),
                             // DEVIATE DIVCONST-SIZE (owner llrm-target-x86-m64-b, exit 2026-11-30): see Tuning.

@@ -1,4 +1,4 @@
-//! DEVIATE RU-REC (owner x86-m64; exit 2026-11-20): a loop is not unrolled at
+//! DEVIATE RU-REC (owner x86-m64; exit 2026-11-24): a loop is not unrolled at
 //! run time when its loop-carried dependence takes longer than the core needs
 //! to issue one trip.
 //!

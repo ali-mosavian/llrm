@@ -3899,7 +3899,7 @@ pub fn _instruction(
             // name their operands; `cwd` and `cdq` name theirs in the opcode.
             if matches!(name, "movsx" | "movzx")
                 || name.starts_with("cvt")
-                || matches!(name, "movq" | "movd" | "movq_x" | "movd_x")
+                || matches!(name, "movq" | "movd" | "movq_x" | "movd_x" | "pmovmskb" | "movmskps")
             {
                 vec![format!("{} {}, {}", name.trim_end_matches("_x"), dests[0], sources[0])]
             } else {
