@@ -1210,10 +1210,6 @@ impl Tti for X86 {
         self.issue_width
     }
 
-    fn vetoes_recurrence_bound_unroll(&self) -> bool {
-        self.tuning.unroll_recurrence_veto
-    }
-
     fn x87_stack_slots(&self) -> Option<u32> {
         self.tuning.x87_stack_slots.filter(|_| !self.sse2)
     }

@@ -41,6 +41,16 @@ fn a_two_dimensional_fill_is_a_vector_loop_with_narrow_counters_at_x86_64() {
     assert!(text.contains("cvtdq2pd"), "no packed conversion:\n{text}");
     assert!(!text.contains("cvtsi2sd"), "a scalar conversion is left:\n{text}");
     assert!(text.contains("paddd") && !text.contains("paddq"), "the counters are not narrow:\n{text}");
+    // `trunc (build_vector x, x)` is the build of the truncated lanes: `movd`, `pshufd`, not `movq`, `punpcklqdq`.
+    assert!(!text.contains("punpcklqdq"), "the 64-bit splat is truncated, not narrowed:\n{text}");
+}
+
+/// A splat of a counter into the low lanes of a `<4 x i32>` (the widened `<2 x i32>`) was built through the stack.
+#[test]
+fn a_splat_of_a_counter_is_movd_and_pshufd_at_x86_64() {
+    let text = compile("vector_float_splat.c");
+    assert!(text.contains("pshufd"), "no shuffle:\n{text}");
+    assert!(!text.contains("[rsp"), "the splat goes through the stack:\n{text}");
 }
 
 #[test]
