@@ -324,6 +324,16 @@ pub trait CombineHooks {
         self.decompose_mul_by_constant(vt, c)
     }
 
+    /// `isVectorLoadExtDesirable`: whether `CombineExtLoad` may split the
+    /// extension of a vector load (the pin: no).
+    fn vector_load_ext_desirable(
+        &self,
+        _dag: &SelectionDAG,
+        _extend: SDValue,
+    ) -> bool {
+        false
+    }
+
     /// `ExtendSetCCUses`: the compares of a load against a constant, which
     /// `ExtendUsesToFormExtLoad` widens to compare its extension, of the type
     /// `wide`
@@ -1229,7 +1239,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 .fold_sext_setcc(node)
                 .or_else(|| self.fold_zext_setcc(node))
                 .or_else(|| self.fold_extend_of_cast(node))
-                .or_else(|| self.visit_extend(node))
+                .or_else(|| self.visit_extend(node).or_else(|| self.combine_ext_load(node)))
                 .or_else(|| self.sext_of_non_negative(node))
                 .or_else(|| self.zext_nneg_of_existing_sext(node)),
             ISD::BitCast => self.visit_bitcast(node),

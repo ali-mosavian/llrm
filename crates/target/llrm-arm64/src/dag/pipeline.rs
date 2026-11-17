@@ -298,6 +298,26 @@ impl CombineHooks for Aarch64Lowering {
         true
     }
 
+    /// `AArch64TargetLowering::isVectorLoadExtDesirable`
+    /// ([L7444](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L7444)):
+    /// "small, illegal vectors can be extended inreg"
+    /// (`isEligibleForSmallVectorLoadOpt`: a simple `v2i8`, `v4i8` or `v2i16`).
+    /// DEVIATE EXL2 (owner w11, exit 2026-11-27): the masked-load and SVE arms
+    /// have no node here.
+    fn vector_load_ext_desirable(
+        &self,
+        dag: &SelectionDAG,
+        extend: SDValue,
+    ) -> bool {
+        use llrm_codegen::backend::selectiondag::mvt::MVT;
+        let load = dag.operand(extend, 0);
+        let NodeData::Mem(info) = dag.node(load).data else { return false };
+        dag.opcode(load) == ISD::Load
+            && dag.value_type(extend).size_in_bits() <= 128
+            && !info.volatile
+            && matches!(info.mem_vt, EVT::Simple(MVT::V2I8 | MVT::V4I8 | MVT::V2I16))
+    }
+
     fn has_target_combine(
         &self,
         op: ISD,
