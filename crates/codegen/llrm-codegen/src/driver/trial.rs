@@ -62,6 +62,8 @@ enum Dimension {
     Unroll { limit: u32, bytes_strict: bool },
     /// DEVIATE JT-LATCH-TRIAL: JumpThreading does not copy a loop latch.
     KeepLatch,
+    /// DEVIATE LIR-COPY-TRIAL: a copy loop of an unknown count stays a loop.
+    KeepCopyLoop,
 }
 
 /// What the base compile noted for each dimension.
@@ -71,6 +73,7 @@ struct Noted {
     rotated_loops: usize,
     left: (Vec<String>, usize),
     latched: Vec<String>,
+    copied: Vec<String>,
 }
 
 impl Noted {
@@ -82,6 +85,7 @@ impl Noted {
             rotated_loops: trial::rotated_loops(),
             left: trial::take_left(),
             latched: trial::take_latch_copies(),
+            copied: trial::take_copy_calls(),
         };
         trial::clear_rotated_loops();
         noted
@@ -96,6 +100,7 @@ impl Noted {
             Dimension::RotateMore { .. } => !self.left.0.is_empty(),
             Dimension::Unroll { .. } => !self.unroll.0.is_empty(),
             Dimension::KeepLatch => !self.latched.is_empty(),
+            Dimension::KeepCopyLoop => !self.copied.is_empty(),
         }
     }
 }
@@ -113,6 +118,9 @@ impl Dimension {
             if tti.rotation_hot_at_size() {
                 all.push(Dimension::RotateMore { bytes: tti.rotation_hot_bytes_per_loop() });
             }
+        }
+        if tti.loop_idiom_copy_trial_at_size() && !llrm_support::env_flag!("LLRM_NO_LIR_COPY_TRIAL") {
+            all.push(Dimension::KeepCopyLoop);
         }
         if tti.jump_threading_latch_trial_at_size() && !llrm_support::env_flag!("LLRM_NO_JT_LATCH_TRIAL") {
             all.push(Dimension::KeepLatch);
@@ -133,6 +141,7 @@ impl Dimension {
             Dimension::RotateMore { .. } => trial::with_more_rotation(body),
             Dimension::Unroll { limit, .. } => trial::with(limit, body),
             Dimension::KeepLatch => trial::with_kept_latches(body),
+            Dimension::KeepCopyLoop => trial::with_kept_copy_loops(body),
         }
     }
 
@@ -176,6 +185,7 @@ impl Dimension {
             }
             // The object without the latch copies is smaller.
             Dimension::KeepLatch => ("keep-latch", trial::keeps_at_size(added)),
+            Dimension::KeepCopyLoop => ("keep-copy-loop", trial::keeps_at_size(added)),
             Dimension::Unroll { bytes_strict, .. } => {
                 ("unroll-os", measured && trial::keeps_unroll_at_size(saved, added, noted.unroll.0.len(), bytes_strict))
             }
