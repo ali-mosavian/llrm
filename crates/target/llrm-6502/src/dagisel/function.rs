@@ -69,6 +69,7 @@ pub fn builder_target() -> BuilderTarget {
         ..BuilderTarget::for_pointer_bits(16)
     }
     .with_narrow_divrem(EVT::I16, true)
+    .with_tuning(crate::driver::bytes_first_tuning())
 }
 
 /// One block, selected and scheduled.

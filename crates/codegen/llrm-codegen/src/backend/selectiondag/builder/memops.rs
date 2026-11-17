@@ -1455,8 +1455,16 @@ impl Builder<'_> {
                 }
             }
             _ => {
+                // DEVIATE SD223: at the speed rate `fill_is_smaller` prices the
+                // fill against the stores, so the pin's count
+                // (`MaxStoresPerMemset`) is the limit, not the
+                // target's fitted one: a 32-byte clear is eight
+                // stores where the fill loses (parity -O2: `rep stosd`
+                // 46 clk over the stores). Owner llrm-target-x86-m16.
                 let limit = if opt_size {
                     self.target.tuning.max_stores_per_memset_opt_size
+                } else if self.target.size_trade.is_some() {
+                    self.target.tuning.max_stores_per_memset.max(llrm_mir::target::Tuning::PIN.max_stores_per_memset)
                 } else {
                     self.target.tuning.max_stores_per_memset
                 };
