@@ -700,7 +700,59 @@ pub fn lower(
         emitter.from_place(None);
         out.push(Lowered { label: block.label.clone(), insts: emitter.insts, locs: emitter.locs });
     }
+    if let Some(one) = wrapped.as_ref().filter(|one| !one.edges.is_empty()) {
+        split_restore(&frame, one, function.unwind, &mut out);
+    }
     Ok(out)
+}
+
+/// `tryToSplitRestore`: the blocks of `wrapped.edges` that reach the shared
+/// return through the frame leave for a new block that takes the frame down
+/// and goes on to the return, which the paths that never made the frame still
+/// reach as before. The block sits before the return when the last edge block
+/// falls into it, else at the end of the function with a branch.
+fn split_restore(
+    frame: &Layout,
+    wrapped: &crate::shrinkwrap::Wrapped,
+    unwind: Unwind,
+    out: &mut Vec<Lowered>,
+) {
+    let target = out[wrapped.restore].label.clone();
+    let label = format!("{target}.frame");
+    let falls_in = wrapped.restore > 0 && wrapped.edges.contains(&(wrapped.restore - 1));
+    for &edge in &wrapped.edges {
+        let block = &mut out[edge];
+        for inst in block.insts.iter_mut() {
+            if let Inst::Branch { link: false, target: Target::Label(to) }
+            | Inst::BranchCond { target: Target::Label(to), .. }
+            | Inst::CompareBranch { target: Target::Label(to), .. }
+            | Inst::TestBranch { target: Target::Label(to), .. } = inst
+                && *to == target
+            {
+                to.clone_from(&label);
+            }
+        }
+        let leaves = matches!(
+            block.insts.iter().rev().find(|inst| !matches!(inst, Inst::Cfi(_))),
+            Some(Inst::Branch { link: false, .. } | Inst::Ret { .. })
+        );
+        if edge + 1 == wrapped.restore && !falls_in && !leaves {
+            block.insts.push(Inst::Branch { link: false, target: Target::Label(label.clone()) });
+            block.locs.push(None);
+        }
+    }
+    let mut emitter = Emitter::new(unwind);
+    epilogue(frame, &mut emitter);
+    if !falls_in {
+        emitter.insts.push(Inst::Branch { link: false, target: Target::Label(target) });
+    }
+    emitter.from_place(None);
+    let block = Lowered { label, insts: emitter.insts, locs: emitter.locs };
+    if falls_in {
+        out.insert(wrapped.restore, block);
+    } else {
+        out.push(block);
+    }
 }
 
 fn prologue(
