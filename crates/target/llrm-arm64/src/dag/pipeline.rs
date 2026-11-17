@@ -298,6 +298,26 @@ impl CombineHooks for Aarch64Lowering {
         true
     }
 
+    /// `AArch64TargetLowering::isVectorLoadExtDesirable`
+    /// ([L7444](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L7444)):
+    /// "small, illegal vectors can be extended inreg"
+    /// (`isEligibleForSmallVectorLoadOpt`: a simple `v2i8`, `v4i8` or `v2i16`).
+    /// DEVIATE EXL2 (owner w11, exit 2026-11-27): the masked-load and SVE arms
+    /// have no node here.
+    fn vector_load_ext_desirable(
+        &self,
+        dag: &SelectionDAG,
+        extend: SDValue,
+    ) -> bool {
+        use llrm_codegen::backend::selectiondag::mvt::MVT;
+        let load = dag.operand(extend, 0);
+        let NodeData::Mem(info) = dag.node(load).data else { return false };
+        dag.opcode(load) == ISD::Load
+            && dag.value_type(extend).size_in_bits() <= 128
+            && !info.volatile
+            && matches!(info.mem_vt, EVT::Simple(MVT::V2I8 | MVT::V4I8 | MVT::V2I16))
+    }
+
     fn has_target_combine(
         &self,
         op: ISD,
@@ -489,6 +509,9 @@ impl LegalizeHooks for Aarch64Lowering {
                 None if super::vector::is_constant_build_vector(dag, node) => return None,
                 None => None,
             },
+            // Declined for a lane that is no constant in range: the legalizer
+            // spills the vector.
+            ISD::ExtractElement => return super::vector::lower_extract_vector_elt(dag, node),
             ISD::VectorShuffle => super::vector::lower_vector_shuffle(dag, node),
             ISD::VecReduceAdd
             | ISD::VecReduceAnd
@@ -505,6 +528,8 @@ impl LegalizeHooks for Aarch64Lowering {
             ISD::Mul => return super::vector::lower_mul(dag, node),
             // Declined: the legalizer expands it, as the pin's `SDValue()`.
             ISD::FShl | ISD::FShr => return super::lowering::lower_funnel_shift(dag, node),
+            // Declined for a step wider than two: the legalizer expands it.
+            ISD::ZeroExtendVectorInreg => return super::vector::lower_zero_extend_vector_inreg(dag, node),
             ISD::BrCond => super::lowering::lower_brcond(dag, node),
             ISD::BrCC => super::lowering::lower_br_cc_node(dag, node),
             ISD::SIntToFp | ISD::UIntToFp if dag.value_type(node).is_vector() => {

@@ -324,6 +324,16 @@ pub trait CombineHooks {
         self.decompose_mul_by_constant(vt, c)
     }
 
+    /// `isVectorLoadExtDesirable`: whether `CombineExtLoad` may split the
+    /// extension of a vector load (the pin: no).
+    fn vector_load_ext_desirable(
+        &self,
+        _dag: &SelectionDAG,
+        _extend: SDValue,
+    ) -> bool {
+        false
+    }
+
     /// `ExtendSetCCUses`: the compares of a load against a constant, which
     /// `ExtendUsesToFormExtLoad` widens to compare its extension, of the type
     /// `wide`
@@ -1168,6 +1178,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             ISD::Freeze => self.visit_freeze(node),
             ISD::InsertVectorElt => self.visit_insert_vector_elt(node),
             ISD::VectorShuffle => self.visit_vector_shuffle(node),
+            ISD::ZeroExtendVectorInreg => self.visit_zero_extend_vector_inreg(node),
             ISD::ExtractElement => self.visit_extract_vector_elt(node),
             ISD::SetCC => self.visit_setcc(node),
             ISD::BrCond => self.visit_brcond(node),
@@ -1228,7 +1239,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 .fold_sext_setcc(node)
                 .or_else(|| self.fold_zext_setcc(node))
                 .or_else(|| self.fold_extend_of_cast(node))
-                .or_else(|| self.visit_extend(node))
+                .or_else(|| self.visit_extend(node).or_else(|| self.combine_ext_load(node)))
                 .or_else(|| self.sext_of_non_negative(node))
                 .or_else(|| self.zext_nneg_of_existing_sext(node)),
             ISD::BitCast => self.visit_bitcast(node),
@@ -4880,7 +4891,8 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         if self.dag.is_undef(n0) || self.dag.is_undef(n1) {
             return Some(self.dag.get_constant(0, vt));
         }
-        // `isConstOrConstSplat`: a vector of one constant is the constant, at the width of its lane.
+        // `isConstOrConstSplat`: a vector of one constant is the constant, at
+        // the width of its lane.
         let is_const = |dag: &SelectionDAG, v: SDValue| dag.const_or_splat(v).is_some() && !dag.is_opaque(v);
         if is_const(self.dag, n0) && !is_const(self.dag, n1) {
             return Some(self.dag.get_node(ISD::Mul, vt, &[n1, n0]));

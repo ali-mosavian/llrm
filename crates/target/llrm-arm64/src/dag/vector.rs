@@ -164,6 +164,44 @@ pub fn is_constant_build_vector(
     dag.node(op).ops.iter().all(|&lane| dag.is_undef(lane) || lane_constant(dag, lane, lane_bits).is_some())
 }
 
+/// `WidenVector`: a 64-bit vector in the low half of a 128-bit one, the high
+/// half undefined. The pin's `insert_subvector (undef), v, 0` is selected as
+/// `INSERT_SUBREG (IMPLICIT_DEF), v, dsub`; the node is built selected, there
+/// being no `INSERT_SUBVECTOR` here. DEVIATE DREG1 (owner llrm-arm64-vec, exit
+/// 2026-11-24): the pin's `insert_subvector` patterns (`addv` of a widened
+/// reduction) do not match a selected node.
+fn widen_vector(
+    dag: &mut SelectionDAG,
+    narrow: SDValue,
+) -> Option<SDValue> {
+    use llrm_dagisel::generated::aarch64::ids::reg::dsub;
+    use llrm_dagisel::generated::ids::target_opcode::{IMPLICIT_DEF, INSERT_SUBREG};
+    let vt = dag.value_type(narrow);
+    let EVT::Simple(wide) = vt else { return None };
+    let wide = EVT::Simple(MVT::vector(wide.element()?, wide.lanes()? * 2)?);
+    let undef = dag.get_node(ISD::Machine(u32::from(IMPLICIT_DEF)), wide, &[]);
+    let sub = dag.get_constant_with(u128::from(dsub), EVT::I32, true, false);
+    Some(dag.get_node(ISD::Machine(u32::from(INSERT_SUBREG)), wide, &[undef, narrow, sub]))
+}
+
+/// `LowerEXTRACT_VECTOR_ELT`
+/// ([L17727](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L17727)):
+/// a constant lane of a 64-bit vector is the lane of the vector widened to 128
+/// bits; any other lane is declined (the legalizer spills the vector). The
+/// 128-bit vectors are legal as they are.
+pub fn lower_extract_vector_elt(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let (vector, index) = (dag.operand(node, 0), dag.operand(node, 1));
+    let vt = dag.value_type(vector);
+    if dag.constant(index)? >= u128::from(vt.lanes()) {
+        return None;
+    }
+    let wide = widen_vector(dag, vector)?;
+    Some(dag.get_node(ISD::ExtractElement, dag.value_type(node), &[wide, index]))
+}
+
 /// `LowerBUILD_VECTOR`.
 pub fn lower_build_vector(
     dag: &mut SelectionDAG,
@@ -1014,11 +1052,12 @@ pub fn lower_small_vector_ext_load(
     let _ = ext;
     let (chain, ptr) = (dag.operand(node, 0), dag.operand(node, 1));
     let f32_vt = EVT::Simple(MVT::F32);
-    let scalar = dag.get_load(f32_vt, chain, ptr, llrm_codegen::backend::selectiondag::dag::MemInfo {
-        mem_vt: f32_vt,
-        ext: None,
-        ..info
-    });
+    let scalar = dag.get_load(
+        f32_vt,
+        chain,
+        ptr,
+        llrm_codegen::backend::selectiondag::dag::MemInfo { mem_vt: f32_vt, ext: None, ..info },
+    );
     let to_vector = dag.get_node(ISD::ScalarToVector, EVT::Simple(MVT::V4F32), &[scalar]);
     let source_bits = mem.element().size_in_bits();
     let mut current_bits = source_bits;
@@ -1067,5 +1106,32 @@ pub fn lower_truncate_vector_store(
     let words = dag.get_node(ISD::BitCast, EVT::Simple(MVT::V2I32), &[narrow]);
     let zero = dag.get_constant(0, EVT::I64);
     let word = dag.get_node(ISD::ExtractElement, EVT::I32, &[words, zero]);
-    Some(dag.get_store(chain, word, ptr, llrm_codegen::backend::selectiondag::dag::MemInfo { mem_vt: EVT::I32, ..info }))
+    Some(dag.get_store(
+        chain,
+        word,
+        ptr,
+        llrm_codegen::backend::selectiondag::dag::MemInfo { mem_vt: EVT::I32, ..info },
+    ))
+}
+
+/// `LowerZERO_EXTEND_VECTOR_INREG`
+/// ([AArch64ISelLowering.cpp#L16103](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L16103)):
+/// "custom-lower it as ZIP1-with-zeros"; a wider step is declined for the
+/// legalizer's expansion ("FIXME: support multi-step zipping?").
+pub fn lower_zero_extend_vector_inreg(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let vt = dag.value_type(node);
+    let source = dag.operand(node, 0);
+    let source_vt = dag.value_type(source);
+    if source_vt.size_in_bits() != vt.size_in_bits()
+        || vt.element().size_in_bits() != 2 * source_vt.element().size_in_bits()
+    {
+        return None;
+    }
+    let zero = dag.get_constant(0, source_vt.element());
+    let zeros = dag.get_splat_build_vector(source_vt, zero);
+    let zipped = dag.get_node(ISD::Target(aarch64_isd::ZIP1), source_vt, &[source, zeros]);
+    Some(dag.get_node(ISD::BitCast, vt, &[zipped]))
 }

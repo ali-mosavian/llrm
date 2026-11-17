@@ -115,21 +115,23 @@ pub mod bswap_combine;
 pub mod builder;
 pub mod chain_combine;
 pub mod combine_andnot;
-pub mod combine_hoist_logic;
 mod combine_avg;
+pub mod combine_ext_load;
+pub mod combine_extend_inreg;
+pub mod combine_extract;
 pub mod combine_funnel;
+pub mod combine_hoist_logic;
 pub mod combine_lifetime_end;
 pub mod combine_load;
 pub mod combine_load_combine;
 pub mod combine_mulo;
 pub mod combine_select_minmax;
-pub mod combine_vselect;
 pub mod combine_store_merge;
 pub mod combine_token_factor;
 pub mod combine_trunc_stores;
 pub mod combine_urem_eq;
-pub mod combine_extract;
 pub mod combine_vector;
+pub mod combine_vselect;
 pub mod ctcount_combine;
 pub mod dag;
 pub mod dag_combiner;
@@ -255,8 +257,6 @@ mod dagisel_tests;
 #[cfg(test)]
 mod exact_shift_tests;
 #[cfg(test)]
-mod infer_ptr_align_tests;
-#[cfg(test)]
 mod extload_tests;
 #[cfg(test)]
 mod fallthrough_tests;
@@ -270,6 +270,8 @@ mod fpround_tests;
 mod freeze_tests;
 #[cfg(test)]
 mod gaps_tests;
+#[cfg(test)]
+mod infer_ptr_align_tests;
 #[cfg(test)]
 mod invoke_tests;
 #[cfg(test)]

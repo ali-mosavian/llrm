@@ -121,6 +121,13 @@ pub trait Lowering {
         true
     }
 
+    /// Whether the target has `optimizeExtendOrTruncateConversion` (the hook
+    /// of CodeGenPrepare that writes a vector extension as a `tbl` shuffle).
+    /// The base class has none.
+    fn rewrites_extends_for_tbl(&self) -> bool {
+        false
+    }
+
     /// `isTypeLegal(EVT(iN))`: a register type of the target. The base class
     /// has none.
     fn is_type_legal(

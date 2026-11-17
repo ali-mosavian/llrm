@@ -304,6 +304,13 @@ impl TypeLegalizer<'_> {
                 his.extend_from_slice(&ops[1..]);
                 (self.dag.get_node_flags(op, lo_vt, &los, flags), self.dag.get_node_flags(op, hi_vt, &his, flags))
             }
+            // `SplitVecRes_BITCAST`, an input that is a vector to be split too:
+            // each half of it, cast. (The pin's other inputs, scalars to
+            // expand and the by-hand integer split, are not translated.)
+            ISD::BitCast if self.action(self.dag.value_type(self.dag.operand(value, 0))) == TypeAction::SplitVector => {
+                let (lo, hi) = self.split_vector(self.dag.operand(value, 0));
+                (self.dag.get_node(ISD::BitCast, lo_vt, &[lo]), self.dag.get_node(ISD::BitCast, hi_vt, &[hi]))
+            }
             ISD::SetCC => self.split_setcc(value).ok_or_else(|| unsupported("split compare"))?,
             ISD::VSelect => self.split_vselect(value, lo_vt, hi_vt).ok_or_else(|| unsupported("split select"))?,
             // `SplitVecRes_CONCAT_VECTORS`: the first operands, then the rest.

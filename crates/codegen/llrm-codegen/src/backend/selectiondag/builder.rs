@@ -985,15 +985,18 @@ impl Builder<'_> {
             Type::Vector { element, count } if self.target.dag.vectors => {
                 // `v16i8`, `v8i16`, `v4i32`, `v2i64`: the vectors VR128 holds.
                 match self.module.context.types.get(*element) {
-                    // A lane count no `MVT` has (`<3 x i8>`) is an extended vector type: the type legalizer widens it.
+                    // A lane count no `MVT` has (`<3 x i8>`) is an extended
+                    // vector type: the type legalizer widens it.
                     Type::Int(bits) => MVT::integer(*bits)
                         .and_then(|lane| {
-                            MVT::vector(lane, *count).map(EVT::Simple).or_else(|| {
-                                (EVT::Simple(lane).size_in_bits() % 8 == 0
-                                    && !count.is_power_of_two()
-                                    && MVT::vector(lane, count.next_power_of_two()).is_some())
-                                .then(|| EVT::vector(lane, *count))
-                            })
+                            MVT::vector(lane, *count)
+                                .map(EVT::Simple)
+                                .or_else(
+                                    || (EVT::Simple(lane).size_in_bits() % 8 == 0
+                                        && !count.is_power_of_two()
+                                        && MVT::vector(lane, count.next_power_of_two()).is_some())
+                                    .then(|| EVT::vector(lane, *count)),
+                                )
                         })
                         .ok_or(Refused("vector with no register class")),
                     // `v4f32`, `v2f64`
@@ -4407,9 +4410,11 @@ impl Builder<'_> {
                     _ => None,
                 }
                 .ok_or(Refused("a shufflevector padded to a vector with no register class"))?;
-                // DEVIATE: no padding past a register (the pin widens `v18i8` to `v32i8` and splits it); the
-                // lanes are built one at a time instead. Exit: splitting an extended vector type; owner
-                // x87-cordic-2; review 2026-11-27.
+                // DEVIATE: no padding past a register (the pin widens `v18i8`
+                // to `v32i8` and splits it); the
+                // lanes are built one at a time instead. Exit: splitting an
+                // extended vector type; owner x87-cordic-2;
+                // review 2026-11-27.
                 if padded.size_in_bits() <= 128 {
                     for operand in [&mut first, &mut second] {
                         if self.dag.is_undef(*operand) {
@@ -4466,6 +4471,11 @@ impl Builder<'_> {
                         .collect();
                     break 'shuffled self.dag.get_vector_shuffle(result, inputs[0], inputs[1], &mapped);
                 }
+            }
+            // "Padded" inputs of the mask's length: the shuffle of the pin's
+            // final `getVectorShuffle`.
+            if sources == lanes {
+                break 'shuffled self.dag.get_vector_shuffle(result, first, second, mask);
             }
             // Neither concatenation nor subvectors: a lane at a time.
             let lane_vt = result.element();

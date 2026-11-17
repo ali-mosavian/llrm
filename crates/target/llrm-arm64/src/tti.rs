@@ -1009,13 +1009,14 @@ impl Tti for AArch64 {
         kind: CastKind,
         dst: VectorTy,
         src: VectorTy,
+        own: VectorTy,
         users: &[llrm_mir::tti::ExtUser],
         cost_kind: CostKind,
     ) -> Option<Cost> {
         if cost_kind == CostKind::Latency {
             return None;
         }
-        crate::tti_vector::ext_cost(kind, dst, src, users)
+        crate::tti_vector::ext_cost(kind, dst, src, own, users)
     }
 
     fn vector_min_max_cost(
@@ -1701,6 +1702,12 @@ impl AArch64Lowering {
 }
 
 impl Lowering for AArch64Lowering {
+    // `AArch64TargetLowering::optimizeExtendOrTruncateConversion`
+    // (`EnableExtToTBL`, little endian, no SVE for fixed vectors).
+    fn rewrites_extends_for_tbl(&self) -> bool {
+        true
+    }
+
     // The register classes: GPR32 and GPR64 (AArch64ISelLowering.cpp,
     // addRegisterClass).
     fn is_type_legal(

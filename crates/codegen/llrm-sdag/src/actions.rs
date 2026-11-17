@@ -931,9 +931,11 @@ impl TargetLowering {
         // expansion. DEVIATE X86V3 now covers only the 8- and 16-bit
         // lanes and the non-splat builds.
         t.set_ops(&[ISD::BuildVector], &[MVT::V16I8, MVT::V8I16, MVT::V4I32, MVT::V2I64], Action::Custom);
-        // `LowerEXTEND_VECTOR_INREG`, `LowerTRUNCATE`: a vector widened to more than one register (`punpck`, `psra`),
-        // or narrowed from more than one (`pand` + `packuswb`). No vector has an extending load or a truncating store
-        // of another vector's memory type without `pmovzx` (SSE4.1).
+        // `LowerEXTEND_VECTOR_INREG`, `LowerTRUNCATE`: a vector widened to more
+        // than one register (`punpck`, `psra`), or narrowed from more
+        // than one (`pand` + `packuswb`). No vector has an extending load or a
+        // truncating store of another vector's memory type without
+        // `pmovzx` (SSE4.1).
         let wide = [MVT::V16I16, MVT::V8I32, MVT::V16I32, MVT::V4I64, MVT::V8I64, MVT::V16I64];
         t.set_ops(&[ISD::ZeroExtend, ISD::SignExtend], &[MVT::V8I16, MVT::V4I32, MVT::V2I64], Action::Custom);
         t.set_ops(&[ISD::ZeroExtend, ISD::SignExtend], &wide, Action::Custom);
@@ -955,15 +957,19 @@ impl TargetLowering {
         // (`ExpandVSELECT`).
         t.set_ops(&[ISD::VSelect], &[MVT::V16I8, MVT::V8I16, MVT::V4I32, MVT::V2I64], Action::Expand);
         // `LowerINSERT_VECTOR_ELT`: lane 0 of an undefined or zero vector is a
-        // `movd`; another position is `ExpandINSERT_VECTOR_ELT` (the stack). DEVIATE
-        // X86V3 (owner llrm-target-x86-m64-b, exit 2026-11-24): the pin shuffles
-        // (`movss`, `punpck`) or uses `pinsrw`/`pinsrb`.
+        // `movd`; another position is `ExpandINSERT_VECTOR_ELT` (the stack).
+        // DEVIATE X86V3 (owner llrm-target-x86-m64-b, exit 2026-11-24):
+        // the pin shuffles (`movss`, `punpck`) or uses
+        // `pinsrw`/`pinsrb`.
         t.set_ops(&[ISD::InsertVectorElt], &[MVT::V16I8, MVT::V8I16, MVT::V4I32, MVT::V2I64], Action::Custom);
-        // `LowerEXTRACT_VECTOR_ELT`: a constant lane is a shuffle and a `movd`; a variable one is the stack.
+        // `LowerEXTRACT_VECTOR_ELT`: a constant lane is a shuffle and a `movd`;
+        // a variable one is the stack.
         t.set_ops(&[ISD::ExtractElement], &[MVT::V16I8, MVT::V8I16, MVT::V4I32, MVT::V2I64], Action::Custom);
-        // No shuffle is selected by pattern: `LegalizeDAG` builds the vector of the lanes the mask picks.
+        // No shuffle is selected by pattern: `LegalizeDAG` builds the vector of
+        // the lanes the mask picks.
         t.set_ops(&[ISD::VectorShuffle], &[MVT::V16I8, MVT::V8I16, MVT::V4I32, MVT::V2I64], Action::Expand);
-        // `LowerSCALAR_TO_VECTOR`: a byte or a word is widened to a dword for `movd`.
+        // `LowerSCALAR_TO_VECTOR`: a byte or a word is widened to a dword for
+        // `movd`.
         t.set_ops(&[ISD::ScalarToVector], &[MVT::V16I8, MVT::V8I16], Action::Custom);
         // `LowerMUL`: `v4i32` without `pmulld` is `pmuludq` on the even and the
         // odd lanes.
@@ -973,8 +979,9 @@ impl TargetLowering {
         // expansion.
         t.set_ops(&[ISD::Shl, ISD::Srl], &[MVT::V8I16, MVT::V4I32, MVT::V2I64], Action::Custom);
         t.set_ops(&[ISD::Sra], &[MVT::V8I16, MVT::V4I32], Action::Custom);
-        // `ExpandReductions` (`getShuffleReduction`) makes a sum, `and`, `or` or
-        // `xor` a shuffle and an operation a step, then `extractelement`.
+        // `ExpandReductions` (`getShuffleReduction`) makes a sum, `and`, `or`
+        // or `xor` a shuffle and an operation a step, then
+        // `extractelement`.
         t.set_ops(
             &[ISD::VecReduceAdd, ISD::VecReduceAnd, ISD::VecReduceOr, ISD::VecReduceXor],
             &[MVT::V16I8, MVT::V8I16, MVT::V4I32, MVT::V2I64],
@@ -985,13 +992,7 @@ impl TargetLowering {
         // llrm-target-x86-m64-b, exit 2026-11-24): the pin shuffles those too
         // (a vector multiply, `pcmpgt` and blend steps).
         t.set_ops(
-            &[
-                ISD::VecReduceMul,
-                ISD::VecReduceSMax,
-                ISD::VecReduceSMin,
-                ISD::VecReduceUMax,
-                ISD::VecReduceUMin,
-            ],
+            &[ISD::VecReduceMul, ISD::VecReduceSMax, ISD::VecReduceSMin, ISD::VecReduceUMax, ISD::VecReduceUMin],
             &[MVT::V16I8, MVT::V8I16, MVT::V4I32, MVT::V2I64],
             Action::Expand,
         );
@@ -1082,6 +1083,9 @@ impl TargetLowering {
             &[MVT::V8I8, MVT::V4I16, MVT::V2I32],
             Custom,
         );
+        // `LowerEXTRACT_VECTOR_ELT`: a lane of a 64-bit vector is read from the
+        // vector widened to 128 bits. The 128-bit vectors are legal.
+        t.set_ops(&[ExtractElement], &[MVT::V8I8, MVT::V4I16, MVT::V2I32, MVT::V2F32], Custom);
         // `LowerMUL`: the widening multiplies (`SMULL`, `UMULL`); `v2i64` has
         // no multiply of its own.
         t.set_ops(&[Mul], &[MVT::V8I16, MVT::V4I32, MVT::V2I64, MVT::V4I16, MVT::V2I32], Custom);
@@ -1096,10 +1100,10 @@ impl TargetLowering {
                 t.set_trunc_store_action(vt, mem, Expand);
             }
         }
-        // `AArch64TargetLowering` (L1515, L1526): the small vectors a D register
-        // does not hold are loaded as a scalar and widened in registers
-        // (`tryLowerSmallVectorExtLoad`), and `v4i8` is stored by narrowing
-        // `v4i16` (`LowerTruncateVectorStore`).
+        // `AArch64TargetLowering` (L1515, L1526): the small vectors a D
+        // register does not hold are loaded as a scalar and widened in
+        // registers (`tryLowerSmallVectorExtLoad`), and `v4i8` is
+        // stored by narrowing `v4i16` (`LowerTruncateVectorStore`).
         for (vt, mem) in [
             (MVT::V2I32, MVT::V2I8),
             (MVT::V2I64, MVT::V2I8),
@@ -1164,7 +1168,10 @@ impl TargetLowering {
         t.set_ops(&[Select, SelectCC, VSelect], &neon, Expand);
         // `initActions`: "These operations default to expand for vector
         // types".
-        t.set_ops(&[SignExtendInReg], &MVT::vectors().collect::<Vec<_>>(), Expand);
+        t.set_ops(&[SignExtendInReg, ZeroExtendVectorInreg], &MVT::vectors().collect::<Vec<_>>(), Expand);
+        // `addTypeForNEON`: `LowerZERO_EXTEND_VECTOR_INREG`.
+        let integer_neon = [MVT::V16I8, MVT::V8I16, MVT::V4I32, MVT::V2I64, MVT::V8I8, MVT::V4I16, MVT::V2I32];
+        t.set_ops(&[ZeroExtendVectorInreg], &integer_neon, Custom);
         for vt in neon.into_iter().filter(|vt| vt.element().is_some_and(|lane| !matches!(lane, MVT::F32 | MVT::F64))) {
             for cc in [CondCode::SetNe, CondCode::SetLe, CondCode::SetLt, CondCode::SetULe, CondCode::SetULt] {
                 t.set_cond_code_action(cc, vt, Expand);

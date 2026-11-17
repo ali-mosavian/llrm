@@ -120,6 +120,7 @@ pub enum ISD {
     SignExtend,
     AnyExtend,
     SignExtendInReg,
+    ZeroExtendVectorInreg,
     BitCast,
     BuildPair,
     ExtractElement,
@@ -170,7 +171,8 @@ pub enum ISD {
 
     SetCC,
     Select,
-    /// `VSELECT`: a vector of booleans picks each lane of the first or the second operand.
+    /// `VSELECT`: a vector of booleans picks each lane of the first or the
+    /// second operand.
     VSelect,
     SelectCC,
     BrCC,
@@ -386,6 +388,7 @@ impl ISD {
             SignExtend => "sign_extend",
             AnyExtend => "any_extend",
             SignExtendInReg => "sign_extend_inreg",
+            ZeroExtendVectorInreg => "zero_extend_vector_inreg",
             BitCast => "bitcast",
             BuildPair => "build_pair",
             ExtractElement => "extract_element",

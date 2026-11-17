@@ -2769,7 +2769,7 @@ fn why(
 }
 
 /// `Function::hasOptSize`.
-fn has_opt_size(function: &Function) -> bool {
+pub(crate) fn has_opt_size(function: &Function) -> bool {
     use llrm_mir::opcode::Attribute;
     function
         .attrs

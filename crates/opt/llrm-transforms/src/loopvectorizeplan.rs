@@ -453,7 +453,7 @@ fn iteration_cost(
                 if vf == 1 {
                     if folded { Cost::FREE } else { tti.cast_cost(cast, dst, src, kind) }
                 } else if matches!(cast, CastKind::SExt | CastKind::ZExt) {
-                    unknown(tti.vector_ext_cost(cast, vector(dst), vector(src), users, kind))?
+                    unknown(tti.vector_ext_cost(cast, vector(dst), vector(src), vector(src), users, kind))?
                 } else {
                     unknown(tti.vector_cast_cost(cast, vector(dst), vector(src), kind))?
                 }
