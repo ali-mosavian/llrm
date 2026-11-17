@@ -36,6 +36,7 @@
 
 use std::collections::BTreeSet;
 
+use crate::asm::CellReads;
 use crate::asm::{Asm, Index, Inst, Line, Op, Operand, Registers};
 use crate::peephole::{Exits, dead_from};
 
@@ -60,6 +61,27 @@ fn call_keeps_scratch(
         && matches!(
             &inst.operand,
             Operand::Direct(routine) if crate::routines::cells_named(routine).is_some_and(|cells| !cells.contains(&n))
+        )
+}
+
+/// Whether `inst`, a `jsr`, may read the scratch cell `rcn` (`n >= 16`) as an
+/// argument: a function of the program takes arguments there past the eighth
+/// byte (`calling.toml` `[mos_private]`), the cells this function's calls of it
+/// pass; a runtime routine's text names the cells it reads
+/// (`routines::cells_named`). A callee the function's own calls do not list is
+/// one nobody here can say a cell of is not read.
+fn call_may_read_scratch(
+    reads: &CellReads,
+    inst: &Inst,
+    n: u8,
+) -> bool {
+    n >= 16
+        && matches!(
+            &inst.operand,
+            Operand::Direct(callee) if match reads.callees.get(callee) {
+                Some(cells) => cells.contains(&n),
+                None => crate::routines::reaches_cells_by_index(callee),
+            }
         )
 }
 
@@ -127,8 +149,10 @@ fn straight(op: Op) -> bool {
 /// reads nothing new. A call, a raw line or an instruction not listed is not
 /// known to leave it dead.
 ///
-/// A scratch cell (`rc16`..) is clobbered by a call, which reads none of them:
-/// a store followed by a `jsr` before any read is dead.
+/// A scratch cell (`rc16`..) is clobbered by a call, which reads none of them
+/// when it is a runtime routine's: a store followed by a `jsr` of one before
+/// any read is dead. A call of a function of the program may read it as an
+/// argument.
 ///
 /// A callee-saved cell (`rc8`..`rc15`) is the caller's at the return: a store
 /// to it is dead only when a write to it (the epilogue's restore) comes before
@@ -149,10 +173,10 @@ fn cell_dead_from(
     lines: &[Line],
     from: usize,
     cell: &str,
-    results: &BTreeSet<String>,
+    reads: &CellReads,
     seen: &mut llrm_support::hash::HashSet<usize>,
 ) -> bool {
-    dead_from_pushed(lines, from, cell, results, seen, 0)
+    dead_from_pushed(lines, from, cell, reads, seen, 0)
 }
 
 /// [`cell_dead_from`] with `pushed` bytes on the stack above where it began: a
@@ -162,7 +186,7 @@ fn dead_from_pushed(
     lines: &[Line],
     from: usize,
     cell: &str,
-    results: &BTreeSet<String>,
+    reads: &CellReads,
     seen: &mut llrm_support::hash::HashSet<usize>,
     mut pushed: u32,
 ) -> bool {
@@ -184,7 +208,7 @@ fn dead_from_pushed(
             Line::Inst(inst) => inst,
         };
         if inst.op == Op::Rts {
-            return pushed == 0 && !callee_saved && !results.contains(cell);
+            return pushed == 0 && !callee_saved && !reads.results.contains(cell);
         }
         if inst.op == Op::Jsr && pushed > 0 {
             return false;
@@ -206,7 +230,7 @@ fn dead_from_pushed(
             if call_keeps_scratch(inst, n) {
                 continue;
             }
-            return true;
+            return !call_may_read_scratch(reads, inst, n);
         }
         // a call does not read the cells its routine reads no argument from:
         // one it always writes is dead before it (the `rc5`..`rc7` of a byte
@@ -237,10 +261,10 @@ fn dead_from_pushed(
             Line::label_position(lines, name)
         };
         if inst.op == Op::Jmp || inst.op == Op::Bra {
-            return label(inst).is_some_and(|to| dead_from_pushed(lines, to, cell, results, seen, pushed));
+            return label(inst).is_some_and(|to| dead_from_pushed(lines, to, cell, reads, seen, pushed));
         }
         if inst.op.opposite().is_some() {
-            if !label(inst).is_some_and(|to| dead_from_pushed(lines, to, cell, results, seen, pushed)) {
+            if !label(inst).is_some_and(|to| dead_from_pushed(lines, to, cell, reads, seen, pushed)) {
                 return false;
             }
             continue;
@@ -341,7 +365,7 @@ pub fn drop_dead_stores(asm: &mut Asm) {
             if let Line::Inst(Inst {
                 op: Op::Sta | Op::Stx | Op::Sty | Op::Stz, operand: Operand::Direct(cell), ..
             }) = &asm.lines[at]
-                && cell_dead_from(&asm.lines, at + 1, cell, &asm.result_cells, &mut Default::default())
+                && cell_dead_from(&asm.lines, at + 1, cell, &asm.cell_reads(), &mut Default::default())
             {
                 asm.lines.remove(at);
                 continue;
@@ -394,7 +418,7 @@ fn store_then_index_once(asm: &mut Asm) -> bool {
                 }
             }
             let Some(t) = found else { continue };
-            if cell_dead_from(lines, t + 1, m, &asm.result_cells, &mut Default::default()) && flags_unread(lines, t + 1)
+            if cell_dead_from(lines, t + 1, m, &asm.cell_reads(), &mut Default::default()) && flags_unread(lines, t + 1)
             {
                 asm.lines[s] = Line::Inst(Inst { op: transfer, operand: Operand::None, place: 0 });
                 asm.lines.remove(t);
@@ -440,7 +464,7 @@ fn temp_operand_once(asm: &mut Asm) -> bool {
         if !alu(user.op) || user.operand != Operand::Direct(t.clone()) {
             continue;
         }
-        if !cell_dead_from(lines, op_at + 1, t, &asm.result_cells, &mut Default::default()) {
+        if !cell_dead_from(lines, op_at + 1, t, &asm.cell_reads(), &mut Default::default()) {
             continue;
         }
         let operand = first.operand.clone();
@@ -549,7 +573,7 @@ fn spill_copy_once(
                     }
                     continue;
                 }
-                if n <= 7 {
+                if n <= 7 || call_may_read_scratch(&asm.cell_reads(), inst, n) {
                     return false;
                 }
                 break;
@@ -584,7 +608,7 @@ fn spill_copy_once(
             )
             || label > 0 && matches!(&lines[label - 1], Line::Label(_));
         if came < refs + usize::from(falls)
-            && !cell_dead_from(lines, label, t, &asm.result_cells, &mut Default::default())
+            && !cell_dead_from(lines, label, t, &asm.cell_reads(), &mut Default::default())
         {
             return false;
         }
@@ -708,7 +732,7 @@ pub fn carry_stays_in_the_flag(asm: &mut Asm) {
                 &mut Default::default(),
                 exits,
             ),
-            Some(m) => cell_dead_from(&asm.lines, end + 2, m, &asm.result_cells, &mut Default::default()),
+            Some(m) => cell_dead_from(&asm.lines, end + 2, m, &asm.cell_reads(), &mut Default::default()),
         };
         // the `lsr` leaves zero and not-negative; the work's flags are what
         // stay
@@ -763,7 +787,7 @@ fn chain_once(asm: &mut Asm) -> bool {
         if x != &m && x != &n {
             continue;
         }
-        if !cell_dead_from(lines, load + 1, x, &asm.result_cells, &mut Default::default())
+        if !cell_dead_from(lines, load + 1, x, &asm.cell_reads(), &mut Default::default())
             || !flags_unread(lines, load + 1)
         {
             continue;
@@ -931,7 +955,7 @@ fn forward_once(
             _ => {}
         }
     }
-    if rewritten.is_empty() || !cell_dead_from(&asm.lines, at + 2, &t, &asm.result_cells, &mut Default::default()) {
+    if rewritten.is_empty() || !cell_dead_from(&asm.lines, at + 2, &t, &asm.cell_reads(), &mut Default::default()) {
         for (index, operand) in rewritten {
             if let Line::Inst(inst) = &mut asm.lines[index] {
                 inst.operand = operand;
@@ -1094,7 +1118,7 @@ fn coalesce_once(
         }
         end += 1;
     }
-    let dead = |cell: &str| cell_dead_from(&asm.lines, end, cell, &asm.result_cells, &mut Default::default());
+    let dead = |cell: &str| cell_dead_from(&asm.lines, end, cell, &asm.cell_reads(), &mut Default::default());
     if renames.is_empty() || !dead(&s) || !dead(&t) {
         return false;
     }
