@@ -187,6 +187,16 @@ pub struct Options {
     /// m68k's. clang's -O1 IR leaves a latch `br` on a compare one block up
     /// (bsearch -O1: a re-test and a loop-carried copy of the result).
     pub thread_jumps: bool,
+    /// `TailCallElimPass` (`tailrec@688`) in the function pipeline before the
+    /// inliner at -O1, where the pin's
+    /// `buildO1FunctionSimplificationPipeline` has none: a self-recursive
+    /// callee is still recursive when the inliner prices it, so it is never
+    /// inlined and a caller loop keeps the call and its argument frames.
+    ///
+    /// DEVIATE TRE-O1 (owner z80, exit 2026-12-15, or when the pin's -O1 gains
+    /// it): a target that ranks bytes first turns it on at -O1.
+    /// idiv_loop_os -O1: 301 B, where the -Os pipeline's own order gives 257 B.
+    pub tail_recursion_early: bool,
     /// GCC's backward threader (`backthread@809`): a path into a join that
     /// decides a guard is copied. It grows code, so a target that ranks bytes
     /// first turns it off (6502, z80: `idioms` +188 and +619 bytes).
@@ -345,6 +355,7 @@ impl Default for Options {
             drop_loads: true,
             pre: true,
             thread_jumps: false,
+            tail_recursion_early: false,
             backward_threading: true,
             drop_stores: true,
             sink: true,
@@ -1409,6 +1420,7 @@ pub(crate) fn llvm_order(
         .filter(|one| {
             applied.options.pre
                 || (applied.options.thread_jumps && is_jump_threading(one.name()))
+                || (applied.options.tail_recursion_early && one.name() == "tailrec@688")
                 || !crate::parity::ABSENT_AT_O1.contains(&one.name())
         })
         .collect()
@@ -1747,6 +1759,7 @@ pub fn recorded(
                 inline: applied.options.inline,
                 cloning: cloning.clone(),
                 speed_rate: applied.options.prices_bytes(),
+                for_size: applied.options.prefers_size(),
             });
         }
     }

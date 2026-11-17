@@ -78,6 +78,7 @@ pub struct TargetLoweringInfo {
     /// A library shift keeps the shift-amount type (z80's asm helpers read a
     /// byte).
     narrow_library_shift: bool,
+    soft_compare_classes: bool,
     /// `f128` has a register class (AArch64 `FPR128`), no arithmetic: its
     /// operations are library calls on `q` registers.
     legal_f128: bool,
@@ -130,6 +131,7 @@ impl TargetLoweringInfo {
             set_cc_result: MVT::I8,
             int_size: 32,
             narrow_library_shift: false,
+            soft_compare_classes: false,
             legal_f128: false,
             widen_vectors: false,
             vectors: legal.iter().copied().filter(|vt| vt.is_vector()).collect(),
@@ -201,6 +203,23 @@ impl TargetLoweringInfo {
 
     pub fn narrow_library_shift(&self) -> bool {
         self.narrow_library_shift
+    }
+
+    /// DEVIATE SOFT-CMP-CSE: soften a float compare by the routine's class,
+    /// not its name: `eq`, `ne`, `lt` and `le` are all `__lesf2`'s three-way
+    /// result (-1, 0, 1; unordered 1), `gt` and `ge` are `__gesf2`'s (unordered
+    /// -1). The pin calls the routine named for each predicate, so six
+    /// predicates of one pair are six calls where two answer them. For a
+    /// runtime whose four low routines are aliases of one core and whose two
+    /// high ones are (compiler-rt's, which m68k, z80 and 6502 ship). Owner w8,
+    /// exit 2026-11-27.
+    pub fn with_soft_compare_classes(mut self) -> TargetLoweringInfo {
+        self.soft_compare_classes = true;
+        self
+    }
+
+    pub fn soft_compare_classes(&self) -> bool {
+        self.soft_compare_classes
     }
 
     /// `getIntSize`: the type a library shift takes its amount in

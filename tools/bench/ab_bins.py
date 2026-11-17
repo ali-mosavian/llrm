@@ -59,6 +59,12 @@ def measure(job: tuple[str, str, str, str, tuple]) -> tuple[int, int, str] | str
     return said if isinstance(said, str) else tuple(said)
 
 
+def compile_command(bindir: str, level: str, source: str, obj) -> list[str]:
+    """No `-march`: the gate's bench passes none and the m16 default CPU is the 486, the table the judge counts. `-march=i386` priced the 386 (grep -O1
+    36.03M clk against 29.73M) and hid the 486's `rep stos` against stores choice: lru +44 B / -30 clk was the only cell that moved, jpeg_* +145 B did not."""
+    return [f"{bindir}/llrm-cc", level, "-I", "bench", "-I", "tests/run/c", "-c", source, "-o", str(obj)]
+
+
 def measure_here(job: tuple[str, str, str, str, tuple]) -> tuple[int, int, str] | str:
     bindir, source, region, level, extra = job
     sys.path[:0] = [str(ROOT / "tools"), str(ROOT / "tools/bench"), str(ROOT / "crates/target/llrm-x86-m16/bench"), str(ROOT / "tools/dosbatch")]
@@ -68,7 +74,7 @@ def measure_here(job: tuple[str, str, str, str, tuple]) -> tuple[int, int, str] 
     obj, exe, lst = work / "a.obj", work / "a.exe", work / "a.map"
     env = {**os.environ, "LLRM_CC_TARGET": "x86_16-wat", **dict(extra)}
     try:
-        done = subprocess.run([f"{bindir}/llrm-cc", "-march=i386", level, "-I", "bench", "-I", "tests/run/c", "-c", source, "-o", str(obj)], capture_output=True, text=True, env=env, cwd=ROOT)
+        done = subprocess.run(compile_command(bindir, level, source, obj), capture_output=True, text=True, env=env, cwd=ROOT)
         if done.returncode:
             return "compile: " + done.stderr[-120:]
         dosbatch.link_c(obj, exe, work, lst)

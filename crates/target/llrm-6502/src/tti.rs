@@ -134,6 +134,12 @@ impl Tti for Mos6502 {
         "mos6502"
     }
 
+    /// Bytes first at every level (6502-UNROLL-RATE): a run of copies is a
+    /// `memcpy` where the call and its routine are fewer bytes.
+    fn string_runs_at_speed(&self) -> bool {
+        true
+    }
+
     fn cmp_sel_cost(
         &self,
         op: CmpSel,
@@ -206,6 +212,16 @@ impl Tti for Mos6502 {
     /// and kept where the backend writes the chain smaller (memcpy_libcall
     /// -O2: `same` folded into `main`, 100 B).
     fn speed_inline_finished_trial(&self) -> bool {
+        true
+    }
+
+    /// DEVIATE INL-O1-TRIAL-6502 (owner 6502, exit 2026-11-24, as
+    /// INL-O1-TRIAL-M68K): at -O1 a callee the bound refused is tried in the
+    /// caller and kept where the caller comes out smaller, and a shrink the
+    /// -O1 rule refuses is priced as the finished chain (`trial_inlined`). The
+    /// pin's -O1 inliner takes the copy at its threshold of 225
+    /// (local_initializers: `sum` inlined at cost 5).
+    fn inline_trials_at_o1(&self) -> bool {
         true
     }
 
