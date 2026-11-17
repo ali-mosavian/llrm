@@ -1147,7 +1147,10 @@ impl TargetLowering {
         // `addTypeForNEON`: the conversions of a vector are
         // `LowerVectorINT_TO_FP` and `LowerVectorFP_TO_INT`, by the
         // operand's type.
-        t.set_ops(&[SIntToFp, UIntToFp], &vectors, Custom);
+        // The 64-bit types are `addDRType`'s, each through `addTypeForNEON`: their
+        // conversions are custom too (`v2i32` to `v2f64`: `ushll`, `ucvtf`).
+        let converted: Vec<MVT> = [MVT::V8I8, MVT::V4I16, MVT::V2I32].into_iter().chain(vectors).collect();
+        t.set_ops(&[SIntToFp, UIntToFp], &converted, Custom);
         t.set_ops(&[FpToSInt, FpToUInt], &[MVT::V4F32, MVT::V2F64, MVT::V2F32], Custom);
         // `addTypeForNEON`: a compare is `LowerVSETCC`, a select a mask
         // expression (`ExpandVSELECT`), and the integer codes the compares
