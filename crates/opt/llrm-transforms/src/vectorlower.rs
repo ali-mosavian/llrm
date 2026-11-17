@@ -36,9 +36,8 @@
 //! `loopvectorize`, which makes the vectors where the target prices them
 //! (`Tti::vector_arithmetic_cost`: only the bitwise operations).
 
-use std::collections::HashMap;
-
 use llrm_mir::context::{Constant, ConstantKind, Context};
+use llrm_mir::dense::IdMap;
 use llrm_mir::edit::Position;
 use llrm_mir::module::{Function, InstId, Operand, ValueId};
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, Opcode};
@@ -204,7 +203,7 @@ pub fn lowered(
     let i32_ty = context.types.int(32);
     let konst = |value: u128| Operand::Constant(context.int(i32_ty, value as i128));
     // the scalar a lane-0 insert into poison put, by the insert's old value
-    let mut clean: HashMap<ValueId, (Operand, u32)> = HashMap::new();
+    let mut clean: IdMap<ValueId, (Operand, u32)> = IdMap::new();
     for inst in work {
         // the word this instruction works in, from the types it has now
         let before = function.instruction(inst).clone();
@@ -228,9 +227,9 @@ pub fn lowered(
         let operands = one.operands.clone();
         let result = one.result;
         // An extract reads its lane width from its own result: where an earlier
-        // shuffle or insert already made its vector an `i32`, no operand says it
-        // is a vector any more, and the extract stayed (an `extractelement` of an
-        // `i32` that selection refuses).
+        // shuffle or insert already made its vector an `i32`, no operand says
+        // it is a vector any more, and the extract stayed (an
+        // `extractelement` of an `i32` that selection refuses).
         let word = match (&one.opcode, word) {
             (Opcode::ExtractElement, None) => context
                 .types
@@ -322,7 +321,7 @@ fn shuffled(
     word: Word,
     mask: &[i32],
     operands: &[Operand],
-    clean: &HashMap<ValueId, (Operand, u32)>,
+    clean: &IdMap<ValueId, (Operand, u32)>,
     i32_ty: TypeId,
 ) -> Operand {
     let konst = |value: u128| Operand::Constant(context.int(i32_ty, value as i128));
@@ -335,7 +334,9 @@ fn shuffled(
         && mask.iter().all(|&pick| pick >= 0)
     {
         let source = match operands[0] {
-            Operand::Value(value) if clean.get(&value).is_some_and(|&(_, was)| was == lane as u32) => clean[&value].0,
+            Operand::Value(value) if clean.get(&value).is_some_and(|&(_, was)| was == lane as u32) => {
+                clean.get(&value).expect("checked").0
+            }
             other => {
                 let shifted = if lane == 0 {
                     other
