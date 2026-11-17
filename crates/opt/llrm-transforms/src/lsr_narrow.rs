@@ -404,7 +404,7 @@ impl Collection<'_, '_> {
         // DEVIATE LU31: a register-starved target
         // (`Tti::lsr_address_fewest_registers`) takes the same filter
         // for every address use, post-indexed or not.
-        let post_indexed = self.tti.preferred_addressing_mode() == AddressingMode::PostIndexed;
+        let post_indexed = self.amk == AddressingMode::PostIndexed;
         let starved = self.tti.lsr_address_fewest_registers();
         if !(post_indexed || starved) || !self.too_complex() {
             return;
