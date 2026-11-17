@@ -819,6 +819,28 @@ fn loop_options(
         .unwrap_or_default()
 }
 
+/// `VPlanTransforms::simplifyBranchConditionForVFAndUF` (L2142): the vector
+/// loop of `header` runs once, so its latch leaves on the first iteration
+/// (`br i1 true` to the exit; the pin's `BranchOnCond true`). The loop and its
+/// phis fold away in the cleanup that follows.
+pub(crate) fn exit_on_first_iteration(
+    context: &mut Context,
+    function: &mut Function,
+    header: BlockId,
+) {
+    let latch = function.terminator(header).expect("a terminated vector loop");
+    let operands = function.instruction(latch).operands.clone();
+    let [_, Operand::Block(on_true), Operand::Block(on_false)] = operands[..] else { return };
+    if (on_true == header) == (on_false == header) {
+        return;
+    }
+    let bool_ty = context.types.intern(Type::Int(1));
+    let leave = Operand::Constant(
+        context.constant(Constant { ty: bool_ty, kind: ConstantKind::Int(u128::from(on_true != header)) }),
+    );
+    function.set_operand(latch, 0, leave);
+}
+
 /// `llvm.loop.isvectorized` on the loop whose latch ends in `branch`: the
 /// pin's own mark that the loop is the product of vectorization, which a later
 /// run leaves alone (`LoopVectorizeHints::getIsVectorized`).
