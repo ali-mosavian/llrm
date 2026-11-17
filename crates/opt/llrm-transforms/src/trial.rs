@@ -43,6 +43,37 @@ thread_local! {
     static LATCH_KEPT: Cell<bool> = const { Cell::new(false) };
     /// The functions in which JumpThreading copied a latch.
     static LATCH_COPIED: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    /// Set while the trial compile of SWITCH-LOOKUP-TRIAL runs: no switch is
+    /// turned into a lookup table.
+    static LOOKUPS_REFUSED: Cell<bool> = const { Cell::new(false) };
+    /// The lookup tables the base compile built.
+    static LOOKUPS_BUILT: Cell<usize> = const { Cell::new(0) };
+}
+
+/// DEVIATE SWITCH-LOOKUP-TRIAL (beyond the pin; gcc's `-Os` keeps the compares
+/// of a sparse switch; owner x86-m32, exit 2026-11-30): whether the trial
+/// compile that builds no lookup table is running. The table is data bytes
+/// against the compares' code bytes, which only the object prices.
+pub fn refusing_lookup_tables() -> bool {
+    LOOKUPS_REFUSED.with(Cell::get)
+}
+
+/// Runs `body` with no switch turned into a lookup table.
+pub fn with_refused_lookup_tables<T>(body: impl FnOnce() -> T) -> T {
+    let before = LOOKUPS_REFUSED.with(|cell| cell.replace(true));
+    let value = body();
+    LOOKUPS_REFUSED.with(|cell| cell.set(before));
+    value
+}
+
+/// Notes a lookup table the base compile built, which a trial may refuse.
+pub(crate) fn note_lookup_table() {
+    LOOKUPS_BUILT.with(|count| count.set(count.get() + 1));
+}
+
+/// The tables [`note_lookup_table`] saw since the last call.
+pub fn take_lookup_tables() -> usize {
+    LOOKUPS_BUILT.with(|count| count.replace(0))
 }
 
 /// DEVIATE JT-LATCH-TRIAL (beyond the pin; gcc's `-Os` backward threader
