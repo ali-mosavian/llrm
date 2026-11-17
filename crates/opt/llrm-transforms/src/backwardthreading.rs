@@ -41,6 +41,8 @@ use llrm_mir::opcode::{Attribute, Flags, IntPredicate, Opcode};
 use llrm_mir::passes::{Analyses, FunctionPass, PreservedAnalyses, Unit};
 use llrm_mir::types::Type;
 
+use crate::pathbits::PathBits;
+
 /// GCC `max-jump-thread-duplication-stmts`: the statements a threaded path
 /// may copy (`max-fsm-thread-path-insns`, 100, is for a `switch`).
 const MAX_PATH_INSNS: usize = 15;
@@ -90,8 +92,29 @@ impl FunctionPass for BackwardThreading {
         for _ in 0..self.max_threads {
             let dt = DomTree::of(unit.function);
             let loops = LoopInfo::analyze(unit.function, || DomTree::of(unit.function));
-            let Some(path) = find(unit.context, unit.function, &dt, &loops) else { break };
-            thread(unit.context, unit.function, &path);
+            if let Some(path) = find(unit.context, unit.function, &dt, &loops) {
+                thread(unit.context, unit.function, &path);
+                changed = true;
+                continue;
+            }
+            // A select that sends the next trip down one arm of a branch is
+            // a diamond GCC would still have: unfold it where that threads.
+            let mut threaded = false;
+            for select in select_candidates(unit.context, unit.function) {
+                let mut trial = unit.function.clone();
+                unfold_select(&mut trial, select);
+                let dt = DomTree::of(&trial);
+                let loops = LoopInfo::analyze(&trial, || DomTree::of(&trial));
+                if let Some(path) = find(unit.context, &trial, &dt, &loops) {
+                    *unit.function = trial;
+                    thread(unit.context, unit.function, &path);
+                    threaded = true;
+                    break;
+                }
+            }
+            if !threaded {
+                break;
+            }
             changed = true;
         }
         if changed { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
@@ -136,7 +159,7 @@ fn branch_of(
     Some(Branch { pred, lhs: ops[0], rhs: ops[1], if_true, if_false })
 }
 
-fn width_of(
+pub(crate) fn width_of(
     context: &Context,
     function: &Function,
     operand: Operand,
@@ -147,7 +170,7 @@ fn width_of(
     }
 }
 
-fn constant_of(
+pub(crate) fn constant_of(
     context: &Context,
     operand: Operand,
 ) -> Option<u128> {
@@ -257,6 +280,123 @@ fn decided(
     }
 }
 
+/// The arm `branch` takes on the path `q -> p -> bb` when the bits of its
+/// inputs along it decide it: `q` is reached by one edge of a branch whose
+/// compare is the assumption.
+fn decided_by_bits(
+    context: &Context,
+    function: &Function,
+    branch: &Branch,
+    q: BlockId,
+    p: BlockId,
+    bb: BlockId,
+) -> Option<BlockId> {
+    let from = single_predecessor(function, q)?;
+    let edge = branch_cond(function, from, q)?;
+    let bits = PathBits::new(context, function, p, bb, Some(q), Some(edge));
+    let yes = bits.decides(branch.pred, branch.lhs, branch.rhs)?;
+    Some(if yes { branch.if_true } else { branch.if_false })
+}
+
+/// The condition of `from`'s branch and whether it is true on the edge to `to`.
+fn branch_cond(
+    function: &Function,
+    from: BlockId,
+    to: BlockId,
+) -> Option<(Operand, bool)> {
+    let term = function.terminator(from)?;
+    let &[cond @ Operand::Value(_), Operand::Block(if_true), Operand::Block(if_false)] =
+        &function.instruction(term).operands[..]
+    else {
+        return None;
+    };
+    if function.instruction(term).opcode != Opcode::Br || if_true == if_false {
+        return None;
+    }
+    Some((cond, if_true == to))
+}
+
+/// The selects of a loop block that jumps to itself whose condition is a
+/// compare the next trip decides: a trip that took one arm knows what the
+/// compare says on the next. Unfolded, the block ends in that compare's
+/// branch, the one GCC threads.
+fn select_candidates(
+    context: &Context,
+    function: &Function,
+) -> Vec<InstId> {
+    let mut found = Vec::new();
+    for &block in function.layout() {
+        if !function.successors(block).contains(&block) || starts_with_landing_pad(function, block) {
+            continue;
+        }
+        for inst in function.iter_block(block) {
+            let Some((cond, _, _)) = crate::pathbits::select_parts(function, inst) else { continue };
+            let Operand::Value(id) = cond else { continue };
+            let ValueDef::Instruction(icmp) = function.value(id).def else { continue };
+            let Opcode::ICmp(pred) = function.instruction(icmp).opcode else { continue };
+            if function.parent(icmp) != Some(block) {
+                continue;
+            }
+            let ops = &function.instruction(icmp).operands;
+            let decides = |holds: bool| {
+                PathBits::new(context, function, block, block, None, Some((cond, holds)))
+                    .decides(pred, ops[0], ops[1])
+                    .is_some()
+            };
+            if decides(true) || decides(false) {
+                found.push(inst);
+            }
+        }
+    }
+    found
+}
+
+/// `select` as a diamond: its block ends in a branch on the condition to one
+/// empty block per arm, and the rest of the block starts with a phi of the arms.
+fn unfold_select(
+    function: &mut Function,
+    select: InstId,
+) {
+    let instruction = function.instruction(select);
+    let (cond, yes, no) = (instruction.operands[0], instruction.operands[1], instruction.operands[2]);
+    let ty = instruction.ty;
+    let result = instruction.result.expect("a select's value");
+    let name = function.value(result).name.clone();
+    let block = function.parent(select).expect("a placed select");
+    let void = function.instruction(function.terminator(block).expect("a terminated block")).ty;
+    let tail = edges::split_block_at(function, block, select);
+    let side = |function: &mut Function, after: BlockId, label: &str| {
+        let new = function.create_block(Some(label));
+        function.insert_block(new, Some(after)).expect("a new block");
+        let jump = function.create_instruction(Opcode::Br, void, vec![Operand::Block(tail)], Flags::default(), None);
+        function.insert(jump, Position::End(new)).expect("a new block");
+        new
+    };
+    let on_true = side(function, block, "select.true");
+    let on_false = side(function, on_true, "select.false");
+    let jump = function.terminator(block).expect("the split's jump");
+    function.erase(jump).expect("a jump nothing reads");
+    let branch = function.create_instruction(
+        Opcode::Br,
+        void,
+        vec![cond, Operand::Block(on_true), Operand::Block(on_false)],
+        Flags::default(),
+        None,
+    );
+    function.insert(branch, Position::End(block)).expect("a placed block");
+    let phi = function.create_instruction(
+        Opcode::Phi,
+        ty,
+        from_arms(&[(yes, on_true), (no, on_false)]),
+        Flags::default(),
+        name.as_deref(),
+    );
+    function.insert(phi, Position::Before(select)).expect("a placed select");
+    let phi_value = function.instruction(phi).result.expect("a phi's value");
+    function.replace_all_uses_with(result, Operand::Value(phi_value));
+    function.erase(select).expect("a select nothing reads");
+}
+
 /// Instructions that a copy of the block cannot take: a `noduplicate` or
 /// `convergent` call, or an `alloca`.
 fn copyable(
@@ -318,7 +458,11 @@ fn find(
                 if q == bb || function.edge_predecessors(p).iter().filter(|&&b| b == q).count() != 1 {
                     continue;
                 }
-                let Some(arm) = decided(context, function, dt, &branch, q, Some((q, p))) else { continue };
+                let Some(arm) = decided(context, function, dt, &branch, q, Some((q, p)))
+                    .or_else(|| decided_by_bits(context, function, &branch, q, p, bb))
+                else {
+                    continue;
+                };
                 if arm == bb || arm == p {
                     continue;
                 }

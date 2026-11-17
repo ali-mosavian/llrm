@@ -44,13 +44,20 @@ exit:
 const INPUTS: &[&[i128]] = &[&[1, 4], &[0, 3], &[2, 5], &[-1, 6], &[1, 1]];
 
 fn threaded(text: &str) -> (String, bool) {
+    threaded_on(text, INPUTS)
+}
+
+fn threaded_on(
+    text: &str,
+    inputs: &[&[i128]],
+) -> (String, bool) {
     let before = parsed(text);
     let mut module = before.clone();
     let mut manager = PassManager::default();
     manager.add(BackwardThreading { enabled: true, max_threads: MAX_THREADS });
     manager.run_module(&mut module, std::rc::Rc::new(Neutral)).unwrap();
     let text = printed(&module);
-    assert_eq!(results(&module, INPUTS), results(&before, INPUTS), "{text}");
+    assert_eq!(results(&module, inputs), results(&before, inputs), "{text}");
     let changed = printed(&before) != text;
     (text, changed)
 }
@@ -129,4 +136,49 @@ s_in:
     manager.run_module(&mut module, std::rc::Rc::new(Neutral)).unwrap();
     let out = printed(&module);
     assert_ne!(out, printed(&before), "the guard was not threaded:\n{out}");
+}
+
+/// The Collatz step: the trip after an odd one starts with `3x + 1`, whose
+/// low bit is 0, so `x & 1` is decided on that path. The select is the
+/// diamond GCC still has when it threads (`threadfull2`). x_collatz -O2 ran
+/// 136,825 clk on x86-m32 where gcc 15 ran 121,682.
+const COLLATZ: &str = "define i32 @f(i32 %n) {
+entry:
+  %skip = icmp eq i32 %n, 1
+  br i1 %skip, label %exit, label %loop
+
+loop:
+  %x = phi i32 [ %n, %entry ], [ %next, %loop ]
+  %steps = phi i32 [ 0, %entry ], [ %steps2, %loop ]
+  %low = and i32 %x, 1
+  %even = icmp eq i32 %low, 0
+  %m = mul i32 %x, 3
+  %odd = add i32 %m, 1
+  %half = lshr i32 %x, 1
+  %next = select i1 %even, i32 %half, i32 %odd
+  %steps2 = add nuw nsw i32 %steps, 1
+  %done = icmp eq i32 %next, 1
+  br i1 %done, label %exit, label %loop
+
+exit:
+  %r = phi i32 [ 0, %entry ], [ %steps2, %loop ]
+  ret i32 %r
+}
+";
+
+const COLLATZ_INPUTS: &[&[i128]] = &[&[1], &[2], &[3], &[6], &[7], &[9], &[27]];
+
+#[test]
+fn the_trip_after_an_odd_one_skips_the_parity_test() {
+    let (text, changed) = threaded_on(COLLATZ, COLLATZ_INPUTS);
+    assert!(changed, "3x + 1 of an odd x is even, so the next `x & 1` is known:\n{text}");
+}
+
+/// The select's condition says nothing of the value the next trip tests: no
+/// bit is known on either arm, so nothing is threaded.
+#[test]
+fn a_select_whose_condition_is_unrelated_to_the_next_test_stays_a_select() {
+    let text = COLLATZ.replace("define i32 @f(i32 %n)", "define i32 @f(i32 %n, i32 %k)").replace("%even = icmp eq i32 %low, 0", "%even = icmp eq i32 %k, 0");
+    let (out, changed) = threaded_on(&text, &[&[1, 0], &[7, 0], &[8, 0]]);
+    assert!(!changed, "{out}");
 }

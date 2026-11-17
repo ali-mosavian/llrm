@@ -239,6 +239,7 @@ pub mod dropunnecessaryassumes;
 pub mod earlycse;
 pub use llrm_analysis::edges;
 pub mod backwardthreading;
+pub mod pathbits;
 #[cfg(test)]
 mod backwardthreading_tests;
 pub mod emptyblocks;
