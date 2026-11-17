@@ -4360,6 +4360,54 @@ impl Builder<'_> {
         Ok(())
     }
 
+    /// The mask as `CONCAT_VECTORS` of aligned pieces of the two inputs, where
+    /// each piece is `gcd(input lanes, mask lanes)` wide; `None` where a piece
+    /// is not one aligned slice of one input (or all undefined, which is an
+    /// undefined piece), or is narrower than two lanes.
+    fn shuffle_as_piece_concat(
+        &mut self,
+        first: SDValue,
+        second: SDValue,
+        mask: &[i32],
+        result: EVT,
+    ) -> Option<SDValue> {
+        fn gcd(
+            a: usize,
+            b: usize,
+        ) -> usize {
+            if b == 0 { a } else { gcd(b, a % b) }
+        }
+        let input = self.dag.value_type(first);
+        let sources = input.lanes() as usize;
+        let piece = gcd(sources, mask.len());
+        let EVT::Simple(lane) = input.element() else { return None };
+        if piece < 2 || MVT::vector(lane, piece as u32).is_none() {
+            return None;
+        }
+        let piece_vt = EVT::vector(lane, piece as u32);
+        let mut pieces = Vec::with_capacity(mask.len() / piece);
+        for chunk in mask.chunks(piece) {
+            let Some(&base) = chunk.iter().find(|&&at| at >= 0) else {
+                pieces.push(self.dag.get_undef(piece_vt));
+                continue;
+            };
+            let start = base as usize - chunk.iter().position(|&at| at >= 0)?;
+            if start % piece != 0
+                || !chunk.iter().enumerate().all(|(at, &lane)| lane < 0 || lane as usize == start + at)
+            {
+                return None;
+            }
+            let (from, offset) = if start >= sources { (second, start - sources) } else { (first, start) };
+            pieces.push(if piece == sources {
+                from
+            } else {
+                let index = self.dag.get_constant(offset as u128, self.target.dag.pointer);
+                self.dag.get_node(ISD::ExtractSubvector, piece_vt, &[from, index])
+            });
+        }
+        Some(self.dag.get_node(ISD::ConcatVectors, result, &pieces))
+    }
+
     /// `visitShuffleVector`
     /// ([L12199](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/SelectionDAGBuilder.cpp#L12199)):
     /// `getVectorShuffle` of the two inputs with the IR's mask (a lane of `-1`
@@ -4409,6 +4457,15 @@ impl Builder<'_> {
                             pieces.iter().map(|piece| piece.map_or(undef, |from| [first, second][from])).collect();
                         break 'shuffled self.dag.get_node(ISD::ConcatVectors, result, &operands);
                     }
+                }
+                // A mask that is aligned pieces of the inputs, each piece the
+                // largest width that divides both lengths (two 16-lane
+                // vectors and a half of a third: `<0..47>` of two `v32i8`),
+                // is the `CONCAT_VECTORS` of those pieces. The pin pads both
+                // inputs to the mask's length and combines the shuffle of
+                // concatenations back into this (`visitVECTOR_SHUFFLE`).
+                if let Some(joined) = self.shuffle_as_piece_concat(first, second, mask, result) {
+                    break 'shuffled joined;
                 }
                 // Both inputs padded with undefined lanes to the mask's length.
                 let count = lanes.div_ceil(sources);
