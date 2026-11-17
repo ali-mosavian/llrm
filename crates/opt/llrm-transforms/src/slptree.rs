@@ -873,6 +873,7 @@ fn result_of(
 /// `vectorizeTree`: the tree as vectors, its scalars gone.
 pub(crate) fn emit(
     context: &mut Context,
+    layout: &llrm_mir::datalayout::DataLayout,
     declared: &mut Declared,
     function: &mut Function,
     tree: &Tree,
@@ -923,8 +924,10 @@ pub(crate) fn emit(
                 }
                 let opcode = match kind {
                     Kind::Load => Opcode::Load {
+                        // `LoadInst::getAlign`: no `align` is the scalar's ABI
+                        // alignment.
                         align: match lead.opcode {
-                            Opcode::Load { align, .. } => align,
+                            Opcode::Load { align, .. } => align.or_else(|| Some(layout.align(&context.types, lead.ty))),
                             _ => None,
                         },
                         volatile: false,
