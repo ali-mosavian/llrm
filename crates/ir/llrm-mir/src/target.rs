@@ -183,6 +183,11 @@ pub struct Tuning {
     /// stated (-O1), an inline that stays is held to the -Os bound (the callee
     /// copied only if it does not grow the code); false: the pin's threshold.
     pub inline_never_grows_without_rate: bool,
+    /// DEVIATE LIR-COPY-TRIAL (owner x86-m32, exit 2026-11-30): at -Os the
+    /// module is compiled again with the copy loops of a count the loop alone
+    /// knows left as loops (no `memcpy` call) and the smaller object kept.
+    /// false: the pin's, which always calls.
+    pub loop_idiom_copy_trial_at_size: bool,
     /// DEVIATE JT-LATCH-TRIAL (owner x86-m32, exit 2026-11-30): at -Os the
     /// module is compiled again without the copies of a loop latch
     /// JumpThreading made (gcc's backward threader refuses a path through the
@@ -816,6 +821,7 @@ impl Tuning {
         rotate_exiting_latch_when_guard_folds: false,
         inline_never_grows_without_rate: false,
         jump_threading_latch_trial_at_size: false,
+        loop_idiom_copy_trial_at_size: false,
         unroll_object_bound: None,
         inline_size_bytes: false,
         inline_o1_milliclocks_per_byte: 0,
