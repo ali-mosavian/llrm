@@ -160,9 +160,9 @@ fn two_phis_of_consecutive_loads_become_a_vector_phi() {
 const PHI_CHAIN: &str = include_str!("../tests/slp/phi_chain_loop.ll");
 
 /// Two phis whose latch values depend on each other (`b.next = b + a.next`)
-/// cannot be one vector phi: the `fadd` bundle would read its own lane. The
-/// pin keeps both scalar; a tree that ignored the chain made a `<2 x double>`
-/// phi and an `fadd` that reads `a.next` before it exists.
+/// stay scalar in the pin. The operand pair of `b.next` (a phi and an `fadd`)
+/// was built as a phi bundle on its first lane alone and panicked indexing
+/// the `fadd`'s operands as incoming arms.
 #[test]
 fn phis_whose_latch_values_chain_stay_scalar() {
     let text = run(PHI_CHAIN);

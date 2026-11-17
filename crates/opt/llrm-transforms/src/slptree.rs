@@ -24,9 +24,11 @@
 //! reversed loads, no alternate-opcode or gather-of-loads entries and
 //! no operand look-ahead past the shallow score; the scale by the loop's trip
 //! count is left out (it multiplies every entry alike, so the sign of the
-//! total is the same). A scalar the tree uses
-//! as a gather lane, or an external user placed before its bundle's last
-//! scalar, makes the tree not form (the pin's scheduler may order it).
+//! total is the same). An external user placed before its bundle's last
+//! scalar makes the tree not form (the pin's scheduler may order it). A scalar
+//! the tree makes as a vector and a gather also reads is extracted for the
+//! gather (`ExternalUses`), when its bundle's last scalar stands before the
+//! gather's user's.
 //!
 //! DEVIATE SLP3 (owner arm64, exit 2026-11-24): `BlockScheduling`'s dependency
 //! graph is not built: the loads must all stand before the first store, and
@@ -56,6 +58,7 @@ use llrm_mir::tti::{
     ArithOp, CastKind, CmpSel, CostKind, LaneOp, MemoryOp, Predicate, Tti, Ty, VectorInstrContext, VectorTy,
 };
 use llrm_mir::types::{FloatKind, Type, TypeId};
+use std::collections::HashMap;
 
 use crate::slpgather::{self, constant_of};
 
@@ -123,6 +126,8 @@ impl Entry {
 pub(crate) struct Tree {
     entries: Vec<Entry>,
     block: BlockId,
+    /// The calls of the tree's blocks that touch memory; they keep their order.
+    impure: std::collections::HashSet<InstId>,
 }
 
 struct Builder<'a, 'u> {
@@ -225,11 +230,6 @@ impl Builder<'_, '_> {
         lanes: Vec<Operand>,
         lane_ty: TypeId,
     ) -> usize {
-        // A scalar the tree makes as a vector, taken again as a gather lane,
-        // would wait on its own bundle (DEVIATE SLP1).
-        if lanes.iter().any(|lane| self.inst_of(*lane).is_some_and(|inst| self.made.contains_key(&inst))) {
-            self.failed = true;
-        }
         // `tryToFindDuplicates` for a gather: the distinct lanes and a shuffle
         // that repeats them, where that costs less than inserting every lane.
         let (unique, reuse) = slpgather::unique_lanes(&lanes);
@@ -434,6 +434,10 @@ impl Builder<'_, '_> {
             return self.gather(lanes, lane_ty);
         }
         if first.opcode == Opcode::Phi {
+            // `getSameOpcode`: a bundle of a phi and anything else is a gather.
+            if insts.iter().any(|inst| self.function.instruction(*inst).opcode != Opcode::Phi) {
+                return self.gather(lanes, lane_ty);
+            }
             return self.build_phis(lanes, insts, lane_ty, depth);
         }
         let (kind, arity, swappable, skip) = match &first.opcode {
@@ -690,21 +694,23 @@ pub(crate) fn try_window(
         );
         return None;
     }
-    let tree = Tree { entries: builder.entries, block };
+    let mut tree = Tree { entries: builder.entries, block, impure: Default::default() };
     let made = builder.made;
     let position = builder.position;
-    if !schedulable(unit, function, &tree, &made, &position) {
+    let Some(impure) = schedulable(unit, function, &tree, &made, &position) else {
         llrm_support::debug!("slp", "tree: not schedulable");
         return None;
-    }
+    };
+    tree.impure = impure;
     let cost = cost_of(unit, function, &tree, &made, align, tti, scaler)?;
     llrm_support::debug!("slp", "tree of {} entries x{}: cost {cost}", tree.entries.len(), stores.len());
     (cost < -COST_THRESHOLD).then_some(tree)
 }
 
-/// `tryToVectorizeList` on the phis `phis` of one block: their tree, if it
-/// pays. The root is the phi bundle; nothing is stored.
-pub(crate) fn try_phis(
+/// `tryToVectorizeList` on the instructions `roots` of one block (phis, or the
+/// operand pair of a binary operation): their tree, if it pays. The root is
+/// their bundle; nothing is stored.
+pub(crate) fn try_bundle(
     unit: &MemUnit,
     function: &Function,
     block: BlockId,
@@ -717,23 +723,24 @@ pub(crate) fn try_phis(
     let mut builder =
         Builder { tti, unit, function, block, entries: Vec::new(), made: IdMap::new(), position, failed: false };
     builder.build(lanes, 0);
-    if builder.failed || builder.entries.first().is_none_or(|root| root.kind != Kind::Phi) {
-        llrm_support::debug!("slp", "phi tree x{}: no phi bundle{}", phis.len(), if builder.failed { ", a lane used as a gather" } else { "" });
+    if builder.failed || builder.entries.first().is_none_or(|root| root.kind == Kind::Gather) {
+        llrm_support::debug!("slp", "bundle tree x{}: no bundle{}", phis.len(), if builder.failed { ", a lane used as a gather" } else { "" });
         return None;
     }
-    let tree = Tree { entries: builder.entries, block };
+    let mut tree = Tree { entries: builder.entries, block, impure: Default::default() };
     let made = builder.made;
     let position = builder.position;
     if tiny_without_stores(&tree) {
-        llrm_support::debug!("slp", "phi tree x{}: tiny", phis.len());
+        llrm_support::debug!("slp", "bundle tree x{}: tiny", phis.len());
         return None;
     }
-    if !schedulable(unit, function, &tree, &made, &position) {
-        llrm_support::debug!("slp", "phi tree: not schedulable");
+    let Some(impure) = schedulable(unit, function, &tree, &made, &position) else {
+        llrm_support::debug!("slp", "bundle tree: not schedulable");
         return None;
-    }
+    };
+    tree.impure = impure;
     let cost = cost_of(unit, function, &tree, &made, 1, tti, scaler)?;
-    llrm_support::debug!("slp", "phi tree of {} entries x{}: cost {cost}", tree.entries.len(), phis.len());
+    llrm_support::debug!("slp", "bundle tree of {} entries x{}: cost {cost}", tree.entries.len(), phis.len());
     (cost < -COST_THRESHOLD).then_some(tree)
 }
 
@@ -805,6 +812,185 @@ impl<'a> StoreSeparation<'a> {
     }
 }
 
+/// The scalars the tree makes as a vector that a gather of the tree also
+/// reads: each is extracted for it.
+fn gathered_scalars(
+    function: &Function,
+    tree: &Tree,
+    made: &IdMap<InstId, usize>,
+) -> std::collections::HashSet<InstId> {
+    let mut found = std::collections::HashSet::new();
+    for entry in tree.entries.iter().filter(|entry| entry.kind == Kind::Gather) {
+        for lane in &entry.lanes {
+            let Operand::Value(id) = lane else { continue };
+            if let ValueDef::Instruction(def) = function.value(*id).def
+                && made.contains_key(&def)
+            {
+                found.insert(def);
+            }
+        }
+    }
+    found
+}
+
+/// The blocks that hold the lanes of the tree's bundles (a phi's are the
+/// block's top).
+fn tree_blocks(
+    function: &Function,
+    tree: &Tree,
+) -> Vec<BlockId> {
+    let mut blocks: Vec<BlockId> = Vec::new();
+    for entry in tree.entries.iter().filter(|entry| entry.kind != Kind::Gather) {
+        for block in entry.insts.iter().filter_map(|inst| function.parent(*inst)).chain(entry.incoming.iter().copied()) {
+            if !blocks.contains(&block) {
+                blocks.push(block);
+            }
+        }
+    }
+    blocks
+}
+
+/// Whether the instruction keeps its place among those that touch memory.
+fn orders_memory(
+    function: &Function,
+    inst: InstId,
+    impure: &std::collections::HashSet<InstId>,
+) -> bool {
+    match function.instruction(inst).opcode {
+        Opcode::Call(_) => impure.contains(&inst),
+        Opcode::Store { .. } | Opcode::Invoke(_) | Opcode::Atomic(_) | Opcode::VaArg | Opcode::Load { .. } => true,
+        _ => false,
+    }
+}
+
+/// `BlockScheduling`'s question for a block: the instructions of `list`, with
+/// `node` naming the unit each stands in, can be put in an order where every
+/// unit stands after what it reads and the ones that touch memory keep theirs
+/// (`key` places a unit among them). The order, least `key` first.
+fn schedule_units(
+    function: &Function,
+    list: &[InstId],
+    nodes: usize,
+    node: &dyn Fn(usize) -> usize,
+    key: &dyn Fn(usize) -> usize,
+    touches: &dyn Fn(InstId) -> bool,
+) -> Option<Vec<usize>> {
+    let index: HashMap<InstId, usize> = list.iter().enumerate().map(|(at, inst)| (*inst, at)).collect();
+    let mut after: Vec<Vec<usize>> = vec![Vec::new(); nodes];
+    let mut waits = vec![0usize; nodes];
+    let mut link = |from: usize, to: usize, after: &mut Vec<Vec<usize>>| {
+        if !after[from].contains(&to) {
+            after[from].push(to);
+            waits[to] += 1;
+        }
+    };
+    for (at, inst) in list.iter().enumerate() {
+        for operand in &function.instruction(*inst).operands {
+            let Operand::Value(id) = operand else { continue };
+            let llrm_mir::module::ValueDef::Instruction(def) = function.value(*id).def else { continue };
+            let Some(from) = index.get(&def).map(|from| node(*from)) else { continue };
+            let to = node(at);
+            if from == to {
+                // A lane that reads another lane of its own bundle.
+                return None;
+            }
+            link(from, to, &mut after);
+        }
+    }
+    let mut memory: Vec<(usize, usize)> =
+        list.iter().enumerate().filter(|(_, inst)| touches(**inst)).map(|(at, _)| (key(at), node(at))).collect();
+    memory.sort();
+    memory.dedup();
+    for pair in memory.windows(2) {
+        if pair[0].1 != pair[1].1 {
+            link(pair[0].1, pair[1].1, &mut after);
+        }
+    }
+    let mut used = vec![false; nodes];
+    let mut keys = vec![usize::MAX; nodes];
+    for at in 0..list.len() {
+        let one = node(at);
+        used[one] = true;
+        keys[one] = keys[one].min(at);
+    }
+    let mut ready: std::collections::BinaryHeap<std::cmp::Reverse<(usize, usize)>> = (0..nodes)
+        .filter(|one| used[*one] && waits[*one] == 0)
+        .map(|one| std::cmp::Reverse((keys[one], one)))
+        .collect();
+    let mut order = Vec::new();
+    while let Some(std::cmp::Reverse((_, one))) = ready.pop() {
+        order.push(one);
+        for next in std::mem::take(&mut after[one]) {
+            waits[next] -= 1;
+            if waits[next] == 0 {
+                ready.push(std::cmp::Reverse((keys[next], next)));
+            }
+        }
+    }
+    (order.len() == used.iter().filter(|one| **one).count()).then_some(order)
+}
+
+/// Whether the scalars of the tree can stand as its vectors: in each block, with
+/// the lanes of a bundle one unit, no unit waits on itself.
+fn contracted_order_exists(
+    function: &Function,
+    tree: &Tree,
+    made: &IdMap<InstId, usize>,
+    position: &IdMap<InstId, usize>,
+    touches: &dyn Fn(InstId) -> bool,
+) -> bool {
+    let _ = position;
+    for block in tree_blocks(function, tree) {
+        let terminator = function.terminator(block);
+        let list: Vec<InstId> = function
+            .iter_block(block)
+            .filter(|inst| function.instruction(*inst).opcode != Opcode::Phi && Some(*inst) != terminator)
+            .collect();
+        let unit_of = |at: usize| match made.get(&list[at]) {
+            Some(entry) if tree.entries[*entry].kind != Kind::Phi => list.len() + *entry,
+            _ => at,
+        };
+        // A bundle stands where its last lane does.
+        let mut last: HashMap<usize, usize> = HashMap::new();
+        for at in 0..list.len() {
+            last.insert(unit_of(at), at);
+        }
+        let key = |at: usize| last[&unit_of(at)];
+        if schedule_units(function, &list, list.len() + tree.entries.len(), &unit_of, &key, touches).is_none() {
+            return false;
+        }
+    }
+    true
+}
+
+/// After the vectors stand: the instructions of each block in an order where
+/// each follows what it reads, as near the layout as that allows
+/// (`BlockScheduling::scheduleBlock`).
+fn reschedule(
+    function: &mut Function,
+    blocks: &[BlockId],
+    impure: &std::collections::HashSet<InstId>,
+) {
+    for block in blocks {
+        let Some(terminator) = function.terminator(*block) else { continue };
+        let list: Vec<InstId> = function
+            .iter_block(*block)
+            .filter(|inst| function.instruction(*inst).opcode != Opcode::Phi && *inst != terminator)
+            .collect();
+        let touches = |inst: InstId| orders_memory(function, inst, impure);
+        let Some(order) = schedule_units(function, &list, list.len(), &|at| at, &|at| at, &touches) else {
+            llrm_support::debug!("slp", "reschedule: the block has no order");
+            continue;
+        };
+        if order.iter().enumerate().all(|(at, one)| at == *one) {
+            continue;
+        }
+        for one in order {
+            function.move_to(list[one], Position::Before(terminator)).expect("a placed instruction");
+        }
+    }
+}
+
 /// DEVIATE SLP3: the scalars of the tree can stand as vectors where the last of
 /// each bundle is.
 fn schedulable(
@@ -813,7 +999,7 @@ fn schedulable(
     tree: &Tree,
     made: &IdMap<InstId, usize>,
     position: &IdMap<InstId, usize>,
-) -> bool {
+) -> Option<std::collections::HashSet<InstId>> {
     let at = |inst: &InstId| position[inst];
     let root = &tree.entries[0];
     let seed = function.parent(root.insts[0]).expect("a placed root");
@@ -843,7 +1029,7 @@ fn schedulable(
                 && !separation.clear(function, inst)
             {
                 llrm_support::debug!("slp", "tree: {:?} stands between the stores", function.instruction(inst).opcode);
-                return false;
+                return None;
             }
         }
     }
@@ -862,7 +1048,7 @@ fn schedulable(
                 && last > first_store
             {
                 llrm_support::debug!("slp", "tree: a load stands after the first store");
-                return false;
+                return None;
             }
             for (order, inst) in function.iter_block(block).enumerate() {
                 let writes = match function.instruction(inst).opcode {
@@ -872,32 +1058,21 @@ fn schedulable(
                 };
                 if order > first && order < last && !made.contains_key(&inst) && writes {
                     llrm_support::debug!("slp", "tree: a write stands among the loads");
-                    return false;
-                }
-            }
-        }
-        // A user outside the tree stands after its bundle's last scalar.
-        for inst in &entry.insts {
-            let Some(result) = function.instruction(*inst).result else { continue };
-            for used in function.users(result).iter() {
-                if made.contains_key(&used.user) {
-                    continue;
-                }
-                match function.parent(used.user) {
-                    Some(user_block) if user_block == block => {
-                        if position[&used.user] <= last || matches!(function.instruction(used.user).opcode, Opcode::Phi)
-                        {
-                            llrm_support::debug!("slp", "tree: a user stands before its bundle's last scalar");
-                            return false;
-                        }
-                    }
-                    Some(_) => {}
-                    None => return false,
+                    return None;
                 }
             }
         }
     }
-    true
+    if !contracted_order_exists(function, tree, made, position, &touches) {
+        llrm_support::debug!("slp", "tree: the bundles wait on one another");
+        return None;
+    }
+    let impure = tree_blocks(function, tree)
+        .into_iter()
+        .flat_map(|block| function.iter_block(block).collect::<Vec<_>>())
+        .filter(|inst| matches!(function.instruction(*inst).opcode, Opcode::Call(_)) && !pure_call(*inst))
+        .collect();
+    Some(impure)
 }
 
 /// `getScaleToLoopIterations`: how often an entry's cost is paid
@@ -1014,6 +1189,7 @@ fn cost_of(
     let kind = CostKind::RecipThroughput;
     let context = unit.context;
     let mut total = 0i64;
+    let gathered = gathered_scalars(function, tree, made);
     for (at, entry) in tree.entries.iter().enumerate() {
         let Some(priced) = entry_cost(unit, function, tree, entry, store_align, tti) else {
             llrm_support::debug!("slp", "entry {:?} x{}: not priced", entry.kind, entry.lanes.len());
@@ -1027,8 +1203,13 @@ fn cost_of(
             for (index, inst) in entry.insts.iter().enumerate() {
                 let Some(result) = function.instruction(*inst).result else { continue };
                 // The first user outside fixes the scale
-                // (`ExtractCostCalculated`).
-                if let Some(used) = function.users(result).iter().find(|used| !made.contains_key(&used.user)) {
+                // (`ExtractCostCalculated`); a gather that reads the scalar
+                // is one.
+                let outside = function.users(result).iter().find(|used| !made.contains_key(&used.user));
+                let site = outside
+                    .map(|used| function.parent(used.user))
+                    .or_else(|| gathered.contains(inst).then(|| function.parent(*inst)));
+                if let Some(site) = site {
                     // DEVIATE SLP5: the extract of an extract (the pin keeps
                     // the scalar when it costs less) is not
                     // made.
@@ -1045,7 +1226,7 @@ fn cost_of(
                         VectorInstrContext::None,
                         kind,
                     )?;
-                    let block = function.parent(used.user)?;
+                    let block = site?;
                     let scale = scaler.scale_at(function, block, &[Operand::Value(result)]);
                     total += extract.valid.then_some(extract.value)? * scale as i64;
                 }
@@ -1264,6 +1445,7 @@ pub(crate) fn emit(
     store_align: Option<u64>,
 ) {
     let position = positions(function);
+    let blocks = tree_blocks(function, tree);
     let last_of = |entry: &Entry| *entry.insts.iter().max_by_key(|inst| position[*inst]).expect("a bundle");
     let mut placer = Placer::default();
     // The vector of each entry, children first; a phi's before them, since a
@@ -1487,6 +1669,7 @@ pub(crate) fn emit(
     if !doomed.is_empty() {
         function.erase_all(&doomed).expect("scalars only the tree reads");
     }
+    reschedule(function, &blocks, &tree.impure);
     let _ = ValueId(0);
 }
 

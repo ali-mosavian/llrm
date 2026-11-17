@@ -240,8 +240,6 @@ fn vectorize(
     }
 }
 
-/// `-slp-min-reg-size`.
-const MIN_VEC_REG_BITS: u64 = 128;
 /// `MaxPHINumOperands`: a block's phis are read until one has more.
 const MAX_PHI_OPERANDS: usize = 128;
 
@@ -545,7 +543,7 @@ impl PhiSeeds<'_> {
             self.function,
             |se, cx| {
                 let scaler = crate::slptree::Scaler::new(se, cx);
-                crate::slptree::try_phis(&unit, self.function, block, ops, self.tti, &scaler)
+                crate::slptree::try_bundle(&unit, self.function, block, ops, self.tti, &scaler)
             },
         )
     }
@@ -562,7 +560,7 @@ impl PhiSeeds<'_> {
         }
         let Some(bits) = self.bits_of(list[0]) else { return false };
         let register = u64::from(self.tti.vector_register_bits());
-        let min_vf = (MIN_VEC_REG_BITS / bits).max(2);
+        let min_vf = (u64::from(self.tti.min_vector_register_bits()) / bits).max(2);
         let max_vf = floor_full(register, bits, list.len() as u64).max(min_vf);
         if max_vf < 2 {
             return false;
@@ -735,6 +733,211 @@ impl PhiSeeds<'_> {
     }
 }
 
+/// `-slp-recursion-max-depth`.
+const RECURSION_MAX_DEPTH: usize = 12;
+
+/// The operand pairs of the binary operations a block's roots reach
+/// (`vectorizeRootInstruction`, l.34724).
+impl PhiSeeds<'_> {
+    /// `canConvertToFMA`, by its first test: an `fadd`/`fsub` that contracts
+    /// with an `fmul` it alone reads (DEVIATE SLP6: the cost comparison of
+    /// the fused and the unfused forms is not made).
+    fn fma_candidate(
+        &self,
+        inst: InstId,
+    ) -> bool {
+        use llrm_mir::opcode::BinaryOp;
+        let one = self.function.instruction(inst);
+        if !matches!(one.opcode, Opcode::Binary(BinaryOp::FAdd | BinaryOp::FSub)) || !one.flags.contains(Flags::CONTRACT) {
+            return false;
+        }
+        one.operands.iter().take(2).any(|operand| {
+            self.instruction_of(*operand).is_some_and(|def| {
+                let def = self.function.instruction(def);
+                def.opcode == Opcode::Binary(BinaryOp::FMul)
+                    && def.flags.contains(Flags::CONTRACT)
+                    && def.result.is_some_and(|result| self.function.users(result).iter().count() == 1)
+            })
+        })
+    }
+
+    /// `tryToVectorize(Instruction *)` (l.34581): the two operands of a binary
+    /// operation or compare, both instructions of its block, as a list. DEVIATE
+    /// SLP7: the pair is always `(Op0, Op1)` (`findBestRootPair` and the
+    /// skipped-operand candidates are not translated), and no reduction is
+    /// tried first (`slpreduction` makes those).
+    fn pair_of(
+        &mut self,
+        inst: InstId,
+    ) -> bool {
+        let one = self.function.instruction(inst);
+        if !matches!(one.opcode, Opcode::Binary(_) | Opcode::ICmp(_) | Opcode::FCmp(_)) || self.bits_of(inst).is_none() && !matches!(one.opcode, Opcode::ICmp(_) | Opcode::FCmp(_)) {
+            return false;
+        }
+        if self.fma_candidate(inst) {
+            return false;
+        }
+        let Some(block) = self.function.parent(inst) else { return false };
+        let (Some(first), Some(second)) =
+            (self.instruction_of(one.operands[0]), self.instruction_of(one.operands[1]))
+        else {
+            return false;
+        };
+        if self.function.parent(first) != Some(block)
+            || self.function.parent(second) != Some(block)
+            || self.bits_of(first).is_none()
+        {
+            return false;
+        }
+        self.try_list(block, &[first, second], false)
+    }
+
+    /// `vectorizeHorReduction` (l.34447) without its reductions: the
+    /// instructions below `root` in breadth-first order, to try as pairs.
+    fn postponed_below(
+        &self,
+        phi: Option<InstId>,
+        root: InstId,
+        block: BlockId,
+    ) -> Vec<InstId> {
+        let skip = |inst: InstId| {
+            matches!(self.function.instruction(inst).opcode, Opcode::Phi | Opcode::ICmp(_) | Opcode::FCmp(_) | Opcode::InsertElement)
+        };
+        if self.function.parent(root) != Some(block) || self.function.instruction(root).opcode == Opcode::Phi {
+            return Vec::new();
+        }
+        let try_operands = phi.is_some() && matches!(self.function.instruction(root).opcode, Opcode::Binary(_));
+        let mut queue = std::collections::VecDeque::from([(root, 0usize)]);
+        let mut visited: HashSet<Operand> = HashSet::new();
+        let mut postponed = Vec::new();
+        while let Some((inst, level)) = queue.pop_front() {
+            if self.function.is_erased(inst) {
+                continue;
+            }
+            let mut seed = inst;
+            if try_operands && inst == root {
+                let result = phi.and_then(|phi| self.function.instruction(phi).result);
+                let operands = &self.function.instruction(root).operands;
+                let other = if Some(operands[0]) == result.map(Operand::Value) { operands[1] } else { operands[0] };
+                match self.instruction_of(other) {
+                    Some(operand) => seed = operand,
+                    None => break,
+                }
+            }
+            if !skip(seed) {
+                postponed.push(seed);
+            }
+            if level + 1 < RECURSION_MAX_DEPTH {
+                for operand in self.function.instruction(inst).operands.clone() {
+                    if matches!(operand, Operand::Block(_)) || !visited.insert(operand) {
+                        continue;
+                    }
+                    if let Some(def) = self.instruction_of(operand)
+                        && !skip(def)
+                        && !self.function.is_erased(def)
+                        && self.function.parent(def) == Some(block)
+                    {
+                        queue.push_back((def, level + 1));
+                    }
+                }
+            }
+        }
+        postponed
+    }
+
+    /// `vectorizeRootInstruction`: whether any pair under `root` vectorized.
+    fn root(
+        &mut self,
+        phi: Option<InstId>,
+        root: InstId,
+        block: BlockId,
+    ) -> bool {
+        let mut changed = false;
+        for inst in self.postponed_below(phi, root, block) {
+            if !self.function.is_erased(inst) {
+                changed |= self.pair_of(inst);
+            }
+        }
+        changed
+    }
+
+    /// `getReductionInstr` (l.34370), for the case of an incoming value made
+    /// in the phi's own block (DEVIATE SLP8: no loop latch case).
+    fn reduction_of(
+        &self,
+        phi: InstId,
+        block: BlockId,
+    ) -> Option<InstId> {
+        let operands = &self.function.instruction(phi).operands;
+        operands
+            .chunks(2)
+            .find(|pair| pair[1] == Operand::Block(block))
+            .and_then(|pair| self.instruction_of(pair[0]))
+            .filter(|def| self.function.parent(*def) == Some(block))
+    }
+
+    /// `vectorizeChainsInBlock`'s instruction loop (l.35620), for the roots
+    /// that start a pair: the latch values of the phis and the operands of an
+    /// instruction nothing reads.
+    fn roots(
+        &mut self,
+        block: BlockId,
+    ) -> bool {
+        let mut changed = false;
+        let mut visited: HashSet<InstId> = HashSet::new();
+        'again: loop {
+            for inst in self.function.iter_block(block).collect::<Vec<_>>() {
+                if self.function.is_erased(inst) || !visited.insert(inst) {
+                    continue;
+                }
+                let one = self.function.instruction(inst);
+                if one.opcode == Opcode::Phi {
+                    let arms: Vec<(Operand, Operand)> = one.operands.chunks(2).map(|pair| (pair[0], pair[1])).collect();
+                    if arms.len() == 2
+                        && let Some(latch) = self.reduction_of(inst, block)
+                        && self.root(Some(inst), latch, block)
+                    {
+                        changed = true;
+                        continue 'again;
+                    }
+                    for (value, pred) in arms {
+                        let Operand::Block(pred) = pred else { continue };
+                        if pred == block {
+                            continue;
+                        }
+                        if let Some(def) = self.instruction_of(value)
+                            && self.root(None, def, pred)
+                        {
+                            changed = true;
+                            if self.function.is_erased(inst) {
+                                continue 'again;
+                            }
+                        }
+                    }
+                    continue;
+                }
+                let unused = one.result.is_none_or(|result| self.function.users(result).iter().next().is_none());
+                let ignores_result = one.result.is_none() || matches!(one.opcode, Opcode::Call(_) | Opcode::Invoke(_));
+                // DEVIATE SLP9: the operands of a store are left to its chain.
+                if unused && ignores_result && !matches!(one.opcode, Opcode::Store { .. }) {
+                    let mut moved = false;
+                    for operand in one.operands.clone() {
+                        if let Some(def) = self.instruction_of(operand) {
+                            moved |= self.root(None, def, block);
+                        }
+                    }
+                    if moved {
+                        changed = true;
+                        continue 'again;
+                    }
+                }
+            }
+            break;
+        }
+        changed
+    }
+}
+
 /// The phis of each block as seeds; whether any tree was made.
 fn run_phis(
     context: &mut Context,
@@ -756,8 +959,11 @@ fn run_phis(
         opcodes: HashMap::new(),
         analyzed: HashSet::new(),
     };
-    for block in blocks {
+    for block in blocks.iter().copied() {
         changed |= seeds.block(block);
+    }
+    for block in blocks {
+        changed |= seeds.roots(block);
     }
     changed
 }
