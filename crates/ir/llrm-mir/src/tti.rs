@@ -1604,6 +1604,15 @@ pub trait Tti {
         true
     }
 
+    /// DEVIATE LV-SIZE (owner arm64, exit 2026-11-30): at `optsize` a vector
+    /// loop is taken only where its body and the work outside it (the
+    /// accumulators' start, the reduction's horizontal step) cost less than the
+    /// scalar loop. The pin prices the loop region alone (`VPlan::cost`,
+    /// VPlan.cpp L1024) and, short of `minsize`, by throughput. false: the pin.
+    fn vectorizes_size_priced(&self) -> bool {
+        false
+    }
+
     fn opt_size_inline_chain_trial(&self) -> bool {
         false
     }

@@ -327,6 +327,32 @@ fn an_optsize_loop_is_widened_when_vf_divides_the_trip_count() {
     assert_eq!(count(&text, "<8 x i16>"), 0, "{text}");
 }
 
+/// `dot` and `tile` at -Os (bench, arm64): the pin widens a reduction at
+/// `optsize` by cost per lane and leaves the accumulator start and the
+/// horizontal step out of the price (`VPlan::cost` counts the loop region
+/// only); the vector loop was 292 and 132 bytes against gcc's scalar 144 and
+/// 80. Priced with that work, a reduction whose loop is no smaller than the
+/// scalar one stays scalar; a copy has none and is still widened.
+#[test]
+fn an_optsize_reduction_stays_scalar_where_its_vector_loop_is_not_smaller() {
+    let dot = DOT_SEXT.replace("2000", "48");
+    let sized = |text: &str| {
+        text.replace(
+            "define i64 @f(ptr noalias %a, ptr noalias %b)",
+            "define i64 @f(ptr noalias %a, ptr noalias %b) optsize",
+        )
+    };
+    let text = run(&dot);
+    assert!(count(&text, "load <") > 0, "at speed the loop is widened: {text}");
+    let text = run(&sized(&dot));
+    assert_eq!(count(&text, "load <"), 0, "at -Os the scalar loop is smaller: {text}");
+    let text = run(&COPY.replace("1920", "1024").replace(
+        "define void @f(ptr noalias %a, ptr noalias %b, i64 %n)",
+        "define void @f(ptr noalias %a, ptr noalias %b, i64 %n) optsize",
+    ));
+    assert!(count(&text, "load <") > 0, "a copy has no work outside the loop: {text}");
+}
+
 /// x86 prices vectors too; its tuning says whether an optsize loop is widened.
 struct X86At(std::rc::Rc<llrm_x86::tti::X86>);
 
