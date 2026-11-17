@@ -304,6 +304,8 @@ pub(crate) fn extract(
                 Opcode::Phi if inst == primary => {}
                 Opcode::Phi => return Err(Skipped("A phi other than the induction")),
                 Opcode::Br => {}
+                // `return (int)i`: only an exit phi reads the cast induction.
+                Opcode::Cast(_) if induction_cast(function, inst, primary_phi, early_exit).is_some() => {}
                 _ if inst == step || inst == latch_compare => {}
                 // An address: read by loads and by other addresses only.
                 Opcode::GetElementPtr { .. } => {
@@ -451,6 +453,7 @@ pub(crate) fn extract(
             }
             if let Some(def) = loop_defined(function, &blocks, value)
                 && def != primary
+                && induction_cast(function, def, primary_phi, early_exit).is_none()
                 && !(widened.contains(&def) && def != condition)
             {
                 return Err(Skipped("An exit phi of a value the loop does not widen"));
@@ -800,15 +803,22 @@ pub(crate) fn execute(
                         "first.lane",
                     )
                 });
-                if def == plan.primary {
-                    emit(
+                if def == plan.primary || induction_cast(function, def, primary_value, plan.early_exit).is_some() {
+                    let at = emit(
                         function,
                         Position::End(early),
                         Opcode::Binary(BinaryOp::Add),
                         index_ty,
                         vec![index, lane],
                         "early.exit.value",
-                    )
+                    );
+                    match induction_cast(function, def, primary_value, plan.early_exit) {
+                        Some(cast) => {
+                            let ty = function.instruction(def).ty;
+                            emit(function, Position::End(early), Opcode::Cast(cast), ty, vec![at], "early.exit.value")
+                        }
+                        None => at,
+                    }
                 } else {
                     let element = function.instruction(def).ty;
                     emit(
@@ -855,6 +865,26 @@ pub(crate) fn execute(
     mark_vectorized(context, declared, metadata, function, vector_branch);
     let scalar_branch = function.terminator(plan.latch).expect("a terminated latch");
     mark_vectorized(context, declared, metadata, function, scalar_branch);
+}
+
+/// The cast of the induction that only an exit phi of `early_exit` reads: the
+/// early edge takes it of the first set lane's index.
+fn induction_cast(
+    function: &Function,
+    inst: InstId,
+    primary: Operand,
+    early_exit: BlockId,
+) -> Option<CastOp> {
+    let data = function.instruction(inst);
+    let Opcode::Cast(cast @ (CastOp::SExt | CastOp::ZExt | CastOp::Trunc)) = data.opcode else { return None };
+    let value = data.result?;
+    let only_exit_phis = function
+        .users(value)
+        .iter()
+        .all(
+            |one| function.instruction(one.user).opcode == Opcode::Phi && function.parent(one.user) == Some(early_exit),
+        );
+    (data.operands[0] == primary && only_exit_phis).then_some(cast)
 }
 
 /// An operand of a widened instruction: the wide value, or the loop-invariant
