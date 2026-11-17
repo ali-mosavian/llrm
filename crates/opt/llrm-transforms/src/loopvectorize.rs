@@ -623,15 +623,13 @@ fn extract(
                     (function.operand_type(cx.context, value).ok_or(Skipped("An untyped store"))?, data.operands[1])
                 };
                 let lane = element_ty(cx, value_ty).ok_or(Skipped("An element type the target has no vector of"))?;
-                // `CM_Interleave`: a member of a full group of two or four
-                // (a factor of three needs the pin's padded concatenation,
-                // DEVIATE LV-I2, owner llrm-arm64-vec, exit 2026-11-24) is
+                // `CM_Interleave`: a member of a full group of two to four is
                 // widened with the group, at its insert position; the other
                 // members have no recipe of their own.
                 if !reverse
                     && let Some(group) = groups
                         .and_then(|info| info.interleave_group(inst))
-                        .filter(|group| !group.is_reverse() && group.is_full() && matches!(group.factor(), 2 | 4))
+                        .filter(|group| !group.is_reverse() && group.is_full() && matches!(group.factor(), 2..=4))
                 {
                     let members: Vec<InstId> = group.members().collect();
                     if is_load {
@@ -887,6 +885,11 @@ fn extract(
             // exit LV-W3b): `fpext`, `fptrunc` and the pointer casts are not
             // widened.
             Opcode::Cast(op) => {
+                // An index of an address only: the access's own recipe
+                // (consecutive, strided or replicated) accounts for it.
+                if data.result.is_some_and(|result| address_arithmetic(function, header, result)) {
+                    continue;
+                }
                 let kind = interleave::cast_kind(op).ok_or(Skipped("A cast the cost model does not know"))?;
                 let integer_cast = matches!(op, CastOp::SExt | CastOp::ZExt | CastOp::Trunc);
                 if !integer_cast
@@ -1227,12 +1230,7 @@ fn address_slice(
             return true;
         }
         let inst = function.instruction(def);
-        let arithmetic = matches!(
-            inst.opcode,
-            Opcode::GetElementPtr { .. }
-                | Opcode::Binary(BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Shl | BinaryOp::Or)
-                | Opcode::Cast(CastOp::SExt | CastOp::ZExt | CastOp::Trunc)
-        );
+        let arithmetic = matches!(inst.opcode, Opcode::GetElementPtr { .. }) || is_index_operation(&inst.opcode);
         if !arithmetic || depth > 8 {
             return false;
         }
@@ -1301,6 +1299,27 @@ fn replicated_address(
     result
 }
 
+/// An integer operation an index may pass through before it is added to a
+/// base: what `CM_Scalarize` clones per lane for an address that is not
+/// affine (a shift of the induction, `a[i >> k]`). No operation here traps or
+/// reads memory, so a lane's clone runs exactly when the scalar loop's did.
+fn is_index_operation(opcode: &Opcode) -> bool {
+    matches!(
+        opcode,
+        Opcode::Binary(
+            BinaryOp::Add
+                | BinaryOp::Sub
+                | BinaryOp::Mul
+                | BinaryOp::Shl
+                | BinaryOp::LShr
+                | BinaryOp::AShr
+                | BinaryOp::And
+                | BinaryOp::Or
+                | BinaryOp::Xor
+        ) | Opcode::Cast(CastOp::SExt | CastOp::ZExt | CastOp::Trunc)
+    )
+}
+
 fn address_arithmetic(
     function: &Function,
     header: BlockId,
@@ -1315,8 +1334,7 @@ fn address_arithmetic(
                 function.parent(one.user) == Some(header)
                     && match user.opcode {
                         Opcode::GetElementPtr { .. } => one.index > 0,
-                        Opcode::Binary(BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Shl | BinaryOp::Or)
-                        | Opcode::Cast(CastOp::SExt | CastOp::ZExt | CastOp::Trunc) => {
+                        ref opcode if is_index_operation(opcode) => {
                             user.result.is_some_and(|result| address_arithmetic(function, header, result))
                         }
                         _ => false,
@@ -1690,24 +1708,48 @@ fn widen_interleave(
                     )
                 })
                 .collect();
-            // `concatenateVectors`: halve the list by pairs until one vector.
+            // `concatenateVectors`: halve the list by pairs until one vector;
+            // an odd one out waits for the next round, and
+            // `concatenateTwoVectors` pads the shorter of a pair with poison.
             while pieces.len() > 1 {
                 let mut next = Vec::new();
                 for pair in pieces.chunks(2) {
-                    let [(low, count), (high, _)] = pair else { unreachable!("a power of two of members") };
-                    let joined_ty = context.types.intern(Type::Vector { element: group.element, count: count * 2 });
-                    let mask = (0..count * 2).map(|lane| lane as i32).collect();
+                    let [(low, low_count), (high, high_count)] = *pair else {
+                        next.push(pair[0]);
+                        continue;
+                    };
+                    let mut high = high;
+                    if low_count > high_count {
+                        let padded_ty = context.types.intern(Type::Vector { element: group.element, count: low_count });
+                        let mask =
+                            (0..low_count).map(|lane| if lane < high_count { lane as i32 } else { -1 }).collect();
+                        let high_ty = context.types.intern(Type::Vector { element: group.element, count: high_count });
+                        let padding =
+                            Operand::Constant(context.constant(Constant { ty: high_ty, kind: ConstantKind::Poison }));
+                        let padded = function.create_instruction(
+                            Opcode::ShuffleVector(mask),
+                            padded_ty,
+                            vec![high, padding],
+                            Flags::default(),
+                            None,
+                        );
+                        function.insert(padded, before).expect("the access's block");
+                        high = Operand::Value(function.instruction(padded).result.expect("a shufflevector"));
+                    }
+                    let count = low_count + high_count;
+                    let joined_ty = context.types.intern(Type::Vector { element: group.element, count });
+                    let mask = (0..count).map(|lane| lane as i32).collect();
                     let joined = function.create_instruction(
                         Opcode::ShuffleVector(mask),
                         joined_ty,
-                        vec![*low, *high],
+                        vec![low, high],
                         Flags::default(),
                         None,
                     );
                     function.insert(joined, before).expect("the access's block");
                     next.push((
                         Operand::Value(function.instruction(joined).result.expect("a shufflevector")),
-                        count * 2,
+                        count,
                     ));
                 }
                 pieces = next;

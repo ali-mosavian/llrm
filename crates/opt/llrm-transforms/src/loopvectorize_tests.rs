@@ -1330,6 +1330,36 @@ fn interleave_groups_stay_scalar_where_the_backend_has_none() {
     assert_eq!(count(&text, "load i16"), 2, "{text}");
 }
 
+const INTERLEAVE_TRIPLE_STORE: &str = include_str!("../tests/lv/interleave_triple_store.ll");
+const CONVERT_BGR: &str = include_str!("../tests/lv/convert_bgr.ll");
+
+/// jpeg_fixed's `convert` writes `line[3 * x]`, `+ 1`, `+ 2`: the group of
+/// three stayed scalar ("An access that is not consecutive"), 49152 scalar
+/// iterations of 40 instructions to clang's 3072 of 246. The pin takes VF 16:
+/// the three members are concatenated (the odd one out padded with poison,
+/// `concatenateTwoVectors`) and stored as one `<48 x i8>` interleave.
+#[test]
+fn a_triple_of_byte_stores_is_one_interleaved_store_of_three_members() {
+    let text = run_interleaved(INTERLEAVE_TRIPLE_STORE);
+    assert_eq!(count(&text, "store <48 x i8>"), 2, "{text}");
+    assert_eq!(count(&text, "store i8"), 0, "{text}");
+    assert!(text.contains("<i32 0, i32 16, i32 32, i32 1, i32 17, i32 33"), "{text}");
+}
+
+/// The whole of convert, as the pin sees it: the chroma planes read at
+/// `x >> hshift` and the three results stored at `3 * x + k`. The shift stopped
+/// the address being "arithmetic of the induction" ("A cast result used other
+/// than by a store or an operation"), and the stores had no group of three. The
+/// pin takes VF 16: the chroma loads scalarized with their address computed per
+/// lane (`VPReplicateRecipe`), the luma load wide, one interleaved store.
+#[test]
+fn a_convert_loop_reads_chroma_at_a_shifted_index_and_stores_three_members() {
+    let text = run_interleaved(CONVERT_BGR);
+    assert_eq!(count(&text, "load <16 x i8>"), 1, "{text}");
+    assert_eq!(count(&text, "insertelement <16 x i8>"), 32, "{text}");
+    assert_eq!(count(&text, "store <48 x i8>"), 1, "{text}");
+}
+
 const COUNT_AND_SUM: &str = include_str!("../tests/lv/count_and_sum_of_zeros.ll");
 
 /// `n += x == 0; s += x == 0 ? i : 0` stayed scalar ("A comparison used other
