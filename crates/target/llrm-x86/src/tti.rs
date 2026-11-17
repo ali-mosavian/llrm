@@ -1246,6 +1246,10 @@ impl Tti for X86 {
         self.tuning.unroll_recurrence_veto
     }
 
+    fn threads_by_relation(&self) -> bool {
+        self.tuning.threads_by_relation
+    }
+
     fn x87_stack_slots(&self) -> Option<u32> {
         self.tuning.x87_stack_slots.filter(|_| !self.sse2)
     }
