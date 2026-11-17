@@ -116,6 +116,12 @@ pub struct M68kHooks {
 }
 
 impl M68kHooks {
+    /// Whether single-bit `or`, `and` and `xor` are `bset`, `bclr` and `bchg`
+    /// (DEVIATE M68K-BITOP): before the 68020, where they cost fewer clocks.
+    pub fn has_single_bit_ops(&self) -> bool {
+        !self.cpu.at_least(Cpu::M68020)
+    }
+
     /// Whether this CPU has `bfextu` (DEVIATE M68K-BFEXTU).
     pub fn has_bit_field_extract(&self) -> bool {
         self.cpu.has_bit_field_extract()

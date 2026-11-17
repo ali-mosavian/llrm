@@ -293,6 +293,7 @@ impl Select for M68kChooser<'_> {
         super::indexed::select(adapter, node)
             .or_else(|| super::bfffo::select(adapter, node))
             .or_else(|| if self.hooks.has_bit_field_extract() { super::bfextu::select(adapter, node) } else { None })
+            .or_else(|| if self.hooks.has_single_bit_ops() { super::bitop::select(adapter, node) } else { None })
             .or_else(|| if self.free_any_extend { super::anyext::select(adapter, node) } else { None })
             .unwrap_or_else(|| self.selector.select(adapter, &mut self.hooks, node))
     }

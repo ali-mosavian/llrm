@@ -9,6 +9,7 @@ pub mod asm;
 pub mod anyext;
 pub mod bfextu;
 pub mod bfffo;
+pub mod bitop;
 pub mod wordjump;
 pub mod btst;
 pub mod call;
