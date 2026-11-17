@@ -28,7 +28,7 @@ use llrm_support::hash::{HashMap, HashSet};
 use crate::asm::{Asm, Inst as AsmInst, Line, Op as AsmOp};
 use crate::dagisel::generated::ids::opcode as op;
 use crate::dagisel::hooks::Cpu;
-use crate::emit::{MInst, Operand as Machine, address, indexed_address, spill};
+use crate::emit::{MInst, Operand as Machine, address, indexed_address, indexed_address_part, spill};
 use crate::reg;
 use crate::select::Item;
 
@@ -2536,26 +2536,44 @@ pub fn build_with_places(
                     }
                 }
             }
-            op::LDAX | op::STAX => {
-                let symbol = indexed_address(&o[1], &o[2]).map_err(Unsupported)?;
+            // `ldx i; lda g+k,x`; a word is two of them, `g+k` and `g+k+1`,
+            // one `x`
+            op::LDAX | op::STAX | op::LDAX16 | op::STAX16 => {
+                indexed_address(&o[1], &o[2]).map_err(Unsupported)?;
                 let (acc, x) = (Reg::Phys(reg::A), Reg::Phys(reg::X));
                 let index = b.byte(name(&o[3])?)?;
                 b.copy(x, index);
-                if inst.opcode == op::LDAX {
-                    b.define(name(&o[0])?);
-                    let d = b.byte(name(&o[0])?)?;
-                    b.push(Inst::new(
-                        Kind::Op("LDAX"),
-                        vec![Operand::Def(acc), Operand::Symbol(symbol.clone(), 0), Operand::Use(x)],
-                    ));
-                    b.copy(d, acc);
+                let wide = matches!(inst.opcode, op::LDAX16 | op::STAX16);
+                let load = matches!(inst.opcode, op::LDAX | op::LDAX16);
+                let halves = if load {
+                    if wide {
+                        let (low, high) = b.write_word(name(&o[0])?)?;
+                        vec![low, high]
+                    } else {
+                        b.define(name(&o[0])?);
+                        vec![b.byte(name(&o[0])?)?]
+                    }
+                } else if wide {
+                    let (low, high) = b.read_word(name(&o[0])?)?;
+                    vec![low, high]
                 } else {
-                    let value = b.byte(name(&o[0])?)?;
-                    b.copy(acc, value);
-                    b.push(Inst::new(
-                        Kind::Op("STAX"),
-                        vec![Operand::Use(acc), Operand::Symbol(symbol.clone(), 0), Operand::Use(x)],
-                    ));
+                    vec![b.byte(name(&o[0])?)?]
+                };
+                for (part, half) in halves.into_iter().enumerate() {
+                    let symbol = indexed_address_part(&o[1], &o[2], part as i64).map_err(Unsupported)?;
+                    if load {
+                        b.push(Inst::new(
+                            Kind::Op("LDAX"),
+                            vec![Operand::Def(acc), Operand::Symbol(symbol, 0), Operand::Use(x)],
+                        ));
+                        b.copy(half, acc);
+                    } else {
+                        b.copy(acc, half);
+                        b.push(Inst::new(
+                            Kind::Op("STAX"),
+                            vec![Operand::Use(acc), Operand::Symbol(symbol, 0), Operand::Use(x)],
+                        ));
+                    }
                 }
             }
             // The flags are made where they are read.
