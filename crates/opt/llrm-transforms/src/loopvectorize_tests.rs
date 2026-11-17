@@ -1322,12 +1322,13 @@ fn a_pair_swap_is_an_interleaved_load_and_store() {
     assert!(text.contains("add nuw nsw i64 %i, 16"), "{text}");
 }
 
-/// The groups are not widened unless the backend selects them.
+/// The groups are widened where the backend selects them (arm64 does since
+/// `ldN`/`stN` and the tuple register): the flag is no longer needed.
 #[test]
-fn interleave_groups_stay_scalar_where_the_backend_has_none() {
+fn interleave_groups_are_widened_where_the_backend_selects_them() {
     let text = run(INTERLEAVE_SWAP);
-    assert_eq!(count(&text, "load <16 x i16>"), 0, "{text}");
-    assert_eq!(count(&text, "load i16"), 2, "{text}");
+    assert_eq!(count(&text, "load <16 x i16>"), 2, "{text}");
+    assert_eq!(count(&text, "load i16"), 0, "{text}");
 }
 
 const COUNT_AND_SUM: &str = include_str!("../tests/lv/count_and_sum_of_zeros.ll");
