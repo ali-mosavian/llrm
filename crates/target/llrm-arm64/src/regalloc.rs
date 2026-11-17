@@ -908,7 +908,19 @@ pub(crate) fn spill_access(
     load: bool,
     quad: bool,
 ) -> Op {
-    let addr = Addr::Slot { slot, offset: 0 };
+    spill_access_at(register, slot, 0, load, quad)
+}
+
+/// [`spill_access`] at `offset` bytes into the frame object: the member of a
+/// tuple that lives `16 * index` bytes in.
+pub(crate) fn spill_access_at(
+    register: Reg,
+    slot: u32,
+    offset: i64,
+    load: bool,
+    quad: bool,
+) -> Op {
+    let addr = Addr::Slot { slot, offset };
     let mem = match register {
         Reg::Gpr(reg) => Memory::Int { width: Width::X, bytes: 8, sign: false, reg },
         Reg::Fpr(reg) => Memory::Fp { bytes: if quad { 16 } else { 8 }, reg },
@@ -916,7 +928,7 @@ pub(crate) fn spill_access(
     // The frame object itself (`getFixedStack`): a spill is disjoint from every
     // other object, so the pair pass moves one past a global's load or a store
     // through a pointer (`MachineInstr::mayAlias`).
-    let mmo = MemOperand { object: MemObject::Slot(slot), offset: Some(0), volatile: false };
+    let mmo = MemOperand { object: MemObject::Slot(slot), offset: Some(offset), volatile: false };
     Op::I(if load { Inst::Load { mem, addr, mmo } } else { Inst::Store { mem, addr, mmo } })
 }
 

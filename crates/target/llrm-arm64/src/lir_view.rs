@@ -14,7 +14,7 @@ use llrm_support::hash::HashMap;
 use crate::mc::inst::{FpConvert, Gpr, Inst, Shift, Target, Vreg, Wide};
 use crate::mc::visit::{Reg, RegRef, Role};
 use crate::mfunc::{MFunc, Op};
-use crate::regalloc::{Allocation, spill_access};
+use crate::regalloc::{Allocation, spill_access, spill_access_at};
 
 /// A virtual register's class: the width of a use is the instruction's.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -382,6 +382,10 @@ fn view_with(
                 operands
                     .extend(targets.iter().filter_map(|label| labels.get(label.as_str())).map(|&b| Operand::Block(b)));
             }
+            // The member a `TupleExtract` takes, which the allocator hints by.
+            if let Op::I(Inst::VectorTupleExtract { index, .. }) = &op {
+                operands.push(Operand::Imm(i64::from(*index)));
+            }
             if kind != Kind::Copy {
                 operands.push(Operand::Imm(if fused { content(&op).wrapping_add(1) } else { content(&op) }));
             }
@@ -535,7 +539,11 @@ fn rebuild_with(
     let wide = crate::regalloc::wide_registers(function);
     let mut slots: HashMap<i32, u32> = HashMap::default();
     for (slot, class) in spill_slots {
-        let (size, align) = if *class == Class::Quad { (16, 16) } else { (8, 8) };
+        let (size, align) = match class {
+            Class::Quad => (16, 16),
+            Class::Tuple(count) => (16 * u64::from(*count), 16),
+            _ => (8, 8),
+        };
         slots.insert(*slot, function.slot(size, align));
     }
     let physical = |register: LirReg| match register {
@@ -592,6 +600,15 @@ fn rebuild_with(
                     if dst != src {
                         // A copy of 128 bits moves all of them.
                         match (dst, src) {
+                            // A tuple copy is a parallel move of its members.
+                            (Reg::Fpr(tuple), Reg::Fpr(first)) if matches!(registers[0].1, Class::Tuple(_)) => {
+                                let Class::Tuple(count) = registers[0].1 else { unreachable!() };
+                                let mut members = [Vreg(0); 4];
+                                for at in 0..count {
+                                    members[usize::from(at)] = first.in_run(u32::from(at));
+                                }
+                                ops.push(Op::I(Inst::VectorTupleBuild { tuple, count, members }));
+                            }
                             (Reg::Fpr(rd), Reg::Fpr(rn))
                                 if registers[0].1 == Class::Quad
                                     || registers[1].1 == Class::Quad
@@ -607,8 +624,16 @@ fn rebuild_with(
                 Kind::Op(name @ ("SpillStore" | "SpillLoad")) => {
                     let Some(Operand::Frame(slot)) = inst.operands.last() else { panic!("a spill names no slot") };
                     let slot = slots[slot];
-                    let quad = registers[0].1 == Class::Quad;
-                    ops.push(spill_access(reg_at(0), slot, name == "SpillLoad", quad));
+                    if let (Class::Tuple(count), Reg::Fpr(first)) = (registers[0].1, reg_at(0)) {
+                        // A tuple goes to its slot a member at a time.
+                        for at in 0..count {
+                            let member = Reg::Fpr(first.in_run(u32::from(at)));
+                            ops.push(spill_access_at(member, slot, 16 * i64::from(at), name == "SpillLoad", true));
+                        }
+                    } else {
+                        let quad = registers[0].1 == Class::Quad;
+                        ops.push(spill_access(reg_at(0), slot, name == "SpillLoad", quad));
+                    }
                 }
                 Kind::Op(_)
                     if matches!(
@@ -918,6 +943,52 @@ impl AllocTarget for Arm64 {
 
     fn candidates(class: Class) -> Vec<RegId> {
         candidate_order(class)
+    }
+
+    /// `getRegAllocationHints` through a sub-register index: a member of a
+    /// tuple takes the register of that member of the tuple's, and a tuple
+    /// the one that makes a member already placed its own, so the moves
+    /// between them go (`TupleExtract`, `TupleBuild`).
+    fn related_registers(
+        one: &llrm_codegen::model::lir::Insn,
+        virt: u32,
+        assigned: &dyn Fn(u32) -> Option<RegId>,
+    ) -> Vec<RegId> {
+        use llrm_lir::Loc;
+        let Some(what) = one.what.as_ref() else { return Vec::new() };
+        let value = |loc: &Loc| match loc {
+            Loc::Held(held) => Some(held.value),
+            _ => None,
+        };
+        // (tuple, [(member, index)]) of the instruction.
+        let (tuple, members): (u32, Vec<(u32, usize)>) = match what.name.as_deref() {
+            Some("VectorTupleExtract") => {
+                let (Some(rd), Some(tuple), Some(Loc::Imm(index))) =
+                    (what.dests.first().and_then(value), what.sources.first().and_then(value), what.sources.get(1))
+                else {
+                    return Vec::new();
+                };
+                (tuple, vec![(rd, index.value as usize)])
+            }
+            Some("VectorTupleBuild") => {
+                let Some(tuple) = what.dests.first().and_then(value) else { return Vec::new() };
+                (tuple, what.sources.iter().filter_map(value).enumerate().map(|(at, member)| (member, at)).collect())
+            }
+            _ => return Vec::new(),
+        };
+        let info = &crate::REGISTER_INFO;
+        let first_of = |register: RegId| register.index().checked_sub(crate::reg::V0.index()).map(|n| n as u32);
+        if virt == tuple {
+            // The first member already placed decides where the tuple starts.
+            let placed = members.iter().find_map(|&(member, at)| Some((assigned(member)?, at)));
+            return placed
+                .and_then(|(register, at)| first_of(register).map(|n| (n, at)))
+                .filter(|(n, _)| *n < 32)
+                .map(|(n, at)| (2..=4).map(|count| tuple_id(count, (n + 32 - at as u32 % 32) % 32)).collect())
+                .unwrap_or_default();
+        }
+        let Some(&(_, at)) = members.iter().find(|&&(member, _)| member == virt) else { return Vec::new() };
+        assigned(tuple).and_then(|tuple| info.subreg(tuple, at)).into_iter().collect()
     }
 
     fn view(

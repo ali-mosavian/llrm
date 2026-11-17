@@ -2115,6 +2115,15 @@ impl<T: Target> TargetInstrInfo for SpikeInstrInfo<T> {
         self.operands_of(one).into_iter().filter_map(|(value, info)| Some((value, info.hint?))).collect()
     }
 
+    fn related_registers(
+        &self,
+        one: &Insn,
+        virt: u32,
+        assigned: &dyn Fn(u32) -> Option<RegId>,
+    ) -> Vec<RegId> {
+        T::related_registers(one, virt, assigned)
+    }
+
     fn copy_register_cost(
         &self,
         to: RegId,
