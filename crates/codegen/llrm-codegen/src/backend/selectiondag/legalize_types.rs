@@ -1589,6 +1589,15 @@ impl<'a> TypeLegalizer<'a> {
                 let operand = self.promoted_integer(self.dag.operand(node, 1));
                 self.dag.get_atomic_store(chain, ptr, operand, info)
             }
+            // `PromoteIntOp_VECREDUCE` (`PromoteIntOpVectorReduction`): `add`, `mul`, `and`, `or`, `xor` of the
+            // promoted lanes, whose extra bits the truncate of the result drops.
+            ISD::VecReduceAdd | ISD::VecReduceMul | ISD::VecReduceAnd | ISD::VecReduceOr | ISD::VecReduceXor => {
+                let operand = self.promoted_integer(self.dag.operand(node, at));
+                let lane = self.dag.value_type(operand).element();
+                let reduced = self.dag.get_node(self.dag.opcode(node), lane, &[operand]);
+                let vt = self.dag.value_type(node);
+                self.dag.get_node(ISD::Truncate, vt, &[reduced])
+            }
             ISD::Truncate => {
                 let operand = self.promoted_integer(self.dag.operand(node, at));
                 let vt = self.dag.value_type(node);
