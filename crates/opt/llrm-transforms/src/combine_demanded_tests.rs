@@ -12,7 +12,7 @@ fn visit(
     inst: InstId,
 ) -> Visit {
     let instruction = c.function.instruction(inst);
-    if instruction.result.is_none() || c.context.types.int_bits(instruction.ty).is_none() {
+    if instruction.result.is_none() || c.context.types.scalar_int_bits(instruction.ty).is_none() {
         return Visit::None;
     }
     c.simplify_demanded_instruction_bits(inst)
@@ -550,4 +550,23 @@ fn a_rotate_reading_only_known_bits_takes_constant_operands() {
     ));
     let out = combined_unverified(&text);
     assert!(out.contains("@llvm.fshl.i16(i16 %c, i16 0, i16 4)"), "{out}");
+}
+
+/// An add of 16 under a mask that reads only bits 1..3 adds nothing the mask
+/// reads, in every lane of a vector as in a scalar: `textfill`'s `(x + 16) &
+/// 14` on `<16 x i8>` kept the `add`, 7 of a loop's 15 instructions.
+#[test]
+fn a_vector_add_whose_bits_are_not_read_is_its_other_operand() {
+    let text = function(
+        "<16 x i8> %x",
+        "<16 x i8>",
+        &[
+            "%a = add <16 x i8> %x, <i8 16, i8 16, i8 16, i8 16, i8 16, i8 16, i8 16, i8 16, i8 16, i8 16, i8 16, i8 16, i8 16, i8 16, i8 16, i8 16>",
+            "%b = and <16 x i8> %a, <i8 14, i8 14, i8 14, i8 14, i8 14, i8 14, i8 14, i8 14, i8 14, i8 14, i8 14, i8 14, i8 14, i8 14, i8 14, i8 14>",
+        ],
+        "%b",
+    );
+    let got = combined(&text);
+    assert!(!got.contains("add <16 x i8>"), "{got}");
+    assert!(got.contains("and <16 x i8> %x"), "{got}");
 }
