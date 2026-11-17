@@ -82,6 +82,8 @@ pub mod x86isd {
     pub const PCMPGT: ISD = ISD::Target(703);
     /// `X86ISD::UNPCKL`: the low lanes of two vectors interleaved (`punpckl*`).
     pub const UNPCKL: ISD = ISD::Target(779);
+    /// `X86ISD::CVTSI2P`: the low lanes of a `v4i32` as floating point (`cvtdq2pd`).
+    pub const CVTSI2P: ISD = ISD::Target(537);
     /// `X86ISD::VZEXT_MOVL`: lane 0 kept, the other lanes zeroed (`movd`/`movq`
     /// from a register).
     pub const VZEXT_MOVL: ISD = ISD::Target(951);
@@ -3282,6 +3284,12 @@ fn lower_int_to_fp(
     let dst = dag.value_type(node);
     let src = dag.operand(node, 0);
     let src_vt = dag.value_type(src);
+    // `LowerSINT_TO_FP`: `v2i32` to `v2f64` is `cvtdq2pd` of the lanes widened with undef.
+    if signed && dst == EVT::Simple(MVT::V2F64) && src_vt == EVT::Simple(MVT::V2I32) {
+        let pad = dag.get_undef(src_vt);
+        let wide = dag.get_node(ISD::ConcatVectors, EVT::Simple(MVT::V4I32), &[src, pad]);
+        return Some(dag.get_node(x86isd::CVTSI2P, dst, &[wide]));
+    }
     if !matches!(dst, EVT::Simple(MVT::F32 | MVT::F64 | MVT::F80)) || !src_vt.is_integer() {
         return None;
     }

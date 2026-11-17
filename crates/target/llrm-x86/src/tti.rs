@@ -1632,6 +1632,9 @@ impl Tti for X86 {
             // a word vector is one `mov` of a dword, the scalar load's price
             return (self.word_vectors && is_word_vector(ty)).then(|| Cost::of(1));
         }
+        if self.tuning.vector_float_costs && matches!(ty.lane, Ty::Float | Ty::Double) {
+            return crate::tti_vector::float_memory_op_cost(op, ty, kind);
+        }
         let pieces = xmm_pieces(ty)?;
         // Every other kind is `TCC_Basic` ("TODO: Handle other cost kinds"), a
         // load's latency the base's 4.
@@ -1706,6 +1709,9 @@ impl Tti for X86 {
             .then(|| Cost::of(1));
         }
         let throughput = kind == CostKind::RecipThroughput;
+        if self.tuning.vector_float_costs && matches!(ty.lane, Ty::Float | Ty::Double) {
+            return crate::tti_vector::float_arithmetic_cost(op, ty, kind);
+        }
         match op {
             ArithOp::And | ArithOp::Or | ArithOp::Xor => xmm_pieces(ty).map(Cost::of),
             // `paddq`, `psubq`: {1, 2, 1, 2}.
@@ -1801,6 +1807,9 @@ impl Tti for X86 {
     /// ones times the larger register count; a truncate to the type it already
     /// is, once legalized, is free. Anything else (a float, a mask, a
     /// scalarized cast) is not priced.
+    /// `X86TTIImpl::getCastInstrCost` for the integer extends and truncates (the SSE2 rows): the row of the exact
+    /// types, else of the legalized ones times the larger register count; a truncate to the type it already is, once
+    /// legalized, is free. Anything else (a mask, a scalarized cast) is not priced; a float is `tti_vector`'s.
     fn vector_cast_cost(
         &self,
         kind: CastKind,
@@ -1808,6 +1817,13 @@ impl Tti for X86 {
         src: VectorTy,
         cost_kind: CostKind,
     ) -> Option<Cost> {
+        // DEVIATE X86V3: a cast to or from float lanes is the pin's row (`tti_vector_oracle.txt`).
+        if matches!(dst.lane, Ty::Float | Ty::Double) || matches!(src.lane, Ty::Float | Ty::Double) {
+            if !self.vector_values() || !self.tuning.vector_float_costs {
+                return None;
+            }
+            return crate::tti_vector::cast_cost(kind, dst, src, cost_kind);
+        }
         if !self.vector_values() || !matches!(kind, CastKind::ZExt | CastKind::SExt | CastKind::Trunc) {
             return None;
         }
