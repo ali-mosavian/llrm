@@ -2945,6 +2945,16 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE LSR-DROP-AT-SIZE (owner llrm-target-x86-m64-b, exit 2026-11-30;
+    /// gcc's ivopts keeps the original candidates when its set costs more,
+    /// `find_optimal_iv_set` against `origset`, tree-ssa-loop-ivopts.cc): in a
+    /// function built for size, a solution that needs more registers or more
+    /// instructions than the loop as written is dropped. queens -Os: three
+    /// counters for 24 B more than the one the loop had.
+    fn lsr_drops_worse_solution_at_size(&self) -> bool {
+        false
+    }
+
     /// DEVIATE LU15 (owner z80, exit 2026-12-15: a baseline that prices the
     /// loop as written): with `should_drop_lsr_solution_if_less_profitable`,
     /// a loop that has an address use keeps LSR's solution. The baseline

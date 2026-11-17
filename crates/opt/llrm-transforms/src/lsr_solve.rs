@@ -345,11 +345,26 @@ impl Collection<'_, '_> {
             && !solution_cost.is_less(self.tti, &self.baseline_cost);
         if saturated_tie
             || self.baseline_cost.is_less(self.tti, &solution_cost)
-                && (self.tti.should_drop_lsr_solution_if_less_profitable() && !spared
+                && ((self.tti.should_drop_lsr_solution_if_less_profitable()
+                    || self.size
+                        && self.tti.lsr_drops_worse_solution_at_size()
+                        && holds_more(&self.baseline_cost, &solution_cost))
+                    && !spared
                     || spills && self.tti.lsr_drops_spilling_solution())
         {
             solution.clear();
         }
         (solution, solution_cost)
     }
+}
+
+/// DEVIATE LSR-DROP-AT-SIZE: the rewrite needs more registers, or more
+/// instructions, than the loop as written. Bytes and immediates are left out:
+/// the loop as written is rated with each address one pointer, so its bytes
+/// read low (sfm16 -Os: a stride-44 index kept for +4 B).
+fn holds_more(
+    written: &Cost,
+    rewrite: &Cost,
+) -> bool {
+    (written.c.insns, written.c.num_regs) < (rewrite.c.insns, rewrite.c.num_regs)
 }
