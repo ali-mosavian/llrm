@@ -213,6 +213,15 @@ fn program(
     text: &str,
     request: &Request,
 ) -> Result<Program, String> {
+    // a private function takes arguments in rc16..rc25 (`calling.toml` `[mos_private]`)
+    if request.platform.zero_page < crate::alloc::MOST_CELLS {
+        return Err(format!(
+            "platform {}: zero_page = {}, the private calling convention needs {} bytes",
+            request.platform.name,
+            request.platform.zero_page,
+            crate::alloc::MOST_CELLS
+        ));
+    }
     let mut module =
         llrm_mir::parse::module(&without_reserved_symbols(&without_triple(text), &request.platform.c_symbol_prefix))
             .map_err(|error| error.to_string())?;

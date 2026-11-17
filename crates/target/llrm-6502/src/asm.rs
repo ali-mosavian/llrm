@@ -374,6 +374,16 @@ impl fmt::Display for Line {
     }
 }
 
+/// What reads cells besides the instructions of a function: its return and the
+/// calls of the functions of the program (see [`Asm::cell_callees`]).
+#[derive(Clone, Copy)]
+pub struct CellReads<'a> {
+    /// The cells a `rts` returns.
+    pub results: &'a std::collections::BTreeSet<String>,
+    /// The scratch cells each callee is passed.
+    pub callees: &'a std::collections::BTreeMap<String, std::collections::BTreeSet<u8>>,
+}
+
 /// The lines of a function, written to as text and kept as [`Line`]s.
 #[derive(Clone, Default, PartialEq, Eq, Debug)]
 pub struct Asm {
@@ -391,6 +401,11 @@ pub struct Asm {
     pub x_callees: std::collections::BTreeSet<String>,
     /// The function returns nothing in `y`: a `rts` does not read it.
     pub no_y_result: bool,
+    /// The scratch cells (`rc16`..) each routine this function calls is passed an
+    /// argument in: a call of a function of the program reads them
+    /// (`calling.toml` `[mos_private]`), where a runtime routine's text names
+    /// what it reads. A callee with none maps to an empty set.
+    pub cell_callees: std::collections::BTreeMap<String, std::collections::BTreeSet<u8>>,
     /// The cells a `rts` returns (`rc2`, `rc3` for a long): every other
     /// caller-saved cell is dead there.
     pub result_cells: std::collections::BTreeSet<String>,
@@ -410,6 +425,11 @@ impl Asm {
         Asm::default()
     }
 
+    /// What a return and a call read of the cells, for the dead-store scans.
+    pub fn cell_reads(&self) -> CellReads<'_> {
+        CellReads { results: &self.result_cells, callees: &self.cell_callees }
+    }
+
     /// A pass's candidate: `self` with `lines` instead. Every other field
     /// (`a_callees`, the result flags, `result_cells`) decides what the
     /// cleanup may drop, so all are named: a field added to [`Asm`] fails
@@ -426,6 +446,7 @@ impl Asm {
             x_callees,
             no_y_result,
             result_cells,
+            cell_callees,
             y_callees,
             cmos,
             place,
@@ -439,6 +460,7 @@ impl Asm {
             x_callees: x_callees.clone(),
             no_y_result: *no_y_result,
             result_cells: result_cells.clone(),
+            cell_callees: cell_callees.clone(),
             y_callees: y_callees.clone(),
             cmos: *cmos,
             place: *place,
