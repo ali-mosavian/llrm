@@ -4,15 +4,16 @@
 
 /// A set of the bytes of one value.
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
-pub struct ValueLanes(pub u16);
+pub struct ValueLanes(pub u64);
 
 impl ValueLanes {
     pub const NONE: Self = Self(0);
 
     /// Bytes `0..width`: the lanes an access of `width` bytes at the bottom of
-    /// a value names. A width past 16 bytes names all 16.
+    /// a value names. A width past 64 bytes (a four-vector tuple) names all
+    /// 64.
     pub const fn low(width: u32) -> Self {
-        if width >= 16 { Self(u16::MAX) } else { Self((1u16 << width) - 1) }
+        if width >= 64 { Self(u64::MAX) } else { Self((1u64 << width) - 1) }
     }
 
     /// `width` bytes from byte `from`: the high byte `AH` is `at(1, 1)`.
@@ -66,7 +67,7 @@ mod tests {
         assert_eq!(ValueLanes::low(2), ValueLanes(0b11));
         assert_eq!(ValueLanes::low(4), ValueLanes(0b1111));
         assert_eq!(ValueLanes::low(0), ValueLanes::NONE);
-        assert_eq!(ValueLanes::low(40), ValueLanes(u16::MAX));
+        assert_eq!(ValueLanes::low(70), ValueLanes(u64::MAX));
     }
 
     /// `sub_8bit_hi` (AH) shares no byte with `sub_8bit` (AL) but both are

@@ -239,7 +239,8 @@ impl TargetEnv {
     }
 
     /// `hosts` for the byte `offset` of the wide register: the narrow one is
-    /// that many bytes above the wide one's lowest.
+    /// that many bytes above the wide one's lowest. For a tuple, `offset` is
+    /// the member's index.
     fn hosts_at(
         &self,
         wide: &BTreeSet<RegId>,
@@ -251,6 +252,11 @@ impl TargetEnv {
         wide.iter()
             .copied()
             .filter(|&big| {
+                // A tuple's lanes are its members: `offset` counts them, and
+                // the narrow value is the member there (`getSubReg`).
+                if regs.is_composite(big) {
+                    return regs.subreg(big, offset as usize).is_some_and(|member| narrow.contains(&member));
+                }
                 narrow
                     .iter()
                     .any(

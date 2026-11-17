@@ -312,7 +312,7 @@ impl LiveRegMatrix {
         // Unit lanes are the root's bytes, the upper two sharing one; the
         // value starts at the register's lowest byte.
         let low = (self.tri.regs.lanes(phys) as u32 & 0xf).trailing_zeros();
-        let bytes: u16 = if unit % 4 == 2 { 0b1100 } else { 1 << (unit % 4) };
+        let bytes: u64 = if unit % 4 == 2 { 0b1100 } else { 1 << (unit % 4) };
         virt.range_for_lanes(ValueLanes(bytes >> low))
     }
 
@@ -331,10 +331,15 @@ impl LiveRegMatrix {
         vreg: VReg,
         lr: &LiveRange,
     ) -> u64 {
-        lr.segments.iter().fold(u64::from(vreg), |key, segment| {
-            let key = key.wrapping_mul(0x100000001b3) ^ segment.start.get_index() as u64;
-            key.wrapping_mul(0x100000001b3) ^ segment.end.get_index() as u64
-        })
+        lr.segments
+            .iter()
+            .fold(
+                u64::from(vreg),
+                |key, segment| {
+                    let key = key.wrapping_mul(0x100000001b3) ^ segment.start.get_index() as u64;
+                    key.wrapping_mul(0x100000001b3) ^ segment.end.get_index() as u64
+                },
+            )
     }
 
     /// `query` (LiveRegMatrix.cpp#L160) followed by `checkInterference()`: does
