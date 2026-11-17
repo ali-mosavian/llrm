@@ -4348,6 +4348,54 @@ impl Builder<'_> {
         Ok(())
     }
 
+    /// The mask as `CONCAT_VECTORS` of aligned pieces of the two inputs, where
+    /// each piece is `gcd(input lanes, mask lanes)` wide; `None` where a piece
+    /// is not one aligned slice of one input (or all undefined, which is an
+    /// undefined piece), or is narrower than two lanes.
+    fn shuffle_as_piece_concat(
+        &mut self,
+        first: SDValue,
+        second: SDValue,
+        mask: &[i32],
+        result: EVT,
+    ) -> Option<SDValue> {
+        fn gcd(
+            a: usize,
+            b: usize,
+        ) -> usize {
+            if b == 0 { a } else { gcd(b, a % b) }
+        }
+        let input = self.dag.value_type(first);
+        let sources = input.lanes() as usize;
+        let piece = gcd(sources, mask.len());
+        let EVT::Simple(lane) = input.element() else { return None };
+        if piece < 2 || MVT::vector(lane, piece as u32).is_none() {
+            return None;
+        }
+        let piece_vt = EVT::vector(lane, piece as u32);
+        let mut pieces = Vec::with_capacity(mask.len() / piece);
+        for chunk in mask.chunks(piece) {
+            let Some(&base) = chunk.iter().find(|&&at| at >= 0) else {
+                pieces.push(self.dag.get_undef(piece_vt));
+                continue;
+            };
+            let start = base as usize - chunk.iter().position(|&at| at >= 0)?;
+            if start % piece != 0
+                || !chunk.iter().enumerate().all(|(at, &lane)| lane < 0 || lane as usize == start + at)
+            {
+                return None;
+            }
+            let (from, offset) = if start >= sources { (second, start - sources) } else { (first, start) };
+            pieces.push(if piece == sources {
+                from
+            } else {
+                let index = self.dag.get_constant(offset as u128, self.target.dag.pointer);
+                self.dag.get_node(ISD::ExtractSubvector, piece_vt, &[from, index])
+            });
+        }
+        Some(self.dag.get_node(ISD::ConcatVectors, result, &pieces))
+    }
+
     /// `visitShuffleVector`
     /// ([L12199](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/SelectionDAGBuilder.cpp#L12199)):
     /// `getVectorShuffle` of the two inputs with the IR's mask (a lane of `-1`
@@ -4363,9 +4411,7 @@ impl Builder<'_> {
         let mut second = self.get_value(instruction.operands[1])?;
         let result = self.type_of(instruction.ty)?;
         let input = self.dag.value_type(first);
-        let (mut sources, lanes) = (input.lanes() as usize, mask.len());
-        let mut remapped: Vec<i32> = Vec::new();
-        let mut mask = mask;
+        let (sources, lanes) = (input.lanes() as usize, mask.len());
         let node = 'shuffled: {
             if sources == lanes {
                 break 'shuffled self.dag.get_vector_shuffle(result, first, second, mask);
@@ -4398,15 +4444,25 @@ impl Builder<'_> {
                         break 'shuffled self.dag.get_node(ISD::ConcatVectors, result, &operands);
                     }
                 }
-                // Both inputs padded with undefined lanes to the mask's length.
+                // A mask that is aligned pieces of the inputs, each piece the
+                // largest width that divides both lengths (two 16-lane
+                // vectors and a half of a third: `<0..47>` of two `v32i8`),
+                // is the `CONCAT_VECTORS` of those pieces. The pin pads both
+                // inputs to the mask's length and combines the shuffle of
+                // concatenations back into this (`visitVECTOR_SHUFFLE`).
+                if let Some(joined) = self.shuffle_as_piece_concat(first, second, mask, result) {
+                    break 'shuffled joined;
+                }
+                // Both inputs padded with undefined lanes to the mask's length
+                // rounded up to a whole number of inputs; the shuffle is made
+                // at that width and its first lanes taken.
                 let count = lanes.div_ceil(sources);
+                let padded_lanes = count * sources;
                 let padded = match input.is_vector().then(|| input.element()) {
-                    Some(EVT::Simple(lane)) => {
-                        let lanes = (count * sources) as u32;
-                        (MVT::vector(lane, lanes).is_some()
-                            || !lanes.is_power_of_two() && MVT::vector(lane, lanes.next_power_of_two()).is_some())
-                        .then(|| EVT::vector(lane, lanes))
-                    }
+                    Some(EVT::Simple(lane)) => (MVT::vector(lane, padded_lanes as u32).is_some()
+                        || !padded_lanes.is_power_of_two()
+                            && MVT::vector(lane, padded_lanes.next_power_of_two() as u32).is_some())
+                    .then(|| EVT::vector(lane, padded_lanes as u32)),
                     _ => None,
                 }
                 .ok_or(Refused("a shufflevector padded to a vector with no register class"))?;
@@ -4414,8 +4470,8 @@ impl Builder<'_> {
                 // of two and is past a register is not made (the pin widens
                 // `v18i8` to `v32i8` and splits it); the lanes are built one at
                 // a time instead. Exit: splitting an extended vector type;
-                // owner x87-cordic-2; review 2026-11-27. A power of two splits.
-                if padded.size_in_bits() <= 128 || padded.lanes().is_power_of_two() {
+                // owner llrm-arm64-vec; review 2026-12-01.
+                if padded.size_in_bits() <= 128 || padded_lanes.is_power_of_two() {
                     for operand in [&mut first, &mut second] {
                         if self.dag.is_undef(*operand) {
                             *operand = self.dag.get_undef(padded);
@@ -4426,15 +4482,22 @@ impl Builder<'_> {
                             *operand = self.dag.get_node(ISD::ConcatVectors, padded, &pieces);
                         }
                     }
-                    // Readjust the mask for the padded inputs: the second
-                    // input's lanes follow the first's padded length.
-                    let padded_lanes = (count * sources) as i32;
-                    remapped = mask
-                        .iter()
-                        .map(|&lane| if lane >= sources as i32 { lane - sources as i32 + padded_lanes } else { lane })
+                    // `MappedOps`: the second input's lanes follow the first's
+                    // padded length; the lanes past the mask are undefined.
+                    let mapped: Vec<i32> = (0..padded_lanes)
+                        .map(|at| match mask.get(at) {
+                            Some(&lane) if lane >= sources as i32 => lane - sources as i32 + padded_lanes as i32,
+                            Some(&lane) => lane,
+                            None => -1,
+                        })
                         .collect();
-                    mask = &remapped;
-                    sources = count * sources;
+                    let shuffled = self.dag.get_vector_shuffle(padded, first, second, &mapped);
+                    break 'shuffled if padded_lanes == lanes {
+                        shuffled
+                    } else {
+                        let zero = self.dag.get_constant(0, self.target.dag.pointer);
+                        self.dag.get_node(ISD::ExtractSubvector, result, &[shuffled, zero])
+                    };
                 }
             }
             if sources > lanes {

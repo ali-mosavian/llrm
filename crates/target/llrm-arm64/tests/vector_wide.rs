@@ -457,9 +457,11 @@ fn a_shuffle_of_another_length_than_its_inputs_is_selected() {
          \x20 store <8 x i32> %wide, ptr %e, align 16\n\
          \x20 ret void\n}\n",
     );
-    // The undefined half of `%wide` is no store; the rest are `str q` or `stp
-    // q`.
-    assert!(text.matches("stp q").count() + text.matches("str q").count() >= 2, "{text}");
+    // `%cat` is `stp q`. `%wide` is the pin's `st4` of four `.2s` members
+    // (`lowerInterleavedStore` takes the mask with its undefined lanes; pin
+    // llc: `ext`, `mov d`, `dup .2s` of lane 3, `st4`).
+    assert_eq!(text.matches("stp q").count(), 1, "{text}");
+    assert!(text.contains("st4 { v") && text.contains(".2s"), "{text}");
     assert!(!text.contains("[sp"), "{text}");
 }
 

@@ -702,10 +702,14 @@ pub fn lower_vector_shuffle(
         return Some(dag.get_node(ISD::Target(aarch64_isd::DUP), vt, &[dag.operand(v1, lane as usize)]));
     }
     // `constructDup`: `DUPLANE` of the lane of the vector. DEVIATE VEC1
-    // (owner llrm-arm64-vec, exit 2026-11-24): only a 128-bit source of the
-    // result's own type; the pin also widens a 64-bit one and extracts a
-    // lane from a wider one.
-    if dag.value_type(v1) != vt || vt.size_in_bits() != 128 {
+    // (owner llrm-arm64-vec, exit 2026-11-24): a 128-bit source of the
+    // result's own type, or a 64-bit result, whose source is widened to 128
+    // bits (`WidenVector`); the pin also looks through a bitcast of an
+    // extract, an extract of a 128-bit vector and a concatenation.
+    let mut source = v1;
+    if vt.size_in_bits() == 64 && dag.value_type(v1) == vt {
+        source = widen_vector(dag, v1)?;
+    } else if dag.value_type(v1) != vt || vt.size_in_bits() != 128 {
         return None;
     }
     let opcode = match vt.element().size_in_bits() {
@@ -715,7 +719,7 @@ pub fn lower_vector_shuffle(
         _ => aarch64_isd::DUPLANE64,
     };
     let index = dag.get_constant(lane as u128, EVT::I64);
-    Some(dag.get_node(ISD::Target(opcode), vt, &[v1, index]))
+    Some(dag.get_node(ISD::Target(opcode), vt, &[source, index]))
 }
 
 /// The constant every lane of `operand` is, at the lane's width
