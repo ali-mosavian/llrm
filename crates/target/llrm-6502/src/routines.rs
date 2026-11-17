@@ -76,8 +76,8 @@ pub fn cells_named(name: &str) -> Option<std::collections::BTreeSet<u8>> {
     named(name, |cells| cells.clone())
 }
 
-/// Whether `name` reaches a cell by index (`cells_named` is `None`), without a copy of the set:
-/// the dead-store scans ask it of every call they pass.
+/// Whether `name` reaches a cell by index (`cells_named` is `None`), without a
+/// copy of the set: the dead-store scans ask it of every call they pass.
 pub fn reaches_cells_by_index(name: &str) -> bool {
     named(name, |cells| cells.is_none())
 }

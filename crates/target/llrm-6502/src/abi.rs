@@ -23,7 +23,8 @@ fn calling() -> &'static Calling {
 
 static PARSES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
-/// How many times `calling.toml` was parsed in this process (a test asks for one).
+/// How many times `calling.toml` was parsed in this process (a test asks for
+/// one).
 pub fn parses() -> usize {
     PARSES.load(std::sync::atomic::Ordering::Relaxed)
 }
@@ -49,8 +50,9 @@ thread_local! {
     static PRIVATE_ROW: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
 }
 
-/// Whether the platform has the zero-page cells the `private` row names (`rc16`..`rc25`): without them
-/// a private function keeps the `mos` row. The driver sets it for each compile.
+/// Whether the platform has the zero-page cells the `private` row names
+/// (`rc16`..`rc25`): without them a private function keeps the `mos` row. The
+/// driver sets it for each compile.
 pub fn allow_private_row(yes: bool) {
     PRIVATE_ROW.set(yes);
 }

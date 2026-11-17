@@ -36,8 +36,8 @@
 
 use std::collections::BTreeSet;
 
-use crate::asm::{Asm, Index, Inst, Line, Op, Operand, Registers};
 use crate::asm::CellReads;
+use crate::asm::{Asm, Index, Inst, Line, Op, Operand, Registers};
 use crate::peephole::{Exits, dead_from};
 
 fn cell_number(name: &str) -> Option<u8> {
@@ -150,8 +150,8 @@ fn straight(op: Op) -> bool {
 /// known to leave it dead.
 ///
 /// A scratch cell (`rc16`..) is clobbered by a call, which reads none of them
-/// when it is a runtime routine's: a store followed by a `jsr` of one before any
-/// read is dead. A call of a function of the program may read it as an
+/// when it is a runtime routine's: a store followed by a `jsr` of one before
+/// any read is dead. A call of a function of the program may read it as an
 /// argument.
 ///
 /// A callee-saved cell (`rc8`..`rc15`) is the caller's at the return: a store

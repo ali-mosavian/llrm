@@ -401,8 +401,8 @@ pub struct Asm {
     pub x_callees: std::collections::BTreeSet<String>,
     /// The function returns nothing in `y`: a `rts` does not read it.
     pub no_y_result: bool,
-    /// The scratch cells (`rc16`..) each routine this function calls is passed an
-    /// argument in: a call of a function of the program reads them
+    /// The scratch cells (`rc16`..) each routine this function calls is passed
+    /// an argument in: a call of a function of the program reads them
     /// (`calling.toml` `[mos_private]`), where a runtime routine's text names
     /// what it reads. A callee with none maps to an empty set.
     pub cell_callees: std::sync::Arc<std::collections::BTreeMap<String, std::collections::BTreeSet<u8>>>,

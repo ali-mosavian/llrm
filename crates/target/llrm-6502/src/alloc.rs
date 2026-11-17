@@ -994,7 +994,8 @@ impl Builder {
     ) -> Result<Reg, Unsupported> {
         if let Some(n) = name.strip_prefix("rs").and_then(|n| n.parse::<u8>().ok()) {
             return match n {
-                // the pairs an argument arrives in (`calling.toml`): rs1..rs3 and rs8..rs12
+                // the pairs an argument arrives in (`calling.toml`): rs1..rs3
+                // and rs8..rs12
                 0..=3 | 8..=12 => Ok(Reg::Phys(RegId::from_raw(reg::RS0.index() as u8 + n))),
                 _ => Err(Unsupported(format!("pair {name}"))),
             };
@@ -1016,7 +1017,11 @@ impl Builder {
         &self,
         name: &str,
     ) -> bool {
-        self.pointers.contains(name) || matches!(name, "rs0" | "rs1" | "rs2" | "rs3" | "rs8" | "rs9" | "rs10" | "rs11" | "rs12")
+        self.pointers.contains(name)
+            || matches!(
+                name,
+                "rs0" | "rs1" | "rs2" | "rs3" | "rs8" | "rs9" | "rs10" | "rs11" | "rs12"
+            )
     }
 
     fn word(
@@ -5027,7 +5032,8 @@ fn emit_with<const STACK: bool>(
             y_callees.extend(entries_of(callee));
         }
     }
-    // `jsr callee` reads the scratch cells (`rc16`..) the call lists among the arguments
+    // `jsr callee` reads the scratch cells (`rc16`..) the call lists among the
+    // arguments
     let mut cell_callees: std::collections::BTreeMap<String, std::collections::BTreeSet<u8>> = Default::default();
     for inst in function.blocks.iter().flat_map(|block| &block.insts).filter(|inst| inst.kind == Kind::Op("JSR")) {
         if let [Operand::Symbol(callee, _), arguments @ ..] = &inst.operands[..] {

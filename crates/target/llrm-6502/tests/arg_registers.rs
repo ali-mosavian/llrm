@@ -1,6 +1,8 @@
-//! Where an argument travels. A function private to its module (`fastcc`) takes up to 18 bytes in `a`, `x`, `rc2`..`rc7`,
-//! `rc16`..`rc25`; one other modules can call keeps 8 bytes in registers and the rest on the soft stack, where the runtime's
-//! members read theirs (`calling.toml`: `[mos]` and `[mos_private]`).
+//! Where an argument travels. A function private to its module (`fastcc`) takes
+//! up to 18 bytes in `a`, `x`, `rc2`..`rc7`, `rc16`..`rc25`; one other modules
+//! can call keeps 8 bytes in registers and the rest on the soft stack, where
+//! the runtime's members read theirs (`calling.toml`: `[mos]` and
+//! `[mos_private]`).
 
 use llrm_6502::dagisel::hooks::Cpu;
 use llrm_6502::driver::{self, Level, Request};
@@ -74,8 +76,9 @@ define i32 @call4(i32 %a, i32 %b, i32 %c) {
 }
 ";
 
-/// frameless (+235 B against llvm-mos at O1) and tail_calls (+190 B): the 16 bytes of `add4(a, b, c, d)` were 8 in
-/// registers and 8 stored through `(rc0),y` at the call and loaded back by the callee, a frame at every call.
+/// frameless (+235 B against llvm-mos at O1) and tail_calls (+190 B): the 16
+/// bytes of `add4(a, b, c, d)` were 8 in registers and 8 stored through
+/// `(rc0),y` at the call and loaded back by the callee, a frame at every call.
 #[test]
 fn a_private_function_takes_sixteen_argument_bytes_in_registers() {
     for level in [Level::O1, Level::O2, Level::Os] {
@@ -88,7 +91,8 @@ fn a_private_function_takes_sixteen_argument_bytes_in_registers() {
     }
 }
 
-/// tail_calls `same`: `jsr __outl_1; jsr __outl_4; jsr add3; jmp __outl_2` (12 B) for a call that is `jmp add3`.
+/// tail_calls `same`: `jsr __outl_1; jsr __outl_4; jsr add3; jmp __outl_2` (12
+/// B) for a call that is `jmp add3`.
 #[test]
 fn a_sibling_call_with_more_than_eight_argument_bytes_is_a_jump() {
     for level in [Level::O1, Level::O2, Level::Os] {
@@ -99,8 +103,8 @@ fn a_sibling_call_with_more_than_eight_argument_bytes_is_a_jump() {
     }
 }
 
-/// Negative: a function other modules can call keeps the placement the runtime's members read: 8 bytes in registers, the
-/// rest on the soft stack.
+/// Negative: a function other modules can call keeps the placement the
+/// runtime's members read: 8 bytes in registers, the rest on the soft stack.
 #[test]
 fn an_external_function_keeps_its_arguments_beyond_eight_bytes_on_the_stack() {
     for level in [Level::O1, Level::O2, Level::Os] {
@@ -110,7 +114,8 @@ fn an_external_function_keeps_its_arguments_beyond_eight_bytes_on_the_stack() {
     }
 }
 
-/// `text` with the cells each callee is passed (`Asm::cell_callees`); a callee not listed is unknown.
+/// `text` with the cells each callee is passed (`Asm::cell_callees`); a callee
+/// not listed is unknown.
 fn parsed(
     text: &str,
     callees: &[(&str, &[u8])],
@@ -140,9 +145,11 @@ fn spill_copies(
     asm.text()
 }
 
-/// The first A/B of the private convention: call_keeps, frameless, tail_calls, recdeep and recmany_o1 printed wrong values on
-/// sim65. `drop_dead_stores` and `fold_spill_copy` took the stores of the ninth to eighteenth argument bytes (`rc16`..) for
-/// dead before a `jsr`, which they clobber and, they thought, read none of.
+/// The first A/B of the private convention: call_keeps, frameless, tail_calls,
+/// recdeep and recmany_o1 printed wrong values on sim65. `drop_dead_stores` and
+/// `fold_spill_copy` took the stores of the ninth to eighteenth argument bytes
+/// (`rc16`..) for dead before a `jsr`, which they clobber and, they thought,
+/// read none of.
 #[test]
 fn a_call_of_a_program_function_reads_the_scratch_cells_its_arguments_are_in() {
     let call = "  lda #3\n  sta rc16\n  jsr f\n  rts\n";
@@ -154,15 +161,17 @@ fn a_call_of_a_program_function_reads_the_scratch_cells_its_arguments_are_in() {
     assert_eq!(dead_stores("  lda #3\n  sta rc16\n  jsr __mulhi3\n  rts\n", &[]), "  lda #3\n  jsr __mulhi3\n  rts\n");
 }
 
-/// The same for `fold_spill_copy`, which dropped `lda m; sta rc16` before the call and read `m` where the callee read `rc16`.
+/// The same for `fold_spill_copy`, which dropped `lda m; sta rc16` before the
+/// call and read `m` where the callee read `rc16`.
 #[test]
 fn a_copy_into_an_argument_cell_stays_before_the_call_that_reads_it() {
     let copy = "  ldy rc8\n  sty rc16\n  lda rc9\n  adc rc16\n  jsr f\n  rts\n";
     assert_eq!(spill_copies(copy, &[("f", &[16])]), copy);
 }
 
-/// A platform with fewer than 26 zero-page cells has no rc16..rc25: a private function keeps the `mos` row there
-/// (`LLRM_6502_ZERO_PAGE=16`, the sweep instrument, was refused by a guard that read the cells off every platform).
+/// A platform with fewer than 26 zero-page cells has no rc16..rc25: a private
+/// function keeps the `mos` row there (`LLRM_6502_ZERO_PAGE=16`, the sweep
+/// instrument, was refused by a guard that read the cells off every platform).
 #[test]
 fn a_platform_without_the_argument_cells_keeps_the_stack_convention() {
     let mut request = Request::new(Level::O1);
@@ -174,8 +183,9 @@ fn a_platform_without_the_argument_cells_keeps_the_stack_convention() {
     assert!(function(&code, "call4").contains("),y"), "{code}");
 }
 
-/// Every call and every argument parsed `calling.toml` again: 12.5 M instructions a run
-/// (+8% of `llrm-6502-llc` on `uint64_to_float` -Os) once the file held two rows.
+/// Every call and every argument parsed `calling.toml` again: 12.5 M
+/// instructions a run (+8% of `llrm-6502-llc` on `uint64_to_float` -Os) once
+/// the file held two rows.
 #[test]
 fn calling_toml_is_parsed_once_for_all_conventions() {
     for _ in 0..50 {
@@ -185,4 +195,3 @@ fn calling_toml_is_parsed_once_for_all_conventions() {
     }
     assert_eq!(llrm_6502::abi::parses(), 1);
 }
-
