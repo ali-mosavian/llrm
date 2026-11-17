@@ -196,7 +196,10 @@ fn vectorize(
     let Operand::Constant(lane) = first.value else { unreachable!("a window of constants") };
     let zero = |seed: &Seed| match seed.value {
         Operand::Constant(one) => {
-            matches!(context.get(one).kind, ConstantKind::Int(0) | ConstantKind::Float(0) | ConstantKind::Zero)
+            matches!(
+                context.get(one).kind,
+                ConstantKind::Int(0) | ConstantKind::Float(0) | ConstantKind::Zero
+            )
         }
         _ => false,
     };
