@@ -1203,8 +1203,10 @@ mod tests {
         assert_eq!(order((Class::Gpr, false, false, false)), base);
         assert_eq!(order((Class::Gpr, true, false, false)), darwin);
         assert_eq!(order((Class::Gpr, false, false, true)), fp);
-        let (fpr, quad) = (order((Class::Fpr, false, false, false)), order((Class::Quad, false, false, false)));
-        assert!(quad.len() < fpr.len(), "the classes have their own orders");
+        let (fpr, tuple) = (order((Class::Fpr, false, false, false)), order((Class::Tuple(2), false, false, false)));
+        assert!(tuple.len() < fpr.len(), "the classes have their own orders");
+        // A `Quad` may take `v8`-`v15` (a call clobbers only their high halves): as many as an `Fpr`.
+        assert_eq!(order((Class::Quad, false, false, false)), fpr);
     }
 
     /// `movk` reads and writes its register: the view needs a def, a use and a

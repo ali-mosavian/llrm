@@ -480,7 +480,7 @@ fn variant(inst: &Inst) -> &'static str {
 /// The variants after frame lowering, which the body is never made from.
 const AFTER_FRAME: [&str; 3] = ["Mark", "Label", "Cfi"];
 
-const ALL: [&str; 80] = [
+const ALL: [&str; 81] = [
     "Mark",
     "Label",
     "Cfi",
