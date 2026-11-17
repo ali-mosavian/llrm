@@ -99,12 +99,13 @@ def verdicts(base: dict, new: dict) -> dict[str, list[str]]:
     gained: moved and ours is at or under the best now, was not before. lost: the reverse. A cell that did not move by more
     than 1% is neither, whatever side of a tie it landed on. gcc and clang are the same binaries in both runs, so a change in
     either column is drift of the instrument (merge_icmps_fields: both fell 4-5% on no code change): `ours` must move by more
-    than the larger of 1% and that drift.
+    than the larger of 1% and that drift. failed: ours had a count and has none (the program no longer builds or runs): not
+    "unchanged", a regression to report.
     """
     def best(cell):
         return min(cell[column]["instr"] for column in ("gcc", "clang") if cell[column].get("instr") is not None)
 
-    out: dict[str, list[str]] = {"gained": [], "lost": [], "moved": []}
+    out: dict[str, list[str]] = {"gained": [], "lost": [], "moved": [], "failed": []}
     for name in sorted(base.keys() & new.keys()):
         was, now = base[name], new[name]
         try:
@@ -112,6 +113,8 @@ def verdicts(base: dict, new: dict) -> dict[str, list[str]]:
             old_best, new_best = best(was), best(now)
         except (KeyError, TypeError):
             continue
+        if before is not None and after is None:
+            out["failed"].append(name)
         if before is None or after is None:
             continue
         drift = max(
