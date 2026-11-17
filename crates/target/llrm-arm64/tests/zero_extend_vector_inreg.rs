@@ -34,6 +34,30 @@ declare i64 @llvm.vector.reduce.add.v4i64(<4 x i64>)
 "#,
     );
     assert!(asm.contains("ushll"), "no widening shift:\n{asm}");
+    assert!(!has_and(&asm), "the widened bytes are masked again:\n{asm}");
+}
+
+fn has_and(asm: &str) -> bool {
+    asm.lines().any(|line| line.trim_start().starts_with("and v"))
+}
+
+/// `CombineExtLoad`: `zext (load <4 x i8>)` is one extending load that
+/// `tryLowerSmallVectorExtLoad` widens with `ushll`s. Before, the `v4i8` was
+/// promoted, any-extended and masked: `ushll; movi; ushll; and`.
+#[test]
+fn a_zext_of_a_small_vector_load_is_not_masked() {
+    let asm = assembly(
+        r#"
+define void @f(ptr %q, ptr %o) {
+  %v = load <4 x i8>, ptr %q, align 1
+  %z = zext <4 x i8> %v to <4 x i32>
+  store <4 x i32> %z, ptr %o
+  ret void
+}
+"#,
+    );
+    assert_eq!(asm.matches("ushll").count(), 2, "{asm}");
+    assert!(!has_and(&asm), "{asm}");
 }
 
 /// Two-fold widening is `LowerZERO_EXTEND_VECTOR_INREG`: `zip1` with zeros

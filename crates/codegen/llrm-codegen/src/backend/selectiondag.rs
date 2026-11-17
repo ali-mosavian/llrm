@@ -116,6 +116,7 @@ pub mod builder;
 pub mod chain_combine;
 pub mod combine_andnot;
 mod combine_avg;
+pub mod combine_ext_load;
 pub mod combine_extend_inreg;
 pub mod combine_extract;
 pub mod combine_funnel;
