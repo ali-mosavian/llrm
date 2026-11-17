@@ -509,6 +509,14 @@ impl Declared {
         self.names().get(name).copied()
     }
 
+    /// Whether the module or this pass declares a global named `prefix...`.
+    pub fn declares_prefixed(
+        &mut self,
+        prefix: &str,
+    ) -> bool {
+        self.names().keys().any(|name| name.starts_with(prefix))
+    }
+
     /// The function `name` of type `ty`, declared where the module has none.
     pub fn declare(
         &mut self,

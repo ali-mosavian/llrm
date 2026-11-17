@@ -1580,6 +1580,62 @@ fn finding_predecessors_does_not_read_the_whole_function() {
     assert!(short > 0 && long < short * 2, "{short} instructions looked at with 2 calls in each arm, {long} with 24");
 }
 
+/// A callee whose loop bound the call's constant fixes was exempt from the byte rate, as a copy that unrolls and folds.
+/// Only an innermost loop is copied out whole: `total(300)` holds two gcd loops of unknown trip count inside the
+/// counted one, so the inlined copy kept `total` beside it (idiv_loop_os -O2: 385 B, -Os 257 B).
+#[test]
+fn a_counted_outer_loop_over_inner_loops_does_not_earn_a_copy_at_o2() {
+    let ir = format!(
+        "target datalayout = \"{DATALAYOUT}\"
+define i32 @total(i16 %n) {{
+entry:
+  %skip = icmp slt i16 %n, 1
+  br i1 %skip, label %out, label %outer
+outer:
+  %i = phi i16 [ 1, %entry ], [ %i1, %latch ]
+  %sum = phi i32 [ 0, %entry ], [ %sum1, %latch ]
+  %a = mul i16 %i, 7
+  %b = add i16 %a, 3
+  %c = mul i16 %i, 5
+  %d = add i16 %c, 2
+  br label %first
+first:
+  %p = phi i16 [ %q, %first ], [ %d, %outer ]
+  %o = phi i16 [ %p, %first ], [ %b, %outer ]
+  %q = srem i16 %o, %p
+  %z = icmp eq i16 %q, 0
+  br i1 %z, label %second.in, label %first
+second.in:
+  %w = add i16 %i, 90
+  br label %second
+second:
+  %t = phi i16 [ %u, %second ], [ 360, %second.in ]
+  %s = phi i16 [ %t, %second ], [ %w, %second.in ]
+  %u = srem i16 %s, %t
+  %y = icmp eq i16 %u, 0
+  br i1 %y, label %latch, label %second
+latch:
+  %both = add i16 %t, %p
+  %wide = sext i16 %both to i32
+  %sum1 = add i32 %sum, %wide
+  %i1 = add i16 %i, 1
+  %last = icmp eq i16 %i, %n
+  br i1 %last, label %out, label %outer
+out:
+  %result = phi i32 [ 0, %entry ], [ %sum1, %latch ]
+  ret i32 %result
+}}
+define i16 @main() {{
+  %t = call i32 @total(i16 300)
+  %r = trunc i32 %t to i16
+  ret i16 %r
+}}
+"
+    );
+    let asm = text(&ir, "main", 1, &Request::new(Level::O2)).expect("compiles");
+    assert!(asm.contains("call _total"), "the counted outer loop was copied into main beside `total`:\n{asm}");
+}
+
 /// The same allocation was priced again (finished into text and priced)
 /// wherever a candidate came out as one already seen: `settle` prices up to six
 /// stack choices of one function, most of them alike, and each pricing is a
