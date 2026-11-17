@@ -1646,8 +1646,8 @@ impl Tti for X86 {
         self.tuning.unroll_store_immediate_bits
     }
 
-    fn unroll_prices_split_gep_base(&self) -> bool {
-        self.tuning.unroll_prices_split_gep_base
+    fn keeps_multi_index_gep(&self) -> bool {
+        self.tuning.keeps_multi_index_gep
     }
 
     fn lsr_size_model(&self) -> Option<llrm_mir::tti::LsrSizeModel> {

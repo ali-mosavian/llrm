@@ -541,9 +541,9 @@ pub struct Tuning {
     /// are instruction bytes, not live values
     /// (`Tti::unroll_store_immediate_bits`).
     pub unroll_store_immediate_bits: u32,
-    /// DEVIATE UNROLL-GEP (owner llrm-target-x86-m64-b, exit 2026-11-30): see
-    /// `Tti::unroll_prices_split_gep_base`.
-    pub unroll_prices_split_gep_base: bool,
+    /// DEVIATE GEP-SPLIT (owner llrm-target-x86-m64-b, exit 2026-11-30): see
+    /// `Tti::keeps_multi_index_gep`.
+    pub keeps_multi_index_gep: bool,
     /// DEVIATE LSR-SIZE (owner x86-m32, exit 2026-11-24): see
     /// `Tti::lsr_size_model` (`LsrSizeModel::X86`).
     pub lsr_size_order: bool,
@@ -889,7 +889,7 @@ impl Tuning {
         unroll_promotion_fits_registers: false,
         unroll_store_immediate_bits: 0,
         lsr_size_order: false,
-        unroll_prices_split_gep_base: false,
+        keeps_multi_index_gep: false,
         vector_float_costs: false,
         lsr_drop_worse_at_size: false,
         add_to_or_disjoint: false,

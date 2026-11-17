@@ -108,6 +108,7 @@ impl FunctionPass for Combine {
                     .target()
                     .tti()
                     .is_some_and(|tti| tti.keeps_icmp_of_swapped_selects()),
+                keeps_multi_index_gep: outer.target().tti().is_some_and(|tti| tti.keeps_multi_index_gep()),
                 keeps_float_off_returning_sink: outer.target().tti().is_some_and(|tti| tti.x87_stack_slots().is_some()),
                 keeps_shared_division_compare: outer
                     .target()

@@ -354,6 +354,8 @@ pub struct TargetHooks {
     pub keeps_swapped_select_compare: bool,
     /// DEVIATE SINK-X87 (`combine_sink.rs`; the target has an x87 stack).
     pub keeps_float_off_returning_sink: bool,
+    /// DEVIATE GEP-SPLIT (`Tti::keeps_multi_index_gep`).
+    pub keeps_multi_index_gep: bool,
 }
 
 pub struct Env<'a> {
