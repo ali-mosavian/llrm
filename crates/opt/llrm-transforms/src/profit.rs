@@ -250,6 +250,14 @@ pub fn operation(
             let cells = llrm_mir::intrinsics::length(context, instruction.operands[2])
                 .and_then(|count| i64::try_from(count).ok())
                 .unwrap_or(UNKNOWN_TRIPS);
+            // The target's own expansion counts its stores
+            // (`findOptimalMemOpLowering`).
+            if let (Some(pieces), true) = (costs.memset_pieces, cells != UNKNOWN_TRIPS) {
+                if let Some(stores) = u64::try_from(cells).ok().and_then(pieces) {
+                    return Some(stores as i64 * costs.store + costs.add);
+                }
+                return Some(costs.fill + cells * costs.fill_cell);
+            }
             // The backend stores a small constant memset inline.
             let inline = crate::loopidioms::InlineFills {
                 max_stores: costs.memset_stores,

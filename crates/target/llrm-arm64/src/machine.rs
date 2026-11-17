@@ -147,7 +147,7 @@ impl Machine for Arm64Machine {
     }
 
     fn costs(&self) -> OperationCosts {
-        OperationCosts::default()
+        OperationCosts { memset_pieces: Some(crate::dag::memops::fill_stores), ..OperationCosts::default() }
     }
 
     /// Real bytes for the rate-priced decisions (unroll, inline growth, call
@@ -194,6 +194,7 @@ impl Machine for Arm64Machine {
             copy: word(units.copy),
             copy_cell: word(units.copy_cell),
             direction: word(units.direction),
+            memset_pieces: Some(crate::dag::memops::fill_stores),
             ..units
         }
     }

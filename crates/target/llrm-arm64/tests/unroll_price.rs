@@ -40,6 +40,18 @@ fn a_nest_loop_that_saves_more_than_its_bytes_cost_is_unrolled() {
     assert_eq!(labels(include_str!("data/bench_crc.ll")), 4);
 }
 
+/// rep_count -O2: a constant `memset` was priced as a loop of one-byte cells
+/// (17 units for 16 B; arm64 stores it as one `stp q`), so the 16-trip nest of
+/// `memset(g[i], 0, 16)` "added 410 B" and stayed a loop: 6 `b.ne` back-edges,
+/// 1,152 instructions run in `bench` and `main` against the pin's 922. With the
+/// backend's own store count one of the two nests is straight code (4).
+#[test]
+fn a_constant_memset_is_priced_by_the_stores_the_backend_makes() {
+    let asm = driver::assembly(include_str!("data/bench_rep_count.ll"), Platform::Linux, Level::O2).expect("lowers");
+    let loops = asm.lines().filter(|line| line.trim_start().starts_with("b.ne ")).count();
+    assert_eq!(loops, 4, "{loops} loops:\n{asm}");
+}
+
 fn instructions(source: &str, level: Level) -> usize {
     let asm = driver::assembly(source, Platform::Linux, level).expect("lowers");
     asm.lines().filter(|line| line.starts_with('\t') && !line.starts_with("\t.")).count()

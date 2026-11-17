@@ -38,6 +38,13 @@ pub(crate) fn pieces(total: u64) -> Vec<(u8, u64)> {
     ops
 }
 
+/// The stores a constant fill of `total` bytes expands to, `None` past the
+/// budget, where it is a call to `memset` (`emit_memset`).
+pub(crate) fn fill_stores(total: u64) -> Option<u64> {
+    let ops = pieces(total).len();
+    (total != 0 && ops <= FILL_OPS).then_some(ops as u64)
+}
+
 /// The `q` accesses that cover `total >= 16` bytes, the last overlapping the
 /// one before it.
 pub(crate) fn wide_pieces(total: u64) -> Vec<(u8, u64)> {
