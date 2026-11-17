@@ -323,6 +323,7 @@ pub fn greedy_rewritten(
         tri: &crate::greedy::targetinfo::X86RegisterInfo,
         size: crate::greedy::greedy::OPT_SIZE.with(std::cell::Cell::get),
         lane_pins: false,
+        preserved_low_bytes: 2,
         carry_slot_indexes: targets::profile(cpu).map_or(true, |profile| {
             // m16 states its table on the machine, m32 and m64 on the TTI.
             let machine = profile.target();

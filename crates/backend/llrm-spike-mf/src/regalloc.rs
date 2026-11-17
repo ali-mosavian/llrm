@@ -79,6 +79,17 @@ pub trait Target {
     }
     /// The roots a call leaves unspecified.
     fn caller_saved() -> Vec<RegId>;
+    /// The roots whose low `preserved_low_bytes` a call keeps and whose rest it
+    /// destroys: a value read wider than that and live across the call loses
+    /// them (AArch64: `v8`-`v15` keep `d8`-`d15`, the pin's regmask clears
+    /// `q8`-`q15`).
+    fn caller_saved_high() -> Vec<RegId> {
+        Vec::new()
+    }
+    /// The bytes of a `caller_saved_high` root a call keeps.
+    fn preserved_low_bytes() -> u32 {
+        2
+    }
     /// Whether two allocatable registers share storage (a pair and its
     /// bytes); a register overlaps itself.
     fn overlaps(

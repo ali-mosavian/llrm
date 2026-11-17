@@ -81,6 +81,9 @@ pub struct ShadowInputs<'a> {
     /// entries erased and moved instructions left empty, reach the allocator
     /// through the scheduler, as the pin's do.
     pub carry_slot_indexes: bool,
+    /// The bytes of a register a call that destroys its high half keeps
+    /// (`clobbers_high`): a value read no wider has no high half to lose.
+    pub preserved_low_bytes: u32,
 }
 
 /// What the shadow allocator decided.
@@ -787,6 +790,8 @@ struct CallMasks {
     lane: std::cell::Cell<Option<u32>>,
     /// The registers some call keeps the low half of only.
     lane_registers: RegSet,
+    /// The bytes of such a register the call keeps.
+    preserved_low_bytes: u32,
     regs: Regs,
 }
 
@@ -855,6 +860,7 @@ impl CallMasks {
             reach: Default::default(),
             lane: Default::default(),
             lane_registers,
+            preserved_low_bytes: 2,
             regs,
         }
     }
@@ -865,6 +871,15 @@ impl CallMasks {
         succ: Vec<Vec<usize>>,
     ) -> Self {
         self.flow = Some(succ);
+        self
+    }
+
+    /// The bytes of a register a call keeps where it destroys the high half.
+    fn keeping(
+        mut self,
+        bytes: u32,
+    ) -> Self {
+        self.preserved_low_bytes = bytes;
         self
     }
 
@@ -1134,7 +1149,7 @@ impl PhysInterference for CallMasks {
         // Every allocated value has a width (the table, or the clone it was
         // made from, `note_split_from`); a missing one is the safe side, wide.
         let width = self.widths.widths.borrow().get(&li.reg()).copied();
-        let wide = width.is_none_or(|width| width > 2);
+        let wide = width.is_none_or(|width| width > self.preserved_low_bytes);
         // Per segment, as `checkRegMaskInterference` walks `SlotI`: the calls
         // at or before its start are crossed by a search (a hole looks at
         // none), those inside it are lost across, and one at its end takes
@@ -1439,7 +1454,9 @@ pub fn decide_with_split(
     let lanes = body.blocks.iter().flat_map(|block| block.insns.iter()).any(|one| !one.clobbers_high.is_empty());
     let read_widths = if lanes { crate::backend::widths::_widest_read(body) } else { Default::default() };
     for (&value, &width) in &widest {
-        let width = if lanes && width > 2 && read_widths.get(&value).copied().unwrap_or(0) <= 2 { 2 } else { width };
+        let half = inputs.preserved_low_bytes;
+        let width =
+            if lanes && width > half && read_widths.get(&value).copied().unwrap_or(0) <= half { half } else { width };
         tables.widths.borrow_mut().insert(value, width);
     }
     {
@@ -1468,7 +1485,10 @@ pub fn decide_with_split(
         for (at, block) in body.blocks.iter().enumerate() {
             for one in &block.insns {
                 let slot = lis.indexes.get_instruction_index(one.id()).get_reg_slot(false);
-                for (value, _) in crate::backend::widths::_read_widths(one).into_iter().filter(|(_, w)| *w > 2) {
+                for (value, _) in crate::backend::widths::_read_widths(one)
+                    .into_iter()
+                    .filter(|(_, w)| *w > inputs.preserved_low_bytes)
+                {
                     wide_reads.entry(value).or_default().push((slot.clone(), at));
                 }
             }
@@ -1566,7 +1586,7 @@ pub fn decide_with_split(
         Box::new(Fixed {
             calls: {
                 let masks = CallMasks::of(inputs.registers, calls, blocks, Rc::clone(&tables));
-                if lanes { masks.with_flow(successors(body)) } else { masks }
+                if lanes { masks.with_flow(successors(body)).keeping(inputs.preserved_low_bytes) } else { masks }
             },
             pins: Rc::clone(&pins_cell),
         }),
@@ -1952,6 +1972,7 @@ mod tests {
                 size: false,
                 lane_pins: false,
                 carry_slot_indexes: true,
+                preserved_low_bytes: 2,
             };
             let decided = decide_with(&inputs, Mode::Simple).expect("allocated");
             let at = |value: u32| decided.placed.iter().find(|(v, _)| *v == value).map(|(_, reg)| *reg);
@@ -2037,6 +2058,7 @@ mod tests {
                 size: false,
                 lane_pins: false,
                 carry_slot_indexes: true,
+                preserved_low_bytes: 2,
             };
             let decided = decide_with(&inputs, Mode::Simple).expect("allocated");
             decided.placed.iter().find(|(v, _)| *v == 2).map(|(_, reg)| *reg)
@@ -2117,6 +2139,7 @@ mod tests {
             size: false,
             lane_pins: false,
             carry_slot_indexes: true,
+            preserved_low_bytes: 2,
         };
         let decided = decide_with(&inputs, Mode::Simple).expect("greedy allocated the body");
         let rfp = Regs(&llrm_x86_m16::REGISTER_INFO).rfp_registers().to_vec();
@@ -2233,6 +2256,7 @@ mod tests {
             size: false,
             lane_pins: false,
             carry_slot_indexes: true,
+            preserved_low_bytes: 2,
         };
         let before = crate::analysis::frequency::OF_CALLS.with(std::cell::Cell::get);
         assert!(decide_with(&inputs, Mode::Simple).is_some(), "premise: greedy allocated the body");
@@ -2420,6 +2444,7 @@ mod tests {
                 size: false,
                 lane_pins: false,
                 carry_slot_indexes: true,
+                preserved_low_bytes: 2,
             };
             let decided = decide_with(&inputs, Mode::Simple).expect("allocated");
             decided
@@ -2490,6 +2515,7 @@ mod tests {
             size: false,
             lane_pins: false,
             carry_slot_indexes: true,
+            preserved_low_bytes: 2,
         };
         let decided = decide_with(&inputs, Mode::Simple).expect("allocated");
         assert_eq!(decided.report.stats.spilled_ranges, 0, "{:?}", decided.report.stats);
@@ -2648,6 +2674,7 @@ mod tests {
             size: false,
             lane_pins: false,
             carry_slot_indexes: true,
+            preserved_low_bytes: 2,
         };
         let plain = decide_with_split(&inputs, Mode::Simple, false).expect("allocated");
         let split = decide_with_split(&inputs, Mode::Simple, true).expect("allocated");
@@ -2725,6 +2752,7 @@ mod tests {
             size: false,
             lane_pins: false,
             carry_slot_indexes: true,
+            preserved_low_bytes: 2,
         };
         let in_ecx = |decided: &Decided| decided.placed.iter().filter(|(v, reg)| *reg == RegId::ECX && *v > 4).count();
         // At -Os the pin skips the split: the premise, v1 whole in another
@@ -2778,6 +2806,7 @@ mod tests {
             size: false,
             lane_pins: false,
             carry_slot_indexes: true,
+            preserved_low_bytes: 2,
         };
         let plain = decide_with_split(&inputs, Mode::Simple, false).expect("allocated");
         let split = decide_with_split(&inputs, Mode::Simple, true).expect("allocated");

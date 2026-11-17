@@ -858,7 +858,9 @@ fn built_order((class, darwin, scratch_free, frame_pointer_free): Flags) -> Vec<
     match class {
         Class::Gpr => gpr_order(darwin, scratch_free, frame_pointer_free),
         Class::Fpr => fpr_order(),
-        Class::Quad => fpr_order().into_iter().filter(|id| !callee_saved_fpr(*id)).collect(),
+        // `v8`-`v15` keep only `d8`-`d15` over a call: a `Quad` there is lost
+        // across one (`caller_saved_high`), not barred from it.
+        Class::Quad => fpr_order(),
         // A tuple is read whole, as a `Quad` is: none takes a callee-saved
         // vector.
         Class::Tuple(count) => (16..=31u32)
@@ -867,10 +869,6 @@ fn built_order((class, darwin, scratch_free, frame_pointer_free): Flags) -> Vec<
             .map(|first| tuple_id(count, first))
             .collect(),
     }
-}
-
-fn callee_saved_fpr(id: RegId) -> bool {
-    (8..=15).any(|n| self::id(Class::Fpr, n) == id)
 }
 
 fn fpr_order() -> Vec<RegId> {
@@ -1041,6 +1039,15 @@ impl AllocTarget for Arm64 {
         let gprs = (0..=18u32).map(|n| id(Class::Gpr, n));
         let fprs = (0..=7u32).chain(16..=31).map(|n| id(Class::Fpr, n));
         gprs.chain(fprs).collect()
+    }
+
+    /// A call keeps `d8`-`d15`, and clobbers `q8`-`q15` (the pin's regmask).
+    fn caller_saved_high() -> Vec<RegId> {
+        (8..=15u32).map(|n| id(Class::Fpr, n)).collect()
+    }
+
+    fn preserved_low_bytes() -> u32 {
+        8
     }
 
     fn csr_first_use_cost() -> u32 {
