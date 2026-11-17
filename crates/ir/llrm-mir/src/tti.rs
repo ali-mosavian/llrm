@@ -1950,6 +1950,11 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE SWITCH-LOOKUP-TRIAL: `Tuning::switch_lookup_trial_at_size`.
+    fn switch_lookup_trial_at_size(&self) -> bool {
+        false
+    }
+
     /// DEVIATE LIR-COPY-TRIAL: `Tuning::loop_idiom_copy_trial_at_size`.
     fn loop_idiom_copy_trial_at_size(&self) -> bool {
         false
@@ -2334,6 +2339,11 @@ pub trait Tti {
 
     /// `Tuning::min_jump_table_density`.
     fn min_jump_table_density(&self) -> Option<u64> {
+        None
+    }
+
+    /// `Tuning::jump_table_size_growth_ratio`.
+    fn jump_table_size_growth_ratio(&self) -> Option<u64> {
         None
     }
 
