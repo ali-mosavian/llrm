@@ -926,6 +926,22 @@ pub fn machine() -> Rc<dyn llrm_mir::target::Machine> {
     Rc::new(Mos6502Machine)
 }
 
+/// DEVIATE 6502-MEM-LIMITS (owner 6502, exit 2026-11-24): bytes first at every
+/// level (6502-UNROLL-RATE). The pin's `MaxStoresPerMemcpy` and
+/// `MaxStoresPerMemmove` are 8 at speed and 4 tuned for size
+/// (X86ISelLowering.cpp); a constant copy of more than four pieces is a call
+/// at -Os (memmove_overlap's 27 bytes: about 14 word pairs inline against a
+/// 6-byte call) and stays inline at -O1..-O3. This target takes the size
+/// limits at every level.
+pub(crate) fn bytes_first_tuning() -> llrm_mir::target::Tuning {
+    let pin = llrm_mir::target::Tuning::PIN;
+    llrm_mir::target::Tuning {
+        max_stores_per_memcpy: pin.max_stores_per_memcpy_opt_size,
+        max_stores_per_memmove: pin.max_stores_per_memmove_opt_size,
+        ..pin
+    }
+}
+
 struct Mos6502Machine;
 
 impl llrm_mir::target::Machine for Mos6502Machine {
@@ -960,6 +976,10 @@ impl llrm_mir::target::Machine for Mos6502Machine {
 
     fn spaces(&self) -> llrm_mir::spaces::Spaces {
         llrm_mir::target::Neutral.spaces()
+    }
+
+    fn tuning(&self) -> llrm_mir::target::Tuning {
+        bytes_first_tuning()
     }
 
     /// Clocks and bytes of the sequences the backend emits, per native byte
