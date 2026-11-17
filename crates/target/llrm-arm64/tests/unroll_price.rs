@@ -40,6 +40,17 @@ fn a_nest_loop_that_saves_more_than_its_bytes_cost_is_unrolled() {
     assert_eq!(labels(include_str!("data/bench_crc.ll")), 4);
 }
 
+/// particle -O3: `advance` inside the 100-trip `t` loop. The vectorizer left
+/// the nest a vector loop and its remainder, which the jam refuses (two inner
+/// loops): 16,743 instructions run against gcc's 12,539, which jams before it
+/// vectorizes. Jammed first, the pair of copies adds `vx` once and the loop runs
+/// 11,249; 246 instructions where there were 589.
+#[test]
+fn a_nest_is_jammed_before_the_vectorizer_splits_its_inner_loop() {
+    let insns = instructions(include_str!("data/bench_particle.ll"), Level::O3);
+    assert!(insns < 300, "{insns} instructions");
+}
+
 fn instructions(source: &str, level: Level) -> usize {
     let asm = driver::assembly(source, Platform::Linux, level).expect("lowers");
     asm.lines().filter(|line| line.starts_with('\t') && !line.starts_with("\t.")).count()
