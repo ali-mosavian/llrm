@@ -812,6 +812,7 @@ impl Hooks for X86Lowering<'_> {
         node: SDValue,
     ) -> Option<SDValue> {
         match dag.opcode(node) {
+            ISD::SetCC if dag.value_type(node).is_vector() => lower_vector_setcc(dag, node),
             ISD::SetCC => lower_setcc(dag, node, self.min_size, self.status_word_tests),
             ISD::Select => lower_select(dag, node, self.cmov, self.min_size, self.status_word_tests),
             ISD::BrCond => lower_brcond(dag, node, self.min_size, self.status_word_tests),
@@ -1751,6 +1752,61 @@ fn combine_integer_setcc(
     Some(dag.get_setcc(dag.value_type(node), source, constant, cond))
 }
 
+/// `LowerVSETCC` for the integer lanes SSE2 compares (8, 16, 32 bits): the `pcmpeq` or `pcmpgt` that holds the
+/// order, and whether its lanes mean the opposite (`ne`, `ge`, `le`). An unsigned order is the signed one of
+/// operands with the sign bit flipped; `<` swaps the operands.
+fn vector_compare(
+    dag: &mut SelectionDAG,
+    mut lhs: SDValue,
+    mut rhs: SDValue,
+    mut cond: CondCode,
+) -> Option<(SDValue, bool)> {
+    let vt = dag.value_type(lhs);
+    let bits = vt.element().size_in_bits();
+    if !vt.element().is_integer() || vt.size_in_bits() != 128 || !matches!(bits, 8 | 16 | 32) {
+        return None;
+    }
+    if matches!(cond, CondCode::SetUGt | CondCode::SetUGe | CondCode::SetULt | CondCode::SetULe) {
+        let top = dag.get_constant(1u128 << (bits - 1), vt.element());
+        let sign = dag.get_splat_build_vector(vt, top);
+        lhs = dag.get_node(ISD::Xor, vt, &[lhs, sign]);
+        rhs = dag.get_node(ISD::Xor, vt, &[rhs, sign]);
+        cond = match cond {
+            CondCode::SetUGt => CondCode::SetGt,
+            CondCode::SetUGe => CondCode::SetGe,
+            CondCode::SetULt => CondCode::SetLt,
+            _ => CondCode::SetLe,
+        };
+    }
+    Some(match cond {
+        CondCode::SetEq => (dag.get_node(x86isd::PCMPEQ, vt, &[lhs, rhs]), false),
+        CondCode::SetNe => (dag.get_node(x86isd::PCMPEQ, vt, &[lhs, rhs]), true),
+        CondCode::SetGt => (dag.get_node(x86isd::PCMPGT, vt, &[lhs, rhs]), false),
+        CondCode::SetLt => (dag.get_node(x86isd::PCMPGT, vt, &[rhs, lhs]), false),
+        CondCode::SetLe => (dag.get_node(x86isd::PCMPGT, vt, &[lhs, rhs]), true),
+        CondCode::SetGe => (dag.get_node(x86isd::PCMPGT, vt, &[rhs, lhs]), true),
+        _ => return None,
+    })
+}
+
+/// `LowerVSETCC`: a vector compare of lanes SSE2 compares, its lanes all ones or zero.
+fn lower_vector_setcc(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let (lhs, rhs) = (dag.operand(node, 0), dag.operand(node, 1));
+    let vt = dag.value_type(node);
+    if vt != dag.value_type(lhs) {
+        return None;
+    }
+    let (compare, flipped) = vector_compare(dag, lhs, rhs, cond_of(dag, dag.operand(node, 2)))?;
+    if !flipped {
+        return Some(compare);
+    }
+    let ones = dag.get_all_ones_constant(vt);
+    Some(dag.get_node(ISD::Xor, vt, &[compare, ones]))
+}
+
 /// `combineBitcastvxi1` for the reduction of a vector compare: `reduce.or` (`reduce.and`) of the `<N x i1>` that
 /// `pcmpeqb` makes is whether `pmovmskb` of the compare is not zero (is all ones), one `test` and branch where the
 /// shuffle ladder is five instructions and a `movd`. A compare SSE2 has no instruction for is the one it has, its
@@ -1775,36 +1831,10 @@ fn combine_reduce_of_compare(
     if dag.opcode(mask) != ISD::SetCC {
         return None;
     }
-    let (mut lhs, mut rhs) = (dag.operand(mask, 0), dag.operand(mask, 1));
+    let (lhs, rhs) = (dag.operand(mask, 0), dag.operand(mask, 1));
     let source_vt = dag.value_type(lhs);
     let bits = source_vt.element().size_in_bits();
-    if !source_vt.element().is_integer() || source_vt.size_in_bits() != 128 || !matches!(bits, 8 | 16 | 32) {
-        return None;
-    }
-    let mut cond = cond_of(dag, dag.operand(mask, 2));
-    // Unsigned orders are the signed ones of operands with the sign bit flipped.
-    if matches!(cond, CondCode::SetUGt | CondCode::SetUGe | CondCode::SetULt | CondCode::SetULe) {
-        let top = dag.get_constant(1u128 << (bits - 1), source_vt.element());
-        let sign = dag.get_splat_build_vector(source_vt, top);
-        lhs = dag.get_node(ISD::Xor, source_vt, &[lhs, sign]);
-        rhs = dag.get_node(ISD::Xor, source_vt, &[rhs, sign]);
-        cond = match cond {
-            CondCode::SetUGt => CondCode::SetGt,
-            CondCode::SetUGe => CondCode::SetGe,
-            CondCode::SetULt => CondCode::SetLt,
-            _ => CondCode::SetLe,
-        };
-    }
-    // The compare as `pcmpeq` or `pcmpgt`, and whether its lanes mean the opposite.
-    let (compare, flipped) = match cond {
-        CondCode::SetEq => (dag.get_node(x86isd::PCMPEQ, source_vt, &[lhs, rhs]), false),
-        CondCode::SetNe => (dag.get_node(x86isd::PCMPEQ, source_vt, &[lhs, rhs]), true),
-        CondCode::SetGt => (dag.get_node(x86isd::PCMPGT, source_vt, &[lhs, rhs]), false),
-        CondCode::SetLt => (dag.get_node(x86isd::PCMPGT, source_vt, &[rhs, lhs]), false),
-        CondCode::SetLe => (dag.get_node(x86isd::PCMPGT, source_vt, &[lhs, rhs]), true),
-        CondCode::SetGe => (dag.get_node(x86isd::PCMPGT, source_vt, &[rhs, lhs]), true),
-        _ => return None,
-    };
+    let (compare, flipped) = vector_compare(dag, lhs, rhs, cond_of(dag, dag.operand(mask, 2)))?;
     let (gathered, lanes) = if bits == 16 {
         (dag.get_node(x86isd::PACKSS, EVT::Simple(MVT::V16I8), &[compare, compare]), 8)
     } else {
