@@ -97,6 +97,9 @@ pub struct GvnPass<'a> {
     /// `SimplifyQuery{DL, TLI, DT, AC}`: made at the first simplification and
     /// dropped when the CFG changes.
     simplifier: Option<llrm_mir::valuetracking::FunctionAnalyses>,
+    /// DEVIATE LP1-FP: the float values a loop (by its header) carries around
+    /// its back edge that GVN made, on top of the phis it had.
+    carried_floats: IdMap<BlockId, usize>,
 }
 
 /// `runImpl`'s scalar part. Whether anything changed.
@@ -154,6 +157,7 @@ pub fn run_impl_exposed(
         to_split: Vec::new(),
         cfg_changed: false,
         simplifier: None,
+        carried_floats: IdMap::new(),
     };
     let mark = pass.function.mark();
     let computed = pass.run_impl();

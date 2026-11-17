@@ -1056,6 +1056,7 @@ fn items_once(
         crate::addrcmp::compare_address_registers(&mut function, &assignment);
         crate::addrcmp::word_immediates(&mut function);
         crate::narrow::merge_logic_immediates(&mut function, &assignment);
+        crate::narrow::copied_masks_as_extensions(&mut function, &assignment);
         crate::narrow::narrow_logic_immediates(&mut function, &assignment);
         crate::consts::materialize_constants(&mut function, &assignment, cpu, wants_size);
         crate::constreg::constant_into_destination(&mut function, &assignment);
