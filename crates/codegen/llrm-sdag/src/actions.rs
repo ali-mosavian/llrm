@@ -963,15 +963,17 @@ impl TargetLowering {
         t.set_ops(&[ISD::ExtractElement], &[MVT::V16I8, MVT::V8I16, MVT::V4I32, MVT::V2I64], Action::Custom);
         // No shuffle is selected by pattern: `LegalizeDAG` builds the vector of the lanes the mask picks.
         t.set_ops(&[ISD::VectorShuffle], &[MVT::V16I8, MVT::V8I16, MVT::V4I32, MVT::V2I64], Action::Expand);
-        // The SSE2 float vectors (`v4f32`, `v2f64`): `addps`..`divpd` are patterns; builds, shuffles, lane inserts and
-        // extracts take the expansions (a constant is a pool load, the rest goes through the stack). DEVIATE X86V3
-        // (owner llrm-target-x86-m64-b, exit 2026-11-24): the pin shuffles (`shufps`, `unpcklpd`, `movss`).
+        // The SSE2 float vectors (`v4f32`, `v2f64`): `addps`..`divpd` and `scalar_to_vector` are patterns; a build is
+        // the pin's unpacks (`LowerBUILD_VECTOR`); shuffles, lane inserts and extracts take the expansions (a constant
+        // is a pool load, the rest goes through the stack). DEVIATE X86V3 (owner llrm-target-x86-m64-b, exit
+        // 2026-11-24): the pin shuffles (`shufps`, `unpcklpd`, `movss`).
         let float_vectors = [MVT::V4F32, MVT::V2F64];
         t.set_ops(
-            &[ISD::BuildVector, ISD::VectorShuffle, ISD::InsertVectorElt, ISD::ExtractElement, ISD::ScalarToVector],
+            &[ISD::VectorShuffle, ISD::InsertVectorElt, ISD::ExtractElement],
             &float_vectors,
             Action::Expand,
         );
+        t.set_ops(&[ISD::BuildVector], &float_vectors, Action::Custom);
         // `LowerSINT_TO_FP`: `v2i32` to `v2f64`; `v4i32` to `v4f32` is a pattern.
         t.set_ops(&[ISD::SIntToFp], &[MVT::V2I32], Action::Custom);
         // `LowerSCALAR_TO_VECTOR`: a byte or a word is widened to a dword for `movd`.

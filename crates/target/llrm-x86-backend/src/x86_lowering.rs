@@ -3681,6 +3681,9 @@ fn lower_build_vector_splat(
     {
         return Some(scalar_in_lane0(dag, vt, lane_vt, first, true));
     }
+    if matches!(vt, EVT::Simple(MVT::V4F32 | MVT::V2F64)) {
+        return lower_build_float_vector(dag, vt, &lanes);
+    }
     if lanes.iter().any(|lane| *lane != first) || dag.constant(first).is_some() || dag.is_undef(first) {
         return None;
     }
@@ -3697,6 +3700,39 @@ fn lower_build_vector_splat(
     }
     let by = dag.get_constant_with(0, EVT::I8, true, false);
     Some(dag.get_node(x86isd::PSHUFD, vt, &[low, by]))
+}
+
+/// `LowerBUILD_VECTOR`, the lanes of a `v4f32` or `v2f64` that are not all constants: each is a `scalar_to_vector`,
+/// and the pairs are interleaved (`getUnpackl`: `unpcklps`, `unpcklpd`) until one vector is left. Undefined lanes at
+/// the top are not built. A splat of a `v4f32` is `shufps`, left to the expansion.
+fn lower_build_float_vector(
+    dag: &mut SelectionDAG,
+    vt: EVT,
+    lanes: &[SDValue],
+) -> Option<SDValue> {
+    if lanes.iter().all(|lane| dag.fp_constant(*lane).is_some()) || lanes.iter().all(|lane| *lane == lanes[0]) && lanes.len() > 2
+    {
+        return None;
+    }
+    fn build(
+        dag: &mut SelectionDAG,
+        vt: EVT,
+        lanes: &[SDValue],
+    ) -> SDValue {
+        let mut count = lanes.len();
+        while count > 2 && dag.is_undef(lanes[count - 1]) && dag.is_undef(lanes[count - 2]) {
+            count -= 2;
+        }
+        let lanes = &lanes[..count];
+        if let [only] = lanes {
+            return if dag.is_undef(*only) { dag.get_undef(vt) } else { dag.get_node(ISD::ScalarToVector, vt, &[*only]) };
+        }
+        let evens: Vec<SDValue> = lanes.iter().step_by(2).copied().collect();
+        let odds: Vec<SDValue> = lanes.iter().skip(1).step_by(2).copied().collect();
+        let (low, high) = (build(dag, vt, &evens), build(dag, vt, &odds));
+        dag.get_node(x86isd::UNPCKL, vt, &[low, high])
+    }
+    Some(build(dag, vt, lanes))
 }
 
 /// `ExpandReductions` (`getShuffleReduction`) then `LowerVECTOR_SHUFFLE`: a
