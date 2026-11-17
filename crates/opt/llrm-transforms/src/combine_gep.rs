@@ -71,7 +71,8 @@ pub(crate) struct GepFlags {
     pub nuw: bool,
 }
 
-/// LLVM's `GEPOperator`: a `getelementptr` instruction or a constant expression.
+/// LLVM's `GEPOperator`: a `getelementptr` instruction or a constant
+/// expression.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum GepRef {
     Inst(InstId),
@@ -581,7 +582,7 @@ fn strip_leading_zero_index(
     gep: &Gep,
 ) -> Option<Visit> {
     let &first = gep.indices.first()?;
-    if !c.is_zero_constant(first) {
+    if !c.is_zero_constant(first) || c.env.hooks.keeps_multi_index_gep {
         return None;
     }
     // The second index steps over the source's element (not a struct field).
@@ -589,12 +590,18 @@ fn strip_leading_zero_index(
     Some(Visit::Replace(c.create_gep(inst, element, gep.ptr, &gep.indices[1..], gep.flags)))
 }
 
-/// A GEP with several non-zero indices is split in two.
+/// A GEP with several non-zero indices is split in two (DEVIATE GEP-SPLIT: not
+/// where the target keeps the multi-index GEP, as LLVM 20 did; nor are leading
+/// zeros stripped, `[N x i8]` source types made, or GEPs merged only when one
+/// index is non-zero).
 fn split_non_zero_indices(
     c: &mut Combiner,
     inst: InstId,
     gep: &Gep,
 ) -> Option<Visit> {
+    if c.env.hooks.keeps_multi_index_gep {
+        return None;
+    }
     // The first index may be a zero that steps over nothing.
     let skipped = usize::from(gep.indices.first().is_some_and(|&first| c.is_zero_constant(first)));
     let at = gep.indices.iter().enumerate().skip(skipped + 1).map(|(at, _)| at).next()?;
@@ -611,7 +618,7 @@ fn canonical_source_type(
     inst: InstId,
     gep: &Gep,
 ) -> Option<Visit> {
-    if gep.indices.len() != 1 {
+    if gep.indices.len() != 1 || c.env.hooks.keeps_multi_index_gep {
         return None;
     }
     let element = match c.context.types.get(gep.source) {

@@ -12,7 +12,9 @@ fn visit(
     inst: InstId,
 ) -> Visit {
     match c.function.instruction(inst).opcode {
-        Opcode::Cast(CastOp::Trunc) => visit_trunc(c, inst),
+        Opcode::Cast(CastOp::Trunc) => {
+            crate::combine_casts::narrow_vector_bin_op(c, inst).unwrap_or_else(|| visit_trunc(c, inst))
+        }
         Opcode::Cast(CastOp::ZExt) => visit_zext(c, inst),
         Opcode::Cast(CastOp::SExt) => visit_sext(c, inst),
         _ => Visit::None,
@@ -626,4 +628,17 @@ fn a_vector_cast_is_left_alone() {
                 %z = zext <8 x i16> %t to <8 x i32>\n  %u = trunc <8 x i32> %z to <8 x i16>\n  \
                 ret <8 x i16> %u\n";
     check("<8 x i16>", "<8 x i16> %x", body, body);
+}
+
+/// `narrowBinOp` on vectors: LoopVectorize's `trunc (add <2 x i64> %splat, <0,
+/// 1>)` stayed 64-bit (`paddq` and a `pshufd` a vector, object_extent_loop's
+/// init, +3% over clang 20 at -O2); it is the add of the truncated splat.
+#[test]
+fn a_truncated_vector_binop_with_a_constant_is_narrow() {
+    check(
+        "<2 x i32>",
+        "<2 x i64> %x",
+        "  %a = add nuw nsw <2 x i64> %x, <i64 0, i64 1>\n  %r = trunc nuw nsw <2 x i64> %a to <2 x i32>\n  ret <2 x i32> %r\n",
+        "  %0 = trunc <2 x i64> %x to <2 x i32>\n  %1 = add <2 x i32> %0, <i32 0, i32 1>\n  ret <2 x i32> %1\n",
+    );
 }

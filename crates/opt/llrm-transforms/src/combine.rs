@@ -354,6 +354,8 @@ pub struct TargetHooks {
     pub keeps_swapped_select_compare: bool,
     /// DEVIATE SINK-X87 (`combine_sink.rs`; the target has an x87 stack).
     pub keeps_float_off_returning_sink: bool,
+    /// DEVIATE GEP-SPLIT (`Tti::keeps_multi_index_gep`).
+    pub keeps_multi_index_gep: bool,
 }
 
 pub struct Env<'a> {
@@ -602,6 +604,12 @@ pub fn visit(
     // vectorizer makes, only simplifies (`add zeroinitializer, x` is `x`); the
     // visitors are enabled by operation, each with its own identity sweep.
     let operation = c.function.instruction(inst).opcode.clone();
+    // `narrowBinOp` is the one cast combine that reads vectors.
+    if matches!(operation, Opcode::Cast(CastOp::Trunc))
+        && let Some(narrowed) = crate::combine_casts::narrow_vector_bin_op(c, inst)
+    {
+        return narrowed;
+    }
     let skips_visitors = match operation {
         Opcode::Binary(op) => !vector_visited(op),
         Opcode::Cast(_) => true,

@@ -317,3 +317,50 @@ fn an_offset_inside_a_dereferenceable_object_is_inbounds() {
         function_of("ptr dereferenceable(16) %b", "ptr", "  %g = getelementptr i8, ptr %b, i64 17\n  ret ptr %g\n");
     assert!(!past.contains("inbounds"), "{past}");
 }
+
+/// `visitGetElementPtrInst` alone on a target that keeps (`keeps`) or splits a
+/// GEP of several non-zero indices.
+fn combined_on(
+    body: &str,
+    keeps: bool,
+) -> String {
+    use crate::combine::{TargetHooks, combine_for};
+    let text = format!("define ptr @f(ptr %b, i64 %i, i64 %j, i1 %c) {{\nb0:\n{body}  ret ptr %p\n}}\n");
+    let mut module = parsed(&text);
+    let globals = module.globals.clone();
+    let metadata = module.metadata.clone();
+    let mut declared = llrm_mir::passes::Declared::of(&module);
+    let (context, function) = module.function_mut("f").expect("@f");
+    let hooks = TargetHooks { keeps_multi_index_gep: keeps, ..Default::default() };
+    combine_for(
+        context,
+        &globals,
+        &Default::default(),
+        &metadata,
+        &DataLayout::default(),
+        function,
+        visit,
+        false,
+        &mut declared,
+        hooks,
+    );
+    declared.place(&mut module).unwrap();
+    printed(&module)
+}
+
+/// object_extent_loop -O2 (x86_64): `A[i][j]` is `gep [12 x [12 x double]], @A,
+/// 0, %i` then `gep [12 x double], %p, 0, %j`. The pin merges them no further
+/// and splits (a301e1a89529, 2025-09), so the 12-trip init loop is 14
+/// instructions and unrolls whole; LLVM 20.1.8, the bar compiler's, merges them
+/// to one 3-index GEP, sizes the loop 16 and vectorizes it: +5.6% executed
+/// instructions. A target that keeps the multi-index GEP merges, as LLVM 20
+/// did.
+#[test]
+fn a_target_that_keeps_the_multi_index_gep_merges_a_row_and_a_column_gep() {
+    let body = "  %q = getelementptr [12 x [12 x double]], ptr %b, i64 0, i64 %i\n  %p = getelementptr [12 x double], ptr %q, i64 0, i64 %j\n";
+    let pin = combined_on(body, false);
+    assert!(pin.contains("[96 x i8]") && pin.contains("[8 x i8]"), "{pin}");
+    let kept = combined_on(body, true);
+    assert!(kept.contains("getelementptr [12 x [12 x double]], ptr %b, i64 0, i64 %i, i64 %j"), "{kept}");
+    assert!(!kept.contains("[96 x i8]"), "{kept}");
+}

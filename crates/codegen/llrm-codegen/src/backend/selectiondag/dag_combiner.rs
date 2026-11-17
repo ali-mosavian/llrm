@@ -2297,6 +2297,24 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             // its user (`test byte [m], 1` where `mov eax, [m]; test al, 1`).
             ISD::Load if n0.res == 0 => self.reduce_load_width(node),
             ISD::Truncate => Some(self.dag.get_node(ISD::Truncate, vt, &[self.dag.operand(n0, 0)])),
+            // "Attempt to pre-truncate BUILD_VECTOR sources": `trunc
+            // (build_vector x, x)` is the build of the truncated lanes (`movd`
+            // and `pshufd` where a `trunc` of a `v2i64` is a `pshufd` a
+            // vector).
+            ISD::BuildVector
+                if vt.is_vector()
+                    && !self.legal_operations()
+                    && self.dag.has_one_use(n0.node)
+                    && self.hooks.is_truncate_free(self.dag.value_type(n0).element(), vt.element())
+                    && (self.level < CombineLevel::AfterLegalizeTypes
+                        || self.tli.is_some_and(|tli| tli.types.is_type_legal(vt.element()))) =>
+            {
+                let scalar = vt.element();
+                let lanes: Vec<SDValue> = self.dag.node(n0).ops.clone();
+                let truncated: Vec<SDValue> =
+                    lanes.into_iter().map(|lane| self.dag.get_node(ISD::Truncate, scalar, &[lane])).collect();
+                Some(self.dag.get_build_vector(vt, &truncated))
+            }
             // Narrow a binary operation with a constant operand ahead of the
             // truncate: `trunc (and y, 31)` is `and (trunc y), 31`, which the
             // shift patterns then drop as an unneeded mask. Before
@@ -4880,7 +4898,8 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         if self.dag.is_undef(n0) || self.dag.is_undef(n1) {
             return Some(self.dag.get_constant(0, vt));
         }
-        // `isConstOrConstSplat`: a vector of one constant is the constant, at the width of its lane.
+        // `isConstOrConstSplat`: a vector of one constant is the constant, at
+        // the width of its lane.
         let is_const = |dag: &SelectionDAG, v: SDValue| dag.const_or_splat(v).is_some() && !dag.is_opaque(v);
         if is_const(self.dag, n0) && !is_const(self.dag, n1) {
             return Some(self.dag.get_node(ISD::Mul, vt, &[n1, n0]));

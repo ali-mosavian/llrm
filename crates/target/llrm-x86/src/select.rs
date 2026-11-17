@@ -1516,7 +1516,8 @@ pub fn test_immediate(
     match dest {
         Loc::Reg(one) => {
             // `optimizeToFixedRegisterForm`: `test al, imm8` (`a8`) and
-            // `test eax, imm32` (`a9`) are a byte shorter than the `f6`/`f7` form.
+            // `test eax, imm32` (`a9`) are a byte shorter than the `f6`/`f7`
+            // form.
             let register = match (width, ACCUMULATOR.get(&width) == Some(&one.register)) {
                 (1, true) => Some("AL"),
                 (2, true) => Some("AX"),
@@ -2420,7 +2421,14 @@ fn scalar_sse(
     // `cmpss xmm0, xmm1, 0`: the predicate rides as an immediate byte.
     if let ([Loc::Reg(into)], [_, source, Loc::Imm(predicate)]) = (dests.as_slice(), sources.as_slice()) {
         let upper = Upper(name);
-        let bits = if name.ends_with("sd") { 64 } else { 32 };
+        // `shufps`/`shufpd` read the whole register.
+        let bits = if name.ends_with("sd") {
+            64
+        } else if name.ends_with("ss") {
+            32
+        } else {
+            128
+        };
         let code = code_of!(upper, "_XMM_XMMM", bits, "_IMM8")?;
         return match source {
             Loc::Reg(outof) => {
@@ -2451,6 +2459,8 @@ fn scalar_sse(
     };
     let read =
         match name.strip_prefix("cvtt").or_else(|| name.strip_prefix("cvt")).and_then(|rest| rest.split_once('2')) {
+            // The two lanes `cvtdq2pd` and `cvtps2pd` widen are 64 bits.
+            _ if matches!(name, "cvtdq2pd" | "cvtps2pd") => 64,
             Some((source, _)) => scalar(source),
             None => scalar(&name[name.len().saturating_sub(2)..]),
         };
@@ -2468,15 +2478,14 @@ fn scalar_sse(
             let code = code_of!(upper, "_XMM_XMMM", bits(second))?;
             _assemble(&raised(create_reg_reg(code, into.register, outof.register)), at, true)
         }
-        // `pshufd xmm, xmm/m128, imm8`: the destination is not the first source.
+        // `pshufd xmm, xmm/m128, imm8`: the destination is not the first
+        // source.
         (Loc::Reg(into), Loc::Imm(order)) if name == "pshufd" && sources.len() == 2 => {
             let code = code_of!(upper, "_XMM_XMMM128_IMM8")?;
             match &sources[0] {
-                Loc::Reg(outof) => _assemble(
-                    &raised(create_reg_reg_i32(code, into.register, outof.register, order.value)),
-                    at,
-                    true,
-                ),
+                Loc::Reg(outof) => {
+                    _assemble(&raised(create_reg_reg_i32(code, into.register, outof.register, order.value)), at, true)
+                }
                 Loc::Mem(cell) => {
                     let (built, relocated) = operand_of(cell, at.bits)?;
                     _assemble(&raised(create_reg_mem_i32(code, into.register, built, order.value)), at, relocated)

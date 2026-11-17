@@ -242,6 +242,18 @@ impl Combiner<'_> {
         // Does the source GEP end with a sequential index?
         let Some(steps) = self.steps(source.source, &source.indices) else { return Visit::None };
         if !matches!(steps.last(), Some(Step::Sequence(_))) {
+            // DEVIATE GEP-SPLIT: LLVM 20's `else if (first index is zero && Src
+            // has indices)`: the second GEP's own indices follow
+            // the first's (`gep T, p, i` then `gep U, q, 0, j` is `gep T, p, i,
+            // j`).
+            if self.env.hooks.keeps_multi_index_gep
+                && gep.indices.first().is_some_and(|&first| self.is_zero_constant(first))
+                && !source.indices.is_empty()
+            {
+                let mut indices = source.indices.clone();
+                indices.extend_from_slice(&gep.indices[1..]);
+                return Visit::Replace(self.create_gep(inst, source.source, source.ptr, &indices, merged));
+            }
             return Visit::None;
         }
 
@@ -271,7 +283,9 @@ impl Combiner<'_> {
         indices.push(sum);
         indices.extend_from_slice(&gep.indices[1..]);
         // No GEPs with more than one non-zero index.
-        if indices.iter().filter(|&&index| !self.is_zero_constant(index)).count() > 1 {
+        if !self.env.hooks.keeps_multi_index_gep
+            && indices.iter().filter(|&&index| !self.is_zero_constant(index)).count() > 1
+        {
             return Visit::None;
         }
         let found = self.create_gep(inst, source.source, source.ptr, &indices, merged);

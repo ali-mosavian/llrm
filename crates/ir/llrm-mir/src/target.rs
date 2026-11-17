@@ -432,11 +432,6 @@ pub struct Tuning {
     /// moves (+5 B at -Os, -6 B at -O1); dists cc 381b0a8398f2, llc
     /// 16601539e87f.
     pub address_reference_milliweight: u32,
-    /// DEVIATE RU-REC (owner x86-m64, exit 2026-11-24): a loop whose
-    /// loop-carried latency exceeds its issue-bound time is not unrolled at
-    /// run time (`loopunrollpass::recurrence`); the pin's `UP.Runtime` asks
-    /// nothing of the loop. false: the pin's.
-    pub unroll_recurrence_veto: bool,
     /// DEVIATE SPILL-FOLD (owner x86-m16, exit 2026-11-29): the clocks a
     /// spilled value costs where its references fold into memory operands,
     /// which `tryRegionSplit` weighs against the split's copies. The pin
@@ -546,9 +541,17 @@ pub struct Tuning {
     /// are instruction bytes, not live values
     /// (`Tti::unroll_store_immediate_bits`).
     pub unroll_store_immediate_bits: u32,
+    /// DEVIATE GEP-SPLIT (owner llrm-target-x86-m64-b, exit 2026-11-30): see
+    /// `Tti::keeps_multi_index_gep`.
+    pub keeps_multi_index_gep: bool,
     /// DEVIATE LSR-SIZE (owner x86-m32, exit 2026-11-24): see
     /// `Tti::lsr_size_model` (`LsrSizeModel::X86`).
     pub lsr_size_order: bool,
+    /// DEVIATE X86V3 (owner llrm-target-x86-m64-b, exit 2026-11-30): price
+    /// vectors of float lanes (memory, `fadd`..`fneg`, the casts to and from
+    /// integer lanes) with the pin's x86-64 rows (`tti_vector_oracle.txt`),
+    /// so the loop vectorizer forms them. Off: such a loop stays scalar.
+    pub vector_float_costs: bool,
     /// DEVIATE LSR-DROP-AT-SIZE (owner llrm-target-x86-m64-b, exit 2026-11-30):
     /// see `Tti::lsr_drops_worse_solution_at_size`.
     pub lsr_drop_worse_at_size: bool,
@@ -865,7 +868,6 @@ impl Tuning {
         slots_loop_width_rule: false,
         carry_slot_indexes: true,
         address_reference_milliweight: 1000,
-        unroll_recurrence_veto: false,
         spill_fold: None,
         unswitch_threshold: None,
         inline_threshold: None,
@@ -887,6 +889,8 @@ impl Tuning {
         unroll_promotion_fits_registers: false,
         unroll_store_immediate_bits: 0,
         lsr_size_order: false,
+        keeps_multi_index_gep: false,
+        vector_float_costs: false,
         lsr_drop_worse_at_size: false,
         add_to_or_disjoint: false,
         vectorize_at_size: true,

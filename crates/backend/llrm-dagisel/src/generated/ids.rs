@@ -752,6 +752,7 @@ pub mod x86 {
     pub const AND16rr: u16 = 834;
     pub const AND32mi: u16 = 845;
     pub const AND32mr: u16 = 855;
+    pub const AND32ri: u16 = 860;
     pub const AND32rm: u16 = 870;
     pub const AND32rr: u16 = 875;
     pub const AND64rm: u16 = 911;
@@ -769,6 +770,7 @@ pub mod x86 {
     pub const CDQ: u16 = 1202;
     pub const CH: u16 = 10;
     pub const CL: u16 = 11;
+    pub const CMP32ri: u16 = 1324;
     pub const CQO: u16 = 1396;
     pub const CS: u16 = 12;
     pub const CWD: u16 = 1506;
@@ -933,10 +935,6 @@ pub mod x86 {
     pub const TEST64rr: u16 = 5020;
     pub const TEST8mi: u16 = 5022;
     pub const TEST8mr: u16 = 5023;
-    pub const AND32ri: u16 = 860;
-    pub const AND8ri: u16 = 938;
-    pub const CMP32ri: u16 = 1324;
-    pub const CMP8ri: u16 = 1342;
     pub const TEST8ri: u16 = 5024;
     pub const TEST8rr: u16 = 5025;
     pub const UCOM_Fpr32: u16 = 5096;
@@ -999,13 +997,11 @@ pub mod x86 {
         (916, "AND64rr"),
         (927, "AND8mi"),
         (933, "AND8mr"),
-        (938, "AND8ri"),
         (944, "AND8rm"),
         (949, "AND8rr"),
         (977, "ANDPSrm"),
         (1202, "CDQ"),
         (1324, "CMP32ri"),
-        (1342, "CMP8ri"),
         (1396, "CQO"),
         (1506, "CWD"),
         (1511, "DEC16m"),

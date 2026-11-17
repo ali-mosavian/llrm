@@ -985,15 +985,18 @@ impl Builder<'_> {
             Type::Vector { element, count } if self.target.dag.vectors => {
                 // `v16i8`, `v8i16`, `v4i32`, `v2i64`: the vectors VR128 holds.
                 match self.module.context.types.get(*element) {
-                    // A lane count no `MVT` has (`<3 x i8>`) is an extended vector type: the type legalizer widens it.
+                    // A lane count no `MVT` has (`<3 x i8>`) is an extended
+                    // vector type: the type legalizer widens it.
                     Type::Int(bits) => MVT::integer(*bits)
                         .and_then(|lane| {
-                            MVT::vector(lane, *count).map(EVT::Simple).or_else(|| {
-                                (EVT::Simple(lane).size_in_bits() % 8 == 0
-                                    && !count.is_power_of_two()
-                                    && MVT::vector(lane, count.next_power_of_two()).is_some())
-                                .then(|| EVT::vector(lane, *count))
-                            })
+                            MVT::vector(lane, *count)
+                                .map(EVT::Simple)
+                                .or_else(
+                                    || (EVT::Simple(lane).size_in_bits() % 8 == 0
+                                        && !count.is_power_of_two()
+                                        && MVT::vector(lane, count.next_power_of_two()).is_some())
+                                    .then(|| EVT::vector(lane, *count)),
+                                )
                         })
                         .ok_or(Refused("vector with no register class")),
                     // `v4f32`, `v2f64`
@@ -1046,9 +1049,30 @@ impl Builder<'_> {
             match MVT::vector(element, lanes) {
                 Some(half) if self.target.legal_vectors.contains(&half) => return Ok((EVT::Simple(half), count)),
                 _ if lanes > 1 => (lanes, count) = (lanes / 2, count * 2),
-                _ => return Err(Refused("vector with no register class")),
+                // `TypeWidenVector`: a narrow vector (`v2i32`) lives in the
+                // legal vector of the same lanes, more of them
+                // (`v4i32`); `getCopyToPartsVector` concatenates it with
+                // undef, `getCopyFromPartsVector` extracts the low lanes.
+                _ => {
+                    return self
+                        .widened_register_vector(mvt)
+                        .map(|wider| (EVT::Simple(wider), 1))
+                        .ok_or(Refused("vector with no register class"));
+                }
             }
         }
+    }
+
+    /// The narrowest legal vector of `vt`'s lane type with more lanes.
+    fn widened_register_vector(
+        &self,
+        vt: MVT,
+    ) -> Option<MVT> {
+        let (element, lanes) = (vt.element()?, vt.lanes()?);
+        (lanes * 2..=64)
+            .step_by(lanes as usize)
+            .filter_map(|wider| MVT::vector(element, wider))
+            .find(|wider| self.target.legal_vectors.contains(wider))
     }
 
     /// How a value of `vt` is carried across blocks and calls: the type of
@@ -1061,7 +1085,7 @@ impl Builder<'_> {
         if vt.is_vector() {
             // Arguments, results and calls carry one register.
             return match self.vector_breakdown(vt)? {
-                (register, 1) => Ok((register, 1)),
+                (register, 1) if register == vt => Ok((register, 1)),
                 _ => Err(Refused("vector wider than a register")),
             };
         }
@@ -3641,6 +3665,10 @@ impl Builder<'_> {
             return Ok(self.join_parts(vt, &pieces, pointer));
         }
         let copy = self.dag.get_copy_from_reg(entry, reg, reg_vt);
+        if vt.is_vector() && reg_vt != vt {
+            let low = self.dag.get_constant(0, EVT::I64);
+            return Ok(self.dag.get_node(ISD::ExtractSubvector, vt, &[copy, low]));
+        }
         Ok(if reg_vt == vt { copy } else { self.dag.get_node(ISD::Truncate, vt, &[copy]) })
     }
 
@@ -3735,7 +3763,16 @@ impl Builder<'_> {
         } else {
             extend
         };
-        let value = if reg_vt == vt { value } else { self.dag.get_node(extend, reg_vt, &[value]) };
+        let value = if reg_vt == vt {
+            value
+        } else if vt.is_vector() {
+            let pad = self.dag.get_undef(vt);
+            let mut pieces = vec![value];
+            pieces.resize((reg_vt.lanes() / vt.lanes()) as usize, pad);
+            self.dag.get_node(ISD::ConcatVectors, reg_vt, &pieces)
+        } else {
+            self.dag.get_node(extend, reg_vt, &[value])
+        };
         let chain = self.dag.get_copy_to_reg(entry, reg, value);
         self.pending_exports.push(chain);
         Ok(())
@@ -4396,9 +4433,11 @@ impl Builder<'_> {
                     _ => None,
                 }
                 .ok_or(Refused("a shufflevector padded to a vector with no register class"))?;
-                // DEVIATE: no padding past a register (the pin widens `v18i8` to `v32i8` and splits it); the
-                // lanes are built one at a time instead. Exit: splitting an extended vector type; owner
-                // x87-cordic-2; review 2026-11-27.
+                // DEVIATE: no padding past a register (the pin widens `v18i8`
+                // to `v32i8` and splits it); the
+                // lanes are built one at a time instead. Exit: splitting an
+                // extended vector type; owner x87-cordic-2;
+                // review 2026-11-27.
                 if padded.size_in_bits() <= 128 {
                     for operand in [&mut first, &mut second] {
                         if self.dag.is_undef(*operand) {

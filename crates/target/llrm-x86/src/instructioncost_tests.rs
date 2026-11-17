@@ -140,3 +140,37 @@ fn test_a_gep_asked_with_constant_operands_costs_what_they_make_it() {
     let constant = |value| llrm_mir::module::Operand::Constant(module.context.int(module.context.types.int(16), value));
     assert_eq!((cost(&own), cost(&[own[0], constant(3), constant(1)])), (1, 0));
 }
+
+/// The `insertelement`, broadcast `shufflevector` and vector `fmuladd` of a
+/// loop were `Invalid` at code size: the unroller read a loop vectorized to `<2
+/// x double>` as "size not computed" and kept its 6 trips rolled
+/// (object_extent_loop -O2, +6% executed instructions). The pin's
+/// `print<cost-model>`: 0 for an insert into poison, 1 for the next, 1 for the
+/// broadcast, 2 for the `fmuladd` (4 for throughput).
+#[test]
+fn a_vector_insert_broadcast_and_fmuladd_cost_what_the_pin_says() {
+    let source = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n\
+        declare <2 x double> @llvm.fmuladd.v2f64(<2 x double>, <2 x double>, <2 x double>)\n\
+        define <2 x double> @f(double %a, double %b, <2 x double> %v) {\n\
+        %i = insertelement <2 x double> poison, double %a, i64 0\n\
+        %j = insertelement <2 x double> %i, double %b, i64 1\n\
+        %s = shufflevector <2 x double> %i, <2 x double> poison, <2 x i32> zeroinitializer\n\
+        %m = call <2 x double> @llvm.fmuladd.v2f64(<2 x double> %v, <2 x double> %s, <2 x double> %j)\n\
+        ret <2 x double> %m\n}\n";
+    let module = llrm_mir::parse::module(source).expect("parses");
+    let layout = DataLayout::parse(module.datalayout.as_deref().expect("a datalayout")).expect("a layout");
+    let tuning = llrm_mir::target::Tuning { vector_float_costs: true, ..llrm_mir::target::Tuning::PIN };
+    let x86 = X86::of_cpu("x86-64").expect("a cpu").with_tuning(tuning);
+    let (_, _, function) = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("f")).unwrap();
+    let insts: Vec<_> = function.layout().iter().flat_map(|&block| function.iter_block(block)).collect();
+    for (kind, want) in [(CostKind::CodeSize, [0, 1, 1, 2]), (CostKind::RecipThroughput, [0, 1, 1, 4])] {
+        let got: Vec<String> = insts[..4]
+            .iter()
+            .map(|&inst| {
+                let cost = instruction_cost(&x86, &module.context, &layout, &module.globals, function, inst, kind);
+                if cost.valid { cost.value.to_string() } else { "Invalid".to_owned() }
+            })
+            .collect();
+        assert_eq!(got, want.map(|n| n.to_string()), "{kind:?}");
+    }
+}

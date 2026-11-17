@@ -1470,6 +1470,18 @@ pub trait Tti {
         0
     }
 
+    /// DEVIATE GEP-SPLIT (owner llrm-target-x86-m64-b, exit 2026-11-30):
+    /// InstCombine leaves a `gep` of several non-zero indices as written.
+    /// The pin's `visitGEP` splits it (`gep [96 x i8], @A, %row` out of a
+    /// loop, `gep %base, %j` in it, "GEP has multiple non-zero indices:
+    /// Split it"); LLVM 20.1.8, the bar compiler's, has no such split (nor
+    /// the `[N x i8]` source types). The split makes object_extent_loop's
+    /// 12-trip init loop 14 instructions, 146 < 150, so it unrolls whole
+    /// for SLP; clang 20 sizes it 16 and vectorizes the loop.
+    fn keeps_multi_index_gep(&self) -> bool {
+        false
+    }
+
     /// The same for the floats of an x87 target, against the stack's slots.
     fn unroll_promotion_fits_x87_stack(&self) -> bool {
         false
@@ -1766,11 +1778,6 @@ pub trait Tti {
     /// `getSchedModel().IssueWidth`; 0: the model states none.
     fn issue_width(&self) -> u32 {
         0
-    }
-
-    /// `Tuning::unroll_recurrence_veto`.
-    fn vetoes_recurrence_bound_unroll(&self) -> bool {
-        false
     }
 
     /// What a byte of code is worth in thousandths of a clock at speed, where

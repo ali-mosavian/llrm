@@ -1,0 +1,1941 @@
+# LLVM version 24.0.0git d1106deb71cc; python3 tti_vector_oracle.py
+throughput trunc 2xi8 2xi16 2
+throughput trunc 2xi8 2xi32 3
+throughput trunc 2xi8 2xi64 4
+throughput fptosi 2xi8 2xfloat 6
+throughput fptoui 2xi8 2xfloat 6
+throughput fptosi 2xi8 2xdouble 6
+throughput fptoui 2xi8 2xdouble 6
+throughput zext 2xi16 2xi8 1
+throughput sext 2xi16 2xi8 2
+throughput trunc 2xi16 2xi32 1
+throughput trunc 2xi16 2xi64 2
+throughput fptosi 2xi16 2xfloat 5
+throughput fptoui 2xi16 2xfloat 5
+throughput fptosi 2xi16 2xdouble 5
+throughput fptoui 2xi16 2xdouble 5
+throughput zext 2xi32 2xi8 2
+throughput sext 2xi32 2xi8 3
+throughput zext 2xi32 2xi16 1
+throughput sext 2xi32 2xi16 2
+throughput trunc 2xi32 2xi64 1
+throughput fptosi 2xi32 2xfloat 4
+throughput fptoui 2xi32 2xfloat 8
+throughput fptosi 2xi32 2xdouble 4
+throughput fptoui 2xi32 2xdouble 8
+throughput zext 2xi64 2xi8 4
+throughput sext 2xi64 2xi8 4
+throughput zext 2xi64 2xi16 2
+throughput sext 2xi64 2xi16 3
+throughput zext 2xi64 2xi32 1
+throughput sext 2xi64 2xi32 2
+throughput fptosi 2xi64 2xfloat 14
+throughput fptoui 2xi64 2xfloat 14
+throughput fptosi 2xi64 2xdouble 14
+throughput fptoui 2xi64 2xdouble 36
+throughput sitofp 2xfloat 2xi8 3
+throughput uitofp 2xfloat 2xi8 4
+throughput sitofp 2xfloat 2xi16 3
+throughput uitofp 2xfloat 2xi16 4
+throughput sitofp 2xfloat 2xi32 3
+throughput uitofp 2xfloat 2xi32 7
+throughput sitofp 2xfloat 2xi64 8
+throughput uitofp 2xfloat 2xi64 18
+throughput fptrunc 2xfloat 2xdouble 1
+throughput sitofp 2xdouble 2xi8 4
+throughput uitofp 2xdouble 2xi8 4
+throughput sitofp 2xdouble 2xi16 4
+throughput uitofp 2xdouble 2xi16 4
+throughput sitofp 2xdouble 2xi32 4
+throughput uitofp 2xdouble 2xi32 7
+throughput sitofp 2xdouble 2xi64 8
+throughput uitofp 2xdouble 2xi64 15
+throughput fpext 2xdouble 2xfloat 1
+throughput trunc 4xi8 4xi16 2
+throughput trunc 4xi8 4xi32 3
+throughput trunc 4xi8 4xi64 8
+throughput fptosi 4xi8 4xfloat 6
+throughput fptoui 4xi8 4xfloat 6
+throughput fptosi 4xi8 4xdouble 12
+throughput fptoui 4xi8 4xdouble 12
+throughput zext 4xi16 4xi8 1
+throughput sext 4xi16 4xi8 2
+throughput trunc 4xi16 4xi32 3
+throughput trunc 4xi16 4xi64 4
+throughput fptosi 4xi16 4xfloat 5
+throughput fptoui 4xi16 4xfloat 5
+throughput fptosi 4xi16 4xdouble 10
+throughput fptoui 4xi16 4xdouble 10
+throughput zext 4xi32 4xi8 2
+throughput sext 4xi32 4xi8 3
+throughput zext 4xi32 4xi16 1
+throughput sext 4xi32 4xi16 2
+throughput trunc 4xi32 4xi64 2
+throughput fptosi 4xi32 4xfloat 4
+throughput fptoui 4xi32 4xfloat 8
+throughput fptosi 4xi32 4xdouble 8
+throughput fptoui 4xi32 4xdouble 16
+throughput zext 4xi64 4xi8 8
+throughput sext 4xi64 4xi8 8
+throughput zext 4xi64 4xi16 4
+throughput sext 4xi64 4xi16 6
+throughput zext 4xi64 4xi32 2
+throughput sext 4xi64 4xi32 4
+throughput fptosi 4xi64 4xfloat 29
+throughput fptoui 4xi64 4xfloat 29
+throughput fptosi 4xi64 4xdouble 28
+throughput fptoui 4xi64 4xdouble 72
+throughput sitofp 4xfloat 4xi8 3
+throughput uitofp 4xfloat 4xi8 4
+throughput sitofp 4xfloat 4xi16 3
+throughput uitofp 4xfloat 4xi16 4
+throughput sitofp 4xfloat 4xi32 3
+throughput uitofp 4xfloat 4xi32 5
+throughput sitofp 4xfloat 4xi64 16
+throughput uitofp 4xfloat 4xi64 36
+throughput fptrunc 4xfloat 4xdouble 3
+throughput sitofp 4xdouble 4xi8 8
+throughput uitofp 4xdouble 4xi8 8
+throughput sitofp 4xdouble 4xi16 8
+throughput uitofp 4xdouble 4xi16 8
+throughput sitofp 4xdouble 4xi32 8
+throughput uitofp 4xdouble 4xi32 14
+throughput sitofp 4xdouble 4xi64 16
+throughput uitofp 4xdouble 4xi64 30
+throughput fpext 4xdouble 4xfloat 3
+throughput trunc 8xi8 8xi16 2
+throughput trunc 8xi8 8xi32 6
+throughput trunc 8xi8 8xi64 16
+throughput fptosi 8xi8 8xfloat 12
+throughput fptoui 8xi8 8xfloat 12
+throughput fptosi 8xi8 8xdouble 24
+throughput fptoui 8xi8 8xdouble 24
+throughput zext 8xi16 8xi8 1
+throughput sext 8xi16 8xi8 2
+throughput trunc 8xi16 8xi32 5
+throughput trunc 8xi16 8xi64 8
+throughput fptosi 8xi16 8xfloat 10
+throughput fptoui 8xi16 8xfloat 10
+throughput fptosi 8xi16 8xdouble 20
+throughput fptoui 8xi16 8xdouble 20
+throughput zext 8xi32 8xi8 4
+throughput sext 8xi32 8xi8 6
+throughput zext 8xi32 8xi16 2
+throughput sext 8xi32 8xi16 4
+throughput trunc 8xi32 8xi64 4
+throughput fptosi 8xi32 8xfloat 8
+throughput fptoui 8xi32 8xfloat 16
+throughput fptosi 8xi32 8xdouble 16
+throughput fptoui 8xi32 8xdouble 32
+throughput zext 8xi64 8xi8 16
+throughput sext 8xi64 8xi8 16
+throughput zext 8xi64 8xi16 8
+throughput sext 8xi64 8xi16 12
+throughput zext 8xi64 8xi32 4
+throughput sext 8xi64 8xi32 8
+throughput fptosi 8xi64 8xfloat 58
+throughput fptoui 8xi64 8xfloat 58
+throughput fptosi 8xi64 8xdouble 56
+throughput fptoui 8xi64 8xdouble 144
+throughput sitofp 8xfloat 8xi8 6
+throughput uitofp 8xfloat 8xi8 8
+throughput sitofp 8xfloat 8xi16 6
+throughput uitofp 8xfloat 8xi16 8
+throughput sitofp 8xfloat 8xi32 6
+throughput uitofp 8xfloat 8xi32 10
+throughput sitofp 8xfloat 8xi64 32
+throughput uitofp 8xfloat 8xi64 72
+throughput fptrunc 8xfloat 8xdouble 6
+throughput sitofp 8xdouble 8xi8 16
+throughput uitofp 8xdouble 8xi8 16
+throughput sitofp 8xdouble 8xi16 16
+throughput uitofp 8xdouble 8xi16 16
+throughput sitofp 8xdouble 8xi32 16
+throughput uitofp 8xdouble 8xi32 28
+throughput sitofp 8xdouble 8xi64 32
+throughput uitofp 8xdouble 8xi64 60
+throughput fpext 8xdouble 8xfloat 6
+throughput trunc 16xi8 16xi16 3
+throughput trunc 16xi8 16xi32 7
+throughput trunc 16xi8 16xi64 32
+throughput fptosi 16xi8 16xfloat 24
+throughput fptoui 16xi8 16xfloat 24
+throughput fptosi 16xi8 16xdouble 48
+throughput fptoui 16xi8 16xdouble 48
+throughput zext 16xi16 16xi8 2
+throughput sext 16xi16 16xi8 4
+throughput trunc 16xi16 16xi32 10
+throughput trunc 16xi16 16xi64 16
+throughput fptosi 16xi16 16xfloat 20
+throughput fptoui 16xi16 16xfloat 20
+throughput fptosi 16xi16 16xdouble 40
+throughput fptoui 16xi16 16xdouble 40
+throughput zext 16xi32 16xi8 8
+throughput sext 16xi32 16xi8 12
+throughput zext 16xi32 16xi16 4
+throughput sext 16xi32 16xi16 8
+throughput trunc 16xi32 16xi64 8
+throughput fptosi 16xi32 16xfloat 16
+throughput fptoui 16xi32 16xfloat 32
+throughput fptosi 16xi32 16xdouble 32
+throughput fptoui 16xi32 16xdouble 64
+throughput zext 16xi64 16xi8 32
+throughput sext 16xi64 16xi8 32
+throughput zext 16xi64 16xi16 16
+throughput sext 16xi64 16xi16 24
+throughput zext 16xi64 16xi32 8
+throughput sext 16xi64 16xi32 16
+throughput fptosi 16xi64 16xfloat 116
+throughput fptoui 16xi64 16xfloat 116
+throughput fptosi 16xi64 16xdouble 112
+throughput fptoui 16xi64 16xdouble 288
+throughput sitofp 16xfloat 16xi8 12
+throughput uitofp 16xfloat 16xi8 16
+throughput sitofp 16xfloat 16xi16 12
+throughput uitofp 16xfloat 16xi16 16
+throughput sitofp 16xfloat 16xi32 12
+throughput uitofp 16xfloat 16xi32 20
+throughput sitofp 16xfloat 16xi64 64
+throughput uitofp 16xfloat 16xi64 144
+throughput fptrunc 16xfloat 16xdouble 12
+throughput sitofp 16xdouble 16xi8 32
+throughput uitofp 16xdouble 16xi8 32
+throughput sitofp 16xdouble 16xi16 32
+throughput uitofp 16xdouble 16xi16 32
+throughput sitofp 16xdouble 16xi32 32
+throughput uitofp 16xdouble 16xi32 56
+throughput sitofp 16xdouble 16xi64 64
+throughput uitofp 16xdouble 16xi64 120
+throughput fpext 16xdouble 16xfloat 12
+throughput trunc 32xi8 32xi16 8
+throughput trunc 32xi8 32xi32 24
+throughput fptosi 32xi8 32xfloat 48
+throughput fptoui 32xi8 32xfloat 48
+throughput zext 32xi16 32xi8 4
+throughput sext 32xi16 32xi8 8
+throughput trunc 32xi16 32xi32 24
+throughput fptosi 32xi16 32xfloat 40
+throughput fptoui 32xi16 32xfloat 40
+throughput zext 32xi32 32xi8 16
+throughput sext 32xi32 32xi8 24
+throughput zext 32xi32 32xi16 8
+throughput sext 32xi32 32xi16 16
+throughput fptosi 32xi32 32xfloat 32
+throughput fptoui 32xi32 32xfloat 64
+throughput sitofp 32xfloat 32xi8 24
+throughput uitofp 32xfloat 32xi8 32
+throughput sitofp 32xfloat 32xi16 24
+throughput uitofp 32xfloat 32xi16 32
+throughput sitofp 32xfloat 32xi32 24
+throughput uitofp 32xfloat 32xi32 40
+throughput fadd 2xfloat 2
+throughput fsub 2xfloat 2
+throughput fmul 2xfloat 2
+throughput fdiv 2xfloat 39
+throughput fneg 2xfloat 1
+throughput load 2xfloat 1
+throughput store 2xfloat 1
+throughput fadd 2xdouble 2
+throughput fsub 2xdouble 2
+throughput fmul 2xdouble 2
+throughput fdiv 2xdouble 69
+throughput fneg 2xdouble 1
+throughput load 2xdouble 1
+throughput store 2xdouble 1
+throughput fadd 4xfloat 2
+throughput fsub 4xfloat 2
+throughput fmul 4xfloat 2
+throughput fdiv 4xfloat 39
+throughput fneg 4xfloat 1
+throughput load 4xfloat 1
+throughput store 4xfloat 1
+throughput fadd 4xdouble 4
+throughput fsub 4xdouble 4
+throughput fmul 4xdouble 4
+throughput fdiv 4xdouble 138
+throughput fneg 4xdouble 2
+throughput load 4xdouble 2
+throughput store 4xdouble 2
+throughput fadd 8xfloat 4
+throughput fsub 8xfloat 4
+throughput fmul 8xfloat 4
+throughput fdiv 8xfloat 78
+throughput fneg 8xfloat 2
+throughput load 8xfloat 2
+throughput store 8xfloat 2
+throughput fadd 8xdouble 8
+throughput fsub 8xdouble 8
+throughput fmul 8xdouble 8
+throughput fdiv 8xdouble 276
+throughput fneg 8xdouble 4
+throughput load 8xdouble 4
+throughput store 8xdouble 4
+throughput fadd 16xfloat 8
+throughput fsub 16xfloat 8
+throughput fmul 16xfloat 8
+throughput fdiv 16xfloat 156
+throughput fneg 16xfloat 4
+throughput load 16xfloat 4
+throughput store 16xfloat 4
+throughput fadd 16xdouble 16
+throughput fsub 16xdouble 16
+throughput fmul 16xdouble 16
+throughput fdiv 16xdouble 552
+throughput fneg 16xdouble 8
+throughput load 16xdouble 8
+throughput store 16xdouble 8
+throughput fadd 32xfloat 16
+throughput fsub 32xfloat 16
+throughput fmul 32xfloat 16
+throughput fdiv 32xfloat 312
+throughput fneg 32xfloat 8
+throughput load 32xfloat 8
+throughput store 32xfloat 8
+throughput insert0 2xi8 3
+throughput insertp0 2xi8 1
+throughput extract0 2xi8 1
+throughput insert1 2xi8 3
+throughput insertp1 2xi8 3
+throughput extract1 2xi8 2
+throughput broadcast 2xi8 1
+throughput insert0 2xi16 1
+throughput insertp0 2xi16 1
+throughput extract0 2xi16 1
+throughput insert1 2xi16 1
+throughput insertp1 2xi16 1
+throughput extract1 2xi16 1
+throughput broadcast 2xi16 1
+throughput insert0 2xi32 3
+throughput insertp0 2xi32 1
+throughput extract0 2xi32 1
+throughput insert1 2xi32 3
+throughput insertp1 2xi32 3
+throughput extract1 2xi32 2
+throughput broadcast 2xi32 1
+throughput insert0 2xi64 2
+throughput insertp0 2xi64 1
+throughput extract0 2xi64 1
+throughput insert1 2xi64 2
+throughput insertp1 2xi64 2
+throughput extract1 2xi64 2
+throughput broadcast 2xi64 1
+throughput insert0 2xfloat 1
+throughput insertp0 2xfloat 0
+throughput extract0 2xfloat 0
+throughput insert1 2xfloat 2
+throughput insertp1 2xfloat 2
+throughput extract1 2xfloat 1
+throughput broadcast 2xfloat 1
+throughput insert0 2xdouble 1
+throughput insertp0 2xdouble 0
+throughput extract0 2xdouble 0
+throughput insert1 2xdouble 1
+throughput insertp1 2xdouble 1
+throughput extract1 2xdouble 1
+throughput broadcast 2xdouble 1
+throughput insert0 4xi8 5
+throughput insertp0 4xi8 1
+throughput extract0 4xi8 1
+throughput insert1 4xi8 5
+throughput insertp1 4xi8 5
+throughput extract1 4xi8 2
+throughput insert2 4xi8 5
+throughput insertp2 4xi8 5
+throughput extract2 4xi8 2
+throughput insert3 4xi8 5
+throughput insertp3 4xi8 5
+throughput extract3 4xi8 2
+throughput broadcast 4xi8 2
+throughput insert0 4xi16 1
+throughput insertp0 4xi16 1
+throughput extract0 4xi16 1
+throughput insert1 4xi16 1
+throughput insertp1 4xi16 1
+throughput extract1 4xi16 1
+throughput insert2 4xi16 1
+throughput insertp2 4xi16 1
+throughput extract2 4xi16 1
+throughput insert3 4xi16 1
+throughput insertp3 4xi16 1
+throughput extract3 4xi16 1
+throughput broadcast 4xi16 1
+throughput insert0 4xi32 3
+throughput insertp0 4xi32 1
+throughput extract0 4xi32 1
+throughput insert1 4xi32 3
+throughput insertp1 4xi32 3
+throughput extract1 4xi32 2
+throughput insert2 4xi32 3
+throughput insertp2 4xi32 3
+throughput extract2 4xi32 2
+throughput insert3 4xi32 3
+throughput insertp3 4xi32 3
+throughput extract3 4xi32 2
+throughput broadcast 4xi32 1
+throughput insert0 4xfloat 1
+throughput insertp0 4xfloat 0
+throughput extract0 4xfloat 0
+throughput insert1 4xfloat 2
+throughput insertp1 4xfloat 2
+throughput extract1 4xfloat 1
+throughput insert2 4xfloat 2
+throughput insertp2 4xfloat 2
+throughput extract2 4xfloat 1
+throughput insert3 4xfloat 2
+throughput insertp3 4xfloat 2
+throughput extract3 4xfloat 1
+throughput broadcast 4xfloat 1
+throughput insert0 8xi8 8
+throughput insertp0 8xi8 1
+throughput extract0 8xi8 1
+throughput insert1 8xi8 8
+throughput insertp1 8xi8 8
+throughput extract1 8xi8 2
+throughput insert2 8xi8 8
+throughput insertp2 8xi8 8
+throughput extract2 8xi8 2
+throughput insert3 8xi8 8
+throughput insertp3 8xi8 8
+throughput extract3 8xi8 2
+throughput insert4 8xi8 8
+throughput insertp4 8xi8 8
+throughput extract4 8xi8 2
+throughput insert5 8xi8 8
+throughput insertp5 8xi8 8
+throughput extract5 8xi8 2
+throughput insert6 8xi8 8
+throughput insertp6 8xi8 8
+throughput extract6 8xi8 2
+throughput insert7 8xi8 8
+throughput insertp7 8xi8 8
+throughput extract7 8xi8 2
+throughput broadcast 8xi8 2
+throughput insert0 8xi16 1
+throughput insertp0 8xi16 1
+throughput extract0 8xi16 1
+throughput insert1 8xi16 1
+throughput insertp1 8xi16 1
+throughput extract1 8xi16 1
+throughput insert2 8xi16 1
+throughput insertp2 8xi16 1
+throughput extract2 8xi16 1
+throughput insert3 8xi16 1
+throughput insertp3 8xi16 1
+throughput extract3 8xi16 1
+throughput insert4 8xi16 1
+throughput insertp4 8xi16 1
+throughput extract4 8xi16 1
+throughput insert5 8xi16 1
+throughput insertp5 8xi16 1
+throughput extract5 8xi16 1
+throughput insert6 8xi16 1
+throughput insertp6 8xi16 1
+throughput extract6 8xi16 1
+throughput insert7 8xi16 1
+throughput insertp7 8xi16 1
+throughput extract7 8xi16 1
+throughput broadcast 8xi16 1
+throughput insert0 16xi8 12
+throughput insertp0 16xi8 1
+throughput extract0 16xi8 1
+throughput insert1 16xi8 12
+throughput insertp1 16xi8 12
+throughput extract1 16xi8 2
+throughput insert2 16xi8 12
+throughput insertp2 16xi8 12
+throughput extract2 16xi8 2
+throughput insert3 16xi8 12
+throughput insertp3 16xi8 12
+throughput extract3 16xi8 2
+throughput insert4 16xi8 12
+throughput insertp4 16xi8 12
+throughput extract4 16xi8 2
+throughput insert5 16xi8 12
+throughput insertp5 16xi8 12
+throughput extract5 16xi8 2
+throughput insert6 16xi8 12
+throughput insertp6 16xi8 12
+throughput extract6 16xi8 2
+throughput insert7 16xi8 12
+throughput insertp7 16xi8 12
+throughput extract7 16xi8 2
+throughput insert8 16xi8 12
+throughput insertp8 16xi8 12
+throughput extract8 16xi8 2
+throughput insert9 16xi8 12
+throughput insertp9 16xi8 12
+throughput extract9 16xi8 2
+throughput insert10 16xi8 12
+throughput insertp10 16xi8 12
+throughput extract10 16xi8 2
+throughput insert11 16xi8 12
+throughput insertp11 16xi8 12
+throughput extract11 16xi8 2
+throughput insert12 16xi8 12
+throughput insertp12 16xi8 12
+throughput extract12 16xi8 2
+throughput insert13 16xi8 12
+throughput insertp13 16xi8 12
+throughput extract13 16xi8 2
+throughput insert14 16xi8 12
+throughput insertp14 16xi8 12
+throughput extract14 16xi8 2
+throughput insert15 16xi8 12
+throughput insertp15 16xi8 12
+throughput extract15 16xi8 2
+throughput broadcast 16xi8 2
+latency trunc 2xi8 2xi16 1
+latency trunc 2xi8 2xi32 1
+latency trunc 2xi8 2xi64 1
+latency fptosi 2xi8 2xfloat 1
+latency fptoui 2xi8 2xfloat 1
+latency fptosi 2xi8 2xdouble 1
+latency fptoui 2xi8 2xdouble 1
+latency zext 2xi16 2xi8 1
+latency sext 2xi16 2xi8 1
+latency trunc 2xi16 2xi32 1
+latency trunc 2xi16 2xi64 1
+latency fptosi 2xi16 2xfloat 1
+latency fptoui 2xi16 2xfloat 1
+latency fptosi 2xi16 2xdouble 1
+latency fptoui 2xi16 2xdouble 1
+latency zext 2xi32 2xi8 1
+latency sext 2xi32 2xi8 1
+latency zext 2xi32 2xi16 1
+latency sext 2xi32 2xi16 1
+latency trunc 2xi32 2xi64 1
+latency fptosi 2xi32 2xfloat 1
+latency fptoui 2xi32 2xfloat 1
+latency fptosi 2xi32 2xdouble 1
+latency fptoui 2xi32 2xdouble 1
+latency zext 2xi64 2xi8 1
+latency sext 2xi64 2xi8 1
+latency zext 2xi64 2xi16 1
+latency sext 2xi64 2xi16 1
+latency zext 2xi64 2xi32 1
+latency sext 2xi64 2xi32 1
+latency fptosi 2xi64 2xfloat 1
+latency fptoui 2xi64 2xfloat 1
+latency fptosi 2xi64 2xdouble 1
+latency fptoui 2xi64 2xdouble 1
+latency sitofp 2xfloat 2xi8 1
+latency uitofp 2xfloat 2xi8 1
+latency sitofp 2xfloat 2xi16 1
+latency uitofp 2xfloat 2xi16 1
+latency sitofp 2xfloat 2xi32 1
+latency uitofp 2xfloat 2xi32 1
+latency sitofp 2xfloat 2xi64 1
+latency uitofp 2xfloat 2xi64 1
+latency fptrunc 2xfloat 2xdouble 1
+latency sitofp 2xdouble 2xi8 1
+latency uitofp 2xdouble 2xi8 1
+latency sitofp 2xdouble 2xi16 1
+latency uitofp 2xdouble 2xi16 1
+latency sitofp 2xdouble 2xi32 1
+latency uitofp 2xdouble 2xi32 1
+latency sitofp 2xdouble 2xi64 1
+latency uitofp 2xdouble 2xi64 1
+latency fpext 2xdouble 2xfloat 1
+latency trunc 4xi8 4xi16 1
+latency trunc 4xi8 4xi32 1
+latency trunc 4xi8 4xi64 2
+latency fptosi 4xi8 4xfloat 1
+latency fptoui 4xi8 4xfloat 1
+latency fptosi 4xi8 4xdouble 2
+latency fptoui 4xi8 4xdouble 2
+latency zext 4xi16 4xi8 1
+latency sext 4xi16 4xi8 1
+latency trunc 4xi16 4xi32 1
+latency trunc 4xi16 4xi64 2
+latency fptosi 4xi16 4xfloat 1
+latency fptoui 4xi16 4xfloat 1
+latency fptosi 4xi16 4xdouble 2
+latency fptoui 4xi16 4xdouble 2
+latency zext 4xi32 4xi8 1
+latency sext 4xi32 4xi8 1
+latency zext 4xi32 4xi16 1
+latency sext 4xi32 4xi16 1
+latency trunc 4xi32 4xi64 2
+latency fptosi 4xi32 4xfloat 1
+latency fptoui 4xi32 4xfloat 1
+latency fptosi 4xi32 4xdouble 2
+latency fptoui 4xi32 4xdouble 2
+latency zext 4xi64 4xi8 2
+latency sext 4xi64 4xi8 2
+latency zext 4xi64 4xi16 2
+latency sext 4xi64 4xi16 2
+latency zext 4xi64 4xi32 2
+latency sext 4xi64 4xi32 2
+latency fptosi 4xi64 4xfloat 1
+latency fptoui 4xi64 4xfloat 1
+latency fptosi 4xi64 4xdouble 1
+latency fptoui 4xi64 4xdouble 1
+latency sitofp 4xfloat 4xi8 1
+latency uitofp 4xfloat 4xi8 1
+latency sitofp 4xfloat 4xi16 1
+latency uitofp 4xfloat 4xi16 1
+latency sitofp 4xfloat 4xi32 1
+latency uitofp 4xfloat 4xi32 1
+latency sitofp 4xfloat 4xi64 2
+latency uitofp 4xfloat 4xi64 2
+latency fptrunc 4xfloat 4xdouble 1
+latency sitofp 4xdouble 4xi8 2
+latency uitofp 4xdouble 4xi8 2
+latency sitofp 4xdouble 4xi16 2
+latency uitofp 4xdouble 4xi16 2
+latency sitofp 4xdouble 4xi32 2
+latency uitofp 4xdouble 4xi32 2
+latency sitofp 4xdouble 4xi64 2
+latency uitofp 4xdouble 4xi64 2
+latency fpext 4xdouble 4xfloat 1
+latency trunc 8xi8 8xi16 1
+latency trunc 8xi8 8xi32 2
+latency trunc 8xi8 8xi64 4
+latency fptosi 8xi8 8xfloat 2
+latency fptoui 8xi8 8xfloat 2
+latency fptosi 8xi8 8xdouble 4
+latency fptoui 8xi8 8xdouble 4
+latency zext 8xi16 8xi8 1
+latency sext 8xi16 8xi8 1
+latency trunc 8xi16 8xi32 1
+latency trunc 8xi16 8xi64 4
+latency fptosi 8xi16 8xfloat 2
+latency fptoui 8xi16 8xfloat 2
+latency fptosi 8xi16 8xdouble 4
+latency fptoui 8xi16 8xdouble 4
+latency zext 8xi32 8xi8 2
+latency sext 8xi32 8xi8 2
+latency zext 8xi32 8xi16 2
+latency sext 8xi32 8xi16 2
+latency trunc 8xi32 8xi64 4
+latency fptosi 8xi32 8xfloat 2
+latency fptoui 8xi32 8xfloat 2
+latency fptosi 8xi32 8xdouble 4
+latency fptoui 8xi32 8xdouble 4
+latency zext 8xi64 8xi8 4
+latency sext 8xi64 8xi8 4
+latency zext 8xi64 8xi16 4
+latency sext 8xi64 8xi16 4
+latency zext 8xi64 8xi32 4
+latency sext 8xi64 8xi32 4
+latency fptosi 8xi64 8xfloat 1
+latency fptoui 8xi64 8xfloat 1
+latency fptosi 8xi64 8xdouble 1
+latency fptoui 8xi64 8xdouble 1
+latency sitofp 8xfloat 8xi8 2
+latency uitofp 8xfloat 8xi8 2
+latency sitofp 8xfloat 8xi16 2
+latency uitofp 8xfloat 8xi16 2
+latency sitofp 8xfloat 8xi32 2
+latency uitofp 8xfloat 8xi32 2
+latency sitofp 8xfloat 8xi64 4
+latency uitofp 8xfloat 8xi64 4
+latency fptrunc 8xfloat 8xdouble 1
+latency sitofp 8xdouble 8xi8 4
+latency uitofp 8xdouble 8xi8 4
+latency sitofp 8xdouble 8xi16 4
+latency uitofp 8xdouble 8xi16 4
+latency sitofp 8xdouble 8xi32 4
+latency uitofp 8xdouble 8xi32 4
+latency sitofp 8xdouble 8xi64 4
+latency uitofp 8xdouble 8xi64 4
+latency fpext 8xdouble 8xfloat 1
+latency trunc 16xi8 16xi16 1
+latency trunc 16xi8 16xi32 1
+latency trunc 16xi8 16xi64 8
+latency fptosi 16xi8 16xfloat 4
+latency fptoui 16xi8 16xfloat 4
+latency fptosi 16xi8 16xdouble 8
+latency fptoui 16xi8 16xdouble 8
+latency zext 16xi16 16xi8 2
+latency sext 16xi16 16xi8 2
+latency trunc 16xi16 16xi32 1
+latency trunc 16xi16 16xi64 8
+latency fptosi 16xi16 16xfloat 4
+latency fptoui 16xi16 16xfloat 4
+latency fptosi 16xi16 16xdouble 8
+latency fptoui 16xi16 16xdouble 8
+latency zext 16xi32 16xi8 4
+latency sext 16xi32 16xi8 4
+latency zext 16xi32 16xi16 4
+latency sext 16xi32 16xi16 4
+latency trunc 16xi32 16xi64 8
+latency fptosi 16xi32 16xfloat 4
+latency fptoui 16xi32 16xfloat 4
+latency fptosi 16xi32 16xdouble 8
+latency fptoui 16xi32 16xdouble 8
+latency zext 16xi64 16xi8 8
+latency sext 16xi64 16xi8 8
+latency zext 16xi64 16xi16 8
+latency sext 16xi64 16xi16 8
+latency zext 16xi64 16xi32 8
+latency sext 16xi64 16xi32 8
+latency fptosi 16xi64 16xfloat 1
+latency fptoui 16xi64 16xfloat 1
+latency fptosi 16xi64 16xdouble 1
+latency fptoui 16xi64 16xdouble 1
+latency sitofp 16xfloat 16xi8 4
+latency uitofp 16xfloat 16xi8 4
+latency sitofp 16xfloat 16xi16 4
+latency uitofp 16xfloat 16xi16 4
+latency sitofp 16xfloat 16xi32 4
+latency uitofp 16xfloat 16xi32 4
+latency sitofp 16xfloat 16xi64 8
+latency uitofp 16xfloat 16xi64 8
+latency fptrunc 16xfloat 16xdouble 1
+latency sitofp 16xdouble 16xi8 8
+latency uitofp 16xdouble 16xi8 8
+latency sitofp 16xdouble 16xi16 8
+latency uitofp 16xdouble 16xi16 8
+latency sitofp 16xdouble 16xi32 8
+latency uitofp 16xdouble 16xi32 8
+latency sitofp 16xdouble 16xi64 8
+latency uitofp 16xdouble 16xi64 8
+latency fpext 16xdouble 16xfloat 1
+latency trunc 32xi8 32xi16 4
+latency trunc 32xi8 32xi32 8
+latency fptosi 32xi8 32xfloat 8
+latency fptoui 32xi8 32xfloat 8
+latency zext 32xi16 32xi8 4
+latency sext 32xi16 32xi8 4
+latency trunc 32xi16 32xi32 8
+latency fptosi 32xi16 32xfloat 8
+latency fptoui 32xi16 32xfloat 8
+latency zext 32xi32 32xi8 8
+latency sext 32xi32 32xi8 8
+latency zext 32xi32 32xi16 8
+latency sext 32xi32 32xi16 8
+latency fptosi 32xi32 32xfloat 8
+latency fptoui 32xi32 32xfloat 8
+latency sitofp 32xfloat 32xi8 8
+latency uitofp 32xfloat 32xi8 8
+latency sitofp 32xfloat 32xi16 8
+latency uitofp 32xfloat 32xi16 8
+latency sitofp 32xfloat 32xi32 8
+latency uitofp 32xfloat 32xi32 8
+latency fadd 2xfloat 3
+latency fsub 2xfloat 3
+latency fmul 2xfloat 5
+latency fdiv 2xfloat 39
+latency fneg 2xfloat 1
+latency load 2xfloat 4
+latency store 2xfloat 1
+latency fadd 2xdouble 3
+latency fsub 2xdouble 3
+latency fmul 2xdouble 5
+latency fdiv 2xdouble 69
+latency fneg 2xdouble 1
+latency load 2xdouble 4
+latency store 2xdouble 1
+latency fadd 4xfloat 3
+latency fsub 4xfloat 3
+latency fmul 4xfloat 5
+latency fdiv 4xfloat 39
+latency fneg 4xfloat 1
+latency load 4xfloat 4
+latency store 4xfloat 1
+latency fadd 4xdouble 6
+latency fsub 4xdouble 6
+latency fmul 4xdouble 10
+latency fdiv 4xdouble 138
+latency fneg 4xdouble 2
+latency load 4xdouble 4
+latency store 4xdouble 1
+latency fadd 8xfloat 6
+latency fsub 8xfloat 6
+latency fmul 8xfloat 10
+latency fdiv 8xfloat 78
+latency fneg 8xfloat 2
+latency load 8xfloat 4
+latency store 8xfloat 1
+latency fadd 8xdouble 12
+latency fsub 8xdouble 12
+latency fmul 8xdouble 20
+latency fdiv 8xdouble 276
+latency fneg 8xdouble 4
+latency load 8xdouble 4
+latency store 8xdouble 1
+latency fadd 16xfloat 12
+latency fsub 16xfloat 12
+latency fmul 16xfloat 20
+latency fdiv 16xfloat 156
+latency fneg 16xfloat 4
+latency load 16xfloat 4
+latency store 16xfloat 1
+latency fadd 16xdouble 24
+latency fsub 16xdouble 24
+latency fmul 16xdouble 40
+latency fdiv 16xdouble 552
+latency fneg 16xdouble 8
+latency load 16xdouble 4
+latency store 16xdouble 1
+latency fadd 32xfloat 24
+latency fsub 32xfloat 24
+latency fmul 32xfloat 40
+latency fdiv 32xfloat 312
+latency fneg 32xfloat 8
+latency load 32xfloat 4
+latency store 32xfloat 1
+latency insert0 2xi8 3
+latency insertp0 2xi8 1
+latency extract0 2xi8 1
+latency insert1 2xi8 3
+latency insertp1 2xi8 3
+latency extract1 2xi8 2
+latency broadcast 2xi8 1
+latency insert0 2xi16 1
+latency insertp0 2xi16 1
+latency extract0 2xi16 1
+latency insert1 2xi16 1
+latency insertp1 2xi16 1
+latency extract1 2xi16 1
+latency broadcast 2xi16 1
+latency insert0 2xi32 3
+latency insertp0 2xi32 1
+latency extract0 2xi32 1
+latency insert1 2xi32 3
+latency insertp1 2xi32 3
+latency extract1 2xi32 2
+latency broadcast 2xi32 1
+latency insert0 2xi64 2
+latency insertp0 2xi64 1
+latency extract0 2xi64 1
+latency insert1 2xi64 2
+latency insertp1 2xi64 2
+latency extract1 2xi64 2
+latency broadcast 2xi64 1
+latency insert0 2xfloat 1
+latency insertp0 2xfloat 0
+latency extract0 2xfloat 0
+latency insert1 2xfloat 2
+latency insertp1 2xfloat 2
+latency extract1 2xfloat 1
+latency broadcast 2xfloat 1
+latency insert0 2xdouble 1
+latency insertp0 2xdouble 0
+latency extract0 2xdouble 0
+latency insert1 2xdouble 1
+latency insertp1 2xdouble 1
+latency extract1 2xdouble 1
+latency broadcast 2xdouble 1
+latency insert0 4xi8 5
+latency insertp0 4xi8 1
+latency extract0 4xi8 1
+latency insert1 4xi8 5
+latency insertp1 4xi8 5
+latency extract1 4xi8 2
+latency insert2 4xi8 5
+latency insertp2 4xi8 5
+latency extract2 4xi8 2
+latency insert3 4xi8 5
+latency insertp3 4xi8 5
+latency extract3 4xi8 2
+latency broadcast 4xi8 2
+latency insert0 4xi16 1
+latency insertp0 4xi16 1
+latency extract0 4xi16 1
+latency insert1 4xi16 1
+latency insertp1 4xi16 1
+latency extract1 4xi16 1
+latency insert2 4xi16 1
+latency insertp2 4xi16 1
+latency extract2 4xi16 1
+latency insert3 4xi16 1
+latency insertp3 4xi16 1
+latency extract3 4xi16 1
+latency broadcast 4xi16 1
+latency insert0 4xi32 3
+latency insertp0 4xi32 1
+latency extract0 4xi32 1
+latency insert1 4xi32 3
+latency insertp1 4xi32 3
+latency extract1 4xi32 2
+latency insert2 4xi32 3
+latency insertp2 4xi32 3
+latency extract2 4xi32 2
+latency insert3 4xi32 3
+latency insertp3 4xi32 3
+latency extract3 4xi32 2
+latency broadcast 4xi32 1
+latency insert0 4xfloat 1
+latency insertp0 4xfloat 0
+latency extract0 4xfloat 0
+latency insert1 4xfloat 2
+latency insertp1 4xfloat 2
+latency extract1 4xfloat 1
+latency insert2 4xfloat 2
+latency insertp2 4xfloat 2
+latency extract2 4xfloat 1
+latency insert3 4xfloat 2
+latency insertp3 4xfloat 2
+latency extract3 4xfloat 1
+latency broadcast 4xfloat 1
+latency insert0 8xi8 8
+latency insertp0 8xi8 1
+latency extract0 8xi8 1
+latency insert1 8xi8 8
+latency insertp1 8xi8 8
+latency extract1 8xi8 2
+latency insert2 8xi8 8
+latency insertp2 8xi8 8
+latency extract2 8xi8 2
+latency insert3 8xi8 8
+latency insertp3 8xi8 8
+latency extract3 8xi8 2
+latency insert4 8xi8 8
+latency insertp4 8xi8 8
+latency extract4 8xi8 2
+latency insert5 8xi8 8
+latency insertp5 8xi8 8
+latency extract5 8xi8 2
+latency insert6 8xi8 8
+latency insertp6 8xi8 8
+latency extract6 8xi8 2
+latency insert7 8xi8 8
+latency insertp7 8xi8 8
+latency extract7 8xi8 2
+latency broadcast 8xi8 2
+latency insert0 8xi16 1
+latency insertp0 8xi16 1
+latency extract0 8xi16 1
+latency insert1 8xi16 1
+latency insertp1 8xi16 1
+latency extract1 8xi16 1
+latency insert2 8xi16 1
+latency insertp2 8xi16 1
+latency extract2 8xi16 1
+latency insert3 8xi16 1
+latency insertp3 8xi16 1
+latency extract3 8xi16 1
+latency insert4 8xi16 1
+latency insertp4 8xi16 1
+latency extract4 8xi16 1
+latency insert5 8xi16 1
+latency insertp5 8xi16 1
+latency extract5 8xi16 1
+latency insert6 8xi16 1
+latency insertp6 8xi16 1
+latency extract6 8xi16 1
+latency insert7 8xi16 1
+latency insertp7 8xi16 1
+latency extract7 8xi16 1
+latency broadcast 8xi16 2
+latency insert0 16xi8 14
+latency insertp0 16xi8 1
+latency extract0 16xi8 1
+latency insert1 16xi8 14
+latency insertp1 16xi8 14
+latency extract1 16xi8 2
+latency insert2 16xi8 14
+latency insertp2 16xi8 14
+latency extract2 16xi8 2
+latency insert3 16xi8 14
+latency insertp3 16xi8 14
+latency extract3 16xi8 2
+latency insert4 16xi8 14
+latency insertp4 16xi8 14
+latency extract4 16xi8 2
+latency insert5 16xi8 14
+latency insertp5 16xi8 14
+latency extract5 16xi8 2
+latency insert6 16xi8 14
+latency insertp6 16xi8 14
+latency extract6 16xi8 2
+latency insert7 16xi8 14
+latency insertp7 16xi8 14
+latency extract7 16xi8 2
+latency insert8 16xi8 14
+latency insertp8 16xi8 14
+latency extract8 16xi8 2
+latency insert9 16xi8 14
+latency insertp9 16xi8 14
+latency extract9 16xi8 2
+latency insert10 16xi8 14
+latency insertp10 16xi8 14
+latency extract10 16xi8 2
+latency insert11 16xi8 14
+latency insertp11 16xi8 14
+latency extract11 16xi8 2
+latency insert12 16xi8 14
+latency insertp12 16xi8 14
+latency extract12 16xi8 2
+latency insert13 16xi8 14
+latency insertp13 16xi8 14
+latency extract13 16xi8 2
+latency insert14 16xi8 14
+latency insertp14 16xi8 14
+latency extract14 16xi8 2
+latency insert15 16xi8 14
+latency insertp15 16xi8 14
+latency extract15 16xi8 2
+latency broadcast 16xi8 3
+code-size trunc 2xi8 2xi16 1
+code-size trunc 2xi8 2xi32 1
+code-size trunc 2xi8 2xi64 1
+code-size fptosi 2xi8 2xfloat 1
+code-size fptoui 2xi8 2xfloat 1
+code-size fptosi 2xi8 2xdouble 1
+code-size fptoui 2xi8 2xdouble 1
+code-size zext 2xi16 2xi8 1
+code-size sext 2xi16 2xi8 1
+code-size trunc 2xi16 2xi32 1
+code-size trunc 2xi16 2xi64 1
+code-size fptosi 2xi16 2xfloat 1
+code-size fptoui 2xi16 2xfloat 1
+code-size fptosi 2xi16 2xdouble 1
+code-size fptoui 2xi16 2xdouble 1
+code-size zext 2xi32 2xi8 1
+code-size sext 2xi32 2xi8 1
+code-size zext 2xi32 2xi16 1
+code-size sext 2xi32 2xi16 1
+code-size trunc 2xi32 2xi64 1
+code-size fptosi 2xi32 2xfloat 1
+code-size fptoui 2xi32 2xfloat 1
+code-size fptosi 2xi32 2xdouble 1
+code-size fptoui 2xi32 2xdouble 1
+code-size zext 2xi64 2xi8 1
+code-size sext 2xi64 2xi8 1
+code-size zext 2xi64 2xi16 1
+code-size sext 2xi64 2xi16 1
+code-size zext 2xi64 2xi32 1
+code-size sext 2xi64 2xi32 1
+code-size fptosi 2xi64 2xfloat 1
+code-size fptoui 2xi64 2xfloat 1
+code-size fptosi 2xi64 2xdouble 1
+code-size fptoui 2xi64 2xdouble 1
+code-size sitofp 2xfloat 2xi8 1
+code-size uitofp 2xfloat 2xi8 1
+code-size sitofp 2xfloat 2xi16 1
+code-size uitofp 2xfloat 2xi16 1
+code-size sitofp 2xfloat 2xi32 1
+code-size uitofp 2xfloat 2xi32 1
+code-size sitofp 2xfloat 2xi64 1
+code-size uitofp 2xfloat 2xi64 1
+code-size fptrunc 2xfloat 2xdouble 1
+code-size sitofp 2xdouble 2xi8 1
+code-size uitofp 2xdouble 2xi8 1
+code-size sitofp 2xdouble 2xi16 1
+code-size uitofp 2xdouble 2xi16 1
+code-size sitofp 2xdouble 2xi32 1
+code-size uitofp 2xdouble 2xi32 1
+code-size sitofp 2xdouble 2xi64 1
+code-size uitofp 2xdouble 2xi64 1
+code-size fpext 2xdouble 2xfloat 1
+code-size trunc 4xi8 4xi16 1
+code-size trunc 4xi8 4xi32 1
+code-size trunc 4xi8 4xi64 2
+code-size fptosi 4xi8 4xfloat 1
+code-size fptoui 4xi8 4xfloat 1
+code-size fptosi 4xi8 4xdouble 2
+code-size fptoui 4xi8 4xdouble 2
+code-size zext 4xi16 4xi8 1
+code-size sext 4xi16 4xi8 1
+code-size trunc 4xi16 4xi32 1
+code-size trunc 4xi16 4xi64 2
+code-size fptosi 4xi16 4xfloat 1
+code-size fptoui 4xi16 4xfloat 1
+code-size fptosi 4xi16 4xdouble 2
+code-size fptoui 4xi16 4xdouble 2
+code-size zext 4xi32 4xi8 1
+code-size sext 4xi32 4xi8 1
+code-size zext 4xi32 4xi16 1
+code-size sext 4xi32 4xi16 1
+code-size trunc 4xi32 4xi64 2
+code-size fptosi 4xi32 4xfloat 1
+code-size fptoui 4xi32 4xfloat 1
+code-size fptosi 4xi32 4xdouble 2
+code-size fptoui 4xi32 4xdouble 2
+code-size zext 4xi64 4xi8 2
+code-size sext 4xi64 4xi8 2
+code-size zext 4xi64 4xi16 2
+code-size sext 4xi64 4xi16 2
+code-size zext 4xi64 4xi32 2
+code-size sext 4xi64 4xi32 2
+code-size fptosi 4xi64 4xfloat 1
+code-size fptoui 4xi64 4xfloat 1
+code-size fptosi 4xi64 4xdouble 1
+code-size fptoui 4xi64 4xdouble 1
+code-size sitofp 4xfloat 4xi8 1
+code-size uitofp 4xfloat 4xi8 1
+code-size sitofp 4xfloat 4xi16 1
+code-size uitofp 4xfloat 4xi16 1
+code-size sitofp 4xfloat 4xi32 1
+code-size uitofp 4xfloat 4xi32 1
+code-size sitofp 4xfloat 4xi64 2
+code-size uitofp 4xfloat 4xi64 2
+code-size fptrunc 4xfloat 4xdouble 1
+code-size sitofp 4xdouble 4xi8 2
+code-size uitofp 4xdouble 4xi8 2
+code-size sitofp 4xdouble 4xi16 2
+code-size uitofp 4xdouble 4xi16 2
+code-size sitofp 4xdouble 4xi32 2
+code-size uitofp 4xdouble 4xi32 2
+code-size sitofp 4xdouble 4xi64 2
+code-size uitofp 4xdouble 4xi64 2
+code-size fpext 4xdouble 4xfloat 1
+code-size trunc 8xi8 8xi16 1
+code-size trunc 8xi8 8xi32 2
+code-size trunc 8xi8 8xi64 4
+code-size fptosi 8xi8 8xfloat 2
+code-size fptoui 8xi8 8xfloat 2
+code-size fptosi 8xi8 8xdouble 4
+code-size fptoui 8xi8 8xdouble 4
+code-size zext 8xi16 8xi8 1
+code-size sext 8xi16 8xi8 1
+code-size trunc 8xi16 8xi32 1
+code-size trunc 8xi16 8xi64 4
+code-size fptosi 8xi16 8xfloat 2
+code-size fptoui 8xi16 8xfloat 2
+code-size fptosi 8xi16 8xdouble 4
+code-size fptoui 8xi16 8xdouble 4
+code-size zext 8xi32 8xi8 2
+code-size sext 8xi32 8xi8 2
+code-size zext 8xi32 8xi16 2
+code-size sext 8xi32 8xi16 2
+code-size trunc 8xi32 8xi64 4
+code-size fptosi 8xi32 8xfloat 2
+code-size fptoui 8xi32 8xfloat 2
+code-size fptosi 8xi32 8xdouble 4
+code-size fptoui 8xi32 8xdouble 4
+code-size zext 8xi64 8xi8 4
+code-size sext 8xi64 8xi8 4
+code-size zext 8xi64 8xi16 4
+code-size sext 8xi64 8xi16 4
+code-size zext 8xi64 8xi32 4
+code-size sext 8xi64 8xi32 4
+code-size fptosi 8xi64 8xfloat 1
+code-size fptoui 8xi64 8xfloat 1
+code-size fptosi 8xi64 8xdouble 1
+code-size fptoui 8xi64 8xdouble 1
+code-size sitofp 8xfloat 8xi8 2
+code-size uitofp 8xfloat 8xi8 2
+code-size sitofp 8xfloat 8xi16 2
+code-size uitofp 8xfloat 8xi16 2
+code-size sitofp 8xfloat 8xi32 2
+code-size uitofp 8xfloat 8xi32 2
+code-size sitofp 8xfloat 8xi64 4
+code-size uitofp 8xfloat 8xi64 4
+code-size fptrunc 8xfloat 8xdouble 1
+code-size sitofp 8xdouble 8xi8 4
+code-size uitofp 8xdouble 8xi8 4
+code-size sitofp 8xdouble 8xi16 4
+code-size uitofp 8xdouble 8xi16 4
+code-size sitofp 8xdouble 8xi32 4
+code-size uitofp 8xdouble 8xi32 4
+code-size sitofp 8xdouble 8xi64 4
+code-size uitofp 8xdouble 8xi64 4
+code-size fpext 8xdouble 8xfloat 1
+code-size trunc 16xi8 16xi16 1
+code-size trunc 16xi8 16xi32 1
+code-size trunc 16xi8 16xi64 8
+code-size fptosi 16xi8 16xfloat 4
+code-size fptoui 16xi8 16xfloat 4
+code-size fptosi 16xi8 16xdouble 8
+code-size fptoui 16xi8 16xdouble 8
+code-size zext 16xi16 16xi8 2
+code-size sext 16xi16 16xi8 2
+code-size trunc 16xi16 16xi32 1
+code-size trunc 16xi16 16xi64 8
+code-size fptosi 16xi16 16xfloat 4
+code-size fptoui 16xi16 16xfloat 4
+code-size fptosi 16xi16 16xdouble 8
+code-size fptoui 16xi16 16xdouble 8
+code-size zext 16xi32 16xi8 4
+code-size sext 16xi32 16xi8 4
+code-size zext 16xi32 16xi16 4
+code-size sext 16xi32 16xi16 4
+code-size trunc 16xi32 16xi64 8
+code-size fptosi 16xi32 16xfloat 4
+code-size fptoui 16xi32 16xfloat 4
+code-size fptosi 16xi32 16xdouble 8
+code-size fptoui 16xi32 16xdouble 8
+code-size zext 16xi64 16xi8 8
+code-size sext 16xi64 16xi8 8
+code-size zext 16xi64 16xi16 8
+code-size sext 16xi64 16xi16 8
+code-size zext 16xi64 16xi32 8
+code-size sext 16xi64 16xi32 8
+code-size fptosi 16xi64 16xfloat 1
+code-size fptoui 16xi64 16xfloat 1
+code-size fptosi 16xi64 16xdouble 1
+code-size fptoui 16xi64 16xdouble 1
+code-size sitofp 16xfloat 16xi8 4
+code-size uitofp 16xfloat 16xi8 4
+code-size sitofp 16xfloat 16xi16 4
+code-size uitofp 16xfloat 16xi16 4
+code-size sitofp 16xfloat 16xi32 4
+code-size uitofp 16xfloat 16xi32 4
+code-size sitofp 16xfloat 16xi64 8
+code-size uitofp 16xfloat 16xi64 8
+code-size fptrunc 16xfloat 16xdouble 1
+code-size sitofp 16xdouble 16xi8 8
+code-size uitofp 16xdouble 16xi8 8
+code-size sitofp 16xdouble 16xi16 8
+code-size uitofp 16xdouble 16xi16 8
+code-size sitofp 16xdouble 16xi32 8
+code-size uitofp 16xdouble 16xi32 8
+code-size sitofp 16xdouble 16xi64 8
+code-size uitofp 16xdouble 16xi64 8
+code-size fpext 16xdouble 16xfloat 1
+code-size trunc 32xi8 32xi16 4
+code-size trunc 32xi8 32xi32 8
+code-size fptosi 32xi8 32xfloat 8
+code-size fptoui 32xi8 32xfloat 8
+code-size zext 32xi16 32xi8 4
+code-size sext 32xi16 32xi8 4
+code-size trunc 32xi16 32xi32 8
+code-size fptosi 32xi16 32xfloat 8
+code-size fptoui 32xi16 32xfloat 8
+code-size zext 32xi32 32xi8 8
+code-size sext 32xi32 32xi8 8
+code-size zext 32xi32 32xi16 8
+code-size sext 32xi32 32xi16 8
+code-size fptosi 32xi32 32xfloat 8
+code-size fptoui 32xi32 32xfloat 8
+code-size sitofp 32xfloat 32xi8 8
+code-size uitofp 32xfloat 32xi8 8
+code-size sitofp 32xfloat 32xi16 8
+code-size uitofp 32xfloat 32xi16 8
+code-size sitofp 32xfloat 32xi32 8
+code-size uitofp 32xfloat 32xi32 8
+code-size fadd 2xfloat 1
+code-size fsub 2xfloat 1
+code-size fmul 2xfloat 1
+code-size fdiv 2xfloat 1
+code-size fneg 2xfloat 1
+code-size load 2xfloat 1
+code-size store 2xfloat 1
+code-size fadd 2xdouble 1
+code-size fsub 2xdouble 1
+code-size fmul 2xdouble 1
+code-size fdiv 2xdouble 1
+code-size fneg 2xdouble 1
+code-size load 2xdouble 1
+code-size store 2xdouble 1
+code-size fadd 4xfloat 1
+code-size fsub 4xfloat 1
+code-size fmul 4xfloat 1
+code-size fdiv 4xfloat 1
+code-size fneg 4xfloat 1
+code-size load 4xfloat 1
+code-size store 4xfloat 1
+code-size fadd 4xdouble 2
+code-size fsub 4xdouble 2
+code-size fmul 4xdouble 2
+code-size fdiv 4xdouble 2
+code-size fneg 4xdouble 2
+code-size load 4xdouble 1
+code-size store 4xdouble 1
+code-size fadd 8xfloat 2
+code-size fsub 8xfloat 2
+code-size fmul 8xfloat 2
+code-size fdiv 8xfloat 2
+code-size fneg 8xfloat 2
+code-size load 8xfloat 1
+code-size store 8xfloat 1
+code-size fadd 8xdouble 4
+code-size fsub 8xdouble 4
+code-size fmul 8xdouble 4
+code-size fdiv 8xdouble 4
+code-size fneg 8xdouble 4
+code-size load 8xdouble 1
+code-size store 8xdouble 1
+code-size fadd 16xfloat 4
+code-size fsub 16xfloat 4
+code-size fmul 16xfloat 4
+code-size fdiv 16xfloat 4
+code-size fneg 16xfloat 4
+code-size load 16xfloat 1
+code-size store 16xfloat 1
+code-size fadd 16xdouble 8
+code-size fsub 16xdouble 8
+code-size fmul 16xdouble 8
+code-size fdiv 16xdouble 8
+code-size fneg 16xdouble 8
+code-size load 16xdouble 1
+code-size store 16xdouble 1
+code-size fadd 32xfloat 8
+code-size fsub 32xfloat 8
+code-size fmul 32xfloat 8
+code-size fdiv 32xfloat 8
+code-size fneg 32xfloat 8
+code-size load 32xfloat 1
+code-size store 32xfloat 1
+code-size insert0 2xi8 3
+code-size insertp0 2xi8 1
+code-size extract0 2xi8 1
+code-size insert1 2xi8 3
+code-size insertp1 2xi8 3
+code-size extract1 2xi8 2
+code-size broadcast 2xi8 1
+code-size insert0 2xi16 1
+code-size insertp0 2xi16 1
+code-size extract0 2xi16 1
+code-size insert1 2xi16 1
+code-size insertp1 2xi16 1
+code-size extract1 2xi16 1
+code-size broadcast 2xi16 1
+code-size insert0 2xi32 3
+code-size insertp0 2xi32 1
+code-size extract0 2xi32 1
+code-size insert1 2xi32 3
+code-size insertp1 2xi32 3
+code-size extract1 2xi32 2
+code-size broadcast 2xi32 1
+code-size insert0 2xi64 2
+code-size insertp0 2xi64 1
+code-size extract0 2xi64 1
+code-size insert1 2xi64 2
+code-size insertp1 2xi64 2
+code-size extract1 2xi64 2
+code-size broadcast 2xi64 1
+code-size insert0 2xfloat 1
+code-size insertp0 2xfloat 0
+code-size extract0 2xfloat 0
+code-size insert1 2xfloat 2
+code-size insertp1 2xfloat 2
+code-size extract1 2xfloat 1
+code-size broadcast 2xfloat 1
+code-size insert0 2xdouble 1
+code-size insertp0 2xdouble 0
+code-size extract0 2xdouble 0
+code-size insert1 2xdouble 1
+code-size insertp1 2xdouble 1
+code-size extract1 2xdouble 1
+code-size broadcast 2xdouble 1
+code-size insert0 4xi8 5
+code-size insertp0 4xi8 1
+code-size extract0 4xi8 1
+code-size insert1 4xi8 5
+code-size insertp1 4xi8 5
+code-size extract1 4xi8 2
+code-size insert2 4xi8 5
+code-size insertp2 4xi8 5
+code-size extract2 4xi8 2
+code-size insert3 4xi8 5
+code-size insertp3 4xi8 5
+code-size extract3 4xi8 2
+code-size broadcast 4xi8 2
+code-size insert0 4xi16 1
+code-size insertp0 4xi16 1
+code-size extract0 4xi16 1
+code-size insert1 4xi16 1
+code-size insertp1 4xi16 1
+code-size extract1 4xi16 1
+code-size insert2 4xi16 1
+code-size insertp2 4xi16 1
+code-size extract2 4xi16 1
+code-size insert3 4xi16 1
+code-size insertp3 4xi16 1
+code-size extract3 4xi16 1
+code-size broadcast 4xi16 1
+code-size insert0 4xi32 3
+code-size insertp0 4xi32 1
+code-size extract0 4xi32 1
+code-size insert1 4xi32 3
+code-size insertp1 4xi32 3
+code-size extract1 4xi32 2
+code-size insert2 4xi32 3
+code-size insertp2 4xi32 3
+code-size extract2 4xi32 2
+code-size insert3 4xi32 3
+code-size insertp3 4xi32 3
+code-size extract3 4xi32 2
+code-size broadcast 4xi32 1
+code-size insert0 4xfloat 1
+code-size insertp0 4xfloat 0
+code-size extract0 4xfloat 0
+code-size insert1 4xfloat 2
+code-size insertp1 4xfloat 2
+code-size extract1 4xfloat 1
+code-size insert2 4xfloat 2
+code-size insertp2 4xfloat 2
+code-size extract2 4xfloat 1
+code-size insert3 4xfloat 2
+code-size insertp3 4xfloat 2
+code-size extract3 4xfloat 1
+code-size broadcast 4xfloat 1
+code-size insert0 8xi8 8
+code-size insertp0 8xi8 1
+code-size extract0 8xi8 1
+code-size insert1 8xi8 8
+code-size insertp1 8xi8 8
+code-size extract1 8xi8 2
+code-size insert2 8xi8 8
+code-size insertp2 8xi8 8
+code-size extract2 8xi8 2
+code-size insert3 8xi8 8
+code-size insertp3 8xi8 8
+code-size extract3 8xi8 2
+code-size insert4 8xi8 8
+code-size insertp4 8xi8 8
+code-size extract4 8xi8 2
+code-size insert5 8xi8 8
+code-size insertp5 8xi8 8
+code-size extract5 8xi8 2
+code-size insert6 8xi8 8
+code-size insertp6 8xi8 8
+code-size extract6 8xi8 2
+code-size insert7 8xi8 8
+code-size insertp7 8xi8 8
+code-size extract7 8xi8 2
+code-size broadcast 8xi8 2
+code-size insert0 8xi16 1
+code-size insertp0 8xi16 1
+code-size extract0 8xi16 1
+code-size insert1 8xi16 1
+code-size insertp1 8xi16 1
+code-size extract1 8xi16 1
+code-size insert2 8xi16 1
+code-size insertp2 8xi16 1
+code-size extract2 8xi16 1
+code-size insert3 8xi16 1
+code-size insertp3 8xi16 1
+code-size extract3 8xi16 1
+code-size insert4 8xi16 1
+code-size insertp4 8xi16 1
+code-size extract4 8xi16 1
+code-size insert5 8xi16 1
+code-size insertp5 8xi16 1
+code-size extract5 8xi16 1
+code-size insert6 8xi16 1
+code-size insertp6 8xi16 1
+code-size extract6 8xi16 1
+code-size insert7 8xi16 1
+code-size insertp7 8xi16 1
+code-size extract7 8xi16 1
+code-size broadcast 8xi16 2
+code-size insert0 16xi8 14
+code-size insertp0 16xi8 1
+code-size extract0 16xi8 1
+code-size insert1 16xi8 14
+code-size insertp1 16xi8 14
+code-size extract1 16xi8 2
+code-size insert2 16xi8 14
+code-size insertp2 16xi8 14
+code-size extract2 16xi8 2
+code-size insert3 16xi8 14
+code-size insertp3 16xi8 14
+code-size extract3 16xi8 2
+code-size insert4 16xi8 14
+code-size insertp4 16xi8 14
+code-size extract4 16xi8 2
+code-size insert5 16xi8 14
+code-size insertp5 16xi8 14
+code-size extract5 16xi8 2
+code-size insert6 16xi8 14
+code-size insertp6 16xi8 14
+code-size extract6 16xi8 2
+code-size insert7 16xi8 14
+code-size insertp7 16xi8 14
+code-size extract7 16xi8 2
+code-size insert8 16xi8 14
+code-size insertp8 16xi8 14
+code-size extract8 16xi8 2
+code-size insert9 16xi8 14
+code-size insertp9 16xi8 14
+code-size extract9 16xi8 2
+code-size insert10 16xi8 14
+code-size insertp10 16xi8 14
+code-size extract10 16xi8 2
+code-size insert11 16xi8 14
+code-size insertp11 16xi8 14
+code-size extract11 16xi8 2
+code-size insert12 16xi8 14
+code-size insertp12 16xi8 14
+code-size extract12 16xi8 2
+code-size insert13 16xi8 14
+code-size insertp13 16xi8 14
+code-size extract13 16xi8 2
+code-size insert14 16xi8 14
+code-size insertp14 16xi8 14
+code-size extract14 16xi8 2
+code-size insert15 16xi8 14
+code-size insertp15 16xi8 14
+code-size extract15 16xi8 2
+code-size broadcast 16xi8 3
+size-latency trunc 2xi8 2xi16 1
+size-latency trunc 2xi8 2xi32 1
+size-latency trunc 2xi8 2xi64 1
+size-latency fptosi 2xi8 2xfloat 1
+size-latency fptoui 2xi8 2xfloat 1
+size-latency fptosi 2xi8 2xdouble 1
+size-latency fptoui 2xi8 2xdouble 1
+size-latency zext 2xi16 2xi8 1
+size-latency sext 2xi16 2xi8 1
+size-latency trunc 2xi16 2xi32 1
+size-latency trunc 2xi16 2xi64 1
+size-latency fptosi 2xi16 2xfloat 1
+size-latency fptoui 2xi16 2xfloat 1
+size-latency fptosi 2xi16 2xdouble 1
+size-latency fptoui 2xi16 2xdouble 1
+size-latency zext 2xi32 2xi8 1
+size-latency sext 2xi32 2xi8 1
+size-latency zext 2xi32 2xi16 1
+size-latency sext 2xi32 2xi16 1
+size-latency trunc 2xi32 2xi64 1
+size-latency fptosi 2xi32 2xfloat 1
+size-latency fptoui 2xi32 2xfloat 1
+size-latency fptosi 2xi32 2xdouble 1
+size-latency fptoui 2xi32 2xdouble 1
+size-latency zext 2xi64 2xi8 1
+size-latency sext 2xi64 2xi8 1
+size-latency zext 2xi64 2xi16 1
+size-latency sext 2xi64 2xi16 1
+size-latency zext 2xi64 2xi32 1
+size-latency sext 2xi64 2xi32 1
+size-latency fptosi 2xi64 2xfloat 1
+size-latency fptoui 2xi64 2xfloat 1
+size-latency fptosi 2xi64 2xdouble 1
+size-latency fptoui 2xi64 2xdouble 1
+size-latency sitofp 2xfloat 2xi8 1
+size-latency uitofp 2xfloat 2xi8 1
+size-latency sitofp 2xfloat 2xi16 1
+size-latency uitofp 2xfloat 2xi16 1
+size-latency sitofp 2xfloat 2xi32 1
+size-latency uitofp 2xfloat 2xi32 1
+size-latency sitofp 2xfloat 2xi64 1
+size-latency uitofp 2xfloat 2xi64 1
+size-latency fptrunc 2xfloat 2xdouble 1
+size-latency sitofp 2xdouble 2xi8 1
+size-latency uitofp 2xdouble 2xi8 1
+size-latency sitofp 2xdouble 2xi16 1
+size-latency uitofp 2xdouble 2xi16 1
+size-latency sitofp 2xdouble 2xi32 1
+size-latency uitofp 2xdouble 2xi32 1
+size-latency sitofp 2xdouble 2xi64 1
+size-latency uitofp 2xdouble 2xi64 1
+size-latency fpext 2xdouble 2xfloat 1
+size-latency trunc 4xi8 4xi16 1
+size-latency trunc 4xi8 4xi32 1
+size-latency trunc 4xi8 4xi64 2
+size-latency fptosi 4xi8 4xfloat 1
+size-latency fptoui 4xi8 4xfloat 1
+size-latency fptosi 4xi8 4xdouble 2
+size-latency fptoui 4xi8 4xdouble 2
+size-latency zext 4xi16 4xi8 1
+size-latency sext 4xi16 4xi8 1
+size-latency trunc 4xi16 4xi32 1
+size-latency trunc 4xi16 4xi64 2
+size-latency fptosi 4xi16 4xfloat 1
+size-latency fptoui 4xi16 4xfloat 1
+size-latency fptosi 4xi16 4xdouble 2
+size-latency fptoui 4xi16 4xdouble 2
+size-latency zext 4xi32 4xi8 1
+size-latency sext 4xi32 4xi8 1
+size-latency zext 4xi32 4xi16 1
+size-latency sext 4xi32 4xi16 1
+size-latency trunc 4xi32 4xi64 2
+size-latency fptosi 4xi32 4xfloat 1
+size-latency fptoui 4xi32 4xfloat 1
+size-latency fptosi 4xi32 4xdouble 2
+size-latency fptoui 4xi32 4xdouble 2
+size-latency zext 4xi64 4xi8 2
+size-latency sext 4xi64 4xi8 2
+size-latency zext 4xi64 4xi16 2
+size-latency sext 4xi64 4xi16 2
+size-latency zext 4xi64 4xi32 2
+size-latency sext 4xi64 4xi32 2
+size-latency fptosi 4xi64 4xfloat 1
+size-latency fptoui 4xi64 4xfloat 1
+size-latency fptosi 4xi64 4xdouble 1
+size-latency fptoui 4xi64 4xdouble 1
+size-latency sitofp 4xfloat 4xi8 1
+size-latency uitofp 4xfloat 4xi8 1
+size-latency sitofp 4xfloat 4xi16 1
+size-latency uitofp 4xfloat 4xi16 1
+size-latency sitofp 4xfloat 4xi32 1
+size-latency uitofp 4xfloat 4xi32 1
+size-latency sitofp 4xfloat 4xi64 2
+size-latency uitofp 4xfloat 4xi64 2
+size-latency fptrunc 4xfloat 4xdouble 1
+size-latency sitofp 4xdouble 4xi8 2
+size-latency uitofp 4xdouble 4xi8 2
+size-latency sitofp 4xdouble 4xi16 2
+size-latency uitofp 4xdouble 4xi16 2
+size-latency sitofp 4xdouble 4xi32 2
+size-latency uitofp 4xdouble 4xi32 2
+size-latency sitofp 4xdouble 4xi64 2
+size-latency uitofp 4xdouble 4xi64 2
+size-latency fpext 4xdouble 4xfloat 1
+size-latency trunc 8xi8 8xi16 1
+size-latency trunc 8xi8 8xi32 2
+size-latency trunc 8xi8 8xi64 4
+size-latency fptosi 8xi8 8xfloat 2
+size-latency fptoui 8xi8 8xfloat 2
+size-latency fptosi 8xi8 8xdouble 4
+size-latency fptoui 8xi8 8xdouble 4
+size-latency zext 8xi16 8xi8 1
+size-latency sext 8xi16 8xi8 1
+size-latency trunc 8xi16 8xi32 1
+size-latency trunc 8xi16 8xi64 4
+size-latency fptosi 8xi16 8xfloat 2
+size-latency fptoui 8xi16 8xfloat 2
+size-latency fptosi 8xi16 8xdouble 4
+size-latency fptoui 8xi16 8xdouble 4
+size-latency zext 8xi32 8xi8 2
+size-latency sext 8xi32 8xi8 2
+size-latency zext 8xi32 8xi16 2
+size-latency sext 8xi32 8xi16 2
+size-latency trunc 8xi32 8xi64 4
+size-latency fptosi 8xi32 8xfloat 2
+size-latency fptoui 8xi32 8xfloat 2
+size-latency fptosi 8xi32 8xdouble 4
+size-latency fptoui 8xi32 8xdouble 4
+size-latency zext 8xi64 8xi8 4
+size-latency sext 8xi64 8xi8 4
+size-latency zext 8xi64 8xi16 4
+size-latency sext 8xi64 8xi16 4
+size-latency zext 8xi64 8xi32 4
+size-latency sext 8xi64 8xi32 4
+size-latency fptosi 8xi64 8xfloat 1
+size-latency fptoui 8xi64 8xfloat 1
+size-latency fptosi 8xi64 8xdouble 1
+size-latency fptoui 8xi64 8xdouble 1
+size-latency sitofp 8xfloat 8xi8 2
+size-latency uitofp 8xfloat 8xi8 2
+size-latency sitofp 8xfloat 8xi16 2
+size-latency uitofp 8xfloat 8xi16 2
+size-latency sitofp 8xfloat 8xi32 2
+size-latency uitofp 8xfloat 8xi32 2
+size-latency sitofp 8xfloat 8xi64 4
+size-latency uitofp 8xfloat 8xi64 4
+size-latency fptrunc 8xfloat 8xdouble 1
+size-latency sitofp 8xdouble 8xi8 4
+size-latency uitofp 8xdouble 8xi8 4
+size-latency sitofp 8xdouble 8xi16 4
+size-latency uitofp 8xdouble 8xi16 4
+size-latency sitofp 8xdouble 8xi32 4
+size-latency uitofp 8xdouble 8xi32 4
+size-latency sitofp 8xdouble 8xi64 4
+size-latency uitofp 8xdouble 8xi64 4
+size-latency fpext 8xdouble 8xfloat 1
+size-latency trunc 16xi8 16xi16 1
+size-latency trunc 16xi8 16xi32 1
+size-latency trunc 16xi8 16xi64 8
+size-latency fptosi 16xi8 16xfloat 4
+size-latency fptoui 16xi8 16xfloat 4
+size-latency fptosi 16xi8 16xdouble 8
+size-latency fptoui 16xi8 16xdouble 8
+size-latency zext 16xi16 16xi8 2
+size-latency sext 16xi16 16xi8 2
+size-latency trunc 16xi16 16xi32 1
+size-latency trunc 16xi16 16xi64 8
+size-latency fptosi 16xi16 16xfloat 4
+size-latency fptoui 16xi16 16xfloat 4
+size-latency fptosi 16xi16 16xdouble 8
+size-latency fptoui 16xi16 16xdouble 8
+size-latency zext 16xi32 16xi8 4
+size-latency sext 16xi32 16xi8 4
+size-latency zext 16xi32 16xi16 4
+size-latency sext 16xi32 16xi16 4
+size-latency trunc 16xi32 16xi64 8
+size-latency fptosi 16xi32 16xfloat 4
+size-latency fptoui 16xi32 16xfloat 4
+size-latency fptosi 16xi32 16xdouble 8
+size-latency fptoui 16xi32 16xdouble 8
+size-latency zext 16xi64 16xi8 8
+size-latency sext 16xi64 16xi8 8
+size-latency zext 16xi64 16xi16 8
+size-latency sext 16xi64 16xi16 8
+size-latency zext 16xi64 16xi32 8
+size-latency sext 16xi64 16xi32 8
+size-latency fptosi 16xi64 16xfloat 1
+size-latency fptoui 16xi64 16xfloat 1
+size-latency fptosi 16xi64 16xdouble 1
+size-latency fptoui 16xi64 16xdouble 1
+size-latency sitofp 16xfloat 16xi8 4
+size-latency uitofp 16xfloat 16xi8 4
+size-latency sitofp 16xfloat 16xi16 4
+size-latency uitofp 16xfloat 16xi16 4
+size-latency sitofp 16xfloat 16xi32 4
+size-latency uitofp 16xfloat 16xi32 4
+size-latency sitofp 16xfloat 16xi64 8
+size-latency uitofp 16xfloat 16xi64 8
+size-latency fptrunc 16xfloat 16xdouble 1
+size-latency sitofp 16xdouble 16xi8 8
+size-latency uitofp 16xdouble 16xi8 8
+size-latency sitofp 16xdouble 16xi16 8
+size-latency uitofp 16xdouble 16xi16 8
+size-latency sitofp 16xdouble 16xi32 8
+size-latency uitofp 16xdouble 16xi32 8
+size-latency sitofp 16xdouble 16xi64 8
+size-latency uitofp 16xdouble 16xi64 8
+size-latency fpext 16xdouble 16xfloat 1
+size-latency trunc 32xi8 32xi16 4
+size-latency trunc 32xi8 32xi32 8
+size-latency fptosi 32xi8 32xfloat 8
+size-latency fptoui 32xi8 32xfloat 8
+size-latency zext 32xi16 32xi8 4
+size-latency sext 32xi16 32xi8 4
+size-latency trunc 32xi16 32xi32 8
+size-latency fptosi 32xi16 32xfloat 8
+size-latency fptoui 32xi16 32xfloat 8
+size-latency zext 32xi32 32xi8 8
+size-latency sext 32xi32 32xi8 8
+size-latency zext 32xi32 32xi16 8
+size-latency sext 32xi32 32xi16 8
+size-latency fptosi 32xi32 32xfloat 8
+size-latency fptoui 32xi32 32xfloat 8
+size-latency sitofp 32xfloat 32xi8 8
+size-latency uitofp 32xfloat 32xi8 8
+size-latency sitofp 32xfloat 32xi16 8
+size-latency uitofp 32xfloat 32xi16 8
+size-latency sitofp 32xfloat 32xi32 8
+size-latency uitofp 32xfloat 32xi32 8
+size-latency fadd 2xfloat 1
+size-latency fsub 2xfloat 1
+size-latency fmul 2xfloat 1
+size-latency fdiv 2xfloat 1
+size-latency fneg 2xfloat 1
+size-latency load 2xfloat 1
+size-latency store 2xfloat 1
+size-latency fadd 2xdouble 1
+size-latency fsub 2xdouble 1
+size-latency fmul 2xdouble 1
+size-latency fdiv 2xdouble 1
+size-latency fneg 2xdouble 1
+size-latency load 2xdouble 1
+size-latency store 2xdouble 1
+size-latency fadd 4xfloat 1
+size-latency fsub 4xfloat 1
+size-latency fmul 4xfloat 1
+size-latency fdiv 4xfloat 1
+size-latency fneg 4xfloat 1
+size-latency load 4xfloat 1
+size-latency store 4xfloat 1
+size-latency fadd 4xdouble 2
+size-latency fsub 4xdouble 2
+size-latency fmul 4xdouble 2
+size-latency fdiv 4xdouble 2
+size-latency fneg 4xdouble 2
+size-latency load 4xdouble 1
+size-latency store 4xdouble 1
+size-latency fadd 8xfloat 2
+size-latency fsub 8xfloat 2
+size-latency fmul 8xfloat 2
+size-latency fdiv 8xfloat 2
+size-latency fneg 8xfloat 2
+size-latency load 8xfloat 1
+size-latency store 8xfloat 1
+size-latency fadd 8xdouble 4
+size-latency fsub 8xdouble 4
+size-latency fmul 8xdouble 4
+size-latency fdiv 8xdouble 4
+size-latency fneg 8xdouble 4
+size-latency load 8xdouble 1
+size-latency store 8xdouble 1
+size-latency fadd 16xfloat 4
+size-latency fsub 16xfloat 4
+size-latency fmul 16xfloat 4
+size-latency fdiv 16xfloat 4
+size-latency fneg 16xfloat 4
+size-latency load 16xfloat 1
+size-latency store 16xfloat 1
+size-latency fadd 16xdouble 8
+size-latency fsub 16xdouble 8
+size-latency fmul 16xdouble 8
+size-latency fdiv 16xdouble 8
+size-latency fneg 16xdouble 8
+size-latency load 16xdouble 1
+size-latency store 16xdouble 1
+size-latency fadd 32xfloat 8
+size-latency fsub 32xfloat 8
+size-latency fmul 32xfloat 8
+size-latency fdiv 32xfloat 8
+size-latency fneg 32xfloat 8
+size-latency load 32xfloat 1
+size-latency store 32xfloat 1
+size-latency insert0 2xi8 3
+size-latency insertp0 2xi8 1
+size-latency extract0 2xi8 1
+size-latency insert1 2xi8 3
+size-latency insertp1 2xi8 3
+size-latency extract1 2xi8 2
+size-latency broadcast 2xi8 1
+size-latency insert0 2xi16 1
+size-latency insertp0 2xi16 1
+size-latency extract0 2xi16 1
+size-latency insert1 2xi16 1
+size-latency insertp1 2xi16 1
+size-latency extract1 2xi16 1
+size-latency broadcast 2xi16 1
+size-latency insert0 2xi32 3
+size-latency insertp0 2xi32 1
+size-latency extract0 2xi32 1
+size-latency insert1 2xi32 3
+size-latency insertp1 2xi32 3
+size-latency extract1 2xi32 2
+size-latency broadcast 2xi32 1
+size-latency insert0 2xi64 2
+size-latency insertp0 2xi64 1
+size-latency extract0 2xi64 1
+size-latency insert1 2xi64 2
+size-latency insertp1 2xi64 2
+size-latency extract1 2xi64 2
+size-latency broadcast 2xi64 1
+size-latency insert0 2xfloat 1
+size-latency insertp0 2xfloat 0
+size-latency extract0 2xfloat 0
+size-latency insert1 2xfloat 2
+size-latency insertp1 2xfloat 2
+size-latency extract1 2xfloat 1
+size-latency broadcast 2xfloat 1
+size-latency insert0 2xdouble 1
+size-latency insertp0 2xdouble 0
+size-latency extract0 2xdouble 0
+size-latency insert1 2xdouble 1
+size-latency insertp1 2xdouble 1
+size-latency extract1 2xdouble 1
+size-latency broadcast 2xdouble 1
+size-latency insert0 4xi8 5
+size-latency insertp0 4xi8 1
+size-latency extract0 4xi8 1
+size-latency insert1 4xi8 5
+size-latency insertp1 4xi8 5
+size-latency extract1 4xi8 2
+size-latency insert2 4xi8 5
+size-latency insertp2 4xi8 5
+size-latency extract2 4xi8 2
+size-latency insert3 4xi8 5
+size-latency insertp3 4xi8 5
+size-latency extract3 4xi8 2
+size-latency broadcast 4xi8 2
+size-latency insert0 4xi16 1
+size-latency insertp0 4xi16 1
+size-latency extract0 4xi16 1
+size-latency insert1 4xi16 1
+size-latency insertp1 4xi16 1
+size-latency extract1 4xi16 1
+size-latency insert2 4xi16 1
+size-latency insertp2 4xi16 1
+size-latency extract2 4xi16 1
+size-latency insert3 4xi16 1
+size-latency insertp3 4xi16 1
+size-latency extract3 4xi16 1
+size-latency broadcast 4xi16 1
+size-latency insert0 4xi32 3
+size-latency insertp0 4xi32 1
+size-latency extract0 4xi32 1
+size-latency insert1 4xi32 3
+size-latency insertp1 4xi32 3
+size-latency extract1 4xi32 2
+size-latency insert2 4xi32 3
+size-latency insertp2 4xi32 3
+size-latency extract2 4xi32 2
+size-latency insert3 4xi32 3
+size-latency insertp3 4xi32 3
+size-latency extract3 4xi32 2
+size-latency broadcast 4xi32 1
+size-latency insert0 4xfloat 1
+size-latency insertp0 4xfloat 0
+size-latency extract0 4xfloat 0
+size-latency insert1 4xfloat 2
+size-latency insertp1 4xfloat 2
+size-latency extract1 4xfloat 1
+size-latency insert2 4xfloat 2
+size-latency insertp2 4xfloat 2
+size-latency extract2 4xfloat 1
+size-latency insert3 4xfloat 2
+size-latency insertp3 4xfloat 2
+size-latency extract3 4xfloat 1
+size-latency broadcast 4xfloat 1
+size-latency insert0 8xi8 8
+size-latency insertp0 8xi8 1
+size-latency extract0 8xi8 1
+size-latency insert1 8xi8 8
+size-latency insertp1 8xi8 8
+size-latency extract1 8xi8 2
+size-latency insert2 8xi8 8
+size-latency insertp2 8xi8 8
+size-latency extract2 8xi8 2
+size-latency insert3 8xi8 8
+size-latency insertp3 8xi8 8
+size-latency extract3 8xi8 2
+size-latency insert4 8xi8 8
+size-latency insertp4 8xi8 8
+size-latency extract4 8xi8 2
+size-latency insert5 8xi8 8
+size-latency insertp5 8xi8 8
+size-latency extract5 8xi8 2
+size-latency insert6 8xi8 8
+size-latency insertp6 8xi8 8
+size-latency extract6 8xi8 2
+size-latency insert7 8xi8 8
+size-latency insertp7 8xi8 8
+size-latency extract7 8xi8 2
+size-latency broadcast 8xi8 2
+size-latency insert0 8xi16 1
+size-latency insertp0 8xi16 1
+size-latency extract0 8xi16 1
+size-latency insert1 8xi16 1
+size-latency insertp1 8xi16 1
+size-latency extract1 8xi16 1
+size-latency insert2 8xi16 1
+size-latency insertp2 8xi16 1
+size-latency extract2 8xi16 1
+size-latency insert3 8xi16 1
+size-latency insertp3 8xi16 1
+size-latency extract3 8xi16 1
+size-latency insert4 8xi16 1
+size-latency insertp4 8xi16 1
+size-latency extract4 8xi16 1
+size-latency insert5 8xi16 1
+size-latency insertp5 8xi16 1
+size-latency extract5 8xi16 1
+size-latency insert6 8xi16 1
+size-latency insertp6 8xi16 1
+size-latency extract6 8xi16 1
+size-latency insert7 8xi16 1
+size-latency insertp7 8xi16 1
+size-latency extract7 8xi16 1
+size-latency broadcast 8xi16 2
+size-latency insert0 16xi8 14
+size-latency insertp0 16xi8 1
+size-latency extract0 16xi8 1
+size-latency insert1 16xi8 14
+size-latency insertp1 16xi8 14
+size-latency extract1 16xi8 2
+size-latency insert2 16xi8 14
+size-latency insertp2 16xi8 14
+size-latency extract2 16xi8 2
+size-latency insert3 16xi8 14
+size-latency insertp3 16xi8 14
+size-latency extract3 16xi8 2
+size-latency insert4 16xi8 14
+size-latency insertp4 16xi8 14
+size-latency extract4 16xi8 2
+size-latency insert5 16xi8 14
+size-latency insertp5 16xi8 14
+size-latency extract5 16xi8 2
+size-latency insert6 16xi8 14
+size-latency insertp6 16xi8 14
+size-latency extract6 16xi8 2
+size-latency insert7 16xi8 14
+size-latency insertp7 16xi8 14
+size-latency extract7 16xi8 2
+size-latency insert8 16xi8 14
+size-latency insertp8 16xi8 14
+size-latency extract8 16xi8 2
+size-latency insert9 16xi8 14
+size-latency insertp9 16xi8 14
+size-latency extract9 16xi8 2
+size-latency insert10 16xi8 14
+size-latency insertp10 16xi8 14
+size-latency extract10 16xi8 2
+size-latency insert11 16xi8 14
+size-latency insertp11 16xi8 14
+size-latency extract11 16xi8 2
+size-latency insert12 16xi8 14
+size-latency insertp12 16xi8 14
+size-latency extract12 16xi8 2
+size-latency insert13 16xi8 14
+size-latency insertp13 16xi8 14
+size-latency extract13 16xi8 2
+size-latency insert14 16xi8 14
+size-latency insertp14 16xi8 14
+size-latency extract14 16xi8 2
+size-latency insert15 16xi8 14
+size-latency insertp15 16xi8 14
+size-latency extract15 16xi8 2
+size-latency broadcast 16xi8 4

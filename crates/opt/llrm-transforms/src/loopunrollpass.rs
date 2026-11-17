@@ -83,7 +83,6 @@ use crate::looppeel::PeelingPreferences;
 use crate::loopunroll::{Exit, Options as UnrollOptions, Unrolled, unroll_loop_blocks};
 
 mod price;
-mod recurrence;
 mod throughput;
 pub use crate::trial;
 
@@ -214,7 +213,8 @@ impl LoopOptions {
         let id = lp.get_loop_latch(function).and_then(|latch| function.terminator(latch)).and_then(|term| {
             function.instruction(term).metadata.iter().find(|(kind, _)| kind == "llvm.loop").map(|(_, id)| *id)
         });
-        // The loop ID may be one the vectorizer made earlier in this run: not yet in the module's table.
+        // The loop ID may be one the vectorizer made earlier in this run: not
+        // yet in the module's table.
         let node =
             |at: llrm_mir::module::MetadataId| crate::loopvectorizeskeleton::node_at(&*run.declared, run.metadata, at);
         let Some(id) = id else { return Self(Vec::new()) };
@@ -1711,10 +1711,6 @@ pub(crate) fn compute_unroll_count(
     if !up.runtime {
         return 0;
     }
-    if recurrence::recurrence_bound(run, lp) {
-        why(run, lp, "runtime unroll: the loop-carried chain bounds a trip (RU-REC)");
-        return 0;
-    }
 
     let mut count = up.default_unroll_runtime_count;
     // Reduce the count to the largest power-of-two factor of the original count
@@ -2033,8 +2029,9 @@ fn try_to_unroll_loop(
         && trial::speed_unroll().is_none()
         && (count > 0 || trip_count > 0)
     {
-        // DEVIATE UNROLL-SPEED-TRIAL: the same question asked under each variant; a driver compiles a variant only
-        // where an answer differs.
+        // DEVIATE UNROLL-SPEED-TRIAL: the same question asked under each
+        // variant; a driver compiles a variant only where an answer
+        // differs.
         let variant = if count > 0 {
             Some(trial::SpeedUnroll::NoGrow)
         } else if run.options.opt_level == 2 && up.threshold < trial::WIDE_THRESHOLD {
