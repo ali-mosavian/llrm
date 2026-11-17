@@ -56,7 +56,10 @@ int main(void) {
 
 #[test]
 fn ld3_results_live_across_a_call_are_stored_permuted() {
-    if ["aarch64-linux-gnu-gcc", "qemu-aarch64"].iter().any(|tool| Command::new(tool).arg("--version").output().is_err()) {
+    if ["aarch64-linux-gnu-gcc", "qemu-aarch64"]
+        .iter()
+        .any(|tool| Command::new(tool).arg("--version").output().is_err())
+    {
         eprintln!("skipped: needs aarch64-linux-gnu-gcc and qemu-aarch64");
         return;
     }

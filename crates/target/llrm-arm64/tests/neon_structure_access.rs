@@ -8,8 +8,13 @@
 use llrm_arm64::driver;
 use llrm_arm64::machine::Platform;
 
-const SHAPES: [(&str, &str); 5] =
-    [("<16 x i8>", "v16i8"), ("<4 x i32>", "v4i32"), ("<2 x i64>", "v2i64"), ("<8 x i8>", "v8i8"), ("<2 x i32>", "v2i32")];
+const SHAPES: [(&str, &str); 5] = [
+    ("<16 x i8>", "v16i8"),
+    ("<4 x i32>", "v4i32"),
+    ("<2 x i64>", "v2i64"),
+    ("<8 x i8>", "v8i8"),
+    ("<2 x i32>", "v2i32"),
+];
 
 /// `r = ldN [p]`, the members combined in a way that needs each, `stN [o]` of
 /// results: the registers `ldN`/`stN` list are consecutive (`v31` wraps to
@@ -48,7 +53,10 @@ fn list(
 ) -> Vec<u32> {
     let line = asm.lines().find(|line| line.trim_start().starts_with(mnemonic)).expect(mnemonic);
     let inside = &line[line.find('{').expect("a list")..line.find('}').expect("a list")];
-    inside.split(',').map(|one| one.trim_start_matches(['{', ' ', 'v']).split('.').next().unwrap().parse().unwrap()).collect()
+    inside
+        .split(',')
+        .map(|one| one.trim_start_matches(['{', ' ', 'v']).split('.').next().unwrap().parse().unwrap())
+        .collect()
 }
 
 #[test]
