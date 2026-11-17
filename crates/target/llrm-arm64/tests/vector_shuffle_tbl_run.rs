@@ -91,3 +91,43 @@ fn tbl_shuffles_match_the_scalar_reference() {
     let ran = Command::new("qemu-aarch64").arg(&program).output().unwrap();
     assert_eq!(ran.status.code(), Some(0), "bit n set: shuffle n's output differs");
 }
+
+/// The byte zero-extend of 8 lanes to 32 (two `tbl`, a half each) puts each
+/// source byte at the first byte of its word and zeros elsewhere.
+#[test]
+fn a_zero_extend_of_eight_bytes_to_words_runs_right() {
+    if ["aarch64-linux-gnu-gcc", "qemu-aarch64"]
+        .iter()
+        .any(|tool| Command::new(tool).arg("--version").output().is_err())
+    {
+        eprintln!("skipped: needs aarch64-linux-gnu-gcc and qemu-aarch64");
+        return;
+    }
+    let mask: Vec<String> =
+        (0..8).flat_map(|at| [format!("i32 {at}"), "i32 8".into(), "i32 8".into(), "i32 8".into()]).collect();
+    let ll = format!(
+        "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128-Fn32\"\n\
+         target triple = \"aarch64-unknown-linux-gnu\"\n\
+         define void @k(ptr %in, ptr %out) {{\n  %a = load <8 x i8>, ptr %in, align 1\n  \
+         %r = shufflevector <8 x i8> %a, <8 x i8> zeroinitializer, <32 x i32> <{}>\n  \
+         store <32 x i8> %r, ptr %out, align 1\n  ret void\n}}\n",
+        mask.join(", ")
+    );
+    let main_c = "#include <string.h>\nvoid k(const unsigned char *, unsigned char *);\n\
+        int main(void) { unsigned char in[8], out[32], want[32] = {0};\n\
+        for (int i = 0; i < 8; i++) { in[i] = (unsigned char)(i * 29 + 7); want[4 * i] = in[i]; }\n\
+        memset(out, 0xaa, sizeof out); k(in, out); return memcmp(out, want, 32) ? 1 : 0; }\n";
+    let dir = tempfile::tempdir().unwrap();
+    let (file, object, source, program) =
+        (dir.path().join("k.ll"), dir.path().join("k.o"), dir.path().join("main.c"), dir.path().join("k"));
+    std::fs::write(&file, ll).unwrap();
+    std::fs::write(&source, main_c).unwrap();
+    let run = |command: &mut Command| {
+        let said = command.output().expect("the tool starts");
+        assert!(said.status.success(), "{command:?}: {}", String::from_utf8_lossy(&said.stderr));
+    };
+    run(Command::new(env!("CARGO_BIN_EXE_llrm-arm64-llc")).arg("-o").arg(&object).arg(&file));
+    run(Command::new("aarch64-linux-gnu-gcc").arg("-static").arg("-o").arg(&program).arg(&source).arg(&object));
+    let ran = Command::new("qemu-aarch64").arg(&program).output().unwrap();
+    assert_eq!(ran.status.code(), Some(0), "the widened words differ from the reference");
+}

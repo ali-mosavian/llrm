@@ -887,9 +887,10 @@ impl SelectionDAG {
         }
     }
 
-    /// A node the legalizer replaced, which nothing reads now, is unfiled from the CSE table: a later
-    /// `getNode` of the same operation must make a node, not return the replaced one, which is not
-    /// legalized again (an `extract_element` made twice, the second one never lowered).
+    /// A node the legalizer replaced, which nothing reads now, is unfiled from
+    /// the CSE table: a later `getNode` of the same operation must make a
+    /// node, not return the replaced one, which is not legalized again (an
+    /// `extract_element` made twice, the second one never lowered).
     pub fn forget_replaced(
         &mut self,
         node: u32,
@@ -2363,6 +2364,11 @@ impl SelectionDAG {
         ops: &[SDValue],
         flags: SDNodeFlags,
     ) -> SDValue {
+        if opcode == ISD::ConcatVectors
+            && let Some(folded) = self.fold_concat_vectors(vt, ops)
+        {
+            return folded;
+        }
         let folded = match *ops {
             [n1] => self.fold_unary(opcode, vt, n1, flags),
             [n1, n2] => self.fold_binary(opcode, vt, n1, n2, flags),
@@ -2373,6 +2379,63 @@ impl SelectionDAG {
             Folded::Done(value) => value,
             Folded::Keep(ops) => self.intern(opcode, &[vt], &ops, flags, NodeData::None),
         }
+    }
+
+    /// `foldCONCAT_VECTORS` (SelectionDAG.cpp#L6969): a concatenation of one
+    /// vector is that vector, of undefs is undef, of the pieces of one vector
+    /// in order is that vector, and of undefs and `BUILD_VECTOR`s is one
+    /// `BUILD_VECTOR`. DEVIATE CONCAT-EXT (owner w11, exit 2026-11-27): the
+    /// pin widens a `BUILD_VECTOR` whose scalars are wider than the vector's
+    /// (`isZExtFree`); here that case is left a `CONCAT_VECTORS`.
+    fn fold_concat_vectors(
+        &mut self,
+        vt: EVT,
+        ops: &[SDValue],
+    ) -> Option<SDValue> {
+        if ops.len() == 1 {
+            return Some(ops[0]);
+        }
+        if ops.is_empty() || ops.iter().any(|op| self.value_type(*op) != self.value_type(ops[0])) {
+            return None;
+        }
+        if ops.iter().all(|op| self.is_undef(*op)) {
+            let poison = ops.iter().all(|op| self.opcode(*op) == ISD::Poison);
+            return Some(if poison { self.get_poison(vt) } else { self.get_undef(vt) });
+        }
+        let piece = self.value_type(ops[0]).lanes();
+        let mut source = None;
+        let identity = ops.iter().enumerate().all(|(at, op)| {
+            let from = (self.opcode(*op) == ISD::ExtractSubvector).then(|| self.operand(*op, 0));
+            let index =
+                (self.opcode(*op) == ISD::ExtractSubvector).then(|| self.constant(self.operand(*op, 1))).flatten();
+            let ok = from.is_some_and(|from| self.value_type(from) == vt && *source.get_or_insert(from) == from)
+                && index == Some(u128::from(at as u32 * piece));
+            ok
+        });
+        if identity {
+            return source;
+        }
+        if !vt.is_vector() {
+            return None;
+        }
+        let scalar = vt.element();
+        let mut elements = Vec::with_capacity(vt.lanes() as usize);
+        for op in ops {
+            let lanes = self.value_type(*op).lanes() as usize;
+            match self.opcode(*op) {
+                ISD::Undef | ISD::Poison => {
+                    let undef =
+                        if self.opcode(*op) == ISD::Poison { self.get_poison(scalar) } else { self.get_undef(scalar) };
+                    elements.extend(std::iter::repeat_n(undef, lanes));
+                }
+                ISD::BuildVector => elements.extend((0..lanes).map(|at| self.operand(*op, at))),
+                _ => return None,
+            }
+        }
+        if elements.iter().any(|one| !self.is_undef(*one) && self.value_type(*one) != scalar) {
+            return None;
+        }
+        Some(self.get_build_vector(vt, &elements))
     }
 
     /// The filed one-result node `(opcode, vt, ops)`, none if there is no such

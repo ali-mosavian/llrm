@@ -45,3 +45,23 @@ define void @f(ptr %q, ptr %o) {
     );
     assert!(asm.contains("tbl v"), "{asm}");
 }
+
+/// A byte zero-extend of 8 lanes to 32 (the `<0,8,8,8,1,8,8,8,..>` shuffle
+/// with zeros): the pad makes each half's second operand `concat(zeros,
+/// undef)`, which `foldCONCAT_VECTORS` makes the zero `BUILD_VECTOR` that
+/// `GenerateTBL` takes. Unfolded it was no zero vector and the 256-bit shuffle
+/// died in the legalizer ("custom lowering of VectorShuffle", jpeg_fixed -O3).
+#[test]
+fn a_byte_zero_extend_of_eight_lanes_to_thirty_two_is_two_tbl() {
+    let asm = assembly(
+        r#"
+define void @f(ptr %q, ptr %p) {
+  %a = load <8 x i8>, ptr %q, align 1
+  %r = shufflevector <8 x i8> %a, <8 x i8> zeroinitializer, <32 x i32> <i32 0, i32 8, i32 8, i32 8, i32 1, i32 8, i32 8, i32 8, i32 2, i32 8, i32 8, i32 8, i32 3, i32 8, i32 8, i32 8, i32 4, i32 8, i32 8, i32 8, i32 5, i32 8, i32 8, i32 8, i32 6, i32 8, i32 8, i32 8, i32 7, i32 8, i32 8, i32 8>
+  store <32 x i8> %r, ptr %p, align 1
+  ret void
+}
+"#,
+    );
+    assert_eq!(asm.matches("tbl v").count(), 2, "{asm}");
+}
