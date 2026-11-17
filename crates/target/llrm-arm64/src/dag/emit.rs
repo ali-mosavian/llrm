@@ -915,6 +915,17 @@ fn vector_inst(
             }
         }
     }
+    // `TBLv16i8One`, `TBLv8i8One`: the table and the indices.
+    if let Some(lanes) = match name {
+        "TBLv16i8One" => Some(Arrangement::B16),
+        "TBLv8i8One" => Some(Arrangement::B8),
+        _ => None,
+    } {
+        return Some(match operands {
+            [Operand::Fpr(rn), Operand::Fpr(rm)] => Ok(Inst::VectorTable { lanes, rd, rn: *rn, rm: *rm }),
+            _ => wrong(),
+        });
+    }
     // `MULv4i32_indexed`: the multiplier is a lane of `rm`.
     if name == "MULv4i32_indexed" {
         return Some(match operands {
