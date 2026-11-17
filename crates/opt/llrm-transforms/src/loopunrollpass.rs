@@ -2333,6 +2333,9 @@ pub(crate) fn cost_estimator(
         }
     }
     let mut loop_size = metrics.num_insts;
+    if run.tti.unroll_prices_split_gep_base() && loop_size.valid {
+        loop_size.value += split_gep_bases(run, lp);
+    }
     // Do not allow an estimate of size zero: the code using this size may
     // assume that each loop has at least three instructions.
     if loop_size.valid && loop_size.value < i64::from(be_insns) + 1 {
@@ -2343,6 +2346,43 @@ pub(crate) fn cost_estimator(
         not_duplicatable: metrics.not_duplicatable,
         loop_size,
     }
+}
+
+/// DEVIATE UNROLL-GEP (`Tti::unroll_prices_split_gep_base`): the `gep`s of `lp`
+/// that index from the result of a `gep` outside it by a variable, at a scale
+/// that is no x86 one (1, 2, 4, 8): the address stays two variable indexes
+/// and a scaled row, no addressing mode, as clang 20 leaves it.
+fn split_gep_bases(
+    run: &Run,
+    lp: Loop,
+) -> i64 {
+    let function = &*run.function;
+    let mut count = 0;
+    for &block in lp.get_blocks() {
+        for inst in function.iter_block(block) {
+            let operation = function.instruction(inst);
+            if !matches!(operation.opcode, Opcode::GetElementPtr { .. })
+                || operation.operands[1..].iter().all(|index| matches!(index, Operand::Constant(_)))
+            {
+                continue;
+            }
+            let Operand::Value(base) = operation.operands[0] else { continue };
+            let ValueDef::Instruction(def) = function.value(base).def else { continue };
+            let outer = function.instruction(def);
+            let Opcode::GetElementPtr { source } = outer.opcode else { continue };
+            if lp.contains_instruction(function, def)
+                || outer.operands.len() != 2
+                || matches!(outer.operands[1], Operand::Constant(_))
+            {
+                continue;
+            }
+            let row = run.layout.alloc_size(&run.context.types, source);
+            if !matches!(row, 1 | 2 | 4 | 8) {
+                count += 1;
+            }
+        }
+    }
+    count
 }
 
 /// The loop `lp` as the cloner reads it.

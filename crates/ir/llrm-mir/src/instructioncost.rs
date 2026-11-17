@@ -28,7 +28,7 @@ use crate::module::{Function, GlobalValue, InstId, Linkage, Operand, ValueDef, V
 use crate::opcode::{BinaryOp, CastOp, Flags, Opcode};
 use crate::tti::{
     AddressBase, AddressForm, ArithOp, CastKind, CmpSel, Cost, CostKind, ExtOperand, ExtUser, MemoryOp, OperandInfo,
-    Predicate, Tti, Ty, VectorTy,
+    Predicate, ShuffleKind, Tti, Ty, VectorInstrContext, VectorTy, LaneOp,
 };
 use crate::types::{Type, TypeId};
 
@@ -511,6 +511,17 @@ pub fn instruction_cost_known(
                     .and_then(|vector| tti.vector_reduction_cost(reduce, vector, ordered, kind))
                     .unwrap_or(Cost::INVALID);
             }
+            // `llvm.fmuladd` of a vector is its multiply and its add (`getIntrinsicInstrCost`).
+            if matches!(callee.intrinsic(), Some(Intrinsic::FMulAdd))
+                && let Some(vector) = vector_of(context, operation.ty)
+            {
+                let product = tti.vector_arithmetic_cost(ArithOp::FMul, vector, kind);
+                let sum = tti.vector_arithmetic_cost(ArithOp::FAdd, vector, kind);
+                return match (product, sum) {
+                    (Some(product), Some(sum)) => product + sum,
+                    _ => Cost::INVALID,
+                };
+            }
             if name.is_some_and(|name| name.starts_with("llvm.")) {
                 let arguments: Option<Vec<Ty>> =
                     operands[..operands.len() - 1].iter().map(|&one| modelled(one)).collect();
@@ -557,7 +568,25 @@ pub fn instruction_cost_known(
         // BasicTTIImpl::getInstructionCost prices these through getVectorInstrCost and
         // getShuffleCost; the model has no vector type yet (VECTORS-1 PR-D), so
         // they are invalid, never cheap.
-        Opcode::ExtractElement | Opcode::InsertElement | Opcode::ShuffleVector(_) => Cost::INVALID,
+        Opcode::InsertElement => {
+            // `getVectorInstrCost` at a constant lane; the target prices what it knows.
+            let vector = vector_of(context, operation.ty);
+            let index = operands.get(2).and_then(|&at| constant_int(context, at)).and_then(|at| u32::try_from(at).ok());
+            let into_poison =
+                matches!(operands[0], Operand::Constant(id) if matches!(context.get(id).kind, ConstantKind::Poison));
+            vector
+                .zip(index)
+                .and_then(|(vector, index)| {
+                    tti.vector_instr_cost(LaneOp::Insert, vector, Some(index), into_poison, VectorInstrContext::None, kind)
+                })
+                .unwrap_or(Cost::INVALID)
+        }
+        // A broadcast of lane 0, the one shuffle the targets price (`getShuffleCost`).
+        Opcode::ShuffleVector(mask) => vector_of(context, operation.ty)
+            .filter(|_| mask.iter().all(|lane| *lane == 0))
+            .and_then(|vector| tti.shuffle_cost(ShuffleKind::Broadcast, vector, mask, kind))
+            .unwrap_or(Cost::INVALID),
+        Opcode::ExtractElement => Cost::INVALID,
         Opcode::Alloca { .. } => {
             if is_static_alloca(function, inst) {
                 Cost::FREE

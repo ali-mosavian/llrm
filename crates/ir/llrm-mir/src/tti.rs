@@ -1470,6 +1470,17 @@ pub trait Tti {
         0
     }
 
+    /// DEVIATE UNROLL-GEP (owner llrm-target-x86-m64-b, exit 2026-11-30): the
+    /// unroller's size counts an address that the pin splits (`gep [N x i8], @A,
+    /// %row` outside the loop, `gep %row_base, %i` inside) as the one `gep` of
+    /// two variable indexes that the bar compiler (clang 20) leaves in the loop,
+    /// when the row's size is no x86 scale: one instruction more. The pin's
+    /// split makes a 12-trip loop of 14 instructions fit its threshold of 150
+    /// where clang 20's 16 do not, and clang 20 vectorizes the loop instead.
+    fn unroll_prices_split_gep_base(&self) -> bool {
+        false
+    }
+
     /// The same for the floats of an x87 target, against the stack's slots.
     fn unroll_promotion_fits_x87_stack(&self) -> bool {
         false

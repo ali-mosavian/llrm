@@ -505,6 +505,8 @@ impl llrm_target::Target for M64 {
                             unroll_promotion_fits_registers: true,
                             // `mov m64, imm32`: sign-extended.
                             unroll_store_immediate_bits: 32,
+                            // DEVIATE UNROLL-GEP (owner llrm-target-x86-m64-b, exit 2026-11-30): see Tuning.
+                            unroll_prices_split_gep_base: true,
                             rotation_guard_must_fold_at_size: true,
                             // DEVIATE SELOPT-C (owner m64-b, exit 2026-11-24): see
                             // `selectoptimize::SelectOptimizePass`.
