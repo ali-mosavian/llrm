@@ -3149,13 +3149,12 @@ pub trait Tti {
         &[]
     }
 
-    /// DEVIATE IU1: whether `IVUsers` meets the users of a value in use-list
-    /// order, as the pin does, where the default is descending program order.
-    /// LSR's ties follow it: wasm32 memory_expansion -O2 was 1307 B over the
-    /// pin and is 367 B under. Other targets state it when their cells agree.
-    /// Owner llrm-target-wasm; exit: every target judged, 2026-11-24.
+    /// Whether `IVUsers` meets the users of a value in use-list order, as the
+    /// pin's `for (Use &U : I->uses())`; use lists keep the pin's order since
+    /// #10160. A target whose cells are worse that way says false, with a
+    /// dated row (DEVIATE IU1, descending program order).
     fn lsr_users_in_use_list_order(&self) -> bool {
-        false
+        true
     }
 
     /// DEVIATE LSR-PHI (owner x87, exit 2026-11-24): whether `IVUsers` makes a
@@ -4085,5 +4084,24 @@ mod size_model_tests {
         let m = LsrSizeModel::X86;
         assert_eq!((m.disp_global.bytes, m.disp_frame.bytes, m.disp_short.bytes, m.disp_long.bytes), (4, 2, 1, 4));
         assert_eq!((m.base_add.bytes, (m.step)(32, Some(1)), m.setup.bytes, m.setup_cap), (3, 3, 3, 4));
+    }
+}
+
+#[cfg(test)]
+mod iu1_default_tests {
+    use super::*;
+
+    /// `IVUsers` meets a value's users in use-list order unless a target
+    /// opts out. Before, the default was descending program order, and the
+    /// targets that had not stated otherwise (wasm, m32, m64 through the
+    /// default `Tuning`) visited users in an order the pin does not.
+    #[test]
+    fn a_target_with_no_opinion_meets_users_in_use_list_order() {
+        assert!(Basic.lsr_users_in_use_list_order());
+        assert!(llrm_mir_default_tuning_uses_list_order());
+    }
+
+    fn llrm_mir_default_tuning_uses_list_order() -> bool {
+        crate::target::Tuning::PIN.lsr_users_in_use_list_order
     }
 }

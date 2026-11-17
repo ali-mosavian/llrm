@@ -582,7 +582,6 @@ pub struct Tuning {
     /// With `lsr_size_order`: price the code in x86-64's encodings (REX.W,
     /// `llrm_x86::encoding`) and the exit test's compare.
     pub lsr_size_x86_64: bool,
-    /// DEVIATE IU1 (owner llrm-target-x86-m64, exit 2026-11-24): see
     /// `Tti::lsr_users_in_use_list_order`.
     pub lsr_users_in_use_list_order: bool,
     /// DEVIATE LSR-PHI (owner x87, exit 2026-11-24): see
@@ -880,7 +879,7 @@ impl Tuning {
         shift_loop_counts: false,
         lsr_derived_setup_free: false,
         lsr_size_x86_64: false,
-        lsr_users_in_use_list_order: false,
+        lsr_users_in_use_list_order: true,
         lsr_phi_operand_uses: false,
         lsr_both_use_orders: false,
         lsr_phi_users_first: false,

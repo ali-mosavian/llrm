@@ -553,6 +553,12 @@ pub(crate) fn vector_divide_by_constant_cost(
 }
 
 impl Tti for AArch64 {
+    // DEVIATE IU1 (owner w9, exit 2026-12-01): descending program order, not use-list
+    // order: net bytes grew with the default on at arm64 (+272 B over 30 cells); to be judged against the pin.
+    fn lsr_users_in_use_list_order(&self) -> bool {
+        false
+    }
+
     /// `isProfitableToSinkOperands`: see [`crate::tti_sink`].
     fn is_profitable_to_sink_operands(
         &self,

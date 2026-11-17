@@ -729,6 +729,7 @@ mod tuning_tests {
                 frame_slot_is_free_base: false,
                 lsr_address_fewest_registers: false,
                 lsr_size_order: false,
+                lsr_users_in_use_list_order: true,
                 x87_share_negated_products: false,
                 x87_zero_fill_at_size: false,
                 unroll_promotion_fits_x87_stack: false,
