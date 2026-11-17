@@ -1330,6 +1330,9 @@ struct Emitter<'a> {
     /// The same for the float registers, and the values in them.
     fvregs: HashMap<u32, Vreg>,
     fvalues: HashMap<(u32, u8), Vreg>,
+    /// The tuple built from these members in this block: the pin's DAG makes
+    /// one `REG_SEQUENCE` for equal members, so two stores share it.
+    tuples_built: HashMap<(u8, [Vreg; 4]), Vreg>,
     ops: Vec<Op>,
     /// The constant pool entries the function has used so far.
     pool: std::cell::RefCell<Vec<PoolEntry>>,
@@ -2088,8 +2091,6 @@ impl Emitter<'_> {
         lanes: Arrangement,
         operands: &[Operand],
     ) -> Result<(), String> {
-        let tuple = self.mf.fpr();
-        self.mf.tuples.push((tuple, count));
         if store {
             let Some((Operand::Reg(base), members)) = operands.split_last() else {
                 return Err("a structure store without an address".into());
@@ -2102,9 +2103,20 @@ impl Emitter<'_> {
                 let Operand::Fpr(src) = member else { return Err("a structure store of a non-vector".into()) };
                 list[at] = *src;
             }
-            self.ops.push(Op::I(Inst::VectorTupleBuild { tuple, count, members: list }));
+            let tuple = match self.tuples_built.get(&(count, list)) {
+                Some(&tuple) => tuple,
+                None => {
+                    let tuple = self.mf.fpr();
+                    self.mf.tuples.push((tuple, count));
+                    self.ops.push(Op::I(Inst::VectorTupleBuild { tuple, count, members: list }));
+                    self.tuples_built.insert((count, list), tuple);
+                    tuple
+                }
+            };
             self.ops.push(Op::I(Inst::VectorStoreStructure { count, lanes, rt: tuple, base: *base }));
         } else {
+            let tuple = self.mf.fpr();
+            self.mf.tuples.push((tuple, count));
             let [Operand::Reg(base)] = operands else { return Err("a structure load without an address".into()) };
             self.ops.push(Op::I(Inst::VectorLoadStructure { count, lanes, rt: tuple, base: *base }));
             for at in 0..count {
@@ -2903,6 +2915,7 @@ pub fn emit(
         vregs: HashMap::default(),
         fvregs: HashMap::default(),
         fvalues: HashMap::default(),
+        tuples_built: HashMap::default(),
         ops: Vec::new(),
         pool: std::cell::RefCell::new(Vec::new()),
         segment: String::new(),
@@ -2925,6 +2938,7 @@ pub fn emit(
         emitter.dag = &block.dag;
         emitter.values.clear();
         emitter.fvalues.clear();
+        emitter.tuples_built.clear();
         emitter.segment = block_label(name, at);
         for &(reg, vreg) in &block.live_ins {
             let dst = if is_fpr(reg) { Reg::Fpr(emitter.fvreg(vreg)) } else { Reg::Gpr(emitter.vreg(vreg)) };

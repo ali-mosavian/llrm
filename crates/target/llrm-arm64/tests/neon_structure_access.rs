@@ -98,3 +98,27 @@ define void @f(ptr %p, ptr %o) {
     let moves = asm.lines().filter(|line| line.trim_start().starts_with("mov v")).count();
     assert!(moves <= 1, "{moves} moves between members and tuples:\n{asm}");
 }
+
+/// Two `st2` of the same pair share one tuple (the pin's DAG makes one
+/// `REG_SEQUENCE`). Without it textfill's fill loop moved the pair into two
+/// tuples, 3 `mov`s a trip, 12 instructions to the pin's 9.
+#[test]
+fn two_stores_of_the_same_members_share_one_tuple() {
+    let ir = r#"
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128-Fn32"
+target triple = "aarch64-unknown-linux-gnu"
+declare void @llvm.aarch64.neon.st2.v4i32.p0(<4 x i32>, <4 x i32>, ptr)
+define void @f(ptr %p, ptr %o, ptr %q) {
+  %a = load <4 x i32>, ptr %p
+  %pb = getelementptr <4 x i32>, ptr %p, i64 1
+  %b = load <4 x i32>, ptr %pb
+  %s = add <4 x i32> %a, %b
+  call void @llvm.aarch64.neon.st2.v4i32.p0(<4 x i32> %s, <4 x i32> %b, ptr %o)
+  call void @llvm.aarch64.neon.st2.v4i32.p0(<4 x i32> %s, <4 x i32> %b, ptr %q)
+  ret void
+}
+"#;
+    let asm = driver::assembly(ir, Platform::Linux, true).expect("lowers");
+    let moves = asm.lines().filter(|line| line.trim_start().starts_with("mov v")).count();
+    assert!(moves <= 1, "{moves} moves building the stored pair twice:\n{asm}");
+}
