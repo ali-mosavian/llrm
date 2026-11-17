@@ -2097,6 +2097,17 @@ pub trait Tti {
         0
     }
 
+    /// How many of a fold's selects cost nothing beyond their own price (a
+    /// select that replaces the branch itself). Only where
+    /// `select_branch_extra` is positive.
+    fn select_branch_exempt(
+        &self,
+        optsize: bool,
+    ) -> usize {
+        let _ = optsize;
+        0
+    }
+
     /// `Tuning::carry_slot_indexes`.
     fn carries_slot_indexes(&self) -> bool {
         true

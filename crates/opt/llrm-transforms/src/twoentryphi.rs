@@ -37,6 +37,8 @@
 //!   select where the clocks pay). Owner llrm-target-x86-m32. A boolean
 //!   `and`/`or` select (`select x, y, false`) is no branch and is not counted:
 //!   the 6502's `isdigit` range test stayed two compares (28 -> 50 B).
+//!   `Tti::select_branch_exempt` lets the first selects go uncounted: a `csel`
+//!   replaces the branch that a lone phi would cost (arm64 -Os).
 //!
 //! # Example
 //! The phi that a branch chooses between becomes a select in the branch's
@@ -347,6 +349,7 @@ pub fn folded(
     );
     let extra = Cost::of(spec.tti.select_branch_extra(optsize));
     if (!spec.tti.has_cmov() || extra.value > 0) && !hoist.is_empty() {
+        let mut exempt = spec.tti.select_branch_exempt(optsize);
         let selects = edges::phis(function, block).iter().fold(Cost::FREE, |all, &phi| {
             let ty = function.instruction(phi).ty;
             let arm = |from| arms(function, phi).into_iter().find(|&(_, one)| one == from).expect("an arm").0;
@@ -355,6 +358,12 @@ pub fn folded(
             if select_logic(context, ty, on_true, on_false).is_some() {
                 return all;
             }
+            let extra = if exempt > 0 {
+                exempt -= 1;
+                Cost::FREE
+            } else {
+                extra
+            };
             all + extra
                 + select_cost(context, spec.tti, ty, if_cond, on_true, on_false, crate::speculate::cost_kind(function))
         });

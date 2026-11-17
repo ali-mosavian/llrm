@@ -963,6 +963,25 @@ impl Tti for AArch64 {
         true
     }
 
+    /// DEVIATE IF-SIZE (`twoentryphi.rs` D5): at -Os every select after the
+    /// first costs a `csel` where the branch form keeps the value in place, so
+    /// a fold that speculates code over two or more phis stays a branch.
+    /// sfm16_float -20 B, grep -22% clocks; jpeg_fixed +8 B (row
+    /// ARM64-IFSIZE-JPEG). Exit 2026-11-24.
+    fn select_branch_extra(
+        &self,
+        optsize: bool,
+    ) -> i64 {
+        i64::from(optsize)
+    }
+
+    fn select_branch_exempt(
+        &self,
+        optsize: bool,
+    ) -> usize {
+        usize::from(optsize)
+    }
+
     fn vector_reduction_cost(
         &self,
         kind: llrm_mir::intrinsics::ReduceKind,
