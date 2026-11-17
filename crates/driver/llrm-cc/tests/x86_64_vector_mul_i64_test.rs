@@ -2,8 +2,10 @@
 //! pin's SSE2 `v2i64` multiply row is 7 a register). The row was missing, every
 //! width was "not priced", and tile's 64-wide fill stayed scalar: bench tile
 //! -O2 ran 14,000 instructions over gcc. The vectorized multiply must also
-//! select: `v2i64` has no SSE2 `pmullq`, so it is three `pmuludq`. Needs
-//! `LLRM_LLC`.
+//! select: `v2i64` has no SSE2 `pmullq`, so it is three `pmuludq`. The scalar
+//! loop's price counts no address (the pin's x86 `getAddressComputationCost` is
+//! 0): with 1 a load, bench dot -O2 vectorized a sum of `i16` products at VF 8
+//! and ran 21,617 instructions against 10,977. Needs `LLRM_LLC`.
 
 use std::path::Path;
 use std::process::Command;
@@ -42,8 +44,16 @@ fn an_i64_induction_multiply_loop_is_vectorized_at_x86_64() {
 }
 
 #[test]
-fn a_widened_i32_product_sum_selects_pmuludq_at_x86_64() {
-    let body = compile_body("dot", "dot_int");
-    let n = body.matches("pmuludq").count();
-    assert!(n >= 3, "{n} pmuludq (a v2i64 multiply is three):\n{body}");
+fn a_vector_i64_multiply_selects_pmuludq_at_x86_64() {
+    for (func, pieces) in [("mul_v2i64", 3), ("mul_v4i64", 6)] {
+        let body = compile_body(func, func);
+        let n = body.matches("pmuludq").count();
+        assert_eq!(n, pieces, "{func}: {n} pmuludq (three per 128 bits):\n{body}");
+    }
+}
+
+#[test]
+fn a_sum_of_i16_products_stays_scalar_at_x86_64() {
+    let body = compile_body("dot_short", "dot_short");
+    assert!(!body.contains("pmuludq"), "vectorized (a scalar load priced an address):\n{body}");
 }

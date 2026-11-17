@@ -367,7 +367,7 @@ pub(crate) fn extract(
                 if !price.valid {
                     return Err(Skipped("An access the target does not price"));
                 }
-                let scalar = price.value + tti.address_computation_cost(kind).value;
+                let scalar = price.value + tti.scalar_access_address_cost(kind).value;
                 cost += scalar;
                 let align = match data.opcode {
                     Opcode::Load { align, .. } | Opcode::Store { align, .. } => align,

@@ -1161,6 +1161,16 @@ pub trait Tti {
         Cost::BASIC
     }
 
+    /// `getAddressComputationCost(PtrTy, nullptr, nullptr)` of a scalar access
+    /// (`getMemoryInstructionCost` at VF 1): the pin's x86 returns the base's
+    /// zero, the addressing mode holds the address; AArch64 returns one.
+    fn scalar_access_address_cost(
+        &self,
+        kind: CostKind,
+    ) -> Cost {
+        self.address_computation_cost(kind)
+    }
+
     /// `getAddressComputationCost` of one lane of a scalarized access
     /// (`getMemInstScalarizationCost`, which passes a vector of pointers and
     /// the pointer's SCEV): `stride_bytes` is the constant step of the

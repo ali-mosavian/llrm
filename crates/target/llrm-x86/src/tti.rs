@@ -990,6 +990,16 @@ impl Tti for X86 {
         Cost::BASIC
     }
 
+    fn scalar_access_address_cost(
+        &self,
+        kind: CostKind,
+    ) -> Cost {
+        if self.size_bytes && kind == CostKind::CodeSize {
+            return self.address_computation_cost(kind);
+        }
+        Cost::FREE
+    }
+
     fn direct_call_cost(
         &self,
         arguments: i64,
