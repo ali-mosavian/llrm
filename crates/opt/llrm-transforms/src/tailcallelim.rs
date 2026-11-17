@@ -176,9 +176,9 @@ pub fn eliminated_self_calls(
     module: &mut llrm_mir::module::Module,
     layout: &DataLayout,
     name: GlobalId,
-) -> std::collections::BTreeSet<InstId> {
+) -> IdSet<InstId> {
     let Some(body) = module.global(name).function() else { return Default::default() };
-    let own = |context: &Context, function: &Function| -> std::collections::BTreeSet<InstId> {
+    let own = |context: &Context, function: &Function| -> IdSet<InstId> {
         function
             .walk()
             .map(|(_, inst)| inst)

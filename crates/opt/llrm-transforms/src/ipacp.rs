@@ -245,7 +245,7 @@ pub fn cloned(
         }
     }
     // GCC's `tailr1` precedes ipa-cp: the self-calls the pass loops.
-    let mut tails: BTreeMap<GlobalId, BTreeSet<InstId>> = BTreeMap::new();
+    let mut tails: BTreeMap<GlobalId, IdSet<InstId>> = BTreeMap::new();
     for &(name, _) in groups.keys().collect::<BTreeSet<_>>() {
         if recursive.contains(&name) {
             tails.entry(name).or_insert_with(|| crate::tailcallelim::eliminated_self_calls(module, layout, name));
@@ -499,7 +499,7 @@ fn chain_benefit(
     callees: &Callees,
     costs: &OperationCosts,
     peel_limited: bool,
-    eliminated: &BTreeSet<InstId>,
+    eliminated: &IdSet<InstId>,
     max_clones: usize,
     level: usize,
     memo: &mut BTreeMap<Vec<Option<ConstantId>>, (i64, i64)>,
@@ -554,7 +554,7 @@ fn time_saved(
     callees: &Callees,
     costs: &OperationCosts,
     peel_limited: bool,
-    eliminated: &BTreeSet<InstId>,
+    eliminated: &IdSet<InstId>,
 ) -> (i64, bool, Vec<(Vec<Option<ConstantId>>, i64)>) {
     let unit = Unit::of(module, layout, body);
     let mut values = IndexMap::default();
