@@ -63,7 +63,7 @@ use llrm_analysis::scev::expr::{Scev, Ty, Type, Use as ScevUse};
 use llrm_analysis::scev::{Cx, ScalarEvolution};
 use llrm_mir::module::{BlockId, InstId, Operand};
 use llrm_mir::opcode::{CastOp, Opcode};
-use llrm_mir::tti::{Cost as TtiCost, LsrBytes, LsrCost, Tti};
+use llrm_mir::tti::{AddressingMode, Cost as TtiCost, LsrBytes, LsrCost, Tti};
 use llrm_mir::valuetracking::pattern::{phi_incoming, result_of};
 use llrm_support::hash::{HashSet, IndexSet};
 
@@ -503,6 +503,8 @@ pub struct Rating<'a, 'b> {
     pub bytes_counted: bool,
     /// The loop calls, and the target's call takes every register (LU13).
     pub across_call: bool,
+    /// `AMK`: the indexed addressing this loop favors.
+    pub amk: AddressingMode,
 }
 
 /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopStrengthReduce.cpp#L1232
@@ -852,7 +854,7 @@ impl Cost {
                 // addressing is favored).
                 if (is_existing_phi(r.se, r.cx, reg)
                     || r.tti.lsr_extension_of_phi_exists() && is_extension_of_existing_phi(r.se, r.cx, reg))
-                    && !r.tti.preferred_addressing_mode().has_post_indexed()
+                    && !r.amk.has_post_indexed()
                 {
                     return;
                 }
@@ -871,7 +873,7 @@ impl Cost {
             // post-indexed access's own increment: free where every fixup of
             // the use runs each trip.
             let ty = crate::lsr_generate::tti_ty(r.se.type_of(reg));
-            if r.tti.preferred_addressing_mode().has_post_indexed()
+            if r.amk.has_post_indexed()
                 && (r.tti.is_post_inc_load_legal(ty) || r.tti.is_post_inc_store_legal(ty))
                 && let Some((start, step, _)) = r.se.match_affine_add_rec(reg)
                 && let Some(step_bytes) = r.se.as_constant(step).map(|c| c.sext_value() as i64)
