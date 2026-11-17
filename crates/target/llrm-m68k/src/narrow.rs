@@ -28,6 +28,90 @@ use crate::dagisel::local;
 use crate::mfunc::{MFunction, op_inst};
 use crate::regalloc::Assignment;
 
+/// `move.l %s,%d; and.l #255,%d` (or `#65535`) is `moveq #0,%d; move.b %s,%d`
+/// (`move.w`): 4 bytes for 8, and 8 clocks for 20 on the 68000. The `and` is
+/// two-address, so a source that stays live was copied first.
+///
+/// # How it works
+/// After allocation, a copy between two data registers followed by an `and`
+/// of the byte or word mask on the copy, or by the zero extension that
+/// expands to one (`MOVZXd32d8`, `MOVZXd32d16` of a register into itself),
+/// becomes that zero extension of the source, which `ExpandMOVSZX_RR` prints
+/// as `moveq` and `move` when the two registers differ. Skipped where a reader
+/// of the codes follows: `move.w` sets N from bit 15, `and.l` clears it.
+///
+/// Pass: the pin's X86 isel patterns `r & (2^16-1) ==> movz` and
+/// `r & (2^8-1) ==> movz` (`X86InstrCompiler.td` L1772-L1776,
+/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86InstrCompiler.td#L1772-L1776>),
+/// as a rewrite after allocation: the DAG form was a copy into a narrower
+/// class that the allocator joined with the result.
+///
+/// DEVIATE M68K-AND-MASK-MOVZX: the pin's M68k has no such pattern. Reason:
+/// gcc 15 -Os extends a masked loop counter with `moveq` and `move.w`
+/// (bench/sieve +12 B). Owner m68k. Exit: none. Off for `Options::PINNED`.
+pub fn copied_masks_as_extensions(
+    function: &mut MFunction,
+    assignment: &Assignment,
+) {
+    let register = |reg: &Reg| match reg {
+        Reg::Virt(v) => REGISTER_INFO.root(assignment.0[*v as usize]),
+        Reg::Phys(p) => REGISTER_INFO.root(*p),
+    };
+    for block in &mut function.blocks {
+        let mut at = 0;
+        while at + 1 < block.insts.len() {
+            let (Kind::Copy, [Operand::Def(copy), Operand::Use(source)]) = (block.insts[at].kind, &block.insts[at].operands[..]) else {
+                at += 1;
+                continue;
+            };
+            let (copy, source) = (*copy, *source);
+            let root = register(&copy);
+            let data = |reg: &Reg| !crate::expand::is_address(register(reg));
+            if register(&source) == root || !data(&copy) || !data(&source) {
+                at += 1;
+                continue;
+            }
+            let Kind::Op(name) = block.insts[at + 1].kind else {
+                at += 1;
+                continue;
+            };
+            let bits = match (name, &block.insts[at + 1].operands[..]) {
+                ("AND32di", [Operand::Def(def), Operand::Use(base), Operand::Imm(mask @ (0xFF | 0xFFFF))])
+                    if register(def) == root && register(base) == root =>
+                {
+                    Some(if *mask == 0xFF { 8 } else { 16 })
+                }
+                (_, [Operand::Def(def), Operand::Use(base)]) if register(def) == root && register(base) == root => {
+                    match crate::expand::extension(name) {
+                        Some((false, 32, 'd', from)) => Some(from),
+                        _ => None,
+                    }
+                }
+                _ => None,
+            };
+            let Some(bits) = bits else {
+                at += 1;
+                continue;
+            };
+            if flags_read_after(&block.insts, at + 1) != Some(0) {
+                at += 1;
+                continue;
+            }
+            let name = if bits == 8 { "MOVZXd32d8" } else { "MOVZXd32d16" };
+            let Some(desc) = local::code_of(name).and_then(local::desc) else {
+                at += 1;
+                continue;
+            };
+            let (Operand::Def(def) | Operand::Use(def)) = block.insts[at + 1].operands[0] else {
+                at += 1;
+                continue;
+            };
+            block.insts[at + 1] = op_inst(name, desc, vec![Operand::Def(def), Operand::Use(source)]);
+            block.insts.remove(at);
+        }
+    }
+}
+
 /// The word row of a long-immediate logic row, and whether its immediate is
 /// narrowed by an upper half of ones (`and`) or zeros.
 fn word_for(name: &str) -> Option<(&'static str, bool)> {
