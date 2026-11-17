@@ -535,6 +535,33 @@ fn a_vector_add_of_a_value_to_itself_is_a_shift() {
     );
 }
 
+/// As [`a_vector_add_folds_as_the_scalar_add_does`], for `and`: the demanded
+/// bits of a vector are those of its lanes, so an `add` of 16 under a mask of
+/// 14 is dropped as it is on a scalar (textfill's `(x + 16) & 14`).
+#[test]
+fn a_vector_and_folds_as_the_scalar_one_does() {
+    let templates = [
+        "define $T$ @f($T$ %x) {\nb0:\n  %a = add $T$ %x, $C:16$\n  %b = and $T$ %a, $C:14$\n  ret $T$ %b\n}\n",
+        "define $T$ @f($T$ %x) {\nb0:\n  %a = or $T$ %x, $C:48$\n  %b = and $T$ %a, $C:15$\n  ret $T$ %b\n}\n",
+        "define $T$ @f($T$ %x) {\nb0:\n  %a = shl $T$ %x, $C:4$\n  %b = and $T$ %a, $C:15$\n  ret $T$ %b\n}\n",
+        "define $T$ @f($T$ %x) {\nb0:\n  %a = and $T$ %x, $C:7$\n  %b = and $T$ %a, $C:5$\n  ret $T$ %b\n}\n",
+        "define $T$ @f($T$ %x) {\nb0:\n  %a = and $T$ %x, $C:-1$\n  ret $T$ %a\n}\n",
+        "define $T$ @f($T$ %x) {\nb0:\n  %a = and $T$ %x, %x\n  ret $T$ %a\n}\n",
+        "define $T$ @f($T$ %x) {\nb0:\n  %a = and $T$ %x, $C:0$\n  ret $T$ %a\n}\n",
+        "define $T$ @f($T$ %x, $T$ %y) {\nb0:\n  %n = xor $T$ %x, $C:-1$\n  %a = and $T$ %n, %y\n  ret $T$ %a\n}\n",
+        "define $T$ @f($T$ %x) {\nb0:\n  %a = lshr $T$ %x, $C:3$\n  %b = and $T$ %a, $C:3$\n  ret $T$ %b\n}\n",
+        "define $T$ @f($T$ %x) {\nb0:\n  %a = mul $T$ %x, $C:4$\n  %b = and $T$ %a, $C:6$\n  ret $T$ %b\n}\n",
+    ];
+    for template in templates {
+        let (scalar, vector) = twins(template);
+        let mut one = parsed(&scalar);
+        combined(&mut one);
+        let mut other = parsed(&vector);
+        combined(&mut other);
+        assert_eq!(as_scalar(&printed(&other)), printed(&one), "{template}");
+    }
+}
+
 /// The scalar text of `template` and its vector twin: `{T}` is the type,
 /// `{C:n}` the constant `n` (a splat in the vector).
 fn twins(template: &str) -> (String, String) {
