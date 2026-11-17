@@ -2198,3 +2198,68 @@ fn an_edge_split_makes_lsr_count_only_the_loop_it_touched_again() {
     session.forget_since_through_edges(context, &data, &outer.globals, &outer.metadata, function, mark);
     assert_eq!(session_counts(&mut session, &mut module, 3), 1, "only the loop whose edge was split is counted again");
 }
+
+/// A prime's marking loop in a sieve with the counter left at 16 bits: it
+/// starts at `i * i`, and the scan loop reaches it on every other trip.
+const SQUARE_START: &str = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+
+@g = global [1024 x i8] zeroinitializer
+
+define i64 @f(i64 %n) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i64 [ 2, %b0 ], [ %i.next, %b6 ]
+  %acc = phi i64 [ 0, %b0 ], [ %acc.next, %b6 ]
+  %odd = and i64 %i, 1
+  %free = icmp eq i64 %odd, 0
+  br i1 %free, label %b2, label %b6
+
+b2:
+  %sq = mul nuw nsw i64 %i, %i
+  %start = trunc nuw nsw i64 %sq to i16
+  %step = trunc nuw nsw i64 %i to i16
+  br label %b4
+
+b4:
+  %m = phi i16 [ %start, %b2 ], [ %m.next, %b4 ]
+  %a = phi i64 [ %acc, %b2 ], [ %a.next, %b4 ]
+  %z = zext nneg i16 %m to i64
+  %q = getelementptr inbounds nuw i8, ptr @g, i64 %z
+  store i8 1, ptr %q
+  %a.next = add i64 %a, %z
+  %m.next = add nuw nsw i16 %m, %step
+  %again = icmp ult i16 %m.next, 1024
+  br i1 %again, label %b4, label %b5
+
+b5:
+  br label %b6
+
+b6:
+  %acc.next = phi i64 [ %acc, %b1 ], [ %a.next, %b5 ]
+  %i.next = add nuw nsw i64 %i, 1
+  %done = icmp eq i64 %i.next, %n
+  br i1 %done, label %b7, label %b1
+
+b7:
+  ret i64 %acc.next
+}
+";
+
+/// sieve x86-64 O2/O3 ran 15223 instructions against gcc's 14703 (O3 14519):
+/// LSR expanded the marking counter's start `i * i` as two phis of the scan
+/// loop, stepped on 1022 trips for 11 entries.
+#[test]
+fn test_a_square_start_entered_on_some_trips_is_not_expanded_in_the_outer_loop() {
+    let (_, text) = reduced_on("", SQUARE_START, "x86-64", &[&[3], &[10], &[30]]);
+    assert!(!text.contains("[ 4, %b0 ]"), "the scan loop steps no phi for the square: {text}");
+    assert!(text.contains("%m = phi i16 [ %start, %b2 ]"), "the marking counter is as written: {text}");
+}
+
+/// The pin expands it: a target that does not weigh entries keeps the pin's IR.
+#[test]
+fn test_a_target_that_does_not_weigh_entries_expands_a_square_start_in_the_outer_loop() {
+    let (_, text) = reduced_on("", SQUARE_START, "core2", &[&[3], &[10], &[30]]);
+    assert!(text.contains("phi i16 [ %8, %b6 ], [ 4, %b0 ]"), "the square is phis of the scan loop: {text}");
+}

@@ -107,6 +107,7 @@ pub mod cgpswitch;
 pub mod cmpopt;
 #[cfg(test)]
 mod codegen_slots_tests;
+pub(crate) mod cold_chrec;
 pub mod combine;
 pub mod combine_abs;
 pub mod combine_add_idioms;

@@ -67,6 +67,7 @@ use llrm_mir::tti::{AddressingMode, Cost as TtiCost, LsrBytes, LsrCost, Tti};
 use llrm_mir::valuetracking::pattern::{phi_incoming, result_of};
 use llrm_support::hash::{HashSet, IndexSet};
 
+use crate::cold_chrec::expands_cold_outer_chrec;
 use crate::lsr_formula::{Formula, Immediate, MemAccessTy, RegUseTracker, Symbol};
 
 /// `SetupCostDepthLimit`.
@@ -864,6 +865,15 @@ impl Cost {
                     self.lose();
                     return;
                 }
+                // DEVIATE COLD-CHREC: not one the loop that holds it steps on
+                // every trip for an inner loop entered on some.
+                if !r.as_written
+                    && r.tti.avoids_cold_outer_addrec_expansion()
+                    && expands_cold_outer_chrec(r.se, r.cx, reg, r.l)
+                {
+                    self.lose();
+                    return;
+                }
                 self.c.num_regs += 1;
                 return;
             }
@@ -894,6 +904,14 @@ impl Cost {
                 loop_cost = 0;
             }
             self.c.add_rec_cost += loop_cost;
+            // DEVIATE COLD-CHREC: nor a start that expands to such phis.
+            if !r.as_written && r.tti.avoids_cold_outer_addrec_expansion() {
+                let start = r.se.operands(reg)[0].scev;
+                if expands_cold_outer_chrec(r.se, r.cx, start, r.l) {
+                    self.lose();
+                    return;
+                }
+            }
             // DEVIATE LU17: the loop as written forms an addrec that is no phi
             // by multiplying a counter; the target says what that costs.
             if r.as_written

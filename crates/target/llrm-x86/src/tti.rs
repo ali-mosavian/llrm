@@ -2298,6 +2298,14 @@ impl Tti for X86 {
         self.real_mode.is_some()
     }
 
+    /// DEVIATE WIDEN-COLD-CHREC: x86-64 (sieve O2/O3: +595 instructions of the
+    /// 15223 for 2 phis the scan loop steps for 11 marking-loop entries).
+    /// owner: llrm-target-x86-m16-b, exit: 2026-11-30, or when the pin
+    /// weighs the entry frequency.
+    fn avoids_cold_outer_addrec_expansion(&self) -> bool {
+        self.quad
+    }
+
     fn lsr_drops_worse_solution_at_size(&self) -> bool {
         self.tuning.lsr_drop_worse_at_size
     }
