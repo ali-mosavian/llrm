@@ -299,6 +299,21 @@ fn the_options_default_to_the_pins_values_and_a_lowered_limit_blocks_the_thread(
     assert!(!run_with(text, strict).contains(".thread"), "2 instructions are over 0");
 }
 
+/// x_radix at -Os (m32) kept a second copy of the outer loop's latch (+12 B,
+/// 306 B against gcc's 287): JumpThreading copied the latch for the edge that
+/// knows the exit. gcc's `-Os` threader refuses a path through the latch. An
+/// `optsize` function of a target that keeps its latches does not copy one;
+/// without `optsize`, or on a target that does not, the pin copies it.
+#[test]
+fn an_optsize_function_keeps_its_loop_latch_in_one_copy() {
+    let text = "define i32 @f(i1 %x, i1 %y) {\nentry:\n  br label %head\nhead:\n  %i = phi i32 [ 0, %entry ], [ %i2, %latch ]\n  call void @sink(i32 %i)\n  br i1 %x, label %p1, label %p2\np1:\n  br label %latch\np2:\n  br label %latch\nlatch:\n  %c = phi i1 [ false, %p1 ], [ %y, %p2 ]\n  %i2 = add i32 %i, 1\n  br i1 %c, label %head, label %exit\nexit:\n  ret i32 %i2\n}\ndeclare void @sink(i32)\n";
+    let keeping = JumpThreadingOptions { keep_latch_at_size: true, ..JumpThreadingOptions::default() };
+    let optsize = text.replace("i1 %y) {", "i1 %y) optsize {");
+    assert!(!run_with(&optsize, keeping).contains(".thread"), "{}", run_with(&optsize, keeping));
+    assert!(run_with(text, keeping).contains(".thread"), "no optsize: the pin copies the latch:\n{}", run_with(text, keeping));
+    assert!(run_with(&optsize, JumpThreadingOptions::default()).contains(".thread"), "target keeps nothing: the pin's");
+}
+
 fn int(bits: u128) -> Val {
     Val::Int { bits, width: 32 }
 }

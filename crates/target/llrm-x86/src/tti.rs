@@ -997,6 +997,10 @@ impl Tti for X86 {
         self.tuning.inline_never_grows_without_rate
     }
 
+    fn jump_threading_keeps_latch_at_size(&self) -> bool {
+        self.tuning.jump_threading_keeps_latch_at_size
+    }
+
     fn cold_site_ignores_sinks(&self) -> bool {
         self.tuning.cold_site_ignores_sinks
     }

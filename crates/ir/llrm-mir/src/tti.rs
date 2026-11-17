@@ -1930,6 +1930,11 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE JT-LATCH-SIZE: `Tuning::jump_threading_keeps_latch_at_size`.
+    fn jump_threading_keeps_latch_at_size(&self) -> bool {
+        false
+    }
+
     /// DEVIATE BFS-1: `Tuning::cold_site_ignores_sinks`.
     fn cold_site_ignores_sinks(&self) -> bool {
         false

@@ -157,6 +157,10 @@ pub struct JumpThreadingOptions {
     /// `BBDuplicateThreshold` of a function with `minsize`
     /// ([L310](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/JumpThreading.cpp#L310)).
     pub min_size_bb_dup_threshold: u32,
+    /// DEVIATE JT-LATCH-SIZE: an `optsize` function keeps a loop latch in
+    /// one copy, where the target states it
+    /// (`Tti::jump_threading_keeps_latch_at_size`) or this does.
+    pub keep_latch_at_size: bool,
     /// `PhiDuplicateThreshold` (`jump-threading-phi-threshold`): a block with
     /// more phis is not copied
     /// ([L99](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/JumpThreading.cpp#L99)).
@@ -174,6 +178,7 @@ impl Default for JumpThreadingOptions {
         Self {
             bb_dup_threshold: 6,
             min_size_bb_dup_threshold: 3,
+            keep_latch_at_size: false,
             phi_duplicate_threshold: 76,
             implication_search_threshold: 3,
         }
@@ -250,6 +255,7 @@ impl FunctionPass for JumpThreading {
             unreachable: IdSet::new(),
             options: self.options,
             bb_dup_threshold: self.options.bb_dup_threshold,
+            keep_latches: false,
         };
         if pass.run_impl() { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
     }
@@ -302,6 +308,8 @@ struct State<'a, 'u> {
     unreachable: IdSet<BlockId>,
     options: JumpThreadingOptions,
     bb_dup_threshold: u32,
+    /// DEVIATE JT-LATCH-SIZE: this function is `optsize` and keeps its latches.
+    keep_latches: bool,
 }
 
 impl State<'_, '_> {
@@ -635,6 +643,9 @@ impl State<'_, '_> {
             } else {
                 self.options.bb_dup_threshold
             };
+        // DEVIATE JT-LATCH-SIZE
+        self.keep_latches = (self.options.keep_latch_at_size || self.tti.jump_threading_keeps_latch_at_size())
+            && self.function().attrs.iter().any(|attr| matches!(attr, Attribute::Flag(flag) if flag == "optsize"));
         let Some(entry) = self.function().entry() else { return false };
 
         self.unreachable.clear();
@@ -820,6 +831,15 @@ impl State<'_, '_> {
             changed = true;
         }
         changed
+    }
+
+    /// DEVIATE JT-LATCH-SIZE: `bb` is a loop latch of an `optsize` function
+    /// that keeps them: a copy of it is a second latch and more code.
+    fn is_kept_latch(
+        &self,
+        bb: BlockId,
+    ) -> bool {
+        self.keep_latches && self.successor_edges(bb).iter().any(|succ| self.loop_headers.contains(succ))
     }
 
     /// `getJumpThreadDuplicationCost`
@@ -1772,7 +1792,7 @@ impl State<'_, '_> {
         }
         let term = self.function().terminator(bb).expect("a terminator");
         let cost = self.duplication_cost(bb, term, self.bb_dup_threshold);
-        if cost > self.bb_dup_threshold {
+        if cost > self.bb_dup_threshold || self.is_kept_latch(bb) {
             return false;
         }
         self.thread_edge(bb, pred_bbs, succ_bb);
@@ -2466,6 +2486,9 @@ impl State<'_, '_> {
         // PredBBCost individually before checking their sum because
         // getJumpThreadDuplicationCost return (unsigned)~0 for those basic
         // blocks that cannot be duplicated.
+        if self.is_kept_latch(bb) || self.is_kept_latch(pred_bb) {
+            return false;
+        }
         if bb_cost > self.bb_dup_threshold
             || pred_bb_cost > self.bb_dup_threshold
             || bb_cost + pred_bb_cost > self.bb_dup_threshold
@@ -2681,7 +2704,7 @@ impl State<'_, '_> {
 
         let term = self.function().terminator(bb).expect("a terminator");
         let duplication_cost = self.duplication_cost(bb, term, self.bb_dup_threshold);
-        if duplication_cost > self.bb_dup_threshold {
+        if duplication_cost > self.bb_dup_threshold || self.is_kept_latch(bb) {
             return false;
         }
 

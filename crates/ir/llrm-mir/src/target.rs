@@ -183,6 +183,11 @@ pub struct Tuning {
     /// stated (-O1), an inline that stays is held to the -Os bound (the callee
     /// copied only if it does not grow the code); false: the pin's threshold.
     pub inline_never_grows_without_rate: bool,
+    /// DEVIATE JT-LATCH-SIZE (owner x86-m32, exit 2026-11-30): at an
+    /// `optsize` function JumpThreading does not copy a loop latch (a block
+    /// that branches back to a loop header), as gcc's backward threader
+    /// refuses a path through the latch at -Os. false: the pin's.
+    pub jump_threading_keeps_latch_at_size: bool,
     /// DEVIATE OB1: see `Tti::unroll_object_bound`.
     pub unroll_object_bound: Option<u32>,
     /// With `inline_never_grows_without_rate`: what a byte of growth costs an
@@ -806,6 +811,7 @@ impl Tuning {
         inline_trials_at_o1: false,
         rotate_exiting_latch_when_guard_folds: false,
         inline_never_grows_without_rate: false,
+        jump_threading_keeps_latch_at_size: false,
         unroll_object_bound: None,
         inline_size_bytes: false,
         inline_o1_milliclocks_per_byte: 0,
