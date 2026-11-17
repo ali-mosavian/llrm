@@ -240,6 +240,8 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         branch_compare_trees_at_size: true,
         inline_never_grows_without_rate: true,
         jump_threading_latch_trial_at_size: true,
+        switch_lookup_trial_at_size: true,
+        jump_table_size_growth_ratio: Some(300),
         loop_idiom_copy_trial_at_size: true,
         // DEVIATE OB1 (owner w12, exit 2026-11-27, `unrollbound.rs`): gcc
         // completely peels a loop whose trips the object it indexes bounds

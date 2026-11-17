@@ -183,6 +183,11 @@ pub struct Tuning {
     /// stated (-O1), an inline that stays is held to the -Os bound (the callee
     /// copied only if it does not grow the code); false: the pin's threshold.
     pub inline_never_grows_without_rate: bool,
+    /// DEVIATE SWITCH-LOOKUP-TRIAL (owner x86-m32, exit 2026-11-30): at -Os
+    /// the module is compiled again with the switches `simplifySwitchLookup`
+    /// turned into a lookup table left as switches (compares, or the backend's
+    /// own jump table) and the smaller object kept. false: the pin's.
+    pub switch_lookup_trial_at_size: bool,
     /// DEVIATE LIR-COPY-TRIAL (owner x86-m32, exit 2026-11-30): at -Os the
     /// module is compiled again with the copy loops of a count the loop alone
     /// knows left as loops (no `memcpy` call) and the smaller object kept.
@@ -479,6 +484,11 @@ pub struct Tuning {
     /// `getMinimumJumpTableDensity`, in percent, at every level; none: the
     /// pin's 10 (40 when tuned for size).
     pub min_jump_table_density: Option<u64>,
+    /// DEVIATE SWITCH-SIZE-RATIO (owner x86-m32, exit 2026-11-30): GCC's
+    /// `jump-table-max-growth-ratio-for-size`, in percent: tuned for size, a
+    /// jump table's range may be at most this share of the compares its
+    /// clusters need. none: the pin's density alone.
+    pub jump_table_size_growth_ratio: Option<u64>,
     /// Two compares joined by `and`/`or` stay two branches at every level, as
     /// the pin does at optsize; false: the pin's cost rule decides.
     pub split_merged_conditions: bool,
@@ -830,6 +840,7 @@ impl Tuning {
         rotate_exiting_latch_when_guard_folds: false,
         inline_never_grows_without_rate: false,
         jump_threading_latch_trial_at_size: false,
+        switch_lookup_trial_at_size: false,
         loop_idiom_copy_trial_at_size: false,
         unroll_object_bound: None,
         inline_size_bytes: false,
@@ -882,6 +893,7 @@ impl Tuning {
         cold_site_ignores_sinks: false,
         read_only_in_code: false,
         min_jump_table_density: None,
+        jump_table_size_growth_ratio: None,
         split_merged_conditions: false,
         merged_condition_clocks: 0,
         multiply_clocks: 0,
