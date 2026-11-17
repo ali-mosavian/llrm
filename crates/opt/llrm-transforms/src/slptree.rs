@@ -975,11 +975,10 @@ pub(crate) fn emit(
                 }
                 let opcode = match kind {
                     Kind::Load => Opcode::Load {
-                        // `LoadInst::getAlign`: no `align` is the scalar's ABI alignment.
+                        // `LoadInst::getAlign`: no `align` is the scalar's ABI
+                        // alignment.
                         align: match lead.opcode {
-                            Opcode::Load { align, .. } => {
-                                align.or_else(|| Some(layout.align(&context.types, lead.ty)))
-                            }
+                            Opcode::Load { align, .. } => align.or_else(|| Some(layout.align(&context.types, lead.ty))),
                             _ => None,
                         },
                         volatile: false,

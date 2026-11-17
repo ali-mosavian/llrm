@@ -150,7 +150,10 @@ fn constant_stores_become_vector_stores_on_x86_64() {
 fn a_vector_access_made_of_scalars_with_no_align_takes_the_scalars_abi_alignment() {
     let stores = run(&CONST_STORES.replace(", align 2", ""));
     assert!(stores.contains("store <8 x i16> <") && !stores.contains("store i16"), "{stores}");
-    assert!(stores.lines().filter(|line| line.contains("store <8 x i16>")).all(|line| line.ends_with(", align 2")), "{stores}");
+    assert!(
+        stores.lines().filter(|line| line.contains("store <8 x i16>")).all(|line| line.ends_with(", align 2")),
+        "{stores}"
+    );
     let loads = run(&TILE.replace(", align 2", ""));
     assert!(loads.contains("load <32 x i16>, ptr") && !loads.contains("load i16"), "{loads}");
     assert!(loads.lines().filter(|line| line.contains("load <")).all(|line| line.contains(", align 2")), "{loads}");

@@ -86,8 +86,9 @@ fn chains(
         let reference = MemRef::at(unit, instruction.operands[1], bytes as u32);
         let Some(root) = reference.root.filter(|_| reference.segment.is_none()) else { continue };
         let key = (root, reference.base, reference.scale);
-        // `StoreInst::getAlign`: a store with no `align` has the ABI alignment of its
-        // value, which the vector store takes (not the vector's own).
+        // `StoreInst::getAlign`: a store with no `align` has the ABI alignment
+        // of its value, which the vector store takes (not the vector's
+        // own).
         let align = align.or_else(|| Some(unit.layout.align(&unit.context.types, ty)));
         let seed = Seed { store: inst, order, disp: reference.disp, align, value };
         match groups.iter_mut().find(|group| group.0 == key && group.1 == ty) {
