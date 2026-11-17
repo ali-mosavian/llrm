@@ -84,6 +84,8 @@ pub struct BuilderTarget {
     pub min_jump_table_entries: usize,
     /// `getMinimumJumpTableDensity`, where the target states one.
     pub min_jump_table_density: Option<u64>,
+    /// `SwitchTarget::size_growth_ratio`.
+    pub jump_table_size_growth_ratio: Option<u64>,
     /// Name prefix of the blocks the target added to the IR before selection
     /// (phi edges): the pin has none at this point, so a switch's layout
     /// successor is the next block without it.
@@ -429,6 +431,15 @@ impl BuilderTarget {
         self
     }
 
+    /// This target with GCC's size growth ratio for jump tables.
+    pub fn with_jump_table_size_growth_ratio(
+        mut self,
+        percent: Option<u64>,
+    ) -> BuilderTarget {
+        self.jump_table_size_growth_ratio = percent;
+        self
+    }
+
     /// This target with `getMinimumJumpTableDensity` stated at every level.
     pub fn with_min_jump_table_density(
         mut self,
@@ -530,6 +541,7 @@ impl BuilderTarget {
             shift_amount_of: None,
             min_jump_table_entries: 4,
             min_jump_table_density: None,
+            jump_table_size_growth_ratio: None,
             preselection_blocks: None,
             refuse_unknown_intrinsics: false,
             variable_shift_legal: true,
@@ -985,15 +997,18 @@ impl Builder<'_> {
             Type::Vector { element, count } if self.target.dag.vectors => {
                 // `v16i8`, `v8i16`, `v4i32`, `v2i64`: the vectors VR128 holds.
                 match self.module.context.types.get(*element) {
-                    // A lane count no `MVT` has (`<3 x i8>`) is an extended vector type: the type legalizer widens it.
+                    // A lane count no `MVT` has (`<3 x i8>`) is an extended
+                    // vector type: the type legalizer widens it.
                     Type::Int(bits) => MVT::integer(*bits)
                         .and_then(|lane| {
-                            MVT::vector(lane, *count).map(EVT::Simple).or_else(|| {
-                                (EVT::Simple(lane).size_in_bits() % 8 == 0
-                                    && !count.is_power_of_two()
-                                    && MVT::vector(lane, count.next_power_of_two()).is_some())
-                                .then(|| EVT::vector(lane, *count))
-                            })
+                            MVT::vector(lane, *count)
+                                .map(EVT::Simple)
+                                .or_else(
+                                    || (EVT::Simple(lane).size_in_bits() % 8 == 0
+                                        && !count.is_power_of_two()
+                                        && MVT::vector(lane, count.next_power_of_two()).is_some())
+                                    .then(|| EVT::vector(lane, *count)),
+                                )
                         })
                         .ok_or(Refused("vector with no register class")),
                     // `v4f32`, `v2f64`
@@ -4407,9 +4422,11 @@ impl Builder<'_> {
                     _ => None,
                 }
                 .ok_or(Refused("a shufflevector padded to a vector with no register class"))?;
-                // DEVIATE: no padding past a register (the pin widens `v18i8` to `v32i8` and splits it); the
-                // lanes are built one at a time instead. Exit: splitting an extended vector type; owner
-                // x87-cordic-2; review 2026-11-27.
+                // DEVIATE: no padding past a register (the pin widens `v18i8`
+                // to `v32i8` and splits it); the
+                // lanes are built one at a time instead. Exit: splitting an
+                // extended vector type; owner x87-cordic-2;
+                // review 2026-11-27.
                 if padded.size_in_bits() <= 128 {
                     for operand in [&mut first, &mut second] {
                         if self.dag.is_undef(*operand) {

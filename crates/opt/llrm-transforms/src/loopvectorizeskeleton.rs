@@ -175,7 +175,7 @@ pub(crate) struct Skeleton {
 }
 
 /// An integer constant's value, masked to its type.
-fn constant_int(
+pub(crate) fn constant_int(
     context: &Context,
     operand: Operand,
 ) -> Option<u128> {
@@ -206,11 +206,11 @@ pub(crate) fn iterations(
     if reverse { start.wrapping_sub(bound) & mask(bits) } else { (bound.wrapping_sub(start) & mask(bits)) / scale }
 }
 
-fn mask(bits: u32) -> u128 {
+pub(crate) fn mask(bits: u32) -> u128 {
     if bits >= 128 { u128::MAX } else { (1u128 << bits) - 1 }
 }
 
-fn bits_of(
+pub(crate) fn bits_of(
     context: &Context,
     ty: TypeId,
 ) -> u32 {
@@ -221,7 +221,7 @@ fn bits_of(
 }
 
 /// An instruction made at `at`, and its value.
-fn emit(
+pub(crate) fn emit(
     function: &mut Function,
     at: Position,
     opcode: Opcode,
@@ -235,7 +235,7 @@ fn emit(
 }
 
 /// A terminator at the end of `block`.
-fn end_with(
+pub(crate) fn end_with(
     function: &mut Function,
     block: BlockId,
     void: TypeId,
@@ -771,7 +771,8 @@ fn retarget_exit_phis(
     }
 }
 
-/// The metadata node `at`: the module's, or one made since (by this pass or an earlier one in the run).
+/// The metadata node `at`: the module's, or one made since (by this pass or an
+/// earlier one in the run).
 pub(crate) fn node_at(
     declared: &Declared,
     metadata: &[MetadataNode],
@@ -816,6 +817,28 @@ fn loop_options(
         .and_then(|(_, id)| node_at(declared, metadata, *id))
         .map(|id| id.operands.into_iter().skip(1).collect())
         .unwrap_or_default()
+}
+
+/// `VPlanTransforms::simplifyBranchConditionForVFAndUF` (L2142): the vector
+/// loop of `header` runs once, so its latch leaves on the first iteration
+/// (`br i1 true` to the exit; the pin's `BranchOnCond true`). The loop and its
+/// phis fold away in the cleanup that follows.
+pub(crate) fn exit_on_first_iteration(
+    context: &mut Context,
+    function: &mut Function,
+    header: BlockId,
+) {
+    let latch = function.terminator(header).expect("a terminated vector loop");
+    let operands = function.instruction(latch).operands.clone();
+    let [_, Operand::Block(on_true), Operand::Block(on_false)] = operands[..] else { return };
+    if (on_true == header) == (on_false == header) {
+        return;
+    }
+    let bool_ty = context.types.intern(Type::Int(1));
+    let leave = Operand::Constant(
+        context.constant(Constant { ty: bool_ty, kind: ConstantKind::Int(u128::from(on_true != header)) }),
+    );
+    function.set_operand(latch, 0, leave);
 }
 
 /// `llvm.loop.isvectorized` on the loop whose latch ends in `branch`: the
