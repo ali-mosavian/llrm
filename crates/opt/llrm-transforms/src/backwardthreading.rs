@@ -185,8 +185,10 @@ fn defined_in(
     value: Operand,
     block: BlockId,
 ) -> bool {
-    matches!(value, Operand::Value(id)
-        if matches!(function.value(id).def, ValueDef::Instruction(inst) if function.parent(inst) == Some(block)))
+    matches!(
+        value,
+        Operand::Value(id) if matches!(function.value(id).def, ValueDef::Instruction(inst) if function.parent(inst) == Some(block))
+    )
 }
 
 /// `range`, narrowed by the edge `from -> to` when `from` branches on a
