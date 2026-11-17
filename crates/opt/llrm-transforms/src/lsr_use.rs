@@ -1049,7 +1049,13 @@ pub fn may_use_post_inc_mode(
     let Some((start, step, _)) = se.match_affine_add_rec(s) else { return false };
     let Some(step_bytes) = se.as_constant(step).map(|c| c.sext_value() as i64) else { return false };
     let ty = crate::lsr_generate::tti_ty(se.type_of(s));
-    (tti.is_post_inc_load_legal(ty) || tti.is_post_inc_store_legal(ty))
+    // DEVIATE LSR-POSTINC-COND (owner arm64, exit 2026-11-30; where
+    // `lsr_post_indexed_amortized`): a use with a conditional fixup cannot
+    // fold the step into an access on every trip (`RateRegister` prices it as
+    // a step), so the pointer walk is no better than the index with a scaled
+    // address, and reassociation still offers that one.
+    (lu.all_fixups_unconditional || !tti.lsr_post_indexed_amortized())
+        && (tti.is_post_inc_load_legal(ty) || tti.is_post_inc_store_legal(ty))
         && tti.is_post_inc_step_legal(i64::from(access_bits / 8), step_bytes)
         && se.as_constant(start).is_none()
         && se.is_loop_invariant(cx, start, Some(l))
