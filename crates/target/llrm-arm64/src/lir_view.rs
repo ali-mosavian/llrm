@@ -382,6 +382,10 @@ fn view_with(
                 operands
                     .extend(targets.iter().filter_map(|label| labels.get(label.as_str())).map(|&b| Operand::Block(b)));
             }
+            // The member a `TupleExtract` takes, which the allocator hints by.
+            if let Op::I(Inst::VectorTupleExtract { index, .. }) = &op {
+                operands.push(Operand::Imm(i64::from(*index)));
+            }
             if kind != Kind::Copy {
                 operands.push(Operand::Imm(if fused { content(&op).wrapping_add(1) } else { content(&op) }));
             }
@@ -958,7 +962,7 @@ impl AllocTarget for Arm64 {
         };
         // (tuple, [(member, index)]) of the instruction.
         let (tuple, members): (u32, Vec<(u32, usize)>) = match what.name.as_deref() {
-            Some("TupleExtract") => {
+            Some("VectorTupleExtract") => {
                 let (Some(rd), Some(tuple), Some(Loc::Imm(index))) =
                     (what.dests.first().and_then(value), what.sources.first().and_then(value), what.sources.get(1))
                 else {
@@ -966,7 +970,7 @@ impl AllocTarget for Arm64 {
                 };
                 (tuple, vec![(rd, index.value as usize)])
             }
-            Some(name) if name.starts_with("TupleBuild") => {
+            Some("VectorTupleBuild") => {
                 let Some(tuple) = what.dests.first().and_then(value) else { return Vec::new() };
                 (tuple, what.sources.iter().filter_map(value).enumerate().map(|(at, member)| (member, at)).collect())
             }

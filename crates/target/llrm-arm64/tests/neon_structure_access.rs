@@ -64,3 +64,29 @@ fn ldn_and_stn_of_each_count_and_shape_list_consecutive_registers() {
         }
     }
 }
+
+/// The members of a tuple take the tuple's registers and the tuple stored
+/// takes the members' (`getRegAllocationHints` through the sub-register
+/// index). Without it `ld2`, add, `st2` of the sum and the second vector was
+/// `ld2`, two `mov`s, the add and three `eor`s swapping the stored pair.
+#[test]
+fn members_and_tuples_share_registers_where_they_can() {
+    let ir = r#"
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128-Fn32"
+target triple = "aarch64-unknown-linux-gnu"
+declare {<4 x i32>, <4 x i32>} @llvm.aarch64.neon.ld2.v4i32.p0(ptr)
+declare void @llvm.aarch64.neon.st2.v4i32.p0(<4 x i32>, <4 x i32>, ptr)
+define void @f(ptr %p, ptr %o) {
+  %r = call {<4 x i32>, <4 x i32>} @llvm.aarch64.neon.ld2.v4i32.p0(ptr %p)
+  %a = extractvalue {<4 x i32>, <4 x i32>} %r, 0
+  %b = extractvalue {<4 x i32>, <4 x i32>} %r, 1
+  %s = add <4 x i32> %a, %b
+  call void @llvm.aarch64.neon.st2.v4i32.p0(<4 x i32> %s, <4 x i32> %b, ptr %o)
+  ret void
+}
+"#;
+    let asm = driver::assembly(ir, Platform::Linux, true).expect("lowers");
+    assert!(!asm.contains("eor"), "the stored pair is swapped in place:\n{asm}");
+    let moves = asm.lines().filter(|line| line.trim_start().starts_with("mov v")).count();
+    assert!(moves <= 1, "{moves} moves between members and tuples:\n{asm}");
+}

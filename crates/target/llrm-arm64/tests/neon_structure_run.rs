@@ -26,7 +26,8 @@ fn ir() -> String {
         );
     }
     format!(
-        "target triple = \"aarch64-unknown-linux-gnu\"\n\
+        "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128-Fn32\"\n\
+         target triple = \"aarch64-unknown-linux-gnu\"\n\
          declare {agg} @llvm.aarch64.neon.ld3.v16i8.p0(ptr)\n\
          declare void @llvm.aarch64.neon.st3.v16i8.p0({ty}, {ty}, {ty}, ptr)\n\
          declare void @touch()\n\
