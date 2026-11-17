@@ -812,6 +812,32 @@ impl Printer<'_> {
                 self.push("inc de");
                 self.push("ldir");
             }
+            // the same for any count in bc: zero stores nothing, one stores the
+            // byte and skips the `ldir` (a count of zero there is 65536). The
+            // value is parked in e across the tests, which clobber a
+            "LDFILLGi" | "LDFILLGr" => {
+                let skip = format!("{}$", self.out.iter().filter(|line| !matches!(line, Line::Loc(_))).count());
+                let value = if op == "LDFILLGi" {
+                    self.immediate(inst, 1, 0xFF)?
+                } else {
+                    self.push("ld e, a");
+                    "e".to_owned()
+                };
+                for step in 0..2 {
+                    self.push("ld a, b");
+                    self.push("or a, c");
+                    self.push(format!("jr z, {skip}"));
+                    if step == 0 {
+                        self.push(format!("ld (hl), {value}"));
+                        self.push("dec bc");
+                    }
+                }
+                self.push("ld e, l");
+                self.push("ld d, h");
+                self.push("inc de");
+                self.push("ldir");
+                self.out.push(Line::Label(skip));
+            }
             // eight bytes at hl shifted in place a bit a trip, count in
             // bc: `inc b` and the jump to the test make a count of zero no trip
             // (the test is `dec b; jp nz`, which the relax pass makes `djnz`);
@@ -2590,7 +2616,8 @@ fn drop_dead_byte_loads(lines: Vec<Line>) -> Vec<Line> {
                 if mnemonic == "djnz" {
                     live[0] = true;
                 }
-                // the target is the last operand (a condition code comes before it): `jp (hl)` reads the pair
+                // the target is the last operand (a condition code comes before
+                // it): `jp (hl)` reads the pair
                 read(&mut live, text.rsplit(", ").next().unwrap_or(""), mnemonic);
                 continue;
             }
@@ -4127,9 +4154,10 @@ mod tests {
         assert_eq!(block("110000"), 7, "bc is live after the block");
     }
 
-    /// `ld l, a` before `jp (hl)` was dropped as a dead load: the indirect jump reads `hl`, and the pass read a jump
-    /// as reading nothing of its own. switch_peeled_table -Os printed wrong results (the jump table's target was
-    /// the pair's old low byte).
+    /// `ld l, a` before `jp (hl)` was dropped as a dead load: the indirect jump
+    /// reads `hl`, and the pass read a jump as reading nothing of its own.
+    /// switch_peeled_table -Os printed wrong results (the jump table's target
+    /// was the pair's old low byte).
     #[test]
     fn a_load_the_indirect_jump_reads_is_kept() {
         let inst = |text: &str| Line::Inst(text.to_owned());
