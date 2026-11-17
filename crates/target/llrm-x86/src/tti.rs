@@ -1549,12 +1549,15 @@ impl Tti for X86 {
             // size, size and latency}.
             // `v16i8`: 2*unpack/2*pmullw/2*and/pack. `v8i16`: `pmullw`, the one
             // multiply that keeps its lane.
-            // `v4i32`: 3*pmuludq/4*shuffle.
+            // `v4i32`: 3*pmuludq/4*shuffle. `v2i64`: 3*pmuludq/3*shift/2*add
+            // (the pin's `PMULUDQ` row, for operands that fit 32 bits, needs
+            // the operands, which this price does not take).
             ArithOp::Mul => {
                 let row = match ty.lane {
                     Ty::Int(8) => [6, 18, 12, 12],
                     Ty::Int(16) => [1, 5, 1, 1],
                     Ty::Int(32) => [6, 8, 7, 7],
+                    Ty::Int(64) => [7, 10, 10, 10],
                     _ => return None,
                 };
                 xmm_pieces(ty).map(|pieces| Cost::of(row[kind.index()] * pieces))
