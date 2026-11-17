@@ -367,8 +367,9 @@ impl X86 {
     }
 }
 
-/// `SSE2ConversionTbl`'s integer rows (the pin's `X86TargetTransformInfo.cpp`, L3526): a cast, its destination and
-/// source as (lane bits, lanes), and the throughput; the other three cost kinds are 1.
+/// `SSE2ConversionTbl`'s integer rows (the pin's `X86TargetTransformInfo.cpp`,
+/// L3526): a cast, its destination and source as (lane bits, lanes), and the
+/// throughput; the other three cost kinds are 1.
 /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L3526
 const SSE2_INTEGER_CASTS: [(CastKind, (u32, u32), (u32, u32), i64); 23] = [
     (CastKind::ZExt, (64, 2), (8, 16), 4),
@@ -997,8 +998,8 @@ impl Tti for X86 {
         self.tuning.inline_never_grows_without_rate
     }
 
-    fn jump_threading_keeps_latch_at_size(&self) -> bool {
-        self.tuning.jump_threading_keeps_latch_at_size
+    fn jump_threading_latch_trial_at_size(&self) -> bool {
+        self.tuning.jump_threading_latch_trial_at_size
     }
 
     fn cold_site_ignores_sinks(&self) -> bool {
@@ -1501,9 +1502,11 @@ impl Tti for X86 {
         }
     }
 
-    /// `X86TTIImpl::getCastInstrCost` for the integer extends and truncates (the SSE2 rows): the row of the exact
-    /// types, else of the legalized ones times the larger register count; a truncate to the type it already is, once
-    /// legalized, is free. Anything else (a float, a mask, a scalarized cast) is not priced.
+    /// `X86TTIImpl::getCastInstrCost` for the integer extends and truncates
+    /// (the SSE2 rows): the row of the exact types, else of the legalized
+    /// ones times the larger register count; a truncate to the type it already
+    /// is, once legalized, is free. Anything else (a float, a mask, a
+    /// scalarized cast) is not priced.
     fn vector_cast_cost(
         &self,
         kind: CastKind,

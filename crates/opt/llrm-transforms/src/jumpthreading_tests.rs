@@ -310,7 +310,11 @@ fn an_optsize_function_keeps_its_loop_latch_in_one_copy() {
     let keeping = JumpThreadingOptions { keep_latch_at_size: true, ..JumpThreadingOptions::default() };
     let optsize = text.replace("i1 %y) {", "i1 %y) optsize {");
     assert!(!run_with(&optsize, keeping).contains(".thread"), "{}", run_with(&optsize, keeping));
-    assert!(run_with(text, keeping).contains(".thread"), "no optsize: the pin copies the latch:\n{}", run_with(text, keeping));
+    assert!(
+        run_with(text, keeping).contains(".thread"),
+        "no optsize: the pin copies the latch:\n{}",
+        run_with(text, keeping)
+    );
     assert!(run_with(&optsize, JumpThreadingOptions::default()).contains(".thread"), "target keeps nothing: the pin's");
 }
 

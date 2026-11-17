@@ -183,11 +183,11 @@ pub struct Tuning {
     /// stated (-O1), an inline that stays is held to the -Os bound (the callee
     /// copied only if it does not grow the code); false: the pin's threshold.
     pub inline_never_grows_without_rate: bool,
-    /// DEVIATE JT-LATCH-SIZE (owner x86-m32, exit 2026-11-30): at an
-    /// `optsize` function JumpThreading does not copy a loop latch (a block
-    /// that branches back to a loop header), as gcc's backward threader
-    /// refuses a path through the latch at -Os. false: the pin's.
-    pub jump_threading_keeps_latch_at_size: bool,
+    /// DEVIATE JT-LATCH-TRIAL (owner x86-m32, exit 2026-11-30): at -Os the
+    /// module is compiled again without the copies of a loop latch
+    /// JumpThreading made (gcc's backward threader refuses a path through the
+    /// latch) and the smaller object kept. false: the pin's.
+    pub jump_threading_latch_trial_at_size: bool,
     /// DEVIATE OB1: see `Tti::unroll_object_bound`.
     pub unroll_object_bound: Option<u32>,
     /// With `inline_never_grows_without_rate`: what a byte of growth costs an
@@ -347,9 +347,10 @@ pub struct Tuning {
     /// pin does not. DEVIATE DIVCONST-SIZE (owner llrm-target-x86-m64-b, exit
     /// 2026-11-30); none: the pin's.
     pub div_by_constant_size_cost: Option<u32>,
-    /// gcc's `-fsplit-paths` (on at `-O3`): the join block of a loop's latch diamond is copied into its arm
-    /// (`splitpaths.rs`). DEVIATE SP-O3 (owner llrm-target-x86-m64-b, exit 2026-11-30): a
-    /// target takes it once measured; false: the pin's, none.
+    /// gcc's `-fsplit-paths` (on at `-O3`): the join block of a loop's latch
+    /// diamond is copied into its arm (`splitpaths.rs`). DEVIATE SP-O3
+    /// (owner llrm-target-x86-m64-b, exit 2026-11-30): a target takes it
+    /// once measured; false: the pin's, none.
     pub split_paths_at_o3: bool,
     /// `UnrollingPreferences::PartialThreshold`: what a partly unrolled loop
     /// (the runtime unroll, the unroll-and-jam outer count) may total; none:
@@ -563,12 +564,12 @@ pub struct Tuning {
     /// DEVIATE LV-BW (owner llrm-target-x86-m64-b, exit 2026-11-24): the pin's
     /// own `-vectorizer-maximize-bandwidth`, a tuning limit, not a new rule.
     pub maximize_vector_bandwidth: bool,
-    /// gcc's single accumulator (`vectorizable_reduction`, `single_defuse_cycle`):
-    /// a reduction wider than a register keeps one register's lanes and folds
-    /// the pieces of each trip into it, not one accumulator per register. The
-    /// pin keeps the whole vector (a byte sum into an `i64` at VF 16 holds eight
-    /// registers and spills). DEVIATE LV-ACC (owner llrm-target-x86-m64-b, exit
-    /// 2026-11-30).
+    /// gcc's single accumulator (`vectorizable_reduction`,
+    /// `single_defuse_cycle`): a reduction wider than a register keeps one
+    /// register's lanes and folds the pieces of each trip into it, not one
+    /// accumulator per register. The pin keeps the whole vector (a byte sum
+    /// into an `i64` at VF 16 holds eight registers and spills). DEVIATE
+    /// LV-ACC (owner llrm-target-x86-m64-b, exit 2026-11-30).
     pub narrow_reduction_accumulators: bool,
     /// gcc's very-cheap cost model (`vect_analyze_loop_costing`): a vector
     /// factor above the widest type's, taken for the bandwidth of the smallest
@@ -576,8 +577,9 @@ pub struct Tuning {
     /// epilogue is left). DEVIATE LV-BW-DIV (owner llrm-target-x86-m64-b, exit
     /// 2026-11-30).
     pub bandwidth_vf_without_epilogue: bool,
-    /// `Tti::shift_loop_counts`: the shift-loop count idioms form (`ctlz`/`cttz`
-    /// are one instruction). Wasm and x86-64 say true (LI-18).
+    /// `Tti::shift_loop_counts`: the shift-loop count idioms form
+    /// (`ctlz`/`cttz` are one instruction). Wasm and x86-64 say true
+    /// (LI-18).
     pub shift_loop_counts: bool,
     /// DEVIATE LSR-DERIVED: with `lsr_size_order`, a recurrence the loop as
     /// written derives from its counter in one instruction a trip (`i <<
@@ -646,11 +648,13 @@ pub struct Tuning {
     pub frame_slot_is_free_base: bool,
     /// DEVIATE LU31, see `Tti::lsr_address_fewest_registers`.
     pub lsr_address_fewest_registers: bool,
-    /// DEVIATE LSR-CONST (owner llrm-target-x86-m64-b, exit 2026-11-30): a constant in a formula's setup
-    /// costs one, as in LLVM 20.1.8 (`getSetupCost`); the pin charges it by `getIntImmCost` (a free 0 costs
-    /// nothing), which makes `{0,+,1}` beat `{-1,+,1}` where clang 20 keeps the post-incremented index
-    /// (strlen: `mov eax, -1; inc eax; cmp [rdi+rax]` against `xor eax, eax; mov ecx, eax; inc eax; cmp [rdi+rcx]`).
-    /// false: the pin's.
+    /// DEVIATE LSR-CONST (owner llrm-target-x86-m64-b, exit 2026-11-30): a
+    /// constant in a formula's setup costs one, as in LLVM 20.1.8
+    /// (`getSetupCost`); the pin charges it by `getIntImmCost` (a free 0 costs
+    /// nothing), which makes `{0,+,1}` beat `{-1,+,1}` where clang 20 keeps the
+    /// post-incremented index (strlen: `mov eax, -1; inc eax; cmp
+    /// [rdi+rax]` against `xor eax, eax; mov ecx, eax; inc eax; cmp
+    /// [rdi+rcx]`). false: the pin's.
     pub lsr_constant_setup_is_one: bool,
     /// DEVIATE SINK-CONST-PHI: a constant operand of an arithmetic instruction
     /// is not made a phi by sinking (the pin: cheap), except at size.
@@ -811,7 +815,7 @@ impl Tuning {
         inline_trials_at_o1: false,
         rotate_exiting_latch_when_guard_folds: false,
         inline_never_grows_without_rate: false,
-        jump_threading_keeps_latch_at_size: false,
+        jump_threading_latch_trial_at_size: false,
         unroll_object_bound: None,
         inline_size_bytes: false,
         inline_o1_milliclocks_per_byte: 0,
