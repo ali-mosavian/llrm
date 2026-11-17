@@ -14,9 +14,8 @@ use llrm_m68k::reg;
 mod support;
 
 fn ir() -> String {
-    let mut text = String::from(
-        "target datalayout = \"E-m:e-p:32:16:32-i8:8:8-i16:16:16-i32:16:32-n8:16:32-a:0:16-S16\"\n",
-    );
+    let mut text =
+        String::from("target datalayout = \"E-m:e-p:32:16:32-i8:8:8-i16:16:16-i32:16:32-n8:16:32-a:0:16-S16\"\n");
     for (name, op, mask) in [("set", "or", 0), ("clr", "and", -1), ("chg", "xor", 0)] {
         for k in 0..32u32 {
             let bit = (1u32 << k) as i32;
@@ -76,10 +75,8 @@ fn the_68020_keeps_the_immediate_logic_instruction() {
 /// `bchg #31,%d7` is `0847 001f`.
 #[test]
 fn the_bit_rows_encode_as_gnu_as_does() {
-    let inst = |opcode, dst, bit| Inst {
-        opcode,
-        operands: vec![Operand::Reg(dst), Operand::Reg(dst), Operand::Imm(bit)],
-    };
+    let inst =
+        |opcode, dst, bit| Inst { opcode, operands: vec![Operand::Reg(dst), Operand::Reg(dst), Operand::Imm(bit)] };
     assert_eq!(encode(&inst("BSET32ti", reg::D1, 20)).unwrap().bytes, [0x08, 0xc1, 0x00, 0x14]);
     assert_eq!(encode(&inst("BCLR32ti", reg::D0, 3)).unwrap().bytes, [0x08, 0x80, 0x00, 0x03]);
     assert_eq!(encode(&inst("BCHG32ti", reg::D7, 31)).unwrap().bytes, [0x08, 0x47, 0x00, 0x1f]);
@@ -94,7 +91,8 @@ fn every_bit_and_edge_value_computes_what_c_computes_when_run() {
         command
     };
     for level in [Level::O1, Level::O2, Level::O3, Level::Os] {
-        let mut text = assembly(&ir(), cpu_of("68000").unwrap(), level).unwrap_or_else(|why| panic!("{level:?}: {why}"));
+        let mut text =
+            assembly(&ir(), cpu_of("68000").unwrap(), level).unwrap_or_else(|why| panic!("{level:?}: {why}"));
         for name in ["set", "clr", "chg"] {
             for k in 0..32 {
                 text = text.replace(&format!("{name}{k}:"), &format!(".globl {name}{k}\n{name}{k}:"));

@@ -13,8 +13,8 @@
 //! The codes are Z of the old bit only: [`crate::ccr::like_test`] has no row
 //! for them, so no pass reads them as a test of the result.
 //!
-//! Translation: gcc's `bsetsi_internal`, `bclrsi_internal` and `bchgsi_internal`
-//! patterns (`config/m68k/m68k.md`).
+//! Translation: gcc's `bsetsi_internal`, `bclrsi_internal` and
+//! `bchgsi_internal` patterns (`config/m68k/m68k.md`).
 //!
 //! DEVIATE M68K-BITOP: the pin's M68k selects none of the three
 //! (`M68kInstrBits.td` defines them with no pattern). Reason: gcc 15 sets,
@@ -126,7 +126,8 @@ fn bit_of(
     let mask = adapter.dag.constant(adapter.dag.operand(here, 1))?;
     let mask = u32::try_from(mask & 0xFFFF_FFFF).ok()?;
     let single = if row == 1 { !mask } else { mask };
-    // the pin selects a disjoint `or` as an add (`or_is_add`), and `addq` of 1 to 8 is 2 bytes and 8 clocks
+    // the pin selects a disjoint `or` as an add (`or_is_add`), and `addq` of 1
+    // to 8 is 2 bytes and 8 clocks
     if row == 0
         && single <= 8
         && (Dag::has_disjoint_flag(adapter, node)

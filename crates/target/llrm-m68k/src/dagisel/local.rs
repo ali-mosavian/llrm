@@ -8,7 +8,7 @@ use llrm_dagisel::instr::InstrDesc;
 
 use super::asm::{AsmOperand, asm};
 use super::enc::{Piece, encoding};
-use super::{adda, bfextu, bitop, bfffo, cmpa, divrem, indexed, pea, scaled, short, widemul, wordjump};
+use super::{adda, bfextu, bfffo, bitop, cmpa, divrem, indexed, pea, scaled, short, widemul, wordjump};
 
 /// The machine code of the instruction named `name`, the pin's or a local one.
 pub fn code_of(name: &str) -> Option<u16> {
