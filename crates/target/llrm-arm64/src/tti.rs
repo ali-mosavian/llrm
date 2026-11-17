@@ -963,6 +963,37 @@ impl Tti for AArch64 {
         true
     }
 
+    /// DEVIATE LSR-POSTINC (owner arm64, exit 2026-11-30; the pin's AArch64
+    /// states no preference): post-indexed access is free on arm64 and gcc's
+    /// ivopts walks a pointer where the loop makes enough trips (tile -O1).
+    fn preferred_addressing_mode(&self) -> AddressingMode {
+        AddressingMode::PostIndexed
+    }
+
+    fn lsr_post_indexed_amortized(&self) -> bool {
+        true
+    }
+
+    fn is_post_inc_load_legal(
+        &self,
+        ty: Ty,
+    ) -> bool {
+        matches!(
+            ty,
+            Ty::Int(8 | 16 | 32 | 64) | Ty::Pointer | Ty::Float | Ty::Double
+        )
+    }
+
+    fn is_post_inc_store_legal(
+        &self,
+        ty: Ty,
+    ) -> bool {
+        matches!(
+            ty,
+            Ty::Int(8 | 16 | 32 | 64) | Ty::Pointer | Ty::Float | Ty::Double
+        )
+    }
+
     fn vector_reduction_cost(
         &self,
         kind: llrm_mir::intrinsics::ReduceKind,
