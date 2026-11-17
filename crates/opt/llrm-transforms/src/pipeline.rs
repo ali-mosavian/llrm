@@ -1083,6 +1083,16 @@ pub(crate) fn llvm_order(
             }),
             combine("combine@1242"),
             dead("dead@1242"),
+            // DEVIATE BACKTHREAD-REL: before `decide@1244` makes selects of the
+            // branches.
+            slot(
+                "backthread@1243",
+                Box::new(
+                    crate::backwardthreading::BackwardThreading::from_env()
+                        .when(applied.options.backward_threading)
+                        .early(),
+                ),
+            ),
             // `SimplifyCFGOptions().convertSwitchRangeToICmp(true)`
             // (PassBuilderPipelines.cpp#L1245): the option is read by
             // `simplifySwitch`, not translated yet, so these are the defaults.
