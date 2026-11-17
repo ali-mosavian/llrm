@@ -602,6 +602,12 @@ pub fn visit(
     // vectorizer makes, only simplifies (`add zeroinitializer, x` is `x`); the
     // visitors are enabled by operation, each with its own identity sweep.
     let operation = c.function.instruction(inst).opcode.clone();
+    // `narrowBinOp` is the one cast combine that reads vectors.
+    if matches!(operation, Opcode::Cast(CastOp::Trunc))
+        && let Some(narrowed) = crate::combine_casts::narrow_vector_bin_op(c, inst)
+    {
+        return narrowed;
+    }
     let skips_visitors = match operation {
         Opcode::Binary(op) => !vector_visited(op),
         Opcode::Cast(_) => true,

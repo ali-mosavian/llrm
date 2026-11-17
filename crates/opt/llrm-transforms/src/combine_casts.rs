@@ -48,7 +48,7 @@
 
 use llrm_mir::apfloat;
 use llrm_mir::constantfolding;
-use llrm_mir::context::{mask, signed};
+use llrm_mir::context::{Constant, ConstantId, ConstantKind, mask, signed};
 use llrm_mir::hash::HashMap;
 use llrm_mir::module::{InstId, Operand, ValueDef};
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
@@ -1171,6 +1171,75 @@ fn trunc_to_bool(
     };
     if let Some(x) = usub_sat {
         return Some(replace_with_icmp(c, inst, IntPredicate::Eq, x, zero));
+    }
+    None
+}
+
+/// `ConstantExpr::getTrunc` of a vector of integer constants, lane by lane.
+fn fold_trunc_vector(
+    c: &mut Combiner,
+    v: Operand,
+    ty: TypeId,
+) -> Option<Operand> {
+    let Operand::Constant(id) = v else { return None };
+    let Type::Vector { element, .. } = c.context.types.get(ty).clone() else { return None };
+    let kind = c.context.get(id).kind.clone();
+    let lane_of = |c: &mut Combiner, lane: ConstantId| {
+        let from = c.context.get(lane).ty;
+        constantfolding::constant_fold_cast_operand(c.context, c.env.layout, CastOp::Trunc, lane, element)
+            .filter(|_| c.context.types.int_bits(from).is_some())
+    };
+    let narrow = match kind {
+        ConstantKind::Aggregate(lanes) => {
+            let narrowed: Option<Vec<ConstantId>> = lanes.into_iter().map(|lane| lane_of(c, lane)).collect();
+            c.context.constant(Constant { ty, kind: ConstantKind::Aggregate(narrowed?) })
+        }
+        ConstantKind::Zero | ConstantKind::Undef | ConstantKind::Poison => {
+            c.context.constant(Constant { ty, kind })
+        }
+        _ => return None,
+    };
+    Some(Operand::Constant(narrow))
+}
+
+/// `InstCombinerImpl::narrowBinOp` of a truncate of integer vectors: `trunc (binop X, C)` is
+/// `binop (trunc X), C'` for a one-use `add`, `sub`, `mul`, `and`, `or` or `xor`. The other
+/// combines of `visitTrunc` do not model vectors (`too_wide`).
+pub(crate) fn narrow_vector_bin_op(
+    c: &mut Combiner,
+    inst: InstId,
+) -> Option<Visit> {
+    let src = c.function.instruction(inst).operands[0];
+    let dest_ty = c.function.instruction(inst).ty;
+    let lane_bits = |c: &Combiner, ty: TypeId| match c.context.types.get(ty) {
+        Type::Vector { element, .. } => c.context.types.int_bits(*element),
+        _ => None,
+    };
+    let (src_bits, dest_bits) = (lane_bits(c, c.type_of(src))?, lane_bits(c, dest_ty)?);
+    if src_bits <= dest_bits || !shared::has_one_use(c, src) {
+        return None;
+    }
+    let (op, op0, op1) = {
+        let (_, binary) = query(c, Some(inst)).instruction_of(src)?;
+        let Opcode::Binary(op) = binary.opcode else { return None };
+        let [a, b] = binary.operands[..] else { return None };
+        (op, a, b)
+    };
+    if !matches!(op, BinaryOp::And | BinaryOp::Or | BinaryOp::Xor | BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul) {
+        return None;
+    }
+    // trunc (binop C, X) --> binop (trunc C', X); trunc (binop X, C) --> binop (trunc X, C')
+    if matches!(op0, Operand::Constant(_))
+        && let Some(narrow_c) = fold_trunc_vector(c, op0, dest_ty)
+    {
+        let trunc_x = c.create_cast(inst, CastOp::Trunc, op1, dest_ty, Flags::default());
+        return Some(c.replace_with_binop(inst, op, narrow_c, trunc_x, Flags::default()));
+    }
+    if matches!(op1, Operand::Constant(_))
+        && let Some(narrow_c) = fold_trunc_vector(c, op1, dest_ty)
+    {
+        let trunc_x = c.create_cast(inst, CastOp::Trunc, op0, dest_ty, Flags::default());
+        return Some(c.replace_with_binop(inst, op, trunc_x, narrow_c, Flags::default()));
     }
     None
 }
