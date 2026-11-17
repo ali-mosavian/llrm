@@ -126,3 +126,20 @@ fn constant_stores_become_vector_stores_on_x86_64() {
     assert_eq!(text.matches(&splat).count(), 10, "{text}");
     assert_eq!(text.matches("store i16").count(), 0, "{text}");
 }
+
+/// huffman_decode m64 -O3 stored `<0, 0, 2, 5>` as `xorps; movups`: a window
+/// whose first lane is zero became a zero vector, whatever the other lanes
+/// held, and `valptr[1][3..5]` read 0 instead of 2 and 5 (a wrong value).
+#[test]
+fn a_constant_window_that_starts_with_zero_keeps_its_other_lanes() {
+    let text = run("@g = global [8 x i32] zeroinitializer, align 16
+define void @f() {
+  store i32 0, ptr getelementptr inbounds nuw (i8, ptr @g, i64 8), align 4
+  store i32 0, ptr getelementptr inbounds nuw (i8, ptr @g, i64 12), align 4
+  store i32 2, ptr getelementptr inbounds nuw (i8, ptr @g, i64 16), align 4
+  store i32 5, ptr getelementptr inbounds nuw (i8, ptr @g, i64 20), align 4
+  ret void
+}
+");
+    assert!(text.contains("store <4 x i32> <i32 0, i32 0, i32 2, i32 5>"), "{text}");
+}

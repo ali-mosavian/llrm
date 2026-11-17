@@ -194,8 +194,17 @@ fn vectorize(
     let last = window.iter().max_by_key(|seed| seed.order).expect("a window");
     let pointer = function.instruction(first.store).operands[1];
     let Operand::Constant(lane) = first.value else { unreachable!("a window of constants") };
+    let zero = |seed: &Seed| match seed.value {
+        Operand::Constant(one) => {
+            matches!(
+                context.get(one).kind,
+                ConstantKind::Int(0) | ConstantKind::Float(0) | ConstantKind::Zero
+            )
+        }
+        _ => false,
+    };
     let kind = match context.get(lane).kind.clone() {
-        ConstantKind::Int(0) | ConstantKind::Float(0) | ConstantKind::Zero => ConstantKind::Zero,
+        _ if window.iter().all(zero) => ConstantKind::Zero,
         _ if window.iter().all(|seed| seed.value == first.value) => ConstantKind::Aggregate(vec![lane; vf]),
         _ => ConstantKind::Aggregate(
             window

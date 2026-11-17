@@ -252,12 +252,13 @@ fn gpr_xmm_move(name: &str) -> Option<&'static str> {
 /// is `movsd_x`. `SQRTSDr` names its tied source too. A pin name that is none
 /// of these is `None`.
 fn sse(name: &str) -> Option<(String, Option<u32>, Option<u32>, Vec<char>)> {
-    const ARITHMETIC: [&str; 58] = [
+    const ARITHMETIC: [&str; 67] = [
         "ADDSS", "ADDSD", "SUBSS", "SUBSD", "MULSS", "MULSD", "DIVSS", "DIVSD", "MINSS", "MINSD", "MAXSS", "MAXSD",
         "SQRTSS", "SQRTSD", "MOVSS", "MOVSD", "UCOMISS", "UCOMISD", "XORPS", "ANDPS", "ANDNPS", "ORPS", "CMPSS",
         "CMPSD", "PADDB", "PADDW", "PADDD", "PADDQ", "PSUBB", "PSUBW", "PSUBD", "PSUBQ", "PAND", "PANDN", "POR",
         "PXOR", "PMULLW", "PSLLW", "PSLLD", "PSLLQ", "PSRLW", "PSRLD", "PSRLQ", "PSRAW", "PSRAD", "PSHUFD", "PUNPCKLQDQ", "PMULUDQ", "PUNPCKLDQ",
         "PUNPCKLBW", "PUNPCKHBW", "PACKUSWB", "PACKSSWB", "PUNPCKLWD", "PUNPCKHWD", "PUNPCKHDQ", "PUNPCKHQDQ", "PACKSSDW",
+        "PCMPEQB", "PCMPEQW", "PCMPEQD", "PCMPGTB", "PCMPGTW", "PCMPGTD", "PMOVMSKB", "MOVMSKPS", "MOVMSKPD",
     ];
     const MOVES: [&str; 2] = ["MOVAPS", "MOVUPS"];
     const CONVERTS: [(&str, &str, Option<u32>); 8] = [
