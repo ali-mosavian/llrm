@@ -897,12 +897,16 @@ pub trait Tti {
 
     /// `getCastInstrCost` of an extension between fixed vectors whose users
     /// are `users`: free where every user absorbs it
-    /// (`GetUserAbsorbedCastCost`), else as [`Tti::vector_cast_cost`].
+    /// (`GetUserAbsorbedCastCost`), else as [`Tti::vector_cast_cost`]. `own`:
+    /// the type of the instruction's own operand, which `src` differs from
+    /// where the caller asks about an extension from another type
+    /// (`SrcOverrideTy`).
     fn vector_ext_cost(
         &self,
         kind: CastKind,
         dst: VectorTy,
         src: VectorTy,
+        own: VectorTy,
         _users: &[ExtUser],
         cost_kind: CostKind,
     ) -> Option<Cost> {

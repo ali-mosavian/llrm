@@ -1005,13 +1005,14 @@ impl Tti for AArch64 {
         kind: CastKind,
         dst: VectorTy,
         src: VectorTy,
+        own: VectorTy,
         users: &[llrm_mir::tti::ExtUser],
         cost_kind: CostKind,
     ) -> Option<Cost> {
         if cost_kind == CostKind::Latency {
             return None;
         }
-        crate::tti_vector::ext_cost(kind, dst, src, users)
+        crate::tti_vector::ext_cost(kind, dst, src, own, users)
     }
 
     fn vector_min_max_cost(

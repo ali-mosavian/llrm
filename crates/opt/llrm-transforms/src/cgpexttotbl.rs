@@ -85,6 +85,7 @@ fn plan(
             CastKind::ZExt,
             vector_of(context, instruction.ty)?,
             vector_of(context, truncated)?,
+            vector_of(context, src_ty)?,
             &users,
             CostKind::SizeAndLatency,
         )

@@ -614,7 +614,7 @@ pub fn instruction_cost_known(
                 // (`GetUserAbsorbedCastCost`).
                 (Some(dst), Some(src)) if matches!(op, CastKind::SExt | CastKind::ZExt) => {
                     let users = operation.result.map(|value| ext_users(context, function, value)).unwrap_or_default();
-                    tti.vector_ext_cost(op, dst, src, &users, kind).unwrap_or(Cost::INVALID)
+                    tti.vector_ext_cost(op, dst, src, src, &users, kind).unwrap_or(Cost::INVALID)
                 }
                 (Some(dst), Some(src)) => tti.vector_cast_cost(op, dst, src, kind).unwrap_or(Cost::INVALID),
                 _ => Cost::INVALID,

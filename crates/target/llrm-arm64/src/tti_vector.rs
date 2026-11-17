@@ -349,13 +349,16 @@ pub(crate) fn ext_cost(
     kind: CastKind,
     dst: VectorTy,
     src: VectorTy,
+    own: VectorTy,
     users: &[ExtUser],
 ) -> Option<Cost> {
+    // `Src != I->getOperand(0)->getType() ? Src : nullptr`
+    let src_override = (src != own).then_some(src.lane);
     if !users.is_empty() {
         let mut most = Cost::FREE;
         let mut all = true;
         for user in users {
-            match absorbed_cost(kind, dst, src, user) {
+            match absorbed_cost(kind, dst, src, src_override, user) {
                 Ok(Some(cost)) => most = if cost.value > most.value { cost } else { most },
                 Ok(None) => {
                     all = false;
@@ -375,10 +378,11 @@ fn absorbed_cost(
     kind: CastKind,
     dst: VectorTy,
     src: VectorTy,
+    src_override: Option<Ty>,
     user: &ExtUser,
 ) -> Result<Option<Cost>, ()> {
     let Some(op) = user.op else { return Ok(None) };
-    if let Some(wide) = bin_ext_widening(op, dst, user.operands, None)? {
+    if let Some(wide) = bin_ext_widening(op, dst, user.operands, src_override)? {
         // "The cost from Src->Src*2 needs to be added if required, the cost
         // from Src*2->ExtTy is free."
         let (wide_bits, src_bits) = (lane_bits(wide.lane).ok_or(())?, lane_bits(src.lane).ok_or(())?);
@@ -388,7 +392,7 @@ fn absorbed_cost(
         }
         return Ok(Some(Cost::FREE));
     }
-    if single_ext_widening(op, dst, user.operands, None) {
+    if single_ext_widening(op, dst, user.operands, src_override) {
         // "For adds only count the second operand as free if both operands are
         // extends but not the same operation."
         if op != ArithOp::Add || user.index == 1 || user.operands[1].is_some_and(|other| other.kind == kind) {

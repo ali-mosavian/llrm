@@ -864,6 +864,7 @@ fn extensions_of_a_mask_cost_what_the_pin_says() {
             kind,
             VectorTy { lane: Ty::Int(dst_lane), count: dst_count },
             VectorTy { lane: Ty::Int(1), count: src_count },
+            VectorTy { lane: Ty::Int(1), count: src_count },
             &[],
             CostKind::RecipThroughput,
         )
@@ -924,4 +925,23 @@ fn a_vector_min_or_max_costs_one_a_register_and_two_for_64_bit_lanes() {
     assert_eq!((cost(true, i(64, 2)), cost(true, i(64, 4))), (Some(2), Some(4)));
     assert_eq!((cost(true, i(8, 2)), cost(false, i(16, 2)), cost(true, i(8, 4))), (Some(5), Some(3), Some(5)));
     assert_eq!(tti.vector_min_max_cost(true, true, i(32, 4), CostKind::Latency), None);
+}
+
+/// `getCastInstrCost` of `zext <4 x i32> to <4 x i64>` asked for the `<4 x i8>`
+/// zext that feeds an `add` (CodeGenPrepare's tbl check): the user's operand
+/// is judged as the extension from `i32` (`SrcOverrideTy`), so `uaddw` takes
+/// it and it is free. The override was dropped: the operand read as `i8`, not
+/// absorbed, and `rep_count`'s zext was never shuffled.
+#[test]
+fn an_extension_asked_from_another_type_is_judged_from_it_for_its_user() {
+    use llrm_mir::tti::{ExtOperand, ExtUser};
+    let tti = AArch64::of_cpu("generic").unwrap();
+    let vector = |bits, count| VectorTy { lane: Ty::Int(bits), count };
+    let user = ExtUser {
+        op: Some(ArithOp::Add),
+        operands: [None, Some(ExtOperand { kind: CastKind::ZExt, src: Ty::Int(8) })],
+        index: 1,
+    };
+    let cost = tti.vector_ext_cost(CastKind::ZExt, vector(64, 4), vector(32, 4), vector(8, 4), &[user], CostKind::SizeAndLatency);
+    assert_eq!(cost.map(|c| c.value), Some(0));
 }
