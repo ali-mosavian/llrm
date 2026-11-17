@@ -1042,6 +1042,10 @@ impl AllocTarget for Arm64 {
     }
 
     /// A call keeps `d8`-`d15`, and clobbers `q8`-`q15` (the pin's regmask).
+    fn value_bytes(class: Class) -> Option<u32> {
+        (class == Class::Fpr).then_some(8)
+    }
+
     fn caller_saved_high() -> Vec<RegId> {
         (8..=15u32).map(|n| id(Class::Fpr, n)).collect()
     }

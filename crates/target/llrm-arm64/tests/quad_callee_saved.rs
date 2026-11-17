@@ -110,3 +110,29 @@ fn a_quad_live_across_a_call_is_not_in_v8_to_v15() {
     }
     assert!(stale.is_empty(), "{stale:?} live across the call:\n{asm}");
 }
+
+/// A scalar `double` is `d8`-`d15` the call keeps: two live across a call sit
+/// there (saved in the prologue), not spilled. Sized as the 16-byte `v` register
+/// it lives in they were lost to the call's `q8`-`q15` clobber and spilled:
+/// +3 instructions in x87_arguments -O1, every double across a call.
+#[test]
+fn a_double_live_across_a_call_sits_in_d8_to_d15() {
+    let asm = driver::assembly(
+        r#"
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128-Fn32"
+target triple = "aarch64-unknown-linux-gnu"
+declare void @g()
+define double @f(double %x, ptr %p) {
+  %a = load double, ptr %p
+  call void @g()
+  %r = fadd double %a, %x
+  ret double %r
+}
+"#,
+        Platform::Linux,
+        true,
+    )
+    .expect("lowers");
+    let spills = asm.lines().filter(|line| line.contains("str d") && line.contains("[sp, #") && !line.contains("!")).count();
+    assert!(asm.contains("d8") && asm.contains("d9") && spills == 0, "{spills} double spills:\n{asm}");
+}

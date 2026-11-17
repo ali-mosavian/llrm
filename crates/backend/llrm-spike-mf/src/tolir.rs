@@ -870,7 +870,12 @@ fn class_width<T: Target>(
     registers: Regs,
     class: T::Class,
 ) -> u32 {
-    T::candidates(class).first().and_then(|root| registers.bytes(T::view(*root, class))).map_or(1, |bytes| bytes as u32)
+    T::value_bytes(class).unwrap_or_else(|| {
+        T::candidates(class)
+            .first()
+            .and_then(|root| registers.bytes(T::view(*root, class)))
+            .map_or(1, |bytes| bytes as u32)
+    })
 }
 
 /// The registers greedy may give a virtual register of each class, minus the
@@ -2762,8 +2767,13 @@ pub fn from_lir<T: Target>(
         if (lane_values.contains(&held.value) || narrower) && !pinned.contains_key(&held.value) {
             let found =
                 placed_at.get(&held.value).and_then(|wide| lane_register(&registers, *wide, held.offset, held.width));
+            // A value narrower than its register by class only (arm64's
+            // `Fpr`: a scalar in a `v` register, no register of its width) is
+            // the whole register.
+            let whole = found.is_none() && narrower && !lane_values.contains(&held.value) && held.offset == 0;
             match found {
                 Some(register) => return Reg::Phys(register),
+                None if whole => return Reg::Phys(placed_at[&held.value]),
                 None => {
                     lane_failed.borrow_mut().get_or_insert(format!("no register for a lane of value {}", held.value));
                 }

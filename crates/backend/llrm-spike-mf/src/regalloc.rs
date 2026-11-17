@@ -58,6 +58,12 @@ pub trait Target {
     fn any() -> Self::Class;
     /// The registers (roots) a class may use, in allocation order.
     fn candidates(class: Self::Class) -> Vec<RegId>;
+    /// The bytes a value of `class` holds where that is less than its first
+    /// candidate's (AArch64's `Fpr` is a scalar of 8 bytes in a 16-byte `v`
+    /// register: `FPR64` against `FPR128`).
+    fn value_bytes(_class: Self::Class) -> Option<u32> {
+        None
+    }
     /// `root`'s view for `class` (the byte or word of a register).
     fn view(
         root: RegId,

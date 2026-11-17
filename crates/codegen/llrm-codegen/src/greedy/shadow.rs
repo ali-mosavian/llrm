@@ -1254,7 +1254,14 @@ impl PhysInterference for CallMasks {
         }
         // DEVIATE C-LANE: the high half of a register a call keeps the low
         // half of is lost to a value only where a wide read can follow.
-        high.contains(&root) && self.lane.get().is_none_or(|virt| self.wide_read_follows(virt, slot))
+        high.contains(&root)
+            && self.lane.get().is_none_or(|virt| {
+                // A value no wider than what the call keeps has no high half to
+                // lose.
+                let narrow =
+                    self.widths.widths.borrow().get(&virt).is_some_and(|width| *width <= self.preserved_low_bytes);
+                !narrow && self.wide_read_follows(virt, slot)
+            })
     }
 
     fn lane_of(
