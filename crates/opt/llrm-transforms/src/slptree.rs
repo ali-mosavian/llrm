@@ -657,15 +657,6 @@ impl<'a> Scaler<'a> {
         scale
     }
 
-    /// The scale of what stands in `block` and is invariant in no loop around it.
-    fn scale_of_block(
-        &self,
-        function: &Function,
-        block: BlockId,
-    ) -> u64 {
-        self.nest_scale(function, self.cx.loops.get_loop_for(block))
-    }
-
     /// The scale of what `scalars` make at `block`: the innermost loop around
     /// it in which one of them varies (`findInnermostNonInvariantLoop`).
     fn scale_at(
@@ -708,9 +699,8 @@ fn entry_scale(
             1
         }
         Kind::Store => {
-            // A store is never invariant: the scale of the whole nest around it.
             let block = function.parent(entry.insts[0]).expect("a placed store");
-            scaler.scale_of_block(function, block)
+            scaler.scale_at(function, block, &[])
         }
         _ => {
             let block = function.parent(entry.insts[0]).expect("a placed bundle");
@@ -751,9 +741,7 @@ fn costs_of(
             llrm_support::debug!("slp", "entry {:?} x{}: not priced", entry.kind, entry.lanes.len());
             return None;
         };
-        let scale = entry_scale(function, tree, at, scaler) as i64;
-        llrm_support::debug!("slp", "entry {at} {:?}: {priced} x{scale}", entry.kind);
-        costs.entry.push(priced * scale);
+        costs.entry.push(priced * entry_scale(function, tree, at, scaler) as i64);
         let mut extracts = 0i64;
         // The lanes some user outside the tree reads are extracted.
         if !matches!(entry.kind, Kind::Gather | Kind::Store) {

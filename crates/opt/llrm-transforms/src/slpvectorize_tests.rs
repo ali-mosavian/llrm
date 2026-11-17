@@ -175,3 +175,44 @@ define void @f() {
 ");
     assert!(text.contains("store <4 x i32> <i32 0, i32 0, i32 2, i32 5>"), "{text}");
 }
+
+/// object_extent_loop's init at x86-64 (`BoUpSLP::getTreeCost`): a pair `(i + k) * 0.5` stored in a loop. The tree
+/// costs more than it saves as written (the conversions and the gather of the counters are dearer); the pin cuts the
+/// conversions out (scalar `uitofp`, one `insertelement` a lane) and keeps `fmul` and the store packed.
+#[test]
+fn a_pair_of_converted_counters_in_a_loop_is_a_packed_multiply_and_store_with_the_conversions_gathered() {
+    let mut tuning = llrm_mir::target::Tuning::PIN;
+    tuning.vector_float_costs = true;
+    let tti = llrm_x86::tti::X86::of_cpu("x86-64").unwrap().with_tuning(tuning);
+    let mut module = parsed(
+        "@A = global [12 x [12 x double]] zeroinitializer, align 16
+define void @f() {
+entry:
+  br label %loop
+loop:
+  %i = phi i64 [ 0, %entry ], [ %next, %loop ]
+  %row = getelementptr inbounds nuw [96 x i8], ptr @A, i64 %i
+  %t0 = trunc nuw nsw i64 %i to i32
+  %c0 = uitofp nneg i32 %t0 to double
+  %m0 = fmul double %c0, 5.000000e-01
+  store double %m0, ptr %row, align 16
+  %next = add nuw nsw i64 %i, 1
+  %t1 = trunc nuw nsw i64 %next to i32
+  %c1 = uitofp nneg i32 %t1 to double
+  %m1 = fmul double %c1, 5.000000e-01
+  %p1 = getelementptr inbounds nuw i8, ptr %row, i64 8
+  store double %m1, ptr %p1, align 8
+  %done = icmp ne i64 %next, 12
+  br i1 %done, label %loop, label %exit
+exit:
+  ret void
+}
+",
+    );
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.add(SlpVectorize);
+    manager.run_module(&mut module, std::rc::Rc::new(X86At(std::rc::Rc::new(tti)))).unwrap();
+    let text = crate::testing::printed(&module);
+    assert!(text.contains("fmul <2 x double>") && text.contains("store <2 x double>"), "{text}");
+    assert_eq!(text.matches("uitofp nneg i32").count(), 2, "{text}");
+}
