@@ -2009,6 +2009,12 @@ pub fn sink_save_bracket(asm: &mut Asm) {
                     | Sec
             )
     };
+    // an indirect operand reads a pair of cells, so any may be `cell`
+    let reads_cell = |inst: &Inst, cell: &str| match &inst.operand {
+        Operand::Direct(name) | Operand::Indexed(name, _) => name == cell,
+        Operand::IndirectY(_) | Operand::IndirectX(_) | Operand::Indirect(_) => true,
+        _ => false,
+    };
     let mut at = 0;
     while at + 3 < asm.lines.len() {
         let [Line::Inst(push), Line::Inst(load), Line::Inst(store), Line::Inst(pull)] = &asm.lines[at..at + 4] else {
@@ -2043,7 +2049,10 @@ pub fn sink_save_bracket(asm: &mut Asm) {
             for look in (at.saturating_sub(12)..at).rev() {
                 let Line::Inst(inst) = &asm.lines[look] else { break };
                 if overwrites(inst) {
-                    target = Some((look, false));
+                    // the bracket goes above this load, which must not read the cell it sets
+                    if !reads_cell(inst, &cell) {
+                        target = Some((look, false));
+                    }
                     break;
                 }
                 if !passable(inst, &cell) {
