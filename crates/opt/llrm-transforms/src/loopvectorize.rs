@@ -2392,6 +2392,8 @@ impl FunctionPass for LoopVectorize {
                                     .then(|| dep.store_load_forward_safe_distance_in_bits()),
                                 widest_induction_bits: legality.widest_induction_bits.unwrap_or(64),
                                 opt_size,
+                                // `early_exit::choose` prices the plan, not `iteration_cost`; the pin adds no outside work for it.
+                                size_priced: false,
                                 has_reductions: false,
                                 reduction_bits: Vec::new(),
                                 pressure: None,
