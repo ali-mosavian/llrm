@@ -3215,6 +3215,13 @@ pub trait Tti {
         Some(self.number_of_gpr_registers())
     }
 
+    /// DEVIATE LICM-SPEC: whether LICM prices the hoisting of an integer or
+    /// pointer value the loop computes on some trips only, as it does a
+    /// promotion (`licm_register_limit`). False: the pin's, which hoists it.
+    fn licm_prices_speculated_values(&self) -> bool {
+        false
+    }
+
     /// DEVIATE LP1-FP: the values LICM (`licm/pressure.rs`) and GVN
     /// (`float_carry_fits`) may hold in the float file across a loop before
     /// they stop hoisting or carrying float loads; `None`: no limit, as the

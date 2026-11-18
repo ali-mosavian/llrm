@@ -190,6 +190,21 @@ impl Tti for Z80Tti {
         true
     }
 
+    /// DEVIATE LICM-SPEC (owner z80, exit 2026-12-15): `bc`, `de`, `hl`, `ix`
+    /// and `iy` are the values a loop keeps; past them an invariant word the
+    /// loop computes on some trips only is a frame slot stored once and
+    /// reloaded each trip it is read, where the computation is an `inc` or an
+    /// `add`. GCC's `loop-invariant.cc` with `-fira-loop-pressure` moves an
+    /// invariant only while its class has registers left. queens -Os: `&q[row]`
+    /// and `row + 1` hoisted out of the column loop, 379 B against 360 B.
+    fn licm_prices_speculated_values(&self) -> bool {
+        true
+    }
+
+    fn licm_register_limit(&self) -> Option<u32> {
+        Some(5)
+    }
+
     /// `long i < 12` compares four bytes a test where a byte would do
     /// (`narrowiv`; div_constants_short -Oz: -1189 B of 9887 with the
     /// counter an `int`).
