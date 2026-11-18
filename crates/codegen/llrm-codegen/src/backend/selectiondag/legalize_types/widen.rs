@@ -350,6 +350,31 @@ impl TypeLegalizer<'_> {
                 let vector = self.widened_vector(vector);
                 self.dag.get_node(ISD::InsertVectorElt, widen_vt, &[vector, element, index])
             }
+            // `WidenVecRes_Convert`, the extensions: the source widened, the
+            // lanes of both kept when they agree. Otherwise (`<4 x i8>` to
+            // `<4 x i16>`: 16 and 8 lanes) the wide source is extended whole
+            // and the low lanes kept, as for an operand (`WidenVecOp_EXTEND`).
+            ISD::ZeroExtend | ISD::SignExtend | ISD::AnyExtend => {
+                let source = self.dag.operand(value, 0);
+                let wide = self.widened_vector(source);
+                let (wide_lanes, result_lanes) = (self.dag.value_type(wide).lanes(), widen_vt.lanes());
+                let EVT::Simple(lane) = widen_vt.element() else {
+                    return Err(unsupported("widen extension to a non-simple lane"));
+                };
+                let extend = if op == ISD::AnyExtend { ISD::ZeroExtend } else { op };
+                if wide_lanes == result_lanes {
+                    self.dag.get_node_flags(extend, widen_vt, &[wide], flags)
+                } else if wide_lanes > result_lanes {
+                    let whole = MVT::vector(lane, wide_lanes)
+                        .map(EVT::Simple)
+                        .ok_or_else(|| unsupported("widen extension with no wide result type"))?;
+                    let extended = self.dag.get_node_flags(extend, whole, &[wide], flags);
+                    let zero = self.dag.get_constant(0, EVT::I64);
+                    self.dag.get_node(ISD::ExtractSubvector, widen_vt, &[extended, zero])
+                } else {
+                    return Err(unsupported("widen extension of a narrower source"));
+                }
+            }
             // `WidenVecRes_VECTOR_SHUFFLE`: the lanes of the second input
             // move up by what the widening added to the first; the new
             // lanes are undefined.

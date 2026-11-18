@@ -1,6 +1,8 @@
-//! x86-64 -O2: `i16 * i16` widened to i32 in a loop. Without
+//! x86-64 -O2: `i16 * i16` and `i8 * i8` widened to i32 in a loop. Without
 //! `reduceVMULWidth`/`combineMulToPMADDWD` the `mul <4 x i32>` was scalarised
-//! (`pmuludq` and shuffles, SSE2 has no `pmulld`), and the repack of
+//! (`pmuludq` and shuffles, SSE2 has no `pmulld`), the `i8` loop was left
+//! scalar (the planner refused the 32-bit `<4 x i8>` loads, and the widening of
+//! its `<4 x i16>` sign extension was not legalised), and the repack of
 //! `pmulhuw`/`pmullw` went through the stack (no shuffle was `punpcklwd`).
 //! Needs `LLRM_LLC`.
 
@@ -9,7 +11,11 @@ use std::process::Command;
 
 fn assembly() -> String {
     let llc = std::env::var_os("LLRM_LLC").expect("LLRM_LLC is not set: this test needs it and does not skip");
-    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("vector-widen-multiply-{}", std::process::id()));
+    // Tests run in parallel: a directory of its own for each call.
+    static CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let call = CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let dir =
+        Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("vector-widen-multiply-{}-{call}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let asm = dir.join("a.s");
@@ -47,4 +53,13 @@ fn unsigned_words_multiply_with_pmullw_pmulhuw_and_unpack() {
     let words = body(&text, "unsigned_words");
     assert!(words.contains("pmullw") && words.contains("pmulhuw") && words.contains("punpcklwd"), "{words}");
     assert!(!words.contains("pmuludq") && !words.contains("[rsp"), "{words}");
+}
+
+/// The `i8` loop was scalar: `<4 x i8>` is under a register, which the planner
+/// did not take for a target that selects such vectors.
+#[test]
+fn signed_bytes_multiply_with_pmullw_in_a_vector_loop() {
+    let text = assembly();
+    let bytes = body(&text, "bytes");
+    assert!(bytes.contains("pmullw") && bytes.contains("psraw") && !bytes.contains("pmuludq"), "{bytes}");
 }

@@ -1565,6 +1565,49 @@ impl Tti for X86 {
         }
     }
 
+    /// `X86TTIImpl::getArithmeticInstrCost` with `Args` ([L283][pin]): a
+    /// `<N x i32>` multiply of operands that fit 15 bits, or are
+    /// zero-extended, or sign-extended from a vector of up to 16 bits (SSE2),
+    /// is `pmaddwd` (`combineMulToPMADDWD`), priced as the `v8i16` multiply.
+    /// `reduceVMULWidth`'s own rows (`useSLMArithCosts`) and a constant
+    /// operand (`second` is not shown here) are not priced.
+    ///
+    /// [pin]:
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L283
+    fn vector_arithmetic_cost_ext(
+        &self,
+        op: ArithOp,
+        ty: VectorTy,
+        args: [Option<ExtOperand>; 2],
+        kind: CostKind,
+    ) -> Result<Option<Cost>, ()> {
+        if op == ArithOp::Mul && ty.lane == Ty::Int(32) && self.vector_values() {
+            // `minRequiredElementSize`: a sign extension needs its source less
+            // the sign bit, a zero extension the source, anything else the
+            // lane.
+            let size = |arg: Option<ExtOperand>| match arg {
+                Some(ExtOperand { kind: CastKind::SExt, src: Ty::Int(bits) }) => (bits - 1, true, true),
+                Some(ExtOperand { kind: CastKind::ZExt, src: Ty::Int(bits) }) => (bits, false, false),
+                _ => (32, false, false),
+            };
+            let ((size0, signed0, sext0), (size1, signed1, sext1)) = (size(args[0]), size(args[1]));
+            let min_size = size0.max(size1);
+            // SSE2: `Op1MinSize == 15 || (Op1MinSize < 15 && !hasSSE41())`.
+            let is_sext = (sext0 && size0 <= 15) || (sext1 && size1 <= 15);
+            let is_zero_extended = !signed0 || !signed1;
+            if min_size <= 15 && (is_zero_extended || is_sext) {
+                // `LT.second` becomes the `v8i16` of one register; `LT.first`
+                // stays.
+                let pieces = xmm_pieces(ty).ok_or(())?;
+                let word = VectorTy { lane: Ty::Int(16), count: 8 };
+                return Ok(self
+                    .vector_arithmetic_cost(ArithOp::Mul, word, kind)
+                    .map(|cost| Cost::of(cost.value * pieces)));
+            }
+        }
+        Ok(self.vector_arithmetic_cost(op, ty, kind))
+    }
+
     /// `X86TTIImpl::getVectorInstrCost` at a constant lane: the pin's row
     /// (`tti_vector_oracle.txt`), for the gathers the SLP vectorizer
     /// builds. DEVIATE X86V3.
@@ -2615,5 +2658,19 @@ mod pieces_tests {
         assert_eq!([pieces(8, 32), pieces(16, 16), pieces(32, 8), pieces(64, 4)], [Some(2); 4]);
         assert_eq!(pieces(8, 64), Some(4));
         assert_eq!(xmm_pieces(VectorTy { lane: Ty::Float, count: 4 }), None);
+    }
+
+    /// A `<4 x i32>` multiply of sign-extended words was priced as the
+    /// `pmuludq` sequence (6), so the loop stayed scalar; it is `pmaddwd`
+    /// (1, the `v8i16` multiply), a plain operand still 6.
+    #[test]
+    fn a_multiply_of_extended_words_is_priced_as_pmaddwd() {
+        let tti = X86::of_cpu("x86-64").unwrap();
+        let ty = VectorTy { lane: Ty::Int(32), count: 4 };
+        let sext16 = Some(ExtOperand { kind: CastKind::SExt, src: Ty::Int(16) });
+        let zext16 = Some(ExtOperand { kind: CastKind::ZExt, src: Ty::Int(16) });
+        let kind = CostKind::RecipThroughput;
+        let price = |args| tti.vector_arithmetic_cost_ext(ArithOp::Mul, ty, args, kind).unwrap().unwrap().value;
+        assert_eq!([price([sext16, sext16]), price([zext16, sext16]), price([None, None])], [1, 6, 6]);
     }
 }

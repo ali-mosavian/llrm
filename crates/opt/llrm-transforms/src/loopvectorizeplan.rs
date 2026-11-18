@@ -354,13 +354,18 @@ fn iteration_cost(
     // MVTs exist; eight registers (a `<16 x i64>` sum of bytes) split to them
     // (`SplitVectorResult`). Owner llrm-arm64-vec, exit LV-X4.
     let register_bits = u64::from(tti.vector_register_bits());
+    let sub_registers = tti.selects_sub_register_vectors();
     let taken = |lane: Ty| {
         // A mask: `<VF x i1>` is held as the lanes of the compare that made it.
         if lane == Ty::Int(1) {
             return true;
         }
         let bits = u64::from(lane_bits(lane)) * u64::from(vf);
-        [register_bits, 2 * register_bits].contains(&bits)
+        // A target whose backend selects a vector under a register (the pin's
+        // `TypeWidenVector`: one register, priced as such) takes one of 32
+        // bits or more.
+        (sub_registers && matches!(lane, Ty::Int(_)) && bits >= 32 && bits < register_bits)
+            || [register_bits, 2 * register_bits].contains(&bits)
             || (matches!(lane, Ty::Int(_)) && [register_bits / 2, 4 * register_bits, 8 * register_bits].contains(&bits))
     };
     if backend_limits && vf > 1 && !recipes.iter().flat_map(recipe_lanes).all(taken) {
