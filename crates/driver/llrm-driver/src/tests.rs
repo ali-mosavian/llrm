@@ -5637,6 +5637,18 @@ fn an_i64_select_of_constants_is_no_branch_at_m32() {
     assert!(listing.contains("setne") && !listing.contains("\n    jne") && !listing.contains("jmp"), "{listing}");
 }
 
+/// The same loop at -O2: gcc completely peels only where it may grow the code (`may_increase_size`,
+/// -O3), so -O2 keeps the loop. x_ld_matmul -O2 peeled the `long double` inner loop 16 times:
+/// 2,071 B and 101,191 clocks against the rolled 228 B and 92,914 (gcc 286 B, 92,753).
+#[test]
+fn a_loop_bounded_by_the_object_it_indexes_stays_rolled_at_m32_o2() {
+    let text = include_str!("tests_data/matmul_f.ll");
+    let (built, _) = compiled(&flags(&["-m32", "-O2", "-march=i486"]), text, "bench_x_matmul_f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let bench = listing.split("bench_x_matmul_f_ proc").nth(1).and_then(|rest| rest.split("endp").next()).expect(&listing);
+    assert!(bench.matches("fmul").count() < 12, "{listing}");
+}
+
 /// `cvtsi2ss xmm1, eax` in a loop rewrote only the low lane of `xmm1`, so each
 /// iteration waited for the last one's result (the pin: `xorps xmm1, xmm1`
 /// first, BreakFalseDeps). sfm16_float_i2f m64 -O2: 9 converts, no `xorps`.
