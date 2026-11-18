@@ -17,9 +17,13 @@ INCLUDES = ["-I", str(REPO / "runtime/shared/posix"), "-I", str(REPO / "bench")]
 MODE = ("-m16", "-m32", "-m64", "-march=i386", "-march=i486", "-march=pentium")  # the target row sets the mode
 
 
-def own_flags(configuration: list[str]) -> list[str]:
-    """A configuration without its optimisation level and x86 mode: the harness sets the level, the target the mode."""
-    return [t for t in configuration if not t.startswith("-O") and t not in MODE]
+X86_ONLY = ("-mabi=", "-mlong-double-80", "-mcmodel=", "-march=")  # x86 driver options: another target's driver rejects them
+
+
+def own_flags(configuration: list[str], target: str) -> list[str]:
+    """A configuration without its optimisation level and x86 mode (the harness sets the level, the target the mode), and off x86 without the x86-only options."""
+    x86 = corpus_targets.FAMILY.match(target) is not None
+    return [t for t in configuration if not t.startswith("-O") and t not in MODE and (x86 or not t.startswith(X86_ONLY))]
 
 
 def classify(target: str, source: str, compile_with, path: Path | None = None) -> tuple:
@@ -28,7 +32,7 @@ def classify(target: str, source: str, compile_with, path: Path | None = None) -
         return ("na", corpus_targets.reason(source, path))
     error = ""
     for configuration in corpus_targets.flag_configurations(source) or [[]]:
-        code, stderr = compile_with([*own_flags(configuration), *INCLUDES])
+        code, stderr = compile_with([*own_flags(configuration, target), *INCLUDES])
         if code == 0:
             return ("ok",)
         error = next((line for line in stderr.splitlines() if "error" in line or "llrm-" in line), stderr[:120])
@@ -40,7 +44,7 @@ def plan(target: str, path: Path) -> list[str] | None:
     source = path.read_text()
     if not corpus_targets.applies(target, source, path):
         return None
-    return [*own_flags((corpus_targets.flag_configurations(source) or [[]])[0]), *INCLUDES]
+    return [*own_flags((corpus_targets.flag_configurations(source) or [[]])[0], target), *INCLUDES]
 
 
 def main(argv: list[str]) -> int:

@@ -51,3 +51,13 @@ def test_bench_io_passes_no_void_to_report():
     done = subprocess.run(["gcc", "-fsyntax-only", "-I", str(root / "runtime/shared/posix"), str(root / "tests/run/c/bench_io.c")], capture_output=True, text=True)
     assert done.returncode == 0, done.stderr
 
+
+def test_an_x86_abi_option_is_not_given_to_a_driver_of_another_architecture():
+    """wasm32 Os read refused=4: `-mabi=sysv|watcom` and `-mlong-double-80` from `// flags:` reached llrm-wasm-llc / clang for wasm32 ("unrecognized argument -mabi=sysv")."""
+    source = "// flags: -O2 -m32 -mabi=sysv -mlong-double-80 -DA\nint x;\n"
+    seen = []
+    cr.classify("wasm32", source, lambda f: seen.append(f) or (0, ""))
+    assert seen[0][0] == "-DA" and not any(t.startswith(("-mabi", "-mlong-double")) for t in seen[0])
+    seen.clear()
+    cr.classify("x86_32-linux", source, lambda f: seen.append(f) or (0, ""))
+    assert "-mabi=sysv" in seen[0] and "-mlong-double-80" in seen[0]
