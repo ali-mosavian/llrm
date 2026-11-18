@@ -1099,10 +1099,16 @@ pub enum Mode {
     Model,
 }
 
-/// The mode `LLRM_ARM64_IFCVT` names; none: the pass does not run.
+/// The mode the pass runs in: the pin's default (`aarch64-enable-early-ifcvt`
+/// is on), the trace-metrics model. `LLRM_ARM64_IFCVT=stress` converts
+/// whenever legal (`-stress-early-ifcvt`); `off` does not run the pass
+/// (`-aarch64-enable-early-ifcvt=false`).
 pub fn mode_from_env() -> Option<Mode> {
-    let value = std::env::var("LLRM_ARM64_IFCVT").ok()?;
-    Some(if value == "stress" { Mode::Stress } else { Mode::Model })
+    match std::env::var("LLRM_ARM64_IFCVT").as_deref() {
+        Ok("off") => None,
+        Ok("stress") => Some(Mode::Stress),
+        _ => Some(Mode::Model),
+    }
 }
 
 /// The dominator tree's post order (`post_order(DomTree)`).
