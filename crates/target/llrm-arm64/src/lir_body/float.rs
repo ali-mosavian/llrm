@@ -453,7 +453,9 @@ pub(super) fn to(inst: &Inst) -> Option<Semantics> {
         }
         Inst::VectorFill { rd, fill } => {
             let (name, sources) = match fill {
-                Fill::Zero => ("MOVIv2d".to_string(), vec![]),
+                // `MOVIv2d_ns` of 0: a literal the width of the register, as
+                // the coalescer asks of an instruction it makes again.
+                Fill::Zero => ("MOVIv2d_ns".to_string(), vec![Loc::Imm(Imm { value: 0, width: 16, address: None })]),
                 Fill::Byte(byte) => ("MOVIv16b".to_string(), vec![imm(i64::from(*byte))]),
                 Fill::Byte8(byte) => ("MOVIv8b_ns".to_string(), vec![imm(i64::from(*byte))]),
                 Fill::Dup(arrangement, register) => {
@@ -471,7 +473,10 @@ pub(super) fn to(inst: &Inst) -> Option<Semantics> {
                     let stem = if *invert { "MVNI" } else { "MOVI" };
                     (format!("{stem}v{lanes}"), vec![imm(i64::from(*imm8)), imm(i64::from(*shift))])
                 }
-                Fill::Mask(imm8) => ("MOVIv2d_ns".to_string(), vec![imm(i64::from(*imm8))]),
+                Fill::Mask(imm8) => (
+                    "MOVIv2d_ns".to_string(),
+                    vec![Loc::Imm(Imm { value: i64::from(*imm8), width: 16, address: None })],
+                ),
                 Fill::MaskD(imm8) => ("MOVID".to_string(), vec![imm(i64::from(*imm8))]),
             };
             let narrow = matches!(
@@ -995,10 +1000,12 @@ pub(super) fn back(what: &Semantics) -> Option<Inst> {
     }
     match name {
         "ORRv16b" => return Some(Inst::VectorMov { rd: vreg_of(dest?), rn: vreg_of(&s[0]) }),
-        "MOVIv2d" => return Some(Inst::VectorFill { rd: vreg_of(dest?), fill: Fill::Zero }),
         "MOVIv8b_ns" => return Some(Inst::VectorFill { rd: vreg_of(dest?), fill: Fill::Byte8(value_of(&s[0]) as u8) }),
         "MOVIv16b" => return Some(Inst::VectorFill { rd: vreg_of(dest?), fill: Fill::Byte(value_of(&s[0]) as u8) }),
-        "MOVIv2d_ns" => return Some(Inst::VectorFill { rd: vreg_of(dest?), fill: Fill::Mask(value_of(&s[0]) as u8) }),
+        "MOVIv2d_ns" => {
+            let fill = if value_of(&s[0]) == 0 { Fill::Zero } else { Fill::Mask(value_of(&s[0]) as u8) };
+            return Some(Inst::VectorFill { rd: vreg_of(dest?), fill });
+        }
         "MOVID" => return Some(Inst::VectorFill { rd: vreg_of(dest?), fill: Fill::MaskD(value_of(&s[0]) as u8) }),
         "SCVTFv1i32" | "UCVTFv1i32" | "SCVTFv1i64" | "UCVTFv1i64" => {
             let size = if name.ends_with("64") { FpSize::D } else { FpSize::S };
