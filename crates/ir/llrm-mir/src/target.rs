@@ -452,9 +452,9 @@ pub struct Tuning {
     /// DEVIATE BACKTHREAD-BITS (owner llrm-target-x86-m32-b, exit 2026-12-15):
     /// backward threading also reads the known bits of a value along the path
     /// (`3x + 1` of an odd `x` is even), and unfolds a select that sends the
-    /// next trip down one arm of a branch (`backwardthreading.rs`, `pathbits.rs`).
-    /// The pin has neither; gcc's ranger carries a bitmask per range. false:
-    /// the pin's pipeline.
+    /// next trip down one arm of a branch (`backwardthreading.rs`,
+    /// `pathbits.rs`). The pin has neither; gcc's ranger carries a bitmask
+    /// per range. false: the pin's pipeline.
     pub threads_by_known_bits: bool,
     /// DEVIATE SPILL-FOLD (owner x86-m16, exit 2026-11-29): the clocks a
     /// spilled value costs where its references fold into memory operands,

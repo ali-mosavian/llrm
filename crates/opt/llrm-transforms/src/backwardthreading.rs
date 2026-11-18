@@ -559,7 +559,8 @@ fn select_candidates(
 }
 
 /// `select` as a diamond: its block ends in a branch on the condition to one
-/// empty block per arm, and the rest of the block starts with a phi of the arms.
+/// empty block per arm, and the rest of the block starts with a phi of the
+/// arms.
 fn unfold_select(
     function: &mut Function,
     select: InstId,

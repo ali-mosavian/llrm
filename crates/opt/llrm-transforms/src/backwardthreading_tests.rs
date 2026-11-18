@@ -196,7 +196,9 @@ fn a_target_without_known_bits_keeps_the_collatz_loop() {
 /// bit is known on either arm, so nothing is threaded.
 #[test]
 fn a_select_whose_condition_is_unrelated_to_the_next_test_stays_a_select() {
-    let text = COLLATZ.replace("define i32 @f(i32 %n)", "define i32 @f(i32 %n, i32 %k)").replace("%even = icmp eq i32 %low, 0", "%even = icmp eq i32 %k, 0");
+    let text = COLLATZ
+        .replace("define i32 @f(i32 %n)", "define i32 @f(i32 %n, i32 %k)")
+        .replace("%even = icmp eq i32 %low, 0", "%even = icmp eq i32 %k, 0");
     let (out, changed) = threaded_on(&text, &[&[1, 0], &[7, 0], &[8, 0]], true);
     assert!(!changed, "{out}");
 }
