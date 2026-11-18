@@ -536,6 +536,45 @@ e:
     assert!(held(&text("", three), false), "a callee of the size of a far call and its push was kept out");
 }
 
+/// D11-MEM: a callee of one 48-byte `memcpy` is one instruction in the pin's
+/// count, under the call it replaces, so `them_dark` (QB m64 -Os)
+/// copied three vector loads and stores for a 10-byte call (37 B against 10).
+/// The guard counts the copy as the loads and stores it becomes: refused on
+/// x86-64, where the three pieces are six units; a 4-byte copy, one piece,
+/// stays inlined.
+#[test]
+fn an_optsize_caller_counts_a_constant_memcpy_as_its_loads_and_stores_on_x86() {
+    let text = |bytes: u32| {
+        format!(
+            "@src = global [64 x i8] zeroinitializer
+@dst = global [64 x i8] zeroinitializer
+declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1)
+
+define void @callee() {{
+b0:
+  call void @llvm.memcpy.p0.p0.i64(ptr @dst, ptr @src, i64 {bytes}, i1 false)
+  ret void
+}}
+
+define void @f() {{
+b0:
+  call void @callee()
+  ret void
+}}
+"
+        )
+    };
+    let x64 = llrm_x86::tti::X86::of_cpu("x86-64")
+        .unwrap()
+        .with_tuning(llrm_mir::target::Tuning { inline_size_guard_at_size: true, ..llrm_mir::target::Tuning::PIN });
+    let held = |text: &str| {
+        let (cost, threshold) = priced_with(text, 0, false, CallerSize::OptSize, Some(&x64));
+        cost < threshold
+    };
+    assert!(!held(&text(48)), "a 48-byte copy was inlined for a call that is smaller");
+    assert!(held(&text(4)), "a one-piece copy stays inlined");
+}
+
 /// A `noipa` callee is never inlined, whatever its cost (`alwaysinline`
 /// included): the same callee without it costs -20 and is inlined (the
 /// premise).

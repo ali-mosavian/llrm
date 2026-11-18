@@ -2141,6 +2141,12 @@ impl<'a> Analyzer<'a> {
     ) -> i64 {
         let Some(tti) = self.site.tti else { return 0 };
         let view = self.size_view();
+        if view.is_none()
+            && self.site.caller_size != CallerSize::Speed
+            && let Some(units) = memory_expansion_units(self.context, &self.site.module.globals, self.callee, inst, tti)
+        {
+            return units;
+        }
         llrm_mir::instructioncost::instruction_cost_known(
             view.as_deref().unwrap_or(tti),
             self.context,
@@ -2660,6 +2666,33 @@ impl<'a> Analyzer<'a> {
         self.decided_by_threshold = true;
         if self.cost < self.threshold.max(1) && !grows { Ok(()) } else { Err("Cost over threshold.".into()) }
     }
+}
+
+/// D11-MEM: the loads and stores a constant-length `memcpy`, `memmove` or
+/// `memset` at `inst` becomes, in the units of the call the size guard holds
+/// the inline against (`Tti::size_caller_memory_units`). The pin counts the
+/// intrinsic as one instruction, so `them_dark` (`them_set(n)`: a store and a
+/// 48-byte copy, 2 units against a call of 3) inlined its copy of 37 bytes for
+/// a 10-byte call. For a size-optimized caller only.
+pub(crate) fn memory_expansion_units(
+    context: &llrm_mir::context::Context,
+    globals: &[llrm_mir::module::GlobalValue],
+    function: &Function,
+    inst: InstId,
+    tti: &dyn llrm_mir::tti::Tti,
+) -> Option<i64> {
+    let operation = function.instruction(inst);
+    if !matches!(operation.opcode, Opcode::Call(_)) {
+        return None;
+    }
+    let callee = llrm_mir::memory::callee(context, function, inst)?;
+    let family = globals.get(callee.0 as usize)?.name.as_deref()?.strip_prefix("llvm.")?.split('.').next()?;
+    if !matches!(family, "memcpy" | "memmove" | "memset") {
+        return None;
+    }
+    let Operand::Constant(length) = *operation.operands.get(2)? else { return None };
+    let ConstantKind::Int(length) = context.get(length).kind else { return None };
+    tti.size_caller_memory_units(family, u64::try_from(length).ok()?)
 }
 
 /// Per parameter of `callee`: nothing reads it and `deadargelim` will drop it

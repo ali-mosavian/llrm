@@ -571,7 +571,7 @@ impl ProgramPass for Walk {
                             (self.simplify)(module, &mut modules[at], id, "walk.");
                         } else if let Some(tti) = tti.as_deref() {
                             let kept = function_mut(module, id).1.clone();
-                            let before = sized(module, &program.layout, tti, id, false);
+                            let before = sized(module, &program.layout, tti, id, false, false);
                             let globals = module.globals.len();
                             (self.simplify)(module, &mut modules[at], id, "walk.again.");
                             // The units count code, not the data a rerun makes:
@@ -580,7 +580,7 @@ impl ProgramPass for Walk {
                             // prices bytes
                             // the old body stays; `globaldce` drops the table.
                             let grew_data = tti.inline_trials_at_o1() && module.globals.len() > globals;
-                            if grew_data || sized(module, &program.layout, tti, id, false) + GUARD >= before {
+                            if grew_data || sized(module, &program.layout, tti, id, false, false) + GUARD >= before {
                                 *function_mut(module, id).1 = kept;
                                 modules[at].changed(id);
                                 modules[at]
@@ -2172,7 +2172,7 @@ fn body_size(
     // Only the measured view, and only for a speed caller: the 6502 and m68k
     // views stay out of the trials, as at the tip.
     let view = tti.inline_size_view().filter(|_| speed && tti.inline_size_view_is_measured());
-    sized(module, layout, view.as_deref().unwrap_or(tti), id, true)
+    sized(module, layout, view.as_deref().unwrap_or(tti), id, true, !speed)
 }
 
 /// [`body_size`] with or without its phis: a phi is a copy the allocator
@@ -2183,6 +2183,7 @@ fn sized(
     tti: &dyn llrm_mir::tti::Tti,
     id: GlobalId,
     phis: bool,
+    size_caller: bool,
 ) -> i64 {
     let function = module.global(id).function().expect("a body");
     let float =
@@ -2193,6 +2194,12 @@ fn sized(
             let operation = function.instruction(inst);
             if !phis && matches!(operation.opcode, llrm_mir::opcode::Opcode::Phi) {
                 return 0;
+            }
+            if size_caller
+                && let Some(units) =
+                    crate::inlinecost::memory_expansion_units(&module.context, &module.globals, function, inst, tti)
+            {
+                return units;
             }
             let units = llrm_mir::instructioncost::instruction_cost(
                 tti,
