@@ -360,6 +360,11 @@ pub(crate) fn wide_registers(function: &MFunc) -> HashSet<Reg> {
             Op::I(Inst::VectorPermute { rd, rn, rm, .. }) => {
                 wide.extend([Reg::Fpr(*rd), Reg::Fpr(*rn), Reg::Fpr(*rm)]);
             }
+            // The multiplier is a vector; the accumulator and the other
+            // factor are scalars.
+            Op::I(Inst::ScalarFmaLane { rm, .. }) => {
+                wide.insert(Reg::Fpr(*rm));
+            }
             Op::I(Inst::VectorNarrow { high, rd, rn, .. }) => {
                 wide.insert(Reg::Fpr(*rn));
                 if *high {

@@ -462,6 +462,10 @@ impl fmt::Display for Inst {
                 let (suffix, lane) = (lanes.suffix(), lane_letter(*lanes));
                 write!(out, "{} v{}.{suffix}, v{}.{suffix}, v{}.{lane}[{index}]", op.mnemonic(), rd.0, rn.0, rm.0)
             }
+            Inst::ScalarFmaLane { op, lanes, rd, rn, rm, index } => {
+                let (scalar, lane) = if *lanes == Arrangement::D2 { ('d', 'd') } else { ('s', 's') };
+                write!(out, "{} {scalar}{}, {scalar}{}, v{}.{lane}[{index}]", op.mnemonic(), rd.0, rn.0, rm.0)
+            }
             Inst::VectorPermute { kind, lanes, rd, rn, rm } => {
                 let name = kind.mnemonic();
                 let s = lanes.suffix();
