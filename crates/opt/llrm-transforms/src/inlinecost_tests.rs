@@ -575,6 +575,46 @@ b0:
     assert!(held(&text(4)), "a one-piece copy stays inlined");
 }
 
+/// D11-MEM: a callee of two fills and a move of an unknown length is three
+/// instructions in the pin's count, under the 9 units of its call, so QB's
+/// `justify` went into `set` three times (`file.c` m64 -Os, 445 B against
+/// gcc's 212). Each stays the call it is on x86-64: refused, while a callee of
+/// one fill of the same kind is smaller than its call and stays inlined.
+#[test]
+fn an_optsize_caller_counts_a_variable_length_fill_as_the_call_it_stays_on_x86() {
+    let text = |body: &str| {
+        format!(
+            "declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)
+declare void @llvm.memmove.p0.p0.i64(ptr, ptr, i64, i1)
+
+define internal void @callee(ptr %d, ptr %s, i64 %n) {{
+b0:
+{body}  ret void
+}}
+
+define void @f(ptr %d, ptr %s, i64 %n) {{
+b0:
+  call void @callee(ptr %d, ptr %s, i64 %n)
+  ret void
+}}
+"
+        )
+    };
+    let fill = "  call void @llvm.memset.p0.i64(ptr %d, i8 32, i64 %n, i1 false)\n";
+    let slide = "  call void @llvm.memmove.p0.p0.i64(ptr %d, ptr %s, i64 %n, i1 false)\n";
+    let x64 = llrm_x86::tti::X86::of_cpu("x86-64")
+        .unwrap()
+        .with_tuning(llrm_mir::target::Tuning { inline_size_guard_at_size: true, ..llrm_mir::target::Tuning::PIN });
+    let held = |body: &str| {
+        let params = InlineParams { compute_full_inline_cost: true, ..InlineParams::from_level(2) };
+        let (cost, threshold) =
+            priced_params(&text(body), 0, false, CallerSize::OptSize, Some(&x64), params, (3, true));
+        cost < threshold
+    };
+    assert!(!held(&format!("{fill}{slide}{fill}")), "two fills and a move were copied three times");
+    assert!(held(&fill), "one fill, smaller than its call, stays inlined");
+}
+
 /// A `noipa` callee is never inlined, whatever its cost (`alwaysinline`
 /// included): the same callee without it costs -20 and is inlined (the
 /// premise).

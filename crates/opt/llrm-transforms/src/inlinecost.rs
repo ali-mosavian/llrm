@@ -2669,11 +2669,12 @@ impl<'a> Analyzer<'a> {
 }
 
 /// D11-MEM: the loads and stores a constant-length `memcpy`, `memmove` or
-/// `memset` at `inst` becomes, in the units of the call the size guard holds
-/// the inline against (`Tti::size_caller_memory_units`). The pin counts the
-/// intrinsic as one instruction, so `them_dark` (`them_set(n)`: a store and a
-/// 48-byte copy, 2 units against a call of 3) inlined its copy of 37 bytes for
-/// a 10-byte call. For a size-optimized caller only.
+/// `memset` at `inst` becomes, or the call it stays, in the units of the call
+/// the size guard holds the inline against (`Tti::size_caller_memory_units`).
+/// The pin counts the intrinsic as one instruction, so `them_dark`
+/// (`them_set(n)`: a store and a 48-byte copy, 2 units against a call of 3)
+/// inlined its copy of 37 bytes for a 10-byte call. For a size-optimized caller
+/// only.
 pub(crate) fn memory_expansion_units(
     context: &llrm_mir::context::Context,
     globals: &[llrm_mir::module::GlobalValue],
@@ -2690,9 +2691,14 @@ pub(crate) fn memory_expansion_units(
     if !matches!(family, "memcpy" | "memmove" | "memset") {
         return None;
     }
-    let Operand::Constant(length) = *operation.operands.get(2)? else { return None };
-    let ConstantKind::Int(length) = context.get(length).kind else { return None };
-    tti.size_caller_memory_units(family, u64::try_from(length).ok()?)
+    let length = match *operation.operands.get(2)? {
+        Operand::Constant(length) => match context.get(length).kind {
+            ConstantKind::Int(length) => u64::try_from(length).ok(),
+            _ => None,
+        },
+        _ => None,
+    };
+    tti.size_caller_memory_units(family, length)
 }
 
 /// Per parameter of `callee`: nothing reads it and `deadargelim` will drop it
