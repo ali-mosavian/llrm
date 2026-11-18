@@ -14,8 +14,8 @@
 //! after.
 //!
 //! DEVIATE SLP6 (owner arm64, exit 2026-12-01): `calculateDependencies`' memory
-//! edges are the order of every instruction that is not a pure computation,
-//! with no alias analysis: a tree of phis has no memory of its own.
+//! edges are the order of the writes, and each read between the writes it
+//! stood between, with no alias analysis.
 //!
 //! # Runs
 //! Under `slptree` (`schedulable_phis`, `emit`).
@@ -82,6 +82,46 @@ fn reads(
             }
         })
         .collect()
+}
+
+/// The order the memory accesses of `insts` keep (`calculateDependencies`'
+/// memory edges): each access after the last write before it, each write after
+/// the reads since; two reads need no order. `at` gives an instruction's node.
+fn memory_edges(
+    function: &Function,
+    insts: &[InstId],
+    pure_calls: &HashSet<InstId>,
+    at: &dyn Fn(InstId) -> usize,
+) -> Vec<(usize, usize)> {
+    let mut edges = Vec::new();
+    let mut last_write: Option<usize> = None;
+    let mut reads: Vec<usize> = Vec::new();
+    for inst in insts {
+        let node = at(*inst);
+        let reading = matches!(
+            function.instruction(*inst).opcode,
+            Opcode::Load { volatile: false, .. }
+        );
+        if !reading && is_pure(function, *inst, pure_calls) {
+            continue;
+        }
+        if let Some(write) = last_write
+            && write != node
+        {
+            edges.push((write, node));
+        }
+        if reading {
+            reads.push(node);
+        } else {
+            for read in reads.drain(..) {
+                if read != node {
+                    edges.push((read, node));
+                }
+            }
+            last_write = Some(node);
+        }
+    }
+    edges
 }
 
 /// A topological order of `nodes` (their edges `reads` and `chain` made into a
@@ -163,19 +203,8 @@ pub(crate) fn acyclic(
             }
         }
     }
-    // The instructions that are not pure computations keep their order.
-    let mut last: Option<usize> = None;
-    for inst in &insts {
-        if !is_pure(function, *inst, pure_calls) {
-            let at = node_of[inst];
-            if let Some(before) = last
-                && before != at
-            {
-                edges.push((before, at));
-            }
-            last = Some(at);
-        }
-    }
+    // Writes keep their order, and the reads stay between them.
+    edges.extend(memory_edges(function, &insts, pure_calls, &|inst| node_of[&inst]));
     let mut nodes: Vec<usize> =
         (0..base).filter(|at| !bundles.iter().any(|(lanes, _)| lanes.contains(&insts[*at]))).collect();
     nodes.extend((0..bundles.len()).map(|bundle| base + bundle));
@@ -221,16 +250,7 @@ pub(crate) fn schedule(
             edges.push((node_of[&def], to));
         }
     }
-    let mut last: Option<usize> = None;
-    for inst in &insts {
-        if !is_pure(function, *inst, pure_calls) {
-            let at = node_of[inst];
-            if let Some(before) = last {
-                edges.push((before, at));
-            }
-            last = Some(at);
-        }
-    }
+    edges.extend(memory_edges(function, &insts, pure_calls, &|inst| node_of[&inst]));
     let nodes: Vec<usize> = (0..insts.len()).collect();
     let Some(order) = topological(&nodes, &edges, &|node| key[&insts[node]]) else { return false };
     for node in order {

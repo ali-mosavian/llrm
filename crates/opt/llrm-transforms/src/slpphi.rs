@@ -311,19 +311,58 @@ fn bits_of(
     }
 }
 
+/// What a window is made one vector of.
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) enum Roots {
+    Phis,
+    Inserts,
+}
+
 /// What a run of `try_list` needs: what the function is vectorized with.
-struct Session<'a> {
-    context: &'a mut Context,
+pub(crate) struct Session<'a> {
+    pub(crate) context: &'a mut Context,
     layout: &'a DataLayout,
     declared: &'a mut Declared,
     outer: &'a Outer,
     tti: &'a dyn Tti,
     block: BlockId,
+    roots: Roots,
     /// `isAnalyzedBundle`: the windows that did not pay.
     analyzed: HashSet<Vec<InstId>>,
 }
 
-impl Session<'_> {
+impl<'a> Session<'a> {
+    pub(crate) fn new(
+        context: &'a mut Context,
+        layout: &'a DataLayout,
+        declared: &'a mut Declared,
+        outer: &'a Outer,
+        tti: &'a dyn Tti,
+        block: BlockId,
+        roots: Roots,
+    ) -> Self {
+        Self { context, layout, declared, outer, tti, block, roots, analyzed: HashSet::new() }
+    }
+
+    pub(crate) fn deleted_inst(
+        function: &Function,
+        inst: InstId,
+    ) -> bool {
+        Self::deleted(function, inst)
+    }
+
+    /// The type of one lane of a root: a phi's, the element an insert sets.
+    fn lane_type(
+        &self,
+        function: &Function,
+        root: InstId,
+    ) -> Option<TypeId> {
+        match self.roots {
+            Roots::Phis => Some(function.instruction(root).ty),
+            Roots::Inserts => function.operand_type(self.context, function.instruction(root).operands[1]),
+        }
+    }
+
     fn deleted(
         function: &Function,
         inst: InstId,
@@ -348,7 +387,12 @@ impl Session<'_> {
                 function,
                 |se, cx| {
                     let scaler = crate::slptree::Scaler::new(se, cx);
-                    crate::slptree::try_phis(&unit, function, self.block, window, self.tti, &scaler)
+                    match self.roots {
+                        Roots::Phis => crate::slptree::try_phis(&unit, function, self.block, window, self.tti, &scaler),
+                        Roots::Inserts => {
+                            crate::slptree::try_inserts(&unit, function, self.block, window, self.tti, &scaler)
+                        }
+                    }
                 },
             )
         };
@@ -362,7 +406,7 @@ impl Session<'_> {
     }
 
     /// `tryToVectorizeList`.
-    fn try_list(
+    pub(crate) fn try_list(
         &mut self,
         function: &mut Function,
         list: &[InstId],
@@ -371,14 +415,17 @@ impl Session<'_> {
         if list.len() < 2 {
             return false;
         }
-        let ty = function.instruction(list[0]).ty;
+        let Some(ty) = self.lane_type(function, list[0]) else { return false };
         let bits = bits_of(self.context, ty) as usize;
-        if bits == 0 || list.iter().any(|phi| function.instruction(*phi).ty != ty) {
+        if bits == 0 || list.iter().any(|root| self.lane_type(function, *root) != Some(ty)) {
             return false;
         }
         let register = self.tti.vector_register_bits() as usize;
         let min_vf = ((self.tti.min_vector_register_bits() as usize) / bits).max(2);
-        let widest = match self.tti.maximum_vf(bits as u32, Opcode::Phi) {
+        let widest = match self
+            .tti
+            .maximum_vf(bits as u32, if self.roots == Roots::Phis { Opcode::Phi } else { Opcode::InsertElement })
+        {
             0 => register / bits,
             limit => limit as usize,
         };
@@ -517,7 +564,7 @@ pub(crate) fn run_function(
     let mut changed = false;
     for block in function.layout().to_vec() {
         let mut visited: HashSet<InstId> = HashSet::new();
-        let mut session = Session { context, layout, declared, outer, tti, block, analyzed: HashSet::new() };
+        let mut session = Session::new(context, layout, declared, outer, tti, block, Roots::Phis);
         loop {
             let mut seeds = incoming(session.context, function, block, &visited);
             if seeds.len() <= 1 {

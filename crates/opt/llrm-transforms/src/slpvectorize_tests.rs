@@ -185,8 +185,57 @@ const NBODY_PHIS: &str = include_str!("../tests/slp/nbody_phis.ll");
 fn loop_carried_doubles_become_vector_phis() {
     let text = run(NBODY_PHIS);
     assert!(text.matches("phi <2 x double>").count() >= 3, "{text}");
-    // The pin's operand order (`VLOperands::reorder`): 5 shuffles and 9
-    // inserts; a one-pass shallow match made 4 and 10.
-    assert_eq!(text.matches("shufflevector").count(), 5, "{text}");
-    assert_eq!(text.matches("insertelement").count(), 9, "{text}");
+    // The fourth, from the `insertelement` chain that builds a vector.
+    assert_eq!(text.matches("phi <2 x double>").count(), 4, "{text}");
+}
+
+/// `fmul a[i], k` in one lane and `fmul k, a[i+1]` in the next kept two
+/// gathers (the operands stood as written): `VLOperands::reorder` puts the
+/// loads in one column and the splat `k` in the other.
+#[test]
+fn commutative_lanes_with_swapped_operands_are_put_in_one_order() {
+    let text = run(
+        "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128-Fn32\"\n\
+define void @f(ptr %d, ptr %a, double %k) {\n\
+  %a1 = getelementptr double, ptr %a, i64 1\n\
+  %x0 = load double, ptr %a, align 8\n\
+  %x1 = load double, ptr %a1, align 8\n\
+  %m0 = fmul double %x0, %k\n\
+  %m1 = fmul double %k, %x1\n\
+  %d1 = getelementptr double, ptr %d, i64 1\n\
+  store double %m0, ptr %d, align 8\n\
+  store double %m1, ptr %d1, align 8\n\
+  ret void\n\
+}\n",
+    );
+    assert!(text.contains("load <2 x double>"), "{text}");
+    assert!(text.contains("fmul <2 x double>"), "{text}");
+    assert!(!text.contains("fmul double"), "{text}");
+}
+
+/// A `<2 x double>` built by two `insertelement`s of `fdiv`s of loads stayed
+/// two scalar loads, two `fdiv`s and two inserts: the buildvector is seeded
+/// (`vectorizeInsertElementInst`) and becomes one vector `fdiv` of a vector
+/// load.
+#[test]
+fn a_buildvector_of_divisions_becomes_a_vector_division() {
+    let text = run(
+        "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128-Fn32\"\n\
+define <2 x double> @f(ptr %a, ptr %b) {\n\
+  %a1 = getelementptr double, ptr %a, i64 1\n\
+  %b1 = getelementptr double, ptr %b, i64 1\n\
+  %x0 = load double, ptr %a, align 8\n\
+  %x1 = load double, ptr %a1, align 8\n\
+  %y0 = load double, ptr %b, align 8\n\
+  %y1 = load double, ptr %b1, align 8\n\
+  %d0 = fdiv double %x0, %y0\n\
+  %d1 = fdiv double %x1, %y1\n\
+  %v0 = insertelement <2 x double> poison, double %d0, i64 0\n\
+  %v1 = insertelement <2 x double> %v0, double %d1, i64 1\n\
+  ret <2 x double> %v1\n\
+}\n",
+    );
+    assert!(text.contains("fdiv <2 x double>"), "{text}");
+    assert!(!text.contains("insertelement"), "{text}");
+    assert!(!text.contains("fdiv double"), "{text}");
 }

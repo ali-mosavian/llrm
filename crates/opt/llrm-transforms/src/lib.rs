@@ -437,6 +437,7 @@ pub mod sinkcast;
 pub mod sinkcommon;
 pub mod slpcompares;
 pub mod slpgather;
+pub mod slpinsert;
 pub mod slpphi;
 pub mod slpschedule;
 pub mod slpreduction;

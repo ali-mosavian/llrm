@@ -91,6 +91,9 @@ enum Kind {
     /// The phis of one block, one vector phi: its operands are the incoming
     /// values of every phi, one entry for each incoming block.
     Phi,
+    /// The inserts of a chain of `insertelement`s: the root of a tree whose
+    /// bundle is the scalars they insert.
+    Insert,
     /// A vector built from its scalars.
     Gather,
 }
@@ -111,6 +114,8 @@ struct Entry {
     reuse: Vec<i32>,
     /// A phi bundle's incoming blocks, in the order of its operands.
     blocks: Vec<BlockId>,
+    /// An insert root: where each scalar goes.
+    insert: Option<crate::slpinsert::Inserts>,
 }
 
 impl Entry {
@@ -257,6 +262,7 @@ impl Builder<'_, '_, '_> {
             lane_ty,
             reuse,
             blocks: Vec::new(),
+            insert: None,
         });
         self.entries.len() - 1
     }
@@ -833,6 +839,7 @@ impl Builder<'_, '_, '_> {
             lane_ty,
             reuse,
             blocks: Vec::new(),
+            insert: None,
         });
         for inst in &insts {
             self.made.insert(*inst, entry);
@@ -989,6 +996,7 @@ pub(crate) fn try_window(
                 lane_ty: store_ty,
                 reuse: Vec::new(),
                 blocks: Vec::new(),
+                insert: None,
             },
         );
     for store in stores {
@@ -1079,6 +1087,91 @@ pub(crate) fn try_phis(
     (cost < -COST_THRESHOLD).then_some(tree)
 }
 
+/// `tryToVectorizeList` for the inserts of a buildvector chain: the tree whose
+/// root is the inserts (ordered by the element each sets), if it pays.
+pub(crate) fn try_inserts(
+    unit: &MemUnit,
+    function: &Function,
+    block: BlockId,
+    inserts: &[InstId],
+    tti: &dyn Tti,
+    scaler: &Scaler,
+) -> Option<Tree> {
+    let context = unit.context;
+    if !crate::slpinsert::connected(function, inserts) {
+        return None;
+    }
+    let indices: Option<Vec<u32>> =
+        inserts.iter().map(|insert| crate::slpinsert::element_index(context, function, *insert)).collect();
+    let indices = indices?;
+    let first = crate::slpinsert::first_insert(function, inserts);
+    let info = crate::slpinsert::Inserts {
+        indices,
+        elts: crate::slpinsert::elements_of(context, function.instruction(inserts[0]).ty)?,
+        base: function.instruction(first).operands[0],
+    };
+    let values: Vec<Operand> = inserts.iter().map(|insert| function.instruction(*insert).operands[1]).collect();
+    let lane_ty = function.operand_type(context, values[0])?;
+    let position = positions(function);
+    let mut builder = Builder {
+        scaler,
+        tti,
+        unit,
+        function,
+        block,
+        entries: Vec::new(),
+        made: IdMap::new(),
+        position,
+        failed: false,
+    };
+    builder
+        .entries
+        .push(
+            Entry {
+                kind: Kind::Insert,
+                lanes: values.clone(),
+                insts: inserts.to_vec(),
+                operands: Vec::new(),
+                lane_ty,
+                reuse: Vec::new(),
+                blocks: Vec::new(),
+                insert: Some(info),
+            },
+        );
+    for insert in inserts {
+        builder.made.insert(*insert, 0);
+    }
+    let child = builder.build(values, 1);
+    builder.entries[0].operands = vec![child];
+    if builder.failed || builder.entries.len() < 2 {
+        llrm_support::debug!("slp", "insert tree x{}: no tree", inserts.len());
+        return None;
+    }
+    let pure_calls: std::collections::HashSet<InstId> = function
+        .iter_block(block)
+        .filter(|inst| {
+            llrm_mir::memory::callee(unit.context, function, *inst)
+                .and_then(|callee| unit.globals.get(callee.0 as usize)?.intrinsic())
+                .is_some_and(llrm_analysis::vectorutils::is_trivially_vectorizable)
+        })
+        .collect();
+    let mut entries = builder.entries;
+    share_gathers(&mut entries);
+    let tree = Tree { entries, block, pure_calls };
+    let made = builder.made;
+    if tiny_and_not_fully_vectorizable(&tree) {
+        llrm_support::debug!("slp", "insert tree x{}: tiny", inserts.len());
+        return None;
+    }
+    if !schedulable_phis(function, &tree) {
+        llrm_support::debug!("slp", "insert tree x{}: not schedulable", inserts.len());
+        return None;
+    }
+    let cost = cost_of(unit, function, &tree, &made, 0, tti, scaler)?;
+    llrm_support::debug!("slp", "insert tree of {} entries x{}: cost {cost}", tree.entries.len(), inserts.len());
+    (cost < -COST_THRESHOLD).then_some(tree)
+}
+
 /// `isGatherShuffledEntry`, the whole-vector case: a gather of the scalars a
 /// bundle of the tree has, in its order, is that bundle's vector (the bundle
 /// may have been made after the gather: the tree is walked depth first, and
@@ -1096,9 +1189,13 @@ fn share_gathers(entries: &mut Vec<Entry>) {
         {
             continue;
         }
-        let same = entries.iter().position(|one| {
-            !matches!(one.kind, Kind::Gather | Kind::Store) && one.reuse.is_empty() && one.lanes == gather.lanes
-        });
+        let same = entries
+            .iter()
+            .position(
+                |one| !matches!(one.kind, Kind::Gather | Kind::Store | Kind::Insert)
+                    && one.reuse.is_empty()
+                    && one.lanes == gather.lanes,
+            );
         if let Some(found) = same {
             redirect[at] = found;
         }
@@ -1139,12 +1236,20 @@ fn share_gathers(entries: &mut Vec<Entry>) {
 /// gathers of a few scalars.
 fn tiny_and_not_fully_vectorizable(tree: &Tree) -> bool {
     let gather = |entry: &Entry| entry.kind == Kind::Gather;
-    let splat_or_constant = |entry: &Entry| {
-        entry.lanes.iter().all(|lane| *lane == entry.lanes[0]) || entry.lanes.iter().all(|lane| constant_of(*lane))
-    };
+    let splat = |entry: &Entry| entry.lanes.iter().all(|lane| *lane == entry.lanes[0]);
+    let constant = |entry: &Entry| entry.lanes.iter().all(|lane| constant_of(*lane));
+    let splat_or_constant = |entry: &Entry| splat(entry) || constant(entry);
     // PHI nodes and gathers only: the vector phi costs nothing, the gathers
     // something.
     if tree.entries.iter().all(|entry| gather(entry) || entry.kind == Kind::Phi) {
+        return true;
+    }
+    // No need to vectorize inserts of gathered values.
+    if tree.entries[0].kind == Kind::Insert
+        && tree.entries.len() == 2
+        && gather(&tree.entries[1])
+        && (tree.entries[1].width() <= 2 || !(splat(&tree.entries[1]) || constant(&tree.entries[1])))
+    {
         return true;
     }
     // The single vectorized node, fed by buildvectors that repack scalars.
@@ -1161,8 +1266,9 @@ fn tiny_and_not_fully_vectorizable(tree: &Tree) -> bool {
 
 /// DEVIATE SLP6 (owner arm64, exit 2026-12-01): the scalars of a tree of phis
 /// stand as vectors where the last of each bundle is (`BlockScheduling` would
-/// move them, and any scalar between): the loop is one block, no bundle loads,
-/// stores or calls, and no lane depends on another of its bundle.
+/// move them, and any scalar between): the block is one, no bundle stores or
+/// calls, a bundle of loads has no write among them (no alias analysis), and no
+/// lane depends on another of its bundle.
 fn schedulable_phis(
     function: &Function,
     tree: &Tree,
@@ -1175,6 +1281,8 @@ fn schedulable_phis(
         if !matches!(
             entry.kind,
             Kind::Phi
+                | Kind::Insert
+                | Kind::Load
                 | Kind::Binary(_)
                 | Kind::FMulAdd
                 | Kind::Cast(..)
@@ -1203,7 +1311,7 @@ fn schedulable_phis(
     // The bundles are one instruction each: they must not wait on each other.
     let mut bundles: Vec<(Vec<InstId>, Vec<InstId>)> = Vec::new();
     for entry in &tree.entries {
-        if matches!(entry.kind, Kind::Gather | Kind::Phi) {
+        if matches!(entry.kind, Kind::Gather | Kind::Phi | Kind::Insert) {
             continue;
         }
         let gathered = entry
@@ -1464,6 +1572,13 @@ fn entry_scale(
             let block = function.parent(entry.insts[0]).expect("a placed store");
             scaler.scale_at(function, block, &[])
         }
+        // `findInnermostNonInvariantLoop` over the inserts themselves: they
+        // stand in the loop.
+        Kind::Insert => {
+            let block = function.parent(entry.insts[0]).expect("a placed insert");
+            let inserts: Vec<Operand> = entry.insts.iter().map(|insert| result_of(function, *insert)).collect();
+            scaler.scale_at(function, block, &inserts)
+        }
         _ => {
             let block = function.parent(entry.insts[0]).expect("a placed bundle");
             scaler.scale_at(function, block, &entry.lanes)
@@ -1502,7 +1617,7 @@ fn cost_of(
         );
         total += priced * scale;
         // The lanes some user outside the tree reads are extracted.
-        if !matches!(entry.kind, Kind::Gather | Kind::Store) {
+        if !matches!(entry.kind, Kind::Gather | Kind::Store | Kind::Insert) {
             let lane = lane_ty_of(context, entry.lane_ty)?;
             let vector = VectorTy { lane, count: entry.width() as u32 };
             for (index, inst) in entry.insts.iter().enumerate() {
@@ -1640,10 +1755,11 @@ fn entry_cost(
             // `getEntryCost`, `Instruction::PHI`: the vector phi costs what the
             // scalar ones did.
             Kind::Phi => 0,
+            Kind::Insert => crate::slpinsert::cost(context, function, tti, &entry.insts, entry.insert.as_ref()?)?,
         };
         // The lanes that repeat are read through a shuffle of the bundle.
         let reuse_cost = match entry.kind {
-            Kind::Gather | Kind::Store => 0,
+            Kind::Gather | Kind::Store | Kind::Insert => 0,
             _ => slpgather::shuffle_cost(tti, VectorTy { lane, count: entry.width() as u32 }, &entry.reuse)?,
         };
         let entry_cost = entry_cost + reuse_cost;
@@ -1824,7 +1940,7 @@ pub(crate) fn emit(
                 let value = result_of(function, phi);
                 Some(reused(context, function, &mut placer, last_phi(function, home), entry, value))
             }
-            Kind::Store => None,
+            Kind::Store | Kind::Insert => None,
             kind => {
                 let lead = function.instruction(entry.insts[0]).clone();
                 let mut flags = lead.flags;
@@ -1883,7 +1999,7 @@ pub(crate) fn emit(
                         vectors[at] = Some(reused(context, function, &mut placer, last_of(entry), entry, value));
                         continue;
                     }
-                    Kind::Store | Kind::Gather | Kind::Extract(_) | Kind::Phi => unreachable!(),
+                    Kind::Store | Kind::Insert | Kind::Gather | Kind::Extract(_) | Kind::Phi => unreachable!(),
                 };
                 let ops = if matches!(kind, Kind::Load) {
                     vec![function.instruction(entry.insts[0]).operands[0]]
@@ -1924,11 +2040,43 @@ pub(crate) fn emit(
         );
         placer.after(function, last, store);
     }
+    // The chain's vector: the bundle's vector shuffled into what the chain's
+    // first insert inserts into, read where the chain's last insert was.
+    if root.kind == Kind::Insert {
+        let info = root.insert.as_ref().expect("an insert root");
+        let last = crate::slpinsert::last_insert(function, &root.insts);
+        let child = vectors[root.operands[0]].expect("the inserted vector");
+        let non_poisonous = !constant_of(child)
+            && llrm_mir::valuetracking::guarantee::is_guaranteed_not_to_be_poison(
+                &llrm_mir::valuetracking::Query::bare(context, function, layout),
+                child,
+                0,
+            );
+        let lane_ty = root.lane_ty;
+        let mut shuffle = |context: &mut Context, function: &mut Function, mask: Vec<i32>, a: Operand, b: Operand| {
+            let ty = vector_of(context, lane_ty, mask.len());
+            let made = function.create_instruction(Opcode::ShuffleVector(mask), ty, vec![a, b], Flags::default(), None);
+            function.insert(made, Position::Before(last)).expect("the chain's block");
+            result_of(function, made)
+        };
+        let value =
+            crate::slpinsert::placed_vector(context, function, non_poisonous, &root.insts, info, child, &mut shuffle);
+        let result = function.instruction(last).result.expect("a value");
+        let users: Vec<(InstId, u32)> = function.users(result).iter().map(|used| (used.user, used.index)).collect();
+        for (user, at) in users {
+            let mut operands = function.instruction(user).operands.clone();
+            operands[at as usize] = value;
+            function.set_operands(user, operands);
+        }
+    }
     // The lanes some user outside the tree reads.
     let tree_insts: Vec<InstId> = tree.entries.iter().flat_map(|entry| entry.insts.iter().copied()).collect();
     let i32_ty = context.types.int(64);
     for (at, entry) in tree.entries.iter().enumerate() {
-        if matches!(entry.kind, Kind::Gather | Kind::Store | Kind::Extract(_)) {
+        if matches!(
+            entry.kind,
+            Kind::Gather | Kind::Store | Kind::Insert | Kind::Extract(_)
+        ) {
             continue;
         }
         let vector = vectors[at].expect("a vector");
@@ -1993,16 +2141,7 @@ pub(crate) fn emit(
         for inst in others.into_iter().chain(phis) {
             function.erase(inst).expect("a tree scalar");
         }
-        // The vectors stand where the block's order and what they read allow.
-        let mut pure_calls = tree.pure_calls.clone();
-        let home = tree.block;
-        pure_calls.extend(function.iter_block(home).filter(|inst| {
-            matches!(function.instruction(*inst).opcode, Opcode::Call(_)) && !position.contains_key(inst)
-        }));
-        let original: std::collections::HashMap<InstId, usize> =
-            function.iter_block(home).filter_map(|inst| position.get(&inst).map(|at| (inst, *at))).collect();
-        let scheduled = crate::slpschedule::schedule(function, home, &pure_calls, &original);
-        debug_assert!(scheduled, "a checked tree is schedulable");
+        reschedule(function, tree, &position);
         return;
     }
     // The scalars: each goes where nothing reads it; a user may stand in a
@@ -2022,7 +2161,33 @@ pub(crate) fn emit(
             break;
         }
     }
+    // The vectors stand where the block's order and what they read allow.
+    if tree.entries[0].kind == Kind::Insert {
+        reschedule(function, tree, &position);
+    }
     let _ = ValueId(0);
+}
+
+/// The block's instructions in the order its bundles' vectors need
+/// (`BlockScheduling`).
+fn reschedule(
+    function: &mut Function,
+    tree: &Tree,
+    position: &IdMap<InstId, usize>,
+) {
+    let mut pure_calls = tree.pure_calls.clone();
+    let home = tree.block;
+    pure_calls.extend(
+        function
+            .iter_block(home)
+            .filter(
+                |inst| matches!(function.instruction(*inst).opcode, Opcode::Call(_)) && !position.contains_key(inst),
+            ),
+    );
+    let original: std::collections::HashMap<InstId, usize> =
+        function.iter_block(home).filter_map(|inst| position.get(&inst).map(|at| (inst, *at))).collect();
+    let scheduled = crate::slpschedule::schedule(function, home, &pure_calls, &original);
+    debug_assert!(scheduled, "a checked tree is schedulable");
 }
 
 /// The entry's vector read through its reuse mask (`FinalShuffle`).

@@ -249,6 +249,7 @@ fn run_function(
 ) -> bool {
     // `vectorizeChainsInBlock` looks at the phis before the stores.
     let phis = crate::slpphi::run_function(context, layout, declared, function, outer, tti);
+    let inserts = crate::slpinsert::run_function(context, layout, declared, function, outer, tti);
     let mut plan: Vec<(TypeId, Vec<Seed>)> = Vec::new();
     {
         let unit = MemUnit::within(context, layout, function, outer);
@@ -287,7 +288,7 @@ fn run_function(
     for (ty, window) in &plan {
         vectorize(context, function, *ty, window);
     }
-    let mut changed = phis || !plan.is_empty();
+    let mut changed = phis || inserts || !plan.is_empty();
     // One tree at a time, the function read again after each.
     while let Some((tree, align)) = next_tree(context, layout, function, outer, tti) {
         crate::slptree::emit(context, layout, declared, function, &tree, align);
