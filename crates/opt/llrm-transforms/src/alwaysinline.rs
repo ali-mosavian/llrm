@@ -99,7 +99,7 @@ impl ProgramPass for AlwaysInline {
             if !wanted.iter().any(|&id| !sites(module, &program.layout, id).is_empty()) {
                 continue;
             }
-            let addressed = llrm_mir::callgraph::addressed(module);
+            let addressed = llrm_mir::callgraph::addressed_by_uses(module);
             let mut live = Liveness::new(module, private, &addressed, &roots_here(&roots, at));
             for id in wanted {
                 for _ in 0..ROUNDS {

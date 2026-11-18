@@ -354,12 +354,27 @@ pub fn stale_callee_lists(module: &Module) -> BTreeSet<u32> {
 
 /// Functions whose address is taken: named anywhere but as a callee, in a
 /// global's initializer, a personality, or a metadata list (a call's `callees`,
-/// which an indirect call may reach; not one [`stale_callee_lists`] names).
+/// which an indirect call may reach). What conventions and placement ask: a
+/// function a stale list names may still be entered through a pointer the
+/// analyses lost.
 pub fn addressed(module: &Module) -> BTreeSet<GlobalId> {
+    addressed_skipping(module, &BTreeSet::new())
+}
+
+/// [`addressed`] as LLVM's use lists have it, for the inliner's count of a
+/// callee's other uses (`isSoleCallToLocalFunction`): a metadata list is no
+/// use, so a [`stale_callee_lists`] one names nothing.
+pub fn addressed_by_uses(module: &Module) -> BTreeSet<GlobalId> {
+    addressed_skipping(module, &stale_callee_lists(module))
+}
+
+fn addressed_skipping(
+    module: &Module,
+    stale: &BTreeSet<u32>,
+) -> BTreeSet<GlobalId> {
     let context = &module.context;
     let mut out = BTreeSet::new();
     let mut work = Vec::new();
-    let stale = stale_callee_lists(module);
     for (_, _, function) in module.functions() {
         work.extend(function.personality);
         for (_, inst) in function.walk() {

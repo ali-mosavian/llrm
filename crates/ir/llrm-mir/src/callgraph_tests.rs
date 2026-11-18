@@ -149,7 +149,9 @@ b0:
 ",
     )
     .expect("parses");
-    assert!(crate::callgraph::addressed(&module).is_empty());
+    assert!(crate::callgraph::addressed_by_uses(&module).is_empty());
+    // Conventions and placement keep asking the conservative question.
+    assert!(crate::callgraph::addressed(&module).contains(&id(&module, "leaf")));
     let listed = parse::module(&CALLS.to_owned()).expect("parses");
     let named = crate::callgraph::addressed(&listed);
     assert!(named.contains(&id(&listed, "leaf")), "an indirect call's list still names its callees");
