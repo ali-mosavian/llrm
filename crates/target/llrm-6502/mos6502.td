@@ -387,6 +387,11 @@ let AddedComplexity = 10 in {
   def : Pat<(i16 (zextloadi8 MOSIdx:$a)), (REG_SEQUENCE Imag16, (LDPI8 MOSIdx:$a), sub_lo, (LDI8 0), sub_hi)>;
   def : Pat<(i16 (extloadi8 MOSIdx:$a)), (REG_SEQUENCE Imag16, (LDPI8 MOSIdx:$a), sub_lo, (LDI8 0), sub_hi)>;
 }
+// A global indexed by a byte and widened: `ldx i; lda g,x`, not the address built in a pointer.
+let AddedComplexity = 20 in {
+  def : Pat<(i16 (zextloadi8 MOSAbsX:$a)), (REG_SEQUENCE Imag16, (LDAX MOSAbsX:$a), sub_lo, (LDI8 0), sub_hi)>;
+  def : Pat<(i16 (extloadi8 MOSAbsX:$a)), (REG_SEQUENCE Imag16, (LDAX MOSAbsX:$a), sub_lo, (LDI8 0), sub_hi)>;
+}
 // The builder joins two bytes as `lo | (hi << 8)` over either kind of extension: that is the pair.
 def ext8 : PatFrags<(ops node:$a), [(zext node:$a), (anyext node:$a)]>;
 def : Pat<(i16 (or (ext8 Imag8:$lo), (shl (ext8 Imag8:$hi), (i8 8)))),
