@@ -7,11 +7,13 @@ use llrm_m68k::compile::{Options, items_with, runs};
 use llrm_m68k::dagisel::hooks::Cpu;
 use llrm_m68k::driver::{Level, lowered_for};
 
+/// Clang's output with no passes carries `optnone`, which the pipeline skips
+/// since #9876: the trials only exist once the body is optimised again.
 const CASE: &str = include_str!("fixtures/div_ushort3_raw.ll");
 
 #[test]
 fn trial_builds_of_a_function_share_their_common_stages() {
-    let module = lowered_for(CASE, Cpu::M68020, Level::Os).expect("lowers");
+    let module = lowered_for(&CASE.replace(" optnone", ""), Cpu::M68020, Level::Os).expect("lowers");
     let before = runs();
     let options = Options { size: true, mid_end: false, ..Options::default() };
     items_with(&module, "c_ushort_3", Cpu::M68020, options).expect("compiles");

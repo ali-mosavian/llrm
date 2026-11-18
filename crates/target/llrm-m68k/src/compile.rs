@@ -844,7 +844,14 @@ fn before_late_stage(options: Options) -> Options {
 
 /// The options that only allocation and the stages after it read.
 fn before_allocation(options: Options) -> Options {
-    Options { global_copies: false, tail_duplicate: false, return_dup: false, slot_registers: false, ..options }
+    Options {
+        global_copies: false,
+        tail_duplicate: false,
+        return_dup: false,
+        slot_registers: false,
+        spill_fold: false,
+        ..options
+    }
 }
 
 /// One build of the function, and the optional rewrites that changed it.
