@@ -218,7 +218,13 @@ umul.fix.sat umul.with.overflow umulh ushl.sat usub.sat usub.with.overflow vscal
 
 # MIR states these itself: its markers still take the size operand, which Intrinsics.td has dropped, so its
 # attribute positions are not MIR's.
-MIR_OWN = {"llvm.lifetime.start", "llvm.lifetime.end"}
+# `llvm.experimental.fp{to}{s,u}i.checked` are MIR's own (no LLVM counterpart, `own` in the table).
+MIR_OWN = {
+    "llvm.lifetime.start",
+    "llvm.lifetime.end",
+    "llvm.experimental.fptosi.checked",
+    "llvm.experimental.fptoui.checked",
+}
 
 
 def emitted() -> set[str]:

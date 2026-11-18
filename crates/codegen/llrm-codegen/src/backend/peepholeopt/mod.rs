@@ -798,8 +798,7 @@ const MAX_RECURRENCE_CHAIN: usize = 3;
 /// has a tied def, up to three long, and counts only if it ends in one of the
 /// phi's incoming values.
 ///
-/// Not translated: nothing (the X86 commutes are `add`, `adc`, `and`, `or`,
-/// `xor`, `imul`).
+/// Not translated: nothing (the commutes are those of `twoaddr::commutative`).
 pub fn recurrences_commuted(body: &LirBody) -> LirBody {
     if body.blocks.iter().all(|block| block.phis.is_empty()) {
         return body.clone();
@@ -869,24 +868,25 @@ fn target_recurrence(
     let one = &body.blocks[at].insns[place];
     let Some(what) = one.what.as_ref() else { return false };
     let name = what.name.as_deref().unwrap_or_default();
-    let tied = matches!(
-        name,
-        "add"
-            | "sub"
-            | "adc"
-            | "sbb"
-            | "and"
-            | "or"
-            | "xor"
-            | "imul"
-            | "neg"
-            | "not"
-            | "inc"
-            | "dec"
-            | "shl"
-            | "shr"
-            | "sar"
-    );
+    let tied = crate::backend::twoaddr::commutative(what)
+        || matches!(
+            name,
+            "add"
+                | "sub"
+                | "adc"
+                | "sbb"
+                | "and"
+                | "or"
+                | "xor"
+                | "imul"
+                | "neg"
+                | "not"
+                | "inc"
+                | "dec"
+                | "shl"
+                | "shr"
+                | "sar"
+        );
     let ([Loc::Held(into)], Some(Loc::Held(first))) = (&what.dests[..], what.sources.first()) else { return false };
     if !tied || what.indirect || one.group.is_some() || !one.requires.is_empty() || !one.delivers.is_empty() {
         return false;
@@ -895,7 +895,7 @@ fn target_recurrence(
         chain.push(None);
         return into.width == first.width && target_recurrence(body, into.value, targets, reads, users, chain);
     }
-    let commutes = matches!(name, "add" | "adc" | "and" | "or" | "xor" | "imul");
+    let commutes = crate::backend::twoaddr::commutative(what);
     let [_, Loc::Held(second)] = &what.sources[..] else { return false };
     if !commutes || second.value != value || into.width != first.width || first.width != second.width {
         return false;
@@ -1411,6 +1411,15 @@ mod tests {
     fn test_a_recurrence_longer_than_the_limit_is_left() {
         let body = recurrences_commuted(&recurrence("add", MAX_RECURRENCE_CHAIN + 1));
         assert_eq!(first_sources(&body, 1), [20, 10]);
+    }
+
+    /// loop_countdown_sum: a packed `paddd` accumulator kept the `xor` result
+    /// as its tied operand, so every trip copied the accumulator (20
+    /// instructions a trip against the pin's 17).
+    #[test]
+    fn test_a_packed_accumulator_is_the_tied_operand_of_the_add_that_reads_it() {
+        let body = recurrences_commuted(&recurrence("paddd", 1));
+        assert_eq!(first_sources(&body, 1), [10, 20]);
     }
 
     #[test]

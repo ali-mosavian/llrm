@@ -10,11 +10,13 @@
 //! moves with the constant it reads (`IsProfitableToHoist` L1273 reaching
 //! `CanCauseHighRegPressure` L1235), unless the values live at once in the loop
 //! and the copies already moved fill the class (DEVIATE ML3, exit 2026-11-20:
-//! the peak over the loop's blocks, not the pin's per-set back trace; a loop
+//! the pressure at each block's entry, not the pin's running back trace; a loop
 //! with a call counts the values it names against `d8`-`d15`, the registers a
 //! call keeps; a block that does not run on every trip keeps its copies,
-//! `AvoidSpeculation` L1349 without the peak). Nothing that reads memory or the
-//! flags, has an effect, or touches a physical register moves.
+//! `AvoidSpeculation` L1349 without the peak). Any other pure invariant op
+//! (a `dup` of a hoisted constant) moves on the same peak test, unless it is
+//! cheap as a move. Nothing that reads memory or the flags, has an effect, or
+//! touches a physical register moves.
 //!
 //! # Example
 //! ```text
@@ -171,15 +173,16 @@ impl Policy<Wrapped> for Arm64<'_> {
         self.peak = [0, 0];
         self.hoisted = [0, 0];
         for block in facts.inside_blocks() {
+            // `EnterScope`: the pin compares a hoist with the pressure at each
+            // block's entry (`BackTrace`), not with the peak inside it.
             let mut now: BTreeSet<u32> = self.live.get(&block.at).cloned().unwrap_or_default();
-            self.note(&now);
             for one in block.insns.iter().rev() {
                 for value in &one.defs {
                     now.remove(value);
                 }
                 now.extend(one.uses.iter().copied());
-                self.note(&now);
             }
+            self.note(&now);
         }
         for &value in facts.named {
             let slot = self.slot(value);
@@ -222,11 +225,7 @@ impl Policy<Wrapped> for Arm64<'_> {
             self.hoisted[slot] += 1;
             return true;
         }
-        (inst.rematerializable || (inst.may_load && inst.invariant_load))
-            // `CheapInstr && CreatesCopy`: a constant a phi takes would need a
-            // copy.
-            && !(inst.cheap_as_move && one.defs.iter().any(|value| facts.copied.contains(value)))
-            && !one.physical
+        let pure = !one.physical
             && !one.defs.is_empty()
             && one.defs.iter().all(|value| facts.defs.get(value) == Some(&1))
             && inst.ties.is_empty()
@@ -238,7 +237,43 @@ impl Policy<Wrapped> for Arm64<'_> {
                 || inst.side_effects
                 || inst.sets_flags
                 || inst.reads_flags
-                || inst.early_clobber)
+                || inst.early_clobber);
+        if !pure {
+            return false;
+        }
+        if inst.rematerializable || (inst.may_load && inst.invariant_load) {
+            // `CheapInstr && CreatesCopy`: a constant a phi takes would need a
+            // copy.
+            return !(inst.cheap_as_move && one.defs.iter().any(|value| facts.copied.contains(value)));
+        }
+        // Any other pure invariant op (`dup` of a hoisted constant): the pin's
+        // `IsProfitableToHoist` L1273 reaching `CanCauseHighRegPressure` L1235,
+        // with `AvoidSpeculation` L1349 and `HoistCheapInsts` off: a cheap op
+        // stays, a copy-making one stays, the rest move while the class has a
+        // register to spare.
+        // A copy within a class is a phi's: the loop's variable, not a value
+        // (the pin's phis are explicit; its COPY rule is the cross-class one
+        // above).
+        if inst.kind == Kind::Copy
+            || inst.cheap_as_move
+            || one.defs.iter().any(|value| facts.copied.contains(value))
+            || !(facts.every_trip)(at)
+        {
+            return false;
+        }
+        let mut weight = [0, 0];
+        for &value in &one.defs {
+            weight[self.slot(value)] += 1;
+        }
+        for slot in 0..2 {
+            if weight[slot] > 0 && self.peak[slot] + self.hoisted[slot] + weight[slot] >= [GPR_LIMIT, FPR_LIMIT][slot] {
+                return false;
+            }
+        }
+        for slot in 0..2 {
+            self.hoisted[slot] += weight[slot];
+        }
+        true
     }
 }
 
@@ -476,6 +511,115 @@ mod tests {
         hoist(&mut function);
         let copies =
             |at: usize| function.blocks[at].insts.iter().filter(|inst| inst.kind == Kind::Op(FMOV_TO_FPR)).count();
+        assert_eq!((copies(0), copies(1)), (0, 1), "{function:?}");
+    }
+
+    /// `dup v.2s, w` of a hoisted constant.
+    fn dup(
+        dst: u32,
+        src: u32,
+    ) -> Inst {
+        Inst::new(Kind::Op("DUPv2i32gpr"), vec![Operand::Def(Reg::Virt(dst)), Operand::Use(Reg::Virt(src))])
+    }
+
+    fn dups(
+        function: &MFunction<Class>,
+        at: usize,
+    ) -> usize {
+        function.blocks[at].insts.iter().filter(|inst| inst.kind == Kind::Op("DUPv2i32gpr")).count()
+    }
+
+    /// recsum (arm64 -O2): the splat of the division's magic number was made
+    /// in the vector loop every trip (32 instructions where the pin's loop has
+    /// 31, +249 executed): `IsProfitableToHoist` moves any pure invariant op
+    /// while the class has a register to spare, not only a rematerializable
+    /// one.
+    #[test]
+    fn the_splat_of_a_hoisted_constant_is_made_before_the_loop() {
+        let mut back = Inst::new(Kind::Op("BranchCond"), vec![Operand::Block(1)]);
+        back.terminator = true;
+        let user = Inst::new(Kind::Op("Store"), vec![Operand::Use(Reg::Virt(1))]);
+        let mut function = MFunction::<Class>::new("f");
+        function.classes = vec![Class::Gpr, Class::Quad];
+        function.blocks = vec![block(0, vec![]), block(1, vec![constant(0), dup(1, 0), user, back]), block(2, vec![])];
+        assert!(hoist(&mut function));
+        assert_eq!((dups(&function, 0), dups(&function, 1)), (1, 0), "{function:?}");
+    }
+
+    /// A loop that already names every vector register keeps the splat
+    /// (`CanCauseHighRegPressure`).
+    #[test]
+    fn the_splat_stays_in_a_loop_that_names_every_vector_register() {
+        let mut back = Inst::new(Kind::Op("BranchCond"), vec![Operand::Block(1)]);
+        back.terminator = true;
+        let mut function = MFunction::<Class>::new("f");
+        let held = FPR_LIMIT as u32;
+        function.classes = vec![Class::Quad; held as usize + 2];
+        function.classes[0] = Class::Gpr;
+        let mut body = vec![constant(0), dup(held + 1, 0)];
+        for value in 1..=held {
+            body.push(Inst::new(Kind::Op("Store"), vec![Operand::Use(Reg::Virt(value))]));
+        }
+        body.push(back);
+        function.blocks = vec![block(0, vec![]), block(1, body), block(2, vec![])];
+        hoist(&mut function);
+        assert_eq!((dups(&function, 0), dups(&function, 1)), (0, 1), "{function:?}");
+    }
+
+    /// sfm16_float (arm64 -O2): five splats of constants stayed in the vector
+    /// loop, which holds every vector register at once inside but enters with
+    /// few: the pin compares a hoist with the pressure at block entry
+    /// (`BackTrace`), not the peak inside (6578 -> 6199 executed).
+    #[test]
+    fn the_splat_is_hoisted_from_a_loop_that_fills_the_registers_only_inside() {
+        let mut back = Inst::new(Kind::Op("BranchCond"), vec![Operand::Block(1)]);
+        back.terminator = true;
+        let mut function = MFunction::<Class>::new("f");
+        let held = FPR_LIMIT as u32;
+        function.classes = vec![Class::Quad; held as usize + 2];
+        function.classes[0] = Class::Gpr;
+        let mut body = vec![constant(0), dup(held + 1, 0)];
+        for value in 1..=held {
+            body.push(Inst::new(Kind::Op("Make"), vec![Operand::Def(Reg::Virt(value))]));
+        }
+        for value in 1..=held {
+            body.push(Inst::new(Kind::Op("Store"), vec![Operand::Use(Reg::Virt(value))]));
+        }
+        body.push(back);
+        function.blocks = vec![block(0, vec![]), block(1, body), block(2, vec![])];
+        hoist(&mut function);
+        assert_eq!((dups(&function, 0), dups(&function, 1)), (1, 0), "{function:?}");
+    }
+
+    /// An op that is as cheap as a move stays (`HoistCheapInsts` is off).
+    #[test]
+    fn a_cheap_invariant_op_stays_in_the_loop() {
+        let mut back = Inst::new(Kind::Op("BranchCond"), vec![Operand::Block(1)]);
+        back.terminator = true;
+        let mut cheap = dup(1, 0);
+        cheap.cheap_as_move = true;
+        let user = Inst::new(Kind::Op("Store"), vec![Operand::Use(Reg::Virt(1))]);
+        let mut function = MFunction::<Class>::new("f");
+        function.classes = vec![Class::Gpr, Class::Quad];
+        function.blocks = vec![block(0, vec![]), block(1, vec![constant(0), cheap, user, back]), block(2, vec![])];
+        hoist(&mut function);
+        assert_eq!((dups(&function, 0), dups(&function, 1)), (0, 1), "{function:?}");
+    }
+
+    /// nbody_single (arm64 -O3) returned 0, not 86016: a copy within a class
+    /// (the phi-elimination copy that carries a loop variable) was hoisted as a
+    /// pure invariant op, so the loop read the value of the first trip.
+    #[test]
+    fn a_copy_within_a_class_stays_in_the_loop() {
+        let mut back = Inst::new(Kind::Op("BranchCond"), vec![Operand::Block(1)]);
+        back.terminator = true;
+        let copy_in = Inst::new(Kind::Copy, vec![Operand::Def(Reg::Virt(1)), Operand::Use(Reg::Virt(0))]);
+        let user = Inst::new(Kind::Op("Store"), vec![Operand::Use(Reg::Virt(1))]);
+        let mut function = MFunction::<Class>::new("f");
+        function.classes = vec![Class::Quad, Class::Quad];
+        function.blocks = vec![block(0, vec![]), block(1, vec![copy_in, user, back]), block(2, vec![])];
+        hoist(&mut function);
+        let copies = |at: usize| function.blocks[at].insts.iter().filter(|inst| inst.kind == Kind::Copy).count();
         assert_eq!((copies(0), copies(1)), (0, 1), "{function:?}");
     }
 }

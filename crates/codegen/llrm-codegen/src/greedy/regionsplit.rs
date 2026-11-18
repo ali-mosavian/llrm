@@ -173,6 +173,14 @@ impl<'a> SplitSupport<'a> {
     }
 }
 
+/// What `tryRegionSplit` decided.
+enum Regions {
+    /// The split it made, or none.
+    Done(Option<RegId>),
+    /// DEVIATE SPILL-FOLD: spill the range, make no split of any kind.
+    Spill,
+}
+
 /// The parts of the allocator the splits work on, borrowed apart so the editor
 /// can hold the live intervals while the extra info is read.
 pub struct Splitter<'p, 'a> {
@@ -229,9 +237,11 @@ impl Splitter<'_, '_> {
         // RS_Split2 ranges already made dubious progress with region
         // splitting, so they go straight to single block splitting.
         if self.extra.get_stage(virt.reg()) < LiveRangeStage::Split2 {
-            let phys = self.try_region_split(virt, order, new_vregs);
-            if phys.is_some() || !new_vregs.is_empty() {
-                return phys;
+            match self.try_region_split(virt, order, new_vregs) {
+                // DEVIATE SPILL-FOLD: the spill, not a split, is the cheaper.
+                Regions::Spill => return None,
+                Regions::Done(phys) if phys.is_some() || !new_vregs.is_empty() => return phys,
+                Regions::Done(_) => {}
             }
         }
 
@@ -828,7 +838,7 @@ impl Splitter<'_, '_> {
         virt: &Rc<LiveInterval>,
         order: &AllocationOrder,
         new_vregs: &mut Vec<u32>,
-    ) -> Option<RegId> {
+    ) -> Regions {
         // D-RS3: shouldRegionSplitForVirtReg is true.
         let mut num_cands = 0usize;
         let spill_cost = self.calc_block_split_cost();
@@ -847,14 +857,67 @@ impl Splitter<'_, '_> {
             best_cost = spill_cost;
         }
 
+        // DEVIATE SPILL-FOLD: a spill whose references all fold is a bar a
+        // split must be cheaper than; none of them is, the range is spilled.
+        let spill_bar = self.fold_spill_cost(virt).filter(|bar| *bar < best_cost);
+        if let Some(bar) = spill_bar {
+            best_cost = bar;
+        }
+
         let best_cand = self.calculate_region_split_cost(order, &mut best_cost, &mut num_cands, false);
+
+        if spill_bar.is_some() && best_cand == NO_CAND {
+            if llrm_support::env_flag!("LLRM_GREEDY_DECISIONS") {
+                eprintln!("spill with folds, {} below every split", self.shown(best_cost));
+            }
+            return Regions::Spill;
+        }
 
         // No solutions found, fall back to single block splitting.
         if !has_compact && best_cand == NO_CAND {
-            return None;
+            return Regions::Done(None);
         }
 
-        self.do_region_split(virt, best_cand, has_compact, new_vregs)
+        Regions::Done(self.do_region_split(virt, best_cand, has_compact, new_vregs))
+    }
+
+    /// DEVIATE SPILL-FOLD (owner x86-m16, exit 2026-11-29): what spilling
+    /// `virt` costs where every reference folds into a memory operand, in
+    /// the copies of a split (`Tuning::spill_fold`); none where one does not
+    /// fold or the target does not price it. The pin's `calcSpillCost` charges
+    /// a reload and a store per reference whether or not they fold.
+    fn fold_spill_cost(
+        &self,
+        virt: &Rc<LiveInterval>,
+    ) -> Option<BlockFrequency> {
+        let prices = self.env.spill_fold_prices()?;
+        let mut seen: Vec<(InstrKey, bool, bool)> = Vec::new();
+        for operand in self.lis.operands(virt.reg()) {
+            let reads = operand.reads_reg || !operand.is_def;
+            match seen.iter_mut().find(|(key, ..)| *key == operand.instr) {
+                Some(one) => {
+                    one.1 |= reads;
+                    one.2 |= operand.is_def;
+                }
+                None => seen.push((operand.instr, reads, operand.is_def)),
+            }
+        }
+        let copy = self.env.spill_fold_copy_clocks(self.lis.instr(seen.first()?.0), virt.reg())?;
+        let mut clocks = 0u64;
+        for (key, reads, writes) in seen {
+            if !self.env.folds_to_cell(self.lis.instr(key), virt.reg()) {
+                return None;
+            }
+            let extra = match (reads, writes) {
+                (true, true) => prices.update,
+                (true, false) => prices.read,
+                _ => prices.store,
+            };
+            let at = self.lis.indexes.get_instruction_index(key);
+            let block = self.lis.indexes.get_mbb_from_index(&at) as u32;
+            clocks += u64::try_from(extra).unwrap_or(0) * self.block_freq(block).get_frequency();
+        }
+        Some(BlockFrequency(clocks / u64::try_from(copy).unwrap_or(1).max(1)))
     }
 
     /// `calculateRegionSplitCostAroundReg`

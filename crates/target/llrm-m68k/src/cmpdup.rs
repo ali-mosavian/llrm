@@ -29,7 +29,10 @@ use crate::regalloc::Assignment;
 use crate::REGISTER_INFO;
 
 fn is_compare(inst: &Inst) -> bool {
-    matches!(inst.kind, Kind::Op(name) if name.starts_with("CMP") && !name.starts_with("CMPA")) && inst.sets_flags
+    matches!(
+        inst.kind,
+        Kind::Op(name) if name.starts_with("CMP") && !name.starts_with("CMPA")
+    ) && inst.sets_flags()
 }
 
 /// The operands with each register as its root, so two compares of the same
@@ -81,7 +84,7 @@ pub fn drop_repeated_compares(
         let before = &function.blocks[*from].insts;
         // the setter, then only branches
         let Some(setter) = before.iter().rposition(|inst| !inst.terminator) else { continue };
-        if !before[setter + 1..].iter().all(|inst| inst.terminator && !inst.sets_flags && !inst.call) {
+        if !before[setter + 1..].iter().all(|inst| inst.terminator && !inst.sets_flags() && !inst.call) {
             continue;
         }
         let last = &before[setter];

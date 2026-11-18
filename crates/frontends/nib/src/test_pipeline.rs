@@ -52,8 +52,8 @@ fn _stack_of(fixture: &str) -> Result<(String, Vec<u8>), String> {
 fn test_a_frame_larger_than_the_start_stack_adds_a_stack_segment() {
     let (listing, object) = _stack_of("bigframe").unwrap();
     // `print` takes its integer in AX: the chain is a word shorter than with
-    // the stack convention (4618).
-    assert!(listing.contains(".stack 4616"), "{listing}");
+    // the stack convention. The listing saves both `si` and `di`: two words of saves, 4618.
+    assert!(listing.contains(".stack 4618"), "{listing}");
     assert!(object.windows(5).any(|one| one == b"STACK"));
 }
 
@@ -428,6 +428,24 @@ fn the_stack_reserve_is_the_os_layers_and_no_startup_names_one() {
         let text = std::fs::read_to_string(std::path::Path::new(env!("LLRM_ROOT")).join(start)).unwrap();
         assert!(text.contains("STACK_RESERVE") && !text.contains("512"), "{start}");
     }
+}
+
+/// A Nib `&mut [T]` is a pointer into the stack, read as `ss:[bx+si]`, and the
+/// machine said the stack need not be in the data group. The DOS start-up
+/// makes SS the data group's selector (`mov ss, ax`) for every program, and
+/// `os.toml` states it: the Nib machine carries it, so the override is dropped
+/// (quicksort -O1: 9 B).
+#[test]
+fn the_dos_start_up_that_rebases_ss_makes_the_nib_machine_share_the_stack_with_the_data() {
+    use llrm_target::Target;
+    let target = &llrm_x86_m16::M16;
+    let os = crate::Os::for_target(target).unwrap();
+    assert!(crate::compile::machine(target, &os).segments.unwrap().stack_shares_data);
+    let text =
+        std::fs::read_to_string(std::path::Path::new(env!("LLRM_ROOT")).join("runtime/shared/dos/m16/start.asm"))
+            .unwrap();
+    assert!(text.contains("mov     ss, ax"), "the start-up no longer makes SS the data group's selector");
+    assert!(!target.machine().segments.unwrap().stack_shares_data, "other models keep ss:");
 }
 
 /// A convention spells a symbol as the object format asks: `f_` for OMF's

@@ -22,6 +22,19 @@ use llrm_spike_mf::{Kind, Operand, Reg};
 use crate::mfunc::{Class, MFunction, operand_class};
 use crate::scaledindex::memory_at;
 
+/// `operand_class`, with the base and the index of an extending load (it has
+/// no printed operands, so the row names no class for them).
+fn class_at(
+    name: &str,
+    position: usize,
+) -> Option<Class> {
+    match (crate::scaledindex::memory_at(name), position) {
+        (Some((base, _)), at) if at == base => Some(Class::Ar32),
+        (Some((_, index)), at) if at == index => Some(Class::Xr32),
+        _ => operand_class(name, position),
+    }
+}
+
 pub fn address_roles(function: &mut MFunction) {
     let count = function.classes.len();
     // defined once, by an instruction whose result is an address register
@@ -45,8 +58,50 @@ pub fn address_roles(function: &mut MFunction) {
             }
         }
     }
-    let held = |v: u32| defs[v as usize] == 1 && address[v as usize];
+    // a single-def copy of such a register, whose other uses allow an address
+    // register, is one too: selection copies the `lea` of a frame index for
+    // a second access
+    let mut copy_of: Vec<Option<u32>> = vec![None; count];
+    let mut arm = vec![Some(Class::Ar32); count];
+    for block in &function.blocks {
+        for inst in &block.insts {
+            match inst.kind {
+                Kind::Copy => {
+                    if let (Operand::Def(Reg::Virt(d)), Operand::Use(Reg::Virt(s))) =
+                        (&inst.operands[0], &inst.operands[1])
+                    {
+                        copy_of[*d as usize] = Some(*s);
+                    }
+                }
+                Kind::Op(name) => {
+                    for (position, operand) in inst.operands.iter().enumerate() {
+                        if let (Operand::Def(Reg::Virt(v)) | Operand::Use(Reg::Virt(v))) = operand {
+                            let slot = &mut arm[*v as usize];
+                            *slot = slot.and_then(|class| class.meet(class_at(name, position)?));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    let held_direct = |v: u32| defs[v as usize] == 1 && address[v as usize];
+    let mut through_copy = vec![false; count];
+    for _ in 0..4 {
+        for v in 0..count {
+            if defs[v] != 1 || held_direct(v as u32) || through_copy[v] {
+                continue;
+            }
+            let Some(source) = copy_of[v] else { continue };
+            let source = source as usize;
+            if (held_direct(source as u32) || through_copy[source]) && arm[v].is_some() {
+                through_copy[v] = true;
+            }
+        }
+    }
+    let held = |v: u32| held_direct(v) || through_copy[v as usize];
     let mut freed: Vec<u32> = Vec::new();
+    let mut promoted: Vec<u32> = Vec::new();
     for block in &mut function.blocks {
         for inst in &mut block.insts {
             let Kind::Op(name) = inst.kind else { continue };
@@ -60,6 +115,7 @@ pub fn address_roles(function: &mut MFunction) {
             if b != i && !held(b) && held(i) {
                 inst.operands.swap(base, index);
                 freed.push(b);
+                promoted.push(i);
             }
         }
     }
@@ -74,7 +130,7 @@ pub fn address_roles(function: &mut MFunction) {
                 let (Operand::Def(Reg::Virt(v)) | Operand::Use(Reg::Virt(v))) = operand else { continue };
                 if freed.binary_search(v).is_ok() {
                     let slot = &mut allowed[*v as usize];
-                    *slot = slot.and_then(|class| class.meet(operand_class(name, position)?));
+                    *slot = slot.and_then(|class| class.meet(class_at(name, position)?));
                 }
             }
         }
@@ -82,6 +138,11 @@ pub fn address_roles(function: &mut MFunction) {
     for v in freed {
         if let Some(class) = allowed[v as usize] {
             function.classes[v as usize] = class;
+        }
+    }
+    for v in promoted {
+        if through_copy[v as usize] {
+            function.classes[v as usize] = Class::Ar32;
         }
     }
 }

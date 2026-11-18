@@ -159,15 +159,19 @@ impl TargetCalling for WasmCalling {
             // `getAlignedCallFrameSize` bytes at the stack alignment.
             let mut offsets = Vec::new();
             let mut bytes = 0u32;
+            let mut max_arg_align = 1u32;
             for out in &outs[fixed..] {
                 let size = dag.value_type(out.value).size_in_bits() / 8;
                 bytes = bytes.next_multiple_of(size) + size;
                 offsets.push(bytes - size);
+                max_arg_align = max_arg_align.max(size);
             }
             let buffer = if bytes == 0 {
                 dag.get_constant(0, self.pointer)
             } else {
-                let size = bytes.next_multiple_of(STACK_ALIGN);
+                // `getAlignedCallFrameSize`: the stack size aligned to the
+                // widest argument (`MaxStackArgAlign`), not to the stack.
+                let size = bytes.next_multiple_of(max_arg_align);
                 let index = frame(size, STACK_ALIGN);
                 let at = dag.get_frame_index(self.pointer, index);
                 let stores: Vec<SDValue> = outs[fixed..]

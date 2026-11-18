@@ -4,8 +4,8 @@
 //! # How it works
 //! `__mulsi3_fast` walks the multiplier a byte at a time and stops at its last
 //! set byte; the compact `__mulsi3` always walks 32 bits. A call saves
-//! [`SAVED_CLOCKS`] on average over multipliers of one to four bytes (1323,
-//! 851, 379 and -93 clocks), the routine is [`FAST_BYTES`] longer, so a site
+//! [`SAVED_CLOCKS`] on average over multipliers of one to four bytes, the
+//! routine is [`fast_bytes`] longer, so a site
 //! that runs repays it at once. The static count cannot tell a site that runs
 //! from one that is dead after folding (an exported function nothing calls
 //! counts once: `mul_words_to_long`, `float_in_memory_loop` and
@@ -25,11 +25,22 @@ use llrm_mir::types::TypeId;
 
 use crate::staticlocals::{block_depths, call_weights, callee_intrinsic, weight};
 
-/// Bytes of `__mulsi3_fast` over `__mulsi3` (`mos_rt.s`).
-pub const FAST_BYTES: f64 = 19.0;
+/// Bytes of `__mulsi3_fast` over `__mulsi3`, read from the runtime's text with
+/// what each links (`mulimage::library_bytes`).
+pub fn fast_bytes() -> f64 {
+    static BYTES: std::sync::OnceLock<f64> = std::sync::OnceLock::new();
+    *BYTES.get_or_init(|| {
+        f64::from(crate::mulimage::library_bytes("__mulsi3_fast"))
+            - f64::from(crate::mulimage::library_bytes("__mulsi3"))
+    })
+}
 /// Clocks a call saves on average
-/// (`the_fast_multiply_saves_what_hotmultiply_prices`).
-pub const SAVED_CLOCKS: f64 = 615.0;
+/// (`the_fast_multiply_saves_what_hotmultiply_prices`, within 10%: sim65 adds a
+/// clock a page crossing, so it moves with where the runtime's text starts: 586
+/// after the divide routines shrank, 553 to 607 with the 32-bit calls taking
+/// their arguments in cells; 550 keeps phi_slot_unknown_arm at -Os on the
+/// compact routine, 15 B under the fast one, 2026-11-15).
+pub const SAVED_CLOCKS: f64 = 550.0;
 /// Static runs from which a module's multiplies are taken to run.
 pub const MIN_RUNS: f64 = 3.0;
 
@@ -38,8 +49,8 @@ pub fn hot(module: &Module) -> bool {
     runs(module) >= MIN_RUNS
 }
 
-/// The static runs of the 32-bit multiplies of `module`: 10 per level of loop depth, times the runs of
-/// the function.
+/// The static runs of the 32-bit multiplies of `module`: 10 per level of loop
+/// depth, times the runs of the function.
 pub fn runs(module: &Module) -> f64 {
     let calls = call_weights(module);
     let mut runs = 0.0;

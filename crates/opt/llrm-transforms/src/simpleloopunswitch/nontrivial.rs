@@ -685,7 +685,7 @@ pub(super) fn unswitch_nontrivial_invariants(
             if let Some(&cloned) = vmap.blocks.get(&block)
                 && !tree.is_reachable_from_entry(cloned)
             {
-                for succ in successors(run, cloned) {
+                for succ in super::candidates::edges(run, cloned) {
                     run.function.predecessor_removed(run.context, succ, cloned, false);
                 }
                 dead.push(cloned);
@@ -701,7 +701,7 @@ pub(super) fn unswitch_nontrivial_invariants(
     let mut candidates: Vec<BlockId> = exit_blocks.iter().chain(lp.get_blocks()).copied().collect();
     while let Some(block) = candidates.pop() {
         if !dead_set.contains(&block) && !tree.is_reachable_from_entry(block) {
-            for succ in successors(run, block) {
+            for succ in super::candidates::edges(run, block) {
                 run.function.predecessor_removed(run.context, succ, block, false);
                 candidates.push(succ);
             }

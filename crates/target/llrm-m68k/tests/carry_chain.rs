@@ -121,7 +121,7 @@ fn the_compare_form_is_kept_where_addx_runs_out_of_data_registers() {
     let options = Options { strict: true, ..Options::default() };
     let kept = items_with(&module, "main", Cpu::M68000, options).expect("compiles");
     let plain = items_with(&module, "main", Cpu::M68000, Options { carry_chain: false, ..options }).expect("compiles");
-    let price = Price::of(false, true);
+    let price = Price::of(false);
     assert!(
         !llrm_m68k::trial::keeps(&plain, &kept, Cpu::M68000, price),
         "the compare form is cheaper than the kept build"

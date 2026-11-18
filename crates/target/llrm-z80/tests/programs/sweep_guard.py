@@ -40,6 +40,20 @@ def incomparable(source):
     return None
 
 
+def no_bar(source):
+    """`WHY` for a program SDCC cannot bar (it miscompiles or rejects it), from its `// bar: none (SDCC WHY)` line, or None. The sweep
+    does not run SDCC for it and lists it apart from the programs whose bar is missing for an unknown reason."""
+    for line in source.splitlines():
+        if line.startswith("// bar: none"):
+            return line.removeprefix("// bar: none").strip().removeprefix("(").rstrip(")")
+    return None
+
+
+def unmeasured(results, reasons):
+    """The programs of `results` with no bar and no `bar: none` marker: a bar missing for a reason nobody wrote down."""
+    return [name for name, rows in results if not has_bar(rows) and not any(why.startswith("NOBAR") for why in reasons.get(name, {}).values())]
+
+
 def dropped(expected, results, required=lambda tag: tag == "ours", excused=()):
     """`{program: reason}` for every program of `expected` without a row whose column `required` accepts (`ours`).
 
@@ -61,6 +75,30 @@ def summary(expected, results, reasons=None, required=lambda tag: tag == "ours",
     if failed:
         line += "; no row: " + " ".join(f"{n}({reasons.get(n, lost.get(n, 'FAILED'))})" for n in sorted(failed))
     return line, not failed
+
+
+def read_gcc_column(path):
+    """`{name: (bytes, clocks)}` of the gcc-z80 fork's run of the corpus (`run.py CC1 LEVEL OUT.tsv`, rows `name\tgcc\tbytes\tclocks`)."""
+    column = {}
+    for line in open(path):
+        name, tag, size, clocks = line.rstrip("\n").split("\t")[:4]
+        if tag == "gcc":
+            column[name] = (int(size), int(clocks))
+    return column
+
+
+def add_gcc_row(rows, gcc_cell, not_a_bar):
+    """`rows` with the fork's `gcc` row beside them: a bar of its own where SDCC gives none (13 of 36 cells, 2026-11-13) and one more
+    column where it does (the bar is the lowest column per metric). Not for a program that computes a different program under
+    the fork (its `double` is 32 bits, as SDCC's: `incomparable`)."""
+    if gcc_cell is None or not_a_bar or any(tag == "gcc" for tag, _, _ in rows):
+        return rows
+    return rows + [("gcc", *gcc_cell)]
+
+
+def has_bar(rows):
+    """Whether any column besides ours bars the program."""
+    return any(tag.startswith("sdcc") or tag == "gcc" for tag, _, _ in rows)
 
 
 def softfloat_library_missing(environ, sdcc_only, no_softfloat):

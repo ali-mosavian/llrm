@@ -190,6 +190,36 @@ fn a_word_fill_stays_a_store_loop_without_memset_pattern16() {
     assert!(!after.contains("memset.pattern") && after.contains("store i16 4660"), "{after}");
 }
 
+/// m16 states no library with `memset_pattern16`, so #9570 kept every word fill
+/// a store loop there: copy_idioms `palette` -O2 lost its `rep stosw` (a
+/// `add si,2; jne` loop of 5 clk a word instead of 4). A target whose isel
+/// fills a pattern itself forms it with no library.
+#[test]
+fn a_word_fill_forms_where_the_target_fills_a_pattern_itself() {
+    let body = "  %p = getelementptr inbounds [64 x i16], ptr @buf, i16 0, i16 %i\n  store i16 4660, ptr %p\n";
+    let text = looped("i16", "10", body, "0");
+    let after =
+        managed_fill_by(DOS, &text, &[&[0, 0], &[0, 9], &[0, 10]], Tuned { fills_pattern: true, ..Tuned::default() });
+    assert!(after.contains("memset.pattern") && !after.contains("store i16 4660"), "{after}");
+}
+
+/// m32 filled a 64x64 word nest by a loop (fill_nest -O2: 27,771 clk against
+/// gcc's 24,667): its pattern fill was expanded before isel, so the fill was
+/// never formed. A target whose tuning says isel fills patterns at speed forms
+/// it with no library.
+#[test]
+fn a_word_fill_forms_where_the_tuning_fills_patterns_at_speed() {
+    let body = "  %p = getelementptr inbounds [64 x i16], ptr @buf, i16 0, i16 %i\n  store i16 4660, ptr %p\n";
+    let text = looped("i16", "10", body, "0");
+    let after = managed_fill_by(
+        DOS,
+        &text,
+        &[&[0, 0], &[0, 9], &[0, 10]],
+        Tuned { fills_pattern_at_speed: true, ..Tuned::default() },
+    );
+    assert!(after.contains("memset.pattern") && !after.contains("store i16 4660"), "{after}");
+}
+
 /// A word whose bytes differ stayed a loop, `rep stosw` being isel's alone:
 /// each of its trips cost a store. It is one pattern fill of the cells.
 #[test]
@@ -1477,8 +1507,20 @@ fn a_loop_trip_is_priced_at_its_conditional_branch_only() {
 #[test]
 fn inline_fill_stores_are_priced_as_immediate_stores() {
     let prices = crate::profit::OperationCosts { store: 6, store_immediate: 10, prefix: 1, ..Default::default() };
-    let fill = super::InlineFills { max_stores: 8, bytes: 8 };
+    let fill = super::InlineFills { max_stores: 8, bytes: 8, prefixed: true };
     assert_eq!(fill.price(&prices), 2 * (10 + 1));
+}
+
+/// Flat code stores a dword with no operand-size prefix: the inline fill of
+/// 64 bytes was priced 16 x (store + prefix), +60% of its clocks, which the
+/// clock gate read as a loop that costs more than `rep stos` (fill_nest -O2
+/// at x86_32-dos priced 42 clocks a trip for 26).
+#[test]
+fn a_flat_dword_store_is_priced_without_the_prefix() {
+    let prices = crate::profit::OperationCosts { store_immediate: 1, prefix: 1, ..Default::default() };
+    let flat = super::InlineFills { max_stores: 16, bytes: 64, prefixed: false };
+    let sixteen_bit = super::InlineFills { prefixed: true, ..flat };
+    assert_eq!((flat.price(&prices), sixteen_bit.price(&prices)), (16, 32));
 }
 
 /// A loop of a known count that zeroes one array and numbers another.

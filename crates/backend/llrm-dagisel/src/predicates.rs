@@ -146,6 +146,23 @@ pub fn memory_vt_f80<D: Dag, H: Hooks<D>>(args: Args<D, H>) -> bool {
     memory_vt_is(args, mvt::f80)
 }
 
+pub fn memory_vt_v2i64<D: Dag, H: Hooks<D>>(args: Args<D, H>) -> bool {
+    memory_vt_is(args, mvt::v2i64)
+}
+
+pub fn memory_vt_v4i32<D: Dag, H: Hooks<D>>(args: Args<D, H>) -> bool {
+    memory_vt_is(args, mvt::v4i32)
+}
+
+/// The pin's `MaskedValueIsZero(Op, high half of the element)` of
+/// `PMULUDQ`/`PMULDQ`'s operand predicates. DEVIATE VEC-PRED1 (owner
+/// llrm-target-x86-m64-b, exit 2026-11-20, PR-C): never true, so those patterns
+/// are not used and a vector multiply is expanded instead. Never selects
+/// a wrong instruction.
+pub fn upper_half_is_zero<D: Dag, H: Hooks<D>>(_: Args<D, H>) -> bool {
+    false
+}
+
 /// `nontemporalstore`: the builder sets no `!nontemporal`, so none is.
 pub fn non_temporal_store<D: Dag, H: Hooks<D>>(_: Args<D, H>) -> bool {
     false

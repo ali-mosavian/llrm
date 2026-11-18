@@ -690,6 +690,11 @@ impl GvnPass<'_> {
         if values_per_block.is_empty() {
             return changed;
         }
+        // DEVIATE LP1-FP: a float value is not carried around a loop's back
+        // edge past the float file.
+        if !self.float_carry_fits(load, &values_per_block, &unavailable_blocks) {
+            return changed;
+        }
         // Step 3: Eliminate fully redundancy.
         if unavailable_blocks.is_empty() {
             let result = self.function.instruction(load).result.expect("a load has a value");
@@ -708,11 +713,76 @@ impl GvnPass<'_> {
             || changed
     }
 
-    /// DEVIATE GVN-PRE-OPTSIZE (owner x86-m32, exit 2026-12-01): `optsize`/`minsize` on a target
-    /// that says so (`Tti::load_pre_off_at_size`).
+    /// DEVIATE GVN-PRE-OPTSIZE (owner x86-m32, exit 2026-12-01):
+    /// `optsize`/`minsize` on a target that says so
+    /// (`Tti::load_pre_off_at_size`). DEVIATE LP1-FP (owner x86-m32, exit
+    /// 2026-11-30): whether replacing `load` by the values
+    /// `values_per_block` gives it (and a load in each of
+    /// `unavailable_blocks`) leaves the float file room. A float load in a loop
+    /// whose value comes from outside it is a phi at the loop's header, held
+    /// across every trip; LLVM's GVN prices no register, and the x87 stack has
+    /// eight. gcc's `tree-ssa-pre.cc` does not carry a load around a loop it
+    /// has not hoisted. The room is the target's `licm_float_register_limit`
+    /// less the float phis the header has.
+    fn float_carry_fits(
+        &mut self,
+        load: InstId,
+        values_per_block: &[AvailableValueInBlock],
+        unavailable_blocks: &[BlockId],
+    ) -> bool {
+        let Some(result) = self.function.instruction(load).result else { return true };
+        if !matches!(
+            self.context.types.get(self.function.value(result).ty),
+            llrm_mir::types::Type::Float(_)
+        ) {
+            return true;
+        }
+        let Some(limit) = crate::looprotate::target_tti(self.outer.target()).licm_float_register_limit() else {
+            return true;
+        };
+        let load_block = self.function.parent(load).expect("a placed load");
+        self.ensure_loops();
+        let (header, outside) = {
+            let info = self.loops.as_ref().expect("made");
+            let Some(innermost) = info.get_loop_for(load_block) else { return true };
+            let outside = values_per_block.iter().any(|one| !innermost.contains(one.bb))
+                || unavailable_blocks.iter().any(|&one| !innermost.contains(one));
+            (innermost.get_header(), outside)
+        };
+        // A value every def of which is in the loop is not carried by a phi.
+        if !outside {
+            return true;
+        }
+        let held = match self.carried_floats.get(&header) {
+            Some(&held) => held,
+            None => self
+                .function
+                .iter_block(header)
+                .filter(|&inst| {
+                    let data = self.function.instruction(inst);
+                    data.opcode == Opcode::Phi
+                        && data.result.is_some_and(|result| {
+                            matches!(
+                                self.context.types.get(self.function.value(result).ty),
+                                llrm_mir::types::Type::Float(_)
+                            )
+                        })
+                })
+                .count(),
+        };
+        if held + 1 > limit as usize {
+            return false;
+        }
+        self.carried_floats.insert(header, held + 1);
+        true
+    }
+
     fn load_pre_off_for_size(&self) -> bool {
         self.function.attrs.iter().any(|attr| {
-            matches!(attr, llrm_mir::opcode::Attribute::Flag(flag) if flag == "optsize" || flag == "minsize")
+            matches!(
+                attr,
+                llrm_mir::opcode::Attribute::Flag(flag) if flag == "optsize" || flag == "minsize"
+            )
         }) && crate::looprotate::target_tti(self.outer.target()).load_pre_off_at_size()
     }
 }

@@ -51,6 +51,8 @@ pub struct TargetEnv {
     pub joins_global_copies: bool,
     /// `CoalescerEnv::joins_pinned_copies`.
     pub joins_pinned_copies: bool,
+    /// `CoalescerEnv::keeps_split_params`.
+    pub keeps_split_params: bool,
     /// DEVIATE C13 (`CoalescerEnv::joins_sub_registers`).
     pub joins_sub_registers: bool,
     /// Whether a copy into or out of a lane above the low one is joined
@@ -301,6 +303,10 @@ impl CoalescerEnv for TargetEnv {
 
     fn joins_pinned_copies(&self) -> bool {
         self.joins_pinned_copies
+    }
+
+    fn keeps_split_params(&self) -> bool {
+        self.keeps_split_params
     }
 
     fn joins_sub_registers(&self) -> bool {
@@ -623,6 +629,7 @@ pub fn coalesce(
         keep_pinned: true,
         joins_global_copies,
         joins_pinned_copies,
+        keeps_split_params: false,
         joins_sub_registers,
         joins_lanes,
         joins_loop_carried_first,

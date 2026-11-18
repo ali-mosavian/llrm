@@ -381,3 +381,51 @@ def test_an_lp64_only_cell_is_refused_at_m32():
         harness.main()
     harness.check_applies("run_urem_eq")
     harness.check_applies("x_iir")
+
+
+def test_a_linked_image_older_than_its_object_is_refused(tmp_path):
+    """The harness does not relink: an object overwritten after its link ran the old .elf, and pin-llc clocks equalled clang's to the clock (x_fir, x_spill_store_order, 2026-11-16)."""
+    import hashlib
+    previous = harness.OUT
+    harness.OUT = tmp_path
+    try:
+        (tmp_path / "b").mkdir()
+        obj, elf = tmp_path / "b" / "p.llrmO3.o", tmp_path / "b" / "p.llrmO3.elf"
+        obj.write_bytes(b"first")
+        elf.write_bytes(b"image")
+        elf.with_suffix(".elf.src").write_text(hashlib.sha256(b"first").hexdigest())
+        assert harness.fresh_elf("p", "llrmO3") == elf
+        obj.write_bytes(b"second")
+        with pytest.raises(AssertionError, match="not built from"):
+            harness.fresh_elf("p", "llrmO3")
+        elf.with_suffix(".elf.src").unlink()
+        with pytest.raises(AssertionError, match="not built from"):
+            harness.fresh_elf("p", "llrmO3")
+    finally:
+        harness.OUT = previous
+
+
+def test_build_records_the_object_each_image_was_linked_from(tmp_path):
+    """build.sh left no record of what it linked, so a stale .elf could not be told from a current one."""
+    import hashlib
+    import subprocess
+    import sys
+    sys.path.insert(0, str(harness.REPO / "tools"))
+    import linkrecipe
+    (tmp_path / "o").mkdir()
+    (tmp_path / "b").mkdir()
+    for cmd in (["gcc", "-m32", "-c", str(HERE / "stub.s"), "-o", str(tmp_path / "stub.o")],
+                ["ld", "-m", linkrecipe.ld_emulation("x86-m32"), "-static", "-e", "0", "-Ttext=0x8000", "-o", str(tmp_path / "stub.elf"), str(tmp_path / "stub.o")]):
+        done = subprocess.run(cmd, capture_output=True, text=True)
+        assert done.returncode == 0, done.stderr
+    previous = harness.OUT
+    harness.OUT = tmp_path
+    try:
+        harness.record_stub(tmp_path)
+        done = subprocess.run([str(HERE / "build.sh"), "fib"], capture_output=True, text=True, env={**os.environ, "VSGCC_WORK": str(tmp_path)})
+        obj = tmp_path / "b" / "fib.gccO2.o"
+        assert obj.exists(), (done.stdout, done.stderr)
+        assert (tmp_path / "b" / "fib.gccO2.elf.src").read_text() == hashlib.sha256(obj.read_bytes()).hexdigest()
+        assert harness.fresh_elf("fib", "gccO2") == tmp_path / "b" / "fib.gccO2.elf"
+    finally:
+        harness.OUT = previous

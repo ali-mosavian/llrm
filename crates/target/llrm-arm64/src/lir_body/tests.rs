@@ -10,9 +10,12 @@ use llrm_mir::MetadataId;
 use super::*;
 use crate::mc::inst::{
     AddSub, Atomic, Barrier, Bitfield, CcOperand, Cond, Div, Extend, Fill, FpBinary, FpConvert, FpFused, FpSize,
-    FpUnary, Logic, Memory, Mul3, Rounding, Select, Unary, Wide,
+    FpUnary, Logic, Memory, Mul3, Permute, Rounding, Select, Unary, Wide,
 };
-use crate::mc::inst::{Addr, Arrangement, Gpr, ImmShape, VectorOp, VectorShift};
+use crate::mc::inst::{
+    Addr, Arrangement, Gpr, ImmShape, MulAcc, NarrowLane, VectorFma, VectorFpOp, VectorFpUnary, VectorIntUnary,
+    VectorLongOp, VectorOp, VectorReduce, VectorShift,
+};
 use crate::mfunc::Callee;
 
 fn g(n: u32) -> Gpr {
@@ -234,21 +237,141 @@ pub(super) fn instructions() -> Vec<Inst> {
         }
     }
     out.push(Inst::VectorMov { rd: v(0), rn: v(1) });
-    for op in [VectorOp::Add, VectorOp::Mul, VectorOp::And, VectorOp::Eor, VectorOp::Ushl] {
+    for op in [
+        VectorOp::Add,
+        VectorOp::Mul,
+        VectorOp::And,
+        VectorOp::Eor,
+        VectorOp::Ushl,
+        VectorOp::Smax,
+        VectorOp::Umin,
+        VectorOp::Sqadd,
+        VectorOp::Uqsub,
+    ] {
         for lanes in [Arrangement::B16, Arrangement::H8, Arrangement::S4, Arrangement::D2] {
-            if (op.is_logical() && lanes != Arrangement::B16) || (op == VectorOp::Mul && lanes == Arrangement::D2) {
+            if !op.has_lanes(lanes) {
                 continue;
             }
             out.push(Inst::VectorBinary { op, lanes, rd: v(0), rn: v(1), rm: v(2) });
         }
     }
-    for op in [VectorShift::Shl, VectorShift::Ushr, VectorShift::Sshr] {
+    for op in [VectorShift::Shl, VectorShift::Ushr, VectorShift::Sshr, VectorShift::Usra, VectorShift::Ssra] {
         out.push(Inst::VectorShift { op, lanes: Arrangement::H8, rd: v(0), rn: v(1), amount: 3 });
     }
-    out.push(Inst::VectorNot { rd: v(0), rn: v(1) });
+    for lane in [NarrowLane::B, NarrowLane::H, NarrowLane::S] {
+        for high in [false, true] {
+            for op in [VectorLongOp::Ushll, VectorLongOp::Sshll] {
+                out.push(Inst::VectorLongShift { op, lane, high, rd: v(0), rn: v(1), amount: 0 });
+            }
+            for op in [
+                VectorLongOp::Uaddl,
+                VectorLongOp::Saddl,
+                VectorLongOp::Uaddw,
+                VectorLongOp::Saddw,
+                VectorLongOp::Umull,
+                VectorLongOp::Smull,
+            ] {
+                out.push(Inst::VectorLong { op, lane, high, rd: v(0), rn: v(1), rm: v(2) });
+            }
+        }
+    }
+    for quad in [true, false] {
+        out.push(Inst::VectorNot { quad, rd: v(0), rn: v(1) });
+    }
+    for (_, form) in crate::vector_forms::all() {
+        use crate::vector_forms::VectorForm;
+        out.push(match form {
+            VectorForm::Compare { op, lanes, quad } => {
+                Inst::VectorCompare { op, lanes, quad, rd: v(0), rn: v(1), rm: v(2) }
+            }
+            VectorForm::CompareZero { op, lanes, quad } => {
+                Inst::VectorCompareZero { op, lanes, quad, rd: v(0), rn: v(1) }
+            }
+            VectorForm::BitSelect { op, quad } => Inst::VectorBitSelect { op, quad, rd: v(0), rn: v(1), rm: v(2) },
+            VectorForm::Bsp { quad } => Inst::VectorBsp { quad, rd: v(0), mask: v(3), rn: v(1), rm: v(2) },
+        });
+    }
+    for (op, lanes) in [(MulAcc::Add, Arrangement::S4), (MulAcc::Sub, Arrangement::B8)] {
+        out.push(Inst::VectorMulAcc { op, lanes, rd: v(0), rn: v(1), rm: v(2) });
+    }
+    for (op, lanes) in [(VectorFma::Add, Arrangement::S4), (VectorFma::Sub, Arrangement::D2)] {
+        out.push(Inst::VectorFma { op, lanes, rd: v(0), rn: v(1), rm: v(2) });
+        out.push(Inst::VectorFmaLane { op, lanes, rd: v(0), rn: v(1), rm: v(2), index: 1 });
+        out.push(Inst::ScalarFmaLane { op, lanes, rd: v(0), rn: v(1), rm: v(2), index: 1 });
+    }
+    out.push(Inst::VectorFmulLane { lanes: Arrangement::S4, rd: v(0), rn: v(1), rm: v(2), index: 1 });
+    out.push(Inst::VectorMulLane { rd: v(0), rn: v(1), rm: v(2), index: 1 });
+    out.push(Inst::VectorDupScalar { lanes: Arrangement::D2, rd: v(0), rn: v(1), index: 1 });
+    for (high, wide) in [(false, Arrangement::H8), (true, Arrangement::S4), (false, Arrangement::D2)] {
+        out.push(Inst::VectorNarrow { high, shift: None, wide, rd: v(0), rn: v(1) });
+    }
+    for (high, lane) in [(false, NarrowLane::B), (true, NarrowLane::H), (false, NarrowLane::S)] {
+        for op in [VectorLongOp::Umlal, VectorLongOp::Smlal] {
+            out.push(Inst::VectorLong { op, lane, high, rd: v(0), rn: v(1), rm: v(2) });
+        }
+    }
+    for lanes in Arrangement::ALL {
+        for kind in Permute::ALL {
+            out.push(Inst::VectorPermute { kind, lanes, rd: v(0), rn: v(1), rm: v(2) });
+        }
+    }
+    for lanes in [Arrangement::B16, Arrangement::H8, Arrangement::S4, Arrangement::D2] {
+        out.push(Inst::VectorInsGpr { lanes, rd: v(0), rn: Gpr(3), index: 1 });
+        out.push(Inst::VectorInsLane { lanes, rd: v(0), rn: v(1), index: 1, src: 0 });
+        out.push(Inst::VectorUmov { lanes, rd: Gpr(3), rn: v(1), index: 1 });
+        for wide in [false, true] {
+            if lanes != Arrangement::D2 && (wide || lanes != Arrangement::S4) {
+                out.push(Inst::VectorSmov { lanes, wide, rd: Gpr(3), rn: v(1), index: 1 });
+            }
+        }
+        out.push(Inst::VectorStoreLane { lanes, rt: v(1), index: 1, base: Gpr(3) });
+    }
+    for lanes in Arrangement::ALL {
+        out.push(Inst::VectorLoadReplicate { lanes, rt: v(1), base: Gpr(3) });
+        for op in
+            [VectorIntUnary::Neg, VectorIntUnary::Abs, VectorIntUnary::Cnt, VectorIntUnary::Clz, VectorIntUnary::Rbit]
+        {
+            if op.has_lanes(lanes) {
+                out.push(Inst::VectorIntUnary { op, lanes, rd: v(0), rn: v(1) });
+            }
+        }
+    }
+    for lanes in [Arrangement::B16, Arrangement::H8, Arrangement::S4, Arrangement::D2] {
+        out.push(Inst::VectorLoadLane { lanes, rt: v(1), index: 1, base: Gpr(3) });
+        out.push(Inst::VectorLoadStructure { count: 2, lanes, rt: v(1), base: Gpr(3) });
+        out.push(Inst::VectorStoreStructure { count: 4, lanes, rt: v(1), base: Gpr(3) });
+    }
+    for (op, lanes) in [
+        (VectorReduce::Addv, Arrangement::B16),
+        (VectorReduce::Smaxv, Arrangement::H8),
+        (VectorReduce::Uminv, Arrangement::S4),
+        (VectorReduce::Addp, Arrangement::D2),
+    ] {
+        out.push(Inst::VectorReduce { op, lanes, rd: v(0), rn: v(1) });
+    }
+    out.push(Inst::VectorDupLane { lanes: Arrangement::S4, rd: v(0), rn: v(1), index: 0 });
+    out.push(Inst::VectorDupLane { lanes: Arrangement::D2, rd: v(0), rn: v(1), index: 1 });
+    for lanes in [Arrangement::S4, Arrangement::D2, Arrangement::S2] {
+        for op in [VectorFpOp::Add, VectorFpOp::Sub, VectorFpOp::Mul, VectorFpOp::Div] {
+            out.push(Inst::VectorFpBinary { op, lanes, rd: v(0), rn: v(1), rm: v(2) });
+        }
+        for op in [
+            VectorFpUnary::Neg,
+            VectorFpUnary::Abs,
+            VectorFpUnary::Scvtf,
+            VectorFpUnary::Ucvtf,
+            VectorFpUnary::Fcvtzs,
+            VectorFpUnary::Fcvtzu,
+            VectorFpUnary::Sqrt,
+        ] {
+            out.push(Inst::VectorFpUnary { op, lanes, rd: v(0), rn: v(1) });
+        }
+    }
     for fill in [
         Fill::Zero,
         Fill::Byte(0xa5),
+        Fill::Byte8(0xa5),
+        Fill::Imm { invert: false, shape: ImmShape::H4(8), imm8: 3 },
         Fill::Dup(Arrangement::B16, rn),
         Fill::Dup(Arrangement::H8, rn),
         Fill::Dup(Arrangement::D2, rn),
@@ -310,6 +433,35 @@ fn variant(inst: &Inst) -> &'static str {
         Inst::VectorBinary { .. } => "VectorBinary",
         Inst::VectorShift { .. } => "VectorShift",
         Inst::VectorNot { .. } => "VectorNot",
+        Inst::VectorCompare { .. } => "VectorCompare",
+        Inst::VectorCompareZero { .. } => "VectorCompareZero",
+        Inst::VectorBitSelect { .. } => "VectorBitSelect",
+        Inst::VectorBsp { .. } => "VectorBsp",
+        Inst::VectorLongShift { .. } => "VectorLongShift",
+        Inst::VectorLong { .. } => "VectorLong",
+        Inst::VectorMulAcc { .. } => "VectorMulAcc",
+        Inst::VectorFma { .. } => "VectorFma",
+        Inst::VectorInsGpr { .. } => "VectorInsGpr",
+        Inst::VectorInsLane { .. } => "VectorInsLane",
+        Inst::VectorUmov { .. } => "VectorUmov",
+        Inst::VectorSmov { .. } => "VectorSmov",
+        Inst::VectorStoreLane { .. } => "VectorStoreLane",
+        Inst::VectorLoadReplicate { .. } => "VectorLoadReplicate",
+        Inst::VectorIntUnary { .. } => "VectorIntUnary",
+        Inst::VectorLoadLane { .. } => "VectorLoadLane",
+        Inst::VectorLoadStructure { .. } => "VectorLoadStructure",
+        Inst::VectorStoreStructure { .. } => "VectorStoreStructure",
+        Inst::VectorFmaLane { .. } => "VectorFmaLane",
+        Inst::ScalarFmaLane { .. } => "ScalarFmaLane",
+        Inst::VectorFmulLane { .. } => "VectorFmulLane",
+        Inst::VectorMulLane { .. } => "VectorMulLane",
+        Inst::VectorNarrow { .. } => "VectorNarrow",
+        Inst::VectorPermute { .. } => "VectorPermute",
+        Inst::VectorDupScalar { .. } => "VectorDupScalar",
+        Inst::VectorReduce { .. } => "VectorReduce",
+        Inst::VectorDupLane { .. } => "VectorDupLane",
+        Inst::VectorFpBinary { .. } => "VectorFpBinary",
+        Inst::VectorFpUnary { .. } => "VectorFpUnary",
         Inst::Svc { .. } => "Svc",
         Inst::Atomic { .. } => "Atomic",
         Inst::Dmb { .. } => "Dmb",
@@ -322,7 +474,7 @@ fn variant(inst: &Inst) -> &'static str {
 /// The variants after frame lowering, which the body is never made from.
 const AFTER_FRAME: [&str; 3] = ["Mark", "Label", "Cfi"];
 
-const ALL: [&str; 50] = [
+const ALL: [&str; 79] = [
     "Mark",
     "Label",
     "Cfi",
@@ -367,6 +519,35 @@ const ALL: [&str; 50] = [
     "VectorBinary",
     "VectorShift",
     "VectorNot",
+    "VectorCompare",
+    "VectorCompareZero",
+    "VectorBitSelect",
+    "VectorBsp",
+    "VectorLongShift",
+    "VectorLong",
+    "VectorMulAcc",
+    "VectorFma",
+    "VectorInsGpr",
+    "VectorInsLane",
+    "VectorUmov",
+    "VectorSmov",
+    "VectorStoreLane",
+    "VectorLoadReplicate",
+    "VectorIntUnary",
+    "VectorLoadLane",
+    "VectorLoadStructure",
+    "VectorStoreStructure",
+    "VectorFmaLane",
+    "ScalarFmaLane",
+    "VectorFmulLane",
+    "VectorMulLane",
+    "VectorNarrow",
+    "VectorPermute",
+    "VectorDupScalar",
+    "VectorReduce",
+    "VectorDupLane",
+    "VectorFpBinary",
+    "VectorFpUnary",
     "Svc",
     "Atomic",
     "Dmb",

@@ -81,7 +81,7 @@ fn a_select_is_right_for_every_byte_on_both_cpus() {
     // the reference, byte by byte: 1 unless the byte is 127 or 'A'..='Z'; `bad`
     // is set by any mismatch
     let main = "  lda #0\n  sta bad\n  sta ia\nloop:\n  lda #1\n  sta want\n  lda ia\n  cmp #127\n  bne n1\n  lda #0\n  sta want\n\
-                n1:\n  lda ia\n  cmp #65\n  bcc n2\n  cmp #91\n  bcs n2\n  lda #0\n  sta want\nn2:\n  lda ia\n  sta rc2\n  lda #0\n  sta rc3\n  \
+                n1:\n  lda ia\n  cmp #65\n  bcc n2\n  cmp #91\n  bcs n2\n  lda #0\n  sta want\nn2:\n  ldx #0\n  lda ia\n  \
                 jsr k_ispunct\n  cmp want\n  beq ok\n  lda #1\n  sta bad\nok:\n  inc ia\n  bne loop\n  lda bad\n";
     let extra = format!("{functions}.segment \"BSS\"\nia: .res 1\nwant: .res 1\nbad: .res 1\n.segment \"CODE\"\n");
     for target in ["sim6502", "sim65c02"] {
@@ -114,12 +114,12 @@ fn a_word_select_is_right_on_the_carry_the_sign_and_the_zero_flag() {
         for (k, (a, b)) in pairs.into_iter().enumerate() {
             let want = if pick(a, b) { a } else { b };
             main += &format!(
-                "  lda #{}\n  sta rc2\n  lda #{}\n  sta rc3\n  lda #{}\n  sta rc4\n  lda #{}\n  sta rc5\n  jsr k_{name}\n  \
+                "  lda #{}\n  sta rc2\n  lda #{}\n  sta rc3\n  ldx #{}\n  lda #{}\n  jsr k_{name}\n  \
                  cmp #{}\n  bne bad{n}_{k}\n  cpx #{}\n  beq ok{n}_{k}\nbad{n}_{k}:\n  lda #1\n  sta bad\nok{n}_{k}:\n",
-                a & 0xFF,
-                a >> 8,
                 b & 0xFF,
                 b >> 8,
+                a >> 8,
+                a & 0xFF,
                 want & 0xFF,
                 want >> 8
             );
@@ -163,7 +163,7 @@ fn a_select_on_a_dropped_zero_compare_is_right_for_every_byte_on_both_cpus() {
     let functions: String =
         compiled.lines().filter(|l| !l.starts_with("rc") || !l.contains(" = $")).map(|l| format!("{l}\n")).collect();
     // want = 7 for an even byte, else 9; `bad` is set by any mismatch
-    let main = "  lda #0\n  sta bad\n  sta ia\nloop:\n  lda ia\n  sta rc2\n  lda #0\n  sta rc3\n  jsr k_zsel\n  sta got\n  \
+    let main = "  lda #0\n  sta bad\n  sta ia\nloop:\n  ldx #0\n  lda ia\n  jsr k_zsel\n  sta got\n  \
                 lda ia\n  and #1\n  bne odd\n  lda #7\n  jmp cmpw\nodd:\n  lda #9\ncmpw:\n  cmp got\n  beq ok\n  lda #1\n  sta bad\n\
                 ok:\n  inc ia\n  bne loop\n  lda bad\n";
     let extra = format!("{functions}.segment \"BSS\"\nia: .res 1\ngot: .res 1\nbad: .res 1\n.segment \"CODE\"\n");

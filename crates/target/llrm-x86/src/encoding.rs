@@ -367,6 +367,7 @@ pub fn lsr_size_model_64() -> llrm_mir::tti::LsrSizeModel {
     let reg = Mem::new(Base::Reg, false, 0);
     let past_register = |m: Mem| mem(&m) - mem(&reg);
     LsrSizeModel {
+        derived_setup_free: false,
         disp_global: bytes(past_register(Mem::new(Base::Rip, false, 0))),
         disp_frame: bytes(past_register(Mem::new(Base::Rsp, false, 8))),
         disp_short: bytes(past_register(Mem::new(Base::Reg, false, 8))),

@@ -76,6 +76,31 @@ b0:
     assert!(!after.contains("add i16 %i, 8"), "{after}");
 }
 
+/// `n*2 - 2` read by the two starts of a count-down copy (each a phi's or
+/// select's input, not an access): each split would be an add of its own, two
+/// for the one the sum costs. wasm `down1_s` -Os grew 3 B a copy
+/// (loop_copy_directions, +12 B over clang) from `(base + n*2) + -2` twice
+/// instead of `base + (n*2 - 2)`.
+#[test]
+fn test_a_sum_two_non_access_addresses_read_keeps_its_add() {
+    let (_, after) = checked(
+        "define i16 @f(i16 %i) {
+b0:
+  %t = add i16 %i, 8
+  %p = getelementptr i16, ptr @g, i16 %t
+  %q = getelementptr i16, ptr @h, i16 %t
+  %c = icmp eq i16 %i, 0
+  %r = select i1 %c, ptr %p, ptr %q
+  %a = ptrtoint ptr %r to i16
+  ret i16 %a
+}
+",
+        INPUTS,
+    );
+    assert!(after.contains("add i16 %i, 8"), "{after}");
+    assert!(!after.contains("getelementptr i8, ptr @g, i16 16"), "{after}");
+}
+
 /// The `i8` inputs on which `x + 3` does not wrap under `flags`: a wrap
 /// there is poison, which nothing is held to.
 fn defined(flags: &str) -> Vec<Vec<i128>> {

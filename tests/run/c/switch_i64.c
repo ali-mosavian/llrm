@@ -1,4 +1,5 @@
 // flags: -O2 -march=i486 | -O2 -march=i486 -m32 | -O2 -march=i486 -m32 -mabi=sysv
+// bar: none (SDCC error 56: duplicate label case)
 /* A switch on a long long (wider than a register): selected, it was refused ("a i64 value", gcc.c-torture/930111-1).
    The cases compare by halves; the default reads the selector too. */
 extern void report(long value);

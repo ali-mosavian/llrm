@@ -37,15 +37,21 @@ fn arguments_fill_a_x_and_then_pairs_from_rc2() {
     assert_eq!(placed.stack_bytes, 0);
 }
 
-/// Three pairs fit rc2..rc7; the fourth i16 goes to the static frame, two
-/// bytes.
+/// A:X and the three pairs rc2..rc7 take four words; the fifth i16 goes to
+/// the static frame, two bytes.
 #[test]
-fn a_fourth_word_argument_goes_to_the_frame() {
+fn a_fifth_word_argument_goes_to_the_frame() {
     let calling = Calling::parse(CALLING).expect("calling.toml parses");
-    let placed = calling.native().place(&[Kind::Wide; 4]);
+    let placed = calling.native().place(&[Kind::Wide; 5]);
     assert_eq!(
         placed.places,
-        [registers(&["rc2", "rc3"]), registers(&["rc4", "rc5"]), registers(&["rc6", "rc7"]), Place::Stack(0)]
+        [
+            registers(&["a", "x"]),
+            registers(&["rc2", "rc3"]),
+            registers(&["rc4", "rc5"]),
+            registers(&["rc6", "rc7"]),
+            Place::Stack(0)
+        ]
     );
     assert_eq!(placed.stack_bytes, 2);
 }

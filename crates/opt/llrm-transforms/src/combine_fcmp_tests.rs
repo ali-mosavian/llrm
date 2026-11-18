@@ -109,3 +109,13 @@ fn test_une_of_a_never_nan_value_with_itself_folds_to_false() {
     );
     assert!(!after.contains("fcmp"), "{after}");
 }
+
+/// `fcmp oge <4 x float> %x, %x` panicked ("an fcmp compares floats") and took
+/// the whole compile with it; the pin makes it `fcmp ord %x, zeroinitializer`.
+#[test]
+fn a_vector_compare_of_a_value_with_itself_is_ord_of_zero() {
+    let after = combined(
+        "define <4 x i1> @f(<4 x float> %x) {\nb0:\n  %c = fcmp oge <4 x float> %x, %x\n  ret <4 x i1> %c\n}\n",
+    );
+    assert!(after.contains("fcmp ord <4 x float> %x, zeroinitializer"), "{after}");
+}
