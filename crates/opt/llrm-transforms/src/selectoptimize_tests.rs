@@ -209,8 +209,8 @@ fn test_an_unsigned_compare_is_no_compare_for_a_signed_max() {
     assert!(text.contains("call i32 @llvm.smax"), "{text}");
 }
 
-/// x_ld_max -O2/-O3 on the i486: `if (a[i] > m) m = a[i]` over `long double` is a
-/// select on a carried chain; as branches it ran 12,818 -> 18,450 clk.
+/// x_ld_max -O2/-O3 on the i486: `if (a[i] > m) m = a[i]` over `long double` is
+/// a select on a carried chain; as branches it ran 12,818 -> 18,450 clk.
 #[test]
 fn test_a_select_of_an_x87_value_stays_where_the_target_leaves_them() {
     let fp80 = CARRIED
