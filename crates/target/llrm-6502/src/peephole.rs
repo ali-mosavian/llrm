@@ -284,6 +284,7 @@ fn run_suffix(
     fuse_shift_chain(asm);
     shift_in_place(asm);
     load_straight_into_a(asm);
+    load_pair_without_transfers(asm);
     compare_through_an_index(asm);
     store_before_transfer(asm);
     drop_cancelling_transfers(asm);
@@ -1559,7 +1560,15 @@ fn load_straight_once(asm: &mut Asm) -> bool {
                     | Op::And
                     | Op::Ora
                     | Op::Eor => true,
-                    Op::Sta => matches!(operand, Operand::Direct(_)) && operand != from,
+                    Op::Sta => {
+                        (matches!(operand, Operand::Direct(_)) && operand != from)
+                            // a store through a pointer or by `y` leaves `x`
+                            // alone, and a constant is not what it writes
+                            || (register == Registers::X
+                                && load_pair_enabled()
+                                && matches!(from, Operand::Imm(_))
+                                && matches!(operand, Operand::IndirectY(_) | Operand::Indexed(_, Index::Y)))
+                    }
                     Op::Beq | Op::Bne | Op::Bcc | Op::Bcs | Op::Bmi | Op::Bpl => match operand {
                         Operand::Direct(target) => {
                             let reads_load = load_flags && !matches!(op, Op::Bcc | Op::Bcs);
@@ -1605,6 +1614,71 @@ fn load_straight_once(asm: &mut Asm) -> bool {
     }
     retain(asm, &keep);
     changed
+}
+
+/// `lda m; tay; lda n; tax; tya` (likewise through `x`): two loads. The first
+/// byte waited in the spare register while the second went through `a`, where
+/// `ldx n; lda m` reads each once. The spare register holds the first byte
+/// after the original, so it must be dead after, and `m` must not be indexed by
+/// the register the second load now writes first.
+pub fn load_pair_without_transfers(asm: &mut Asm) {
+    if !load_pair_enabled() {
+        return;
+    }
+    let hits: Vec<(usize, Op, Operand, Operand)> = {
+        let exits = Exits::of(asm);
+        (0..asm.lines.len().saturating_sub(4))
+            .filter_map(|at| load_pair_at(asm, at, exits).map(|(load, first, second)| (at, load, first, second)))
+            .collect()
+    };
+    // from the end: a rewrite shortens the text after it only
+    let mut taken = usize::MAX;
+    for (at, load_new, first, second) in hits.into_iter().rev() {
+        if at + 5 > taken {
+            continue;
+        }
+        asm.lines[at] = Line::Inst(Inst { op: load_new, operand: second, place: 0 });
+        asm.lines[at + 1] = Line::Inst(Inst { op: Op::Lda, operand: first, place: 0 });
+        asm.lines.drain(at + 2..at + 5);
+        taken = at;
+    }
+}
+
+/// `LLRM_6502_LOADPAIR=0` is the kill switch of this pass and of the store
+/// through a pointer that `load_straight_into_a` reads past, for an A/B of one
+/// binary.
+fn load_pair_enabled() -> bool {
+    crate::copyprop::enabled(std::env::var_os("LLRM_6502_LOADPAIR").as_deref())
+}
+
+/// The load that replaces the pair at `at`, and the two operands, where the
+/// five lines are `lda m; tay; lda n; tax; tya` or its mirror.
+fn load_pair_at(
+    asm: &Asm,
+    at: usize,
+    exits: Exits,
+) -> Option<(Op, Operand, Operand)> {
+    let window: Vec<&Inst> = asm.lines[at..at + 5].iter().filter_map(Line::inst).collect();
+    let [first, wait, second, keep, back] = window[..] else { return None };
+    let (spare, new, load_new, ops) = match wait.op {
+        Op::Tay => (Registers::Y, Index::X, Op::Ldx, (Op::Tay, Op::Tax, Op::Tya)),
+        Op::Tax => (Registers::X, Index::Y, Op::Ldy, (Op::Tax, Op::Tay, Op::Txa)),
+        _ => return None,
+    };
+    if first.op != Op::Lda
+        || second.op != Op::Lda
+        || (wait.op, keep.op, back.op) != ops
+        || !matches!(second.operand, Operand::Direct(_) | Operand::Imm(_))
+    {
+        return None;
+    }
+    let read_by_new = matches!(&first.operand, Operand::Indexed(_, i) if *i == new)
+        || matches!(
+            (&first.operand, new),
+            (Operand::IndirectX(_), Index::X) | (Operand::IndirectY(_), Index::Y)
+        );
+    (!read_by_new && dead_from(&asm.lines, at + 5, spare, &mut HashSet::default(), exits))
+        .then(|| (load_new, first.operand.clone(), second.operand.clone()))
 }
 
 /// `tax; ...; stx m` (likewise `tay` and `sty`): the byte is in `a` at the
