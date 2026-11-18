@@ -96,3 +96,30 @@ pub fn bits(name: &str) -> Option<(u16, &'static [Piece])> {
         .or_else(|| bfextu::bfextu_encoding(name))
         .or_else(|| wordjump::wordjump_encoding(name))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A segment that outgrew its range shadowed the next one: `CMPA32p` took
+    /// a scaled row's description (a store with side effects), which stopped
+    /// `select_of_constants` f281 -O2 sharing its `moveq` (+16 B, +1.6%
+    /// clocks).
+    #[test]
+    fn every_local_code_names_its_own_row() {
+        let names = short::names().chain(scaled::names()).chain(["CMPA32r", "CMPA32p", "CMPA32i", "CMPA16i"]);
+        for name in names {
+            let code = code_of(name).expect("a local row");
+            assert_eq!(name_of(u32::from(code)), Some(name), "code {code:#x}");
+        }
+        let pin = |name| instrinfo_desc(name).flags;
+        for (cmpa, base) in [("CMPA32p", "CMP32dp"), ("CMPA32r", "CMP32dr")] {
+            let desc = desc(code_of(cmpa).unwrap()).unwrap();
+            assert_eq!(desc.flags, pin(base), "{cmpa} describes {base}");
+        }
+    }
+
+    fn instrinfo_desc(name: &str) -> &'static InstrDesc {
+        super::super::generated::instrinfo::desc(super::super::opcodes::code_of(name).unwrap()).unwrap()
+    }
+}
