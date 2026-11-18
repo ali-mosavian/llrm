@@ -350,6 +350,20 @@ impl TypeLegalizer<'_> {
                 let vector = self.widened_vector(vector);
                 self.dag.get_node(ISD::InsertVectorElt, widen_vt, &[vector, element, index])
             }
+            // `WidenVecRes_VECTOR_SHUFFLE`: the lanes of the second input
+            // move up by what the widening added to the first; the new
+            // lanes are undefined.
+            ISD::VectorShuffle => {
+                let (lanes, wide_lanes) = (vt.lanes() as i32, widen_vt.lanes() as i32);
+                let mask: Vec<i32> = self.dag.shuffle_mask(value).to_vec();
+                let mut widened = vec![-1; wide_lanes as usize];
+                for (at, &index) in mask.iter().enumerate() {
+                    widened[at] = if index < lanes { index } else { index - lanes + wide_lanes };
+                }
+                let (first, second) = (self.dag.operand(value, 0), self.dag.operand(value, 1));
+                let (first, second) = (self.widened_vector(first), self.widened_vector(second));
+                self.dag.get_vector_shuffle(widen_vt, first, second, &widened)
+            }
             ISD::Load => self.widen_load(value).ok_or_else(|| unsupported("widen load"))?,
             // `WidenVecRes_BinaryCanTrap`: the undefined lanes of a division
             // would trap.

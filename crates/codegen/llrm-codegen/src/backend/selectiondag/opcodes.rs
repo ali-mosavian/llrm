@@ -253,7 +253,7 @@ fn gpr_xmm_move(name: &str) -> Option<&'static str> {
 /// is `movsd_x`. `SQRTSDr` names its tied source too. A pin name that is none
 /// of these is `None`.
 fn sse(name: &str) -> Option<(String, Option<u32>, Option<u32>, Vec<char>)> {
-    const ARITHMETIC: [&str; 93] = [
+    const ARITHMETIC: [&str; 96] = [
         "ADDSS",
         "ADDSD",
         "SUBSS",
@@ -293,6 +293,9 @@ fn sse(name: &str) -> Option<(String, Option<u32>, Option<u32>, Vec<char>)> {
         "POR",
         "PXOR",
         "PMULLW",
+        "PMULHW",
+        "PMULHUW",
+        "PMADDWD",
         "PSLLW",
         "PSLLD",
         "PSLLQ",

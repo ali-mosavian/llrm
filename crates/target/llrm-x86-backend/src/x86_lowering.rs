@@ -40,7 +40,9 @@ use llrm_codegen::backend::selectiondag::actions::TargetLowering;
 use llrm_codegen::backend::selectiondag::dag::{MemBase, MemInfo, NodeData, SDNodeFlags, SDValue, SelectionDAG};
 use llrm_codegen::backend::selectiondag::dag_combiner::{CombineHooks, CombineLevel};
 use llrm_codegen::backend::selectiondag::isd::{CondCode, ISD};
-use llrm_codegen::backend::selectiondag::known_bits::{known_bits, masked_value_is_zero, max_significant_bits};
+use llrm_codegen::backend::selectiondag::known_bits::{
+    known_bits, masked_value_is_zero, max_significant_bits, num_sign_bits,
+};
 use llrm_codegen::backend::selectiondag::legalize_dag::Hooks;
 use llrm_codegen::backend::selectiondag::mvt::{EVT, MVT};
 
@@ -108,6 +110,9 @@ pub mod x86isd {
     /// `X86ISD::PMULUDQ`: the unsigned products of the even `i32` lanes, as
     /// `v2i64`.
     pub const PMULUDQ: ISD = ISD::Target(710);
+    /// `X86ISD::VPMADDWD`: the sums of the adjacent word products, as `i32`
+    /// lanes.
+    pub const VPMADDWD: ISD = ISD::Target(910);
     pub const VSHLI: ISD = ISD::Target(933);
     pub const VSRAI: ISD = ISD::Target(937);
     pub const VSRLI: ISD = ISD::Target(941);
@@ -647,6 +652,7 @@ impl CombineHooks for X86Lowering<'_> {
                     chain_bytes(dag, body, dag.operand(node, 0)) <= imul
                 })
             }
+            ISD::Mul if dag.value_type(node).is_vector() && self.sse2 => combine_vector_mul(dag, node, level),
             ISD::Mul => {
                 combine_mul(dag, node, level, self.min_size && !self.hot_chains, self.i16_mul_chains, self.profile)
             }
@@ -857,6 +863,7 @@ impl Hooks for X86Lowering<'_> {
             ISD::Abs => Some(lower_abs(dag, node)),
             ISD::Shl | ISD::Srl | ISD::Sra if dag.value_type(node).is_vector() => lower_vector_shift(dag, node),
             ISD::BuildVector => lower_build_vector_splat(dag, node),
+            ISD::VectorShuffle => lower_shuffle_with_unpack(dag, node),
             ISD::Mul if dag.value_type(node) == EVT::Simple(MVT::V4I32) => Some(lower_mul_v4i32(dag, node)),
             ISD::Mul if dag.value_type(node) == EVT::Simple(MVT::V16I8) => Some(lower_mul_v16i8(dag, node)),
             ISD::VecReduceAdd | ISD::VecReduceAnd | ISD::VecReduceOr | ISD::VecReduceXor => {
@@ -3370,6 +3377,244 @@ fn chain_bytes(
         }
     }
     bytes
+}
+
+/// `combineMul` for a vector ([L51188][pin]): `combineMulToPMADDWD`, then
+/// `reduceVMULWidth` before type legalization. SSE2 only: this target has no
+/// `pmulld`, so the pin's `hasSSE41` tests are false.
+///
+/// [pin]:
+/// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L51188
+fn combine_vector_mul(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+    level: CombineLevel,
+) -> Option<SDValue> {
+    if let Some(found) = combine_mul_to_pmaddwd(dag, node) {
+        return Some(found);
+    }
+    if level == CombineLevel::BeforeLegalizeTypes {
+        return reduce_vmul_width(dag, node);
+    }
+    None
+}
+
+/// Whether `value` is a `BuildVector` of constants
+/// (`isBuildVectorOfConstantSDNodes`).
+fn is_build_vector_of_constants(
+    dag: &SelectionDAG,
+    value: SDValue,
+) -> bool {
+    dag.opcode(value) == ISD::BuildVector
+        && (0..dag.value_type(value).lanes() as usize).all(|at| {
+            let lane = dag.operand(value, at);
+            dag.is_undef(lane) || dag.constant(lane).is_some()
+        })
+}
+
+/// `combineMulToPMADDWD` ([L50740][pin]): `mul <N x i32>` whose operands have
+/// at most 16 significant bits, one of them with the upper 17 bits zero (or
+/// made so), is `pmaddwd` of the operands as `<2N x i16>`: the high word of
+/// the zeroable operand is 0, so the pair sum is the one product. A vector
+/// wider than 128 bits is split into 128-bit pieces (`SplitOpsAndApply`, no
+/// AVX2).
+///
+/// [pin]:
+/// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L50740
+fn combine_mul_to_pmaddwd(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let vt = dag.value_type(node);
+    if !vt.is_vector() || vt.element() != EVT::I32 {
+        return None;
+    }
+    let lanes = vt.lanes();
+    if lanes == 1 || !lanes.is_power_of_two() {
+        return None;
+    }
+    let (n0, n1) = (dag.operand(node, 0), dag.operand(node, 1));
+    let narrow_source = |dag: &SelectionDAG, value: SDValue, opcode: ISD, bits: u32| {
+        dag.opcode(value) == opcode && dag.value_type(dag.operand(value, 0)).element().size_in_bits() <= bits
+    };
+    // "If we are zero/sign extending two steps without SSE4.1, its better to
+    // reduce the vmul width instead."
+    if (narrow_source(dag, n0, ISD::ZeroExtend, 8) && narrow_source(dag, n1, ISD::ZeroExtend, 8))
+        || (narrow_source(dag, n0, ISD::SignExtend, 8) && narrow_source(dag, n1, ISD::SignExtend, 8))
+    {
+        return None;
+    }
+    let wide_source = |dag: &SelectionDAG, value: SDValue| {
+        dag.opcode(value) == ISD::SignExtend && dag.value_type(dag.operand(value, 0)).size_in_bits() > 128
+    };
+    if wide_source(dag, n0) && wide_source(dag, n1) {
+        return None;
+    }
+    // "Sign bits must extend down to the lowest i16."
+    if max_significant_bits(dag, n1) > 16 || max_significant_bits(dag, n0) > 16 {
+        return None;
+    }
+    let zeroable = |dag: &mut SelectionDAG, op: SDValue| -> Option<SDValue> {
+        if masked_value_is_zero(dag, op, 0xFFFF_8000) {
+            return Some(op);
+        }
+        // "Mask off upper 16-bits of sign-extended constants."
+        if is_build_vector_of_constants(dag, op) {
+            let mask = dag.get_constant(0xFFFF, EVT::I32);
+            let mask = dag.get_splat_build_vector(vt, mask);
+            return Some(dag.get_node(ISD::And, vt, &[op, mask]));
+        }
+        if dag.opcode(op) == ISD::SignExtend && dag.has_one_use(op.node) {
+            let source = dag.operand(op, 0);
+            let source_bits = dag.value_type(source).element().size_in_bits();
+            // "Convert sext(vXi16) to zext(vXi16)."
+            if source_bits == 16 {
+                return Some(dag.get_node(ISD::ZeroExtend, vt, &[source]));
+            }
+            // "Convert sext(vXi8) to zext(vXi16 sext(vXi8)) on pre-SSE41
+            // targets which will expand the extension."
+            if source_bits < 16 {
+                let words = EVT::vector(MVT::I16, lanes);
+                let wide = dag.get_node(ISD::SignExtend, words, &[source]);
+                return Some(dag.get_node(ISD::ZeroExtend, vt, &[wide]));
+            }
+        }
+        None
+    };
+    let (zero0, zero1) = (zeroable(dag, n0), zeroable(dag, n1));
+    if zero0.is_none() && zero1.is_none() {
+        return None;
+    }
+    let (n0, n1) = (zero0.unwrap_or(n0), zero1.unwrap_or(n1));
+    // `SplitOpsAndApply`: 128-bit pieces.
+    let (pieces, piece_lanes) = if vt.size_in_bits() > 128 { (vt.size_in_bits() / 128, 4) } else { (1, lanes) };
+    let (piece_vt, piece_words) = (EVT::vector(MVT::I32, piece_lanes), EVT::vector(MVT::I16, piece_lanes * 2));
+    let parts: Vec<SDValue> = (0..pieces)
+        .map(|at| {
+            let part = |dag: &mut SelectionDAG, op: SDValue| {
+                let op = if pieces == 1 {
+                    op
+                } else {
+                    let index = dag.get_constant(u128::from(at * piece_lanes), EVT::I64);
+                    dag.get_node(ISD::ExtractSubvector, piece_vt, &[op, index])
+                };
+                dag.get_node(ISD::BitCast, piece_words, &[op])
+            };
+            let (x, y) = (part(dag, n0), part(dag, n1));
+            dag.get_node(x86isd::VPMADDWD, piece_vt, &[x, y])
+        })
+        .collect();
+    Some(if pieces == 1 { parts[0] } else { dag.get_node(ISD::ConcatVectors, vt, &parts) })
+}
+
+/// `lowerShuffleWithUNPCK` ([L10871][pin]): a 128-bit integer shuffle whose
+/// defined lanes interleave the low (or high) halves of its two inputs, in
+/// either order, is `punpckl*` (`punpckh*`); an undefined lane matches either
+/// side. Any other mask is left to the expansion.
+///
+/// [pin]:
+/// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L10871
+fn lower_shuffle_with_unpack(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let vt = dag.value_type(node);
+    if !vt.is_vector() || vt.size_in_bits() != 128 {
+        return None;
+    }
+    let n = vt.lanes() as i32;
+    let (v1, v2) = (dag.operand(node, 0), dag.operand(node, 1));
+    let mask = dag.shuffle_mask(node).to_vec();
+    // `createUnpackShuffleMask`: `[b, n+b, b+1, n+b+1, ...]`.
+    let unpack = |base: i32| -> Vec<i32> { (0..n / 2).flat_map(|i| [base + i, n + base + i]).collect() };
+    let equivalent = |wanted: &[i32]| mask.iter().zip(wanted).all(|(&lane, &want)| lane < 0 || lane == want);
+    for (opcode, base) in [(x86isd::UNPCKL, 0), (x86isd::UNPCKH, n / 2)] {
+        if equivalent(&unpack(base)) {
+            return Some(dag.get_node(opcode, vt, &[v1, v2]));
+        }
+    }
+    // `commuteMask`, then the operands swapped.
+    for (opcode, base) in [(x86isd::UNPCKL, 0), (x86isd::UNPCKH, n / 2)] {
+        let commuted: Vec<i32> = unpack(base).iter().map(|&lane| if lane < n { lane + n } else { lane - n }).collect();
+        if equivalent(&commuted) {
+            return Some(dag.get_node(opcode, vt, &[v2, v1]));
+        }
+    }
+    None
+}
+
+/// `reduceVMULWidth` with `canReduceVMulWidth` ([L50582][pin]): `mul <N x i32>`
+/// of operands that fit 8 or 16 bits is `pmullw` (and `pmulhw`/`pmulhuw` for
+/// the high words, repacked by `punpcklwd`/`punpckhwd`) on `<N x i16>`.
+///
+/// [pin]:
+/// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L50582
+fn reduce_vmul_width(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let vt = dag.value_type(node);
+    if !vt.is_vector() || vt.element().size_in_bits() != 32 {
+        return None;
+    }
+    let (n0, n1) = (dag.operand(node, 0), dag.operand(node, 1));
+    let sign_bits = num_sign_bits(dag, n0).min(num_sign_bits(dag, n1));
+    let positive = masked_value_is_zero(dag, n0, 0x8000_0000) && masked_value_is_zero(dag, n1, 0x8000_0000);
+    #[derive(PartialEq, Clone, Copy)]
+    enum Mode {
+        Muls8,
+        Mulu8,
+        Muls16,
+        Mulu16,
+    }
+    let mode = if sign_bits >= 25 {
+        Mode::Muls8
+    } else if positive && sign_bits >= 24 {
+        Mode::Mulu8
+    } else if sign_bits >= 17 {
+        Mode::Muls16
+    } else if positive && sign_bits >= 16 {
+        Mode::Mulu16
+    } else {
+        return None;
+    };
+    let lanes = vt.lanes();
+    if lanes % 2 != 0 {
+        return None;
+    }
+    let reduced = EVT::vector(MVT::I16, lanes);
+    let (a, b) = (dag.get_node(ISD::Truncate, reduced, &[n0]), dag.get_node(ISD::Truncate, reduced, &[n1]));
+    let low = dag.get_node(ISD::Mul, reduced, &[a, b]);
+    if matches!(mode, Mode::Muls8 | Mode::Mulu8) {
+        let extend = if mode == Mode::Mulu8 { ISD::ZeroExtend } else { ISD::SignExtend };
+        return Some(dag.get_node(extend, vt, &[low]));
+    }
+    let high = dag.get_node(if mode == Mode::Muls16 { ISD::MulHS } else { ISD::MulHU }, reduced, &[a, b]);
+    // DEVIATE X86MW1 (owner llrm-target-x86-m16-b, exit 2026-11-30): a `v4i32`
+    // product is one `punpcklwd` of the two words of each lane. The pin gets
+    // there by combining the `punpcklwd`/`punpckhwd` pair of the `v4i16`
+    // halves (`combineX86ShufflesRecursively`), which is not translated.
+    if lanes == 4 {
+        let words = EVT::vector(MVT::I16, 8);
+        let undef = dag.get_undef(reduced);
+        let (low8, high8) = (
+            dag.get_node(ISD::ConcatVectors, words, &[low, undef]),
+            dag.get_node(ISD::ConcatVectors, words, &[high, undef]),
+        );
+        let mask = [0, 8, 1, 9, 2, 10, 3, 11];
+        let shuffled = dag.get_vector_shuffle(words, low8, high8, &mask);
+        return Some(dag.get_node(ISD::BitCast, vt, &[shuffled]));
+    }
+    let halves = EVT::vector(MVT::I32, lanes / 2);
+    let (n, half) = (lanes as i32, (lanes / 2) as i32);
+    // `punpcklwd` then `punpckhwd`.
+    let interleave = |dag: &mut SelectionDAG, first: i32| {
+        let mask: Vec<i32> = (0..half).flat_map(|i| [first + i, first + i + n]).collect();
+        let shuffled = dag.get_vector_shuffle(reduced, low, high, &mask);
+        dag.get_node(ISD::BitCast, halves, &[shuffled])
+    };
+    let (lo, hi) = (interleave(dag, 0), interleave(dag, half));
+    Some(dag.get_node(ISD::ConcatVectors, vt, &[lo, hi]))
 }
 
 fn combine_mul(

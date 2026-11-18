@@ -62,6 +62,8 @@ pub(super) fn is_elementwise(op: ISD) -> bool {
             | ISD::SMax
             | ISD::UMin
             | ISD::UMax
+            | ISD::MulHS
+            | ISD::MulHU
             | ISD::FAdd
             | ISD::FSub
             | ISD::FMul

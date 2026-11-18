@@ -970,9 +970,9 @@ impl TargetLowering {
         // `LowerEXTRACT_VECTOR_ELT`: a constant lane is a shuffle and a `movd`;
         // a variable one is the stack.
         t.set_ops(&[ISD::ExtractElement], &[MVT::V16I8, MVT::V8I16, MVT::V4I32, MVT::V2I64], Action::Custom);
-        // No shuffle is selected by pattern: `LegalizeDAG` builds the vector of
-        // the lanes the mask picks.
-        t.set_ops(&[ISD::VectorShuffle], &[MVT::V16I8, MVT::V8I16, MVT::V4I32, MVT::V2I64], Action::Expand);
+        // `LowerVECTOR_SHUFFLE`: an unpack is `punpck*`; any other mask is left
+        // to `LegalizeDAG`, which builds the vector of the lanes it picks.
+        t.set_ops(&[ISD::VectorShuffle], &[MVT::V16I8, MVT::V8I16, MVT::V4I32, MVT::V2I64], Action::Custom);
         // The SSE2 float vectors (`v4f32`, `v2f64`): `addps`..`divpd` and
         // `scalar_to_vector` are patterns; a build is the pin's unpacks
         // (`LowerBUILD_VECTOR`); shuffles, lane inserts and extracts take the
@@ -994,6 +994,8 @@ impl TargetLowering {
         // `LowerMUL`: `v4i32` without `pmulld` is `pmuludq` on the even and the
         // odd lanes.
         t.set_ops(&[ISD::Mul], &[MVT::V4I32, MVT::V16I8], Action::Custom);
+        // `pmulhw`/`pmulhuw`: the high words of `v8i16` products.
+        t.set_ops(&[ISD::MulHS, ISD::MulHU], &[MVT::V8I16], Action::Legal);
         // `LowerShift`: a shift by a constant splat is `VSHLI`/`VSRLI`/`VSRAI`;
         // `psraq` is AVX-512, so a 64-bit arithmetic shift is left to the
         // expansion.
