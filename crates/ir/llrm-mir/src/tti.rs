@@ -2150,6 +2150,13 @@ pub trait Tti {
         false
     }
 
+    /// The limits of a constant fill or copy the selection reads
+    /// (`Tuning::max_stores_per_*`): the pin's, unless the target states its
+    /// own.
+    fn memory_limits(&self) -> crate::target::Tuning {
+        crate::target::Tuning::PIN
+    }
+
     /// `Tuning::size_copy_price`.
     fn copy_price_for_size(&self) -> Option<crate::target::CopyPrice> {
         None

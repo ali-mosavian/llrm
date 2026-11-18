@@ -266,6 +266,10 @@ impl llrm_mir::target::Machine for Described {
         self.tti.as_ref().is_some_and(|tti| tti.vector_values())
     }
 
+    fn tuning(&self) -> llrm_mir::target::Tuning {
+        self.tti.as_ref().map_or(llrm_mir::target::Tuning::PIN, |tti| tti.memory_limits())
+    }
+
     fn throughput(&self) -> Option<&llrm_mir::target::Throughput> {
         self.throughput.as_ref()
     }
