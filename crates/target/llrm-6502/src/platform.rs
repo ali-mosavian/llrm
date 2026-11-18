@@ -33,11 +33,12 @@ pub struct Platform {
     /// `rc0`..`rc15` and scratch cells above them (`rc16`.., at most 26
     /// bytes). 16 where a row does not say.
     pub zero_page: u8,
-    /// The zero-page bytes after those that the runtime's scratch cells may
-    /// take (15 are needed: `__sa`, `__ra`, `__st`, `__sr`, `__sg` of
-    /// `mos_rt.s`); 0 where a row does not say: they are BSS then, addressed in
-    /// three bytes. The rows whose ld65 memory has a ZEROPAGE of exactly the
-    /// registers' 26 bytes (apple2, c64, nes) have none to give.
+    /// The zero-page bytes after the registers (`imag_base + zero_page`) that
+    /// the runtime's scratch cells may take (15 are needed: `__sa`, `__ra`,
+    /// `__st`, `__sr`, `__sg` of `mos_rt.s`); 0 where a row does not say: they
+    /// are BSS then, addressed in three bytes. The rows whose cc65 ZEROPAGE is
+    /// exactly the registers' 26 bytes (apple2, c64, nes) have none to give;
+    /// bbc has 6.
     pub scratch_zero_page: u8,
     /// Where the soft stack (`rs0`) starts; it grows down.
     pub soft_stack: u16,

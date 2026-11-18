@@ -20,18 +20,20 @@ class ScratchInZeroPage(unittest.TestCase):
 
     def test_the_multiply_is_18_bytes_shorter_with_the_scratch_in_zero_page(self):
         bss = code_bytes(mkrt.split_rt(self.rt)["__mulsi3"])
-        zp = code_bytes(mkrt.split_rt(self.rt, scratch_zp=True)["__mulsi3"])
+        zp = code_bytes(mkrt.split_rt(self.rt, scratch_at=0x9A)["__mulsi3"])
         self.assertEqual((bss, zp), (83, 65))
 
-    def test_the_cells_member_is_zeropage_and_the_others_import_it_as_such(self):
-        members = mkrt.split_rt(self.rt, scratch_zp=True)
-        self.assertIn('.segment "ZEROPAGE"', members["__rt_cells"])
-        self.assertIn(".exportzp __sa", members["__rt_cells"])
-        self.assertIn(".importzp __sa", members["__mulsi3"])
+    def test_the_cells_are_equates_after_the_registers_and_no_member_holds_them(self):
+        members = mkrt.split_rt(self.rt, scratch_at=0x9A)
+        self.assertNotIn("__rt_cells", members)
+        head = members["__mulsi3"]
+        for line in ("__sa = $9A", "__ra = $9E", "__st = $A0", "__sr = $A4", "__sg = $A8"):
+            self.assertIn(line, head)
 
-    def test_the_sim65_row_has_the_bytes(self):
-        self.assertGreaterEqual(mkrt.scratch_zero_page("sim65-cc65"), mkrt.SCRATCH_CELLS)
-        self.assertEqual(mkrt.scratch_zero_page("c64"), 0)
+    def test_the_rows_with_room_place_the_scratch_after_the_registers(self):
+        self.assertEqual(mkrt.scratch_address("sim65-cc65"), 0x9A)
+        self.assertEqual(mkrt.scratch_address("atari8"), 0x9C)
+        self.assertIsNone(mkrt.scratch_address("c64"))
 
 
 if __name__ == "__main__":
