@@ -11,6 +11,7 @@ use llrm_spike_mf::regalloc::{Assignment, Target as AllocTarget};
 use llrm_spike_mf::tolir::allocate_greedy;
 use llrm_support::hash::HashMap;
 
+use crate::mc::inst::Fill;
 use crate::mc::inst::{FpConvert, Gpr, Inst, Shift, Target, Vreg, Wide};
 use crate::mc::visit::{Reg, RegRef, Role};
 use crate::mfunc::{MFunc, Op};
@@ -295,6 +296,7 @@ fn view_with(
                 Op::JumpTable { .. } => (Kind::Op("JumpTable"), true, true, false),
                 Op::Call { .. } => (Kind::Op("Call"), false, false, true),
                 Op::Return { .. } => (Kind::Op("Return"), true, true, false),
+                Op::Unreachable => (Kind::Op("Unreachable"), true, true, false),
                 Op::DbgValue { .. } => unreachable!("a debug note is skipped above"),
                 Op::Phi { .. } => unreachable!("phis are copies before allocation"),
             };
@@ -383,6 +385,9 @@ fn view_with(
                     op,
                     Op::Imm { .. }
                         | Op::I(Inst::FpMoveImm { .. } | Inst::Adr { .. })
+                        // `MOVIv2d_ns`:
+                        // `isReMaterializable`, `isAsCheapAsAMove`.
+                        | Op::I(Inst::VectorFill { fill: Fill::Zero | Fill::Mask(_), .. })
                         | Op::I(Inst::MoveWide { op: Wide::Zero | Wide::Not, .. })
                 );
             inst.invariant_load = matches!(
@@ -393,7 +398,13 @@ fn view_with(
                 inst.memory =
                     Some(crate::lir_body::memref_of(mem, mmo, matches!(access, Inst::Store { .. }), &mut symbols));
             }
-            inst.cheap_as_move = zero || cheap_alu(&op) || matches!(op, Op::Imm { .. } | Op::I(Inst::MoveWide { .. }));
+            inst.cheap_as_move = zero
+                || cheap_alu(&op)
+                || matches!(
+                    op,
+                    Op::Imm { .. }
+                        | Op::I(Inst::MoveWide { .. } | Inst::VectorFill { fill: Fill::Zero | Fill::Mask(_), .. })
+                );
             insts.push(inst);
         }
         lir.blocks.push(Block { id: at as u32, insts, phis: Vec::new() });
@@ -702,6 +713,22 @@ thread_local! {
     static DARWIN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static FP_FREE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static SCRATCH_FREE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static QUAD_CSR_FREE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Sets whether the next function makes no call, so a 128-bit value may take
+/// `v8`..`v15`: the calling convention keeps only their low 64 bits, which
+/// the frame saves, and no call is there to take the rest. The pin lets a
+/// value that crosses no call have them (`RegisterClassInfo` puts the
+/// callee-saved registers last; a call's mask does not preserve `Q8`).
+/// DEVIATE QUAD-CSR (owner arm64, exit 2026-11-30): a function with a call
+/// keeps them out for every value, as a call's mask is by root register here.
+pub fn set_quad_callee_saved_free(free: bool) {
+    QUAD_CSR_FREE.with(|flag| flag.set(free));
+}
+
+fn quad_callee_saved_free() -> bool {
+    QUAD_CSR_FREE.with(std::cell::Cell::get)
 }
 
 /// Sets the target the next allocations are for.
@@ -764,7 +791,7 @@ fn gpr_order(
         .collect()
 }
 
-type Flags = (Class, bool, bool, bool);
+type Flags = (Class, bool, bool, bool, bool);
 
 thread_local! {
     static ORDERS: std::cell::RefCell<Vec<(Flags, Vec<RegId>)>> = const { std::cell::RefCell::new(Vec::new()) };
@@ -782,7 +809,7 @@ pub fn candidate_orders_built() -> usize {
 /// interval allocated, 4,274 times for shellsort's two functions: it is built
 /// once per such state.
 pub fn candidate_order(class: Class) -> Vec<RegId> {
-    cached_order((class, darwin(), scratch_free(), frame_pointer_free()))
+    cached_order((class, darwin(), scratch_free(), frame_pointer_free(), quad_callee_saved_free()))
 }
 
 /// [`candidate_order`] for an explicit state; the cache is keyed by all of it.
@@ -799,11 +826,11 @@ fn cached_order(state: Flags) -> Vec<RegId> {
 }
 
 /// The order itself: a function of the class and the three flags only.
-fn built_order((class, darwin, scratch_free, frame_pointer_free): Flags) -> Vec<RegId> {
+fn built_order((class, darwin, scratch_free, frame_pointer_free, quad_free): Flags) -> Vec<RegId> {
     match class {
         Class::Gpr => gpr_order(darwin, scratch_free, frame_pointer_free),
         Class::Fpr => fpr_order(),
-        Class::Quad => fpr_order().into_iter().filter(|id| !callee_saved_fpr(*id)).collect(),
+        Class::Quad => fpr_order().into_iter().filter(|id| quad_free || !callee_saved_fpr(*id)).collect(),
     }
 }
 
@@ -1028,7 +1055,7 @@ mod tests {
     #[test]
     fn the_candidate_order_is_built_once_per_state() {
         let before = candidate_orders_built();
-        let base = (Class::Gpr, false, false, false);
+        let base = (Class::Gpr, false, false, false, false);
         let first = cached_order(base);
         for _ in 0..50 {
             assert_eq!(cached_order(base), first);
@@ -1042,11 +1069,11 @@ mod tests {
     #[test]
     fn every_input_of_the_candidate_order_is_in_the_cache_key() {
         let order = |state| cached_order(state);
-        let base = order((Class::Gpr, false, false, false));
+        let base = order((Class::Gpr, false, false, false, false));
         let (darwin, scratch, fp) = (
-            order((Class::Gpr, true, false, false)),
-            order((Class::Gpr, false, true, false)),
-            order((Class::Gpr, false, false, true)),
+            order((Class::Gpr, true, false, false, false)),
+            order((Class::Gpr, false, true, false, false)),
+            order((Class::Gpr, false, false, true, false)),
         );
         let x = |n: u32| id(Class::Gpr, n);
         assert!(base.contains(&x(18)) && !darwin.contains(&x(18)), "x18 is the platform register on Darwin");
@@ -1056,11 +1083,14 @@ mod tests {
         );
         assert!(!base.contains(&x(29)) && fp.contains(&x(29)), "x29 when there is no frame record");
         // Asking again returns each state's own order, not the last one's.
-        assert_eq!(order((Class::Gpr, false, false, false)), base);
-        assert_eq!(order((Class::Gpr, true, false, false)), darwin);
-        assert_eq!(order((Class::Gpr, false, false, true)), fp);
-        let (fpr, quad) = (order((Class::Fpr, false, false, false)), order((Class::Quad, false, false, false)));
+        assert_eq!(order((Class::Gpr, false, false, false, false)), base);
+        assert_eq!(order((Class::Gpr, true, false, false, false)), darwin);
+        assert_eq!(order((Class::Gpr, false, false, true, false)), fp);
+        let (fpr, quad) =
+            (order((Class::Fpr, false, false, false, false)), order((Class::Quad, false, false, false, false)));
         assert!(quad.len() < fpr.len(), "the classes have their own orders");
+        let quad_free = order((Class::Quad, false, false, false, true));
+        assert_eq!(quad_free.len(), fpr.len(), "a call-free function may take v8..v15");
     }
 
     /// `movk` reads and writes its register: the view needs a def, a use and a

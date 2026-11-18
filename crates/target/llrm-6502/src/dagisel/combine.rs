@@ -24,6 +24,9 @@ use super::lowering::mosisd;
 pub struct MosCombines {
     pub sized: bool,
     pub synthesize: bool,
+    /// The block is outside every loop and a multiply by a constant is priced
+    /// as in a function tuned for size (`mulimage::call_when_it_pays`).
+    pub call_multiply: bool,
 }
 
 /// The combines after legalization: only the shared-shift answer, which every
@@ -223,7 +226,7 @@ impl CombineHooks for MosCombines {
             ISD::Shl => shifted_byte_in_pieces(dag, node).or_else(|| long_shift_in_bytes(dag, node)),
             ISD::Or => funnel_by_one(dag, node),
             ISD::SetCC => range_on_low_byte(dag, node),
-            ISD::Mul => decompose_mul(dag, node, self.sized, self.synthesize),
+            ISD::Mul => decompose_mul(dag, node, self.sized || self.call_multiply, self.synthesize),
             // the combiner offers every target node to the hook
             _ => None,
         }
@@ -912,8 +915,13 @@ fn decompose_mul(
     // (x * C at -Os) it is only where a shift is whole bytes (`2^8 +- 1`,
     // `2^16 +- 1`, `2^24 +- 1`, also `2^9 +- 1`); `x * 3` is 74 bytes. At
     // speed it saves ~2200 clocks a multiply for ~15 bytes.
-    if vt == EVT::I32 && sized && !(k + zeros >= 8 && (k + zeros) % 8 <= 1 && zeros % 8 == 0) {
-        return None;
+    if vt == EVT::I32 && !(k + zeros >= 8 && (k + zeros) % 8 <= 1 && zeros % 8 == 0) {
+        if sized {
+            return None;
+        }
+        // a call may be shorter beside the others:
+        // `mulimage::call_when_it_pays`
+        super::function::note_call_candidate();
     }
     let has = |dag: &SelectionDAG, by: u32| {
         by == 0

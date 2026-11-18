@@ -84,6 +84,8 @@ pub struct BuilderTarget {
     pub min_jump_table_entries: usize,
     /// `getMinimumJumpTableDensity`, where the target states one.
     pub min_jump_table_density: Option<u64>,
+    /// `SwitchTarget::size_growth_ratio`.
+    pub jump_table_size_growth_ratio: Option<u64>,
     /// Name prefix of the blocks the target added to the IR before selection
     /// (phi edges): the pin has none at this point, so a switch's layout
     /// successor is the next block without it.
@@ -429,6 +431,15 @@ impl BuilderTarget {
         self
     }
 
+    /// This target with GCC's size growth ratio for jump tables.
+    pub fn with_jump_table_size_growth_ratio(
+        mut self,
+        percent: Option<u64>,
+    ) -> BuilderTarget {
+        self.jump_table_size_growth_ratio = percent;
+        self
+    }
+
     /// This target with `getMinimumJumpTableDensity` stated at every level.
     pub fn with_min_jump_table_density(
         mut self,
@@ -530,6 +541,7 @@ impl BuilderTarget {
             shift_amount_of: None,
             min_jump_table_entries: 4,
             min_jump_table_density: None,
+            jump_table_size_growth_ratio: None,
             preselection_blocks: None,
             refuse_unknown_intrinsics: false,
             variable_shift_legal: true,
@@ -611,6 +623,11 @@ pub fn build_block(
     );
     if Some(block) == function.entry() {
         builder.lower_arguments()?;
+    } else if builder.target.dag.fixed_args_in_every_block
+        && let Some((offsets, objects)) = builder.info.fixed_args.clone()
+    {
+        builder.dag.fixed_offsets.extend(offsets);
+        builder.dag.fixed_objects.extend(objects);
     }
     // selection starts at the first non-phi (`getFirstNonPHIIt`)
     for inst in
@@ -812,6 +829,7 @@ impl<'a> Builder<'a> {
             call_attrs_move_arguments: false,
             call_sret: Vec::new(),
             call_pointers: Vec::new(),
+            call_convention: 0,
             call_result_assert: None,
             call_result_range_bits: None,
             fixed_args: 0,
@@ -880,6 +898,8 @@ struct Builder<'a> {
     /// The arguments of the call being lowered that are pointers
     /// (`ArgFlags.isPointer()`); none listed means none are.
     call_pointers: Vec<bool>,
+    /// The LLVM calling convention of the call `visit_call` is lowering.
+    call_convention: u32,
     /// The `AssertSext`/`AssertZext` a call's `signext`/`zeroext` result asks
     /// for.
     call_result_assert: Option<ISD>,
@@ -980,15 +1000,18 @@ impl Builder<'_> {
             Type::Vector { element, count } if self.target.dag.vectors => {
                 // `v16i8`, `v8i16`, `v4i32`, `v2i64`: the vectors VR128 holds.
                 match self.module.context.types.get(*element) {
-                    // A lane count no `MVT` has (`<3 x i8>`) is an extended vector type: the type legalizer widens it.
+                    // A lane count no `MVT` has (`<3 x i8>`) is an extended
+                    // vector type: the type legalizer widens it.
                     Type::Int(bits) => MVT::integer(*bits)
                         .and_then(|lane| {
-                            MVT::vector(lane, *count).map(EVT::Simple).or_else(|| {
-                                (EVT::Simple(lane).size_in_bits() % 8 == 0
-                                    && !count.is_power_of_two()
-                                    && MVT::vector(lane, count.next_power_of_two()).is_some())
-                                .then(|| EVT::vector(lane, *count))
-                            })
+                            MVT::vector(lane, *count)
+                                .map(EVT::Simple)
+                                .or_else(
+                                    || (EVT::Simple(lane).size_in_bits() % 8 == 0
+                                        && !count.is_power_of_two()
+                                        && MVT::vector(lane, count.next_power_of_two()).is_some())
+                                    .then(|| EVT::vector(lane, *count)),
+                                )
                         })
                         .ok_or(Refused("vector with no register class")),
                     // `v4f32`, `v2f64`
@@ -1566,7 +1589,14 @@ impl Builder<'_> {
             objects.push((size, immutable));
             -(offsets.len() as i32)
         };
-        let mut parts = calling.lower_formal_arguments(&mut self.dag, entry, &ins, &mut make_object, &mut live_in);
+        let mut parts = calling.lower_formal_arguments_in(
+            self.function.calling_convention,
+            &mut self.dag,
+            entry,
+            &ins,
+            &mut make_object,
+            &mut live_in,
+        );
         // `SaveVarArgRegisters`: the save areas are stack objects made after
         // the allocas', numbered from the next frame index.
         let mut requests: Vec<(u32, u32)> = Vec::new();
@@ -1595,10 +1625,15 @@ impl Builder<'_> {
             let copy = self.dag.get_copy_to_reg(self.dag.entry_node(), reg, hidden);
             self.dag.set_root(copy);
         }
+        let (mut slot_offsets, mut slot_objects) =
+            (std::collections::BTreeMap::new(), std::collections::BTreeMap::new());
         for (at, offset) in offsets.iter().enumerate() {
             self.dag.fixed_offsets.insert(-(at as i32 + 1), *offset);
             self.dag.fixed_objects.insert(-(at as i32 + 1), objects[at]);
+            slot_offsets.insert(-(at as i32 + 1), *offset);
+            slot_objects.insert(-(at as i32 + 1), objects[at]);
         }
+        self.info.fixed_args = Some((slot_offsets, slot_objects));
         let mut next = 0;
         for (at, (&arg, leaves)) in parameters.iter().zip(shapes).enumerate() {
             let attrs = self.function.parameter_attrs.get(at).map_or(&[][..], Vec::as_slice);
@@ -2286,6 +2321,7 @@ impl Builder<'_> {
             .map(|argument| info.argument_attrs.get(*argument).is_some_and(|attrs| has_sret(attrs)))
             .collect();
         self.call_pointers = owner.iter().map(|argument| self.is_pointer_type(arg_types[*argument])).collect();
+        self.call_convention = info.calling_convention;
         self.call_attrs_move_arguments = match self.calling() {
             Some(calling) => info.argument_attrs.iter().any(|attrs| self.moves_argument(calling, attrs)),
             None => info.argument_attrs.iter().any(|attrs| relocating_attribute(attrs).is_some()),
@@ -2555,6 +2591,7 @@ impl Builder<'_> {
         let variadic = std::mem::take(&mut self.variadic_call);
         let sret_args = std::mem::take(&mut self.call_sret);
         let pointer_args = std::mem::take(&mut self.call_pointers);
+        let call_convention = std::mem::take(&mut self.call_convention);
         let in_area = calling.byval_in_area();
         if sibling || flags_answer || (byvals.iter().any(Option::is_some) && !calling.byval_by_reference() && !in_area)
         {
@@ -2691,7 +2728,8 @@ impl Builder<'_> {
             return Ok(None);
         }
         let info = &mut *self.info;
-        let (chain, parts) = calling.lower_call_with_frame(
+        let (chain, parts) = calling.lower_call_in(
+            call_convention,
             &mut self.dag,
             root,
             callee_node,
@@ -4340,6 +4378,8 @@ impl Builder<'_> {
         let result = self.type_of(instruction.ty)?;
         let input = self.dag.value_type(first);
         let (mut sources, lanes) = (input.lanes() as usize, mask.len());
+        let mut remapped: Vec<i32> = Vec::new();
+        let mut mask = mask;
         let node = 'shuffled: {
             if sources == lanes {
                 break 'shuffled self.dag.get_vector_shuffle(result, first, second, mask);
@@ -4384,9 +4424,11 @@ impl Builder<'_> {
                     _ => None,
                 }
                 .ok_or(Refused("a shufflevector padded to a vector with no register class"))?;
-                // DEVIATE: no padding past a register (the pin widens `v18i8` to `v32i8` and splits it); the
-                // lanes are built one at a time instead. Exit: splitting an extended vector type; owner
-                // x87-cordic-2; review 2026-11-27.
+                // DEVIATE: no padding past a register (the pin widens `v18i8`
+                // to `v32i8` and splits it); the
+                // lanes are built one at a time instead. Exit: splitting an
+                // extended vector type; owner x87-cordic-2;
+                // review 2026-11-27.
                 if padded.size_in_bits() <= 128 {
                     for operand in [&mut first, &mut second] {
                         if self.dag.is_undef(*operand) {
@@ -4398,6 +4440,14 @@ impl Builder<'_> {
                             *operand = self.dag.get_node(ISD::ConcatVectors, padded, &pieces);
                         }
                     }
+                    // Readjust the mask for the padded inputs: the second
+                    // input's lanes follow the first's padded length.
+                    let padded_lanes = (count * sources) as i32;
+                    remapped = mask
+                        .iter()
+                        .map(|&lane| if lane >= sources as i32 { lane - sources as i32 + padded_lanes } else { lane })
+                        .collect();
+                    mask = &remapped;
                     sources = count * sources;
                 }
             }

@@ -316,6 +316,7 @@ fn lower_function(
                     machine.calls,
                 )),
     );
+    crate::lir_view::set_quad_callee_saved_free(!machine.calls);
     machine.alloc_odds = Some(crate::layout::edge_odds(module, function, &program.layout, &machine));
     let allocate = |machine: &mut crate::mfunc::MFunc, scratch: bool| {
         crate::lir_view::set_scratch_free(scratch);
@@ -505,11 +506,15 @@ fn compiled(
         rotated: Vec<String>,
         loops: usize,
         merged: usize,
+        divides: bool,
     }
     type Built = (Program, Vec<crate::emit::Function>, crate::trial::Price, Notes);
     let size = matches!(level, Level::Os | Level::Oz);
     let asked = crate::trial::asked(platform, size);
-    let once = |(unrotated, more, unmerged): (bool, bool, bool)| -> Result<Built, String> {
+    // DEVIATE SD535: -Os only; -Oz is `minsize`, where the pin keeps the
+    // divides.
+    let divide_trial = level == Level::Os && !llrm_support::env_flag!("LLRM_ARM64_NO_TRIAL");
+    let once = |(unrotated, more, unmerged, divided): (bool, bool, bool, bool)| -> Result<Built, String> {
         let mut program = program(text, platform)?;
         if refuse_aliases {
             // The text carries no alias: refuse it rather than drop the symbol.
@@ -530,34 +535,42 @@ fn compiled(
             lowered_before_selection(&mut program)?;
         }
         let mut notes = Notes::default();
-        if asked.is_some() {
+        if divide_trial {
+            notes.divides = crate::trial::divides_by_constant(&program.modules[0]);
+        }
+        if asked.is_some() || notes.divides {
             use llrm_transforms::trial;
             (notes.left, notes.left_loops) = trial::take_left();
             (notes.rotated, notes.loops) = (trial::take_rotated(), trial::rotated_loops());
             notes.merged = crate::trial::take_merged();
             // A module nothing was noted in is compiled once, unpriced: the
             // pricing is a second walk of every function.
-            let noted = !(notes.left.is_empty() && notes.rotated.is_empty() && notes.merged == 0);
-            if noted || (unrotated, more, unmerged) != (false, false, false) {
+            let noted = !(notes.left.is_empty() && notes.rotated.is_empty() && notes.merged == 0) || notes.divides;
+            if noted || (unrotated, more, unmerged, divided) != (false, false, false, false) {
                 crate::trial::start();
             }
         }
-        let lowered = functions_with(&program, debug)?;
+        let lowered = if divided {
+            crate::trial::keeping_divides(|| functions_with(&program, debug))?
+        } else {
+            functions_with(&program, debug)?
+        };
         let cost = crate::trial::price(&lowered);
         Ok((program, lowered, cost, notes))
     };
-    let Some(hot) = asked else {
-        let (program, lowered, _, _) = once((false, false, false))?;
+    if asked.is_none() && !divide_trial {
+        let (program, lowered, _, _) = once((false, false, false, false))?;
         return Ok((program, lowered));
-    };
+    }
+    let hot = asked.unwrap_or(false);
     use llrm_transforms::trial;
     let _ = (trial::take_left(), trial::take_rotated(), crate::trial::take_merged());
     trial::clear_rotated_loops();
-    let mut best = once((false, false, false))?;
+    let mut best = once((false, false, false, false))?;
     let notes = std::mem::take(&mut best.3);
     let mut state = (false, false, false);
     let mut try_one = |best: &mut Built,
-                       other: (bool, bool, bool),
+                       other: (bool, bool, bool, bool),
                        what: &str,
                        pays: &dyn Fn(crate::trial::Price, crate::trial::Price) -> bool|
      -> Result<bool, String> {
@@ -574,7 +587,7 @@ fn compiled(
         Ok(keeps)
     };
     if !notes.rotated.is_empty()
-        && try_one(&mut best, (true, false, false), "unrotated", &|kept, now| {
+        && try_one(&mut best, (true, false, false, false), "unrotated", &|kept, now| {
             crate::trial::keeps_unrotated(kept, now, hot, notes.loops)
         })?
     {
@@ -582,15 +595,20 @@ fn compiled(
     }
     if hot
         && !notes.left.is_empty()
-        && try_one(&mut best, (state.0, true, false), "rotation-hot", &|kept, now| {
+        && try_one(&mut best, (state.0, true, false, false), "rotation-hot", &|kept, now| {
             crate::trial::keeps_rotated(kept, now, notes.left_loops)
         })?
     {
         state = (false, true, false);
     }
     if notes.merged > 0 {
-        try_one(&mut best, (state.0, state.1, true), "unmerged", &|kept, now| {
+        state.2 = try_one(&mut best, (state.0, state.1, true, false), "unmerged", &|kept, now| {
             crate::trial::keeps_unmerged(kept, now, notes.merged)
+        })?;
+    }
+    if notes.divides {
+        try_one(&mut best, (state.0, state.1, state.2, true), "divides", &|kept, now| {
+            !crate::trial::expansion_pays(kept, now)
         })?;
     }
     Ok((best.0, best.1))

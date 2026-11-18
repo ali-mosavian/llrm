@@ -35,7 +35,9 @@ fn zeroed_arrays_with_lifetimes_merge_in_pairs_from_the_first_element() {
     let (source, out) = (dir.join("f.ll"), dir.join("f.s"));
     std::fs::write(&source, ir).unwrap();
     let done = Command::new(env!("CARGO_BIN_EXE_llrm-arm64-llc"))
-        .args(["-O2", "-S", "-o", out.to_str().unwrap(), source.to_str().unwrap()])
+        // -O1: from -O2 the SLP vectorizer makes these stores `str q`/`str d`, as the
+        // pin's `opt -O2` does; the merge of the DAG is what the test is about.
+        .args(["-O1", "-S", "-o", out.to_str().unwrap(), source.to_str().unwrap()])
         .output()
         .expect("the driver runs");
     assert_eq!(done.status.code(), Some(0), "{}", String::from_utf8_lossy(&done.stderr));

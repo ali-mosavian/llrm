@@ -59,7 +59,7 @@ def reachable_runtime(text):
     if out and ("__sa" in out or "__ra" in out): out += bss
     return macros + out if out else out
 def driver():
-    s = ".export _main\n.import main\n.import _putchar\n.export report\nlp = $A0\nptr = $A2\n" + "".join(f"rc{i} = ${0x80 + i:X}\n" for i in range(6))
+    s = ".export _main\n.import main\n.import _putchar\n.export report\nlp = $70\nptr = $72\n" + "".join(f"rc{i} = ${0x80 + i:X}\n" for i in range(6))
     s += """.segment "CODE"
 _main:
   lda #0

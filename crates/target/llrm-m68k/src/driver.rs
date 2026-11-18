@@ -438,7 +438,10 @@ fn function_items(
     let calls =
         near.iter().flat_map(|(_, items)| items).any(|item| matches!(item, Item::Inst(inst) if inst.opcode == "CALLq"));
     let bytes: usize = near.iter().map(|(_, items)| crate::compile::items_bytes(items)).sum();
-    if calls && bytes > crate::pccall::REACH { lower_functions(module, &names, cpu, backend, false) } else { Ok(near) }
+    let mut functions =
+        if calls && bytes > crate::pccall::REACH { lower_functions(module, &names, cpu, backend, false)? } else { near };
+    crate::fallthrough::drop_jumps_to_next(&mut functions);
+    Ok(functions)
 }
 
 /// The items of the functions `names` of `module`, in that order, with

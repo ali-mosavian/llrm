@@ -569,12 +569,22 @@ impl Tti for AArch64 {
         }
     }
 
-    /// No default ipa-cp clones (IPACP-O2 is x86's): arm64 queens -O2 252 ->
-    /// 2,260 B, cells at or below both bars 18/20 with clones against 19/19
-    /// without (-O3 26/16 against 27/16), frames worse on both axes.
-    /// `-fipa-cp-clone` still clones.
+    /// gcc's `-fipa-cp-clone`, on at -O3 only: arm64 queens -O3 113,742 ->
+    /// 59,543 instructions (gcc 71,673), jpeg_fixed -1.2%, the other 49
+    /// programs identical. At -O2 it cost queens 252 -> 2,260 B and frames
+    /// on both axes (IPACP-O2 is x86's). Pin: none.
     fn ipa_cp_clones_at_speed(&self) -> bool {
+        true
+    }
+
+    fn ipa_cp_clones_at_o2(&self) -> bool {
         false
+    }
+
+    /// DEVIATE IPACP-DEPTH (exit 2026-11-30): gcc's depth. queens -O3 at 4:
+    /// 106,088; 6: 82,148; 8: 59,543 (2 s to compile).
+    fn ipa_cp_max_clones(&self) -> usize {
+        8
     }
 
     /// DEVIATE LFTR1 (owner w12, review 2026-12-20): any constant
@@ -735,23 +745,28 @@ impl Tti for AArch64 {
         250_000
     }
 
-    /// DEVIATE REC-1 (arm64, owner w15, exit 2026-11-30): a tree-recursive
-    /// function of at most 40 `gcc_insns` is copied into itself to depth 2, as
-    /// gcc's recursive inlining does (the call, return and argument setup of a
-    /// small body are most of its clocks). rectwo -O2: 777,916 instructions to
-    /// 165,196 (gcc 266,373), fib 201,208 to 8,824. Depth 3 or a larger limit
-    /// copies recchop and quicksort (+134k, +126k), a clock-priced depth never
-    /// pays at 250 clk/B for the static trip guess. Open: bintree +97k (its
-    /// body is loads and a multiply, not calls). Pin: none.
+    /// DEVIATE REC-1 (arm64, owner w15, exit 2026-11-30): gcc's recursive
+    /// inlining as x86-m32 takes it, with the bars of m68k's REC-2: bodies of
+    /// 450 `gcc_insns`, edge growth bar 22 at -O2 and 30 at -O3
+    /// (`max-inline-insns-auto`), copies adding 450 and 150, depth 2. No bar
+    /// on the share of clocks spent in calls: recchop and quicksort have loop
+    /// bodies that the copies shorten too. recchop -21%, bintree -9%,
+    /// quicksort -17% (-O3); fib, hanoi, rectwo, recpow, frames and queens
+    /// are identical. Pin: none.
     fn recursive_inlining(&self) -> Option<(u32, i64)> {
-        Some((2, 40))
+        Some((8, 450))
     }
 
-    /// The calls of a recursion are most of its clocks (rectwo `paths` 12 of
-    /// 15, fib 8 of 11; bintree `walk` 16 of 33, quicksort 16 of 51, queens
-    /// 8 of 37, which copies grew +97k, +126k and more).
-    fn recursive_inlining_call_share(&self) -> Option<(i64, i64)> {
-        Some((3, 5))
+    fn recursive_edge_growth(&self) -> Option<(i64, i64)> {
+        Some((22, 30))
+    }
+
+    fn recursive_inlining_growth(&self) -> Option<(i64, i64)> {
+        Some((450, 150))
+    }
+
+    fn recursive_inlining_depth(&self) -> Option<(u32, u32)> {
+        Some((2, 2))
     }
 
     /// DEVIATE REC-9 (arm64, owner w15, exit 2026-11-30 with REC-1): a linear
@@ -959,6 +974,45 @@ impl Tti for AArch64 {
         vector_divide_by_constant_cost(op, ty, second, kind).or_else(|| vector_arithmetic_cost(op, ty, kind))
     }
 
+    fn vectorizes_size_priced(&self) -> bool {
+        true
+    }
+
+    /// DEVIATE LSR-POSTINC (owner arm64, exit 2026-11-30; the pin's AArch64
+    /// states no preference): post-indexed access is free on arm64 and gcc's
+    /// ivopts walks a pointer where the loop makes enough trips (tile -O1).
+    fn preferred_addressing_mode(&self) -> AddressingMode {
+        AddressingMode::PostIndexed
+    }
+
+    fn lsr_post_indexed_amortized(&self) -> bool {
+        true
+    }
+
+    fn lsr_pair_first_walk(&self) -> bool {
+        true
+    }
+
+    fn is_post_inc_load_legal(
+        &self,
+        ty: Ty,
+    ) -> bool {
+        matches!(
+            ty,
+            Ty::Int(8 | 16 | 32 | 64) | Ty::Pointer | Ty::Float | Ty::Double
+        )
+    }
+
+    fn is_post_inc_store_legal(
+        &self,
+        ty: Ty,
+    ) -> bool {
+        matches!(
+            ty,
+            Ty::Int(8 | 16 | 32 | 64) | Ty::Pointer | Ty::Float | Ty::Double
+        )
+    }
+
     fn vector_reduction_cost(
         &self,
         kind: llrm_mir::intrinsics::ReduceKind,
@@ -1084,16 +1138,15 @@ impl Tti for AArch64 {
 
     /// `AArch64TTIImpl::getShuffleCost`
     /// ([L6978](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Target/AArch64/AArch64TargetTransformInfo.cpp#L6978)),
-    /// `SK_Broadcast`: a `dup`, one for each register the vector takes. Every
-    /// other kind is not priced (DEVIATE SLP1 of `slptree`).
+    /// a single-source shuffle (`tti_vector::shuffle_cost`).
     fn shuffle_cost(
         &self,
         kind: llrm_mir::tti::ShuffleKind,
         ty: VectorTy,
-        _mask: &[i32],
+        mask: &[i32],
         cost_kind: CostKind,
     ) -> Option<Cost> {
-        crate::tti_vector::shuffle_cost(kind, ty, cost_kind)
+        crate::tti_vector::shuffle_cost(kind, ty, mask, cost_kind)
     }
 
     fn vector_instr_cost(

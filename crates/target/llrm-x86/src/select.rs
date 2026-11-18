@@ -2518,6 +2518,11 @@ fn scalar_sse(
             let code = code_of!(upper, "_XMM_RM", outof.width * 8)?;
             _assemble(&raised(create_reg_reg(code, into.register, outof.register)), at, true)
         }
+        // `pmovmskb r32, xmm`: the sign bit of each lane in a general register.
+        (Loc::Reg(into), Loc::Reg(outof)) if matches!(name, "pmovmskb" | "movmskps") => {
+            let code = code_of!(upper, "_R", into.width * 8, "_XMM")?;
+            _assemble(&raised(create_reg_reg(code, into.register, outof.register)), at, true)
+        }
         // cvttsd2si: an integer register from an xmm register or memory.
         (Loc::Reg(into), source) if !xmm(first) => {
             let code = code_of!(upper, "_R", into.width * 8, "_XMMM", bits(source))?;
