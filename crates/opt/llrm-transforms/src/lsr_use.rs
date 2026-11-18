@@ -67,6 +67,7 @@ use llrm_mir::tti::{AddressingMode, Cost as TtiCost, LsrBytes, LsrCost, Tti};
 use llrm_mir::valuetracking::pattern::{phi_incoming, result_of};
 use llrm_support::hash::{HashSet, IndexSet};
 
+use crate::cold_chrec::expands_cold_outer_chrec;
 use crate::lsr_formula::{Formula, Immediate, MemAccessTy, RegUseTracker, Symbol};
 
 /// `SetupCostDepthLimit`.
@@ -517,14 +518,38 @@ pub struct Cost {
     scaled: Vec<(Scev, i64)>,
     /// The registers rated so far as part of an address (DEVIATE LU8).
     pub(crate) addressed: Vec<Scev>,
+    /// The base registers, offset and access size of each address rated so
+    /// far, for the pairs of DEVIATE LSR-POSTINC-PAIR.
+    walked: Vec<(Vec<Scev>, i64, i64)>,
     /// Rated for size (set by `rate_formula`).
     pub(crate) size: bool,
+    /// DEVIATE LU32: the phis the formulae's starts add to outer loops.
+    pub(crate) outer_phis: u32,
     /// DEVIATE LG3: the bytes of the setup and exit-test code, for a target
     /// that gives a byte model (`Tti::lsr_bytes`); 0 elsewhere.
     pub bytes: u32,
     /// DEVIATE LSR-SIZE: x86 bytes of the displacements, adds and setup the
     /// formulae need, where the target sizes by `Tti::lsr_size_model`.
     pub size_bytes: u32,
+    /// DEVIATE LSR-TIE: the recurrences rated that step by a register, not a
+    /// constant.
+    pub(crate) variable_steps: u32,
+}
+
+/// DEVIATE LSR-POSTINC-PAIR: the two a pointer's accesses cost more when they
+/// are exactly an adjacent pair with the lower one before the pointer.
+fn pair_walk_penalty(
+    walked: &[(Vec<Scev>, i64, i64)],
+    base: &[Scev],
+) -> u32 {
+    let mut same = walked.iter().filter(|(regs, _, _)| regs == base);
+    match (same.next(), same.next(), same.next()) {
+        (Some(&(_, a, size)), Some(&(_, b, other)), None) if size == other => {
+            let (low, high) = (a.min(b), a.max(b));
+            if low < 0 && high == low + size { 2 } else { 0 }
+        }
+        _ => 0,
+    }
 }
 
 impl Cost {
@@ -720,7 +745,8 @@ impl Cost {
             if lu.kind == Kind::Address {
                 for fixup in &lu.fixups {
                     let offset = fixup.offset.add_unsigned(f.base_offset).0;
-                    self.size_bytes += m.displacement(offset, f.has_global(), matches!(f.symbol, Some(Symbol::Frame(_))));
+                    self.size_bytes +=
+                        m.displacement(offset, f.has_global(), matches!(f.symbol, Some(Symbol::Frame(_))));
                 }
             }
             // An add or lea for each register not folded, and its immediate.
@@ -754,7 +780,31 @@ impl Cost {
                 // Symbolic values are rated conservatively.
                 self.c.imm_cost += 64;
             } else if offset.is_non_zero() {
-                self.c.imm_cost += 65 - (offset.0 ^ (offset.0 >> 63)).leading_zeros();
+                let bits = 65 - (offset.0 ^ (offset.0 >> 63)).leading_zeros();
+                self.c.imm_cost += bits;
+            }
+            // DEVIATE LSR-POSTINC-PAIR (owner arm64, exit 2026-11-30): a
+            // walked pointer's writeback folds into the first access of an
+            // adjacent pair (`ldp [p], #n`), so the walk starts there: a pair
+            // that is all a pointer reaches, its lower access before the
+            // pointer (a negative offset), costs two more; a third access
+            // takes the bump alone from the last, as the pin starts it. The
+            // pin's two's complement width rates `-4` cheaper than `4` and
+            // starts every walk at the last access.
+            if lu.kind == Kind::Address
+                && r.amk.has_post_indexed()
+                && r.tti.lsr_pair_first_walk()
+                && !f.has_global()
+                && f.scaled_reg.is_none()
+            {
+                let size = lu.access_ty.bytes as i64;
+                // Only a 4-, 8- or 16-byte access has a pair form (`ldp`).
+                if matches!(size, 4 | 8 | 16) {
+                    let before = pair_walk_penalty(&self.walked, &f.base_regs);
+                    self.walked.push((f.base_regs.clone(), offset.0, size));
+                    let after = pair_walk_penalty(&self.walked, &f.base_regs);
+                    self.c.imm_cost = (self.c.imm_cost + after).saturating_sub(before);
+                }
             }
             // The target may not support this offset for this instruction.
             if lu.kind == Kind::Address
@@ -864,6 +914,15 @@ impl Cost {
                     self.lose();
                     return;
                 }
+                // DEVIATE COLD-CHREC: not one the loop that holds it steps on
+                // every trip for an inner loop entered on some.
+                if !r.as_written
+                    && r.tti.avoids_cold_outer_addrec_expansion()
+                    && expands_cold_outer_chrec(r.se, r.cx, reg, r.l)
+                {
+                    self.lose();
+                    return;
+                }
                 self.c.num_regs += 1;
                 return;
             }
@@ -894,6 +953,27 @@ impl Cost {
                 loop_cost = 0;
             }
             self.c.add_rec_cost += loop_cost;
+            if loop_cost > 0
+                && r.se.match_affine_add_rec(reg).is_some_and(|(_, step, _)| r.se.as_constant(step).is_none())
+            {
+                self.variable_steps += 1;
+            }
+            // DEVIATE LU32: a start that is a multi-level addrec of an outer
+            // loop no phi carries is expanded there by a phi a level.
+            if r.tti.lsr_outer_addrec_regs_per_level() && !r.as_written {
+                let start = r.se.operands(reg)[0].scev;
+                let phis = outer_addrec_phis(r.se, r.cx, start, r.l);
+                self.outer_phis += phis;
+                self.c.num_regs += phis;
+            }
+            // DEVIATE COLD-CHREC: nor a start that expands to such phis.
+            if !r.as_written && r.tti.avoids_cold_outer_addrec_expansion() {
+                let start = r.se.operands(reg)[0].scev;
+                if expands_cold_outer_chrec(r.se, r.cx, start, r.l) {
+                    self.lose();
+                    return;
+                }
+            }
             // DEVIATE LU17: the loop as written forms an addrec that is no phi
             // by multiplying a counter; the target says what that costs.
             if r.as_written
@@ -950,7 +1030,8 @@ impl Cost {
             {
                 // The step added each trip.
                 let step = r.se.operands(reg)[1].scev;
-                let step_bytes = r.se.as_constant(step).map_or(m.local_get, |c| m.constant + leb_len(c.sext_value() as i64));
+                let step_bytes =
+                    r.se.as_constant(step).map_or(m.local_get, |c| m.constant + leb_len(c.sext_value() as i64));
                 self.bytes += m.local_get + step_bytes + m.op + m.local_set;
             }
 
@@ -1004,11 +1085,12 @@ impl Cost {
             // constant start the model prices by value is counted already.
             let priced_start = m.constant_start.is_some()
                 && r.se.match_affine_add_rec(reg).is_some_and(|(start, _, _)| r.se.as_constant(start).is_some());
-            // DEVIATE LSR-DERIVED (a target fact, off by default: m16 -Os grew without
-            // it checked): not for an integer recurrence the loop as
-            // written derives from its counter by one instruction each trip
-            // (`i << 4`, `i - 192`): it is no register stepped from a start,
-            // so there is nothing to set up. The pin counts it a recurrence
+            // DEVIATE LSR-DERIVED (a target fact, off by default: m16 -Os grew
+            // without it checked): not for an integer recurrence
+            // the loop as written derives from its counter by one
+            // instruction each trip (`i << 4`, `i - 192`): it is no
+            // register stepped from a start, so there is nothing to
+            // set up. The pin counts it a recurrence
             // like any other; a byte model prices the two apart.
             let derived = m.derived_setup_free
                 && r.as_written
@@ -1068,6 +1150,33 @@ fn cx_loop_contains(
     inner: BlockId,
 ) -> bool {
     cx.loops.get_loop_for(outer).is_some_and(|lp| lp.contains_loop(cx.loops.get_loop_for(inner)))
+}
+
+/// DEVIATE LU32 (`Tti::lsr_outer_addrec_regs_per_level`): the phis expanding
+/// `s` adds to the loops other than `l`: a phi a level of each addrec with
+/// more than one that no phi carries.
+fn outer_addrec_phis(
+    se: &mut ScalarEvolution,
+    cx: &Cx,
+    s: Scev,
+    l: BlockId,
+) -> u32 {
+    use llrm_analysis::scev::expr::Kind as K;
+    match se.node(s).kind.clone() {
+        K::AddRec(operands, header) if header != l => {
+            if is_existing_phi(se, cx, s) {
+                0
+            } else if operands.len() > 2 {
+                operands.len() as u32 - 1
+            } else {
+                operands.iter().map(|op| outer_addrec_phis(se, cx, op.scev, l)).sum()
+            }
+        }
+        K::Add(operands) | K::Mul(operands) | K::AddRec(operands, _) => {
+            operands.iter().map(|op| outer_addrec_phis(se, cx, op.scev, l)).sum()
+        }
+        _ => 0,
+    }
 }
 
 /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopStrengthReduce.cpp#L1123
@@ -1149,7 +1258,13 @@ fn leb_len(v: i64) -> u32 {
 
 /// What the code in the preheader that makes `reg` is in bytes, as
 /// `setup_cost` walks it.
-fn setup_bytes(se: &ScalarEvolution, cx: &Cx, m: &LsrBytes, reg: Scev, depth: u32) -> u32 {
+fn setup_bytes(
+    se: &ScalarEvolution,
+    cx: &Cx,
+    m: &LsrBytes,
+    reg: Scev,
+    depth: u32,
+) -> u32 {
     match se.scev_type(reg) {
         Type::Unknown => m.local_get,
         Type::Constant => m.constant + leb_len(se.as_constant(reg).expect("a constant").sext_value() as i64),
@@ -1160,8 +1275,7 @@ fn setup_bytes(se: &ScalarEvolution, cx: &Cx, m: &LsrBytes, reg: Scev, depth: u3
         }
         Type::Add | Type::Mul => {
             let ops = se.operands(reg);
-            ops.iter().map(|op| setup_bytes(se, cx, m, op.scev, depth - 1)).sum::<u32>()
-                + (ops.len() as u32 - 1) * m.op
+            ops.iter().map(|op| setup_bytes(se, cx, m, op.scev, depth - 1)).sum::<u32>() + (ops.len() as u32 - 1) * m.op
         }
         _ => 0,
     }

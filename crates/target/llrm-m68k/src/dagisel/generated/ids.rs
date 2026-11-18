@@ -38,7 +38,9 @@ pub mod opcode {
     pub const ADD16dp: u16 = 422;
     pub const ADD16dq: u16 = 423;
     pub const ADD16dr: u16 = 424;
+    pub const ADD16fi: u16 = 426;
     pub const ADD16ji: u16 = 428;
+    pub const ADD16pi: u16 = 430;
     pub const ADD32ab: u16 = 431;
     pub const ADD32ai: u16 = 433;
     pub const ADD32dd: u16 = 439;
@@ -49,7 +51,9 @@ pub mod opcode {
     pub const ADD32dp: u16 = 444;
     pub const ADD32dq: u16 = 445;
     pub const ADD32dr: u16 = 446;
+    pub const ADD32fi: u16 = 448;
     pub const ADD32ji: u16 = 450;
+    pub const ADD32pi: u16 = 452;
     pub const ADD8dd: u16 = 453;
     pub const ADD8df: u16 = 454;
     pub const ADD8di: u16 = 455;
@@ -57,7 +61,9 @@ pub mod opcode {
     pub const ADD8dk: u16 = 457;
     pub const ADD8dp: u16 = 458;
     pub const ADD8dq: u16 = 459;
+    pub const ADD8fi: u16 = 461;
     pub const ADD8ji: u16 = 463;
+    pub const ADD8pi: u16 = 465;
     pub const ADDX16dd: u16 = 466;
     pub const ADDX32dd: u16 = 467;
     pub const ADDX8dd: u16 = 468;
@@ -629,7 +635,9 @@ pub mod opcode {
     pub const SUB16dp: u16 = 1294;
     pub const SUB16dq: u16 = 1295;
     pub const SUB16dr: u16 = 1296;
+    pub const SUB16fi: u16 = 1298;
     pub const SUB16ji: u16 = 1300;
+    pub const SUB16pi: u16 = 1302;
     pub const SUB32dd: u16 = 1311;
     pub const SUB32df: u16 = 1312;
     pub const SUB32di: u16 = 1313;
@@ -638,7 +646,9 @@ pub mod opcode {
     pub const SUB32dp: u16 = 1316;
     pub const SUB32dq: u16 = 1317;
     pub const SUB32dr: u16 = 1318;
+    pub const SUB32fi: u16 = 1320;
     pub const SUB32ji: u16 = 1322;
+    pub const SUB32pi: u16 = 1324;
     pub const SUB8dd: u16 = 1325;
     pub const SUB8df: u16 = 1326;
     pub const SUB8di: u16 = 1327;
@@ -646,7 +656,9 @@ pub mod opcode {
     pub const SUB8dk: u16 = 1329;
     pub const SUB8dp: u16 = 1330;
     pub const SUB8dq: u16 = 1331;
+    pub const SUB8fi: u16 = 1333;
     pub const SUB8ji: u16 = 1335;
+    pub const SUB8pi: u16 = 1337;
     pub const SUBX16dd: u16 = 1338;
     pub const SUBX32dd: u16 = 1339;
     pub const SUBX8dd: u16 = 1340;

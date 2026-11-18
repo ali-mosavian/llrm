@@ -190,6 +190,16 @@ impl Tti for Z80Tti {
         true
     }
 
+    /// DEVIATE LSR-TIE (owner z80, exit 2026-12-15): a recurrence stepped by
+    /// a register is an `add hl, rr` through `hl` and a frame slot for the
+    /// step, where a constant step is an `inc` of the pair itself; LSR counts
+    /// both as one. Past four values (`bc`, `de`, `hl`, `iy`) a rewrite it
+    /// rates equal costs frame traffic it does not see: shellsort -O1 664 B
+    /// rewritten, 523 B as written (SDCC 445 B).
+    fn lsr_register_step_loses_a_tie_above(&self) -> Option<u32> {
+        Some(4)
+    }
+
     /// `long i < 12` compares four bytes a test where a byte would do
     /// (`narrowiv`; div_constants_short -Oz: -1189 B of 9887 with the
     /// counter an `int`).
@@ -322,6 +332,14 @@ impl Tti for Z80Tti {
             )
         };
         key(a) < key(b)
+    }
+
+    /// DEVIATE LU32: an inner loop starting at `i * i` made the outer loop
+    /// carry two more induction variables (a pointer and its step); the
+    /// Z80's outer loops hold their counter, sum and bound in the frame
+    /// already (sieve -Os: 312 B a body, 240 B with the product opaque).
+    fn lsr_outer_addrec_regs_per_level(&self) -> bool {
+        true
     }
 
     /// DEVIATE LU13: a call takes every register of the Z80, so what a loop
