@@ -1984,7 +1984,7 @@ pub fn recorded(
     // The pin's `addIRPasses` slot for SelectOptimize, before CodeGenPrepare;
     // DEVIATE SELOPT-C at the speed rate.
     if applied.options.prices_bytes() && applied.options.wanted("selectoptimize") {
-        manager.add(crate::selectoptimize::SelectOptimizePass);
+        manager.add(crate::selectoptimize::SelectOptimizePass { late: false });
     }
     // The pin's `addIRPasses` slot for InterleavedAccess, after SelectOptimize.
     if applied.options.wanted("interleavedaccess") {
@@ -2003,9 +2003,19 @@ pub fn recorded(
     if !applied.options.prefers_size() && applied.options.wanted("cgpcondsplit") {
         manager.add(crate::cgpcondsplit::CondSplit);
     }
+    // DEVIATE SELOPT-MINMAX (owner x86-m32-b, exit 2026-12-20): before the arms
+    // are sunk.
+    if applied.options.prices_bytes() && applied.options.wanted("selectoptimize") {
+        manager.add(crate::selectoptimize::MinMaxToSelects);
+    }
     // DEVIATE CS2 (owner m32, exit 2026-11-20), at the speed rate.
     if (applied.options.prices_bytes() || applied.options.for_size) && applied.options.wanted("cgpselectarms") {
         manager.add(crate::cgpselect::SelectArms { size: applied.options.for_size });
+    }
+    // DEVIATE SELECT-OPT-I486 (owner x86-m32-b, exit 2026-12-20): after the
+    // arms are sunk, for a target without a conditional move.
+    if applied.options.prices_bytes() && applied.options.wanted("selectoptimize") {
+        manager.add(crate::selectoptimize::SelectOptimizePass { late: true });
     }
     // After cgpaddr, with the other passes that make the forms isel sees:
     // the pin's DAGCombiner makes one extending load for a load and its
