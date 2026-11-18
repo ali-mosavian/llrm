@@ -118,7 +118,10 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // is 4.
         fills_pattern_at_speed: true,
         libc_memcpy: true,
-        pops_arguments_at_size: false,
+        // DEVIATE PO1 (owner llrm-target-x86-m16-b, exit 2026-11-20): -Os pops
+        // a call's one or two argument words, as gcc does: `add esp,4` is
+        // 3 bytes, `pop ecx` 1 (QB m32 Os control.c, 108 sites).
+        pops_arguments_at_size: true,
         // DEVIATE X87-FCMP-AH at -O1 (owner x87-c, exit 2026-11-24): `sahf`,
         // not `test ah`, where bytes are held: x_ld_cmp3 O1 184 -> 180 B. m16
         // O1 keeps the test until its counted cells are judged.
