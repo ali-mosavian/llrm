@@ -56,16 +56,19 @@ fn two_signed_halves_are_multiplied_with_muls_w_where_the_long_multiply_is_a_cal
     }
 }
 
-/// bench/memory at 68020 -O1 was 2 B larger with the word multiply: an
-/// extended operand costs the `ext.l` and a copy of its source (the tied
-/// destination) that `muls.l d0,d0` does not. Where `muls.l` exists the
-/// extended operands keep it.
+/// `(u32)a * b` of two words was `moveq #0,%d1; move.w a,%d1; moveq #0,%d0; move.w b,%d0; muls.l %d1,%d0` (16 B,
+/// 43 clocks on the 68020); `mulu.w` and `muls.w` read the low word only, so the operand's extension is dead
+/// (mul_words_to_long, bench/dot at 68020 Os). The extension of the tied operand is still made.
 #[test]
-fn an_extended_halfword_keeps_the_long_multiply_where_there_is_one() {
-    for cpu in CPUS.iter().filter(|cpu| !NO_LONG_MULTIPLY.contains(cpu)) {
-        for how in ["sext", "zext"] {
-            let out = asm(&product(how, how), cpu, Level::O1);
-            assert!(out.contains(".l\t") && !out.contains("muls\t") && !out.contains("mulu\t"), "{cpu} {how}:\n{out}");
+fn extended_halfwords_take_the_word_multiply_on_every_cpu() {
+    for cpu in CPUS {
+        for (how, mnemonic) in [("sext", "muls\t"), ("zext", "mulu\t")] {
+            for level in [Level::O1, Level::Os] {
+                let out = asm(&product(how, how), cpu, level);
+                let long = ["muls.l", "mulu.l", "__mulsi3"];
+                let word = out.contains(mnemonic) && !long.iter().any(|op| out.contains(op));
+                assert!(word, "{cpu} {how} {level:?}:\n{out}");
+            }
         }
     }
 }

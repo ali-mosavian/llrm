@@ -2781,6 +2781,17 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE LSR-POSTINC-PAIR (target flag): the pair form of a load or
+    /// store (`ldp`/`stp`) folds a pointer's bump only into its first access,
+    /// so a post-indexed walk rates the lower access of an adjacent pair
+    /// before the pointer (a negative offset) as costlier. The pin's
+    /// two's complement `ImmCost` rates `-4` below `4` and starts the walk at
+    /// the second access (gcc's ivopts starts it at the first). `false`: the
+    /// pin's rating.
+    fn lsr_pair_first_walk(&self) -> bool {
+        false
+    }
+
     /// `isIndexedLoadLegal(MIM_PostInc, ty)`: a load that steps its pointer by
     /// the access size after it (`(An)+`).
     fn is_post_inc_load_legal(
@@ -2857,6 +2868,19 @@ pub trait Tti {
     /// register. A size build then keeps `mul X, select(c, 8, 2)` rather than
     /// the pin's `shl X, select(c, 3, 1)` (`visitMul`'s `tryGetLog2`).
     fn variable_shift_count_in_fixed_register(&self) -> bool {
+        false
+    }
+
+    /// DEVIATE WIDEN-COLD-CHREC (`widen.rs`): whether `WidenIV` leaves a
+    /// counter narrow when its wide start is a chained recurrence
+    /// (`{a,+,b,+,c}`, a square) of an enclosing loop that no phi carries
+    /// and the counter's loop is entered on only some trips of it.
+    /// `SCEVExpander` then adds one phi a level to every trip of the outer
+    /// loop for a start the written code computes where the loop is entered
+    /// (sieve: `i * i` feeding the marking loop of a prime, 11 entries in
+    /// 1022 trips); the pin widens regardless. gcc's ivopts weighs a use's
+    /// cost by the frequency of its block. Off by default.
+    fn avoids_cold_outer_addrec_expansion(&self) -> bool {
         false
     }
 

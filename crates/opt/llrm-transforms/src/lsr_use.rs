@@ -67,6 +67,7 @@ use llrm_mir::tti::{AddressingMode, Cost as TtiCost, LsrBytes, LsrCost, Tti};
 use llrm_mir::valuetracking::pattern::{phi_incoming, result_of};
 use llrm_support::hash::{HashSet, IndexSet};
 
+use crate::cold_chrec::expands_cold_outer_chrec;
 use crate::lsr_formula::{Formula, Immediate, MemAccessTy, RegUseTracker, Symbol};
 
 /// `SetupCostDepthLimit`.
@@ -517,6 +518,9 @@ pub struct Cost {
     scaled: Vec<(Scev, i64)>,
     /// The registers rated so far as part of an address (DEVIATE LU8).
     pub(crate) addressed: Vec<Scev>,
+    /// The base registers, offset and access size of each address rated so
+    /// far, for the pairs of DEVIATE LSR-POSTINC-PAIR.
+    walked: Vec<(Vec<Scev>, i64, i64)>,
     /// Rated for size (set by `rate_formula`).
     pub(crate) size: bool,
     /// DEVIATE LU32: the phis the formulae's starts add to outer loops.
@@ -527,6 +531,22 @@ pub struct Cost {
     /// DEVIATE LSR-SIZE: x86 bytes of the displacements, adds and setup the
     /// formulae need, where the target sizes by `Tti::lsr_size_model`.
     pub size_bytes: u32,
+}
+
+/// DEVIATE LSR-POSTINC-PAIR: the two a pointer's accesses cost more when they
+/// are exactly an adjacent pair with the lower one before the pointer.
+fn pair_walk_penalty(
+    walked: &[(Vec<Scev>, i64, i64)],
+    base: &[Scev],
+) -> u32 {
+    let mut same = walked.iter().filter(|(regs, _, _)| regs == base);
+    match (same.next(), same.next(), same.next()) {
+        (Some(&(_, a, size)), Some(&(_, b, other)), None) if size == other => {
+            let (low, high) = (a.min(b), a.max(b));
+            if low < 0 && high == low + size { 2 } else { 0 }
+        }
+        _ => 0,
+    }
 }
 
 impl Cost {
@@ -757,7 +777,31 @@ impl Cost {
                 // Symbolic values are rated conservatively.
                 self.c.imm_cost += 64;
             } else if offset.is_non_zero() {
-                self.c.imm_cost += 65 - (offset.0 ^ (offset.0 >> 63)).leading_zeros();
+                let bits = 65 - (offset.0 ^ (offset.0 >> 63)).leading_zeros();
+                self.c.imm_cost += bits;
+            }
+            // DEVIATE LSR-POSTINC-PAIR (owner arm64, exit 2026-11-30): a
+            // walked pointer's writeback folds into the first access of an
+            // adjacent pair (`ldp [p], #n`), so the walk starts there: a pair
+            // that is all a pointer reaches, its lower access before the
+            // pointer (a negative offset), costs two more; a third access
+            // takes the bump alone from the last, as the pin starts it. The
+            // pin's two's complement width rates `-4` cheaper than `4` and
+            // starts every walk at the last access.
+            if lu.kind == Kind::Address
+                && r.amk.has_post_indexed()
+                && r.tti.lsr_pair_first_walk()
+                && !f.has_global()
+                && f.scaled_reg.is_none()
+            {
+                let size = lu.access_ty.bytes as i64;
+                // Only a 4-, 8- or 16-byte access has a pair form (`ldp`).
+                if matches!(size, 4 | 8 | 16) {
+                    let before = pair_walk_penalty(&self.walked, &f.base_regs);
+                    self.walked.push((f.base_regs.clone(), offset.0, size));
+                    let after = pair_walk_penalty(&self.walked, &f.base_regs);
+                    self.c.imm_cost = (self.c.imm_cost + after).saturating_sub(before);
+                }
             }
             // The target may not support this offset for this instruction.
             if lu.kind == Kind::Address
@@ -867,6 +911,15 @@ impl Cost {
                     self.lose();
                     return;
                 }
+                // DEVIATE COLD-CHREC: not one the loop that holds it steps on
+                // every trip for an inner loop entered on some.
+                if !r.as_written
+                    && r.tti.avoids_cold_outer_addrec_expansion()
+                    && expands_cold_outer_chrec(r.se, r.cx, reg, r.l)
+                {
+                    self.lose();
+                    return;
+                }
                 self.c.num_regs += 1;
                 return;
             }
@@ -904,6 +957,14 @@ impl Cost {
                 let phis = outer_addrec_phis(r.se, r.cx, start, r.l);
                 self.outer_phis += phis;
                 self.c.num_regs += phis;
+            }
+            // DEVIATE COLD-CHREC: nor a start that expands to such phis.
+            if !r.as_written && r.tti.avoids_cold_outer_addrec_expansion() {
+                let start = r.se.operands(reg)[0].scev;
+                if expands_cold_outer_chrec(r.se, r.cx, start, r.l) {
+                    self.lose();
+                    return;
+                }
             }
             // DEVIATE LU17: the loop as written forms an addrec that is no phi
             // by multiplying a counter; the target says what that costs.
