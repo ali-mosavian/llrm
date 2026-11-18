@@ -451,6 +451,19 @@ pub struct Tuning {
     /// run time (`loopunrollpass::recurrence`); the pin's `UP.Runtime` asks
     /// nothing of the loop. false: the pin's.
     pub unroll_recurrence_veto: bool,
+    /// DEVIATE BACKTHREAD-REL (owner llrm-target-x86-m64-b, exit 2026-12-15):
+    /// backward threading also reads the compares of one pair of values as
+    /// relations (`a < b` taken: `a <= b` taken), and runs before the first
+    /// SimplifyCFG that makes selects of the branches
+    /// (`backwardthreading.rs`). The pin has neither; gcc's `threadfull1` and
+    /// `vrp1` do both. false: the pin's pipeline.
+    pub threads_by_relation: bool,
+    /// DEVIATE BACKTHREAD-M32 (owner x87-b, exit 2026-12-15): backward
+    /// threading (`backwardthreading.rs`, no LLVM pass) runs. false at m32:
+    /// of 121 programs it changes 13 at -O2/-O3 and moves none by more than
+    /// 0.2% in clocks, while its copies of a peeled ladder cost x_ld_matmul
+    /// -O3 +8.1% clocks and 1,615 B, queens -O3 +8.3% and 3,706 B.
+    pub backward_threading: bool,
     /// DEVIATE SPILL-FOLD (owner x86-m16, exit 2026-11-29): the clocks a
     /// spilled value costs where its references fold into memory operands,
     /// which `tryRegionSplit` weighs against the split's copies. The pin
@@ -484,6 +497,11 @@ pub struct Tuning {
     /// `getMinimumJumpTableDensity`, in percent, at every level; none: the
     /// pin's 10 (40 when tuned for size).
     pub min_jump_table_density: Option<u64>,
+    /// DEVIATE LP1-FP (owner x86-m32, exit 2026-11-30): the float registers
+    /// LICM may fill with hoisted float loads and GVN with float loads it
+    /// carries around a loop (`Tti::licm_float_register_limit`); none: both
+    /// do every one, as the pin.
+    pub licm_float_register_limit: Option<u32>,
     /// DEVIATE SWITCH-SIZE-RATIO (owner x86-m32, exit 2026-11-30): GCC's
     /// `jump-table-max-growth-ratio-for-size`, in percent: tuned for size, a
     /// jump table's range may be at most this share of the compares its
@@ -742,6 +760,12 @@ pub struct Tuning {
     /// runs at -O2/-O3 with constant-arm selects included. false: the
     /// pin's, which runs it nowhere.
     pub branch_constant_arm_selects: bool,
+    /// DEVIATE SELECT-OPT-I486 (`Tti::select_optimize_penalty`): the clocks a
+    /// taken branch costs over a fallen-through one. `Some`: where there is
+    /// no conditional move, `SelectOptimize` runs at -O2/-O3, pricing
+    /// a mispredicted branch at it. `None`: the pin's `llc`, which leaves the
+    /// pass off.
+    pub select_optimize_penalty: Option<u64>,
     /// DEVIATE IND-PREFIX (`Tti::narrow_counter_is_taxed`): 16-bit counters
     /// are widened like illegal ones, for the operand-size prefix.
     pub prefixed_16_bit_counters: bool,
@@ -887,12 +911,15 @@ impl Tuning {
         carry_slot_indexes: true,
         address_reference_milliweight: 1000,
         unroll_recurrence_veto: false,
+        threads_by_relation: false,
+        backward_threading: true,
         spill_fold: None,
         unswitch_threshold: None,
         inline_threshold: None,
         cold_site_ignores_sinks: false,
         read_only_in_code: false,
         min_jump_table_density: None,
+        licm_float_register_limit: None,
         jump_table_size_growth_ratio: None,
         split_merged_conditions: false,
         merged_condition_clocks: 0,
@@ -950,6 +977,7 @@ impl Tuning {
         phi_constant_chains: false,
         sink_select_arms: false,
         branch_constant_arm_selects: false,
+        select_optimize_penalty: None,
         prefixed_16_bit_counters: false,
         partial_libcalls_skip_at_size: false,
         inline_variable_memcpy: false,

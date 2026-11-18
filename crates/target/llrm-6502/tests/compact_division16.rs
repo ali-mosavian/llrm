@@ -23,7 +23,8 @@ fn a_cold_division_calls_the_compact_routine_at_speed() {
 /// `udivmod16` branches into `__udivhi3c` (`bne`), which the image scan read
 /// as a call only: the speed divide's image came out 16 B smaller than the
 /// compact one's (-16 for a 31 B growth), and the choice above never saw its
-/// bytes. The growth is 39 B since the compact routine lost its wrapper.
+/// bytes. The growth is 125 B since the speed divide shifts the divisor up to
+/// the dividend.
 #[test]
 fn an_image_includes_a_routine_the_speed_divide_branches_into() {
     use llrm_6502::mulimage::{image_bytes, image_of_texts};
@@ -31,7 +32,7 @@ fn an_image_includes_a_routine_the_speed_divide_branches_into() {
     let speed = image_of_texts(&names, &["  jsr __udivhi3\n".to_owned()]);
     let compact = image_of_texts(&names, &["  jsr __udivhi3c\n".to_owned()]);
     assert!(speed.contains("__udivhi3c"), "{speed:?}");
-    assert_eq!(image_bytes(&speed) - image_bytes(&compact), 39, "{speed:?} against {compact:?}");
+    assert_eq!(image_bytes(&speed) - image_bytes(&compact), 125, "{speed:?} against {compact:?}");
 }
 
 /// The compact word divide linked 55 B (an 8 B wrapper over a 47 B loop that

@@ -263,6 +263,17 @@ impl Tti for Mos6502 {
         Some(1100)
     }
 
+    /// DEVIATE UNROLL-SPEED-TRIAL (owner 6502, exit 2026-11-24, the z80's
+    /// translated: `driver::speed_unroll_trial`): the module compiled again at
+    /// -O2 and -O3 with only the unrolls that add no bytes, and kept if it is
+    /// fewer bytes. The pin's early unroll takes a loop of an inlinable callee
+    /// unpriced and the inliner then declines the unrolled body
+    /// (memmove_overlap -O3: `fill`, 32 trips, 14 B rolled, 161 B unrolled,
+    /// inline cost 130 against a threshold of 130).
+    fn unroll_speed_trial(&self) -> bool {
+        true
+    }
+
     /// DEVIATE UNROLL-TRIAL-NEST: see `Tti::unroll_trial_analyzed_at_speed`.
     fn unroll_trial_analyzed_at_speed(&self) -> bool {
         true
@@ -361,6 +372,14 @@ impl Tti for Mos6502 {
         multiplier: Option<u128>,
     ) -> bool {
         multiplier.is_none_or(|m| !crate::dagisel::combine::mul_by_constant_stays_in_line(16, m as i128, false))
+    }
+
+    /// DEVIATE LSR-OUTER-SIZE: at -Os the `__mulhi3` call of `i * 54` is a
+    /// dozen bytes of setup and the routine's own bytes per use, against one
+    /// 16-bit add of a counter (rep_count: a call in its third loop nest).
+    /// Owner: llrm-target-6502. Exit: 2026-11-24.
+    fn reduces_outer_multiply_at_size(&self) -> bool {
+        true
     }
 
     /// DEVIATE LU24: a pointer that steps is weighed against `p + n`.

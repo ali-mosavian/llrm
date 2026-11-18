@@ -293,6 +293,9 @@ pub struct Options {
     /// `-ftree-loop-vectorize`: LLVM's `LoopVectorizePass`, which clang runs at
     /// -O2 and up.
     pub vectorize: bool,
+    /// gcc's `--param vect-cost-model=very-cheap`: `LoopVectorizePass` plans no
+    /// loop that would end in a scalar epilogue (DEVIATE VP9 of the planner).
+    pub vect_very_cheap: bool,
     /// LPM1's `loop-rotate` between the two LICM runs
     /// (PassBuilderPipelines.cpp L728), the first LICM not speculating; on, as
     /// in the pin.
@@ -379,6 +382,7 @@ impl Default for Options {
             interchange: true,
             unroll_and_jam: false,
             vectorize: true,
+            vect_very_cheap: false,
             mem2reg: experiment_mem2reg(),
             sroa: !llrm_support::env_flag!("LLRM_NO_SROA"),
             combine: !llrm_support::env_flag!("LLRM_NO_COMBINE"),
@@ -1083,6 +1087,16 @@ pub(crate) fn llvm_order(
             }),
             combine("combine@1242"),
             dead("dead@1242"),
+            // DEVIATE BACKTHREAD-REL: before `decide@1244` makes selects of the
+            // branches.
+            slot(
+                "backthread@1243",
+                Box::new(
+                    crate::backwardthreading::BackwardThreading::from_env()
+                        .when(applied.options.backward_threading)
+                        .early(),
+                ),
+            ),
             // `SimplifyCFGOptions().convertSwitchRangeToICmp(true)`
             // (PassBuilderPipelines.cpp#L1245): the option is read by
             // `simplifySwitch`, not translated yet, so these are the defaults.
@@ -1144,6 +1158,7 @@ pub(crate) fn llvm_order(
                     // clang vectorizes loops at -O2 and up
                     // (`PTO.LoopVectorization`).
                     only_when_forced: !applied.options.pre,
+                    very_cheap: applied.options.vect_very_cheap,
                     ..Default::default()
                 }),
             ),
@@ -1492,13 +1507,20 @@ pub fn timed() {
 /// The level `LoopFullUnroll` is told: 1 at -O1 (`pre` off, as `ABSENT_AT_O1`
 /// reads it), else 3 or 2 by the target percent. It was always 2 or 3, so the
 /// -O1 rule `unroll_never_grows_at_o1` never ran.
-/// Whether ipa-cp copies without `-fipa-cp-clone`: at -O2 and -O3 where the
-/// target says so, never for size.
+/// Whether ipa-cp copies without `-fipa-cp-clone`: at -O3 where the target
+/// clones at speed, at -O2 where it clones there too
+/// (`Tti::ipa_cp_clones_at_o2`), never for size.
 fn cp_clones_by_default(
     options: &Options,
     target_clones_at_speed: bool,
+    target_clones_at_o2: bool,
 ) -> bool {
-    target_clones_at_speed && unroll_level(options) >= 2 && !options.prefers_size()
+    match unroll_level(options) {
+        _ if options.prefers_size() => false,
+        3 => target_clones_at_speed,
+        2 => target_clones_at_o2,
+        _ => false,
+    }
 }
 
 fn unroll_level(options: &Options) -> u32 {
@@ -1693,6 +1715,7 @@ pub fn recorded(
                     cp_clones_by_default(
                         &applied.options,
                         program.target.tti().is_some_and(|tti| tti.ipa_cp_clones_at_speed()),
+                        program.target.tti().is_some_and(|tti| tti.ipa_cp_clones_at_o2()),
                     )
                 })),
                 cp_hint_clones: applied.options.inline.cp_clone.is_some() || unroll_level(&applied.options) >= 3,
@@ -1739,6 +1762,8 @@ pub fn recorded(
         // LLVM's CGSCC walk: each body inlined into, then simplified, callees
         // first. `Phase::Simplify` runs there and not module-wide.
         if at == 1 {
+            // `AlwaysInlinerPass`, ahead of the CGSCC inliner (PassBuilderPipelines.cpp:1326).
+            manager.add_program(crate::alwaysinline::AlwaysInline);
             // What each body does to memory is stated here, as the pin's
             // PostOrderFunctionAttrs inside the CGSCC walk: the early
             // simplification (SROA, EarlyCSE, PromotePass, InstCombine,
@@ -1966,7 +1991,7 @@ pub fn recorded(
     // The pin's `addIRPasses` slot for SelectOptimize, before CodeGenPrepare;
     // DEVIATE SELOPT-C at the speed rate.
     if applied.options.prices_bytes() && applied.options.wanted("selectoptimize") {
-        manager.add(crate::selectoptimize::SelectOptimizePass);
+        manager.add(crate::selectoptimize::SelectOptimizePass { late: false });
     }
     // The pin's `addIRPasses` slot for InterleavedAccess, after SelectOptimize.
     if applied.options.wanted("interleavedaccess") {
@@ -1985,9 +2010,19 @@ pub fn recorded(
     if !applied.options.prefers_size() && applied.options.wanted("cgpcondsplit") {
         manager.add(crate::cgpcondsplit::CondSplit);
     }
+    // DEVIATE SELOPT-MINMAX (owner x86-m32-b, exit 2026-12-20): before the arms
+    // are sunk.
+    if applied.options.prices_bytes() && applied.options.wanted("selectoptimize") {
+        manager.add(crate::selectoptimize::MinMaxToSelects);
+    }
     // DEVIATE CS2 (owner m32, exit 2026-11-20), at the speed rate.
     if (applied.options.prices_bytes() || applied.options.for_size) && applied.options.wanted("cgpselectarms") {
         manager.add(crate::cgpselect::SelectArms { size: applied.options.for_size });
+    }
+    // DEVIATE SELECT-OPT-I486 (owner x86-m32-b, exit 2026-12-20): after the
+    // arms are sunk, for a target without a conditional move.
+    if applied.options.prices_bytes() && applied.options.wanted("selectoptimize") {
+        manager.add(crate::selectoptimize::SelectOptimizePass { late: true });
     }
     // After cgpaddr, with the other passes that make the forms isel sees:
     // the pin's DAGCombiner makes one extending load for a load and its

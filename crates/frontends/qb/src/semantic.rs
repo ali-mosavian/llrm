@@ -11468,6 +11468,13 @@ impl Compiler {
         // A loop that reaches no far allocation keeps every far descriptor's
         // words.
         for function in &self.functions {
+        // The runtime enters a module's body once and no statement calls it, so
+        // `__main` never runs inside itself: GlobalOpt localizes a global to
+        // its one accessing function only when that function says it does not
+        // recurse, which the pin's early pipeline cannot yet infer.
+        if let Some(main) = self.functions.iter().find(|one| one.name == "__main") {
+            facts.state(llrm_hir::facts::Subject::Callable(i64::from(main.id)), llrm_hir::facts::Fact::NoRecurse);
+        }
             for &block in &function.quiet_loops {
                 facts.state(
                     llrm_hir::facts::Subject::Terminator { function: i64::from(function.id), block: i64::from(block) },

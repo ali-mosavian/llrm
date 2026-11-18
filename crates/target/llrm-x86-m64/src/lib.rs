@@ -485,6 +485,8 @@ impl llrm_target::Target for M64 {
                             lsr_constant_setup_is_one: true,
                             // DEVIATE RU-REC (owner x86-m64, exit 2026-11-24): see Tuning.
                             unroll_recurrence_veto: true,
+                            // DEVIATE BACKTHREAD-REL (owner llrm-target-x86-m64-b, exit 2026-12-15): see Tuning.
+                            threads_by_relation: true,
                             // DEVIATE SZ2 (owner m64, exit 2026-11-19): the bound holds a
                             // callee with one site too; the pin copies it (crc, floats,
                             // tile -Os: gcc keeps the call, +40 B each).
