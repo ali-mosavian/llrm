@@ -266,9 +266,67 @@ pub fn assembly(
     text: &str,
     request: &Request,
 ) -> Result<String, String> {
+    llrm_transforms::trial::take_speed_unrolls();
+    let kept = assembly_trials(text, request)?;
+    speed_unroll_trial(kept, text, request)
+}
+
+fn assembly_trials(
+    text: &str,
+    request: &Request,
+) -> Result<String, String> {
     let built = program(text, request)?;
     let (built, inlined, assembled, joint) = trial_inlined(built, text, request)?;
     llrm_transforms::trial::with_inlined(&inlined, || trial_unrolled(built, assembled, joint, text, request))
+}
+
+/// DEVIATE UNROLL-SPEED-TRIAL (owner 6502, exit 2026-11-24; the z80's
+/// `compile::effective`): at -O2 and -O3 a module whose mid-end made a full
+/// unroll that `NoGrow` would not (`take_speed_unrolls`) is compiled again
+/// with only the unrolls that add no bytes, and that text is kept if it is
+/// fewer bytes. The pin's early unroll takes a loop of an inlinable callee
+/// unpriced, and the inliner then declines the body it made (memmove_overlap
+/// -O3: `fill`, 32 trips, 14 B rolled, 161 B unrolled). Only a module with
+/// such an unroll is compiled twice.
+fn speed_unroll_trial(
+    kept: String,
+    text: &str,
+    request: &Request,
+) -> Result<String, String> {
+    use llrm_transforms::trial::{SpeedUnroll, take_speed_unrolls, with_speed_unroll};
+    let made = take_speed_unrolls().made;
+    let tried = matches!(request.level, Level::O2 | Level::O3)
+        && made > 0
+        && machine().tti().is_some_and(|tti| tti.unroll_speed_trial())
+        && std::env::var_os("LLRM_6502_NO_SPEED_UNROLL_TRIAL").is_none();
+    if !tried {
+        return Ok(kept);
+    }
+    let Ok(other) = with_speed_unroll(Some(SpeedUnroll::NoGrow), || assembly_trials(text, request)) else {
+        return Ok(kept);
+    };
+    let bytes = |assembly: &str| -> Result<i64, String> { image_bytes_of(assembly, request) };
+    let (kept_bytes, other_bytes) = (bytes(&kept)?, bytes(&other)?);
+    if std::env::var_os("LLRM_DEBUG_TRIAL").is_some() {
+        eprintln!("trial speed unroll: {made} unrolls; {other_bytes} B no-growth against {kept_bytes} B kept");
+    }
+    Ok(if other_bytes < kept_bytes { other } else { kept })
+}
+
+/// The bytes of a program's assembly: its code and data, and the runtime
+/// routines it links.
+fn image_bytes_of(
+    assembly: &str,
+    request: &Request,
+) -> Result<i64, String> {
+    let names: Vec<String> = assembly
+        .lines()
+        .filter(|line| line.ends_with(':') && !line.starts_with(|c: char| c.is_whitespace() || c == '.' || c == '@'))
+        .map(|line| line.trim_end_matches(':').to_owned())
+        .collect();
+    let code = i64::from(crate::timing::estimate(request.cpu, assembly)?.bytes);
+    let routines = crate::mulimage::image_of_texts(&names, &[assembly.to_owned()]);
+    Ok(code + data_bytes(assembly) + crate::mulimage::image_bytes(&routines))
 }
 
 /// DEVIATE OS-INLINE-TRIAL (owner 6502-c, exit 2026-12-05): the copies the -Os
