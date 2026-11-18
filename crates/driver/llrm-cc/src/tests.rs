@@ -681,3 +681,16 @@ fn one_source_linked_for_the_6502_sweeps_what_main_does_not_reach() {
         assert!(!args(name, on).contains(&"-fwhole-program".to_owned()), "{name}");
     }
 }
+
+/// DEVIATE VP9 is opt-in: no row defaults `-fllrm-vect-very-cheap`, and the
+/// command line's spelling reaches the backend.
+#[test]
+fn very_cheap_vectorizing_is_opt_in() {
+    let table = targets(TARGETS).unwrap();
+    let llc = |row: &str, line: &str| llc_args(&table[row], &built(line), Path::new("x.ll"), Path::new("x.o"));
+    let has = |args: &[String]| args.iter().any(|f| f == "-fllrm-vect-very-cheap");
+    for row in table.keys() {
+        assert!(!has(&llc(row, "-O2 -c x.c")), "{row}");
+    }
+    assert!(has(&llc("arm64-linux", "-O2 -fllrm-vect-very-cheap -c x.c")));
+}
