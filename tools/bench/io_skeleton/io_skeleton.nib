@@ -1,0 +1,44 @@
+# The std.io file calls the benches that read and write a DOS file make (open, create, read_raw, write_raw), and nothing else. Its bytes less an empty
+# program's are the I/O's, which a C twin gets from bench_io.h outside its object: bench.py takes them from those Nib cells (`io_skeleton = true`).
+import std.io as io
+
+var block: i16[2] = [0] * 2
+
+fn fill(file: &mut io.File) -> bool:
+    unsafe:
+        let data: *near mut i16 = &mut block
+        match file.read_raw(data.cast[u8]().far(), 4):
+            .ok(n):
+                return n == u16(4)
+            .err(_):
+                return false
+
+fn put(file: &mut io.File) -> bool:
+    unsafe:
+        let data: *near i16 = &block
+        match file.write_raw(data.cast[u8]().far(), 4):
+            .ok(n):
+                return n == u16(4)
+            .err(_):
+                return false
+
+fn bench_io_skeleton() -> i32:
+    match io.File.open("IN"):
+        .err(_):
+            return -1
+        .ok(opened):
+            let mut input = opened
+            match io.File.create("OUT"):
+                .err(_):
+                    return -1
+                .ok(created):
+                    let mut output = created
+                    if !fill(input):
+                        return -1
+                    if !put(output):
+                        return -1
+    return 0
+
+fn main() -> i16:
+    print(bench_io_skeleton())
+    return 0

@@ -14,6 +14,33 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[4]
 RUNTIME = HERE.parents[1] / "runtime" / "z80_rt.s"
+
+
+def fnv1a64(data):
+    """`llrm_z80::runtime_stamp`: FNV-1a, 64 bits, 16 hex digits."""
+    hash = 0xCBF29CE484222325
+    for byte in data:
+        hash = ((hash ^ byte) * 0x100000001B3) & 0xFFFFFFFFFFFFFFFF
+    return f"{hash:016x}"
+
+
+def runtime_mismatch(llc, runtime):
+    """Why `llc` and the runtime file a program is linked with are not the same: the compiler inlines and prices the runtime
+    it was built with, and a sweep links the file it is given (by default the working tree's), so a runtime A/B that swaps
+    the compiler and not the file measures two builds on one runtime (z80 2026-11-12: a divide fix showed 0 diff). None
+    when they agree."""
+    try:
+        done = subprocess.run([llc, "--runtime-stamp"], capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired) as why:
+        return f"cannot ask {llc} for its runtime stamp: {why}"
+    stamp = done.stdout.strip()
+    if done.returncode or not stamp:
+        return f"{llc} does not report a runtime stamp (built before --runtime-stamp): rebuild it, or pass --allow-runtime-mismatch"
+    have = fnv1a64(Path(runtime).read_bytes())
+    if stamp != have:
+        return (f"{llc} was built with a z80_rt.s of stamp {stamp}, but {runtime} has {have}: link the runtime the compiler "
+                "was built with (--runtime FILE), or pass --allow-runtime-mismatch")
+    return None
 LIBC = HERE / "libc"  # the C library's entries over the runtime's: a library, so a program's own definition wins
 DATALAYOUT = 'target datalayout = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8"'
 sys.path.insert(0, str(ROOT / "tools"))
@@ -193,6 +220,7 @@ def selected(src, names=()):
 
 
 def main():
+    global RUNTIME
     ap = argparse.ArgumentParser()
     ap.add_argument("names", nargs="*")
     ap.add_argument("--llc", default=os.path.expanduser("~/scratch/z80-sweep/tgt/debug/llrm-z80-llc"))
@@ -204,7 +232,12 @@ def main():
     ap.add_argument("--compile-timeout", type=int, default=120)
     ap.add_argument("--json")
     ap.add_argument("--src", default=str(ROOT / "tests/run/c"))
+    ap.add_argument("--runtime", default=str(RUNTIME), help="the z80_rt.s to link (the compiler's own build of it)")
+    ap.add_argument("--allow-runtime-mismatch", action="store_true")
     args = ap.parse_args()
+    RUNTIME = Path(args.runtime)
+    if not args.allow_runtime_mismatch and (why := runtime_mismatch(args.llc, RUNTIME)):
+        sys.exit(f"run.py: {why}")
     sources = selected(Path(args.src), args.names)
     work = tempfile.mkdtemp(prefix="z80prog-")
     try:

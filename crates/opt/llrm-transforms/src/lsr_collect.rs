@@ -41,14 +41,15 @@
 use llrm_analysis::scev::expr::{Kind as ScevKind, Scev, Ty, Type, Use as ScevUse};
 use llrm_analysis::scev::{Cx, Flags, ScalarEvolution};
 use llrm_mir::context::GlobalId;
-use llrm_mir::module::{BlockId, InstId, Operand};
+use llrm_mir::dense::IdSet;
+use llrm_mir::module::{BlockId, InstId, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{IntPredicate, Opcode};
 use llrm_mir::tti::{AddressingMode, Tti};
 use llrm_mir::types::Type as MirType;
 use llrm_support::hash::{HashMap, HashSet, IndexSet};
 
 use crate::ivusers::IvUsers;
-use crate::lsr_formula::{Formula, Immediate, MemAccessTy, RegUseTracker};
+use crate::lsr_formula::{Formula, Immediate, MemAccessTy, RegUseTracker, Symbol};
 use crate::lsr_use::{
     Cost, Fixup, Kind, Rating, Use, is_am_completely_folded_at, is_am_completely_folded_between, is_legal_use_formula,
 };
@@ -242,33 +243,68 @@ pub fn extract_immediate(
     }
 }
 
+/// The static alloca `s` is, where the target takes a frame slot as a free
+/// base.
+fn frame_slot(
+    se: &ScalarEvolution,
+    cx: &Cx,
+    s: Scev,
+) -> Option<ValueId> {
+    let Some(Operand::Value(value)) = se.unknown_value(s) else { return None };
+    match cx.function.value(value).def {
+        ValueDef::Instruction(inst)
+            if matches!(cx.function.instruction(inst).opcode, Opcode::Alloca { .. })
+                && llrm_mir::instructioncost::is_static_alloca(cx.function, inst) =>
+        {
+            Some(value)
+        }
+        _ => None,
+    }
+}
+
 /// `ExtractSymbol`: the global whose address is added in `s`, and `s` without
-/// it.
+/// it. DEVIATE LU30: with `frame`, a static alloca is a symbol too, found among
+/// any term of a sum (an alloca sorts before the recurrences it is added to).
 pub fn extract_symbol(
     se: &mut ScalarEvolution,
     cx: &Cx,
     s: Scev,
-) -> (Option<GlobalId>, Scev) {
+    frame: bool,
+) -> (Option<Symbol>, Scev) {
     match se.node(s).kind.clone() {
         ScevKind::Unknown(Operand::Constant(id)) => {
             if let llrm_mir::context::ConstantKind::Global(global) = cx.context.get(id).kind {
-                return (Some(global), se.get_constant_of_type(cx, se.type_of(s), 0));
+                return (Some(Symbol::Global(global)), se.get_constant_of_type(cx, se.type_of(s), 0));
             }
             (None, s)
         }
+        ScevKind::Unknown(Operand::Value(_)) => match frame.then(|| frame_slot(se, cx, s)).flatten() {
+            Some(value) => (Some(Symbol::Frame(value)), se.get_constant_of_type(cx, se.type_of(s), 0)),
+            None => (None, s),
+        },
         ScevKind::Add(ops) => {
             let mut ops = ops.to_vec();
             let last = ops.len() - 1;
-            let (result, rest) = extract_symbol(se, cx, ops[last].scev);
+            let (result, rest) = extract_symbol(se, cx, ops[last].scev, frame);
             if result.is_some() {
                 ops[last] = ScevUse::of(rest);
                 return (result, se.get_add_expr(cx, ops, Flags::default(), 0).scev);
+            }
+            if frame && let Some(at) = ops.iter().position(|one| frame_slot(se, cx, one.scev).is_some()) {
+                let value = frame_slot(se, cx, ops[at].scev).expect("found above");
+                ops.remove(at);
+                let rest = if ops.is_empty() {
+                    se.get_constant_of_type(cx, se.type_of(s), 0)
+                } else {
+                    se.get_add_expr(cx, ops, Flags::default(), 0).scev
+                };
+                return (Some(Symbol::Frame(value)), rest);
             }
             (None, s)
         }
         ScevKind::AddRec(ops, header) => {
             let mut ops = ops.to_vec();
-            let (result, rest) = extract_symbol(se, cx, ops[0].scev);
+            let (result, rest) = extract_symbol(se, cx, ops[0].scev, frame);
             if result.is_some() {
                 ops[0] = ScevUse::of(rest);
                 return (result, se.get_add_rec_expr(cx, ops, header, Flags::default()).scev);
@@ -430,12 +466,13 @@ pub fn is_always_foldable_scev(
         return true;
     }
     let (base_offset, rest) = extract_immediate(se, cx, s);
-    let (base_gv, rest) = extract_symbol(se, cx, rest);
+    let (symbol, rest) = extract_symbol(se, cx, rest, tti.frame_slot_is_free_base());
+    let base_gv = symbol.filter(|one| matches!(one, Symbol::Global(_)));
     // Anything else involved does not fold.
     if !se.match_zero(rest) {
         return false;
     }
-    if base_offset.is_zero() && base_gv.is_none() {
+    if base_offset.is_zero() && symbol.is_none() {
         return true;
     }
     let scale = if kind == Kind::ICmpZero { -1 } else { 1 };
@@ -476,6 +513,12 @@ pub struct Collection<'a, 'b> {
     /// Interesting use types, to reuse by truncation.
     pub types: IndexSet<Ty>,
     pub baseline_cost: Cost,
+    /// `AMK`: the indexed addressing this loop favors
+    /// (`getPreferredAddressingMode(L, SE)`).
+    pub amk: AddressingMode,
+    /// DEVIATE LSR-LIVE-IV: the induction variables live in every solution
+    /// (`live_induction_variables`); empty unless the target opts in.
+    pub live_ivs: Vec<Scev>,
     pub changed: bool,
     /// The equality compares whose operands the caller is to swap, so the
     /// operand to replace is the left one.
@@ -495,6 +538,8 @@ pub struct Collection<'a, 'b> {
     /// The compile is for size: a setup instruction costs a byte like a loop
     /// one.
     pub size: bool,
+    /// The bytes of the formulae's code are counted (`Rating::bytes_counted`).
+    pub bytes_counted: bool,
     /// The loop calls and the target's call clobbers every register (LU13).
     pub across_call: bool,
     /// How many formulae were rated: the work the filter, narrowing and solver
@@ -523,12 +568,15 @@ impl<'a, 'b> Collection<'a, 'b> {
             factors: self.factors.clone(),
             types: self.types.clone(),
             baseline_cost: self.baseline_cost.clone(),
+            amk: self.amk,
+            live_ivs: self.live_ivs.clone(),
             changed: self.changed,
             swapped_compares: self.swapped_compares.clone(),
             insert_attempts: self.insert_attempts,
             other_register_units: self.other_register_units,
             ignore_pressure: std::cell::Cell::new(self.ignore_pressure.get()),
             size: self.size,
+            bytes_counted: self.bytes_counted,
             across_call: self.across_call,
             rated: std::cell::Cell::new(self.rated.get()),
             chain_uses: self.chain_uses.clone(),
@@ -563,12 +611,15 @@ impl<'a, 'b> Collection<'a, 'b> {
             factors: IndexSet::default(),
             types: IndexSet::default(),
             baseline_cost: Cost::new(),
+            amk: tti.preferred_addressing_mode(),
+            live_ivs: Vec::new(),
             changed: false,
             swapped_compares: Vec::new(),
             insert_attempts: 0,
             other_register_units: 0,
             ignore_pressure: std::cell::Cell::new(false),
             size: false,
+            bytes_counted: false,
             across_call: false,
             rated: std::cell::Cell::new(0),
             chain_uses: HashSet::default(),
@@ -680,7 +731,7 @@ impl<'a, 'b> Collection<'a, 'b> {
                 for g in &lu.formulae {
                     if g.base_regs == f.base_regs
                         && g.scaled_reg == f.scaled_reg
-                        && g.base_gv == f.base_gv
+                        && g.symbol == f.symbol
                         && g.scale == f.scale
                         && g.unfolded_offset == f.unfolded_offset
                     {
@@ -787,12 +838,8 @@ impl<'a, 'b> Collection<'a, 'b> {
         f: &Formula,
     ) -> bool {
         self.insert_attempts += 1;
-        let lu = &self.uses[lu_idx];
         // A formula that cannot be expanded is not inserted.
-        assert!(
-            is_legal_use_formula(self.tti, lu.min_offset, lu.max_offset, lu.kind, lu.access_ty, f),
-            "Formula is illegal"
-        );
+        assert!(self.legal(lu_idx, f), "Formula is illegal");
         if !self.uses[lu_idx].insert_formula(se, f, self.l) {
             return false;
         }
@@ -844,6 +891,12 @@ impl<'a, 'b> Collection<'a, 'b> {
         let mut regs: HashSet<Scev> = HashSet::default();
         let visited_regs: HashSet<Scev> = HashSet::default();
         let mut visited_uses: HashSet<usize> = HashSet::default();
+        if self.tti.lsr_unmanaged_iv_reads_stay_live() {
+            self.live_ivs = live_induction_variables(se, cx, self.l, users);
+            let mut seeded = Cost::new();
+            self.seed_live_ivs(&mut seeded, &mut regs);
+            self.baseline_cost = seeded;
+        }
 
         for u in &users.uses {
             let instruction = cx.function.instruction(u.user);
@@ -948,7 +1001,9 @@ impl<'a, 'b> Collection<'a, 'b> {
                     as_written: true,
                     other_register_units: self.pressure_units(),
                     size: self.size,
+                    bytes_counted: self.bytes_counted,
                     across_call: self.across_call,
+                    amk: self.amk,
                 };
                 self.baseline_cost.rate_formula(&mut rating, &f, &mut regs, &visited_regs, &self.uses[lu_idx], None);
                 visited_uses.insert(lu_idx);
@@ -971,7 +1026,7 @@ impl<'a, 'b> Collection<'a, 'b> {
     ) {
         // Outside uses are not collected when post-indexed addressing is
         // favored: the instructions in the loop matter more.
-        if self.tti.preferred_addressing_mode() == AddressingMode::PostIndexed {
+        if self.amk == AddressingMode::PostIndexed {
             return;
         }
         let cx = self.cx;
@@ -1096,24 +1151,104 @@ pub fn loop_calls(
     l: BlockId,
 ) -> bool {
     let Some(lp) = cx.loops.get_loop_for(l) else { return false };
-    lp.get_blocks().iter().any(|&block| {
-        cx.function.iter_block(block).any(|inst| {
-            if !matches!(cx.function.instruction(inst).opcode, Opcode::Call(_)) {
-                return false;
+    lp.get_blocks()
+        .iter()
+        .any(
+            |&block| cx.function
+                .iter_block(block)
+                .any(
+                    |inst| {
+                        if !matches!(cx.function.instruction(inst).opcode, Opcode::Call(_)) {
+                            return false;
+                        }
+                        match llrm_mir::memory::callee(cx.context, cx.function, inst) {
+                            Some(callee) if (callee.0 as usize) < cx.globals.len() => {
+                                let value = &cx.globals[callee.0 as usize];
+                                !value.name.as_deref().is_some_and(|name| name.starts_with("llvm."))
+                                    && tti.is_lowered_to_call(
+                                        value.name.as_deref(),
+                                        matches!(
+                                            value.linkage,
+                                            llrm_mir::module::Linkage::Internal | llrm_mir::module::Linkage::Private
+                                        ),
+                                    )
+                            }
+                            _ => true,
+                        }
+                    },
+                ),
+        )
+}
+
+impl Collection<'_, '_> {
+    /// DEVIATE LSR-LIVE-IV: `cost` and `regs` start holding the live
+    /// induction variables, so a formula that reuses one pays nothing and one
+    /// that adds another pays for it.
+    pub fn seed_live_ivs(
+        &self,
+        cost: &mut Cost,
+        regs: &mut HashSet<Scev>,
+    ) {
+        for &iv in &self.live_ivs {
+            if regs.insert(iv) {
+                cost.c.num_regs += 1;
             }
-            match llrm_mir::memory::callee(cx.context, cx.function, inst) {
-                Some(callee) if (callee.0 as usize) < cx.globals.len() => {
-                    let value = &cx.globals[callee.0 as usize];
-                    !value.name.as_deref().is_some_and(|name| name.starts_with("llvm."))
-                        && tti.is_lowered_to_call(
-                            value.name.as_deref(),
-                            matches!(value.linkage, llrm_mir::module::Linkage::Internal | llrm_mir::module::Linkage::Private),
-                        )
-                }
-                _ => true,
+        }
+    }
+}
+
+/// DEVIATE LSR-LIVE-IV: the header phis of `l` that an instruction of the
+/// loop reads and LSR does not rewrite: neither an IV user nor an update of
+/// the recurrence (a phi, or a value that is itself an addrec of `l`).
+pub fn live_induction_variables(
+    se: &mut ScalarEvolution,
+    cx: &Cx,
+    l: BlockId,
+    users: &IvUsers,
+) -> Vec<Scev> {
+    let Some(lp) = cx.loops.get_loop_for(l) else { return Vec::new() };
+    let mut managed: IdSet<InstId> = IdSet::new();
+    for u in &users.uses {
+        managed.insert(u.user);
+    }
+    let phis: Vec<ValueId> = cx
+        .function
+        .iter_block(l)
+        .take_while(|&inst| cx.function.instruction(inst).opcode == Opcode::Phi)
+        .filter_map(|inst| cx.function.instruction(inst).result)
+        .collect();
+    let mut live = Vec::new();
+    for phi in phis {
+        let value = Operand::Value(phi);
+        if !se.is_value_scevable(cx, value) {
+            continue;
+        }
+        let s = se.get_scev(cx, value);
+        if se.addrec_header(s) != Some(l) {
+            continue;
+        }
+        let mut read = false;
+        for user in cx.function.users(phi) {
+            let inst = cx.function.instruction(user.user);
+            let in_loop = cx.function.parent(user.user).is_some_and(|block| lp.contains(block));
+            if !in_loop || inst.opcode == Opcode::Phi || managed.contains(&user.user) {
+                continue;
             }
-        })
-    })
+            let Some(result) = inst.result else {
+                read = true;
+                break;
+            };
+            let user_scev = se.get_scev(cx, Operand::Value(result));
+            if se.addrec_header(user_scev) != Some(l) {
+                read = true;
+                break;
+            }
+        }
+        if read {
+            live.push(s);
+        }
+    }
+    live
 }
 
 pub fn loop_register_units(

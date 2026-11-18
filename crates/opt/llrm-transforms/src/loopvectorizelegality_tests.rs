@@ -65,6 +65,19 @@ corpus! {
     reduction => true,
     // Not vectorizing: Found a non-intrinsic callsite
     with_call => false,
+    // vectorized loop (an `llvm.smax` call is trivially vectorizable)
+    with_intrinsic => true,
+    // vectorized loop (`ctlz`'s second operand is a constant: scalar in every
+    // lane)
+    with_ctlz => true,
+    // loop not vectorized: call instruction cannot be vectorized (`sdiv.fix` is
+    // not in `isTriviallyVectorizable`)
+    with_sdiv_fix => false,
+    // vectorized loop (plain pointers: the pin guards them
+    // with `vector.memcheck`)
+    memcheck_copy => true,
+    // We can vectorize this loop! (`llvm.fmuladd` is trivially vectorizable)
+    fp_fmuladd => true,
     // Can't vectorize due to memory conflicts
     dependence => false,
     // Not vectorizing: Cannot vectorize uncountable loop.
@@ -78,4 +91,51 @@ fn a_zero_based_unit_step_induction_is_the_primary() {
     let found = verdict(include_str!("../tests/lv/copy.ll")).expect("legal");
     assert!(found.primary_induction.is_some());
     assert_eq!(found.widest_induction_bits, Some(64));
+}
+
+/// `differ` of memory_expansion: a byte compare that leaves at the first
+/// difference. The pin's legality takes it (`isVectorizableEarlyExitLoop`, the
+/// loads dereferenceable in the loop); every loop of two blocks was refused,
+/// so clang's `pcmpeqb` loop stayed a scalar one (1.69 M instructions against
+/// 0.93 M).
+const DIFFER: &str = "target datalayout = \"e-m:e-p:64:64-i64:64-n8:16:32:64\"
+
+@a = global [1200 x i8] zeroinitializer
+@b = global [1200 x i8] zeroinitializer
+
+define i32 @f() {
+entry:
+  br label %body
+body:
+  %i = phi i64 [ 0, %entry ], [ %i.next, %latch ]
+  %pa = getelementptr inbounds i8, ptr @a, i64 %i
+  %pb = getelementptr inbounds i8, ptr @b, i64 %i
+  %x = load i8, ptr %pa, align 1
+  %y = load i8, ptr %pb, align 1
+  %ne = icmp ne i8 %x, %y
+  br i1 %ne, label %found, label %latch
+latch:
+  %i.next = add nuw nsw i64 %i, 1
+  %done = icmp eq i64 %i.next, 1200
+  br i1 %done, label %same, label %body
+found:
+  ret i32 1
+same:
+  ret i32 0
+}
+";
+
+#[test]
+fn a_byte_compare_that_leaves_early_is_legal_with_an_early_exit() {
+    let found = verdict(DIFFER).expect("legal");
+    let early = found.early_exit.expect("an early-exit loop");
+    assert_eq!((early.uncountable.len(), early.countable.len()), (1, 1));
+}
+
+/// The same loop over a global too small for the walk: the load may fault, so
+/// it is not legal (`NonReadOnlyEarlyExitLoop`).
+#[test]
+fn an_early_exit_loop_that_may_fault_is_refused() {
+    let small = DIFFER.replace("[1200 x i8]", "[1000 x i8]");
+    assert!(verdict(&small).is_err());
 }

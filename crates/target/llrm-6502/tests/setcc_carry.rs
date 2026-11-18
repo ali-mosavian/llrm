@@ -109,7 +109,8 @@ fn consumer_bytes(
 /// `udivmod` took it per call, `div_constants_short -Os` ran 25% more cycles.
 #[test]
 fn a_branch_on_the_order_of_two_words_reads_the_flags_of_the_chain() {
-    consumer_bytes("branch", 72);
+    // 72 B before the first pointer arrived in A:X (stored to cells)
+    consumer_bytes("branch", 73);
 }
 
 #[test]

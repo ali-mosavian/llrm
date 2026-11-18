@@ -55,6 +55,20 @@ use crate::lsr_collect::Collection;
 use crate::lsr_use::{Cost, Kind};
 
 impl Collection<'_, '_> {
+    /// DEVIATE LSR-SPILL-PRICE: the loop's other values alone need the target's
+    /// margin more registers than it has (gcc's ivopts, `regs_used` past
+    /// `target_avail_regs` in `estimate_reg_pressure_cost`, which prices spills
+    /// only past it), so each register the rewrite holds is a spill. The cost
+    /// model has no price for one.
+    fn spills_are_priced(&self) -> bool {
+        // Spills cost clocks, not bytes: a size build keeps the pin's choice.
+        !self.size
+            && self
+                .tti
+                .lsr_spill_pressure_margin()
+                .is_some_and(|margin| self.pressure_units() >= self.tti.number_of_gpr_registers() + margin)
+    }
+
     /// `SolveRecurse`: decide use `workspace.len()`, then the rest.
     #[allow(clippy::too_many_arguments)]
     fn solve_recurse(
@@ -79,7 +93,14 @@ impl Collection<'_, '_> {
             // set and try again; it gives up.
             // Favoring post-increment, an address use is left to the cost
             // model: the required registers can mislead it.
-            if !self.tti.preferred_addressing_mode().has_post_indexed() || lu.kind != Kind::Address {
+            // DEVIATE LU24: so is an address use that runs every trip where
+            // the target says its base add costs more than a recurrence (`gep
+            // p, n` against a pointer that steps): a pointer that steps costs
+            // an add on trips that do not use it.
+            if !(self.amk.has_post_indexed()
+                || self.tti.lsr_address_left_to_cost_model() && lu.all_fixups_unconditional)
+                || lu.kind != Kind::Address
+            {
                 let mut to_find = f.num_regs().min(req_regs.len());
                 for reg in &req_regs {
                     if f.scaled_reg == Some(*reg) || f.base_regs.contains(reg) {
@@ -147,7 +168,11 @@ impl Collection<'_, '_> {
                         }
                     }
                 }
-                if to_find != 0 {
+                if to_find != 0
+                    && !(lu.kind == Kind::Address
+                        && lu.all_fixups_unconditional
+                        && this.tti.lsr_address_left_to_cost_model())
+                {
                     continue;
                 }
                 let mut new_cost = cur_cost.clone();
@@ -166,7 +191,8 @@ impl Collection<'_, '_> {
             }
         }
         let mut found = Vec::new();
-        walk(self, se, &mut Vec::new(), &Cost::new(), &HashSet::default(), &mut HashSet::default(), &mut found);
+        let (seed_cost, seed_regs) = self.seeded();
+        walk(self, se, &mut Vec::new(), &seed_cost, &seed_regs, &mut HashSet::default(), &mut found);
         found.sort_by_key(|(cost, _)| (cost.c.num_regs, cost.c.insns, cost.c.setup_cost));
         llrm_support::debug!("lsr-all", "{} candidates, baseline {:?}", found.len(), self.baseline_cost.c);
         let mut shown = 0;
@@ -203,6 +229,14 @@ impl Collection<'_, '_> {
         self.solve_with_cost(se).0
     }
 
+    /// The empty solution's cost and registers: the live induction variables
+    /// (DEVIATE LSR-LIVE-IV), else nothing.
+    fn seeded(&self) -> (Cost, HashSet<Scev>) {
+        let (mut cost, mut regs) = (Cost::new(), HashSet::default());
+        self.seed_live_ivs(&mut cost, &mut regs);
+        (cost, regs)
+    }
+
     /// One `SolveRecurse` from the empty solution with the uses taken in
     /// `order`: the formula chosen for each use (by use, empty if none) and
     /// what it costs.
@@ -216,13 +250,14 @@ impl Collection<'_, '_> {
         solution_cost.lose();
         let mut workspace = Vec::with_capacity(self.uses.len());
         let mut visited = HashSet::default();
+        let (seed_cost, seed_regs) = self.seeded();
         self.solve_recurse(
             se,
             &mut by_position,
             &mut solution_cost,
             &mut workspace,
-            &Cost::new(),
-            &HashSet::default(),
+            &seed_cost,
+            &seed_regs,
             &mut visited,
             order,
         );
@@ -256,11 +291,12 @@ impl Collection<'_, '_> {
             // DEVIATE LU14: `SolveRecurse` requires of a use the registers the
             // uses before it chose, so a cheaper combination that starts with
             // a later use is never rated (rcflip's RAMP loop: 4 instructions
-            // against 2 with the uses the other way round). The uses are also taken
-            // in the opposite order, and its solution kept where it costs less
-            // by the target's comparator; a tie keeps the pin's order. A
-            // target opts in (`lsr_solves_both_use_orders`). Cost: one more
-            // search per instance.
+            // against 2 with the uses the other way round). The uses are also
+            // taken in the opposite order, and its solution kept
+            // where it costs less by the target's comparator; a tie
+            // keeps the pin's order. A target opts in
+            // (`lsr_solves_both_use_orders`). Cost: one more search
+            // per instance.
             if self.uses.len() > 1 && !solution.is_empty() && self.tti.lsr_solves_both_use_orders() {
                 let (other, other_cost) = self.search(se, &reversed);
                 // It must save an instruction over the first order's solution
@@ -281,7 +317,12 @@ impl Collection<'_, '_> {
             // base and an index, the cut tells no solution from
             // another; search again without it.
             let budget = self.tti.number_of_gpr_registers().saturating_sub(1).saturating_sub(self.pressure_units());
-            if solution.is_empty() || budget >= 2 || solution_cost.c.num_regs <= budget || self.pressure_units() == 0 {
+            if solution.is_empty()
+                || budget >= 2
+                || solution_cost.c.num_regs <= budget
+                || self.pressure_units() == 0
+                || self.spills_are_priced()
+            {
                 break;
             }
             self.ignore_pressure.set(true);
@@ -302,13 +343,44 @@ impl Collection<'_, '_> {
             && solution_cost.c.insns >= self.baseline_cost.c.insns + 2;
         // DEVIATE LU15: a loop with an address keeps the solution that
         // reduces it, where the target says so.
-        let spared = self.tti.lsr_dropped_solution_spares_addresses() && self.uses.iter().any(|u| u.kind == Kind::Address);
-        if self.baseline_cost.is_less(self.tti, &solution_cost)
-            && (self.tti.should_drop_lsr_solution_if_less_profitable() && !spared
-                || spills && self.tti.lsr_drops_spilling_solution())
+        // DEVIATE LU32: not where the rewrite makes an outer loop carry more
+        // induction variables.
+        let spared = self.tti.lsr_dropped_solution_spares_addresses()
+            && self.uses.iter().any(|u| u.kind == Kind::Address)
+            && solution_cost.outer_phis == 0;
+        // DEVIATE LSR-SPILL-PRICE: a loop whose other values fill the
+        // registers keeps its pressure in the cost (no search with it cut), and
+        // a rewrite that does not rate better than the loop as written is
+        // dropped: each register it adds is a spill the rating cannot tell
+        // apart (gcc's ivopts, `estimate_reg_pressure_cost`).
+        let steps_by_register = self.tti.lsr_register_step_loses_a_tie_above().is_some_and(|limit| {
+            self.baseline_cost.variable_steps > 0 && self.baseline_cost.c.num_regs + self.other_register_units > limit
+        });
+        let saturated_tie = (self.spills_are_priced() || steps_by_register)
+            && self.uses.iter().any(|u| u.kind == Kind::Address)
+            && !solution_cost.is_less(self.tti, &self.baseline_cost);
+        if saturated_tie
+            || self.baseline_cost.is_less(self.tti, &solution_cost)
+                && ((self.tti.should_drop_lsr_solution_if_less_profitable()
+                    || self.size
+                        && self.tti.lsr_drops_worse_solution_at_size()
+                        && holds_more(&self.baseline_cost, &solution_cost))
+                    && !spared
+                    || spills && self.tti.lsr_drops_spilling_solution())
         {
             solution.clear();
         }
         (solution, solution_cost)
     }
+}
+
+/// DEVIATE LSR-DROP-AT-SIZE: the rewrite needs more registers, or more
+/// instructions, than the loop as written. Bytes and immediates are left out:
+/// the loop as written is rated with each address one pointer, so its bytes
+/// read low (sfm16 -Os: a stride-44 index kept for +4 B).
+fn holds_more(
+    written: &Cost,
+    rewrite: &Cost,
+) -> bool {
+    (written.c.insns, written.c.num_regs) < (rewrite.c.insns, rewrite.c.num_regs)
 }

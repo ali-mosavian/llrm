@@ -65,3 +65,17 @@ fn calls_cost_more_and_every_operation_is_priced() {
     assert!(arith(Mul, Ty::Int(8), CostKind::Latency) > arith(Add, Ty::Int(16), CostKind::Latency));
     assert!(arith(UDiv, Ty::Int(16), CostKind::Latency) > arith(Mul, Ty::Int(16), CostKind::Latency));
 }
+
+/// The inliner had its own 3000 and the unroll had none (0: the pin's threshold alone), so a byte was worth 3 T to one
+/// decision and nothing to another. One constant feeds every speed decision.
+#[test]
+fn one_rate_prices_every_speed_decision() {
+    use llrm_mir::tti::Tti;
+    let tti = Z80Tti::new();
+    let rate = llrm_z80::tti::SPEED_MILLICLOCKS_PER_BYTE;
+    assert_eq!(rate, 3000);
+    assert_eq!(
+        (tti.speed_milliclocks_per_byte(), tti.speed_inline_milliclocks_per_byte(), tti.unroll_milliclocks_per_byte()),
+        (rate, rate, rate)
+    );
+}

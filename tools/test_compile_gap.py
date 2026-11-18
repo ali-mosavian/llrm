@@ -20,3 +20,10 @@ def test_the_clang_compared_with_is_the_one_named_and_not_whichever_the_path_has
     stays a second column."""
     assert '["clang"' not in SOURCE
     assert '"--clang"' in SOURCE and '"--distro-clang"' in SOURCE
+
+
+def test_llrm_cc_is_given_its_target_and_the_pinned_clang_and_is_told_to_stop_at_the_object():
+    """llrm-cc without LLRM_CC_TARGET compiled for the host and died on the datalayout; without `-c` it linked d_faces and died
+    on `qglRsPoly`: the tool printed nothing for the llrm column."""
+    assert 'setdefault("LLRM_CC_TARGET"' in SOURCE and 'setdefault("LLRM_PIN_CLANG"' in SOURCE
+    assert "sink if cc == args.llrm" not in SOURCE

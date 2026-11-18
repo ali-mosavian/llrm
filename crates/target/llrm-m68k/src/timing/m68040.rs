@@ -24,9 +24,28 @@ use std::sync::LazyLock;
 use super::table::key;
 use super::{Mode, Operand, Size, mode, size_of};
 
+/// A table with its labels normalized once: `key` of every row's labels per
+/// lookup was a quarter of a 68040 compile's instructions.
 struct Grid {
     header: Vec<String>,
     rows: Vec<Vec<String>>,
+    header_key: Vec<String>,
+    /// Per row: `key` of its first column, and of that column carried down
+    /// from above (the instruction of Section 10.5, up to its `[`) and of its
+    /// second column.
+    first_key: Vec<String>,
+    carried_key: Vec<String>,
+    second_key: Vec<String>,
+}
+
+impl Grid {
+    /// The first row whose first column is `wanted` (already a `key`).
+    fn row_named(
+        &self,
+        wanted: &str,
+    ) -> Option<&Vec<String>> {
+        self.first_key.iter().position(|first| first == wanted).map(|at| &self.rows[at])
+    }
 }
 
 fn parse(csv: &str) -> Grid {
@@ -44,7 +63,19 @@ fn parse(csv: &str) -> Grid {
         fields
     };
     let header = split(lines.next().expect("a header row"));
-    Grid { header, rows: lines.filter(|line| !line.is_empty()).map(split).collect() }
+    let rows: Vec<Vec<String>> = lines.filter(|line| !line.is_empty()).map(split).collect();
+    let header_key = header.iter().map(|name| key(name)).collect();
+    let first_key = rows.iter().map(|fields| key(&fields[0])).collect();
+    let mut carried = String::new();
+    let mut carried_key = Vec::new();
+    for fields in &rows {
+        if !fields[0].is_empty() {
+            carried = key(fields[0].split('[').next().unwrap_or(""));
+        }
+        carried_key.push(carried.clone());
+    }
+    let second_key = rows.iter().map(|fields| fields.get(1).map(|one| key(one)).unwrap_or_default()).collect();
+    Grid { header, rows, header_key, first_key, carried_key, second_key }
 }
 
 /// The instruction names a header column group lists: `ADD, AND, EOR` is three,
@@ -213,7 +244,7 @@ fn by_mode_with(
     let group = tables.groups.iter().find(|group| group.names.contains(&name))?;
     let grid = &tables.mode_grids[group.grid];
     let row = key(mode_label(operand));
-    let found = grid.rows.iter().find(|fields| key(&fields[0]) == row)?;
+    let found = grid.row_named(&row)?;
     busiest(&found[group.calculate], &found[group.execute], pick, registers)
 }
 
@@ -224,16 +255,10 @@ fn miscellaneous(
     condition: &str,
 ) -> Option<u32> {
     let (instruction, condition) = (key(instruction), key(condition));
-    let mut carried = String::new();
-    for fields in &TABLES.misc.rows {
-        if !fields[0].is_empty() {
-            carried = key(fields[0].split('[').next().unwrap_or(""));
-        }
-        if carried.starts_with(&instruction) && key(&fields[1]).starts_with(&condition) {
-            return busiest(&fields[2], &fields[3], 0, 0);
-        }
-    }
-    None
+    let misc = &TABLES.misc;
+    let at = (0..misc.rows.len())
+        .find(|&at| misc.carried_key[at].starts_with(&instruction) && misc.second_key[at].starts_with(&condition))?;
+    busiest(&misc.rows[at][2], &misc.rows[at][3], 0, 0)
 }
 
 /// Section 10.4: a move, by source row and destination column.
@@ -245,9 +270,9 @@ fn move_clocks(
     // a source address register reads as the data register row (no `An` row is
     // printed)
     let row = key(mode_label(if source == Mode::An { Mode::Dn } else { source }));
-    let found = grid.rows.iter().find(|fields| key(&fields[0]) == row)?;
+    let found = grid.row_named(&row)?;
     let column = key(&format!("DEST {} <ea> Calculate", mode_label(destination)));
-    let calculate = grid.header.iter().position(|name| key(name) == column)?;
+    let calculate = grid.header_key.iter().position(|name| *name == column)?;
     busiest(&found[calculate], &found[calculate + 1], 0, 0)
 }
 

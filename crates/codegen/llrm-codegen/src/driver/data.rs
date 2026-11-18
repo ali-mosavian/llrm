@@ -100,6 +100,12 @@ impl Placed {
         }
         let layout = module.datalayout.as_deref().and_then(|text| llrm_mir::datalayout::DataLayout::parse(text).ok());
         let mut bss: Vec<(String, Vec<GlobalId>)> = Vec::new();
+        let in_code: BTreeSet<String> = built
+            .code_data
+            .values()
+            .flat_map(|datums| crate::backend::codetables::labels(datums))
+            .map(str::to_owned)
+            .collect();
         for (number, (segment, members)) in segments.into_iter().enumerate() {
             // Segment 0 is the default; the others a frontend named, which
             // LLVM would call a section: a stated alignment is kept exactly.
@@ -118,6 +124,10 @@ impl Placed {
             let mut items = Vec::new();
             for global in members {
                 let GlobalKind::Variable(variable) = &module.global(global).kind else { continue };
+                // A table assembly put in the code of its reader stays there.
+                if in_code.contains(built.names[&(globals::space(module, global), i64::from(global.0))].as_str()) {
+                    continue;
+                }
                 if let Some(to) = crate::backend::globals::alignment(
                     module,
                     layout.as_ref(),
@@ -190,10 +200,11 @@ impl Placed {
                 built.data.push((name, part));
             }
         }
-        // The rule of the llc path, `getKindForGlobal`: a variable of zeros in the data space is
-        // uninitialised data (a frontend's `[0] * N` is `zeroinitializer` all the same).
+        // The rule of the llc path, `getKindForGlobal`: a variable of zeros in
+        // the data space is uninitialised data (a frontend's `[0] * N`
+        // is `zeroinitializer` all the same).
         // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/TargetLoweringObjectFile.cpp#L246-L285
-        zero_to_bss(built, module, data_space, false);
+        zero_to_bss(built, module, data_space, false, segment_bytes.is_some());
         match constants {
             Some(segment) if !pool.is_empty() => built.data.push((segment.to_owned(), pool)),
             _ => built.data[0].1.extend(pool),
@@ -230,12 +241,19 @@ pub fn zero_to_bss(
     module: &Module,
     data_space: u32,
     bss_begin: bool,
+    pack: bool,
 ) {
-    let bss = zeros_out(built, module, 0, |space| space == data_space);
+    let mut bss = zeros_out(built, module, 0, |space| space == data_space);
     if bss.is_empty() {
         return;
     }
-    // A frontend's own `_BSS` (a variable it declared there) takes them too: one segment.
+    // A COMDAT's extent indexes `bss` by position: it stays in the order it was
+    // made.
+    if pack && !built.comdats.values().any(|one| matches!(&one.extent, Some((segment, _)) if segment == "_BSS")) {
+        bss = packed(bss);
+    }
+    // A frontend's own `_BSS` (a variable it declared there) takes them too:
+    // one segment.
     if let Some(at) = built.data.iter().position(|(segment, _)| segment == "_BSS") {
         built.data[at].1.extend(bss);
         return;
@@ -244,6 +262,33 @@ pub fn zero_to_bss(
         built.data.push(("BSSB".to_owned(), Vec::new()));
     }
     built.data.push(("_BSS".to_owned(), bss));
+}
+
+/// `objects` (an optional `align`, a label, a fill each) by decreasing
+/// alignment, the ones whose size is not a multiple of it last in their class,
+/// so no `align` pads: GNU ld's `--sort-common` (descending). The sort is
+/// stable.
+fn packed(objects: Vec<masm::Datum>) -> Vec<masm::Datum> {
+    use masm::Datum;
+    let mut parts: Vec<Vec<Datum>> = Vec::new();
+    for datum in objects {
+        match (&datum, parts.last()) {
+            (Datum::Label(_), Some(last)) if matches!(last.as_slice(), [Datum::Align(_)]) => {}
+            (Datum::Align(_) | Datum::Label(_), _) => parts.push(Vec::new()),
+            _ => {}
+        }
+        parts.last_mut().expect("an object starts with an align or a label").push(datum);
+    }
+    let key = |part: &Vec<Datum>| {
+        let align =
+            part.iter().find_map(|one| if let Datum::Align(masm::Align { to }) = one { Some(*to) } else { None });
+        let size: i64 =
+            part.iter().map(|one| if let Datum::Fill(masm::Fill { size, .. }) = one { *size } else { 0 }).sum();
+        let align = align.unwrap_or(1);
+        (std::cmp::Reverse(align), size % align != 0)
+    };
+    parts.sort_by_key(key);
+    parts.into_iter().flatten().collect()
 }
 
 /// Under `far_bss` the far variables of zeros move out of the far data segment
@@ -263,6 +308,154 @@ pub fn zero_far_to_bss(
     built.private.insert(name.clone());
     built.far_bss.insert(name.clone());
     built.data.push((name, bss));
+}
+
+/// Bytes of code and table one segment's zeroing costs under `far_bss_init`:
+/// the routine (27, 28 for an odd size, with its frame) and its entry in the
+/// initializer table (6). A segment of fewer zeros than this is stored as it
+/// is.
+const ZEROING_BYTES: i64 = 34;
+
+/// Where the start-up leaves FAR_BSS as DOS found it but the runtime runs a
+/// table of initializers before `main` (Open Watcom's `XI`, `rt_init` in
+/// `bld/watcom/h/rtinit.h`): the far variables of zeros, which the image would
+/// store, go to FAR_BSS segments, and each is zeroed by a routine that its
+/// own entry in the object's `XI` calls. Only a segment of more zeros than
+/// the routine and the entry weigh is moved (`ZEROING_BYTES`), so an object
+/// with little far zero data keeps it stored and no object grows.
+pub fn zero_far_with_init(
+    built: &mut masm::Module,
+    module: &Module,
+) {
+    let Some(registers) = built.procedures.first().map(|one| one.registers.clone()) else { return };
+    let mut zeroed: Vec<(String, i64)> = Vec::new();
+    let far_segment = built.data.iter().position(|(name, _)| name.ends_with("_FARDATA"));
+    if let Some(at) = far_segment {
+        let (items, comdats) = (built.data[at].1.clone(), built.comdats.clone());
+        let bss = zeros_out(built, module, at, |space| space == crate::backend::assemble::FAR_SPACE);
+        let size = masm::data_size(&bss, 0);
+        if size > ZEROING_BYTES {
+            let name = format!("{}_BSS", built.data[at].0);
+            built.private.insert(name.clone());
+            built.far_bss.insert(name.clone());
+            built.data.push((name.clone(), bss));
+            zeroed.push((name, size));
+        } else {
+            built.data[at].1 = items;
+            built.comdats = comdats;
+        }
+    }
+    // A huge object's 64K pieces, each a segment of its own: wholly zero where
+    // the object is.
+    for (name, items) in built.data.iter_mut() {
+        if !built.private.contains(name) || !name.contains("_FARDATA_") || !name.contains('$') {
+            continue;
+        }
+        let all_zero = items
+            .iter()
+            .all(
+                |one| match one {
+                    masm::Datum::Align(_) | masm::Datum::Label(_) | masm::Datum::Object(_) => true,
+                    masm::Datum::Bytes(bytes) => bytes.iter().all(|byte| *byte == 0),
+                    masm::Datum::Fill(fill) => fill.byte.is_none_or(|byte| byte == 0),
+                    _ => false,
+                },
+            );
+        let size = masm::data_size(items, 0);
+        if !all_zero || size <= ZEROING_BYTES {
+            continue;
+        }
+        for one in items.iter_mut() {
+            if let masm::Datum::Bytes(bytes) = one {
+                *one = masm::Datum::Fill(masm::Fill { size: bytes.len() as i64, byte: None });
+            }
+        }
+        built.far_bss.insert(name.clone());
+        zeroed.push((name.clone(), size));
+    }
+    if zeroed.is_empty() {
+        return;
+    }
+    let mut table: Vec<masm::Datum> = Vec::new();
+    for (segment, size) in zeroed {
+        let routine = format!("$ZFB${segment}");
+        // The routine loads the segment's base through a label at its start:
+        // a segment is no symbol, and a huge object's later pieces hold none.
+        let start = format!("$FB${segment}");
+        if let Some((_, items)) = built.data.iter_mut().find(|(name, _)| *name == segment) {
+            items.insert(0, masm::Datum::Label(masm::Label { name: start.clone() }));
+        }
+        // push es; push di; push cx; mov ax, SEG; mov es, ax; mov di, OFFSET;
+        // xor ax, ax; mov cx, size / 2; cld; rep stosw; [stosb]; pop
+        // cx; pop di; pop es (the frame and the return are the
+        // procedure's). `__InitRtns` keeps its priority limit in cx and
+        // its cursor in si/di across the call: all are preserved.
+        // The label's frame is shared among the FAR_BSS segments, so its offset
+        // is not zero: starting at the frame's base left the last bytes
+        // unzeroed.
+        let words = (size / 2) as u16;
+        let mut code = vec![masm::InlinePart::Bytes(vec![0x06, 0x57, 0x51, 0xB8])];
+        code.push(masm::InlinePart::Fixup("segment".into(), start.clone(), 0));
+        code.push(masm::InlinePart::Bytes(vec![0x8E, 0xC0, 0xBF]));
+        code.push(masm::InlinePart::Fixup("offset".into(), start, 0));
+        let mut rest = vec![0x31, 0xC0, 0xB9];
+        rest.extend(words.to_le_bytes());
+        rest.extend([0xFC, 0xF3, 0xAB]);
+        if size % 2 == 1 {
+            rest.push(0xAA);
+        }
+        rest.extend([0x59, 0x5F, 0x07]);
+        code.push(masm::InlinePart::Bytes(rest));
+        built.procedures.push(inline_procedure(&routine, code, registers.clone(), built.registers.clone(), true));
+        // `rt_init`: far routine (1), priority 1 (runs before the others), the
+        // routine's offset and selector words.
+        table.push(masm::Datum::Bytes(vec![1, 1]));
+        table.push(masm::Datum::Pointer(masm::Pointer { name: routine, offset: 0, far: true, bytes: 4 }));
+    }
+    match built.data.iter_mut().find(|(name, _)| name == "XI") {
+        Some((_, items)) => items.extend(table),
+        None => built.data.push(("XI".to_owned(), table)),
+    }
+}
+
+/// A procedure that is its inline `code` alone: no instruction of its own.
+pub fn inline_procedure(
+    name: &str,
+    code: Vec<masm::InlinePart>,
+    registers: llrm_target::FrameRegisters,
+    regs: llrm_lir::registers::Regs,
+    far: bool,
+) -> masm::Procedure {
+    use crate::model::ir::{Operation, Semantics};
+    use crate::model::lir;
+    let what = Semantics { name: Some(name.into()), ..Semantics::new(Operation::Call) };
+    let instruction = lir::Insn::new(1, None, Some(what), vec![], vec![]);
+    let leave = lir::Insn::new(2, None, Some(Semantics::new(Operation::Return)), vec![], vec![]);
+    let mut body = lir::LirBody::new(
+        name,
+        1,
+        vec![lir::LirBlock::new(1, vec![std::sync::Arc::new(instruction), std::sync::Arc::new(leave)]).into()],
+        Default::default(),
+        Default::default(),
+    );
+    body.registers = Some(regs);
+    masm::Procedure {
+        name: name.into(),
+        public: false,
+        far,
+        body,
+        reserve: 0,
+        callees: crate::support::hash::IndexMap::from_iter([(
+            1,
+            masm::Callee { name: format!("${name}"), far: false, pops: 0, code, tail: false },
+        )]),
+        interrupt: None,
+        size: false,
+        entry: 0,
+        stack_check: None,
+        probe_stack: None,
+        registers,
+    }
 }
 
 /// The objects of zeros of `module`'s variables in address space `wanted`,
@@ -482,6 +675,7 @@ mod tests {
             far_bss: Default::default(),
             weak: Default::default(),
             code_segments: Default::default(),
+            code_data: Default::default(),
             comdats: Default::default(),
             padding: Default::default(),
             object: llrm_target::Target::object(&llrm_x86_m16::M16),
@@ -489,8 +683,30 @@ mod tests {
             stack: 0,
             debug: None,
         };
-        zero_to_bss(&mut built, &module, 0, false);
+        zero_to_bss(&mut built, &module, 0, false, false);
         assert_eq!(built.data.len(), 1, "no _BSS for a variable with no label");
+    }
+
+    /// m16 jpeg_single: a 1-byte variable before an `align 2` one padded a byte
+    /// of `.data?` (+1 B of static against bcc). The odd-sized one goes
+    /// after the even, and the unaligned last.
+    #[test]
+    fn test_bss_objects_are_packed_by_decreasing_alignment() {
+        let object = |name: &str, align: Option<i64>, size: i64| {
+            let mut one = Vec::new();
+            one.extend(align.map(|to| Datum::Align(masm::Align { to })));
+            one.extend([Datum::Label(Label { name: name.into() }), Datum::Fill(Fill { size, byte: None })]);
+            one
+        };
+        let objects: Vec<Datum> = [object("odd", Some(2), 1), object("plain", None, 5), object("even", Some(2), 2)]
+            .into_iter()
+            .flatten()
+            .collect();
+        let names: Vec<String> = packed(objects)
+            .into_iter()
+            .filter_map(|one| if let Datum::Label(Label { name }) = one { Some(name) } else { None })
+            .collect();
+        assert_eq!(names, ["even", "odd", "plain"]);
     }
 
     fn size(part: &[Datum]) -> usize {

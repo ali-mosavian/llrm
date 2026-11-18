@@ -64,6 +64,11 @@ SIGS = {
     load="".join("\tld\tl,%d(ix)\n\tld\th,%d(ix)\n\tpush\thl\n" % (k + 8, k + 9) for k in (6, 4, 2, 0)) + "\tld\tl,6(ix)\n\tld\th,7(ix)\n\tpush\thl\n\tld\tl,4(ix)\n\tld\th,5(ix)\n\tpush\thl\n\tld\te,0(ix)\n\tld\td,1(ix)\n\tld\tc,2(ix)\n\tld\tb,3(ix)\n\tld\thl,#0x8020\n",
     pre="\tpop\taf\n" * 6,
     store="\tld\thl,#0x8020\n\tld\tde,(0x8000)\n\tld\tbc,#8\n\tldir\n\tdec\tde\n\tex\tde,hl\n"),
+  # a long long pair: the cell of sixteen bytes through hl (0x8020), the quotient first, then the remainder
+  "QQ>QR": dict(isz=16, osz=16,
+    load="".join("\tld\tl,%d(ix)\n\tld\th,%d(ix)\n\tpush\thl\n" % (k + 8, k + 9) for k in (6, 4, 2, 0)) + "\tld\tl,6(ix)\n\tld\th,7(ix)\n\tpush\thl\n\tld\tl,4(ix)\n\tld\th,5(ix)\n\tpush\thl\n\tld\te,0(ix)\n\tld\td,1(ix)\n\tld\tc,2(ix)\n\tld\tb,3(ix)\n\tld\thl,#0x8020\n",
+    pre="\tpop\taf\n" * 6,
+    store="\tld\thl,#0x8020\n\tld\tde,(0x8000)\n\tld\tbc,#16\n\tldir\n\tdec\tde\n\tex\tde,hl\n"),
   "QA>Q": dict(isz=9, osz=8,
     load="\tld\tl,8(ix)\n\tld\th,#0\n\tpush\thl\n\tld\tl,6(ix)\n\tld\th,7(ix)\n\tpush\thl\n\tld\tl,4(ix)\n\tld\th,5(ix)\n\tpush\thl\n\tld\te,0(ix)\n\tld\td,1(ix)\n\tld\tc,2(ix)\n\tld\tb,3(ix)\n\tld\thl,#0x8020\n",
     pre="\tpop\taf\n" * 3,
@@ -129,7 +134,7 @@ table:
 def enc(sig, v):
     if sig in ("LL>L", "LL>QR"): return tuple((v[0] >> (8 * k)) & 255 for k in range(4)) + tuple((v[1] >> (8 * k)) & 255 for k in range(4))
     if sig == "L,A>L": return (v[0] & 255, v[0] >> 8 & 255, v[0] >> 16 & 255, v[0] >> 24, v[1])
-    if sig == "QQ>Q": return tuple((v[0] >> (8 * k)) & 255 for k in range(8)) + tuple((v[1] >> (8 * k)) & 255 for k in range(8))
+    if sig in ("QQ>Q", "QQ>QR"): return tuple((v[0] >> (8 * k)) & 255 for k in range(8)) + tuple((v[1] >> (8 * k)) & 255 for k in range(8))
     if sig == "QA>Q": return tuple((v[0] >> (8 * k)) & 255 for k in range(8)) + (v[1],)
     if sig == "A,L>A": return v
     if sig in ("HL,DE>DE", "HL,DE>DEHL", "HL,DE>L"): return (v[0] & 255, v[0] >> 8, v[1] & 255, v[1] >> 8)
@@ -262,6 +267,12 @@ def main():
         sq = [p for p in qp if not (p[0] == 1 << 63 and p[1] == (1 << 64) - 1)]
         allok &= check(pre + "divdi3", "QQ>Q", lambda a, b: tdiv64(s64(a), s64(b)) & ((1 << 64) - 1), sq)
         allok &= check(pre + "moddi3", "QQ>Q", lambda a, b: (s64(a) - tdiv64(s64(a), s64(b)) * s64(b)) & ((1 << 64) - 1), sq)
+    # the pair: quotient and remainder of one call (answer: quotient low, remainder high)
+    mask64 = (1 << 64) - 1
+    for pre in ("__", "__s_"):
+        allok &= check(pre + "udivmddi4", "QQ>QR", lambda a, b: a // b | (a % b) << 64, qp)
+        allok &= check(pre + "divmddi4", "QQ>QR",
+                       lambda a, b: (tdiv64(s64(a), s64(b)) & mask64) | ((s64(a) - tdiv64(s64(a), s64(b)) * s64(b)) & mask64) << 64, sq)
     for nm, f in (("__ashldi3", lambda a, b: a << b & ((1 << 64) - 1)), ("__lshrdi3", lambda a, b: a >> b), ("__ashrdi3", lambda a, b: s64(a) >> b & ((1 << 64) - 1))):
         allok &= check(nm, "QA>Q", f, [(a, b) for a in q64 for b in (0, 1, 7, 8, 9, 15, 16, 31, 32, 33, 47, 56, 63)])
     # A long long divide takes one step per quotient bit; at one per dividend bit these cost 97k and 103k T.

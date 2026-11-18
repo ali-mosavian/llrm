@@ -82,6 +82,7 @@ use llrm_support::debug::timed;
 use crate::abi::runtime::Contract;
 use crate::backend::calleefacts;
 use crate::backend::classes::RegisterClasses;
+use crate::backend::codetables;
 use crate::backend::constpool::Pool;
 use crate::backend::cpu::{Profile, ProfileOrName};
 use crate::backend::isel::{self, Selected, Unselected};
@@ -223,11 +224,18 @@ pub fn assembled_by(
     let mut shared: IndexMap<String, Vec<u8>> = IndexMap::default();
     let mut shared_registers = None;
     let mut data = Vec::new();
-    // A variable of zeros moves to `.data?` after this (`zero_to_bss`): where
-    // one is among `data`, the pool's start offset in `.data` is not known
-    // here.
-    let mut zero_may_move = false;
+    // A variable of zeros moves to `.data?` after this (`zero_to_bss`): the
+    // pool's start offset in `.data` is where the others end.
+    let mut staying_end = 0_i64;
     let mut far_data = Vec::new();
+    // Private constants of no alignment (string literals) go after every aligned datum: the pin
+    // gives them their own mergeable `.rodata.str1.1` section, so an odd-sized one never pads what
+    // follows it (m16 stft_single -O2: +1 B of `align 2` after two strings, jpeg_single +2).
+    let mut unaligned_tail: Vec<codetables::Table> = Vec::new();
+    // Off when tuned for size: each load site costs the `cs:` byte, which the moved table's
+    // data bytes do not repay (QCport -Os grew).
+    let reads_in_code = cpu.target().tuning().read_only_in_code && !cpu.size;
+    let mut aligned_tables: Vec<codetables::Table> = Vec::new();
     let mut sectioned: IndexMap<String, Vec<masm::Datum>> = IndexMap::default();
     let mut huge_objects: Vec<(String, Vec<masm::Datum>)> = Vec::new();
     let mut data_publics = Vec::new();
@@ -238,7 +246,10 @@ pub fn assembled_by(
     let mut comdats: std::collections::BTreeMap<String, masm::Comdat> = Default::default();
     let pool = Rc::new(RefCell::new(Pool::new(module.globals.len() as i64)));
     let classes = Rc::new(RegisterClasses::of(arch));
-    let (facts, order) = calleefacts::CalleeFacts::of(module);
+    let (facts, order) = calleefacts::CalleeFacts::of_binding(
+        module,
+        cpu.target().tti().is_some_and(|tti| tti.ipra_binds_local()),
+    );
     let target = Target {
         facts: &facts,
         cpu,
@@ -314,14 +325,34 @@ pub fn assembled_by(
                     huge_objects.push((name.to_owned(), datums));
                 } else if matches!(global.address_space, FAR_SPACE | HUGE_SPACE) {
                     far_data.extend(datums);
+                } else if variable.constant
+                    && global.linkage == Linkage::Private
+                    && comdat_of(module, name).is_none()
+                    && segment_bytes != i64::MAX
+                    && !datums.iter().any(|one| matches!(one, masm::Datum::Align(_) | masm::Datum::Pointer(_)))
+                {
+                    unaligned_tail.push(codetables::Table { key: (globals::space(module, id), at as i64), datums });
+                } else if reads_in_code
+                    && variable.constant
+                    && global.linkage == llrm_mir::Linkage::Private
+                    && comdat_of(module, name).is_none()
+                    && segment_bytes != i64::MAX
+                    && codetables::movable(&datums)
+                {
+                    // Aligned like the rest, a table that stays in data goes
+                    // after it (`tables`).
+                    aligned_tables.push(codetables::Table { key: (globals::space(module, id), at as i64), datums });
                 } else {
                     let start = data.len();
-                    zero_may_move |= !variable.constant
+                    let zero_may_move = !variable.constant
                         && datums.iter().all(|one| match one {
                             masm::Datum::Align(_) | masm::Datum::Label(_) => true,
                             masm::Datum::Bytes(bytes) => bytes.iter().all(|byte| *byte == 0),
                             _ => false,
                         });
+                    if !zero_may_move {
+                        staying_end += masm::data_size(&datums, staying_end);
+                    }
                     data.extend(datums);
                     if let Some(comdat) = comdat_of(module, name) {
                         let symbol = names[&(globals::space(module, id), at as i64)].clone();
@@ -500,7 +531,7 @@ pub fn assembled_by(
                     }
                     let procedure = masm::exits_inserted(masm::saved_first(procedure));
                     let procedure = if procedure.body.frame_exit.is_some() {
-                        let body = jumps::tails_merged_after_exits(procedure.body.clone(), cpu.size, Some(&calls))
+                        let body = jumps::tails_merged_after_exits(procedure.body.clone(), cpu.size, Some(&calls), cpu.tail_merge_pin_faithful)
                             .map_err(|error| error.to_string())?;
                         masm::Procedure { body, ..procedure }
                     } else {
@@ -520,11 +551,12 @@ pub fn assembled_by(
     let flat_elf = arch.object().default == llrm_target::object::Format::Elf && arch.object().code_model().flat();
     // A flat ELF object keeps the pool in mergeable sections, with no gap to fill.
     let entries = pool.borrow();
-    let pooled = if flat_elf || zero_may_move {
+    let pooled = if flat_elf {
         crate::backend::constpool::wide_first(entries.entries())
     } else {
-        crate::backend::constpool::gap_filled(entries.entries(), masm::data_size(&data, 0))
+        crate::backend::constpool::gap_filled(entries.entries(), staying_end)
     };
+    let mut pool_end = staying_end;
     for (bytes, id) in pooled {
         let name = format!("$K{id}");
         names.insert((Space::Segment, id), name.clone());
@@ -558,13 +590,38 @@ pub fn assembled_by(
             section.extend([masm::Datum::Label(masm::Label { name }), masm::Datum::Bytes(bytes.to_vec())]);
             continue;
         }
-        if to > 1 && (to >= 8 || masm::data_size(&data, 0) % to != 0) {
+        // The offset counts what stays in `.data`: the variables of zeros that
+        // `zero_to_bss` moves are not before the pool.
+        if to > 1 && (to >= 8 || pool_end % to != 0) {
             data.push(masm::Datum::Align(masm::Align { to }));
+            pool_end += (to - pool_end % to) % to;
         }
+        pool_end += bytes.len() as i64;
         data.extend([masm::Datum::Label(masm::Label { name }), masm::Datum::Bytes(bytes.to_vec())]);
     }
-    let (read_only, tables) = masm::split_read_only(masm::jump_tables(&procedures, &mut names, module));
-    data.extend(tables);
+    let (read_only, tables_of_jumps) = masm::split_read_only(masm::jump_tables(&procedures, &mut names, module));
+    let mut code_data = std::collections::BTreeMap::new();
+    if reads_in_code {
+        let mut tables = aligned_tables;
+        tables.extend(codetables::jump_tables(tables_of_jumps, &names));
+        tables.extend(unaligned_tail);
+        let others: Vec<&[masm::Datum]> = [&data[..], &far_data[..], &read_only[..]]
+            .into_iter()
+            .chain(sectioned.values().map(Vec::as_slice))
+            .chain(huge_objects.iter().map(|(_, datums)| datums.as_slice()))
+            .collect();
+        let aliased: BTreeSet<codetables::Key> = module
+            .aliases
+            .iter()
+            .map(|alias| (globals::space(module, alias.aliasee), i64::from(alias.aliasee.0)))
+            .collect();
+        let (placed, kept) = codetables::placed(&mut procedures, tables, &names, &others, &aliased);
+        code_data = placed;
+        data.extend(kept.into_iter().flat_map(|table| table.datums));
+    } else {
+        data.extend(tables_of_jumps);
+        data.extend(unaligned_tail.into_iter().flat_map(|table| table.datums));
+    }
     if !read_only.is_empty() {
         sectioned.entry("CONST".to_owned()).or_default().extend(read_only);
     }
@@ -678,6 +735,7 @@ pub fn assembled_by(
         far_bss: BTreeSet::new(),
         weak,
         code_segments,
+        code_data,
         comdats,
         stack: 0,
         object: arch.object(),
@@ -1334,7 +1392,9 @@ fn staged(
     if let Some((push, _)) = registers.slot_scratch.filter(|_| !pop_order.is_empty()) {
         // No dead register: the pin's `emitSPUpdate` adjusts with `add`.
         registers.slot_scratch = dead_pop(&pop_order, &body, &registers.saved, &convention.returns).map(|pop| (push, pop));
+        registers.slot_dead_checked = entry.is_some_and(|one| one.frame_slot_sibling);
     }
+    registers.slot_add_with_saved = target.cpu.target().tti().is_some_and(|tti| tti.frame_slot_add_with_saved());
     registers.align = target.facts.stack_alignment(target.arch, name);
     registers.object_align = target.facts.object_alignment(target.arch, name);
     // LLVM's `hasFP`, before allocation: a function that can do without its

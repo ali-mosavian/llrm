@@ -45,10 +45,10 @@
 //! [`SchedInfo::reg_pressure_limit`]); the defaults are the pin's
 //! (`getRegPressureLimit` 0), where every class is always at its limit.
 //!
-//! DEVIATE SD407: none in the scheduler; the row records that the M68k ILP
-//! queue is the pin's and that its call-hoisting with a decomposed multiply
-//! (select_of_constants -Os, 19672 B against 16916 without the multiply hook)
-//! is the pin's own choice. Owner: m68k. Exit 2026-11-23.
+//! DEVIATE SD407: a target that gives [`SchedInfo::spill_threshold`] has a
+//! block scheduled in source order as well when its ILP order holds values
+//! above the threshold, and keeps the order with fewer. Reason: the ILP queue
+//! ran every call of select_of_constants first, 412 results live. Exit: none.
 //!
 //! DEVIATE SD30: part translated. Physical-register live interference
 //! (`DelayForLiveRegsBottomUp`, `CheckForLiveRegDef`, `LiveRegDefs`,
@@ -110,6 +110,16 @@ pub trait SchedInfo {
     /// Whether the target runs the pin's source-order queue by default.
     fn source_order(&self) -> bool {
         false
+    }
+    /// DEVIATE SD407: the values live at once a block's ILP order may hold;
+    /// above it the block is also scheduled in source order and the order
+    /// with fewer values above the threshold is kept. The pin has no such
+    /// choice. Reason: with a multiply that is an ALU node, the ILP queue
+    /// ran all of select_of_constants' 412 calls first and kept their
+    /// results live (gcc keeps source order, 16990 B against 18532 B at
+    /// 68020 -Os). Exit: none. None: the target's queue always.
+    fn spill_threshold(&self) -> Option<u32> {
+        None
     }
     /// Which of the pin's DAG schedulers the target gets:
     /// `createDefaultScheduler` picks `ILP` for a target that does not
@@ -350,6 +360,79 @@ fn is_passive(opcode: ISD) -> bool {
 /// The units of `dag` reachable from `root` in schedule order, the pin's
 /// `ScheduleDAGSDNodes::Run` with the BURR queue.
 pub fn schedule(
+    dag: &mut SelectionDAG,
+    root: SDValue,
+    info: &dyn SchedInfo,
+) -> Vec<Unit> {
+    let order = schedule_once(dag, root, info);
+    let Some(limit) = info.spill_threshold() else { return order };
+    if SRC_ORDER.get() {
+        return order;
+    }
+    let before = excess_live(dag, &order, info, limit);
+    if before == 0 {
+        return order;
+    }
+    SRC_ORDER.set(true);
+    let in_source_order = schedule_once(dag, root, info);
+    SRC_ORDER.set(false);
+    if excess_live(dag, &in_source_order, info, limit) < before {
+        return in_source_order;
+    }
+    schedule_once(dag, root, info)
+}
+
+/// The values live above `limit`, summed over the points after each unit of
+/// `order`: a value is live
+/// from the unit that defines it (a machine node's explicit results and a
+/// `CopyFromReg`) to the last unit that reads it.
+fn excess_live(
+    dag: &SelectionDAG,
+    order: &[Unit],
+    info: &dyn SchedInfo,
+    limit: u32,
+) -> u32 {
+    let mut at: HashMap<u32, usize> = HashMap::default();
+    for (i, unit) in order.iter().enumerate() {
+        for &n in &unit.nodes {
+            at.insert(n, i);
+        }
+    }
+    let mut last_use: HashMap<(u32, u8), usize> = HashMap::default();
+    for (i, unit) in order.iter().enumerate() {
+        for &n in &unit.nodes {
+            for op in &dag.node(SDValue { node: n, res: 0 }).ops {
+                if at.contains_key(&op.node) {
+                    last_use.insert((op.node, op.res), i);
+                }
+            }
+        }
+    }
+    let mut delta = vec![0i32; order.len() + 1];
+    for (&(n, res), &used) in &last_use {
+        let node = dag.node(SDValue { node: n, res: 0 });
+        let defs = match node.opcode {
+            ISD::Machine(op) => node.values.len().min(info.num_defs(op)),
+            ISD::CopyFromReg => 1,
+            _ => 0,
+        };
+        let defined = at[&n];
+        if usize::from(res) < defs && used > defined {
+            delta[defined] += 1;
+            delta[used] -= 1;
+        }
+    }
+    let mut live = 0i32;
+    delta
+        .iter()
+        .map(|d| {
+            live += d;
+            (live - limit as i32).max(0) as u32
+        })
+        .sum()
+}
+
+fn schedule_once(
     dag: &mut SelectionDAG,
     root: SDValue,
     info: &dyn SchedInfo,

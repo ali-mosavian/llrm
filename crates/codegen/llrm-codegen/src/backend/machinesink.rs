@@ -28,10 +28,10 @@
 //!  b4: r = phi [b1: v] [b2: x]
 //! ```
 //!
-//! `hasStoreBetween` asks `Insn::may_alias` of each store (`StoreInstrCache`); an
-//! instruction with no `Insn::memory` may alias anything, so a body whose target
-//! states none (x86) counts every store, as `mayAlias` without operands does.
-//! (Was DEVIATE M7, row 44, retired 2026-11-09 by the memory operand.)
+//! `hasStoreBetween` asks `Insn::may_alias` of each store (`StoreInstrCache`);
+//! an instruction with no `Insn::memory` may alias anything, so a body whose
+//! target states none (x86) counts every store, as `mayAlias` without operands
+//! does. (Was DEVIATE M7, row 44, retired 2026-11-09 by the memory operand.)
 //!
 //! Row M2 (was DEVIATE M2 #2903, retired 2026-10-25): inside a cycle an
 //! instruction goes to a post-dominating block when no in-cycle operand it
@@ -254,7 +254,10 @@ pub(crate) fn may_store(one: &Insn) -> bool {
 /// aliasing whatever it moves.
 pub(crate) fn ordered_access(one: &Insn) -> bool {
     let Some(what) = &one.what else { return true };
-    one.volatile() || one.call.is_some() || matches!(what.op, Operation::Call | Operation::Barrier | Operation::Escape)
+    one.volatile() || one.call.is_some() || matches!(
+        what.op,
+        Operation::Call | Operation::Barrier | Operation::Escape
+    )
 }
 
 /// `TII->isAsCheapAsAMove`: a copy or a move of a constant, the constant as
@@ -264,18 +267,40 @@ pub(crate) fn as_cheap_as_a_move(
     one: &Insn,
     cheap_immediate: fn(u8, i64) -> bool,
 ) -> bool {
+    as_cheap_as_a_move_named(one, cheap_immediate, |_| false)
+}
+
+/// [`as_cheap_as_a_move`] with the rows a target flags `isAsCheapAsAMove`
+/// besides its moves (`Target::cheap_move_rows`: M68k's `SWAP`).
+pub(crate) fn as_cheap_as_a_move_named(
+    one: &Insn,
+    cheap_immediate: fn(u8, i64) -> bool,
+    cheap_row: fn(&str) -> bool,
+) -> bool {
     one.what
         .as_ref()
         .is_some_and(
-            |what| what.op == Operation::Move
-                && match (what.dests.as_slice(), what.sources.as_slice()) {
-                    ([Loc::Held(_)], [Loc::Held(_)]) => true,
-                    ([Loc::Held(dest)], [Loc::Imm(Imm { value, address: None, .. })]) => {
-                        cheap_immediate(dest.width as u8, *value)
-                    }
-                    _ => false,
-                },
+            |what| zero_idiom(what)
+                || what.name.as_deref().is_some_and(cheap_row)
+                || what.op == Operation::Move
+                    && match (what.dests.as_slice(), what.sources.as_slice()) {
+                        ([Loc::Held(_)], [Loc::Held(_)]) => true,
+                        ([Loc::Held(dest)], [Loc::Imm(Imm { value, address: None, .. })]) => {
+                            cheap_immediate(dest.width as u8, *value)
+                        }
+                        _ => false,
+                    },
         )
+}
+
+/// `V_SET0`, `FsFLD0SS`, `FsFLD0SD` (`isAsCheapAsAMove`, `isReMaterializable`):
+/// `xorps v, v` of the register being defined, which reads nothing, so it is a
+/// constant like `mov v, imm`.
+pub(crate) fn zero_idiom(what: &crate::model::ir::Semantics) -> bool {
+    matches!(
+        &what.dests[..],
+        [Loc::Held(into)] if !what.sources.is_empty() && what.sources.iter().all(|source| matches!(source, Loc::Held(from) if from.value == into.value))
+    )
 }
 
 thread_local! {
@@ -408,6 +433,8 @@ struct Sinker {
     spare_ranges: bool,
     /// `Target::cheap_move_immediate`.
     cheap_immediate: fn(u8, i64) -> bool,
+    /// `Target::cheap_move_row`.
+    cheap_row: fn(&str) -> bool,
     /// Instructions with an operand the encoding pins to a register (DEVIATE
     /// M7).
     pinned: HashSet<usize>,
@@ -550,6 +577,7 @@ impl Sinker {
             limit: usize::MAX,
             spare_ranges: false,
             cheap_immediate: llrm_target::x86_cheap_move_immediate,
+            cheap_row: |_| false,
             pinned: HashSet::default(),
             stack: None,
             phi_blocks,
@@ -640,29 +668,22 @@ impl Sinker {
         // spelled through is not a read of one.
         // A local object's cell is a frame index in the pin too: `%stack.N`
         // carries no register until frame lowering, so its load sinks.
-        let frame_cell = one
-            .what
-            .as_ref()
-            .is_some_and(
-                |what| {
-                    let mut cells = what
-                        .sources
-                        .iter()
-                        .chain(&what.dests)
-                        .filter_map(
-                            |place| match place {
-                                Loc::Mem(mem) => Some(mem),
-                                _ => None,
-                            },
-                        );
-                    cells.clone().next().is_some()
-                        && cells.all(|mem| {
-                            mem.base.is_none()
-                                && mem.index.is_none()
-                                && mem.addr.is_some_and(|addr| addr.space == crate::model::ir::Space::Frame)
-                        })
-                },
-            );
+        let frame_cell = one.what.as_ref().is_some_and(|what| {
+            let mut cells = what
+                .sources
+                .iter()
+                .chain(&what.dests)
+                .filter_map(
+                    |place| match place {
+                        Loc::Mem(mem) => Some(mem),
+                        _ => None,
+                    },
+                );
+            cells.clone().next().is_some()
+                && cells.all(|mem| {
+                    mem.base.is_none() && mem.addr.is_some_and(|addr| addr.space == crate::model::ir::Space::Frame)
+                })
+        });
         let fixed_stack = frame_cell || one.defines.first().is_some_and(|value| self.arguments.contains(value));
         let reads = effect.all_reads();
         // DEVIATE (segment-reads): an access through the default data segment
@@ -992,7 +1013,7 @@ impl Sinker {
         if !self.considered.insert((from, to)) {
             return true;
         }
-        if !as_cheap_as_a_move(one, self.cheap_immediate) {
+        if !as_cheap_as_a_move_named(one, self.cheap_immediate, self.cheap_row) {
             return true;
         }
         for &value in &one.defines {
@@ -1270,6 +1291,7 @@ pub fn sunk_within_ranges(
         sinker.spare_ranges = spare_ranges;
         if let Some(classes) = classes {
             sinker.cheap_immediate = classes.cheap_move_immediate;
+            sinker.cheap_row = classes.cheap_move_row;
             sinker.pinned = body
                 .blocks
                 .iter()
@@ -2474,5 +2496,63 @@ mod tests {
         let sunk = sunk(&body, false);
         let loads = |at: usize| sunk.blocks[at].insns.iter().any(|one| one.defines.contains(&3));
         assert!(loads(1) && !loads(0), "the load moved into the arm that reads it");
+    }
+
+    /// QCport host/bench.c, every level +6 B: a load of a local array element
+    /// through a virtual index (`[bp+di-94]`) stayed above the branch whose
+    /// one arm pushed it, and was spilled (`mov ax,[bp+di-94]; mov
+    /// [bp-118],ax`). The pin's local is a frame index and its index
+    /// register is virtual: nothing physical is read, so it sinks.
+    #[test]
+    fn test_a_load_of_an_indexed_local_cell_sinks_into_the_arm_that_reads_it() {
+        use crate::model::ir::{Addr, Mem, Space};
+        let cell = Mem {
+            through: llrm_lir::registers::RegId::BP,
+            index: Some(Held { value: 4, width: 2, offset: 0 }),
+            ..Mem::new(Some(Addr::new(Space::Frame, -94)), 2)
+        };
+        let block =
+            |at: i64, succ: Vec<i64>, insns: Vec<Arc<Insn>>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
+        let jump = |at: i64| insn(at, Operation::Branch, "jcxz", vec![], vec![], vec![], vec![]);
+        let mut body = LirBody::new(
+            "indexed_local",
+            0,
+            vec![
+                block(
+                    0,
+                    vec![1, 2],
+                    vec![
+                        insn(
+                            9,
+                            Operation::Move,
+                            "mov",
+                            vec![held(4)],
+                            vec![Loc::Imm(crate::model::ir::Imm { value: 2, width: 2, address: None })],
+                            vec![4],
+                            vec![],
+                        ),
+                        insn(10, Operation::Move, "mov", vec![held(3)], vec![Loc::Mem(cell)], vec![3], vec![4]),
+                        jump(11),
+                    ],
+                )
+                .into(),
+                block(
+                    1,
+                    vec![],
+                    vec![
+                        insn(12, Operation::Move, "mov", vec![held(5)], vec![held(3)], vec![5], vec![3]),
+                        insn(13, Operation::Return, "ret", vec![], vec![], vec![], vec![]),
+                    ],
+                )
+                .into(),
+                block(2, vec![], vec![insn(14, Operation::Return, "ret", vec![], vec![], vec![], vec![])]).into(),
+            ],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+        let sunk = sunk(&body, false);
+        let loads = |at: usize| sunk.blocks[at].insns.iter().any(|one| one.defines.contains(&3));
+        assert!(loads(1) && !loads(0), "the indexed load moved into the arm that reads it");
     }
 }

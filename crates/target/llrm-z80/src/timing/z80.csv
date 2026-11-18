@@ -31,6 +31,8 @@ ld (ix+d);b,3,19,,z80
 ld (ix+d);n,4,19,,z80
 push bc,1,11,,z80
 pop bc,1,10,,z80
+push hl,1,11,,z80
+pop hl,1,10,,z80
 push ix,2,15,,z80
 pop ix,2,14,,z80
 ex de;hl,1,4,,z80
@@ -69,6 +71,7 @@ inc (ix+d),3,23,,z80
 dec (ix+d),3,23,,z80
 inc bc,1,6,,z80
 dec bc,1,6,,z80
+dec hl,1,6,,z80
 inc ix,2,10,,z80
 add hl;bc,1,11,,z80
 add hl;sp,1,11,,z80
@@ -85,6 +88,10 @@ rl b,2,8,,z80
 rr b,2,8,,z80
 rlc b,2,8,,z80
 sla (hl),2,15,,z80
+sra (hl),2,15,,z80
+srl (hl),2,15,,z80
+rl (hl),2,15,,z80
+rr (hl),2,15,,z80
 rlca,1,4,,z80
 rrca,1,4,,z80
 rla,1,4,,z80

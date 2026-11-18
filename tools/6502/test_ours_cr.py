@@ -14,6 +14,27 @@ def run(env_rt, script="ours_cr.py"):
     return subprocess.run([sys.executable, os.path.join(HERE, script), "/nonexistent/llrm-cc", "O2", "/dev/null", "__empty__"],
                           capture_output=True, text=True, env=env, timeout=120)
 
+class StoppedRunLeavesNoWorkDir(unittest.TestCase):
+    """A run stopped by SIGTERM (a guard, a timeout, a kill of the session) skipped atexit and left its o6progs-* directory:
+    five were left on 11-11 after the atexit fix, 19,011 inodes in all in /tmp (/tmp ran out of inodes, 2026-11-13)."""
+    def test_sigterm_removes_the_work_directory(self):
+        import signal, time
+        with tempfile.TemporaryDirectory() as tmp:
+            rt = os.path.join(tmp, "mos_rt.s"); open(rt, "w").write("")
+            cc = os.path.join(tmp, "cc"); open(cc, "w").write("#!/bin/sh\nsleep 3\n"); os.chmod(cc, 0o755)
+            env = dict(os.environ, OURS_RT=rt, TMPDIR=tmp)
+            proc = subprocess.Popen([sys.executable, os.path.join(HERE, "ours_cr.py"), cc, "O2", os.devnull, "__empty__"],
+                                    env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            try:
+                deadline = time.time() + 30
+                while time.time() < deadline and not [d for d in os.listdir(tmp) if d.startswith("o6progs-")]:
+                    time.sleep(0.05)
+                self.assertTrue([d for d in os.listdir(tmp) if d.startswith("o6progs-")], "the run never made its work directory")
+                proc.send_signal(signal.SIGTERM); proc.wait(timeout=60)
+                self.assertEqual([d for d in os.listdir(tmp) if d.startswith("o6progs-")], [])
+            finally:
+                if proc.poll() is None: proc.kill()
+
 def header_flags_fn():
     sys.path.insert(0, HERE)
     import flagset
@@ -169,6 +190,18 @@ class Members(unittest.TestCase):
         self.assertEqual([x[:2] for x in rows], [["int64_division", "ours"]], r.stdout[-200:])
         self.assertLess(int(rows[0][2]), 5000, "the generic C divide links 5519 B")
 
+    def test_a_function_main_does_not_reach_is_not_in_the_program(self):
+        """float_return -O2 was 5945 B against llvm-mos's 90: `scale` and `narrow` are external, nothing calls them, and they pulled the soft-float
+        (no section GC in the ca65/ld65 link). The ours column is compiled with -fwhole-program (2026-11-11)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            out = os.path.join(tmp, "o.tsv")
+            r = subprocess.run([sys.executable, os.path.join(HERE, "ours_cr.py"), CC, "O2", out, "float_return"],
+                               capture_output=True, text=True, env={**os.environ, "OURS_RT": RT, "OURS_PADS": "0"}, timeout=600)
+            self.assertEqual(r.returncode, 0, r.stderr[-300:])
+            rows = [x.split("\t") for x in open(out).read().splitlines()]
+        self.assertEqual([x[:2] for x in rows], [["float_return", "ours"]], r.stdout[-200:])
+        self.assertLess(int(rows[0][2]), 1000, "the file's object keeps scale and narrow: 5945 B")
+
     def test_the_f32_mul_and_div_come_from_the_6502_config_member(self):
         """x87rotate and fcmp_all failed to link (`__mulsf3`, `__divsf3` unresolved): config.h defines SF_EXT_MULDIV, so lib/fp/f32/mul.c and div.c
         compile to nothing at 6502 and config/6502/sf32_6502.c defines both, but the index named the empty generic files (2026-11-11)."""
@@ -236,7 +269,7 @@ class Archive(unittest.TestCase):
         text = mkrt.MOS_RT.read_text()
         ours_cr.RT = re.sub(r";.*", "", text)
         labels = {n: [x.strip() for x in re.search(r"^\.export (.*)$", t, re.M).group(1).split(",")] for n, t in mkrt.split_rt(text).items()}
-        cells = {"__sa", "__ra", "__sb", "__st", "__sr", "__sg"}
+        cells = {"__sa", "__ra", "__st", "__sr", "__sg"}
         Path(self.tmp, "start.s").write_text(mkrt.startup())
         for routine in re.findall(r"^\.export (__\w+)", text, re.M):
             wanted = set(re.findall(r"^([A-Za-z_]\w*):", ours_cr.reachable_runtime(f"  jsr {routine}\n"), re.M)) - cells

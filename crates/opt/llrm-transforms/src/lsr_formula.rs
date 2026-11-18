@@ -24,7 +24,7 @@
 use llrm_analysis::scev::expr::{Scev, Ty, Use};
 use llrm_analysis::scev::{Cx, Flags, ScalarEvolution};
 use llrm_mir::context::GlobalId;
-use llrm_mir::module::BlockId;
+use llrm_mir::module::{BlockId, ValueId};
 use llrm_mir::types::TypeId;
 use llrm_support::hash::HashMap;
 
@@ -268,12 +268,29 @@ impl RegUseTracker {
 }
 
 /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopStrengthReduce.cpp#L475
-/// One way to compute a use: `base_gv + base_offset + base_regs + scale *
+/// The symbolic part of an address: a global, or (DEVIATE LU30, where the
+/// target says a frame slot is a free base, `Tti::frame_slot_is_free_base`) a
+/// static alloca, which the frame register addresses with a displacement.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Symbol {
+    Global(GlobalId),
+    Frame(ValueId),
+}
+
+/// The arguments `Tti::is_legal_addressing_mode` takes for a formula.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Mode {
+    pub global: bool,
+    pub has_base_reg: bool,
+    pub scale: i64,
+}
+
+/// One way to compute a use: `symbol + base_offset + base_regs + scale *
 /// scaled_reg + unfolded_offset`.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Formula {
     /// Global base address used for complex addressing.
-    pub base_gv: Option<GlobalId>,
+    pub symbol: Option<Symbol>,
     pub base_offset: Immediate,
     /// Whether any complex addressing has a base register.
     pub has_base_reg: bool,
@@ -286,6 +303,20 @@ pub struct Formula {
     /// A constant added near the use: it needs a temporary register, but the
     /// offset lives in an add immediate field.
     pub unfolded_offset: Immediate,
+}
+
+/// The address space of the static alloca `value`.
+fn frame_address_space(
+    cx: &Cx,
+    value: ValueId,
+) -> u32 {
+    match cx.function.value(value).def {
+        llrm_mir::module::ValueDef::Instruction(inst) => match cx.function.instruction(inst).opcode {
+            llrm_mir::opcode::Opcode::Alloca { address_space, .. } => address_space,
+            _ => 0,
+        },
+        _ => 0,
+    }
 }
 
 /// `containsAddRecDependentOnLoop`.
@@ -358,6 +389,28 @@ fn do_initial_match(
 }
 
 impl Formula {
+    /// Whether the symbol is a global: a frame slot is the frame register and
+    /// a displacement, not a global displacement.
+    pub fn has_global(&self) -> bool {
+        matches!(self.symbol, Some(Symbol::Global(_)))
+    }
+
+    /// The addressing mode `Tti` is asked about, or none when the target has
+    /// no mode for it. A frame slot takes the base register, so a register of
+    /// the formula is the index (scale 1); the frame beside both a base and a
+    /// scaled register is three registers.
+    pub fn mode(&self) -> Option<Mode> {
+        let global = self.has_global();
+        if !matches!(self.symbol, Some(Symbol::Frame(_))) {
+            return Some(Mode { global, has_base_reg: self.has_base_reg, scale: self.scale });
+        }
+        match (self.has_base_reg, self.scale) {
+            (true, 0) => Some(Mode { global, has_base_reg: true, scale: 1 }),
+            (true, _) => None,
+            (false, scale) => Some(Mode { global, has_base_reg: true, scale }),
+        }
+    }
+
     /// `Formula::initialMatch`: incorporate loop-variant parts of `s` into
     /// this formula, keeping all loop-invariant and loop-computable values in
     /// a single base register.
@@ -501,7 +554,10 @@ impl Formula {
         } else if let Some(scaled) = self.scaled_reg {
             Some(se.type_of(scaled))
         } else {
-            self.base_gv.map(|global| Ty::Ptr(cx.globals[global.0 as usize].address_space))
+            self.symbol.map(|symbol| match symbol {
+                Symbol::Global(global) => Ty::Ptr(cx.globals[global.0 as usize].address_space),
+                Symbol::Frame(value) => Ty::Ptr(frame_address_space(cx, value)),
+            })
         }
     }
 

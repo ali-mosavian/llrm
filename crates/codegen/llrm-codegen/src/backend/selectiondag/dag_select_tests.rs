@@ -134,6 +134,7 @@ fn through(text: &str) -> Result<Vec<Vec<String>>, String> {
         frame: &frame,
         address_mode: llrm_dagisel::addr::AddrMode::Flat32,
         opt_size: false,
+        stack_shares_data: false,
         call_alignment: 1,
         reserved_calls: false,
         map: &map,
@@ -151,7 +152,7 @@ fn through(text: &str) -> Result<Vec<Vec<String>>, String> {
             &tli,
             &mut X86Lowering {
                 multiply_early_out: None,
-                imul_if_smaller: false,
+                imul_if_smaller: false, hot_chains: false,
                 share_products: false,
                 cmov: false,
                 sse2: false,
@@ -161,6 +162,7 @@ fn through(text: &str) -> Result<Vec<Vec<String>>, String> {
                 sext_load: false,
                 zext_free: false,
                 branch_constant_selects: false,
+                status_word_tests: false,
                 profile: None,
             },
             &selector,
@@ -245,7 +247,7 @@ fn the_combiner_runs_between_the_legalizers() {
         &tli,
         &mut X86Lowering {
             multiply_early_out: None,
-            imul_if_smaller: false,
+            imul_if_smaller: false, hot_chains: false,
             share_products: false,
             cmov: false,
             sse2: false,
@@ -255,6 +257,7 @@ fn the_combiner_runs_between_the_legalizers() {
             sext_load: false,
             zext_free: false,
             branch_constant_selects: false,
+            status_word_tests: false,
             profile: None,
         },
         &machine,
@@ -373,7 +376,7 @@ fn a_dag_target_is_preprocessed_once_before_it_selects() {
         let (mut lowering, mut hooks) = (
             X86Lowering {
                 multiply_early_out: None,
-                imul_if_smaller: false,
+                imul_if_smaller: false, hot_chains: false,
                 share_products: false,
                 cmov: false,
                 sse2: false,
@@ -383,6 +386,7 @@ fn a_dag_target_is_preprocessed_once_before_it_selects() {
                 sext_load: false,
                 zext_free: false,
                 branch_constant_selects: false,
+                status_word_tests: false,
                 profile: None,
             },
             hooks(),

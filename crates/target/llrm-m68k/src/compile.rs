@@ -28,6 +28,9 @@ pub enum Item {
     /// A jump table: the absolute address of each label, as 32-bit words
     /// (`EK_BlockAddress`).
     Table(Vec<String>),
+    /// A jump table of 16-bit offsets from its own start (`.word label -
+    /// table`), placed where the `jmp` through it ends (M68K-WORD-TABLE).
+    WordTable(Vec<String>),
     /// The source place of the instructions that follow (`.loc`): printed only
     /// for `-g`.
     Loc(crate::expand::Row),
@@ -107,7 +110,8 @@ pub struct Options {
     /// reserved call area ([`crate::callpush`]).
     pub push_arguments: bool,
     /// `addq` and `subq` for an immediate of 1 to 8, which the pin has no
-    /// instruction for.
+    /// instruction for; an `any_extend` of a byte or word as a copy
+    /// (DEVIATE M68K-ANYEXT, [`crate::dagisel::anyext`]).
     pub short: bool,
     /// A `tst` is dropped past instructions that set the codes between it and
     /// the definition of its register, which move above the definition
@@ -116,15 +120,29 @@ pub struct Options {
     /// `cmpi.l #(2^s-1)` after the `lsr.l #s` of the same value is dropped
     /// ([`crate::cmpshift`]).
     pub reuse_shift_flags: bool,
+    /// A table switch jumps through 16-bit offsets, gcc's `casesi` (DEVIATE
+    /// M68K-WORD-TABLE, [`crate::wordtable`]).
+    pub word_jump_tables: bool,
     /// A `tst` of the register an `add` of it to itself just doubled reads the
     /// carry the `add` left instead ([`crate::cmpcarry`]).
     pub reuse_shift_out_flags: bool,
     /// A load and the step of its pointer in another block are one `(An)+`
     /// ([`crate::loopinc`]).
     pub post_inc_across_blocks: bool,
+    /// A spill slot lives in a free address register where one is free over
+    /// its range (DEVIATE SLOT-REG, [`crate::slotreg`]). On in the shipped
+    /// options; `LLRM_NO_SLOT_REG` turns it off.
+    pub slot_registers: bool,
+    /// An instruction reads a spilled value from its slot
+    /// ([`crate::spillfold`]). A slot read that way cannot live
+    /// in an address register, so a function with spills is also built without
+    /// it and the cheaper kept.
+    pub spill_fold: bool,
     /// The shared flow's `MachineCSE` runs on the function in SSA form, before
-    /// phi elimination ([`crate::regalloc::shared_cse`]). Off until its corpus
-    /// A/B has no cell worse than main (11-09: O2 68000 +542 B, 27 worse).
+    /// phi elimination ([`crate::regalloc::shared_cse`]). A function it
+    /// changed is also built without it and the cheaper kept
+    /// ([`crate::trial`]): shared values live longer, and across calls they
+    /// spill (11-12 corpus: 222 cells larger, 136 smaller, without the trial).
     pub shared_cse: bool,
     /// A value read in a block after an earlier one defines it is read from its
     /// register, as in the pin's MIR: what the hosted stages (MachineLICM) need
@@ -183,6 +201,17 @@ pub struct Options {
     /// tuning); a function that saved a register is also built without, and
     /// the cheaper kept. False is the pin's M68k.
     pub global_copies: bool,
+    /// A pass-through copy temp takes either register kind
+    /// ([`crate::regalloc::relax_copy_only_classes`], DEVIATE C17); a function
+    /// that saved a callee-saved register is also built with it, and the
+    /// cheaper kept.
+    pub relax_classes: bool,
+    /// Make a `moveq` constant again where it is read ([`crate::moveqremat`]).
+    pub remat_constants: bool,
+    /// A `moveq` constant read only by data operands is held in a data
+    /// register ([`crate::moveqremat::hold_in_data_registers`]): a function
+    /// built for size is also built without, and the smaller kept.
+    pub data_constants: bool,
     /// Multiplies by `(2^n +- 1) << k` (DEVIATE M68K-MUL-LATE,
     /// [`crate::dagisel::mulprice`]).
     pub mul: crate::dagisel::mulprice::Mode,
@@ -211,8 +240,11 @@ impl Options {
         short: false,
         hoist_flag_setters: false,
         reuse_shift_flags: false,
+        word_jump_tables: false,
         reuse_shift_out_flags: false,
         post_inc_across_blocks: false,
+        slot_registers: false,
+        spill_fold: false,
         shared_cse: false,
         direct_copies: false,
         shared_licm: false,
@@ -228,6 +260,9 @@ impl Options {
         compare_destinations: false,
         carry_chain: true,
         global_copies: true,
+        relax_classes: false,
+        remat_constants: false,
+        data_constants: false,
         mul: crate::dagisel::mulprice::Mode::Pin,
         loop_carried_first: false,
         debug: false,
@@ -250,9 +285,12 @@ impl Default for Options {
             short: true,
             hoist_flag_setters: true,
             reuse_shift_flags: true,
+            word_jump_tables: true,
             reuse_shift_out_flags: true,
             post_inc_across_blocks: true,
-            shared_cse: false,
+            slot_registers: !llrm_support::env_flag!("LLRM_NO_SLOT_REG"),
+            spill_fold: !llrm_support::env_flag!("LLRM_NO_SPILL_FOLD"),
+            shared_cse: true,
             direct_copies: false,
             shared_licm: false,
             shared_prelude: false,
@@ -267,6 +305,9 @@ impl Default for Options {
             compare_destinations: true,
             carry_chain: true,
             global_copies: true,
+            relax_classes: true,
+            remat_constants: true,
+            data_constants: true,
             mul: crate::dagisel::mulprice::Mode::Trial,
             loop_carried_first: true,
             debug: false,
@@ -291,6 +332,13 @@ pub fn items(
 /// cheaper kept (`crate::trial`): each is priced before the code is known. A
 /// function that saved a register is last built with the pin's join order,
 /// which replaces the tuned one only when cheaper.
+///
+/// A function that saved a callee-saved register is also built once more with
+/// the class relaxation ([`Options::relax_classes`]) on the choices the trials
+/// made, and the relaxed build kept only where cheaper: the relaxation exists
+/// to free a scratch register for a value, so a build that saves none has
+/// nothing to gain. One extra build, not the sequence again: the sequence
+/// cost a corpus 1.64 times the instructions, one file twice.
 pub fn items_with(
     module: &Module,
     name: &str,
@@ -299,80 +347,192 @@ pub fn items_with(
 ) -> Result<Vec<Item>, String> {
     let optimized;
     let module = if options.mid_end {
-        optimized = mid_end_described_by(module, &M68k::for_cpu(cpu), Some(Rc::new(M68kMachine { cpu })))?;
+        let narrow = if !options.strict && !size_build(module, name, options) {
+            NarrowMultiplies::Speed
+        } else {
+            NarrowMultiplies::Off
+        };
+        optimized = mid_end_narrowing(module, &M68k::for_cpu(cpu), Some(Rc::new(M68kMachine { cpu })), narrow)?;
         &optimized
     } else {
         module
     };
-    let mut options = Options { mid_end: false, global_copies: options.global_copies, ..options };
-    let (mut kept, touched) = items_once(module, name, cpu, options)?;
+    let options = Options { mid_end: false, global_copies: options.global_copies, ..options };
+    let wants_size = size_build(module, name, options);
+    let price = crate::timing::Price::of(wants_size);
+    // The relaxation is the last choice of a build, so it is made before the
+    // two builds of the shared `MachineCSE` are compared.
+    let prefixes = Prefixes::default();
+    let wants_slots = options.slot_registers;
+    // DEVIATE M68K-ONE-BUILD, continued: a speed build is not built again for
+    // the relaxation, the shared `MachineCSE` or the slot registers (-O2 68020
+    // over 165 programs: no cell passes a gcc/clang clock bar either way).
+    let one_build = !wants_size && !options.strict;
+    let finished = |options: Options| -> Result<(Vec<Item>, bool, Options), String> {
+        let (plain, saved, chosen, shared) =
+            items_trials(module, name, cpu, Options { relax_classes: false, ..options }, &prefixes)?;
+        if !options.relax_classes || !saved || one_build {
+            return Ok((plain, shared, chosen));
+        }
+        let relaxed_options = Options { relax_classes: true, ..chosen };
+        let (relaxed, touched) = items_once(module, name, cpu, relaxed_options, &prefixes)?;
+        let relax = touched.relax_classes && crate::trial::keeps(&relaxed, &plain, cpu, price);
+        Ok(if relax { (relaxed, shared, relaxed_options) } else { (plain, shared, chosen) })
+    };
+    // The trials run without the slot registers, so their choices are the
+    // pass's being off; it is tried once on the build they end on.
+    // the held constants are tried last, on the build every other choice ended
+    // on
+    let held = options.data_constants && wants_size;
+    let options = Options { slot_registers: false, data_constants: false, ..options };
+    let (mut kept, shared, mut kept_options) = finished(options)?;
+    // The shared `MachineCSE` lengthens live ranges, and across calls they
+    // spill. A function it changed is built through the whole sequence both
+    // ways (the other trials' choices depend on the shape), the cheaper kept.
+    if shared && !one_build {
+        let (without, _, without_options) = finished(Options { shared_cse: false, ..options })?;
+        if !crate::trial::keeps(&kept, &without, cpu, price) {
+            trial_won(name, "shared_cse", crate::trial::keeps(&without, &kept, cpu, price));
+            (kept, kept_options) = (without, without_options);
+        }
+    }
+    // A function with no spill slot has nothing to move.
+    if wants_slots && !one_build && prefixes.had_slots.get() {
+        let (items, touched) =
+            items_once(module, name, cpu, Options { slot_registers: true, ..kept_options }, &prefixes)?;
+        let mut best = kept;
+        if touched.slot_registers && crate::trial::keeps(&items, &best, cpu, price) {
+            best = items;
+            kept_options = Options { slot_registers: true, ..kept_options };
+        }
+        // a slot read in place stays in the frame: the same build without the
+        // fold may move it
+        if touched.spill_folded {
+            let options = Options { slot_registers: true, spill_fold: false, ..kept_options };
+            let (items, touched) = items_once(module, name, cpu, options, &prefixes)?;
+            if touched.slot_registers && crate::trial::keeps(&items, &best, cpu, price) {
+                trial_won(name, "spill_fold", true);
+                best = items;
+                kept_options = options;
+            }
+        }
+        kept = best;
+    }
+    if held {
+        let (items, touched) =
+            items_once(module, name, cpu, Options { data_constants: true, ..kept_options }, &prefixes)?;
+        if touched.data_constants && crate::trial::keeps(&items, &kept, cpu, price) {
+            trial_won(name, "data_constants", crate::trial::keeps(&items, &kept, cpu, price));
+            kept = items;
+        }
+    }
+    Ok(kept)
+}
+
+/// The trials of [`items_with`] on a module the mid-end has run on: the items,
+/// whether the first build saved a callee-saved register, and the options the
+/// trials ended on.
+/// `LLRM_DEBUG=builds`: a trial's other build beat the one kept.
+fn trial_won(
+    name: &str,
+    trial: &str,
+    strictly: bool,
+) {
+    if llrm_support::debug::enabled("builds") {
+        eprintln!("[{}] {name} {trial}", if strictly { "won" } else { "tie" });
+    }
+}
+
+fn items_trials(
+    module: &Module,
+    name: &str,
+    cpu: Cpu,
+    options: Options,
+    prefixes: &Prefixes,
+) -> Result<(Vec<Item>, bool, Options, bool), String> {
+    let mut options = options;
+    let (mut kept, touched) = items_once(module, name, cpu, options, prefixes)?;
+    let saved = touched.global_copies;
     if llrm_support::debug::enabled("builds") {
         eprintln!(
-            "[builds] {name} trials: tail_dup {} return_dup {} class_split {} compare_destinations {} carry_chain {} global_copies {} mul_trial {}",
+            "[builds] {name} trials: tail_dup {} return_dup {} class_split {} compare_destinations {} carry_chain {} global_copies {} mul_trial {} remat_constants {} data_constants {} shared_cse {}",
             touched.tail_dup,
             touched.return_dup,
             touched.class_split,
             touched.compare_destinations,
             touched.carry_chain,
             touched.global_copies,
-            touched.mul_trial
+            touched.mul_trial,
+            touched.remat_constants,
+            touched.data_constants,
+            touched.shared_cse
         );
     }
-    if !touched.any() {
-        return Ok(kept);
+    let wants_size = size_build(module, name, options);
+    // DEVIATE M68K-ONE-BUILD (owner m68k, exit 2026-12-20): the pin builds a
+    // function once. At -O2/-O3 each optional rewrite is kept as the first
+    // build has it (the cold-chain price, `M68K-MUL-COLD`, answers what the
+    // multiply trial did); the size and -O1 builds still try each rewrite
+    // both ways. The shared-CSE trial stays: dropping it grew
+    // div_constants_short +232 B. -O2 68020 over 165 programs: -154 B, 10
+    // smaller, 6 larger; matmul 4472 M to 2258 M instructions.
+    if !touched.any() || (!wants_size && !options.strict) {
+        return Ok((kept, saved, options, touched.shared_cse));
     }
-    let wants_size = options.size
-        || module
-            .named(name)
-            .and_then(|id| module.global(id).function())
-            .is_some_and(|one| has(&one.attrs, "optsize") || has(&one.attrs, "minsize"));
-    let price = crate::timing::Price::of(wants_size, options.strict);
+    let price = crate::timing::Price::of(wants_size);
     // first: the multiply decides the shape of the rest, and its price counts
     // the library routine, which the other rewrites do not touch
     if touched.mul_trial {
         use crate::dagisel::mulprice::Mode;
         let without = Options { mul: Mode::Kept, ..options };
-        let (plain, _) = items_once(module, name, cpu, without)?;
+        let (plain, _) = items_once(module, name, cpu, without, prefixes)?;
+        let linked = crate::routine::mulsi3_share(module, name, cpu, price);
         if touched.mul_synthesized {
             // DEVIATE G2: the pin's shapes are judged as before (clocks
             // count wherever they run); a chain beyond them only against
             // that winner, and its clocks only inside loops
             let shapes = Options { mul: Mode::TrialPinShapes, ..options };
-            let (pin, _) = items_once(module, name, cpu, shapes)?;
-            let (base, base_options) = if crate::trial::prefers_without(&pin, &plain, cpu, price, true) {
+            let (pin, _) = items_once(module, name, cpu, shapes, prefixes)?;
+            let (base, base_options) = if crate::trial::prefers_without_linking(&pin, &plain, cpu, price, true, linked)
+            {
                 (plain, without)
             } else {
                 (pin, shapes)
             };
-            if crate::trial::prefers_without(&kept, &base, cpu, price, false) {
+            if crate::trial::prefers_without_linking(&kept, &base, cpu, price, false, linked) {
+                trial_won(name, "mul", crate::trial::keeps(&base, &kept, cpu, price));
                 kept = base;
                 options = base_options;
             }
-        } else if crate::trial::prefers_without(&kept, &plain, cpu, price, true) {
+        } else if crate::trial::prefers_without_linking(&kept, &plain, cpu, price, true, linked) {
+            trial_won(name, "mul", crate::trial::keeps(&plain, &kept, cpu, price));
             kept = plain;
             options = without;
         }
     }
     if touched.class_split {
         let without = Options { class_split: false, ..options };
-        let (plain, _) = items_once(module, name, cpu, without)?;
+        let (plain, _) = items_once(module, name, cpu, without, prefixes)?;
         if !crate::trial::keeps(&kept, &plain, cpu, price) {
+            trial_won(name, "class_split", crate::trial::keeps(&plain, &kept, cpu, price));
             kept = plain;
             options = without;
         }
     }
     if touched.tail_dup {
         let without = Options { tail_duplicate: false, ..options };
-        let (plain, _) = items_once(module, name, cpu, without)?;
+        let (plain, _) = items_once(module, name, cpu, without, prefixes)?;
         if !crate::trial::keeps(&kept, &plain, cpu, price) {
+            trial_won(name, "tail_dup", crate::trial::keeps(&plain, &kept, cpu, price));
             kept = plain;
             options = without;
         }
     }
     if touched.return_dup {
         let without = Options { return_dup: false, ..options };
-        let (plain, _) = items_once(module, name, cpu, without)?;
+        let (plain, _) = items_once(module, name, cpu, without, prefixes)?;
         if !crate::trial::keeps(&kept, &plain, cpu, price) {
+            trial_won(name, "return_dup", crate::trial::keeps(&plain, &kept, cpu, price));
             kept = plain;
             options = without;
         }
@@ -380,29 +540,44 @@ pub fn items_with(
     if touched.global_copies {
         // the default stands unless the other join order is cheaper
         let other = Options { global_copies: false, ..options };
-        let (items, _) = items_once(module, name, cpu, other)?;
+        let (items, _) = items_once(module, name, cpu, other, prefixes)?;
         if crate::trial::keeps(&items, &kept, cpu, price) {
+            trial_won(name, "global_copies", crate::trial::keeps(&items, &kept, cpu, price));
             kept = items;
             options = other;
+        }
+    }
+    // The size build does not try it: over 165 programs at -Os the build
+    // without rematerialisation was never smaller (0 of 164, same bytes with
+    // the trial off) and the trial was one build in each of them.
+    if touched.remat_constants && !wants_size {
+        let without = Options { remat_constants: false, ..options };
+        let (plain, _) = items_once(module, name, cpu, without, prefixes)?;
+        if !crate::trial::keeps(&kept, &plain, cpu, price) {
+            trial_won(name, "remat", crate::trial::keeps(&plain, &kept, cpu, price));
+            kept = plain;
+            options = without;
         }
     }
     // last: the two builds compared are final, the other choices made
     if touched.carry_chain {
         let without = Options { carry_chain: false, ..options };
-        let (plain, _) = items_once(module, name, cpu, without)?;
+        let (plain, _) = items_once(module, name, cpu, without, prefixes)?;
         if !crate::trial::keeps(&kept, &plain, cpu, price) {
+            trial_won(name, "carry_chain", crate::trial::keeps(&plain, &kept, cpu, price));
             kept = plain;
             options = without;
         }
     }
     if touched.compare_destinations {
         let without = Options { compare_destinations: false, ..options };
-        let (plain, _) = items_once(module, name, cpu, without)?;
+        let (plain, _) = items_once(module, name, cpu, without, prefixes)?;
         if !crate::trial::keeps(&kept, &plain, cpu, price) {
+            trial_won(name, "compare_destinations", crate::trial::keeps(&plain, &kept, cpu, price));
             kept = plain;
         }
     }
-    Ok(kept)
+    Ok((kept, saved, options, touched.shared_cse))
 }
 
 /// Whether `function` carries through the extend flag: an `addx`, `subx` or
@@ -465,6 +640,19 @@ struct Touched {
     global_copies: bool,
     /// The build decomposed a multiply ([`crate::dagisel::mulprice::Chain`]).
     mul_trial: bool,
+    /// The build widened the class of a pass-through copy temp.
+    relax_classes: bool,
+    /// The build marked a `moveq` constant rematerializable
+    /// ([`crate::moveqremat`]).
+    remat_constants: bool,
+    /// The build held a `moveq` constant in a data register.
+    data_constants: bool,
+    /// The shared `MachineCSE` changed the function.
+    shared_cse: bool,
+    /// A spill slot moved into an address register ([`crate::slotreg`]).
+    slot_registers: bool,
+    /// An instruction reads a spill slot in place ([`crate::spillfold`]).
+    spill_folded: bool,
     /// ... and one of them was a chain beyond the pin's shape (DEVIATE G2): the
     /// trial credits clocks only inside loops, since a straight-line multiply
     /// may never run.
@@ -480,7 +668,29 @@ impl Touched {
             || self.carry_chain
             || self.global_copies
             || self.mul_trial
+            || self.remat_constants
     }
+}
+
+/// Whether `name` is built for size: the level, or an `optsize`/`minsize`
+/// attribute.
+fn size_build(
+    module: &Module,
+    name: &str,
+    options: Options,
+) -> bool {
+    options.size
+        || module
+            .named(name)
+            .and_then(|id| module.global(id).function())
+            .is_some_and(|one| has(&one.attrs, "optsize") || has(&one.attrs, "minsize"))
+}
+
+fn same_instructions(
+    a: &crate::mfunc::MFunction,
+    b: &crate::mfunc::MFunction,
+) -> bool {
+    a.blocks.len() == b.blocks.len() && a.blocks.iter().zip(&b.blocks).all(|(a, b)| a.insts == b.insts)
 }
 
 /// The bytes of `items` as assembled (a branch not yet sized counts 6).
@@ -491,6 +701,7 @@ pub fn items_bytes(items: &[Item]) -> usize {
             Item::Inst(inst) => crate::encode::encode(inst).map_or(6, |one| one.bytes.len()),
             Item::Bytes(bytes) => bytes.len(),
             Item::Table(labels) => 4 * labels.len(),
+            Item::WordTable(labels) => 2 * labels.len(),
             _ => 0,
         })
         .sum()
@@ -506,14 +717,134 @@ pub fn libcalls_for(
 ) -> u8 {
     let kinds = crate::libcalls::chosen(
         module,
+        cpu,
         options.size_libcalls,
         |one| options.size || has(&one.attrs, "optsize") || has(&one.attrs, "minsize"),
         |name, kinds| {
-            let options = Options { libcalls: Some(crate::libcalls::mask(kinds)), ..options };
+            // The price is one build: a call against a loop differs by far more
+            // than a trial moves, and each trial set costs several
+            // builds (x2.65 compile time).
+            let options = Options {
+                libcalls: Some(crate::libcalls::mask(kinds)),
+                shared_cse: false,
+                tail_duplicate: false,
+                return_dup: false,
+                class_split: false,
+                compare_destinations: false,
+                global_copies: false,
+                relax_classes: false,
+                remat_constants: false,
+                data_constants: false,
+                slot_registers: false,
+                ..options
+            };
             items_with(module, name, cpu, options).map(|items| items_bytes(&items))
         },
     );
     crate::libcalls::mask(&kinds)
+}
+
+/// Everything that decides what selection and emission make of a function: the
+/// trials of [`items_with`] that change none of it share one result.
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct Selection {
+    source_order: bool,
+    indexed: bool,
+    short: bool,
+    absolute_data: bool,
+    wants_size: bool,
+    strict: bool,
+    carry_chain: bool,
+    mul: crate::dagisel::mulprice::Mode,
+    libcalls: Vec<crate::libcalls::Kind>,
+    direct_copies: bool,
+    copy_destinations: bool,
+}
+
+thread_local! {
+    static RUNS: std::cell::Cell<Runs> = const { std::cell::Cell::new(Runs { builds: 0, selections: 0, early: 0, late: 0 }) };
+}
+
+/// How often this thread ran each stage of a build: the regression tests of
+/// the shared stages count them.
+#[derive(Clone, Copy, Debug)]
+pub struct Runs {
+    pub builds: usize,
+    pub selections: usize,
+    /// The rewrites up to the shared `MachineCSE`.
+    pub early: usize,
+    /// The rewrites from `MachineSink` to allocation.
+    pub late: usize,
+}
+
+pub fn runs() -> Runs {
+    RUNS.with(std::cell::Cell::get)
+}
+
+fn counted(count: impl FnOnce(&mut Runs)) {
+    RUNS.with(|runs| {
+        let mut now = runs.get();
+        count(&mut now);
+        runs.set(now);
+    });
+}
+
+/// The function as emitted, with whether the build decomposed a multiply and
+/// took a chain beyond the pin's shape.
+type Emission = (crate::mfunc::MFunction, bool, bool);
+
+/// A result kept by the inputs that made it.
+struct Memo<K, V>(std::cell::RefCell<llrm_support::hash::HashMap<K, V>>);
+
+impl<K, V> Default for Memo<K, V> {
+    fn default() -> Self {
+        Memo(Default::default())
+    }
+}
+
+impl<K: Eq + std::hash::Hash, V: Clone> Memo<K, V> {
+    fn get_or(
+        &self,
+        key: K,
+        make: impl FnOnce() -> Result<V, String>,
+    ) -> Result<V, String> {
+        if let Some(found) = self.0.borrow().get(&key) {
+            return Ok(found.clone());
+        }
+        let made = make()?;
+        self.0.borrow_mut().insert(key, made.clone());
+        Ok(made)
+    }
+}
+
+/// The function before allocation, with what its rewrites touched.
+type Prepared = (crate::mfunc::MFunction, Touched);
+
+/// What the builds of one function share, stage by stage. Each key is the
+/// inputs the stage and those before it read, so a trial that changes only a
+/// later option takes the earlier stages' result: selection and emission (a
+/// third of a build; only the multiply and carry-chain trials change its
+/// inputs), the rewrites up to the shared `MachineCSE`, and the rest of
+/// the rewrites before allocation. The options as text: a new option is in
+/// every key until it is taken out below.
+#[derive(Default)]
+struct Prefixes {
+    emitted: Memo<Selection, Emission>,
+    early: Memo<(Selection, String), Prepared>,
+    late: Memo<(Selection, String), Prepared>,
+    /// Some build had a spill slot ([`crate::slotreg`] has something to move).
+    had_slots: std::cell::Cell<bool>,
+}
+
+/// The options that only the stages after `MachineCSE` read, left out of the
+/// key of the stage before it.
+fn before_late_stage(options: Options) -> Options {
+    Options { relax_classes: false, remat_constants: false, data_constants: false, ..before_allocation(options) }
+}
+
+/// The options that only allocation and the stages after it read.
+fn before_allocation(options: Options) -> Options {
+    Options { global_copies: false, tail_duplicate: false, return_dup: false, slot_registers: false, ..options }
 }
 
 /// One build of the function, and the optional rewrites that changed it.
@@ -522,9 +853,11 @@ fn items_once(
     name: &str,
     cpu: Cpu,
     options: Options,
+    prefixes: &Prefixes,
 ) -> Result<(Vec<Item>, Touched), String> {
     // one full select, allocate and emit; a function with optional rewrites
     // runs it again per trial
+    counted(|runs| runs.builds += 1);
     let _build = llrm_support::debug::span("m68k build");
     if llrm_support::debug::enabled("builds") {
         eprintln!("[builds] {name}");
@@ -535,121 +868,184 @@ fn items_once(
     let wants_size = options.size
         || module.global(id).function().is_some_and(|one| has(&one.attrs, "optsize") || has(&one.attrs, "minsize"));
     // DEVIATE M68K-SIZE-LIBCALL (`crate::libcalls`): the 68000 and 68010 always
-    // call
-    let libcalls = if wants_size && cpu.at_least(crate::dagisel::hooks::Cpu::M68020) {
-        crate::libcalls::from_mask(options.libcalls.unwrap_or_else(|| libcalls_for(module, cpu, options)))
+    // call the counts; their variable shifts are chosen like the 68020's
+    let libcalls = if wants_size {
+        let mut kinds =
+            crate::libcalls::from_mask(options.libcalls.unwrap_or_else(|| libcalls_for(module, cpu, options)));
+        kinds.retain(|&kind| crate::libcalls::decided_at(kind, cpu));
+        kinds
     } else {
         Vec::new()
     };
-    let chain = crate::dagisel::mulprice::Chain::of(options.mul);
-    let blocks = select_function_with(
-        module,
-        name,
-        cpu,
-        options.source_order,
-        options.indexed,
-        options.short,
-        options.code_model.absolute_data(),
+    let selection = Selection {
+        source_order: options.source_order,
+        indexed: options.indexed,
+        short: options.short,
+        absolute_data: options.code_model.absolute_data(),
         wants_size,
-        options.carry_chain,
-        crate::timing::Price::of(wants_size, options.strict),
-        &chain,
-        &libcalls,
-    )?;
-    let mut function = emit_with(
-        name,
-        &blocks,
-        Shape {
-            direct_copies: options.direct_copies,
-            // what the hosted stages read: a result is defined in its copy's
-            // register
-            copy_destinations: options.direct_copies || options.shared_cse || options.shared_licm,
-        },
-    )?;
-    let mut touched = Touched::default();
-    touched.carry_chain = options.carry_chain && uses_extend(&function);
-    touched.mul_trial = options.mul == crate::dagisel::mulprice::Mode::Trial && chain.used();
-    touched.mul_synthesized = chain.synthesized();
-    function.returns_twice =
-        module.global(id).function().is_some_and(|one| llrm_mir::memory::calls_returns_twice(module, one));
-    if options.short {
-        crate::cmpelim::eliminate_tests(&mut function, options.hoist_flag_setters, options.rematerialize_arguments);
-        if options.reuse_shift_flags {
-            crate::cmpshift::reuse_shift_flags(&mut function);
-        }
-        crate::shiftadd::shifts_to_adds(&mut function);
-        crate::negadd::negative_adds_to_subq(&mut function);
-        crate::addrroles::address_roles(&mut function);
-        crate::addrarith::address_adds(&mut function, cpu, wants_size, options.compare_destinations);
-        crate::foldload::fold_loads(&mut function);
-        crate::divrem::remainders_from_quotients(&mut function);
-        if wants_size {
-            crate::foldarg::fold_argument_loads(&mut function);
-        }
-        if options.compare_destinations {
-            touched.compare_destinations = crate::addrcmp::widen_compare_destinations(&mut function) > 0;
-        }
-        // priced inside the pass (`Price`), so a function it changed is not
-        // built again
-        if options.sext_adds {
-            crate::sextacc::sign_extended_words(
-                &mut function,
-                cpu,
-                crate::timing::Price::of(wants_size, options.strict),
-            );
-        }
-        if options.class_split {
-            touched.class_split = crate::classsplit::hold_in_data_registers(&mut function) > 0;
-        }
-        if cpu.at_least(Cpu::M68020) {
-            crate::scaledindex::scale_indexes(&mut function);
-        }
-        if options.indexed && options.post_inc_across_blocks {
-            crate::loopinc::post_increment_across_blocks(&mut function);
-        }
-    }
-    function.odds = Some(edge_odds(module, name)?);
-    expand_cmov(&mut function)?;
-    if options.shared_licm {
-        function = crate::regalloc::shared_licm(&function, wants_size)?;
-    }
-    if options.shared_cse {
-        function = crate::regalloc::shared_cse(&function)?;
-    }
-    machine_sink(&mut function);
-    if options.short && options.reuse_shift_out_flags {
-        crate::cmpcarry::reuse_shift_out_flags(&mut function);
-    }
-    crate::regalloc::split_flag_edges(&mut function);
-    if !options.shared_prelude {
-        eliminate_phis_with(&mut function, false);
-    }
-    fold_reserved_copies(&mut function);
-    if options.short {
-        crate::commutative::mark_commutative(&mut function, wants_size);
-    }
-    if !options.shared_prelude {
-        commute_tied(&mut function);
-        two_address(&mut function);
-    }
+        strict: options.strict,
+        carry_chain: options.carry_chain,
+        mul: options.mul,
+        libcalls: libcalls.clone(),
+        direct_copies: options.direct_copies,
+        // what the hosted stages read: a result is defined in its copy's
+        // register
+        copy_destinations: options.direct_copies || options.shared_cse || options.shared_licm,
+    };
+    let (emitted, mul_used, mul_synthesized) = prefixes
+        .emitted
+        .get_or(
+            selection.clone(),
+            || {
+                let selection = &selection;
+                counted(|runs| runs.selections += 1);
+                let chain = crate::dagisel::mulprice::Chain::of(selection.mul);
+                let blocks = {
+                    let _span = llrm_support::debug::span("m68k select");
+                    select_function_with(
+                        module,
+                        name,
+                        cpu,
+                        selection.source_order,
+                        selection.indexed,
+                        selection.short,
+                        selection.absolute_data,
+                        selection.wants_size,
+                        selection.carry_chain,
+                        crate::timing::Price::of(selection.wants_size),
+                        &chain,
+                        &selection.libcalls,
+                    )?
+                };
+                let _span = llrm_support::debug::span("m68k emit");
+                let function = emit_with(
+                    name,
+                    &blocks,
+                    Shape { direct_copies: selection.direct_copies, copy_destinations: selection.copy_destinations },
+                )?;
+                Ok((function, chain.used(), chain.synthesized()))
+            },
+        )?;
+    let sp = llrm_support::debug::span("m68k prealloc");
+    let (function, touched) =
+        prefixes.early.get_or((selection.clone(), format!("{:?}", before_late_stage(options))), || {
+            counted(|runs| runs.early += 1);
+            let mut function = emitted.clone();
+            let mut touched = Touched::default();
+            touched.carry_chain = options.carry_chain && uses_extend(&function);
+            touched.mul_trial = options.mul == crate::dagisel::mulprice::Mode::Trial && mul_used;
+            touched.mul_synthesized = mul_synthesized;
+            function.returns_twice =
+                module.global(id).function().is_some_and(|one| llrm_mir::memory::calls_returns_twice(module, one));
+            if options.short {
+                // `addMachineSSAOptimization`: what selection built and nothing
+                // reads, before the selects become branches
+                llrm_spike_mf::dead_machine_instruction_elim(&mut function);
+                crate::cmpelim::eliminate_tests(
+                    &mut function,
+                    options.hoist_flag_setters,
+                    options.rematerialize_arguments,
+                );
+                if options.reuse_shift_flags {
+                    crate::cmpshift::reuse_shift_flags(&mut function);
+                }
+                crate::shiftadd::shifts_to_adds(&mut function);
+                crate::negadd::negative_adds_to_subq(&mut function);
+                crate::addrroles::address_roles(&mut function);
+                crate::addrarith::address_adds(&mut function, cpu, wants_size, options.compare_destinations);
+                crate::foldload::fold_loads(&mut function);
+                crate::divrem::remainders_from_quotients(&mut function);
+                if wants_size {
+                    crate::foldarg::fold_argument_loads(&mut function);
+                }
+                if options.compare_destinations {
+                    touched.compare_destinations = crate::addrcmp::widen_compare_destinations(&mut function) > 0;
+                }
+                // priced inside the pass (`Price`), so a function it changed is
+                // not built again
+                if options.sext_adds {
+                    crate::sextacc::sign_extended_words(&mut function, cpu, crate::timing::Price::of(wants_size));
+                }
+                if options.class_split {
+                    touched.class_split = crate::classsplit::hold_in_data_registers(&mut function) > 0;
+                }
+                if options.word_jump_tables {
+                    crate::wordtable::word_offset_tables(&mut function);
+                }
+                if cpu.at_least(Cpu::M68020) {
+                    crate::scaledindex::scale_indexes(&mut function);
+                }
+                if options.indexed && options.post_inc_across_blocks {
+                    crate::loopinc::post_increment_across_blocks(&mut function);
+                }
+            }
+            function.odds = Some(edge_odds(module, name)?);
+            expand_cmov(&mut function)?;
+            if options.shared_licm {
+                function = crate::regalloc::shared_licm(&function, wants_size)?;
+            }
+            if options.shared_cse {
+                let shared = crate::regalloc::shared_cse(&function)?;
+                touched.shared_cse = !same_instructions(&function, &shared);
+                function = shared;
+            }
+            Ok((function, touched))
+        })?;
+    let (mut function, mut touched) =
+        prefixes.late.get_or((selection, format!("{:?}", before_allocation(options))), || {
+            counted(|runs| runs.late += 1);
+            let (mut function, mut touched) = (function, touched);
+            machine_sink(&mut function);
+            if options.short && options.reuse_shift_out_flags {
+                crate::cmpcarry::reuse_shift_out_flags(&mut function);
+            }
+            crate::regalloc::split_flag_edges(&mut function);
+            if !options.shared_prelude {
+                eliminate_phis_with(&mut function, false);
+            }
+            fold_reserved_copies(&mut function);
+            if options.short {
+                crate::commutative::mark_commutative(&mut function, wants_size);
+            }
+            if !options.shared_prelude {
+                commute_tied(&mut function);
+                two_address(&mut function);
+            }
+            if options.indexed && options.relax_classes && !options.shared_prelude {
+                touched.relax_classes = crate::regalloc::relax_copy_only_classes(&mut function);
+            }
+            if options.remat_constants {
+                touched.remat_constants = crate::moveqremat::rematerializable_constants(&mut function) > 0;
+            }
+            if options.data_constants && wants_size {
+                touched.data_constants = crate::moveqremat::hold_in_data_registers(&mut function) > 0;
+            }
+            Ok((function, touched))
+        })?;
+    drop(sp);
     // spill slots are numbered after the static allocas
     let first_slot = function.locals.iter().map(|local| local.0 + 1).max().unwrap_or(0);
+    crate::mirdump::dump("before allocation", &function, None);
     let allocating = llrm_support::debug::span("m68k allocate");
     let (assignment, slots) = if std::env::var_os("LLRM_M68K_SPIKE").is_some() {
         crate::regalloc::allocate_spilling_by_frequency(&mut function, first_slot)?
     } else {
-        crate::regalloc::allocate_greedy_after(
-            &mut function,
-            wants_size,
-            options.indexed,
-            options.rematerialize_arguments,
-            options.global_copies,
-            options.loop_carried_first,
-            options.shared_prelude.then_some(&crate::regalloc::shared_prelude as llrm_spike_mf::tolir::Prelude),
-        )?
+        crate::spillfold::scoped(options.spill_fold, || {
+            crate::regalloc::allocate_greedy_after(
+                &mut function,
+                wants_size,
+                options.indexed,
+                options.rematerialize_arguments,
+                options.global_copies,
+                options.loop_carried_first,
+                options.shared_prelude.then_some(&crate::regalloc::shared_prelude as llrm_spike_mf::tolir::Prelude),
+            )
+        })?
     };
+    touched.spill_folded = crate::spillfold::has_folded_reads(&function);
     drop(allocating);
-    let slots: Vec<i32> = slots.into_iter().map(|(slot, _)| slot).collect();
+    let mut slots: Vec<i32> = slots.into_iter().map(|(slot, _)| slot).collect();
+    let sp = llrm_support::debug::span("m68k postalloc");
     verify_ties(&function, &assignment)?;
     touched.global_copies = options.global_copies && crate::calltarget::saves_a_register(&function, &assignment);
     if options.short {
@@ -660,15 +1056,18 @@ fn items_once(
         crate::addrcmp::compare_address_registers(&mut function, &assignment);
         crate::addrcmp::word_immediates(&mut function);
         crate::narrow::merge_logic_immediates(&mut function, &assignment);
+        crate::narrow::copied_masks_as_extensions(&mut function, &assignment);
         crate::narrow::narrow_logic_immediates(&mut function, &assignment);
         crate::consts::materialize_constants(&mut function, &assignment, cpu, wants_size);
         crate::constreg::constant_into_destination(&mut function, &assignment);
         crate::constreg::immediate_from_free_register(&mut function, &assignment);
         crate::narrow_add::narrow_adds(&mut function, &assignment);
         crate::narrow_add::narrow_compares(&mut function, &assignment);
+        crate::narrow_add::narrow_counters(&mut function, &assignment);
     }
     remove_identity_copies(&mut function, &assignment);
     remove_redundant_copies(&mut function, &assignment);
+    crate::mirdump::dump("after allocation", &function, Some(&assignment));
     if options.hoist_flag_setters {
         crate::cmpelim::eliminate_adjacent_tests(&mut function, &assignment);
     }
@@ -679,13 +1078,16 @@ fn items_once(
         &slots,
     );
     if options.short {
+        crate::spillhoist::hoist_spills(&mut function, &assignment);
+    }
+    if options.short && options.slot_registers {
+        let moved = crate::slotreg::slots_in_address_registers(&mut function, &assignment, &slots);
+        touched.slot_registers = !moved.is_empty();
+        slots.retain(|slot| !moved.contains(slot));
+    }
+    if options.short {
         crate::cmpdup::drop_repeated_compares(&mut function, &assignment);
-        crate::spillmove::spills_as_moves(
-            &mut function,
-            &assignment,
-            cpu,
-            crate::timing::Price::of(wants_size, options.strict),
-        );
+        crate::spillmove::spills_as_moves(&mut function, &assignment, cpu, crate::timing::Price::of(wants_size));
     }
     preserve_flags(&mut function, &assignment)?;
     restore_remade_flags(&mut function);
@@ -700,6 +1102,8 @@ fn items_once(
         }
     }
     crate::regalloc::place_blocks(&mut function, &edge_odds(module, name)?, wants_size, options.loop_top_by_jumps);
+    drop(sp);
+    let sp = llrm_support::debug::span("m68k expand");
     let mut out = vec![Item::Label(name.to_owned())];
     // The line the function is declared at starts its rows (the prologue is
     // from no instruction).
@@ -711,7 +1115,7 @@ fn items_once(
             epilogue_begin: false,
         }));
     }
-    let price = crate::timing::Price::of(wants_size, options.strict);
+    let price = crate::timing::Price::of(wants_size);
     let expand = |function: &crate::mfunc::MFunction| {
         finish_with(
             function,
@@ -731,15 +1135,57 @@ fn items_once(
         let chosen = crate::calltarget::choose(&function, &assignment, cpu, price, expand)?;
         crate::calltarget::through_registers(&mut function, &chosen)?;
     }
+    let word_tables = word_table_labels(&function, number);
     for line in expand(&function)? {
+        let table = match &line {
+            Line::Inst(inst) if inst.opcode == crate::dagisel::wordjump::NAME => match inst.operands.first() {
+                Some(mc::Operand::Symbol(table, _)) => Some(table.clone()),
+                _ => None,
+            },
+            _ => None,
+        };
         out.push(match line {
             Line::Label(at) => Item::Label(format!(".LBB{number}_{at}")),
             Line::Inst(inst) => Item::Inst(inst),
             Line::Loc(place) => Item::Loc(place),
         });
+        // the table starts where the `jmp` through it ends
+        if let Some(table) = table {
+            let labels = word_tables.get(&table).ok_or("a word jump of no table")?.clone();
+            out.push(Item::Label(table));
+            out.push(Item::WordTable(labels));
+        }
     }
     out.extend(jump_tables(&function, number));
+    drop(sp);
+    prefixes.had_slots.set(prefixes.had_slots.get() || !slots.is_empty());
     Ok((out, touched))
+}
+
+/// The block labels of each word-offset jump table, by the table's symbol.
+fn word_table_labels(
+    function: &crate::mfunc::MFunction,
+    number: usize,
+) -> llrm_support::hash::HashMap<String, Vec<String>> {
+    function
+        .blocks
+        .iter()
+        .flat_map(|block| &block.insts)
+        .filter(|inst| inst.kind == crate::mfunc::Kind::Op(crate::dagisel::wordjump::NAME))
+        .filter_map(|inst| {
+            let Some(crate::mfunc::Operand::Symbol(table, _)) = inst.operands.first() else { return None };
+            let labels = inst
+                .operands
+                .iter()
+                .filter_map(|operand| match operand {
+                    crate::mfunc::Operand::Block(id) => function.blocks.iter().position(|block| block.id == *id),
+                    _ => None,
+                })
+                .map(|at| format!(".LBB{number}_{at}"))
+                .collect();
+            Some((table.clone(), labels))
+        })
+        .collect()
 }
 
 /// Each jump table the function dispatches through: its label, then the
@@ -860,12 +1306,20 @@ pub fn printed(
 ) -> Result<String, String> {
     let mut out = String::new();
     let mut previous = None;
+    let mut table: Option<String> = None;
     for item in items {
         match item {
-            Item::Label(label) => out.push_str(&format!("{label}:\n")),
+            Item::Label(label) => {
+                out.push_str(&format!("{label}:\n"));
+                table = Some(label);
+            }
             Item::Inst(inst) => out.push_str(&format!("\t{}\n", mc::print(&inst)?)),
             Item::Bytes(bytes) => out.push_str(&format!("\t.byte\t{}\n", bytes.len())),
             Item::Table(labels) => labels.iter().for_each(|label| out.push_str(&format!("\t.long\t{label}\n"))),
+            Item::WordTable(labels) => {
+                let table = table.as_deref().ok_or("a word table with no label")?;
+                labels.iter().for_each(|label| out.push_str(&format!("\t.word\t{label}-{table}\n")))
+            }
             Item::Loc(row) if debug => {
                 // A row on the line the one before it was on does not start a
                 // statement.
@@ -913,12 +1367,62 @@ pub fn mid_end_for(
     mid_end_described_by(module, &M68k::for_cpu(cpu), Some(Rc::new(M68kMachine { cpu })))
 }
 
+/// Where a multiply the range proves 16 bits wide is done as `mulu.w`
+/// (`narrowrange::multiplies_narrowed`, DEVIATE NRW-2).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NarrowMultiplies {
+    Off,
+    /// Not in a size build: the extensions are bytes, and a 68020 multiplies
+    /// 32 bits in one instruction.
+    Speed,
+    /// Every build: no 32-bit multiply (68000, 68010) makes the multiply a
+    /// call, 16 B at the site beside `mulu.w`'s 2 B, and the routine's 54 B
+    /// for a program that calls it nowhere else.
+    Always,
+}
+
+impl NarrowMultiplies {
+    /// The policy for `cpu` at a level that is `speed` (-O2 and up) or not.
+    pub fn of(
+        cpu: Cpu,
+        optimizing: bool,
+        speed: bool,
+    ) -> Self {
+        match (optimizing, matches!(cpu, Cpu::M68000 | Cpu::M68010), speed) {
+            (false, ..) => Self::Off,
+            (true, true, _) => Self::Always,
+            (true, false, true) => Self::Speed,
+            (true, false, false) => Self::Off,
+        }
+    }
+}
+
+/// [`mid_end_for`], narrowing multiplies as `narrow_multiplies` says.
+pub fn mid_end_for_narrowing(
+    module: &Module,
+    cpu: Cpu,
+    narrow_multiplies: NarrowMultiplies,
+) -> Result<Module, String> {
+    mid_end_narrowing(module, &M68k::for_cpu(cpu), Some(Rc::new(M68kMachine { cpu })), narrow_multiplies)
+}
+
 /// [`mid_end`] with another target description: what a test compares the
 /// m68k one with.
 pub fn mid_end_described_by(
     module: &Module,
     tti: &dyn llrm_mir::tti::Tti,
     machine: Option<Rc<dyn llrm_mir::target::Machine>>,
+) -> Result<Module, String> {
+    mid_end_narrowing(module, tti, machine, NarrowMultiplies::Off)
+}
+
+/// [`mid_end_described_by`], narrowing the multiplies the range proves narrow
+/// (`narrow_multiplies`).
+pub fn mid_end_narrowing(
+    module: &Module,
+    tti: &dyn llrm_mir::tti::Tti,
+    machine: Option<Rc<dyn llrm_mir::target::Machine>>,
+    narrow_multiplies: NarrowMultiplies,
 ) -> Result<Module, String> {
     MID_ENDS.with(|runs| runs.set(runs.get() + 1));
     use llrm_mir::datalayout::DataLayout;
@@ -941,6 +1445,16 @@ pub fn mid_end_described_by(
             llrm_transforms::exitne::strengthened(context, &layout, function, &outer);
         }
         llrm_transforms::lsr_pass::reduced_with(context, &layout, function, &mut declared, &outer, tti, false);
+        // after it: it folds `zext (trunc iv)` back into the counter
+        let for_size = has(&function.attrs, "optsize") || has(&function.attrs, "minsize");
+        let wanted = match narrow_multiplies {
+            NarrowMultiplies::Off => false,
+            NarrowMultiplies::Speed => !for_size,
+            NarrowMultiplies::Always => true,
+        };
+        if let (true, Some(limit)) = (wanted, tti.range_narrowing_width()) {
+            llrm_transforms::narrowrange::multiplies_narrowed(context, &layout, function, &outer, limit);
+        }
         // the ids the pass handed out for declarations name nothing until they
         // are placed
         declared.place(&mut module)?;

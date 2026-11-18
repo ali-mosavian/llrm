@@ -30,14 +30,14 @@ fn two_extra_bytes_for_a_clock_pass_on_the_68040_and_not_on_the_68020() {
 }
 
 /// `adda.l #imm` (1 clock, 6 bytes) against `lea (d,An)` (2 clocks, 4 bytes):
-/// clocks first took the six bytes on every CPU, on the 68020 at 1.33 bytes
-/// a clock and not just on the 68040.
+/// -O1 to -O3 are judged by clocks (user ruling 2026-11-14), so the longer form
+/// wins on every CPU; the bytes break a tie.
 #[test]
-fn a_priced_choice_takes_the_longer_form_only_where_the_bus_fill_pays_for_it() {
-    let longer = |cpu| order(cpu, false, 1, 6) < order(cpu, false, 2, 4);
-    assert!(longer(Cpu::M68040));
-    assert!(!longer(Cpu::M68020));
-    assert!(!longer(Cpu::M68000));
+fn a_priced_choice_takes_the_fewer_clocks_on_every_cpu_and_bytes_break_ties() {
+    for cpu in [Cpu::M68000, Cpu::M68020, Cpu::M68040] {
+        assert!(order(cpu, false, 1, 6) < order(cpu, false, 2, 4), "{cpu:?}");
+        assert!(order(cpu, false, 2, 4) < order(cpu, false, 2, 6), "{cpu:?}: a tie goes to the smaller");
+    }
     // at -Os the bytes decide alone
     assert!(order(Cpu::M68040, true, 2, 4) < order(Cpu::M68040, true, 1, 6));
 }

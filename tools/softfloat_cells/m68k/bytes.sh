@@ -29,7 +29,7 @@ for c in 68000 68020; do
   for m in eqdf2 nedf2 gtdf2 gedf2 ltdf2 ledf2 cmpdf2; do $B-gcc -msoft-float -m$c -DL_$m -I$LS/config/m68k -I$LS -c $LS/config/m68k/lb1sf68.S -o $T/$c/g_$m.o 2> /dev/null && gobjs="$gobjs $T/$c/g_$m.o"; done
   gobjs="$gobjs $LG2/${c}_*.o"; if [ $c = 68000 ]; then for i in divsi3 modsi3 udivsi3 umodsi3 mulsi3; do gobjs="$gobjs $G/${c}_$i.o"; done; fi # the 68000 has no 32-bit mul/div: libgcc2 calls lb1sf68's
   $B-ar rcs $T/$c/gcc.a $gobjs
-  text() { $B-size -A $1 | awk '$1==".text"||$1==".rodata"||$1==".data"{s+=$2} END{print s+0}'; } # code + rodata + data: libgcc's tables are data
+  text() { $B-size -A $1 | awk '$1==".text"||$1==".rodata"||$1==".data"{s+=$2} END{print s+0}'; } # code + rodata + data: libgcc's tables are data; text-only by design: a linked executable, ld folds .text.* into .text
   link() { # prog.c archive
     $B-gcc -msoft-float -m$c -O1 -nostdlib -static -ffreestanding -c $1 -o $T/$c/p.o && $B-ld -static -e main -o $T/$c/x $T/$c/p.o $2 2> $T/$c/err && text $T/$c/x || { echo FAIL; [ -n "$VERBOSE" ] && grep -m2 undefined $T/$c/err >&2; }; }
   for col in ours gcc; do link $T/null.c $T/$c/$col.a > $T/$c/null_$col; done

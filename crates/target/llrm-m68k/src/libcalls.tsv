@@ -8,6 +8,7 @@ candidate	Pop64	__popcountdi2
 candidate	Shl64	__ashldi3
 candidate	Shr64	__lshrdi3
 candidate	Sar64	__ashrdi3
+candidate	Mul64	__muldi3
 member	__ctzdi2	48
 member	__clzdi2	26
 member	__popcountsi2	70
@@ -15,3 +16,4 @@ member	__popcountdi2	32	__popcountsi2
 member	__ashldi3	72
 member	__lshrdi3	72
 member	__ashrdi3	76
+member	__muldi3	134

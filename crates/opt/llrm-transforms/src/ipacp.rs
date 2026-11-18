@@ -126,13 +126,12 @@ use crate::profit::{self, OperationCosts};
 const EVAL_THRESHOLD: i64 = 500;
 /// `ipa-cp-max-recursive-depth` (params.opt:225), which
 /// `ipa-cp-value-list-size` (:253) also makes the clones one function gets.
-/// DEVIATE IPACP-DEPTH (owner x86-m32-c, exit 2026-12-05; gcc's is 8): the
-/// clones' compile cost grows faster than their number. m32 -O3, instructions
-/// against no clones, clocks of queens: depth 2 x1.55 151,615; 4 x4.13
-/// 140,365; 6 x18.95 113,064; 8 x71.1 79,692 (121 programs, total +3.3% /
-/// +4.2% / +8.8% / +24.9%). Each superlinear pass fixed lets a deeper depth
-/// fit the bar (row M32-QUEENS-O3).
-const MAX_CLONES: usize = 4;
+/// DEVIATE IPACP-DEPTH (owner x86-m32-b, exit 2026-11-24; gcc's is 8): a
+/// target's default is 4, as the clones' compile cost grows faster than their
+/// number (m32 -O3 instructions on queens against no clones: depth 2 x1.55,
+/// 4 x4.13, 8 x71). x86-m32 states 8 (`Tti::ipa_cp_max_clones`): queens -O3
+/// 140,156 -> 73,196 clk (gcc 94,851) for 5.8 G instructions to compile it.
+pub const DEFAULT_MAX_CLONES: usize = 4;
 /// Our clocks, at our block frequencies (held to ten trips), per GCC time unit:
 /// `place` with `row` known saves 667 here and 245.8 in GCC's dump
 /// (`-fdump-ipa-cp-details`), which also declines quicksort's clone (time 1)
@@ -141,6 +140,20 @@ const TIME_SCALE: i64 = 5;
 /// The most a block counts in a callee's time: the trips GCC's loop estimates
 /// stop at.
 const MAX_FREQUENCY: i64 = 10;
+/// What a target's default for `-fipa-cp-clone` tunes beyond gcc (DEVIATE
+/// IPACP-O2, IPACP-LOOPS); a flag given, or -Omax, is gcc's own.
+#[derive(Clone, Copy, Debug)]
+pub struct Tuning {
+    /// A copy whose only gain is a known loop bound is made.
+    pub hint_clones: bool,
+    /// The loop hint counts only bounds the unroller takes whole.
+    pub peel_limited: bool,
+    /// The most clones one function gets (`ipa-cp-max-recursive-depth`).
+    pub max_clones: usize,
+}
+
+/// `max-completely-peel-times` (params.opt): the most trips the unroller takes whole.
+const MAX_PEEL_TIMES: i128 = 16;
 /// `ipa-cp-loop-hint-bonus` (params.opt:221): time units added where the known
 /// actuals make a loop's bound known.
 const LOOP_HINT_BONUS: i64 = 64;
@@ -164,7 +177,7 @@ pub struct Cloning {
 }
 
 /// The clones made so far, shared by the cloning before the walk and the one
-/// after it: a function gets at most `MAX_CLONES` between them.
+/// after it: a function gets at most `Tuning::max_clones` between them.
 pub type Shared = std::rc::Rc<std::cell::RefCell<Cloning>>;
 
 /// One kind of call: a callee and the constants it is called with.
@@ -187,6 +200,7 @@ pub fn cloned(
     private: &BTreeSet<GlobalId>,
     costs: &OperationCosts,
     clone: bool,
+    tuning: Tuning,
     state: &mut Cloning,
 ) -> Changed {
     let mut changed = Changed { added: Vec::new(), edited: Vec::new(), unsound: Vec::new() };
@@ -230,8 +244,16 @@ pub fn cloned(
                 );
         }
     }
+    // GCC's `tailr1` precedes ipa-cp: the self-calls the pass loops.
+    let mut tails: BTreeMap<GlobalId, IdSet<InstId>> = BTreeMap::new();
+    for &(name, _) in groups.keys().collect::<BTreeSet<_>>() {
+        if recursive.contains(&name) {
+            tails.entry(name).or_insert_with(|| crate::tailcallelim::eliminated_self_calls(module, layout, name));
+        }
+    }
     for ((name, known), sites) in groups {
         let Some(body) = module.global(name).function() else { continue };
+        let eliminated = tails.get(&name).cloned().unwrap_or_default();
         // DEVIATE: an `available_externally` body is read, not run: the
         // definition is elsewhere. A copy would become a definition of its own
         // (`isDefinitionExact` is false for it; GCC's `ipa-cp` versions only a
@@ -276,7 +298,7 @@ pub fn cloned(
             redirect(module, existing, &sites, &mut changed);
             continue;
         }
-        if state.made.get(&origin).copied().unwrap_or(0) >= MAX_CLONES {
+        if state.made.get(&origin).copied().unwrap_or(0) >= tuning.max_clones {
             continue;
         }
         let size = inline::operations(body);
@@ -315,19 +337,41 @@ pub fn cloned(
         let mut verdict = false;
         let (mut saved, mut loops, mut benefit) = (0, false, 0);
         for context in &contexts {
-            let (context_saved, context_loops, _) = time_saved(module, layout, name, body, context, &callees, costs);
+            let (context_saved, context_loops, _) =
+                time_saved(module, layout, name, body, context, &callees, costs, tuning.peel_limited, &eliminated);
             let level = state.made.get(&origin).copied().unwrap_or(0);
-            let chain =
-                chain_benefit(module, layout, name, body, context, &callees, costs, level, &mut BTreeMap::new());
+            let (chain, chain_size) = chain_benefit(
+                module,
+                layout,
+                name,
+                body,
+                context,
+                &callees,
+                costs,
+                tuning.peel_limited,
+                &eliminated,
+                tuning.max_clones,
+                level,
+                &mut BTreeMap::new(),
+            );
             let mut context_benefit = chain.saturating_mul(frequency) / profit::UNIT;
             // GCC's `incorporate_penalties`: a function in a cycle with others,
             // not one that calls itself.
             if recursive.contains(&name) && !own {
                 context_benefit = context_benefit * (100 - RECURSION_PENALTY) / 100;
             }
-            let pays = (context_saved > 0 || context_loops)
+            // DEVIATE IPACP-SHARED (owner w10, exit 2026-11-24): gcc credits a
+            // value every call site that passes it. A recursion's context two
+            // sites pass (`fib(n - 1)` here, `fib(n - 2)` there) is one the
+            // copies share: it has two callers, is not inlined back, and the
+            // calls to one pure callee in different functions are merged by
+            // nothing (m64 -O2 fib(20) runs fib(16) three times, +50% clk;
+            // frames +2%). A copy with one caller is inlined into it.
+            let shared = own && sites.len() > 1 && !replaces;
+            let pays = !shared
+                && (context_saved > 0 || (context_loops && tuning.hint_clones))
                 && (replaces
-                    || (context_benefit * 1000 >= EVAL_THRESHOLD * size
+                    || (context_benefit * 1000 >= EVAL_THRESHOLD * chain_size
                         && state.grown + size <= unit.max(LARGE_UNIT) * UNIT_GROWTH / 100 + 1));
             if pays || !verdict && context_benefit >= benefit {
                 (saved, loops, benefit) = (context_saved, context_loops, context_benefit);
@@ -442,7 +486,10 @@ fn jump_source(
 /// What a context is worth, with what the contexts it passes to its own calls
 /// are worth: GCC's `propagate_effects` adds a value's benefit to the value
 /// that produces it, times `ipa-cp-max-recursive-depth` less the level, so a
-/// clone for `row = 0` is credited with the rows after it.
+/// clone for `row = 0` is credited with the rows after it. Each context also
+/// adds its clone's size (`prop_size_cost`), so a chain pays for every clone it
+/// counts: `fib(20)` credits clones for 19 and 18 and must carry their size.
+/// Returns the benefit and that size.
 fn chain_benefit(
     module: &Module,
     layout: &DataLayout,
@@ -451,28 +498,48 @@ fn chain_benefit(
     known: &[Option<ConstantId>],
     callees: &Callees,
     costs: &OperationCosts,
+    peel_limited: bool,
+    eliminated: &IdSet<InstId>,
+    max_clones: usize,
     level: usize,
-    memo: &mut BTreeMap<(Vec<Option<ConstantId>>, usize), i64>,
-) -> i64 {
-    if let Some(&done) = memo.get(&(known.to_vec(), level)) {
+    memo: &mut BTreeMap<Vec<Option<ConstantId>>, (i64, i64)>,
+) -> (i64, i64) {
+    if let Some(&done) = memo.get(known) {
         return done;
     }
-    // A context met again while it is priced adds nothing.
-    memo.insert((known.to_vec(), level), 0);
-    let (saved, loops, next) = time_saved(module, layout, name, body, known, callees, costs);
+    // A context met again while it is priced adds nothing; one met by another
+    // path is the value GCC's lattice holds once (`add_value` finds it again).
+    memo.insert(known.to_vec(), (0, 0));
+    let size_of = inline::operations(body);
+    let mut chain_size = size_of;
+    let (saved, loops, next) = time_saved(module, layout, name, body, known, callees, costs, peel_limited, eliminated);
     let mut benefit = saved / TIME_SCALE + if loops { LOOP_HINT_BONUS } else { 0 };
-    if level + 1 < MAX_CLONES {
+    if level + 1 < max_clones {
         for (context, frequency) in next {
             if context.as_slice() == known {
                 continue;
             }
-            let after = chain_benefit(module, layout, name, body, &context, callees, costs, level + 1, memo);
-            let factor = (MAX_CLONES - level) as i64;
+            let (after, after_size) = chain_benefit(
+                module,
+                layout,
+                name,
+                body,
+                &context,
+                callees,
+                costs,
+                peel_limited,
+                eliminated,
+                max_clones,
+                level + 1,
+                memo,
+            );
+            let factor = (max_clones - level) as i64;
             benefit = benefit.saturating_add(after.saturating_mul(factor).saturating_mul(frequency) / profit::UNIT);
+            chain_size = chain_size.saturating_add(after_size);
         }
     }
-    memo.insert((known.to_vec(), level), benefit);
-    benefit
+    memo.insert(known.to_vec(), (benefit, chain_size));
+    (benefit, chain_size)
 }
 
 /// GCC's `time_benefit`: the clocks a call no longer spends in `body` given its
@@ -486,6 +553,8 @@ fn time_saved(
     known: &[Option<ConstantId>],
     callees: &Callees,
     costs: &OperationCosts,
+    peel_limited: bool,
+    eliminated: &IdSet<InstId>,
 ) -> (i64, bool, Vec<(Vec<Option<ConstantId>>, i64)>) {
     let unit = Unit::of(module, layout, body);
     let mut values = IndexMap::default();
@@ -614,6 +683,9 @@ fn time_saved(
     // `niter` expression needs every parameter it reads: `chop(0, 64)`'s
     // `for (i = lo; i < hi; ++i)` has "loops with known iterations: 0" with
     // `hi` alone, and recchop -O3 cloned `chop` for the bonus).
+    let number = |operand: &Operand| -> Option<i128> {
+        consts::_operand(&unit, *operand, &values, None)?.n.to_string().parse().ok()
+    };
     let hint = cfg::loops_of(body)
         .iter()
         .any(
@@ -631,9 +703,9 @@ fn time_saved(
                     );
                     // A counter: a loop phi, or one step of it, whose arms from
                     // outside the loop are constant.
-                    let starts_known = |operand: &Operand| {
-                        let Operand::Value(v) = operand else { return false };
-                        let llrm_mir::module::ValueDef::Instruction(made) = body.value(*v).def else { return false };
+                    let starts_known = |operand: &Operand| -> Option<i128> {
+                        let Operand::Value(v) = operand else { return None };
+                        let llrm_mir::module::ValueDef::Instruction(made) = body.value(*v).def else { return None };
                         let phi = if body.instruction(made).opcode == Opcode::Phi {
                             made
                         } else {
@@ -654,17 +726,35 @@ fn time_saved(
                             let mut phis = phis;
                             match (matches!(step.opcode, Opcode::Binary(_)), phis.next(), phis.next()) {
                                 (true, Some(only), None) => only,
-                                _ => return false,
+                                _ => return None,
                             }
                         };
-                        crate::lcssa::arms(body, phi).into_iter().all(|(value, from)| {
-                            one.body.contains(&cfg::id(from)) || consts::_operand(&unit, value, &values, None).is_some()
-                        })
+                        // The counter's start: the one arm from outside the loop.
+                        let mut start = Some(0i128);
+                        for (value, from) in crate::lcssa::arms(body, phi) {
+                            if one.body.contains(&cfg::id(from)) {
+                                continue;
+                            }
+                            start = Some(number(&value)?);
+                        }
+                        start
                     };
                     let moving = |operand: &Operand| {
-                        matches!(operand, Operand::Value(v) if varying.contains(v)) && starts_known(operand)
+                        matches!(operand, Operand::Value(v) if varying.contains(v)).then(|| starts_known(operand)).flatten()
                     };
-                    compared.operands.len() == 2 && ((constant(&compared.operands[0]) && moving(&compared.operands[1])) || (constant(&compared.operands[1]) && moving(&compared.operands[0])))
+                    // DEVIATE IPACP-LOOPS (owner w10, exit 2026-11-24): gcc's
+                    // hint counts any known trip count; here a loop the
+                    // unroller cannot take whole (`MAX_PEEL_TIMES`, gcc's
+                    // `max-completely-peel-times`) is grown by the clone's
+                    // inlining instead: m64 nbody -O2 655 -> 1189 B for 3
+                    // instructions, recpow 1207 -> 3060 B.
+                    let reach = |bound: &Operand, counter: &Operand| {
+                        let (Some(start), Some(end)) = (moving(counter), number(bound)) else { return false };
+                        !peel_limited || (end - start).abs() <= MAX_PEEL_TIMES
+                    };
+                    compared.operands.len() == 2
+                        && ((constant(&compared.operands[0]) && reach(&compared.operands[0], &compared.operands[1]))
+                            || (constant(&compared.operands[1]) && reach(&compared.operands[1], &compared.operands[0])))
                 }
             }),
         );
@@ -672,7 +762,12 @@ fn time_saved(
     // make constant at each (GCC's `propagate_effects` follows them).
     let mut next: Vec<(Vec<Option<ConstantId>>, i64)> = Vec::new();
     for (block, inst) in body.walk() {
-        if !reached.contains(&block) || llrm_mir::memory::callee(&module.context, body, inst) != Some(name) {
+        // A call the tail-call pass makes a loop passes a phi: no context
+        // (GCC's `tailr1` runs before ipa-cp).
+        if !reached.contains(&block)
+            || eliminated.contains(&inst)
+            || llrm_mir::memory::callee(&module.context, body, inst) != Some(name)
+        {
             continue;
         }
         let instruction = body.instruction(inst);

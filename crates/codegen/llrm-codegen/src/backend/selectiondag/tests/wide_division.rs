@@ -25,10 +25,25 @@ fn quotient_on(
     small: bool,
     size_only: bool,
 ) -> (SelectionDAG, SDValue) {
+    quotient_in(arch, op, narrow, small, size_only, None)
+}
+
+/// `quotient_on` in a block of `frequency` over the entry's, for a target that takes the
+/// speed routine in loops at size (`Some`).
+fn quotient_in(
+    arch: &dyn llrm_target::Target,
+    op: ISD,
+    narrow: bool,
+    small: bool,
+    size_only: bool,
+    frequency: Option<f64>,
+) -> (SelectionDAG, SDValue) {
     let mut tli = TargetLowering::x86_32(Features::default(), MVT::I32);
     tli.set_small_divide(small);
     tli.set_size_only(size_only);
+    tli.set_fast_divide_in_loops(frequency.is_some());
     let mut dag = dag();
+    dag.set_divide_frequency(frequency.unwrap_or(0.0));
     let ptr = dag.get_register(EVT::I32, 7);
     let chain = dag.entry_node();
     let mut dword = |slot: i32| {
@@ -167,4 +182,14 @@ fn only_m16_takes_the_size_divide_at_o1() {
     use llrm_target::Target;
     assert!(llrm_x86_m16::M16.small_divide_at_o1());
     assert!(!llrm_x86_m32::M32.small_divide_at_o1());
+}
+
+/// DEVIATE DIV-HOT: a bit-a-round `i64` divide in a loop at m32 -Os ran 2,503,700 clocks in
+/// x_int64_division (libgcc's: 460,640) and 530,760 in x_ll_div (239,757). In a loop the
+/// speed routine; once a call the size one.
+#[test]
+fn an_i64_divide_in_a_loop_at_size_takes_the_speed_routine() {
+    let name = |frequency| call_of(&quotient_in(&llrm_x86_m32::M32, ISD::UDiv, false, true, true, Some(frequency)).0).0;
+    assert_eq!(name(1.0), "div64_u_small", "a block that runs once a call keeps the size routine");
+    assert_eq!(name(8.0), "div64_u", "a loop takes the speed routine");
 }

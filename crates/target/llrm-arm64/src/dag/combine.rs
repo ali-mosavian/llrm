@@ -9,6 +9,14 @@
 //! `(shift - y) + z` to the outer add, so it becomes `(z - y) + shift` and the
 //! shift folds into the add's shifted-register form.
 //!
+//! DEVIATE MUL-MADD-OS (owner w11, exit 2026-11-30): at `optsize` a multiply
+//! by a constant whose only user is an add or subtract stays a multiply, so
+//! the selector forms `madd`/`msub` (one instruction and the constant's `mov`,
+//! hoisted out of a loop, for the pin's two: `sub` and `add .. lsl`). The pin
+//! decomposes unilaterally (`performMulCombine`, "this is true unilaterally")
+//! and keeps the multiply only for a constant with trailing zeros; gcc's `-Os`
+//! keeps `madd` (histo -Os: 4096 trips of one instruction fewer).
+//!
 //! DEVIATE SD524: the `hasALULSLFast` decompositions are omitted (apple-m1 does
 //! not have the feature); the vector, SVE and `rdsvl` parts do not apply to the
 //! scalar table; `isOnlyUsedAsMemoryAddress` does not look at indexed
@@ -70,13 +78,19 @@ fn is_extend_or_shift_operand(
 ) -> bool {
     match dag.opcode(n) {
         ISD::SignExtend | ISD::ZeroExtend | ISD::AnyExtend => {
-            matches!(dag.value_type(dag.operand(n, 0)), EVT::I32 | EVT::I16 | EVT::I8)
+            matches!(
+                dag.value_type(dag.operand(n, 0)),
+                EVT::I32 | EVT::I16 | EVT::I8
+            )
         }
         ISD::SignExtendInReg => matches!(
             dag.node(dag.operand(n, 1)).data,
             llrm_codegen::backend::selectiondag::NodeData::ValueType(EVT::I32 | EVT::I16 | EVT::I8)
         ),
-        ISD::And => matches!(dag.constant(dag.operand(n, 1)), Some(0xff | 0xffff | 0xffff_ffff)),
+        ISD::And => matches!(
+            dag.constant(dag.operand(n, 1)),
+            Some(0xff | 0xffff | 0xffff_ffff)
+        ),
         ISD::Shl | ISD::Srl | ISD::Sra => dag.constant(dag.operand(n, 1)).is_some(),
         _ => false,
     }
@@ -123,13 +137,10 @@ pub fn add_combine_for_shifted_operands(
         return Some(found);
     }
     // Both shifted by immediates: the smaller shift (<= 4) goes on the right.
-    let shl_amount = |dag: &SelectionDAG, v: SDValue| {
-        (dag.opcode(v) == ISD::Shl).then(|| dag.constant(dag.operand(v, 1))).flatten()
-    };
+    let shl_amount =
+        |dag: &SelectionDAG, v: SDValue| (dag.opcode(v) == ISD::Shl).then(|| dag.constant(dag.operand(v, 1))).flatten();
     match (shl_amount(dag, lhs), shl_amount(dag, rhs)) {
-        (Some(l), Some(r)) if l <= 4 && r > 4 && dag.has_one_use(lhs.node) => {
-            Some(binary(dag, ISD::Add, rhs, lhs))
-        }
+        (Some(l), Some(r)) if l <= 4 && r > 4 && dag.has_one_use(lhs.node) => Some(binary(dag, ISD::Add, rhs, lhs)),
         _ => None,
     }
 }
@@ -139,6 +150,7 @@ pub fn combine_mul(
     dag: &mut SelectionDAG,
     node: SDValue,
     level: CombineLevel,
+    opt_for_size: bool,
 ) -> Option<SDValue> {
     if level == CombineLevel::BeforeLegalizeTypes {
         return None;
@@ -170,6 +182,13 @@ pub fn combine_mul(
     }
 
     let bits = dag.constant(n1)?;
+    if opt_for_size && dag.has_one_use(node.node) {
+        let user = dag.users(node).next().expect("a user");
+        let user_value = SDValue { node: user, res: 0 };
+        if matches!(dag.opcode(user_value), ISD::Add | ISD::Sub) && !only_used_as_memory_address(dag, user_value) {
+            return None;
+        }
+    }
     let shift_up = 128 - width;
     let c = ((bits << shift_up) as i128) >> shift_up;
     if c == 0 {
@@ -451,7 +470,9 @@ fn has_legal_cmp_immediate(
     dag: &SelectionDAG,
     pair: (SDValue, SDValue),
 ) -> bool {
-    [pair.0, pair.1].into_iter().all(|one| super::lowering::signed_constant(dag, one).is_none_or(super::lowering::legal_cmp_immed))
+    [pair.0, pair.1]
+        .into_iter()
+        .all(|one| super::lowering::signed_constant(dag, one).is_none_or(super::lowering::legal_cmp_immed))
 }
 
 /// `hasLegalCondCmpImmediate`.
@@ -459,7 +480,9 @@ fn has_legal_cond_cmp_immediate(
     dag: &SelectionDAG,
     pair: (SDValue, SDValue),
 ) -> bool {
-    [pair.0, pair.1].into_iter().all(|one| super::lowering::signed_constant(dag, one).is_none_or(legal_cond_cmp_immediate))
+    [pair.0, pair.1]
+        .into_iter()
+        .all(|one| super::lowering::signed_constant(dag, one).is_none_or(legal_cond_cmp_immediate))
 }
 
 /// `hasCheapXorImmediateThatNeedsCondCmpReg`: a constant that does not fit a
@@ -468,14 +491,18 @@ fn has_cheap_xor_immediate_that_needs_cond_cmp_reg(
     dag: &SelectionDAG,
     pair: (SDValue, SDValue),
 ) -> bool {
-    [pair.0, pair.1].into_iter().any(|one| {
-        let (Some(value), Some(signed)) = (dag.constant(one), super::lowering::signed_constant(dag, one)) else {
-            return false;
-        };
-        let width = dag.value_type(one).size_in_bits();
-        legal_cond_cmp_immediate(signed) == false
-            && crate::mc::immediate::logical(value as u64, if width <= 32 { 32 } else { 64 }).is_some()
-    })
+    [pair.0, pair.1]
+        .into_iter()
+        .any(
+            |one| {
+                let (Some(value), Some(signed)) = (dag.constant(one), super::lowering::signed_constant(dag, one)) else {
+                    return false;
+                };
+                let width = dag.value_type(one).size_in_bits();
+                legal_cond_cmp_immediate(signed) == false
+                    && crate::mc::immediate::logical(value as u64, if width <= 32 { 32 } else { 64 }).is_some()
+            },
+        )
 }
 
 /// `isOrXorChain`: the leaves of a tree of one-use `or`s over `xor`s.
@@ -547,10 +574,16 @@ pub fn or_xor_chain(
         return None;
     }
     let vt = dag.value_type(node);
-    let require_legal = dag.users(node).collect::<Vec<_>>().into_iter().any(|user| {
-        let user = SDValue { node: user, res: 0 };
-        dag.opcode(user) == ISD::BrCond || dag.opcode(user) == ISD::Target(a64::BRCOND)
-    });
+    let require_legal = dag
+        .users(node)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .any(
+            |user| {
+                let user = SDValue { node: user, res: 0 };
+                dag.opcode(user) == ISD::BrCond || dag.opcode(user) == ISD::Target(a64::BRCOND)
+            },
+        );
     let (mut leaves, mut xors, mut saw_xor) = (0, 0, false);
     let mut work = Vec::new();
     if !is_or_xor_chain(dag, lhs, &mut leaves, &mut xors, &mut saw_xor, require_legal, &mut work) || !saw_xor {
@@ -570,9 +603,8 @@ pub fn or_xor_chain(
         return None;
     }
     // Only the leading compare uses the wider `cmp` immediate.
-    if let Some(first) = work
-        .iter()
-        .position(|&pair| has_legal_cmp_immediate(dag, pair) && !has_legal_cond_cmp_immediate(dag, pair))
+    if let Some(first) =
+        work.iter().position(|&pair| has_legal_cmp_immediate(dag, pair) && !has_legal_cond_cmp_immediate(dag, pair))
     {
         work.swap(0, first);
     }

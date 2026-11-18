@@ -5,11 +5,12 @@
 //! `byval`, in memory: the parameter becomes the integer, the callee keeps its
 //! own copy and each direct call loads the value. A struct result of that size
 //! is clang's `sret` pointer; the convention returns it in AL, AX or DX:AX
-//! (`small_struct_results_as_scalars`).
+//! (`small_struct_results_as_scalars`). Any other size is returned through a
+//! hidden far pointer (`far_result_pointers`).
 
 use llrm_mir::edit::Position;
 use llrm_mir::module::{GlobalKind, Module};
-use llrm_mir::opcode::{Attribute, Flags, Opcode};
+use llrm_mir::opcode::{Attribute, CastOp, Flags, Opcode};
 use llrm_mir::types::{Type, TypeId};
 use llrm_mir::{GlobalId, InstId, Operand};
 use llrm_target::calling::Calling;
@@ -236,6 +237,103 @@ pub fn small_struct_results_as_scalars(
                 None,
             );
             caller_fn.insert(store, Position::After(call)).map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+/// A convention whose hidden result pointer is far (`aggregate.pointer_far`:
+/// Borland's `ss:offset` pushed after the arguments) takes it as a far
+/// pointer, as clang's near `sret` is not. The callee keeps the offset, as it
+/// does of every near pointer (its data segment is the pointer's); the
+/// caller extends its near pointer with the segment it addresses. Each call,
+/// direct or through a pointer, follows its own convention.
+pub fn far_result_pointers(
+    module: &mut Module,
+    calling: &Calling,
+    spaces: llrm_mir::spaces::Spaces,
+) -> Result<(), String> {
+    if spaces.far_is_near() {
+        return Ok(());
+    }
+    let Some(text) = module.datalayout.clone() else { return Ok(()) };
+    let layout = llrm_mir::datalayout::DataLayout::parse(&text)?;
+    let far = module.context.types.ptr(spaces.far);
+    // Whether `calling` returns a struct of `bytes` through a far pointer.
+    let wants_far = |number: u32, bytes: u64| {
+        calling.by_number(number).and_then(|one| one.aggregate.as_ref()).is_some_and(|aggregate| {
+            aggregate.pointer_far && !aggregate.in_register_bytes.contains(&(bytes as i64))
+        })
+    };
+    let cast = |function: &mut llrm_mir::module::Function, from: Operand, to: TypeId| {
+        function.create_instruction(Opcode::Cast(CastOp::AddrSpaceCast), to, vec![from], Flags::default(), None)
+    };
+    let near = module.context.types.ptr(spaces.near);
+    // (function, parameter): its `sret` pointer is not far yet.
+    let mut planned: Vec<(GlobalId, usize)> = vec![];
+    for (at, global) in module.globals.iter().enumerate() {
+        let GlobalKind::Function(function) = &global.kind else { continue };
+        let Some((index, (ty, _))) = function
+            .parameter_attrs
+            .iter()
+            .enumerate()
+            .find_map(|(index, attrs)| typed_of(attrs, "sret").map(|found| (index, found)))
+        else {
+            continue;
+        };
+        let is_near = matches!(module.context.types.get(function.value(function.parameters()[index]).ty), Type::Pointer(space) if *space == spaces.near);
+        if is_near && wants_far(function.calling_convention, layout.alloc_size(&module.context.types, ty)) {
+            planned.push((GlobalId(at as u32), index));
+        }
+    }
+    for &(id, index) in &planned {
+        let Module { context, globals, .. } = &mut *module;
+        let GlobalKind::Function(function) = &mut globals[id.0 as usize].kind else { unreachable!("a function") };
+        let attrs = function.parameter_attrs[index].clone();
+        let made = function.insert_parameters(context, index, &[far])[0];
+        function.parameter_attrs[index] = attrs;
+        if let Some(entry) = function.entry() {
+            let old = function.parameters()[index + 1];
+            let first = function.block(entry).first().expect("a block with instructions");
+            let narrowed = cast(function, Operand::Value(made), near);
+            function.insert(narrowed, Position::Before(first)).map_err(|e| e.to_string())?;
+            let address = Operand::Value(function.instruction(narrowed).result.expect("an address"));
+            function.replace_all_uses_with(old, address);
+        }
+        function.remove_parameter(context, index + 1);
+    }
+    // Every call, whatever it calls, that passes a near `sret` pointer to a
+    // convention that wants it far.
+    let Module { context, globals, .. } = &mut *module;
+    for caller in 0..globals.len() {
+        let GlobalKind::Function(caller_fn) = &mut globals[caller].kind else { continue };
+        let calls: Vec<(InstId, usize, TypeId, Vec<Attribute>)> = caller_fn
+            .walk()
+            .filter_map(|(_, inst)| {
+                let Opcode::Call(info) = &caller_fn.instruction(inst).opcode else { return None };
+                let (index, (ty, _)) =
+                    info.argument_attrs.iter().enumerate().find_map(|(index, attrs)| typed_of(attrs, "sret").map(|found| (index, found)))?;
+                let Type::Function { parameters, .. } = context.types.get(info.function_type) else { return None };
+                let is_near = matches!(context.types.get(*parameters.get(index)?), Type::Pointer(space) if *space == spaces.near);
+                (is_near && wants_far(info.calling_convention, layout.alloc_size(&context.types, ty)))
+                    .then(|| (inst, index, info.function_type, info.argument_attrs[index].clone()))
+            })
+            .collect();
+        for (call, index, old_type, attrs) in calls {
+            let Type::Function { returns, mut parameters, variadic } = context.types.get(old_type).clone()
+            else {
+                return Err("a call whose type is not a function type".into());
+            };
+            parameters[index] = far;
+            let new_type = context.types.intern(Type::Function { returns, parameters, variadic });
+            let pointer = caller_fn.instruction(call).operands[index];
+            let widened = cast(caller_fn, pointer, far);
+            caller_fn.insert(widened, Position::Before(call)).map_err(|e| e.to_string())?;
+            let value = Operand::Value(caller_fn.instruction(widened).result.expect("an address"));
+            caller_fn.replace_argument(call, index, &[value], new_type);
+            for attr in attrs {
+                caller_fn.add_argument_attr(call, index, attr);
+            }
         }
     }
     Ok(())

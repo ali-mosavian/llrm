@@ -7,7 +7,7 @@ use llrm_6502::dagisel::hooks::Cpu;
 use llrm_6502::driver::{self, Level, Request};
 
 /// The `-f` switches the backend takes besides the shared ones.
-const OWN_SWITCHES: &[&str] = &["-fno-second-inline", "-fno-static-locals"];
+const OWN_SWITCHES: &[&str] = &["-fno-second-inline", "-fno-static-locals", "-fwhole-program", "-fno-whole-program"];
 
 /// Whether `switch` is one the shared flag parser knows or the backend's own;
 /// an unknown `-f` was taken silently before (2026-11-08: `-fno-bogus`).

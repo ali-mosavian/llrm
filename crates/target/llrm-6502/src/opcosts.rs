@@ -78,7 +78,25 @@ pub fn clocks(cpu: Cpu) -> OperationCosts {
 
 /// Prices in code bytes.
 pub fn bytes(cpu: Cpu) -> OperationCosts {
-    table(cpu, |(_, bytes)| bytes)
+    let mut costs = table(cpu, |(_, bytes)| bytes);
+    // `memcpy` is called with the two pointers in `rc2`..`rc5` and the length
+    // in `a`, `x`: two pointer arguments, the length, the `jsr`; its own
+    // bytes are linked once.
+    costs.copy = 2 * costs.argument + 4 + costs.call;
+    costs.copy_member = member_bytes("memcpy");
+    costs
+}
+
+/// The code bytes of the routine `name` of `runtime/mos_rt.s`, from its label
+/// to its `rts`.
+fn member_bytes(name: &str) -> i64 {
+    const RUNTIME: &str = include_str!("../runtime/mos_rt.s");
+    let label = format!("\n{name}:\n");
+    let from = RUNTIME.find(&label).expect("the runtime has the routine") + 1;
+    let body = &RUNTIME[from..];
+    let end = body.find("\n  rts\n").expect("the routine returns") + "\n  rts\n".len();
+    let text = body[..end].replace('@', &format!("{name}_"));
+    i64::from(timing::estimate(Cpu::Mos6502, &text).expect("a routine the estimator prices").bytes)
 }
 
 /// The prices of the Os inline trial's byte estimate: [`bytes`] refit to the

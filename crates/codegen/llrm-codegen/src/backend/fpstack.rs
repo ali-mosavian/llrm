@@ -1057,6 +1057,20 @@ impl Fps<'_> {
         let produced: HashSet<u32> = one.defines.iter().copied().collect();
         let comparison = self.out.last().expect("a comparison was emitted");
         let mut made = (**comparison).clone();
+        // DEVIATE X87-STATUS: a compare that defines the status word as a value
+        // (`gcc`'s `ix86_expand_fp_compare` keeps the `fnstsw` word and
+        // tests it per reader) gets the `fnstsw` and a copy of AX into
+        // that value, and no `sahf`. Allocated, the word is a register
+        // (`Loc::Reg`); before, a value (`Loc::Held`).
+        let word_value = one
+            .what
+            .as_ref()
+            .and_then(
+                |what| match &what.dests[..] {
+                    [dest @ (Loc::Held(_) | Loc::Reg(_))] => Some(dest.clone()),
+                    _ => None,
+                },
+            );
         made.defines = comparison.defines.iter().copied().filter(|value| !produced.contains(value)).collect();
         made.delivers =
             comparison.delivers.iter().copied().filter(|(held, _)| !produced.contains(&held.value)).collect();
@@ -1069,21 +1083,69 @@ impl Fps<'_> {
             vec![Loc::Reg(Reg { register: self.status_word, width: 2 })],
             Vec::new(),
         );
-        let mut word = Insn::new(at, Some((at, at)), Some(status), one.defines.clone(), Vec::new());
+        let word_defines = if word_value.is_some() { Vec::new() } else { one.defines.clone() };
+        let mut word = Insn::new(at, Some((at, at)), Some(status), word_defines, Vec::new());
         word.clobbers = BTreeSet::from([self.status_word]);
         word.delivers = one.delivers.clone();
         word.widths = one.widths.iter().copied().filter(|pair| produced.contains(&pair.0)).collect();
         let held = match word.delivers.iter().find(|(_, register)| *register == self.status_word) {
             Some(&(held, _)) => held,
             None => {
-                let held = Held { value: self.take_fresh(), width: 2, offset: 0 };
+                let width = match &word_value {
+                    Some(Loc::Reg(reg)) => reg.width,
+                    Some(Loc::Held(value)) => value.width,
+                    _ => 2,
+                };
+                let held = Held { value: self.take_fresh(), width, offset: 0 };
                 word.defines.push(held.value);
                 word.delivers.push((held, self.status_word));
-                word.widths.push((held.value, 2));
+                word.widths.push((held.value, width));
                 held
             }
         };
+        // The word's copy reads `held`: the `fnstsw` defines it. Its readers
+        // name the compare's own value, which the `fnstsw` defines
+        // where the word stays in AX, and the copy otherwise.
+        if word_value.is_some() && !word.defines.contains(&held.value) {
+            word.defines.push(held.value);
+        }
+        if matches!(
+            &word_value,
+            Some(Loc::Reg(reg)) if reg.register == self.status_word
+        ) {
+            let named: Vec<u32> = one.defines.iter().copied().filter(|value| !word.defines.contains(value)).collect();
+            word.defines.extend(named);
+        }
         self.out.push(Arc::new(word));
+        if let Some(dest) = word_value {
+            match dest {
+                Loc::Held(value) => {
+                    let mut copy =
+                        inserted(at, semantics(Operation::Move, "mov", vec![Loc::Held(value)], vec![Loc::Held(held)]));
+                    copy.defines = vec![value.value];
+                    copy.uses = vec![held.value];
+                    copy.widths = vec![(value.value, value.width)];
+                    copy.requires = vec![(held, self.status_word)];
+                    self.out.push(Arc::new(copy));
+                }
+                // `fnstsw` writes AX alone: the word is copied from there
+                // unless it stays there.
+                Loc::Reg(reg) if reg.register != self.status_word => {
+                    // A 32-bit copy reads EAX: the high half is garbage the
+                    // readers never test.
+                    let source = if reg.width == 4 { self.status_word.full_register32() } else { self.status_word };
+                    let from = Loc::Reg(Reg { register: source, width: reg.width });
+                    let mut copy = inserted(at, semantics(Operation::Move, "mov", vec![Loc::Reg(reg)], vec![from]));
+                    copy.defines = one.defines.clone();
+                    copy.widths = one.widths.iter().copied().filter(|pair| produced.contains(&pair.0)).collect();
+                    copy.uses = vec![held.value];
+                    copy.requires = vec![(held, self.status_word)];
+                    self.out.push(Arc::new(copy));
+                }
+                _ => {}
+            }
+            return Ok(());
+        }
         let mut sahf = inserted(at, semantics(Operation::Nothing, "sahf", Vec::new(), Vec::new()));
         sahf.uses = vec![held.value];
         sahf.requires = vec![(held, self.status_word)];
@@ -1252,12 +1314,14 @@ impl Ahead<'_> {
             None => block.succ.iter().find_map(|next| self.order(*next, seen))?,
         };
         // Back through the copies: a value a copy wrote was the copy's source.
-        Some(
-            after
-                .iter()
-                .map(|value| pairs.iter().find(|(result, _)| result == value).map_or(*value, |(_, source)| *source))
-                .collect(),
-        )
+        let before: Vec<u32> = after
+            .iter()
+            .map(|value| pairs.iter().find(|(result, _)| result == value).map_or(*value, |(_, source)| *source))
+            .collect();
+        // A copy whose source is still in `after` (and a result that is also
+        // a value live into the block) maps two places to one value: no order.
+        let distinct: BTreeSet<u32> = before.iter().copied().collect();
+        (distinct.len() == before.len()).then_some(before)
     }
 }
 
@@ -1310,7 +1374,9 @@ fn depth_first(body: &LirBody) -> Vec<i64> {
 /// fewest instructions, weighted by loop depth. Chains are the instructions
 /// that share a value one of them writes; a block that writes memory, calls,
 /// or has a float instruction with an address or integer operand is left as
-/// it is.
+/// it is. The values a loop carries into its header are likewise tried in
+/// each order (two or three of them), kept by the same count; not where bytes
+/// are strict (-O1, -Os).
 pub(super) fn converted(
     body: &LirBody,
     classes: &RegisterClasses,
@@ -1328,7 +1394,8 @@ pub(super) fn converted_with(
 ) -> Result<LirBody, Raised> {
     let valued = crate::backend::fpregs::valued(body);
     let body = valued.as_ref().unwrap_or(body);
-    let mut best = converted_valued(body, classes, cpu, constants)?;
+    let no_orders = HashMap::default();
+    let mut best = converted_valued(body, classes, cpu, constants, &no_orders)?;
     let floating = floatassign::_floating_values(body);
     if floating.is_empty() {
         return Ok(best);
@@ -1349,7 +1416,7 @@ pub(super) fn converted_with(
             let mut blocks: Vec<Block> = current.blocks.iter().cloned().collect();
             blocks[index] = block.with_insns(insns);
             let candidate = current.with_blocks(blocks);
-            let Ok(done) = converted_valued(&candidate, classes, cpu, constants) else { continue };
+            let Ok(done) = converted_valued(&candidate, classes, cpu, constants, &no_orders) else { continue };
             let length = weighted_len(&done, &weight);
             if length < score {
                 score = length;
@@ -1358,7 +1425,60 @@ pub(super) fn converted_with(
             }
         }
     }
+    // The order each loop header's carried values take: a loop that finds them
+    // the wrong way round exchanges them on every trip.
+    // Not where bytes are strict (-O1, -Os): the shuffle can move a constant's
+    // load onto an edge and the block placement after it grows the loop's
+    // guard.
+    if cpu.is_some_and(|cpu| cpu.bytes_strict()) {
+        return Ok(best);
+    }
+    let mut orders: HashMap<i64, Vec<u32>> = HashMap::default();
+    let found = crate::analysis::loops::loops(&current.blocks, Some(current.entry));
+    // Liveness only where there is a loop: a body without one asked it twice for nothing.
+    if found.is_empty() {
+        return Ok(best);
+    }
+    let (live_in, _) = live_among(&current, |value| floating.contains(&value));
+    for one in found {
+        let values: Vec<u32> = live_in[&one.header].iter().filter(|value| floating.contains(value)).collect();
+        if !(2..=3).contains(&values.len()) {
+            continue;
+        }
+        for order in permutations(&values) {
+            tried += 1;
+            if tried > MAX_CHAIN_TRIALS {
+                return Ok(best);
+            }
+            let mut trial = orders.clone();
+            trial.insert(one.header, order);
+            let Ok(done) = converted_valued(&current, classes, cpu, constants, &trial) else { continue };
+            let length = weighted_len(&done, &weight);
+            if length < score {
+                score = length;
+                best = done;
+                orders = trial;
+            }
+        }
+    }
     Ok(best)
+}
+
+/// Every order of `values`.
+fn permutations(values: &[u32]) -> Vec<Vec<u32>> {
+    if values.len() <= 1 {
+        return vec![values.to_vec()];
+    }
+    let mut all = Vec::new();
+    for at in 0..values.len() {
+        let mut rest = values.to_vec();
+        let first = rest.remove(at);
+        for mut tail in permutations(&rest) {
+            tail.insert(0, first);
+            all.push(tail);
+        }
+    }
+    all
 }
 
 /// Most orders `converted` converts a function in.
@@ -1501,6 +1621,7 @@ fn converted_valued(
     classes: &RegisterClasses,
     cpu: Option<&Profile>,
     constants: &HashMap<i64, &'static str>,
+    orders: &HashMap<i64, Vec<u32>>,
 ) -> Result<LirBody, Raised> {
     let regs = body.regs();
     let floating = floatassign::_floating_values(body);
@@ -1543,6 +1664,18 @@ fn converted_valued(
         let (entry, exit) = bundles.of[&block.at];
         live_bundles.entry(entry).or_default().mask.extend(floats(&live_in[&block.at]));
         live_bundles.entry(exit).or_default().mask.extend(floats(&live_out[&block.at]));
+    }
+    // DEVIATE 11: the order a loop header's values take, where `converted_with`
+    // tried one other than the first exit to reach it would give.
+    for (header, order) in orders {
+        let Some(&(entry, _)) = bundles.of.get(header) else { continue };
+        let Some(bundle) = live_bundles.get_mut(&entry) else { continue };
+        if bundle.fixed.is_none()
+            && bundle.mask.len() == order.len()
+            && order.iter().all(|value| bundle.mask.contains(value))
+        {
+            bundle.fixed = Some(order.clone());
+        }
     }
     let at_of: IndexMap<i64, &Block> = body.blocks.iter().map(|block| (block.at, block)).collect();
     let status_word = classes.status_word().ok_or_else(|| unlowered("the target has no x87 status word register"))?;

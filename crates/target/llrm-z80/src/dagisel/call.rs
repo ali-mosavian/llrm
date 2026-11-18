@@ -5,8 +5,9 @@
 //! # How it works
 //! A byte argument takes the first free of `a l h e d c b`, a word the first
 //! free pair of `hl de bc`, as `Convention::place` says. A byte result leaves
-//! in `a`, a word in the pair `de`, a long in `hl` then `de` (the order of the argument registers). The values arrive
-//! already split into legal `i8` and `i16` parts, so an `i32` is two words.
+//! in `a`, a word in the pair `de`, a long in `hl` then `de` (the order of the
+//! argument registers). The values arrive already split into legal `i8` and
+//! `i16` parts, so an `i32` is two words.
 //!
 //! An argument that fits no register goes on the stack at the offset
 //! `Convention::place` gives it, counted from the first stack argument. The
@@ -19,8 +20,8 @@
 //! DEVIATE Z80-ARGPUSH (owner z80-argpush, exit 2026-11-14): the stores are not
 //! `PUSH`. Reason: the pin turns stores into pushes in a separate pass
 //! (`X86CallFrameOptimization`); `expand::push_arguments` is that pass, after
-//! allocation, and the stores are chained top word first (`LowerCall` joins them
-//! in a `TokenFactor`) so that every push stands at its store.
+//! allocation, and the stores are chained top word first (`LowerCall` joins
+//! them in a `TokenFactor`) so that every push stands at its store.
 //!
 //! # See also
 //! `llvm/lib/Target/AVR/AVRISelLowering.cpp`: `LowerCall` (L1311),
@@ -44,6 +45,10 @@ pub const STSP: ISD = ISD::Target(ids::STSP);
 pub const LDIRG: ISD = ISD::Target(ids::LDIRG);
 /// The byte stored, then `ldir` over the rest: a fill of a constant count.
 pub const LDFILL: ISD = ISD::Target(ids::LDFILL);
+pub const LDFILLG: ISD = ISD::Target(ids::LDFILLG);
+/// A 64-bit value in memory shifted in place, a bit a trip: address, count,
+/// kind (0 shl, 1 lshr, 2 ashr).
+pub const WSHIFT: ISD = ISD::Target(ids::WSHIFT);
 
 pub use llrm_codegen::backend::selectiondag::target_calling::{Ext, FixedObject, In, Out};
 use llrm_codegen::backend::selectiondag::target_calling::{LiveIn, Site, TargetCalling};
@@ -178,11 +183,16 @@ pub fn lower_call(
         (ISD::GlobalAddress, NodeData::Global { symbol, offset }) => {
             dag.get_target_global_address(EVT::I16, symbol, offset)
         }
-        // `X86TargetLowering::LowerCall`: a libcall's `ExternalSymbol` becomes the `TargetExternalSymbol` the call selects on
+        // `X86TargetLowering::LowerCall`: a libcall's `ExternalSymbol` becomes
+        // the `TargetExternalSymbol` the call selects on
         (ISD::ExternalSymbol, NodeData::Symbol(id)) => {
             let name = dag.symbol_names[id as usize].clone();
-            // the runtime's own name for a C library routine, as the builder's `libcalls` table gives it
-            let symbol = super::function::LIBCALLS.iter().find(|(c_name, _)| *c_name == name).map_or(name.as_str(), |(_, symbol)| symbol);
+            // the runtime's own name for a C library routine, as the builder's
+            // `libcalls` table gives it
+            let symbol = super::function::LIBCALLS
+                .iter()
+                .find(|(c_name, _)| *c_name == name)
+                .map_or(name.as_str(), |(_, symbol)| symbol);
             dag.get_target_external_symbol(EVT::I16, symbol)
         }
         (ISD::TargetGlobalAddress | ISD::TargetExternalSymbolNode, _) => callee,
@@ -203,8 +213,10 @@ pub fn lower_call(
         let vt = dag.value_type(out.value);
         operands.push(dag.get_phys_register(vt, register));
     }
-    // DEVIATE SCM1 (as x86's `call_clobbered_flags`): only the flags, the one live physical register that crosses
-    // a call in this DAG; the scheduler recomputes a flags value after the call. Exit: with the per-target clobber lists.
+    // DEVIATE SCM1 (as x86's `call_clobbered_flags`): only the flags, the one
+    // live physical register that crosses a call in this DAG; the scheduler
+    // recomputes a flags value after the call. Exit: with the per-target
+    // clobber lists.
     operands.push(dag.get_register_mask_clobbering(&[super::generated::ids::reg::F]));
     operands.extend(glue);
     let call = dag.get_node_multi(CALL, &[EVT::OTHER, EVT::GLUE], &operands);
@@ -393,14 +405,14 @@ impl TargetCalling for Z80Calling {
         Some(dag.get_node(LDIRG, EVT::OTHER, &[chain, dst, src, size]))
     }
 
-    /// `EmitTargetCodeForMemset`, as X86's is `rep stos`: the byte stored at the
-    /// destination and `ldir` copying it forward over the next `n - 1` bytes
-    /// (`ld (hl), v; ld e, l; ld d, h; inc de; ld bc, n - 1; ldir`, 13 B at
-    /// the site and no routine) where `__memseta` is a call (7 B at the site)
-    /// and a 21 B routine linked once. Only for a constant count of two or
-    /// more, and only in the selection that asks for it (`INLINE_FILLS`): the
-    /// module price decides whether the routine goes
-    /// (`compile::decomposed_functions`).
+    /// `EmitTargetCodeForMemset`, as X86's is `rep stos`: the byte stored at
+    /// the destination and `ldir` copying it forward over the next `n - 1`
+    /// bytes (`ld (hl), v; ld e, l; ld d, h; inc de; ld bc, n - 1; ldir`,
+    /// 13 B at the site and no routine) where `__memseta` is a call (7 B at
+    /// the site) and a 21 B routine linked once. A count that is not a
+    /// constant goes behind a test of it (`LDFILLG`, 16 B). Only in the
+    /// selection that asks for it (`INLINE_FILLS`): the module price
+    /// decides whether the routine goes (`compile::decomposed_functions`).
     fn emit_memset(
         &self,
         dag: &mut SelectionDAG,
@@ -412,7 +424,11 @@ impl TargetCalling for Z80Calling {
         if !super::pipeline::INLINE_FILLS.with(std::cell::Cell::get) {
             return None;
         }
-        let bytes = u64::try_from(dag.constant(size)?).ok().filter(|bytes| (2..=0x1_0000).contains(bytes))?;
+        let Some(bytes) = dag.constant(size) else {
+            let size = dag.get_zext_or_trunc(size, EVT::I16);
+            return Some(dag.get_node(LDFILLG, EVT::OTHER, &[chain, dst, value, size]));
+        };
+        let bytes = u64::try_from(bytes).ok().filter(|bytes| (2..=0x1_0000).contains(bytes))?;
         let count = dag.get_constant(u128::from(bytes - 1), EVT::I16);
         Some(dag.get_node(LDFILL, EVT::OTHER, &[chain, dst, value, count]))
     }

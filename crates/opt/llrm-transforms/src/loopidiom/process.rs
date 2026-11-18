@@ -37,6 +37,7 @@ use llrm_mir::valuetracking::nonzero::null_pointer_is_defined;
 use super::build::{self, Copy};
 use super::{LoopIdiomRecognize, equals, get_mem_set_pattern_value, get_num_bytes, get_start_for_neg_stride};
 use crate::profit::OperationCosts;
+use crate::trial;
 
 /// Alias analysis over a function as it stands. It is made for one version of
 /// a body and the pass edits the body between queries, so the pass asks for
@@ -359,6 +360,7 @@ impl LoopIdiomRecognize {
                     bytes.map(|bytes| crate::loopidioms::InlineFills {
                         max_stores: run.memset_stores,
                         bytes: bytes / (groups.len() as i64).max(1),
+                        prefixed: run.env.layout.pointer(0).index_bits < 32,
                     })
                 },
             ) {
@@ -641,6 +643,9 @@ impl LoopIdiomRecognize {
         if self.is_memcpy_inline(run, args.the_store) {
             return false;
         }
+        if self.keeps_copy_loop_for_trial(run, args) {
+            return false;
+        }
 
         let preheader = run.cur_loop.get_loop_preheader(run.function).expect("a preheader");
         let insert_at = run.function.terminator(preheader).expect("a preheader ends");
@@ -653,6 +658,31 @@ impl LoopIdiomRecognize {
         }
         cleaner.cleanup(&mut expander, run.function);
         changed
+    }
+
+    /// DEVIATE LIR-COPY-TRIAL (`Tti::loop_idiom_copy_trial_at_size`): at -Os,
+    /// whether the copy loop of a count the compiler does not know stays a
+    /// loop: the trial compile that keeps such loops is running. The base
+    /// compile notes the `memcpy` it makes instead. x_radix's `a[i] = b[i]`
+    /// over n words was a call of 3 pushes, call, `add esp` and a spill of
+    /// the byte count against a 19-byte loop; where the call is fewer bytes
+    /// (x_idioms) the object decides.
+    fn keeps_copy_loop_for_trial(
+        &self,
+        run: &Run,
+        args: &StoreOfLoad,
+    ) -> bool {
+        if !run.tti.is_some_and(|tti| tti.loop_idiom_copy_trial_at_size())
+            || !self.apply_code_size_heuristics
+            || run.se.match_apint(args.be_count).is_some()
+        {
+            return false;
+        }
+        if trial::keeping_copy_loops() {
+            return true;
+        }
+        trial::note_copy_call(run.name);
+        false
     }
 
     /// Whether every constant store of the loop over `blocks` is to an object
@@ -763,12 +793,14 @@ impl LoopIdiomRecognize {
         // that may read or write the memory region we're storing to. This
         // includes the load that feeds the stores. Check for an alias by
         // generating the base address and checking everything.
-        // DEVIATE: at -Os a copy whose length is known only at run time stays
-        // a loop when the `rep movs` that replaces it is more bytes (no libc
-        // `memcpy` to call). At speed, DEVIATE MEM-1 inlines the copy. Exit
-        // 2026-11-20.
+        // DEVIATE, only where the target has no libc `memcpy` to call
+        // (`Tuning::libc_memcpy` false): at -Os a copy whose length is known
+        // only at run time stays a loop when the `rep movs` that replaces it
+        // is more bytes. Where there is one the pin's rule stands. At speed,
+        // DEVIATE MEM-1 inlines the copy. Exit 2026-11-20.
         if let Some((costs, callees)) = run.bytes
             && run.se.match_apint(args.be_count).is_none()
+            && !run.tti.is_some_and(|tti| tti.libc_memcpy())
         {
             let blocks = run.cur_loop.get_blocks();
             if !crate::loopidioms::variable_copy_pays(

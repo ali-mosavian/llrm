@@ -339,7 +339,7 @@ pub fn has_poison_generating_flags(
 }
 
 /// `FPMathOperator::classof`.
-fn is_fp_math_operator(
+pub fn is_fp_math_operator(
     q: &Query,
     inst: InstId,
 ) -> bool {

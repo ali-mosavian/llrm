@@ -648,6 +648,11 @@ impl Function {
         self.layout.is_empty()
     }
 
+    /// `Function::hasOptNone`: the source asked for no optimization of the body.
+    pub fn has_opt_none(&self) -> bool {
+        self.attrs.iter().any(|attr| matches!(attr, Attribute::Flag(flag) if flag == "optnone"))
+    }
+
     /// The body is one `unreachable`: what the inliner leaves of a private
     /// function at its last inlined call, in place of the deletion the pin's
     /// CGSCC walk makes (`removeDeadFunctions`). No pass has a use for it.
@@ -1053,6 +1058,20 @@ impl Function {
             }
         }
         found
+    }
+
+    /// [`Self::predecessors`] once per edge, in use-list order: LLVM's
+    /// `predecessors(block)` as GVN's scalar PRE walks it (a `switch` with two
+    /// cases to `block` is two).
+    pub fn predecessor_edges(
+        &self,
+        block: BlockId,
+    ) -> Vec<BlockId> {
+        self.block_users(block)
+            .into_iter()
+            .filter(|one| self.instruction(one.user).opcode.is_terminator())
+            .filter_map(|one| self.parent(one.user))
+            .collect()
     }
 
     /// LLVM's `predecessors(block)`: the blocks whose terminators name

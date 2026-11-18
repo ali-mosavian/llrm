@@ -1553,13 +1553,15 @@ fn test_a_hot_join_above_the_pin_bound_is_copied_where_the_jump_pays() {
     assert!(placed_with(bound, 0.312).blocks.iter().any(|one| one.at == 30), "run once, the jump does not pay for it");
 }
 
-/// The loop's latch is not copied above the pin's bound: x_jpeg_fixed -O2 ran
-/// 137354 clocks longer when `inc; jne` latches went into their predecessors.
+/// A loop's latch is copied above the pin's bound only where the jump it saves
+/// is worth more than the back edge the copy takes (`HotTailDup::back_edge_clocks`,
+/// #9145): x_jpeg_fixed -O2 ran 137354 clocks longer when `inc; jne` latches went
+/// into their predecessors at a back edge as dear as the jump.
 #[test]
-fn test_a_loop_latch_is_not_copied_above_the_pin_bound() {
+fn test_a_loop_latch_is_copied_only_where_the_jump_outweighs_the_back_edge() {
     use super::placement::HotTailDup;
-    let hot = Some(HotTailDup { size: 8, jump_clocks: 3.0, back_edge_clocks: 0.0, clocks_per_byte: 0.01 });
-    let looped = |latch_back: bool| {
+    let hot = |back_edge_clocks: f64| Some(HotTailDup { size: 8, jump_clocks: 3.0, back_edge_clocks, clocks_per_byte: 0.01 });
+    let looped = |latch_back: bool, back_edge_clocks: f64| {
         let to_header = if latch_back { 2 } else { 50 };
         let mut made = body(
             "f",
@@ -1582,10 +1584,11 @@ fn test_a_loop_latch_is_not_copied_above_the_pin_bound() {
         let fixed = |probability: f64| (probability * crate::model::lir::BlockOdds::CERTAIN) as u32;
         made.odds.taken.insert((2, 10), fixed(0.5));
         made.odds.taken.insert((2, 20), fixed(0.5));
-        _placed(&made, false, false, None, hot, 0).unwrap()
+        _placed(&made, false, false, None, hot(back_edge_clocks), 0).unwrap()
     };
-    assert!(looped(true).blocks.iter().any(|one| one.at == 30), "the latch is kept");
-    assert!(looped(false).blocks.iter().all(|one| one.at != 30), "premise: the same block, no back edge, is copied");
+    assert!(looped(true, 3.0).blocks.iter().any(|one| one.at == 30), "a back edge as dear as the jump: the latch is kept");
+    assert!(looped(true, 0.0).blocks.iter().all(|one| one.at != 30), "a free back edge: the jump pays, the latch is copied");
+    assert!(looped(false, 3.0).blocks.iter().all(|one| one.at != 30), "premise: the same block, no back edge, is copied");
 }
 
 /// Only a block that goes to the join and nowhere else takes a copy: one that
@@ -2596,7 +2599,8 @@ fn test_a_flag_setting_instruction_is_not_hoisted_over_a_branch_with_no_compare(
 }
 
 /// The pin copies propagation twice, again after tail duplication and block
-/// placement (row 84): `ControlFlow`, `CopyPropagation`, then `BreakFalseDeps`.
+/// placement (row 84): `ControlFlow`, `CopyPropagation`, then `BreakFalseDeps`;
+/// `KnownZero` (beyond the pin) runs between the last two.
 #[test]
 fn test_copy_propagation_runs_again_after_the_control_flow() {
     let names = |cpu: &str| -> Vec<&'static str> {
@@ -2615,7 +2619,7 @@ fn test_copy_propagation_runs_again_after_the_control_flow() {
         .collect()
     };
     let optimized = names("386");
-    assert_eq!(&optimized[optimized.len() - 3..], ["ControlFlow", "CopyPropagation", "BreakFalseDeps"]);
+    assert_eq!(&optimized[optimized.len() - 4..], ["ControlFlow", "CopyPropagation", "KnownZero", "BreakFalseDeps"]);
 }
 
 fn dword() -> Loc {
@@ -2785,4 +2789,100 @@ fn test_a_branch_into_an_identity_copy_anchor_and_a_jump_goes_to_the_jump_target
     assert!(early.blocks[0].succ.contains(&7), "the anchor keeps the edge block while values are read");
     let late = threaded_late(&body("f", 1, blocks()));
     assert!(late.blocks[0].succ.contains(&9) && !late.blocks[0].succ.contains(&7), "{:?}", late.blocks[0].succ);
+}
+
+/// x_ld_dot's outer loop at -O2 (m32 486): the guard `n <= 0` is estimated at
+/// 12 in 32, so the latch, entered from the guard's block and from the inner
+/// loop's exit, was chosen as the loop's top: the inner loop then left by a
+/// `jmp` to the latch every outer trip (9 `jmp` and 8 `je` for +37 clk over
+/// gcc, whose bottom `jne` falls through). Counting a lost fall-through at the
+/// `jmp` it costs and a gained one at what the taken branch cost over one
+/// not taken keeps the latch below the inner loop.
+#[test]
+fn test_the_latch_stays_below_the_inner_loop_it_falls_from() {
+    use super::placement::TopClocks;
+    let source = {
+        let mut made = body(
+            "f",
+            1,
+            vec![
+                block(1, vec![_move(1, imm(0)), _jump(2, 3)], vec![3]).into(),
+                block(3, vec![_compare(3), _branch(4, "jle", 20), _jump(5, 4)], vec![20, 4]).into(),
+                block(20, vec![_move(20, imm(1)), _jump(21, 6)], vec![6]).into(),
+                block(4, vec![_move(7, imm(2)), _jump(8, 5)], vec![5]).into(),
+                block(5, vec![_move(9, imm(3)), _compare(10), _branch(11, "jne", 5), _jump(12, 6)], vec![5, 6]).into(),
+                block(6, vec![_move(13, imm(4)), _compare(14), _branch(15, "jne", 3), _jump(16, 7)], vec![3, 7]).into(),
+                block(7, vec![_return(17)], vec![]).into(),
+            ],
+        );
+        let fixed = |probability: f64| (probability * crate::model::lir::BlockOdds::CERTAIN) as u32;
+        made.odds.taken.insert((3, 20), fixed(12.0 / 32.0));
+        made.odds.taken.insert((3, 4), fixed(20.0 / 32.0));
+        made.odds.taken.insert((5, 5), fixed(31.0 / 32.0));
+        made.odds.taken.insert((5, 6), fixed(1.0 / 32.0));
+        made.odds.taken.insert((6, 3), fixed(31.0 / 32.0));
+        made.odds.taken.insert((6, 7), fixed(1.0 / 32.0));
+        made
+    };
+    let order = |top: Option<TopClocks>| {
+        let placed = super::_placed_ext(&source, false, false, None, None, top, 0, false).unwrap();
+        placed.blocks.iter().map(|one| one.at).collect::<Vec<_>>()
+    };
+    let at = |order: &[i64], block: i64| order.iter().position(|&one| one == block).unwrap();
+    let pin = order(None);
+    assert!(at(&pin, 6) < at(&pin, 3), "premise: the pin puts the latch above the header: {pin:?}");
+    let priced = order(Some(TopClocks { jump_clocks: 3.0, saved_clocks: 2.0 }));
+    assert!(at(&priced, 6) == at(&priced, 5) + 1, "the inner loop falls into the latch: {priced:?}");
+}
+
+/// x_cordic -O2: an inner loop whose header splits in two arms that join in
+/// a small latch. Placement copies the latch into both arms, so the arm's jump
+/// to it is no loss when the latch goes above the header and falls into it.
+/// Priced as a lost `jmp`, the latch stayed below, both arms paid a taken
+/// `jne` and the loop took 50,653 clk against 48,939.
+#[test]
+fn test_a_latch_copied_into_two_arms_goes_above_the_header() {
+    use super::placement::TopClocks;
+    let source = {
+        let mut made = body(
+            "f",
+            1,
+            vec![
+                block(1, vec![_move(1, imm(0)), _jump(2, 3)], vec![3]).into(),
+                block(3, vec![_compare(3), _branch(4, "js", 4), _jump(5, 5)], vec![4, 5]).into(),
+                block(4, vec![_move(6, imm(1)), _jump(7, 6)], vec![6]).into(),
+                block(5, vec![_move(8, imm(2)), _jump(9, 6)], vec![6]).into(),
+                block(6, vec![_compare(10), _branch(11, "jne", 3), _jump(12, 7)], vec![3, 7]).into(),
+                block(7, vec![_return(13)], vec![]).into(),
+            ],
+        );
+        let fixed = |probability: f64| (probability * crate::model::lir::BlockOdds::CERTAIN) as u32;
+        made.odds.taken.insert((3, 4), fixed(25.0 / 40.0));
+        made.odds.taken.insert((3, 5), fixed(15.0 / 40.0));
+        made.odds.taken.insert((6, 3), fixed(31.0 / 32.0));
+        made.odds.taken.insert((6, 7), fixed(1.0 / 32.0));
+        made
+    };
+    let order = |top: Option<TopClocks>| {
+        let placed = super::_placed_ext(&source, false, false, None, None, top, 0, false).unwrap();
+        placed.blocks.iter().map(|one| one.at).collect::<Vec<_>>()
+    };
+    let at = |order: &[i64], block: i64| order.iter().position(|&one| one == block).unwrap();
+    let pin = order(None);
+    assert!(at(&pin, 5) < at(&pin, 3), "premise: the pin has an arm, with the latch copied in, above the header: {pin:?}");
+    let priced = order(Some(TopClocks { jump_clocks: 3.0, saved_clocks: 2.0 }));
+    assert!(at(&priced, 5) < at(&priced, 3), "an arm with the latch is the loop top: {priced:?}");
+}
+
+/// Control: the clock weights and the exit rule are for a loop's top and a
+/// loop's exit; a diamond's join keeps the pin's order (sfm16_float_cmp -O2
+/// ran 1,364 clk longer when every join took the hotter-edge rule).
+#[test]
+fn test_a_diamond_is_placed_as_the_pin_does_under_the_loop_top_clocks() {
+    use super::placement::TopClocks;
+    let order = |top: Option<TopClocks>| {
+        let placed = super::_placed_ext(&weighted_diamond(0.7), false, false, None, None, top, 0, false).unwrap();
+        placed.blocks.iter().map(|one| one.at).collect::<Vec<_>>()
+    };
+    assert_eq!(order(Some(TopClocks { jump_clocks: 3.0, saved_clocks: 2.0 })), order(None));
 }

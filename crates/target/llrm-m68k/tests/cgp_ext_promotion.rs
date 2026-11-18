@@ -9,7 +9,7 @@ const BENCH: &str = "target datalayout = \"E-m:e-p:32:16:32-i8:8:8-i16:16:16-i32
 declare void @report(i32)
 define i32 @main() {
   %1 = call i32 @bench(i32 63)
-  %2 = mul nsw i32 %1, 100
+  %2 = shl nsw i32 %1, 2
   %3 = call i32 @bench(i32 5)
   %4 = add nsw i32 %2, %3
   call void @report(i32 %4)
@@ -46,9 +46,11 @@ done:
   ret i32 %s
 }";
 
+/// The count is the one the promotion gives (one more without it). `shl`, not `mul 100`: #9197 prices a constant
+/// multiply by its cheapest chain, 6 instructions at the 68000 where the count once held 4 (33 -> 35).
 #[test]
 fn a_sign_extension_is_made_where_the_promoted_load_is_used() {
-    for (cpu, sunk) in [("68000", 33), ("68020", 29)] {
+    for (cpu, sunk) in [("68000", 30), ("68020", 28)] {
         let out = assembly(BENCH, cpu_of(cpu).unwrap(), Level::O2).expect("compiles");
         let instructions = out.lines().filter(|line| line.starts_with('\t') && !line.starts_with("\t.")).count();
         assert!(instructions <= sunk, "{cpu}: {instructions} instructions (promoted: {sunk}):\n{out}");

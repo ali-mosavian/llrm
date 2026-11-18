@@ -23,6 +23,10 @@
 //! DEVIATE 5: the folds that match `scmp` and `ucmp` are translated, but MIR
 //! has neither intrinsic yet, so no test reaches them.
 //!
+//! DEVIATE 6 (gcc `match.pd`, owner w11, exit 2026-12-05): `lshr (X nuw+ C), s` is `(X >>u s) nuw+ (C >> s)` and
+//! `ashr (X nsw+ C), s` is `(X >>s s) nsw+ (C >> s)` where `C` is a multiple of `2^s` ([`fold_shift_of_add_constant`]).
+//! The pin has neither; gcc's VRP-fed folds give nbody_fixed -Os `asr`, `add` where the pin has `add`, `lsr`, `add`.
+//!
 //! # Used by
 //! `combine::visit`, once the shift family's slot is flipped.
 //!
@@ -2019,6 +2023,65 @@ fn lshr_by_constant(
 
 /// `InstCombinerImpl::visitLShr`
 /// ([:1399](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineShifts.cpp#L1399)).
+/// DEVIATE 6: the shifted constant of an add. `v` is `rest + C` with `C` a multiple of `2^amount`: `rest` and
+/// `C >> amount`. A logical shift sees through a tree of one-use `add nuw`s, whose every partial sum is at most
+/// the total and so cannot wrap; an arithmetic shift only the one `add nsw`, since a regrouped partial sum could
+/// leave the range the original did not.
+fn split_shifted_constant(
+    c: &mut Combiner,
+    inst: InstId,
+    v: Operand,
+    amount: u32,
+    arithmetic: bool,
+) -> Option<(Operand, u128)> {
+    let flag = if arithmetic { Flags::NSW } else { Flags::NUW };
+    let (lhs, rhs) = {
+        let q = query(c, Some(inst));
+        let (_, lhs, rhs, flags) = binop(&q, v, BinaryOp::Add)?;
+        if !flags.contains(flag) || !has_one_use(c, v) {
+            return None;
+        }
+        (lhs, rhs)
+    };
+    let w = c.context.types.int_bits(c.type_of(v)).expect("an integer");
+    let shifted = |k: u128| (k != 0 && k & low_bits(w, amount) == 0).then(|| {
+        if arithmetic { ashr_w(k, amount, w) } else { lshr_w(k, amount, w) }
+    });
+    for (rest, constant) in [(lhs, rhs), (rhs, lhs)] {
+        if let Some(k) = imm(&query(c, Some(inst)), constant).and_then(shifted) {
+            return Some((rest, k));
+        }
+    }
+    if arithmetic {
+        return None;
+    }
+    for (inner, other) in [(lhs, rhs), (rhs, lhs)] {
+        if let Some((rest, k)) = split_shifted_constant(c, inst, inner, amount, false) {
+            return Some((c.create_binop(inst, BinaryOp::Add, rest, other, Flags::NUW), k));
+        }
+    }
+    None
+}
+
+/// DEVIATE 6: `(X + C) >> s` is `(X >> s) + (C >> s)`, by a constant `s`, for `C` a multiple of `2^s`, where the
+/// add cannot wrap (`nuw` for `lshr`, `nsw` for `ashr`): the floor of the quotient moves the whole multiple out.
+/// Without the flag it is wrong: `lshr (add i8 200, 64), 6` is 0, the split is 4. gcc's `match.pd` has the same
+/// rule, fed by its range propagation.
+fn fold_shift_of_add_constant(
+    c: &mut Combiner,
+    inst: InstId,
+    arithmetic: bool,
+) -> Option<Visit> {
+    let (_, op0, op1, _) = shift_parts(c, inst);
+    let ty = c.type_of(op0);
+    let w = c.context.types.int_bits(ty).expect("an integer");
+    let amount = imm(&query(c, Some(inst)), op1).filter(|&amount| 0 < amount && amount < u128::from(w))? as u32;
+    let (rest, k) = split_shifted_constant(c, inst, op0, amount, arithmetic)?;
+    let moved = c.create_binop(inst, if arithmetic { BinaryOp::AShr } else { BinaryOp::LShr }, rest, op1, Flags::default());
+    let k = c.int(ty, k);
+    Some(c.replace_with_binop(inst, BinaryOp::Add, moved, k, if arithmetic { Flags::NSW } else { Flags::NUW }))
+}
+
 pub fn visit_lshr(
     c: &mut Combiner,
     inst: InstId,
@@ -2127,6 +2190,10 @@ pub fn visit_lshr(
             flags_of(&[(bo_flags.contains(Flags::DISJOINT), Flags::DISJOINT)])
         };
         return c.replace_with_binop(inst, bo_op, new_lshr, x, new_flags);
+    }
+
+    if let Some(folded) = fold_shift_of_add_constant(c, inst, false) {
+        return folded;
     }
 
     if let Some(amount) = imm(&query(c, Some(inst)), op1)
@@ -2363,6 +2430,10 @@ pub fn visit_ashr(
             let new_flags = flags_of(&[(true, Flags::NSW), (mul_flags.contains(Flags::NUW), Flags::NUW)]);
             return c.replace_with_binop(inst, BinaryOp::Add, x, shifted, new_flags);
         }
+    }
+
+    if let Some(folded) = fold_shift_of_add_constant(c, inst, true) {
+        return folded;
     }
 
     if set_shift_flags(c, inst) {
