@@ -3415,6 +3415,17 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE LU32 (`lsr_use.rs`): an addrec of another loop that no phi
+    /// carries and that has several recurrence levels (`{a,+,b,+,c}`, a squared
+    /// counter) is expanded by one phi a level in that loop, so the rating
+    /// counts a register for each; the pin counts one. Otherwise `i * i`
+    /// feeding an inner loop's start becomes a quadratic pair of induction
+    /// variables that an outer loop holding its own counter, sum and bound
+    /// spills.
+    fn lsr_outer_addrec_regs_per_level(&self) -> bool {
+        false
+    }
+
     /// Whether an offset LSR leaves unfolded in an address that has one base
     /// register and no scale is folded into that address after LSR (the 6502's
     /// `(zp),y` with a constant `y`): then it costs no add. DEVIATE LU16

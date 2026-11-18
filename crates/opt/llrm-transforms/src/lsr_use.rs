@@ -523,6 +523,8 @@ pub struct Cost {
     walked: Vec<(Vec<Scev>, i64, i64)>,
     /// Rated for size (set by `rate_formula`).
     pub(crate) size: bool,
+    /// DEVIATE LU32: the phis the formulae's starts add to outer loops.
+    pub(crate) outer_phis: u32,
     /// DEVIATE LG3: the bytes of the setup and exit-test code, for a target
     /// that gives a byte model (`Tti::lsr_bytes`); 0 elsewhere.
     pub bytes: u32,
@@ -743,7 +745,8 @@ impl Cost {
             if lu.kind == Kind::Address {
                 for fixup in &lu.fixups {
                     let offset = fixup.offset.add_unsigned(f.base_offset).0;
-                    self.size_bytes += m.displacement(offset, f.has_global(), matches!(f.symbol, Some(Symbol::Frame(_))));
+                    self.size_bytes +=
+                        m.displacement(offset, f.has_global(), matches!(f.symbol, Some(Symbol::Frame(_))));
                 }
             }
             // An add or lea for each register not folded, and its immediate.
@@ -955,6 +958,14 @@ impl Cost {
             {
                 self.variable_steps += 1;
             }
+            // DEVIATE LU32: a start that is a multi-level addrec of an outer
+            // loop no phi carries is expanded there by a phi a level.
+            if r.tti.lsr_outer_addrec_regs_per_level() && !r.as_written {
+                let start = r.se.operands(reg)[0].scev;
+                let phis = outer_addrec_phis(r.se, r.cx, start, r.l);
+                self.outer_phis += phis;
+                self.c.num_regs += phis;
+            }
             // DEVIATE COLD-CHREC: nor a start that expands to such phis.
             if !r.as_written && r.tti.avoids_cold_outer_addrec_expansion() {
                 let start = r.se.operands(reg)[0].scev;
@@ -1019,7 +1030,8 @@ impl Cost {
             {
                 // The step added each trip.
                 let step = r.se.operands(reg)[1].scev;
-                let step_bytes = r.se.as_constant(step).map_or(m.local_get, |c| m.constant + leb_len(c.sext_value() as i64));
+                let step_bytes =
+                    r.se.as_constant(step).map_or(m.local_get, |c| m.constant + leb_len(c.sext_value() as i64));
                 self.bytes += m.local_get + step_bytes + m.op + m.local_set;
             }
 
@@ -1073,11 +1085,12 @@ impl Cost {
             // constant start the model prices by value is counted already.
             let priced_start = m.constant_start.is_some()
                 && r.se.match_affine_add_rec(reg).is_some_and(|(start, _, _)| r.se.as_constant(start).is_some());
-            // DEVIATE LSR-DERIVED (a target fact, off by default: m16 -Os grew without
-            // it checked): not for an integer recurrence the loop as
-            // written derives from its counter by one instruction each trip
-            // (`i << 4`, `i - 192`): it is no register stepped from a start,
-            // so there is nothing to set up. The pin counts it a recurrence
+            // DEVIATE LSR-DERIVED (a target fact, off by default: m16 -Os grew
+            // without it checked): not for an integer recurrence
+            // the loop as written derives from its counter by one
+            // instruction each trip (`i << 4`, `i - 192`): it is no
+            // register stepped from a start, so there is nothing to
+            // set up. The pin counts it a recurrence
             // like any other; a byte model prices the two apart.
             let derived = m.derived_setup_free
                 && r.as_written
@@ -1137,6 +1150,33 @@ fn cx_loop_contains(
     inner: BlockId,
 ) -> bool {
     cx.loops.get_loop_for(outer).is_some_and(|lp| lp.contains_loop(cx.loops.get_loop_for(inner)))
+}
+
+/// DEVIATE LU32 (`Tti::lsr_outer_addrec_regs_per_level`): the phis expanding
+/// `s` adds to the loops other than `l`: a phi a level of each addrec with
+/// more than one that no phi carries.
+fn outer_addrec_phis(
+    se: &mut ScalarEvolution,
+    cx: &Cx,
+    s: Scev,
+    l: BlockId,
+) -> u32 {
+    use llrm_analysis::scev::expr::Kind as K;
+    match se.node(s).kind.clone() {
+        K::AddRec(operands, header) if header != l => {
+            if is_existing_phi(se, cx, s) {
+                0
+            } else if operands.len() > 2 {
+                operands.len() as u32 - 1
+            } else {
+                operands.iter().map(|op| outer_addrec_phis(se, cx, op.scev, l)).sum()
+            }
+        }
+        K::Add(operands) | K::Mul(operands) | K::AddRec(operands, _) => {
+            operands.iter().map(|op| outer_addrec_phis(se, cx, op.scev, l)).sum()
+        }
+        _ => 0,
+    }
 }
 
 /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopStrengthReduce.cpp#L1123
@@ -1218,7 +1258,13 @@ fn leb_len(v: i64) -> u32 {
 
 /// What the code in the preheader that makes `reg` is in bytes, as
 /// `setup_cost` walks it.
-fn setup_bytes(se: &ScalarEvolution, cx: &Cx, m: &LsrBytes, reg: Scev, depth: u32) -> u32 {
+fn setup_bytes(
+    se: &ScalarEvolution,
+    cx: &Cx,
+    m: &LsrBytes,
+    reg: Scev,
+    depth: u32,
+) -> u32 {
     match se.scev_type(reg) {
         Type::Unknown => m.local_get,
         Type::Constant => m.constant + leb_len(se.as_constant(reg).expect("a constant").sext_value() as i64),
@@ -1229,8 +1275,7 @@ fn setup_bytes(se: &ScalarEvolution, cx: &Cx, m: &LsrBytes, reg: Scev, depth: u3
         }
         Type::Add | Type::Mul => {
             let ops = se.operands(reg);
-            ops.iter().map(|op| setup_bytes(se, cx, m, op.scev, depth - 1)).sum::<u32>()
-                + (ops.len() as u32 - 1) * m.op
+            ops.iter().map(|op| setup_bytes(se, cx, m, op.scev, depth - 1)).sum::<u32>() + (ops.len() as u32 - 1) * m.op
         }
         _ => 0,
     }

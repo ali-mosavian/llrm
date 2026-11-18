@@ -334,6 +334,14 @@ impl Tti for Z80Tti {
         key(a) < key(b)
     }
 
+    /// DEVIATE LU32: an inner loop starting at `i * i` made the outer loop
+    /// carry two more induction variables (a pointer and its step); the
+    /// Z80's outer loops hold their counter, sum and bound in the frame
+    /// already (sieve -Os: 312 B a body, 240 B with the product opaque).
+    fn lsr_outer_addrec_regs_per_level(&self) -> bool {
+        true
+    }
+
     /// DEVIATE LU13: a call takes every register of the Z80, so what a loop
     /// keeps across one is in the frame; `spills` plus the base adds (the
     /// instructions that stand for a kept value) rank first.
