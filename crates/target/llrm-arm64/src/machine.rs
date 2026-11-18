@@ -79,16 +79,17 @@ pub struct Arm64Machine {
     pub platform: Platform,
 }
 
-/// Whether vector values are taken (ARM64-VEC POC, DEVIATE VECT-LATE): off unless
-/// `LLRM_ARM64_VECTORS` is set, so no scalar compile can change.
+/// Whether vector values are taken (DEVIATE VECT-LATE): on unless
+/// `LLRM_ARM64_VECTORS=0`, the off-switch (the vectors were deferred until
+/// 32-bit parity; oversight lifted the hold 2026-11-12).
 pub fn vectors_enabled() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| flag_on(std::env::var_os("LLRM_ARM64_VECTORS").as_deref()))
 }
 
-/// Unset, empty and `0` are off: `LLRM_ARM64_VECTORS=0` turned the vectors on.
+/// Only `0` is off; unset and empty are on.
 fn flag_on(value: Option<&std::ffi::OsStr>) -> bool {
-    value.is_some_and(|v| !v.is_empty() && v != "0")
+    value.is_none_or(|v| v != "0")
 }
 
 #[cfg(test)]
@@ -97,9 +98,9 @@ mod flag_tests {
     use std::ffi::OsStr;
 
     #[test]
-    fn a_zero_flag_value_leaves_the_vectors_off() {
-        assert!(!flag_on(None));
-        assert!(!flag_on(Some(OsStr::new(""))));
+    fn only_a_zero_flag_value_turns_the_vectors_off() {
+        assert!(flag_on(None));
+        assert!(flag_on(Some(OsStr::new(""))));
         assert!(!flag_on(Some(OsStr::new("0"))));
         assert!(flag_on(Some(OsStr::new("1"))));
     }
@@ -130,6 +131,11 @@ impl Machine for Arm64Machine {
 
     fn tti(&self) -> Option<Rc<dyn Tti>> {
         Some(Rc::new(AArch64::of_cpu(self.platform.cpu()).expect("a cpu the platform names")))
+    }
+
+    /// Darwin's runtime has `memset_pattern16`; Linux states nothing.
+    fn library(&self) -> Option<Rc<dyn llrm_mir::libfunc::Library>> {
+        (self.platform == Platform::Darwin).then(|| Rc::new(llrm_mir::libfunc::Darwin { int_bits: 32, size_t_bits: 64 }) as _)
     }
 
     fn lowering(&self) -> Option<Rc<dyn Lowering>> {
@@ -219,6 +225,33 @@ impl Machine for Arm64Machine {
         &self,
         aggressive: bool,
     ) -> Option<GlobalMerge> {
-        Some(GlobalMerge { max_offset: 4095, size_only: !aggressive, optsize_counts: true, mach_o: self.platform == Platform::Darwin })
+        Some(GlobalMerge {
+            max_offset: 4095,
+            size_only: !aggressive,
+            optsize_counts: true,
+            keep_data_indexed: true,
+            mach_o: self.platform == Platform::Darwin,
+        })
+    }
+}
+
+#[cfg(test)]
+mod library_tests {
+    use super::*;
+    use llrm_mir::libfunc::{LibFunc, TargetLibraryInfo};
+
+    fn has_pattern(platform: Platform) -> bool {
+        match (Arm64Machine { platform }).library() {
+            Some(library) => TargetLibraryInfo::new(&*library).has(LibFunc::MemsetPattern16),
+            None => false,
+        }
+    }
+
+    /// A Darwin target stated no library, so the pass that forms
+    /// `memset_pattern16` (gated on `TLI->has`) never did on arm64-macos.
+    #[test]
+    fn darwin_has_memset_pattern16_and_linux_does_not() {
+        assert!(has_pattern(Platform::Darwin));
+        assert!(!has_pattern(Platform::Linux));
     }
 }

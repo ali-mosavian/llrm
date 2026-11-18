@@ -15,7 +15,7 @@ fn legalized(
         &tli,
         &mut X86Lowering {
             multiply_early_out: None,
-            imul_if_smaller: false,
+            imul_if_smaller: false, hot_chains: false,
             share_products: false,
             cmov: false,
             sse2: false,
@@ -25,6 +25,7 @@ fn legalized(
             sext_load: false,
             zext_free: false,
             branch_constant_selects: false,
+            status_word_tests: false,
             profile: None,
         },
     )
@@ -84,7 +85,7 @@ fn equal_constants_share_a_pool_entry() {
         &tli,
         &mut X86Lowering {
             multiply_early_out: None,
-            imul_if_smaller: false,
+            imul_if_smaller: false, hot_chains: false,
             share_products: false,
             cmov: false,
             sse2: false,
@@ -94,6 +95,7 @@ fn equal_constants_share_a_pool_entry() {
             sext_load: false,
             zext_free: false,
             branch_constant_selects: false,
+            status_word_tests: false,
             profile: None,
         },
     )
@@ -118,7 +120,7 @@ fn a_target_that_takes_every_float_constant_keeps_it() {
             &tli,
             &mut X86Lowering {
                 multiply_early_out: None,
-                imul_if_smaller: false,
+                imul_if_smaller: false, hot_chains: false,
                 share_products: false,
                 cmov: false,
                 sse2: false,
@@ -128,6 +130,7 @@ fn a_target_that_takes_every_float_constant_keeps_it() {
                 sext_load: false,
                 zext_free: false,
                 branch_constant_selects: false,
+                status_word_tests: false,
                 profile: None,
             },
         )

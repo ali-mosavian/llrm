@@ -57,7 +57,7 @@ fn reduced_with(text: &str, flag: Option<&str>) -> String {
         function.attrs.push(llrm_mir::opcode::Attribute::Flag(flag.into()));
     }
     let mut manager = llrm_mir::passes::PassManager::default();
-    manager.add(LoopStrengthReduce { size: false });
+    manager.add(LoopStrengthReduce { size: false, bytes_strict: false });
     manager.run_module(&mut module, Rc::new(Flat("i486"))).expect("runs");
     llrm_mir::print::module(&module)
 }

@@ -1631,6 +1631,29 @@ pub(crate) fn floating(body: &LirBody) -> BTreeSet<u32> {
     out
 }
 
+/// The values an instruction fills into an xmm register that no x87 operation touches: the vectors and the SSE
+/// floats, which `floating` also holds with the x87 stack's values.
+pub(crate) fn xmm_values(body: &LirBody) -> BTreeSet<u32> {
+    let regs = body.regs();
+    let mut xmm: BTreeSet<u32> = BTreeSet::new();
+    let mut x87: BTreeSet<u32> = BTreeSet::new();
+    let mut items: Vec<Item> = Vec::new();
+    for one in body.insns() {
+        if one.what.as_ref().is_some_and(|what| target::_on_the_stack(regs, what) || what.op.is_x87()) {
+            x87.extend(one.uses.iter().chain(&one.defines).copied());
+        }
+        items.clear();
+        contribution(regs, &*one, &mut items);
+        for item in &items {
+            if let Item::Restrict { value, kind: Kind::Xmm, .. } = item {
+                xmm.insert(*value);
+            }
+        }
+    }
+    xmm.retain(|value| !x87.contains(value));
+    xmm
+}
+
 /// Each far cell whose selector is also read as a number, or pinned to a
 /// general register, reached through ES: None where no cell is rewritten.
 pub fn explicit_selectors_given(

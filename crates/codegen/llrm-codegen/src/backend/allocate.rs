@@ -313,6 +313,12 @@ pub fn greedy_rewritten(
             basic_semantics,
             address_reference_milliweight: targets::profile(cpu)
                 .map_or(1000, |profile| profile.target().tuning().address_reference_milliweight),
+            // Priced in clocks: where bytes are held (-O1, size) a fold is no
+            // gain by that price.
+            fold_spill: targets::profile(cpu)
+                .ok()
+                .filter(|profile| !profile.bytes_strict())
+                .and_then(|profile| profile.target().tuning().spill_fold),
         },
         tri: &crate::greedy::targetinfo::X86RegisterInfo,
         size: crate::greedy::greedy::OPT_SIZE.with(std::cell::Cell::get),
@@ -577,7 +583,7 @@ impl RegAlloc {
         }
         let selectors: BTreeSet<RegId> = segments.selectors.iter().copied().collect();
         self.pinned.retain(|value, register| !(regs.is_segment(*register) && confined.get(value) == Some(&selectors)));
-        let (constrained_body, fixed) = constrain::constrained(&body, Some(&self.pinned), &self.classes);
+        let (constrained_body, fixed) = constrain::constrained(&body, Some(&self.pinned), &self.classes, self.size);
         body = constrain::hoisted(&constrained_body, &fixed);
         // A copy of an undefined value the constraints made is undefined too.
         if body.insns().iter().any(|one| crate::processimpdefs::implicit_def_of(one).is_some()) {
@@ -613,8 +619,13 @@ impl RegAlloc {
         pins.extend(required);
         if !cpu.optimized {
             // -O0: the pin's RegAllocFast.
-            match crate::backend::regallocfast::allocate(&body, &pins, &segments, &self.classes, &mut frame.borrow_mut())
-            {
+            match crate::backend::regallocfast::allocate(
+                &body,
+                &pins,
+                &segments,
+                &self.classes,
+                &mut frame.borrow_mut(),
+            ) {
                 Ok(placed) => {
                     drop(base);
                     llrm_support::debug!("regalloc", "{}: fast", body.name);
@@ -1726,6 +1737,7 @@ mod tests {
             &body_of("dead result", 0, vec![call]),
             Some(&pins(&[(1, RegId::EAX)])),
             &crate::backend::classes::RegisterClasses::m16(),
+            false,
         );
         let insns = lowered.insns();
         assert_eq!(insns.len(), 1, "a copy was made of a result nothing reads");

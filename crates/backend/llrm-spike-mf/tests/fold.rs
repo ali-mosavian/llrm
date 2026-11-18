@@ -270,3 +270,69 @@ fn a_block_with_an_instruction_after_its_branch_is_refused() {
     let mut function = layout(vec![vec![terminator("branch", false, Some(2)), op("spill", vec![])], vec![ret()], vec![halt()]]);
     branch_fold::<Two>(&mut function);
 }
+
+/// `Two` with HC1's window open (m68k's `hoist_window` is 4).
+struct Windowed;
+
+impl llrm_spike_mf::regalloc::Target for Windowed {
+    type Class = ();
+    fn meet(
+        a: (),
+        b: (),
+    ) -> Option<()> {
+        Two::meet(a, b)
+    }
+    fn any() {}
+    fn candidates(class: ()) -> Vec<RegId> {
+        Two::candidates(class)
+    }
+    fn view(
+        root: RegId,
+        class: (),
+    ) -> RegId {
+        Two::view(root, class)
+    }
+    fn root(register: RegId) -> RegId {
+        Two::root(register)
+    }
+    fn reserved(root: RegId) -> bool {
+        Two::reserved(root)
+    }
+    fn caller_saved() -> Vec<RegId> {
+        vec![]
+    }
+    fn copy_sets_flags(
+        to: RegId,
+        from: RegId,
+    ) -> bool {
+        Two::copy_sets_flags(to, from)
+    }
+    fn hoist_window() -> usize {
+        4
+    }
+}
+
+impl llrm_spike_mf::Jump for Windowed {
+    fn jump(block: u32) -> Inst {
+        Two::jump(block)
+    }
+    fn reverse(branch: &Inst) -> Option<Inst> {
+        Two::reverse(branch)
+    }
+}
+
+/// HC1 looked for a way's twin compare past a `move` into a data register
+/// (`Kind::Copy`, `sets_flags` false) and pulled the compare above it, so the
+/// `set` that reads the compare's codes read the `move`'s. The copy must
+/// stay ahead of the compare it precedes.
+#[test]
+fn a_twin_compare_does_not_cross_a_copy_that_sets_flags() {
+    use llrm_spike_mf::regalloc::Target as _;
+    let copy = Inst::new(Kind::Copy, vec![Operand::Def(v(3)), Operand::Use(v(1))]);
+    let mut reads = op("reads", vec![Operand::Def(v(4))]);
+    reads.reads_flags = true;
+    let mut function =
+        guard(compare(0), [vec![compare(0), reads.clone(), ret()], vec![copy, compare(0), reads, halt()]]);
+    branch_fold_hoisting::<Windowed>(&mut function, &registers());
+    assert_eq!(shape(&function)[2].1, names(&["copy", "compare", "reads", "halt"]));
+}

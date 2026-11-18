@@ -3,7 +3,7 @@
 //! is asserted of the text is how many loops there are and where the test is.
 
 use crate::simpleloopunswitch::SimpleLoopUnswitch;
-use crate::testing::{managed, parsed, results};
+use crate::testing::{Tuned, managed, managed_on, parsed, results};
 
 /// `text` through the pass, `non_trivial` or not: its printed form, run as
 /// before on `inputs`.
@@ -169,6 +169,63 @@ out:
     assert_eq!(loops(&after), 3, "{after}");
 }
 
+/// queens -O3 (m32) died in the unswitch: the original loop's dead blocks end
+/// in switches that name an exit three times, the exit's phi has an input for
+/// each edge, and one removal for each block left two inputs, so the exit
+/// that other blocks still reach was named by blocks erased ("block 115
+/// still has 2 users"). One removal for each edge, as LLVM's `successors(BB)`
+/// iterates them.
+#[test]
+fn a_dead_blocks_switch_naming_a_live_exit_twice_leaves_no_input_in_its_phi() {
+    let text = "define i16 @f(i16 %n, i16 %m) {
+b0:
+  %z = icmp eq i16 %n, 0
+  br label %head
+
+head:
+  %i = phi i16 [ 0, %b0 ], [ %next, %latch ]
+  %acc = phi i16 [ 0, %b0 ], [ %sum, %latch ]
+  br i1 %z, label %then, label %else
+
+then:
+  %k = and i16 %i, 3
+  %a = add i16 %acc, %i
+  switch i16 %k, label %gone [
+    i16 1, label %gone
+    i16 2, label %then2
+  ]
+
+then2:
+  %c = add i16 %a, 1
+  switch i16 %k, label %gone [
+    i16 1, label %gone
+    i16 3, label %latch
+  ]
+
+else:
+  %b = mul i16 %acc, 3
+  %w = icmp eq i16 %i, 7
+  br i1 %w, label %gone, label %latch
+
+latch:
+  %sum = phi i16 [ %c, %then2 ], [ %b, %else ]
+  %next = add i16 %i, 1
+  %done = icmp eq i16 %next, %m
+  br i1 %done, label %out, label %head
+
+gone:
+  %g = phi i16 [ %acc, %then ], [ %acc, %then ], [ %a, %then2 ], [ %a, %then2 ], [ %b, %else ]
+  ret i16 %g
+
+out:
+  %r = phi i16 [ %sum, %latch ]
+  ret i16 %r
+}
+";
+    let after = unswitched(text, &[&[0, 3], &[1, 3], &[0, 9], &[5, 9]], true);
+    assert_eq!(loops(&after), 2, "{after}");
+}
+
 /// A value the loop makes and the code after reads is one phi after both
 /// copies, whichever ran.
 #[test]
@@ -293,4 +350,19 @@ fn test_a_header_test_of_loads_nothing_writes_is_unswitched() {
     assert_eq!(loops(&other), 2, "{other}");
     let same = unswitched(&partially_invariant("store i16 1, ptr @g"), inputs, true);
     assert_eq!(loops(&same), 1, "{same}");
+}
+
+/// x86-m16 sets `unswitch_threshold: Some(0)` (no loop is copied for size), but
+/// nothing read it: a -O3 m16 loop with an invariant branch was unswitched like
+/// any other. A target's bar is the pin's option, so 0 leaves every loop.
+#[test]
+fn the_targets_unswitch_threshold_is_the_bar_a_candidate_stays_under() {
+    let text = branch("%c = and i1 %z, true");
+    let run = |unswitch_threshold| {
+        let mut module = parsed(&text);
+        let machine = Tuned { unswitch_threshold, ..Default::default() };
+        loops(&managed_on(&mut module, SimpleLoopUnswitch { non_trivial: true }, machine))
+    };
+    assert_eq!(run(None), 2, "the pin's 50 unswitches it");
+    assert_eq!(run(Some(0)), 1, "a bar of 0 leaves the loop");
 }

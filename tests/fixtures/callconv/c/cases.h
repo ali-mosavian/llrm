@@ -22,11 +22,18 @@ typedef struct { char c; int i; } SCI;
     X(np, char near *, char near *) X(fp, char far *, char far *) X(f, float, double) \
     X(d, double, double) X(ld, long double, long double) X(s3, S3, S3) X(s5, S5, S5)
 
+#ifdef __clang__
+/* clang keeps a parameter whose address is taken in a local copy: `&parmN` is not the argument area. */
+typedef __builtin_va_list va_list;
+#define va_start(ap, parmN) __builtin_va_start(ap, parmN)
+#define va_arg(ap, type) __builtin_va_arg(ap, type)
+#else
 /* Borland's STDARG.H, medium model. */
 typedef void *va_list;
 #define __size(x) ((sizeof(x) + sizeof(int) - 1) & ~(sizeof(int) - 1))
 #define va_start(ap, parmN) ((void)((ap) = (va_list)((char *)(&parmN) + __size(parmN))))
 #define va_arg(ap, type) (*(type *)(((*(char **)&(ap)) += __size(type)) - (__size(type))))
+#endif
 
 /* Clobbers every register a callee may: EAX-EDX, ES, and the high halves
    of ESI, EDI and EBP. */

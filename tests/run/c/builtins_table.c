@@ -1,4 +1,5 @@
 // flags: -O0 | -O2 | -Os
+// bar: none (SDCC error 101: too many parameters)
 // The builtins the table lowers besides expect: constant_p is 0 or 1 (1 once a call is inlined), prefetch and unreachable do nothing, abs and strlen
 // are the library's (defined below: the test links no C library).
 extern void report(long value);

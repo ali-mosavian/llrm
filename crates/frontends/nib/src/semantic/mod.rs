@@ -1870,6 +1870,9 @@ struct FunctionCompiler<'a> {
     values: Vec<hir::Value>,
     places: Vec<hir::Place>,
     blocks: Vec<BlockBuilder>,
+    /// The block of each panic routine's call in this function, which every
+    /// check of it shares.
+    panic_blocks: BTreeMap<&'static str, u32>,
     current: u32,
     parameters: Vec<u32>,
     stated: llrm_codegen::hir::facts::Builder,
@@ -2012,6 +2015,7 @@ impl<'a> FunctionCompiler<'a> {
             values: Vec::new(),
             places: Vec::new(),
             blocks: vec![BlockBuilder { id: 1, instructions: Vec::new(), terminator: None }],
+            panic_blocks: BTreeMap::new(),
             current: 1,
             parameters: Vec::new(),
             stated: llrm_codegen::hir::facts::Builder::new("nib"),

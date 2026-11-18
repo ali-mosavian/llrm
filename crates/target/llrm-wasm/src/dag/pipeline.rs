@@ -131,6 +131,13 @@ pub enum Refusal {
 struct WasmCombines;
 
 impl CombineHooks for WasmCombines {
+    /// `visitFREEZE` pushes a freeze to the operands the pin cannot prove
+    /// defined, so the freeze `narrowSDivSRem` leaves on a byte does not hide
+    /// its sign bits from `sext_inreg` (`div8_os` -O3 kept one per iteration).
+    fn push_freeze_through_operands(&self) -> bool {
+        true
+    }
+
     /// `TargetLowering::convertSelectOfConstantsToMath`: wasm keeps the pin's
     /// default, so `(shl (select c, 1, 2), 2)` folds into one `select 4, 8`.
     fn convert_select_of_constants_to_math(
@@ -138,6 +145,23 @@ impl CombineHooks for WasmCombines {
         _vt: EVT,
     ) -> bool {
         false
+    }
+
+    /// `convertSetCCLogicToBitwiseLogic`: WebAssembly keeps the pin's default
+    /// (false), so `(a != 7) | (b != 9)` stays two compares and an `or`.
+    fn convert_setcc_logic_to_bitwise_logic(&self) -> bool {
+        false
+    }
+
+    /// `TargetLowering::shouldNormalizeToSelectSequence`: wasm keeps the pin's
+    /// default, true unless the select's type is split into registers, so
+    /// `select (and c0, c1), x, y` is `select c0, (select c1, x, y), y`.
+    fn normalize_to_select_sequence(
+        &self,
+        vt: EVT,
+        _cond_vt: EVT,
+    ) -> bool {
+        !(vt.is_integer() && vt.size_in_bits() > 64)
     }
 
     fn canonicalize_ge_le(&self) -> bool {
@@ -285,7 +309,7 @@ pub fn select_block(
     // memory) are frame objects numbered after the function's.
     dag.first_temporary = info.next_stack_object();
     let tables = &info.jump_tables;
-    let mut lowering = WasmLowering { tables };
+    let mut lowering = WasmLowering { tables, cpu };
     if optimize {
         live_out::assert_live_out_copies(dag, info);
     }

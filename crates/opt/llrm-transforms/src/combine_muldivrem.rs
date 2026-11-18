@@ -101,12 +101,12 @@ fn parts(
     (instruction.operands[0], instruction.operands[1], instruction.flags)
 }
 
-/// The width of the integer `v` (a scalar: MIR has no vectors).
+/// The width of the integer `v`, or of the lane of an integer vector.
 fn width(
     c: &Combiner,
     v: Operand,
 ) -> u32 {
-    c.context.types.int_bits(c.type_of(v)).expect("an integer")
+    c.context.types.scalar_int_bits(c.type_of(v)).expect("an integer")
 }
 
 /// The number `v` is and its width (`m_APInt`).
@@ -1177,12 +1177,13 @@ pub fn visit_mul(
 
     // (mul Op0 Op1): if Log2(Op0) folds away -> (shl Op1, Log2(Op0)), and if
     // Log2(Op1) folds away -> (shl Op0, Log2(Op1)).
-    // DEVIATE SD546 (owner anyisa, exit 2026-11-20): a size build keeps
-    // `mul X, select(c, 8, 2)` where a shift needs its count in one register;
-    // the pin's `shl X, select(c, 3, 1)` (visitMul,
+    // DEVIATE SD546 (owner anyisa, exit 2026-11-24; m64 spill_store_order +32 B
+    // blocks removal): a size build keeps `mul X, select(c, 8, 2)` where a
+    // shift needs its count in one register; the pin's `shl X, select(c, 3,
+    // 1)` (visitMul,
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineMulDivRem.cpp#L604)
-    // costs the move and the register (pack_ref -Os: m32 -18 B, m64 -7 B).
-    // gcc shifts only a constant multiplier. A constant count stays.
+    // costs the move and the register (pack_ref -Os: m32 -18 B, m64 -7 B). gcc
+    // shifts only a constant multiplier. A constant count stays.
     let keeps_mul = c.env.hooks.fixed_shift_count && is_optsize(c.function);
     for (log_of, other) in [(op0, op1), (op1, op0)] {
         if keeps_mul && !matches!(log_of, Operand::Constant(_)) {

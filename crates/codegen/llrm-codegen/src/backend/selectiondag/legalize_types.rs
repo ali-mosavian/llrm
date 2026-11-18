@@ -49,6 +49,10 @@ use super::libcalls::{self, Cmp3, Libcall};
 use super::lowering::TypeAction;
 use super::mvt::{EVT, MVT};
 
+mod mask;
+mod vector;
+mod widen;
+
 /// The width of the C `int` the soft-float routines take for a conversion: a
 /// 32-bit integer is passed as is, a narrower one is extended to it.
 const INT_BITS: u32 = 32;
@@ -79,9 +83,19 @@ pub struct TypeLegalizer<'a> {
     replaced: HashMap<SDValue, SDValue>,
     promoted: HashMap<SDValue, SDValue>,
     expanded: HashMap<SDValue, (SDValue, SDValue)>,
+    /// A vector value and its two halves (`SplitVectors`).
+    split: HashMap<SDValue, (SDValue, SDValue)>,
+    /// A vector value and the wider vector that stands for it
+    /// (`WidenedVectors`).
+    widened: HashMap<SDValue, SDValue>,
     /// A float value and the integer of its width that stands for it
     /// (`SoftenedFloats`).
     softened: HashMap<SDValue, SDValue>,
+    /// The result of a compare routine already called on these operands: the
+    /// routines are pure (`const` in libgcc), so a second compare of the same
+    /// pair reads it instead of calling again. DEVIATE SOFT-CMP-CSE (the pin
+    /// calls one routine per predicate): owner w8, exit 2026-11-27.
+    compare_results: HashMap<(&'static str, SDValue, SDValue), SDValue>,
     /// The target whose routines a division calls (`None`: no library calls).
     target: Option<&'a dyn llrm_target::Target>,
     /// The target's custom lowerings, asked before a node with an illegal type
@@ -136,7 +150,10 @@ impl<'a> TypeLegalizer<'a> {
             replaced: HashMap::default(),
             promoted: HashMap::default(),
             expanded: HashMap::default(),
+            split: HashMap::default(),
+            widened: HashMap::default(),
             softened: HashMap::default(),
+            compare_results: HashMap::default(),
             target: None,
             hooks: None,
         }
@@ -261,6 +278,18 @@ impl<'a> TypeLegalizer<'a> {
                     self.soften_float_result(value)?;
                     return Ok(true);
                 }
+                TypeAction::SplitVector => {
+                    if !self.custom_lower_node(n, vt) {
+                        self.split_vector_result(value)?;
+                    }
+                    return Ok(true);
+                }
+                TypeAction::WidenVector => {
+                    if !self.custom_lower_node(n, vt) {
+                        self.widen_vector_result(value)?;
+                    }
+                    return Ok(true);
+                }
                 // The builder creates a vector only where a register class
                 // holds it.
                 TypeAction::ScalarizeVector => {
@@ -290,6 +319,8 @@ impl<'a> TypeLegalizer<'a> {
                 TypeAction::PromoteInteger => self.promote_integer_operand(n, at)?,
                 TypeAction::ExpandInteger => self.expand_integer_operand(n, at)?,
                 TypeAction::SoftenFloat => self.soften_float_operand(n, at)?,
+                TypeAction::SplitVector => self.split_vector_operand(n, at)?,
+                TypeAction::WidenVector => self.widen_vector_operand(n, at)?,
                 TypeAction::ScalarizeVector => {
                     let op = self.dag.node(SDValue { node: n, res: 0 }).opcode;
                     return Err(LegalizeError::Unsupported {
@@ -552,6 +583,15 @@ impl<'a> TypeLegalizer<'a> {
                     )
                 } else {
                     let bits = from.size_in_bits();
+                    // DEVIATE SOFT-UITOFP-NONNEG: the signed routine for a value known non-negative (`nneg`, or
+                    // a clear sign bit), where the target asks (`TargetLowering::signed_conversion_of_nonneg`)
+                    let nonneg = op == ISD::UIntToFp
+                        && self.tli.signed_conversion_of_nonneg()
+                        && (self.dag.node(value).flags.0 & SDNodeFlags::NON_NEG.0 != 0
+                            || bits < INT_BITS
+                            || (bits <= INT_BITS
+                                && super::known_bits::masked_value_is_zero(self.dag, operand, 1u128 << (bits - 1))));
+                    let op = if nonneg { ISD::SIntToFp } else { op };
                     let extension = if op == ISD::SIntToFp { ISD::SignExtend } else { ISD::ZeroExtend };
                     let arg =
                         if bits < INT_BITS { self.dag.get_node(extension, EVT::I32, &[operand]) } else { operand };
@@ -734,14 +774,31 @@ impl<'a> TypeLegalizer<'a> {
         let (a, b) = (self.softened_float(lhs), self.softened_float(rhs));
         let vt = self.dag.value_type(node);
         let EVT::Simple(float_mvt) = float_vt else { return Err(unsupported("soften a compare of this float")) };
-        let pick = |cmp: Cmp3| libcalls::name(Libcall::Fcmp3(cmp, float_mvt));
+        // DEVIATE SOFT-CMP-CSE: by class, where the target's runtime has them.
+        let classes = self.tli.types.soft_compare_classes();
+        let pick = |cmp: Cmp3| {
+            let cmp = match cmp {
+                Cmp3::Oeq | Cmp3::Une | Cmp3::Olt if classes => Cmp3::Ole,
+                Cmp3::Ogt if classes => Cmp3::Oge,
+                other => other,
+            };
+            libcalls::name(Libcall::Fcmp3(cmp, float_mvt))
+        };
         let compare = |this: &mut Self, cmp: Cmp3, cc: CondCode| -> Result<SDValue, LegalizeError> {
             // The routines return a C `int`: the pointer's width up to a long
             // (16 at m16, 32 above).
             let int = EVT::integer(this.dag.config().pointer.size_in_bits().min(32));
-            let result = pick(cmp)
-                .and_then(|name| this.soft_call(name, &[a, b], int))
-                .ok_or_else(|| unsupported("the compare routine cannot be called"))?;
+            let name = pick(cmp).ok_or_else(|| unsupported("the compare routine cannot be called"))?;
+            let result = match this.compare_results.get(&(name, a, b)) {
+                Some(&done) => done,
+                None => {
+                    let call = this
+                        .soft_call(name, &[a, b], int)
+                        .ok_or_else(|| unsupported("the compare routine cannot be called"))?;
+                    this.compare_results.insert((name, a, b), call);
+                    call
+                }
+            };
             let zero = this.dag.get_constant(0, int);
             Ok(this.dag.get_setcc(vt, result, zero, cc))
         };
@@ -799,7 +856,7 @@ impl<'a> TypeLegalizer<'a> {
         &mut self,
         value: SDValue,
     ) -> SDValue {
-        let bits = self.dag.value_type(value).size_in_bits();
+        let bits = lane_bits(self.dag.value_type(value));
         let promoted = self.promoted_integer(value);
         let wide = self.dag.value_type(promoted);
         let mask = self.dag.get_constant(super::fold::mask(bits), wide);
@@ -896,6 +953,37 @@ impl<'a> TypeLegalizer<'a> {
                 let opcode = if vt.size_in_bits() % 8 == 0 { ISD::SignExtend } else { ISD::ZeroExtend };
                 self.dag.get_node(opcode, to, &[value])
             }
+            ISD::BuildVector => {
+                // `PromoteIntRes_BUILD_VECTOR`: each lane extended to the
+                // promoted lane; a constant boolean as the target's
+                // vectors hold it, which lets it fold with a compare's mask.
+                let lane = to.element();
+                let extend = match self.dag.config().boolean_contents_of(to) {
+                    BooleanContents::ZeroOrOne => ISD::ZeroExtend,
+                    BooleanContents::ZeroOrNegativeOne => ISD::SignExtend,
+                    BooleanContents::Undefined => ISD::AnyExtend,
+                };
+                let ops: Vec<SDValue> = self
+                    .dag
+                    .node(value)
+                    .ops
+                    .clone()
+                    .into_iter()
+                    .map(|op| {
+                        let op_vt = self.dag.value_type(op);
+                        if !op_vt.bits_lt(lane) {
+                            return op;
+                        }
+                        let opcode = if op_vt == EVT::I1 && self.dag.opcode(op) == ISD::Constant {
+                            extend
+                        } else {
+                            ISD::AnyExtend
+                        };
+                        self.dag.get_node(opcode, lane, &[op])
+                    })
+                    .collect();
+                self.dag.get_build_vector(to, &ops)
+            }
             // `PromoteIntRes_UNDEF`: an undef of the promoted type.
             ISD::Undef | ISD::Poison => self.dag.get_undef(to),
             ISD::Add | ISD::Sub | ISD::Mul | ISD::And | ISD::Or | ISD::Xor => {
@@ -904,12 +992,18 @@ impl<'a> TypeLegalizer<'a> {
                 let wide = self.dag.value_type(lhs);
                 self.dag.get_node(self.dag.opcode(value), wide, &[lhs, rhs])
             }
+            // `PromoteIntRes_VECREDUCE`: the result type changes, the vector
+            // does not.
+            op if op.vec_reduce_base_opcode().is_some() => {
+                let vector = self.dag.operand(value, 0);
+                self.dag.get_node(op, to, &[vector])
+            }
             op @ (ISD::SMin | ISD::SMax | ISD::UMin | ISD::UMax) => {
                 // `PromoteIntRes_SimpleIntBinOp` with `SExtPromotedInteger` for
                 // the signed forms and `ZExtPromotedInteger` for the unsigned.
                 let signed = matches!(op, ISD::SMin | ISD::SMax);
                 let extend = |legalizer: &mut Self, operand: SDValue| {
-                    let bits = legalizer.dag.value_type(operand).size_in_bits();
+                    let bits = lane_bits(legalizer.dag.value_type(operand));
                     let promoted = legalizer.promoted_integer(operand);
                     let wide = legalizer.dag.value_type(promoted);
                     if signed {
@@ -933,7 +1027,7 @@ impl<'a> TypeLegalizer<'a> {
                 let mut extended = Vec::with_capacity(2);
                 for at in 0..2 {
                     let operand = self.dag.operand(value, at);
-                    let bits = self.dag.value_type(operand).size_in_bits();
+                    let bits = lane_bits(self.dag.value_type(operand));
                     let promoted = self.promoted_integer(operand);
                     let wide = self.dag.value_type(promoted);
                     extended.push(if signed {
@@ -952,7 +1046,7 @@ impl<'a> TypeLegalizer<'a> {
                 // bits above its width cleared (srl) or sign-filled (sra); a
                 // promoted shift amount is zero extended.
                 let (value, amount) = (self.dag.operand(value, 0), self.dag.operand(value, 1));
-                let bits = self.dag.value_type(value).size_in_bits();
+                let bits = lane_bits(self.dag.value_type(value));
                 let promoted = self.promoted_integer(value);
                 let wide = self.dag.value_type(promoted);
                 let lhs = match op {
@@ -978,14 +1072,14 @@ impl<'a> TypeLegalizer<'a> {
                 };
                 self.dag.get_node(op, wide, &[lhs, amount])
             }
-            ISD::Select => {
-                // `PromoteIntRes_SELECT`: the arms promoted, the condition as
+            op @ (ISD::Select | ISD::VSelect) => {
+                // `PromoteIntRes_Select`: the arms promoted, the condition as
                 // is.
                 let (cond, then, other) =
                     (self.dag.operand(value, 0), self.dag.operand(value, 1), self.dag.operand(value, 2));
                 let (then, other) = (self.promoted_integer(then), self.promoted_integer(other));
                 let wide = self.dag.value_type(then);
-                self.dag.get_node(ISD::Select, wide, &[cond, then, other])
+                self.dag.get_node(op, wide, &[cond, then, other])
             }
             ISD::Freeze => {
                 // `PromoteIntRes_FREEZE`: the promoted operand, frozen.
@@ -994,19 +1088,26 @@ impl<'a> TypeLegalizer<'a> {
                 self.dag.get_node(ISD::Freeze, wide, &[promoted])
             }
             ISD::SetCC => {
-                // Compare into the target's own result type, then sign extend
-                // or truncate to the promoted type.
+                // `PromoteIntRes_SETCC`: compare into the canonical result
+                // type of the operands, then sign extend or truncate to the
+                // promoted type.
                 let ops = self.dag.node(value).ops.clone();
-                let in_vt = self.dag.value_type(ops[0]);
-                let wide = self.tli.types.set_cc_result_type(in_vt);
-                let setcc = self.dag.get_node(ISD::SetCC, wide, &ops);
-                if to.size_in_bits() > wide.size_in_bits() {
-                    self.dag.get_node(ISD::SignExtend, to, &[setcc])
-                } else if to.size_in_bits() < wide.size_in_bits() {
-                    self.dag.get_node(ISD::Truncate, to, &[setcc])
-                } else {
-                    setcc
+                let mut in_vt = self.dag.value_type(ops[0]);
+                let mut wide = self.tli.types.set_cc_result_type(in_vt);
+                // A result type that itself needs promotion means the input
+                // does too: ask again of its promoted type; where the input
+                // is legal, the promoted type of the result is the one to use.
+                if self.action(wide) == TypeAction::PromoteInteger {
+                    if self.action(in_vt) == TypeAction::PromoteInteger {
+                        in_vt = self.tli.types.type_conversion(in_vt).1;
+                        wide = self.tli.types.set_cc_result_type(in_vt);
+                    } else {
+                        wide = to;
+                    }
                 }
+                let flags = self.dag.node(value).flags;
+                let setcc = self.dag.get_node_flags(ISD::SetCC, wide, &ops, flags);
+                self.dag.get_sext_or_trunc(setcc, to)
             }
             ISD::Truncate => {
                 // `PromoteIntRes_TRUNCATE`: truncate the (promoted) input to
@@ -1034,7 +1135,7 @@ impl<'a> TypeLegalizer<'a> {
                                 self.dag.get_node(ISD::SignExtendInReg, to, &[promoted, ty])
                             }
                             ISD::ZeroExtend => {
-                                let mask = self.dag.get_constant(super::fold::mask(from.size_in_bits()), to);
+                                let mask = self.dag.get_constant(super::fold::mask(lane_bits(from)), to);
                                 self.dag.get_node(ISD::And, to, &[promoted, mask])
                             }
                             _ => promoted,
@@ -1168,7 +1269,7 @@ impl<'a> TypeLegalizer<'a> {
                     extended.push(if signed {
                         self.dag.get_node(ISD::SignExtendInReg, to, &[promoted, narrow_node])
                     } else {
-                        let mask = self.dag.get_constant(super::fold::mask(narrow.size_in_bits()), to);
+                        let mask = self.dag.get_constant(super::fold::mask(lane_bits(narrow)), to);
                         self.dag.get_node(ISD::And, to, &[promoted, mask])
                     });
                 }
@@ -1232,7 +1333,7 @@ impl<'a> TypeLegalizer<'a> {
                     extended.push(if signed {
                         self.dag.get_node(ISD::SignExtendInReg, wide, &[promoted, ty])
                     } else {
-                        let mask = self.dag.get_constant(super::fold::mask(narrow.size_in_bits()), wide);
+                        let mask = self.dag.get_constant(super::fold::mask(lane_bits(narrow)), wide);
                         self.dag.get_node(ISD::And, wide, &[promoted, mask])
                     });
                 }
@@ -1268,7 +1369,7 @@ impl<'a> TypeLegalizer<'a> {
                     extended.push(if signed {
                         self.dag.get_node(ISD::SignExtendInReg, wide, &[promoted, ty])
                     } else {
-                        let mask = self.dag.get_constant(super::fold::mask(narrow.size_in_bits()), wide);
+                        let mask = self.dag.get_constant(super::fold::mask(lane_bits(narrow)), wide);
                         self.dag.get_node(ISD::And, wide, &[promoted, mask])
                     });
                 }
@@ -1277,7 +1378,7 @@ impl<'a> TypeLegalizer<'a> {
                 let truncated = if signed {
                     self.dag.get_node(ISD::SignExtendInReg, to, &[sum, ty])
                 } else {
-                    let mask = self.dag.get_constant(super::fold::mask(narrow.size_in_bits()), to);
+                    let mask = self.dag.get_constant(super::fold::mask(lane_bits(narrow)), to);
                     self.dag.get_node(ISD::And, to, &[sum, mask])
                 };
                 let flag_vt = self.dag.value_type(SDValue { node: value.node, res: 1 });
@@ -1333,7 +1434,7 @@ impl<'a> TypeLegalizer<'a> {
                 // the zero-extended value in the wider type, less the bits
                 // added above the narrow one (none for a population count).
                 let promoted = self.promoted_integer(self.dag.operand(value, 0));
-                let mask = self.dag.get_constant(super::fold::mask(vt.size_in_bits()), to);
+                let mask = self.dag.get_constant(super::fold::mask(lane_bits(vt)), to);
                 let extended = self.dag.get_node(ISD::And, to, &[promoted, mask]);
                 let count = self.dag.get_node(op, to, &[extended]);
                 if op == ISD::CtPop {
@@ -1398,7 +1499,7 @@ impl<'a> TypeLegalizer<'a> {
                     let ty = self.dag.get_value_type_node(vt);
                     self.dag.get_node(ISD::SignExtendInReg, to, &[promoted, ty])
                 } else {
-                    let mask = self.dag.get_constant(super::fold::mask(vt.size_in_bits()), to);
+                    let mask = self.dag.get_constant(super::fold::mask(lane_bits(vt)), to);
                     self.dag.get_node(ISD::And, to, &[promoted, mask])
                 };
                 self.dag.get_node(op, to, &[wide, self.dag.operand(value, 1)])
@@ -1443,6 +1544,49 @@ impl<'a> TypeLegalizer<'a> {
                     return Ok(());
                 }
             }
+            ISD::ExtractElement => {
+                // `PromoteIntRes_EXTRACT_VECTOR_ELT`: the lane read at the
+                // promoted type; a promoted source wider than that is read at
+                // its own lane and narrowed.
+                let (vector, index) = (self.dag.operand(value, 0), self.dag.operand(value, 1));
+                if self.action(self.dag.value_type(vector)) == TypeAction::PromoteInteger {
+                    let promoted = self.promoted_integer(vector);
+                    let lane = self.dag.value_type(promoted).element();
+                    if !lane.bits_lt(to) {
+                        let read = self.dag.get_node(ISD::ExtractElement, lane, &[promoted, index]);
+                        let wide = self.dag.get_any_ext_or_trunc(read, to);
+                        self.set_promoted_integer(value, wide);
+                        return Ok(());
+                    }
+                }
+                self.dag.get_node(ISD::ExtractElement, to, &[vector, index])
+            }
+            ISD::ExtractSubvector => {
+                // `PromoteIntRes_EXTRACT_SUBVECTOR` (fixed width): each lane
+                // of the (promoted) source read out, widened to the promoted
+                // lane, and built into the promoted vector (`v8i1` of a
+                // `v16i1` mask).
+                let (source, base) = (self.dag.operand(value, 0), self.dag.operand(value, 1));
+                let source = if self.action(self.dag.value_type(source)) == TypeAction::PromoteInteger {
+                    self.promoted_integer(source)
+                } else {
+                    source
+                };
+                let (in_lane, out_lane) = (self.dag.value_type(source).element(), to.element());
+                let at = self.dag.constant(base).ok_or(LegalizeError::Unsupported {
+                    op: ISD::ExtractSubvector,
+                    ty: vt,
+                    what: "promote an extract at a variable index",
+                })?;
+                let ops: Vec<SDValue> = (0..vt.lanes())
+                    .map(|lane| {
+                        let index = self.dag.get_constant(at + u128::from(lane), self.dag.value_type(base));
+                        let element = self.dag.get_node(ISD::ExtractElement, in_lane, &[source, index]);
+                        self.dag.get_any_ext_or_trunc(element, out_lane)
+                    })
+                    .collect();
+                self.dag.get_build_vector(to, &ops)
+            }
             op => return Err(LegalizeError::Unsupported { op, ty: vt, what: "promote result" }),
         };
         self.set_promoted_integer(value, result);
@@ -1467,6 +1611,15 @@ impl<'a> TypeLegalizer<'a> {
                 let (chain, ptr) = (self.dag.operand(node, 0), self.dag.operand(node, 2));
                 let operand = self.promoted_integer(self.dag.operand(node, 1));
                 self.dag.get_atomic_store(chain, ptr, operand, info)
+            }
+            // `PromoteIntOp_VECREDUCE` (`PromoteIntOpVectorReduction`): `add`, `mul`, `and`, `or`, `xor` of the
+            // promoted lanes, whose extra bits the truncate of the result drops.
+            ISD::VecReduceAdd | ISD::VecReduceMul | ISD::VecReduceAnd | ISD::VecReduceOr | ISD::VecReduceXor => {
+                let operand = self.promoted_integer(self.dag.operand(node, at));
+                let lane = self.dag.value_type(operand).element();
+                let reduced = self.dag.get_node(self.dag.opcode(node), lane, &[operand]);
+                let vt = self.dag.value_type(node);
+                self.dag.get_node(ISD::Truncate, vt, &[reduced])
             }
             ISD::Truncate => {
                 let operand = self.promoted_integer(self.dag.operand(node, at));
@@ -1503,7 +1656,9 @@ impl<'a> TypeLegalizer<'a> {
                 let promoted = self.promoted_integer(src);
                 let vt = self.dag.value_type(node);
                 let wide = self.dag.get_node(ISD::AnyExtend, vt, &[promoted]);
-                let mask = super::fold::mask(self.dag.value_type(src).size_in_bits());
+                // A vector's mask is its lane's, in every lane.
+                let lane = if vt.is_vector() { self.dag.value_type(src).element() } else { self.dag.value_type(src) };
+                let mask = super::fold::mask(lane.size_in_bits());
                 let mask = self.dag.get_constant(mask, vt);
                 self.dag.get_node(ISD::And, vt, &[wide, mask])
             }
@@ -1560,12 +1715,39 @@ impl<'a> TypeLegalizer<'a> {
                 }
                 self.dag.get_token_factor(&stores)
             }
+            ISD::VSelect if at == 0 => {
+                // `PromoteIntOp_SELECT` of a `VSELECT`: the mask at the
+                // compare's own lane width where it can be, else a boolean of
+                // the select's type (`PromoteTargetBoolean`).
+                let (cond, then, other) =
+                    (self.dag.operand(node, 0), self.dag.operand(node, 1), self.dag.operand(node, 2));
+                let vt = self.dag.value_type(node);
+                match self.widen_vselect_mask(node) {
+                    Some(mask) => self.dag.get_node(ISD::VSelect, vt, &[mask, then, other]),
+                    None => {
+                        let then_vt = self.dag.value_type(then);
+                        let bool_vt = self.tli.types.set_cc_result_type(then_vt);
+                        let extend = match self.dag.config().boolean_contents_of(then_vt) {
+                            BooleanContents::ZeroOrOne => ISD::ZeroExtend,
+                            BooleanContents::ZeroOrNegativeOne => ISD::SignExtend,
+                            BooleanContents::Undefined => ISD::AnyExtend,
+                        };
+                        let cond = self.dag.get_node(extend, bool_vt, &[cond]);
+                        let updated = self.dag.update_node_operands(n, &[cond, then, other]);
+                        SDValue { node: updated, res: 0 }
+                    }
+                }
+            }
             ISD::Select if at == 0 => {
                 // The condition becomes the target's boolean type
                 // (`PromoteTargetBoolean`).
                 let (cond, then, other) =
                     (self.dag.operand(node, 0), self.dag.operand(node, 1), self.dag.operand(node, 2));
-                let bool_vt = self.tli.types.set_cc_result_type(self.dag.value_type(then));
+                // The scalar condition of a vector select is one `i1`, whatever
+                // the lanes (`OpTy.getScalarType()`).
+                let value_vt = self.dag.value_type(then);
+                let value_vt = if value_vt.is_vector() { value_vt.element() } else { value_vt };
+                let bool_vt = self.tli.types.set_cc_result_type(value_vt);
                 let extend = match self.dag.config().boolean_contents {
                     BooleanContents::ZeroOrOne => ISD::ZeroExtend,
                     BooleanContents::ZeroOrNegativeOne => ISD::SignExtend,
@@ -1592,13 +1774,13 @@ impl<'a> TypeLegalizer<'a> {
                 // compared as they are, with no zext_inreg.
                 let fits = |legalizer: &Self, value: SDValue| {
                     let promoted = legalizer.promoted_integer(value);
-                    let wide = legalizer.dag.value_type(promoted).size_in_bits();
-                    let narrow = legalizer.dag.value_type(value).size_in_bits();
+                    let wide = lane_bits(legalizer.dag.value_type(promoted));
+                    let narrow = lane_bits(legalizer.dag.value_type(value));
                     wide + 1 - super::known_bits::num_sign_bits(legalizer.dag, promoted) <= narrow
                 };
                 let as_is = !code.is_signed_int() && fits(self, lhs) && fits(self, rhs);
                 let extend = |legalizer: &mut Self, value: SDValue| {
-                    let bits = legalizer.dag.value_type(value).size_in_bits();
+                    let bits = lane_bits(legalizer.dag.value_type(value));
                     let promoted = legalizer.promoted_integer(value);
                     let wide = legalizer.dag.value_type(promoted);
                     if as_is {
@@ -1646,7 +1828,7 @@ impl<'a> TypeLegalizer<'a> {
                     let ty = self.dag.get_value_type_node(from);
                     self.dag.get_node(ISD::SignExtendInReg, wide, &[promoted, ty])
                 } else {
-                    let mask = self.dag.get_constant(super::fold::mask(from.size_in_bits()), wide);
+                    let mask = self.dag.get_constant(super::fold::mask(lane_bits(from)), wide);
                     self.dag.get_node(ISD::And, wide, &[promoted, mask])
                 };
                 let updated = self.dag.update_node_operands(n, &[extended]);
@@ -1742,6 +1924,40 @@ impl<'a> TypeLegalizer<'a> {
                     self.dag.get_store(chain, promoted, ptr, info)
                 }
             }
+            ISD::Store if at == 1 && self.dag.value_type(self.dag.operand(node, 1)).is_vector() => {
+                // `PromoteIntOp_STORE` of a vector: a truncating store of the
+                // promoted lanes to the memory type (`v4i16` to `v4i8`).
+                let (chain, value, ptr) =
+                    (self.dag.operand(node, 0), self.dag.operand(node, 1), self.dag.operand(node, 2));
+                let NodeData::Mem(info) = self.dag.node(node).data else {
+                    unreachable!("a store has a memory operand")
+                };
+                let promoted = self.promoted_integer(value);
+                self.dag.get_store(chain, promoted, ptr, info)
+            }
+            ISD::ConcatVectors => {
+                // `PromoteIntOp_CONCAT_VECTORS`: every lane of every promoted piece read out, narrowed to the result
+                // lane, and built.
+                let result_vt = self.dag.value_type(node);
+                let lane_vt = result_vt.element();
+                let mut lanes = Vec::new();
+                for piece in 0..self.dag.node(node).ops.len() {
+                    let incoming = self.dag.operand(node, piece);
+                    let incoming = if self.action(self.dag.value_type(incoming)) == TypeAction::PromoteInteger {
+                        self.promoted_integer(incoming)
+                    } else {
+                        incoming
+                    };
+                    let incoming_vt = self.dag.value_type(incoming);
+                    for lane in 0..incoming_vt.lanes() {
+                        let index = self.dag.get_constant(u128::from(lane), EVT::I64);
+                        let element =
+                            self.dag.get_node(ISD::ExtractElement, incoming_vt.element(), &[incoming, index]);
+                        lanes.push(self.dag.get_any_ext_or_trunc(element, lane_vt));
+                    }
+                }
+                self.dag.get_build_vector(result_vt, &lanes)
+            }
             op => {
                 return Err(LegalizeError::Unsupported {
                     op,
@@ -1761,6 +1977,17 @@ impl<'a> TypeLegalizer<'a> {
     }
 
     // --- expansion -------------------------------------------------------
+
+    /// The two-lane vector of an expanded integer's halves, if it is legal
+    /// (`ExpandOp_BITCAST`'s `NVT`).
+    fn legal_pair_vector(
+        &self,
+        integer: EVT,
+    ) -> Option<EVT> {
+        let EVT::Simple(half) = self.tli.types.type_conversion(integer).1 else { return None };
+        let pair = EVT::Simple(MVT::vector(half, 2)?);
+        self.tli.types.is_type_legal(pair).then_some(pair)
+    }
 
     /// `GetExpandedInteger`: low and high halves.
     fn expanded_integer(
@@ -1881,8 +2108,11 @@ impl<'a> TypeLegalizer<'a> {
                 // each half to its own type is the half).
                 self.split_integer(self.softened_float(self.dag.operand(value, 0)), half)
             }
-            ISD::BitCast if self.dag.value_type(self.dag.operand(value, 0)).is_floating_point() => {
-                // `ExpandRes_BITCAST` of a float: stored to a stack slot, the
+            ISD::BitCast
+                if self.dag.value_type(self.dag.operand(value, 0)).is_floating_point()
+                    || self.dag.value_type(self.dag.operand(value, 0)).is_vector() =>
+            {
+                // `ExpandRes_BITCAST` of a float or a legal vector: stored to a stack slot, the
                 // halves loaded from it.
                 let src = self.dag.operand(value, 0);
                 let (slot, store, cell) = self.store_to_slot(src);
@@ -2926,6 +3156,7 @@ impl<'a> TypeLegalizer<'a> {
         if super::known_bits::masked_value_is_zero(self.dag, lhs, high_mask)
             && super::known_bits::masked_value_is_zero(self.dag, rhs, high_mask)
             && !self.product_fits(lhs, rhs, bits)
+            && ![lhs, rhs].into_iter().filter_map(|one| self.dag.constant(one)).any(|c| self.tli.multiply_by_constant_stays_inline(c))
             && let Some(name) = self.tli.libcall_name(ISD::UMulLoHi, half)
         {
             let vt = self.dag.value_type(value);
@@ -3214,7 +3445,10 @@ impl<'a> TypeLegalizer<'a> {
         };
         // A dword divisor's size form always does two `div`s: -Os only, -O1
         // keeps the clocks.
-        let small = (self.tli.small_divide() && (wide || self.tli.size_only()))
+        // DEVIATE DIV-HOT (owner x86-m32, exit 2026-11-24): in a block that runs more than once a
+        // call the speed routine, whose bytes the module pays once.
+        let hot = self.tli.fast_divide_in_loops() && self.dag.config().block_frequency > 1.0;
+        let small = (self.tli.small_divide() && (wide || self.tli.size_only()) && !hot)
             .then(|| arch.divide_routine_small(signed, wide, used).ok())
             .flatten();
         let Some(routine) = small.or_else(|| arch.divide_routine_used(signed, wide, used).ok()) else {
@@ -3302,6 +3536,21 @@ impl<'a> TypeLegalizer<'a> {
     ) -> (SDValue, SDValue) {
         let (chain, ptr) = (self.dag.operand(value, 0), self.dag.operand(value, 1));
         let NodeData::Mem(info) = self.dag.node(value).data else { unreachable!("a load has a memory operand") };
+        if let Some(ext) = info.ext
+            && info.mem_vt.size_in_bits() > half.size_in_bits()
+            && !self.dag.config().big_endian
+        {
+            // `ExpandIntRes_LOAD`, an extending load from memory wider than the half: the low half
+            // is a plain load, the high an extending load of the bits left over at +half.
+            let lo = self.dag.get_load(half, chain, ptr, super::dag::MemInfo { ext: None, mem_vt: half, ..info });
+            let excess = EVT::integer(info.mem_vt.size_in_bits() - half.size_in_bits());
+            let high_ptr = self.address_plus(ptr, u128::from(half.size_in_bits() / 8));
+            let hi = self.dag.get_ext_load(ext, half, chain, high_ptr, super::dag::MemInfo { mem_vt: excess, ..info });
+            let chains =
+                self.dag.get_token_factor(&[SDValue { node: lo.node, res: 1 }, SDValue { node: hi.node, res: 1 }]);
+            self.replace_value_with(SDValue { node: value.node, res: 1 }, chains);
+            return (lo, hi);
+        }
         if let Some(ext) = info.ext {
             // `ExpandIntRes_LOAD`, an extending load from memory no wider than
             // the half: the low half is the (extending) load of
@@ -3558,7 +3807,8 @@ impl<'a> TypeLegalizer<'a> {
     ) -> (SDValue, SDValue, i32) {
         let vt = self.dag.value_type(src);
         let size = vt.size_in_bits().div_ceil(8);
-        let cell = self.dag.create_stack_temporary(size, 4);
+        // A vector is stored whole (`movaps` wants 16).
+        let cell = self.dag.create_stack_temporary(size, if vt.is_vector() { 16 } else { 4 });
         let pointer = self.dag.config().pointer;
         let slot = self.dag.get_frame_index(pointer, cell);
         let info = self.slot_info(src, cell);
@@ -3750,7 +4000,7 @@ impl<'a> TypeLegalizer<'a> {
             let folded = this
                 .dag
                 .constant(b)
-                .and_then(|c| super::setcc_extreme::fold_against_an_extreme(this.dag, vt, a, c, code));
+                .and_then(|c| super::setcc_extreme::fold_against_an_extreme(this.dag, vt, a, c, code, true));
             folded.unwrap_or_else(|| this.dag.get_setcc(vt, a, b, code))
         };
         let low = half_compare(self, ll, rl, low_code);
@@ -3896,9 +4146,22 @@ impl<'a> TypeLegalizer<'a> {
             ISD::Store if at == 2 => self.expand_far_address(node, at),
             op if at == 1 && Some(op) == self.dag.config().nodes.call => self.expand_far_call(node),
             op if Some(op) == self.dag.config().nodes.ptrdiff => self.expand_ptrdiff(node)?,
-            ISD::BitCast if self.dag.value_type(node).is_floating_point() => {
-                // `ExpandOp_BITCAST` to a float: the halves stored to a stack
-                // slot, the float loaded from it.
+            ISD::BitCast
+                if self.dag.value_type(node).is_vector()
+                    && self.legal_pair_vector(self.dag.value_type(self.dag.operand(node, 0))).is_some() =>
+            {
+                // `ExpandOp_BITCAST` to a vector: the halves as the two lanes
+                // of a legal vector, bitcast to the result.
+                let (lo, hi) = self.expanded_integer(self.dag.operand(node, 0));
+                let pair = self.legal_pair_vector(self.dag.value_type(self.dag.operand(node, 0))).expect("checked");
+                let lanes = self.dag.get_build_vector(pair, &[lo, hi]);
+                let vt = self.dag.value_type(node);
+                self.dag.get_node(ISD::BitCast, vt, &[lanes])
+            }
+            ISD::BitCast if self.dag.value_type(node).is_floating_point() || self.dag.value_type(node).is_vector() => {
+                // `ExpandOp_BITCAST` to a float, or to a vector with no legal
+                // two-lane form: the halves stored to a stack slot, the value
+                // loaded from it.
                 let (lo, hi) = self.expanded_integer(self.dag.operand(node, 0));
                 let vt = self.dag.value_type(node);
                 let size = vt.size_in_bits().div_ceil(8);
@@ -4028,6 +4291,12 @@ impl<'a> TypeLegalizer<'a> {
         }
         true
     }
+}
+
+/// The width an extension in a register keeps: a lane of a vector, else the
+/// whole value (`getScalarSizeInBits`).
+fn lane_bits(vt: EVT) -> u32 {
+    if vt.is_vector() { vt.element().size_in_bits() } else { vt.size_in_bits() }
 }
 
 /// A memory type that is not a power of two wide, as the powers of two it is

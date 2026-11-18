@@ -1,4 +1,5 @@
 // flags: -O1 | -O2 | -Os
+// bar: none (SDCC error 101: too many parameters)
 // A saturating i64 subtract in a loop: the select's sunk arm (xor of the saturated word) cleared the flags the next
 // select read, so the overflow row gave the wrapped 0 for the saturated -1 (word 0 of q[0] - q[1]).
 extern void report(long value);

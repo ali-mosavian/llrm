@@ -14,7 +14,7 @@ use super::generated::{instrinfo, m68k_m68000, m68k_m68020};
 /// The CPUs of the family. The pin selects on three gates only (`IsM68000`,
 /// `AtLeastM68010`, `AtLeastM68020`), so the tables are generated for two:
 /// the 68010 selects from the 68000's, the 68030 and up from the 68020's.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Cpu {
     M68000,
     M68010,
@@ -46,9 +46,24 @@ impl Cpu {
     /// Whether `bfffo` is a hardware instruction (DEVIATE M68K-BFFFO, see
     /// [`super::bfffo`]): the table's row for it, not decoded as emulated.
     pub fn has_bit_field_find(self) -> bool {
-        let model = crate::isa::Cpu::ALL[self as usize];
-        crate::isa::forms().iter().any(|form| {
-            form.mnemonic == "bfffo" && form.operands == "Dn,{off:wid},Dn" && form.on(model) && !form.emulated_on(model)
+        static FOUND: crate::percpu::PerCpu<bool> = crate::percpu::PerCpu::new();
+        *FOUND.get(self, |cpu| {
+            let model = crate::isa::Cpu::ALL[cpu as usize];
+            crate::isa::forms_of("bfffo")
+                .iter()
+                .any(|form| form.operands == "Dn,{off:wid},Dn" && form.on(model) && !form.emulated_on(model))
+        })
+    }
+
+    /// Whether `bfextu` is a hardware instruction (DEVIATE M68K-BFEXTU, see
+    /// [`super::bfextu`]).
+    pub fn has_bit_field_extract(self) -> bool {
+        static FOUND: crate::percpu::PerCpu<bool> = crate::percpu::PerCpu::new();
+        *FOUND.get(self, |cpu| {
+            let model = crate::isa::Cpu::ALL[cpu as usize];
+            crate::isa::forms_of("bfextu")
+                .iter()
+                .any(|form| form.operands == "Dn,{off:wid},Dn" && form.on(model) && !form.emulated_on(model))
         })
     }
 
@@ -101,6 +116,17 @@ pub struct M68kHooks {
 }
 
 impl M68kHooks {
+    /// Whether loads and stores fold into the operation that uses them
+    /// (`IsLegalToFold` is false at -O0).
+    pub fn folds_memory(&self) -> bool {
+        !self.opt_none
+    }
+
+    /// Whether this CPU has `bfextu` (DEVIATE M68K-BFEXTU).
+    pub fn has_bit_field_extract(&self) -> bool {
+        self.cpu.has_bit_field_extract()
+    }
+
     pub fn new(
         cpu: Cpu,
         opt_none: bool,

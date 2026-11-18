@@ -57,6 +57,10 @@ thread_local! {
     /// the argument registers are left unjoined, instead of what the
     /// convention says (`Target::joins_pinned_copies`).
     pub static UNJOINED: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+    /// Set while a function is allocated to price the other choice: no spilled
+    /// read is taken from its cell (a `push` and a `pop` of the slot can be
+    /// smaller than `ld d(ix), r` and `op a, d(ix)`).
+    pub static NO_FOLD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 impl Target for Z80Registers {
@@ -245,6 +249,14 @@ impl Target for Z80Registers {
         inst.operands.iter().find_map(|o| if let Operand::Frame(f) = o { Some(*f) } else { None })
     }
 
+    /// An incoming argument is an immutable fixed stack object, so the pin
+    /// makes a load of one again where it is read
+    /// (`isLoadFromInvariantOrConstantMemory`): the loads of a pair or a byte
+    /// take any register of the class.
+    fn is_invariant_argument_load(name: &str) -> bool {
+        matches!(name, "LD16rf" | "LD8rf")
+    }
+
     /// A load of a frame object the call before it filled is made again where
     /// it is read (`call_result_buffers`).
     fn is_buffer_load(name: &str) -> bool {
@@ -266,6 +278,44 @@ impl Target for Z80Registers {
                 vec![Operand::Frame(slot), Operand::Use(register), Operand::Imm(i64::from(offset))],
             )
         })
+    }
+
+    /// `foldMemoryOperand` (`InlineSpiller::foldMemoryOperand`,
+    /// `X86InstrInfo::foldMemoryOperandImpl`): the second source of a byte
+    /// ALU op or compare, or of the word `and`/`or`/`xor`, is read from its
+    /// frame cell (`and a, d(ix)`), not loaded into a register first.
+    fn fold_spill(
+        inst: &Inst,
+        register: Reg,
+        slot: i32,
+    ) -> Option<Inst> {
+        // a half taken from a spilled pair is that half's byte of the cell
+        if let (Kind::Op(op @ ("LO" | "HI")), [Operand::Def(byte), Operand::Use(pair)]) = (inst.kind, &inst.operands[..])
+            && *pair == register
+            && byte != pair
+            && !NO_FOLD.with(std::cell::Cell::get)
+        {
+            return Some(Inst {
+                may_load: true,
+                ..Inst::new(
+                    Kind::Op("RELOAD8L"),
+                    vec![Operand::Def(*byte), Operand::Frame(slot), Operand::Imm(i64::from(op == "HI"))],
+                )
+            });
+        }
+        let (Kind::Op("ADD8r" | "SUB8r" | "AND8r" | "OR8r" | "XOR8r" | "CP8r" | "AND16" | "OR16" | "XOR16"), Some(Operand::Use(second))) =
+            (inst.kind, inst.operands.get(2))
+        else {
+            return None;
+        };
+        let once = inst.operands.iter().filter(|o| matches!(o, Operand::Def(r) | Operand::Use(r) if *r == register)).count() == 1;
+        if *second != register || !once || NO_FOLD.with(std::cell::Cell::get) {
+            return None;
+        }
+        let mut folded = inst.clone();
+        folded.operands[2] = Operand::Frame(slot);
+        folded.may_load = true;
+        Some(folded)
     }
 
     fn spill_load(

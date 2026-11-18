@@ -17,10 +17,14 @@
 //! Nothing runs it yet: stage 3 of the translation of LSR.
 //!
 //! # Limits
-//! DEVIATE IU1: users of a value are visited in descending program order, not
-//! use-list order. Use-list order is edit history; the pin's order on parsed
+//! DEVIATE IU1: unless the target asks for use-list order
+//! (`Tti::lsr_users_in_use_list_order`), users of a value are visited in
+//! descending program order, not use-list order. Use-list order is edit history; the pin's order on parsed
 //! IR is the only reproducible one, and it breaks ties in LSR's register
-//! choice. Cost (IU1-COST): one map of the layout per loop and a block's
+//! choice. With use-list order and `Tti::lsr_phi_users_first` a phi is met
+//! first all the same: the pin keeps the one operand of a phi it meets first
+//! (`Processed`), and which that is must not depend on edits (div_constants
+//! m64 -O1: 4334 B -> 4173 B, 6960 B -> 6854 B). Cost (IU1-COST): one map of the layout per loop and a block's
 //! instruction numbers, where the pin has none (it was a map of every
 //! instruction: 1.9 M on d_faces -O2). Exit: use lists keep LLVM's order.
 //! Owner: w-5. Review: 2026-11-19.
@@ -35,7 +39,8 @@ use llrm_analysis::scev::expr::{Kind, Scev};
 use llrm_analysis::scev::{Cx, ScalarEvolution};
 use llrm_mir::dense::IdSet;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
-use llrm_mir::opcode::{CastOp, Opcode};
+use llrm_mir::context::ConstantKind;
+use llrm_mir::opcode::{BinaryOp, CastOp, Opcode};
 use llrm_mir::valuetracking::pattern::phi_incoming;
 
 #[cfg(test)]
@@ -54,6 +59,14 @@ pub struct Env<'a> {
     /// (`Tti::lsr_native_integer_widths`); the pin's check is
     /// [`!DL.isLegalInteger(Width)`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/IVUsers.cpp#L157).
     pub native_widths: &'a [u32],
+    /// `Tti::lsr_users_in_use_list_order`: the users of a value are met in
+    /// use-list order, as the pin's `for (Use &U : I->uses())`, not in
+    /// descending program order (DEVIATE IU1).
+    pub use_list_order: bool,
+    /// DEVIATE LSR-PHI: `Tti::lsr_phi_operand_uses`.
+    pub phi_operand_uses: bool,
+    /// DEVIATE IU1: `Tti::lsr_phi_users_first`.
+    pub phi_users_first: bool,
 }
 
 /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Analysis/IVUsers.h#L33
@@ -74,8 +87,11 @@ pub struct IvUsers {
     pub l: BlockId,
     pub uses: Vec<IvStrideUse>,
     processed: IdSet<InstId>,
+    /// The phis recorded as a use (DEVIATE LSR-PHI).
+    phi_uses: IdSet<InstId>,
     /// How many users had their place worked out.
     ordered: usize,
+    use_list_order: bool,
 }
 
 /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/IVUsers.cpp#L52
@@ -199,7 +215,7 @@ impl IvUsers {
         #[cfg(test)]
         BUILDS.with(|made| made.set(made.get() + 1));
         let mut users =
-            Self { l, uses: Vec::new(), processed: IdSet::with_capacity(cx.function.instruction_count()), ordered: 0 };
+            Self { l, uses: Vec::new(), processed: IdSet::with_capacity(cx.function.instruction_count()), phi_uses: IdSet::with_capacity(0), ordered: 0, use_list_order: env.use_list_order };
         let phis: Vec<InstId> =
             cx.function.iter_block(l).take_while(|&inst| cx.function.instruction(inst).opcode == Opcode::Phi).collect();
         for phi in phis {
@@ -243,8 +259,14 @@ impl IvUsers {
         // DEVIATE LU19: a width the target declares native (and the layout does
         // not) is for induction variables of that width, not for a narrower
         // one an extension widens: `arr[zext i8 i]` stays an index (`adc
-        // arr,x`), not a 16-bit pointer walk.
-        if !cx.layout.legal_integer(width) && matches!(instruction.opcode, Opcode::Cast(CastOp::ZExt | CastOp::SExt)) {
+        // arr,x`), not a 16-bit pointer walk. Unless a user scales the
+        // extension (`v[zext i8 j]` of 4-byte elements, `3 * zext j`): that is
+        // a shift chain per trip, and the stepped value (`{v,+,4}`) is the
+        // form the pin's LSR reduces it to.
+        if !cx.layout.legal_integer(width)
+            && matches!(instruction.opcode, Opcode::Cast(CastOp::ZExt | CastOp::SExt))
+            && !scaled_by_a_user(cx, result)
+        {
             return false;
         }
         // An ephemeral value is removed later anyway.
@@ -260,7 +282,18 @@ impl IvUsers {
         let l = self.l;
         let lp = cx.loops.get_loop_for(l).expect("a loop");
         let mut users: Vec<InstId> = cx.function.users(result).iter().map(|one| one.user).collect();
-        if users.len() > 1 {
+        if env.use_list_order {
+            // One instruction using the result twice is visited once.
+            let mut seen = std::collections::HashSet::new();
+            users.retain(|user| seen.insert(*user));
+            // DEVIATE IU1: a phi first, as in program order (stable, so the rest
+            // keep the list's): the pin's "do not recurse into a phi twice" keeps the
+            // operand met first, and edit history decides which that is.
+            // Where the target asks (`Tti::lsr_phi_users_first`).
+            if env.phi_users_first {
+                users.sort_by_key(|user| cx.function.instruction(*user).opcode != Opcode::Phi);
+            }
+        } else if users.len() > 1 {
             self.ordered += users.len();
             // The function keeps each block's index in the layout, made once
             // for all the loops (IU1).
@@ -275,7 +308,15 @@ impl IvUsers {
         for user in users {
             // Do not recurse into a phi twice.
             let is_phi = cx.function.instruction(user).opcode == Opcode::Phi;
-            if is_phi && self.processed.contains(&user) {
+            // DEVIATE LSR-PHI: a phi that is a use takes another operand as a
+            // use of its own, where the pin drops it
+            // (https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/IVUsers.cpp#L180).
+            if is_phi
+                && self.processed.contains(&user)
+                && !(env.phi_operand_uses
+                    && self.phi_uses.contains(&user)
+                    && !self.uses.iter().any(|one| one.user == user && one.operand == value))
+            {
                 continue;
             }
             // Descend, but not into phis outside the loop: the whole expression
@@ -310,6 +351,9 @@ impl IvUsers {
             if original != ise && se.denormalize_for_post_inc_use(cx, ise, &post_inc_loops) != original {
                 return false;
             }
+            if is_phi {
+                self.phi_uses.insert(user);
+            }
             self.uses.push(IvStrideUse { user, operand: value, post_inc_loops });
         }
         true
@@ -340,6 +384,12 @@ impl IvUsers {
         copy: Option<InstId>,
     ) -> bool {
         let Some(at) = self.uses.iter().position(|u| u.user == old) else { return true };
+        if self.use_list_order && copy.is_some() {
+            // A copy is a new use, first in its operands' lists, which the walk
+            // would meet before the others: the uses are made again. A move
+            // leaves the lists as they were.
+            return false;
+        }
         // A test of two induction variables is a user of both: which of them
         // finds it first depends on where it is.
         let walked = |value: &Operand| match value {
@@ -353,6 +403,9 @@ impl IvUsers {
         };
         if function.instruction(old).operands.iter().filter(|op| walked(op)).count() > 1 {
             return false;
+        }
+        if self.use_list_order {
+            return true;
         }
         let place = |user: InstId| {
             let block = function.parent(user)?;
@@ -444,4 +497,29 @@ fn find_add_rec_for_loop(
         Kind::Add(operands) => operands.iter().find_map(|op| find_add_rec_for_loop(se, op.scev, l)),
         _ => None,
     }
+}
+
+/// Whether a user scales `value` (an address by more than one byte, or a
+/// multiply or left shift by a constant): rebuilt each trip, the scale is a
+/// shift chain, and stepping the scaled value is one add.
+fn scaled_by_a_user(
+    cx: &Cx,
+    value: llrm_mir::module::ValueId,
+) -> bool {
+    cx.function.users(value).iter().any(|one| {
+        let user = cx.function.instruction(one.user);
+        match user.opcode {
+            Opcode::GetElementPtr { source } => {
+                let indices = vec![None; user.operands.len() - 1];
+                let (_, variable) = cx.layout.collect_offset(&cx.context.types, source, &indices);
+                variable.iter().any(|&(at, scale)| scale > 1 && user.operands[1 + at] == Operand::Value(value))
+            }
+            Opcode::Binary(op @ (BinaryOp::Mul | BinaryOp::Shl)) => {
+                let [Operand::Value(a), Operand::Constant(c)] = user.operands[..] else { return false };
+                let ConstantKind::Int(by) = cx.context.get(c).kind else { return false };
+                a == value && (op == BinaryOp::Shl || by > 1)
+            }
+            _ => false,
+        }
+    })
 }

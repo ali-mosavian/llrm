@@ -203,6 +203,35 @@ impl Library for Generic {
     }
 }
 
+/// A Darwin target's library (`initializeLibCalls`, the `isOSDarwin` tests):
+/// what `Generic` states, and `memset_pattern{4,8,16}`, which a current macOS
+/// or iOS has (TargetLibraryInfo.cpp#L159).
+#[derive(Clone, Copy, Debug)]
+pub struct Darwin {
+    pub int_bits: u32,
+    pub size_t_bits: u32,
+}
+
+impl Library for Darwin {
+    fn int_bits(&self) -> u32 {
+        self.int_bits
+    }
+
+    fn size_t_bits(&self) -> u32 {
+        self.size_t_bits
+    }
+
+    fn availability(
+        &self,
+        func: LibFunc,
+    ) -> Availability {
+        match func {
+            LibFunc::MemsetPattern4 | LibFunc::MemsetPattern8 | LibFunc::MemsetPattern16 => Availability::Standard,
+            _ => Generic { int_bits: self.int_bits, size_t_bits: self.size_t_bits }.availability(func),
+        }
+    }
+}
+
 /// The C library of a target whose linker symbols are C's decorated: a leading
 /// underscore, and `@N` after the name for a callee-pops convention. What
 /// `Generic` states of the functions, under those names.

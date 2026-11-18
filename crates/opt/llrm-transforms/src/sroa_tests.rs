@@ -672,13 +672,11 @@ b0:
 /// instructions to the pin's 18).
 #[test]
 fn test_a_double_stored_whole_and_read_by_halves_is_widened_and_promoted() {
-    let after = managed(
-        &mut parsed(&format!("{X64}{F}")),
-        Sroa,
-    );
+    let after = managed(&mut parsed(&format!("{X64}{F}")), Sroa);
     assert!(!after.contains("alloca") && !after.contains("store") && !after.contains("load"), "{after}");
-    // 16-bit too: the pin's `canConvertValue` has no native-integer test, and isel
-    // moves the double through the stack (float_bits -Os m32 132 -> 68 B).
+    // 16-bit too: the pin's `canConvertValue` has no native-integer test, and
+    // isel moves the double through the stack (float_bits -Os m32 132 -> 68
+    // B).
     let after = sroa(F);
     assert!(!after.contains("alloca"), "{after}");
 }
@@ -856,4 +854,194 @@ b2:
     manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).expect("runs");
     assert!(!llrm_mir::print::module(&module).contains("alloca"), "the split did not happen");
     assert_eq!(llrm_analysis::cfg::shapes_derived() - before, 1, "a split that left the CFG dropped the shape");
+}
+
+/// A load at `gep ptr, phi [0, 1]` read a variable index, so the alloca stayed
+/// with both stores and the load (fpbench O3: 12 loads and 2 phis the pin's
+/// `unfoldGEPPhi` folds; +22 B). The gep becomes a phi of geps at constant
+/// offsets, each partition promoted: no alloca, store or load is left.
+#[test]
+fn test_a_gep_over_a_phi_of_constant_indices_is_unfolded_and_promoted() {
+    let after = sroa(
+        "define i32 @f(i1 %c) {
+b0:
+  %s = alloca [2 x i32]
+  %p1 = getelementptr i8, ptr %s, i16 4
+  store i32 5, ptr %s
+  store i32 7, ptr %p1
+  br i1 %c, label %b1, label %b2
+b1:
+  br label %b3
+b2:
+  br label %b3
+b3:
+  %i = phi i16 [ 0, %b1 ], [ 1, %b2 ]
+  %p = getelementptr i32, ptr %s, i16 %i
+  %v = load i32, ptr %p
+  ret i32 %v
+}
+",
+    );
+    assert!(!after.contains("alloca") && !after.contains("store") && !after.contains("load"), "{after}");
+}
+
+/// The select form: `gep ptr, select c, 0, 1` unfolds to a select of geps.
+#[test]
+fn test_a_gep_over_a_select_of_constant_indices_is_unfolded_and_promoted() {
+    let after = sroa(
+        "define i32 @f(i1 %c) {
+b0:
+  %s = alloca [2 x i32]
+  %p1 = getelementptr i8, ptr %s, i16 4
+  store i32 5, ptr %s
+  store i32 7, ptr %p1
+  %i = select i1 %c, i16 0, i16 1
+  %p = getelementptr i32, ptr %s, i16 %i
+  %v = load i32, ptr %p
+  ret i32 %v
+}
+",
+    );
+    assert!(!after.contains("alloca") && !after.contains("store") && !after.contains("load"), "{after}");
+}
+
+/// A vector alloca whose accesses are the whole vector and one element: the
+/// element load is an `extractelement` of the stored vector (vector promotion,
+/// `isVectorPromotionViable`). Without it the alloca stayed, with a store and
+/// two loads, because no legal integer spans 128 bits.
+#[test]
+fn test_an_element_load_of_a_stored_vector_is_an_extractelement() {
+    let after = sroa(
+        "define i16 @f(<8 x i16> %v) {
+b0:
+  %s = alloca <8 x i16>
+  store <8 x i16> %v, ptr %s
+  %p = getelementptr i8, ptr %s, i16 6
+  %x = load i16, ptr %p
+  ret i16 %x
+}
+",
+    );
+    assert!(!after.contains("alloca") && !after.contains("store") && !after.contains("load"), "{after}");
+    assert!(after.contains("extractelement <8 x i16> %v, i32 3"), "{after}");
+}
+
+/// An element store into a vector alloca read back whole is an
+/// `insertelement`.
+#[test]
+fn test_an_element_store_into_a_vector_is_an_insertelement() {
+    let after = sroa(
+        "define <8 x i16> @f(<8 x i16> %v, i16 %e) {
+b0:
+  %s = alloca <8 x i16>
+  store <8 x i16> %v, ptr %s
+  %p = getelementptr i8, ptr %s, i16 4
+  store i16 %e, ptr %p
+  %r = load <8 x i16>, ptr %s
+  ret <8 x i16> %r
+}
+",
+    );
+    assert!(!after.contains("alloca") && !after.contains("store") && !after.contains("load"), "{after}");
+    assert!(after.contains("insertelement <8 x i16> %v, i16 %e, i32 2"), "{after}");
+}
+
+/// A memset of some lanes of a vector alloca is a splat shuffled into the
+/// stored vector, and the whole load is that vector.
+#[test]
+fn test_a_memset_of_two_lanes_of_a_stored_vector_is_a_blend() {
+    let after = sroa(
+        "declare void @llvm.memset.p0.i16(ptr, i8, i16, i1)
+
+define <8 x i16> @f(<8 x i16> %v) {
+b0:
+  %s = alloca <8 x i16>
+  store <8 x i16> %v, ptr %s
+  %p = getelementptr i8, ptr %s, i16 4
+  call void @llvm.memset.p0.i16(ptr %p, i8 0, i16 4, i1 false)
+  %r = load <8 x i16>, ptr %s
+  ret <8 x i16> %r
+}
+",
+    );
+    assert!(
+        !after.contains("alloca") && !after.contains("call void @llvm.memset") && !after.contains("load"),
+        "{after}"
+    );
+    assert!(after.contains("shufflevector"), "{after}");
+}
+
+/// A vector alloca copied out by memcpy is read lane by lane from the stored
+/// vector: no copy through memory stays.
+#[test]
+fn test_a_lane_copied_out_of_a_stored_vector_is_an_extractelement() {
+    let after = sroa(
+        "declare void @llvm.memcpy.p0.p0.i16(ptr, ptr, i16, i1)
+
+define i16 @f(<8 x i16> %v) {
+b0:
+  %s = alloca <8 x i16>
+  %d = alloca i16
+  store <8 x i16> %v, ptr %s
+  %p = getelementptr i8, ptr %s, i16 10
+  call void @llvm.memcpy.p0.p0.i16(ptr %d, ptr %p, i16 2, i1 false)
+  %x = load i16, ptr %d
+  ret i16 %x
+}
+",
+    );
+    assert!(!after.contains("alloca") && !after.contains("call void @llvm.memcpy"), "{after}");
+    assert!(after.contains("extractelement <8 x i16> %v, i32 5"), "{after}");
+}
+
+/// Three bytes of a stored `<16 x i8>` copied out: the DAG has no `<3 x i8>`
+/// (memory_expansion -O3 on x86-64 failed "vector with no register class"), so
+/// the copy stays a copy and no odd-lane vector is made.
+#[test]
+fn test_three_bytes_copied_out_of_a_stored_vector_make_no_odd_lane_vector() {
+    let after = sroa(
+        "declare void @llvm.memcpy.p0.p0.i16(ptr, ptr, i16, i1)
+
+define void @f(<16 x i8> %v, ptr %out) {
+b0:
+  %s = alloca <16 x i8>
+  store <16 x i8> %v, ptr %s
+  %p = getelementptr i8, ptr %s, i16 1
+  call void @llvm.memcpy.p0.p0.i16(ptr %out, ptr %p, i16 3, i1 false)
+  ret void
+}
+",
+    );
+    assert!(!after.contains("<3 x i8>"), "{after}");
+}
+
+/// The loop shape of arm64 `dot -O2`: a vector alloca stored once and read by
+/// lane in the body of a loop. Every lane read is an `extractelement` of the
+/// stored vector, in the loop; the alloca, its store and loads are gone.
+#[test]
+fn test_a_vector_alloca_read_by_lane_in_a_loop_is_promoted() {
+    let after = sroa(
+        "define i16 @f(<8 x i16> %v, i16 %n) {
+b0:
+  %s = alloca <8 x i16>
+  store <8 x i16> %v, ptr %s
+  br label %loop
+
+loop:
+  %i = phi i16 [ 0, %b0 ], [ %j, %loop ]
+  %acc = phi i16 [ 0, %b0 ], [ %next, %loop ]
+  %p = getelementptr i8, ptr %s, i16 6
+  %x = load i16, ptr %p
+  %next = add i16 %acc, %x
+  %j = add i16 %i, 1
+  %c = icmp ult i16 %j, %n
+  br i1 %c, label %loop, label %exit
+
+exit:
+  ret i16 %next
+}
+",
+    );
+    assert!(!after.contains("alloca") && !after.contains("store") && !after.contains("load"), "{after}");
+    assert!(after.contains("extractelement <8 x i16> %v, i32 3"), "{after}");
 }

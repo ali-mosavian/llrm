@@ -1532,6 +1532,42 @@ fn test_stores_of_one_literal_are_not_shared_at_o2() {
     assert_eq!(sharedstores::shared(&input, o2, &saved(), &crate::backend::classes::RegisterClasses::m16()), input);
 }
 
+/// d_faces -m32 -O2: `shared` found the blocks on a cycle by a walk from every
+/// block with a linear search for each step, 17 M of 1,324 M instructions and
+/// cubic in the blocks. A ring of 1,200 blocks took tens of seconds; the
+/// components are one linear walk, and the answer is the same: a block is on a
+/// cycle when it reaches itself.
+#[test]
+fn test_the_blocks_on_a_cycle_are_found_in_one_walk() {
+    let plain = |at: i64| -> Arc<Insn> { Arc::new(Insn::new(at, None, None, Vec::new(), Vec::new())) };
+    let graph = |edges: &[(i64, Vec<i64>)]| -> LirBody {
+        let blocks: Vec<Block> =
+            edges.iter().map(|(at, next)| Block::from(block(*at, vec![plain(*at * 10)], next.clone()))).collect();
+        body("cycles", 0, blocks)
+    };
+    // 0 -> 1 -> 2 -> 1 (a cycle of two), 2 -> 3 -> 3 (a block that branches to
+    // itself), 3 -> 4 (a block after the cycles), 5 branches off the body.
+    let found = sharedstores::blocks_in_cycles(&graph(&[
+        (0, vec![1]),
+        (1, vec![2]),
+        (2, vec![1, 3]),
+        (3, vec![3, 4]),
+        (4, vec![9]),
+        (5, vec![]),
+    ]));
+    let mut found: Vec<i64> = found.into_iter().collect();
+    found.sort_unstable();
+    assert_eq!(found, [1, 2, 3]);
+
+    let ring = 1200;
+    let edges: Vec<(i64, Vec<i64>)> = (0..ring).map(|at| (at, vec![(at + 1) % ring])).collect();
+    let big = graph(&edges);
+    let started = std::time::Instant::now();
+    let found = sharedstores::blocks_in_cycles(&big);
+    assert_eq!(found.len(), ring as usize);
+    assert!(started.elapsed().as_secs() < 3, "a ring of {ring} blocks took {:?}", started.elapsed());
+}
+
 #[test]
 fn test_lea_of_a_frame_cell_is_decoded() {
     let regs = crate::backend::registerinfo::test_regs();
@@ -6602,8 +6638,9 @@ fn test_stores_of_one_literal_are_shared_at_o1_outside_any_loop() {
     );
 }
 
-/// wrapv_overflow_check -O1 stored its lone zero as `xor eax,eax; mov [m],eax` (7 B for the pin's 10 B): +1 clk for 3 B, a worse
-/// cell against main. A lone literal store stays at -O1 (the pin); a run of two still shares.
+/// wrapv_overflow_check -O1 stored its lone zero as `xor eax,eax; mov [m],eax`
+/// (7 B for the pin's 10 B): +1 clk for 3 B, a worse cell against main. A lone
+/// literal store stays at -O1 (the pin); a run of two still shares.
 #[test]
 fn test_a_lone_literal_store_is_not_shared_at_o1() {
     let mut cpu = crate::backend::cpu::tuned("486", false).unwrap().clone();
@@ -6624,8 +6661,9 @@ fn test_a_lone_literal_store_is_not_shared_at_o1() {
     assert_eq!(shared(2), ["xor", "mov", "mov"], "a run of two");
 }
 
-/// `mov r32, imm8` is `push imm8; pop r` at minsize (`ExpandMOVImmSExti8`); a move into the
-/// stack pointer, zero, -1, a wider immediate and a non-32-bit body stay as they are.
+/// `mov r32, imm8` is `push imm8; pop r` at minsize (`ExpandMOVImmSExti8`); a
+/// move into the stack pointer, zero, -1, a wider immediate and a non-32-bit
+/// body stay as they are.
 #[test]
 fn test_a_small_immediate_is_pushed_and_popped_at_minsize() {
     // (destination, value, bits, rewritten)
@@ -6645,11 +6683,8 @@ fn test_a_small_immediate_is_pushed_and_popped_at_minsize() {
             vec![],
             vec![],
         );
-        let input = LirBody {
-            bits,
-            min_size: true,
-            ..body("f", 0, vec![block(0, vec![Arc::new(set)], vec![]).into()])
-        };
+        let input =
+            LirBody { bits, min_size: true, ..body("f", 0, vec![block(0, vec![Arc::new(set)], vec![]).into()]) };
         let done = pushed_immediates(&input, &crate::backend::cpu::tuned("486", false).unwrap());
         let names: Vec<_> = done.blocks[0].insns.iter().map(|one| one.what.as_ref().unwrap().name.clone()).collect();
         let want: &[&str] = if rewritten { &["push", "pop"] } else { &["mov"] };
@@ -6661,7 +6696,8 @@ fn test_a_small_immediate_is_pushed_and_popped_at_minsize() {
     }
 }
 
-/// `mov cx,ax; mov ax,bx; mov bx,cx`, with `after` the instructions that follow it.
+/// `mov cx,ax; mov ax,bx; mov bx,cx`, with `after` the instructions that follow
+/// it.
 fn swap_through_a_temporary(after: Vec<Arc<Insn>>) -> LirBody {
     swap_through_a_temporary_of([RegId::AX, RegId::BX, RegId::CX], 2, after)
 }
@@ -6720,19 +6756,24 @@ fn a_swap_whose_temporary_is_read_later_is_not_an_xchg() {
     let mut cpu = peephole().cpu;
     cpu.size = true;
     let (cx, dx) = (rl(RegId::CX, 2), rl(RegId::DX, 2));
-    let input = swap_through_a_temporary(vec![point(4, sem(Operation::Move, "mov", vec![dx], vec![cx]), vec![5], vec![4])]);
+    let input =
+        swap_through_a_temporary(vec![point(4, sem(Operation::Move, "mov", vec![dx], vec![cx]), vec![5], vec![4])]);
 
     assert_eq!(swapped_registers(rules(), &input, &cpu), input);
 }
 
 /// 16-, 32- and 64-bit swaps become an `xchg`: it moves exactly the bits the
-/// moves did (a 16-bit `mov` keeps the upper bits, as `xchg r16` does; a 32-bit one
-/// clears them in both registers, as `xchg r32` does) and sets no flags.
+/// moves did (a 16-bit `mov` keeps the upper bits, as `xchg r16` does; a 32-bit
+/// one clears them in both registers, as `xchg r32` does) and sets no flags.
 #[test]
 fn a_swap_of_16_32_and_64_bit_registers_is_one_xchg_for_size() {
     let mut cpu = peephole().cpu;
     cpu.size = true;
-    for (regs, width) in [([RegId::AX, RegId::BX, RegId::CX], 2), ([RegId::EAX, RegId::EBX, RegId::ECX], 4), ([RegId::RAX, RegId::RBX, RegId::RCX], 8)] {
+    for (regs, width) in [
+        ([RegId::AX, RegId::BX, RegId::CX], 2),
+        ([RegId::EAX, RegId::EBX, RegId::ECX], 4),
+        ([RegId::RAX, RegId::RBX, RegId::RCX], 8),
+    ] {
         let mut input = swap_through_a_temporary_of(regs, width, vec![]);
         if width == 8 {
             input.bits = 64;
@@ -6769,4 +6810,40 @@ fn test_a_price_is_asked_only_for_a_rule_the_target_has() {
     assert!(zeroed_loads(none, &body, &cpu).is_ok());
     assert!(doubled(rules(), &body, &cpu).is_err(), "a rule that needs the clock still names its absence");
     assert!(zeroed_loads(rules(), &body, &cpu).is_err(), "a rule that needs the clock still names its absence");
+}
+
+/// x_funcptr -O1: `movzx eax, ax` (3 clk on the i486) is `and eax, 0xffff`
+/// (1 clk) where no later instruction reads a flag it would clobber, as
+/// gcc's `X86_TUNE_ZERO_EXTEND_WITH_AND` has it; a branch that reads the
+/// flags keeps the `movzx`.
+#[test]
+fn test_a_register_zero_extended_into_itself_is_an_and_where_its_flags_are_dead() {
+    for (reads_flags, name) in [(false, "and"), (true, "movzx")] {
+        let first = Arc::new(insn(
+            0,
+            Some((0, 3)),
+            Some(sem(Operation::Extend, "movzx", vec![rl(RegId::EAX, 4)], vec![rl(RegId::AX, 2)])),
+            vec![],
+            vec![],
+        ));
+        let last = if reads_flags {
+            Arc::new(insn(3, Some((3, 5)), Some(sem(Operation::Branch, "jne", vec![], vec![])), vec![], vec![]))
+        } else {
+            Arc::new(insn(
+                3,
+                Some((3, 5)),
+                Some(sem(Operation::Compare, "cmp", vec![], vec![rl(RegId::EAX, 4), im(1, 4)])),
+                vec![],
+                vec![],
+            ))
+        };
+        let result = zero_extended_with_and(&body(
+            "zext",
+            0,
+            crate::model::lir::shared(vec![block(0, vec![first, last], vec![])]),
+        ))
+        .insns()[0]
+            .clone();
+        assert_eq!(result.what.as_ref().unwrap().name.as_deref(), Some(name), "reads_flags {reads_flags}");
+    }
 }

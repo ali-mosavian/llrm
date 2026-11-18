@@ -401,6 +401,9 @@ mod tests {
         fn small_divide_at_o1(&self) -> bool {
             self.0.small_divide_at_o1()
         }
+        fn fast_divide_in_loops_at_size(&self) -> bool {
+            self.0.fast_divide_in_loops_at_size()
+        }
         fn divide_routine_small(
             &self,
             signed: bool,

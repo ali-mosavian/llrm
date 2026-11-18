@@ -12,7 +12,7 @@ fn combined(build: impl FnOnce(&mut SelectionDAG, SDValue) -> SDValue) -> (Selec
     dag.set_root(root);
     let mut hooks = X86Lowering {
         multiply_early_out: None,
-        imul_if_smaller: false,
+        imul_if_smaller: false, hot_chains: false,
         share_products: false,
         cmov: true,
         sse2: false,
@@ -22,6 +22,7 @@ fn combined(build: impl FnOnce(&mut SelectionDAG, SDValue) -> SDValue) -> (Selec
         sext_load: false,
         zext_free: false,
         branch_constant_selects: false,
+        status_word_tests: false,
         profile: None,
     };
     DagCombiner::new(&mut dag, &mut hooks, CombineLevel::BeforeLegalizeTypes).run();

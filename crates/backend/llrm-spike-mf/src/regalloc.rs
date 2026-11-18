@@ -394,6 +394,14 @@ pub trait Target {
         1.0
     }
 
+    /// The status-flags register, which a machine instruction that `sets_flags`
+    /// writes without naming it (the pin's `implicit-def $ccr`). The SSA
+    /// converter gives such an instruction a pinned value for it where a later
+    /// instruction of the block reads the register by name.
+    fn flags_register() -> Option<RegId> {
+        None
+    }
+
     /// Registers the code of a spill or a reload overwrites (the 6502's
     /// stack-mode spill goes through `y`): greedy writes spills after it has
     /// chosen registers, so no value may be held in one.
@@ -416,6 +424,18 @@ pub trait Target {
         _index: usize,
     ) -> Option<Self::Class> {
         None
+    }
+    /// Whether the instruction `name` can write its result to a memory place
+    /// as it is, so a value it computes needs no move to get there.
+    fn writes_memory_in_place(_name: &str) -> bool {
+        false
+    }
+
+    /// Whether [`commute_accumulator`](crate::commute_accumulator) also
+    /// commutes where a source is read by instructions that work on memory
+    /// as it is. The caller learns when it did, to price the other choice.
+    fn commutes_beyond_one_use() -> bool {
+        false
     }
     /// The instruction that stores `register` (of `class`) to frame `slot`;
     /// `None` when the target cannot spill.
@@ -512,10 +532,10 @@ fn copy_point(
     source: Reg,
 ) -> usize {
     let first = insts.iter().rposition(|inst| !inst.terminator).map_or(0, |last| last + 1);
-    if !insts[first..].iter().any(|inst| inst.reads_flags) {
+    if !insts[first..].iter().any(|inst| inst.reads_flags()) {
         return first;
     }
-    let Some(setter) = insts[..first].iter().rposition(|inst| inst.sets_flags) else { return first };
+    let Some(setter) = insts[..first].iter().rposition(|inst| inst.sets_flags()) else { return first };
     let defines_source = insts[setter..first]
         .iter()
         .any(|inst| inst.operands.iter().any(|o| matches!(o, Operand::Def(reg) if *reg == source)));
@@ -540,9 +560,9 @@ fn hoisted_point(
     let uses_source = |inst: &Inst| inst.operands.iter().any(|o| matches!(o, Operand::Use(reg) if *reg == source));
     let Some(last) = insts[..point].iter().rposition(uses_source) else { return point };
     let strands_reader = (last..point).any(|at| {
-        insts[at].reads_flags
-            && !insts[at].sets_flags
-            && insts[..at].iter().rposition(|i| i.sets_flags).is_some_and(|setter| setter < last)
+        insts[at].reads_flags()
+            && !insts[at].sets_flags()
+            && insts[..at].iter().rposition(|i| i.sets_flags()).is_some_and(|setter| setter < last)
     });
     if strands_reader { point } else { last }
 }
@@ -592,6 +612,10 @@ pub fn split_flag_edges<T: Jump, C>(function: &mut MFunction<C>) {
     }
 }
 
+/// The `MFunction` form of the shared `PHIElimination` (`phielimination.rs`),
+/// which m68k and z80 run it in place of while their allocators take an
+/// `MFunction` (`CompileOptions::shared_prelude` is the bridge, off: the corpus
+/// was tuned on this). Keep the two in the pin's order.
 /// `PHIElimination`: a phi becomes a copy of each incoming value into a new
 /// register at the end of its predecessor, and a copy of that register into
 /// the phi's at the top of its block, so parallel phis do not overwrite each
@@ -629,6 +653,11 @@ pub fn eliminate_phis_with<C: Copy>(
             }
             heads.push(Inst::copy(phi.result, temporary));
         }
+        // `LowerPHINode` inserts each copy before the earlier ones: the last
+        // phi's copy is first. A phi that reads another phi's old value then
+        // reads its register before that one is redefined, so the two can
+        // share one.
+        heads.reverse();
         function.blocks[at].insts.splice(0..0, heads);
     }
 }
@@ -807,7 +836,9 @@ fn effects<T: Target>(
         }
     }
     if inst.call {
-        defs.extend(T::caller_saved().iter().map(|root| nodes.of::<T>(Reg::Phys(*root))));
+        let clobbered =
+            inst.call_clobbers.as_ref().map_or_else(T::caller_saved, |known| known.iter().copied().collect());
+        defs.extend(clobbered.iter().map(|root| nodes.of::<T>(Reg::Phys(*root))));
     }
     (defs, uses)
 }

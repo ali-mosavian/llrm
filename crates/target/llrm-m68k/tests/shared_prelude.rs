@@ -313,3 +313,60 @@ fn machine_sink_keeps_every_instruction_attached_to_its_origin() {
     assert_eq!(before, 0, "the converted body already mis-attaches: the check is wrong");
     assert_eq!(after, sunk, "MachineSink moved instructions onto another instruction's origin");
 }
+
+/// The prelude `Options::shared_prelude` runs (`regalloc::shared_prelude`) sinks
+/// instructions, and every one stays attached to its own origin: read by `at`,
+/// 30 of the fixture functions' instructions named a neighbour's. Counted over
+/// the prelude's own output, not a replay of its phases.
+#[test]
+fn the_prelude_sinks_and_every_instruction_keeps_its_origin() {
+    let (mut moved, mut open) = (0, 0);
+    for (_, function) in functions() {
+        let converted = llrm_spike_mf::tolir::to_ssa_lir::<M68kRegisters>(&function, Regs(&llrm_m68k::REGISTER_INFO)).expect("converts");
+        let _lanes = llrm_codegen::backend::lanes::enter(Regs(&llrm_m68k::REGISTER_INFO));
+        let body = llrm_m68k::regalloc::shared_prelude(converted.body.clone()).unwrap_or_else(|why| panic!("prelude refuses: {why}"));
+        open += misattached(&function, &converted, &body);
+        moved += body
+            .blocks
+            .iter()
+            .flat_map(|block| block.insns.iter())
+            .filter(|insn| insn.numbered.is_some_and(|n| i64::from(n) != insn.at / 2))
+            .count();
+    }
+    println!("sunk {moved}, mis-attached {open}");
+    assert!(moved > 0, "the prelude moved no instruction: it runs no MachineSink");
+    assert_eq!(open, 0, "the prelude left instructions attached to another instruction's origin");
+}
+
+/// The control for the converter's own tie pairs: where no operand is dropped
+/// they are the pairs the description's row states, for every instruction of
+/// the fixture functions that has one.
+#[test]
+fn the_converters_tie_pairs_are_the_rows_where_nothing_is_dropped() {
+    let regs = Regs(&llrm_m68k::REGISTER_INFO);
+    let (mut same, mut dropped) = (0, 0);
+    for (what, function) in functions() {
+        let converted = llrm_spike_mf::tolir::to_ssa_lir::<M68kRegisters>(&function, regs).expect("converts");
+        for insn in converted.body.blocks.iter().flat_map(|block| block.insns.iter()) {
+            let Some(semantics) = &insn.what else { continue };
+            let Some(pairs) = &semantics.tied else { continue };
+            let Some(&(b, i)) = converted.origin.get(llrm_spike_mf::tolir::ordinal_of(insn)) else { continue };
+            let inst = &function.blocks[b].insts[i];
+            let name = semantics.name.as_deref().unwrap_or("");
+            let row = (regs.effects)(name, semantics.dests.len(), semantics.sources.len()).first().map(|row| row.ties.to_vec());
+            let lost = inst.operands.iter().any(|operand| match operand {
+                Operand::Use(Reg::Phys(register)) | Operand::Def(Reg::Phys(register)) => M68kRegisters::reserved(M68kRegisters::root(*register)),
+                Operand::Block(_) => true,
+                _ => false,
+            });
+            if lost {
+                dropped += 1;
+                continue;
+            }
+            assert_eq!(row.as_ref(), Some(pairs), "{what}: {name}: the converter's pairs are not the row's");
+            same += 1;
+        }
+    }
+    assert!(same > 0, "no tied instruction reached the control");
+    println!("{same} tied instructions equal their row, {dropped} lose an operand");
+}

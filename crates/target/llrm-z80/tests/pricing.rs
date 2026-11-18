@@ -48,12 +48,18 @@ fn a_counter_in_b_prices_below_one_in_c() {
     assert!(b.0 < c.0 && b.1 < c.1, "b {b:?} c {c:?}");
 }
 
-/// byval_struct -O1 took the allocation with the 41-trip counter in `c`
-/// (`dec c; jr nz`, 339 B and 11925 T) over the one with `djnz` (340 B and
-/// 11842 T): +83 T for -1 B, priced as a gain.
+/// byval_struct -O1 took the allocation with the 41-trip counter in `c` (`dec c; jr nz`, 339 B and 11925 T) over the
+/// one with `djnz` (340 B and 11842 T): +83 T for -1 B, priced as a gain. Since #9031 (LSR meets IV users in program
+/// order again) that loop also stores its own index, so `b` is taken and the counter is `c` (279 B, 9706 T, from
+/// 294 B, 10399 T); the counter alone, the shape the price decides, keeps `djnz`.
 #[test]
 fn a_counted_loop_keeps_its_djnz_at_o1() {
-    let out = text(include_str!("kernels/ir/byval_struct.ll"), "main", 0, &Request::new(Level::O1)).expect("compiles");
+    let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8\"\n\
+        define void @f(ptr %p) {\nentry:\n  br label %l\nl:\n  %i = phi i8 [ 41, %entry ], [ %n, %l ]\n  \
+        %q = phi ptr [ %p, %entry ], [ %q1, %l ]\n  store volatile i8 %i, ptr %q\n  \
+        %q1 = getelementptr i8, ptr %q, i16 1\n  %n = sub i8 %i, 1\n  %c = icmp eq i8 %n, 0\n  \
+        br i1 %c, label %e, label %l\ne:\n  ret void\n}\n";
+    let out = text(ir, "f", 0, &Request::new(Level::O1)).expect("compiles");
     assert!(out.contains("djnz"), "{out}");
 }
 

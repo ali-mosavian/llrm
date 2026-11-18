@@ -471,6 +471,8 @@ pub fn compiled_dumping(
     // C's convention.
     with_default_convention(&mut module, default, flags.regcall_default, flags.c_library, format.name() == "omf");
     crate::coerce::small_structs_as_scalars(&mut module, bound.target.calling())?;
+    crate::coerce::small_struct_results_as_scalars(&mut module, bound.target.calling())?;
+    crate::coerce::far_result_pointers(&mut module, bound.target.calling(), bound.target.layout().spaces.roles.clone())?;
     let spellings = decorate(&mut module, bound.target.calling(), default, format.name());
     // After the rename: the debug info names the symbols the object has.
     llrm_mir::dbgimport::types_and_globals(&mut module);
@@ -502,8 +504,12 @@ pub fn compiled_dumping(
     let bytes = |built: &masm::Module| {
         objbuild::written_in(built, name, layout_of(flags, format), format, objects).ok().map(|object| object.len() as i64)
     };
+    // A bytes-strict target's trials compare the code the instructions fill (`Tti::unroll_trial_bytes_strict`).
+    let flat = options.cpu().ok().and_then(|cpu| cpu.target().tti()).is_some_and(|tti| tti.unroll_trial_bytes_strict());
     let unpadded = |built: &masm::Module| {
-        objbuild::unpadded_bytes(built, name, layout_of(flags, format), format, objects).ok()
+        objbuild::unpadded_split(built, name, layout_of(flags, format), format, objects, flat)
+            .ok()
+            .map(|(code, data)| llrm_codegen::driver::trial::Sizes { code, data })
     };
     Ok((llrm_codegen::driver::trial::compiled_module_trying(module, name, &options, &bytes, &unpadded)?, format))
 }

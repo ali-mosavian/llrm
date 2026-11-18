@@ -47,6 +47,7 @@ fn pricing_a_register_allocates_nothing() {
         table_id: None,
         repeat: false,
         pops: None,
+        tied: None,
     };
     let registers: Vec<RegId> = RegId::values().collect();
     let sum = |registers: &[RegId]| registers.iter().map(|&reg| register_extra_bytes(&what, 7, reg)).sum::<i64>();

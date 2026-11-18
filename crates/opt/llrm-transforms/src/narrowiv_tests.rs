@@ -55,6 +55,31 @@ fn run(
     after
 }
 
+/// `run` on a target that narrows at `-Os` only, `size` stating the level.
+fn run_for_size_only(
+    text: &str,
+    size: bool,
+) -> String {
+    let mut module = parsed(text);
+    managed_on(
+        &mut module,
+        IndVars { lftr: true, size },
+        Tuned { narrows_counters: true, narrows_counters_for_size_only: true, ..Default::default() },
+    );
+    printed(&module)
+}
+
+/// word_compares -O2 narrowed a counter to a byte: 30 B smaller, 9,843 clocks
+/// slower (a shift chain per trip). A target that has not priced that narrows
+/// where bytes are what counts.
+#[test]
+fn a_target_that_narrows_for_size_only_narrows_at_os_and_not_at_speed() {
+    let text = counting("i32", 0, "add", 1, "icmp ult i32 %next, 12");
+    assert!(run_for_size_only(&text, true).contains("phi i8 [ 0, %entry ]"));
+    let kept = run_for_size_only(&text, false);
+    assert!(kept.contains("phi i32 [ 0, %entry ], [ %next"), "{kept}");
+}
+
 /// Symptom: `for (long i = 0; i < 12; ++i)` compared and stepped four bytes on
 /// an 8-bit target (div_constants_short -Oz: 14 B a compare, 1189 B a program).
 #[test]

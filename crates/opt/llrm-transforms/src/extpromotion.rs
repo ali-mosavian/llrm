@@ -564,6 +564,40 @@ fn try_to_promote_exts(
     promoted
 }
 
+/// Whether some path from `load`'s block ends the function without passing a
+/// block that extends the load's value: where there is none, every path pays
+/// the extension and moving it next to the load costs nothing (and one
+/// extension in place of one in each arm).
+fn escapes_the_extensions(
+    function: &Function,
+    load: InstId,
+) -> bool {
+    let (Some(home), Some(result)) = (function.parent(load), function.instruction(load).result) else { return true };
+    let readers: std::collections::HashSet<_> = function
+        .users(result)
+        .iter()
+        .filter(|one| matches!(
+            function.instruction(one.user).opcode,
+            Opcode::Cast(CastOp::ZExt | CastOp::SExt)
+        ))
+        .filter_map(|one| function.parent(one.user))
+        .collect();
+    let mut seen = std::collections::HashSet::from([home]);
+    let mut work = vec![home];
+    while let Some(block) = work.pop() {
+        let next = function.successors(block);
+        if next.is_empty() {
+            return true;
+        }
+        for one in next {
+            if !readers.contains(&one) && seen.insert(one) {
+                work.push(one);
+            }
+        }
+    }
+    false
+}
+
 /// `isExtLoad`: whether the target folds `ext` into `load`.
 fn is_ext_load(
     env: &Env,
@@ -596,6 +630,7 @@ pub fn optimize_ext(
     function: &mut Function,
     state: &mut State,
     ext: InstId,
+    ext_load_costs_extra: bool,
 ) -> bool {
     let env = Env { context, layout, lowering };
     let mut tpt = Transaction::new();
@@ -612,7 +647,11 @@ pub fn optimize_ext(
     if let Some(fed) = fed {
         let load = instruction_of(function, function.instruction(fed).operands[0]).expect("a load");
         let same_block = function.parent(load) == function.parent(fed);
-        if (promoted || !same_block) && is_ext_load(&env, function, load, fed) {
+        // DEVIATE EXT-LOAD-COST: an extension in another block than its load
+        // stays where it is read, where the extending load costs clocks over
+        // the plain one (`Tti::ext_load_costs_extra`).
+        let speculated = !same_block && ext_load_costs_extra && escapes_the_extensions(function, load);
+        if (promoted || !same_block) && !speculated && is_ext_load(&env, function, load, fed) {
             tpt.commit(function);
             let _ = function.move_to(fed, Position::After(load));
             return true;

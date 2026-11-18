@@ -9,7 +9,7 @@ use crate::context::{ConstantExpr, ConstantId, ConstantKind, GlobalId, mask, sig
 use crate::datalayout::{DataLayout, float_bits};
 use crate::facts::Facts;
 use crate::hash::HashMap;
-use crate::intrinsics::Intrinsic;
+use crate::intrinsics::{Intrinsic, ReduceKind};
 use crate::module::{BlockId, Function, GlobalKind, MetadataOperand, Module, Operand, ValueDef, ValueId};
 use crate::opcode::{AtomicKind, Attribute, BinaryOp, CastOp, Flags, FloatPredicate, IntPredicate, Opcode, RmwOp};
 use crate::types::{FloatKind, Type, TypeId};
@@ -436,6 +436,44 @@ impl<'m> Machine<'m> {
                     (exact, _, _) => exact,
                 }
             }
+            // The lanes in order: any order is a valid choice where `reassoc`
+            // says so, and the in-order one is always valid.
+            Intrinsic::VectorReduce(kind) => {
+                let (start, vector) =
+                    if kind.is_float() { (Some(argument(0)), argument(1)) } else { (None, argument(0)) };
+                let Val::Aggregate(lanes) = vector else { return Ok(Val::Poison) };
+                let mut lanes = lanes.into_iter();
+                let first = match start {
+                    Some(start) => start,
+                    None => lanes.next().unwrap_or(Val::Poison),
+                };
+                let mut result = first;
+                for lane in lanes {
+                    result = match kind {
+                        ReduceKind::Add => binary(BinaryOp::Add, Flags::default(), result, lane)?,
+                        ReduceKind::Mul => binary(BinaryOp::Mul, Flags::default(), result, lane)?,
+                        ReduceKind::And => binary(BinaryOp::And, Flags::default(), result, lane)?,
+                        ReduceKind::Or => binary(BinaryOp::Or, Flags::default(), result, lane)?,
+                        ReduceKind::Xor => binary(BinaryOp::Xor, Flags::default(), result, lane)?,
+                        ReduceKind::FAdd => binary(BinaryOp::FAdd, Flags::default(), result, lane)?,
+                        ReduceKind::FMul => binary(BinaryOp::FMul, Flags::default(), result, lane)?,
+                        ReduceKind::SMax | ReduceKind::SMin | ReduceKind::UMax | ReduceKind::UMin => {
+                            let predicate = match kind {
+                                ReduceKind::SMax => IntPredicate::Sgt,
+                                ReduceKind::SMin => IntPredicate::Slt,
+                                ReduceKind::UMax => IntPredicate::Ugt,
+                                _ => IntPredicate::Ult,
+                            };
+                            match icmp(predicate, result.clone(), lane.clone()) {
+                                Val::Int { bits: 1, .. } => result,
+                                Val::Int { .. } => lane,
+                                _ => Val::Poison,
+                            }
+                        }
+                    };
+                }
+                result
+            }
             Intrinsic::MinMax { signed, max } => {
                 let predicate = match (signed, max) {
                     (true, true) => IntPredicate::Sgt,
@@ -577,6 +615,28 @@ impl<'m> Machine<'m> {
                 }
                 _ => Val::Poison,
             },
+            Intrinsic::FpToIntChecked { signed } => {
+                let Val::Float(kind, bits) = argument(0) else { return Ok(Val::Poison) };
+                let x = match kind {
+                    FloatKind::Float => f64::from(f32::from_bits(bits as u32)),
+                    FloatKind::Double | FloatKind::X86Fp80 => f64::from_bits(bits),
+                    FloatKind::F128 => unreachable!("Machine::new refuses a module with an fp128"),
+                }
+                .trunc();
+                let Some(width) = self.types().fields(returns).and_then(|fields| self.types().int_bits(fields[0]))
+                else {
+                    return Ok(Val::Poison);
+                };
+                let (low, high) = if signed {
+                    (-(2f64.powi(width as i32 - 1)), 2f64.powi(width as i32 - 1))
+                } else {
+                    (0.0, 2f64.powi(width as i32))
+                };
+                let fits = x.is_finite() && x >= low && x < high;
+                let value =
+                    if fits { Val::Int { bits: (x as i128 as u128) & mask(width), width } } else { Val::Poison };
+                Val::Aggregate(vec![value, Val::Int { bits: u128::from(fits), width: 1 }])
+            }
             Intrinsic::LRint | Intrinsic::LLRint => {
                 let Val::Float(kind, bits) = argument(0) else { return Ok(Val::Poison) };
                 let x = match kind {
@@ -609,7 +669,9 @@ impl<'m> Machine<'m> {
                 self.poison[range].fill(poison);
                 void
             }
-            Intrinsic::Trap | Intrinsic::DebugTrap | Intrinsic::UbsanTrap => return unsupported("a trap: the program stops"),
+            Intrinsic::Trap | Intrinsic::DebugTrap | Intrinsic::UbsanTrap => {
+                return unsupported("a trap: the program stops");
+            }
             Intrinsic::MemSetPattern => {
                 let (Val::Ptr(address), Val::Int { bits: count, .. }) = (argument(0), argument(2)) else {
                     return undefined("a pattern fill of a poison address or count");
@@ -954,28 +1016,65 @@ impl<'m> Machine<'m> {
                         }
                         None
                     }
-                    Opcode::Binary(op) => Some(binary(*op, instruction.flags, value(self, 0)?, value(self, 1)?)?),
+                    // A vector operation is its scalar one on each lane.
+                    Opcode::Binary(op) => Some(match (value(self, 0)?, value(self, 1)?) {
+                        (Val::Aggregate(a), Val::Aggregate(b)) if a.len() == b.len() => Val::Aggregate(
+                            a.into_iter()
+                                .zip(b)
+                                .map(|(x, y)| binary(*op, instruction.flags, x, y))
+                                .collect::<Run<Vec<_>>>()?,
+                        ),
+                        (a, b) => binary(*op, instruction.flags, a, b)?,
+                    }),
                     Opcode::FNeg => Some(match value(self, 0)? {
                         Val::Float(kind, bits) => Val::Float(kind, bits ^ (1 << (float_bits(kind) - 1))),
                         other => other,
                     }),
                     Opcode::Cast(op) => {
                         let from = function.operand_type(&self.module.context, ops[0]).expect("a value");
-                        Some(cast(
-                            self.types(),
-                            &self.layout,
-                            *op,
-                            value(self, 0)?,
-                            from,
-                            instruction.ty,
-                            instruction.flags,
-                        )?)
+                        let (types, layout) = (self.types(), &self.layout);
+                        // A vector cast is its scalar one on each lane.
+                        Some(match (value(self, 0)?, types.get(from), types.get(instruction.ty)) {
+                            (
+                                Val::Aggregate(lanes),
+                                Type::Vector { element: src, .. },
+                                Type::Vector { element: dst, .. },
+                            ) => Val::Aggregate(
+                                lanes
+                                    .into_iter()
+                                    .map(|lane| cast(types, layout, *op, lane, *src, *dst, instruction.flags))
+                                    .collect::<Run<Vec<_>>>()?,
+                            ),
+                            (lane, ..) => cast(types, layout, *op, lane, from, instruction.ty, instruction.flags)?,
+                        })
                     }
-                    Opcode::ICmp(predicate) => Some(icmp(*predicate, value(self, 0)?, value(self, 1)?)),
+                    Opcode::ICmp(predicate) => Some(match (value(self, 0)?, value(self, 1)?) {
+                        (Val::Aggregate(a), Val::Aggregate(b)) if a.len() == b.len() => {
+                            Val::Aggregate(a.into_iter().zip(b).map(|(x, y)| icmp(*predicate, x, y)).collect())
+                        }
+                        (a, b) => icmp(*predicate, a, b),
+                    }),
                     Opcode::FCmp(predicate) => Some(fcmp(*predicate, value(self, 0)?, value(self, 1)?)),
                     Opcode::Select => Some(match value(self, 0)? {
                         Val::Poison => Val::Poison,
                         Val::Int { bits, .. } => value(self, if bits != 0 { 1 } else { 2 })?,
+                        // A vector condition picks each lane.
+                        Val::Aggregate(conditions) => match (value(self, 1)?, value(self, 2)?) {
+                            (Val::Aggregate(taken), Val::Aggregate(other)) if taken.len() == conditions.len() => {
+                                Val::Aggregate(
+                                    conditions
+                                        .into_iter()
+                                        .zip(taken.into_iter().zip(other))
+                                        .map(|(condition, (taken, other))| match condition {
+                                            Val::Int { bits, .. } if bits != 0 => taken,
+                                            Val::Int { .. } => other,
+                                            _ => Val::Poison,
+                                        })
+                                        .collect(),
+                                )
+                            }
+                            _ => Val::Poison,
+                        },
                         other => unreachable!("a condition {other:?}"),
                     }),
                     Opcode::Freeze => Some(match value(self, 0)? {

@@ -1,0 +1,4 @@
+# program	compiler	reason (written by `prog_bars.py layouts`; a bar of this program is a bar of another struct layout)
+bitfield_long_long	sdcc	struct t is not 8 B there
+volatile_bitfield	llvm-mos	struct S 4 B here against 5 B; union U 4 B here against 5 B
+volatile_bitfield	sdcc	struct S is not 4 B there; union U is not 4 B there

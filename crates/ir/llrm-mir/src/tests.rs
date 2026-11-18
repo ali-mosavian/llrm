@@ -540,6 +540,56 @@ fn an_invariant_start_with_a_wrong_result_is_a_wrong_signature() {
     assert!(error.contains("incorrect return type"), "{error}");
 }
 
+/// An overloaded intrinsic over a vector (`llvm.fmuladd.v4f32`) was refused as
+/// "incorrect return type" and its vector name as badly mangled: LoopVectorize
+/// could not widen a call, and the verifier stopped the module.
+#[test]
+fn an_overloaded_intrinsic_over_a_vector_verifies_with_its_vector_mangling() {
+    let found = |text: &str| crate::verify::verify(&parse::module(text).unwrap_or_else(|error| panic!("{error}")));
+    let right = "declare <4 x float> @llvm.fmuladd.v4f32(<4 x float>, <4 x float>, <4 x float>)\n";
+    assert_eq!(found(right), Vec::<String>::new());
+    let wrong = "declare <4 x float> @llvm.fmuladd.v4f64(<4 x float>, <4 x float>, <4 x float>)\n";
+    assert!(found(wrong)[0].contains("Should be: llvm.fmuladd.v4f32"), "{:?}", found(wrong));
+}
+
+/// `llvm.vector.reduce.*` was not an intrinsic: a vectorizer could not name the
+/// horizontal step of a reduction. The integer forms take a vector and answer
+/// its lane; the float forms take the start value first.
+#[test]
+fn a_vector_reduce_verifies_with_its_lane_as_result_and_the_vector_mangling() {
+    let found = |text: &str| crate::verify::verify(&parse::module(text).unwrap_or_else(|error| panic!("{error}")));
+    assert_eq!(found("declare i16 @llvm.vector.reduce.add.v8i16(<8 x i16>)\n"), Vec::<String>::new());
+    assert_eq!(found("declare i64 @llvm.vector.reduce.umax.v2i64(<2 x i64>)\n"), Vec::<String>::new());
+    assert_eq!(found("declare float @llvm.vector.reduce.fadd.v4f32(float, <4 x float>)\n"), Vec::<String>::new());
+    // The result is the vector's lane, not another type.
+    let wrong = found("declare i32 @llvm.vector.reduce.add.v8i16(<8 x i16>)\n");
+    assert!(wrong[0].contains("incorrect return type"), "{wrong:?}");
+    // A scalar is not a vector to reduce.
+    let scalar = found("declare i16 @llvm.vector.reduce.add.i16(i16)\n");
+    assert!(scalar[0].contains("incorrect argument type"), "{scalar:?}");
+    // The float start is the lane's type.
+    let start = found("declare float @llvm.vector.reduce.fadd.v4f32(double, <4 x float>)\n");
+    assert!(start[0].contains("incorrect argument type"), "{start:?}");
+    let name = found("declare i16 @llvm.vector.reduce.add.v4i16(<8 x i16>)\n");
+    assert!(name[0].contains("Should be: llvm.vector.reduce.add.v8i16"), "{name:?}");
+}
+
+/// A cast of vectors of one lane count ("cannot take <4 x i32> to <4 x
+/// float>") was refused by the verifier: LoopVectorize could not widen a
+/// `sitofp`.
+#[test]
+fn a_cast_of_vectors_with_one_lane_count_verifies_lane_by_lane() {
+    let found = |text: &str| crate::verify::verify(&parse::module(text).unwrap_or_else(|error| panic!("{error}")));
+    let body = |op: &str, from: &str, to: &str| {
+        format!("define void @f({from} %x) {{\n  %y = {op} {from} %x to {to}\n  ret void\n}}\n")
+    };
+    assert_eq!(found(&body("sitofp", "<4 x i32>", "<4 x float>")), Vec::<String>::new());
+    assert_eq!(found(&body("trunc", "<4 x i32>", "<4 x i16>")), Vec::<String>::new());
+    assert_eq!(found(&body("bitcast", "<4 x i32>", "<4 x float>")), Vec::<String>::new());
+    assert!(found(&body("sitofp", "<4 x i32>", "<2 x double>"))[0].contains("cannot take"));
+    assert!(found(&body("zext", "<4 x i32>", "<4 x i16>"))[0].contains("cannot take"));
+}
+
 /// `llvm.fshl`, `llvm.fshr` and `llvm.abs` are intrinsics MIR has: a call of
 /// each verifies. The verifier said "an intrinsic MIR does not have" of all
 /// three, and the funnel-shift and abs folds of InstCombine could not build

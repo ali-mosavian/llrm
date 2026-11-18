@@ -843,3 +843,16 @@ fn canonicalizing_an_add_keeps_the_use_order_of_its_operand() {
         .collect();
     assert_eq!(users, [(1, 0), (0, 0)]);
 }
+
+/// A `xor <8 x i16>` of two operands made `optimize_xor` ask for an integer
+/// width and panic ("an integer xor") in the arm64 compile of a widened loop.
+/// The vector operations are left as they are.
+#[test]
+fn a_vector_operation_is_left_alone() {
+    for op in ["xor", "add", "mul", "and", "or", "sub", "shl"] {
+        let mut module = parsed(&format!(
+            "define <8 x i16> @f(<8 x i16> %x, <8 x i16> %y, <8 x i16> %z) {{\nb0:\n  %a = {op} <8 x i16> %x, %y\n  %b = {op} <8 x i16> %a, %z\n  ret <8 x i16> %b\n}}\n"
+        ));
+        assert!(!reassociated(&mut module), "{op}");
+    }
+}

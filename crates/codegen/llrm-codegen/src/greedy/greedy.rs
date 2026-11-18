@@ -346,6 +346,28 @@ pub trait GreedyEnv: SpillWeightEnv {
     ) -> bool {
         true
     }
+    /// DEVIATE SPILL-FOLD: `Tuning::spill_fold`; none for the pin.
+    fn spill_fold_prices(&self) -> Option<llrm_mir::target::SpillFoldClocks> {
+        None
+    }
+    /// DEVIATE SPILL-FOLD: the clocks of one split copy of `virt` as `insn`
+    /// names it; none for the pin.
+    fn spill_fold_copy_clocks(
+        &self,
+        _insn: &crate::model::lir::Insn,
+        _virt: u32,
+    ) -> Option<i64> {
+        None
+    }
+    /// DEVIATE SPILL-FOLD: whether `insn` takes a stack cell in place of
+    /// `virt` (`foldMemoryOperand`).
+    fn folds_to_cell(
+        &self,
+        _insn: &crate::model::lir::Insn,
+        _virt: u32,
+    ) -> bool {
+        false
+    }
     /// `RegClassInfo.getNumAllocatableRegs(RC)`.
     fn num_allocatable_regs(
         &self,
@@ -439,8 +461,8 @@ pub trait GreedyEnv: SpillWeightEnv {
         false
     }
     /// DEVIATE CSR5: where code is sized in bytes, whether spilling `virt`
-    /// (`reads` instructions read it, `writes` write it; `def_reads_registers`: a
-    /// definition of it reads a register) is shorter than the
+    /// (`reads` instructions read it, `writes` write it; `def_reads_registers`:
+    /// a definition of it reads a register) is shorter than the
     /// first use of the callee-saved `phys`, counted in static bytes, not
     /// frequency. None: the pin's rule. Exit: none, a target knob.
     fn csr_spill_costs_less(
@@ -1295,7 +1317,8 @@ impl<'a> RAGreedy<'a> {
     /// `canEvictInterferenceBasedOnCost` (RegAllocEvictionAdvisor.cpp#L207):
     /// all interferences between `virt` and `phys` can be evicted for less
     /// than `max_cost` (updated when true).
-    /// The `LLRM_GREEDY_DECISIONS` line of one eviction check ([`eviction_line`]).
+    /// The `LLRM_GREEDY_DECISIONS` line of one eviction check
+    /// ([`eviction_line`]).
     fn trace_eviction(
         &self,
         virt: &Rc<LiveInterval>,
@@ -1394,7 +1417,12 @@ impl<'a> RAGreedy<'a> {
                 // Apply the eviction policy for non-urgent evictions.
                 if !self.should_evict(virt, is_hint, &intf, breaks_hint) {
                     self.trace_eviction(virt, phys, || {
-                        format!("v{intf_reg} w={:.4} is not lighter than v{} w={:.4}", intf.weight(), virt.reg(), virt.weight())
+                        format!(
+                            "v{intf_reg} w={:.4} is not lighter than v{} w={:.4}",
+                            intf.weight(),
+                            virt.reg(),
+                            virt.weight()
+                        )
                     });
                     return false;
                 }

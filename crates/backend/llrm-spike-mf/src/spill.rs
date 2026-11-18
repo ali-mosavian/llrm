@@ -107,7 +107,7 @@ fn spill<T: Target>(
                 let load = T::spill_load(class, temporary, slot).ok_or_else(refuse)?;
                 // a load may set the condition codes: it goes before the
                 // compare a flag reader depends on, not between them
-                let at = if inst.reads_flags { flag_sequence_start(&out) } else { out.len() };
+                let at = if inst.reads_flags() { flag_sequence_start(&out) } else { out.len() };
                 out.insert(at, load);
             }
             out.push(inst);
@@ -192,7 +192,7 @@ fn flag_sequence_start(insts: &[Inst]) -> usize {
     let mut start = insts.len();
     while start > 0
         && !insts[start - 1].terminator
-        && (insts[start - 1].sets_flags || copies_to_physical(&insts[start - 1]))
+        && (insts[start - 1].sets_flags() || copies_to_physical(&insts[start - 1]))
     {
         start -= 1;
     }
@@ -207,10 +207,10 @@ fn flags_live_at(
     at: usize,
 ) -> bool {
     for inst in &insts[at..] {
-        if inst.reads_flags {
+        if inst.reads_flags() {
             return true;
         }
-        if inst.sets_flags {
+        if inst.sets_flags() {
             return false;
         }
     }
@@ -273,7 +273,7 @@ fn rematerialize<C: Copy>(
     for (at, block) in function.blocks.iter().enumerate() {
         for (i, inst) in block.insts.iter().enumerate() {
             let reads = mentions(inst, v).0;
-            if reads && source.sets_flags && flags_live_at(&block.insts, i) && !(at == def_block && i == def_index) {
+            if reads && source.sets_flags() && flags_live_at(&block.insts, i) && !(at == def_block && i == def_index) {
                 return None;
             }
         }
@@ -362,7 +362,7 @@ fn remove_dead_defs<C>(function: &mut MFunction<C>) {
                     && !inst.may_store
                     && !inst.side_effects
                     && inst.ties.is_empty()
-                    && !(inst.sets_flags && flags_live_at(&block.insts, at + 1));
+                    && !(inst.sets_flags() && flags_live_at(&block.insts, at + 1));
                 if pure && !defs.is_empty() && defs.iter().all(|d| !used.contains(d)) {
                     block.insts.remove(at);
                     removed = true;
@@ -452,6 +452,14 @@ fn slot_access<C>(
 ) -> Option<(usize, bool)> {
     let slot = inst.operands.iter().find_map(|o| if let Operand::Frame(s) = o { Some(*s) } else { None })?;
     let at = slots.iter().position(|(s, _)| *s == slot)?;
+    // a read folded into an instruction that names no register (`cmpi #k,
+    // slot`) or leads with a use (`cmp slot, reg`) is a read, whatever its
+    // first operand is
+    match (inst.may_store, inst.may_load) {
+        (true, false) => return Some((at, true)),
+        (false, true) => return Some((at, false)),
+        _ => {}
+    }
     match inst.operands.iter().find(|o| matches!(o, Operand::Use(_) | Operand::Def(_)))? {
         Operand::Use(_) => Some((at, true)),
         _ => Some((at, false)),

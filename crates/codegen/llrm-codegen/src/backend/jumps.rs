@@ -204,21 +204,42 @@ pub fn optimized_with(
     // `BranchFolder` ahead of placement: in the order the blocks were made,
     // where a block falling into the common successor takes any tail.
     let hoisted = _hoisted(body);
-    let (early, any_early) = tails_merged(hoisted.clone(), size, calls, false)?;
-    let start = if any_early { early.with_blocks(_explicit(&early)?) } else { hoisted };
-    let mut placed = threaded(&_placed(&start, size, cpu.aggressive, cpu.tail_dup_threshold, cpu.tail_dup_hot(), epilogue)?);
+    // `OptimizeBranches` changes the function whether or not a tail merged: the
+    // placement sees a select's empty `copy0MBB` gone, not a block to fall
+    // into.
+    let (early, _) = tails_merged(hoisted, size, calls, false, cpu.tail_merge_pin_faithful)?;
+    let start = early.with_blocks(_explicit(&early)?);
+    let mut placed = threaded(&_placed_ext(
+        &start,
+        size,
+        cpu.aggressive,
+        cpu.tail_dup_threshold,
+        cpu.tail_dup_hot(),
+        cpu.loop_top_clocks(),
+        epilogue,
+        cpu.operations.ext_tsp_for_size,
+    )?);
     // Tail duplication before the merge, as LLVM places with it: after, the
     // merge would give back what the copy gained.
     // `BranchFolder::OptimizeFunction` after placement: the tails merged, then
     // the branches optimised (`threaded`), until neither changes anything. A
     // merge can leave a compare nothing selects on; LLVM leaves it (T6).
-    let (merged, any) = tails_merged(placed, size, calls, true)?;
+    let (merged, any) = tails_merged(placed, size, calls, true, cpu.tail_merge_pin_faithful)?;
     placed = merged;
     if any {
         // `MachineBlockPlacement::runOnMachineFunction`: "Redo the layout if
         // tail merging creates/removes/moves blocks."
         let explicit = placed.with_blocks(_explicit(&placed)?);
-        placed = threaded(&_placed(&explicit, size, cpu.aggressive, cpu.tail_dup_threshold, cpu.tail_dup_hot(), epilogue)?);
+        placed = threaded(&_placed_ext(
+            &explicit,
+            size,
+            cpu.aggressive,
+            cpu.tail_dup_threshold,
+            cpu.tail_dup_hot(),
+            cpu.loop_top_clocks(),
+            epilogue,
+            cpu.operations.ext_tsp_for_size,
+        )?);
     }
     let done = aligned(&inverted(&placed, size), cpu);
     // Every block leaves by a way the printer can read.
@@ -236,11 +257,12 @@ fn tails_merged(
     size: bool,
     calls: Option<&IndexMap<i64, String>>,
     after_placement: bool,
+    faithful: bool,
 ) -> Result<(LirBody, bool), masm::Unprintable> {
     let mut any = false;
     for _round in 0..std::cmp::max(1, placed.blocks.len() + placed.insns().len()) {
         let explicit = placed.with_blocks(_explicit(&placed)?);
-        let Some(merged) = tailmerge::merged_in(&explicit, size, calls, after_placement)? else {
+        let Some(merged) = tailmerge::merged_in(&explicit, size, calls, after_placement, faithful)? else {
             // `OptimizeFunction`: the branches optimised after each merge
             // attempt, and the merge tried again if they changed anything. A
             // body that was not threaded yet (before placement) has edge
@@ -266,6 +288,7 @@ pub fn tails_merged_after_exits(
     body: LirBody,
     size: bool,
     calls: Option<&IndexMap<i64, String>>,
+    faithful: bool,
 ) -> Result<LirBody, masm::Unprintable> {
     // Only the blocks that return gained something to share.
     let returns = body
@@ -278,7 +301,7 @@ pub fn tails_merged_after_exits(
     if returns < 2 {
         return Ok(body);
     }
-    let (merged, any) = tails_merged(body.clone(), size, calls, true)?;
+    let (merged, any) = tails_merged(body.clone(), size, calls, true, faithful)?;
     Ok(if any { inverted(&merged, size) } else { body })
 }
 
@@ -289,7 +312,7 @@ fn aligned(
     body: &LirBody,
     cpu: &cpu::Profile,
 ) -> LirBody {
-    if cpu.size || cpu.loop_alignment == 0 || body.blocks.len() < 2 || !(cpu.speed_rate || cpu.align_loops_at_o1) {
+    if cpu.size || cpu.loop_alignment == 0 || body.blocks.len() < 2 || !((cpu.speed_rate && cpu.speed_level) || cpu.align_loops_at_o1) {
         return body.clone();
     }
     const COLD: f64 = 0.2;
@@ -500,14 +523,48 @@ fn _placed(
     hot: Option<placement::HotTailDup>,
     epilogue: usize,
 ) -> Result<LirBody, masm::Unprintable> {
+    _placed_ext(body, size, aggressive, tail_dup, hot, None, epilogue, false)
+}
+
+/// `_placed`, with the size order of `-apply-ext-tsp-for-size` where
+/// `ext_tsp` and `size`.
+fn _placed_ext(
+    body: &LirBody,
+    size: bool,
+    aggressive: bool,
+    tail_dup: Option<usize>,
+    hot: Option<placement::HotTailDup>,
+    top: Option<placement::TopClocks>,
+    epilogue: usize,
+    ext_tsp: bool,
+) -> Result<LirBody, masm::Unprintable> {
     let explicit = _explicit(body)?;
     if body.source_order {
         return Ok(body.with_blocks(explicit));
     }
+    Ok(placed_explicit(body, explicit, size, aggressive, tail_dup, hot, top, epilogue, ext_tsp))
+}
+
+/// `_placed_ext` for blocks whose fall-throughs are already jumps: a target
+/// whose own pass made them explicit (arm64's `layout::fold`) calls this, and
+/// `explicit` stands in for `body.blocks`.
+pub fn placed_explicit(
+    body: &LirBody,
+    explicit: Vec<Block>,
+    size: bool,
+    aggressive: bool,
+    tail_dup: Option<usize>,
+    hot: Option<placement::HotTailDup>,
+    top: Option<placement::TopClocks>,
+    epilogue: usize,
+    ext_tsp: bool,
+) -> LirBody {
     let natural = loopy::loops(&explicit, Some(body.entry));
     let busy = Frequency::of(body);
-    let (blocks, odds) = placement::order(&explicit, body.entry, &body.odds, &busy, &natural, size, aggressive, tail_dup, hot, epilogue);
-    Ok(_reachable(&LirBody { odds, ..body.clone() }, blocks))
+    let (blocks, odds) = placement::order(
+        &explicit, body.entry, &body.odds, &busy, &natural, size, aggressive, tail_dup, hot, top, epilogue, ext_tsp,
+    );
+    _reachable(&LirBody { odds, ..body.clone() }, blocks)
 }
 
 pub fn threaded(body: &LirBody) -> LirBody {

@@ -124,6 +124,7 @@
 //! The phase map: [`crate::backend`].
 
 pub mod absolute;
+pub mod checkedconv;
 pub mod addressforms;
 pub mod addressvalues;
 pub mod affine;
@@ -144,6 +145,7 @@ pub mod callregs;
 pub mod cfi;
 pub mod classes;
 pub mod cmovconversion;
+pub mod codetables;
 pub mod combiner;
 pub mod comparefold;
 pub mod compares;
@@ -215,6 +217,7 @@ pub mod intbits;
 mod isel_tests;
 pub mod ivshare;
 pub mod ivzero;
+pub mod joinsp;
 pub mod jumps;
 pub mod lanes;
 pub mod latecleanup;
@@ -234,6 +237,7 @@ pub mod liveness;
 pub mod liverangeshrink;
 pub mod loopslots;
 pub mod lower_int64;
+pub mod knownzero;
 pub mod machinecp;
 pub mod machinedce;
 pub mod machinelicm;
@@ -283,6 +287,7 @@ pub mod shadow;
 #[cfg(test)]
 mod shadow_tests;
 pub mod shrinkwrap;
+pub mod splitparams;
 pub mod slotcopies;
 pub mod slots;
 pub mod stackcoloring;

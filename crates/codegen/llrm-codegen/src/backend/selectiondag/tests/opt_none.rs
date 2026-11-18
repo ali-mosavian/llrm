@@ -62,7 +62,7 @@ fn the_x86_pipeline_passes_o0_to_the_combiner() {
         let tli = TargetLowering::x86_32(Features::default(), MVT::I32);
         let mut lowering = X86Lowering {
             multiply_early_out: None,
-            imul_if_smaller: false,
+            imul_if_smaller: false, hot_chains: false,
             share_products: false,
             cmov: false,
             sse2: false,
@@ -72,6 +72,7 @@ fn the_x86_pipeline_passes_o0_to_the_combiner() {
             sext_load: false,
             zext_free: false,
             branch_constant_selects: false,
+            status_word_tests: false,
             profile: None,
         };
         legalized_with(&mut dag, &tli, &mut lowering, Some(&llrm_x86_m32::M32), opt_none).expect("legalizes");

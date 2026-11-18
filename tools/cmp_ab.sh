@@ -27,6 +27,9 @@ if [ "$1" = --selftest ]; then
   "$self" $out/pert "$dist" "$dist" "${prog%%:*}:${prog##*:}/O1"; r=$(row $out/pert)
   set -- $(pair "$r"); d=$(( $1 > $2 ? $1 - $2 : $2 - $1 ))
   [ $((d * 100)) -lt "$1" ] && fail "a variant at -O1 did not read as a difference ($1 -> $2)"
+  "$self" $out/data "$dist" "$dist" jpeg_single:O2; r=$(row $out/data); set -- $(pair "$r")
+  calls=$(echo "$r" | sed 's/.* calls \([0-9]*\) .*/\1/')
+  [ $(( $1 / calls )) -lt 100000 ] && fail "jpeg_single ran $(( $1 / calls )) instructions a call: its PHOTO.JPG was not found in the run directory"
   echo "SELFTEST ok"; exit 0
 fi
 OUT=$1; A=$2; B=$3; shift 3
@@ -34,12 +37,19 @@ python3 "$here/llrmbin.py" sides "$A/llrm-cc" "$B/llrm-cc" $([ "${CMP_AB_SAME_OK
 t=$(mktemp -d); trap 'rm -rf $t' EXIT; cd $t
 for n in 0 16 32 48; do printf '.text\n.p2align 6\n.space %d,0x90\n' $n > pad$n.s; gcc -c pad$n.s -o pad$n.o 2>/dev/null; done
 echo "# $(date -u +%FT%TZ) A=$A($(md5sum <$A/llrm-cc|cut -c1-8)) B=$B($(md5sum <$B/llrm-cc|cut -c1-8)) load $(cut -d' ' -f1-3 /proc/loadavg)" > $OUT
-meas(){ setarch -R taskset -c $CORE perf stat -x, -e cycles:u,instructions:u,ls_dispatch.ld_dispatch:u,ls_dispatch.store_dispatch:u $1 5000 2>&1 >/dev/null | awk -F, '$3 ~ /^cycles/ {c=$1} $3 ~ /^instructions/ {i=$1} $3 ~ /ld_dispatch/ {l=$1} $3 ~ /store_dispatch/ {s=$1} END{print c, i, l, s}'; }
+meas(){ setarch -R taskset -c $CORE perf stat -x, -e cycles:u,instructions:u,ls_dispatch.ld_dispatch:u,ls_dispatch.store_dispatch:u $1 $REPS 2>&1 >/dev/null | awk -F, '$3 ~ /^cycles/ {c=$1} $3 ~ /^instructions/ {i=$1} $3 ~ /ld_dispatch/ {l=$1} $3 ~ /store_dispatch/ {s=$1} END{print c, i, l, s}'; }
 for pl in "$@"; do p=${pl%%:*}; L=${pl##*:}; LA=${L%%/*}; LB=${L##*/}; ctlmax=0; pm=
+ # A program that reads a file (`// data: photo.jpg`) finds it in the run directory, under the name it opens (the DOS spelling is upper case):
+ # without it jpeg_* returned "PHOTO.JPG not found" after ~700 instructions and every clock row read 208 cycles a call.
+ for f in $(sed -n '1,6s,^// data: *,,p' $REPO/bench/$p/$p.c); do case $f in @*) ;; *) cp $REPO/bench/$p/$f $t/$f; cp $REPO/bench/$p/$f $t/$(echo $f | tr a-z A-Z) ;; esac; done
  for k in a b; do d=$A; lv=$LA; [ $k = b ] && { d=$B; lv=$LB; }
   (cd $REPO/bench/$p; LLRM_CC_TARGET=x86_64-linux $d/llrm-cc -m64 -$lv -c -Dmain=bench_main_ -I $REPO/bench -I $R -o $t/o.$k.o $p.c) >/dev/null 2>&1 || { echo "$p $L compile-fail $k" >> $OUT; continue 2; }
  done
  bytesA=$(uv run -q --project $here python $here/ab/object_bytes.py x86_64-linux $t/o.a.o | awk '{print $1 + $2}'); bytesB=$(uv run -q --project $here python $here/ab/object_bytes.py x86_64-linux $t/o.b.o | awk '{print $1 + $2}')
+ # Calls per run: 5000 for a kernel of a few hundred instructions, one for a decoder of millions (jpeg_single, 5.6 M a call: 28 G a run at 5000).
+ gcc -static -no-pie -o $t/x.n $t/pad0.o $t/o.a.o $TOOLS/instrcount_driver.c $R/os.c -lm >/dev/null 2>&1
+ one=$(cd $t; setarch -R perf stat -x, -e instructions:u $t/x.n 1 2>&1 >/dev/null | awk -F, '$3 ~ /^instructions/ {print $1}')
+ REPS=$(( 50000000 / (one > 1 ? one : 1) )); [ $REPS -gt 5000 ] && REPS=5000; [ $REPS -lt 1 ] && REPS=1
  for pd in 0 16 32 48; do
   for k in a b; do gcc -static -no-pie -o $t/x.$k $t/pad$pd.o $t/o.$k.o $TOOLS/instrcount_driver.c $R/os.c -lm >/dev/null 2>&1; done
   cp $t/x.a $t/x.ctl; [ -n "$CMP_AB_BREAK" ] && cp $t/x.a $t/x.b
@@ -52,5 +62,5 @@ for pl in "$@"; do p=${pl%%:*}; L=${pl##*:}; LA=${L%%/*}; LB=${L##*/}; ctlmax=0;
   pm="$pm $bA,$bB,$bC"; d=$(( (bC>bA ? bC-bA : bA-bC) * 1000 / bA )); [ "$d" -gt "$ctlmax" ] && ctlmax=$d
  done
  flag=ok; [ "$ctlmax" -gt 10 ] && flag=NOISY
- echo "$p $L bytes $bytesA->$bytesB ins $insA->$insB loads $ldA->$ldB stores $stA->$stB control_max_permille=$ctlmax $flag placements(A,B,ctl cycles):$pm" >> $OUT
+ echo "$p $L bytes $bytesA->$bytesB calls $REPS ins $insA->$insB loads $ldA->$ldB stores $stA->$stB control_max_permille=$ctlmax $flag placements(A,B,ctl cycles):$pm" >> $OUT
 done; echo done >> $OUT

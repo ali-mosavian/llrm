@@ -34,17 +34,38 @@ impl DataRegisters {
         self.known = [None; 8];
     }
 
+    /// The data register that holds the places of the shift `text`, when it
+    /// shifts by a register.
+    pub fn count_register(text: &str) -> Option<usize> {
+        let (base, _, operands) = parts(text);
+        if !is_shift(base) || operands.len() != 2 {
+            return None;
+        }
+        data_register(operands[0])
+    }
+
+    /// The destination data register and signedness of the 16-bit multiply
+    /// `text` whose source is not an immediate: the 68000 prices it by
+    /// the source's value, which only the cpu state before and after can show.
+    pub fn multiply_destination(text: &str) -> Option<(usize, bool)> {
+        let (base, suffix, operands) = parts(text);
+        if !matches!(base, "mulu" | "muls")
+            || suffix != Some("w")
+            || operands.len() != 2
+            || operands[0].starts_with('#')
+        {
+            return None;
+        }
+        Some((data_register(operands[1])?, base == "muls"))
+    }
+
     /// The places the shift `text` moves, if it shifts by a register whose
     /// value is known.
     pub fn places_of(
         &self,
         text: &str,
     ) -> Option<u32> {
-        let (base, _, operands) = parts(text);
-        if !is_shift(base) || operands.len() != 2 {
-            return None;
-        }
-        self.known[data_register(operands[0])?].map(|value| value % 64)
+        self.known[Self::count_register(text)?].map(|value| value % 64)
     }
 
     /// Account for the registers `text` writes; call after it executed.

@@ -3,6 +3,7 @@ name = "llrm-transforms"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+license = "GPL-3.0-or-later"
 description = "MIR to MIR passes, adapted from llrm-codegen's optimizations"
 
 [dependencies]

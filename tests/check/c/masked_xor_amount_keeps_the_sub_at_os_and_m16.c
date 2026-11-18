@@ -1,7 +1,8 @@
 // RUN: llrm-cc %s -m32 -mabi=sysv -Os -march=i486 -S -o /dev/stdout
 // RUN: llrm-cc %s -m16 -O2 -march=i386 -S -o /dev/stdout
-// `26 - (n ^ 31)` stays `mov cl, 26; sub cl, al` where the add form is a byte longer: -Os (no byte `lea`) and m16 (no three-address add).
-// The fold to `n - 5` (SD448) made 18 m16 and 18 z80 cells and 11 m32 -Os cells larger when it was an InstCombine rewrite.
+// `26 - (n ^ 31)` is the pin's combineSub fold `or n, -32; add n, 27` (X86ISelLowering.cpp#L60933; the pin's llc gives
+// `orb $-32; addb $27` on the same IR). No `mov 26; sub`, no `lea`: -Os has no byte `lea`, m16 no three-address add.
+// Folding it to `n - 5` earlier (SD448, an InstCombine rewrite) made 18 m16, 18 z80 and 11 m32 -Os cells larger.
 unsigned amount(unsigned a, unsigned x)
 {
     unsigned k = a & 31;
@@ -9,6 +10,6 @@ unsigned amount(unsigned a, unsigned x)
 }
 
 // CHECK-LABEL: amount{{.*}} proc
-// CHECK: mov cl, 26
-// CHECK-NEXT: sub cl,
+// CHECK: or {{[a-d]l}}, -32
+// CHECK-NEXT: add {{[a-d]l}}, 27
 // CHECK-NOT: lea

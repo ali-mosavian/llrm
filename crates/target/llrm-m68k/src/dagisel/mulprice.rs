@@ -8,13 +8,16 @@
 //! is 6 to 10 B: 45 small programs grew 2 to 28 B at -Os. The answer here is
 //! the level's [`Price`] of the chain against the multiply, on the CPU's
 //! tables, so a size build keeps `muls.l` where the chain is longer and a speed
-//! build takes the chain where it is faster; -O1 keeps the pin's chain unless the
-//! multiply is no worse in both (the function-level trial below). The 68000 and 68010 have no 32-bit
-//! multiply: it is a call (16 B at the site, and the routine), so the chain
-//! always wins there, as the pin has it. Wider than 32 bits stays the multiply
-//! (the pin's `atLeast68020` answer decomposed `i64` into pairs; unpriced).
-//! Owner m68k. Exit 2026-12-20: the price from the selected instructions (G2,
-//! `synth_mult` for any constant).
+//! build takes the chain where it is faster; -O1 keeps the pin's chain unless
+//! the multiply is no worse in both (the function-level trial below). The 68000
+//! and 68010 have no 32-bit multiply: it is a call (16 B at the site, and the
+//! routine), so the chain always wins there, as the pin has it. Wider than 32
+//! bits: the pin's `atLeast68020` answer decomposed `i64` into pairs; here an
+//! `i64` below the 68020 is a chain of at most three pair shifts
+//! ([`wide_chain`]), where the multiply is a call or partial products (`b * 3`
+//! at 68000 -O2: 38 B against 72), and from the 68020 it stays the multiply (28
+//! B against the chain's 38). Owner m68k. Exit 2026-12-20: the price from the
+//! selected instructions (G2, `synth_mult` for any constant).
 //!
 //!
 //! DEVIATE M68K-MUL-LATE: the per-site answer cannot see what the chain does to
@@ -43,7 +46,7 @@ use super::hooks::Cpu;
 use crate::timing::Price;
 
 /// How a build treats a multiply by a constant.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Mode {
     /// The decomposition stands, as the pin's M68k has it.
     Pin,
@@ -52,6 +55,9 @@ pub enum Mode {
     Trial,
     /// The multiply stays: `muls.l`, or the library call before the 68020.
     Kept,
+    /// As [`Mode::Trial`] without the chains beyond the pin's shape (G2): the
+    /// build the trial judges them against.
+    TrialPinShapes,
 }
 
 /// Whether the combiner may decompose a multiply in this build of a function,
@@ -60,17 +66,35 @@ pub enum Mode {
 #[derive(Clone, Default)]
 pub struct Chain {
     off: bool,
+    pin: bool,
+    shapes_only: bool,
     used: Rc<Cell<bool>>,
+    synthesized: Rc<Cell<bool>>,
 }
 
 impl Chain {
     pub fn of(mode: Mode) -> Chain {
-        Chain { off: mode == Mode::Kept, used: Rc::default() }
+        Chain { off: mode == Mode::Kept, pin: mode == Mode::Pin, shapes_only: mode == Mode::TrialPinShapes, used: Rc::default(), synthesized: Rc::default() }
     }
 
     /// Whether this build decomposed at least one multiply.
     pub fn used(&self) -> bool {
         self.used.get()
+    }
+
+    /// Whether this build took a chain beyond the pin's shape (DEVIATE G2).
+    pub fn synthesized(&self) -> bool {
+        self.synthesized.get()
+    }
+
+    pub(super) fn note_synthesized(&self) {
+        self.synthesized.set(true);
+    }
+
+    /// Whether a chain beyond the pin's shape may be taken: not in a build
+    /// that follows the pin, nor one that keeps the multiply.
+    pub(super) fn allows_beyond_pin(&self) -> bool {
+        !self.pin && !self.off && !self.shapes_only
     }
 
     pub(super) fn allows(&self, yes: bool) -> bool {
@@ -83,7 +107,7 @@ impl Chain {
 }
 
 /// `(bytes, clocks)` of `text` on `cpu`: `bytes` are the instruction's length.
-fn one(
+pub(super) fn one(
     cpu: Cpu,
     text: &str,
     bytes: usize,
@@ -92,13 +116,13 @@ fn one(
     (bytes, clocks)
 }
 
-fn sum(parts: impl IntoIterator<Item = (usize, u32)>) -> (usize, u32) {
+pub(super) fn sum(parts: impl IntoIterator<Item = (usize, u32)>) -> (usize, u32) {
     parts.into_iter().fold((0, 0), |(b, c), (pb, pc)| (b + pb, c + pc))
 }
 
 /// A shift of a data register by `amount`: the count in the instruction up to
 /// 8, else in a register set by `moveq`.
-fn shift(
+pub(super) fn shift(
     cpu: Cpu,
     amount: u32,
 ) -> (usize, u32) {
@@ -154,17 +178,40 @@ pub fn decomposes(
     bits: u32,
     c: u128,
 ) -> bool {
-    if bits > 32 {
+    if bits > 64 {
         return false;
+    }
+    if bits == 64 {
+        // from the 68020 the pair's multiply is inline and shorter than the
+        // chain (`b * 3`: 28 B against 38)
+        return !cpu.at_least(Cpu::M68020) && wide_chain(c as u64);
     }
     let c = (c & u128::from(u32::MAX)) as u32;
     let Some(chain) = chain(cpu, c) else { return false };
-    // -O1 stands on the pin's answer: the chain is the incumbent and the multiply replaces it
-    // only where it is no worse in bytes and in clocks, which `crate::trial` decides for the
-    // function (a lone `x * 9` is 6 B against 4 but 12 clocks against 43: each wins one axis,
-    // the chain stands, as the pin's clang has it).
-    if !cpu.at_least(Cpu::M68020) || price == Price::Strict {
+    if !cpu.at_least(Cpu::M68020) {
         return true;
     }
     price.beats(cpu, chain, multiply(cpu))
+}
+
+/// Whether `x * c` of 64 bits is `(2^n +- 1) << k` with `n + k` at most 3: each
+/// shift of the pair by one is `add.l` and `addx.l` (4 B), so the chain is 12 B
+/// plus 4 B a shift, against the call's 26 B (`b * 3` at -O2: 38 B against 72 B
+/// of partial products). The function trial keeps the multiply where the chain
+/// loses.
+fn wide_chain(c: u64) -> bool {
+    let magnitude = if c >> 63 == 1 { c.wrapping_neg() } else { c };
+    if magnitude == 0 {
+        return false;
+    }
+    let zeros = magnitude.trailing_zeros();
+    let odd = magnitude >> zeros;
+    let bits = if (odd - 1).is_power_of_two() {
+        odd - 1
+    } else if (odd + 1).is_power_of_two() {
+        odd + 1
+    } else {
+        return false;
+    };
+    bits.trailing_zeros() + zeros <= 3
 }

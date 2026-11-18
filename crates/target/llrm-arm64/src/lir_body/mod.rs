@@ -189,6 +189,7 @@ fn semantics(
         table_id: None,
         repeat: false,
         pops: None,
+        tied: None,
     }
 }
 

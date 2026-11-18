@@ -153,6 +153,7 @@ use std::sync::Arc;
 use llrm_analysis::aa::MemoryLocation;
 use llrm_analysis::cfg;
 use llrm_analysis::memory::Unit;
+use llrm_analysis::scev::analysis::ScevSession;
 use llrm_lir::registers::RegId;
 use llrm_lir::registers::Regs;
 use llrm_mir::datalayout::DataLayout;
@@ -208,7 +209,9 @@ pub fn _read(what: &ir::Semantics) -> Vec<u32> {
     let addressed = || what.dests.iter().filter(|where_| !matches!(where_, Loc::Held(_)));
     let count: usize = what.sources.iter().chain(addressed()).map(|operand| ir::values(operand).len()).sum();
     let mut out = Vec::with_capacity(count);
-    out.extend(what.sources.iter().chain(addressed()).flat_map(|operand| ir::values(operand).into_iter().map(|one| one.value)));
+    out.extend(
+        what.sources.iter().chain(addressed()).flat_map(|operand| ir::values(operand).into_iter().map(|one| one.value)),
+    );
     out
 }
 
@@ -228,22 +231,31 @@ pub mod api {
 mod unwind;
 
 pub use matcher::Compiled;
-/// Each loop of `shape` with a trip count `induction` proves, as (the LIR
-/// address of its header, the trips): what the executed-work estimate scales
-/// the loop by. `header_at` names the LIR block a MIR block became.
+/// Each loop of `shape` with a trip count `induction` proves, or else
+/// ScalarEvolution does (`getSmallConstantTripCount`), as (the LIR address of
+/// its header, the trips): what the executed-work estimate scales the loop by.
+/// `header_at` names the LIR block a MIR block became.
 pub fn proven_trips(
     unit: &Unit,
     shape: &llrm_analysis::cfg::Shape,
     facts: &IndexMap<llrm_mir::module::ValueId, llrm_analysis::consts::Known>,
     header_at: impl Fn(BlockId) -> Option<i64>,
 ) -> Vec<(i64, i64)> {
+    // The body's assumptions are found once, as LLVM's `AssumptionCache`, not
+    // for every loop's proof.
+    let assumed = llrm_analysis::assumptions::Assumptions::of(unit);
+    let unit = &(*unit).with_assumptions(&assumed);
+    let mut session = ScevSession::within(unit.context, unit.globals, unit.metadata, unit.function);
     let mut counts: Vec<(i64, i64)> = shape
         .loops
         .iter()
         .filter_map(|one| {
             let header = header_at(cfg::block(one.header))?;
-            let count = llrm_analysis::induction::trip_count(unit, one, facts)?;
-            Some((header, i64::try_from(count).expect("a trip count fits an int64")))
+            let count = match llrm_analysis::induction::trip_count(unit, one, facts) {
+                Some(count) => i64::try_from(count).expect("a trip count fits an int64"),
+                None => llrm_transforms::profit::scev_trips(&mut session, unit, one)?,
+            };
+            Some((header, count))
         })
         .collect();
     counts.sort();
@@ -621,14 +633,12 @@ pub fn convention_for_abi(
             return refuse("a Win64 by-value struct, vector or integer wider than 128 bits (row W64-1)");
         }
         let registers_len = registers.map_or(0, |entry| entry.argument_registers.len());
-        let mut position = usize::from(
-            param_types
-                .iter()
-                .enumerate()
-                .any(|(index, _)| class_of(parameter_attrs.get(index).map_or(&[], Vec::as_slice)) == Some(llrm_mir::opcode::RESULT_POINTER)),
-        );
+        let mut position = usize::from(param_types.iter().enumerate().any(|(index, _)| {
+            class_of(parameter_attrs.get(index).map_or(&[], Vec::as_slice)) == Some(llrm_mir::opcode::RESULT_POINTER)
+        }));
         for (index, &ty) in param_types.iter().enumerate() {
-            if class_of(parameter_attrs.get(index).map_or(&[], Vec::as_slice)) == Some(llrm_mir::opcode::RESULT_POINTER) {
+            if class_of(parameter_attrs.get(index).map_or(&[], Vec::as_slice)) == Some(llrm_mir::opcode::RESULT_POINTER)
+            {
                 continue;
             }
             if wide(ty) {
@@ -700,6 +710,30 @@ pub fn convention_for_abi(
         }
         if in_order {
             parameters.reverse();
+        }
+    }
+    if interrupt {
+        // Each parameter is the low word of the frame slot the description
+        // names.
+        if let Some(handler) = arch.calling().interrupt().filter(|one| !one.interrupt_parameters.is_empty()) {
+            if parameters.len() > handler.interrupt_parameters.len() {
+                return refuse("an interrupt handler with more parameters than the description names");
+            }
+            for (parameter, name) in parameters.iter_mut().zip(&handler.interrupt_parameters) {
+                let mut at = 0;
+                let mut found = false;
+                for (slot, bytes) in &handler.interrupt_frame {
+                    if slot == name {
+                        found = true;
+                        break;
+                    }
+                    at += bytes;
+                }
+                if !found {
+                    return refuse(format!("an interrupt parameter {name} that the frame does not hold"));
+                }
+                *parameter = Parameter::Cell(first + at);
+            }
         }
     }
     for (index, parameter) in parameters.iter_mut().enumerate() {
@@ -1409,7 +1443,6 @@ pub fn selected_with<'c>(
         landing: selector.landing,
     })
 }
-
 
 /// `-g`'s parameters of the function `name`, in the cells `convention` passes
 /// them in.

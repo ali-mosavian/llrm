@@ -255,3 +255,33 @@ fn integers_are_built_as_binary128() {
     assert_eq!(fp_value::from_integer(F128, 7), Some((0x4001 << 112) | (0xC << 108)));
     assert_eq!(fp_value::negate(F128, 0), Some(1 << 127));
 }
+
+/// m16 stft_single: `next = c * K1 - s * K2` reached the pool as `fadd (fmul c K1), (fmul s -K2)`, two
+/// cells for `K2` and `-K2` (+4 B of data against bcc). A target with positive constants makes it
+/// `fsub`; one without keeps the pin's `fadd`.
+#[test]
+fn a_multiply_by_a_negative_constant_is_a_subtract_of_the_positive_one_where_constants_are_positive() {
+    let tli_for = |positive: bool| {
+        let mut tli = TargetLowering::x86_16(Features::default(), MVT::I16);
+        if !positive {
+            tli = TargetLowering::x86_32(Features::default(), MVT::I32);
+        }
+        tli
+    };
+    let run = |positive: bool| {
+        let tli = tli_for(positive);
+        let mut dag = dag();
+        let (x, y) = (load(&mut dag, F64, 1), load(&mut dag, F64, 2));
+        let k = double(&mut dag, -0.0245);
+        let mul = dag.get_node(ISD::FMul, F64, &[y, k]);
+        let add = dag.get_node(ISD::FAdd, F64, &[x, mul]);
+        dag.set_root(add);
+        DagCombiner::new(&mut dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).with_tli(&tli).run();
+        let root = dag.get_root();
+        let opcode = dag.opcode(root);
+        let mul = dag.operand(root, 1);
+        (opcode, bits(&dag, dag.operand(mul, 1)))
+    };
+    assert_eq!(run(true), (ISD::FSub, Some(0.0245f64.to_bits().into())));
+    assert_eq!(run(false), (ISD::FAdd, Some((-0.0245f64).to_bits().into())));
+}

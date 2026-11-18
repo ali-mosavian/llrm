@@ -335,6 +335,9 @@ pub struct ShadowEdit {
     pub dest: llrm_mir::types::TypeId,
     pub init: i128,
     pub step: u64,
+    /// The conversions of the increment are the new increment too: where
+    /// floats live on the x87 stack (`floats_live_on_the_x87_stack`).
+    pub twins: bool,
 }
 
 /// DEVIATE LS-SH: `OptimizeShadowIV` makes one variable per loop and breaks;
@@ -437,6 +440,7 @@ pub fn analyze_shadow(
             dest: instruction.ty,
             init,
             step: step_bits as u64,
+            twins: floats_live_on_the_x87_stack(tti),
         });
     }
     None
@@ -485,7 +489,35 @@ pub fn apply_shadow(
     let incr_value = Operand::Value(function.instruction(new_incr).result.expect("an increment value"));
     function.set_operand(new_phi, 2, incr_value);
     // The conversion goes.
+    let cast = function.instruction(edit.cast).opcode.clone();
     let cast_value = function.instruction(edit.cast).result.expect("a conversion value");
     function.replace_all_uses_with(cast_value, new_value);
     function.erase(edit.cast).expect("the conversion");
+    // Beyond the pin: a conversion of the increment, in the same way, is the
+    // new increment (`1.0 / (double)(i + 1)` beside `(double)i`): it would
+    // otherwise convert the integer every trip beside the counter that holds
+    // the same number. Where floats live on the x87 stack only: a soft-float
+    // target keeps one more value live across its calls (6502 x_ldmath +32 B).
+    let wrap = if matches!(cast, Opcode::Cast(llrm_mir::opcode::CastOp::SIToFP)) {
+        llrm_mir::opcode::Flags::NSW
+    } else {
+        llrm_mir::opcode::Flags::NUW
+    };
+    let incr_int = function.instruction(edit.incr).result.expect("an increment value");
+    if edit.twins && function.instruction(edit.incr).flags.contains(wrap) {
+        let twins: Vec<InstId> = function
+            .users(incr_int)
+            .iter()
+            .map(|one| one.user)
+            .filter(|&user| {
+                let one = function.instruction(user);
+                one.opcode == cast && one.ty == edit.dest
+            })
+            .collect();
+        for twin in twins {
+            let twin_value = function.instruction(twin).result.expect("a conversion value");
+            function.replace_all_uses_with(twin_value, incr_value);
+            function.erase(twin).expect("the conversion");
+        }
+    }
 }

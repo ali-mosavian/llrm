@@ -184,7 +184,7 @@ pub fn split_phi_edges(f: &mut Function) -> bool {
 /// jump-table path (`findJumpTableIndex`) does not apply: wasm's `BR_TABLE`
 /// names its blocks, not a jump table (pin `-debug-only=phi-node-elimination`:
 /// "Failed to split critical edge").
-fn can_split_critical_edge(
+pub(crate) fn can_split_critical_edge(
     f: &Function,
     pred: usize,
 ) -> bool {
@@ -200,11 +200,11 @@ pub(crate) fn split_edge(
     block: usize,
 ) {
     let new = pred + 1;
-    // `pred` may fall into the block laid out after it: the new block now stands
-    // there, so the fall-through needs its own jump (the block moves up by one).
-    let falls_into = f.blocks[pred].last().is_some_and(|last| !last.is_barrier())
-        && pred + 1 < f.blocks.len()
-        && pred + 1 != block;
+    // `pred` may fall into the block laid out after it: the new block now
+    // stands there, so the fall-through needs its own jump (the block moves
+    // up by one).
+    let falls_into =
+        f.blocks[pred].last().is_some_and(|last| !last.is_barrier()) && pred + 1 < f.blocks.len() && pred + 1 != block;
     let shift = |b: &mut u32| {
         if *b as usize >= new {
             *b += 1;
@@ -220,6 +220,7 @@ pub(crate) fn split_edge(
             *to += 1;
         }
     }
+    f.remap_preds(f.blocks.len() + 1, |old| Some(if old >= new { old + 1 } else { old }));
     let (old, block) = (block, if block >= new { block + 1 } else { block });
     let pred = pred as u32;
     let (target, new_id) = (block as u32, new as u32);
@@ -245,7 +246,8 @@ pub(crate) fn split_edge(
         }
     }
     if falls_into {
-        f.blocks[pred as usize].push(Inst::new(crate::dagisel::generated::ids::opcode::BR, &[Operand::Block(new_id + 1)]));
+        f.blocks[pred as usize]
+            .push(Inst::new(crate::dagisel::generated::ids::opcode::BR, &[Operand::Block(new_id + 1)]));
     }
     f.blocks.insert(new, vec![Inst::new(crate::dagisel::generated::ids::opcode::BR, &[Operand::Block(target)])]);
     f.succs.insert(new, vec![block]);

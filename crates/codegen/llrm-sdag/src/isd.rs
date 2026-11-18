@@ -170,6 +170,8 @@ pub enum ISD {
 
     SetCC,
     Select,
+    /// `VSELECT`: a vector of booleans picks each lane of the first or the second operand.
+    VSelect,
     SelectCC,
     BrCC,
     BrCond,
@@ -228,6 +230,11 @@ pub enum ISD {
     /// `BUILD_VECTOR`: one scalar per lane. An operand may be wider than the
     /// lane (`PromoteIntOp_BUILD_VECTOR`): the extra bits are ignored.
     BuildVector,
+    /// `CONCAT_VECTORS`: vectors of one type, one of as many times the lanes.
+    ConcatVectors,
+    /// `EXTRACT_SUBVECTOR`: `(vector, index)`, a constant first lane, a
+    /// multiple of the result's lane count.
+    ExtractSubvector,
     /// `SCALAR_TO_VECTOR`: the scalar in lane 0, the rest undefined.
     ScalarToVector,
     /// `INSERT_VECTOR_ELT`: `(vector, element, index)`.
@@ -235,12 +242,41 @@ pub enum ISD {
     /// `VECTOR_SHUFFLE`: `(v1, v2)` and a mask of `v1`'s lane count in
     /// `NodeData::Shuffle`; -1 is an undefined lane, `n..2n` picks `v2`.
     VectorShuffle,
+    /// `VECREDUCE_ADD` and its kin: one operand, a vector, and the scalar its
+    /// lanes combine to. The result may be wider than a lane (promotion of
+    /// an `i8` result), the extra bits undefined.
+    VecReduceAdd,
+    VecReduceMul,
+    VecReduceAnd,
+    VecReduceOr,
+    VecReduceXor,
+    VecReduceSMax,
+    VecReduceSMin,
+    VecReduceUMax,
+    VecReduceUMin,
 
     Target(u16),
     Machine(u32),
 }
 
 impl ISD {
+    /// `ISD::getVecReduceBaseOpcode`: the scalar operation a reduction
+    /// applies to its lanes, `None` for any other node.
+    pub fn vec_reduce_base_opcode(self) -> Option<ISD> {
+        Some(match self {
+            ISD::VecReduceAdd => ISD::Add,
+            ISD::VecReduceMul => ISD::Mul,
+            ISD::VecReduceAnd => ISD::And,
+            ISD::VecReduceOr => ISD::Or,
+            ISD::VecReduceXor => ISD::Xor,
+            ISD::VecReduceSMax => ISD::SMax,
+            ISD::VecReduceSMin => ISD::SMin,
+            ISD::VecReduceUMax => ISD::UMax,
+            ISD::VecReduceUMin => ISD::UMin,
+            _ => return None,
+        })
+    }
+
     /// `SDNode::getOperationName`, as the dump prints it.
     pub fn name(self) -> String {
         use ISD::*;
@@ -395,6 +431,7 @@ impl ISD {
             FCopySign => "fcopysign",
             SetCC => "setcc",
             Select => "select",
+            VSelect => "vselect",
             SelectCC => "select_cc",
             BrCC => "br_cc",
             BrCond => "brcond",
@@ -426,13 +463,50 @@ impl ISD {
             IntrinsicWChain => "intrinsic_w_chain",
             IntrinsicVoid => "intrinsic_void",
             BuildVector => "BUILD_VECTOR",
+            ConcatVectors => "concat_vectors",
+            ExtractSubvector => "extract_subvector",
             ScalarToVector => "scalar_to_vector",
             InsertVectorElt => "insert_vector_elt",
             VectorShuffle => "vector_shuffle",
+            VecReduceAdd => "vecreduce_add",
+            VecReduceMul => "vecreduce_mul",
+            VecReduceAnd => "vecreduce_and",
+            VecReduceOr => "vecreduce_or",
+            VecReduceXor => "vecreduce_xor",
+            VecReduceSMax => "vecreduce_smax",
+            VecReduceSMin => "vecreduce_smin",
+            VecReduceUMax => "vecreduce_umax",
+            VecReduceUMin => "vecreduce_umin",
             Target(code) => return super::target_names::name(code),
             Machine(code) => return format!("<<Unknown Machine Node #{code}>>"),
         };
         name.to_string()
+    }
+
+    /// `TargetLowering::isBinOp` for the generic opcodes: the commutative
+    /// ones and the non-commutative arithmetic, shift and rotate nodes.
+    pub fn is_binop(self) -> bool {
+        use ISD::*;
+        self.is_commutative_binop()
+            || matches!(
+                self,
+                Sub | Shl
+                    | Srl
+                    | Sra
+                    | Rotl
+                    | Rotr
+                    | SDiv
+                    | UDiv
+                    | SRem
+                    | URem
+                    | SSubSat
+                    | USubSat
+                    | FSub
+                    | FDiv
+                    | FRem
+                    | PseudoFMin
+                    | PseudoFMax
+            )
     }
 
     /// `TargetLowering::isCommutativeBinOp` for the generic opcodes.

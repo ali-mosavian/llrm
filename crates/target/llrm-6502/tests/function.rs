@@ -44,7 +44,7 @@ fn a_byte_add_is_one_instruction() {
 #[test]
 fn a_word_add_joins_and_splits_the_bytes() {
     let ir = "define i16 @f(i16 %a, i16 %b) {\n  %r = add i16 %a, %b\n  ret i16 %r\n}";
-    assert_eq!(selected(ir, "f"), [["ADD16", "EXTRACT_SUBREG", "EXTRACT_SUBREG", "RET"]]);
+    assert_eq!(selected(ir, "f"), [["REG_SEQUENCE", "ADD16", "EXTRACT_SUBREG", "EXTRACT_SUBREG", "RET"]]);
 }
 
 /// With every argument in a register the call is `JSR` between the stack

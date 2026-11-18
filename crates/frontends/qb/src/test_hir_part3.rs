@@ -397,15 +397,22 @@ fn test_an_exact_static_subscript_folds_into_a_32_bit_symbolic_address() {
 /// A negative subscript leaf, zero-extended, addressed `A%+20[esi+esi]`
 /// 128K past the element. The address stays 16 bit; the scaled index may be
 /// computed in a 32-bit `lea` (its low half is the same, and no header copy
-/// reshapes the loop now).
+/// reshapes the loop now), or addressed through a zero-extended 32-bit register.
 #[test]
 fn test_a_negative_static_subscript_stays_16_bit() {
     let body = main_listing(
         "NEGATIVE.BAS",
         b"DEFINT A-Z\r\nDIM a(-10 TO 10)\r\nFOR j = 0 TO 99\r\ni = (PEEK(j) AND 7) - 5\r\na(i) = j\r\nNEXT\r\nPRINT a(5)\r\n",
     );
-    let wide: Vec<&str> = body.lines().filter(|line| line.contains("A%") && line.contains("[e")).collect();
-    assert!(wide.is_empty(), "{wide:?}\n{body}");
+    // A 32-bit index register in an `A%` address is fine only where its upper half is zero: a
+    // `movzx r32, r16` before the use. An index that is a sign- or garbage-extended word reaches
+    // 128K past the array (real mode faults).
+    let lines: Vec<&str> = body.lines().map(str::trim).collect();
+    for (at, line) in lines.iter().enumerate().filter(|(_, line)| line.contains("A%") && line.contains("[e")) {
+        let register = &line[line.find("[e").unwrap() + 1..][..3];
+        let zeroed = format!("movzx {register}, {}", &register[1..]);
+        assert!(lines[..at].iter().any(|before| *before == zeroed), "{line} uses {register} without `{zeroed}` before it\n{body}");
+    }
 }
 
 /// D_SURF SC_FTAKE lost far-array address definitions during secondary folding.
@@ -588,10 +595,11 @@ fn test_a_raise_under_an_error_handler_resumes_after_its_statement() {
     let source = parsed_as(&basic, "qb45", "qb45");
     let assembly = listing(&source);
     // The raise names its statement (in whichever frame slot: the frame also
-    // holds the conversions' scratch cells), and RESUME NEXT from that
+    // holds the conversions' scratch cells, and the counter the handler reads
+    // back), and RESUME NEXT from that
     // statement continues at the PRINT.
     let raised = regex::Regex::new(
-        r"mov word ptr (?:ss:)?\$QB\$FRAME\+\d+, (\d+)\n(?:    fstp st\(0\)\n)*    pushw 5\n    call far ptr B\$SERR",
+        r"mov word ptr (?:ss:)?\$QB\$FRAME\+\d+, (\d+)\n(?:    mov word ptr (?:ss:)?\$QB\$FRAME\+\d+, si\n)?(?:    fstp st\(0\)\n)*    pushw 5\n    call far ptr B\$SERR",
     )
     .unwrap();
     let statement = &raised.captures(&assembly).unwrap_or_else(|| panic!("{assembly}"))[1];

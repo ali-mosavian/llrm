@@ -1,6 +1,6 @@
-@g = dso_local global i32 5
-@h = dso_local global i64 7
-@arr = dso_local global [4 x i32] zeroinitializer
+@g = hidden global i32 5
+@h = hidden global i64 7
+@arr = hidden global [4 x i32] zeroinitializer
 define i32 @rg() { %v = load i32, ptr @g
  ret i32 %v }
 define void @wg(i32 %x) { store i32 %x, ptr @g

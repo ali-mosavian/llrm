@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/emptyblocks.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/emptyblocks.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/emptyblocks.rs sha256:2a67fc1ad80e2ef603ad7a40a65e9dfcb1e984e70aa3a53cad66d49d06a02503 -->
+<!-- src: crates/opt/llrm-transforms/src/emptyblocks.rs sha256:2d2a25f04ab08de26daad377c2d6b1798c19f0ce3ef55ed50f47e34027fdc391 -->
 
 # emptyblocks
 
@@ -27,13 +27,9 @@ predecessors in its place, and the block goes.
 ```
 
 MIRROR: the dead-phi sweep, `findDestBlockOfMergeableEmptyBlock`,
-`canMergeBlocks`, the preheader rule and the `callbr` rule of
-`isMergingEmptyBlockProfitable`.
-
-DEVIATE ECB1: the last rule of `isMergingEmptyBlockProfitable` (a switch or
-indirect jump's only successor to a phi block, kept by the ratio of block
-frequencies) always merges: MIR has no block frequency here. Exit: the
-frequency analysis (BlockOdds), owner w12, 2026-12-02.
+`canMergeBlocks`, and the preheader and switch-frequency rules of
+`isMergingEmptyBlockProfitable` (`FreqRatioToSkipMerge` 2, frequencies from
+before the first merge, as the pin's `BFI`). No `indirectbr` in this IR.
 
 DEVIATE ECB2: the merge itself is `simplifycfg::empty_block_removed`
 (`TryToSimplifyUncondBranchFromEmptyBlock`), which does the same to the

@@ -31,12 +31,24 @@ pub fn text(
     text_at(ir, &crate::compile::effective(ir, request)?)
 }
 
-/// [`text`] at `request.level` as it stands (no `oz_best_of` choice).
+/// [`text`] at `request.level` as it stands (no `oz_best_of` choice). Kept for the module's next ask: pricing a
+/// compile and emitting it each asked for it, and each ran the whole mid-end for the data alone.
 pub(crate) fn text_at(
     ir: &str,
     request: &Request,
 ) -> Result<String, String> {
-    let program = program(ir, request)?;
+    crate::compile::kept_data_text(ir, request, || data_text(ir, request))
+}
+
+fn data_text(
+    ir: &str,
+    request: &Request,
+) -> Result<String, String> {
+    text_of(&program(ir, request)?)
+}
+
+/// The data text of a module the mid-end has made.
+pub(crate) fn text_of(program: &llrm_mir::program::Program) -> Result<String, String> {
     let module = &program.modules[0];
     let spaces = crate::driver::machine().spaces();
     let names = globals::names(module, &spaces, &|name| symbol(name))?;

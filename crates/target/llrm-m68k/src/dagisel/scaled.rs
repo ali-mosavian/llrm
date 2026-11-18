@@ -24,10 +24,11 @@ use llrm_dagisel::instr::InstrDesc;
 use super::asm::{ASM, AsmOperand};
 use super::enc::{Piece, encoding};
 use super::generated::instrinfo;
-use super::generated::m68k_m68000::MACHINE_OPCODES;
 
-/// Codes of the scaled rows, above the short forms'.
-pub const FIRST: u16 = 0xF400;
+/// Codes of the scaled rows, in a range of their own: they follow the pin table
+/// (one row per scale of each indexed row), so they outgrew the 256 codes below
+/// the next segment and shadowed `cmpa.l` (`CMPA32p` read as a memory add).
+pub const FIRST: u16 = 0x8000;
 
 const SCALES: [u8; 3] = [2, 4, 8];
 
@@ -103,7 +104,7 @@ pub fn base_of(name: &str) -> Option<&'static str> {
 }
 
 fn pin_code(name: &str) -> Option<u16> {
-    MACHINE_OPCODES.iter().find(|(_, one)| *one == name).map(|(code, _)| *code)
+    super::opcodes::code_of(name)
 }
 
 /// The description of a scaled row: its pin row's.

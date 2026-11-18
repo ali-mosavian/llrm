@@ -510,7 +510,8 @@ b2:
 
 /// `int a = *p; *q = 1; return a + *p` with `q` a `char *`: C lets the char
 /// store write `*p`, so the second load stays. TypeBasedAA's `omnipotent char`
-/// was not read as the parent of `int2`, and llrm-cc's -O2 added `*p` to itself.
+/// was not read as the parent of `int2`, and llrm-cc's -O2 added `*p` to
+/// itself.
 #[test]
 fn a_char_store_between_two_int_loads_leaves_the_second_load() {
     let text = "define i16 @f(ptr %p, ptr %q) {
@@ -2356,7 +2357,10 @@ fn test_the_write_through_promote_is_left_out_at_o1_when_the_option_is_off() {
         let mut slots = Vec::new();
         for phase in [crate::parity::Phase::Early, crate::parity::Phase::Cleanup, crate::parity::Phase::Simplify] {
             for one in pipeline::llvm_order(applied, phase) {
-                if matches!(one.name(), "sroa@1179" | "promote@1241" | "sroa@646" | "sroa@776") {
+                if matches!(
+                    one.name(),
+                    "sroa@1179" | "promote@1241" | "sroa@646" | "sroa@776"
+                ) {
                     slots.push((one.name(), one.parts()));
                 }
             }
@@ -2978,16 +2982,17 @@ b:
 }
 
 /// The pin's early `SimplifyCFGPass()` (L1178) has `ConvertSwitchRangeToICmp`
-/// off (`opt -print-pipeline-passes`: `simplifycfg<...no-switch-range-to-icmp...>`);
-/// ours turned a two-way switch over a case range into an `icmp` there, ahead of
-/// the passes that read the switch. The slots that name the option (L1245, ...)
-/// keep it.
+/// off (`opt -print-pipeline-passes`:
+/// `simplifycfg<...no-switch-range-to-icmp...>`); ours turned a two-way switch
+/// over a case range into an `icmp` there, ahead of the passes that read the
+/// switch. The slots that name the option (L1245, ...) keep it.
 #[test]
 fn test_the_early_simplifycfg_slot_leaves_a_switch_range_alone() {
     let text = "define i32 @f(i32 %x) {\nb0:\n  switch i32 %x, label %d [\n    i32 0, label %a\n    i32 1, label %a\n    i32 2, label %a\n  ]\na:\n  ret i32 1\nd:\n  ret i32 2\n}\n";
     let run = |slot: &str| {
         let mut module = llrm_analysis::testing::parsed(text);
-        let applied = Applied { only: Some(slot.to_owned()), options: pipeline::Options::standard(), ..Applied::default() };
+        let applied =
+            Applied { only: Some(slot.to_owned()), options: pipeline::Options::standard(), ..Applied::default() };
         assert!(pipeline::slot_built(&applied, slot), "no slot {slot}");
         let mut manager = llrm_mir::passes::PassManager::default();
         manager.add(pipeline::Fixed::new(&applied));
@@ -3037,8 +3042,11 @@ fn getenv_calls_do_not_grow_with_the_functions_compiled() {
     let reads = |functions: usize| {
         let text: String = (0..functions).map(function).collect();
         let mut module = llrm_analysis::testing::parsed(&text);
-        let applied =
-            Applied { only: Some("decide@1178".to_owned()), options: pipeline::Options::standard(), ..Applied::default() };
+        let applied = Applied {
+            only: Some("decide@1178".to_owned()),
+            options: pipeline::Options::standard(),
+            ..Applied::default()
+        };
         let mut manager = llrm_mir::passes::PassManager::default();
         manager.add(pipeline::Fixed::new(&applied));
         let before = GETENVS.with(std::cell::Cell::get);
@@ -3093,7 +3101,8 @@ fn the_exit_tests_of_earlier_loops_are_rewritten_before_the_next_loop_is_asked()
 /// simplify-cfg): 63 of the 129 extra InstCombine runs on memory_expansion -O2.
 /// The pin runs GlobalCleanup once, before the inliner, and nothing follows
 /// `DeadArgumentEliminationPass`. Here `@g`'s argument is read only by a call
-/// to `@h(%u, 0)`, whose select the inliner folds: the argument is dead only after it.
+/// to `@h(%u, 0)`, whose select the inliner folds: the argument is dead only
+/// after it.
 #[test]
 fn test_a_body_dead_argument_elimination_changed_does_not_run_the_cleanup_list_again() {
     let text = "define internal i16 @h(i16 %p, i16 %q) {\nb0:\n  %c = icmp eq i16 %q, 0\n  %r = select i1 %c, i16 1, i16 %p\n  ret i16 %r\n}\n\ndefine internal i16 @g(i16 %x, i16 %u) noinline {\nb0:\n  %k = call i16 @h(i16 %u, i16 0)\n  %m = call i16 @h(i16 %x, i16 1)\n  %r = add i16 %m, %k\n  ret i16 %r\n}\n\ndefine i16 @f(i16 %a, i16 %b) {\nb0:\n  %c = call i16 @g(i16 %a, i16 %b)\n  ret i16 %c\n}\n";
@@ -3210,9 +3219,9 @@ b:
     assert!(after.contains("udiv") && !after.contains("urem"), "{after}");
 }
 
-/// `x == INT_MAX ? INT_MIN : x + 1` (`add nsw`) of `foldSelectValueEquivalence`'s
-/// own comment reached the backend as a compare and a select; -O2 makes it
-/// the add.
+/// `x == INT_MAX ? INT_MIN : x + 1` (`add nsw`) of
+/// `foldSelectValueEquivalence`'s own comment reached the backend as a compare
+/// and a select; -O2 makes it the add.
 #[test]
 fn test_o2_folds_a_select_guarding_an_overflow_to_the_add() {
     let text = "define i32 @f(i32 %x) {
@@ -3239,4 +3248,112 @@ b:
     assert!(off.contains("select"), "premise: with no passes the select stays\n{off}");
     let after = run(pipeline::Options::standard());
     assert!(!after.contains("select") && after.contains("add i32 %x, 1"), "{after}");
+}
+
+/// wasm32 shift_int32_variable at -O2: the outer loop over a 3-entry constant
+/// table is unrolled by the function passes after the module's dead-code pass,
+/// its loads become constants, and the table stayed in the object (+18 B of
+/// Data the pin does not have). The pin's GlobalDCE follows the function
+/// passes.
+#[test]
+fn a_table_whose_loads_the_late_unroll_folded_leaves_the_module() {
+    let (module, _) = pipelined(include_str!("fixtures/late_unroll_table.ll"), pipeline::Options::standard());
+    let text = llrm_mir::print::module(&module);
+    assert!(!text.contains("@main.xs"), "{text}");
+}
+
+/// m64 queens -O2 ran 9.4% more instructions because ipa-cp copied only at
+/// -O3: a target that clones at speed and at -O2 copies at both, never at -O1,
+/// -Os or where the target says no. A target that clones at -O3 only (gcc's
+/// `-fipa-cp-clone` is on there alone: arm64 queens -O3 113,742 -> 59,543
+/// instructions, -O2 +2 KB for nothing) copies at -O3 alone.
+#[test]
+fn a_target_that_clones_at_speed_copies_at_o2_and_o3_not_at_o1_or_size() {
+    let copies = |options: pipeline::Options, speed: bool, o2: bool| super::cp_clones_by_default(&options, speed, o2);
+    assert!(copies(pipeline::Options::standard(), true, true));
+    assert!(copies(pipeline::Options::speed(), true, true));
+    assert!(!copies(pipeline::Options::basic(), true, true));
+    assert!(!copies(pipeline::Options::size(), true, true));
+    assert!(!copies(pipeline::Options::standard(), false, false));
+    assert!(!copies(pipeline::Options::speed(), false, false));
+    assert!(copies(pipeline::Options::speed(), true, false));
+    assert!(!copies(pipeline::Options::standard(), true, false));
+}
+
+/// LPM1 runs loop by loop: each loop goes through every pass before the next
+/// loop is looked at. Run pass by pass over all the loops, the outer loops
+/// rotated and hoisted from with the inner loops in a different state than the
+/// pin's (klw -O1: 1,153 instructions where the pin has 1,127; +3,340 executed
+/// instructions).
+#[test]
+fn test_lpm1_takes_each_loop_through_every_pass_before_the_next_loop() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    use llrm_mir::module::BlockId;
+    use llrm_mir::passes::{Analyses, FunctionPass, PreservedAnalyses, Unit};
+
+    type Log = Rc<RefCell<Vec<(&'static str, Vec<BlockId>)>>>;
+    struct Recorder {
+        name: &'static str,
+        loops: Vec<BlockId>,
+        log: Log,
+    }
+    impl FunctionPass for Recorder {
+        fn name(&self) -> &'static str {
+            self.name
+        }
+
+        fn run(
+            &mut self,
+            _: &mut Unit,
+            _: &mut Analyses,
+        ) -> PreservedAnalyses {
+            let in_scope = self.loops.iter().copied().filter(|&one| crate::loopfilter::allows(one)).collect();
+            self.log.borrow_mut().push((self.name, in_scope));
+            PreservedAnalyses::all()
+        }
+    }
+
+    let text = "define i16 @f(i16 %n) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %j, %b1 ]
+  %j = add i16 %i, 1
+  %c = icmp slt i16 %j, %n
+  br i1 %c, label %b1, label %b2
+
+b2:
+  br label %b3
+
+b3:
+  %k = phi i16 [ 0, %b2 ], [ %l, %b3 ]
+  %l = add i16 %k, 1
+  %d = icmp slt i16 %l, %n
+  br i1 %d, label %b3, label %b4
+
+b4:
+  ret i16 %l
+}
+";
+    let mut module = crate::testing::parsed(text);
+    let loops: Vec<BlockId> = {
+        let function = &*module.function_mut("f").expect("@f").1;
+        let info = llrm_mir::loopinfo::LoopInfo::analyze(function, || llrm_mir::domtree::DomTree::of(function));
+        info.get_loops_in_reverse_sibling_preorder().iter().map(|one| one.get_header()).collect()
+    };
+    assert_eq!(loops.len(), 2);
+    let log: Log = Default::default();
+    let part = |name| -> Box<dyn FunctionPass> { Box::new(Recorder { name, loops: loops.clone(), log: log.clone() }) };
+    let group = super::LoopPassManager { passes: vec![part("first"), part("second")], fused: Default::default() };
+    crate::testing::managed(&mut module, group);
+    let log = log.borrow();
+    let order: Vec<&str> = log.iter().map(|(name, _)| *name).collect();
+    assert_eq!(order, ["first", "second", "first", "second"], "{log:?}");
+    assert!(log.iter().all(|(_, scope)| scope.len() == 1), "a pass ran outside a one-loop scope: {log:?}");
+    assert_eq!(log[0].1, log[1].1, "{log:?}");
+    assert_eq!(log[2].1, log[3].1, "{log:?}");
+    assert_ne!(log[0].1, log[2].1, "{log:?}");
 }

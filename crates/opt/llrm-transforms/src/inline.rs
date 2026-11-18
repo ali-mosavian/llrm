@@ -186,9 +186,21 @@ pub struct Threshold {
     /// `-fno-inline-functions` leaves on as GCC's does;
     /// `-fno-inline-functions-called-once` turns it off.
     pub last: bool,
-    /// `-fipa-cp-clone` (-O3): a function is copied for the constants its
-    /// callers pass though the unit grows (`ipacp`).
-    pub cp_clone: bool,
+    /// `-f[no-]ipa-cp-clone`: a function is copied for the constants its
+    /// callers pass though the unit grows (`ipacp`). `None`: the level's and
+    /// the target's default (`Tti::ipa_cp_clones_at_speed` at -O3; on at
+    /// -Omax).
+    pub cp_clone: Option<bool>,
+    /// A copy whose only gain is a loop bound its constants make known (the
+    /// loop-hint bonus, no instruction folds) is made only where gcc enables
+    /// `-fipa-cp-clone` (-O3, gcc/opts.cc `default_options_table`); a target
+    /// that clones at -O2 too (DEVIATE IPACP-O2) keeps to copies that fold.
+    pub cp_hint_clones: bool,
+    /// The loop hint counts only bounds the unroller takes whole (IPACP-LOOPS):
+    /// the target's default for `cp_clone`; a flag given is gcc's own.
+    pub cp_peel_limited: bool,
+    /// The most clones ipa-cp makes of one function (`Tti::ipa_cp_max_clones`).
+    pub cp_max_clones: usize,
     /// `-f[no-]inline-recursive`: gcc's recursive inlining and peeling (a
     /// recursive function copied into itself to depth 3, a recursive callee's
     /// own calls inlined in the copy, its tail-call elimination deferred until
@@ -202,7 +214,7 @@ pub struct Threshold {
 
 impl Threshold {
     pub fn new(limit: i64) -> Self {
-        Self { limit, single: false, min_size: false, last: true, cp_clone: false, recursive: None }
+        Self { limit, single: false, min_size: false, last: true, cp_clone: None, cp_hint_clones: true, cp_peel_limited: false, cp_max_clones: crate::ipacp::DEFAULT_MAX_CLONES, recursive: None }
     }
 
     /// Nothing inlines, the last call of a function included.
@@ -1000,7 +1012,7 @@ fn unmarked_allocas(
     }
     Lifetimes {
         allocas,
-        dynamic: dynamic_alloca_space(function, &made.copies),
+        dynamic: llrm_mir::splice::has_dynamic_alloca(body),
         entry: made.entry,
         returns: made.returns.clone(),
     }
@@ -1046,7 +1058,8 @@ fn outlives_the_copy(
 /// it, so a call the copy brings carries the constants the pin's cost model sees
 /// (`hold(1)` copies `churn(c1, c2, c3, c4)`, not `churn(add 1 K, ...)`), and an alloca of the
 /// entry whose count was the argument's (`int a[n]`) has a constant one and is
-/// static: it goes to the caller's entry, and the copy has no dynamic alloca to bracket.
+/// static: it goes to the caller's entry (the copy is still bracketed: the body had a dynamic alloca,
+/// `ContainsDynamicAllocas`).
 /// DEVIATE: the pin also prunes the blocks a folded branch condition leaves dead and folds phis
 /// while it clones; here the Simplify list that follows does.
 fn fold_entry_allocas(
@@ -1066,11 +1079,6 @@ fn fold_entry_allocas(
             (copy, alloca, Some(block) == entry)
         })
         .collect();
-    // Asked before the fold: it is what makes the count constant, and an alloca
-    // that was dynamic is the one to move to the caller's entry.
-    let was_dynamic = copies
-        .iter()
-        .any(|&(copy, alloca, in_entry)| in_entry && alloca && !is_static_alloca(context, function, copy));
     for &(copy, alloca, _) in &copies {
         if alloca || function.instruction(copy).opcode == Opcode::Phi {
             continue;
@@ -1082,9 +1090,6 @@ fn fold_entry_allocas(
     }
     let copies: Vec<(InstId, bool)> =
         copies.into_iter().filter(|&(_, _, in_entry)| in_entry).map(|(copy, alloca, _)| (copy, alloca)).collect();
-    if !was_dynamic {
-        return;
-    }
     let first = anchor
         .filter(|&one| function.parent(one).is_some())
         .or_else(|| function.entry().and_then(|entry| function.block(entry).first()));
@@ -1103,27 +1108,6 @@ fn is_static_alloca(
     inst: InstId,
 ) -> bool {
     function.instruction(inst).operands.iter().all(|one| matches!(one, Operand::Constant(_)))
-}
-
-/// The address space of the first alloca among `copies` that is not static: not
-/// on the caller's entry or of a variable count.
-fn dynamic_alloca_space(
-    function: &Function,
-    copies: &[InstId],
-) -> Option<u32> {
-    copies
-        .iter()
-        .find_map(
-            |&copy| match function.instruction(copy).opcode {
-                Opcode::Alloca { address_space, .. }
-                    if function.parent(copy) != function.entry()
-                        || !function.instruction(copy).operands.iter().all(|one| matches!(one, Operand::Constant(_))) =>
-                {
-                    Some(address_space)
-                }
-                _ => None,
-            },
-        )
 }
 
 /// `InlineFunction`'s stack save and restore: a copy with a dynamic alloca

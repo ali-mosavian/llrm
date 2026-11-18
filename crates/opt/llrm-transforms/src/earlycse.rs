@@ -9,8 +9,6 @@
 //! - DEVIATE no `guard`, `sideeffect`, `pseudoprobe`, masked or target memory
 //!   intrinsics, memset forwarding, fences or atomics: MIR has none (or `fill`
 //!   makes them later). `llvm.assume` is handled.
-//! - DEVIATE flags are intersected whenever a value is reused (`combineIRFlags`
-//!   does it only when poison-generating flags remain).
 //! - DEVIATE a call's attributes are not intersected; a call that only reads or
 //!   only writes memory (`memory::of`, which counts every location including
 //!   `inaccessiblemem`) is numbered unless it is an `llrm.` marker.
@@ -81,7 +79,10 @@ use llrm_mir::opcode::{BinaryOp, CastOp, FloatPredicate, IntPredicate, Opcode};
 use llrm_mir::passes::{Analyses, Dominators, FunctionPass, PreservedAnalyses, Unit};
 use llrm_mir::simplify::simplify_instruction_in;
 use llrm_mir::types::TypeId;
-use llrm_mir::valuetracking::FunctionAnalyses;
+use llrm_mir::valuetracking::guarantee::{
+    Operator, has_poison_generating_flags, is_fp_math_operator, program_undefined_if_poison,
+};
+use llrm_mir::valuetracking::{FunctionAnalyses, Query};
 use llrm_support::hash::HashMap;
 
 /// `EarlyCSEMssaOptCap`, `-earlycse-mssa-optimization-cap`.
@@ -906,16 +907,26 @@ impl Walk<'_> {
 
     /// `combineIRFlags`
     /// (https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/Scalar/EarlyCSE.cpp#L1257):
-    /// what both have stays on `to`.
+    /// what both have stays on `to`, unless poison from `to` is already
+    /// undefined behaviour (an address a load uses), when its flags stay.
     fn combine_flags(
         &mut self,
         from: InstId,
         to: Operand,
     ) {
-        let Some(to) = self.definer(to) else { return };
-        let flags = self.function.instruction(to).flags.intersect(self.function.instruction(from).flags);
-        if flags != self.function.instruction(to).flags {
-            self.function.edit().set_flags(to, flags);
+        let Some(to_inst) = self.definer(to) else { return };
+        let keeps = {
+            let q = Query { globals: self.view.globals, ..Query::bare(self.context, &self.function, self.view.layout) };
+            !is_fp_math_operator(&q, to_inst)
+                && (!has_poison_generating_flags(&q, Operator::Instruction(to_inst))
+                    || program_undefined_if_poison(&q, to))
+        };
+        if keeps {
+            return;
+        }
+        let flags = self.function.instruction(to_inst).flags.intersect(self.function.instruction(from).flags);
+        if flags != self.function.instruction(to_inst).flags {
+            self.function.edit().set_flags(to_inst, flags);
         }
     }
 

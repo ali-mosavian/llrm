@@ -1,6 +1,5 @@
 //! m32 (i486, no cmov): a select of two constants is a branch (SELB), and equal
-//! literal stores in code that runs once share a register (ISS1). Both were the
-//! pin's: `setcc` arithmetic and `mov dword [m],0` stores, 2026-11-08.
+//! literal stores stay `mov dword [m],0` at -O1 to -O3 (ISS1 shares only at -Os).
 
 #[path = "common/target_dir.rs"]
 mod target_dir;
@@ -58,14 +57,17 @@ fn test_a_select_of_two_constants_run_once_keeps_setcc() {
     }
 }
 
+/// lru -O3 ran 143 clk against clang's 142: three runs of equal literal stores
+/// became `xor` and register stores, a clock a run on the 486, for bytes that
+/// do not count at -O2/-O3.
 #[test]
-fn test_equal_literal_stores_share_a_register_outside_loops() {
+fn test_equal_literal_stores_stay_immediate_at_speed() {
     for level in ["-O2", "-O3"] {
         let asm = compiled(level);
         let f = function(&asm, "f");
         let zeros = f.iter().filter(|line| line.starts_with("mov dword ptr [") && line.ends_with(", 0")).count();
-        assert_eq!(zeros, 0, "{level}: immediate zero stores kept:\n{}", f.join("\n"));
-        assert!(f.iter().any(|line| line.starts_with("xor ")), "{level}: no xor:\n{}", f.join("\n"));
+        assert_eq!(zeros, 4, "{level}: zero stores shared a register:\n{}", f.join("\n"));
+        assert!(!f.iter().any(|line| line.starts_with("xor ")), "{level}: an xor:\n{}", f.join("\n"));
     }
 }
 

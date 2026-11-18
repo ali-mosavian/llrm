@@ -177,6 +177,11 @@ let mayLoad = 1, AddedComplexity = 10 in
   def LDAX : MOSInst<(outs Imag8:$d), (ins absx:$a), "ldax $d, $a", [(set i8:$d, (load MOSAbsX:$a))]>;
 let mayStore = 1, AddedComplexity = 10 in
   def STAX : MOSInst<(outs), (ins Imag8:$s, absx:$a), "stax $s, $a", [(store i8:$s, MOSAbsX:$a)]>;
+// A word of a global indexed by a byte: LDX i; LDA g+k,X; LDA g+k+1,X (the pin splits the i16 into two byte loads that each match abs,x).
+let mayLoad = 1, AddedComplexity = 10 in
+  def LDAX16 : MOSInst<(outs Imag16:$d), (ins absx:$a), "ldax16 $d, $a", [(set i16:$d, (load MOSAbsX:$a))]>;
+let mayStore = 1, AddedComplexity = 10 in
+  def STAX16 : MOSInst<(outs), (ins Imag16:$s, absx:$a), "stax16 $s, $a", [(store i16:$s, MOSAbsX:$a)]>;
 // A global plus a constant offset: LDA g+k.
 def absaddr : Operand<i16> { let MIOperandInfo = (ops i16imm, i16imm); }
 def MOSAbs : ComplexPattern<i16, 2, "SelectAbs", [], []>;
@@ -206,6 +211,9 @@ let mayLoad = 1, AddedComplexity = 30 in {
   def CMP8M : MOSInst<(outs Flags:$f), (ins Imag8:$a, absaddr:$m), "cmp8m $f, $a, $m", [(set i8:$f, (MOScmp i8:$a, (load MOSAbs:$m)))]>;
   def CMP16M : MOSInst<(outs Flags:$f), (ins Imag16:$a, absaddr:$m), "cmp16m $f, $a, $m", [(set i8:$f, (MOScmp i16:$a, (load MOSAbs:$m)))]>;
 }
+// The byte compare against a global indexed by a byte: LDX i; CMP g,x (pin analogue: X86's CMP8rm folding the load).
+let mayLoad = 1, AddedComplexity = 30 in
+  def CMP8MX : MOSInst<(outs Flags:$f), (ins Imag8:$a, absx:$m), "cmp8mx $f, $a, $m", [(set i8:$f, (MOScmp i8:$a, (load MOSAbsX:$m)))]>;
 // A byte op whose second operand is loaded through a pointer: LDY #off; LDA a; ADC (p),Y (a 65C02 with off 0 prints ADC (p)). The load
 // folds under the global forms' rule: its one use, no store between. Below those forms (30): a global's address is also a pointer,
 // and `and bad` beats five instructions to build it. The carry forms take the carry operand before the address, so the address is
@@ -379,6 +387,11 @@ let AddedComplexity = 10 in {
   def : Pat<(i16 (zextloadi8 MOSIdx:$a)), (REG_SEQUENCE Imag16, (LDPI8 MOSIdx:$a), sub_lo, (LDI8 0), sub_hi)>;
   def : Pat<(i16 (extloadi8 MOSIdx:$a)), (REG_SEQUENCE Imag16, (LDPI8 MOSIdx:$a), sub_lo, (LDI8 0), sub_hi)>;
 }
+// A global indexed by a byte and widened: `ldx i; lda g,x`, not the address built in a pointer.
+let AddedComplexity = 20 in {
+  def : Pat<(i16 (zextloadi8 MOSAbsX:$a)), (REG_SEQUENCE Imag16, (LDAX MOSAbsX:$a), sub_lo, (LDI8 0), sub_hi)>;
+  def : Pat<(i16 (extloadi8 MOSAbsX:$a)), (REG_SEQUENCE Imag16, (LDAX MOSAbsX:$a), sub_lo, (LDI8 0), sub_hi)>;
+}
 // The builder joins two bytes as `lo | (hi << 8)` over either kind of extension: that is the pair.
 def ext8 : PatFrags<(ops node:$a), [(zext node:$a), (anyext node:$a)]>;
 def : Pat<(i16 (or (ext8 Imag8:$lo), (shl (ext8 Imag8:$hi), (i8 8)))),
@@ -400,6 +413,11 @@ def SDTMOSLong : SDTypeProfile<2, 4, [SDTCisVT<0, i16>, SDTCisVT<1, i16>, SDTCis
                                      SDTCisVT<4, i16>, SDTCisVT<5, i16>]>;
 def SDTMOSLongShift : SDTypeProfile<2, 3, [SDTCisVT<0, i16>, SDTCisVT<1, i16>, SDTCisVT<2, i16>, SDTCisVT<3, i16>,
                                           SDTCisVT<4, i8>]>;
+// A 16 x 16 -> 32 multiply, the operands' extensions to 32 bits left out (GCC's `umulhisi3`/`mulhisi3`, the
+// widening multiply of tree-ssa-math-opts): `__umulhisi3` and `__mulhisi3` read the low words of `__sa`/`__sb`.
+def SDTMOSWiden : SDTypeProfile<2, 2, [SDTCisVT<0, i16>, SDTCisVT<1, i16>, SDTCisVT<2, i16>, SDTCisVT<3, i16>]>;
+def MOSumulw16 : SDNode<"MOSISD::UMULW16", SDTMOSWiden>;
+def MOSsmulw16 : SDNode<"MOSISD::SMULW16", SDTMOSWiden>;
 def MOSmul32 : SDNode<"MOSISD::MUL32", SDTMOSLong>;
 def MOSudiv32 : SDNode<"MOSISD::UDIV32", SDTMOSLong>;
 def MOSsdiv32 : SDNode<"MOSISD::SDIV32", SDTMOSLong>;
@@ -428,6 +446,10 @@ let isCodeGenOnly = 0 in {
       [(set i8:$q, i8:$r, (udivrem i8:$a, i8:$b))]>;
   def UDIVREM16 : MOSInst<(outs Imag16:$q, Imag16:$r), (ins Imag16:$a, Imag16:$b), "udivrem16",
       [(set i16:$q, i16:$r, (udivrem i16:$a, i16:$b))]>;
+  def UMULW16 : MOSInst<(outs Imag16:$dl, Imag16:$dh), (ins Imag16:$a, Imag16:$b), "umulw16",
+      [(set i16:$dl, i16:$dh, (MOSumulw16 i16:$a, i16:$b))]>;
+  def SMULW16 : MOSInst<(outs Imag16:$dl, Imag16:$dh), (ins Imag16:$a, Imag16:$b), "smulw16",
+      [(set i16:$dl, i16:$dh, (MOSsmulw16 i16:$a, i16:$b))]>;
   def MUL32 : MOSInst<(outs Imag16:$dl, Imag16:$dh), (ins Imag16:$al, Imag16:$ah, Imag16:$bl, Imag16:$bh), "mul32",
       [(set i16:$dl, i16:$dh, (MOSmul32 i16:$al, i16:$ah, i16:$bl, i16:$bh))]>;
   def UDIV32 : MOSInst<(outs Imag16:$dl, Imag16:$dh), (ins Imag16:$al, Imag16:$ah, Imag16:$bl, Imag16:$bh), "udiv32",

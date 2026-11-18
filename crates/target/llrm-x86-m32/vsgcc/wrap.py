@@ -18,9 +18,11 @@ def with_file_api(source: str) -> str:
     return IO_INCLUDE.sub(lambda _: SHIM.read_text().rstrip(), source)
 
 
-def wrapped(program: str, source: str) -> str:
+def wrapped(program: str, source: str, shim: bool = True) -> str:
+    """`shim=False` keeps bench_io.h: a target that has the program's real file API (m16's DOS) links no `vs_*` stub."""
     kernel = f"bench_{program}"
-    source = with_file_api(source)
+    if shim:
+        source = with_file_api(source)
     if program.startswith("run_"):
         return wrapped_run(program, source)
     definition = re.search(rf"^([a-z][a-z ]*[ *])({kernel})\(([^)]*)\)", source, re.M)

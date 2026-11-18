@@ -35,6 +35,7 @@ pub mod mir;
 pub mod object;
 pub mod optimize_live_intervals;
 pub mod peephole;
+pub mod peephole_opt;
 pub mod phi_elimination;
 pub mod print;
 pub mod reg_coloring;

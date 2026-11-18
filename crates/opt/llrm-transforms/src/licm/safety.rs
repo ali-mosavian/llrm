@@ -26,6 +26,11 @@ pub struct SafetyMemo {
     may_throw: Cell<Option<bool>>,
     /// How many times the loop was scanned for a block that may throw.
     pub scans: Cell<usize>,
+    /// How many times a block's predecessors were looked up in the function.
+    pub pred_lookups: Cell<usize>,
+    /// Each block of the loop with its predecessors that are in the loop: what
+    /// `collectTransitivePredecessors` walks back over, made once.
+    in_loop_preds: RefCell<Option<IdMap<BlockId, Vec<BlockId>>>>,
 }
 
 impl SafetyMemo {
@@ -34,6 +39,7 @@ impl SafetyMemo {
         self.first_write.borrow_mut().clear();
         self.guaranteed.borrow_mut().clear();
         self.may_throw.set(None);
+        *self.in_loop_preds.borrow_mut() = None;
     }
 }
 
@@ -221,9 +227,23 @@ impl<'a> LoopSafety<'a> {
         if cfg::id(block) == self.loop_.header {
             return found;
         }
+        let mut cached = self.memo.in_loop_preds.borrow_mut();
+        let preds = cached.get_or_insert_with(|| {
+            let mut made: IdMap<BlockId, Vec<BlockId>> = IdMap::new();
+            for &at in self.loop_.body.iter() {
+                self.memo.pred_lookups.set(self.memo.pred_lookups.get() + 1);
+                let inside = self
+                    .function
+                    .predecessors(cfg::block(at))
+                    .into_iter()
+                    .filter(|&pred| self.loop_.body.contains(&cfg::id(pred)));
+                made.insert(cfg::block(at), inside.collect());
+            }
+            made
+        });
         let mut work = Vec::new();
-        for pred in self.function.predecessors(block) {
-            if self.loop_.body.contains(&cfg::id(pred)) && found.insert(pred) {
+        for &pred in preds.get(&block).into_iter().flatten() {
+            if found.insert(pred) {
                 work.push(pred);
             }
         }
@@ -233,8 +253,8 @@ impl<'a> LoopSafety<'a> {
             if cfg::id(pred) == self.loop_.header {
                 continue;
             }
-            for next in self.function.predecessors(pred) {
-                if self.loop_.body.contains(&cfg::id(next)) && found.insert(next) {
+            for &next in preds.get(&pred).into_iter().flatten() {
+                if found.insert(next) {
                     work.push(next);
                 }
             }

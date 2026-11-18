@@ -126,7 +126,8 @@ fn spill_slots_lie_nearer_ix_than_a_large_local_array() {
            %c = add i16 %a, %n\n\
            %d = add i16 %c, %b\n\
            ret i16 %d\n}\n";
-    let body = text(ir, "f", 0, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+    let request = Request { sp_frame: false, ..Request::new(Level::O2) };
+    let body = text(ir, "f", 0, &request).unwrap_or_else(|why| panic!("{why}"));
     // the prologue's `ld iy, #-n; add iy, sp` is the one use of iy
     assert_eq!(body.matches("add iy, sp").count(), 1, "a spill slot is addressed past the array:\n{body}");
 }

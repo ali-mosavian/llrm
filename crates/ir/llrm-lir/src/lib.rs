@@ -529,6 +529,13 @@ pub struct Semantics {
     /// `None` where unknown, which an indirect call keeps the frame register
     /// for.
     pub pops: Option<i64>,
+    /// The `(source, dest)` pairs the instruction ties, numbered as `sources`
+    /// and `dests` are, where the producer knows them from the machine
+    /// instruction itself (its own tied operands, `MachineInstr::isRegTiedToDefOperand`).
+    /// A target's per-name rows (`@ties rows`) number operands as the
+    /// description does, which is not these lists once an operand is dropped
+    /// (a reserved register). None: the rows say.
+    pub tied: Option<Vec<(usize, usize)>>,
 }
 
 impl Semantics {
@@ -540,7 +547,7 @@ impl Semantics {
         dests: Vec<Loc>,
         sources: Vec<Loc>,
     ) -> Semantics {
-        let Semantics { op, name: _, dests: _, sources: _, target, indirect, table, table_id, repeat, pops } = self;
+        let Semantics { op, name: _, dests: _, sources: _, target, indirect, table, table_id, repeat, pops, tied } = self;
         Semantics {
             op: *op,
             name,
@@ -552,6 +559,7 @@ impl Semantics {
             table_id: *table_id,
             repeat: *repeat,
             pops: *pops,
+            tied: tied.clone(),
         }
     }
 }
@@ -691,6 +699,7 @@ impl Semantics {
             table_id: None,
             repeat: false,
             pops: None,
+            tied: None,
         }
     }
 }
@@ -710,6 +719,7 @@ pub static RESTORE_IDIOM: LazyLock<Semantics> = LazyLock::new(|| Semantics {
     table_id: None,
     repeat: false,
     pops: None,
+    tied: None,
 });
 
 /// Python `TABLE_DATA`.
@@ -808,6 +818,7 @@ pub fn restoring(
         table_id: None,
         repeat: false,
         pops: None,
+        tied: None,
     }
 }
 

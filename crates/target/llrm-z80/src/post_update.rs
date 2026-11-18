@@ -78,10 +78,16 @@ struct Context<'a> {
     function: &'a MFunction,
     assignment: &'a Assignment,
     cfg: &'a Cfg,
-    live: &'a PhysLiveness,
+    /// Solved when the first query asks, and again after a merge: most
+    /// functions have no update to fold.
+    live: &'a std::cell::OnceCell<PhysLiveness>,
 }
 
 impl Context<'_> {
+    fn solved(&self) -> &PhysLiveness {
+        self.live.get_or_init(|| PhysLiveness::of::<Z80Registers>(self.function, self.assignment, &REGISTER_INFO))
+    }
+
     fn register(
         &self,
         r: Reg,
@@ -137,7 +143,7 @@ impl Context<'_> {
         at: usize,
         r: RegId,
     ) -> bool {
-        self.live
+        self.solved()
             .live_before::<Z80Registers>(self.function, self.assignment, &REGISTER_INFO, b, at + 1)
             .is_live(&REGISTER_INFO, r)
     }
@@ -148,7 +154,7 @@ impl Context<'_> {
         b: usize,
         r: RegId,
     ) -> bool {
-        self.live
+        self.solved()
             .live_before::<Z80Registers>(self.function, self.assignment, &REGISTER_INFO, b, 0)
             .is_live(&REGISTER_INFO, r)
     }
@@ -350,8 +356,8 @@ impl Context<'_> {
         // it unknown
         let dead = insts[i + 1..]
             .iter()
-            .find(|one| one.reads_flags || one.sets_flags)
-            .is_some_and(|one| one.sets_flags && !one.reads_flags);
+            .find(|one| one.reads_flags() || one.sets_flags())
+            .is_some_and(|one| one.sets_flags() && !one.reads_flags());
         if !dead {
             return Err("the carry of the add is read");
         }
@@ -424,7 +430,7 @@ pub fn fold(
     assignment: &Assignment,
 ) -> bool {
     let cfg = Cfg::new(function);
-    let mut live = PhysLiveness::of::<Z80Registers>(function, assignment, &REGISTER_INFO);
+    let mut live = std::cell::OnceCell::new();
     let mut changed = false;
     for block in 0..function.blocks.len() {
         let mut at = 0;
@@ -447,7 +453,7 @@ pub fn fold(
                     }
                     merge_update(function, block, at, &access, update);
                     at += 1 + usize::from(access.home.is_some());
-                    live = PhysLiveness::of::<Z80Registers>(function, assignment, &REGISTER_INFO);
+                    live = std::cell::OnceCell::new();
                     changed = true;
                 }
             }

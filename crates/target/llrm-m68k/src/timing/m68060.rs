@@ -25,9 +25,17 @@ use std::sync::LazyLock;
 use super::table::{key, split_csv};
 use super::{Mode, Operand, Size, mode, size_of};
 
+/// A table with its labels normalized once (`norm` of every row's labels was a
+/// quarter of a 68060 compile's instructions, run per row per lookup).
 struct Grid {
     header: Vec<String>,
     rows: Vec<Vec<String>>,
+    header_norm: Vec<String>,
+    /// Per row: `norm` of its first column, of each instruction that column
+    /// lists, and of its second column (the size).
+    first_norm: Vec<String>,
+    names_norm: Vec<Vec<String>>,
+    second_norm: Vec<Option<String>>,
 }
 
 /// A label without typesetting: `key`, the footnote marks and the column group
@@ -52,7 +60,18 @@ fn grid(csv: &str) -> Grid {
         }
         rows.push(fields);
     }
-    Grid { header, rows }
+    let header_norm = header.iter().map(|name| norm(name)).collect();
+    let first_norm = rows.iter().map(|row| norm(&row[0])).collect();
+    let names_norm = rows
+        .iter()
+        .map(|row| {
+            let first = &row[0];
+            let names: Vec<&str> = if first.contains('(') { vec![first] } else { first.split(", ").collect() };
+            names.into_iter().map(norm).collect()
+        })
+        .collect();
+    let second_norm = rows.iter().map(|row| row.get(1).map(|one| norm(one))).collect();
+    Grid { header, rows, header_norm, first_norm, names_norm, second_norm }
 }
 
 /// The clocks of a cell: `1+n(n/0)`, `<=22(1/0)`. A dash is no entry.
@@ -71,7 +90,15 @@ impl Grid {
         label: &str,
     ) -> Option<usize> {
         let label = norm(label);
-        self.header.iter().position(|name| norm(name) == label)
+        self.header_norm.iter().position(|name| *name == label)
+    }
+
+    /// The first row whose first column is `wanted` (already `norm`ed).
+    fn row_named(
+        &self,
+        wanted: &str,
+    ) -> Option<&Vec<String>> {
+        self.first_norm.iter().position(|first| first == wanted).map(|at| &self.rows[at])
     }
 
     /// The cell of the row `name` (one of its comma-separated instructions; a
@@ -85,16 +112,14 @@ impl Grid {
         registers: u32,
     ) -> Option<u32> {
         let (name, column) = (norm(name), self.column(column)?);
-        let rows: Vec<&Vec<String>> = self
-            .rows
-            .iter()
-            .filter(|row| {
-                let first = &row[0];
-                let names: Vec<&str> = if first.contains('(') { vec![first] } else { first.split(", ").collect() };
-                names.iter().any(|one| norm(one) == name || (name.contains('(') && norm(one).starts_with(&name)))
+        let at: Vec<usize> = (0..self.rows.len())
+            .filter(|&at| {
+                self.names_norm[at].iter().any(|one| *one == name || (name.contains('(') && one.starts_with(&name)))
             })
             .collect();
-        let sized = rows.iter().find(|row| row.get(1).is_some_and(|one| norm(one).contains(size)));
+        let sized = at.iter().find(|&&at| self.second_norm[at].as_ref().is_some_and(|one| one.contains(size)));
+        let rows: Vec<&Vec<String>> = at.iter().map(|&at| &self.rows[at]).collect();
+        let sized = sized.map(|&at| &self.rows[at]);
         sized
             .and_then(|row| clocks_of(&row[column], registers))
             .or_else(|| rows.iter().find_map(|row| clocks_of(&row[column], registers)))
@@ -177,7 +202,7 @@ fn label(
 fn ea_time(mode: Mode) -> Option<u32> {
     let ea = &TABLES.ea;
     let wanted = norm(label(mode, false));
-    ea.rows.iter().find(|row| norm(&row[0]) == wanted).and_then(|row| clocks_of(&row[2], 0))
+    ea.row_named(&wanted).and_then(|row| clocks_of(&row[2], 0))
 }
 
 /// The memory operand's mode, else the last register one.
@@ -343,14 +368,14 @@ pub(super) fn clocks(
             let grid = if long { &tables.move_long } else { &tables.move_word };
             let row = norm(label(mode(source)?, false));
             let column = grid.column(label(mode(destination)?, true))?;
-            let found = grid.rows.iter().find(|fields| norm(&fields[0]) == row)?;
+            let found = grid.row_named(&row)?;
             clocks_of(&found[column], 0)
         }
         ("movea", [source, _]) => {
             let grid = if long { &tables.move_long } else { &tables.move_word };
             let row = norm(label(mode(source)?, false));
             let column = grid.column("An")?;
-            clocks_of(&grid.rows.iter().find(|fields| norm(&fields[0]) == row)?[column], 0)
+            clocks_of(&grid.row_named(&row)?[column], 0)
         }
         ("moveq", _) => by_destination(&tables.immediate, "MOVEQ", Size::L, Mode::Dn),
         ("move16", [source, destination]) => {
@@ -362,7 +387,7 @@ pub(super) fn clocks(
             };
             let row = norm(&letter(mode(source)?, 'y')?);
             let column = tables.move16.column(&letter(mode(destination)?, 'x')?)?;
-            clocks_of(&tables.move16.rows.iter().find(|fields| norm(&fields[0]) == row)?[column], 0)
+            clocks_of(&tables.move16.row_named(&row)?[column], 0)
         }
         ("addq" | "subq", [_, destination]) => by_destination(&tables.immediate, &name, size, mode(destination)?),
         ("addi" | "subi" | "andi" | "ori" | "eori" | "cmpi", [_, destination]) => {
@@ -392,12 +417,9 @@ pub(super) fn clocks(
         ("clr", [destination]) => by_destination(&tables.clear, "", size, mode(destination)?).or_else(|| {
             let column = tables.clear.column(label(mode(destination)?, true))?;
             let wanted = if long { "long" } else { "byte" };
-            tables
-                .clear
-                .rows
-                .iter()
-                .find(|row| norm(&row[0]).contains(wanted))
-                .and_then(|row| clocks_of(&row[column], 0))
+            let clear = &tables.clear;
+            let at = clear.first_norm.iter().position(|first| first.contains(wanted))?;
+            clocks_of(&clear.rows[at][column], 0)
         }),
         ("tst" | "neg" | "negx" | "not" | "nbcd" | "tas", [operand]) => {
             register_or_memory(&tables.single, &name, size, mode(operand)?)
@@ -462,7 +484,7 @@ pub(super) fn clocks(
             tables.misc.cell(if trap == "trapf" { "TRAPF" } else { "TRAPcc" }, "", "Register", 0)
         }
         ("rts" | "rtr" | "rtd" | "rte", _) => {
-            let found = tables.leave.rows.iter().find(|row| norm(&row[0]) == norm(&name))?;
+            let found = tables.leave.row_named(&norm(&name))?;
             clocks_of(&found[1], 0)
         }
         ("bra", _) => tables.branch.cell("BRA", "", branch_column(true), 0),

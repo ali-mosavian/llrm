@@ -59,21 +59,19 @@ fn a_factor_of_a_lea_and_an_address_scale_is_one_lea_at_every_level() {
     }
 }
 
-/// A multiply by 7 is no `lea` factor times a scale. At -O2 the pin's `llc` on
-/// the same IR makes it `lea r, [i*8]` and `sub r, i`, and so do we. At -Os the
-/// pin's `lea; sub` is 21 B for `a[7 * i]` against gcc's 13 B `imul`, and ours
-/// keeps the `imul` (DEVIATE MUL-OS, `Tuning::imul_at_size`, owner x86-m32,
-/// exit 2026-11-20; #7579): this test still asked the -Os of before it, and was
-/// not run in CI (it needs the pin's clang).
+/// A multiply by 7 is no `lea` factor times a scale. At -O2 and at -Os the
+/// pin's `llc` on the same IR makes it `lea r, [i*8]` and `sub r, i` (it keeps
+/// the `imul` at -Oz only), and so do we: the `imul` DEVIATE MUL-OS kept at -Os
+/// cost lru -Os 201 clk against 124.
 ///
 /// llrm-cc: the register that holds the index is `eax`, as in the pin's
 /// listing (pin-shape).
 #[test]
-fn a_factor_that_is_no_lea_times_a_scale_is_the_pins_lea_and_sub_at_speed_and_an_imul_at_size() {
+fn a_factor_that_is_no_lea_times_a_scale_is_the_pins_lea_and_sub() {
     let source = "int a7(char *a, int i) { return a[7 * i]; }\n";
     let speed = listing(source, "-O2");
     assert!(!speed.contains("imul"), "-O2: {speed}");
     assert!(speed.contains("*8]") && speed.lines().any(|line| line.trim().starts_with("sub ")), "-O2: {speed}");
     let size = listing(source, "-Os");
-    assert!(size.contains("imul") && !size.lines().any(|line| line.trim().starts_with("sub ")), "-Os: {size}");
+    assert!(!size.contains("imul") && size.lines().any(|line| line.trim().starts_with("sub ")), "-Os: {size}");
 }

@@ -19,10 +19,9 @@
 //! `nsw`/`nuw`/`exact` are read from the instruction (`IIQ.UseInstrInfo`).
 //!
 //! DEVIATE, permanent (MIR lacks the construct):
-//! 1. Vectors: `extractelement`, `insertelement`, `shufflevector`,
-//!    `simplifyIdentityInterleave`, `simplifySVEIntReduction`. MIR types
-//!    vectors but has no lane operation and nothing produces a vector value
-//!    (#2201).
+//! 1. Vectors: `simplifyExtractElementInst` is translated for a constant vector
+//!    and index only; `insertelement`, `shufflevector`,
+//!    `simplifyIdentityInterleave`, `simplifySVEIntReduction` are not (#2201).
 //!
 //! OWED, each with an issue and its exit condition:
 //! 2. `x86_fp80` constants: MIR has the type (`FloatKind::X86Fp80`) but
@@ -73,7 +72,7 @@ use crate::datalayout::DataLayout;
 use crate::knownbits::KnownBits;
 use crate::module::{Function, GlobalValue, InstId, Operand, ValueDef};
 use crate::opcode::{BinaryOp, CastOp, Flags, FloatPredicate, IntPredicate, Opcode};
-use crate::types::TypeId;
+use crate::types::{Type, TypeId};
 use crate::valuetracking::{
     FunctionAnalyses, Query as ValueQuery, context as conditions, guarantee, known, nonzero, pattern, power2, range,
     signbits,
@@ -132,13 +131,7 @@ impl Query<'_> {
         &self,
         operand: Operand,
     ) -> Option<(u128, u32)> {
-        let constant = self.context.get(self.constant(operand)?);
-        let width = self.context.types.int_bits(constant.ty).filter(|&width| width <= 128)?;
-        match constant.kind {
-            ConstantKind::Int(bits) => Some((bits, width)),
-            ConstantKind::Null | ConstantKind::Zero => Some((0, width)),
-            _ => None,
-        }
+        self.context.splat_int(self.constant(operand)?).filter(|&(_, width)| width <= 128)
     }
 
     fn is_poison(
@@ -224,7 +217,7 @@ impl Query<'_> {
         &mut self,
         ty: TypeId,
     ) -> Operand {
-        let width = self.context.types.int_bits(ty).expect("an integer");
+        let width = self.context.types.scalar_int_bits(ty).expect("an integer");
         self.int(ty, mask(width))
     }
 
@@ -4411,12 +4404,43 @@ fn simplify_instruction_with_operands(
         Opcode::Phi => simplify_phi(q, inst),
         Opcode::Load { volatile, .. } => simplify_load(q, *volatile, operands[0], instruction.ty),
         Opcode::Freeze => simplify_freeze(q, operands[0]),
+        Opcode::ExtractElement => simplify_extract_element(q, operands[0], operands[1]),
         Opcode::ExtractValue(indices) => simplify_extract_value(q, operands[0], indices),
         Opcode::InsertValue(indices) => simplify_insert_value(q, operands[0], operands[1], indices),
         Opcode::Call(_) => calls::simplify_call(q, inst, operands),
         Opcode::GetElementPtr { source } => simplify_gep(q, *source, operands[0], &operands[1..], flags),
         _ => None,
     }
+}
+
+/// `simplifyExtractElementInst`
+/// ([:5693](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/InstructionSimplify.cpp#L5693)):
+/// a constant vector's lane at a constant index
+/// (`ConstantFoldExtractElementInstruction`), poison where the index is out of
+/// range, undef for an undef vector. DEVIATE: the `insertelement` and splat
+/// cases (`findScalarElement`) are not translated. Exit: a pass that needs
+/// them; owner x87-cordic-2; review 2026-12-10.
+fn simplify_extract_element(
+    q: &mut Query,
+    vector: Operand,
+    index: Operand,
+) -> Option<Operand> {
+    let vector_ty = q.ty(vector);
+    let Type::Vector { element, count } = *q.context.types.get(vector_ty) else { return None };
+    let vector = q.constant(vector)?;
+    if let Some(ConstantKind::Int(lane)) = q.constant(index).map(|id| q.context.get(id).kind.clone()) {
+        if lane >= u128::from(count) {
+            let poison = q.context.constant(Constant { ty: element, kind: ConstantKind::Poison });
+            return Some(Operand::Constant(poison));
+        }
+        let lanes = constfold::lanes_of(q.context, vector, element, count as usize)?;
+        return Some(Operand::Constant(lanes[lane as usize]));
+    }
+    if matches!(q.context.get(vector).kind, ConstantKind::Undef) {
+        let undef = q.context.constant(Constant { ty: element, kind: ConstantKind::Undef });
+        return Some(Operand::Constant(undef));
+    }
+    None
 }
 
 /// `simplifyExtractValueInst`
