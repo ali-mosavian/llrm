@@ -20,6 +20,16 @@
 //! (MOV r0)`): `commute_tied` then ties the result to it, as the pin's
 //! `SrcRegMap`/`DstRegMap` rule does, and the return copy goes.
 //!
+//! Both sources dying is also worth the swap when the result flows back,
+//! through copies, into the variable the other source was copied from (the
+//! loop-carried accumulator: `t = t + a * b`): the tie to the accumulator
+//! drops the per-trip `move.l %d1,%d0`. The pin's `SrcRegMap`/`DstRegMap` rule
+//! has only the physical form of this.
+//!
+//! DEVIATE M68K-ACC-COMMUTE (owner w8, exit 2026-11-24): that virtual-register
+//! form. Reason: gcc ties the accumulator (bench/dot -Os 116 -> 114 B, fib -Os
+//! 2,492,412 -> 2,229,708 clk).
+//!
 //! DEVIATE: the pin marks `ADD32dd` commutative and not its `ADD32dr` twin.
 //! Reason: both are the same add, and the tie to the dying source saves the
 //! copies. Exit: review 2026-11-20, a policy choice.
@@ -194,8 +204,10 @@ pub fn mark_commutative(
             let Some(other) = other else { continue };
             let returns_to_base = flow.returns_to(*result, *base) && !flow.returns_to(*result, other);
             let wanted = size || flow.returns_to(*result, other);
+            let both_die = flow.dies_here(other) && flow.dies_here(*base);
             inst.commutable = wanted && flow.dies_here(other) && !flow.dies_here(*base) && !returns_to_base
-                || flow.dies_here(other) && flow.dies_here(*base) && flow.returns_through_phys(*result, other);
+                || both_die && flow.returns_through_phys(*result, other)
+                || both_die && flow.returns_to(*result, other) && !returns_to_base;
         }
     }
 }
