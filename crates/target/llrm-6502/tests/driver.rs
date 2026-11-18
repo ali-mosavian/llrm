@@ -196,12 +196,12 @@ fn an_unknown_f_switch_is_refused() {
     std::fs::remove_dir_all(dir).ok();
 }
 
-/// `-Os` holds an inline to the size threshold: a callee of about forty
-/// instructions called three times stays a call, where `-O2` copies it in. The
-/// hand corpus and bench tables have no such callee, so their `-Os` rows
-/// equal their `-O2` rows and cannot show whether `-Os` reaches the mid-end.
+/// Bytes first at every level (user ruling 2026-11-14, #9943): a callee of
+/// about forty instructions called three times stays a call at `-O2` and at
+/// `-Os`. Copied in, the module was 182 B and 283 clocks; as calls, 148 B and
+/// 232 clocks. `-O2` copied it in before #9943, and this test said so.
 #[test]
-fn the_size_level_keeps_a_call_that_speed_inlines() {
+fn a_growing_inline_stays_a_call_at_o2_and_os() {
     let ir = module(
         "@sink = external global [8 x i8]
 define internal i8 @mix(i8 %x, i8 %y) {
@@ -250,7 +250,7 @@ define i8 @f(i8 %p, i8 %q) {
 }",
     );
     let calls = |level| assembly(&ir, &Request::new(level)).unwrap().matches("jsr mix").count();
-    assert_eq!((calls(Level::O2), calls(Level::Os)), (0, 3));
+    assert_eq!((calls(Level::O2), calls(Level::Os)), (3, 3));
 }
 
 /// crc16 as the mid-end leaves it: the `if` of the bit loop is a `select`.
@@ -1214,12 +1214,13 @@ define i32 @sar(i32 %x, i32 %n) {
     assert!(!small.contains("_fast"), "a speed variant at -Os:\n{small}");
 }
 
-/// A four-trip loop over a global stayed a loop at `-O2` (22 B, 98 clocks for
-/// `sum4`, against 13 B and 34 clocks unrolled): the driver turned the unroller
-/// off (DEVIATE 6502-5). The pin unrolls it fully at `-O2`; `buf` holds
-/// 1, 2, 3, 4 so the sum is 10.
+/// Bytes first at every level (user ruling 2026-11-14, #9928): a full unroll
+/// that adds a byte is refused at `-O2`. `sum4` unrolled is 20 B and 28
+/// clocks, the loop 18 B and 142 clocks, so it stays a loop. `-O2` unrolled it
+/// before #9928, and this test said so (DEVIATE 6502-5 had turned the unroller
+/// off; the pin unrolls it). `buf` holds 1, 2, 3, 4 so the sum is 10.
 #[test]
-fn a_four_trip_loop_is_unrolled_at_o2() {
+fn a_four_trip_loop_stays_a_loop_at_o2() {
     let ir = module(
         r#"@buf = global [4 x i8] [i8 1, i8 2, i8 3, i8 4]
 define i8 @sum4() {
@@ -1239,7 +1240,7 @@ out:
 }"#,
     );
     let text = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
-    assert!(!text.contains("bne") && !text.contains("beq"), "the loop is still a loop:\n{text}");
+    assert!(text.contains("bne") || text.contains("beq"), "the unroll added a byte:\n{text}");
     assert_eq!(exit_code_of(&text, "sum4"), 10, "{text}");
 }
 
@@ -1317,6 +1318,7 @@ fn a_float_global_is_emitted_as_its_bits() {
     );
 }
 
+/// (A compare is `__lesf2`, the core `lt`, `le`, `eq` and `ne` share: `with_soft_compare_classes`.)
 /// A float add, a multiply, an int-to-float and a compare are calls of the
 /// softfloat routines (`SoftenFloatRes_Binary`, `_XINT_TO_FP`, `softenSetCC`):
 /// each stopped at "the target names no routine" or, for the compare, at a
@@ -1334,7 +1336,7 @@ fn a_float_operation_is_a_call_of_its_softfloat_routine() {
     call("define float @f(float %a, float %b) {\n  %r = fadd float %a, %b\n  ret float %r\n}", "__addsf3");
     call("define float @f(float %a, float %b) {\n  %r = fmul float %a, %b\n  ret float %r\n}", "__mulsf3");
     call("define float @f(i32 %n) {\n  %r = sitofp i32 %n to float\n  ret float %r\n}", "__floatsisf");
-    call("define i1 @f(float %a, float %b) {\n  %r = fcmp olt float %a, %b\n  ret i1 %r\n}", "__ltsf2");
+    call("define i1 @f(float %a, float %b) {\n  %r = fcmp olt float %a, %b\n  ret i1 %r\n}", "__lesf2");
     // An i32 result takes the `si` routines: `__fixsfdi` was called and never
     // linked.
     call("define i32 @f(float %a) {\n  %r = fptosi float %a to i32\n  ret i32 %r\n}", "__fixsfsi");

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/jumptableswitch.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/jumptableswitch.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/jumptableswitch.rs sha256:836a495d4d310f6182cf9a361b51b8812bc295f03a5b244708db0f151eaad9c3 -->
+<!-- src: crates/opt/llrm-transforms/src/jumptableswitch.rs sha256:3299f27ab512a3b6a5d87ae303b4e9ecd573a6b2d7478c631cb6a76fc4846e28 -->
 
 # jumptableswitch
 

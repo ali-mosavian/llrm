@@ -10,7 +10,7 @@ use llrm_mir::MetadataId;
 use super::*;
 use crate::mc::inst::{
     AddSub, Atomic, Barrier, Bitfield, CcOperand, Cond, Div, Extend, Fill, FpBinary, FpConvert, FpFused, FpSize,
-    FpUnary, Logic, Memory, Mul3, Rounding, Select, Unary, Wide,
+    FpUnary, Logic, Memory, Mul3, Permute, Rounding, Select, Unary, Wide,
 };
 use crate::mc::inst::{
     Addr, Arrangement, Gpr, ImmShape, MulAcc, NarrowLane, VectorFma, VectorFpOp, VectorFpUnary, VectorIntUnary,
@@ -297,6 +297,7 @@ pub(super) fn instructions() -> Vec<Inst> {
     for (op, lanes) in [(VectorFma::Add, Arrangement::S4), (VectorFma::Sub, Arrangement::D2)] {
         out.push(Inst::VectorFma { op, lanes, rd: v(0), rn: v(1), rm: v(2) });
         out.push(Inst::VectorFmaLane { op, lanes, rd: v(0), rn: v(1), rm: v(2), index: 1 });
+        out.push(Inst::ScalarFmaLane { op, lanes, rd: v(0), rn: v(1), rm: v(2), index: 1 });
     }
     out.push(Inst::VectorFmulLane { lanes: Arrangement::S4, rd: v(0), rn: v(1), rm: v(2), index: 1 });
     out.push(Inst::VectorMulLane { rd: v(0), rn: v(1), rm: v(2), index: 1 });
@@ -310,8 +311,9 @@ pub(super) fn instructions() -> Vec<Inst> {
         }
     }
     for lanes in Arrangement::ALL {
-        out.push(Inst::VectorUnzip { second: false, lanes, rd: v(0), rn: v(1), rm: v(2) });
-        out.push(Inst::VectorUnzip { second: true, lanes, rd: v(0), rn: v(1), rm: v(2) });
+        for kind in Permute::ALL {
+            out.push(Inst::VectorPermute { kind, lanes, rd: v(0), rn: v(1), rm: v(2) });
+        }
     }
     for lanes in [Arrangement::B16, Arrangement::H8, Arrangement::S4, Arrangement::D2] {
         out.push(Inst::VectorInsGpr { lanes, rd: v(0), rn: Gpr(3), index: 1 });
@@ -336,6 +338,8 @@ pub(super) fn instructions() -> Vec<Inst> {
     }
     for lanes in [Arrangement::B16, Arrangement::H8, Arrangement::S4, Arrangement::D2] {
         out.push(Inst::VectorLoadLane { lanes, rt: v(1), index: 1, base: Gpr(3) });
+        out.push(Inst::VectorLoadStructure { count: 2, lanes, rt: v(1), base: Gpr(3) });
+        out.push(Inst::VectorStoreStructure { count: 4, lanes, rt: v(1), base: Gpr(3) });
     }
     for (op, lanes) in [
         (VectorReduce::Addv, Arrangement::B16),
@@ -445,11 +449,14 @@ fn variant(inst: &Inst) -> &'static str {
         Inst::VectorLoadReplicate { .. } => "VectorLoadReplicate",
         Inst::VectorIntUnary { .. } => "VectorIntUnary",
         Inst::VectorLoadLane { .. } => "VectorLoadLane",
+        Inst::VectorLoadStructure { .. } => "VectorLoadStructure",
+        Inst::VectorStoreStructure { .. } => "VectorStoreStructure",
         Inst::VectorFmaLane { .. } => "VectorFmaLane",
+        Inst::ScalarFmaLane { .. } => "ScalarFmaLane",
         Inst::VectorFmulLane { .. } => "VectorFmulLane",
         Inst::VectorMulLane { .. } => "VectorMulLane",
         Inst::VectorNarrow { .. } => "VectorNarrow",
-        Inst::VectorUnzip { .. } => "VectorUnzip",
+        Inst::VectorPermute { .. } => "VectorPermute",
         Inst::VectorDupScalar { .. } => "VectorDupScalar",
         Inst::VectorReduce { .. } => "VectorReduce",
         Inst::VectorDupLane { .. } => "VectorDupLane",
@@ -467,7 +474,7 @@ fn variant(inst: &Inst) -> &'static str {
 /// The variants after frame lowering, which the body is never made from.
 const AFTER_FRAME: [&str; 3] = ["Mark", "Label", "Cfi"];
 
-const ALL: [&str; 76] = [
+const ALL: [&str; 79] = [
     "Mark",
     "Label",
     "Cfi",
@@ -528,11 +535,14 @@ const ALL: [&str; 76] = [
     "VectorLoadReplicate",
     "VectorIntUnary",
     "VectorLoadLane",
+    "VectorLoadStructure",
+    "VectorStoreStructure",
     "VectorFmaLane",
+    "ScalarFmaLane",
     "VectorFmulLane",
     "VectorMulLane",
     "VectorNarrow",
-    "VectorUnzip",
+    "VectorPermute",
     "VectorDupScalar",
     "VectorReduce",
     "VectorDupLane",

@@ -287,6 +287,7 @@ pub mod shadow;
 #[cfg(test)]
 mod shadow_tests;
 pub mod shrinkwrap;
+pub mod splitparams;
 pub mod slotcopies;
 pub mod slots;
 pub mod stackcoloring;

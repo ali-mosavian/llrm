@@ -826,6 +826,27 @@ fn vector_costs_at_code_size_are_the_pins() {
     assert_eq!((cmp(ICmp, i(32, 4), Some(Int(I::Slt))), cmp(Select, i(32, 4), Some(Int(I::Slt)))), (Some(1), Some(1)));
 }
 
+/// `getInterleavedMemoryOpCost` (L5865): a full group of up to four costs one
+/// `ldN`/`stN` per member per register; a member vector that is not 64 bits or
+/// a multiple of 128 (`<2 x i8>`), or a factor of five, is the BasicTTI
+/// fallback this port does not translate (LV-I1). Before the hook existed the
+/// loop vectorizer could not weigh an interleave group at all.
+#[test]
+fn interleaved_memory_costs_are_one_ldn_per_member_per_register() {
+    use llrm_mir::tti::MemoryOp::*;
+    let tti = AArch64::of_cpu("generic").unwrap();
+    let cost = |lane, count, factor| {
+        tti.interleaved_memory_op_cost(Store, VectorTy { lane: Ty::Int(lane), count }, factor, CostKind::RecipThroughput)
+            .map(|c| c.value)
+    };
+    assert_eq!(cost(8, 16, 2), Some(2));
+    assert_eq!(cost(16, 8, 4), Some(4));
+    assert_eq!(cost(8, 8, 2), Some(2));
+    assert_eq!(cost(64, 4, 2), Some(4));
+    assert_eq!(cost(8, 2, 2), None);
+    assert_eq!(cost(8, 16, 5), None);
+}
+
 #[test]
 fn slp_runs_on_arm64() {
     assert!(AArch64::of_cpu("generic").unwrap().slp_priced());
@@ -886,4 +907,42 @@ fn wide_vector_casts_and_extended_reductions_are_the_pins() {
         let native = tti.vector_extended_reduction_cost(ReduceKind::Add, true, Ty::Int(32), i(8, 16), k);
         assert_eq!(native.map(|c| c.value), Some(2), "{cpu}");
     }
+}
+
+/// `getIntrinsicInstrCost` of `llvm.{s,u}{max,min}` (L710): a register of 8, 16
+/// or 32-bit lanes is 1, of 64-bit lanes 2 (`cmgt` and `bif`), the promoted
+/// `v2i8`, `v2i16` and `v4i8` 5 signed and 3 unsigned.
+#[test]
+fn a_vector_min_or_max_costs_one_a_register_and_two_for_64_bit_lanes() {
+    let i = |lane, count| VectorTy { lane: Ty::Int(lane), count };
+    let tti = AArch64::of_cpu("generic").unwrap();
+    let k = CostKind::RecipThroughput;
+    let cost = |signed, ty| tti.vector_min_max_cost(signed, true, ty, k).map(|c| c.value);
+    assert_eq!((cost(true, i(32, 4)), cost(false, i(32, 4))), (Some(1), Some(1)));
+    assert_eq!((cost(true, i(32, 2)), cost(true, i(8, 8)), cost(true, i(16, 4))), (Some(1), Some(1), Some(1)));
+    assert_eq!((cost(true, i(32, 16)), cost(true, i(8, 32))), (Some(4), Some(2)));
+    assert_eq!((cost(true, i(64, 2)), cost(true, i(64, 4))), (Some(2), Some(4)));
+    assert_eq!((cost(true, i(8, 2)), cost(false, i(16, 2)), cost(true, i(8, 4))), (Some(5), Some(3), Some(5)));
+    assert_eq!(tti.vector_min_max_cost(true, true, i(32, 4), CostKind::Latency), None);
+}
+
+/// `getShuffleCost` of a single-source shuffle (L6978), the prices the pin's
+/// `slp-vectorizer` printed (`ReuseShuffleCost`): `<0,0,1,1>` of 4 floats is a
+/// `zip1` (1), of 4 doubles a `dup` a register (2), no mask the table's
+/// worst case (3); identity is free. The port priced only `SK_Broadcast`, so
+/// a reused lane made the tree "not priced" and it stayed scalar.
+#[test]
+fn a_single_source_shuffle_costs_what_the_pin_prices() {
+    let tti = AArch64::of_cpu("generic").unwrap();
+    let k = CostKind::RecipThroughput;
+    let single = |lane, count, mask: &[i32]| {
+        tti.shuffle_cost(ShuffleKind::PermuteSingleSrc, VectorTy { lane, count }, mask, k).map(|c| c.value)
+    };
+    assert_eq!(single(Ty::Float, 4, &[0, 0, 1, 1]), Some(1));
+    assert_eq!(single(Ty::Double, 4, &[0, 0, 1, 1]), Some(2));
+    assert_eq!(single(Ty::Float, 4, &[]), Some(3));
+    assert_eq!(single(Ty::Float, 4, &[0, 1, 2, 3]), Some(0));
+    assert_eq!(single(Ty::Float, 4, &[0, 0, 0, 0]), Some(1));
+    // The 4-lane perfect-shuffle table is not translated: unpriced.
+    assert_eq!(single(Ty::Float, 4, &[2, 0, 3, 1]), None);
 }

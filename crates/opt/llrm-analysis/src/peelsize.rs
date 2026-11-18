@@ -4,6 +4,15 @@
 //! deleted with `Options::peel`, `Limits::grows` and the trip and operation caps
 //! only it read: nothing called it outside its tests, and the translated
 //! `LoopUnrollPass` decides the copies.
+//!
+//! # Example
+//! `Limits::default()` is the budget the passes read when no option sets one.
+//!
+//! ```text
+//! Limits::default()
+//!     => { target_percent: 0, milliclocks_per_byte: 16_000 }
+//!        (an inline that grows the code must save 16 clocks per byte)
+//! ```
 
 /// The copy budgets and the price of a code byte the pipeline's passes read.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]

@@ -14,6 +14,15 @@
 //! loop the target's trial size admits; the driver then compiles the program
 //! again with every loop under that size unrolled and keeps whichever
 //! assembly it prices cheaper.
+//!
+//! # Example
+//! A loop the pass refused to unroll is noted; the driver compiles again with it unrolled and keeps the cheaper assembly.
+//!
+//! ```text
+//! pass:   loop refused by the threshold -> noted (ELIGIBLE)
+//! driver: compile 1 (loop kept) vs compile 2 (loop unrolled)
+//!         -> keeps whichever assembly it prices cheaper
+//! ```
 
 use std::cell::{Cell, RefCell};
 
@@ -38,6 +47,110 @@ thread_local! {
     static MORE: Cell<bool> = const { Cell::new(false) };
     /// The functions, and loops together, ROTATION-HOT left unrotated.
     static LEFT: RefCell<(Vec<String>, usize)> = const { RefCell::new((Vec::new(), 0)) };
+    /// Set while the trial compile of JT-LATCH-TRIAL runs: JumpThreading does
+    /// not copy a loop latch.
+    static LATCH_KEPT: Cell<bool> = const { Cell::new(false) };
+    /// The functions in which JumpThreading copied a latch.
+    static LATCH_COPIED: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    /// Set while the trial compile of SWITCH-LOOKUP-TRIAL runs: no switch is
+    /// turned into a lookup table.
+    static LOOKUPS_REFUSED: Cell<bool> = const { Cell::new(false) };
+    /// The lookup tables the base compile built.
+    static LOOKUPS_BUILT: Cell<usize> = const { Cell::new(0) };
+    /// Set while the trial compile of LIR-COPY-TRIAL runs: LoopIdiom leaves a
+    /// copy loop of an unknown count as a loop.
+    static COPY_LOOPS_KEPT: Cell<bool> = const { Cell::new(false) };
+    /// The functions in which LoopIdiom turned such a loop into a `memcpy`.
+    static COPY_CALLS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+}
+
+/// DEVIATE SWITCH-LOOKUP-TRIAL (beyond the pin; gcc's `-Os` keeps the compares
+/// of a sparse switch; owner x86-m32, exit 2026-11-30): whether the trial
+/// compile that builds no lookup table is running. The table is data bytes
+/// against the compares' code bytes, which only the object prices.
+pub fn refusing_lookup_tables() -> bool {
+    LOOKUPS_REFUSED.with(Cell::get)
+}
+
+/// Runs `body` with no switch turned into a lookup table.
+pub fn with_refused_lookup_tables<T>(body: impl FnOnce() -> T) -> T {
+    let before = LOOKUPS_REFUSED.with(|cell| cell.replace(true));
+    let value = body();
+    LOOKUPS_REFUSED.with(|cell| cell.set(before));
+    value
+}
+
+/// Notes a lookup table the base compile built, which a trial may refuse.
+pub(crate) fn note_lookup_table() {
+    LOOKUPS_BUILT.with(|count| count.set(count.get() + 1));
+}
+
+/// The tables [`note_lookup_table`] saw since the last call.
+pub fn take_lookup_tables() -> usize {
+    LOOKUPS_BUILT.with(|count| count.replace(0))
+}
+
+/// DEVIATE LIR-COPY-TRIAL (beyond the pin; owner x86-m32, exit 2026-11-30):
+/// whether the trial compile that keeps copy loops of an unknown count is
+/// running. The pin calls `memcpy` for them; whether the call is fewer bytes
+/// than the loop depends on the sequence around it, so the object decides.
+pub fn keeping_copy_loops() -> bool {
+    COPY_LOOPS_KEPT.with(Cell::get)
+}
+
+/// Runs `body` with those copy loops kept.
+pub fn with_kept_copy_loops<T>(body: impl FnOnce() -> T) -> T {
+    let before = COPY_LOOPS_KEPT.with(|cell| cell.replace(true));
+    let value = body();
+    COPY_LOOPS_KEPT.with(|cell| cell.set(before));
+    value
+}
+
+/// Notes that LoopIdiom made a `memcpy` of a copy loop of `function`, which a
+/// trial may refuse.
+pub(crate) fn note_copy_call(function: &str) {
+    COPY_CALLS.with(|list| {
+        let mut list = list.borrow_mut();
+        if !list.iter().any(|one| one == function) {
+            list.push(function.to_owned());
+        }
+    });
+}
+
+/// The functions [`note_copy_call`] saw since the last call.
+pub fn take_copy_calls() -> Vec<String> {
+    COPY_CALLS.with(|list| std::mem::take(&mut *list.borrow_mut()))
+}
+
+/// DEVIATE JT-LATCH-TRIAL (beyond the pin; gcc's `-Os` backward threader
+/// refuses a path through a loop latch; owner x86-m32, exit 2026-11-30):
+/// whether the trial compile that does not copy a loop latch is running.
+pub fn keeping_latches() -> bool {
+    LATCH_KEPT.with(Cell::get)
+}
+
+/// Runs `body` with loop latches kept in one copy.
+pub fn with_kept_latches<T>(body: impl FnOnce() -> T) -> T {
+    let before = LATCH_KEPT.with(|cell| cell.replace(true));
+    let value = body();
+    LATCH_KEPT.with(|cell| cell.set(before));
+    value
+}
+
+/// Notes that JumpThreading copied a loop latch of `function`, which a trial
+/// may refuse.
+pub(crate) fn note_latch_copy(function: &str) {
+    LATCH_COPIED.with(|list| {
+        let mut list = list.borrow_mut();
+        if !list.iter().any(|one| one == function) {
+            list.push(function.to_owned());
+        }
+    });
+}
+
+/// The functions [`note_latch_copy`] saw since the last call.
+pub fn take_latch_copies() -> Vec<String> {
+    LATCH_COPIED.with(|list| std::mem::take(&mut *list.borrow_mut()))
 }
 
 thread_local! {

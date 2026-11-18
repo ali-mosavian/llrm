@@ -325,7 +325,7 @@ impl Inst {
                 f(Fpr(rd), Role::UseDef);
                 f(G(rn), Role::Use);
             }
-            Inst::VectorFmaLane { rd, rn, rm, .. } => {
+            Inst::VectorFmaLane { rd, rn, rm, .. } | Inst::ScalarFmaLane { rd, rn, rm, .. } => {
                 f(Fpr(rd), Role::UseDef);
                 f(Fpr(rn), Role::Use);
                 f(Fpr(rm), Role::Use);
@@ -334,7 +334,7 @@ impl Inst {
                 f(Fpr(rd), Role::Def);
                 f(Fpr(rn), Role::Use);
             }
-            Inst::VectorUnzip { rd, rn, rm, .. } => {
+            Inst::VectorPermute { rd, rn, rm, .. } => {
                 f(Fpr(rd), Role::Def);
                 f(Fpr(rn), Role::Use);
                 f(Fpr(rm), Role::Use);
@@ -350,6 +350,20 @@ impl Inst {
             }
             Inst::VectorLoadLane { rt, base, .. } => {
                 f(Fpr(rt), Role::UseDef);
+                f(G(base), Role::Use);
+            }
+            // The registers are physical and consecutive: a rewrite of one
+            // would break the run, so none is applied.
+            Inst::VectorLoadStructure { count, rt, base, .. } => {
+                for at in 0..u32::from(*count) {
+                    f(Fpr(&mut rt.in_run(at)), Role::Def);
+                }
+                f(G(base), Role::Use);
+            }
+            Inst::VectorStoreStructure { count, rt, base, .. } => {
+                for at in 0..u32::from(*count) {
+                    f(Fpr(&mut rt.in_run(at)), Role::Use);
+                }
                 f(G(base), Role::Use);
             }
             Inst::VectorLoadReplicate { rt, base, .. } => {

@@ -35,6 +35,7 @@ ALL = COMPILERS + [LTO]
 def family(compiler):
     return "llvm-mos" if compiler == LTO else compiler
 BARS = HERE / "prog_bars.tsv"
+NO_BAR = HERE / "no_bar_layout.tsv"  # program, compiler, reason: a program whose structs a competitor lays out differently
 CORPUS = Path(os.environ.get("PROG_BARS_CORPUS", ROOT / "tests" / "run" / "c"))
 MOS = Path(os.environ.get("LLVM_MOS", os.path.expanduser("~/scratch/fetch-llvm-mos-sdk/x/llvm-mos")))
 INSNS = os.environ.get("SIM65_INSNS", os.path.expanduser("~/scratch/cc65-v2.19-src/sim65-insns"))
@@ -343,12 +344,30 @@ def measure(compiler, level, name):
 
 # ---- the bars file ---------------------------------------------------------------------------------------------------------------
 
-def load_bars(path):
+def load_no_bar(path=NO_BAR):
+    """{(program, compiler family): reason} of the cells whose program is not ours' program for that compiler: its struct
+    layout differs (volatile_bitfield: `struct S` is 4 B packed here, 5 B for llvm-mos and sdcc), so the bar measures another
+    program. `layouts` writes the file."""
+    found = {}
+    for line in Path(path).read_text().splitlines() if Path(path).exists() else []:
+        if line.startswith("#") or not line.strip():
+            continue
+        program, compiler, reason = line.split("\t")
+        found[(program, compiler)] = reason
+    return found
+
+
+def load_bars(path, no_bar=None):
+    """The bars of `path`; a cell `no_bar` names is `n/a: layout: ...` whatever the file measured (it is kept as measured)."""
+    no_bar = load_no_bar() if no_bar is None else no_bar
     rows = {}
     for line in Path(path).read_text().splitlines() if Path(path).exists() else []:
         if line.startswith("#") or not line.strip():
             continue
         p = line.split("\t")
+        reason = no_bar.get((p[0], family(p[1])))
+        if reason and p[4] != "n/a":  # a cell that did not build keeps its own reason
+            p = [*p[:4], "n/a", "n/a", "-", f"n/a: layout: {reason}"]
         rows[(p[0], p[1], p[2])] = p[3:]
     return rows
 
@@ -374,10 +393,63 @@ def programs():
     return [n for n in names if applies(n)]
 
 
+def record_layouts(text):
+    """{record: (sizeof, field lines)} of clang's `-fdump-record-layouts` output: the AST layout blocks, field offsets in bits."""
+    found, name, lines = {}, None, []
+    for line in text.splitlines():
+        if line.startswith("*** Dumping AST Record Layout"):
+            name, lines = None, []
+        elif name is None and re.match(r"^\s+0 \| (struct|union) ", line):
+            name = line.split("|", 1)[1].strip()
+        elif name is not None and (m := re.search(r"\[sizeof=(\d+)", line)):
+            found[name] = (int(m.group(1)), tuple(lines))
+            name = None
+        elif name is not None:
+            lines.append(re.sub(r"\s+", " ", line.strip()))
+    return found
+
+
+def layout_reasons(ours, theirs):
+    """Why two dumps are not the same structs, one `struct S 4 B against 5 B` per record that differs; none when they match."""
+    return [f"{k} {ours[k][0]} B here against {theirs[k][0]} B" if ours[k][0] != theirs[k][0] else f"{k} fields at other offsets"
+            for k in sorted(ours) if k in theirs and ours[k] != theirs[k]]
+
+
+def cmd_layouts(a):
+    """Write no_bar_layout.tsv: the programs a competitor lays out differently from llrm-cc (its clang front end: msp430 data layout).
+    llvm-mos: the two `-fdump-record-layouts` dumps compared; sdcc: a `_Static_assert` of each of our record sizes on the program."""
+    rows = []
+    for n in programs():
+        src = CORPUS / f"{n}.c"
+        fl = [f for f in (program_flags(src)[0] if program_flags(src) else []) if f.startswith("-f") and "sanitize" not in f]
+        dump = ["-w", "-fsyntax-only", "-Xclang", "-fdump-record-layouts", *fl, str(src)]
+        run = subprocess.run([a.cc, "--target=6502-sim65", *dump], capture_output=True, text=True)
+        ours = record_layouts(run.stdout + run.stderr)
+        mos = subprocess.run([str(MOS / "bin/mos-sim-clang"), "-fno-lto", "-fsigned-char", *dump], capture_output=True, text=True)
+        mos = record_layouts(mos.stdout + mos.stderr)
+        why = layout_reasons(ours, mos)
+        if why:
+            rows.append((n, "llvm-mos", "; ".join(why)))
+        named = [k for k in ours if re.match(r"(struct|union) \w+$", k)]
+        if named and shutil.which("sdcc"):
+            asserts = "".join(f'_Static_assert(sizeof({k}) == {ours[k][0]}, "{k}");\n' for k in named)
+            work = Path(tempfile.mkdtemp())
+            (work / "p.c").write_text(PRELUDE + src.read_text() + "\n" + asserts)
+            r = subprocess.run(["sdcc", "-mmos6502", "--std-c11", "-c", "-o", str(work / "p.rel"), str(work / "p.c")], capture_output=True, text=True)
+            shutil.rmtree(work, True)
+            bad = [k for k in named if f'static assertion failed: "{k}"' in r.stderr]
+            if bad:
+                rows.append((n, "sdcc", "; ".join(f"{k} is not {ours[k][0]} B there" for k in bad)))
+    Path(a.out).write_text("# program\tcompiler\treason (written by `prog_bars.py layouts`; a bar of this program is a bar of another struct layout)\n" +
+                           "".join("\t".join(r) + "\n" for r in rows))
+    for r in rows:
+        print("\t".join(r))
+
+
 def cmd_bars(a):
     names = a.progs.split(",") if a.progs else programs()
     levels = a.levels.split(",") if a.levels else LEVELS
-    rows = load_bars(a.out)
+    rows = load_bars(a.out, no_bar={})
     if not a.progs:
         rows = {k: v for k, v in rows.items() if k[0] in names}
     jobs = []
@@ -517,7 +589,8 @@ if __name__ == "__main__":
     b.add_argument("--levels"); b.add_argument("--progs"); b.add_argument("--out", default=str(BARS))
     o = sub.add_parser("ours"); o.add_argument("--cc", required=True); o.add_argument("--rt", required=True); o.add_argument("--rtlib")
     o.add_argument("--out", required=True); o.add_argument("--levels"); o.add_argument("--progs")
+    l = sub.add_parser("layouts"); l.add_argument("--cc", required=True); l.add_argument("--out", default=str(NO_BAR))
     m = sub.add_parser("matrix"); m.add_argument("--ours", required=True); m.add_argument("--tip", required=True); m.add_argument("--out", required=True)
     m.add_argument("--bars", default=str(BARS)); m.add_argument("--date", default="2026-11-15")
     a = p.parse_args()
-    {"bars": cmd_bars, "ours": cmd_ours, "matrix": cmd_matrix}[a.cmd](a)
+    {"bars": cmd_bars, "ours": cmd_ours, "layouts": cmd_layouts, "matrix": cmd_matrix}[a.cmd](a)

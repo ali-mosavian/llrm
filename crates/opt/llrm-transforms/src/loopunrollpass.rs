@@ -1965,10 +1965,13 @@ fn try_to_unroll_loop(
         max_or_zero = se.is_backedge_taken_count_max_or_zero(&cx, header);
         // DEVIATE OB1: where the pin's bound is none or too large to unroll by,
         // the object the loop's accesses run through gives one (its
-        // range-derived 2^31-1 for `i < n`).
+        // range-derived 2^31-1 for `i < n`). Only at -O3: gcc completely peels
+        // a loop that way where it may grow the code (`may_increase_size`),
+        // not at -O2 (x_ld_matmul -O2 peeled 16 times: 2,071 B and 8.9%
+        // slower than the rolled loop).
         if let Some(cap) = run.tti.unroll_object_bound()
             && !opt_for_size
-            && run.options.opt_level >= 2
+            && run.options.opt_level >= 3
             && let Some(bound) = crate::unrollbound::object_max_trip_count(&mut se, &cx, header)
             && bound <= cap
             // The pin's bound is none, or too large to unroll by.

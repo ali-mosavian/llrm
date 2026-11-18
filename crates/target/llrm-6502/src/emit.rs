@@ -141,6 +141,19 @@ pub fn indexed_address(
     }
 }
 
+/// [`indexed_address`] of byte `part` of the word at `symbol+offset`: the
+/// offset wraps at 2^16 as the access does.
+pub fn indexed_address_part(
+    symbol: &Operand,
+    offset: &Operand,
+    part: i64,
+) -> Result<String, String> {
+    match offset {
+        Operand::Imm(offset) => indexed_address(symbol, &Operand::Imm((offset + part) & 0xFFFF)),
+        other => Err(format!("{other:?} is not an offset")),
+    }
+}
+
 /// `symbol+offset` for an absolute access.
 pub fn address(
     symbol: &Operand,
@@ -360,6 +373,16 @@ pub fn expand(
                 writeln!(out, "  ldx {index}\n  lda {symbol},x\n  sta {value}").unwrap();
             } else {
                 writeln!(out, "  ldx {index}\n  lda {value}\n  sta {symbol},x").unwrap();
+            }
+        }
+        op::LDAX16 | op::STAX16 => {
+            let load = inst.opcode == op::LDAX16;
+            let ((low, high), index) = (word(&o[0])?, reg(&o[3])?);
+            let (first, second) = (indexed_address_part(&o[1], &o[2], 0)?, indexed_address_part(&o[1], &o[2], 1)?);
+            if load {
+                writeln!(out, "  ldx {index}\n  lda {first},x\n  sta {low}\n  lda {second},x\n  sta {high}").unwrap();
+            } else {
+                writeln!(out, "  ldx {index}\n  lda {low}\n  sta {first},x\n  lda {high}\n  sta {second},x").unwrap();
             }
         }
         op::LDABS => writeln!(

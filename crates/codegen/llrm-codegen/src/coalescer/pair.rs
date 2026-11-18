@@ -136,6 +136,13 @@ pub trait CoalescerEnv {
         true
     }
 
+    /// DEVIATE SPLIT-PARAMS: a copy of an argument made below the entry stays
+    /// (`SplitParamRanges` made it so the kept register is set up where the
+    /// calls begin; a join would put it back in the entry).
+    fn keeps_split_params(&self) -> bool {
+        false
+    }
+
     /// `MRI->setRegClass(CP.getDstReg(), CP.getNewRC())`: `src` was merged into
     /// `dst`, which may now take only the registers both could.
     fn narrow(

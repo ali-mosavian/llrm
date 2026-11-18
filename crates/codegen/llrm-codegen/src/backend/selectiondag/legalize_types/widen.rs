@@ -18,7 +18,8 @@
 //! `WidenVecRes_Binary`, `WidenVecRes_INSERT_VECTOR_ELT`,
 //! `WidenVecRes_SCALAR_TO_VECTOR`, `WidenVecOp_STORE`
 //! (`GenWidenVectorStores`), `WidenVecOp_EXTRACT_VECTOR_ELT`,
-//! `WidenVecOp_EXTEND`, all of
+//! `WidenVecOp_EXTEND`, `WidenVecRes_EXTRACT_SUBVECTOR`, `WidenVecRes_BITCAST`, `WidenVecOp_CONCAT_VECTORS`,
+//! `WidenVecOp_BITCAST` (not their stack-slot fallbacks), all of
 //! [LegalizeVectorTypes.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/LegalizeVectorTypes.cpp).
 //!
 //! DEVIATE WV1 (owner llrm-target-x86-m64-b, exit 2026-11-30): every other
@@ -150,7 +151,7 @@ impl TypeLegalizer<'_> {
         let mut ty = self.dag.value_type(scalars[0]);
         let vector_of = |ty: EVT| match ty {
             EVT::Simple(lane) => MVT::vector(lane, width / ty.size_in_bits()).map(EVT::Simple),
-            EVT::Int(_) => None,
+            EVT::Int(_) | EVT::Vector(..) => None,
         };
         let mut vec = self.dag.get_node(ISD::ScalarToVector, vector_of(ty)?, &[scalars[0]]);
         let mut at = 1_u32;
@@ -362,6 +363,60 @@ impl TypeLegalizer<'_> {
                 let wide: Vec<SDValue> = ops.into_iter().map(|operand| self.widened_vector(operand)).collect();
                 self.dag.get_node_flags(op, widen_vt, &wide, flags)
             }
+            // `WidenVecRes_EXTRACT_SUBVECTOR`: the input itself, or a subvector of it as wide as the result;
+            // otherwise the lanes one by one, then undefined ones.
+            ISD::ExtractSubvector => {
+                let (source, index) = (self.dag.operand(value, 0), self.dag.operand(value, 1));
+                let source = self.widen_operand(source);
+                let source_vt = self.dag.value_type(source);
+                let start = self.dag.constant(index).ok_or_else(|| unsupported("widen extract at a variable index"))?;
+                let (wide_lanes, source_lanes) = (u128::from(widen_vt.lanes()), u128::from(source_vt.lanes()));
+                if start == 0 && source_vt == widen_vt {
+                    source
+                } else if start % wide_lanes == 0 && start + wide_lanes < source_lanes {
+                    self.dag.get_node(ISD::ExtractSubvector, widen_vt, &[source, index])
+                } else {
+                    let lane_vt = vt.element();
+                    let mut ops = Vec::with_capacity(widen_vt.lanes() as usize);
+                    for lane in 0..u128::from(vt.lanes()) {
+                        let at = self.dag.get_constant(start + lane, EVT::I64);
+                        ops.push(self.dag.get_node(ISD::ExtractElement, lane_vt, &[source, at]));
+                    }
+                    let undef = self.dag.get_undef(lane_vt);
+                    ops.resize(widen_vt.lanes() as usize, undef);
+                    self.dag.get_build_vector(widen_vt, &ops)
+                }
+            }
+            // `WidenVecRes_BITCAST`, an input that is legal or widens: the same size is a bitcast; a
+            // smaller one is placed in lane 0 of a legal vector of its own lanes, which is bitcast.
+            ISD::BitCast => {
+                let input = self.widen_operand(self.dag.operand(value, 0));
+                let input_vt = self.dag.value_type(input);
+                let (wide_bits, input_bits) = (widen_vt.size_in_bits(), input_vt.size_in_bits());
+                if wide_bits == input_bits {
+                    self.dag.get_node(ISD::BitCast, widen_vt, &[input])
+                } else {
+                    let lane_vt = if input_vt.is_vector() { input_vt.element() } else { input_vt };
+                    let lane_bits = lane_vt.size_in_bits();
+                    let new_vt = match lane_vt {
+                        EVT::Simple(lane) if wide_bits % lane_bits == 0 && wide_bits % input_bits == 0 => {
+                            MVT::vector(lane, wide_bits / lane_bits).map(EVT::Simple)
+                        }
+                        _ => None,
+                    }
+                    .filter(|&new_vt| self.tli.types.is_type_legal(new_vt) && self.tli.types.is_type_legal(lane_vt))
+                    .ok_or_else(|| unsupported("widen bitcast through memory"))?;
+                    let wide = if input_vt.is_vector() {
+                        let undef = self.dag.get_undef(input_vt);
+                        let mut parts = vec![undef; (wide_bits / input_bits) as usize];
+                        parts[0] = input;
+                        self.dag.get_node(ISD::ConcatVectors, new_vt, &parts)
+                    } else {
+                        self.dag.get_node(ISD::ScalarToVector, new_vt, &[input])
+                    };
+                    self.dag.get_node(ISD::BitCast, widen_vt, &[wide])
+                }
+            }
             _ => return Err(unsupported("widen result")),
         };
         self.set_widened_vector(value, result);
@@ -419,6 +474,46 @@ impl TypeLegalizer<'_> {
                 let extended = self.dag.get_node_flags(extend, wide_result, &[wide], self.dag.node(node).flags);
                 let zero = self.dag.get_constant(0, EVT::I64);
                 self.dag.get_node(ISD::ExtractSubvector, result_vt, &[extended, zero])
+            }
+            // `WidenVecOp_CONCAT_VECTORS`: the first operand widened when the rest are undefined, else every lane
+            // of every operand, one by one.
+            ISD::ConcatVectors => {
+                let ops = self.dag.node(node).ops.clone();
+                let result_vt = self.dag.value_type(node);
+                let first_vt = self.dag.value_type(ops[0]);
+                if result_vt == self.tli.types.type_conversion(first_vt).1
+                    && ops[1..].iter().all(|operand| self.dag.is_undef(*operand))
+                {
+                    self.widened_vector(ops[0])
+                } else {
+                    let lane_vt = result_vt.element();
+                    let mut lanes = Vec::with_capacity(result_vt.lanes() as usize);
+                    for operand in &ops {
+                        let wide = self.widened_vector(*operand);
+                        for lane in 0..u128::from(first_vt.lanes()) {
+                            let at = self.dag.get_constant(lane, EVT::I64);
+                            lanes.push(self.dag.get_node(ISD::ExtractElement, lane_vt, &[wide, at]));
+                        }
+                    }
+                    self.dag.get_build_vector(result_vt, &lanes)
+                }
+            }
+            // `WidenVecOp_BITCAST`, to a scalar that divides the wide vector: lane 0 of the wide vector seen as
+            // lanes of that scalar.
+            ISD::BitCast if at == 0 && !self.dag.value_type(node).is_vector() => {
+                let wide = self.widened_vector(operand);
+                let (vt, wide_bits) = (self.dag.value_type(node), self.dag.value_type(wide).size_in_bits());
+                let new_vt = match vt {
+                    EVT::Simple(lane) if wide_bits % vt.size_in_bits() == 0 => {
+                        MVT::vector(lane, wide_bits / vt.size_in_bits()).map(EVT::Simple)
+                    }
+                    _ => None,
+                }
+                .filter(|&new_vt| self.tli.types.is_type_legal(new_vt))
+                .ok_or_else(|| unsupported("widen bitcast through memory"))?;
+                let cast = self.dag.get_node(ISD::BitCast, new_vt, &[wide]);
+                let zero = self.dag.get_constant(0, EVT::I64);
+                self.dag.get_node(ISD::ExtractElement, vt, &[cast, zero])
             }
             _ => return Err(unsupported("widen operand")),
         };

@@ -1,9 +1,18 @@
 # llvm-mos's convention, simplified: bytes in a, x and the imaginary registers from rc2 (rc0:rc1 is the soft stack
 # pointer, which the callee keeps), an integer word in A:X or the next pair, a pointer in the pairs from rc2 only,
-# a result in A, A:X or A:X:rc2:rc3. Whatever does not fit goes in static frame
-# cells (stack args, no stack pointer arithmetic on the hardware stack).
+# a result in A, A:X or A:X:rc2:rc3. Whatever does not fit goes on the soft stack.
+#
+# Two rows, one per callee class (the LLVM calling convention of the call and of the definition):
+#   [mos]         ccc, a function other modules or the runtime can call: 8 bytes in registers (a, x, rc2..rc7) and the
+#                 rest on the soft stack, the placement the hand-written members of `mos_rt.s` and compiler-rt read
+#                 (`__muldi3` reads b at the stack pointer).
+#   [mos_private] fastcc, a function of this module nothing else calls (internal, address not taken): arguments in a, x,
+#                 rc2..rc7, then rc16..rc25 (18 bytes). DEVIATE from llvm-mos CC_MOS (A, X, RC2..RC15; MOS_CSR RC20..RC31),
+#                 which has one row: the callee-saved cells stay rc8..rc15 because the runtime members use rc16..rc25 as
+#                 scratch; the cells a call already clobbers carry the extra arguments.
+
 default = "mos"
-private = "mos"
+private = "mos_private"
 
 [abi.mos]
 convention = "mos"
@@ -39,6 +48,43 @@ aggregate_pointer_popped_by = "caller"
 elf = "*"
 
 [mos.result]
+1 = ["a"]
+2 = ["a", "x"]
+4 = ["a", "x", "rc2", "rc3"]
+8 = ["a", "x", "rc2", "rc3", "rc4", "rc5", "rc6", "rc7"]
+pointer = ["a", "x"]
+
+[mos_private]
+cc = "cdecl"
+slot_bytes = 1
+order = "left-to-right"
+cleanup = "caller"
+argument_registers = ["a", "x", "rc2", "rc3", "rc4", "rc5", "rc6", "rc7", "rc16", "rc17", "rc18", "rc19", "rc20", "rc21", "rc22", "rc23", "rc24", "rc25"]
+wide_pairs = [["a", "x"], ["rc2", "rc3"], ["rc4", "rc5"], ["rc6", "rc7"], ["rc16", "rc17"], ["rc18", "rc19"], ["rc20", "rc21"], ["rc22", "rc23"], ["rc24", "rc25"]]
+pointer_pairs = [["rc2", "rc3"], ["rc4", "rc5"], ["rc6", "rc7"], ["rc16", "rc17"], ["rc18", "rc19"], ["rc20", "rc21"], ["rc22", "rc23"], ["rc24", "rc25"]]
+backfill = true
+return_address_bytes = 2
+first_argument_offset = 0
+frame = "rs0"
+frame_optional = true
+stack = "rs0"
+preserved = [["rs0", "rs0"], ["rs4", "rs4"], ["rs5", "rs5"], ["rs6", "rs6"], ["rs7", "rs7"]]
+clobbered = ["a", "x", "y", "rs1", "rs2", "rs3", "rs8", "rs9", "rs10", "rs11", "rs12", "flags"]
+entry_state = ["decimal_clear"]
+promotion = "slot"
+wide_slots = 2
+variadic_float = "double"
+aggregate = "hidden-pointer"
+aggregate_in_register_bytes = []
+aggregate_pointer = "register"
+aggregate_pointer_register = "rs1"
+aggregate_pointer_returned = "a"
+aggregate_pointer_popped_by = "caller"
+
+[mos_private.symbol]
+elf = "*"
+
+[mos_private.result]
 1 = ["a"]
 2 = ["a", "x"]
 4 = ["a", "x", "rc2", "rc3"]

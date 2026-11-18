@@ -37,6 +37,16 @@
 //!
 //! # Used by
 //! `slpvectorize`.
+//!
+//! # Example
+//! Forty `sext i16` loads of consecutive cells, summed by a chain of `add i64`, become two vector loads and one reduction (the tile test).
+//!
+//! ```text
+//! %x0 = sext i16 (load [i]) to i64 ; ... x39, summed by add i64
+//!         =>
+//! load <32 x i16>, load <8 x i16>; the narrower is added into the low
+//! lanes of the wider; one @llvm.vector.reduce.add.v32i64 of the result
+//! ```
 
 use llrm_analysis::memory::{MemRef, Unit as MemUnit};
 use llrm_mir::context::{Constant, ConstantKind, Context};
@@ -180,6 +190,8 @@ fn leaf_of(
     };
     let Opcode::Load { align, volatile: false } = function.instruction(load).opcode else { return None };
     let loaded = function.instruction(load).ty;
+    // `LoadInst::getAlign`: no `align` is the ABI alignment of the loaded type.
+    let align = align.or_else(|| Some(unit.layout.align(&unit.context.types, loaded)));
     let bits = int_ty(unit.context, loaded)?;
     let reference = MemRef::at(unit, function.instruction(load).operands[0], bits / 8);
     let root = reference.root.filter(|_| reference.segment.is_none())?;

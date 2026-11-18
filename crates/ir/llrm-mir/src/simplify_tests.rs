@@ -1340,3 +1340,31 @@ b0:
 ";
     assert_eq!(simplified(text, "r"), Some("%t".to_owned()));
 }
+
+/// A lane of a constant vector at a constant index is that lane: SROA's
+/// vector promotion leaves `extractelement` of a constant where a memcpy from
+/// a constant global was, and arm64 had no way to select it
+/// (`CannotSelect(ExtractElement)`).
+#[test]
+fn test_an_extractelement_of_a_constant_vector_is_its_lane() {
+    let text = "define void @f() {\nb0:\n  %e = extractelement <2 x i64> <i64 5, i64 6>, i32 1\n  ret void\n}\n";
+    assert_eq!(simplified(text, "e").as_deref(), Some("6"));
+}
+
+/// A lane past the end is poison.
+#[test]
+fn test_an_extractelement_past_the_end_is_poison() {
+    let text = "define void @f() {\nb0:\n  %e = extractelement <2 x i64> <i64 5, i64 6>, i32 2\n  ret void\n}\n";
+    assert_eq!(simplified(text, "e").as_deref(), Some("poison"));
+}
+
+/// An integer cast to a vector of integers is its bytes, lane 0 lowest, and a
+/// vector cast back is the integer: the two folds an `extractelement` of the
+/// bitcast needs.
+#[test]
+fn test_a_bitcast_between_an_integer_and_its_lanes_folds_both_ways() {
+    let text = "define void @f() {\nb0:\n  %v = bitcast i32 16909060 to <4 x i8>\n  %i = bitcast <4 x i8> <i8 4, i8 3, i8 2, i8 1> to i32\n  ret void\n}\n";
+    assert_eq!(simplified(text, "i").as_deref(), Some("16909060"));
+    let lanes = simplified(text, "v").expect("a constant");
+    assert!(lanes.starts_with("Aggregate"), "{lanes}");
+}

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/looprotate.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/looprotate.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/looprotate.rs sha256:fd036ee386efbf49f9b07afd5bb6fdc24d4654bdafbd51f25211ba90b656c02e -->
+<!-- src: crates/opt/llrm-transforms/src/looprotate.rs sha256:4593335974ea6521eef8e467c097f64495f31a9a124c2ec23d68d36a3aeb799e -->
 
 # looprotate
 
@@ -43,17 +43,11 @@ latch if they are joined by a jump.
   `llvm.coro` check: MIR has no local noalias scope declarations, and no
   coroutines. Debug records stand before an instruction and move with it, so
   only the preheader's old terminator needs `flushTerminatorDbgRecords`.
-- R5 `simplifyInstruction` takes no dominator tree or assumptions: the copy
-  sits in a preheader whose analyses the rotation is changing.
+- R5 The dominator tree and assumptions `simplifyInstruction` is given are
+  built from the function when first asked and dropped when a loop rotates
+  (the pin keeps its own up to date).
 - R6 A target with no cost model (`Machine::tti`) is priced by the generic
   profile, `llrm_mir::tti::Basic`: a pass names no target crate.
-- RL-EXITING-LATCH (target opt-in, owner x87, exit 2026-11-24): a loop whose latch
-  already exits is also rotated when the copy of its header folds away in the
-  preheader, guard and all (`Tti::rotation_of_exiting_latch_when_guard_folds`,
-  m32). The pin rotates it only if a header phi dies or the exit count becomes
-  computable; gcc's `ch_base::copy_headers` copies any loop header that holds
-  the exit test. mandel -O1 m32: `x * x` with `x = 0` ran on the first
-  iteration, 2 `imul` a pixel.
 
 ## Example
 Before:

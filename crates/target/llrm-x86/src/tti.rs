@@ -367,8 +367,9 @@ impl X86 {
     }
 }
 
-/// `SSE2ConversionTbl`'s integer rows (the pin's `X86TargetTransformInfo.cpp`, L3526): a cast, its destination and
-/// source as (lane bits, lanes), and the throughput; the other three cost kinds are 1.
+/// `SSE2ConversionTbl`'s integer rows (the pin's `X86TargetTransformInfo.cpp`,
+/// L3526): a cast, its destination and source as (lane bits, lanes), and the
+/// throughput; the other three cost kinds are 1.
 /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L3526
 const SSE2_INTEGER_CASTS: [(CastKind, (u32, u32), (u32, u32), i64); 23] = [
     (CastKind::ZExt, (64, 2), (8, 16), 4),
@@ -821,6 +822,13 @@ impl Tti for X86 {
         "X86"
     }
 
+    /// x86-64 first (DEVIATE VPEE6, owner x87-cordic-2, exit 2026-12-10): the
+    /// other ports' backends are not known to select the vector loop's
+    /// `reduce.or` and `reduce.umin`.
+    fn vectorizes_early_exit(&self) -> bool {
+        self.vector_values()
+    }
+
     fn selects_sub_register_vectors(&self) -> bool {
         self.vector_values()
     }
@@ -997,6 +1005,18 @@ impl Tti for X86 {
         self.tuning.inline_never_grows_without_rate
     }
 
+    fn switch_lookup_trial_at_size(&self) -> bool {
+        self.tuning.switch_lookup_trial_at_size
+    }
+
+    fn loop_idiom_copy_trial_at_size(&self) -> bool {
+        self.tuning.loop_idiom_copy_trial_at_size
+    }
+
+    fn jump_threading_latch_trial_at_size(&self) -> bool {
+        self.tuning.jump_threading_latch_trial_at_size
+    }
+
     fn cold_site_ignores_sinks(&self) -> bool {
         self.tuning.cold_site_ignores_sinks
     }
@@ -1122,6 +1142,15 @@ impl Tti for X86 {
         self.tuning.imul_at_size
     }
 
+    /// DEVIATE MERGEFUNC-LOCAL-X64 (owner llrm-target-x86-m16-b, exit
+    /// 2026-11-30): x86-64 drops a local function that is the same code as
+    /// another at -O1 to -O3, as gcc's `-fipa-icf` does at -O2 (signbit_idioms:
+    /// 8 of 24 functions were copies; each function is an FDE the start-up
+    /// unwinder registration walks, 110 instructions a function).
+    fn merge_local_functions_at_speed(&self) -> bool {
+        self.quad
+    }
+
     fn merge_functions_at_size(&self) -> bool {
         self.tuning.merge_functions_at_size
     }
@@ -1202,6 +1231,14 @@ impl Tti for X86 {
         self.tuning.unroll_recurrence_veto
     }
 
+    fn threads_by_relation(&self) -> bool {
+        self.tuning.threads_by_relation
+    }
+
+    fn backward_threading(&self) -> bool {
+        self.tuning.backward_threading
+    }
+
     fn x87_stack_slots(&self) -> Option<u32> {
         self.tuning.x87_stack_slots.filter(|_| !self.sse2)
     }
@@ -1251,8 +1288,16 @@ impl Tti for X86 {
         self.tuning.unswitch_threshold
     }
 
+    fn licm_float_register_limit(&self) -> Option<u32> {
+        self.tuning.licm_float_register_limit
+    }
+
     fn min_jump_table_density(&self) -> Option<u64> {
         self.tuning.min_jump_table_density
+    }
+
+    fn jump_table_size_growth_ratio(&self) -> Option<u64> {
+        self.tuning.jump_table_size_growth_ratio
     }
 
     fn recursive_inlining(&self) -> Option<(u32, i64)> {
@@ -1304,6 +1349,11 @@ impl Tti for X86 {
 
     fn branches_constant_arm_selects(&self) -> bool {
         self.tuning.branch_constant_arm_selects
+    }
+
+    fn select_optimize_penalty(&self) -> Option<u64> {
+        // Where a select is a conditional move, it is the cheaper form.
+        self.tuning.select_optimize_penalty.filter(|_| !self.cmov)
     }
 
     fn indvars_widens_narrow_counter_through_masks(&self) -> bool {
@@ -1374,6 +1424,23 @@ impl Tti for X86 {
         self.tuning.vectorize_at_size
     }
 
+    fn should_maximize_vector_bandwidth(&self) -> bool {
+        self.tuning.maximize_vector_bandwidth
+    }
+
+    fn narrows_reduction_accumulators(&self) -> bool {
+        self.tuning.narrow_reduction_accumulators
+    }
+
+    fn bandwidth_vf_without_epilogue(&self) -> bool {
+        self.tuning.bandwidth_vf_without_epilogue
+    }
+
+    /// `bsr` and `tzcnt`/`bsf` are one instruction at x86-64 (LI-18).
+    fn shift_loop_counts(&self) -> bool {
+        self.tuning.shift_loop_counts
+    }
+
     /// The 128-bit integer vectors need SSE2 and, for now, the 64-bit mode (x86
     /// vectors plan, PR-A).
     fn vector_values(&self) -> bool {
@@ -1440,6 +1507,44 @@ impl Tti for X86 {
         })
     }
 
+    /// `X86TTIImpl::getCmpSelInstrCost` of an integer vector, the SSE2 rows
+    /// (L4062 and L4069): the compares `pcmpeqX` and `pcmpgtX` of 8, 16 and 32
+    /// bit lanes cost one per register, the selects (`pand`, `pandn`, `por`)
+    /// two; the predicates SSE2 has no compare for cost the instructions that
+    /// make them (L3877), taking the second operand as no constant. A float
+    /// lane or a 64-bit compare is not priced (DEVIATE X86V3, owner
+    /// llrm-target-x86-m64-b, exit 2026-12-10).
+    fn vector_cmp_sel_cost(
+        &self,
+        op: CmpSel,
+        ty: VectorTy,
+        predicate: Option<Predicate>,
+        kind: CostKind,
+    ) -> Option<Cost> {
+        use llrm_mir::opcode::IntPredicate;
+        if !self.vector_values() {
+            return None;
+        }
+        let Ty::Int(bits @ (8 | 16 | 32)) = ty.lane else { return None };
+        let pieces = xmm_pieces(ty)?;
+        let (row, extra) = match op {
+            CmpSel::ICmp => {
+                let extra = match predicate {
+                    Some(Predicate::Int(IntPredicate::Ne | IntPredicate::Sge | IntPredicate::Sle)) => 1,
+                    Some(Predicate::Int(IntPredicate::Ult | IntPredicate::Ugt)) => 2,
+                    Some(Predicate::Int(IntPredicate::Ule | IntPredicate::Uge)) if bits < 32 => 1,
+                    Some(Predicate::Int(IntPredicate::Ule | IntPredicate::Uge)) => 3,
+                    Some(Predicate::Int(_)) => 0,
+                    _ => 3,
+                };
+                (all(1, 1, 1, 1), extra)
+            }
+            CmpSel::Select => (all(2, 2, 3, 3), 0),
+            _ => return None,
+        };
+        row[kind.index()].map(|each| Cost::of(pieces * (extra + each)))
+    }
+
     /// `X86TTIImpl::getArithmeticInstrCost`, the SSE2 rows of the integer ops
     /// isel selects for every operand: `paddX`, `psubX`, `pand`, `por`, `pxor`
     /// cost one per register; the multiplies of 8-, 16- and 32-bit lanes are
@@ -1480,9 +1585,11 @@ impl Tti for X86 {
         }
     }
 
-    /// `X86TTIImpl::getCastInstrCost` for the integer extends and truncates (the SSE2 rows): the row of the exact
-    /// types, else of the legalized ones times the larger register count; a truncate to the type it already is, once
-    /// legalized, is free. Anything else (a float, a mask, a scalarized cast) is not priced.
+    /// `X86TTIImpl::getCastInstrCost` for the integer extends and truncates
+    /// (the SSE2 rows): the row of the exact types, else of the legalized
+    /// ones times the larger register count; a truncate to the type it already
+    /// is, once legalized, is free. Anything else (a float, a mask, a
+    /// scalarized cast) is not priced.
     fn vector_cast_cost(
         &self,
         kind: CastKind,
@@ -2207,6 +2314,18 @@ impl Tti for X86 {
     /// index make the model's best answer a loss in bytes and clocks too.
     fn should_drop_lsr_solution_if_less_profitable(&self) -> bool {
         self.real_mode.is_some()
+    }
+
+    /// DEVIATE WIDEN-COLD-CHREC: x86-64 (sieve O2/O3: +595 instructions of the
+    /// 15223 for 2 phis the scan loop steps for 11 marking-loop entries).
+    /// owner: llrm-target-x86-m16-b, exit: 2026-11-30, or when the pin
+    /// weighs the entry frequency.
+    fn avoids_cold_outer_addrec_expansion(&self) -> bool {
+        self.quad
+    }
+
+    fn lsr_drops_worse_solution_at_size(&self) -> bool {
+        self.tuning.lsr_drop_worse_at_size
     }
 
     /// DEVIATE LU14: real mode searches both use orders (rcflip's RAMP loop:
