@@ -220,8 +220,9 @@ fn decided(
                 // A pop's worth of bytes saved is not worth an instruction more
                 // at every call.
                 && words > 0
-                && sites.len() as i64 * costs.cleanup(words) + costs.pop >= returns * costs.return_pops)
-                .then_some((callee, twin))
+                && sites.len() as i64 * costs.cleanup(words) + costs.pop
+                    >= returns * costs.return_pops + lost_tail_cleanup(module, costs, layout, target, function))
+            .then_some((callee, twin))
         })
         .collect();
     let sites = chosen
@@ -229,6 +230,49 @@ fn decided(
         .flat_map(|(callee, &twin)| calls[callee].iter().map(move |&(caller, inst)| (caller, inst, twin)))
         .collect();
     (chosen, sites)
+}
+
+/// What popping its own arguments costs `function` in tail calls: each call
+/// that ends it, in its own convention, is a sibling `jmp` while the caller
+/// cleans, and a call, the cleanup of the callee's arguments and a `ret N`
+/// once the function pops (the callee's convention is not the twin's).
+fn lost_tail_cleanup(
+    module: &Module,
+    costs: &OperationCosts,
+    layout: &DataLayout,
+    target: &dyn Machine,
+    function: &llrm_mir::module::Function,
+) -> i64 {
+    let mut lost = 0;
+    for &block in function.layout() {
+        let insts: Vec<InstId> = function.iter_block(block).collect();
+        for pair in insts.windows(2) {
+            let (Opcode::Call(info), Opcode::Ret) =
+                (&function.instruction(pair[0]).opcode, &function.instruction(pair[1]).opcode)
+            else {
+                continue;
+            };
+            if !matches!(
+                info.tail,
+                llrm_mir::opcode::Tail::Tail | llrm_mir::opcode::Tail::MustTail
+            )
+                || info.calling_convention != function.calling_convention
+            {
+                continue;
+            }
+            let (_, parameters, variadic) = module.signature(info.function_type);
+            if variadic {
+                continue;
+            }
+            let arguments: Vec<Argument> =
+                parameters.iter().map(|&ty| argument_of(&module.context.types, layout, ty)).collect();
+            let bytes = target
+                .stack_argument_bytes(info.calling_convention, &arguments)
+                .unwrap_or_else(|| arguments.iter().map(|one| one.bytes.max(2)).sum());
+            lost += costs.cleanup((bytes + 1) / 2);
+        }
+    }
+    lost
 }
 
 /// What an argument of type `ty` is, for where a convention puts it.
