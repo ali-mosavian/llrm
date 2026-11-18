@@ -764,6 +764,16 @@ fn tail(
         }
         _ => text,
     };
+    // The bytes a trial prices are the finished text's: the outliner shares
+    // the repeated sequences of an unrolled body (static_pointers: 26 B of
+    // 174 modelled bytes, 16 of the rolled loop's 181), which the functions'
+    // own bytes leave out.
+    // `LLRM_6502_MODEL_BYTES` is the kill switch, for an A/B of one binary
+    if price && std::env::var_os("LLRM_6502_MODEL_BYTES").is_none() {
+        if let Ok(finished) = crate::timing::estimate(request.cpu, &text) {
+            bytes = i64::from(finished.bytes) + data_bytes(&data.0);
+        }
+    }
     Ok(Assembled { text: equates(&request.platform) + &files + &text + &data.0, clocks, bytes, functions })
 }
 
