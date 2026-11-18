@@ -549,6 +549,13 @@ pub fn encode(inst: &Inst) -> Result<Encoded, Error> {
                 if *lanes == Arrangement::D2 { (0b11, index & 1, 0) } else { (0b10, index >> 1, index & 1) };
             0x4F00_1000 | size << 22 | l << 21 | vreg(*rm)? << 16 | s << 14 | h << 11 | vreg(*rn)? << 5 | vreg(*rd)?
         }
+        Inst::ScalarFmaLane { op, lanes, rd, rn, rm, index } => {
+            let s = u32::from(*op == VectorFma::Sub);
+            let index = u32::from(*index);
+            let (size, h, l) =
+                if *lanes == Arrangement::D2 { (0b11, index & 1, 0) } else { (0b10, index >> 1, index & 1) };
+            0x5F00_1000 | size << 22 | l << 21 | vreg(*rm)? << 16 | s << 14 | h << 11 | vreg(*rn)? << 5 | vreg(*rd)?
+        }
         Inst::VectorPermute { kind, lanes, rd, rn, rm } => {
             let size = lanes.size();
             let base = 0x0E00_0800 | kind.opcode() << 12;

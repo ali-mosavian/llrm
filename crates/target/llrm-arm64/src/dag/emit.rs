@@ -939,6 +939,24 @@ fn vector_inst(
             _ => wrong(),
         });
     }
+    // `FMLAv1i64_indexed`: the scalar form, `rm` a vector.
+    for (stem, op) in [("FMLA", VectorFma::Add), ("FMLS", VectorFma::Sub)] {
+        let Some(lanes) =
+            name.strip_prefix(stem).and_then(|rest| rest.strip_suffix("_indexed")).and_then(|rest| match rest {
+                "v1i32" => Some(Arrangement::S4),
+                "v1i64" => Some(Arrangement::D2),
+                _ => None,
+            })
+        else {
+            continue;
+        };
+        return Some(match operands {
+            [Operand::Fpr(_), Operand::Fpr(rn), Operand::Fpr(rm), Operand::Imm(index)] => {
+                Ok(Inst::ScalarFmaLane { op, lanes, rd, rn: *rn, rm: *rm, index: *index as u8 })
+            }
+            _ => wrong(),
+        });
+    }
     for (stem, op) in [("FMLA", VectorFma::Add), ("FMLS", VectorFma::Sub)] {
         let Some(lanes) =
             name.strip_prefix(stem).and_then(|rest| rest.strip_suffix("_indexed")).and_then(|rest| match rest {
@@ -2454,6 +2472,7 @@ impl Emitter<'_> {
                     if let (
                         Inst::VectorFma { .. }
                         | Inst::VectorFmaLane { .. }
+                        | Inst::ScalarFmaLane { .. }
                         | Inst::VectorLong { op: VectorLongOp::Umlal | VectorLongOp::Smlal, .. }
                         | Inst::VectorShift { op: VectorShift::Usra | VectorShift::Ssra, .. }
                         | Inst::VectorNarrow { high: true, .. }
