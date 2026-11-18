@@ -449,6 +449,12 @@ pub struct Tuning {
     /// (`backwardthreading.rs`). The pin has neither; gcc's `threadfull1` and
     /// `vrp1` do both. false: the pin's pipeline.
     pub threads_by_relation: bool,
+    /// DEVIATE BACKTHREAD-M32 (owner x87-b, exit 2026-12-15): backward
+    /// threading (`backwardthreading.rs`, no LLVM pass) runs. false at m32:
+    /// of 121 programs it changes 13 at -O2/-O3 and moves none by more than
+    /// 0.2% in clocks, while its copies of a peeled ladder cost x_ld_matmul
+    /// -O3 +8.1% clocks and 1,615 B, queens -O3 +8.3% and 3,706 B.
+    pub backward_threading: bool,
     /// DEVIATE SPILL-FOLD (owner x86-m16, exit 2026-11-29): the clocks a
     /// spilled value costs where its references fold into memory operands,
     /// which `tryRegionSplit` weighs against the split's copies. The pin
@@ -896,6 +902,7 @@ impl Tuning {
         address_reference_milliweight: 1000,
         unroll_recurrence_veto: false,
         threads_by_relation: false,
+        backward_threading: true,
         spill_fold: None,
         unswitch_threshold: None,
         inline_threshold: None,

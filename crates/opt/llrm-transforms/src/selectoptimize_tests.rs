@@ -209,8 +209,8 @@ fn test_an_unsigned_compare_is_no_compare_for_a_signed_max() {
     assert!(text.contains("call i32 @llvm.smax"), "{text}");
 }
 
-/// x_ld_max -O2/-O3 on the i486: `if (a[i] > m) m = a[i]` over `long double` is a
-/// select on a carried chain; as branches it ran 12,818 -> 18,450 clk.
+/// x_ld_max -O2/-O3 on the i486: `if (a[i] > m) m = a[i]` over `long double` is
+/// a select on a carried chain; as branches it ran 12,818 -> 18,450 clk.
 #[test]
 fn test_a_select_of_an_x87_value_stays_where_the_target_leaves_them() {
     let fp80 = CARRIED
@@ -223,6 +223,6 @@ fn test_a_select_of_an_x87_value_stays_where_the_target_leaves_them() {
         .replace("ret i32 %s", "ret x86_fp80 %s");
     let (changed, text) = optimized(&fp80, |_| {});
     assert!(changed, "the premise: the pass takes it: {text}");
-    let (changed, text) = optimized(&fp80, |target| target.leave_x87_selects = true);
+    let (changed, text) = optimized(&fp80, |target| target.i486(16));
     assert!(!changed && text.contains("select i1"), "{text}");
 }

@@ -111,6 +111,20 @@ pub struct Target<'a> {
     pub leave_x87_selects: bool,
 }
 
+impl Target<'_> {
+    /// DEVIATE SELECT-OPT-I486: an in-order core with no conditional move; the
+    /// pin's own arms only, an integer min or max joining its compare's
+    /// group, and an `x86_fp80` select left as it is.
+    pub(crate) fn i486(
+        &mut self,
+        penalty: u64,
+    ) {
+        self.misprediction_penalty = penalty;
+        self.min_max_selects = true;
+        self.leave_x87_selects = true;
+    }
+}
+
 impl<'a> Target<'a> {
     /// The base classes' answers: every select supported, the 99% threshold,
     /// `MCSchedModel::DefaultMispredictPenalty`.
@@ -1370,11 +1384,7 @@ impl llrm_mir::passes::FunctionPass for SelectOptimizePass {
             target.misprediction_penalty = 16;
             target.constant_arm_selects = true;
         } else if let Some(penalty) = tti.select_optimize_penalty() {
-            // DEVIATE SELECT-OPT-I486: an in-order core with no conditional
-            // move; the pin's own arms only.
-            target.misprediction_penalty = penalty;
-            target.min_max_selects = true;
-            target.leave_x87_selects = true;
+            target.i486(penalty);
         }
         let outer = analyses.outer().clone();
         let env = Env {
