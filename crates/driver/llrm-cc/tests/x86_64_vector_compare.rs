@@ -65,3 +65,12 @@ fn a_strided_float_loop_gathers_in_registers() {
     assert!(loop_body.contains("unpcklps") && loop_body.contains("cvttps2dq"), "{loop_body}");
     assert!(!loop_body.contains("[rsp"), "the vector is built through the stack:\n{loop_body}");
 }
+
+/// `s + (mask & 1)` of a compare was `pand` and `paddd`; the pin folds it to `s
+/// - mask` (`foldAddSubMasked1`).
+#[test]
+fn a_count_of_compares_subtracts_the_mask() {
+    let text = assembly();
+    let count = body(&text, "count_less");
+    assert!(count.contains("psubd") && !count.contains("pand"), "{count}");
+}

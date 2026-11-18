@@ -255,6 +255,10 @@ impl X86Lowering<'_> {
 }
 
 impl CombineHooks for X86Lowering<'_> {
+    fn fold_add_sub_masked1(&self) -> bool {
+        true
+    }
+
     /// `X86TargetLowering::shouldNormalizeToSelectSequence` is true unless CCMP
     /// (APX) keeps the `and`/`or` tree.
     ///

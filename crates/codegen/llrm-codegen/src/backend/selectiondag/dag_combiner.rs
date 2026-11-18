@@ -622,6 +622,14 @@ pub trait CombineHooks {
         false
     }
 
+    /// `foldAddSubMasked1` ([`DagCombiner::fold_add_sub_masked1`]): the pin
+    /// folds it for every target. DEVIATE: on for the targets whose cells
+    /// were A/B-measured with it (x86); the others keep it off until theirs
+    /// are. Owner llrm-target-x86-m16-b, exit 2026-11-30.
+    fn fold_add_sub_masked1(&self) -> bool {
+        false
+    }
+
     /// `add x, (zext i1 y)` is `sub x, (sext i1 y)` where booleans are 0/-1:
     /// the sign extension of a compare is the cheaper one (`slt; extb.l` 4 B
     /// against `slt; and.l #1` 8 B on the 68020), and the pin's `sub x, (zext
@@ -3157,6 +3165,37 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         None
     }
 
+    /// `foldAddSubMasked1`
+    /// ([pin](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L2873)):
+    /// `n0 + (and x, 1)` where every bit of `x` is its sign (a boolean mask) is
+    /// `n0 - x`; `n0 - (and x, 1)` is `n0 + x`.
+    fn fold_add_sub_masked1(
+        &mut self,
+        is_add: bool,
+        n0: SDValue,
+        n1: SDValue,
+    ) -> Option<SDValue> {
+        let vt = self.dag.value_type(n0);
+        let mut n1 = n1;
+        if self.dag.opcode(n1) == ISD::ZeroExtend {
+            n1 = self.dag.operand(n1, 0);
+        }
+        if self.dag.opcode(n1) != ISD::And || self.dag.const_or_splat(self.dag.operand(n1, 1)) != Some(1) {
+            return None;
+        }
+        let mut masked = self.dag.operand(n1, 0);
+        if self.dag.value_type(masked) != vt && self.dag.opcode(masked) == ISD::Truncate {
+            masked = self.dag.operand(masked, 0);
+        }
+        if self.dag.value_type(masked) != vt
+            || super::known_bits::num_sign_bits(self.dag, masked)
+                != if vt.is_vector() { vt.element().size_in_bits() } else { vt.size_in_bits() }
+        {
+            return None;
+        }
+        Some(self.dag.get_node(if is_add { ISD::Sub } else { ISD::Add }, vt, &[n0, masked]))
+    }
+
     fn visit_add(
         &mut self,
         node: SDValue,
@@ -3232,6 +3271,12 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                     return Some(self.dag.get_node(ISD::Sub, vt, &[other, sext]));
                 }
             }
+        }
+        if self.hooks.fold_add_sub_masked1()
+            && let Some(folded) =
+                self.fold_add_sub_masked1(true, n0, n1).or_else(|| self.fold_add_sub_masked1(true, n1, n0))
+        {
+            return Some(folded);
         }
         if plain(self.dag, n1) {
             if self.dag.opcode(n0) == ISD::Sub {
@@ -4026,6 +4071,11 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         }
         if self.hooks.sub_algebra_folds()
             && let Some(folded) = self.fold_sub_algebra(vt, n0, n1)
+        {
+            return Some(folded);
+        }
+        if self.hooks.fold_add_sub_masked1()
+            && let Some(folded) = self.fold_add_sub_masked1(false, n0, n1)
         {
             return Some(folded);
         }

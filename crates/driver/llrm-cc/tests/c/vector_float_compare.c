@@ -29,3 +29,11 @@ int strided_sum(const struct rec *r, int n)
     for (int i = 0; i < n; i++) s += (int)r[i].a;
     return s;
 }
+
+/* `s + (mask & 1)` of a compare is `s - mask`: `psubd`, not `pand` and `paddd` (`foldAddSubMasked1`). */
+int count_less(const float *restrict a, const float *restrict b, int n)
+{
+    int s = 0;
+    for (int i = 0; i < n; i++) s += a[i] < b[i];
+    return s;
+}

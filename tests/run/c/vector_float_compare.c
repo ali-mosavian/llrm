@@ -29,6 +29,13 @@ static long to_int(int n)
     return s;
 }
 
+static long count_less(int n)
+{
+    int s = 0;
+    for (int i = 0; i < n; i++) s += A[i] < B[i];
+    return s;
+}
+
 static long to_float(int n)
 {
     for (int i = 0; i < n; i++) C[i] = (float)I[i];
@@ -49,6 +56,7 @@ int main(void)
         report(lt(n)); report(le(n)); report(gt(n)); report(ge(n)); report(eq(n)); report(ne(n));
         report(min_of(n));
         report(to_int(n));
+        report(count_less(n));
         report(to_float(n));
     }
     return 0;
