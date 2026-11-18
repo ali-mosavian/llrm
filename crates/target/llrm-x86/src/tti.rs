@@ -79,6 +79,11 @@ pub struct X86 {
     /// This is the inliner's size view (`Tti::inline_size_view`): `CodeSize`
     /// is bytes of 32-bit code (`sizes`), not the pin's units.
     pub size_bytes: bool,
+    /// A 32-bit integer register holds the vector `<2 x i16>` or `<4 x i8>`:
+    /// a loop of bitwise operations is widened by it, and the vectors are
+    /// lowered to the word before selection (gcc's `ix86_preferred_simd_mode`
+    /// with no SSE, `tree-vect-generic.cc`). Off: the pin has no such vector.
+    pub word_vectors: bool,
 }
 
 /// T6: the 16-bit target's address forms and registers, from its description
@@ -295,6 +300,7 @@ impl X86 {
                 issue_width: 0,
                 position_independent: std::cell::Cell::new(true),
                 size_bytes: false,
+                word_vectors: false,
             }),
             "core2" => Some(X86 {
                 cmov: true,
@@ -309,6 +315,7 @@ impl X86 {
                 issue_width: 4,
                 position_independent: std::cell::Cell::new(true),
                 size_bytes: false,
+                word_vectors: false,
             }),
             // `-march=x86-64`: the baseline of long mode, SSE2
             // and `TuningMacroFusion` (X86.td `X86_64V1Tuning`).
@@ -325,6 +332,7 @@ impl X86 {
                 issue_width: 4,
                 position_independent: std::cell::Cell::new(true),
                 size_bytes: false,
+                word_vectors: false,
             }),
             _ => None,
         }
@@ -356,6 +364,14 @@ impl X86 {
         registers: u32,
     ) -> X86 {
         X86 { registers: Some(registers), ..self.clone() }
+    }
+
+    /// The word is a vector register (`word_vectors`).
+    pub fn with_word_vectors(
+        &self,
+        word_vectors: bool,
+    ) -> X86 {
+        X86 { word_vectors, ..self.clone() }
     }
 
     /// The target's tuning table.
@@ -817,6 +833,14 @@ fn xmm_pieces(ty: VectorTy) -> Option<i64> {
     (ty.count.is_power_of_two() && total >= 128 && total % 128 == 0).then(|| (total / 128) as i64)
 }
 
+/// A vector of 8- or 16-bit integer lanes that fills a 32-bit word.
+fn is_word_vector(ty: VectorTy) -> bool {
+    match ty.lane {
+        Ty::Int(bits @ (8 | 16)) => u64::from(ty.count) * u64::from(bits) == 32,
+        _ => false,
+    }
+}
+
 impl Tti for X86 {
     fn name(&self) -> &'static str {
         "X86"
@@ -1235,6 +1259,10 @@ impl Tti for X86 {
         self.tuning.threads_by_relation
     }
 
+    fn backward_threading(&self) -> bool {
+        self.tuning.backward_threading
+    }
+
     fn x87_stack_slots(&self) -> Option<u32> {
         self.tuning.x87_stack_slots.filter(|_| !self.sse2)
     }
@@ -1354,6 +1382,11 @@ impl Tti for X86 {
         self.tuning.branch_constant_arm_selects
     }
 
+    fn select_optimize_penalty(&self) -> Option<u64> {
+        // Where a select is a conditional move, it is the cheaper form.
+        self.tuning.select_optimize_penalty.filter(|_| !self.cmov)
+    }
+
     fn indvars_widens_narrow_counter_through_masks(&self) -> bool {
         self.tuning.prefixed_16_bit_counters
     }
@@ -1418,8 +1451,11 @@ impl Tti for X86 {
         self.tuning.add_to_or_disjoint
     }
 
+    /// A word vector is a speed trade of a few bytes (the vector body, its
+    /// remainder and the splat); at -Os the bytes rank first, as in gcc, which
+    /// does not vectorize there.
     fn vectorizes_at_size(&self) -> bool {
-        self.tuning.vectorize_at_size
+        self.tuning.vectorize_at_size && (self.vector_values() || !self.word_vectors)
     }
 
     fn should_maximize_vector_bandwidth(&self) -> bool {
@@ -1458,7 +1494,23 @@ impl Tti for X86 {
     /// register. Only where the 128-bit integer vectors are taken
     /// (`vector_values`): the others stay scalar and read 0.
     fn vector_register_bits(&self) -> u32 {
-        if self.vector_values() { 128 } else { 0 }
+        if self.vector_values() {
+            128
+        } else if self.word_vectors {
+            32
+        } else {
+            0
+        }
+    }
+
+    fn word_vectors(&self) -> bool {
+        self.word_vectors
+    }
+
+    /// A word vector has no horizontal step: `vectorlower` takes no `llvm.vector.reduce.*`,
+    /// so a loop with a reduction stays scalar (the pin's `ExpandReductions` has no word-mode form).
+    fn lowers_vector_reductions(&self) -> bool {
+        self.vector_values() || !self.word_vectors
     }
 
     /// `X86TTIImpl::getNumberOfRegisters`: 16 in long mode, for the general
@@ -1467,7 +1519,13 @@ impl Tti for X86 {
         &self,
         _class: RegisterClass,
     ) -> u32 {
-        if self.vector_values() { 16 } else { 0 }
+        if self.vector_values() {
+            16
+        } else if self.word_vectors {
+            4
+        } else {
+            0
+        }
     }
 
     /// `X86TTIImpl::getMaxInterleaveFactor`: a scalar loop is left to the
@@ -1493,7 +1551,8 @@ impl Tti for X86 {
         kind: CostKind,
     ) -> Option<Cost> {
         if !self.vector_values() {
-            return None;
+            // a word vector is one `mov` of a dword, the scalar load's price
+            return (self.word_vectors && is_word_vector(ty)).then(|| Cost::of(1));
         }
         let pieces = xmm_pieces(ty)?;
         // Every other kind is `TCC_Basic` ("TODO: Handle other cost kinds"), a
@@ -1556,7 +1615,9 @@ impl Tti for X86 {
         kind: CostKind,
     ) -> Option<Cost> {
         if !self.vector_values() {
-            return None;
+            // only the bitwise operations act lane by lane on a word
+            return (self.word_vectors && is_word_vector(ty) && matches!(op, ArithOp::And | ArithOp::Or | ArithOp::Xor))
+                .then(|| Cost::of(1));
         }
         match op {
             ArithOp::Add | ArithOp::Sub | ArithOp::And | ArithOp::Or | ArithOp::Xor => xmm_pieces(ty).map(Cost::of),

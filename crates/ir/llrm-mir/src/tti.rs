@@ -688,6 +688,15 @@ pub trait Tti {
         false
     }
 
+    /// A general register holds a vector of lanes narrower than itself: the
+    /// vectorizer widens bitwise loops by it, and the vectors are lowered to
+    /// the integer of their width before selection
+    /// (`crate::vectorlower`, gcc's `tree-vect-generic.cc`). Where the target
+    /// has vector registers the vectors stay.
+    fn word_vectors(&self) -> bool {
+        false
+    }
+
     /// `getRegisterBitWidth(RGK_Scalar)`: the bits of a scalar register, 0
     /// where the target does not say.
     fn scalar_register_bits(&self) -> u32 {
@@ -1795,6 +1804,11 @@ pub trait Tti {
         false
     }
 
+    /// `Tuning::backward_threading`.
+    fn backward_threading(&self) -> bool {
+        true
+    }
+
     /// What a byte of code is worth in thousandths of a clock at speed, where
     /// the target trades bytes for clocks; 0: it does not.
     fn speed_milliclocks_per_byte(&self) -> i64 {
@@ -2132,6 +2146,13 @@ pub trait Tti {
     /// `Tuning::sink_select_arms`.
     fn sinks_select_arms(&self) -> bool {
         false
+    }
+
+    /// `Tuning::select_optimize_penalty`: `SelectOptimize` runs (the pin's
+    /// `llc` leaves it off) and a mispredicted branch costs this many
+    /// clocks.
+    fn select_optimize_penalty(&self) -> Option<u64> {
+        None
     }
 
     /// `Tuning::branch_constant_arm_selects`.

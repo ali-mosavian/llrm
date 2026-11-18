@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/deadstore.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/deadstore.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/deadstore.rs sha256:1c328ba65fb42943858887bc5f6a1d317b7d26fd9759aeffeea9227211f8d6a1 -->
+<!-- src: crates/opt/llrm-transforms/src/deadstore.rs sha256:f843060bc12b49f279b06a16383e69c3f6b6c0681b55d8dcce236609f803db3c -->
 
 # deadstore
 
@@ -58,9 +58,10 @@ overwrites (`isPartialOverwrite`, `IOLs`,
 `eliminateRedundantStoresOfExistingValues` are in, and a call's
 `initializes` (`Accesses::fills`, which holds `getInitializesArgMemLoc`'s
 argument and capture rules; nothing unwinds). Exit: stage 2.
-DEVIATE 5: only stores and constant-length memsets are candidates, and
-`storeIsNoop` knows no `getInitialValueOfAllocation` (it needs `calloc`
-and friends). Exit: stage 2.
+DEVIATE 5: only stores, constant-length memsets and calls that only write
+their one pointer argument (`getForDest`) are candidates, and `storeIsNoop`
+knows no `getInitialValueOfAllocation` (it needs `calloc` and friends).
+Exit: stage 2.
 DEVIATE 6: a call that initializes an object keeps the earlier writes to it
 when a pointer into the object also reaches the call through another
 argument (the pin trusts `initializes`: the callee reads before it writes

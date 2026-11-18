@@ -749,7 +749,11 @@ fn tail(
     // that beat the other compilers', and bytes come first (row
     // 6502-OUTLINE-CLOCKS). At -Os the pass is the pin's, bytes alone.
     let rate = (request.level == Level::O1).then(|| request.level.tuning().clocks_per_byte);
-    let text = if outlined { crate::outline::run_at(&text, rate) } else { text };
+    // at -O2 and -O3 a place outside every loop is given up by the share of the
+    // module's clocks its calls add against the share of its bytes they
+    // save (`[share.speed] outline`)
+    let share = matches!(request.level, Level::O2 | Level::O3).then(|| crate::routines::speed_share_percent("outline"));
+    let text = if outlined { crate::outline::run_priced(&text, rate, share) } else { text };
     let text = if request.level != Level::O0 { crate::peephole::after_outlining(&text) } else { text };
     let text = match request.platform.static_zero_page {
         0 => text,
@@ -765,6 +769,16 @@ fn tail(
         }
         _ => text,
     };
+    // The bytes a trial prices are the finished text's: the outliner shares
+    // the repeated sequences of an unrolled body (static_pointers: 26 B of
+    // 174 modelled bytes, 16 of the rolled loop's 181), which the functions'
+    // own bytes leave out.
+    // `LLRM_6502_MODEL_BYTES` is the kill switch, for an A/B of one binary
+    if price && std::env::var_os("LLRM_6502_MODEL_BYTES").is_none() {
+        if let Ok(finished) = crate::timing::estimate(request.cpu, &text) {
+            bytes = i64::from(finished.bytes) + data_bytes(&data.0);
+        }
+    }
     Ok(Assembled { text: equates(&request.platform) + &files + &text + &data.0, clocks, bytes, functions })
 }
 

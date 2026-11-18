@@ -1205,9 +1205,10 @@ fn priced(
     crate::weights::run_cost(first.cpu, &names, texts, &weights)
 }
 
-/// Whether a module at speed keeps the speed 16-bit divisions: the share of its
-/// clocks they save is at least `[share] percent_per_percent` times the share
-/// of its bytes they add (the image they link).
+/// Whether a module at speed keeps the speed 16-bit divisions: the clocks they
+/// save reach `clocks_per_byte` for each byte they add, and the share of the
+/// module's clocks they save is at least `[share.speed] division16` times the
+/// share of its bytes they add (the image they link).
 ///
 /// DEVIATE 6502-DIV-16 (owner llrm-target-6502, exit 2026-11-24): the pin's
 /// `__udivhi3` is one routine. Reason: bytes first on this target at every
@@ -1220,15 +1221,41 @@ fn speed_division16_pays(
     compact: &[String],
 ) -> Result<bool, String> {
     let names: Vec<String> = parts.iter().map(|(name, _)| (*name).to_owned()).collect();
-    let growth = crate::mulimage::image_bytes(&crate::mulimage::image_of_texts(&names, speed))
-        - crate::mulimage::image_bytes(&crate::mulimage::image_of_texts(&names, compact));
-    let (clocks, bytes) = priced(module, parts, compact)?;
+    let compact_image = crate::mulimage::image_bytes(&crate::mulimage::image_of_texts(&names, compact));
+    let growth = crate::mulimage::image_bytes(&crate::mulimage::image_of_texts(&names, speed)) - compact_image;
+    let (clocks, code) = priced(module, parts, compact)?;
+    // the program is its code and the routines it links: the growth is a share
+    // of both
+    let bytes = code + compact_image.max(0) as u64;
     // the priced clocks leave out the routine's own run
-    let runs = crate::hotdivision::runs16(module);
+    let layout =
+        llrm_mir::datalayout::DataLayout::parse(module.datalayout.as_deref().ok_or("a module with no datalayout")?)?;
+    let weights: std::collections::HashMap<usize, Vec<u64>> = module
+        .globals
+        .iter()
+        .enumerate()
+        .filter_map(|(index, global)| match &global.kind {
+            llrm_mir::module::GlobalKind::Function(function) if function.entry().is_some() => {
+                Some((index, crate::weights::block_weights(module, function, &layout)))
+            }
+            _ => None,
+        })
+        .collect();
+    let runs = crate::hotdivision::runs16_priced(module, &weights);
     let cpu = parts.first().map_or(crate::dagisel::hooks::Cpu::Mos6502, |(_, selection)| selection.cpu);
     let clocks = clocks + (runs * crate::hotdivision::clocks_compact_16(cpu)) as u64;
     let saved = (runs * crate::hotdivision::saved_at_speed_16(cpu)) as u64;
-    Ok(crate::mulimage::pays_by_share((saved, growth), clocks, bytes))
+    // a cold division repays nothing: the clocks saved over the run must reach
+    // the rate every size-reducing choice of the target is made at, and
+    // then the share rule holds the growth to the module
+    let repays = saved >= growth.max(0) as u64 * u64::from(crate::alloc::Tuning::SPEED.clocks_per_byte);
+    Ok(repays
+        && crate::mulimage::pays_by_share_at(
+            crate::routines::speed_share_percent("division16"),
+            (saved, growth),
+            clocks,
+            bytes,
+        ))
 }
 
 /// At size the speed long divisions (the small wide path, bytes by the image

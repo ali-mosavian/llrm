@@ -35,7 +35,7 @@ fn run_with_options(
 ) -> String {
     let mut module = parsed(source);
     let mut manager = llrm_mir::passes::PassManager::default();
-    manager.add(LoopVectorize { always: true, only_when_forced: false, compares, interleaves });
+    manager.add(LoopVectorize { always: true, only_when_forced: false, compares, interleaves, very_cheap: false });
     manager
         .run_module(
             &mut module,
@@ -276,7 +276,13 @@ fn a_tiny_trip_count_is_not_interleaved() {
 fn a_loop_is_left_alone_when_only_forced_loops_are_vectorized() {
     let mut module = crate::testing::parsed(COPY);
     let mut manager = llrm_mir::passes::PassManager::default();
-    manager.add(LoopVectorize { always: true, only_when_forced: true, compares: false, interleaves: false });
+    manager.add(LoopVectorize {
+        always: true,
+        only_when_forced: true,
+        compares: false,
+        interleaves: false,
+        very_cheap: false,
+    });
     manager
         .run_module(
             &mut module,
@@ -422,7 +428,13 @@ fn run_x86_tuned(
     let tti = llrm_x86::tti::X86::of_cpu("x86-64").unwrap().with_tuning(tuning);
     let mut module = parsed(source);
     let mut manager = llrm_mir::passes::PassManager::default();
-    manager.add(LoopVectorize { always: true, only_when_forced: false, compares: false, interleaves: false });
+    manager.add(LoopVectorize {
+        always: true,
+        only_when_forced: false,
+        compares: false,
+        interleaves: false,
+        very_cheap: false,
+    });
     manager.run_module(&mut module, std::rc::Rc::new(X86At(std::rc::Rc::new(tti)))).unwrap();
     crate::testing::printed(&module)
 }
@@ -1407,7 +1419,13 @@ fn the_widened_early_exit_loop_finds_what_the_scalar_one_finds() {
     let scalar = crate::testing::parsed(EARLY_EXIT_FIND);
     let mut module = crate::testing::parsed(EARLY_EXIT_FIND);
     let mut manager = llrm_mir::passes::PassManager::default();
-    manager.add(LoopVectorize { always: true, only_when_forced: false, compares: true, interleaves: false });
+    manager.add(LoopVectorize {
+        always: true,
+        only_when_forced: false,
+        compares: true,
+        interleaves: false,
+        very_cheap: false,
+    });
     let machine = llrm_arm64::machine::Arm64Machine { platform: llrm_arm64::machine::Platform::Linux };
     manager.run_module(&mut module, std::rc::Rc::new(machine)).unwrap();
     let text = crate::testing::printed(&module);
