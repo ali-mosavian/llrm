@@ -214,8 +214,17 @@ impl Facts {
 fn operands(one: &Insn) -> Option<(u32, Held, Held)> {
     let what = one.what.as_ref()?;
     let associative = match what.op {
-        Operation::Binary => matches!(what.name.as_deref(), Some("add" | "and" | "or" | "xor")),
-        Operation::Multiply => what.name.as_deref() == Some("imul"),
+        Operation::Binary => matches!(
+            what.name.as_deref(),
+            Some(
+                "add" | "and" | "or" | "xor"
+                    // The packed forms `isAssociativeAndCommutative` lists (the
+                    // integer and the bitwise float ones).
+                    | "pand" | "por" | "pxor" | "andps" | "andpd" | "orps" | "orpd" | "xorps" | "xorpd"
+                    | "paddb" | "paddw" | "paddd" | "paddq" | "pmullw"
+            )
+        ),
+        Operation::Multiply => matches!(what.name.as_deref(), Some("imul" | "pmullw")),
         _ => false,
     };
     let ([Loc::Held(dest)], [Loc::Held(left), Loc::Held(right)]) = (&what.dests[..], &what.sources[..]) else {
@@ -554,7 +563,7 @@ mod tests {
         left: u32,
         right: u32,
     ) -> Arc<Insn> {
-        let op = if name == "imul" { Operation::Multiply } else { Operation::Binary };
+        let op = if matches!(name, "imul" | "pmullw") { Operation::Multiply } else { Operation::Binary };
         insn(
             i64::from(value),
             op,
@@ -616,8 +625,11 @@ mod tests {
                 match name {
                     "add" => left.wrapping_add(right),
                     "sub" => left.wrapping_sub(right),
-                    "xor" => left ^ right,
-                    "imul" => left.wrapping_mul(right),
+                    "xor" | "pxor" | "xorps" | "xorpd" => left ^ right,
+                    "and" | "pand" | "andps" | "andpd" => left & right,
+                    "or" | "por" | "orps" | "orpd" => left | right,
+                    "paddb" | "paddw" | "paddd" | "paddq" => left.wrapping_add(right),
+                    "imul" | "pmullw" => left.wrapping_mul(right),
                     other => panic!("{other}"),
                 }
             }
@@ -646,6 +658,29 @@ mod tests {
             assert!(left == 9 || right == 9, "{name}: the load is an operand of the root: {left} {right}");
             let early = if left == 9 { right } else { left };
             assert_ne!(early, 11, "{name}: the root no longer reads the old middle sum");
+            assert_eq!(evaluate(&old, 12), evaluate(&new, 12), "{name}: the value is the same");
+        }
+    }
+
+    /// A serial sum of packed lanes (`paddd`) is rebuilt like the scalar one:
+    /// the pin's `isAssociativeAndCommutative` lists the packed integer and
+    /// bitwise forms. Left whole, sfm16_float_cmp's 12-term `paddd` chain made
+    /// every compare result wait for its turn in the sum (20 live xmm against
+    /// 16), so the mask constants were reloaded in the loop.
+    #[test]
+    fn a_chain_of_packed_operations_is_rebuilt_too() {
+        for name in [
+            "paddb", "paddw", "paddd", "paddq", "pand", "por", "pxor", "andps", "andpd", "orps", "orpd", "xorps",
+            "xorpd", "pmullw",
+        ] {
+            // The packed forms are known to x86-64's effect tables only.
+            let mut before = late_chain(name);
+            before.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m64::REGISTER_INFO));
+            let after = combined(before.clone());
+            let (old, new) = (result(&before), result(&after));
+            let (op, left, right) = defining(&new, 12);
+            assert_eq!(op, name);
+            assert!(left == 9 || right == 9, "{name}: the load is an operand of the root: {left} {right}");
             assert_eq!(evaluate(&old, 12), evaluate(&new, 12), "{name}: the value is the same");
         }
     }

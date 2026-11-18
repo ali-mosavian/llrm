@@ -199,9 +199,56 @@ pub fn shrunk(
             }
         }
     }
+    // A phi's result and arguments are one register class (the pin gives the
+    // phi's vreg the class its operands' definitions have): a value of a web
+    // that nothing confines takes the set of a member that is.
     let class_of = |value: u32| -> Class {
-        let confined = confined.get_or_init(|| regclass::classes(body, &BTreeSet::new(), segments, registers));
-        (confined.get(&value).cloned(), widths.get(&value).copied())
+        let (confined, webs) = confined.get_or_init(|| {
+            let confined = regclass::classes(body, &BTreeSet::new(), segments, registers);
+            let mut root: IndexMap<u32, u32> = IndexMap::default();
+            fn find(
+                root: &mut IndexMap<u32, u32>,
+                value: u32,
+            ) -> u32 {
+                let mut at = value;
+                while let Some(&up) = root.get(&at) {
+                    if up == at {
+                        break;
+                    }
+                    at = up;
+                }
+                root.insert(value, at);
+                at
+            }
+            for phi in body.blocks.iter().flat_map(|block| block.phis.iter()) {
+                let top = find(&mut root, phi.result);
+                for &(_, value) in &phi.incoming {
+                    let other = find(&mut root, value);
+                    if other != top {
+                        root.insert(other, top);
+                    }
+                }
+            }
+            let members: Vec<u32> = root.keys().copied().collect();
+            let mut webs: IndexMap<u32, BTreeSet<llrm_lir::registers::RegId>> = IndexMap::default();
+            for value in members {
+                if let Some(set) = confined.get(&value) {
+                    let top = find(&mut root, value);
+                    webs.entry(top).or_insert_with(|| set.clone());
+                }
+            }
+            let tops: IndexMap<u32, u32> = root
+                .keys()
+                .copied()
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|value| (value, find(&mut root, value)))
+                .collect();
+            (confined, (tops, webs))
+        });
+        let (tops, sets) = webs;
+        let own = confined.get(&value).cloned().or_else(|| tops.get(&value).and_then(|top| sets.get(top)).cloned());
+        (own, widths.get(&value).copied())
     };
     let mut changed = false;
     let blocks: Vec<Block> = body
@@ -544,6 +591,36 @@ mod tests {
         });
         let before = body(vec![entry, constant(1, 12), add(2, 13, 10, 11), ret(3)]);
         assert_eq!(defines(&shrink(&before)), [10, 11, 12, 13]);
+    }
+
+    /// An accumulator that is a phi has no register set of its own, so its
+    /// class never equalled that of the `psubd` it feeds, and the `psubd`
+    /// stayed below the unrelated definitions after its compare
+    /// (sfm16_float_cmp: 12 compares ahead of the 12 sums, 20 live xmm
+    /// against 16, the masks reloaded in the loop). The pin gives the phi
+    /// its operands' class.
+    #[test]
+    fn test_a_phi_takes_the_class_of_the_values_it_joins() {
+        let wide = |value: u32| Loc::Held(Held { value, width: 16, offset: 0 });
+        let load = |at: i64, into: u32| {
+            insn(
+                at,
+                Operation::Move,
+                "movaps",
+                vec![wide(into)],
+                vec![Loc::Mem(llrm_lir::Mem::new(None, 16))],
+                vec![into],
+                vec![],
+            )
+        };
+        let sub = insn(4, Operation::Binary, "psubd", vec![wide(30)], vec![wide(10), wide(24)], vec![30], vec![10, 24]);
+        let mut block = LirBlock::new(0, vec![load(0, 20), load(1, 24), load(2, 25), load(3, 26), sub, ret(5)]);
+        block.phis = vec![Phi { result: 10, incoming: vec![(-1, 20)] }].into();
+        let mut before = LirBody::new("f", 0, vec![block.into()], IndexMap::default(), IndexMap::default());
+        before.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m64::REGISTER_INFO));
+        let registers = RegisterClasses::of(&llrm_x86_m64::M64);
+        let after = shrunk(&before, &crate::backend::target::BUILT_IN, &registers);
+        assert_eq!(defines(&after), [20, 24, 30, 25, 26]);
     }
 
     /// A value read twice is not shortened by the move.
