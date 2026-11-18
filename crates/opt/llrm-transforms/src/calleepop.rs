@@ -222,7 +222,7 @@ fn decided(
                 && words > 0
                 && sites.len() as i64 * costs.cleanup(words) + costs.pop
                     >= returns * costs.return_pops
-                        + sibling_calls_lost(module, layout, costs, target, function, bytes))
+                        + sibling_calls_lost(module, layout, costs, target, function))
             .then_some((callee, twin))
         })
         .collect();
@@ -234,21 +234,19 @@ fn decided(
 }
 
 /// CP-TAIL: what a callee-pops convention costs `function` in sibling calls.
-/// A call in tail position to a function that cleans up after itself, whose
-/// arguments fit in the stack words `function` was itself called with, is a
-/// jump that reuses them; once `function` pops its own arguments its return
-/// is `ret N` and the jump would leave the callee's cleanup to a caller that
-/// does not make it, so the call is made, with its arguments pushed again and
-/// cleaned up (`twice` at m16 -Os: 200 to 205 B). The pin's `fastcc` change
-/// does not see it either; GCC's `-foptimize-sibling-calls` runs before the
-/// callee's convention is chosen.
+/// A call in tail position to a function that cleans up after itself, passing
+/// the stack words `function` was itself called with, is a jump that reuses
+/// them; once `function` pops its own arguments its return is `ret N`, which a
+/// jump to a callee that does not pop would leave unpaid, so the call is made,
+/// its arguments pushed again and cleaned up (`twice` at m16 -Os: 200 to
+/// 205 B). The pin's `fastcc` change does not see it either; GCC's
+/// `-foptimize-sibling-calls` runs before the callee's convention is chosen.
 fn sibling_calls_lost(
     module: &Module,
     layout: &DataLayout,
     costs: &OperationCosts,
     target: &dyn Machine,
     function: &llrm_mir::module::Function,
-    own_bytes: i64,
 ) -> i64 {
     let mut lost = 0;
     for &block in function.layout() {
@@ -257,25 +255,25 @@ fn sibling_calls_lost(
         let (called, returned) = (function.instruction(call), function.instruction(ret));
         let Opcode::Call(info) = &called.opcode else { continue };
         if !matches!(returned.opcode, Opcode::Ret)
-            || returned.operands.first().map(|one| one) != called.result.map(Operand::Value).as_ref()
+            || returned.operands.first() != called.result.map(Operand::Value).as_ref()
+            || !matches!(
+                called.operands.last(),
+                Some(Operand::Constant(id)) if matches!(module.context.get(*id).kind, ConstantKind::Global(_))
+            )
+            || !llrm_mir::callgraph::passes_own_parameters(function, call)
+            // the callee already pops: the jump was never one
+            || target.callee_pop(info.calling_convention).is_none()
         {
             continue;
         }
-        let Some((&Operand::Constant(id), arguments)) = called.operands.split_last() else { continue };
-        if !matches!(module.context.get(id).kind, ConstantKind::Global(_)) {
-            continue;
-        }
-        if target.callee_pop(info.calling_convention).is_none() {
-            continue; // the callee already pops: the jump was never one
-        }
-        let bytes: i64 = arguments
+        let bytes: i64 = called
+            .operands
+            .split_last()
+            .map_or(&[][..], |(_, arguments)| arguments)
             .iter()
             .filter_map(|&one| function.operand_type(&module.context, one))
             .map(|ty| layout.alloc_size(&module.context.types, ty) as i64)
             .sum();
-        if bytes > own_bytes {
-            continue;
-        }
         let words = (bytes + 1) / 2;
         lost += words * costs.argument + costs.cleanup(words);
     }

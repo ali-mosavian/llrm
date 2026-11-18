@@ -68,6 +68,10 @@ fn a_function_that_ends_in_a_sibling_call_keeps_the_caller_cleaning_at_size() {
     // The last call takes more than the function was given: no jump either way.
     let wider = run_for(&twice("  call void @report(i32 %v)\n  call void @report2(i32 %v, i32 %v)\n"), true);
     assert!(wider.contains("define internal fastcc void @twice"), "{wider}");
+    // The last call takes a new value, not the function's own argument: the
+    // backend makes that call (`four` in shl_long_by_one: `ret 4` kept).
+    let fresh = run_for(&twice("  call void @report(i32 %v)\n  call void @report(i32 7)\n"), true);
+    assert!(fresh.contains("define internal fastcc void @twice"), "{fresh}");
     // The same function without a call at its end pops.
     let plain =
         run_for(&twice("  call void @report(i32 %v)\n  call void @report(i32 %v)\n  store i32 1, ptr @g\n"), true);
