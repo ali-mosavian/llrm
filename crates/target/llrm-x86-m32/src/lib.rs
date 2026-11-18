@@ -871,6 +871,19 @@ mod tests {
         assert!(tuning.unroll_trial_at_o1.is_some() && tuning.unroll_trial_nests_only);
     }
 
+    /// QuickrBasic `repl.c` -O2: ipa-cp cloned `read_file` eight times (a
+    /// recursion whose chain benefit compounds, 3e12 for 40 clocks a call):
+    /// 16,336 B against 10,738 B with `-fno-ipa-cp-clone`, gcc 6,025. gcc and the
+    /// pin make no clone at -O2; -O3 clones as gcc does.
+    #[test]
+    fn test_m32_makes_no_ipa_cp_clones_at_o2() {
+        use llrm_mir::tti::Tti;
+        let tuning = super::tuning(&llrm_mir::target::OperationCosts::default());
+        let tti = llrm_x86::tti::X86::of_cpu("i486").unwrap().with_tuning(tuning);
+        assert!(tti.ipa_cp_clones_at_speed(), "-O3 clones");
+        assert!(!tti.ipa_cp_clones_at_o2(), "-O2 does not");
+    }
+
     /// -O3 copied a recursion to depth 8 with the loop first, gcc's setting,
     /// while -O2 copies to depth 2 with the tree first. Over 12 recursion
     /// programs -O3 was bigger by 5556 B and ran 1.12 M more instructions than
