@@ -1975,6 +1975,11 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE LC-SIZE: `Tuning::last_call_at_cold_sites_for_size`.
+    fn last_call_at_cold_sites_for_size(&self) -> bool {
+        false
+    }
+
     /// DEVIATE BFS-1: `Tuning::cold_site_ignores_sinks`.
     fn cold_site_ignores_sinks(&self) -> bool {
         false

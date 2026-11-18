@@ -673,6 +673,9 @@ impl llrm_target::Target for M64 {
                                 wide_piece: 8,
                                 narrow_piece: 6,
                             }),
+                            // DEVIATE LC-SIZE (owner llrm-target-x86-m16-b,
+                            // exit 2026-11-30): see Tuning.
+                            last_call_at_cold_sites_for_size: true,
                             // DEVIATE IMM-1 (owner greedy-os-causes, exit
                             // 2026-11-20): see Tuning.
                             immediate_forms_at_size: true,
