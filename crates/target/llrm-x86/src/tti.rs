@@ -1337,6 +1337,18 @@ impl Tti for X86 {
         self.tuning.inline_variable_memcpy
     }
 
+    fn memory_limits(&self) -> llrm_mir::target::Tuning {
+        llrm_mir::target::Tuning {
+            max_stores_per_memset: self.tuning.max_stores_per_memset,
+            max_stores_per_memset_opt_size: self.tuning.max_stores_per_memset_opt_size,
+            max_stores_per_memcpy: self.tuning.max_stores_per_memcpy,
+            max_stores_per_memcpy_opt_size: self.tuning.max_stores_per_memcpy_opt_size,
+            max_stores_per_memmove: self.tuning.max_stores_per_memmove,
+            max_stores_per_memmove_opt_size: self.tuning.max_stores_per_memmove_opt_size,
+            ..llrm_mir::target::Tuning::PIN
+        }
+    }
+
     fn copy_price_for_size(&self) -> Option<llrm_mir::target::CopyPrice> {
         self.tuning.size_copy_price
     }

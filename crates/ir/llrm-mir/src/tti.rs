@@ -841,8 +841,9 @@ pub trait Tti {
         true
     }
 
-    /// The loop vectorizer narrows `mul i64 (ext a), (ext b)` to the smallest multiply that holds
-    /// the product (gcc's `vect_recog_widen_mult_pattern`): a target with no 64-bit vector
+    /// The loop vectorizer narrows `mul i64 (ext a), (ext b)` to the smallest
+    /// multiply that holds the product (gcc's
+    /// `vect_recog_widen_mult_pattern`): a target with no 64-bit vector
     /// multiply. DEVIATE LVW1 (owner llrm-target-x86-m16-b, exit 2026-11-30).
     fn narrows_widening_multiplies(&self) -> bool {
         false
@@ -2135,6 +2136,13 @@ pub trait Tti {
     /// `Tuning::inline_variable_memcpy`.
     fn inlines_variable_memcpy(&self) -> bool {
         false
+    }
+
+    /// The limits of a constant fill or copy the selection reads
+    /// (`Tuning::max_stores_per_*`): the pin's, unless the target states its
+    /// own.
+    fn memory_limits(&self) -> crate::target::Tuning {
+        crate::target::Tuning::PIN
     }
 
     /// `Tuning::size_copy_price`.
