@@ -107,9 +107,13 @@ const CLOCKS_PER_WORK: f64 = 0.3;
 const CLOCKS_PER_DIVIDE: f64 = 8.0;
 
 /// Percent of its clocks a module must save for each percent of its bytes the
-/// expansion adds (SD535). The 6502 asks 4 for its speed multiply; a divide is
-/// priced by the module's own corpus at -Os.
-const SHARE_PERCENT_PER_PERCENT: f64 = 1.0;
+/// expansion adds (SD535): the 6502's `[share] percent_per_percent` for its
+/// speed multiply at -Os. At 1 (break-even) recpow and switch expanded, +39%
+/// and +22% bytes for -15% and -17% clocks that stay over gcc's bytes; at 4
+/// only the four cells whose bytes grow by under 8% expand (frames, jpeg_fixed,
+/// nbody_fixed, stft_fixed). The static price cannot see a divide overlap, so
+/// the threshold, not the price, keeps the rest.
+const SHARE_PERCENT_PER_PERCENT: f64 = 4.0;
 
 /// Whether the compile that expands a divide by a constant (`expanded`) is
 /// kept over the one that keeps the divides (`divided`): it is no larger, or
