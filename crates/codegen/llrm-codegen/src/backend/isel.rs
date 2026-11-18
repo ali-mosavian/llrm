@@ -366,6 +366,9 @@ struct Passing {
     /// The description's entry, where the convention passes arguments in
     /// registers.
     registers: Option<&'static llrm_target::calling::Convention>,
+    /// The description's entry, where the convention keeps the stack for every
+    /// argument but those marked `inreg`.
+    inreg: Option<&'static llrm_target::calling::Convention>,
 }
 
 /// The entry of the target's `calling.toml` that `convention` is: `ccc` is the
@@ -391,9 +394,9 @@ fn passing(
 ) -> Result<Passing, Unselected> {
     use llrm_target::calling::{Cleanup, Order};
     match convention {
-        llrm_mir::opcode::BASIC => Ok(Passing { in_order: true, pops: true, registers: None }),
+        llrm_mir::opcode::BASIC => Ok(Passing { in_order: true, pops: true, registers: None, inreg: None }),
         // Its parameters are the registers its frame saved; iret pops the rest.
-        llrm_mir::opcode::X86_INTR => Ok(Passing { in_order: false, pops: false, registers: None }),
+        llrm_mir::opcode::X86_INTR => Ok(Passing { in_order: false, pops: false, registers: None, inreg: None }),
         // The compiler's own, for a function it sees every caller of: the
         // target's order, the callee pops.
         _ => {
@@ -410,6 +413,7 @@ fn passing(
                 in_order: found.order == Order::LeftToRight,
                 pops,
                 registers: Some(found).filter(|found| !found.argument_registers.is_empty()),
+                inreg: Some(found).filter(|found| !found.inreg_registers.is_empty()),
             })
         }
     }
@@ -595,7 +599,7 @@ pub fn convention_for_abi(
 ) -> Result<Convention, Unselected> {
     in_the_frame(parameter_attrs)?;
     let interrupt = calling_convention == llrm_mir::opcode::X86_INTR;
-    let Passing { in_order, pops, registers } = passing(arch, calling_convention, variadic)?;
+    let Passing { in_order, pops, registers, inreg } = passing(arch, calling_convention, variadic)?;
     let types = &module.context.types;
     let sizes = param_types
         .iter()
@@ -703,6 +707,43 @@ pub fn convention_for_abi(
             });
         }
         cursor = first + hidden + placed.stack_bytes;
+    } else if let Some(entry) = inreg.filter(|_| !variadic && !in_order) {
+        // `CC_X86_32_C`: an `inreg` integer or pointer takes the next of the
+        // registers while one is free (an i64 is two i32 parts, both in
+        // registers or, here, both on the stack); the rest is on the stack.
+        let mut free = entry.inreg_registers.iter();
+        for (index, &ty) in param_types.iter().enumerate() {
+            let attrs = parameter_attrs.get(index).map_or(&[][..], Vec::as_slice);
+            let class = class_of(attrs);
+            let marked = attrs.iter().any(|one| matches!(one, llrm_mir::Attribute::Flag(name) if name == "inreg"));
+            if marked && class == Some(llrm_mir::opcode::RESULT_POINTER) {
+                return refuse("an `inreg` struct result pointer (regparm with a struct result)");
+            }
+            let wanted = if marked {
+                let argument = argument_of(types, ty, sizes[index], class, soft_float);
+                (!argument.memory && !argument.floating && (argument.integer || argument.pointer))
+                    .then(|| (argument.bytes as usize).div_ceil(arch.stack_slot_bytes() as usize))
+            } else {
+                None
+            };
+            let taken: Option<Vec<String>> = wanted
+                .filter(|parts| (1..=2).contains(parts))
+                .and_then(
+                    |parts| {
+                        let rest = free.clone();
+                        (rest.len() >= parts).then(|| free.by_ref().take(parts).cloned().collect())
+                    },
+                );
+            match taken {
+                Some(names) => {
+                    parameters.push(Parameter::Registers(names.iter().map(|name| arch.register_named(name)).collect()))
+                }
+                None => {
+                    parameters.push(Parameter::Cell(cursor));
+                    cursor += widths[index];
+                }
+            }
+        }
     } else {
         for width in widths {
             parameters.push(Parameter::Cell(cursor));
@@ -6771,7 +6812,20 @@ impl Selector<'_, '_, '_> {
             &instruction.opcode,
             Opcode::Call(info) | Opcode::Invoke(info) if self.module.signature(info.function_type).2
         );
-        let Passing { in_order, pops, registers: entry } = passing(self.arch, convention, variadic)?;
+        let Passing { in_order, pops, registers: entry, inreg } = passing(self.arch, convention, variadic)?;
+        // This path places every argument by its position: an `inreg` one
+        // would be left on the stack (the DAG builder places them).
+        if inreg.is_some()
+            && matches!(
+                &instruction.opcode,
+                Opcode::Call(info) | Opcode::Invoke(info)
+                    if info.argument_attrs.iter().flatten().any(
+                        |one| matches!(one, llrm_mir::Attribute::Flag(name) if name == "inreg")
+                    )
+            )
+        {
+            return refuse("an `inreg` argument on this path");
+        }
         if convention == llrm_mir::opcode::X86_INTR {
             // An interrupt handler is entered with the flags pushed; its iret
             // takes them.

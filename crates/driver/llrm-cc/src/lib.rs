@@ -533,6 +533,16 @@ fn register_parameter(ir: &str) -> Option<&str> {
     })
 }
 
+/// Whether the backend places the `inreg` arguments of this build: the 32-bit
+/// x86 System V convention does (`inreg_registers`), no other does.
+fn places_inreg(
+    target: &Target,
+    build: &Build,
+) -> bool {
+    let arch = target.triple.split('-').next().unwrap_or_default();
+    matches!(arch, "i386" | "i486" | "i586" | "i686") && build.llc.iter().any(|flag| flag == "-mabi=sysv")
+}
+
 const PASSTHROUGH: &[&str] = &["-E", "-M", "-MM", "-emit-llvm", "-fsyntax-only", "-###", "-dumpmachine"];
 
 /// The target named by `-target`/`--target=`, and the job the rest of `argv`
@@ -1105,7 +1115,7 @@ fn build(
                 run(&clang, &args)?;
                 let text = std::fs::read_to_string(&ir).map_err(|error| fail(format!("{}: {error}", ir.display())))?;
                 let text = lifetimes::upgraded(&text);
-                if let Some(line) = register_parameter(&text) {
+                if let Some(line) = register_parameter(&text).filter(|_| !places_inreg(target, build)) {
                     return Err(fail(format!(
                         "{path}: regparm (an `inreg` parameter) is not translated yet: {}",
                         line.trim()
