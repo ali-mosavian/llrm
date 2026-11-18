@@ -263,6 +263,17 @@ impl Tti for Mos6502 {
         Some(1100)
     }
 
+    /// DEVIATE UNROLL-SPEED-TRIAL (owner 6502, exit 2026-11-24, the z80's
+    /// translated: `driver::speed_unroll_trial`): the module compiled again at
+    /// -O2 and -O3 with only the unrolls that add no bytes, and kept if it is
+    /// fewer bytes. The pin's early unroll takes a loop of an inlinable callee
+    /// unpriced and the inliner then declines the unrolled body
+    /// (memmove_overlap -O3: `fill`, 32 trips, 14 B rolled, 161 B unrolled,
+    /// inline cost 130 against a threshold of 130).
+    fn unroll_speed_trial(&self) -> bool {
+        true
+    }
+
     /// DEVIATE UNROLL-TRIAL-NEST: see `Tti::unroll_trial_analyzed_at_speed`.
     fn unroll_trial_analyzed_at_speed(&self) -> bool {
         true
