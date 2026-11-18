@@ -146,6 +146,22 @@ def test_an_x86_64_object_with_a_bss_buffer_a_const_table_and_an_aligned_loop(tm
     assert align > 0 and code + align == section, (code, align, section)
 
 
+def test_an_x86_64_object_with_unwind_tables_counts_no_eh_frame_in_code_or_data(tmp_path):
+    """An A/B read `size`'s text+data column: recpow x86_64 -Os showed +4 B where the code was -28 B, the 32 B being the `.eh_frame` of one more function (main
+    inlined it). Two functions with unwind tables: CODE + ALIGN is the `.text` and DATA leaves `.eh_frame` out."""
+    c = tmp_path / "u.c"
+    c.write_text("int g(int n) { return n * 3 + 1; }\n__attribute__((noinline)) int f(int n) { return g(n) + g(n + 1); }\n")
+    obj = tmp_path / "u.o"
+    subprocess.run(["gcc", "-Os", "-fno-pie", "-fasynchronous-unwind-tables", "-fno-inline", "-c", str(c), "-o", str(obj)], check=True)
+    sections = {row.split()[0]: int(row.split()[1]) for row in subprocess.run(["size", "-A", str(obj)], capture_output=True, text=True).stdout.splitlines() if len(row.split()) > 2 and row.split()[1].isdigit()}
+    code, data, align = (int(n) for n in run("x86_64-linux", obj).stdout.split())
+    assert sections[".eh_frame"] > 0, "premise: the object carries an .eh_frame"
+    naive = int(subprocess.run(["size", str(obj)], capture_output=True, text=True).stdout.splitlines()[1].split()[0])
+    assert naive > code + align, "premise: size's text column counts the .eh_frame the code column must not"
+    assert code + align == sections[".text"], (code, align, sections)
+    assert data == 0, (code, data, align, sections)
+
+
 def test_object_bytes_reads_an_elf_without_importing_the_compiler_tooling(tmp_path):
     """`import sizes` pulls llrmbin, benchlist and run_tests, which look for compiler binaries: an ELF size must not need them (m64's review of #8533)."""
     source = tmp_path / "a.s"

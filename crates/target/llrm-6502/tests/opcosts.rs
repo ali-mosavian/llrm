@@ -87,3 +87,16 @@ fn a_call_argument_is_priced_as_the_two_cells_it_is_stored_in() {
     assert_eq!(bytes.call + 3 * bytes.argument, 3 + 3 * 8, "a call with three word arguments, in bytes");
     assert_eq!(machine.costs().argument, 10, "clocks of one word argument: lda #, sta zp, lda #, sta zp");
 }
+
+/// A run of copies is priced against `memcpy`'s own bytes, linked once: the
+/// price is the routine as ca65 assembles it, not a guess.
+#[test]
+fn the_memcpy_member_is_priced_at_its_assembled_bytes() {
+    let runtime = include_str!("../runtime/mos_rt.s");
+    let from = runtime.find("\nmemcpy:\n").expect("the runtime has memcpy") + 1;
+    let body = &runtime[from..];
+    let text = &body[..body.find("\n  rts\n").expect("memcpy returns") + "\n  rts\n".len()];
+    let member = llrm_6502::opcosts::bytes(Cpu::Mos6502).copy_member;
+    assert!(member > 0, "no member price");
+    assert_eq!(member, assembled("memcpy", text));
+}

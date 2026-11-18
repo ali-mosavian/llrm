@@ -127,6 +127,64 @@ pub fn run_on(
     (code, std::fs::metadata(dir.join("p.bin")).unwrap().len())
 }
 
+/// The arguments of a 32-bit runtime routine, set as the compiler sets them:
+/// `a` in A:X:rc2:rc3, `b` in rc4..rc7 (the words of a widening multiply in
+/// A:X and rc4:rc5).
+pub fn long_args(
+    routine: &str,
+    a: u32,
+    b: u32,
+) -> String {
+    let byte = |value: u32, at: u32| (value >> (8 * at)) & 0xFF;
+    let mut text = String::new();
+    if routine.contains("hisi3") {
+        for (cell, at) in [("rc4", 0), ("rc5", 1)] {
+            text += &format!("  lda #{}\n  sta {cell}\n", byte(b, at));
+        }
+    } else {
+        for at in 0..4 {
+            text += &format!("  lda #{}\n  sta rc{}\n", byte(b, at), 4 + at);
+        }
+        for (cell, at) in [("rc2", 2), ("rc3", 3)] {
+            text += &format!("  lda #{}\n  sta {cell}\n", byte(a, at));
+        }
+    }
+    text + &format!("  ldx #{}\n  lda #{}\n", byte(a, 1), byte(a, 0))
+}
+
+/// Which results a long routine's call is read for.
+#[derive(Clone, Copy)]
+pub enum Result32 {
+    /// A:X:rc2:rc3.
+    Value,
+    /// rc4..rc7, where a divide with its remainder leaves the remainder.
+    Remainder,
+}
+
+/// `routine` called with `a` and `b` (see [`long_args`]) and the four bytes of
+/// `which` read back, one program run for each.
+pub fn long_call(
+    name: &str,
+    routine: &str,
+    a: u32,
+    b: u32,
+    which: Result32,
+) -> u32 {
+    let setup = long_args(routine, a, b);
+    (0..4)
+        .map(|at| {
+            let read = match (which, at) {
+                (Result32::Value, 0) => String::new(),
+                (Result32::Value, 1) => "  txa\n".to_owned(),
+                (Result32::Value, n) => format!("  lda rc{n}\n"),
+                (Result32::Remainder, n) => format!("  lda rc{}\n", 4 + n),
+            };
+            let main = format!("{setup}  jsr {routine}\n{read}");
+            (run_with_runtime(&format!("{name}-{at}"), &main) as u32 & 0xFF) << (8 * at)
+        })
+        .sum()
+}
+
 /// Runs `prg` in VICE's `x64sc` without a display and returns the monitor's
 /// answer to each of `commands` (`m 0400 0400`) once the program has run. Needs
 /// `x64sc`, `xvfb-run` and the C64 ROMs in ~/.local/share/vice/C64.

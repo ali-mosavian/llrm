@@ -70,3 +70,37 @@ fn a_compare_stays_when_a_branch_reads_its_zero_flag() {
     let text = "  cmp rc3\n  bne L\n  rts\nL:\n  rts\n";
     assert_eq!(run(text), text);
 }
+
+/// `bit` ands `a` with its operand: a load before it was dropped as dead.
+#[test]
+fn an_accumulator_load_stays_before_a_bit_test() {
+    let text = "  lda rc3\n  bit rc2\n  bne out\n  rts\nout:\n  rts\n";
+    let mut asm = Asm::parse(text);
+    asm.no_a_result = true;
+    drop_dead_writes(&mut asm);
+    assert_eq!(asm.text(), text);
+}
+
+/// A cell the transfer of known constants read as zero left `ora #0` behind
+/// (div_constants_long at -Os: two a trip, 2 B each): it changes nothing in
+/// `a`, and the flags it writes are written again by the `lda`.
+#[test]
+fn an_or_of_zero_whose_flags_nobody_reads_goes() {
+    assert_eq!(run("  eor #2\n  ora #0\n  sta rc3\n  lda rc2\n  rts\n"), "  eor #2\n  sta rc3\n  lda rc2\n  rts\n");
+    assert_eq!(run("  tya\n  eor #0\n  tax\n  lda rc3\n  rts\n"), "  tya\n  tax\n  lda rc3\n  rts\n");
+    assert_eq!(run("  tya\n  and #255\n  tax\n  lda rc3\n  rts\n"), "  tya\n  tax\n  lda rc3\n  rts\n");
+}
+
+/// The `bne` reads the zero flag the `ora #0` sets from `a`.
+#[test]
+fn an_or_of_zero_stays_when_a_branch_reads_its_flags() {
+    let text = "  lda rc2\n  ora #0\n  bne L\n  rts\nL:\n  rts\n";
+    assert_eq!(run(text), text);
+}
+
+/// An `ora` of anything but zero changes `a`.
+#[test]
+fn an_or_of_a_value_stays() {
+    let text = "  eor #2\n  ora #1\n  sta rc3\n  lda rc2\n  rts\n";
+    assert_eq!(run(text), text);
+}

@@ -139,6 +139,7 @@
 
 use std::collections::BTreeSet;
 
+use llrm_analysis::assumptions::Assumptions;
 use llrm_analysis::cfg::{self, Around};
 use llrm_analysis::graph::loops::Loop;
 use llrm_analysis::induction::{self, AffineOperand, CountedLoop};
@@ -215,6 +216,7 @@ impl FunctionPass for Merge {
         let memset =
             crate::memcpyoptimizer::run_impl(unit.context, unit.layout, unit.function, analyses.outer(), unit.declared);
         let bytes = analyses.outer().target().size_costs();
+        let runs = self.size || analyses.outer().target().tti().is_some_and(|tti| tti.string_runs_at_speed());
         let copies = self.widen
             && !llrm_support::env_flag!("LLRM_NO_MERGE_COPIES")
             && crate::mergestores::merged_copies(
@@ -223,7 +225,7 @@ impl FunctionPass for Merge {
                 analyses.outer().callees(),
                 unit.function,
                 analyses.outer(),
-                self.size.then(|| (&mut *unit.declared, &bytes)),
+                runs.then(|| (&mut *unit.declared, &bytes)),
             );
         let constants = self.widen
             && crate::mergestores::merged_constants(
@@ -302,9 +304,12 @@ pub fn filled_with(
     // DEVIATE 17 (exit 2026-11-12, `Tti::memory_idioms_at_optsize`): a size
     // build keeps its loops where the call costs more bytes than the loop.
     let for_size = size
-        || function.attrs.iter().any(
-            |attr| matches!(attr, llrm_mir::opcode::Attribute::Flag(name) if name == "optsize" || name == "minsize"),
-        );
+        || function.attrs.iter().any(|attr| {
+            matches!(
+                attr,
+                llrm_mir::opcode::Attribute::Flag(name) if name == "optsize" || name == "minsize"
+            )
+        });
     if for_size && outer.target().tti().is_some_and(|tti| !tti.memory_idioms_at_optsize()) {
         return false;
     }
@@ -313,9 +318,13 @@ pub fn filled_with(
     let mut changed = false;
     'again: loop {
         let shape = cfg::Shape::of(function);
+        // One search of the body for `llvm.assume` per state of it, not one per
+        // loop and idiom asked (LLVM's AssumptionCache is
+        // per function).
+        let assumed = Assumptions::of(&Unit::within(context, layout, function, outer));
         for loop_ in shape.loops.iter().filter(|loop_| wanted(loop_)).cloned().collect::<Vec<_>>() {
             let found = {
-                let unit = Unit::within(context, layout, function, outer).with_shape(&shape);
+                let unit = Unit::within(context, layout, function, outer).with_shape(&shape).with_assumptions(&assumed);
                 let facts = standing.of(&unit);
                 _fill(&unit.with_registers(facts), callees, &loop_, &costs, &bytes, size)
             };
@@ -326,7 +335,7 @@ pub fn filled_with(
                 continue 'again;
             }
             let split = if found.is_none() {
-                let unit = Unit::within(context, layout, function, outer).with_shape(&shape);
+                let unit = Unit::within(context, layout, function, outer).with_shape(&shape).with_assumptions(&assumed);
                 let facts = standing.of(&unit);
                 _split(&unit.with_registers(facts), callees, &loop_, &costs, &bytes, size)
             } else {
@@ -1047,13 +1056,16 @@ pub(crate) fn trip_clocks<'a>(
     trip_total(context, layout, function, callees, blocks, costs, true, false)
 }
 
-/// Whether `inst` is an instruction of its own in a trip's price: a phi is a register, an address
-/// an operand, a compare the flags of the branch it feeds.
+/// Whether `inst` is an instruction of its own in a trip's price: a phi is a
+/// register, an address an operand, a compare the flags of the branch it feeds.
 pub(crate) fn counted(
     function: &Function,
     inst: InstId,
 ) -> bool {
-    !matches!(function.instruction(inst).opcode, Opcode::Phi | Opcode::GetElementPtr { .. } | Opcode::ICmp(_))
+    !matches!(
+        function.instruction(inst).opcode,
+        Opcode::Phi | Opcode::GetElementPtr { .. } | Opcode::ICmp(_)
+    )
 }
 
 fn trip_total<'a>(
@@ -1079,7 +1091,8 @@ fn trip_total<'a>(
 
 /// DEVIATE, for `loopidiom`: whether `rep movs` over a length known only at
 /// run time is fewer code bytes than the loop over `blocks` it replaces. The
-/// pin lowers that copy to a libc call, which llrm has none of: the string
+/// pin lowers that copy to a libc call, which a target without one
+/// (`Tuning::libc_memcpy` false: m16) has none of: the string
 /// instruction takes ES, three registers, the count split in dwords and odd
 /// bytes, and a second `rep movs` (x_mergesort msort at m16 -Os: three sites,
 /// 16 bytes over the loop each). Owner w2, exit 2026-11-20: the DAG's
@@ -1122,9 +1135,9 @@ pub(crate) fn fills_pay(
     // `clocks`' last entry is the cells the fill stores in all: a cell is a
     // `stos` of a dword, or the pattern's own cell.
     // The loop stays for the stores of computed values: a fill saves one
-    // store, less than itself.
+    // store, less than itself, unless the trips pay for it.
     if kept > 0 {
-        return false;
+        return fill_beside_computed_stores_pays(at_speed, clocks, stores, stores - kept, fills);
     }
     // `costs.fill` is the fill as encoded: its loads are the instructions.
     let loop_bytes = trip_cost(context, layout, function, callees, blocks.iter(), costs, true);
@@ -1157,6 +1170,27 @@ pub(crate) fn fills_pay(
         })
 }
 
+/// DEVIATE, for `loopidiom`: a loop that keeps a computed store beside the
+/// constant ones is filled at speed when the `removed` stores' clocks over the
+/// trips beat the `fills`' own (the rule the targets without a rate follow in
+/// `process`: `trips * store <= fill` keeps the loop). Not without trips and
+/// cells, nor at the size levels, where the loop stays. Exit: none.
+fn fill_beside_computed_stores_pays(
+    at_speed: bool,
+    clocks: Option<(&OperationCosts, i64, Option<i64>, Option<i64>)>,
+    stores: i64,
+    removed: i64,
+    fills: i64,
+) -> bool {
+    let (Some((clocks, _, Some(trips), Some(cells))), true) = (clocks, at_speed) else { return false };
+    // `cells` counts every store of the loop; the fills cover the `removed`
+    // ones' share (priced over all, a loop of one computed and one constant
+    // store stored twice the cells it fills: `reset`'s 1200 trips lost the
+    // fill).
+    let fill_cells = cells * removed / stores.max(1);
+    trips * removed * clocks.store_immediate > fills * clocks.fill + fill_cells * clocks.fill_cell
+}
+
 /// A fill the backend may store inline: `bytes` long, and the most stores a
 /// constant memset takes before it is a `rep stos`
 /// (`Tuning::max_stores_per_memset`).
@@ -1164,6 +1198,9 @@ pub(crate) fn fills_pay(
 pub(crate) struct InlineFills {
     pub max_stores: i64,
     pub bytes: i64,
+    /// A dword store carries the operand-size prefix: the target's word is
+    /// 16 bits (m16); flat code has none.
+    pub prefixed: bool,
 }
 
 impl InlineFills {
@@ -1179,7 +1216,8 @@ impl InlineFills {
         prices: &OperationCosts,
     ) -> i64 {
         let dwords = self.bytes / 4;
-        dwords * (prices.store_immediate + prices.prefix) + (self.stores() - dwords) * prices.store_immediate
+        let prefix = if self.prefixed { prices.prefix } else { 0 };
+        dwords * (prices.store_immediate + prefix) + (self.stores() - dwords) * prices.store_immediate
     }
 }
 
@@ -1684,7 +1722,27 @@ fn _stored(
     // default space's (a huge array): the count would be wider than the
     // target's `rep stos` takes, and isel cannot lower it.
     let counted = unit.layout.pointer(unit.space(pointer)?).index_bits <= unit.layout.pointer(0).index_bits;
-    (matches!(width, 16 | 32) && counted).then_some((pointer, Byte::Pattern(value), bytes))
+    // Only where the target's library has the function
+    // (`HasMemsetPattern = TLI->has(LibFunc_memset_pattern16)`,
+    // LoopIdiomRecognize.cpp#L372).
+    (matches!(width, 16 | 32) && counted && _has_memset_pattern(unit)).then_some((pointer, Byte::Pattern(value), bytes))
+}
+
+/// `TLI->has(LibFunc_memset_pattern16)` of the unit's target: a target stating
+/// no library has the pin's defaults for an unknown OS, which lack it.
+/// DEVIATE MEMSET-PATTERN-ISEL (owner w10, exit 2026-11-24): or one whose isel
+/// lowers the pattern fill to `rep stosw`/`rep stosd` itself
+/// (`Machine::fills_by_pattern`, x86-m16) instead of the pre-ISel store loop.
+fn _has_memset_pattern(unit: &Unit) -> bool {
+    use llrm_mir::libfunc::{Generic, LibFunc, TargetLibraryInfo};
+    let Some(outer) = unit.outer else { return false };
+    if outer.target().fills_by_pattern() || outer.target().tti().is_some_and(|tti| tti.fills_pattern_at_speed()) {
+        return true;
+    }
+    match outer.target().library() {
+        Some(library) => TargetLibraryInfo::new(&*library).has(LibFunc::MemsetPattern16),
+        None => TargetLibraryInfo::new(&Generic { int_bits: 32, size_t_bits: 32 }).has(LibFunc::MemsetPattern16),
+    }
 }
 
 /// The store and load of `one` and `other`, where the store writes the loaded

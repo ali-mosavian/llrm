@@ -374,3 +374,33 @@ fn a_deleted_node_leaves_the_use_lists_of_its_operands() {
     }
     assert_eq!(dag.use_candidates(x.node), &[kept.node]);
 }
+
+/// Two users of the replaced value that become equal: the one made first stays
+/// and the other merges into it, as `ReplaceAllUsesWith` updates users in
+/// creation order here. Walking them newest first kept the later one, moved
+/// every node number after it, and 6502 `memory_expansion` -O2 grew 14 B
+/// (51,459 -> 51,473) from the scheduler's different order.
+#[test]
+fn of_two_users_made_equal_by_a_replacement_the_earlier_one_stays() {
+    let mut dag = dag();
+    let (from, to) = (arg(&mut dag, EVT::I32, 1), arg(&mut dag, EVT::I32, 2));
+    let first = dag.get_node(ISD::Sub, EVT::I32, &[from, to]);
+    let second = dag.get_node(ISD::Sub, EVT::I32, &[to, from]);
+    let events = dag.replace_all_uses_with(from, to);
+    assert!(events.contains(&Rauw::Merged { from: second.node, into: first.node }), "{events:?}");
+}
+
+/// A use list has the newest use first, and `ReplaceAllUsesWith` adds each use
+/// to the new value as it walks the old list, so the order reverses: the pin's
+/// `CreateVirtualRegisters` reads it to pick which `CopyToReg` of a load names
+/// the load's register (the Aho-Corasick loop of bench/grep -O1 chose the
+/// other copy and ran 5,856 instructions over).
+#[test]
+fn a_replacement_reverses_the_use_list_of_the_new_value() {
+    let mut dag = dag();
+    let (from, to, a) = (arg(&mut dag, EVT::I32, 1), arg(&mut dag, EVT::I32, 2), arg(&mut dag, EVT::I32, 3));
+    let older = dag.get_node(ISD::Add, EVT::I32, &[from, a]);
+    let newer = dag.get_node(ISD::Mul, EVT::I32, &[from, a]);
+    dag.replace_all_uses_with(from, to);
+    assert_eq!(dag.use_candidates(to.node), &[newer.node, older.node]);
+}

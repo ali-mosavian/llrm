@@ -121,7 +121,7 @@ pub struct Profile {
     pub loop_alignment: u8,
     /// `Target::loop_alignment_max_skip`.
     pub loop_max_skip: u8,
-    /// `Target::align_loops_at_o1`; below -O2 (`speed_rate` off) loops are
+    /// `Target::align_loops_at_o1`; below -O2 (`speed_level` off) loops are
     /// aligned only where this holds.
     pub align_loops_at_o1: bool,
     pub call_register_capacity: i64,
@@ -163,11 +163,19 @@ pub struct Profile {
     pub tail_dup_threshold: Option<usize>,
     /// `tail_dup_hot_threshold` of the target's table (DEVIATE TAILDUP-HOT).
     pub tail_dup_hot_size: Option<usize>,
+    /// `loop_top_prices_jumps` of the target's table (DEVIATE LOOP-TOP-JMP).
+    pub loop_top_prices_jumps: bool,
     /// Commuting prefers the operand the result is copied back into
     /// (DEVIATE TA-LC, from the target's table; off: the pin's order).
     pub commute_loop_carried: bool,
+    /// DEVIATE FB3 on (`CpuTable::widen_word_immediate`).
+    pub widen_word_immediate: bool,
+    /// DEVIATE TA-11 on (`CpuTable::three_address_to_known_register`).
+    pub three_address_to_known_register: bool,
     /// DEVIATE PHI-SHARE on (`CpuTable::share_congruent_phis`).
     pub share_congruent_phis: bool,
+    /// DEVIATE UNORDERED-ODDS on (`CpuTable::unordered_branch_odds`).
+    pub unordered_branch_odds: bool,
     /// Clocks a mispredicted branch costs, where the target states it.
     pub mispredict_penalty: Option<i64>,
     /// `mispredict_penalty` at -O1, -Os and -Oz, where the target states one.
@@ -193,13 +201,22 @@ pub struct Profile {
     /// -O2 and -O3: the target's price of a code byte at speed counts
     /// (`Options::prices_bytes`); -O1, -Os and -Oz gate every metric alone.
     pub speed_rate: bool,
+    /// -O2 and above: what gcc enables at -O2 (`-falign-loops`) and not at -O1,
+    /// where `speed_rate` may also be on (`speed_rate_at_o1`).
+    pub speed_level: bool,
     /// The target runs the pin's stand-alone tail duplication after
     /// allocation (`TailDuplicator`, `PreRegAlloc` clear); on only where its
     /// A/B has been made (`TailDuplicate` slot).
     pub post_ra_tail_duplicate: bool,
-    /// Equal literal stores share a register at the speed levels too
+    /// `TimingTable::tail_merge_pin_faithful`.
+    pub tail_merge_pin_faithful: bool,
+    /// Equal literal stores share a register where bytes are strict
     /// (`TimingTable::share_literal_stores`).
     pub share_literal_stores: bool,
+    /// `TimingTable::share_literal_stores_at_speed`.
+    pub share_literal_stores_at_speed: bool,
+    /// `TimingTable::zero_extend_with_and`.
+    pub zero_extend_with_and: bool,
     /// Pool data bytes are strict (`TimingTable::pool_data_strict`).
     pub pool_data_strict: bool,
     /// At -Os a 1 is `xor r,r; inc r` (`TimingTable::size_one_is_xor_inc`).
@@ -406,8 +423,12 @@ impl Profile {
             aggressive: false,
             tail_dup_threshold: None,
             tail_dup_hot_size: None,
+            loop_top_prices_jumps: false,
             commute_loop_carried: false,
+            widen_word_immediate: false,
+            three_address_to_known_register: false,
             share_congruent_phis: false,
+            unordered_branch_odds: false,
             mispredict_penalty: None,
             mispredict_penalty_size: None,
             float_store: false,
@@ -415,8 +436,12 @@ impl Profile {
             stable_loads: true,
             min_size: false,
             speed_rate: true,
+            speed_level: true,
             post_ra_tail_duplicate: false,
+            tail_merge_pin_faithful: false,
             share_literal_stores: false,
+            share_literal_stores_at_speed: false,
+            zero_extend_with_and: false,
             pool_data_strict: false,
             size_one_is_xor_inc: false,
             branch_constant_selects: 0,
@@ -425,6 +450,20 @@ impl Profile {
             model: arch.cost_model(),
             multiplies: Default::default(),
         }
+    }
+
+    /// The chance a branch of this mnemonic is taken where the target knows it
+    /// from what the branch tests, for a branch whose odds nobody stated: the
+    /// unordered case of a float compare, `BranchProbabilityInfo`'s
+    /// `FPH_UNO_WEIGHT` against `FPH_ORD_WEIGHT` (1 in 2^20), which an x86 `jp`
+    /// after `fucom`/`ucomis` takes. None unless the target has DEVIATE
+    /// UNORDERED-ODDS on, and never in a build for size: a constant sunk onto
+    /// the edge costs a block and a `jmp` there (sfm16_float -Os +48 B).
+    pub fn branch_odds(
+        &self,
+        name: &str,
+    ) -> Option<f64> {
+        (self.unordered_branch_odds && !self.size && name == "jp").then_some(1.0 / 1_048_576.0)
     }
 
     /// The existing target-ranking cost for one named instruction form.
@@ -436,15 +475,17 @@ impl Profile {
     }
 
     /// DEVIATE X87-FCMP-AH: whether a compare read from the status word is
-    /// `test ah, mask` rather than `sahf`: where the table prices `sahf` above a
-    /// register-immediate operation, code is not tuned for size, and the clock
-    /// saved pays for the two bytes the test adds at the target's speed rate
-    /// (none at -O1, where clocks and bytes are each held; m16's 500 milli-
-    /// clocks a byte makes it a tie, which keeps `sahf`).
+    /// `test ah, mask` rather than `sahf`: where the table prices `sahf` above
+    /// a register-immediate operation, code is not tuned for size, and the
+    /// clock saved pays for the two bytes the test adds at the target's
+    /// speed rate (m16's 500 milli-clocks a byte makes it a tie, which
+    /// keeps `sahf`). A target that keeps `sahf` where bytes are held (m32)
+    /// tests at neither -O1 nor size: two bytes there are a worse cell.
     pub fn tests_status_word(&self) -> bool {
         const EXTRA_BYTES: i64 = 2;
         !self.size
             && !self.min_size
+            && !(self.bytes_strict() && self.target().tti().is_some_and(|tti| tti.keeps_sahf_where_bytes_are_held()))
             && matches!(
                 (self.cost("sahf"), self.cost("alu_ri")),
                 (Ok(sahf), Ok(alu)) if alu < sahf
@@ -509,6 +550,21 @@ impl Profile {
         })
     }
 
+    /// What placement's choice of a loop's top weighs fall-throughs by
+    /// (DEVIATE LOOP-TOP-JMP): the clocks a `jmp` costs, and what a taken
+    /// conditional branch costs over one not taken. Not for size.
+    pub fn loop_top_clocks(&self) -> Option<crate::backend::jumps::placement::TopClocks> {
+        if !self.loop_top_prices_jumps || self.size || !self.has_speed_goal() {
+            return None;
+        }
+        let jump = self.cost("jmp_short").ok()?;
+        let saved = self.cost("jcc").ok()? - self.cost("jcc_not_taken").ok()?;
+        (jump > 0 && saved > 0).then_some(crate::backend::jumps::placement::TopClocks {
+            jump_clocks: jump as f64,
+            saved_clocks: saved as f64,
+        })
+    }
+
     /// Clocks a mispredicted branch costs in this function: the size row at
     /// -O1, -Os and -Oz (no byte price at speed) where stated.
     pub fn mispredict_penalty_here(&self) -> Option<i64> {
@@ -530,6 +586,20 @@ impl Profile {
     /// wider: x_adler -O1 gained a callee-saved register (+2 B, +5 clk).
     pub fn commutes_loop_carried_flow(&self) -> bool {
         self.commutes_loop_carried() && !self.bytes_strict()
+    }
+
+    /// DEVIATE FB3 applies here: the table's key, where the operand-size
+    /// prefix costs a clock (the 486), at -Os and at speed (-O2, -O3). Not at
+    /// -O1: its bytes are strict and the clock buys no counted cell there
+    /// (x_idioms +20 B for -120 clk).
+    pub fn widens_word_immediate(&self) -> bool {
+        self.widen_word_immediate && self.prefix_cost > 0 && (self.size || self.min_size || self.speed_rate)
+    }
+
+    /// DEVIATE TA-11 applies here: the table's key, where bytes are strict
+    /// (-O1, -Os). At -O2 and -O3 the `lea` costs clocks (fib 19993 -> 21815).
+    pub fn converts_three_address_to_known_register(&self) -> bool {
+        self.three_address_to_known_register && self.bytes_strict()
     }
 
     /// `TuningSlow3OpsLEA`: a three-operand LEA takes three cycles, so
@@ -587,7 +657,8 @@ impl Profile {
     /// off the stack in place of `add sp,2*words`: shorter for one or two
     /// words, and where size is not wanted, only if no slower.
     ///
-    /// DEVIATE PO1 (owner w10, 2026-10-30): the pin pops only at `minsize`
+    /// DEVIATE PO1 (owner w10, 2026-10-30; x86-m32 off,
+    /// `Tuning::pops_arguments_at_size`): the pin pops only at `minsize`
     /// (`X86FrameLowering::eliminateCallFramePseudoInstr`,
     /// X86FrameLowering.cpp:4116, `F.hasMinSize() && adjustStackWithPops`; pin
     /// llc -mcpu=i486 keeps `add esp,8` at `optsize`). Here -Os pops too: one
@@ -599,7 +670,10 @@ impl Profile {
         &self,
         words: i64,
     ) -> Result<bool, String> {
-        Ok(words <= 2 && (self.size || words * self.cost("pop_r")? <= self.cost("alu_rr")?))
+        Ok(words <= 2
+            && ((self.size && self.target().tti().is_none_or(|tti| tti.pops_arguments_at_size()))
+                || self.min_size
+                || words * self.cost("pop_r")? <= self.cost("alu_rr")?))
     }
 
     /// Whether a one-slot frame is `push`/`pop` of a scratch register in place
@@ -707,10 +781,17 @@ fn _profile(
         address_prefix_stall: table.lcp_stall,
         tail_dup_threshold: table.tail_dup_placement_threshold.map(|n| n.max(0) as usize),
         tail_dup_hot_size: table.tail_dup_hot_threshold.map(|n| n.max(0) as usize),
+        loop_top_prices_jumps: table.loop_top_prices_jumps,
         commute_loop_carried: table.commute_loop_carried,
+        widen_word_immediate: table.widen_word_immediate,
+        three_address_to_known_register: table.three_address_to_known_register,
         share_congruent_phis: table.share_congruent_phis,
+        unordered_branch_odds: table.unordered_branch_odds,
         post_ra_tail_duplicate: table.post_ra_tail_duplicate,
+        tail_merge_pin_faithful: table.tail_merge_pin_faithful,
         share_literal_stores: table.share_literal_stores,
+        share_literal_stores_at_speed: table.share_literal_stores_at_speed,
+        zero_extend_with_and: table.zero_extend_with_and,
         pool_data_strict: table.pool_data_strict,
         size_one_is_xor_inc: table.size_one_is_xor_inc,
         branch_constant_selects: table.branch_constant_selects,
@@ -723,7 +804,7 @@ fn _profile(
 /// The profiles made so far, by target, CPU and size: each made once, as the
 /// passes hold them.
 static _MADE: LazyLock<
-    std::sync::Mutex<crate::support::hash::HashMap<(&'static str, String, [bool; 11]), &'static Profile>>,
+    std::sync::Mutex<crate::support::hash::HashMap<(&'static str, String, [bool; 12]), &'static Profile>>,
 > = LazyLock::new(Default::default);
 
 /// `name`'s profile on the target `arch`, tuned for size where `size`.
@@ -764,7 +845,7 @@ pub fn tuned_with(
     search: bool,
     exhaustive: bool,
 ) -> Result<&'static Profile, String> {
-    tuned_optimizing(arch, name, size, search, exhaustive, true, false, false, false, false, true, false, true)
+    tuned_optimizing(arch, name, size, search, exhaustive, true, false, false, false, false, true, false, true, true)
 }
 
 /// `tuned_with`, the backend's optional phases left out where not
@@ -783,6 +864,7 @@ pub fn tuned_optimizing(
     stable_loads: bool,
     min_size: bool,
     speed_rate: bool,
+    speed_level: bool,
 ) -> Result<&'static Profile, String> {
     if !arch.cpus().contains(&name) {
         return Err(format!("unknown CPU target: {name}; {} has {}", arch.name(), arch.cpus().join(", ")));
@@ -803,6 +885,7 @@ pub fn tuned_optimizing(
             stable_loads,
             min_size,
             speed_rate,
+            speed_level,
         ],
     );
     if let Some(&one) = made.get(&key) {
@@ -820,6 +903,7 @@ pub fn tuned_optimizing(
         stable_loads,
         min_size,
         speed_rate,
+        speed_level,
         ..(_profile(arch, name)).expect("every listed CPU has a profile")
     }));
     made.insert(key, one);
@@ -875,8 +959,10 @@ mod tests {
         let targets: [&dyn Target; 3] = [&llrm_x86_m16::M16, &llrm_x86_m32::M32, &llrm_x86_m64::M64];
         for arch in targets {
             let file = llrm_target::registers::file(&arch.registers_text()).unwrap();
-            let old: Vec<RegId> =
-                llrm_target::registers::of_class(&file, "gpr").into_iter().map(|name| RegId::named(name).unwrap()).collect();
+            let old: Vec<RegId> = llrm_target::registers::of_class(&file, "gpr")
+                .into_iter()
+                .map(|name| RegId::named(name).unwrap())
+                .collect();
             assert!(!old.is_empty());
             assert_eq!(general_registers(arch), old, "{}", arch.name());
         }
@@ -1160,18 +1246,18 @@ pub fn private_convention_under(
 mod private_convention_tests {
     use super::*;
 
-    /// CC1: a private m32 function takes the pin's `fastcc` (ECX, EDX; the
-    /// caller pops); `LLRM_PRIVATE_WATCALL` (the comparison instrument) gives
-    /// it `watcall32` instead. A default of `watcall32` priced the rows against
-    /// the pin's convention and lost -O1..-O3 clocks (`rectwo` -9.6%).
+    /// CC-LOCAL: a private m32 function takes gcc's local `regparm(3)` (EAX,
+    /// EDX, ECX; the caller pops); `LLRM_PRIVATE_WATCALL` (the comparison
+    /// instrument) gives it `watcall32`. The pin's `fastcc` (ECX, EDX) put a
+    /// third argument on the stack and made a tail call a `call`+`ret`.
     #[test]
-    fn test_a_private_function_takes_the_pin_fastcc_and_the_instrument_watcall32() {
-        use llrm_mir::opcode::{FAST, WATCALL};
+    fn test_a_private_function_takes_gccs_local_regparm_and_the_instrument_watcall32() {
+        use llrm_mir::opcode::{REGPARM3, WATCALL};
         let ours = private_convention(&llrm_x86_m32::M32, false).expect("m32 states one");
         let old = private_convention(&llrm_x86_m32::M32, true).expect("m32 states one");
-        assert_eq!((ours.to, old.to), (FAST, WATCALL));
-        let found = llrm_x86_m32::M32.calling().by_number(FAST).expect("fastcc is stated");
-        assert_eq!(found.argument_registers, ["ecx", "edx"]);
+        assert_eq!((ours.to, old.to), (REGPARM3, WATCALL));
+        let found = llrm_x86_m32::M32.calling().by_number(REGPARM3).expect("regparm3 is stated");
+        assert_eq!(found.argument_registers, ["eax", "edx", "ecx"]);
         assert_eq!(found.cleanup, llrm_target::calling::Cleanup::Caller);
     }
 }
@@ -1251,6 +1337,7 @@ mod mask_tests {
                 true,
                 min_size,
                 speed_rate,
+                true,
             )
             .expect("a 486")
             .speed_milliclocks_per_byte()
@@ -1321,5 +1408,41 @@ mod bytes_strict_tests {
         assert!(!at(true, true, true).commutes_loop_carried_flow(), "-Os");
         let without_key = Profile { commute_loop_carried: false, ..at(true, false, true) };
         assert!(!without_key.commutes_loop_carried_flow(), "no key: the pin's order");
+    }
+
+    /// FB3 holds at -Os and at speed, not at -O1 (strict bytes, no speed rate):
+    /// x_idioms -O1 +20 B for -120 clk, no counted cell.
+    #[test]
+    fn the_word_immediate_widening_is_not_made_at_o1() {
+        let base = tuned("486", false).expect("a profile").clone();
+        let at = |size, speed_rate| Profile {
+            optimized: true,
+            size,
+            speed_rate,
+            widen_word_immediate: true,
+            ..base.clone()
+        };
+        assert!(at(true, true).widens_word_immediate(), "-Os");
+        assert!(at(false, true).widens_word_immediate(), "-O2 and -O3");
+        assert!(!at(false, false).widens_word_immediate(), "-O1");
+    }
+
+    /// fib -O2 with the `lea` of a sum ending in a known register ran 19993 ->
+    /// 21815 clk: the conversion holds where bytes are strict (-O1, -Os).
+    #[test]
+    fn the_three_address_to_known_register_conversion_is_o1_and_os_only() {
+        let base = tuned("486", false).expect("a profile").clone();
+        let at = |optimized, size, speed_rate| Profile {
+            optimized,
+            size,
+            speed_rate,
+            three_address_to_known_register: true,
+            ..base.clone()
+        };
+        assert!(at(true, false, false).converts_three_address_to_known_register(), "-O1");
+        assert!(at(true, true, true).converts_three_address_to_known_register(), "-Os");
+        assert!(!at(true, false, true).converts_three_address_to_known_register(), "-O2 and -O3");
+        let without_key = Profile { three_address_to_known_register: false, ..at(true, true, true) };
+        assert!(!without_key.converts_three_address_to_known_register(), "no key: the pin's rule");
     }
 }

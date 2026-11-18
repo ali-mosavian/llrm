@@ -141,6 +141,19 @@ pub fn indexed_address(
     }
 }
 
+/// [`indexed_address`] of byte `part` of the word at `symbol+offset`: the
+/// offset wraps at 2^16 as the access does.
+pub fn indexed_address_part(
+    symbol: &Operand,
+    offset: &Operand,
+    part: i64,
+) -> Result<String, String> {
+    match offset {
+        Operand::Imm(offset) => indexed_address(symbol, &Operand::Imm((offset + part) & 0xFFFF)),
+        other => Err(format!("{other:?} is not an offset")),
+    }
+}
+
 /// `symbol+offset` for an absolute access.
 pub fn address(
     symbol: &Operand,
@@ -362,6 +375,16 @@ pub fn expand(
                 writeln!(out, "  ldx {index}\n  lda {value}\n  sta {symbol},x").unwrap();
             }
         }
+        op::LDAX16 | op::STAX16 => {
+            let load = inst.opcode == op::LDAX16;
+            let ((low, high), index) = (word(&o[0])?, reg(&o[3])?);
+            let (first, second) = (indexed_address_part(&o[1], &o[2], 0)?, indexed_address_part(&o[1], &o[2], 1)?);
+            if load {
+                writeln!(out, "  ldx {index}\n  lda {first},x\n  sta {low}\n  lda {second},x\n  sta {high}").unwrap();
+            } else {
+                writeln!(out, "  ldx {index}\n  lda {low}\n  sta {first},x\n  lda {high}\n  sta {second},x").unwrap();
+            }
+        }
         op::LDABS => writeln!(
             out,
             "  lda {}
@@ -526,52 +549,19 @@ pub fn expand(
             copy_byte(&mut out, &dl, "a");
             copy_byte(&mut out, &dh, "x");
         }
-        // A long operation: the operands are copied to `__sa` and `__sb`
-        // (runtime/mos_rt.s), the result comes back in `__sa`.
-        op::MUL32 | op::UDIV32 | op::SDIV32 | op::UREM32 | op::SREM32 | op::SHL32 | op::SRL32 | op::SRA32 => {
-            let routine = match inst.opcode {
-                op::MUL32 => "__mulsi3",
-                op::UDIV32 => "__udivsi3",
-                op::SDIV32 => "__divsi3",
-                op::UREM32 => "__umodsi3",
-                op::SREM32 => "__modsi3",
-                op::SHL32 => "__ashlsi3",
-                op::SRL32 => "__lshrsi3",
-                _ => "__ashrsi3",
-            };
-            let (low, high) = (word(&o[0])?, word(&o[1])?);
-            for (at, source) in [word(&o[2])?, word(&o[3])?].into_iter().enumerate() {
-                copy_byte(&mut out, &format!("__sa+{}", 2 * at), &source.0);
-                copy_byte(&mut out, &format!("__sa+{}", 2 * at + 1), &source.1);
-            }
-            if matches!(inst.opcode, op::SHL32 | op::SRL32 | op::SRA32) {
-                copy_byte(&mut out, "__sb", reg(&o[4])?);
-            } else {
-                for (at, source) in [word(&o[4])?, word(&o[5])?].into_iter().enumerate() {
-                    copy_byte(&mut out, &format!("__sb+{}", 2 * at), &source.0);
-                    copy_byte(&mut out, &format!("__sb+{}", 2 * at + 1), &source.1);
-                }
-            }
-            writeln!(out, "  jsr {routine}").unwrap();
-            copy_byte(&mut out, &low.0, "__sa");
-            copy_byte(&mut out, &low.1, "__sa+1");
-            copy_byte(&mut out, &high.0, "__sa+2");
-            copy_byte(&mut out, &high.1, "__sa+3");
-        }
-        // A widening multiply: the operands' low words in `__sa` and `__sb`,
-        // the product in `__sa`.
-        op::UMULW16 | op::SMULW16 => {
-            let routine = if inst.opcode == op::UMULW16 { "__umulhisi3" } else { "__mulhisi3" };
-            let (low, high) = (word(&o[0])?, word(&o[1])?);
-            for (to, source) in [("__sa", word(&o[2])?), ("__sb", word(&o[3])?)] {
-                copy_byte(&mut out, to, &source.0);
-                copy_byte(&mut out, &format!("{to}+1"), &source.1);
-            }
-            writeln!(out, "  jsr {routine}").unwrap();
-            copy_byte(&mut out, &low.0, "__sa");
-            copy_byte(&mut out, &low.1, "__sa+1");
-            copy_byte(&mut out, &high.0, "__sa+2");
-            copy_byte(&mut out, &high.1, "__sa+3");
+        // A long operation is a call of the `mos` convention, made where
+        // registers are assigned (`alloc.rs`).
+        op::MUL32
+        | op::UDIV32
+        | op::SDIV32
+        | op::UREM32
+        | op::SREM32
+        | op::SHL32
+        | op::SRL32
+        | op::SRA32
+        | op::UMULW16
+        | op::SMULW16 => {
+            return Err(format!("opcode {} is expanded by the allocator", inst.opcode));
         }
         op::COPY8 => copy_byte(&mut out, reg(&o[0])?, reg(&o[1])?),
         op::COPY16 => {

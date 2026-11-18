@@ -1,4 +1,5 @@
 // flags: -O1 | -O2 | -Os
+// bar: not comparable (SDCC double is 32 bits); twin soft_double_add_sub_f32
 /* A double add and subtract through the soft-float library. At the 6502 the add read the flags of an unrelated copy
    (`ldx`) where the `and` of its select had set them: 1.5 + 0.25 came out as 0.5 (2026-11-11). */
 extern void report(long value);

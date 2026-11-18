@@ -21,22 +21,20 @@ _main:
     lda #0
     sta fail
 loop:
-    ldy #5                  ; a and b's low half in rc2..rc7, b's high half at (rc0:rc1) = record + 6
-:   lda (ptr),y
-    sta rc2,y
-    dey
-    bpl :-
-    clc
-    lda ptr
-    adc #6
-    sta rc0
-    lda ptr+1
-    adc #0
-    sta rc0+1
     lda #$5a                ; rc8 and rc9 are the caller's: they must come back unchanged
     sta rc8
     lda #$a5
     sta rc9
+    ldy #7                  ; a2:a3 and b in rc2..rc7, a0:a1 in A:X
+:   lda (ptr),y
+    sta rc2-2,y
+    dey
+    cpy #1
+    bne :-
+    lda (ptr),y
+    tax
+    dey
+    lda (ptr),y
     jsr OP
     sta $d0
     stx $d1

@@ -1,6 +1,7 @@
 """`python3 -m unittest discover -s crates/target/llrm-z80/tests/programs`"""
 
 import importlib.util
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -33,6 +34,17 @@ class NotABar(unittest.TestCase):
         self.assertIn("twin volatile_bitfield_aligned", why or "")
         self.assertTrue((corpus / "volatile_bitfield_aligned.c").exists())
         self.assertIsNone(guard.incomparable((corpus / "volatile_bitfield_aligned.c").read_text()))
+
+
+    def test_a_program_that_names_long_double_is_not_a_bar(self):
+        """long_double_arguments read 7801 B / 241,900 T against SDCC's 3167 / 87,501 (x2.76 on both axes at every level): SDCC's
+        long double is 32 bits, ours the x87's 80 (f64 library). Every program the z80 sweep selects that names `long double` in code
+        says so with a `// bar: not comparable` line, or its SDCC columns grade a different program."""
+        import re
+        corpus = run.ROOT / "tests" / "run" / "c"
+        code = lambda text: re.sub(r"//[^\n]*", "", re.sub(r"/\*.*?\*/", "", text, flags=re.S))
+        unmarked = [p.stem for p in run.selected(corpus) if re.search(r"\blong\s+double\b", code(p.read_text())) and guard.incomparable(p.read_text()) is None]
+        self.assertEqual(unmarked, [])
 
 
 class RowCount(unittest.TestCase):
@@ -178,3 +190,104 @@ class RuntimeStamp(unittest.TestCase):
     def test_the_stamp_is_fnv1a_64(self):
         self.assertEqual(run.fnv1a64(b""), "cbf29ce484222325")
         self.assertEqual(run.fnv1a64(b"a"), "af63dc4c8601ec8c")
+
+
+class SweepInstrument(unittest.TestCase):
+    def sweep(self):
+        spec = importlib.util.spec_from_file_location("sweep_instrument", Path(__file__).resolve().parent / "sweep.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def test_a_sweep_without_the_soft_float_library_is_refused(self):
+        """The owner sweep of 2026-11-12 ran without `Z80_LIBC_EXTRA`: 13 float programs failed to link and read as 'no row'. A run
+        that needs the library and has none is refused, with the way to build it; `--sdcc-only` and `--no-softfloat` opt out."""
+        why = guard.softfloat_library_missing({}, sdcc_only=False, no_softfloat=False)
+        self.assertIn("z80_lib.sh", why or "")
+        self.assertIsNone(guard.softfloat_library_missing({"Z80_LIBC_EXTRA": "/lib"}, False, False))
+        self.assertIsNone(guard.softfloat_library_missing({}, sdcc_only=True, no_softfloat=False))
+        self.assertIsNone(guard.softfloat_library_missing({}, sdcc_only=False, no_softfloat=True))
+
+    def test_the_sdcc_compile_gets_the_timeout_the_run_asked_for(self):
+        """div_constants_long's `-ma` variants (--max-allocs-per-node 200000) need over 300 s: the fixed limit dropped 2 of 4 SDCC
+        columns of that cell (and 1 of div_constants_ulong and long_shift_by_a_call_result) and the best-bar read from the rest."""
+        import subprocess
+        from types import SimpleNamespace
+        from unittest import mock
+
+        sweep = self.sweep()
+        seen = []
+
+        def timed_out(command, cwd, input=None, timeout=None):
+            seen.append(timeout)
+            raise subprocess.TimeoutExpired(command, timeout)
+
+        ctx = SimpleNamespace(sdcc_timeout=3600, defines=[], predefined={})
+        with mock.patch.object(sweep.run, "sh", timed_out), mock.patch.object(sweep, "assemble"), mock.patch.object(
+            sweep, "branch_header", return_value=[]
+        ):
+            with tempfile.TemporaryDirectory() as work:
+                source = Path(work) / "p.c"
+                source.write_text("int main(void) { return 0; }\n")
+                with self.assertRaises(sweep.Void):
+                    sweep.sdcc_cell(source, Path(work), "sdcc-x", [], ctx, [])
+        self.assertEqual(seen, [3600])
+
+
+class LibraryChecks(unittest.TestCase):
+    def test_a_failing_library_script_fails_the_sweep_and_is_named(self):
+        """f64 divide gave 3.0/1.0 = 4 for a day (2026-11-13): tests/z80/f64_div_clk.sh failed, and no runner ran it."""
+        with tempfile.TemporaryDirectory() as d:
+            for name, body in (("good.sh", "exit 0"), ("bad.sh", "echo 'f64 div: xor differs'; exit 1")):
+                Path(d, name).write_text(body)
+            failed = guard.failed_library_checks(d, "llc", checks=("good.sh", "bad.sh"))
+        self.assertEqual(failed, {"bad.sh": "f64 div: xor differs"})
+
+    def test_the_run_checks_are_the_three_scripts_that_hid_it(self):
+        self.assertEqual([Path(s).name for s in guard.LIBRARY_CHECKS], ["f64_div_clk.sh", "f64_mul_clk.sh", "mul64_check.sh", "z80_f64_split_test.sh"])
+
+
+class Selection(unittest.TestCase):
+    def test_no_selected_program_includes_a_header_the_z80_has_not_got(self):
+        """bench_io, os_console and os_exit include `llrm_os.h` / `bench_io.h` (x86 OS layer): selected for the z80, each failed
+        'file not found' in every sweep and read as a cell with no bar."""
+        src = Path(__file__).resolve().parents[5] / "tests" / "run" / "c"
+        for program in run.selected(src):
+            text = program.read_text()
+            self.assertNotIn("llrm_os.h", text, program.name)
+            self.assertNotIn("bench_io.h", text, program.name)
+
+
+class GccColumn(unittest.TestCase):
+    def test_a_program_without_an_sdcc_bar_gets_the_forks_cell_as_its_bar(self):
+        """36 programs had no SDCC row (error 101, wrong value, 32-bit double): 15 of them build and pass under the gcc-z80 fork and
+        read 'no bar' in the sweep's .nobar list, outside the counted cells."""
+        rows = guard.add_gcc_row([("ours", 1570, 18827)], (1779, 602269), None)
+        self.assertEqual(rows, [("ours", 1570, 18827), ("gcc", 1779, 602269)])
+        self.assertTrue(guard.has_bar(rows))
+        self.assertFalse(guard.has_bar([("ours", 1570, 18827)]))
+
+    def test_a_program_the_fork_computes_differently_gets_no_gcc_row(self):
+        """float_in_memory_loop passes under the fork with a 32-bit double: a bar of 298 B against our 64-bit program."""
+        rows = [("ours", 4000, 90000)]
+        self.assertEqual(guard.add_gcc_row(rows, (298, 63476), "double is 32 bits"), rows)
+
+    def test_the_gcc_column_reads_only_its_own_rows(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "gcc.tsv"
+            path.write_text("builtin_expect\tgcc\t45\t776\nother\tsdcc-size\t1\t2\n")
+            self.assertEqual(guard.read_gcc_column(path), {"builtin_expect": (45, 776)})
+
+
+class BarNone(unittest.TestCase):
+    def test_a_marked_program_is_read_and_a_plain_one_is_not(self):
+        text = "// flags: -O2\n// bar: none (SDCC error 101: too many parameters)\nint main(void) { return 0; }\n"
+        self.assertEqual(guard.no_bar(text), "SDCC error 101: too many parameters")
+        self.assertIsNone(guard.no_bar("// flags: -O2\nint main(void) { return 0; }\n"))
+
+    def test_a_marked_program_is_not_listed_as_unmeasured(self):
+        """34 programs had no SDCC bar and all 34 read as 'unmeasured' in the .nobar list: 19 of them are SDCC miscompiles or errors
+        that nobody will fix, so the list could not show the ones whose bar is missing for an unknown reason."""
+        results = [("known", [("ours", 10, 20)]), ("unknown", [("ours", 10, 20)]), ("barred", [("ours", 10, 20), ("sdcc-size", 9, 19)])]
+        reasons = {"known": {"sdcc-size": "NOBAR SDCC error 101"}, "unknown": {"sdcc-size": "SDCC failed"}}
+        self.assertEqual(guard.unmeasured(results, reasons), ["unknown"])

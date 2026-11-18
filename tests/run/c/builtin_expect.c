@@ -1,4 +1,5 @@
 // flags: -O0 | -O2 | -Os
+// bar: none (SDCC error 101: too many parameters)
 // __builtin_expect(x, c) in valid C compiled to a call of an undefined extern and the program did not link.
 extern void report(long value);
 

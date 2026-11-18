@@ -5,9 +5,10 @@
 //! `LoopVectorize.cpp` `processLoop`
 //! ([L8067](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Vectorize/LoopVectorize.cpp#L8067),
 //! "interleaved loop (interleaved count: N)"): `computeBestVF` chose VF 1, and
-//! `selectInterleaveCount` (L3705, [`crate::loopvectorizeplan::choose_interleave`])
-//! chose IC > 1. `VPlanTransforms::unrollByUF`
-//! ([VPlanUnroll.cpp L504](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Vectorize/VPlanUnroll.cpp#L504))
+//! `selectInterleaveCount` (L3705,
+//! [`crate::loopvectorizeplan::choose_interleave`]) chose IC > 1.
+//! `VPlanTransforms::unrollByUF` ([VPlanUnroll.cpp
+//! L504](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Vectorize/VPlanUnroll.cpp#L504))
 //! copies every recipe once per part; part `k` reads the induction as
 //! `index + k`. Each reduction gets one phi per part, so the parts do not wait
 //! for each other (`VPReductionPHIRecipe`), and the middle block folds the
@@ -36,8 +37,8 @@
 //!   not interleaved alone. The widening of casts and reductions is not
 //!   translated (LV-X4), so the loop is interleaved only if no vector factor
 //!   takes its loads, stores and arithmetic (an `i64` multiply has no NEON
-//!   form); a cast or reduction a vector factor would also price is not
-//!   priced. Exit: the vector cast and reduction costs with LV-X4.
+//!   form); a cast or reduction a vector factor would also price is not priced.
+//!   Exit: the vector cast and reduction costs with LV-X4.
 //! - LVI3 the register pressure is counted on the loop's instructions in order,
 //!   one register per live value (`calculateRegisterUsageForPlan`, L106, at VF
 //!   1); invariants are the instructions defined outside and read inside.
@@ -46,20 +47,21 @@
 //! After the vector plan of [`crate::loopvectorize`] did not widen the loop.
 
 use llrm_analysis::ivdescriptors::RecurKind;
-use llrm_analysis::scev::Cx;
+use llrm_analysis::loopaccess::{SymbolicStrideMap, get_ptr_stride};
+use llrm_analysis::scev::{Cx, ScalarEvolution};
 use llrm_mir::context::{Constant, ConstantKind, Context};
 use llrm_mir::edit::{Position, ValueMap};
 use llrm_mir::loopinfo::Loop;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
-use llrm_mir::tti::{ArithOp, CastKind, CmpSel, CostKind, MemoryOp, Tti, Ty};
-use llrm_mir::types::{Type, TypeId};
+use llrm_mir::tti::{ArithOp, CastKind, CmpSel, CostKind, MemoryOp, Predicate, Tti, Ty};
+use llrm_mir::types::{FloatKind, Type, TypeId};
 
+use crate::lcssa::{arms, from_arms};
 use crate::loopvectorize::Skipped;
 use crate::loopvectorizelegality::Legality;
-use crate::loopvectorizeplan::{Recipe, SCALAR_CONTROL_COST};
+use crate::loopvectorizeplan::{Recipe, scalar_control_cost};
 use crate::loopvectorizeskeleton::{Shape, Skeleton};
-use crate::lcssa::{arms, from_arms};
 
 /// A reduction of the loop: its phi, the recurrence kind, the instruction that
 /// feeds the phi back and is also the value used after the loop.
@@ -88,6 +90,26 @@ pub(crate) struct Interleaving {
     pub reductions: Vec<Reduction>,
 }
 
+/// `Op2Info` of an unsigned divide or remainder: a constant divisor is a few
+/// multiplies on a target that says so, not a division. Other operations
+/// carry none.
+pub(crate) fn divisor_info(
+    context: &Context,
+    op: BinaryOp,
+    divisor: Operand,
+    ty: Ty,
+) -> llrm_mir::tti::OperandInfo {
+    let (Operand::Constant(id), Ty::Int(width), BinaryOp::UDiv | BinaryOp::URem | BinaryOp::SDiv | BinaryOp::SRem) =
+        (divisor, ty, op)
+    else {
+        return Default::default();
+    };
+    match context.get(id).kind {
+        ConstantKind::Int(bits) => llrm_mir::tti::OperandInfo::constant(bits as i128, width),
+        _ => Default::default(),
+    }
+}
+
 /// The `ArithOp` that prices an integer `BinaryOp`, if the cost model knows it.
 fn arith_of(op: BinaryOp) -> Option<ArithOp> {
     Some(match op {
@@ -104,21 +126,74 @@ fn arith_of(op: BinaryOp) -> Option<ArithOp> {
         BinaryOp::And => ArithOp::And,
         BinaryOp::Or => ArithOp::Or,
         BinaryOp::Xor => ArithOp::Xor,
-        _ => return None,
+        BinaryOp::FAdd => ArithOp::FAdd,
+        BinaryOp::FSub => ArithOp::FSub,
+        BinaryOp::FMul => ArithOp::FMul,
+        BinaryOp::FDiv => ArithOp::FDiv,
+        BinaryOp::FRem => ArithOp::FRem,
     })
 }
 
-fn cast_kind(op: CastOp) -> Option<CastKind> {
+pub(crate) fn cast_kind(op: CastOp) -> Option<CastKind> {
     Some(match op {
         CastOp::Trunc => CastKind::Trunc,
         CastOp::ZExt => CastKind::ZExt,
         CastOp::SExt => CastKind::SExt,
-        _ => return None,
+        CastOp::FPTrunc => CastKind::FPTrunc,
+        CastOp::FPExt => CastKind::FPExt,
+        CastOp::FPToUI => CastKind::FPToUI,
+        CastOp::FPToSI => CastKind::FPToSI,
+        CastOp::UIToFP => CastKind::UIToFP,
+        CastOp::SIToFP => CastKind::SIToFP,
+        CastOp::BitCast => CastKind::BitCast,
+        CastOp::PtrToInt | CastOp::IntToPtr | CastOp::FPRound | CastOp::AddrSpaceCast => return None,
+    })
+}
+
+/// The reduction a header phi is, or why the loop is left alone: a kind with an
+/// identity, whose update is in the loop and is the only value (with the phi
+/// itself, by the update) read after it.
+pub(crate) fn reduction_of(
+    function: &Function,
+    legality: &Legality,
+    header: BlockId,
+    phi: InstId,
+    used_after_loop: impl Fn(ValueId) -> bool,
+) -> Result<Reduction, Skipped> {
+    let Some((_, descriptor)) = legality.reductions.iter().find(|(one, _)| *one == phi) else {
+        return Err(Skipped("A header phi other than the induction and the reductions"));
+    };
+    if reduction_op(descriptor.kind).is_none() {
+        return Err(Skipped("A reduction that is not add, mul, and, or or xor"));
+    }
+    if descriptor.has_uses_outside_reduction_chain() || descriptor.intermediate_store.is_some() {
+        return Err(Skipped("A reduction used other than by its chain"));
+    }
+    let back = arms(function, phi).into_iter().find(|&(_, from)| from == header).map(|(value, _)| value);
+    let latch = match back {
+        Some(Operand::Value(value)) => match function.value(value).def {
+            ValueDef::Instruction(def) if function.parent(def) == Some(header) => def,
+            _ => return Err(Skipped("A reduction whose update is not in the loop")),
+        },
+        _ => return Err(Skipped("A reduction whose update is not in the loop")),
+    };
+    if descriptor.loop_exit_instr.is_some_and(|one| one != latch) {
+        return Err(Skipped("A reduction whose used value is not its update"));
+    }
+    if used_after_loop(function.instruction(phi).result.expect("a phi")) {
+        return Err(Skipped("A reduction phi used after the loop"));
+    }
+    Ok(Reduction {
+        phi,
+        kind: descriptor.kind,
+        latch,
+        start: descriptor.start_value,
+        ty: function.instruction(phi).ty,
     })
 }
 
 /// The operation a reduction of `kind` folds with, and its identity.
-fn reduction_op(kind: RecurKind) -> Option<(BinaryOp, u128)> {
+pub(crate) fn reduction_op(kind: RecurKind) -> Option<(BinaryOp, u128)> {
     Some(match kind {
         RecurKind::Add => (BinaryOp::Add, 0),
         RecurKind::Mul => (BinaryOp::Mul, 1),
@@ -136,6 +211,19 @@ fn int_ty(
     match cx.context.types.get(ty) {
         Type::Int(bits @ (1 | 8 | 16 | 32 | 64)) => Some(Ty::Int(*bits)),
         _ => None,
+    }
+}
+
+/// An element the cost model prices: an integer of a width the target has, or a
+/// `float` or `double`.
+fn scalar_ty(
+    cx: &Cx,
+    ty: TypeId,
+) -> Option<Ty> {
+    match cx.context.types.get(ty) {
+        Type::Float(FloatKind::Float) => Some(Ty::Float),
+        Type::Float(FloatKind::Double) => Some(Ty::Double),
+        _ => int_ty(cx, ty),
     }
 }
 
@@ -162,6 +250,7 @@ pub(crate) struct Extracted {
 /// The body of the single-block loop of `the_loop`, or why it is not
 /// interleaved.
 pub(crate) fn extract(
+    se: &mut ScalarEvolution,
     cx: &Cx,
     the_loop: Loop,
     legality: &Legality,
@@ -172,17 +261,21 @@ pub(crate) fn extract(
     let function = cx.function;
     let header = the_loop.get_header();
     let kind = CostKind::RecipThroughput;
+    let strides = SymbolicStrideMap::default();
     let primary_phi = Operand::Value(function.instruction(primary).result.expect("a phi"));
     let index_ty = function.instruction(primary).ty;
     let preheader = the_loop.get_loop_preheader(function).ok_or(Skipped("The loop has no preheader"))?;
     let exit = the_loop.get_unique_exit_block(function).ok_or(Skipped("The loop has no unique exit block"))?;
     let outside = |value: ValueId, allowed_exit_phi: bool| -> bool {
-        function.users(value).iter().any(|one| {
-            function.parent(one.user) != Some(header)
-                && !(allowed_exit_phi
-                    && function.parent(one.user) == Some(exit)
-                    && function.instruction(one.user).opcode == Opcode::Phi)
-        })
+        function
+            .users(value)
+            .iter()
+            .any(
+                |one| function.parent(one.user) != Some(header)
+                    && !(allowed_exit_phi
+                        && function.parent(one.user) == Some(exit)
+                        && function.instruction(one.user).opcode == Opcode::Phi),
+            )
     };
 
     // The exit test: the stepped induction against a loop-invariant bound.
@@ -223,7 +316,9 @@ pub(crate) fn extract(
         (Operand::Constant(_), b) if b == primary_phi => 0,
         _ => return Err(Skipped("The induction step is not a constant")),
     };
-    if outside(function.instruction(primary).result.expect("a phi"), false) || outside(step_data.result.expect("an add"), false) {
+    if outside(function.instruction(primary).result.expect("a phi"), false)
+        || outside(step_data.result.expect("an add"), false)
+    {
         return Err(Skipped("The induction is used after the loop"));
     }
 
@@ -232,7 +327,7 @@ pub(crate) fn extract(
         .users(step_result)
         .iter()
         .any(|one| one.user != compare && one.user != primary && function.parent(one.user) == Some(header));
-    let mut cost = SCALAR_CONTROL_COST;
+    let mut cost = scalar_control_cost(tti);
     let (mut loads, mut stores) = (0u32, 0u32);
     let mut body = Vec::new();
     let mut priced = Vec::new();
@@ -245,38 +340,9 @@ pub(crate) fn extract(
         }
         match data.opcode {
             Opcode::Phi => {
-                let Some((_, descriptor)) = legality.reductions.iter().find(|(phi, _)| *phi == inst) else {
-                    return Err(Skipped("A header phi other than the induction and the reductions"));
-                };
-                if reduction_op(descriptor.kind).is_none() {
-                    return Err(Skipped("A reduction that is not add, mul, and, or or xor"));
-                }
-                if descriptor.has_uses_outside_reduction_chain() || descriptor.intermediate_store.is_some() {
-                    return Err(Skipped("A reduction used other than by its chain"));
-                }
-                let back = arms(function, inst).into_iter().find(|&(_, from)| from == header).map(|(value, _)| value);
-                let latch = match back {
-                    Some(Operand::Value(value)) => match function.value(value).def {
-                        ValueDef::Instruction(def) if function.parent(def) == Some(header) => def,
-                        _ => return Err(Skipped("A reduction whose update is not in the loop")),
-                    },
-                    _ => return Err(Skipped("A reduction whose update is not in the loop")),
-                };
-                if descriptor.loop_exit_instr.is_some_and(|one| one != latch) {
-                    return Err(Skipped("A reduction whose used value is not its update"));
-                }
-                let result = function.instruction(inst).result.expect("a phi");
-                if outside(result, false) {
-                    return Err(Skipped("A reduction phi used after the loop"));
-                }
-                reductions.push(Reduction {
-                    phi: inst,
-                    kind: descriptor.kind,
-                    latch,
-                    start: descriptor.start_value,
-                    ty: function.instruction(inst).ty,
-                });
-                cost += 1;
+                let reduction = reduction_of(function, legality, header, inst, |value| outside(value, false))?;
+                reductions.push(reduction);
+                cost += tti.cf_instr_cost(true, kind).value;
             }
             Opcode::GetElementPtr { .. } => body.push(inst),
             Opcode::Load { volatile, .. } | Opcode::Store { volatile, .. } => {
@@ -284,14 +350,16 @@ pub(crate) fn extract(
                     return Err(Skipped("A volatile access"));
                 }
                 let is_load = matches!(data.opcode, Opcode::Load { .. });
-                let value_ty = if is_load {
-                    data.ty
+                let (value_ty, ptr) = if is_load {
+                    (data.ty, data.operands[0])
                 } else {
-                    function.operand_type(cx.context, data.operands[0]).ok_or(Skipped("An untyped store"))?
+                    let stored =
+                        function.operand_type(cx.context, data.operands[0]).ok_or(Skipped("An untyped store"))?;
+                    (stored, data.operands[1])
                 };
                 let lane = match cx.context.types.get(value_ty) {
                     Type::Pointer(_) => Ty::Pointer,
-                    _ => int_ty(cx, value_ty).ok_or(Skipped("An element type the target has no cost for"))?,
+                    _ => scalar_ty(cx, value_ty).ok_or(Skipped("An element type the target has no cost for"))?,
                 };
                 let op = if is_load { MemoryOp::Load } else { MemoryOp::Store };
                 let stored_constant = !is_load && matches!(data.operands[0], Operand::Constant(_));
@@ -299,13 +367,31 @@ pub(crate) fn extract(
                 if !price.valid {
                     return Err(Skipped("An access the target does not price"));
                 }
-                cost += price.value;
+                let scalar = price.value + tti.address_computation_cost(kind).value;
+                cost += scalar;
                 let align = match data.opcode {
                     Opcode::Load { align, .. } | Opcode::Store { align, .. } => align,
                     _ => None,
                 }
                 .unwrap_or(cx.layout.size_bits(&cx.context.types, value_ty) / 8);
-                priced.push(if is_load { Recipe::Load { lane, align } } else { Recipe::Store { lane, align } });
+                // `getWideningDecision`: consecutive addresses widen; a uniform
+                // address, a reversal and a small stride (an
+                // interleave group) have costs of their own, which this port
+                // does not price; any other pattern is
+                // scalarized (NEON has no gather or scatter).
+                let step = get_ptr_stride(se, cx, value_ty, ptr, header, &strides, true);
+                let bytes = (cx.layout.size_bits(&cx.context.types, value_ty) / 8) as i64;
+                priced.push(match step {
+                    Some(1) => {
+                        if is_load {
+                            Recipe::Load { lane, align }
+                        } else {
+                            Recipe::Store { lane, align }
+                        }
+                    }
+                    Some(-4..=4) => Recipe::Unpriced { scalar_cost: scalar },
+                    _ => Recipe::Scalarized { op, lane, stride_bytes: step.map(|stride| stride * bytes) },
+                });
                 if is_load {
                     loads += 1;
                 } else {
@@ -313,15 +399,18 @@ pub(crate) fn extract(
                 }
                 body.push(inst);
             }
+            // The step's `add` is the loop control's, priced once there.
+            Opcode::Binary(_) if inst == step => body.push(inst),
             Opcode::Binary(op) => {
                 let arith = arith_of(op).ok_or(Skipped("A binary operation the cost model does not know"))?;
-                let ty = int_ty(cx, data.ty).ok_or(Skipped("An element type the target has no cost for"))?;
-                let price = tti.arithmetic_cost(arith, ty, kind, Default::default(), Default::default());
+                let ty = scalar_ty(cx, data.ty).ok_or(Skipped("An element type the target has no cost for"))?;
+                let second = divisor_info(cx.context, op, data.operands[1], ty);
+                let price = tti.arithmetic_cost(arith, ty, kind, Default::default(), second);
                 if !price.valid {
                     return Err(Skipped("An operation the target does not price"));
                 }
                 cost += price.value;
-                priced.push(Recipe::Binary { op: arith, lane: ty });
+                priced.push(Recipe::Binary { op: arith, lane: ty, ext: [None, None], second });
                 let extended = |operand: Operand| {
                     matches!(
                         operand,
@@ -339,9 +428,9 @@ pub(crate) fn extract(
             }
             Opcode::Cast(op) => {
                 let ck = cast_kind(op).ok_or(Skipped("A cast the cost model does not know"))?;
-                let dst = int_ty(cx, data.ty).ok_or(Skipped("An element type the target has no cost for"))?;
+                let dst = scalar_ty(cx, data.ty).ok_or(Skipped("An element type the target has no cost for"))?;
                 let src_ty = function.operand_type(cx.context, data.operands[0]).ok_or(Skipped("An untyped cast"))?;
-                let src = int_ty(cx, src_ty).ok_or(Skipped("An element type the target has no cost for"))?;
+                let src = scalar_ty(cx, src_ty).ok_or(Skipped("An element type the target has no cost for"))?;
                 // LVI1: an extension of a load is folded into it.
                 let of_load = matches!(
                     data.operands[0],
@@ -350,26 +439,61 @@ pub(crate) fn extract(
                         ValueDef::Instruction(def) if matches!(function.instruction(def).opcode, Opcode::Load { .. })
                     )
                 );
-                if !(of_load && matches!(ck, CastKind::ZExt | CastKind::SExt)) {
+                let folded = of_load && matches!(ck, CastKind::ZExt | CastKind::SExt);
+                if !folded {
                     let price = tti.cast_cost(ck, dst, src, kind);
                     if !price.valid {
                         return Err(Skipped("A cast the target does not price"));
                     }
                     cost += price.value;
                 }
+                priced.push(Recipe::Cast { kind: ck, dst, src, folded, users: Vec::new() });
                 body.push(inst);
             }
-            Opcode::ICmp(_) | Opcode::Select => {
+            Opcode::ICmp(_) | Opcode::FCmp(_) | Opcode::Select => {
+                let select = matches!(data.opcode, Opcode::Select);
                 let operand_ty = function
-                    .operand_type(cx.context, if matches!(data.opcode, Opcode::Select) { data.operands[1] } else { data.operands[0] })
+                    .operand_type(cx.context, if select { data.operands[1] } else { data.operands[0] })
                     .ok_or(Skipped("An untyped comparison"))?;
-                let ty = int_ty(cx, operand_ty).ok_or(Skipped("An element type the target has no cost for"))?;
-                let op = if matches!(data.opcode, Opcode::Select) { CmpSel::Select } else { CmpSel::ICmp };
-                let price = tti.cmp_sel_cost(op, ty, kind);
+                let ty = scalar_ty(cx, operand_ty).ok_or(Skipped("An element type the target has no cost for"))?;
+                let op = match data.opcode {
+                    Opcode::Select => CmpSel::Select,
+                    Opcode::FCmp(_) => CmpSel::FCmp,
+                    _ => CmpSel::ICmp,
+                };
+                let own = match data.opcode {
+                    Opcode::ICmp(predicate) => Some(Predicate::Int(predicate)),
+                    Opcode::FCmp(predicate) => Some(Predicate::Float(predicate)),
+                    _ => None,
+                };
+                // The compare that makes a select's condition, where the loop
+                // does: the target prices a select by it.
+                let feeding = match data.operands[0] {
+                    Operand::Value(value) if select => match function.value(value).def {
+                        ValueDef::Instruction(def) if function.parent(def) == Some(header) => {
+                            match function.instruction(def).opcode {
+                                Opcode::ICmp(predicate) => Some(Predicate::Int(predicate)),
+                                Opcode::FCmp(predicate) => Some(Predicate::Float(predicate)),
+                                _ => None,
+                            }
+                        }
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                let price = tti.cmp_sel_cost_for(op, ty, kind, own.or(feeding));
                 if !price.valid {
                     return Err(Skipped("A comparison the target does not price"));
                 }
                 cost += price.value;
+                priced.push(match (select, own, feeding) {
+                    (false, Some(predicate), _) => Recipe::Compare { op, lane: ty, predicate },
+                    // A select by a condition the loop makes widens to a vector
+                    // select; any other (a loop-invariant condition) is a
+                    // different recipe to the pin.
+                    (true, _, Some(_)) => Recipe::Select { lane: ty, predicate: feeding },
+                    _ => Recipe::Unpriced { scalar_cost: price.value },
+                });
                 body.push(inst);
             }
             _ => return Err(Skipped("An instruction the interleaver does not copy")),
@@ -395,7 +519,7 @@ pub(crate) fn extract(
     }
 
     let (users, invariants) = register_usage(function, header, &body, &reductions, primary);
-    let shape = Shape { header, preheader, exit, primary, compare, bound_operand, index_ty };
+    let shape = Shape { header, preheader, exit, primary, compare, bound_operand, index_ty, reverse: false, scale: 1, tests_phi: false };
     Ok(Extracted {
         interleaving: Interleaving { shape, step, step_operand, step_in_body, body, reductions },
         cost,
@@ -473,7 +597,7 @@ fn int_constant(
 }
 
 /// The identity of a reduction as a constant of its type.
-fn identity(
+pub(crate) fn identity(
     context: &Context,
     reduction: &Reduction,
     value: u128,
@@ -500,7 +624,8 @@ pub(crate) fn execute(
     let Interleaving { shape, step, step_operand, step_in_body, body, reductions } = interleaving;
     let header = shape.header;
     let parts = ic as usize;
-    let first = function.iter_block(header).find(|&inst| function.instruction(inst).opcode != Opcode::Phi).expect("a body");
+    let first =
+        function.iter_block(header).find(|&inst| function.instruction(inst).opcode != Opcode::Phi).expect("a body");
     let primary_value = function.instruction(shape.primary).result.expect("a phi");
 
     // part k's view of the loop-variant values.
@@ -511,7 +636,8 @@ pub(crate) fn execute(
         let original = function.instruction(reduction.phi).result.expect("a phi");
         let mut phis = vec![reduction.phi];
         for part in 1..parts {
-            let phi = function.create_instruction(Opcode::Phi, reduction.ty, Vec::new(), Flags::default(), Some("vec.phi"));
+            let phi =
+                function.create_instruction(Opcode::Phi, reduction.ty, Vec::new(), Flags::default(), Some("vec.phi"));
             function.insert(phi, Position::Before(first)).expect("the header");
             let value = Operand::Value(function.instruction(phi).result.expect("a phi"));
             maps[part].values.insert(original, value);
@@ -552,7 +678,8 @@ pub(crate) fn execute(
         }
     }
 
-    // The phis' arms: the identity on entry, the part's update on the back edge.
+    // The phis' arms: the identity on entry, the part's update on the back
+    // edge.
     let enter = skeleton.vector_ph;
     for (reduction, phis) in reductions.iter().zip(&part_phis) {
         let (_, neutral) = reduction_op(reduction.kind).expect("a kind with an identity");
@@ -578,8 +705,10 @@ pub(crate) fn execute(
         );
         function.insert(next, Position::Before(shape.compare)).expect("the exit test's block");
         let next = Operand::Value(function.instruction(next).result.expect("an add"));
-        let back: Vec<_> =
-            arms(function, shape.primary).into_iter().map(|(v, from)| (if v == stepped { next } else { v }, from)).collect();
+        let back: Vec<_> = arms(function, shape.primary)
+            .into_iter()
+            .map(|(v, from)| (if v == stepped { next } else { v }, from))
+            .collect();
         function.set_operands(shape.primary, from_arms(&back));
         function.set_operand(shape.compare, 1 - shape.bound_operand, next);
     } else {
@@ -599,15 +728,37 @@ pub(crate) fn execute(
         let mut total = Operand::Value(original);
         for part in 1..parts {
             let value = *maps[part].values.get(&original).expect("a copy of the update");
-            let made = function.create_instruction(Opcode::Binary(op), reduction.ty, vec![value, total], Flags::default(), Some("bin.rdx"));
+            let made = function.create_instruction(
+                Opcode::Binary(op),
+                reduction.ty,
+                vec![value, total],
+                Flags::default(),
+                Some("bin.rdx"),
+            );
             function.insert(made, before).expect("the middle block");
             total = Operand::Value(function.instruction(made).result.expect("a binary operation"));
         }
         folded.push(total);
     }
+    hand_on(function, shape, skeleton, middle, reductions, &folded);
+}
+
+/// What follows the middle block's fold of the reductions: the exit block
+/// reads each total from the middle block (and the remainder's own last value
+/// from the remainder), and the remainder resumes each reduction from its total
+/// (`bc.merge.rdx`), or from its start where the vector loop was skipped.
+/// `totals[i]` is the value of `reductions[i]` after the vector loop.
+pub(crate) fn hand_on(
+    function: &mut Function,
+    shape: &Shape,
+    skeleton: &Skeleton,
+    middle: BlockId,
+    reductions: &[Reduction],
+    totals: &[Operand],
+) {
     let exit = shape.exit;
     let remainder_block = skeleton.remainder.as_ref().map(|(block, _)| *block);
-    for (reduction, total) in reductions.iter().zip(&folded) {
+    for (reduction, total) in reductions.iter().zip(totals) {
         let original = Operand::Value(function.instruction(reduction.latch).result.expect("an update"));
         let copy_in_remainder = skeleton.remainder.as_ref().map(|(_, pairs)| {
             let phi = pairs.iter().find(|(from, _)| *from == reduction.phi).expect("the copy of the phi").1;
@@ -638,18 +789,22 @@ pub(crate) fn execute(
             }
         }
         // The remainder resumes the reduction from the folded value
-        // (`bc.merge.rdx`), or from the start where the vector loop was skipped.
+        // (`bc.merge.rdx`), or from the start where the vector loop was
+        // skipped.
         if let Some((phi, _)) = copy_in_remainder {
             let (enter_from, merged) = match skeleton.scalar_ph {
                 Some(scalar_ph) => {
-                    let merge = function.create_instruction(Opcode::Phi, reduction.ty, Vec::new(), Flags::default(), Some("bc.merge.rdx"));
+                    let merge = function.create_instruction(
+                        Opcode::Phi,
+                        reduction.ty,
+                        Vec::new(),
+                        Flags::default(),
+                        Some("bc.merge.rdx"),
+                    );
                     let at = function.iter_block(scalar_ph).next().expect("a terminated block");
                     function.insert(merge, Position::Before(at)).expect("scalar.ph");
                     let merge_value = Operand::Value(function.instruction(merge).result.expect("a phi"));
-                    function.set_operands(
-                        merge,
-                        from_arms(&[(*total, middle), (reduction.start, shape.preheader)]),
-                    );
+                    function.set_operands(merge, from_arms(&[(*total, middle), (reduction.start, shape.preheader)]));
                     (scalar_ph, merge_value)
                 }
                 None => (middle, *total),

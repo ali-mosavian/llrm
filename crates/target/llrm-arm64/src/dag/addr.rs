@@ -99,6 +99,30 @@ pub fn arith_immed<D: AddrDag>(
     Some([value, shifter])
 }
 
+/// `SelectExtractHigh`
+/// ([AArch64ISelDAGToDAG.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelDAGToDAG.cpp)):
+/// the high half of a 128-bit vector, seen through a bitcast; the vector is
+/// the result.
+pub fn extract_high<D: AddrDag>(
+    dag: &mut D,
+    n: SDValue,
+) -> Option<[SDValue; 1]> {
+    let n = if dag.opcode(n.node) == isd::BITCAST { dag.operand(n.node, 0) } else { n };
+    if dag.opcode(n.node) != isd::EXTRACT_SUBVECTOR {
+        return None;
+    }
+    let index = dag.constant(dag.operand(n.node, 1))?;
+    let (half, whole) = (dag.value_type(n), dag.value_type(dag.operand(n.node, 0)));
+    // `is64BitVector`, `is128BitVector`, `Index == getVectorNumElements`.
+    let lanes = match (half, whole) {
+        (h, w) if h == Vt::V8I8 && w == mvt::v16i8 => 8,
+        (h, w) if h == Vt::V4I16 && w == mvt::v8i16 => 4,
+        (h, w) if h == Vt::V2I32 && w == mvt::v4i32 => 2,
+        _ => return None,
+    };
+    (index == lanes).then(|| [dag.operand(n.node, 0)])
+}
+
 /// `SelectNegArithImmed`: `-immediate` as an arithmetic immediate.
 pub fn neg_arith_immed<D: AddrDag>(
     dag: &mut D,

@@ -547,10 +547,13 @@ fn reference_counts(module: &Module) -> llrm_support::hash::IndexMap<GlobalId, i
 /// The functions an indirect call may reach by the metadata that lists them
 /// (`!callees`): no direct call names them, and they are still called.
 fn listed(module: &Module) -> BTreeSet<GlobalId> {
+    let stale = llrm_mir::callgraph::stale_callee_lists(module);
     module
         .metadata
         .iter()
-        .flat_map(|node| &node.operands)
+        .enumerate()
+        .filter(|(at, _)| !stale.contains(&(*at as u32)))
+        .flat_map(|(_, node)| &node.operands)
         .filter_map(|operand| match operand {
             llrm_mir::module::MetadataOperand::Constant(id) => match module.context.get(*id).kind {
                 llrm_mir::context::ConstantKind::Global(global) => Some(global),
@@ -798,7 +801,11 @@ pub fn optimized_with<E: From<String>>(
                     &private[at],
                     costs,
                     threshold.cp_clone.unwrap_or(false),
-                    threshold.cp_hint_clones,
+                    crate::ipacp::Tuning {
+                        hint_clones: threshold.cp_hint_clones,
+                        peel_limited: threshold.cp_peel_limited,
+                        max_clones: threshold.cp_max_clones,
+                    },
                     cloning,
                 )
             });

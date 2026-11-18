@@ -327,6 +327,9 @@ struct Registers {
     /// The index of each register's definition in a block, for the blocks
     /// searched; dropped when the block changes.
     positions: HashMap<usize, HashMap<VReg, usize>>,
+    /// For a register with several definitions, per block: the one block whose
+    /// definition is the value live on entry, if the entry has one value.
+    entering: HashMap<VReg, Vec<Option<usize>>>,
 }
 
 impl Registers {
@@ -352,7 +355,44 @@ impl Registers {
             }
         }
         let live_out = if optimize { crate::liveness::liveness(f).1 } else { Vec::new() };
-        Registers { optimize, live_out, defs, uses, first_def, positions: HashMap::default() }
+        Registers { optimize, live_out, defs, uses, first_def, positions: HashMap::default(), entering: HashMap::default() }
+    }
+
+    /// The block holding the one definition of `reg` whose value is live on
+    /// entry to `block`: `getVNInfoBefore` at the block's start, where it is no
+    /// merge of two values (a `PHIDef`, which `getVRegDef` answers with no
+    /// instruction).
+    fn entering_def_block(
+        &mut self,
+        f: &Function,
+        reg: VReg,
+        block: usize,
+    ) -> Option<usize> {
+        if !self.entering.contains_key(&reg) {
+            let n = f.blocks.len();
+            let defines: Vec<bool> = f.blocks.iter().map(|b| b.iter().any(|inst| inst.defs().any(|r| r == reg))).collect();
+            // The definitions (by block) that reach each block's entry.
+            let mut reaching: Vec<Vec<usize>> = vec![Vec::new(); n];
+            let mut work: Vec<usize> = (0..n).filter(|&b| defines[b]).collect();
+            while let Some(b) = work.pop() {
+                let out: Vec<usize> = if defines[b] { vec![b] } else { reaching[b].clone() };
+                for &s in &f.succs[b] {
+                    let mut grew = false;
+                    for &d in &out {
+                        if !reaching[s].contains(&d) {
+                            reaching[s].push(d);
+                            grew = true;
+                        }
+                    }
+                    if grew && !defines[s] {
+                        work.push(s);
+                    }
+                }
+            }
+            let found = reaching.iter().map(|r| if let [one] = r[..] { Some(one) } else { None }).collect();
+            self.entering.insert(reg, found);
+        }
+        self.entering[&reg][block]
     }
 
     /// `MRI.createVirtualRegister` with one definition and one use.
@@ -430,7 +470,15 @@ fn reaching_def(
     if !regs.optimize {
         return None;
     }
-    above().map(|index| Site { block, index })
+    if let Some(index) = above() {
+        return Some(Site { block, index });
+    }
+    // None above in this block: the value that enters it, when one definition
+    // reaches (`LiveIntervals::getVNInfoBefore` crosses blocks). A definition
+    // further down this block reaches round a loop and merges with the entry's.
+    let def_block = regs.entering_def_block(f, reg, block).filter(|&d| d != block)?;
+    let index = f.blocks[def_block].iter().rposition(|inst| inst.defs().any(|r| r == reg))?;
+    Some(Site { block: def_block, index })
 }
 
 /// `hasSingleUse`: `reg`, defined at `def` of `block` (where the pass is

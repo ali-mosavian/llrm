@@ -69,7 +69,8 @@ struct Printer<'a> {
     frame: Frame,
     /// The blocks that are only a `ret`.
     returns_bare: Vec<u32>,
-    /// The jump tables to print after the function: the index and the block of each entry.
+    /// The jump tables to print after the function: the index and the block of
+    /// each entry.
     tables: Vec<(i64, Vec<u32>)>,
     /// How many times each virtual register is read.
     reads: llrm_support::hash::HashMap<u32, usize>,
@@ -151,7 +152,10 @@ impl Printer<'_> {
         // cell may be volatile. Not while pricing: the price at the speed
         // levels is taken before the peepholes.
         if let Some(from) = text.strip_prefix("ld a, ").filter(|from| from.len() == 1)
-            && matches!(self.out.last(), Some(Line::Inst(last)) if *last == format!("ld {from}, a"))
+            && matches!(
+                self.out.last(),
+                Some(Line::Inst(last)) if *last == format!("ld {from}, a")
+            )
             && !PRICING.with(|one| one.get())
         {
             return;
@@ -203,7 +207,8 @@ impl Printer<'_> {
         }
     }
 
-    /// A symbol as printed: a jump table's placeholder is the function's own label.
+    /// A symbol as printed: a jump table's placeholder is the function's own
+    /// label.
     fn symbol(
         &self,
         symbol: &str,
@@ -224,8 +229,8 @@ impl Printer<'_> {
         }
     }
 
-    /// Whether `a` holds 0 or 255 here: the last write to it in this straight line is `sbc a, a`, and the lines
-    /// since only store it.
+    /// Whether `a` holds 0 or 255 here: the last write to it in this straight
+    /// line is `sbc a, a`, and the lines since only store it.
     fn a_is_mask(&self) -> bool {
         for line in self.out.iter().rev() {
             match line {
@@ -233,9 +238,10 @@ impl Printer<'_> {
                 Line::Label(_) => return false,
                 Line::Inst(text) if text == "sbc a, a" => return true,
                 Line::Inst(text) => {
-                    let stores = text.strip_prefix("ld ").and_then(|rest| rest.split_once(", ")).is_some_and(
-                        |(to, from)| from == "a" && to != "a" && (to.len() == 1 || to.starts_with('(')),
-                    );
+                    let stores = text
+                        .strip_prefix("ld ")
+                        .and_then(|rest| rest.split_once(", "))
+                        .is_some_and(|(to, from)| from == "a" && to != "a" && (to.len() == 1 || to.starts_with('(')));
                     if !stores {
                         return false;
                     }
@@ -245,8 +251,9 @@ impl Printer<'_> {
         false
     }
 
-    /// Whether byte register `lane` holds 0 here: its last write in this straight line is `ld lane, #0`, and
-    /// nothing since names its pair, jumps, calls or enters a label.
+    /// Whether byte register `lane` holds 0 here: its last write in this
+    /// straight line is `ld lane, #0`, and nothing since names its pair,
+    /// jumps, calls or enters a label.
     fn lane_is_zero(
         &self,
         lane: RegId,
@@ -266,7 +273,8 @@ impl Printer<'_> {
                     if text == &format!("ld {want}, #0") {
                         return true;
                     }
-                    // the other byte of the pair may be read or written; this one and the pair may not be named
+                    // the other byte of the pair may be read or written; this
+                    // one and the pair may not be named
                     let named = text
                         .split([' ', ',', '(', ')', '+'])
                         .filter(|word| !word.is_empty())
@@ -492,13 +500,16 @@ impl Printer<'_> {
                 let source = name_of(self, 2)?;
                 self.push(format!("{} hl, {source}", op[..3].to_lowercase()));
             }
-            // the words of a long, the carry in the flags: `add hl, rr` and `or a, a; sbc hl, rr` start,
-            // `adc hl, rr` and `sbc hl, rr` carry on (the destination and the flags come first)
+            // the words of a long, the carry in the flags: `add hl, rr` and `or
+            // a, a; sbc hl, rr` start,
+            // `adc hl, rr` and `sbc hl, rr` carry on (the destination and the
+            // flags come first)
             "ADD16F" | "ADC16F" | "SBC16F" => {
                 let source = name_of(self, 3)?;
                 self.push(format!("{} hl, {source}", op[..3].to_lowercase()));
             }
-            // a long doubled in the pairs of its words: the carry runs from the low word's bytes into the high's;
+            // a long doubled in the pairs of its words: the carry runs from the
+            // low word's bytes into the high's;
             // `hl` doubles in one instruction
             "SHL32" => {
                 for (word, first) in [(0, true), (1, false)] {
@@ -562,7 +573,8 @@ impl Printer<'_> {
                 if count > 8 && self.shift_byte(left, kept, cleared, count - 8, rest) {
                     self.push(format!("ld {kept}, #0"));
                 } else {
-                    // `ld cleared, kept; ld kept, #0` stay adjacent: `forward_high_bytes` reads them
+                    // `ld cleared, kept; ld kept, #0` stay adjacent:
+                    // `forward_high_bytes` reads them
                     self.push(format!("ld {cleared}, {kept}"));
                     self.push(format!("ld {kept}, #0"));
                     for _ in 8..count {
@@ -572,7 +584,8 @@ impl Printer<'_> {
             }
             // `add hl, hl` is a doubling: 1 B / 11 T a bit against `sla l; rl
             // h`'s 4 B / 16 T
-            // the low bit of the second word through the carry into the top of the first: `a` is read, not kept
+            // the low bit of the second word through the carry into the top of
+            // the first: `a` is read, not kept
             "FSHR1" => {
                 let (lo, hi) = lanes(self.register(inst, 0)?)?;
                 let (from, _) = lanes(self.register(inst, 2)?)?;
@@ -715,7 +728,8 @@ impl Printer<'_> {
                 self.push(format!("ld (hl), #{}", (value >> 8) & 0xFF));
                 self.restore_pointer(rest);
             }
-            // the pointer comes back stepped past the word (`post_update`): the data pair is BC or DE
+            // the pointer comes back stepped past the word (`post_update`): the
+            // data pair is BC or DE
             "LD16rm_pi" => {
                 let (lo, hi) = lanes(self.register(inst, 0)?)?;
                 self.push(format!("ld {}, (hl)", name(lo)));
@@ -798,6 +812,32 @@ impl Printer<'_> {
                 self.push("inc de");
                 self.push("ldir");
             }
+            // the same for any count in bc: zero stores nothing, one stores the
+            // byte and skips the `ldir` (a count of zero there is 65536). The
+            // value is parked in e across the tests, which clobber a
+            "LDFILLGi" | "LDFILLGr" => {
+                let skip = format!("{}$", self.out.iter().filter(|line| !matches!(line, Line::Loc(_))).count());
+                let value = if op == "LDFILLGi" {
+                    self.immediate(inst, 1, 0xFF)?
+                } else {
+                    self.push("ld e, a");
+                    "e".to_owned()
+                };
+                for step in 0..2 {
+                    self.push("ld a, b");
+                    self.push("or a, c");
+                    self.push(format!("jr z, {skip}"));
+                    if step == 0 {
+                        self.push(format!("ld (hl), {value}"));
+                        self.push("dec bc");
+                    }
+                }
+                self.push("ld e, l");
+                self.push("ld d, h");
+                self.push("inc de");
+                self.push("ldir");
+                self.out.push(Line::Label(skip));
+            }
             // eight bytes at hl shifted in place a bit a trip, count in
             // bc: `inc b` and the jump to the test make a count of zero no trip
             // (the test is `dec b; jp nz`, which the relax pass makes `djnz`);
@@ -852,7 +892,8 @@ impl Printer<'_> {
                 };
                 let ((dl, dh), (al, ah)) = (lanes(to)?, lanes(a)?);
                 for (d, x, byte) in [(dl, al, mask & 0xFF), (dh, ah, (mask >> 8) & 0xFF)] {
-                    // a lane known to be 0: `and` is 0, `or`/`xor` the mask byte itself
+                    // a lane known to be 0: `and` is 0, `or`/`xor` the mask
+                    // byte itself
                     if self.lane_is_zero(x) {
                         self.push(format!("ld {}, #{}", name(d), if mnemonic == "and" { 0 } else { byte }));
                         continue;
@@ -895,7 +936,8 @@ impl Printer<'_> {
                         self.push(format!("ld {}, a", name(d)));
                         continue;
                     }
-                    // a lane known to be 0: `and` is 0, `or`/`xor` the other lane
+                    // a lane known to be 0: `and` is 0, `or`/`xor` the other
+                    // lane
                     let (zero_x, zero_y) = (self.lane_is_zero(x), self.lane_is_zero(y));
                     if mnemonic == "and" && (zero_x || zero_y) {
                         self.push(format!("ld {}, #0", name(d)));
@@ -910,17 +952,22 @@ impl Printer<'_> {
                     self.push(format!("ld {}, a", name(d)));
                 }
             }
-            // the block's operands past the table's index are its entries, the successors
+            // the block's operands past the table's index are its entries, the
+            // successors
             "JPHL" => {
                 let Some(&Operand::Imm(index)) = inst.operands.get(1) else {
                     return Err("a jump through a table with no index".to_owned());
                 };
                 if !self.tables.iter().any(|(one, _)| *one == index) {
-                    let entries =
-                        inst.operands[2..].iter().filter_map(|operand| match operand {
-                            Operand::Block(block) => Some(*block),
-                            _ => None,
-                        });
+                    let entries = inst
+                        .operands[2..]
+                        .iter()
+                        .filter_map(
+                            |operand| match operand {
+                                Operand::Block(block) => Some(*block),
+                                _ => None,
+                            },
+                        );
                     self.tables.push((index, entries.collect()));
                 }
                 self.push("jp (hl)");
@@ -976,15 +1023,17 @@ impl Printer<'_> {
                 }
                 let pushes = (*bytes + 1) / 2;
                 let down = op == "ADJCALLSTACKDOWN";
-                // The return restores SP from IX: the release before it is dead.
+                // The return restores SP from IX: the release before it is
+                // dead.
                 if !down && self.frame.active && rest.first().is_some_and(|next| next.kind == Kind::Op("RET")) {
                     self.call_bytes = 0;
                     return Ok(());
                 }
-                // A large area moves SP by a sum: `ld hl, #n; add hl, sp; ld sp,
-                // hl` (5 B / 27 T) once the pops are longer and slower, or the
-                // same through IY (8 B / 39 T) where `hl` holds a result. Both
-                // change the flags; the pushes and pops change nothing.
+                // A large area moves SP by a sum: `ld hl, #n; add hl, sp; ld
+                // sp, hl` (5 B / 27 T) once the pops are longer
+                // and slower, or the same through IY (8 B / 39
+                // T) where `hl` holds a result. Both change the
+                // flags; the pushes and pops change nothing.
                 let sum = if !self.flags_dead(rest) {
                     None
                 } else if !down && pushes >= 5 && self.pair_unused_after(reg::HL, rest) {
@@ -1084,7 +1133,9 @@ impl Printer<'_> {
                     let Some(Operand::Imm(value)) = inst.operands.first() else {
                         return Err("LD16fi without a constant".to_owned());
                     };
-                    for (byte, slot) in [value & 0xFF, (value >> 8) & 0xFF].into_iter().zip(self.frame_slots(index, extra, 2)?) {
+                    for (byte, slot) in
+                        [value & 0xFF, (value >> 8) & 0xFF].into_iter().zip(self.frame_slots(index, extra, 2)?)
+                    {
                         self.push(format!("ld {slot}, #{byte}"));
                     }
                 } else if op == "LD8fi" {
@@ -1132,6 +1183,10 @@ impl Printer<'_> {
                 if op == "RELOAD8" && self.updated_in_place(inst, rest)? {
                     return Ok(());
                 }
+                // a reload no instruction reads (the successor loads it again)
+                if op == "RELOAD8" && self.byte_unused_after(self.register(inst, 0)?, rest) {
+                    return Ok(());
+                }
                 let slot = self.frame_slots(index, 0, 1)?.remove(0);
                 if op == "RELOAD8" && self.held_since_stored(&[(slot.clone(), register.to_owned())]) {
                     return Ok(());
@@ -1174,6 +1229,9 @@ impl Printer<'_> {
                 if op == "RELOAD16" && self.stepped_word_in_place(inst, rest)? {
                     return Ok(());
                 }
+                if op == "RELOAD16" && self.pair_unused_after(self.register(inst, register)?, rest) {
+                    return Ok(());
+                }
                 if op == "RELOAD16"
                     && self.call_bytes == 0
                     && self.spill_bytes == 0
@@ -1200,9 +1258,29 @@ impl Printer<'_> {
                         return Ok(());
                     }
                 }
-                if op == "RELOAD16" && self.reload_is_operand(inst, rest) && slots.iter().all(|slot| slot.ends_with("(ix)")) {
+                if op == "RELOAD16"
+                    && self.reload_is_operand(inst, rest)
+                    && slots.iter().all(|slot| slot.ends_with("(ix)"))
+                {
                     self.folded_word = Some((self.register(inst, 0)?, [slots[0].clone(), slots[1].clone()]));
                     return Ok(());
+                }
+                // a pair read in one byte only: that byte alone is loaded
+                // (`InlineSpiller::foldMemoryOperand` loads the used
+                // sub-register of a reload)
+                if op == "RELOAD16" {
+                    let pair = self.register(inst, register)?;
+                    let unused = |byte| self.lane_unused_after(pair, byte, rest);
+                    let lone = match (unused(lo), unused(hi)) {
+                        (false, true) => Some(0),
+                        (true, false) => Some(1),
+                        _ => None,
+                    };
+                    if let Some(lane) = lone {
+                        let (byte, slot) = ([lo, hi][lane], slots[lane].clone());
+                        self.push(format!("ld {}, {slot}", name(byte)));
+                        return Ok(());
+                    }
                 }
                 for (byte, slot) in [lo, hi].into_iter().zip(slots) {
                     self.push(if op == "SPILL16" {
@@ -1358,17 +1436,17 @@ impl Printer<'_> {
         }
         let added_next = rest.first().is_some_and(|next| {
             next.kind == Kind::Op("ADD16")
-                && matches!(next.operands.get(2), Some(Operand::Use(r)) if self.physical(*r) == pair)
+                && matches!(
+                    next.operands.get(2),
+                    Some(Operand::Use(r)) if self.physical(*r) == pair
+                )
         }) && bits >= 2
             && self.pair_dead_after(pair, &rest[1..]);
-        if added_next {
-            Some(true)
-        } else {
-            self.dead_after(reg::HL, rest).then_some(false)
-        }
+        if added_next { Some(true) } else { self.dead_after(reg::HL, rest).then_some(false) }
     }
 
-    /// The `dec hl` that puts a pointer back after a word through it, unless nothing reads `hl` after.
+    /// The `dec hl` that puts a pointer back after a word through it, unless
+    /// nothing reads `hl` after.
     fn restore_pointer(
         &mut self,
         rest: &[Inst],
@@ -1429,6 +1507,77 @@ impl Printer<'_> {
             .liveness
             .live_before::<Z80Registers>(self.function, self.assignment, &REGISTER_INFO, self.at.0, self.at.1 + 1);
         ![pair, lo, hi].into_iter().any(|one| after.is_live(&REGISTER_INFO, one))
+    }
+
+    /// Nothing reads `byte` of `pair` after this instruction before it is
+    /// written: the first mention of the byte or the pair is a write, or
+    /// the block ends with the allocator's liveness showing neither live.
+    /// `LO` and `HI` read the one byte of the pair they name.
+    fn lane_unused_after(
+        &self,
+        pair: RegId,
+        byte: RegId,
+        rest: &[Inst],
+    ) -> bool {
+        let is_low = lanes(pair).is_ok_and(|(lo, _)| lo == byte);
+        for inst in rest {
+            let reads = inst
+                .operands
+                .iter()
+                .any(
+                    |operand| match operand {
+                        Operand::Use(r) => {
+                            let r = self.physical(*r);
+                            r == byte
+                                || (r == pair
+                                    && match inst.kind {
+                                        Kind::Op("LO") => is_low,
+                                        Kind::Op("HI") => !is_low,
+                                        _ => true,
+                                    })
+                        }
+                        _ => false,
+                    },
+                );
+            if reads {
+                return false;
+            }
+            let writes = inst
+                .operands
+                .iter()
+                .any(
+                    |operand| matches!(
+                        operand,
+                        Operand::Def(r) if [pair, byte].contains(&self.physical(*r))
+                    ),
+                );
+            if writes {
+                return true;
+            }
+        }
+        if matches!(rest.last().map(|inst| inst.kind), Some(Kind::Op("RET"))) {
+            return true;
+        }
+        let after = self
+            .liveness
+            .live_before::<Z80Registers>(self.function, self.assignment, &REGISTER_INFO, self.at.0, self.at.1 + 1);
+        ![pair, byte].into_iter().any(|one| after.is_live(&REGISTER_INFO, one))
+    }
+
+    /// [`Self::dead_after`], or the byte not live after this instruction by
+    /// the allocator's liveness.
+    fn byte_unused_after(
+        &self,
+        register: RegId,
+        rest: &[Inst],
+    ) -> bool {
+        if self.dead_after(register, rest) {
+            return true;
+        }
+        let after = self
+            .liveness
+            .live_before::<Z80Registers>(self.function, self.assignment, &REGISTER_INFO, self.at.0, self.at.1 + 1);
+        !after.is_live(&REGISTER_INFO, register)
     }
 
     /// Whether the byte register `register` holds nothing a later instruction
@@ -1558,7 +1707,8 @@ impl Printer<'_> {
                 self.out.push(Line::Label(skip));
             }
             (true, false) => {
-                // a low byte of zero subtracts nothing and clears the carry: the high bytes alone decide
+                // a low byte of zero subtracts nothing and clears the carry:
+                // the high bytes alone decide
                 if bl != "#0" {
                     self.push(format!("ld a, {}", name(al)));
                     self.push(format!("sub a, {bl}"));
@@ -1625,7 +1775,8 @@ impl Printer<'_> {
     /// ([`X86InstrCompiler.td`][td]). Owner z80. Exit: the flag-use
     /// predicate in the generated selector.
     ///
-    /// [td]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86InstrCompiler.td#L2324
+    /// [td]:
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86InstrCompiler.td#L2324
     fn push_zero_test_against(
         &mut self,
         operand: &str,
@@ -1725,11 +1876,14 @@ impl Printer<'_> {
         Ok(true)
     }
 
-    /// A `RELOAD16` of a frame cell, a step of the pair (`INC16`, or `INC16c` that steps when its condition holds) and
-    /// the `SPILL16` back to the same cell, with nothing else reading the pair, is `inc d(ix)`, a `jr nz` over `inc
-    /// d+1(ix)`: the carry runs through the cell and no register holds the word (`foldMemoryOperand` of the frame
-    /// cell, `X86InstrInfo::foldMemoryOperandImpl` for `INC`; 15 B and 88 T became 10 B and 12 to 59 T in
-    /// div_constants_short's carry steps). The memory step sets the flags the register step left alone, so they
+    /// A `RELOAD16` of a frame cell, a step of the pair (`INC16`, or `INC16c`
+    /// that steps when its condition holds) and the `SPILL16` back to the
+    /// same cell, with nothing else reading the pair, is `inc d(ix)`, a `jr nz`
+    /// over `inc d+1(ix)`: the carry runs through the cell and no register
+    /// holds the word (`foldMemoryOperand` of the frame
+    /// cell, `X86InstrInfo::foldMemoryOperandImpl` for `INC`; 15 B and 88 T
+    /// became 10 B and 12 to 59 T in div_constants_short's carry steps).
+    /// The memory step sets the flags the register step left alone, so they
     /// must be dead after. Prints it and reports whether it did.
     fn stepped_word_in_place(
         &mut self,
@@ -1756,7 +1910,8 @@ impl Printer<'_> {
         if !steps_in_place || !spills || !self.flags_dead(tail) {
             return Ok(false);
         }
-        // nothing else reads the loaded value, the stepped value or the pair after the spill
+        // nothing else reads the loaded value, the stepped value or the pair
+        // after the spill
         let stepped = match back.operands.get(1) {
             Some(Operand::Use(Reg::Virt(v))) => Some(*v),
             _ => None,
@@ -1809,12 +1964,10 @@ impl Printer<'_> {
         matches!(
             next.kind,
             Kind::Op("ADD8r" | "SUB8r" | "AND8r" | "OR8r" | "XOR8r" | "CP8r" | "AND16" | "OR16" | "XOR16")
-        )
-            && matches!(
-                next.operands.get(2),
-                Some(Operand::Use(Reg::Virt(v))) if v == loaded
-            )
-            && self.reads.get(loaded) == Some(&1)
+        ) && matches!(
+            next.operands.get(2),
+            Some(Operand::Use(Reg::Virt(v))) if v == loaded
+        ) && self.reads.get(loaded) == Some(&1)
             && !matches!(
                 next.operands.get(1),
                 Some(Operand::Use(Reg::Virt(v))) if v == loaded
@@ -1886,10 +2039,10 @@ impl Printer<'_> {
         let mut readers: Vec<Inst> = Vec::new();
         let mut scan = |insts: &[Inst]| {
             for inst in insts {
-                if inst.reads_flags {
+                if inst.reads_flags() {
                     readers.push(inst.clone());
                 }
-                if inst.sets_flags {
+                if inst.sets_flags() {
                     return true;
                 }
             }
@@ -1916,8 +2069,9 @@ impl Printer<'_> {
     /// `rest` and in the blocks it goes on to: a conditional return in the
     /// block after a compare reads the compare's flags, so an `xor a, a` or a
     /// `dec` in between would change what it sees.
-    /// `dst = src << count` (or `>>`, logical) through `a` where that is shorter than `count` `sla`/`srl`/`add a, a`
-    /// steps, or as short and quicker. Needs `a` and the flags dead after. False: nothing was pushed.
+    /// `dst = src << count` (or `>>`, logical) through `a` where that is
+    /// shorter than `count` `sla`/`srl`/`add a, a` steps, or as short and
+    /// quicker. Needs `a` and the flags dead after. False: nothing was pushed.
     fn shift_byte(
         &mut self,
         left: bool,
@@ -1999,18 +2153,18 @@ impl Printer<'_> {
 /// neither.
 fn flags_first(insts: &[Inst]) -> Option<bool> {
     for inst in insts {
-        if inst.reads_flags {
+        if inst.reads_flags() {
             return Some(false);
         }
-        if inst.sets_flags {
+        if inst.sets_flags() {
             return Some(true);
         }
     }
     None
 }
 
-/// A word in `de` or `bc` shifted left by `bits`: `sla r; rl r'` is 4 B / 16 T a
-/// bit, `add hl, hl` 1 B / 11 T. `de` swaps with `hl` round the doublings
+/// A word in `de` or `bc` shifted left by `bits`: `sla r; rl r'` is 4 B / 16 T
+/// a bit, `add hl, hl` 1 B / 11 T. `de` swaps with `hl` round the doublings
 /// (`ex de, hl` x2 keeps `hl`); `bc` goes through `hl` when nothing reads it.
 /// None where the bit by bit form is no longer or no slower, priced by the
 /// timing table.
@@ -2022,22 +2176,16 @@ fn word_double_through_hl(
     let bits = usize::try_from(bits).ok().filter(|bits| *bits >= 2)?;
     let (head, tail, setup, teardown): (Vec<&str>, Vec<&str>, Vec<&str>, Vec<&str>) = match pair {
         "de" => (vec!["ex de, hl"], vec!["ex de, hl"], vec!["ex de;hl"], vec!["ex de;hl"]),
-        "bc" if hl_dead => (
-            vec!["ld h, b", "ld l, c"],
-            vec!["ld b, h", "ld c, l"],
-            vec!["ld b;c", "ld b;c"],
-            vec!["ld b;c", "ld b;c"],
-        ),
+        "bc" if hl_dead => {
+            (vec!["ld h, b", "ld l, c"], vec!["ld b, h", "ld c, l"], vec!["ld b;c", "ld b;c"], vec!["ld b;c", "ld b;c"])
+        }
         _ => return None,
     };
     let price = |forms: &[&str]| {
-        forms.iter().fold(
-            (0u32, 0u32),
-            |(bytes, clocks), form| {
-                let one = crate::timing::cost(form).unwrap_or_else(|| panic!("timing/z80.csv has no form `{form}`"));
-                (bytes + one.bytes, clocks + one.taken)
-            },
-        )
+        forms.iter().fold((0u32, 0u32), |(bytes, clocks), form| {
+            let one = crate::timing::cost(form).unwrap_or_else(|| panic!("timing/z80.csv has no form `{form}`"));
+            (bytes + one.bytes, clocks + one.taken)
+        })
     };
     let mut new = [setup, teardown].concat();
     new.extend(std::iter::repeat_n("add hl;bc", bits));
@@ -2052,7 +2200,6 @@ fn word_double_through_hl(
     Some(lines)
 }
 
-
 fn shift_count(inst: &Inst) -> Result<i64, String> {
     match inst.operands.last() {
         Some(Operand::Imm(count)) => Ok(*count),
@@ -2061,7 +2208,10 @@ fn shift_count(inst: &Inst) -> Result<i64, String> {
 }
 
 /// Whether `function` with spill `slots` keeps an IX frame.
-pub(crate) fn needs_frame(function: &MFunction, slots: &[(i32, usize)]) -> bool {
+pub(crate) fn needs_frame(
+    function: &MFunction,
+    slots: &[(i32, usize)],
+) -> bool {
     layout(function, slots).active
 }
 
@@ -2088,9 +2238,10 @@ fn layout(
         // The densest objects (most uses per byte) lie nearest IX, as the pin's
         // `orderFrameObjects` lays a frame addressed from the frame pointer:
         // `ld -n(ix), r` reaches 128 bytes below it, and past that every access
-        // is `ld iy, #n; add iy, sp`. Spill slots and scalars came after a local
-        // array and lay beyond its 8 KB (tests/run/c/fill_nest); by size alone a
-        // hot array lay beyond a cold smaller one (tests/frame_density.rs).
+        // is `ld iy, #n; add iy, sp`. Spill slots and scalars came after a
+        // local array and lay beyond its 8 KB (tests/run/c/fill_nest);
+        // by size alone a hot array lay beyond a cold smaller one
+        // (tests/frame_density.rs).
         let mut objects: Vec<(i32, i64)> = function.locals.iter().map(|&(index, size, _)| (index, size)).collect();
         objects.extend(slots.iter().map(|&(index, size)| (index, size as i64)));
         // A frame within IX's reach keeps its locals first and its slots last,
@@ -2106,7 +2257,11 @@ fn layout(
             }
             let sorting: Vec<_> = objects
                 .iter()
-                .map(|&(index, size)| Sorting { size: size as u64, align: 1, uses: uses.get(&index).copied().unwrap_or(0) })
+                .map(|&(index, size)| Sorting {
+                    size: size as u64,
+                    align: 1,
+                    uses: uses.get(&index).copied().unwrap_or(0),
+                })
                 .collect();
             objects = order_frame_objects(&sorting, true).into_iter().map(|at| objects[at]).collect();
         }
@@ -2129,20 +2284,22 @@ fn layout(
                     Some(Operand::Imm(bytes)) if *bytes != 0
                 ),
         );
-    // A fixed object nothing reads or writes (an argument home the optimizer left unused) needs no frame: the
-    // pin's `X86FrameLowering::hasFP` keys on the accesses and calls, not on what the frame could hold.
-    let fixed_used = function
-        .blocks
-        .iter()
-        .flat_map(|block| &block.insts)
-        .flat_map(|inst| &inst.operands)
-        .any(|operand| matches!(operand, Operand::Frame(index) if function.fixed.contains_key(index)));
+    // A fixed object nothing reads or writes (an argument home the optimizer
+    // left unused) needs no frame: the pin's `X86FrameLowering::hasFP` keys
+    // on the accesses and calls, not on what the frame could hold.
+    let fixed_used =
+        function.blocks.iter().flat_map(|block| &block.insts).flat_map(|inst| &inst.operands).any(|operand| {
+            matches!(
+                operand,
+                Operand::Frame(index) if function.fixed.contains_key(index)
+            )
+        });
     frame.active = frame.size > 0 || fixed_used || stack_arguments;
     frame
 }
 
-/// What a word of the frame is pushed from at entry: the pair, and the constant it is loaded with first where the
-/// word starts as one (`entry_pushes`).
+/// What a word of the frame is pushed from at entry: the pair, and the constant
+/// it is loaded with first where the word starts as one (`entry_pushes`).
 type Pushed = Option<(&'static str, Option<i64>)>;
 
 /// `push ix; ld ix, 0; add ix, sp`, then room for the frame: a `push` per two
@@ -2181,10 +2338,11 @@ fn prologue(
 /// into the high byte of a word (`push af` stores `a` there, and flags that
 /// nothing holds in the low byte). By word from the top of the frame.
 ///
-/// A leading store of a constant to a whole word of the frame (`LD16fi`: two `ld d(ix), #n`, 8 B and 38 T)
-/// is `ld rr, #n; push rr` (4 B, 21 T) where a pair is free at entry. DEVIATE: no LLVM pass: the pin's
-/// `X86FrameLowering` pushes only the callee-saved registers. Exit: none; exact, the store stays the first
-/// instruction of the function.
+/// A leading store of a constant to a whole word of the frame (`LD16fi`: two
+/// `ld d(ix), #n`, 8 B and 38 T) is `ld rr, #n; push rr` (4 B, 21 T) where a
+/// pair is free at entry. DEVIATE: no LLVM pass: the pin's `X86FrameLowering`
+/// pushes only the callee-saved registers. Exit: none; exact, the store stays
+/// the first instruction of the function.
 fn entry_pushes(
     function: &mut MFunction,
     assignment: &Assignment,
@@ -2207,13 +2365,8 @@ fn entry_pushes(
                 break;
             }
             let free = free.get_or_insert_with(|| {
-                let live = PhysLiveness::of::<Z80Registers>(function, assignment, &REGISTER_INFO).live_before::<Z80Registers>(
-                    function,
-                    assignment,
-                    &REGISTER_INFO,
-                    0,
-                    0,
-                );
+                let live = PhysLiveness::of::<Z80Registers>(function, assignment, &REGISTER_INFO)
+                    .live_before::<Z80Registers>(function, assignment, &REGISTER_INFO, 0, 0);
                 [reg::HL, reg::DE, reg::BC].into_iter().filter(|pair| !live.is_live(&REGISTER_INFO, *pair)).collect()
             });
             let Some(&pair) = free.first() else { break };
@@ -2231,7 +2384,9 @@ fn entry_pushes(
             let word = ((-offset - 1) / 2) as usize;
             let pair = [reg::BC, reg::DE, reg::HL].into_iter().find(|pair| REGISTER_INFO.root(register) == *pair);
             let by = match (op, pair) {
-                (Kind::Op("SPILL16"), Some(pair)) if offset == -2 * word as i64 - 2 && register == pair => Some(name(pair)),
+                (Kind::Op("SPILL16"), Some(pair)) if offset == -2 * word as i64 - 2 && register == pair => {
+                    Some(name(pair))
+                }
                 (Kind::Op("SPILL8"), _) if offset == -2 * word as i64 - 1 && register == reg::A => Some("af"),
                 (Kind::Op("SPILL8"), Some(pair))
                     if offset == -2 * word as i64 - 1 && lanes(pair).is_ok_and(|(_, hi)| hi == register) =>
@@ -2388,8 +2543,14 @@ pub fn finish(
             }
             printer.instruction(inst, next, &block.insts[index + 1..])?;
         }
+        let after =
+            printer.liveness.live_before::<Z80Registers>(function, assignment, &REGISTER_INFO, at, block.insts.len());
+        let bits: String =
+            BYTES.map(|byte| if after.is_live(&REGISTER_INFO, byte) { '1' } else { '0' }).iter().collect();
+        printer.out.push(Line::Inst(format!("{LIVE_OUT}{bits}")));
     }
-    // the tables follow the code: a word a block, each entry the label of its block
+    // the tables follow the code: a word a block, each entry the label of its
+    // block
     let tables = std::mem::take(&mut printer.tables);
     for (index, entries) in tables {
         printer.out.push(Line::Label(format!("L{number}_JT{index}")));
@@ -2400,35 +2561,147 @@ pub fn finish(
     Ok(tidy(printer.out))
 }
 
-/// The post-printer passes. `forward_high_bytes` runs before `drop_overwritten_byte_stores`: the latter drops the
-/// `ld R1, S1` the former needs to see.
+/// The byte registers the text passes follow, in the order of their flags.
+const BYTES: [RegId; 6] = [reg::B, reg::C, reg::D, reg::E, reg::H, reg::L];
+
+/// The line that ends a block in the printer's output, carrying which of
+/// [`BYTES`] the allocator's liveness keeps live after the block's last
+/// instruction: `;live 001100`. [`drop_dead_byte_loads`] reads and removes it.
+const LIVE_OUT: &str = ";live ";
+
+/// Drops `ld r, s` of a byte register that nothing reads before the block ends
+/// (the [`LIVE_OUT`] line). The printer leaves one where it copies a whole word
+/// and the compare after it reads one byte (`xor a, #128; ld b, a` of a signed
+/// compare against a constant whose low byte is 0): the copy is dead unless a
+/// later load overwrites it, which `drop_overwritten_byte_stores` sees. It runs
+/// after the passes that need such a load to fuse (`ld l, c; ld h, b; ld l,
+/// h`). The scan stops at a label; a call, a return or an instruction that
+/// reads a register unnamed keeps every register live, a jump keeps those
+/// live after the block, and a jump out of the function (a tail call) keeps
+/// them all.
+///
+/// Translation: `DeadMachineInstrElim` (DeadMachineInstructionElim.cpp, a
+/// physical register def not live after the instruction is dead), on the
+/// printed text. DEVIATE: only a load of a byte register from another byte
+/// register, the accumulator or a constant is judged. Exit: the pass on the
+/// shared flow.
+fn drop_dead_byte_loads(lines: Vec<Line>) -> Vec<Line> {
+    let at = |register: &str| ["b", "c", "d", "e", "h", "l"].iter().position(|one| *one == register);
+    // marks the registers the words of `operands` name, past `mnemonic`
+    let read = |live: &mut [bool; 6], operands: &str, mnemonic: &str| {
+        let operands = operands.strip_prefix(mnemonic).unwrap_or(operands);
+        for word in operands.split([' ', ',', '(', ')', '+']).filter(|word| !word.is_empty()) {
+            match word {
+                "bc" => live[..2].fill(true),
+                "de" => live[2..4].fill(true),
+                "hl" => live[4..].fill(true),
+                _ => {
+                    if let Some(byte) = at(word) {
+                        live[byte] = true;
+                    }
+                }
+            }
+        }
+    };
+    let labels: std::collections::HashSet<&str> =
+        lines.iter().filter_map(|line| if let Line::Label(name) = line { Some(name.as_str()) } else { None }).collect();
+    let mut keep = vec![true; lines.len()];
+    for end in 0..lines.len() {
+        let Line::Inst(marker) = &lines[end] else { continue };
+        let Some(bits) = marker.strip_prefix(LIVE_OUT) else { continue };
+        keep[end] = false;
+        let live_out: Vec<bool> = bits.chars().map(|bit| bit == '1').collect();
+        let mut live = [false; 6];
+        live.iter_mut().zip(&live_out).for_each(|(now, out)| *now = *out);
+        for index in (0..end).rev() {
+            let text = match &lines[index] {
+                Line::Label(_) => break,
+                Line::Inst(text) if text.starts_with(LIVE_OUT) => break,
+                Line::Inst(text) => text,
+                _ => continue,
+            };
+            let mnemonic = text.split(' ').next().unwrap_or("");
+            if let Some((to, source)) = text.strip_prefix("ld ").and_then(|rest| rest.split_once(", "))
+                && let Some(to) = at(to)
+                && (at(source).is_some() || source == "a" || source.starts_with('#'))
+            {
+                if !live[to] {
+                    keep[index] = false;
+                    continue;
+                }
+                live[to] = false;
+                if let Some(source) = at(source) {
+                    live[source] = true;
+                }
+                continue;
+            }
+            if matches!(mnemonic, "jr" | "jp" | "djnz") {
+                // a jump out of the function is a tail call: the callee reads
+                // its argument registers
+                let target = text.rsplit([' ', ',']).next().unwrap_or("");
+                if !target.starts_with('(') && !labels.contains(target) {
+                    live = [true; 6];
+                    continue;
+                }
+                for (now, out) in live.iter_mut().zip(&live_out) {
+                    *now |= *out;
+                }
+                if mnemonic == "djnz" {
+                    live[0] = true;
+                }
+                // the target is the last operand (a condition code comes before
+                // it): `jp (hl)` reads the pair
+                read(&mut live, target, mnemonic);
+                continue;
+            }
+            if HIDDEN.contains(&mnemonic) {
+                live = [true; 6];
+                continue;
+            }
+            read(&mut live, text, mnemonic);
+        }
+    }
+    lines.into_iter().zip(keep).filter_map(|(line, keep)| keep.then_some(line)).collect()
+}
+
+/// The post-printer passes. `forward_high_bytes` runs before
+/// `drop_overwritten_byte_stores`: the latter drops the `ld R1, S1` the former
+/// needs to see.
 fn tidy(lines: Vec<Line>) -> Vec<Line> {
-    branch_over_tail_jump(drop_unreachable(conditional_tail_jumps(drop_reloaded_accumulator(drop_overwritten_byte_stores(
-        forward_byte_copies(forward_high_bytes(cancel_steps(lines))),
+    branch_over_tail_jump(drop_unreachable(conditional_tail_jumps(drop_reloaded_accumulator(drop_dead_byte_loads(
+        drop_overwritten_byte_stores(forward_byte_copies(forward_high_bytes(cancel_steps(lines)))),
     )))))
 }
 
-/// `ld r, a` then `ld a, r` (or the reverse) leaves both holding one value: the second load is nothing, and neither
-/// touches the flags. `push` drops the pair when it prints it; a dead load between them that
-/// `drop_overwritten_byte_stores` removes later brings the two together (`xor a, b; ld b, a; ld a, b; rrca`, 42 sites in
-/// div_constants_long -O2). Registers only: a memory cell may be volatile. Not while pricing, as in `push`.
+/// `ld r, a` then `ld a, r` (or the reverse) leaves both holding one value: the
+/// second load is nothing, and neither touches the flags. `push` drops the pair
+/// when it prints it; a dead load between them that
+/// `drop_overwritten_byte_stores` removes later brings the two together (`xor
+/// a, b; ld b, a; ld a, b; rrca`, 42 sites in div_constants_long -O2).
+/// Registers only: a memory cell may be volatile. Not while pricing, as in
+/// `push`.
 fn drop_reloaded_accumulator(lines: Vec<Line>) -> Vec<Line> {
     if PRICING.with(|one| one.get()) {
         return lines;
     }
-    // `ld r, a` as `r`, or `ld a, r` as `r`: the byte register the accumulator is copied to or from
+    // `ld r, a` as `r`, or `ld a, r` as `r`: the byte register the accumulator
+    // is copied to or from
     let with_a = |line: Option<&Line>, into_a: bool| -> Option<String> {
         let Some(Line::Inst(text)) = line else { return None };
         let (to, from) = text.strip_prefix("ld ")?.split_once(", ")?;
         let (r, a) = if into_a { (from, to) } else { (to, from) };
-        (a == "a" && r.len() == 1 && "bcdehl".contains(r)).then(|| r.to_owned())
+        (a == "a" && is_byte_register(r)).then(|| r.to_owned())
     };
     let mut out: Vec<Line> = Vec::with_capacity(lines.len());
     for line in lines {
-        let again = [false, true].into_iter().any(|into_a| {
-            let first = with_a(out.last(), into_a);
-            first.is_some() && first == with_a(Some(&line), !into_a)
-        });
+        let again = [false, true]
+            .into_iter()
+            .any(
+                |into_a| {
+                    let first = with_a(out.last(), into_a);
+                    first.is_some() && first == with_a(Some(&line), !into_a)
+                },
+            );
         if !again {
             out.push(line);
         }
@@ -2436,21 +2709,36 @@ fn drop_reloaded_accumulator(lines: Vec<Line>) -> Vec<Line> {
     out
 }
 
-/// The symbol of a `jp SYMBOL` that leaves the function: not a condition, an indirect jump or a block of ours.
-fn tail_symbol(jump: &str) -> Option<&str> {
-    let symbol = jump.strip_prefix("jp ")?;
-    (!(symbol.contains(',') || symbol.starts_with('(') || block_of(symbol).is_some() || symbol.ends_with('$'))).then_some(symbol)
+/// `b`, `c`, `d`, `e`, `h` or `l`: a one-byte test, not a substring search.
+fn is_byte_register(name: &str) -> bool {
+    matches!(name, "b" | "c" | "d" | "e" | "h" | "l")
 }
 
-/// `jp cc, L` to a block that is only `jp SYMBOL`, which nothing else reaches, is `jp cc, SYMBOL`: the conditional
-/// tail call (`BranchFolder::OptimizeBlock` makes one through `replaceBranchWithTailCall`). Wherever the block lies;
-/// the layout cannot lose it.
+/// The symbol of a `jp SYMBOL` that leaves the function: not a condition, an
+/// indirect jump or a block of ours.
+fn tail_symbol(jump: &str) -> Option<&str> {
+    let symbol = jump.strip_prefix("jp ")?;
+    (!(symbol.contains(',') || symbol.starts_with('(') || block_of(symbol).is_some() || symbol.ends_with('$')))
+        .then_some(symbol)
+}
+
+/// `jp cc, L` to a block that is only `jp SYMBOL`, which nothing else reaches,
+/// is `jp cc, SYMBOL`: the conditional tail call (`BranchFolder::OptimizeBlock`
+/// makes one through `replaceBranchWithTailCall`). Wherever the block lies; the
+/// layout cannot lose it.
 fn conditional_tail_jumps(mut lines: Vec<Line>) -> Vec<Line> {
-    let mut names: llrm_support::hash::HashMap<String, usize> = llrm_support::hash::HashMap::default();
+    // how often each label is named by an instruction (only labels are
+    // counted: a word that is no label is never asked for)
+    let mut names: llrm_support::hash::HashMap<&str, usize> = lines
+        .iter()
+        .filter_map(|line| if let Line::Label(label) = line { Some((label.as_str(), 0)) } else { None })
+        .collect();
     for line in &lines {
         if let Line::Inst(text) = line {
             for word in text.split([' ', ',']).filter(|word| !word.is_empty()) {
-                *names.entry(word.trim_start_matches('#').to_owned()).or_default() += 1;
+                if let Some(count) = names.get_mut(word.trim_start_matches('#')) {
+                    *count += 1;
+                }
             }
         }
     }
@@ -2459,14 +2747,19 @@ fn conditional_tail_jumps(mut lines: Vec<Line>) -> Vec<Line> {
     for (at, line) in lines.iter().enumerate() {
         let Line::Label(label) = line else { continue };
         let after = lines[at + 1..].iter().find(|line| !matches!(line, Line::Loc(_) | Line::Label(_)));
-        let before = lines[..at].iter().rev().find_map(|line| match line {
-            Line::Inst(text) => Some(text.as_str()),
-            _ => None,
-        });
+        let before = lines[..at]
+            .iter()
+            .rev()
+            .find_map(
+                |line| match line {
+                    Line::Inst(text) => Some(text.as_str()),
+                    _ => None,
+                },
+            );
         if let (Some(Line::Inst(jump)), Some(before)) = (after, before)
             && let Some(symbol) = tail_symbol(jump)
             && ends_flow(before)
-            && names.get(label).copied() == Some(1)
+            && names.get(label.as_str()).copied() == Some(1)
         {
             jumps.insert(label.clone(), symbol.to_owned());
         }
@@ -2481,11 +2774,20 @@ fn conditional_tail_jumps(mut lines: Vec<Line>) -> Vec<Line> {
     lines
 }
 
-/// `jp cc, L; M: jp SYMBOL; L:` with nothing else naming `M` is `jp !cc, SYMBOL; L:`: the conditional jump over a
-/// tail call is the tail call's own condition (the pin's branch folder reverses a branch over an unconditional one).
+/// `jp cc, L; M: jp SYMBOL; L:` with nothing else naming `M` is `jp !cc,
+/// SYMBOL; L:`: the conditional jump over a tail call is the tail call's own
+/// condition (the pin's branch folder reverses a branch over an unconditional
+/// one).
 fn branch_over_tail_jump(lines: Vec<Line>) -> Vec<Line> {
     let named = |lines: &[Line], label: &str| {
-        lines.iter().any(|line| matches!(line, Line::Inst(text) if text.rsplit([' ', ',']).next() == Some(label)))
+        lines
+            .iter()
+            .any(
+                |line| matches!(
+                    line,
+                    Line::Inst(text) if text.rsplit([' ', ',']).next() == Some(label)
+                ),
+            )
     };
     let opposite = |cc: &str| match cc {
         "nz" => Some("z"),
@@ -2574,6 +2876,7 @@ fn held_since_stored(
     }
     let want = |(slot, register): &(String, String)| format!("ld {slot}, {register}");
     let mut lines: Vec<&str> = Vec::new();
+    let last_store = format!("ld {last_slot}, {last_register}");
     for line in out.iter().rev() {
         match line {
             Line::Loc(_) => {}
@@ -2583,7 +2886,7 @@ fn held_since_stored(
         if lines.len() > 24 {
             return false;
         }
-        if lines.last().is_some_and(|text| *text == format!("ld {last_slot}, {last_register}")) {
+        if lines.last().is_some_and(|text| *text == last_store) {
             break;
         }
     }
@@ -2628,10 +2931,11 @@ fn mentions(
         .any(|word| word == pair || (word.len() == 1 && pair.contains(word)))
 }
 
-/// `ld R, S; ld a, R` reads `S` itself: the copy may then be dead, which `drop_overwritten_byte_stores` finds
-/// (a byte shifted through `a` right after a copy of its source).
+/// `ld R, S; ld a, R` reads `S` itself: the copy may then be dead, which
+/// `drop_overwritten_byte_stores` finds (a byte shifted through `a` right after
+/// a copy of its source).
 fn forward_byte_copies(mut lines: Vec<Line>) -> Vec<Line> {
-    let is_byte = |register: &str| register.len() == 1 && "bcdehl".contains(register);
+    let is_byte = |register: &str| is_byte_register(register);
     for at in 1..lines.len() {
         let (Line::Inst(copy), Line::Inst(read)) = (&lines[at - 1], &lines[at]) else { continue };
         let Some((to, from)) = copy.strip_prefix("ld ").and_then(|text| text.split_once(", ")) else { continue };
@@ -2721,12 +3025,14 @@ fn cancel_steps(lines: Vec<Line>) -> Vec<Line> {
     out
 }
 
-/// `ld r, s` (a register or a constant) and a later `ld r, ...` with nothing between that names `r`, its
-/// pair, a label or a jump: the first load is never read. The printer leaves one when the instruction that read it
-/// was spared (`and a, #248; ld c, a; or a, #5; ld c, a`, or a signed compare of a word against a constant
-/// whose low byte is 0, which keeps only the high byte of the biased copy). The load leaves the flags alone.
+/// `ld r, s` (a register or a constant) and a later `ld r, ...` with nothing
+/// between that names `r`, its pair, a label or a jump: the first load is never
+/// read. The printer leaves one when the instruction that read it was spared
+/// (`and a, #248; ld c, a; or a, #5; ld c, a`, or a signed compare of a word
+/// against a constant whose low byte is 0, which keeps only the high byte of
+/// the biased copy). The load leaves the flags alone.
 fn drop_overwritten_byte_stores(lines: Vec<Line>) -> Vec<Line> {
-    let is_byte = |register: &str| register.len() == 1 && "bcdehl".contains(register);
+    let is_byte = |register: &str| is_byte_register(register);
     let byte = |text: &str| {
         let (register, source) = text.strip_prefix("ld ")?.split_once(", ")?;
         (is_byte(register) && (is_byte(source) || source == "a" || source.starts_with('#')))
@@ -2739,18 +3045,22 @@ fn drop_overwritten_byte_stores(lines: Vec<Line>) -> Vec<Line> {
     };
     // the register or its pair named: the other byte of the pair is no reader
     let names = |text: &str, register: &str| {
-        text.split([' ', ',', '(', ')', '+']).filter(|word| !word.is_empty()).skip(1).any(|word| word == register || word == pair_of(register))
+        text.split([' ', ',', '(', ')', '+'])
+            .filter(|word| !word.is_empty())
+            .skip(1)
+            .any(|word| word == register || word == pair_of(register))
     };
     let mut keep = vec![true; lines.len()];
     for (at, line) in lines.iter().enumerate() {
         let Line::Inst(text) = line else { continue };
         let Some(register) = byte(text) else { continue };
+        let reload = format!("ld {register}, ");
         for later in &lines[at + 1..] {
             match later {
                 Line::Loc(_) => continue,
                 Line::Label(_) => break,
                 Line::Inst(next) => {
-                    if let Some(source) = next.strip_prefix(&format!("ld {register}, "))
+                    if let Some(source) = next.strip_prefix(&reload)
                         && !names(&format!("ld x, {source}"), &register)
                     {
                         keep[at] = false;
@@ -2774,7 +3084,9 @@ fn drop_unreachable(lines: Vec<Line>) -> Vec<Line> {
         .iter()
         .filter_map(|line| match line {
             // an immediate names a label too: `ld hl, #L0_JT0`
-            Line::Inst(text) => Some(text.split([' ', ',']).filter(|word| !word.is_empty()).map(|word| word.trim_start_matches('#'))),
+            Line::Inst(text) => {
+                Some(text.split([' ', ',']).filter(|word| !word.is_empty()).map(|word| word.trim_start_matches('#')))
+            }
             _ => None,
         })
         .flatten()
@@ -2867,7 +3179,7 @@ fn form(text: &str) -> String {
 /// each than as one `ld rr,nn` and two register stores each (`inc hl` between
 /// the halves either way), by the encoding table's bytes.
 pub(crate) fn immediate_store_is_not_longer(users: usize) -> bool {
-    let bytes = |text: &str| table_cost(&form(text)).map(|cost| cost.bytes);
+    let bytes = |text: &str| text_cost(text).map(|cost| cost.bytes);
     let (Some(immediate), Some(register), Some(step), Some(load)) =
         (bytes("ld (hl), #1"), bytes("ld (hl), e"), bytes("inc hl"), bytes("ld de, #1"))
     else {
@@ -2877,30 +3189,54 @@ pub(crate) fn immediate_store_is_not_longer(users: usize) -> bool {
     users * (2 * immediate + step) <= load + users * (2 * register + step)
 }
 
-/// The table's cost of a form as `form` writes it. The accumulator is `a` where the table has the form for it alone
-/// (`ld a;(bc)`, `ld (nn);a`), else every byte register is `b` there, so a copy between two of them is `ld b;b`, which
+thread_local! {
+    /// [`text_cost`] of each instruction text seen: a compile prices the same
+    /// few hundred texts thousands of times.
+    static TEXT_COSTS: std::cell::RefCell<llrm_support::hash::HashMap<String, Option<crate::timing::Cost>>> =
+        std::cell::RefCell::default();
+}
+
+/// The table's cost of the instruction `text`, as `table_cost(&form(text))`,
+/// kept by text.
+fn text_cost(text: &str) -> Option<crate::timing::Cost> {
+    if let Some(cost) = TEXT_COSTS.with(|costs| costs.borrow().get(text).copied()) {
+        return cost;
+    }
+    let cost = table_cost(&form(text));
+    TEXT_COSTS.with(|costs| costs.borrow_mut().insert(text.to_owned(), cost));
+    cost
+}
+
+/// The table's cost of a form as `form` writes it. The accumulator is `a` where
+/// the table has the form for it alone (`ld a;(bc)`, `ld (nn);a`), else every
+/// byte register is `b` there, so a copy between two of them is `ld b;b`, which
 /// the table spells `ld b;c`.
 fn table_cost(key: &str) -> Option<crate::timing::Cost> {
-    let generic = key.split_once(' ').map_or_else(
-        || key.to_owned(),
-        |(mnemonic, operands)| {
-            // `add a;b`, `adc a;b`, `sbc a;b` name the accumulator in the table
-            let named = usize::from(matches!(mnemonic, "add" | "adc" | "sbc"));
-            let operands: Vec<&str> = operands
-                .split(';')
-                .enumerate()
-                .map(|(at, one)| if one == "a" && at >= named { "b" } else { one })
-                .collect();
-            format!("{mnemonic} {}", operands.join(";"))
-        },
-    );
-    [key, generic.as_str()].into_iter().find_map(|key| {
-        crate::timing::cost(key)
-            .or_else(|| crate::timing::cost(&key.replace("hl", "bc")))
-            .or_else(|| crate::timing::cost(&key.replace("ix", "bc")))
-            .or_else(|| crate::timing::cost(&key.replace("iy", "ix")))
-            .or_else(|| (key == "ld b;b").then(|| crate::timing::cost("ld b;c")).flatten())
-    })
+    let generic = key
+        .split_once(' ')
+        .map_or_else(
+            || key.to_owned(),
+            |(mnemonic, operands)| {
+                // `add a;b`, `adc a;b`, `sbc a;b` name the accumulator in the
+                // table
+                let named = usize::from(matches!(mnemonic, "add" | "adc" | "sbc"));
+                let operands: Vec<&str> = operands
+                    .split(';')
+                    .enumerate()
+                    .map(|(at, one)| if one == "a" && at >= named { "b" } else { one })
+                    .collect();
+                format!("{mnemonic} {}", operands.join(";"))
+            },
+        );
+    [key, generic.as_str()]
+        .into_iter()
+        .find_map(
+            |key| crate::timing::cost(key)
+                .or_else(|| crate::timing::cost(&key.replace("hl", "bc")))
+                .or_else(|| crate::timing::cost(&key.replace("ix", "bc")))
+                .or_else(|| crate::timing::cost(&key.replace("iy", "ix")))
+                .or_else(|| (key == "ld b;b").then(|| crate::timing::cost("ld b;c")).flatten()),
+        )
 }
 
 /// Bytes and T-states of the lines, summed over every instruction (a loop body
@@ -2910,7 +3246,7 @@ pub fn price(lines: &[Line]) -> (u32, u32) {
     let (mut bytes, mut clocks) = (0, 0);
     for line in lines {
         let Line::Inst(text) = line else { continue };
-        match table_cost(&form(text)) {
+        match text_cost(text) {
             Some(cost) => {
                 bytes += cost.bytes;
                 clocks += cost.taken;
@@ -2931,7 +3267,8 @@ thread_local! {
     static FREQUENCIES: std::cell::RefCell<llrm_support::hash::HashMap<u32, f64>> = std::cell::RefCell::default();
 }
 
-/// Sets the block frequencies the prices of the function being compiled weigh by.
+/// Sets the block frequencies the prices of the function being compiled weigh
+/// by.
 pub fn set_frequencies(frequencies: &[(u32, f64)]) {
     FREQUENCIES.with(|one| *one.borrow_mut() = frequencies.iter().copied().collect());
 }
@@ -2976,6 +3313,15 @@ pub fn weighted(
     lines: &[Line],
     frequencies: &llrm_support::hash::HashMap<u32, f64>,
 ) -> Vec<(Line, f64)> {
+    lines.iter().cloned().zip(block_weights(lines, frequencies)).collect()
+}
+
+/// [`weighted`]'s weights alone: the price reads the lines it holds, not a copy
+/// of each (a `String` per line, 36k in switch_jump_table -O2).
+fn block_weights(
+    lines: &[Line],
+    frequencies: &llrm_support::hash::HashMap<u32, f64>,
+) -> Vec<f64> {
     // blocks: the entry (before the first label) and one per `L<fn>_<id>`
     let mut starts = vec![0usize];
     let mut ids: Vec<Option<u32>> = vec![None];
@@ -3045,8 +3391,9 @@ pub fn weighted(
                 total += if sides.len() == 1 {
                     freq[p]
                 } else {
-                    // a side that is known and entered only from here takes its own
-                    // frequency; the rest of the block's is shared by the others
+                    // a side that is known and entered only from here takes its
+                    // own frequency; the rest of the
+                    // block's is shared by the others
                     let (mut taken, mut open) = (0.0, 0usize);
                     for &s in sides {
                         if known[s].is_some() && preds[s].len() == 1 {
@@ -3070,7 +3417,7 @@ pub fn weighted(
         while block + 1 < count && starts[block + 1] <= at {
             block += 1;
         }
-        out.push((line.clone(), freq[block]));
+        out.push(freq[block]);
     }
     out
 }
@@ -3079,21 +3426,22 @@ pub fn weighted(
 /// the frequency of its block (the entry's is 1), what two variants of one
 /// function are compared by. DEVIATE Z80-BLOCK-WEIGHT: the pin's frequencies
 /// are of the IR; the machine blocks of this stage take them by block id.
-/// Owner z80, exit 2026-11-20: `MachineBlockFrequencyInfo` over the machine function.
+/// Owner z80, exit 2026-11-20: `MachineBlockFrequencyInfo` over the machine
+/// function.
 pub fn price_in_loops(lines: &[Line]) -> (u32, u64) {
-    let frequencies = FREQUENCIES.with(|one| one.borrow().clone());
+    let weights = FREQUENCIES.with(|one| block_weights(lines, &one.borrow()));
     let (mut bytes, mut clocks) = (0, 0.0);
-    let weighted = weighted(lines, &frequencies);
     let trips = local_loop_trips(lines);
     let mut before: Vec<&str> = Vec::new();
-    for ((line, weight), trips) in weighted.iter().zip(&trips) {
+    for ((line, weight), trips) in lines.iter().zip(&weights).zip(&trips) {
         let Line::Inst(text) = line else {
             before.clear();
             continue;
         };
-        let cost = table_cost(&form(text)).map_or((2, 8), |cost| (cost.bytes, cost.taken));
+        let cost = text_cost(text).map_or((2, 8), |cost| (cost.bytes, cost.taken));
         bytes += cost.0;
-        // the routine a call reaches runs too (`runtime_size::routine_clocks`: `__mulsi3` is 120 T a multiplier bit)
+        // the routine a call reaches runs too (`runtime_size::routine_clocks`:
+        // `__mulsi3` is 120 T a multiplier bit)
         clocks += (f64::from(cost.1) + f64::from(crate::runtime_size::routine_clocks(text, &before))) * weight * trips;
         before.push(text);
     }
@@ -3141,17 +3489,44 @@ pub fn price_emitted(
     price_in_loops(&relax(lines.to_vec(), speed))
 }
 
+/// [`price_emitted`] with the functions its lines call: each by name with how
+/// often it runs for one entry of this function (the frequency of the block the
+/// call is in, and the trips of a loop of an expansion). A call to a runtime
+/// routine (`__mulsi3`) is priced by [`price_in_loops`] already; the callees
+/// named here are the module's own, whose clocks the caller does not hold.
+pub fn price_emitted_calls(
+    lines: &[Line],
+    speed: bool,
+) -> ((u32, u64), Vec<(String, f64)>) {
+    let lines = relax(lines.to_vec(), speed);
+    let price = price_in_loops(&lines);
+    let weights = FREQUENCIES.with(|one| block_weights(&lines, &one.borrow()));
+    let trips = local_loop_trips(&lines);
+    let mut calls = Vec::new();
+    for ((line, weight), trips) in lines.iter().zip(&weights).zip(&trips) {
+        let Line::Inst(text) = line else { continue };
+        let Some(name) = text.strip_prefix("call ").or_else(|| text.strip_prefix("jp ")) else { continue };
+        let name = name.trim();
+        if name.starts_with('_') && !name.starts_with("__") {
+            calls.push((name.to_owned(), weight * trips));
+        }
+    }
+    (price, calls)
+}
+
 /// The bytes of one printed line, jumps being the three-byte form.
 fn bytes_of(line: &Line) -> u32 {
     let Line::Inst(text) = line else { return 0 };
-    let key = form(text);
-    table_cost(&key)
+    text_cost(text)
         // a form the table lacks: longer than any estimate
         .map_or(4, |cost| cost.bytes)
 }
 
 /// One logical shift step of byte register `to`.
-fn plain_byte_shift(left: bool, to: &str) -> String {
+fn plain_byte_shift(
+    left: bool,
+    to: &str,
+) -> String {
     match (left, to) {
         (true, "a") => "add a, a".to_owned(),
         (true, _) => format!("sla {to}"),
@@ -3159,9 +3534,15 @@ fn plain_byte_shift(left: bool, to: &str) -> String {
     }
 }
 
-/// `src` shifted logically by `count` into `dst` through `a`: rotate round the shorter way, then mask (`rrca` x3,
-/// `and #224` for `<< 5`); with the bytes and clocks of the sequence.
-fn rotated_byte_shift(left: bool, src: &str, dst: &str, count: u32) -> (Vec<String>, u32, u32) {
+/// `src` shifted logically by `count` into `dst` through `a`: rotate round the
+/// shorter way, then mask (`rrca` x3, `and #224` for `<< 5`); with the bytes
+/// and clocks of the sequence.
+fn rotated_byte_shift(
+    left: bool,
+    src: &str,
+    dst: &str,
+    count: u32,
+) -> (Vec<String>, u32, u32) {
     let (rotate, turns) = match (count <= 4, left) {
         (true, true) | (false, false) => ("rlca", if count <= 4 { count } else { 8 - count }),
         _ => ("rrca", if count <= 4 { count } else { 8 - count }),
@@ -3304,8 +3685,9 @@ fn flag_and_b_free(text: &str) -> bool {
 /// call frame: the pin's `isProfitable` answers true (`CannotReserveFrame`)
 /// and every legal frame converts.
 ///
-/// DEVIATE Z80-ARGPUSH (owner z80-argpush, exit 2026-11-14): the pin runs on virtual registers and puts every push at the
-/// call, bailing when an instruction defines a register an earlier store
+/// DEVIATE Z80-ARGPUSH (owner z80-argpush, exit 2026-11-14): the pin runs on
+/// virtual registers and puts every push at the call, bailing when an
+/// instruction defines a register an earlier store
 /// read (`classifyInstruction`). This runs after allocation, where the
 /// argument registers are loaded between the stores and the call, so a push
 /// stands at its store, or behind the push above it when that comes later:
@@ -3313,6 +3695,18 @@ fn flag_and_b_free(text: &str) -> bool {
 /// motion.
 ///
 /// <https://github.com/llvm/llvm-project/blob/29eff20316/llvm/lib/Target/X86/X86CallFrameOptimization.cpp#L358>
+thread_local! {
+    /// Instructions `push_arguments` went over to rewrite a call frame, since
+    /// the last [`take_push_span`].
+    static PUSH_SPAN: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The instructions `push_arguments` rewrote on this thread since the last
+/// call.
+pub fn take_push_span() -> usize {
+    PUSH_SPAN.with(|one| one.replace(0))
+}
+
 fn push_arguments(
     function: &mut MFunction,
     assignment: &Assignment,
@@ -3332,27 +3726,40 @@ fn push_arguments(
             };
             let stores: Vec<usize> = places.iter().map(|&(store, _)| store).collect();
             let bytes_first = BYTES_FIRST.with(std::cell::Cell::get);
-            if let Some(stored) = crate::spilled_args::store_spilled(&block.insts, at, &stores, assignment, bytes_first, below_ix + entry[index].1) {
+            if let Some(stored) = crate::spilled_args::store_spilled(
+                &block.insts,
+                at,
+                &stores,
+                assignment,
+                bytes_first,
+                below_ix + entry[index].1,
+            ) {
                 block.insts = stored;
                 at += 1;
                 continue;
             }
-            let mut pushes: Vec<Vec<Inst>> = vec![Vec::new(); block.insts.len()];
-            let mut stores = vec![false; block.insts.len()];
+            // only the span from the frame's opening to the last push's place
+            // changes: a block of many calls was rebuilt whole for
+            // each (straight-line code of 400 calls: a quarter of the compile)
+            let last = places.iter().map(|&(_, after)| after).max().unwrap_or(at);
+            let mut pushes: Vec<Vec<Inst>> = vec![Vec::new(); last - at + 1];
+            let mut stores = vec![false; last - at + 1];
             for (store, after) in places {
                 let mut push = block.insts[store].clone();
                 push.kind = Kind::Op("PUSHARG");
                 push.operands.truncate(1);
-                stores[store] = true;
-                pushes[after].push(push);
+                stores[store - at] = true;
+                pushes[after - at].push(push);
             }
-            let old = std::mem::take(&mut block.insts);
-            for (index, inst) in old.into_iter().enumerate() {
-                if index != at && !stores[index] {
-                    block.insts.push(inst);
+            PUSH_SPAN.with(|one| one.set(one.get() + last - at + 1));
+            let mut span = Vec::new();
+            for (offset, inst) in block.insts[at..=last].iter().enumerate() {
+                if offset != 0 && !stores[offset] {
+                    span.push(inst.clone());
                 }
-                block.insts.append(&mut pushes[index]);
+                span.append(&mut pushes[offset]);
             }
+            block.insts.splice(at..=last, span);
         }
     }
 }
@@ -3406,9 +3813,18 @@ fn push_places(
         let (store, pair) = word?;
         behind = behind.max(store);
         let (lo, hi) = lanes(pair).ok()?;
-        let clobbered = insts[store + 1..=behind].iter().any(|inst| {
-            inst.operands.iter().any(|operand| matches!(operand, Operand::Def(r) if [pair, lo, hi].contains(&physical(*r))))
-        });
+        let clobbered = insts[store + 1..=behind]
+            .iter()
+            .any(
+                |inst| inst.operands
+                    .iter()
+                    .any(
+                        |operand| matches!(
+                            operand,
+                            Operand::Def(r) if [pair, lo, hi].contains(&physical(*r))
+                        ),
+                    ),
+            );
         if clobbered {
             return None;
         }
@@ -3442,7 +3858,10 @@ fn tail_calls(function: &MFunction) -> MFunction {
     // as the call does: the shared return stands where its own `ret` did
     let falls_into_return: Vec<bool> = (0..function.blocks.len())
         .map(|at| {
-            function.blocks.get(at + 1).is_some_and(|next| matches!(&next.insts[..], [one] if one.kind == Kind::Op("RET")))
+            function
+                .blocks
+                .get(at + 1)
+                .is_some_and(|next| matches!(&next.insts[..], [one] if one.kind == Kind::Op("RET")))
         })
         .collect();
     for (index, block) in function.blocks.iter_mut().enumerate() {
@@ -3456,7 +3875,8 @@ fn tail_calls(function: &MFunction) -> MFunction {
         let falls = !returns && n >= 1 && falls_into_return[index] && (bare_adjust(&insts[n - 1]) || insts[n - 1].call);
         let end = n + usize::from(falls);
         if end >= 2 && (returns || falls) {
-            // a block of only the bare adjust, falling into the return, has no call before it
+            // a block of only the bare adjust, falling into the return, has no
+            // call before it
             let at = if bare_adjust(&insts[end - 2]) { end.checked_sub(3) } else { Some(end - 2) };
             if let Some(at) = at
                 && at < n
@@ -3485,6 +3905,80 @@ fn tail_calls(function: &MFunction) -> MFunction {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Substring search for one register name built a searcher per call (74k in
+    /// switch_jump_table -O2): the byte registers are the six one-letter names,
+    /// as `len() == 1 && "bcdehl".contains(name)` had it.
+    #[test]
+    fn a_byte_register_is_one_of_six_letters() {
+        let letters: Vec<char> = ('a'..='z').collect();
+        let mut names = vec![String::new()];
+        for &one in &letters {
+            names.push(one.to_string());
+            for &two in &letters {
+                names.push(format!("{one}{two}"));
+            }
+        }
+        for name in names {
+            let old = name.len() == 1 && "bcdehl".contains(name.as_str());
+            assert_eq!(is_byte_register(&name), old, "{name:?}");
+        }
+    }
+
+    fn lines_of(text: &[&str]) -> Vec<Line> {
+        text.iter()
+            .map(|one| match one.strip_suffix(':') {
+                Some(label) => Line::Label(label.to_owned()),
+                None => Line::Inst((*one).to_owned()),
+            })
+            .collect()
+    }
+
+    /// The price read a copy of every line to weigh it (a `String` per line,
+    /// 36k in switch_jump_table -O2): the weights alone are what `weighted`
+    /// pairs with the lines, and a diamond's join takes what flows into it.
+    #[test]
+    fn the_block_weights_are_the_weights_of_the_weighted_lines() {
+        let lines = lines_of(&["ld a, 1", "jp z, L0_1", "inc a", "jp L0_2", "L0_1:", "dec a", "L0_2:", "ret"]);
+        let frequencies: llrm_support::hash::HashMap<u32, f64> = [(1, 0.25), (2, 1.0)].into_iter().collect();
+        let weights = block_weights(&lines, &frequencies);
+        let paired = weighted(&lines, &frequencies);
+        assert_eq!(weights, paired.iter().map(|(_, weight)| *weight).collect::<Vec<_>>());
+        assert_eq!(weights.len(), lines.len());
+        assert!(weights.iter().any(|weight| *weight == 0.25), "the arm {weights:?}");
+    }
+
+    /// A byte load that a later load of the same register overwrites with
+    /// nothing between that names it is dropped; one that is read first
+    /// stays. The reload's text is built once per candidate, not once per
+    /// line scanned (21k `format!` in switch_jump_table -O2).
+    #[test]
+    fn a_byte_load_overwritten_before_any_read_is_dropped() {
+        let dropped = drop_overwritten_byte_stores(lines_of(&["and a, #248", "ld c, a", "or a, #5", "ld c, a"]));
+        assert_eq!(dropped, lines_of(&["and a, #248", "or a, #5", "ld c, a"]));
+        let read = lines_of(&["ld c, a", "ld b, c", "ld c, a"]);
+        assert_eq!(drop_overwritten_byte_stores(read.clone()), read, "read before it is overwritten");
+        let other = lines_of(&["ld c, a", "ld b, a", "ld e, a"]);
+        assert_eq!(drop_overwritten_byte_stores(other.clone()), other, "other registers are not overwrites");
+    }
+
+    /// A `jp cc, L` to a block that is only a tail `jp SYMBOL` becomes `jp cc,
+    /// SYMBOL` only where nothing else names `L`: the count of names is per
+    /// label, counted through a `#` prefix and over operands.
+    #[test]
+    fn a_conditional_jump_to_a_lone_tail_jump_is_a_tail_jump_only_if_the_label_is_named_once() {
+        let text = |named_twice: bool| {
+            let mut lines = vec!["ret", "T:", "jp _far", "ld a, 1", "jp z, T"];
+            if named_twice {
+                lines.push("ld hl, #T");
+            }
+            lines
+        };
+        let once = conditional_tail_jumps(lines_of(&text(false)));
+        assert!(once.contains(&Line::Inst("jp z, _far".into())), "named once: {once:?}");
+        let twice = conditional_tail_jumps(lines_of(&text(true)));
+        assert!(twice.contains(&Line::Inst("jp z, T".into())), "named twice: {twice:?}");
+    }
 
     fn op(
         name: &'static str,
@@ -3544,7 +4038,8 @@ mod tests {
     fn a_register_defined_before_its_push_keeps_the_stores() {
         let insts = vec![area(4), store(reg::BC, 0), load(reg::BC), store(reg::DE, 2), call()];
         assert_eq!(push_places(&insts, 0, &Assignment::default()), None);
-        // in order, each push stands at its store and the load after it is harmless
+        // in order, each push stands at its store and the load after it is
+        // harmless
         let insts = vec![area(4), store(reg::DE, 2), store(reg::BC, 0), load(reg::BC), call()];
         assert_eq!(push_places(&insts, 0, &Assignment::default()), Some(vec![(1, 1), (2, 2)]));
     }
@@ -3555,7 +4050,10 @@ mod tests {
     fn a_frame_that_is_not_filled_once_keeps_the_stores() {
         let a = Assignment::default();
         assert_eq!(push_places(&[area(4), store(reg::BC, 2), call()], 0, &a), None);
-        assert_eq!(push_places(&[area(4), store(reg::BC, 2), store(reg::DE, 2), store(reg::HL, 0), call()], 0, &a), None);
+        assert_eq!(
+            push_places(&[area(4), store(reg::BC, 2), store(reg::DE, 2), store(reg::HL, 0), call()], 0, &a),
+            None
+        );
         let byte = op("STSP8", vec![Operand::Use(Reg::Phys(reg::A)), Operand::Imm(0)]);
         assert_eq!(push_places(&[area(2), byte, call()], 0, &a), None);
         assert_eq!(push_places(&[area(2), store(reg::BC, 0)], 0, &a), None);
@@ -3648,7 +4146,8 @@ mod tests {
     #[test]
     fn a_byte_store_overwritten_before_any_read_is_dropped() {
         let inst = |text: &str| Line::Inst(text.to_owned());
-        let kept = drop_overwritten_byte_stores(vec![inst("and a, #248"), inst("ld c, a"), inst("or a, #5"), inst("ld c, a")]);
+        let kept =
+            drop_overwritten_byte_stores(vec![inst("and a, #248"), inst("ld c, a"), inst("or a, #5"), inst("ld c, a")]);
         assert_eq!(kept, vec![inst("and a, #248"), inst("or a, #5"), inst("ld c, a")]);
         for between in ["add hl, bc", "ld (bc), a", "call _f", "jr nz, 1$", "ld b, c"] {
             let lines = vec![inst("ld c, a"), inst(between), inst("ld c, a")];
@@ -3657,11 +4156,68 @@ mod tests {
         let lines = vec![inst("ld c, a"), Line::Label("L".to_owned()), inst("ld c, a")];
         assert_eq!(drop_overwritten_byte_stores(lines.clone()), lines, "a label may be entered from elsewhere");
         let lines = vec![inst("ld c, a"), inst("ld c, d"), inst("ld c, (hl)")];
-        assert_eq!(drop_overwritten_byte_stores(lines), vec![inst("ld c, (hl)")], "each load is overwritten by the next");
+        assert_eq!(
+            drop_overwritten_byte_stores(lines),
+            vec![inst("ld c, (hl)")],
+            "each load is overwritten by the next"
+        );
     }
 
-    /// `ld l, c; ld h, b; ld l, h; ld h, #0` fuses to `ld l, b; ld h, #0`. Dropping the dead `ld l, c` first left
-    /// `ld h, b; ld l, h; ld h, #0` (struct_with_i64 -O3: 1 B and 4 T more, 8 sites).
+    /// The copy of a word a signed compare keeps one byte of (`ld c, l; ld a,
+    /// h; xor a, #128; ld b, a; sub a, #129`) stayed where no later load
+    /// overwrote `bc`: switch_peeled_table -Os, once the loop no longer rebuilt
+    /// it.
+    #[test]
+    fn a_byte_load_nothing_reads_before_the_block_ends_is_dropped() {
+        let inst = |text: &str| Line::Inst(text.to_owned());
+        let block = |live: &str| {
+            let lines = vec![
+                Line::Label("M".to_owned()),
+                Line::Label("L".to_owned()),
+                inst("ld c, l"),
+                inst("ld a, h"),
+                inst("xor a, #128"),
+                inst("ld b, a"),
+                inst("sub a, #129"),
+                inst("jr nc, M"),
+                inst(&format!("{LIVE_OUT}{live}")),
+            ];
+            drop_dead_byte_loads(lines).len()
+        };
+        assert_eq!(block("000000"), 6, "both loads of bc are dead");
+        assert_eq!(block("110000"), 8, "bc is live after the block");
+    }
+
+    /// `ld l, c; ld h, b` before `jp _report` was dropped as dead: a jump to a
+    /// label outside the function is a tail call, and the callee reads `hl`.
+    #[test]
+    fn a_load_a_tail_call_reads_is_kept() {
+        let inst = |text: &str| Line::Inst(text.to_owned());
+        let lines = vec![inst("ld l, c"), inst("ld h, b"), inst("jp _report"), inst(&format!("{LIVE_OUT}000000"))];
+        assert_eq!(drop_dead_byte_loads(lines).len(), 3);
+    }
+
+    /// `ld l, a` before `jp (hl)` was dropped as a dead load: the indirect jump
+    /// reads `hl`, and the pass read a jump as reading nothing of its own.
+    /// switch_peeled_table -Os printed wrong results (the jump table's target
+    /// was the pair's old low byte).
+    #[test]
+    fn a_load_the_indirect_jump_reads_is_kept() {
+        let inst = |text: &str| Line::Inst(text.to_owned());
+        let lines = vec![
+            inst("ld a, (hl)"),
+            inst("inc hl"),
+            inst("ld h, (hl)"),
+            inst("ld l, a"),
+            inst("jp (hl)"),
+            inst(&format!("{LIVE_OUT}000000")),
+        ];
+        assert_eq!(drop_dead_byte_loads(lines).len(), 5, "`ld l, a` feeds the jump");
+    }
+
+    /// `ld l, c; ld h, b; ld l, h; ld h, #0` fuses to `ld l, b; ld h, #0`.
+    /// Dropping the dead `ld l, c` first left `ld h, b; ld l, h; ld h, #0`
+    /// (struct_with_i64 -O3: 1 B and 4 T more, 8 sites).
     #[test]
     fn a_dead_load_is_dropped_after_the_high_byte_forward_has_used_it() {
         let inst = |text: &str| Line::Inst(text.to_owned());
@@ -3669,8 +4225,9 @@ mod tests {
         assert_eq!(tidy(lines), vec![inst("ld l, b"), inst("ld h, #0")]);
     }
 
-    /// `word >> 15` with `a` live kept the copy ahead of the shifts (`ld b, h; ld c, b; srl c` x7; `ld b, #0`, which
-    /// `forward_high_bytes` cannot fuse): idioms -Oz +1 B and 24 T over `ld c, h; ld b, #0; srl c` x7.
+    /// `word >> 15` with `a` live kept the copy ahead of the shifts (`ld b, h;
+    /// ld c, b; srl c` x7; `ld b, #0`, which `forward_high_bytes` cannot
+    /// fuse): idioms -Oz +1 B and 24 T over `ld c, h; ld b, #0; srl c` x7.
     #[test]
     fn a_word_shifted_by_a_byte_and_more_clears_the_pair_next_to_the_copy() {
         let ir = "target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8\"\n@g = global i16 0\n\
@@ -3680,8 +4237,10 @@ mod tests {
         assert!(out.contains("srl c") && !out.contains("ld c, b\n\tsrl"), "{out}");
     }
 
-    /// `xor a, b; ld b, a; ld c, l; ld a, b; rrca; ld c, e` lost its dead middle load and kept `ld b, a; ld a, b` (div_constants_long -O2: 42
-    /// bytes of `ld a, r` after `ld r, a`; the copy through `a` of a byte just stored from it).
+    /// `xor a, b; ld b, a; ld c, l; ld a, b; rrca; ld c, e` lost its dead
+    /// middle load and kept `ld b, a; ld a, b` (div_constants_long -O2: 42
+    /// bytes of `ld a, r` after `ld r, a`; the copy through `a` of a byte just
+    /// stored from it).
     #[test]
     fn a_byte_loaded_back_into_the_accumulator_it_came_from_is_not_loaded() {
         let inst = |text: &str| Line::Inst(text.to_owned());
@@ -3693,8 +4252,10 @@ mod tests {
         assert_eq!(tidy(lines.clone()), lines, "a memory cell may be volatile");
     }
 
-    /// `ld l, e; ld h, d; ld a, h; ...; ld l, a; ld h, #0` (a word's high byte shifted through `a`) read the copy
-    /// `h` of `d`: the copies were dead (loop_interchange -O2: +1 B and 9,216 T over `ld l, d; ld h, #0; srl l` x3).
+    /// `ld l, e; ld h, d; ld a, h; ...; ld l, a; ld h, #0` (a word's high byte
+    /// shifted through `a`) read the copy `h` of `d`: the copies were dead
+    /// (loop_interchange -O2: +1 B and 9,216 T over `ld l, d; ld h, #0; srl l`
+    /// x3).
     #[test]
     fn a_byte_read_through_a_copy_reads_the_source() {
         let inst = |text: &str| Line::Inst(text.to_owned());
@@ -3730,9 +4291,11 @@ mod tests {
         assert_eq!(forward_high_bytes(lines).len(), 3);
     }
 
-    /// A loop with two jumps back to its head was counted as two nested loops, 8 times too heavy: lz4 -O2 priced
-    /// a candidate with 40% fewer real clocks as 40% dearer. Blocks are weighted by the IR frequencies since
-    /// then (Z80-BLOCK-WEIGHT): the head's frequency applies once, however many jumps return to it.
+    /// A loop with two jumps back to its head was counted as two nested loops,
+    /// 8 times too heavy: lz4 -O2 priced a candidate with 40% fewer real
+    /// clocks as 40% dearer. Blocks are weighted by the IR frequencies since
+    /// then (Z80-BLOCK-WEIGHT): the head's frequency applies once, however many
+    /// jumps return to it.
     #[test]
     fn a_loop_with_two_jumps_back_is_weighted_once() {
         let inst = |text: &str| Line::Inst(text.to_owned());

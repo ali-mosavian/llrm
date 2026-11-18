@@ -39,6 +39,9 @@ def flags(target, reloc=(), gcc_major=None):
 GCC_PROGRAM_FLAGS = {"-fno-inline-functions": "-fno-inline"}
 # What gcc has no flag for. Left in, `-fno-inline=NAME` and `-fsanitize=stack` fail the compile, but `-ffixed-point` is read as
 # `-ffixed-REG` and only warns ("unknown register name: point"): a column that compiled a different program.
+# gcc 15 defaults to C23, clang and ours to gnu17: a program with an old-style call ("none(1, 2)" to `int none()`) is an error to gcc
+# alone (old_style_extra_args had no gcc cell). The dialect every gcc column builds the corpus in.
+GCC_DIALECT = ("-std=gnu17",)
 CLANG_ONLY = ("-fno-inline=", "-fsanitize=stack", "-ffixed-point")
 
 

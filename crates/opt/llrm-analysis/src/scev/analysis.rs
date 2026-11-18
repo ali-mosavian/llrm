@@ -353,6 +353,28 @@ impl ScevSession {
         }
     }
 
+    /// [`Self::forget_since`] for edits that changed the CFG, on a session
+    /// whose tree and loops are of the CFG as it is now: the pin edits edges
+    /// (`SplitCriticalEdge`) without dropping its one `ScalarEvolution`, which
+    /// forgets what the edits touched, and the blocks' dispositions. All are
+    /// dropped only where the log from `mark` is gone.
+    pub fn forget_since_through_edges(
+        &mut self,
+        context: &llrm_mir::context::Context,
+        layout: &DataLayout,
+        globals: &[llrm_mir::module::GlobalValue],
+        metadata: &[llrm_mir::module::MetadataNode],
+        function: &Function,
+        mark: llrm_mir::module::Mark,
+    ) {
+        match function.touched_since(mark) {
+            Some(touched) => self.ask_within(context, layout, globals, metadata, function, |se, cx| {
+                se.forget_touched_keeping(cx, &touched, false)
+            }),
+            None => self.forget_expressions(),
+        }
+    }
+
     /// `ScalarEvolution::verify` over the function as it is now: the first
     /// kept expression that a new one would not give, said.
     pub fn verify(

@@ -660,7 +660,8 @@ fn test_the_size_header_limit_of_m32_is_four() {
     assert_eq!(super::header_limit(true, false, &*m32, &*tti), 16);
 }
 
-/// `rotated` as the pass is configured for an -Os build of `m32`: what the target's tuning states.
+/// `rotated` as the pass is configured for an -Os build of `m32`: what the
+/// target's tuning states.
 fn rotated_as_m32_at_size(text: &str) -> bool {
     let m32 = crate::indvars::tests::m32();
     let tti = m32.tti().unwrap();
@@ -682,8 +683,9 @@ fn rotated_as_m32_at_size(text: &str) -> bool {
     rotate_function(&mut module, "f", &*tti, options).expect("rotates")
 }
 
-/// m32 -Os rotated a loop that stops on a loaded value, copying a compare and a branch above it that no value decides:
-/// x_jpeg_fixed 2995 B (gcc 2805), 17 kernels larger than with RS1 (-296 B). The target's tuning states RS1; a
+/// m32 -Os rotated a loop that stops on a loaded value, copying a compare and a
+/// branch above it that no value decides: x_jpeg_fixed 2995 B (gcc 2805), 17
+/// kernels larger than with RS1 (-296 B). The target's tuning states RS1; a
 /// counted loop is still rotated.
 #[test]
 fn test_m32_size_builds_leave_a_loop_whose_guard_does_not_fold() {
@@ -693,7 +695,8 @@ fn test_m32_size_builds_leave_a_loop_whose_guard_does_not_fold() {
     assert!(m32.tti().unwrap().rotation_guard_must_fold_at_size());
 }
 
-/// `rotated` as -Oz: the pin copies no header instruction; `free_guard` waives that for a header that folds away.
+/// `rotated` as -Oz: the pin copies no header instruction; `free_guard` waives
+/// that for a header that folds away.
 fn rotated_at_minsize(
     text: &str,
     free_guard: bool,
@@ -717,9 +720,10 @@ fn rotated_at_minsize(
     rotate_function(&mut module, "f", &tti, options).expect("rotates")
 }
 
-/// z80 sum4 -Oz lost its `djnz` when the gcc tail rotate went (#8017): a four-trip loop stayed top-tested, 27 -Oz
-/// cells grew. A loop whose copied header folds away in the preheader is rotated at -Oz where the target says so; a
-/// header that leaves code (an unfolded guard) is not.
+/// z80 sum4 -Oz lost its `djnz` when the gcc tail rotate went (#8017): a
+/// four-trip loop stayed top-tested, 27 -Oz cells grew. A loop whose copied
+/// header folds away in the preheader is rotated at -Oz where the target says
+/// so; a header that leaves code (an unfolded guard) is not.
 #[test]
 fn test_minsize_rotates_a_loop_whose_copied_header_folds_away_only() {
     let folded = COUNTED.replace("%n)", "%y)").replace("i16 %i, %n", "i16 %i, 4");
@@ -730,10 +734,11 @@ fn test_minsize_rotates_a_loop_whose_copied_header_folds_away_only() {
     assert!(!rotated_at_minsize(&wide, true), "a counter wider than a register keeps its test above the body");
 }
 
-/// ROTATION-TRIAL: the counted loop RS1 rotates is noted for the driver's second compile, which
-/// leaves it unrotated. x86-m32 x_prefix -Os kept five rotated loops at 136 B kernel; gcc's
-/// unrotated shape is 2 B less a loop (124 B with the loops left, 12 B smaller). Without the
-/// target's opt-in the second compile changes nothing.
+/// ROTATION-TRIAL: the counted loop RS1 rotates is noted for the driver's
+/// second compile, which leaves it unrotated. x86-m32 x_prefix -Os kept five
+/// rotated loops at 136 B kernel; gcc's unrotated shape is 2 B less a loop (124
+/// B with the loops left, 12 B smaller). Without the target's opt-in the second
+/// compile changes nothing.
 #[test]
 fn test_a_trial_leaves_a_counted_loop_rs1_rotates() {
     let _ = crate::trial::take_rotated();
@@ -748,9 +753,10 @@ fn test_a_trial_leaves_a_counted_loop_rs1_rotates() {
     assert!(crate::trial::take_rotated().is_empty());
 }
 
-/// ROTATION-TRIAL on a function of over 4096 instructions: known_loads_walks.c -Os (one 6219-instruction
-/// `main`) compiled 2.27x as long for a trial it lost. A big function is not noted and the trial compile
-/// rotates its counted loop as the first.
+/// ROTATION-TRIAL on a function of over 4096 instructions: known_loads_walks.c
+/// -Os (one 6219-instruction `main`) compiled 2.27x as long for a trial it
+/// lost. A big function is not noted and the trial compile rotates its counted
+/// loop as the first.
 #[test]
 fn test_a_big_function_is_rotated_in_the_trial_too_and_not_noted() {
     let padding: String = (0..4200).map(|at| format!("  %p{at} = add i16 %n, {at}\n")).collect();
@@ -759,4 +765,184 @@ fn test_a_big_function_is_rotated_in_the_trial_too_and_not_noted() {
     assert!(rotated_guard_must_fold_trying(&big, true));
     assert!(crate::trial::take_rotated().is_empty(), "a big function is not noted");
     assert!(crate::trial::with_unrotated(|| rotated_guard_must_fold_trying(&big, true)), "the trial rotates it too");
+}
+
+/// `known_loads_walks` `f` at wasm32 -O1: a loop nested two deep in one that
+/// runs only while `i < m`, with an empty loop before it. Its copied guard
+/// `0 < m` was left as a compare and a branch, the pin dropped it (`m u> i`
+/// at the outer test says `m != 0`, found through the dominator tree), and
+/// the guard kept the loop from being deleted: +42 B.
+#[test]
+fn test_a_guard_the_dominating_test_implies_is_dropped_by_the_rotation() {
+    let mut module = parsed(
+        "define i8 @f(i8 %a, i8 %b, i8 %m) {
+entry:
+  br label %o
+
+o:
+  %i = phi i8 [ 0, %entry ], [ %in, %olatch ]
+  %c = phi i8 [ 0, %entry ], [ %c3, %olatch ]
+  %go = icmp ult i8 %i, %m
+  br i1 %go, label %body, label %exit
+
+body:
+  br label %j
+
+j:
+  %jv = phi i8 [ 0, %body ], [ %jn, %jb ]
+  %jc = icmp ult i8 %jv, %m
+  br i1 %jc, label %jb, label %k
+
+jb:
+  %jn = add i8 %jv, 1
+  br label %j
+
+k:
+  br label %l
+
+l:
+  %lv = phi i8 [ 0, %k ], [ %ln, %lb ]
+  %c2 = phi i8 [ %c, %k ], [ %v, %lb ]
+  %lc = icmp ult i8 %lv, %m
+  br i1 %lc, label %lb, label %olatch
+
+lb:
+  %v = and i8 %a, %b
+  %ln = add i8 %lv, 1
+  br label %l
+
+olatch:
+  %c3 = phi i8 [ %c2, %l ]
+  %in = add i8 %i, 1
+  br label %o
+
+exit:
+  ret i8 %c
+}
+",
+    );
+    assert!(rotated(&mut module));
+    let out = printed(&module);
+    assert_eq!(out.matches("icmp ult i8 0, %m").count(), 1, "{out}");
+}
+
+/// A loop whose latch exits (`i < n`) and whose header also exits (`x * x >
+/// 1024`), with `x = 0` on entry: mandel -O1's `xx + yy > 1024` break.
+const EXITING_LATCH: &str = "define i32 @f(i32 %n, i32 %c) {
+b0:
+  br label %b1
+
+b1:
+  %x = phi i32 [ 0, %b0 ], [ %nx, %b3 ]
+  %i = phi i32 [ 0, %b0 ], [ %ni, %b3 ]
+  %xx = mul i32 %x, %x
+  %big = icmp sgt i32 %xx, 1024
+  br i1 %big, label %b4, label %b2
+
+b2:
+  %nx = add i32 %xx, %c
+  %ni = add i32 %i, 1
+  br label %b3
+
+b3:
+  %more = icmp ult i32 %ni, %n
+  br i1 %more, label %b1, label %b4
+
+b4:
+  %r = phi i32 [ %x, %b1 ], [ %nx, %b3 ]
+  ret i32 %r
+}
+";
+
+const EXITING_LATCH_INPUTS: &[&[i128]] = &[&[0, 1], &[1, 1], &[5, 3], &[40, 7], &[32, 100], &[3, -1]];
+
+/// `EXITING_LATCH` rotated for the machine `tti` is.
+fn rotated_exiting_latch(tti: &dyn llrm_mir::tti::Tti) -> (bool, String) {
+    let mut module = parsed(EXITING_LATCH);
+    let before = results(&module, EXITING_LATCH_INPUTS);
+    let function = module.function_mut("f").expect("@f").1;
+    crate::loopsimplify::simplified(function);
+    crate::testing::closed(&mut module).expect("closes");
+    let options = Options {
+        max_header_size: 16,
+        priced_at_size: false,
+        guard_must_fold: false,
+        free_guard: false,
+        rotation_trial: false,
+        rotation_only: false,
+        is_util_mode: false,
+        prepare_for_lto: false,
+        check_exit_count: false,
+    };
+    let rotated = rotate_function(&mut module, "f", tti, options).expect("rotates");
+    assert_eq!(results(&module, EXITING_LATCH_INPUTS), before, "{}", printed(&module));
+    (rotated, printed(&module))
+}
+
+/// m32 -O1 mandel ran 2 `imul` a pixel more than gcc (+9,757 clk): the pin
+/// leaves a loop whose latch already exits unrotated unless a header phi dies,
+/// so the header's `x * x` with `x = 0` was computed on the first iteration.
+/// m32 rotates it when the whole header copy folds in the preheader (gcc's
+/// header copy), and keeps the pin's rule elsewhere.
+#[test]
+fn test_a_loop_whose_latch_exits_is_rotated_when_its_header_folds_in_the_preheader() {
+    let (pin, _) = rotated_exiting_latch(&X86::of_cpu("i486").expect("a cpu"));
+    assert!(!pin, "premise: no header phi dies, the pin leaves it");
+    let m32 = crate::indvars::tests::m32();
+    let tti = m32.tti().unwrap();
+    assert!(tti.rotation_of_exiting_latch_when_guard_folds());
+    let (rotated, text) = rotated_exiting_latch(&*tti);
+    assert!(rotated, "{text}");
+    let entry = text.split("\n\n").next().unwrap();
+    assert!(!entry.contains("mul"), "the copy folded, the entry holds no multiply: {text}");
+}
+
+/// A header the preheader's values do not fold is a compare and a multiply
+/// copied above the loop: left as the pin has it.
+#[test]
+fn test_a_loop_whose_latch_exits_is_left_when_its_header_does_not_fold() {
+    let m32 = crate::indvars::tests::m32();
+    let tti = m32.tti().unwrap();
+    let source = EXITING_LATCH.replace("[ 0, %b0 ], [ %nx, %b3 ]", "[ %c, %b0 ], [ %nx, %b3 ]");
+    let mut module = parsed(&source);
+    let function = module.function_mut("f").expect("@f").1;
+    crate::loopsimplify::simplified(function);
+    crate::testing::closed(&mut module).expect("closes");
+    let options = Options {
+        max_header_size: 16,
+        priced_at_size: false,
+        guard_must_fold: false,
+        free_guard: false,
+        rotation_trial: false,
+        rotation_only: false,
+        is_util_mode: false,
+        prepare_for_lto: false,
+        check_exit_count: false,
+    };
+    assert!(!rotate_function(&mut module, "f", &*tti, options).expect("rotates"));
+}
+
+/// The loop headers of @f, innermost first.
+fn headers_of(module: &mut Module) -> Vec<llrm_mir::module::BlockId> {
+    let function = &*module.function_mut("f").expect("@f").1;
+    let info = super::LoopInfo::analyze(function, || llrm_mir::domtree::DomTree::of(function));
+    info.get_loops_in_reverse_sibling_preorder().iter().rev().map(|one| one.get_header()).collect()
+}
+
+/// A scope names a loop by its header (`loopfilter::only`) and the rotation
+/// makes another block the header. The scope stayed on the old one, so the
+/// passes after the rotate in LPM1's per-loop run (the second LICM, the
+/// unswitch) found no loop in scope: klw -O3 lost every non-trivial unswitch
+/// (spill_store_order +4,400 executed instructions).
+#[test]
+fn test_a_scope_follows_the_loop_to_its_new_header() {
+    let mut module = parsed(COUNTED);
+    crate::loopsimplify::simplified(module.function_mut("f").expect("@f").1);
+    let before = headers_of(&mut module);
+    assert_eq!(before.len(), 1);
+    let _scope = crate::loopfilter::only(&before);
+    assert!(rotated(&mut module));
+    let after = headers_of(&mut module);
+    assert_ne!(after, before, "the rotation left the header where it was");
+    assert!(crate::loopfilter::allows(after[0]), "the scope stayed on the old header");
 }

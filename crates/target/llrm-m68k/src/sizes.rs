@@ -167,6 +167,67 @@ fn constant_division(
     })
 }
 
+/// The clocks of a division or remainder by a constant that is not a power of
+/// two, as the DAG lowers it (the forms of `constant_division`'s table): the
+/// magic multiply and what folds its sign and rebuilds the remainder. None
+/// where the plain divide stands (a 32-bit divide without `muls.l`, an
+/// operand that is not constant) or the tables cannot price a form.
+pub fn constant_division_clocks(
+    cpu: Cpu,
+    op: ArithOp,
+    ty: Ty,
+    right: OperandInfo,
+    cpu_has_long_muldiv: bool,
+) -> Option<i64> {
+    let (signed, rem) = match op {
+        ArithOp::UDiv => (false, false),
+        ArithOp::URem => (false, true),
+        ArithOp::SDiv => (true, false),
+        ArithOp::SRem => (true, true),
+        _ => return None,
+    };
+    let Ty::Int(bits) = ty else { return None };
+    if !right.constant || right.power_of_two || right.value.is_some_and(|value| value.unsigned_abs() <= 1) {
+        return None;
+    }
+    let long = bits > 16;
+    if long && !cpu_has_long_muldiv {
+        return None;
+    }
+    let width = if long { "l" } else { "w" };
+    let multiply = if signed { "muls" } else { "mulu" };
+    // (form, bytes): the instructions of the lowering, a representative divisor's.
+    let mut forms: Vec<(String, u32)> = if long {
+        vec![
+            ("move.l #1717986919, %d0".into(), 6),
+            (format!("{multiply}.l %d0, %d1:%d2"), 4),
+        ]
+    } else {
+        vec![(format!("{multiply}.w #171, %d1"), 4), ("moveq #10, %d0".into(), 2)]
+    };
+    forms.push((format!("lsr.{width} %d0, %d1"), 2));
+    if signed {
+        // the quotient's sign shifted out and added back
+        forms.extend([
+            (format!("asr.{width} #1, %d1"), 2),
+            ("move.l %d1, %d2".into(), 2),
+            (format!("lsr.{width} #7, %d2"), 2),
+            (format!("add.{width} %d2, %d1"), 2),
+        ]);
+    }
+    if rem {
+        // the quotient times the divisor by shifts and adds, subtracted
+        forms.extend(
+            ["move.l %d1, %d2", "lsl.l #2, %d2", "add.l %d1, %d2", "add.l %d2, %d2", "add.l %d1, %d2", "sub.l %d2, %d3"]
+                .map(|text| (text.to_string(), 2)),
+        );
+    }
+    forms
+        .iter()
+        .map(|(text, bytes)| crate::timing::cost(cpu, text, *bytes, true).ok().map(|cost| i64::from(cost.clocks)))
+        .sum()
+}
+
 /// Bytes of a compare or select.
 pub fn cmp_sel(
     op: CmpSel,

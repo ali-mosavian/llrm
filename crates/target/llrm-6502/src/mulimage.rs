@@ -36,9 +36,9 @@ fn routine_code(routine: &str) -> &'static str {
     &body[..end]
 }
 
-/// Bytes `routine` adds to an image (`mos_rt.s`): its code up to the next
-/// `.export`, and the tail it ends in with a `jmp`.
-pub fn library_bytes(routine: &str) -> u32 {
+/// Bytes the runtime label `routine` adds to an image: its own code, up to the
+/// next label.
+fn label_bytes(routine: &str) -> u32 {
     // the routine's macros are defined elsewhere in the file
     let mut macros = String::new();
     let mut inside = false;
@@ -51,25 +51,16 @@ pub fn library_bytes(routine: &str) -> u32 {
         }
         inside &= !word.starts_with(".endmacro");
     }
-    let priced =
-        |text: &str| estimate(Cpu::Mos6502, &format!("{macros}{text}")).unwrap_or_else(|e| panic!("{e}")).bytes;
     let text = routine_code(routine);
-    let own = priced(text);
-    let tail = text
-        .lines()
-        .map(|line| line.split(';').next().unwrap_or("").trim())
-        .filter(|line| !line.is_empty())
-        .next_back();
-    match tail.and_then(|line| line.strip_prefix("jmp ")) {
-        Some(label) if !label.starts_with('@') => {
-            let from =
-                crate::RUNTIME.find(&format!("\n{label}:")).unwrap_or_else(|| panic!("no `{label}` in mos_rt.s")) + 1;
-            let body = &crate::RUNTIME[from..];
-            let end = body.find("\n  rts").unwrap_or_else(|| panic!("`{label}` has no rts")) + "\n  rts".len();
-            own + priced(&body[..end])
-        }
-        _ => own,
-    }
+    estimate(Cpu::Mos6502, &format!("{macros}{text}")).unwrap_or_else(|e| panic!("{e}")).bytes
+}
+
+/// Bytes a call of `routine` adds to an image (`mos_rt.s`): the routine and the
+/// routines it calls or jumps to, as the link takes them.
+pub fn library_bytes(routine: &str) -> u32 {
+    let mut found = std::collections::BTreeSet::from([routine.to_owned()]);
+    links_callees(&mut found);
+    found.iter().map(|one| label_bytes(one)).sum()
 }
 
 /// A 32-bit multiply call, in clocks (`__mulsi3`, sim65): what each removed
@@ -150,7 +141,11 @@ fn linked(
     let mut found = std::collections::BTreeSet::new();
     for (name, selection) in names.iter().zip(selections) {
         let text = crate::select::function_text(module, name, selection)?;
-        for target in text.lines().filter_map(|line| line.trim().strip_prefix("jsr ")).map(str::trim) {
+        for target in text
+            .lines()
+            .filter_map(|line| line.trim().strip_prefix("jsr ").or_else(|| line.trim().strip_prefix("jmp ")))
+            .map(str::trim)
+        {
             if names.iter().all(|one| one != target) && crate::RUNTIME.contains(&format!("\n{target}:")) {
                 found.insert(target.to_owned());
             }
@@ -165,8 +160,21 @@ fn links_callees(found: &mut std::collections::BTreeSet<String>) {
     let mut pending: Vec<String> = found.iter().cloned().collect();
     while let Some(routine) = pending.pop() {
         for line in routine_code(&routine).lines() {
-            let callee = line.split(';').next().unwrap_or("").trim().strip_prefix("jsr ").map(str::trim);
-            if let Some(callee) = callee.filter(|one| crate::RUNTIME.contains(&format!("\n{one}:"))) {
+            let code = line.split(';').next().unwrap_or("").trim();
+            // a routine that branches into another one (`udivmod16`: `bne
+            // udivmod16c`) links it too
+            let callee = code
+                .strip_prefix("jsr ")
+                .or_else(|| code.strip_prefix("jmp "))
+                .or_else(|| {
+                    ["bne ", "beq ", "bcc ", "bcs ", "bmi ", "bpl ", "bvc ", "bvs "]
+                        .iter()
+                        .find_map(|op| code.strip_prefix(op))
+                })
+                .map(str::trim);
+            if let Some(callee) =
+                callee.filter(|one| !one.starts_with('@') && crate::RUNTIME.contains(&format!("\n{one}:")))
+            {
                 if found.insert(callee.to_owned()) {
                     pending.push(callee.to_owned());
                 }
@@ -240,7 +248,7 @@ pub fn widen_when_it_pays(
         .map(|(at, one)| again.iter().find(|(to, _)| *to == at).map_or(*one, |(_, other)| other))
         .collect();
     let library = |routines: &std::collections::BTreeSet<String>| -> i64 {
-        routines.iter().map(|one| i64::from(library_bytes(one))).sum()
+        routines.iter().map(|one| i64::from(label_bytes(one))).sum()
     };
     let net = growth + library(&linked(module, names, &widened)?) - library(&linked(module, names, &current)?);
     if net <= 0 {
@@ -251,76 +259,31 @@ pub fn widen_when_it_pays(
     Ok(())
 }
 
-/// The compact word divides loop 16 times whatever the quotient; the aligned ones loop for its bits (one or
-/// two for Euclid's gcd) and are larger. The routine is linked once for all the module's calls, so the
-/// module chooses: [`aligned_divide_sites`] prices what they save and cost, [`pays_by_share`] weighs the
-/// two against the module itself.
-///
-/// DEVIATE 6502-ALIGNED-DIVIDE (owner llrm-target-6502, exit 2026-11-24): llvm-mos's `__umodhi3` aligns the
-/// divisor too; the pin has no divide routine to price. Exit: with the shared inline-or-call cost model.
-///
-/// The clocks the aligned divides save in `module` (each call weighted by its block's trips) and the bytes
-/// they add to the image, if it calls a compact divide. `from_module[i]` is whether `selections[i]` was
-/// selected from `module` itself.
-pub fn aligned_divide_sites(
-    module: &llrm_mir::module::Module,
-    names: &[String],
-    selections: &[Selection],
-    from_module: &[bool],
-    layout: &llrm_mir::datalayout::DataLayout,
-    request: &Request,
-) -> Option<(u64, i64)> {
-    use crate::dagisel::generated::ids::opcode as op;
-    use llrm_codegen::backend::selectiondag::isd::ISD;
-    if !matches!(request.level, Level::Os | Level::Oz) {
-        return None;
-    }
-    let (mut weighted, mut used) = (0u64, std::collections::BTreeSet::new());
-    for (at, (name, selection)) in names.iter().zip(selections).enumerate() {
-        let function = module.named(name).and_then(|id| module.global(id).function());
-        let weights = function.filter(|_| from_module[at]).map(|function| crate::weights::block_weights(module, function, layout));
-        for one in &selection.blocks {
-            for &node in one.units.iter().flat_map(|unit| &unit.nodes) {
-                let routine = match one.dag.nodes()[node as usize].opcode {
-                    ISD::Machine(code) if code as u16 == op::SDIV16 => "__divhi3c",
-                    ISD::Machine(code) if code as u16 == op::SREM16 => "__modhi3c",
-                    ISD::Machine(code) if code as u16 == op::UDIVREM16 => "__udivhi3c",
-                    _ => continue,
-                };
-                used.insert(routine.to_owned());
-                let weight = weights.as_ref().and_then(|all| all.get(one.block.0 as usize)).copied().unwrap_or(1);
-                weighted = weighted.saturating_add(weight);
-            }
-        }
-    }
-    if used.is_empty() {
-        return None;
-    }
-    let image = |routines: std::collections::BTreeSet<String>| -> i64 {
-        let mut all = routines;
-        links_callees(&mut all);
-        all.iter().map(|one| i64::from(library_bytes(one))).sum()
-    };
-    let aligned = used.iter().filter_map(|one| crate::routines::aligned_variant(one)).map(str::to_owned).collect();
-    let growth = image(aligned) - image(used);
-    Some((weighted.saturating_mul(crate::routines::aligned_divide_saving()), growth))
-}
-
-/// Whether a module, of `clocks` and `bytes` by the static estimate, takes a speed routine at size that
-/// saves `saved` clocks for `growth` bytes: when the share of its clocks it saves is at least
-/// `[share] percent_per_percent` times the share of its bytes it adds. The shares by this estimate for the
-/// aligned divide: idiv_loop_os saves more than all of its clocks for 5.4% of its bytes,
-/// compound_assignment_types 86% for 2.4%, idioms 0.3% for 0.7%; measured, -60% / -12% / -0.0% clocks.
+/// Whether a module, of `clocks` and `bytes` by the static estimate, takes a
+/// speed routine at size that saves `saved` clocks for `growth` bytes: when the
+/// share of its clocks it saves is at least `[share] percent_per_percent` times
+/// the share of its bytes it adds.
 pub fn pays_by_share(
     (saved, growth): (u64, i64),
     clocks: u64,
     bytes: u64,
 ) -> bool {
-    let percent = u128::from(crate::routines::share_percent());
+    pays_by_share_at(crate::routines::share_percent(), (saved, growth), clocks, bytes)
+}
+
+/// [`pays_by_share`] at `percent` clocks per percent of bytes.
+pub fn pays_by_share_at(
+    percent: u64,
+    (saved, growth): (u64, i64),
+    clocks: u64,
+    bytes: u64,
+) -> bool {
+    let percent = u128::from(percent);
     growth <= 0 || u128::from(saved) * u128::from(bytes) >= percent * growth as u128 * u128::from(clocks)
 }
 
-/// The `mos_rt.s` routines the function `texts` call or jump to, with the ones those call.
+/// The `mos_rt.s` routines the function `texts` call or jump to, with the ones
+/// those call.
 pub fn image_of_texts(
     names: &[String],
     texts: &[String],
@@ -343,5 +306,104 @@ pub fn image_of_texts(
 
 /// The bytes the routines add to an image.
 pub fn image_bytes(routines: &std::collections::BTreeSet<String>) -> i64 {
-    routines.iter().map(|one| i64::from(library_bytes(one))).sum()
+    routines.iter().map(|one| i64::from(label_bytes(one))).sum()
+}
+
+/// The bytes of the module as `selections` write it, the runtime routines it
+/// links counted: what a multiply as a call is priced by, since the routine is
+/// linked once, for all of them.
+fn module_bytes(
+    module: &llrm_mir::module::Module,
+    names: &[String],
+    selections: &[&Selection],
+    request: &Request,
+) -> Result<i64, String> {
+    let parts: Vec<(&str, &Selection)> = names.iter().map(String::as_str).zip(selections.iter().copied()).collect();
+    let pieces = crate::select::module_text(module, &parts)?;
+    let mut bytes = 0;
+    for piece in &pieces {
+        bytes += i64::from(estimate(request.cpu, piece)?.bytes);
+    }
+    let routines = image_of_texts(names, &pieces);
+    if std::env::var_os("LLRM_DEBUG_TRIAL").is_some() {
+        eprintln!("trial mul call: functions {bytes} B, routines {} B {routines:?}", image_bytes(&routines));
+    }
+    Ok(bytes + image_bytes(&routines))
+}
+
+/// A multiply of 32 bits by a constant outside every loop that a function not
+/// tuned for size expands in line is a call of `__mulsi3` when the module is
+/// written in fewer bytes so: the routine is linked once, for every call
+/// (compound_assignment_types at -O2: twelve expansions of `check * 7` of
+/// 22 B against twelve calls of 8 B and one routine). Bytes first at every
+/// level (user ruling 2026-11-14); a place in a loop keeps the expansion, a
+/// call is some 1,900 clocks a multiply.
+///
+/// DEVIATE 6502-MUL-CALL-TRIAL (owner 6502, exit 2026-11-24, with
+/// 6502-MUL-IMAGE): translation of the repo's module-level re-selections
+/// (`expand_when_unshared`, `widen_when_it_pays`, and `OS-INLINE-TRIAL`'s
+/// compile-twice-keep-the-fewer-bytes); the pin decides each multiply alone
+/// ([`DAGCombiner::visitMUL`]), and llvm-mos and gcc expand it. The module is
+/// selected again for the functions that have such a multiply, only when one
+/// does, and kept when its bytes, the routines linked (the speed and compact
+/// variants of `module_text` included) counted, fall.
+///
+/// `from_module[i]` is whether `selections[i]` was selected from `module`
+/// itself (not from a copy of it with loops or paged indexing).
+pub fn call_when_it_pays(
+    module: &llrm_mir::module::Module,
+    names: &[String],
+    selections: &mut [Selection],
+    from_module: &[bool],
+    request: &Request,
+) -> Result<(), String> {
+    use crate::dagisel::function::with_cold_multiply_calls;
+    if !matches!(request.level, Level::O1 | Level::O2 | Level::O3)
+        || std::env::var_os("LLRM_6502_NO_MUL_CALL").is_some()
+    {
+        return Ok(());
+    }
+    // static call weight, as `hotmultiply` counts it: ten a level of loop
+    let calls = crate::staticlocals::call_weights(module);
+    let loop_called: Vec<String> = names
+        .iter()
+        .filter(|name| {
+            module.named(name).is_some_and(|id| calls.get(&(id.0 as usize)).is_some_and(|weight| *weight >= 10.0))
+        })
+        .cloned()
+        .collect();
+    let mut again = Vec::new();
+    for (at, (name, selection)) in names.iter().zip(selections.iter()).enumerate() {
+        let function = module.named(name).and_then(|id| module.global(id).function());
+        if selection.call_candidates == 0 || !from_module[at] || function.is_some_and(is_sized) {
+            continue;
+        }
+        let mut other =
+            with_cold_multiply_calls(loop_called.clone(), || select_function_with(module, name, request.cpu, false))?;
+        other.zero_page = request.platform.zero_page;
+        other.tuning = request.level.tuning();
+        if other.mul_calls() > selection.mul_calls() {
+            again.push((at, other));
+        }
+    }
+    if again.is_empty() {
+        return Ok(());
+    }
+    let current: Vec<&Selection> = selections.iter().collect();
+    let called: Vec<&Selection> = current
+        .iter()
+        .enumerate()
+        .map(|(at, one)| again.iter().find(|(to, _)| *to == at).map_or(*one, |(_, other)| other))
+        .collect();
+    let (kept, tried) =
+        (module_bytes(module, names, &current, request)?, module_bytes(module, names, &called, request)?);
+    if std::env::var_os("LLRM_DEBUG_TRIAL").is_some() {
+        eprintln!("trial mul call: {} functions, {tried} B against {kept} B kept", again.len());
+    }
+    if tried < kept {
+        for (at, other) in again {
+            selections[at] = other;
+        }
+    }
+    Ok(())
 }

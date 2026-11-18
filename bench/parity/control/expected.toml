@@ -1,5 +1,5 @@
-reason = "count the compiler-support routines a reference links: code_bytes includes helper_bytes (tools/bench/helpers.py)"
-blessed = "2026-11-10"
+reason = "BASIC references re-measured under the stored-bytes rule of sizes.py: BC_VARS is stored data, not bss"
+blessed = "2026-11-14"
 corpus = "01195747f5878bf4655af53a360d23f1"
 
 [ow.O1]
@@ -123,25 +123,31 @@ bss_bytes = 4
 kernel_ms = 0.0046
 
 [bc.O2]
-instructions = 448
-memory_operands = 239
-code_bytes = 358
-data_bytes = 7
-bss_bytes = 10
-kernel_ms = 0.0176
+instructions = 440
+memory_operands = 231
+clocks = 1070
+layout_clocks = 1070
+pad_nops = 0
+code_bytes = 386
+data_bytes = 40
+bss_bytes = 0
 
 [pds71.O2]
-instructions = 476
-memory_operands = 266
-code_bytes = 366
-data_bytes = 7
-bss_bytes = 10
-kernel_ms = 0.0162
+instructions = 468
+memory_operands = 258
+clocks = 1121
+layout_clocks = 1121
+pad_nops = 0
+code_bytes = 394
+data_bytes = 40
+bss_bytes = 0
 
 [vbdos.O2]
-instructions = 527
-memory_operands = 281
-code_bytes = 371
-data_bytes = 7
-bss_bytes = 10
-kernel_ms = 0.0136
+instructions = 519
+memory_operands = 273
+clocks = 1199
+layout_clocks = 1199
+pad_nops = 0
+code_bytes = 401
+data_bytes = 40
+bss_bytes = 0

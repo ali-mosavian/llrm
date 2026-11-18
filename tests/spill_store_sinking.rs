@@ -36,7 +36,6 @@ int main(void)
 ";
 
 #[test]
-#[ignore = "row M32-SPILLSINK-1"]
 fn test_a_spill_store_ahead_of_a_branch_is_made_on_the_path_that_reads_the_slot() {
     let scratch = tempfile::tempdir().unwrap();
     let source = scratch.path().join("hanoi.c");

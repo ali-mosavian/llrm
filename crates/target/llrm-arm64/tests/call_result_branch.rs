@@ -25,8 +25,13 @@ fn a_long_result_is_tested_in_x0() {
     assert!(text.contains("cbz x0") || text.contains("cbnz x0"), "{text}");
 }
 
+/// A byte has garbage above it. `and w9, w0, #0xff; cbz w9` became the pin's
+/// `tst w0, #0xff; b.eq` with `AArch64CondBrTuning` (#9732): the flag-setting
+/// `and` clears the bits and tests in one instruction.
 #[test]
 fn a_byte_result_is_cleared_before_the_test() {
     let text = body("byte");
-    assert!(text.contains("and w") || text.contains("uxtb"), "{text}");
+    assert!(text.contains("ands wzr, w0, #0xff"), "{text}");
+    assert!(text.contains("b.eq") || text.contains("b.ne"), "{text}");
+    assert!(!text.contains("cbz") && !text.contains("cbnz"), "{text}");
 }

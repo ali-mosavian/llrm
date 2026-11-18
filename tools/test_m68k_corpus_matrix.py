@@ -38,7 +38,7 @@ class CorpusMatrix(unittest.TestCase):
 
     def test_gcc_keeps_a_static_function_out_of_line(self):
         """frameless.c asks for -fno-inline-functions: gcc inlined all five statics into main (260 B against our 558 B, not like-for-like)."""
-        self.assertEqual(mx.gcc_program_flags(["-DX", "-fno-inline-functions"]), ["-DX", "-fno-inline"])
+        self.assertEqual(mx.gcc_program_flags(["-DX", "-fno-inline-functions"]), ["-DX", "-fno-inline", "-std=gnu17"])
 
     def test_gcc_compiles_the_branch_of_a_source_that_tests_clang(self):
         """variadic.c: `#ifdef __clang__` is the real stdarg walk, the rest a macro walk. gcc built the macro branch (178 B at 68000 -Os);

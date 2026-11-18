@@ -1162,3 +1162,92 @@ fn erasing_one_block_tests_no_layout_entry_and_keeps_the_order() {
     assert_eq!(f.layout(), &expected[..]);
     assert!(!f.is_placed(made[20]));
 }
+
+const LOOP: &str = "define i32 @f(i32 %n) {
+entry:
+  br label %loop
+loop:
+  %i = phi i32 [ 0, %entry ], [ %next, %loop ]
+  %j = phi i32 [ 0, %entry ], [ %next, %loop ]
+  %next = add i32 %i, 1
+  %sum = add i32 %j, %next
+  %c = icmp ult i32 %next, %n
+  br i1 %c, label %loop, label %out
+out:
+  ret i32 %sum
+}
+";
+
+/// The result names of the users of `%name`, in use-list order.
+fn users_of(
+    f: &Function,
+    name: &str,
+) -> Vec<String> {
+    let (_, value) = named(f, name);
+    f.users(value)
+        .iter()
+        .map(|one| f.value(f.instruction(one.user).result.unwrap_or(value)).name.clone().unwrap_or_default())
+        .collect()
+}
+
+/// A value read before its definition has its early uses behind the later
+/// ones, in the order read (`LLParser`'s placeholder `RAUW`): `[c, sum, i, j]`.
+/// They came out `[c, sum, j, i]`, so every pass that walks users met the loop
+/// phis in the other order than the pin.
+#[test]
+fn uses_read_before_the_definition_come_after_the_later_ones_in_read_order() {
+    let mut module = module(LOOP);
+    assert_eq!(users_of(function(&mut module), "next"), ["c", "sum", "i", "j"]);
+}
+
+/// `uselistorder` sorts the list: the `i`th use goes to place `indexes[i]`
+/// (`LLParser::sortUseListOrder`).
+#[test]
+fn a_uselistorder_directive_reorders_the_uses_of_a_value() {
+    let text = LOOP.replace("}\n", "  uselistorder i32 %next, { 1, 2, 3, 0 }\n}\n");
+    let mut module = module(&text);
+    assert_eq!(users_of(function(&mut module), "next"), ["j", "c", "sum", "i"]);
+}
+
+/// Clang's `-emit-llvm-uselists` writes the use lists of globals and
+/// constants as module-level directives after the functions. The reader
+/// refused them ("unexpected uselistorder at the top level"), so wasm and every
+/// other compile of such a module failed once llrm-cc asked for the lists.
+#[test]
+fn a_module_level_uselistorder_directive_is_read_and_dropped() {
+    let text = format!("{LOOP}\n@g = global i32 0\nuselistorder ptr @g, {{ 1, 0 }}\n");
+    let mut module = module(&text);
+    assert_eq!(users_of(function(&mut module), "next"), ["c", "sum", "i", "j"]);
+}
+
+/// What a reader would build prints no directive; a reordered list prints the
+/// shuffle that `opt -preserve-ll-uselistorder` prints for it (checked against
+/// the pin on this loop: `{ 1, 2, 3, 0 }`, and none without the directive).
+#[test]
+fn a_use_list_prints_its_shuffle_only_where_it_differs_from_the_readers() {
+    let mut plain = module(LOOP);
+    assert!(function(&mut plain).use_list_orders().is_empty());
+    let text = LOOP.replace("}\n", "  uselistorder i32 %next, { 1, 2, 3, 0 }\n}\n");
+    let mut module = module(&text);
+    let f = function(&mut module);
+    let (_, next) = named(f, "next");
+    assert_eq!(f.use_list_orders(), [(next, vec![1, 2, 3, 0])]);
+}
+
+/// Clang writes a block's use list inside the function as `uselistorder label
+/// %b, { .. }`. The reader took `label` for a type and then `%b` for a value
+/// never defined, so wasm refused `switch_empty_cases.c` at -O1/-O2/-Os.
+#[test]
+fn a_uselistorder_directive_reorders_the_uses_of_a_block() {
+    let users = |text: &str| {
+        let mut module = module(text);
+        let f = function(&mut module);
+        let block = f.layout().iter().copied().find(|&b| f.block(b).name.as_deref() == Some("loop")).expect("%loop");
+        f.block_users(block).iter().map(|one| one.user.0).collect::<Vec<_>>()
+    };
+    let plain = users(LOOP);
+    let text = LOOP.replace("}\n", "  uselistorder label %loop, { 1, 0 }\n}\n");
+    let swapped = users(&text);
+    assert_eq!(plain.len(), 2);
+    assert_eq!(swapped, [plain[1], plain[0]]);
+}

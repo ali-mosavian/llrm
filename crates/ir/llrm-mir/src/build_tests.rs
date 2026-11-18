@@ -322,3 +322,18 @@ fn a_global_named_after_the_first_lookup_is_found() {
     module.globals.push(crate::module::GlobalValue { name: "d".to_owned().into(), ..copy });
     assert_eq!(module.named("d").map(|id| id.0), Some(2));
 }
+
+/// `select <4 x i1>` was "ill-typed": the check took only an `i1` condition,
+/// so LoopVectorize's widened selects failed verification. LLVM's
+/// `SelectInst::areInvalidOperands` takes a vector of `i1` with the values' lanes.
+#[test]
+fn a_select_by_a_vector_of_conditions_verifies_when_the_lanes_agree() {
+    let select = |condition: &str| {
+        format!(
+            "define <4 x i32> @f({condition} %c, <4 x i32> %a, <4 x i32> %b) {{\nentry:\n  %r = select {condition} %c, <4 x i32> %a, <4 x i32> %b\n  ret <4 x i32> %r\n}}\n"
+        )
+    };
+    assert_eq!(verify::verify(&parse::module(&select("<4 x i1>")).unwrap()), Vec::<String>::new());
+    let said = verify::verify(&parse::module(&select("<2 x i1>")).unwrap());
+    assert!(said.iter().any(|one| one.contains("is ill-typed")), "{said:?}");
+}

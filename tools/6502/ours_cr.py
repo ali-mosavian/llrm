@@ -8,6 +8,8 @@ from concurrent.futures import ThreadPoolExecutor
 HERE = Path(__file__).resolve().parent
 # OURS_CPU=65c02: the 65C02 target and cc65 target
 CPU = os.environ.get("OURS_CPU", "6502")
+# the flag verifier (`flagcheck`): a compile where a flag is cleared before its reader fails, not runs wrong
+os.environ.setdefault("LLRM_6502_CHECK_FLAGS", "1")
 SIM = "sim" + CPU
 GC = os.environ.get("GCC_COLUMNS", os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "gcc-columns"))
 OVERLAY = HERE / "overlay"  # what must differ from the repo corpus (the empty program the floor is read from)
@@ -59,10 +61,10 @@ def reachable_runtime(text):
         if not want[i]:
             want[i] = True; q += [j for j in toks(blocks[i][1]) if j != i]
     out = "".join(b for (n, b), w in zip(blocks, want) if w)
-    if out and ("__sa" in out or "__ra" in out or "__sa" in text or "__ra" in text): out += bss + ".export __sa, __ra, __sb, __st, __sr, __sg\n"
+    if out and ("__sa" in out or "__ra" in out or "__sa" in text or "__ra" in text): out += bss + ".export __sa, __ra, __st, __sr, __sg\n"
     return macros + out if out else out
 def driver():
-    s = ".export _main\n.import main\n.import _putchar\n.export report\nlp = $A0\nptr = $A2\n" + "".join(f"rc{i} = ${0x80 + i:X}\n" for i in range(6))
+    s = ".export _main\n.import main\n.import _putchar\n.export report\nlp = $70\nptr = $72\n" + "".join(f"rc{i} = ${0x80 + i:X}\n" for i in range(6))
     s += """.segment "CODE"
 _main:
   lda #0
@@ -103,16 +105,15 @@ d3:
   jmp $FFF9
 report:
   ldy #0
+  sta (lp),y
+  iny
+  txa
+  sta (lp),y
+  iny
   lda rc2
   sta (lp),y
   iny
   lda rc3
-  sta (lp),y
-  iny
-  lda rc4
-  sta (lp),y
-  iny
-  lda rc5
   sta (lp),y
   lda lp
   clc
@@ -123,7 +124,8 @@ report:
 r1:
   rts
 """ % (LOG >> 8, LOG >> 8)
-    return s
+    # a dist from before the A:X convention reads the first word from rc2
+    return s if os.environ.get("OURS_ABI") != "cells" else s.replace('  sta (lp),y\n  iny\n  txa\n  sta (lp),y\n  iny\n  lda rc2\n  sta (lp),y\n  iny\n  lda rc3\n  sta (lp),y\n', '  lda rc2\n  sta (lp),y\n  iny\n  lda rc3\n  sta (lp),y\n  iny\n  lda rc4\n  sta (lp),y\n  iny\n  lda rc5\n  sta (lp),y\n')
 def sh(cmd, cwd, timeout=300, text=True):
     return subprocess.run(cmd, cwd=cwd, capture_output=True, text=text, timeout=timeout)
 def expected(p):
@@ -245,7 +247,7 @@ def one(job):
 if __name__ == "__main__":
     OURS, level, out = sys.argv[1:4]; names = sys.argv[4:]
     WORK = tempfile.mkdtemp(prefix="o6progs-"); lib = None
-    import atexit; atexit.register(shutil.rmtree, WORK, True)  # one work directory per run, gone at exit (516 left in /tmp ran it out of inodes, 2026-11-10)
+    import atexit, signal; signal.signal(signal.SIGTERM, lambda *_: sys.exit(143)); atexit.register(shutil.rmtree, WORK, True)  # one work directory per run, gone at exit (516 left in /tmp ran it out of inodes, 2026-11-10)
     BASE = base_members(WORK)
     pass82 = [x.strip() for x in open(HERE / "pass82.txt")]
     srcs = [src_of(n) for n in (names or pass82)]

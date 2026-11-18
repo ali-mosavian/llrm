@@ -29,7 +29,10 @@ use crate::regalloc::Assignment;
 use crate::REGISTER_INFO;
 
 fn is_compare(inst: &Inst) -> bool {
-    matches!(inst.kind, Kind::Op(name) if name.starts_with("CMP") && !name.starts_with("CMPA")) && inst.sets_flags
+    matches!(
+        inst.kind,
+        Kind::Op(name) if name.starts_with("CMP") && !name.starts_with("CMPA")
+    ) && inst.sets_flags()
 }
 
 /// The operands with each register as its root, so two compares of the same
@@ -68,6 +71,12 @@ pub fn drop_repeated_compares(
             }
         }
     }
+    // a block that falls into the next one is an edge no terminator names
+    for at in 1..function.blocks.len() {
+        if !function.blocks[at - 1].insts.last().is_some_and(|last| last.barrier) {
+            entering.entry(function.blocks[at].id).or_default().push(at - 1);
+        }
+    }
     for at in 1..function.blocks.len() {
         let id = function.blocks[at].id;
         let [from] = entering.get(&id).map(Vec::as_slice).unwrap_or(&[]) else { continue };
@@ -75,12 +84,52 @@ pub fn drop_repeated_compares(
         let before = &function.blocks[*from].insts;
         // the setter, then only branches
         let Some(setter) = before.iter().rposition(|inst| !inst.terminator) else { continue };
-        if !before[setter + 1..].iter().all(|inst| inst.terminator && !inst.sets_flags && !inst.call) {
+        if !before[setter + 1..].iter().all(|inst| inst.terminator && !inst.sets_flags() && !inst.call) {
             continue;
         }
         let last = &before[setter];
         if is_compare(last) && last.kind == first.kind && rooted(last, assignment) == rooted(first, assignment) {
             function.blocks[at].insts.remove(0);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use llrm_lir::registers::RegId;
+    use llrm_spike_mf::{Block, Inst};
+
+    use super::*;
+    use crate::mfunc::MFunction;
+
+    fn phys(n: u8) -> Reg {
+        Reg::Phys(RegId::from_raw(n))
+    }
+
+    fn compare() -> Inst {
+        let mut inst = Inst::new(Kind::Op("CMP32rr"), vec![Operand::Use(phys(0)), Operand::Use(phys(1))]);
+        inst.sets_flags = true;
+        inst
+    }
+
+    fn branch(to: u32) -> Inst {
+        let mut inst = Inst::new(Kind::Op("Bcc"), vec![Operand::Block(to)]);
+        inst.terminator = true;
+        inst.reads_flags = true;
+        inst
+    }
+
+    /// `A: cmp; bge Y` falls into `B: move`, which falls into `Y: cmp; blt`:
+    /// the compare in `Y` was dropped as the repeat of `A`'s, so on the path
+    /// through `B` the `blt` read the `move`'s codes.
+    #[test]
+    fn a_compare_reached_by_falling_through_a_move_stays() {
+        let mut function = MFunction::new("f");
+        let copy = Inst::new(Kind::Copy, vec![Operand::Def(phys(2)), Operand::Use(phys(3))]);
+        for (id, insts) in [(0, vec![compare(), branch(2)]), (1, vec![copy]), (2, vec![compare(), branch(0)])] {
+            function.blocks.push(Block { id, insts, phis: vec![] });
+        }
+        drop_repeated_compares(&mut function, &Assignment(vec![]));
+        assert_eq!(function.blocks[2].insts.len(), 2);
     }
 }

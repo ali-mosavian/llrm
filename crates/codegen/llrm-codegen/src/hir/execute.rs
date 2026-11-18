@@ -790,6 +790,14 @@ impl<'p> Machine<'p> {
             Op::Copy => vec![args[0].clone()],
             Op::ZeroExtend => vec![Scalar::Int(unsigned(args[0].whole()?, operand_type(0)?))],
             Op::SignExtend => vec![Scalar::Int(wrap(args[0].whole()?, operand_type(0)?.width * 8, true))],
+            Op::TruncateChecked => {
+                let target = activation.layout.value_types[&instruction.results[0]];
+                let Scalar::Float(value) = &args[0] else { return fail("truncate_checked of a non-float") };
+                let half = 2f64.powi(target.width as i32 * 8 - 1);
+                let (low, top) = if target.signed == Some(true) { (-half, half) } else { (0.0, 2.0 * half) };
+                let fits = value.is_finite() && (low..top).contains(&value.trunc());
+                vec![Scalar::Int(if fits { args[0].whole()? } else { 0 }), truth(fits)]
+            }
             Op::Truncate => {
                 let target = activation.layout.value_types[&instruction.results[0]];
                 let fits = match &args[0] {

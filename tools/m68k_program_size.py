@@ -22,6 +22,7 @@ ROOT = HERE.parent
 sys.path.insert(0, str(HERE))
 import llrmbin  # noqa: E402
 import m68k_exec_sweep as sweep  # noqa: E402
+import external_flags  # noqa: E402
 import o0_sweep  # noqa: E402
 
 ENTRY = re.compile(r"^ (\.text\S*)\s*(?:\n\s+)?0x[0-9a-f]+\s+0x([0-9a-f]+)\s+(\S+)$", re.M)
@@ -57,14 +58,19 @@ def short(member: str) -> str:
     return re.sub(r"^rt_[^_]+_[^_]+_[^_]+_", "", member).removesuffix(".o")
 
 
-def globalize(text: str) -> str:
-    """Every label global, so the linker can name the functions (the compilers' output makes none)."""
-    out = [".text"]
-    for line in text.splitlines():
-        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*:", line):
-            out.append(f".globl {line[:-1]}")
-        out.append(line)
-    return "\n".join(out) + "\n"
+def in_text(text: str) -> str:
+    """The compiler's assembly under `.text`, its own `.globl` lines unchanged. Every label global (as this once did) made each call to a `static` function a 32-bit relocation: ours, which calls pc-relative, read 192 B larger on fcmp_all (5530 against 5338) and gcc, which calls absolute, did not."""
+    return ".text\n" + text
+
+
+def ours_command(cc: str, level: str, flags: list[str], obj: Path, source: Path) -> list[str]:
+    """llrm-cc's own object: its encoder, not GNU as on the printed text. `lea (sym,%pc)` is 4 B in our object (`R_68K_PC16`, as the pin's) and 8 B when GNU as reads the text at the 68020 (a 32-bit base displacement): fcmp_all 68020 Os read 5338 B by text and is 4794 B as an object."""
+    return [cc, f"-{level}", "-w", "-c", *flags, "-I", str(ROOT / "runtime/shared/posix"), "-o", str(obj), str(source)]
+
+
+def gcc_command(tools: str, cpu: str, level: str, asm: Path, source: Path, flags: list[str], pcrel: bool = False) -> list[str]:
+    """gcc's line with the program's own flags in gcc's spelling: `-fno-inline-functions` left out, gcc inlined what ours and the pin keep calls."""
+    return [f"{tools}gcc", f"-m{cpu}", f"-{level}", "-msoft-float", "-ffreestanding", *(["-mpcrel"] if pcrel else []), *external_flags.GCC_DIALECT, "-I", str(ROOT / "runtime/shared/posix"), *[flag for flag in external_flags.gcc_program_flags(flags) if not flag.startswith("-mcmodel")], "-S", "-o", str(asm), str(source)]
 
 
 def measure(source: Path, cpu: str, level: str, compiler: str, cc: str, root: str, cache: Path, work: Path) -> dict[str, object]:
@@ -72,8 +78,8 @@ def measure(source: Path, cpu: str, level: str, compiler: str, cc: str, root: st
     tools = f"{root}/usr/bin/m68k-linux-gnu-"
     asm = work / f"{source.stem}.{compiler}.s"
     flags = o0_sweep.flags_of(source.read_text(), f"m68k-{cpu}")
-    if compiler == "gcc":
-        cmd = [f"{tools}gcc", f"-m{cpu}", f"-{level}", "-msoft-float", "-ffreestanding", "-S", "-o", str(asm), str(source)]
+    if compiler in ("gcc", "gcc-pcrel"):
+        cmd = gcc_command(tools, cpu, level, asm, source, flags, pcrel=compiler == "gcc-pcrel")
         run_env = env
     elif compiler == "clang":
         pin, llc = pinned_tool("clang"), pinned_tool("llc")
@@ -89,22 +95,21 @@ def measure(source: Path, cpu: str, level: str, compiler: str, cc: str, root: st
         cmd = [llc, f"-mcpu=M{cpu}", "-O2", "-filetype=obj", str(ir), "-o", str(work / f"{source.stem}.clang.o")]  # its text is not GNU as syntax
         run_env = env
     else:
-        cmd = [cc, f"-{level}", "-w", "-S", *flags, "-I", str(ROOT / "runtime/shared/posix"), "-o", str(asm), str(source)]
+        cmd = ours_command(cc, level, flags, work / f"{source.stem}.ours.o", source)
         run_env = {**os.environ, **llrmbin.cc_environment(), "LLRM_CC_TARGET": f"m68k-{cpu}"}
     built = subprocess.run(cmd, capture_output=True, text=True, env=run_env, timeout=sweep.TIMEOUT)
     if built.returncode != 0:
         raise SystemExit(f"m68k_program_size: {compiler} does not compile {source.name}: {sweep.first_error(built.stderr)}")
     obj = work / f"{source.stem}.{compiler}.o"
-    if compiler != "clang":
+    if compiler not in ("clang", "ours"):
         glob = work / f"{source.stem}.{compiler}.g.s"
-        glob.write_text(globalize(asm.read_text()))
-        subprocess.run([f"{tools}as", f"-m{cpu}", "-o", str(obj), str(glob)], check=True, capture_output=True, env=env)
-    crt, archive = support(cc, root, cpu, level, cache)
+        glob.write_text(in_text(asm.read_text()))
+        assembled = subprocess.run([f"{tools}as", f"-m{cpu}", "-o", str(obj), str(glob)], capture_output=True, text=True, env=env)
+        if assembled.returncode != 0:  # gcc -mpcrel on a data section over 32 KB: a 16-bit displacement does not reach
+            raise SystemExit(f"m68k_program_size: {compiler} {source.name} does not assemble: {sweep.first_error(assembled.stderr)}")
+    crt, archive, stubs = support(cc, root, cpu, level, cache)
     exe, mapfile = work / f"{source.stem}.{compiler}.exe", work / f"{source.stem}.{compiler}.map"
-    link = subprocess.run(
-        [f"{tools}gcc", f"-m{cpu}", "-msoft-float", "-nostdlib", "-static", "-ffreestanding", f"-Wl,-Map={mapfile}", "-o", str(exe), str(obj), crt, archive],
-        capture_output=True, text=True, env=env,
-    )
+    link = subprocess.run(link_command(tools, cpu, obj, exe, mapfile, crt, archive, stubs), capture_output=True, text=True, env=env)
     if link.returncode != 0:
         raise SystemExit(f"m68k_program_size: {compiler} {source.name} does not link: {sweep.first_error(link.stderr)}")
     sizes = text_bytes(mapfile.read_text())
@@ -113,17 +118,29 @@ def measure(source: Path, cpu: str, level: str, compiler: str, cc: str, root: st
     return {"program": program, "library": sum(library.values()), "members": library, "whole": program + sum(library.values())}
 
 
-def support(cc: str, root: str, cpu: str, level: str, cache: Path) -> tuple[str, str]:
-    """The crt object and the compiler-rt archive at LEVEL: the only objects a program is linked with here (no memcpy or OS stubs)."""
+def support(cc: str, root: str, cpu: str, level: str, cache: Path) -> tuple[str, str, str]:
+    """The crt object, the compiler-rt archive at LEVEL and the libc stub archive (`memcpy`, `memset`, the `llrm_os_*` calls): one stub source for both columns, so a program either column calls them for pays the same member bytes."""
     args = sweep.build_support(cc, root, cpu, cache, int(os.environ.get("JOBS", "4")), level, runnable=False)
-    return args[0], args[2]
+    stubs = cache / f"stubs_{cpu}.a"
+    if not stubs.exists():
+        tmp = stubs.with_suffix(".tmp")
+        tmp.unlink(missing_ok=True)
+        subprocess.run([f"{root}/usr/bin/m68k-linux-gnu-ar", "rcs", str(tmp), args[3], args[4]], check=True, env=sweep.tool_env(root))
+        tmp.rename(stubs)
+    return args[0], args[2], str(stubs)
+
+
+def link_command(tools: str, cpu: str, obj: Path, exe: Path, mapfile: Path, crt: str, archive: str, stubs: str) -> list[str]:
+    """The program, the crt and the two archives; the group lets the stubs reach back into compiler-rt."""
+    return [f"{tools}gcc", f"-m{cpu}", "-msoft-float", "-nostdlib", "-static", "-ffreestanding", f"-Wl,-Map={mapfile}", "-o", str(exe), str(obj), crt,
+            "-Wl,--start-group", archive, stubs, "-Wl,--end-group"]
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--cpu", default="68020")
     parser.add_argument("--level", default="Os")
-    parser.add_argument("--compiler", default="both", choices=["ours", "gcc", "clang", "both", "all"])
+    parser.add_argument("--compiler", default="both", choices=["ours", "gcc", "gcc-pcrel", "clang", "both", "like", "all"])
     parser.add_argument("names", nargs="+")
     args = parser.parse_args()
     root = os.environ.get("GCC_M68K")
@@ -132,16 +149,29 @@ def main() -> int:
         return 2
     cc = o0_sweep.compiler()
     cache = sweep.cache_dir(cc)
-    columns = {"both": ["ours", "gcc"], "all": ["ours", "gcc", "clang"]}.get(args.compiler, [args.compiler])
+    columns = {"both": ["ours", "gcc"], "like": ["ours", "gcc-pcrel"], "all": ["ours", "gcc", "clang"]}.get(args.compiler, [args.compiler])
     print("| program | cpu | level | compiler | program B | library B | whole B | members |")
     print("|---|---|---|---|---|---|---|---|")
+    keep = os.environ.get("M68K_KEEP")  # a directory that keeps the linked .exe files for `cycles --exe`
+    if keep:
+        Path(keep).mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory() as tmp:
+        tmp = keep or tmp
         for name in args.names:
-            for compiler in columns:
-                got = measure(ROOT / "tests/run/c" / f"{name}.c", args.cpu, args.level, compiler, cc, root, cache, Path(tmp))
-                members = " ".join(f"{short(m)}:{b}" for m, b in sorted(got["members"].items()))
-                print(f"| {name} | {args.cpu} | {args.level} | {compiler} | {got['program']} | {got['library']} | {got['whole']} | {members} |")
+            report(name, columns, args, cc, root, cache, Path(tmp))
     return 0
+
+
+def report(name: str, columns: list[str], args: argparse.Namespace, cc: str, root: str, cache: Path, work: Path) -> None:
+    """One row per column. A program a column cannot build or link (an x86-only source, a libc call: the link has no libc) is one SKIP row and the next program runs: it measured nothing, and it must not end the sweep."""
+    for compiler in columns:
+        try:
+            got = measure(ROOT / "tests/run/c" / f"{name}.c", args.cpu, args.level, compiler, cc, root, cache, work)
+        except SystemExit as refused:
+            print(f"| {name} | {args.cpu} | {args.level} | {compiler} | SKIP | | | {str(refused.code or refused).removeprefix('m68k_program_size: ')[:200]} |")
+            return
+        members = " ".join(f"{short(m)}:{b}" for m, b in sorted(got["members"].items()))
+        print(f"| {name} | {args.cpu} | {args.level} | {compiler} | {got['program']} | {got['library']} | {got['whole']} | {members} |")
 
 
 if __name__ == "__main__":

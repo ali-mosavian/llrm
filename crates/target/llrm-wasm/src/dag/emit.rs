@@ -19,11 +19,11 @@
 //! `InstrEmitter::EmitMachineNode`, pin d1106deb71cc.
 
 use std::collections::BTreeMap;
-use llrm_support::hash::HashMap;
 
 use llrm_codegen::backend::selectiondag::isd::ISD;
 use llrm_codegen::backend::selectiondag::mvt::{EVT, MVT};
 use llrm_codegen::backend::selectiondag::{NodeData, SDValue, SelectionDAG};
+use llrm_support::hash::HashMap;
 
 use super::function::{PhiCopy, Selected};
 use crate::dagisel::post_ids::{self as post, CALL_PARAMS, CALL_RESULTS};
@@ -64,6 +64,22 @@ struct Emitter<'a> {
 }
 
 impl Emitter<'_> {
+    /// The register `ReplacePhysRegs` makes of `SP32` / `SP64`: one for the
+    /// function, the one its prologue defines.
+    fn stack_pointer(
+        &mut self,
+        ty: ValType,
+    ) -> VReg {
+        match self.f.sp {
+            Some(reg) => reg,
+            None => {
+                let reg = self.f.new_vreg(ty);
+                self.f.sp = Some(reg);
+                reg
+            }
+        }
+    }
+
     fn builder_reg(
         &mut self,
         number: u32,
@@ -122,9 +138,10 @@ impl Emitter<'_> {
         // The builder register a result is copied to, where a `CopyToReg` takes
         // it whole.
         // `CreateVirtualRegisters` takes the first matching user of the result,
-        // and a node's users list the newest first: the latest
-        // `CopyToReg` wins.
-        let mut copied: HashMap<(u32, u8), (u32, u32)> = HashMap::default();
+        // and a use list has the newest use first: the `CopyToReg` whose use
+        // was added last wins, whatever its node number (`ReplaceAllUsesWith`
+        // adds a moved use again, at the head).
+        let mut copied: HashMap<(u32, u8), (usize, u32)> = HashMap::default();
         for &node in selected.units.iter().flat_map(|unit| &unit.nodes) {
             let data = dag.node(SDValue { node, res: 0 });
             if data.opcode != ISD::CopyToReg {
@@ -132,9 +149,10 @@ impl Emitter<'_> {
             }
             let (NodeData::Register(number), value) = (dag.node(data.ops[1]).data, data.ops[2]) else { continue };
             if matches!(dag.node(value).opcode, ISD::Machine(_)) {
-                let latest = copied.entry((value.node, value.res)).or_insert((node, number));
-                if node > latest.0 {
-                    *latest = (node, number);
+                let added = dag.use_candidates(value.node).iter().rposition(|&user| user == node).unwrap_or(0);
+                let latest = copied.entry((value.node, value.res)).or_insert((added, number));
+                if added > latest.0 {
+                    *latest = (added, number);
                 }
             }
         }
@@ -157,18 +175,36 @@ impl Emitter<'_> {
             line = dag.lines.get(data.order as usize).copied().flatten().map_or(0, |at| at.line);
             match data.opcode {
                 ISD::CopyFromReg => {
-                    let NodeData::Register(number) = dag.node(data.ops[1]).data else { continue };
-                    if let Some(ty) = class(data.values[0]) {
-                        let reg = self.builder_reg(number, ty);
-                        self.results.insert((node, 0), reg);
-                    }
+                    let Some(ty) = class(data.values[0]) else { continue };
+                    let reg = match dag.node(data.ops[1]).data {
+                        NodeData::Register(number) => self.builder_reg(number, ty),
+                        // `InstrEmitter`: a read of a physical register is a
+                        // `COPY` into a new one; the register changes later.
+                        NodeData::PhysReg(_) => {
+                            let source = self.stack_pointer(ty);
+                            let reg = self.f.new_vreg(ty);
+                            out.push(Inst::new(copy(ty), &[Operand::Def(reg), Operand::Use(source)]));
+                            reg
+                        }
+                        _ => continue,
+                    };
+                    self.results.insert((node, 0), reg);
                 }
                 ISD::CopyToReg => {
-                    let NodeData::Register(number) = dag.node(data.ops[1]).data else { continue };
+                    let register = match dag.node(data.ops[1]).data {
+                        NodeData::Register(number) => Some(number),
+                        // `ReplacePhysRegs` names `SP32` and `SP64` one
+                        // register.
+                        NodeData::PhysReg(_) => None,
+                        _ => continue,
+                    };
                     let value = data.ops[2];
                     match (class(dag.value_type(value)), self.operand(dag, value)) {
                         (Some(ty), Some(Operand::Use(src))) => {
-                            let dst = self.builder_reg(number, ty);
+                            let dst = match register {
+                                Some(number) => self.builder_reg(number, ty),
+                                None => self.stack_pointer(ty),
+                            };
                             if dst != src {
                                 out.push(Inst::new(copy(ty), &[Operand::Def(dst), Operand::Use(src)]));
                             }
@@ -177,7 +213,10 @@ impl Emitter<'_> {
                         // lowering turns the index into the stack pointer
                         // plus its offset.
                         (Some(ty), Some(frame @ Operand::Frame(_))) => {
-                            let dst = self.builder_reg(number, ty);
+                            let dst = match register {
+                                Some(number) => self.builder_reg(number, ty),
+                                None => self.stack_pointer(ty),
+                            };
                             out.push(Inst::new(copy(ty), &[Operand::Def(dst), frame]));
                         }
                         _ => {}
@@ -335,6 +374,7 @@ pub fn emit(
     let mut f = Function::new(name);
     f.params = params.to_vec();
     f.frame = blocks.first().map_or(Vec::new(), |block| block.frame.clone());
+    f.has_var_sized = blocks.first().is_some_and(|block| block.has_var_sized);
     f.results = results.to_vec();
     let layout = blocks.first().map_or(Vec::new(), |block| block.layout.clone());
     f.blocks = vec![Vec::new(); layout.len().max(1)];
@@ -343,6 +383,17 @@ pub fn emit(
     let mut emitter = Emitter { f, results: HashMap::default(), builder: BTreeMap::new(), names, position, labels: 0 };
     for selected in blocks {
         emitter.block(selected);
+    }
+    // `MBB.predecessors()`: the edges in the order selection made them, block
+    // by block in reverse post-order.
+    let mut selection: Vec<&Selected> = blocks.iter().collect();
+    selection.sort_by_key(|block| block.rank);
+    emitter.f.preds = vec![Vec::new(); emitter.f.blocks.len()];
+    for block in selection {
+        let at = emitter.position[&block.id];
+        for &to in &emitter.f.succs[at] {
+            emitter.f.preds[to].push(at);
+        }
     }
     // The phis, at the start of their blocks: `PHI dst, src, pred, ..` in the
     // builder's order.

@@ -2081,7 +2081,9 @@ pub fn multiply(
     match source {
         RegisterOrCell::Mem(cell) => {
             let built = operand_of(cell, at.bits);
-            if built.is_none() || !memory_widths(at).contains(&cell.width) {
+            // `mul m8` takes AL by a byte factor, which `memory_widths` leaves
+            // out.
+            if built.is_none() || (cell.width != 1 && !memory_widths(at).contains(&cell.width)) {
                 return None;
             }
             let (r#where, relocated) = built?;
@@ -2466,10 +2468,41 @@ fn scalar_sse(
             let code = code_of!(upper, "_XMM_XMMM", bits(second))?;
             _assemble(&raised(create_reg_reg(code, into.register, outof.register)), at, true)
         }
+        // `pshufd xmm, xmm/m128, imm8`: the destination is not the first source.
+        (Loc::Reg(into), Loc::Imm(order)) if name == "pshufd" && sources.len() == 2 => {
+            let code = code_of!(upper, "_XMM_XMMM128_IMM8")?;
+            match &sources[0] {
+                Loc::Reg(outof) => _assemble(
+                    &raised(create_reg_reg_i32(code, into.register, outof.register, order.value)),
+                    at,
+                    true,
+                ),
+                Loc::Mem(cell) => {
+                    let (built, relocated) = operand_of(cell, at.bits)?;
+                    _assemble(&raised(create_reg_mem_i32(code, into.register, built, order.value)), at, relocated)
+                }
+                _ => None,
+            }
+        }
+        // `pslld xmm, 3`: a vector shifted by an immediate count.
+        (Loc::Reg(into), Loc::Imm(count)) if xmm(first) => {
+            let code = code_of!(upper, "_XMM_IMM8")?;
+            _assemble(&raised(create_reg_i32(code, into.register, count.value)), at, false)
+        }
+        // `movd xmm, m32`: the encoding names the source `RM32`.
+        (Loc::Reg(into), Loc::Mem(cell)) if xmm(first) && name.trim_end_matches("_x") == "movd" => {
+            let (built, relocated) = operand_of(cell, at.bits)?;
+            _assemble(&raised(create_reg_mem(Code::Movd_xmm_rm32, into.register, built)), at, relocated)
+        }
         (Loc::Reg(into), Loc::Mem(cell)) if xmm(first) && !name.starts_with("cvtsi2") => {
             let code = code_of!(upper, "_XMM_XMMM", bits(second))?;
             let (built, relocated) = operand_of(cell, at.bits)?;
             _assemble(&raised(create_reg_mem(code, into.register, built)), at, relocated)
+        }
+        // `movd m32, xmm`: the encoding names the destination `RM32`.
+        (Loc::Mem(cell), Loc::Reg(outof)) if xmm(second) && name.trim_end_matches("_x") == "movd" => {
+            let (built, relocated) = operand_of(cell, at.bits)?;
+            _assemble(&raised(create_mem_reg(Code::Movd_rm32_xmm, built, outof.register)), at, relocated)
         }
         (Loc::Mem(cell), Loc::Reg(outof)) if xmm(second) => {
             let code = code_of!(upper, "_XMMM", bits(first), "_XMM")?;
@@ -2483,6 +2516,11 @@ fn scalar_sse(
         }
         (Loc::Reg(into), Loc::Reg(outof)) if matches!(name, "movq" | "movd") => {
             let code = code_of!(upper, "_XMM_RM", outof.width * 8)?;
+            _assemble(&raised(create_reg_reg(code, into.register, outof.register)), at, true)
+        }
+        // `pmovmskb r32, xmm`: the sign bit of each lane in a general register.
+        (Loc::Reg(into), Loc::Reg(outof)) if matches!(name, "pmovmskb" | "movmskps") => {
+            let code = code_of!(upper, "_R", into.width * 8, "_XMM")?;
             _assemble(&raised(create_reg_reg(code, into.register, outof.register)), at, true)
         }
         // cvttsd2si: an integer register from an xmm register or memory.

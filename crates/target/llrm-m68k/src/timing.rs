@@ -24,6 +24,7 @@
 //! `tests/timing.rs`: the cells it checks, with table and page.
 
 mod counts;
+mod csv;
 mod family;
 mod m68020;
 mod m68030;
@@ -158,7 +159,8 @@ fn list_size(text: &str) -> Option<u32> {
     Some(count)
 }
 
-/// An error that is a parser fault, not a missing table row: the cycles tool stops on it.
+/// An error that is a parser fault, not a missing table row: the cycles tool
+/// stops on it.
 pub const UNPARSEABLE: &str = "unparseable displacement";
 
 fn operand(text: &str) -> Result<Operand, String> {
@@ -207,15 +209,21 @@ fn operand(text: &str) -> Result<Operand, String> {
             [_, "%pc"] => Ok(Operand::Mode(Mode::PcDisp, 0)),
             // a displacement that does not fit the brief format's 8 bits is
             // the full format's base displacement (68020 and up)
-            // an empty base is the full format's suppressed one: `@(ffffffff800020a0,%d0:l)`
-            [disp, base, _] if is_address(base) || *base == "%pc" || base.is_empty() => match (displacement(disp), *base == "%pc") {
-                (Some(d), _) if (-128..=127).contains(&d) && !base.is_empty() => {
-                    Ok(Operand::Mode(if *base == "%pc" { Mode::PcIndex } else { Mode::Index }, 0))
+            // an empty base is the full format's suppressed
+            // one: `@(ffffffff800020a0,%d0:l)`
+            [disp, base, _] if is_address(base) || *base == "%pc" || base.is_empty() => {
+                match (displacement(disp), *base == "%pc") {
+                    (Some(d), _) if (-128..=127).contains(&d) && !base.is_empty() => {
+                        Ok(Operand::Mode(if *base == "%pc" { Mode::PcIndex } else { Mode::Index }, 0))
+                    }
+                    (Some(d), _) if (-32768..=32767).contains(&d) => Ok(Operand::Mode(Mode::IndexW, 0)),
+                    (Some(_), _) => Ok(Operand::Mode(Mode::IndexL, 0)),
+                    // a label in the brief form's 8 bits: the table `jmp` and
+                    // its `move.w` (M68K-WORD-TABLE)
+                    (None, true) if disp.starts_with('.') => Ok(Operand::Mode(Mode::PcIndex, 0)),
+                    (None, _) => Err(format!("{UNPARSEABLE} `{disp}` in `{text}`")),
                 }
-                (Some(d), _) if (-32768..=32767).contains(&d) => Ok(Operand::Mode(Mode::IndexW, 0)),
-                (Some(_), _) => Ok(Operand::Mode(Mode::IndexL, 0)),
-                (None, _) => Err(format!("{UNPARSEABLE} `{disp}` in `{text}`")),
-            },
+            }
             [base, index] if (is_address(base) || *base == "%pc") && is_index(index) => {
                 Ok(Operand::Mode(Mode::IndexB, 0))
             }
@@ -265,6 +273,35 @@ fn places(operands: &[Operand]) -> Option<u32> {
         [Operand::Mode(Mode::Imm, count), _] => Some(if *count == 0 { 8 } else { *count as u32 }),
         _ => None,
     }
+}
+
+/// The `n` of a 68000/68010 `mulu.w`/`muls.w`: the 1 bits of a `mulu` source,
+/// the 01/10 transitions of a `muls` source with a 0 appended. Known from an
+/// immediate source, else from the `count` the trace fixed ([`word_ones`] of
+/// the source it observed).
+fn product_ones(
+    cpu: Cpu,
+    base: &str,
+    suffix: Option<&str>,
+    operands: &[Operand],
+    count: Option<u32>,
+) -> Option<u32> {
+    let [source, Operand::Mode(Mode::Dn, _)] = operands else { return None };
+    if !matches!(cpu, Cpu::M68000 | Cpu::M68010) || suffix != Some("w") || !matches!(base, "mulu" | "muls") {
+        return None;
+    }
+    match source {
+        Operand::Mode(Mode::Imm, value) => Some(word_ones(base == "muls", (*value & 0xffff) as u32)),
+        _ => count,
+    }
+}
+
+/// The `n` of a 16-bit multiply by `word`.
+pub fn word_ones(
+    signed: bool,
+    word: u32,
+) -> u32 {
+    if signed { (((word << 1) ^ word) & 0xffff).count_ones() } else { word.count_ones() }
 }
 
 fn is_shift(base: &str) -> bool {
@@ -321,13 +358,20 @@ fn set_on_condition(base: &str) -> bool {
 const INTERIM_MILLICLOCKS_PER_BYTE: i64 = 500;
 
 /// What a byte of code is worth on `cpu`, in thousandths of a clock: the
-/// CPU's `timings.times` row.
+/// CPU's `timings.times` row. Prices the density of a jump table; a choice
+/// between two candidates at -O1..-O3 uses [`TIE_MILLICLOCKS_PER_BYTE`].
 pub fn byte_milliclocks(cpu: SelectCpu) -> i64 {
     crate::target::cpu_table(cpu.name())
         .and_then(|table| table.byte_rate())
         .filter(|rate| *rate > 0)
         .unwrap_or(INTERIM_MILLICLOCKS_PER_BYTE)
 }
+
+/// What a byte of code is worth when two candidates are compared at -O1, -O2
+/// and -O3, in thousandths of a clock: a tie-break. The levels are judged by
+/// clocks (user ruling 2026-11-14), so no clock is given up for bytes; -Os
+/// orders bytes first.
+const TIE_MILLICLOCKS_PER_BYTE: i64 = 1;
 
 /// Whether `extra_bytes` of code are worth `saved_clocks` on `cpu`: the trade
 /// passes only at N extra bytes per clock saved <= the row's allowance.
@@ -344,26 +388,15 @@ pub fn trade_passes(
 pub enum Price {
     /// Bytes, then clocks (`-Os`).
     Size,
-    /// A candidate is taken only when no larger and no slower (`-O1`).
-    Strict,
-    /// Clocks plus bytes at the CPU's byte price (`-O2`, `-O3`).
+    /// Clocks, bytes only to break a tie (`-O1`, `-O2`, `-O3`).
     #[default]
     Rate,
 }
 
 impl Price {
-    /// The price of a build: `size` wins, then `strict`.
-    pub fn of(
-        size: bool,
-        strict: bool,
-    ) -> Price {
-        if size {
-            Price::Size
-        } else if strict {
-            Price::Strict
-        } else {
-            Price::Rate
-        }
+    /// The price of a build: bytes at -Os, else clocks.
+    pub fn of(size: bool) -> Price {
+        if size { Price::Size } else { Price::Rate }
     }
 
     /// Whether `candidate` beats `incumbent`, each `(bytes, clocks)`, on `cpu`.
@@ -375,7 +408,6 @@ impl Price {
     ) -> bool {
         match self {
             Price::Size => candidate < incumbent,
-            Price::Strict => candidate.0 <= incumbent.0 && candidate.1 <= incumbent.1 && candidate != incumbent,
             Price::Rate => {
                 let key = |(bytes, clocks): (usize, u32)| order(cpu, false, clocks, bytes as u32);
                 key(candidate) < key(incumbent)
@@ -385,15 +417,15 @@ impl Price {
 }
 
 /// The order a priced choice minimizes on `cpu`: bytes then clocks for size,
-/// else clocks plus bytes at the CPU's byte price, ties to fewer clocks.
+/// else clocks, ties to fewer bytes.
 pub fn order(
-    cpu: SelectCpu,
+    _cpu: SelectCpu,
     size: bool,
     clocks: u32,
     bytes: u32,
 ) -> (i64, i64) {
     let (clocks, bytes) = (i64::from(clocks), i64::from(bytes));
-    if size { (bytes, clocks) } else { (clocks * 1000 + bytes * byte_milliclocks(cpu), clocks) }
+    if size { (bytes, clocks) } else { (clocks * 1000 + bytes * TIE_MILLICLOCKS_PER_BYTE, clocks) }
 }
 
 /// The clock periods of `text` on `cpu`. `bytes` is its encoded length (a
@@ -442,6 +474,38 @@ pub fn cost_on_counted(
     taken: bool,
     count: Option<u32>,
 ) -> Result<Cost, String> {
+    type Key = (u8, String, u32, bool, Option<u32>);
+    thread_local! {
+        static PRICES: std::cell::RefCell<llrm_support::hash::HashMap<Key, Result<Cost, String>>> =
+            std::cell::RefCell::new(Default::default());
+    }
+    PRICES.with(|prices| {
+        let key = (cpu as u8, text.to_owned(), bytes, taken, count);
+        if let Some(known) = prices.borrow().get(&key) {
+            return known.clone();
+        }
+        let made = priced(cpu, text, bytes, taken, count);
+        prices.borrow_mut().insert(key, made.clone());
+        made
+    })
+}
+
+static PRICED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// How many instruction texts the tables have parsed and priced: once per
+/// distinct `(cpu, text, bytes, taken, count)`, not once per ask.
+pub fn priced_texts() -> usize {
+    PRICED.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+fn priced(
+    cpu: Cpu,
+    text: &str,
+    bytes: u32,
+    taken: bool,
+    count: Option<u32>,
+) -> Result<Cost, String> {
+    PRICED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let text = text.trim();
     let (name, rest) = text.split_once(char::is_whitespace).unwrap_or((text, ""));
     let (base, suffix) = match name.split_once('.') {
@@ -478,7 +542,14 @@ pub fn cost_on_counted(
         && operands.len() == 2;
     let counted = by_register && count.is_some();
     let clocks = clocks + 2 * count.filter(|_| by_register).unwrap_or(0);
-    let partial = if cpu == Cpu::M68060 {
+    // The 68000's 16-bit multiply takes 38 + 2n clocks, n the ones of the
+    // source (`mulu`) or its 01/10 transitions (`muls`); the table holds
+    // the n = 16 bound. An immediate source is known, so its count is exact.
+    let product = product_ones(cpu, base, suffix, &operands, count);
+    let clocks = product.map_or(clocks, |ones| clocks - 32 + 2 * ones);
+    let partial = if product.is_some() {
+        false
+    } else if cpu == Cpu::M68060 {
         m68060::partial(base, suffix)
     } else if matches!(cpu, Cpu::M68020 | Cpu::M68030 | Cpu::M68040) {
         // bit fields and `cas` are a bound on the 68020 and 68030 (the "< 5
@@ -547,8 +618,10 @@ fn gnu_operand(text: &str) -> String {
             match parts.next() {
                 None => format!("({displacement},{base})"),
                 Some(index) => {
-                    // binutils prints an index displacement as bare hex, sign-extended to 64 bits
-                    let decimal = u64::from_str_radix(&displacement, 16).map_or(displacement, |bits| (bits as i64).to_string());
+                    // binutils prints an index displacement as bare hex,
+                    // sign-extended to 64 bits
+                    let decimal =
+                        u64::from_str_radix(&displacement, 16).map_or(displacement, |bits| (bits as i64).to_string());
                     format!("({decimal},{base},{})", index.split(':').next().unwrap_or(index))
                 }
             }

@@ -777,8 +777,8 @@ impl<C, J: Jump> TailMergeFunction for Mf<'_, C, J> {
             Some(assignment) => fold::identical(one, other, assignment),
             None => {
                 one.kind == other.kind
-                    && one.sets_flags == other.sets_flags
-                    && one.reads_flags == other.reads_flags
+                    && one.sets_flags() == other.sets_flags()
+                    && one.reads_flags() == other.reads_flags()
                     && one.operands == other.operands
             }
         }

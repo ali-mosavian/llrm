@@ -1322,3 +1322,34 @@ b4:
     let problems = llrm_mir::verify::phi_arity(function);
     assert!(problems.is_empty(), "{problems:?}\n{}", printed(&module));
 }
+
+/// A switch with two cases to the join is two predecessors of it (`predecessors(CurrentBlock)` once per edge). With the
+/// value unavailable in the switch's block that is two predecessors without it, and the pin's scalar PRE refuses
+/// (`NumWithOut > 1`); walking each block once inserted into the switch block and made the phi.
+#[test]
+fn test_a_value_missing_on_two_edges_of_a_switch_is_not_made_available_by_pre() {
+    let text = "define i16 @f(i16 %x, i16 %y, i1 %c) {
+b0:
+  br i1 %c, label %b1, label %b2
+
+b1:
+  switch i16 %x, label %b4 [
+    i16 1, label %b3
+    i16 2, label %b3
+  ]
+
+b2:
+  %a = add i16 %x, %y
+  br label %b3
+
+b3:
+  %r = add i16 %x, %y
+  ret i16 %r
+
+b4:
+  ret i16 0
+}
+";
+    let (text, _) = joined_once(text, true);
+    assert!(!text.contains(".pre"), "{text}");
+}

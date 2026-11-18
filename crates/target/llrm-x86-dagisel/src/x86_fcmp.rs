@@ -45,6 +45,58 @@ pub fn select_fcmp<D: AddrDag>(
     true
 }
 
+/// `LLRM_FSTATUS lhs, rhs`: the compare's status word as an `i16` value
+/// (`fucom`, `fnstsw`); the users test it ([`select_status_test`]).
+///
+/// DEVIATE X87-STATUS (owner x87-b): the pin moves the word to `AH` and `sahf`s
+/// it into the flags every condition reads. gcc keeps the word
+/// (`ix86_expand_fp_compare`, the `IX86_FPCMP_ARITH` strategy).
+pub fn select_fstatus<D: AddrDag>(
+    dag: &mut D,
+    node: u32,
+) -> bool {
+    let (n0, n1) = (dag.operand(node, 0), dag.operand(node, 1));
+    let cmp = match dag.value_type(n0) {
+        mvt::f32 => x86::UCOM_Fpr32,
+        mvt::f64 => x86::UCOM_Fpr64,
+        mvt::f80 => x86::UCOM_Fpr80,
+        _ => return false,
+    };
+    let glue = SDValue::new(dag.machine_node(cmp, &[mvt::Glue], &[n0, n1]), 0);
+    // Typed `i32`: `fnstsw` writes AX, the readers mask bits 8..16 and take the
+    // register whole.
+    let status = SDValue::new(dag.machine_node(x86::FNSTSW16r, &[mvt::i32], &[glue]), 0);
+    dag.replace_uses(SDValue::new(node, 0), status);
+    dag.remove_dead_node(node);
+    true
+}
+
+/// `LLRM_STATUS_TEST word, mask, value`: the flags where `word`'s high byte
+/// `& mask == value` is `E`. `test ah, mask` for a zero value; `and` of a copy
+/// then `cmp` for the rest (the word stays whole for the next reader).
+pub fn select_status_test<D: AddrDag>(
+    dag: &mut D,
+    node: u32,
+) -> bool {
+    let word = dag.operand(node, 0);
+    let (Some(mask), Some(value)) = (dag.constant(dag.operand(node, 1)), dag.constant(dag.operand(node, 2))) else {
+        return false;
+    };
+    // The condition bits are in the word's high byte: C0 bit 8, C2 bit 10, C3
+    // bit 14.
+    let mask = dag.target_constant(mask << 8, mvt::i32);
+    let flags = if value == 0 {
+        SDValue::new(dag.machine_node(x86::TEST32ri, &[mvt::i32], &[word, mask]), 0)
+    } else {
+        let value = dag.target_constant(value << 8, mvt::i32);
+        let masked = SDValue::new(dag.machine_node(x86::AND32ri, &[mvt::i32, mvt::i32], &[word, mask]), 0);
+        SDValue::new(dag.machine_node(x86::CMP32ri, &[mvt::i32], &[masked, value]), 0)
+    };
+    dag.replace_uses(SDValue::new(node, 0), flags);
+    dag.remove_dead_node(node);
+    true
+}
+
 /// `X86ISD::POP_FROM_X87_REG chain, $fp0 [, glue]` ([L7069][case]): a call's
 /// floating-point result is the copy from the x87 register; the node becomes a
 /// `CopyFromReg` of the same operands.

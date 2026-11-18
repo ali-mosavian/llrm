@@ -177,14 +177,24 @@ impl FunctionPass for CgpAddr {
         unit: &mut passes::Unit,
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
+        Self::run_at(unit, analyses)
+    }
+}
+
+impl CgpAddr {
+    fn run_at(
+        unit: &mut passes::Unit,
+        analyses: &mut Analyses,
+    ) -> PreservedAnalyses {
         // A closing phi (`lcssa`) whose arms are all one value is that value:
         // nothing after this needs loop-closed form, and isel cannot
         // fold a phi into an addressing mode.
         let merged = crate::emptyblocks::eliminated(unit.context, unit.layout, analyses, unit.function);
         // `dupRetToEnableTailCallOpts`: a return after a tail call is the
         // call's.
-        let merged =
-            crate::cgpretdup::returns_duplicated(unit.context, &analyses.outer().globals, unit.function) | merged;
+        let merged = (analyses.outer().target().may_be_emitted_as_tail_call()
+            && crate::cgpretdup::returns_duplicated(unit.context, &analyses.outer().globals, unit.function))
+            | merged;
         let closed = trivial_phis(unit.context, unit.layout, unit.function);
         let branched = crate::cgpbranch::branches_optimized(
             unit.context,
@@ -257,6 +267,10 @@ impl FunctionPass for CgpAddr {
             let outer = std::rc::Rc::clone(analyses.outer());
             crate::cgpmemalign::raised(unit.context, unit.layout, &outer.globals, unit.function)
         };
+        let sunk_operands = match analyses.outer().target().tti() {
+            Some(tti) => crate::cgpsinkops::free_operands_sunk(unit.context, &*tti, unit.function),
+            None => false,
+        };
         let sunk_casts = match lowering_for(analyses, CgpStep::CastSinking) {
             Some(lowering) => crate::sinkcast::casts_sunk(
                 unit.context,
@@ -271,7 +285,8 @@ impl FunctionPass for CgpAddr {
         let extended = match lowering_for(analyses, CgpStep::ExtPromotion) {
             Some(lowering) => {
                 let mut state = crate::extpromotion::State::default();
-                let promoted = exts_optimized(unit, &*lowering, &mut state);
+                let costs_extra = analyses.outer().target().tti().is_some_and(|tti| tti.ext_load_costs_extra());
+                let promoted = exts_optimized(unit, &*lowering, &mut state, costs_extra);
                 ext_uses(unit, &*lowering, &mut state) | promoted
             }
             None => false,
@@ -324,6 +339,7 @@ impl FunctionPass for CgpAddr {
             || addresses
             || extended
             || sunk_casts
+            || sunk_operands
             || resunk
             || split
             || remainders
@@ -354,6 +370,7 @@ fn exts_optimized(
     unit: &mut passes::Unit,
     lowering: &dyn llrm_mir::lowering::Lowering,
     state: &mut crate::extpromotion::State,
+    ext_load_costs_extra: bool,
 ) -> bool {
     let exts: Vec<InstId> = unit
         .function
@@ -377,7 +394,15 @@ fn exts_optimized(
         {
             continue;
         }
-        changed |= crate::extpromotion::optimize_ext(unit.context, unit.layout, lowering, unit.function, state, ext);
+        changed |= crate::extpromotion::optimize_ext(
+            unit.context,
+            unit.layout,
+            lowering,
+            unit.function,
+            state,
+            ext,
+            ext_load_costs_extra,
+        );
     }
     changed
 }

@@ -198,6 +198,7 @@ impl Options {
             self.pipeline.stable_loads,
             self.pipeline.has_min_size,
             self.pipeline.prices_bytes(),
+            self.pipeline.pre,
         )
     }
 }
@@ -440,6 +441,8 @@ pub fn assembled_module(
     );
     if options.machine.far_bss {
         data::zero_far_to_bss(&mut assembled, module);
+    } else if options.machine.far_bss_init {
+        data::zero_far_with_init(&mut assembled, module);
     }
     stage_files(options, "", &assembled)?;
     Ok(assembled)
@@ -624,7 +627,10 @@ pub fn optimized(
     timed("mir constant intrinsics", || {
         program.modules.iter_mut().try_for_each(llrm_transforms::lowerconstantintrinsics::module_lowered)
     })?;
-    if crate::backend::memsetpattern::expands_for(options.isel) && !options.cpu()?.target().fills_by_pattern() {
+    if crate::backend::memsetpattern::expands_for(options.isel)
+        && !options.cpu()?.target().fills_by_pattern()
+        && !options.cpu()?.target().tti().is_some_and(|tti| tti.fills_pattern_at_speed())
+    {
         timed("mir memset patterns", || {
             program.modules.iter_mut().try_for_each(crate::backend::memsetpattern::expanded)
         })?;
@@ -662,6 +668,13 @@ pub fn optimized(
                     |bits| crate::backend::funnel::kept_for_isel(options.isel, &format!("i{bits}")),
                 ),
             )
+    })?;
+    timed("mir checked conversions", || {
+        let tti = program.target.tti().unwrap_or_else(|| std::rc::Rc::new(llrm_mir::tti::Basic));
+        program
+            .modules
+            .iter_mut()
+            .try_for_each(|module| crate::backend::checkedconv::expanded(module, |bits| tti.wide_float_to_int(bits)))
     })?;
     timed("mir absolute values", || {
         program

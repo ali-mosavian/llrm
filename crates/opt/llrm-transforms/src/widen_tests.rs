@@ -308,3 +308,81 @@ define void @sort(ptr %0, i32 range(i32 0, -2147483648) %1, i32 range(i32 -1, 21
     let after = printed(&module);
     assert!(!after.contains("trunc"), "the compare stayed on the narrow value: {after}");
 }
+
+/// A prime's marking loop in a sieve (`bench/sieve`, bench_sieve(1024) inlined
+/// into `main`): the inner counter starts at `i * i`, and the scan loop
+/// reaches it only when `i` is unmarked and below 32.
+const MARKING_AFTER_SQUARE: &str = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+
+declare void @llvm.memset.p0.i64(ptr nocapture writeonly, i8, i64, i1 immarg)
+
+define i64 @f() {
+b0:
+  %buf = alloca [1024 x i8], align 16
+  call void @llvm.memset.p0.i64(ptr nonnull align 16 %buf, i8 0, i64 1024, i1 false)
+  br label %b1
+
+b1:
+  %i = phi i64 [ 2, %b0 ], [ %i.next, %b6 ]
+  %sum = phi i64 [ 0, %b0 ], [ %sum.next, %b6 ]
+  %p = getelementptr inbounds nuw i8, ptr %buf, i64 %i
+  %c = load i8, ptr %p, align 1
+  %free = icmp eq i8 %c, 0
+  br i1 %free, label %b2, label %b6
+
+b2:
+  %add = add i64 %sum, %i
+  %small = icmp samesign ult i64 %i, 32
+  br i1 %small, label %b3, label %b6
+
+b3:
+  %sq = mul nuw nsw i64 %i, %i
+  %start = trunc nuw nsw i64 %sq to i16
+  %step = trunc nuw nsw i64 %i to i16
+  br label %b4
+
+b4:
+  %m = phi i16 [ %start, %b3 ], [ %m.next, %b4 ]
+  %wide = zext nneg i16 %m to i64
+  %q = getelementptr inbounds nuw i8, ptr %buf, i64 %wide
+  store i8 1, ptr %q, align 1
+  %m.next = add nuw nsw i16 %m, %step
+  %again = icmp samesign ult i16 %m.next, 1024
+  br i1 %again, label %b4, label %b5
+
+b5:
+  br label %b6
+
+b6:
+  %sum.next = phi i64 [ %sum, %b1 ], [ %add, %b2 ], [ %add, %b5 ]
+  %i.next = add nuw nsw i64 %i, 1
+  %done = icmp eq i64 %i.next, 1024
+  br i1 %done, label %b7, label %b1
+
+b7:
+  ret i64 %sum.next
+}
+";
+
+fn marking(cold_outer_chrec: bool) -> String {
+    let mut module = parsed(MARKING_AFTER_SQUARE);
+    let machine = crate::testing::Tuned { cold_outer_chrec, ..Default::default() };
+    crate::testing::managed_on(&mut module, IndVars { lftr: true, size: false }, machine)
+}
+
+/// sieve x86-64 O2/O3 ran 15223 instructions against gcc's 14703: widening
+/// the marking counter expanded `i * i` as two phis of the scan loop, which
+/// stepped 1022 times for 11 entries.
+#[test]
+fn test_a_counter_starting_at_a_square_entered_on_some_trips_stays_narrow() {
+    let after = marking(true);
+    assert!(after.contains("phi i16 [ %start, %b3 ]"), "the counter stays 16 bits: {after}");
+    assert!(!after.contains("[ 4, %b0 ]"), "no phi of the scan loop for the square: {after}");
+}
+
+/// The pin widens it: the default target keeps the pin's IR.
+#[test]
+fn test_a_target_that_does_not_weigh_entries_widens_a_counter_starting_at_a_square() {
+    let after = marking(false);
+    assert!(after.contains("[ 4, %b0 ]"), "the square is a phi of the scan loop: {after}");
+}

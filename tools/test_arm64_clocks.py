@@ -8,6 +8,7 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "arm64"))
 import clocks  # noqa: E402
+import count  # noqa: E402
 
 HAVE_MCA = os.path.exists(f"{clocks.LLVM}/llvm-mca")
 
@@ -25,6 +26,26 @@ class Blocks(unittest.TestCase):
         # Cutting only after branches priced the pre-header and the loop body as one block of 4 instructions run 10 times.
         executed = {0x100: 1, 0x104: 10, 0x108: 10, 0x10C: 10, 0x110: 1}
         self.assertEqual(clocks.blocks(self.CODE, executed), [[0x100], [0x104, 0x108, 0x10C], [0x110]])
+
+
+class Range(unittest.TestCase):
+    def test_the_range_is_chosen_with_kernel_or_whole(self):
+        # The docstring promised `ELF [--kernel]` and the parser rejected it ("unrecognized arguments"), so the 11
+        # LVI cells were priced whole-program: runtime included, a 24% instruction cut read as 1.8% of the clocks.
+        self.assertTrue(clocks.parser().parse_args(["a.elf", "--kernel"]).kernel)
+        self.assertTrue(clocks.parser().parse_args(["a.elf", "--whole"]).whole)
+
+    def test_no_range_is_an_error_not_a_default(self):
+        # count.py's rule: a count with no flag once ran whole and was read as the kernel.
+        with self.assertRaises(SystemExit):
+            clocks.parser().parse_args(["a.elf"])
+
+    def test_the_kernel_histogram_leaves_out_main_and_the_runtime(self):
+        # Priced from a histogram that held every address, --kernel would still have priced the runtime.
+        self.assertTrue(count.histogram_wants("kernel", kernel=True))
+        self.assertFalse(count.histogram_wants("main", kernel=True))
+        self.assertFalse(count.histogram_wants("runtime", kernel=True))
+        self.assertTrue(all(count.histogram_wants(name, kernel=False) for name in ("kernel", "main", "runtime")))
 
 
 @unittest.skipUnless(HAVE_MCA, "needs the pin's llvm-mca (LLVM_BIN)")
@@ -51,6 +72,27 @@ class Model(unittest.TestCase):
         clocks_, instructions = clocks.modelled_clocks(code, {0x100: 1, 0x104: 1})
         self.assertEqual(instructions, 2)
         self.assertLess(clocks_, 10)
+
+    def test_an_adr_to_an_address_no_symbol_covers_is_priced(self):
+        # gcc's `adr x0, 0x200158` (a literal in the same section) made llvm-mca refuse the block: jpeg_fixed and 13 more
+        # gcc/clang cells were dropped from the board for want of a price.
+        self.assertIsNotNone(clocks.mca_cycles(["adr x0, 0x200158", "add x0, x0, #1"], 1))
+
+    def test_an_immediate_in_hex_is_not_a_target(self):
+        # A first fix rewrote `add w3, w0, #0x1` to `##16`: the block was refused again.
+        self.assertIsNotNone(clocks.mca_cycles(["add w3, w0, #0x1", "adr x2, 0x221bd8 <bmp>"], 1))
+        self.assertIsNotNone(clocks.mca_cycles(["mov x1, #-0x1"], 1))
+
+    def test_a_store_that_bumps_its_base_does_not_wait_for_its_data(self):
+        # llvm-mca makes `strh w6, [x8], #2` write x8 only after w6, which a load through x8 made: a copy loop priced 5.06
+        # a trip against 1.10 for the same loop with a separate `add`, scroll -O1 +47% over clang for it alone.
+        bumped = ["ldrh w6, [x8, #0xa0]", "subs x7, x7, #0x1", "strh w6, [x8], #0x2", "b.ne 0x100 <f>"]
+        split = ["ldrh w6, [x8, #0xa0]", "subs x7, x7, #0x1", "strh w6, [x8]", "add x8, x8, #0x2", "b.ne 0x100 <f>"]
+        self.assertAlmostEqual(clocks.mca_cycles(bumped, 100), clocks.mca_cycles(split, 100), delta=0.2)
+        pre = ["ldrh w6, [x8, #0xa0]", "subs x7, x7, #0x1", "strh w6, [x8, #0x2]!", "b.ne 0x100 <f>"]
+        self.assertLess(clocks.mca_cycles(pre, 100), 2.5)
+        # A prologue's `stp x30, x19, [sp, #-16]!` and a downward copy's `strh w6, [x8], #-2` still parse.
+        self.assertIsNotNone(clocks.mca_cycles(["stp x30, x19, [sp, #-0x10]!", "strh w6, [x8], #-0x2"], 1))
 
 
 if __name__ == "__main__":

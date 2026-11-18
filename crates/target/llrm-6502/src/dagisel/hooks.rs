@@ -167,8 +167,9 @@ fn add_leaves<D: Dag>(
 /// `SelectAbsX`: a global, a byte index and constants added in any order and
 /// grouping, `(add (wrapper global), (zext i8 index))` with `+ k` anywhere, as
 /// the symbol, the constant (mod 2^16: the access wraps there too) and the
-/// byte index.
-fn select_absx<D: Dag>(
+/// byte index. A word whose high byte is known zero is the same index, as for
+/// `SelectIndexed` (`MaskedValueIsZero`).
+fn select_absx<D: AddrDag>(
     dag: &mut D,
     value: SDValue,
     results: &mut Vec<(SDValue, Option<u32>)>,
@@ -179,6 +180,7 @@ fn select_absx<D: Dag>(
     let mut leaves = Vec::new();
     add_leaves(dag, value, &mut leaves);
     let (mut symbol, mut index, mut offset) = (None, None, 0u64);
+    let mut word_index = None;
     for leaf in leaves {
         if let Some(c) = dag.constant(leaf) {
             offset = offset.wrapping_add(c as u64);
@@ -194,9 +196,21 @@ fn select_absx<D: Dag>(
                 return false;
             }
             index = Some(byte);
+        } else if index.is_none()
+            && word_index.is_none()
+            && dag.value_type(leaf) == mvt::i16
+            && dag.masked_value_is_zero(leaf, 0xFF00)
+        {
+            word_index = Some(leaf);
         } else {
             return false;
         }
+    }
+    if let Some(word) = word_index {
+        if index.is_some() {
+            return false;
+        }
+        index = Some(dag.get_node(isd::TRUNCATE, mvt::i8, &[word]));
     }
     let (Some(symbol), Some(index)) = (symbol, index) else { return false };
     results.push((symbol, None));

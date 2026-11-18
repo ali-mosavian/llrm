@@ -70,6 +70,27 @@ fn names(
     inst.terminator && inst.operands.iter().any(|operand| *operand == Operand::Block(id))
 }
 
+thread_local! {
+    /// Instructions the predecessor scans looked at since the last
+    /// [`take_scanned`].
+    static SCANNED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The instructions the predecessor scans of branch folding looked at on this
+/// thread since the last call.
+pub fn take_scanned() -> usize {
+    SCANNED.with(|one| one.replace(0))
+}
+
+/// `MachineBasicBlock::terminators`: the run of terminators at a block's end,
+/// found from the back (the pin's verifier allows nothing but terminators after
+/// the first one).
+fn terminators(insts: &[Inst]) -> &[Inst] {
+    let first = insts.iter().rposition(|inst| !inst.terminator).map_or(0, |last| last + 1);
+    SCANNED.with(|one| one.set(one.get() + insts.len() - first + 1));
+    &insts[first..]
+}
+
 fn is_jump(inst: &Inst) -> bool {
     inst.terminator && inst.barrier && target(inst).is_some() && !names_many(inst)
 }
@@ -191,7 +212,7 @@ fn predecessors<C>(
     let at = position(function, id);
     (0..function.blocks.len())
         .filter(|&other| {
-            function.blocks[other].insts.iter().any(|inst| names(inst, id))
+            terminators(&function.blocks[other].insts).iter().any(|inst| names(inst, id))
                 || (other + 1 == at && can_fall_through(function, other))
         })
         .collect()
@@ -203,7 +224,7 @@ fn is_successor<C>(
     from: usize,
     id: u32,
 ) -> bool {
-    function.blocks[from].insts.iter().any(|inst| names(inst, id))
+    terminators(&function.blocks[from].insts).iter().any(|inst| names(inst, id))
         || (can_fall_through(function, from) && function.blocks[from + 1].id == id)
 }
 
@@ -564,10 +585,10 @@ impl Effects {
             }
             _ => false,
         };
-        if inst.sets_flags || copy_sets_flags {
+        if inst.sets_flags() || copy_sets_flags {
             effects.defs.push(Place::Flags);
         }
-        if inst.reads_flags {
+        if inst.reads_flags() {
             effects.uses.push(Place::Flags);
         }
         effects
@@ -603,8 +624,8 @@ pub(crate) fn identical(
     assignment: &Assignment,
 ) -> bool {
     one.kind == other.kind
-        && one.sets_flags == other.sets_flags
-        && one.reads_flags == other.reads_flags
+        && one.sets_flags() == other.sets_flags()
+        && one.reads_flags() == other.reads_flags()
         && one.operands.len() == other.operands.len()
         && one.operands.iter().zip(&other.operands).all(|pair| match pair {
             (Operand::Def(a), Operand::Def(b)) | (Operand::Use(a), Operand::Use(b)) => {
@@ -688,12 +709,14 @@ impl<C, T: Target<Class = C> + Jump> Folder<'_, C, T> {
                     break;
                 }
                 let theirs = Effects::of::<T>(inst, assignment);
+                // a copy that becomes a `move` sets them too
+                let sets_flags = theirs.defs.contains(&Place::Flags);
                 let apart = !inst.terminator
                     && !inst.call
                     && !inst.barrier
                     && !inst.side_effects
-                    && !inst.reads_flags
-                    && !(inst.sets_flags && head.reads_flags)
+                    && !inst.reads_flags()
+                    && !(sets_flags && head.reads_flags())
                     && theirs.defs.iter().all(|place| {
                         *place == Place::Flags || !touches::<T>(&own.uses, *place) && !touches::<T>(&own.defs, *place)
                     })
@@ -701,7 +724,7 @@ impl<C, T: Target<Class = C> + Jump> Folder<'_, C, T> {
                 if !apart {
                     break;
                 }
-                crossed_flags |= inst.sets_flags;
+                crossed_flags |= sets_flags;
             }
             if let Some(at) = twin.filter(|&at| at > run) {
                 let inst = self.function.blocks[move_in].insts.remove(at);

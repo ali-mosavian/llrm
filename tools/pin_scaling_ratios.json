@@ -1,0 +1,39 @@
+{
+ "pin": "d1106deb71cc81016406a1917d0508d2df296266",
+ "small": 20,
+ "large": 80,
+ "huge": 320,
+ "seconds": {
+  "20": {
+   "LoopFullUnrollPass": 0.0001,
+   "LoopRotatePass": 0.0006,
+   "IndVarSimplifyPass": 0.0007,
+   "LoopIdiomRecognizePass": 0.0004,
+   "JumpThreadingPass": 0.0005,
+   "ConstraintEliminationPass": 0.0002
+  },
+  "80": {
+   "LoopFullUnrollPass": 0.0003,
+   "LoopRotatePass": 0.0047,
+   "IndVarSimplifyPass": 0.003,
+   "LoopIdiomRecognizePass": 0.0014,
+   "JumpThreadingPass": 0.0021,
+   "ConstraintEliminationPass": 0.0014
+  },
+  "320": {
+   "LoopFullUnrollPass": 0.0015,
+   "LoopRotatePass": 0.0718,
+   "IndVarSimplifyPass": 0.0145,
+   "LoopIdiomRecognizePass": 0.0058,
+   "JumpThreadingPass": 0.01,
+   "ConstraintEliminationPass": 0.0169
+  }
+ },
+ "ratio": {
+  "mir rotate": 15.3,
+  "mir indvars": 4.8,
+  "mir loopidioms": 4.1,
+  "mir jumpthreading": 4.8,
+  "mir constraint-elimination": 12.1
+ }
+}

@@ -274,9 +274,9 @@ impl ProgramPass for MergeFunctions {
     }
 }
 
-/// `MergeFunctions` at a level that allows no trade (-O1): the local functions nothing takes the address of are
+/// `MergeFunctions` where a thunk is no trade (-O1 to -O3): the local functions nothing takes the address of are
 /// dropped, the rest stay. A thunk saves bytes and costs a `jmp` a call, so only a drop is a win on both axes.
-/// DEVIATE MERGEFUNC-O1 (owner z80, exit 2026-11-24): the pin runs no `MergeFunctions` at all.
+/// DEVIATE Z80-MERGEFUNC-LOCAL (owner z80, exit 2026-11-24): the pin runs no `MergeFunctions` at all.
 pub struct MergeLocalFunctions;
 
 impl ProgramPass for MergeLocalFunctions {

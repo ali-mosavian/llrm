@@ -15,8 +15,9 @@ long rot(short n, float seed)
     }
     return (long)(a0 + 2 * a1 + 3 * a2 + 4 * a3 + 5 * a4 + 6 * a5 + 7 * a6 + 8 * a7 + 9 * a8 + 10 * a9);
 }
+// The slots are the allocator's to number (#9367 moved them): the symptom is a copy through ecx, twice in a row.
 // CHECK: L0_3:
-// CHECK: mov ecx, dword ptr [bp-8]
-// CHECK-NEXT: mov dword ptr [bp-20], ecx
-// CHECK-NEXT: mov ecx, dword ptr [bp-4]
-// CHECK-NEXT: mov dword ptr [bp-8], ecx
+// CHECK: mov ecx, dword ptr [bp-{{[0-9]+}}]
+// CHECK-NEXT: mov dword ptr [bp-{{[0-9]+}}], ecx
+// CHECK-NEXT: mov ecx, dword ptr [bp-{{[0-9]+}}]
+// CHECK-NEXT: mov dword ptr [bp-{{[0-9]+}}], ecx

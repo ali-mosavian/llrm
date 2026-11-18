@@ -125,11 +125,13 @@ pub enum Event {
     FactSets,
     /// Dominator tree + loop info rebuilt by loop unroll (`Analyzed::of`).
     LoopAnalyses,
+    /// A top-level `computeKnownBits` of a value (`compute_known_bits`).
+    KnownBitsComputed,
 }
 
 const SLOTS: usize = 64;
 
-const NAMES: [&str; 46] = [
+const NAMES: [&str; 47] = [
     "function_clones",
     "function_forks",
     "machinings",
@@ -177,6 +179,7 @@ const NAMES: [&str; 46] = [
 
     "fact_sets",
     "loop_analyses",
+    "known_bits_computed",
 ];
 
 /// A pass's runs and the instructions of the functions it ran over.
@@ -193,7 +196,7 @@ thread_local! {
     static PASSES: RefCell<Vec<PassRow>> = const { RefCell::new(Vec::new()) };
     /// (pass, analysis, misses): the analyses a pass made the manager compute.
     static ASKS: RefCell<Vec<(&'static str, &'static str, u64)>> = const { RefCell::new(Vec::new()) };
-    static EVENTS: [Cell<u64>; 46] = const { [const { Cell::new(0) }; 46] };
+    static EVENTS: [Cell<u64>; 47] = const { [const { Cell::new(0) }; 47] };
     /// (name, hits, misses) by the address of the name, which is a literal.
     static FOUND: [Cell<usize>; SLOTS] = const { [const { Cell::new(0) }; SLOTS] };
     static ANALYSES: RefCell<Vec<(&'static str, u64, u64)>> = const { RefCell::new(Vec::new()) };

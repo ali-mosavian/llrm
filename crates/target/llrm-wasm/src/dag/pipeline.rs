@@ -131,6 +131,13 @@ pub enum Refusal {
 struct WasmCombines;
 
 impl CombineHooks for WasmCombines {
+    /// `visitFREEZE` pushes a freeze to the operands the pin cannot prove
+    /// defined, so the freeze `narrowSDivSRem` leaves on a byte does not hide
+    /// its sign bits from `sext_inreg` (`div8_os` -O3 kept one per iteration).
+    fn push_freeze_through_operands(&self) -> bool {
+        true
+    }
+
     /// `TargetLowering::convertSelectOfConstantsToMath`: wasm keeps the pin's
     /// default, so `(shl (select c, 1, 2), 2)` folds into one `select 4, 8`.
     fn convert_select_of_constants_to_math(
@@ -302,7 +309,7 @@ pub fn select_block(
     // memory) are frame objects numbered after the function's.
     dag.first_temporary = info.next_stack_object();
     let tables = &info.jump_tables;
-    let mut lowering = WasmLowering { tables };
+    let mut lowering = WasmLowering { tables, cpu };
     if optimize {
         live_out::assert_live_out_copies(dag, info);
     }

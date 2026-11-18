@@ -21,7 +21,10 @@
 //! (`Tti::lsr_users_in_use_list_order`), users of a value are visited in
 //! descending program order, not use-list order. Use-list order is edit history; the pin's order on parsed
 //! IR is the only reproducible one, and it breaks ties in LSR's register
-//! choice. Cost (IU1-COST): one map of the layout per loop and a block's
+//! choice. With use-list order and `Tti::lsr_phi_users_first` a phi is met
+//! first all the same: the pin keeps the one operand of a phi it meets first
+//! (`Processed`), and which that is must not depend on edits (div_constants
+//! m64 -O1: 4334 B -> 4173 B, 6960 B -> 6854 B). Cost (IU1-COST): one map of the layout per loop and a block's
 //! instruction numbers, where the pin has none (it was a map of every
 //! instruction: 1.9 M on d_faces -O2). Exit: use lists keep LLVM's order.
 //! Owner: w-5. Review: 2026-11-19.
@@ -62,6 +65,8 @@ pub struct Env<'a> {
     pub use_list_order: bool,
     /// DEVIATE LSR-PHI: `Tti::lsr_phi_operand_uses`.
     pub phi_operand_uses: bool,
+    /// DEVIATE IU1: `Tti::lsr_phi_users_first`.
+    pub phi_users_first: bool,
 }
 
 /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Analysis/IVUsers.h#L33
@@ -281,6 +286,13 @@ impl IvUsers {
             // One instruction using the result twice is visited once.
             let mut seen = std::collections::HashSet::new();
             users.retain(|user| seen.insert(*user));
+            // DEVIATE IU1: a phi first, as in program order (stable, so the rest
+            // keep the list's): the pin's "do not recurse into a phi twice" keeps the
+            // operand met first, and edit history decides which that is.
+            // Where the target asks (`Tti::lsr_phi_users_first`).
+            if env.phi_users_first {
+                users.sort_by_key(|user| cx.function.instruction(*user).opcode != Opcode::Phi);
+            }
         } else if users.len() > 1 {
             self.ordered += users.len();
             // The function keeps each block's index in the layout, made once

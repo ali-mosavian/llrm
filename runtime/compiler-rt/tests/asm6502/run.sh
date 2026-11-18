@@ -1,9 +1,9 @@
 #!/bin/sh
-# usage: [OLDSHIM=1] [EDGE=1] [SF_DEFS='-DSF_MUL_LUT=1 ...'] tests/asm6502/run.sh [n] [ops]  (n <= 4500): bit-exact run of config/6502 on sim65 against the host FPU; prints fails
+# usage: [EDGE=1] [SF_DEFS='-DSF_MUL_LUT=1 ...'] tests/asm6502/run.sh [n] [ops]  (n <= 4500): bit-exact run of config/6502 on sim65 against the host FPU; prints fails
 # ops: add sub mul div itof utof ftoi ftou (default all). Run under taskset when the machine is loaded.
 set -e
 cd "$(dirname "$0")"; N=${1:-3000}; OPS=${2:-add sub mul div itof utof ftoi ftou}; T=$(mktemp -d); I=../../config/6502
-if [ -n "$OLDSHIM" ]; then S=; X=$T/sf32_abi.o; else S=-DSTACKB=1; X=; fi
+S=; X=$T/sf32_abi.o
 for f in sf32 sf32_muldiv sf32_conv sf32_abi; do ca65 -t sim6502 -I $I $S $SF_DEFS $I/$f.s -o $T/$f.o; done
 for op in $OPS; do
   python3 gen.py $op $N ${EDGE:+edge}${DIRECTED:+directed} > $T/vec.inc

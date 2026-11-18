@@ -330,11 +330,11 @@ skip_blank:
                 dec     ecx
                 jmp     short skip_blank
 tail_copy:
-                cmp     ecx, dword ptr [esp+28]
+                cmp     ecx, dword ptr [esp+24]
                 jbe     short tail_fits
-                mov     ecx, dword ptr [esp+28]
+                mov     ecx, dword ptr [esp+24]
 tail_fits:
-                mov     edi, dword ptr [esp+24]
+                mov     edi, dword ptr [esp+20]
                 mov     eax, ecx
                 jecxz   short tail_done
 copy_tail:
