@@ -1235,6 +1235,10 @@ impl Tti for X86 {
         self.tuning.threads_by_relation
     }
 
+    fn backward_threading(&self) -> bool {
+        self.tuning.backward_threading
+    }
+
     fn x87_stack_slots(&self) -> Option<u32> {
         self.tuning.x87_stack_slots.filter(|_| !self.sse2)
     }

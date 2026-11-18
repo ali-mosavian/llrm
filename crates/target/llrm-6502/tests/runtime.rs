@@ -876,3 +876,96 @@ fn the_fast_multiply_saves_what_hotmultiply_prices() {
     let priced = llrm_6502::hotmultiply::SAVED_CLOCKS;
     assert!((mean - priced).abs() <= priced / 10.0, "the fast multiply saves {mean} clocks a call, priced at {priced}");
 }
+
+/// The speed word divide shifts the divisor up to the dividend (a quotient of
+/// a few bits takes a few steps) and hands a wide quotient to the bit loops: it
+/// agrees with the compact bit loop over pairs of every quotient width, a
+/// divisor under the dividend's top bit, at it, and over it, and a byte divisor
+/// under a dividend of 1024 or more.
+#[test]
+fn the_aligned_word_division_agrees_with_the_bit_loop() {
+    let mut pairs = vec![];
+    for a in [1, 7, 255, 256, 300, 1023, 1024, 4000, 32767, 32768, 40000, 65535] {
+        for b in [1, 2, 3, 10, 37, 100, 255, 256, 257, 300, 1500, 8191, 8192, 32767, 32768, 40000, 65535] {
+            pairs.push((a, b));
+        }
+    }
+    let table: String = pairs.iter().map(|(a, b)| format!("  .word {a}, {b}\n")).collect();
+    let main = format!(
+        "  lda #<pairs\n  sta rc8\n  lda #>pairs\n  sta rc9\n  lda #{}\n  sta rc10\n\
+@next:\n  ldy #0\n@copy:\n  lda (rc8),y\n  sta rc2,y\n  sta rc16,y\n  iny\n  cpy #4\n  bne @copy\n\
+  jsr __udivhi3\n  sta rc12\n  stx rc13\n  lda rc6\n  sta rc14\n  lda rc7\n  sta rc15\n\
+  ldy #3\n@back:\n  lda rc16,y\n  sta rc2,y\n  dey\n  bpl @back\n\
+  jsr __udivhi3c\n  cmp rc12\n  bne @bad\n  cpx rc13\n  bne @bad\n  lda rc6\n  cmp rc14\n  bne @bad\n  lda rc7\n  cmp rc15\n  bne @bad\n\
+  clc\n  lda rc8\n  adc #4\n  sta rc8\n  bcc @c\n  inc rc9\n@c:\n  dec rc10\n  bne @next\n  lda #0\n  rts\n@bad:\n  lda #1\n",
+        pairs.len()
+    );
+    let status = common::run_with(
+        "udivhi-aligned-all",
+        &main,
+        &format!(".segment \"RODATA\"\npairs:\n{table}.segment \"CODE\"\n"),
+    );
+    assert_eq!(status, 0, "the speed and compact divides differ on one of {} pairs", pairs.len());
+}
+
+/// The signed speed divides take two non-negative words as unsigned ones (no
+/// signs to take and give back) and agree with the compact signed ones on every
+/// sign pair.
+#[test]
+fn the_signed_speed_divides_agree_with_the_compact_ones_on_every_sign_pair() {
+    let mut pairs = vec![];
+    for a in [0i32, 1, 7, 300, 1500, 32767, -1, -7, -300, -32768, -32767] {
+        for b in [1i32, 2, 3, 10, 37, 300, 1500, 32767, -1, -2, -37, -1500, -32768] {
+            pairs.push((a as u16, b as u16));
+        }
+    }
+    let table: String = pairs.iter().map(|(a, b)| format!("  .word {a}, {b}\n")).collect();
+    for (name, fast, compact) in [
+        ("divhi", "__divhi3", "__divhi3c"),
+        ("modhi", "__modhi3", "__modhi3c"),
+        ("divmodhi", "__divmodhi4", "__divmodhi4c"),
+    ] {
+        let main = format!(
+            "  lda #<pairs\n  sta rc8\n  lda #>pairs\n  sta rc9\n  lda #{}\n  sta rc10\n\
+@next:\n  ldy #0\n@copy:\n  lda (rc8),y\n  sta rc2,y\n  sta rc16,y\n  iny\n  cpy #4\n  bne @copy\n\
+  jsr {fast}\n  sta rc12\n  stx rc13\n  lda rc6\n  sta rc14\n  lda rc7\n  sta rc15\n\
+  ldy #3\n@back:\n  lda rc16,y\n  sta rc2,y\n  dey\n  bpl @back\n\
+  jsr {compact}\n  cmp rc12\n  bne @bad\n  cpx rc13\n  bne @bad\n\
+  clc\n  lda rc8\n  adc #4\n  sta rc8\n  bcc @c\n  inc rc9\n@c:\n  dec rc10\n  bne @next\n  lda #0\n  rts\n@bad:\n  lda #1\n",
+            pairs.len()
+        );
+        let extra = format!(".segment \"RODATA\"\npairs:\n{table}.segment \"CODE\"\n");
+        assert_eq!(common::run_with(&format!("signed-{name}-all"), &main, &extra), 0, "{fast} differs from {compact}");
+    }
+}
+
+/// A remainder of two non-negative words took the sign handling anyway: 36
+/// clocks of `abs16_pair`, a `php` and a `plp` over the divide, on every call
+/// of a loop of gcd steps.
+#[test]
+fn a_remainder_of_two_non_negative_words_takes_no_sign_handling() {
+    let plain = divide_clocks("signed-fast-mod", "__umodhi3", 2100, 1500);
+    let signed = divide_clocks("signed-fast-mod-s", "__modhi3", 2100, 1500);
+    assert!(signed <= plain + 15, "__modhi3 took {signed} clocks, __umodhi3 {plain}");
+}
+
+fn divide_clocks(
+    name: &str,
+    routine: &str,
+    a: u16,
+    b: u16,
+) -> i64 {
+    let setup = two_words(a, b);
+    common::cycles_with(name, &format!("{setup}  jsr {routine}\n"), "")
+        - common::cycles_with(&format!("{name}-s"), &setup, "")
+}
+
+/// Euclid's steps divide a number by one a little smaller: the quotient is a
+/// bit or two. 2100 / 1500 took 700 clocks (the bit loop), 1500 / 360 600.
+#[test]
+fn a_divide_with_a_quotient_of_a_few_bits_takes_a_few_steps() {
+    for (a, b, limit) in [(2100, 1500, 260), (1500, 360, 400), (300, 60, 400), (9999, 5000, 260)] {
+        let spent = divide_clocks(&format!("udivhi-few-{a}-{b}"), "__udivhi3", a, b);
+        assert!(spent <= limit, "{a} / {b} took {spent} clocks");
+    }
+}

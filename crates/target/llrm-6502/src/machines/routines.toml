@@ -23,3 +23,8 @@ __divmodhi4 = "__divmodhi4c"
 # Policy, for a speed routine linked at size (the speed multiply): the share of its estimated clocks a
 # module must save for each percent of its bytes the routine adds.
 percent_per_percent = 4
+
+[share.speed]
+# The same, at the speed levels (O1-O3), per routine: clocks are the second goal there and a module's bytes
+# under the bytes bar are headroom (coordinator ruling 2026-11-18).
+division16 = 1

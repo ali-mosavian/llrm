@@ -296,6 +296,7 @@ fn view_with(
                 Op::JumpTable { .. } => (Kind::Op("JumpTable"), true, true, false),
                 Op::Call { .. } => (Kind::Op("Call"), false, false, true),
                 Op::Return { .. } => (Kind::Op("Return"), true, true, false),
+                Op::Unreachable => (Kind::Op("Unreachable"), true, true, false),
                 Op::DbgValue { .. } => unreachable!("a debug note is skipped above"),
                 Op::Phi { .. } => unreachable!("phis are copies before allocation"),
             };
