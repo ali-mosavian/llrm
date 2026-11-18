@@ -525,7 +525,7 @@ __ashrhi3:                      ; rs1 >> rc4 (arithmetic) -> A:X
 ; body, `jmp out32`) that copy the first operand to __sa, work there and in rc4..rc7 (`__sb` in the
 ; comments), and copy __sa back; the bodies are the s32_ labels.
 
-; ZEROPAGE where the platform row has `scratch_zero_page` (tools/6502/mkrt.py), BSS otherwise
+; zero-page equates after the registers where the platform row has `scratch_zero_page` (tools/6502/mkrt.py), BSS otherwise
 .segment "BSS"
 __sa: .res 4
 __ra: .res 2
