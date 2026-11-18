@@ -5072,8 +5072,15 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         } else {
             return None;
         };
+        // Both operands are read as halves: the tied one is the low half of `x`
+        // widened with undefined high bits, so an extension of it is not made
+        // (the pin's own patterns do the same, `MOVXd32d16`).
         let low = self.dag.get_node(ISD::Truncate, half.half, &[y]);
-        Some(self.dag.get_node(ISD::Machine(opcode), vt, &[x, low]))
+        let tied_low = self.dag.get_node(ISD::Truncate, half.half, &[x]);
+        // `TargetOpcode::COPY` (no name in the pin's tables): a node the combiner leaves alone, where an
+        // `any_extend` of a load would be formed into an extending load again.
+        let tied = self.dag.get_node(ISD::Machine(TARGET_OPCODE_COPY), vt, &[tied_low]);
+        Some(self.dag.get_node(ISD::Machine(opcode), vt, &[tied, low]))
     }
 
     /// The shifts and the add or subtract of `x * c` for `c = +-(2^n +- 1) <<
@@ -5340,6 +5347,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
 
 /// How many times the nodes a run started with it may make before it is
 /// stopped, and the least it may make (see [`DagCombiner::run_bounded`]).
+/// `TargetOpcode::COPY`, which has no name in the target tables.
+const TARGET_OPCODE_COPY: u32 = 20;
+
 const RUNAWAY_GROWTH: usize = 64;
 const RUNAWAY_FLOOR: usize = 1 << 17;
 
