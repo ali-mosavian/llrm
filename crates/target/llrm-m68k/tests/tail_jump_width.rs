@@ -1,6 +1,8 @@
-//! A tail call to a function of the same object was a 16-bit `bra` (`braw`, 4 B), 2 B over gcc's 8-bit one
-//! (`sibling_call_callees` -Os, 68000/68020/68040: two tail jumps, +4 B in the object). A branch to a label the object
-//! defines starts at its 8-bit form and takes the 16-bit one only where the displacement does not fit.
+//! A tail call to a function of the same object was a 16-bit `bra` (`braw`, 4
+//! B), 2 B over gcc's 8-bit one (`sibling_call_callees` -Os, 68000/68020/68040:
+//! two tail jumps, +4 B in the object). A branch to a label the object
+//! defines starts at its 8-bit form and takes the 16-bit one only where the
+//! displacement does not fit.
 
 use llrm_m68k::compile::Item;
 use llrm_m68k::elf::object;

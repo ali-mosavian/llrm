@@ -142,7 +142,10 @@ pub(crate) fn tail_jumps_narrowed(items: &[Item]) -> Vec<Item> {
         .map(|item| match item {
             Item::Inst(inst)
                 if inst.opcode == "BRA16"
-                    && matches!(&inst.operands[..], [Operand::Symbol(name, 0)] if defined.contains(name.as_str())) =>
+                    && matches!(
+                        &inst.operands[..],
+                        [Operand::Symbol(name, 0)] if defined.contains(name.as_str())
+                    ) =>
             {
                 Item::Inst(crate::mc::Inst { opcode: "BRA8", operands: inst.operands.clone() })
             }

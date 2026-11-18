@@ -5077,8 +5077,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         // (the pin's own patterns do the same, `MOVXd32d16`).
         let low = self.dag.get_node(ISD::Truncate, half.half, &[y]);
         let tied_low = self.dag.get_node(ISD::Truncate, half.half, &[x]);
-        // `TargetOpcode::COPY` (no name in the pin's tables): a node the combiner leaves alone, where an
-        // `any_extend` of a load would be formed into an extending load again.
+        // `TargetOpcode::COPY` (no name in the pin's tables): a node the combiner
+        // leaves alone, where an `any_extend` of a load would be formed into an
+        // extending load again.
         let tied = self.dag.get_node(ISD::Machine(TARGET_OPCODE_COPY), vt, &[tied_low]);
         Some(self.dag.get_node(ISD::Machine(opcode), vt, &[tied, low]))
     }
