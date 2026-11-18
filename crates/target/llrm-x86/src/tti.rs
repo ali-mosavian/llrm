@@ -984,7 +984,7 @@ impl Tti for X86 {
         (self.size_bytes && kind == CostKind::CodeSize).then(|| crate::sizes::memory_intrinsic(family, length))
     }
 
-    /// D11-MEM (owner llrm-target-x86-m16-b, exit 2026-11-30): where the size
+    /// D11-MEM (owner llrm-target-x86-m16-b, exit 2026-11-20): where the size
     /// guard holds, a constant-length copy or fill the DAG builder expands
     /// counts as the loads and stores it becomes, not the pin's one
     /// instruction: a 48-byte copy was inlined for a call of 10 bytes
