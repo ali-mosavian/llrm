@@ -988,14 +988,11 @@ impl Tti for X86 {
     /// guard holds, a constant-length copy or fill the DAG builder expands
     /// counts as the loads and stores it becomes, not the pin's one
     /// instruction: a 48-byte copy was inlined for a call of 10 bytes
-    /// (`them_dark`, 37 B). Above the -Os store limit, or of unknown length,
-    /// it stays a call and counts as one of three arguments: `justify` (two
-    /// fills and a move, 8 units against a call of 9) went into `set` three
-    /// times (`file.c`, 445 B against gcc's 212).
+    /// (`them_dark`, 37 B). Above the -Os store limit it stays a call.
     fn size_caller_memory_units(
         &self,
         family: &str,
-        length: Option<u64>,
+        length: u64,
     ) -> Option<i64> {
         if !self.tuning.inline_size_guard_at_size || self.real_mode.is_some() {
             return None;
@@ -1009,14 +1006,21 @@ impl Tti for X86 {
         // The widest piece the DAG builder takes (a vector under SSE2), then
         // one store per power of two of the tail.
         let width = if self.sse2 { 16 } else { 4 };
+        let pieces = length / width + u64::from((length % width).count_ones());
         let per_piece = if family == "memset" { 1 } else { 2 };
-        let expanded = length.and_then(|length| {
-            let pieces = length / width + u64::from((length % width).count_ones());
-            (pieces <= limit).then_some(pieces as i64 * per_piece)
-        });
-        expanded.or_else(|| {
-            Some((self.direct_call_cost(3, CostKind::CodeSize).value * self.call_code_size_percent() + 50) / 100)
-        })
+        (pieces <= limit).then_some(pieces as i64 * per_piece)
+    }
+
+    /// An unknown or long length stays a call of three arguments: `justify`
+    /// (two fills and a move, 8 units against a call of 9) went into `set`
+    /// three times (`file.c`, 445 B against gcc's 212). The guard only: the
+    /// size trial's units keep the pin's one instruction, which its byte
+    /// model corrects (`idioms.c` m32 Os +94 B when its margin shifted).
+    fn size_caller_memory_call_units(&self) -> Option<i64> {
+        if !self.tuning.inline_size_guard_at_size || self.real_mode.is_some() {
+            return None;
+        }
+        Some((self.direct_call_cost(3, CostKind::CodeSize).value * self.call_code_size_percent() + 50) / 100)
     }
 
     fn address_computation_cost(

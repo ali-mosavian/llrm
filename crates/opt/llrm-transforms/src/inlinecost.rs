@@ -2143,7 +2143,8 @@ impl<'a> Analyzer<'a> {
         let view = self.size_view();
         if view.is_none()
             && self.site.caller_size != CallerSize::Speed
-            && let Some(units) = memory_expansion_units(self.context, &self.site.module.globals, self.callee, inst, tti)
+            && let Some(units) =
+                memory_expansion_units(self.context, &self.site.module.globals, self.callee, inst, tti, true)
         {
             return units;
         }
@@ -2681,6 +2682,7 @@ pub(crate) fn memory_expansion_units(
     function: &Function,
     inst: InstId,
     tti: &dyn llrm_mir::tti::Tti,
+    unknown_length: bool,
 ) -> Option<i64> {
     let operation = function.instruction(inst);
     if !matches!(operation.opcode, Opcode::Call(_)) {
@@ -2698,7 +2700,8 @@ pub(crate) fn memory_expansion_units(
         },
         _ => None,
     };
-    tti.size_caller_memory_units(family, length)
+    let expanded = length.and_then(|length| tti.size_caller_memory_units(family, length));
+    expanded.or_else(|| if unknown_length { tti.size_caller_memory_call_units() } else { None })
 }
 
 /// Per parameter of `callee`: nothing reads it and `deadargelim` will drop it
