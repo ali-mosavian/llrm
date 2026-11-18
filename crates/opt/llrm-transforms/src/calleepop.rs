@@ -220,8 +220,10 @@ fn decided(
                 // A pop's worth of bytes saved is not worth an instruction more
                 // at every call.
                 && words > 0
-                && sites.len() as i64 * costs.cleanup(words) + costs.pop >= returns * costs.return_pops)
-                .then_some((callee, twin))
+                && sites.len() as i64 * costs.cleanup(words) + costs.pop
+                    >= returns * costs.return_pops
+                        + sibling_calls_lost(module, layout, costs, target, function, bytes))
+            .then_some((callee, twin))
         })
         .collect();
     let sites = chosen
@@ -229,6 +231,55 @@ fn decided(
         .flat_map(|(callee, &twin)| calls[callee].iter().map(move |&(caller, inst)| (caller, inst, twin)))
         .collect();
     (chosen, sites)
+}
+
+/// CP-TAIL: what a callee-pops convention costs `function` in sibling calls.
+/// A call in tail position to a function that cleans up after itself, whose
+/// arguments fit in the stack words `function` was itself called with, is a
+/// jump that reuses them; once `function` pops its own arguments its return
+/// is `ret N` and the jump would leave the callee's cleanup to a caller that
+/// does not make it, so the call is made, with its arguments pushed again and
+/// cleaned up (`twice` at m16 -Os: 200 to 205 B). The pin's `fastcc` change
+/// does not see it either; GCC's `-foptimize-sibling-calls` runs before the
+/// callee's convention is chosen.
+fn sibling_calls_lost(
+    module: &Module,
+    layout: &DataLayout,
+    costs: &OperationCosts,
+    target: &dyn Machine,
+    function: &llrm_mir::module::Function,
+    own_bytes: i64,
+) -> i64 {
+    let mut lost = 0;
+    for &block in function.layout() {
+        let insts: Vec<InstId> = function.iter_block(block).collect();
+        let [.., call, ret] = insts[..] else { continue };
+        let (called, returned) = (function.instruction(call), function.instruction(ret));
+        let Opcode::Call(info) = &called.opcode else { continue };
+        if !matches!(returned.opcode, Opcode::Ret)
+            || returned.operands.first().map(|one| one) != called.result.map(Operand::Value).as_ref()
+        {
+            continue;
+        }
+        let Some((&Operand::Constant(id), arguments)) = called.operands.split_last() else { continue };
+        if !matches!(module.context.get(id).kind, ConstantKind::Global(_)) {
+            continue;
+        }
+        if target.callee_pop(info.calling_convention).is_none() {
+            continue; // the callee already pops: the jump was never one
+        }
+        let bytes: i64 = arguments
+            .iter()
+            .filter_map(|&one| function.operand_type(&module.context, one))
+            .map(|ty| layout.alloc_size(&module.context.types, ty) as i64)
+            .sum();
+        if bytes > own_bytes {
+            continue;
+        }
+        let words = (bytes + 1) / 2;
+        lost += words * costs.argument + costs.cleanup(words);
+    }
+    lost
 }
 
 /// What an argument of type `ty` is, for where a convention puts it.
