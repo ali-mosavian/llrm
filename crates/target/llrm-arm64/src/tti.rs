@@ -989,6 +989,10 @@ impl Tti for AArch64 {
         true
     }
 
+    fn lsr_pair_first_walk(&self) -> bool {
+        true
+    }
+
     fn is_post_inc_load_legal(
         &self,
         ty: Ty,

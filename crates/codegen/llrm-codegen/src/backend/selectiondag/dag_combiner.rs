@@ -73,12 +73,6 @@ pub struct HalfMul {
     pub half: EVT,
     pub unsigned: u32,
     pub signed: u32,
-    /// The target has a full-width multiply instruction (`muls.l`). The half
-    /// multiply then needs the operand's extension and a copy of the source
-    /// (the tied destination), which the full-width one needs just the same
-    /// without the copy: it is used only for operands that are already full
-    /// width.
-    pub has_full_multiply: bool,
     /// A constant operand that fits the half is the half multiply's immediate
     /// when [`CombineHooks::half_multiply_by_constant`] prices it under the
     /// chain and the full multiply.
@@ -1225,7 +1219,8 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             ISD::MulHU => self.simplify_demanded(node),
             ISD::SRem | ISD::URem => self.visit_rem(node),
             ISD::ZeroExtend | ISD::SignExtend | ISD::AnyExtend => self
-                .fold_sext_setcc(node)
+                .fold_extended_sign_bit_test(node)
+                .or_else(|| self.fold_sext_setcc(node))
                 .or_else(|| self.fold_zext_setcc(node))
                 .or_else(|| self.fold_extend_of_cast(node))
                 .or_else(|| self.visit_extend(node))
@@ -2376,6 +2371,41 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         }
         self.replace_value(SDValue { node: load.node, res: 1 }, SDValue { node: new.node, res: 1 });
         Some(new)
+    }
+
+    /// `foldExtendedSignBitTest` (DAGCombiner.cpp, called by `visitSIGN_EXTEND`
+    /// and `visitZERO_EXTEND`): an extension of the sign test `setgt X, -1`
+    /// to X's own width is the sign bit of the complement: `zext i1 (setgt
+    /// iN X, -1)` is `srl (not X), N-1`, `sext` the same with `sra`. No target
+    /// here overrides `shouldAvoidTransformToShift` (the pin's MSP430
+    /// does).
+    ///
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L15936>
+    fn fold_extended_sign_bit_test(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let (op, vt, setcc) = (self.dag.opcode(node), self.dag.value_type(node), self.dag.operand(node, 0));
+        if !matches!(op, ISD::ZeroExtend | ISD::SignExtend)
+            || self.legal_operations()
+            || self.dag.opcode(setcc) != ISD::SetCC
+            || !self.dag.has_one_use(setcc.node)
+            || self.dag.value_type(setcc) != EVT::I1
+        {
+            return None;
+        }
+        let (x, ones) = (self.dag.operand(setcc, 0), self.dag.operand(setcc, 1));
+        let NodeData::CondCode(cc) = self.dag.node(self.dag.operand(setcc, 2)).data else { return None };
+        if cc != CondCode::SetGt
+            || self.dag.value_type(x) != vt
+            || self.dag.constant(ones) != Some(super::fold::mask(vt.size_in_bits()))
+        {
+            return None;
+        }
+        let not_x = self.dag.get_not(x, vt);
+        let shift = self.dag.get_constant(u128::from(vt.size_in_bits() - 1), vt);
+        let opcode = if op == ISD::SignExtend { ISD::Sra } else { ISD::Srl };
+        Some(self.dag.get_node(opcode, vt, &[not_x, shift]))
     }
 
     /// `foldSextSetcc`: where a vector compare's result is as wide as its
@@ -5031,23 +5061,6 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         half: HalfMul,
     ) -> Option<SDValue> {
         if self.dag.constant(x).is_some() || self.dag.constant(y).is_some() {
-            return None;
-        }
-        // an extension of a half-width value, or a load that extends one
-        let extends_half = |dag: &SelectionDAG, v: SDValue| {
-            if dag.opcode(v) == ISD::Load {
-                return matches!(
-                    dag.node(v).data,
-                    NodeData::Mem(info) if info.ext.is_some() && info.mem_vt == half.half
-                );
-            }
-            matches!(
-                dag.opcode(v),
-                ISD::SignExtend | ISD::ZeroExtend | ISD::AnyExtend
-            )
-                && dag.value_type(dag.operand(v, 0)) == half.half
-        };
-        if half.has_full_multiply && (extends_half(self.dag, x) || extends_half(self.dag, y)) {
             return None;
         }
         let (width, narrow) = (vt.size_in_bits(), half.half.size_in_bits());
