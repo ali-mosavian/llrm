@@ -4427,9 +4427,10 @@ fn a_nest_with_loads_invariant_in_the_outer_loop_is_jammed_at_o3_m64() {
                 next:\n  %t1 = add nuw nsw i16 %t, 1\n  %f = icmp eq i16 %t1, 101\n  br i1 %f, label %done, label %outer\n\
                 done:\n  ret void\n}\n";
     // The symptom, not the factor: the copies of `px += vx` share one load of
-    // `vx` and add it to itself (`add r, r`: x2 for two copies, UJ3's divisor
-    // of the 100 outer trips), where an unjammed nest loads `vx` and `vy` once
-    // per trip and doubles nothing.
+    // `vx` and scale it (`add r, r` for two copies, `shl r, 2` for four: the
+    // jam is by the divisor of the 100 outer trips the cost model allows),
+    // where an unjammed nest loads `vx` and `vy` once per trip and scales
+    // nothing.
     let shape = |level: &str| {
         let (built, _) =
             compiled(&flags(&["-m64", level, "--isel=dag", "-fno-tree-loop-vectorize"]), text, "f").unwrap();
@@ -4441,6 +4442,7 @@ fn a_nest_with_loads_invariant_in_the_outer_loop_is_jammed_at_o3_m64() {
                 line.strip_prefix("add ")
                     .and_then(|rest| rest.split_once(", "))
                     .is_some_and(|(a, b)| a == b && !a.starts_with("word"))
+                    || line.strip_prefix("shl ").is_some_and(|rest| !rest.starts_with("word"))
             })
             .count();
         let loads = lines.filter(|line| line.starts_with("movzx") && line.contains("ptr [")).count();
@@ -5502,7 +5504,8 @@ fn a_call_and_a_defined_global_at_m64_pie_stay_direct() {
 /// compiled to `and edi, 0x80000000; cmp rdi, 1; adc eax, 0` (13 B); the pin
 /// tests the narrow sign bit (`(and X, 2^k) == 0` is `(trunc X) >= 0`,
 /// `foldSetCCWithAnd`) and shifts it down: `not; shr 31; add` (7 B, -8 B at
-/// sfm16_float_cmp -Os).
+/// sfm16_float_cmp -Os). Since #10238 the sign test is folded to the shift
+/// itself (no `setns`).
 #[test]
 fn a_single_bit_mask_test_at_m64_is_a_narrow_sign_test_not_cmp_adc() {
     let text = "target datalayout = \"@m64-datalayout@\"\n\
@@ -5512,7 +5515,7 @@ fn a_single_bit_mask_test_at_m64_is_a_narrow_sign_test_not_cmp_adc() {
                 \x20 %r = add nuw nsw i32 %y, %z\n  ret i32 %r\n}\n";
     let (built, _) = compiled(&flags(&["-m64", "-Os", "--isel=dag"]), text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
-    assert!(!listing.contains("adc") && listing.contains("setns"), "{listing}");
+    assert!(!listing.contains("adc") && !listing.contains("cmp") && listing.contains("shr edi, 31"), "{listing}");
 }
 
 /// The pin's `combineMul` covers i64 as well as i32: `x * 40` is `lea; shl`. Ours returned early for i64 and kept
