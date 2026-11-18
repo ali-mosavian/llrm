@@ -2263,8 +2263,14 @@ fn sized(
                 return 0;
             }
             if size_caller
-                && let Some(units) =
-                    crate::inlinecost::memory_expansion_units(&module.context, &module.globals, function, inst, tti)
+                && let Some(units) = crate::inlinecost::memory_expansion_units(
+                    &module.context,
+                    &module.globals,
+                    function,
+                    inst,
+                    tti,
+                    false,
+                )
             {
                 return units;
             }
