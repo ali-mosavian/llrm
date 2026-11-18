@@ -29,7 +29,9 @@ fn facts(
         store_load_forward_bits: None,
         widest_induction_bits: 64,
         opt_size: false,
+        very_cheap: false,
         has_reductions: false,
+        size_priced: false,
         reduction_bits: Vec::new(),
         pressure: None,
     }
@@ -115,6 +117,21 @@ fn no_epilogue_is_planned_where_the_pin_allows_none() {
     // A count the factors divide (VF 8, IC 1 at `-Os`) needs none.
     size.trip_count = 1000;
     assert_eq!(plan(&tti, &size), Ok(Plan { vf: 8, ic: 1 }));
+}
+
+/// gcc's `vect-cost-model=very-cheap` (VP9): a loop of an unknown trip count
+/// is not planned at -O2 (no epilogue); a known count keeps the pin's plan,
+/// remainder and all (particle -O2: 101 trips, 8x the clocks left scalar).
+#[test]
+fn a_very_cheap_cost_model_plans_no_loop_of_an_unknown_trip_count() {
+    let tti = AArch64::of_cpu("generic").unwrap();
+    let mut cheap = facts(16, 0, false);
+    cheap.very_cheap = true;
+    assert_eq!(plan(&tti, &cheap).unwrap_err().0, "A scalar epilogue would remain");
+    for trips in [101, 1001, 1920] {
+        cheap.trip_count = trips;
+        assert_eq!(plan(&tti, &cheap), plan(&tti, &facts(16, trips, false)), "trips {trips}");
+    }
 }
 
 /// Bandwidth maximization (`shouldMaximizeVectorBandwidth`) takes VF 8 for a
@@ -224,4 +241,34 @@ fn a_scalarized_store_is_priced_as_the_pin_prices_it() {
     assert_eq!(store(Ty::Int(8), None) - bytes, 120 - 48);
     assert_eq!(store(Ty::Float, Some(32)) - bytes, 44 - 48);
     assert_eq!(store(Ty::Int(8), Some(-100)) - bytes, 0);
+}
+
+fn widening_loop(live_values: usize) -> LoopFacts {
+    let wide = Ty::Int(64);
+    let mut recipes = vec![
+        Recipe::Load { lane: Ty::Int(8), align: 1 },
+        Recipe::Cast { kind: CastKind::ZExt, dst: wide, src: Ty::Int(8), folded: false, users: Vec::new() },
+    ];
+    for _ in 0..live_values {
+        recipes.push(Recipe::Binary { op: ArithOp::Add, lane: wide, ext: [None, None], second: Default::default() });
+    }
+    recipes.push(Recipe::Store { lane: wide, align: 8 });
+    let mut facts = facts(8, 1920, false);
+    facts.recipes = recipes;
+    // `live_values` i64 values all open across the last one.
+    let live = (0..live_values)
+        .map(|at| super::Live { lane: wide, start: at, end: live_values + 1, accumulator: false })
+        .collect();
+    facts.pressure = Some(super::Pressure { live, invariants: Vec::new() });
+    facts
+}
+
+/// A byte loop widened to six live i64 vectors: at the bandwidth VF 16 each is
+/// eight registers, past AArch64's 32, so `spillCost` (L5612) prices VF 16
+/// above VF 8. Without the term the planner chose VF 16 and spilled.
+#[test]
+fn a_bandwidth_vf_past_the_register_file_pays_its_spills() {
+    let tti = AArch64::of_cpu("generic").unwrap();
+    assert_eq!(choose(&tti, &widening_loop(6)), Ok(Plan { vf: 8, ic: 1 }));
+    assert_eq!(choose(&tti, &widening_loop(3)), Ok(Plan { vf: 16, ic: 1 }));
 }

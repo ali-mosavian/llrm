@@ -623,13 +623,18 @@ impl<'m> Machine<'m> {
                     FloatKind::F128 => unreachable!("Machine::new refuses a module with an fp128"),
                 }
                 .trunc();
-                let Some(width) = self.types().fields(returns).and_then(|fields| self.types().int_bits(fields[0])) else {
+                let Some(width) = self.types().fields(returns).and_then(|fields| self.types().int_bits(fields[0]))
+                else {
                     return Ok(Val::Poison);
                 };
-                let (low, high) =
-                    if signed { (-(2f64.powi(width as i32 - 1)), 2f64.powi(width as i32 - 1)) } else { (0.0, 2f64.powi(width as i32)) };
+                let (low, high) = if signed {
+                    (-(2f64.powi(width as i32 - 1)), 2f64.powi(width as i32 - 1))
+                } else {
+                    (0.0, 2f64.powi(width as i32))
+                };
                 let fits = x.is_finite() && x >= low && x < high;
-                let value = if fits { Val::Int { bits: (x as i128 as u128) & mask(width), width } } else { Val::Poison };
+                let value =
+                    if fits { Val::Int { bits: (x as i128 as u128) & mask(width), width } } else { Val::Poison };
                 Val::Aggregate(vec![value, Val::Int { bits: u128::from(fits), width: 1 }])
             }
             Intrinsic::LRint | Intrinsic::LLRint => {
@@ -664,7 +669,9 @@ impl<'m> Machine<'m> {
                 self.poison[range].fill(poison);
                 void
             }
-            Intrinsic::Trap | Intrinsic::DebugTrap | Intrinsic::UbsanTrap => return unsupported("a trap: the program stops"),
+            Intrinsic::Trap | Intrinsic::DebugTrap | Intrinsic::UbsanTrap => {
+                return unsupported("a trap: the program stops");
+            }
             Intrinsic::MemSetPattern => {
                 let (Val::Ptr(address), Val::Int { bits: count, .. }) = (argument(0), argument(2)) else {
                     return undefined("a pattern fill of a poison address or count");
@@ -1028,14 +1035,16 @@ impl<'m> Machine<'m> {
                         let (types, layout) = (self.types(), &self.layout);
                         // A vector cast is its scalar one on each lane.
                         Some(match (value(self, 0)?, types.get(from), types.get(instruction.ty)) {
-                            (Val::Aggregate(lanes), Type::Vector { element: src, .. }, Type::Vector { element: dst, .. }) => {
-                                Val::Aggregate(
-                                    lanes
-                                        .into_iter()
-                                        .map(|lane| cast(types, layout, *op, lane, *src, *dst, instruction.flags))
-                                        .collect::<Run<Vec<_>>>()?,
-                                )
-                            }
+                            (
+                                Val::Aggregate(lanes),
+                                Type::Vector { element: src, .. },
+                                Type::Vector { element: dst, .. },
+                            ) => Val::Aggregate(
+                                lanes
+                                    .into_iter()
+                                    .map(|lane| cast(types, layout, *op, lane, *src, *dst, instruction.flags))
+                                    .collect::<Run<Vec<_>>>()?,
+                            ),
                             (lane, ..) => cast(types, layout, *op, lane, from, instruction.ty, instruction.flags)?,
                         })
                     }
@@ -1049,6 +1058,23 @@ impl<'m> Machine<'m> {
                     Opcode::Select => Some(match value(self, 0)? {
                         Val::Poison => Val::Poison,
                         Val::Int { bits, .. } => value(self, if bits != 0 { 1 } else { 2 })?,
+                        // A vector condition picks each lane.
+                        Val::Aggregate(conditions) => match (value(self, 1)?, value(self, 2)?) {
+                            (Val::Aggregate(taken), Val::Aggregate(other)) if taken.len() == conditions.len() => {
+                                Val::Aggregate(
+                                    conditions
+                                        .into_iter()
+                                        .zip(taken.into_iter().zip(other))
+                                        .map(|(condition, (taken, other))| match condition {
+                                            Val::Int { bits, .. } if bits != 0 => taken,
+                                            Val::Int { .. } => other,
+                                            _ => Val::Poison,
+                                        })
+                                        .collect(),
+                                )
+                            }
+                            _ => Val::Poison,
+                        },
                         other => unreachable!("a condition {other:?}"),
                     }),
                     Opcode::Freeze => Some(match value(self, 0)? {

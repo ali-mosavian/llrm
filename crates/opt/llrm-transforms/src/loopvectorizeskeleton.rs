@@ -70,6 +70,9 @@ pub(crate) struct Shape {
     pub index_ty: TypeId,
     /// The induction counts down.
     pub reverse: bool,
+    /// The step of an induction that counts up, 1 unless the loop steps by
+    /// a constant (`o += 2`).
+    pub scale: u128,
     /// The exit test reads the phi, before the step, not the stepped value
     /// (`for (i = n; i >= 0; --i)` leaves when `i == 0`): [`stepped_exit_test`]
     /// moves it.
@@ -89,11 +92,11 @@ pub(crate) fn stepped_exit_test(
     if !shape.tests_phi {
         return shape;
     }
-    let Shape { header, preheader, primary, compare, bound_operand, index_ty, reverse, .. } = shape;
+    let Shape { header, preheader, primary, compare, bound_operand, index_ty, reverse, scale, .. } = shape;
     let bits = bits_of(context, index_ty);
     let stepped = arms(function, primary).into_iter().find(|&(_, from)| from == header).expect("a back edge").0;
     let bound = function.instruction(compare).operands[bound_operand];
-    let step: u128 = if reverse { mask(bits) } else { 1 };
+    let step: u128 = if reverse { mask(bits) } else { scale };
     let moved = match constant_int(context, bound) {
         Some(value) => Operand::Constant(
             context.constant(Constant { ty: index_ty, kind: ConstantKind::Int(value.wrapping_add(step) & mask(bits)) }),
@@ -172,7 +175,7 @@ pub(crate) struct Skeleton {
 }
 
 /// An integer constant's value, masked to its type.
-fn constant_int(
+pub(crate) fn constant_int(
     context: &Context,
     operand: Operand,
 ) -> Option<u128> {
@@ -188,20 +191,26 @@ fn constant_int(
 
 /// The iterations between a constant `start` and the `bound` the stepped
 /// induction meets (the bound less the start, the start less the bound counting
-/// down), not yet masked to the type.
-fn iterations(
+/// down, over the step), not yet masked to the type. The exit test is an
+/// `eq`/`ne`, so a step that does not divide the distance never meets it and
+/// the loop is not finite: the quotient is the count.
+pub(crate) fn iterations(
     reverse: bool,
+    scale: u128,
+    bits: u32,
     start: u128,
     bound: u128,
 ) -> u128 {
-    if reverse { start.wrapping_sub(bound) } else { bound.wrapping_sub(start) }
+    // Masked to the type before the division: a bound met after the counter
+    // wraps (i8 from 250 to 4) is a distance of the type, not of u128.
+    if reverse { start.wrapping_sub(bound) & mask(bits) } else { (bound.wrapping_sub(start) & mask(bits)) / scale }
 }
 
-fn mask(bits: u32) -> u128 {
+pub(crate) fn mask(bits: u32) -> u128 {
     if bits >= 128 { u128::MAX } else { (1u128 << bits) - 1 }
 }
 
-fn bits_of(
+pub(crate) fn bits_of(
     context: &Context,
     ty: TypeId,
 ) -> u32 {
@@ -212,7 +221,7 @@ fn bits_of(
 }
 
 /// An instruction made at `at`, and its value.
-fn emit(
+pub(crate) fn emit(
     function: &mut Function,
     at: Position,
     opcode: Opcode,
@@ -226,7 +235,7 @@ fn emit(
 }
 
 /// A terminator at the end of `block`.
-fn end_with(
+pub(crate) fn end_with(
     function: &mut Function,
     block: BlockId,
     void: TypeId,
@@ -256,7 +265,7 @@ pub(crate) fn add_remainder(
     with_middle: bool,
     memory: Option<MemChecks>,
 ) -> Option<Skeleton> {
-    let Shape { header, preheader, exit, primary, compare, bound_operand, index_ty, reverse, .. } = shape;
+    let Shape { header, preheader, exit, primary, compare, bound_operand, index_ty, reverse, scale, .. } = shape;
     debug_assert!(!shape.tests_phi, "the exit test is on the stepped value");
     let bits = bits_of(context, index_ty);
     let preheader_term = function.terminator(preheader).expect("a terminated preheader");
@@ -266,8 +275,12 @@ pub(crate) fn add_remainder(
     let start = incoming.iter().find(|&&(_, from)| from == preheader).expect("the start arm").0;
     let bound = function.instruction(compare).operands[bound_operand];
     let (start_value, bound_value) = (constant_int(context, start), constant_int(context, bound));
+    // A runtime trip count divides by the step with a shift.
+    if scale > 1 && !(scale.is_power_of_two() || (start_value.is_some() && bound_value.is_some() && memory.is_none())) {
+        return None;
+    }
     if let (Some(start_value), Some(bound_value)) = (start_value, bound_value)
-        && (iterations(reverse, start_value, bound_value) & mask(bits)) < u128::from(vf_ic)
+        && (iterations(reverse, scale, bits, start_value, bound_value)) < u128::from(vf_ic)
     {
         return None;
     }
@@ -317,9 +330,12 @@ pub(crate) fn add_remainder(
         && memory.is_none()
     {
         // Both ends known: the checks fold (the pin's constant folder).
-        let trip = iterations(reverse, start_value, bound_value) & mask(bits);
+        let trip = iterations(reverse, scale, bits, start_value, bound_value);
         let moved = trip - trip % u128::from(vf_ic);
-        let end = constant(context, if reverse { start_value.wrapping_sub(moved) } else { start_value + moved });
+        let end = constant(
+            context,
+            if reverse { start_value.wrapping_sub(moved) } else { start_value.wrapping_add(moved * scale) },
+        );
         function.set_operand(compare, bound_operand, end);
         let from = if with_middle {
             // The reductions are combined between the loop and its remainder.
@@ -342,12 +358,21 @@ pub(crate) fn add_remainder(
         let before = Position::Before(memory.map_or(preheader_term, |checks| checks.first));
         // n = bound - start (start - bound counting down), the iterations of
         // the loop.
-        let trip = if reverse {
+        let distance = if reverse {
             emit(function, before, Opcode::Binary(BinaryOp::Sub), index_ty, vec![start, bound], "n.trip")
         } else if start_value == Some(0) {
             bound
         } else {
             emit(function, before, Opcode::Binary(BinaryOp::Sub), index_ty, vec![bound, start], "n.trip")
+        };
+        // A step that does not divide the distance never meets the `eq` test:
+        // the scalar loop would not end, which a loop the pin vectorizes may
+        // not do, so the floor here is the exact count of one that ends.
+        let shift = constant(context, u128::from(scale.trailing_zeros()));
+        let trip = if scale > 1 {
+            emit(function, before, Opcode::Binary(BinaryOp::LShr), index_ty, vec![distance, shift], "n.steps")
+        } else {
+            distance
         };
         let vector_lanes = constant(context, u128::from(vf_ic));
         let min_iters = emit(
@@ -374,12 +399,17 @@ pub(crate) fn add_remainder(
             emit(function, at_vector, Opcode::Binary(BinaryOp::And), index_ty, vec![trip, lane_mask], "n.mod.vf");
         let vector_trip =
             emit(function, at_vector, Opcode::Binary(BinaryOp::Sub), index_ty, vec![trip, remainder_lanes], "n.vec");
-        let end = if reverse {
-            emit(function, at_vector, Opcode::Binary(BinaryOp::Sub), index_ty, vec![start, vector_trip], "ind.end")
-        } else if start_value == Some(0) {
-            vector_trip
+        let distance_trip = if scale > 1 {
+            emit(function, at_vector, Opcode::Binary(BinaryOp::Shl), index_ty, vec![vector_trip, shift], "n.vec.dist")
         } else {
-            emit(function, at_vector, Opcode::Binary(BinaryOp::Add), index_ty, vec![start, vector_trip], "ind.end")
+            vector_trip
+        };
+        let end = if reverse {
+            emit(function, at_vector, Opcode::Binary(BinaryOp::Sub), index_ty, vec![start, distance_trip], "ind.end")
+        } else if start_value == Some(0) {
+            distance_trip
+        } else {
+            emit(function, at_vector, Opcode::Binary(BinaryOp::Add), index_ty, vec![start, distance_trip], "ind.end")
         };
         end_with(function, vector, void, vec![Operand::Block(header)]);
 
@@ -741,7 +771,8 @@ fn retarget_exit_phis(
     }
 }
 
-/// The metadata node `at`: the module's, or one made since (by this pass or an earlier one in the run).
+/// The metadata node `at`: the module's, or one made since (by this pass or an
+/// earlier one in the run).
 pub(crate) fn node_at(
     declared: &Declared,
     metadata: &[MetadataNode],
@@ -786,6 +817,28 @@ fn loop_options(
         .and_then(|(_, id)| node_at(declared, metadata, *id))
         .map(|id| id.operands.into_iter().skip(1).collect())
         .unwrap_or_default()
+}
+
+/// `VPlanTransforms::simplifyBranchConditionForVFAndUF` (L2142): the vector
+/// loop of `header` runs once, so its latch leaves on the first iteration
+/// (`br i1 true` to the exit; the pin's `BranchOnCond true`). The loop and its
+/// phis fold away in the cleanup that follows.
+pub(crate) fn exit_on_first_iteration(
+    context: &mut Context,
+    function: &mut Function,
+    header: BlockId,
+) {
+    let latch = function.terminator(header).expect("a terminated vector loop");
+    let operands = function.instruction(latch).operands.clone();
+    let [_, Operand::Block(on_true), Operand::Block(on_false)] = operands[..] else { return };
+    if (on_true == header) == (on_false == header) {
+        return;
+    }
+    let bool_ty = context.types.intern(Type::Int(1));
+    let leave = Operand::Constant(
+        context.constant(Constant { ty: bool_ty, kind: ConstantKind::Int(u128::from(on_true != header)) }),
+    );
+    function.set_operand(latch, 0, leave);
 }
 
 /// `llvm.loop.isvectorized` on the loop whose latch ends in `branch`: the

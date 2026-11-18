@@ -605,7 +605,7 @@ impl GvnPass<'_> {
 
     /// Makes the loop info of the function as it stands, when it is first
     /// asked.
-    fn ensure_loops(&mut self) {
+    pub(super) fn ensure_loops(&mut self) {
         if self.loops.is_none() {
             let function = &*self.function;
             let dt = &*self.dt;

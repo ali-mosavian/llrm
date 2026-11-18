@@ -592,8 +592,8 @@ fn ends_on_edge_into(
 }
 
 /// Whether `from` ends in a conditional branch that takes it to `to` and
-/// falls into another block: the edge `tryToSplitRestore` splits is the taken
-/// one.
+/// falls into another block, or in that branch and a jump to the other
+/// successor: the edge `tryToSplitRestore` splits is the taken one.
 fn ends_on_taken_edge_into(
     body: &LirBody,
     from: BlockId,
@@ -602,11 +602,15 @@ fn ends_on_taken_edge_into(
     let (Some(block), Some(restore)) = (body.blocks.get(from.0 as usize), body.blocks.get(to.0 as usize)) else {
         return false;
     };
-    let Some(what) =
-        block.insns.iter().rev().find(|one| crate::backend::masm::prints(one)).and_then(|one| one.what.as_ref())
-    else {
-        return false;
-    };
+    let mut printed =
+        block.insns.iter().rev().filter(|one| crate::backend::masm::prints(one)).filter_map(|one| one.what.as_ref());
+    let Some(what) = printed.next() else { return false };
+    // A two-way block ends in the branch and a jump to the other successor.
+    if what.op == ir::Operation::Jump && what.target != Some(restore.at) {
+        return printed.next().is_some_and(|branch| {
+            branch.op == ir::Operation::Branch && branch.target == Some(restore.at)
+        });
+    }
     what.op == ir::Operation::Branch && what.target == Some(restore.at) && from.0 + 1 != to.0
 }
 
@@ -1125,6 +1129,26 @@ mod tests {
                 && wrap.closes_taken.contains_key(&2)
                 && !wrap.closes_after.contains_key(&2)
         );
+    }
+
+    /// A late path that ends in a conditional branch to the shared return and
+    /// a jump to its other successor pops on the taken edge too (x_mergesort
+    /// `msort` at -O3 kept its four pushes ahead of the early `jl`: the block
+    /// was `jle ret; jmp next`).
+    #[test]
+    fn test_a_late_path_that_branches_then_jumps_pops_on_the_taken_edge() {
+        let (to_next, to_ret) = (
+            insn(24, Semantics { name: Some("jmp".into()), target: Some(4), ..Semantics::new(ir::Operation::Jump) }),
+            insn(42, Semantics { name: Some("jmp".into()), target: Some(3), ..Semantics::new(ir::Operation::Jump) }),
+        );
+        let blocks = vec![
+            block(0, vec![branch(2, 3)], vec![3, 2]),
+            block(2, vec![touch(20, RegId::ESI), branch(22, 3), to_next], vec![3, 4]),
+            block(4, vec![touch(40, RegId::ESI), to_ret], vec![3]),
+            block(3, vec![ret(30)], vec![]),
+        ];
+        let wrap = wrapped(&body(blocks), &BTreeSet::from([RegId::ESI]), None, false, false);
+        assert!(wrap.is_some_and(|wrap| wrap.closes_taken.contains_key(&2)), "the placement was refused");
     }
 
     /// Two late paths that each use a register were saved and popped per exit

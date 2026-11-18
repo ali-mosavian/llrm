@@ -311,7 +311,12 @@ impl SelectionDAG {
         if opcode.is_commutative_binop() && self.is_constant_int(n1) && !self.is_constant_int(n2) {
             std::mem::swap(&mut n1, &mut n2);
         }
+        // `N2CV = isConstOrConstSplat(N2, AllowUndefs=false, AllowTruncation=true)`:
+        // a splat of a lane counts as the constant, at the lane's width.
+        let lane = if vt.is_vector() { vt.element() } else { vt };
+        let lane_bits = if lane.is_integer() { lane.size_in_bits() } else { 0 };
         let n2_const = self.constant(n2);
+        let n2_splat = if lane_bits == 0 { None } else { self.const_or_splat(n2).map(|value| value & mask(lane_bits)) };
         let is_i1 = vt == EVT::I1;
         match opcode {
             // `getNode` of `EXTRACT_SUBVECTOR`: "Trivial extraction."
@@ -325,15 +330,15 @@ impl SelectionDAG {
                 }
             }
             ISD::And => {
-                if n2_const == Some(0) {
+                if n2_splat == Some(0) {
                     return Folded::Done(n2);
                 }
-                if n2_const == Some(mask(vt.size_in_bits())) {
+                if n2_splat == Some(mask(lane_bits)) {
                     return Folded::Done(n1);
                 }
             }
             ISD::Or | ISD::Xor | ISD::Add | ISD::PtrAdd | ISD::Sub => {
-                if n2_const == Some(0) {
+                if n2_splat == Some(0) {
                     return Folded::Done(n1);
                 }
                 if matches!(opcode, ISD::Add | ISD::Sub) && is_i1 {
@@ -344,7 +349,7 @@ impl SelectionDAG {
                 if is_i1 {
                     return Folded::Done(self.get_node(ISD::And, vt, &[n1, n2]));
                 }
-                if n2_const == Some(0) {
+                if n2_splat == Some(0) {
                     return Folded::Done(n2);
                 }
             }
@@ -653,6 +658,9 @@ impl SelectionDAG {
                 _ => None,
             };
         }
+        if vt.is_vector() {
+            return self.fold_constant_vector(opcode, vt, ops);
+        }
         if !vt.is_integer() {
             return None;
         }
@@ -721,6 +729,49 @@ impl SelectionDAG {
         }
     }
 
+    /// The lane-by-lane arm of `FoldConstantArithmetic` (L8120-L8216): an
+    /// integer binary operation over two `BUILD_VECTOR`s of constants is a
+    /// `BUILD_VECTOR` of the folded lanes, each in the type of the operands'
+    /// lanes (`LegalSVT`, sign-extended from the element).
+    ///
+    /// DEVIATE: an operand that is not a `BUILD_VECTOR` of numbers (undef,
+    /// `splat_vector`, a bitcast, an undef or opaque lane) is not folded, nor
+    /// is `setcc`, a partial reduction, `step_vector` or a bitcast pair
+    /// (`getConstantRawBits`).
+    fn fold_constant_vector(
+        &mut self,
+        opcode: ISD,
+        vt: EVT,
+        ops: &[SDValue],
+    ) -> Option<SDValue> {
+        let [n1, n2] = *ops else { return None };
+        if !vt.element().is_integer()
+            || self.opcode(n1) != ISD::BuildVector
+            || self.opcode(n2) != ISD::BuildVector
+            || self.value_type(n1) != vt
+            || self.value_type(n2) != vt
+        {
+            return None;
+        }
+        let element_bits = vt.element().size_in_bits();
+        let lane_ty = self.value_type(self.operand(n1, 0));
+        if lane_ty.size_in_bits() < element_bits {
+            return None;
+        }
+        let mut lanes = Vec::with_capacity(vt.lanes() as usize);
+        for lane in 0..vt.lanes() as usize {
+            let (a, b) = (self.operand(n1, lane), self.operand(n2, lane));
+            if self.is_opaque(a) || self.is_opaque(b) || self.value_type(a) != lane_ty || self.value_type(b) != lane_ty
+            {
+                return None;
+            }
+            let (c1, c2) = (self.constant(a)? & mask(element_bits), self.constant(b)? & mask(element_bits));
+            let value = fold_value(opcode, c1, c2, element_bits)?;
+            lanes.push(self.get_constant(extend_signed(value, element_bits, lane_ty.size_in_bits()), lane_ty));
+        }
+        Some(self.get_build_vector(vt, &lanes))
+    }
+
     /// `foldConstantFPMath`: two constants fold to one; an undef operand
     /// makes the result undef (both) or a NaN (one).
     pub(super) fn fold_constant_fp(
@@ -768,6 +819,13 @@ impl SelectionDAG {
     ) -> bool {
         if self.constant(value).is_some() {
             return true;
+        }
+        // `ISD::isBuildVectorOfConstantSDNodes`: every lane a number or undef.
+        if self.opcode(value) == ISD::BuildVector {
+            return (0..self.value_type(value).lanes() as usize).all(|lane| {
+                let op = self.operand(value, lane);
+                self.opcode(op) == ISD::Undef || self.constant(op).is_some()
+            });
         }
         let NodeData::Global { symbol, .. } = self.node(value).data else { return false };
         self.config.global_addresses_constant

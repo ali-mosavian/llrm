@@ -278,6 +278,12 @@ pub struct DagConfig {
     /// 6502-SEXT-BOOL-ADD: a target fact the pin has no hook for. Exit
     /// 2026-12-15.
     pub sext_bool_add_max_bits: u32,
+    /// The caller's incoming argument slots are known to every block's DAG, as
+    /// `MachineFrameInfo`'s fixed objects are to the whole function: a sibling
+    /// call after a branch finds the slots it stores into. Off is the DAG of
+    /// the entry block alone. DEVIATE (target opt-in): the pin's targets read
+    /// `MFI` in `LowerCall`; here the entry's DAG held them.
+    pub fixed_args_in_every_block: bool,
     /// `isOffsetFoldingLegal`: `(add GlobalAddress, c)` folds into the symbol.
     pub offset_folding: bool,
     /// `isConstantIntBuildVectorOrConstantInt` counts a global address whose
@@ -392,6 +398,7 @@ impl Default for DagConfig {
             boolean_contents: BooleanContents::ZeroOrOne,
             vector_boolean_contents: None,
             sext_bool_add_max_bits: 0,
+            fixed_args_in_every_block: false,
             offset_folding: false,
             global_addresses_constant: false,
             dso_local_symbols: false,
@@ -878,6 +885,23 @@ impl SelectionDAG {
             }
             self.delete_dead(op);
         }
+    }
+
+    /// A node the legalizer replaced, which nothing reads now, is unfiled from the CSE table: a later
+    /// `getNode` of the same operation must make a node, not return the replaced one, which is not
+    /// legalized again (an `extract_element` made twice, the second one never lowered).
+    pub fn forget_replaced(
+        &mut self,
+        node: u32,
+    ) {
+        if node == self.root.node || node == self.entry.node || self.is_deleted(node) {
+            return;
+        }
+        let results = self.nodes[node as usize].values.len() as u8;
+        if (0..results).any(|res| self.has_users(SDValue { node, res })) {
+            return;
+        }
+        self.cse_forget(node);
     }
 
     /// `SDNode::DropOperands`: a deleted node leaves the use lists of what it

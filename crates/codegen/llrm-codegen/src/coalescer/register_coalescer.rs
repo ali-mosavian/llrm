@@ -182,6 +182,13 @@ pub fn join_copy(
         return JoinResult::Rejected;
     }
     let block = lis.indexes.get_mbb_from_index(&lis.indexes.get_instruction_index(copy));
+    // DEVIATE SPLIT-PARAMS: see `CoalescerEnv::keeps_split_params`.
+    if env.keeps_split_params()
+        && block != lis.cfg.entry
+        && lis.blocks()[lis.cfg.entry].iter().any(|one| one.delivers.iter().any(|(held, _)| held.value == cp.src_reg()))
+    {
+        return JoinResult::Rejected;
+    }
     // Dead code elimination. This really should be handled by MachineDCE, but
     // sometimes dead copies slip through, and we can't generate invalid live
     // ranges.

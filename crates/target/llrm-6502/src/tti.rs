@@ -134,6 +134,12 @@ impl Tti for Mos6502 {
         "mos6502"
     }
 
+    /// Bytes first at every level (6502-UNROLL-RATE): a run of copies is a
+    /// `memcpy` where the call and its routine are fewer bytes.
+    fn string_runs_at_speed(&self) -> bool {
+        true
+    }
+
     fn cmp_sel_cost(
         &self,
         op: CmpSel,
@@ -209,6 +215,16 @@ impl Tti for Mos6502 {
         true
     }
 
+    /// DEVIATE INL-O1-TRIAL-6502 (owner 6502, exit 2026-11-24, as
+    /// INL-O1-TRIAL-M68K): at -O1 a callee the bound refused is tried in the
+    /// caller and kept where the caller comes out smaller, and a shrink the
+    /// -O1 rule refuses is priced as the finished chain (`trial_inlined`). The
+    /// pin's -O1 inliner takes the copy at its threshold of 225
+    /// (local_initializers: `sum` inlined at cost 5).
+    fn inline_trials_at_o1(&self) -> bool {
+        true
+    }
+
     fn write_only_after_late_unroll(&self) -> bool {
         true
     }
@@ -245,6 +261,17 @@ impl Tti for Mos6502 {
     /// programs, 5 for the worse on both axes (div_constants_ulong +15,986 B).
     fn unroll_trial_threshold(&self) -> Option<u32> {
         Some(1100)
+    }
+
+    /// DEVIATE UNROLL-SPEED-TRIAL (owner 6502, exit 2026-11-24, the z80's
+    /// translated: `driver::speed_unroll_trial`): the module compiled again at
+    /// -O2 and -O3 with only the unrolls that add no bytes, and kept if it is
+    /// fewer bytes. The pin's early unroll takes a loop of an inlinable callee
+    /// unpriced and the inliner then declines the unrolled body
+    /// (memmove_overlap -O3: `fill`, 32 trips, 14 B rolled, 161 B unrolled,
+    /// inline cost 130 against a threshold of 130).
+    fn unroll_speed_trial(&self) -> bool {
+        true
     }
 
     /// DEVIATE UNROLL-TRIAL-NEST: see `Tti::unroll_trial_analyzed_at_speed`.
@@ -345,6 +372,14 @@ impl Tti for Mos6502 {
         multiplier: Option<u128>,
     ) -> bool {
         multiplier.is_none_or(|m| !crate::dagisel::combine::mul_by_constant_stays_in_line(16, m as i128, false))
+    }
+
+    /// DEVIATE LSR-OUTER-SIZE: at -Os the `__mulhi3` call of `i * 54` is a
+    /// dozen bytes of setup and the routine's own bytes per use, against one
+    /// 16-bit add of a counter (rep_count: a call in its third loop nest).
+    /// Owner: llrm-target-6502. Exit: 2026-11-24.
+    fn reduces_outer_multiply_at_size(&self) -> bool {
+        true
     }
 
     /// DEVIATE LU24: a pointer that steps is weighed against `p + n`.

@@ -351,7 +351,7 @@ impl InlineCost {
     }
 }
 
-fn has_flag(
+pub(crate) fn has_flag(
     attrs: &[Attribute],
     name: &str,
 ) -> bool {
@@ -1399,7 +1399,18 @@ impl<'a> Analyzer<'a> {
         }
         let Some(block) = self.callee.parent(inst) else { return false };
         let headers = loop_headers(self.callee);
-        headers.contains(&block) || self.callee.successors(block).into_iter().any(|next| headers.contains(&next))
+        // the loop the compare ends: its own header, or the header it branches
+        // to
+        let header = if headers.contains(&block) {
+            Some(block)
+        } else {
+            self.callee.successors(block).into_iter().find(|next| headers.contains(next))
+        };
+        // Only an innermost loop is copied out whole (`LoopFullUnrollPass`
+        // takes a loop with no inner loop): the constant bound of an
+        // outer loop leaves its copy as big as the callee (idiv_loop_os -O2:
+        // `total(300)` kept beside the call, +128 B).
+        header.is_some_and(|header| is_innermost(self.callee, header, &headers))
     }
 
     /// `isKnownNonNullInCallee` (:1974).
@@ -2304,6 +2315,26 @@ impl<'a> Analyzer<'a> {
         tti.callee_frame_cost(&shape, kind).map_or(0, |cost| cost.value)
     }
 
+    /// What a caller with no frame builds for the callee's static allocas
+    /// where the callee stays: the callee keeps its own frame, so the inline
+    /// adds one (`callee_frame` has the case where the callee goes with its
+    /// frame, which moves).
+    fn frame_built_in_caller(
+        &self,
+        kind: llrm_mir::tti::CostKind,
+    ) -> i64 {
+        let Some(tti) = self.site.tti else { return 0 };
+        let Some(shape) = self.call_shape() else { return 0 };
+        if self.site.callee_dies
+            || shape.caller_frame_bytes != 0
+            || shape.callee_frame_bytes == 0
+            || !tti.inline_callee_that_stays_adds_a_caller_frame()
+        {
+            return 0;
+        }
+        tti.callee_frame_cost(&shape, kind).map_or(0, |cost| cost.value)
+    }
+
     /// DEVIATE REC-9 (gcc's peeling, ipa-inline.cc:1033; the pin refuses a
     /// recursive callee): the callee calls itself from one place
     /// (a linear recursion) and this is another function's call of it, on a
@@ -2339,7 +2370,11 @@ impl<'a> Analyzer<'a> {
             && k >= 2
             && (self.site.caller_size == CallerSize::Speed
                 || self.site.tti.is_none_or(|tti| tti.inline_dying_credit_at_os()));
-        if credit { (k - 1) * size > k * call + frame } else { size > call }
+        if credit {
+            (k - 1) * size > k * call + frame
+        } else {
+            size + self.frame_built_in_caller(llrm_mir::tti::CostKind::CodeSize) > call
+        }
     }
 
     /// Bytes of the caller's stores into a local that the callee reads only
@@ -2485,7 +2520,11 @@ impl<'a> Analyzer<'a> {
     fn growth_per_site(&self) -> i64 {
         let (size, call, k) = (self.size_units - self.folded_caller_stores(), self.call_size(), self.site.callee_calls);
         let frame = self.callee_frame(llrm_mir::tti::CostKind::CodeSize);
-        if self.site.callee_dies && k >= 2 { ((k - 1) * size - k * call - frame) / k } else { size - call }
+        if self.site.callee_dies && k >= 2 {
+            ((k - 1) * size - k * call - frame) / k
+        } else {
+            size + self.frame_built_in_caller(llrm_mir::tti::CostKind::CodeSize) - call
+        }
     }
 
     /// Whether a speed caller's inline costs more in bytes than it saves in
@@ -2894,6 +2933,42 @@ fn lowered_to_call(
 
 fn only_reads_memory(info: &CallInfo) -> bool {
     !llrm_mir::memory::stated(&info.attrs).writes
+}
+
+/// Whether the natural loop of `header` holds no other loop
+/// (`Loop::isInnermost`): the blocks that reach a latch (a block reached from
+/// `header` that branches back to it) without passing `header`, none of them
+/// another header.
+fn is_innermost(
+    function: &Function,
+    header: BlockId,
+    headers: &IdSet<BlockId>,
+) -> bool {
+    let blocks: Vec<BlockId> = function.layout().to_vec();
+    let mut predecessors: HashMap<u32, Vec<BlockId>> = HashMap::default();
+    for &block in &blocks {
+        for next in function.successors(block) {
+            predecessors.entry(next.0).or_default().push(block);
+        }
+    }
+    let mut reached: std::collections::HashSet<u32> = std::collections::HashSet::new();
+    let mut stack = vec![header];
+    while let Some(block) = stack.pop() {
+        if reached.insert(block.0) {
+            stack.extend(function.successors(block));
+        }
+    }
+    let mut body: std::collections::HashSet<u32> = std::collections::HashSet::from([header.0]);
+    let mut work: Vec<BlockId> =
+        predecessors.get(&header.0).into_iter().flatten().copied().filter(|latch| reached.contains(&latch.0)).collect();
+    while let Some(block) = work.pop() {
+        if body.insert(block.0) {
+            work.extend(
+                predecessors.get(&block.0).into_iter().flatten().copied().filter(|one| reached.contains(&one.0)),
+            );
+        }
+    }
+    body.iter().all(|&block| block == header.0 || !headers.contains(&BlockId(block)))
 }
 
 /// The headers of the callee's loops: targets of a retreating edge (D7).
