@@ -60,6 +60,12 @@ pub fn share_percent() -> u64 {
 ///
 /// The pin's analogue is the call's operand list: only the registers it lists
 /// are read (`MachineInstr::implicit_operands`, `LivePhysRegs`).
+/// Whether `name` is one of the runtime's own routines (`mos_rt.s`), whose text, not the
+/// call that passes it arguments, says what it reads.
+pub fn is_runtime_routine(name: &str) -> bool {
+    runtime().routines.contains_key(name)
+}
+
 pub fn leaves_cells_alone(name: &str) -> bool {
     cells_named(name).is_some_and(|cells| cells.is_empty())
 }
