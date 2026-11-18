@@ -520,6 +520,18 @@ fn backend_pass(flag: &str) -> Option<&'static str> {
 }
 
 const REFUSED: &[&str] = &["-fsanitize", "-fprofile", "-fcs-profile", "-flto", "-fmemory-profile"];
+/// The first definition, declaration or call whose parameters carry `inreg`:
+/// what `-mregparm=N` and `__attribute__((regparm(N)))` make clang write. No
+/// backend gives it registers, so an object built that way took its arguments
+/// from the stack where its callers put them in registers.
+fn register_parameter(ir: &str) -> Option<&str> {
+    ir.lines().find(|line| {
+        let line = line.trim_start();
+        (line.starts_with("define ") || line.starts_with("declare ") || line.contains(" call "))
+            && line.split(|c: char| !(c.is_alphanumeric() || c == '_')).any(|word| word == "inreg")
+    })
+}
+
 const PASSTHROUGH: &[&str] = &["-E", "-M", "-MM", "-emit-llvm", "-fsyntax-only", "-###", "-dumpmachine"];
 
 /// The target named by `-target`/`--target=`, and the job the rest of `argv`
@@ -1092,6 +1104,12 @@ fn build(
                 run(&clang, &args)?;
                 let text = std::fs::read_to_string(&ir).map_err(|error| fail(format!("{}: {error}", ir.display())))?;
                 let text = lifetimes::upgraded(&text);
+                if let Some(line) = register_parameter(&text) {
+                    return Err(fail(format!(
+                        "{path}: regparm (an `inreg` parameter) is not translated yet: {}",
+                        line.trim()
+                    )));
+                }
                 std::fs::write(&ir, &text).map_err(|error| fail(format!("{}: {error}", ir.display())))?;
                 let printed = datalayout_of(&text).unwrap_or_default();
                 let expected = target.clang_datalayout.as_deref().unwrap_or(&target.datalayout);
