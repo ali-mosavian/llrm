@@ -1138,16 +1138,15 @@ impl Tti for AArch64 {
 
     /// `AArch64TTIImpl::getShuffleCost`
     /// ([L6978](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Target/AArch64/AArch64TargetTransformInfo.cpp#L6978)),
-    /// `SK_Broadcast`: a `dup`, one for each register the vector takes. Every
-    /// other kind is not priced (DEVIATE SLP1 of `slptree`).
+    /// a single-source shuffle (`tti_vector::shuffle_cost`).
     fn shuffle_cost(
         &self,
         kind: llrm_mir::tti::ShuffleKind,
         ty: VectorTy,
-        _mask: &[i32],
+        mask: &[i32],
         cost_kind: CostKind,
     ) -> Option<Cost> {
-        crate::tti_vector::shuffle_cost(kind, ty, cost_kind)
+        crate::tti_vector::shuffle_cost(kind, ty, mask, cost_kind)
     }
 
     fn vector_instr_cost(

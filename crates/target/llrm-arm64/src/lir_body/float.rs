@@ -252,6 +252,20 @@ pub(super) fn to(inst: &Inst) -> Option<Semantics> {
             vec![vreg_loc(*rd, 128), vreg_loc(*rn, 128), vreg_loc(*rm, 128), imm(i64::from(*index))],
             None,
         ),
+        Inst::ScalarFmaLane { op, lanes, rd, rn, rm, index } => {
+            let bits = lanes.lane_bits();
+            semantics(
+                Operation::FloatMultiplyAdd,
+                format!(
+                    "{}v1{}_indexed",
+                    op.mnemonic().to_uppercase(),
+                    if *lanes == Arrangement::D2 { "i64" } else { "i32" }
+                ),
+                vec![vreg_loc(*rd, bits)],
+                vec![vreg_loc(*rd, bits), vreg_loc(*rn, bits), vreg_loc(*rm, 128), imm(i64::from(*index))],
+                None,
+            )
+        }
         Inst::VectorPermute { kind, lanes, rd, rn, rm } => semantics(
             Operation::Binary,
             permute_name(*kind, *lanes),
@@ -753,6 +767,22 @@ pub(super) fn back(what: &Semantics) -> Option<Inst> {
         let lane = if lanes == Arrangement::D2 { "2i64" } else { "4i32" };
         if name == format!("{}v{lane}_indexed", op.mnemonic().to_uppercase()) {
             return Some(Inst::VectorFmaLane {
+                op,
+                lanes,
+                rd: vreg_of(dest?),
+                rn: vreg_of(&s[1]),
+                rm: vreg_of(&s[2]),
+                index: value_of(&s[3]) as u8,
+            });
+        }
+    }
+    for (lanes, op) in [Arrangement::S4, Arrangement::D2]
+        .into_iter()
+        .flat_map(|lanes| [VectorFma::Add, VectorFma::Sub].map(|op| (lanes, op)))
+    {
+        let lane = if lanes == Arrangement::D2 { "i64" } else { "i32" };
+        if name == format!("{}v1{lane}_indexed", op.mnemonic().to_uppercase()) {
+            return Some(Inst::ScalarFmaLane {
                 op,
                 lanes,
                 rd: vreg_of(dest?),
