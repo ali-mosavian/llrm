@@ -5991,7 +5991,7 @@ fn the_rotation_trial_compares_code_without_the_padding_between_functions() {
 /// COMPILE-OSROT: the rotation trial assembled the functions that differ twice and the module once
 /// more, so a module of two loop functions and a leaf that does not change cost three assemblies
 /// where two are the floor (x_jpeg_fixed -Os, 6 of 8 functions differ: 2.0x the compile time). Each
-/// of the three functions is selected once per assembly, twice in all.
+/// of the three functions is selected once per assembly.
 #[test]
 fn the_rotation_trial_assembles_the_module_twice_whatever_part_of_it_differs() {
     let one = include_str!("tests_data/prefix_sums.ll");
@@ -6007,11 +6007,12 @@ fn the_rotation_trial_assembles_the_module_twice_whatever_part_of_it_differs() {
     let before = llrm_mir::counts::get(llrm_mir::counts::Event::Selections);
     compiled(&flags(&["-m32", "-Os", "-march=i486"]), &text, "bench_prefix").unwrap();
     let selections = llrm_mir::counts::get(llrm_mir::counts::Event::Selections) - before;
-    // Two assemblies for the rotation trial, whatever it keeps, and a third
-    // where the kept module folded a leaf (LEAF-FOLD-TRIAL assembles that
-    // one again): the rotated nest is kept now that it is priced like the
-    // unrotated one, and it folds a leaf.
-    assert_eq!(selections, 9, "{selections} selections of three functions");
+    // Four assemblies: the base, the rotation trial's (two is its floor,
+    // whatever part of the module it changes), the latch trial's (JT-LATCH-TRIAL,
+    // #10218: JumpThreading copied the latch and the keep-latch module is
+    // 28 B smaller, kept) and the leaf-fold pair's, which assembles the kept
+    // module again.
+    assert_eq!(selections, 12, "{selections} selections of three functions");
 }
 
 /// x86-m32 `--no-midend`: the pin's `llc` takes its IR as given, so the instrument that prices our
@@ -6233,18 +6234,24 @@ fn a_calls_arguments_come_off_the_stack_by_add_at_m32_os() {
 }
 
 /// LoopIdiomRecognize forms the `memcpy` of a copy loop whose length is known at run time and the target calls it (m32 has a
-/// libc; `Tuning::libc_memcpy`), as the pin does. It stayed a loop at -Os where the inline `rep movs` was more bytes:
-/// x_transpose -Os ran 17,984 loop trips for 9,792 and 8,192 `movsd`.
+/// libc; `Tuning::libc_memcpy`), as the pin does. At -Os the object decides (LIR-COPY-TRIAL, #10220): the call stays only where it
+/// is fewer bytes, and here a 19-byte loop is fewer than 3 pushes, a call and `add esp`. At -O2 the `memcpy` is always formed (here
+/// the 64-word bound expands it inline, as `rep movsd`).
 #[test]
-fn a_copy_loop_of_run_time_length_is_a_memcpy_call_at_m32_os() {
+fn a_copy_loop_of_run_time_length_is_a_memcpy_at_m32_o2_and_a_loop_at_os_when_smaller() {
     let text = "target datalayout = \"@m32-datalayout@\"\ntarget triple = \"i486-unknown-linux-gnu\"\n\
                 @d = external global [64 x i32]\n@s = external global [64 x i32]\n                define void @f(i32 %n) {\nentry:\n  %e = icmp eq i32 %n, 0\n  br i1 %e, label %done, label %body\n\
                 body:\n  %i = phi i32 [ 0, %entry ], [ %j, %body ]\n  %a = getelementptr i32, ptr @s, i32 %i\n  %v = load i32, ptr %a\n  \
                 %b = getelementptr i32, ptr @d, i32 %i\n  store i32 %v, ptr %b\n  %j = add i32 %i, 1\n  %c = icmp ne i32 %j, %n\n  \
                 br i1 %c, label %body, label %done\ndone:\n  ret void\n}\n";
-    let (built, _) = compiled(&flags(&["-m32", "-mabi=sysv", "-Os"]), text, "f").unwrap();
-    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
-    assert!(listing.contains("memcpy"), "the loop is a call of memcpy:\n{listing}");
+    let listing = |level: &str| {
+        let (built, _) = compiled(&flags(&["-m32", "-mabi=sysv", level]), text, "f").unwrap();
+        llrm_codegen::backend::masm::text(&built).unwrap()
+    };
+    let o2 = listing("-O2");
+    assert!(o2.contains("memcpy") || o2.contains("rep movsd"), "-O2: the loop is a memcpy:\n{o2}");
+    let os = listing("-Os");
+    assert!(!os.contains("memcpy") && !os.contains("rep movs"), "-Os: the 19-byte loop is smaller than the memcpy:\n{os}");
 }
 
 /// REP-MOVS-OS (m32 -Os): a constant copy is `rep movs` in the widest block its size and alignment allow, not `movsb`:
