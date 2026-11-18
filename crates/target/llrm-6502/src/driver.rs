@@ -739,10 +739,9 @@ fn tail(
     // that beat the other compilers', and bytes come first (row
     // 6502-OUTLINE-CLOCKS). At -Os the pass is the pin's, bytes alone.
     let rate = (request.level == Level::O1).then(|| request.level.tuning().clocks_per_byte);
-    // at -O2 and -O3 a place outside every loop is given up by the share of the
-    // module's clocks its calls add against the share of its bytes they
-    // save (`[share.speed] outline`)
-    let share = matches!(request.level, Level::O2 | Level::O3).then(|| crate::routines::speed_share_percent("outline"));
+    // at -O1 to -O3 a place is given up by the share of the module's clocks its
+    // calls add against the share of its bytes they save (`[share.speed] outline`)
+    let share = matches!(request.level, Level::O1 | Level::O2 | Level::O3).then(|| crate::routines::speed_share_percent("outline"));
     let text = if outlined { crate::outline::run_priced(&text, rate, share) } else { text };
     let text = if request.level != Level::O0 { crate::peephole::after_outlining(&text) } else { text };
     let text = match request.platform.static_zero_page {
