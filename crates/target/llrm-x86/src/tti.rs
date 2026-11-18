@@ -1351,6 +1351,11 @@ impl Tti for X86 {
         self.tuning.branch_constant_arm_selects
     }
 
+    fn select_optimize_penalty(&self) -> Option<u64> {
+        // Where a select is a conditional move, it is the cheaper form.
+        self.tuning.select_optimize_penalty.filter(|_| !self.cmov)
+    }
+
     fn indvars_widens_narrow_counter_through_masks(&self) -> bool {
         self.tuning.prefixed_16_bit_counters
     }

@@ -751,6 +751,12 @@ pub struct Tuning {
     /// runs at -O2/-O3 with constant-arm selects included. false: the
     /// pin's, which runs it nowhere.
     pub branch_constant_arm_selects: bool,
+    /// DEVIATE SELECT-OPT-I486 (`Tti::select_optimize_penalty`): the clocks a
+    /// taken branch costs over a fallen-through one. `Some`: where there is
+    /// no conditional move, `SelectOptimize` runs at -O2/-O3, pricing
+    /// a mispredicted branch at it. `None`: the pin's `llc`, which leaves the
+    /// pass off.
+    pub select_optimize_penalty: Option<u64>,
     /// DEVIATE IND-PREFIX (`Tti::narrow_counter_is_taxed`): 16-bit counters
     /// are widened like illegal ones, for the operand-size prefix.
     pub prefixed_16_bit_counters: bool,
@@ -961,6 +967,7 @@ impl Tuning {
         phi_constant_chains: false,
         sink_select_arms: false,
         branch_constant_arm_selects: false,
+        select_optimize_penalty: None,
         prefixed_16_bit_counters: false,
         partial_libcalls_skip_at_size: false,
         inline_variable_memcpy: false,
