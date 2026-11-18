@@ -1,7 +1,7 @@
-//! x86-32 -Os (i486): a constant fill or copy of three or more dwords is
-//! `rep stos` / `rep movs`, as gcc's `CLEAR_RATIO`/`MOVE_RATIO` at size. The
-//! pin keeps 8 stores and 4 pairs: seven `mov [esp+d], eax` (28 bytes of
-//! stores, `pkey_wait`) and three load/store pairs. Needs `LLRM_LLC`.
+//! x86-32 -Os (i486): a constant copy of three or more dwords is `rep movs`,
+//! as gcc's `MOVE_RATIO` at size; the pin keeps 4 pairs (three load/store
+//! pairs for 12 bytes). A fill of up to eight stores stays stores (a 486
+//! `rep stos` is 7 + 4 clk a dword: lru -Os +24% clocks). Needs `LLRM_LLC`.
 
 use std::path::Path;
 use std::process::Command;
@@ -34,10 +34,10 @@ fn body<'a>(
 }
 
 #[test]
-fn a_seven_dword_clear_is_rep_stos() {
+fn a_seven_dword_clear_stays_stores_for_the_clocks() {
     let text = assembly();
     let clear = body(&text, "clear");
-    assert!(clear.contains("rep stosd"), "{clear}");
+    assert!(!clear.contains("rep stos"), "{clear}");
 }
 
 #[test]

@@ -796,8 +796,6 @@ pub struct CopyPrice {
 pub struct SizeFill {
     /// A dword, word and byte store of an immediate.
     pub store: [[u64; 3]; 2],
-    /// A dword, word and byte store of the register the value is in.
-    pub register: [[u64; 3]; 2],
     /// The value in `eax` for zero, all ones and any other byte.
     pub value: [u64; 3],
     /// `lea`/`mov edi`, `mov ecx` and the `rep stos`.

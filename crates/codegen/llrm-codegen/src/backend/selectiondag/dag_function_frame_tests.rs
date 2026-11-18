@@ -1173,15 +1173,14 @@ define void @f() {{
     (fills, stores)
 }
 
-/// At m32 -Os a constant fill is `rep stos` where its stores take more bytes,
-/// whatever their number (the pin keeps up to eight stores; gcc's `CLEAR_RATIO`
-/// at size is two; QB `pkey_wait`: seven zero stores, 28 bytes, against
-/// `rep stosd`). lru -Os once kept seven stores for the clocks (201 against
-/// 124); Os is bytes. At speed the stores stay, and a lone dword stays a store.
+/// lru -Os at m32: constant-store loops became memsets of 6..28 bytes, and
+/// `rep stosd` (201 clk against 124 for seven stores) lost clocks without
+/// beating the pin's eight-store limit. At -Os a fill is taken only past that
+/// limit, where it is fewer bytes; at speed the stores stay, and a lone dword
+/// stays a store.
 #[test]
-fn at_m32_os_a_fill_is_rep_stos_where_it_is_fewer_bytes_and_at_speed_stores() {
-    assert_eq!(memset_shape_m32(28, -1, true).0, 1, "-Os: seven stores of -1 are more bytes than the fill");
-    assert_eq!(memset_shape_m32(28, 0, true).0, 1, "-Os: seven zero stores are more bytes than the fill");
+fn at_m32_os_a_fill_past_the_pin_store_limit_is_rep_stos_and_at_speed_stores() {
+    assert_eq!(memset_shape_m32(28, -1, true).0, 0, "-Os: seven stores are the pin's");
     assert_eq!(memset_shape_m32(40, -1, true).0, 1, "-Os: ten stores are a fill");
     assert_eq!(memset_shape_m32(40, -1, false).0, 0, "-O2: stores");
     assert_eq!(memset_shape_m32(4, -1, true).0, 0, "one dword store is smaller than the fill");

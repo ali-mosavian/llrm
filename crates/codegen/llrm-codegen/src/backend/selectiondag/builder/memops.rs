@@ -850,8 +850,16 @@ impl Builder<'_> {
             if length % 4 != 0 || alignment < 4 {
                 return false;
             }
+            // The pin keeps up to `MaxStoresPerMemsetOptSize` stores; the
+            // fill's clocks (`rep stos` start-up) lose to them.
+            // Only the x87 zero fill below is priced inside the
+            // limit.
             let x87_zero =
                 fill == Some(0) && length >= 8 && length % 8 == 0 && !self.volatile_memory && self.x87_zero_fill();
+            let pieces = length / 4 + u64::from(length % 4 >= 2) + length % 2;
+            if !x87_zero && pieces <= self.target.tuning.max_stores_per_memset_opt_size as u64 {
+                return false;
+            }
             let place = usize::from(!frame);
             let value = match fill {
                 Some(0) => costs.value[0],
@@ -859,13 +867,8 @@ impl Builder<'_> {
                 Some(_) => costs.value[2],
                 None => return false,
             };
-            // The stores of an immediate each, or of the register the value
-            // is set in once.
-            let (dwords, words, bytes) = (length / 4, u64::from(length % 4 >= 2), length % 2);
             let store = costs.store[place];
-            let held = costs.register[place];
-            let mut stores = (dwords * store[0] + words * store[1] + bytes * store[2])
-                .min(value + dwords * held[0] + words * held[1] + bytes * held[2]);
+            let mut stores = length / 4 * store[0] + u64::from(length % 4 >= 2) * store[1] + length % 2 * store[2];
             // DEVIATE X87-ZERO-FILL stores whole doubles of zero as `fldz` (2)
             // and one `fst qword` each: its stores are the pin's to
             // beat, so the fill is taken only where it beats those
