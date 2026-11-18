@@ -2134,6 +2134,13 @@ pub trait Tti {
         false
     }
 
+    /// `Tuning::select_optimize_penalty`: `SelectOptimize` runs (the pin's
+    /// `llc` leaves it off) and a mispredicted branch costs this many
+    /// clocks.
+    fn select_optimize_penalty(&self) -> Option<u64> {
+        None
+    }
+
     /// `Tuning::branch_constant_arm_selects`.
     fn branches_constant_arm_selects(&self) -> bool {
         false
