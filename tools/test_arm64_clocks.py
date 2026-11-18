@@ -83,6 +83,17 @@ class Model(unittest.TestCase):
         self.assertIsNotNone(clocks.mca_cycles(["add w3, w0, #0x1", "adr x2, 0x221bd8 <bmp>"], 1))
         self.assertIsNotNone(clocks.mca_cycles(["mov x1, #-0x1"], 1))
 
+    def test_a_store_that_bumps_its_base_does_not_wait_for_its_data(self):
+        # llvm-mca makes `strh w6, [x8], #2` write x8 only after w6, which a load through x8 made: a copy loop priced 5.06
+        # a trip against 1.10 for the same loop with a separate `add`, scroll -O1 +47% over clang for it alone.
+        bumped = ["ldrh w6, [x8, #0xa0]", "subs x7, x7, #0x1", "strh w6, [x8], #0x2", "b.ne 0x100 <f>"]
+        split = ["ldrh w6, [x8, #0xa0]", "subs x7, x7, #0x1", "strh w6, [x8]", "add x8, x8, #0x2", "b.ne 0x100 <f>"]
+        self.assertAlmostEqual(clocks.mca_cycles(bumped, 100), clocks.mca_cycles(split, 100), delta=0.2)
+        pre = ["ldrh w6, [x8, #0xa0]", "subs x7, x7, #0x1", "strh w6, [x8, #0x2]!", "b.ne 0x100 <f>"]
+        self.assertLess(clocks.mca_cycles(pre, 100), 2.5)
+        # A prologue's `stp x30, x19, [sp, #-16]!` and a downward copy's `strh w6, [x8], #-2` still parse.
+        self.assertIsNotNone(clocks.mca_cycles(["stp x30, x19, [sp, #-0x10]!", "strh w6, [x8], #-0x2"], 1))
+
 
 if __name__ == "__main__":
     unittest.main()
