@@ -534,13 +534,16 @@ fn register_parameter(ir: &str) -> Option<&str> {
 }
 
 /// Whether the backend places the `inreg` arguments of this build: the 32-bit
-/// x86 System V convention does (`inreg_registers`), no other does.
+/// x86 System V convention does (`inreg_registers`), no other does. The last
+/// `-mabi=` of the target's backend flags and the command line is the one the
+/// backend takes.
 fn places_inreg(
     target: &Target,
     build: &Build,
 ) -> bool {
     let arch = target.triple.split('-').next().unwrap_or_default();
-    matches!(arch, "i386" | "i486" | "i586" | "i686") && build.llc.iter().any(|flag| flag == "-mabi=sysv")
+    let abi = target.llc.iter().chain(&build.llc).rev().find(|flag| flag.starts_with("-mabi="));
+    matches!(arch, "i386" | "i486" | "i586" | "i686") && abi.is_some_and(|flag| flag == "-mabi=sysv")
 }
 
 const PASSTHROUGH: &[&str] = &["-E", "-M", "-MM", "-emit-llvm", "-fsyntax-only", "-###", "-dumpmachine"];

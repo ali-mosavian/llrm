@@ -1,7 +1,8 @@
 //! `-mregparm=3` and `regparm(3)` reached the backend as `inreg` parameters,
-//! which no backend gives registers: the function took its arguments from the
-//! stack where a regparm caller put them in EAX, EDX and ECX, and the compile
-//! said nothing.
+//! which the Open Watcom convention (`-mabi=watcom`) gives no registers:
+//! the function took its arguments from the stack where a regparm caller put
+//! them in EAX, EDX and ECX, and the compile said nothing. Only the i386
+//! System V convention places them (`m32_regparm3.rs`).
 
 use std::path::Path;
 use std::process::Command;
@@ -13,7 +14,7 @@ fn compile(name: &str, source: &str, flags: &[&str]) -> std::process::Output {
     std::fs::write(dir.join("c.c"), source).unwrap();
     Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
         .env("LLRM_CC_TARGET", "x86_32-linux")
-        .args(["-m32", "-march=i486", "-O2", "--isel=dag", "-w", "-S", "-o"])
+        .args(["-m32", "-mabi=watcom", "-march=i486", "-O2", "--isel=dag", "-w", "-S", "-o"])
         .arg(dir.join("c.s"))
         .arg(dir.join("c.c"))
         .args(flags)
