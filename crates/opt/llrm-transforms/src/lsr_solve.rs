@@ -343,8 +343,11 @@ impl Collection<'_, '_> {
             && solution_cost.c.insns >= self.baseline_cost.c.insns + 2;
         // DEVIATE LU15: a loop with an address keeps the solution that
         // reduces it, where the target says so.
-        let spared =
-            self.tti.lsr_dropped_solution_spares_addresses() && self.uses.iter().any(|u| u.kind == Kind::Address);
+        // DEVIATE LU32: not where the rewrite makes an outer loop carry more
+        // induction variables.
+        let spared = self.tti.lsr_dropped_solution_spares_addresses()
+            && self.uses.iter().any(|u| u.kind == Kind::Address)
+            && solution_cost.outer_phis == 0;
         // DEVIATE LSR-SPILL-PRICE: a loop whose other values fill the
         // registers keeps its pressure in the cost (no search with it cut), and
         // a rewrite that does not rate better than the loop as written is
