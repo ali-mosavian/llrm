@@ -531,6 +531,9 @@ pub struct Cost {
     /// DEVIATE LSR-SIZE: x86 bytes of the displacements, adds and setup the
     /// formulae need, where the target sizes by `Tti::lsr_size_model`.
     pub size_bytes: u32,
+    /// DEVIATE LSR-TIE: the recurrences rated that step by a register, not a
+    /// constant.
+    pub(crate) variable_steps: u32,
 }
 
 /// DEVIATE LSR-POSTINC-PAIR: the two a pointer's accesses cost more when they
@@ -950,6 +953,11 @@ impl Cost {
                 loop_cost = 0;
             }
             self.c.add_rec_cost += loop_cost;
+            if loop_cost > 0
+                && r.se.match_affine_add_rec(reg).is_some_and(|(_, step, _)| r.se.as_constant(step).is_none())
+            {
+                self.variable_steps += 1;
+            }
             // DEVIATE LU32: a start that is a multi-level addrec of an outer
             // loop no phi carries is expanded there by a phi a level.
             if r.tti.lsr_outer_addrec_regs_per_level() && !r.as_written {
