@@ -28,7 +28,16 @@ pub(crate) struct Touch<'a> {
     at: Option<(Gpr, i64)>,
 }
 
+/// What a vector lane, replicate or structure load reaches: it carries no
+/// memory operand, so against a store it is unknown.
+static UNKNOWN: std::sync::LazyLock<MemOperand> = std::sync::LazyLock::new(MemOperand::default);
+
 pub(crate) fn touch(inst: &Inst) -> Option<Touch<'_>> {
+    // `LD1i32` and its kin are loads: they pass a load, as the pin's `mayAlias`
+    // lets any two loads pass.
+    if matches!(inst, Inst::VectorLoadLane { .. } | Inst::VectorLoadReplicate { .. } | Inst::VectorLoadStructure { .. }) {
+        return Some(Touch { store: false, mmo: &UNKNOWN, bytes: 16, at: None });
+    }
     let (store, mem, addr, mmo) = match inst {
         Inst::Load { mem, addr, mmo } => (false, mem, addr, mmo),
         Inst::Store { mem, addr, mmo } => (true, mem, addr, mmo),
@@ -117,12 +126,14 @@ pub(crate) fn is_memory(inst: &Inst) -> bool {
         || ordered(inst)
 }
 
-/// An atomic access or a barrier: no access moves across it, whatever it
-/// reaches.
+/// An atomic access, a barrier or a vector lane access: no access moves
+/// across it, whatever it reaches.
 fn ordered(inst: &Inst) -> bool {
     matches!(
         inst,
-        Inst::Atomic { .. } | Inst::Dmb { .. } | Inst::VectorStoreLane { .. }
+        Inst::Atomic { .. } | Inst::Dmb { .. } | Inst::VectorStoreLane { .. } | Inst::VectorLoadReplicate { .. } | Inst::VectorLoadLane { .. }
+            | Inst::VectorLoadStructure { .. }
+            | Inst::VectorStoreStructure { .. }
     )
 }
 
@@ -287,6 +298,21 @@ mod tests {
     fn folded(insts: Vec<Inst>) -> Vec<Inst> {
         let places = vec![None; insts.len()];
         pairs_in(insts, places).0
+    }
+
+    /// `ldr s23, [x, #176]` and `ldr s26, [x, #180]` with an `ld1 {v22.s}[1]`
+    /// between stayed two loads (a lane load stopped the scan), +1 instruction
+    /// a trip in sfm16_float_mul's loop; the pin's loads pass each other.
+    #[test]
+    fn a_lane_load_between_two_loads_does_not_keep_them_apart() {
+        let single = |reg: u32, imm: i64| Inst::Load {
+            mem: Memory::Fp { bytes: 4, reg: Vreg(reg) },
+            addr: Addr::Offset { base: Gpr(11), imm },
+            mmo: MemOperand::default(),
+        };
+        let lane = Inst::VectorLoadLane { lanes: Arrangement::S4, rt: Vreg(22), index: 1, base: Gpr(13) };
+        let out = folded(vec![single(23, 176), lane, single(26, 180)]);
+        assert!(out.iter().any(|inst| matches!(inst, Inst::LoadPair { .. })), "{out:?}");
     }
 
     /// Two loads of neighbouring doublewords were two instructions.

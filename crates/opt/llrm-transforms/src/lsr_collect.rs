@@ -41,6 +41,7 @@
 use llrm_analysis::scev::expr::{Kind as ScevKind, Scev, Ty, Type, Use as ScevUse};
 use llrm_analysis::scev::{Cx, Flags, ScalarEvolution};
 use llrm_mir::context::GlobalId;
+use llrm_mir::dense::IdSet;
 use llrm_mir::module::{BlockId, InstId, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{IntPredicate, Opcode};
 use llrm_mir::tti::{AddressingMode, Tti};
@@ -512,6 +513,12 @@ pub struct Collection<'a, 'b> {
     /// Interesting use types, to reuse by truncation.
     pub types: IndexSet<Ty>,
     pub baseline_cost: Cost,
+    /// `AMK`: the indexed addressing this loop favors
+    /// (`getPreferredAddressingMode(L, SE)`).
+    pub amk: AddressingMode,
+    /// DEVIATE LSR-LIVE-IV: the induction variables live in every solution
+    /// (`live_induction_variables`); empty unless the target opts in.
+    pub live_ivs: Vec<Scev>,
     pub changed: bool,
     /// The equality compares whose operands the caller is to swap, so the
     /// operand to replace is the left one.
@@ -561,6 +568,8 @@ impl<'a, 'b> Collection<'a, 'b> {
             factors: self.factors.clone(),
             types: self.types.clone(),
             baseline_cost: self.baseline_cost.clone(),
+            amk: self.amk,
+            live_ivs: self.live_ivs.clone(),
             changed: self.changed,
             swapped_compares: self.swapped_compares.clone(),
             insert_attempts: self.insert_attempts,
@@ -602,6 +611,8 @@ impl<'a, 'b> Collection<'a, 'b> {
             factors: IndexSet::default(),
             types: IndexSet::default(),
             baseline_cost: Cost::new(),
+            amk: tti.preferred_addressing_mode(),
+            live_ivs: Vec::new(),
             changed: false,
             swapped_compares: Vec::new(),
             insert_attempts: 0,
@@ -827,12 +838,8 @@ impl<'a, 'b> Collection<'a, 'b> {
         f: &Formula,
     ) -> bool {
         self.insert_attempts += 1;
-        let lu = &self.uses[lu_idx];
         // A formula that cannot be expanded is not inserted.
-        assert!(
-            is_legal_use_formula(self.tti, lu.min_offset, lu.max_offset, lu.kind, lu.access_ty, f),
-            "Formula is illegal"
-        );
+        assert!(self.legal(lu_idx, f), "Formula is illegal");
         if !self.uses[lu_idx].insert_formula(se, f, self.l) {
             return false;
         }
@@ -884,6 +891,12 @@ impl<'a, 'b> Collection<'a, 'b> {
         let mut regs: HashSet<Scev> = HashSet::default();
         let visited_regs: HashSet<Scev> = HashSet::default();
         let mut visited_uses: HashSet<usize> = HashSet::default();
+        if self.tti.lsr_unmanaged_iv_reads_stay_live() {
+            self.live_ivs = live_induction_variables(se, cx, self.l, users);
+            let mut seeded = Cost::new();
+            self.seed_live_ivs(&mut seeded, &mut regs);
+            self.baseline_cost = seeded;
+        }
 
         for u in &users.uses {
             let instruction = cx.function.instruction(u.user);
@@ -990,6 +1003,7 @@ impl<'a, 'b> Collection<'a, 'b> {
                     size: self.size,
                     bytes_counted: self.bytes_counted,
                     across_call: self.across_call,
+                    amk: self.amk,
                 };
                 self.baseline_cost.rate_formula(&mut rating, &f, &mut regs, &visited_regs, &self.uses[lu_idx], None);
                 visited_uses.insert(lu_idx);
@@ -1012,7 +1026,7 @@ impl<'a, 'b> Collection<'a, 'b> {
     ) {
         // Outside uses are not collected when post-indexed addressing is
         // favored: the instructions in the loop matter more.
-        if self.tti.preferred_addressing_mode() == AddressingMode::PostIndexed {
+        if self.amk == AddressingMode::PostIndexed {
             return;
         }
         let cx = self.cx;
@@ -1137,24 +1151,104 @@ pub fn loop_calls(
     l: BlockId,
 ) -> bool {
     let Some(lp) = cx.loops.get_loop_for(l) else { return false };
-    lp.get_blocks().iter().any(|&block| {
-        cx.function.iter_block(block).any(|inst| {
-            if !matches!(cx.function.instruction(inst).opcode, Opcode::Call(_)) {
-                return false;
+    lp.get_blocks()
+        .iter()
+        .any(
+            |&block| cx.function
+                .iter_block(block)
+                .any(
+                    |inst| {
+                        if !matches!(cx.function.instruction(inst).opcode, Opcode::Call(_)) {
+                            return false;
+                        }
+                        match llrm_mir::memory::callee(cx.context, cx.function, inst) {
+                            Some(callee) if (callee.0 as usize) < cx.globals.len() => {
+                                let value = &cx.globals[callee.0 as usize];
+                                !value.name.as_deref().is_some_and(|name| name.starts_with("llvm."))
+                                    && tti.is_lowered_to_call(
+                                        value.name.as_deref(),
+                                        matches!(
+                                            value.linkage,
+                                            llrm_mir::module::Linkage::Internal | llrm_mir::module::Linkage::Private
+                                        ),
+                                    )
+                            }
+                            _ => true,
+                        }
+                    },
+                ),
+        )
+}
+
+impl Collection<'_, '_> {
+    /// DEVIATE LSR-LIVE-IV: `cost` and `regs` start holding the live
+    /// induction variables, so a formula that reuses one pays nothing and one
+    /// that adds another pays for it.
+    pub fn seed_live_ivs(
+        &self,
+        cost: &mut Cost,
+        regs: &mut HashSet<Scev>,
+    ) {
+        for &iv in &self.live_ivs {
+            if regs.insert(iv) {
+                cost.c.num_regs += 1;
             }
-            match llrm_mir::memory::callee(cx.context, cx.function, inst) {
-                Some(callee) if (callee.0 as usize) < cx.globals.len() => {
-                    let value = &cx.globals[callee.0 as usize];
-                    !value.name.as_deref().is_some_and(|name| name.starts_with("llvm."))
-                        && tti.is_lowered_to_call(
-                            value.name.as_deref(),
-                            matches!(value.linkage, llrm_mir::module::Linkage::Internal | llrm_mir::module::Linkage::Private),
-                        )
-                }
-                _ => true,
+        }
+    }
+}
+
+/// DEVIATE LSR-LIVE-IV: the header phis of `l` that an instruction of the
+/// loop reads and LSR does not rewrite: neither an IV user nor an update of
+/// the recurrence (a phi, or a value that is itself an addrec of `l`).
+pub fn live_induction_variables(
+    se: &mut ScalarEvolution,
+    cx: &Cx,
+    l: BlockId,
+    users: &IvUsers,
+) -> Vec<Scev> {
+    let Some(lp) = cx.loops.get_loop_for(l) else { return Vec::new() };
+    let mut managed: IdSet<InstId> = IdSet::new();
+    for u in &users.uses {
+        managed.insert(u.user);
+    }
+    let phis: Vec<ValueId> = cx
+        .function
+        .iter_block(l)
+        .take_while(|&inst| cx.function.instruction(inst).opcode == Opcode::Phi)
+        .filter_map(|inst| cx.function.instruction(inst).result)
+        .collect();
+    let mut live = Vec::new();
+    for phi in phis {
+        let value = Operand::Value(phi);
+        if !se.is_value_scevable(cx, value) {
+            continue;
+        }
+        let s = se.get_scev(cx, value);
+        if se.addrec_header(s) != Some(l) {
+            continue;
+        }
+        let mut read = false;
+        for user in cx.function.users(phi) {
+            let inst = cx.function.instruction(user.user);
+            let in_loop = cx.function.parent(user.user).is_some_and(|block| lp.contains(block));
+            if !in_loop || inst.opcode == Opcode::Phi || managed.contains(&user.user) {
+                continue;
             }
-        })
-    })
+            let Some(result) = inst.result else {
+                read = true;
+                break;
+            };
+            let user_scev = se.get_scev(cx, Operand::Value(result));
+            if se.addrec_header(user_scev) != Some(l) {
+                read = true;
+                break;
+            }
+        }
+        if read {
+            live.push(s);
+        }
+    }
+    live
 }
 
 pub fn loop_register_units(

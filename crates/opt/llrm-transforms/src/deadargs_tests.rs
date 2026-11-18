@@ -388,3 +388,72 @@ b0:
     ));
     assert!(after.contains("define internal i16 @f"), "{after}");
 }
+
+/// The pin builds `f` again without the dead parameter and moves the uses of
+/// `%a` over one at a time, so its use list comes out reversed. Ours kept the
+/// order, which sent `shrink_wrapped_saves` wasm32 -O1 through another LSR
+/// choice: 257 B against the pin's 246.
+#[test]
+fn the_uses_of_a_kept_parameter_come_out_reversed() {
+    let mut module = parsed(&format!(
+        "{}define internal i16 @f(i16 %a, i16 %unused) {{
+b0:
+  %x = add i16 %a, 1
+  %y = add i16 %a, 2
+  %z = add i16 %a, 3
+  %s = add i16 %x, %y
+  %t = add i16 %s, %z
+  ret i16 %t
+}}
+{CALLER}",
+        llrm_analysis::testing::DOS
+    ));
+    let users = |module: &llrm_mir::module::Module| {
+        let function = module.globals.iter().find_map(|global| global.function()).expect("@f is first");
+        let a = function.parameters()[0];
+        function.users(a).iter().map(|one| one.user).collect::<Vec<_>>()
+    };
+    let before = users(&module);
+    removed(&mut module);
+    let mut after = users(&module);
+    after.reverse();
+    assert_eq!(before.len(), 3);
+    assert_eq!(after, before);
+}
+
+/// A dead return value rebuilds the function in the pin as a dead parameter
+/// does: the uses of `%a` come out reversed. Ours kept the order.
+#[test]
+fn the_uses_of_a_parameter_come_out_reversed_when_only_the_return_is_dead() {
+    let mut module = parsed(&format!(
+        "{}@sink = global i16 0
+define internal i16 @f(i16 %a) {{
+b0:
+  %x = add i16 %a, 1
+  %y = add i16 %a, 2
+  %z = add i16 %a, 3
+  %s = add i16 %x, %y
+  %t = add i16 %s, %z
+  store i16 %t, ptr @sink
+  ret i16 %t
+}}
+define i16 @top(i16 %x) {{
+b0:
+  %r = call i16 @f(i16 %x)
+  ret i16 0
+}}
+",
+        llrm_analysis::testing::DOS
+    ));
+    let users = |module: &llrm_mir::module::Module| {
+        let function = module.globals.iter().find_map(|global| global.function()).expect("@f is first");
+        let a = function.parameters()[0];
+        function.users(a).iter().map(|one| one.user).collect::<Vec<_>>()
+    };
+    let before = users(&module);
+    removed(&mut module);
+    let mut after = users(&module);
+    after.reverse();
+    assert_eq!(before.len(), 3);
+    assert_eq!(after, before);
+}

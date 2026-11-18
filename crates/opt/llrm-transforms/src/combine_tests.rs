@@ -382,9 +382,8 @@ fn drains_visits_and_inserts_count_the_worklist() {
     assert_eq!(inserts, initial);
 
     let before = counts();
-    let mut module = parsed(
-        "define i16 @f(i16 %x) {\nb0:\n  %a = add i16 %x, 0\n  %b = sub i16 %a, %x\n  ret i16 %b\n}\n",
-    );
+    let mut module =
+        parsed("define i16 @f(i16 %x) {\nb0:\n  %a = add i16 %x, 0\n  %b = sub i16 %a, %x\n  ret i16 %b\n}\n");
     assert!(combined(&mut module));
     let [_, visits, initial, inserts] = delta(before);
     assert!(visits > initial - 1 && inserts >= initial, "{visits} {initial} {inserts}");
@@ -395,7 +394,7 @@ fn drains_visits_and_inserts_count_the_worklist() {
 /// widened add. The vector operations are left as they are.
 #[test]
 fn a_vector_operation_is_not_visited_by_the_scalar_folds() {
-    for op in ["add", "sub", "mul", "shl", "lshr", "ashr", "and", "or", "xor"] {
+    for op in ["shl", "lshr", "ashr", "and", "or", "xor"] {
         let text = format!(
             "define <8 x i16> @f(<8 x i16> %x, <8 x i16> %y) {{\nb0:\n  %a = {op} <8 x i16> %x, %y\n  ret <8 x i16> %a\n}}\n"
         );
@@ -413,5 +412,214 @@ fn a_vector_cast_is_not_visited_by_the_scalar_folds() {
             "define <8 x {to}> @f(<8 x {from}> %x) {{\nb0:\n  %a = {op} <8 x {from}> %x to <8 x {to}>\n  ret <8 x {to}> %a\n}}\n"
         );
         check(&text, &text);
+    }
+}
+
+/// x_ld_horner -O2 m32: a `fadd` of two loop results was sunk to the block that
+/// returns, two floats alive across every later loop where one sum was
+/// (a spill and a reload of the multiplier each trip, +50 clk against gcc).
+/// A float stays where it is on a target with an x87 stack; the pin sinks it.
+const FLOAT_SUM: &str = "define double @f(double %a, double %b, i1 %c) {
+b0:
+  %s = fadd double %a, %b
+  br i1 %c, label %b1, label %b2
+
+b1:
+  br label %b3
+
+b2:
+  br label %b3
+
+b3:
+  ret double %s
+}
+";
+
+fn float_sum_combined(keep: bool) -> String {
+    let mut module = parsed(FLOAT_SUM);
+    let globals = module.globals.clone();
+    let metadata = module.metadata.clone();
+    let mut declared = llrm_mir::passes::Declared::of(&module);
+    let (context, function) = module.function_mut("f").expect("@f");
+    super::combine_on_target(
+        context,
+        &globals,
+        &Default::default(),
+        &metadata,
+        &DataLayout::default(),
+        function,
+        &mut declared,
+        super::TargetHooks { keeps_float_off_returning_sink: keep, ..Default::default() },
+    );
+    printed(&module)
+}
+
+#[test]
+fn test_a_float_is_not_sunk_to_a_returning_block_on_an_x87_stack() {
+    let text = float_sum_combined(true);
+    assert!(text.find("fadd").unwrap() < text.find("br i1 %c").unwrap(), "{text}");
+}
+
+/// Control: the pin's sink, and an integer on the x87 target, are unchanged.
+#[test]
+fn test_without_an_x87_stack_the_float_is_sunk_as_the_pin_does() {
+    let text = float_sum_combined(false);
+    assert!(text.find("fadd").unwrap() > text.find("br i1 %c").unwrap(), "{text}");
+}
+
+/// A widened reduction whose vector loop ran once adds its first part to a zero
+/// start: `add <4 x i32> zeroinitializer, %x` stayed (the vector operations
+/// were not visited at all), an extra `saddw` and register copy per part in
+/// tile's `-O2` rows (1,431 instructions against the pin's 980). `x + 0` and
+/// `x * 1` are `x` for vectors too.
+#[test]
+fn a_vector_identity_folds_as_the_scalar_one_does() {
+    check(
+        "define <4 x i32> @f(<4 x i32> %x) {\nb0:\n  %a = add <4 x i32> zeroinitializer, %x\n  %b = mul <4 x i32> %a, <i32 1, i32 1, i32 1, i32 1>\n  ret <4 x i32> %b\n}\n",
+        "define <4 x i32> @f(<4 x i32> %x) {\nb0:\n  ret <4 x i32> %x\n}\n",
+    );
+    // The reduction's first part, as tile's widened sum has it.
+    check(
+        "define <8 x i64> @f(<8 x i64> %x) {\nb0:\n  %a = add nsw <8 x i64> zeroinitializer, %x\n  ret <8 x i64> %a\n}\n",
+        "define <8 x i64> @f(<8 x i64> %x) {\nb0:\n  ret <8 x i64> %x\n}\n",
+    );
+}
+
+#[test]
+fn a_vector_multiply_by_one_and_an_and_with_all_ones_fold() {
+    check(
+        "define <4 x i32> @f(<4 x i32> %x) {\nb0:\n  %a = mul <4 x i32> %x, <i32 1, i32 1, i32 1, i32 1>\n  %b = and <4 x i32> %a, <i32 -1, i32 -1, i32 -1, i32 -1>\n  ret <4 x i32> %b\n}\n",
+        "define <4 x i32> @f(<4 x i32> %x) {\nb0:\n  ret <4 x i32> %x\n}\n",
+    );
+}
+
+/// `urem (and x, 255), 251` on vectors was folded to its dividend: the value
+/// analyses read a vector's width as 0, so its range came out as one below 251
+/// (a debug build: "attempt to subtract with overflow"). `huge` -O2 summed
+/// 319,345,180, not 5,020,780. A vector is what every lane holds, a splat
+/// constant's number, else nothing.
+#[test]
+fn a_vector_remainder_is_not_folded_by_a_range_it_does_not_have() {
+    let text = "define <4 x i32> @f(<4 x i32> %x) {\nb0:\n  %a = and <4 x i32> %x, <i32 255, i32 255, i32 255, i32 255>\n  %r = urem <4 x i32> %a, <i32 251, i32 251, i32 251, i32 251>\n  ret <4 x i32> %r\n}\n";
+    check(text, text);
+}
+
+/// A vector `urem` by a splat and an `and` with zero are not identities: the
+/// first attempt read the splat as a scalar and dropped the `urem` (huge O2
+/// returned a wrong sum).
+#[test]
+fn a_vector_operation_that_is_no_identity_stays() {
+    let urem = "define <4 x i32> @f(<4 x i32> %x) {\nb0:\n  %a = urem <4 x i32> %x, <i32 251, i32 251, i32 251, i32 251>\n  ret <4 x i32> %a\n}\n";
+    check(urem, urem);
+    let and = "define <4 x i32> @f(<4 x i32> %x) {\nb0:\n  %a = and <4 x i32> %x, <i32 1, i32 1, i32 1, i32 1>\n  ret <4 x i32> %a\n}\n";
+    check(and, and);
+}
+
+/// recsum's inner loop on arm64 added two constants to a vector one after the
+/// other (`(x + 3) + 4`): the visitors read integer widths and skipped
+/// vectors, so the pair stayed (two `add`s a trip, 8,776 instructions against
+/// clang's 7,780). The sum of the constants is one lane-wise constant.
+#[test]
+fn a_vector_add_of_two_constants_is_one_add() {
+    check(
+        "define <4 x i32> @f(<4 x i32> %x) {\nb0:\n  %a = add <4 x i32> %x, <i32 3, i32 3, i32 3, i32 3>\n  %b = add <4 x i32> %a, <i32 4, i32 4, i32 4, i32 4>\n  ret <4 x i32> %b\n}\n",
+        "define <4 x i32> @f(<4 x i32> %x) {\nb0:\n  %b = add <4 x i32> %x, <i32 7, i32 7, i32 7, i32 7>\n  ret <4 x i32> %b\n}\n",
+    );
+}
+
+#[test]
+fn a_vector_add_of_a_value_to_itself_is_a_shift() {
+    check(
+        "define <4 x i32> @f(<4 x i32> %x) {\nb0:\n  %a = add <4 x i32> %x, %x\n  ret <4 x i32> %a\n}\n",
+        "define <4 x i32> @f(<4 x i32> %x) {\nb0:\n  %0 = shl <4 x i32> %x, <i32 1, i32 1, i32 1, i32 1>\n  ret <4 x i32> %0\n}\n",
+    );
+}
+
+/// The scalar text of `template` and its vector twin: `{T}` is the type,
+/// `{C:n}` the constant `n` (a splat in the vector).
+fn twins(template: &str) -> (String, String) {
+    let (mut scalar, mut vector) = (String::new(), String::new());
+    let mut rest = template;
+    while let Some(at) = rest.find('$') {
+        let (before, after) = rest.split_at(at);
+        scalar.push_str(before);
+        vector.push_str(before);
+        let end = after[1..].find('$').expect("a closing $") + 1;
+        let key = &after[1..end];
+        if key == "T" {
+            scalar.push_str("i32");
+            vector.push_str("<4 x i32>");
+        } else {
+            let number = key.strip_prefix("C:").expect("$T$ or $C:n$");
+            scalar.push_str(number);
+            vector.push_str(&format!("<i32 {number}, i32 {number}, i32 {number}, i32 {number}>"));
+        }
+        rest = &after[end + 1..];
+    }
+    scalar.push_str(rest);
+    vector.push_str(rest);
+    (scalar, vector)
+}
+
+/// The vector twin of what a scalar program combines to, as the scalar one.
+fn as_scalar(text: &str) -> String {
+    let mut text = text.replace("<4 x i32>", "i32").replace("zeroinitializer", "0");
+    for number in -9..=99 {
+        let splat = format!("<i32 {number}, i32 {number}, i32 {number}, i32 {number}>");
+        text = text.replace(&splat, &number.to_string());
+    }
+    text
+}
+
+/// A vector operation is what the scalar one is, lane by lane: the visitors
+/// the pin's InstCombine runs on a splat give the result they give on the
+/// scalar. Each template is a scalar shape the add visitors know.
+#[test]
+fn a_vector_add_folds_as_the_scalar_add_does() {
+    let templates = [
+        "define $T$ @f($T$ %x) {\nb0:\n  %a = add $T$ %x, $C:3$\n  %b = add $T$ %a, $C:4$\n  ret $T$ %b\n}\n",
+        "define $T$ @f($T$ %x) {\nb0:\n  %a = add $T$ %x, %x\n  ret $T$ %a\n}\n",
+        "define $T$ @f($T$ %x, $T$ %y) {\nb0:\n  %n = sub $T$ $C:0$, %y\n  %a = add $T$ %x, %n\n  ret $T$ %a\n}\n",
+        "define $T$ @f($T$ %x, $T$ %y) {\nb0:\n  %s = shl $T$ %y, $C:2$\n  %a = add $T$ %x, %s\n  ret $T$ %a\n}\n",
+        "define $T$ @f($T$ %x) {\nb0:\n  %n = xor $T$ %x, $C:-1$\n  %a = add $T$ %n, $C:1$\n  ret $T$ %a\n}\n",
+        "define $T$ @f($T$ %x, $T$ %y) {\nb0:\n  %a = and $T$ %x, %y\n  %o = or $T$ %x, %y\n  %s = add $T$ %a, %o\n  ret $T$ %s\n}\n",
+        "define $T$ @f($T$ %x) {\nb0:\n  %a = add nsw $T$ %x, $C:5$\n  %b = add nuw $T$ %a, $C:6$\n  ret $T$ %b\n}\n",
+        "define $T$ @f($T$ %x, $T$ %y) {\nb0:\n  %a = sub $T$ %x, %y\n  %b = add $T$ %a, %y\n  ret $T$ %b\n}\n",
+    ];
+    for template in templates {
+        let (scalar, vector) = twins(template);
+        let mut one = parsed(&scalar);
+        combined(&mut one);
+        let mut other = parsed(&vector);
+        combined(&mut other);
+        assert_eq!(as_scalar(&printed(&other)), printed(&one), "{template}");
+    }
+}
+
+/// As [`a_vector_add_folds_as_the_scalar_add_does`], for `sub` and `mul`:
+/// recsum's loop multiplies `(x + 3)` by a constant three times a trip, which
+/// the pin's InstCombine makes `x * 3 + 9` and these visitors left alone on
+/// vectors.
+#[test]
+fn a_vector_sub_and_mul_fold_as_the_scalar_ones_do() {
+    let templates = [
+        "define $T$ @f($T$ %x) {\nb0:\n  %a = sub $T$ %x, $C:5$\n  ret $T$ %a\n}\n",
+        "define $T$ @f($T$ %x) {\nb0:\n  %a = sub $T$ %x, %x\n  ret $T$ %a\n}\n",
+        "define $T$ @f($T$ %x, $T$ %y) {\nb0:\n  %a = add $T$ %x, %y\n  %b = sub $T$ %a, %y\n  ret $T$ %b\n}\n",
+        "define $T$ @f($T$ %x) {\nb0:\n  %n = sub $T$ $C:0$, %x\n  %b = sub $T$ $C:0$, %n\n  ret $T$ %b\n}\n",
+        "define $T$ @f($T$ %x) {\nb0:\n  %a = mul $T$ %x, $C:8$\n  ret $T$ %a\n}\n",
+        "define $T$ @f($T$ %x) {\nb0:\n  %a = mul $T$ %x, $C:-1$\n  ret $T$ %a\n}\n",
+        "define $T$ @f($T$ %x) {\nb0:\n  %a = mul $T$ %x, $C:3$\n  %b = mul $T$ %a, $C:5$\n  ret $T$ %b\n}\n",
+        "define $T$ @f($T$ %x) {\nb0:\n  %a = add $T$ %x, $C:3$\n  %b = mul $T$ %a, $C:5$\n  ret $T$ %b\n}\n",
+        "define $T$ @f($T$ %x, $T$ %y) {\nb0:\n  %a = mul $T$ %x, $C:3$\n  %b = add $T$ %a, %x\n  ret $T$ %b\n}\n",
+        "define $T$ @f($T$ %x, $T$ %y) {\nb0:\n  %a = sub $T$ $C:0$, %x\n  %b = sub $T$ $C:0$, %y\n  %c = mul $T$ %a, %b\n  ret $T$ %c\n}\n",
+    ];
+    for template in templates {
+        let (scalar, vector) = twins(template);
+        let mut one = parsed(&scalar);
+        combined(&mut one);
+        let mut other = parsed(&vector);
+        combined(&mut other);
+        assert_eq!(as_scalar(&printed(&other)), printed(&one), "{template}");
     }
 }

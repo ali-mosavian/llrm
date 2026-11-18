@@ -5,8 +5,8 @@
 # Prints, per op and class of the expected result (zerosign, denormal, special, normal): pairs and mismatches; then compares and conversions.
 # llrm-cc gaps worked around here, not in the library: the driver is always -O2 (-Os: "greedy refused" on main); static functions are
 # exported, so only __*, sf32_pack and sf64_pack stay exported; global data is not exported, so the wrapper is appended to the driver's .s;
-# mos_rt.s keeps its __sa/__sb cells private, so they are exported here. int32.c is not linked: the compiler calls __mulsi3 and the
-# other 32-bit helpers with operands in mos_rt.s's __sa/__sb, not the C convention.
+# mos_rt.s keeps its __sa cell private, so it is exported here. int32.c is not linked: the compiler calls __mulsi3 and the
+# other 32-bit helpers by the mos convention, as a C function would, but they are in mos_rt.s.
 set -e
 cd "$(dirname "$0")/.."
 # hand asm by default: f64 mul uses config/6502/mul32x32.s (not reentrant: static cells), 41312 -> 11504 clk. SF_EXTRA= SF_ASM= (set, empty) builds the C.
@@ -28,7 +28,7 @@ for f in $LIBS; do
   ca65 -t sim6502 -U $T/r/$f.s -o $T/r/$f.o; OBJS="$OBJS $T/r/$f.o"
 done
 for a in $SF_ASM; do ca65 -t sim6502 -I config/6502 $a -o $T/$(basename $a).o; OBJS="$OBJS $T/$(basename $a).o"; done
-{ i=0; while [ $i -lt 26 ]; do echo "rc$i = $((128 + i))"; i=$((i + 1)); done; cat $MOS_RT; echo ".export __sa, __sb"; } > $T/mos.s
+{ i=0; while [ $i -lt 26 ]; do echo "rc$i = $((128 + i))"; i=$((i + 1)); done; cat $MOS_RT; echo ".export __sa"; } > $T/mos.s
 ca65 -t sim6502 $T/mos.s -o $T/mos_rt.o
 # _main: soft stack (rc0:rc1) to the top of a 1 KB buffer, run main, print outbuf, return main's exit code. It is appended to the
 # driver's .s: llrm-cc exports no global data.

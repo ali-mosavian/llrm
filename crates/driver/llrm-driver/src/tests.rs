@@ -3229,7 +3229,8 @@ fn an_i32_call_argument_is_passed_in_the_dword_register_at_m64() {
 /// (`double_to_uint64.c` at i486 -Os) was two branches before the DAG: the high
 /// word was `mov edx, -2147483648 / xor eax, eax` in the arms and the threshold
 /// was loaded twice. The pin keeps one diamond for the float select and `shl
-/// 31` of the `setbe`.
+/// 31` of the condition's setcc (`setbe` after `fucom; sahf`; the status word
+/// is tested for C0|C3 now, #9921, a `setne`).
 #[test]
 fn an_unsigned_quadword_conversion_without_cmov_has_one_diamond_and_a_shifted_setcc() {
     let text = "target datalayout = \"@m32-datalayout@\"\n\
@@ -3237,7 +3238,16 @@ fn an_unsigned_quadword_conversion_without_cmov_has_one_diamond_and_a_shifted_se
                 define i64 @f(double %d) {\n  %r = fptoui double %d to i64\n  ret i64 %r\n}\n";
     let (built, _) = compiled(&flags(&["-m32", "-march=i486", "-O2", "--isel=dag"]), text, "f").unwrap();
     let listing = llrm_codegen::backend::masm::text(&built).unwrap();
-    assert!(listing.contains("setbe") && listing.contains("shl edx, 31"), "{listing}");
+    let diamonds = listing
+        .lines()
+        .filter(|line| {
+            matches!(
+                line.trim().split(' ').next(),
+                Some(op) if op.starts_with('j') && op != "jmp"
+            )
+        })
+        .count();
+    assert!(diamonds == 1 && listing.contains("set") && listing.contains("shl edx, 31"), "{listing}");
     assert!(!listing.contains("-2147483648"), "{listing}");
 }
 
@@ -4395,7 +4405,9 @@ fn the_call_pad_lies_above_the_locals_at_m64() {
 /// -O3 unroll-and-jam never fired on x86-64: the outer loop's size (28) was
 /// held to `BasicTTIImpl`'s 28-micro-op loop buffer, so the count was 0
 /// (particle: 15850 cycles; gcc's jam of two outer trips, 10262). Jammed, the
-/// copies of `px += vx` share one load of `vx`.
+/// copies of `px += vx` share one load of `vx`. The loop vectorizer is off:
+/// the pin's `default<O2>` and `default<O3>` vectorize this i16 nest (SSE2)
+/// since #9877, which leaves no scalar loop to jam.
 #[test]
 fn a_nest_with_loads_invariant_in_the_outer_loop_is_jammed_at_o3_m64() {
     let text = "target datalayout = \"@m64-datalayout@\"\n\
@@ -4419,7 +4431,8 @@ fn a_nest_with_loads_invariant_in_the_outer_loop_is_jammed_at_o3_m64() {
     // of the 100 outer trips), where an unjammed nest loads `vx` and `vy` once
     // per trip and doubles nothing.
     let shape = |level: &str| {
-        let (built, _) = compiled(&flags(&["-m64", level, "--isel=dag"]), text, "f").unwrap();
+        let (built, _) =
+            compiled(&flags(&["-m64", level, "--isel=dag", "-fno-tree-loop-vectorize"]), text, "f").unwrap();
         let listing = llrm_codegen::backend::masm::text(&built).unwrap();
         let lines = listing.lines().map(str::trim);
         let doubled = lines
@@ -5624,6 +5637,31 @@ fn an_i64_select_of_constants_is_no_branch_at_m32() {
     assert!(listing.contains("setne") && !listing.contains("\n    jne") && !listing.contains("jmp"), "{listing}");
 }
 
+/// `x_ld_matmul` (the m32 vsgcc kernel behind a volatile pointer, clang IR before the passes) at -O3.
+/// The backward threader copied the peeled `n == k` ladder, and the `long double` values the copies share
+/// outran the eight x87 slots: 79 stack accesses in `bench_x_ld_matmul`, 91,538 clocks and 2,155 B against
+/// 0, 84,103 and 540 B with the pass off (gcc 84,571 clk, 1,356 B).
+#[test]
+fn a_peeled_long_double_loop_nest_does_not_spill_the_x87_stack_at_m32_o3() {
+    let text = include_str!("tests_data/ld_matmul.ll");
+    let (built, _) = compiled(&flags(&["-m32", "-O3", "-march=i486"]), text, "bench_x_ld_matmul").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let spills = listing.matches("tbyte ptr [esp").count();
+    assert_eq!(spills, 0, "{listing}");
+}
+
+/// The same loop at -O2: gcc completely peels only where it may grow the code (`may_increase_size`,
+/// -O3), so -O2 keeps the loop. x_ld_matmul -O2 peeled the `long double` inner loop 16 times:
+/// 2,071 B and 101,191 clocks against the rolled 228 B and 92,914 (gcc 286 B, 92,753).
+#[test]
+fn a_loop_bounded_by_the_object_it_indexes_stays_rolled_at_m32_o2() {
+    let text = include_str!("tests_data/matmul_f.ll");
+    let (built, _) = compiled(&flags(&["-m32", "-O2", "-march=i486"]), text, "bench_x_matmul_f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let bench = listing.split("bench_x_matmul_f_ proc").nth(1).and_then(|rest| rest.split("endp").next()).expect(&listing);
+    assert!(bench.matches("fmul").count() < 12, "{listing}");
+}
+
 /// `cvtsi2ss xmm1, eax` in a loop rewrote only the low lane of `xmm1`, so each
 /// iteration waited for the last one's result (the pin: `xorps xmm1, xmm1`
 /// first, BreakFalseDeps). sfm16_float_i2f m64 -O2: 9 converts, no `xorps`.
@@ -5761,13 +5799,14 @@ fn a_swap_of_two_64_bit_arguments_for_a_call_is_one_xchg_at_m64_os() {
 }
 
 /// A 16-trip loop of calls in an internal function that nothing will inline
-/// (`-fno-inline-functions` with called-once off) was unrolled unpriced: the
-/// early unroll leaves an internal function's loops to be priced at each
-/// inlined site, and no site came. huffman_decode -O3 at m64: `decode` copied
-/// 17 calls of `getbit`, 443 B against gcc's 137, 2099 B in all against 1184
-/// and 27% over gcc in clocks plus bytes.
+/// (`-fno-inline-functions` with called-once off) is fully unrolled at m64 -O3,
+/// as the pin's `LoopFullUnroll` does (`opt
+/// -passes='function(loop-unroll<O3>)'` leaves 16 calls of `h`). It was priced
+/// against its bytes (huffman_decode: 17 calls of `getbit`, 443 B against gcc's
+/// 137) until bytes stopped being counted at -O1..-O3 (ruling 2026-11-14,
+/// #9993).
 #[test]
-fn a_loop_of_calls_in_a_function_nothing_inlines_is_priced_not_unrolled_at_m64_o3() {
+fn a_loop_of_calls_in_a_function_nothing_inlines_is_unrolled_at_the_pins_threshold_at_m64_o3() {
     let text = "target datalayout = \"@m64-datalayout@\"\n\
                 target triple = \"x86_64-unknown-linux-gnu\"\n\
                 declare i32 @h()\n\
@@ -5782,7 +5821,7 @@ fn a_loop_of_calls_in_a_function_nothing_inlines_is_priced_not_unrolled_at_m64_o
         llrm_codegen::backend::masm::text(&built).unwrap().matches("call h").count()
     };
     let off = ["-m64", "-O3", "--isel=dag", "-fno-inline-functions", "-fno-inline-functions-called-once"];
-    assert!(calls_of_h(&off) <= 2, "the loop stays rolled: one call of h, not 16");
+    assert_eq!(calls_of_h(&off), 16, "the pin's threshold unrolls the loop: sixteen calls of h");
     let on = ["-m64", "-O3", "--isel=dag"];
     assert!(calls_of_h(&on) >= 1);
 }
@@ -5877,24 +5916,6 @@ fn a_loop_latch_joining_two_arms_is_copied_into_each_at_o2() {
     assert_eq!(copies, 2, "the latch is shared by the arms: {listing}");
 }
 
-/// x86-m32 x_prefix -Os: five counted loops, each rotated for a guard that does not fold (RS1 rotates a
-/// counted loop), 136 B of kernel where gcc's unrotated loops are 110 B. ROTATION-TRIAL compiles the
-/// module again with those loops left and keeps the smaller object: 297 B against 326 B rotated.
-#[test]
-fn counted_loops_that_are_smaller_unrotated_stay_unrotated_at_os() {
-    let text = include_str!("tests_data/prefix_sums.ll");
-    let (built, format) = compiled(&flags(&["-m32", "-Os", "-march=i486"]), text, "bench_prefix").unwrap();
-    let object = llrm_codegen::backend::objbuild::written_in(
-        &built,
-        "prefix_sums.ll",
-        llrm_codegen::backend::objbuild::CodeLayout::OneSegment,
-        format,
-        llrm_target::Target::objects(&llrm_x86_m32::M32),
-    )
-    .unwrap();
-    assert!(object.len() < 310, "{} bytes: {}", object.len(), llrm_codegen::backend::masm::text(&built).unwrap());
-}
-
 /// x86-m32 x_crc32 -Os: the table-driven loop is counted, its copied guard does not fold, and the unrotated
 /// trial was a few bytes smaller, so the loop stayed unrotated and paid a taken `jmp` a trip (+7.5% clocks
 /// against clang). ROTATION-HOT keeps the rotated loop when it runs less for at most 4 B a loop.
@@ -5909,6 +5930,31 @@ fn a_counted_loop_that_runs_less_rotated_stays_rotated_at_m32_os() {
         listing.lines().position(|label| label == format!("{target}:")).is_some_and(|label| label < at)
     });
     assert!(!back, "a loop is unrotated, a jmp back to its guard: {listing}");
+}
+
+/// x86-m32 x_prefix -Os: the outer loop's rotation copies its guard into two
+/// exits, so neither SCEV nor the induction proof counts its 4 trips, and the
+/// rotated body was priced with the heuristic's 32 where the unrotated one was
+/// priced with 4: the trial saw the rotated code run 3.9x more (12,810 against
+/// 3,297) and kept the smaller, slower object (58,870 clk against 50,427). Both
+/// shapes are priced with the same trips. DEVIATE ROTATION-HOT.
+#[test]
+fn a_nest_whose_rotation_hides_its_trip_count_is_priced_like_its_unrotated_shape() {
+    let text = include_str!("tests_data/prefix_sums.ll");
+    let (built, _) = compiled(&flags(&["-m32", "-Os", "-march=i486"]), text, "bench_prefix").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let lines: Vec<&str> = listing.lines().collect();
+    let backward_jumps = lines
+        .iter()
+        .enumerate()
+        .filter(|(at, line)| {
+            let Some(target) = line.trim().strip_prefix("jmp ") else { return false };
+            lines.iter().position(|label| *label == format!("{target}:")).is_some_and(|label| label < *at)
+        })
+        .count();
+    // The outer loop closes with one `jmp`; an unrotated inner loop closes with
+    // one each.
+    assert!(backward_jumps <= 2, "{backward_jumps} loops pay a taken jmp a trip: {listing}");
 }
 
 /// COMBINED-TRIAL: the -Os trials were nested wrappers, each re-running the mid-end and the backend over the whole
@@ -5961,7 +6007,11 @@ fn the_rotation_trial_assembles_the_module_twice_whatever_part_of_it_differs() {
     let before = llrm_mir::counts::get(llrm_mir::counts::Event::Selections);
     compiled(&flags(&["-m32", "-Os", "-march=i486"]), &text, "bench_prefix").unwrap();
     let selections = llrm_mir::counts::get(llrm_mir::counts::Event::Selections) - before;
-    assert_eq!(selections, 6, "{selections} selections of three functions");
+    // Two assemblies for the rotation trial, whatever it keeps, and a third
+    // where the kept module folded a leaf (LEAF-FOLD-TRIAL assembles that
+    // one again): the rotated nest is kept now that it is priced like the
+    // unrotated one, and it folds a leaf.
+    assert_eq!(selections, 9, "{selections} selections of three functions");
 }
 
 /// x86-m32 `--no-midend`: the pin's `llc` takes its IR as given, so the instrument that prices our
@@ -6086,11 +6136,11 @@ fn a_counted_loop_that_is_smaller_unrotated_stays_unrotated_at_os_on_m64() {
     assert!(bytes <= 195, "{bytes} bytes: {}", llrm_codegen::backend::masm::text(&built).unwrap());
 }
 
-/// MUL-HOT (m32 -Os): `x * 45` keeps its `imul` in a block that runs once and is the pin's `lea` chain in a loop (the pin
-/// decomposes at -Os, `hasMinSize` is -Oz's). The tip kept the `imul` everywhere at -Os: x_mul_constants -Os ran
-/// 388,733 clk against clang's 286,797.
+/// m32 -Os: `x * 45` is the pin's `lea` chain in a loop and outside it (the pin decomposes at -Os, `hasMinSize` is
+/// -Oz's). MUL-HOT kept the `imul` where a block ran once; #10077 removed it, with MUL-OS. The tip kept the `imul`
+/// everywhere at -Os: x_mul_constants -Os ran 388,733 clk against clang's 286,797.
 #[test]
-fn a_multiply_in_a_loop_is_a_chain_at_m32_os_and_an_imul_outside_it() {
+fn a_multiply_is_a_chain_at_m32_os_in_a_loop_and_outside_it() {
     let head = "target datalayout = \"@m32-datalayout@\"\ntarget triple = \"i486-unknown-linux-gnu\"\n";
     let once = format!("{head}define i32 @f(i32 %x) {{\n  %m = mul i32 %x, 45\n  ret i32 %m\n}}\n");
     let looped = format!(
@@ -6104,15 +6154,15 @@ fn a_multiply_in_a_loop_is_a_chain_at_m32_os_and_an_imul_outside_it() {
         let (built, _) = compiled(&flags(&["-m32", "-mabi=sysv", "-Os"]), text, "f").unwrap();
         llrm_codegen::backend::masm::text(&built).unwrap()
     };
-    assert!(listing(&once).contains("imul"), "a multiply that runs once keeps its imul:\n{}", listing(&once));
+    assert!(!listing(&once).contains("imul"), "a multiply that runs once is the chain:\n{}", listing(&once));
     assert!(!listing(&looped).contains("imul"), "a multiply in a loop is the chain:\n{}", listing(&looped));
 }
 
-/// MUL-HOT (m32 -Os): a block runs often when its function does, not only when its loop does. x_dct -Os called `dct8`
+/// m32 -Os: a multiply in a function is the chain whether it is called from a loop or once. x_dct -Os called `dct8`
 /// (`x * 7`, `x * 5`, `x * 3` in straight-line code) from two nested loops and kept every `imul`: 314,722 clk against
-/// clang's 211,103. A function called from a loop is hot in all its blocks; one called once keeps its `imul`.
+/// clang's 211,103.
 #[test]
-fn a_multiply_in_a_function_called_from_a_loop_is_a_chain_at_m32_os() {
+fn a_multiply_in_a_function_is_a_chain_at_m32_os_called_from_a_loop_or_once() {
     let head = "target datalayout = \"@m32-datalayout@\"\ntarget triple = \"i486-unknown-linux-gnu\"\n";
     let callee = "define internal i32 @g(i32 %x) noinline {\n  %m = mul i32 %x, 45\n  ret i32 %m\n}\n";
     let once = format!("{head}{callee}define i32 @f(i32 %x) {{\n  %r = call i32 @g(i32 %x)\n  ret i32 %r\n}}\n");
@@ -6129,7 +6179,7 @@ fn a_multiply_in_a_function_called_from_a_loop_is_a_chain_at_m32_os() {
         let start = listing.find("g proc").unwrap_or_else(|| panic!("no g:\n{listing}"));
         listing[start..].split("g endp").next().unwrap().to_owned()
     };
-    assert!(callee_listing(&once).contains("imul"), "a function called once keeps its imul:\n{}", callee_listing(&once));
+    assert!(!callee_listing(&once).contains("imul"), "a function called once is the chain:\n{}", callee_listing(&once));
     assert!(!callee_listing(&looped).contains("imul"), "a function called from a loop is the chain:\n{}", callee_listing(&looped));
 }
 
@@ -6226,11 +6276,13 @@ fn an_aligned_constant_copy_is_rep_movs_in_wide_blocks_at_m32_os() {
     assert!(listing(4, 4002).contains("movsw") && !listing(4, 4002).contains("movsd"), "a size of 2 mod 4 stays whole blocks of 2");
 }
 
-/// x86-m64 shellsort -O2: `bench_main_` took a second 255 B copy of `bench_shellsort`, a public function that stays,
-/// for one constant argument: 499 B of code against gcc's 235. INL-O2 RATE prices the copy's bytes at the m64 rate
-/// as m32's does, and the caller keeps the call (271 B).
+/// x86-m64 shellsort -O2: the 64-trip fill loop is vectorized (v8i16 `pmullw`,
+/// #9906) and `bench_shellsort` is inlined into `bench_main_`, as the pin does:
+/// its `opt -passes='default<O2>'` and `llc -O2` give 2085 B of code, no call
+/// of `bench_shellsort` left. Bytes are not counted at -O1..-O3 (ruling
+/// 2026-11-14); the object stays at the pin's size.
 #[test]
-fn a_speed_inline_pays_its_bytes_at_o2_on_m64() {
+fn a_speed_inline_stays_within_the_pins_object_at_o2_on_m64() {
     let text = include_str!("tests_data/shellsort_o2.ll");
     let (built, format) = compiled(&flags(&["-m64", "-O2"]), text, "bench_shellsort").unwrap();
     let bytes = llrm_codegen::backend::objbuild::unpadded_bytes(
@@ -6241,7 +6293,7 @@ fn a_speed_inline_pays_its_bytes_at_o2_on_m64() {
         llrm_target::Target::objects(&llrm_x86_m64::M64),
     )
     .unwrap();
-    assert!(bytes <= 350, "{bytes} bytes: {}", llrm_codegen::backend::masm::text(&built).unwrap());
+    assert!(bytes <= 2085, "{bytes} bytes: {}", llrm_codegen::backend::masm::text(&built).unwrap());
 }
 
 /// x86-m64 crc -O2: the rate kept `bench_main_`'s call of `bench_crc(0)`, whose copy folds to one constant: 21 executed

@@ -296,7 +296,27 @@ impl Inst {
                 f(Fpr(rn), Role::Use);
                 f(Fpr(rm), Role::Use);
             }
-            Inst::VectorFma { rd, rn, rm, .. } => {
+            Inst::VectorCompare { rd, rn, rm, .. } => {
+                f(Fpr(rd), Role::Def);
+                f(Fpr(rn), Role::Use);
+                f(Fpr(rm), Role::Use);
+            }
+            Inst::VectorCompareZero { rd, rn, .. } => {
+                f(Fpr(rd), Role::Def);
+                f(Fpr(rn), Role::Use);
+            }
+            Inst::VectorBitSelect { rd, rn, rm, .. } => {
+                f(Fpr(rd), Role::UseDef);
+                f(Fpr(rn), Role::Use);
+                f(Fpr(rm), Role::Use);
+            }
+            Inst::VectorBsp { rd, mask, rn, rm, .. } => {
+                f(Fpr(rd), Role::Def);
+                f(Fpr(mask), Role::Use);
+                f(Fpr(rn), Role::Use);
+                f(Fpr(rm), Role::Use);
+            }
+            Inst::VectorFma { rd, rn, rm, .. } | Inst::VectorMulAcc { rd, rn, rm, .. } => {
                 f(Fpr(rd), Role::UseDef);
                 f(Fpr(rn), Role::Use);
                 f(Fpr(rm), Role::Use);
@@ -305,7 +325,7 @@ impl Inst {
                 f(Fpr(rd), Role::UseDef);
                 f(G(rn), Role::Use);
             }
-            Inst::VectorFmaLane { rd, rn, rm, .. } => {
+            Inst::VectorFmaLane { rd, rn, rm, .. } | Inst::ScalarFmaLane { rd, rn, rm, .. } => {
                 f(Fpr(rd), Role::UseDef);
                 f(Fpr(rn), Role::Use);
                 f(Fpr(rm), Role::Use);
@@ -314,7 +334,7 @@ impl Inst {
                 f(Fpr(rd), Role::Def);
                 f(Fpr(rn), Role::Use);
             }
-            Inst::VectorUnzip { rd, rn, rm, .. } => {
+            Inst::VectorPermute { rd, rn, rm, .. } => {
                 f(Fpr(rd), Role::Def);
                 f(Fpr(rn), Role::Use);
                 f(Fpr(rm), Role::Use);
@@ -328,11 +348,33 @@ impl Inst {
                 f(Fpr(rn), Role::Use);
                 f(Fpr(rm), Role::Use);
             }
+            Inst::VectorLoadLane { rt, base, .. } => {
+                f(Fpr(rt), Role::UseDef);
+                f(G(base), Role::Use);
+            }
+            // The registers are physical and consecutive: a rewrite of one
+            // would break the run, so none is applied.
+            Inst::VectorLoadStructure { count, rt, base, .. } => {
+                for at in 0..u32::from(*count) {
+                    f(Fpr(&mut rt.in_run(at)), Role::Def);
+                }
+                f(G(base), Role::Use);
+            }
+            Inst::VectorStoreStructure { count, rt, base, .. } => {
+                for at in 0..u32::from(*count) {
+                    f(Fpr(&mut rt.in_run(at)), Role::Use);
+                }
+                f(G(base), Role::Use);
+            }
+            Inst::VectorLoadReplicate { rt, base, .. } => {
+                f(Fpr(rt), Role::Def);
+                f(G(base), Role::Use);
+            }
             Inst::VectorStoreLane { rt, base, .. } => {
                 f(Fpr(rt), Role::Use);
                 f(G(base), Role::Use);
             }
-            Inst::VectorUmov { rd, rn, .. } => {
+            Inst::VectorUmov { rd, rn, .. } | Inst::VectorSmov { rd, rn, .. } => {
                 f(G(rd), Role::Def);
                 f(Fpr(rn), Role::Use);
             }
@@ -354,10 +396,14 @@ impl Inst {
                 f(Fpr(rn), Role::Use);
                 f(Fpr(rm), Role::Use);
             }
+            Inst::VectorShift { op, rd, rn, .. } => {
+                f(Fpr(rd), if op.accumulates() { Role::UseDef } else { Role::Def });
+                f(Fpr(rn), Role::Use);
+            }
             Inst::VectorLongShift { rd, rn, .. }
-            | Inst::VectorShift { rd, rn, .. }
-            | Inst::VectorNot { rd, rn }
+            | Inst::VectorNot { rd, rn, .. }
             | Inst::VectorFpUnary { rd, rn, .. }
+            | Inst::VectorIntUnary { rd, rn, .. }
             | Inst::VectorReduce { rd, rn, .. } => {
                 f(Fpr(rd), Role::Def);
                 f(Fpr(rn), Role::Use);

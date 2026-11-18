@@ -70,6 +70,9 @@ pub(crate) struct Shape {
     pub index_ty: TypeId,
     /// The induction counts down.
     pub reverse: bool,
+    /// The step of an induction that counts up, 1 unless the loop steps by
+    /// a constant (`o += 2`).
+    pub scale: u128,
     /// The exit test reads the phi, before the step, not the stepped value
     /// (`for (i = n; i >= 0; --i)` leaves when `i == 0`): [`stepped_exit_test`]
     /// moves it.
@@ -89,18 +92,15 @@ pub(crate) fn stepped_exit_test(
     if !shape.tests_phi {
         return shape;
     }
-    let Shape { header, preheader, primary, compare, bound_operand, index_ty, reverse, .. } = shape;
+    let Shape { header, preheader, primary, compare, bound_operand, index_ty, reverse, scale, .. } = shape;
     let bits = bits_of(context, index_ty);
     let stepped = arms(function, primary).into_iter().find(|&(_, from)| from == header).expect("a back edge").0;
     let bound = function.instruction(compare).operands[bound_operand];
-    let step: u128 = if reverse { mask(bits) } else { 1 };
+    let step: u128 = if reverse { mask(bits) } else { scale };
     let moved = match constant_int(context, bound) {
-        Some(value) => {
-            Operand::Constant(context.constant(Constant {
-                ty: index_ty,
-                kind: ConstantKind::Int(value.wrapping_add(step) & mask(bits)),
-            }))
-        }
+        Some(value) => Operand::Constant(
+            context.constant(Constant { ty: index_ty, kind: ConstantKind::Int(value.wrapping_add(step) & mask(bits)) }),
+        ),
         None => {
             let by = Operand::Constant(context.constant(Constant { ty: index_ty, kind: ConstantKind::Int(step) }));
             // Before the memory checks, which move to their own block.
@@ -175,7 +175,7 @@ pub(crate) struct Skeleton {
 }
 
 /// An integer constant's value, masked to its type.
-fn constant_int(
+pub(crate) fn constant_int(
     context: &Context,
     operand: Operand,
 ) -> Option<u128> {
@@ -191,20 +191,26 @@ fn constant_int(
 
 /// The iterations between a constant `start` and the `bound` the stepped
 /// induction meets (the bound less the start, the start less the bound counting
-/// down), not yet masked to the type.
-fn iterations(
+/// down, over the step), not yet masked to the type. The exit test is an
+/// `eq`/`ne`, so a step that does not divide the distance never meets it and
+/// the loop is not finite: the quotient is the count.
+pub(crate) fn iterations(
     reverse: bool,
+    scale: u128,
+    bits: u32,
     start: u128,
     bound: u128,
 ) -> u128 {
-    if reverse { start.wrapping_sub(bound) } else { bound.wrapping_sub(start) }
+    // Masked to the type before the division: a bound met after the counter
+    // wraps (i8 from 250 to 4) is a distance of the type, not of u128.
+    if reverse { start.wrapping_sub(bound) & mask(bits) } else { (bound.wrapping_sub(start) & mask(bits)) / scale }
 }
 
-fn mask(bits: u32) -> u128 {
+pub(crate) fn mask(bits: u32) -> u128 {
     if bits >= 128 { u128::MAX } else { (1u128 << bits) - 1 }
 }
 
-fn bits_of(
+pub(crate) fn bits_of(
     context: &Context,
     ty: TypeId,
 ) -> u32 {
@@ -215,7 +221,7 @@ fn bits_of(
 }
 
 /// An instruction made at `at`, and its value.
-fn emit(
+pub(crate) fn emit(
     function: &mut Function,
     at: Position,
     opcode: Opcode,
@@ -229,7 +235,7 @@ fn emit(
 }
 
 /// A terminator at the end of `block`.
-fn end_with(
+pub(crate) fn end_with(
     function: &mut Function,
     block: BlockId,
     void: TypeId,
@@ -259,7 +265,7 @@ pub(crate) fn add_remainder(
     with_middle: bool,
     memory: Option<MemChecks>,
 ) -> Option<Skeleton> {
-    let Shape { header, preheader, exit, primary, compare, bound_operand, index_ty, reverse, .. } = shape;
+    let Shape { header, preheader, exit, primary, compare, bound_operand, index_ty, reverse, scale, .. } = shape;
     debug_assert!(!shape.tests_phi, "the exit test is on the stepped value");
     let bits = bits_of(context, index_ty);
     let preheader_term = function.terminator(preheader).expect("a terminated preheader");
@@ -269,8 +275,12 @@ pub(crate) fn add_remainder(
     let start = incoming.iter().find(|&&(_, from)| from == preheader).expect("the start arm").0;
     let bound = function.instruction(compare).operands[bound_operand];
     let (start_value, bound_value) = (constant_int(context, start), constant_int(context, bound));
+    // A runtime trip count divides by the step with a shift.
+    if scale > 1 && !(scale.is_power_of_two() || (start_value.is_some() && bound_value.is_some() && memory.is_none())) {
+        return None;
+    }
     if let (Some(start_value), Some(bound_value)) = (start_value, bound_value)
-        && (iterations(reverse, start_value, bound_value) & mask(bits)) < u128::from(vf_ic)
+        && (iterations(reverse, scale, bits, start_value, bound_value)) < u128::from(vf_ic)
     {
         return None;
     }
@@ -320,9 +330,12 @@ pub(crate) fn add_remainder(
         && memory.is_none()
     {
         // Both ends known: the checks fold (the pin's constant folder).
-        let trip = iterations(reverse, start_value, bound_value) & mask(bits);
+        let trip = iterations(reverse, scale, bits, start_value, bound_value);
         let moved = trip - trip % u128::from(vf_ic);
-        let end = constant(context, if reverse { start_value.wrapping_sub(moved) } else { start_value + moved });
+        let end = constant(
+            context,
+            if reverse { start_value.wrapping_sub(moved) } else { start_value.wrapping_add(moved * scale) },
+        );
         function.set_operand(compare, bound_operand, end);
         let from = if with_middle {
             // The reductions are combined between the loop and its remainder.
@@ -345,12 +358,21 @@ pub(crate) fn add_remainder(
         let before = Position::Before(memory.map_or(preheader_term, |checks| checks.first));
         // n = bound - start (start - bound counting down), the iterations of
         // the loop.
-        let trip = if reverse {
+        let distance = if reverse {
             emit(function, before, Opcode::Binary(BinaryOp::Sub), index_ty, vec![start, bound], "n.trip")
         } else if start_value == Some(0) {
             bound
         } else {
             emit(function, before, Opcode::Binary(BinaryOp::Sub), index_ty, vec![bound, start], "n.trip")
+        };
+        // A step that does not divide the distance never meets the `eq` test:
+        // the scalar loop would not end, which a loop the pin vectorizes may
+        // not do, so the floor here is the exact count of one that ends.
+        let shift = constant(context, u128::from(scale.trailing_zeros()));
+        let trip = if scale > 1 {
+            emit(function, before, Opcode::Binary(BinaryOp::LShr), index_ty, vec![distance, shift], "n.steps")
+        } else {
+            distance
         };
         let vector_lanes = constant(context, u128::from(vf_ic));
         let min_iters = emit(
@@ -377,12 +399,17 @@ pub(crate) fn add_remainder(
             emit(function, at_vector, Opcode::Binary(BinaryOp::And), index_ty, vec![trip, lane_mask], "n.mod.vf");
         let vector_trip =
             emit(function, at_vector, Opcode::Binary(BinaryOp::Sub), index_ty, vec![trip, remainder_lanes], "n.vec");
-        let end = if reverse {
-            emit(function, at_vector, Opcode::Binary(BinaryOp::Sub), index_ty, vec![start, vector_trip], "ind.end")
-        } else if start_value == Some(0) {
-            vector_trip
+        let distance_trip = if scale > 1 {
+            emit(function, at_vector, Opcode::Binary(BinaryOp::Shl), index_ty, vec![vector_trip, shift], "n.vec.dist")
         } else {
-            emit(function, at_vector, Opcode::Binary(BinaryOp::Add), index_ty, vec![start, vector_trip], "ind.end")
+            vector_trip
+        };
+        let end = if reverse {
+            emit(function, at_vector, Opcode::Binary(BinaryOp::Sub), index_ty, vec![start, distance_trip], "ind.end")
+        } else if start_value == Some(0) {
+            distance_trip
+        } else {
+            emit(function, at_vector, Opcode::Binary(BinaryOp::Add), index_ty, vec![start, distance_trip], "ind.end")
         };
         end_with(function, vector, void, vec![Operand::Block(header)]);
 
@@ -472,6 +499,241 @@ pub(crate) fn add_remainder(
     Some(Skeleton { vector_ph, middle: middle_block, scalar_ph: scalar_block, remainder: Some((remainder, copies)) })
 }
 
+/// The instruction that defines `operand`.
+fn defining(
+    function: &Function,
+    operand: Operand,
+) -> Option<InstId> {
+    match operand {
+        Operand::Value(value) => match function.value(value).def {
+            llrm_mir::module::ValueDef::Instruction(def) => Some(def),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// An unsigned `icmp ult` against a constant, as a guard's condition:
+/// the compare, its first operand and its bound.
+fn short_trip_guard(
+    function: &Function,
+    block: BlockId,
+) -> Option<(InstId, Operand, Operand, [BlockId; 2])> {
+    let guard = function.terminator(block)?;
+    let [condition, Operand::Block(taken), Operand::Block(other)] = function.instruction(guard).operands[..] else {
+        return None;
+    };
+    let compare = defining(function, condition)?;
+    let compare_inst = function.instruction(compare);
+    (compare_inst.opcode == Opcode::ICmp(IntPredicate::Ult))
+        .then(|| (compare, compare_inst.operands[0], compare_inst.operands[1], [taken, other]))
+}
+
+/// The pin's `iter.check`: where the remainder of a vector loop is itself
+/// vectorized (`epilogue`, made for the loop `header` from `entry`, the
+/// main loop's `scalar.ph`), a trip count under the epilogue's lanes goes
+/// straight to the scalar remainder, before the main loop's own check
+/// (`n < epilogue lanes`, then `n < main lanes`, then the main loop).
+/// The main loop's guard no longer enters `entry`; it enters the epilogue
+/// beside `entry`'s own exit, so the values `entry` made for the epilogue
+/// are merged in `vector.ph` of the epilogue.
+///
+/// Left as it is where the blocks are not the shape `add_remainder` makes.
+pub(crate) fn check_epilogue_first(
+    context: &Context,
+    function: &mut Function,
+    entry: BlockId,
+    header: BlockId,
+    epilogue: &Skeleton,
+) {
+    let (Some(scalar_ph), vector_ph) = (epilogue.scalar_ph, epilogue.vector_ph) else { return };
+    let Some((_, _, lanes, [own_small, own_large])) = short_trip_guard(function, entry) else { return };
+    if (own_small, own_large) != (scalar_ph, vector_ph) {
+        return;
+    }
+    // The main loop's guard: the one predecessor that branches to `entry` on a
+    // short trip.
+    let guards: Vec<BlockId> = function
+        .predecessors(entry)
+        .into_iter()
+        .filter(|&block| short_trip_guard(function, block).is_some_and(|(_, _, _, [small, _])| small == entry))
+        .collect();
+    let [before] = guards[..] else { return };
+    let Some((main_compare, trip, main_lanes, [_, main_large])) = short_trip_guard(function, before) else {
+        return;
+    };
+
+    // What `entry` defines, as it reads on the edge from `before`.
+    let defs: Vec<InstId> =
+        function.iter_block(entry).filter(|&inst| function.instruction(inst).result.is_some()).collect();
+    let mut on_edge: Vec<(llrm_mir::module::ValueId, Operand)> = Vec::new();
+    for &def in &defs {
+        if function.instruction(def).opcode != Opcode::Phi {
+            continue;
+        }
+        let Some(&(value, _)) = arms(function, def).iter().find(|&&(_, from)| from == before) else { return };
+        on_edge.push((function.instruction(def).result.expect("a phi's value"), value));
+    }
+    let local = |function: &Function, operand: Operand| match operand {
+        Operand::Value(value) => matches!(
+            function.value(value).def,
+            llrm_mir::module::ValueDef::Instruction(def) if function.parent(def) == Some(entry)
+        ),
+        _ => false,
+    };
+    let allowed = [vector_ph, header, epilogue.middle.unwrap_or(vector_ph)];
+    // The values read beyond `entry` and the epilogue's own phis, and how each
+    // reads on the edge.
+    let mut merged: Vec<InstId> = Vec::new();
+    for &def in &defs {
+        let value = function.instruction(def).result.expect("a value");
+        let outside: Vec<_> = function
+            .users(value)
+            .into_iter()
+            .filter(|one| {
+                let parent = function.parent(one.user);
+                parent != Some(entry) && parent != Some(scalar_ph)
+            })
+            .map(|one| function.parent(one.user))
+            .collect();
+        if outside.is_empty() {
+            continue;
+        }
+        if outside.iter().any(|parent| !parent.is_some_and(|block| allowed.contains(&block))) {
+            return;
+        }
+        let opcode = &function.instruction(def).opcode;
+        let pure = match opcode {
+            Opcode::Phi => true,
+            Opcode::Binary(_) | Opcode::ICmp(_) => function.instruction(def).operands.iter().all(|&operand| {
+                !local(function, operand)
+                    || matches!(
+                        operand,
+                        Operand::Value(v) if on_edge.iter().any(|&(phi, _)| phi == v)
+                    )
+            }),
+            _ => false,
+        };
+        if !pure {
+            return;
+        }
+        merged.push(def);
+    }
+    // The epilogue's own phis name `entry`'s values only for the edge from
+    // `entry`.
+    for phi in edges::phis(function, scalar_ph) {
+        for (value, from) in arms(function, phi) {
+            let known = !local(function, value)
+                || matches!(
+                    value,
+                    Operand::Value(v) if on_edge.iter().any(|&(p, _)| p == v)
+                );
+            if from == entry && !known {
+                return;
+            }
+        }
+    }
+
+    let void = function.instruction(function.terminator(before).expect("a guard")).ty;
+    let bool_ty = function.instruction(main_compare).ty;
+    let substituted = |operand: Operand, on_edge: &[(llrm_mir::module::ValueId, Operand)]| match operand {
+        Operand::Value(value) => on_edge.iter().find(|&&(phi, _)| phi == value).map_or(operand, |&(_, there)| there),
+        other => other,
+    };
+
+    // `before` tests the epilogue's lanes first; the main loop's test moves to
+    // its own block.
+    let checked = function.create_block(Some("vector.main.loop.iter.check"));
+    function.insert_block(checked, Some(before)).expect("a new block");
+    let old_guard = function.terminator(before).expect("a guard");
+    let iter_check = emit(
+        function,
+        Position::Before(old_guard),
+        Opcode::ICmp(IntPredicate::Ult),
+        bool_ty,
+        vec![trip, lanes],
+        "iter.check",
+    );
+    let first = function.create_instruction(
+        Opcode::Br,
+        void,
+        vec![iter_check, Operand::Block(scalar_ph), Operand::Block(checked)],
+        Flags::default(),
+        None,
+    );
+    function.insert(first, Position::Before(old_guard)).expect("a placed terminator");
+    function.set_operands(old_guard, Vec::new());
+    function.erase(old_guard).expect("the old guard");
+    function.erase(main_compare).expect("the old compare");
+    let main_check = emit(
+        function,
+        Position::End(checked),
+        Opcode::ICmp(IntPredicate::Ult),
+        bool_ty,
+        vec![trip, main_lanes],
+        "min.iters.check",
+    );
+
+    // The values `entry` made, as they are on the edge from `checked`.
+    let mut there: Vec<(llrm_mir::module::ValueId, Operand)> = on_edge.clone();
+    for &def in &merged {
+        if function.instruction(def).opcode == Opcode::Phi {
+            continue;
+        }
+        let inst = function.instruction(def);
+        let (opcode, ty, flags, name) = (inst.opcode.clone(), inst.ty, inst.flags, None::<String>);
+        let operands: Vec<Operand> = inst.operands.iter().map(|&operand| substituted(operand, &on_edge)).collect();
+        let value = function.instruction(def).result.expect("a value");
+        // `x - 0` and `x + 0` are `x`.
+        if matches!(opcode, Opcode::Binary(BinaryOp::Sub | BinaryOp::Add))
+            && constant_int(context, operands[1]) == Some(0)
+        {
+            there.push((value, operands[0]));
+            continue;
+        }
+        let copy = function.create_instruction(opcode, ty, operands, flags, name.as_deref());
+        function.insert(copy, Position::End(checked)).expect("a placed block");
+        there.push((value, Operand::Value(function.instruction(copy).result.expect("a value"))));
+    }
+    end_with(function, checked, void, vec![main_check, Operand::Block(vector_ph), Operand::Block(main_large)]);
+
+    // `entry` is no longer entered from `before`; the epilogue's scalar loop
+    // is, as it is from `entry`.
+    for &def in &defs {
+        if function.instruction(def).opcode == Opcode::Phi {
+            let kept: Vec<_> = arms(function, def).into_iter().filter(|&(_, from)| from != before).collect();
+            function.set_operands(def, from_arms(&kept));
+        }
+    }
+    for phi in edges::phis(function, scalar_ph) {
+        let mut all = arms(function, phi);
+        if let Some(&(value, _)) = all.iter().find(|&&(_, from)| from == entry) {
+            all.push((substituted(value, &on_edge), before));
+            function.set_operands(phi, from_arms(&all));
+        }
+    }
+    // The epilogue's vector loop reads them through phis in `vector.ph`.
+    for &def in &merged {
+        let value = function.instruction(def).result.expect("a value");
+        let ty = function.instruction(def).ty;
+        let first = function.iter_block(vector_ph).next().expect("a terminated block");
+        let name = function.value(value).name.clone().unwrap_or_default();
+        let merge = emit(function, Position::Before(first), Opcode::Phi, ty, Vec::new(), &name);
+        let Operand::Value(merge_value) = merge else { unreachable!("a phi") };
+        let merge_phi = defining(function, merge).expect("a phi");
+        let from_checked =
+            there.iter().find(|&&(v, _)| v == value).map(|&(_, operand)| operand).expect("an edge value");
+        function.set_operands(merge_phi, from_arms(&[(Operand::Value(value), entry), (from_checked, checked)]));
+        let users: Vec<_> = function.users(value).into_iter().map(|one| (one.user, one.index)).collect();
+        for (user, index) in users {
+            let parent = function.parent(user);
+            if user != merge_phi && parent != Some(entry) && parent != Some(scalar_ph) {
+                function.set_operand(user, index as usize, Operand::Value(merge_value));
+            }
+        }
+    }
+}
+
 /// The middle block of a loop with no remainder (the trip count is a multiple
 /// of the lanes): between the loop and the block it leaves to, where the
 /// reductions are combined.
@@ -509,8 +771,9 @@ fn retarget_exit_phis(
     }
 }
 
-/// The metadata node `at`: the module's, or one this pass made.
-fn node_at(
+/// The metadata node `at`: the module's, or one made since (by this pass or an
+/// earlier one in the run).
+pub(crate) fn node_at(
     declared: &Declared,
     metadata: &[MetadataNode],
     at: MetadataId,
@@ -554,6 +817,28 @@ fn loop_options(
         .and_then(|(_, id)| node_at(declared, metadata, *id))
         .map(|id| id.operands.into_iter().skip(1).collect())
         .unwrap_or_default()
+}
+
+/// `VPlanTransforms::simplifyBranchConditionForVFAndUF` (L2142): the vector
+/// loop of `header` runs once, so its latch leaves on the first iteration
+/// (`br i1 true` to the exit; the pin's `BranchOnCond true`). The loop and its
+/// phis fold away in the cleanup that follows.
+pub(crate) fn exit_on_first_iteration(
+    context: &mut Context,
+    function: &mut Function,
+    header: BlockId,
+) {
+    let latch = function.terminator(header).expect("a terminated vector loop");
+    let operands = function.instruction(latch).operands.clone();
+    let [_, Operand::Block(on_true), Operand::Block(on_false)] = operands[..] else { return };
+    if (on_true == header) == (on_false == header) {
+        return;
+    }
+    let bool_ty = context.types.intern(Type::Int(1));
+    let leave = Operand::Constant(
+        context.constant(Constant { ty: bool_ty, kind: ConstantKind::Int(u128::from(on_true != header)) }),
+    );
+    function.set_operand(latch, 0, leave);
 }
 
 /// `llvm.loop.isvectorized` on the loop whose latch ends in `branch`: the

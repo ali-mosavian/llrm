@@ -1602,7 +1602,9 @@ fn lowered(
         }
     }
     enter.extend(procedure.body.vector_saves.iter().map(|(register, cell)| vector(true, *register, cell, false)));
-    let dead = scratch.map(|_| DEAD);
+    // `emitEpilogue` releases the slot where the first callee-saved `pop` stands, not at the `ret`:
+    // `findDeadCallerSavedReg` answers 0 for a `pop`, so with registers to restore the slot is an `add`.
+    let dead = scratch.filter(|_| saved.is_empty() || !procedure.registers.slot_add_with_saved).map(|_| DEAD);
     let mut leave: Vec<Semantics> = Vec::new();
     for op in emit_epilogue(&info, dead) {
         if leave.is_empty() && matches!(op, Op::AddSp(_) | Op::LeaSpFp(_) | Op::MovSpFp) {
@@ -1996,6 +1998,22 @@ pub fn listing(
         trailing_calls_padded(&mut items);
     }
     Ok(items)
+}
+
+/// Whether `branch` ends the block's code, or is followed only by the jump to
+/// the block's other successor: the branch whose taken edge an epilogue takes.
+fn is_taken_branch(
+    insns: &[Arc<crate::model::lir::Insn>],
+    branch: &Arc<crate::model::lir::Insn>,
+) -> bool {
+    let mut printed = insns.iter().rev().filter(|one| prints(one));
+    match printed.next() {
+        Some(last) if Arc::ptr_eq(last, branch) => true,
+        Some(last) if last.what.as_ref().is_some_and(|what| what.op == Operation::Jump) => {
+            printed.next().is_some_and(|before| Arc::ptr_eq(before, branch))
+        }
+        _ => false,
+    }
 }
 
 /// Whether `what` is part of an epilogue: the stack pointer taken back, a
@@ -2639,7 +2657,7 @@ fn built(
                         callee: callee.name.clone(),
                     });
                 }
-                Operation::Branch if taken.is_some_and(|_| last_printed.is_some_and(|last| Arc::ptr_eq(last, one))) => {
+                Operation::Branch if taken.is_some() && is_taken_branch(&block.insns, one) => {
                     // The taken edge into the restore goes through a block of
                     // its own, past the procedure's last, that takes the
                     // pieces back (`tryToSplitRestore`).
@@ -3872,12 +3890,16 @@ pub fn _instruction(
             }
         }
         Operation::Multiply | Operation::Divide => vec![format!("{name} {}", last(&sources))],
+        // `pshufd xmm0, xmm1, 0EEh`: a source of its own and the order as the third operand.
+        Operation::Extend if sources.len() == 2 && matches!(what.sources[1], Loc::Imm(_)) => {
+            vec![format!("{name} {}, {}, {}", dests[0], sources[0], sources[1])]
+        }
         Operation::Extend => {
             // `cvtss2sd xmm0, xmm1`, `cvtsi2sd xmm0, eax`: the SSE converts
             // name their operands; `cwd` and `cdq` name theirs in the opcode.
             if matches!(name, "movsx" | "movzx")
                 || name.starts_with("cvt")
-                || matches!(name, "movq" | "movd" | "movq_x" | "movd_x")
+                || matches!(name, "movq" | "movd" | "movq_x" | "movd_x" | "pmovmskb" | "movmskps")
             {
                 vec![format!("{} {}, {}", name.trim_end_matches("_x"), dests[0], sources[0])]
             } else {
@@ -4210,6 +4232,21 @@ mod tests {
             ..Semantics::new(Operation::Move)
         };
         assert_eq!(_instruction(regs, &copy, &no_names(), 0).unwrap(), ["movaps xmm0, xmm2"]);
+    }
+
+    /// `pshufd` printed `pshufd xmm1, 238`, the source and the destination one register (tied): the result is a fresh
+    /// register, `pshufd xmm1, xmm0, 238`.
+    #[test]
+    fn test_a_shuffle_prints_its_source_and_order() {
+        let regs = crate::backend::registerinfo::test_regs();
+        let xmm = |register| Loc::Reg(ir::Reg { register, width: 16 });
+        let shuffle = Semantics {
+            name: Some("pshufd".into()),
+            dests: vec![xmm(RegId::XMM1)],
+            sources: vec![xmm(RegId::XMM0), Loc::Imm(ir::Imm { value: 238, width: 1, address: None })],
+            ..Semantics::new(Operation::Extend)
+        };
+        assert_eq!(_instruction(regs, &shuffle, &no_names(), 0).unwrap(), ["pshufd xmm1, xmm0, 238"]);
     }
 
     /// `cvtss2sd` and `sqrtsd` printed no source: `cvtss2sd` alone, `sqrtsd
@@ -5039,6 +5076,7 @@ mod tests {
             red_zone: 0,
             slot_scratch: Some((RegId::EAX, RegId::ECX)),
             slot_dead_checked: false,
+            slot_add_with_saved: false,
             free: false,
             kept: false,
             exit_cfi: true,
@@ -5095,6 +5133,7 @@ mod tests {
             red_zone: 0,
             slot_scratch: None,
             slot_dead_checked: false,
+            slot_add_with_saved: false,
             free: false,
             kept: false,
             exit_cfi: true,
@@ -5155,6 +5194,7 @@ mod tests {
                 red_zone: 0,
                 slot_scratch: None,
                 slot_dead_checked: false,
+                slot_add_with_saved: false,
                 free: false,
                 kept: false,
                 exit_cfi: true,
@@ -5234,6 +5274,7 @@ mod tests {
             red_zone: 0,
             slot_scratch: None,
             slot_dead_checked: false,
+            slot_add_with_saved: false,
             free: false,
             kept: false,
             exit_cfi: true,
@@ -5415,6 +5456,7 @@ mod tests {
             red_zone: 0,
             slot_scratch: None,
             slot_dead_checked: false,
+            slot_add_with_saved: false,
             free: false,
             kept: false,
             exit_cfi: true,
@@ -5451,17 +5493,20 @@ mod tests {
 
     /// `place` saved SI on every call, entered or not, though only its loop
     /// names it: the early `return 1` pushed and popped it for nothing. The
-    /// save is where the loop starts.
+    /// save is where the loop starts. The entry block reads no frame cell:
+    /// since #9917 (`useOrDefCSROrFI`) a read of an incoming argument there
+    /// keeps the save in the entry.
     #[test]
     fn test_a_register_only_a_later_block_names_is_saved_there() {
         let branch = Semantics { target: Some(3), ..semantics(Operation::Branch, "je", vec![], vec![]) };
         let si = || Loc::Reg(ir::Reg { register: RegId::SI, width: 2 });
+        let bx = || Loc::Reg(ir::Reg { register: RegId::BX, width: 2 });
         let blocks = vec![
             lir::LirBlock {
                 succ: vec![3, 2].into(),
                 ..lir::LirBlock::new(
                     1,
-                    vec![insn(1, semantics(Operation::Move, "mov", vec![ax()], vec![through_bp()])), insn(2, branch)],
+                    vec![insn(1, semantics(Operation::Move, "mov", vec![ax()], vec![bx()])), insn(2, branch)],
                 )
             },
             lir::LirBlock::new(
@@ -5606,6 +5651,7 @@ mod tests {
                 object_aligned: false,
                 slot_scratch: None,
                 slot_dead_checked: false,
+                slot_add_with_saved: false,
                 free: false,
                 kept: false,
                 exit_cfi: true,

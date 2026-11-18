@@ -98,10 +98,6 @@ const UNROLL_MILLICLOCKS_PER_BYTE: i64 = 500;
 /// Bytes, in thousandths, one inliner cost unit (an instruction) stands for.
 const BYTES_PER_COST_UNIT_MILLI: i64 = 4000;
 
-/// Thousandths of a clock one unit of inline growth costs at -O2/-O3 (250
-/// clocks).
-const INLINE_MILLICLOCKS_PER_UNIT: i64 = 250_000;
-
 /// AArch64's scalar profile.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AArch64 {
@@ -378,6 +374,27 @@ pub(crate) fn vector_pieces(ty: VectorTy) -> Option<(i64, u32)> {
     Some((pieces, lane))
 }
 
+/// `AArch64TTIImpl::getInterleavedMemoryOpCost` (L5833), the native `ldN`/`stN`
+/// branch: a full group of up to four members whose member vector is 64 bits
+/// or a multiple of 128 costs one instruction per member per register
+/// (`getNumInterleavedAccesses`). `None`: the BasicTTI fallback, not
+/// translated (LV-I1, owner llrm-arm64-vec, exit 2026-11-24).
+fn interleaved_memory_op_cost(
+    ty: VectorTy,
+    factor: u32,
+) -> Option<Cost> {
+    const MAX_NATIVE_FACTOR: u32 = 4;
+    let (_, lane) = vector_pieces(ty)?;
+    let bits = u64::from(lane) * u64::from(ty.count);
+    // `isLegalInterleavedAccessType`: two or more lanes of 8 to 64 bits, 64 or
+    // a multiple of 128 bits.
+    let legal = ty.count >= 2 && [8, 16, 32, 64].contains(&lane) && (bits == 64 || bits % 128 == 0);
+    if factor > MAX_NATIVE_FACTOR || !legal {
+        return None;
+    }
+    Some(Cost::of(i64::from(factor) * ((bits as i64 + 127) / 128).max(1)))
+}
+
 /// `AArch64TTIImpl::getMemoryOpCost` for a fixed vector, the throughput
 /// kinds: L5664 (DEVIATE VT2: `TCK_Latency` reads the scheduling model and is
 /// not priced).
@@ -389,6 +406,13 @@ fn vector_memory_op_cost(
     kind: CostKind,
 ) -> Option<Cost> {
     let (first, lane) = vector_pieces(ty)?;
+    // DEVIATE VT3 (owner arm64, exit 2026-11-24): a memory access under 64
+    // bits (`<2 x i8>`, `<4 x i8>`, `<2 x i16>`) is not priced: the selector
+    // has no register class for it, and SLP's `store <2 x i8>` was refused by
+    // llc (jpeg -Os).
+    if u64::from(lane) * u64::from(ty.count) < 64 {
+        return None;
+    }
     match kind {
         CostKind::Latency => return None,
         CostKind::CodeSize | CostKind::SizeAndLatency => return Some(Cost::of(first)),
@@ -441,11 +465,21 @@ pub(crate) fn vector_arithmetic_cost(
     ty: VectorTy,
     kind: CostKind,
 ) -> Option<Cost> {
-    if kind != CostKind::RecipThroughput {
+    if kind == CostKind::Latency {
         return None;
     }
     let (first, lane) = vector_pieces(ty)?;
     let float = ty.lane.is_float();
+    // L5233-5306: only the throughput kind is priced further (`BaseT` for a
+    // floating-point operation, 1); an integer operation is `LT.first` in
+    // every kind.
+    if kind != CostKind::RecipThroughput && float {
+        return matches!(
+            op,
+            ArithOp::FAdd | ArithOp::FSub | ArithOp::FMul | ArithOp::FDiv | ArithOp::FNeg
+        )
+            .then_some(Cost::BASIC);
+    }
     match op {
         ArithOp::Add | ArithOp::Sub | ArithOp::And | ArithOp::Or | ArithOp::Xor if !float => Some(Cost::of(first)),
         ArithOp::Shl | ArithOp::LShr | ArithOp::AShr if !float => Some(Cost::of(first)),
@@ -457,6 +491,65 @@ pub(crate) fn vector_arithmetic_cost(
         ArithOp::FMul | ArithOp::FDiv if float => Some(Cost::of(2 * first)),
         _ => None,
     }
+}
+
+/// `AArch64TTIImpl::getArithmeticInstrCost` of an unsigned divide or
+/// remainder by a constant ([L5149][pin]): a shift or a mask for a power of
+/// two, else the multiply-high sequence (`umull` and `umull2` for a 128-bit
+/// register, the two adds, the shifts, and for a remainder the multiply and
+/// the subtract).
+///
+/// Priced for 64 and 128-bit vectors of 8 to 32-bit lanes only: a 64-bit lane
+/// has no multiply-high here, and the pin's scalarized price is not one a
+/// backend that cannot select the divide can take.
+///
+/// [pin]:
+/// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64TargetTransformInfo.cpp#L5149
+/// [L5035]:
+/// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64TargetTransformInfo.cpp#L5035
+pub(crate) fn vector_divide_by_constant_cost(
+    op: ArithOp,
+    ty: VectorTy,
+    second: OperandInfo,
+    kind: CostKind,
+) -> Option<Cost> {
+    let signed = matches!(op, ArithOp::SDiv | ArithOp::SRem);
+    if !matches!(
+        op,
+        ArithOp::UDiv | ArithOp::URem | ArithOp::SDiv | ArithOp::SRem
+    )
+        || !second.constant
+        || ty.lane.is_float()
+    {
+        return None;
+    }
+    let (_, lane) = vector_pieces(ty)?;
+    if lane == 64 || u64::from(lane) * u64::from(ty.count) < 64 {
+        return None;
+    }
+    let price = |op| vector_arithmetic_cost(op, ty, kind).map(|cost| cost.value);
+    if signed {
+        // The `ISD::SDIV` case ([L5035]): `smull2`, `smull`, `uzp2`, `sshr`
+        // and `usra` (two shifts), the remainder's multiply and subtract not
+        // priced; a power of two is `cmlt`, `usra` and `sshr` (a remainder:
+        // `usra`, `and`, `sub`).
+        let (mul, add, shr) = (price(ArithOp::Mul)?, price(ArithOp::Add)?, price(ArithOp::AShr)?);
+        let usra = 2 * shr;
+        if second.power_of_two || second.negated_power_of_two {
+            let negate = if second.negated_power_of_two && op == ArithOp::SDiv { shr } else { 0 };
+            return Some(Cost::of(negate + usra + if op == ArithOp::SDiv { 2 * shr } else { 2 * add }));
+        }
+        return Some(Cost::of(2 * mul + add + shr + usra));
+    }
+    if second.power_of_two {
+        return price(if op == ArithOp::UDiv { ArithOp::LShr } else { ArithOp::And }).map(Cost::of);
+    }
+    let (mul, add, shr) = (price(ArithOp::Mul)?, price(ArithOp::Add)?, price(ArithOp::AShr)?);
+    // `HasMULH` is false: the multiply-high is `umull` and `umull2`, and its
+    // shift is one more.
+    let wide = u64::from(lane) * u64::from(ty.count) >= 128;
+    let divide = mul * if wide { 2 } else { 1 } + shr + add * 2 + shr;
+    Some(Cost::of(divide + if op == ArithOp::URem { mul + add } else { 0 }))
 }
 
 impl Tti for AArch64 {
@@ -476,12 +569,22 @@ impl Tti for AArch64 {
         }
     }
 
-    /// No default ipa-cp clones (IPACP-O2 is x86's): arm64 queens -O2 252 ->
-    /// 2,260 B, cells at or below both bars 18/20 with clones against 19/19
-    /// without (-O3 26/16 against 27/16), frames worse on both axes.
-    /// `-fipa-cp-clone` still clones.
+    /// gcc's `-fipa-cp-clone`, on at -O3 only: arm64 queens -O3 113,742 ->
+    /// 59,543 instructions (gcc 71,673), jpeg_fixed -1.2%, the other 49
+    /// programs identical. At -O2 it cost queens 252 -> 2,260 B and frames
+    /// on both axes (IPACP-O2 is x86's). Pin: none.
     fn ipa_cp_clones_at_speed(&self) -> bool {
+        true
+    }
+
+    fn ipa_cp_clones_at_o2(&self) -> bool {
         false
+    }
+
+    /// DEVIATE IPACP-DEPTH (exit 2026-11-30): gcc's depth. queens -O3 at 4:
+    /// 106,088; 6: 82,148; 8: 59,543 (2 s to compile).
+    fn ipa_cp_max_clones(&self) -> usize {
+        8
     }
 
     /// DEVIATE LFTR1 (owner w12, review 2026-12-20): any constant
@@ -569,6 +672,13 @@ impl Tti for AArch64 {
         true
     }
 
+    /// DEVIATE LM2 (owner w11, exit 2026-11-24): nbody_fixed -O3 723,134
+    /// instructions against 645,136; the pos[body] loads of the unrolled pair
+    /// loop were redone in every copy.
+    fn licm_range_deref(&self) -> bool {
+        true
+    }
+
     /// A loop is rotated at -Os only if the copied exit test folds in the
     /// preheader (gcc's `copy_headers`): an unfolded guard also leaves a second
     /// exit block (recsum, recfloat -Os: `mov x0, xzr; ret` beside the loop's).
@@ -600,25 +710,13 @@ impl Tti for AArch64 {
         Some(100)
     }
 
-    /// 0.004 B/clock, provisional: a unit of growth is 250 frequency-weighted
-    /// clocks, the median of the -O2/-O3 cells where inlining grew the code
-    /// (w15-arm64-rate-proposal-11-03.md; widened to 30 clean cells by 11-12),
-    /// fitted with one byte a unit. Stated per byte of the 4-byte unit, so the
-    /// decisions are those of the fit.
-    ///
-    /// Refit scan (provisional: net = executed instructions + 0.3 x bytes, an
-    /// instruction proxy, not clocks; 2026-11-08, 34 programs at -O2/-O3,
-    /// release/next 8d22165d6d, rerun from the knob and scripts in draft PR
-    /// 8402): 30 and 10 clk/B change no cell against 62.5; 3 changes
-    /// jpeg_fixed and jpeg_single only (+84 B, -1.6k instructions); the
-    /// scoring rate 0.3 makes both worse in bytes and instructions (+540 B,
-    /// +688k instructions on jpeg_single -O2). Kept at the fitted rate.
+    /// The pin's threshold alone at -O2/-O3: AArch64 is a large platform, and
+    /// the 11-04 rule of bytes against clocks on a hot path is for the small
+    /// ones (6502, z80, m68k, m16). The earlier fit (62.5 milliclocks a byte)
+    /// refused `fillw` and `filll` at `cost=-5` against the pin's threshold
+    /// of 250 (pattern_fill -O3: 1,840 instructions against clang's 602).
     fn speed_inline_milliclocks_per_byte(&self) -> i64 {
-        // Scan knob (w15/rate-scan only, never merged): milliclocks per byte.
-        if let Some(rate) = std::env::var("LLRM_INL_RATE").ok().and_then(|value| value.parse().ok()) {
-            return rate;
-        }
-        INLINE_MILLICLOCKS_PER_UNIT * 1000 / BYTES_PER_COST_UNIT_MILLI
+        0
     }
 
     /// DEVIATE UP1-RUNS (owner w15, exit 2026-11-20): an unknown-count loop
@@ -647,23 +745,28 @@ impl Tti for AArch64 {
         250_000
     }
 
-    /// DEVIATE REC-1 (arm64, owner w15, exit 2026-11-30): a tree-recursive
-    /// function of at most 40 `gcc_insns` is copied into itself to depth 2, as
-    /// gcc's recursive inlining does (the call, return and argument setup of a
-    /// small body are most of its clocks). rectwo -O2: 777,916 instructions to
-    /// 165,196 (gcc 266,373), fib 201,208 to 8,824. Depth 3 or a larger limit
-    /// copies recchop and quicksort (+134k, +126k), a clock-priced depth never
-    /// pays at 250 clk/B for the static trip guess. Open: bintree +97k (its
-    /// body is loads and a multiply, not calls). Pin: none.
+    /// DEVIATE REC-1 (arm64, owner w15, exit 2026-11-30): gcc's recursive
+    /// inlining as x86-m32 takes it, with the bars of m68k's REC-2: bodies of
+    /// 450 `gcc_insns`, edge growth bar 22 at -O2 and 30 at -O3
+    /// (`max-inline-insns-auto`), copies adding 450 and 150, depth 2. No bar
+    /// on the share of clocks spent in calls: recchop and quicksort have loop
+    /// bodies that the copies shorten too. recchop -21%, bintree -9%,
+    /// quicksort -17% (-O3); fib, hanoi, rectwo, recpow, frames and queens
+    /// are identical. Pin: none.
     fn recursive_inlining(&self) -> Option<(u32, i64)> {
-        Some((2, 40))
+        Some((8, 450))
     }
 
-    /// The calls of a recursion are most of its clocks (rectwo `paths` 12 of
-    /// 15, fib 8 of 11; bintree `walk` 16 of 33, quicksort 16 of 51, queens
-    /// 8 of 37, which copies grew +97k, +126k and more).
-    fn recursive_inlining_call_share(&self) -> Option<(i64, i64)> {
-        Some((3, 5))
+    fn recursive_edge_growth(&self) -> Option<(i64, i64)> {
+        Some((22, 30))
+    }
+
+    fn recursive_inlining_growth(&self) -> Option<(i64, i64)> {
+        Some((450, 150))
+    }
+
+    fn recursive_inlining_depth(&self) -> Option<(u32, u32)> {
+        Some((2, 2))
     }
 
     /// DEVIATE REC-9 (arm64, owner w15, exit 2026-11-30 with REC-1): a linear
@@ -773,6 +876,16 @@ impl Tti for AArch64 {
         128
     }
 
+    fn slp_priced(&self) -> bool {
+        true
+    }
+
+    /// The selector has `CMxx`, `FCMxx` and `BSL`/`BIT`/`BIF` for a vector
+    /// `icmp`, `fcmp` and `select`.
+    fn selects_vector_compares(&self) -> bool {
+        true
+    }
+
     /// `AArch64TTIImpl::getNumberOfRegisters`: 32 NEON registers, 31 general.
     fn number_of_registers(
         &self,
@@ -797,6 +910,10 @@ impl Tti for AArch64 {
         self.cpu.max_interleave_factor()
     }
 
+    fn vectorizes_epilogues(&self) -> bool {
+        true
+    }
+
     /// `AArch64TTIImpl::shouldMaximizeVectorBandwidth`: true for fixed-width
     /// NEON (L375).
     fn should_maximize_vector_bandwidth(&self) -> bool {
@@ -813,6 +930,31 @@ impl Tti for AArch64 {
         vector_memory_op_cost(self.cpu, op, ty, align, kind)
     }
 
+    /// The selector has no `ld2`/`st2` or interleave shuffles yet (S3, S4 of
+    /// the interleaved-access work).
+    fn selects_interleaved_accesses(&self) -> bool {
+        false
+    }
+
+    fn interleaved_access_legal(
+        &self,
+        element_bits: u32,
+        count: u32,
+    ) -> bool {
+        let bits = element_bits * count;
+        matches!(element_bits, 8 | 16 | 32 | 64) && count >= 2 && (bits == 64 || bits % 128 == 0)
+    }
+
+    fn interleaved_memory_op_cost(
+        &self,
+        _op: MemoryOp,
+        ty: VectorTy,
+        factor: u32,
+        _kind: CostKind,
+    ) -> Option<Cost> {
+        interleaved_memory_op_cost(ty, factor)
+    }
+
     fn vector_arithmetic_cost(
         &self,
         op: ArithOp,
@@ -820,6 +962,55 @@ impl Tti for AArch64 {
         kind: CostKind,
     ) -> Option<Cost> {
         vector_arithmetic_cost(op, ty, kind)
+    }
+
+    fn vector_arithmetic_cost_op2(
+        &self,
+        op: ArithOp,
+        ty: VectorTy,
+        second: OperandInfo,
+        kind: CostKind,
+    ) -> Option<Cost> {
+        vector_divide_by_constant_cost(op, ty, second, kind).or_else(|| vector_arithmetic_cost(op, ty, kind))
+    }
+
+    fn vectorizes_size_priced(&self) -> bool {
+        true
+    }
+
+    /// DEVIATE LSR-POSTINC (owner arm64, exit 2026-11-30; the pin's AArch64
+    /// states no preference): post-indexed access is free on arm64 and gcc's
+    /// ivopts walks a pointer where the loop makes enough trips (tile -O1).
+    fn preferred_addressing_mode(&self) -> AddressingMode {
+        AddressingMode::PostIndexed
+    }
+
+    fn lsr_post_indexed_amortized(&self) -> bool {
+        true
+    }
+
+    fn lsr_pair_first_walk(&self) -> bool {
+        true
+    }
+
+    fn is_post_inc_load_legal(
+        &self,
+        ty: Ty,
+    ) -> bool {
+        matches!(
+            ty,
+            Ty::Int(8 | 16 | 32 | 64) | Ty::Pointer | Ty::Float | Ty::Double
+        )
+    }
+
+    fn is_post_inc_store_legal(
+        &self,
+        ty: Ty,
+    ) -> bool {
+        matches!(
+            ty,
+            Ty::Int(8 | 16 | 32 | 64) | Ty::Pointer | Ty::Float | Ty::Double
+        )
     }
 
     fn vector_reduction_cost(
@@ -830,6 +1021,17 @@ impl Tti for AArch64 {
         cost_kind: CostKind,
     ) -> Option<Cost> {
         crate::tti_vector::reduction_cost(kind, ty, ordered, cost_kind)
+    }
+
+    fn vector_extended_reduction_cost(
+        &self,
+        kind: llrm_mir::intrinsics::ReduceKind,
+        unsigned: bool,
+        result: Ty,
+        vec: VectorTy,
+        cost_kind: CostKind,
+    ) -> Option<Cost> {
+        crate::tti_vector::extended_reduction_cost(kind, unsigned, result, vec, cost_kind)
     }
 
     fn vector_cast_cost(
@@ -860,10 +1062,20 @@ impl Tti for AArch64 {
         users: &[llrm_mir::tti::ExtUser],
         cost_kind: CostKind,
     ) -> Option<Cost> {
-        if cost_kind != CostKind::RecipThroughput {
+        if cost_kind == CostKind::Latency {
             return None;
         }
         crate::tti_vector::ext_cost(kind, dst, src, users)
+    }
+
+    fn vector_min_max_cost(
+        &self,
+        signed: bool,
+        _max: bool,
+        ty: VectorTy,
+        cost_kind: CostKind,
+    ) -> Option<Cost> {
+        crate::tti_vector::min_max_cost(signed, ty, cost_kind)
     }
 
     fn vector_cmp_sel_cost(
@@ -876,6 +1088,29 @@ impl Tti for AArch64 {
         crate::tti_vector::cmp_sel_cost(op, ty, predicate, cost_kind)
     }
 
+    /// `AArch64TTIImpl::getAddressComputationCost`
+    /// ([L5318](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64TargetTransformInfo.cpp#L5318)),
+    /// asked with a vector of pointers: a step that is not a constant under
+    /// 65 bytes costs `NeonNonConstStrideOverhead` (10), any other 1.
+    fn scalarized_address_cost(
+        &self,
+        stride_bytes: Option<i64>,
+        _kind: CostKind,
+    ) -> Cost {
+        const NEON_NON_CONST_STRIDE_OVERHEAD: i64 = 10;
+        const MAX_MERGE_DISTANCE: i64 = 64;
+        Cost::of(if stride_bytes.is_some_and(|step| step < MAX_MERGE_DISTANCE + 1) {
+            1
+        } else {
+            NEON_NON_CONST_STRIDE_OVERHEAD
+        })
+    }
+
+    /// `AArch64TTIImpl::prefersVectorizedAddressing`: `ST->hasSVE()`.
+    fn prefers_vectorized_addressing(&self) -> bool {
+        false
+    }
+
     fn scalarization_overhead(
         &self,
         ty: VectorTy,
@@ -884,6 +1119,48 @@ impl Tti for AArch64 {
         cost_kind: CostKind,
     ) -> Option<Cost> {
         crate::tti_vector::scalarization_overhead(ty, insert, extract, cost_kind)
+    }
+
+    /// `AArch64Subtarget::MinVectorRegisterBitWidth`: 64 on `generic` and
+    /// `apple-m1` (128 only on named cores the port does not take).
+    fn min_vector_register_bits(&self) -> u32 {
+        64
+    }
+
+    fn store_minimum_vf(
+        &self,
+        vf: u32,
+        mem: Ty,
+        _value: Ty,
+    ) -> u32 {
+        crate::tti_vector::store_minimum_vf(vf, mem)
+    }
+
+    /// `AArch64TTIImpl::getShuffleCost`
+    /// ([L6978](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Target/AArch64/AArch64TargetTransformInfo.cpp#L6978)),
+    /// a single-source shuffle (`tti_vector::shuffle_cost`).
+    fn shuffle_cost(
+        &self,
+        kind: llrm_mir::tti::ShuffleKind,
+        ty: VectorTy,
+        mask: &[i32],
+        cost_kind: CostKind,
+    ) -> Option<Cost> {
+        crate::tti_vector::shuffle_cost(kind, ty, mask, cost_kind)
+    }
+
+    fn vector_instr_cost(
+        &self,
+        op: llrm_mir::tti::LaneOp,
+        ty: VectorTy,
+        index: Option<u32>,
+        into_poison: bool,
+        context: llrm_mir::tti::VectorInstrContext,
+        cost_kind: CostKind,
+    ) -> Option<Cost> {
+        // `FeatureFastLD1Single`, in the Apple A14 tune apple-m1 takes.
+        let fast_ld1_single = self.cpu == Cpu::AppleM1;
+        crate::tti_vector::vector_instr_cost(op, ty, index, into_poison, context, cost_kind, fast_ld1_single)
     }
 
     /// `AArch64TargetLowering::getJumpConditionMergingParams`: a base of
@@ -1604,7 +1881,6 @@ impl Lowering for AArch64Lowering {
         op == llrm_mir::lowering::OverflowOp::UAdd && llrm_mir::lowering::simple_int(bits)
     }
 }
-
 
 /// The instructions of `x * m` as `performMulCombine` leaves it (dag/combine.rs
 /// `combine_mul`): `2^N + 1` is one shifted add, `2^N - 1` a shift and a `sub`,

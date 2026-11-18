@@ -8,12 +8,21 @@ fn labels(source: &str) -> usize {
     asm.lines().filter(|line| line.starts_with(".L")).count()
 }
 
+/// The labels of basic blocks: a constant-pool label (`.LCPI`) is data, and the
+/// SLP vectorizer's vector constants add them (nbody: 3 -> 5).
+fn blocks(source: &str) -> usize {
+    let asm = driver::assembly(source, Platform::Linux, Level::O2).expect("lowers");
+    asm.lines().filter(|line| line.starts_with(".L") && !line.starts_with(".LCPI")).count()
+}
+
 /// nbody -O2: the triangular nest's inner copies were priced alone and kept
 /// rolled, 38,049 instructions where the pin runs 14,233. The unrolled nest
-/// has 9 labels (10 before #9699: TailDupPlacement merges a block).
+/// has 6 block labels (7 before #9699: TailDupPlacement merges a block); its
+/// constant pool adds 3, or 5 with the SLP vectorizer's vector constants, which
+/// this test used to count as blocks (11 where 9 stood).
 #[test]
 fn a_nest_whose_inner_count_follows_the_outer_counter_is_the_pins_decision() {
-    assert_eq!(labels(include_str!("data/bench_nbody_nest.ll")), 9);
+    assert_eq!(blocks(include_str!("data/bench_nbody_nest.ll")), 6);
 }
 
 /// lru -O2: the estimate priced each copy's constant stores one by one
@@ -38,6 +47,17 @@ fn init_loops_whose_stores_merge_when_unrolled_are_unrolled() {
 #[test]
 fn a_nest_loop_that_saves_more_than_its_bytes_cost_is_unrolled() {
     assert_eq!(labels(include_str!("data/bench_crc.ll")), 4);
+}
+
+/// particle -O3: `advance` inside the 100-trip `t` loop. The vectorizer left
+/// the nest a vector loop and its remainder, which the jam refuses (two inner
+/// loops): 16,743 instructions run against gcc's 12,539, which jams before it
+/// vectorizes. Jammed first, the pair of copies adds `vx` once and the loop runs
+/// 11,249; 246 instructions where there were 589.
+#[test]
+fn a_nest_is_jammed_before_the_vectorizer_splits_its_inner_loop() {
+    let insns = instructions(include_str!("data/bench_particle.ll"), Level::O3);
+    assert!(insns < 300, "{insns} instructions");
 }
 
 fn instructions(source: &str, level: Level) -> usize {
@@ -97,21 +117,31 @@ fn a_loop_whose_copies_make_data_constant_is_unrolled_with_its_nest() {
     assert!(labels(include_str!("data/bench_stft_fixed.ll")) <= 27);
 }
 
-/// tile -O2: the 40-trip loop inside a 25-trip loop saves 3,000 clocks for 300
-/// B (10 a byte): unrolled, 364 B and 2,155 instructions run where the rolled
-/// loop is 68 B and 4,181 (gcc 80 B, 4,184). The module is 115 instructions;
-/// rolled, fewer than 80.
+/// tile -O2: the 40-trip loop inside a 25-trip loop was unrolled (10 clocks a
+/// byte, 2,155 instructions run). Since #9916 priced vector arithmetic and
+/// casts at code size, the loop vectorizer takes it first: widening vector
+/// adds, 955 instructions run (clang 980, gcc 1,434).
 #[test]
-fn a_loop_that_saves_ten_clocks_a_byte_is_unrolled() {
-    let insns = instructions(include_str!("data/bench_tile.ll"), Level::O2);
-    assert!(insns >= 100, "{insns} instructions");
+fn a_loop_that_saves_ten_clocks_a_byte_is_vectorized() {
+    assert!(vector_lines(include_str!("data/bench_tile.ll"), "\tsaddw") > 0);
+}
+
+fn vector_lines(
+    source: &str,
+    prefix: &str,
+) -> usize {
+    let asm = driver::assembly(source, Platform::Linux, Level::O2).expect("lowers");
+    asm.lines().filter(|line| line.starts_with(prefix)).count()
 }
 
 /// jpeg_fixed -O2: a 16-trip dot product inside two loops of unknown count was
 /// unrolled (+104 B) for a saving counted over 32 x 32 assumed runs of the
-/// loops around it (49,152 clocks); the program's instructions did not move.
-/// An unknown loop around counts once. Rolled: the loop's label stays.
+/// loops around it; the program's instructions did not move. Since #9916 the
+/// loop vectorizer takes it: one vector `mul`, three `mla`, one `addv`, no scalar `mul`.
 #[test]
-fn a_loop_inside_unknown_loops_is_not_unrolled_for_runs_nobody_counted() {
-    assert!(labels(include_str!("data/unroll_cold_nest.ll")) >= 6);
+fn a_loop_inside_unknown_loops_is_vectorized_not_unrolled_for_runs_nobody_counted() {
+    let source = include_str!("data/unroll_cold_nest.ll");
+    assert_eq!(vector_lines(source, "\tmla"), 3);
+    assert_eq!(vector_lines(source, "\taddv"), 1);
+    assert_eq!(vector_lines(source, "\tmul w"), 0);
 }

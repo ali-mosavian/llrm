@@ -209,6 +209,18 @@ impl Types {
         self.intern(Type::Pointer(space))
     }
 
+    /// The width of an integer or of an integer vector's lane
+    /// (`getScalarSizeInBits`).
+    pub fn scalar_int_bits(
+        &self,
+        id: TypeId,
+    ) -> Option<u32> {
+        match self.get(id) {
+            Type::Vector { element, .. } => self.int_bits(*element),
+            _ => self.int_bits(id),
+        }
+    }
+
     #[inline]
     pub fn int_bits(
         &self,

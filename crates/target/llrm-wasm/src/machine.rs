@@ -199,6 +199,12 @@ impl Tti for Wasm {
         false
     }
 
+    /// The pin's `TotalAllocaSizeRecursiveCaller` (1024 bytes) decides, not a refusal of every
+    /// frame: wasm's shadow stack is in linear memory, as a flat target's is.
+    fn inline_frames_into_recursive_callers(&self) -> bool {
+        true
+    }
+
     /// A callee the -O1 size bound refused is tried inline as at -Os, the copy staying where the
     /// caller comes out smaller: the pin's `inline_cost` shrinks a caller whose inlined copy
     /// folds, which the bound's static size cannot see (`call_keeps`, `switch_header_marker_loop`).
@@ -368,7 +374,8 @@ impl Tti for Wasm {
     /// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/include/llvm/CodeGen/BasicTTIImpl.h#L1257>):
     /// a pointer cast to or from a legal integer of its width, and a `trunc`
     /// or `bitcast` between types that legalize to one register of one size
-    /// (`i32` to `i8`: both an `i32`), are free. `Basic` charged each one.
+    /// (`i32` to `i8`: both an `i32`), are free, and so is a `trunc` to a
+    /// legal integer (`i64` to `i32`). `Basic` charged each one.
     fn cast_cost(
         &self,
         op: CastKind,
@@ -384,6 +391,9 @@ impl Tti for Wasm {
         let free = match op {
             CastKind::IntToPtr => legal_integer(from) && width(from) <= POINTER_BITS,
             CastKind::PtrToInt => legal_integer(to) && width(to) >= POINTER_BITS,
+            // `TargetTransformInfoImplBase`: a `trunc` to a legal integer is free
+            // (`n32:64`: `i32` and `i64`), whatever it comes from.
+            CastKind::Trunc if legal_integer(to) => true,
             CastKind::Trunc | CastKind::BitCast => {
                 let integral = |ty: Ty| matches!(ty, Ty::Int(_) | Ty::Pointer);
                 let (from_count, from_size) = legalized(from);
@@ -468,7 +478,11 @@ impl Tti for Wasm {
         match intrinsic_price(kind, name) {
             Some(cost) => Cost::of(cost),
             None if is_free_intrinsic(name) => Cost::FREE,
-            None => base_intrinsic_cost(name).unwrap_or(Cost::INVALID),
+            // A scalar intrinsic with no case of its own (`stacksave`) is
+            // "turned into a library call": `BasicTTIImplBase`'s
+            // `SingleCallCost` (1 for code size, else 10).
+            // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/BasicTTIImpl.h#L2323
+            None => base_intrinsic_cost(name).unwrap_or(Cost::of(if kind == "code-size" { 1 } else { 10 })),
         }
     }
 }
@@ -481,6 +495,19 @@ mod tests {
     #[test]
     fn lftr_takes_the_pins_unit_stride() {
         assert!(!Wasm.lftr_any_stride());
+    }
+
+    /// A `trunc` of an `i64` to an `i32` cost one unit where the pin prices it at
+    /// none (`TargetTransformInfoImplBase`: a truncation to a legal integer):
+    /// the outer loop of `int64_divmod_edges` read 78 against the pin's 70 and
+    /// stayed rolled at -O3 (+33 executed instructions).
+    #[test]
+    fn a_truncation_to_a_legal_integer_is_free() {
+        let cost = |from, to| Wasm.cast_cost(CastKind::Trunc, to, from, CostKind::CodeSize);
+        assert_eq!(cost(Ty::Int(64), Ty::Int(32)), Cost::FREE);
+        assert_eq!(cost(Ty::Int(32), Ty::Int(8)), Cost::FREE);
+        assert_eq!(cost(Ty::Int(128), Ty::Int(64)), Cost::FREE);
+        assert_eq!(cost(Ty::Int(128), Ty::Int(32)), Cost::FREE);
     }
 
     /// A `zext` of a loaded byte cost one unit, where the pin prices it at none
@@ -505,6 +532,17 @@ mod tests {
         assert!(Wasm.ext_load_free(CastKind::ZExt, Ty::Int(64), Ty::Int(32)));
         assert!(!Wasm.ext_load_free(CastKind::ZExt, Ty::Int(32), Ty::Int(1)));
         assert!(!Wasm.ext_load_free(CastKind::Trunc, Ty::Int(8), Ty::Int(32)));
+    }
+
+    /// `stacksave` and `stackrestore` had no price, so a loop that held a
+    /// variable-length array could not be unrolled (vla_callee_constant -O2:
+    /// 3,021 instructions against the pin's 994). The pin prices them as a
+    /// library call: 1 for code size, else 10.
+    #[test]
+    fn a_stack_save_or_restore_is_priced_as_a_library_call() {
+        let cost = |name, ret, args: &[Ty], kind| Wasm.intrinsic_cost(name, ret, args, kind);
+        assert_eq!(cost("llvm.stacksave.p0", Some(Ty::Pointer), &[], CostKind::CodeSize), Cost::of(1));
+        assert_eq!(cost("llvm.stackrestore.p0", None, &[Ty::Pointer], CostKind::SizeAndLatency), Cost::of(10));
     }
 
     /// `llvm.fmuladd` had no price, so a loop that held one could not be

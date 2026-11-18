@@ -64,6 +64,7 @@ const UNOPTIMIZED: &[&str] = &[
     "LoopSlots",
     "Scheduler",
     "Coalescer",
+    "JoinStackPointer",
     "MachineScheduler",
     "MachineSink",
     "PeepholeOptimizer",
@@ -76,6 +77,7 @@ const UNOPTIMIZED: &[&str] = &[
     "LoadFold",
     "FixupSetCC",
     "CopyPropagation",
+    "KnownZero",
     "BreakFalseDeps",
     "LiveRangeShrink",
     "X86OptimizeLEAs",
@@ -99,6 +101,7 @@ const UNOPTIMIZED: &[&str] = &[
     "DeadMachineInstructionElim",
     "ProcessImplicitDefs",
     "LeafFold",
+    "SplitParamRanges",
     "FloatUnhoist",
     "FloatFold",
     "FloatSink",
@@ -115,6 +118,7 @@ const SLOTS: &[(&str, &str)] = &[
     ("DeadMachineInstructionElim", "deadmi@1"),
     ("SharedConstants", "phiconst@2"),
     ("LeafFold", "phiconst@2"),
+    ("SplitParamRanges", "liverangeshrink@4"),
     ("ProcessImplicitDefs", "processimpdefs@2"),
     ("PhiElimination", "phielim@4"),
     ("MachineLICM", "machinelicm@4"),
@@ -143,6 +147,7 @@ const SLOTS: &[(&str, &str)] = &[
     ("FloatAlloc", "floatalloc@8"),
     ("TwoAddress", "twoaddr@9"),
     ("Coalescer", "coalesce@10"),
+    ("JoinStackPointer", "coalesce@10"),
     ("RegAlloc", "allocate@11"),
     ("ParallelCopy", "parcopy@12"),
     ("Prologue", "prologue@13"),
@@ -155,6 +160,7 @@ const SLOTS: &[(&str, &str)] = &[
     ("TailDuplicate", "jumps@17"),
     ("ControlFlow", "jumps@17"),
     ("CopyPropagation", "copyprop@18"),
+    ("KnownZero", "copyprop@18"),
     ("BreakFalseDeps", "breakfalsedeps@19"),
 ];
 
@@ -281,6 +287,10 @@ pub fn machine_with<'a>(
         // instruction that clobbers them become a byte per condition
         // (X86FlagsCopyLowering, every level).
         Box::new(crate::backend::flagscopy::FlagsCopy),
+        // On SSA, before the phis go: the arguments the calls keep are read
+        // from a copy made where the calls begin (gcc: IRA's
+        // `split_live_ranges_for_shrink_wrap`).
+        Box::new(crate::backend::splitparams::SplitParamRanges),
         Box::new(phielim::PhiElimination { unoptimized: !target.optimized, share_congruent: target.share_congruent_phis }),
         // After the shrinking of live ranges: a `setcc` zero-extended is a
         // zero made before the compare (the pin: X86FixupSetCC).
@@ -313,7 +323,13 @@ pub fn machine_with<'a>(
             unoptimized: !target.optimized,
             classes: Some(Rc::clone(classes)),
         }),
-        Box::new(Coalescer { size: target.size, moves: target.move_bytes, ..Coalescer::new(None, segments, classes) }),
+        // `joinReservedPhysReg`: a copy of the stack pointer nothing moves it from.
+        Box::new(crate::backend::joinsp::JoinStackPointer { stack: registers.stack }),
+        Box::new(Coalescer {
+            size: target.size,
+            moves: target.move_bytes,
+            keeps_split_params: classes.splits_params_for_shrink_wrap,
+            ..Coalescer::new(None, segments, classes) }),
         // After TwoAddress and the coalescer, before any value is placed: the
         // pin's pre-RA scheduler, bottom-up by pressure.
         Box::new(crate::backend::machinesched::MachineScheduler {
@@ -399,6 +415,8 @@ pub fn machine_with<'a>(
         }),
         // The pin runs MachineCopyPropagation again after tail duplication.
         Box::new(crate::backend::machinecp::CopyPropagation),
+        // Beyond the pin (GCC's postreload-cse): a move of a zero the register holds.
+        Box::new(crate::backend::knownzero::KnownZero),
         // The pin's pre-emit pass: the distances are those of the final order.
         Box::new(crate::backend::breakfalsedeps::BreakFalseDeps),
     ];
@@ -409,6 +427,9 @@ pub fn machine_with<'a>(
             return Err(format!("the target omits {name:?}, which is no machine phase here (or is named twice)"));
         }
         phases.retain(|phase| phase.class_name() != *name);
+    }
+    if !classes.splits_params_for_shrink_wrap {
+        phases.retain(|phase| phase.class_name() != "SplitParamRanges");
     }
     if !target.post_ra_tail_duplicate {
         phases.retain(|phase| phase.class_name() != "TailDuplicate");

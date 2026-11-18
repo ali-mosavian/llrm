@@ -49,9 +49,15 @@ enum Location {
     Stack(i64),
 }
 
-fn kind(vt: EVT) -> Result<Kind, Refused> {
+/// A pointer (`ArgFlags.isPointer()`) takes the pointer pairs, as llvm-mos's
+/// `CCIfPtr`: `(zp),y` walks it, and A:X cannot be that.
+fn kind(
+    vt: EVT,
+    pointer: bool,
+) -> Result<Kind, Refused> {
     match vt {
         EVT::I8 => Ok(Kind::Word),
+        EVT::I16 if pointer => Ok(Kind::Pointer),
         EVT::I16 => Ok(Kind::Wide),
         other => Err(Refused::Type(other)),
     }
@@ -74,9 +80,10 @@ fn kind(vt: EVT) -> Result<Kind, Refused> {
 fn locations(
     convention: &Convention,
     vts: &[EVT],
+    pointers: &[bool],
     fixed: usize,
 ) -> Result<(Vec<Location>, i64), Refused> {
-    let kinds = vts.iter().map(|&vt| kind(vt)).collect::<Result<Vec<_>, _>>()?;
+    let kinds = vts.iter().zip(pointers).map(|(&vt, &pointer)| kind(vt, pointer)).collect::<Result<Vec<_>, _>>()?;
     let placement = convention.place_variadic(&kinds, &[], fixed);
     let places = placement
         .places
@@ -150,10 +157,24 @@ pub fn lower_call(
     outs: &[Out],
     ins: &[In],
 ) -> Result<(SDValue, Vec<SDValue>), Refused> {
-    let convention = abi::mos();
+    lower_call_in(dag, chain, callee, outs, ins, 0)
+}
+
+/// [`lower_call`] for a call in LLVM calling convention `cc`: `fastcc` takes
+/// the `private` row of `calling.toml`.
+pub fn lower_call_in(
+    dag: &mut SelectionDAG,
+    chain: SDValue,
+    callee: SDValue,
+    outs: &[Out],
+    ins: &[In],
+    cc: u32,
+) -> Result<(SDValue, Vec<SDValue>), Refused> {
+    let convention = abi::convention_of(cc);
     let vts: Vec<EVT> = outs.iter().map(|out| dag.value_type(out.value)).collect();
     let fixed = outs.iter().position(|out| out.variadic).unwrap_or(outs.len());
-    let (targets, bytes) = locations(&convention, &vts, fixed)?;
+    let pointers: Vec<bool> = outs.iter().map(|out| out.pointer).collect();
+    let (targets, bytes) = locations(&convention, &vts, &pointers, fixed)?;
     let mut chain = dag.get_callseq_start(chain, bytes as u64);
     // `LowerMemOpCallTo`: the stack arguments are stored at `rs0 + offset`.
     let mut stores = Vec::new();
@@ -250,9 +271,22 @@ pub fn lower_formal_arguments(
     fixed: FixedObject,
     live_in: LiveIn,
 ) -> Result<Vec<SDValue>, Refused> {
-    let convention = abi::mos();
+    lower_formal_arguments_in(dag, chain, ins, fixed, live_in, 0)
+}
+
+/// [`lower_formal_arguments`] of a function in LLVM calling convention `cc`.
+pub fn lower_formal_arguments_in(
+    dag: &mut SelectionDAG,
+    chain: SDValue,
+    ins: &[In],
+    fixed: FixedObject,
+    live_in: LiveIn,
+    cc: u32,
+) -> Result<Vec<SDValue>, Refused> {
+    let convention = abi::convention_of(cc);
     let vts: Vec<EVT> = ins.iter().map(|arg| arg.vt).collect();
-    let (sources, _) = locations(&convention, &vts, vts.len())?;
+    let pointers: Vec<bool> = ins.iter().map(|arg| arg.pointer).collect();
+    let (sources, _) = locations(&convention, &vts, &pointers, vts.len())?;
     Ok(ins
         .iter()
         .zip(sources)
@@ -302,7 +336,7 @@ pub fn lower_return(
     let mut operands = vec![chain];
     let vts: Vec<EVT> = outs.iter().map(|out| dag.value_type(out.value)).collect();
     for &vt in &vts {
-        kind(vt)?;
+        kind(vt, false)?;
     }
     let mut registers = result_registers(&convention, &vts).into_iter();
     for (out, &vt) in outs.iter().zip(&vts) {
@@ -366,6 +400,20 @@ impl TargetCalling for MosCalling {
         lower_call(dag, chain, callee, outs, ins).expect("legal parts")
     }
 
+    fn lower_call_in(
+        &self,
+        cc: u32,
+        dag: &mut SelectionDAG,
+        chain: SDValue,
+        callee: SDValue,
+        outs: &[Out],
+        ins: &[In],
+        _variadic: bool,
+        _frame: &mut dyn FnMut(u32, u32) -> i32,
+    ) -> (SDValue, Vec<SDValue>) {
+        lower_call_in(dag, chain, callee, outs, ins, cc).expect("legal parts")
+    }
+
     fn lower_formal_arguments(
         &self,
         dag: &mut SelectionDAG,
@@ -375,6 +423,18 @@ impl TargetCalling for MosCalling {
         live_in: LiveIn,
     ) -> Vec<SDValue> {
         lower_formal_arguments(dag, chain, ins, fixed, live_in).expect("legal parts")
+    }
+
+    fn lower_formal_arguments_in(
+        &self,
+        cc: u32,
+        dag: &mut SelectionDAG,
+        chain: SDValue,
+        ins: &[In],
+        fixed: FixedObject,
+        live_in: LiveIn,
+    ) -> Vec<SDValue> {
+        lower_formal_arguments_in(dag, chain, ins, fixed, live_in, cc).expect("legal parts")
     }
 
     fn lower_return(
@@ -393,6 +453,7 @@ impl TargetCalling for MosCalling {
         named: &[In],
     ) -> Option<i64> {
         let vts: Vec<EVT> = named.iter().map(|arg| arg.vt).collect();
-        locations(&abi::mos(), &vts, vts.len()).ok().map(|(_, bytes)| bytes)
+        let pointers: Vec<bool> = named.iter().map(|arg| arg.pointer).collect();
+        locations(&abi::mos(), &vts, &pointers, vts.len()).ok().map(|(_, bytes)| bytes)
     }
 }

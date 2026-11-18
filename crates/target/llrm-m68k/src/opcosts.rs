@@ -137,6 +137,7 @@ pub const AT_DEFAULT: &[(&str, &str)] = &[
     ("copy", "no string instruction (loop idioms, own row)"),
     ("copy_cell", "same"),
     ("copy_variable", "same"),
+    ("copy_member", "no copy routine is linked by the compiler: a memcpy is the platform libc (loop idioms, own row)"),
     ("direction", "no direction flag"),
     ("unroll_budget", "a tuning limit"),
     ("pieces_set", "a tuning limit"),
@@ -171,6 +172,12 @@ fn products(cpu: Cpu) -> (i64, i64) {
     if cpu.at_least(Cpu::M68020) { (34, 8) } else { (136, 160) }
 }
 
+/// The bytes of an `i64` shifted by a variable count, the whole sequence (the object of `a << n` and `a >> n` at -Os,
+/// 2026-11-15: 62 B at both CPUs, the sequence from the count's test to the last `or` 44): both halves and the count's
+/// test against 32. Priced as one shift it was 2 B of 40, and the SZ2 trial of `pick` in
+/// `u64_shift_select_arms` read -40 B for an inline that grows the object by 72.
+pub const WIDE_SHIFT_BYTES: i64 = 44;
+
 /// The operations in code bytes at `cpu`.
 pub fn size_costs(cpu: Cpu) -> Result<OperationCosts, String> {
     let (wide, widening) = products(cpu);
@@ -180,6 +187,7 @@ pub fn size_costs(cpu: Cpu) -> Result<OperationCosts, String> {
         expanded_intrinsics: true,
         multiply_wide: wide,
         multiply_widening: widening,
+        shift_wide: WIDE_SHIFT_BYTES,
         ..OperationCosts::default()
     };
     for (class, form) in forms(cpu) {
@@ -215,4 +223,11 @@ pub fn size_costs(cpu: Cpu) -> Result<OperationCosts, String> {
         }
     }
     Ok(costs)
+}
+
+/// The prices of the Os inline trial's byte estimate (`function_bytes`): [`size_costs`] with an operation on a value
+/// wider than the 32-bit word priced per word. An `i64` add, move, load, store, compare or select is two instructions
+/// and was priced as one, so a copy that keeps an `i64` computation looked half its size.
+pub fn trial_costs(cpu: Cpu) -> Result<OperationCosts, String> {
+    Ok(OperationCosts { width_scaled: true, native_bits: 32, ..size_costs(cpu)? })
 }

@@ -72,8 +72,9 @@ impl CombineHooks for Aarch64Lowering {
         vt: EVT,
         _constant: bool,
     ) -> bool {
-        // `AArch64TargetLowering::hasAndNot`: `bic` takes any scalar integer.
-        vt.is_integer()
+        // `AArch64TargetLowering::hasAndNot`: `bic` takes any scalar integer
+        // and a vector of 64 bits or more.
+        vt.is_integer() || (vt.is_vector() && vt.size_in_bits() >= 64)
     }
 
     fn is_indexed_legal(
@@ -233,6 +234,10 @@ impl CombineHooks for Aarch64Lowering {
         narrow: EVT,
     ) -> bool {
         narrow.is_integer() && wide.is_integer() && narrow.size_in_bits() == 32 && wide.size_in_bits() == 64
+    }
+
+    fn narrow_zext_setcc(&self) -> bool {
+        true
     }
 
     /// `AArch64TargetLowering::isNarrowingProfitable`: `isTypeLegal(DestVT) &&
@@ -438,6 +443,7 @@ impl LegalizeHooks for Aarch64Lowering {
             ISD::JumpTable => super::lowering::lower_jump_table(dag, node),
             ISD::BrJT => super::lowering::lower_br_jt(dag, node),
             ISD::BrInd => super::lowering::lower_br_ind(dag, node),
+            ISD::SetCC if dag.value_type(dag.operand(node, 0)).is_vector() => super::vector::lower_vsetcc(dag, node),
             ISD::SetCC => super::lowering::lower_setcc(dag, node),
             ISD::Select => super::lowering::lower_select(dag, node),
             ISD::SelectCC => super::lowering::lower_select_cc_node(dag, node),
@@ -463,9 +469,10 @@ impl LegalizeHooks for Aarch64Lowering {
             // only when it is volatile or atomic
             // (`ldxp`/`stxp`, `LowerStore128`); every other is declined, and
             // the legalizer splits it.
-            ISD::Load | ISD::Store => match dag.node(node).data {
+            ISD::Load => return super::vector::lower_small_vector_ext_load(dag, node),
+            ISD::Store => match dag.node(node).data {
                 NodeData::Mem(info) if info.volatile || info.ordering.is_some() => None,
-                _ => return None,
+                _ => return super::vector::lower_truncate_vector_store(dag, node),
             },
             ISD::VAArg => super::lowering::lower_vaarg(dag, node),
             // `LowerINSERT_VECTOR_ELT`: a constant lane in range is as it is
@@ -492,6 +499,7 @@ impl LegalizeHooks for Aarch64Lowering {
             | ISD::VecReduceUMax
             | ISD::VecReduceUMin => super::vector::lower_vec_reduce(dag, node),
             ISD::Shl | ISD::Srl | ISD::Sra => super::vector::lower_vector_shift(dag, node),
+            ISD::SMax | ISD::SMin | ISD::UMax | ISD::UMin => super::vector::lower_min_max(dag, node),
             // Declined for a `v2i64` that is no widening multiply: the
             // legalizer unrolls it.
             ISD::Mul => return super::vector::lower_mul(dag, node),

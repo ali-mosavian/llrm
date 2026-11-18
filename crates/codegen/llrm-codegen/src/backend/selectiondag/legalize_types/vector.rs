@@ -42,12 +42,16 @@ fn split_dest(vt: EVT) -> Option<(EVT, EVT)> {
 
 /// The nodes of one result type and operands of that type: `SplitVecRes_BinOp`
 /// and `SplitVecRes_TernaryOp`.
-fn is_elementwise(op: ISD) -> bool {
+pub(super) fn is_elementwise(op: ISD) -> bool {
     matches!(
         op,
         ISD::Add
             | ISD::Sub
             | ISD::Mul
+            | ISD::UDiv
+            | ISD::SDiv
+            | ISD::URem
+            | ISD::SRem
             | ISD::And
             | ISD::Or
             | ISD::Xor
@@ -64,6 +68,7 @@ fn is_elementwise(op: ISD) -> bool {
             | ISD::FDiv
             | ISD::FMA
             | ISD::FNeg
+            | ISD::Freeze
             | ISD::FAbs
     )
 }
@@ -114,12 +119,17 @@ impl TypeLegalizer<'_> {
         let (src_bits, dest_bits) = (src_vt.element().size_in_bits(), dest_vt.element().size_in_bits());
         if src_vt.lanes() % 2 == 0 && src_bits * 2 < dest_bits {
             let EVT::Simple(src_mvt) = src_vt else { return None };
-            let new_src = MVT::vector(MVT::integer(src_bits * 2)?, src_mvt.lanes()?).map(EVT::Simple)?;
+            // `widenIntegerVectorElementType`: a lane with no `MVT` (the `i2`
+            // of a mask) is not a legal type, so the two steps are not taken.
+            let new_src = MVT::integer(src_bits * 2)
+                .and_then(|lane| MVT::vector(lane, src_mvt.lanes()?))
+                .map(EVT::Simple);
             // A half with no `MVT` (`v4i8`) is not a legal type.
             let split_src = MVT::vector(src_mvt.element()?, src_mvt.lanes()? / 2).map(EVT::Simple);
-            let (split_lo, _) = split_dest(new_src)?;
+            let split_lo = new_src.and_then(|new_src| split_dest(new_src)).map(|(lo, _)| lo);
             let legal = |this: &Self, vt: EVT| this.action(vt) == TypeAction::Legal;
-            if legal(self, src_vt)
+            if let (Some(new_src), Some(split_lo)) = (new_src, split_lo)
+                && legal(self, src_vt)
                 && !split_src.is_some_and(|half| legal(self, half))
                 && legal(self, new_src)
                 && legal(self, split_lo)
@@ -139,6 +149,73 @@ impl TypeLegalizer<'_> {
             self.split_vector_of(source)?
         };
         Some((self.dag.get_node_flags(op, lo_vt, &[lo], flags), self.dag.get_node_flags(op, hi_vt, &[hi], flags)))
+    }
+
+    /// `GetSplitOp`: the halves of an operand, those the legalizer made where
+    /// its type splits and extractions where it does not.
+    fn split_operand(
+        &mut self,
+        value: SDValue,
+    ) -> Option<(SDValue, SDValue)> {
+        if self.action(self.dag.value_type(value)) == TypeAction::SplitVector {
+            Some(self.split_vector(value))
+        } else {
+            self.split_vector_of(value)
+        }
+    }
+
+    /// `SplitVecRes_SETCC`: a compare of each half of the operands, into the
+    /// halves of the result type.
+    fn split_setcc(
+        &mut self,
+        setcc: SDValue,
+    ) -> Option<(SDValue, SDValue)> {
+        let (lo_vt, hi_vt) = split_dest(self.dag.value_type(setcc))?;
+        let (lhs, rhs, cc) = (self.dag.operand(setcc, 0), self.dag.operand(setcc, 1), self.dag.operand(setcc, 2));
+        let flags = self.dag.node(setcc).flags;
+        let (ll, lh) = self.split_operand(lhs)?;
+        let (rl, rh) = self.split_operand(rhs)?;
+        Some((
+            self.dag.get_node_flags(ISD::SetCC, lo_vt, &[ll, rl, cc], flags),
+            self.dag.get_node_flags(ISD::SetCC, hi_vt, &[lh, rh, cc], flags),
+        ))
+    }
+
+    /// `SplitRes_Select` of a `VSELECT`: the halves of the arms, and of the
+    /// mask by whichever way costs least.
+    fn split_vselect(
+        &mut self,
+        select: SDValue,
+        lo_vt: EVT,
+        hi_vt: EVT,
+    ) -> Option<(SDValue, SDValue)> {
+        let (then, other, cond) = (self.dag.operand(select, 1), self.dag.operand(select, 2), self.dag.operand(select, 0));
+        let (ll, lh) = self.split_operand(then)?;
+        let (rl, rh) = self.split_operand(other)?;
+        let cond_vt = self.dag.value_type(cond);
+        let (cl, ch) = if let Some(mask) = self.widen_vselect_mask(select) {
+            self.split_vector_of(mask)?
+        } else if self.action(cond_vt) == TypeAction::SplitVector {
+            self.split_vector(cond)
+        } else if self.dag.opcode(cond) == ISD::SetCC {
+            // Two narrow compares beat splitting a wide result, unless the
+            // compare already makes this `i1` vector from a legal operand.
+            let operand_vt = self.dag.value_type(self.dag.operand(cond, 0));
+            if cond_vt.element() == EVT::I1
+                && self.action(operand_vt) == TypeAction::Legal
+                && self.tli.types.set_cc_result_type(operand_vt) == cond_vt
+            {
+                self.split_vector_of(cond)?
+            } else {
+                self.split_setcc(cond)?
+            }
+        } else {
+            self.split_vector_of(cond)?
+        };
+        Some((
+            self.dag.get_node(ISD::VSelect, lo_vt, &[cl, ll, rl]),
+            self.dag.get_node(ISD::VSelect, hi_vt, &[ch, lh, rh]),
+        ))
     }
 
     /// `GetSplitVector`.
@@ -227,6 +304,8 @@ impl TypeLegalizer<'_> {
                 his.extend_from_slice(&ops[1..]);
                 (self.dag.get_node_flags(op, lo_vt, &los, flags), self.dag.get_node_flags(op, hi_vt, &his, flags))
             }
+            ISD::SetCC => self.split_setcc(value).ok_or_else(|| unsupported("split compare"))?,
+            ISD::VSelect => self.split_vselect(value, lo_vt, hi_vt).ok_or_else(|| unsupported("split select"))?,
             // `SplitVecRes_CONCAT_VECTORS`: the first operands, then the rest.
             ISD::ConcatVectors => {
                 let ops = self.dag.node(value).ops.clone();

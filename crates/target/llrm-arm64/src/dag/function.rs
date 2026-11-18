@@ -34,7 +34,11 @@ pub fn builder_target(platform: Platform) -> BuilderTarget {
             // `isOffsetFoldingLegal` is false: `performGlobalAddressCombine`
             // picks the offset.
             dso_local_symbols: true,
+            // `AArch64TargetLowering::aggressivelyPreferBuildVectorSources`.
+            prefers_build_vector_sources: true,
             boolean_contents: BooleanContents::ZeroOrOne,
+            // `setBooleanVectorContents(ZeroOrNegativeOneBooleanContent)`.
+            vector_boolean_contents: Some(BooleanContents::ZeroOrNegativeOne),
             known_bits_for_target_node: Some(known_bits_for_target_node),
             fma_faster: true,
             vectors: crate::machine::vectors_enabled(),
@@ -186,25 +190,29 @@ pub fn select_function_in(
     };
     let tti = crate::tti::AArch64::of_cpu(platform.cpu())
         .map(|one| std::rc::Rc::new(one) as std::rc::Rc<dyn llrm_mir::tti::Tti>);
-    // `isIntDivCheap` keeps a divide by a constant a divide where it is smaller
-    // than the multiply-high sequence. DEVIATE SD535 (exit: none, arm64 is
-    // strict on bytes): the pin answers `minsize` only
-    // ([L33827](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L33827));
-    // `-Os` is `optsize` and gcc's `-Os` divides there too (2 instructions
-    // against 7).
-    let opt_for_size = function
-        .attrs
-        .iter()
-        .any(
-            |attr| matches!(
-                attr,
-                llrm_mir::opcode::Attribute::Flag(name) if name == "optsize" || name == "minsize"
-            ),
-        );
-    let mut target = builder_target(platform).with_int_div_cheap(opt_for_size);
+    // `isIntDivCheap` keeps a divide by a constant a divide: the pin answers
+    // `minsize` only
+    // ([L33827](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L33827)).
+    // DEVIATE SD535 (`crate::trial`): the compile that keeps the divides at
+    // `-Os` (`optsize`) is the trial's, kept where the expansion's bytes are
+    // not repaid.
+    let flagged = |names: &[&str]| {
+        function
+            .attrs
+            .iter()
+            .any(
+                |attr| matches!(
+                    attr,
+                    llrm_mir::opcode::Attribute::Flag(name) if names.contains(&name.as_str())
+                ),
+            )
+    };
+    let opt_for_size = flagged(&["optsize", "minsize"]);
+    let divide_cheap = flagged(&["minsize"]) || (flagged(&["optsize"]) && crate::trial::divides_kept());
+    let mut target = builder_target(platform).with_int_div_cheap(divide_cheap);
     // `AArch64TargetLowering::BuildSDIVPow2`: where a divide is cheap, a divide
     // by a power of two stays one.
-    target.dag.sdiv_pow2_stays = opt_for_size;
+    target.dag.sdiv_pow2_stays = divide_cheap;
     let target = target
         .with_tti(tti)
         .with_tail_calls(llrm_support::env_var("LLRM_TAIL_CALLS").is_none_or(|value| value != "0"))
@@ -274,7 +282,10 @@ pub fn select_function_in(
                 let part = updates[..at].iter().filter(|(one, _)| *one == phi).count();
                 let dst = if part == 0 { reg } else { info.part_regs(reg, part + 1)[part] };
                 let ty = function.value(phi).ty;
-                let vector = matches!(module.context.types.get(ty), llrm_mir::types::Type::Vector { .. });
+                let vector = matches!(
+                    module.context.types.get(ty),
+                    llrm_mir::types::Type::Vector { .. }
+                );
                 let float = vector || matches!(module.context.types.get(ty), llrm_mir::types::Type::Float(_));
                 let quad = vector && layout.size_bits(&module.context.types, ty) == 128;
                 Ok(PhiCopy { to, dst, src, float, quad })

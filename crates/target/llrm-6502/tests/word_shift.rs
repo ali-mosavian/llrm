@@ -26,15 +26,15 @@ fn bytes(
 
 /// The chain through A, by hand under the ABI (A:X in, A:X out):
 /// shl `stx rc3; (asl a; rol rc3)*k; ldx rc3; rts`, shr
-/// `sta rc2; txa; (lsr a; ror rc2)*k; tax; lda rc2; rts`, sar the same with
-/// `cmp #$80; ror a; ror rc2`.
+/// `stx rc3; (lsr rc3; ror a)*k; ldx rc3; rts`, sar `sta rc2; txa;
+/// (cmp #$80; ror a; ror rc2)*k; tax; lda rc2; rts`.
 fn target(
     op: &str,
     k: u32,
 ) -> u32 {
     match op {
         "shl" => 3 * k + 5,
-        "lshr" => 3 * k + 7,
+        "lshr" => 3 * k + 5,
         _ => 5 * k + 7,
     }
 }

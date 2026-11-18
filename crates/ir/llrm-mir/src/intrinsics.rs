@@ -1131,6 +1131,12 @@ pub fn is_wide_divide(name: &str) -> bool {
     WIDE_DIVIDES.contains(&name)
 }
 
+/// A target's own intrinsic, which a pass of the target's IR slot may call
+/// and the target's selector lowers: MIR keeps no table of its types.
+pub fn is_target_intrinsic(name: &str) -> bool {
+    name.starts_with("llvm.aarch64.neon.")
+}
+
 pub fn is_reserved(name: &str) -> bool {
     name.starts_with("llvm.") || name.starts_with("llrm.ia16.") || name.starts_with("llrm.noalias") || name.starts_with("llrm.vararg.")
 }

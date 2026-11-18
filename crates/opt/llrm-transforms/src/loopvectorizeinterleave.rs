@@ -90,6 +90,26 @@ pub(crate) struct Interleaving {
     pub reductions: Vec<Reduction>,
 }
 
+/// `Op2Info` of an unsigned divide or remainder: a constant divisor is a few
+/// multiplies on a target that says so, not a division. Other operations
+/// carry none.
+pub(crate) fn divisor_info(
+    context: &Context,
+    op: BinaryOp,
+    divisor: Operand,
+    ty: Ty,
+) -> llrm_mir::tti::OperandInfo {
+    let (Operand::Constant(id), Ty::Int(width), BinaryOp::UDiv | BinaryOp::URem | BinaryOp::SDiv | BinaryOp::SRem) =
+        (divisor, ty, op)
+    else {
+        return Default::default();
+    };
+    match context.get(id).kind {
+        ConstantKind::Int(bits) => llrm_mir::tti::OperandInfo::constant(bits as i128, width),
+        _ => Default::default(),
+    }
+}
+
 /// The `ArithOp` that prices an integer `BinaryOp`, if the cost model knows it.
 fn arith_of(op: BinaryOp) -> Option<ArithOp> {
     Some(match op {
@@ -359,7 +379,9 @@ pub(crate) fn extract(
                 // interleave group) have costs of their own, which this port
                 // does not price; any other pattern is
                 // scalarized (NEON has no gather or scatter).
-                priced.push(match get_ptr_stride(se, cx, value_ty, ptr, header, &strides, true) {
+                let step = get_ptr_stride(se, cx, value_ty, ptr, header, &strides, true);
+                let bytes = (cx.layout.size_bits(&cx.context.types, value_ty) / 8) as i64;
+                priced.push(match step {
                     Some(1) => {
                         if is_load {
                             Recipe::Load { lane, align }
@@ -368,7 +390,7 @@ pub(crate) fn extract(
                         }
                     }
                     Some(-4..=4) => Recipe::Unpriced { scalar_cost: scalar },
-                    _ => Recipe::Scalarized { op, lane },
+                    _ => Recipe::Scalarized { op, lane, stride_bytes: step.map(|stride| stride * bytes) },
                 });
                 if is_load {
                     loads += 1;
@@ -382,12 +404,13 @@ pub(crate) fn extract(
             Opcode::Binary(op) => {
                 let arith = arith_of(op).ok_or(Skipped("A binary operation the cost model does not know"))?;
                 let ty = scalar_ty(cx, data.ty).ok_or(Skipped("An element type the target has no cost for"))?;
-                let price = tti.arithmetic_cost(arith, ty, kind, Default::default(), Default::default());
+                let second = divisor_info(cx.context, op, data.operands[1], ty);
+                let price = tti.arithmetic_cost(arith, ty, kind, Default::default(), second);
                 if !price.valid {
                     return Err(Skipped("An operation the target does not price"));
                 }
                 cost += price.value;
-                priced.push(Recipe::Binary { op: arith, lane: ty, ext: [None, None] });
+                priced.push(Recipe::Binary { op: arith, lane: ty, ext: [None, None], second });
                 let extended = |operand: Operand| {
                     matches!(
                         operand,
@@ -496,7 +519,7 @@ pub(crate) fn extract(
     }
 
     let (users, invariants) = register_usage(function, header, &body, &reductions, primary);
-    let shape = Shape { header, preheader, exit, primary, compare, bound_operand, index_ty, reverse: false, tests_phi: false };
+    let shape = Shape { header, preheader, exit, primary, compare, bound_operand, index_ty, reverse: false, scale: 1, tests_phi: false };
     Ok(Extracted {
         interleaving: Interleaving { shape, step, step_operand, step_in_body, body, reductions },
         cost,

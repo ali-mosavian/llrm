@@ -166,6 +166,7 @@ fn candidate(
     if one.uses.is_empty()
         && !remade
         && !loads_invariant
+        && !crate::backend::machinesink::zero_idiom(what)
         && !matches!(
             what.sources.as_slice(),
             [Loc::Imm(imm)] if imm.address.is_none()
@@ -198,11 +199,20 @@ fn candidate(
 }
 
 /// What the table is keyed by: the instruction with its result named by
-/// nothing.
+/// nothing (and a read of the register it defines, which an idiom makes, by
+/// nothing either).
 fn expression(what: &Semantics) -> Semantics {
     let mut key = what.clone();
+    let idiom = crate::backend::machinesink::zero_idiom(what);
     if let Some(Loc::Held(dest)) = key.dests.first_mut() {
         *dest = Held { value: 0, width: dest.width, offset: 0 };
+    }
+    if idiom {
+        for source in &mut key.sources {
+            if let Loc::Held(from) = source {
+                *from = Held { value: 0, width: from.width, offset: 0 };
+            }
+        }
     }
     key
 }
@@ -212,7 +222,7 @@ fn cheap(
     one: &Insn,
     classes: &RegisterClasses,
 ) -> bool {
-    crate::backend::machinesink::as_cheap_as_a_move(one, classes.cheap_move_immediate)
+    crate::backend::machinesink::as_cheap_as_a_move_named(one, classes.cheap_move_immediate, classes.cheap_move_row)
 }
 
 /// The commutative operations: `add`, `and`, `or`, `xor`, `imul`.
@@ -256,6 +266,8 @@ struct Walk<'a> {
     constrain: Option<&'a dyn Fn(u32, u32) -> bool>,
     /// `Target::cheap_move_immediate`.
     cheap_immediate: fn(u8, i64) -> bool,
+    /// `Target::cheap_move_row`.
+    cheap_row: fn(&str) -> bool,
 }
 
 impl Walk<'_> {
@@ -320,7 +332,8 @@ impl Walk<'_> {
                         .count(),
                 );
             let only_one = reads == 1 && self.readers.get(&used).is_some_and(|readers| readers.len() == 1);
-            // `MRI->constrainRegClass(SrcReg, ...)`: not where the source cannot be of the class the reader needs
+            // `MRI->constrainRegClass(SrcReg, ...)`: not where the source
+            // cannot be of the class the reader needs
             if !self.allows(used, source) {
                 continue;
             }
@@ -359,16 +372,23 @@ impl Walk<'_> {
             return false;
         }
         let Some(what) = one.what.as_ref() else { return false };
-        let shared_id =
-            self.body.blocks[shared_block].insns.iter().find(|made| made.defines.first() == Some(&shared)).map(|made| made.id());
+        let shared_id = self.body.blocks[shared_block]
+            .insns
+            .iter()
+            .find(|made| made.defines.first() == Some(&shared))
+            .map(|made| made.id());
         let position = |at: usize, id: u64| self.body.blocks[at].insns.iter().position(|made| made.id() == id);
         let defined_in = |key: u32| {
-            self.body.blocks.iter().position(|candidate| {
-                candidate.phis.iter().any(|phi| phi.result == key)
-                    || candidate.insns.iter().any(|made| made.defines.contains(&key))
-            })
+            self.body
+                .blocks
+                .iter()
+                .position(
+                    |candidate| candidate.phis.iter().any(|phi| phi.result == key)
+                        || candidate.insns.iter().any(|made| made.defines.contains(&key)),
+                )
         };
-        // Whether `reader` reads `key` after the instruction `origin` of block `from`.
+        // Whether `reader` reads `key` after the instruction `origin` of block
+        // `from`.
         let after = |reader: &Reader, key: u32, from: usize, origin: u64| match reader {
             Reader::Insn(id) => match self.block_of.get(id) {
                 Some(&at) if at == from => {
@@ -379,12 +399,14 @@ impl Walk<'_> {
                 None => true,
             },
             Reader::Phi(join) => self.body.blocks[*join].phis.iter().any(|phi| {
-                phi.incoming.iter().any(|&(edge_from, value)| {
-                    self.name(value) == key
-                        && self.by_at.get(&edge_from).is_none_or(|&edge| {
-                            edge == from || reaches_avoiding(self.body, &self.by_at, from, edge, defined_in(key))
-                        })
-                })
+                phi.incoming
+                    .iter()
+                    .any(
+                        |&(edge_from, value)| self.name(value) == key
+                            && self.by_at.get(&edge_from).is_none_or(|&edge| {
+                                edge == from || reaches_avoiding(self.body, &self.by_at, from, edge, defined_in(key))
+                            }),
+                    )
             }),
         };
         // (live past the shared point, live past `one`) of one operand.
@@ -398,7 +420,8 @@ impl Walk<'_> {
                 .flatten()
                 .filter(|reader| **reader != Reader::Insn(one.id()) && Some(**reader) != shared_id.map(Reader::Insn))
                 .collect();
-            let past_shared = shared_id.is_some_and(|origin| others.iter().any(|reader| after(reader, key, shared_block, origin)));
+            let past_shared =
+                shared_id.is_some_and(|origin| others.iter().any(|reader| after(reader, key, shared_block, origin)));
             Some((past_shared, others.iter().any(|reader| after(reader, key, block, one.id()))))
         };
         let operands: Vec<(bool, bool)> = what.sources.iter().filter_map(lives).collect();
@@ -436,7 +459,7 @@ impl Walk<'_> {
         // at any distance and its allocator splits the long range; ours spilled
         // (x_life -O3 +2.6% clk: `lea eax, _g[ecx]` shared across a loop held a
         // register and reloaded the bound each trip; x_transpose +14 B).
-        if (crate::backend::machinesink::as_cheap_as_a_move(one, self.cheap_immediate)
+        if (crate::backend::machinesink::as_cheap_as_a_move_named(one, self.cheap_immediate, self.cheap_row)
             || one.what.as_ref().is_some_and(|what| what.op == Operation::Address))
             && shared_block != block
             && !self.body.blocks[shared_block].succ.contains(&self.body.blocks[block].at)
@@ -468,8 +491,8 @@ impl Walk<'_> {
     }
 
     /// The pin reads a value a call or a return needs in a particular register
-    /// through a `COPY` into it (a call's argument, the returned value). Another
-    /// fixed-register reader is not one.
+    /// through a `COPY` into it (a call's argument, the returned value).
+    /// Another fixed-register reader is not one.
     fn pinned_read(
         &self,
         id: u64,
@@ -955,6 +978,7 @@ pub fn shared_constrained(
         regs,
         constrain,
         cheap_immediate: classes.cheap_move_immediate,
+        cheap_row: classes.cheap_move_row,
     };
     // Depth first over the dominator tree; an entry is `(block, keys to drop)`
     // once its subtree is done.
@@ -1028,7 +1052,8 @@ pub fn shared_constrained(
                 mine.push(key);
                 continue;
             }
-            // not where the shared result cannot be of the class the removed one's readers need
+            // not where the shared result cannot be of the class the removed
+            // one's readers need
             if !walk.allows(old, shared_value) {
                 walk.table.insert(key.clone(), (old, number));
                 mine.push(key);
@@ -1137,6 +1162,32 @@ mod tests {
                 .count()
         };
         assert_eq!(count(&body), 2, "the premise: two leas");
+        assert_eq!(count(&shared(&body, &RegisterClasses::m16())), 1);
+    }
+
+    /// `V_SET0` of two vector types in one loop body (the unpack steps of a
+    /// widened byte sum: `v8i16`, `v4i32`, `v2i64` zeros) stayed three `xorps`
+    /// of three registers, since each read its own result and no two were the
+    /// same expression: three live zeros and, at the register file's edge,
+    /// the loop's spills (mem_length_boundaries_m32 +2.7% over gcc). The pin
+    /// makes one.
+    #[test]
+    fn test_two_zero_vectors_in_a_block_are_one() {
+        let zero = |at, into| {
+            let wide = |value| Loc::Held(Held { value, width: 16, offset: 0 });
+            insn(at, Operation::Binary, "xorps", vec![wide(into)], vec![wide(into), wide(into)], vec![into], vec![])
+        };
+        let block = LirBlock::new(0, vec![zero(0, 10), zero(1, 11)]);
+        let mut body = LirBody::new("zero", 0, vec![block.into()], IndexMap::default(), IndexMap::default());
+        body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+        let count = |body: &LirBody| {
+            body.blocks
+                .iter()
+                .flat_map(|block| block.insns.iter())
+                .filter(|one| one.what.as_ref().and_then(|what| what.name.as_deref()) == Some("xorps"))
+                .count()
+        };
+        assert_eq!(count(&body), 2, "the premise: two zeros");
         assert_eq!(count(&shared(&body, &RegisterClasses::m16())), 1);
     }
 
@@ -1686,10 +1737,26 @@ mod tests {
     fn test_a_movabs_a_call_separates_from_its_use_is_shared() {
         let imm = || Loc::Imm(llrm_lir::Imm { value: 0xaaaa_aaaa_aaaa_aaabu64 as i64, width: 8, address: None });
         let make = |at: i64, result: u32| {
-            insn(at, Operation::Move, "mov", vec![Loc::Held(Held { value: result, width: 8, offset: 0 })], vec![imm()], vec![result], vec![])
+            insn(
+                at,
+                Operation::Move,
+                "mov",
+                vec![Loc::Held(Held { value: result, width: 8, offset: 0 })],
+                vec![imm()],
+                vec![result],
+                vec![],
+            )
         };
         let read = |at: i64, value: u32, result: u32| {
-            insn(at, Operation::Binary, "add", vec![held(result)], vec![held(value), held(1)], vec![result], vec![value, 1])
+            insn(
+                at,
+                Operation::Binary,
+                "add",
+                vec![held(result)],
+                vec![held(value), held(1)],
+                vec![result],
+                vec![value, 1],
+            )
         };
         let call = insn(2, Operation::Call, "call", vec![], vec![], vec![], vec![]);
         let blocks = vec![
@@ -1907,13 +1974,26 @@ mod tests {
         };
         let mut join_insns = vec![];
         if after {
-            join_insns.push(insn(7, Operation::Binary, "add", vec![held(6)], vec![held(1), held(5)], vec![6], vec![1, 5]));
+            join_insns.push(insn(
+                7,
+                Operation::Binary,
+                "add",
+                vec![held(6)],
+                vec![held(1), held(5)],
+                vec![6],
+                vec![1, 5],
+            ));
         }
         join_insns.push(insn(8, Operation::Return, "ret", vec![], vec![], vec![], vec![]));
         let mut join = LirBlock::new(3, join_insns);
         join.phis = vec![crate::model::lir::Phi { result: 5, incoming: vec![(1, 4), (2, 1)] }].into();
-        let mut body =
-            LirBody::new("diamond", 0, vec![head.into(), then.into(), other.into(), join.into()], IndexMap::default(), IndexMap::default());
+        let mut body = LirBody::new(
+            "diamond",
+            0,
+            vec![head.into(), then.into(), other.into(), join.into()],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
         body.inputs = [1, 2].into_iter().collect();
         body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
         body

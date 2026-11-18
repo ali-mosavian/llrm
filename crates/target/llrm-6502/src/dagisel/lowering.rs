@@ -67,7 +67,10 @@ pub mod cond {
 pub fn target_lowering() -> TargetLowering {
     use ISD::*;
     let mut tl = TargetLowering::empty(
-        TargetLoweringInfo::new(&[MVT::I1, MVT::I8, MVT::I16], false).with_soft_float().with_int_size(16),
+        TargetLoweringInfo::new(&[MVT::I1, MVT::I8, MVT::I16], false)
+            .with_soft_float()
+            .with_soft_compare_classes()
+            .with_int_size(16),
     );
     tl.init_actions();
     // SD241: the shift routine stays for a variable amount known small until an
@@ -189,6 +192,9 @@ pub struct MosLowering {
     /// A product of two words is a widening multiply (not in a function tuned
     /// for size: the two routines add bytes).
     pub widen_products: bool,
+    /// The function is tuned for size: a long shift by a constant that
+    /// takes more bytes in line than as a call goes to the routine.
+    pub sized: bool,
 }
 
 impl Hooks for MosLowering {
@@ -214,7 +220,7 @@ impl Hooks for MosLowering {
             ISD::Mul | ISD::SDiv | ISD::UDiv | ISD::SRem | ISD::URem | ISD::Shl | ISD::Srl | ISD::Sra
                 if dag.value_type(node) == EVT::I32 =>
             {
-                lower_long(dag, node, self.widen_products)
+                lower_long(dag, node, self.widen_products, self.sized)
             }
             _ => None,
         }
@@ -345,6 +351,33 @@ fn lower_rotate(
     dag.get_node(ISD::Or, vt, &[high, low])
 }
 
+/// Whether a long shift by the constant `count` is smaller as a call of
+/// `__ashlsi3` and its kin than in line: the count is `8 * bytes + bits`, the
+/// whole bytes are moves of registers, and each remaining bit is a pass over
+/// the lanes that are left, unrolled for one or two and a loop for more. The
+/// call is `lda #n; sta rc4; jsr` and the copies of the operand into
+/// `a:x:rc2:rc3`, about 11 bytes.
+///
+/// DEVIATE 6502-SHIFT-CALL: the pin's `LowerShift` expands a constant shift
+/// of a legal type; its long shifts are the generic expansion over the
+/// halves. Owner: llrm-target-6502. Exit: 2026-11-24, with a pricing from the
+/// emitted shift run rather than this table.
+fn long_shift_is_a_call(count: u128) -> bool {
+    const CALL: u128 = 11;
+    // a shift of 8 bits or more moves whole bytes and shifts the pair that is
+    // left: measured at -Os it is no longer than the call
+    // (div_constants_short, overflow_builtins and sat_builtins grew when it
+    // went to one)
+    if !(1..8).contains(&count) {
+        return false;
+    }
+    let inline = match count {
+        1 | 2 => 8 * count,
+        _ => 32,
+    };
+    inline > CALL
+}
+
 /// A long (`i32`) multiply, divide, remainder or shift by a variable:
 /// `MOSISD::<op>32` of the operands' halves, two words joined. A shift by a
 /// constant is left to the type legalizer.
@@ -352,6 +385,7 @@ fn lower_long(
     dag: &mut SelectionDAG,
     node: SDValue,
     widen_products: bool,
+    sized: bool,
 ) -> Option<SDValue> {
     let opcode = match dag.opcode(node) {
         ISD::Mul => mosisd::MUL32,
@@ -371,8 +405,19 @@ fn lower_long(
     }
     let shift = matches!(opcode, mosisd::SHL32 | mosisd::SRL32 | mosisd::SRA32);
     let (a, b) = (dag.operand(node, 0), dag.operand(node, 1));
-    if shift && dag.constant(b).is_some() {
-        return None;
+    // a product commutes: two arguments go in their own order, the first where
+    // the routine takes its first operand (InstCombine puts the later argument
+    // on the left, and the call then swapped four bytes with four)
+    let (a, b) = match (opcode, incoming_register(dag, a), incoming_register(dag, b)) {
+        (mosisd::MUL32, Some(x), Some(y)) if x > y => (b, a),
+        _ => (a, b),
+    };
+    if shift && let Some(count) = dag.constant(b) {
+        // at -Os a count that takes many bytes in line is the routine with
+        // the count in `rc4`
+        if !(sized && long_shift_is_a_call(count)) {
+            return None;
+        }
     }
     let sixteen = dag.get_constant(16, EVT::I8);
     let mut operands = Vec::new();
@@ -443,6 +488,24 @@ fn lower_widening_multiply(
         EVT::I32,
         &[SDValue { node: pair.node, res: 0 }, SDValue { node: pair.node, res: 1 }],
     ))
+}
+
+/// The virtual register an argument (or the low half of a long one) is copied
+/// from.
+fn incoming_register(
+    dag: &SelectionDAG,
+    value: SDValue,
+) -> Option<u32> {
+    if dag.opcode(value) == ISD::BuildPair {
+        return incoming_register(dag, dag.operand(value, 0));
+    }
+    if dag.opcode(value) != ISD::CopyFromReg {
+        return None;
+    }
+    match dag.node(dag.operand(value, 1)).data {
+        NodeData::Register(register) => Some(register),
+        _ => None,
+    }
 }
 
 /// A bit in memory is a byte with the upper bits zero, as the pin's type

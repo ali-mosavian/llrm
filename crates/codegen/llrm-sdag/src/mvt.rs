@@ -26,9 +26,20 @@ pub enum MVT {
     V2F64,
     /// `v2f32`: the 64-bit float vector `FPR64` holds (`addDRTypeForNEON`).
     V2F32,
+    /// The vectors of booleans (`v2i1`..`v16i1`): no register holds one, the
+    /// type legalizer promotes the lanes (`getPreferredVectorAction`).
+    V2I1,
+    V4I1,
+    V8I1,
+    V16I1,
     /// The 64-bit integer vectors `FPR64` holds (arm64, `addDRTypeForNEON`).
     V8I8,
     V4I16,
+    /// The vectors under a D register: no register class holds them, so the
+    /// legalizer promotes their lanes (`v4i8` is `v4i16`).
+    V2I8,
+    V4I8,
+    V2I16,
     V2I32,
     /// The vectors no register holds: the type legalizer splits each in two
     /// (`TypeSplitVector`).
@@ -50,6 +61,9 @@ pub enum MVT {
     V64I16,
     V32I32,
     V16I64,
+    /// The 2048-bit `v32i64` of the pin's `MVT`: the widest the vectorizers
+    /// form (`<32 x i16>` widened to `i64` lanes).
+    V32I64,
     V32F32,
     V16F64,
     /// IEEE binary128: never legal, softened to an `i128` (DEVIATE: the pin
@@ -123,7 +137,11 @@ impl MVT {
 }
 
 /// Every vector type: its element and its lane count.
-const VECTORS: [(MVT, MVT, u32); 28] = [
+const VECTORS: [(MVT, MVT, u32); 36] = [
+    (MVT::V2I1, MVT::I1, 2),
+    (MVT::V4I1, MVT::I1, 4),
+    (MVT::V8I1, MVT::I1, 8),
+    (MVT::V16I1, MVT::I1, 16),
     (MVT::V16I8, MVT::I8, 16),
     (MVT::V8I16, MVT::I16, 8),
     (MVT::V4I32, MVT::I32, 4),
@@ -139,6 +157,9 @@ const VECTORS: [(MVT, MVT, u32); 28] = [
     (MVT::V4F64, MVT::F64, 4),
     (MVT::V8I8, MVT::I8, 8),
     (MVT::V4I16, MVT::I16, 4),
+    (MVT::V2I8, MVT::I8, 2),
+    (MVT::V4I8, MVT::I8, 4),
+    (MVT::V2I16, MVT::I16, 2),
     (MVT::V2I32, MVT::I32, 2),
     (MVT::V64I8, MVT::I8, 64),
     (MVT::V32I16, MVT::I16, 32),
@@ -150,15 +171,18 @@ const VECTORS: [(MVT, MVT, u32); 28] = [
     (MVT::V64I16, MVT::I16, 64),
     (MVT::V32I32, MVT::I32, 32),
     (MVT::V16I64, MVT::I64, 16),
+    (MVT::V32I64, MVT::I64, 32),
     (MVT::V32F32, MVT::F32, 32),
     (MVT::V16F64, MVT::F64, 16),
 ];
 
-/// A value type: a simple one, or an integer of a width with no simple type.
+/// A value type: a simple one, an integer of a width with no simple type, or a vector with no simple type
+/// (`<3 x i8>`; `EVT::getVectorVT` on a lane count no `MVT` has).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum EVT {
     Simple(MVT),
     Int(u32),
+    Vector(MVT, u32),
 }
 
 impl From<MVT> for EVT {
@@ -184,8 +208,17 @@ impl EVT {
         MVT::integer(bits).map_or(EVT::Int(bits), EVT::Simple)
     }
 
+    /// `EVT::getVectorVT`: the simple type when there is one, so equal types compare equal.
+    pub fn vector(
+        element: MVT,
+        lanes: u32,
+    ) -> EVT {
+        MVT::vector(element, lanes).map_or(EVT::Vector(element, lanes), EVT::Simple)
+    }
+
     pub fn is_integer(self) -> bool {
         match self {
+            EVT::Vector(..) => false,
             EVT::Int(_) => true,
             EVT::Simple(vt) => matches!(
                 vt,
@@ -195,13 +228,30 @@ impl EVT {
     }
 
     pub fn is_vector(self) -> bool {
-        matches!(self, EVT::Simple(vt) if vt.is_vector())
+        match self {
+            EVT::Simple(vt) => vt.is_vector(),
+            EVT::Vector(..) => true,
+            EVT::Int(_) => false,
+        }
+    }
+
+    /// `changeVectorElementTypeToInteger`: the vector of integer lanes as wide
+    /// as this one's (a scalar's own type is its integer of that width).
+    pub fn change_vector_element_type_to_integer(self) -> EVT {
+        match self {
+            EVT::Simple(_) | EVT::Vector(..) if self.is_vector() => {
+                let lane = MVT::integer(self.element().size_in_bits()).expect("an integer lane of a simple width");
+                EVT::vector(lane, self.lanes())
+            }
+            other => other,
+        }
     }
 
     /// `getVectorElementType`.
     pub fn element(self) -> EVT {
         match self {
             EVT::Simple(vt) => EVT::Simple(vt.element().expect("a vector type")),
+            EVT::Vector(element, _) => EVT::Simple(element),
             EVT::Int(_) => panic!("{self:?} is not a vector"),
         }
     }
@@ -210,6 +260,7 @@ impl EVT {
     pub fn lanes(self) -> u32 {
         match self {
             EVT::Simple(vt) => vt.lanes().expect("a vector type"),
+            EVT::Vector(_, lanes) => lanes,
             EVT::Int(_) => panic!("{self:?} is not a vector"),
         }
     }
@@ -222,6 +273,7 @@ impl EVT {
     pub fn size_in_bits(self) -> u32 {
         match self {
             EVT::Int(bits) => bits,
+            EVT::Vector(element, lanes) => EVT::Simple(element).size_in_bits() * lanes,
             EVT::Simple(vt) => match vt {
                 MVT::I1 => 1,
                 MVT::I8 => 8,

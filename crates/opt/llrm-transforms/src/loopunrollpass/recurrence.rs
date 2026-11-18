@@ -1,4 +1,4 @@
-//! DEVIATE RU-REC (owner x86-m64; exit 2026-11-20): a loop is not unrolled at
+//! DEVIATE RU-REC (owner x86-m64; exit 2026-11-24): a loop is not unrolled at
 //! run time when its loop-carried dependence takes longer than the core needs
 //! to issue one trip.
 //!
@@ -8,6 +8,10 @@
 //! set by a chain of dependent operations, the copies run no sooner, and the
 //! guard, the split of the count and the remainder loop are code for nothing
 //! (floats -O2 394 B against gcc's 207 for the same clocks).
+//!
+//! A known trip count is not vetoed (partial unrolling): the copies show CVP
+//! the range of a remainder, `% 100003` narrows to 32 bits (loop_interchange
+//! -O3, -5%); the bytes it saved at -O2/-O3 are not a goal.
 //!
 //! The chain is the pin's own estimate of a loop's critical path,
 //! `SelectOptimize::computeLoopCosts`: two walks of the body, each operation
