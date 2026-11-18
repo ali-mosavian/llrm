@@ -68,6 +68,9 @@ static ADDRESS_FORMS: LazyLock<Vec<AddressForm>> = LazyLock::new(|| {
     llrm_target::addressing::forms(include_str!("machines/datalayout.toml")).expect("datalayout.toml parses")
 });
 
+/// The most pairs a constant copy is inline at -Os (`RATIO-OS`).
+const RATIO_OS: usize = 2;
+
 /// The target's tuning. DEVIATE: a multiply by a constant the pin leaves an
 /// `imul` (13-42 clocks on a 486, Intel 240440-002 Table 10.1) is, at -O1..-O3,
 /// the shift/`lea` chain of fewest clocks on the CPU's table with no byte term,
@@ -99,17 +102,14 @@ static ADDRESS_FORMS: LazyLock<Vec<AddressForm>> = LazyLock::new(|| {
 /// fill clocks over its bytes (`line_fill_clocks` / `cache_line` of the CPU's
 /// sheet; 486: 5 / 16 = 312 milliclocks), so `speed_milliclocks_per_byte` is
 /// derived, never set. Owner llrm-target-x86-m32.
-/// The most stores or pairs a constant fill or copy is at -Os (`RATIO-OS`).
-const RATIO_OS: usize = 2;
-
 fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning {
     let per_byte = llrm_target::timings::derived_byte_rate(costs.cache_line, costs.line_fill_clocks);
     llrm_mir::target::Tuning {
         // DEVIATE RATIO-OS (owner llrm-target-x86-m16-b, exit 2026-11-30): at
-        // -Os a constant fill or copy of three or more dwords is `rep stos` /
-        // `rep movs`, as gcc's `CLEAR_RATIO (size)` of 2 and `MOVE_RATIO
-        // (size)` of 3 moves (i386.h), where the pin keeps 8 stores and 4
-        // pairs. QB m32 -Os: gcc 368 rep-string sites, llrm 105, clang 57.
+        // -Os a constant copy of three or more dwords is `rep movs`, as gcc's
+        // `MOVE_RATIO (size)` of 3 moves (i386.h), where the pin keeps 4
+        // pairs. Fills keep the pin's window: lru -Os clocks 124 -> 154 (+24%,
+        // clang 143) with seven stores as `rep stosd`.
         max_stores_per_memcpy_opt_size: RATIO_OS,
         max_stores_per_memmove_opt_size: RATIO_OS,
         multiply_by_clocks: true,
@@ -279,12 +279,12 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         x87_zero_fill_at_size: true,
         speed_milliclocks_per_byte: per_byte,
         // DEVIATE REPFILL (owner x86-m32, exit 2026-11-27): at -Os a constant
-        // fill is `rep stos` where its stores (an immediate each, or the value
-        // in a register once) take more bytes (the pin keeps up to
-        // MaxStoresPerMemsetOptSize stores; lru -Os: 7 stores were `rep stosd`,
-        // 201 clk against 124: Os is bytes, 2026-11-18). `mov dword/word/byte
-        // [esp+d8], imm` 8/7/5 B, at an absolute address 10/9/7; `xor eax, eax`
-        // 2,
+        // fill is `rep stos` where its stores take more bytes and are more
+        // than MaxStoresPerMemsetOptSize (the pin keeps up to that many
+        // stores; lru -Os: 7 stores were `rep stosd`, 201 clk against
+        // 124: a 486 `rep stos` is 7 + 4 clk a dword, a store 1). `mov
+        // dword/word/byte [esp+d8], imm` 8/7/5 B, at an absolute address
+        // 10/9/7; `xor eax, eax` 2,
         // `or eax, -1` 3, `mov eax, imm32` 5; `lea edi, [esp+d8]` (4) or `mov
         // edi, imm32` (5), `mov ecx, imm32` 5, `rep stos` 2; `fst qword` 4 / 6.
         // DEVIATE SINK-CONST-PHI (owner x86-m32, exit 2026-11-27): the pin
@@ -299,9 +299,6 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         phi_constant_chains: true,
         size_fill: Some(llrm_mir::target::SizeFill {
             store: [[8, 7, 5], [10, 9, 7]],
-            // `mov [esp+d8], eax` 4, word 5 (prefix), byte 4; `mov [abs32],
-            // eax` 5, word 6, byte 5 (`A3`/`A2`).
-            register: [[4, 5, 4], [5, 6, 5]],
             value: [2, 3, 5],
             setup: [11, 12],
             fst: [4, 6],
