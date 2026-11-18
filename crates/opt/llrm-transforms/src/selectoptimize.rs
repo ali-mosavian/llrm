@@ -103,11 +103,11 @@ pub struct Target<'a> {
     /// operands beside it is a select of that compare, so it joins the
     /// group of the selects that branch on it.
     pub min_max_selects: bool,
-    /// DEVIATE SELOPT-X87 (owner x87-b, exit 2026-11-24): a select of an
-    /// `x86_fp80` stays. A loop of them made branches over the x87 stack
-    /// gives wrong results at the i486 (x_ld_max, x_ldcmp -O3: `fstp st(1)` and
-    /// `fxch` pairs across the join), a fault of the stack's allocation across
-    /// blocks, not of the pass.
+    /// DEVIATE SELOPT-X87 (owner x87-b, exit 2026-11-30): a select of an
+    /// `x86_fp80` stays. As branches it is correct (the stack bundle order was
+    /// fixed) but loses at the i486: x_ld_max -O2/-O3 12,818 -> 18,450 clk
+    /// (gcc 13,837), x_ldcmp +5.8%; the backend's own expansion of the select
+    /// is cheaper than the branches' compare, `fnstsw` and `sahf` per element.
     pub leave_x87_selects: bool,
 }
 
