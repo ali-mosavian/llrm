@@ -256,6 +256,13 @@ fn lower_function(
         dag_select(module, &name, &program.layout, platform, lines).map_err(|why| format!("@{name}: {why}"))?;
     dump("Select", &machine);
     crate::mfunc::remove_unreachable_blocks(&mut machine);
+    // `EarlyIfConverter` skips an `optnone` function (`skipFunction`).
+    if !flagged(function, &["optnone"])
+        && let Some(mode) = crate::ifcvt::mode_from_env()
+    {
+        crate::ifcvt::run(&mut machine, mode);
+        dump("EarlyIfConversion", &machine);
+    }
     // The shared phases that need SSA see the body as selection made it,
     // phis and all; the private phases below see it after phi elimination.
     if llrm_support::env_flag!("LLRM_ARM64_STAGES") {
