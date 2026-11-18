@@ -249,7 +249,8 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // (64,485): the machine count and the measured flip agree.
         licm_float_register_limit: Some(5),
         loop_idiom_copy_trial_at_size: true,
-        // DEVIATE OB1 (owner w12, exit 2026-11-27, `unrollbound.rs`): gcc
+        // DEVIATE OB1 (owner w12, exit 2026-11-27, `unrollbound.rs`; -O3 only,
+        // as gcc grows code only there): gcc
         // completely peels a loop whose trips the object it indexes bounds
         // (max-completely-peel-times 16); the pin does not. x_matmul_f /
         // x_ld_matmul -O3: 392 B and 3 fmul against gcc's 1183 B and 14. Tried
