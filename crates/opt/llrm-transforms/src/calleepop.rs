@@ -194,7 +194,9 @@ fn decided(
             }
         }
     }
-    let chosen: BTreeMap<GlobalId, u32> = calls
+    // What each candidate pays (callers' cleanup less the returns' extra) and
+    // the stack bytes it takes.
+    let candidates: BTreeMap<GlobalId, (u32, i64, i64)> = calls
         .iter()
         .filter_map(|(&callee, sites)| {
             let function = module.global(callee).function()?;
@@ -219,13 +221,28 @@ fn decided(
                 && !other.contains(&callee)
                 // A pop's worth of bytes saved is not worth an instruction more
                 // at every call.
-                && words > 0
-                && sites.len() as i64 * costs.cleanup(words) + costs.pop
-                    >= returns * costs.return_pops
-                        + sibling_calls_lost(module, layout, costs, target, function))
-            .then_some((callee, twin))
+                && words > 0)
+                .then_some((
+                    callee,
+                    (twin, bytes, sites.len() as i64 * costs.cleanup(words) + costs.pop - returns * costs.return_pops),
+                ))
         })
         .collect();
+    let mut keep: BTreeSet<GlobalId> =
+        candidates.iter().filter(|(_, (_, _, pays))| *pays >= 0).map(|(&callee, _)| callee).collect();
+    // CP-TAIL: a function stays caller-pop where the sibling calls it would
+    // lose cost more than the pops save; one fewer callee-pop function can
+    // cost another its jump, so until nothing more drops.
+    while let Some(&callee) = keep.iter().find(|&&callee| {
+        let (_, bytes, pays) = candidates[&callee];
+        let Some(function) = module.global(callee).function() else { return false };
+        pays < sibling_calls_lost(module, layout, costs, target, function, &|called| {
+            keep.contains(&called) && candidates[&called].1 == bytes
+        })
+    }) {
+        keep.remove(&callee);
+    }
+    let chosen: BTreeMap<GlobalId, u32> = keep.iter().map(|&callee| (callee, candidates[&callee].0)).collect();
     let sites = chosen
         .iter()
         .flat_map(|(callee, &twin)| calls[callee].iter().map(move |&(caller, inst)| (caller, inst, twin)))
@@ -247,6 +264,7 @@ fn sibling_calls_lost(
     costs: &OperationCosts,
     target: &dyn Machine,
     function: &llrm_mir::module::Function,
+    pops_alike: &dyn Fn(GlobalId) -> bool,
 ) -> i64 {
     let mut lost = 0;
     for &block in function.layout() {
@@ -263,6 +281,13 @@ fn sibling_calls_lost(
             || !llrm_mir::callgraph::passes_own_parameters(function, call)
             // the callee already pops: the jump was never one
             || target.callee_pop(info.calling_convention).is_none()
+        {
+            continue;
+        }
+        // A callee that pops the same bytes keeps the jump.
+        if let Some(Operand::Constant(id)) = called.operands.last()
+            && let ConstantKind::Global(callee) = module.context.get(*id).kind
+            && pops_alike(callee)
         {
             continue;
         }

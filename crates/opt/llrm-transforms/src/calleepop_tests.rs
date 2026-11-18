@@ -68,6 +68,21 @@ fn a_function_that_ends_in_a_sibling_call_keeps_the_caller_cleaning_at_size() {
     // The last call takes more than the function was given: no jump either way.
     let wider = run_for(&twice("  call void @report(i32 %v)\n  call void @report2(i32 %v, i32 %v)\n"), true);
     assert!(wider.contains("define internal fastcc void @twice"), "{wider}");
+    // The last call goes to a function that pops the same bytes: the jump
+    // stays, and both pop (loop_fusion's `total`, +11 instructions at m16 -Os
+    // when this was missed).
+    let chained = run_for(
+        "@g = global i32 0\n\
+         define internal void @inner(i32 %v) {\nb0:\n  store i32 %v, ptr @g\n  ret void\n}\n\
+         define internal void @outer(i32 %v) {\nb0:\n  store i32 1, ptr @g\n  call void @inner(i32 %v)\n  ret void\n}\n\
+         define void @f() {\nb0:\n  call void @outer(i32 3)\n  call void @outer(i32 4)\n  call void @inner(i32 5)\n  ret void\n}\n",
+        true,
+    );
+    assert!(
+        chained.contains("define internal fastcc void @inner")
+            && chained.contains("define internal fastcc void @outer"),
+        "{chained}"
+    );
     // The last call takes a new value, not the function's own argument: the
     // backend makes that call (`four` in shl_long_by_one: `ret 4` kept).
     let fresh = run_for(&twice("  call void @report(i32 %v)\n  call void @report(i32 7)\n"), true);
