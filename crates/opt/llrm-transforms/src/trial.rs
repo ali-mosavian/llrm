@@ -43,6 +43,11 @@ thread_local! {
     static LATCH_KEPT: Cell<bool> = const { Cell::new(false) };
     /// The functions in which JumpThreading copied a latch.
     static LATCH_COPIED: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    /// Set while the trial compile of BACKTHREAD-OS-TRIAL runs: backward
+    /// threading also runs on `optsize` functions.
+    static THREADING_AT_SIZE: Cell<bool> = const { Cell::new(false) };
+    /// The `optsize` functions backward threading copied a path of.
+    static SIZE_THREADS: Cell<usize> = const { Cell::new(0) };
     /// Set while the trial compile of SWITCH-LOOKUP-TRIAL runs: no switch is
     /// turned into a lookup table.
     static LOOKUPS_REFUSED: Cell<bool> = const { Cell::new(false) };
@@ -142,6 +147,31 @@ pub(crate) fn note_latch_copy(function: &str) {
 /// The functions [`note_latch_copy`] saw since the last call.
 pub fn take_latch_copies() -> Vec<String> {
     LATCH_COPIED.with(|list| std::mem::take(&mut *list.borrow_mut()))
+}
+
+/// DEVIATE BACKTHREAD-OS-TRIAL (owner llrm-target-x86-m32-b, exit
+/// 2026-12-15): whether the trial compile that threads `optsize` functions is
+/// running.
+pub fn threading_at_size() -> bool {
+    THREADING_AT_SIZE.with(Cell::get)
+}
+
+/// Runs `body` with backward threading on `optsize` functions.
+pub fn with_threading_at_size<T>(body: impl FnOnce() -> T) -> T {
+    let before = THREADING_AT_SIZE.with(|cell| cell.replace(true));
+    let value = body();
+    THREADING_AT_SIZE.with(|cell| cell.set(before));
+    value
+}
+
+/// Notes that backward threading copied a path of an `optsize` function.
+pub(crate) fn note_size_thread() {
+    SIZE_THREADS.with(|count| count.set(count.get() + 1));
+}
+
+/// The functions [`note_size_thread`] saw since the last call.
+pub fn take_size_threads() -> usize {
+    SIZE_THREADS.with(|count| count.replace(0))
 }
 
 thread_local! {

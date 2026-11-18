@@ -66,6 +66,9 @@ enum Dimension {
     KeepSwitch,
     /// DEVIATE LIR-COPY-TRIAL: a copy loop of an unknown count stays a loop.
     KeepCopyLoop,
+    /// DEVIATE BACKTHREAD-OS-TRIAL: backward threading also runs on the
+    /// `optsize` functions.
+    ThreadAtSize { bytes_strict: bool },
 }
 
 /// What the base compile noted for each dimension.
@@ -77,6 +80,7 @@ struct Noted {
     latched: Vec<String>,
     lookups: usize,
     copied: Vec<String>,
+    size_threads: usize,
 }
 
 impl Noted {
@@ -90,6 +94,7 @@ impl Noted {
             latched: trial::take_latch_copies(),
             lookups: trial::take_lookup_tables(),
             copied: trial::take_copy_calls(),
+            size_threads: trial::take_size_threads(),
         };
         trial::clear_rotated_loops();
         noted
@@ -106,6 +111,7 @@ impl Noted {
             Dimension::KeepLatch => !self.latched.is_empty(),
             Dimension::KeepSwitch => self.lookups > 0,
             Dimension::KeepCopyLoop => !self.copied.is_empty(),
+            Dimension::ThreadAtSize { .. } => self.size_threads > 0,
         }
     }
 }
@@ -133,6 +139,9 @@ impl Dimension {
         if tti.jump_threading_latch_trial_at_size() && !llrm_support::env_flag!("LLRM_NO_JT_LATCH_TRIAL") {
             all.push(Dimension::KeepLatch);
         }
+        if tti.backward_threading_trial_at_size() && !llrm_support::env_flag!("LLRM_NO_BT_OS_TRIAL") {
+            all.push(Dimension::ThreadAtSize { bytes_strict: tti.unroll_trial_bytes_strict() });
+        }
         if let Some(limit) = tti.unroll_trial_at_size().filter(|_| !NO_SIZE_UNROLL.with(|one| one.get())) {
             all.push(Dimension::Unroll { limit, bytes_strict: tti.unroll_trial_bytes_strict() });
         }
@@ -151,6 +160,7 @@ impl Dimension {
             Dimension::KeepLatch => trial::with_kept_latches(body),
             Dimension::KeepSwitch => trial::with_refused_lookup_tables(body),
             Dimension::KeepCopyLoop => trial::with_kept_copy_loops(body),
+            Dimension::ThreadAtSize { .. } => trial::with_threading_at_size(body),
         }
     }
 
@@ -198,6 +208,9 @@ impl Dimension {
             Dimension::KeepCopyLoop => ("keep-copy-loop", trial::keeps_at_size(added)),
             Dimension::Unroll { bytes_strict, .. } => {
                 ("unroll-os", measured && trial::keeps_unroll_at_size(saved, added, noted.unroll.0.len(), bytes_strict))
+            }
+            Dimension::ThreadAtSize { bytes_strict } => {
+                ("thread-os", measured && trial::keeps_unroll_at_size(saved, added, noted.size_threads.max(1), bytes_strict))
             }
         };
         if llrm_support::debug::enabled("trial") {
@@ -405,9 +418,14 @@ fn compiled_module_at_size(
     // A dimension that stays, with its variant assembled whole or the program
     // not yet assembled.
     let mut kept: Vec<(Dimension, Result<Variant, Program>)> = Vec::new();
+    // BACKTHREAD-OS-TRIAL: a variant's loops may have a path the base's lack
+    // (a rotated loop is the one the threader finds), so what each variant
+    // noted is kept for the stage after the others.
+    let mut threadable = noted.size_threads > 0;
+    let tried_threading = active.iter().any(|one| matches!(one, Dimension::ThreadAtSize { .. }));
     for dimension in active {
         let program = dimension.compile(|| optimized_program(module.clone(), &again))?;
-        let _ = Noted::take();
+        threadable |= Noted::take().size_threads > 0;
         let cut = differing(&base.program.modules[0], &program.modules[0]);
         if llrm_support::debug::enabled("trial") {
             eprintln!("trial: {} of the functions differ: {cut:?}", cut.len());
@@ -467,7 +485,7 @@ fn compiled_module_at_size(
     for (dimension, _) in kept {
         accepted.push(dimension);
         let program = compiled_with(&accepted, || optimized_program(module.clone(), &again))?;
-        let _ = Noted::take();
+        threadable |= Noted::take().size_threads > 0;
         let together = built(program, name, &again)?;
         let price =
             |one: &masm::Module| Some((unpadded(one)?, rotation_work(one, options, dimension.prices_proven_trips())));
@@ -479,6 +497,24 @@ fn compiled_module_at_size(
             chosen = together;
         } else {
             accepted.pop();
+        }
+    }
+    // BACKTHREAD-OS-TRIAL on the loops the others left.
+    if let Some(threading) = dimensions.iter().copied().find(|one| matches!(one, Dimension::ThreadAtSize { .. }))
+        && threadable
+        && !tried_threading
+    {
+        accepted.push(threading);
+        let program = compiled_with(&accepted, || optimized_program(module.clone(), &again))?;
+        let _ = Noted::take();
+        let together = built(program, name, &again)?;
+        let price = |one: &masm::Module| Some((unpadded(one)?, rotation_work(one, options, false)));
+        let pays = matches!(
+            (price(&chosen.built), price(&together.built)),
+            (Some(a), Some(b)) if threading.keeps(&noted, a, b)
+        );
+        if pays {
+            chosen = together;
         }
     }
     stage_files(options, "", &chosen.built)?;

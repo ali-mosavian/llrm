@@ -198,6 +198,12 @@ pub struct Tuning {
     /// JumpThreading made (gcc's backward threader refuses a path through the
     /// latch) and the smaller object kept. false: the pin's.
     pub jump_threading_latch_trial_at_size: bool,
+    /// DEVIATE BACKTHREAD-OS-TRIAL (owner llrm-target-x86-m32-b, exit
+    /// 2026-12-15): at -Os the module is compiled again with backward
+    /// threading on (the pass skips `optsize` functions) and the object kept
+    /// where it is smaller, or runs less for few bytes. gcc's `-Os` threads a
+    /// path when the copy does not grow the function. false: the pin's.
+    pub backward_threading_trial_at_size: bool,
     /// DEVIATE OB1: see `Tti::unroll_object_bound`.
     pub unroll_object_bound: Option<u32>,
     /// With `inline_never_grows_without_rate`: what a byte of growth costs an
@@ -850,6 +856,7 @@ impl Tuning {
         rotate_exiting_latch_when_guard_folds: false,
         inline_never_grows_without_rate: false,
         jump_threading_latch_trial_at_size: false,
+        backward_threading_trial_at_size: false,
         switch_lookup_trial_at_size: false,
         loop_idiom_copy_trial_at_size: false,
         unroll_object_bound: None,

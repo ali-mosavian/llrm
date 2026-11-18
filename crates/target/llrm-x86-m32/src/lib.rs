@@ -244,6 +244,9 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         branch_compare_trees_at_size: true,
         inline_never_grows_without_rate: true,
         jump_threading_latch_trial_at_size: true,
+        // DEVIATE BACKTHREAD-OS-TRIAL (owner llrm-target-x86-m32-b, exit
+        // 2026-12-15): see Tuning.
+        backward_threading_trial_at_size: true,
         switch_lookup_trial_at_size: true,
         jump_table_size_growth_ratio: Some(300),
         // The x87 stack has eight slots; an operation in a loop needs three of

@@ -1992,6 +1992,11 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE BACKTHREAD-OS-TRIAL: `Tuning::backward_threading_trial_at_size`.
+    fn backward_threading_trial_at_size(&self) -> bool {
+        false
+    }
+
     /// DEVIATE BFS-1: `Tuning::cold_site_ignores_sinks`.
     fn cold_site_ignores_sinks(&self) -> bool {
         false

@@ -128,49 +128,68 @@ impl FunctionPass for BackwardThreading {
             && (self.relations || analyses.outer().target().tti().is_some_and(|tti| tti.threads_by_relation()));
         let bits = !llrm_support::env_flag!("LLRM_NO_BACKTHREAD_BITS")
             && (self.bits || analyses.outer().target().tti().is_some_and(|tti| tti.threads_by_known_bits()));
-        if !self.enabled
-            || (self.early && !relations)
-            || unit.function.attrs.iter().any(|attr| {
-                matches!(
-                    attr,
-                    Attribute::Flag(flag) if flag == "optsize" || flag == "minsize"
-                )
-            })
-        {
+        if !self.enabled || (self.early && !relations) {
+            return PreservedAnalyses::all();
+        }
+        // DEVIATE BACKTHREAD-OS-TRIAL: an `optsize` function is threaded only by
+        // the trial compile; the base compile notes that there is a path to thread.
+        let sized = unit.function.attrs.iter().any(|attr| {
+            matches!(
+                attr,
+                Attribute::Flag(flag) if flag == "optsize" || flag == "minsize"
+            )
+        });
+        if sized && !crate::trial::threading_at_size() {
+            let found = next_thread(unit.context, unit.function, relations, bits).is_some();
+            if llrm_support::debug::enabled("trial") {
+                eprintln!("trial thread-os probe: relations={relations} bits={bits} found={found}");
+            }
+            if found {
+                crate::trial::note_size_thread();
+            }
             return PreservedAnalyses::all();
         }
         let mut changed = false;
         for _ in 0..self.max_threads {
-            let dt = DomTree::of(unit.function);
-            let loops = LoopInfo::analyze(unit.function, || DomTree::of(unit.function));
-            if let Some(path) = find(unit.context, unit.function, &dt, &loops, relations, bits) {
-                thread(unit.context, unit.function, &path);
-                changed = true;
-                continue;
+            let Some((unfolded, path)) = next_thread(unit.context, unit.function, relations, bits) else { break };
+            if let Some(function) = unfolded {
+                *unit.function = function;
             }
-            // A select that sends the next trip down one arm of a branch is
-            // a diamond GCC would still have: unfold it where that threads.
-            let mut threaded = false;
-            let selects = if bits { select_candidates(unit.context, unit.function) } else { Vec::new() };
-            for select in selects {
-                let mut trial = unit.function.clone();
-                unfold_select(&mut trial, select);
-                let dt = DomTree::of(&trial);
-                let loops = LoopInfo::analyze(&trial, || DomTree::of(&trial));
-                if let Some(path) = find(unit.context, &trial, &dt, &loops, relations, bits) {
-                    *unit.function = trial;
-                    thread(unit.context, unit.function, &path);
-                    threaded = true;
-                    break;
-                }
-            }
-            if !threaded {
-                break;
-            }
+            thread(unit.context, unit.function, &path);
             changed = true;
         }
         if changed { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
     }
+}
+
+/// The next path to thread, with the function whose select was unfolded for it
+/// (none where the path is in `function` as it stands). A select that sends the
+/// next trip down one arm of a branch is a diamond GCC would still have: it is
+/// unfolded where that threads.
+fn next_thread(
+    context: &Context,
+    function: &Function,
+    relations: bool,
+    bits: bool,
+) -> Option<(Option<Function>, Path)> {
+    let dt = DomTree::of(function);
+    let loops = LoopInfo::analyze(function, || DomTree::of(function));
+    if let Some(path) = find(context, function, &dt, &loops, relations, bits) {
+        return Some((None, path));
+    }
+    if !bits {
+        return None;
+    }
+    for select in select_candidates(context, function) {
+        let mut trial = function.clone();
+        unfold_select(&mut trial, select);
+        let dt = DomTree::of(&trial);
+        let loops = LoopInfo::analyze(&trial, || DomTree::of(&trial));
+        if let Some(path) = find(context, &trial, &dt, &loops, relations, bits) {
+            return Some((Some(trial), path));
+        }
+    }
+    None
 }
 
 /// One path to thread: `q -> p -> bb`, `bb`'s branch taking `arm`.
