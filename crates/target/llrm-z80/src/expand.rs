@@ -812,6 +812,32 @@ impl Printer<'_> {
                 self.push("inc de");
                 self.push("ldir");
             }
+            // the same for any count in bc: zero stores nothing, one stores the
+            // byte and skips the `ldir` (a count of zero there is 65536). The
+            // value is parked in e across the tests, which clobber a
+            "LDFILLGi" | "LDFILLGr" => {
+                let skip = format!("{}$", self.out.iter().filter(|line| !matches!(line, Line::Loc(_))).count());
+                let value = if op == "LDFILLGi" {
+                    self.immediate(inst, 1, 0xFF)?
+                } else {
+                    self.push("ld e, a");
+                    "e".to_owned()
+                };
+                for step in 0..2 {
+                    self.push("ld a, b");
+                    self.push("or a, c");
+                    self.push(format!("jr z, {skip}"));
+                    if step == 0 {
+                        self.push(format!("ld (hl), {value}"));
+                        self.push("dec bc");
+                    }
+                }
+                self.push("ld e, l");
+                self.push("ld d, h");
+                self.push("inc de");
+                self.push("ldir");
+                self.out.push(Line::Label(skip));
+            }
             // eight bytes at hl shifted in place a bit a trip, count in
             // bc: `inc b` and the jump to the test make a count of zero no trip
             // (the test is `dec b; jp nz`, which the relax pass makes `djnz`);
@@ -1157,6 +1183,10 @@ impl Printer<'_> {
                 if op == "RELOAD8" && self.updated_in_place(inst, rest)? {
                     return Ok(());
                 }
+                // a reload no instruction reads (the successor loads it again)
+                if op == "RELOAD8" && self.byte_unused_after(self.register(inst, 0)?, rest) {
+                    return Ok(());
+                }
                 let slot = self.frame_slots(index, 0, 1)?.remove(0);
                 if op == "RELOAD8" && self.held_since_stored(&[(slot.clone(), register.to_owned())]) {
                     return Ok(());
@@ -1197,6 +1227,9 @@ impl Printer<'_> {
                     if op == "SPILL16" { (self.frame_index(inst, 0)?, 1) } else { (self.frame_index(inst, 1)?, 0) };
                 let (lo, hi) = lanes(self.register(inst, register)?)?;
                 if op == "RELOAD16" && self.stepped_word_in_place(inst, rest)? {
+                    return Ok(());
+                }
+                if op == "RELOAD16" && self.pair_unused_after(self.register(inst, register)?, rest) {
                     return Ok(());
                 }
                 if op == "RELOAD16"
@@ -1529,6 +1562,22 @@ impl Printer<'_> {
             .liveness
             .live_before::<Z80Registers>(self.function, self.assignment, &REGISTER_INFO, self.at.0, self.at.1 + 1);
         ![pair, byte].into_iter().any(|one| after.is_live(&REGISTER_INFO, one))
+    }
+
+    /// [`Self::dead_after`], or the byte not live after this instruction by
+    /// the allocator's liveness.
+    fn byte_unused_after(
+        &self,
+        register: RegId,
+        rest: &[Inst],
+    ) -> bool {
+        if self.dead_after(register, rest) {
+            return true;
+        }
+        let after = self
+            .liveness
+            .live_before::<Z80Registers>(self.function, self.assignment, &REGISTER_INFO, self.at.0, self.at.1 + 1);
+        !after.is_live(&REGISTER_INFO, register)
     }
 
     /// Whether the byte register `register` holds nothing a later instruction
