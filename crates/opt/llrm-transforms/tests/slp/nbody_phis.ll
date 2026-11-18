@@ -1,0 +1,121 @@
+target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128-Fn32"
+declare double @llvm.fmuladd.f64(double, double, double)
+define i64 @bench_nbody(i16 %v0) {
+entry:
+  %.not = icmp eq i16 %v0, 0
+  br i1 %.not, label %._crit_edge43, label %._crit_edge.3
+
+._crit_edge.3:                                    ; preds = %v1, %._crit_edge.3
+  %.sroa.19.0 = phi double [ %v80, %._crit_edge.3 ], [ 0.000000e+00, %entry ]
+  %.sroa.1299.0 = phi double [ %v78, %._crit_edge.3 ], [ 0.000000e+00, %entry ]
+  %.sroa.7.0 = phi double [ %v76, %._crit_edge.3 ], [ 1.000000e+00, %entry ]
+  %.sroa.094.0 = phi double [ %v74, %._crit_edge.3 ], [ -1.000000e+00, %entry ]
+  %.sroa.1888.0 = phi double [ %v81, %._crit_edge.3 ], [ 1.000000e+00, %entry ]
+  %.sroa.12.0 = phi double [ %v79, %._crit_edge.3 ], [ -1.000000e+00, %entry ]
+  %.sroa.6.0 = phi double [ %v77, %._crit_edge.3 ], [ 0.000000e+00, %entry ]
+  %.sroa.080.0 = phi double [ %v75, %._crit_edge.3 ], [ 0.000000e+00, %entry ]
+  %.sroa.2676.0 = phi double [ %v71, %._crit_edge.3 ], [ -1.250000e-02, %entry ]
+  %.sroa.1872.0 = phi double [ %v68, %._crit_edge.3 ], [ 1.250000e-02, %entry ]
+  %.sroa.1068.0 = phi double [ %v56, %._crit_edge.3 ], [ 0.000000e+00, %entry ]
+  %.sroa.064.0 = phi double [ %v32, %._crit_edge.3 ], [ 0.000000e+00, %entry ]
+  %.sroa.26.0 = phi double [ %v73, %._crit_edge.3 ], [ 0.000000e+00, %entry ]
+  %.sroa.18.0 = phi double [ %v69, %._crit_edge.3 ], [ 0.000000e+00, %entry ]
+  %.sroa.10.0 = phi double [ %v57, %._crit_edge.3 ], [ 1.250000e-02, %entry ]
+  %.sroa.0.0 = phi double [ %v33, %._crit_edge.3 ], [ -1.250000e-02, %entry ]
+  %.042 = phi i16 [ %v82, %._crit_edge.3 ], [ 0, %entry ]
+  %v2 = fsub double %.sroa.7.0, %.sroa.094.0
+  %v3 = fsub double %.sroa.6.0, %.sroa.080.0
+  %v4 = fmul double %v3, %v3
+  %v5 = call double @llvm.fmuladd.f64(double %v2, double %v2, double %v4)
+  %v6 = fadd double %v5, 1.250000e-01
+  %v7 = fdiv double 1.000000e-05, %v6
+  %v8 = call double @llvm.fmuladd.f64(double %v2, double %v7, double %.sroa.064.0)
+  %v9 = call double @llvm.fmuladd.f64(double %v3, double %v7, double %.sroa.0.0)
+  %v10 = fneg double %v2
+  %v11 = call double @llvm.fmuladd.f64(double %v10, double %v7, double %.sroa.1068.0)
+  %v12 = fneg double %v3
+  %v13 = call double @llvm.fmuladd.f64(double %v12, double %v7, double %.sroa.10.0)
+  %v14 = fsub double %.sroa.1299.0, %.sroa.094.0
+  %v15 = fsub double %.sroa.12.0, %.sroa.080.0
+  %v16 = fmul double %v15, %v15
+  %v17 = call double @llvm.fmuladd.f64(double %v14, double %v14, double %v16)
+  %v18 = fadd double %v17, 1.250000e-01
+  %v19 = fdiv double 1.000000e-05, %v18
+  %v20 = call double @llvm.fmuladd.f64(double %v14, double %v19, double %v8)
+  %v21 = call double @llvm.fmuladd.f64(double %v15, double %v19, double %v9)
+  %v22 = fneg double %v14
+  %v23 = call double @llvm.fmuladd.f64(double %v22, double %v19, double %.sroa.1872.0)
+  %v24 = fneg double %v15
+  %v25 = call double @llvm.fmuladd.f64(double %v24, double %v19, double %.sroa.18.0)
+  %v26 = fsub double %.sroa.19.0, %.sroa.094.0
+  %v27 = fsub double %.sroa.1888.0, %.sroa.080.0
+  %v28 = fmul double %v27, %v27
+  %v29 = call double @llvm.fmuladd.f64(double %v26, double %v26, double %v28)
+  %v30 = fadd double %v29, 1.250000e-01
+  %v31 = fdiv double 1.000000e-05, %v30
+  %v32 = call double @llvm.fmuladd.f64(double %v26, double %v31, double %v20)
+  %v33 = call double @llvm.fmuladd.f64(double %v27, double %v31, double %v21)
+  %v34 = fneg double %v26
+  %v35 = call double @llvm.fmuladd.f64(double %v34, double %v31, double %.sroa.2676.0)
+  %v36 = fneg double %v27
+  %v37 = call double @llvm.fmuladd.f64(double %v36, double %v31, double %.sroa.26.0)
+  %v38 = fsub double %.sroa.1299.0, %.sroa.7.0
+  %v39 = fsub double %.sroa.12.0, %.sroa.6.0
+  %v40 = fmul double %v39, %v39
+  %v41 = call double @llvm.fmuladd.f64(double %v38, double %v38, double %v40)
+  %v42 = fadd double %v41, 1.250000e-01
+  %v43 = fdiv double 1.000000e-05, %v42
+  %v44 = call double @llvm.fmuladd.f64(double %v38, double %v43, double %v11)
+  %v45 = call double @llvm.fmuladd.f64(double %v39, double %v43, double %v13)
+  %v46 = fneg double %v38
+  %v47 = call double @llvm.fmuladd.f64(double %v46, double %v43, double %v23)
+  %v48 = fneg double %v39
+  %v49 = call double @llvm.fmuladd.f64(double %v48, double %v43, double %v25)
+  %v50 = fsub double %.sroa.19.0, %.sroa.7.0
+  %v51 = fsub double %.sroa.1888.0, %.sroa.6.0
+  %v52 = fmul double %v51, %v51
+  %v53 = call double @llvm.fmuladd.f64(double %v50, double %v50, double %v52)
+  %v54 = fadd double %v53, 1.250000e-01
+  %v55 = fdiv double 1.000000e-05, %v54
+  %v56 = call double @llvm.fmuladd.f64(double %v50, double %v55, double %v44)
+  %v57 = call double @llvm.fmuladd.f64(double %v51, double %v55, double %v45)
+  %v58 = fneg double %v50
+  %v59 = call double @llvm.fmuladd.f64(double %v58, double %v55, double %v35)
+  %v60 = fneg double %v51
+  %v61 = call double @llvm.fmuladd.f64(double %v60, double %v55, double %v37)
+  %v62 = fsub double %.sroa.19.0, %.sroa.1299.0
+  %v63 = fsub double %.sroa.1888.0, %.sroa.12.0
+  %v64 = fmul double %v63, %v63
+  %v65 = call double @llvm.fmuladd.f64(double %v62, double %v62, double %v64)
+  %v66 = fadd double %v65, 1.250000e-01
+  %v67 = fdiv double 1.000000e-05, %v66
+  %v68 = call double @llvm.fmuladd.f64(double %v62, double %v67, double %v47)
+  %v69 = call double @llvm.fmuladd.f64(double %v63, double %v67, double %v49)
+  %v70 = fneg double %v62
+  %v71 = call double @llvm.fmuladd.f64(double %v70, double %v67, double %v59)
+  %v72 = fneg double %v63
+  %v73 = call double @llvm.fmuladd.f64(double %v72, double %v67, double %v61)
+  %v74 = fadd double %v32, %.sroa.094.0
+  %v75 = fadd double %v33, %.sroa.080.0
+  %v76 = fadd double %v56, %.sroa.7.0
+  %v77 = fadd double %v57, %.sroa.6.0
+  %v78 = fadd double %v68, %.sroa.1299.0
+  %v79 = fadd double %v69, %.sroa.12.0
+  %v80 = fadd double %v71, %.sroa.19.0
+  %v81 = fadd double %v73, %.sroa.1888.0
+  %v82 = add nuw i16 %.042, 1
+  %v83 = icmp ult i16 %v82, %v0
+  br i1 %v83, label %._crit_edge.3, label %._crit_edge43.loopexit
+
+._crit_edge43.loopexit:                           ; preds = %._crit_edge.3
+  %v84 = fadd double %v74, %v77
+  %v85 = fadd double %v84, %v78
+  %v86 = fadd double %v85, %v81
+  %v87 = fmul double %v86, 1.000000e+06
+  %v88 = fptosi double %v87 to i64
+  br label %._crit_edge43
+
+._crit_edge43:                                    ; preds = %._crit_edge43.loopexit, %v1
+  %v89 = phi i64 [ 0, %entry ], [ %v88, %._crit_edge43.loopexit ]
+  ret i64 %v89
+}

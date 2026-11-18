@@ -8,12 +8,21 @@ fn labels(source: &str) -> usize {
     asm.lines().filter(|line| line.starts_with(".L")).count()
 }
 
+/// The labels of basic blocks: a constant-pool label (`.LCPI`) is data, and the
+/// SLP vectorizer's vector constants add them (nbody: 3 -> 5).
+fn blocks(source: &str) -> usize {
+    let asm = driver::assembly(source, Platform::Linux, Level::O2).expect("lowers");
+    asm.lines().filter(|line| line.starts_with(".L") && !line.starts_with(".LCPI")).count()
+}
+
 /// nbody -O2: the triangular nest's inner copies were priced alone and kept
 /// rolled, 38,049 instructions where the pin runs 14,233. The unrolled nest
-/// has 9 labels (10 before #9699: TailDupPlacement merges a block).
+/// has 6 block labels (7 before #9699: TailDupPlacement merges a block); its
+/// constant pool adds 3, or 5 with the SLP vectorizer's vector constants, which
+/// this test used to count as blocks (11 where 9 stood).
 #[test]
 fn a_nest_whose_inner_count_follows_the_outer_counter_is_the_pins_decision() {
-    assert_eq!(labels(include_str!("data/bench_nbody_nest.ll")), 9);
+    assert_eq!(blocks(include_str!("data/bench_nbody_nest.ll")), 6);
 }
 
 /// lru -O2: the estimate priced each copy's constant stores one by one
