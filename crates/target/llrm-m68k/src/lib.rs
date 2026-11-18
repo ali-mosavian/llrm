@@ -29,6 +29,7 @@ pub mod driver;
 pub mod elf;
 pub mod encode;
 pub mod expand;
+pub mod fallthrough;
 pub mod flags;
 pub mod foldarg;
 pub mod foldload;

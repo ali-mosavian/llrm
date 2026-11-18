@@ -2527,8 +2527,9 @@ const LIVE_OUT: &str = ";live ";
 /// later load overwrites it, which `drop_overwritten_byte_stores` sees. It runs
 /// after the passes that need such a load to fuse (`ld l, c; ld h, b; ld l,
 /// h`). The scan stops at a label; a call, a return or an instruction that
-/// reads a register unnamed keeps every register live, and a jump keeps those
-/// live after the block.
+/// reads a register unnamed keeps every register live, a jump keeps those
+/// live after the block, and a jump out of the function (a tail call) keeps
+/// them all.
 ///
 /// Translation: `DeadMachineInstrElim` (DeadMachineInstructionElim.cpp, a
 /// physical register def not live after the instruction is dead), on the
@@ -2553,6 +2554,8 @@ fn drop_dead_byte_loads(lines: Vec<Line>) -> Vec<Line> {
             }
         }
     };
+    let labels: std::collections::HashSet<&str> =
+        lines.iter().filter_map(|line| if let Line::Label(name) = line { Some(name.as_str()) } else { None }).collect();
     let mut keep = vec![true; lines.len()];
     for end in 0..lines.len() {
         let Line::Inst(marker) = &lines[end] else { continue };
@@ -2584,14 +2587,22 @@ fn drop_dead_byte_loads(lines: Vec<Line>) -> Vec<Line> {
                 continue;
             }
             if matches!(mnemonic, "jr" | "jp" | "djnz") {
+                // a jump out of the function is a tail call: the callee reads
+                // its argument registers
+                let target = text.rsplit([' ', ',']).next().unwrap_or("");
+                if !target.starts_with('(') && !labels.contains(target) {
+                    live = [true; 6];
+                    continue;
+                }
                 for (now, out) in live.iter_mut().zip(&live_out) {
                     *now |= *out;
                 }
                 if mnemonic == "djnz" {
                     live[0] = true;
                 }
-                // the target is the last operand (a condition code comes before it): `jp (hl)` reads the pair
-                read(&mut live, text.rsplit(", ").next().unwrap_or(""), mnemonic);
+                // the target is the last operand (a condition code comes before
+                // it): `jp (hl)` reads the pair
+                read(&mut live, target, mnemonic);
                 continue;
             }
             if HIDDEN.contains(&mnemonic) {
@@ -4112,6 +4123,7 @@ mod tests {
         let inst = |text: &str| Line::Inst(text.to_owned());
         let block = |live: &str| {
             let lines = vec![
+                Line::Label("M".to_owned()),
                 Line::Label("L".to_owned()),
                 inst("ld c, l"),
                 inst("ld a, h"),
@@ -4123,13 +4135,23 @@ mod tests {
             ];
             drop_dead_byte_loads(lines).len()
         };
-        assert_eq!(block("000000"), 5, "both loads of bc are dead");
-        assert_eq!(block("110000"), 7, "bc is live after the block");
+        assert_eq!(block("000000"), 6, "both loads of bc are dead");
+        assert_eq!(block("110000"), 8, "bc is live after the block");
     }
 
-    /// `ld l, a` before `jp (hl)` was dropped as a dead load: the indirect jump reads `hl`, and the pass read a jump
-    /// as reading nothing of its own. switch_peeled_table -Os printed wrong results (the jump table's target was
-    /// the pair's old low byte).
+    /// `ld l, c; ld h, b` before `jp _report` was dropped as dead: a jump to a
+    /// label outside the function is a tail call, and the callee reads `hl`.
+    #[test]
+    fn a_load_a_tail_call_reads_is_kept() {
+        let inst = |text: &str| Line::Inst(text.to_owned());
+        let lines = vec![inst("ld l, c"), inst("ld h, b"), inst("jp _report"), inst(&format!("{LIVE_OUT}000000"))];
+        assert_eq!(drop_dead_byte_loads(lines).len(), 3);
+    }
+
+    /// `ld l, a` before `jp (hl)` was dropped as a dead load: the indirect jump
+    /// reads `hl`, and the pass read a jump as reading nothing of its own.
+    /// switch_peeled_table -Os printed wrong results (the jump table's target
+    /// was the pair's old low byte).
     #[test]
     fn a_load_the_indirect_jump_reads_is_kept() {
         let inst = |text: &str| Line::Inst(text.to_owned());

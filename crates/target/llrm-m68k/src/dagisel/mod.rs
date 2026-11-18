@@ -29,6 +29,7 @@ pub mod mulprice;
 pub mod opcodes;
 pub mod synth;
 pub mod pea;
+pub mod rmw;
 pub mod pipeline;
 pub mod predicates;
 pub mod scaled;
