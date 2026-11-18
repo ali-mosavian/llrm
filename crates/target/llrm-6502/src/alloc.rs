@@ -5050,8 +5050,8 @@ fn emit_with<const STACK: bool>(
             y_callees.extend(entries_of(callee));
         }
     }
-    // `jsr callee` reads the scratch cells (`rc16`..) the call lists among the
-    // arguments
+    // `jsr callee` reads the argument cells (`rc2`.., `rc16`..) the call lists
+    // among the arguments
     let mut cell_callees: std::collections::BTreeMap<String, std::collections::BTreeSet<u8>> = Default::default();
     for inst in function.blocks.iter().flat_map(|block| &block.insts).filter(|inst| inst.kind == Kind::Op("JSR")) {
         if let [Operand::Symbol(callee, _), arguments @ ..] = &inst.operands[..] {
@@ -5059,7 +5059,7 @@ fn emit_with<const STACK: bool>(
             for operand in arguments {
                 if let Operand::Use(Reg::Phys(r)) = operand {
                     let bytes = if is_pair(*r) { vec![lane(*r, 0), lane(*r, 1)] } else { vec![*r] };
-                    cells.extend((BASE_CELLS..MOST_CELLS).filter(|&n| bytes.contains(&rc(n))));
+                    cells.extend((2..MOST_CELLS).filter(|&n| bytes.contains(&rc(n))));
                 }
             }
         }
