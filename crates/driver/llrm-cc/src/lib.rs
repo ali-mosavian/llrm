@@ -5,6 +5,7 @@
 
 mod inline_asm;
 mod lifetimes;
+mod staticflag;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -1091,7 +1092,7 @@ fn build(
                 args.extend([ir.display().to_string(), path.clone()]);
                 run(&clang, &args)?;
                 let text = std::fs::read_to_string(&ir).map_err(|error| fail(format!("{}: {error}", ir.display())))?;
-                let text = lifetimes::upgraded(&text);
+                let text = staticflag::stated(&lifetimes::upgraded(&text));
                 std::fs::write(&ir, &text).map_err(|error| fail(format!("{}: {error}", ir.display())))?;
                 let printed = datalayout_of(&text).unwrap_or_default();
                 let expected = target.clang_datalayout.as_deref().unwrap_or(&target.datalayout);
