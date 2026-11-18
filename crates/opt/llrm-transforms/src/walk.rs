@@ -1671,9 +1671,35 @@ fn expanded_intrinsic(
     }
 }
 
+/// The operands `function_bytes` prices as a call's arguments
+/// ([`OperationCosts::exact_call_arguments`]).
+fn call_arguments<'a>(
+    costs: &llrm_mir::target::OperationCosts,
+    operands: &'a [llrm_mir::module::Operand],
+) -> &'a [llrm_mir::module::Operand] {
+    if costs.exact_call_arguments {
+        &operands[..operands.len().saturating_sub(1)]
+    } else {
+        operands.get(1..).unwrap_or(&[])
+    }
+}
+
+/// One function of a target's size audit: what `function_bytes` says it will be
+/// against the bytes the backend writes it as.
+pub struct SizeRow {
+    pub name: String,
+    /// `function_bytes` of the function the backend gets.
+    pub model: i64,
+    /// The bytes it is written as.
+    pub written: i64,
+    /// Its operations by class ([`operation_counts`]), for the fit of a
+    /// target's byte table.
+    pub counts: String,
+}
+
 /// The operations of `function` by class, width-weighted, as `name=count,...`:
 /// what `function_bytes` prices, for the fit of a target's byte table against
-/// the bytes written (`tools/6502/size_fit.py`).
+/// the bytes written (`tools/size_fit.py`).
 pub fn operation_counts(
     module: &Module,
     layout: &llrm_mir::datalayout::DataLayout,
@@ -1753,7 +1779,7 @@ pub fn operation_counts(
             Opcode::Switch => ("switch", (operation.operands.len() as i64 - 2) / 2 + 1),
             Opcode::Phi => ("phi", words(result)),
             Opcode::Call(_) | Opcode::Invoke(_) => {
-                for &argument in operation.operands.iter().skip(1) {
+                for &argument in call_arguments(costs, &operation.operands) {
                     let kind = if matches!(argument, llrm_mir::module::Operand::Constant(_)) {
                         "callargc"
                     } else {
@@ -1866,7 +1892,26 @@ pub fn function_bytes(
                     BinaryOp::Shl | BinaryOp::LShr | BinaryOp::AShr if wide && costs.shift_wide > 0 && !constant_divisor => {
                         costs.shift_wide + prefix
                     }
-                    BinaryOp::Shl | BinaryOp::LShr | BinaryOp::AShr => costs.shift * words(ty) + prefix,
+                    BinaryOp::Shl | BinaryOp::LShr | BinaryOp::AShr => {
+                        let amount = match operation.operands.get(1) {
+                            Some(&llrm_mir::module::Operand::Constant(id)) => match module.context.get(id).kind {
+                                llrm_mir::context::ConstantKind::Int(bits) => u64::try_from(bits).ok(),
+                                _ => None,
+                            },
+                            _ => None,
+                        };
+                        match amount {
+                            Some(amount) if costs.constant_word_shifts && costs.width_scaled && costs.native_bits > 0 => {
+                                let total = words(ty);
+                                let whole = ((amount as i64) / costs.native_bits).min(total);
+                                let stays = total - whole;
+                                costs.r#move * stays
+                                    + if (amount as i64) % costs.native_bits > 0 { costs.shift * stays } else { 0 }
+                                    + prefix
+                            }
+                            _ => costs.shift * words(ty) + prefix,
+                        }
+                    }
                     _ => costs.add * words(ty) + prefix,
                 },
                 Opcode::Cast(cast) => match cast {
@@ -1930,14 +1975,18 @@ pub fn function_bytes(
                 // (`expanded_intrinsics`).
                 Opcode::Call(_) | Opcode::Invoke(_) if expanded.is_some() => expanded.unwrap_or(0),
                 Opcode::Call(_) | Opcode::Invoke(_) => {
+                    let argument_words = call_arguments(costs, &operation.operands)
+                        .iter()
+                        .map(|&argument| words(function.operand_type(&module.context, argument)))
+                        .sum::<i64>();
+                    let stacked = if costs.argument_registers > 0 {
+                        (argument_words - costs.argument_registers).max(0)
+                    } else {
+                        0
+                    };
                     costs.call
-                        + costs.argument
-                            * operation
-                                .operands
-                                .iter()
-                                .skip(1)
-                                .map(|&argument| words(function.operand_type(&module.context, argument)))
-                                .sum::<i64>()
+                        + costs.argument * (argument_words - stacked)
+                        + if costs.argument_stacked > 0 { costs.argument_stacked } else { costs.argument } * stacked
                 }
                 Opcode::Ret => costs.return_,
                 Opcode::Phi => costs.r#move * words(operation.result.map(|value| function.value(value).ty)),
