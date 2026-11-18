@@ -44,6 +44,10 @@ fn a_long_shifted_by_a_few_bits_is_a_chain() {
         for (op, by, limit) in kernels {
             let (bytes, body) = bytes_of(op, by, level);
             println!("ROW {op} {by} {level:?}: {bytes} (limit {limit})");
+            // at -O2 and -O3 the outliner keeps a 1-byte saving inline when its call costs more clocks
+            // than the bytes are worth (`[share.speed] outline`): lshr by 2 is 25 B, not 24. The ora join
+            // the test is about was 34 B.
+            let limit = if matches!(level, Level::O2 | Level::O3) { limit + 1 } else { limit };
             if bytes > limit {
                 over.push(format!("{op} i32 by {by} at {level:?}: {bytes} B > {limit}\n{body}"));
             }
