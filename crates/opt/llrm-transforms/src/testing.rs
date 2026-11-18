@@ -197,6 +197,8 @@ pub struct Tuned {
     pub ext_loads_free: bool,
     /// `Tti::split_paths_at_o3`.
     pub split_paths: bool,
+    /// `Tti::avoids_cold_outer_addrec_expansion`.
+    pub cold_outer_chrec: bool,
 }
 
 use llrm_mir::tti;
@@ -224,6 +226,7 @@ pub struct Flagged {
     pub soft_float: bool,
     pub ext_loads_free: bool,
     pub split_paths: bool,
+    pub cold_outer_chrec: bool,
 }
 
 impl llrm_mir::tti::Tti for Flagged {
@@ -249,6 +252,10 @@ impl llrm_mir::tti::Tti for Flagged {
 
     fn split_paths_at_o3(&self) -> bool {
         self.split_paths
+    }
+
+    fn avoids_cold_outer_addrec_expansion(&self) -> bool {
+        self.cold_outer_chrec
     }
 
     fn fills_pattern_at_speed(&self) -> bool {
@@ -468,6 +475,7 @@ impl llrm_mir::target::Machine for Tuned {
             || self.unswitch_threshold.is_some()
             || self.ext_loads_free
             || self.split_paths
+            || self.cold_outer_chrec
             || self.skip_partial_at_size)
             .then(|| {
                 std::rc::Rc::new(Flagged {
@@ -488,6 +496,7 @@ impl llrm_mir::target::Machine for Tuned {
                     soft_float: false,
                     ext_loads_free: self.ext_loads_free,
                     split_paths: self.split_paths,
+                    cold_outer_chrec: self.cold_outer_chrec,
                 }) as _
             })
     }

@@ -2860,6 +2860,19 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE WIDEN-COLD-CHREC (`widen.rs`): whether `WidenIV` leaves a
+    /// counter narrow when its wide start is a chained recurrence
+    /// (`{a,+,b,+,c}`, a square) of an enclosing loop that no phi carries
+    /// and the counter's loop is entered on only some trips of it.
+    /// `SCEVExpander` then adds one phi a level to every trip of the outer
+    /// loop for a start the written code computes where the loop is entered
+    /// (sieve: `i * i` feeding the marking loop of a prime, 11 entries in
+    /// 1022 trips); the pin widens regardless. gcc's ivopts weighs a use's
+    /// cost by the frequency of its block. Off by default.
+    fn avoids_cold_outer_addrec_expansion(&self) -> bool {
+        false
+    }
+
     /// Beyond the pin: whether a strict exit compare of a unit-stride counter
     /// that never passes its bound should become `!=` (`exitne`). Counting to
     /// zero and testing `!=` is cheap where a decrement sets the flags and one

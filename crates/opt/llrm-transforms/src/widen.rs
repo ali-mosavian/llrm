@@ -48,6 +48,8 @@ use llrm_mir::opcode::{Attribute, BinaryOp, CastOp, Flags, IntPredicate, Opcode}
 use llrm_mir::passes::Declared;
 use llrm_mir::types::TypeId;
 
+use crate::cold_chrec::expands_cold_outer_chrec;
+
 /// `ExtendKind`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ExtendKind {
@@ -1386,6 +1388,14 @@ impl WidenIv {
             return None;
         }
         let add_rec = wide_iv_expr;
+        // DEVIATE WIDEN-COLD-CHREC (`Tti::avoids_cold_outer_addrec_expansion`).
+        if e.outer.target().tti().is_some_and(|tti| tti.avoids_cold_outer_addrec_expansion()) {
+            let start = e.se.operands(add_rec)[0].scev;
+            let cx = cx!(e);
+            if expands_cold_outer_chrec(e.se, &cx, start, self.l) {
+                return None;
+            }
+        }
         self.collect_nneg_zexts(e);
 
         // Iterate over IV uses (including transitive ones) looking for IV
