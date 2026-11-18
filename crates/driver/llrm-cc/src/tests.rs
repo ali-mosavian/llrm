@@ -681,21 +681,15 @@ fn one_source_linked_for_the_6502_sweeps_what_main_does_not_reach() {
     }
 }
 
-/// DEVIATE VP9: the arm64 rows give their backend `-fllrm-vect-very-cheap` at
-/// -O2 and no other level, unless the command line states either spelling; no
-/// other row does.
+/// DEVIATE VP9 is opt-in: no row defaults `-fllrm-vect-very-cheap`, and the
+/// command line's spelling reaches the backend.
 #[test]
-fn the_arm64_linux_rows_vectorize_very_cheap_at_o2_unless_told_otherwise() {
+fn very_cheap_vectorizing_is_opt_in() {
     let table = targets(TARGETS).unwrap();
     let llc = |row: &str, line: &str| llc_args(&table[row], &built(line), Path::new("x.ll"), Path::new("x.o"));
     let has = |args: &[String]| args.iter().any(|f| f == "-fllrm-vect-very-cheap");
-    for row in ["arm64-linux", "arm64-glibc"] {
-        assert!(has(&llc(row, "-O2 -c x.c")), "{row}");
-        for line in ["-O1 -c x.c", "-O3 -c x.c", "-Os -c x.c", "-O2 -fno-llrm-vect-very-cheap -c x.c"] {
-            assert!(!has(&llc(row, line)), "{row} {line}");
-        }
-    }
-    for row in table.keys().filter(|row| !matches!(row.as_str(), "arm64-linux" | "arm64-glibc")) {
+    for row in table.keys() {
         assert!(!has(&llc(row, "-O2 -c x.c")), "{row}");
     }
+    assert!(has(&llc("arm64-linux", "-O2 -fllrm-vect-very-cheap -c x.c")));
 }
