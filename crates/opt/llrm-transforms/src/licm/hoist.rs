@@ -56,6 +56,8 @@ pub fn hoist_region(
 ) -> (Vec<Hoist>, Vec<(usize, Reassociation)>) {
     let mut found = Vec::new();
     let mut reassociated = Vec::new();
+    // Taken once for the loop, at its first float load (DEVIATE LP1-FP).
+    let mut float_room: Option<Option<usize>> = None;
     for block in loop_blocks_rpo(ctx) {
         // Only the contents of a block outside the subloops: those have been
         // processed.
@@ -73,6 +75,7 @@ pub fn hoist_region(
             if ctx.has_loop_invariant_operands(inst)
                 && can_sink_or_hoist_inst(unit, outer, ctx, mssa, aa, flags, safety, inst, true)
                 && is_safe_to_execute_unconditionally(unit, outer, ctx, safety, preheader, inst)
+                && float_load_has_room(unit, outer, ctx, inst, &mut float_room)
             {
                 ctx.state.moved.borrow_mut().insert(inst, preheader);
                 found.push(Hoist { inst, preheader, guaranteed: safety.is_guaranteed_to_execute(inst) });
@@ -94,6 +97,35 @@ pub fn hoist_region(
         }
     }
     (found, reassociated)
+}
+
+/// DEVIATE LP1-FP: whether hoisting `inst` keeps the values the loop holds in
+/// the float file within the target's registers. Only a float load is priced:
+/// reading it in the loop again costs what reloading a spilled copy does.
+fn float_load_has_room(
+    unit: &passes::Unit,
+    outer: &Outer,
+    ctx: &LoopCtx,
+    inst: InstId,
+    room: &mut Option<Option<usize>>,
+) -> bool {
+    let data = unit.function.instruction(inst);
+    let is_float_load = matches!(data.opcode, Opcode::Load { .. })
+        && data.result.is_some_and(|result| super::pressure::counts_float_type(unit, unit.function.value(result).ty));
+    if !is_float_load {
+        return true;
+    }
+    let room = room.get_or_insert_with(|| {
+        super::pressure::Pressure::of_class(unit, outer, ctx, super::pressure::Class::Float).map(|held| held.room())
+    });
+    match room {
+        None => true,
+        Some(0) => false,
+        Some(left) => {
+            *left -= 1;
+            true
+        }
+    }
 }
 
 /// An instruction `hoist_region` moves to `preheader`, and whether it was

@@ -164,6 +164,17 @@ fn a_loop_to_the_terminator_indexes_with_the_bumped_register() {
     assert!(len.contains("[rdi+rax") && !len.contains("[rdi+rcx"), "{len}");
 }
 
+/// A byte sum into an `i64` (VF 16) kept its total as eight registers and interleaved twice: 16 accumulators spilled to
+/// the stack, mem_length_boundaries_m32 186,155 instructions to 142,319 scalar and gcc's 137,355. One register of lanes
+/// takes the eight pieces of a trip.
+#[test]
+fn a_byte_sum_into_a_wide_total_does_not_spill() {
+    let text = assembly_of("lv_bytesum.c", "x86_64-linux", "-O2");
+    let sum = body(&text, "sum_bytes_wide");
+    assert!(sum.contains("punpcklbw") || sum.contains("pmovzx"), "{sum}");
+    assert!(!sum.contains("rsp"), "{sum}");
+}
+
 /// The widened loops compute what the scalar ones do: sums and xors folded from vector lanes, and forward and backward copies that overlap by 1 to 5 bytes, every
 /// length under 100, run on the host. The count-down copy sat 31 bytes low at IC 2 (`bad 340`).
 #[test]
@@ -377,4 +388,42 @@ fn a_loop_carried_short_is_extended_on_its_load_and_not_in_every_trip() {
     let descent = body(&text, "descent");
     let widened = descent.lines().filter(|line| (line.contains("movsx") || line.contains("movzx")) && !line.contains("ptr")).count();
     assert_eq!(widened, 0, "a register-to-register extension stays in the loop: {descent}");
+}
+
+/// `differ` of memory_expansion (a byte compare that leaves at the first difference) stayed a scalar loop, 1.69 M
+/// instructions against clang's 0.93 M: no loop of two blocks was planned and x86 priced no vector compare. The
+/// pin's vector loop compares 16 bytes (`pcmpeqb`) and leaves on any set lane (`pmovmskb`).
+#[test]
+fn an_early_exit_byte_compare_is_sixteen_lanes_wide() {
+    let text = assembly_of("lv_early_exit.c", "x86_64-linux", "-O3");
+    let differ = body(&text, "differ_arrays");
+    assert!(differ.contains("pcmpeqb"), "{differ}");
+    assert!(differ.contains("pmovmskb"), "{differ}");
+}
+
+/// The any-of of a vector compare is its sign-bit mask (`combineBitcastvxi1`): bytes `pmovmskb` as they are,
+/// words packed to bytes first, doublewords `movmskps`; an unsigned order flips the sign bits and a missing
+/// order (`<`) swaps the operands. Before, the vectorized loop refused to select (`CannotSelect(SetCC)`).
+#[test]
+fn an_early_exit_compare_of_each_lane_width_is_gathered_by_a_sign_mask() {
+    let text = assembly_of("lv_early_exit_widths.c", "x86_64-linux", "-O3");
+    let words = body(&text, "first_below");
+    assert!(words.contains("pcmpgtw") && words.contains("packsswb") && words.contains("pmovmskb"), "{words}");
+    assert!(words.contains("pxor"), "an unsigned `<` flips the sign bits: {words}");
+    let dwords = body(&text, "first_differs");
+    assert!(dwords.contains("pcmpeqd") && dwords.contains("movmskps"), "{dwords}");
+    let bytes = body(&text, "first_greater");
+    assert!(bytes.contains("pcmpgtb") && bytes.contains("pmovmskb"), "{bytes}");
+}
+
+/// A loop that returns the index of the first difference as an `int`: the induction is cast inside the loop
+/// (`trunc`) and only the exit phi reads it. Before, the loop stayed scalar (`recipes: An instruction the vectorizer
+/// does not widen yet`): no `pmovmskb` in `first_index32`.
+#[test]
+fn an_early_exit_that_returns_the_cast_index_is_a_vector_loop() {
+    let text = assembly_of("lv_early_exit_index.c", "x86_64-linux", "-O3");
+    for name in ["first_index32", "first_index16"] {
+        let words = body(&text, name);
+        assert!(words.contains("pmovmskb"), "{name}: {words}");
+    }
 }

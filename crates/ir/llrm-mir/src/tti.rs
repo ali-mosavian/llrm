@@ -707,6 +707,14 @@ pub trait Tti {
         false
     }
 
+    /// `-enable-early-exit-vectorization` (default true in the pin) where the
+    /// backend selects what the vector loop makes: a vector `icmp`,
+    /// `reduce.or` of an `i1` vector, and `select` and `reduce.umin` of the
+    /// lane numbers. DEVIATE: on where a port says so.
+    fn vectorizes_early_exit(&self) -> bool {
+        false
+    }
+
     /// `getNumberOfRegisters(ClassID)`: 0 where the target has no vector
     /// registers.
     fn number_of_registers(
@@ -740,10 +748,54 @@ pub trait Tti {
         false
     }
 
+    /// A reduction wider than a vector register keeps one register of lanes
+    /// (see `Tuning::narrow_reduction_accumulators`).
+    fn narrows_reduction_accumulators(&self) -> bool {
+        false
+    }
+
+    /// A VF above the widest type's, taken for the bandwidth, needs a trip
+    /// count it divides (see `Tuning::bandwidth_vf_without_epilogue`).
+    fn bandwidth_vf_without_epilogue(&self) -> bool {
+        false
+    }
+
     /// `enableAggressiveInterleaving(HasReductions)`: interleave a loop that is
     /// not small.
     fn enable_aggressive_interleaving(&self) -> bool {
         false
+    }
+
+    /// Whether the backend selects the wide access and shuffles of an
+    /// interleave group (`ld2`/`st2` and their zip/uzp fallbacks): the loop
+    /// vectorizer widens a strided access only where it does. DEVIATE LV-I0
+    /// (owner llrm-arm64-vec, exit 2026-11-24): the pin's targets all do; here
+    /// each backend says when its selector has them.
+    fn selects_interleaved_accesses(&self) -> bool {
+        false
+    }
+
+    /// `isLegalInterleavedAccessType` of a `count`-lane vector of
+    /// `element_bits`-bit lanes: one `ldN`/`stN` takes it.
+    fn interleaved_access_legal(
+        &self,
+        _element_bits: u32,
+        _count: u32,
+    ) -> bool {
+        false
+    }
+
+    /// `getInterleavedMemoryOpCost` of a full group of `factor` members, each
+    /// a `ty` vector (the wide access is `factor * ty.count` lanes). `None`:
+    /// not priced (the BasicTTI fallback is not translated, LV-I1).
+    fn interleaved_memory_op_cost(
+        &self,
+        _op: MemoryOp,
+        _ty: VectorTy,
+        _factor: u32,
+        _kind: CostKind,
+    ) -> Option<Cost> {
+        None
     }
 
     /// `getMemoryOpCost` of a vector access of `align` bytes. `None`: the
@@ -805,6 +857,18 @@ pub trait Tti {
         _kind: crate::intrinsics::ReduceKind,
         _ty: VectorTy,
         _ordered: bool,
+        _cost_kind: CostKind,
+    ) -> Option<Cost> {
+        None
+    }
+
+    /// `getIntrinsicInstrCost` of `llvm.{s,u}{max,min}` of the fixed vector
+    /// `ty`. `None`: not priced.
+    fn vector_min_max_cost(
+        &self,
+        _signed: bool,
+        _max: bool,
+        _ty: VectorTy,
         _cost_kind: CostKind,
     ) -> Option<Cost> {
         None
@@ -1187,9 +1251,11 @@ pub trait Tti {
         false
     }
 
-    /// DEVIATE SLOT-ADD (owner x86-m32, exit 2026-11-24, then every x86): a one-slot frame is released by `add` when
-    /// callee-saved registers are restored, as the pin does: `emitEpilogue` stands at the first callee-saved `pop`, where
-    /// `findDeadCallerSavedReg` answers 0. False: a `pop` of a dead register there (3 clocks on a 486, 2 bytes less).
+    /// DEVIATE SLOT-ADD (owner x86-m32, exit 2026-11-24, then every x86): a
+    /// one-slot frame is released by `add` when callee-saved registers are
+    /// restored, as the pin does: `emitEpilogue` stands at the first
+    /// callee-saved `pop`, where `findDeadCallerSavedReg` answers 0. False:
+    /// a `pop` of a dead register there (3 clocks on a 486, 2 bytes less).
     fn frame_slot_add_with_saved(&self) -> bool {
         false
     }
@@ -1277,6 +1343,14 @@ pub trait Tti {
     /// code that prices better (fewer clocks within the target's bytes
     /// ceiling). False: the bound's verdict stands.
     fn opt_size_inline_finished_trial(&self) -> bool {
+        false
+    }
+
+    /// Whether a run of copies of adjacent cells is `llvm.memcpy` at every
+    /// level, where the bytes of the call are fewer (`mergestores`): the
+    /// pin's MemCpyOpt forms it, and the size gate is this target's to lift.
+    /// False: only when tuned for size.
+    fn string_runs_at_speed(&self) -> bool {
         false
     }
 
@@ -1530,6 +1604,15 @@ pub trait Tti {
         true
     }
 
+    /// DEVIATE LV-SIZE (owner arm64, exit 2026-11-30): at `optsize` a vector
+    /// loop is taken only where its body and the work outside it (the
+    /// accumulators' start, the reduction's horizontal step) cost less than the
+    /// scalar loop. The pin prices the loop region alone (`VPlan::cost`,
+    /// VPlan.cpp L1024) and, short of `minsize`, by throughput. false: the pin.
+    fn vectorizes_size_priced(&self) -> bool {
+        false
+    }
+
     fn opt_size_inline_chain_trial(&self) -> bool {
         false
     }
@@ -1606,8 +1689,9 @@ pub trait Tti {
         false
     }
 
-    /// `Tuning::lsr_constant_setup_is_one`: a constant in a formula's setup costs one, whatever
-    /// `int_imm_cost` says (LLVM 20.1.8's `getSetupCost`; the pin's is free for a free constant).
+    /// `Tuning::lsr_constant_setup_is_one`: a constant in a formula's setup
+    /// costs one, whatever `int_imm_cost` says (LLVM 20.1.8's
+    /// `getSetupCost`; the pin's is free for a free constant).
     fn lsr_constant_setup_is_one(&self) -> bool {
         false
     }
@@ -1686,6 +1770,11 @@ pub trait Tti {
 
     /// `Tuning::unroll_recurrence_veto`.
     fn vetoes_recurrence_bound_unroll(&self) -> bool {
+        false
+    }
+
+    /// `Tuning::threads_by_relation`.
+    fn threads_by_relation(&self) -> bool {
         false
     }
 
@@ -1863,6 +1952,21 @@ pub trait Tti {
 
     /// DEVIATE INL-O1: `Tuning::inline_never_grows_without_rate`.
     fn inline_never_grows_without_rate(&self) -> bool {
+        false
+    }
+
+    /// DEVIATE SWITCH-LOOKUP-TRIAL: `Tuning::switch_lookup_trial_at_size`.
+    fn switch_lookup_trial_at_size(&self) -> bool {
+        false
+    }
+
+    /// DEVIATE LIR-COPY-TRIAL: `Tuning::loop_idiom_copy_trial_at_size`.
+    fn loop_idiom_copy_trial_at_size(&self) -> bool {
+        false
+    }
+
+    /// DEVIATE JT-LATCH-TRIAL: `Tuning::jump_threading_latch_trial_at_size`.
+    fn jump_threading_latch_trial_at_size(&self) -> bool {
         false
     }
 
@@ -2091,6 +2195,12 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE IPACP-O2: whether the clones are also made at -O2, where gcc
+    /// has none; default: as at -O3.
+    fn ipa_cp_clones_at_o2(&self) -> bool {
+        self.ipa_cp_clones_at_speed()
+    }
+
     /// DEVIATE IPACP-DEPTH: the most clones ipa-cp makes of one function
     /// (gcc's `ipa-cp-max-recursive-depth` is 8).
     fn ipa_cp_max_clones(&self) -> usize {
@@ -2167,7 +2277,8 @@ pub trait Tti {
         (None, None)
     }
 
-    /// Whether the target takes gcc's path splitting at `-O3` (`Tuning::split_paths_at_o3`).
+    /// Whether the target takes gcc's path splitting at `-O3`
+    /// (`Tuning::split_paths_at_o3`).
     fn split_paths_at_o3(&self) -> bool {
         false
     }
@@ -2239,6 +2350,11 @@ pub trait Tti {
 
     /// `Tuning::min_jump_table_density`.
     fn min_jump_table_density(&self) -> Option<u64> {
+        None
+    }
+
+    /// `Tuning::jump_table_size_growth_ratio`.
+    fn jump_table_size_growth_ratio(&self) -> Option<u64> {
         None
     }
 
@@ -2653,6 +2769,29 @@ pub trait Tti {
         AddressingMode::None
     }
 
+    /// DEVIATE LSR-POSTINC-TRIPS (owner arm64, exit 2026-11-30; gcc's ivopts
+    /// divides what an invariant costs by the loop's average trip count, no
+    /// pin pass): a loop that makes few trips keeps no post-indexed
+    /// preference, since each of its pointers is started again on every entry
+    /// to it (a copy and an add) and the walk saves one add a trip; a size
+    /// build keeps none, as ARM's `getPreferredAddressingMode` (the walk's
+    /// setup is code). `false`: the preference holds in every loop, as the
+    /// pin's.
+    fn lsr_post_indexed_amortized(&self) -> bool {
+        false
+    }
+
+    /// DEVIATE LSR-POSTINC-PAIR (target flag): the pair form of a load or
+    /// store (`ldp`/`stp`) folds a pointer's bump only into its first access,
+    /// so a post-indexed walk rates the lower access of an adjacent pair
+    /// before the pointer (a negative offset) as costlier. The pin's
+    /// two's complement `ImmCost` rates `-4` below `4` and starts the walk at
+    /// the second access (gcc's ivopts starts it at the first). `false`: the
+    /// pin's rating.
+    fn lsr_pair_first_walk(&self) -> bool {
+        false
+    }
+
     /// `isIndexedLoadLegal(MIM_PostInc, ty)`: a load that steps its pointer by
     /// the access size after it (`(An)+`).
     fn is_post_inc_load_legal(
@@ -2729,6 +2868,19 @@ pub trait Tti {
     /// register. A size build then keeps `mul X, select(c, 8, 2)` rather than
     /// the pin's `shl X, select(c, 3, 1)` (`visitMul`'s `tryGetLog2`).
     fn variable_shift_count_in_fixed_register(&self) -> bool {
+        false
+    }
+
+    /// DEVIATE WIDEN-COLD-CHREC (`widen.rs`): whether `WidenIV` leaves a
+    /// counter narrow when its wide start is a chained recurrence
+    /// (`{a,+,b,+,c}`, a square) of an enclosing loop that no phi carries
+    /// and the counter's loop is entered on only some trips of it.
+    /// `SCEVExpander` then adds one phi a level to every trip of the outer
+    /// loop for a start the written code computes where the loop is entered
+    /// (sieve: `i * i` feeding the marking loop of a prime, 11 entries in
+    /// 1022 trips); the pin widens regardless. gcc's ivopts weighs a use's
+    /// cost by the frequency of its block. Off by default.
+    fn avoids_cold_outer_addrec_expansion(&self) -> bool {
         false
     }
 
@@ -2884,8 +3036,28 @@ pub trait Tti {
         true
     }
 
+    /// DEVIATE LSR-LIVE-IV (beyond the pin; a target opts in): an induction
+    /// variable that an instruction of the loop reads, and LSR does not
+    /// rewrite, is live in every solution. The pin credits a formula that
+    /// replaces it with the register it frees, so a count-up counter beside
+    /// the live one wins on a tie of registers (m68k `countdown`: `addq;
+    /// cmpi.l #-1; bne` where the loop ends on its own `subq` flags).
+    fn lsr_unmanaged_iv_reads_stay_live(&self) -> bool {
+        false
+    }
+
     /// `shouldDropLSRSolutionIfLessProfitable`.
     fn should_drop_lsr_solution_if_less_profitable(&self) -> bool {
+        false
+    }
+
+    /// DEVIATE LSR-DROP-AT-SIZE (owner llrm-target-x86-m64-b, exit 2026-11-30;
+    /// gcc's ivopts keeps the original candidates when its set costs more,
+    /// `find_optimal_iv_set` against `origset`, tree-ssa-loop-ivopts.cc): in a
+    /// function built for size, a solution that needs more registers or more
+    /// instructions than the loop as written is dropped. queens -Os: three
+    /// counters for 24 B more than the one the loop had.
+    fn lsr_drops_worse_solution_at_size(&self) -> bool {
         false
     }
 
@@ -3033,6 +3205,14 @@ pub trait Tti {
     /// the pin promotes without a cap.
     fn licm_register_limit(&self) -> Option<u32> {
         Some(self.number_of_gpr_registers())
+    }
+
+    /// DEVIATE LP1-FP: the values LICM (`licm/pressure.rs`) and GVN
+    /// (`float_carry_fits`) may hold in the float file across a loop before
+    /// they stop hoisting or carrying float loads; `None`: no limit, as the
+    /// pin.
+    fn licm_float_register_limit(&self) -> Option<u32> {
+        None
     }
 
     /// DEVIATE IND-MASK (beyond the pin; exit 2026-11-24): whether `indvars`
@@ -3224,6 +3404,17 @@ pub trait Tti {
     /// itself. Without it an outer loop's reduction (LSR-OUTER) rates every
     /// formula naming the inner loop's narrowed counter a loser.
     fn lsr_extension_of_phi_exists(&self) -> bool {
+        false
+    }
+
+    /// DEVIATE LU32 (`lsr_use.rs`): an addrec of another loop that no phi
+    /// carries and that has several recurrence levels (`{a,+,b,+,c}`, a squared
+    /// counter) is expanded by one phi a level in that loop, so the rating
+    /// counts a register for each; the pin counts one. Otherwise `i * i`
+    /// feeding an inner loop's start becomes a quadratic pair of induction
+    /// variables that an outer loop holding its own counter, sum and bound
+    /// spills.
+    fn lsr_outer_addrec_regs_per_level(&self) -> bool {
         false
     }
 

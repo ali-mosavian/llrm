@@ -49,6 +49,9 @@
 //!   each a step of 1) of a byte in memory, with `a` and the carry dead after:
 //!   `inc m` (`dec m`), which sets the sign and zero flags as the store left
 //!   them.
+//! - [`fuse_shift_chain`]: the bit one word gives the next, `lda w; lsr a; ror
+//!   p; ror q; lsr h; ror w`, is `lsr h; ror w; ror p; ror q`: the carry of the
+//!   shift of `w`.
 //! - [`shift_in_place`]: `lda m; asl|lsr|rol|ror a; sta m` of a byte in memory
 //!   with `a` dead after: `asl|lsr|rol|ror m`, the same carry and sign and zero
 //!   flags (2 bytes and 3 clocks fewer on a zero-page cell).
@@ -278,6 +281,7 @@ fn run_suffix(
     zero_test_through_an_index(asm);
     step_in_place(asm);
     step_through_y(asm);
+    fuse_shift_chain(asm);
     shift_in_place(asm);
     load_straight_into_a(asm);
     compare_through_an_index(asm);
@@ -314,9 +318,22 @@ fn run_suffix(
     // store
     drop_reloads(asm);
     crate::peephole_cells::store_then_index_load(asm);
+    fuse_shift_chain(asm);
     branch_on_shift_carry(asm);
     carry_made_again(asm);
     jump_to_return(asm);
+}
+
+/// The passes that follow the outliner: a byte made in `a` only to be stored
+/// and moved to `x` is made in `x` (`make_the_byte_in_x`), and a transfer left
+/// beside its reverse goes. After it, not before: a site the first rewrites and
+/// the outliner finds in another shape is a body of its own
+/// (constant_int_float_compare -O2: a second routine, +2 B).
+pub fn after_outlining(text: &str) -> String {
+    let mut asm = Asm::parse(text);
+    make_the_byte_in_x(&mut asm);
+    drop_cancelling_transfers(&mut asm);
+    asm.text()
 }
 
 /// How many lines name `label`: a branch or jump to it, or a directive.
@@ -1684,6 +1701,58 @@ pub fn drop_cancelling_transfers(asm: &mut Asm) {
     asm.lines = out;
 }
 
+/// `lda v; sta m; ...; tax` with `a` dead after the transfer: `ldx v; stx m;
+/// ...`. The byte is made in `x`, the register the stores and the transfer
+/// both end in, and the transfer goes: one byte and two clocks fewer a site
+/// (`f` of sibling_call_callees: `lda #0; sta rc2; sta rc3; tax; lda #1` is
+/// `ldx #0; stx rc2; stx rc3; lda #1`). The flags `ldx` sets are those of `lda`
+/// and `tax`. The pin's analogue is the register allocator's choice of the
+/// cheaper class for a constant used in two (`MachineCopyPropagation` would
+/// forward the copy; rematerialization puts the constant where it is needed).
+pub fn make_the_byte_in_x(asm: &mut Asm) {
+    let runs = {
+        // it runs on parsed text, which lost what the callees take: every
+        // call and return reads `a`
+        let exits = Exits::default();
+        let lines = &asm.lines;
+        let inst = |n: usize| lines.get(n).and_then(Line::inst);
+        let mut runs = Vec::new();
+        let mut at = 0;
+        while at < lines.len() {
+            let loads =
+                inst(at).is_some_and(|i| i.op == Op::Lda && matches!(i.operand, Operand::Imm(_) | Operand::Direct(_)));
+            if !loads {
+                at += 1;
+                continue;
+            }
+            let mut end = at + 1;
+            while inst(end).is_some_and(|i| i.op == Op::Sta && matches!(i.operand, Operand::Direct(_))) {
+                end += 1;
+            }
+            if end > at + 1
+                && inst(end).is_some_and(|i| i.op == Op::Tax)
+                && dead_from(lines, end + 1, Registers::A, &mut HashSet::default(), exits)
+            {
+                runs.push((at, end));
+            }
+            at = end.max(at + 1);
+        }
+        runs
+    };
+    for (at, end) in runs.into_iter().rev() {
+        let stores: Vec<Line> = asm.lines[at + 1..end]
+            .iter()
+            .filter_map(Line::inst)
+            .map(|i| Line::Inst(Inst { op: Op::Stx, operand: i.operand.clone(), place: i.place }))
+            .collect();
+        let load = asm.lines[at].inst().expect("a load");
+        let load = Line::Inst(Inst { op: Op::Ldx, operand: load.operand.clone(), place: load.place });
+        let mut made = vec![load];
+        made.extend(stores);
+        asm.lines.splice(at..=end, made);
+    }
+}
+
 /// Both paths of a branch start with `lda b; sta c`, and the straight-line code
 /// before the branch stored `b` from a register (`stx b`): the store of `c`
 /// goes beside it (`stx b; stx c`) and the two loads and stores go. A pair
@@ -1940,6 +2009,13 @@ pub fn sink_save_bracket(asm: &mut Asm) {
                     | Sec
             )
     };
+    // an indirect or zero-page indexed operand reaches cells it does not name
+    let reads_cell = |inst: &Inst, cell: &str| match &inst.operand {
+        Operand::Direct(name) => name == cell,
+        Operand::Indexed(name, _) => name == cell || name.starts_with("rc"),
+        Operand::IndirectY(_) | Operand::IndirectX(_) | Operand::Indirect(_) => true,
+        _ => false,
+    };
     let mut at = 0;
     while at + 3 < asm.lines.len() {
         let [Line::Inst(push), Line::Inst(load), Line::Inst(store), Line::Inst(pull)] = &asm.lines[at..at + 4] else {
@@ -1974,7 +2050,11 @@ pub fn sink_save_bracket(asm: &mut Asm) {
             for look in (at.saturating_sub(12)..at).rev() {
                 let Line::Inst(inst) = &asm.lines[look] else { break };
                 if overwrites(inst) {
-                    target = Some((look, false));
+                    // the bracket goes above this load, which must not read the
+                    // cell it sets
+                    if !reads_cell(inst, &cell) {
+                        target = Some((look, false));
+                    }
                     break;
                 }
                 if !passable(inst, &cell) {
@@ -2618,7 +2698,7 @@ pub(crate) fn carry_dead_from(
         };
         match inst.op {
             Op::Clc | Op::Sec | Op::Cmp | Op::Cpx | Op::Cpy | Op::Jsr | Op::Rts => return true,
-            Op::Asl | Op::Lsr if matches!(inst.operand, Operand::Acc | Operand::None) => return true,
+            Op::Asl | Op::Lsr => return true,
             Op::Lda
             | Op::Ldx
             | Op::Ldy
@@ -2783,6 +2863,90 @@ pub fn step_through_y(asm: &mut Asm) {
         }
         at += 1;
     }
+}
+
+/// `lda w; lsr a; ror p; ror q; lsr h; ror w` (a funnel step: the low bit of
+/// `w` into the word `q:p`, then the word `w:h`'s own shift) is `lsr h; ror w;
+/// ror p; ror q`: the shift of `w` leaves that bit in the carry. Likewise
+/// `lda w; asl a; rol p; rol q; asl h; rol w`. A long shifted by one bit was
+/// six instructions a step where llvm-mos has four (`x >> 1` 20 B, 14 B).
+/// Needs `a`, the carry and the sign and zero flags dead after: the chain
+/// ends on `q`, not on `w`.
+///
+/// DEVIATE 6502-SHIFT-CHAIN (owner llrm-target-6502, exit 2026-12-15): the pin
+/// has no funnel node; llvm-mos's `G_LSHRE` chain passes the carry on.
+pub fn fuse_shift_chain(asm: &mut Asm) {
+    let mut at = 0;
+    while at + 6 <= asm.lines.len() {
+        if let Some((length, fused)) = fused_chain(asm, at) {
+            asm.lines.splice(at..at + length, fused);
+        }
+        at += 1;
+    }
+}
+
+fn fused_chain(
+    asm: &Asm,
+    at: usize,
+) -> Option<(usize, Vec<Line>)> {
+    let inst = |n: usize| asm.lines.get(at + n).and_then(Line::inst);
+    let (load, step, first, second) = (inst(0)?, inst(1)?, inst(2)?, inst(3)?);
+    let (shift_op, rotate_op) = match step.op {
+        Op::Lsr => (Op::Lsr, Op::Ror),
+        Op::Asl => (Op::Asl, Op::Rol),
+        _ => return None,
+    };
+    let cell = |inst: &Inst| inst.operand.is_cell().then(|| inst.operand.clone());
+    let source = |inst: &Inst| match inst.op {
+        Op::Lda | Op::Sta => cell(inst).map(Some),
+        Op::Txa | Op::Tya => Some(None),
+        _ => None,
+    };
+    let held = source(load)?;
+    let (p, q) = (cell(first)?, cell(second)?);
+    if !matches!(step.operand, Operand::Acc | Operand::None) || first.op != rotate_op || second.op != rotate_op {
+        return None;
+    }
+    // the word's own shift, after the same load where `w` was in `a`
+    let (shift, last, length) = if held.is_some() {
+        (inst(4)?, inst(5)?, 6)
+    } else {
+        if inst(4)?.op != load.op {
+            return None;
+        }
+        (inst(5)?, inst(6)?, 7)
+    };
+    let h = cell(shift)?;
+    let ends_in_a = held.is_none() && matches!(last.operand, Operand::Acc | Operand::None);
+    let ends_in_w = held.as_ref().is_some_and(|w| cell(last).as_ref() == Some(w));
+    let mut cells = vec![&p, &q, &h];
+    if let Some(w) = &held {
+        cells.push(w);
+    }
+    let distinct = cells.iter().enumerate().all(|(i, a)| cells[i + 1..].iter().all(|b| a != b));
+    let shape = shift.op == shift_op && last.op == rotate_op && (ends_in_a || ends_in_w);
+    // the chain ends on `q`: what `rol w` left in the flags and, in the cell
+    // form, in `a`, is not there
+    (shape
+        && distinct
+        && (ends_in_a || dead_from(&asm.lines, at + length, Registers::A, &mut HashSet::default(), Exits::of(asm)))
+        && carry_dead_from(&asm.lines, at + length, &mut HashSet::default())
+        && flags_unread_after(&asm.lines, at + length))
+    .then(|| {
+        let mut lines = Vec::new();
+        if ends_in_a {
+            lines.extend([asm.lines[at].clone(), asm.lines[at + 5].clone(), asm.lines[at + 6].clone()]);
+        } else {
+            // the store of `a` into `w` stays: it is the copy the chain starts
+            // from
+            if load.op == Op::Sta {
+                lines.push(asm.lines[at].clone());
+            }
+            lines.extend([asm.lines[at + 4].clone(), asm.lines[at + 5].clone()]);
+        }
+        lines.extend([asm.lines[at + 2].clone(), asm.lines[at + 3].clone()]);
+        (length, lines)
+    })
 }
 
 /// `lda m; asl|lsr|rol|ror a; sta m` where `a` is dead after the store: the

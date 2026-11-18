@@ -357,7 +357,7 @@ pub(crate) fn wide_registers(function: &MFunc) -> HashSet<Reg> {
                     }
                 }
             }
-            Op::I(Inst::VectorUnzip { rd, rn, rm, .. }) => {
+            Op::I(Inst::VectorPermute { rd, rn, rm, .. }) => {
                 wide.extend([Reg::Fpr(*rd), Reg::Fpr(*rn), Reg::Fpr(*rm)]);
             }
             Op::I(Inst::VectorNarrow { high, rd, rn, .. }) => {
@@ -380,6 +380,9 @@ pub(crate) fn wide_registers(function: &MFunc) -> HashSet<Reg> {
             }
             Op::I(Inst::VectorDupScalar { rn, .. }) => {
                 wide.insert(Reg::Fpr(*rn));
+            }
+            Op::I(Inst::VectorLoadStructure { count, rt, .. } | Inst::VectorStoreStructure { count, rt, .. }) => {
+                wide.extend((0..u32::from(*count)).map(|at| Reg::Fpr(rt.in_run(at))));
             }
             Op::I(Inst::VectorLoadReplicate { rt, .. } | Inst::VectorLoadLane { rt, .. }) => {
                 wide.insert(Reg::Fpr(*rt));

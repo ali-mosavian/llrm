@@ -1638,7 +1638,12 @@ fn test_module_ipo_states_the_argument_ranges_the_pins_ipsccp_does() {
         &mut module,
         std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()),
         |program: &mut llrm_mir::program::Program| {
-            let mut ipo = crate::walk::ModuleIpo { inline: crate::inline::Threshold::none(), cloning: Default::default() };
+            let mut ipo = crate::walk::ModuleIpo {
+                inline: crate::inline::Threshold::none(),
+                cloning: Default::default(),
+                speed_rate: false,
+                for_size: false,
+            };
             ipo.run(program, &mut Default::default())
         },
     )
@@ -2324,7 +2329,12 @@ b0:
         &mut module,
         std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()),
         |program: &mut llrm_mir::program::Program| {
-            let mut ipo = crate::walk::ModuleIpo { inline: crate::inline::Threshold::none(), cloning: Default::default() };
+            let mut ipo = crate::walk::ModuleIpo {
+                inline: crate::inline::Threshold::none(),
+                cloning: Default::default(),
+                speed_rate: false,
+                for_size: false,
+            };
             ipo.run(program, &mut Default::default())
         },
     )
@@ -2365,7 +2375,12 @@ b0:
         &mut module,
         std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()),
         |program: &mut llrm_mir::program::Program| {
-            let mut ipo = crate::walk::ModuleIpo { inline: crate::inline::Threshold::none(), cloning: Default::default() };
+            let mut ipo = crate::walk::ModuleIpo {
+                inline: crate::inline::Threshold::none(),
+                cloning: Default::default(),
+                speed_rate: false,
+                for_size: false,
+            };
             ipo.run(program, &mut Default::default())
         },
     )
@@ -2412,7 +2427,12 @@ b0:
         &mut module,
         std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()),
         |program: &mut llrm_mir::program::Program| {
-            let mut ipo = crate::walk::ModuleIpo { inline: crate::inline::Threshold::none(), cloning: Default::default() };
+            let mut ipo = crate::walk::ModuleIpo {
+                inline: crate::inline::Threshold::none(),
+                cloning: Default::default(),
+                speed_rate: false,
+                for_size: false,
+            };
             ipo.run(program, &mut Default::default())
         },
     )
@@ -2815,7 +2835,7 @@ fn priced_depth(
         &mut module,
         std::rc::Rc::new(llrm_x86_m16::Dos::default()),
         |program: &mut llrm_mir::program::Program| {
-            let module = &program.modules[0];
+            let module = &mut program.modules[0];
             let id = module
                 .functions()
                 .find(|(_, global, _)| global.name.as_deref() == Some(name))
@@ -3259,7 +3279,7 @@ fn is_tree(
         &mut module,
         crate::indvars::tests::m32(),
         |program: &mut llrm_mir::program::Program| {
-            let module = &program.modules[0];
+            let module = &mut program.modules[0];
             let id = module
                 .functions()
                 .find(|(_, global, _)| global.name.as_deref() == Some(name))
@@ -3751,4 +3771,100 @@ fn test_a_file_that_links_gcc_source_is_marked_gpl() {
     let mut found = Vec::new();
     scan(&root, &mut found);
     assert!(found.is_empty(), "gcc-derived file without the SPDX GPL header: {found:?}");
+}
+
+/// `ModuleIpo` dropped the unread parameter of a function that calls itself
+/// whatever the target: the pin's `deadargelim` follows the walk, so
+/// shrink_wrapped_saves wasm32 -O1 came out 257 B against the pin's 246
+/// (the use lists of `g`'s parameters ordered otherwise). Only the recursion
+/// copier or -Os asks for it.
+#[test]
+fn test_module_ipo_drops_a_recursive_functions_unread_parameter_only_for_the_copier_or_os() {
+    use llrm_mir::program::ProgramPass;
+    let source = "define internal i16 @f(i16 %a, i16 %unused) {
+b0:
+  %done = icmp sle i16 %a, 0
+  br i1 %done, label %out, label %again
+again:
+  %m = sub i16 %a, 1
+  %r = call i16 @f(i16 %m, i16 %unused)
+  ret i16 %r
+out:
+  ret i16 %a
+}
+define i16 @top(i16 %x) {
+b0:
+  %r = call i16 @f(i16 %x, i16 %x)
+  %s = call i16 @f(i16 %r, i16 5)
+  ret i16 %s
+}
+";
+    let after = |recursive: bool, for_size: bool| {
+        let mut module = parsed(source);
+        llrm_mir::program::Program::lend(
+            &mut module,
+            std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()),
+            |program: &mut llrm_mir::program::Program| {
+                let inline = crate::inline::Threshold { recursive: Some(recursive), limit: 100, ..Default::default() };
+                let mut ipo =
+                    crate::walk::ModuleIpo { inline, cloning: Default::default(), speed_rate: true, for_size };
+                ipo.run(program, &mut Default::default())
+            },
+        )
+        .and_then(|done| done)
+        .expect("ModuleIpo runs");
+        crate::testing::printed(&module)
+    };
+    let (on, off, os) = (after(true, false), after(false, false), after(false, true));
+    assert!(on.contains("call i16 @f(i16 %m)"), "the copier prices the body without it:\n{on}");
+    assert!(off.contains("call i16 @f(i16 %m, i16 %unused)"), "the pin drops it after the walk:\n{off}");
+    // arm64 hanoi -Os went 60 B / 112 instrs to 136 B / 200,699 with it kept:
+    // the two calls of the tree recursion only merge once the arguments are
+    // gone.
+    assert!(os.contains("call i16 @f(i16 %m)"), "-Os drops it before the walk:\n{os}");
+}
+
+/// m16 hanoi -O1/-O2/-O3 kept its three peg arguments: tail-call elimination
+/// made them loop phis, the two self-calls never merged, and the run took
+/// 405,508 clk against 199. A tree recursion loses them before the walk at
+/// every level, with the copier off.
+#[test]
+fn test_module_ipo_drops_a_tree_recursions_unread_parameters_without_the_copier() {
+    use llrm_mir::program::ProgramPass;
+    let mut module = parsed(
+        "define internal i16 @hanoi(i16 %n, i16 %a, i16 %b) {
+b0:
+  %zero = icmp eq i16 %n, 0
+  br i1 %zero, label %out, label %again
+again:
+  %m = sub i16 %n, 1
+  %x = call i16 @hanoi(i16 %m, i16 %a, i16 %b)
+  %y = call i16 @hanoi(i16 %m, i16 %b, i16 %a)
+  %s = add i16 %x, %y
+  %t = add i16 %s, 1
+  ret i16 %t
+out:
+  ret i16 0
+}
+define i16 @top(i16 %x) {
+b0:
+  %r = call i16 @hanoi(i16 %x, i16 1, i16 3)
+  ret i16 %r
+}
+",
+    );
+    llrm_mir::program::Program::lend(
+        &mut module,
+        std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()),
+        |program: &mut llrm_mir::program::Program| {
+            let inline = crate::inline::Threshold { recursive: Some(false), limit: 100, ..Default::default() };
+            let mut ipo = crate::walk::ModuleIpo { inline, cloning: Default::default(), speed_rate: true, for_size: false };
+            ipo.run(program, &mut Default::default())
+        },
+    )
+    .and_then(|done| done)
+    .expect("ModuleIpo runs");
+    let text = crate::testing::printed(&module);
+    assert!(text.contains("@hanoi(i16 %n)"), "the pegs are still parameters:\n{text}");
+    assert!(!text.contains("i16 %a"), "the pegs are still passed:\n{text}");
 }

@@ -704,7 +704,7 @@ impl TargetLowering {
         vt: EVT,
     ) -> Action {
         match vt {
-            EVT::Int(_) => Action::Expand,
+            EVT::Int(_) | EVT::Vector(..) => Action::Expand,
             EVT::Simple(vt) => self.maps.operations.get(&(op, vt)).copied().unwrap_or(Action::Legal),
         }
     }
@@ -949,11 +949,22 @@ impl TargetLowering {
         // `LowerSELECT`: a scalar condition over a vector is a `CMOV` of the
         // register.
         t.set_ops(&[ISD::Select], &[MVT::V16I8, MVT::V8I16, MVT::V4I32, MVT::V2I64], Action::Custom);
+        // `LowerVSETCC`: the integer compares SSE2 has (`pcmpeq*`, `pcmpgt*`), the others made from them.
+        t.set_ops(&[ISD::SetCC], &[MVT::V16I8, MVT::V8I16, MVT::V4I32], Action::Custom);
+        // `LowerVSELECT` without SSE4.1's `pblendvb`: the arms masked by the lanes' sign masks, `pand`, `pandn`, `por`
+        // (`ExpandVSELECT`).
+        t.set_ops(&[ISD::VSelect], &[MVT::V16I8, MVT::V8I16, MVT::V4I32, MVT::V2I64], Action::Expand);
         // `LowerINSERT_VECTOR_ELT`: lane 0 of an undefined or zero vector is a
         // `movd`; another position is `ExpandINSERT_VECTOR_ELT` (the stack). DEVIATE
         // X86V3 (owner llrm-target-x86-m64-b, exit 2026-11-24): the pin shuffles
         // (`movss`, `punpck`) or uses `pinsrw`/`pinsrb`.
         t.set_ops(&[ISD::InsertVectorElt], &[MVT::V16I8, MVT::V8I16, MVT::V4I32, MVT::V2I64], Action::Custom);
+        // `LowerEXTRACT_VECTOR_ELT`: a constant lane is a shuffle and a `movd`; a variable one is the stack.
+        t.set_ops(&[ISD::ExtractElement], &[MVT::V16I8, MVT::V8I16, MVT::V4I32, MVT::V2I64], Action::Custom);
+        // No shuffle is selected by pattern: `LegalizeDAG` builds the vector of the lanes the mask picks.
+        t.set_ops(&[ISD::VectorShuffle], &[MVT::V16I8, MVT::V8I16, MVT::V4I32, MVT::V2I64], Action::Expand);
+        // `LowerSCALAR_TO_VECTOR`: a byte or a word is widened to a dword for `movd`.
+        t.set_ops(&[ISD::ScalarToVector], &[MVT::V16I8, MVT::V8I16], Action::Custom);
         // `LowerMUL`: `v4i32` without `pmulld` is `pmuludq` on the even and the
         // odd lanes.
         t.set_ops(&[ISD::Mul], &[MVT::V4I32, MVT::V16I8], Action::Custom);
@@ -1125,7 +1136,10 @@ impl TargetLowering {
         // `addTypeForNEON`: the conversions of a vector are
         // `LowerVectorINT_TO_FP` and `LowerVectorFP_TO_INT`, by the
         // operand's type.
-        t.set_ops(&[SIntToFp, UIntToFp], &vectors, Custom);
+        // The 64-bit types are `addDRType`'s, each through `addTypeForNEON`: their
+        // conversions are custom too (`v2i32` to `v2f64`: `ushll`, `ucvtf`).
+        let converted: Vec<MVT> = [MVT::V8I8, MVT::V4I16, MVT::V2I32].into_iter().chain(vectors).collect();
+        t.set_ops(&[SIntToFp, UIntToFp], &converted, Custom);
         t.set_ops(&[FpToSInt, FpToUInt], &[MVT::V4F32, MVT::V2F64, MVT::V2F32], Custom);
         // `addTypeForNEON`: a compare is `LowerVSETCC`, a select a mask
         // expression (`ExpandVSELECT`), and the integer codes the compares

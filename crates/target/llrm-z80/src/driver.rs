@@ -41,6 +41,10 @@ impl Level {
     }
 
     fn options(self) -> Options {
+        Options { backward_threading: false, ..self.mid_end() }
+    }
+
+    fn mid_end(self) -> Options {
         match self {
             Self::O0 => Options::none(),
             Self::O1 => Options::basic(),
@@ -251,6 +255,7 @@ pub fn mid_end_fingerprint() -> Option<Fingerprint> {
 }
 
 thread_local! {
+    static MULTI_RECURSIVE: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
     static DATA_OF_LAST: std::cell::RefCell<Option<Result<String, String>>> = const { std::cell::RefCell::new(None) };
     static MID_END_RUNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static FINGERPRINT: std::cell::Cell<Option<Fingerprint>> = const { std::cell::Cell::new(None) };
@@ -286,6 +291,9 @@ fn program_of(
         Some(stated) => return Err(format!("the module's datalayout `{stated}` is not the Z80's `{layout}`")),
         None => return Err(format!("the module states no datalayout; the Z80's is `{layout}`")),
     }
+    if request.level != Level::O0 {
+        MULTI_RECURSIVE.with(|held| *held.borrow_mut() = crate::prepare::multi_recursive(&module));
+    }
     if request.optsize_only {
         for global in &mut module.globals {
             if let llrm_mir::module::GlobalKind::Function(function) = &mut global.kind {
@@ -317,6 +325,10 @@ fn program_of(
         // compound_assignment_types Os/Oz +2 B. Layout and allocation
         // noise after the pin's own plan; no pass is wrong.
         options.lower_switches = false;
+        // Bytes first at every level: a recursive callee is a loop before the
+        // inliner prices it, as at -Os (DEVIATE TRE-O1, owner z80, exit
+        // 2026-12-15).
+        options.tail_recursion_early = true;
         // The runtime's `strlen` (`cpir`): LoopIdiomRecognize may form a call.
         // and `memcmp` (SDCC's libc has no `bcmp`).
         options.library = llrm_mir::libfunc::Routine::stated(["strlen", "memcmp"], |name| format!("_{name}"), 0);
@@ -380,7 +392,7 @@ pub fn selections_with_alternatives(
         .filter(|global| global.function().is_some_and(|one| !one.is_declaration()))
         .filter_map(|global| global.name.as_deref().map(str::to_owned))
         .collect();
-    let select_form = |name: &str| {
+    let select_form = |module: &llrm_mir::module::Module, name: &str| {
         crate::dagisel::function::FLAT_LOOP_TRIPS.with(|one| one.set(request.flat_loop_trips));
         crate::dagisel::pipeline::STRICT_LEVEL
             .with(|one| one.set(matches!(request.level, Level::O1 | Level::Os | Level::Oz)));
@@ -397,25 +409,26 @@ pub fn selections_with_alternatives(
     // each sum to `hl`, which costs spills where several longs are live
     // (register_upper_half -Os +28 B; call_keeps -O1 all-calls form +65 B).
     // The selection is scheduled by `Source` and by `ILP` from one DAG.
-    let select = |name: &str| -> (Result<Selection, String>, Result<Selection, String>) {
-        crate::dagisel::pipeline::CARRY_OPS.with(|count| count.set(0));
-        let mut one = select_form(name);
-        if crate::dagisel::pipeline::CARRY_OPS.with(std::cell::Cell::get) > 0 {
-            crate::dagisel::pipeline::GENERIC_CARRY.with(|flag| flag.set(true));
-            let generic = select_form(name);
-            crate::dagisel::pipeline::GENERIC_CARRY.with(|flag| flag.set(false));
-            if let (Ok(one), Ok(generic)) = (&mut one, generic) {
-                one.generic = Some(Box::new(generic));
+    let select =
+        |module: &llrm_mir::module::Module, name: &str| -> (Result<Selection, String>, Result<Selection, String>) {
+            crate::dagisel::pipeline::CARRY_OPS.with(|count| count.set(0));
+            let mut one = select_form(module, name);
+            if crate::dagisel::pipeline::CARRY_OPS.with(std::cell::Cell::get) > 0 {
+                crate::dagisel::pipeline::GENERIC_CARRY.with(|flag| flag.set(true));
+                let generic = select_form(module, name);
+                crate::dagisel::pipeline::GENERIC_CARRY.with(|flag| flag.set(false));
+                if let (Ok(one), Ok(generic)) = (&mut one, generic) {
+                    one.generic = Some(Box::new(generic));
+                }
             }
-        }
-        match one {
-            Ok(one) => {
-                let ilp = one.scheduled_by_ilp();
-                (Ok(one), Ok(ilp))
+            match one {
+                Ok(one) => {
+                    let ilp = one.scheduled_by_ilp();
+                    (Ok(one), Ok(ilp))
+                }
+                Err(why) => (Err(why.clone()), Err(why)),
             }
-            Err(why) => (Err(why.clone()), Err(why)),
-        }
-    };
+        };
     // A function with the routine for its long multiplies
     // (`prepare::mark_long_multiplies`) is also selected the other way: a
     // sized one with every multiply inline (`DECOMPOSE_MULS`), an unsized one
@@ -468,11 +481,11 @@ pub fn selections_with_alternatives(
     let main: Vec<Selected> = names
         .iter()
         .map(|name| {
-            let (source, ilp) = select(name);
+            let (source, ilp) = select(module, name);
             (name.clone(), source, ilp)
         })
         .collect();
-    let alternatives: Vec<Selected> = names
+    let mut alternatives: Vec<Selected> = names
         .iter()
         .filter_map(|name| {
             // The all-calls form is priced bytes first at every level (it was
@@ -500,7 +513,7 @@ pub fn selections_with_alternatives(
             // also carry the divide's price
             crate::dagisel::pipeline::SPEED_ROUTINES
                 .with(|one| one.set(divides && muls.is_none() && !fills && !shifts));
-            let (source, ilp) = select(name);
+            let (source, ilp) = select(module, name);
             let selected = (name.clone(), source, ilp);
             crate::dagisel::pipeline::INLINE_FILLS.with(|one| one.set(false));
             crate::dagisel::pipeline::INLINE_SHIFTS.with(|one| one.set(false));
@@ -511,6 +524,36 @@ pub fn selections_with_alternatives(
             Some(selected)
         })
         .collect();
+    // A function that calls itself twice is also selected without the
+    // tail-recursion elimination (`prepare::multi_recursive`): the caller
+    // keeps the loop or the plain recursion, whichever the module price
+    // says. DEVIATE Z80-TRE-PRICE (owner x87-b, exit 2026-11-30): the pin
+    // eliminates unpriced, and its x86 pays a spill for the carried values
+    // where the z80 pays a frame access of 3 B.
+    let recursive = MULTI_RECURSIVE.with(|held| std::mem::take(&mut *held.borrow_mut()));
+    let wanted: Vec<&String> = recursive
+        .iter()
+        .filter(|name| names.contains(name) && !alternatives.iter().any(|(one, ..)| one == *name))
+        .collect();
+    if !wanted.is_empty() {
+        let mut without = request.clone();
+        without.passes.push("-fno-optimize-sibling-calls".to_owned());
+        if let Ok(mut plain) = program_of(text, &without) {
+            plain.modules.iter_mut().for_each(crate::prepare::split_phi_edges);
+            let plain = &plain.modules[0];
+            let convention = |module: &llrm_mir::module::Module, name: &str| {
+                module.named(name).and_then(|id| module.global(id).function()).map(|one| one.calling_convention)
+            };
+            for name in wanted {
+                if convention(module, name).is_none() || convention(module, name) != convention(plain, name) {
+                    continue;
+                }
+                let (source, ilp) = select(plain, name);
+                alternatives.push((name.clone(), source, ilp));
+            }
+        }
+        MULTI_RECURSIVE.with(|held| held.borrow_mut().clear());
+    }
     Ok((main, alternatives))
 }
 

@@ -316,6 +316,7 @@ fn lower_function(
                     machine.calls,
                 )),
     );
+    crate::lir_view::set_quad_callee_saved_free(!machine.calls);
     machine.alloc_odds = Some(crate::layout::edge_odds(module, function, &program.layout, &machine));
     let allocate = |machine: &mut crate::mfunc::MFunc, scratch: bool| {
         crate::lir_view::set_scratch_free(scratch);

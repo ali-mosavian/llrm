@@ -60,7 +60,7 @@
 //! Nothing.
 //!
 //! # See also
-//! Tests: `llrm-transforms/src/splitpaths_tests.rs` (feature `gcc-gpl`). Levels: `docs/reference/levels.md`.
+//! Tests: `llrm-transforms/src/splitpaths_tests.rs`. Levels: `docs/reference/levels.md`.
 
 use std::collections::BTreeSet;
 

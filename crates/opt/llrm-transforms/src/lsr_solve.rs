@@ -97,7 +97,7 @@ impl Collection<'_, '_> {
             // the target says its base add costs more than a recurrence (`gep
             // p, n` against a pointer that steps): a pointer that steps costs
             // an add on trips that do not use it.
-            if !(self.tti.preferred_addressing_mode().has_post_indexed()
+            if !(self.amk.has_post_indexed()
                 || self.tti.lsr_address_left_to_cost_model() && lu.all_fixups_unconditional)
                 || lu.kind != Kind::Address
             {
@@ -191,7 +191,8 @@ impl Collection<'_, '_> {
             }
         }
         let mut found = Vec::new();
-        walk(self, se, &mut Vec::new(), &Cost::new(), &HashSet::default(), &mut HashSet::default(), &mut found);
+        let (seed_cost, seed_regs) = self.seeded();
+        walk(self, se, &mut Vec::new(), &seed_cost, &seed_regs, &mut HashSet::default(), &mut found);
         found.sort_by_key(|(cost, _)| (cost.c.num_regs, cost.c.insns, cost.c.setup_cost));
         llrm_support::debug!("lsr-all", "{} candidates, baseline {:?}", found.len(), self.baseline_cost.c);
         let mut shown = 0;
@@ -228,6 +229,14 @@ impl Collection<'_, '_> {
         self.solve_with_cost(se).0
     }
 
+    /// The empty solution's cost and registers: the live induction variables
+    /// (DEVIATE LSR-LIVE-IV), else nothing.
+    fn seeded(&self) -> (Cost, HashSet<Scev>) {
+        let (mut cost, mut regs) = (Cost::new(), HashSet::default());
+        self.seed_live_ivs(&mut cost, &mut regs);
+        (cost, regs)
+    }
+
     /// One `SolveRecurse` from the empty solution with the uses taken in
     /// `order`: the formula chosen for each use (by use, empty if none) and
     /// what it costs.
@@ -241,13 +250,14 @@ impl Collection<'_, '_> {
         solution_cost.lose();
         let mut workspace = Vec::with_capacity(self.uses.len());
         let mut visited = HashSet::default();
+        let (seed_cost, seed_regs) = self.seeded();
         self.solve_recurse(
             se,
             &mut by_position,
             &mut solution_cost,
             &mut workspace,
-            &Cost::new(),
-            &HashSet::default(),
+            &seed_cost,
+            &seed_regs,
             &mut visited,
             order,
         );
@@ -333,8 +343,11 @@ impl Collection<'_, '_> {
             && solution_cost.c.insns >= self.baseline_cost.c.insns + 2;
         // DEVIATE LU15: a loop with an address keeps the solution that
         // reduces it, where the target says so.
-        let spared =
-            self.tti.lsr_dropped_solution_spares_addresses() && self.uses.iter().any(|u| u.kind == Kind::Address);
+        // DEVIATE LU32: not where the rewrite makes an outer loop carry more
+        // induction variables.
+        let spared = self.tti.lsr_dropped_solution_spares_addresses()
+            && self.uses.iter().any(|u| u.kind == Kind::Address)
+            && solution_cost.outer_phis == 0;
         // DEVIATE LSR-SPILL-PRICE: a loop whose other values fill the
         // registers keeps its pressure in the cost (no search with it cut), and
         // a rewrite that does not rate better than the loop as written is
@@ -345,11 +358,26 @@ impl Collection<'_, '_> {
             && !solution_cost.is_less(self.tti, &self.baseline_cost);
         if saturated_tie
             || self.baseline_cost.is_less(self.tti, &solution_cost)
-                && (self.tti.should_drop_lsr_solution_if_less_profitable() && !spared
+                && ((self.tti.should_drop_lsr_solution_if_less_profitable()
+                    || self.size
+                        && self.tti.lsr_drops_worse_solution_at_size()
+                        && holds_more(&self.baseline_cost, &solution_cost))
+                    && !spared
                     || spills && self.tti.lsr_drops_spilling_solution())
         {
             solution.clear();
         }
         (solution, solution_cost)
     }
+}
+
+/// DEVIATE LSR-DROP-AT-SIZE: the rewrite needs more registers, or more
+/// instructions, than the loop as written. Bytes and immediates are left out:
+/// the loop as written is rated with each address one pointer, so its bytes
+/// read low (sfm16 -Os: a stride-44 index kept for +4 B).
+fn holds_more(
+    written: &Cost,
+    rewrite: &Cost,
+) -> bool {
+    (written.c.insns, written.c.num_regs) < (rewrite.c.insns, rewrite.c.num_regs)
 }

@@ -78,6 +78,8 @@ pub enum Recipe {
     /// `llvm.fmuladd` of `lane`s (`VPWidenIntrinsicRecipe`): AArch64 prices it
     /// as one `fmul` (`getIntrinsicInstrCost`, L797).
     FMulAdd { lane: Ty },
+    /// `llvm.{s,u}{max,min}` of `lane`s (`VPWidenIntrinsicRecipe`).
+    IntMinMax { lane: Ty, signed: bool, max: bool },
     /// An access whose addresses are not consecutive and not a pattern the
     /// pin widens (an interleave group, a reversal, a uniform address): one
     /// scalar access per lane (`CM_Scalarize`), a load's lanes put together
@@ -85,6 +87,11 @@ pub enum Recipe {
     /// step of the address, which the target prices the address by
     /// (`getAddressComputationCost`).
     Scalarized { op: MemoryOp, lane: Ty, stride_bytes: Option<i64> },
+    /// A full interleave group of `factor` members (`CM_Interleave`): one wide
+    /// access of `factor * VF` lanes and a shuffle per member, priced once, at
+    /// the group's insert position (`setWideningDecision`); the other members
+    /// have no recipe.
+    Interleave { op: MemoryOp, lane: Ty, factor: u32 },
     /// A cast; `folded`: the scalar one is part of the load it extends (LVI1);
     /// `users`: what reads an extension, which may absorb it
     /// (`GetUserAbsorbedCastCost`).
@@ -156,6 +163,9 @@ pub struct LoopFacts {
     pub widest_induction_bits: u32,
     /// The function is `optsize` or `minsize` (VP6).
     pub opt_size: bool,
+    /// `optsize` and the target prices a vector loop by size, outside work
+    /// included (`Tti::vectorizes_size_priced`).
+    pub size_priced: bool,
     /// The loop carries reductions (`!Legal->getReductionVars().empty()`).
     pub has_reductions: bool,
     /// The recurrence types' widths of the reductions
@@ -174,6 +184,9 @@ pub struct Live {
     pub lane: Ty,
     pub start: usize,
     pub end: usize,
+    /// A reduction's phi that keeps one register of lanes at any VF
+    /// (`Tuning::narrow_reduction_accumulators`).
+    pub accumulator: bool,
 }
 
 /// The loop's values by interval, and its loop-invariant vector operands
@@ -204,6 +217,20 @@ fn lane_bits(ty: Ty) -> u32 {
     }
 }
 
+/// The name of the scalar `llvm.{s,u}{max,min}` of `lane`, as the cost hooks
+/// take it.
+fn min_max_name(
+    signed: bool,
+    max: bool,
+    lane: Ty,
+) -> String {
+    let bits = match lane {
+        Ty::Int(bits) => bits,
+        _ => 0,
+    };
+    format!("llvm.{}{}.i{bits}", if signed { 's' } else { 'u' }, if max { "max" } else { "min" })
+}
+
 /// The lane types of a recipe's vectors: its result's, and a conversion's
 /// source.
 fn recipe_lanes(recipe: &Recipe) -> impl Iterator<Item = Ty> {
@@ -220,7 +247,9 @@ fn recipe_lane(recipe: &Recipe) -> Option<Ty> {
         | Recipe::Store { lane, .. }
         | Recipe::Binary { lane, .. }
         | Recipe::FMulAdd { lane }
+        | Recipe::IntMinMax { lane, .. }
         | Recipe::Scalarized { lane, .. }
+        | Recipe::Interleave { lane, .. }
         | Recipe::Compare { lane, .. }
         | Recipe::Select { lane, .. }
         | Recipe::Induction { lane, .. } => Some(lane),
@@ -243,7 +272,7 @@ fn smallest_and_widest(
     for recipe in recipes {
         if matches!(
             recipe,
-            Recipe::Load { .. } | Recipe::Store { .. } | Recipe::Scalarized { .. }
+            Recipe::Load { .. } | Recipe::Store { .. } | Recipe::Scalarized { .. } | Recipe::Interleave { .. }
         ) {
             let bits = lane_bits(recipe_lane(recipe).expect("an access has a lane"));
             smallest = smallest.min(bits);
@@ -270,30 +299,31 @@ fn clamp_vf_by_max_trip_count(
     vf
 }
 
-/// `getMaximizedVFForTarget` (L235), fixed width.
+/// `getMaximizedVFForTarget` (L235), fixed width: the VF, and
+/// `MaxPermissibleVFWithoutMaxBW` (the widest VF before the bandwidth one).
 fn maximized_vf_for_target(
     tti: &dyn Tti,
     max_trip_count: u64,
     smallest: u32,
     widest: u32,
     max_safe_vf: u64,
-) -> u64 {
+) -> (u64, u64) {
     let register_bits = u64::from(tti.vector_register_bits());
     let max_vector = bit_floor(register_bits / u64::from(widest)).min(max_safe_vf);
     if max_vector == 0 {
-        return 1;
+        return (1, 1);
     }
     let max_vf = clamp_vf_by_max_trip_count(max_vector, max_trip_count);
     // If the MaxVF was already clamped, there is no point in trying a larger
     // one.
     if max_vf != max_vector {
-        return max_vf;
+        return (max_vf, max_vf);
     }
     if tti.should_maximize_vector_bandwidth() {
         let max_bandwidth = bit_floor(register_bits / u64::from(smallest)).min(max_safe_vf);
-        return clamp_vf_by_max_trip_count(max_bandwidth, max_trip_count);
+        return (clamp_vf_by_max_trip_count(max_bandwidth, max_trip_count), max_vf);
     }
-    max_vf
+    (max_vf, max_vf)
 }
 
 /// Why a vector factor has no price: the target prices no vector for a recipe
@@ -352,6 +382,13 @@ fn iteration_cost(
                     tti.vector_memory_op_cost(op, vector(lane), align, kind).ok_or(NotTaken)?
                 }
             }
+            Recipe::IntMinMax { lane, signed, max } => {
+                if vf == 1 {
+                    tti.intrinsic_cost(&min_max_name(signed, max, lane), Some(lane), &[lane, lane], kind)
+                } else {
+                    unknown(tti.vector_min_max_cost(signed, max, vector(lane), kind))?
+                }
+            }
             Recipe::FMulAdd { lane } => {
                 if vf == 1 {
                     tti.arithmetic_cost(ArithOp::FMul, lane, kind, Default::default(), Default::default())
@@ -377,6 +414,16 @@ fn iteration_cost(
                     // pin's scalarized one (a multiply of
                     // `<2 x i64>`).
                     tti.vector_arithmetic_cost_op2(op, vector(lane), second, kind).ok_or(NotTaken)?
+                }
+            }
+            // `getInterleaveGroupCost`: the target's price of the group; at VF 1
+            // a group is its scalar accesses (the members' recipes are one).
+            Recipe::Interleave { op, lane, factor } => {
+                if vf == 1 {
+                    let access = tti.memory_op_cost(op, lane, kind, false);
+                    Cost { value: i64::from(factor) * (access.value + address), valid: access.valid }
+                } else {
+                    tti.interleaved_memory_op_cost(op, vector(lane), factor, kind).ok_or(NotTaken)?
                 }
             }
             Recipe::Scalarized { op, lane, stride_bytes } => {
@@ -510,11 +557,56 @@ fn is_more_profitable(
     for_trip_count(vf_a, cost_a, scalar_a) < for_trip_count(vf_b, cost_b, scalar_b)
 }
 
+/// DEVIATE LV-SIZE (owner arm64, exit 2026-11-30): the work outside the vector
+/// loop at `vf`, which `VPlan::cost` leaves out (VPlan.cpp L1024: the loop
+/// region only). Each reduction starts one accumulator (an insert) and ends in
+/// a horizontal step in the middle block (`ComputeReductionResult`), priced as
+/// an `add` reduction of its width: the plan keeps a reduction's width, not
+/// its kind.
+fn outside_loop_cost(
+    tti: &dyn Tti,
+    facts: &LoopFacts,
+    vf: u64,
+) -> i64 {
+    facts
+        .reduction_bits
+        .iter()
+        .map(|&bits| {
+            let vector = VectorTy { lane: Ty::Int(bits), count: vf as u32 };
+            let step = tti
+                .vector_reduction_cost(llrm_mir::intrinsics::ReduceKind::Add, vector, false, CostKind::RecipThroughput)
+                .map_or_else(|| i64::from(vf.ilog2()) + 1, |cost| cost.value);
+            step + 1
+        })
+        .sum()
+}
+
+/// `VPRegisterUsage::spillCost` added by `LoopVectorizationPlanner::cost`
+/// (L5612) where `shouldConsiderRegPressureForVF`: the target maximizes the
+/// vector bandwidth and `vf` is past `MaxPermissibleVFWithoutMaxBW`. Each
+/// register used past the target's (`MaxLocalUsers - getNumberOfRegisters`)
+/// costs a spill and a reload (`TCC_Basic` each).
+fn spill_cost(
+    tti: &dyn Tti,
+    facts: &LoopFacts,
+    vf: u64,
+    without_max_bandwidth: u64,
+) -> i64 {
+    const SPILL_AND_RELOAD: i64 = 2;
+    let Some(pressure) = &facts.pressure else { return 0 };
+    if !tti.should_maximize_vector_bandwidth() || vf <= without_max_bandwidth {
+        return 0;
+    }
+    let (users, _) = register_usage(tti, pressure, vf as u32);
+    i64::from(users.saturating_sub(tti.number_of_registers(RegisterClass::Vector))) * SPILL_AND_RELOAD
+}
+
 /// `computeBestVF` (L5640): the cheapest VF in `1, 2, 4 .. max_vf`.
 fn best_vf(
     tti: &dyn Tti,
     facts: &LoopFacts,
     max_vf: u64,
+    without_max_bandwidth: u64,
     backend_limits: bool,
     optimistic: bool,
 ) -> (u32, i64) {
@@ -534,15 +626,32 @@ fn best_vf(
         eprintln!("LV: recipes {counts:?}");
     }
     let mut best = (scalar, 1u64, scalar);
+    // DEVIATE LV-BW-DIV (owner llrm-target-x86-m64-b, exit 2026-11-30): a VF
+    // above `MaxPermissibleVFWithoutMaxBW` takes the bandwidth of the smallest
+    // type only where it divides the trip count, as gcc's very-cheap cost
+    // model takes a vector loop only where no scalar epilogue is left
+    // (`vect_analyze_loop_costing`).
+    let needs_no_epilogue = tti.should_maximize_vector_bandwidth() && tti.bandwidth_vf_without_epilogue();
     let mut vf = 2u64;
     while vf <= max_vf {
-        let priced = iteration_cost(tti, &facts.recipes, vf as u32, backend_limits, optimistic);
+        if needs_no_epilogue && vf > without_max_bandwidth && (facts.trip_count == 0 || facts.trip_count % vf != 0) {
+            vf *= 2;
+            continue;
+        }
+        let priced = iteration_cost(tti, &facts.recipes, vf as u32, backend_limits, optimistic)
+            .map(|cost| cost + spill_cost(tti, facts, vf, without_max_bandwidth));
         if debug {
             match &priced {
                 Ok(cost) => eprintln!("Cost for VF {vf}: {cost}"),
                 Err(_) => eprintln!("Cost for VF {vf}: not priced"),
             }
         }
+        // DEVIATE LV-SIZE: at `optsize` the vector loop and its outside work
+        // must cost less than the scalar loop, whatever the cost per lane.
+        let priced = priced.and_then(|cost| {
+            let outside = outside_loop_cost(tti, facts, vf);
+            if facts.size_priced && cost + outside >= scalar { Err(NotTaken) } else { Ok(cost) }
+        });
         if let Ok(cost) = priced {
             let candidate = (cost, vf, scalar);
             if is_more_profitable(candidate, best, facts.trip_count, true) {
@@ -597,7 +706,7 @@ fn register_usage(
             .live
             .iter()
             .filter(|one| one.start < at && one.end > at)
-            .map(|one| registers_of(tti, one.lane, vf))
+            .map(|one| if one.accumulator { 1 } else { registers_of(tti, one.lane, vf) })
             .sum();
         most = most.max(open);
     }
@@ -828,6 +937,14 @@ fn max_vf_of(
     tti: &dyn Tti,
     facts: &LoopFacts,
 ) -> u64 {
+    max_vfs_of(tti, facts).0
+}
+
+/// [`max_vf_of`] and `MaxPermissibleVFWithoutMaxBW`.
+fn max_vfs_of(
+    tti: &dyn Tti,
+    facts: &LoopFacts,
+) -> (u64, u64) {
     let (smallest, widest) = smallest_and_widest(&facts.recipes, &facts.reduction_bits);
     // MaxSafeElementsPowerOf2 = bit_floor(MaxSafeVectorWidthInBits /
     // WidestType).
@@ -850,12 +967,13 @@ fn choose_with(
     if facts.trip_count == 1 {
         return Err(NotPlanned("Single iteration (non) loop"));
     }
-    let max_vf = max_vf_of(tti, facts);
-    let (vf, cost) = best_vf(tti, facts, max_vf, backend_limits, optimistic);
+    let (max_vf, without_max_bandwidth) = max_vfs_of(tti, facts);
+    let (vf, cost) = best_vf(tti, facts, max_vf, without_max_bandwidth, backend_limits, optimistic);
     if vf == 1 {
         return Err(NotPlanned("Vectorization is possible but not beneficial"));
     }
-    Ok(Plan { vf, ic: select_interleave_count(tti, facts, vf, cost) })
+    let ic = select_interleave_count(tti, facts, vf, cost);
+    Ok(Plan { vf, ic })
 }
 
 /// `AArch64Subtarget::EpilogueVectorizationMinVF` (every target's default): the

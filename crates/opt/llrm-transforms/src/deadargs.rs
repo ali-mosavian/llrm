@@ -82,27 +82,51 @@ pub fn removed(module: &mut Module) -> Vec<GlobalId> {
 /// argument went from whose value then has no other reader (what computed it
 /// is dead now).
 pub fn removed_with(module: &mut Module) -> (Vec<GlobalId>, BTreeSet<GlobalId>) {
-    removed_among(module, false)
+    removed_among(module, SelfCalls::No)
 }
 
-/// [`removed_with`] over the functions that call themselves alone: the
-/// recursion copier prices a body without the parameters nothing reads, as
-/// gcc's IPA-SRA leaves it for `-finline-recursive` (W1).
-pub fn removed_from_recursions(module: &mut Module) -> (Vec<GlobalId>, BTreeSet<GlobalId>) {
-    removed_among(module, true)
+/// [`removed_with`] over the functions that call themselves: the recursion
+/// copier prices a body without the parameters nothing reads, as gcc's IPA-SRA
+/// leaves it for `-finline-recursive` (W1). With `tree` only those with two
+/// or more self-calls: the calls of a tree recursion merge once the
+/// arguments they differ in are gone (hanoi), the one gain an early removal
+/// has where the pin removes after the walk.
+pub fn removed_from_recursions(
+    module: &mut Module,
+    tree: bool,
+) -> (Vec<GlobalId>, BTreeSet<GlobalId>) {
+    removed_among(module, if tree { SelfCalls::Tree } else { SelfCalls::Any })
+}
+
+/// Which functions [`removed_among`] looks at.
+#[derive(Clone, Copy, PartialEq)]
+enum SelfCalls {
+    /// Every function.
+    No,
+    /// Those that call themselves.
+    Any,
+    /// Those that call themselves at two or more sites.
+    Tree,
 }
 
 fn removed_among(
     module: &mut Module,
-    recursive_only: bool,
+    calls_of: SelfCalls,
 ) -> (Vec<GlobalId>, BTreeSet<GlobalId>) {
     let mut unsound = BTreeSet::new();
     let only = direct_only(module);
     let llrm_mir::callgraph::DirectCalls { sites, refused } = direct_calls(module);
     let mut changed = BTreeSet::new();
+    // The functions the pin builds again (`removeDeadStuffFromFunction`).
+    let mut rebuilt = BTreeSet::new();
     for &id in only.iter().filter(|id| !refused.contains(id)) {
         let Some(calls) = sites.get(&id) else { continue };
-        if recursive_only && !calls.iter().any(|&(caller, _)| caller == id) {
+        let own_calls = calls.iter().filter(|&&(caller, _)| caller == id).count();
+        if own_calls < match calls_of {
+            SelfCalls::No => 0,
+            SelfCalls::Any => 1,
+            SelfCalls::Tree => 2,
+        } {
             continue;
         }
         let gone = dead(module, id);
@@ -152,10 +176,19 @@ fn removed_among(
         // The function itself has other parameters now.
         unsound.insert(id);
         changed.insert(id);
+        rebuilt.insert(id);
     }
-    for id in remove_dead_returns(module) {
+    for id in remove_dead_returns(module, &mut rebuilt) {
         unsound.insert(id);
         changed.insert(id);
+    }
+    // The new function takes the uses of the old one's other parameters one at a
+    // time, so each list comes out reversed, once however much was removed.
+    for id in rebuilt {
+        let GlobalKind::Function(function) = &mut module.globals[id.0 as usize].kind else { unreachable!("a function") };
+        for parameter in function.parameters().to_vec() {
+            function.reverse_uses(parameter);
+        }
     }
     (changed.into_iter().collect(), unsound)
 }
@@ -164,7 +197,10 @@ fn removed_among(
 /// (LLVM's DeadArgumentElimination, `surveyFunction`'s return values and
 /// `removeDeadStuffFromFunction`): the function returns nothing and each call
 /// has no result. Returns the functions and callers it edited.
-fn remove_dead_returns(module: &mut Module) -> Vec<GlobalId> {
+fn remove_dead_returns(
+    module: &mut Module,
+    rebuilt: &mut BTreeSet<GlobalId>,
+) -> Vec<GlobalId> {
     let gone = dead_returns(module);
     if gone.is_empty() {
         return Vec::new();
@@ -176,6 +212,7 @@ fn remove_dead_returns(module: &mut Module) -> Vec<GlobalId> {
         let GlobalKind::Function(function) = &mut globals[id.0 as usize].kind else { unreachable!("a function") };
         function.drop_return_value(context);
         changed.insert(id);
+        rebuilt.insert(id);
     }
     for &id in &gone {
         let ty = module.global(id).function().expect("a function").ty;

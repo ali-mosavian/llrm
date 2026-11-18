@@ -85,3 +85,42 @@ def test_a_program_with_an_lp64_expectation_is_checked_against_it():
         assert clocks.expected_output(source) == "lp64\n"
     finally:
         shutil.rmtree(work, ignore_errors=True)
+
+
+FLAGGED = "// flags: -O2 -fno-inline-functions\nint f(void) { return 1; }\n"
+
+
+def test_the_bar_columns_are_the_matrixs_not_the_distros():
+    """gcc -m64 on a distro adds endbr64 per function and a canary per array frame: instructions the bar does not owe
+    (the size matrix drops them in `external_flags`; the clocks columns did not, so gcc read high and ours looked better)."""
+    lines = clocks.compile_lines("/dist", FLAGGED, "O2")
+    for column in ("gcc", "clang"):
+        assert "-fcf-protection=none" in lines[column] and "-fno-stack-protector" in lines[column], column
+
+
+def test_every_column_takes_the_programs_own_flags():
+    """40 programs say `-fno-inline-functions`; ours, gcc and clang were all built without it."""
+    lines = clocks.compile_lines("/dist", FLAGGED, "O2")
+    assert "-fno-inline-functions" in lines["ours"] and "-fno-inline-functions" in lines["clang"]
+    assert "-fno-inline" in lines["gcc"]
+
+
+def test_a_program_for_another_target_is_not_an_x86_64_cell():
+    """`// targets: dos` programs were built and counted as x86_64 cells."""
+    assert not clocks.is_cell("// targets: dos\nint main(void) { return 0; }\n")
+    assert clocks.is_cell(FLAGGED)
+
+
+def test_a_program_gcc_cannot_take_has_no_gcc_column():
+    clang_only = "// flags: -fsanitize=stack\nint main(void) { return 0; }\n"
+    assert clocks.compile_lines("/dist", clang_only, "O2")["gcc"] is None
+
+
+def test_every_column_has_the_same_unwind_tables():
+    """The size matrix's bars drop `.eh_frame` (`-fno-asynchronous-unwind-tables`; it is not code bytes). Ours emits it, and a
+    program with `.eh_frame` runs 560 more instructions of runtime start-up and exit than one without, on identical code
+    (value_of_valueless: same 10-instruction main, 137,834 against 137,260): the bars read 25-34% under ours on that alone,
+    127 cells of the first v2 census flipped from counted to not."""
+    lines = clocks.compile_lines("/dist", FLAGGED, "O2")
+    for column in ("gcc", "clang"):
+        assert "-fno-asynchronous-unwind-tables" not in lines[column], column

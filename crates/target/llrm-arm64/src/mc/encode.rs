@@ -549,9 +549,9 @@ pub fn encode(inst: &Inst) -> Result<Encoded, Error> {
                 if *lanes == Arrangement::D2 { (0b11, index & 1, 0) } else { (0b10, index >> 1, index & 1) };
             0x4F00_1000 | size << 22 | l << 21 | vreg(*rm)? << 16 | s << 14 | h << 11 | vreg(*rn)? << 5 | vreg(*rd)?
         }
-        Inst::VectorUnzip { second, lanes, rd, rn, rm } => {
+        Inst::VectorPermute { kind, lanes, rd, rn, rm } => {
             let size = lanes.size();
-            let base = if *second { 0x0E00_5800 } else { 0x0E00_1800 };
+            let base = 0x0E00_0800 | kind.opcode() << 12;
             base | lanes.q() << 30 | size << 22 | vreg(*rm)? << 16 | vreg(*rn)? << 5 | vreg(*rd)?
         }
         Inst::VectorNarrow { high, shift: None, wide, rd, rn } => {
@@ -590,6 +590,18 @@ pub fn encode(inst: &Inst) -> Result<Encoded, Error> {
         Inst::VectorLoadLane { lanes, rt, index, base } => {
             let (opcode, q, s, size) = single_structure_fields(*lanes, *index);
             0x0D40_0000 | q << 30 | opcode << 13 | s << 12 | size << 10 | reg(*base)? << 5 | vreg(*rt)?
+        }
+        // "AdvSIMD load/store multiple structures": `L` is bit 22, the opcode
+        // 8 (two registers), 4 (three) or 0 (four).
+        Inst::VectorLoadStructure { count, lanes, rt, base } | Inst::VectorStoreStructure { count, lanes, rt, base } => {
+            let load = u32::from(matches!(inst, Inst::VectorLoadStructure { .. }));
+            let opcode = match count {
+                2 => 0b1000,
+                3 => 0b0100,
+                4 => 0b0000,
+                _ => return error(format!("a structure access of {count} registers")),
+            };
+            0x0C00_0000 | lanes.q() << 30 | load << 22 | opcode << 12 | lanes.size() << 10 | reg(*base)? << 5 | vreg(*rt)?
         }
         Inst::VectorIntUnary { op, lanes, rd, rn } => {
             let (u, opcode) = op.fields();

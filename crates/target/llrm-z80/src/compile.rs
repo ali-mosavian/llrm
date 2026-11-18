@@ -936,16 +936,37 @@ mod tests {
         assert!(!same_function(&base, &other), "one immediate differs");
     }
 
-    /// A SipHash call per small field cost more than the bytes it hashed (a
+    /// The key bytes are hashed by `wyhash`, no longer SipHash and Fx per
+    /// write: a flipped bit anywhere, a longer key that only adds zero
+    /// bytes, and the two seeds must all change what the memo sees.
+    #[test]
+    fn the_key_hash_changes_with_every_bit_and_with_the_length() {
+        let base: Vec<u8> = (0..70u8).map(|at| at.wrapping_mul(37)).collect();
+        let (first, second) = (wyhash(&base, 1), wyhash(&base, 2));
+        assert_ne!(first, second, "the seeds");
+        let mut seen = std::collections::HashSet::from([first]);
+        for at in 0..base.len() {
+            for bit in 0..8 {
+                let mut flipped = base.clone();
+                flipped[at] ^= 1 << bit;
+                assert!(seen.insert(wyhash(&flipped, 1)), "bit {bit} of byte {at}");
+            }
+        }
+        for length in 0..40 {
+            assert!(seen.insert(wyhash(&vec![0u8; length], 1)), "{length} zero bytes");
+        }
+    }
+
+    /// A hasher call per small field cost more than the bytes it hashed (a
     /// tenth of switch_jump_table -O2): the key is hashed in one run.
     #[test]
-    fn a_key_is_siphashed_in_one_run_not_one_per_field() {
+    fn a_key_is_hashed_in_one_run_not_one_per_field() {
         let request = Request::new(Level::O2);
         let selected = cached_selections(include_str!("../tests/kernels/ir/lz4.ll"), &request).expect("selects");
         let function = machine_function_with(&selected, "lz4", true).expect("builds");
-        let before = SIPS.with(|count| count.get());
+        let before = RUNS.with(|count| count.get());
         let one = allocation_key(&function, "lz4", false, Level::O2, false);
-        assert_eq!(SIPS.with(|count| count.get()) - before, 1, "one SipHash run for the whole key");
+        assert_eq!(RUNS.with(|count| count.get()) - before, 1, "one hash run for the whole key");
         assert_eq!(one, allocation_key(&function, "lz4", false, Level::O2, false));
     }
 
@@ -1209,18 +1230,21 @@ fn allocate_from(
         Some(first) => first,
         None => allocate_first(function.clone(), name, level)?,
     };
-    let best = improved(first, function.clone(), name, level);
+    let (best, folds) = improved(first, function.clone(), name, level);
     // DEVIATE Z80-FOLD-PRICE (owner z80-b, exit 2026-11-30): the pin's spill
     // slots are all frame cells, so it folds every spilled read. Here a slot
     // can also be a `push` and a `pop` (1 B against 3 B and no frame), chosen
     // after allocation: a spilled read is taken from its cell where the
     // function is cheaper for it, every other choice explored on both. Exit:
     // the stack slots chosen before the fold.
-    if !best.0.blocks.iter().flat_map(|block| &block.insts).any(reads_its_cell) {
+    // Without a fold in the allocations that made `best`, the same allocations
+    // under `NO_FOLD` are the same.
+    if folds == 0 || !best.0.blocks.iter().flat_map(|block| &block.insts).any(reads_its_cell) {
         return Ok(best);
     }
     crate::regalloc::NO_FOLD.with(|one| one.set(true));
-    let other = allocate_first(function.clone(), name, level).map(|first| improved(first, function, name, level));
+    NO_FOLD_TRIALS.with(|one| one.set(one.get() + 1));
+    let other = allocate_first(function.clone(), name, level).map(|first| improved(first, function, name, level).0);
     crate::regalloc::NO_FOLD.with(|one| one.set(false));
     Ok(match other {
         Ok(other) => match (priced_in_loops(&best, level), priced_in_loops(&other, level)) {
@@ -1253,16 +1277,16 @@ fn repeating_loop_fold_wins(
         (priced_in_loops(&joined.0, level), priced_in_loops(&apart, level)),
         (Some(now), Some(then)) if cheaper(level, then, now)
     ) {
-        (false, Some((apart, joined.1, joined.2)))
+        (false, Some((apart, joined.1, joined.2, joined.3)))
     } else {
         (true, Some(joined))
     }
 }
 
 /// What a first allocation leaves: the allocation, whether `strict` held a
-/// byte back from `a`, and whether the other choices are worth exploring (not
-/// after the fallback).
-type First = (Allocated, bool, bool);
+/// byte back from `a`, whether the other choices are worth exploring (not
+/// after the fallback), and how many spilled reads it folded.
+type First = (Allocated, bool, bool, usize);
 
 /// The first allocation of `function`; where it fails, once more with the
 /// copies from the argument registers left unjoined.
@@ -1282,10 +1306,11 @@ fn allocate_first_apart(
     level: Level,
     want_apart: bool,
 ) -> Result<(First, Option<Allocated>), String> {
+    let folds = folds_made();
     match allocate_with_apart(None, true, function.clone(), name, level, want_apart) {
-        Ok((best, held, apart)) => Ok(((best, held, true), apart)),
+        Ok((best, held, apart)) => Ok(((best, held, true, folds_made() - folds), apart)),
         Err(first) => allocate_with(Some(true), true, function, name, level)
-            .map(|(done, _)| ((done, false, false), None))
+            .map(|(done, _)| ((done, false, false, folds_made() - folds), None))
             .map_err(|_| first),
     }
 }
@@ -1318,13 +1343,14 @@ fn allocate_with_apart(
 /// best so far: the argument copies joined or not, and a byte wanted both in
 /// `a` and in a register of its own loaded through `a` or through `hl`.
 fn improved(
-    (mut best, held, explore): First,
+    (mut best, held, explore, first_folds): First,
     function: MFunction,
     name: &str,
     level: Level,
-) -> Allocated {
+) -> (Allocated, usize) {
+    let folds = folds_made();
     if !explore {
-        return best;
+        return (best, first_folds);
     }
     let has_loop = !Cfg::new(&function).loops().is_empty();
     let other_join = Some(!crate::abi::z80().pinned_copies_unjoined);
@@ -1343,7 +1369,7 @@ fn improved(
             }
         }
     }
-    best
+    (best, first_folds + folds_made() - folds)
 }
 
 /// An ALU op or compare whose second source is a frame cell
@@ -1366,6 +1392,25 @@ thread_local! {
 }
 
 thread_local! {
+    /// Spilled reads the allocator has folded into their instruction on this
+    /// thread (an op reading its frame cell, or a byte of a pair read from it).
+    static FOLDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The folded spilled reads the allocations on this thread have left so far.
+fn folds_made() -> usize {
+    FOLDS.with(std::cell::Cell::get)
+}
+
+/// `count` folds more: a memoized allocation made them where it was first run.
+fn add_folds(count: usize) {
+    FOLDS.with(|one| one.set(one.get() + count));
+}
+
+thread_local! {
+    /// Allocations repeated with every spilled read left unfolded (`NO_FOLD`)
+    /// since the last [`take_no_fold_trials`].
+    static NO_FOLD_TRIALS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     /// Full allocations run since the last [`take_allocations`].
     static ALLOCATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     /// Reports `stack_slot_report_by` made, and whole-function read-again
@@ -1386,6 +1431,12 @@ thread_local! {
 /// each.
 pub fn take_stack_refusals() -> Vec<(i32, StackRefusal)> {
     STACK_REFUSALS.with(|one| std::mem::take(&mut *one.borrow_mut()))
+}
+
+/// The trials with every spilled read left unfolded run on this thread since
+/// the last call.
+pub fn take_no_fold_trials() -> usize {
+    NO_FOLD_TRIALS.with(|one| one.replace(0))
 }
 
 /// The allocations run on this thread since the last call.
@@ -1437,9 +1488,11 @@ fn allocate_once_with(
         }
         HOT_LOOP_FOLD.with(|one| one.set(done.hot_loop_fold));
         STACK_REFUSALS.with(|one| one.borrow_mut().extend(done.refusals.iter().copied()));
+        add_folds(done.folds);
         return done.result;
     }
     let refusals = STACK_REFUSALS.with(|one| one.borrow().len());
+    let folds = folds_made();
     let (folded_before, hot_before) = (LOOPS_FOLDED.with(|one| one.get()), HOT_LOOP_FOLD.with(|one| one.get()));
     let result = allocate_once_computed(function, name, strict, level, want_apart);
     let (folded, hot_loop_fold) = (LOOPS_FOLDED.with(|one| one.get()), HOT_LOOP_FOLD.with(|one| one.get()));
@@ -1448,6 +1501,7 @@ fn allocate_once_with(
         loops_folded: (folded != folded_before).then_some(folded),
         hot_loop_fold: if hot_loop_fold != hot_before { hot_loop_fold } else { hot_before },
         refusals: STACK_REFUSALS.with(|one| one.borrow()[refusals..].to_vec()),
+        folds: folds_made() - folds,
     };
     ALLOCATED.with(|memo| {
         let mut memo = memo.borrow_mut();
@@ -1471,6 +1525,8 @@ struct AllocatedBefore {
     loops_folded: Option<bool>,
     hot_loop_fold: bool,
     refusals: Vec<(i32, StackRefusal)>,
+    /// Spilled reads the call folded ([`folds_made`]).
+    folds: usize,
 }
 
 thread_local! {
@@ -1535,31 +1591,57 @@ fn write_ambient_state(both: &mut Both) {
 
 #[cfg(test)]
 thread_local! {
-    /// SipHash runs made, for the test that keeps them to one per key.
-    static SIPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Key hash runs made, for the test that keeps them to one per key.
+    static RUNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// Both hashes of a key at once: Fx on every write, SipHash over the whole
-/// buffered key in one call (a SipHash call per small field costs more than
-/// the bytes it hashes).
+/// The bytes of a key, hashed twice (two seeds) in one run when the key is
+/// complete: a hasher call per small field cost more than the bytes it hashes
+/// (SipHash, then Fx per write, were 4% of int64_divmod_edges -O2).
 struct Both {
-    fx: <llrm_support::hash::FxBuild as std::hash::BuildHasher>::Hasher,
     bytes: Vec<u8>,
 }
 
 impl Both {
     fn new() -> Self {
-        Both { fx: Default::default(), bytes: Vec::with_capacity(4096) }
+        Both { bytes: Vec::with_capacity(4096) }
     }
 
     fn finish_pair(&self) -> (u64, u64) {
-        use std::hash::Hasher;
         #[cfg(test)]
-        SIPS.with(|count| count.set(count.get() + 1));
-        let mut sip = std::collections::hash_map::DefaultHasher::new();
-        sip.write(&self.bytes);
-        (sip.finish(), self.fx.finish())
+        RUNS.with(|count| count.set(count.get() + 1));
+        (wyhash(&self.bytes, 0x243f_6a88_85a3_08d3), wyhash(&self.bytes, 0x1319_8a2e_0370_7344))
     }
+}
+
+/// wyhash (final version 4, one lane): 64 bits of `bytes`, folding two words
+/// at a time through a 64 x 64 -> 128 multiply.
+fn wyhash(
+    bytes: &[u8],
+    seed: u64,
+) -> u64 {
+    const P0: u64 = 0x2d35_8dcc_aa6c_78a5;
+    const P1: u64 = 0x8bb8_4b93_962e_acc9;
+    fn mix(
+        a: u64,
+        b: u64,
+    ) -> u64 {
+        let product = u128::from(a) * u128::from(b);
+        (product as u64) ^ ((product >> 64) as u64)
+    }
+    let word = |at: &[u8]| u64::from_le_bytes(at[..8].try_into().expect("eight bytes"));
+    let mut seed = seed ^ mix(seed ^ P0, P1);
+    let mut rest = bytes;
+    while rest.len() > 16 {
+        seed = mix(word(rest) ^ P1, word(&rest[8..]) ^ seed);
+        rest = &rest[16..];
+    }
+    // the last one to 16 bytes, read up to the end of the key (zero padded
+    // by the length that is mixed in below)
+    let mut tail = [0u8; 16];
+    tail[..rest.len()].copy_from_slice(rest);
+    let (a, b) = (word(&tail), word(&tail[8..]));
+    mix(P1 ^ bytes.len() as u64, mix(a ^ P1, b ^ seed))
 }
 
 impl std::fmt::Write for Both {
@@ -1567,8 +1649,7 @@ impl std::fmt::Write for Both {
         &mut self,
         text: &str,
     ) -> std::fmt::Result {
-        use std::hash::Hasher;
-        self.write(text.as_bytes());
+        self.bytes.extend_from_slice(text.as_bytes());
         Ok(())
     }
 }
@@ -1578,7 +1659,6 @@ impl std::hash::Hasher for Both {
         &mut self,
         bytes: &[u8],
     ) {
-        self.fx.write(bytes);
         self.bytes.extend_from_slice(bytes);
     }
 
@@ -1586,7 +1666,6 @@ impl std::hash::Hasher for Both {
         &mut self,
         value: u8,
     ) {
-        self.fx.write_u8(value);
         self.bytes.push(value);
     }
 
@@ -1594,7 +1673,6 @@ impl std::hash::Hasher for Both {
         &mut self,
         value: u32,
     ) {
-        self.fx.write_u32(value);
         self.bytes.extend_from_slice(&value.to_ne_bytes());
     }
 
@@ -1602,7 +1680,6 @@ impl std::hash::Hasher for Both {
         &mut self,
         value: u64,
     ) {
-        self.fx.write_u64(value);
         self.bytes.extend_from_slice(&value.to_ne_bytes());
     }
 
@@ -1610,7 +1687,6 @@ impl std::hash::Hasher for Both {
         &mut self,
         value: usize,
     ) {
-        self.fx.write_usize(value);
         self.bytes.extend_from_slice(&value.to_ne_bytes());
     }
 
@@ -1642,7 +1718,7 @@ fn hash_form(
             .or_insert_with(|| {
                 let mut text = Both::new();
                 let _ = std::fmt::Write::write_fmt(&mut text, format_args!("{form:?}"));
-                (form.clone(), std::hash::Hasher::finish(&text.fx))
+                (form.clone(), wyhash(&text.bytes, 0))
             })
             .1
     });
@@ -1809,6 +1885,7 @@ fn allocate_once_computed(
     }
     ALLOCATIONS.with(|one| one.set(one.get() + 1));
     let (assignment, slots) = allocate_greedy::<Z80Registers>(&mut function, Regs(&REGISTER_INFO), false)?;
+    add_folds(function.blocks.iter().flat_map(|block| &block.insts).filter(|inst| reads_its_cell(inst)).count());
     let reads = expand::reads(&function);
     if std::env::var("LLRM_Z80_DUMP_RA").is_ok_and(|one| one == name) {
         dump(&function);
@@ -1911,7 +1988,7 @@ fn settle(
     // slot read again later is a `pop` and a `push` where it is on top, and
     // the reorder can take that away (frameless -O1 +4 B)
     let mut nested = function.clone();
-    let nests = nest_reloads(&mut nested, &assignment);
+    let nests = nest_reloads(&mut nested, &assignment) | sink_spills(&mut nested, &assignment);
     let variants: Vec<(bool, bool, bool)> = choices
         .iter()
         .flat_map(|&(peek, by_conflicts)| {
@@ -2813,6 +2890,81 @@ pub fn nest_reloads(
     false
 }
 
+/// A spill moves down past the reloads that follow it, while nothing between
+/// writes its register or touches its slot and no call, branch or call-area
+/// marker is crossed: `fib` spilled the first call's result right after the
+/// call and reloaded the argument it had pushed under it after, so the two
+/// slots did not nest and the result went to the frame (`ld iy, #2; add iy, sp;
+/// ld 0(iy), e; ld 1(iy), d`, 10 B against a `push de`). Kept only where it
+/// makes every slot a push (DEVIATE Z80-SLOT-NEST). Whether anything moved.
+pub fn sink_spills(
+    function: &mut MFunction,
+    assignment: &Assignment,
+) -> bool {
+    let register = |reg: Reg| match reg {
+        Reg::Virt(v) => assignment.0[v as usize],
+        Reg::Phys(id) => id,
+    };
+    let report = |function: &MFunction| stack_slot_report_by(&mut function.clone(), assignment, true, false);
+    let before = function.clone();
+    let mut moved = false;
+    for block in &mut function.blocks {
+        let mut at = 0;
+        while at < block.insts.len() {
+            let (Kind::Op("SPILL8" | "SPILL16"), [Operand::Frame(slot), Operand::Use(source)]) =
+                (block.insts[at].kind, &block.insts[at].operands[..])
+            else {
+                at += 1;
+                continue;
+            };
+            let (slot, source) = (*slot, register(*source));
+            let mut last = None;
+            for next in at + 1..block.insts.len() {
+                let inst = &block.insts[next];
+                let blocked = inst.call
+                    || inst.barrier
+                    || inst.terminator
+                    || matches!(inst.kind, Kind::Op("ADJCALLSTACKDOWN" | "ADJCALLSTACKUP"))
+                    || inst.operands.iter().any(|operand| match operand {
+                        Operand::Def(r) => Z80Registers::overlaps(register(*r), source),
+                        Operand::Frame(other) => *other == slot,
+                        _ => false,
+                    });
+                if blocked {
+                    // the spill's own slot read next: it would sit against its
+                    // reload (`push bc; pop bc`, tile -O1 +55% T)
+                    if inst.operands.iter().any(|operand| matches!(operand, Operand::Frame(other) if *other == slot)) {
+                        last = None;
+                    }
+                    break;
+                }
+                if matches!(inst.kind, Kind::Op("RELOAD8" | "RELOAD16")) {
+                    last = Some(next);
+                }
+            }
+            match last {
+                Some(last) => {
+                    let spill = block.insts.remove(at);
+                    block.insts.insert(last, spill);
+                    moved = true;
+                }
+                None => at += 1,
+            }
+        }
+    }
+    // only where every slot is then a push and a pop: with a frame that stays,
+    // the price's loop weights took the sunk variant for the cheaper one where
+    // the hot slots had gone to the frame (tile -O1: +55% T for 2 B)
+    if moved {
+        let (now, then) = (report(function), report(&before));
+        if now.refused.is_empty() && now.pushed.len() > then.pushed.len() {
+            return true;
+        }
+    }
+    *function = before;
+    false
+}
+
 /// Moves the entry block's spills of argument registers up to its start while
 /// nothing before them writes the register or touches the slot, so the
 /// prologue can `push` them: crc16 stored `n` and `p` with `ld -1(ix), a` /
@@ -3344,7 +3496,9 @@ pub fn read_copies_at_their_source(
     let pair = |r: RegId| [reg::BC, reg::DE, reg::HL].contains(&r);
     let byte = |r: RegId| [reg::A, reg::B, reg::C, reg::D, reg::E, reg::H, reg::L].contains(&r);
     'again: loop {
-        let live = PhysLiveness::of::<Z80Registers>(function, assignment, &REGISTER_INFO);
+        // solved at the first candidate that gets as far as asking: most
+        // functions have none
+        let live = std::cell::OnceCell::new();
         for b in 0..function.blocks.len() {
             for at in 0..function.blocks[b].insts.len() {
                 let inst = &function.blocks[b].insts[at];
@@ -3397,7 +3551,9 @@ pub fn read_copies_at_their_source(
                 let Some(&last) = compares.last() else { continue };
                 // the source stays as it is to the last compare (a write in the
                 // compare's own instruction comes after its read)
-                let after = live.live_before::<Z80Registers>(function, assignment, &REGISTER_INFO, b, last + 1);
+                let after = live
+                    .get_or_init(|| PhysLiveness::of::<Z80Registers>(function, assignment, &REGISTER_INFO))
+                    .live_before::<Z80Registers>(function, assignment, &REGISTER_INFO, b, last + 1);
                 if after.is_live(&REGISTER_INFO, dst) {
                     continue;
                 }

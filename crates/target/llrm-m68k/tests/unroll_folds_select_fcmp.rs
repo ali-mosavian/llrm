@@ -40,7 +40,7 @@ exit:
 fn a_float_loop_whose_select_and_compare_fold_is_unrolled_at_os() {
     for cpu in [Cpu::M68000, Cpu::M68020] {
         let text = assembly(IR, cpu, Level::Os).expect("compiles");
-        for routine in ["__muldf3", "__divdf3", "__nedf2"] {
+        for routine in ["__muldf3", "__divdf3", "__ledf2"] {
             assert!(!text.contains(routine), "{cpu:?}: {routine} left in the loop\n{text}");
         }
     }

@@ -39,6 +39,7 @@ pub fn builder_target() -> BuilderTarget {
         dag: DagConfig {
             boolean_contents: BooleanContents::ZeroOrNegativeOne,
             big_endian: true,
+            fixed_args_in_every_block: true,
             ..BuilderTarget::for_pointer_bits(32).dag
         },
         shift_amount: EVT::I32,
