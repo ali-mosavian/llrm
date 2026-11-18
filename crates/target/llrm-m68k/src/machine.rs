@@ -624,6 +624,11 @@ impl Tti for M68k {
         }
     }
 
+    /// DEVIATE LSR-LIVE-IV (owner llrm-w12-m16-nib-twins, exit 2026-11-24).
+    fn lsr_unmanaged_iv_reads_stay_live(&self) -> bool {
+        true
+    }
+
     /// The per-target value of `SCEVCheapExpansionBudget`: one operation. A
     /// limit that costs a single operation (`n - 1`) is repaid by the counter
     /// that goes (`subq`+`bne` for `addq`+`cmp`+`blt`); one that costs more

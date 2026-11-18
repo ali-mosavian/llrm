@@ -650,6 +650,14 @@ impl Plan {
         if !should_build_lookup_table(context, spec, cases.len(), table_size, &result_types, opt_size) {
             return None;
         }
+        // DEVIATE SWITCH-LOOKUP-TRIAL: the table is built in the base compile
+        // and refused in the trial's.
+        if opt_size && spec.tti.switch_lookup_trial_at_size() {
+            if crate::trial::refusing_lookup_tables() {
+                return None;
+            }
+            crate::trial::note_lookup_table();
+        }
 
         if cond_is_index && has_default_results {
             // Grow the table to cover all possible index values to avoid the
@@ -881,7 +889,8 @@ impl Plan {
                     let array = context.types.intern(Type::Array { element: *cell, count: cells.len() as u64 });
                     let initial =
                         context.constant(Constant { ty: array, kind: ConstantKind::Aggregate(cells.clone()) });
-                    // As the pin: the alignment of one cell, as only one cell is loaded.
+                    // As the pin: the alignment of one cell, as only one cell
+                    // is loaded.
                     let align = Some(spec.layout.pref_align(&context.types, *cell));
                     let table = declared.table("switch.table", array, initial, UnnamedAddr::Global, align);
                     let address = context.types.ptr(0);

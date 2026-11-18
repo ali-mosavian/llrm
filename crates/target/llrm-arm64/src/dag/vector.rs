@@ -7,12 +7,12 @@
 //! L486](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/MCTargetDesc/AArch64AddressingModes.h#L486)).
 //!
 //! DEVIATE VEC1: a `BUILD_VECTOR` that is a splat of a constant, the all-zeros
-//! and all-ones vectors, a splat of one value, or a value in lane 0 alone is
-//! lowered; a constant that is no splat is declined to the legalizer's pool
-//! load; any other (the pin builds it with `INSERT_VECTOR_ELT`) is declined
-//! and the block refused. A constant
-//! with undefined lanes is tried only as the splat of its defined lanes
-//! (`UndefBits` of `ConstantBuildVector` is not tried), and `FMOV`, the
+//! and all-ones vectors, a splat of one value, a value in lane 0 alone, or one
+//! constant in several lanes with the others inserted is lowered; a constant
+//! that is no splat is declined to the legalizer's pool load; any other (the
+//! pin builds it with `INSERT_VECTOR_ELT`) is declined and the block refused. A
+//! constant with undefined lanes is tried only as the splat of its defined
+//! lanes (`UndefBits` of `ConstantBuildVector` is not tried), and `FMOV`, the
 //! `FNEG` forms and SVE are not made. A shuffle is lowered where it is a
 //! splat of a scalar (`DUP`); `DUPLANE` and the other masks are declined.
 //! Exit: the rest of both lowerings, with reverse (`REV64`) first.
@@ -212,6 +212,36 @@ pub fn lower_build_vector(
     if one_value {
         // "Use DUP for non-constant splats."
         return Some(dag.get_node(ISD::Target(aarch64_isd::DUP), vt, &[first]));
+    }
+    // "If there was only one constant value used and for more than one lane,
+    // start by splatting that value, then replace the non-constant lanes."
+    // Skipped where the pin prefers a `DUP` of the common value and inserts
+    // (`PreferDUPAndInsert`), a branch not translated (VEC6).
+    let constant_lanes: Vec<SDValue> =
+        defined.iter().copied().filter(|&lane| lane_constant(dag, lane, lane_bits).is_some()).collect();
+    let different = defined.iter().filter(|&&lane| lane != first).count();
+    let prefer_dup_and_insert = different >= 1 && different < defined.len() / 2 && different >= constant_lanes.len();
+    if !prefer_dup_and_insert
+        && let Some(&constant) = constant_lanes.first()
+        && constant_lanes.iter().all(|&lane| lane == constant)
+    {
+        let value = lane_constant(dag, constant, lane_bits).expect("a constant lane");
+        let mask = (u128::MAX >> (128 - lane_bits)) as u64;
+        let mut vec = dag.get_splat_build_vector(vt, constant);
+        if value != 0 && value != mask {
+            let unit = (0..64 / lane_bits).fold(0u64, |all, at| all | value << (lane_bits * at));
+            vec = constant_build_vector(dag, vt, unit)
+                .unwrap_or_else(|| dag.get_node(ISD::Target(aarch64_isd::DUP), vt, &[constant]));
+        }
+        for lane in 0..ops.len() {
+            if let Some(lane_value) = lanes[lane]
+                && lane_constant(dag, lane_value, lane_bits).is_none()
+            {
+                let index = dag.get_constant(lane as u128, EVT::I64);
+                vec = dag.get_node(ISD::InsertVectorElt, vt, &[vec, lane_value, index]);
+            }
+        }
+        return Some(vec);
     }
     // "If all else fails, just use a sequence of INSERT_VECTOR_ELT": lane 0 by
     // `SCALAR_TO_VECTOR`, the others inserted. DEVIATE VEC6 (owner
@@ -950,23 +980,34 @@ fn emit_vector_comparison(
 /// `LowerVSETCC`: an integer compare is selected as it is, by the `CMEQ`,
 /// `CMGT`, ... fragments over `SETCC`; a float one is the `FCMEQ`, `FCMGE`,
 /// `FCMGT` masks of its condition, OR-ed and inverted as the condition needs.
-///
-/// DEVIATE VEC2 (owner llrm-arm64-vec, exit 2026-11-24): `isKnownNeverNaN` is
-/// not asked, so `isnan(x) | isnan(never-nan)` is `x != x` only for
-/// `LHS == RHS`.
 pub fn lower_vsetcc(
     dag: &mut SelectionDAG,
     node: SDValue,
 ) -> Option<SDValue> {
-    let (lhs, rhs) = (dag.operand(node, 0), dag.operand(node, 1));
+    let (mut lhs, mut rhs) = (dag.operand(node, 0), dag.operand(node, 1));
     if dag.value_type(lhs).element().is_integer() {
         return Some(node);
     }
     let mut code = super::lowering::cond_of(dag, dag.operand(node, 2));
     let vt = dag.value_type(node);
     let compare_vt = dag.value_type(lhs).change_vector_element_type_to_integer();
-    if matches!(code, CondCode::SetUo | CondCode::SetO) && lhs == rhs {
-        code = if code == CondCode::SetUo { CondCode::SetUNe } else { CondCode::SetOEq };
+    // "Lower isnan(x) | isnan(never-nan) to x != x. Lower !isnan(x) &
+    // !isnan(never-nan) to x == x."
+    if matches!(code, CondCode::SetUo | CondCode::SetO) {
+        let one_nan = if lhs == rhs {
+            true
+        } else if dag.is_known_never_nan(rhs, false) {
+            rhs = lhs;
+            true
+        } else if dag.is_known_never_nan(lhs, false) {
+            lhs = rhs;
+            true
+        } else {
+            false
+        };
+        if one_nan {
+            code = if code == CondCode::SetUo { CondCode::SetUNe } else { CondCode::SetOEq };
+        }
     }
     let (first, second, invert) = vector_fp_cc(code);
     let no_nans = dag.node(node).flags.has(SDNodeFlags::NO_NANS);
@@ -1003,11 +1044,12 @@ pub fn lower_small_vector_ext_load(
     let _ = ext;
     let (chain, ptr) = (dag.operand(node, 0), dag.operand(node, 1));
     let f32_vt = EVT::Simple(MVT::F32);
-    let scalar = dag.get_load(f32_vt, chain, ptr, llrm_codegen::backend::selectiondag::dag::MemInfo {
-        mem_vt: f32_vt,
-        ext: None,
-        ..info
-    });
+    let scalar = dag.get_load(
+        f32_vt,
+        chain,
+        ptr,
+        llrm_codegen::backend::selectiondag::dag::MemInfo { mem_vt: f32_vt, ext: None, ..info },
+    );
     let to_vector = dag.get_node(ISD::ScalarToVector, EVT::Simple(MVT::V4F32), &[scalar]);
     let source_bits = mem.element().size_in_bits();
     let mut current_bits = source_bits;
@@ -1056,5 +1098,10 @@ pub fn lower_truncate_vector_store(
     let words = dag.get_node(ISD::BitCast, EVT::Simple(MVT::V2I32), &[narrow]);
     let zero = dag.get_constant(0, EVT::I64);
     let word = dag.get_node(ISD::ExtractElement, EVT::I32, &[words, zero]);
-    Some(dag.get_store(chain, word, ptr, llrm_codegen::backend::selectiondag::dag::MemInfo { mem_vt: EVT::I32, ..info }))
+    Some(dag.get_store(
+        chain,
+        word,
+        ptr,
+        llrm_codegen::backend::selectiondag::dag::MemInfo { mem_vt: EVT::I32, ..info },
+    ))
 }

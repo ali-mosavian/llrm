@@ -90,6 +90,7 @@
 
 pub mod aa;
 pub mod accessanalysis;
+pub mod edges;
 pub mod aggregate;
 pub mod alias;
 pub mod aliasdiff;
@@ -164,6 +165,7 @@ pub mod ranges;
 pub mod reachability;
 pub mod references;
 pub mod regions;
+pub mod loopderef;
 pub mod runtimecheck;
 pub mod saverestore;
 pub mod scev;

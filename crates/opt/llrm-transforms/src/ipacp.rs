@@ -244,8 +244,16 @@ pub fn cloned(
                 );
         }
     }
+    // GCC's `tailr1` precedes ipa-cp: the self-calls the pass loops.
+    let mut tails: BTreeMap<GlobalId, IdSet<InstId>> = BTreeMap::new();
+    for &(name, _) in groups.keys().collect::<BTreeSet<_>>() {
+        if recursive.contains(&name) {
+            tails.entry(name).or_insert_with(|| crate::tailcallelim::eliminated_self_calls(module, layout, name));
+        }
+    }
     for ((name, known), sites) in groups {
         let Some(body) = module.global(name).function() else { continue };
+        let eliminated = tails.get(&name).cloned().unwrap_or_default();
         // DEVIATE: an `available_externally` body is read, not run: the
         // definition is elsewhere. A copy would become a definition of its own
         // (`isDefinitionExact` is false for it; GCC's `ipa-cp` versions only a
@@ -329,10 +337,23 @@ pub fn cloned(
         let mut verdict = false;
         let (mut saved, mut loops, mut benefit) = (0, false, 0);
         for context in &contexts {
-            let (context_saved, context_loops, _) = time_saved(module, layout, name, body, context, &callees, costs, tuning.peel_limited);
+            let (context_saved, context_loops, _) =
+                time_saved(module, layout, name, body, context, &callees, costs, tuning.peel_limited, &eliminated);
             let level = state.made.get(&origin).copied().unwrap_or(0);
-            let (chain, chain_size) =
-                chain_benefit(module, layout, name, body, context, &callees, costs, tuning.peel_limited, tuning.max_clones, level, &mut BTreeMap::new());
+            let (chain, chain_size) = chain_benefit(
+                module,
+                layout,
+                name,
+                body,
+                context,
+                &callees,
+                costs,
+                tuning.peel_limited,
+                &eliminated,
+                tuning.max_clones,
+                level,
+                &mut BTreeMap::new(),
+            );
             let mut context_benefit = chain.saturating_mul(frequency) / profit::UNIT;
             // GCC's `incorporate_penalties`: a function in a cycle with others,
             // not one that calls itself.
@@ -478,32 +499,46 @@ fn chain_benefit(
     callees: &Callees,
     costs: &OperationCosts,
     peel_limited: bool,
+    eliminated: &IdSet<InstId>,
     max_clones: usize,
     level: usize,
-    memo: &mut BTreeMap<(Vec<Option<ConstantId>>, usize), (i64, i64)>,
+    memo: &mut BTreeMap<Vec<Option<ConstantId>>, (i64, i64)>,
 ) -> (i64, i64) {
-    if let Some(&done) = memo.get(&(known.to_vec(), level)) {
+    if let Some(&done) = memo.get(known) {
         return done;
     }
-    // A context met again while it is priced adds nothing.
-    memo.insert((known.to_vec(), level), (0, 0));
+    // A context met again while it is priced adds nothing; one met by another
+    // path is the value GCC's lattice holds once (`add_value` finds it again).
+    memo.insert(known.to_vec(), (0, 0));
     let size_of = inline::operations(body);
     let mut chain_size = size_of;
-    let (saved, loops, next) = time_saved(module, layout, name, body, known, callees, costs, peel_limited);
+    let (saved, loops, next) = time_saved(module, layout, name, body, known, callees, costs, peel_limited, eliminated);
     let mut benefit = saved / TIME_SCALE + if loops { LOOP_HINT_BONUS } else { 0 };
     if level + 1 < max_clones {
         for (context, frequency) in next {
             if context.as_slice() == known {
                 continue;
             }
-            let (after, after_size) =
-                chain_benefit(module, layout, name, body, &context, callees, costs, peel_limited, max_clones, level + 1, memo);
+            let (after, after_size) = chain_benefit(
+                module,
+                layout,
+                name,
+                body,
+                &context,
+                callees,
+                costs,
+                peel_limited,
+                eliminated,
+                max_clones,
+                level + 1,
+                memo,
+            );
             let factor = (max_clones - level) as i64;
             benefit = benefit.saturating_add(after.saturating_mul(factor).saturating_mul(frequency) / profit::UNIT);
             chain_size = chain_size.saturating_add(after_size);
         }
     }
-    memo.insert((known.to_vec(), level), (benefit, chain_size));
+    memo.insert(known.to_vec(), (benefit, chain_size));
     (benefit, chain_size)
 }
 
@@ -519,6 +554,7 @@ fn time_saved(
     callees: &Callees,
     costs: &OperationCosts,
     peel_limited: bool,
+    eliminated: &IdSet<InstId>,
 ) -> (i64, bool, Vec<(Vec<Option<ConstantId>>, i64)>) {
     let unit = Unit::of(module, layout, body);
     let mut values = IndexMap::default();
@@ -726,7 +762,12 @@ fn time_saved(
     // make constant at each (GCC's `propagate_effects` follows them).
     let mut next: Vec<(Vec<Option<ConstantId>>, i64)> = Vec::new();
     for (block, inst) in body.walk() {
-        if !reached.contains(&block) || llrm_mir::memory::callee(&module.context, body, inst) != Some(name) {
+        // A call the tail-call pass makes a loop passes a phi: no context
+        // (GCC's `tailr1` runs before ipa-cp).
+        if !reached.contains(&block)
+            || eliminated.contains(&inst)
+            || llrm_mir::memory::callee(&module.context, body, inst) != Some(name)
+        {
             continue;
         }
         let instruction = body.instruction(inst);

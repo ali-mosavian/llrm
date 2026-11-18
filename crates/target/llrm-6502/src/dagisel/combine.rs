@@ -24,6 +24,9 @@ use super::lowering::mosisd;
 pub struct MosCombines {
     pub sized: bool,
     pub synthesize: bool,
+    /// The block is outside every loop and a multiply by a constant is priced
+    /// as in a function tuned for size (`mulimage::call_when_it_pays`).
+    pub call_multiply: bool,
 }
 
 /// The combines after legalization: only the shared-shift answer, which every
@@ -218,11 +221,12 @@ impl CombineHooks for MosCombines {
             ISD::Sub => borrow_of_ult(dag, node)
                 .or_else(|| negated_high_byte_minus(dag, node))
                 .or_else(|| word_with_loaded_byte(dag, node)),
-            ISD::Srl | ISD::Truncate => half_of_pair(dag, node),
-            ISD::Shl => shifted_byte_in_pieces(dag, node),
+            ISD::Srl => half_of_pair(dag, node).or_else(|| long_shift_in_bytes(dag, node)),
+            ISD::Truncate => half_of_pair(dag, node),
+            ISD::Shl => shifted_byte_in_pieces(dag, node).or_else(|| long_shift_in_bytes(dag, node)),
             ISD::Or => funnel_by_one(dag, node),
             ISD::SetCC => range_on_low_byte(dag, node),
-            ISD::Mul => decompose_mul(dag, node, self.sized, self.synthesize),
+            ISD::Mul => decompose_mul(dag, node, self.sized || self.call_multiply, self.synthesize),
             // the combiner offers every target node to the hook
             _ => None,
         }
@@ -628,6 +632,69 @@ fn shifted_byte_in_pieces(
     Some(dag.get_node(ISD::Or, EVT::I16, &[low, high]))
 }
 
+/// A long shifted by 2, 9 or 10 bits: one-bit steps (a byte first, for 9 and
+/// 10), each a carry chain through the words (`asl; rol; rol; rol`). The type
+/// legalizer shifted each word by the whole count and joined the words with
+/// `ora` (`x << 2` 34 B, the chain 25; `x << 9` 36 B, 24).
+///
+/// Translation: llvm-mos `MOSLegalizerInfo::legalizeShiftRotate`
+/// (`llvm/lib/Target/MOS/MOSLegalizerInfo.cpp`): bytes first, then one bit at
+/// a time (`G_SHLE`/`G_LSHRE`). DEVIATE 6502-LONG-SHIFT (owner
+/// llrm-target-6502, exit 2026-12-15): only up to two bits. From three a
+/// step is 8 B unrolled where `shift_forms` makes a loop of the words' shifts
+/// (13 B whatever the count), and the 81 programs got 56 to 213 B larger
+/// (`mul_constants`, `div_constants_short`); the steps the other way for 5 to
+/// 7 bits (`shouldOverCorrect`) are the same chain and wait for a loop form of
+/// it.
+fn long_shift_in_bytes(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    if dag.value_type(node) != EVT::I32 {
+        return None;
+    }
+    let c = dag.constant(dag.operand(node, 1))?;
+    let (bytes, bits) = (c / 8, c % 8);
+    // one step is the funnel `funnel_by_one` makes
+    if c < 2 || bytes > 1 || !(1..=2).contains(&bits) {
+        return None;
+    }
+    let left = dag.opcode(node) == ISD::Shl;
+    let x = dag.operand(node, 0);
+    let moved = if bytes == 0 {
+        x
+    } else {
+        let eight = dag.get_constant(8, EVT::I8);
+        dag.get_node(if left { ISD::Shl } else { ISD::Srl }, EVT::I32, &[x, eight])
+    };
+    Some(shifted_by_single_steps(dag, moved, left, bits))
+}
+
+/// `value` of a long shifted `by` times one bit, as its two words: each step
+/// is one shift of the word that gives up a bit and `FSHL1`/`FSHR1` for the
+/// word that takes it. A shift of a shift is not folded back into one: the
+/// words are not a shift of the long.
+fn shifted_by_single_steps(
+    dag: &mut SelectionDAG,
+    value: SDValue,
+    left: bool,
+    by: u128,
+) -> SDValue {
+    let sixteen = dag.get_constant(16, EVT::I8);
+    let upper = dag.get_node(ISD::Srl, EVT::I32, &[value, sixteen]);
+    let mut low = dag.get_node(ISD::Truncate, EVT::I16, &[value]);
+    let mut high = dag.get_node(ISD::Truncate, EVT::I16, &[upper]);
+    let one = dag.get_constant(1, EVT::I8);
+    for _ in 0..by {
+        (low, high) = if left {
+            (dag.get_node(ISD::Shl, EVT::I16, &[low, one]), dag.get_node(mosisd::FSHL1, EVT::I16, &[high, low]))
+        } else {
+            (dag.get_node(mosisd::FSHR1, EVT::I16, &[high, low]), dag.get_node(ISD::Srl, EVT::I16, &[high, one]))
+        };
+    }
+    dag.get_node(ISD::BuildPair, EVT::I32, &[low, high])
+}
+
 /// One half of a `BuildPair`: `trunc` of it is the low piece, and `srl` of it
 /// by the width of a piece is the high piece, extended.
 fn half_of_pair(
@@ -848,8 +915,13 @@ fn decompose_mul(
     // (x * C at -Os) it is only where a shift is whole bytes (`2^8 +- 1`,
     // `2^16 +- 1`, `2^24 +- 1`, also `2^9 +- 1`); `x * 3` is 74 bytes. At
     // speed it saves ~2200 clocks a multiply for ~15 bytes.
-    if vt == EVT::I32 && sized && !(k + zeros >= 8 && (k + zeros) % 8 <= 1 && zeros % 8 == 0) {
-        return None;
+    if vt == EVT::I32 && !(k + zeros >= 8 && (k + zeros) % 8 <= 1 && zeros % 8 == 0) {
+        if sized {
+            return None;
+        }
+        // a call may be shorter beside the others:
+        // `mulimage::call_when_it_pays`
+        super::function::note_call_candidate();
     }
     let has = |dag: &SelectionDAG, by: u32| {
         by == 0

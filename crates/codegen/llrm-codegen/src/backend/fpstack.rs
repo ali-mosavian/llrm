@@ -1314,12 +1314,14 @@ impl Ahead<'_> {
             None => block.succ.iter().find_map(|next| self.order(*next, seen))?,
         };
         // Back through the copies: a value a copy wrote was the copy's source.
-        Some(
-            after
-                .iter()
-                .map(|value| pairs.iter().find(|(result, _)| result == value).map_or(*value, |(_, source)| *source))
-                .collect(),
-        )
+        let before: Vec<u32> = after
+            .iter()
+            .map(|value| pairs.iter().find(|(result, _)| result == value).map_or(*value, |(_, source)| *source))
+            .collect();
+        // A copy whose source is still in `after` (and a result that is also
+        // a value live into the block) maps two places to one value: no order.
+        let distinct: BTreeSet<u32> = before.iter().copied().collect();
+        (distinct.len() == before.len()).then_some(before)
     }
 }
 
@@ -1432,8 +1434,13 @@ pub(super) fn converted_with(
         return Ok(best);
     }
     let mut orders: HashMap<i64, Vec<u32>> = HashMap::default();
+    let found = crate::analysis::loops::loops(&current.blocks, Some(current.entry));
+    // Liveness only where there is a loop: a body without one asked it twice for nothing.
+    if found.is_empty() {
+        return Ok(best);
+    }
     let (live_in, _) = live_among(&current, |value| floating.contains(&value));
-    for one in crate::analysis::loops::loops(&current.blocks, Some(current.entry)) {
+    for one in found {
         let values: Vec<u32> = live_in[&one.header].iter().filter(|value| floating.contains(value)).collect();
         if !(2..=3).contains(&values.len()) {
             continue;

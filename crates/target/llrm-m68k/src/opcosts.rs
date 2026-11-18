@@ -137,6 +137,7 @@ pub const AT_DEFAULT: &[(&str, &str)] = &[
     ("copy", "no string instruction (loop idioms, own row)"),
     ("copy_cell", "same"),
     ("copy_variable", "same"),
+    ("copy_member", "no copy routine is linked by the compiler: a memcpy is the platform libc (loop idioms, own row)"),
     ("direction", "no direction flag"),
     ("unroll_budget", "a tuning limit"),
     ("pieces_set", "a tuning limit"),

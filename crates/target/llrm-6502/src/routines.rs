@@ -44,13 +44,27 @@ pub fn compact_variant(name: &str) -> Option<&'static str> {
 /// The share of its clocks a module must save, in percent, for each percent of
 /// its bytes a speed routine adds at size (`[share] percent_per_percent`).
 pub fn share_percent() -> u64 {
-    let doc: toml::Table = ROUTINES.parse().expect("routines.toml is well formed");
-    let table = doc.get("share").and_then(|t| t.as_table()).expect("a [share] table");
-    table
+    share_table()
         .get("percent_per_percent")
         .and_then(|v| v.as_integer())
         .and_then(|v| u64::try_from(v).ok())
         .expect("share.percent_per_percent is a count")
+}
+
+/// The same for `routine` at the speed levels (`[share.speed]`).
+pub fn speed_share_percent(routine: &str) -> u64 {
+    share_table()
+        .get("speed")
+        .and_then(|t| t.as_table())
+        .and_then(|t| t.get(routine))
+        .and_then(|v| v.as_integer())
+        .and_then(|v| u64::try_from(v).ok())
+        .unwrap_or_else(share_percent)
+}
+
+fn share_table() -> toml::Table {
+    let doc: toml::Table = ROUTINES.parse().expect("routines.toml is well formed");
+    doc.get("share").and_then(|t| t.as_table()).cloned().expect("a [share] table")
 }
 
 /// Whether a call of the runtime routine `name` reads and writes none of the
@@ -60,6 +74,12 @@ pub fn share_percent() -> u64 {
 ///
 /// The pin's analogue is the call's operand list: only the registers it lists
 /// are read (`MachineInstr::implicit_operands`, `LivePhysRegs`).
+/// Whether `name` is one of the runtime's own routines (`mos_rt.s`), whose
+/// text, not the call that passes it arguments, says what it reads.
+pub fn is_runtime_routine(name: &str) -> bool {
+    runtime().routines.contains_key(name)
+}
+
 pub fn leaves_cells_alone(name: &str) -> bool {
     cells_named(name).is_some_and(|cells| cells.is_empty())
 }
@@ -73,11 +93,28 @@ pub fn leaves_cells_alone(name: &str) -> bool {
 /// The pin's analogue is the call's register mask from the callee's own use
 /// (`RegUsageInfo`, `-enable-ipra`; gcc's `-fipa-ra`).
 pub fn cells_named(name: &str) -> Option<std::collections::BTreeSet<u8>> {
+    named(name, |cells| cells.clone())
+}
+
+/// Whether `name` reaches a cell by index (`cells_named` is `None`), without a
+/// copy of the set: the dead-store scans ask it of every call they pass.
+pub fn reaches_cells_by_index(name: &str) -> bool {
+    named(name, |cells| cells.is_none())
+}
+
+fn named<T>(
+    name: &str,
+    answer: impl Fn(&Option<std::collections::BTreeSet<u8>>) -> T,
+) -> T {
     use std::collections::{BTreeSet, HashMap};
     type Answers = HashMap<String, Option<BTreeSet<u8>>>;
     static ANSWERS: std::sync::Mutex<Option<Answers>> = std::sync::Mutex::new(None);
     let mut answers = ANSWERS.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    answers.get_or_insert_default().entry(name.to_owned()).or_insert_with(|| scan_cells(name)).clone()
+    let answers = answers.get_or_insert_default();
+    if let Some(known) = answers.get(name) {
+        return answer(known);
+    }
+    answer(answers.entry(name.to_owned()).or_insert_with(|| scan_cells(name)))
 }
 
 use std::collections::HashMap;

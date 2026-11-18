@@ -416,7 +416,7 @@ const ROWS: &[Disposition] = &[
         Module,
         "deadargelim",
         Why::Deviate,
-        "DEVIATE W1 (walk.rs): ipo-early (walk::ModuleIpo: ipa-deadargs) runs before the Simplify list, the pin's after the CGSCC block. Measured 2026-10-27 (early run removed, the later one kept): QCport -18 B at -Os (2 of 65), 0 at -O2; bench/hanoi +51..+64 B (m16/m32, O2/Os) toward the pin's 62 instructions from our 30. Kept: ours is the smaller",
+        "DEVIATE W1 (walk.rs): ipo-early (walk::ModuleIpo: ipa-deadargs) runs before the Simplify list for a function that calls itself with the recursion copier on or at -Os, and at any level for one that calls itself at two or more sites (a tree recursion: gcc's IPA-SRA order); the pin's runs after the CGSCC block. Measured 2026-10-27 (early run removed, the later one kept): QCport -18 B at -Os (2 of 65), 0 at -O2; bench/hanoi +51..+64 B (m16/m32, O2/Os) toward the pin's 62 instructions from our 30. Kept: ours is the smaller",
         "",
     ),
     row(
@@ -481,6 +481,14 @@ const ROWS: &[Disposition] = &[
 
 /// The built slot groups no pin slot is matched to, with why.
 const OURS_ONLY: &[(&str, &str)] = &[
+    (
+        "1243: backthread@1243",
+        "DEVIATE BACKTHREAD-REL (owner llrm-target-x86-m64-b, exit 2026-12-15): gcc's relation-oracle backward threading before the first select-forming SimplifyCFG, on x86-64; the pin has no such pass",
+    ),
+    (
+        "early: loop-unroll-and-jam@early",
+        "-O3, DEVIATE UJ-EARLY (owner arm64-vec, exit 2026-12-01): gcc's `pass_unroll_jam` runs before its vectorizer; the pin's is after the vectorizer (l.1474)",
+    ),
     ("1474: loop-unroll-and-jam@1474", "-O3: the pin's printed list has no unroll-and-jam in this fixture; unverified"),
     (
         "764: loopsimplify@764 + lcssa@764",
