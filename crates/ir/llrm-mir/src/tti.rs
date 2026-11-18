@@ -1924,6 +1924,16 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE WIDEN-RETURNS: a function only its own module calls, whose every
+    /// caller extends its result (`zext` or `sext` to one type), returns the
+    /// wider value itself, extended once where it returns rather than at each
+    /// call (`widenreturns`). A target whose wide return costs the callee one
+    /// extension and the callers none opts in; false: the result is returned as
+    /// written.
+    fn widen_private_returns(&self) -> bool {
+        false
+    }
+
     /// DEVIATE UP1-CALL at -O1: the size-neutral rule above prices a call the
     /// copies keep as one instruction with its operands, where the pin's
     /// analysis gives up on a call (gcc's `estimate_num_insns` prices it).

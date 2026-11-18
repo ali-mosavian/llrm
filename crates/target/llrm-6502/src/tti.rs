@@ -263,6 +263,16 @@ impl Tti for Mos6502 {
         Some(1100)
     }
 
+    /// DEVIATE WIDEN-RETURNS (owner 6502, exit 2026-11-24): a private function
+    /// whose callers all extend its result returns the long (`a`, `x`, `rc2`,
+    /// `rc3`, where the call that takes it reads them) extended once. The
+    /// zero high word of `report(f(x))` was 6 B at every call (bit_setclear
+    /// O2: 151 B against a bar of 147).
+    fn widen_private_returns(&self) -> bool {
+        // `LLRM_6502_WIDEN_RETURNS=0` is the kill switch, for an A/B of one binary
+        std::env::var_os("LLRM_6502_WIDEN_RETURNS").is_none_or(|value| value != "0")
+    }
+
     /// DEVIATE UNROLL-SPEED-TRIAL (owner 6502, exit 2026-11-24, the z80's
     /// translated: `driver::speed_unroll_trial`): the module compiled again at
     /// -O2 and -O3 with only the unrolls that add no bytes, and kept if it is
