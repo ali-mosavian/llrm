@@ -47,3 +47,50 @@ fn extracting_a_half_of_a_legal_wide_value_is_a_truncate_of_a_shift() {
         }
     }
 }
+
+/// `extract_element v4f32 %x, i` from a vector in a register reached selection
+/// as `CannotSelect(ExtractElement)` (fpbench and nbody_single at -O3 once the
+/// vectorizer emitted a `<4 x float>` phi): the float vectors' extract is
+/// `Expand` but no expansion existed. It is a store of the vector and a load of
+/// the lane (`ExpandExtractFromVectorThroughStack`).
+#[test]
+fn extracting_a_lane_of_a_float_vector_in_a_register_is_a_load_from_the_stack() {
+    let mut tli =
+        TargetLowering::x86_64_vectors(Features { sse2: true, vector128: true, ..Features::default() }, MVT::I64);
+    tli.set_operation_action(ISD::ExtractElement, MVT::V4F32, Action::Expand);
+    for index in [Some(1u128), None] {
+        let mut dag = dag();
+        let x = dag.get_register(EVT::Simple(MVT::V4F32), 5);
+        let at = match index {
+            Some(lane) => dag.get_constant(lane, EVT::I64),
+            None => dag.get_register(EVT::I64, 6),
+        };
+        let lane = dag.get_node(ISD::ExtractElement, EVT::Simple(MVT::F32), &[x, at]);
+        dag.set_root(lane);
+        DagLegalizer::new(
+            &mut dag,
+            &tli,
+            &mut X86Lowering {
+                multiply_early_out: None,
+                imul_if_smaller: false, hot_chains: false,
+                share_products: false,
+                cmov: false,
+                sse2: true,
+                min_size: false,
+                three_address_adds: false,
+                i16_mul_chains: false,
+                sext_load: false,
+                zext_free: false,
+                branch_constant_selects: false,
+                status_word_tests: false,
+                profile: None,
+            },
+        )
+        .run()
+        .unwrap();
+        let root = dag.get_root();
+        assert_eq!((dag.opcode(root), dag.value_type(root)), (ISD::Load, EVT::Simple(MVT::F32)), "index {index:?}");
+        let spill = dag.operand(root, 0);
+        assert_eq!(dag.opcode(spill), ISD::Store, "index {index:?}: the vector is stored first");
+    }
+}

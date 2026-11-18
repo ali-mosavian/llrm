@@ -561,9 +561,9 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         if self.dag.opcode(node) == ISD::ExtractElement
             && let source @ EVT::Simple(_) = self.dag.value_type(self.dag.operand(node, 0))
             && source.is_vector()
-            && self.tli.operation_action(ISD::ExtractElement, source) == Action::Custom
+            && matches!(self.tli.operation_action(ISD::ExtractElement, source), Action::Custom | Action::Expand)
         {
-            action = Action::Custom;
+            action = self.tli.operation_action(ISD::ExtractElement, source);
         }
         if self.dag.opcode(node) == ISD::SetCC
             && let (EVT::Simple(operand), NodeData::CondCode(cc)) = (vt, self.dag.node(self.dag.operand(node, 2)).data)
@@ -1203,6 +1203,51 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         Some(self.dag.get_load(vt, put, slot, whole))
     }
 
+    /// `ExpandExtractFromVectorThroughStack`: the vector is stored to a stack
+    /// slot and the lane loaded from its place; a variable index is masked to
+    /// the lane count and scaled. Little-endian, a power-of-two lane count.
+    fn expand_extract_vector_elt(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let (vector, index) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+        let (vt, result) = (self.dag.value_type(vector), self.dag.value_type(node));
+        let lane = vt.element();
+        let lane_bytes = lane.size_in_bits() / 8;
+        let count = vt.lanes();
+        if lane_bytes == 0 || !count.is_power_of_two() || self.dag.config().big_endian {
+            return None;
+        }
+        let cell = self.dag.create_stack_temporary(vt.size_in_bits() / 8, 16);
+        let pointer = self.dag.config().pointer;
+        let slot = self.dag.get_frame_index(pointer, cell);
+        let whole = MemInfo {
+            mem_vt: vt,
+            align: 16,
+            volatile: false,
+            base: MemBase::Stack(cell),
+            ext: None,
+            space: 0,
+            ordering: None,
+        };
+        let entry = self.dag.entry_node();
+        let spill = self.dag.get_store(entry, vector, slot, whole);
+        let to = match self.dag.constant(index) {
+            Some(at) => self.dag.get_object_ptr_offset(slot, ((at as u32 % count) * lane_bytes) as i64),
+            None => {
+                let at = self.dag.get_zext_or_trunc(index, pointer);
+                let mask = self.dag.get_constant(u128::from(count - 1), pointer);
+                let at = self.dag.get_node(ISD::And, pointer, &[at, mask]);
+                let by = self.dag.get_constant(u128::from(lane_bytes), pointer);
+                let offset = self.dag.get_node(ISD::Mul, pointer, &[at, by]);
+                self.dag.get_node(ISD::Add, pointer, &[slot, offset])
+            }
+        };
+        let info = MemInfo { mem_vt: lane, align: lane_bytes.min(16), ..whole };
+        let loaded = self.dag.get_load(lane, spill, to, info);
+        Some(if result == lane { loaded } else { self.dag.get_any_ext_or_trunc(loaded, result) })
+    }
+
     /// `TargetLowering::expandVecReduce`: the vector is spilled and its lanes
     /// are folded with the reduction's scalar operation, halving the lane
     /// count each step (lane `i` with lane `i + n / 2`), so a sum of four is
@@ -1484,6 +1529,9 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
             ISD::FNeg => Some(vec![self.expand_fneg(node)]),
             ISD::FAbs => Some(vec![self.expand_fabs(node)]),
             ISD::FCopySign => Some(vec![self.expand_fcopysign(node)]),
+            ISD::ExtractElement if self.dag.value_type(self.dag.operand(node, 0)).is_vector() => {
+                self.expand_extract_vector_elt(node).map(|lane| vec![lane])
+            }
             ISD::ExtractElement => {
                 // 0 is the low half, 1 the high: a truncate, of a shift for the
                 // high.
