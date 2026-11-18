@@ -64,6 +64,10 @@ pub enum Op {
         /// The labels of the blocks the entries go to; the table's successors.
         targets: Vec<String>,
     },
+    /// The end of a block the IR ends in `unreachable`: no code (the pin traps
+    /// only for MachO and Windows CFI) and no successor, not even the block
+    /// after it. Selection puts it last in the block.
+    Unreachable,
     /// `DBG_VALUE`: from here on the source variable `variable` is the value
     /// in `reg` (`llvm.dbg.value`); none once nothing keeps the value. It is
     /// no code and no use: liveness, allocation and every pass that looks at
@@ -134,8 +138,17 @@ impl Op {
             }
             // Not a use: the allocator renames it by hand
             // (`regalloc::rewrite`).
-            Op::DbgValue { .. } => {}
+            Op::DbgValue { .. } | Op::Unreachable => {}
         }
+    }
+
+    /// Whether control never goes on from here: a return, a trap, or the end
+    /// of a block that goes nowhere.
+    pub fn ends_the_function(&self) -> bool {
+        matches!(
+            self,
+            Op::Return { .. } | Op::Unreachable | Op::I(Inst::Brk { .. })
+        )
     }
 
     /// Whether the operation is debug information only
@@ -493,6 +506,7 @@ pub fn falls_through(block: &MBlock) -> bool {
                 Op::I(Inst::Branch { link: false, target: Target::Label(_) })
                     | Op::Return { .. }
                     | Op::JumpTable { .. }
+                    | Op::Unreachable
                     | Op::I(Inst::Brk { .. })
             ),
         )

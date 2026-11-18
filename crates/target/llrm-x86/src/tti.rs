@@ -1235,6 +1235,10 @@ impl Tti for X86 {
         self.tuning.threads_by_relation
     }
 
+    fn backward_threading(&self) -> bool {
+        self.tuning.backward_threading
+    }
+
     fn x87_stack_slots(&self) -> Option<u32> {
         self.tuning.x87_stack_slots.filter(|_| !self.sse2)
     }
@@ -1345,6 +1349,11 @@ impl Tti for X86 {
 
     fn branches_constant_arm_selects(&self) -> bool {
         self.tuning.branch_constant_arm_selects
+    }
+
+    fn select_optimize_penalty(&self) -> Option<u64> {
+        // Where a select is a conditional move, it is the cheaper form.
+        self.tuning.select_optimize_penalty.filter(|_| !self.cmov)
     }
 
     fn indvars_widens_narrow_counter_through_masks(&self) -> bool {
