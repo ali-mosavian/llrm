@@ -4,6 +4,7 @@ pub mod cc;
 pub mod cfi;
 pub mod cmpzero;
 pub mod combine;
+pub mod condbrtuning;
 pub mod copyprop;
 pub mod dag;
 pub mod data;
@@ -12,6 +13,7 @@ pub mod description;
 pub mod divconst;
 pub mod driver;
 pub mod emit;
+pub mod expand_pseudo;
 pub mod expand_imm;
 pub mod facts;
 pub mod flagcse;
@@ -20,6 +22,7 @@ pub mod ifcvt;
 pub mod ipra;
 pub mod jumptable;
 pub mod layout;
+pub mod lir_place;
 pub mod ldst_update;
 pub mod licm;
 pub mod lir_body;
@@ -40,9 +43,11 @@ pub mod taildup;
 pub mod tracemetrics;
 pub mod trial;
 pub mod tti;
+mod tti_sink;
 #[cfg(test)]
 mod tti_tests;
 mod tti_vector;
+pub mod vector_forms;
 
 use llrm_lir::registers::RegId;
 

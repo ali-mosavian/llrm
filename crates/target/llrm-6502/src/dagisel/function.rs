@@ -48,6 +48,8 @@ pub fn builder_target() -> BuilderTarget {
         // the runtime's own routines (runtime/mos_rt.s), called by the name the
         // C library gives them
         libcalls: Some(["memcpy", "memmove", "memset"].map(|name| (name.to_owned(), 0, name.to_owned())).to_vec()),
+        // each returns dst in A:X (runtime/mos_rt.s)
+        mem_libcalls_return_dest: true,
         target_nodes: Some(TargetNodes {
             call: CALL,
             ret: RET_GLUE,
@@ -67,6 +69,7 @@ pub fn builder_target() -> BuilderTarget {
         ..BuilderTarget::for_pointer_bits(16)
     }
     .with_narrow_divrem(EVT::I16, true)
+    .with_tuning(crate::driver::bytes_first_tuning())
 }
 
 /// One block, selected and scheduled.
@@ -93,6 +96,9 @@ pub struct Edge {
 /// A selected function: its blocks and the sizes of its local frame objects, by
 /// frame index.
 pub struct Selection {
+    /// Which selection this is: unique to the thread, what a cached text of it
+    /// is keyed by (a selection is moved, not copied).
+    pub id: u64,
     pub blocks: Vec<Selected>,
     pub locals: Vec<i64>,
     /// The subtarget it was selected for: emission expands to the same CPU.
@@ -214,6 +220,7 @@ pub fn select_function_with(
         widths.extend(info.part_regs(reg, parts).into_iter().skip(1).map(|part| (part, 16)));
     }
     Ok(Selection {
+        id: next_selection_id(),
         blocks: selected,
         locals,
         cpu,
@@ -221,6 +228,16 @@ pub fn select_function_with(
         zero_page: 16,
         tuning: crate::alloc::Tuning::SPEED,
         source: None,
+    })
+}
+
+fn next_selection_id() -> u64 {
+    thread_local! {
+        static NEXT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    }
+    NEXT.with(|next| {
+        next.set(next.get() + 1);
+        next.get()
     })
 }
 

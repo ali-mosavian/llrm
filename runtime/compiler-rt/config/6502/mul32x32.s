@@ -1,5 +1,5 @@
 ; Hand written. void __mul32x32(uint32_t a, uint32_t b, uint32_t *hi, uint32_t *lo): unsigned 32x32 -> 64, the SF_MUL32X32 hook
-; (-DSF_MUL32X32_6502). llrm-6502 layout: a in rc2..rc5, b0 b1 in rc6 rc7, b2 b3 hi lo at the caller's stack (rc0:rc1)+0..5.
+; (-DSF_MUL32X32_6502). llrm-6502 A:X-first layout: a in A:X and rc2:rc3, b in rc4:rc5 and rc6:rc7, hi and lo at the caller's stack (rc0:rc1)+0..3.
 ; Shift and add with the product shifting right: the smaller operand drives, one byte at a time, a zero byte is a byte move.
 ; Scratch: A X Y, rc2..rc7, rc16..rc25.
 
@@ -7,6 +7,12 @@
 .export __mul32x32
 
 rc0 = $80
+rc2 = $82
+rc3 = $83
+rc4 = $84
+rc5 = $85
+rc6 = $86
+rc7 = $87
 m0 = $82                ; rc2..rc5: the multiplicand
 d0 = $90                ; rc16..rc19: the driver; byte j becomes product byte j
 ph = $94                ; rc20, rc21
@@ -17,13 +23,23 @@ h2 = $86
 h3 = $87
 
 __mul32x32:
-    lda h2                  ; b0 b1
-    sta d0
-    lda h3
-    sta d0+1
-    ldy #5                  ; b2 b3 hi lo
+    ldy rc4                 ; b
+    sty d0
+    ldy rc5
+    sty d0+1
+    ldy rc6
+    sty d0+2
+    ldy rc7
+    sty d0+3
+    ldy rc3                 ; a from A:X and rc2:rc3 into rc2..rc5
+    sty rc5
+    ldy rc2
+    sty rc4
+    sta rc2
+    stx rc3
+    ldy #3                  ; hi and lo, the pointers ph and pl
 :   lda (rc0),y
-    sta d0+2,y
+    sta ph,y
     dey
     bpl :-
     ldx #3                  ; drive with the smaller operand

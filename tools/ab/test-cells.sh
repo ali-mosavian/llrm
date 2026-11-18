@@ -7,6 +7,12 @@ mkdir -p "$d/base" "$d/new"
 for b in llrm-cc llrm-llc; do printf '#!/bin/sh\necho same\n' > "$d/base/$b"; cp "$d/base/$b" "$d/new/$b"; chmod +x "$d/base/$b" "$d/new/$b"; done
 echo "x t -O2 f.c" > "$d/list"
 "$cells" "$d" "$d/list" >/dev/null 2>&1 && { echo "FAIL: identical binaries accepted"; exit 1; }
+# Regression (2026-11-13): a change in a target's own backend (`llrm-m68k-llc`) leaves llrm-cc and llrm-llc identical, and cells.sh refused the
+# m68k A/B of a real change ("base and new llrm-cc are the same binary"). One differing llrm-* binary makes it a sweep.
+printf '#!/bin/sh\necho one\n' > "$d/base/llrm-m68k-llc"; printf '#!/bin/sh\necho two\n' > "$d/new/llrm-m68k-llc"; chmod +x "$d/base/llrm-m68k-llc" "$d/new/llrm-m68k-llc"
+out=$("$cells" "$d" "$d/list" 2>&1)
+case $out in EMPTY*) ;; *) echo "FAIL: a differing target backend refused: $out"; exit 1;; esac
+rm -f "$d/base/llrm-m68k-llc" "$d/new/llrm-m68k-llc"
 # distinct binaries, compiler produces nothing: the cell is EMPTY, never a number
 printf '#!/bin/sh\necho other\n' > "$d/new/llrm-cc"; printf '#!/bin/sh\necho other\n' > "$d/new/llrm-llc"
 out=$("$cells" "$d" "$d/list" 2>&1)
@@ -87,6 +93,10 @@ echo "x t -O2 $d/io.c" > "$d/list"
 : > "$d/args"; unset CELLS_INC
 "$cells" "$d" "$d/list" >/dev/null 2>&1
 grep -q -- "runtime/shared/posix" "$d/args" || { echo "FAIL: a bench_io.h source compiled without the posix runtime dir: $(cat "$d/args")"; exit 1; }
+# The posix dir must not shadow a target's own llrm_os.h (2026-11-13: -I put it first, and 16 os_screen/os_execute cells at x86_16-wat lost the DOS header's
+# LLRM_OS_TEXT_SCREEN): it goes with -idirafter, never -I.
+if grep -q -- "-I [^ ]*runtime/shared/posix" "$d/args"; then echo "FAIL: the posix runtime dir was given with -I, ahead of the target's own headers: $(cat "$d/args")"; exit 1; fi
+grep -q -- "-idirafter [^ ]*runtime/shared/posix" "$d/args" || { echo "FAIL: the posix runtime dir was not given with -idirafter: $(cat "$d/args")"; exit 1; }
 printf 'int main(void) { return 0; }\n' > "$d/plain.c"
 echo "x t -O2 $d/plain.c" > "$d/list"
 : > "$d/args"

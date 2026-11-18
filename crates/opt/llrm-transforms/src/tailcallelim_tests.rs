@@ -453,3 +453,47 @@ fn a_function_whose_elimination_is_deferred_keeps_its_call() {
     assert_eq!(calls(&after), 1, "{after}");
     assert!(!after.contains("tailrecurse"), "{after}");
 }
+
+/// The pin's `opt -passes=tailcallelim -preserve-ll-uselistorder` on this
+/// function prints `%n.tr { 6, 5, 4, 3, 2, 1, 0 }` and `%acc.tr { 1, 0 }`:
+/// the argument's uses move to its phi one by one, oldest first, and each
+/// phi arm is linked as it is added. The arms were kept until the end, which
+/// linked them later than the uses made in between, so the phis'
+/// operands (and everything LSR walks) stood in another order.
+#[test]
+fn the_argument_phis_use_lists_are_in_the_order_the_pin_leaves_them() {
+    let text = "define i32 @g(i32 %n, i32 %acc) {
+entry:
+  %a = add i32 %n, 1
+  %b = mul i32 %n, %a
+  %c = icmp eq i32 %n, 0
+  br i1 %c, label %done, label %rec
+
+rec:
+  %d = sub i32 %n, 1
+  %e = add i32 %acc, %n
+  %f = xor i32 %e, %n
+  %r = tail call i32 @g(i32 %d, i32 %f)
+  ret i32 %r
+
+done:
+  %s = add i32 %acc, %b
+  %t = add i32 %s, %n
+  ret i32 %t
+}
+";
+    let mut module = parsed(text);
+    managed(&mut module, TailCallElim);
+    let function = module.function_mut("g").expect("@g").1;
+    let named = |name: &str| {
+        function
+            .walk()
+            .find_map(|(_, inst)| {
+                let result = function.instruction(inst).result?;
+                (function.value(result).name.as_deref() == Some(name)).then_some(result)
+            })
+            .unwrap_or_else(|| panic!("%{name}"))
+    };
+    let (n, acc) = (named("n.tr"), named("acc.tr"));
+    assert_eq!(function.use_list_orders(), [(n, vec![6, 5, 4, 3, 2, 1, 0]), (acc, vec![1, 0])]);
+}

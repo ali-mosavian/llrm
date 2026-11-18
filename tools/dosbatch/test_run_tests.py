@@ -144,3 +144,16 @@ def test_jobs_are_dealt_round_robin_over_the_launches_with_none_lost_or_empty():
     shares = run_tests.dealt(jobs, 8)
     assert sorted(sum(shares, [])) == jobs and all(shares) and len(shares) == 8
     assert run_tests.dealt([1, 2], 8) == [[1], [2]] and run_tests.dealt([], 8) == [[]]
+
+
+class FrontEndTests(unittest.TestCase):
+    def test_a_missing_front_end_is_refused_not_a_fail(self):
+        """A bin dir without llrm-qb and llrm-nib read as 16 compile FAILs (2026-11-14, #9807's run): the programs never ran."""
+        with tempfile.TemporaryDirectory() as where:
+            was, run_tests.BIN = run_tests.BIN, Path(where)
+            try:
+                for suffix, tool in ((".bas", "llrm-qb"), (".nib", "llrm-nib"), (".c", "llrm-cc")):
+                    program = run_tests.Program(Path(where) / f"p{suffix}", [], None)
+                    self.assertIn(tool, run_tests.missing_frontend(program) or "")
+            finally:
+                run_tests.BIN = was

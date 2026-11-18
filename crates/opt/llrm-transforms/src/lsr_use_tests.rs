@@ -97,6 +97,7 @@ fn rated_by(
         size: false,
         bytes_counted: false,
         across_call: false,
+        amk: tti.preferred_addressing_mode(),
     };
     let (mut cost, mut regs) = (Cost::new(), HashSet::default());
     cost.rate_formula(&mut rating, f, &mut regs, visited, lu, None);
@@ -238,6 +239,7 @@ fn a_visited_register_loses_and_a_chosen_one_is_free() {
             size: false,
             bytes_counted: false,
             across_call: false,
+            amk: tti.preferred_addressing_mode(),
         };
         let (mut cost, mut regs) = (Cost::new(), [a].into_iter().collect::<HashSet<Scev>>());
         cost.rate_formula(&mut rating, &f, &mut regs, &HashSet::default(), &lu, None);
@@ -460,6 +462,7 @@ fn a_scaled_index_costs_its_instructions_once_for_each_scaled_register() {
                 size: false,
                 bytes_counted: false,
                 across_call: false,
+                amk: tti.preferred_addressing_mode(),
             };
             let (mut cost, mut regs, visited) = (Cost::new(), HashSet::default(), HashSet::default());
             cost.rate_formula(&mut rating, &fa, &mut regs, &visited, &lu, None);
@@ -613,6 +616,7 @@ fn a_pointer_stepping_by_a_constant_is_free_where_post_indexed_access_is_favored
                 size: false,
                 bytes_counted: false,
                 across_call: false,
+                amk: tti.preferred_addressing_mode(),
             };
             let (mut cost, mut regs) = (Cost::new(), HashSet::default());
             cost.rate_formula(&mut rating, &f, &mut regs, &HashSet::default(), &lu, None);
@@ -647,6 +651,7 @@ fn a_zero_ending_counter_pays_the_targets_zero_test() {
                 size: false,
                 bytes_counted: false,
                 across_call: false,
+                amk: tti.preferred_addressing_mode(),
             };
             let (mut cost, mut regs) = (Cost::new(), HashSet::default());
             cost.rate_formula(&mut rating, &f, &mut regs, &HashSet::default(), &lu, None);
@@ -813,6 +818,7 @@ fn the_loop_as_written_pays_for_the_multiply_that_forms_a_recurrence() {
                 size: false,
                 bytes_counted: false,
                 across_call: false,
+                amk: tti.preferred_addressing_mode(),
             };
             let (mut cost, mut regs) = (Cost::new(), HashSet::default());
             cost.rate_formula(&mut rating, &f, &mut regs, &HashSet::default(), &use_of(Kind::Address, &[0]), None);
@@ -852,6 +858,7 @@ fn the_loop_as_written_keeps_the_exit_bound_live() {
                 size: false,
                 bytes_counted: false,
                 across_call: false,
+                amk: tti.preferred_addressing_mode(),
             };
             let f = Formula { base_regs: vec![reg], has_base_reg: true, ..Formula::default() };
             let (mut cost, mut seen) = (Cost::new(), HashSet::default());
@@ -919,4 +926,76 @@ fn fewer_address_registers_win_before_fewer_bytes_when_sized() {
         .unwrap()
         .with_tuning(llrm_mir::target::Tuning { lsr_size_order: true, ..llrm_mir::target::Tuning::PIN });
     assert!(two_registers.is_less(&flat, &one_register) && !one_register.is_less(&flat, &two_registers));
+}
+
+/// switch_peeled_table (6502 -Os): `i << 4` and `i - 192` as written are one
+/// instruction each from the counter `i`, but were priced as recurrences
+/// stepped from a start: a step and a setup each, so the model took 124 B for
+/// the loop as written against 98 B for its rewrite where the object was
+/// 91 lines against 114. The loop as written pays no setup for them.
+#[test]
+fn the_loop_as_written_pays_no_setup_for_a_recurrence_it_derives_from_its_counter() {
+    with_loop(|cx, se, a, _, header, _| {
+        let step = se.get_constant_of_type(cx, Ty::Int(32), 16);
+        let row = se.get_add_rec_expr(cx, vec![Operand32::of(a), Operand32::of(step)], header, Flags::default()).scev;
+        let f = Formula { base_regs: vec![row], has_base_reg: true, ..Formula::default() };
+        let tti = X86::of_cpu("core2").unwrap().with_tuning(llrm_mir::target::Tuning {
+            lsr_size_order: true,
+            lsr_derived_setup_free: true,
+            ..llrm_mir::target::Tuning::PIN
+        });
+        let bytes = |as_written: bool, se: &mut ScalarEvolution| {
+            let mut rating = Rating {
+                se,
+                cx,
+                tti: &tti,
+                l: header,
+                hardware_loop_profitable: false,
+                as_written,
+                other_register_units: 0,
+                size: true,
+                bytes_counted: true,
+                across_call: false,
+                amk: tti.preferred_addressing_mode(),
+            };
+            let (mut cost, mut regs) = (Cost::new(), HashSet::default());
+            cost.rate_formula(&mut rating, &f, &mut regs, &HashSet::default(), &use_of(Kind::Basic, &[0]), None);
+            cost.size_bytes
+        };
+        let model = tti.lsr_size_model().expect("x86 prices bytes");
+        assert_eq!(bytes(false, se), bytes(true, se) + model.setup.bytes, "a stepped register: step and setup");
+    });
+}
+
+/// A target that did not state the fact keeps the pin's count: m16 -Os grew 28 QCport modules by
+/// 302 B and `huge` by 27% with the discount (#9587), its setup being real bytes.
+#[test]
+fn a_target_without_the_fact_pays_setup_for_a_derived_recurrence() {
+    with_loop(|cx, se, a, _, header, _| {
+        let step = se.get_constant_of_type(cx, Ty::Int(32), 16);
+        let row = se.get_add_rec_expr(cx, vec![Operand32::of(a), Operand32::of(step)], header, Flags::default()).scev;
+        let f = Formula { base_regs: vec![row], has_base_reg: true, ..Formula::default() };
+        let tti = X86::of_cpu("core2")
+            .unwrap()
+            .with_tuning(llrm_mir::target::Tuning { lsr_size_order: true, ..llrm_mir::target::Tuning::PIN });
+        let bytes = |as_written: bool, se: &mut ScalarEvolution| {
+            let mut rating = Rating {
+                se,
+                cx,
+                tti: &tti,
+                l: header,
+                hardware_loop_profitable: false,
+                as_written,
+                other_register_units: 0,
+                size: true,
+                bytes_counted: true,
+                across_call: false,
+                amk: tti.preferred_addressing_mode(),
+            };
+            let (mut cost, mut regs) = (Cost::new(), HashSet::default());
+            cost.rate_formula(&mut rating, &f, &mut regs, &HashSet::default(), &use_of(Kind::Basic, &[0]), None);
+            cost.size_bytes
+        };
+        assert_eq!(bytes(false, se), bytes(true, se), "as written or not, the setup is counted");
+    });
 }

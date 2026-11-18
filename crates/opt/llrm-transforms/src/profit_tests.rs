@@ -582,3 +582,24 @@ b0:
     assert_eq!(prices(8), [Some(12), Some(3), Some(20), Some(28), Some(8), Some(1)]);
     assert_eq!(prices(0), [Some(3), Some(3), Some(5), Some(7), Some(2), Some(1)]);
 }
+
+/// A 64-byte constant memset is 16 dword stores; flat code stores a dword with
+/// no operand-size prefix, 16-bit code with one. The prefix was charged on
+/// both, 32 clocks for 16 at m32 (fill_nest -O2 priced 42 a trip for 26).
+#[test]
+fn an_inline_memset_pays_the_dword_prefix_only_in_sixteen_bit_code() {
+    let price = |layout: &str| {
+        let text = format!(
+            "target datalayout = \"{layout}\"\n\ndeclare void @llvm.memset.p0.i32(ptr, i8, i32, i1)\n\n\
+             define void @f(ptr %p) {{\nb0:\n  call void @llvm.memset.p0.i32(ptr %p, i8 0, i32 64, i1 false)\n  ret void\n}}\n"
+        );
+        let module = module(&text);
+        let callees = llrm_mir::memory::callees(&module);
+        let layout = llrm_mir::datalayout::DataLayout::parse(module.datalayout.as_deref().unwrap()).unwrap();
+        let costs = OperationCosts { store_immediate: 1, prefix: 1, memset_stores: 16, ..OperationCosts::default() };
+        let f = function(&module);
+        f.walk().find_map(|(_, one)| operation(&module.context, &layout, f, &callees, one, &costs).filter(|&p| p > 1))
+    };
+    assert_eq!(price("e-p:32:32-n8:16:32"), Some(16));
+    assert_eq!(price("e-p:16:16-n8:16"), Some(32));
+}

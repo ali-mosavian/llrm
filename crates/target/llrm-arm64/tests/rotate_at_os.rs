@@ -24,10 +24,12 @@ fn sieve_instructions(trial: bool) -> usize {
 
 /// sieve -Os: the outer loop's unfoldable `i*i <= n` test copied into the
 /// preheader is one instruction (4 B) over the unrotated loop, so the pass
-/// leaves it (51 instructions).
+/// leaves it (51 instructions). Since #9699 the placer copies that test into
+/// the latch (TailDupPlacement), the same instruction: 52 with and without the
+/// trial, so the trial's rotation (below) costs no more bytes than the pass alone.
 #[test]
 fn a_loop_whose_copied_exit_test_does_not_fold_is_not_rotated_by_the_pass_at_os() {
-    assert_eq!(sieve_instructions(false), 51);
+    assert_eq!(sieve_instructions(false), 52);
 }
 
 /// DEVIATE ROTATION-HOT: the same loop rotated runs 6.8% fewer instructions

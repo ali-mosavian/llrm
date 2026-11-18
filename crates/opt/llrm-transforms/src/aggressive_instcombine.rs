@@ -2549,7 +2549,7 @@ fn try_to_recognize_table_based_log2(
     let _ = isolated;
     // The target needs an efficient ctlz (a lzcnt, not a bsr and a fix-up).
     let Some(tti) = tti else { return false };
-    let cost = tti.intrinsic_cost(
+    let cost = tti.zero_poison_intrinsic_cost(
         &format!("llvm.ctlz.i{input_bits}"),
         Some(llrm_mir::tti::Ty::Int(input_bits)),
         &[llrm_mir::tti::Ty::Int(input_bits), llrm_mir::tti::Ty::Int(1)],

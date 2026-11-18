@@ -193,6 +193,49 @@ pub fn select_block(
     select_block_with(dag, cpu, false, false, false, false, true, Default::default(), Default::default(), &[], &mut Temporaries::new(0))
 }
 
+static LOWERINGS_BUILT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// How many lowering tables [`select_block_with`] has built: the pin builds
+/// `M68kTargetLowering` once per subtarget, not once per block.
+pub fn lowerings_built() -> usize {
+    LOWERINGS_BUILT.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+type Lowering = std::rc::Rc<llrm_codegen::backend::selectiondag::actions::TargetLowering>;
+
+/// The lowering table of a CPU, the carry-chain setting, the module's library
+/// calls and the size setting, built once per thread and not for every block
+/// (4.9 M of grep's 132 M compile instructions at -O2).
+fn lowering_for(
+    cpu: Cpu,
+    carry_chain: bool,
+    libcalls: &[crate::libcalls::Kind],
+    size: bool,
+) -> Lowering {
+    type Key = (Cpu, bool, Vec<crate::libcalls::Kind>, bool);
+    thread_local! {
+        static TABLES: std::cell::RefCell<Vec<(Key, Lowering)>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+    TABLES.with(|tables| {
+        let mut tables = tables.borrow_mut();
+        if let Some((_, one)) = tables
+            .iter()
+            .find(|((c, cc, kinds, s), _)| (*c, *cc, kinds.as_slice(), *s) == (cpu, carry_chain, libcalls, size))
+        {
+            return one.clone();
+        }
+        let mut tli = target_lowering_with(cpu, carry_chain);
+        crate::libcalls::apply(&mut tli, libcalls);
+        // `DAG.shouldOptForSize()`: the routines tuned for size
+        // (`set_size_libcall_name`)
+        tli.set_opt_for_size(size);
+        LOWERINGS_BUILT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let made = Lowering::new(tli);
+        tables.push(((cpu, carry_chain, libcalls.to_vec(), size), made.clone()));
+        made
+    })
+}
+
 /// [`select_block`], with the pin's source-order scheduler where
 /// `source_order`, `(An)+` and `-(An)` accesses where `indexed`, and `addq`
 /// and `subq` where `short`.
@@ -209,10 +252,7 @@ pub fn select_block_with(
     libcalls: &[crate::libcalls::Kind],
     frame: &mut Temporaries,
 ) -> Result<Vec<Unit>, Refusal> {
-    let mut tli = target_lowering_with(cpu, carry_chain);
-    crate::libcalls::apply(&mut tli, libcalls);
-    // `DAG.shouldOptForSize()`: the routines tuned for size (`set_size_libcall_name`)
-    tli.set_opt_for_size(price == crate::timing::Price::Size);
+    let tli = lowering_for(cpu, carry_chain, libcalls, price == crate::timing::Price::Size);
     let mut lowering = M68kLowering { indexed, short, absolute_data, half_mul: short && super::lowering::prefers_word_multiply(cpu), cpu, price, mul };
     let selector = Selector::new(match cpu {
         Cpu::M68000 | Cpu::M68010 => m68k_m68000::TABLE,
@@ -221,7 +261,7 @@ pub fn select_block_with(
     let mut target = M68kTarget {
         tli: &tli,
         lowering: &mut lowering,
-        chooser: M68kChooser { selector: &selector, hooks: M68kHooks::new(cpu, false) },
+        chooser: M68kChooser { selector: &selector, hooks: M68kHooks::new(cpu, false), free_any_extend: short },
         short,
     };
     select_units(dag, &mut target, &M68kSched { source_order }, frame).map_err(|why| match why {
@@ -240,6 +280,8 @@ struct M68kTarget<'a> {
 struct M68kChooser<'a> {
     selector: &'a Selector,
     hooks: M68kHooks,
+    /// DEVIATE M68K-ANYEXT ([`super::anyext`]); false is the pin's `MOVZX`.
+    free_any_extend: bool,
 }
 
 impl Select for M68kChooser<'_> {
@@ -250,6 +292,9 @@ impl Select for M68kChooser<'_> {
     ) -> llrm_dagisel::interp::Outcome {
         super::indexed::select(adapter, node)
             .or_else(|| super::bfffo::select(adapter, node))
+            .or_else(|| if self.hooks.folds_memory() { super::rmw::select(adapter, node) } else { None })
+            .or_else(|| if self.hooks.has_bit_field_extract() { super::bfextu::select(adapter, node) } else { None })
+            .or_else(|| if self.free_any_extend { super::anyext::select(adapter, node) } else { None })
             .unwrap_or_else(|| self.selector.select(adapter, &mut self.hooks, node))
     }
 }

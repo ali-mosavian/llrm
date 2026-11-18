@@ -191,6 +191,7 @@ impl Builder<'_> {
             jump_tables: self.target.jump_tables,
             min_jump_table_entries: self.target.min_jump_table_entries,
             min_density: self.target.min_jump_table_density,
+            size_growth_ratio: self.target.jump_table_size_growth_ratio,
             optimize: self.target.switch_optimize,
             shift_legal: self.target.variable_shift_legal,
             opt_size: self.target.opt_size || self.function_has("optsize") || self.function_has("minsize"),

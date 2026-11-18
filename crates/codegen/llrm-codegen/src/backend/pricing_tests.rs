@@ -23,6 +23,16 @@ fn test_memory_compare_is_priced_as_a_read_not_a_read_modify_write() {
     assert_eq!(classify("add", "word [bp-4],1", "8346fc01"), "alu_mr");
 }
 
+/// `inc dword ptr [bp-8]` was priced `alu_rr` (1 clk) where the 486 charges a read/modify/write
+/// `alu_mr` (3): a loop counter kept in memory looked as cheap as one in a register.
+#[test]
+fn test_memory_inc_dec_neg_are_priced_as_a_read_modify_write() {
+    for (mnemonic, raw) in [("inc", "66ff46f8"), ("dec", "66ff4ef8"), ("neg", "66f75ef8")] {
+        assert_eq!(classify(mnemonic, "dword [bp-8]", raw), "alu_mr", "{mnemonic} on memory");
+        assert_eq!(classify(mnemonic, "ebx", ""), "alu_rr", "{mnemonic} on a register");
+    }
+}
+
 #[test]
 fn test_scalar_double_shifts_use_the_integer_shift_price() {
     for mnemonic in ["shld", "shrd"] {

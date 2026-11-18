@@ -119,6 +119,15 @@ fn cheap_alu(op: &Op) -> bool {
         _ => false,
     }
 }
+
+/// `isReallyTriviallyReMaterializable`: an instruction that reads a register
+/// that is not constant is not remade where it is used. `add x9, sp, #0` (a
+/// `stacksave`, the base of a `dynamic_stackalloc`) reads one: made again
+/// after an `alloca` lowered `sp`, it saved nothing.
+fn reads_sp(op: &Op) -> bool {
+    matches!(op, Op::I(Inst::AddSubImm { rn: Gpr::R31, .. }))
+}
+
 /// A constant one instruction makes (`movz`, `movn` or a logical immediate):
 /// the size of the copy it replaces.
 const ONE_INSN_IMM: &str = "Imm1";
@@ -216,6 +225,7 @@ fn view_with(
 ) -> MFunction<Class> {
     let mut lir = MFunction::<Class>::new(&function.name);
     lir.odds = function.alloc_odds.clone();
+    lir.optnone = function.optnone;
     lir.classes = vec![Class::Gpr; (function.next_register - Gpr::FIRST_VIRTUAL) as usize];
     lir.locals =
         function.slots.iter().enumerate().map(|(at, slot)| (at as i32, slot.size as i64, slot.align as i64)).collect();
@@ -368,7 +378,7 @@ fn view_with(
             inst.early_clobber = facts.early_clobber;
             inst.rematerializable = fused
                 || zero
-                || cheap_alu(&op)
+                || (cheap_alu(&op) && !reads_sp(&op))
                 || matches!(
                     op,
                     Op::Imm { .. }
@@ -687,41 +697,58 @@ pub fn allocate(
 /// registers come last).
 pub struct Arm64;
 
-/// Whether the target is Apple's: `x18` is the platform register there
-/// (`AArch64RegisterInfo::getReservedRegs`, `isTargetDarwin`), an ordinary
-/// caller-saved register on Linux.
-static DARWIN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+// Per thread: a compile on another thread must not change this one's target.
+thread_local! {
+    static DARWIN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static FP_FREE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static SCRATCH_FREE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static QUAD_CSR_FREE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Sets whether the next function makes no call, so a 128-bit value may take
+/// `v8`..`v15`: the calling convention keeps only their low 64 bits, which
+/// the frame saves, and no call is there to take the rest. The pin lets a
+/// value that crosses no call have them (`RegisterClassInfo` puts the
+/// callee-saved registers last; a call's mask does not preserve `Q8`).
+/// DEVIATE QUAD-CSR (owner arm64, exit 2026-11-30): a function with a call
+/// keeps them out for every value, as a call's mask is by root register here.
+pub fn set_quad_callee_saved_free(free: bool) {
+    QUAD_CSR_FREE.with(|flag| flag.set(free));
+}
+
+fn quad_callee_saved_free() -> bool {
+    QUAD_CSR_FREE.with(std::cell::Cell::get)
+}
 
 /// Sets the target the next allocations are for.
 pub fn set_darwin(darwin: bool) {
-    DARWIN.store(darwin, std::sync::atomic::Ordering::Relaxed);
+    DARWIN.with(|flag| flag.set(darwin));
 }
 
+/// Whether the target is Apple's: `x18` is the platform register there
+/// (`AArch64RegisterInfo::getReservedRegs`, `isTargetDarwin`), an ordinary
+/// caller-saved register on Linux.
 fn darwin() -> bool {
-    DARWIN.load(std::sync::atomic::Ordering::Relaxed)
+    DARWIN.with(std::cell::Cell::get)
 }
 
-/// Whether the next function has no frame record, so `x29` is an ordinary
+/// Sets whether the next function has no frame record, so `x29` is an ordinary
 /// callee-saved register (`getReservedRegs` reserves it when `hasFP`).
-static FP_FREE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-
 pub fn set_frame_pointer_free(free: bool) {
-    FP_FREE.store(free, std::sync::atomic::Ordering::Relaxed);
+    FP_FREE.with(|flag| flag.set(free));
 }
 
-/// Whether `x16` and `x17` may be allocated: the frame needs no scratch.
-static SCRATCH_FREE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-
+/// Sets whether `x16` and `x17` may be allocated: the frame needs no scratch.
 pub fn set_scratch_free(free: bool) {
-    SCRATCH_FREE.store(free, std::sync::atomic::Ordering::Relaxed);
+    SCRATCH_FREE.with(|flag| flag.set(free));
 }
 
 fn scratch_free() -> bool {
-    SCRATCH_FREE.load(std::sync::atomic::Ordering::Relaxed)
+    SCRATCH_FREE.with(std::cell::Cell::get)
 }
 
 fn frame_pointer_free() -> bool {
-    FP_FREE.load(std::sync::atomic::Ordering::Relaxed)
+    FP_FREE.with(std::cell::Cell::get)
 }
 
 /// The caller-saved general registers the allocator hands out.
@@ -753,7 +780,7 @@ fn gpr_order(
         .collect()
 }
 
-type Flags = (Class, bool, bool, bool);
+type Flags = (Class, bool, bool, bool, bool);
 
 thread_local! {
     static ORDERS: std::cell::RefCell<Vec<(Flags, Vec<RegId>)>> = const { std::cell::RefCell::new(Vec::new()) };
@@ -771,7 +798,7 @@ pub fn candidate_orders_built() -> usize {
 /// interval allocated, 4,274 times for shellsort's two functions: it is built
 /// once per such state.
 pub fn candidate_order(class: Class) -> Vec<RegId> {
-    cached_order((class, darwin(), scratch_free(), frame_pointer_free()))
+    cached_order((class, darwin(), scratch_free(), frame_pointer_free(), quad_callee_saved_free()))
 }
 
 /// [`candidate_order`] for an explicit state; the cache is keyed by all of it.
@@ -788,11 +815,11 @@ fn cached_order(state: Flags) -> Vec<RegId> {
 }
 
 /// The order itself: a function of the class and the three flags only.
-fn built_order((class, darwin, scratch_free, frame_pointer_free): Flags) -> Vec<RegId> {
+fn built_order((class, darwin, scratch_free, frame_pointer_free, quad_free): Flags) -> Vec<RegId> {
     match class {
         Class::Gpr => gpr_order(darwin, scratch_free, frame_pointer_free),
         Class::Fpr => fpr_order(),
-        Class::Quad => fpr_order().into_iter().filter(|id| !callee_saved_fpr(*id)).collect(),
+        Class::Quad => fpr_order().into_iter().filter(|id| quad_free || !callee_saved_fpr(*id)).collect(),
     }
 }
 
@@ -1017,7 +1044,7 @@ mod tests {
     #[test]
     fn the_candidate_order_is_built_once_per_state() {
         let before = candidate_orders_built();
-        let base = (Class::Gpr, false, false, false);
+        let base = (Class::Gpr, false, false, false, false);
         let first = cached_order(base);
         for _ in 0..50 {
             assert_eq!(cached_order(base), first);
@@ -1031,11 +1058,11 @@ mod tests {
     #[test]
     fn every_input_of_the_candidate_order_is_in_the_cache_key() {
         let order = |state| cached_order(state);
-        let base = order((Class::Gpr, false, false, false));
+        let base = order((Class::Gpr, false, false, false, false));
         let (darwin, scratch, fp) = (
-            order((Class::Gpr, true, false, false)),
-            order((Class::Gpr, false, true, false)),
-            order((Class::Gpr, false, false, true)),
+            order((Class::Gpr, true, false, false, false)),
+            order((Class::Gpr, false, true, false, false)),
+            order((Class::Gpr, false, false, true, false)),
         );
         let x = |n: u32| id(Class::Gpr, n);
         assert!(base.contains(&x(18)) && !darwin.contains(&x(18)), "x18 is the platform register on Darwin");
@@ -1045,11 +1072,14 @@ mod tests {
         );
         assert!(!base.contains(&x(29)) && fp.contains(&x(29)), "x29 when there is no frame record");
         // Asking again returns each state's own order, not the last one's.
-        assert_eq!(order((Class::Gpr, false, false, false)), base);
-        assert_eq!(order((Class::Gpr, true, false, false)), darwin);
-        assert_eq!(order((Class::Gpr, false, false, true)), fp);
-        let (fpr, quad) = (order((Class::Fpr, false, false, false)), order((Class::Quad, false, false, false)));
+        assert_eq!(order((Class::Gpr, false, false, false, false)), base);
+        assert_eq!(order((Class::Gpr, true, false, false, false)), darwin);
+        assert_eq!(order((Class::Gpr, false, false, true, false)), fp);
+        let (fpr, quad) =
+            (order((Class::Fpr, false, false, false, false)), order((Class::Quad, false, false, false, false)));
         assert!(quad.len() < fpr.len(), "the classes have their own orders");
+        let quad_free = order((Class::Quad, false, false, false, true));
+        assert_eq!(quad_free.len(), fpr.len(), "a call-free function may take v8..v15");
     }
 
     /// `movk` reads and writes its register: the view needs a def, a use and a

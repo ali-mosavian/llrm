@@ -258,8 +258,10 @@ fn the_x86_addressing_modes_are_those_of_the_lowering() {
 #[test]
 fn a_symbol_in_long_mode_takes_neither_a_displacement_nor_an_index() {
     let x64 = X86::of_cpu("x86-64").unwrap();
-    // DEVIATE PIE64: `@sym + reg` is refused, where the pin accepts a scale of 1.
-    assert!(x64.is_legal_addressing_mode(true, 0, false, 0) && !x64.is_legal_addressing_mode(true, 0, false, 1));
+    // `@sym + reg` (a scale of 1, or a base register) is one address to the
+    // pin.
+    assert!(x64.is_legal_addressing_mode(true, 0, false, 0) && x64.is_legal_addressing_mode(true, 0, false, 1));
+    assert!(x64.is_legal_addressing_mode(true, 0, true, 0) && !x64.is_legal_addressing_mode(true, 0, true, 2));
     assert!(!x64.is_legal_addressing_mode(true, 8, false, 1) && !x64.is_legal_addressing_mode(true, 0, false, 4));
     assert!(x64.is_legal_addressing_mode(false, 8, true, 4));
     assert_eq!(x64.number_of_gpr_registers(), 16);
@@ -496,4 +498,18 @@ fn a_function_built_for_size_keeps_the_pins_cost_for_a_zero_extended_constant() 
     let cost = |for_size| zimm.int_imm_cost_inst_for_size(ImmUser::Other, 0, 0x9e37_79b9, 64, for_size);
     assert_eq!(cost(false), Cost::of(1));
     assert_eq!(cost(true), Cost::of(2));
+}
+
+/// The SLP vectorizer ran on x86 with default (unpriced) vector costs and changed four to six programs of the identity
+/// corpus at O2 and O3 (`bitcount_u64.c`, `double_across_a_call_result.c`). It runs on x86-64 now, where the SSE2 vector
+/// memory costs are priced (fill_nest's 64 constant stores became eight vector stores) and a tree with an operation the
+/// target does not price is not formed; the targets without vector values keep their scalar code.
+#[test]
+fn slp_runs_on_x86_64_alone() {
+    assert!(X86::of_cpu("x86-64").expect("a cpu").slp_priced());
+    for cpu in ["i486", "pentium4"] {
+        if let Some(tti) = X86::of_cpu(cpu) {
+            assert!(!tti.slp_priced(), "{cpu}");
+        }
+    }
 }

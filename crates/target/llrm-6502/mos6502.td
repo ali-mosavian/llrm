@@ -177,6 +177,11 @@ let mayLoad = 1, AddedComplexity = 10 in
   def LDAX : MOSInst<(outs Imag8:$d), (ins absx:$a), "ldax $d, $a", [(set i8:$d, (load MOSAbsX:$a))]>;
 let mayStore = 1, AddedComplexity = 10 in
   def STAX : MOSInst<(outs), (ins Imag8:$s, absx:$a), "stax $s, $a", [(store i8:$s, MOSAbsX:$a)]>;
+// A word of a global indexed by a byte: LDX i; LDA g+k,X; LDA g+k+1,X (the pin splits the i16 into two byte loads that each match abs,x).
+let mayLoad = 1, AddedComplexity = 10 in
+  def LDAX16 : MOSInst<(outs Imag16:$d), (ins absx:$a), "ldax16 $d, $a", [(set i16:$d, (load MOSAbsX:$a))]>;
+let mayStore = 1, AddedComplexity = 10 in
+  def STAX16 : MOSInst<(outs), (ins Imag16:$s, absx:$a), "stax16 $s, $a", [(store i16:$s, MOSAbsX:$a)]>;
 // A global plus a constant offset: LDA g+k.
 def absaddr : Operand<i16> { let MIOperandInfo = (ops i16imm, i16imm); }
 def MOSAbs : ComplexPattern<i16, 2, "SelectAbs", [], []>;
@@ -206,6 +211,9 @@ let mayLoad = 1, AddedComplexity = 30 in {
   def CMP8M : MOSInst<(outs Flags:$f), (ins Imag8:$a, absaddr:$m), "cmp8m $f, $a, $m", [(set i8:$f, (MOScmp i8:$a, (load MOSAbs:$m)))]>;
   def CMP16M : MOSInst<(outs Flags:$f), (ins Imag16:$a, absaddr:$m), "cmp16m $f, $a, $m", [(set i8:$f, (MOScmp i16:$a, (load MOSAbs:$m)))]>;
 }
+// The byte compare against a global indexed by a byte: LDX i; CMP g,x (pin analogue: X86's CMP8rm folding the load).
+let mayLoad = 1, AddedComplexity = 30 in
+  def CMP8MX : MOSInst<(outs Flags:$f), (ins Imag8:$a, absx:$m), "cmp8mx $f, $a, $m", [(set i8:$f, (MOScmp i8:$a, (load MOSAbsX:$m)))]>;
 // A byte op whose second operand is loaded through a pointer: LDY #off; LDA a; ADC (p),Y (a 65C02 with off 0 prints ADC (p)). The load
 // folds under the global forms' rule: its one use, no store between. Below those forms (30): a global's address is also a pointer,
 // and `and bad` beats five instructions to build it. The carry forms take the carry operand before the address, so the address is

@@ -3,7 +3,11 @@
 
 Both external columns take `external_flags.flags` (no distro defaults: canary, endbr64, frame pointer) and the program's own
 flags, gcc in the spelling `gcc_program_flags` gives. A program that splits on the compiler, or that gcc cannot take the flags
-of, has no gcc column (0). Unreadable cells print EMPTY."""
+of, has no gcc column (0). Unreadable cells print EMPTY.
+
+An external .o that calls a libgcc helper (`__popcountdi2`, `__udivti3`) has the helper's code outside it: the program links
+those bytes too, so they are added to that column (the bytes of a call are the bytes of the routine too, as m68k's
+`libcall_choice`). The row ends with `gcc_calls` and `clang_calls`, each `name:member_bytes,...` or `-`, saying what was added."""
 import os
 import subprocess
 import sys
@@ -38,11 +42,55 @@ def external_commands(source: str, level: str, include=INCLUDE, reloc=RELOC) -> 
     }
 
 
+def libgcc_path() -> Path:
+    return Path(subprocess.run(["gcc", "-print-libgcc-file-name"], capture_output=True, text=True).stdout.strip())
+
+
+def libgcc_members(nm_output: str) -> dict[str, str]:
+    """Symbol -> archive member, from `nm -A --defined-only libgcc.a`."""
+    found = {}
+    for line in nm_output.splitlines():
+        parts = line.split()
+        if len(parts) == 3 and parts[1] in ("T", "t", "W") and line.count(":") >= 2:
+            found[parts[2]] = line.split(":")[1]
+    return found
+
+
+def undefined_helpers(nm_output: str, helpers: dict[str, str]) -> list[str]:
+    """The undefined symbols of `nm -u` output that libgcc defines: code the object calls and does not hold."""
+    return sorted({parts[-1] for line in nm_output.splitlines() if (parts := line.split()) and parts[0] == "U" and parts[-1] in helpers})
+
+
+def member_bytes(archive: Path, member: str) -> int:
+    with tempfile.TemporaryDirectory() as tmp:
+        out = Path(tmp) / member
+        with open(out, "wb") as fh:
+            subprocess.run(["ar", "p", str(archive), member], stdout=fh, check=True)
+        return object_bytes.object_bytes("x86_64-linux", out)[0]
+
+
+def library_calls(obj: Path) -> str:
+    """`name:bytes,...` of the libgcc helpers `obj` calls, or `-`."""
+    archive = libgcc_path()
+    helpers = libgcc_members(subprocess.run(["nm", "-A", "--defined-only", str(archive)], capture_output=True, text=True).stdout)
+    called = undefined_helpers(subprocess.run(["nm", "-u", str(obj)], capture_output=True, text=True).stdout, helpers)
+    return ",".join(f"{name}:{member_bytes(archive, helpers[name])}" for name in called) or "-"
+
+
+def charged(
+    size: int,
+    calls: str,
+) -> int:
+    """`size` plus the bytes of the helpers `calls` (`library_calls`) names: what the program that links them holds."""
+    return size + sum(int(part.rsplit(":", 1)[1]) for part in calls.split(",") if ":" in part)
+
+
 def one(job):
     dist, level, src = job
     text = Path(src).read_text()
     lines = {"ours": [f"{dist}/llrm-cc", level, "-w", *cell_flags.cell_flags(text), *INCLUDE], **external_commands(text, level)}
     sizes = {}
+    calls = {"gcc": "-", "clang": "-"}
     with tempfile.TemporaryDirectory() as tmp:
         for name, line in lines.items():
             if line is None:
@@ -54,7 +102,10 @@ def one(job):
             if run.returncode or not out.exists():
                 return f"EMPTY\t{src}\t{level}\t{name}"
             sizes[name] = object_bytes.object_bytes("x86_64-linux", out)[0]
-    return f"{src}\t{level}\t{sizes['ours']}\t{sizes['gcc']}\t{sizes['clang']}"
+            if name in calls:
+                calls[name] = library_calls(out)
+                sizes[name] = charged(sizes[name], calls[name])
+    return f"{src}\t{level}\t{sizes['ours']}\t{sizes['gcc']}\t{sizes['clang']}\t{calls['gcc']}\t{calls['clang']}"
 
 
 if __name__ == "__main__":

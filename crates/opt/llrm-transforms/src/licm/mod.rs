@@ -12,6 +12,7 @@ pub(crate) mod calls;
 pub mod hoist;
 mod pressure;
 pub(crate) mod promote;
+mod range_deref;
 mod safety;
 mod sink;
 #[cfg(test)]
@@ -38,8 +39,8 @@ pub const LICM_MSSA_OPT_CAP: u32 = 100;
 /// before no store is hoisted or sunk and nothing is promoted
 /// ([`LICM.cpp#L118`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LICM.cpp#L118)).
 pub const LICM_MSSA_NO_ACC_FOR_PROMOTION_CAP: u32 = 250;
-/// A backstop for the rounds of reassociation of one loop; the pin has none (each
-/// round erases an instruction, so the walk ends by itself).
+/// A backstop for the rounds of reassociation of one loop; the pin has none
+/// (each round erases an instruction, so the walk ends by itself).
 const MAX_REASSOCIATION_ROUNDS: usize = 16;
 
 /// [`SinkAndHoistLICMFlags`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LICM.cpp#L388).
@@ -103,6 +104,9 @@ impl Flags {
 /// in (erased as dead, or sunk).
 #[derive(Default)]
 pub struct State {
+    /// DEVIATE LM2: the expressions of `range_deref`, made when a guarded load
+    /// first asks.
+    pub scev: std::cell::OnceCell<std::cell::RefCell<llrm_analysis::scev::analysis::ScevSession>>,
     pub moved: std::cell::RefCell<IdMap<InstId, BlockId>>,
     pub gone: std::cell::RefCell<llrm_mir::dense::IdSet<InstId>>,
     /// Those of `gone` that were sunk, not erased: a clone of each stands in an
@@ -495,6 +499,11 @@ pub fn run(
     let memo = safety::SafetyMemo::default();
     for one in shape.loops.iter() {
         let header = cfg::block(one.header);
+        // A loop pass manager run for one loop (LPM1's, per loop): the others
+        // are not looked at yet.
+        if !crate::loopfilter::allows(header) {
+            continue;
+        }
         // No instruction to start from: nothing is asked of the graph.
         if !seeded(unit.function, &shape, &innermost, one) {
             continue;
@@ -503,12 +512,14 @@ pub fn run(
             use llrm_analysis::cfg::Around;
             one.preheader(unit.function).map(cfg::block)
         };
-        // Worked out once per loop, as the pin's `ICFLoopSafetyInfo`: cleared at each loop and after each edit.
+        // Worked out once per loop, as the pin's `ICFLoopSafetyInfo`: cleared
+        // at each loop and after each edit.
         memo.clear();
-        // The pin reassociates an instruction it has just made, in the same walk
-        // (`hoistMulAddAssociation` chains 31, 961, 29791 to one multiply by 923521); a
-        // round here leaves alone what another has replaced, so the loop is looked at
-        // again while a round reassociated something.
+        // The pin reassociates an instruction it has just made, in the same
+        // walk (`hoistMulAddAssociation` chains 31, 961, 29791 to one
+        // multiply by 923521); a round here leaves alone what another
+        // has replaced, so the loop is looked at again while a round
+        // reassociated something.
         for round in 0.. {
             let (sunk, hoisted, reassociated) = looking!(one, true, |view, ctx, mssa, aa, accesses| {
                 let found = sink_and_hoist(view, &outer, &ctx, mssa, &aa, accesses, &memo);

@@ -28,7 +28,7 @@ __csave:
   sta __ra+1
   ldx #1
 @next:
-  lda rc7,x
+  lda rc7,x                     ; [rc8..rc15]
   pha
   inx
   dey
@@ -43,7 +43,7 @@ __csave:
 __crest:
 @next:
   pla
-  sta rc7,x
+  sta rc7,x                     ; [rc8..rc15]
   dex
   bne @next
   tya
@@ -153,10 +153,11 @@ udivmod8:
   bne @next
   rts
 
-; rs1 / rs2: the quotient in rc2:rc3, the remainder in rc6:rc7. Uses A and X only.
+; rs1 / rs2: the quotient in rc2:rc3, the remainder in rc6:rc7. Uses A and X, and Y and the bit loop for a divisor
+; of 256 or more.
 udivmod16:
   lda rc5
-  bne udivmod16c
+  bne __udivhi3c
   ; a divisor under 256: the remainder is a byte, in A, with the carry of the shift as its ninth bit
   ldx #16
 @next8:
@@ -176,8 +177,11 @@ udivmod16:
   lda #0
   sta rc7
   rts
-; the bit loop alone: what the compact entry points run
-udivmod16c:
+; the bit loop alone, what the compact entry points run: the quotient in rc2:rc3 and A:X, the remainder in
+; rc6:rc7. Uses A, X, Y. The remainder before step k is under 2^(k-1), so the shifted one never carries out of
+; 16 bits, whatever the divisor.
+.export __udivhi3c
+__udivhi3c:
   lda #0
   sta rc6
   sta rc7
@@ -187,24 +191,21 @@ udivmod16c:
   rol rc3
   rol rc6
   rol rc7
-  bcs @sub
   lda rc6
   cmp rc4
   lda rc7
   sbc rc5
   bcc @keep
-@sub:
-  sec
+  sta rc7
   lda rc6
   sbc rc4
   sta rc6
-  lda rc7
-  sbc rc5
-  sta rc7
   inc rc2
 @keep:
   dex
   bne @next
+  lda rc2
+  ldx rc3
   rts
 
 .export __udivqi3
@@ -238,17 +239,10 @@ __umodhi3:                      ; rs1 % rs2 -> A:X
   ldx rc7
   rts
 
-; the compact variants, called where a byte is worth more than the clocks: no short-divisor path
-.export __udivhi3c
-__udivhi3c:                     ; rs1 / rs2 -> A:X, the remainder in rc6:rc7
-  jsr udivmod16c
-  lda rc2
-  ldx rc3
-  rts
-
+; the compact variants, called where a byte is worth more than the clocks: no short-divisor path (__udivhi3c above)
 .export __umodhi3c
 __umodhi3c:                     ; rs1 % rs2 -> A:X
-  jsr udivmod16c
+  jsr __udivhi3c
   lda rc6
   ldx rc7
   rts
@@ -301,6 +295,25 @@ __modqi3:                       ; rc2 % rc3 -> A
 @done:
   rts
 
+; rs1 := |rs1|, rs2 := |rs2|: the pair at rc4:rc5, then the one at rc2:rc3
+abs16_pair:
+  ldx #2
+@next:
+  lda rc3,x
+  bpl @skip
+  sec
+  lda #0
+  sbc rc2,x
+  sta rc2,x
+  lda #0
+  sbc rc3,x
+  sta rc3,x
+@skip:
+  dex
+  dex
+  bpl @next
+  rts
+
 ; rs := -rs for the pair at (lo, hi)
 .macro neg16 lo, hi
   sec
@@ -312,73 +325,109 @@ __modqi3:                       ; rc2 % rc3 -> A
   sta hi
 .endmacro
 
-; rs1 := |rs1|, rs2 := |rs2|
-abs16_pair:
-  lda rc3
-  bpl @b
-  neg16 rc2, rc3
-@b:
-  lda rc5
-  bpl @done
-  neg16 rc4, rc5
-@done:
-  rts
+; A:X := -(hi:lo); the carry chain runs through Y, so the result is returned as it is made
+.macro negax lo, hi
+  sec
+  lda #0
+  sbc lo
+  tay
+  lda #0
+  sbc hi
+  tax
+  tya
+.endmacro
 
+; the result comes back from the divide in A:X; the sign is the N flag on the stack (the bit loop uses Y, `plp` leaves A)
 .export __divhi3
 __divhi3:                       ; rs1 / rs2 -> A:X
   lda rc3
   eor rc5
-  tay
+  php
   jsr abs16_pair
   jsr udivmod16
-  cpy #0
-  bpl @done
-  neg16 rc2, rc3
-@done:
   lda rc2
   ldx rc3
+  plp
+  bpl @done
+  negax rc2, rc3
+@done:
   rts
 
 .export __modhi3
 __modhi3:                       ; rs1 % rs2 -> A:X
-  ldy rc3
+  lda rc3
+  php
   jsr abs16_pair
   jsr udivmod16
-  cpy #0
-  bpl @done
-  neg16 rc6, rc7
-@done:
+  plp
+  bpl @pos
+  negax rc6, rc7
+  rts
+@pos:
   lda rc6
   ldx rc7
   rts
+
+.export __divmodhi4
+__divmodhi4:                    ; rs1 / rs2 -> A:X, the remainder (the dividend's sign) in rc6:rc7
+  lda rc3
+  pha                           ; the remainder's sign
+  eor rc5
+  pha                           ; the quotient's sign: the bit loop uses Y
+  jsr abs16_pair
+  jsr __udivhi3
+  jmp divmod16_signs
 
 ; the compact signed variants, called at size: the same sign handling over the bit loop alone (no short-divisor path)
 .export __divhi3c
 __divhi3c:                       ; rs1 / rs2 -> A:X, compact
   lda rc3
   eor rc5
-  tay
+  php
   jsr abs16_pair
-  jsr udivmod16c
-  cpy #0
+  jsr __udivhi3c
+  plp
   bpl @done
-  neg16 rc2, rc3
+  negax rc2, rc3
 @done:
-  lda rc2
-  ldx rc3
   rts
 
 .export __modhi3c
 __modhi3c:                       ; rs1 % rs2 -> A:X, compact
-  ldy rc3
+  lda rc3
+  php
   jsr abs16_pair
-  jsr udivmod16c
-  cpy #0
+  jsr __udivhi3c
+  plp
+  bpl @pos
+  negax rc6, rc7
+  rts
+@pos:
+  lda rc6
+  ldx rc7
+  rts
+
+.export __divmodhi4c
+__divmodhi4c:                    ; rs1 / rs2 -> A:X, the remainder in rc6:rc7, compact
+  lda rc3
+  pha
+  eor rc5
+  pha
+  jsr abs16_pair
+  jsr __udivhi3c
+  jmp divmod16_signs
+
+divmod16_signs:                 ; the quotient's sign on the stack, then the remainder's
+  pla
+  bpl @q
+  neg16 rc2, rc3
+@q:
+  pla
   bpl @done
   neg16 rc6, rc7
 @done:
-  lda rc6
-  ldx rc7
+  lda rc2
+  ldx rc3
   rts
 
 ; ---- shifts by a variable count: rs1 or rc2 shifted by rc4 or rc3 ---------------------------------
@@ -466,21 +515,211 @@ __ashrhi3:                      ; rs1 >> rc4 (arithmetic) -> A:X
   rts
 
 ; ---- 32-bit operations -------------------------------------------------------------------------
-; The compiler copies the operands to __sa (first) and __sb (second, or a shift count in its first
-; byte) and reads the result from __sa. The routines change A, X, Y, __sa, __sb, __st, __sr and
-; __sg and nothing else. Division by zero gives the all-ones quotient and the dividend.
+; The mos convention, as any function of two longs: the first operand in A:X:rc2:rc3 (A the low
+; byte), the second in rc4..rc7 (a shift count in rc4), the result in A:X:rc2:rc3; a widening
+; multiply takes its words in A:X and rc4:rc5. A divide with its remainder (`__divmodsi4`,
+; `__udivmodsi4`) leaves the remainder in rc4..rc7. The routines change A, X, Y and rc2..rc7.
+; Division by zero gives the all-ones quotient and the dividend.
+;
+; The shifts and the multiplies work in the argument cells. The divides are entries (`jsr in32`, the
+; body, `jmp out32`) that copy the first operand to __sa, work there and in rc4..rc7 (`__sb` in the
+; comments), and copy __sa back; the bodies are the s32_ labels.
 
+; ZEROPAGE where the platform row has `scratch_zero_page` (tools/6502/mkrt.py), BSS otherwise
 .segment "BSS"
 __sa: .res 4
 __ra: .res 2
-__sb: .res 4
 __st: .res 4
 __sr: .res 4
 __sg: .res 1
 .segment "CODE"
 
+in32:                           ; A:X:rc2:rc3 -> __sa
+  sta __sa
+  stx __sa+1
+  lda rc2
+  sta __sa+2
+  lda rc3
+  sta __sa+3
+  rts
+
+out32r:                         ; the remainder __sr -> rc4..rc7, then the quotient as out32
+  lda __sr
+  sta rc4
+  lda __sr+1
+  sta rc5
+  lda __sr+2
+  sta rc6
+  lda __sr+3
+  sta rc7
+  jmp out32                     ; no fall-through: a linker keeps routines apart
+out32:                          ; __sa -> A:X:rc2:rc3
+  lda __sa+2
+  sta rc2
+  lda __sa+3
+  sta rc3
+  ldx __sa+1
+  lda __sa
+  rts
+
+out32_st:                       ; the product __st -> A:X:rc2:rc3
+  lda __st+2
+  sta rc2
+  lda __st+3
+  sta rc3
+  ldx __st+1
+  lda __st
+  rts
+
+; the entries: the glue, the body, the glue
+.export __udivsi3
+__udivsi3:
+  jsr in32
+  jsr s32_udivsi3
+  jmp out32
+
+.export __umodsi3
+__umodsi3:
+  jsr in32
+  jsr s32_umodsi3
+  jmp out32
+
+.export __divsi3
+__divsi3:
+  jsr in32
+  jsr s32_divsi3
+  jmp out32
+
+.export __modsi3
+__modsi3:
+  jsr in32
+  jsr s32_modsi3
+  jmp out32
+
+.export __udivsi3_fast
+__udivsi3_fast:
+  jsr in32
+  jsr s32_udivsi3_fast
+  jmp out32
+
+.export __udivsi3_fast_byte
+__udivsi3_fast_byte:
+  jsr in32
+  jsr s32_udivsi3_fast_byte
+  jmp out32
+
+.export __udivsi3_fast_small
+__udivsi3_fast_small:
+  jsr in32
+  jsr s32_udivsi3_fast_small
+  jmp out32
+
+.export __umodsi3_fast
+__umodsi3_fast:
+  jsr in32
+  jsr s32_umodsi3_fast
+  jmp out32
+
+.export __umodsi3_fast_byte
+__umodsi3_fast_byte:
+  jsr in32
+  jsr s32_umodsi3_fast_byte
+  jmp out32
+
+.export __umodsi3_fast_small
+__umodsi3_fast_small:
+  jsr in32
+  jsr s32_umodsi3_fast_small
+  jmp out32
+
+.export __divsi3_fast
+__divsi3_fast:
+  jsr in32
+  jsr s32_divsi3_fast
+  jmp out32
+
+.export __divsi3_fast_byte
+__divsi3_fast_byte:
+  jsr in32
+  jsr s32_divsi3_fast_byte
+  jmp out32
+
+.export __divsi3_fast_small
+__divsi3_fast_small:
+  jsr in32
+  jsr s32_divsi3_fast_small
+  jmp out32
+
+.export __modsi3_fast
+__modsi3_fast:
+  jsr in32
+  jsr s32_modsi3_fast
+  jmp out32
+
+.export __modsi3_fast_byte
+__modsi3_fast_byte:
+  jsr in32
+  jsr s32_modsi3_fast_byte
+  jmp out32
+
+.export __modsi3_fast_small
+__modsi3_fast_small:
+  jsr in32
+  jsr s32_modsi3_fast_small
+  jmp out32
+
+.export __divmodsi4
+__divmodsi4:
+  jsr in32
+  jsr s32_divmodsi4
+  jmp out32r
+
+.export __divmodsi4_fast
+__divmodsi4_fast:
+  jsr in32
+  jsr s32_divmodsi4_fast
+  jmp out32r
+
+.export __divmodsi4_fast_byte
+__divmodsi4_fast_byte:
+  jsr in32
+  jsr s32_divmodsi4_fast_byte
+  jmp out32r
+
+.export __divmodsi4_fast_small
+__divmodsi4_fast_small:
+  jsr in32
+  jsr s32_divmodsi4_fast_small
+  jmp out32r
+
+.export __udivmodsi4
+__udivmodsi4:
+  jsr in32
+  jsr s32_udivsi3
+  jmp out32r
+
+.export __udivmodsi4_fast
+__udivmodsi4_fast:
+  jsr in32
+  jsr s32_udivsi3_fast
+  jmp out32r
+
+.export __udivmodsi4_fast_byte
+__udivmodsi4_fast_byte:
+  jsr in32
+  jsr s32_udivsi3_fast_byte
+  jmp out32r
+
+.export __udivmodsi4_fast_small
+__udivmodsi4_fast_small:
+  jsr in32
+  jsr s32_udivsi3_fast_small
+  jmp out32r
+
 .export __mulsi3
-__mulsi3:                       ; __sa * __sb -> __sa (the low 32 bits)
+__mulsi3:                       ; A:X:rc2:rc3 * rc4..rc7 -> A:X:rc2:rc3 (the low 32 bits)
+  sta __sa
+  stx __sa+1
   lda #0
   sta __st
   sta __st+1
@@ -488,10 +727,10 @@ __mulsi3:                       ; __sa * __sb -> __sa (the low 32 bits)
   sta __st+3
   ldx #32
 @next:
-  lsr __sb+3
-  ror __sb+2
-  ror __sb+1
-  ror __sb
+  lsr rc7
+  ror rc6
+  ror rc5
+  ror rc4
   bcc @skip
   clc
   lda __st
@@ -501,24 +740,26 @@ __mulsi3:                       ; __sa * __sb -> __sa (the low 32 bits)
   adc __sa+1
   sta __st+1
   lda __st+2
-  adc __sa+2
+  adc rc2
   sta __st+2
   lda __st+3
-  adc __sa+3
+  adc rc3
   sta __st+3
 @skip:
   asl __sa
   rol __sa+1
-  rol __sa+2
-  rol __sa+3
+  rol rc2
+  rol rc3
   dex
   bne @next
-  jmp copy_st_to_sa
+  jmp out32_st
 
 ; __mulsi3 for speed: the multiplier is walked a byte at a time and the walk
 ; stops at its last set byte, 19 bytes more, a third of the clocks for a byte.
 .export __mulsi3_fast
-__mulsi3_fast:                  ; __sa * __sb -> __sa (the low 32 bits)
+__mulsi3_fast:                       ; A:X:rc2:rc3 * rc4..rc7 -> A:X:rc2:rc3 (the low 32 bits)
+  sta __sa
+  stx __sa+1
   lda #0
   sta __st
   sta __st+1
@@ -528,10 +769,10 @@ __mulsi3_fast:                  ; __sa * __sb -> __sa (the low 32 bits)
 @byte:
   ldx #8
 @next:
-  lsr __sb+3
-  ror __sb+2
-  ror __sb+1
-  ror __sb
+  lsr rc7
+  ror rc6
+  ror rc5
+  ror rc4
   bcc @skip
   clc
   lda __st
@@ -541,34 +782,35 @@ __mulsi3_fast:                  ; __sa * __sb -> __sa (the low 32 bits)
   adc __sa+1
   sta __st+1
   lda __st+2
-  adc __sa+2
+  adc rc2
   sta __st+2
   lda __st+3
-  adc __sa+3
+  adc rc3
   sta __st+3
 @skip:
   asl __sa
   rol __sa+1
-  rol __sa+2
-  rol __sa+3
+  rol rc2
+  rol rc3
   dex
   bne @next
-  lda __sb
-  ora __sb+1
-  ora __sb+2
-  ora __sb+3
+  lda rc4
+  ora rc5
+  ora rc6
+  ora rc7
   beq @done
   dey
   bne @byte
 @done:
-  jmp copy_st_to_sa
+  jmp out32_st
 
-; 16 x 16 -> 32: __sa and __sb low words in, the product in __sa. The product is built
-; in __st:__sb, the multiplier shifting out of __sb as the low half shifts in. A multiplier
-; whose high byte is zero is spent after 8 bits: the product is then the 32 bits shifted
-; down a byte.
+; 16 x 16 -> 32: the words A:X and rc4:rc5 in, the product in A:X:rc2:rc3. The product is built in
+; __st:rc4:rc5, the multiplier shifting out of rc4:rc5 as the low half shifts in. A multiplier whose
+; high byte is zero is spent after 8 bits: the product is then the 32 bits shifted down a byte.
 .export __umulhisi3
 __umulhisi3:
+  sta __sa
+  stx __sa+1
   lda #0
   sta __st
   sta __st+1
@@ -576,7 +818,7 @@ __umulhisi3:
 @pass:
   ldx #8
 @next:
-  lda __sb
+  lda rc4
   lsr a
   bcc @skip
   clc
@@ -589,80 +831,80 @@ __umulhisi3:
 @skip:
   ror __st+1
   ror __st
-  ror __sb+1
-  ror __sb
+  ror rc5
+  ror rc4
   dex
   bne @next
   dey
   beq @long
-  lda __sb
+  lda rc4
   bne @pass
-  lda __sb+1
-  sta __sa
-  lda __st
-  sta __sa+1
   lda __st+1
-  sta __sa+2
+  sta rc2
   lda #0
-  sta __sa+3
+  sta rc3
+  ldx __st
+  lda rc5
   rts
 @long:
-  lda __sb
-  sta __sa
-  lda __sb+1
-  sta __sa+1
   lda __st
-  sta __sa+2
+  sta rc2
   lda __st+1
-  sta __sa+3
+  sta rc3
+  ldx rc5
+  lda rc4
   rts
 
 ; the signed product: the unsigned one less the other operand from the high word for each
 ; negative operand
 .export __mulhisi3
 __mulhisi3:
-  lda __sa
   sta __sr
-  lda __sa+1
-  sta __sr+1
-  lda __sb
+  stx __sr+1
+  lda rc4
   sta __sr+2
-  lda __sb+1
+  lda rc5
   sta __sr+3
+  lda __sr
   jsr __umulhisi3
+  tay
   lda __sr+1
   bpl @a
   sec
-  lda __sa+2
+  lda rc2
   sbc __sr+2
-  sta __sa+2
-  lda __sa+3
+  sta rc2
+  lda rc3
   sbc __sr+3
-  sta __sa+3
+  sta rc3
 @a:
   lda __sr+3
   bpl @done
   sec
-  lda __sa+2
+  lda rc2
   sbc __sr
-  sta __sa+2
-  lda __sa+3
+  sta rc2
+  lda rc3
   sbc __sr+1
-  sta __sa+3
+  sta rc3
 @done:
+  tya
   rts
 
-; the same for a multiplier under 256 (its high byte known zero at the call): the multiplicand shifts
-; left into 24 bits and is added for each set bit, and the walk ends with the multiplier's last set bit
+; the same for a multiplier under 256 (rc4, the high byte known zero at the call): the multiplicand
+; shifts left into 24 bits and is added for each set bit, and the walk ends with the multiplier's last
+; set bit
 .export __umulhisi3_byte
 __umulhisi3_byte:
+  sta __sa
+  stx __sa+1
   lda #0
   sta __st
   sta __st+1
   sta __st+2
   sta __sa+2
 @bit:
-  lsr __sb
+  lsr rc4
   bcc @no
   clc
   lda __st
@@ -675,57 +917,56 @@ __umulhisi3_byte:
   adc __sa+2
   sta __st+2
 @no:
-  lda __sb
+  lda rc4
   beq @out
   asl __sa
   rol __sa+1
   rol __sa+2
   jmp @bit
 @out:
-  lda __st
-  sta __sa
-  lda __st+1
-  sta __sa+1
   lda __st+2
-  sta __sa+2
+  sta rc2
   lda #0
-  sta __sa+3
+  sta rc3
+  ldx __st+1
+  lda __st
   rts
 
 ; the signed multiplicand by a byte: the unsigned product less the byte from the high word if the
 ; multiplicand is negative
 .export __mulhisi3_byte
 __mulhisi3_byte:
-  lda __sb
-  sta __sr
-  lda __sa+1
-  sta __sr+1
+  stx __sr+1
+  ldy rc4
+  sty __sr
   jsr __umulhisi3_byte
+  tay
   lda __sr+1
   bpl @done
   sec
-  lda __sa+2
+  lda rc2
   sbc __sr
-  sta __sa+2
-  lda __sa+3
+  sta rc2
+  lda rc3
   sbc #0
-  sta __sa+3
+  sta rc3
 @done:
+  tya
   rts
 
 .macro cmp_sub_32
   sec
   lda __sr
-  sbc __sb
+  sbc rc4
   sta __st
   lda __sr+1
-  sbc __sb+1
+  sbc rc5
   sta __st+1
   lda __sr+2
-  sbc __sb+2
+  sbc rc6
   sta __st+2
   lda __sr+3
-  sbc __sb+3
+  sbc rc7
   sta __st+3
 .endmacro
 
@@ -766,17 +1007,6 @@ udivmod32:                      ; __sa / __sb -> __sa, __sa % __sb -> __sr (unsi
 @done:
   rts
 
-copy_st_to_sa:
-  lda __st
-  sta __sa
-  lda __st+1
-  sta __sa+1
-  lda __st+2
-  sta __sa+2
-  lda __st+3
-  sta __sa+3
-  rts
-
 copy_sr_to_sa:
   lda __sr
   sta __sa
@@ -807,25 +1037,52 @@ neg_sa:
 neg_sb:
   sec
   lda #0
-  sbc __sb
-  sta __sb
+  sbc rc4
+  sta rc4
   lda #0
-  sbc __sb+1
-  sta __sb+1
+  sbc rc5
+  sta rc5
   lda #0
-  sbc __sb+2
-  sta __sb+2
+  sbc rc6
+  sta rc6
   lda #0
-  sbc __sb+3
-  sta __sb+3
+  sbc rc7
+  sta rc7
   rts
 
-.export __udivsi3
-__udivsi3:                      ; __sa / __sb -> __sa
+neg_sr:
+  sec
+  lda #0
+  sbc __sr
+  sta __sr
+  lda #0
+  sbc __sr+1
+  sta __sr+1
+  lda #0
+  sbc __sr+2
+  sta __sr+2
+  lda #0
+  sbc __sr+3
+  sta __sr+3
+  rts
+
+divmod32s_signs:                ; the signs of the quotient (__sg bit 0) and the remainder (bit 1)
+  lda __sg
+  and #1
+  beq @r
+  jsr neg_sa
+@r:
+  lda __sg
+  and #2
+  beq @done
+  jmp neg_sr
+@done:
+  rts
+
+s32_udivsi3:                      ; __sa / __sb -> __sa
   jmp udivmod32
 
-.export __umodsi3
-__umodsi3:                      ; __sa % __sb -> __sa
+s32_umodsi3:                      ; __sa % __sb -> __sa
   jsr udivmod32
   jmp copy_sr_to_sa
 
@@ -840,7 +1097,7 @@ divmod32s:
   sta __sg
   jsr neg_sa
 @a:
-  lda __sb+3
+  lda rc7
   bpl @b
   lda __sg
   eor #1
@@ -849,8 +1106,7 @@ divmod32s:
 @b:
   jmp udivmod32
 
-.export __divsi3
-__divsi3:                       ; __sa / __sb -> __sa (signed, truncated toward zero)
+s32_divsi3:                       ; __sa / __sb -> __sa (signed, truncated toward zero)
   jsr divmod32s
   lda __sg
   and #1
@@ -859,8 +1115,7 @@ __divsi3:                       ; __sa / __sb -> __sa (signed, truncated toward 
 @done:
   rts
 
-.export __modsi3
-__modsi3:                       ; __sa % __sb -> __sa (signed, the sign of the dividend)
+s32_modsi3:                       ; __sa % __sb -> __sa (signed, the sign of the dividend)
   jsr divmod32s
   jsr copy_sr_to_sa
   lda __sg
@@ -870,163 +1125,195 @@ __modsi3:                       ; __sa % __sb -> __sa (signed, the sign of the d
 @done:
   rts
 
+s32_divmodsi4:                    ; __sa / __sb -> __sa, __sa % __sb -> __sr (signed, truncated toward zero)
+  jsr divmod32s
+  jmp divmod32s_signs
+
+; ---- shifts of a long by a variable count, in place: A:X:rc2:rc3 shifted by rc4 ------------------------
+; The low word walks in rc5:rc6 (rc4 is the count, which goes to X) and comes back in A:X. The speed
+; variants (the compiler calls them at -O2) move whole bytes while the count is 8 or more, 38 clocks a
+; byte step against 200 for eight bit steps, then the rest is shifted bit by bit. Same results as the bit
+; loops for every count, 32 and more included.
+
 .export __ashlsi3
-__ashlsi3:                      ; __sa << __sb (low byte) -> __sa
-  ldx __sb
+__ashlsi3:                      ; A:X:rc2:rc3 << rc4 -> A:X:rc2:rc3
+  sta rc5
+  stx rc6
+  ldx rc4
   beq @done
 @next:
-  asl __sa
-  rol __sa+1
-  rol __sa+2
-  rol __sa+3
+  asl rc5
+  rol rc6
+  rol rc2
+  rol rc3
   dex
   bne @next
 @done:
+  lda rc5
+  ldx rc6
   rts
 
 .export __lshrsi3
-__lshrsi3:                      ; __sa >> __sb (logical) -> __sa
-  ldx __sb
+__lshrsi3:                      ; A:X:rc2:rc3 >> rc4 (logical) -> A:X:rc2:rc3
+  sta rc5
+  stx rc6
+  ldx rc4
   beq @done
 @next:
-  lsr __sa+3
-  ror __sa+2
-  ror __sa+1
-  ror __sa
+  lsr rc3
+  ror rc2
+  ror rc6
+  ror rc5
   dex
   bne @next
 @done:
+  lda rc5
+  ldx rc6
   rts
 
 .export __ashrsi3
-__ashrsi3:                      ; __sa >> __sb (arithmetic) -> __sa
-  ldx __sb
+__ashrsi3:                      ; A:X:rc2:rc3 >> rc4 (arithmetic) -> A:X:rc2:rc3
+  sta rc5
+  stx rc6
+  ldx rc4
   beq @done
 @next:
-  lda __sa+3
+  lda rc3
   cmp #$80
-  ror __sa+3
-  ror __sa+2
-  ror __sa+1
-  ror __sa
+  ror rc3
+  ror rc2
+  ror rc6
+  ror rc5
   dex
   bne @next
 @done:
+  lda rc5
+  ldx rc6
   rts
 
-; The speed variants (the compiler calls them at -O2): whole bytes move while
-; the count is 8 or more, 38 clocks a byte step against 200 for eight bit steps,
-; then the rest is shifted bit by bit. Same results as the bit loops for every
-; count, 32 and more included.
 .export __ashlsi3_fast
-__ashlsi3_fast:                 ; __sa << __sb (low byte) -> __sa
-  ldx __sb
+__ashlsi3_fast:                 ; A:X:rc2:rc3 << rc4 -> A:X:rc2:rc3
+  sta rc5
+  stx rc6
+  ldx rc4
   beq @done
 @bytes:
   cpx #8
   bcc @bits
-  lda __sa+2
-  sta __sa+3
-  lda __sa+1
-  sta __sa+2
-  lda __sa
-  sta __sa+1
+  lda rc2
+  sta rc3
+  lda rc6
+  sta rc2
+  lda rc5
+  sta rc6
   lda #0
-  sta __sa
+  sta rc5
   txa
   sec
   sbc #8
   tax
   bne @bytes
-  rts
+  beq @done
 @bits:
-  asl __sa
-  rol __sa+1
-  rol __sa+2
-  rol __sa+3
+  asl rc5
+  rol rc6
+  rol rc2
+  rol rc3
   dex
   bne @bits
 @done:
+  lda rc5
+  ldx rc6
   rts
 
 .export __lshrsi3_fast
-__lshrsi3_fast:                 ; __sa >> __sb (logical) -> __sa
-  ldx __sb
+__lshrsi3_fast:                 ; A:X:rc2:rc3 >> rc4 (logical) -> A:X:rc2:rc3
+  sta rc5
+  stx rc6
+  ldx rc4
   beq @done
 @bytes:
   cpx #8
   bcc @bits
-  lda __sa+1
-  sta __sa
-  lda __sa+2
-  sta __sa+1
-  lda __sa+3
-  sta __sa+2
+  lda rc6
+  sta rc5
+  lda rc2
+  sta rc6
+  lda rc3
+  sta rc2
   lda #0
-  sta __sa+3
+  sta rc3
   txa
   sec
   sbc #8
   tax
   bne @bytes
-  rts
+  beq @done
 @bits:
-  lsr __sa+3
-  ror __sa+2
-  ror __sa+1
-  ror __sa
+  lsr rc3
+  ror rc2
+  ror rc6
+  ror rc5
   dex
   bne @bits
 @done:
+  lda rc5
+  ldx rc6
   rts
 
 .export __ashrsi3_fast
-__ashrsi3_fast:                 ; __sa >> __sb (arithmetic) -> __sa
-  ldx __sb
+__ashrsi3_fast:                 ; A:X:rc2:rc3 >> rc4 (arithmetic) -> A:X:rc2:rc3
+  sta rc5
+  stx rc6
+  ldx rc4
   beq @done
 @bytes:
   cpx #8
   bcc @bits
-  lda __sa+1
-  sta __sa
-  lda __sa+2
-  sta __sa+1
-  lda __sa+3
-  sta __sa+2
+  lda rc6
+  sta rc5
+  lda rc2
+  sta rc6
+  lda rc3
+  sta rc2
   cmp #$80                      ; the sign byte: carry is the sign
   lda #0
   sbc #0                        ; $FF for a positive value, 0 for a negative
   eor #$FF                      ; the fill: $FF for a negative value
-  sta __sa+3
+  sta rc3
   txa
   sec
   sbc #8
   tax
   bne @bytes
-  rts
+  beq @done
 @bits:
-  lda __sa+3
+  lda rc3
   cmp #$80
-  ror __sa+3
-  ror __sa+2
-  ror __sa+1
-  ror __sa
+  ror rc3
+  ror rc2
+  ror rc6
+  ror rc5
   dex
   bne @bits
 @done:
+  lda rc5
+  ldx rc6
   rts
 
 ; ---- memory fills and copies ----------------------------------------------------------------------
-; memset(rs1 = dst, A = byte, rs2 = n), memcpy and memmove(rs1 = dst, rs2 = src, rs3 = n); each
-; returns dst in A:X. They walk whole pages with Y, so the low byte of dst stays put and only its high
-; byte is saved (memset in rc6, the others on the hardware stack).
+; memset(rc2:rc3 = dst, A = byte, rc4:rc5 = n), memcpy and memmove(rc2:rc3 = dst, rc4:rc5 = src, A:X = n):
+; the pointers in cells (llvm-mos), n as a word; each returns dst in A:X. They walk whole pages with Y, so
+; the low byte of dst stays put and only its high byte is saved (rc6, memcpy in rc7, memmove on the
+; hardware stack).
 
 .export memset
 memset:
   ldx rc3
   stx rc6
-  ldy #0
   ldx rc5
+  ldy #0
+  cpx #0
   beq @tail
 @page:
   sta (rc2),y
@@ -1050,10 +1337,11 @@ memset:
 
 .export memcpy
 memcpy:
+  sta rc6
   lda rc3
-  pha
+  sta rc7
   ldy #0
-  ldx rc7
+  cpx #0
   beq @tail
 @page:
   lda (rc4),y
@@ -1074,8 +1362,7 @@ memcpy:
   dex
   bne @byte
 @done:
-  pla
-  tax
+  ldx rc7
   lda rc2
   rts
 
@@ -1083,21 +1370,24 @@ memcpy:
 ; the ranges overlap
 .export memmove
 memmove:
+  sta rc6
   lda rc2
   cmp rc4
   lda rc3
   sbc rc5
   bcs @down
+  lda rc6
   jmp memcpy
 @down:
   lda rc3
   pha
+  txa
   clc
-  adc rc7
+  adc rc3
   sta rc3
-  lda rc5
+  txa
   clc
-  adc rc7
+  adc rc5
   sta rc5
   ldy rc6
   beq @pages
@@ -1108,7 +1398,7 @@ memmove:
   cpy #0
   bne @tail
 @pages:
-  ldx rc7
+  cpx #0
   beq @done
 @page:
   dec rc3
@@ -1141,10 +1431,10 @@ udivmod32_fast_byte:                 ; __sa / __sb -> __sa, __sa % __sb -> __sr 
   asl __sa,x
   rol a
   bcs @t                        ; the remainder overflowed 8 bits: it is above the divisor
-  cmp __sb
+  cmp rc4
   bcc @s
 @t:
-  sbc __sb                      ; C is set
+  sbc rc4                      ; C is set
   inc __sa,x                    ; the quotient bit (bit 0 is clear after the shift)
 @s:
   dey
@@ -1155,19 +1445,19 @@ udivmod32_fast_byte:                 ; __sa / __sb -> __sa, __sa % __sb -> __sr 
   rts
 
 udivmod32_fast:                      ; the speed variant: __sa / __sb -> __sa, __sa % __sb -> __sr (unsigned)
-  lda __sb+1                    ; a divisor below 256 takes the byte loop
-  ora __sb+2
-  ora __sb+3
+  lda rc5                    ; a divisor below 256 takes the byte loop
+  ora rc6
+  ora rc7
   bne udivmod32_wide
-  lda __sb
+  lda rc4
   beq udivmod32_wide            ; a zero divisor takes the wide path: its quotient is all ones
   jmp udivmod32_fast_byte
 
 udivmod32_wide:
-  lda __sb                      ; a zero divisor: all-ones quotient, the dividend as remainder
-  ora __sb+1
-  ora __sb+2
-  ora __sb+3
+  lda rc4                      ; a zero divisor: all-ones quotient, the dividend as remainder
+  ora rc5
+  ora rc6
+  ora rc7
   bne @nz
   ldx #3
 @zero:
@@ -1190,7 +1480,7 @@ udivmod32_wide:
   ldx #3                        ; a divisor above the dividend: quotient 0
 @cmpd:
   lda __sa,x
-  cmp __sb,x
+  cmp rc4,x; [rc4..rc7]
   bne @cmpe
   dex
   bpl @cmpd
@@ -1222,53 +1512,53 @@ udivmod32_wide:
   sta __st
   ldx #0
 @abyte:                         ; a whole byte at once while the divisor shifted by 8 stays at or below half
-  lda __sb+3
+  lda rc7
   bne @align
-  lda __sb+2
+  lda rc6
   cmp __st+3
   bne @cb
-  lda __sb+1
+  lda rc5
   cmp __st+2
   bne @cb
-  lda __sb
+  lda rc4
   cmp __st+1
   beq @bshift                   ; equal above, and the divisor's low byte is 0 after the shift
 @cb:
   bcs @align
 @bshift:
-  lda __sb+2
-  sta __sb+3
-  lda __sb+1
-  sta __sb+2
-  lda __sb
-  sta __sb+1
+  lda rc6
+  sta rc7
+  lda rc5
+  sta rc6
+  lda rc4
+  sta rc5
   lda #0
-  sta __sb
+  sta rc4
   txa
   clc
   adc #8
   tax
   bne @abyte
 @align:
-  lda __sb+3                    ; the divisor above half the dividend: aligned
+  lda rc7                    ; the divisor above half the dividend: aligned
   cmp __st+3
   bne @cmph
-  lda __sb+2
+  lda rc6
   cmp __st+2
   bne @cmph
-  lda __sb+1
+  lda rc5
   cmp __st+1
   bne @cmph
-  lda __sb
+  lda rc4
   cmp __st
   beq @shift
 @cmph:
   bcs @aligned
 @shift:
-  asl __sb
-  rol __sb+1
-  rol __sb+2
-  rol __sb+3
+  asl rc4
+  rol rc5
+  rol rc6
+  rol rc7
   inx
   bne @align                    ; X is never 0 here: the loop is past a short branch's reach otherwise
 @aligned:
@@ -1280,57 +1570,53 @@ udivmod32_wide:
   inx
 @trip:
   lda __sr+3                    ; compare from the high byte: most trips end at the first
-  cmp __sb+3
+  cmp rc7
   bne @c2
   lda __sr+2
-  cmp __sb+2
+  cmp rc6
   bne @c2
   lda __sr+1
-  cmp __sb+1
+  cmp rc5
   bne @c2
   lda __sr
-  cmp __sb
+  cmp rc4
 @c2:
   bcc @no                       ; the remainder is below the divisor: the quotient bit is 0 (C clear)
   lda __sr                      ; C is set: no borrow, and the quotient bit is 1
-  sbc __sb
+  sbc rc4
   sta __sr
   lda __sr+1
-  sbc __sb+1
+  sbc rc5
   sta __sr+1
   lda __sr+2
-  sbc __sb+2
+  sbc rc6
   sta __sr+2
   lda __sr+3
-  sbc __sb+3
+  sbc rc7
   sta __sr+3
 @no:
   rol __sa                      ; the quotient bit comes in at the bottom
   rol __sa+1
   rol __sa+2
   rol __sa+3
-  lsr __sb+3
-  ror __sb+2
-  ror __sb+1
-  ror __sb
+  lsr rc7
+  ror rc6
+  ror rc5
+  ror rc4
   dex
   bne @trip
   rts
 
-.export __udivsi3_fast
-__udivsi3_fast:                 ; __sa / __sb -> __sa
+s32_udivsi3_fast:                 ; __sa / __sb -> __sa
   jmp udivmod32_fast
 
-.export __udivsi3_fast_byte
-__udivsi3_fast_byte:            ; __sa / __sb -> __sa, a divisor of 1 to 255
+s32_udivsi3_fast_byte:            ; __sa / __sb -> __sa, a divisor of 1 to 255
   jmp udivmod32_fast_byte
 
-.export __umodsi3_fast
-__umodsi3_fast:                 ; __sa % __sb -> __sa
+s32_umodsi3_fast:                 ; __sa % __sb -> __sa
   jmp umod32_fast
 
-.export __umodsi3_fast_byte
-__umodsi3_fast_byte:            ; __sa % __sb -> __sa, a divisor of 1 to 255
+s32_umodsi3_fast_byte:            ; __sa % __sb -> __sa, a divisor of 1 to 255
   jsr udivmod32_fast_byte
   jmp copy_sr_to_sa
 
@@ -1343,7 +1629,7 @@ divmod32s_fast:                 ; the signs split off, then the speed division
   sta __sg
   jsr neg_sa
 @a:
-  lda __sb+3
+  lda rc7
   bpl @b
   lda __sg
   eor #1
@@ -1352,8 +1638,7 @@ divmod32s_fast:                 ; the signs split off, then the speed division
 @b:
   jmp udivmod32_fast
 
-.export __divsi3_fast
-__divsi3_fast:                  ; __sa / __sb -> __sa (signed, truncated toward zero)
+s32_divsi3_fast:                  ; __sa / __sb -> __sa (signed, truncated toward zero)
   jsr divmod32s_fast
   lda __sg
   and #1
@@ -1362,8 +1647,7 @@ __divsi3_fast:                  ; __sa / __sb -> __sa (signed, truncated toward 
 @done:
   rts
 
-.export __modsi3_fast
-__modsi3_fast:                  ; __sa % __sb -> __sa (signed, the sign of the dividend)
+s32_modsi3_fast:                  ; __sa % __sb -> __sa (signed, the sign of the dividend)
   jmp umod32s_fast
 
 divmod32s_fast_byte:            ; the dividend's sign split off (the divisor is 1 to 255), then the byte loop
@@ -1377,8 +1661,7 @@ divmod32s_fast_byte:            ; the dividend's sign split off (the divisor is 
 @a:
   jmp udivmod32_fast_byte
 
-.export __divsi3_fast_byte
-__divsi3_fast_byte:             ; __sa / __sb -> __sa (signed), a divisor of 1 to 255
+s32_divsi3_fast_byte:             ; __sa / __sb -> __sa (signed), a divisor of 1 to 255
   jsr divmod32s_fast_byte
   lda __sg
   and #1
@@ -1387,8 +1670,7 @@ __divsi3_fast_byte:             ; __sa / __sb -> __sa (signed), a divisor of 1 t
 @done:
   rts
 
-.export __modsi3_fast_byte
-__modsi3_fast_byte:             ; __sa % __sb -> __sa (signed), a divisor of 1 to 255
+s32_modsi3_fast_byte:             ; __sa % __sb -> __sa (signed), a divisor of 1 to 255
   jsr divmod32s_fast_byte
   jsr copy_sr_to_sa
   lda __sg
@@ -1397,6 +1679,14 @@ __modsi3_fast_byte:             ; __sa % __sb -> __sa (signed), a divisor of 1 t
   jsr neg_sa
 @done:
   rts
+
+s32_divmodsi4_fast:               ; __sa / __sb -> __sa, __sa % __sb -> __sr (signed)
+  jsr divmod32s_fast
+  jmp divmod32s_signs
+
+s32_divmodsi4_fast_byte:          ; __sa / __sb -> __sa, __sa % __sb -> __sr (signed), a divisor of 1 to 255
+  jsr divmod32s_fast_byte
+  jmp divmod32s_signs
 
 ; ---- the speed division with the small wide path: the routines of the module that divides cold
 ; (sites that run fewer than 3 times together, `hotdivision`) are the ones of the first speed variant,
@@ -1407,11 +1697,11 @@ udivmod32_fast_small:                      ; the speed variant: __sa / __sb -> _
   sta __sr+1
   sta __sr+2
   sta __sr+3
-  lda __sb+1                    ; a divisor below 256: the remainder stays in A, a byte at a time
-  ora __sb+2
-  ora __sb+3
+  lda rc5                    ; a divisor below 256: the remainder stays in A, a byte at a time
+  ora rc6
+  ora rc7
   bne @wide
-  lda __sb
+  lda rc4
   beq @wide                     ; a zero divisor takes the general path: its quotient is all ones
   lda #0
   ldx #3
@@ -1421,10 +1711,10 @@ udivmod32_fast_small:                      ; the speed variant: __sa / __sb -> _
   asl __sa,x
   rol a
   bcs @t                        ; the remainder overflowed 8 bits: it is above the divisor
-  cmp __sb
+  cmp rc4
   bcc @s
 @t:
-  sbc __sb                      ; C is set
+  sbc rc4                      ; C is set
   inc __sa,x                    ; the quotient bit (bit 0 is clear after the shift)
 @s:
   dey
@@ -1443,16 +1733,16 @@ udivmod32_fast_small:                      ; the speed variant: __sa / __sb -> _
   lda __sr+3
   bne @next
   lda __sr+2
-  cmp __sb+3
+  cmp rc7
   bne @below
   lda __sr+1
-  cmp __sb+2
+  cmp rc6
   bne @below
   lda __sr
-  cmp __sb+1
+  cmp rc5
   bne @below
   lda __sa+3
-  cmp __sb
+  cmp rc4
 @below:
   bcs @next                     ; the remainder reaches the divisor: the trips start here
   lda __sr+2
@@ -1488,31 +1778,31 @@ udivmod32_fast_small:                      ; the speed variant: __sa / __sb -> _
   rol __sr+3
   bcs @take                     ; the remainder overflowed 32 bits: it is above any divisor
   lda __sr+3                    ; compare from the high byte: most trips end at the first
-  cmp __sb+3
+  cmp rc7
   bne @cmp
   lda __sr+2
-  cmp __sb+2
+  cmp rc6
   bne @cmp
   lda __sr+1
-  cmp __sb+1
+  cmp rc5
   bne @cmp
   lda __sr
-  cmp __sb
+  cmp rc4
 @cmp:
   bcc @skipbit                  ; the remainder is below the divisor
 @take:
   sec
   lda __sr
-  sbc __sb
+  sbc rc4
   sta __sr
   lda __sr+1
-  sbc __sb+1
+  sbc rc5
   sta __sr+1
   lda __sr+2
-  sbc __sb+2
+  sbc rc6
   sta __sr+2
   lda __sr+3
-  sbc __sb+3
+  sbc rc7
   sta __sr+3
   inc __sa                      ; the quotient bit (bit 0 of __sa is clear after the shift)
 @skipbit:
@@ -1520,12 +1810,10 @@ udivmod32_fast_small:                      ; the speed variant: __sa / __sb -> _
   bne @next
   rts
 
-.export __udivsi3_fast_small
-__udivsi3_fast_small:                 ; __sa / __sb -> __sa
+s32_udivsi3_fast_small:                 ; __sa / __sb -> __sa
   jmp udivmod32_fast_small
 
-.export __umodsi3_fast_small
-__umodsi3_fast_small:                 ; __sa % __sb -> __sa
+s32_umodsi3_fast_small:                 ; __sa % __sb -> __sa
   jsr udivmod32_fast_small
   jmp copy_sr_to_sa
 
@@ -1538,7 +1826,7 @@ divmod32s_fast_small:                 ; the signs split off, then the speed divi
   sta __sg
   jsr neg_sa
 @a:
-  lda __sb+3
+  lda rc7
   bpl @b
   lda __sg
   eor #1
@@ -1547,8 +1835,7 @@ divmod32s_fast_small:                 ; the signs split off, then the speed divi
 @b:
   jmp udivmod32_fast_small
 
-.export __divsi3_fast_small
-__divsi3_fast_small:                  ; __sa / __sb -> __sa (signed, truncated toward zero)
+s32_divsi3_fast_small:                  ; __sa / __sb -> __sa (signed, truncated toward zero)
   jsr divmod32s_fast_small
   lda __sg
   and #1
@@ -1557,8 +1844,7 @@ __divsi3_fast_small:                  ; __sa / __sb -> __sa (signed, truncated t
 @done:
   rts
 
-.export __modsi3_fast_small
-__modsi3_fast_small:                  ; __sa % __sb -> __sa (signed, the sign of the dividend)
+s32_modsi3_fast_small:                  ; __sa % __sb -> __sa (signed, the sign of the dividend)
   jsr divmod32s_fast_small
   jsr copy_sr_to_sa
   lda __sg
@@ -1568,18 +1854,22 @@ __modsi3_fast_small:                  ; __sa % __sb -> __sa (signed, the sign of
 @done:
   rts
 
+s32_divmodsi4_fast_small:         ; __sa / __sb -> __sa, __sa % __sb -> __sr (signed)
+  jsr divmod32s_fast_small
+  jmp divmod32s_signs
+
 ; ---- the speed remainder: the quotient is never built, as in llvm-mos's `__umodsi3`. The dividend is
 ; the remainder, in place in __sa; the divisor is shifted up as far as the quotient's first bit, and each
 ; trip subtracts it when it fits and halves it ----
 umod32_fast:                         ; __sa % __sb -> __sa (unsigned)
-  lda __sb
-  ora __sb+1
-  ora __sb+2
-  ora __sb+3
+  lda rc4
+  ora rc5
+  ora rc6
+  ora rc7
   beq @zero                     ; a zero divisor: the dividend is the remainder
-  lda __sb+1                    ; a divisor below 256 takes the byte loop
-  ora __sb+2
-  ora __sb+3
+  lda rc5                    ; a divisor below 256 takes the byte loop
+  ora rc6
+  ora rc7
   bne umod32_wide
   jsr udivmod32_fast_byte
   jmp copy_sr_to_sa
@@ -1590,7 +1880,7 @@ umod32_wide:
   ldx #3                        ; a divisor above the dividend: the dividend is the remainder
 @cmpd:
   lda __sa,x
-  cmp __sb,x
+  cmp rc4,x; [rc4..rc7]
   bne @cmpe
   dex
   bpl @cmpd
@@ -1613,88 +1903,88 @@ umod32_wide:
   sta __st
   ldx #0
 @abyte:                         ; a whole byte at once while the divisor shifted by 8 stays at or below half
-  lda __sb+3
+  lda rc7
   bne @align
-  lda __sb+2
+  lda rc6
   cmp __st+3
   bne @cb
-  lda __sb+1
+  lda rc5
   cmp __st+2
   bne @cb
-  lda __sb
+  lda rc4
   cmp __st+1
   beq @bshift                   ; equal above, and the divisor's low byte is 0 after the shift
 @cb:
   bcs @align
 @bshift:
-  lda __sb+2
-  sta __sb+3
-  lda __sb+1
-  sta __sb+2
-  lda __sb
-  sta __sb+1
+  lda rc6
+  sta rc7
+  lda rc5
+  sta rc6
+  lda rc4
+  sta rc5
   lda #0
-  sta __sb
+  sta rc4
   txa
   clc
   adc #8
   tax
   bne @abyte
 @align:
-  lda __sb+3                    ; the divisor above half the dividend: aligned
+  lda rc7                    ; the divisor above half the dividend: aligned
   cmp __st+3
   bne @cmph
-  lda __sb+2
+  lda rc6
   cmp __st+2
   bne @cmph
-  lda __sb+1
+  lda rc5
   cmp __st+1
   bne @cmph
-  lda __sb
+  lda rc4
   cmp __st
   beq @shift
 @cmph:
   bcs @aligned
 @shift:
-  asl __sb
-  rol __sb+1
-  rol __sb+2
-  rol __sb+3
+  asl rc4
+  rol rc5
+  rol rc6
+  rol rc7
   inx
   bne @align                    ; X is never 0 here: the loop is past a short branch's reach otherwise
 @aligned:
   inx
 @trip:
   lda __sa+3                    ; compare from the high byte: most trips end at the first
-  cmp __sb+3
+  cmp rc7
   bne @c2
   lda __sa+2
-  cmp __sb+2
+  cmp rc6
   bne @c2
   lda __sa+1
-  cmp __sb+1
+  cmp rc5
   bne @c2
   lda __sa
-  cmp __sb
+  cmp rc4
 @c2:
   bcc @no                       ; the remainder is below the divisor: the quotient bit is 0 (C clear)
   lda __sa                      ; C is set: no borrow, and the quotient bit is 1
-  sbc __sb
+  sbc rc4
   sta __sa
   lda __sa+1
-  sbc __sb+1
+  sbc rc5
   sta __sa+1
   lda __sa+2
-  sbc __sb+2
+  sbc rc6
   sta __sa+2
   lda __sa+3
-  sbc __sb+3
+  sbc rc7
   sta __sa+3
 @no:
-  lsr __sb+3
-  ror __sb+2
-  ror __sb+1
-  ror __sb
+  lsr rc7
+  ror rc6
+  ror rc5
+  ror rc4
   dex
   bne @trip
   rts
@@ -1709,7 +1999,7 @@ umod32s_fast:                        ; __sa % __sb -> __sa (signed, the sign of 
   sta __sg
   jsr neg_sa
 @a:
-  lda __sb+3
+  lda rc7
   bpl @b
   jsr neg_sb
 @b:

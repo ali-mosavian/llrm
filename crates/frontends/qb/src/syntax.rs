@@ -436,6 +436,8 @@ pub enum Statement {
     },
     Data {
         values: Vec<Expr>,
+        /// The statement's text after the keyword, as written: BC stores it so.
+        text: String,
         span: Span,
     },
     Read {

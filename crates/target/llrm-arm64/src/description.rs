@@ -128,6 +128,7 @@ impl Target for Arm64 {
             ("FixupLEAs", "X86FixupLEAs"),
             ("LeafFold", "DEVIATE LEAF-FOLD-OS, an x86 -Os join; arm64 states leaf_fold_at_size false"),
             ("BreakFalseDeps", "x86 partial-register dependency breaking; the pin's AArch64 adds no such pass"),
+            ("KnownZero", "x86 byte lanes; beyond the pin (GCC postreload-cse)"),
         ]
     }
 
@@ -451,7 +452,7 @@ mod tests {
         .unwrap_or_else(|error| panic!("{error}"));
         let names: Vec<&str> = phases.iter().map(|phase| phase.class_name()).collect();
         println!("{} phases: {}", names.len(), names.join(" "));
-        assert_eq!(names.len(), 27, "47 phases less the 20 omitted");
+        assert_eq!(names.len(), 28, "48 phases less the 20 omitted");
         for (name, why) in Arm64.omitted_phases() {
             assert!(!names.contains(name) && !why.is_empty(), "{name}");
         }

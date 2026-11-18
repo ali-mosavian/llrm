@@ -68,6 +68,7 @@ mod mem_space;
 mod min_max;
 mod narrow_divrem;
 mod odd_shift;
+mod combine_runaway;
 mod opt_none;
 mod or_simplify;
 mod pair_arith;

@@ -34,7 +34,6 @@ use llrm_dagisel::interp::Outcome;
 use super::asm::AsmOperand;
 use super::enc::{Enc, Piece};
 use super::generated::instrinfo;
-use super::generated::m68k_m68000::MACHINE_OPCODES;
 
 /// Code of the first row, above the `adda` forms.
 pub const FIRST: u16 = 0xF700;
@@ -70,7 +69,7 @@ pub fn memory_twin(name: &str) -> Option<&'static str> {
 static DESCS: LazyLock<Vec<&'static InstrDesc>> = LazyLock::new(|| {
     ROWS.iter()
         .map(|&(_, from)| {
-            let code = MACHINE_OPCODES.iter().find(|(_, one)| *one == from).map(|(code, _)| *code).expect("a pin row");
+            let code = super::opcodes::code_of(from).expect("a pin row");
             let base = instrinfo::desc(code).expect("a described row");
             // the pin's [dst, src (tied to dst), opd...]: the result and the
             // operands searched

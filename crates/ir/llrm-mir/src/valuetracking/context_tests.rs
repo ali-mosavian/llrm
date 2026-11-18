@@ -372,3 +372,23 @@ fn test_an_intrinsic_is_found_by_probes_not_a_scan() {
     assert!(intrinsic_id_of_name("llvm.smax.i32").is_some());
     assert_eq!(NAME_PROBES.with(std::cell::Cell::get), 2);
 }
+
+/// `m_Intrinsic` resolved the intrinsic's name to an id before it asked
+/// whether the value was a call: 14 probes for each of the 14 intrinsics
+/// `foldICmpIntrinsicWithConstant` tries on an `add` (5.1 M Ir on jpeg_fixed).
+/// A value that is not a call answers with no probe.
+#[test]
+fn test_an_intrinsic_match_on_a_non_call_probes_no_name() {
+    use crate::module::{GlobalKind, Operand};
+    use crate::valuetracking::pattern::{NAME_PROBES, intrinsic_call};
+    let module = crate::parse::module("define i32 @f(i32 %a, i32 %b) {\n  %s = add i32 %a, %b\n  ret i32 %s\n}\n").expect("parses");
+    let layout = crate::datalayout::DataLayout::default();
+    let GlobalKind::Function(function) = &module.global(module.named("f").expect("@f")).kind else { unreachable!() };
+    let q = crate::valuetracking::Query::new(&module, function, &layout);
+    let sum = function.walk().find_map(|(_, inst)| function.instruction(inst).result).map(Operand::Value).expect("%s");
+    NAME_PROBES.with(|one| one.set(0));
+    for base in ["llvm.abs", "llvm.bswap", "llvm.ctpop", "llvm.fshl"] {
+        assert!(intrinsic_call(&q, sum, base).is_none());
+    }
+    assert_eq!(NAME_PROBES.with(std::cell::Cell::get), 0);
+}

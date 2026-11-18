@@ -19,6 +19,18 @@ static inline void sf_z80_mul32x32(uint32_t a, uint32_t b, uint32_t *hi, uint32_
 #define SF_MUL32X32 sf_z80_mul32x32
 /* The 57-step restoring loop of the f64 divide as a Z80 routine over fixed cells (config/z80/div64.s): the compiled loop costs ~3.0k clk per step. */
 #define SF_DIV64_Z80 1
+/* The 64x64 -> 128 of the f64 multiply as a Z80 routine over fixed cells (config/z80/mul64.s): the compiled form spills every operand and result word. */
+extern uint64_t sf_m64_a, sf_m64_b, sf_m64_lo, sf_m64_hi;
+void __sf_mul64(void);
+static inline void sf_z80_mul64(uint64_t a, uint64_t b, uint64_t *hi, uint64_t *lo)
+{
+    sf_m64_a = a;
+    sf_m64_b = b;
+    __sf_mul64();
+    *hi = sf_m64_hi;
+    *lo = sf_m64_lo;
+}
+#define SF_MUL64X64 sf_z80_mul64
 /* sdld links an object whole: one object per f64 compare group (__cmpdf2 with eq/ne/lt/le as aliases of it, __gedf2 with gt) and per int-to-float entry, so a program linking one links one. */
 #define SF_CMP_SPLIT 1
 /* the f64 decode is one shared object: add, mul and div each carried a copy (208 B) */

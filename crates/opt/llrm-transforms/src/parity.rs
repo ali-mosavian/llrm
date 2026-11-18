@@ -119,6 +119,13 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "criterion: the families of combine.rs `visitors` (add, icmp, gep, store, and what they call: phi, select) match `opt -passes=instcombine` on the cases of their tests; exit: the remaining visit* (sub, and/or/xor, mul/div/rem, shifts, casts, select, phi, load, alloca, calls) translated, then fold@N and dead@N deleted (instcombine-port); the opcodes of foldICmpBinOpWithConstant not yet translated (xor, or, mul, shl, shr, srem, div, sub, add: InstCombineCompares.cpp:4124; only and is, combine_icmp_const.rs) are owed by llrm-w-4, 2026-10-24 onward; on by default, LLRM_NO_COMBINE turns it off",
     ),
     entry("dead@1242", Cleanup, "instcombine", Old, "instcombine-port"),
+    entry(
+        "backthread@1243",
+        Cleanup,
+        "none (DEVIATE BACKTHREAD-REL, GCC tree-ssa-threadbackward + value-relation)",
+        Old,
+        "backwardthreading.rs",
+    ),
     partial(
         "decide@1244",
         Cleanup,
@@ -168,6 +175,8 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("loop-instsimplify@715", Simplify, "loop-instsimplify", Translated, ""),
     entry("loop-simplifycfg@716", Simplify, "loop-simplifycfg", Translated, ""),
     entry("floatloop@724", Simplify, "licm", Old, "licm-port"),
+    // DEVIATE FMULADD-SPLIT: no pass of LLVM's; it runs inside every LICM slot.
+    entry("fmuladdsplit", Simplify, "fmuladd-split (no pass of LLVM)", Old, "fmuladd-split"),
     entry("licm@724", Simplify, "licm<no-allowspeculation>", Translated, ""),
     entry("licm@730", Simplify, "licm<allowspeculation>", Translated, ""),
     entry("trivialunswitch@732", Simplify, "simple-loop-unswitch<trivial> (-O3: nontrivial;trivial)", Translated, ""),
@@ -221,6 +230,13 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "jump-threading",
         Translated,
         "jumpthreading.rs + jumpthreading/loadpre.rs; deviations J2 (guards: no deopt bundles in MIR), J3 (!prof/BFI/BPI), J15 (isSafeToSpeculativelyExecute reuse); see docs/architecture/jumpthreading-translation.md",
+    ),
+    entry(
+        "backthread@809",
+        Simplify,
+        "none (DEVIATE BACKTHREAD, GCC tree-ssa-threadbackward)",
+        Old,
+        "backwardthreading.rs",
     ),
     entry("cvp@810", Simplify, "correlated-propagation", Translated, ""),
     entry("adce@815", Simplify, "adce", Translated, ""),
@@ -317,7 +333,14 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "slp@1455",
         Late,
         "slp-vectorizer",
-        "slpcompares.rs makes the wide compare the pin's SLP, VectorCombine and InstCombine leave of an and-chain of equalities of adjacent bytes; no vectors; criterion: the chain of eight bytes is one ldr and one cmp as the pin's (tests/slp_compares.rs); exit: vector types in the backend",
+        "slpvectorize.rs makes vector stores of runs of constant stores (arm64 only: cost-priced, VF down from the register width, DEVIATE SLP1: constants only), slpcompares.rs makes the wide compare the pin's SLP, VectorCombine and InstCombine leave of an and-chain of equalities of adjacent bytes; no vectors; criterion: the chain of eight bytes is one ldr and one cmp as the pin's (tests/slp_compares.rs); exit: vector types in the backend",
+    ),
+    entry(
+        "loop-unroll-and-jam@early",
+        Late,
+        "none (DEVIATE UJ-EARLY, GCC pass_unroll_jam)",
+        Old,
+        "loopunrollandjam.rs, before the vectorizer on a target with vector values",
     ),
     partial(
         "loop-vectorize@1354",
@@ -356,11 +379,13 @@ pub(crate) const REGISTRY: &[Entry] = &[
     // Runs in the strength slot,
     // before `lsr`: `canonfreeze::CanonicalizeFreezeInLoops`.
     entry("canonfreeze", Module, "canon-freeze", Translated, ""),
-    // Runs in the strength slot, right after `lsr`: `looptermfold::LoopTermFold`.
+    // Runs in the strength slot, right
+    // after `lsr`: `looptermfold::LoopTermFold`.
     entry("looptermfold", Module, "loop-term-fold (LoopTermFold.cpp)", Translated, ""),
     // Runs in the strength slot, after `lsr`: `hardwareloops::HardwareLoops`.
     entry("hardwareloops", Module, "hardware-loops", Translated, ""),
-    // Runs in the strength slot, after `hardwareloops`: `constanthoisting::ConstantHoisting`.
+    // Runs in the strength slot,
+    // after `hardwareloops`: `constanthoisting::ConstantHoisting`.
     entry("constanthoisting", Module, "consthoist (ConstantHoisting.cpp)", Translated, ""),
     entry("rotate@728", Simplify, "loop-rotate<header-duplication>", Translated, ""),
     partial(
@@ -413,9 +438,21 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("flagscopy@5", Backend, "x86-flags-copy-lowering (X86FlagsCopyLowering.cpp)", Translated, ""),
     entry("leaopt@5", Backend, "x86-optimize-leas (X86OptimizeLEAs.cpp)", Translated, ""),
     entry("floatfold@6", Backend, "x86 isel float folding (target)", Old, ""),
-    entry("statustest@5", Backend, "x86 x87 compare read from the status word, no sahf (target; DEVIATE X87-FCMP-AH, no pin pass)", Old, ""),
+    entry(
+        "statustest@5",
+        Backend,
+        "x86 x87 compare read from the status word, no sahf (target; DEVIATE X87-FCMP-AH, no pin pass)",
+        Old,
+        "",
+    ),
     entry("floatsink@6", Backend, "x86 float load sinking (target; DEVIATE SD-SINK, no pin pass)", Old, ""),
-    entry("floatunhoist@6", Backend, "x86 hoisted float load made again in the loop (target; DEVIATE M16-NBODY-O2, no pin pass)", Old, ""),
+    entry(
+        "floatunhoist@6",
+        Backend,
+        "x86 hoisted float load made again in the loop (target; DEVIATE M16-NBODY-O2, no pin pass)",
+        Old,
+        "",
+    ),
     partial(
         "pushfold@6",
         Backend,
@@ -466,9 +503,10 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "criterion: a join of at most two instructions (its jump counted) goes into every predecessor that jumps to it alone, a one-jump block is bypassed, phis and read-outside values get an SSA update; exit: the pin's merge into the layout predecessor is the same result here (ET3); EH pads and INLINEASM_BR have no counterpart (ET2)",
     ),
     // X86TargetLowering::EmitLoweredSelect: the diamond at selection
-    // (lir-cleanup-port, 2026-11-22). Measured 2026-11-08 with CS2 (cgpselectarms)
-    // off, m32 -O2: -2510 B over 176 cells, but sfm16_float_mul/sub/div +758 clk
-    // and x_jpeg_fixed +2.9% clk; it needs a clock-priced CS2, not a switch.
+    // (lir-cleanup-port, 2026-11-22). Measured 2026-11-08 with CS2
+    // (cgpselectarms) off, m32 -O2: -2510 B over 176 cells, but
+    // sfm16_float_mul/sub/div +758 clk and x_jpeg_fixed +2.9% clk; it needs a
+    // clock-priced CS2, not a switch.
     entry("emit-lowered-select", Backend, "x86-emit-lowered-select", Missing, ""),
     // ExecutionDomainFix picks movdqa for integer data where ours picks movaps,
     // one byte shorter; no domain-crossing penalty at 486/P5. Won't translate.
@@ -802,6 +840,8 @@ pub const ABSENT_AT_O1: &[&str] = &[
     "gvn@787",
     "jumpthreading@668",
     "jumpthreading@809",
+    "backthread@809",
+    "backthread@1243",
     "cvp@669",
     "cvp@810",
     "dfajumpthreading@806",

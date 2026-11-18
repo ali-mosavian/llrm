@@ -24,6 +24,7 @@
 //! `tests/timing.rs`: the cells it checks, with table and page.
 
 mod counts;
+mod csv;
 mod family;
 mod m68020;
 mod m68030;
@@ -214,6 +215,8 @@ fn operand(text: &str) -> Result<Operand, String> {
                 }
                 (Some(d), _) if (-32768..=32767).contains(&d) => Ok(Operand::Mode(Mode::IndexW, 0)),
                 (Some(_), _) => Ok(Operand::Mode(Mode::IndexL, 0)),
+                // a label in the brief form's 8 bits: the table `jmp` and its `move.w` (M68K-WORD-TABLE)
+                (None, true) if disp.starts_with('.') => Ok(Operand::Mode(Mode::PcIndex, 0)),
                 (None, _) => Err(format!("{UNPARSEABLE} `{disp}` in `{text}`")),
             },
             [base, index] if (is_address(base) || *base == "%pc") && is_index(index) => {
@@ -321,13 +324,20 @@ fn set_on_condition(base: &str) -> bool {
 const INTERIM_MILLICLOCKS_PER_BYTE: i64 = 500;
 
 /// What a byte of code is worth on `cpu`, in thousandths of a clock: the
-/// CPU's `timings.times` row.
+/// CPU's `timings.times` row. Prices the density of a jump table; a choice
+/// between two candidates at -O1..-O3 uses [`TIE_MILLICLOCKS_PER_BYTE`].
 pub fn byte_milliclocks(cpu: SelectCpu) -> i64 {
     crate::target::cpu_table(cpu.name())
         .and_then(|table| table.byte_rate())
         .filter(|rate| *rate > 0)
         .unwrap_or(INTERIM_MILLICLOCKS_PER_BYTE)
 }
+
+/// What a byte of code is worth when two candidates are compared at -O1, -O2
+/// and -O3, in thousandths of a clock: a tie-break. The levels are judged by
+/// clocks (user ruling 2026-11-14), so no clock is given up for bytes; -Os
+/// orders bytes first.
+const TIE_MILLICLOCKS_PER_BYTE: i64 = 1;
 
 /// Whether `extra_bytes` of code are worth `saved_clocks` on `cpu`: the trade
 /// passes only at N extra bytes per clock saved <= the row's allowance.
@@ -344,26 +354,15 @@ pub fn trade_passes(
 pub enum Price {
     /// Bytes, then clocks (`-Os`).
     Size,
-    /// A candidate is taken only when no larger and no slower (`-O1`).
-    Strict,
-    /// Clocks plus bytes at the CPU's byte price (`-O2`, `-O3`).
+    /// Clocks, bytes only to break a tie (`-O1`, `-O2`, `-O3`).
     #[default]
     Rate,
 }
 
 impl Price {
-    /// The price of a build: `size` wins, then `strict`.
-    pub fn of(
-        size: bool,
-        strict: bool,
-    ) -> Price {
-        if size {
-            Price::Size
-        } else if strict {
-            Price::Strict
-        } else {
-            Price::Rate
-        }
+    /// The price of a build: bytes at -Os, else clocks.
+    pub fn of(size: bool) -> Price {
+        if size { Price::Size } else { Price::Rate }
     }
 
     /// Whether `candidate` beats `incumbent`, each `(bytes, clocks)`, on `cpu`.
@@ -375,7 +374,6 @@ impl Price {
     ) -> bool {
         match self {
             Price::Size => candidate < incumbent,
-            Price::Strict => candidate.0 <= incumbent.0 && candidate.1 <= incumbent.1 && candidate != incumbent,
             Price::Rate => {
                 let key = |(bytes, clocks): (usize, u32)| order(cpu, false, clocks, bytes as u32);
                 key(candidate) < key(incumbent)
@@ -385,15 +383,15 @@ impl Price {
 }
 
 /// The order a priced choice minimizes on `cpu`: bytes then clocks for size,
-/// else clocks plus bytes at the CPU's byte price, ties to fewer clocks.
+/// else clocks, ties to fewer bytes.
 pub fn order(
-    cpu: SelectCpu,
+    _cpu: SelectCpu,
     size: bool,
     clocks: u32,
     bytes: u32,
 ) -> (i64, i64) {
     let (clocks, bytes) = (i64::from(clocks), i64::from(bytes));
-    if size { (bytes, clocks) } else { (clocks * 1000 + bytes * byte_milliclocks(cpu), clocks) }
+    if size { (bytes, clocks) } else { (clocks * 1000 + bytes * TIE_MILLICLOCKS_PER_BYTE, clocks) }
 }
 
 /// The clock periods of `text` on `cpu`. `bytes` is its encoded length (a
@@ -442,6 +440,38 @@ pub fn cost_on_counted(
     taken: bool,
     count: Option<u32>,
 ) -> Result<Cost, String> {
+    type Key = (u8, String, u32, bool, Option<u32>);
+    thread_local! {
+        static PRICES: std::cell::RefCell<llrm_support::hash::HashMap<Key, Result<Cost, String>>> =
+            std::cell::RefCell::new(Default::default());
+    }
+    PRICES.with(|prices| {
+        let key = (cpu as u8, text.to_owned(), bytes, taken, count);
+        if let Some(known) = prices.borrow().get(&key) {
+            return known.clone();
+        }
+        let made = priced(cpu, text, bytes, taken, count);
+        prices.borrow_mut().insert(key, made.clone());
+        made
+    })
+}
+
+static PRICED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// How many instruction texts the tables have parsed and priced: once per
+/// distinct `(cpu, text, bytes, taken, count)`, not once per ask.
+pub fn priced_texts() -> usize {
+    PRICED.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+fn priced(
+    cpu: Cpu,
+    text: &str,
+    bytes: u32,
+    taken: bool,
+    count: Option<u32>,
+) -> Result<Cost, String> {
+    PRICED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let text = text.trim();
     let (name, rest) = text.split_once(char::is_whitespace).unwrap_or((text, ""));
     let (base, suffix) = match name.split_once('.') {

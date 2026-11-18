@@ -48,6 +48,11 @@
 //!   load and store of a cell the others touch; gcc folds them. The pin never
 //!   forms the shape (`-O3` leaves the jam off), so no pin output shows it.
 //!   Exit: none.
+//! - D9 (UJ-EARLY, owner arm64-vec, exit 2026-12-01): a second run, before the
+//!   vectorizer, on a target with vector registers. GCC's `pass_unroll_jam`
+//!   runs before its vectorizer; after the pin's (l.1474) a nest's inner loop is
+//!   a vector loop and its remainder, two loops, and the jam refuses it. particle
+//!   -O3 (arm64): 16,743 instructions run, 11,249 jammed first (gcc 12,539).
 //! - D2: no loop metadata is made: not `llvm.loop.unroll_and_jam.followup_*`,
 //!   not `setLoopAlreadyUnrolled` (a function pass cannot add metadata nodes),
 //!   not `llvm.loop.unroll.disable` on the epilog. llrm has no partial or
@@ -1359,6 +1364,10 @@ pub struct LoopUnrollAndJam {
     pub opt_level: u32,
     pub opt_size: bool,
     pub options: JamOptions,
+    /// DEVIATE UJ-EARLY: the run before the vectorizer, which only a target
+    /// with vector values takes (the vectorizer leaves a nest two loops, a
+    /// vector loop and its remainder, that the jam refuses).
+    pub needs_vectors: bool,
 }
 
 impl LoopUnrollAndJam {
@@ -1533,6 +1542,9 @@ impl FunctionPass for LoopUnrollAndJam {
     ) -> PreservedAnalyses {
         let outer = std::rc::Rc::clone(analyses.outer());
         let tti = crate::looprotate::target_tti(outer.target());
+        if self.needs_vectors && tti.vector_register_bits() == 0 {
+            return PreservedAnalyses::all();
+        }
         let expansion = MachineCosts { tti: Some(std::rc::Rc::clone(&tti)), minimum_size: false };
         // Only a function with a loop that holds a loop is looked at.
         let tops: Vec<BlockId> = {
@@ -1579,6 +1591,7 @@ impl FunctionPass for LoopUnrollAndJam {
                 prepare_for_lto: false,
                 target_unrolling: false,
                 inliner_follows: true,
+                speed_rate: false,
             },
         };
         let mut changed = false;

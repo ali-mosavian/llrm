@@ -275,10 +275,10 @@ fn codes_unread(
             break;
         }
         // read first: `addx` reads the codes it sets
-        if after.reads_flags {
+        if after.reads_flags() {
             return false;
         }
-        if after.sets_flags {
+        if after.sets_flags() {
             break;
         }
     }
@@ -466,10 +466,10 @@ pub fn refine_lea_round_trips(
                         break;
                     }
                     // read first: `addx` reads the codes it sets
-                    if after.reads_flags {
+                    if after.reads_flags() {
                         return None;
                     }
-                    if after.sets_flags {
+                    if after.sets_flags() {
                         break;
                     }
                 }

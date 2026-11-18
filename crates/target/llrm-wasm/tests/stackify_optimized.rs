@@ -298,7 +298,7 @@ fn a_value_the_later_compares_use_is_computed_after_the_first_branch() {
     assert!(branch < sub, "{text}");
 }
 
-const GLOBAL_PLUS_INDEX_PLUS_OFFSET: &str = "@px = dso_local global [101 x i16] zeroinitializer
+const GLOBAL_PLUS_INDEX_PLUS_OFFSET: &str = "@px = hidden global [101 x i16] zeroinitializer
 define void @f(i32 %i, i16 %v) {
   %a = getelementptr i8, ptr @px, i32 %i
   %b = getelementptr i8, ptr %a, i32 202

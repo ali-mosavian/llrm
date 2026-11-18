@@ -224,6 +224,22 @@ fn interprocedural_register_use(platform: Platform) -> bool {
         && !llrm_support::env_flag!("LLRM_ARM64_NO_IPRA")
 }
 
+/// Whether `function` carries one of the attributes `names`.
+fn flagged(
+    function: &llrm_mir::module::Function,
+    names: &[&str],
+) -> bool {
+    function
+        .attrs
+        .iter()
+        .any(
+            |attr| matches!(
+                attr,
+                llrm_mir::opcode::Attribute::Flag(flag) if names.contains(&flag.as_str())
+            ),
+        )
+}
+
 /// One defined function of `program`'s module, selected, allocated and
 /// lowered, with the registers a call to it destroys (`crate::ipra`).
 fn lower_function(
@@ -259,15 +275,8 @@ fn lower_function(
     }
     machine.frame_pointer = llrm_codegen::backend::framefree::frame_pointer_policy(&function.attrs).map(str::to_owned);
     machine.unwind = crate::cfi::Unwind::of(function);
-    let optsize = function
-        .attrs
-        .iter()
-        .any(
-            |attr| matches!(
-                attr,
-                llrm_mir::opcode::Attribute::Flag(name) if name == "optsize" || name == "minsize"
-            ),
-        );
+    let optsize = flagged(function, &["optsize", "minsize"]);
+    machine.optnone = flagged(function, &["optnone"]);
     crate::prepass::run(&mut machine, optsize);
     dump("Prepass", &machine);
     if !llrm_support::env_flag!("LLRM_ARM64_NO_COMBINE") {
@@ -278,6 +287,10 @@ fn lower_function(
     dump("CmpZero", &machine);
     crate::flagcse::run(&mut machine);
     dump("FlagCse", &machine);
+    // The pin runs it after MachineCSE and MachineCombiner, which make the
+    // value read once and the `msub` it must leave alone.
+    crate::condbrtuning::run(&mut machine);
+    dump("CondBrTuning", &machine);
     crate::memcluster::run(&mut machine);
     dump("MemCluster", &machine);
     crate::sibcall::run(&mut machine);
@@ -307,6 +320,7 @@ fn lower_function(
                     machine.calls,
                 )),
     );
+    crate::lir_view::set_quad_callee_saved_free(!machine.calls);
     machine.alloc_odds = Some(crate::layout::edge_odds(module, function, &program.layout, &machine));
     let allocate = |machine: &mut crate::mfunc::MFunc, scratch: bool| {
         crate::lir_view::set_scratch_free(scratch);
@@ -336,12 +350,12 @@ fn lower_function(
     crate::copyprop::run(&mut machine);
     crate::postrasink::run(&mut machine);
     dump("PostRaSink", &machine);
-    crate::trial::add(&machine);
     let variables = crate::frame::variable_offsets(&machine, &allocation, platform == Platform::Darwin);
     let blocks = crate::frame::lower(&machine, &allocation, platform == Platform::Darwin)
         .map_err(|why| format!("@{name}: {why}"))?;
+    let blocks = crate::expand_pseudo::run(blocks);
     let mut tables = crate::jumptable::tables_of(&machine);
-    let blocks = crate::layout::fold(
+    let (blocks, likelihood) = crate::layout::fold_with_odds(
         blocks,
         &mut tables,
         &crate::layout::odds_by_label_number(
@@ -354,6 +368,7 @@ fn lower_function(
     let blocks = crate::pairs::fold(blocks);
     let mut blocks = crate::ldst_update::fold(blocks, &crate::mfunc::returned_registers(&machine));
     crate::jumptable::compress(&mut blocks, &mut tables).map_err(|why| format!("@{name}: {why}"))?;
+    crate::trial::add(&machine, &blocks, &likelihood);
     let written = crate::ipra::written(&machine);
     Ok((
         crate::emit::Function {
@@ -405,15 +420,7 @@ pub fn functions_with(
                 continue;
             }
             let name = global.name.owned().ok_or("an unnamed function")?;
-            let optnone = function
-                .attrs
-                .iter()
-                .any(
-                    |attr| matches!(
-                        attr,
-                        llrm_mir::opcode::Attribute::Flag(flag) if flag == "optnone"
-                    ),
-                );
+            let optnone = flagged(function, &["optnone"]);
             let usable = !optnone && !global.linkage.is_interposable();
             let (done, written) = lower_function(program, id, platform, lines)?;
             if usable {

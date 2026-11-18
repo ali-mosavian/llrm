@@ -135,8 +135,9 @@ define internal i32 @in(i32 %x) {
 
 # Every intrinsic llrm knows, at the widths it meets.
 INTRINSICS = []
-def intr(name, ret, args):
-    INTRINSICS.append((name, ret, args))
+def intr(name, ret, args, key=None, flag=None):
+    """`key` names the price row (default: the intrinsic); `flag` is the call's `i1` argument for `ctlz` and `cttz`."""
+    INTRINSICS.append((name, ret, args, key or name, flag))
 INTS = ["i8", "i16", "i32", "i64", "i128"]
 FLOATS = [("f64", "double"), ("f32", "float"), ("f80", "x86_fp80")]
 PTRS = {"p0": "ptr", "p1": "ptr addrspace(1)", "p2": "ptr addrspace(2)"}
@@ -147,8 +148,11 @@ for ty in INTS:
         intr(f"llvm.{m}.with.overflow.{ty}", "{ " + ty + ", i1 }", [ty, ty])
     intr(f"llvm.ctpop.{ty}", ty, [ty]); intr(f"llvm.bswap.{ty}", ty, [ty]) if ty != "i8" else None
     intr(f"llvm.abs.{ty}", ty, [ty, "i1"])
-    intr(f"llvm.cttz.{ty}", ty, [ty, "i1"])
-    intr(f"llvm.ctlz.{ty}", ty, [ty, "i1"])
+    # The pin prices the zero-poison call (`i1 true`) from its own table rows (X86TTIImpl::getIntrinsicInstrCost):
+    # `name` is the call with a defined zero, `name.zp` the call without one.
+    for count in ["cttz", "ctlz"]:
+        intr(f"llvm.{count}.{ty}", ty, [ty, "i1"], flag="false")
+        intr(f"llvm.{count}.{ty}", ty, [ty, "i1"], key=f"llvm.{count}.{ty}.zp", flag="true")
     intr(f"llvm.bitreverse.{ty}", ty, [ty])
     for m in ["sadd", "uadd", "ssub", "usub"]:
         intr(f"llvm.{m}.sat.{ty}", ty, [ty, ty])
@@ -173,18 +177,20 @@ for dst, dty in PTRS.items():
         for src, sty in PTRS.items():
             intr(f"llvm.memcpy.{dst}.{src}.{ln}", "void", [dty, sty, ln, "i1"])
             intr(f"llvm.memmove.{dst}.{src}.{ln}", "void", [dty, sty, ln, "i1"])
-body = []; decls = []
-for n, (name, ret, args) in enumerate(INTRINSICS):
-    vals = {"i8": "%b", "i16": "%a", "i32": "%w", "i64": "%q", "double": "%d", "float": "%f", "x86_fp80": "%e", "i128": "%o", "i1": "false",
-            "ptr": "%p", "ptr addrspace(1)": "%p1", "ptr addrspace(2)": "%p2"}
-    cargs = ", ".join(f"{t} {vals[t]}" for t in args)
-    # SimplifyCFG's switch-of-powers-of-two prices `cttz(x, true)`.
-    if name.startswith("llvm.cttz."): cargs = f"{args[0]} {vals[args[0]]}, i1 true"
-    if name == "llvm.prefetch.p0": cargs = "ptr %p, i32 0, i32 3, i32 1"
-    if ".fix." in name: cargs = f"{args[0]} {vals[args[0]]}, {args[1]} {vals[args[1]]}, i32 3"
-    body.append(f"  {'' if ret == 'void' else f'%v{n} = '}call {ret} @{name}({cargs})")
-    decls.append(f"declare {ret} @{name}({', '.join(args)})")
-fn("intrinsics", "i8 %b, i16 %a, i32 %w, i64 %q, i128 %o, double %d, float %f, x86_fp80 %e, ptr %p, ptr addrspace(1) %p1, ptr addrspace(2) %p2, ...", "\n".join(body), "\n".join(decls) + "\n")
+def intrinsics_fn(entries):
+    body = []; decls = []
+    for n, (name, ret, args, _key, flag) in enumerate(entries):
+        vals = {"i8": "%b", "i16": "%a", "i32": "%w", "i64": "%q", "double": "%d", "float": "%f", "x86_fp80": "%e", "i128": "%o", "i1": "false",
+                "ptr": "%p", "ptr addrspace(1)": "%p1", "ptr addrspace(2)": "%p2"}
+        cargs = ", ".join(f"{t} {vals[t]}" for t in args)
+        if flag: cargs = f"{args[0]} {vals[args[0]]}, i1 {flag}"
+        if name == "llvm.prefetch.p0": cargs = "ptr %p, i32 0, i32 3, i32 1"
+        if ".fix." in name: cargs = f"{args[0]} {vals[args[0]]}, {args[1]} {vals[args[1]]}, i32 3"
+        body.append(f"  {'' if ret == 'void' else f'%v{n} = '}call {ret} @{name}({cargs})")
+        decls.append(f"declare {ret} @{name}({', '.join(args)})")
+    return ("define void @intrinsics(i8 %b, i16 %a, i32 %w, i64 %q, i128 %o, double %d, float %f, x86_fp80 %e, ptr %p, ptr addrspace(1) %p1, "
+            "ptr addrspace(2) %p2, ...) {\n" + "\n".join(body) + "\n  ret void\n}\n" + "\n".join(dict.fromkeys(decls)) + "\n")
+FUNCS["intrinsics"] = intrinsics_fn(INTRINSICS)
 
 corpus = HEAD + G + "".join(FUNCS.values())
 open(os.path.join(HERE, "instructioncost_corpus.ll"), "w").write(corpus)
@@ -208,10 +214,22 @@ table = {}
 for row in rows:
     cpu, kind, function, index, cost = row.split()
     if function != "intrinsics" or int(index) >= len(INTRINSICS): continue
-    name = INTRINSICS[int(index)][0]
+    name = INTRINSICS[int(index)][3]
     profile = "sse2" if cpu == "core2" else "nosse"
     key = (profile, kind, name)
     assert table.setdefault(key, cost) == cost, (key, cost, table[key])
+# Long mode has its own rows (X64CostTbl, and the 64-bit legalization): priced at the x86_64 triple with the baseline cpu.
+INTRINSICS64 = [entry for entry in INTRINSICS if "ptrmask" not in entry[0]]  # `ptrmask`'s mask is pointer-wide
+HEAD64 = ('target datalayout = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"\n'
+          'target triple = "x86_64-unknown-linux-gnu"\n')
+open(os.path.join(HERE, "instructioncost_corpus64.ll"), "w").write(HEAD64 + intrinsics_fn(INTRINSICS64))
+for kind in KINDS:
+    r = subprocess.run([OPT, "-passes=print<cost-model>", "-disable-output", "-mtriple=x86_64-unknown-linux-gnu", "-mcpu=x86-64",
+                        f"-cost-kind={kind}", os.path.join(HERE, "instructioncost_corpus64.ll")], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr[:500]
+    costs = re.findall(r"Cost Model: Found an estimated cost of (-?\d+|Invalid) for instruction:", r.stderr)
+    for index, (_name, _ret, _args, key, _flag) in enumerate(INTRINSICS64):
+        table[("x64", kind, key)] = costs[index]
 
 # The matrix: every opcode at every type the targets meet, with variable and constant operands, loads as cast sources and
 # stores of truncs, so that a price the corpus above does not hold cannot hide (`sext (load)` was 1 where the pin says 0).

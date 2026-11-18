@@ -18,10 +18,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import llrmbin  # noqa: E402
 
 SMALL, LARGE = 20, 80
-# What 4x the loops may cost (4 is linear). Steps not named are held to DEFAULT. The named ones are mid-end passes measured over
-# it on 2026-11-13 (20 -> 80 loops, release/next a12d6adfdb) and are owed a fix (owner: compile-time-bench / w8): each limit is
-# the measured growth plus 15%, lowered when its step is fixed. `unroll` and `indvars` are fixed (the float liveness of DEVIATE U3 is
-# followed from the reads, 15.1x -> 4.1x and 14.7x -> 6.0x on 2026-11-13); the others are not yet diagnosed.
+# What 4x the loops may cost (4 is linear). Steps not named are held to DEFAULT. The named ones are measured over it
+# (20 -> 80 loops, 2026-11-13): each limit is the measured growth plus 15%, lowered when its step is fixed. `unroll` and `indvars` are
+# fixed (the float liveness of DEVIATE U3 is followed from the reads, w8's #9562); `loopfullunroll` (its per-loop part, named since the group's spans were split, #9528) is under DEFAULT too
+# now. rotate, constraint-elimination, indvars, loopidioms and jumpthreading
+# grow in the pin's own `opt -passes='default<O2>' -time-passes` too (LoopRotate 9.1x here, ours 9.7x): the ceilings keep them from
+# growing further, they are not defects.
 DEFAULT = 6.0
 OWED = {
     "mir indvars": 6.9,

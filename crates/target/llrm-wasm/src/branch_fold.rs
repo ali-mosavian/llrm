@@ -8,7 +8,8 @@
 //! `SplitPHIEdges` makes for a PHI copy is such a block once the coalescer has
 //! removed the copy.
 //!
-//! `fold_branches` is the rest of `OptimizeBlock` but tail merging: the
+//! `fold_branches` is `OptimizeBlock` but tail merging, one sweep over the
+//! blocks in layout order that bypasses a branch-only block or moves one: the
 //! block before it merges, loses a branch to the block or reverses one, and
 //! the block moves after a predecessor, before a successor, or to the end, so
 //! that a fall-through happens.
@@ -28,81 +29,12 @@ use crate::dagisel::generated::ids::opcode as op;
 use crate::dagisel::generated::instrinfo::{desc, flag};
 use crate::mir::{Function, Inst, Operand, VReg};
 
-/// The target of `block` if it is only an unconditional branch.
-fn branch_only(
-    f: &Function,
-    block: usize,
-) -> Option<usize> {
-    match f.blocks[block].as_slice() {
-        [only] if only.opcode == op::BR => match only.operands[..] {
-            [Operand::Block(to)] if to as usize != block => Some(to as usize),
-            _ => None,
-        },
-        _ => None,
-    }
-}
-
 /// Whether control can fall from the end of `block` into the next one.
 fn falls_through(
     f: &Function,
     block: usize,
 ) -> bool {
     f.blocks[block].last().is_none_or(|last| !desc(last.opcode).is_some_and(|d| d.has(flag::BARRIER)))
-}
-
-/// Whether anything changed.
-pub fn forward_branch_only_blocks(f: &mut Function) -> bool {
-    if f.personality {
-        return false;
-    }
-    let mut changed = false;
-    for block in 1..f.blocks.len() {
-        let Some(mut to) = branch_only(f, block) else { continue };
-        if f.is_eh_pad(block) {
-            continue;
-        }
-        // Through a chain of such blocks, but not around a cycle of them.
-        for _ in 0..f.blocks.len() {
-            match branch_only(f, to) {
-                Some(next) if next != block => to = next,
-                _ => break,
-            }
-        }
-        if to == block {
-            continue;
-        }
-        // The block before it that falls into it branches to it, so that the
-        // loop below sees every edge.
-        let before = block - 1;
-        if falls_through(f, before) {
-            f.blocks[before].push(Inst::new(op::BR, &[Operand::Block(block as u32)]));
-        }
-        let from = block as u32;
-        for at in 0..f.blocks.len() {
-            let mut moved = false;
-            for operand in f.blocks[at].iter_mut().flat_map(|inst| inst.operands.iter_mut()) {
-                if *operand == Operand::Block(from) {
-                    *operand = Operand::Block(to as u32);
-                    moved = true;
-                }
-            }
-            for s in f.succs[at].iter_mut().filter(|s| **s == block) {
-                *s = to;
-            }
-            // A conditional branch whose two edges meet is the jump.
-            if moved && let [.., cond, jump] = f.blocks[at].as_slice() {
-                let meets = jump.opcode == op::BR
-                    && matches!(cond.opcode, op::BR_IF | op::BR_UNLESS)
-                    && cond.operands.first() == jump.operands.first();
-                if meets {
-                    let last = f.blocks[at].len() - 2;
-                    f.blocks[at].remove(last);
-                }
-            }
-            changed |= moved;
-        }
-    }
-    changed
 }
 
 /// The explicit branches ending a block, as `TargetInstrInfo::analyzeBranch`
@@ -287,6 +219,104 @@ impl Folder<'_> {
                     new
                 },
             );
+    }
+
+    /// The target of `block` if it is only an unconditional branch, or empty
+    /// and so falls into the block after it in the layout (`OptimizeBlock`:
+    /// "if this block is empty, make everyone use its fall-through").
+    fn branch_only(
+        &self,
+        block: usize,
+    ) -> Option<usize> {
+        match self.f.blocks[block].as_slice() {
+            [] => {
+                let next = self.layout.next[block];
+                (next != Layout::NONE && !self.f.is_eh_pad(next)).then_some(next)
+            }
+            [only] if only.opcode == op::BR => match only.operands[..] {
+                [Operand::Block(to)] if to as usize != block => Some(to as usize),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    /// `BranchFolder::OptimizeBlock`, the case of a block that is only an
+    /// unconditional branch (`IsBranchOnlyBlock`) or empty: every branch to it
+    /// goes to its target instead, the block before it that fell into it gets
+    /// an explicit branch first, and a conditional branch whose two edges now
+    /// meet becomes the unconditional one. A block left with no predecessor
+    /// goes. Whether the block was bypassed.
+    fn forward_branch_only(
+        &mut self,
+        block: usize,
+    ) -> bool {
+        let n = self.f.blocks.len();
+        if self.f.is_eh_pad(block) {
+            return false;
+        }
+        let Some(mut to) = self.branch_only(block) else { return false };
+        // Through a chain of such blocks, but not around a cycle of them.
+        for _ in 0..n {
+            match self.branch_only(to) {
+                Some(next) if next != block => to = next,
+                _ => break,
+            }
+        }
+        if to == block {
+            return false;
+        }
+        // The block before it that falls into it branches to it, so that the
+        // loop below sees every edge.
+        let before = self.layout.prev[block];
+        if before != Layout::NONE && falls_through(self.f, before) {
+            self.f.blocks[before].push(Inst::new(op::BR, &[Operand::Block(block as u32)]));
+        }
+        let from = block as u32;
+        let mut changed = false;
+        for at in 0..n {
+            if self.dead[at] {
+                continue;
+            }
+            let mut moved = false;
+            for operand in self.f.blocks[at].iter_mut().flat_map(|inst| inst.operands.iter_mut()) {
+                if *operand == Operand::Block(from) {
+                    *operand = Operand::Block(to as u32);
+                    moved = true;
+                }
+            }
+            for s in self.f.succs[at].iter_mut().filter(|s| **s == block) {
+                *s = to;
+            }
+            if !moved {
+                continue;
+            }
+            // A conditional branch whose two edges meet is the jump.
+            if let [.., cond, jump] = self.f.blocks[at].as_slice() {
+                let meets = jump.opcode == op::BR
+                    && matches!(cond.opcode, op::BR_IF | op::BR_UNLESS)
+                    && cond.operands.first() == jump.operands.first();
+                if meets {
+                    let last = self.f.blocks[at].len() - 2;
+                    self.f.blocks[at].remove(last);
+                }
+            }
+            self.dedupe_succs(at);
+            self.preds[block].retain(|&pred| pred != at);
+            if !self.preds[to].contains(&at) {
+                self.preds[to].push(at);
+            }
+            changed = true;
+        }
+        if changed && self.preds[block].is_empty() {
+            for s in std::mem::take(&mut self.f.succs[block]) {
+                self.preds[s].retain(|&pred| pred != block);
+            }
+            self.f.blocks[block].clear();
+            self.layout.unlink(block);
+            self.dead[block] = true;
+        }
+        changed
     }
 
     /// `BranchFolder::OptimizeBlock`, without tail merging.
@@ -488,7 +518,8 @@ impl Folder<'_> {
         }
         let falls = self.can_fall_through(block);
         // After a predecessor that does not fall through.
-        let cur_ok = cur.is_some_and(|c| !falls || c.taken.is_none() || c.other.is_none());
+        // (`!CurFallsThru || !CurTBB || !CurFBB`: a branch table has neither.)
+        let cur_ok = cur.is_none_or(|c| !falls || c.taken.is_none() || c.other.is_none());
         if cur_ok {
             for i in 0..self.preds[block].len() {
                 let pred = self.preds[block][i];
@@ -544,14 +575,8 @@ pub fn fold_branches(f: &mut Function) -> bool {
     if f.personality || n < 3 {
         return false;
     }
-    let mut preds = vec![Vec::new(); n];
-    for (from, succs) in f.succs.iter().enumerate() {
-        for &to in succs {
-            if !preds[to].contains(&from) {
-                preds[to].push(from);
-            }
-        }
-    }
+    f.sync_preds();
+    let preds = f.preds.clone();
     let mut folder = Folder { f, layout: Layout::new(n), preds, dead: vec![false; n] };
     let mut changed = false;
     // The pin repeats until nothing changes; each move lands a fall-through.
@@ -559,7 +584,10 @@ pub fn fold_branches(f: &mut Function) -> bool {
         let mut round = false;
         for block in folder.layout.order().into_iter().skip(1) {
             if !folder.dead[block] {
-                round |= folder.optimize_block(block);
+                // One sweep, as the pin's: a block is bypassed or moved, each
+                // in the layout the blocks before it left.
+                let bypassed = folder.forward_branch_only(block);
+                round |= bypassed || folder.optimize_block(block);
             }
         }
         for block in folder.layout.order() {
@@ -575,6 +603,7 @@ pub fn fold_branches(f: &mut Function) -> bool {
     if changed {
         let mut order = folder.layout.order();
         order.extend((0..n).filter(|&b| folder.dead[b]));
+        folder.f.preds = std::mem::take(&mut folder.preds);
         folder.f.apply_order(&order);
     }
     changed
@@ -592,9 +621,10 @@ mod tests {
         let mut f = Function::default();
         let c = f.new_vreg(ValType::I32);
         let block = Operand::Block;
+        let taken = if first_falls_through { 2 } else { 1 };
         let mut head = vec![
             Inst::new(op::CONST_I32, &[Operand::Def(c), Operand::Imm(0)]),
-            Inst::new(op::BR_IF, &[block(1), Operand::Use(c)]),
+            Inst::new(op::BR_IF, &[block(taken), Operand::Use(c)]),
         ];
         if !first_falls_through {
             head.push(Inst::new(op::BR, &[block(2)]));
@@ -615,23 +645,86 @@ mod tests {
     #[test]
     fn a_branch_to_a_block_of_one_br_goes_to_its_target_and_the_block_goes() {
         let mut f = function(false);
-        assert!(forward_branch_only_blocks(&mut f));
-        // Both edges of bb0 meet at bb3: the conditional branch is dropped.
-        assert_eq!(f.blocks[0].last(), Some(&Inst::new(op::BR, &[Operand::Block(3)])));
-        assert!(f.blocks[0].iter().all(|inst| inst.opcode != op::BR_IF));
+        assert!(fold_branches(&mut f));
         remove_unreachable_blocks(&mut f);
-        assert_eq!(f.blocks.len(), 2);
+        // Both edges of bb0 meet at bb3, which is then bb0's alone: one block.
+        assert_eq!(f.blocks.len(), 1);
+        assert!(f.blocks[0].iter().all(|inst| !matches!(inst.opcode, op::BR_IF | op::BR | op::BR_UNLESS)));
+        assert_eq!(f.blocks[0].last().map(|inst| inst.opcode), Some(op::RETURN));
     }
 
-    /// The previous block falls into bb2: it gets `br bb2` first, as the pin's
-    /// `OptimizeBlock` makes the fall-through explicit, and bb2 still goes.
+    /// The previous block falls into bb1: it gets `br bb1` first, as the pin's
+    /// `OptimizeBlock` makes the fall-through explicit, and bb1 still goes.
     #[test]
     fn a_block_the_previous_one_falls_into_is_bypassed_too() {
         let mut f = function(true);
-        assert!(forward_branch_only_blocks(&mut f));
-        assert_eq!(f.blocks[0].last(), Some(&Inst::new(op::BR, &[Operand::Block(3)])));
+        assert!(fold_branches(&mut f));
         remove_unreachable_blocks(&mut f);
-        assert_eq!(f.blocks.len(), 2);
+        assert_eq!(f.blocks.len(), 1);
+        assert_eq!(f.blocks[0].last().map(|inst| inst.opcode), Some(op::RETURN));
+    }
+
+    /// A block the coalescer emptied (its copy gone) kept its predecessors:
+    /// a branch to it jumps over the block it falls into (memcpy_libcall -Os,
+    /// a `block`, a `br` and an `end` more than the pin).
+    #[test]
+    fn a_branch_to_an_empty_block_goes_to_the_block_it_falls_into() {
+        let mut f = function(false);
+        f.blocks[1].clear();
+        f.succs[1] = vec![2];
+        assert!(fold_branches(&mut f));
+        remove_unreachable_blocks(&mut f);
+        // bb1 falls into bb2, which is one `br bb3`: both edges meet at bb3.
+        assert_eq!(f.blocks.len(), 1);
+        assert_eq!(f.blocks[0].last().map(|inst| inst.opcode), Some(op::RETURN));
+    }
+
+    /// The pin's test for moving a block after a predecessor reads
+    /// `!CurFallsThru || !CurTBB || !CurFBB`: a branch table has no `TBB` or
+    /// `FBB`, so it passes. Ours required a branch we could analyze, and the
+    /// blocks after a switch loop landed in another order (tail_calls -Os
+    /// `__main_void`, known_loads_walks -O2 +32 instructions).
+    fn a_branch_table_block_is_moved_after_its_predecessor_like_any_other() {
+        let mut f = Function::default();
+        let c = f.new_vreg(ValType::I32);
+        let block = Operand::Block;
+        let konst = |n: i64| Inst::new(op::CONST_I32, &[Operand::Def(c), Operand::Imm(n)]);
+        let table = |targets: &[u32]| {
+            let mut operands = vec![Operand::Use(c)];
+            operands.extend(targets.iter().map(|&t| block(t)));
+            Inst::new(op::BR_TABLE_I32, &operands)
+        };
+        let br = |to: u32| Inst::new(op::BR, &[block(to)]);
+        // A: table. S, L: branch to R and back to A. E: empty. R: falls into
+        // B, a table. Z: returns.
+        f.blocks = vec![
+            vec![konst(10), table(&[3, 1, 2])],
+            vec![konst(11), br(4)],
+            vec![konst(12), br(0)],
+            vec![],
+            vec![konst(13)],
+            vec![table(&[6, 0])],
+            vec![konst(14), Inst::new(op::RETURN, &[])],
+        ];
+        f.succs = vec![vec![3, 1, 2], vec![4], vec![0], vec![4], vec![5], vec![6, 0], vec![]];
+        assert!(fold_branches(&mut f));
+        let labels: Vec<i64> = f
+            .blocks
+            .iter()
+            .map(|b| match b.first().map(|i| i.operands[..].to_vec()) {
+                Some(o) if o.len() == 2 => {
+                    if let Operand::Imm(n) = o[1] {
+                        n
+                    } else {
+                        -1
+                    }
+                }
+                _ => -1,
+            })
+            .collect();
+        // The pin's order for this shape, by `OptimizeBlock` read by hand; the
+        // block that returns follows the back edge.
+        assert_eq!(labels, [10, 11, 13, 12, 14, -1, -1]);
     }
 
     /// Both arms of a branch began with the same constant, which the register
