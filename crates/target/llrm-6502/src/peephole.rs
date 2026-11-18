@@ -2827,22 +2827,39 @@ pub(crate) fn carry_dead_from(
 
 /// 65C02: `lda #0; sta m` (and further `[lda #0;] sta n` after it) with `a`
 /// dead after the last store: `stz m`, `stz n`. The zero reaches the cell
-/// without `a`: 2 bytes and 2 clocks fewer, and `a` is not clobbered.
+/// without `a`: 2 bytes and 2 clocks fewer, and `a` is not clobbered. The same
+/// through `x` and `y` (`ldy #0; sty rc2; sty rc3`, the high word of a long
+/// made from a short: 6 B, 4 as `stz`).
 pub fn zero_cells_with_stz(asm: &mut Asm) {
     if !asm.cmos {
         return;
     }
+    for (load, store, register) in [
+        (Op::Lda, Op::Sta, Registers::A),
+        (Op::Ldx, Op::Stx, Registers::X),
+        (Op::Ldy, Op::Sty, Registers::Y),
+    ] {
+        zero_run_with_stz(asm, load, store, register);
+    }
+}
+
+fn zero_run_with_stz(
+    asm: &mut Asm,
+    load: Op,
+    store: Op,
+    register: Registers,
+) {
     let runs = {
         let exits = Exits::of(asm);
         let lines = &asm.lines;
         let zero = |n: usize| {
-            lines.get(n).and_then(Line::inst).is_some_and(|i| i.op == Op::Lda && i.operand == Operand::Imm("0".into()))
+            lines.get(n).and_then(Line::inst).is_some_and(|i| i.op == load && i.operand == Operand::Imm("0".into()))
         };
         let cell = |n: usize| {
             lines
                 .get(n)
                 .and_then(Line::inst)
-                .is_some_and(|i| i.op == Op::Sta && matches!(i.operand, Operand::Direct(_)))
+                .is_some_and(|i| i.op == store && matches!(i.operand, Operand::Direct(_)))
         };
         let mut runs = Vec::new();
         let mut at = 0;
@@ -2851,8 +2868,8 @@ pub fn zero_cells_with_stz(asm: &mut Asm) {
                 at += 1;
                 continue;
             }
-            // the run: stores, each after a `lda #0` or straight after the last
-            // store
+            // the run: stores, each after a load of zero or straight after the
+            // last store
             let mut end = at + 2;
             loop {
                 if cell(end) {
@@ -2863,7 +2880,7 @@ pub fn zero_cells_with_stz(asm: &mut Asm) {
                     break;
                 }
             }
-            if flags_unread_after(lines, end) && dead_from(lines, end, Registers::A, &mut HashSet::default(), exits) {
+            if flags_unread_after(lines, end) && dead_from(lines, end, register, &mut HashSet::default(), exits) {
                 runs.push((at, end));
             }
             at = end;
@@ -2874,7 +2891,7 @@ pub fn zero_cells_with_stz(asm: &mut Asm) {
         let stores: Vec<Line> = asm.lines[at..end]
             .iter()
             .filter_map(Line::inst)
-            .filter(|i| i.op == Op::Sta)
+            .filter(|i| i.op == store)
             .map(|i| Line::Inst(Inst { op: Op::Stz, operand: i.operand.clone(), place: i.place }))
             .collect();
         asm.lines.splice(at..end, stores);

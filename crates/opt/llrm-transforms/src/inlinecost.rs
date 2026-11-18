@@ -351,7 +351,7 @@ impl InlineCost {
     }
 }
 
-fn has_flag(
+pub(crate) fn has_flag(
     attrs: &[Attribute],
     name: &str,
 ) -> bool {
