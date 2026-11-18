@@ -29,3 +29,13 @@ void scaled(int *restrict c, const short *restrict a, int n)
     for (int i = 0; i < n; ++i)
         c[i] = a[i] * 1000;
 }
+
+short back[2000];
+
+long weighted(void)
+{
+    long total = 0;
+    for (long i = 0; i < 2000; ++i)
+        total += (long)((int)back[i] * ((i & 15) + 1));
+    return total;
+}

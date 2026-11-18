@@ -82,3 +82,12 @@ fn a_word_times_a_constant_multiplies_with_pmaddwd() {
     let scaled = body(&text, "scaled");
     assert!(scaled.contains("pmaddwd") && !scaled.contains("pmuludq"), "{scaled}");
 }
+
+/// A word times `(i & 15) + 1` stayed an `i64` scalar loop (the weight is no
+/// extension): about 14000 instructions in `scroll`.
+#[test]
+fn a_word_times_a_small_weight_multiplies_with_pmaddwd() {
+    let text = assembly();
+    let weighted = body(&text, "weighted");
+    assert!(weighted.contains("pmaddwd") && !weighted.contains("pmuludq"), "{weighted}");
+}

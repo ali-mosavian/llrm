@@ -1432,7 +1432,11 @@ fn the_widened_early_exit_loop_finds_what_the_scalar_one_finds() {
 fn a_product_of_two_word_extensions_is_multiplied_narrow_in_a_vector_loop() {
     let text = run_x86(include_str!("../tests/lv/dot_i16.ll"), false);
     assert!(count(&text, "mul nsw <") > 0 && count(&text, " x i32> %") > 0, "{text}");
-    assert_eq!(count(&text, "mul nsw <2 x i64>") + count(&text, "mul nsw <4 x i64>") + count(&text, "mul <"), 0, "{text}");
+    assert_eq!(
+        count(&text, "mul nsw <2 x i64>") + count(&text, "mul nsw <4 x i64>") + count(&text, "mul <"),
+        0,
+        "{text}"
+    );
 }
 
 /// The narrow multiply costs a `movsxd` in a scalar loop: a loop that stays
@@ -1441,5 +1445,32 @@ fn a_product_of_two_word_extensions_is_multiplied_narrow_in_a_vector_loop() {
 fn a_loop_that_stays_scalar_keeps_its_wide_multiply() {
     let text = run_x86(include_str!("../tests/lv/dot_i16_short.ll"), false);
     assert_eq!(count(&text, "x i16>"), 0, "the premise: three trips are not widened: {text}");
-    assert!(count(&text, "mul nsw i64") > 0 && count(&text, "widen.mul") == 0 && count(&text, "mul nsw i32") == 0, "{text}");
+    assert!(
+        count(&text, "mul nsw i64") > 0 && count(&text, "widen.mul") == 0 && count(&text, "mul nsw i32") == 0,
+        "{text}"
+    );
+}
+
+/// A word times a small weight (`(i & 15) + 1`) is multiplied narrow: the
+/// `i64` multiply stayed scalar, as the weight is no extension.
+#[test]
+fn a_word_times_a_small_weight_is_multiplied_narrow_in_a_vector_loop() {
+    let text = run_x86(include_str!("../tests/lv/weighted_sum.ll"), false);
+    assert!(count(&text, "mul nsw <") > 0 && count(&text, " x i32> %") > 0, "{text}");
+    assert_eq!(count(&text, "mul nsw <2 x i64>") + count(&text, "mul nsw <4 x i64>"), 0, "{text}");
+}
+
+/// A loop that stays scalar gets its weight chain back wide: no `trunc` of
+/// the counter, no narrow multiply.
+#[test]
+fn a_scalar_loop_keeps_its_wide_weight_chain() {
+    let text = run_x86(include_str!("../tests/lv/weighted_sum_short.ll"), false);
+    assert_eq!(count(&text, "x i16>"), 0, "the premise: three trips are not widened: {text}");
+    assert!(
+        count(&text, "mul nsw i64") > 0
+            && count(&text, "trunc") == 0
+            && count(&text, "widen.") == 0
+            && count(&text, "i32") == 0,
+        "{text}"
+    );
 }
