@@ -360,6 +360,7 @@ fn lower_function(
         ),
         optsize,
         &crate::mfunc::returned_registers(&machine),
+        &crate::mfunc::dead_end_labels(&machine),
     );
     let blocks = crate::pairs::fold(blocks);
     let mut blocks = crate::ldst_update::fold(blocks, &crate::mfunc::returned_registers(&machine));

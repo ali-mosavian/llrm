@@ -646,7 +646,7 @@ pub fn fold(
     optsize: bool,
     exits: &[crate::mc::visit::Reg],
 ) -> Vec<Lowered> {
-    fold_with_odds(blocks, tables, odds, optsize, exits).0
+    fold_with_odds(blocks, tables, odds, optsize, exits, &[]).0
 }
 
 /// The odds of the edges between blocks by label, as placement read them.
@@ -660,6 +660,7 @@ pub fn fold_with_odds(
     odds: &Odds,
     optsize: bool,
     exits: &[crate::mc::visit::Reg],
+    dead_ends: &[String],
 ) -> (Vec<Lowered>, Likelihood) {
     if blocks.is_empty() {
         return (blocks, Likelihood::default());
@@ -675,7 +676,8 @@ pub fn fold_with_odds(
                     | Inst::Brk { .. }
             )
         );
-        if !ends {
+        // A block that ends in a call that never returns falls into nothing.
+        if !ends && !dead_ends.contains(&blocks[at].label) {
             let next = blocks[at + 1].label.clone();
             blocks[at].insts.push(Inst::Branch { link: false, target: Target::Label(next) });
             blocks[at].locs.push(None);
