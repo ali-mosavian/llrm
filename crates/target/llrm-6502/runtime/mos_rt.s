@@ -562,6 +562,34 @@ __ashlhi3:                      ; rs1 << rc4 -> A:X
   ldx rc3
   rts
 
+; 1 << n for a count in A (0 to 15): the bit is made in a byte, which half it is in is the count's bit 3. A:X in, none of
+; the rc cells touched.
+.export __shl1hi3
+__shl1hi3:                      ; A = n -> A:X = 1 << n
+  ldy #0
+  cmp #8
+  bcc @low
+  sbc #8                        ; carry is set: the bit is in the high byte
+  iny
+@low:
+  tax
+  lda #1
+  cpx #0
+  beq @made
+@next:
+  asl a
+  dex
+  bne @next
+@made:
+  cpy #0
+  bne @high
+  ldx #0
+  rts
+@high:
+  tax
+  lda #0
+  rts
+
 .export __lshrhi3
 __lshrhi3:                      ; rs1 >> rc4 (logical) -> A:X
   ldx rc4
