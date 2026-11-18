@@ -92,19 +92,16 @@ fn test_m32_regparm3_a_variadic_call_takes_every_argument_on_the_stack() {
 }
 
 #[test]
-fn test_m32_regparm3_a_struct_result_pointer_is_refused_not_misplaced() {
-    let source = "struct S { int a, b, c; };\nstruct S s3(int x) { struct S s = {x, x + 1, x + 2}; return s; }\n";
-    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("regparm3-sret-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("c.c"), source).unwrap();
-    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
-        .env("LLRM_CC_TARGET", "x86_32-linux")
-        .args(["-m32", "-mabi=sysv", "-mregparm=3", "-O2", "--isel=dag", "-w", "-S", "-o"])
-        .arg(dir.join("c.s"))
-        .arg(dir.join("c.c"))
-        .output()
-        .unwrap();
-    assert!(!run.status.success(), "compiled an inreg struct result pointer");
-    assert!(String::from_utf8_lossy(&run.stderr).contains("inreg"), "{}", String::from_utf8_lossy(&run.stderr));
+fn test_m32_regparm3_a_struct_result_pointer_is_in_eax_and_not_popped() {
+    let source = "struct S { int a, b, c; };\n\
+                  __attribute__((noinline)) struct S s3(int x, int y) { struct S s = {x, y, x + y}; return s; }\n\
+                  int use(int x) { struct S s = s3(x, 5); return s.a + s.b + s.c; }\n";
+    let text = listing("sret", source, &["-mregparm=3"]);
+    let s3 = body(&text, "s3");
+    // The result pointer is the first `inreg` argument (EAX), x and y follow in
+    // EDX and ECX: on the stack the callee popped it with `ret 4`.
+    assert!(s3.contains("mov dword ptr [eax], edx"), "the result is not written through EAX:\n{s3}");
+    assert!(!s3.contains("ret 4"), "the callee pops a pointer it was not given on the stack:\n{s3}");
+    let user = body(&text, "use");
+    assert!(user.contains("mov edx, eax") && user.contains("mov ecx, 5"), "x and 5 are not in EDX and ECX:\n{user}");
 }

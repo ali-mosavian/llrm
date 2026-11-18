@@ -715,10 +715,7 @@ pub fn convention_for_abi(
         for (index, &ty) in param_types.iter().enumerate() {
             let attrs = parameter_attrs.get(index).map_or(&[][..], Vec::as_slice);
             let class = class_of(attrs);
-            let marked = attrs.iter().any(|one| matches!(one, llrm_mir::Attribute::Flag(name) if name == "inreg"));
-            if marked && class == Some(llrm_mir::opcode::RESULT_POINTER) {
-                return refuse("an `inreg` struct result pointer (regparm with a struct result)");
-            }
+            let marked = marked_inreg(attrs);
             let wanted = if marked {
                 let argument = argument_of(types, ty, sizes[index], class, soft_float);
                 (!argument.memory && !argument.floating && (argument.integer || argument.pointer))
@@ -809,8 +806,8 @@ pub fn convention_for_abi(
     let result_slot = described.is_some_and(|one| {
         hidden_slot_popped_by_callee(
             one,
-            (0..param_types.len())
-                .map(|index| llrm_mir::opcode::argument_class(parameter_attrs.get(index).map_or(&[], Vec::as_slice))),
+            variadic,
+            (0..param_types.len()).map(|index| parameter_attrs.get(index).map_or(&[][..], Vec::as_slice)),
         )
     });
     let popped = if pops {
@@ -902,14 +899,25 @@ fn argument_of(
     }
 }
 
+/// Whether `attrs` mark an argument `inreg`.
+fn marked_inreg(attrs: &[llrm_mir::Attribute]) -> bool {
+    attrs.iter().any(|one| matches!(one, llrm_mir::Attribute::Flag(name) if name == "inreg"))
+}
+
 /// Whether `entry` passes a struct result's address in a stack slot that its
-/// callee pops, and one of `classes` is that address.
+/// callee pops, and one of the arguments with `attrs` is that address: not one
+/// marked `inreg` where the convention places those (it is in a register, and
+/// there is nothing to pop).
 fn hidden_slot_popped_by_callee<'a>(
     entry: &llrm_target::calling::Convention,
-    mut classes: impl Iterator<Item = Option<&'a str>>,
+    variadic: bool,
+    mut arguments: impl Iterator<Item = &'a [llrm_mir::Attribute]>,
 ) -> bool {
+    let in_register = |attrs: &[llrm_mir::Attribute]| !variadic && !entry.inreg_registers.is_empty() && marked_inreg(attrs);
     entry.aggregate.as_ref().is_some_and(|one| one.pointer_register.is_none() && one.pointer_popped_by == "callee")
-        && classes.any(|class| class == Some(llrm_mir::opcode::RESULT_POINTER))
+        && arguments.any(|attrs| {
+            llrm_mir::opcode::argument_class(attrs) == Some(llrm_mir::opcode::RESULT_POINTER) && !in_register(attrs)
+        })
 }
 
 /// The registers `entry` keeps for its caller that a function with these
@@ -7120,10 +7128,7 @@ impl Selector<'_, '_, '_> {
         let pushed = pushed + pad;
         let hidden_popped = match (&instruction.opcode, self::entry(self.arch, convention, variadic)) {
             (Opcode::Call(info) | Opcode::Invoke(info), Some(one))
-                if hidden_slot_popped_by_callee(
-                    one,
-                    info.argument_attrs.iter().map(|attrs| llrm_mir::opcode::argument_class(attrs)),
-                ) =>
+                if hidden_slot_popped_by_callee(one, variadic, info.argument_attrs.iter().map(Vec::as_slice)) =>
             {
                 self.arch.stack_slot_bytes()
             }
