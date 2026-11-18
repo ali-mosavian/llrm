@@ -575,6 +575,14 @@ impl Tti for Z80Tti {
         }))
     }
 
+    /// DEVIATE INLINE-FRAME (owner z80, exit 2026-12-15): queens -Os inlined
+    /// `bench_queens` (it stays, 37 B, a 24 B array) into a `main` with no
+    /// frame: `main` grew a frame and a copy of the body, 410 B against SDCC's
+    /// 342 B, 379 B without it.
+    fn inline_callee_that_stays_adds_a_caller_frame(&self) -> bool {
+        true
+    }
+
     /// The callee's frame: `push ix; ld ix,#0; add ix,sp` and its undoing, with
     /// a `push` a word of locals (a frame over 6 B is `ld iy,#-n; add iy,sp;
     /// ld sp,iy`). `ld sp,ix` and `ld iy,nn` are priced as `ld sp,hl` and
