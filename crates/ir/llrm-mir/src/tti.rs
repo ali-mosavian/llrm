@@ -1207,6 +1207,14 @@ pub trait Tti {
         None
     }
 
+    /// DEVIATE INLINE-FRAME: the code-size guard counts the frame a caller
+    /// with none builds for the callee's static allocas where the callee
+    /// stays (the pin's cost has no frame term). False: the frame is taken to
+    /// move, as before.
+    fn inline_callee_that_stays_adds_a_caller_frame(&self) -> bool {
+        false
+    }
+
     /// What building and tearing down the callee's frame costs in `kind`,
     /// once per call executed. Inlining removes it from the callee, which then
     /// stays or dies: in bytes it is saved once, when the callee dies, and
