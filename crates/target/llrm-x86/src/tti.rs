@@ -1150,6 +1150,15 @@ impl Tti for X86 {
         self.tuning.imul_at_size
     }
 
+    /// DEVIATE MERGEFUNC-LOCAL-X64 (owner llrm-target-x86-m16-b, exit
+    /// 2026-11-30): x86-64 drops a local function that is the same code as
+    /// another at -O1 to -O3, as gcc's `-fipa-icf` does at -O2 (signbit_idioms:
+    /// 8 of 24 functions were copies; each function is an FDE the start-up
+    /// unwinder registration walks, 110 instructions a function).
+    fn merge_local_functions_at_speed(&self) -> bool {
+        self.quad
+    }
+
     fn merge_functions_at_size(&self) -> bool {
         self.tuning.merge_functions_at_size
     }
@@ -1232,6 +1241,10 @@ impl Tti for X86 {
 
     fn threads_by_relation(&self) -> bool {
         self.tuning.threads_by_relation
+    }
+
+    fn backward_threading(&self) -> bool {
+        self.tuning.backward_threading
     }
 
     fn x87_stack_slots(&self) -> Option<u32> {
@@ -1344,6 +1357,11 @@ impl Tti for X86 {
 
     fn branches_constant_arm_selects(&self) -> bool {
         self.tuning.branch_constant_arm_selects
+    }
+
+    fn select_optimize_penalty(&self) -> Option<u64> {
+        // Where a select is a conditional move, it is the cheaper form.
+        self.tuning.select_optimize_penalty.filter(|_| !self.cmov)
     }
 
     fn indvars_widens_narrow_counter_through_masks(&self) -> bool {
@@ -2304,6 +2322,14 @@ impl Tti for X86 {
     /// index make the model's best answer a loss in bytes and clocks too.
     fn should_drop_lsr_solution_if_less_profitable(&self) -> bool {
         self.real_mode.is_some()
+    }
+
+    /// DEVIATE WIDEN-COLD-CHREC: x86-64 (sieve O2/O3: +595 instructions of the
+    /// 15223 for 2 phis the scan loop steps for 11 marking-loop entries).
+    /// owner: llrm-target-x86-m16-b, exit: 2026-11-30, or when the pin
+    /// weighs the entry frequency.
+    fn avoids_cold_outer_addrec_expansion(&self) -> bool {
+        self.quad
     }
 
     fn lsr_drops_worse_solution_at_size(&self) -> bool {

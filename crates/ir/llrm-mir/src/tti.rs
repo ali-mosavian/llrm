@@ -1052,6 +1052,15 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE LSR-OUTER-SIZE: whether `reduces_outer_multiply` also holds at
+    /// -Os. A multiply that is a runtime call costs its setup and the routine's
+    /// bytes at each use; the counter stepped by the multiplier costs one add
+    /// and a cell pair. false: the pin's, which leaves a loop with a subloop
+    /// alone.
+    fn reduces_outer_multiply_at_size(&self) -> bool {
+        false
+    }
+
     /// `getJumpConditionMergingParams`: the budget for keeping the compares
     /// of a branch on `a && b` or `a || b` one condition. Split always, where
     /// the target says nothing.
@@ -1205,6 +1214,14 @@ pub trait Tti {
     ) -> Option<Cost> {
         let _ = (shape, kind);
         None
+    }
+
+    /// DEVIATE INLINE-FRAME: the code-size guard counts the frame a caller
+    /// with none builds for the callee's static allocas where the callee
+    /// stays (the pin's cost has no frame term). False: the frame is taken to
+    /// move, as before.
+    fn inline_callee_that_stays_adds_a_caller_frame(&self) -> bool {
+        false
     }
 
     /// What building and tearing down the callee's frame costs in `kind`,
@@ -1778,6 +1795,11 @@ pub trait Tti {
         false
     }
 
+    /// `Tuning::backward_threading`.
+    fn backward_threading(&self) -> bool {
+        true
+    }
+
     /// What a byte of code is worth in thousandths of a clock at speed, where
     /// the target trades bytes for clocks; 0: it does not.
     fn speed_milliclocks_per_byte(&self) -> i64 {
@@ -2126,6 +2148,13 @@ pub trait Tti {
     /// `Tuning::sink_select_arms`.
     fn sinks_select_arms(&self) -> bool {
         false
+    }
+
+    /// `Tuning::select_optimize_penalty`: `SelectOptimize` runs (the pin's
+    /// `llc` leaves it off) and a mispredicted branch costs this many
+    /// clocks.
+    fn select_optimize_penalty(&self) -> Option<u64> {
+        None
     }
 
     /// `Tuning::branch_constant_arm_selects`.
@@ -2729,6 +2758,14 @@ pub trait Tti {
         key(a) < key(b)
     }
 
+    /// DEVIATE LSR-TIE: a loop with an address that LSR rates no better than
+    /// the loop as written is left as written where a recurrence steps by a
+    /// register and the loop's values number more than this (the pin
+    /// rewrites on a tie). None: the pin's.
+    fn lsr_register_step_loses_a_tie_above(&self) -> Option<u32> {
+        None
+    }
+
     /// DEVIATE LSR-SIZE (owner w12, exit 2026-11-24): LSR ranks formulae by
     /// the bytes of this table first when the function is built for size;
     /// none is the pin's order at every level.
@@ -2789,6 +2826,17 @@ pub trait Tti {
     /// setup is code). `false`: the preference holds in every loop, as the
     /// pin's.
     fn lsr_post_indexed_amortized(&self) -> bool {
+        false
+    }
+
+    /// DEVIATE LSR-POSTINC-PAIR (target flag): the pair form of a load or
+    /// store (`ldp`/`stp`) folds a pointer's bump only into its first access,
+    /// so a post-indexed walk rates the lower access of an adjacent pair
+    /// before the pointer (a negative offset) as costlier. The pin's
+    /// two's complement `ImmCost` rates `-4` below `4` and starts the walk at
+    /// the second access (gcc's ivopts starts it at the first). `false`: the
+    /// pin's rating.
+    fn lsr_pair_first_walk(&self) -> bool {
         false
     }
 
@@ -2868,6 +2916,19 @@ pub trait Tti {
     /// register. A size build then keeps `mul X, select(c, 8, 2)` rather than
     /// the pin's `shl X, select(c, 3, 1)` (`visitMul`'s `tryGetLog2`).
     fn variable_shift_count_in_fixed_register(&self) -> bool {
+        false
+    }
+
+    /// DEVIATE WIDEN-COLD-CHREC (`widen.rs`): whether `WidenIV` leaves a
+    /// counter narrow when its wide start is a chained recurrence
+    /// (`{a,+,b,+,c}`, a square) of an enclosing loop that no phi carries
+    /// and the counter's loop is entered on only some trips of it.
+    /// `SCEVExpander` then adds one phi a level to every trip of the outer
+    /// loop for a start the written code computes where the loop is entered
+    /// (sieve: `i * i` feeding the marking loop of a prime, 11 entries in
+    /// 1022 trips); the pin widens regardless. gcc's ivopts weighs a use's
+    /// cost by the frequency of its block. Off by default.
+    fn avoids_cold_outer_addrec_expansion(&self) -> bool {
         false
     }
 
@@ -3391,6 +3452,17 @@ pub trait Tti {
     /// itself. Without it an outer loop's reduction (LSR-OUTER) rates every
     /// formula naming the inner loop's narrowed counter a loser.
     fn lsr_extension_of_phi_exists(&self) -> bool {
+        false
+    }
+
+    /// DEVIATE LU32 (`lsr_use.rs`): an addrec of another loop that no phi
+    /// carries and that has several recurrence levels (`{a,+,b,+,c}`, a squared
+    /// counter) is expanded by one phi a level in that loop, so the rating
+    /// counts a register for each; the pin counts one. Otherwise `i * i`
+    /// feeding an inner loop's start becomes a quadratic pair of induction
+    /// variables that an outer loop holding its own counter, sum and bound
+    /// spills.
+    fn lsr_outer_addrec_regs_per_level(&self) -> bool {
         false
     }
 

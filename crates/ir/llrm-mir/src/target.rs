@@ -449,6 +449,12 @@ pub struct Tuning {
     /// (`backwardthreading.rs`). The pin has neither; gcc's `threadfull1` and
     /// `vrp1` do both. false: the pin's pipeline.
     pub threads_by_relation: bool,
+    /// DEVIATE BACKTHREAD-M32 (owner x87-b, exit 2026-12-15): backward
+    /// threading (`backwardthreading.rs`, no LLVM pass) runs. false at m32:
+    /// of 121 programs it changes 13 at -O2/-O3 and moves none by more than
+    /// 0.2% in clocks, while its copies of a peeled ladder cost x_ld_matmul
+    /// -O3 +8.1% clocks and 1,615 B, queens -O3 +8.3% and 3,706 B.
+    pub backward_threading: bool,
     /// DEVIATE SPILL-FOLD (owner x86-m16, exit 2026-11-29): the clocks a
     /// spilled value costs where its references fold into memory operands,
     /// which `tryRegionSplit` weighs against the split's copies. The pin
@@ -745,6 +751,12 @@ pub struct Tuning {
     /// runs at -O2/-O3 with constant-arm selects included. false: the
     /// pin's, which runs it nowhere.
     pub branch_constant_arm_selects: bool,
+    /// DEVIATE SELECT-OPT-I486 (`Tti::select_optimize_penalty`): the clocks a
+    /// taken branch costs over a fallen-through one. `Some`: where there is
+    /// no conditional move, `SelectOptimize` runs at -O2/-O3, pricing
+    /// a mispredicted branch at it. `None`: the pin's `llc`, which leaves the
+    /// pass off.
+    pub select_optimize_penalty: Option<u64>,
     /// DEVIATE IND-PREFIX (`Tti::narrow_counter_is_taxed`): 16-bit counters
     /// are widened like illegal ones, for the operand-size prefix.
     pub prefixed_16_bit_counters: bool,
@@ -890,6 +902,7 @@ impl Tuning {
         address_reference_milliweight: 1000,
         unroll_recurrence_veto: false,
         threads_by_relation: false,
+        backward_threading: true,
         spill_fold: None,
         unswitch_threshold: None,
         inline_threshold: None,
@@ -954,6 +967,7 @@ impl Tuning {
         phi_constant_chains: false,
         sink_select_arms: false,
         branch_constant_arm_selects: false,
+        select_optimize_penalty: None,
         prefixed_16_bit_counters: false,
         partial_libcalls_skip_at_size: false,
         inline_variable_memcpy: false,

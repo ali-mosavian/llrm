@@ -1434,7 +1434,16 @@ fn a_far_frame_access_between_a_compare_and_its_branch_keeps_the_carry() {
         ..Inst::new(Kind::Op("JPC"), vec![Operand::Block(1), Operand::Use(Reg::Phys(llrm_z80::reg::FLAGS))])
     };
     function.blocks.push(Block { id: 0, insts: vec![compare, reload, branch], phis: Vec::new() });
-    function.blocks.push(Block { id: 1, insts: vec![Inst::new(Kind::Op("RET"), vec![])], phis: Vec::new() });
+    // the reloaded byte is returned: a reload nothing reads is not emitted
+    function
+        .blocks
+        .push(
+            Block {
+                id: 1,
+                insts: vec![Inst::new(Kind::Op("RET"), vec![Operand::Use(Reg::Virt(2))])],
+                phis: Vec::new(),
+            },
+        );
     let assignment = Assignment(vec![llrm_z80::reg::A, llrm_z80::reg::B, llrm_z80::reg::C]);
     // object 100 sits below 100 words of other objects: out of ix's reach
     let slots: Vec<(i32, usize)> = (0..101).map(|at| (at, 2)).collect();

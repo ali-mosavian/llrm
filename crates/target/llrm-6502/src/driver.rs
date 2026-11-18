@@ -266,9 +266,92 @@ pub fn assembly(
     text: &str,
     request: &Request,
 ) -> Result<String, String> {
+    llrm_transforms::trial::take_speed_unrolls();
     let built = program(text, request)?;
+    let made = llrm_transforms::trial::take_speed_unrolls().made;
+    let size = instructions(&built);
+    let kept = assembly_trials(built, text, request)?;
+    speed_unroll_trial(kept, made, size, text, request)
+}
+
+fn assembly_trials(
+    built: Program,
+    text: &str,
+    request: &Request,
+) -> Result<String, String> {
     let (built, inlined, assembled, joint) = trial_inlined(built, text, request)?;
     llrm_transforms::trial::with_inlined(&inlined, || trial_unrolled(built, assembled, joint, text, request))
+}
+
+/// DEVIATE UNROLL-SPEED-TRIAL (owner 6502, exit 2026-11-24; the z80's
+/// `compile::effective`): at -O2 and -O3 a module whose mid-end made a full
+/// unroll that `NoGrow` would not (`made`) is compiled again with only the
+/// unrolls that add no bytes, and that text is kept if it is fewer bytes. The
+/// pin's early unroll takes a loop of an inlinable callee unpriced, and the
+/// inliner then declines the body it made (memmove_overlap -O3: `fill`, 32
+/// trips, 14 B rolled, 161 B unrolled).
+///
+/// Compile time: only a module with such an unroll runs the second mid-end,
+/// and its backend runs only if that mid-end has fewer instructions than the
+/// kept one (`size`): a variant with as many or more cannot be fewer bytes
+/// (write_through_parameter's folded 43 B against 249 B).
+fn speed_unroll_trial(
+    kept: String,
+    made: usize,
+    size: usize,
+    text: &str,
+    request: &Request,
+) -> Result<String, String> {
+    use llrm_transforms::trial::{SpeedUnroll, with_speed_unroll};
+    let tried = matches!(request.level, Level::O2 | Level::O3)
+        && made > 0
+        && machine().tti().is_some_and(|tti| tti.unroll_speed_trial())
+        && std::env::var_os("LLRM_6502_NO_SPEED_UNROLL_TRIAL").is_none();
+    if !tried {
+        return Ok(kept);
+    }
+    let debug = std::env::var_os("LLRM_DEBUG_TRIAL").is_some();
+    let variant = |text: &str| -> Result<Option<String>, String> {
+        let built = program(text, request)?;
+        if debug {
+            eprintln!("trial speed unroll: {} instructions against {size}", instructions(&built));
+        }
+        if instructions(&built) >= size {
+            if debug {
+                eprintln!(
+                    "trial speed unroll: {made} unrolls; {} instructions against {size}: not tried",
+                    instructions(&built)
+                );
+            }
+            return Ok(None);
+        }
+        tail(built, request, false, false).map(|done| Some(done.text))
+    };
+    let Ok(Some(other)) = with_speed_unroll(Some(SpeedUnroll::NoGrow), || variant(text)) else {
+        return Ok(kept);
+    };
+    let bytes = |assembly: &str| -> Result<i64, String> { image_bytes_of(assembly, request) };
+    let (kept_bytes, other_bytes) = (bytes(&kept)?, bytes(&other)?);
+    if debug {
+        eprintln!("trial speed unroll: {made} unrolls; {other_bytes} B no-growth against {kept_bytes} B kept");
+    }
+    Ok(if other_bytes < kept_bytes { other } else { kept })
+}
+
+/// The bytes of a program's assembly: its code and data, and the runtime
+/// routines it links.
+fn image_bytes_of(
+    assembly: &str,
+    request: &Request,
+) -> Result<i64, String> {
+    let names: Vec<String> = assembly
+        .lines()
+        .filter(|line| line.ends_with(':') && !line.starts_with(|c: char| c.is_whitespace() || c == '.' || c == '@'))
+        .map(|line| line.trim_end_matches(':').to_owned())
+        .collect();
+    let code = i64::from(crate::timing::estimate(request.cpu, assembly)?.bytes);
+    let routines = crate::mulimage::image_of_texts(&names, &[assembly.to_owned()]);
+    Ok(code + data_bytes(assembly) + crate::mulimage::image_bytes(&routines))
 }
 
 /// DEVIATE OS-INLINE-TRIAL (owner 6502-c, exit 2026-12-05): the copies the -Os
@@ -625,6 +708,7 @@ fn tail(
     }
     crate::mulimage::widen_when_it_pays(module, &names, &mut selections, &from_module, request)?;
     crate::mulimage::expand_when_unshared(module, &names, &mut selections, &from_module, request)?;
+    crate::mulimage::call_when_it_pays(module, &names, &mut selections, &from_module, request)?;
     // Set once the selection is final: pricing the alternatives sees none.
     let file = request.debug.then(|| llrm_mir::dbgimport::unit_file(module)).flatten().map(|(name, _)| name);
     for (name, selection) in names.iter().zip(selections.iter_mut()) {
@@ -665,8 +749,36 @@ fn tail(
     // that beat the other compilers', and bytes come first (row
     // 6502-OUTLINE-CLOCKS). At -Os the pass is the pin's, bytes alone.
     let rate = (request.level == Level::O1).then(|| request.level.tuning().clocks_per_byte);
-    let text = if outlined { crate::outline::run_at(&text, rate) } else { text };
+    // at -O2 and -O3 a place outside every loop is given up by the share of the
+    // module's clocks its calls add against the share of its bytes they
+    // save (`[share.speed] outline`)
+    let share = matches!(request.level, Level::O2 | Level::O3).then(|| crate::routines::speed_share_percent("outline"));
+    let text = if outlined { crate::outline::run_priced(&text, rate, share) } else { text };
     let text = if request.level != Level::O0 { crate::peephole::after_outlining(&text) } else { text };
+    let text = match request.platform.static_zero_page {
+        0 => text,
+        // `LLRM_6502_STATIC_ZP=0` is the kill switch, for an A/B of one binary
+        budget
+            if whole_program(request)
+                && crate::copyprop::enabled(std::env::var_os("LLRM_6502_STATIC_ZP").as_deref()) =>
+        {
+            let first = u16::from(request.platform.imag_base)
+                + u16::from(request.platform.zero_page)
+                + u16::from(request.platform.scratch_zero_page);
+            crate::zerospill::static_cells_to_zero_page(&text, first, u16::from(budget))
+        }
+        _ => text,
+    };
+    // The bytes a trial prices are the finished text's: the outliner shares
+    // the repeated sequences of an unrolled body (static_pointers: 26 B of
+    // 174 modelled bytes, 16 of the rolled loop's 181), which the functions'
+    // own bytes leave out.
+    // `LLRM_6502_MODEL_BYTES` is the kill switch, for an A/B of one binary
+    if price && std::env::var_os("LLRM_6502_MODEL_BYTES").is_none() {
+        if let Ok(finished) = crate::timing::estimate(request.cpu, &text) {
+            bytes = i64::from(finished.bytes) + data_bytes(&data.0);
+        }
+    }
     Ok(Assembled { text: equates(&request.platform) + &files + &text + &data.0, clocks, bytes, functions })
 }
 

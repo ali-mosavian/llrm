@@ -76,6 +76,7 @@
 pub mod adce;
 pub mod aggressive_instcombine;
 pub mod algebraic;
+pub mod alwaysinline;
 pub mod alwaysundef;
 pub mod argpromotion;
 #[cfg(test)]
@@ -107,6 +108,7 @@ pub mod cgpswitch;
 pub mod cmpopt;
 #[cfg(test)]
 mod codegen_slots_tests;
+pub(crate) mod cold_chrec;
 pub mod combine;
 pub mod combine_abs;
 pub mod combine_add_idioms;
@@ -435,6 +437,10 @@ pub mod simplifylibcalls;
 pub mod sinkcast;
 pub mod sinkcommon;
 pub mod slpcompares;
+pub mod slpgather;
+pub mod slpinsert;
+pub mod slpphi;
+pub mod slpschedule;
 pub mod slpreduction;
 pub mod slptree;
 pub mod slpvectorize;
