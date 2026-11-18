@@ -30,6 +30,7 @@ use std::collections::HashSet;
 use llrm_analysis::memory::Unit as MemUnit;
 use llrm_mir::context::{ConstantKind, Context};
 use llrm_mir::datalayout::DataLayout;
+use llrm_mir::dense::IdSet;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
 use llrm_mir::opcode::{BinaryOp, CastOp, Opcode};
 use llrm_mir::passes::{Declared, Outer};
@@ -234,7 +235,7 @@ fn reaching(
 ) -> Vec<Reaching> {
     let mut values = Vec::new();
     let mut nodes = vec![phi];
-    let mut visited: HashSet<InstId> = HashSet::new();
+    let mut visited: IdSet<InstId> = IdSet::new();
     while let Some(node) = nodes.pop() {
         if !visited.insert(node) {
             continue;
@@ -283,7 +284,7 @@ fn incoming(
     context: &Context,
     function: &Function,
     block: BlockId,
-    visited: &HashSet<InstId>,
+    visited: &IdSet<InstId>,
 ) -> Vec<Seed> {
     let mut seeds = Vec::new();
     for inst in function.iter_block(block) {
@@ -563,7 +564,7 @@ pub(crate) fn run_function(
 ) -> bool {
     let mut changed = false;
     for block in function.layout().to_vec() {
-        let mut visited: HashSet<InstId> = HashSet::new();
+        let mut visited: IdSet<InstId> = IdSet::new();
         let mut session = Session::new(context, layout, declared, outer, tti, block, Roots::Phis);
         loop {
             let mut seeds = incoming(session.context, function, block, &visited);

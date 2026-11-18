@@ -24,8 +24,9 @@
 //! `slptree`.
 
 use std::cmp::Reverse;
-use std::collections::{BinaryHeap, HashMap, HashSet};
+use std::collections::{BinaryHeap, HashMap};
 
+use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
 use llrm_mir::opcode::Opcode;
@@ -35,7 +36,7 @@ use llrm_mir::opcode::Opcode;
 pub(crate) fn is_pure(
     function: &Function,
     inst: InstId,
-    pure_calls: &HashSet<InstId>,
+    pure_calls: &IdSet<InstId>,
 ) -> bool {
     match function.instruction(inst).opcode {
         Opcode::Binary(op) => !matches!(
@@ -90,7 +91,7 @@ fn reads(
 fn memory_edges(
     function: &Function,
     insts: &[InstId],
-    pure_calls: &HashSet<InstId>,
+    pure_calls: &IdSet<InstId>,
     at: &dyn Fn(InstId) -> usize,
 ) -> Vec<(usize, usize)> {
     let mut edges = Vec::new();
@@ -163,7 +164,7 @@ pub(crate) fn acyclic(
     function: &Function,
     block: BlockId,
     bundles: &[(Vec<InstId>, Vec<InstId>)],
-    pure_calls: &HashSet<InstId>,
+    pure_calls: &IdSet<InstId>,
 ) -> bool {
     let insts: Vec<InstId> = function
         .iter_block(block)
@@ -171,7 +172,7 @@ pub(crate) fn acyclic(
             function.instruction(*inst).opcode != Opcode::Phi && !function.instruction(*inst).opcode.is_terminator()
         })
         .collect();
-    let mut node_of: HashMap<InstId, usize> = HashMap::new();
+    let mut node_of: IdMap<InstId, usize> = IdMap::new();
     for (at, inst) in insts.iter().enumerate() {
         node_of.insert(*inst, at);
     }
@@ -217,8 +218,8 @@ pub(crate) fn acyclic(
 pub(crate) fn schedule(
     function: &mut Function,
     block: BlockId,
-    pure_calls: &HashSet<InstId>,
-    original: &HashMap<InstId, usize>,
+    pure_calls: &IdSet<InstId>,
+    original: &IdMap<InstId, usize>,
 ) -> bool {
     let Some(terminator) = function.terminator(block) else { return false };
     let insts: Vec<InstId> = function
@@ -226,7 +227,7 @@ pub(crate) fn schedule(
         .filter(|inst| function.instruction(*inst).opcode != Opcode::Phi && *inst != terminator)
         .collect();
     // An instruction made for the tree takes the place of the one before it.
-    let mut key: HashMap<InstId, (usize, usize)> = HashMap::new();
+    let mut key: IdMap<InstId, (usize, usize)> = IdMap::new();
     let mut inherited = 0usize;
     let mut sequence = 0usize;
     for inst in &insts {
@@ -242,7 +243,7 @@ pub(crate) fn schedule(
             }
         }
     }
-    let node_of: HashMap<InstId, usize> = insts.iter().enumerate().map(|(at, inst)| (*inst, at)).collect();
+    let node_of: IdMap<InstId, usize> = insts.iter().enumerate().map(|(at, inst)| (*inst, at)).collect();
     let mut edges: Vec<(usize, usize)> = Vec::new();
     for inst in &insts {
         let to = node_of[inst];

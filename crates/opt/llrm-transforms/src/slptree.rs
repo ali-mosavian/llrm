@@ -47,7 +47,7 @@ use std::collections::HashMap;
 use llrm_analysis::memory::{MemRef, Unit as MemUnit};
 use llrm_analysis::scev::{Cx, ScalarEvolution};
 use llrm_mir::context::{Constant, ConstantKind, Context};
-use llrm_mir::dense::IdMap;
+use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::edit::Position;
 use llrm_mir::intrinsics::Intrinsic;
 use llrm_mir::loopinfo::Loop;
@@ -130,7 +130,7 @@ pub(crate) struct Tree {
     entries: Vec<Entry>,
     block: BlockId,
     /// The calls of the block that are pure computations (`llvm.fmuladd`).
-    pure_calls: std::collections::HashSet<InstId>,
+    pure_calls: IdSet<InstId>,
 }
 
 #[derive(Clone, Copy)]
@@ -1062,7 +1062,7 @@ pub(crate) fn try_phis(
         );
         return None;
     }
-    let pure_calls: std::collections::HashSet<InstId> = function
+    let pure_calls: IdSet<InstId> = function
         .iter_block(block)
         .filter(|inst| {
             llrm_mir::memory::callee(unit.context, function, *inst)
@@ -1147,7 +1147,7 @@ pub(crate) fn try_inserts(
         llrm_support::debug!("slp", "insert tree x{}: no tree", inserts.len());
         return None;
     }
-    let pure_calls: std::collections::HashSet<InstId> = function
+    let pure_calls: IdSet<InstId> = function
         .iter_block(block)
         .filter(|inst| {
             llrm_mir::memory::callee(unit.context, function, *inst)
@@ -2184,7 +2184,7 @@ fn reschedule(
                 |inst| matches!(function.instruction(*inst).opcode, Opcode::Call(_)) && !position.contains_key(inst),
             ),
     );
-    let original: std::collections::HashMap<InstId, usize> =
+    let original: IdMap<InstId, usize> =
         function.iter_block(home).filter_map(|inst| position.get(&inst).map(|at| (inst, *at))).collect();
     let scheduled = crate::slpschedule::schedule(function, home, &pure_calls, &original);
     debug_assert!(scheduled, "a checked tree is schedulable");

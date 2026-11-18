@@ -22,10 +22,9 @@
 //! # Used by
 //! `slpvectorize`, `slptree`.
 
-use std::collections::HashSet;
-
 use llrm_mir::context::{ConstantKind, Context};
 use llrm_mir::datalayout::DataLayout;
+use llrm_mir::dense::IdSet;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
 use llrm_mir::opcode::Opcode;
 use llrm_mir::passes::{Declared, Outer};
@@ -633,7 +632,7 @@ fn vectorize_inserts(
     group: &[InstId],
 ) -> bool {
     let mut changed = false;
-    let mut tried: HashSet<InstId> = HashSet::new();
+    let mut tried: IdSet<InstId> = IdSet::new();
     for last in group.iter().rev() {
         if Session::deleted_inst(function, *last) || !tried.insert(*last) {
             continue;
