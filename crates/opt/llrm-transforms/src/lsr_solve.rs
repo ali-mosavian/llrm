@@ -343,14 +343,20 @@ impl Collection<'_, '_> {
             && solution_cost.c.insns >= self.baseline_cost.c.insns + 2;
         // DEVIATE LU15: a loop with an address keeps the solution that
         // reduces it, where the target says so.
-        let spared =
-            self.tti.lsr_dropped_solution_spares_addresses() && self.uses.iter().any(|u| u.kind == Kind::Address);
+        // DEVIATE LU32: not where the rewrite makes an outer loop carry more
+        // induction variables.
+        let spared = self.tti.lsr_dropped_solution_spares_addresses()
+            && self.uses.iter().any(|u| u.kind == Kind::Address)
+            && solution_cost.outer_phis == 0;
         // DEVIATE LSR-SPILL-PRICE: a loop whose other values fill the
         // registers keeps its pressure in the cost (no search with it cut), and
         // a rewrite that does not rate better than the loop as written is
         // dropped: each register it adds is a spill the rating cannot tell
         // apart (gcc's ivopts, `estimate_reg_pressure_cost`).
-        let saturated_tie = self.spills_are_priced()
+        let steps_by_register = self.tti.lsr_register_step_loses_a_tie_above().is_some_and(|limit| {
+            self.baseline_cost.variable_steps > 0 && self.baseline_cost.c.num_regs + self.other_register_units > limit
+        });
+        let saturated_tie = (self.spills_are_priced() || steps_by_register)
             && self.uses.iter().any(|u| u.kind == Kind::Address)
             && !solution_cost.is_less(self.tti, &self.baseline_cost);
         if saturated_tie

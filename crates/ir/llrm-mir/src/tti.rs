@@ -1207,6 +1207,14 @@ pub trait Tti {
         None
     }
 
+    /// DEVIATE INLINE-FRAME: the code-size guard counts the frame a caller
+    /// with none builds for the callee's static allocas where the callee
+    /// stays (the pin's cost has no frame term). False: the frame is taken to
+    /// move, as before.
+    fn inline_callee_that_stays_adds_a_caller_frame(&self) -> bool {
+        false
+    }
+
     /// What building and tearing down the callee's frame costs in `kind`,
     /// once per call executed. Inlining removes it from the callee, which then
     /// stays or dies: in bytes it is saved once, when the callee dies, and
@@ -2718,6 +2726,14 @@ pub trait Tti {
         key(a) < key(b)
     }
 
+    /// DEVIATE LSR-TIE: a loop with an address that LSR rates no better than
+    /// the loop as written is left as written where a recurrence steps by a
+    /// register and the loop's values number more than this (the pin
+    /// rewrites on a tie). None: the pin's.
+    fn lsr_register_step_loses_a_tie_above(&self) -> Option<u32> {
+        None
+    }
+
     /// DEVIATE LSR-SIZE (owner w12, exit 2026-11-24): LSR ranks formulae by
     /// the bytes of this table first when the function is built for size;
     /// none is the pin's order at every level.
@@ -3404,6 +3420,17 @@ pub trait Tti {
     /// itself. Without it an outer loop's reduction (LSR-OUTER) rates every
     /// formula naming the inner loop's narrowed counter a loser.
     fn lsr_extension_of_phi_exists(&self) -> bool {
+        false
+    }
+
+    /// DEVIATE LU32 (`lsr_use.rs`): an addrec of another loop that no phi
+    /// carries and that has several recurrence levels (`{a,+,b,+,c}`, a squared
+    /// counter) is expanded by one phi a level in that loop, so the rating
+    /// counts a register for each; the pin counts one. Otherwise `i * i`
+    /// feeding an inner loop's start becomes a quadratic pair of induction
+    /// variables that an outer loop holding its own counter, sum and bound
+    /// spills.
+    fn lsr_outer_addrec_regs_per_level(&self) -> bool {
         false
     }
 

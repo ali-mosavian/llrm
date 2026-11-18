@@ -183,8 +183,7 @@ fn movable(
                         | Opcode::Invoke(_)
                         | Opcode::Atomic(_)
                         | Opcode::VaArg
-                )
-                    || separation.clear(function, inst)
+                ) || separation.clear(function, inst)
             },
         )
 }
@@ -248,6 +247,9 @@ fn run_function(
     outer: &Outer,
     tti: &dyn Tti,
 ) -> bool {
+    // `vectorizeChainsInBlock` looks at the phis before the stores.
+    let phis = crate::slpphi::run_function(context, layout, declared, function, outer, tti);
+    let inserts = crate::slpinsert::run_function(context, layout, declared, function, outer, tti);
     let mut plan: Vec<(TypeId, Vec<Seed>)> = Vec::new();
     {
         let unit = MemUnit::within(context, layout, function, outer);
@@ -286,7 +288,7 @@ fn run_function(
     for (ty, window) in &plan {
         vectorize(context, function, *ty, window);
     }
-    let mut changed = !plan.is_empty();
+    let mut changed = phis || inserts || !plan.is_empty();
     // One tree at a time, the function read again after each.
     while let Some((tree, align)) = next_tree(context, layout, function, outer, tti) {
         crate::slptree::emit(context, layout, declared, function, &tree, align);
