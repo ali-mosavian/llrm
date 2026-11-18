@@ -20,8 +20,9 @@ fn compiled(
     text(ir, "clear", 0, &Request::new(level)).unwrap_or_else(|why| panic!("{why}"))
 }
 
-/// pattern_fill -Os called `__memseta` for its two constant clears: 10 B a site and a 21 B routine linked for them,
-/// against 13 B a site for `ld (hl), v; ld e, l; ld d, h; inc de; ld bc, n - 1; ldir` and no routine (459 B against
+/// pattern_fill -Os called `__memseta` for its two constant clears: 10 B a site
+/// and a 21 B routine linked for them, against 13 B a site for `ld (hl), v; ld
+/// e, l; ld d, h; inc de; ld bc, n - 1; ldir` and no routine (459 B against
 /// 443, SDCC 440).
 #[test]
 fn constant_fills_are_inline_ldir_where_no_other_site_needs_the_routine() {
@@ -32,15 +33,15 @@ fn constant_fills_are_inline_ldir_where_no_other_site_needs_the_routine() {
     }
 }
 
-/// A fill of a variable count links `__memseta` anyway: the constant site is then 3 B smaller as the call.
+/// Enough fills of a variable count keep `__memseta` linked (an inline
+/// count-tested fill is 16 B a site where the call is 7 B and the routine 22 B
+/// once), and the constant site is then 3 B smaller as the call. One variable
+/// fill no longer does: it is inline too (`memset_variable.rs`).
 #[test]
 fn a_constant_fill_stays_a_call_where_the_routine_is_linked_anyway() {
-    let ir = format!(
-        "{HEADER}define void @any(ptr %p, i16 %n) {{\n\
-           call void @llvm.memset.p0.i16(ptr %p, i8 0, i16 %n, i1 false)\n\
-           ret void\n\
-         }}\n"
-    );
+    let fills: String =
+        (0..5).map(|at| format!("  call void @llvm.memset.p0.i16(ptr %p, i8 {at}, i16 %n, i1 false)\n")).collect();
+    let ir = format!("{HEADER}define void @any(ptr %p, i16 %n) {{\n{fills}  ret void\n}}\n");
     let out = compiled(&ir, Level::Os);
     assert!(out.contains("__memseta") && !out.contains("ldir"), "{out}");
 }
