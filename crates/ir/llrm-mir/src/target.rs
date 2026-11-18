@@ -442,6 +442,13 @@ pub struct Tuning {
     /// run time (`loopunrollpass::recurrence`); the pin's `UP.Runtime` asks
     /// nothing of the loop. false: the pin's.
     pub unroll_recurrence_veto: bool,
+    /// DEVIATE BACKTHREAD-REL (owner llrm-target-x86-m64-b, exit 2026-12-15):
+    /// backward threading also reads the compares of one pair of values as
+    /// relations (`a < b` taken: `a <= b` taken), and runs before the first
+    /// SimplifyCFG that makes selects of the branches
+    /// (`backwardthreading.rs`). The pin has neither; gcc's `threadfull1` and
+    /// `vrp1` do both. false: the pin's pipeline.
+    pub threads_by_relation: bool,
     /// DEVIATE SPILL-FOLD (owner x86-m16, exit 2026-11-29): the clocks a
     /// spilled value costs where its references fold into memory operands,
     /// which `tryRegionSplit` weighs against the split's copies. The pin
@@ -475,6 +482,11 @@ pub struct Tuning {
     /// `getMinimumJumpTableDensity`, in percent, at every level; none: the
     /// pin's 10 (40 when tuned for size).
     pub min_jump_table_density: Option<u64>,
+    /// DEVIATE LP1-FP (owner x86-m32, exit 2026-11-30): the float registers
+    /// LICM may fill with hoisted float loads and GVN with float loads it
+    /// carries around a loop (`Tti::licm_float_register_limit`); none: both
+    /// do every one, as the pin.
+    pub licm_float_register_limit: Option<u32>,
     /// DEVIATE SWITCH-SIZE-RATIO (owner x86-m32, exit 2026-11-30): GCC's
     /// `jump-table-max-growth-ratio-for-size`, in percent: tuned for size, a
     /// jump table's range may be at most this share of the compares its
@@ -877,12 +889,14 @@ impl Tuning {
         carry_slot_indexes: true,
         address_reference_milliweight: 1000,
         unroll_recurrence_veto: false,
+        threads_by_relation: false,
         spill_fold: None,
         unswitch_threshold: None,
         inline_threshold: None,
         cold_site_ignores_sinks: false,
         read_only_in_code: false,
         min_jump_table_density: None,
+        licm_float_register_limit: None,
         jump_table_size_growth_ratio: None,
         split_merged_conditions: false,
         merged_condition_clocks: 0,

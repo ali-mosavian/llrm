@@ -13,9 +13,8 @@ use llrm_m68k::driver::{Level, assembly, cpu_of};
 mod support;
 
 fn ir() -> String {
-    let mut text = String::from(
-        "target datalayout = \"E-m:e-p:32:16:32-i8:8:8-i16:16:16-i32:16:32-n8:16:32-a:0:16-S16\"\n",
-    );
+    let mut text =
+        String::from("target datalayout = \"E-m:e-p:32:16:32-i8:8:8-i16:16:16-i32:16:32-n8:16:32-a:0:16-S16\"\n");
     for (name, op) in [("srl", "lshr"), ("shl", "shl"), ("sra", "ashr")] {
         for n in 16..32 {
             text += &format!("define i32 @{name}{n}(i32 %x) {{\n  %r = {op} i32 %x, {n}\n  ret i32 %r\n}}\n");
@@ -54,7 +53,8 @@ fn every_count_and_edge_value_computes_what_c_computes_when_run() {
         command
     };
     for level in [Level::O1, Level::O2, Level::O3, Level::Os] {
-        let mut text = assembly(&ir(), cpu_of("68000").unwrap(), level).unwrap_or_else(|why| panic!("{level:?}: {why}"));
+        let mut text =
+            assembly(&ir(), cpu_of("68000").unwrap(), level).unwrap_or_else(|why| panic!("{level:?}: {why}"));
         for name in ["srl", "shl", "sra"] {
             for n in 16..32 {
                 text = text.replace(&format!("{name}{n}:"), &format!(".globl {name}{n}\n{name}{n}:"));
@@ -77,4 +77,22 @@ fn every_count_and_edge_value_computes_what_c_computes_when_run() {
         }
         assert_eq!(code, Some(0), "{level:?}: wrong result (1+k srl, 17+k shl, 33+k sra, count 16+k)");
     }
+}
+
+/// `x >> 23` in the entry block and `x >> 31` in a block that is not its
+/// successor: the entry's `swap` was shared (`MachineCSE` did not know `SWAP`
+/// is `isAsCheapAsAMove`), its range ran across the function, and the second
+/// callee-saved register it forced cost every call 12 more clocks, the 1,632
+/// of 3,000 `fix_si` vectors that return early included.
+#[test]
+fn a_swap_is_not_shared_into_a_block_that_does_not_follow_it() {
+    let ir = "target datalayout = \"E-m:e-p:32:16:32-i8:8:8-i16:16:16-i32:16:32-n8:16:32-a:0:16-S16\"\n\
+define i32 @f(i32 %x) {\nentry:\n  %v2 = lshr i32 %x, 23\n  %v3 = and i32 %v2, 255\n  %v4 = icmp samesign ult i32 %v3, 127\n  br i1 %v4, label %out, label %mid\n\
+mid:\n  %v5 = icmp samesign ugt i32 %v3, 157\n  br i1 %v5, label %sat, label %body\n\
+sat:\n  %v8 = icmp sgt i32 %x, -1\n  %v9 = select i1 %v8, i32 2147483647, i32 -2147483648\n  br label %out\n\
+body:\n  %v11 = shl i32 %x, 8\n  %v12 = or i32 %v11, -2147483648\n  %v13 = sub nuw nsw i32 158, %v3\n  %v14 = lshr i32 %v12, %v13\n  %v15 = sub nsw i32 0, %v14\n  %v16 = icmp slt i32 %x, 0\n  %v17 = select i1 %v16, i32 %v15, i32 %v14\n  br label %out\n\
+out:\n  %v19 = phi i32 [ %v17, %body ], [ %v9, %sat ], [ 0, %entry ]\n  ret i32 %v19\n}\n";
+    let text = assembly(ir, cpu_of("68000").unwrap(), Level::O2).unwrap();
+    let saved = text.lines().filter(|line| line.contains("-(%sp)")).count();
+    assert_eq!(saved, 1, "one callee-saved register, not two\n{text}");
 }
