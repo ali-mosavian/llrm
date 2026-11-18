@@ -267,34 +267,42 @@ pub fn assembly(
     request: &Request,
 ) -> Result<String, String> {
     llrm_transforms::trial::take_speed_unrolls();
-    let kept = assembly_trials(text, request)?;
-    speed_unroll_trial(kept, text, request)
+    let built = program(text, request)?;
+    let made = llrm_transforms::trial::take_speed_unrolls().made;
+    let size = instructions(&built);
+    let kept = assembly_trials(built, text, request)?;
+    speed_unroll_trial(kept, made, size, text, request)
 }
 
 fn assembly_trials(
+    built: Program,
     text: &str,
     request: &Request,
 ) -> Result<String, String> {
-    let built = program(text, request)?;
     let (built, inlined, assembled, joint) = trial_inlined(built, text, request)?;
     llrm_transforms::trial::with_inlined(&inlined, || trial_unrolled(built, assembled, joint, text, request))
 }
 
 /// DEVIATE UNROLL-SPEED-TRIAL (owner 6502, exit 2026-11-24; the z80's
 /// `compile::effective`): at -O2 and -O3 a module whose mid-end made a full
-/// unroll that `NoGrow` would not (`take_speed_unrolls`) is compiled again
-/// with only the unrolls that add no bytes, and that text is kept if it is
-/// fewer bytes. The pin's early unroll takes a loop of an inlinable callee
-/// unpriced, and the inliner then declines the body it made (memmove_overlap
-/// -O3: `fill`, 32 trips, 14 B rolled, 161 B unrolled). Only a module with
-/// such an unroll is compiled twice.
+/// unroll that `NoGrow` would not (`made`) is compiled again with only the
+/// unrolls that add no bytes, and that text is kept if it is fewer bytes. The
+/// pin's early unroll takes a loop of an inlinable callee unpriced, and the
+/// inliner then declines the body it made (memmove_overlap -O3: `fill`, 32
+/// trips, 14 B rolled, 161 B unrolled).
+///
+/// Compile time: only a module with such an unroll runs the second mid-end,
+/// and its backend runs only if that mid-end has fewer instructions than the
+/// kept one (`size`): a variant with as many or more cannot be fewer bytes
+/// (write_through_parameter's folded 43 B against 249 B).
 fn speed_unroll_trial(
     kept: String,
+    made: usize,
+    size: usize,
     text: &str,
     request: &Request,
 ) -> Result<String, String> {
-    use llrm_transforms::trial::{SpeedUnroll, take_speed_unrolls, with_speed_unroll};
-    let made = take_speed_unrolls().made;
+    use llrm_transforms::trial::{SpeedUnroll, with_speed_unroll};
     let tried = matches!(request.level, Level::O2 | Level::O3)
         && made > 0
         && machine().tti().is_some_and(|tti| tti.unroll_speed_trial())
@@ -302,12 +310,29 @@ fn speed_unroll_trial(
     if !tried {
         return Ok(kept);
     }
-    let Ok(other) = with_speed_unroll(Some(SpeedUnroll::NoGrow), || assembly_trials(text, request)) else {
+    let debug = std::env::var_os("LLRM_DEBUG_TRIAL").is_some();
+    let variant = |text: &str| -> Result<Option<String>, String> {
+        let built = program(text, request)?;
+        if debug {
+            eprintln!("trial speed unroll: {} instructions against {size}", instructions(&built));
+        }
+        if instructions(&built) >= size {
+            if debug {
+                eprintln!(
+                    "trial speed unroll: {made} unrolls; {} instructions against {size}: not tried",
+                    instructions(&built)
+                );
+            }
+            return Ok(None);
+        }
+        tail(built, request, false, false).map(|done| Some(done.text))
+    };
+    let Ok(Some(other)) = with_speed_unroll(Some(SpeedUnroll::NoGrow), || variant(text)) else {
         return Ok(kept);
     };
     let bytes = |assembly: &str| -> Result<i64, String> { image_bytes_of(assembly, request) };
     let (kept_bytes, other_bytes) = (bytes(&kept)?, bytes(&other)?);
-    if std::env::var_os("LLRM_DEBUG_TRIAL").is_some() {
+    if debug {
         eprintln!("trial speed unroll: {made} unrolls; {other_bytes} B no-growth against {kept_bytes} B kept");
     }
     Ok(if other_bytes < kept_bytes { other } else { kept })
