@@ -22,6 +22,16 @@
 //!
 //! # Used by
 //! `slptree`.
+//!
+//! # Example
+//! Once a tree is vectorized, the vector of each bundle is placed where the last scalar of its bundle stood, and what waits on it follows.
+//!
+//! ```text
+//! store float %f0 / %f1 / %f2 / %f3   (four scalar stores, in this order)
+//!         =>
+//! the <4 x float> chain is emitted in the place of the last scalar it
+//! replaces; the one vector store stands at the last scalar store
+//! ```
 
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap};

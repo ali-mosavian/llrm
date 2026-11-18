@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/objbuild.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/objbuild.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/objbuild.rs sha256:c21419ae2928fae719c9acaec2933195fa2d4b0b9b6387987eb14cff4d01dd71 -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/objbuild.rs sha256:7b3da5a9cf8b987d779350455942a33574a2c9ba0129612fdee7b81ceeed872a -->
 
 # objbuild
 
@@ -33,13 +33,13 @@ tuned for size, `_trampolined` follows it: a conditional jump still long
 at the price of a taken `jmp` (Watcom's `SetBranches`), and the fixed point
 runs again.
 
-A call to a procedure of the same segment is a relative displacement filled
-in; any other is a relocation. `object_of` turns what the segments hold
-into `llrm_object::Object`: a reference to a symbol the module defines
-becomes a relocation against that symbol with the addend in the code (as
-jwasm writes it), anything else is an undefined symbol, and a reference to
-a name neither defined nor declared is an error. 16-bit data segments of
-the near kind join the `DGROUP` group.
+A call to a procedure of the same segment that no other module can replace
+is a relative displacement filled in; any other is a relocation. `object_of`
+turns what the segments hold into `llrm_object::Object`: a reference to a
+symbol the module defines becomes a relocation against that symbol with the
+addend in the code (as jwasm writes it), anything else is an undefined
+symbol, and a reference to a name neither defined nor declared is an error.
+16-bit data segments of the near kind join the `DGROUP` group.
 
 Code is padded as MC does: an `Align` item (a block's `align` and
 `max_skip`) pads with `nops` (`writeNopData`), and each function not tuned
@@ -49,6 +49,13 @@ OMF and COFF, ELF's `.prefalign` (no more than the body fills).
 `written_in` hands the object to the writer crate of the target's format
 (OMF, ELF32/64, COFF32/64, Mach-O x86-64), or refuses a pair none writes.
 
+DEVIATE 1: the pin's MC leaves a call or jump to every global to the linker,
+at `-fPIE` and `-fno-pic` too (`R_X86_64_PLT32`, 5 bytes). Ours binds a
+definition no other module can replace (`masm::Module::preemptible` lists
+the ones that can: weak, and default-visibility at `-fPIC`), as gcc and gas
+do for an executable: `jmp f` is 2 bytes. Bar: gcc. Owner: x86-m64; leaves
+with the pin's behaviour or when the bar changes.
+
 ## Example
 No honest example: its output is the bytes and relocations of an object, not
 LIR. `-S` prints the items it encodes (see `masm`); `tests` in this file
@@ -56,7 +63,7 @@ assert the bytes.
 
 ## Runs
 Once per module, after `assemble` and `data layout` have produced the masm
-module, when a frontend writes the object (`llrm-c`'s `compile.rs` calls
+module, when a frontend writes the object (`llrm-cc`'s `compile.rs` calls
 `written_in`). The BASIC driver (`driver/basic.rs`) reuses `_data`,
 `_code_by` and `object_of` with its own listing and header.
 

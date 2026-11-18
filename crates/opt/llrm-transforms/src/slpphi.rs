@@ -23,6 +23,16 @@
 //!
 //! # Used by
 //! `slpvectorize`.
+//!
+//! # Example
+//! Sixteen loop-carried doubles in a loop header become `<2 x double>` phis when the trees of their values pay (the nbody test).
+//!
+//! ```text
+//! %a = phi double [ 0.0, %entry ], [ %a1, %loop ]
+//! %b = phi double [ 0.0, %entry ], [ %b1, %loop ]
+//!         =>
+//! %v = phi <2 x double> [ zeroinitializer, %entry ], [ %v1, %loop ]
+//! ```
 
 use std::cmp::Ordering;
 use std::collections::HashSet;

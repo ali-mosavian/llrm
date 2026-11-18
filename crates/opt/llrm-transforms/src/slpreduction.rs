@@ -37,6 +37,16 @@
 //!
 //! # Used by
 //! `slpvectorize`.
+//!
+//! # Example
+//! Forty `sext i16` loads of consecutive cells, summed by a chain of `add i64`, become two vector loads and one reduction (the tile test).
+//!
+//! ```text
+//! %x0 = sext i16 (load [i]) to i64 ; ... x39, summed by add i64
+//!         =>
+//! load <32 x i16>, load <8 x i16>; the narrower is added into the low
+//! lanes of the wider; one @llvm.vector.reduce.add.v32i64 of the result
+//! ```
 
 use llrm_analysis::memory::{MemRef, Unit as MemUnit};
 use llrm_mir::context::{Constant, ConstantKind, Context};

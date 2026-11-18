@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/statustest.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/statustest.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/statustest.rs sha256:6052b7419bf714e1ab2d407e43b5125125c81ae9f59d893ef7f49b45287d2bd1 -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/statustest.rs sha256:bdc0b67b6b1f48d118033247b825fafda5c4f340811c960b0e629fa04ad3f4bc -->
 
 # statustest
 
@@ -19,7 +19,7 @@ share (`==` is `je` and `jnp`) stays.
 
 The test is one clock on a 486 (`test r8, imm`) against two for `sahf`, and
 two bytes longer: made where the target prices `sahf` above a register-
-immediate ALU operation, and not when optimizing for size.
+immediate ALU operation, and not where bytes are held (-O1, size).
 
 ## Example
 `fcomp; fnstsw ax; sahf; jbe L` (`x_ld_abs` -O1, 256 executions):

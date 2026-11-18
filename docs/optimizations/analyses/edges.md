@@ -1,5 +1,5 @@
-> Generated from the `//!` header of [`crates/opt/llrm-transforms/src/edges.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/edges.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/edges.rs sha256:105b474e143b4087c37fe2783d7fec3378ace5959110defe06507765c0a916e1 -->
+> Generated from the `//!` header of [`crates/opt/llrm-analysis/src/edges.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/edges.rs); edit the header, not this file.
+<!-- src: crates/opt/llrm-analysis/src/edges.rs sha256:105b474e143b4087c37fe2783d7fec3378ace5959110defe06507765c0a916e1 -->
 
 # edges
 
