@@ -48,6 +48,32 @@ b0:
     assert_eq!(after.matches("call fastcc i16 @work").count(), 2, "{after}");
 }
 
+/// CP-TAIL: a function that ends in a call whose arguments are its own stays
+/// caller-pop at -Os. As callee-pop its `ret N` cannot be a jump to a callee
+/// that does not pop, so the last call was made and cleaned up again:
+/// `twice` (`report(v); report(v);`, one dword) at m16 grew from 200 to 205 B.
+/// A function that does something after its last call, or whose last call
+/// takes more than it was given, has no jump to lose and keeps the pop.
+#[test]
+fn a_function_that_ends_in_a_sibling_call_keeps_the_caller_cleaning_at_size() {
+    let twice = |body: &str| {
+        format!(
+            "@g = global i32 0\ndeclare void @report(i32)\ndeclare void @report2(i32, i32)\n\
+             define internal void @twice(i32 %v) {{\nb0:\n{body}  ret void\n}}\n\
+             define void @f() {{\nb0:\n  call void @twice(i32 3)\n  call void @twice(i32 4)\n  ret void\n}}\n"
+        )
+    };
+    let sibling = run_for(&twice("  call void @report(i32 %v)\n  call void @report(i32 %v)\n"), true);
+    assert!(!sibling.contains("fastcc"), "{sibling}");
+    // The last call takes more than the function was given: no jump either way.
+    let wider = run_for(&twice("  call void @report(i32 %v)\n  call void @report2(i32 %v, i32 %v)\n"), true);
+    assert!(wider.contains("define internal fastcc void @twice"), "{wider}");
+    // The same function without a call at its end pops.
+    let plain =
+        run_for(&twice("  call void @report(i32 %v)\n  call void @report(i32 %v)\n  store i32 1, ptr @g\n"), true);
+    assert!(plain.contains("define internal fastcc void @twice"), "{plain}");
+}
+
 /// Where a caller outside the module's sight, or an indirect one, may reach it,
 /// the callee popping would unbalance that caller's stack: an external
 /// function, one whose address is stored or passed, one called with another
