@@ -73,6 +73,11 @@ class Model(unittest.TestCase):
         self.assertEqual(instructions, 2)
         self.assertLess(clocks_, 10)
 
+    def test_an_adr_to_an_address_no_symbol_covers_is_priced(self):
+        # gcc's `adr x0, 0x200158` (a literal in the same section) made llvm-mca refuse the block: jpeg_fixed and 13 more
+        # gcc/clang cells were dropped from the board for want of a price.
+        self.assertIsNotNone(clocks.mca_cycles(["adr x0, 0x200158", "add x0, x0, #1"], 1))
+
 
 if __name__ == "__main__":
     unittest.main()
