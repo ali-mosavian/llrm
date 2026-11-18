@@ -1699,6 +1699,17 @@ pub enum Inst {
         rm: Vreg,
         index: u8,
     },
+    /// `fmla d0, d1, v2.d[index]` (`FMLAv1i64_indexed`; `s` for `S4`,
+    /// `FMLAv1i32_indexed`): the scalar `rd` is read and written; `lanes` is
+    /// the arrangement of `rm`.
+    ScalarFmaLane {
+        op: VectorFma,
+        lanes: Arrangement,
+        rd: Vreg,
+        rn: Vreg,
+        rm: Vreg,
+        index: u8,
+    },
     /// `mov d0, v1.d[index]` (`DUPi64`; `s`, `h`, `b` for the others): one
     /// lane of `rn` as a scalar.
     VectorDupScalar {
