@@ -3,6 +3,8 @@
 
 usage: pressure_sets.py <X86GenRegisterInfoTargetDesc.inc> <x86.json> <registers.regs> [overlay]
 
+PRESSURE_CLASSES (default `int`) names the register-file classes whose registers count, `int,xmm` for x86-64.
+
 The optional overlay is a file of `set`/`class` lines appended after the pin's (m16's ADDR16).
 
 The .inc (from the pin's build) gives the pressure sets, their raw limits, the largest class
@@ -11,6 +13,7 @@ gives each class's registers. Only the classes with a register the target descri
 """
 
 import json
+import os
 import re
 import sys
 
@@ -48,10 +51,13 @@ def members_of(classes, dag):
 def main(inc_path, json_path, regs_path, overlay=None):
     inc = open(inc_path).read()
     classes = json.load(open(json_path))
+    # The register file's classes whose registers count: the integer ones, and with PRESSURE_CLASSES=int,xmm the SSE ones.
+    classes_kept = set(os.environ.get("PRESSURE_CLASSES", "int").split(","))
     visible = {
         line.split()[0].upper()
         for line in open(regs_path)
-        if line.strip() and not line.startswith("#") and not line.startswith("@") and "int" in line.split()[4].split(",")
+        if line.strip() and not line.startswith("#") and not line.startswith("@")
+        and set(line.split()[4].split(",")) & classes_kept
     }
 
     weights = [(int(a), int(b), n) for a, b, n in re.findall(r"\{(\d+), (\d+)\},\s*// (\w+)", table(inc, "RCWeightTable"))]

@@ -45,6 +45,10 @@ pub struct M64;
 static REGISTERS: LazyLock<std::sync::Arc<Vec<llrm_target::registers::Register>>> =
     LazyLock::new(|| llrm_target::registers::file(include_str!("registers.regs")).expect("registers.regs parses"));
 
+/// The pin's register pressure sets for the registers above: `pressure.sets`.
+static PRESSURE: LazyLock<llrm_target::pressure::PressureSets> =
+    LazyLock::new(|| llrm_target::pressure::parse(include_str!("pressure.sets")).expect("pressure.sets parses"));
+
 /// How flat operations are priced from the instruction forms: `opcosts.txt`.
 static OPCOSTS: LazyLock<llrm_target::opcosts::Description> = LazyLock::new(|| {
     llrm_target::opcosts::Description::parse(include_str!("opcosts.txt")).expect("opcosts.txt parses")
@@ -398,6 +402,23 @@ impl llrm_target::Target for M64 {
         OperationCosts { memset_store: 16, ext_tsp_for_size: true, ..OPCOSTS.operations(price, prefix) }
     }
 
+    /// The pressure sets of the pin's x86: one limit per set, the raw one for a
+    /// set whose largest class the table leaves out.
+    fn pressure(&self) -> Option<(&'static llrm_target::pressure::PressureSets, Vec<u32>)> {
+        Some((
+            M64::pressure_sets(),
+            (0..PRESSURE.sets.len())
+                .map(|set| {
+                    if PRESSURE.class(&PRESSURE.sets[set].largest).is_some() {
+                        M64::pressure_limit(set)
+                    } else {
+                        PRESSURE.sets[set].limit
+                    }
+                })
+                .collect(),
+        ))
+    }
+
     fn register_capacity(&self) -> i64 {
         llrm_target::registers::allocatable(&REGISTERS) as i64
     }
@@ -692,8 +713,46 @@ impl llrm_target::Target for M64 {
     }
 }
 
+impl M64 {
+    /// The pressure sets and classes of the pin's x86.
+    pub fn pressure_sets() -> &'static llrm_target::pressure::PressureSets {
+        &PRESSURE
+    }
+
+    /// The limit of pressure set `set` here (`computePSetLimit`): a register
+    /// may be allocated if its root is a general or an SSE register.
+    pub fn pressure_limit(set: usize) -> u32 {
+        PRESSURE.limit(set, |name| {
+            REGISTERS
+                .iter()
+                .find(|one| one.name == name)
+                .and_then(|one| REGISTERS.iter().find(|root| root.name == one.root))
+                .is_some_and(|root| root.is("gpr") || root.is("xmm"))
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    /// x86-64 had no pressure sets: `Target::pressure()` was `None`, so
+    /// MachineLICM hoisted vector constants into loops with no room and the
+    /// scheduler tracked nothing (sfm16_float_cmp reloaded 4 masks per trip).
+    /// The pin's VR128 holds the 16 xmm registers; set 35 (GR16) is 66 - 2 *
+    /// (34 - 14): 14 of the 16 general registers are free (rsp and rbp are
+    /// not).
+    #[test]
+    fn test_m64_has_pressure_sets_with_vr128() {
+        use llrm_target::Target;
+        let (sets, limits) = M64.pressure().expect("m64 has pressure sets");
+        assert_eq!(limits.len(), sets.sets.len());
+        // A 16-byte xmm value is limited to the 16 xmm registers.
+        let xmm: Vec<String> = (0..16).map(|n| format!("xmm{n}")).collect();
+        let names: Vec<&str> = xmm.iter().map(String::as_str).collect();
+        let class = sets.class_holding(&names).expect("xmm0-15 are held by a class");
+        assert_eq!(class.sets.iter().map(|&set| limits[set]).min(), Some(16), "{}: {:?}", class.name, class.sets);
+        assert_eq!(limits[35], 66 - 2 * (34 - 14));
+    }
+
     /// CARRY-SI: carrying the coalescer's slot indexes through the scheduler
     /// moved x86 cells worse at -O1 (2026-11-07), so m64 numbers the function
     /// afresh until it has priced them.
