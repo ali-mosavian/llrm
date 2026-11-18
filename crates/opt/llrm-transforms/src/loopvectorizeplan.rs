@@ -48,10 +48,12 @@
 //!   (LV-X3, 2026-11-20).
 //! - VP9 DEVIATE (owner arm64-vec, exit: the pin's -O2 cost model gains it, or
 //!   2026-12-31): a target's driver row may turn on gcc's
-//!   `vect-cost-model=very-cheap` at -O2 (`-fllrm-vect-very-cheap`): a loop
-//!   whose trip count VF x IC does not divide is not vectorized, as for
-//!   `optsize` (VP6), the pin's -O2 putting a scalar epilogue after it. gcc 15
-//!   does the same at -O2 and the code-size bar is its.
+//!   `vect-cost-model=very-cheap` at -O2 (`-fllrm-vect-very-cheap`): a loop of
+//!   an unknown trip count is planned only if VF x IC divides it, which nothing
+//!   says, so none is: no scalar epilogue, as for `optsize` (VP6), where the
+//!   pin's -O2 leaves one. A known trip count keeps the pin's plan: gcc
+//!   vectorizes those (particle -O2: 9,311 clocks vectorized, 73,733 with the
+//!   101 trips left scalar).
 //! - VP8 closed: the loop-control prices are the pin's. The scalar loop pays
 //!   its `add` and exit `icmp` (the phis, the branch and the address
 //!   computations are free at throughput), the vector loop its
@@ -169,8 +171,9 @@ pub struct LoopFacts {
     pub widest_induction_bits: u32,
     /// The function is `optsize` or `minsize` (VP6).
     pub opt_size: bool,
-    /// gcc's `--param vect-cost-model=very-cheap`: no scalar epilogue is
-    /// allowed, as at `optsize`, but the loop is priced for speed (VP9).
+    /// gcc's `--param vect-cost-model=very-cheap`: a loop of an unknown trip
+    /// count gets no scalar epilogue, as at `optsize`, but is priced for speed
+    /// (VP9).
     pub very_cheap: bool,
     /// `optsize` and the target prices a vector loop by size, outside work
     /// included (`Tti::vectorizes_size_priced`).
@@ -1055,7 +1058,9 @@ const TINY_TRIP_COUNT: u64 = 16;
 /// `CM_EpilogueNotAllowedOptSize` (L7076) and
 /// `CM_EpilogueNotAllowedLowTripLoop` (L7809).
 fn epilogue_allowed(facts: &LoopFacts) -> bool {
-    !facts.opt_size && !facts.very_cheap && !(facts.trip_count != 0 && facts.trip_count < TINY_TRIP_COUNT)
+    !facts.opt_size
+        && !(facts.very_cheap && facts.trip_count == 0)
+        && !(facts.trip_count != 0 && facts.trip_count < TINY_TRIP_COUNT)
 }
 
 /// [`choose`], then the epilogue policy: where none is allowed the plan must

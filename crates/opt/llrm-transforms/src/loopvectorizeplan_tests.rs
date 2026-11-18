@@ -119,20 +119,19 @@ fn no_epilogue_is_planned_where_the_pin_allows_none() {
     assert_eq!(plan(&tti, &size), Ok(Plan { vf: 8, ic: 1 }));
 }
 
-/// gcc's `vect-cost-model=very-cheap` (VP9): a loop with a scalar epilogue is
-/// not planned at -O2 either, one the factors divide is (IC 1, as where no
-/// epilogue is allowed).
+/// gcc's `vect-cost-model=very-cheap` (VP9): a loop of an unknown trip count
+/// is not planned at -O2 (no epilogue); a known count keeps the pin's plan,
+/// remainder and all (particle -O2: 101 trips, 8x the clocks left scalar).
 #[test]
-fn a_very_cheap_cost_model_plans_no_loop_with_an_epilogue() {
+fn a_very_cheap_cost_model_plans_no_loop_of_an_unknown_trip_count() {
     let tti = AArch64::of_cpu("generic").unwrap();
-    let mut cheap = facts(16, 1921, false);
+    let mut cheap = facts(16, 0, false);
     cheap.very_cheap = true;
-    for trips in [0, 1001, 1921] {
+    assert_eq!(plan(&tti, &cheap).unwrap_err().0, "A scalar epilogue would remain");
+    for trips in [101, 1001, 1920] {
         cheap.trip_count = trips;
-        assert_eq!(plan(&tti, &cheap).unwrap_err().0, "A scalar epilogue would remain", "trips {trips}");
+        assert_eq!(plan(&tti, &cheap), plan(&tti, &facts(16, trips, false)), "trips {trips}");
     }
-    cheap.trip_count = 1920;
-    assert_eq!(plan(&tti, &cheap), Ok(Plan { vf: 8, ic: 1 }));
 }
 
 /// Bandwidth maximization (`shouldMaximizeVectorBandwidth`) takes VF 8 for a
