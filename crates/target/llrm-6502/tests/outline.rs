@@ -248,3 +248,18 @@ fn a_run_outside_a_loop_is_outlined_where_its_bytes_are_a_larger_share_than_its_
     assert!(run_priced(&text, None, None).contains("jsr __outl_0"), "bytes alone outline them");
     assert!(!run_priced(&text, None, Some(1)).contains("__outl_"), "{}", run_priced(&text, None, Some(1)));
 }
+
+/// `word_compares` at -O2 on the 65C02 ran 97,736 clocks against 93,233: a
+/// 3-instruction run in a 14x14 loop was outlined for 4 bytes and added 12
+/// clocks a run. With a share a place in a loop is given up where its runs add
+/// a larger share of the module's clocks than its bytes save of the module's;
+/// without one (-Os) it is outlined.
+#[test]
+fn a_run_in_a_loop_is_given_up_where_its_clocks_are_a_larger_share_than_its_bytes() {
+    let copy = "  lda rc16\n  sta rc17\n";
+    // the moves run in the inner of two loops: each call is 12 clocks of a hot
+    // loop
+    let looped = probe(&format!("again:\nspin:\n{}  dec rc30\n  bne spin\n  dec rc31\n  bne again\n", copy.repeat(6)));
+    assert!(run_priced(&looped, None, None).contains("jsr __outl_0"), "bytes alone outline them");
+    assert!(!run_priced(&looped, None, Some(1)).contains("__outl_"), "{}", run_priced(&looped, None, Some(1)));
+}

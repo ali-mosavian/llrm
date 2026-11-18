@@ -76,7 +76,7 @@ pub fn run_at(
     run_priced(text, clocks_per_byte, None)
 }
 
-/// [`run_at`], and with a `share` (percent) a place outside every loop is given
+/// [`run_at`], and with a `share` (percent) a place is given
 /// up where the share of the module's clocks its calls add is more than
 /// `share` times the share of the module's bytes it saves (a call and its
 /// return add 12 clocks a run).
@@ -489,6 +489,14 @@ fn select(
             {
                 places.retain(|&place| weights[place] != 1);
             }
+            // and a place in a loop where its own runs add a larger share of
+            // the clocks than its bytes are of the module
+            let saved = candidate.bytes.saturating_sub(CALL) as u64;
+            places.retain(|&place| {
+                weights[place] == 1
+                    || u128::from(weights[place] * per_run) * u128::from(module_bytes)
+                        <= u128::from(percent) * u128::from(saved) * u128::from(module_clocks)
+            });
         }
         if places.len() < 2 || benefit(candidate.bytes, places.len(), candidate.tail) <= 0 {
             continue;
