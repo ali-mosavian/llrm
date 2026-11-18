@@ -256,3 +256,29 @@ pub fn mark_constant_fills(module: &mut Module) {
         }
     }
 }
+
+/// The functions with two or more direct calls to themselves, before the
+/// mid-end: tail-recursion elimination turns one of them into a loop that
+/// carries an accumulator and the argument across the other call, which the
+/// z80 often spills where the plain recursion pushes (fib 62 B against 31 B).
+/// Two calls keep the recursion's depth either way, so the loop's form may be
+/// priced against the plain one; a function with one call must stay a loop
+/// (`recdeep` runs 24350 deep).
+pub fn multi_recursive(module: &Module) -> Vec<String> {
+    module
+        .functions()
+        .filter(|(_, _, function)| !function.is_declaration())
+        .filter(|(_, global, function)| {
+            function
+                .walk()
+                .filter(|&(_, call)| {
+                    llrm_mir::memory::callee(&module.context, function, call)
+                        .and_then(|callee| module.globals.get(callee.0 as usize))
+                        .is_some_and(|callee| callee.name.as_deref() == global.name.as_deref())
+                })
+                .count()
+                >= 2
+        })
+        .filter_map(|(_, global, _)| global.name.owned())
+        .collect()
+}
