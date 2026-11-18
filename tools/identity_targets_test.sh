@@ -21,4 +21,12 @@ printf '#!/bin/sh\n[ -n "${LLRM_CLANG_M16:-}" ] || exit 1\nwhile [ $# -gt 1 ]; d
 chmod +x "$t/needs_fork"
 fork=$t/home/scratch/clang-by-sha/$(sed -n 2p "$root/toolchain/clang/pin" | cut -d' ' -f1)/bin; mkdir -p "$fork"; printf '#!/bin/sh\n' > "$fork/clang"; chmod +x "$fork/clang"
 (unset LLRM_CLANG_M16; HOME=$t/home; export HOME; run "$t/needs_fork" "$t/needs_fork" x86_16-dos O2 "$t/p.c") || { echo "FAIL: the pinned fork clang was not found"; exit 1; }
+
+# 36 of the 40 x86_64 "refused" programs were `// targets: dos|x86-m16`; os_*.c and bench_io.c failed on a missing llrm_os.h: a program its header excludes is n/a, the rest get the include dirs.
+printf '// targets: dos\nint main(void){return 0;}\n' > "$t/dos_only.c"
+printf '#!/bin/sh\necho "$@" >> "$ARGS_LOG"\nwhile [ $# -gt 1 ]; do [ "$1" = -o ] && echo x > "$2"; shift; done\n' > "$t/logs"; chmod +x "$t/logs"
+summary=$(ARGS_LOG=$t/args AB_ALLOW_ENV=ARGS_LOG "$root/tools/identity_targets.sh" "$t/logs" "$t/logs" x86_64-linux O2 "$t/p.c" "$t/dos_only.c" 2>&1 | tail -n 1)
+case $summary in *"same=1 diff=0 refused=0 status=0 na=1") ;; *) echo "FAIL: a DOS-only program was not n/a: $summary"; exit 1;; esac
+grep -q "dos_only" "$t/args" && { echo "FAIL: a DOS-only program was compiled"; exit 1; }
+grep -q -- "-I $root/runtime/shared/posix" "$t/args" || { echo "FAIL: the runtime include dirs were not given"; exit 1; }
 echo ok

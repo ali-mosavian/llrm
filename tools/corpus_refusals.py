@@ -35,7 +35,19 @@ def classify(target: str, source: str, compile_with, path: Path | None = None) -
     return ("refused", error[:160])
 
 
+def plan(target: str, path: Path) -> list[str] | None:
+    """The flags to compile `path` with on `target` (its first configuration plus the include dirs), None where its `// targets:` excludes it."""
+    source = path.read_text()
+    if not corpus_targets.applies(target, source, path):
+        return None
+    return [*own_flags((corpus_targets.flag_configurations(source) or [[]])[0]), *INCLUDES]
+
+
 def main(argv: list[str]) -> int:
+    if len(argv) == 4 and argv[1] == "--plan":  # --plan TARGET FILE.c: "n/a", or the flags one per line
+        flags = plan(argv[2], Path(argv[3]))
+        print("\n".join(["n/a"] if flags is None else flags))
+        return 0
     if len(argv) < 4:
         print("usage: corpus_refusals.py LLRM_CC TARGET LEVEL [-mXX...] -- FILE.c...", file=sys.stderr)
         return 2

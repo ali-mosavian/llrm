@@ -16,16 +16,20 @@ esac
 python3 "$root/tools/llrmbin.py" sides "$base" "$new" $same --target "$target" || exit 2  # prints cc + llc md5 per side; refuses one llc
 [ $# -gt 0 ] || set -- "$root"/tests/run/c/*.c
 out=$(mktemp -d); trap 'rm -rf "$out"' EXIT
-same=0; diff=0; refused=0; status=0
+same=0; diff=0; refused=0; status=0; na=0
 for f in "$@"; do
     [ -f "$f" ] || continue
-    LLRM_CC_TARGET=$target "$base" -c "-$level" "$f" -o "$out/a" > /dev/null 2>&1; a=$?
-    LLRM_CC_TARGET=$target "$new" -c "-$level" "$f" -o "$out/b" > /dev/null 2>&1; b=$?
+    # Each program is compiled as its own header says: a `// targets:` that excludes TARGET is n/a, not refused (36 of the 40 x86_64 "refusals" were DOS/m16 programs),
+    # and the runtime include dirs are given (llrm_os.h).
+    mapfile -t flags < <(python3 "$root/tools/corpus_refusals.py" --plan "$target" "$f")
+    [ "${flags[0]}" = "n/a" ] && { na=$((na+1)); continue; }
+    LLRM_CC_TARGET=$target "$base" -c "-$level" "${flags[@]}" "$f" -o "$out/a" > /dev/null 2>&1; a=$?
+    LLRM_CC_TARGET=$target "$new" -c "-$level" "${flags[@]}" "$f" -o "$out/b" > /dev/null 2>&1; b=$?
     if [ $a != $b ]; then status=$((status+1)); echo "STATUS $f"
     elif [ $a != 0 ]; then refused=$((refused+1))
     elif cmp -s "$out/a" "$out/b"; then same=$((same+1))
     else diff=$((diff+1)); echo "DIFF $f"; fi
     rm -f "$out/a" "$out/b"
 done
-echo "$target $level same=$same diff=$diff refused=$refused status=$status"
+echo "$target $level same=$same diff=$diff refused=$refused status=$status na=$na"
 [ $((same + diff)) -gt 0 ] && [ $diff = 0 ] && [ $status = 0 ]
