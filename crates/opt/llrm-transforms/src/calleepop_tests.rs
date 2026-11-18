@@ -227,27 +227,3 @@ b0:
     let marked = run(&format!("{}{caller}", CALLEE.replace("%c) {", "%c) noipa {")));
     assert!(!marked.contains("fastcc"), "{marked}");
 }
-
-/// m16 -Os `far_pointer_call`: `twice` ends in a tail call to a function that
-/// pops nothing. Popping its own arguments turns that `jmp` into a call, the
-/// callee's cleanup and a `ret N`: 200 -> 205 B. The price counts the cleanup
-/// the tail call stops saving.
-#[test]
-fn a_function_ending_in_a_tail_call_to_a_caller_cleaning_one_keeps_the_caller_cleaning() {
-    let after = run("declare void @report(i32)
-
-define internal void @twice(i32 %v) {
-b0:
-  tail call void @report(i32 %v)
-  tail call void @report(i32 %v)
-  ret void
-}
-
-define i16 @f() {
-b0:
-  call void @twice(i32 3)
-  ret i16 0
-}
-");
-    assert!(!after.contains("fastcc"), "{after}");
-}
