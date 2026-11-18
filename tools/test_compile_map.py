@@ -133,3 +133,25 @@ def test_the_report_states_the_host_load_it_ran_under():
     assert "load average at the run (1/5/15 min): 75.1 / 70.2 / 60.0" in m.show(result)
     del result["load_average"]
     assert "load average: not recorded" in m.show(result)
+
+
+def test_a_failed_compile_is_not_a_map():
+    """llrm-cc ran with `PATH` alone, exited 1 on the system clang's datalayout, and the map printed 10.8 M for the loader, rows 0.0%,
+    "llrm/gcc 0.0x": a number to quote from a compile that did not happen."""
+    import pytest
+
+    with pytest.raises(SystemExit) as stop:
+        m.checked(["python3", "-c", "import sys; sys.stderr.write('llrm-cc: clang datalayout differs\\n'); sys.exit(1)"])
+    assert "nothing to measure" in str(stop.value) and "datalayout differs" in str(stop.value)
+
+
+def test_llrm_cc_gets_the_pinned_clang_and_the_target(monkeypatch):
+    monkeypatch.setattr(m.pin_clang, "path", lambda: "/pin/clang")
+    env = m.llrm_environment()
+    assert env["LLRM_PIN_CLANG"] == "/pin/clang" and env["LLRM_CC_TARGET"] == "x86_32-linux"
+
+
+def test_llrm_cc_gets_the_keywords_defined_away_as_gcc_and_clang_do():
+    """`void far *` in qcshared.h stopped llrm-cc's clang (error: field has incomplete type 'void'): only gcc and clang were given `-Dfar=`."""
+    command = m.llrm_command("/x/llrm-cc", "-O2", ["-S", "-o", "/o"], "/src/d_faces.c")
+    assert "-Dfar=" in command and "-Dhuge=" in command and "-march=i486" in command and command[-1] == "/src/d_faces.c"

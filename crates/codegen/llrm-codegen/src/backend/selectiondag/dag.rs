@@ -181,6 +181,19 @@ pub enum BooleanContents {
     Undefined,
 }
 
+impl DagConfig {
+    /// `getBooleanContents(Type)`: the contents of a compare that makes a `vt`.
+    pub fn boolean_contents_of(
+        &self,
+        vt: EVT,
+    ) -> BooleanContents {
+        match self.vector_boolean_contents {
+            Some(contents) if vt.is_vector() => contents,
+            _ => self.boolean_contents,
+        }
+    }
+}
+
 /// What a target charges for the operations a divide by a constant is made of
 /// or replaced by: the divide's own price, and the multiply-high sequence's
 /// parts. `None` in [`DagConfig::div_prices`]: the pin's rule (`int_div_cheap`
@@ -254,6 +267,9 @@ pub struct DagConfig {
     /// own where one is installed.
     pub nodes: super::builder::LoweringNodes,
     pub boolean_contents: BooleanContents,
+    /// `setBooleanVectorContents`: what a vector compare's lanes hold, where
+    /// it differs from the scalar's (AArch64: all ones).
+    pub vector_boolean_contents: Option<BooleanContents>,
     /// A boolean sign-extends cheaper than it zero-extends (z80: the carry flag
     /// is `sbc a, a`, a zero extension is a branch or a shift), so `add
     /// (sext i1 c), x` stays an add where the pin makes it `sub x, (zext i1 c)`
@@ -262,6 +278,12 @@ pub struct DagConfig {
     /// 6502-SEXT-BOOL-ADD: a target fact the pin has no hook for. Exit
     /// 2026-12-15.
     pub sext_bool_add_max_bits: u32,
+    /// The caller's incoming argument slots are known to every block's DAG, as
+    /// `MachineFrameInfo`'s fixed objects are to the whole function: a sibling
+    /// call after a branch finds the slots it stores into. Off is the DAG of
+    /// the entry block alone. DEVIATE (target opt-in): the pin's targets read
+    /// `MFI` in `LowerCall`; here the entry's DAG held them.
+    pub fixed_args_in_every_block: bool,
     /// `isOffsetFoldingLegal`: `(add GlobalAddress, c)` folds into the symbol.
     pub offset_folding: bool,
     /// `isConstantIntBuildVectorOrConstantInt` counts a global address whose
@@ -289,12 +311,20 @@ pub struct DagConfig {
     pub pointer: EVT,
     /// `isIntDivCheap`: a divide by a constant stays a divide.
     pub int_div_cheap: bool,
+    /// `isIntDivCheap` for a type of at most this many bits where
+    /// `int_div_cheap` is off: a target with a narrow divide instruction and a
+    /// libcall for the wide one (the 68000's `divs.w` against `__divsi3`).
+    /// DEVIATE: the pin's hooks answer for every width at once. Owner m68k.
+    pub int_div_cheap_narrow: u32,
     /// DEVIATE DIV-LIVE: see `Tuning::narrow_divide_live_limit`; 0 is off.
     pub div_live_limit: u32,
     /// The widest divide `div_live_limit` governs.
     pub div_live_max_bits: u32,
     /// The values live across the narrow divides of the block this DAG is of.
     pub div_live: u32,
+    /// The block's frequency over the entry's (the IR `BlockFrequencies`); 0
+    /// where none was computed. DEVIATE DIV-HOT reads it.
+    pub block_frequency: f64,
     /// Prices that decide `isIntDivCheap` per divisor and width; see
     /// [`DivPrices`].
     pub div_prices: Option<DivPrices>,
@@ -331,6 +361,9 @@ pub struct DagConfig {
     /// until the judge has seen them. Exit: x86 judged, no later than
     /// 2026-11-20.
     pub add_to_or_disjoint: bool,
+    /// `aggressivelyPreferBuildVectorSources`: `visitINSERT_VECTOR_ELT` also
+    /// rebuilds from a `BUILD_VECTOR` that has other users.
+    pub prefers_build_vector_sources: bool,
     /// A signed divide or remainder whose operands fit this narrower legal
     /// type is made at that type ([`super::narrow_divrem`]); `None` keeps the
     /// wide divide. Set by the targets whose narrow routine is the cheaper.
@@ -345,6 +378,11 @@ pub struct DagConfig {
     /// arm64 leaves it off (no `AliasOracle` is wired for it, as wasm's is).
     /// Exit: 2026-11-12, owner w15.
     pub use_aa: bool,
+    /// `computeKnownBits` of `BUILD_PAIR`: the halves' bits side by side (the
+    /// pin always does). DEVIATE: off by default so the other targets'
+    /// output stays as it was until their owners judge it. Exit: all targets
+    /// judged.
+    pub known_bits_of_build_pair: bool,
 }
 
 /// See [`DagConfig::known_bits_for_target_node`].
@@ -358,7 +396,9 @@ impl Default for DagConfig {
         DagConfig {
             nodes: super::builder::LoweringNodes::installed(),
             boolean_contents: BooleanContents::ZeroOrOne,
+            vector_boolean_contents: None,
             sext_bool_add_max_bits: 0,
+            fixed_args_in_every_block: false,
             offset_folding: false,
             global_addresses_constant: false,
             dso_local_symbols: false,
@@ -367,9 +407,11 @@ impl Default for DagConfig {
             absolute_symbols: false,
             pointer: EVT::I32,
             int_div_cheap: false,
+            int_div_cheap_narrow: 0,
             div_live_limit: 0,
             div_live_max_bits: 31,
             div_live: 0,
+            block_frequency: 0.0,
             div_prices: None,
             sdiv_pow2_stays: false,
             sdiv_by_magnitude: false,
@@ -379,9 +421,11 @@ impl Default for DagConfig {
             big_endian: false,
             fma_faster: false,
             add_to_or_disjoint: false,
+            prefers_build_vector_sources: false,
             narrow_divrem: None,
             narrow_srem_overflow_defined: false,
             use_aa: false,
+            known_bits_of_build_pair: false,
         }
     }
 }
@@ -505,6 +549,10 @@ pub struct SelectionDAG {
     /// (`MachineFrameInfo::getObjectAlign`): what the known bits of its
     /// address say. Empty where the layout may place an object lower.
     pub frame_alignments: Vec<u64>,
+    /// The alignment of each global the DAG addresses, by symbol
+    /// (`Value::getPointerAlignment`): what `computeKnownBits` of the global
+    /// says in `InferPtrAlign`.
+    pub global_alignments: HashMap<u32, u64>,
     /// The bytes of each static alloca's frame object, by frame index
     /// (`MachineFrameInfo::getObjectSize`), set where a `lifetime` marker names
     /// it; 0 where not known. The group of allocas that share an index (stack
@@ -538,6 +586,9 @@ pub struct SelectionDAG {
     /// negative frame indices the builder makes for stack arguments):
     /// `MachineFrameInfo::getObjectOffset`.
     pub fixed_offsets: std::collections::BTreeMap<i32, i64>,
+    /// The size in bytes and the immutability (`byval` objects are not) of the
+    /// fixed objects a target made through `FixedObject`, by frame index.
+    pub fixed_objects: std::collections::BTreeMap<i32, (u32, bool)>,
     /// The loads and stores the program marks volatile: the LIR instructions
     /// they become keep the mark (`MachineMemOperand::isVolatile`).
     pub volatile_accesses: HashSet<u32>,
@@ -608,6 +659,7 @@ impl SelectionDAG {
             shuffle_masks: Vec::new(),
             first_temporary: 0,
             frame_alignments: Vec::new(),
+            global_alignments: HashMap::default(),
             frame_object_bytes: Vec::new(),
             mem_locations: Vec::new(),
             var_args_frame_index: None,
@@ -617,6 +669,7 @@ impl SelectionDAG {
             invariant_loads: HashSet::default(),
             got_loads: HashSet::default(),
             fixed_offsets: Default::default(),
+            fixed_objects: Default::default(),
             volatile_accesses: HashSet::default(),
             direct_copies: HashSet::default(),
         };
@@ -650,6 +703,7 @@ impl SelectionDAG {
         &mut self,
         frequency: f64,
     ) {
+        self.config.block_frequency = frequency;
         if let Some(bytes) = self.config.div_prices.as_mut().and_then(|prices| prices.bytes.as_mut()) {
             bytes.frequency = frequency;
         }
@@ -833,6 +887,23 @@ impl SelectionDAG {
         }
     }
 
+    /// A node the legalizer replaced, which nothing reads now, is unfiled from the CSE table: a later
+    /// `getNode` of the same operation must make a node, not return the replaced one, which is not
+    /// legalized again (an `extract_element` made twice, the second one never lowered).
+    pub fn forget_replaced(
+        &mut self,
+        node: u32,
+    ) {
+        if node == self.root.node || node == self.entry.node || self.is_deleted(node) {
+            return;
+        }
+        let results = self.nodes[node as usize].values.len() as u8;
+        if (0..results).any(|res| self.has_users(SDValue { node, res })) {
+            return;
+        }
+        self.cse_forget(node);
+    }
+
     /// `SDNode::DropOperands`: a deleted node leaves the use lists of what it
     /// read, so they hold no entry for it. Each operand slot pushed one entry;
     /// they are looked for from the end, where a node made lately sits, and
@@ -894,6 +965,23 @@ impl SelectionDAG {
         value: SDValue,
     ) -> impl Iterator<Item = u32> + '_ {
         self.live_users(value.node).filter(move |&user| self.nodes[user as usize].ops.contains(&value))
+    }
+
+    /// The nodes that read `value`, newest use first, once each: a use list
+    /// in the pin's order (`addToList` puts a use at the head, so the list
+    /// runs from the use added last). `ReplaceAllUsesWith` walks it and adds
+    /// each use to the new value in turn, which reverses it.
+    pub fn users_newest_first(
+        &self,
+        value: SDValue,
+    ) -> Vec<u32> {
+        let mut out: Vec<u32> = Vec::new();
+        for &user in self.uses.get(value.node as usize).into_iter().flatten().rev() {
+            if !self.is_deleted(user) && self.nodes[user as usize].ops.contains(&value) && !out.contains(&user) {
+                out.push(user);
+            }
+        }
+        out
     }
 
     /// Whether anything reads `value`: `users(value).next().is_some()`
@@ -1081,6 +1169,10 @@ impl SelectionDAG {
             if self.root == from {
                 self.root = to;
             }
+            // The pin walks the use list newest first and adds each use to `to`
+            // as it goes; the users are still updated in creation order, which
+            // fixes which of two equal nodes a CSE merge keeps.
+            let use_list_order = self.users_newest_first(from);
             for user in self.users(from).collect::<Vec<_>>() {
                 self.cse_forget(user);
                 for op in &mut self.nodes[user as usize].ops {
@@ -1088,7 +1180,6 @@ impl SelectionDAG {
                         *op = to;
                     }
                 }
-                self.push_use(to.node as usize, user);
                 let Some(hash) = self.key_of(user) else {
                     events.push(Rauw::Updated(user));
                     continue;
@@ -1109,8 +1200,30 @@ impl SelectionDAG {
                     }
                 }
             }
+            for user in use_list_order {
+                self.push_use(to.node as usize, user);
+            }
         }
         events
+    }
+
+    /// `refineAlignment` of a load's or store's memory operand: `node` is
+    /// accessed `align`-aligned, as the pin's `getLoad` of an existing node
+    /// with a better alignment records it.
+    pub fn refine_mem_alignment(
+        &mut self,
+        node: u32,
+        align: u32,
+    ) {
+        let NodeData::Mem(info) = self.nodes[node as usize].data else { return };
+        if align <= info.align {
+            return;
+        }
+        self.cse_forget(node);
+        self.nodes[node as usize].data = NodeData::Mem(MemInfo { align, ..info });
+        if let Some(hash) = self.key_of(node) {
+            self.cse_link(hash, node);
+        }
     }
 
     /// `UpdateNodeOperands`: `node` reads `ops` instead. If that equals an
@@ -1226,6 +1339,17 @@ impl SelectionDAG {
         matches!(self.opcode(value), ISD::Undef | ISD::Poison)
     }
 
+    /// The bits of a `ConstantFPSDNode` (`ConstantFP` or `TargetConstantFP`).
+    pub fn fp_constant(
+        &self,
+        value: SDValue,
+    ) -> Option<u128> {
+        match (self.opcode(value), self.node(value).data) {
+            (ISD::ConstantFP | ISD::TargetConstantFP, NodeData::ConstFp { bits, .. }) => Some(bits),
+            _ => None,
+        }
+    }
+
     /// The value of a `ConstantSDNode` (`Constant` or `TargetConstant`).
     pub fn constant(
         &self,
@@ -1235,6 +1359,21 @@ impl SelectionDAG {
             (ISD::Constant | ISD::TargetConstant, NodeData::Const { bits, .. }) => Some(bits),
             _ => None,
         }
+    }
+
+    /// `isConstOrConstSplat`: the value of a constant, or the one value of
+    /// every lane of a build vector of equal constants.
+    pub fn const_or_splat(
+        &self,
+        value: SDValue,
+    ) -> Option<u128> {
+        if self.opcode(value) != ISD::BuildVector {
+            return self.constant(value);
+        }
+        let first = self.constant(self.operand(value, 0))?;
+        (1..self.value_type(value).lanes())
+            .all(|lane| self.constant(self.operand(value, lane as usize)) == Some(first))
+            .then_some(first)
     }
 
     pub fn is_opaque(
@@ -1452,6 +1591,30 @@ impl SelectionDAG {
         self.intern(ISD::TargetConstantFP, &[vt], &[], SDNodeFlags::default(), NodeData::ConstFp { bits })
     }
 
+    /// `ISD::isBuildVectorAllZeros`/`isBuildVectorAllOnes`: every defined lane
+    /// is the constant (its low lane bits; a float's, `bitcastToAPInt`), and
+    /// one is defined.
+    pub fn is_build_vector_all(
+        &self,
+        value: SDValue,
+        ones: bool,
+    ) -> bool {
+        if self.opcode(value) != ISD::BuildVector {
+            return false;
+        }
+        let lane_bits = self.value_type(value).element().size_in_bits();
+        let mask = (1u128 << lane_bits) - 1;
+        let lanes = &self.node(value).ops;
+        lanes.iter().any(|&lane| !self.is_undef(lane))
+            && lanes.iter().all(|&lane| {
+                self.is_undef(lane)
+                    || self
+                        .constant(lane)
+                        .or_else(|| self.fp_constant(lane))
+                        .is_some_and(|bits| bits & mask == if ones { mask } else { 0 })
+            })
+    }
+
     pub fn get_all_ones_constant(
         &mut self,
         vt: EVT,
@@ -1468,7 +1631,7 @@ impl SelectionDAG {
         if !value {
             return self.get_constant(0, vt);
         }
-        match self.config.boolean_contents {
+        match self.config.boolean_contents_of(vt) {
             BooleanContents::ZeroOrOne | BooleanContents::Undefined => self.get_constant(1, vt),
             BooleanContents::ZeroOrNegativeOne => self.get_all_ones_constant(vt),
         }
@@ -1481,7 +1644,7 @@ impl SelectionDAG {
     ) -> Option<bool> {
         let bits = self.constant(value)?;
         let all_ones = super::fold::mask(self.width(value));
-        match self.config.boolean_contents {
+        match self.config.boolean_contents_of(self.value_type(value)) {
             BooleanContents::ZeroOrOne => (bits <= 1).then_some(bits == 1),
             BooleanContents::ZeroOrNegativeOne => (bits == 0 || bits == all_ones).then_some(bits != 0),
             BooleanContents::Undefined => Some(bits != 0),
@@ -1844,7 +2007,7 @@ impl SelectionDAG {
         value: SDValue,
         vt: EVT,
     ) -> SDValue {
-        if self.config.boolean_contents == BooleanContents::ZeroOrOne {
+        if self.config.boolean_contents_of(self.value_type(value)) == BooleanContents::ZeroOrOne {
             return self.get_zext_or_trunc(value, vt);
         }
         let (one, zero) = (self.get_constant(1, vt), self.get_constant(0, vt));
@@ -2230,7 +2393,8 @@ impl SelectionDAG {
         vt: EVT,
     ) -> Option<SDValue> {
         let bits = bits & super::fold::mask(vt.size_in_bits());
-        self.cse_find(ISD::Constant, &[vt], &[], &NodeData::Const { bits, opaque: false }).map(|node| SDValue { node, res: 0 })
+        self.cse_find(ISD::Constant, &[vt], &[], &NodeData::Const { bits, opaque: false })
+            .map(|node| SDValue { node, res: 0 })
     }
 
     /// `getNode(Opcode, VTList, Ops)` for nodes with several results; no folds.

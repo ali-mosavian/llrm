@@ -41,7 +41,8 @@ significant bits there, for the counter alone compared to zero. The pin
 keeps a loop's exit counter beside the scaled one it is a multiple of
 (recsum: `dec; add -3; jne`); this exits on the scaled one (`add -3; jne`),
 as the stand-in LSR did. Exit: none, a proof; if LLVM does the same, delete
-the line.
+the line. A target turns LG1 and LG2 off with
+`Tti::lsr_scales_zero_compare_past_overflow` (wasm: the pin's formulae).
 
 DEVIATE LG2: for an even factor `getExactSDiv` fails where the compared
 value cannot reach 2^(bits - ctz(factor)) under the loop's guards, although

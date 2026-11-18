@@ -882,6 +882,48 @@ b9:
     );
 }
 
+/// `dst.a != 7 || dst.z != 9` kept its branch: the arm's load addresses the
+/// global through a constant-expression GEP, whose alignment the walk to the
+/// base did not follow (`isDereferenceableAndAlignedPointer` takes a GEP
+/// operator, instruction or constant). memcpy_libcall wasm32 -O2/-O3 were 8 B
+/// over the pin.
+#[test]
+fn test_a_load_through_a_constant_gep_of_an_aligned_global_runs_before_the_branch() {
+    check(
+        "@g = global [51 x i32] zeroinitializer, align 4
+
+define i32 @f(i32 %c) {
+b0:
+  %t = icmp eq i32 %c, 7
+  br i1 %t, label %then, label %end
+
+then:
+  %v = load i32, ptr getelementptr inbounds (i8, ptr @g, i32 200), align 4
+  %n = icmp ne i32 %v, 9
+  %z = zext i1 %n to i32
+  br label %end
+
+end:
+  %r = phi i32 [ 1, %b0 ], [ %z, %then ]
+  ret i32 %r
+}
+",
+        "@g = global [51 x i32] zeroinitializer, align 4
+
+define i32 @f(i32 %c) {
+b0:
+  %t = icmp eq i32 %c, 7
+  %v = load i32, ptr getelementptr inbounds (i8, ptr @g, i32 200), align 4
+  %n = icmp ne i32 %v, 9
+  %z = zext i1 %n to i32
+  %0 = select i1 %t, i32 %z, i32 1
+  ret i32 %0
+}
+",
+        &[&[7], &[3]],
+    );
+}
+
 /// A store is not run early (the pin only does that for a store it can prove
 /// safe, which is not ported).
 #[test]

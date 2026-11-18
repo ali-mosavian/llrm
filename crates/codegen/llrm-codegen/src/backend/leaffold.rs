@@ -22,6 +22,10 @@
 //! case. `Target::leaf_fold_at_size` turns it on (m32); only at -Os, where the
 //! jump counts and the move on the path that does not branch does not.
 //!
+//! DEVIATE LEAF-FOLD-TRIAL (owner m32, exit 2026-11-24): the fold changes the
+//! registers after it, so a module it folded is assembled again without it
+//! (`driver::trial`) and the smaller object is kept.
+//!
 //! # Runs
 //! Phase 1 of the machine phases, after `SharedConstants`, before `SsaSpill`.
 
@@ -37,6 +41,24 @@ pub struct LeafFold {
     pub size: bool,
 }
 
+thread_local! {
+    static FOLDED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static OFF: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Whether a fold was made since the last call (the trial's note).
+pub fn take_folded() -> bool {
+    FOLDED.with(|one| one.replace(false))
+}
+
+/// `body` run with the fold left off: the trial's second compile.
+pub fn without<T>(body: impl FnOnce() -> T) -> T {
+    OFF.with(|one| one.set(true));
+    let made = body();
+    OFF.with(|one| one.set(false));
+    made
+}
+
 impl LIRTransform for LeafFold {
     fn class_name(&self) -> &'static str {
         "LeafFold"
@@ -50,7 +72,14 @@ impl LIRTransform for LeafFold {
         &mut self,
         body: LirBody,
     ) -> Result<LirBody, String> {
-        Ok(if self.size { folded(&body) } else { body })
+        if !self.size || OFF.with(|one| one.get()) {
+            return Ok(body);
+        }
+        let made = folded(&body);
+        if made.blocks.len() != body.blocks.len() {
+            FOLDED.with(|one| one.set(true));
+        }
+        Ok(made)
     }
 }
 

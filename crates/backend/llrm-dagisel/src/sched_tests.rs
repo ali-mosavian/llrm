@@ -89,11 +89,13 @@ fn every_emitted_opcode_has_a_class() {
 #[test]
 fn vector_only_opcodes_are_marked_and_scalar_ones_keep_their_class() {
     let apple = sched::model("apple-m1").unwrap();
-    for op in [opcode::MOVIv2d_ns, opcode::MOVIv16b_ns, opcode::ADDv4i32] {
+    for op in [opcode::MVNIv2i32, opcode::ADDv4i32] {
         assert!(sched::dynamic_only(op), "opcode {op}");
         assert!(apple.class_of(op).is_some(), "opcode {op} has a class when the vectors are on");
     }
-    for op in [opcode::FMOVWSr, opcode::FMOVXDr, opcode::FMOVDr, opcode::ADDWri, opcode::LDRQui] {
+    // `MOVIv2d_ns` and `MOVIv16b_ns` are `extra_symbols` (the hand code emits
+    // them): the baseline has them, so they keep a class with the vectors off.
+    for op in [opcode::FMOVWSr, opcode::FMOVXDr, opcode::FMOVDr, opcode::ADDWri, opcode::LDRQui, opcode::MOVIv2d_ns] {
         assert!(!sched::dynamic_only(op), "opcode {op}");
         assert!(apple.class_of(op).is_some(), "opcode {op} has a class");
     }

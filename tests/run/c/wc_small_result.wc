@@ -1,0 +1,25 @@
+/* Compiled by Open Watcom's own wcc386 (-3r, its default convention): a struct of 1, 2 or 4 bytes is returned in AL, AX or
+   EAX, any other through the address in ESI. llrm's code calls these, and these call llrm's. */
+struct S1 { char b[1]; };
+struct S2 { char b[2]; };
+struct S3 { char b[3]; };
+struct S4 { char b[4]; };
+struct S8 { char b[8]; };
+
+extern struct S1 llrm_r1(void);
+extern struct S2 llrm_r2(void);
+extern struct S3 llrm_r3(void);
+extern struct S4 llrm_r4(void);
+extern struct S8 llrm_r8(void);
+
+struct S1 wc_r1(void) { struct S1 s; s.b[0] = 0x11; return s; }
+struct S2 wc_r2(void) { struct S2 s; s.b[0] = 0x21; s.b[1] = 0x22; return s; }
+struct S3 wc_r3(void) { struct S3 s; s.b[0] = 0x31; s.b[1] = 0x32; s.b[2] = 0x33; return s; }
+struct S4 wc_r4(void) { struct S4 s; s.b[0] = 0x41; s.b[1] = 0x42; s.b[2] = 0x43; s.b[3] = 0x44; return s; }
+struct S8 wc_r8(void) { struct S8 s; int i; for (i = 0; i < 8; i++) s.b[i] = 0x71 + i; return s; }
+
+int wc_calls_r1(void) { struct S1 s = llrm_r1(); return s.b[0]; }
+int wc_calls_r2(void) { struct S2 s = llrm_r2(); return s.b[0] * 256 + s.b[1]; }
+int wc_calls_r3(void) { struct S3 s = llrm_r3(); return (s.b[0] * 256 + s.b[1]) * 256 + s.b[2]; }
+int wc_calls_r4(void) { struct S4 s = llrm_r4(); return ((s.b[0] * 256 + s.b[1]) * 256 + s.b[2]) * 256 + s.b[3]; }
+int wc_calls_r8(void) { struct S8 s = llrm_r8(); return ((s.b[0] * 256 + s.b[1]) * 256 + s.b[2]) * 256 + s.b[7]; }

@@ -137,10 +137,16 @@ impl SpillWeightEnv for BodyEnv<'_> {
     ) -> Option<(u32, u32)> {
         use crate::model::ir::Loc;
         let what = instr.what.as_ref()?;
-        let held = what.dests.iter().chain(&what.sources).find_map(|place| match place {
-            Loc::Held(held) if held.value == reg => Some(*held),
-            _ => None,
-        })?;
+        let held = what
+            .dests
+            .iter()
+            .chain(&what.sources)
+            .find_map(
+                |place| match place {
+                    Loc::Held(held) if held.value == reg => Some(*held),
+                    _ => None,
+                },
+            )?;
         // The whole of a value is as wide as its instructions read it; a value
         // none reads is as wide as its widest access.
         let whole = match self.orders.natural.borrow().get(&reg) {
@@ -192,6 +198,28 @@ impl SpillWeightEnv for BodyEnv<'_> {
 }
 
 impl GreedyEnv for BodyEnv<'_> {
+    fn spill_fold_prices(&self) -> Option<llrm_mir::target::SpillFoldClocks> {
+        self.tii.spill_fold_clocks()
+    }
+
+    fn spill_fold_copy_clocks(
+        &self,
+        insn: &crate::model::lir::Insn,
+        virt: u32,
+    ) -> Option<i64> {
+        self.tii.spill_fold_copy_clocks(insn, virt)
+    }
+
+    fn folds_to_cell(
+        &self,
+        insn: &crate::model::lir::Insn,
+        virt: u32,
+    ) -> bool {
+        use crate::model::ir::{Addr, Mem, Space};
+        let cell = Mem::new(Some(Addr::new(Space::Frame, -8)), super::tii::_width(insn, virt));
+        self.tii.fold_memory_operand(&std::sync::Arc::new(insn.clone()), virt, &cell).is_some()
+    }
+
     fn has_class(
         &self,
         virt: u32,
@@ -415,7 +443,7 @@ fn reclass_orders(
 ) {
     use crate::backend::regclass::{Confinement, confinement_of};
     let Some(sets) = sets else {
-        reclass_by_operands(tables, pinned, tii, lis, regs);
+        reclass_by_operands(tables, pinned, tii, registers, lis, regs);
         return;
     };
     for &reg in regs {
@@ -454,6 +482,7 @@ fn reclass_by_operands(
     tables: &Tables,
     pinned: &crate::support::hash::HashSet<u32>,
     tii: &dyn super::tii::TargetInstrInfo,
+    registers: Regs,
     lis: &LiveIntervals,
     regs: &[u32],
 ) {
@@ -461,6 +490,8 @@ fn reclass_by_operands(
         if pinned.contains(&reg) {
             continue;
         }
+        // The (offset, width) of every lane of `reg` an instruction reads.
+        let mut lanes: Vec<(u32, u32)> = Vec::new();
         let mut seen = crate::support::hash::HashSet::default();
         // Start from the larger class the parent's has, if any, and let the
         // instructions narrow it again.
@@ -470,13 +501,37 @@ fn reclass_by_operands(
                 continue;
             }
             for (value, order) in tii.operand_orders(lis.instr(op.instr)) {
-                if value != reg || reads_a_lane(tables, lis.instr(op.instr), reg) {
+                if value != reg {
+                    continue;
+                }
+                if reads_a_lane(tables, lis.instr(op.instr), reg) {
+                    if let Some(what) = &lis.instr(op.instr).what {
+                        for place in what.dests.iter().chain(&what.sources).flat_map(crate::model::ir::values) {
+                            if place.value == reg && !lanes.contains(&(place.offset, place.width)) {
+                                lanes.push((place.offset, place.width));
+                            }
+                        }
+                    }
                     continue;
                 }
                 allowed = Some(match allowed {
                     None => order,
                     Some(so_far) => so_far.into_iter().filter(|one| order.contains(one)).collect(),
                 });
+            }
+        }
+        // `recomputeRegClass`'s `getMatchingSuperRegClass`: a register read
+        // through a lane stays in the order only if it has that lane.
+        if let Some(order) = &mut allowed {
+            let kept: Vec<RegId> = order
+                .iter()
+                .copied()
+                .filter(|one| {
+                    lanes.iter().all(|&(offset, width)| registers.lane_register(*one, offset, width).is_some())
+                })
+                .collect();
+            if !kept.is_empty() {
+                *order = kept;
             }
         }
         match allowed {
@@ -1254,15 +1309,16 @@ fn intervals_to_allocate(
     body: &LirBody,
     carry: bool,
 ) -> LiveIntervals {
-    let mut lis =
-        crate::liveness::liveintervals::take_handed_over_edited_to(body, carry).unwrap_or_else(|| LiveIntervals::new(body));
+    let mut lis = crate::liveness::liveintervals::take_handed_over_edited_to(body, carry)
+        .unwrap_or_else(|| LiveIntervals::new(body));
     if llrm_support::env_flag!("LLRM_CHECK_LIVEINTERVALS") {
         // The premise: the intervals the edits left are the ones made afresh.
         lis.assert_intervals_cover_afresh(body);
     }
     lis.indexes.pack_indexes();
     if llrm_support::env_flag!("LLRM_SLOT_COUNT") {
-        // `tools/slotcmp.py`: the instructions the pin's `-stop-before=greedy` MIR of the same IR has.
+        // `tools/slotcmp.py`: the instructions the pin's `-stop-before=greedy`
+        // MIR of the same IR has.
         let slots: usize = body
             .blocks
             .iter()
@@ -1376,6 +1432,25 @@ pub fn decide_with_split(
     for (&value, &width) in &widest {
         let width = if lanes && width > 2 && read_widths.get(&value).copied().unwrap_or(0) <= 2 { 2 } else { width };
         tables.widths.borrow_mut().insert(value, width);
+    }
+    {
+        // DEVIATE SPILL-ZEXT: general-register values the target zero-extends.
+        let tii = &inputs.tii;
+        let mut zero = crate::backend::widths::_zero_extended(
+            body.blocks.iter().flat_map(|block| block.insns.iter()),
+            &widest,
+            &|written, whole| tii.write_zero_extends(written, whole),
+        );
+        zero.retain(|value| {
+            tables
+                .orders
+                .borrow()
+                .get(value)
+                .is_some_and(|order| !order.is_empty() && order.iter().all(|one| one.is_gpr()))
+                && !floats.contains(value)
+                && !inputs.pins.contains_key(value)
+        });
+        *tables.zero_extended.borrow_mut() = zero;
     }
     if lanes {
         // Where the wide reads are, for `CallMasks::wide_read_follows`.
@@ -1711,9 +1786,7 @@ fn exiting_blocks(body: &LirBody) -> Vec<bool> {
     body.blocks
         .iter()
         .map(|block| {
-            forest
-                .innermost(block.at)
-                .is_some_and(|inner| block.succ.iter().any(|to| !forest.contains(inner, *to)))
+            forest.innermost(block.at).is_some_and(|inner| block.succ.iter().any(|to| !forest.contains(inner, *to)))
         })
         .collect()
 }
@@ -1776,6 +1849,15 @@ mod tests {
         ) -> Option<Arc<Insn>> {
             self.inner.fold_memory_operand(one, reg, cell)
         }
+        fn fold_memory_operand_classed(
+            &self,
+            one: &Arc<Insn>,
+            reg: u32,
+            cell: &crate::model::ir::Mem,
+            xmm: &dyn Fn(u32) -> bool,
+        ) -> Option<Arc<Insn>> {
+            self.inner.fold_memory_operand_classed(one, reg, cell, xmm)
+        }
         fn fold_copy_member(
             &self,
             one: &Insn,
@@ -1830,6 +1912,7 @@ mod tests {
             classes: &RegisterClasses::m16(),
             basic_semantics: false,
             address_reference_milliweight: 3000,
+            fold_spill: None,
         };
         let plain = |at: i64, defines: &[u32], uses: &[u32]| {
             Arc::new(Insn::new(at, None, None, defines.to_vec(), uses.to_vec()))
@@ -1891,6 +1974,7 @@ mod tests {
             classes: &RegisterClasses::m16(),
             basic_semantics: false,
             address_reference_milliweight: 3000,
+            fold_spill: None,
         };
         let held = |value, width| Loc::Held(Held { value, width, offset: 0 });
         let mov = |to: Loc, from: Loc| Semantics {
@@ -2018,6 +2102,7 @@ mod tests {
                 classes: &RegisterClasses::m16(),
                 basic_semantics: false,
                 address_reference_milliweight: 3000,
+                fold_spill: None,
             },
             tri: &crate::greedy::targetinfo::X86RegisterInfo,
             size: false,
@@ -2074,7 +2159,13 @@ mod tests {
             (from..from + n).map(|k| Arc::new(Insn::new(k, None, None, vec![], vec![]))).collect()
         };
         let body_of = |list: Vec<Arc<Insn>>| {
-            LirBody::new("holes", 0, vec![Block::from(LirBlock::new(0, list))], IndexMap::default(), IndexMap::default())
+            LirBody::new(
+                "holes",
+                0,
+                vec![Block::from(LirBlock::new(0, list))],
+                IndexMap::default(),
+                IndexMap::default(),
+            )
         };
         let all = make(0, 4);
         let before = body_of(all.clone());
@@ -2085,8 +2176,8 @@ mod tests {
         let after = body_of(vec![Arc::clone(&all[2]), Arc::clone(&all[0]), Arc::clone(&all[3])]);
         let lis = intervals_to_allocate(&after, true);
         let entries = lis.indexes.get_last_index().get_index() / SlotIndex::INSTR_DIST + 1;
-        // Start, 4 instructions, the end of the block, and the move's new entry;
-        // numbered afresh the body has 5.
+        // Start, 4 instructions, the end of the block, and the move's new
+        // entry; numbered afresh the body has 5.
         assert_eq!(entries, 7, "the entries of the coalescer's list, not a fresh one");
         // A target that does not carry them (x86, until priced) numbers afresh.
         crate::liveness::liveintervals::hand_over(LiveIntervals::new(&before), &before);
@@ -2127,6 +2218,7 @@ mod tests {
                 classes: &RegisterClasses::m16(),
                 basic_semantics: false,
                 address_reference_milliweight: 3000,
+                fold_spill: None,
             },
             tri: &crate::greedy::targetinfo::X86RegisterInfo,
             size: false,
@@ -2313,6 +2405,7 @@ mod tests {
                     classes: &RegisterClasses::m16(),
                     basic_semantics: false,
                     address_reference_milliweight: 3000,
+                    fold_spill: None,
                 },
                 tri: &crate::greedy::targetinfo::X86RegisterInfo,
                 size: false,
@@ -2382,6 +2475,7 @@ mod tests {
                 classes: &RegisterClasses::m16(),
                 basic_semantics: false,
                 address_reference_milliweight: 3000,
+                fold_spill: None,
             },
             tri: &crate::greedy::targetinfo::X86RegisterInfo,
             size: false,
@@ -2429,7 +2523,8 @@ mod tests {
     fn reachability_is_worked_out_for_the_blocks_asked_of() {
         let blocks = 300;
         let flow: Vec<Vec<usize>> = (0..blocks).map(|at| if at + 1 < blocks { vec![at + 1] } else { vec![] }).collect();
-        let masks = CallMasks::of(Regs(&llrm_x86_m16::REGISTER_INFO), Vec::new(), Vec::new(), widths(&[])).with_flow(flow);
+        let masks =
+            CallMasks::of(Regs(&llrm_x86_m16::REGISTER_INFO), Vec::new(), Vec::new(), widths(&[])).with_flow(flow);
         assert!(masks.reaches(0, 299) && masks.reaches(10, 11) && !masks.reaches(11, 10));
         assert!(!masks.reaches(299, 299), "a block does not reach itself without a loop");
         let made = masks.reach.borrow().iter().filter(|row| row.is_some()).count();
@@ -2538,6 +2633,7 @@ mod tests {
                 classes: &RegisterClasses::m16(),
                 basic_semantics: false,
                 address_reference_milliweight: 3000,
+                fold_spill: None,
             },
             tri: &crate::greedy::targetinfo::X86RegisterInfo,
             size: false,
@@ -2614,6 +2710,7 @@ mod tests {
                 classes: &RegisterClasses::m16(),
                 basic_semantics: false,
                 address_reference_milliweight: 3000,
+                fold_spill: None,
             },
             tri: &crate::greedy::targetinfo::X86RegisterInfo,
             size: false,
@@ -2666,6 +2763,7 @@ mod tests {
                 classes: &RegisterClasses::m16(),
                 basic_semantics: false,
                 address_reference_milliweight: 3000,
+                fold_spill: None,
             },
             tri: &crate::greedy::targetinfo::X86RegisterInfo,
             size: false,
@@ -2711,6 +2809,7 @@ mod tests {
             classes: &classes,
             basic_semantics: false,
             address_reference_milliweight: 3000,
+            fold_spill: None,
         };
         let env = BodySplitEnv::new(
             &body,
@@ -2755,6 +2854,7 @@ mod tests {
             classes: &classes,
             basic_semantics: false,
             address_reference_milliweight: 3000,
+            fold_spill: None,
         };
         let env = BodySplitEnv::new(
             &body,
@@ -2810,6 +2910,7 @@ mod tests {
             classes: &classes,
             basic_semantics: false,
             address_reference_milliweight: 3000,
+            fold_spill: None,
         };
         let env = BodySplitEnv::new(
             &body,
@@ -2890,7 +2991,13 @@ mod tests {
             &tables,
             &Default::default(),
             Some(&sets),
-            &crate::greedy::tii::X86InstrInfo { bits: 32, classes: &classes, basic_semantics: false, address_reference_milliweight: 3000 },
+            &crate::greedy::tii::X86InstrInfo {
+                bits: 32,
+                classes: &classes,
+                basic_semantics: false,
+                address_reference_milliweight: 3000,
+                fold_spill: None,
+            },
             classes.registers,
             &lis,
             &[word, base],
@@ -3034,7 +3141,8 @@ mod exiting_tests {
 
     /// `decide_with_split` scanned every loop for every block (654k
     /// `Body::contains` calls, 41 M of memory_expansion's compile); one forest
-    /// lookup per block gives the same answer: 1 -> 2 <-> 3 (inner), 2 -> 4 -> 1.
+    /// lookup per block gives the same answer: 1 -> 2 <-> 3 (inner), 2 -> 4 ->
+    /// 1.
     #[test]
     fn test_the_exiting_blocks_of_nested_loops_are_those_with_an_edge_out_of_their_innermost_loop() {
         let block = |at: i64, succ: &[i64]| LirBlock { succ: succ.to_vec().into(), ..LirBlock::new(at, Vec::new()) };

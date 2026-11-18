@@ -12,7 +12,11 @@ fn mul_by(c: i32) -> String {
     )
 }
 
-fn compile(cpu: &str, level: Level, c: i32) -> String {
+fn compile(
+    cpu: &str,
+    level: Level,
+    c: i32,
+) -> String {
     assembly(&mul_by(c), cpu_of(cpu).unwrap(), level).expect("compiles")
 }
 
@@ -24,7 +28,11 @@ define i32 @f(ptr %a, i32 %n) {{\nentry:\n  br label %loop\nloop:\n  %i = phi i3
     )
 }
 
-fn compile_loop(cpu: &str, level: Level, c: i32) -> String {
+fn compile_loop(
+    cpu: &str,
+    level: Level,
+    c: i32,
+) -> String {
     assembly(&loop_mul_by(c), cpu_of(cpu).unwrap(), level).expect("compiles")
 }
 
@@ -36,12 +44,14 @@ fn a_constant_that_is_not_near_a_power_of_two_is_a_chain_in_a_loop() {
     }
 }
 
+/// urem_eq at 68020 -O2 (+148 B, one build): the divide-by-3 and -5 magic
+/// numbers were 12-instruction chains, priced by clocks in code that never ran.
 /// struct_with_i64, struct_odd_sizes, switch_i64, frame_address_stack_args and
 /// register_args_truncate at 68020 -O2/-O3 grew 4 to 16 B each with no executed
 /// clock gained: the chain was credited its clocks in code that never ran.
 #[test]
 fn a_straight_line_multiply_is_decided_by_size_not_by_clocks_it_may_never_save() {
-    for c in [1000, 100, -1000, 641] {
+    for c in [1000, 100, -1000, 641, -858993459, -1431655765] {
         let out = compile("68020", Level::O2, c);
         assert!(out.contains("muls.l"), "68020 -O2 straight-line x*{c}: a chain that grew the code:\n{out}");
     }
@@ -56,9 +66,25 @@ fn the_68000_never_calls_the_library_for_a_short_chain() {
     // 1000 is a 12 B chain: it beats the call's clocks, not its bytes
     let out = compile_loop("68000", Level::O2, 1000);
     assert!(!out.contains("__mulsi3"), "68000 -O2 loop x*1000: a call:\n{out}");
+    // alone, the function is charged the 54 B routine its call links (#9982,
+    // #10053): the chain is the smaller program at every level
     for level in [Level::O1, Level::Os] {
         let out = compile("68000", level, 1000);
-        assert!(out.contains("__mulsi3"), "68000 {level:?} x*1000: a chain larger than the call site:\n{out}");
+        assert!(
+            !out.contains("__mulsi3"),
+            "68000 {level:?} x*1000 alone: a call links the routine for nothing else:\n{out}"
+        );
+    }
+    // where another function multiplies two variables the routine is linked
+    // anyway, and the chain is larger than the call site in bytes
+    let linked = mul_by(1000) + "define i32 @v(i32 %a, i32 %b) {\n  %r = mul i32 %a, %b\n  ret i32 %r\n}\n";
+    for level in [Level::O1, Level::Os] {
+        let out = assembly(&linked, cpu_of("68000").unwrap(), level).expect("compiles");
+        let f = out.split("v:").next().unwrap();
+        assert!(
+            f.contains("__mulsi3"),
+            "68000 {level:?} x*1000 beside a variable multiply: a chain larger than the call site:\n{out}"
+        );
     }
 }
 

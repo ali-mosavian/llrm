@@ -95,7 +95,7 @@ fn the_overflow_add_and_add_with_carry_are_add_and_adc() {
             &tli,
             &mut X86Lowering {
                 multiply_early_out: None,
-                imul_if_smaller: false,
+                imul_if_smaller: false, hot_chains: false,
                 share_products: false,
                 cmov: false,
                 sse2: false,
@@ -105,6 +105,7 @@ fn the_overflow_add_and_add_with_carry_are_add_and_adc() {
                 sext_load: false,
                 zext_free: false,
                 branch_constant_selects: false,
+                status_word_tests: false,
                 profile: None,
             },
         )

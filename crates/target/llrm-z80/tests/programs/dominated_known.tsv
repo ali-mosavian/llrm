@@ -1,0 +1,7 @@
+O1>O2 byval_inline	Z80-O2-DOMINATED
+O1>O2 copy_runs	Z80-O2-DOMINATED
+O1>O2 fcmp_all	Z80-O2-DOMINATED
+O1>O2 fill_nest	Z80-O2-DOMINATED
+O1>O2 shl_long_by_one	Z80-O2-DOMINATED
+O1>O2 signbit_idioms	Z80-O2-DOMINATED
+O2>O3 idioms	Z80-O2-DOMINATED

@@ -430,3 +430,195 @@ b1:
     let after = printed(&module);
     assert!(!after.contains("load"), "{after}");
 }
+
+#[test]
+fn test_a_load_past_a_volatile_load_of_other_memory_is_still_the_first() {
+    let (text, changed) = loaded(
+        "define i16 @f(i16 %x, i16 %y) {
+b0:
+  %a = load i16, ptr @g
+  %w = load volatile i16, ptr @h
+  %b = load i16, ptr @g
+  %s = add i16 %a, %b
+  %r = add i16 %s, %w
+  ret i16 %r
+}
+",
+        XY,
+    );
+    assert!(changed && text.matches("load i16, ptr @g").count() == 1, "{text}");
+}
+
+#[test]
+fn test_a_load_of_a_constant_array_past_a_call_is_still_the_first() {
+    let (text, changed) = loaded(
+        "@c = constant [8 x i16] [i16 1, i16 2, i16 3, i16 4, i16 5, i16 6, i16 7, i16 8]
+define void @report(i16 %v) noinline {
+b0:
+  store i16 %v, ptr @g
+  ret void
+}
+
+define i16 @f(i16 %x, i16 %y) {
+b0:
+  %i = and i16 %x, 7
+  %p = getelementptr inbounds i16, ptr @c, i16 %i
+  %q = getelementptr inbounds i16, ptr @c, i16 %i
+  %a = load i16, ptr %p
+  call void @report(i16 %y)
+  %b = load i16, ptr %q
+  %r = add i16 %a, %b
+  ret i16 %r
+}
+",
+        XY,
+    );
+    assert!(changed && text.matches("load i16").count() == 1, "{text}");
+}
+
+/// A `switch` with two cases to the block that loads is two unavailable
+/// predecessors, as LLVM's `predecessors` counts edges, so PRE is refused. The
+/// port walked blocks: one unavailable predecessor, one edge split, and the
+/// other edge fed the loop-carried value, which is poison on the way in and
+/// stale after any call (two cases to one block in a loop under -O2: the
+/// second case skipped its load, x86_32-dos).
+#[test]
+fn test_a_load_behind_two_switch_cases_to_one_block_is_not_partly_redundant() {
+    let (text, changed) = loaded(
+        "define i16 @f(i16 %x, i16 %y) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %n, %b4 ]
+  %n = add i16 %i, 1
+  switch i16 %y, label %b4 [
+    i16 1, label %b2
+    i16 2, label %b2
+  ]
+
+b2:
+  %d = load i16, ptr @g
+  %e = add i16 %d, -1
+  store i16 %e, ptr @g
+  br label %b4
+
+b4:
+  %c = icmp ult i16 %n, 3
+  br i1 %c, label %b1, label %b5
+
+b5:
+  ret i16 %n
+}
+",
+        XY,
+    );
+    assert!(!changed && !text.contains(".pre") && !text.contains("poison"), "{text}");
+}
+
+/// div_constants_long wasm32 -Oz kept 13 more `load @sum` than the pin (+143
+/// B): `lifetime.start` of another local sat between a loop's last store and
+/// the next loop's reload of the same global, and MemDep read the marker's
+/// size operand (MIR's markers keep it first) as its pointer, so every marker
+/// ended the scan as a clobber.
+#[test]
+fn test_a_load_past_a_lifetime_start_of_other_memory_is_still_the_first() {
+    let (text, changed) = loaded(
+        "@sum = internal global i16 0
+declare void @llvm.lifetime.start.p0(i64 immarg, ptr nocapture) nocallback nofree nosync nounwind willreturn memory(argmem: write)
+declare void @llvm.lifetime.end.p0(i64 immarg, ptr nocapture) nocallback nofree nosync nounwind willreturn memory(argmem: write)
+define i16 @f(i16 %n, i16 %y) {
+b0:
+  %a = alloca i16
+  %p = load i16, ptr @sum, align 1
+  br label %h
+h:
+  %s = phi i16 [ %p, %b0 ], [ %t, %l ]
+  %i = phi i16 [ 0, %b0 ], [ %j, %l ]
+  %c = icmp eq i16 %i, %n
+  br i1 %c, label %x, label %l
+l:
+  %t = add i16 %s, %i
+  store i16 %t, ptr @sum, align 2
+  %j = add i16 %i, 1
+  br label %h
+x:
+  call void @llvm.lifetime.start.p0(i64 2, ptr nonnull %a) nounwind
+  store volatile i16 5, ptr %a
+  %q = load i16, ptr @sum, align 1
+  ret i16 %q
+}
+",
+        &[&[0, 0], &[3, 5], &[5, 1]],
+    );
+    assert!(changed && text.matches("load i16, ptr @sum").count() == 1, "{text}");
+}
+
+/// x_matmul_f -O3 m32: GVN made the loads of the row `A[i][0..11]` that the
+/// `j` loop re-reads into values carried around its back edge, on the
+/// eight-slot x87 stack: 64,485 clk against gcc's 61,005 (gcc reads them in
+/// the loop). A float load is carried only while the float file has room.
+#[test]
+fn test_float_loads_are_carried_around_a_loop_only_while_the_float_file_has_room() {
+    let cells = 10;
+    let mut globals = String::new();
+    let mut before = String::new();
+    let mut header = String::new();
+    let mut sum = String::from("%s");
+    for k in 0..cells {
+        globals += &format!("@c{k} = global double 0.0\n");
+        before += &format!("  %a{k} = load double, ptr @c{k}\n");
+        header += &format!("  %r{k} = load double, ptr @c{k}\n  %t{k} = fadd double {sum}, %r{k}\n");
+        sum = format!("%t{k}");
+    }
+    let text = format!(
+        "{globals}
+define double @w() {{
+b0:
+  store double 1.0, ptr @c0
+  ret double 0.0
+}}
+
+define double @f(i32 %n, i1 %c) {{
+b0:
+{before}  br label %b1
+
+b1:
+  %i = phi i32 [ 0, %b0 ], [ %j, %b3 ]
+  %s = phi double [ 0.0, %b0 ], [ %e, %b3 ]
+{header}  %skip = icmp eq i32 %i, 1
+  br i1 %skip, label %b2, label %b3
+
+b2:
+  %w = call double @w()
+  br label %b3
+
+b3:
+  %e = fadd double {sum}, 0.0
+  %j = add i32 %i, 1
+  %more = icmp slt i32 %j, %n
+  br i1 %more, label %b1, label %b4
+
+b4:
+  ret double %e
+}}
+"
+    );
+    let loads_left = |float_limit| {
+        let mut module = parsed(&text);
+        let layout = llrm_analysis::testing::layout(&module);
+        let machine = crate::testing::FloatFile { inner: llrm_mir::target::Neutral, float_limit };
+        let outer = Outer::of(&module, Some(std::rc::Rc::new(machine)));
+        let (context, function) = module.function_mut("f").expect("@f");
+        run_impl_cfg(context, &layout, function, &outer, true, None);
+        let text = printed(&module);
+        let header = &text[text.find("\nb1:\n").expect("b1")..text.find("\nb2:\n").expect("b2")];
+        header.matches("load double").count()
+    };
+    let free = loads_left(None);
+    let priced = loads_left(Some(5));
+    assert!(
+        priced > free,
+        "{priced} loads stay in the loop with five float values allowed across the loop, {free} with none"
+    );
+}

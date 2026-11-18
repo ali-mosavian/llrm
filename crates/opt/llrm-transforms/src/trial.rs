@@ -1,7 +1,7 @@
-//! The state a target's driver and a pass share for a trial compile: the module is
-//! compiled again with one decision of the pass reversed, and the driver keeps
-//! whichever result it prices smaller or cheaper. Two trials use it, UNROLL-TRIAL and
-//! ROTATION-TRIAL.
+//! The state a target's driver and a pass share for a trial compile: the module
+//! is compiled again with one decision of the pass reversed, and the driver
+//! keeps whichever result it prices smaller or cheaper. Two trials use it,
+//! UNROLL-TRIAL and ROTATION-TRIAL.
 //!
 //! DEVIATE UNROLL-TRIAL (beyond the pin; owner 6502, exit 2026-12-05): the
 //! state the target's driver and the pass share for a trial unroll.
@@ -30,6 +30,155 @@ thread_local! {
     /// The functions with a loop that ROTATION-TRIAL rotated and a trial may
     /// leave unrotated.
     static ROTATED: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    /// The loops ROTATION-TRIAL noted, counted apart from the functions they
+    /// are in.
+    static ROTATED_LOOPS: Cell<usize> = const { Cell::new(0) };
+    /// Set while the trial compile of ROTATION-HOT runs: a loop whose copied
+    /// guard does not fold and whose trips are not counted is rotated as well.
+    static MORE: Cell<bool> = const { Cell::new(false) };
+    /// The functions, and loops together, ROTATION-HOT left unrotated.
+    static LEFT: RefCell<(Vec<String>, usize)> = const { RefCell::new((Vec::new(), 0)) };
+    /// Set while the trial compile of JT-LATCH-TRIAL runs: JumpThreading does
+    /// not copy a loop latch.
+    static LATCH_KEPT: Cell<bool> = const { Cell::new(false) };
+    /// The functions in which JumpThreading copied a latch.
+    static LATCH_COPIED: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    /// Set while the trial compile of SWITCH-LOOKUP-TRIAL runs: no switch is
+    /// turned into a lookup table.
+    static LOOKUPS_REFUSED: Cell<bool> = const { Cell::new(false) };
+    /// The lookup tables the base compile built.
+    static LOOKUPS_BUILT: Cell<usize> = const { Cell::new(0) };
+    /// Set while the trial compile of LIR-COPY-TRIAL runs: LoopIdiom leaves a
+    /// copy loop of an unknown count as a loop.
+    static COPY_LOOPS_KEPT: Cell<bool> = const { Cell::new(false) };
+    /// The functions in which LoopIdiom turned such a loop into a `memcpy`.
+    static COPY_CALLS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+}
+
+/// DEVIATE SWITCH-LOOKUP-TRIAL (beyond the pin; gcc's `-Os` keeps the compares
+/// of a sparse switch; owner x86-m32, exit 2026-11-30): whether the trial
+/// compile that builds no lookup table is running. The table is data bytes
+/// against the compares' code bytes, which only the object prices.
+pub fn refusing_lookup_tables() -> bool {
+    LOOKUPS_REFUSED.with(Cell::get)
+}
+
+/// Runs `body` with no switch turned into a lookup table.
+pub fn with_refused_lookup_tables<T>(body: impl FnOnce() -> T) -> T {
+    let before = LOOKUPS_REFUSED.with(|cell| cell.replace(true));
+    let value = body();
+    LOOKUPS_REFUSED.with(|cell| cell.set(before));
+    value
+}
+
+/// Notes a lookup table the base compile built, which a trial may refuse.
+pub(crate) fn note_lookup_table() {
+    LOOKUPS_BUILT.with(|count| count.set(count.get() + 1));
+}
+
+/// The tables [`note_lookup_table`] saw since the last call.
+pub fn take_lookup_tables() -> usize {
+    LOOKUPS_BUILT.with(|count| count.replace(0))
+}
+
+/// DEVIATE LIR-COPY-TRIAL (beyond the pin; owner x86-m32, exit 2026-11-30):
+/// whether the trial compile that keeps copy loops of an unknown count is
+/// running. The pin calls `memcpy` for them; whether the call is fewer bytes
+/// than the loop depends on the sequence around it, so the object decides.
+pub fn keeping_copy_loops() -> bool {
+    COPY_LOOPS_KEPT.with(Cell::get)
+}
+
+/// Runs `body` with those copy loops kept.
+pub fn with_kept_copy_loops<T>(body: impl FnOnce() -> T) -> T {
+    let before = COPY_LOOPS_KEPT.with(|cell| cell.replace(true));
+    let value = body();
+    COPY_LOOPS_KEPT.with(|cell| cell.set(before));
+    value
+}
+
+/// Notes that LoopIdiom made a `memcpy` of a copy loop of `function`, which a
+/// trial may refuse.
+pub(crate) fn note_copy_call(function: &str) {
+    COPY_CALLS.with(|list| {
+        let mut list = list.borrow_mut();
+        if !list.iter().any(|one| one == function) {
+            list.push(function.to_owned());
+        }
+    });
+}
+
+/// The functions [`note_copy_call`] saw since the last call.
+pub fn take_copy_calls() -> Vec<String> {
+    COPY_CALLS.with(|list| std::mem::take(&mut *list.borrow_mut()))
+}
+
+/// DEVIATE JT-LATCH-TRIAL (beyond the pin; gcc's `-Os` backward threader
+/// refuses a path through a loop latch; owner x86-m32, exit 2026-11-30):
+/// whether the trial compile that does not copy a loop latch is running.
+pub fn keeping_latches() -> bool {
+    LATCH_KEPT.with(Cell::get)
+}
+
+/// Runs `body` with loop latches kept in one copy.
+pub fn with_kept_latches<T>(body: impl FnOnce() -> T) -> T {
+    let before = LATCH_KEPT.with(|cell| cell.replace(true));
+    let value = body();
+    LATCH_KEPT.with(|cell| cell.set(before));
+    value
+}
+
+/// Notes that JumpThreading copied a loop latch of `function`, which a trial
+/// may refuse.
+pub(crate) fn note_latch_copy(function: &str) {
+    LATCH_COPIED.with(|list| {
+        let mut list = list.borrow_mut();
+        if !list.iter().any(|one| one == function) {
+            list.push(function.to_owned());
+        }
+    });
+}
+
+/// The functions [`note_latch_copy`] saw since the last call.
+pub fn take_latch_copies() -> Vec<String> {
+    LATCH_COPIED.with(|list| std::mem::take(&mut *list.borrow_mut()))
+}
+
+thread_local! {
+    /// Set while the trial compile of LOOP-COPY-TRIAL runs: a callee that holds
+    /// a loop is not inlined at several sites of a loop of its caller.
+    static REFUSE_LOOP_COPIES: Cell<bool> = const { Cell::new(false) };
+    /// The inlines of that kind the pass made since [`take_loop_copies`].
+    static LOOP_COPIES: Cell<usize> = const { Cell::new(0) };
+}
+
+/// DEVIATE LOOP-COPY-TRIAL (beyond the pin; owner z80, exit 2026-11-24):
+/// whether the trial compile that refuses the copies of a loop-holding callee
+/// at several sites inside a loop is running. The pin's InlineCost prices the
+/// call away and the callee's body, never the registers the merged loop needs
+/// (its `LoopPenalty` binds minsize callers only): on the z80 each copy spilled
+/// its pointers and the module came out larger and slower (idioms -O2: 4555 B /
+/// 25.58M T against 1993 B / 24.49M T).
+pub fn refusing_loop_copies() -> bool {
+    REFUSE_LOOP_COPIES.with(Cell::get)
+}
+
+/// Runs `body` with those copies refused.
+pub fn with_refused_loop_copies<T>(body: impl FnOnce() -> T) -> T {
+    let before = REFUSE_LOOP_COPIES.with(|cell| cell.replace(true));
+    let value = body();
+    REFUSE_LOOP_COPIES.with(|cell| cell.set(before));
+    value
+}
+
+/// Notes one inline the trial may refuse.
+pub(crate) fn note_loop_copy() {
+    LOOP_COPIES.with(|count| count.set(count.get() + 1));
+}
+
+/// The inlines [`note_loop_copy`] saw since the last call.
+pub fn take_loop_copies() -> usize {
+    LOOP_COPIES.with(|count| count.replace(0))
 }
 
 /// The trial threshold in force, if a trial compile is running.
@@ -69,25 +218,59 @@ pub fn take() -> (Vec<String>, u64) {
     ELIGIBLE.with(|list| std::mem::take(&mut *list.borrow_mut()))
 }
 
-/// Puts back what [`take`] returned, for the compile whose candidates they were.
+/// Puts back what [`take`] returned, for the compile whose candidates they
+/// were.
 pub fn restore(noted: (Vec<String>, u64)) {
     ELIGIBLE.with(|list| *list.borrow_mut() = noted);
 }
 
-/// Whether a trial unroll is kept at -O1, where each axis is strict: it adds no bytes (`added`
-/// <= 0) and costs no work (`saved` >= 0, work being what the code is expected to execute). The
-/// one rule of every target's -O1 trial (DEVIATE UNROLL-TRIAL, 6502-UNROLL-O1, UNROLL-O1-TRIAL).
+/// Whether a trial unroll is kept at -O1: the code is expected to execute no
+/// more (`saved` >= 0, work being what the code is expected to execute) and
+/// adds no bytes (`added` <= 0). Where the target prices bytes in clocks at -O1
+/// (`rate`, thousandths of a clock a byte, `Tti::unroll_milliclocks_per_byte`;
+/// 0 where it does not), an unroll that adds bytes is kept too if the work it
+/// saves repays them, as the -O2 unroll is (`unroll_pays`): -O1 is about clocks
+/// since the ruling of 2026-11-14, which replaced the strict rule of each axis.
+/// The one rule of every target's -O1 trial (DEVIATE UNROLL-TRIAL,
+/// 6502-UNROLL-O1, UNROLL-O1-TRIAL).
 pub fn keeps_at_o1(
     saved: i64,
     added: i64,
+    rate: i64,
 ) -> bool {
-    added <= 0 && saved >= 0
+    if added <= 0 {
+        return saved >= 0;
+    }
+    rate > 0 && saved > 0 && saved * 1000 >= added * rate
 }
 
-/// DEVIATE ROTATION-TRIAL (beyond the pin; gcc's `-Os` leaves a counted loop whose
-/// guard does not fold unrotated, `ch_base::copy_headers`; owner greedy-os-causes,
-/// exit 2026-12-05): whether the trial compile that leaves such loops unrotated is
-/// running.
+#[cfg(test)]
+mod tests {
+    use super::keeps_at_o1;
+
+    /// x_life -O1 (m32): the 3x3 nest unrolled ran half the work (212,914
+    /// against 425,704) for 32 B more once the outer loops' counters
+    /// spilled; the strict rule put it back and the nest ran twice as long. 312
+    /// is the 486's byte rate.
+    #[test]
+    fn an_unroll_that_halves_the_work_is_kept_for_a_few_bytes_where_bytes_are_priced() {
+        assert!(keeps_at_o1(212_790, 32, 312));
+        assert!(!keeps_at_o1(212_790, 32, 0), "the strict rule of a target that prices no bytes");
+    }
+
+    /// matmul -O1 (m32): +1601 B for a work saving the 486's byte rate does not
+    /// repay.
+    #[test]
+    fn an_unroll_that_does_not_repay_its_bytes_is_put_back() {
+        assert!(!keeps_at_o1(400, 1601, 312));
+        assert!(keeps_at_o1(0, -3, 312) && keeps_at_o1(0, 0, 0) && !keeps_at_o1(-1, -3, 312));
+    }
+}
+
+/// DEVIATE ROTATION-TRIAL (beyond the pin; gcc's `-Os` leaves a counted loop
+/// whose guard does not fold unrotated, `ch_base::copy_headers`; owner
+/// greedy-os-causes, exit 2026-12-05): whether the trial compile that leaves
+/// such loops unrotated is running.
 pub fn unrotated() -> bool {
     UNROTATED.with(Cell::get)
 }
@@ -100,9 +283,10 @@ pub fn with_unrotated<T>(body: impl FnOnce() -> T) -> T {
     value
 }
 
-/// Notes that `function` has a counted loop of an unfolded guard that was rotated
-/// and a trial may leave as it was.
+/// Notes that `function` has a counted loop of an unfolded guard that was
+/// rotated and a trial may leave as it was.
 pub(crate) fn note_rotated(function: &str) {
+    ROTATED_LOOPS.with(|count| count.set(count.get() + 1));
     ROTATED.with(|list| {
         let mut list = list.borrow_mut();
         if !list.iter().any(|one| one == function) {
@@ -111,21 +295,96 @@ pub(crate) fn note_rotated(function: &str) {
     });
 }
 
+/// The loops [`note_rotated`] saw since [`clear_rotated_loops`].
+pub fn rotated_loops() -> usize {
+    ROTATED_LOOPS.with(Cell::get)
+}
+
+/// Forgets the loops counted for an earlier compile.
+pub fn clear_rotated_loops() {
+    ROTATED_LOOPS.with(|count| count.set(0));
+}
+
 /// The functions noted by [`note_rotated`] since the last call.
 pub fn take_rotated() -> Vec<String> {
     ROTATED.with(|list| std::mem::take(&mut *list.borrow_mut()))
 }
 
-/// A function of more instructions than this is not priced twice: the second compile of a big function
-/// costs more than the loops in it can save (known_loads_walks.c -Os: one 6219-instruction `main`, 2.27x the
-/// compile time, put back). The functions the trial leaves unrotated hold up to 2038
-/// (x_jpeg_fixed -Os, -213 B), so 1024 gave that away.
+/// DEVIATE ROTATION-HOT (beyond the pin; owner x86-m32, exit 2026-11-24):
+/// whether the trial compile that also rotates the loops of an unfolded guard
+/// and uncounted trips is running. The pin rotates them at -Os; RS1 leaves
+/// them, and the finished code decides which pays (hot loops: fewer executed
+/// instructions for a few bytes).
+pub fn rotates_more() -> bool {
+    MORE.with(Cell::get)
+}
+
+/// Runs `body` with those loops rotated as well.
+pub fn with_more_rotation<T>(body: impl FnOnce() -> T) -> T {
+    let before = MORE.with(|cell| cell.replace(true));
+    let value = body();
+    MORE.with(|cell| cell.set(before));
+    value
+}
+
+/// Notes that `function` has a loop RS1 left unrotated that
+/// [`with_more_rotation`] would rotate.
+pub(crate) fn note_left(function: &str) {
+    LEFT.with(|list| {
+        let mut list = list.borrow_mut();
+        if !list.0.iter().any(|one| one == function) {
+            list.0.push(function.to_owned());
+        }
+        list.1 += 1;
+    });
+}
+
+/// The functions and loops noted by [`note_left`] since the last call.
+pub fn take_left() -> (Vec<String>, usize) {
+    LEFT.with(|list| std::mem::take(&mut *list.borrow_mut()))
+}
+
+/// Bytes a loop that ROTATION-HOT rotates may add (a copied guard: a compare
+/// and a jump), where the target (`Tti::rotation_hot_bytes_per_loop`) does not
+/// say.
+pub const ROTATION_HOT_BYTES_PER_LOOP: i64 = 4;
+
+/// Whether the ROTATION-HOT compile is kept: it executes less, and grows the
+/// code by no more than `bytes` for each loop it rotated.
+pub fn keeps_rotation_hot(
+    saved: i64,
+    added: i64,
+    loops: usize,
+    bytes: i64,
+) -> bool {
+    saved > 0 && added <= bytes * loops as i64
+}
+
+/// A function of more instructions than this is not priced twice: the second
+/// compile of a big function costs more than the loops in it can save
+/// (known_loads_walks.c -Os: one 6219-instruction `main`, 2.27x the
+/// compile time, put back). The functions the trial leaves unrotated hold up to
+/// 2038 (x_jpeg_fixed -Os, -213 B), so 1024 gave that away.
 pub const ROTATION_TRIAL_MAX_INSTRUCTIONS: usize = 4096;
 
-/// Whether the unrotated trial is kept at -Os, where bytes are the one strict axis: it
-/// is smaller. A tie keeps the pass's own result.
+/// Whether the unrotated trial is kept at -Os, where bytes are the one strict
+/// axis: it is smaller. A tie keeps the pass's own result.
 pub fn keeps_at_size(added: i64) -> bool {
     added < 0
+}
+
+/// DEVIATE UNROLL-OS-TRIAL: whether the -Os unroll trial is kept: the object is
+/// smaller, or it grows by at most `ROTATION_HOT_BYTES_PER_LOOP` for each
+/// function the trial took and the code runs less. `bytes_strict`
+/// (`Tuning::unroll_trial_bytes_strict`): bytes are the one axis at -Os, so
+/// only the smaller object is kept.
+pub fn keeps_unroll_at_size(
+    saved: i64,
+    added: i64,
+    functions: usize,
+    bytes_strict: bool,
+) -> bool {
+    added < 0 || (!bytes_strict && saved > 0 && added <= ROTATION_HOT_BYTES_PER_LOOP * functions as i64)
 }
 
 /// The names of the functions whose finished bodies differ between two modules
@@ -173,12 +432,14 @@ pub fn only(
     cut
 }
 
-/// DEVIATE OS-INLINE-TRIAL (beyond the pin; owner 6502-c, exit 2026-12-05): a call site the -Os
-/// byte model refused within its own error, to be inlined in a second compile and kept if the
-/// finished functions of its chain are smaller. The model is fit to the bytes the backend writes
-/// (`Tti::opt_size_inline_trial_by_bytes`) and is within 25% of them for two functions in three, so
-/// a copy it refuses by less than that is the backend's to decide. `caller` and `callees` are names:
-/// the compile is deterministic up to the site, so the same site is found again.
+/// DEVIATE OS-INLINE-TRIAL (beyond the pin; owner 6502-c, exit 2026-12-05): a
+/// call site the -Os byte model refused within its own error, to be inlined in
+/// a second compile and kept if the finished functions of its chain are
+/// smaller. The model is fit to the bytes the backend writes
+/// (`Tti::opt_size_inline_trial_by_bytes`) and is within 25% of them for two
+/// functions in three, so a copy it refuses by less than that is the backend's
+/// to decide. `caller` and `callees` are names: the compile is deterministic up
+/// to the site, so the same site is found again.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Site {
     pub caller: String,
@@ -211,6 +472,27 @@ pub(crate) fn inlines(
     INLINED.with(|list| list.borrow().iter().any(|one| one.caller == caller && one.callees == callees))
 }
 
+thread_local! {
+    /// Set while the compile that inlines as the pin's threshold alone says
+    /// runs.
+    static PIN_INLINES: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Whether the byte rate that refuses a growing inline is off, for the compile
+/// of the pin's own inline decisions.
+pub fn pinning_inlines() -> bool {
+    PIN_INLINES.with(Cell::get)
+}
+
+/// Runs `body` with every inline the pin's threshold takes made, whatever it
+/// grows.
+pub fn with_pin_inlines<T>(body: impl FnOnce() -> T) -> T {
+    let before = PIN_INLINES.with(|cell| cell.replace(true));
+    let value = body();
+    PIN_INLINES.with(|cell| cell.set(before));
+    value
+}
+
 /// Whether a trial compile is running.
 pub(crate) fn inlining() -> bool {
     INLINED.with(|list| !list.borrow().is_empty())
@@ -231,11 +513,12 @@ pub fn take_refused() -> Vec<Site> {
     REFUSED.with(|list| std::mem::take(&mut *list.borrow_mut()))
 }
 
-/// Which of the sites' groups the finished code keeps: sites that share a function (a caller or a
-/// callee) are one group, kept whole if the bytes of its functions are fewer in the second compile
-/// (`other`) than in the first (`kept`; a function a compile does not define is 0). A group whose
-/// caller one compile did not define is not priced: another inline took it, and its bytes went
-/// with that. Returns one flag per site.
+/// Which of the sites' groups the finished code keeps: sites that share a
+/// function (a caller or a callee) are one group, kept whole if the bytes of
+/// its functions are fewer in the second compile (`other`) than in the first
+/// (`kept`; a function a compile does not define is 0). A group whose
+/// caller one compile did not define is not priced: another inline took it, and
+/// its bytes went with that. Returns one flag per site.
 pub fn accepted(
     sites: &[Site],
     kept: &std::collections::BTreeMap<String, i64>,
@@ -254,7 +537,8 @@ pub fn accepted(
     let roots: Vec<usize> = (0..sites.len()).map(|one| root(&group, one)).collect();
     (0..sites.len())
         .map(|site| {
-            let members: Vec<&Site> = (0..sites.len()).filter(|one| roots[*one] == roots[site]).map(|one| &sites[one]).collect();
+            let members: Vec<&Site> =
+                (0..sites.len()).filter(|one| roots[*one] == roots[site]).map(|one| &sites[one]).collect();
             if members.iter().any(|one| !kept.contains_key(&one.caller) || !other.contains_key(&one.caller)) {
                 return false;
             }
@@ -301,8 +585,9 @@ mod inline_tests {
         Site { caller: caller.to_owned(), callees: callees.iter().map(|one| (*one).to_owned()).collect() }
     }
 
-    /// memcpy_libcall -Os: the model read the copies of `same` as +52 B, the backend writes -58 B once
-    /// `same` is gone. The chain's functions are priced together; the callee's bytes leave with it.
+    /// memcpy_libcall -Os: the model read the copies of `same` as +52 B, the
+    /// backend writes -58 B once `same` is gone. The chain's functions are
+    /// priced together; the callee's bytes leave with it.
     #[test]
     fn a_chain_whose_functions_are_fewer_bytes_is_kept_with_its_callee_gone() {
         let sites = [site("main", &["same"])];
@@ -312,8 +597,8 @@ mod inline_tests {
         assert_eq!(accepted(&sites, &kept, &bytes(&[("main", 380)])), [false], "a tie or more is put back");
     }
 
-    /// Two callers of one callee are one group: priced apart, each would count the callee's bytes as
-    /// its own saving.
+    /// Two callers of one callee are one group: priced apart, each would count
+    /// the callee's bytes as its own saving.
     #[test]
     fn callers_of_one_callee_are_priced_as_one_group() {
         let sites = [site("a", &["h"]), site("b", &["h"])];
@@ -324,7 +609,8 @@ mod inline_tests {
         assert_eq!(accepted(&sites, &kept, &cheaper), [true, true]);
     }
 
-    /// A caller another inline absorbed has no bytes of its own in one compile: that is not a saving.
+    /// A caller another inline absorbed has no bytes of its own in one compile:
+    /// that is not a saving.
     #[test]
     fn a_caller_a_compile_does_not_define_is_not_priced() {
         let sites = [site("line", &["kernel"])];
@@ -377,4 +663,129 @@ mod moved_tests {
         assert!(defined("f") && !defined("g"));
         assert!(differing(&one, &module("1")).is_empty());
     }
+}
+
+#[cfg(test)]
+mod unroll_keep_tests {
+    use super::*;
+
+    /// x86_64 -Os kept an unroll that grew long_double_union_pun by 13 B (53 ->
+    /// 66; clang 53) because the code ran less: the one strict axis at -Os
+    /// is bytes. A target that says so keeps only the smaller object.
+    #[test]
+    fn a_bytes_strict_unroll_trial_keeps_only_a_smaller_object() {
+        assert!(keeps_unroll_at_size(10, 3, 1, false), "m32 keeps a few bytes for less work");
+        assert!(!keeps_unroll_at_size(10, 3, 1, true), "strict: a grown object is put back");
+        assert!(keeps_unroll_at_size(0, -1, 1, true), "strict: a smaller one stays");
+        assert!(!keeps_unroll_at_size(10, 0, 1, true), "strict: a tie keeps the pass's own result");
+    }
+}
+
+/// DEVIATE UNROLL-SPEED-TRIAL (beyond the pin; owner z80, exit 2026-11-24): a
+/// decision of the full unroll at -O2 and -O3 that a driver compiles the module
+/// again without, or with, and keeps the smaller object. Neither the pin's
+/// threshold nor the price (bytes added, clocks saved) can see what an unroll
+/// frees after it: one loop's copies fold the loads of the next and a whole
+/// array is deleted (z80 loop_fusion -O2: priced "adds 108 B" a loop, the
+/// object 831 B smaller), or its copies fold nothing and are copied again by
+/// the inliner (memmove_overlap -O3: `fill`, 32 trips, 589 B rolled, 1329 B
+/// unrolled).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SpeedUnroll {
+    /// A full unroll is made only where it adds no bytes, and the
+    /// inlinable-callee bypass of the price is off.
+    NoGrow,
+    /// An inline the speed caller's byte rate would take is made only where it
+    /// adds no bytes: the rate is [`NO_GROW_RATE`]. Independent of
+    /// `NoGrow`: the two answer different decisions, and a module can be
+    /// smaller with one and not the other (idioms -O3: 1856 B with the
+    /// unrolls refused, 3229 B with the inlines refused too).
+    NoInlineGrowth,
+    /// Both of the above: switch_table_in_code -O2 is 138 B smaller with both,
+    /// 78 B with the inline alone.
+    NoGrowBoth,
+    /// The full unroll's threshold is this one, where the pin's -O2 is 150 and
+    /// its -O3 300.
+    Wide(u32),
+}
+
+impl SpeedUnroll {
+    /// Whether the variant makes only the full unrolls that add no bytes.
+    pub fn refuses_unroll_growth(self) -> bool {
+        matches!(self, Self::NoGrow | Self::NoGrowBoth)
+    }
+
+    /// Whether the variant makes only the inlines that add no bytes.
+    pub fn refuses_inline_growth(self) -> bool {
+        matches!(self, Self::NoInlineGrowth | Self::NoGrowBoth)
+    }
+}
+
+/// The byte rate of the no-growth variants: a byte costs more than any clocks
+/// can repay.
+pub(crate) const NO_GROW_RATE: i64 = 1 << 40;
+
+/// The threshold of [`SpeedUnroll::Wide`]: the pin's at -O3.
+pub const WIDE_THRESHOLD: u32 = 300;
+
+/// The loops and call sites of a compile at -O2 and up whose decision a variant
+/// changes, asked of each as it is decided: those unrolled that `NoGrow` would
+/// not unroll (`made`), those refused that `Wide` would unroll (`refused`), the
+/// inlines that `NoInlineGrowth` would not make (`inlined`). A driver
+/// compiles a variant only where its count is not 0.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct UnrollDecisions {
+    pub made: usize,
+    pub refused: usize,
+    pub inlined: usize,
+}
+
+thread_local! {
+    /// The variant of UNROLL-SPEED-TRIAL running, if any.
+    static SPEED_UNROLL: Cell<Option<SpeedUnroll>> = const { Cell::new(None) };
+    /// The decisions since [`take_speed_unrolls`].
+    static SPEED_UNROLLS: Cell<UnrollDecisions> = const { Cell::new(UnrollDecisions { made: 0, refused: 0, inlined: 0 }) };
+}
+
+/// The UNROLL-SPEED-TRIAL variant in force, if a trial compile is running.
+pub fn speed_unroll() -> Option<SpeedUnroll> {
+    SPEED_UNROLL.with(Cell::get)
+}
+
+/// Runs `body` under `variant` (`None`: the pin's decisions).
+pub fn with_speed_unroll<T>(
+    variant: Option<SpeedUnroll>,
+    body: impl FnOnce() -> T,
+) -> T {
+    let before = SPEED_UNROLL.with(|cell| cell.replace(variant));
+    let value = body();
+    SPEED_UNROLL.with(|cell| cell.set(before));
+    value
+}
+
+/// Notes a call site inlined that adds bytes.
+pub(crate) fn note_speed_inline() {
+    SPEED_UNROLLS.with(|cell| {
+        let mut seen = cell.get();
+        seen.inlined += 1;
+        cell.set(seen);
+    });
+}
+
+/// Notes a loop unrolled (`made`) or, with known trips, refused.
+pub(crate) fn note_speed_unroll(made: bool) {
+    SPEED_UNROLLS.with(|cell| {
+        let mut seen = cell.get();
+        if made {
+            seen.made += 1;
+        } else {
+            seen.refused += 1;
+        }
+        cell.set(seen);
+    });
+}
+
+/// The decisions [`note_speed_unroll`] saw since the last call.
+pub fn take_speed_unrolls() -> UnrollDecisions {
+    SPEED_UNROLLS.with(Cell::take)
 }

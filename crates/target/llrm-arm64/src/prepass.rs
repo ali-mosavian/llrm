@@ -68,7 +68,7 @@ fn pure(op: &Op) -> bool {
                     | Inst::AddPageOffset { .. }
                     | Inst::Adr { .. }
                     | Inst::FpMoveImm { .. }
-                    | Inst::VectorFill { fill: Fill::Zero | Fill::Byte(_) | Fill::Imm { .. } | Fill::Mask(_) | Fill::MaskD(_), .. }
+                    | Inst::VectorFill { fill: Fill::Zero | Fill::Byte(_) | Fill::Byte8(_) | Fill::Imm { .. } | Fill::Mask(_) | Fill::MaskD(_), .. }
                     | Inst::FpInt { op: FpConvert::Bits { to_fp: true }, .. }
             ) && !matches!(inst, Inst::AddSubImm { rd, .. } if !rd.is_virtual())
                 // Reading the stack pointer (stacksave, a dynamic alloca's
@@ -212,6 +212,23 @@ pub(crate) fn definitions(function: &MFunc) -> HashMap<Reg, usize> {
     count
 }
 
+/// How many fresh definitions each virtual register has: a write that is
+/// not also a read. A pre- or post-indexed access updates its base in place
+/// (`UseDef`), which is no second input of a phi.
+fn fresh_definitions(function: &MFunc) -> HashMap<Reg, usize> {
+    let mut count: HashMap<Reg, usize> = HashMap::default();
+    for block in &function.blocks {
+        for op in &block.ops {
+            op.for_each_register(&mut |register, role| {
+                if role == Role::Def {
+                    *count.entry(register).or_default() += 1;
+                }
+            });
+        }
+    }
+    count
+}
+
 /// Whether `op` only computes registers, so that it can go when none is read.
 /// Loads stay (a volatile load is not told apart), and so does anything that
 /// sets the flags.
@@ -287,6 +304,7 @@ pub fn run(
     dead_definitions(function);
     non_flag_setting(function);
     redundant_zero_extends(function);
+    redundant_zero_high_moves(function);
     narrow_extension_uses(function);
     dead_code(function);
 }
@@ -645,10 +663,12 @@ fn readers_of(function: &MFunc) -> HashMap<Reg, Vec<(usize, usize)>> {
 /// code; the heuristics guard register pressure). Without it 9 of 36 arm64
 /// -Os cells are bigger and 1 smaller (recpow -4 B; jpeg_fixed +20, stft_single
 /// +24, lru +16, handoff/w15-cse-heur-only-ab-2026-11-10.md). Owner w15.
-/// Exit: 11-30.
+/// Exit: 11-30. Not over a call: a constant shared past one is kept in a
+/// callee-saved register (two more instructions per call level, recpow -Os),
+/// where the pin makes it again after the call.
 fn profitable(
     readers: &HashMap<Reg, Vec<(usize, usize)>>,
-    definitions: &HashMap<Reg, usize>,
+    fresh: &HashMap<Reg, usize>,
     blocks: &[crate::mfunc::MBlock],
     earlier: Reg,
     register: Reg,
@@ -680,7 +700,7 @@ fn profitable(
             }
             for &(block, index) in reads(one) {
                 if let Op::Copy { dst, .. } = blocks[block].ops[index] {
-                    if definitions.get(&dst) != Some(&1) {
+                    if fresh.get(&dst) != Some(&1) {
                         return true;
                     }
                     pending.push(dst);
@@ -711,12 +731,79 @@ fn as_cheap_as_a_move(op: &Op) -> bool {
     }
 }
 
+/// Whether a call runs between the definition of `earlier` (in `from`) and
+/// the operation `at` of `to`, on some path: sharing a constant over it keeps
+/// the value in a callee-saved register or reloads it, where the pin's greedy
+/// makes it again after the call (a rematerializable `MOVi32imm`).
+fn call_between(
+    blocks: &[crate::mfunc::MBlock],
+    cfg: &Cfg,
+    earlier: Reg,
+    from: usize,
+    to: usize,
+    at: usize,
+) -> bool {
+    let is_call = |op: &Op| matches!(op, Op::Call { .. });
+    let defined_at = blocks[from].ops.iter().position(|op| defined(op) == Some(earlier)).unwrap_or(0);
+    if blocks[from].ops[defined_at..].iter().any(is_call) || blocks[to].ops[..at].iter().any(is_call) {
+        return true;
+    }
+    let reach = |start: usize, edges: &[Vec<usize>]| {
+        let mut seen = HashSet::default();
+        let mut pending = vec![start];
+        while let Some(one) = pending.pop() {
+            if seen.insert(one) {
+                pending.extend(edges[one].iter().copied());
+            }
+        }
+        seen
+    };
+    let (after, before) = (reach(from, &cfg.successors), reach(to, &cfg.predecessors));
+    after.intersection(&before).any(|&one| one != from && one != to && blocks[one].ops.iter().any(is_call))
+}
+
+/// The `adrp`s the pin keeps inside a `MOVaddr`: a page register defined once
+/// and read only by the `add :lo12:` of the same symbol in its block. The pin
+/// has one instruction there, which `MachineCSE` never equates with the bare
+/// `ADRP` a folded load uses, so the two stay apart: sharing the page makes
+/// the address live across a call in a callee-saved register, and its holder
+/// saves it in the entry, which shrink wrapping then cannot move. Not at
+/// `optsize`, where a shared page is the smaller code (the DEVIATE of
+/// [`profitable`]).
+fn address_pair_heads(
+    function: &MFunc,
+    definitions: &HashMap<Reg, usize>,
+) -> HashSet<(usize, usize)> {
+    let readers = readers_of(function);
+    let mut heads = HashSet::default();
+    for (block, body) in function.blocks.iter().enumerate() {
+        for (index, op) in body.ops.iter().enumerate() {
+            let Op::I(Inst::Adr { page: true, rd, target, got: false }) = op else { continue };
+            let page = Reg::Gpr(*rd);
+            if definitions.get(&page) != Some(&1) {
+                continue;
+            }
+            if let [(reader_block, reader)] = readers.get(&page).map_or(&[][..], Vec::as_slice)
+                && *reader_block == block
+                && matches!(
+                    &body.ops[*reader],
+                    Op::I(Inst::AddPageOffset { rn, target: add, .. }) if rn == rd && add == target
+                )
+            {
+                heads.insert((block, index));
+            }
+        }
+    }
+    heads
+}
+
 fn cse(
     function: &mut MFunc,
     cfg: &Cfg,
     optsize: bool,
 ) {
     let definitions = definitions(function);
+    let fresh = fresh_definitions(function);
     // The table, scoped by the dominator tree: a block sees what its
     // dominators computed.
     let mut children: Vec<Vec<usize>> = vec![Vec::new(); function.blocks.len()];
@@ -725,13 +812,14 @@ fn cse(
     }
     let mut rename: HashMap<Reg, Reg> = HashMap::default();
     let mut removed: HashSet<(usize, usize)> = HashSet::default();
-    let mut table: HashMap<Op, Reg> = HashMap::default();
+    let mut table: HashMap<(Op, bool), Reg> = HashMap::default();
+    let heads = if optsize { HashSet::default() } else { address_pair_heads(function, &definitions) };
     // The block each table entry's register is defined in: equal operations in
     // one block are one DAG node in the pin, shared whatever their readers.
     let mut home: HashMap<Reg, usize> = HashMap::default();
     let copies = single_copies(function, &definitions);
     let readers = readers_of(function);
-    let mut stack: Vec<(usize, usize, Vec<Op>)> = vec![(0, 0, Vec::new())];
+    let mut stack: Vec<(usize, usize, Vec<(Op, bool)>)> = vec![(0, 0, Vec::new())];
     // Depth-first over the tree, undoing a block's entries when it is left.
     while let Some((block, next, added)) = stack.last_mut() {
         if *next == 0 {
@@ -745,18 +833,27 @@ fn cse(
                 if definitions.get(&register) != Some(&1) {
                     continue;
                 }
-                let key = keyed(&renamed(op, &rename, &copies));
+                let key = (keyed(&renamed(op, &rename, &copies)), heads.contains(&(*block, index)));
                 match table.get(&key) {
                     // A flag-setting instruction is shared where its own flags
                     // are dead: the earlier one still sets them
                     // (`MachineCSE`, `PhysRegDefsReach`).
                     Some(&earlier)
                         if (!setter || flags_dead(&function.blocks[*block].ops, index))
-                            && (optsize
+                            && ((optsize
+                                && !(as_cheap_as_a_move(op)
+                                    && call_between(
+                                        &function.blocks,
+                                        cfg,
+                                        earlier,
+                                        home[&earlier],
+                                        *block,
+                                        index,
+                                    )))
                                 || home.get(&earlier) == Some(block)
                                 || profitable(
                                     &readers,
-                                    &definitions,
+                                    &fresh,
                                     &function.blocks,
                                     earlier,
                                     register,
@@ -1397,6 +1494,64 @@ mod tests {
         assert_eq!(movzs(2), 0, "{function:#?}");
     }
 
+    /// recpow -Os: the divisor of `power`'s even path was shared with the
+    /// one after the recursive call, so it lived over the call in `x20`
+    /// (`stp x20, x19` and `ldp x20, x19` where gcc and the pin save one
+    /// register): +9.0% executed instructions at -104 B of headroom.
+    #[test]
+    fn at_optsize_a_constant_is_not_shared_over_a_call() {
+        let mut function = MFunc::new("f");
+        let (a, b, c, d, e) = (64, 65, 66, 67, 68);
+        function.next_register = 70;
+        let copy = |dst: u32, src: u32| Op::Copy { dst: Reg::Gpr(Gpr(dst)), src: Reg::Gpr(Gpr(src)) };
+        function.blocks = vec![
+            MBlock { label: "entry".into(), ops: vec![movz(b, 0), branch_to("loop")].into() },
+            MBlock {
+                label: "loop".into(),
+                ops: vec![
+                    movz(a, 5000),
+                    add(d, b, a),
+                    Op::I(Inst::CompareBranch {
+                        nonzero: true,
+                        width: Width::X,
+                        rt: Gpr(d),
+                        target: Target::Label("loop".into()),
+                    }),
+                    branch_to("call"),
+                ]
+                .into(),
+            },
+            MBlock {
+                label: "call".into(),
+                ops: vec![
+                    Op::Call {
+                        callee: crate::mfunc::Callee::Symbol("g".into()),
+                        uses: Vec::new(),
+                        defs: Vec::new(),
+                        tail: false,
+                    },
+                    branch_to("after"),
+                ]
+                .into(),
+            },
+            MBlock {
+                label: "after".into(),
+                ops: vec![
+                    movz(c, 5000),
+                    copy(e, c),
+                    add(69, e, d),
+                    Op::Return { uses: vec![Reg::Gpr(Gpr(69))], tail: None },
+                ]
+                .into(),
+            },
+        ];
+        run(&mut function, true);
+        let movzs = |block: usize| {
+            function.blocks[block].ops.iter().filter(|op| matches!(op, Op::I(Inst::MoveWide { .. }))).count()
+        };
+        assert_eq!(movzs(3), 1, "{function:#?}");
+    }
+
     /// Heuristic 3: a value a phi reads is not reused in a block that does not
     /// read it already (the pin: `isProfitableToCSE`, the PHI scan).
     #[test]
@@ -1610,6 +1765,52 @@ mod tests {
             function.blocks[block].ops.iter().filter(|op| matches!(op, Op::I(Inst::MoveWide { .. }))).count()
         };
         assert_eq!((movzs(0), movzs(2)), (1, 1), "{function:#?}");
+    }
+
+    /// getbit (jpeg_single -O3): the page a folded load reads and the page of a
+    /// `MOVaddr` two blocks away were one `adrp`, so the address lived across
+    /// the call in `x19`, saved in the entry, and shrink wrapping could not
+    /// move the frame: 160k more instructions than clang. The pin's `MOVaddr`
+    /// is one instruction, never equal to the bare `ADRP`.
+    #[test]
+    fn the_page_of_an_address_pair_is_not_shared_with_a_bare_page() {
+        let symbol = || Target::Symbol { name: "g".into(), addend: 4 };
+        let adrp = |rd: u32| Op::I(Inst::Adr { page: true, rd: Gpr(rd), target: symbol(), got: false });
+        let load = |rd: u32, base: u32| {
+            Op::I(Inst::Load {
+                mem: Memory::Int { width: Width::W, bytes: 4, sign: false, reg: Gpr(rd) },
+                addr: Addr::PageOffset { base: Gpr(base), target: symbol(), got: false },
+                mmo: MemOperand::default(),
+            })
+        };
+        let low = |rd: u32, rn: u32| Op::I(Inst::AddPageOffset { rd: Gpr(rd), rn: Gpr(rn), target: symbol() });
+        let mut function = function();
+        function.blocks = vec![
+            MBlock { label: "entry".into(), ops: vec![adrp(64), load(65, 64), branch_to("mid")].into() },
+            MBlock { label: "mid".into(), ops: vec![branch_to("tail")].into() },
+            MBlock {
+                label: "tail".into(),
+                ops: vec![
+                    adrp(66),
+                    low(67, 66),
+                    Op::I(Inst::Store {
+                        mem: Memory::Int { width: Width::X, bytes: 8, sign: false, reg: Gpr(67) },
+                        addr: Addr::Slot { slot: 0, offset: 0 },
+                        mmo: MemOperand::default(),
+                    }),
+                    Op::Return { uses: vec![], tail: None },
+                ]
+                .into(),
+            },
+        ];
+        run(&mut function, false);
+        let pages = function
+            .blocks
+            .iter()
+            .flat_map(|block| block.ops.iter())
+            .filter(|op| matches!(op, Op::I(Inst::Adr { .. })))
+            .count();
+        assert_eq!(pages, 2, "{function:#?}");
     }
 
     /// A four-chunk 64-bit constant is not as cheap as a move: it was remade
@@ -1878,6 +2079,67 @@ fn redundant_zero_extends(function: &mut MFunc) {
             op.visit(&mut |slot, _| {
                 if let Some(Reg::Gpr(new)) = rename.get(&slot.key())
                     && let RegRef::Gpr(slot) = slot
+                {
+                    *slot = *new;
+                }
+            });
+        }
+    }
+}
+
+/// `AArch64MIPeepholeOpt::visitFMOVDr`: an `fmov d, d` already follows an
+/// instruction that writes a `D` register (a 64-bit load, a `dup` of 64 bits,
+/// an `fmov d, x`), which clears the upper half; the move goes.
+/// `is64bitDefwithZeroHigh64bit` is translated for the instructions this
+/// selector makes; the pin's other cases (`COPY` of a general register, a load
+/// of a tuple) are not.
+fn redundant_zero_high_moves(function: &mut MFunc) {
+    let definitions = definitions(function);
+    let zeroed: HashSet<Reg> = function
+        .blocks
+        .iter()
+        .flat_map(|block| &block.ops)
+        .filter_map(|op| match op {
+            Op::I(Inst::Load { mem: Memory::Fp { bytes: 8, reg }, addr: Addr::Offset { .. }, .. })
+            | Op::I(Inst::VectorFill {
+                rd: reg,
+                fill: Fill::Dup(Arrangement::B8 | Arrangement::H4 | Arrangement::S2, _),
+            })
+            | Op::I(Inst::FpInt {
+                op: FpConvert::Bits { to_fp: true },
+                width: Width::X,
+                size: FpSize::D,
+                fpr: reg,
+                ..
+            }) => Some(Reg::Fpr(*reg)),
+            _ => None,
+        })
+        .filter(|register| definitions.get(register) == Some(&1))
+        .collect();
+    let mut rename: HashMap<Reg, Reg> = HashMap::default();
+    for block in &mut function.blocks {
+        block
+            .ops
+            .retain(
+                |op| {
+                    let Op::I(Inst::FpUnary { op: FpUnary::Mov, size: FpSize::D, rd, rn }) = op else { return true };
+                    let (from, to) = (Reg::Fpr(*rd), Reg::Fpr(*rn));
+                    if rd.is_virtual() && definitions.get(&from) == Some(&1) && zeroed.contains(&to) {
+                        rename.insert(from, to);
+                        return false;
+                    }
+                    true
+                },
+            );
+    }
+    if rename.is_empty() {
+        return;
+    }
+    for block in &mut function.blocks {
+        for op in &mut block.ops {
+            op.visit(&mut |slot, _| {
+                if let Some(Reg::Fpr(new)) = rename.get(&slot.key())
+                    && let RegRef::Fpr(slot) = slot
                 {
                     *slot = *new;
                 }

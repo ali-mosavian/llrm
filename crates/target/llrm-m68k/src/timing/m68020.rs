@@ -23,71 +23,24 @@
 //! 5. `trap #n` is Table 8.2.17's exception entry (20 clocks), not the handler;
 //!    the rest of that table, `rte`, `callm` and `rtm` are not priced.
 
-use std::sync::LazyLock;
-
-use super::table::{Cell, key, parse_cell, split_csv};
+use super::table::{Cell, key, parse_cell};
 use super::{Mode, Operand, Size, mode, places, size_of};
 
-struct Row {
-    instruction: String,
-    operands: String,
-    mark: String,
-    cache: String,
+include!(concat!(env!("OUT_DIR"), "/m68020_tables.rs"));
+
+fn move_label(text: &str) -> String {
+    key(text.split(" or ").next().unwrap_or(text))
 }
 
-/// The rows of the instruction tables 8.2.7 to 8.2.16.
-static ROWS: LazyLock<Vec<Row>> = LazyLock::new(|| {
-    let files = [
-        include_str!("m68020/t8.2.7.csv"),
-        include_str!("m68020/t8.2.8.csv"),
-        include_str!("m68020/t8.2.9.csv"),
-        include_str!("m68020/t8.2.10.csv"),
-        include_str!("m68020/t8.2.11.csv"),
-        include_str!("m68020/t8.2.12.csv"),
-        include_str!("m68020/t8.2.13.csv"),
-        include_str!("m68020/t8.2.14.csv"),
-        include_str!("m68020/t8.2.15.csv"),
-        include_str!("m68020/t8.2.16.csv"),
-        include_str!("m68020/t8.2.17.csv"),
-    ];
-    files
-        .iter()
-        .flat_map(|text| text.lines().skip(1))
-        .map(split_csv)
-        .map(|fields| Row {
-            instruction: fields[0].clone(),
-            operands: fields[1].clone(),
-            mark: fields[2].clone(),
-            cache: fields[4].clone(),
-        })
-        .collect()
-});
-
-/// An effective address table: `(mode label, cache cell)`.
-fn grid(text: &str) -> Vec<(String, String)> {
-    text.lines().skip(1).map(split_csv).map(|fields| (key(&fields[0]), fields[2].clone())).collect()
+fn position(
+    table: &[(&str, usize)],
+    label: &str,
+) -> Option<usize> {
+    table.binary_search_by(|(name, _)| (*name).cmp(label)).ok().map(|at| table[at].1)
 }
-
-struct Grids {
-    fetch: Vec<(String, String)>,
-    fetch_immediate: Vec<(String, String)>,
-    calculate: Vec<(String, String)>,
-    calculate_immediate: Vec<(String, String)>,
-    jump: Vec<(String, String)>,
-    moves: Vec<Vec<String>>,
-}
-
-static GRIDS: LazyLock<Grids> = LazyLock::new(|| Grids {
-    fetch: grid(include_str!("m68020/t8.2.1.csv")),
-    fetch_immediate: grid(include_str!("m68020/t8.2.2.csv")),
-    calculate: grid(include_str!("m68020/t8.2.3.csv")),
-    calculate_immediate: grid(include_str!("m68020/t8.2.4.csv")),
-    jump: grid(include_str!("m68020/t8.2.5.csv")),
-    moves: include_str!("m68020/t8.2.6-cache.csv").lines().map(split_csv).collect(),
-});
 
 fn lookup(
-    grid: &[(String, String)],
+    grid: &[(&str, &str)],
     label: &str,
 ) -> Option<u32> {
     let label = key(label);
@@ -127,7 +80,7 @@ fn fetch(
     mode: Mode,
     size: Size,
 ) -> Option<u32> {
-    lookup(&GRIDS.fetch, label(mode, size))
+    lookup(FETCH, label(mode, size))
 }
 
 /// 8.2.2 and 8.2.4: `#<data>.W|L,<destination>`; a byte immediate is the word
@@ -160,7 +113,7 @@ fn fetch_immediate(
     mode: Mode,
     size: Size,
 ) -> Option<u32> {
-    lookup(&GRIDS.fetch_immediate, &immediate_label(mode, size)?)
+    lookup(FETCH_IMMEDIATE, &immediate_label(mode, size)?)
 }
 
 fn calculate(mode: Mode) -> Option<u32> {
@@ -169,13 +122,13 @@ fn calculate(mode: Mode) -> Option<u32> {
         Mode::AbsL => "<data>.L",
         other => label(other, Size::W),
     };
-    lookup(&GRIDS.calculate, label)
+    lookup(CALCULATE, label)
 }
 
 fn calculate_immediate(mode: Mode) -> Option<u32> {
     // the table prints no `-(An)` row; it is `(An)+`'s (limit 5)
     let mode = if mode == Mode::Pre { Mode::Post } else { mode };
-    lookup(&GRIDS.calculate_immediate, &immediate_label(mode, Size::W)?)
+    lookup(CALCULATE_IMMEDIATE, &immediate_label(mode, Size::W)?)
 }
 
 fn jump(mode: Mode) -> Option<u32> {
@@ -183,7 +136,7 @@ fn jump(mode: Mode) -> Option<u32> {
         Mode::Disp | Mode::PcDisp => "(d16,An)",
         other => label(other, Size::W),
     };
-    lookup(&GRIDS.jump, label)
+    lookup(JUMP, label)
 }
 
 /// The effective address time a row's mark asks for.
@@ -207,9 +160,11 @@ fn marked(
 fn row(
     instruction: &str,
     operands: &str,
-) -> Option<&'static Row> {
+) -> Option<(&'static str, &'static str)> {
     let (instruction, operands) = (key(instruction), key(operands));
-    ROWS.iter().find(|row| key(&row.instruction) == instruction && key(&row.operands) == operands)
+    let at = ROW_INDEX.binary_search_by(|(i, o, _)| (*i, *o).cmp(&(instruction.as_str(), operands.as_str()))).ok()?;
+    let (_, _, row) = ROW_INDEX[at];
+    Some((ROWS[row].2, ROWS[row].3))
 }
 
 /// A row's cache clocks, `+ n * registers`, with the effective address time of
@@ -221,10 +176,10 @@ fn price(
     size: Size,
     registers: u32,
 ) -> Option<u32> {
-    let row = row(instruction, operands)?;
-    let text: String = row.cache.chars().filter(|c| !c.is_whitespace()).collect();
+    let (mark, cache) = row(instruction, operands)?;
+    let text: String = cache.chars().filter(|c| !c.is_whitespace()).collect();
     let Cell { base, per, .. } = parse_cell(&text)?;
-    Some(base + per * registers + marked(&row.mark, ea, size)?)
+    Some(base + per * registers + marked(mark, ea, size)?)
 }
 
 /// A row named whole (`DBcc (cc = True)`), no operands column.
@@ -248,12 +203,10 @@ fn move_clocks(
         Mode::Imm => return None,
         other => label(other, size),
     };
-    let moves = &GRIDS.moves;
     // the matrix labels PC displacement and index with the address register
     // forms
-    let strip = |text: &str| key(text.split(" or ").next().unwrap_or(text));
-    let column = moves[0].iter().position(|name| strip(name) == strip(destination_label))?;
-    let found = moves[1..].iter().find(|fields| strip(&fields[0]) == strip(source_label))?;
+    let column = position(MOVE_COLUMNS, &move_label(destination_label))?;
+    let found = MOVES[1 + position(MOVE_ROWS, &move_label(source_label))?];
     parse_cell(&found[column]).map(|cell| cell.base)
 }
 

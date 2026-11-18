@@ -11,7 +11,7 @@ cc=${LLRM_CC_DIR:?dir with llrm-cc}/llrm-cc; CRT=${CRT:-$HOME/scratch/llvm-src/c
 T=$(mktemp -d); trap 'rm -rf "${T:?}"' EXIT
 case $tgt in
   m32) ccw="x86_32-linux"; cl="/usr/bin/clang --target=i486-linux-gnu -fno-pic -fno-asynchronous-unwind-tables"; extra="-march=i486"; cfg="-DSF_INTABI=1 -include stdint.h -include $rt/config/x86_m32/config.h"
-       bytes() { size -A "$1" | awk '$1==".text"||$1~/^\.rodata/{s+=$2} END{print s+0}'; } ;;
+       bytes() { size -A "$1" | awk '$1~/^\.text/||$1~/^\.rodata/{s+=$2} END{print s+0}'; } ;;
   wasm32) ccw="wasm32"; cl="${CLANG_WASM:-$HOME/scratch/llvm-build-clang-wasm/bin/clang} --target=wasm32 -ffreestanding"; extra=""; cfg="-include stdint.h -include $rt/config/wasm/config.h"
        bytes() { local s=0 h; for h in $(wasm-objdump -h "$1" | awk '$1=="Code"||$1=="Data"' | grep -o 'size=0x[0-9a-f]*' | cut -d= -f2); do s=$((s + h)); done; echo $s; } ;;
   *) echo "target: m32 or wasm32" >&2; exit 2 ;;

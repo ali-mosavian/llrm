@@ -165,6 +165,11 @@ impl FunctionCompiler<'_> {
         let moved = self.moved().clone();
         let must = self.must().clone();
         for target in targets {
+            // A panic block is shared, never returns and drops nothing: it is
+            // no loop head.
+            if self.panic_blocks.values().any(|shared| shared == target) {
+                continue;
+            }
             if let Some(before) = self.moves.state.get(target) {
                 let depth = self
                     .loops

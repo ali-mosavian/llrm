@@ -91,6 +91,21 @@ fn error<T>(text: impl Into<String>) -> Result<T, Error> {
     Err(Error(text.into()))
 }
 
+/// `(opcode, Q, S, size)` of the single-structure forms: Q:S:size is the
+/// index, as many bits of it as the lane leaves.
+fn single_structure_fields(
+    lanes: Arrangement,
+    index: u8,
+) -> (u32, u32, u32, u32) {
+    let index = u32::from(index);
+    match lanes.full() {
+        Arrangement::B16 => (0b000, index >> 3, (index >> 2) & 1, index & 3),
+        Arrangement::H8 => (0b010, index >> 2, (index >> 1) & 1, (index & 1) << 1),
+        Arrangement::S4 => (0b100, index >> 1, index & 1, 0b00),
+        _ => (0b100, index, 0, 0b01),
+    }
+}
+
 fn reg(register: Gpr) -> Result<u32, Error> {
     if register.0 > 31 { error(format!("x{} is no machine register", register.0)) } else { Ok(register.0) }
 }
@@ -424,15 +439,228 @@ pub fn encode(inst: &Inst) -> Result<Encoded, Error> {
         Inst::FpSelect { size, rd, rn, rm, cond } => {
             0x1E20_0C00 | size.field() << 22 | vreg(*rm)? << 16 | cond.field() << 12 | vreg(*rn)? << 5 | vreg(*rd)?
         }
+        Inst::VectorBinary { op, lanes, rd, rn, rm } => {
+            let (u, opcode, logical) = op.fields();
+            let size = logical.unwrap_or_else(|| lanes.size());
+            0x0E20_0400
+                | lanes.q() << 30
+                | u << 29
+                | size << 22
+                | vreg(*rm)? << 16
+                | opcode << 11
+                | vreg(*rn)? << 5
+                | vreg(*rd)?
+        }
+        Inst::VectorShift { op, lanes, rd, rn, amount } => {
+            let esize = lanes.lane_bits();
+            let amount = u32::from(*amount);
+            // `immh:immb` is `esize + shift` for a left shift and `2 * esize -
+            // shift` for a right one; the lane size is its highest set bit.
+            let (u, opcode, immhb) = match op {
+                VectorShift::Shl => (0, 0b01010, esize + amount),
+                VectorShift::Ushr => (1, 0b00000, 2 * esize - amount),
+                VectorShift::Sshr => (0, 0b00000, 2 * esize - amount),
+                VectorShift::Usra => (1, 0b00010, 2 * esize - amount),
+                VectorShift::Ssra => (0, 0b00010, 2 * esize - amount),
+            };
+            0x0F00_0400 | lanes.q() << 30 | u << 29 | immhb << 16 | opcode << 11 | vreg(*rn)? << 5 | vreg(*rd)?
+        }
+        Inst::VectorLongShift { op, lane, high, rd, rn, amount } => {
+            let (u, base) = op.fields();
+            // `immh:immb` is `esize + shift`; the lane size is its highest set
+            // bit.
+            let immhb = lane.bits() + u32::from(*amount);
+            base | u32::from(*high) << 30 | u << 29 | immhb << 16 | vreg(*rn)? << 5 | vreg(*rd)?
+        }
+        Inst::VectorLong { op, lane, high, rd, rn, rm } => {
+            let (u, base) = op.fields();
+            base | u32::from(*high) << 30
+                | u << 29
+                | lane.size() << 22
+                | vreg(*rm)? << 16
+                | vreg(*rn)? << 5
+                | vreg(*rd)?
+        }
+        Inst::VectorNot { quad, rd, rn } => 0x2E20_5800 | u32::from(*quad) << 30 | vreg(*rn)? << 5 | vreg(*rd)?,
+        Inst::VectorCompare { op, lanes, quad, rd, rn, rm } => {
+            let (u, bit23, opcode) = op.fields();
+            // The float forms put the lane size (`sz`) at bit 22, the
+            // integer ones in `size`.
+            let size = if op.is_float() { bit23 << 1 | u32::from(*lanes == Arrangement::D2) } else { lanes.size() };
+            0x0E20_0400
+                | u32::from(*quad) << 30
+                | u << 29
+                | size << 22
+                | vreg(*rm)? << 16
+                | opcode << 11
+                | vreg(*rn)? << 5
+                | vreg(*rd)?
+        }
+        Inst::VectorCompareZero { op, lanes, quad, rd, rn } => {
+            let (u, opcode) = op.fields();
+            let (base, size) = if op.is_float() {
+                (0x0EA0_0800, u32::from(*lanes == Arrangement::D2))
+            } else {
+                (0x0E20_0800, lanes.size())
+            };
+            base | u32::from(*quad) << 30 | u << 29 | size << 22 | opcode << 12 | vreg(*rn)? << 5 | vreg(*rd)?
+        }
+        Inst::VectorBitSelect { op, quad, rd, rn, rm } => {
+            0x2E20_1C00 | u32::from(*quad) << 30 | op.size() << 22 | vreg(*rm)? << 16 | vreg(*rn)? << 5 | vreg(*rd)?
+        }
+        Inst::VectorBsp { .. } => return error("a bit-select pseudo is expanded after allocation"),
+        Inst::VectorFpBinary { op, lanes, rd, rn, rm } => {
+            let (u, a, opcode) = op.fields();
+            let sz = u32::from(*lanes == Arrangement::D2);
+            0x0E20_0400
+                | lanes.q() << 30
+                | u << 29
+                | a << 23
+                | sz << 22
+                | vreg(*rm)? << 16
+                | opcode << 11
+                | vreg(*rn)? << 5
+                | vreg(*rd)?
+        }
+        Inst::VectorMulAcc { op, lanes, rd, rn, rm } => {
+            let u = u32::from(*op == MulAcc::Sub);
+            0x0E20_9400
+                | lanes.q() << 30
+                | u << 29
+                | lanes.size() << 22
+                | vreg(*rm)? << 16
+                | vreg(*rn)? << 5
+                | vreg(*rd)?
+        }
+        Inst::VectorFma { op, lanes, rd, rn, rm } => {
+            let a = u32::from(*op == VectorFma::Sub);
+            let sz = u32::from(*lanes == Arrangement::D2);
+            0x0E20_CC00 | lanes.q() << 30 | a << 23 | sz << 22 | vreg(*rm)? << 16 | vreg(*rn)? << 5 | vreg(*rd)?
+        }
+        Inst::VectorInsGpr { lanes, rd, rn, index } => {
+            let imm5 = (u32::from(*index) << (lanes.imm5().trailing_zeros() + 1)) | lanes.imm5();
+            0x4E00_1C00 | imm5 << 16 | reg(*rn)? << 5 | vreg(*rd)?
+        }
+        Inst::VectorFmaLane { op, lanes, rd, rn, rm, index } => {
+            let s = u32::from(*op == VectorFma::Sub);
+            let index = u32::from(*index);
+            // single: the index is H:L; double: H alone, L clear
+            let (size, h, l) =
+                if *lanes == Arrangement::D2 { (0b11, index & 1, 0) } else { (0b10, index >> 1, index & 1) };
+            0x4F00_1000 | size << 22 | l << 21 | vreg(*rm)? << 16 | s << 14 | h << 11 | vreg(*rn)? << 5 | vreg(*rd)?
+        }
+        Inst::ScalarFmaLane { op, lanes, rd, rn, rm, index } => {
+            let s = u32::from(*op == VectorFma::Sub);
+            let index = u32::from(*index);
+            let (size, h, l) =
+                if *lanes == Arrangement::D2 { (0b11, index & 1, 0) } else { (0b10, index >> 1, index & 1) };
+            0x5F00_1000 | size << 22 | l << 21 | vreg(*rm)? << 16 | s << 14 | h << 11 | vreg(*rn)? << 5 | vreg(*rd)?
+        }
+        Inst::VectorPermute { kind, lanes, rd, rn, rm } => {
+            let size = lanes.size();
+            let base = 0x0E00_0800 | kind.opcode() << 12;
+            base | lanes.q() << 30 | size << 22 | vreg(*rm)? << 16 | vreg(*rn)? << 5 | vreg(*rd)?
+        }
+        Inst::VectorNarrow { high, shift: None, wide, rd, rn } => {
+            let size = match wide {
+                Arrangement::H8 => 0,
+                Arrangement::S4 => 1,
+                _ => 2,
+            };
+            0x0E21_2800 | u32::from(*high) << 30 | size << 22 | vreg(*rn)? << 5 | vreg(*rd)?
+        }
+        // `shrn`: `immh:immb` is twice the narrow lane's bits less the shift.
+        Inst::VectorNarrow { high, shift: Some(shift), wide, rd, rn } => {
+            let narrow_bits = wide.lane_bits() / 2;
+            let immhb = 2 * narrow_bits - u32::from(*shift);
+            0x0F00_8400 | u32::from(*high) << 30 | immhb << 16 | vreg(*rn)? << 5 | vreg(*rd)?
+        }
+        Inst::VectorFmulLane { lanes, rd, rn, rm, index } => {
+            let index = u32::from(*index);
+            let (size, h, l) =
+                if *lanes == Arrangement::D2 { (0b11, index & 1, 0) } else { (0b10, index >> 1, index & 1) };
+            0x4F00_9000 | size << 22 | l << 21 | vreg(*rm)? << 16 | h << 11 | vreg(*rn)? << 5 | vreg(*rd)?
+        }
+        Inst::VectorMulLane { rd, rn, rm, index } => {
+            let index = u32::from(*index);
+            0x4F80_8000 | (index & 1) << 21 | vreg(*rm)? << 16 | (index >> 1) << 11 | vreg(*rn)? << 5 | vreg(*rd)?
+        }
+        // `LD1R`: Q, size and the base register.
+        Inst::VectorLoadReplicate { lanes, rt, base } => {
+            0x0D40_C000 | lanes.q() << 30 | lanes.size() << 10 | reg(*base)? << 5 | vreg(*rt)?
+        }
+        Inst::VectorStoreLane { lanes, rt, index, base } => {
+            let (opcode, q, s, size) = single_structure_fields(*lanes, *index);
+            0x0D00_0000 | q << 30 | opcode << 13 | s << 12 | size << 10 | reg(*base)? << 5 | vreg(*rt)?
+        }
+        // `LD1 (single structure)`: the store's encoding with L set.
+        Inst::VectorLoadLane { lanes, rt, index, base } => {
+            let (opcode, q, s, size) = single_structure_fields(*lanes, *index);
+            0x0D40_0000 | q << 30 | opcode << 13 | s << 12 | size << 10 | reg(*base)? << 5 | vreg(*rt)?
+        }
+        // "AdvSIMD load/store multiple structures": `L` is bit 22, the opcode
+        // 8 (two registers), 4 (three) or 0 (four).
+        Inst::VectorLoadStructure { count, lanes, rt, base } | Inst::VectorStoreStructure { count, lanes, rt, base } => {
+            let load = u32::from(matches!(inst, Inst::VectorLoadStructure { .. }));
+            let opcode = match count {
+                2 => 0b1000,
+                3 => 0b0100,
+                4 => 0b0000,
+                _ => return error(format!("a structure access of {count} registers")),
+            };
+            0x0C00_0000 | lanes.q() << 30 | load << 22 | opcode << 12 | lanes.size() << 10 | reg(*base)? << 5 | vreg(*rt)?
+        }
+        Inst::VectorIntUnary { op, lanes, rd, rn } => {
+            let (u, opcode) = op.fields();
+            0x0E20_0800 | lanes.q() << 30 | u << 29 | op.size(*lanes) << 22 | opcode << 12 | vreg(*rn)? << 5 | vreg(*rd)?
+        }
+        Inst::VectorUmov { lanes, rd, rn, index } => {
+            let imm5 = (u32::from(*index) << (lanes.imm5().trailing_zeros() + 1)) | lanes.imm5();
+            let q = u32::from(*lanes == Arrangement::D2);
+            0x0E00_3C00 | q << 30 | imm5 << 16 | vreg(*rn)? << 5 | reg(*rd)?
+        }
+        Inst::VectorSmov { lanes, wide, rd, rn, index } => {
+            let imm5 = (u32::from(*index) << (lanes.imm5().trailing_zeros() + 1)) | lanes.imm5();
+            0x0E00_2C00 | u32::from(*wide) << 30 | imm5 << 16 | vreg(*rn)? << 5 | reg(*rd)?
+        }
+        Inst::VectorInsLane { lanes, rd, rn, index, src } => {
+            let shift = lanes.imm5().trailing_zeros();
+            let imm5 = (u32::from(*index) << (shift + 1)) | lanes.imm5();
+            let imm4 = u32::from(*src) << shift;
+            0x6E00_0400 | imm5 << 16 | imm4 << 11 | vreg(*rn)? << 5 | vreg(*rd)?
+        }
+        // "Across lanes" (`addv`, `smaxv`, ...) and, for `addp`, the scalar
+        // pairwise class: `size` 3 and `Q` clear.
+        Inst::VectorReduce { op, lanes, rd, rn } => {
+            let (u, opcode) = op.fields();
+            let base = if *op == VectorReduce::Addp { 0x5E30_0800 } else { 0x4E30_0800 };
+            base | u << 29 | lanes.size() << 22 | opcode << 12 | vreg(*rn)? << 5 | vreg(*rd)?
+        }
+        Inst::VectorDupLane { lanes, rd, rn, index } => {
+            let imm5 = (u32::from(*index) << (lanes.imm5().trailing_zeros() + 1)) | lanes.imm5();
+            0x0E00_0400 | lanes.q() << 30 | imm5 << 16 | vreg(*rn)? << 5 | vreg(*rd)?
+        }
+        Inst::VectorDupScalar { lanes, rd, rn, index } => {
+            let imm5 = (u32::from(*index) << (lanes.imm5().trailing_zeros() + 1)) | lanes.imm5();
+            0x5E00_0400 | imm5 << 16 | vreg(*rn)? << 5 | vreg(*rd)?
+        }
+        Inst::VectorFpUnary { op, lanes, rd, rn } => {
+            let (u, high, opcode) = op.fields();
+            let sz = u32::from(*lanes == Arrangement::D2);
+            0x0E20_0800 | lanes.q() << 30 | u << 29 | high << 23 | sz << 22 | opcode << 12 | vreg(*rn)? << 5 | vreg(*rd)?
+        }
         Inst::VectorFill { rd, fill } => match fill {
             Fill::Zero => 0x6F00_E400 | vreg(*rd)?,
             Fill::Byte(byte) => 0x4F00_E400 | u32::from(byte >> 5) << 16 | u32::from(byte & 31) << 5 | vreg(*rd)?,
-            Fill::Dup(arrangement, source) => 0x4E00_0C00 | arrangement.imm5() << 16 | reg(*source)? << 5 | vreg(*rd)?,
+            Fill::Byte8(byte) => 0x0F00_E400 | u32::from(byte >> 5) << 16 | u32::from(byte & 31) << 5 | vreg(*rd)?,
+            Fill::Dup(arrangement, source) => {
+                0x0E00_0C00 | arrangement.q() << 30 | arrangement.imm5() << 16 | reg(*source)? << 5 | vreg(*rd)?
+            }
             // `abc` is bits 18-16 of imm8 and `defgh` bits 9-5; `op`
             // is `mvni`'s.
             Fill::Imm { invert, shape, imm8 } => {
                 0x0F00_0400
-                    | u32::from(!matches!(shape, ImmShape::S2(_))) << 30
+                    | u32::from(!matches!(shape, ImmShape::S2(_) | ImmShape::H4(_))) << 30
                     | u32::from(*invert) << 29
                     | shape.cmode() << 12
                     | u32::from(imm8 >> 5) << 16

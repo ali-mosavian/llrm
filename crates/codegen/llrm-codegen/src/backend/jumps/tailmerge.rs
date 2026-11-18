@@ -265,6 +265,8 @@ struct Folder {
     size: bool,
     /// `AfterPlacement`: the layout is final, so the rules that read it hold.
     after_placement: bool,
+    /// The target's `tail_merge_pin_faithful`: no D1, no three-block minimum.
+    faithful: bool,
     entry: i64,
     /// The candidates now being merged: seen without their jump to `onward`.
     stripped: HashSet<i64>,
@@ -902,7 +904,7 @@ impl Folder {
             // D1: a block on a cycle that ends in a branch is kept whole for
             // speed: dropped, its branch moves behind a jump it pays every
             // trip.
-            if !self.size {
+            if !self.size && !self.faithful {
                 pots.retain(|pot| pot.seq.terms == 0 || !self.cyclic.contains(&pot.at));
             }
             if pots.len() == THRESHOLD {
@@ -957,7 +959,7 @@ pub fn merged(
     size: bool,
     calls: Option<&IndexMap<i64, String>>,
 ) -> Result<Option<LirBody>, masm::Unprintable> {
-    merged_in(body, size, calls, true)
+    merged_in(body, size, calls, true, false)
 }
 
 /// `merged`, before placement when `after_placement` is false: the layout is
@@ -968,6 +970,7 @@ pub fn merged_in(
     size: bool,
     calls: Option<&IndexMap<i64, String>>,
     after_placement: bool,
+    faithful: bool,
 ) -> Result<Option<LirBody>, masm::Unprintable> {
     // A body presented before `_placed` has jumps that are fall-throughs.
     for block in &body.blocks {
@@ -975,8 +978,8 @@ pub fn merged_in(
             return Ok(None);
         }
     }
-    // `MF.size() > 3`.
-    if body.blocks.len() <= 3 {
+    // T14: `BranchFolding.cpp` has no minimum on the blocks; `faithful` (m64) lifts it, and D1.
+    if body.blocks.len() <= 3 && !faithful {
         return Ok(None);
     }
     let mut folder = Folder {
@@ -998,6 +1001,7 @@ pub fn merged_in(
         minimum: if size { 2 } else { 3 },
         size,
         after_placement,
+        faithful,
         entry: body.entry,
         stripped: HashSet::default(),
         changed: false,

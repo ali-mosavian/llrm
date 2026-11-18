@@ -16,14 +16,13 @@ fn instructions(asm: &str, name: &str) -> usize {
 
 /// `shl i32 %n, 1` took 27 instructions: `srl l` seven times for bit 15 of the
 /// low word, two `or`s of lanes, `sla c; rl b`, `sla e; rl d` and moves, then
-/// (as `x + x`) a compare and a branch for the carry. It is `add hl, hl` and
-/// `adc hl, de`; the three copies the allocator adds are open (ideal: 5). With the result in HL:DE like the
-/// argument the copies are `ex de, hl` and two `ld`s: 10 instructions, one byte more than the 9 with the swapped result (the corpus cell: 179 to 161 B at O2).
+/// (as `x + x`) a compare and a branch for the carry. It is `add hl, hl; rl e; rl d`
+/// (long_double_in_place.rs: 10 instructions before the doubling was one fused instruction).
 #[test]
 fn a_long_shifted_left_by_one_is_an_add_with_carry() {
     let asm = text(include_str!("kernels/ir/shl_long_by_one.ll"), "f", 0, &Request::new(Level::O2)).expect("compiles");
     let count = instructions(&asm, "_f");
-    assert!(count <= 10 && asm.contains("adc hl") && !asm.contains("jr "), "{count} instructions:\n{asm}");
+    assert!(count <= 4 && !asm.contains("jr "), "{count} instructions:\n{asm}");
 }
 
 /// The target combine ran on every target node and read operand 1 of a node with

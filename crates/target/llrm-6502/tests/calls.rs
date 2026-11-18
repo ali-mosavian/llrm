@@ -77,10 +77,10 @@ fn a_call_passes_a_byte_in_a_and_a_word_in_rs1() {
 /// Three words fit rc2..rc7; the fourth fits no register and is stored on the
 /// soft stack at `rs0 + 0` inside a call sequence of two bytes.
 #[test]
-fn a_fourth_word_is_stored_on_the_soft_stack() {
+fn a_fifth_word_is_stored_on_the_soft_stack() {
     let mut dag = SelectionDAG::new(DagConfig::default());
     let entry = dag.entry_node();
-    let words: Vec<Out> = (1..=4)
+    let words: Vec<Out> = (1..=5)
         .map(|n| Out {
             value: dag.get_register(EVT::I16, n),
             ext: Ext::Any,
@@ -102,7 +102,7 @@ fn a_fourth_word_is_stored_on_the_soft_stack() {
         .filter(|&v| dag.opcode(v) == ISD::Store)
         .collect();
     assert_eq!(stores.len(), 1);
-    assert_eq!(dag.operand(stores[0], 1), words[3].value);
+    assert_eq!(dag.operand(stores[0], 1), words[4].value);
     // the address is `rs0` (plus the offset 0, which may fold away)
     let address = dag.operand(stores[0], 2);
     let base = if dag.opcode(address) == ISD::Add { dag.operand(address, 0) } else { address };
@@ -112,7 +112,7 @@ fn a_fourth_word_is_stored_on_the_soft_stack() {
 /// A word that reaches the callee on the stack is loaded from a fixed object of
 /// two bytes at the offset the convention gave it.
 #[test]
-fn a_fourth_formal_word_is_loaded_from_a_fixed_object() {
+fn a_fifth_formal_word_is_loaded_from_a_fixed_object() {
     let mut dag = SelectionDAG::new(DagConfig::default());
     let entry = dag.entry_node();
     let mut created = Vec::new();
@@ -124,15 +124,18 @@ fn a_fourth_formal_word_is_loaded_from_a_fixed_object() {
     let args = lower_formal_arguments(
         &mut dag,
         entry,
-        &[In { vt: EVT::I16, pointer: false, arg_vt: EVT::I16, split: false, sret: false, ext: Ext::Any, byval: None }; 4],
+        &[In { vt: EVT::I16, pointer: false, arg_vt: EVT::I16, split: false, sret: false, ext: Ext::Any, byval: None };
+            5],
         &mut fixed,
         &mut |_| 4096,
     )
     .unwrap();
 
     assert_eq!(created, [(2, 0, true)]);
-    assert_eq!((dag.opcode(args[3]), dag.value_type(args[3])), (ISD::Load, EVT::I16));
-    assert_eq!(dag.opcode(args[0]), ISD::CopyFromReg);
+    assert_eq!((dag.opcode(args[4]), dag.value_type(args[4])), (ISD::Load, EVT::I16));
+    // the first word arrives in a and x, joined; the next in a pair
+    assert_eq!(dag.opcode(args[0]), ISD::BuildPair);
+    assert_eq!(dag.opcode(args[1]), ISD::CopyFromReg);
 }
 
 /// `g(i8, i16)` is live-in at `a` and rs1, each read from the virtual register
@@ -169,7 +172,16 @@ fn a_returned_byte_is_copied_to_a() {
     let ret = lower_return(
         &mut dag,
         entry,
-        &[Out { value: v, ext: Ext::Any, pointer: false, arg_vt: EVT::I8, split: false, variadic: false, sret: false, byval: None }],
+        &[Out {
+            value: v,
+            ext: Ext::Any,
+            pointer: false,
+            arg_vt: EVT::I8,
+            split: false,
+            variadic: false,
+            sret: false,
+            byval: None,
+        }],
     )
     .unwrap();
 
@@ -180,8 +192,8 @@ fn a_returned_byte_is_copied_to_a() {
 }
 
 /// A call's `RegisterMask` names the flags register `P`: the scheduler read an
-/// empty mask, so flags live across a call were never recomputed after it (arm64
-/// fib10 gave 49 for 55 the same way).
+/// empty mask, so flags live across a call were never recomputed after it
+/// (arm64 fib10 gave 49 for 55 the same way).
 #[test]
 fn a_call_register_mask_names_the_flags() {
     use llrm_6502::dagisel::generated::ids::reg::P;

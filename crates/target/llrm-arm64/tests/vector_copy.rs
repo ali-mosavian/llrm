@@ -19,10 +19,7 @@ fn assembly_with(
     let (input, output) = (dir.path().join("t.ll"), dir.path().join("t.s"));
     std::fs::write(&input, format!("{HEAD}{body}")).unwrap();
     let mut llc = Command::new(env!("CARGO_BIN_EXE_llrm-arm64-llc"));
-    llc.env_remove("LLRM_ARM64_VECTORS");
-    if vectors {
-        llc.env("LLRM_ARM64_VECTORS", "1");
-    }
+    llc.env("LLRM_ARM64_VECTORS", if vectors { "1" } else { "0" });
     let said = llc.args(["-S", "-O2", "-o"]).arg(&output).arg(&input).output().unwrap();
     assert!(said.status.success(), "{}", String::from_utf8_lossy(&said.stderr));
     String::from_utf8(std::fs::read(&output).unwrap()).unwrap()
@@ -69,7 +66,27 @@ fn an_overlapping_copy_loop_runs_on_q_registers() {
     assert!(!text.contains("ldrh"), "{text}");
 }
 
-/// The same loop with the flag off (the default) stays the scalar `ldrh`/`strh`
+/// With no flag set the pass ran nowhere: the copy loop stayed 1920 scalar
+/// `ldrh` iterations (scroll: 1.19M executed instructions at -O2, 0.47M
+/// vectorized). On is the default; `LLRM_ARM64_VECTORS=0` is the off-switch.
+#[test]
+fn the_vectorizer_runs_with_no_flag_set() {
+    let dir = tempfile::tempdir().unwrap();
+    let (input, output) = (dir.path().join("t.ll"), dir.path().join("t.s"));
+    std::fs::write(&input, format!("{HEAD}{OVERLAPPING_COPY}")).unwrap();
+    let said = Command::new(env!("CARGO_BIN_EXE_llrm-arm64-llc"))
+        .env_remove("LLRM_ARM64_VECTORS")
+        .args(["-S", "-O2", "-o"])
+        .arg(&output)
+        .arg(&input)
+        .output()
+        .unwrap();
+    assert!(said.status.success(), "{}", String::from_utf8_lossy(&said.stderr));
+    let text = std::fs::read_to_string(&output).unwrap();
+    assert!(text.contains("ldr\tq") || text.contains("ldr q"), "{text}");
+}
+
+/// The same loop with the flag at `0` stays the scalar `ldrh`/`strh`
 /// loop: no `q` register appears.
 #[test]
 fn the_flag_off_leaves_the_copy_loop_scalar() {
@@ -217,4 +234,152 @@ fn a_splat_made_in_the_preheader_is_stored_in_the_loop() {
          \x20 ret void\n}\n",
     );
     assert!(text.contains("dup") && (text.contains("str\tq") || text.contains("str q")), "{text}");
+}
+
+/// `shl`, `lshr`, `ashr` of `<8 x i16>` by a constant refused with
+/// `CannotSelect("Shl")`: the legalizer truncated the vector shift amount to a
+/// scalar (`getShiftAmountOperand` leaves a vector's alone), so
+/// `LowerVectorSRA_SRL_SHL` saw no splat.
+#[test]
+fn a_vector_shift_by_a_constant_is_one_shift_instruction() {
+    let three = "<i16 3, i16 3, i16 3, i16 3, i16 3, i16 3, i16 3, i16 3>";
+    for (op, mnemonic) in [("shl", "shl"), ("lshr", "ushr"), ("ashr", "sshr")] {
+        let text = assembly(&format!(
+            "define void @f(ptr %d, ptr %s) {{\n  %v = load <8 x i16>, ptr %s, align 16\n  %r = {op} <8 x i16> %v, {three}\n  store <8 x i16> %r, ptr %d, align 16\n  ret void\n}}\n"
+        ));
+        assert!(text.contains(&format!("{mnemonic} v")) && text.contains(".8h") && text.contains("#3"), "{op}: {text}");
+    }
+}
+
+/// The three-register forms: one instruction each, on the lanes of the type.
+#[test]
+fn a_vector_binary_operation_is_one_instruction_on_its_lanes() {
+    for (op, lanes, mnemonic, arrangement) in [
+        ("add", "<8 x i16>", "add", ".8h"),
+        ("sub", "<4 x i32>", "sub", ".4s"),
+        ("mul", "<16 x i8>", "mul", ".16b"),
+        ("and", "<2 x i64>", "and", ".16b"),
+        ("xor", "<8 x i16>", "eor", ".16b"),
+        ("or", "<4 x i32>", "orr", ".16b"),
+    ] {
+        let text = assembly(&format!(
+            "define void @f(ptr %d, ptr %a, ptr %b) {{\n  %x = load {lanes}, ptr %a, align 16\n  %y = load {lanes}, ptr %b, align 16\n  %r = {op} {lanes} %x, %y\n  store {lanes} %r, ptr %d, align 16\n  ret void\n}}\n"
+        ));
+        assert!(text.contains(&format!("{mnemonic} v")) && text.contains(arrangement), "{op} {lanes}: {text}");
+    }
+}
+
+/// An inner loop storing `i16` and `i64` in the same iteration was widened to
+/// `<8 x i16>` and `<8 x i64>` (bandwidth maximization); the backend cannot
+/// split the second, and the compile stopped with "vector with no register
+/// class" (tests/run/c/pattern_fill.c at -O2). Non-constant values, so loop-idiom
+/// leaves the stores.
+#[test]
+fn a_loop_storing_two_element_widths_compiles() {
+    let text = assembly(
+        "@a = global [64 x i16] zeroinitializer, align 2\n\
+         @b = global [64 x i64] zeroinitializer, align 8\n\
+         declare void @report(i64)\n\
+         define void @f(i64 %t, i64 %m, i16 %x, i64 %y) {\n\
+         entry:\n  br label %outer\n\
+         outer:\n\
+         \x20 %k = phi i64 [ %t, %entry ], [ %k1, %next ]\n  br label %loop\n\
+         loop:\n\
+         \x20 %i = phi i64 [ 0, %outer ], [ %n, %loop ]\n\
+         \x20 %p = getelementptr inbounds i16, ptr @a, i64 %i\n\
+         \x20 store i16 %x, ptr %p, align 2\n\
+         \x20 %q = getelementptr inbounds i64, ptr @b, i64 %i\n\
+         \x20 store i64 %y, ptr %q, align 8\n\
+         \x20 %n = add nuw nsw i64 %i, 1\n\
+         \x20 %c = icmp eq i64 %n, %m\n\
+         \x20 br i1 %c, label %next, label %loop\n\
+         next:\n\
+         \x20 call void @report(i64 %k)\n\
+         \x20 %k1 = add nsw i64 %k, -1\n\
+         \x20 %more = icmp sgt i64 %k, 1\n\
+         \x20 br i1 %more, label %outer, label %exit\n\
+         exit:\n  ret void\n}\n",
+    );
+    assert!(text.contains("report"), "{text}");
+}
+
+/// `a ^ b ^ c` over `<4 x i32>` selected `EOR3` ("machine opcode EOR3 has no
+/// arm64 instruction yet"): the one table is apple-m1's, which has SHA3, and
+/// `-mcpu=generic` (Linux) has not. Generic gets two `eor`s, as the pin's llc.
+#[test]
+fn a_three_way_xor_is_two_eors_without_sha3() {
+    let text = assembly(
+        "define void @f(ptr %d, ptr %a, ptr %b, ptr %c) {\n\
+         \x20 %x = load <4 x i32>, ptr %a, align 16\n\
+         \x20 %y = load <4 x i32>, ptr %b, align 16\n\
+         \x20 %z = load <4 x i32>, ptr %c, align 16\n\
+         \x20 %t = xor <4 x i32> %x, %y\n\
+         \x20 %r = xor <4 x i32> %t, %z\n\
+         \x20 store <4 x i32> %r, ptr %d, align 16\n\
+         \x20 ret void\n}\n",
+    );
+    assert!(!text.contains("eor3"), "{text}");
+    assert_eq!(text.lines().filter(|l| l.trim_start().starts_with("eor ")).count(), 2, "{text}");
+}
+
+/// A loop carrying a `<8 x i16>` phi (the widened induction `vec.ind`) panicked
+/// in live-range calculation ("a unique value"): a vector phi was given general
+/// registers, so its copies read a register nothing defined. It now lives in
+/// one `q` register and steps with `add v.8h`.
+#[test]
+fn a_loop_carried_vector_phi_lives_in_a_q_register() {
+    let text = assembly(
+        "define void @f(ptr noalias %a) {\n\
+         entry:\n  br label %body\n\
+         body:\n\
+         \x20 %index = phi i64 [ 0, %entry ], [ %next, %body ]\n\
+         \x20 %v = phi <8 x i16> [ splat (i16 3), %entry ], [ %vn, %body ]\n\
+         \x20 %p = getelementptr inbounds i16, ptr %a, i64 %index\n\
+         \x20 store <8 x i16> %v, ptr %p, align 2\n\
+         \x20 %next = add nuw i64 %index, 8\n\
+         \x20 %vn = add <8 x i16> %v, splat (i16 8)\n\
+         \x20 %done = icmp eq i64 %next, 2000\n\
+         \x20 br i1 %done, label %exit, label %body\n\
+         exit:\n  ret void\n}\n",
+    );
+    assert!(text.contains("add v") && text.contains(".8h"), "{text}");
+    assert!(text.contains("str q"), "{text}");
+}
+
+/// A store of the constant `<0, 1, .., 7>` was refused (`Legalize(custom
+/// lowering of BuildVector)`): a constant that is no splat is the pin's pool
+/// load (`adrp` + `ldr q`, the lanes in a 16-byte entry), and the widened
+/// induction's start is one.
+#[test]
+fn a_constant_vector_that_is_no_splat_is_a_pool_load() {
+    let text = assembly(
+        "define void @f(ptr %d) {\n\
+         \x20 store <8 x i16> <i16 0, i16 1, i16 2, i16 3, i16 4, i16 5, i16 6, i16 7>, ptr %d, align 16\n\
+         \x20 ret void\n}\n",
+    );
+    assert!(text.contains("adrp") && text.contains("PAGEOFF"), "{text}");
+    assert!(text.contains("ldr\tq") || text.contains("ldr q"), "{text}");
+    // The lanes in memory order: 0, 1, 2, 3 then 4, 5, 6, 7 (16 bits each).
+    assert!(text.contains(".quad 0x3000200010000") && text.contains(".quad 0x7000600050004"), "{text}");
+}
+
+/// The unroller could not size a vector loop ("no cost for load"), so the
+/// 5-trip vector loop of scroll's splat fill stayed a loop of `str q` that
+/// clang's pin fully unrolls: ~21 more instructions per call.
+#[test]
+fn a_five_trip_vector_loop_is_fully_unrolled() {
+    let text = assembly(
+        "define void @fill(ptr noalias %a) {\n\
+         entry:\n  br label %loop\n\
+         loop:\n\
+         \x20 %i = phi i64 [ 0, %entry ], [ %next, %loop ]\n\
+         \x20 %d = getelementptr inbounds i16, ptr %a, i64 %i\n\
+         \x20 store i16 1824, ptr %d, align 2\n\
+         \x20 %next = add nuw nsw i64 %i, 1\n\
+         \x20 %done = icmp eq i64 %next, 80\n\
+         \x20 br i1 %done, label %exit, label %loop\n\
+         exit:\n  ret void\n}\n",
+    );
+    let branches = text.lines().filter(|l| l.trim().starts_with("b.") || l.trim().starts_with("cbnz")).count();
+    assert!(text.contains("q") && branches == 0, "{text}");
 }

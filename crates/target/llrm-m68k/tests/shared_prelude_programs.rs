@@ -22,6 +22,11 @@ const PROGRAMS: &[(&str, &str)] = &[
     // `move.l sp, -(An)`: the stack pointer is dropped from the sources, and the
     // row's source 1 (the address) was none: the write-back def went untied
     ("nbody_single", include_str!("fixtures/nbody_single_raw.ll")),
+    // an i64 result whose low word is computed before a select's split: its copy
+    // into the return register stayed in the head, the `RET` that reads it in the join
+    ("i64_select_returns", include_str!("fixtures/i64_select_returns.ll")),
+    // `CCR_SAVE` reads the flags the `cmp` before it set without naming them
+    ("word_compare_branches", include_str!("fixtures/word_compare_branches_raw.ll")),
 ];
 
 #[test]

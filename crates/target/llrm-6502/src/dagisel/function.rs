@@ -12,21 +12,20 @@
 //! calls) needs none. Reason: frame objects wait for the 6502 machine function.
 //! Exit: M4.
 
-use llrm_support::hash::HashMap;
-
 use llrm_codegen::backend::isel;
 use llrm_codegen::backend::registerinfo::RegId;
-use llrm_codegen::backend::selectiondag::{DagConfig, SelectionDAG};
-use llrm_codegen::backend::selectiondag::isd::ISD;
 use llrm_codegen::backend::selectiondag::builder::{BlockDag, BuilderTarget, TargetNodes, TtiHandle, build_block};
 use llrm_codegen::backend::selectiondag::function_lowering::FunctionLoweringInfo;
+use llrm_codegen::backend::selectiondag::isd::ISD;
 use llrm_codegen::backend::selectiondag::mvt::EVT;
 use llrm_codegen::backend::selectiondag::schedule::Unit;
+use llrm_codegen::backend::selectiondag::{DagConfig, SelectionDAG};
 use llrm_mir::context::ConstantKind;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::dense::IdMap;
 use llrm_mir::module::{BlockId, Function, Module, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::Opcode;
+use llrm_support::hash::HashMap;
 
 use super::call::{CALL, MosCalling, RET_GLUE};
 use super::hooks::Cpu;
@@ -41,13 +40,16 @@ pub fn builder_target() -> BuilderTarget {
         shift_amount: EVT::I8,
         legal_ints: vec![8, 16],
         soft_float: true,
-        // the builder refuses what the machine refuses (6502-ALLOCA-ALIGN, driver.rs)
+        // the builder refuses what the machine refuses (6502-ALLOCA-ALIGN,
+        // driver.rs)
         max_alloca_align: Some(crate::frame::MAX_ALLOCA_ALIGN),
         jump_tables: false,
         string_instructions: false,
         // the runtime's own routines (runtime/mos_rt.s), called by the name the
         // C library gives them
         libcalls: Some(["memcpy", "memmove", "memset"].map(|name| (name.to_owned(), 0, name.to_owned())).to_vec()),
+        // each returns dst in A:X (runtime/mos_rt.s)
+        mem_libcalls_return_dest: true,
         target_nodes: Some(TargetNodes {
             call: CALL,
             ret: RET_GLUE,
@@ -59,14 +61,19 @@ pub fn builder_target() -> BuilderTarget {
         // default `getJumpConditionMergingParams`), not two 0/1 bytes and a
         // logic op
         tti: Some(TtiHandle(std::rc::Rc::new(llrm_mir::tti::Basic))),
-        // DEVIATE 6502-SEXT-BOOL-ADD (owner 6502, exit 2026-12-15): the pin turns `add (sext i1 c), x` into
-        // `sub x, (zext i1 c)` (`visitADDLikeCommutative`), which here is an `sbc` chain; a word compared with its bound
-        // gained an `ldx #255` and a swapped `cmp` from it (`a_compare_against_a_word_boundary_...`). The add stays up to
-        // 16 bits; wider, the sign bytes of the add read a cell (`adc rc22`, 3 clk) where the pin's `sbc #0` is 2.
+        // DEVIATE 6502-SEXT-BOOL-ADD (owner 6502, exit 2026-12-15): the pin
+        // turns `add (sext i1 c), x` into
+        // `sub x, (zext i1 c)` (`visitADDLikeCommutative`), which here is
+        // an `sbc` chain; a word compared with its bound gained an `ldx #255`
+        // and a swapped `cmp` from it
+        // (`a_compare_against_a_word_boundary_...`). The add stays up to 16
+        // bits; wider, the sign bytes of the add read a cell (`adc rc22`, 3
+        // clk) where the pin's `sbc #0` is 2.
         dag: DagConfig { sext_bool_add_max_bits: 16, ..BuilderTarget::for_pointer_bits(16).dag },
         ..BuilderTarget::for_pointer_bits(16)
     }
     .with_narrow_divrem(EVT::I16, true)
+    .with_tuning(crate::driver::bytes_first_tuning())
 }
 
 /// One block, selected and scheduled.
@@ -93,6 +100,9 @@ pub struct Edge {
 /// A selected function: its blocks and the sizes of its local frame objects, by
 /// frame index.
 pub struct Selection {
+    /// Which selection this is: unique to the thread, what a cached text of it
+    /// is keyed by (a selection is moved, not copied).
+    pub id: u64,
     pub blocks: Vec<Selected>,
     pub locals: Vec<i64>,
     /// The subtarget it was selected for: emission expands to the same CPU.
@@ -109,6 +119,9 @@ pub struct Selection {
     /// The source file `-g` names the lines of, and the line the function
     /// starts at (its scope line); none prints no `.dbg line`.
     pub source: Option<(String, Option<u32>)>,
+    /// The multiplies by a constant it expanded in line that a call may beat
+    /// in bytes (`mulimage::call_when_it_pays`).
+    pub call_candidates: usize,
 }
 
 impl Selection {
@@ -119,7 +132,10 @@ impl Selection {
             .iter()
             .flat_map(|one| one.units.iter().flat_map(move |unit| unit.nodes.iter().map(move |&n| (one, n))))
             .filter(|(one, node)| {
-                matches!(one.dag.nodes()[*node as usize].opcode, ISD::Machine(code) if code as u16 == op::MUL32)
+                matches!(
+                    one.dag.nodes()[*node as usize].opcode,
+                    ISD::Machine(code) if code as u16 == op::MUL32
+                )
             })
             .count()
     }
@@ -136,6 +152,63 @@ pub fn select_function(
     cpu: Cpu,
 ) -> Result<Selection, String> {
     select_function_with(module, name, cpu, false)
+}
+
+/// Where a product of two words is a widening multiply (two routines that add
+/// bytes).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Widen {
+    /// Nowhere.
+    Off,
+    /// In functions not tuned for size: a level that prices a clock above a
+    /// byte.
+    Unsized,
+    /// Everywhere: the module-level trial of 6502-WIDEN-IMAGE.
+    Always,
+}
+
+thread_local! {
+    static WIDEN_PRODUCTS: std::cell::Cell<Widen> = const { std::cell::Cell::new(Widen::Off) };
+    static COLD_MULTIPLY_CALLS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static LOOP_CALLED: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+    static CALL_CANDIDATES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static CALL_MULTIPLY_HERE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// `run` with the multiplies by a constant of the blocks outside every loop,
+/// in a function that is not called from one (`loop_called`), priced as a
+/// function tuned for size prices them: a call where that is shorter than the
+/// shifts and adds (6502-MUL-CALL-TRIAL, `mulimage`).
+pub fn with_cold_multiply_calls<R>(
+    loop_called: Vec<String>,
+    run: impl FnOnce() -> R,
+) -> R {
+    let before = COLD_MULTIPLY_CALLS.with(|flag| flag.replace(true));
+    let names = LOOP_CALLED.with(|list| list.replace(loop_called));
+    let result = run();
+    LOOP_CALLED.with(|list| *list.borrow_mut() = names);
+    COLD_MULTIPLY_CALLS.with(|flag| flag.set(before));
+    result
+}
+
+/// A multiply by a constant that was expanded in line and that a call may
+/// beat in bytes was met.
+pub(super) fn note_call_candidate() {
+    CALL_CANDIDATES.with(|count| count.set(count.get() + 1));
+}
+
+/// Whether the block being selected prices its multiplies as a call.
+pub(super) fn call_multiply_here() -> bool {
+    CALL_MULTIPLY_HERE.with(std::cell::Cell::get)
+}
+
+/// Set by the driver for each compile.
+pub fn set_widen_products(on: Widen) {
+    WIDEN_PRODUCTS.with(|f| f.set(on));
+}
+
+pub(super) fn widen_products() -> Widen {
+    WIDEN_PRODUCTS.with(|f| f.get())
 }
 
 /// Whether `function` is tuned for size (`optsize` or `minsize`).
@@ -166,10 +239,27 @@ pub fn select_function_with(
     let mut locals = alloca_sizes(module, function, &layout, &info)?;
     let mut selected = Vec::new();
     let sized = is_sized(function) && !inline_multiplies;
+    CALL_CANDIDATES.with(|count| count.set(0));
+    // static loop depth, as `driver::cheaper` weighs a block: a place in a loop
+    // runs ten times a level
+    let depths = (COLD_MULTIPLY_CALLS.with(std::cell::Cell::get)
+        && !LOOP_CALLED.with(|list| list.borrow().iter().any(|one| one == name)))
+    .then(|| llrm_transforms::memloops::loop_depths(function));
     for &block in function.layout() {
         let built = build_block(module, function, &layout, &target, &arch, &convention, &mut info, block)
             .map_err(|why| why.0.to_owned())?;
-        select_built(Some((function, block)), block, built, (cpu, sized, inline_multiplies), &mut info, &mut selected)?;
+        let cold = depths.as_ref().is_some_and(|depths| depths.get(block.0 as usize).copied().unwrap_or(0) == 0);
+        CALL_MULTIPLY_HERE.with(|flag| flag.set(cold));
+        let selected_block = select_built(
+            Some((function, block)),
+            block,
+            built,
+            (cpu, sized, inline_multiplies),
+            &mut info,
+            &mut selected,
+        );
+        CALL_MULTIPLY_HERE.with(|flag| flag.set(false));
+        selected_block?;
     }
     // The stack objects the builder made follow the static allocas.
     locals.extend(info.objects.iter().map(|(size, _)| i64::from(*size)));
@@ -190,6 +280,7 @@ pub fn select_function_with(
         widths.extend(info.part_regs(reg, parts).into_iter().skip(1).map(|part| (part, 16)));
     }
     Ok(Selection {
+        id: next_selection_id(),
         blocks: selected,
         locals,
         cpu,
@@ -197,6 +288,17 @@ pub fn select_function_with(
         zero_page: 16,
         tuning: crate::alloc::Tuning::SPEED,
         source: None,
+        call_candidates: CALL_CANDIDATES.with(std::cell::Cell::get),
+    })
+}
+
+fn next_selection_id() -> u64 {
+    thread_local! {
+        static NEXT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    }
+    NEXT.with(|next| {
+        next.set(next.get() + 1);
+        next.get()
     })
 }
 

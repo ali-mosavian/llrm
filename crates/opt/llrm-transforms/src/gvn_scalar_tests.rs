@@ -764,3 +764,40 @@ b3:
 ",
     );
 }
+
+/// A `switch` with two cases to the block that recomputes `x + y` is two
+/// predecessors that lack it, as LLVM's `predecessors` counts edges, so scalar
+/// PRE is refused (`NumWithout` 2). The port walked blocks, counted one,
+/// scheduled the edge to be split and left an empty `br` block behind
+/// (case 1 of `sw`), where the pin's GVN changes nothing.
+#[test]
+fn test_a_switch_with_two_cases_to_the_block_is_two_predecessors_without_the_value() {
+    let (text, changed) = numbered(
+        "define i16 @f(i16 %x, i16 %y, i16 %c) {
+entry:
+  %k = icmp eq i16 %c, 0
+  br i1 %k, label %p1, label %sw
+
+p1:
+  %t = add i16 %x, %y
+  br label %a
+
+sw:
+  switch i16 %c, label %r [
+    i16 1, label %a
+    i16 2, label %a
+  ]
+
+a:
+  %u = add i16 %x, %y
+  %v = mul i16 %u, 3
+  ret i16 %v
+
+r:
+  ret i16 0
+}
+",
+        &[&[1, 2, 0], &[1, 2, 1], &[1, 2, 2], &[1, 2, 5]],
+    );
+    assert!(!changed, "{text}");
+}

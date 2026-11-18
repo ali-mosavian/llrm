@@ -27,7 +27,10 @@ jobs=""
 for k in cf cn pf pn; do
     K=${k^^}
     for m in callee caller aggee agger; do
-        if "$BIN/llrm-cc" --target=x86_16-dos -mabi=cdecl -c "$k$m.c" -o "$k$m.llrm.obj" 2> "$K${m^^}.ERR"; then
+        # BCC's callers are built -DARMED (arm()/verify() check what the callee kept): so are llrm's, without SI and DI, which
+        # llrm's own code may use between the two.
+        armed=""; [[ $m == caller || $m == agger ]] && armed="-DARMED -DARMED_NO_SIDI"
+        if "$BIN/llrm-cc" --target=x86_16-dos -mabi=cdecl $armed -c "$k$m.c" -o "$k$m.llrm.obj" 2> "$K${m^^}.ERR"; then
             # The pair must differ: a module byte-equal to BCC's measures nothing.
             if cmp -s "$k$m.llrm.obj" "$K${m^^}.OBJ"; then r=compiled-SAME-AS-BCC; else r=compiled; fi
         else

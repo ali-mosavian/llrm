@@ -21,11 +21,14 @@
 //! lane conflicts (`CR_Unresolved`, `taintExtent`, `resolveConflicts`) cannot
 //! arise, and `JoinVals` asserts it. Exit: none while values have no lanes.
 //!
-//! DEVIATE C2 (no number): no physical-register copies. A fixed register is a
-//! constraint on an instruction (`requires`, `delivers`), not a `COPY` to a
-//! physical register, so `joinReservedPhysReg`, `canJoinPhys` and
+//! DEVIATE C2 (no number): no physical-register copies, except the stack
+//! pointer. A fixed register is a constraint on an instruction (`requires`,
+//! `delivers`), not a `COPY` to a physical register, so `canJoinPhys` and
 //! `CP.isPhys()` have nothing to join; the environment says whether two values
-//! may share a register (`CoalescerEnv::can_share`, `getCommonSubClass`).
+//! may share a register (`CoalescerEnv::can_share`, `getCommonSubClass`). The
+//! one reserved register that is copied is the stack pointer (`stacksave`,
+//! `stackrestore`): `joinReservedPhysReg` for it is `backend::joinsp`, the
+//! phase before this one.
 //!
 //! DEVIATE C3 (no number): `removeImplicitDefs` (sub-range joins only) is not
 //! translated, and with one lane `ErasableImplicitDef` is a single flag:

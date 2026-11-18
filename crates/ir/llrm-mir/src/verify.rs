@@ -31,7 +31,7 @@ pub fn verify(module: &Module) -> Vec<String> {
             }
         }
         if let GlobalKind::Function(function) = &global.kind {
-            if intrinsics::is_reserved(name) {
+            if intrinsics::is_reserved(name) && !intrinsics::is_target_intrinsic(name) {
                 let problem = match Intrinsic::named(name) {
                     _ if !function.is_declaration() => Err("llvm intrinsics cannot be defined!".to_owned()),
                     None => Err("an intrinsic MIR does not have".to_owned()),
@@ -450,7 +450,19 @@ impl Checker<'_> {
             Opcode::FCmp(_) if ty(0) != ty(1) || !is_float(self, ty(0)) => {
                 self.fail(format!("{at} compares {} with {}", self.show(ty(0)), self.show(ty(1))))
             }
-            Opcode::Select if ty(1) != ty(2) || ty(1) != result || !matches!(self.ty(ty(0)), Type::Int(1)) => {
+            // `SelectInst::areInvalidOperands`: an `i1` condition, or a vector
+            // of them as long as the values'.
+            Opcode::Select
+                if ty(1) != ty(2)
+                    || ty(1) != result
+                    || !match (self.ty(ty(0)), self.ty(result)) {
+                        (Type::Int(1), _) => true,
+                        (Type::Vector { element, count }, Type::Vector { count: lanes, .. }) => {
+                            count == lanes && matches!(self.ty(*element), Type::Int(1))
+                        }
+                        _ => false,
+                    } =>
+            {
                 self.fail(format!("{at} is ill-typed"))
             }
             // llvm/lib/IR/Instructions.cpp#L1728 `ExtractElementInst::isValidOperands`
@@ -670,6 +682,21 @@ impl Checker<'_> {
         to: TypeId,
     ) -> Result<(), String> {
         let (a, b) = (self.ty(from), self.ty(to));
+        // `CastInst::castIsValid`: vectors of one lane count cast lane by
+        // lane; a bit cast keeps the total size.
+        if let (Type::Vector { element: x, count: m }, Type::Vector { element: y, count: n }) = (a, b) {
+            let bits = |ty: TypeId| match self.ty(ty) {
+                Type::Int(bits) => Some(u64::from(*bits)),
+                Type::Float(kind) => Some(u64::from(crate::datalayout::float_bits(*kind))),
+                _ => None,
+            };
+            let ok = if op == CastOp::BitCast {
+                matches!((bits(*x), bits(*y)), (Some(p), Some(q)) if p * u64::from(*m) == q * u64::from(*n))
+            } else {
+                m == n && self.cast(op, *x, *y).is_ok()
+            };
+            return if ok { Ok(()) } else { Err(format!("cannot take {} to {}", self.show(from), self.show(to))) };
+        }
         let ok = match (op, a, b) {
             (CastOp::Trunc, Type::Int(x), Type::Int(y)) => y < x,
             (CastOp::ZExt | CastOp::SExt, Type::Int(x), Type::Int(y)) => y > x,

@@ -88,24 +88,54 @@ class KernelRange(unittest.TestCase):
         self.assertFalse(expect.same_value("-1", "30825279\n"))
         self.assertEqual(expect.status("stft_fixed", "O2", "-1", "30825279\n"), "fail")
 
-    def test_the_stft_single_value_is_a_named_exception_only_at_its_observed_value(self):
-        sys.path.insert(0, os.path.join(os.path.dirname(COUNT)))
+    def test_stft_single_is_judged_on_its_arm64_output_not_the_dos_one(self):
+        # stft_single read as `exception` on all three columns of every level (hiding the cell from the counted tables):
+        # the DOS .out holds the x87 value 78803551, aarch64 fuses a*b+c and prints 40144774 (NAME.arm64.out).
+        sys.path.insert(0, os.path.dirname(COUNT))
         import expect
 
-        for level in ("O1", "O2", "O3", "Os"):
-            self.assertEqual(expect.status("stft_single", level, "40144774:f14311fc", "78803551\n"), "exception", level)
-        self.assertEqual(expect.status("stft_single", "O2", "-1", "78803551\n"), "fail")
-        self.assertEqual(expect.status("stft_single", "O2", "502187692", "78803551\n"), "fail")
-        self.assertEqual(expect.status("stft_single", "O2", "78803551", "78803551\n"), "ok")
-
-    def test_the_level_may_be_given_as_cell_sh_passes_it(self):
-        # cell.sh passes 1/2/3/s, the table is keyed O1/O2/O3/Os: every stft_single cell of the
-        # judge table came out `unmeasured:value 40144774...` instead of `exception`.
-        sys.path.insert(0, os.path.join(os.path.dirname(COUNT)))
-        import expect
-
+        root = os.path.join(os.path.dirname(COUNT), "..", "..", "bench")
+        path = expect.expected_path(root, "stft_single")
+        self.assertTrue(path.endswith("stft_single.arm64.out"), path)
+        want = open(path).read()
         for level in ("1", "2", "3", "s"):
-            self.assertEqual(expect.status("stft_single", level, "40144774:f14311fc", "78803551\n"), "exception", level)
+            self.assertEqual(expect.status("stft_single", level, "40144774:f14311fc", want), "ok", level)
+        self.assertEqual(expect.status("stft_single", "2", "502187692", want), "fail")
+        self.assertTrue(expect.expected_path(root, "grep").endswith("grep.ci.out"))
+        self.assertTrue(expect.expected_path(root, "queens").endswith("queens.out"))
+
+    def test_a_dos_only_program_is_not_measured_on_arm64(self):
+        # textfill (`// targets: dos`) stores through a DOS physical screen address: it built, ran and printed a row of
+        # +15,921 instructions that no other target counts.
+        r = subprocess.run([sys.executable, os.path.join(os.path.dirname(COUNT), "expect.py"), "--applies",
+                            os.path.join(os.path.dirname(COUNT), "..", "..", "bench", "textfill", "textfill.c")],
+                           capture_output=True, text=True)
+        self.assertEqual(r.returncode, 3)
+        self.assertIn("DOS", r.stdout)
+        ok = subprocess.run([sys.executable, os.path.join(os.path.dirname(COUNT), "expect.py"), "--applies",
+                             os.path.join(os.path.dirname(COUNT), "..", "..", "bench", "queens", "queens.c")])
+        self.assertEqual(ok.returncode, 0)
+
+    def test_a_program_with_two_reports_is_judged_on_its_last(self):
+        # grep prints lines then a checksum; `reported` holds the checksum, the .out's first number (4745 lines) never equalled it:
+        # all 188 grep cells of the LV-X2 table read `unmeasured:value ... is not the expected one`.
+        import expect
+
+        ci_out = "115\n494962839\n"
+        self.assertEqual(expect.status("grep", "O2", "494962839", ci_out), "ok")
+        self.assertEqual(expect.status("grep", "O2", "115", ci_out), "fail")
+        self.assertEqual(expect.status("grep", "O2", "109617741", ci_out), "fail")  # rt.c's old 64 KiB of fixed text
+
+    def test_the_dickens_corpus_is_found_by_its_dos_name(self):
+        sys.path.insert(0, os.path.join(os.path.dirname(COUNT), "..", "dosbatch"))
+        import corpus
+
+        count = self.load()
+        try:
+            want = str(corpus.path("dickens"))
+        except corpus.Unavailable as why:
+            self.skipTest(str(why))
+        self.assertEqual(count.find_input("dickens"), want)
 
 
 if __name__ == "__main__":

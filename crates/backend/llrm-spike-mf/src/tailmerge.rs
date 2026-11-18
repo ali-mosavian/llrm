@@ -157,6 +157,23 @@ pub trait TailMergeFunction {
     ) -> Option<Self::Block> {
         None
     }
+    /// Whether blocks `one` and `other` may merge as far as their loops go:
+    /// those of one loop, or of loops the caller lets merge (`Crossing`).
+    fn may_cross(
+        &self,
+        one: Self::Block,
+        other: Self::Block,
+    ) -> bool {
+        self.loop_header(one) == self.loop_header(other)
+    }
+    /// `MBBFreqInfo.setBlockFreq` of the common tail: `from`'s tail now runs
+    /// through `common`, which takes its frequency.
+    fn add_tail_frequency(
+        &mut self,
+        _common: Self::Block,
+        _from: Self::Block,
+    ) {
+    }
     /// `getTailMergeSize`.
     fn tail_merge_size(&self) -> usize {
         3
@@ -294,7 +311,7 @@ impl<F: TailMergeFunction> Merger<'_, F> {
         succ: Option<F::Block>,
         pred: Option<F::Block>,
     ) -> Option<(usize, usize, usize)> {
-        if self.function.loop_header(one) != self.function.loop_header(other) {
+        if !self.function.may_cross(one, other) {
             return None;
         }
         let (length, start1, start2) = self.common_tail(one, other);
@@ -499,6 +516,7 @@ impl<F: TailMergeFunction> Merger<'_, F> {
                 if i == index {
                     continue;
                 }
+                self.function.add_tail_frequency(common, tail.block);
                 self.function.replace_tail_with_branch_to(tail.block, tail.start, common);
                 self.potentials.retain(|one| one.block != tail.block);
             }
@@ -599,6 +617,16 @@ struct Mf<'a, C, J> {
     /// Block to the header of its innermost loop, from the blocks at the start;
     /// a split block takes its origin's.
     loops: HashMap<u32, u32>,
+    /// The loops (by header) whose blocks may merge with those of other loops:
+    /// [`Crossing::Loops`].
+    crossing: Option<HashSet<u32>>,
+    /// Block frequencies by id, kept as `BranchFolder` keeps `MBBFreqInfo`: a
+    /// split block's tail takes its frequency and a common tail adds those
+    /// of the tails merged into it.
+    frequencies: Option<&'a mut HashMap<u32, f64>>,
+    /// A loop's header to the header of the loop around it, for the loops that
+    /// have one.
+    enclosing: HashMap<u32, u32>,
     /// Positions and edges of the blocks as they are, built on the first ask
     /// after a change (LLVM keeps these on the block).
     graph: std::cell::RefCell<Option<Graph>>,
@@ -749,8 +777,8 @@ impl<C, J: Jump> TailMergeFunction for Mf<'_, C, J> {
             Some(assignment) => fold::identical(one, other, assignment),
             None => {
                 one.kind == other.kind
-                    && one.sets_flags == other.sets_flags
-                    && one.reads_flags == other.reads_flags
+                    && one.sets_flags() == other.sets_flags()
+                    && one.reads_flags() == other.reads_flags()
                     && one.operands == other.operands
             }
         }
@@ -886,6 +914,23 @@ impl<C, J: Jump> TailMergeFunction for Mf<'_, C, J> {
         self.loops.get(&block).copied()
     }
 
+    fn may_cross(
+        &self,
+        one: u32,
+        other: u32,
+    ) -> bool {
+        let (x, y) = (self.loop_header(one), self.loop_header(other));
+        // A hot loop's own blocks join those of the loop around it (its guard
+        // and latch), and no others.
+        let guards = |inner: Option<u32>, outer: Option<u32>| {
+            inner.is_some_and(|header| {
+                self.crossing.as_ref().is_some_and(|hot| hot.contains(&header))
+                    && self.enclosing.get(&header).copied() == outer
+            })
+        };
+        x == y || guards(x, y) || guards(y, x)
+    }
+
     fn split_block_at(
         &mut self,
         block: u32,
@@ -896,10 +941,25 @@ impl<C, J: Jump> TailMergeFunction for Mf<'_, C, J> {
         if let Some(header) = self.loops.get(&block).copied() {
             self.loops.insert(id, header);
         }
+        if let Some(frequency) = self.frequencies.as_deref().and_then(|all| all.get(&block).copied()) {
+            self.frequencies.as_deref_mut().expect("read above").insert(id, frequency);
+        }
         let tail = self.function.blocks[position].insts.split_off(at);
         self.function.insert_block(position + 1, Block { id, insts: tail, phis: Vec::new() });
         self.changed();
         Some(id)
+    }
+
+    fn add_tail_frequency(
+        &mut self,
+        common: u32,
+        from: u32,
+    ) {
+        if let Some(all) = self.frequencies.as_deref_mut() {
+            if let Some(added) = all.get(&from).copied() {
+                *all.entry(common).or_insert(0.0) += added;
+            }
+        }
     }
 
     fn replace_tail_with_branch_to(
@@ -926,6 +986,18 @@ pub fn merge_tails<J: Jump, C>(
     merge_tails_across_loops::<J, C>(function, assignment, false)
 }
 
+/// Which loops' blocks tail merging may join with others'.
+#[derive(Clone, Copy)]
+pub enum Crossing<'a> {
+    /// Those of one loop only.
+    Never,
+    /// Any, as the pin's `BranchFolder` does before block placement.
+    Always,
+    /// Those of the loops with these headers, with blocks of other loops or of
+    /// none.
+    Loops(&'a HashSet<u32>),
+}
+
 /// [`merge_tails`], and with `across_loops` blocks of different loops merge as
 /// the pin's `BranchFolder` does before block placement. The merged guard and
 /// latch of a loop leave its test at the bottom behind one entry jump: bytes
@@ -935,6 +1007,23 @@ pub fn merge_tails_across_loops<J: Jump, C>(
     assignment: Option<&Assignment>,
     across_loops: bool,
 ) -> bool {
+    merge_tails_crossing::<J, C>(
+        function,
+        assignment,
+        if across_loops { Crossing::Always } else { Crossing::Never },
+        None,
+    )
+}
+
+/// [`merge_tails_across_loops`] with the loops that may merge named: the entry
+/// jump costs a loop's entry once and saves its test a trip each, so the caller
+/// names the loops that run more than once (the pin leaves it to `rotateLoop`).
+pub fn merge_tails_crossing<J: Jump, C>(
+    function: &mut MFunction<C>,
+    assignment: Option<&Assignment>,
+    crossing: Crossing<'_>,
+    frequencies: Option<&mut HashMap<u32, f64>>,
+) -> bool {
     if function.blocks.iter().any(|block| !block.phis.is_empty()) {
         return false;
     }
@@ -943,11 +1032,17 @@ pub fn merge_tails_across_loops<J: Jump, C>(
         assignment,
         removed: HashMap::default(),
         loops: HashMap::default(),
+        enclosing: HashMap::default(),
+        frequencies,
+        crossing: match crossing {
+            Crossing::Loops(hot) => Some(hot.clone()),
+            _ => None,
+        },
         graph: std::cell::RefCell::new(None),
         jump: std::marker::PhantomData,
     };
-    if !across_loops {
-        mf.loops = innermost_loops(&mf.blocks(), |block| mf.successors(block));
+    if !matches!(crossing, Crossing::Always) {
+        (mf.loops, mf.enclosing) = innermost_loops(&mf.blocks(), |block| mf.successors(block));
     }
     tail_merge_blocks(&mut mf)
 }
@@ -958,8 +1053,8 @@ pub fn merge_tails_across_loops<J: Jump, C>(
 fn innermost_loops(
     blocks: &[u32],
     successors: impl Fn(u32) -> Vec<u32>,
-) -> HashMap<u32, u32> {
-    let Some(&entry) = blocks.first() else { return HashMap::default() };
+) -> (HashMap<u32, u32>, HashMap<u32, u32>) {
+    let Some(&entry) = blocks.first() else { return Default::default() };
     let succ: HashMap<u32, Vec<u32>> = blocks.iter().map(|&b| (b, successors(b))).collect();
     let mut preds: HashMap<u32, Vec<u32>> = HashMap::default();
     for (&b, out) in &succ {
@@ -1008,5 +1103,17 @@ fn innermost_loops(
             }
         }
     }
-    innermost
+    // the loop around a loop: the smallest other body holding its header
+    let mut enclosing: HashMap<u32, u32> = HashMap::default();
+    for &header in bodies.keys() {
+        let around = bodies
+            .iter()
+            .filter(|&(&other, body)| other != header && body.contains(&header))
+            .min_by_key(|&(&other, body)| (body.len(), other))
+            .map(|(&other, _)| other);
+        if let Some(around) = around {
+            enclosing.insert(header, around);
+        }
+    }
+    (innermost, enclosing)
 }

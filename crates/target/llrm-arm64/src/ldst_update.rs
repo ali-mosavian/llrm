@@ -151,6 +151,11 @@ fn touches_sp(inst: &Inst) -> bool {
         | Inst::LoadPair { addr, .. }
         | Inst::StorePair { addr, .. } => based(addr),
         Inst::Atomic { rn, .. } => sp(rn),
+        Inst::VectorStoreLane { base, .. }
+        | Inst::VectorLoadReplicate { base, .. }
+        | Inst::VectorLoadLane { base, .. }
+        | Inst::VectorLoadStructure { base, .. }
+        | Inst::VectorStoreStructure { base, .. } => sp(base),
         Inst::Prefetch { base, .. } => sp(base),
         _ => false,
     }

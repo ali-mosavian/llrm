@@ -490,6 +490,12 @@ impl Emitter<'_> {
                     }
                     return Ok(());
                 }
+                // `InstrEmitter::EmitCopyToRegNode`: the copy of an `IMPLICIT_DEF` into a physical register
+                // is an `IMPLICIT_DEF` of that register, which `ProcessImplicitDefs` drops: no code, the
+                // register keeps whatever it holds (`ret i32 undef`)
+                if matches!(dst, Reg::Phys(_)) && self.dag.opcode(source) == ISD::Machine(10) {
+                    return Ok(());
+                }
                 let Some(Operand::Use(src)) = self.operand(n.ops[2])? else {
                     return Err("CopyToReg of a value that is no register".to_owned());
                 };
@@ -528,6 +534,16 @@ impl Emitter<'_> {
                 // the glue a `CALLSEQ_END` of no bytes is given
                 // (`DYNAMIC_STACKALLOC`'s expansion) is no register
                 if !is_value(n.values[0]) {
+                    return Ok(());
+                }
+                // read only by copies into physical registers, which make no code of their own
+                // (`EmitCopyToRegNode`, above): nothing to define
+                let users: Vec<u32> = self.dag.users(value).collect();
+                if users.into_iter().all(|user| {
+                    let copy = SDValue { node: user, res: 0 };
+                    self.dag.opcode(copy) == ISD::CopyToReg
+                        && matches!(self.register(self.dag.node(copy).ops[1]), Some(Reg::Phys(_)))
+                }) {
                     return Ok(());
                 }
                 let name = match n.values[0].size_in_bits() {
@@ -856,7 +872,7 @@ fn flag_readers_to_hoist(tail: &[Inst]) -> Vec<usize> {
         if is_cmov(inst) {
             continue;
         }
-        if inst.reads_flags {
+        if inst.reads_flags() {
             if inst.terminator {
                 break;
             }
@@ -878,7 +894,7 @@ fn flag_readers_to_hoist(tail: &[Inst]) -> Vec<usize> {
                 readers.push(at);
             }
         }
-        if inst.sets_flags {
+        if inst.sets_flags() {
             break;
         }
     }
@@ -949,7 +965,7 @@ pub fn expand_cmov(function: &mut MFunction) -> Result<(), String> {
         // them and the join restores them before the first such reader.
         // DEVIATE from the pin, which orders the readers before the pseudo.
         if let Some(second) =
-            tail.iter().take_while(|inst| !inst.sets_flags).position(|inst| is_cmov(inst) || inst.reads_flags)
+            tail.iter().take_while(|inst| !inst.sets_flags()).position(|inst| is_cmov(inst) || inst.reads_flags())
         {
             function.classes.push(Class::Dr16);
             let kept = Reg::Virt(function.classes.len() as u32 - 1);

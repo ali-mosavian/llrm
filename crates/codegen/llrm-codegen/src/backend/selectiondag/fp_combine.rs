@@ -213,7 +213,9 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
                 if !self.dag.has_one_use(op.node) && !self.dag.has_users(made) {
                     return None;
                 }
-                Some((made, Cost::Neutral))
+                // DEVIATE FP3: where constants are canonically positive, negating a negative one is a gain.
+                let positive = self.tli.is_some_and(|tli| tli.positive_fp_constants()) && self.fp_const(op).is_some_and(|c| c.negative);
+                Some((made, if positive { Cost::Cheaper } else { Cost::Neutral }))
             }
             ISD::FAdd => {
                 if !flags.has(SDNodeFlags::NO_SIGNED_ZEROS)
@@ -449,7 +451,12 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
             }
         }
         // fold (fsub A, (fneg B)) -> (fadd A, B)
-        let (neg, _) = self.negated_expression(n1, 0)?;
+        let (neg, cost) = self.negated_expression(n1, 0)?;
+        // DEVIATE FP3: with positive constants `fadd A, (fmul B, -K)` is `fsub`, so a neutral negation would flip
+        // it back and forth.
+        if cost > Cost::Cheaper && self.tli.is_some_and(|tli| tli.positive_fp_constants()) {
+            return None;
+        }
         Some(self.dag.get_node_flags(ISD::FAdd, vt, &[n0, neg], flags))
     }
 

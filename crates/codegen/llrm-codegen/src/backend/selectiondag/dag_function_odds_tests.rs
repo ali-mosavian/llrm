@@ -216,3 +216,75 @@ done:
     let looped = body.blocks.iter().find(|block| block.succ.contains(&block.at)).expect("a block that loops");
     assert_eq!(body.loop_trip_counts, vec![(looped.at, 8)], "{:?}", body.loop_trip_counts);
 }
+
+/// x_list -Os, ROTATION-HOT's trial: rotating an inner loop copied the outer
+/// counter's `add` into both arms of its guard, `phi [%a, %l1], [%b, %l2]` of
+/// two equal adds. `induction` did not read the phi as the add, the outer loop
+/// lost its 10 trips and read 31 in 32: the rotated body was priced 13,401 of
+/// work against 7,259 for the one that is 4,070 clocks faster, and put back.
+/// ScalarEvolution's `createNodeForPHIWithIdenticalOperands` reads it.
+#[test]
+fn a_loops_trips_are_proved_where_its_counter_is_a_phi_of_two_equal_adds() {
+    let module = llrm_mir::parse::module(
+        "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(i32 %a) {
+entry:
+  br label %loop
+loop:
+  %i = phi i32 [ 0, %entry ], [ %j, %latch ]
+  %z = icmp eq i32 %a, 0
+  br i1 %z, label %l1, label %l2
+l1:
+  %j1 = add nuw nsw i32 %i, 1
+  br label %latch
+l2:
+  %j2 = add nuw nsw i32 %i, 1
+  br label %latch
+latch:
+  %j = phi i32 [ %j1, %l1 ], [ %j2, %l2 ]
+  %more = icmp ne i32 %j, 10
+  br i1 %more, label %loop, label %done
+done:
+  ret i32 %j
+}
+",
+    )
+    .expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let trips: Vec<i64> = done.body.loop_trip_counts.iter().map(|(_, count)| *count).collect();
+    assert_eq!(trips, vec![10], "{:?}", done.body.loop_trip_counts);
+}
+
+/// d_faces -m32 -O2: every loop's trip proof found the body's `llvm.assume`s
+/// again, a walk of the whole function (`Unit::assumptions` builds them when
+/// the unit carries none): 120 M of 11,900 M on 160 loops, a loop times the
+/// function. They are found once for the body, as LLVM's `AssumptionCache`.
+#[test]
+fn a_functions_loops_have_their_trips_proved_over_one_search_for_assumptions() {
+    // Rotated loops, each entered by a guard on its bound: `for (i = 0; i < n;
+    // ++i)`.
+    let loops = 6;
+    let mut body = String::new();
+    for k in 0..loops {
+        body.push_str(&format!(
+            "g{k}:\n  %g{k}v = icmp sgt i32 %a, {k}\n  br i1 %g{k}v, label %p{k}, label %x{k}\np{k}:\n  br label %l{k}\nl{k}:\n  %i{k} = phi i32 [ 0, %p{k} ], [ %j{k}, %l{k} ]\n  %j{k} = add nuw nsw i32 %i{k}, 1\n  %c{k} = icmp slt i32 %j{k}, %a\n  br i1 %c{k}, label %l{k}, label %x{k}\nx{k}:\n  br label %{next}\n",
+            next = if k + 1 == loops { "done".to_string() } else { format!("g{}", k + 1) },
+        ));
+    }
+    let module = llrm_mir::parse::module(&format!(
+        "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"\ndefine i32 @f(i32 %a) {{\nentry:\n  br label %g0\n{body}done:\n  ret i32 %a\n}}\n"
+    ))
+    .expect("parses");
+    let layout = llrm_mir::datalayout::DataLayout::default();
+    let (_, _, function) = module.functions().next().expect("f");
+    let shape = llrm_analysis::cfg::Shape::of(function);
+    let plain = llrm_analysis::memory::Unit::of(&module, &layout, function).with_shape(&shape);
+    let facts = llrm_analysis::consts::known(&plain);
+    let unit = plain.with_registers(&facts);
+    let before = llrm_analysis::assumptions::built();
+    let trips = crate::backend::isel::proven_trips(&unit, &shape, &facts, |block| Some(llrm_analysis::cfg::id(block)));
+    let searched = llrm_analysis::assumptions::built() - before;
+    assert_eq!(trips.len(), 0, "the counts are symbolic: {trips:?}");
+    assert!(searched <= 1, "{searched} searches for the assumptions of one body of {loops} loops");
+}

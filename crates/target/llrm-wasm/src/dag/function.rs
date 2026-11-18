@@ -71,11 +71,10 @@ pub fn builder_target(
             pointer: pointer(width),
             offset_folding: true,
             global_addresses_constant: true,
-            // DEVIATE: clang marks every symbol `dso_local` under `-fno-pic`,
-            // which the IR parser drops, so every symbol is. The golden
-            // inputs carry the keyword. Exit: `GlobalValue` carries it, no
-            // later than 2026-11-20.
-            dso_local_symbols: true,
+            // `shouldAssumeDSOLocal` on wasm is the IR's: local linkage or a
+            // visibility other than default (clang marks every definition
+            // `hidden`; a declaration of default visibility is preemptible).
+            dso_local_symbols: false,
             boolean_contents: BooleanContents::ZeroOrOne,
             // The pin keeps `i32.div_s` for `sdiv x, 4` at every
             // level: `isIntDivCheap`.
@@ -163,6 +162,9 @@ pub struct Selected {
     /// The IR block whose lowering made this one: itself, or the `switch`
     /// block.
     pub origin: u32,
+    /// Where selection reached this block: `SelectAllBasicBlocks` goes in
+    /// reverse post-order, and the edges a block makes are added then.
+    pub rank: u32,
     /// The unwind destination of the `invoke` ending this block (an EH
     /// pad's block id), when the model keeps unwinding edges.
     pub unwind: Option<u32>,
@@ -180,6 +182,8 @@ pub struct Selected {
     /// The (size, alignment) of each stack object, by frame index: the
     /// function's allocas, then what the builder made.
     pub frame: Vec<(u64, u64)>,
+    /// `MFI.hasVarSizedObjects()`, the same on every block.
+    pub has_var_sized: bool,
     /// `-g`: the metadata id of each variable declared by a `#dbg_declare` of
     /// a static alloca, and the frame index of that alloca. The same on every
     /// block.
@@ -284,7 +288,8 @@ pub fn select_function(
         let mut built = build_block(module, function, &layout, &target, &arch, &convention, &mut info, block)
             .map_err(|why| why.0.to_owned())?;
         let extras = std::mem::take(&mut built.extra);
-        // A phi of two registers (an `i128`, an `f128`) is updated part by part: the k-th source goes to the k-th register of the phi
+        // A phi of two registers (an `i128`, an `f128`) is updated part by
+        // part: the k-th source goes to the k-th register of the phi
         let mut seen: std::collections::HashMap<_, usize> = std::collections::HashMap::new();
         let mut phis = Vec::new();
         for &(phi, src) in &built.phi_updates {
@@ -311,7 +316,11 @@ pub fn select_function(
         let mut group = vec![(block, block, built, phis)];
         group.extend(extras.into_iter().map(|(id, one)| (id, block, one, Vec::new())));
         for (n, (id, origin, mut one, phis)) in group.into_iter().enumerate() {
+            // The objects a call made while the block was built (a variadic
+            // call's buffer) are the frame's too:
+            // `computeKnownBitsForFrameIndex` reads each object's alignment.
             one.dag.frame_alignments.clone_from(&alignments);
+            one.dag.frame_alignments.extend(info.objects.iter().map(|&(_, align)| u64::from(align)));
             let Scheduled { units, mem_refs, accesses } =
                 select_block(&mut one.dag, cpu, features, &mut info, &alias, optimize)
                     .map_err(|why| format!("{why:?}"))?;
@@ -328,6 +337,7 @@ pub fn select_function(
             selected.push(Selected {
                 id: id.0,
                 origin: origin.0,
+                rank: 0,
                 unwind: if unwinding { unwind_of(function, origin) } else { None },
                 landing: unwinding && id == origin && starts_with_landing_pad(function, origin),
                 phis,
@@ -344,6 +354,7 @@ pub fn select_function(
                 accesses,
                 layout: Vec::new(),
                 frame: Vec::new(),
+                has_var_sized: false,
                 declared: Vec::new(),
                 argument_variables: Vec::new(),
                 stack_colors: Vec::new(),
@@ -353,6 +364,9 @@ pub fn select_function(
     // Selected in reverse post-order, emitted in layout order; the sort is
     // stable, so the blocks a switch was split into follow their block.
     machine_layout.sort_by_key(|&(at, _)| at);
+    for (rank, block) in selected.iter_mut().enumerate() {
+        block.rank = rank as u32;
+    }
     selected.sort_by_key(|block| at[&llrm_mir::module::BlockId(block.origin)]);
     let machine_layout: Vec<u32> = machine_layout.into_iter().map(|(_, id)| id).collect();
     let mut frame = statics;
@@ -383,6 +397,7 @@ pub fn select_function(
     for block in &mut selected {
         block.layout.clone_from(&machine_layout);
         block.frame.clone_from(&frame);
+        block.has_var_sized = info.has_var_sized_objects;
         block.declared.clone_from(&declared);
         block.argument_variables.clone_from(&argument_variables);
         block.stack_colors.clone_from(&stack_colors);
@@ -467,8 +482,10 @@ fn static_frame(
 mod stack_natural_alignment_tests {
     use super::*;
 
-    /// Every target's datalayout names the stack alignment its frames keep, or the passes that raise an alloca to its type's preferred
-    /// alignment have no bound. wasm declares S128 (the pin's string) and keeps 16.
+    /// Every target's datalayout names the stack alignment its frames keep, or
+    /// the passes that raise an alloca to its type's preferred
+    /// alignment have no bound. wasm declares S128 (the pin's string) and keeps
+    /// 16.
     #[test]
     fn the_datalayout_states_the_stack_alignment_the_frames_keep() {
         // The pin clang's strings (d1106deb71cc), not ours read back.

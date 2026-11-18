@@ -336,3 +336,47 @@ e:
     assert_eq!(adds(&sunk_on(&keep, &text(""))), 2, "the constants were turned into a phi");
     assert_eq!(adds(&sunk_on(&keep, &text("optsize "))), 1, "at size one add is smaller");
 }
+
+/// Two arms read `[p+2]` / `[p+4]` and then run the same six instructions on
+/// it. Where the target keeps constant offsets as displacements the sink of
+/// the load alone loses (see the tests above), but here one copy of the whole
+/// tail replaces two: the sink pays, as the pin's does. QCport
+/// `r_recursive_world_node` at m16 -O2 stayed 194 IR instructions (176 in the
+/// pin) when every displacement phi was refused.
+#[test]
+fn test_a_long_common_tail_behind_a_displacement_phi_is_sunk_where_the_target_keeps_displacements() {
+    let text = "define void @f(ptr %p, ptr %q, i1 %c) {
+b0:
+  br i1 %c, label %b1, label %b2
+
+b1:
+  %a = getelementptr inbounds nuw i8, ptr %p, i16 2
+  %x = load i16, ptr %a
+  %x1 = add i16 %x, 1
+  %x2 = mul i16 %x1, 3
+  %x3 = xor i16 %x2, 5
+  %x4 = shl i16 %x3, 1
+  store i16 %x4, ptr %q
+  br label %e
+
+b2:
+  %b = getelementptr inbounds nuw i8, ptr %p, i16 4
+  %y = load i16, ptr %b
+  %y1 = add i16 %y, 1
+  %y2 = mul i16 %y1, 3
+  %y3 = xor i16 %y2, 5
+  %y4 = shl i16 %y3, 1
+  store i16 %y4, ptr %q
+  br label %e
+
+e:
+  ret void
+}
+";
+    let keep = llrm_x86::tti::X86::of_cpu("i486")
+        .unwrap()
+        .with_tuning(llrm_mir::target::Tuning { keep_constant_displacements: true, ..llrm_mir::target::Tuning::PIN });
+    let sunk = sunk_on(&keep, text);
+    assert_eq!(sunk.matches("store i16").count(), 1, "{sunk}");
+    assert_eq!(sunk.matches("= load i16").count(), 1, "{sunk}");
+}

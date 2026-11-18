@@ -71,6 +71,13 @@ pub fn compute_num_sign_bits(
     v: Operand,
     depth: u32,
 ) -> u32 {
+    // DEVIATE (vectors, w11): the sign bit every lane has, none looked for.
+    if q.int_vector_lane_bits(v).is_some() {
+        return match q.int_constant(v) {
+            Some((bits, width)) => num_sign_bits(bits, width),
+            None => 1,
+        };
+    }
     compute_num_sign_bits_impl(q, v, depth)
 }
 

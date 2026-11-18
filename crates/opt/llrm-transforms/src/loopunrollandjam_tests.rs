@@ -185,7 +185,7 @@ fn jammed(
     assert!(arguments.is_empty(), "{arguments:?}");
     let mut module = llrm_mir::parse::module(text).expect("the corpus parses");
     let mut manager = llrm_mir::passes::PassManager::default();
-    manager.add(LoopUnrollAndJam { opt_level: 2, opt_size: false, options });
+    manager.add(LoopUnrollAndJam { opt_level: 2, opt_size: false, options, needs_vectors: false });
     manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).expect("the pass runs");
     llrm_mir::print::module(&module)
 }

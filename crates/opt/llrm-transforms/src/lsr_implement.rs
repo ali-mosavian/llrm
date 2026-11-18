@@ -42,8 +42,8 @@ use llrm_mir::passes::Declared;
 use llrm_mir::tti::Tti;
 use llrm_mir::types::{Type as MirType, TypeId};
 
-use crate::lsr_formula::Formula;
-use crate::lsr_use::{Fixup, Kind, Use, is_am_completely_folded};
+use crate::lsr_formula::{Formula, Symbol};
+use crate::lsr_use::{Fixup, Kind, Use, extension_of_existing_phi, is_am_completely_folded};
 
 /// What was decided for a loop: its uses, each with the formula chosen.
 pub struct Plan {
@@ -423,6 +423,41 @@ impl Implement<'_, '_> {
         ip
     }
 
+    /// `expand_code_for` of one register of a formula. DEVIATE LU22
+    /// (`Tti::lsr_extension_of_phi_exists`): the register that is the
+    /// extension of a phi of another loop's header (`{0,+,1}<i16>` of an inner
+    /// `i8` counter) is that extension of the phi, as the rating takes it.
+    /// The pin expands the addrec: a second counter in the inner loop, which
+    /// only the inner loop's own pass would merge with the first.
+    fn expand_register(
+        &mut self,
+        s: Scev,
+        ip: InstId,
+    ) -> Operand {
+        if self.tti.lsr_extension_of_phi_exists()
+            && self.se.addrec_header(s).is_some_and(|header| header != self.l)
+            && let Some((phi, signed)) = {
+                let cx = self.env.cx(&*self.context, &*self.function);
+                extension_of_existing_phi(self.se, &cx, s)
+            }
+            && self.env.tree.instruction_dominates(&*self.function, phi, ip)
+        {
+            let narrow = Operand::Value(self.function.instruction(phi).result.expect("a phi has a value"));
+            let narrow = self.unknown(narrow);
+            let ty = self.se.type_of(s);
+            let wide = {
+                let cx = self.env.cx(&*self.context, &*self.function);
+                if signed {
+                    self.se.get_sign_extend_expr(&cx, ScevUse::of(narrow), ty, 0)
+                } else {
+                    self.se.get_zero_extend_expr(&cx, ScevUse::of(narrow), ty, 0)
+                }
+            };
+            return self.expand_code_for(wide, None);
+        }
+        self.expand_code_for(s, None)
+    }
+
     /// `Expand`: the code for use `lu`'s formula at fixup `lf`, before `ip`;
     /// the value, and a compare's other operand set.
     fn expand(
@@ -481,7 +516,7 @@ impl Implement<'_, '_> {
             };
             if lu.kind == Kind::ICmpZero
                 && f.base_regs.len() == 1
-                && f.base_gv.is_none()
+                && f.symbol.is_none()
                 && !f.base_offset.add_unsigned(lf.offset).is_non_zero()
                 && !f.unfolded_offset.is_non_zero()
             {
@@ -492,7 +527,7 @@ impl Implement<'_, '_> {
             }
             if lu.kind == Kind::ICmpZero
                 && f.base_regs.len() == 1
-                && f.base_gv.is_none()
+                && f.symbol.is_none()
                 && !f.unfolded_offset.is_non_zero()
             {
                 original = self.narrow_existing(lf, reg, op_ty_id);
@@ -500,7 +535,7 @@ impl Implement<'_, '_> {
                     continue;
                 }
             }
-            let v = self.expand_code_for(reg, None);
+            let v = self.expand_register(reg, ip);
             let u = self.unknown(v);
             ops.push(u);
         }
@@ -516,14 +551,14 @@ impl Implement<'_, '_> {
             if lu.kind == Kind::ICmpZero {
                 // As if it were a base register.
                 if f.scale == 1 {
-                    let v = self.expand_code_for(scaled_s, None);
+                    let v = self.expand_register(scaled_s, ip);
                     let u = self.unknown(v);
                     ops.push(u);
                 } else {
                     // A negated scale is folded by putting the register in the
                     // compare's other operand.
                     assert_eq!(f.scale, -1, "The only scale supported by ICmpZero uses is -1!");
-                    icmp_scaled_v = Some(self.expand_code_for(scaled_s, None));
+                    icmp_scaled_v = Some(self.expand_register(scaled_s, ip));
                 }
             } else {
                 // Expand the register and an explicit scale, to be matched as
@@ -537,7 +572,7 @@ impl Implement<'_, '_> {
                     ops.clear();
                     ops.push(u);
                 }
-                let v = self.expand_code_for(scaled_s, None);
+                let v = self.expand_register(scaled_s, ip);
                 let mut s = self.unknown(v);
                 if f.scale != 1 {
                     let cx = self.env.cx(&*self.context, &*self.function);
@@ -549,7 +584,7 @@ impl Implement<'_, '_> {
         }
 
         // The global.
-        if let Some(global) = f.base_gv {
+        if let Some(symbol) = f.symbol {
             // Flushed, to keep the expander from hoisting.
             if !ops.is_empty() {
                 let sum = self.add(&ops);
@@ -558,11 +593,19 @@ impl Implement<'_, '_> {
                 ops.clear();
                 ops.push(u);
             }
-            let space = self.env.globals[global.0 as usize].address_space;
-            let pointer = self.context.types.ptr(space);
-            let constant =
-                Operand::Constant(self.context.constant(Constant { ty: pointer, kind: ConstantKind::Global(global) }));
-            let u = self.unknown(constant);
+            let operand = match symbol {
+                Symbol::Global(global) => {
+                    let space = self.env.globals[global.0 as usize].address_space;
+                    let pointer = self.context.types.ptr(space);
+                    Operand::Constant(
+                        self.context.constant(Constant { ty: pointer, kind: ConstantKind::Global(global) }),
+                    )
+                }
+                // A static alloca is in the entry block: it dominates every
+                // use.
+                Symbol::Frame(value) => Operand::Value(value),
+            };
+            let u = self.unknown(operand);
             ops.push(u);
         }
 
@@ -622,7 +665,7 @@ impl Implement<'_, '_> {
             if let Operand::Value(v) = self.function.instruction(ci).operands[1] {
                 self.dead.push(v);
             }
-            assert!(f.base_gv.is_none(), "ICmp does not support folding a global value and a scale at the same time!");
+            assert!(f.symbol.is_none(), "ICmp does not support folding a global value and a scale at the same time!");
             if f.scale == -1 {
                 let mut v = icmp_scaled_v.expect("a scaled value");
                 if self.operand_ty(v) != op_ty_id {

@@ -29,17 +29,19 @@
 //! or size folds to compares and a select (`search.rs`). `strcpy`, `stpcpy`,
 //! `strcat`, `strncat` and `strncpy` of a string of known length are an
 //! `llvm.memcpy` of it with its NUL (`copy.rs`), `strlen` finding the end where
-//! the compile states it.
+//! the compile states it. `strlen` of a constant string is its length, of a
+//! `select` of two the `select` of their lengths, and `strlen(x) == 0` is
+//! `*x == 0` (`length.rs`).
 //!
 //! # Deviations
 //! - D1: `puts`, `putchar`, `fwrite`, `fputc`, `fputs`, `memcmp` and `bcmp` are
 //!   formed only where the compile states them in `Options::library`, as
 //!   `strlen` is (loopidiom D11); the pin reads the triple. Exit:
 //!   `Target::library` naming them.
-//! - D2: the other arms (`sprintf`, `snprintf`, the other `str*`, `memchr`, math)
-//!   are untranslated, and so are `iprintf`/`__small_printf`,
-//!   `optimizeErrorReporting` and the argument annotations. The `memcpy`
-//!   family is `memops.rs`.
+//! - D2: the other arms (`sprintf`, `snprintf`, the other `str*`, `memchr`,
+//!   math) are untranslated, and so are `iprintf`/`__small_printf`,
+//!   `optimizeErrorReporting` and the argument annotations. The `memcpy` family
+//!   is `memops.rs`.
 //! - D4: the arms of `strchr`, `strpbrk`, `strcspn` and `strstr` that call a
 //!   routine (`memchr`, `strlen`, `strncmp`, `strchr`) are untranslated, as is
 //!   the character compare the pin makes of a `strchr` or `strstr` tested
@@ -78,6 +80,7 @@ use llrm_mir::valuetracking::underlying::get_underlying_object;
 
 mod compare;
 mod copy;
+mod length;
 mod memops;
 mod search;
 
@@ -525,6 +528,21 @@ fn puts(
     Some(put_char(site, Operand::Constant(unit.context.int(site.int, i128::from(b'\n')))))
 }
 
+/// The library function a global is by the symbol the compile states for it
+/// (`Routine::symbol`: a target that decorates its C names, DOS's `_strlen`,
+/// names the routine its idioms form so), where its undecorated name is not
+/// the global's.
+fn stated(
+    info: &TargetLibraryInfo,
+    routines: &[Routine],
+    unit: &Unit,
+    global: &llrm_mir::module::GlobalValue,
+) -> Option<LibFunc> {
+    let name = global.name.as_deref()?;
+    let routine = routines.iter().find(|one| one.symbol == name)?;
+    info.get_lib_func(&unit.context.types, routine.standard, global.function()?.ty)
+}
+
 impl FunctionPass for SimplifyLibCalls {
     fn adds_memory_operations(&self) -> bool {
         false
@@ -572,9 +590,9 @@ impl FunctionPass for SimplifyLibCalls {
         let size = unit.context.types.int(size_bits);
         for call in calls {
             let Some(global) = llrm_mir::memory::callee(unit.context, unit.function, call) else { continue };
-            let Some(func) =
-                outer.globals.get(global.0 as usize).and_then(|one| info.get_lib_func_of(&unit.context.types, one))
-            else {
+            let Some(func) = outer.globals.get(global.0 as usize).and_then(|one| {
+                info.get_lib_func_of(&unit.context.types, one).or_else(|| stated(&info, &self.routines, unit, one))
+            }) else {
                 continue;
             };
             let site = Site { env, call, int, size, optimize_size };
@@ -588,6 +606,7 @@ impl FunctionPass for SimplifyLibCalls {
                 LibFunc::Strncmp => compare::str_n_cmp(unit, &site, &outer),
                 LibFunc::Memcmp => compare::mem_cmp(unit, &site, true),
                 LibFunc::Bcmp => compare::mem_cmp(unit, &site, false),
+                LibFunc::Strlen => length::str_len(unit, &site),
                 LibFunc::Strchr => search::str_chr(unit, &site),
                 LibFunc::Memchr => search::mem_chr(unit, &site),
                 LibFunc::Strcpy => copy::str_cpy(unit, &site),

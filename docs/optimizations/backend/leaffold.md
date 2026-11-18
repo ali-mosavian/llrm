@@ -27,5 +27,11 @@ DEVIATE LEAF-FOLD-OS (owner m32, exit 2026-11-20). The pin keeps the leaf:
 case. `Target::leaf_fold_at_size` turns it on (m32); only at -Os, where the
 jump counts and the move on the path that does not branch does not.
 
+The fold changes the registers after it, so the bytes are not its own: of the
+12 -Os cells it touched, 4 grew (jpeg_fixed +16, x_bubble +3, quicksort +2,
+x_switch_sparse +1). DEVIATE LEAF-FOLD-TRIAL (owner m32, exit 2026-11-24): a
+module the backend folded is assembled again without the fold
+(`driver::trial`) and the smaller object is kept.
+
 ## Runs
 Phase 1 of the machine phases, after `SharedConstants`, before `SsaSpill`.

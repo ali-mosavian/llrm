@@ -426,9 +426,9 @@ fn mcmodel_goes_to_the_m68k_backend_and_not_to_its_clang() {
 
 /// clang marks every loop `llvm.loop.unroll.disable` at -O1 (its `UnrollLoops`
 /// is off), so the pin's -O1 never unrolls and x_life O1 ran 64k taken `jne`
-/// against gcc's 16k (+151k clk). The m32 rows take `-funroll-loops` at -O1,
-/// unless the command line states either spelling; other rows and levels are
-/// as before.
+/// against gcc's 16k (+151k clk). The m32 and m64 rows take `-funroll-loops` at
+/// -O1, unless the command line states either spelling; other rows and levels
+/// are as before.
 #[test]
 fn m32_rows_unroll_at_o1_unless_told_otherwise() {
     let table = targets(TARGETS).unwrap();
@@ -442,18 +442,40 @@ fn m32_rows_unroll_at_o1_unless_told_otherwise() {
         let (clang, llc) = flags("x86_32-linux", line);
         assert!(!clang.iter().any(|f| f == "-funroll-loops") && !llc.iter().any(|f| f == "-funroll-loops"), "{line}");
     }
-    let (clang, llc) = flags("x86_64-linux", "-O1 -c x.c");
-    assert!(
-        !clang.iter().any(|f| f == "-funroll-loops") && !llc.iter().any(|f| f == "-funroll-loops"),
-        "m64 as before"
-    );
+    // #9536: the m64 row takes it at -O1 as well, with the same exceptions.
+    for line in ["-O1 -c x.c", "-O2 -c x.c", "-O1 -fno-unroll-loops -c x.c"] {
+        let (clang, llc) = flags("x86_64-linux", line);
+        let unrolls = line.starts_with("-O1 -c");
+        assert!(
+            clang.iter().any(|f| f == "-funroll-loops") == unrolls
+                && llc.iter().any(|f| f == "-funroll-loops") == unrolls,
+            "m64 {line}"
+        );
+    }
     let (clang, _) = flags("x86_16-dos", "-O1 -c x.c");
     assert!(!clang.iter().any(|f| f == "-funroll-loops"), "m16 as before");
 }
 
-/// The 6502 rows take `-funroll-loops` at -O1 as the m32 rows do (6502-UNROLL-O1): float_in_place_update
-/// kept a two-trip float loop at -O1, 9441 B against 19 B at -Os. Other levels are as before, and
-/// a command line that names either spelling is obeyed.
+/// The m68k rows take `-funroll-loops` at -O1 (M68K-UNROLL-O1):
+/// float_in_place_update kept a two-trip float loop, 170 B at -O1 against gcc's
+/// 16. Other levels are as before, and a command line that names either
+/// spelling is obeyed.
+#[test]
+fn the_m68k_rows_unroll_at_o1_unless_told_otherwise() {
+    let table = targets(TARGETS).unwrap();
+    let clang = |row: &str, line: &str| clang_flags(&table[row], &built(line));
+    for row in ["m68k-68000", "m68k-68010", "m68k-68020", "m68k-68030", "m68k-68040", "m68k-68060"] {
+        assert!(clang(row, "-O1 -S x.c").iter().any(|f| f == "-funroll-loops"), "{row}");
+        for line in ["-O2 -S x.c", "-Os -S x.c", "-O1 -fno-unroll-loops -S x.c"] {
+            assert!(!clang(row, line).iter().any(|f| f == "-funroll-loops"), "{row} {line}");
+        }
+    }
+}
+
+/// The 6502 rows take `-funroll-loops` at -O1 as the m32 rows do
+/// (6502-UNROLL-O1): float_in_place_update kept a two-trip float loop at -O1,
+/// 9441 B against 19 B at -Os. Other levels are as before, and a command line
+/// that names either spelling is obeyed.
 #[test]
 fn the_6502_rows_unroll_at_o1_unless_told_otherwise() {
     let table = targets(TARGETS).unwrap();
@@ -469,15 +491,21 @@ fn the_6502_rows_unroll_at_o1_unless_told_otherwise() {
 /// The pin's -O1 pipeline has no JumpThreadingPass (JUMPTHREAD-O1), so clang's
 /// IR keeps a latch branch on a compare tested one block up (bsearch -O1: 668
 /// clk against gcc's 614; shift_int32_variable m32 -O1: 8942 clk against gcc's
-/// 7784). The m68k and m32 rows give their backend `-fthread-jumps` at -O1,
-/// unless the command line states either spelling; no other row, and no other
-/// level, does.
+/// 7784; arm64 mandel -O1: 153,637 instructions against gcc's 139,398, the
+/// second `b.hi` on one compare; m64 mandel -O1: 192,827 instructions against
+/// gcc's 176,067, the same; 6502 k_strnicmp -O1: 197 B against 129, the loop
+/// exit left as a `switch` on a phi of constants). The m68k, m32, m64, arm64
+/// and 6502 rows give their backend `-fthread-jumps` at -O1, unless the
+/// command line states either spelling; no other row, and no other level,
+/// does.
 #[test]
-fn m68k_and_m32_rows_thread_jumps_at_o1_unless_told_otherwise() {
+fn m68k_x86_arm64_and_6502_rows_thread_jumps_at_o1_unless_told_otherwise() {
     let table = targets(TARGETS).unwrap();
     let llc = |row: &str, line: &str| llc_args(&table[row], &built(line), Path::new("x.ll"), Path::new("x.o"));
     let has = |args: &[String]| args.iter().any(|f| f == "-fthread-jumps");
-    let threads = |row: &str| row.starts_with("m68k-") || row.starts_with("x86_32-");
+    let threads = |row: &str| {
+        ["m68k-", "x86_32-", "x86_64-", "arm64-", "6502-", "65c02-"].iter().any(|prefix| row.starts_with(prefix))
+    };
     for row in table.keys().filter(|row| threads(row)) {
         assert!(has(&llc(row, "-O1 -c x.c")), "{row}");
         for line in ["-O2 -c x.c", "-Os -c x.c", "-O1 -fno-thread-jumps -c x.c"] {
@@ -486,6 +514,43 @@ fn m68k_and_m32_rows_thread_jumps_at_o1_unless_told_otherwise() {
     }
     for row in table.keys().filter(|row| !threads(row)) {
         assert!(!has(&llc(row, "-O1 -c x.c")), "{row} as before");
+    }
+}
+
+/// DEVIATE SPEED-O1: the x86-32 rows give their backend `-fllrm-speed-rate` at
+/// -O1 (x_iir kept three `imul` of 24 clk a trip against gcc's lea chains,
+/// 130,528 clk to gcc's 60,034), and the x86-16 rows do (m16 grep -O1 kept the
+/// pin's counters and spilled its scan loop: 46.4M clk against bcc's 33.9M),
+/// unless the command line states either spelling; no other row, and no other
+/// level, does.
+#[test]
+fn x86_rows_price_bytes_at_speed_at_o1_unless_told_otherwise() {
+    let table = targets(TARGETS).unwrap();
+    let llc = |row: &str, line: &str| llc_args(&table[row], &built(line), Path::new("x.ll"), Path::new("x.o"));
+    let has = |args: &[String]| args.iter().any(|f| f == "-fllrm-speed-rate");
+    for row in table.keys() {
+        let at_o1 = row.starts_with("x86_32-") || row.starts_with("x86_16-");
+        assert_eq!(has(&llc(row, "-O1 -c x.c")), at_o1, "{row}");
+        for line in ["-O2 -c x.c", "-Os -c x.c", "-O1 -fno-llrm-speed-rate -c x.c"] {
+            assert!(!has(&llc(row, line)), "{row} {line}");
+        }
+    }
+}
+
+/// DEVIATE PRE-O1: the x86-16 rows give their backend `-ftree-pre` at -O1 (m16
+/// grep -O1 reloaded and respilled the scan loop's state, 40.16M clk against
+/// -O2's 34.89M, which GVN-PRE makes the same), unless the command line states
+/// either spelling; no other row, and no other level, does.
+#[test]
+fn x86_16_rows_run_pre_at_o1_unless_told_otherwise() {
+    let table = targets(TARGETS).unwrap();
+    let llc = |row: &str, line: &str| llc_args(&table[row], &built(line), Path::new("x.ll"), Path::new("x.o"));
+    let has = |args: &[String]| args.iter().any(|f| f == "-ftree-pre");
+    for row in table.keys() {
+        assert_eq!(has(&llc(row, "-O1 -c x.c")), row.starts_with("x86_16-"), "{row}");
+        for line in ["-O2 -c x.c", "-Os -c x.c", "-O1 -fno-tree-pre -c x.c"] {
+            assert!(!has(&llc(row, line)), "{row} {line}");
+        }
     }
 }
 
@@ -589,4 +654,42 @@ fn resource_dir_defers_to_clang_when_ambiguous_and_follows_symlinks() {
     let many = resource_include(&root.join("link/clang"), || Some(PathBuf::from("/spawned")));
     assert_eq!(many, Some(PathBuf::from("/spawned")));
     std::fs::remove_dir_all(&root).unwrap();
+}
+
+/// A 6502 program linked from one C source kept every external function
+/// nothing calls: float_return was 5945 B against llvm-mos's 90 (its linker
+/// drops them). The sweep is the default of that link only: not of `-S` or
+/// `-c` (other units may name the globals), of several sources, nor of a row
+/// whose backend lacks it.
+#[test]
+fn one_source_linked_for_the_6502_sweeps_what_main_does_not_reach() {
+    let table = targets(TARGETS).unwrap();
+    let args = |name: &str, line: &str| llc_args(&table[name], &built(line), Path::new("x.ll"), Path::new("x.o"));
+    let on = "-O2 x.c -o x";
+    for name in ["6502-cc65", "65c02-cc65"] {
+        assert!(args(name, on).contains(&"-fwhole-program".to_owned()), "{name}");
+        for line in
+            ["-O2 -S x.c", "-O2 -c x.c", "-O2 x.c y.c -o x", "-O2 x.c y.o -o x", "-O2 -fno-whole-program x.c -o x"]
+        {
+            assert!(!args(name, line).contains(&"-fwhole-program".to_owned()), "{name}: {line}");
+        }
+    }
+    // identity elsewhere: the same command line on every other row, bit for bit
+    for (name, row) in table.iter().filter(|(name, _)| !name.contains("cc65")) {
+        assert!(!row.whole_program, "{name}");
+        assert!(!args(name, on).contains(&"-fwhole-program".to_owned()), "{name}");
+    }
+}
+
+/// DEVIATE VP9 is opt-in: no row defaults `-fllrm-vect-very-cheap`, and the
+/// command line's spelling reaches the backend.
+#[test]
+fn very_cheap_vectorizing_is_opt_in() {
+    let table = targets(TARGETS).unwrap();
+    let llc = |row: &str, line: &str| llc_args(&table[row], &built(line), Path::new("x.ll"), Path::new("x.o"));
+    let has = |args: &[String]| args.iter().any(|f| f == "-fllrm-vect-very-cheap");
+    for row in table.keys() {
+        assert!(!has(&llc(row, "-O2 -c x.c")), "{row}");
+    }
+    assert!(has(&llc("arm64-linux", "-O2 -fllrm-vect-very-cheap -c x.c")));
 }

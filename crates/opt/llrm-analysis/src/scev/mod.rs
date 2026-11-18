@@ -24,12 +24,12 @@ pub mod backedge;
 pub mod cast;
 pub mod compare;
 pub mod compare_predicate;
+#[cfg(test)]
+mod constant_map_tests;
 pub mod create;
 pub mod create_addrec;
 pub mod create_phi;
 pub mod delinearize;
-#[cfg(test)]
-mod constant_map_tests;
 #[cfg(test)]
 mod delinearize_tests;
 pub mod disposition;
@@ -96,7 +96,7 @@ pub mod wrap_proof;
 
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
-use llrm_mir::dense::IdMap;
+use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::domtree::DomTree;
 use llrm_mir::hash::{HashMap, HashSet};
 use llrm_mir::loopinfo::LoopInfo;
@@ -292,6 +292,9 @@ pub struct ScalarEvolution {
     /// held: their SCEV is a constant node, made again for the price of a
     /// lookup.
     pub(super) value_expr_map: IdMap<ValueId, Scev>,
+    /// Values the caller wants read as unknown, whatever they compute
+    /// ([`Self::set_opaque`]). Beyond the pin.
+    pub(super) opaque: IdSet<ValueId>,
     /// `ExprValueMap`: the values a SCEV was made for, in insertion order.
     pub(super) expr_value_map: HashMap<Scev, Vec<ValueId>>,
     /// `SCEVUsers`: the expressions that have a SCEV as an operand.
@@ -363,6 +366,7 @@ impl ScalarEvolution {
             loop_dispositions: HashMap::default(),
             block_dispositions: HashMap::default(),
             value_expr_map: IdMap::new(),
+            opaque: IdSet::new(),
             expr_value_map: HashMap::default(),
             scev_users: HashMap::default(),
             loop_users: IdMap::new(),

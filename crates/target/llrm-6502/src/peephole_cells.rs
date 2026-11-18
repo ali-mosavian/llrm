@@ -1,8 +1,9 @@
 //! Cells a function leaves dead at its return, and the shifts of a word that
 //! end in `a`.
 //!
-//! - [`drop_dead_stores`]: `sta rc2` (likewise `stx`, `sty`, and the 65C02's `stz`) of a caller-saved
-//!   cell that nothing reads before an `rts` that does not return it.
+//! - [`drop_dead_stores`]: `sta rc2` (likewise `stx`, `sty`, and the 65C02's
+//!   `stz`) of a caller-saved cell that nothing reads before an `rts` that does
+//!   not return it.
 //! - [`store_then_index_load`]: `sta m; lda n; ldx m` is `tax; lda n` when `m`
 //!   is dead after (likewise `ldy m`): the byte went through memory to leave
 //!   `a`.
@@ -26,8 +27,8 @@
 //!   writes `s` or `t` and the copy `t` is dead after: a value copied to a cell
 //!   to be loaded again, one instruction early, costs the store and the cell.
 //!
-//! - [`fold_spill_copy`]: `ldy m; sty t; ...; sbc t` (likewise `lda`, `ldx`
-//!   and the other readers) reads `m` when `m` is unchanged on every path to the
+//! - [`fold_spill_copy`]: `ldy m; sty t; ...; sbc t` (likewise `lda`, `ldx` and
+//!   the other readers) reads `m` when `m` is unchanged on every path to the
 //!   reads and `t` is written again before another read: a spilled byte
 //!   reloaded into a cell for its readers.
 //!
@@ -35,6 +36,7 @@
 
 use std::collections::BTreeSet;
 
+use crate::asm::CellReads;
 use crate::asm::{Asm, Index, Inst, Line, Op, Operand, Registers};
 use crate::peephole::{Exits, dead_from};
 
@@ -46,6 +48,59 @@ fn cell_number(name: &str) -> Option<u8> {
 /// and not the callee-saved `rc8`..`rc15`.
 fn caller_saved(n: u8) -> bool {
     n >= 2 && !(8..=15).contains(&n)
+}
+
+/// Whether `inst`, a `jsr`, leaves the scratch cell `rcn` (`n >= 16`) as it
+/// was: a runtime routine whose text names no such cell
+/// (`routines::cells_named`; the allocator keeps a value there across it).
+fn call_keeps_scratch(
+    inst: &Inst,
+    n: u8,
+) -> bool {
+    n >= 16
+        && matches!(
+            &inst.operand,
+            Operand::Direct(routine) if crate::routines::cells_named(routine).is_some_and(|cells| !cells.contains(&n))
+        )
+}
+
+/// Whether `inst`, a `jsr`, may read the scratch cell `rcn` (`n >= 16`) as an
+/// argument: a function of the program takes arguments there past the eighth
+/// byte (`calling.toml` `[mos_private]`), the cells this function's calls of it
+/// pass; a runtime routine's text names the cells it reads
+/// (`routines::cells_named`). A callee the function's own calls do not list is
+/// one nobody here can say a cell of is not read.
+fn call_may_read_scratch(
+    reads: &CellReads,
+    inst: &Inst,
+    n: u8,
+) -> bool {
+    n >= 16
+        && matches!(
+            &inst.operand,
+            Operand::Direct(callee) if match reads.callees.get(callee) {
+                Some(cells) => cells.contains(&n),
+                None => crate::routines::reaches_cells_by_index(callee),
+            }
+        )
+}
+
+/// Whether `inst`, a `jsr`, leaves the named cell as it was: a spill slot, a
+/// callee-saved cell, or a cell the runtime routine's text does not name.
+///
+/// The pin's analogue is the call's register mask applied to the copy's source
+/// as to its destination (`MachineCopyPropagation`,
+/// `Tracker::clobberRegister`).
+fn call_keeps_source(
+    inst: &Inst,
+    source: &str,
+) -> bool {
+    let Some(n) = cell_number(source) else { return true };
+    (8..=15).contains(&n)
+        || matches!(
+            &inst.operand,
+            Operand::Direct(routine) if crate::routines::cells_named(routine).is_some_and(|cells| !cells.contains(&n))
+        )
 }
 
 fn straight(op: Op) -> bool {
@@ -94,12 +149,22 @@ fn straight(op: Op) -> bool {
 /// reads nothing new. A call, a raw line or an instruction not listed is not
 /// known to leave it dead.
 ///
-/// A callee-saved cell (`rc8`..`rc15`) is the caller's at the return: a store to it is dead only
-/// when a write to it (the epilogue's restore) comes before every `rts`, and a call neither reads
-/// nor changes it (the callee saves it on entry and restores it), so the scan goes on past a `jsr`.
-/// `float_conversions_loop` kept a `ldy #0; sty rc10` that only the restore ever followed. A `pla` is
-/// straight (the epilogue's restore); a `pha` is not: `pha; pha; rts` is a call through a pointer, and the
-/// `rts` there reads the argument cells (`function_table`, `static_pointers` miscompiled by 3 B of stores).
+/// A scratch cell (`rc16`..) is clobbered by a call, which reads none of them
+/// when it is a runtime routine's: a store followed by a `jsr` of one before
+/// any read is dead. A call of a function of the program may read it as an
+/// argument.
+///
+/// A callee-saved cell (`rc8`..`rc15`) is the caller's at the return: a store
+/// to it is dead only when a write to it (the epilogue's restore) comes before
+/// every `rts`, and a call neither reads nor changes it (the callee saves it on
+/// entry and restores it), so the scan goes on past a `jsr`.
+/// `float_conversions_loop` kept a `ldy #0; sty rc10` that only the restore
+/// ever followed. A `pla` is straight (the epilogue's restore); a `pha` is
+/// straight too, and counts a byte on the stack: `pha; pha; rts` is a call
+/// through a pointer, and an `rts` with a byte pushed reads the argument cells
+/// (`function_table`, `static_pointers` miscompiled by 3 B of stores). A save
+/// of `a` around a dead copy (`pha; lda rc4; sta rc7; pla`) no longer hides the
+/// store from this scan.
 ///
 /// The pin's analogue is the liveness of a physical register at a return
 /// (`DeadMachineInstructionElim.cpp`, `LivePhysRegs`): a def with no use on any
@@ -108,8 +173,22 @@ fn cell_dead_from(
     lines: &[Line],
     from: usize,
     cell: &str,
-    results: &BTreeSet<String>,
-    seen: &mut BTreeSet<usize>,
+    reads: &CellReads,
+    seen: &mut llrm_support::hash::HashSet<usize>,
+) -> bool {
+    dead_from_pushed(lines, from, cell, reads, seen, 0)
+}
+
+/// [`cell_dead_from`] with `pushed` bytes on the stack above where it began: a
+/// `pha` is straight while a `pla` of the same function pulls it back, but an
+/// `rts` with a byte still pushed is a jump through it.
+fn dead_from_pushed(
+    lines: &[Line],
+    from: usize,
+    cell: &str,
+    reads: &CellReads,
+    seen: &mut llrm_support::hash::HashSet<usize>,
+    mut pushed: u32,
 ) -> bool {
     let Some(n) = cell_number(cell) else { return false };
     // the soft stack pointer is read by every frame access
@@ -129,20 +208,76 @@ fn cell_dead_from(
             Line::Inst(inst) => inst,
         };
         if inst.op == Op::Rts {
-            return !callee_saved && !results.contains(cell);
+            return pushed == 0 && !callee_saved && !reads.results.contains(cell);
+        }
+        if inst.op == Op::Jsr && pushed > 0 {
+            return false;
+        }
+        if inst.op == Op::Pha {
+            pushed += 1;
+            continue;
+        }
+        if inst.op == Op::Pla {
+            pushed = pushed.saturating_sub(1);
+            continue;
         }
         if inst.op == Op::Jsr && callee_saved {
             continue;
         }
+        // a call clobbers the scratch cells above the callee-saved ones and
+        // reads none of them
+        if inst.op == Op::Jsr && n >= 16 {
+            if call_keeps_scratch(inst, n) {
+                continue;
+            }
+            return !call_may_read_scratch(reads, inst, n);
+        }
+        // a function of the program, or an external one, reads of `rc2`..`rc7`
+        // the cells this function's call of it passes: the others are as the
+        // call found them
+        if inst.op == Op::Jsr
+            && (2..8).contains(&n)
+            && matches!(
+                &inst.operand,
+                Operand::Direct(callee) if !crate::routines::is_runtime_routine(callee)
+                    && reads.callees.get(callee).is_some_and(|cells| !cells.contains(&n))
+            )
+        {
+            continue;
+        }
+        // a call does not read the cells its routine reads no argument from:
+        // one it always writes is dead before it (the `rc5`..`rc7` of a byte
+        // divisor, the remainder's cells of a quotient-and-remainder call), any
+        // other is as the call found it
+        if inst.op == Op::Jsr
+            && let Operand::Direct(routine) = &inst.operand
+            && let Some(effects) = crate::routine_effects::cell_effects(routine)
+            && n < 64
+            && effects.reads & (1 << n) == 0
+        {
+            if effects.writes & (1 << n) != 0 {
+                return true;
+            }
+            continue;
+        }
+        // a call of a routine that names no cell reads none of them
+        if inst.op == Op::Jsr
+            && matches!(
+                &inst.operand,
+                Operand::Direct(routine) if crate::routines::leaves_cells_alone(routine)
+            )
+        {
+            continue;
+        }
         let label = |inst: &Inst| {
             let name = inst.target()?;
-            lines.iter().position(|l| *l == Line::Label(name.to_owned()))
+            Line::label_position(lines, name)
         };
         if inst.op == Op::Jmp || inst.op == Op::Bra {
-            return label(inst).is_some_and(|to| cell_dead_from(lines, to, cell, results, seen));
+            return label(inst).is_some_and(|to| dead_from_pushed(lines, to, cell, reads, seen, pushed));
         }
         if inst.op.opposite().is_some() {
-            if !label(inst).is_some_and(|to| cell_dead_from(lines, to, cell, results, seen)) {
+            if !label(inst).is_some_and(|to| dead_from_pushed(lines, to, cell, reads, seen, pushed)) {
                 return false;
             }
             continue;
@@ -165,16 +300,94 @@ fn cell_dead_from(
     false
 }
 
-pub fn drop_dead_stores(asm: &mut Asm) {
-    let mut at = 0;
-    while at < asm.lines.len() {
-        if let Line::Inst(Inst { op: Op::Sta | Op::Stx | Op::Sty | Op::Stz, operand: Operand::Direct(cell), .. }) = &asm.lines[at]
-            && cell_dead_from(&asm.lines, at + 1, cell, &asm.result_cells, &mut BTreeSet::new())
-        {
-            asm.lines.remove(at);
+/// `lda rc8; pha` on entry and `pla; sta rc8` before each return of a
+/// callee-saved cell nothing else in the function names: the uses were dead
+/// stores [`drop_dead_stores`] removed after the allocator chose the cell, and
+/// the save of the caller's value guards nothing (6 B in `main` of
+/// `memmove_overlap`).
+///
+/// The pin saves the callee-saved registers the function modifies after
+/// allocation (`PrologEpilogInserter`, `calculateSavedRegisters`).
+pub fn drop_unused_saves(asm: &mut Asm) {
+    let shared = asm
+        .lines
+        .iter()
+        .any(
+            |line| matches!(
+                line,
+                Line::Inst(Inst { op: Op::Jsr, operand: Operand::Direct(n), .. }) if n.contains("csave") || n.contains("crest")
+            ),
+        );
+    if shared {
+        return;
+    }
+    for n in 8..=15u8 {
+        let cell = format!("rc{n}");
+        let (mut saves, mut restores, mut other) = (Vec::new(), Vec::new(), false);
+        let mut at = 0;
+        while at < asm.lines.len() {
+            match &asm.lines[at] {
+                Line::Raw(text) => other |= text.contains(&cell),
+                Line::Label(_) => {}
+                Line::Inst(inst) => {
+                    let next = asm.lines.get(at + 1).and_then(Line::inst);
+                    if inst.op == Op::Lda
+                        && inst.operand == Operand::Direct(cell.clone())
+                        && next.is_some_and(|next| next.op == Op::Pha)
+                    {
+                        saves.push(at);
+                        at += 1;
+                    } else if inst.op == Op::Pla
+                        && next.is_some_and(|next| next.op == Op::Sta && next.operand == Operand::Direct(cell.clone()))
+                    {
+                        restores.push(at);
+                        at += 1;
+                    } else {
+                        other |= match &inst.operand {
+                            Operand::Direct(c) => *c == cell,
+                            Operand::Indexed(c, _) => cell_number(c).is_some(),
+                            Operand::IndirectY(c) | Operand::IndirectX(c) | Operand::Indirect(c) => {
+                                cell_number(c).is_some_and(|m| m == n || m + 1 == n)
+                            }
+                            _ => false,
+                        };
+                    }
+                }
+            }
+            at += 1;
+        }
+        if other || saves.is_empty() || restores.is_empty() {
             continue;
         }
-        at += 1;
+        let mut gone: Vec<usize> = saves.iter().flat_map(|at| [*at, *at + 1]).collect();
+        gone.extend(restores.iter().flat_map(|at| [*at, *at + 1]));
+        gone.sort_unstable();
+        for at in gone.into_iter().rev() {
+            asm.lines.remove(at);
+        }
+    }
+}
+
+pub fn drop_dead_stores(asm: &mut Asm) {
+    // a removed store can make an earlier one dead (a zero kept in a scratch
+    // cell for the argument stores of a call that ignores them)
+    loop {
+        let before = asm.lines.len();
+        let mut at = 0;
+        while at < asm.lines.len() {
+            if let Line::Inst(Inst {
+                op: Op::Sta | Op::Stx | Op::Sty | Op::Stz, operand: Operand::Direct(cell), ..
+            }) = &asm.lines[at]
+                && cell_dead_from(&asm.lines, at + 1, cell, &asm.cell_reads(), &mut Default::default())
+            {
+                asm.lines.remove(at);
+                continue;
+            }
+            at += 1;
+        }
+        if asm.lines.len() == before {
+            break;
+        }
     }
 }
 
@@ -218,7 +431,8 @@ fn store_then_index_once(asm: &mut Asm) -> bool {
                 }
             }
             let Some(t) = found else { continue };
-            if cell_dead_from(lines, t + 1, m, &asm.result_cells, &mut BTreeSet::new()) && flags_unread(lines, t + 1) {
+            if cell_dead_from(lines, t + 1, m, &asm.cell_reads(), &mut Default::default()) && flags_unread(lines, t + 1)
+            {
                 asm.lines[s] = Line::Inst(Inst { op: transfer, operand: Operand::None, place: 0 });
                 asm.lines.remove(t);
                 return true;
@@ -263,7 +477,7 @@ fn temp_operand_once(asm: &mut Asm) -> bool {
         if !alu(user.op) || user.operand != Operand::Direct(t.clone()) {
             continue;
         }
-        if !cell_dead_from(lines, op_at + 1, t, &asm.result_cells, &mut BTreeSet::new()) {
+        if !cell_dead_from(lines, op_at + 1, t, &asm.cell_reads(), &mut Default::default()) {
             continue;
         }
         let operand = first.operand.clone();
@@ -323,7 +537,7 @@ fn spill_copy_once(
     let lines = &asm.lines;
     let covers = |c: &String| cell_number(c).is_some_and(|m| m == n || m + 1 == n);
     let covers_s = |c: &String| cell_number(c).zip(cell_number(s)).is_some_and(|(m, k)| m == k || m + 1 == k);
-    let position = |name: &str| lines.iter().position(|l| *l == Line::Label(name.to_owned()));
+    let position = |name: &str| Line::label_position(lines, name);
     let mut reads = Vec::new();
     let mut arrivals: std::collections::BTreeMap<usize, usize> = Default::default();
     let mut seen = BTreeSet::new();
@@ -361,9 +575,18 @@ fn spill_copy_once(
                 work.push(to);
                 continue;
             }
-            // a call clobbers a caller-saved cell and reads none above the argument cells
+            // a call clobbers a caller-saved cell and reads none above the
+            // argument cells
             if inst.op == Op::Jsr {
-                if n <= 7 {
+                if call_keeps_scratch(inst, n) {
+                    // the reads after the call would read `s` as the call left
+                    // it
+                    if !call_keeps_source(inst, s) {
+                        return false;
+                    }
+                    continue;
+                }
+                if n <= 7 || call_may_read_scratch(&asm.cell_reads(), inst, n) {
                     return false;
                 }
                 break;
@@ -386,19 +609,25 @@ fn spill_copy_once(
             }
         }
     }
-    // a label that other paths also reach, with `t` live there, joins another value of `t`
+    // a label that other paths also reach, with `t` live there, joins another
+    // value of `t`
     for (&label, &came) in &arrivals {
         let Line::Label(name) = &lines[label] else { continue };
         let refs = lines.iter().filter(|l| matches!(l, Line::Inst(i) if i.target() == Some(name.as_str()))).count();
         let falls = label > 0
-            && matches!(&lines[label - 1], Line::Inst(i) if !matches!(i.op, Op::Jmp | Op::Bra | Op::Rts))
+            && matches!(
+                &lines[label - 1],
+                Line::Inst(i) if !matches!(i.op, Op::Jmp | Op::Bra | Op::Rts)
+            )
             || label > 0 && matches!(&lines[label - 1], Line::Label(_));
-        if came < refs + usize::from(falls) && !cell_dead_from(lines, label, t, &asm.result_cells, &mut BTreeSet::new())
+        if came < refs + usize::from(falls)
+            && !cell_dead_from(lines, label, t, &asm.cell_reads(), &mut Default::default())
         {
             return false;
         }
     }
-    // a read of `t` the walk could not reach from here is no fold's business; the store goes only if none remain
+    // a read of `t` the walk could not reach from here is no fold's business;
+    // the store goes only if none remain
     let exits = Exits::of(asm);
     let dead_load = dead_from(lines, at + 2, register, &mut Default::default(), exits);
     if reads.is_empty() || reads.len() > if dead_load { 4 } else { 1 } {
@@ -421,6 +650,18 @@ fn stable(operand: &Operand) -> bool {
     matches!(
         operand,
         Operand::Direct(_) | Operand::Imm(_) | Operand::Indexed(..) | Operand::IndirectY(_)
+    )
+}
+
+/// Whether `operand` indexes by `x` while `x` holds the saved byte (`saved_in`
+/// is no cell).
+fn reads_x(
+    operand: &Operand,
+    saved_in: &Option<String>,
+) -> bool {
+    saved_in.is_none() && matches!(
+        operand,
+        Operand::Indexed(_, crate::asm::Index::X) | Operand::IndirectX(_)
     )
 }
 
@@ -461,12 +702,17 @@ pub fn carry_stays_in_the_flag(asm: &mut Asm) {
                 Op::Lda if restore => false,
                 Op::Lda => {
                     a_loaded = true;
-                    true
+                    !reads_x(&inst.operand, &saved_in)
                 }
-                Op::Ldy | Op::Sty | Op::Stx | Op::Tay => !writes_m,
+                // a copy of `a` before a load is a copy of the byte
+                Op::Tay => a_loaded && !writes_m,
+                Op::Ldy | Op::Sty => !writes_m && !reads_x(&inst.operand, &saved_in),
+                // `x` holds the byte when no cell does: storing it reads it
+                Op::Stx => !writes_m && saved_in.is_some(),
                 // `x` is free to change when the byte waits in a cell
-                Op::Ldx | Op::Tax => saved_in.is_some() && !writes_m,
-                Op::Sta => a_loaded && !writes_m,
+                Op::Ldx => saved_in.is_some() && !writes_m,
+                Op::Tax => saved_in.is_some() && a_loaded && !writes_m,
+                Op::Sta => a_loaded && !writes_m && !reads_x(&inst.operand, &saved_in),
                 _ => false,
             };
             if !quiet {
@@ -499,9 +745,11 @@ pub fn carry_stays_in_the_flag(asm: &mut Asm) {
                 &mut Default::default(),
                 exits,
             ),
-            Some(m) => cell_dead_from(&asm.lines, end + 2, m, &asm.result_cells, &mut BTreeSet::new()),
+            Some(m) => cell_dead_from(&asm.lines, end + 2, m, &asm.cell_reads(), &mut Default::default()),
         };
-        if !a_dead || !byte_dead {
+        // the `lsr` leaves zero and not-negative; the work's flags are what
+        // stay
+        if !a_dead || !byte_dead || !crate::peephole::flags_unread_after(&asm.lines, end + 2) {
             at += 1;
             continue;
         }
@@ -552,7 +800,7 @@ fn chain_once(asm: &mut Asm) -> bool {
         if x != &m && x != &n {
             continue;
         }
-        if !cell_dead_from(lines, load + 1, x, &asm.result_cells, &mut BTreeSet::new())
+        if !cell_dead_from(lines, load + 1, x, &asm.cell_reads(), &mut Default::default())
             || !flags_unread(lines, load + 1)
         {
             continue;
@@ -606,16 +854,13 @@ pub fn bytes_of_text(text: &str) -> u32 {
     bytes_of(&Asm::parse(text).lines).unwrap_or(0)
 }
 
-fn bytes_of(lines: &[Line]) -> Option<u32> {
+/// The bytes of the instructions in `lines`; none when one is a form the
+/// emitter does not write.
+pub fn bytes_of(lines: &[Line]) -> Option<u32> {
     let mut total = 0;
     for line in lines {
         if let Line::Inst(inst) = line {
-            total += crate::timing::instruction(
-                crate::dagisel::hooks::Cpu::Mos6502,
-                inst.op.name(),
-                &inst.operand.to_string(),
-            )?
-            .bytes;
+            total += crate::timing::of(crate::dagisel::hooks::Cpu::Mos6502, inst)?.bytes;
         }
     }
     Some(total)
@@ -646,6 +891,13 @@ pub fn arithmetic_chain_in_a(asm: &mut Asm) {
         }
         candidate.lines.push(inst(Op::Sta, Operand::Direct(h.clone())));
         let rewritten = candidate.lines.len();
+        // the original leaves the old high byte in `a`, the rewrite the shifted
+        // one
+        let exits = crate::peephole::Exits::of(asm);
+        if !crate::peephole::dead_from(&asm.lines, end, crate::asm::Registers::A, &mut Default::default(), exits) {
+            s = end;
+            continue;
+        }
         candidate.lines.extend_from_slice(&asm.lines[end..]);
         drop_dead_stores(&mut candidate);
         store_then_index_load(&mut candidate);
@@ -657,163 +909,6 @@ pub fn arithmetic_chain_in_a(asm: &mut Asm) {
             _ => s = end,
         }
     }
-}
-
-thread_local! {
-    /// The lines of every candidate the shift pass has built on this thread: the
-    /// work counter its scaling test reads (wall time flakes on a loaded host).
-    pub static SHIFT_CANDIDATE_LINES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
-
-/// `ldx #k; L: asl m; rol n; dex; bne L` (likewise `ldy`/`dey`, `lsr`/`ror`)
-/// is `lda m; (asl a; rol n)*k; sta m` when the dead stores and reloads the
-/// other passes then drop leave it shorter. The counted loop costs a copy of
-/// the shifted byte and, after it, a load; the run keeps the byte in `a`.
-/// Taken only where `a`, the flags and the index register are dead after.
-///
-/// The cleanup and the size check run on the straight-line region around the
-/// loop (no label, branch or return inside it), closed by a return that
-/// reads every register and cell: nothing past the region is assumed dead,
-/// and the cost of a candidate does not grow with the function (a whole-
-/// function candidate took `select_of_constants` from 8 s to over 400 s).
-///
-/// DEVIATE SHIFT-LOOP-IN-A: the pin has no such choice (a shift by a constant
-/// is one instruction there); this target picks the loop or the run at the
-/// size level from the final text, like [`arithmetic_chain_in_a`] does for a
-/// signed shift. The choice is by bytes, so it holds for every shape of
-/// shift, not one multiplier. Owner 6502, exit 2026-11-15: price the in-`a`
-/// run at emission, where the copy and the reload are known, and drop the
-/// pass. The exit also recovers the whole-function form this region form
-/// gives up (Os: `call_keeps` -11 B vs -8, `overflow_builtins` -18 vs -3,
-/// `div_constants_short` -21 and `sat_builtins` -18 vs 0, `loop_interchange`
-/// -6 vs -4): that needs liveness across blocks, which emission-time pricing
-/// has and a region does not.
-pub fn shift_loop_in_a(asm: &mut Asm) {
-    let mut at = 0;
-    let mut references = std::collections::HashMap::<String, usize>::new();
-    for line in &asm.lines {
-        if let Line::Inst(inst) = line {
-            if let Some(label) = inst.target() {
-                *references.entry(label.to_owned()).or_default() += 1;
-            }
-        }
-    }
-    while at < asm.lines.len() {
-        match shift_loop(&asm.lines, at, &references) {
-            Some((first, second, p, q, count)) => {
-                let end = at + 6;
-                let lines = &asm.lines;
-                let exits = Exits::of(asm);
-                let register = if matches!(&lines[at], Line::Inst(Inst { op: Op::Ldx, .. })) { Registers::X } else { Registers::Y };
-                let free = dead_from(lines, end, Registers::A, &mut Default::default(), exits)
-                    && dead_from(lines, end, register, &mut Default::default(), exits)
-                    && flags_unread(lines, end);
-                if free {
-                    let ends_region = |line: &Line| match line {
-                        Line::Inst(inst) => inst.target().is_some() || matches!(inst.op, Op::Rts | Op::Jmp),
-                        _ => true,
-                    };
-                    let start = lines[..at].iter().rposition(ends_region).map_or(0, |i| i + 1);
-                    let stop = lines[end..].iter().position(ends_region).map_or(lines.len(), |i| end + i);
-                    // The region's end is read as it is: the function's own return keeps its
-                    // meaning, and a branch or jump stays in the region, so the flags it
-                    // reads and the registers of its unknown target stay live. Only a
-                    // label (control falls through) is closed by a branch of our own.
-                    let returns = matches!(lines.get(stop), Some(Line::Inst(Inst { op: Op::Rts, .. })));
-                    let ends_in_inst = matches!(lines.get(stop), Some(Line::Inst(_)));
-                    let stop = if ends_in_inst { stop + 1 } else { stop };
-                    let inst = |op, operand| Line::Inst(Inst { op, operand, place: 0 });
-                    let region = &lines[start..stop];
-                    let mut candidate = lines[start..at].to_vec();
-                    candidate.push(inst(Op::Lda, Operand::Direct(p.clone())));
-                    for _ in 0..count {
-                        candidate.push(inst(first, Operand::Acc));
-                        candidate.push(inst(second, Operand::Direct(q.clone())));
-                    }
-                    candidate.push(inst(Op::Sta, Operand::Direct(p.clone())));
-                    candidate.extend_from_slice(&lines[end..stop]);
-                    // a return reads every register and cell: the region's end
-                    // is not an exit that frees anything
-                    let every = cells_named(region);
-                    let close = |mut lines: Vec<Line>| {
-                        if returns {
-                            return asm.candidate_from(lines);
-                        }
-                        if !ends_in_inst {
-                            lines.push(inst(Op::Bne, Operand::Direct("__region_exit".to_owned())));
-                        }
-                        let mut closed = asm.candidate_from(lines);
-                        closed.no_a_result = false;
-                        closed.no_x_result = false;
-                        closed.no_y_result = false;
-                        closed.result_cells = every.clone();
-                        closed
-                    };
-                    SHIFT_CANDIDATE_LINES.with(|work| work.set(work.get() + candidate.len()));
-                    let mut candidate = close(candidate);
-                    crate::peephole::drop_reloads(&mut candidate);
-                    forward_cell_copy(&mut candidate);
-                    crate::peephole::drop_reloads(&mut candidate);
-                    drop_dead_stores(&mut candidate);
-                    crate::peephole::drop_dead_writes(&mut candidate);
-                    store_then_index_load(&mut candidate);
-                    if !returns && !ends_in_inst {
-                        candidate.lines.pop();
-                    }
-                    if let (Some(before), Some(after)) = (bytes_of(region), bytes_of(&candidate.lines)) {
-                        if after < before {
-                            asm.lines.splice(start..stop, candidate.lines);
-                            at = start;
-                            continue;
-                        }
-                    }
-                }
-                at = end;
-            }
-            None => at += 1,
-        }
-    }
-}
-
-/// Every cell and symbol the instructions name.
-fn cells_named(lines: &[Line]) -> std::collections::BTreeSet<String> {
-    lines
-        .iter()
-        .filter_map(|line| match line {
-            Line::Inst(Inst { operand, .. }) => operand.name().map(str::to_owned),
-            _ => None,
-        })
-        .collect()
-}
-
-/// The counted shift loop at `at`: the shift of the first cell, the rotate of
-/// the second, the two cells and the count.
-fn shift_loop(
-    lines: &[Line],
-    at: usize,
-    references: &std::collections::HashMap<String, usize>,
-) -> Option<(Op, Op, String, String, usize)> {
-    let inst = |i: usize| match lines.get(at + i) {
-        Some(Line::Inst(inst)) => Some(inst),
-        _ => None,
-    };
-    let (load, step_a, step_b, count, branch) = (inst(0)?, inst(2)?, inst(3)?, inst(4)?, inst(5)?);
-    let Some(Line::Label(label)) = lines.get(at + 1) else { return None };
-    let (Operand::Imm(n), Operand::Direct(p), Operand::Direct(q)) = (&load.operand, &step_a.operand, &step_b.operand)
-    else {
-        return None;
-    };
-    let index_ok = matches!((load.op, count.op), (Op::Ldx, Op::Dex) | (Op::Ldy, Op::Dey));
-    let pair = matches!((step_a.op, step_b.op), (Op::Asl, Op::Rol) | (Op::Lsr, Op::Ror));
-    let n: usize = n.parse().ok()?;
-    (index_ok
-        && pair
-        && p != q
-        && (2..=8).contains(&n)
-        && branch.op == Op::Bne
-        && branch.target() == Some(label.as_str())
-        && references.get(label.as_str()) == Some(&1))
-        .then(|| (step_a.op, step_b.op, p.clone(), q.clone(), n))
 }
 
 /// The instructions that read a memory operand and write no memory.
@@ -842,9 +937,12 @@ fn forward_once(
     if load.op != Op::Lda || store.op != Op::Sta || s == t || cell_number(s).is_none() || cell_number(t).is_none() {
         return false;
     }
-    let mut lines = asm.lines.clone();
-    let mut changed = false;
-    for line in lines.iter_mut().skip(at + 2) {
+    let (s, t) = (s.clone(), t.clone());
+    // The reads are rewritten where they stand and put back if the copy stays
+    // (cloning the function per `lda; sta` pair was quadratic: 15x the cost of
+    // the whole compile of a nest of fills).
+    let mut rewritten: Vec<(usize, Operand)> = Vec::new();
+    for (index, line) in asm.lines.iter_mut().enumerate().skip(at + 2) {
         let Line::Inst(inst) = line else { break };
         if !straight(inst.op) {
             break;
@@ -856,26 +954,29 @@ fn forward_once(
             // an index reaches the cells above its base; a pointer reads two
             Operand::Indexed(c, _) if cell_number(c).is_some() => break,
             Operand::IndirectY(c) | Operand::IndirectX(c) | Operand::Indirect(c)
-                if pointer_pair(c, t) || pointer_pair(c, s) =>
+                if pointer_pair(c, &t) || pointer_pair(c, &s) =>
             {
                 break;
             }
-            Operand::Direct(c) if c == t => {
+            Operand::Direct(c) if *c == t => {
                 if !reads_only(inst.op) {
                     break;
                 }
-                inst.operand = Operand::Direct(s.clone());
-                changed = true;
+                rewritten.push((index, std::mem::replace(&mut inst.operand, Operand::Direct(s.clone()))));
             }
-            Operand::Direct(c) if c == s && !reads_only(inst.op) => break,
+            Operand::Direct(c) if *c == s && !reads_only(inst.op) => break,
             _ => {}
         }
     }
-    if !changed || !cell_dead_from(&lines, at + 2, t, &asm.result_cells, &mut BTreeSet::new()) {
+    if rewritten.is_empty() || !cell_dead_from(&asm.lines, at + 2, &t, &asm.cell_reads(), &mut Default::default()) {
+        for (index, operand) in rewritten {
+            if let Line::Inst(inst) = &mut asm.lines[index] {
+                inst.operand = operand;
+            }
+        }
         return false;
     }
-    lines.remove(at + 1);
-    asm.lines = lines;
+    asm.lines.remove(at + 1);
     true
 }
 
@@ -1009,10 +1110,12 @@ fn coalesce_once(
     if !caller_saved(sn) || !caller_saved(tn) {
         return false;
     }
-    let mut lines = asm.lines.clone();
-    let mut renamed = false;
+    let (s, t) = (s.clone(), t.clone());
+    // The reads of `t` to turn into reads of `s`; nothing changes until the
+    // copy is known to go.
+    let mut renames = Vec::new();
     let mut end = at + 2;
-    while let Some(Line::Inst(inst)) = lines.get_mut(end) {
+    while let Some(Line::Inst(inst)) = asm.lines.get(end) {
         if !straight(inst.op) {
             break;
         }
@@ -1022,20 +1125,21 @@ fn coalesce_once(
             Operand::IndirectY(c) | Operand::IndirectX(c) | Operand::Indirect(c) if pair(c, sn) || pair(c, tn) => {
                 return false;
             }
-            Operand::Direct(c) if c == s => return false,
-            Operand::Direct(c) if c == t => {
-                inst.operand = Operand::Direct(s.clone());
-                renamed = true;
-            }
+            Operand::Direct(c) if *c == s => return false,
+            Operand::Direct(c) if *c == t => renames.push(end),
             _ => {}
         }
         end += 1;
     }
-    let dead = |cell: &str| cell_dead_from(&asm.lines, end, cell, &asm.result_cells, &mut BTreeSet::new());
-    if !renamed || !dead(s) || !dead(t) {
+    let dead = |cell: &str| cell_dead_from(&asm.lines, end, cell, &asm.cell_reads(), &mut Default::default());
+    if renames.is_empty() || !dead(&s) || !dead(&t) {
         return false;
     }
-    lines.remove(at + 1);
-    asm.lines = lines;
+    for index in renames {
+        if let Line::Inst(inst) = &mut asm.lines[index] {
+            inst.operand = Operand::Direct(s.clone());
+        }
+    }
+    asm.lines.remove(at + 1);
     true
 }

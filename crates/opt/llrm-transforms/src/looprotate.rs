@@ -38,8 +38,9 @@
 //!   `llvm.coro` check: MIR has no local noalias scope declarations, and no
 //!   coroutines. Debug records stand before an instruction and move with it, so
 //!   only the preheader's old terminator needs `flushTerminatorDbgRecords`.
-//! - R5 `simplifyInstruction` takes no dominator tree or assumptions: the copy
-//!   sits in a preheader whose analyses the rotation is changing.
+//! - R5 The dominator tree and assumptions `simplifyInstruction` is given are
+//!   built from the function when first asked and dropped when a loop rotates
+//!   (the pin keeps its own up to date).
 //! - R6 A target with no cost model (`Machine::tti`) is priced by the generic
 //!   profile, `llrm_mir::tti::Basic`: a pass names no target crate.
 //!
@@ -118,23 +119,26 @@ pub struct Options {
     /// `CodeSize` of the branches the rotation removes, the loop-closing jump
     /// and the header's exit test.
     pub priced_at_size: bool,
-    /// DEVIATE RS1 (size builds, target opt-in, owners m64 and arm64, exit 2026-11-20):
-    /// a loop is rotated only if the copied exit test folds in the
-    /// preheader. gcc's `ch_base::copy_headers` copies at `-Os` only when the
-    /// code does not grow; an unfolded guard is a compare and a branch
-    /// against the one jump the rotation removes.
+    /// DEVIATE RS1 (size builds, target opt-in, owners m64 and arm64, exit
+    /// 2026-11-20): a loop is rotated only if the copied exit test folds in
+    /// the preheader. gcc's `ch_base::copy_headers` copies at `-Os` only
+    /// when the code does not grow; an unfolded guard is a compare and a
+    /// branch against the one jump the rotation removes.
     pub guard_must_fold: bool,
-    /// DEVIATE ROTATION-TRIAL (size builds, target opt-in, owner greedy-os-causes, exit
-    /// 2026-12-05): a counted loop whose copied guard does not fold, which RS1 still
-    /// rotates, is left as it is in the driver's second compile and the smaller object
-    /// is kept (`trial`). gcc's `ch_base::copy_headers` leaves such a loop unrotated
-    /// at -Os; whether that pays depends on what the later passes do with the loop,
-    /// which only the finished code shows (x_prefix -12 B, x_transpose +34 B).
+    /// DEVIATE ROTATION-TRIAL (size builds, target opt-in, owner
+    /// greedy-os-causes, exit 2026-12-05): a counted loop whose copied
+    /// guard does not fold, which RS1 still rotates, is left as it is in
+    /// the driver's second compile and the smaller object
+    /// is kept (`trial`). gcc's `ch_base::copy_headers` leaves such a loop
+    /// unrotated at -Os; whether that pays depends on what the later passes
+    /// do with the loop, which only the finished code shows (x_prefix -12
+    /// B, x_transpose +34 B).
     pub rotation_trial: bool,
-    /// DEVIATE Z80-ROT (-Oz, target opt-in, owner z80, exit 2026-11-21): the pin's
-    /// minsize limit of no copied instruction is waived for a loop whose copied
-    /// header folds away in the preheader, guard and all: the copy costs no byte
-    /// and the loop-closing jump goes (gcc's `ch_base::copy_headers` at -Os).
+    /// DEVIATE Z80-ROT (-Oz, target opt-in, owner z80, exit 2026-11-21): the
+    /// pin's minsize limit of no copied instruction is waived for a loop
+    /// whose copied header folds away in the preheader, guard and all: the
+    /// copy costs no byte and the loop-closing jump goes (gcc's
+    /// `ch_base::copy_headers` at -Os).
     pub free_guard: bool,
     /// `RotationOnly`: no `simplifyLoopLatch`.
     pub rotation_only: bool,
@@ -167,6 +171,8 @@ pub struct Run<'a> {
     /// The expressions `profitable_to_rotate_loop_exiting_latch` asks about,
     /// kept while no loop has changed (R7); a rotation drops them.
     scev: std::cell::RefCell<Option<llrm_analysis::scev::analysis::ScevSession>>,
+    /// `SQ`'s dominator tree and assumptions (R5), kept like `scev`.
+    dom: std::cell::RefCell<Option<llrm_mir::valuetracking::FunctionAnalyses>>,
 }
 
 impl Run<'_> {
@@ -507,7 +513,7 @@ fn rewrite_uses_of_cloned_instructions(
 /// in the header's exit, so rotating makes it dead, or (`CheckExitCount`)
 /// rotating makes the latch's exit count computable.
 fn profitable_to_rotate_loop_exiting_latch(
-    run: &Run,
+    run: &mut Run,
     lp: Loop,
 ) -> bool {
     let function = &*run.function;
@@ -523,6 +529,19 @@ fn profitable_to_rotate_loop_exiting_latch(
         if function.users(result).iter().any(|one| function.parent(one.user) != Some(header_exit)) {
             continue;
         }
+        return true;
+    }
+    // DEVIATE RL-EXITING-LATCH (target opt-in, owner x87, exit 2026-11-24): a
+    // loop whose latch exits and whose header's copy folds away in the
+    // preheader, guard and all, is rotated: the first iteration runs without
+    // the header's work. gcc's `ch_base::copy_headers` copies the header of
+    // any loop whose exit test is in it, whatever the latch does; the pin
+    // returns "already rotated" (mandel -O1: x = y = 0 on entry, 2 `imul` per
+    // pixel).
+    if run.tti.rotation_of_exiting_latch_when_guard_folds()
+        && let Some(preheader) = lp.get_loop_preheader(run.function)
+        && guard_folds(run, header, preheader, branch).free()
+    {
         return true;
     }
     if !run.options.check_exit_count {
@@ -542,6 +561,26 @@ fn profitable_to_rotate_loop_exiting_latch(
     let latch_count = se.get_exit_count(&cx, header, latch, Exact);
     let header_count = se.get_exit_count(&cx, header, header, Exact);
     se.is_could_not_compute(latch_count) && !se.is_could_not_compute(header_count)
+}
+
+/// `simplifyInstruction(copy, SQ)`: with the dominator tree, which finds the
+/// guard a dominating test implies (R5).
+fn simplified_copy(
+    run: &mut Run,
+    copy: InstId,
+) -> Option<Operand> {
+    let mut held = run.dom.borrow_mut();
+    let analyses = held.get_or_insert_with(|| {
+        llrm_mir::valuetracking::FunctionAnalyses::of(run.context, run.globals, run.metadata, run.layout, run.function)
+    });
+    llrm_mir::simplify::simplify_instruction_in(
+        run.context,
+        run.globals,
+        run.layout,
+        Some(&*analyses),
+        run.function,
+        copy,
+    )
 }
 
 /// `LoopInfo::replacementPreservesLCSSAForm`.
@@ -677,7 +716,7 @@ fn guard_folds(
                 run.function.set_operand(copy, index, mapped);
             }
         }
-        match llrm_mir::simplify::simplify_instruction(run.context, run.layout, run.function, copy) {
+        match simplified_copy(run, copy) {
             Some(value) => {
                 map.insert(result, value);
             }
@@ -703,26 +742,35 @@ fn guard_folds(
     Guard { folds, remains }
 }
 
-/// Whether no header phi is wider than the target's widest native integer: rotating keeps a
-/// counter and its successor live together at the loop's end, which costs a register
-/// pair a word of the counter (z80 -Oz, 32-bit counters: div_constants +535 B).
+/// Whether no header phi is wider than the target's widest native integer:
+/// rotating keeps a counter and its successor live together at the loop's end,
+/// which costs a register pair a word of the counter (z80 -Oz, 32-bit counters:
+/// div_constants +535 B).
 fn phis_fit_a_register(
     run: &Run,
     orig_header: BlockId,
 ) -> bool {
     let widest = run.layout.largest_legal_integer();
-    run.function.iter_block(orig_header).all(|inst| {
-        let operation = run.function.instruction(inst);
-        operation.opcode != Opcode::Phi
-            || !matches!(run.context.types.get(operation.ty), llrm_mir::types::Type::Int(width) if *width > widest)
-    })
+    run.function
+        .iter_block(orig_header)
+        .all(
+            |inst| {
+                let operation = run.function.instruction(inst);
+                operation.opcode != Opcode::Phi
+                    || !matches!(
+                        run.context.types.get(operation.ty),
+                        llrm_mir::types::Type::Int(width) if *width > widest
+                    )
+            },
+        )
 }
 
 /// What [`guard_folds`] found.
 struct Guard {
     /// The exit test is a constant in the preheader.
     folds: bool,
-    /// Some copied header instruction does not simplify away: the copy leaves code.
+    /// Some copied header instruction does not simplify away: the copy leaves
+    /// code.
     remains: bool,
 }
 
@@ -835,17 +883,24 @@ fn rotate_loop(
         return None;
     }
     if run.options.guard_must_fold && !guard_folds(run, orig_header, orig_preheader, header_end).folds {
+        // A big function is rotated in both trial compiles.
+        let priced =
+            run.options.rotation_trial && run.function.instruction_count() <= trial::ROTATION_TRIAL_MAX_INSTRUCTIONS;
+        let this = run.this.and_then(|this| run.globals[this.0 as usize].name.as_deref());
         if !header_exit_count_known(run, lp, orig_header) {
-            return None;
-        }
-        // A counted loop: rotated, unless the trial compile leaves it (a big function is rotated in both).
-        if run.options.rotation_trial && run.function.instruction_count() <= trial::ROTATION_TRIAL_MAX_INSTRUCTIONS {
+            // Uncounted: left, unless the ROTATION-HOT compile rotates it.
+            if !(priced && trial::rotates_more()) {
+                if let (true, Some(name)) = (priced, this) {
+                    trial::note_left(name);
+                }
+                return None;
+            }
+        } else if priced {
+            // Counted: rotated, unless the ROTATION-TRIAL compile leaves it.
             if trial::unrotated() {
                 return None;
             }
-            if let Some(this) = run.this
-                && let Some(name) = run.globals[this.0 as usize].name.as_deref()
-            {
+            if let Some(name) = this {
                 if llrm_support::debug::enabled("trial") {
                     eprintln!("trial noted {name}: {} instructions", run.function.instruction_count());
                 }
@@ -940,7 +995,7 @@ fn rotate_loop(
         // With the operands remapped, see if the instruction constant folds or
         // is otherwise simplifiable. This commonly occurs because the entry
         // from phis allows compares and other instructions to fold.
-        let simplified = llrm_mir::simplify::simplify_instruction(run.context, run.layout, run.function, copy);
+        let simplified = simplified_copy(run, copy);
         let original = run.function.instruction(inst).result;
         match simplified {
             Some(value) if replacement_preserves_lcssa_form(info, run.function, copy, value) => {
@@ -995,14 +1050,7 @@ fn rotate_loop(
         );
         let tail: Vec<InstId> =
             run.function.iter_block(orig_preheader).skip_while(|&inst| inst != first_copy).collect();
-        crate::noaliasscopes::cloned_and_adapted(
-            run.function,
-            &scopes,
-            &tail,
-            "pre.rot",
-            run.metadata,
-            run.declared,
-        );
+        crate::noaliasscopes::cloned_and_adapted(run.function, &scopes, &tail, "pre.rot", run.metadata, run.declared);
     }
 
     // Along with all the other instructions, the header's terminator was cloned
@@ -1097,6 +1145,7 @@ fn rotate_loop(
     } else {
         orig_header
     };
+    crate::loopfilter::moved(orig_header, new_header);
     Some(latch)
 }
 
@@ -1160,6 +1209,7 @@ pub fn process_loop(
     let changed = rotated_latch.is_some() || simplified_latch.is_some();
     if changed {
         run.scev.take();
+        run.dom.take();
     }
     changed
 }
@@ -1232,9 +1282,10 @@ pub struct LoopRotate {
     pub size: bool,
     /// `CheckExitCount`.
     pub check_exit_count: bool,
-    /// The slot that follows the other loop passes (the unroll refuses a rotated loop, LSR
-    /// picks worse counters for one: switch_empty_cases -Oz 45 B became 76 B rotated before
-    /// it): at -Oz only, the loops whose copied header folds away (`Options::free_guard`).
+    /// The slot that follows the other loop passes (the unroll refuses a
+    /// rotated loop, LSR picks worse counters for one: switch_empty_cases
+    /// -Oz 45 B became 76 B rotated before it): at -Oz only, the loops
+    /// whose copied header folds away (`Options::free_guard`).
     pub free_guard: bool,
 }
 
@@ -1279,6 +1330,7 @@ impl FunctionPass for LoopRotate {
             has_one_live_use: &|_| false,
             dead: IdSet::new(),
             scev: Default::default(),
+            dom: Default::default(),
         };
         if rotate_loops(&mut run) { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
     }
@@ -1341,6 +1393,7 @@ pub fn rotate_function_knowing(
             has_one_live_use: &|_| false,
             dead: IdSet::new(),
             scev: Default::default(),
+            dom: Default::default(),
         };
         rotate_loops(&mut run)
     };

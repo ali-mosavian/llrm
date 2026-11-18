@@ -21,18 +21,14 @@ sgd:    .res 1
 .segment "CODE"
 
 load:
+    sta N
+    stx N+1
     ldx #5
 :   lda rc2,x
-    sta N,x
+    sta N+2,x
     dex
     bpl :-
     ldy #0
-    lda (rc0),y
-    sta N+6
-    iny
-    lda (rc0),y
-    sta N+7
-    ldy #2
     ldx #0
 :   lda (rc0),y
     sta d,x

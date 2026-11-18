@@ -831,12 +831,33 @@ fn test_lsr_continues_the_expressions_the_passes_before_it_made() {
     let mut declared = llrm_mir::passes::Declared::of(&module);
     let (context, function) = module.function_mut("f").expect("@f");
     let tti = X86::of_cpu("i486").unwrap();
-    let (_, kept) =
-        crate::lsr_pass::reduced_held(context, &layout, function, &mut declared, &outer, &tti, false, false, None);
+    let (_, kept) = crate::lsr_pass::reduced_held(
+        context,
+        &layout,
+        function,
+        &mut declared,
+        &outer,
+        &tti,
+        false,
+        false,
+        false,
+        None,
+    );
     let kept = kept.expect("no edge was split");
     let mut nodes = |held| {
         let before = get(Event::ScevNodes);
-        crate::lsr_pass::reduced_held(context, &layout, function, &mut declared, &outer, &tti, false, false, held);
+        crate::lsr_pass::reduced_held(
+            context,
+            &layout,
+            function,
+            &mut declared,
+            &outer,
+            &tti,
+            false,
+            false,
+            false,
+            held,
+        );
         get(Event::ScevNodes) - before
     };
     let (cold, warm) = (nodes(None), nodes(Some(kept)));
@@ -1050,7 +1071,18 @@ exit:
         let mut declared = llrm_mir::passes::Declared::of(&module);
         let (context, function) = module.function_mut("f").expect("@f");
         let tti = X86::of_cpu("i486").unwrap();
-        crate::lsr_pass::reduced_held(context, &layout, function, &mut declared, &outer, &tti, false, size, None);
+        crate::lsr_pass::reduced_held(
+            context,
+            &layout,
+            function,
+            &mut declared,
+            &outer,
+            &tti,
+            false,
+            size,
+            false,
+            None,
+        );
         declared.place(&mut module).expect("the declarations");
         printed(&module).split("loop:").nth(1).unwrap().split("exit:").next().unwrap().matches("phi").count()
     };
@@ -1285,7 +1317,7 @@ fn a_quadratic_start_is_expanded_into_the_outer_loop_on_a_flat_target() {
 fn a_byte_stepped_index_with_a_doubled_limit_keeps_one_recurrence() {
     let mut module = parsed(&format!("{DOS}{DOT}"));
     let mut manager = llrm_mir::passes::PassManager::default();
-    manager.add(crate::lsr_pass::LoopStrengthReduce { size: false });
+    manager.add(crate::lsr_pass::LoopStrengthReduce { size: false, bytes_strict: false });
     manager.run_module(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned())).unwrap();
     let after = printed(&module);
     assert_eq!(after.matches("= phi i16").count(), 1, "{after}");
@@ -1300,7 +1332,7 @@ fn a_byte_stepped_index_with_a_doubled_limit_keeps_one_recurrence() {
 fn the_temporaries_of_the_body_count_against_the_registers() {
     let mut module = parsed(&format!("{DOS}{SHELLSORT_INIT}"));
     let mut manager = llrm_mir::passes::PassManager::default();
-    manager.add(crate::lsr_pass::LoopStrengthReduce { size: true });
+    manager.add(crate::lsr_pass::LoopStrengthReduce { size: true, bytes_strict: false });
     manager.run_module(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned())).unwrap();
     let after = printed(&module);
     // At LU3c the live count is exact at m16, so the offset that ends at zero
@@ -1340,7 +1372,7 @@ b6:
 fn at_size_a_word_copy_keeps_the_counter_and_does_not_double_the_limit() {
     let mut module = parsed(&format!("{DOS}{COPY}"));
     let mut manager = llrm_mir::passes::PassManager::default();
-    manager.add(crate::lsr_pass::LoopStrengthReduce { size: true });
+    manager.add(crate::lsr_pass::LoopStrengthReduce { size: true, bytes_strict: false });
     manager.run_module(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned())).unwrap();
     let after = printed(&module);
     assert!(!after.contains("shl i16"), "{after}");
@@ -1424,7 +1456,7 @@ fn the_even_factor_zero_rule_matches_the_wrapped_product_exhaustively() {
 fn a_counter_serving_two_uses_lets_the_byte_index_end_at_zero() {
     let mut module = parsed(&format!("{DOS}{SUM_OF_COUNTS}"));
     let mut manager = llrm_mir::passes::PassManager::default();
-    manager.add(crate::lsr_pass::LoopStrengthReduce { size: false });
+    manager.add(crate::lsr_pass::LoopStrengthReduce { size: false, bytes_strict: false });
     manager.run_module(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned())).unwrap();
     let after = printed(&module);
     assert!(after.contains(", 0\n") && !after.contains("257"), "{after}");
@@ -1462,7 +1494,7 @@ exit:
 fn a_cut_nothing_fits_keeps_the_pointer_over_the_table() {
     let mut module = parsed(&format!("{DOS}{BLOCK_LOOP}"));
     let mut manager = llrm_mir::passes::PassManager::default();
-    manager.add(crate::lsr_pass::LoopStrengthReduce { size: true });
+    manager.add(crate::lsr_pass::LoopStrengthReduce { size: true, bytes_strict: false });
     manager.run_module(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned())).unwrap();
     let after = printed(&module);
     assert!(after.contains("phi ptr"), "{after}");
@@ -1477,7 +1509,7 @@ fn a_cut_nothing_fits_keeps_the_pointer_over_the_table() {
 fn at_size_a_fitting_solution_does_not_cost_an_instruction_more() {
     let mut module = parsed(include_str!("lsr_stft_rev.ll"));
     let mut manager = llrm_mir::passes::PassManager::default();
-    manager.add(crate::lsr_pass::LoopStrengthReduce { size: true });
+    manager.add(crate::lsr_pass::LoopStrengthReduce { size: true, bytes_strict: false });
     manager.run_module(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned())).unwrap();
     let after = printed(&module);
     assert!(after.contains("phi ptr [ %") && after.contains("@$var_rev, i16 128"), "{after}");
@@ -1541,7 +1573,7 @@ exit:
 fn frame_arrays_share_one_index_under_pressure() {
     let mut module = parsed(&format!("{DOS}{FRAME_LOOP}"));
     let mut manager = llrm_mir::passes::PassManager::default();
-    manager.add(crate::lsr_pass::LoopStrengthReduce { size: false });
+    manager.add(crate::lsr_pass::LoopStrengthReduce { size: false, bytes_strict: false });
     manager.run_module(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned())).unwrap();
     let after = printed(&module);
     assert!(!after.contains("phi ptr"), "{after}");
@@ -1629,7 +1661,7 @@ e:
 ";
     let mut module = parsed(text);
     let mut manager = llrm_mir::passes::PassManager::default();
-    manager.add(crate::lsr_pass::LoopStrengthReduce { size: true });
+    manager.add(crate::lsr_pass::LoopStrengthReduce { size: true, bytes_strict: false });
     manager.run_module(&mut module, crate::indvars::tests::m32()).unwrap();
     let after = printed(&module);
     assert!(after.contains("phi ptr") && after.contains(", 7013"), "{after}");
@@ -1941,8 +1973,293 @@ fn an_outer_loops_multiply_is_a_counter_where_the_target_prices_multiplies() {
     };
     // a multiply left in the preheader runs once; one in the loop, every trip
     let in_loop = |text: &str| text[text.find("outer:").expect("the outer loop")..].contains(" mul ");
-    let priced = run(llrm_mir::target::Tuning { multiply_clocks: 19, loop_carried_clocks: 2, ..llrm_mir::target::Tuning::PIN });
+    let priced =
+        run(llrm_mir::target::Tuning { multiply_clocks: 19, loop_carried_clocks: 2, ..llrm_mir::target::Tuning::PIN });
     assert!(!in_loop(&priced), "{priced}");
     let pin = run(llrm_mir::target::Tuning::PIN);
     assert!(in_loop(&pin), "{pin}");
+}
+
+/// An outer loop whose two arms compute `i * 300 + 21472` and `i * 300 - 81472`
+/// for one phi that feeds the inner loop.
+const OUTER_PHI_OF_AFFINES: &str = "define i32 @f(i32 %n) {
+entry:
+  br label %outer
+outer:
+  %i = phi i32 [ 0, %entry ], [ %i1, %latch ]
+  %acc = phi i32 [ 0, %entry ], [ %acc1, %latch ]
+  %m = mul nuw nsw i32 %i, 300
+  %c = icmp ult i32 %i, 100
+  br i1 %c, label %a, label %b
+a:
+  %pa = add nuw nsw i32 %m, 21472
+  br label %join
+b:
+  %pb = add nsw i32 %m, -81472
+  br label %join
+join:
+  %z0 = phi i32 [ %pa, %a ], [ %pb, %b ]
+  br label %inner
+inner:
+  %k = phi i32 [ 0, %join ], [ %k1, %inner ]
+  %z = phi i32 [ %z0, %join ], [ %z1, %inner ]
+  %t = xor i32 %z, %k
+  %z1 = add i32 %t, 7
+  %k1 = add nuw nsw i32 %k, 1
+  %e4 = icmp eq i32 %k1, 4
+  br i1 %e4, label %latch, label %inner
+latch:
+  %acc1 = add i32 %acc, %z1
+  %i1 = add nuw nsw i32 %i, 1
+  %e = icmp eq i32 %i1, %n
+  br i1 %e, label %exit, label %outer
+exit:
+  ret i32 %acc1
+}
+";
+
+/// DEVIATE LSR-PHI. x_cordic m32 -O3: the pin made a counter for one operand
+/// of the phi that merges two affine values and left the other a 5-instruction
+/// multiply chain, 100 trips. Where the target asks, both are counters.
+#[test]
+fn both_affine_operands_of_a_phi_are_counters_where_the_target_asks() {
+    let run = |phi_operand_uses: bool| {
+        let mut module = parsed(&format!("{FLAT}{OUTER_PHI_OF_AFFINES}"));
+        let before = module.clone();
+        let (layout, outer) = (layout(&module), Outer::of(&module, None));
+        let mut declared = llrm_mir::passes::Declared::of(&module);
+        let (context, function) = module.function_mut("f").expect("@f");
+        let mut tti = X86::of_cpu("i486").unwrap();
+        tti.tuning = llrm_mir::target::Tuning {
+            multiply_clocks: 19,
+            loop_carried_clocks: 2,
+            lsr_phi_operand_uses: phi_operand_uses,
+            ..llrm_mir::target::Tuning::PIN
+        };
+        crate::lsr_pass::reduced_with(context, &layout, function, &mut declared, &outer, &tti, false);
+        let after = printed(&module);
+        let inputs: &[&[i128]] = &[&[1], &[2], &[150]];
+        assert_eq!(results(&module, inputs), results(&before, inputs), "{after}");
+        after
+    };
+    let muls = |text: &str| text.matches(" mul ").count();
+    let asked = run(true);
+    assert_eq!(muls(&asked), 0, "{asked}");
+    let pin = run(false);
+    assert!(muls(&pin) > 0, "{pin}");
+}
+
+/// A remainder by a constant that feeds addresses, at -Os on a target that
+/// keeps the divide.
+const REMAINDER_INDEX: &str = "@V = global [400 x [16 x i32]] zeroinitializer
+
+define i32 @f(i32 %n) {
+entry:
+  br label %loop
+
+loop:
+  %i = phi i32 [ 0, %entry ], [ %in, %loop ]
+  %acc = phi i32 [ 0, %entry ], [ %an, %loop ]
+  %r = urem i32 %i, 400
+  %p0 = getelementptr [16 x i32], ptr @V, i32 %r, i32 0
+  %p1 = getelementptr [16 x i32], ptr @V, i32 %r, i32 1
+  %p2 = getelementptr [16 x i32], ptr @V, i32 %r, i32 2
+  %a = load i32, ptr %p0
+  %b = load i32, ptr %p1
+  %c = load i32, ptr %p2
+  %s = add i32 %a, %b
+  %t = add i32 %s, %c
+  %an = add i32 %acc, %t
+  %in = add i32 %i, 1
+  %done = icmp ult i32 %in, %n
+  br i1 %done, label %loop, label %exit
+
+exit:
+  ret i32 %an
+}
+";
+
+fn reduced_for_size(
+    text: &str,
+    size: bool,
+) -> String {
+    let mut module = parsed(&format!("{FLAT}{text}"));
+    let (layout, outer) = (layout(&module), Outer::of(&module, Some(std::rc::Rc::new(llrm_x86_m16::Dos::default()))));
+    let mut declared = llrm_mir::passes::Declared::of(&module);
+    let (context, function) = module.function_mut("f").expect("@f");
+    let tti = X86::of_cpu("i486").unwrap();
+    crate::lsr_pass::reduced_held(context, &layout, function, &mut declared, &outer, &tti, false, size, size, None);
+    printed(&module)
+}
+
+/// x_crt_i2d at m32 -Os: `V[i % 400].f` was strength-reduced through
+/// `i - (i / 400) * 400` into three field pointers plus a multiply by
+/// -25600, 152 B of loop where gcc's `idiv` and one scaled index took 99.
+#[test]
+fn test_a_kept_divides_remainder_is_not_split_into_the_addresses() {
+    let text = reduced_for_size(REMAINDER_INDEX, true);
+    assert!(text.contains("urem i32"), "{text}");
+    assert!(!text.contains("udiv"), "{text}");
+}
+
+const NEXT_CONVERTED: &str = "define double @f(i32 %n) {
+entry:
+  br label %loop
+loop:
+  %i = phi i32 [ 0, %entry ], [ %next, %loop ]
+  %s = phi double [ 0.0, %entry ], [ %s3, %loop ]
+  %d = sitofp i32 %i to double
+  %next = add nuw nsw i32 %i, 1
+  %e = sitofp i32 %next to double
+  %q = fdiv double 1.0, %e
+  %s2 = fadd double %s, %d
+  %s3 = fadd double %s2, %q
+  %c = icmp eq i32 %next, %n
+  br i1 %c, label %exit, label %loop
+exit:
+  ret double %s3
+}
+";
+
+fn reduced_next_converted(x87: bool) -> String {
+    let tuning = llrm_mir::target::Tuning { x87_stack_slots: x87.then_some(8), ..llrm_mir::target::Tuning::PIN };
+    let mut module = parsed(&format!("{FLAT}{NEXT_CONVERTED}"));
+    let (layout, outer) = (layout(&module), Outer::of(&module, None));
+    let mut declared = llrm_mir::passes::Declared::of(&module);
+    let (context, function) = module.function_mut("f").expect("@f");
+    let tti = X86::of_cpu("i486").unwrap().with_tuning(tuning);
+    crate::lsr_pass::reduced_with(context, &layout, function, &mut declared, &outer, &tti, false);
+    printed(&module)
+}
+
+/// `1.0 / (double)(i + 1)` beside `(double)i`: x_ldmath at O2 kept an `fadd`
+/// counter and also converted `i + 1` (an `fidiv` of the integer) every trip,
+/// +400 clk against gcc's one `fild` shared by both.
+#[test]
+fn test_a_conversion_of_the_increment_is_the_double_counters_increment() {
+    let after = reduced_next_converted(true);
+    assert!(!after.contains("sitofp"), "{after}");
+}
+
+/// Off the x87 stack the conversion stays: 6502 x_ldmath grew 32 B with the
+/// counter's next value kept live across the soft-float calls.
+#[test]
+fn test_a_conversion_of_the_increment_stays_off_the_x87_stack() {
+    let after = reduced_next_converted(false);
+    assert!(after.contains("sitofp"), "{after}");
+}
+
+/// The trip counts the session works out for the headers `h0..h{loops}`.
+fn session_counts(
+    session: &mut llrm_analysis::scev::analysis::ScevSession,
+    module: &mut llrm_mir::module::Module,
+    loops: usize,
+) -> usize {
+    let (data, outer) = (layout(module), Outer::of(module, None));
+    let (context, function) = module.function_mut("f").expect("@f");
+    let (context, function) = (&*context, &*function);
+    let before = llrm_analysis::scev::trip::backedge_taken_computations();
+    let (se, env) = session.split(&data, &outer.globals, &outer.metadata);
+    let cx = env.cx(context, function);
+    for k in 0..loops {
+        let header = llrm_analysis::testing::block(function, &format!("h{k}"));
+        se.get_backedge_taken_count(&cx, header, llrm_analysis::scev::backedge::ExitCountKind::Exact);
+    }
+    llrm_analysis::scev::trip::backedge_taken_computations() - before
+}
+
+/// An edge LSR splits dropped every expression of the function (the session's
+/// `forget_since` drops all where the CFG changed), so each loop after it
+/// worked out the trip counts of the loops before it again: 27 G of a 400-loop
+/// function's LSR. The pin edits the edge and keeps its one `ScalarEvolution`:
+/// only the loop whose blocks were touched is counted again.
+#[test]
+fn an_edge_split_makes_lsr_count_only_the_loop_it_touched_again() {
+    let mut module = parsed(&format!("{FLAT}{}", walks(3)));
+    let outer = Outer::of(&module, None);
+    let mut session = {
+        let (context, function) = module.function_mut("f").expect("@f");
+        llrm_analysis::scev::analysis::ScevSession::within(&*context, &outer.globals, &outer.metadata, &*function)
+    };
+    assert_eq!(session_counts(&mut session, &mut module, 3), 3, "premise: three loops, three counts");
+    let mark = module.function_mut("f").unwrap().1.mark();
+    {
+        let function = module.function_mut("f").expect("@f").1;
+        let (from, to) = (llrm_analysis::testing::block(function, "h0"), llrm_analysis::testing::block(function, "e1"));
+        crate::edges::split_edge(function, from, to);
+    }
+    let (data, outer) = (layout(&module), Outer::of(&module, None));
+    let kept = session.into_scev();
+    let (context, function) = module.function_mut("f").expect("@f");
+    let (context, function) = (&*context, &*function);
+    let mut session =
+        llrm_analysis::scev::analysis::ScevSession::within(context, &outer.globals, &outer.metadata, function);
+    session.adopt(kept);
+    session.forget_since_through_edges(context, &data, &outer.globals, &outer.metadata, function, mark);
+    assert_eq!(session_counts(&mut session, &mut module, 3), 1, "only the loop whose edge was split is counted again");
+}
+
+/// A prime's marking loop in a sieve with the counter left at 16 bits: it
+/// starts at `i * i`, and the scan loop reaches it on every other trip.
+const SQUARE_START: &str = "target datalayout = \"e-p:64:64-i64:64-n8:16:32:64\"
+
+@g = global [1024 x i8] zeroinitializer
+
+define i64 @f(i64 %n) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i64 [ 2, %b0 ], [ %i.next, %b6 ]
+  %acc = phi i64 [ 0, %b0 ], [ %acc.next, %b6 ]
+  %odd = and i64 %i, 1
+  %free = icmp eq i64 %odd, 0
+  br i1 %free, label %b2, label %b6
+
+b2:
+  %sq = mul nuw nsw i64 %i, %i
+  %start = trunc nuw nsw i64 %sq to i16
+  %step = trunc nuw nsw i64 %i to i16
+  br label %b4
+
+b4:
+  %m = phi i16 [ %start, %b2 ], [ %m.next, %b4 ]
+  %a = phi i64 [ %acc, %b2 ], [ %a.next, %b4 ]
+  %z = zext nneg i16 %m to i64
+  %q = getelementptr inbounds nuw i8, ptr @g, i64 %z
+  store i8 1, ptr %q
+  %a.next = add i64 %a, %z
+  %m.next = add nuw nsw i16 %m, %step
+  %again = icmp ult i16 %m.next, 1024
+  br i1 %again, label %b4, label %b5
+
+b5:
+  br label %b6
+
+b6:
+  %acc.next = phi i64 [ %acc, %b1 ], [ %a.next, %b5 ]
+  %i.next = add nuw nsw i64 %i, 1
+  %done = icmp eq i64 %i.next, %n
+  br i1 %done, label %b7, label %b1
+
+b7:
+  ret i64 %acc.next
+}
+";
+
+/// sieve x86-64 O2/O3 ran 15223 instructions against gcc's 14703 (O3 14519):
+/// LSR expanded the marking counter's start `i * i` as two phis of the scan
+/// loop, stepped on 1022 trips for 11 entries.
+#[test]
+fn test_a_square_start_entered_on_some_trips_is_not_expanded_in_the_outer_loop() {
+    let (_, text) = reduced_on("", SQUARE_START, "x86-64", &[&[3], &[10], &[30]]);
+    assert!(!text.contains("[ 4, %b0 ]"), "the scan loop steps no phi for the square: {text}");
+    assert!(text.contains("%m = phi i16 [ %start, %b2 ]"), "the marking counter is as written: {text}");
+}
+
+/// The pin expands it: a target that does not weigh entries keeps the pin's IR.
+#[test]
+fn test_a_target_that_does_not_weigh_entries_expands_a_square_start_in_the_outer_loop() {
+    let (_, text) = reduced_on("", SQUARE_START, "core2", &[&[3], &[10], &[30]]);
+    assert!(text.contains("phi i16 [ %8, %b6 ], [ 4, %b0 ]"), "the square is phis of the scan loop: {text}");
 }

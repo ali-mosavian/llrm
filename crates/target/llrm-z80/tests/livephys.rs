@@ -74,3 +74,126 @@ fn a_sign_test_of_a_pair_reads_its_high_byte() {
     let f = function(vec![vec![test]]);
     assert!(live(&f, 0, 0, reg::H) && !live(&f, 0, 0, reg::L));
 }
+
+/// `live_before` at every position of a block of 40,000 instructions stepped
+/// back from the block's end each time, 800 M steps: the printer asks at every
+/// instruction, and `select_of_constants` -O2 spent 140 M steps and
+/// half its compile there for 800 call sites. The answers come from
+/// checkpoints, `STRIDE` steps at most each.
+#[test]
+fn every_position_of_a_long_block_is_asked_without_walking_to_its_end() {
+    let n = 40_000;
+    let insts: Vec<Inst> = (0..n).map(|at| if at % 2 == 0 { def(reg::B) } else { read(reg::B) }).collect();
+    let f = function(vec![insts]);
+    let assignment = Assignment(Vec::new());
+    let start = std::time::Instant::now();
+    let live = PhysLiveness::of::<Z80Registers>(&f, &assignment, &REGISTER_INFO);
+    for at in 0..n {
+        let before = live.live_before::<Z80Registers>(&f, &assignment, &REGISTER_INFO, 0, at);
+        // `b` is read at the odd positions and written at the even ones just
+        // before
+        assert_eq!(before.is_live(&REGISTER_INFO, reg::B), at % 2 == 1, "at {at}");
+    }
+    assert!(start.elapsed() < std::time::Duration::from_secs(3), "40,000 queries took {:?}", start.elapsed());
+}
+
+/// Solving the live-outs swept every block again to see that nothing moved: an
+/// acyclic function of 50 straight blocks was stepped twice over
+/// (switch_jump_table -O2: 5% of the compile in 270 solves). Each instruction
+/// is stepped once where no loop feeds a block's live-in back, and the answers
+/// are the same.
+#[test]
+fn an_acyclic_function_is_stepped_over_once_when_its_live_outs_are_solved() {
+    let blocks: Vec<Vec<Inst>> = (0..50)
+        .map(|at| {
+            vec![def(reg::B), read(reg::B), read(reg::D), def(reg::E), read(if at % 2 == 0 { reg::A } else { reg::C })]
+        })
+        .collect();
+    let f = function(blocks);
+    let assignment = Assignment(Vec::new());
+    llrm_spike_mf::livephys::take_steps();
+    let live = PhysLiveness::of::<Z80Registers>(&f, &assignment, &REGISTER_INFO);
+    assert_eq!(llrm_spike_mf::livephys::take_steps(), 50 * 5, "every instruction once");
+    // `d` is read in every block and written in none: live before the first
+    // instruction of block 0
+    let before = live.live_before::<Z80Registers>(&f, &assignment, &REGISTER_INFO, 0, 0);
+    assert!(before.is_live(&REGISTER_INFO, reg::D) && !before.is_live(&REGISTER_INFO, reg::B));
+}
+
+/// The worklist must reach the sweeps' answer where blocks loop, branch out of
+/// order and fall through: 400 functions of 2 to 12 blocks, a third of the
+/// branches backward.
+#[test]
+fn the_worklist_solves_the_same_live_outs_as_sweeps_on_functions_with_loops() {
+    let registers = [reg::A, reg::B, reg::C, reg::D, reg::E, reg::H, reg::L, reg::BC, reg::DE, reg::HL];
+    let mut seed = 0x9e37_79b9_7f4a_7c15u64;
+    let mut next = move |bound: usize| {
+        seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        ((seed >> 33) as usize) % bound
+    };
+    let mut loops = 0;
+    for _ in 0..400 {
+        let count = 2 + next(11);
+        let blocks: Vec<Vec<Inst>> = (0..count)
+            .map(|at| {
+                let mut insts: Vec<Inst> = (0..1 + next(6))
+                    .map(|_| {
+                        let one = registers[next(registers.len())];
+                        if next(2) == 0 { def(one) } else { read(one) }
+                    })
+                    .collect();
+                if next(3) > 0 {
+                    let to = next(count);
+                    loops += usize::from(to <= at);
+                    let mut jump = Inst::new(Kind::Op("JP"), vec![Operand::Block(to as u32)]);
+                    jump.barrier = next(2) == 0;
+                    insts.push(jump);
+                }
+                insts
+            })
+            .collect();
+        let f = function(blocks);
+        let assignment = Assignment(Vec::new());
+        let worked = PhysLiveness::of::<Z80Registers>(&f, &assignment, &REGISTER_INFO);
+        let swept = PhysLiveness::of_by_sweeps::<Z80Registers>(&f, &assignment, &REGISTER_INFO);
+        for b in 0..count {
+            assert!(worked.live_out_of(b) == swept.live_out_of(b), "block {b} of {f:?}");
+        }
+    }
+    assert!(loops > 100, "{loops} backward branches");
+}
+
+/// The live lanes of a register file are a sorted list: two sets holding the
+/// same lanes are equal however they were built, and a register whose lanes
+/// were all removed is gone (the worklist stops when a block's live-in is
+/// equal).
+#[test]
+fn the_live_lanes_are_the_same_set_whatever_order_they_were_added_in() {
+    use llrm_spike_mf::livephys::LiveLanes;
+    use llrm_z80::{REGISTER_INFO, reg};
+    let (mut one, mut other) = (LiveLanes::default(), LiveLanes::default());
+    for register in [reg::BC, reg::HL, reg::E, reg::D] {
+        one.add(&REGISTER_INFO, register);
+    }
+    for register in [reg::D, reg::E, reg::HL, reg::BC] {
+        other.add(&REGISTER_INFO, register);
+    }
+    assert_eq!(one, other);
+    one.add(&REGISTER_INFO, reg::A);
+    one.remove(&REGISTER_INFO, reg::A);
+    assert_eq!(one, other, "a register with no lane left is not kept");
+}
+
+/// `read_copies_at_their_source` and the post-update fold each solved the live
+/// registers of the whole function before looking for a candidate, 2% of the
+/// corpus compile: a function with no copy to move and no access to step has
+/// nothing to ask, and solves nothing.
+#[test]
+fn a_function_with_nothing_to_rewrite_is_not_solved_for_liveness() {
+    let mut f = function(vec![vec![def(reg::B), def(reg::C), read(reg::C), read(reg::B)], vec![read(reg::D)]]);
+    let assignment = Assignment(Vec::new());
+    llrm_spike_mf::livephys::take_solved();
+    llrm_z80::compile::read_copies_at_their_source(&mut f, &assignment);
+    llrm_z80::post_update::fold(&mut f, &assignment);
+    assert_eq!(llrm_spike_mf::livephys::take_solved(), 0);
+}

@@ -73,25 +73,31 @@ pub fn builder_target() -> BuilderTarget {
         dag: DagConfig {
             dso_local_symbols: true,
             sext_bool_add_max_bits: u32::MAX,
+            known_bits_of_build_pair: true,
             ..BuilderTarget::for_pointer_bits(16).dag
         },
-        // the target's limits (`driver::MEMCPY_STORES`), the same table the mid-end reads
+        // the target's limits (`driver::MEMCPY_STORES`), the same table the
+        // mid-end reads
         tuning: llrm_mir::target::Machine::tuning(&*crate::driver::machine()),
         ..BuilderTarget::for_pointer_bits(16)
     }
 }
 
 thread_local! {
-    /// The pin's block frequencies as they are (`Request::flat_loop_trips`), for
-    /// the selections made on this thread.
+    /// The pin's block frequencies as they are (`Request::flat_loop_trips`),
+    /// for the selections made on this thread.
     pub static FLAT_LOOP_TRIPS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// One block, selected and scheduled.
+#[derive(Clone)]
 pub struct Selected {
     pub block: BlockId,
-    pub dag: SelectionDAG,
+    /// Shared by the `Source` and the `ILP` form of the block.
+    pub dag: std::sync::Arc<SelectionDAG>,
     pub units: Vec<Unit>,
+    /// The units under the `ILP` schedule (`Selection::scheduled_by_ilp`).
+    pub ilp_units: Vec<Unit>,
     /// The registers the block reads on arrival, with the virtual register each
     /// is copied to.
     pub live_ins: Vec<(RegId, u32)>,
@@ -103,6 +109,7 @@ pub struct Selected {
 
 /// The phi copies on the edge to `to` (a parallel copy), or on every edge when
 /// `to` is `None`.
+#[derive(Clone)]
 pub struct Edge {
     pub to: Option<BlockId>,
     pub copies: Vec<(u32, u32)>,
@@ -110,6 +117,7 @@ pub struct Edge {
 
 /// A selected function: its blocks and the sizes of its local frame objects, by
 /// frame index.
+#[derive(Clone)]
 pub struct Selection {
     pub blocks: Vec<Selected>,
     pub locals: Vec<i64>,
@@ -127,21 +135,42 @@ pub struct Selection {
     pub returns_twice: bool,
     /// `internal` or `private` linkage: the label is not exported.
     pub local: bool,
-    /// The function carries `optsize` or `minsize`: tuned for size at any level.
+    /// The function carries `optsize` or `minsize`: tuned for size at any
+    /// level.
     pub sized: bool,
-    /// The same function selected with its long adds as the generic expansion, not carry ops
-    /// (`pipeline::GENERIC_CARRY`); none where it has no carry ops.
+    /// Selected the second time for the module price with the speed routines or
+    /// the shift loops (`pipeline::SPEED_ROUTINES`, `INLINE_SHIFTS`): a
+    /// function tuned for size chooses between its two by the
+    /// smaller relative regret, not by bytes first.
+    pub wide_alternative: bool,
+    /// The same function selected with its long adds as the generic expansion,
+    /// not carry ops (`pipeline::GENERIC_CARRY`); none where it has no
+    /// carry ops.
     pub generic: Option<Box<Selection>>,
     /// The blocks IR `unreachable` ends. The pin emits nothing for it (the
     /// machine CFG comes from the IR); here a block with no terminator falls
     /// into the next one, so emission states the end.
     pub unreachable: llrm_mir::dense::IdSet<BlockId>,
     /// The pin's block frequency of each IR block over the entry's
-    /// (`BlockFrequencyInfo` over `BranchProbabilityInfo`), by block number: what
-    /// the prices that choose between variants of the function weigh by.
+    /// (`BlockFrequencyInfo` over `BranchProbabilityInfo`), by block number:
+    /// what the prices that choose between variants of the function weigh
+    /// by.
     pub frequencies: Vec<(u32, f64)>,
     /// The jump tables: the block of each entry, by table.
     pub tables: Vec<Vec<u32>>,
+}
+
+impl Selection {
+    /// This selection with every block under the `ILP` schedule: the DAGs are
+    /// the same (`pipeline::select_block`), only the units differ.
+    pub fn scheduled_by_ilp(&self) -> Selection {
+        let mut one = self.clone();
+        for block in &mut one.blocks {
+            std::mem::swap(&mut block.units, &mut block.ilp_units);
+        }
+        one.generic = self.generic.as_ref().map(|generic| Box::new(generic.scheduled_by_ilp()));
+        one
+    }
 }
 
 /// Function `name` of `module`, block by block in layout order.
@@ -178,8 +207,11 @@ pub fn select_function_with(
     let target = builder_target();
     let sized = ["optsize", "minsize"].into_iter().any(|name| llrm_mir::memory::has(&function.attrs, name));
     let tuned_for_size = sized;
+    let chain_credit = llrm_mir::memory::has(&function.attrs, crate::prepare::WORD_CHAINS);
     let long_multiply = llrm_mir::memory::has(&function.attrs, crate::prepare::LONG_MULTIPLY)
         && !super::pipeline::DECOMPOSE_MULS.with(std::cell::Cell::get);
+    let frequencies =
+        crate::frequency::block_frequencies(module, function, &layout, FLAT_LOOP_TRIPS.with(std::cell::Cell::get));
     let mut info = FunctionLoweringInfo::new(function);
     let mut locals = alloca_sizes(module, function, &layout, &info)?;
     let mut selected = Vec::new();
@@ -211,7 +243,8 @@ pub fn select_function_with(
             block,
             built,
             cpu,
-            (optimize, sized, long_multiply),
+            (optimize, sized, long_multiply, chain_credit),
+            frequencies.iter().any(|&(one, frequency)| one == block.0 && frequency <= 1.0),
             &mut info,
             &mut selected,
         )?;
@@ -253,8 +286,22 @@ pub fn select_function_with(
             llrm_mir::module::Linkage::Internal | llrm_mir::module::Linkage::Private
         );
     let tables = info.jump_tables.clone();
-    let frequencies = crate::frequency::block_frequencies(module, function, &layout, FLAT_LOOP_TRIPS.with(std::cell::Cell::get));
-    Ok(Selection { blocks: selected, locals, cpu, widths, variables, returns_twice, local, sized: tuned_for_size, generic: None, unreachable, frequencies, tables })
+    Ok(Selection {
+        blocks: selected,
+        locals,
+        cpu,
+        widths,
+        variables,
+        returns_twice,
+        local,
+        sized: tuned_for_size,
+        wide_alternative: super::pipeline::SPEED_ROUTINES.with(std::cell::Cell::get)
+            || super::pipeline::INLINE_SHIFTS.with(std::cell::Cell::get),
+        generic: None,
+        unreachable,
+        frequencies,
+        tables,
+    })
 }
 
 /// The variables of `function` (after the debug import): parameters in the
@@ -341,15 +388,17 @@ fn select_built(
     block: BlockId,
     mut built: BlockDag,
     cpu: Cpu,
-    (optimize, sized, long_multiply): (bool, bool, bool),
+    (optimize, sized, long_multiply, chain_credit): (bool, bool, bool, bool),
+    cold: bool,
     info: &mut FunctionLoweringInfo,
     selected: &mut Vec<Selected>,
 ) -> Result<(), String> {
     // the scratch slots the legalizers ask for (a long long result's memory)
     // are frame objects numbered after the function's
     built.dag.first_temporary = info.next_stack_object();
-    let units =
-        select_block(&mut built.dag, cpu, info, optimize, (sized, long_multiply)).map_err(|why| format!("{why:?}"))?;
+    let (units, ilp_units) =
+        select_block(&mut built.dag, cpu, info, optimize, (sized, long_multiply, cold, chain_credit))
+            .map_err(|why| format!("{why:?}"))?;
     for (size, align) in std::mem::take(&mut built.dag.temporaries) {
         info.new_stack_object(size, align);
     }
@@ -385,9 +434,16 @@ fn select_built(
             None => edges.push(Edge { to, copies: vec![copy] }),
         }
     }
-    selected.push(Selected { block, dag: built.dag, units, live_ins: built.live_ins, edges });
+    selected.push(Selected {
+        block,
+        dag: std::sync::Arc::new(built.dag),
+        units,
+        ilp_units,
+        live_ins: built.live_ins,
+        edges,
+    });
     for (extra, made) in built.extra {
-        select_built(None, extra, made, cpu, (optimize, sized, long_multiply), info, selected)?;
+        select_built(None, extra, made, cpu, (optimize, sized, long_multiply, chain_credit), cold, info, selected)?;
     }
     Ok(())
 }

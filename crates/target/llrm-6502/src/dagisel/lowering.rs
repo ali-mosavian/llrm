@@ -18,10 +18,12 @@
 //! subtract-with-borrow); equality is `CMPZ`, whose Z covers both bytes.
 
 use llrm_codegen::backend::selectiondag::isd::{CondCode, ISD};
+use llrm_codegen::backend::selectiondag::known_bits::{masked_value_is_zero, num_sign_bits};
 use llrm_codegen::backend::selectiondag::legalize_dag::Hooks;
-use llrm_codegen::backend::selectiondag::known_bits::masked_value_is_zero;
 use llrm_codegen::backend::selectiondag::mvt::{EVT, MVT};
-use llrm_codegen::backend::selectiondag::{Action, LoadExt, MemBase, MemInfo, NodeData, SDValue, SelectionDAG};
+use llrm_codegen::backend::selectiondag::{
+    Action, LoadExt, MemBase, MemInfo, NodeData, SDNodeFlags, SDValue, SelectionDAG,
+};
 use llrm_codegen::backend::selectiondag::{TargetLowering, TargetLoweringInfo};
 
 use super::generated::ids::isd as ids;
@@ -33,6 +35,8 @@ pub mod mosisd {
     pub const CMP: ISD = ISD::Target(ids::CMP);
     pub const WRAPPER: ISD = ISD::Target(ids::WRAPPER);
     pub const MUL32: ISD = ISD::Target(ids::MUL32);
+    pub const UMULW16: ISD = ISD::Target(ids::UMULW16);
+    pub const SMULW16: ISD = ISD::Target(ids::SMULW16);
     pub const UDIV32: ISD = ISD::Target(ids::UDIV32);
     pub const SDIV32: ISD = ISD::Target(ids::SDIV32);
     pub const UREM32: ISD = ISD::Target(ids::UREM32);
@@ -63,10 +67,14 @@ pub mod cond {
 pub fn target_lowering() -> TargetLowering {
     use ISD::*;
     let mut tl = TargetLowering::empty(
-        TargetLoweringInfo::new(&[MVT::I1, MVT::I8, MVT::I16], false).with_soft_float().with_int_size(16),
+        TargetLoweringInfo::new(&[MVT::I1, MVT::I8, MVT::I16], false)
+            .with_soft_float()
+            .with_soft_compare_classes()
+            .with_int_size(16),
     );
     tl.init_actions();
-    // SD241: the shift routine stays for a variable amount known small until an inline policy is priced
+    // SD241: the shift routine stays for a variable amount known small until an
+    // inline policy is priced
     tl.set_libcall_for_small_variable_shift();
     for vt in [MVT::I1, MVT::I8, MVT::I16, MVT::I32, MVT::I64] {
         for ext in [LoadExt::SExtLoad, LoadExt::ZExtLoad, LoadExt::ExtLoad] {
@@ -137,8 +145,10 @@ pub fn target_lowering() -> TargetLowering {
         tl.set_operation_action(op, MVT::I8, Action::Legal);
     }
     tl.set_operation_action(Undef, MVT::I1, Action::Expand);
-    // `va_start` stores the address of the first unnamed argument (`lower_vastart_frame_index`, as llvm-mos's
-    // `legalizeVAStart` stores `VarArgsStackIndex`); the rest of a `va_list` is a pointer the generic expansions walk
+    // `va_start` stores the address of the first unnamed argument
+    // (`lower_vastart_frame_index`, as llvm-mos's `legalizeVAStart` stores
+    // `VarArgsStackIndex`); the rest of a `va_list` is a pointer the generic
+    // expansions walk
     tl.set_operation_action(VAStart, MVT::Other, Action::Custom);
     for op in [VAEnd, VACopy] {
         tl.set_operation_action(op, MVT::Other, Action::Expand);
@@ -178,7 +188,14 @@ pub fn target_lowering() -> TargetLowering {
 }
 
 /// The custom lowerings.
-pub struct MosLowering;
+pub struct MosLowering {
+    /// A product of two words is a widening multiply (not in a function tuned
+    /// for size: the two routines add bytes).
+    pub widen_products: bool,
+    /// The function is tuned for size: a long shift by a constant that
+    /// takes more bytes in line than as a call goes to the routine.
+    pub sized: bool,
+}
 
 impl Hooks for MosLowering {
     fn lower_operation(
@@ -203,7 +220,7 @@ impl Hooks for MosLowering {
             ISD::Mul | ISD::SDiv | ISD::UDiv | ISD::SRem | ISD::URem | ISD::Shl | ISD::Srl | ISD::Sra
                 if dag.value_type(node) == EVT::I32 =>
             {
-                lower_long(dag, node)
+                lower_long(dag, node, self.widen_products, self.sized)
             }
             _ => None,
         }
@@ -213,8 +230,8 @@ impl Hooks for MosLowering {
     /// external symbol; a long or a long long travels as words, low first.
     ///
     /// DEVIATE: a shift count goes as a word. Reason: the routines are libgcc's
-    /// `__ashldi3 (u64, int)` and `int` is a word here, the pin passes the count
-    /// at the target's shift type (a byte). Exit: none.
+    /// `__ashldi3 (u64, int)` and `int` is a word here, the pin passes the
+    /// count at the target's shift type (a byte). Exit: none.
     fn make_lib_call(
         &mut self,
         dag: &mut SelectionDAG,
@@ -267,7 +284,15 @@ impl Hooks for MosLowering {
         let count = if ret.size_in_bits() > 16 { ret.size_in_bits() / 16 } else { 1 };
         let part_vt = if count > 1 { EVT::I16 } else { ret };
         let ins = vec![
-            In { vt: part_vt, pointer: false, arg_vt: ret, split: count > 1, sret: false, ext: Ext::Any, byval: None };
+            In {
+                vt: part_vt,
+                pointer: false,
+                arg_vt: ret,
+                split: count > 1,
+                sret: false,
+                ext: Ext::Any,
+                byval: None
+            };
             count as usize
         ];
         let callee = dag.get_target_external_symbol(EVT::I16, name);
@@ -326,12 +351,41 @@ fn lower_rotate(
     dag.get_node(ISD::Or, vt, &[high, low])
 }
 
+/// Whether a long shift by the constant `count` is smaller as a call of
+/// `__ashlsi3` and its kin than in line: the count is `8 * bytes + bits`, the
+/// whole bytes are moves of registers, and each remaining bit is a pass over
+/// the lanes that are left, unrolled for one or two and a loop for more. The
+/// call is `lda #n; sta rc4; jsr` and the copies of the operand into
+/// `a:x:rc2:rc3`, about 11 bytes.
+///
+/// DEVIATE 6502-SHIFT-CALL: the pin's `LowerShift` expands a constant shift
+/// of a legal type; its long shifts are the generic expansion over the
+/// halves. Owner: llrm-target-6502. Exit: 2026-11-24, with a pricing from the
+/// emitted shift run rather than this table.
+fn long_shift_is_a_call(count: u128) -> bool {
+    const CALL: u128 = 11;
+    // a shift of 8 bits or more moves whole bytes and shifts the pair that is
+    // left: measured at -Os it is no longer than the call
+    // (div_constants_short, overflow_builtins and sat_builtins grew when it
+    // went to one)
+    if !(1..8).contains(&count) {
+        return false;
+    }
+    let inline = match count {
+        1 | 2 => 8 * count,
+        _ => 32,
+    };
+    inline > CALL
+}
+
 /// A long (`i32`) multiply, divide, remainder or shift by a variable:
 /// `MOSISD::<op>32` of the operands' halves, two words joined. A shift by a
 /// constant is left to the type legalizer.
 fn lower_long(
     dag: &mut SelectionDAG,
     node: SDValue,
+    widen_products: bool,
+    sized: bool,
 ) -> Option<SDValue> {
     let opcode = match dag.opcode(node) {
         ISD::Mul => mosisd::MUL32,
@@ -343,10 +397,27 @@ fn lower_long(
         ISD::Srl => mosisd::SRL32,
         _ => mosisd::SRA32,
     };
+    if opcode == mosisd::MUL32
+        && widen_products
+        && let Some(widened) = lower_widening_multiply(dag, node)
+    {
+        return Some(widened);
+    }
     let shift = matches!(opcode, mosisd::SHL32 | mosisd::SRL32 | mosisd::SRA32);
     let (a, b) = (dag.operand(node, 0), dag.operand(node, 1));
-    if shift && dag.constant(b).is_some() {
-        return None;
+    // a product commutes: two arguments go in their own order, the first where
+    // the routine takes its first operand (InstCombine puts the later argument
+    // on the left, and the call then swapped four bytes with four)
+    let (a, b) = match (opcode, incoming_register(dag, a), incoming_register(dag, b)) {
+        (mosisd::MUL32, Some(x), Some(y)) if x > y => (b, a),
+        _ => (a, b),
+    };
+    if shift && let Some(count) = dag.constant(b) {
+        // at -Os a count that takes many bytes in line is the routine with
+        // the count in `rc4`
+        if !(sized && long_shift_is_a_call(count)) {
+            return None;
+        }
     }
     let sixteen = dag.get_constant(16, EVT::I8);
     let mut operands = Vec::new();
@@ -365,6 +436,76 @@ fn lower_long(
         EVT::I32,
         &[SDValue { node: pair.node, res: 0 }, SDValue { node: pair.node, res: 1 }],
     ))
+}
+
+/// Whether a 32-bit value is a sign extension of its low word: 17 sign bits,
+/// or a zero extension that the IR says is not negative (`zext nneg`, which
+/// leaves the word's top bit zero).
+fn fits_signed_word(
+    dag: &SelectionDAG,
+    value: SDValue,
+) -> bool {
+    num_sign_bits(dag, value) >= 17
+        || (dag.opcode(value) == ISD::ZeroExtend
+            && dag.node(value).flags.has(SDNodeFlags::NON_NEG)
+            && masked_value_is_zero(dag, value, 0xFFFF_0000))
+}
+
+/// A product of two operands that each fit in 16 bits is one 16 x 16 -> 32
+/// multiply of their low words, whatever 32-bit multiplier they went through:
+/// GCC's widening multiply (`convert_mult_to_widen`,
+/// <https://github.com/gcc-mirror/gcc/blob/releases/gcc-15.2.0/gcc/tree-ssa-math-opts.cc>,
+/// the `umulhisi3`/`mulhisi3` optabs) and LLVM's `SMUL_LOHI`/`UMUL_LOHI` of
+/// the halves. Unsigned when both upper words are known zero, signed when both
+/// have 17 sign bits; a mix of the two is a long multiply.
+fn lower_widening_multiply(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let (a, b) = (dag.operand(node, 0), dag.operand(node, 1));
+    // a constant factor is the combiner's to shift and add, or a call kept for
+    // size
+    if dag.constant(a).is_some() || dag.constant(b).is_some() {
+        return None;
+    }
+    // the factor with a zero high byte walks the fewer bits: it is the
+    // multiplier
+    let narrow = |dag: &SelectionDAG, v| masked_value_is_zero(dag, v, 0xFF00);
+    let (a, b) = if narrow(dag, a) && !narrow(dag, b) { (b, a) } else { (a, b) };
+    let upper = 0xFFFF_0000;
+    let opcode = if masked_value_is_zero(dag, a, upper) && masked_value_is_zero(dag, b, upper) {
+        mosisd::UMULW16
+    } else if fits_signed_word(dag, a) && fits_signed_word(dag, b) {
+        mosisd::SMULW16
+    } else {
+        return None;
+    };
+    let low = |dag: &mut SelectionDAG, value| dag.get_node(ISD::Truncate, EVT::I16, &[value]);
+    let operands = [low(dag, a), low(dag, b)];
+    let pair = dag.get_node_multi(opcode, &[EVT::I16, EVT::I16], &operands);
+    Some(dag.get_node(
+        ISD::BuildPair,
+        EVT::I32,
+        &[SDValue { node: pair.node, res: 0 }, SDValue { node: pair.node, res: 1 }],
+    ))
+}
+
+/// The virtual register an argument (or the low half of a long one) is copied
+/// from.
+fn incoming_register(
+    dag: &SelectionDAG,
+    value: SDValue,
+) -> Option<u32> {
+    if dag.opcode(value) == ISD::BuildPair {
+        return incoming_register(dag, dag.operand(value, 0));
+    }
+    if dag.opcode(value) != ISD::CopyFromReg {
+        return None;
+    }
+    match dag.node(dag.operand(value, 1)).data {
+        NodeData::Register(register) => Some(register),
+        _ => None,
+    }
 }
 
 /// A bit in memory is a byte with the upper bits zero, as the pin's type
@@ -394,7 +535,10 @@ fn distinct_objects(
     a: MemBase,
     b: MemBase,
 ) -> bool {
-    matches!((a, b), (MemBase::Global(_) | MemBase::Stack(_), MemBase::Global(_) | MemBase::Stack(_))) && a != b
+    matches!(
+        (a, b),
+        (MemBase::Global(_) | MemBase::Stack(_), MemBase::Global(_) | MemBase::Stack(_))
+    ) && a != b
 }
 
 /// A word loaded only to be stored to another object is copied a byte at a
@@ -431,7 +575,11 @@ fn lower_word_copy(
     let (high_from, high_to) = (dag.get_object_ptr_offset(from, 1), dag.get_object_ptr_offset(to, 1));
     let low = dag.get_load(EVT::I8, load_chain, from, load_info);
     let low_chain = SDValue { node: low.node, res: 1 };
-    let before_store = if chain == (SDValue { node: value.node, res: 1 }) { low_chain } else { dag.get_token_factor(&[low_chain, chain]) };
+    let before_store = if chain == (SDValue { node: value.node, res: 1 }) {
+        low_chain
+    } else {
+        dag.get_token_factor(&[low_chain, chain])
+    };
     let low_store = dag.get_store(before_store, low, to, store_info);
     let high = dag.get_load(EVT::I8, low_store, high_from, load_info);
     let high_store = dag.get_store(SDValue { node: high.node, res: 1 }, high, high_to, store_info);
@@ -469,7 +617,10 @@ fn lower_extend(
     // the flag of an overflow op is not a condition yet: its expansion makes
     // one, and the extension is lowered when that is done (`condition_byte` has
     // no byte for it and would widen the flag with this very node)
-    if matches!(dag.opcode(condition), ISD::SAddO | ISD::SSubO | ISD::SMulO | ISD::UMulO) {
+    if matches!(
+        dag.opcode(condition),
+        ISD::SAddO | ISD::SSubO | ISD::SMulO | ISD::UMulO
+    ) {
         return node;
     }
     let vt = dag.value_type(node);
@@ -571,7 +722,23 @@ fn equality_operands(
     op1: SDValue,
 ) -> (SDValue, SDValue) {
     let incoming = |value: SDValue| dag.opcode(value) == ISD::CopyFromReg;
-    if incoming(op0) && !incoming(op1) && dag.constant(op1).is_none() { (op1, op0) } else { (op0, op1) }
+    let loaded = |value: SDValue| dag.opcode(value) == ISD::Load;
+    if incoming(op0) && !incoming(op1) && !loaded(op1) && dag.constant(op1).is_none() { (op1, op0) } else { (op0, op1) }
+}
+
+/// A load nothing else reads, not extending, not volatile: `cmp g` and
+/// `cmp g,x` take it from memory.
+fn foldable_load(
+    dag: &SelectionDAG,
+    value: SDValue,
+) -> bool {
+    dag.opcode(value) == ISD::Load
+        && value.res == 0
+        && matches!(
+            dag.node(value).data,
+            NodeData::Mem(info) if info.ext.is_none() && !info.volatile && info.ordering.is_none()
+        )
+        && dag.has_one_use(value.node)
 }
 
 /// The code a comparison of `op0` with `op1` branches on, and the operands to
@@ -583,6 +750,13 @@ fn translate_cc(
     op1: SDValue,
 ) -> (u128, SDValue, SDValue) {
     use CondCode::*;
+    // `TranslateX86CC`: a foldable load on the left and none on the right
+    // flips the condition, so the load is the memory operand of the compare
+    let (cc, op0, op1) = if foldable_load(dag, op0) && !foldable_load(dag, op1) && dag.constant(op1).is_none() {
+        (cc.swapped_operands(), op1, op0)
+    } else {
+        (cc, op0, op1)
+    };
     let against_zero = dag.is_null_constant(op1);
     // `x > C` is `x >= C + 1`: the constant stays the right-hand side, an
     // immediate of the compare (AArch64's `getAArch64Cmp` adjusts the
@@ -696,7 +870,8 @@ fn sign_compare(
 /// high words with their sign bits flipped.
 ///
 /// The pin's `IntegerExpandSetCCOperands` makes the node when the target has
-/// it ([LegalizeIntegerTypes.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/LegalizeIntegerTypes.cpp));
+/// it
+/// ([LegalizeIntegerTypes.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/LegalizeIntegerTypes.cpp));
 /// ours is `legalize_types.rs`. Without it a compare of two words was a select
 /// of the compares of its halves, each a chain.
 fn lower_setcc_carry(

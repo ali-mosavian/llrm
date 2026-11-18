@@ -14,7 +14,10 @@ const PARTICLE: &str = include_str!("data/imm_shared_store.ll");
 /// its smaller form (`ld (hl), #1` / `ld (hl), #0`) whichever order selects.
 #[test]
 fn a_shared_constant_word_is_stored_as_immediates_where_that_is_smaller() {
-    let body = text(PARTICLE, "bench_particle", 0, &Request::new(Level::Os)).unwrap_or_else(|why| panic!("{why}"));
+    // LSR's choice of induction variables moves the loop (#9031: IV users meet in descending program order); the
+    // decision under test is the selection's, on the loop as written
+    let request = Request { passes: vec!["-fno-lsr".into()], ..Request::new(Level::Os) };
+    let body = text(PARTICLE, "bench_particle", 0, &request).unwrap_or_else(|why| panic!("{why}"));
     assert!(body.contains("ld (hl), #1"), "the immediate stores of the shared word 1 were lost:\n{body}");
 }
 

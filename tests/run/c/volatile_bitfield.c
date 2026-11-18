@@ -1,4 +1,5 @@
 // flags: -O0 | -O2 | -Os
+// bar: not comparable (SDCC lays f:15 at a byte, clang's packed layout at bit 3: a different struct); twin volatile_bitfield_aligned
 // A bit field of a volatile object, read in a comparison, a sum and a condition (gcc.c-torture 20181120-1: `d != u.f1` was refused
 // with "a bit field's address").
 extern void report(long value);

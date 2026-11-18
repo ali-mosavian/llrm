@@ -6,6 +6,13 @@ set -u
 same=; [ "${1:-}" = --same-ok ] && { same=--same-ok; shift; }  # a head that changes only the frontend
 base=${1:?base llrm-cc}; new=${2:?new llrm-cc}; target=${3:?target}; level=${4:?level}; shift 4
 root=$(cd "$(dirname "$0")/.." && pwd)
+# The segmented rows need the fork clang of toolchain/clang/pin (line 2, as tools/llrmbin.py finds it); without it llrm-cc refuses every program
+# (x86_16-dos refused=215 on #10190 and #10193, read as "unmeasurable").
+case $target in
+x86_16-* | x86_32-dos | x86_32-wat)
+    m16=$HOME/scratch/clang-by-sha/$(sed -n 2p "$root/toolchain/clang/pin" | cut -d' ' -f1)/bin/clang
+    [ -n "${LLRM_CLANG_M16:-}" ] || ! [ -x "$m16" ] || export LLRM_CLANG_M16=$m16 ;;
+esac
 python3 "$root/tools/llrmbin.py" sides "$base" "$new" $same --target "$target" || exit 2  # prints cc + llc md5 per side; refuses one llc
 [ $# -gt 0 ] || set -- "$root"/tests/run/c/*.c
 out=$(mktemp -d); trap 'rm -rf "$out"' EXIT
