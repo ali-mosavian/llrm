@@ -110,8 +110,8 @@ pub fn trial_bytes(cpu: Cpu) -> OperationCosts {
 /// What the snippets do not say, fit to the bytes the backend writes: a
 /// non-negative least squares of each function's operation counts
 /// (width-weighted) against its written size, over the 86 programs of
-/// `tests/data_size` at -Os (`tools/size_fit.py`, 182 functions; the fit
-/// is within 25% for 68% of them, the snippets alone for 39%).
+/// `tests/data_size` at -Os (`tools/size_fit.py`, 181 functions with a call's
+/// arguments counted exactly; the fit is within 25% for 70% of them).
 ///
 /// DEVIATE (6502-OPCOSTS): measured here, the pin has no byte model for the
 /// 6502. Exit: a generated scheduling description of the instruction tables

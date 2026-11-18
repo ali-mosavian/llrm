@@ -70,3 +70,23 @@ fn the_estimate_tracks_the_bytes_written_at_both_cpus() {
     }
     assert!(failures.is_empty(), "{failures:#?}");
 }
+
+/// `function_bytes` read a call's operands from the second, so the first
+/// argument was dropped and the callee (the last operand) priced as a word: a
+/// call of `f(i32)` cost what a call of `f(i8)` did. Every argument is priced,
+/// the callee not (CALL-ARGS-SKIP).
+#[test]
+fn a_call_is_priced_by_all_of_its_arguments_and_not_its_callee() {
+    let model = |ty: &str| {
+        let ir = format!(
+            "target datalayout = \"{}\"\ndeclare void @f({ty})\ndefine void @m() {{\n  call void @f({ty} 5)\n  ret void\n}}\n",
+            Mos.layout().datalayout
+        );
+        let mut request = Request::new(Level::Os);
+        request.cpu = Cpu::Mos6502;
+        let rows = driver::size_audit(&ir, &request).unwrap_or_else(|why| panic!("{ty}: {why}"));
+        rows.iter().find(|row| row.name == "m").unwrap_or_else(|| panic!("no m among {} rows", rows.len())).model
+    };
+    let costs = llrm_6502::opcosts::trial_bytes(Cpu::Mos6502);
+    assert_eq!(model("i32") - model("i8"), 3 * costs.argument, "three more argument bytes in the call");
+}
