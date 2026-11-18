@@ -206,6 +206,10 @@ pub struct EmitContext<'a> {
     pub address_mode: AddrMode,
     /// Code size is wanted over speed (`-Os`, `-Oz`).
     pub opt_size: bool,
+    /// A near pointer into the stack segment needs no `ss:` override: SS holds
+    /// the data segment's value for the whole run
+    /// (`Segments::stack_shares_data`).
+    pub stack_shares_data: bool,
     /// The multiple a call's argument area is rounded to, so a call finds the
     /// stack aligned (`aligned_calls`); 1 where calls need none.
     pub call_alignment: i64,
@@ -235,6 +239,10 @@ pub struct EmitBlock {
     pub at: i64,
     pub phis: Vec<Phi>,
     pub insns: Vec<Arc<Insn>>,
+    /// The block's fall-through successor comes before its branch target, as a
+    /// custom inserter adds them (`EmitLoweredSelect`: `copy0MBB`, then
+    /// `sinkMBB`). Placement breaks a tie between even odds in that order.
+    pub fall_first: bool,
 }
 
 /// What outlives one MIR block: the LIR value of each virtual register of the

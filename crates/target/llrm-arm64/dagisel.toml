@@ -28,7 +28,6 @@ extra_symbols = [
   "AArch64::LDRSBXpre",
   "AArch64::LDRSBWpre",
   "AArch64::LDRBBpre",
-  "AArch64::LDRBpre",
   "AArch64::LDRHpre",
   "AArch64::LDRSpre",
   "AArch64::LDRDpre",
@@ -42,7 +41,6 @@ extra_symbols = [
   "AArch64::LDRSBXpost",
   "AArch64::LDRSBWpost",
   "AArch64::LDRBBpost",
-  "AArch64::LDRBpost",
   "AArch64::LDRHpost",
   "AArch64::LDRSpost",
   "AArch64::LDRDpost",
@@ -51,6 +49,19 @@ extra_symbols = [
   "AArch64::BFMWri",
   # Selected by hand (LowerBR_JT).
   "AArch64::JumpTableDest32",
+  # The machine combiner's `mla`/`mls` (`VectorMulAcc`).
+  "AArch64::MLAv16i8",
+  "AArch64::MLAv2i32",
+  "AArch64::MLAv4i16",
+  "AArch64::MLAv4i32",
+  "AArch64::MLAv8i16",
+  "AArch64::MLAv8i8",
+  "AArch64::MLSv16i8",
+  "AArch64::MLSv2i32",
+  "AArch64::MLSv4i16",
+  "AArch64::MLSv4i32",
+  "AArch64::MLSv8i16",
+  "AArch64::MLSv8i8",
   # Every opcode a form of `opcodes.instr` stands for: the scheduling model resolves its class by number
   # (checked by `every_opcode_a_form_stands_for_has_a_number_in_the_table`).
   "TargetOpcode::COPY",
@@ -81,7 +92,6 @@ extra_symbols = [
   "AArch64::MOVIv16b_ns",
   "AArch64::MOVIv2d_ns",
   "AArch64::MOVKWi",
-  "AArch64::MVNIv2i32",
   "AArch64::MOVNWi",
   "AArch64::MOVNXi",
   "AArch64::MOVZWi",
@@ -111,9 +121,57 @@ extra_symbols = [
 # Selected by hand when the vectors are live (a 64-bit `mvni`, a byte load for a lane): the tables before
 # the vectors leave them out, so the scheduling model prices them only then.
 dynamic_extra_symbols = [
+  "AArch64::BIFv16i8",
+  "AArch64::BIFv8i8",
+  "AArch64::BITv16i8",
+  "AArch64::BITv8i8",
+  "AArch64::BSLv16i8",
+  "AArch64::BSLv8i8",
+  "AArch64::LD2Twov8b",
+  "AArch64::LD2Twov16b",
+  "AArch64::LD2Twov4h",
+  "AArch64::LD2Twov8h",
+  "AArch64::LD2Twov2s",
+  "AArch64::LD2Twov4s",
+  "AArch64::LD2Twov2d",
+  "AArch64::LD3Threev8b",
+  "AArch64::LD3Threev16b",
+  "AArch64::LD3Threev4h",
+  "AArch64::LD3Threev8h",
+  "AArch64::LD3Threev2s",
+  "AArch64::LD3Threev4s",
+  "AArch64::LD3Threev2d",
+  "AArch64::LD4Fourv8b",
+  "AArch64::LD4Fourv16b",
+  "AArch64::LD4Fourv4h",
+  "AArch64::LD4Fourv8h",
+  "AArch64::LD4Fourv2s",
+  "AArch64::LD4Fourv4s",
+  "AArch64::LD4Fourv2d",
   "AArch64::LDRBpost",
   "AArch64::LDRBpre",
-  "AArch64::MVNIv2i32"
+  "AArch64::MVNIv2i32",
+  "AArch64::ST2Twov8b",
+  "AArch64::ST2Twov16b",
+  "AArch64::ST2Twov4h",
+  "AArch64::ST2Twov8h",
+  "AArch64::ST2Twov2s",
+  "AArch64::ST2Twov4s",
+  "AArch64::ST2Twov2d",
+  "AArch64::ST3Threev8b",
+  "AArch64::ST3Threev16b",
+  "AArch64::ST3Threev4h",
+  "AArch64::ST3Threev8h",
+  "AArch64::ST3Threev2s",
+  "AArch64::ST3Threev4s",
+  "AArch64::ST3Threev2d",
+  "AArch64::ST4Fourv8b",
+  "AArch64::ST4Fourv16b",
+  "AArch64::ST4Fourv4h",
+  "AArch64::ST4Fourv8h",
+  "AArch64::ST4Fourv2s",
+  "AArch64::ST4Fourv4s",
+  "AArch64::ST4Fourv2d"
 ]
 # Opcodes the hand code selects (a bitcast, a float round) that kept a scheduling class only through patterns of vector
 # types now pruned: they keep their row in instrinfo.rs and sched.rs.
@@ -160,11 +218,14 @@ features = ["FPARMv8", "FullFP16", "LSE", "CRC", "AES", "SHA2", "SHA3", "RCPC", 
 # Decided when a function is selected (the flag-gated vectors, ARM64-VEC POC): off, NEON patterns never match, as when they were pruned.
 [dynamic]
 "Subtarget->isNeonAvailable()" = "neon_available"
+# A feature the CPUs differ in (apple-m1 has SHA3, generic does not): the CPU answers at selection time, not the table.
+"Subtarget->hasSHA3()" = "has_feature(\"SHA3\")"
 
 [types]
 dead_prefixes = ["v", "nxv", "aarch64"]
-# The 128-bit integer vectors the DAG builds (ARM64-VEC POC): their loads and stores, nothing NEON-gated.
-live = ["v16i8", "v8i16", "v4i32", "v2i64", "v4f32", "v2f64"]
+# The vectors the DAG builds (ARM64-VEC POC): their loads and stores, nothing NEON-gated; the 64-bit integer
+# vectors are the narrow operands of the long forms (`ushll`, `uaddw`, `smull`).
+live = ["v16i8", "v8i16", "v4i32", "v2i64", "v4f32", "v2f64", "v2f32", "v8i8", "v4i16", "v2i32"]
 
 [node_predicate]
 # One name per predicate number is enough (the pin groups equal bodies). Names with no Dag query answer false by name (see aarch64_predicates.rs).

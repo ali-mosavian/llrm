@@ -74,6 +74,11 @@ use crate::effects;
 use crate::memory::Unit;
 use crate::mssa::phitrans::{Env as PhiEnv, PhiTransAddr, SelectAddrs};
 
+/// The pointer operand of `llvm.lifetime.start` / `.end`. MIR's markers still
+/// take the size first (`Intrinsics.td` has dropped it), so the pointer is
+/// operand 1, not the pin's 0.
+const LIFETIME_POINTER: u32 = 1;
+
 /// [`BlockScanLimit`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/MemoryDependenceAnalysis.cpp#L65),
 /// `memdep-block-scan-limit`.
 pub const BLOCK_SCAN_LIMIT: u32 = 100;
@@ -276,7 +281,7 @@ pub fn get_location(
             {
                 // They don't modify the memory, but Mod makes them
                 // conservative.
-                return (MemoryLocation::get_for_argument(unit, inst, 0), ModRefInfo::Mod);
+                return (MemoryLocation::get_for_argument(unit, inst, LIFETIME_POINTER), ModRefInfo::Mod);
             }
             // The coarse-grained thing that always works.
             let calls = matches!(opcode, Opcode::Call(_) | Opcode::Invoke(_));
@@ -614,7 +619,8 @@ impl MemoryDependenceResults {
             if matches!(function.instruction(inst).opcode, Opcode::Call(_))
                 && unit.intrinsic(inst) == Some(Intrinsic::LifetimeStart)
             {
-                let arg_loc = MemoryLocation::get_for_argument(unit, inst, 0).expect("lifetime names its object");
+                let arg_loc =
+                    MemoryLocation::get_for_argument(unit, inst, LIFETIME_POINTER).expect("lifetime names its object");
                 match batch.alias(&arg_loc, mem_loc) {
                     AliasResult::MustAlias => return MemDepResult::Def(inst),
                     AliasResult::NoAlias => continue,

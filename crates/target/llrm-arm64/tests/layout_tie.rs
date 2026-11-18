@@ -40,5 +40,13 @@ fn equal_jump_counts_keep_the_pins_order() {
     odds.insert((3, 1), (BranchProbability::get_one(), 0));
     let out = fold(vec![entry, test, exit, body], &mut [], &odds, false, &[]);
     let order: Vec<&str> = out.iter().map(|block| block.label.as_str()).collect();
-    assert_eq!(order, [".Lf.0", ".Lf.1", ".Lf.3", ".Lf.2"], "{out:#?}");
+    // #9699 (TailDupPlacement): the test is merged into the entry and copied into the body, so the loop is `.Lf.3` alone;
+    // what the old order guarded still holds: the loop ends in the `cbnz` back edge and falls into the exit, no `b exit`.
+    assert_eq!(order, [".Lf.0", ".Lf.3", ".Lf.2"], "{out:#?}");
+    let body = &out[1];
+    assert!(
+        matches!(body.insts.last(), Some(Inst::CompareBranch { nonzero: true, target: Target::Label(back), .. }) if back == ".Lf.3"),
+        "{out:#?}"
+    );
+    assert!(out.iter().all(|block| !block.insts.iter().any(|inst| matches!(inst, Inst::Branch { .. }))), "{out:#?}");
 }

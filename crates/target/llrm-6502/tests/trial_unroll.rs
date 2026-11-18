@@ -79,16 +79,19 @@ fn an_unroll_that_folds_nothing_is_put_back() {
     assert!(xors < 8, "{xors} xors: the 16 trips were copied out:\n{text}");
 }
 
-/// `fcmp_all` was unrolled to 85,508 bytes more at 23 clk/B: it pays by the
-/// rate and would not fit the 64 KiB address space. A trial is put back past
-/// the growth limit whatever it saves, at either level.
+/// `fcmp_all` was unrolled to 85,508 bytes more at 23 clk/B and would not fit
+/// the 64 KiB address space. A trial that grows the code is put back whatever
+/// it saves, at every level: bytes come first, so 8,000 bytes for 100,000
+/// clocks was kept at -O2 at 3 clk/B (2026-11-14).
 #[test]
-fn a_trial_that_grows_the_code_past_the_limit_is_put_back() {
+fn a_trial_that_grows_the_code_is_put_back() {
     use llrm_6502::driver::trial_pays;
-    assert!(trial_pays(Level::O2, 3000, 100_000, 8_000));
-    assert!(!trial_pays(Level::O2, 3000, 2_008_446, 85_508));
-    assert!(trial_pays(Level::Os, 0, 0, -1));
-    assert!(!trial_pays(Level::Os, 0, 1_000_000, 17_000));
+    assert!(!trial_pays(Level::O2, 100_000, 8_000));
+    assert!(!trial_pays(Level::O3, 2_008_446, 85_508));
+    assert!(!trial_pays(Level::Os, 1_000_000, 17_000));
+    assert!(trial_pays(Level::O2, 0, -1));
+    assert!(trial_pays(Level::Os, 0, -1));
+    assert!(trial_pays(Level::O3, 5, 0));
 }
 
 /// `fcmp_all`'s trial took 14 s of selection to price 85,508 bytes more: a 4
@@ -144,4 +147,70 @@ fn a_four_trip_loop_is_priced_at_four_trips() {
     let asm = assembly(&module(FOUR_TRIPS), &Request::new(Level::O2)).unwrap();
     let calls = asm.lines().filter(|line| line.trim() == "jsr report").count();
     assert_eq!(calls, 1, "the loop was unrolled to {calls} calls:\n{asm}");
+}
+
+/// The trial priced the functions' bytes only: static_pointers' unroll folds a
+/// 6-byte switch table away for 3 bytes of code, was put back as +3 B, and the
+/// program was 196 B against 193 (2026-11-14).
+#[test]
+fn a_trial_prices_the_initialised_data_too() {
+    use llrm_6502::driver::data_bytes;
+    let text = ".segment \"RODATA\"\nt:\n  .byte 11,12,30,6,40,13\n  .word 1,2\n.segment \"BSS\"\nb: .res 9\n.segment \"DATA\"\nd:\n  .res 3\n";
+    assert_eq!(data_bytes(text), 6 + 4 + 3);
+}
+
+/// A full unroll that repaid its bytes at 3 clocks each was made at -O2/-O3:
+/// eight stores of `v + i` were 8 `clc; txa; adc` and a 22 B body, against a 12
+/// B loop; bytes come first (2026-11-14).
+#[test]
+fn a_full_unroll_that_adds_bytes_is_not_made_at_speed() {
+    let body = "@g = global [8 x i8] zeroinitializer
+define void @f(i8 %v) {
+entry:
+  br label %loop
+loop:
+  %i = phi i8 [ 0, %entry ], [ %n, %loop ]
+  %p = getelementptr [8 x i8], ptr @g, i16 0, i8 %i
+  %w = add i8 %v, %i
+  store i8 %w, ptr %p
+  %n = add i8 %i, 1
+  %c = icmp ult i8 %n, 8
+  br i1 %c, label %loop, label %done
+done:
+  ret void
+}";
+    for level in [Level::O2, Level::O3] {
+        let text = assembly(&module(body), &Request::new(level)).unwrap();
+        let adds = text.lines().filter(|line| line.trim_start().starts_with("adc")).count();
+        assert!(adds < 4 && text.contains("bne"), "{level:?}: {adds} adds, the loop was copied out:\n{text}");
+    }
+}
+
+/// int64_division's nest at -O2 and -O3 kept both loops and linked `__divdi3`,
+/// `__udivdi3` and `__umoddi3`: 4,035 B for four constants. The inner loop (6
+/// trips, 1,422 units) is under the pin's threshold of 300 in the pin's own
+/// units but over this target's trial size of 1,100; held to the cost the
+/// analysis finds (1,200, boosted by 1.18 to 1,017) it is tried, and with it
+/// gone the outer loop folds. llvm-mos -O3 and the pin's x86 -O3 do the same.
+#[test]
+fn a_nest_of_constant_divisions_folds_to_its_results() {
+    for level in [Level::O2, Level::O3] {
+        let text = assembly(include_str!("data/division_nest.ll"), &Request::new(level)).unwrap();
+        let divisions = text.lines().filter(|line| line.contains("jsr __") && line.contains("div")).count();
+        let reports = text.lines().filter(|line| line.contains("jsr report")).count();
+        assert!(divisions == 0 && reports == 4, "{divisions} calls to a division, {reports} reports:\n{text}");
+    }
+}
+
+/// loop_fusion at -Os kept every callee and its loops, 1,041 B against 120 B at
+/// -O2: the size rule refuses the callees the unrolled loops fold away, and the
+/// pair that inlines them was priced only at -O2. -Os prices the -O2 pair too.
+#[test]
+fn the_pair_of_inlines_and_unrolls_is_priced_at_os() {
+    let text = assembly(include_str!("data/loop_fusion_os.ll"), &Request::new(Level::Os)).unwrap();
+    let kept: Vec<&str> = ["clear", "total", "same", "behind", "ahead", "over", "longer"]
+        .into_iter()
+        .filter(|name| text.contains(&format!("{name}:")))
+        .collect();
+    assert!(kept.is_empty(), "{kept:?} stay as functions:\n{text}");
 }

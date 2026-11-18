@@ -103,6 +103,7 @@ fn context_in(
         frame: &NoFrame,
         address_mode: mode,
         opt_size: false,
+        stack_shares_data: false,
         call_alignment: 1,
         reserved_calls: false,
         map: &map,

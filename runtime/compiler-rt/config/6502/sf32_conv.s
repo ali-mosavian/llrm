@@ -1,19 +1,33 @@
 ; binary32 <-> 32-bit integer for the 6502, hand written; links with sf32.s (rounding). ABI as sf32.s:
-; the argument in rc2..rc5, the result in A:X:rc2:rc3. Float to int truncates; out of range saturates, NaN gives 0
+; the argument in A:X and rc2:rc3 (moved to rc2..rc5 on entry), the result in A:X:rc2:rc3. Float to int truncates; out of range saturates, NaN gives 0
 ; (matches lib/fp/f32/fix_si.c lib/fp/f32/float_si.c).
 
 .setcpu "6502"
 .include "sf32.inc"
 .import sf_round
 .export __floatsisf, __floatunsisf, __fixsfsi, __fixunssfsi
+.export sf_floatsisf_c, sf_floatunsisf_c, sf_fixsfsi_c, sf_fixunssfsi_c   ; the cores: the argument already in rc2..rc5
 
 .segment "CODE"
 
 ; ---- int to float: the integer becomes the rounding block (byte 0 is the guard byte), normalized to bit 31
+ax2cells:               ; A:X, rc2:rc3 -> rc2..rc5, through Y
+    ldy rc3
+    sty rc5
+    ldy rc2
+    sty rc4
+    sta rc2
+    stx rc3
+    rts
+
 __floatunsisf:
+    jsr ax2cells
+sf_floatunsisf_c:
     lda #0
     beq fcopy
 __floatsisf:
+    jsr ax2cells
+sf_floatsisf_c:
     lda rc5
     and #$80
 fcopy:
@@ -190,6 +204,8 @@ retzero:
     rts
 
 __fixunssfsi:
+    jsr ax2cells
+sf_fixunssfsi_c:
     lda rc5
     bmi retzero             ; negative, -inf, -NaN
     jsr fixmag
@@ -211,6 +227,8 @@ fret:
     rts
 
 __fixsfsi:
+    jsr ax2cells
+sf_fixsfsi_c:
     jsr fixmag
     bcs sbig
     lda rc19

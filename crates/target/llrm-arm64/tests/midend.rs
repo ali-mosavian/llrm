@@ -771,6 +771,17 @@ fn an_arm64_object_has_a_line_row_where_the_source_place_changes() {
     assert_eq!(rows, [(0, 2, 0), (8, 3, 11), (16, 3, 18), (20, 3, 16), (24, 3, 7), (28, 4, 12), (32, 4, 3)]);
 }
 
+/// The target facts of an allocation were process-wide: a Darwin compile on
+/// another thread flipped the Linux scheduler's model mid-function, so the
+/// line table and `-g` tests passed or failed with the thread timing.
+#[test]
+fn a_darwin_compile_on_another_thread_leaves_this_threads_target_alone() {
+    llrm_arm64::lir_view::set_darwin(false);
+    let linux = llrm_arm64::lir_view::gpr_caller_saved_count();
+    std::thread::spawn(|| llrm_arm64::lir_view::set_darwin(true)).join().unwrap();
+    assert_eq!(llrm_arm64::lir_view::gpr_caller_saved_count(), linux, "Darwin's registers on a Linux thread");
+}
+
 /// `-g` must not change the code: the source place each operation carries
 /// through the passes decides nothing. The fixtures (clang's -O0 and -O2
 /// output) lower to the same bytes with and without it.
@@ -838,6 +849,8 @@ fn an_arm64_row_on_the_line_before_it_is_not_a_statement() {
 /// store is given: `gep [2 x i8], %p, %i` is a legal scaled address, so free.
 /// It was costed 1, which made the 40-trip loop of `tile` 162 against the
 /// -O2 bar of 150 and left it rolled (4207 instructions, clang's 2155).
+/// The 40-trip loop is marked `isvectorized`: the pin widens it at VF 8 and
+/// the unroller would count nothing.
 #[test]
 fn a_scaled_index_gep_feeding_another_gep_is_free_so_a_small_loop_unrolls_fully() {
     let text = include_str!("data/tile_unroll.ll");

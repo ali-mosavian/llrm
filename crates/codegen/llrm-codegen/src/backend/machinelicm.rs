@@ -49,8 +49,8 @@
 //!
 //! DEVIATE ML2 (owner x87, exit 2026-12-08), 11-08 re-check: the pin keeps
 //! `fld1; fchs` inside the loops of x_ld_abs -O2 (`-march=i486`, the pinned
-//! clang's listing) and gcc carries the constant on the stack (`fsub st, st(1)`),
-//! so neither exit holds. The pin's `FLD1` and `FLDZ` read `$fpcw`,
+//! clang's listing) and gcc carries the constant on the stack (`fsub st,
+//! st(1)`), so neither exit holds. The pin's `FLD1` and `FLDZ` read `$fpcw`,
 //! which the function's `FLDCW` (for an `fptosi`) writes, so nothing moves and
 //! `fld1; fchs; faddp` (18 clk) is made on every trip of a loop that adds
 //! `-1.0`. Both and `fchs` are exact under any rounding control. A constant
@@ -169,9 +169,9 @@ fn constant_load(one: &Insn) -> bool {
 
 /// `fld m80` of a constant-pool entry (`Insn::invariant`): the value is made
 /// again on every trip, where gcc's reg-stack leaves it on the x87 stack.
-/// DEVIATE X1 (owner x87, exit 2026-12-08), 11-08 re-check: for `s += a[i] * 0.1L + 0.3L`
-/// the pinned clang loads both m80 constants every trip, gcc carries one and ours
-/// both. The load reads `$fpcw`, which the pin's
+/// DEVIATE X1 (owner x87, exit 2026-12-08), 11-08 re-check: for `s += a[i] *
+/// 0.1L + 0.3L` the pinned clang loads both m80 constants every trip, gcc
+/// carries one and ours both. The load reads `$fpcw`, which the pin's
 /// `IsLoopInvariantInst` accepts only where nothing in the function writes it
 /// (`fisttp` here does); `fld` of an extended constant does not depend on the
 /// rounding control, so it moves regardless and the stack carries it as it
@@ -313,7 +313,11 @@ fn candidate(
         && one.requires.is_empty()
         && one.delivers.is_empty()
         && one.spread.is_empty()
-        && !crate::backend::machinesink::as_cheap_as_a_move(one, classes.cheap_move_immediate)
+        && !crate::backend::machinesink::as_cheap_as_a_move_named(
+            one,
+            classes.cheap_move_immediate,
+            classes.cheap_move_row,
+        )
 }
 
 /// An x86 instruction as the shared pass reads it.
@@ -699,6 +703,9 @@ struct X86<'a> {
     classes: &'a RegisterClasses,
     regs: llrm_lir::registers::Regs,
     floating: std::collections::BTreeSet<u32>,
+    /// The `floating` values that live in an xmm register: no x87 stack slot
+    /// holds them.
+    xmm: std::collections::BTreeSet<u32>,
     control_word_written: bool,
     /// The loop being walked.
     calls: bool,
@@ -922,13 +929,14 @@ impl licm::Policy<Wrapped> for X86<'_> {
         let invariant_load = loaded(one).is_some() && one.invariant();
         let limit = self.classes.available.len();
         let facts_every_trip = (facts.every_trip)(at);
+        // An invariant load into an xmm register is hoisted like any other: the
+        // stack the `floating` values wait on is the x87's, and the
+        // allocator can load the constant again where it wants it.
         let mut movable = candidate(one, self.classes, loads_here)
-            && value.is_some_and(|value| !self.floating.contains(&value))
-            && (if self.classes.hoist_by_pressure {
-                !self.pressure.high(facts, at, one)
-            } else {
-                self.named < limit
-            } || invariant_load)
+            && value
+                .is_some_and(|value| !self.floating.contains(&value) || (invariant_load && self.xmm.contains(&value)))
+            && (if self.classes.hoist_by_pressure { !self.pressure.high(facts, at, one) } else { self.named < limit }
+                || invariant_load)
             && (invariant_load || facts_every_trip || self.peak_pressure(facts) < limit);
         // `IsProfitableToHoist`: "Trivially rematerializable instructions
         // should always be hoisted providing the register allocator can just
@@ -1000,6 +1008,7 @@ pub fn hoisted(
         selectors: Vec::new(),
         data: registers.data_segment,
         through: None,
+        stack_shares_data: false,
         huge_shift: None,
         offset_bytes: 0,
         registers,
@@ -1043,6 +1052,7 @@ pub fn hoisted_sized(
         })
         .collect();
     let floating = crate::backend::regclass::floating(body);
+    let xmm = crate::backend::regclass::xmm_values(body);
     let model =
         crate::backend::machinesched::pressure_model(body, classes, segments, &|value| !floating.contains(&value));
     let mut policy = X86 {
@@ -1052,6 +1062,7 @@ pub fn hoisted_sized(
         classes,
         regs,
         floating,
+        xmm,
         control_word_written,
         calls: false,
         floats_named: 0,
@@ -1062,17 +1073,42 @@ pub fn hoisted_sized(
         fresh: body.next_value(),
     };
     let Some(moved) = licm::hoist(&blocks, body.entry, &mut policy) else { return body.clone() };
-    let blocks: Vec<crate::model::lir::Block> = body
-        .blocks
-        .iter()
-        .zip(moved)
-        .map(|(block, after)| {
-            let insns: Vec<Arc<Insn>> = after.insns.into_iter().map(|one| one.0).collect();
-            let same = insns.len() == block.insns.len()
-                && insns.iter().zip(block.insns.iter()).all(|(a, b)| Arc::ptr_eq(a, b));
-            if same { block.clone() } else { block.with_insns(insns) }
-        })
-        .collect();
+    let blocks: Vec<crate::model::lir::Block> =
+        body.blocks
+            .iter()
+            .zip(moved)
+            .map(|(block, after)| {
+                let insns: Vec<Arc<Insn>> = after.insns.into_iter().map(|one| one.0).collect();
+                let same = insns.len() == block.insns.len()
+                    && insns.iter().zip(block.insns.iter()).all(|(a, b)| Arc::ptr_eq(a, b));
+                let mut block_after = if same { block.clone() } else { block.with_insns(insns) };
+                // `EliminateCSE` renames a duplicate's readers, a phi's
+                // incoming values among them: a duplicate whose
+                // definition went left a phi reading a value nothing made.
+                let renamed =
+                    block.phis.iter().zip(&after.phis).any(|(phi, now)| {
+                        phi.incoming.iter().map(|(_, value)| *value).ne(now.incoming.iter().copied())
+                    });
+                if renamed {
+                    block_after.phis = block
+                        .phis
+                        .iter()
+                        .zip(after.phis)
+                        .map(|(phi, now)| crate::model::lir::Phi {
+                            result: phi.result,
+                            incoming: phi
+                                .incoming
+                                .iter()
+                                .zip(now.incoming)
+                                .map(|((from, _), value)| (*from, value))
+                                .collect(),
+                        })
+                        .collect::<Vec<_>>()
+                        .into();
+                }
+                block_after
+            })
+            .collect();
     body.with_blocks(blocks)
 }
 

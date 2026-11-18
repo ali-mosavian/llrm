@@ -29,6 +29,29 @@ fn row_of(name: &str) -> Option<(&'static str, bool)> {
     ADDS.iter().find(|(from, ..)| *from == name).map(|&(_, to, commutes)| (to, commutes))
 }
 
+/// The plain load an extending load (any mode, scaled or with a `(An)+`
+/// writeback) is made of, and the bits it loads: `MOVSXd32o8_WB` is `MOV8do_WB`
+/// and 8. Only a sign extension to a long.
+fn plain_of(name: &str) -> Option<(&'static str, u32)> {
+    let writeback = name.ends_with("_WB");
+    let printed = if writeback { crate::dagisel::indexed::extension_of(name)? } else { name };
+    let (stem, scale) = match crate::dagisel::scaled::base_of(printed) {
+        Some(base) => (base, crate::dagisel::scaled::scale_of(printed)),
+        None => (printed, None),
+    };
+    let (true, 32, mode, from) = crate::expand::extension(stem)? else { return None };
+    let plain = crate::expand::plain_load(from, mode)?;
+    let plain = match scale {
+        Some(scale) => crate::dagisel::scaled::scaled_name(plain, scale)?,
+        None => plain,
+    };
+    if !writeback {
+        return Some((plain, from));
+    }
+    let twin = crate::dagisel::indexed::code_of(&format!("{plain}_WB"))?;
+    Some((crate::dagisel::indexed::name_of(u32::from(twin))?, from))
+}
+
 /// What `texts` cost on `cpu`: bytes (2 each) and clocks.
 fn price_of(
     texts: &[&str],
@@ -79,7 +102,7 @@ pub fn sign_extended_words(
     let mut defs = vec![0u32; count];
     let mut uses = vec![0u32; count];
     // each sign extension to a long: its place, its source, whether a byte
-    let mut word_of: Vec<Option<(usize, usize, Reg, bool)>> = vec![None; count];
+    let mut word_of: Vec<Option<(usize, usize, Reg, bool, Option<&'static str>)>> = vec![None; count];
     for (b, block) in function.blocks.iter().enumerate() {
         for phi in &block.phis {
             if let Reg::Virt(v) = phi.result {
@@ -104,7 +127,13 @@ pub fn sign_extended_words(
                 [Operand::Def(Reg::Virt(x)), Operand::Use(source)],
             ) = (inst.kind, &inst.operands[..])
             {
-                word_of[*x as usize] = Some((b, at, *source, name == "MOVSXd32d8"));
+                word_of[*x as usize] = Some((b, at, *source, name == "MOVSXd32d8", None));
+            } else if let (Kind::Op(name), Some(Operand::Def(Reg::Virt(x)))) = (inst.kind, inst.operands.first()) {
+                // an extending load: the load stays, narrow, and the extension
+                // goes
+                if let Some((plain, from)) = plain_of(name) {
+                    word_of[*x as usize] = Some((b, at, Reg::Virt(*x), from == 8, Some(plain)));
+                }
             }
         }
     }
@@ -239,6 +268,7 @@ pub fn sign_extended_words(
         Some(moves)
     };
     let mut made: Vec<(usize, usize)> = Vec::new();
+    let mut inserted: Vec<(usize, usize, llrm_spike_mf::Inst)> = Vec::new();
     let mut folded = 0;
     for b in 0..function.blocks.len() {
         for at in 0..function.blocks[b].insts.len() {
@@ -277,13 +307,37 @@ pub fn sign_extended_words(
                 continue;
             };
             let Some(desc) = local::code_of(row).and_then(local::desc) else { continue };
-            let (_, wat, source, byte) = word;
+            let (_, wat, source, byte, load) = word;
             if !pays(byte, row == "SUBA16r", into + out, cpu, price) {
                 continue;
             }
             // a byte is widened to a word first (`ext.w`), the long step is
-            // gone
-            let used = if byte {
+            // gone; an extending load becomes the plain load of its width
+            let used = if let Some(plain) = load {
+                let Some(desc) = local::code_of(plain).and_then(local::desc) else { continue };
+                let narrow = function.classes.len() as u32;
+                function.classes.push(if byte { Class::Dr8 } else { Class::Dr16 });
+                let mut operands = function.blocks[b].insts[wat].operands.clone();
+                operands[0] = Operand::Def(Reg::Virt(narrow));
+                function.blocks[b].insts[wat] = op_inst(plain, desc, operands);
+                if byte {
+                    let Some(widen) = local::code_of("MOVSXd16d8").and_then(local::desc) else { continue };
+                    let wide = function.classes.len() as u32;
+                    function.classes.push(Class::Dr16);
+                    inserted.push((
+                        b,
+                        wat,
+                        op_inst(
+                            "MOVSXd16d8",
+                            widen,
+                            vec![Operand::Def(Reg::Virt(wide)), Operand::Use(Reg::Virt(narrow))],
+                        ),
+                    ));
+                    Reg::Virt(wide)
+                } else {
+                    Reg::Virt(narrow)
+                }
+            } else if byte {
                 let Some(widen) = local::code_of("MOVSXd16d8").and_then(local::desc) else { continue };
                 let wide = function.classes.len() as u32;
                 function.classes.push(Class::Dr16);
@@ -304,9 +358,20 @@ pub fn sign_extended_words(
             folded += 1;
         }
     }
-    made.sort_unstable_by(|a, b| b.cmp(a));
-    for (b, at) in made {
-        function.blocks[b].insts.remove(at);
+    // from the back, so the places still hold
+    let mut edits: Vec<(usize, usize, Option<llrm_spike_mf::Inst>)> = made
+        .into_iter()
+        .map(|(b, at)| (b, at, None))
+        .chain(inserted.into_iter().map(|(b, at, inst)| (b, at + 1, Some(inst))))
+        .collect();
+    edits.sort_by(|a, b| (b.0, b.1).cmp(&(a.0, a.1)));
+    for (b, at, inst) in edits {
+        match inst {
+            Some(inst) => function.blocks[b].insts.insert(at, inst),
+            None => {
+                function.blocks[b].insts.remove(at);
+            }
+        }
     }
     folded
 }

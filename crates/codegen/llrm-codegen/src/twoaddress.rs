@@ -849,6 +849,9 @@ pub struct Commuter<'a> {
     dst: HashMap<u32, Mapped>,
     /// `Processed`: the instructions whose copies are in the maps.
     processed: crate::support::hash::HashSet<InstrKey>,
+    /// `Processed` of `scanUses`: a copy is one value's `requires`, where the
+    /// pin has one `COPY` instruction each (a `ret` of `edx:eax` is two).
+    scanned: crate::support::hash::HashSet<(InstrKey, u32)>,
     /// The values `convertInstTo3Addr` made a two-register `lea` of in this
     /// block (`isConvertibleLEA`).
     leas: llrm_support::hash::HashSet<u32>,
@@ -856,9 +859,24 @@ pub struct Commuter<'a> {
     loop_carried: bool,
     /// DEVIATE TA-LC2 on (`Profile::commutes_loop_carried_flow`).
     loop_carried_flow: bool,
+    /// DEVIATE TA-11 on (`Profile::three_address_to_known_register`).
+    to_known_register: bool,
+    /// The register file's pins. The pin's `COPY`s to and from the fixed
+    /// registers of a form (`mul`'s AX and DX) are in the function when the
+    /// pass runs; here they are made later, so the pins stand for them.
+    classes: Option<&'a crate::backend::classes::RegisterClasses>,
 }
 
 impl<'a> Commuter<'a> {
+    /// The walk that reads the copies the register file's pins stand for.
+    pub fn with_classes(
+        mut self,
+        classes: Option<&'a crate::backend::classes::RegisterClasses>,
+    ) -> Self {
+        self.classes = classes;
+        self
+    }
+
     /// The walk with DEVIATE TA-LC on or off.
     pub fn with_loop_carried(
         mut self,
@@ -875,6 +893,21 @@ impl<'a> Commuter<'a> {
     ) -> Self {
         self.loop_carried_flow = on;
         self
+    }
+
+    /// The walk with DEVIATE TA-11 on or off.
+    pub fn with_to_known_register(
+        mut self,
+        on: bool,
+    ) -> Self {
+        self.to_known_register = on;
+        self
+    }
+
+    /// DEVIATE TA-11: whether a sum ending in a known register is made a
+    /// `lea` where its source has no known register.
+    pub fn converts_to_known_register(&self) -> bool {
+        self.to_known_register
     }
 
     /// The walk of `block`, at its first instruction.
@@ -900,9 +933,12 @@ impl<'a> Commuter<'a> {
             src: HashMap::default(),
             dst: HashMap::default(),
             processed: Default::default(),
+            scanned: Default::default(),
             leas: Default::default(),
             loop_carried: false,
             loop_carried_flow: false,
+            to_known_register: false,
+            classes: None,
         }
     }
 
@@ -939,24 +975,53 @@ impl<'a> Commuter<'a> {
         Self::mapped(&self.dst, value)
     }
 
+    /// The copies the form's fixed registers stand for: each value and the
+    /// register it is copied to before `one` (a source) or from after it (a
+    /// result, `true`).
+    fn pinned(
+        &self,
+        one: &Insn,
+    ) -> Vec<(u32, llrm_lir::registers::RegId, bool)> {
+        let (Some(classes), Some(what)) = (self.classes, one.what.as_ref()) else { return Vec::new() };
+        classes
+            .requirements(what)
+            .into_iter()
+            .filter_map(|(place, register)| {
+                let side = if place.side == "dest" { &what.dests } else { &what.sources };
+                match side.get(place.index) {
+                    Some(Loc::Held(held)) => Some((held.value, register, place.side == "dest")),
+                    _ => None,
+                }
+            })
+            .collect()
+    }
+
     /// `processCopy`: the copies of `one` from and to a register (`delivers`
     /// and `requires`), once.
     pub fn process_copy(
         &mut self,
         one: &Insn,
     ) {
+        let pinned = self.pinned(one);
         // Only an instruction that carries a copy is read, and once.
-        if one.requires.is_empty() && one.delivers.is_empty() || !self.processed.insert(one.id()) {
+        if one.requires.is_empty() && one.delivers.is_empty() && pinned.is_empty() || !self.processed.insert(one.id()) {
             return;
         }
         // The copy to a register, before the instruction.
         for (held, register) in &one.requires {
             self.dst.entry(held.value).or_insert(Mapped::Register(*register));
         }
+        for (value, register, _) in pinned.iter().filter(|(_, _, delivered)| !delivered) {
+            self.dst.entry(*value).or_insert(Mapped::Register(*register));
+        }
         // The copy from a register, after it: the value's uses are followed.
         for (held, register) in &one.delivers {
             self.src.entry(held.value).or_insert(Mapped::Register(*register));
             self.scan_uses(held.value);
+        }
+        for (value, register, _) in pinned.iter().filter(|(_, _, delivered)| *delivered) {
+            self.src.entry(*value).or_insert(Mapped::Register(*register));
+            self.scan_uses(*value);
         }
     }
 
@@ -983,6 +1048,12 @@ impl<'a> Commuter<'a> {
         let one = self.facts.insn(killing?);
         // A copy to a register (the requirement that `reg` is in it).
         if let Some(register) = one.requires.iter().find(|(held, _)| held.value == reg).map(|(_, register)| *register) {
+            return Some((one, true, Mapped::Register(register)));
+        }
+        // A source the form pins to a register is copied to it.
+        if let Some((_, register, _)) =
+            self.pinned(&one).into_iter().find(|(value, _, delivered)| *value == reg && !delivered)
+        {
             return Some((one, true, Mapped::Register(register)));
         }
         // A copy to another value.
@@ -1020,7 +1091,7 @@ impl<'a> Commuter<'a> {
         let mut pairs: Vec<Mapped> = Vec::new();
         let mut reg = dst_reg;
         while let Some((one, is_copy, next)) = self.find_only_interesting_use(reg) {
-            if is_copy && !self.processed.insert(one.id()) {
+            if is_copy && (self.processed.contains(&one.id()) || !self.scanned.insert((one.id(), reg))) {
                 break;
             }
             // Earlier in this block, reached by a back edge.

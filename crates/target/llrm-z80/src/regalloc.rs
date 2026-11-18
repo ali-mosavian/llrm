@@ -249,6 +249,14 @@ impl Target for Z80Registers {
         inst.operands.iter().find_map(|o| if let Operand::Frame(f) = o { Some(*f) } else { None })
     }
 
+    /// An incoming argument is an immutable fixed stack object, so the pin
+    /// makes a load of one again where it is read
+    /// (`isLoadFromInvariantOrConstantMemory`): the loads of a pair or a byte
+    /// take any register of the class.
+    fn is_invariant_argument_load(name: &str) -> bool {
+        matches!(name, "LD16rf" | "LD8rf")
+    }
+
     /// A load of a frame object the call before it filled is made again where
     /// it is read (`call_result_buffers`).
     fn is_buffer_load(name: &str) -> bool {

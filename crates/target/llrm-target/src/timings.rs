@@ -42,6 +42,16 @@ pub struct CpuTable {
     /// `max-grow-copy-bb-insns` 8, takes any block it optimises for speed);
     /// `None`: the pin's bound alone.
     pub tail_dup_hot_threshold: Option<i64>,
+    /// DEVIATE LOOP-TOP-JMP (owner x87-b, exit 2026-11-24): placement's choice
+    /// of a loop's top weighs the fall-throughs it gains and loses in clocks:
+    /// a taken conditional branch made one that falls through saves
+    /// `jcc - jcc_not_taken`, and a fall-through lost costs a whole `jmp`.
+    /// The pin counts each as one (`FallThroughGains`) and put the latch of
+    /// x_ld_dot above its header, so the inner loop's exit took a `jmp` every
+    /// outer trip. A loop's exit also falls into what follows it unless
+    /// another block's edge to it is hotter (`hasBetterLayoutPredecessor`'s
+    /// ratio gave the guard's edge block the latch). Off: the pin's count.
+    pub loop_top_prices_jumps: bool,
     /// Two-address commuting ties the operand the result goes back into (a
     /// loop's back-edge copy) even where the operand was read earlier in the
     /// block (DEVIATE TA-LC, owner anyisa, exit 2026-11-27): the pin's
@@ -49,6 +59,21 @@ pub struct CpuTable {
     /// reversed-copy-chain test, and keeps a copy per iteration. Off: the
     /// pin's order.
     pub commute_loop_carried: bool,
+    /// A `mov r16, imm` whose register's upper half is dead is the dword form
+    /// (DEVIATE FB3, owner x86-m32-b, exit 2026-11-24): the pin's
+    /// X86FixupBWInsts widens loads, copies and extensions, not the immediate
+    /// move, so `mov dx,8` pays the operand-size prefix a clock where gcc
+    /// writes `movl $8,%ecx` (crc -Os: 9 clk over the bar). +1 B a site, also
+    /// where bytes are strict. Off: the pin's form.
+    pub widen_word_immediate: bool,
+    /// A tied add or sub whose source dies is made a three-address `lea` when
+    /// the sum ends in a known register and the source's own register is not
+    /// known (DEVIATE TA-11, owner x86-m32-b, exit 2026-11-24): the pin's
+    /// `isProfitableToConv3Addr` needs both maps, and a source that is a
+    /// loop phi has none in the exit block, so the sum is added in the
+    /// source's register and copied (fib -Os: `add esi,edi; mov eax,esi`
+    /// where gcc writes `lea eax,[ebx+esi]`). Off: the pin's rule.
+    pub three_address_to_known_register: bool,
     /// PHIElimination lowers phis of different blocks through one register
     /// where they read the same value from every predecessor they share
     /// (DEVIATE PHI-SHARE, owner x87, exit 2026-11-29): the pin shares only
@@ -56,16 +81,32 @@ pub struct CpuTable {
     /// phis differ in the preheader alone, are carried twice through the
     /// loop. Off: the pin's rule.
     pub share_congruent_phis: bool,
+    /// The branch of a select made into a diamond (`EmitLoweredSelect`) is
+    /// stated the odds its flags carry: an x86 `jp` after a float compare is
+    /// the unordered case, 1 in 2^20 as `BranchProbabilityInfo` has it for the
+    /// branch (DEVIATE UNORDERED-ODDS, owner x87, exit 2026-11-24; not at -Os).
+    /// The pin states none, so `MachineSink` reads 1 in 2 and keeps the NaN
+    /// constant in the hot predecessor (`SplitEdgeProbabilityThreshold`).
+    /// Off: the pin's rule.
+    pub unordered_branch_odds: bool,
     /// The pin's stand-alone `TailDuplicator` runs after allocation, once this
     /// target's A/B has been made (`TailDuplicate` slot). DEVIATE TD-M64 (owner
     /// greedy-subreg, exit 2026-11-12): on at m64 only; m32/m16 stay off until
     /// their sfm16 rows (+16/+4 B) are explained; the pin runs it everywhere.
     pub post_ra_tail_duplicate: bool,
-    /// Runs of equal literal stores outside loops share a register at -O2/-O3 too, where
-    /// the bytes outweigh the clock of loading it (DEVIATE ISS1, owner
-    /// x86-m32, exit 2026-11-30): -Os does it everywhere, -O1 never. Off: the pin's
-    /// `MOV32mi`s.
+    /// `BranchFolder::TailMergeBlocks` as the pin runs it: no hot-cycle guard and no three-block minimum
+    /// (T14 and D1 of jumps-tailmerge-check.md lifted). Off: the guards stand.
+    pub tail_merge_pin_faithful: bool,
+    /// Runs of equal literal stores outside loops share a register where bytes are strict (DEVIATE ISS1,
+    /// owner x86-m32, exit 2026-11-30); -Os always. Off: the pin's `MOV32mi`s.
     pub share_literal_stores: bool,
+    /// The same at -O1 to -O3, where the bytes outweigh the clock of loading the register. Off where
+    /// clocks decide the cell: the `xor` and the register stores cost more than the immediates.
+    pub share_literal_stores_at_speed: bool,
+    /// A `movzx` of a register into itself is `and r, mask` where the flags are dead and bytes
+    /// are priced at speed: gcc's `X86_TUNE_ZERO_EXTEND_WITH_AND`, set for the 486 and Pentium
+    /// (DEVIATE ZEXT-AND, owner x86-m32-b, exit 2026-11-24). Off: the pin's `movzx`.
+    pub zero_extend_with_and: bool,
     /// Constant-pool bytes are a strict axis of the target's ranking: a fold that makes a new pool cell is off
     /// (DEVIATE FF2, `floatfold.rs`).
     pub pool_data_strict: bool,
@@ -226,12 +267,19 @@ impl Timings {
                     ("scalars", "line_fill_clocks") => table.line_fill_clocks = Some(number()?),
                     ("scalars", "tail_dup_placement_threshold") => table.tail_dup_placement_threshold = Some(number()?),
                     ("scalars", "tail_dup_hot_threshold") => table.tail_dup_hot_threshold = Some(number()?),
+                    ("scalars", "loop_top_prices_jumps") => table.loop_top_prices_jumps = number()? != 0,
                     ("scalars", "mispredict_penalty") => table.mispredict_penalty = Some(number()?),
                     ("scalars", "mispredict_penalty_size") => table.mispredict_penalty_size = Some(number()?),
                     ("scalars", "commute_loop_carried") => table.commute_loop_carried = number()? != 0,
+                    ("scalars", "widen_word_immediate") => table.widen_word_immediate = number()? != 0,
+                    ("scalars", "three_address_to_known_register") => table.three_address_to_known_register = number()? != 0,
                     ("scalars", "share_congruent_phis") => table.share_congruent_phis = number()? != 0,
                     ("scalars", "post_ra_tail_duplicate") => table.post_ra_tail_duplicate = number()? != 0,
+                    ("scalars", "tail_merge_pin_faithful") => table.tail_merge_pin_faithful = number()? != 0,
+                    ("scalars", "unordered_branch_odds") => table.unordered_branch_odds = number()? != 0,
                     ("scalars", "share_literal_stores") => table.share_literal_stores = number()? != 0,
+                    ("scalars", "share_literal_stores_at_speed") => table.share_literal_stores_at_speed = number()? != 0,
+                    ("scalars", "zero_extend_with_and") => table.zero_extend_with_and = number()? != 0,
                     ("scalars", "pool_data_strict") => table.pool_data_strict = number()? != 0,
                     ("scalars", "size_one_is_xor_inc") => table.size_one_is_xor_inc = number()? != 0,
                     ("scalars", "branch_constant_selects") => table.branch_constant_selects = number()? as u32,

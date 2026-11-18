@@ -334,6 +334,7 @@ fn main() -> ExitCode {
                     opt_level: 2,
                     opt_size: false,
                     options: jam_options.clone(),
+                    needs_vectors: false,
                 });
                 let tti: std::rc::Rc<dyn llrm_mir::target::Machine> = std::rc::Rc::new(llrm_mir::target::Neutral);
                 if let Err(error) = manager.run_module(&mut module, tti) {
@@ -374,6 +375,7 @@ fn main() -> ExitCode {
                     target_unrolling: false,
                     // The early full-unroll slot of the default pipeline, where inlining is on.
                     inliner_follows: true,
+                    speed_rate: true,
                 };
                 let names: Vec<String> = module
                     .functions()

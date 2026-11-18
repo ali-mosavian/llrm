@@ -97,7 +97,11 @@ pub fn machine(
     target: &dyn llrm_target::Target,
     os: &crate::Os,
 ) -> llrm_codegen::abi::machine::Machine {
-    llrm_codegen::abi::machine::Machine { far_bss: os.far_bss, ..target.machine() }
+    let mut machine = llrm_codegen::abi::machine::Machine { far_bss: os.far_bss, ..target.machine() };
+    if let Some(segments) = machine.segments.as_mut() {
+        segments.stack_shares_data = os.stack_shares_data;
+    }
+    machine
 }
 
 /// `module` as an object file of `format`, its code laid out as `layout` says.

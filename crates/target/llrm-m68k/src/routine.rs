@@ -55,6 +55,98 @@ pub fn mulsi3_clocks(
     }
 }
 
+/// Bytes of `__mulsi3` a program that calls it links (assembled `mulsi3.s`, 2026-11-15): 54 at the 68000 and
+/// 68010, 12 from the 68020. A trial counts them against a build that calls the routine and another that does not.
+pub fn mulsi3_bytes(cpu: crate::dagisel::hooks::Cpu) -> usize {
+    if cpu.at_least(crate::dagisel::hooks::Cpu::M68020) { 12 } else { 54 }
+}
+
+/// Whether a function of `module` other than `except` multiplies two variables, which a CPU without a long multiply
+/// calls `__mulsi3` for: the routine is then linked whatever a trial chooses for `except` (its own calls show in its
+/// items; two narrow operands are a `muls`, so this may say yes where the other function does not call).
+pub fn another_function_multiplies_variables(
+    module: &llrm_mir::module::Module,
+    except: &str,
+    cpu: crate::dagisel::hooks::Cpu,
+) -> bool {
+    use llrm_mir::module::Operand;
+    use llrm_mir::opcode::{BinaryOp, Opcode};
+    if cpu.at_least(crate::dagisel::hooks::Cpu::M68020) {
+        return false;
+    }
+    module
+        .functions()
+        .filter(|(_, global, function)| !function.is_declaration() && global.name.owned().as_deref() != Some(except))
+        .any(|(_, _, function)| {
+        function.walk().any(|(_, inst)| {
+            let instruction = function.instruction(inst);
+            matches!(instruction.opcode, Opcode::Binary(BinaryOp::Mul))
+                && !instruction.operands.iter().any(|operand| matches!(operand, Operand::Constant(_)))
+                && !is_halfword_product(module, function, instruction)
+        })
+    })
+}
+
+/// Whether `instruction`, a multiply, is the product of two operands each a sign (or each a zero) extension from
+/// at most 16 bits: `muls.w` or `mulu.w`, which never calls `__mulsi3` (`(long) raw * sval` in `qlight`, whose
+/// `* 1000000L` then kept the call and linked the routine for nothing else).
+fn is_halfword_product(
+    module: &llrm_mir::module::Module,
+    function: &llrm_mir::module::Function,
+    instruction: &llrm_mir::module::Instruction,
+) -> bool {
+    use llrm_mir::module::{Operand, ValueDef};
+    use llrm_mir::opcode::{CastOp, Opcode};
+    let extension = |operand: &Operand| {
+        let Operand::Value(value) = operand else { return None };
+        let ValueDef::Instruction(def) = function.value(*value).def else { return None };
+        let cast = function.instruction(def);
+        let Opcode::Cast(op @ (CastOp::SExt | CastOp::ZExt)) = cast.opcode else { return None };
+        let from = function.operand_type(&module.context, cast.operands[0])?;
+        module.context.types.int_bits(from).filter(|&bits| bits <= 16).map(|_| op)
+    };
+    match instruction.operands.as_slice() {
+        [left, right] => extension(left).is_some() && extension(left) == extension(right),
+        _ => false,
+    }
+}
+
+/// The bytes of `__mulsi3` a trial charges the build of `except` that calls it: none where another function
+/// multiplies variables (the routine is linked anyway), else the routine shared by this function and every other
+/// that multiplies or divides by a constant, which may call it too. Each of six functions of `urem_eq` saw the
+/// whole 54 B saved by its own chain and took it: +64 B for the module, the routine still saved only once.
+pub fn mulsi3_share(
+    module: &llrm_mir::module::Module,
+    except: &str,
+    cpu: crate::dagisel::hooks::Cpu,
+    price: crate::timing::Price,
+) -> usize {
+    use llrm_mir::module::Operand;
+    use llrm_mir::opcode::{BinaryOp, Opcode};
+    if cpu.at_least(crate::dagisel::hooks::Cpu::M68020) || another_function_multiplies_variables(module, except, cpu) {
+        return 0;
+    }
+    // where clocks count too, the whole routine is the build's, as before: sharing it flipped `urem_eq` -O1 to
+    // the calls, 8.4 M to 12.9 M clocks
+    if price != crate::timing::Price::Size {
+        return mulsi3_bytes(cpu);
+    }
+    let by_constant = module
+        .functions()
+        .filter(|(_, global, function)| !function.is_declaration() && global.name.owned().as_deref() != Some(except))
+        .filter(|(_, _, function)| {
+            function.walk().any(|(_, inst)| {
+                let instruction = function.instruction(inst);
+                matches!(
+                    instruction.opcode,
+                    Opcode::Binary(BinaryOp::Mul | BinaryOp::UDiv | BinaryOp::SDiv | BinaryOp::URem | BinaryOp::SRem)
+                ) && instruction.operands.iter().any(|operand| matches!(operand, Operand::Constant(_)))
+            })
+        })
+        .count();
+    mulsi3_bytes(cpu) / (1 + by_constant)
+}
+
 /// [`mulsi3_clocks`] with `b` = 1: the floor a trial counts for a call.
 pub fn mulsi3_floor(cpu: crate::dagisel::hooks::Cpu) -> u32 {
     mulsi3_clocks(cpu, 1)

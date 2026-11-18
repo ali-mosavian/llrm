@@ -27,6 +27,8 @@ exit:
 ";
 
 thread_local! {
+    /// `phi_users_first` for the next `with_flagged_users` (DEVIATE IU1).
+    static PHI_FIRST: Cell<bool> = const { Cell::new(false) };
     /// How many sets grew while the last `with_users` made its users.
     static GROWN: Cell<usize> = const { Cell::new(0) };
 }
@@ -83,7 +85,7 @@ fn with_flagged_users(
         asked.set(asked.get() + 1);
         true
     };
-    let env = Env { safe_to_speculate: &safe, ephemeral: &|_| false, native_widths: &[], use_list_order, phi_operand_uses };
+    let env = Env { safe_to_speculate: &safe, ephemeral: &|_| false, native_widths: &[], use_list_order, phi_operand_uses, phi_users_first: PHI_FIRST.with(Cell::get) };
     let grown = llrm_mir::dense::idset_resizes::<InstId>();
     let users = IvUsers::of(&mut se, &cx, header, &env);
     GROWN.with(|n| n.set(llrm_mir::dense::idset_resizes::<InstId>() - grown));
@@ -211,7 +213,7 @@ fn test_the_block_places_are_made_once_for_all_the_loops_of_a_function() {
         assumptions: &assumptions,
     };
     let mut se = ScalarEvolution::new();
-    let env = Env { safe_to_speculate: &|_| true, ephemeral: &|_| false, native_widths: &[], use_list_order: false, phi_operand_uses: false };
+    let env = Env { safe_to_speculate: &|_| true, ephemeral: &|_| false, native_widths: &[], use_list_order: false, phi_operand_uses: false, phi_users_first: false };
     let before = llrm_mir::module::block_places_built();
     let headers: Vec<_> = loops.top_level_loops().map(|one| one.get_header()).collect();
     assert_eq!(headers.len(), 6);
@@ -286,7 +288,7 @@ fn users_on_a_16_bit_native_target(text: &str) -> Vec<String> {
     };
     let mut se = ScalarEvolution::new();
     let header = loops.top_level_loops().next().expect("a loop").get_header();
-    let env = Env { safe_to_speculate: &|_: InstId| true, ephemeral: &|_| false, native_widths: &[16], use_list_order: false, phi_operand_uses: false };
+    let env = Env { safe_to_speculate: &|_: InstId| true, ephemeral: &|_| false, native_widths: &[16], use_list_order: false, phi_operand_uses: false, phi_users_first: false };
     let users = IvUsers::of(&mut se, &cx, header, &env);
     users.uses.iter().map(|u| format!("{:?}", function.instruction(u.user).opcode)).collect()
 }
@@ -409,4 +411,50 @@ exit:
     assert_eq!(phi_operands(false).len(), 1, "the pin keeps one operand: {:?}", phi_operands(false));
     let both = phi_operands(true);
     assert_eq!(both.iter().map(|(_, v)| v.trim_start_matches('%')).collect::<Vec<_>>(), ["pa", "pb"], "{both:?}");
+}
+
+/// DEVIATE IU1, phis first. div_constants_ulong m64 -O1: a phi merges `i`,
+/// `16 - i` and more; the pin's "do not recurse into a phi twice" keeps the
+/// operand it meets first and drops the rest, so a phi met first leaves `16 - i`
+/// computed in place. In use-list order a re-added `16 - i` was met before the
+/// phi, which took it as the phi's use: a second counter, one more
+/// callee-saved push (4334 B against 4173 B).
+#[test]
+fn a_phi_is_met_before_the_other_users_of_a_counter_in_use_list_order() {
+    let text = "define i32 @f(i32 %n) {
+entry:
+  br label %loop
+loop:
+  %i = phi i32 [ 0, %entry ], [ %next, %latch ]
+  %c = icmp ult i32 %i, 6
+  br i1 %c, label %a, label %b
+a:
+  br label %latch
+b:
+  %s = sub nuw nsw i32 16, %i
+  br label %latch
+latch:
+  %p = phi i32 [ %i, %a ], [ %s, %b ]
+  store volatile i32 %p, ptr null
+  %next = add nuw nsw i32 %i, 1
+  %e = icmp eq i32 %next, %n
+  br i1 %e, label %exit, label %loop
+exit:
+  ret i32 0
+}
+";
+    let edit = |module: &mut llrm_mir::module::Module| {
+        let (_, function) = module.function_mut("f").expect("@f");
+        // An edit re-adds the use: `%s` becomes the newest user of `%i`.
+        let s = function.iter_block(function.layout()[3]).next().expect("%s");
+        let index = function.instruction(s).operands[1];
+        function.set_operand(s, 1, index);
+    };
+    let mut found = Vec::new();
+    PHI_FIRST.with(|one| one.set(true));
+    with_edited_users(text, true, edit, |cx, _, users, _, _| {
+        found = users.uses.iter().map(|u| named(cx, u)).filter(|(opcode, _)| opcode == "Phi").collect();
+    });
+    PHI_FIRST.with(|one| one.set(false));
+    assert_eq!(found, [("Phi".to_owned(), "i".to_owned())], "the phi's use is the counter itself: {found:?}");
 }

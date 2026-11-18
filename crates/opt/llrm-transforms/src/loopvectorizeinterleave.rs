@@ -90,6 +90,26 @@ pub(crate) struct Interleaving {
     pub reductions: Vec<Reduction>,
 }
 
+/// `Op2Info` of an unsigned divide or remainder: a constant divisor is a few
+/// multiplies on a target that says so, not a division. Other operations
+/// carry none.
+pub(crate) fn divisor_info(
+    context: &Context,
+    op: BinaryOp,
+    divisor: Operand,
+    ty: Ty,
+) -> llrm_mir::tti::OperandInfo {
+    let (Operand::Constant(id), Ty::Int(width), BinaryOp::UDiv | BinaryOp::URem | BinaryOp::SDiv | BinaryOp::SRem) =
+        (divisor, ty, op)
+    else {
+        return Default::default();
+    };
+    match context.get(id).kind {
+        ConstantKind::Int(bits) => llrm_mir::tti::OperandInfo::constant(bits as i128, width),
+        _ => Default::default(),
+    }
+}
+
 /// The `ArithOp` that prices an integer `BinaryOp`, if the cost model knows it.
 fn arith_of(op: BinaryOp) -> Option<ArithOp> {
     Some(match op {
@@ -130,8 +150,50 @@ pub(crate) fn cast_kind(op: CastOp) -> Option<CastKind> {
     })
 }
 
+/// The reduction a header phi is, or why the loop is left alone: a kind with an
+/// identity, whose update is in the loop and is the only value (with the phi
+/// itself, by the update) read after it.
+pub(crate) fn reduction_of(
+    function: &Function,
+    legality: &Legality,
+    header: BlockId,
+    phi: InstId,
+    used_after_loop: impl Fn(ValueId) -> bool,
+) -> Result<Reduction, Skipped> {
+    let Some((_, descriptor)) = legality.reductions.iter().find(|(one, _)| *one == phi) else {
+        return Err(Skipped("A header phi other than the induction and the reductions"));
+    };
+    if reduction_op(descriptor.kind).is_none() {
+        return Err(Skipped("A reduction that is not add, mul, and, or or xor"));
+    }
+    if descriptor.has_uses_outside_reduction_chain() || descriptor.intermediate_store.is_some() {
+        return Err(Skipped("A reduction used other than by its chain"));
+    }
+    let back = arms(function, phi).into_iter().find(|&(_, from)| from == header).map(|(value, _)| value);
+    let latch = match back {
+        Some(Operand::Value(value)) => match function.value(value).def {
+            ValueDef::Instruction(def) if function.parent(def) == Some(header) => def,
+            _ => return Err(Skipped("A reduction whose update is not in the loop")),
+        },
+        _ => return Err(Skipped("A reduction whose update is not in the loop")),
+    };
+    if descriptor.loop_exit_instr.is_some_and(|one| one != latch) {
+        return Err(Skipped("A reduction whose used value is not its update"));
+    }
+    if used_after_loop(function.instruction(phi).result.expect("a phi")) {
+        return Err(Skipped("A reduction phi used after the loop"));
+    }
+    Ok(Reduction {
+        phi,
+        kind: descriptor.kind,
+        latch,
+        start: descriptor.start_value,
+        ty: function.instruction(phi).ty,
+    })
+}
+
 /// The operation a reduction of `kind` folds with, and its identity.
-fn reduction_op(kind: RecurKind) -> Option<(BinaryOp, u128)> {
+pub(crate) fn reduction_op(kind: RecurKind) -> Option<(BinaryOp, u128)> {
     Some(match kind {
         RecurKind::Add => (BinaryOp::Add, 0),
         RecurKind::Mul => (BinaryOp::Mul, 1),
@@ -278,37 +340,8 @@ pub(crate) fn extract(
         }
         match data.opcode {
             Opcode::Phi => {
-                let Some((_, descriptor)) = legality.reductions.iter().find(|(phi, _)| *phi == inst) else {
-                    return Err(Skipped("A header phi other than the induction and the reductions"));
-                };
-                if reduction_op(descriptor.kind).is_none() {
-                    return Err(Skipped("A reduction that is not add, mul, and, or or xor"));
-                }
-                if descriptor.has_uses_outside_reduction_chain() || descriptor.intermediate_store.is_some() {
-                    return Err(Skipped("A reduction used other than by its chain"));
-                }
-                let back = arms(function, inst).into_iter().find(|&(_, from)| from == header).map(|(value, _)| value);
-                let latch = match back {
-                    Some(Operand::Value(value)) => match function.value(value).def {
-                        ValueDef::Instruction(def) if function.parent(def) == Some(header) => def,
-                        _ => return Err(Skipped("A reduction whose update is not in the loop")),
-                    },
-                    _ => return Err(Skipped("A reduction whose update is not in the loop")),
-                };
-                if descriptor.loop_exit_instr.is_some_and(|one| one != latch) {
-                    return Err(Skipped("A reduction whose used value is not its update"));
-                }
-                let result = function.instruction(inst).result.expect("a phi");
-                if outside(result, false) {
-                    return Err(Skipped("A reduction phi used after the loop"));
-                }
-                reductions.push(Reduction {
-                    phi: inst,
-                    kind: descriptor.kind,
-                    latch,
-                    start: descriptor.start_value,
-                    ty: function.instruction(inst).ty,
-                });
+                let reduction = reduction_of(function, legality, header, inst, |value| outside(value, false))?;
+                reductions.push(reduction);
                 cost += tti.cf_instr_cost(true, kind).value;
             }
             Opcode::GetElementPtr { .. } => body.push(inst),
@@ -346,7 +379,9 @@ pub(crate) fn extract(
                 // interleave group) have costs of their own, which this port
                 // does not price; any other pattern is
                 // scalarized (NEON has no gather or scatter).
-                priced.push(match get_ptr_stride(se, cx, value_ty, ptr, header, &strides, true) {
+                let step = get_ptr_stride(se, cx, value_ty, ptr, header, &strides, true);
+                let bytes = (cx.layout.size_bits(&cx.context.types, value_ty) / 8) as i64;
+                priced.push(match step {
                     Some(1) => {
                         if is_load {
                             Recipe::Load { lane, align }
@@ -355,7 +390,7 @@ pub(crate) fn extract(
                         }
                     }
                     Some(-4..=4) => Recipe::Unpriced { scalar_cost: scalar },
-                    _ => Recipe::Scalarized { op, lane },
+                    _ => Recipe::Scalarized { op, lane, stride_bytes: step.map(|stride| stride * bytes) },
                 });
                 if is_load {
                     loads += 1;
@@ -369,12 +404,13 @@ pub(crate) fn extract(
             Opcode::Binary(op) => {
                 let arith = arith_of(op).ok_or(Skipped("A binary operation the cost model does not know"))?;
                 let ty = scalar_ty(cx, data.ty).ok_or(Skipped("An element type the target has no cost for"))?;
-                let price = tti.arithmetic_cost(arith, ty, kind, Default::default(), Default::default());
+                let second = divisor_info(cx.context, op, data.operands[1], ty);
+                let price = tti.arithmetic_cost(arith, ty, kind, Default::default(), second);
                 if !price.valid {
                     return Err(Skipped("An operation the target does not price"));
                 }
                 cost += price.value;
-                priced.push(Recipe::Binary { op: arith, lane: ty });
+                priced.push(Recipe::Binary { op: arith, lane: ty, ext: [None, None], second });
                 let extended = |operand: Operand| {
                     matches!(
                         operand,
@@ -411,7 +447,7 @@ pub(crate) fn extract(
                     }
                     cost += price.value;
                 }
-                priced.push(Recipe::Cast { kind: ck, dst, src, folded });
+                priced.push(Recipe::Cast { kind: ck, dst, src, folded, users: Vec::new() });
                 body.push(inst);
             }
             Opcode::ICmp(_) | Opcode::FCmp(_) | Opcode::Select => {
@@ -483,7 +519,7 @@ pub(crate) fn extract(
     }
 
     let (users, invariants) = register_usage(function, header, &body, &reductions, primary);
-    let shape = Shape { header, preheader, exit, primary, compare, bound_operand, index_ty };
+    let shape = Shape { header, preheader, exit, primary, compare, bound_operand, index_ty, reverse: false, scale: 1, tests_phi: false };
     Ok(Extracted {
         interleaving: Interleaving { shape, step, step_operand, step_in_body, body, reductions },
         cost,
@@ -561,7 +597,7 @@ fn int_constant(
 }
 
 /// The identity of a reduction as a constant of its type.
-fn identity(
+pub(crate) fn identity(
     context: &Context,
     reduction: &Reduction,
     value: u128,
@@ -704,9 +740,25 @@ pub(crate) fn execute(
         }
         folded.push(total);
     }
+    hand_on(function, shape, skeleton, middle, reductions, &folded);
+}
+
+/// What follows the middle block's fold of the reductions: the exit block
+/// reads each total from the middle block (and the remainder's own last value
+/// from the remainder), and the remainder resumes each reduction from its total
+/// (`bc.merge.rdx`), or from its start where the vector loop was skipped.
+/// `totals[i]` is the value of `reductions[i]` after the vector loop.
+pub(crate) fn hand_on(
+    function: &mut Function,
+    shape: &Shape,
+    skeleton: &Skeleton,
+    middle: BlockId,
+    reductions: &[Reduction],
+    totals: &[Operand],
+) {
     let exit = shape.exit;
     let remainder_block = skeleton.remainder.as_ref().map(|(block, _)| *block);
-    for (reduction, total) in reductions.iter().zip(&folded) {
+    for (reduction, total) in reductions.iter().zip(totals) {
         let original = Operand::Value(function.instruction(reduction.latch).result.expect("an update"));
         let copy_in_remainder = skeleton.remainder.as_ref().map(|(_, pairs)| {
             let phi = pairs.iter().find(|(from, _)| *from == reduction.phi).expect("the copy of the phi").1;

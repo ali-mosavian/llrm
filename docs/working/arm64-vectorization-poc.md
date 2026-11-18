@@ -82,7 +82,7 @@ Next piece by loop count: induction from any start + fill (splat) + reverse = ~1
 
 ## Review fixes (2026-11-11, w15-arm64)
 
-- LV-M1: a loop LAA can only separate at run time (`RuntimePointerChecking::need`) stays scalar; the pin builds `vector.memcheck` (L1637). `b[i] = a[i]` over plain pointers was widened with no overlap test. Exit 2026-11-24.
+- LV-M1 (closed by slice 6): a loop LAA can only separate at run time (`RuntimePointerChecking::need`) is guarded by `vector.memcheck` (L1637), as the pin. Open: LV-M2, `isOutsideLoopWorkProfitable` (L7185) is not translated: the planner exposes no per-iteration costs and no TTI price of the check block, so a short loop may be widened where the pin's minimum trip count refuses it. Owner llrm-arm64-vec (planner), exit 2026-11-24. The SCEV-predicate checks (`vector.scevcheck`) stay out (LV-D5).
 - LV-F1: no loop is widened at -O1 (`VectorizeOnlyWhenForced`); the earlier O1 scroll rows no longer apply. Exit 2026-11-24.
 - IC is 1 wherever no epilogue is allowed (tiny trip count too), as `selectInterleaveCount` L3705.
 - `LLRM_ARM64_VECTORS=0` is off.
@@ -90,7 +90,7 @@ Next piece by loop count: induction from any start + fill (splat) + reverse = ~1
 
 ## LV-X2: integer binary operations (2026-11-11)
 
-- **LV-OS (2026-11-11, oversight ruling): no vectorizing at -Os/-Oz** (`optsize`/`minsize`). The pin widens an optsize loop whose trip count VF divides; flag on that added bytes at Os (histo +4, scroll +4, jpeg_fixed +24, jpeg_single +16). Owner llrm-arm64-vec, exit 2026-11-24: the cause card, then the gate goes.
+- **LV-OS (2026-11-11, retired 2026-11-15): no vectorizing at -Os/-Oz.** Gone: an optsize loop whose trip count VF divides is widened as the pin does (`isScalarEpilogueAllowed`); bytes grow on 6 Os cells, row ARM64-LVOS-BYTES.
 
 - Pass: LoopVectorize `VPWidenRecipe` (widen `add`, `sub`, `mul`, `and`, `or`, `xor`, `shl`, `lshr`, `ashr` over loaded and loop-invariant operands); NEON `addTypeForNEON`, `LowerVectorSRA_SRL_SHL`.
 - Planner: the PIN rows already priced `add`; `mul <2 x i64>` is invalid (the pin leaves it scalar).
@@ -114,7 +114,7 @@ Next piece by loop count: induction from any start + fill (splat) + reverse = ~1
 - **Pass:** LoopVectorize `VPWidenCastRecipe`; `LegalizeVectorTypes.cpp` (`SplitVectorResult` L1375, `SplitVectorOperand` L3779, `SplitVecRes_ExtendOp` L3050, `SplitVecOp_TruncateHelper` L4841, `WidenVectorResult` L5223); AArch64 `addDRType` (L2752) / `addQRType`.
 - **Why it is more than SplitVector:** `sext <8 x i16>` to `<8 x i64>` splits to four `<2 x i64>` results with `<2 x i16>` sources. In order: (1) 64-bit D-register vectors legal (v8i8, v4i16, v2i32, v1i64), (2) SplitVector, (3) WidenVector for what stays under 64 bits, (4) ext/trunc lowering (`sshll`, `ushll`, `xtn`). Skipping (1) means widening everything to 128 bits: output unlike the pin.
 - **Cells:** histo:21 (`<16 x i16>`, trunc to `<16 x i8>`), particle init (`<8 x i64>`, trunc), recsum (`sext <2 x i32>`), scroll:28, plus the widened induction (`vec.ind`) they use.
-- **Slices:** (1) D-register types and their selection; (2) SplitVector for load, store, binary, shift; (3) casts and `vec.ind` in the vectorizer. No date; after LV-X3a.
+- **Slices:** (1) D-register types and their selection; (2) SplitVector for load, store, binary, shift; (3) casts in the vectorizer; `vec.ind` (integer induction, plain or truncated) landed with WI 2026-11-13 (llrm-arm64-lv). No date; after LV-X3a.
 
 ## LV-W: widening plan for the counted cells (2026-11-12, tip b227f477a5, card; owner llrm-arm64-vec)
 
@@ -133,7 +133,7 @@ Slices (pin function in the PR body; each: fail-first, per-target md5 identity, 
 4. **Strided accesses** (`CM_Scalarize` replicate recipes, `VPReplicateRecipe`, the pin's `getMemInstScalarizationCost` already priced in #9473): jpeg_single pass 1 (`cosine[x][u]`), stft `tw[j*stride]`.
 5. **Binary result used by other than store/binary** (select, compare, reduction users): jpeg_fixed :165, reductions (`VPReductionPHIRecipe`, horizontal add).
 6. **Runtime alias checks** (`vector.memcheck`, `RuntimePointerChecking::generateChecks`, LV-M1): stft :52/:74, the O3 gcc bar. Own slice.
-LV-OS gate stays (DEVIATE LV-OS, exit 2026-11-24 cause card). Bytes at O2 vs gcc: jpeg_single +980 B, jpeg_fixed +1,540 B (O2 rate cells: +0.3 net per byte, 294/462 instrs against gaps of 1.33M/0.95M); gcc does not unroll at O2, not a vector cause.
+Bytes at O2 vs gcc: jpeg_single +980 B, jpeg_fixed +1,540 B (O2 rate cells: +0.3 net per byte, 294/462 instrs against gaps of 1.33M/0.95M); gcc does not unroll at O2, not a vector cause.
 
 ## LV-W2: what blocks the counted loops after slices 1-4 (2026-11-13, head 65d632f9a8; owner llrm-arm64-vec)
 

@@ -37,6 +37,16 @@ pub trait TargetInstrInfo {
         what: &Semantics,
     ) -> bool;
 
+    /// `MachineInstr::canFoldAsLoad`: whether `what` is a load that
+    /// `foldMemoryOperand` may fold into its one reader (X86 `MOV`, `MOVSS`,
+    /// `MOVSD`, `MOVAPS`... `rm` forms have `canFoldAsLoad = 1`).
+    fn can_fold_as_load(
+        &self,
+        what: &Semantics,
+    ) -> bool {
+        self.is_plain_move(what)
+    }
+
     /// `BuildMI(COPY)`: a copy of `from` into `to`, `width` bytes.
     fn copy_semantics(
         &self,
@@ -309,6 +319,17 @@ impl TargetInstrInfo for X86InstrInfo<'_> {
         what: &Semantics,
     ) -> bool {
         what.op == Operation::Move && what.name.as_deref() == Some("mov")
+    }
+
+    fn can_fold_as_load(
+        &self,
+        what: &Semantics,
+    ) -> bool {
+        what.op == Operation::Move
+            && matches!(
+                what.name.as_deref(),
+                Some("mov" | "movss" | "movsd_x" | "movaps" | "movups" | "movapd" | "movupd" | "movdqa" | "movdqu")
+            )
     }
 
     fn copy_semantics(

@@ -80,6 +80,8 @@ def Z80ldirg : SDNode<"Z80ISD::LDIRG", SDTZ80Ldir, [SDNPHasChain, SDNPMayLoad, S
 // (so the count is one less than the bytes filled, and nonzero). `de` is made from the pointer by the expansion.
 def SDTZ80Fill : SDTypeProfile<0, 3, [SDTCisVT<0, i16>, SDTCisVT<1, i8>, SDTCisVT<2, i16>]>;
 def Z80ldfill : SDNode<"Z80ISD::LDFILL", SDTZ80Fill, [SDNPHasChain, SDNPMayStore]>;
+// A fill of any count (the bytes filled, zero allowed): the expansion tests it, as LDIRG does a copy's.
+def Z80ldfillg : SDNode<"Z80ISD::LDFILLG", SDTZ80Fill, [SDNPHasChain, SDNPMayStore]>;
 // A 64-bit value in eight bytes of memory shifted in place by a count of bits: the node carries the address of the low
 // byte (of the high byte for a right shift), the count in BC, and the kind (0 shl, 1 lshr, 2 ashr). One loop, a bit a trip.
 def SDTZ80WShift : SDTypeProfile<0, 3, [SDTCisVT<0, i16>, SDTCisVT<1, i16>, SDTCisVT<2, i8>]>;
@@ -388,6 +390,11 @@ let mayLoad = 1, mayStore = 1, Defs = [HL, DE, BC, F] in
 let mayLoad = 1, mayStore = 1, Defs = [HL, DE, BC, F] in {
   def LDFILLi : Z80Inst<(outs), (ins HLR:$p, i8imm:$v, BCR:$n), "ldfill $p, $v, $n", [(Z80ldfill i16:$p, (i8 imm:$v), i16:$n)]>;
   def LDFILLr : Z80Inst<(outs), (ins HLR:$p, ACC:$v, BCR:$n), "ldfill $p, $v, $n", [(Z80ldfill i16:$p, i8:$v, i16:$n)]>;
+}
+// The same behind a test of the count (a, f clobbered): a count of zero or one skips the `ldir`.
+let mayLoad = 1, mayStore = 1, Defs = [HL, DE, BC, F, A] in {
+  def LDFILLGi : Z80Inst<(outs), (ins HLR:$p, i8imm:$v, BCR:$n), "ldfillg $p, $v, $n", [(Z80ldfillg i16:$p, (i8 imm:$v), i16:$n)]>;
+  def LDFILLGr : Z80Inst<(outs), (ins HLR:$p, ACC:$v, BCR:$n), "ldfillg $p, $v, $n", [(Z80ldfillg i16:$p, i8:$v, i16:$n)]>;
 }
 
 // `ld b, c; inc b; jr test; loop: push hl; sla (hl) or srl/sra (hl); (inc or dec hl; rl or rr (hl)) x 7; pop hl; test: djnz loop`.

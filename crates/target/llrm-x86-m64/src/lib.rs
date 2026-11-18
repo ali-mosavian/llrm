@@ -416,6 +416,12 @@ impl llrm_target::Target for M64 {
                     .map(|one| {
                         one.with_tuning(llrm_mir::target::Tuning {
                             inline_size_guard_at_size: true,
+                            // DEVIATE LFTR-SIZE (owner llrm-target-x86-m64, exit 2026-11-24; gcc-bar only): see
+                            // Tuning. m64 -Os 22 files smaller (-189 B), sieve +1 cell, spill_store_order +16 B.
+                            lftr_size_budget: 1,
+                            // DEVIATE OS-INLINE-GROWTH (owner llrm-target-x86-m64, exit 2026-11-24; gcc-bar only): see
+                            // Tuning. m64 -Os sfm16_float_* -39 B each, vla_callee_constant +8 B.
+                            inline_trial_defers_to_shared_growth: true,
                             // DEVIATE IPRA-DSO-LOCAL (owner llrm-target-x86-m64, exit 2026-11-24): see Tuning.
                             ipra_binds_local: true,
                             // DEVIATE SD443 (owner w9, exit: a constant-argument pass after
@@ -431,10 +437,28 @@ impl llrm_target::Target for M64 {
                             load_pre_off_at_size: true,
                             merge_functions_at_size: true,
                             rep_movs_at_size: true,
+                            rep_movs_at_size_max: u64::MAX,
                             // DEVIATE IU1 (owner llrm-target-x86-m64, exit 2026-11-24): see
                             // `Tti::lsr_users_in_use_list_order`.
                             lsr_users_in_use_list_order: true,
+                            // DEVIATE IU1 (owner llrm-target-x86-m64, exit 2026-11-24): see
+                            // `Tti::lsr_phi_users_first`.
+                            lsr_phi_users_first: true,
                             lsr_size_order: true,
+                            // DEVIATE LSR-DROP-AT-SIZE (owner llrm-target-x86-m64-b, exit 2026-11-30): see Tuning.
+                            lsr_drop_worse_at_size: true,
+                            // Pin order: visitADD's or-disjoint, then pushAddIntoCmovOfConsts; see Tuning.
+                            add_to_or_disjoint: true,
+                            // DEVIATE LV-OS (owner llrm-target-x86-m64, exit 2026-11-24): see Tuning.
+                            vectorize_at_size: false,
+                            // DEVIATE LV-BW (owner llrm-target-x86-m64-b, exit 2026-11-24): see Tuning.
+                            maximize_vector_bandwidth: true,
+                            // DEVIATE LV-ACC (owner llrm-target-x86-m64-b, exit 2026-11-30): see Tuning.
+                            narrow_reduction_accumulators: true,
+                            // DEVIATE LV-BW-DIV (owner llrm-target-x86-m64-b, exit 2026-11-30): see Tuning.
+                            bandwidth_vf_without_epilogue: true,
+                            // LI-18 (owner llrm-target-x86-m64-b): `bsr`/`bsf` are one instruction.
+                            shift_loop_counts: true,
                             lsr_size_x86_64: true,
                             // DEVIATE MUL-OS64 (owner w9, exit 2026-11-20): the m32 MUL-OS entry
                             // at m64; gcc keeps the 3-byte `imul` at -Os where the pin makes
@@ -442,6 +466,7 @@ impl llrm_target::Target for M64 {
                             // against the old selector.
                             imul_at_size: true,
                             rep_stos_at_size: true,
+                            rep_stos_at_size_max: u64::MAX,
                             // DEVIATE REP-STOS-UNIT (owner llrm-target-x86-m64, exit 2026-11-30): see
                             // `Tuning::rep_stos_priced_unit`. gcc fills a frame object with `rep stosb`.
                             rep_stos_priced_unit: true,
@@ -456,8 +481,12 @@ impl llrm_target::Target for M64 {
                             unroll_trial_at_o1: Some(150),
                             // DEVIATE CARRY-SI (owner x86-m64, exit 2026-11-21): see Tuning.
                             carry_slot_indexes: false,
-                            // DEVIATE RU-REC (owner x86-m64, exit 2026-11-20): see Tuning.
+                            // DEVIATE LSR-CONST (owner llrm-target-x86-m64-b, exit 2026-11-30): see Tuning.
+                            lsr_constant_setup_is_one: true,
+                            // DEVIATE RU-REC (owner x86-m64, exit 2026-11-24): see Tuning.
                             unroll_recurrence_veto: true,
+                            // DEVIATE BACKTHREAD-REL (owner llrm-target-x86-m64-b, exit 2026-12-15): see Tuning.
+                            threads_by_relation: true,
                             // DEVIATE SZ2 (owner m64, exit 2026-11-19): the bound holds a
                             // callee with one site too; the pin copies it (crc, floats,
                             // tile -Os: gcc keeps the call, +40 B each).
@@ -465,11 +494,13 @@ impl llrm_target::Target for M64 {
                             // DEVIATE UP1-REG at m64 (owner m64, exit 2026-11-20): promoted
                             // arrays that exceed the registers are not free (fpbench -O2
                             // +815 B for -75 clocks). The byte rate follows the clock pricing.
-                            // DEVIATE UP1 at m64 (owner m64, exit 2026-11-20, with
-                            // x86-m32's): a full unroll repays its bytes at 312
-                            // milliclocks a byte, the m64 net rate (fpbench -O2:
-                            // 6-trip fp nests, +815 B for -75 clocks, gcc keeps them).
-                            unroll_milliclocks_per_byte: 312,
+                            // UP1 is retired at m64: bytes are not counted at -O1..-O3
+                            // (ruling 2026-11-14), so a full unroll is the pin's threshold,
+                            // not a price. At 312 milliclocks a byte `rotate_small` kept its
+                            // 3-trip outer loop ("saves 18 clk, adds 241 B") and ran 6351
+                            // instructions; unrolled, 4442 (clang 5116 at -O3). The x86-m32 target
+                            // keeps its own rate.
+                            unroll_milliclocks_per_byte: 0,
                             unroll_prices_nest: true,
                             unroll_promotion_fits_registers: true,
                             // `mov m64, imm32`: sign-extended.
@@ -478,15 +509,16 @@ impl llrm_target::Target for M64 {
                             // DEVIATE SELOPT-C (owner m64-b, exit 2026-11-24): see
                             // `selectoptimize::SelectOptimizePass`.
                             branch_constant_arm_selects: true,
-                            // DEVIATE INL-O2 RATE at m64 (owner x86-m64, exit 2026-11-24), as x86-m32's:
-                            // a speed caller's inline pays the callee's bytes at the m64 net rate
-                            // (312 milliclocks a byte); gcc's `ipa-inline` takes a copy only where its
-                            // growth is small (shellsort -O2: main took a second 255 B copy of a
-                            // function that stays). -O1 and -Os unchanged.
-                            speed_inline_milliclocks_per_byte: 312,
+                            // INL-O2 RATE is retired at m64: bytes are not counted at -O1..-O3
+                            // (ruling 2026-11-14), so a speed caller's inline is the pin's
+                            // threshold, not a price in bytes. At 312 milliclocks a byte
+                            // loop_fusion kept `clear` a call (22 calls against 11); inlined, it
+                            // runs fewer instructions at -O2 and -O3. -O1 and -Os unchanged.
+                            speed_inline_milliclocks_per_byte: 0,
                             inline_trial_keeps_shrinking_copy: true,
                             // DEVIATE INL-O1-TRIAL-M64 (owner llrm-target-x86-m64, exit 2026-11-24): see Tuning.
                             inline_trials_at_o1: true,
+                            inline_chain_trial: true,
                             // DEVIATE SD103-M64 (owner x86-m64, exit 2026-11-24), as x86-m32's SD103-M32:
                             // the pin's cost rule, with the price of a merged `a && b` it omits taken
                             // from the table: two `setcc`, a logic op and a `test`, less the branch
@@ -556,6 +588,16 @@ impl llrm_target::Target for M64 {
                             immediate_forms_at_size: true,
                             // DEVIATE IPACP-O2 (owner w10, exit 2026-11-24): see Tuning.
                             ipa_cp_clones_at_speed: true,
+                            // DEVIATE IPACP-O3-M64 (owner x87-cordic-2, exit 2026-12-20): gcc clones `place`
+                            // for each row of queens; 4 left rows 4.. generic (+4.3% clk). 8 clones grow
+                            // each body past the unroll threshold: queens -O3 +2% instructions, so 7.
+                            ipa_cp_max_clones: 7,
+                            // DEVIATE UNROLL-O3 (owner llrm-target-x86-m64-b, exit 2026-11-30): see Tuning.
+                            unroll_threshold_at_o3: Some(400),
+                            // DEVIATE DIVCONST-SIZE (owner llrm-target-x86-m64-b, exit 2026-11-30): see Tuning.
+                            div_by_constant_size_cost: Some(4),
+                            // DEVIATE SP-O3 (owner llrm-target-x86-m64-b, exit 2026-11-30): see Tuning.
+                            split_paths_at_o3: true,
                             ..llrm_mir::target::Tuning::PIN
                         })
                     })
