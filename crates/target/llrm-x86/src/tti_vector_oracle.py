@@ -31,6 +31,12 @@ for n in LANES:
             if si and not di: ops = ["sitofp", "uitofp"]
             for o in ops:
                 casts.append((o, n, dn, sn))
+# A mask widened to the lanes of a compare's operands (`zext`/`sext` of `<n x i1>`).
+for n in LANES:
+    for dn, db in INTS.items():
+        if db * n <= MAX_BITS:
+            for o in ("zext", "sext"):
+                casts.append((o, n, dn, "i1"))
 others = []  # (text, (opname, type)) for each fp arithmetic and memory row
 for n in LANES:
     for tn, tb in FLTS.items():
@@ -42,6 +48,17 @@ for n in LANES:
         others.append((f"fneg {ty} %a{{i}}", ty, ("fneg", f"{n}x{tn}"), ty))
         others.append((f"load {ty}, ptr %p, align {tb // 8}", ty, ("load", f"{n}x{tn}"), ty))
         others.append((f"store {ty} %a{{i}}, ptr %p, align {tb // 8}", ty, ("store", f"{n}x{tn}"), ty))
+# Float compares by each predicate, and the selects the loop vectorizer makes of a mask.
+PREDICATES = ["oeq", "ogt", "oge", "olt", "ole", "one", "ord", "ueq", "ugt", "uge", "ult", "ule", "une", "uno"]
+for n in LANES:
+    for tn, tb in {**INTS, **FLTS}.items():
+        if tb * n > 128:
+            continue
+        ty = f"<{n} x {tn}>"
+        if tn in FLTS:
+            for pr in PREDICATES:
+                others.append((f"fcmp {pr} {ty} %a{{i}}, %a{{i}}", ty, (f"fcmp-{pr}", f"{n}x{tn}"), None))
+        others.append((f"select <{n} x i1> %m{n}, {ty} %a{{i}}, {ty} %a{{i}}", ty, ("select", f"{n}x{tn}"), ty))
 # Lane inserts, extracts and the broadcast of the 128-bit vectors a gather is built from (the SLP vectorizer's `getGatherCost`).
 for n in LANES:
     for tn, tb in {**INTS, **FLTS}.items():
@@ -57,7 +74,7 @@ for n in LANES:
 lines, names = [], []
 for i, (o, n, dn, sn) in enumerate(casts):
     lines.append(f"  %c{i} = {o} <{n} x {sn}> %a{i} to <{n} x {dn}>")
-args = ", ".join([f"<{n} x {sn}> %a{i}" for i, (o, n, dn, sn) in enumerate(casts)] + [f"{t} %a{len(casts) + j}" for j, (_, t, _, _) in enumerate(others)] + ["ptr %p", "i8 %s8", "i16 %s16", "i32 %s32", "i64 %s64", "float %sf", "double %sd"])
+args = ", ".join([f"<{n} x {sn}> %a{i}" for i, (o, n, dn, sn) in enumerate(casts)] + [f"{t} %a{len(casts) + j}" for j, (_, t, _, _) in enumerate(others)] + [f"<{n} x i1> %m{n}" for n in LANES] + ["ptr %p", "i8 %s8", "i16 %s16", "i32 %s32", "i64 %s64", "float %sf", "double %sd"])
 for j, (text, t, key, _) in enumerate(others):
     k = len(casts) + j
     body = text.format(i=k)

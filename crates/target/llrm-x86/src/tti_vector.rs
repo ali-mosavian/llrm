@@ -26,7 +26,8 @@
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
-use llrm_mir::tti::{ArithOp, CastKind, Cost, CostKind, LaneOp, MemoryOp, Ty, VectorTy};
+use llrm_mir::opcode::FloatPredicate;
+use llrm_mir::tti::{ArithOp, CastKind, CmpSel, Cost, CostKind, LaneOp, MemoryOp, Predicate, Ty, VectorTy};
 
 const ORACLE: &str = include_str!("tti_vector_oracle.txt");
 
@@ -56,7 +57,7 @@ fn kind_name(kind: CostKind) -> &'static str {
 
 fn type_name(ty: VectorTy) -> Option<String> {
     let lane = match ty.lane {
-        Ty::Int(bits @ (8 | 16 | 32 | 64)) => format!("i{bits}"),
+        Ty::Int(bits @ (1 | 8 | 16 | 32 | 64)) => format!("i{bits}"),
         Ty::Float => "float".to_owned(),
         Ty::Double => "double".to_owned(),
         _ => return None,
@@ -144,4 +145,85 @@ pub(crate) fn broadcast_cost(
     cost_kind: CostKind,
 ) -> Option<Cost> {
     lookup(format!("{} broadcast {}", kind_name(cost_kind), type_name(ty)?))
+}
+
+/// `X86TTIImpl::getScalarizationOverhead` of every lane of an SSE2 vector (the
+/// `ForPoisonSrc` form the loop vectorizer asks), of a power-of-two lane count.
+/// An insert is a `movd` per integer lane and the unpacks that join the lanes
+/// of each register, a 16-bit lane a `pinsrw`; an extract is the row of the
+/// lane in its register (a pointer is a 64-bit integer).
+pub(crate) fn scalarization_overhead(
+    ty: VectorTy,
+    insert: bool,
+    extract: bool,
+    cost_kind: CostKind,
+) -> Option<Cost> {
+    let (lane, bits) = match ty.lane {
+        Ty::Int(bits @ (8 | 16 | 32 | 64)) => (ty.lane, bits),
+        Ty::Pointer => (Ty::Int(64), 64),
+        Ty::Float => (ty.lane, 32),
+        Ty::Double => (ty.lane, 64),
+        _ => return None,
+    };
+    if !ty.count.is_power_of_two() || ty.count < 2 {
+        return None;
+    }
+    let per_register = 128 / bits;
+    let registers = i64::from((ty.count * bits).div_ceil(128));
+    // The row of lane `at`, in the register that holds it.
+    let row = |op: LaneOp, at: u32, into_poison: bool| {
+        let piece = VectorTy { lane, count: if ty.count < per_register { ty.count } else { per_register } };
+        lane_cost(op, piece, Some(at % piece.count), into_poison, cost_kind).map(|cost| cost.value)
+    };
+    let mut total = 0;
+    if insert {
+        if lane == Ty::Int(16) {
+            for at in 0..ty.count {
+                total += row(LaneOp::Insert, at, true)?;
+            }
+        } else {
+            if matches!(lane, Ty::Int(_)) {
+                total += i64::from(ty.count);
+            }
+            total += (i64::from(ty.count.min(per_register)) - 1) * registers;
+        }
+    }
+    if extract {
+        for at in 0..ty.count {
+            total += row(LaneOp::Extract, at, false)?;
+        }
+    }
+    Some(Cost::of(total))
+}
+
+/// `getCmpSelInstrCost` of a float compare by `predicate`, or of a select of
+/// float lanes by a mask.
+pub(crate) fn float_cmp_sel_cost(
+    op: CmpSel,
+    ty: VectorTy,
+    predicate: Option<Predicate>,
+    cost_kind: CostKind,
+) -> Option<Cost> {
+    let name = match (op, predicate) {
+        (CmpSel::Select, _) => "select",
+        (CmpSel::FCmp, Some(Predicate::Float(predicate))) => match predicate {
+            FloatPredicate::Oeq => "fcmp-oeq",
+            FloatPredicate::Ogt => "fcmp-ogt",
+            FloatPredicate::Oge => "fcmp-oge",
+            FloatPredicate::Olt => "fcmp-olt",
+            FloatPredicate::Ole => "fcmp-ole",
+            FloatPredicate::One => "fcmp-one",
+            FloatPredicate::Ord => "fcmp-ord",
+            FloatPredicate::Ueq => "fcmp-ueq",
+            FloatPredicate::Ugt => "fcmp-ugt",
+            FloatPredicate::Uge => "fcmp-uge",
+            FloatPredicate::Ult => "fcmp-ult",
+            FloatPredicate::Ule => "fcmp-ule",
+            FloatPredicate::Une => "fcmp-une",
+            FloatPredicate::Uno => "fcmp-uno",
+            FloatPredicate::False | FloatPredicate::True => return None,
+        },
+        _ => return None,
+    };
+    lookup(format!("{} {name} {}", kind_name(cost_kind), type_name(ty)?))
 }

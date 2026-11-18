@@ -228,6 +228,44 @@ throughput sitofp 32xfloat 32xi16 24
 throughput uitofp 32xfloat 32xi16 32
 throughput sitofp 32xfloat 32xi32 24
 throughput uitofp 32xfloat 32xi32 40
+throughput zext 2xi8 2xi1 1
+throughput sext 2xi8 2xi1 2
+throughput zext 2xi16 2xi1 1
+throughput sext 2xi16 2xi1 2
+throughput zext 2xi32 2xi1 1
+throughput sext 2xi32 2xi1 2
+throughput zext 2xi64 2xi1 1
+throughput sext 2xi64 2xi1 2
+throughput zext 4xi8 4xi1 1
+throughput sext 4xi8 4xi1 2
+throughput zext 4xi16 4xi1 1
+throughput sext 4xi16 4xi1 2
+throughput zext 4xi32 4xi1 1
+throughput sext 4xi32 4xi1 2
+throughput zext 4xi64 4xi1 2
+throughput sext 4xi64 4xi1 4
+throughput zext 8xi8 8xi1 1
+throughput sext 8xi8 8xi1 2
+throughput zext 8xi16 8xi1 1
+throughput sext 8xi16 8xi1 2
+throughput zext 8xi32 8xi1 2
+throughput sext 8xi32 8xi1 4
+throughput zext 8xi64 8xi1 8
+throughput sext 8xi64 8xi1 12
+throughput zext 16xi8 16xi1 1
+throughput sext 16xi8 16xi1 2
+throughput zext 16xi16 16xi1 2
+throughput sext 16xi16 16xi1 4
+throughput zext 16xi32 16xi1 8
+throughput sext 16xi32 16xi1 12
+throughput zext 16xi64 16xi1 32
+throughput sext 16xi64 16xi1 32
+throughput zext 32xi8 32xi1 2
+throughput sext 32xi8 32xi1 4
+throughput zext 32xi16 32xi1 4
+throughput sext 32xi16 32xi1 8
+throughput zext 32xi32 32xi1 16
+throughput sext 32xi32 32xi1 24
 throughput fadd 2xfloat 2
 throughput fsub 2xfloat 2
 throughput fmul 2xfloat 2
@@ -291,6 +329,61 @@ throughput fdiv 32xfloat 312
 throughput fneg 32xfloat 8
 throughput load 32xfloat 8
 throughput store 32xfloat 8
+throughput select 2xi8 2
+throughput select 2xi16 2
+throughput select 2xi32 2
+throughput select 2xi64 2
+throughput fcmp-oeq 2xfloat 2
+throughput fcmp-ogt 2xfloat 2
+throughput fcmp-oge 2xfloat 2
+throughput fcmp-olt 2xfloat 2
+throughput fcmp-ole 2xfloat 2
+throughput fcmp-one 2xfloat 5
+throughput fcmp-ord 2xfloat 2
+throughput fcmp-ueq 2xfloat 5
+throughput fcmp-ugt 2xfloat 2
+throughput fcmp-uge 2xfloat 2
+throughput fcmp-ult 2xfloat 2
+throughput fcmp-ule 2xfloat 2
+throughput fcmp-une 2xfloat 2
+throughput fcmp-uno 2xfloat 2
+throughput select 2xfloat 2
+throughput fcmp-oeq 2xdouble 2
+throughput fcmp-ogt 2xdouble 2
+throughput fcmp-oge 2xdouble 2
+throughput fcmp-olt 2xdouble 2
+throughput fcmp-ole 2xdouble 2
+throughput fcmp-one 2xdouble 5
+throughput fcmp-ord 2xdouble 2
+throughput fcmp-ueq 2xdouble 5
+throughput fcmp-ugt 2xdouble 2
+throughput fcmp-uge 2xdouble 2
+throughput fcmp-ult 2xdouble 2
+throughput fcmp-ule 2xdouble 2
+throughput fcmp-une 2xdouble 2
+throughput fcmp-uno 2xdouble 2
+throughput select 2xdouble 2
+throughput select 4xi8 2
+throughput select 4xi16 2
+throughput select 4xi32 2
+throughput fcmp-oeq 4xfloat 2
+throughput fcmp-ogt 4xfloat 2
+throughput fcmp-oge 4xfloat 2
+throughput fcmp-olt 4xfloat 2
+throughput fcmp-ole 4xfloat 2
+throughput fcmp-one 4xfloat 5
+throughput fcmp-ord 4xfloat 2
+throughput fcmp-ueq 4xfloat 5
+throughput fcmp-ugt 4xfloat 2
+throughput fcmp-uge 4xfloat 2
+throughput fcmp-ult 4xfloat 2
+throughput fcmp-ule 4xfloat 2
+throughput fcmp-une 4xfloat 2
+throughput fcmp-uno 4xfloat 2
+throughput select 4xfloat 2
+throughput select 8xi8 2
+throughput select 8xi16 2
+throughput select 16xi8 2
 throughput insert0 2xi8 3
 throughput insertp0 2xi8 1
 throughput extract0 2xi8 1
@@ -713,6 +806,44 @@ latency sitofp 32xfloat 32xi16 8
 latency uitofp 32xfloat 32xi16 8
 latency sitofp 32xfloat 32xi32 8
 latency uitofp 32xfloat 32xi32 8
+latency zext 2xi8 2xi1 1
+latency sext 2xi8 2xi1 1
+latency zext 2xi16 2xi1 1
+latency sext 2xi16 2xi1 1
+latency zext 2xi32 2xi1 1
+latency sext 2xi32 2xi1 1
+latency zext 2xi64 2xi1 1
+latency sext 2xi64 2xi1 1
+latency zext 4xi8 4xi1 1
+latency sext 4xi8 4xi1 1
+latency zext 4xi16 4xi1 1
+latency sext 4xi16 4xi1 1
+latency zext 4xi32 4xi1 1
+latency sext 4xi32 4xi1 1
+latency zext 4xi64 4xi1 2
+latency sext 4xi64 4xi1 2
+latency zext 8xi8 8xi1 1
+latency sext 8xi8 8xi1 1
+latency zext 8xi16 8xi1 1
+latency sext 8xi16 8xi1 1
+latency zext 8xi32 8xi1 2
+latency sext 8xi32 8xi1 2
+latency zext 8xi64 8xi1 4
+latency sext 8xi64 8xi1 4
+latency zext 16xi8 16xi1 1
+latency sext 16xi8 16xi1 1
+latency zext 16xi16 16xi1 2
+latency sext 16xi16 16xi1 2
+latency zext 16xi32 16xi1 4
+latency sext 16xi32 16xi1 4
+latency zext 16xi64 16xi1 8
+latency sext 16xi64 16xi1 8
+latency zext 32xi8 32xi1 1
+latency sext 32xi8 32xi1 1
+latency zext 32xi16 32xi1 4
+latency sext 32xi16 32xi1 4
+latency zext 32xi32 32xi1 8
+latency sext 32xi32 32xi1 8
 latency fadd 2xfloat 3
 latency fsub 2xfloat 3
 latency fmul 2xfloat 5
@@ -776,6 +907,61 @@ latency fdiv 32xfloat 312
 latency fneg 32xfloat 8
 latency load 32xfloat 4
 latency store 32xfloat 1
+latency select 2xi8 2
+latency select 2xi16 2
+latency select 2xi32 2
+latency select 2xi64 2
+latency fcmp-oeq 2xfloat 5
+latency fcmp-ogt 2xfloat 5
+latency fcmp-oge 2xfloat 5
+latency fcmp-olt 2xfloat 5
+latency fcmp-ole 2xfloat 5
+latency fcmp-one 2xfloat 11
+latency fcmp-ord 2xfloat 5
+latency fcmp-ueq 2xfloat 11
+latency fcmp-ugt 2xfloat 5
+latency fcmp-uge 2xfloat 5
+latency fcmp-ult 2xfloat 5
+latency fcmp-ule 2xfloat 5
+latency fcmp-une 2xfloat 5
+latency fcmp-uno 2xfloat 5
+latency select 2xfloat 2
+latency fcmp-oeq 2xdouble 5
+latency fcmp-ogt 2xdouble 5
+latency fcmp-oge 2xdouble 5
+latency fcmp-olt 2xdouble 5
+latency fcmp-ole 2xdouble 5
+latency fcmp-one 2xdouble 11
+latency fcmp-ord 2xdouble 5
+latency fcmp-ueq 2xdouble 11
+latency fcmp-ugt 2xdouble 5
+latency fcmp-uge 2xdouble 5
+latency fcmp-ult 2xdouble 5
+latency fcmp-ule 2xdouble 5
+latency fcmp-une 2xdouble 5
+latency fcmp-uno 2xdouble 5
+latency select 2xdouble 2
+latency select 4xi8 2
+latency select 4xi16 2
+latency select 4xi32 2
+latency fcmp-oeq 4xfloat 5
+latency fcmp-ogt 4xfloat 5
+latency fcmp-oge 4xfloat 5
+latency fcmp-olt 4xfloat 5
+latency fcmp-ole 4xfloat 5
+latency fcmp-one 4xfloat 11
+latency fcmp-ord 4xfloat 5
+latency fcmp-ueq 4xfloat 11
+latency fcmp-ugt 4xfloat 5
+latency fcmp-uge 4xfloat 5
+latency fcmp-ult 4xfloat 5
+latency fcmp-ule 4xfloat 5
+latency fcmp-une 4xfloat 5
+latency fcmp-uno 4xfloat 5
+latency select 4xfloat 2
+latency select 8xi8 2
+latency select 8xi16 2
+latency select 16xi8 2
 latency insert0 2xi8 3
 latency insertp0 2xi8 1
 latency extract0 2xi8 1
@@ -1198,6 +1384,44 @@ code-size sitofp 32xfloat 32xi16 8
 code-size uitofp 32xfloat 32xi16 8
 code-size sitofp 32xfloat 32xi32 8
 code-size uitofp 32xfloat 32xi32 8
+code-size zext 2xi8 2xi1 1
+code-size sext 2xi8 2xi1 1
+code-size zext 2xi16 2xi1 1
+code-size sext 2xi16 2xi1 1
+code-size zext 2xi32 2xi1 1
+code-size sext 2xi32 2xi1 1
+code-size zext 2xi64 2xi1 1
+code-size sext 2xi64 2xi1 1
+code-size zext 4xi8 4xi1 1
+code-size sext 4xi8 4xi1 1
+code-size zext 4xi16 4xi1 1
+code-size sext 4xi16 4xi1 1
+code-size zext 4xi32 4xi1 1
+code-size sext 4xi32 4xi1 1
+code-size zext 4xi64 4xi1 2
+code-size sext 4xi64 4xi1 2
+code-size zext 8xi8 8xi1 1
+code-size sext 8xi8 8xi1 1
+code-size zext 8xi16 8xi1 1
+code-size sext 8xi16 8xi1 1
+code-size zext 8xi32 8xi1 2
+code-size sext 8xi32 8xi1 2
+code-size zext 8xi64 8xi1 4
+code-size sext 8xi64 8xi1 4
+code-size zext 16xi8 16xi1 1
+code-size sext 16xi8 16xi1 1
+code-size zext 16xi16 16xi1 2
+code-size sext 16xi16 16xi1 2
+code-size zext 16xi32 16xi1 4
+code-size sext 16xi32 16xi1 4
+code-size zext 16xi64 16xi1 8
+code-size sext 16xi64 16xi1 8
+code-size zext 32xi8 32xi1 1
+code-size sext 32xi8 32xi1 1
+code-size zext 32xi16 32xi1 4
+code-size sext 32xi16 32xi1 4
+code-size zext 32xi32 32xi1 8
+code-size sext 32xi32 32xi1 8
 code-size fadd 2xfloat 1
 code-size fsub 2xfloat 1
 code-size fmul 2xfloat 1
@@ -1261,6 +1485,61 @@ code-size fdiv 32xfloat 8
 code-size fneg 32xfloat 8
 code-size load 32xfloat 1
 code-size store 32xfloat 1
+code-size select 2xi8 3
+code-size select 2xi16 3
+code-size select 2xi32 3
+code-size select 2xi64 3
+code-size fcmp-oeq 2xfloat 1
+code-size fcmp-ogt 2xfloat 1
+code-size fcmp-oge 2xfloat 1
+code-size fcmp-olt 2xfloat 1
+code-size fcmp-ole 2xfloat 1
+code-size fcmp-one 2xfloat 3
+code-size fcmp-ord 2xfloat 1
+code-size fcmp-ueq 2xfloat 3
+code-size fcmp-ugt 2xfloat 1
+code-size fcmp-uge 2xfloat 1
+code-size fcmp-ult 2xfloat 1
+code-size fcmp-ule 2xfloat 1
+code-size fcmp-une 2xfloat 1
+code-size fcmp-uno 2xfloat 1
+code-size select 2xfloat 3
+code-size fcmp-oeq 2xdouble 1
+code-size fcmp-ogt 2xdouble 1
+code-size fcmp-oge 2xdouble 1
+code-size fcmp-olt 2xdouble 1
+code-size fcmp-ole 2xdouble 1
+code-size fcmp-one 2xdouble 3
+code-size fcmp-ord 2xdouble 1
+code-size fcmp-ueq 2xdouble 3
+code-size fcmp-ugt 2xdouble 1
+code-size fcmp-uge 2xdouble 1
+code-size fcmp-ult 2xdouble 1
+code-size fcmp-ule 2xdouble 1
+code-size fcmp-une 2xdouble 1
+code-size fcmp-uno 2xdouble 1
+code-size select 2xdouble 3
+code-size select 4xi8 3
+code-size select 4xi16 3
+code-size select 4xi32 3
+code-size fcmp-oeq 4xfloat 1
+code-size fcmp-ogt 4xfloat 1
+code-size fcmp-oge 4xfloat 1
+code-size fcmp-olt 4xfloat 1
+code-size fcmp-ole 4xfloat 1
+code-size fcmp-one 4xfloat 3
+code-size fcmp-ord 4xfloat 1
+code-size fcmp-ueq 4xfloat 3
+code-size fcmp-ugt 4xfloat 1
+code-size fcmp-uge 4xfloat 1
+code-size fcmp-ult 4xfloat 1
+code-size fcmp-ule 4xfloat 1
+code-size fcmp-une 4xfloat 1
+code-size fcmp-uno 4xfloat 1
+code-size select 4xfloat 3
+code-size select 8xi8 3
+code-size select 8xi16 3
+code-size select 16xi8 3
 code-size insert0 2xi8 3
 code-size insertp0 2xi8 1
 code-size extract0 2xi8 1
@@ -1683,6 +1962,44 @@ size-latency sitofp 32xfloat 32xi16 8
 size-latency uitofp 32xfloat 32xi16 8
 size-latency sitofp 32xfloat 32xi32 8
 size-latency uitofp 32xfloat 32xi32 8
+size-latency zext 2xi8 2xi1 1
+size-latency sext 2xi8 2xi1 1
+size-latency zext 2xi16 2xi1 1
+size-latency sext 2xi16 2xi1 1
+size-latency zext 2xi32 2xi1 1
+size-latency sext 2xi32 2xi1 1
+size-latency zext 2xi64 2xi1 1
+size-latency sext 2xi64 2xi1 1
+size-latency zext 4xi8 4xi1 1
+size-latency sext 4xi8 4xi1 1
+size-latency zext 4xi16 4xi1 1
+size-latency sext 4xi16 4xi1 1
+size-latency zext 4xi32 4xi1 1
+size-latency sext 4xi32 4xi1 1
+size-latency zext 4xi64 4xi1 2
+size-latency sext 4xi64 4xi1 2
+size-latency zext 8xi8 8xi1 1
+size-latency sext 8xi8 8xi1 1
+size-latency zext 8xi16 8xi1 1
+size-latency sext 8xi16 8xi1 1
+size-latency zext 8xi32 8xi1 2
+size-latency sext 8xi32 8xi1 2
+size-latency zext 8xi64 8xi1 4
+size-latency sext 8xi64 8xi1 4
+size-latency zext 16xi8 16xi1 1
+size-latency sext 16xi8 16xi1 1
+size-latency zext 16xi16 16xi1 2
+size-latency sext 16xi16 16xi1 2
+size-latency zext 16xi32 16xi1 4
+size-latency sext 16xi32 16xi1 4
+size-latency zext 16xi64 16xi1 8
+size-latency sext 16xi64 16xi1 8
+size-latency zext 32xi8 32xi1 1
+size-latency sext 32xi8 32xi1 1
+size-latency zext 32xi16 32xi1 4
+size-latency sext 32xi16 32xi1 4
+size-latency zext 32xi32 32xi1 8
+size-latency sext 32xi32 32xi1 8
 size-latency fadd 2xfloat 1
 size-latency fsub 2xfloat 1
 size-latency fmul 2xfloat 1
@@ -1746,6 +2063,61 @@ size-latency fdiv 32xfloat 8
 size-latency fneg 32xfloat 8
 size-latency load 32xfloat 1
 size-latency store 32xfloat 1
+size-latency select 2xi8 3
+size-latency select 2xi16 3
+size-latency select 2xi32 3
+size-latency select 2xi64 3
+size-latency fcmp-oeq 2xfloat 1
+size-latency fcmp-ogt 2xfloat 1
+size-latency fcmp-oge 2xfloat 1
+size-latency fcmp-olt 2xfloat 1
+size-latency fcmp-ole 2xfloat 1
+size-latency fcmp-one 2xfloat 3
+size-latency fcmp-ord 2xfloat 1
+size-latency fcmp-ueq 2xfloat 3
+size-latency fcmp-ugt 2xfloat 1
+size-latency fcmp-uge 2xfloat 1
+size-latency fcmp-ult 2xfloat 1
+size-latency fcmp-ule 2xfloat 1
+size-latency fcmp-une 2xfloat 1
+size-latency fcmp-uno 2xfloat 1
+size-latency select 2xfloat 3
+size-latency fcmp-oeq 2xdouble 1
+size-latency fcmp-ogt 2xdouble 1
+size-latency fcmp-oge 2xdouble 1
+size-latency fcmp-olt 2xdouble 1
+size-latency fcmp-ole 2xdouble 1
+size-latency fcmp-one 2xdouble 3
+size-latency fcmp-ord 2xdouble 1
+size-latency fcmp-ueq 2xdouble 3
+size-latency fcmp-ugt 2xdouble 1
+size-latency fcmp-uge 2xdouble 1
+size-latency fcmp-ult 2xdouble 1
+size-latency fcmp-ule 2xdouble 1
+size-latency fcmp-une 2xdouble 1
+size-latency fcmp-uno 2xdouble 1
+size-latency select 2xdouble 3
+size-latency select 4xi8 3
+size-latency select 4xi16 3
+size-latency select 4xi32 3
+size-latency fcmp-oeq 4xfloat 1
+size-latency fcmp-ogt 4xfloat 1
+size-latency fcmp-oge 4xfloat 1
+size-latency fcmp-olt 4xfloat 1
+size-latency fcmp-ole 4xfloat 1
+size-latency fcmp-one 4xfloat 3
+size-latency fcmp-ord 4xfloat 1
+size-latency fcmp-ueq 4xfloat 3
+size-latency fcmp-ugt 4xfloat 1
+size-latency fcmp-uge 4xfloat 1
+size-latency fcmp-ult 4xfloat 1
+size-latency fcmp-ule 4xfloat 1
+size-latency fcmp-une 4xfloat 1
+size-latency fcmp-uno 4xfloat 1
+size-latency select 4xfloat 3
+size-latency select 8xi8 3
+size-latency select 8xi16 3
+size-latency select 16xi8 3
 size-latency insert0 2xi8 3
 size-latency insertp0 2xi8 1
 size-latency extract0 2xi8 1

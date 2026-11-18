@@ -1512,13 +1512,14 @@ impl Emitter<'_, '_> {
         }
         // `FsFLD0SD`, `V_SET0`: a zero double or 16 bytes, `xorps` of the
         // register with itself.
-        if matches!(name, "FsFLD0SD" | "FsFLD0SS" | "V_SET0") {
+        // `V_SETALLONES`: `pcmpeqd` of the register with itself.
+        if matches!(name, "FsFLD0SD" | "FsFLD0SS" | "V_SET0" | "V_SETALLONES") {
             let node = self.dag.node(SDValue { node: n, res: 0 });
             let zero = self.fresh(width(self.ctx.map.scalar_sse(), node.values[0]));
             self.values.insert(SDValue { node: n, res: 0 }, zero.value);
             // The idiom reads nothing: the instruction uses no value.
             let what = Semantics {
-                name: Some("xorps".into()),
+                name: Some(if name == "V_SETALLONES" { "pcmpeqd" } else { "xorps" }.into()),
                 dests: vec![Loc::Held(zero)],
                 sources: vec![Loc::Held(zero), Loc::Held(zero)],
                 ..Semantics::new(Operation::Binary)

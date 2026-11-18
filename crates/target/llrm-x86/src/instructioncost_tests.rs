@@ -174,3 +174,32 @@ fn a_vector_insert_broadcast_and_fmuladd_cost_what_the_pin_says() {
         assert_eq!(got, want.map(|n| n.to_string()), "{kind:?}");
     }
 }
+
+/// The loop vectorizer prices a strided load as scalar loads plus the inserts
+/// that build the vector (`getScalarizationOverhead`) and the extracts of its
+/// pointers; the port priced none, so every such loop (sfm16_float_cmp, _f2i,
+/// sfm16_float: 1.5x to 2.6x clang's instructions) stayed scalar. SSE2, insert
+/// into poison: a `movd` per integer lane plus the unpacks (`4 + 3` for `<4 x
+/// i32>`), the unpacks alone for floats, a `pinsrw` per 16-bit lane; an extract
+/// is its lane's row.
+#[test]
+fn the_overhead_of_building_and_unpacking_a_vector_is_the_pins() {
+    use llrm_mir::tti::{Ty, VectorTy};
+    let tuning = llrm_mir::target::Tuning { vector_float_costs: true, ..llrm_mir::target::Tuning::PIN };
+    let x86 = X86::of_cpu("x86-64").expect("a cpu").with_tuning(tuning);
+    let kind = CostKind::RecipThroughput;
+    let insert = |lane, count| x86.scalarization_overhead(VectorTy { lane, count }, true, false, kind).map(|c| c.value);
+    let extract =
+        |lane, count| x86.scalarization_overhead(VectorTy { lane, count }, false, true, kind).map(|c| c.value);
+    assert_eq!(
+        [
+            insert(Ty::Int(32), 4),
+            insert(Ty::Float, 4),
+            insert(Ty::Int(64), 2),
+            insert(Ty::Double, 2),
+            insert(Ty::Int(16), 8)
+        ],
+        [Some(7), Some(3), Some(3), Some(1), Some(8)]
+    );
+    assert_eq!([extract(Ty::Pointer, 2), extract(Ty::Pointer, 4)], [Some(3), Some(6)]);
+}

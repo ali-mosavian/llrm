@@ -1421,6 +1421,10 @@ impl Tti for X86 {
     /// `getRegisterBitWidth(RGK_FixedWidthVector)` of an SSE2 target: one XMM
     /// register. Only where the 128-bit integer vectors are taken
     /// (`vector_values`): the others stay scalar and read 0.
+    fn selects_vector_compares(&self) -> bool {
+        self.quad
+    }
+
     fn vector_register_bits(&self) -> u32 {
         if self.vector_values() { 128 } else { 0 }
     }
@@ -1489,6 +1493,14 @@ impl Tti for X86 {
         use llrm_mir::opcode::IntPredicate;
         if !self.vector_values() {
             return None;
+        }
+        // DEVIATE X86V3: float lanes are the pin's rows
+        // (`tti_vector_oracle.txt`).
+        if matches!(ty.lane, Ty::Float | Ty::Double) {
+            if !self.tuning.vector_float_costs {
+                return None;
+            }
+            return crate::tti_vector::float_cmp_sel_cost(op, ty, predicate, kind);
         }
         let Ty::Int(bits @ (8 | 16 | 32)) = ty.lane else { return None };
         let pieces = xmm_pieces(ty)?;
@@ -1571,6 +1583,21 @@ impl Tti for X86 {
         crate::tti_vector::lane_cost(op, ty, index, into_poison, cost_kind)
     }
 
+    /// `X86TTIImpl::getScalarizationOverhead`: the inserts that build a vector
+    /// from scalars and the extracts that take it apart.
+    fn scalarization_overhead(
+        &self,
+        ty: VectorTy,
+        insert: bool,
+        extract: bool,
+        cost_kind: CostKind,
+    ) -> Option<Cost> {
+        if !self.vector_values() || !self.tuning.vector_float_costs {
+            return None;
+        }
+        crate::tti_vector::scalarization_overhead(ty, insert, extract, cost_kind)
+    }
+
     /// `X86TTIImpl::getShuffleCost` of a broadcast of lane 0; any other shuffle
     /// is not priced. DEVIATE X86V3.
     fn shuffle_cost(
@@ -1601,9 +1628,21 @@ impl Tti for X86 {
         src: VectorTy,
         cost_kind: CostKind,
     ) -> Option<Cost> {
+        // `BasicTTIImpl::getCastInstrCost`: a bitcast of vectors of one
+        // register type is free.
+        if kind == CastKind::BitCast && dst.count == src.count && self.vector_values() {
+            return Some(Cost::FREE);
+        }
         // DEVIATE X86V3: a cast to or from float lanes is the pin's row
         // (`tti_vector_oracle.txt`).
         if matches!(dst.lane, Ty::Float | Ty::Double) || matches!(src.lane, Ty::Float | Ty::Double) {
+            if !self.vector_values() || !self.tuning.vector_float_costs {
+                return None;
+            }
+            return crate::tti_vector::cast_cost(kind, dst, src, cost_kind);
+        }
+        // A mask widened to the lanes it selects: the pin's row.
+        if src.lane == Ty::Int(1) && matches!(kind, CastKind::ZExt | CastKind::SExt) {
             if !self.vector_values() || !self.tuning.vector_float_costs {
                 return None;
             }

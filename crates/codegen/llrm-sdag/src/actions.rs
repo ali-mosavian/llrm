@@ -954,6 +954,10 @@ impl TargetLowering {
         // `LowerVSETCC`: the integer compares SSE2 has (`pcmpeq*`, `pcmpgt*`),
         // the others made from them.
         t.set_ops(&[ISD::SetCC], &[MVT::V16I8, MVT::V8I16, MVT::V4I32], Action::Custom);
+        // `LowerVSETCC`: `cmpps`/`cmppd`, and the select of float lanes the
+        // masks `ExpandVSELECT` makes.
+        t.set_ops(&[ISD::SetCC], &[MVT::V4F32, MVT::V2F64], Action::Custom);
+        t.set_ops(&[ISD::VSelect], &[MVT::V4F32, MVT::V2F64], Action::Expand);
         // `LowerVSELECT` without SSE4.1's `pblendvb`: the arms masked by the
         // lanes' sign masks, `pand`, `pandn`, `por` (`ExpandVSELECT`).
         t.set_ops(&[ISD::VSelect], &[MVT::V16I8, MVT::V8I16, MVT::V4I32, MVT::V2I64], Action::Expand);
@@ -981,6 +985,9 @@ impl TargetLowering {
         // `LowerSINT_TO_FP`: `v2i32` to `v2f64`; `v4i32` to `v4f32` is a
         // pattern.
         t.set_ops(&[ISD::SIntToFp], &[MVT::V2I32], Action::Custom);
+        // `LowerFP_TO_INT`: `v4f32` to `v4i32` is `X86ISD::CVTTP2SI`
+        // (`cvttps2dq`).
+        t.set_ops(&[ISD::FpToSInt], &[MVT::V4I32], Action::Custom);
         // `LowerSCALAR_TO_VECTOR`: a byte or a word is widened to a dword for
         // `movd`.
         t.set_ops(&[ISD::ScalarToVector], &[MVT::V16I8, MVT::V8I16], Action::Custom);
