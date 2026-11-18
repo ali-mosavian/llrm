@@ -20,7 +20,19 @@ impl Builder<'_> {
         &self,
         inst: InstId,
     ) -> bool {
-        tail_position(self.function, inst)
+        // `memcpy`, `memmove` and `memset` return their destination as the
+        // libcall does, so a `ret` of their first argument ends them too.
+        let returns_destination = llrm_mir::memory::callee(&self.module.context, self.function, inst)
+            .and_then(|id| self.module.global(id).intrinsic())
+            .is_some_and(|one| {
+                matches!(
+                    one,
+                    llrm_mir::intrinsics::Intrinsic::MemCpy
+                        | llrm_mir::intrinsics::Intrinsic::MemMove
+                        | llrm_mir::intrinsics::Intrinsic::MemSet
+                )
+            });
+        tail_position_of(self.function, inst, returns_destination)
     }
 }
 
@@ -38,11 +50,11 @@ impl Builder<'_> {
         plan: &Convention,
         variadic: bool,
         callee: Option<llrm_mir::GlobalId>,
+        direct: bool,
         plan_first: i64,
         arguments: &[Operand],
     ) -> bool {
         let caller = &self.convention;
-        let direct = callee.is_some();
         // the callee returns to our caller: a far callee to a far caller and a
         // near one to a near, or the return address is the wrong size
         let Some(full) = self.arch.full() else { return false };
@@ -196,6 +208,17 @@ pub fn tail_position(
     function: &Function,
     inst: InstId,
 ) -> bool {
+    tail_position_of(function, inst, false)
+}
+
+/// `tail_position`, `returns_destination` saying the call is a `memcpy`,
+/// `memmove` or `memset`, whose libcall returns the destination: a `ret` of
+/// the call's first argument is then the call's value.
+pub fn tail_position_of(
+    function: &Function,
+    inst: InstId,
+    returns_destination: bool,
+) -> bool {
     let call = function.instruction(inst);
     let Opcode::Call(info) = &call.opcode else { return false };
     if !matches!(info.tail, Tail::Tail | Tail::MustTail) {
@@ -251,6 +274,7 @@ pub fn tail_position(
         // a `ret void` ignores what the call returns
         (_, None) => true,
         (Some(value), Some(Operand::Value(one))) => value == *one,
+        (None, Some(returned)) => returns_destination && call.operands.first() == Some(returned),
         _ => false,
     }
 }

@@ -1446,7 +1446,7 @@ impl Builder<'_> {
                     }
                     _ => self.mem_libcall(
                         info,
-                        operands[0],
+                        &operands[..3],
                         if matches!(which, Intrinsic::MemCpy) { "memcpy" } else { "memmove" },
                         root,
                         &[dst, other],
@@ -1534,7 +1534,7 @@ impl Builder<'_> {
                         self.rep_stos(root, dst, other, bytes, self.pointer_bytes())?
                     }
                     _ if strings_exist && !self.runtime_has("memset") => self.rep_stosb(root, dst, other, size),
-                    _ => self.mem_libcall(info, operands[0], "memset", root, &[dst, other], size)?,
+                    _ => self.mem_libcall(info, &operands[..3], "memset", root, &[dst, other], size)?,
                 }
             }
         };
@@ -2049,7 +2049,7 @@ impl Builder<'_> {
     fn mem_libcall(
         &mut self,
         info: &CallInfo,
-        destination: Operand,
+        operands: &[Operand],
         name: &str,
         chain_in: SDValue,
         first_two: &[SDValue],
@@ -2062,6 +2062,7 @@ impl Builder<'_> {
         else {
             return Err(Refused("library call whose symbol and convention are the target fact's"));
         };
+        let destination = operands[0];
         let types = &self.module.context.types;
         let pointer_type = types.ptr(0);
         let word = types.int(self.target.dag.pointer.size_in_bits());
@@ -2091,7 +2092,9 @@ impl Builder<'_> {
             )
             .map_err(|_| Refused("libcall the convention does not describe"))
         };
-        let tail_plan = plan_of(self, void)?;
+        // the destination comes back in the register the caller returns it in
+        let tail_returns = if self.convention.returns.is_empty() { void } else { pointer_type };
+        let tail_plan = plan_of(self, tail_returns)?;
         let target_symbol = self.dag.get_target_external_symbol(self.target.dag.pointer, &routine_symbol);
         let _ = symbol;
         let values = vec![first_two[0], first_two[1], size];
@@ -2102,7 +2105,7 @@ impl Builder<'_> {
         // `isTailCall`: the intrinsic is marked `tail` and ends the function,
         // and the target takes the sibling call.
         let tail = match self.tail_candidate.take() {
-            Some(tail) if self.eligible_for_sibling_call(info, &tail_plan, false, None, first, &[]) => Some(tail),
+            Some(tail) if self.eligible_for_sibling_call(info, &tail_plan, false, None, true, first, operands) => Some(tail),
             _ => None,
         };
         if let Some(tail) = tail {

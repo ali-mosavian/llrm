@@ -2171,7 +2171,7 @@ impl Builder<'_> {
         };
         if !hooked
             && let Some(tail) = self.tail_candidate.take()
-            && self.eligible_for_sibling_call(info, &plan, variadic, direct, first, arguments)
+            && self.eligible_for_sibling_call(info, &plan, variadic, direct, direct.is_some(), first, arguments)
         {
             self.tail_calls.push(tail);
             self.sibcall = self.target.tail_calls;
