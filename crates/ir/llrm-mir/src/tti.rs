@@ -2718,6 +2718,14 @@ pub trait Tti {
         key(a) < key(b)
     }
 
+    /// DEVIATE LSR-TIE: a loop with an address that LSR rates no better than
+    /// the loop as written is left as written where a recurrence steps by a
+    /// register and the loop's values number more than this (the pin
+    /// rewrites on a tie). None: the pin's.
+    fn lsr_register_step_loses_a_tie_above(&self) -> Option<u32> {
+        None
+    }
+
     /// DEVIATE LSR-SIZE (owner w12, exit 2026-11-24): LSR ranks formulae by
     /// the bytes of this table first when the function is built for size;
     /// none is the pin's order at every level.
