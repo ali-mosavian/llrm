@@ -389,7 +389,7 @@ class TermInsideTheQueue(Env, unittest.TestCase):
 
 
 class Cancel(Env, unittest.TestCase):
-    """--cancel JOBID kills exactly the recorded process group. Pattern kills (pgrep -f / pkill -f) took out three sessions' builds on 2026-11-10."""
+    """--cancel JOBID kills exactly the recorded process group. Kills by process name took out three sessions' builds on 2026-11-10."""
 
     def job(self, *command):
         guard = self.start(*command, LG_SLOTS="5", LG_SLOTS_HIGH="5", LG_SETTLE="0")

@@ -118,7 +118,7 @@ Next piece by loop count: induction from any start + fill (splat) + reverse = ~1
 
 ## LV-W: widening plan for the counted cells (2026-11-12, tip b227f477a5, card; owner llrm-arm64-vec)
 
-TL;DR: the pin's loop vectorizer removes the whole gap of six counted cells (`~/scratch/handoff/arm64-top-gap-cards-2026-11-12.md`). Our refusals say what each slice must lift; slices are in dependency order, each a draft until it moves a cell.
+TL;DR: the pin's loop vectorizer removes the whole gap of six counted cells (`arm64-top-gap-cards-2026-11-12.md`). Our refusals say what each slice must lift; slices are in dependency order, each a draft until it moves a cell.
 
 | cell (O2/O3 instrs gap) | pin loops (`-Rpass`) | ours today (`LLRM_DEBUG=loop-vectorize`) |
 |---|---|---|
