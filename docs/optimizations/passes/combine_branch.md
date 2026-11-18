@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_branch.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_branch.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_branch.rs sha256:c45ae1ea491058d65ea8e8803947454eeda0c1d43d9c5ffad260636e327c2b27 -->
+<!-- src: crates/opt/llrm-transforms/src/combine_branch.rs sha256:574fb74254e75a6eb1dd94e8724fb3b831a2bfbce119d96b544eeded5a535799 -->
 
 # combine_branch
 
@@ -17,11 +17,15 @@ MIRROR: a branch that reaches the end of the visit is registered with the
 `DomConditionCache` (`DC.registerBranch`), so a query sees the branches
 visited before it and no others.
 
+MIRROR: a branch on a one-use `fcmp` with a non-canonical predicate (`one`,
+`ole`, `oge`; `isCanonicalPredicate`) takes the inverse predicate and swaps
+its successors, so `br (fcmp ole x, 0), %c, %v` is `br (fcmp ugt x, 0), %v,
+%c`.
+
 DEVIATE 1 (temporary): not made: the logical-and-with-invert form (MIR has
-no logical `select` pattern here yet), the `fcmp` predicate canonical form
-(`isCanonicalPredicate`), and the constant condition at visit time (the
-driver folds a branch on a number, and `combine::prepare` kills the edges
-of an undef or poison one, `combine.rs`).
+no logical `select` pattern here yet) and the constant condition at visit
+time (the driver folds a branch on a number, and `combine::prepare` kills
+the edges of an undef or poison one, `combine.rs`).
 
 MIRROR: every use of the condition that an edge dominates becomes `true`
 (the first edge) or `false` (the second): a second branch on the same

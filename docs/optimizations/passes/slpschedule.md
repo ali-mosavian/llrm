@@ -1,0 +1,29 @@
+> Generated from the `//!` header of [`crates/opt/llrm-transforms/src/slpschedule.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/slpschedule.rs); edit the header, not this file.
+<!-- src: crates/opt/llrm-transforms/src/slpschedule.rs sha256:d03c913b0ae55f4c68d66cbe97bfc80a54c8b42f8835091471868e96292e8729 -->
+
+# slpschedule
+
+`BlockScheduling` for a tree of registers: the order the instructions of
+the block stand in once a bundle is one instruction.
+
+## How it works
+`BoUpSLP::BlockScheduling` (SLPVectorizer.cpp l.19930) makes each bundle's
+scalars one `ScheduleBundle`, finds what each instruction waits for
+(`calculateDependencies`: the values it reads, and the memory the ones
+before it write), and `scheduleBlock` places the ready ones, bundles whole,
+in the order the block had where it can. A bundle whose lanes wait on each
+other cannot be scheduled and the tree is not made. Here the instructions
+of the block are the nodes, the values they read and the order of those that
+touch memory are the edges, and the vectors made for the tree are placed
+where the last scalar of their bundle stood, with whatever waits on them
+after.
+
+DEVIATE SLP6 (owner arm64, exit 2026-12-01): `calculateDependencies`' memory
+edges are the order of the writes, and each read between the writes it
+stood between, with no alias analysis.
+
+## Runs
+Under `slptree` (`schedulable_phis`, `emit`).
+
+## Used by
+`slptree`.
