@@ -13,6 +13,12 @@
 //!   for at most `ROTATION_HOT_BYTES_PER_LOOP` bytes a loop
 //!   (`keeps_rotation_hot`).
 //!
+//! DEVIATE SD535 (owner llrm-arm64-vec, exit 2026-12-05): the pin expands a
+//! divide by a constant at -Os and keeps it at `minsize`. A module with such a
+//! divide is compiled both ways, and the divides are kept where the clocks the
+//! expansion saves are too small a share for the bytes it adds
+//! ([`expansion_pays`]).
+//!
 //! # Price
 //! [`price`]: bytes are four a word plus the pool; work is `executed` of each
 //! function after allocation: instructions, memory operands, taken branches and
@@ -44,13 +50,83 @@ pub struct Price {
     pub bytes: i64,
     pub work: f64,
     pub laid_out: f64,
+    /// Divides executed: slow, so a clock more than a unit of `work`.
+    pub divides: f64,
 }
 
 thread_local! {
     static PRICED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static UNMERGED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static MERGED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-    static WORK: std::cell::Cell<Option<(f64, f64)>> = const { std::cell::Cell::new(None) };
+    static WORK: std::cell::Cell<Option<(f64, f64, f64)>> = const { std::cell::Cell::new(None) };
+    static DIVIDES_KEPT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Whether the compile that keeps a divide by a constant a divide at -Os is
+/// running (SD535).
+pub fn divides_kept() -> bool {
+    DIVIDES_KEPT.with(std::cell::Cell::get)
+}
+
+/// Runs `body` keeping the divides by a constant at -Os.
+pub fn keeping_divides<T>(body: impl FnOnce() -> T) -> T {
+    let before = DIVIDES_KEPT.with(|cell| cell.replace(true));
+    let value = body();
+    DIVIDES_KEPT.with(|cell| cell.set(before));
+    value
+}
+
+/// Whether `module` has a function at -Os (not `minsize`) that divides by a
+/// constant: the one the SD535 trial has something to decide for.
+pub fn divides_by_constant(module: &llrm_mir::module::Module) -> bool {
+    use llrm_mir::module::Operand;
+    use llrm_mir::opcode::{Attribute, BinaryOp, Opcode};
+    let flagged = |function: &llrm_mir::module::Function, name: &str| {
+        function.attrs.iter().any(|attr| matches!(attr, Attribute::Flag(flag) if flag == name))
+    };
+    module
+        .functions()
+        .any(
+            |(_, _, function)| flagged(function, "optsize")
+                && !flagged(function, "minsize")
+                && function.layout().iter().flat_map(|block| function.iter_block(*block)).any(|inst| {
+                    let inst = function.instruction(inst);
+                    matches!(
+                        inst.opcode,
+                        Opcode::Binary(BinaryOp::SDiv | BinaryOp::UDiv | BinaryOp::SRem | BinaryOp::URem)
+                    )
+                        && matches!(inst.operands.get(1), Some(Operand::Constant(_)))
+                }),
+        )
+}
+
+/// Clocks a unit of `work` takes on a wide core, and a divide: recsum -Os ran
+/// 10 a trip around one `sdiv` and 2.6 a trip around the 8-instruction
+/// expansion (modelled, M1).
+const CLOCKS_PER_WORK: f64 = 0.3;
+const CLOCKS_PER_DIVIDE: f64 = 8.0;
+
+/// Percent of its clocks a module must save for each percent of its bytes the
+/// expansion adds (SD535). The 6502 asks 4 for its speed multiply; a divide is
+/// priced by the module's own corpus at -Os.
+const SHARE_PERCENT_PER_PERCENT: f64 = 1.0;
+
+/// Whether the compile that expands a divide by a constant (`expanded`) is
+/// kept over the one that keeps the divides (`divided`): it is no larger, or
+/// the share of clocks it saves is at least `SHARE_PERCENT_PER_PERCENT` times
+/// the share of bytes it adds. A price with no finite estimate keeps the pin's
+/// expansion.
+pub fn expansion_pays(
+    expanded: Price,
+    divided: Price,
+) -> bool {
+    let clocks = |price: Price| CLOCKS_PER_WORK * price.work + CLOCKS_PER_DIVIDE * price.divides;
+    let (now, was) = (clocks(expanded), clocks(divided));
+    if now.is_nan() || was.is_nan() || was <= 0.0 || divided.bytes <= 0 {
+        return true;
+    }
+    let added = expanded.bytes - divided.bytes;
+    added <= 0 || (was - now) / was >= SHARE_PERCENT_PER_PERCENT * added as f64 / divided.bytes as f64
 }
 
 /// Whether the compile that merges no global of an `optsize` function is
@@ -102,7 +178,7 @@ pub fn keeps_unmerged(
 
 /// Starts summing the work of the functions lowered on this thread.
 pub fn start() {
-    WORK.with(|work| work.set(Some((0.0, 0.0))));
+    WORK.with(|work| work.set(Some((0.0, 0.0, 0.0))));
 }
 
 /// Adds a finished function's work, where [`start`] was called, through the
@@ -123,13 +199,23 @@ pub fn add(
     let early = before.as_ref().and_then(work);
     // A function the layout cannot be read for is priced as it was.
     let placed = finished(function, blocks, likelihood).as_ref().and_then(work).or(early);
+    let is_divide = |one: &llrm_codegen::model::lir::Insn| {
+        one.what
+            .as_ref()
+            .and_then(|what| what.name.as_deref())
+            .is_some_and(|name| name.starts_with("SDIV") || name.starts_with("UDIV"))
+    };
+    let divides = before.as_ref().and_then(|body| executed::count_where(body, &is_divide));
     WORK.with(|cell| {
         // A function with no finite estimate poisons the sum: no work saved is
         // claimed.
-        cell.set(
-            cell.get()
-                .map(|(one, two)| (early.map_or(f64::NAN, |now| one + now), placed.map_or(f64::NAN, |now| two + now))),
-        );
+        cell.set(cell.get().map(|(one, two, three)| {
+            (
+                early.map_or(f64::NAN, |now| one + now),
+                placed.map_or(f64::NAN, |now| two + now),
+                divides.map_or(f64::NAN, |now| three + now),
+            )
+        }));
     });
 }
 
@@ -260,8 +346,8 @@ pub fn priced() -> usize {
 }
 
 /// The work summed since [`start`], before layout and laid out.
-fn finish() -> (f64, f64) {
-    WORK.with(|work| work.replace(None)).unwrap_or((f64::NAN, f64::NAN))
+fn finish() -> (f64, f64, f64) {
+    WORK.with(|work| work.replace(None)).unwrap_or((f64::NAN, f64::NAN, f64::NAN))
 }
 
 /// What `functions` cost together: bytes as written, and the work [`add`]
@@ -275,8 +361,8 @@ pub fn price(functions: &[Function]) -> Price {
             4 * words as i64 + pool as i64
         })
         .sum();
-    let (work, laid_out) = finish();
-    Price { bytes, work, laid_out }
+    let (work, laid_out, divides) = finish();
+    Price { bytes, work, laid_out, divides }
 }
 
 /// Whether `other` is kept over `kept` after a compile that left the loops
