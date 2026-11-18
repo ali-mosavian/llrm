@@ -1,5 +1,5 @@
 """The runtime's scratch cells as zero page: __mulsi3 was 83 B with three-byte addresses, 65 B with two-byte ones."""
-import subprocess, sys, tempfile, unittest
+import re, subprocess, sys, tempfile, unittest
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -34,6 +34,22 @@ class ScratchInZeroPage(unittest.TestCase):
         self.assertEqual(mkrt.scratch_address("sim65-cc65"), 0x9A)
         self.assertEqual(mkrt.scratch_address("atari8"), 0x9C)
         self.assertIsNone(mkrt.scratch_address("c64"))
+
+
+class HarnessDriver(unittest.TestCase):
+    def test_the_log_pointers_overlap_neither_the_registers_nor_the_scratch(self):
+        """lp = $A0 sat on `__st` ($A0..$A3): a*b of two longs read -1 and 9 cells went WRONG in the 2026-11-18 A/B."""
+        row = mkrt.platform_row("sim65-cc65")
+        regs = range(row["imag_base"], row["imag_base"] + row["zero_page"])
+        at = mkrt.scratch_address("sim65-cc65")
+        scratch = range(at, at + mkrt.SCRATCH_CELLS)
+        for name in ("ours.py", "ours_cr.py", "ours_keep.py", "ours.multi.py"):
+            text = (HERE / name).read_text()
+            for var in ("lp", "ptr"):
+                start = int(re.search(rf"\\n{var} = \$([0-9A-Fa-f]+)\\n", text).group(1), 16)
+                for byte in (start, start + 1):
+                    self.assertNotIn(byte, regs, f"{name}: {var} on a register")
+                    self.assertNotIn(byte, scratch, f"{name}: {var} on the runtime scratch")
 
 
 if __name__ == "__main__":
