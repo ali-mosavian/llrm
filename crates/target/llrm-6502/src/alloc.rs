@@ -847,7 +847,7 @@ impl Builder {
             "a" => Some(reg::A),
             "x" => Some(reg::X),
             "y" => Some(reg::Y),
-            _ => n.strip_prefix("rc").and_then(|n| n.parse::<u8>().ok()).filter(|n| *n < 16).map(rc),
+            _ => n.strip_prefix("rc").and_then(|n| n.parse::<u8>().ok()).filter(|n| *n < MOST_CELLS).map(rc),
         };
         if let Some(r) = named(name) {
             return Ok(Reg::Phys(r));
@@ -994,10 +994,9 @@ impl Builder {
     ) -> Result<Reg, Unsupported> {
         if let Some(n) = name.strip_prefix("rs").and_then(|n| n.parse::<u8>().ok()) {
             return match n {
-                0 => Ok(Reg::Phys(reg::RS0)),
-                1 => Ok(Reg::Phys(reg::RS1)),
-                2 => Ok(Reg::Phys(reg::RS2)),
-                3 => Ok(Reg::Phys(reg::RS3)),
+                // the pairs an argument arrives in (`calling.toml`): rs1..rs3
+                // and rs8..rs12
+                0..=3 | 8..=12 => Ok(Reg::Phys(RegId::from_raw(reg::RS0.index() as u8 + n))),
                 _ => Err(Unsupported(format!("pair {name}"))),
             };
         }
@@ -1018,14 +1017,18 @@ impl Builder {
         &self,
         name: &str,
     ) -> bool {
-        self.pointers.contains(name) || matches!(name, "rs0" | "rs1" | "rs2" | "rs3")
+        self.pointers.contains(name)
+            || matches!(
+                name,
+                "rs0" | "rs1" | "rs2" | "rs3" | "rs8" | "rs9" | "rs10" | "rs11" | "rs12"
+            )
     }
 
     fn word(
         &mut self,
         name: &str,
     ) -> Result<(Reg, Reg), Unsupported> {
-        if let Some(n) = name.strip_prefix("rs").and_then(|n| n.parse::<u8>().ok()).filter(|n| *n < 8) {
+        if let Some(n) = name.strip_prefix("rs").and_then(|n| n.parse::<u8>().ok()).filter(|n| *n < MOST_CELLS / 2) {
             return Ok((Reg::Phys(rc(2 * n)), Reg::Phys(rc(2 * n + 1))));
         }
         let name = name.strip_suffix("+1").unwrap_or(name);
@@ -5029,6 +5032,21 @@ fn emit_with<const STACK: bool>(
             y_callees.extend(entries_of(callee));
         }
     }
+    // `jsr callee` reads the scratch cells (`rc16`..) the call lists among the
+    // arguments
+    let mut cell_callees: std::collections::BTreeMap<String, std::collections::BTreeSet<u8>> = Default::default();
+    for inst in function.blocks.iter().flat_map(|block| &block.insts).filter(|inst| inst.kind == Kind::Op("JSR")) {
+        if let [Operand::Symbol(callee, _), arguments @ ..] = &inst.operands[..] {
+            let cells = cell_callees.entry(callee.clone()).or_default();
+            for operand in arguments {
+                if let Operand::Use(Reg::Phys(r)) = operand {
+                    let bytes = if is_pair(*r) { vec![lane(*r, 0), lane(*r, 1)] } else { vec![*r] };
+                    cells.extend((BASE_CELLS..MOST_CELLS).filter(|&n| bytes.contains(&rc(n))));
+                }
+            }
+        }
+    }
+    let cell_callees = std::sync::Arc::new(cell_callees);
     // the cells a return reads: the bytes of a long result
     let mut result_cells = std::collections::BTreeSet::new();
     for operand in function
@@ -5085,11 +5103,12 @@ fn emit_with<const STACK: bool>(
         out.no_y_result = !returns_y;
         out.y_callees = y_callees.clone();
         out.result_cells = result_cells.clone();
+        out.cell_callees = cell_callees.clone();
         crate::shift_forms::choose(&mut out, &sites, &exits);
     }
     let lines_of = source.map(|(file, scope)| (file, scope, &function.places[..]));
     out.cmos = cmos;
-    let tails = ((!returns_a, a_callees), (!returns_x, x_callees), (!returns_y, y_callees), result_cells);
+    let tails = ((!returns_a, a_callees), (!returns_x, x_callees), (!returns_y, y_callees), result_cells, cell_callees);
     let (priced, text, finished) = finish_pair(out, lines_of, tails);
     let named = |text: &str| own_labels(text, &function.name);
     Ok((named(&text), named(&priced), slots, sunk, shared, moved, named(&finished)))
@@ -5137,11 +5156,12 @@ fn own_labels(
 fn finish_pair(
     mut code: Asm,
     lines_of: Option<(&str, Option<u32>, &[llrm_codegen::model::lir::SrcLoc])>,
-    ((no_a_result, a_callees), (no_x_result, x_callees), (no_y_result, y_callees), result_cells): (
+    ((no_a_result, a_callees), (no_x_result, x_callees), (no_y_result, y_callees), result_cells, cell_callees): (
         (bool, std::collections::BTreeSet<String>),
         (bool, std::collections::BTreeSet<String>),
         (bool, std::collections::BTreeSet<String>),
         std::collections::BTreeSet<String>,
+        std::sync::Arc<std::collections::BTreeMap<String, std::collections::BTreeSet<u8>>>,
     ),
 ) -> (String, String, String) {
     code.no_a_result = no_a_result;
@@ -5151,6 +5171,7 @@ fn finish_pair(
     code.no_y_result = no_y_result;
     code.y_callees = y_callees;
     code.result_cells = result_cells;
+    code.cell_callees = cell_callees;
     let (mut priced, mut kept) = crate::peephole::run_pair(&code);
     crate::relax::relax(&mut priced);
     crate::relax::relax(&mut kept);

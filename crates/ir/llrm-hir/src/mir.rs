@@ -1523,6 +1523,12 @@ fn lower_fact(
             Some(&global) => (global, Some(index)),
             None => return Ok(()),
         },
+        // A routine the module defines and nothing calls has no callable: its
+        // function carries the fact.
+        Subject::Callable(id) if !hir.callables.iter().any(|one| one.id == id) => match declared.get(&id) {
+            Some(&global) => (global, None),
+            None => return Err("a fact of no callable".to_owned()),
+        },
         Subject::Callable(id) => {
             let callable = hir.callables.iter().find(|one| one.id == id).ok_or("a fact of no callable")?;
             // A routine the module never calls has no declaration to carry it.
