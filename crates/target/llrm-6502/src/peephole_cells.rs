@@ -232,6 +232,19 @@ fn dead_from_pushed(
             }
             return !call_may_read_scratch(reads, inst, n);
         }
+        // a function of the program, or an external one, reads of `rc2`..`rc7`
+        // the cells this function's call of it passes: the others are as the
+        // call found them
+        if inst.op == Op::Jsr
+            && (2..8).contains(&n)
+            && matches!(
+                &inst.operand,
+                Operand::Direct(callee) if !crate::routines::is_runtime_routine(callee)
+                    && reads.callees.get(callee).is_some_and(|cells| !cells.contains(&n))
+            )
+        {
+            continue;
+        }
         // a call does not read the cells its routine reads no argument from:
         // one it always writes is dead before it (the `rc5`..`rc7` of a byte
         // divisor, the remainder's cells of a quotient-and-remainder call), any
