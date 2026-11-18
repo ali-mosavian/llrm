@@ -19,6 +19,15 @@
 //!
 //! # Used by
 //! `pipeline`.
+//!
+//! # Example
+//! A call of an `alwaysinline` function is replaced by a copy of its body, and the
+//! function is dropped once nothing calls or addresses it.
+//!
+//! ```text
+//! define internal i32 @f(i32 %x) alwaysinline { %r = add i32 %x, 1 ; ret i32 %r }
+//! %v = call i32 @f(i32 %a)      ; becomes  %v = add i32 %a, 1, and @f is deleted
+//! ```
 
 use std::rc::Rc;
 

@@ -9,6 +9,15 @@
 //!
 //! # Used by
 //! Every site that swaps the two arms of a `br` or `select` in place.
+//!
+//! # Example
+//! When the two arms of a conditional branch change places, its weights change places too.
+//!
+//! ```text
+//! br i1 %c, label %a, label %b, !prof !{"branch_weights", i32 90, i32 10}
+//! => swapSuccessors
+//! br i1 %c, label %b, label %a, !prof !{"branch_weights", i32 10, i32 90}
+//! ```
 
 use llrm_mir::context::Context;
 use llrm_mir::module::{Function, InstId, MetadataNode, MetadataOperand};
