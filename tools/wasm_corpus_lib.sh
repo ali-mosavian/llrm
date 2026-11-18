@@ -7,7 +7,7 @@ count() {
   local linked="$1.stub.o" md5
   cp "$2" "$linked"; md5=$(stub_md5 "$linked")
   : > "$1.import"
-  wasm-ld --no-entry --export=llrm_harness_run --allow-undefined "$1" "$linked" -o "$1.wasm" 2> "$1.ld" ||
+  wasm-ld --no-entry --export=llrm_harness_run --allow-undefined "$1" "$linked" ${RT_OBJS:-} -o "$1.wasm" 2> "$1.ld" ||
     { sed -n 's/^wasm-ld: error: /link failed: /p' "$1.ld" | head -1 > "$1.import"; echo "none 0 $md5"; return; }
   # The trace counts instructions but costs minutes on a program of hundreds of millions (memfuncs_runtime: 4 s untraced, over 5 min
   # traced): past the cap the result comes from an untraced run and the count is "-", never 0.
