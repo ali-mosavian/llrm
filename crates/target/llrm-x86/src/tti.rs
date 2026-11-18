@@ -861,6 +861,14 @@ impl Tti for X86 {
         self.tuning.unroll_never_grows_at_o1
     }
 
+    /// DEVIATE UNROLL-THROUGH-CALLS: x86-64 (switch_jump_table O2: gcc unrolls
+    /// the 10-trip `byte()` loop and folds its switch, 228 instructions).
+    /// owner: llrm-target-x86-m16-b, exit: 2026-11-30, or when the pin's
+    /// analysis prices calls.
+    fn unroll_prices_calls(&self) -> bool {
+        self.quad
+    }
+
     fn unroll_trial_threshold(&self) -> Option<u32> {
         self.tuning.unroll_trial_at_o1
     }

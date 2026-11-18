@@ -1234,7 +1234,8 @@ fn should_full_unroll(
         max_unrolled_loop_size,
         trips_to_analyze,
         None,
-        false,
+        // DEVIATE UNROLL-THROUGH-CALLS (`Tti::unroll_prices_calls`).
+        run.tti.unroll_prices_calls(),
     ) {
         let boost = full_unroll_boosting_factor(&cost, up.max_percent_threshold_boost);
         let boosted_threshold = (u64::from(up.threshold) * u64::from(boost) / 100) as u32;
