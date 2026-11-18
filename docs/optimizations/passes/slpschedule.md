@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/slpschedule.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/slpschedule.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/slpschedule.rs sha256:d03c913b0ae55f4c68d66cbe97bfc80a54c8b42f8835091471868e96292e8729 -->
+<!-- src: crates/opt/llrm-transforms/src/slpschedule.rs sha256:4895cf5ff3c446f79998c9db418f7cca4698f8f84077d7c2dbaaeb366f916a9a -->
 
 # slpschedule
 
@@ -27,3 +27,13 @@ Under `slptree` (`schedulable_phis`, `emit`).
 
 ## Used by
 `slptree`.
+
+## Example
+Once a tree is vectorized, the vector of each bundle is placed where the last scalar of its bundle stood, and what waits on it follows.
+
+```text
+store float %f0 / %f1 / %f2 / %f3   (four scalar stores, in this order)
+        =>
+the <4 x float> chain is emitted in the place of the last scalar it
+replaces; the one vector store stands at the last scalar store
+```

@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 310 documented, 4 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 310 documented, 5 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -317,6 +317,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | unrollbound | The most trips a loop can make, from the size of the object it accesses. | Named by `loopunrollpass`. | [unrollbound](unrollbound.md) |
 | uremloop | CodeGenPrepare's `foldURemOfLoopIncrement`: the remainder of a loop's counter by a loop-invariant amount is a second counter that wraps ([CodeGenPrepare.cpp#L2227](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/CodeGenPrepare.cpp#L2227)). | In `cgpaddr`'s run, before the store split. | [uremloop](uremloop.md) |
 | vastart | `llvm.va_start` of a one-pointer `va_list` as a store the mid-end can see. | First in the mid-end, before `sroa`, in a variadic function. | [vastart](vastart.md) |
+| vectorlower | undocumented | | [source](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/vectorlower.rs) |
 | vncoercion | A value stored or loaded in one type, made the value a load of another type at a must-aliased address reads: GVN's `VNCoercion`, a translation of [`VNCoercion.cpp`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/VNCoercion.cpp) at d1106deb71cc. | Nothing yet; `gvn`'s load elimination (stage 4 of the GVN port) is the | [vncoercion](vncoercion.md) |
 | walk | The module passes that LLVM runs between the early function pipeline and the function simplification (`ipsccp`, `deadargelim`), so that a body they change goes through the Simplify list once and not again afterwards. | Once per compile, after the Early stage. | [walk](walk.md) |
 | widen | A loop counter read through `sext` or `zext` becomes a counter of the wider type, and the extensions go. | [`crate::simplifyindvar`](simplifyindvar.md) (`simplifyAndExtend`), from [`crate::indvars`](indvars.md). | [widen](widen.md) |
