@@ -1384,7 +1384,9 @@ fn note_for_trial(
 /// A target that states `Tti::peels_on_trial_at_size` has the peels the
 /// `unroll_trial_at_size` bar would admit noted at -Os, and taken in the trial
 /// compile; the driver keeps them where the finished functions are smaller
-/// (what a peel frees lands in later passes, so only the code decides).
+/// (what a peel frees lands in later passes, so only the code decides). The
+/// driver also leaves single peels out (`trial::peel_site_skipped`,
+/// PEEL-OS-PER-LOOP) where the finished functions are smaller without them.
 #[allow(clippy::too_many_arguments)]
 fn peel_on_trial(
     run: &Run,
@@ -1406,7 +1408,10 @@ fn peel_on_trial(
         return;
     }
     if trial::active().is_some() {
-        *pp = wide;
+        let name = run.this.and_then(|this| run.globals[this.0 as usize].name.as_deref().map(str::to_owned)).unwrap_or_default();
+        if !trial::peel_site_skipped(&format!("{name}:{:?}", lp.get_header())) {
+            *pp = wide;
+        }
     } else if let Some(this) = run.this
         && let Some(name) = run.globals[this.0 as usize].name.as_deref()
     {

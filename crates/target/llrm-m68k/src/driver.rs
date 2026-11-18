@@ -221,6 +221,10 @@ struct Kept {
 /// the 29.4 s the trial added (run/fixed_point 3,628 units: 0.95 s -> 3.7 s).
 const TRIAL_MAX_UNITS: u64 = 700;
 
+/// The most loops PEEL-OS-PER-LOOP tries one by one: each is a compile of the
+/// module.
+const PEEL_SITES_MAX: usize = 48;
+
 /// [`lowered_once`], then at -Os DEVIATE UNROLL-OS-TRIAL (the shared
 /// `llrm_transforms::trial`, as x86's driver): the module compiled again with
 /// the loops the -Os threshold refused unrolled, kept if its functions that
@@ -309,8 +313,10 @@ fn lowered(
     };
     let plain = |module: Module, kept: Option<Kept>| Lowered { module, kept };
     let Some(limit) = limit.filter(|_| !noted.is_empty() && units <= TRIAL_MAX_UNITS) else { return Ok(plain(base, base_kept)) };
+    let _ = trial::take_peel_sites();
     let Ok(other) = trial::with_inlined(&inlined, || trial::with(limit, || lowered_once(text, cpu, level, None, policy))) else { return Ok(plain(base, base_kept)) };
     let _ = trial::take();
+    let peel_sites = trial::take_peel_sites();
     let cut = trial::differing(&base, &other);
     if cut.is_empty() {
         return Ok(plain(base, base_kept));
@@ -326,11 +332,73 @@ fn lowered(
             .collect();
         lower(&base, &rest).map_or(true, |kept| crate::trial::calls_mulsi3(&kept.items))
     };
-    let pays = crate::trial::keeps_linking(&with.items, &without.items, rest_calls_mulsi3, cpu, crate::timing::Price::of(small));
+    let price = crate::timing::Price::of(small);
+    let pays = crate::trial::keeps_linking(&with.items, &without.items, rest_calls_mulsi3, cpu, price);
     if llrm_support::debug::enabled("trial") {
         eprintln!("trial unroll {level:?}: {} functions differ: {}", cut.len(), if pays { "kept" } else { "put back" });
     }
-    Ok(if pays { Lowered { module: other, kept: Some(with) } } else { Lowered { module: base, kept: Some(without) } })
+    if !pays {
+        return Ok(Lowered { module: base, kept: Some(without) });
+    }
+    // DEVIATE PEEL-OS-PER-LOOP: the trial peeled every loop it could; each
+    // peel is now left out in turn and stays out where the finished functions
+    // are smaller. One pass, in the order the compile reached the loops.
+    let sites = peel_sites;
+    if !small || sites.is_empty() || sites.len() > PEEL_SITES_MAX {
+        return Ok(Lowered { module: other, kept: Some(with) });
+    }
+    let (mut module, mut skipped) = (other, Vec::<String>::new());
+    // the current module's finished functions, so each is lowered once
+    let mut current: Vec<(String, Vec<Item>)> = with.items.clone();
+    for site in &sites {
+        let trying: Vec<String> = skipped.iter().cloned().chain([site.clone()]).collect();
+        let Ok(candidate) = trial::with_peels_skipped(&trying, || {
+            trial::with_inlined(&inlined, || trial::with(limit, || lowered_once(text, cpu, level, None, policy)))
+        }) else {
+            continue;
+        };
+        let _ = trial::take();
+        let _ = trial::take_peel_sites();
+        let changed = trial::differing(&module, &candidate);
+        if changed.is_empty() {
+            continue;
+        }
+        let left = lower(&candidate, &changed)?;
+        if left.libcalls != with.libcalls {
+            continue;
+        }
+        let have: Vec<(String, Vec<Item>)> =
+            current.iter().filter(|(name, _)| changed.contains(name)).cloned().collect();
+        let peeled =
+            if have.len() == changed.len() { Kept { libcalls: left.libcalls, items: have } } else { lower(&module, &changed)? };
+        let rest_calls = || {
+            let rest: std::collections::BTreeSet<String> = module
+                .functions()
+                .filter(|(_, _, function)| !function.is_declaration())
+                .filter_map(|(_, global, _)| global.name.owned().filter(|name| !changed.contains(name)))
+                .collect();
+            lower(&candidate, &rest).map_or(true, |kept| crate::trial::calls_mulsi3(&kept.items))
+        };
+        if crate::trial::keeps_linking(&left.items, &peeled.items, rest_calls, cpu, price) {
+            skipped = trying;
+            module = candidate;
+            current.retain(|(name, _)| !changed.contains(name));
+            current.extend(left.items);
+        }
+    }
+    if llrm_support::debug::enabled("trial") {
+        eprintln!("trial peel {level:?}: {} of {} loops left unpeeled", skipped.len(), sites.len());
+    }
+    if skipped.is_empty() {
+        return Ok(Lowered { module, kept: Some(with) });
+    }
+    let cut = trial::differing(&base, &module);
+    if cut.is_empty() {
+        return Ok(plain(base, base_kept));
+    }
+    let items: Vec<(String, Vec<Item>)> = current.into_iter().filter(|(name, _)| cut.contains(name)).collect();
+    let kept = if items.len() == cut.len() { Kept { libcalls: with.libcalls, items } } else { lower(&module, &cut)? };
+    Ok(Lowered { module, kept: Some(kept) })
 }
 
 /// `text` through the shared mid-end, the expansions m68k needs, and the
