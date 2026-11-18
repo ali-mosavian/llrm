@@ -1052,6 +1052,15 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE LSR-OUTER-SIZE: whether `reduces_outer_multiply` also holds at
+    /// -Os. A multiply that is a runtime call costs its setup and the routine's
+    /// bytes at each use; the counter stepped by the multiplier costs one add
+    /// and a cell pair. false: the pin's, which leaves a loop with a subloop
+    /// alone.
+    fn reduces_outer_multiply_at_size(&self) -> bool {
+        false
+    }
+
     /// `getJumpConditionMergingParams`: the budget for keeping the compares
     /// of a branch on `a && b` or `a || b` one condition. Split always, where
     /// the target says nothing.

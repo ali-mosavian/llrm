@@ -322,14 +322,15 @@ fn plan_loop(
     // DEVIATE LSR-OUTER (owner x87, exit 2026-11-27; the pin skips every loop
     // that has a subloop): where the target prices it
     // (`Tti::reduces_outer_multiply`: the multiply's clocks against a
-    // counter held across the inner loop) and not at -Os, an outer loop
+    // counter held across the inner loop) and not at -Os unless the target
+    // says so (`reduces_outer_multiply_at_size`), an outer loop
     // that computes an affine value with a multiply is reduced as
     // an inner loop is, so `i * 300` feeding the inner loop becomes a counter
     // stepped by 300. gcc's ivopts does this on every loop (named behaviour
     // only, its code is not translated). x_cordic -O1: 200 `imul` x 19
     // clocks.
     if !lp.is_innermost()
-        && !(!size
+        && !((!size || tti.reduces_outer_multiply_at_size())
             && users.uses.iter().any(|one| computed_by_priced_multiply(tti, context, layout, function, one.operand, 3)))
     {
         return planned(None);
