@@ -1935,6 +1935,29 @@ impl<'a> TypeLegalizer<'a> {
                 let promoted = self.promoted_integer(value);
                 self.dag.get_store(chain, promoted, ptr, info)
             }
+            ISD::ConcatVectors => {
+                // `PromoteIntOp_CONCAT_VECTORS`: every lane of every promoted piece read out, narrowed to the result
+                // lane, and built.
+                let result_vt = self.dag.value_type(node);
+                let lane_vt = result_vt.element();
+                let mut lanes = Vec::new();
+                for piece in 0..self.dag.node(node).ops.len() {
+                    let incoming = self.dag.operand(node, piece);
+                    let incoming = if self.action(self.dag.value_type(incoming)) == TypeAction::PromoteInteger {
+                        self.promoted_integer(incoming)
+                    } else {
+                        incoming
+                    };
+                    let incoming_vt = self.dag.value_type(incoming);
+                    for lane in 0..incoming_vt.lanes() {
+                        let index = self.dag.get_constant(u128::from(lane), EVT::I64);
+                        let element =
+                            self.dag.get_node(ISD::ExtractElement, incoming_vt.element(), &[incoming, index]);
+                        lanes.push(self.dag.get_any_ext_or_trunc(element, lane_vt));
+                    }
+                }
+                self.dag.get_build_vector(result_vt, &lanes)
+            }
             op => {
                 return Err(LegalizeError::Unsupported {
                     op,

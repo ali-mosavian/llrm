@@ -82,19 +82,36 @@ pub fn removed(module: &mut Module) -> Vec<GlobalId> {
 /// argument went from whose value then has no other reader (what computed it
 /// is dead now).
 pub fn removed_with(module: &mut Module) -> (Vec<GlobalId>, BTreeSet<GlobalId>) {
-    removed_among(module, false)
+    removed_among(module, SelfCalls::No)
 }
 
-/// [`removed_with`] over the functions that call themselves alone: the
-/// recursion copier prices a body without the parameters nothing reads, as
-/// gcc's IPA-SRA leaves it for `-finline-recursive` (W1).
-pub fn removed_from_recursions(module: &mut Module) -> (Vec<GlobalId>, BTreeSet<GlobalId>) {
-    removed_among(module, true)
+/// [`removed_with`] over the functions that call themselves: the recursion
+/// copier prices a body without the parameters nothing reads, as gcc's IPA-SRA
+/// leaves it for `-finline-recursive` (W1). With `tree` only those with two
+/// or more self-calls: the calls of a tree recursion merge once the
+/// arguments they differ in are gone (hanoi), the one gain an early removal
+/// has where the pin removes after the walk.
+pub fn removed_from_recursions(
+    module: &mut Module,
+    tree: bool,
+) -> (Vec<GlobalId>, BTreeSet<GlobalId>) {
+    removed_among(module, if tree { SelfCalls::Tree } else { SelfCalls::Any })
+}
+
+/// Which functions [`removed_among`] looks at.
+#[derive(Clone, Copy, PartialEq)]
+enum SelfCalls {
+    /// Every function.
+    No,
+    /// Those that call themselves.
+    Any,
+    /// Those that call themselves at two or more sites.
+    Tree,
 }
 
 fn removed_among(
     module: &mut Module,
-    recursive_only: bool,
+    calls_of: SelfCalls,
 ) -> (Vec<GlobalId>, BTreeSet<GlobalId>) {
     let mut unsound = BTreeSet::new();
     let only = direct_only(module);
@@ -104,7 +121,12 @@ fn removed_among(
     let mut rebuilt = BTreeSet::new();
     for &id in only.iter().filter(|id| !refused.contains(id)) {
         let Some(calls) = sites.get(&id) else { continue };
-        if recursive_only && !calls.iter().any(|&(caller, _)| caller == id) {
+        let own_calls = calls.iter().filter(|&&(caller, _)| caller == id).count();
+        if own_calls < match calls_of {
+            SelfCalls::No => 0,
+            SelfCalls::Any => 1,
+            SelfCalls::Tree => 2,
+        } {
             continue;
         }
         let gone = dead(module, id);

@@ -1083,6 +1083,16 @@ pub(crate) fn llvm_order(
             }),
             combine("combine@1242"),
             dead("dead@1242"),
+            // DEVIATE BACKTHREAD-REL: before `decide@1244` makes selects of the
+            // branches.
+            slot(
+                "backthread@1243",
+                Box::new(
+                    crate::backwardthreading::BackwardThreading::from_env()
+                        .when(applied.options.backward_threading)
+                        .early(),
+                ),
+            ),
             // `SimplifyCFGOptions().convertSwitchRangeToICmp(true)`
             // (PassBuilderPipelines.cpp#L1245): the option is read by
             // `simplifySwitch`, not translated yet, so these are the defaults.
@@ -1492,13 +1502,20 @@ pub fn timed() {
 /// The level `LoopFullUnroll` is told: 1 at -O1 (`pre` off, as `ABSENT_AT_O1`
 /// reads it), else 3 or 2 by the target percent. It was always 2 or 3, so the
 /// -O1 rule `unroll_never_grows_at_o1` never ran.
-/// Whether ipa-cp copies without `-fipa-cp-clone`: at -O2 and -O3 where the
-/// target says so, never for size.
+/// Whether ipa-cp copies without `-fipa-cp-clone`: at -O3 where the target
+/// clones at speed, at -O2 where it clones there too
+/// (`Tti::ipa_cp_clones_at_o2`), never for size.
 fn cp_clones_by_default(
     options: &Options,
     target_clones_at_speed: bool,
+    target_clones_at_o2: bool,
 ) -> bool {
-    target_clones_at_speed && unroll_level(options) >= 2 && !options.prefers_size()
+    match unroll_level(options) {
+        _ if options.prefers_size() => false,
+        3 => target_clones_at_speed,
+        2 => target_clones_at_o2,
+        _ => false,
+    }
 }
 
 fn unroll_level(options: &Options) -> u32 {
@@ -1693,6 +1710,7 @@ pub fn recorded(
                     cp_clones_by_default(
                         &applied.options,
                         program.target.tti().is_some_and(|tti| tti.ipa_cp_clones_at_speed()),
+                        program.target.tti().is_some_and(|tti| tti.ipa_cp_clones_at_o2()),
                     )
                 })),
                 cp_hint_clones: applied.options.inline.cp_clone.is_some() || unroll_level(&applied.options) >= 3,
