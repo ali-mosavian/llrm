@@ -118,6 +118,8 @@ pub fn trial_bytes(cpu: Cpu) -> OperationCosts {
 /// (2026-11-20).
 fn calibrate(costs: &mut OperationCosts) {
     costs.width_scaled = true;
+    // every operand of a call but the callee is an argument (CALL-ARGS-SKIP)
+    costs.exact_call_arguments = true;
     // A load or store from a global or a stack slot is an absolute address;
     // through a pointer it is `(zp),y`.
     costs.direct_load = 2;
@@ -131,8 +133,8 @@ fn calibrate(costs: &mut OperationCosts) {
     // A constant shift is a few `asl`/`rol` per byte; a call keeps what it
     // needs across it.
     costs.shift = 5;
-    costs.call = 12;
-    costs.argument = 2;
+    costs.call = 7;
+    costs.argument = 1;
     costs.multiply = 9;
     costs.multiply_long = 9;
     costs.divide = 22;
