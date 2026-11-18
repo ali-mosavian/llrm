@@ -56,6 +56,7 @@ use crate::combine_select_op_op::select_op_op;
 use crate::combine_select_spf::select_with_icmp;
 use crate::combine_select_tail::{nested_selects, select_of_symmetric_select};
 use crate::combine_select_to_cmp::select_to_cmp;
+use crate::combine_select_to_phi::select_to_phi;
 use crate::combine_shared::{has_one_use, query, replace_operand};
 
 /// The parts of a `select`.
@@ -91,6 +92,7 @@ const FOLDS: &[Fold] = &[
     binop_between_selects,
     absorb_not_condition,
     select_fcmp_unordered_swap,
+    select_to_phi,
     select_of_symmetric_select,
     nested_selects,
     select_to_cmp,
