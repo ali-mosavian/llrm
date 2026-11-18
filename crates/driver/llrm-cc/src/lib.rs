@@ -141,6 +141,13 @@ pub struct Target {
     /// so clang's IR keeps a latch branch on a compare tested one block up.
     #[serde(default)]
     pub thread_jumps_at_o1: bool,
+    /// DEVIATE VP9 (owner arm64-vec, exit 2026-12-31): `-fllrm-vect-very-cheap`
+    /// is the default at `-O2`: gcc's `vect-cost-model=very-cheap`, which
+    /// vectorizes a loop only where no scalar epilogue is left. The pin's -O2
+    /// vectorizes with an epilogue, 3x the code of gcc's for an unknown trip
+    /// count (QuickrBasic `tabl_moved`: 1216 B against 428 B).
+    #[serde(default)]
+    pub vect_very_cheap_at_o2: bool,
     /// DEVIATE SPEED-O1 (owner x86-m32-b, exit 2026-11-24; user ruling
     /// 2026-11-14: -O1 to -O3 match the best compiler by clocks):
     /// `-fllrm-speed-rate` is the default at `-O1`, so the target's byte
@@ -499,6 +506,7 @@ const BACKEND_PASSES: &[&str] = &[
     "tree-pre",
     "thread-jumps",
     "llrm-speed-rate",
+    "llrm-vect-very-cheap",
     "tree-switch-conversion",
     "jump-tables",
     "tree-dse",
@@ -722,6 +730,19 @@ fn threads_jumps_at_o1(
         && !build.llc.iter().any(|flag| flag == "-fthread-jumps" || flag == "-fno-thread-jumps")
 }
 
+/// Whether the target's `-O2` takes `-fllrm-vect-very-cheap` as its default:
+/// unless the command line states either spelling, and only where the backend
+/// takes pass switches.
+fn vectorizes_very_cheap_at_o2(
+    target: &Target,
+    build: &Build,
+) -> bool {
+    target.vect_very_cheap_at_o2
+        && target.llc_passes
+        && build.level == "2"
+        && !build.llc.iter().any(|flag| flag == "-fllrm-vect-very-cheap" || flag == "-fno-llrm-vect-very-cheap")
+}
+
 /// Whether the target's `-O1` takes `-fllrm-speed-rate` as its default: unless
 /// the command line states either spelling, and only where the backend takes
 /// pass switches.
@@ -814,6 +835,9 @@ pub fn llc_args(
     }
     if prices_bytes_at_o1(target, build) {
         args.push("-fllrm-speed-rate".into());
+    }
+    if vectorizes_very_cheap_at_o2(target, build) {
+        args.push("-fllrm-vect-very-cheap".into());
     }
     if pre_at_o1(target, build) {
         args.push("-ftree-pre".into());

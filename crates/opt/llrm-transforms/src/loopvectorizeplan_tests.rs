@@ -29,6 +29,7 @@ fn facts(
         store_load_forward_bits: None,
         widest_induction_bits: 64,
         opt_size: false,
+        very_cheap: false,
         has_reductions: false,
         size_priced: false,
         reduction_bits: Vec::new(),
@@ -116,6 +117,22 @@ fn no_epilogue_is_planned_where_the_pin_allows_none() {
     // A count the factors divide (VF 8, IC 1 at `-Os`) needs none.
     size.trip_count = 1000;
     assert_eq!(plan(&tti, &size), Ok(Plan { vf: 8, ic: 1 }));
+}
+
+/// gcc's `vect-cost-model=very-cheap` (VP9): a loop with a scalar epilogue is
+/// not planned at -O2 either, one the factors divide is (IC 1, as where no
+/// epilogue is allowed).
+#[test]
+fn a_very_cheap_cost_model_plans_no_loop_with_an_epilogue() {
+    let tti = AArch64::of_cpu("generic").unwrap();
+    let mut cheap = facts(16, 1921, false);
+    cheap.very_cheap = true;
+    for trips in [0, 1001, 1921] {
+        cheap.trip_count = trips;
+        assert_eq!(plan(&tti, &cheap).unwrap_err().0, "A scalar epilogue would remain", "trips {trips}");
+    }
+    cheap.trip_count = 1920;
+    assert_eq!(plan(&tti, &cheap), Ok(Plan { vf: 8, ic: 1 }));
 }
 
 /// Bandwidth maximization (`shouldMaximizeVectorBandwidth`) takes VF 8 for a
@@ -240,7 +257,9 @@ fn widening_loop(live_values: usize) -> LoopFacts {
     let mut facts = facts(8, 1920, false);
     facts.recipes = recipes;
     // `live_values` i64 values all open across the last one.
-    let live = (0..live_values).map(|at| super::Live { lane: wide, start: at, end: live_values + 1, accumulator: false }).collect();
+    let live = (0..live_values)
+        .map(|at| super::Live { lane: wide, start: at, end: live_values + 1, accumulator: false })
+        .collect();
     facts.pressure = Some(super::Pressure { live, invariants: Vec::new() });
     facts
 }
