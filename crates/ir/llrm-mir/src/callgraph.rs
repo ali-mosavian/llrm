@@ -431,3 +431,21 @@ pub fn direct_calls(module: &Module) -> DirectCalls {
     }
     found
 }
+
+/// Whether the call `inst` in `function` passes the function's own parameters,
+/// in order and as many as it has arguments: the stack arguments it was called
+/// with are already where the callee wants them, so the call can be a jump
+/// (`isEligibleForSiblingCallOpt` takes a stack argument only when it is the
+/// caller's incoming parameter at the same offset).
+pub fn passes_own_parameters(
+    function: &crate::module::Function,
+    inst: crate::module::InstId,
+) -> bool {
+    use crate::module::Operand;
+    let operation = function.instruction(inst);
+    let Some((_, arguments)) = operation.operands.split_last() else { return false };
+    let parameters = function.parameters();
+    !arguments.is_empty()
+        && arguments.len() <= parameters.len()
+        && arguments.iter().zip(parameters).all(|(argument, parameter)| *argument == Operand::Value(*parameter))
+}
