@@ -471,6 +471,14 @@ pub struct Tuning {
     /// the mass and make the code after them cold (threshold 45, no bonuses).
     /// false: the pin's.
     pub cold_site_ignores_sinks: bool,
+    /// DEVIATE LC-SIZE (owner llrm-target-x86-m16-b, exit 2026-11-30): tuned
+    /// for size, the `LastCallToStatic` bonus also applies at a cold call
+    /// site, where the pin drops it: gcc's `-finline-functions-called-once`
+    /// inlines every local function called once whose copy does not grow the
+    /// code (`want_inline_function_to_all_callers_p`), cold caller or not. QB
+    /// control.c m32 -Os: `xstmt` (804 B) stayed a function, gcc 6948 B
+    /// against 7813.
+    pub last_call_at_cold_sites_for_size: bool,
     /// Read-only data (a private constant, a jump table) that one procedure
     /// only loads from follows that procedure in its code segment and is read
     /// through `cs:`, as `TargetLoweringObjectFile::getSectionForConstant`
@@ -900,6 +908,7 @@ impl Tuning {
         unswitch_threshold: None,
         inline_threshold: None,
         cold_site_ignores_sinks: false,
+        last_call_at_cold_sites_for_size: false,
         read_only_in_code: false,
         min_jump_table_density: None,
         licm_float_register_limit: None,

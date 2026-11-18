@@ -1017,6 +1017,10 @@ impl Tti for X86 {
         self.tuning.jump_threading_latch_trial_at_size
     }
 
+    fn last_call_at_cold_sites_for_size(&self) -> bool {
+        self.tuning.last_call_at_cold_sites_for_size
+    }
+
     fn cold_site_ignores_sinks(&self) -> bool {
         self.tuning.cold_site_ignores_sinks
     }

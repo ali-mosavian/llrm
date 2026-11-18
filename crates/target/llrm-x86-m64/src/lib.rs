@@ -584,6 +584,8 @@ impl llrm_target::Target for M64 {
                             // dword and a byte 3 + 3, a word 4 + 4); the call is `mov edx, n` 5 and the
                             // jump 5, 14 with the setup of a frame object's pointers.
                             size_copy_price: Some(llrm_mir::target::CopyPrice { call: 14, wide_piece: 8, narrow_piece: 6 }),
+                            // DEVIATE LC-SIZE (owner llrm-target-x86-m16-b, exit 2026-11-30): see Tuning.
+                            last_call_at_cold_sites_for_size: true,
                             // DEVIATE IMM-1 (owner greedy-os-causes, exit 2026-11-20): see Tuning.
                             immediate_forms_at_size: true,
                             // DEVIATE IPACP-O2 (owner w10, exit 2026-11-24): see Tuning.

@@ -301,6 +301,9 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
             setup: [11, 12],
             fst: [4, 6],
         }),
+        // DEVIATE LC-SIZE (owner llrm-target-x86-m16-b, exit 2026-11-30): see
+        // Tuning.
+        last_call_at_cold_sites_for_size: true,
         // DEVIATE SZ1 (owner x86-m32, exit 2026-11-20): D11 holds at -Os, so a
         // callee whose copies grow the code stays a call (called_once_os:
         // gcc -Os does; the pin inlines it).
