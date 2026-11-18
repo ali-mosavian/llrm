@@ -10,8 +10,9 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 MOS_RT = ROOT / "crates/target/llrm-6502/runtime/mos_rt.s"
 
-def split_rt(text, zp=0x80, cells=26):
-    """{member name: ca65 source} for mos_rt.s text."""
+def split_rt(text, zp=0x80, cells=26, scratch_zp=False):
+    """{member name: ca65 source} for mos_rt.s text. scratch_zp: the BSS scratch cells (`__sa`, `__st`..) are ZEROPAGE, addressed in
+    two bytes where an absolute address takes three (the platform row's `scratch_zero_page`)."""
     equates = "".join(f"rc{i} = ${zp + i:02X}\n" for i in range(cells))
     macros, bss, blocks, pending, in_macro, in_bss = [], [], [], [], False, False
     for line in text.splitlines():
@@ -68,14 +69,32 @@ def split_rt(text, zp=0x80, cells=26):
     groups = {}
     for i in range(len(blocks)):
         groups.setdefault(find(i), []).append(i)
-    head = ".autoimport +\n" + equates + "\n".join(macros) + "\n"
+    zeropage = ".importzp " + ", ".join(cell_names) + "\n" if scratch_zp and cell_names else ""
+    head = ".autoimport +\n" + zeropage + equates + "\n".join(macros) + "\n"
     out = {}
     for members in groups.values():
         names = [rename.get(blocks[i][0], blocks[i][0]) for i in members]
         body = "\n".join(tokens("\n".join(blocks[i][2])) for i in members)
         out[names[0]] = head + ".export " + ", ".join(names) + "\n" + body + "\n"
-    out["__rt_cells"] = head + ".export " + ", ".join(cell_names) + "\n" + "\n".join(bss) + "\n"
+    cells_text = "\n".join(bss)
+    if scratch_zp:
+        cells_text = cells_text.replace('.segment "BSS"', '.segment "ZEROPAGE"', 1)
+        out["__rt_cells"] = head.replace(zeropage, "", 1) + ".exportzp " + ", ".join(cell_names) + "\n" + cells_text + "\n"
+    else:
+        out["__rt_cells"] = head + ".export " + ", ".join(cell_names) + "\n" + cells_text + "\n"
     return out
+
+SCRATCH_CELLS = 15  # `__sa`, `__ra`, `__st`, `__sr`, `__sg` of mos_rt.s
+
+def platform_of(target):
+    """The platform row (`machines/<name>.toml`) of an llrm-cc target such as `6502-sim65` or `65c02-sim65`."""
+    return "sim65-cc65"
+
+def scratch_zero_page(platform):
+    """Zero-page bytes after the registers that the platform row leaves the runtime's scratch (`scratch_zero_page`; 0 where not said)."""
+    import tomllib
+    row = tomllib.loads((ROOT / "crates/target/llrm-6502/src/machines" / f"{platform}.toml").read_text())["platform"]
+    return int(row.get("scratch_zero_page", 0))
 
 def startup(platform="sim65-cc65"):
     """The object a program is linked with first: a constructor (cc65 runs them before `main`) that points the soft stack, rc0:rc1, at the
@@ -108,7 +127,7 @@ def main():
     sys.path.insert(0, str(HERE))
     import crlib
     rt = ROOT / "runtime" / "compiler-rt"
-    sources = {f"mos_{k}": v for k, v in split_rt(MOS_RT.read_text()).items()}
+    sources = {f"mos_{k}": v for k, v in split_rt(MOS_RT.read_text(), scratch_zp=scratch_zero_page(platform_of(target)) >= SCRATCH_CELLS).items()}
     for f in sorted(set(crlib.index(rt).values())):
         sources[f.replace("/", "_")[:-2]] = ".autoimport +\n" + crlib.member(rt, cc, f, ["-Os"], target)
     objs = []
