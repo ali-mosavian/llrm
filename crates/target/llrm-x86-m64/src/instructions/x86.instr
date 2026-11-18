@@ -142,6 +142,14 @@ punpckhdq	binary	x/^0,xm	128	sse_arith	-	-	-	-/-	Punpckhdq_xmm_xmmm128
 punpckhqdq	binary	x/^0,xm	128	sse_arith	-	-	-	-/-	Punpckhqdq_xmm_xmmm128
 packssdw	binary	x/^0,xm	128	sse_arith	-	-	-	-/-	Packssdw_xmm_xmmm128
 pand	binary	x/^0,xm	128	sse_logic	-	same	-	-/-	Pand_xmm_xmmm128
+pcmpeqb	binary	x/^0,xm	128	sse_logic	-	same	-	-/-	Pcmpeqb_xmm_xmmm128
+pcmpeqw	binary	x/^0,xm	128	sse_logic	-	same	-	-/-	Pcmpeqw_xmm_xmmm128
+pcmpeqd	binary	x/^0,xm	128	sse_logic	-	same	-	-/-	Pcmpeqd_xmm_xmmm128
+pcmpgtb	binary	x/^0,xm	128	sse_logic	-	-	-	-/-	Pcmpgtb_xmm_xmmm128
+pcmpgtw	binary	x/^0,xm	128	sse_logic	-	-	-	-/-	Pcmpgtw_xmm_xmmm128
+pcmpgtd	binary	x/^0,xm	128	sse_logic	-	-	-	-/-	Pcmpgtd_xmm_xmmm128
+pmovmskb	extend	r/x	128	sse_move	-	-	-	-/-	Pmovmskb_r32_xmm
+movmskps	extend	r/x	128	sse_move	-	-	-	-/-	Movmskps_r32_xmm
 pandn	binary	x/^0,xm	128	sse_logic	-	idiom,same	-	-/-	Pandn_xmm_xmmm128
 por	binary	x/^0,xm	128	sse_logic	-	same	-	-/-	Por_xmm_xmmm128
 pxor	binary	x/^0,xm	128	sse_logic	-	idiom,same	-	-/-	Pxor_xmm_xmmm128
@@ -155,6 +163,8 @@ movq_x	extend	x/m	64	sse_move	-	-	-	-/-	Movq_xmm_xmmm64
 movq_x	extend	m/x	64	sse_move	-	-	-	-/-	Movq_xmmm64_xmm
 movd	extend	r/x	32	sse_move	-	-	-	-/-	Movd_rm32_xmm
 movd_x	extend	x/r	32	sse_move	-	-	-	-/-	Movd_xmm_rm32
+movd_x	extend	x/m	32	sse_move	-	-	-	-/-	Movd_xmm_rm32
+movd_x	extend	m/x	32	sse_move	-	-	-	-/-	Movd_rm32_xmm
 cvtss2sd	extend	x/xm	32	sse_move	-	-	-	-/-	Cvtss2sd_xmm_xmmm32
 cvtsd2ss	extend	x/xm	64	sse_move	-	-	-	-/-	Cvtsd2ss_xmm_xmmm64
 cvtsi2ss	extend	x/rm	32	sse_move	-	-	-	-/-	Cvtsi2ss_xmm_rm32

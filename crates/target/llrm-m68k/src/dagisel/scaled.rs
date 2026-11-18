@@ -25,8 +25,10 @@ use super::asm::{ASM, AsmOperand};
 use super::enc::{Piece, encoding};
 use super::generated::instrinfo;
 
-/// Codes of the scaled rows, above the short forms'.
-pub const FIRST: u16 = 0xF400;
+/// Codes of the scaled rows, in a range of their own: they follow the pin table
+/// (one row per scale of each indexed row), so they outgrew the 256 codes below
+/// the next segment and shadowed `cmpa.l` (`CMPA32p` read as a memory add).
+pub const FIRST: u16 = 0x8000;
 
 const SCALES: [u8; 3] = [2, 4, 8];
 

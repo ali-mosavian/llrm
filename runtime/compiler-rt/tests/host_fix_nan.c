@@ -1,5 +1,5 @@
 /* NaN to int: 0 by default (SF_FIX_NAN_UNDEF unset: every target but x86 m16); with SF_FIX_NAN_UNDEF the saturated value, as compiler-rt.
- * cc -O2 -Iinclude [-DSF_FIX_NAN_UNDEF] '-DSF_NAME(n)=sfb_##n' tests/host_fix_nan.c lib/fp/f32/fix_si.c lib/fp/f32/fix_usi.c lib/fp/f32/fix_di.c lib/fp/f64/fix.c lib/fp/f64/pack.c && ./a.out */
+ * cc -O2 -Iinclude [-DSF_FIX_NAN_UNDEF] '-DSF_NAME(n)=sfb_##n' tests/host_fix_nan.c lib/fp/f32/fix_si.c lib/fp/f32/fix_usi.c lib/fp/f32/fix_di.c lib/fp/f32/fix_udi.c lib/fp/f64/fix.c lib/fp/f64/pack.c && ./a.out */
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>

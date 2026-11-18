@@ -72,6 +72,38 @@ fn a_remainder_alone_is_one_divide_on_the_68020() {
     }
 }
 
+/// A remainder inside a loop was `divs.l`, `muls.l` and `sub.l`: the two-address multiply reads a copy of the quotient
+/// and its own product, and a branch reads the subtract's codes (bench/recgcd, run/idiv_loop_os: +12 B each at Os).
+#[test]
+fn a_remainder_in_a_loop_is_one_divide_on_the_68020() {
+    for (signed, one, other) in [(true, "divsl.l", "divs.l"), (false, "divul.l", "divu.l")] {
+        let rem = if signed { "srem" } else { "urem" };
+        let ir = format!(
+            "define i32 @f(i32 %a, i32 %b) {{
+entry:
+  %z = icmp eq i32 %b, 0
+  br i1 %z, label %done, label %l
+l:
+  %x = phi i32 [ %a, %entry ], [ %y, %l ]
+  %y = phi i32 [ %b, %entry ], [ %r, %l ]
+  %r = {rem} i32 %x, %y
+  %c = icmp eq i32 %r, 0
+  br i1 %c, label %done, label %l
+done:
+  %res = phi i32 [ %a, %entry ], [ %y, %l ]
+  ret i32 %res
+}}
+"
+        );
+        for level in [Level::O2, Level::Os] {
+            let ir = format!("target datalayout = \"{DATALAYOUT}\"\n{ir}");
+            let out = assembly(&ir, cpu_of("68020").unwrap(), level).expect("compiles");
+            assert!(out.contains(one) && !out.contains(&format!("{other}\t")), "{level:?}:\n{out}");
+            assert!(!out.contains("muls.l") && !out.contains("mulu.l"), "{level:?}: the multiply back is left:\n{out}");
+        }
+    }
+}
+
 /// The same remainder, run under qemu against C's `%`.
 #[test]
 fn a_remainder_alone_is_the_remainder_under_qemu() {

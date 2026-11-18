@@ -191,12 +191,17 @@ struct Call {
 /// of copies of adjacent cells that `rep movs` does in fewer code bytes than
 /// the loads and stores `MEMCPY_MOVES` makes of it is `llvm.memcpy`. The pin
 /// merges the run into dword copies and stops there (24 pairs for 96 bytes).
+/// A target whose `Tti::string_runs_at_speed` says bytes first lifts the size
+/// gate (6502, 6502-UNROLL-RATE): the pin's MemCpyOpt forms the call at every
+/// level.
 /// The calls made, and the pairs left.
 fn string_runs(
     unit: &Unit,
     span: &mut Vec<Pair>,
     reads: &[Operand],
     costs: &OperationCosts,
+    member_paid: &mut bool,
+    member_linked: &mut dyn FnMut() -> bool,
 ) -> (Vec<Call>, Vec<Pair>) {
     let kept = std::mem::take(span);
     if kept.iter().any(|one| reads.contains(&one.dst)) {
@@ -235,9 +240,21 @@ fn string_runs(
             at = end;
             let length: i64 = run.iter().map(|one| one.width).sum();
             let pairs = length / 4 + i64::from((length % 4).count_ones());
-            if pairs <= 8 || crate::loopidioms::copy_price(costs, length, false) >= pairs * (costs.load + costs.store) {
+            // The loads and stores the run is otherwise, in native words: a
+            // dword is four on a byte machine.
+            let words = (length / 4) * costs.words(32)
+                + i64::from(length & 2 != 0) * costs.words(16)
+                + i64::from(length & 1 != 0) * costs.words(8);
+            if pairs <= 8 {
                 continue;
             }
+            // The library routine the call links in is paid once per program:
+            // by the first run made a call, not the next.
+            let member = if costs.copy_member == 0 || *member_paid || member_linked() { 0 } else { costs.copy_member };
+            if crate::loopidioms::copy_price(costs, length, false) + member >= words * (costs.load + costs.store) {
+                continue;
+            }
+            *member_paid = true;
             let (Some(to), Some(from)) = (unit.space(run[0].dst_pointer), unit.space(run[0].src_pointer)) else {
                 continue;
             };
@@ -277,6 +294,8 @@ pub fn merged_copies(
     let legal = layout.largest_legal_integer();
     let mut plan: Vec<Vec<Pair>> = Vec::new();
     let mut calls: Vec<Call> = Vec::new();
+    let mut member_paid = false;
+    let mut linked: Option<bool> = None;
     {
         let unit = Unit::within(context, layout, function, outer);
         // The loads of the span, by result: one map for the function, emptied
@@ -292,7 +311,13 @@ pub fn merged_copies(
                              put: &mut Vec<ValueId>| {
                 let kept = match run_costs {
                     Some(costs) => {
-                        let (taken, kept) = string_runs(&unit, span, reads, costs);
+                        let mut member_linked = || {
+                            *linked.get_or_insert_with(|| {
+                                declared.as_mut().is_some_and(|declared| declared.declares_prefixed("llvm.memcpy."))
+                            })
+                        };
+                        let (taken, kept) =
+                            string_runs(&unit, span, reads, costs, &mut member_paid, &mut member_linked);
                         calls.extend(taken);
                         kept
                     }
@@ -732,7 +757,8 @@ mod tests {
     /// `a[0] = b[0]; a[1] = b[1]` is a dword load and a dword store.
     /// 24 word copies from `@b` to `@a`, with `size` the pass's mode: the
     /// printed form. Priced in code bytes on the DOS target.
-    fn forty_eight_bytes(size: bool) -> String {
+    /// 24 word copies from `@b` to `@a`, `declares` text before the function.
+    fn forty_eight_module(declares: &str) -> String {
         let steps = (0..24)
             .map(|at| {
                 format!(
@@ -740,10 +766,13 @@ mod tests {
                 )
             })
             .collect::<String>();
-        let text = format!(
-            "@a = global [24 x i16] zeroinitializer\n@b = global [24 x i16] zeroinitializer\n\ndefine i16 @f(i16 %q) {{\n{steps}  ret i16 %q\n}}\n"
-        );
-        let before = parsed(&format!("{DOS}{text}"));
+        format!(
+            "@a = global [24 x i16] zeroinitializer\n@b = global [24 x i16] zeroinitializer\n{declares}\ndefine i16 @f(i16 %q) {{\n{steps}  ret i16 %q\n}}\n"
+        )
+    }
+
+    fn forty_eight_bytes(size: bool) -> String {
+        let before = parsed(&format!("{DOS}{}", forty_eight_module("")));
         let mut module = before.clone();
         let machine = std::rc::Rc::new(llrm_x86_m16::Dos::default());
         let (layout, outer) = (layout(&module), Outer::of(&module, Some(machine.clone())));
@@ -754,6 +783,27 @@ mod tests {
         let runs = size.then_some((&mut declared, &bytes));
         merged_copies(context, &layout, &callees, function, &outer, runs);
         printed(&module)
+    }
+
+    /// The same run through the `Merge` pass tuned for speed, on a byte
+    /// machine whose `memcpy` is `copy` bytes a call and `member` bytes linked
+    /// once, `at_speed` saying whether the target lets a run be a call there.
+    fn forty_eight_at_speed(
+        declares: &str,
+        at_speed: bool,
+        member: i64,
+    ) -> String {
+        let mut module = parsed(&format!("{DOS}{}", forty_eight_module(declares)));
+        let sizes = llrm_mir::target::OperationCosts {
+            native_bits: 8,
+            load: 1,
+            store: 1,
+            copy: 23,
+            copy_member: member,
+            ..Default::default()
+        };
+        let machine = crate::testing::Tuned { sizes, string_runs_at_speed: at_speed, ..Default::default() };
+        crate::testing::managed_on(&mut module, crate::loopidioms::Merge { size: false, widen: true }, machine)
     }
 
     /// 96 bytes of word copies were 24 dword loads and stores (copy_runs -Os
@@ -770,6 +820,30 @@ mod tests {
         let speed = forty_eight_bytes(false);
         assert!(!speed.contains("i16 48"), "{speed}");
         assert_eq!(speed.matches("load i32").count(), 12, "{speed}");
+    }
+
+    /// 6502 copy_runs -O1..-O3: the 96-byte run stayed 96 loads and stores
+    /// (2,106 bytes against 1,392 at -Os, sdcc 2,027) because the run was a
+    /// call only tuned for size. A target that says bytes first at every
+    /// level makes it one call at speed too; any other target keeps the loads.
+    #[test]
+    fn test_a_long_run_of_copies_is_a_memcpy_at_speed_where_the_target_says_bytes_first() {
+        let first = forty_eight_at_speed("", true, 45);
+        assert!(first.contains("i16 48, i1 false)") && !first.contains("load"), "{first}");
+        let other = forty_eight_at_speed("", false, 45);
+        assert!(!other.contains("i16 48"), "{other}");
+    }
+
+    /// The routine a call links in is paid by the first call of a program, not
+    /// the next: 48 byte-pairs cost 96; the call 23, and 80 for the routine
+    /// that no other call has linked.
+    #[test]
+    fn test_the_memcpy_member_is_counted_once_per_program() {
+        let alone = forty_eight_at_speed("", true, 80);
+        assert!(!alone.contains("i16 48"), "{alone}");
+        let linked = "declare void @llvm.memcpy.p0.p0.i16(ptr, ptr, i16, i1)\n";
+        let shared = forty_eight_at_speed(linked, true, 80);
+        assert!(shared.contains("i16 48, i1 false)") && !shared.contains("load"), "{shared}");
     }
 
     #[test]

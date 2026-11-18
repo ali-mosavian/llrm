@@ -21,10 +21,14 @@
 //! - LV-D1 outer loops and the VPlan-native path (`canVectorizeOuterLoop`):
 //!   only innermost loops.
 //! - LV-D2 if-conversion (`canVectorizeWithIfConvert`,
-//!   `blockNeedsPredication`): a loop of more than one block is refused, so no
-//!   block is predicated.
-//! - LV-D3 uncountable and early-exit loops (`isVectorizableEarlyExitLoop`): a
-//!   loop without an exact backedge-taken count is refused.
+//!   `blockNeedsPredication`): a loop of more than one block is legal only
+//!   where every block runs on every trip (it dominates the latch), so no block
+//!   is predicated. Exit: predicated blocks (`blockCanBePredicated`).
+//! - LV-D3 early-exit loops (`isVectorizableEarlyExitLoop`): read-only loops
+//!   whose loads are dereferenceable in the loop only; no stores (the pin's
+//!   `-enable-early-exit-vectorization-with-side-effects` is off), no
+//!   fault-only-first loads (`-enable-early-exit-with-ffload` is off), no
+//!   SCEV predicates. The planner takes them through `loopvectorizeearlyexit`.
 //! - LV-D4 calls: an intrinsic `getVectorIntrinsicIDForCall` takes is legal (a
 //!   scalar operand loop invariant, L965); a call the `VFDatabase` or
 //!   `isTLIScalarize` would take is refused. The transform widens fewer.
@@ -47,8 +51,8 @@ use llrm_analysis::scev::{Cx, ScalarEvolution};
 use llrm_analysis::vectorutils::{get_vector_intrinsic_id_for_call, is_vector_intrinsic_with_scalar_op_at_arg};
 use llrm_mir::intrinsics::Intrinsic;
 use llrm_mir::loopinfo::Loop;
-use llrm_mir::module::{InstId, Operand};
-use llrm_mir::opcode::{Flags, Opcode};
+use llrm_mir::module::{BlockId, InstId, Operand};
+use llrm_mir::opcode::{BinaryOp, Flags, Opcode};
 use llrm_mir::types::{Type, TypeId};
 
 /// What `canVectorize` found, for the planner: `Inductions`, `Reductions`,
@@ -67,6 +71,17 @@ pub struct Legality {
     /// `Hints->setPotentiallyUnsafe`: a floating-point operation without
     /// fast-math flags.
     pub potentially_unsafe: bool,
+    /// `UncountableExitType`: the loop leaves early where a computed condition
+    /// says so (`isVectorizableEarlyExitLoop`). Read-only loops only.
+    pub early_exit: Option<EarlyExit>,
+}
+
+/// The exits of an early-exit loop (`CountableExitingBlocks` and
+/// `UncountableExitingBlocks`).
+#[derive(Clone, Debug)]
+pub struct EarlyExit {
+    pub countable: Vec<BlockId>,
+    pub uncountable: Vec<BlockId>,
 }
 
 /// Why a loop is not vectorized (`reportVectorizationFailure`'s debug message).
@@ -99,7 +114,7 @@ pub fn can_vectorize(
     }
     // NumBlocks != 1 && !canVectorizeWithIfConvert() (LV-D2).
     if the_loop.get_num_blocks() != 1 {
-        return Err(Refusal("Can't if-convert the loop"));
+        can_vectorize_with_if_convert(cx, the_loop)?;
     }
 
     let mut found = Legality {
@@ -108,6 +123,7 @@ pub fn can_vectorize(
         primary_induction: None,
         widest_induction_bits: None,
         potentially_unsafe: false,
+        early_exit: None,
     };
     can_vectorize_instrs(cx, se, the_loop, &mut found)?;
 
@@ -115,11 +131,141 @@ pub fn can_vectorize(
     let header = the_loop.get_header();
     let btc = se.get_backedge_taken_count(cx, header, ExitCountKind::Exact);
     if se.is_could_not_compute(btc) {
-        return Err(Refusal("Cannot vectorize uncountable loop"));
+        if the_loop.get_exiting_block(cx.function).is_some() {
+            return Err(Refusal("Cannot vectorize uncountable loop"));
+        }
+        found.early_exit = Some(is_vectorizable_early_exit_loop(cx, se, the_loop, &found)?);
     }
 
     can_vectorize_memory(cx, se, lai, the_loop, &found)?;
     Ok(found)
+}
+
+/// `canVectorizeWithIfConvert` (L1449) for a loop whose blocks all run on
+/// every trip (LV-D2): the terminators are branches, and `blockNeedsPredication`
+/// (the block does not dominate the latch) is false everywhere.
+fn can_vectorize_with_if_convert(
+    cx: &Cx,
+    the_loop: Loop,
+) -> Result<(), Refusal> {
+    let function = cx.function;
+    let latch = the_loop.get_loop_latch(function).ok_or(Refusal("Can't if-convert the loop"))?;
+    for &block in the_loop.get_blocks() {
+        let Some(term) = function.terminator(block) else { return Err(Refusal("Can't if-convert the loop")) };
+        match function.instruction(term).opcode {
+            Opcode::Br => {}
+            // A switch that exits the loop is refused in the pin; one that does not is predicated here.
+            Opcode::Switch => return Err(Refusal("Loop contains an unsupported switch")),
+            _ => return Err(Refusal("Loop contains an unsupported terminator")),
+        }
+        if !cx.tree.dominates(block, latch) {
+            return Err(Refusal("Control flow cannot be substituted for a select"));
+        }
+    }
+    Ok(())
+}
+
+/// `isVectorizableEarlyExitLoop` (L1652), for a read-only loop (LV-D3).
+fn is_vectorizable_early_exit_loop(
+    cx: &Cx,
+    se: &mut ScalarEvolution,
+    the_loop: Loop,
+    found: &Legality,
+) -> Result<EarlyExit, Refusal> {
+    let function = cx.function;
+    let header = the_loop.get_header();
+    let latch = the_loop.get_loop_latch(function).ok_or(Refusal("Cannot vectorize early exit loop"))?;
+    // Reductions, or fixed-order recurrences (refused as unidentified phis).
+    if !found.reductions.is_empty() {
+        return Err(Refusal("Cannot vectorize early exit loop with reductions or recurrences"));
+    }
+    let mut early = EarlyExit { countable: Vec::new(), uncountable: Vec::new() };
+    for block in the_loop.get_exiting_blocks(function) {
+        let count = se.get_exit_count(cx, header, block, ExitCountKind::Exact);
+        if se.is_could_not_compute(count) {
+            let successors = function.successors(block).len();
+            if successors != 2 {
+                return Err(Refusal("Incorrect number of successors from early exiting block"));
+            }
+            early.uncountable.push(block);
+        } else {
+            early.countable.push(block);
+        }
+    }
+    if early.uncountable.is_empty() {
+        return Err(Refusal("Cannot vectorize uncountable loop"));
+    }
+    if !early.countable.contains(&latch) {
+        return Err(Refusal("Cannot vectorize early exit loop"));
+    }
+    let q = llrm_mir::valuetracking::Query::bare(cx.context, function, cx.layout);
+    for &block in the_loop.get_blocks() {
+        for inst in function.iter_block(block) {
+            let data = function.instruction(inst);
+            match data.opcode {
+                // Checked separately (the loads below); a store is a side effect.
+                Opcode::Load { .. } | Opcode::Phi | Opcode::Br => {}
+                Opcode::Store { .. } => {
+                    return Err(Refusal("Cannot vectorize early exit loop with side effects"));
+                }
+                _ if llrm_mir::valuetracking::guarantee::may_write_to_memory(&q, inst) => {
+                    return Err(Refusal("Cannot vectorize early exit loop with complex writes to memory"));
+                }
+                _ if !is_safe_to_speculate(cx, inst) => {
+                    return Err(Refusal("Early exit loop contains operations that cannot be speculatively executed"));
+                }
+                _ => {}
+            }
+        }
+    }
+    // A read-only loop's loads are dereferenceable for every trip: faulting
+    // ones need fault-only-first loads, which the pin leaves off.
+    for &block in the_loop.get_blocks() {
+        for inst in function.iter_block(block) {
+            let data = function.instruction(inst);
+            let Opcode::Load { align, .. } = data.opcode else { continue };
+            let align = align.unwrap_or_else(|| cx.layout.align(&cx.context.types, data.ty));
+            if !llrm_analysis::loopderef::is_dereferenceable_and_aligned_in_loop(
+                se,
+                cx,
+                header,
+                data.operands[0],
+                data.ty,
+                align,
+            ) {
+                return Err(Refusal("Cannot vectorize non-read-only early exit loop"));
+            }
+        }
+    }
+    Ok(early)
+}
+
+/// `isSafeToSpeculativelyExecute` for the operations a loop of the slice can
+/// hold: arithmetic that cannot trap, casts, compares, selects and address
+/// computations. DEVIATE LV-D3a (exit: none): a division is safe only by a
+/// constant that is not zero (or -1 for a signed one); any call is not.
+fn is_safe_to_speculate(
+    cx: &Cx,
+    inst: InstId,
+) -> bool {
+    let data = cx.function.instruction(inst);
+    match data.opcode {
+        Opcode::Binary(BinaryOp::UDiv | BinaryOp::SDiv | BinaryOp::URem | BinaryOp::SRem) => {
+            let q = llrm_mir::valuetracking::Query::bare(cx.context, cx.function, cx.layout);
+            data.operands.get(1).and_then(|&divisor| q.int_constant(divisor)).is_some_and(|(bits, width)| {
+                let all_ones = if width >= 128 { u128::MAX } else { (1u128 << width) - 1 };
+                bits != 0 && bits != all_ones
+            })
+        }
+        Opcode::Binary(_)
+        | Opcode::Cast(_)
+        | Opcode::ICmp(_)
+        | Opcode::FCmp(_)
+        | Opcode::Select
+        | Opcode::GetElementPtr { .. }
+        | Opcode::FNeg => true,
+        _ => false,
+    }
 }
 
 /// `canVectorizeInstrs` (L799) over the loop's blocks.
@@ -162,7 +308,7 @@ pub(crate) fn widened_intrinsic(
     cx: &Cx,
     inst: InstId,
 ) -> Option<Intrinsic> {
-    get_vector_intrinsic_id_for_call(cx, inst).filter(|id| *id == Intrinsic::FMulAdd)
+    get_vector_intrinsic_id_for_call(cx, inst).filter(|id| matches!(id, Intrinsic::FMulAdd | Intrinsic::MinMax { .. }))
 }
 
 /// `canVectorizeInstr` (L840).

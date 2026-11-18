@@ -462,8 +462,12 @@ impl fmt::Display for Inst {
                 let (suffix, lane) = (lanes.suffix(), lane_letter(*lanes));
                 write!(out, "{} v{}.{suffix}, v{}.{suffix}, v{}.{lane}[{index}]", op.mnemonic(), rd.0, rn.0, rm.0)
             }
-            Inst::VectorUnzip { second, lanes, rd, rn, rm } => {
-                let name = if *second { "uzp2" } else { "uzp1" };
+            Inst::ScalarFmaLane { op, lanes, rd, rn, rm, index } => {
+                let (scalar, lane) = if *lanes == Arrangement::D2 { ('d', 'd') } else { ('s', 's') };
+                write!(out, "{} {scalar}{}, {scalar}{}, v{}.{lane}[{index}]", op.mnemonic(), rd.0, rn.0, rm.0)
+            }
+            Inst::VectorPermute { kind, lanes, rd, rn, rm } => {
+                let name = kind.mnemonic();
                 let s = lanes.suffix();
                 write!(out, "{name} v{}.{s}, v{}.{s}, v{}.{s}", rd.0, rn.0, rm.0)
             }
@@ -518,6 +522,12 @@ impl fmt::Display for Inst {
             }
             Inst::VectorLoadLane { lanes, rt, index, base } => {
                 write!(out, "ld1 {{ v{}.{} }}[{index}], [{}]", rt.0, lane_letter(*lanes), gpr(*base, Width::X, true))
+            }
+            Inst::VectorLoadStructure { count, lanes, rt, base } | Inst::VectorStoreStructure { count, lanes, rt, base } => {
+                let name = if matches!(self, Inst::VectorLoadStructure { .. }) { "ld" } else { "st" };
+                let list: Vec<String> =
+                    (0..u32::from(*count)).map(|at| format!("v{}.{}", rt.in_run(at).0, lanes.suffix())).collect();
+                write!(out, "{name}{count} {{ {} }}, [{}]", list.join(", "), gpr(*base, Width::X, true))
             }
             Inst::VectorFpUnary { op, lanes, rd, rn } => {
                 let suffix = lanes.suffix();

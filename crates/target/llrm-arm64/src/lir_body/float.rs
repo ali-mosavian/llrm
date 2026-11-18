@@ -5,8 +5,9 @@
 use super::*;
 use crate::mc::inst::Cond;
 use crate::mc::inst::{
-    Arrangement, Fill, FpBinary, FpConvert, FpFused, FpSize, FpUnary, ImmShape, MulAcc, NarrowLane, Rounding, SMOV_FORMS,
-    VectorFma, VectorFpOp, VectorFpUnary, VectorIntUnary, VectorLongOp, VectorOp, VectorReduce, VectorShift,
+    Arrangement, Fill, FpBinary, FpConvert, FpFused, FpSize, FpUnary, ImmShape, MulAcc, NarrowLane, Permute, Rounding,
+    SMOV_FORMS, VectorFma, VectorFpOp, VectorFpUnary, VectorIntUnary, VectorLongOp, VectorOp, VectorReduce,
+    VectorShift,
 };
 use crate::vector_forms::VectorForm;
 
@@ -251,9 +252,23 @@ pub(super) fn to(inst: &Inst) -> Option<Semantics> {
             vec![vreg_loc(*rd, 128), vreg_loc(*rn, 128), vreg_loc(*rm, 128), imm(i64::from(*index))],
             None,
         ),
-        Inst::VectorUnzip { second, lanes, rd, rn, rm } => semantics(
+        Inst::ScalarFmaLane { op, lanes, rd, rn, rm, index } => {
+            let bits = lanes.lane_bits();
+            semantics(
+                Operation::FloatMultiplyAdd,
+                format!(
+                    "{}v1{}_indexed",
+                    op.mnemonic().to_uppercase(),
+                    if *lanes == Arrangement::D2 { "i64" } else { "i32" }
+                ),
+                vec![vreg_loc(*rd, bits)],
+                vec![vreg_loc(*rd, bits), vreg_loc(*rn, bits), vreg_loc(*rm, 128), imm(i64::from(*index))],
+                None,
+            )
+        }
+        Inst::VectorPermute { kind, lanes, rd, rn, rm } => semantics(
             Operation::Binary,
-            unzip_name(*second, *lanes),
+            permute_name(*kind, *lanes),
             vec![vreg_loc(*rd, 128)],
             vec![vreg_loc(*rn, 128), vreg_loc(*rm, 128)],
             None,
@@ -438,7 +453,9 @@ pub(super) fn to(inst: &Inst) -> Option<Semantics> {
         }
         Inst::VectorFill { rd, fill } => {
             let (name, sources) = match fill {
-                Fill::Zero => ("MOVIv2d".to_string(), vec![]),
+                // `MOVIv2d_ns` of 0: a literal the width of the register, as
+                // the coalescer asks of an instruction it makes again.
+                Fill::Zero => ("MOVIv2d_ns".to_string(), vec![Loc::Imm(Imm { value: 0, width: 16, address: None })]),
                 Fill::Byte(byte) => ("MOVIv16b".to_string(), vec![imm(i64::from(*byte))]),
                 Fill::Byte8(byte) => ("MOVIv8b_ns".to_string(), vec![imm(i64::from(*byte))]),
                 Fill::Dup(arrangement, register) => {
@@ -456,7 +473,10 @@ pub(super) fn to(inst: &Inst) -> Option<Semantics> {
                     let stem = if *invert { "MVNI" } else { "MOVI" };
                     (format!("{stem}v{lanes}"), vec![imm(i64::from(*imm8)), imm(i64::from(*shift))])
                 }
-                Fill::Mask(imm8) => ("MOVIv2d_ns".to_string(), vec![imm(i64::from(*imm8))]),
+                Fill::Mask(imm8) => (
+                    "MOVIv2d_ns".to_string(),
+                    vec![Loc::Imm(Imm { value: i64::from(*imm8), width: 16, address: None })],
+                ),
                 Fill::MaskD(imm8) => ("MOVID".to_string(), vec![imm(i64::from(*imm8))]),
             };
             let narrow = matches!(
@@ -572,9 +592,9 @@ fn vector_fp_name(
     format!("{}v{lanes}", mnemonic.to_uppercase())
 }
 
-/// `UZP1v8i16`: the pin's name of an unzip.
-fn unzip_name(
-    second: bool,
+/// `UZP1v8i16`: the pin's name of a permute.
+fn permute_name(
+    kind: Permute,
     lanes: Arrangement,
 ) -> String {
     let lanes = match lanes {
@@ -586,7 +606,7 @@ fn unzip_name(
         Arrangement::H4 => "v4i16",
         Arrangement::S2 => "v2i32",
     };
-    format!("UZP{}{lanes}", if second { 2 } else { 1 })
+    format!("{}{lanes}", kind.stem())
 }
 
 /// `v8i8`, `v16i8`, `v4i16`, ...: the narrow arrangement of an `xtn` or
@@ -761,6 +781,22 @@ pub(super) fn back(what: &Semantics) -> Option<Inst> {
             });
         }
     }
+    for (lanes, op) in [Arrangement::S4, Arrangement::D2]
+        .into_iter()
+        .flat_map(|lanes| [VectorFma::Add, VectorFma::Sub].map(|op| (lanes, op)))
+    {
+        let lane = if lanes == Arrangement::D2 { "i64" } else { "i32" };
+        if name == format!("{}v1{lane}_indexed", op.mnemonic().to_uppercase()) {
+            return Some(Inst::ScalarFmaLane {
+                op,
+                lanes,
+                rd: vreg_of(dest?),
+                rn: vreg_of(&s[1]),
+                rm: vreg_of(&s[2]),
+                index: value_of(&s[3]) as u8,
+            });
+        }
+    }
     for (wide, high) in [
         (Arrangement::H8, false),
         (Arrangement::H8, true),
@@ -784,10 +820,12 @@ pub(super) fn back(what: &Semantics) -> Option<Inst> {
             });
         }
     }
-    for (second, lanes) in OP_ARRANGEMENTS.into_iter().flat_map(|lanes| [(false, lanes), (true, lanes)]) {
-        if name == unzip_name(second, lanes) {
-            return Some(Inst::VectorUnzip {
-                second,
+    for (kind, lanes) in
+        Permute::ALL.into_iter().flat_map(|kind| OP_ARRANGEMENTS.into_iter().map(move |lanes| (kind, lanes)))
+    {
+        if name == permute_name(kind, lanes) {
+            return Some(Inst::VectorPermute {
+                kind,
                 lanes,
                 rd: vreg_of(dest?),
                 rn: vreg_of(&s[0]),
@@ -962,10 +1000,12 @@ pub(super) fn back(what: &Semantics) -> Option<Inst> {
     }
     match name {
         "ORRv16b" => return Some(Inst::VectorMov { rd: vreg_of(dest?), rn: vreg_of(&s[0]) }),
-        "MOVIv2d" => return Some(Inst::VectorFill { rd: vreg_of(dest?), fill: Fill::Zero }),
         "MOVIv8b_ns" => return Some(Inst::VectorFill { rd: vreg_of(dest?), fill: Fill::Byte8(value_of(&s[0]) as u8) }),
         "MOVIv16b" => return Some(Inst::VectorFill { rd: vreg_of(dest?), fill: Fill::Byte(value_of(&s[0]) as u8) }),
-        "MOVIv2d_ns" => return Some(Inst::VectorFill { rd: vreg_of(dest?), fill: Fill::Mask(value_of(&s[0]) as u8) }),
+        "MOVIv2d_ns" => {
+            let fill = if value_of(&s[0]) == 0 { Fill::Zero } else { Fill::Mask(value_of(&s[0]) as u8) };
+            return Some(Inst::VectorFill { rd: vreg_of(dest?), fill });
+        }
         "MOVID" => return Some(Inst::VectorFill { rd: vreg_of(dest?), fill: Fill::MaskD(value_of(&s[0]) as u8) }),
         "SCVTFv1i32" | "UCVTFv1i32" | "SCVTFv1i64" | "UCVTFv1i64" => {
             let size = if name.ends_with("64") { FpSize::D } else { FpSize::S };

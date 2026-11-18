@@ -2000,6 +2000,22 @@ pub fn listing(
     Ok(items)
 }
 
+/// Whether `branch` ends the block's code, or is followed only by the jump to
+/// the block's other successor: the branch whose taken edge an epilogue takes.
+fn is_taken_branch(
+    insns: &[Arc<crate::model::lir::Insn>],
+    branch: &Arc<crate::model::lir::Insn>,
+) -> bool {
+    let mut printed = insns.iter().rev().filter(|one| prints(one));
+    match printed.next() {
+        Some(last) if Arc::ptr_eq(last, branch) => true,
+        Some(last) if last.what.as_ref().is_some_and(|what| what.op == Operation::Jump) => {
+            printed.next().is_some_and(|before| Arc::ptr_eq(before, branch))
+        }
+        _ => false,
+    }
+}
+
 /// Whether `what` is part of an epilogue: the stack pointer taken back, a
 /// register popped or reloaded, the return.
 fn epilogue_step(what: &Semantics) -> bool {
@@ -2641,7 +2657,7 @@ fn built(
                         callee: callee.name.clone(),
                     });
                 }
-                Operation::Branch if taken.is_some_and(|_| last_printed.is_some_and(|last| Arc::ptr_eq(last, one))) => {
+                Operation::Branch if taken.is_some() && is_taken_branch(&block.insns, one) => {
                     // The taken edge into the restore goes through a block of
                     // its own, past the procedure's last, that takes the
                     // pieces back (`tryToSplitRestore`).
@@ -3883,7 +3899,7 @@ pub fn _instruction(
             // name their operands; `cwd` and `cdq` name theirs in the opcode.
             if matches!(name, "movsx" | "movzx")
                 || name.starts_with("cvt")
-                || matches!(name, "movq" | "movd" | "movq_x" | "movd_x")
+                || matches!(name, "movq" | "movd" | "movq_x" | "movd_x" | "pmovmskb" | "movmskps")
             {
                 vec![format!("{} {}, {}", name.trim_end_matches("_x"), dests[0], sources[0])]
             } else {

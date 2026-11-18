@@ -2,8 +2,9 @@
 //! widens, with the pin's factors (`opt -passes=loop-vectorize` on aarch64: i16
 //! copy of 1920 is VF 8, IC 2), and the ones it leaves alone.
 
-use super::LoopVectorize;
 use llrm_mir::target::{Machine as _, Neutral};
+
+use super::LoopVectorize;
 use crate::testing::parsed;
 
 fn run(source: &str) -> String {
@@ -15,13 +16,26 @@ fn run_compares(source: &str) -> String {
     run_with(source, true)
 }
 
+/// [`run`] with the interleave groups the arm64 backend does not select yet.
+fn run_interleaved(source: &str) -> String {
+    run_with_options(source, false, true)
+}
+
 fn run_with(
     source: &str,
     compares: bool,
 ) -> String {
+    run_with_options(source, compares, false)
+}
+
+fn run_with_options(
+    source: &str,
+    compares: bool,
+    interleaves: bool,
+) -> String {
     let mut module = parsed(source);
     let mut manager = llrm_mir::passes::PassManager::default();
-    manager.add(LoopVectorize { always: true, only_when_forced: false, compares });
+    manager.add(LoopVectorize { always: true, only_when_forced: false, compares, interleaves, very_cheap: false });
     manager
         .run_module(
             &mut module,
@@ -52,6 +66,19 @@ fn a_copy_loop_is_widened_by_the_pins_factors() {
     assert_eq!(count(&text, "llvm.loop.isvectorized"), 1, "{text}");
 }
 
+const COPY_SINGLE_TRIP: &str = include_str!("../tests/lv/copy_single_trip.ll");
+
+/// A copy of 8 `i16` is one vector iteration (VF 8, IC 1), but its latch still
+/// compared the index with 8: a loop that ran once kept its back edge (matmul's
+/// `j` loop, +20 instructions at O2). The pin's
+/// `simplifyBranchConditionForVFAndUF` makes the latch `br i1 true`.
+#[test]
+fn a_vector_loop_that_runs_once_leaves_on_its_first_iteration() {
+    let text = run(COPY_SINGLE_TRIP);
+    assert_eq!(count(&text, "load <8 x i16>"), 1, "{text}");
+    assert!(text.contains("br i1 true,"), "{text}");
+}
+
 const ADD: &str = include_str!("../tests/lv/binop_add.ll");
 const CHAIN: &str = include_str!("../tests/lv/binop_chain.ll");
 const SPLAT: &str = include_str!("../tests/lv/binop_splat.ll");
@@ -60,6 +87,8 @@ const MUL64: &str = include_str!("../tests/lv/binop_mul64.ll");
 const UDIV: &str = include_str!("../tests/lv/binop_udiv.ll");
 const FP_AXPY: &str = include_str!("../tests/lv/fp_axpy.ll");
 const FP_STRIDED: &str = include_str!("../tests/lv/fp_strided.ll");
+const SYMBOLIC_STRIDE: &str = include_str!("../tests/lv/symbolic_stride.ll");
+const FLOAT_BITS: &str = include_str!("../tests/lv/float_bits.ll");
 const FP_CONVERT: &str = include_str!("../tests/lv/fp_convert.ll");
 const FP_CONVERT_NARROW: &str = include_str!("../tests/lv/fp_convert_narrow.ll");
 const FP_FMULADD: &str = include_str!("../tests/lv/fp_fmuladd.ll");
@@ -118,6 +147,18 @@ fn an_int_to_float_conversion_is_widened_with_its_operand() {
     assert!(text.contains("add nuw nsw i64 %i, 8"), "{text}");
 }
 
+/// `b[i] = bits(a[i] * 2.5f) * 5` (the soft-float `f2b` of the sfm16 loops): "A
+/// cast the target has no vector instruction for yet" kept a `bitcast float to
+/// i32` loop scalar (sfm16_float_mul O2 4009 instructions against clang's
+/// 1955); the pin widens it (`bitcast <4 x float> to <4 x i32>`).
+#[test]
+fn a_bitcast_between_float_and_integer_lanes_is_widened() {
+    let text = run(FLOAT_BITS);
+    assert!(count(&text, "bitcast <4 x float>") >= 1, "{text}");
+    assert!(count(&text, "mul <4 x i32>") >= 1, "{text}");
+    assert_eq!(count(&text, "bitcast float"), 0, "{text}");
+}
+
 /// `b[i] = (float)a[i] * 2.5f` over `i64`: "A cast that changes the lane width"
 /// kept the loop scalar; the pin takes VF 4, IC 1 (`opt
 /// -passes=loop-vectorize -mcpu=generic`: one `load <4 x i64>`, one `sitofp
@@ -144,6 +185,20 @@ fn strided_loads_are_scalarized_and_put_together() {
     assert_eq!(count(&text, "sitofp <4 x i32>"), 2, "{text}");
     assert_eq!(count(&text, "call <4 x float> @llvm.fmuladd.v4f32("), 2, "{text}");
     assert_eq!(count(&text, "store <4 x float>"), 1, "{text}");
+}
+
+/// `b[i] = a[i * stride] * 2.5f` with a run-time `stride` (the twiddle load of
+/// stft_single's butterfly): "An access that is not consecutive" kept the loop
+/// scalar; the pin scalarizes the load, one copy of the address computation per
+/// lane (`VPReplicateRecipe`), and widens the rest.
+#[test]
+fn a_load_at_a_run_time_stride_is_scalarized_with_its_address_replicated() {
+    let text = run(SYMBOLIC_STRIDE);
+    // Two twiddle loads a lane, replicated address and all.
+    assert_eq!(count(&text, "insertelement <4 x float>"), 8, "{text}");
+    // A copy of the address for each of the other three lanes, per load.
+    assert_eq!(count(&text, " = mul i64 %lane.index"), 6, "{text}");
+    assert_eq!(count(&text, "store <4 x float>"), 4, "{text}");
 }
 
 /// `double` lanes: pin VF 2, IC 2 (step 4).
@@ -221,7 +276,13 @@ fn a_tiny_trip_count_is_not_interleaved() {
 fn a_loop_is_left_alone_when_only_forced_loops_are_vectorized() {
     let mut module = crate::testing::parsed(COPY);
     let mut manager = llrm_mir::passes::PassManager::default();
-    manager.add(LoopVectorize { always: true, only_when_forced: true, compares: false });
+    manager.add(LoopVectorize {
+        always: true,
+        only_when_forced: true,
+        compares: false,
+        interleaves: false,
+        very_cheap: false,
+    });
     manager
         .run_module(
             &mut module,
@@ -285,6 +346,32 @@ fn an_optsize_loop_is_widened_when_vf_divides_the_trip_count() {
     assert_eq!(count(&text, "<8 x i16>"), 0, "{text}");
 }
 
+/// `dot` and `tile` at -Os (bench, arm64): the pin widens a reduction at
+/// `optsize` by cost per lane and leaves the accumulator start and the
+/// horizontal step out of the price (`VPlan::cost` counts the loop region
+/// only); the vector loop was 292 and 132 bytes against gcc's scalar 144 and
+/// 80. Priced with that work, a reduction whose loop is no smaller than the
+/// scalar one stays scalar; a copy has none and is still widened.
+#[test]
+fn an_optsize_reduction_stays_scalar_where_its_vector_loop_is_not_smaller() {
+    let dot = DOT_SEXT.replace("2000", "48");
+    let sized = |text: &str| {
+        text.replace(
+            "define i64 @f(ptr noalias %a, ptr noalias %b)",
+            "define i64 @f(ptr noalias %a, ptr noalias %b) optsize",
+        )
+    };
+    let text = run(&dot);
+    assert!(count(&text, "load <") > 0, "at speed the loop is widened: {text}");
+    let text = run(&sized(&dot));
+    assert_eq!(count(&text, "load <"), 0, "at -Os the scalar loop is smaller: {text}");
+    let text = run(&COPY.replace("1920", "1024").replace(
+        "define void @f(ptr noalias %a, ptr noalias %b, i64 %n)",
+        "define void @f(ptr noalias %a, ptr noalias %b, i64 %n) optsize",
+    ));
+    assert!(count(&text, "load <") > 0, "a copy has no work outside the loop: {text}");
+}
+
 /// x86 prices vectors too; its tuning says whether an optsize loop is widened.
 struct X86At(std::rc::Rc<llrm_x86::tti::X86>);
 
@@ -331,18 +418,29 @@ fn run_x86(
     source: &str,
     at_size: bool,
 ) -> String {
-    let tti = llrm_x86::tti::X86::of_cpu("x86-64")
-        .unwrap()
-        .with_tuning(llrm_mir::target::Tuning { vectorize_at_size: at_size, ..llrm_mir::target::Tuning::PIN });
+    run_x86_tuned(source, llrm_mir::target::Tuning { vectorize_at_size: at_size, ..llrm_mir::target::Tuning::PIN })
+}
+
+fn run_x86_tuned(
+    source: &str,
+    tuning: llrm_mir::target::Tuning,
+) -> String {
+    let tti = llrm_x86::tti::X86::of_cpu("x86-64").unwrap().with_tuning(tuning);
     let mut module = parsed(source);
     let mut manager = llrm_mir::passes::PassManager::default();
-    manager.add(LoopVectorize { always: true, only_when_forced: false, compares: false });
+    manager.add(LoopVectorize {
+        always: true,
+        only_when_forced: false,
+        compares: false,
+        interleaves: false,
+        very_cheap: false,
+    });
     manager.run_module(&mut module, std::rc::Rc::new(X86At(std::rc::Rc::new(tti)))).unwrap();
     crate::testing::printed(&module)
 }
 
-/// Retiring LV-OS made 15 m64 -Os corpus files 5-50% bigger (byval_struct 183 ->
-/// 269 B): a target whose tuning says no keeps its optsize loops scalar.
+/// Retiring LV-OS made 15 m64 -Os corpus files 5-50% bigger (byval_struct 183
+/// -> 269 B): a target whose tuning says no keeps its optsize loops scalar.
 #[test]
 fn an_optsize_loop_stays_scalar_where_the_tuning_says_so() {
     let optsize = COPY.replace(
@@ -352,6 +450,54 @@ fn an_optsize_loop_stays_scalar_where_the_tuning_says_so() {
     assert!(count(&run_x86(&optsize, true), "x i16>") > 0, "the premise: the pin widens it");
     assert_eq!(count(&run_x86(&optsize, false), "x i16>"), 0);
     assert!(count(&run_x86(COPY, false), "x i16>") > 0, "a loop at speed is widened either way");
+}
+
+/// mem_length_boundaries_m32: `sum += dst[i]` (bytes into an `i64`) stayed at
+/// the pin's VF 2 (the widest type) while gcc sums 16 bytes a trip: 142,319
+/// instructions to gcc's 137,355. With the pin's own
+/// `-vectorizer-maximize-bandwidth` (the smallest type sizes the VF) it is a
+/// VF 16 loop, 266,570 total to gcc's 341,638 in the pin itself.
+#[test]
+fn a_byte_sum_into_a_wide_total_is_sized_by_the_smallest_type_where_the_tuning_says_so() {
+    let source = include_str!("../tests/lv/sum_zext_bytes.ll");
+    let pin = llrm_mir::target::Tuning::PIN;
+    assert_eq!(count(&run_x86_tuned(source, pin), "<16 x i8>"), 0, "the pin keeps it narrow");
+    let wide = run_x86_tuned(source, llrm_mir::target::Tuning { maximize_vector_bandwidth: true, ..pin });
+    assert!(count(&wide, "load <16 x i8>") > 0, "{wide}");
+}
+
+/// mem_length_boundaries_m32: a byte sum into an `i64` at VF 16 kept its total
+/// as `<16 x i64>` (eight registers, doubled by the interleave count: 16
+/// accumulators and 186,155 instructions to 142,319 scalar). gcc keeps one
+/// register of lanes and adds the eight pieces of a trip into it.
+#[test]
+fn a_reduction_wider_than_a_register_keeps_one_register_of_lanes_where_the_tuning_says_so() {
+    let source = include_str!("../tests/lv/sum_zext_bytes.ll");
+    let pin = llrm_mir::target::Tuning { maximize_vector_bandwidth: true, ..llrm_mir::target::Tuning::PIN };
+    let wide = run_x86_tuned(source, pin);
+    assert!(count(&wide, "phi <16 x i64>") > 0, "the pin keeps the whole vector: {wide}");
+    let narrow = run_x86_tuned(source, llrm_mir::target::Tuning { narrow_reduction_accumulators: true, ..pin });
+    assert_eq!(count(&narrow, "phi <16 x i64>"), 0, "{narrow}");
+    assert!(count(&narrow, "phi <2 x i64>") > 0, "{narrow}");
+    assert_eq!(count(&narrow, "shufflevector <16 x i64>"), 8 * count(&narrow, "phi <2 x i64>"), "{narrow}");
+}
+
+/// rep_count: with the bandwidth tuning a 54-byte loop was widened to VF 16 and
+/// left a scalar epilogue (3,560 instructions to 4,018; gcc's very-cheap model
+/// takes a vector loop only where none is left). A trip count the VF divides
+/// keeps its wide factor.
+#[test]
+fn a_wider_factor_than_the_widest_type_needs_a_trip_count_it_divides() {
+    let divisible = include_str!("../tests/lv/sum_zext_bytes.ll");
+    let tuned = llrm_mir::target::Tuning {
+        maximize_vector_bandwidth: true,
+        bandwidth_vf_without_epilogue: true,
+        ..llrm_mir::target::Tuning::PIN
+    };
+    assert!(count(&run_x86_tuned(divisible, tuned), "<16 x i8>") > 0);
+    let remainder = divisible.replace("20000", "54");
+    let narrow = run_x86_tuned(&remainder, tuned);
+    assert_eq!(count(&narrow, "<16 x i8>"), 0, "{narrow}");
 }
 
 /// A trip count `n` the loop is given: the pin checks `n < 16` (minimum
@@ -369,7 +515,8 @@ fn a_symbolic_trip_count_is_checked_at_run_time() {
     assert!(text.contains("%n.vec = sub i64 %n, %n.mod.vf"), "{text}");
     assert!(text.contains("icmp eq i64 %next, %n.vec"), "{text}");
     assert!(text.contains("%cmp.n = icmp eq i64 %n, %n.vec"), "{text}");
-    // Its remainder is widened in turn, at 4 lanes as the pin: that loop's `n < 4` comes first.
+    // Its remainder is widened in turn, at 4 lanes as the pin: that loop's `n <
+    // 4` comes first.
     assert!(text.contains("%iter.check = icmp ult i64 %n, 4"), "{text}");
     assert!(text.contains("%bc.resume.val = phi i64 [ %n.vec, %middle.block ]"), "{text}");
     assert!(text.contains("br i1 %min.iters.check2, label %vector.ph1, label %vector.ph"), "{text}");
@@ -1133,6 +1280,68 @@ fn a_select_by_a_loop_invariant_condition_stays_scalar() {
     assert_eq!(count(&text, "<4 x i32>"), 0, "{text}");
 }
 
+const INTERLEAVE_STORE: &str = include_str!("../tests/lv/interleave_store.ll");
+const INTERLEAVE_SWAP: &str = include_str!("../tests/lv/interleave_swap.ll");
+
+/// `p[2i] = x; p[2i+1] = y` over bytes stayed scalar ("An access that is not
+/// consecutive"). The pin takes VF 16, IC 2: per part one `<32 x i8>` store of
+/// the two splats concatenated and interleaved (`interleaved.vec`).
+#[test]
+fn two_stores_per_iteration_are_one_interleaved_store() {
+    let text = run_interleaved(INTERLEAVE_STORE);
+    assert_eq!(count(&text, "store <32 x i8>"), 2, "{text}");
+    assert!(text.contains("<i32 0, i32 16, i32 1, i32 17"), "{text}");
+    assert!(text.contains("add nuw nsw i64 %i, 32"), "{text}");
+}
+
+const INTERLEAVE_STEP2: &str = include_str!("../tests/lv/interleave_step2.ll");
+
+/// `for (o = 0; o < 4000; o += 2) { s[o] = 65 + (o & 14); s[o + 1] = 31; }`
+/// (textfill's fill, 32009 instructions to the pin's 4120): the loop was left
+/// scalar ("No integer induction that steps by one"). The pin takes VF 16,
+/// IC 2 with `o` derived from the canonical index (`start + index * 2`): two
+/// `<32 x i8>` stores of the interleaved members and `o` stepping by 64.
+#[test]
+fn a_loop_stepping_by_two_is_widened_with_the_step_scaled() {
+    let text = run_interleaved(INTERLEAVE_STEP2);
+    assert_eq!(count(&text, "store <32 x i8>"), 2, "{text}");
+    assert!(text.contains("add nuw nsw i64 %o, 64"), "{text}");
+    assert!(text.contains("%ind.end") || text.contains("icmp eq i64 %next, 3968"), "{text}");
+}
+
+/// An `i8` counter from 250 to 4 by 2 meets the bound after wrapping: 5
+/// iterations. The distance was divided as a `u128` (2^128 - 246) before it
+/// was cut to the type, and read 133.
+#[test]
+fn a_wrapping_counter_with_a_step_counts_its_iterations_in_the_type() {
+    use crate::loopvectorizeskeleton::iterations;
+    assert_eq!(iterations(false, 2, 8, 250, 4), 5);
+    assert_eq!(iterations(false, 1, 8, 250, 4), 10);
+    assert_eq!(iterations(true, 1, 8, 4, 250), 10);
+}
+
+/// A pair swap `d[2i] = s[2i+1]; d[2i+1] = s[2i]` over halves: the pin takes
+/// VF 8, IC 2, one `<16 x i16>` load and one store per part, the members
+/// pulled out by `strided.vec` shuffles.
+#[test]
+fn a_pair_swap_is_an_interleaved_load_and_store() {
+    let text = run_interleaved(INTERLEAVE_SWAP);
+    assert_eq!(count(&text, "load <16 x i16>"), 2, "{text}");
+    assert_eq!(count(&text, "store <16 x i16>"), 2, "{text}");
+    assert_eq!(count(&text, "= shufflevector <16 x i16> %wide.vec"), 4, "{text}");
+    assert_eq!(count(&text, "poison, <16 x i32> <i32 0, i32 8, i32 1, i32 9"), 2, "{text}");
+    assert_eq!(count(&text, "load i16"), 0, "{text}");
+    assert!(text.contains("add nuw nsw i64 %i, 16"), "{text}");
+}
+
+/// The groups are not widened unless the backend selects them.
+#[test]
+fn interleave_groups_stay_scalar_where_the_backend_has_none() {
+    let text = run(INTERLEAVE_SWAP);
+    assert_eq!(count(&text, "load <16 x i16>"), 0, "{text}");
+    assert_eq!(count(&text, "load i16"), 2, "{text}");
+}
+
 const COUNT_AND_SUM: &str = include_str!("../tests/lv/count_and_sum_of_zeros.ll");
 
 /// `n += x == 0; s += x == 0 ? i : 0` stayed scalar ("A comparison used other
@@ -1147,4 +1356,88 @@ fn a_count_of_a_compare_beside_a_select_sum_is_widened_without_interleaving() {
     assert_eq!(count(&text, "load <16 x i8>"), 1, "{text}");
     assert_eq!(count(&text, "select <16 x i1>"), 1, "{text}");
     assert!(text.contains("add nuw nsw i64 %i, 16"), "{text}");
+}
+
+const EARLY_EXIT_DIFFER: &str = include_str!("../tests/lv/early_exit_differ.ll");
+const EARLY_EXIT_INDEX: &str = include_str!("../tests/lv/early_exit_index.ll");
+const EARLY_EXIT_FIND: &str = include_str!("../tests/lv/early_exit_find.ll");
+
+/// `differ` of memory_expansion (a byte compare that leaves at the first
+/// difference) stayed a scalar loop, 1.69 M instructions against clang's 0.93
+/// M: the planner skipped every loop of two blocks. The pin widens it to 16
+/// lanes and leaves the vector loop where `reduce.or` of the compare says
+/// (`AnyOf`).
+#[test]
+fn an_early_exit_byte_compare_is_widened_with_an_any_of_exit() {
+    let text = run_compares(EARLY_EXIT_DIFFER);
+    assert_eq!(count(&text, "load <16 x i8>"), 2, "{text}");
+    assert_eq!(count(&text, "icmp ne <16 x i8>"), 1, "{text}");
+    assert_eq!(count(&text, "llvm.vector.reduce.or.v16i1"), 2, "call and declaration: {text}");
+    assert!(text.contains("vector.early.exit:"), "{text}");
+    assert!(text.contains("vector.body:"), "{text}");
+}
+
+/// The vector loop's exit has the pin's shape: the any-of branch to
+/// `vector.early.exit`, then the count branch to `middle.block`, else back.
+#[test]
+fn the_early_exit_vector_loop_leaves_by_the_any_of_then_the_count() {
+    let text = run_compares(EARLY_EXIT_DIFFER);
+    assert!(text.contains("add i64 %index, 16"), "{text}");
+    assert!(text.contains("label %vector.early.exit"), "{text}");
+    assert!(text.contains("label %middle.block"), "{text}");
+}
+
+/// The original loop stays as the scalar remainder, marked as vectorized (it
+/// must not be widened again), entered from `scalar.ph`.
+#[test]
+fn the_early_exit_loop_keeps_a_marked_scalar_remainder() {
+    let text = run_compares(EARLY_EXIT_INDEX);
+    assert_eq!(count(&text, "load i8"), 2, "{text}");
+    assert!(text.contains("scalar.ph:"), "{text}");
+    assert!(text.contains("%bc.resume.val = phi i64"), "{text}");
+    assert_eq!(count(&text, "llvm.loop.isvectorized"), 2, "{text}");
+}
+
+/// The index of the first difference was lost where the loop leaves early: the
+/// exit phi reads `%i`, which the vector loop does not have per lane. The
+/// pin's `vector.early.exit` finds the first set lane (here the `umin` of the
+/// lane numbers the mask selects) and adds it to the vector iteration's index.
+#[test]
+fn the_early_exit_value_is_the_index_of_the_first_set_lane() {
+    let text = run_compares(EARLY_EXIT_INDEX);
+    assert!(text.contains("llvm.vector.reduce.umin.v16i8"), "{text}");
+    assert!(text.contains("select <16 x i1>"), "{text}");
+    assert!(text.contains("= add i64 %index, %"), "{text}");
+}
+
+/// The text tests cannot see a wrong first lane, a lost remainder or a bad hand
+/// over to the scalar loop. The widened loop must return what the scalar one
+/// does, for a difference in the vector part (0, 7, 15, 16, 17, 1199), in the
+/// remainder (1200 to 1202) and none (1203 plants nothing).
+#[test]
+fn the_widened_early_exit_loop_finds_what_the_scalar_one_finds() {
+    let scalar = crate::testing::parsed(EARLY_EXIT_FIND);
+    let mut module = crate::testing::parsed(EARLY_EXIT_FIND);
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.add(LoopVectorize {
+        always: true,
+        only_when_forced: false,
+        compares: true,
+        interleaves: false,
+        very_cheap: false,
+    });
+    let machine = llrm_arm64::machine::Arm64Machine { platform: llrm_arm64::machine::Platform::Linux };
+    manager.run_module(&mut module, std::rc::Rc::new(machine)).unwrap();
+    let text = crate::testing::printed(&module);
+    assert!(text.contains("vector.early.exit:"), "{text}");
+    let inputs: Vec<[i128; 1]> = [0, 7, 15, 16, 17, 1199, 1200, 1201, 1202, 1203].iter().map(|&k| [k]).collect();
+    let inputs: Vec<&[i128]> = inputs.iter().map(|one| &one[..]).collect();
+    let (wide, narrow) = (crate::testing::results(&module, &inputs), crate::testing::results(&scalar, &inputs));
+    assert_eq!(wide, narrow, "{text}");
+    assert_eq!(
+        wide[..9],
+        [0, 7, 15, 16, 17, 1199, 1200, 1201, 1202]
+            .map(|k| llrm_mir::interpret::Val::Int { bits: k as u128, width: 64 }),
+        "{text}"
+    );
 }

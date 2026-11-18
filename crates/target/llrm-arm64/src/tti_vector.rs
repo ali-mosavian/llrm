@@ -633,21 +633,135 @@ pub(crate) fn vector_instr_cost(
     Some(Cost::of(base))
 }
 
-/// The `SK_Broadcast` rows of `ShuffleTbl` (L7196): `dup` of a 64- or 128-bit
-/// vector of 8, 16 or 32-bit lanes, or of two 64-bit ones; `LT.first` of them
-/// for a vector that splits.
-pub(crate) fn shuffle_cost(
-    kind: llrm_mir::tti::ShuffleKind,
+/// `AArch64TTIImpl::getIntrinsicInstrCost` of `llvm.{s,u}{max,min}` of a fixed
+/// vector
+/// ([L710](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64TargetTransformInfo.cpp#L710)):
+/// one instruction a register of the types NEON has them for (8, 16 and 32-bit
+/// lanes), two (`cmgt` and `bif`) for 64-bit lanes, and the promoted `v2i8`,
+/// `v2i16` and `v4i8` a heavy 5 (signed) or 3. DEVIATE VT2 as the other
+/// vector hooks: `TCK_Latency` is not priced; the base class's compare and
+/// select price of the types not listed (a lane count of one) is not either.
+pub(crate) fn min_max_cost(
+    signed: bool,
     ty: VectorTy,
     cost_kind: CostKind,
 ) -> Option<Cost> {
-    if kind != llrm_mir::tti::ShuffleKind::Broadcast || cost_kind != CostKind::RecipThroughput {
+    if cost_kind == CostKind::Latency {
         return None;
     }
     let (pieces, lane) = vector_pieces(ty)?;
     let bits = u64::from(lane) * u64::from(ty.count);
-    let legal = (bits == 64 && lane != 64) || bits % 128 == 0;
-    legal.then(|| Cost::of(pieces))
+    if matches!((lane, ty.count), (8, 2) | (16, 2) | (8, 4)) {
+        return Some(Cost::of(if signed { 5 } else { 3 }));
+    }
+    match lane {
+        _ if ty.count < 2 || bits < 64 => None,
+        64 => Some(Cost::of(pieces * 2)),
+        _ => Some(Cost::of(pieces)),
+    }
+}
+
+/// `isREVMask` (`AArch64PerfectShuffle.h`): lanes reversed within blocks of
+/// `block_bits`.
+fn is_rev_mask(
+    mask: &[i32],
+    lane_bits: u32,
+    block_bits: u32,
+) -> bool {
+    let block = (block_bits / lane_bits) as usize;
+    block > 1
+        && mask.len() % block == 0
+        && mask.iter().enumerate().all(|(i, &m)| m < 0 || m as usize == i - i % block + (block - 1 - i % block))
+}
+
+/// `AArch64TTIImpl::getShuffleCost`
+/// ([L6978](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Target/AArch64/AArch64TargetTransformInfo.cpp#L6978))
+/// of a single-source shuffle of `ty` by `mask`, in the pin's order: the
+/// kind the mask is (`improveShuffleKindFromMask`), identity free, the
+/// one-instruction masks (a lane splat, `zip`, `trn`, `uzp`, `rev`) at one,
+/// then the rows of `ShuffleTbl` (L7194), by register for a vector that
+/// splits. A mask of the sub-register vectors, a 4-lane 16 or 32-bit mask
+/// that is none of those (the perfect-shuffle table, L7160) and the
+/// `BaseT` fall-through are not priced (DEVIATE SLP5, owner arm64, exit
+/// 2026-11-24).
+pub(crate) fn shuffle_cost(
+    kind: llrm_mir::tti::ShuffleKind,
+    ty: VectorTy,
+    mask: &[i32],
+    cost_kind: CostKind,
+) -> Option<Cost> {
+    use llrm_mir::tti::ShuffleKind as K;
+    // An empty mask is the pin's "no mask given": the table row of the kind.
+    if cost_kind != CostKind::RecipThroughput || (!mask.is_empty() && mask.len() != ty.count as usize) {
+        return None;
+    }
+    let (pieces, lane) = vector_pieces(ty)?;
+    let bits = u64::from(lane) * u64::from(ty.count);
+    if !((bits == 64 && lane != 64) || bits % 128 == 0) {
+        return None;
+    }
+    let per_register = (128 / lane).min(ty.count) as usize;
+    // A mask over a vector that splits: each register's piece on its own, the
+    // same piece once (L6992).
+    if pieces > 1 && kind == K::PermuteSingleSrc {
+        let mut seen: Vec<(Option<i32>, Vec<i32>)> = Vec::new();
+        let mut total = 0;
+        for chunk in mask.chunks(per_register) {
+            let sources: Vec<i32> = chunk.iter().filter(|&&m| m >= 0).map(|&m| m / per_register as i32).collect();
+            if sources.iter().any(|&source| Some(&source) != sources.first()) {
+                return None;
+            }
+            let part: Vec<i32> = chunk.iter().map(|&m| if m < 0 { m } else { m % per_register as i32 }).collect();
+            let key = (sources.first().copied(), part);
+            if seen.contains(&key) {
+                continue;
+            }
+            total +=
+                shuffle_cost(kind, VectorTy { lane: ty.lane, count: per_register as u32 }, &key.1, cost_kind)?.value;
+            seen.push(key);
+        }
+        return Some(Cost::of(total));
+    }
+    let defined: Vec<i32> = mask.iter().copied().filter(|&m| m >= 0).collect();
+    if defined.iter().any(|&m| m >= ty.count as i32) {
+        return None;
+    }
+    // `improveShuffleKindFromMask`.
+    let splat = !defined.is_empty() && defined.iter().all(|&m| m == defined[0]);
+    let kind = match kind {
+        K::PermuteSingleSrc if is_rev_mask(mask, lane, bits as u32) && mask.len() > 1 => K::Reverse,
+        K::PermuteSingleSrc if splat => K::Broadcast,
+        other => other,
+    };
+    if !mask.is_empty()
+        && matches!(kind, K::PermuteSingleSrc | K::PermuteTwoSrc)
+        && mask.iter().enumerate().all(|(i, &m)| m < 0 || m as usize == i)
+    {
+        return Some(Cost::of(0));
+    }
+    let one_instruction = !mask.is_empty()
+        && (splat
+            || crate::dag::permute::matched(mask, mask.len()).is_some()
+            || [16, 32, 64].iter().any(|&block| is_rev_mask(mask, lane, block)));
+    if mask.len() == 4 && matches!(lane, 16 | 32) {
+        // The perfect-shuffle table: the masks of one instruction are cost 1.
+        return one_instruction.then(|| Cost::of(1));
+    }
+    if one_instruction && kind != K::Broadcast {
+        return Some(Cost::of(1));
+    }
+    let register = VectorTy { lane: ty.lane, count: per_register as u32 };
+    let (_, lane_bits) = vector_pieces(register)?;
+    let row = match (kind, lane_bits, register.count) {
+        (K::Broadcast, 8, 8 | 16) | (K::Broadcast, 16, 4 | 8) | (K::Broadcast, 32, 2 | 4) | (K::Broadcast, 64, 2) => 1,
+        (K::PermuteSingleSrc, 32, 2) | (K::PermuteSingleSrc, 64, 2) => 1,
+        (K::PermuteSingleSrc, 32, 4) | (K::PermuteSingleSrc, 16, 4) => 3,
+        (K::PermuteSingleSrc, 16, 8) | (K::PermuteSingleSrc, 8, 8 | 16) => 8,
+        (K::Reverse, 32, 2) | (K::Reverse, 64, 2) | (K::Reverse, 16, 4) | (K::Reverse, 8, 8) => 1,
+        (K::Reverse, 32, 4) | (K::Reverse, 16, 8) | (K::Reverse, 8, 16) => 2,
+        _ => return None,
+    };
+    Some(Cost::of(pieces * row))
 }
 
 /// `AArch64TTIImpl::getStoreMinimumVF`

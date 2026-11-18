@@ -36,8 +36,8 @@ use crate::mc::inst::{
     Logic, MemObject, MemOperand, Memory, Mul3, Rounding, Select, Shift, Target, Unary, Vreg, Width,
 };
 use crate::mc::inst::{
-    Arrangement, Atomic, Barrier, Fill, ImmShape, NarrowLane, VectorFma, VectorFpOp, VectorFpUnary, VectorIntUnary,
-    SMOV_FORMS, VectorLongOp, VectorOp, VectorReduce, VectorShift,
+    Arrangement, Atomic, Barrier, Fill, ImmShape, NarrowLane, Permute, SMOV_FORMS, VectorFma, VectorFpOp,
+    VectorFpUnary, VectorIntUnary, VectorLongOp, VectorOp, VectorReduce, VectorShift,
 };
 use crate::mc::visit::Reg;
 use crate::mfunc::{Callee, INCOMING_ARGUMENTS, MBlock, MFunc, Op, OpList, PoolEntry, block_label};
@@ -600,7 +600,11 @@ fn vector_fill(
     match (name, operands) {
         ("MOVIv16b_ns", [Operand::Imm(byte)]) => return Some(Ok(Fill::Byte(*byte as u8))),
         ("MOVIv8b_ns", [Operand::Imm(byte)]) => return Some(Ok(Fill::Byte8(*byte as u8))),
-        ("MOVIv2d_ns", [Operand::Imm(mask)]) => return Some(Ok(Fill::Mask(*mask as u8))),
+        // A zero mask is the one `Fill::Zero`, so the LIR description
+        // (`MOVIv2d_ns` #0) maps back to it.
+        ("MOVIv2d_ns", [Operand::Imm(mask)]) => {
+            return Some(Ok(if *mask as u8 == 0 { Fill::Zero } else { Fill::Mask(*mask as u8) }));
+        }
         ("MOVID", [Operand::Imm(mask)]) => return Some(Ok(Fill::MaskD(*mask as u8))),
         _ => {}
     }
@@ -886,32 +890,33 @@ fn vector_inst(
         }
     }
     // `UZP1v8i16`: two sources, no tied register.
-    for (second, lanes) in [
-        Arrangement::B16,
-        Arrangement::H8,
-        Arrangement::S4,
-        Arrangement::D2,
-        Arrangement::B8,
-        Arrangement::H4,
-        Arrangement::S2,
-    ]
-    .into_iter()
-    .flat_map(|lanes| [(false, lanes), (true, lanes)])
-    {
-        let lane = match lanes {
-            Arrangement::B16 => "v16i8",
-            Arrangement::H8 => "v8i16",
-            Arrangement::S4 => "v4i32",
-            Arrangement::D2 => "v2i64",
-            Arrangement::B8 => "v8i8",
-            Arrangement::H4 => "v4i16",
-            Arrangement::S2 => "v2i32",
-        };
-        if name == format!("UZP{}{lane}", if second { 2 } else { 1 }) {
-            return Some(match operands {
-                [Operand::Fpr(rn), Operand::Fpr(rm)] => Ok(Inst::VectorUnzip { second, lanes, rd, rn: *rn, rm: *rm }),
-                _ => wrong(),
-            });
+    for kind in Permute::ALL {
+        for lanes in [
+            Arrangement::B16,
+            Arrangement::H8,
+            Arrangement::S4,
+            Arrangement::D2,
+            Arrangement::B8,
+            Arrangement::H4,
+            Arrangement::S2,
+        ] {
+            let lane = match lanes {
+                Arrangement::B16 => "v16i8",
+                Arrangement::H8 => "v8i16",
+                Arrangement::S4 => "v4i32",
+                Arrangement::D2 => "v2i64",
+                Arrangement::B8 => "v8i8",
+                Arrangement::H4 => "v4i16",
+                Arrangement::S2 => "v2i32",
+            };
+            if name == format!("{}{lane}", kind.stem()) {
+                return Some(match operands {
+                    [Operand::Fpr(rn), Operand::Fpr(rm)] => {
+                        Ok(Inst::VectorPermute { kind, lanes, rd, rn: *rn, rm: *rm })
+                    }
+                    _ => wrong(),
+                });
+            }
         }
     }
     // `MULv4i32_indexed`: the multiplier is a lane of `rm`.
@@ -934,6 +939,24 @@ fn vector_inst(
         return Some(match operands {
             [Operand::Fpr(rn), Operand::Fpr(rm), Operand::Imm(index)] => {
                 Ok(Inst::VectorFmulLane { lanes, rd, rn: *rn, rm: *rm, index: *index as u8 })
+            }
+            _ => wrong(),
+        });
+    }
+    // `FMLAv1i64_indexed`: the scalar form, `rm` a vector.
+    for (stem, op) in [("FMLA", VectorFma::Add), ("FMLS", VectorFma::Sub)] {
+        let Some(lanes) =
+            name.strip_prefix(stem).and_then(|rest| rest.strip_suffix("_indexed")).and_then(|rest| match rest {
+                "v1i32" => Some(Arrangement::S4),
+                "v1i64" => Some(Arrangement::D2),
+                _ => None,
+            })
+        else {
+            continue;
+        };
+        return Some(match operands {
+            [Operand::Fpr(_), Operand::Fpr(rn), Operand::Fpr(rm), Operand::Imm(index)] => {
+                Ok(Inst::ScalarFmaLane { op, lanes, rd, rn: *rn, rm: *rm, index: *index as u8 })
             }
             _ => wrong(),
         });
@@ -2376,11 +2399,8 @@ impl Emitter<'_> {
                     })
                     .collect();
                 let undefined = |op: &SDValue| {
-                    self.dag.value_type(*op).is_vector()
-                        && matches!(
-                            self.dag.opcode(*op),
-                            ISD::Undef | ISD::Poison
-                        ) || matches!(
+                    self.dag.value_type(*op).is_vector() && matches!(self.dag.opcode(*op), ISD::Undef | ISD::Poison)
+                        || matches!(
                             self.dag.opcode(*op),
                             ISD::Machine(code) if opcode_name(code) == Some("IMPLICIT_DEF") && self.dag.value_type(*op).is_vector()
                         )
@@ -2445,8 +2465,8 @@ impl Emitter<'_> {
                         || node.values[0].is_vector()
                         || vector_fill(name, &operands).is_some()
                         || reduction(name).is_some()
-                        // `DUPi16` reads a lane into an `h` register, which has no
-                        // type of ours: it reads as an `i16`.
+                        // `DUPi16` reads a lane into an `h` register, which has
+                        // no type of ours: it reads as an `i16`.
                         || matches!(probe, Ok(Inst::VectorDupScalar { .. }))
                         || matches!(probe, Ok(Inst::FpUnary { op: FpUnary::Mov, .. }));
                     let (rd, gd) = if float_result { (self.mf.fpr(), Gpr(0)) } else { (Vreg(0), self.mf.gpr()) };
@@ -2456,6 +2476,7 @@ impl Emitter<'_> {
                     if let (
                         Inst::VectorFma { .. }
                         | Inst::VectorFmaLane { .. }
+                        | Inst::ScalarFmaLane { .. }
                         | Inst::VectorLong { op: VectorLongOp::Umlal | VectorLongOp::Smlal, .. }
                         | Inst::VectorShift { op: VectorShift::Usra | VectorShift::Ssra, .. }
                         | Inst::VectorNarrow { high: true, .. }
@@ -2631,8 +2652,8 @@ impl Emitter<'_> {
                         self.values.insert((id, 0), rd);
                         return Ok(());
                     }
-                    // A vector or float value nothing defines (the undefined half
-                    // of a widened vector) is a float register.
+                    // A vector or float value nothing defines (the undefined
+                    // half of a widened vector) is a float register.
                     ("IMPLICIT_DEF", []) if in_float_file(node.values[0]) => {
                         let one = self.mf.fpr();
                         if is_quad(node.values[0]) {
@@ -2920,6 +2941,12 @@ pub fn emit(
                 }
             }
         }
+        // An IR `unreachable` selects to nothing (no trap on this target) but
+        // leaves the block without a successor: `successors` names none and it
+        // does not return.
+        if block.successors.is_empty() && !emitter.ops.iter().any(Op::ends_the_function) {
+            emitter.ops.push(Op::Unreachable);
+        }
         let ops = std::mem::take(&mut emitter.ops);
         places.resize(ops.len(), None);
         let mut pairs: Vec<(Op, Option<SrcLoc>)> = ops.into_iter().zip(places).collect();
@@ -2949,6 +2976,7 @@ pub fn emit(
                     Some(
                         Op::Return { .. }
                             | Op::JumpTable { .. }
+                            | Op::Unreachable
                             | Op::I(Inst::Branch { link: false, .. } | Inst::Brk { .. })
                     )
                 ) && at + 1 < blocks.len()

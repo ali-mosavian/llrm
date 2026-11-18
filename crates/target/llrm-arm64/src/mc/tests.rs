@@ -381,6 +381,7 @@ fn branches() {
         all.push(Inst::VectorFma { op, lanes, rd: Vreg(6), rn: Vreg(25), rm: Vreg(14) });
         all.push(Inst::VectorFmaLane { op, lanes, rd: Vreg(6), rn: Vreg(25), rm: Vreg(31), index: 1 });
         all.push(Inst::VectorFmaLane { op, lanes, rd: Vreg(5), rn: Vreg(6), rm: Vreg(17), index: 0 });
+        all.push(Inst::ScalarFmaLane { op, lanes, rd: Vreg(7), rn: Vreg(8), rm: Vreg(18), index: 1 });
     }
     for (lanes, index) in [(Arrangement::D2, 1), (Arrangement::S4, 3), (Arrangement::H8, 7), (Arrangement::B16, 15)] {
         all.push(Inst::VectorDupScalar { lanes, rd: Vreg(5), rn: Vreg(17), index });
@@ -407,8 +408,9 @@ fn branches() {
         }
     }
     for lanes in ALL_ARRANGEMENTS {
-        all.push(Inst::VectorUnzip { second: false, lanes, rd: Vreg(5), rn: Vreg(17), rm: Vreg(30) });
-        all.push(Inst::VectorUnzip { second: true, lanes, rd: Vreg(5), rn: Vreg(17), rm: Vreg(30) });
+        for kind in Permute::ALL {
+            all.push(Inst::VectorPermute { kind, lanes, rd: Vreg(5), rn: Vreg(17), rm: Vreg(30) });
+        }
     }
     for (lanes, index) in [(Arrangement::S4, 3), (Arrangement::S4, 1), (Arrangement::D2, 1), (Arrangement::D2, 0)] {
         all.push(Inst::VectorFmulLane { lanes, rd: Vreg(5), rn: Vreg(6), rm: Vreg(17), index });
@@ -430,6 +432,13 @@ fn branches() {
             }
         }
         all.push(Inst::VectorStoreLane { lanes, rt: Vreg(21), index, base: Gpr(9) });
+    }
+    // `ld2`..`ld4` of consecutive registers, wrapping past v31.
+    for lanes in ALL_ARRANGEMENTS {
+        for count in 2..=4 {
+            all.push(Inst::VectorLoadStructure { count, lanes, rt: Vreg(30), base: Gpr(9) });
+            all.push(Inst::VectorStoreStructure { count, lanes, rt: Vreg(4), base: Gpr(31) });
+        }
     }
     for lanes in ALL_ARRANGEMENTS {
         all.push(Inst::VectorLoadReplicate { lanes, rt: Vreg(21), base: Gpr(9) });

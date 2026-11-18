@@ -32,9 +32,12 @@ fn the_sext_add_is_not_a_trial_and_costs_no_build() {
     assert_eq!(builds(on), builds(off), "the rewrite cost a build");
 }
 
-/// The counter sees a trial: `compare_destinations` fired here is one more build.
+/// The counter sees a trial: `compare_destinations` fired here is one more
+/// build.
 #[test]
 fn the_build_count_sees_a_trial() {
-    let off = Options { compare_destinations: false, ..Options::default() };
-    assert!(builds(Options::default()) > builds(off), "a fired trial adds no build: the count is blind");
+    // a speed build is built once (#9934); the size build runs the trials
+    let on = Options { size: true, ..Options::default() };
+    let off = Options { compare_destinations: false, ..on };
+    assert!(builds(on) > builds(off), "a fired trial adds no build: the count is blind");
 }

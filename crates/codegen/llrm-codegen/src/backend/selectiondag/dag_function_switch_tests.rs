@@ -279,3 +279,24 @@ fn a_wide_switch_is_a_tree_unless_minsize() {
     assert_eq!(first_compare("optsize"), plain, "-Os splits the tree as -O2 does");
     assert_ne!(first_compare("minsize"), plain, "-Oz is a chain: {plain:?} against {:?}", first_compare("minsize"));
 }
+
+/// x_switch_ranges' `class_of`: seven runs of values spread over 114, 58% dense
+/// by value count. At -Os the pin's 40% density built a 114-slot jump table
+/// (+380 B over the compares); GCC's size ratio keeps the compares.
+#[test]
+fn at_size_a_table_may_not_outgrow_the_compares_it_replaces() {
+    use super::switchcg::{SwitchTarget, plan};
+    let mut cases: Vec<(i128, u32)> = Vec::new();
+    for (low, high, dest) in
+        [(9, 10, 1), (32, 32, 1), (48, 57, 2), (65, 90, 3), (95, 95, 4), (97, 102, 5), (103, 122, 6)]
+    {
+        cases.extend((low..=high).map(|value| (value, dest)));
+    }
+    let tables = |size_growth_ratio, opt_size| {
+        let target = SwitchTarget { size_growth_ratio, opt_size, ..SwitchTarget::x86(32) };
+        plan(&cases, 0, &target).jump_tables.len()
+    };
+    assert_eq!(tables(None, true), 1, "premise: the pin's density builds the table");
+    assert_eq!(tables(Some(300), true), 0, "-Os: 114 slots against 12 compares");
+    assert_eq!(tables(Some(300), false), 1, "-O2 keeps the table");
+}

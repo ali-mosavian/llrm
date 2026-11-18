@@ -160,6 +160,7 @@ pub mod iminmax_combine;
 pub mod indexed_combine;
 pub mod inline_asm;
 pub mod known_bits;
+pub mod known_never_nan;
 pub mod legalize_dag;
 pub mod legalize_types;
 pub mod libcall;

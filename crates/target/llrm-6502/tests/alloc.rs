@@ -2621,6 +2621,36 @@ fn a_transfer_and_its_reverse_are_one_transfer() {
     }
 }
 
+/// sibling_call_callees: `f` and `h` made the zero in `a` for the cells and
+/// moved it to `x` for the high argument byte (`lda #0; sta rc2; sta rc3; tax;
+/// lda #1; jmp report`, 12 B where llvm-mos has 11): made in `x` and stored
+/// from it, the transfer goes. Where `a` is read after the transfer it is not.
+#[test]
+fn a_byte_stored_and_moved_to_x_is_made_in_x() {
+    use llrm_6502::peephole::make_the_byte_in_x;
+    assert_eq!(
+        pass(make_the_byte_in_x, "  lda #0\n  sta rc2\n  sta rc3\n  tax\n  lda #1\n  jmp report\n"),
+        "  ldx #0\n  stx rc2\n  stx rc3\n  lda #1\n  jmp report\n"
+    );
+    assert_eq!(
+        pass(make_the_byte_in_x, "  lda rc5\n  sta rc2\n  tax\n  rts\n"),
+        "  lda rc5\n  sta rc2\n  tax\n  rts\n"
+    );
+    for kept in [
+        // `a` is read after the transfer
+        "  lda #0\n  sta rc2\n  tax\n  sta rc3\n  rts\n",
+        // no store: the transfer is `ldx #0` already priced elsewhere
+        "  lda #0\n  tax\n  lda #1\n  rts\n",
+        // a call reads `a`: the argument of `report(0)` (sim65 printed the
+        // wrong value)
+        "  lda #0\n  sta rc2\n  sta rc3\n  tax\n  jsr report\n  rts\n",
+        // an indexed store has no `stx` form
+        "  lda #0\n  sta (rc2),y\n  tax\n  lda #1\n  rts\n",
+    ] {
+        assert_eq!(pass(make_the_byte_in_x, kept), kept);
+    }
+}
+
 /// A conditional branch is long only when its target is out of reach in bytes:
 /// 127 forward, 128 back. Counting 40 instruction lines made 14 of 19 long
 /// branches in the corpus (3 bytes each) that the assembler would have reached.
