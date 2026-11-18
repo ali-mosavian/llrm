@@ -165,11 +165,12 @@ pub const FUNCTION_RESIDUE_BYTES: i64 = 3;
 
 /// The bytes of an `i64` product and of the product of two `i32`s into an `i64`, the whole sequence: the object of
 /// `long long f(long long a, long long b) { return a * b; }` and of `(long long)a * b` at -Os (2026-11-09: 152 and 178
-/// B at the 68000, 44 and 14 B at the 68020) less the saved registers, `rts` and loads around the product
+/// B at the 68000, 44 and 14 B at the 68020; the widening one is 116 B at the 68000 since the word multiply stopped
+/// extending its tied operand, 2026-11-18) less the saved registers, `rts` and loads around the product
 /// (`tests/size_calibration.rs` holds them to the objects). The 68000 has no 32-bit multiply either: each is a run of
 /// `__mulsi3` calls on 16-bit halves; the 68020 has `muls.l`/`mulu.l`.
 fn products(cpu: Cpu) -> (i64, i64) {
-    if cpu.at_least(Cpu::M68020) { (34, 8) } else { (136, 160) }
+    if cpu.at_least(Cpu::M68020) { (34, 8) } else { (136, 100) }
 }
 
 /// The bytes of an `i64` shifted by a variable count, the whole sequence (the object of `a << n` and `a >> n` at -Os,
