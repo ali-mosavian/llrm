@@ -76,6 +76,7 @@
 pub mod adce;
 pub mod aggressive_instcombine;
 pub mod algebraic;
+pub mod alwaysinline;
 pub mod alwaysundef;
 pub mod argpromotion;
 #[cfg(test)]

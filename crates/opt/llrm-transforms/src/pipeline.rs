@@ -1757,6 +1757,8 @@ pub fn recorded(
         // LLVM's CGSCC walk: each body inlined into, then simplified, callees
         // first. `Phase::Simplify` runs there and not module-wide.
         if at == 1 {
+            // `AlwaysInlinerPass`, ahead of the CGSCC inliner (PassBuilderPipelines.cpp:1326).
+            manager.add_program(crate::alwaysinline::AlwaysInline);
             // What each body does to memory is stated here, as the pin's
             // PostOrderFunctionAttrs inside the CGSCC walk: the early
             // simplification (SROA, EarlyCSE, PromotePass, InstCombine,
