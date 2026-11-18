@@ -329,13 +329,37 @@ pub fn strong_components(callees: &[Vec<usize>]) -> (Vec<usize>, Vec<bool>) {
 #[path = "callgraph_tests.rs"]
 mod tests;
 
+/// The `!callees` lists that only direct calls carry: a copy or a fold made
+/// the call they described direct, and they list nothing an indirect call may
+/// reach. LLVM's metadata is no use of the function it names, so such a list
+/// neither takes an address nor keeps a function alive.
+pub fn stale_callee_lists(module: &Module) -> BTreeSet<u32> {
+    let mut direct = BTreeSet::new();
+    let mut indirect = BTreeSet::new();
+    for (_, _, function) in module.functions() {
+        for (_, inst) in function.walk() {
+            let Some((_, node)) = function.instruction(inst).metadata.iter().find(|(kind, _)| kind == "callees") else {
+                continue;
+            };
+            if memory::callee(&module.context, function, inst).is_some() {
+                direct.insert(node.0);
+            } else {
+                indirect.insert(node.0);
+            }
+        }
+    }
+    direct.retain(|node| !indirect.contains(node));
+    direct
+}
+
 /// Functions whose address is taken: named anywhere but as a callee, in a
 /// global's initializer, a personality, or a metadata list (a call's `callees`,
-/// which an indirect call may reach).
+/// which an indirect call may reach; not one [`stale_callee_lists`] names).
 pub fn addressed(module: &Module) -> BTreeSet<GlobalId> {
     let context = &module.context;
     let mut out = BTreeSet::new();
     let mut work = Vec::new();
+    let stale = stale_callee_lists(module);
     for (_, _, function) in module.functions() {
         work.extend(function.personality);
         for (_, inst) in function.walk() {
@@ -352,7 +376,10 @@ pub fn addressed(module: &Module) -> BTreeSet<GlobalId> {
     work.extend(module.globals.iter().filter_map(|global| {
         if let GlobalKind::Variable(variable) = &global.kind { variable.initializer } else { None }
     }));
-    for node in &module.metadata {
+    for (at, node) in module.metadata.iter().enumerate() {
+        if stale.contains(&(at as u32)) {
+            continue;
+        }
         work.extend(
             node.operands
                 .iter()
