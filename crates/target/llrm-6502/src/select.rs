@@ -153,7 +153,7 @@ struct TextKey {
     zero_page: u8,
     tuning: (u32, bool),
     source: Option<(String, Option<u32>)>,
-    flags: (bool, bool, bool, bool, bool, bool, bool, bool),
+    flags: (bool, bool, bool, bool, bool, bool, bool, bool, bool),
 }
 
 impl TextKey {
@@ -388,6 +388,40 @@ pub fn module_text(
             variants = chosen;
         }
     }
+    // at speed the long divisions are the speed family (the small wide path
+    // where cold): a module takes the compact 32-step walk, bytes first, unless
+    // the clocks the speed family saves are worth the bytes it links: the test
+    // of size (`fast_division_pays_at_size`, with the trip counts of the
+    // module's loops); a division by a known byte keeps the speed family.
+    //
+    // DEVIATE 6502-DIV-32 (owner llrm-target-6502, exit 2026-11-24): the pin's
+    // `__udivsi3` is one routine. Reason: bytes first on this target at every
+    // level (user ruling 2026-11-14); compound_assignment_types' one cold long
+    // division links 298 bytes of the speed family, 86 over the compact walk.
+    let speed_long_division = |text: &str, suffix: &str| {
+        ["__udivsi3", "__divsi3", "__umodsi3", "__modsi3", "__divmodsi4", "__udivmodsi4"]
+            .iter()
+            .any(|name| text.contains(&format!(" {name}{suffix}\n")))
+    };
+    // `LLRM_6502_NO_COMPACT_DIV32` is the kill switch, for an A/B of one binary
+    if !size
+        && std::env::var_os("LLRM_6502_NO_COMPACT_DIV32").is_none()
+        && texts.iter().any(|text| speed_long_division(text, "_fast") || speed_long_division(text, "_fast_small"))
+        && !texts.iter().any(|text| speed_long_division(text, "_fast_byte"))
+    {
+        let mut compact = texts.clone();
+        let mut chosen = variants.clone();
+        for at in 0..compact.len() {
+            if speed_long_division(&compact[at], "_fast") || speed_long_division(&compact[at], "_fast_small") {
+                chosen[at].compact_division32 = true;
+                compact[at] = chosen[at].text(module, parts[at])?;
+            }
+        }
+        if !fast_division_pays_at_size(module, parts, &compact, &texts)? {
+            texts = compact;
+            variants = chosen;
+        }
+    }
     // the speed multiply is 19 bytes linked once: a module whose multiplies
     // are cold keeps the compact routine
     let calls_multiply = |text: &str| text.contains(" __mulsi3\n");
@@ -416,13 +450,21 @@ struct Variants {
     size_fast_division: bool,
     /// The 16-bit divisions call their compact routines at speed.
     compact_division16: bool,
+    /// The long divisions call their compact routines at speed.
+    compact_division32: bool,
     /// The long multiply calls `__mulsi3_fast`.
     fast_multiply: bool,
 }
 
 impl Default for Variants {
     fn default() -> Self {
-        Variants { wide_division: true, size_fast_division: false, compact_division16: false, fast_multiply: false }
+        Variants {
+            wide_division: true,
+            size_fast_division: false,
+            compact_division16: false,
+            compact_division32: false,
+            fast_multiply: false,
+        }
     }
 }
 
@@ -436,7 +478,9 @@ impl Variants {
         alloc::with_fast_division(self.wide_division, || {
             alloc::with_size_fast_division(self.size_fast_division, || {
                 alloc::with_compact_division16(self.compact_division16, || {
-                    alloc::with_fast_multiply(self.fast_multiply, || function_text(module, name, selection))
+                    alloc::with_compact_division32(self.compact_division32, || {
+                        alloc::with_fast_multiply(self.fast_multiply, || function_text(module, name, selection))
+                    })
                 })
             })
         })

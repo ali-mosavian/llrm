@@ -1,5 +1,5 @@
-//! The routine variants a module chooses (a cold long division takes the small
-//! wide path, a hot multiply the speed routine) hold together: a function's
+//! The routine variants a module chooses (a cold long division takes the
+//! compact walk, a hot multiply the speed routine) hold together: a function's
 //! text written again for the multiply dropped the division's choice, linking
 //! the wide path (+141 B) for one cold division (compound_assignment_types at
 //! -O2).
@@ -43,6 +43,6 @@ fn a_hot_multiply_keeps_the_cold_division_small() {
     let ir = format!("target datalayout = \"{}\"\n{IR}", datalayout());
     let text = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
     assert!(text.contains("__mulsi3_fast"), "{text}");
-    assert!(text.contains("__divsi3_fast_small"), "{text}");
     assert!(!text.contains("__divsi3_fast\n"), "{text}");
+    assert!(text.contains("jsr __divsi3\n"), "{text}");
 }

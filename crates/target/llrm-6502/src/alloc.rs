@@ -105,6 +105,9 @@ thread_local! {
     /// Whether a 16-bit division calls its compact routine at speed too (see
     /// [`with_compact_division16`]).
     static COMPACT_DIVISION16: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Whether a long division calls its compact routine at speed too (see
+    /// [`with_compact_division32`]).
+    static COMPACT_DIVISION32: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// The functions of the module in hand that save their cells inline (see
     /// [`keep_saves_inline`]).
     static INLINE_SAVES: std::cell::RefCell<std::collections::HashSet<String>> = std::cell::RefCell::new(Default::default());
@@ -193,7 +196,7 @@ pub fn forget_inline_saves() {
 /// Every choice outside a selection that the text of a function depends on
 /// (see [`with_shared_saves`], [`with_fast_division`] and the others): two
 /// compiles of one selection under equal flags write the same text.
-pub fn text_flags(name: &str) -> (bool, bool, bool, bool, bool, bool, bool, bool) {
+pub fn text_flags(name: &str) -> (bool, bool, bool, bool, bool, bool, bool, bool, bool) {
     (
         SPIKE.with(|a| a.get()),
         SHARED_SAVES.with(|a| a.get()),
@@ -201,6 +204,7 @@ pub fn text_flags(name: &str) -> (bool, bool, bool, bool, bool, bool, bool, bool
         FAST_MULTIPLY.with(|a| a.get()),
         SIZE_FAST_DIVISION.with(|a| a.get()),
         COMPACT_DIVISION16.with(|a| a.get()),
+        COMPACT_DIVISION32.with(|a| a.get()),
         WIDE_COMMUTE.with(|a| a.get()),
         INLINE_SAVES.with(|set| set.borrow().contains(name)),
     )
@@ -244,6 +248,19 @@ pub fn with_compact_division16<R>(
     let before = COMPACT_DIVISION16.with(|a| a.replace(allowed));
     let result = f();
     COMPACT_DIVISION16.with(|a| a.set(before));
+    result
+}
+
+/// `f` with the long divisions calling the compact routines at speed too: a
+/// module takes them where the clocks the speed routines save are not worth
+/// their bytes (`select::module_text`).
+pub fn with_compact_division32<R>(
+    allowed: bool,
+    f: impl FnOnce() -> R,
+) -> R {
+    let before = COMPACT_DIVISION32.with(|a| a.replace(allowed));
+    let result = f();
+    COMPACT_DIVISION32.with(|a| a.set(before));
     result
 }
 
@@ -4571,7 +4588,7 @@ fn emit_with<const STACK: bool>(
                         callee,
                         "__udivsi3" | "__divsi3" | "__umodsi3" | "__modsi3" | "__divmodsi4" | "__udivmodsi4"
                     );
-                    let entry = if !speed
+                    let entry = if (!speed || (division && COMPACT_DIVISION32.with(|f| f.get())))
                         && !(callee == "__mulsi3" && FAST_MULTIPLY.with(|f| f.get()))
                         && !(division && SIZE_FAST_DIVISION.with(|f| f.get()))
                     {
