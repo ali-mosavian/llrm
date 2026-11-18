@@ -1142,6 +1142,15 @@ impl Tti for X86 {
         self.tuning.imul_at_size
     }
 
+    /// DEVIATE MERGEFUNC-LOCAL-X64 (owner llrm-target-x86-m16-b, exit
+    /// 2026-11-30): x86-64 drops a local function that is the same code as
+    /// another at -O1 to -O3, as gcc's `-fipa-icf` does at -O2 (signbit_idioms:
+    /// 8 of 24 functions were copies; each function is an FDE the start-up
+    /// unwinder registration walks, 110 instructions a function).
+    fn merge_local_functions_at_speed(&self) -> bool {
+        self.quad
+    }
+
     fn merge_functions_at_size(&self) -> bool {
         self.tuning.merge_functions_at_size
     }
