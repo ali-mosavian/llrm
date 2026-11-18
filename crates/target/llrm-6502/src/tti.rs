@@ -363,6 +363,14 @@ impl Tti for Mos6502 {
         multiplier.is_none_or(|m| !crate::dagisel::combine::mul_by_constant_stays_in_line(16, m as i128, false))
     }
 
+    /// DEVIATE LSR-OUTER-SIZE: at -Os the `__mulhi3` call of `i * 54` is a
+    /// dozen bytes of setup and the routine's own bytes per use, against one
+    /// 16-bit add of a counter (rep_count: a call in its third loop nest).
+    /// Owner: llrm-target-6502. Exit: 2026-11-24.
+    fn reduces_outer_multiply_at_size(&self) -> bool {
+        true
+    }
+
     /// DEVIATE LU24: a pointer that steps is weighed against `p + n`.
     fn lsr_address_left_to_cost_model(&self) -> bool {
         true
