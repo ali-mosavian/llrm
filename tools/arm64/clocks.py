@@ -58,8 +58,10 @@ def mca_cycles(lines, iterations):
     lines = [line for line in lines if not CALL.match(line + ' ')]
     if not lines:
         return float(calls)
-    # objdump prints a target no symbol covers bare (`adr x0, 0x200158`, as gcc takes a nearby literal): llvm-mca takes an offset.
-    text = '\n'.join(re.sub(r'\b0x[0-9a-f]+( <[^>]*>)?$', '#4096' if line.startswith('adrp') else '#16', line) if re.search(r'\b0x[0-9a-f]+( <[^>]*>)?$', line) else line for line in lines)
+    # objdump prints a target no symbol covers bare (`adr x0, 0x200158`, as gcc takes a nearby literal): llvm-mca takes an
+    # offset. An immediate (`#0x1`) is not a target.
+    target = re.compile(r'(?<![#\w])0x[0-9a-f]+( <[^>]*>)?$')
+    text = '\n'.join(target.sub('#4096' if line.startswith('adrp') else '#16', line) for line in lines)
     run = subprocess.run([f'{LLVM}/llvm-mca', '-mtriple=aarch64-linux-gnu', '-mcpu=apple-m1', f'-iterations={iterations}', '-'], input=text, capture_output=True, text=True)
     cycles, done = re.search(r'Total Cycles:\s+(\d+)', run.stdout), re.search(r'Iterations:\s+(\d+)', run.stdout)
     return int(cycles.group(1)) / int(done.group(1)) + calls if cycles and done else None

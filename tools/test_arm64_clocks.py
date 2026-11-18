@@ -78,6 +78,10 @@ class Model(unittest.TestCase):
         # gcc/clang cells were dropped from the board for want of a price.
         self.assertIsNotNone(clocks.mca_cycles(["adr x0, 0x200158", "add x0, x0, #1"], 1))
 
+    def test_an_immediate_in_hex_is_not_a_target(self):
+        # A first fix rewrote `add w3, w0, #0x1` to `##16`: the block was refused again.
+        self.assertIsNotNone(clocks.mca_cycles(["add w3, w0, #0x1", "adr x2, 0x221bd8 <bmp>"], 1))
+
 
 if __name__ == "__main__":
     unittest.main()
