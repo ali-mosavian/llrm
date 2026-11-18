@@ -1160,16 +1160,22 @@ pub trait Tti {
     }
 
     /// Units a size-optimized caller's inline guard (D11) counts for a
-    /// `memcpy`, `memmove` or `memset`: the loads and stores of a constant
-    /// `length` the target expands inline, else the call it stays (an unknown
-    /// or long length); the pin counts one instruction. None: the pin's count
-    /// stands.
+    /// `memcpy`, `memmove` or `memset` of constant `length` bytes that the
+    /// target expands inline, as the loads and stores it becomes; the pin
+    /// counts one instruction. None: the call-shaped count stands.
     fn size_caller_memory_units(
         &self,
         family: &str,
-        length: Option<u64>,
+        length: u64,
     ) -> Option<i64> {
         let _ = (family, length);
+        None
+    }
+
+    /// Units the inline guard counts for such an intrinsic that stays a call
+    /// (an unknown length, or one past the inline limit): its call with
+    /// three arguments. None: the pin's count stands.
+    fn size_caller_memory_call_units(&self) -> Option<i64> {
         None
     }
 
