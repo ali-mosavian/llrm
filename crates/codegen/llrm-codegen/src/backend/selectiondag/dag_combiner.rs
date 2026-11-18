@@ -4910,7 +4910,8 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         if self.dag.is_undef(n0) || self.dag.is_undef(n1) {
             return Some(self.dag.get_constant(0, vt));
         }
-        // `isConstOrConstSplat`: a vector of one constant is the constant, at the width of its lane.
+        // `isConstOrConstSplat`: a vector of one constant is the constant, at
+        // the width of its lane.
         let is_const = |dag: &SelectionDAG, v: SDValue| dag.const_or_splat(v).is_some() && !dag.is_opaque(v);
         if is_const(self.dag, n0) && !is_const(self.dag, n1) {
             return Some(self.dag.get_node(ISD::Mul, vt, &[n1, n0]));
@@ -5073,7 +5074,32 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             return None;
         };
         let low = self.dag.get_node(ISD::Truncate, half.half, &[y]);
+        let x = self.without_half_extension(x, vt, half);
         Some(self.dag.get_node(ISD::Machine(opcode), vt, &[x, low]))
+    }
+
+    /// `x` as the half multiply's destination: it reads the low half only, so
+    /// an extension of a half-width value is the value itself
+    /// (`getAnyExtOrTrunc`; `muls.w` of `ext.l` costs the `ext.l`).
+    fn without_half_extension(
+        &mut self,
+        x: SDValue,
+        vt: EVT,
+        half: HalfMul,
+    ) -> SDValue {
+        if !matches!(
+            self.dag.opcode(x),
+            ISD::SignExtend | ISD::ZeroExtend | ISD::AnyExtend
+        ) {
+            return x;
+        }
+        let narrow = self.dag.operand(x, 0);
+        // an extended load stays one: the extension is the load's own, and the
+        // indexed combine reads the loads' users
+        if self.dag.value_type(narrow) != half.half || self.dag.opcode(narrow) == ISD::Load {
+            return x;
+        }
+        self.any_ext_or_trunc(narrow, vt)
     }
 
     /// The shifts and the add or subtract of `x * c` for `c = +-(2^n +- 1) <<
