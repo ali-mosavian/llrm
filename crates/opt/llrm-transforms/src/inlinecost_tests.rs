@@ -1208,7 +1208,7 @@ fn a_target_stating_only_a_rate_leaves_o1_to_the_pin() {
 #[test]
 fn the_size_rule_holds_a_growing_inline_in_a_speed_caller_at_o1() {
     use llrm_mir::tti::{InlinePolicy, SizeRule};
-    let policy = InlinePolicy { by_size: Some(SizeRule { min_sites: 2, yields_to_negative_cost: false }), by_rate: 0 };
+    let policy = InlinePolicy { by_size: Some(SizeRule { min_sites: 2, yields_to_negative_cost: false, yields_to_inlinehint: false }), by_rate: 0 };
     let tti = PolicyOnly(policy, Some(false), false);
     let params = InlineParams { compute_full_inline_cost: true, o1_bound: true, ..InlineParams::from_level(2) };
     let (cost, threshold) = priced_params(COMPARE_LOOP, 0, false, CallerSize::Speed, Some(&tti), params, (2, false));
@@ -1277,6 +1277,7 @@ fn the_default_inline_policy_is_made_from_the_hooks_a_target_states() {
     let by_size = SizeRule {
         min_sites: arm.opt_size_inline_guard_min_sites(),
         yields_to_negative_cost: arm.opt_size_inline_guard_yields_to_negative_cost(),
+        yields_to_inlinehint: arm.opt_size_inline_guard_yields_to_inlinehint(),
     };
     assert!(arm.opt_size_inline_by_code_size());
     assert_eq!(
@@ -1331,7 +1332,7 @@ b0:
 #[test]
 fn the_size_rule_prices_a_callee_with_the_constants_of_the_site() {
     use llrm_mir::tti::{InlinePolicy, SizeRule};
-    let policy = InlinePolicy { by_size: Some(SizeRule { min_sites: 2, yields_to_negative_cost: false }), by_rate: 0 };
+    let policy = InlinePolicy { by_size: Some(SizeRule { min_sites: 2, yields_to_negative_cost: false, yields_to_inlinehint: false }), by_rate: 0 };
     let tti = PolicyOnly(policy, None, false);
     let inlined = |at| {
         let (cost, threshold) = priced_with(ROTATE, at, false, CallerSize::OptSize, Some(&tti));
@@ -1470,7 +1471,7 @@ impl llrm_mir::tti::Tti for Sequenced {
 #[test]
 fn test_the_size_guard_prices_a_call_sequence_without_the_arguments_nothing_reads() {
     use llrm_mir::tti::{InlinePolicy, SizeRule};
-    let policy = InlinePolicy { by_size: Some(SizeRule { min_sites: 1, yields_to_negative_cost: false }), by_rate: 0 };
+    let policy = InlinePolicy { by_size: Some(SizeRule { min_sites: 1, yields_to_negative_cost: false, yields_to_inlinehint: false }), by_rate: 0 };
     let tti = Sequenced(PolicyOnly(policy, None, false));
     let params = InlineParams { compute_full_inline_cost: true, opt_size_threshold: 100_000, ..InlineParams::from_level(2) };
     let held = |text: &str| {
