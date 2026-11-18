@@ -2,7 +2,7 @@
 //! returns branching to what followed. Where to inline is
 //! `llrm_transforms::inline`'s policy; this is only how.
 
-use crate::context::Context;
+use crate::context::{Constant, ConstantKind, Context};
 use crate::edit::Position;
 use crate::hash::HashMap;
 use crate::module::{BlockId, Function, InstId, Operand, ValueId};
@@ -176,6 +176,12 @@ pub fn spliced(
         let returned: Vec<(Operand, BlockId)> =
             returns.into_iter().map(|(value, from)| (mapped(value.expect("a value returned")), from)).collect();
         let with = match returned[..] {
+            // A callee that never returns (`noreturn`): the users of the call
+            // are in what follows it, which no edge reaches
+            // now; `InlineFunction` gives them a poison.
+            [] => Operand::Constant(
+                context.constant(Constant { ty: function.value(result).ty, kind: ConstantKind::Poison }),
+            ),
             [(value, _)] => value,
             _ => {
                 let ty = function.value(result).ty;
@@ -210,8 +216,8 @@ pub fn spliced(
     Spliced { copies, block, entry, returns: returned_from }
 }
 
-/// The copy's entry joined to the block that branches to it, as `InlineFunction`
-/// splices CalleeEntry into OrigBB and erases the branch
+/// The copy's entry joined to the block that branches to it, as
+/// `InlineFunction` splices CalleeEntry into OrigBB and erases the branch
 /// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/Utils/InlineFunction.cpp#L3556>).
 /// Made when every user of the entry block is done with it. Nothing changes
 /// if `entry` has another predecessor or opens with a phi.

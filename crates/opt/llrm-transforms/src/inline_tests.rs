@@ -1142,9 +1142,10 @@ b1:
     }
 }
 
-/// REC-9 asked `walk()` of the callee at every call site; the set is found once.
-/// Only a function with exactly one call of itself is linear: a tree (two) and a
-/// mutual recursion (none to itself) are not, and neither is a plain function.
+/// REC-9 asked `walk()` of the callee at every call site; the set is found
+/// once. Only a function with exactly one call of itself is linear: a tree
+/// (two) and a mutual recursion (none to itself) are not, and neither is a
+/// plain function.
 #[test]
 fn test_linear_recursive_holds_the_functions_with_one_self_call() {
     let module = parsed(
@@ -1156,4 +1157,45 @@ fn test_linear_recursive_holds_the_functions_with_one_self_call() {
     );
     let found = linear_recursive(&module, &recursive(&module));
     assert_eq!(found, [id(&module, "line")].into_iter().collect());
+}
+
+/// A `noreturn` callee has no `ret`: it was never copied, so a by-value
+/// struct handed to it was built in a temporary and copied again (`rep movs`
+/// in QuickrBasic's `fault_error`, 66-77 bytes against clang's 50).
+#[test]
+fn test_the_sole_call_of_a_noreturn_callee_is_inlined() {
+    let text = "declare void @sink(ptr)
+
+define internal void @die(ptr %p) noreturn {
+b1:
+  call void @sink(ptr %p)
+  unreachable
+}
+
+define void @main(ptr %p, i1 %c) {
+b1:
+  br i1 %c, label %b2, label %b3
+b2:
+  call void @die(ptr %p)
+  unreachable
+b3:
+  ret void
+}
+";
+    let mut module = parsed(text);
+    assert!(inline_into(&mut module, "main", 4));
+    let printed = printed(&module);
+    assert!(!printed.contains("call void @die"), "{printed}");
+    assert!(printed.contains("call void @sink(ptr %p)"), "{printed}");
+}
+
+/// The walk copies only bodies `copyable` admits, which once wanted a `ret`:
+/// a `noreturn` callee was never a candidate.
+#[test]
+fn test_a_noreturn_body_is_copyable() {
+    let module = parsed(
+        "declare void @sink(ptr)\n\ndefine internal void @die(ptr %p) noreturn {\nb1:\n  call void @sink(ptr %p)\n  unreachable\n}\n",
+    );
+    let (_, _, body) = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("die")).expect("@die");
+    assert!(copyable(&module, body));
 }
