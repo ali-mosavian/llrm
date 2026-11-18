@@ -1988,7 +1988,7 @@ fn settle(
     // slot read again later is a `pop` and a `push` where it is on top, and
     // the reorder can take that away (frameless -O1 +4 B)
     let mut nested = function.clone();
-    let nests = nest_reloads(&mut nested, &assignment);
+    let nests = nest_reloads(&mut nested, &assignment) | sink_spills(&mut nested, &assignment);
     let variants: Vec<(bool, bool, bool)> = choices
         .iter()
         .flat_map(|&(peek, by_conflicts)| {
@@ -2885,6 +2885,81 @@ pub fn nest_reloads(
     // places comes back to the stack only where every one of them is nested
     if reordered && pushed(function) > pushed(&before) {
         return true;
+    }
+    *function = before;
+    false
+}
+
+/// A spill moves down past the reloads that follow it, while nothing between
+/// writes its register or touches its slot and no call, branch or call-area
+/// marker is crossed: `fib` spilled the first call's result right after the
+/// call and reloaded the argument it had pushed under it after, so the two
+/// slots did not nest and the result went to the frame (`ld iy, #2; add iy, sp;
+/// ld 0(iy), e; ld 1(iy), d`, 10 B against a `push de`). Kept only where it
+/// makes every slot a push (DEVIATE Z80-SLOT-NEST). Whether anything moved.
+pub fn sink_spills(
+    function: &mut MFunction,
+    assignment: &Assignment,
+) -> bool {
+    let register = |reg: Reg| match reg {
+        Reg::Virt(v) => assignment.0[v as usize],
+        Reg::Phys(id) => id,
+    };
+    let report = |function: &MFunction| stack_slot_report_by(&mut function.clone(), assignment, true, false);
+    let before = function.clone();
+    let mut moved = false;
+    for block in &mut function.blocks {
+        let mut at = 0;
+        while at < block.insts.len() {
+            let (Kind::Op("SPILL8" | "SPILL16"), [Operand::Frame(slot), Operand::Use(source)]) =
+                (block.insts[at].kind, &block.insts[at].operands[..])
+            else {
+                at += 1;
+                continue;
+            };
+            let (slot, source) = (*slot, register(*source));
+            let mut last = None;
+            for next in at + 1..block.insts.len() {
+                let inst = &block.insts[next];
+                let blocked = inst.call
+                    || inst.barrier
+                    || inst.terminator
+                    || matches!(inst.kind, Kind::Op("ADJCALLSTACKDOWN" | "ADJCALLSTACKUP"))
+                    || inst.operands.iter().any(|operand| match operand {
+                        Operand::Def(r) => Z80Registers::overlaps(register(*r), source),
+                        Operand::Frame(other) => *other == slot,
+                        _ => false,
+                    });
+                if blocked {
+                    // the spill's own slot read next: it would sit against its
+                    // reload (`push bc; pop bc`, tile -O1 +55% T)
+                    if inst.operands.iter().any(|operand| matches!(operand, Operand::Frame(other) if *other == slot)) {
+                        last = None;
+                    }
+                    break;
+                }
+                if matches!(inst.kind, Kind::Op("RELOAD8" | "RELOAD16")) {
+                    last = Some(next);
+                }
+            }
+            match last {
+                Some(last) => {
+                    let spill = block.insts.remove(at);
+                    block.insts.insert(last, spill);
+                    moved = true;
+                }
+                None => at += 1,
+            }
+        }
+    }
+    // only where every slot is then a push and a pop: with a frame that stays,
+    // the price's loop weights took the sunk variant for the cheaper one where
+    // the hot slots had gone to the frame (tile -O1: +55% T for 2 B)
+    if moved {
+        let (now, then) = (report(function), report(&before));
+        if now.refused.is_empty() && now.pushed.len() > then.pushed.len() {
+            return true;
+        }
     }
     *function = before;
     false

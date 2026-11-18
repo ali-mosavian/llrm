@@ -3263,17 +3263,21 @@ fn a_table_whose_loads_the_late_unroll_folded_leaves_the_module() {
 }
 
 /// m64 queens -O2 ran 9.4% more instructions because ipa-cp copied only at
-/// -O3: a target that clones at speed copies at -O2 too, never at -O1, -Os or
-/// where the target says no.
+/// -O3: a target that clones at speed and at -O2 copies at both, never at -O1,
+/// -Os or where the target says no. A target that clones at -O3 only (gcc's
+/// `-fipa-cp-clone` is on there alone: arm64 queens -O3 113,742 -> 59,543
+/// instructions, -O2 +2 KB for nothing) copies at -O3 alone.
 #[test]
 fn a_target_that_clones_at_speed_copies_at_o2_and_o3_not_at_o1_or_size() {
-    let copies = |options: pipeline::Options, target: bool| super::cp_clones_by_default(&options, target);
-    assert!(copies(pipeline::Options::standard(), true));
-    assert!(copies(pipeline::Options::speed(), true));
-    assert!(!copies(pipeline::Options::basic(), true));
-    assert!(!copies(pipeline::Options::size(), true));
-    assert!(!copies(pipeline::Options::standard(), false));
-    assert!(!copies(pipeline::Options::speed(), false));
+    let copies = |options: pipeline::Options, speed: bool, o2: bool| super::cp_clones_by_default(&options, speed, o2);
+    assert!(copies(pipeline::Options::standard(), true, true));
+    assert!(copies(pipeline::Options::speed(), true, true));
+    assert!(!copies(pipeline::Options::basic(), true, true));
+    assert!(!copies(pipeline::Options::size(), true, true));
+    assert!(!copies(pipeline::Options::standard(), false, false));
+    assert!(!copies(pipeline::Options::speed(), false, false));
+    assert!(copies(pipeline::Options::speed(), true, false));
+    assert!(!copies(pipeline::Options::standard(), true, false));
 }
 
 /// LPM1 runs loop by loop: each loop goes through every pass before the next

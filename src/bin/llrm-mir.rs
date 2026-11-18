@@ -334,6 +334,7 @@ fn main() -> ExitCode {
                     opt_level: 2,
                     opt_size: false,
                     options: jam_options.clone(),
+                    needs_vectors: false,
                 });
                 let tti: std::rc::Rc<dyn llrm_mir::target::Machine> = std::rc::Rc::new(llrm_mir::target::Neutral);
                 if let Err(error) = manager.run_module(&mut module, tti) {

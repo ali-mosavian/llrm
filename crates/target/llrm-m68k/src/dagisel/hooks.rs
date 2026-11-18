@@ -116,6 +116,12 @@ pub struct M68kHooks {
 }
 
 impl M68kHooks {
+    /// Whether loads and stores fold into the operation that uses them
+    /// (`IsLegalToFold` is false at -O0).
+    pub fn folds_memory(&self) -> bool {
+        !self.opt_none
+    }
+
     /// Whether this CPU has `bfextu` (DEVIATE M68K-BFEXTU).
     pub fn has_bit_field_extract(&self) -> bool {
         self.cpu.has_bit_field_extract()

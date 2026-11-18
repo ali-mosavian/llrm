@@ -213,6 +213,9 @@ fn program(
     text: &str,
     request: &Request,
 ) -> Result<Program, String> {
+    // a private function takes arguments in rc16..rc25 (`calling.toml`
+    // `[mos_private]`), where the platform has them
+    crate::abi::allow_private_row(request.platform.zero_page >= crate::alloc::MOST_CELLS);
     let mut module =
         llrm_mir::parse::module(&without_reserved_symbols(&without_triple(text), &request.platform.c_symbol_prefix))
             .map_err(|error| error.to_string())?;
@@ -663,6 +666,7 @@ fn tail(
     // 6502-OUTLINE-CLOCKS). At -Os the pass is the pin's, bytes alone.
     let rate = (request.level == Level::O1).then(|| request.level.tuning().clocks_per_byte);
     let text = if outlined { crate::outline::run_at(&text, rate) } else { text };
+    let text = if request.level != Level::O0 { crate::peephole::after_outlining(&text) } else { text };
     Ok(Assembled { text: equates(&request.platform) + &files + &text + &data.0, clocks, bytes, functions })
 }
 

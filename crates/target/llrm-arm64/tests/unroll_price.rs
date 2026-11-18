@@ -8,12 +8,21 @@ fn labels(source: &str) -> usize {
     asm.lines().filter(|line| line.starts_with(".L")).count()
 }
 
+/// The labels of basic blocks: a constant-pool label (`.LCPI`) is data, and the
+/// SLP vectorizer's vector constants add them (nbody: 3 -> 5).
+fn blocks(source: &str) -> usize {
+    let asm = driver::assembly(source, Platform::Linux, Level::O2).expect("lowers");
+    asm.lines().filter(|line| line.starts_with(".L") && !line.starts_with(".LCPI")).count()
+}
+
 /// nbody -O2: the triangular nest's inner copies were priced alone and kept
 /// rolled, 38,049 instructions where the pin runs 14,233. The unrolled nest
-/// has 9 labels (10 before #9699: TailDupPlacement merges a block).
+/// has 6 block labels (7 before #9699: TailDupPlacement merges a block); its
+/// constant pool adds 3, or 5 with the SLP vectorizer's vector constants, which
+/// this test used to count as blocks (11 where 9 stood).
 #[test]
 fn a_nest_whose_inner_count_follows_the_outer_counter_is_the_pins_decision() {
-    assert_eq!(labels(include_str!("data/bench_nbody_nest.ll")), 9);
+    assert_eq!(blocks(include_str!("data/bench_nbody_nest.ll")), 6);
 }
 
 /// lru -O2: the estimate priced each copy's constant stores one by one
@@ -38,6 +47,17 @@ fn init_loops_whose_stores_merge_when_unrolled_are_unrolled() {
 #[test]
 fn a_nest_loop_that_saves_more_than_its_bytes_cost_is_unrolled() {
     assert_eq!(labels(include_str!("data/bench_crc.ll")), 4);
+}
+
+/// particle -O3: `advance` inside the 100-trip `t` loop. The vectorizer left
+/// the nest a vector loop and its remainder, which the jam refuses (two inner
+/// loops): 16,743 instructions run against gcc's 12,539, which jams before it
+/// vectorizes. Jammed first, the pair of copies adds `vx` once and the loop runs
+/// 11,249; 246 instructions where there were 589.
+#[test]
+fn a_nest_is_jammed_before_the_vectorizer_splits_its_inner_loop() {
+    let insns = instructions(include_str!("data/bench_particle.ll"), Level::O3);
+    assert!(insns < 300, "{insns} instructions");
 }
 
 fn instructions(source: &str, level: Level) -> usize {

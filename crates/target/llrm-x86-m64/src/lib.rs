@@ -485,6 +485,8 @@ impl llrm_target::Target for M64 {
                             lsr_constant_setup_is_one: true,
                             // DEVIATE RU-REC (owner x86-m64, exit 2026-11-24): see Tuning.
                             unroll_recurrence_veto: true,
+                            // DEVIATE BACKTHREAD-REL (owner llrm-target-x86-m64-b, exit 2026-12-15): see Tuning.
+                            threads_by_relation: true,
                             // DEVIATE SZ2 (owner m64, exit 2026-11-19): the bound holds a
                             // callee with one site too; the pin copies it (crc, floats,
                             // tile -Os: gcc keeps the call, +40 B each).
@@ -586,6 +588,10 @@ impl llrm_target::Target for M64 {
                             immediate_forms_at_size: true,
                             // DEVIATE IPACP-O2 (owner w10, exit 2026-11-24): see Tuning.
                             ipa_cp_clones_at_speed: true,
+                            // DEVIATE IPACP-O3-M64 (owner x87-cordic-2, exit 2026-12-20): gcc clones `place`
+                            // for each row of queens; 4 left rows 4.. generic (+4.3% clk). 8 clones grow
+                            // each body past the unroll threshold: queens -O3 +2% instructions, so 7.
+                            ipa_cp_max_clones: 7,
                             // DEVIATE UNROLL-O3 (owner llrm-target-x86-m64-b, exit 2026-11-30): see Tuning.
                             unroll_threshold_at_o3: Some(400),
                             // DEVIATE DIVCONST-SIZE (owner llrm-target-x86-m64-b, exit 2026-11-30): see Tuning.
