@@ -646,7 +646,10 @@ impl Builder<'_> {
         src_align: u64,
     ) -> Result<Option<SDValue>, Refused> {
         let slice = if self.volatile_memory { None } else { self.constant_slice(src) };
-        let widest = self.widest_mem_op_sse(size, slice.is_some());
+        // `getOptimalMemOpType` asks nothing of the source: a constant one is
+        // 16-byte pieces too, loaded (`getMemsetStringVal` takes no vector but
+        // the zero one, which stays immediates here).
+        let widest = self.widest_mem_op_sse(size, matches!(slice, Some((None, _))));
         let Some(ops) = Self::mem_ops(size, widest, limit, self.volatile_memory) else { return Ok(None) };
         let (mut src_off, mut dst_off, mut left) = (0u64, 0u64, size);
         let mut chains = Vec::new();
