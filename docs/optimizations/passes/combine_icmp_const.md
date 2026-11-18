@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_icmp_const.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_icmp_const.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_icmp_const.rs sha256:b0977169f1b724f8f613ca7b6220b5e930e15ddcb114f317607d9b8940c5ab79 -->
+<!-- src: crates/opt/llrm-transforms/src/combine_icmp_const.rs sha256:559d8f030a83b53fe071e3cab74f862b6b031b437d42fd5a83d232a380aa8928 -->
 
 # combine_icmp_const
 
@@ -20,15 +20,13 @@ MIRROR: the order of the folds and each condition.
 
 OWED, each at its place as a `// OWED:` comment: the other opcodes of
 `foldICmpBinOpWithConstant` (`foldICmpXorConstant`, `foldICmpOrConstant`,
-`foldICmpSRemConstant`, `foldICmpUDivConstant`, `foldICmpDivConstant`,
-),
+`foldICmpSRemConstant`, `foldICmpUDivConstant`),
 the `or`-of-select case of `foldICmpBinOpEqualityWithConstant`, the
 truth-table fold, and the select, truncate, intrinsic and `extractvalue`
 arms of `foldICmpInstWithConstant`.
 
-DEVIATE 1: the load from an indexed global fold
-(`foldCmpLoadFromIndexedGlobal`) and the floating-point class folds on a
-bitcast (`is.fpclass`) are not translated.
+DEVIATE 1: the floating-point class folds on a bitcast (`is.fpclass`) are
+not translated.
 
 ## How it works
 The compare's left operand is an `and` of a value with a constant `C2`,
