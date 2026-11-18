@@ -329,7 +329,7 @@ fn module_bytes(
 /// level (user ruling 2026-11-14); a place in a loop keeps the expansion, a
 /// call is some 1,900 clocks a multiply.
 ///
-/// DEVIATE 6502-MUL-CALL-TRIAL (owner llrm-target-6502, exit 2026-11-24, with
+/// DEVIATE 6502-MUL-CALL-TRIAL (owner 6502, exit 2026-11-24, with
 /// 6502-MUL-IMAGE): translation of the repo's module-level re-selections
 /// (`expand_when_unshared`, `widen_when_it_pays`, and `OS-INLINE-TRIAL`'s
 /// compile-twice-keep-the-fewer-bytes); the pin decides each multiply alone
