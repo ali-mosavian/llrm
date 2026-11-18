@@ -387,7 +387,8 @@ fn layout(
         && function.outgoing == 0
         && locals_end > 0
         && area > 0
-        // Below 512: from there `split_locals` pushes the saves before the locals, as the pin.
+        // Below 512: from there `split_locals` pushes the saves before the
+        // locals, as the pin.
         && locals_end + area < 512;
     let shift = if record_low { 0 } else { locals_end };
     let mut saves = Vec::new();
@@ -642,6 +643,7 @@ pub fn lower(
                 },
                 Op::Imm { dst, bits, value } => emitter.insts.extend(crate::expand_imm::mov_imm(*value, *bits, *dst)),
                 Op::Phi { .. } => return Err("a phi after phi elimination".into()),
+                Op::Unreachable => {}
                 Op::DbgValue { variable, reg } => {
                     let reg = match reg {
                         Some(Reg::Gpr(gpr)) => Some(*gpr),

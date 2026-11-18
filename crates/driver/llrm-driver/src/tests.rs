@@ -5637,6 +5637,31 @@ fn an_i64_select_of_constants_is_no_branch_at_m32() {
     assert!(listing.contains("setne") && !listing.contains("\n    jne") && !listing.contains("jmp"), "{listing}");
 }
 
+/// `x_ld_matmul` (the m32 vsgcc kernel behind a volatile pointer, clang IR before the passes) at -O3.
+/// The backward threader copied the peeled `n == k` ladder, and the `long double` values the copies share
+/// outran the eight x87 slots: 79 stack accesses in `bench_x_ld_matmul`, 91,538 clocks and 2,155 B against
+/// 0, 84,103 and 540 B with the pass off (gcc 84,571 clk, 1,356 B).
+#[test]
+fn a_peeled_long_double_loop_nest_does_not_spill_the_x87_stack_at_m32_o3() {
+    let text = include_str!("tests_data/ld_matmul.ll");
+    let (built, _) = compiled(&flags(&["-m32", "-O3", "-march=i486"]), text, "bench_x_ld_matmul").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let spills = listing.matches("tbyte ptr [esp").count();
+    assert_eq!(spills, 0, "{listing}");
+}
+
+/// The same loop at -O2: gcc completely peels only where it may grow the code (`may_increase_size`,
+/// -O3), so -O2 keeps the loop. x_ld_matmul -O2 peeled the `long double` inner loop 16 times:
+/// 2,071 B and 101,191 clocks against the rolled 228 B and 92,914 (gcc 286 B, 92,753).
+#[test]
+fn a_loop_bounded_by_the_object_it_indexes_stays_rolled_at_m32_o2() {
+    let text = include_str!("tests_data/matmul_f.ll");
+    let (built, _) = compiled(&flags(&["-m32", "-O2", "-march=i486"]), text, "bench_x_matmul_f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let bench = listing.split("bench_x_matmul_f_ proc").nth(1).and_then(|rest| rest.split("endp").next()).expect(&listing);
+    assert!(bench.matches("fmul").count() < 12, "{listing}");
+}
+
 /// `cvtsi2ss xmm1, eax` in a loop rewrote only the low lane of `xmm1`, so each
 /// iteration waited for the last one's result (the pin: `xorps xmm1, xmm1`
 /// first, BreakFalseDeps). sfm16_float_i2f m64 -O2: 9 converts, no `xorps`.

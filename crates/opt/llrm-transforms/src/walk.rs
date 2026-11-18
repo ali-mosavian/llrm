@@ -344,7 +344,7 @@ impl ProgramPass for Walk {
             let module = &mut program.modules[at];
             let mut recursive = crate::inline::recursive(module);
             let mut linear_recursive = crate::inline::linear_recursive(module, &recursive);
-            let addressed = llrm_mir::callgraph::addressed(module);
+            let addressed = llrm_mir::callgraph::addressed_by_uses(module);
             // The calls to each function as the splices leave them, as LLVM's
             // use lists do (`isSoleCallToLocalFunction`), and a callee with
             // none left is deleted there, as `removeDeadFunctions` does after
