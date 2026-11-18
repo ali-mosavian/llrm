@@ -330,10 +330,15 @@ pub fn module_text(
             .iter()
             .any(|name| text.contains(&format!(" {name}_fast\n")))
     };
+    // the choices of this function so far: a text written again for another
+    // choice keeps them (a call of `__mulsi3` made the speed multiply and lost
+    // the module's cold-division choice, +230 B in compound_assignment_types)
+    let mut variants = vec![Variants::default(); texts.len()];
     if texts.iter().any(|text| wide(text)) && !crate::hotdivision::hot(module) {
         for at in 0..texts.len() {
             if wide(&texts[at]) {
-                texts[at] = alloc::with_fast_division(false, || function_text(module, parts[at].0, parts[at].1))?;
+                variants[at].wide_division = false;
+                texts[at] = variants[at].text(module, parts[at])?;
             }
         }
     }
@@ -348,15 +353,17 @@ pub fn module_text(
     };
     if size && texts.iter().any(|text| compact_division(text)) {
         let mut faster = texts.clone();
+        let mut chosen = variants.clone();
         for at in 0..faster.len() {
             if compact_division(&faster[at]) {
-                faster[at] = alloc::with_size_fast_division(true, || {
-                    alloc::with_fast_division(false, || function_text(module, parts[at].0, parts[at].1))
-                })?;
+                chosen[at].size_fast_division = true;
+                chosen[at].wide_division = false;
+                faster[at] = chosen[at].text(module, parts[at])?;
             }
         }
         if fast_division_pays_at_size(module, parts, &texts, &faster)? {
             texts = faster;
+            variants = chosen;
         }
     }
     // at speed the 16-bit divisions are the speed routine (39 bytes over the
@@ -369,13 +376,16 @@ pub fn module_text(
     };
     if !size && texts.iter().any(|text| speed_division16(text)) {
         let mut compact = texts.clone();
+        let mut chosen = variants.clone();
         for at in 0..compact.len() {
             if speed_division16(&compact[at]) {
-                compact[at] = alloc::with_compact_division16(true, || function_text(module, parts[at].0, parts[at].1))?;
+                chosen[at].compact_division16 = true;
+                compact[at] = chosen[at].text(module, parts[at])?;
             }
         }
         if !speed_division16_pays(module, parts, &texts, &compact)? {
             texts = compact;
+            variants = chosen;
         }
     }
     // the speed multiply is 19 bytes linked once: a module whose multiplies
@@ -388,11 +398,49 @@ pub fn module_text(
     {
         for at in 0..texts.len() {
             if calls_multiply(&texts[at]) {
-                texts[at] = alloc::with_fast_multiply(true, || function_text(module, parts[at].0, parts[at].1))?;
+                variants[at].fast_multiply = true;
+                texts[at] = variants[at].text(module, parts[at])?;
             }
         }
     }
     Ok(texts)
+}
+
+/// The runtime routines a function's text calls that [`module_text`] chooses
+/// among by the module: each choice made for it.
+#[derive(Clone, Copy)]
+struct Variants {
+    /// The wide speed division (`__divsi3_fast`, not the small one).
+    wide_division: bool,
+    /// The long divisions call the speed routines at size.
+    size_fast_division: bool,
+    /// The 16-bit divisions call their compact routines at speed.
+    compact_division16: bool,
+    /// The long multiply calls `__mulsi3_fast`.
+    fast_multiply: bool,
+}
+
+impl Default for Variants {
+    fn default() -> Self {
+        Variants { wide_division: true, size_fast_division: false, compact_division16: false, fast_multiply: false }
+    }
+}
+
+impl Variants {
+    /// The text of the function with every choice made.
+    fn text(
+        &self,
+        module: &Module,
+        (name, selection): (&str, &Selection),
+    ) -> Result<String, String> {
+        alloc::with_fast_division(self.wide_division, || {
+            alloc::with_size_fast_division(self.size_fast_division, || {
+                alloc::with_compact_division16(self.compact_division16, || {
+                    alloc::with_fast_multiply(self.fast_multiply, || function_text(module, name, selection))
+                })
+            })
+        })
+    }
 }
 
 /// The function's lines in order, with the byte and word cells it made.

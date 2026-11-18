@@ -708,6 +708,7 @@ fn tail(
     }
     crate::mulimage::widen_when_it_pays(module, &names, &mut selections, &from_module, request)?;
     crate::mulimage::expand_when_unshared(module, &names, &mut selections, &from_module, request)?;
+    crate::mulimage::call_when_it_pays(module, &names, &mut selections, &from_module, request)?;
     // Set once the selection is final: pricing the alternatives sees none.
     let file = request.debug.then(|| llrm_mir::dbgimport::unit_file(module)).flatten().map(|(name, _)| name);
     for (name, selection) in names.iter().zip(selections.iter_mut()) {
@@ -750,6 +751,20 @@ fn tail(
     let rate = (request.level == Level::O1).then(|| request.level.tuning().clocks_per_byte);
     let text = if outlined { crate::outline::run_at(&text, rate) } else { text };
     let text = if request.level != Level::O0 { crate::peephole::after_outlining(&text) } else { text };
+    let text = match request.platform.static_zero_page {
+        0 => text,
+        // `LLRM_6502_STATIC_ZP=0` is the kill switch, for an A/B of one binary
+        budget
+            if whole_program(request)
+                && crate::copyprop::enabled(std::env::var_os("LLRM_6502_STATIC_ZP").as_deref()) =>
+        {
+            let first = u16::from(request.platform.imag_base)
+                + u16::from(request.platform.zero_page)
+                + u16::from(request.platform.scratch_zero_page);
+            crate::zerospill::static_cells_to_zero_page(&text, first, u16::from(budget))
+        }
+        _ => text,
+    };
     Ok(Assembled { text: equates(&request.platform) + &files + &text + &data.0, clocks, bytes, functions })
 }
 
