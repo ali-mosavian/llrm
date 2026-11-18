@@ -15,3 +15,17 @@ void bytes(int *restrict c, const signed char *restrict a, const signed char *re
     for (int i = 0; i < n; ++i)
         c[i] = a[i] * b[i];
 }
+
+long dot(const short *a, const short *b)
+{
+    long total = 0;
+    for (int i = 0; i < 48; ++i)
+        total += (long)a[i] * b[i];
+    return total;
+}
+
+void scaled(int *restrict c, const short *restrict a, int n)
+{
+    for (int i = 0; i < n; ++i)
+        c[i] = a[i] * 1000;
+}

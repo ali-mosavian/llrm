@@ -341,6 +341,7 @@ pub mod loopvectorizeinterleave;
 pub mod loopvectorizelegality;
 pub mod loopvectorizeplan;
 pub mod loopvectorizeskeleton;
+pub mod loopvectorizewidenmul;
 pub mod loopversioning;
 pub mod lowerconstantintrinsics;
 pub mod lowerexpect;

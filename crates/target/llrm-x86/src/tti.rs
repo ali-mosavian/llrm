@@ -829,6 +829,10 @@ impl Tti for X86 {
         self.vector_values()
     }
 
+    fn narrows_widening_multiplies(&self) -> bool {
+        self.vector_values()
+    }
+
     fn selects_sub_register_vectors(&self) -> bool {
         self.vector_values()
     }

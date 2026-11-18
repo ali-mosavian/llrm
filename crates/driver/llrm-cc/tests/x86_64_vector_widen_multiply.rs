@@ -41,10 +41,10 @@ fn body<'a>(
 }
 
 #[test]
-fn signed_words_multiply_with_pmaddwd() {
+fn signed_words_multiply_with_pmullw_and_pmulhw() {
     let text = assembly();
     let words = body(&text, "words");
-    assert!(words.contains("pmaddwd") && !words.contains("pmuludq"), "{words}");
+    assert!(words.contains("pmullw") && words.contains("pmulhw") && !words.contains("pmuludq"), "{words}");
 }
 
 #[test]
@@ -62,4 +62,23 @@ fn signed_bytes_multiply_with_pmullw_in_a_vector_loop() {
     let text = assembly();
     let bytes = body(&text, "bytes");
     assert!(bytes.contains("pmullw") && bytes.contains("psraw") && !bytes.contains("pmuludq"), "{bytes}");
+}
+
+/// X64-DOT-O2: `total += (long)a[i] * b[i]` ran `pmuludq` or stayed scalar
+/// (10,977 instructions to gcc's 7,910). The product is made in `i32` (gcc's
+/// `vect_recog_widen_mult_pattern`) as `pmullw`/`pmulhw` and two unpacks, not
+/// `pmaddwd` with four.
+#[test]
+fn a_dot_product_into_a_long_multiplies_words_with_pmullw_and_pmulhw() {
+    let text = assembly();
+    let dot = body(&text, "dot");
+    assert!(dot.contains("pmullw") && dot.contains("pmulhw") && !dot.contains("pmuludq"), "{dot}");
+}
+
+/// A constant operand has no unpack to save: the pin's `pmaddwd`.
+#[test]
+fn a_word_times_a_constant_multiplies_with_pmaddwd() {
+    let text = assembly();
+    let scaled = body(&text, "scaled");
+    assert!(scaled.contains("pmaddwd") && !scaled.contains("pmuludq"), "{scaled}");
 }

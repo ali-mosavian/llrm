@@ -79,6 +79,7 @@ use llrm_mir::types::{FloatKind, Type, TypeId};
 
 use crate::lcssa::from_arms;
 use crate::loopvectorizeaccumulator as accumulator;
+use crate::loopvectorizewidenmul as widenmul;
 use crate::loopvectorizeearlyexit as early_exit;
 use crate::loopvectorizeinterleave::{self as interleave, Extracted};
 use crate::loopvectorizelegality::{Legality, can_vectorize, const_int_step, widened_intrinsic};
@@ -2329,6 +2330,10 @@ impl FunctionPass for LoopVectorize {
             return PreservedAnalyses::all();
         }
         let mut changed = crate::loopsimplify::simplified(unit.function);
+        // gcc's widening multiply: narrowed here, undone below for what stays scalar.
+        let narrowed =
+            tti.narrows_widening_multiplies() && widenmul::narrow(unit.context, unit.function);
+        changed |= narrowed;
         let mut session = ScevSession::of(unit.context, unit.function, &outer);
         // The loops, and the vector factor an epilogue loop is forced to (the
         // remainder of a main loop widened in turn, pushed as it is made).
@@ -2702,6 +2707,9 @@ impl FunctionPass for LoopVectorize {
             changed = true;
             // The loop's body is new: the expressions are stale.
             session = ScevSession::of(unit.context, unit.function, &outer);
+        }
+        if narrowed {
+            widenmul::widen_back(unit.context, unit.function);
         }
         if changed && llrm_support::debug::enabled("loop-vectorize-ir-after") {
             eprintln!("{}", llrm_mir::print::body(unit.context, unit.function));

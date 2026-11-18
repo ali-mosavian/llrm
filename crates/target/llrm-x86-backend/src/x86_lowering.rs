@@ -3390,6 +3390,22 @@ fn combine_vector_mul(
     node: SDValue,
     level: CombineLevel,
 ) -> Option<SDValue> {
+    // DEVIATE X86MW2 (owner llrm-target-x86-m16-b, exit 2026-11-30): the pin
+    // tries `pmaddwd` first. Of two extensions of words it unpacks both
+    // operands (4 `punpck`, 2 `pmaddwd` for 8 products); `pmullw` and
+    // `pmulhw` with 2 unpacks make the same 8 products in 4 instructions.
+    // A constant or a masked operand has no unpack to save, and keeps the
+    // pin's order.
+    let words = |dag: &SelectionDAG, value: SDValue| {
+        matches!(dag.opcode(value), ISD::SignExtend | ISD::ZeroExtend)
+            && dag.value_type(dag.operand(value, 0)).element().size_in_bits() == 16
+    };
+    let both_extended = words(dag, dag.operand(node, 0)) && words(dag, dag.operand(node, 1));
+    if both_extended && level == CombineLevel::BeforeLegalizeTypes {
+        if let Some(found) = reduce_vmul_width(dag, node) {
+            return Some(found);
+        }
+    }
     if let Some(found) = combine_mul_to_pmaddwd(dag, node) {
         return Some(found);
     }
@@ -3430,7 +3446,9 @@ fn combine_mul_to_pmaddwd(
         return None;
     }
     let lanes = vt.lanes();
-    if lanes == 1 || !lanes.is_power_of_two() {
+    // A `<2 x i32>` product would need `VPMADDWD` widened, which the legaliser
+    // cannot.
+    if lanes < 4 || !lanes.is_power_of_two() {
         return None;
     }
     let (n0, n1) = (dag.operand(node, 0), dag.operand(node, 1));
@@ -3579,6 +3597,11 @@ fn reduce_vmul_width(
         return None;
     };
     let lanes = vt.lanes();
+    if lanes < 4 && matches!(mode, Mode::Muls16 | Mode::Mulu16) {
+        // The halves of a two-lane product are `<1 x i32>`, a type the
+        // legaliser does not widen through memory.
+        return None;
+    }
     if lanes % 2 != 0 {
         return None;
     }

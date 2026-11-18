@@ -841,6 +841,13 @@ pub trait Tti {
         true
     }
 
+    /// The loop vectorizer narrows `mul i64 (ext a), (ext b)` to the smallest multiply that holds
+    /// the product (gcc's `vect_recog_widen_mult_pattern`): a target with no 64-bit vector
+    /// multiply. DEVIATE LVW1 (owner llrm-target-x86-m16-b, exit 2026-11-30).
+    fn narrows_widening_multiplies(&self) -> bool {
+        false
+    }
+
     /// The backend selects a vector under a register (`<8 x i8>`): the pin's
     /// `TypeWidenVector` makes it one register, as the x86 targets do. A port
     /// whose backend takes none keeps the loop scalar.

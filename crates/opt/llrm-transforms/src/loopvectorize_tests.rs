@@ -1423,3 +1423,23 @@ fn the_widened_early_exit_loop_finds_what_the_scalar_one_finds() {
         "{text}"
     );
 }
+
+/// X64-DOT-O2: `sum += (long)a[i] * b[i]` of words ran `<2 x i64>` multiplies
+/// (`pmuludq` and shifts) or stayed scalar, 10,977 instructions to gcc's 7,910.
+/// gcc's `vect_recog_widen_mult_pattern` multiplies in `i32`: the vector loop
+/// holds `mul <N x i32>` of the extensions and a `sext` to `i64`.
+#[test]
+fn a_product_of_two_word_extensions_is_multiplied_narrow_in_a_vector_loop() {
+    let text = run_x86(include_str!("../tests/lv/dot_i16.ll"), false);
+    assert!(count(&text, "mul nsw <") > 0 && count(&text, " x i32> %") > 0, "{text}");
+    assert_eq!(count(&text, "mul nsw <2 x i64>") + count(&text, "mul nsw <4 x i64>") + count(&text, "mul <"), 0, "{text}");
+}
+
+/// The narrow multiply costs a `movsxd` in a scalar loop: a loop that stays
+/// scalar keeps its `i64` multiply of the extensions.
+#[test]
+fn a_loop_that_stays_scalar_keeps_its_wide_multiply() {
+    let text = run_x86(include_str!("../tests/lv/dot_i16_short.ll"), false);
+    assert_eq!(count(&text, "x i16>"), 0, "the premise: three trips are not widened: {text}");
+    assert!(count(&text, "mul nsw i64") > 0 && count(&text, "widen.mul") == 0 && count(&text, "mul nsw i32") == 0, "{text}");
+}
