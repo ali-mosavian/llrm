@@ -505,7 +505,8 @@ fn m68k_x86_and_6502_rows_thread_jumps_at_o1_unless_told_otherwise() {
     let table = targets(TARGETS).unwrap();
     let llc = |row: &str, line: &str| llc_args(&table[row], &built(line), Path::new("x.ll"), Path::new("x.o"));
     let has = |args: &[String]| args.iter().any(|f| f == "-fthread-jumps");
-    let threads = |row: &str| ["m68k-", "x86_32-", "x86_64-", "6502-", "65c02-"].iter().any(|prefix| row.starts_with(prefix));
+    let threads =
+        |row: &str| ["m68k-", "x86_32-", "x86_64-", "6502-", "65c02-"].iter().any(|prefix| row.starts_with(prefix));
     for row in table.keys().filter(|row| threads(row)) {
         assert!(has(&llc(row, "-O1 -c x.c")), "{row}");
         for line in ["-O2 -c x.c", "-Os -c x.c", "-O1 -fno-thread-jumps -c x.c"] {
