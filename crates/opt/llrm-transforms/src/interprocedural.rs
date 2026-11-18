@@ -842,7 +842,8 @@ pub fn optimized_with<E: From<String>>(
     // result returns the wider value (`Tti::widen_private_returns`).
     if program.target.tti().is_some_and(|tti| tti.widen_private_returns()) {
         for at in 0..count {
-            let (changed, _) = reporting_marked(&mut program.modules[at], &mut modules[at], crate::widenreturns::widened);
+            let (changed, _) =
+                reporting_marked(&mut program.modules[at], &mut modules[at], crate::widenreturns::widened);
             for id in changed {
                 edited(&mut modules[at], &[id]);
                 reoptimised(&mut program.modules[at], &mut modules[at], id, "ipa-widen.")?;

@@ -29,13 +29,14 @@
 //!
 //! # Not in the pin
 //! Nothing in LLVM changes a function's return type to a wider one:
-//! DeadArgumentElimination (`DeadArgumentEliminationPass::removeDeadStuffFromFunction`)
-//! drops dead returns and arguments, IPSCCP (`IPSCCP.cpp`) propagates constant
-//! returns and ranges without retyping, ArgumentPromotion changes parameters
-//! only, and the Attributor deduces `zeroext` and `range` of the return without
-//! removing the caller's cast. GCC's nearest is IPA-SRA's return-value
-//! rewrite (`ipa-sra.cc`, `ipa_param_adjustments`), which narrows or removes a
-//! return, never widens it. `DEVIATE WIDEN-RETURNS`.
+//! DeadArgumentElimination
+//! (`DeadArgumentEliminationPass::removeDeadStuffFromFunction`) drops dead
+//! returns and arguments, IPSCCP (`IPSCCP.cpp`) propagates constant returns and
+//! ranges without retyping, ArgumentPromotion changes parameters only, and the
+//! Attributor deduces `zeroext` and `range` of the return without removing the
+//! caller's cast. GCC's nearest is IPA-SRA's return-value rewrite (`ipa-sra.
+//! cc`, `ipa_param_adjustments`), which narrows or removes a return, never
+//! widens it. `DEVIATE WIDEN-RETURNS`.
 //!
 //! # Runs
 //! In the interprocedural step, after dead-argument elimination, on a target
@@ -60,8 +61,9 @@ pub fn any_widenable(module: &Module) -> bool {
 pub fn widened(module: &mut Module) -> Vec<GlobalId> {
     let mut changed = BTreeSet::new();
     for (id, kind, wide, calls) in candidates(module) {
-        // the callee's extension is the ABI's `zeroext`/`signext`: a caller reads the returned
-        // registers as they stand, as it reads a return so marked
+        // the callee's extension is the ABI's `zeroext`/`signext`: a caller
+        // reads the returned registers as they stand, as it reads a
+        // return so marked
         let extension = || vec![Attribute::Flag(if kind == CastOp::ZExt { "zeroext" } else { "signext" }.into())];
         {
             let Module { context, globals, .. } = &mut *module;
@@ -88,7 +90,9 @@ pub fn widened(module: &mut Module) -> Vec<GlobalId> {
                 unreachable!("a caller")
             };
             let result = function.instruction(call).result.expect("a result");
-            let casts: BTreeSet<InstId> = function.users(result).iter().map(|one| one.user).collect();
+            let mut casts: Vec<InstId> = function.users(result).iter().map(|one| one.user).collect();
+            casts.sort();
+            casts.dedup();
             function.retype_call_result(call, wide, ty, extension());
             for cast in casts {
                 let extended = function.instruction(cast).result.expect("a value");

@@ -269,7 +269,8 @@ impl Tti for Mos6502 {
     /// zero high word of `report(f(x))` was 6 B at every call (bit_setclear
     /// O2: 151 B against a bar of 147).
     fn widen_private_returns(&self) -> bool {
-        // `LLRM_6502_WIDEN_RETURNS=0` is the kill switch, for an A/B of one binary
+        // `LLRM_6502_WIDEN_RETURNS=0` is the kill switch, for an A/B of one
+        // binary
         std::env::var_os("LLRM_6502_WIDEN_RETURNS").is_none_or(|value| value != "0")
     }
 

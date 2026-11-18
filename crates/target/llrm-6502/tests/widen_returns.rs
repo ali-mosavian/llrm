@@ -39,7 +39,8 @@ fn high_word_stores(text: &str) -> usize {
 #[test]
 fn the_zero_high_word_is_made_once_in_the_private_function() {
     let ir = calls();
-    // SAFETY: this binary has one test; nothing else reads the environment meanwhile
+    // SAFETY: this binary has one test; nothing else reads the environment
+    // meanwhile
     unsafe { std::env::set_var("LLRM_6502_WIDEN_RETURNS", "0") };
     let narrow = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
     unsafe { std::env::remove_var("LLRM_6502_WIDEN_RETURNS") };
