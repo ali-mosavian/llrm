@@ -9,7 +9,12 @@
 //! integer and every call reads the result only through casts of one kind
 //! (`zext` or `sext`) to one type. Then each `ret` returns the value cast to
 //! that type, the function's type follows, and each call returns the wider
-//! type: its casts read the call's result and are gone.
+//! type: its casts read the call's result and are gone. The return and every
+//! call are marked `zeroext` (`signext`), the ABI's own statement that the
+//! callee extended: a call lowering that reads the returned registers as they
+//! stand (the `AssertZext`/`AssertSext` of `lowerRangeToAssertZExt` and
+//! `getCopyFromParts` are skipped for an attribute that already says so) does
+//! not rebuild the high part from a `range` it infers.
 //!
 //! ```text
 //!  define internal i16 @f(i16 %n)        define internal i32 @f(i16 %n)
@@ -41,7 +46,7 @@ use std::collections::BTreeSet;
 use llrm_mir::callgraph::{DirectCalls, direct_calls, direct_only};
 use llrm_mir::edit::Position;
 use llrm_mir::module::{GlobalKind, Module};
-use llrm_mir::opcode::{CastOp, Flags, Opcode, Tail};
+use llrm_mir::opcode::{Attribute, CastOp, Flags, Opcode, Tail};
 use llrm_mir::types::{Type, TypeId};
 use llrm_mir::{GlobalId, InstId, Operand};
 
@@ -55,6 +60,9 @@ pub fn any_widenable(module: &Module) -> bool {
 pub fn widened(module: &mut Module) -> Vec<GlobalId> {
     let mut changed = BTreeSet::new();
     for (id, kind, wide, calls) in candidates(module) {
+        // the callee's extension is the ABI's `zeroext`/`signext`: a caller reads the returned
+        // registers as they stand, as it reads a return so marked
+        let extension = || vec![Attribute::Flag(if kind == CastOp::ZExt { "zeroext" } else { "signext" }.into())];
         {
             let Module { context, globals, .. } = &mut *module;
             let GlobalKind::Function(function) = &mut globals[id.0 as usize].kind else { unreachable!("a function") };
@@ -71,6 +79,7 @@ pub fn widened(module: &mut Module) -> Vec<GlobalId> {
                 function.set_operands(ret, vec![extended]);
             }
             function.set_return_type(context, wide);
+            function.return_attrs = extension();
             changed.insert(id);
         }
         let ty = module.global(id).function().expect("a function").ty;
@@ -80,7 +89,7 @@ pub fn widened(module: &mut Module) -> Vec<GlobalId> {
             };
             let result = function.instruction(call).result.expect("a result");
             let casts: BTreeSet<InstId> = function.users(result).iter().map(|one| one.user).collect();
-            function.retype_call_result(call, wide, ty);
+            function.retype_call_result(call, wide, ty, extension());
             for cast in casts {
                 let extended = function.instruction(cast).result.expect("a value");
                 function.replace_value(extended, Operand::Value(result));

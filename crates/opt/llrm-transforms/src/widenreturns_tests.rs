@@ -27,9 +27,9 @@ b0:
   ret i32 %t
 }
 ");
-    assert!(after.contains("define internal i32 @f"), "{after}");
+    assert!(after.contains("define internal zeroext i32 @f"), "{after}");
     assert!(after.contains("zext i16 %v to i32"), "{after}");
-    assert!(after.matches("call i32 @f").count() == 2, "{after}");
+    assert!(after.matches("call zeroext i32 @f").count() == 2, "{after}");
     assert!(!after.contains("call i16 @f"), "{after}");
     assert_eq!(after.matches("zext").count(), 1, "the calls' extensions are gone:\n{after}");
 }
@@ -153,5 +153,5 @@ b0:
   ret i16 %t
 }
 ");
-    assert!(after.contains("define internal i16 @f") && after.contains("sext i8 %v to i16"), "{after}");
+    assert!(after.contains("define internal signext i16 @f") && after.contains("sext i8 %v to i16"), "{after}");
 }
