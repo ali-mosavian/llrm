@@ -449,6 +449,13 @@ pub struct Tuning {
     /// (`backwardthreading.rs`). The pin has neither; gcc's `threadfull1` and
     /// `vrp1` do both. false: the pin's pipeline.
     pub threads_by_relation: bool,
+    /// DEVIATE BACKTHREAD-BITS (owner llrm-target-x86-m32-b, exit 2026-12-15):
+    /// backward threading also reads the known bits of a value along the path
+    /// (`3x + 1` of an odd `x` is even), and unfolds a select that sends the
+    /// next trip down one arm of a branch (`backwardthreading.rs`, `pathbits.rs`).
+    /// The pin has neither; gcc's ranger carries a bitmask per range. false:
+    /// the pin's pipeline.
+    pub threads_by_known_bits: bool,
     /// DEVIATE SPILL-FOLD (owner x86-m16, exit 2026-11-29): the clocks a
     /// spilled value costs where its references fold into memory operands,
     /// which `tryRegionSplit` weighs against the split's copies. The pin
@@ -890,6 +897,7 @@ impl Tuning {
         address_reference_milliweight: 1000,
         unroll_recurrence_veto: false,
         threads_by_relation: false,
+        threads_by_known_bits: false,
         spill_fold: None,
         unswitch_threshold: None,
         inline_threshold: None,

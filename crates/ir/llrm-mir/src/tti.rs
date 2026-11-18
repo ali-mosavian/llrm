@@ -1795,6 +1795,11 @@ pub trait Tti {
         false
     }
 
+    /// `Tuning::threads_by_known_bits`.
+    fn threads_by_known_bits(&self) -> bool {
+        false
+    }
+
     /// What a byte of code is worth in thousandths of a clock at speed, where
     /// the target trades bytes for clocks; 0: it does not.
     fn speed_milliclocks_per_byte(&self) -> i64 {

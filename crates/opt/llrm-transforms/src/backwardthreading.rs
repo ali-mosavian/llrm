@@ -68,6 +68,9 @@ pub struct BackwardThreading {
     /// <= b` taken, `a > b` not), and a join that holds its own branch is
     /// threaded for the path that decides it.
     pub relations: bool,
+    /// The known bits of a value along the path decide a branch, and a select
+    /// that sends the next trip down one arm is unfolded where that threads.
+    pub bits: bool,
     /// The slot before the first SimplifyCFG that speculates
     /// (`backthread@1243`): the pass runs only where the target threads by
     /// relation, since the branches it reads are selects by the slot after.
@@ -80,6 +83,7 @@ impl BackwardThreading {
             enabled: !llrm_support::env_flag!("LLRM_NO_BACKTHREAD"),
             max_threads: MAX_THREADS,
             relations: false,
+            bits: false,
             early: false,
         }
     }
@@ -96,6 +100,13 @@ impl BackwardThreading {
         on: bool,
     ) -> Self {
         Self { relations: on, ..self }
+    }
+
+    pub fn with_bits(
+        self,
+        on: bool,
+    ) -> Self {
+        Self { bits: on, ..self }
     }
 
     pub fn early(self) -> Self {
@@ -115,6 +126,8 @@ impl FunctionPass for BackwardThreading {
     ) -> PreservedAnalyses {
         let relations = !llrm_support::env_flag!("LLRM_NO_BACKTHREAD_REL")
             && (self.relations || analyses.outer().target().tti().is_some_and(|tti| tti.threads_by_relation()));
+        let bits = !llrm_support::env_flag!("LLRM_NO_BACKTHREAD_BITS")
+            && (self.bits || analyses.outer().target().tti().is_some_and(|tti| tti.threads_by_known_bits()));
         if !self.enabled
             || (self.early && !relations)
             || unit.function.attrs.iter().any(|attr| {
@@ -130,7 +143,7 @@ impl FunctionPass for BackwardThreading {
         for _ in 0..self.max_threads {
             let dt = DomTree::of(unit.function);
             let loops = LoopInfo::analyze(unit.function, || DomTree::of(unit.function));
-            if let Some(path) = find(unit.context, unit.function, &dt, &loops, relations) {
+            if let Some(path) = find(unit.context, unit.function, &dt, &loops, relations, bits) {
                 thread(unit.context, unit.function, &path);
                 changed = true;
                 continue;
@@ -138,12 +151,13 @@ impl FunctionPass for BackwardThreading {
             // A select that sends the next trip down one arm of a branch is
             // a diamond GCC would still have: unfold it where that threads.
             let mut threaded = false;
-            for select in select_candidates(unit.context, unit.function) {
+            let selects = if bits { select_candidates(unit.context, unit.function) } else { Vec::new() };
+            for select in selects {
                 let mut trial = unit.function.clone();
                 unfold_select(&mut trial, select);
                 let dt = DomTree::of(&trial);
                 let loops = LoopInfo::analyze(&trial, || DomTree::of(&trial));
-                if let Some(path) = find(unit.context, &trial, &dt, &loops, relations) {
+                if let Some(path) = find(unit.context, &trial, &dt, &loops, relations, bits) {
                     *unit.function = trial;
                     thread(unit.context, unit.function, &path);
                     threaded = true;
@@ -627,6 +641,7 @@ fn find(
     dt: &DomTree,
     loops: &LoopInfo<BlockId>,
     relations: bool,
+    bits: bool,
 ) -> Option<Path> {
     for &bb in function.layout() {
         let Some(branch) = branch_of(function, bb) else { continue };
@@ -660,7 +675,7 @@ fn find(
                 let Some(arm) = outside
                     .then(|| decided(context, function, dt, &branch, q, Some((q, p)), relations))
                     .flatten()
-                    .or_else(|| decided_by_bits(context, function, &branch, q, p, bb))
+                    .or_else(|| if bits { decided_by_bits(context, function, &branch, q, p, bb) } else { None })
                 else {
                     continue;
                 };

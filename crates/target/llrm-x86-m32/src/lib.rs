@@ -103,6 +103,9 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
     let per_byte = llrm_target::timings::derived_byte_rate(costs.cache_line, costs.line_fill_clocks);
     llrm_mir::target::Tuning {
         multiply_by_clocks: true,
+        // DEVIATE BACKTHREAD-BITS (owner llrm-target-x86-m32-b, exit 2026-12-15):
+        // see Tuning. x_collatz O2/O3 136,825 -> 119,524 clk (gcc15 121,682).
+        threads_by_known_bits: true,
         // DEVIATE MEMSET-PATTERN-SPEED (owner w10, exit 2026-11-24): fill_nest
         // -O2 filled 4096 words by a loop, 5 clk a word, where `rep stosw`
         // is 4.

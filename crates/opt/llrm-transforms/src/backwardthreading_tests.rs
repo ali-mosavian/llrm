@@ -44,17 +44,18 @@ exit:
 const INPUTS: &[&[i128]] = &[&[1, 4], &[0, 3], &[2, 5], &[-1, 6], &[1, 1]];
 
 fn threaded(text: &str) -> (String, bool) {
-    threaded_on(text, INPUTS)
+    threaded_on(text, INPUTS, true)
 }
 
 fn threaded_on(
     text: &str,
     inputs: &[&[i128]],
+    bits: bool,
 ) -> (String, bool) {
     let before = parsed(text);
     let mut module = before.clone();
     let mut manager = PassManager::default();
-    manager.add(BackwardThreading { enabled: true, max_threads: MAX_THREADS, relations: false, early: false });
+    manager.add(BackwardThreading { enabled: true, max_threads: MAX_THREADS, relations: false, bits, early: false });
     manager.run_module(&mut module, std::rc::Rc::new(Neutral)).unwrap();
     let text = printed(&module);
     assert_eq!(results(&module, inputs), results(&before, inputs), "{text}");
@@ -133,7 +134,13 @@ s_in:
     let before = parsed(text);
     let mut module = before.clone();
     let mut manager = PassManager::default();
-    manager.add(BackwardThreading { enabled: true, max_threads: MAX_THREADS, relations: false, early: false });
+    manager.add(BackwardThreading {
+        enabled: true,
+        max_threads: MAX_THREADS,
+        relations: false,
+        bits: false,
+        early: false,
+    });
     manager.run_module(&mut module, std::rc::Rc::new(Neutral)).unwrap();
     let out = printed(&module);
     assert_ne!(out, printed(&before), "the guard was not threaded:\n{out}");
@@ -171,8 +178,18 @@ const COLLATZ_INPUTS: &[&[i128]] = &[&[1], &[2], &[3], &[6], &[7], &[9], &[27]];
 
 #[test]
 fn the_trip_after_an_odd_one_skips_the_parity_test() {
-    let (text, changed) = threaded_on(COLLATZ, COLLATZ_INPUTS);
+    let (text, changed) = threaded_on(COLLATZ, COLLATZ_INPUTS, true);
     assert!(changed, "3x + 1 of an odd x is even, so the next `x & 1` is known:\n{text}");
+}
+
+/// A target that does not read known bits keeps the loop as the pin has it:
+/// the same Collatz step is not threaded. Before the flag the pass threaded it
+/// on every target (shift_int32_variable O3 +67 B on x86-m32, bytes of the
+/// other targets unpriced).
+#[test]
+fn a_target_without_known_bits_keeps_the_collatz_loop() {
+    let (out, changed) = threaded_on(COLLATZ, COLLATZ_INPUTS, false);
+    assert!(!changed, "{out}");
 }
 
 /// The select's condition says nothing of the value the next trip tests: no
@@ -180,7 +197,7 @@ fn the_trip_after_an_odd_one_skips_the_parity_test() {
 #[test]
 fn a_select_whose_condition_is_unrelated_to_the_next_test_stays_a_select() {
     let text = COLLATZ.replace("define i32 @f(i32 %n)", "define i32 @f(i32 %n, i32 %k)").replace("%even = icmp eq i32 %low, 0", "%even = icmp eq i32 %k, 0");
-    let (out, changed) = threaded_on(&text, &[&[1, 0], &[7, 0], &[8, 0]]);
+    let (out, changed) = threaded_on(&text, &[&[1, 0], &[7, 0], &[8, 0]], true);
     assert!(!changed, "{out}");
 }
 
@@ -225,7 +242,13 @@ done:
     let before = parsed(text);
     let mut module = before.clone();
     let mut manager = PassManager::default();
-    manager.add(BackwardThreading { enabled: true, max_threads: MAX_THREADS, relations: false, early: false });
+    manager.add(BackwardThreading {
+        enabled: true,
+        max_threads: MAX_THREADS,
+        relations: false,
+        bits: false,
+        early: false,
+    });
     manager.run_module(&mut module, std::rc::Rc::new(Neutral)).unwrap();
     let inputs: &[&[i128]] = &[&[4], &[6], &[5], &[3], &[8], &[2], &[1]];
     assert_eq!(results(&module, inputs), results(&before, inputs), "{}", printed(&module));
@@ -276,7 +299,7 @@ fn related(
     let before = parsed(text);
     let mut module = before.clone();
     let mut manager = PassManager::default();
-    manager.add(BackwardThreading { enabled: true, max_threads: MAX_THREADS, relations, early: false });
+    manager.add(BackwardThreading { enabled: true, max_threads: MAX_THREADS, relations, bits: false, early: false });
     manager.run_module(&mut module, std::rc::Rc::new(Neutral)).unwrap();
     let inputs: &[&[i128]] = &[&[1, 2], &[2, 1], &[3, 3], &[0, 0], &[5, 9], &[9, 5], &[0, -1], &[-1, 0]];
     let out = printed(&module);
