@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/machinelicm.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/machinelicm.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/machinelicm.rs sha256:701875e0910c30b0366d38ee17b07457efb16337b06fc2f7638663e4eaa07edf -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/machinelicm.rs sha256:74d9ec97b1dfaaf5078b4cbef5fdbf9b2d657fa18279e31fe0627fd7c386308f -->
 
 # machinelicm
 
@@ -52,7 +52,10 @@ a constant-pool cell is split, and the load moves if it can.
 outside a block that runs every trip, where the `constant` path above
 already hoists what the allocator can make again.
 
-DEVIATE ML2, exit 2026-11-20: the pin's `FLD1` and `FLDZ` read `$fpcw`,
+DEVIATE ML2 (owner x87, exit 2026-12-08), 11-08 re-check: the pin keeps
+`fld1; fchs` inside the loops of x_ld_abs -O2 (`-march=i486`, the pinned
+clang's listing) and gcc carries the constant on the stack (`fsub st,
+st(1)`), so neither exit holds. The pin's `FLD1` and `FLDZ` read `$fpcw`,
 which the function's `FLDCW` (for an `fptosi`) writes, so nothing moves and
 `fld1; fchs; faddp` (18 clk) is made on every trip of a loop that adds
 `-1.0`. Both and `fchs` are exact under any rounding control. A constant

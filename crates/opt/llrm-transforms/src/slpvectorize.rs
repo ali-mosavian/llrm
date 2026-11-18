@@ -28,6 +28,15 @@
 //!
 //! # Used by
 //! `pipeline` (Late).
+//!
+//! # Example
+//! Eighty adjacent `store i16 1824` become ten `store <8 x i16>` of the constant (the const_stores test).
+//!
+//! ```text
+//! store i16 1824, ptr %p0 ... store i16 1824, ptr %p79
+//!         =>
+//! store <8 x i16> <i16 1824 x 8>, ptr %p0 ... ptr %p72 (ten stores)
+//! ```
 
 use llrm_analysis::memory::{MemRef, Unit as MemUnit};
 use llrm_mir::context::{Constant, ConstantKind, Context};

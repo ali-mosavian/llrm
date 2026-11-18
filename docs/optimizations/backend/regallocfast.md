@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/regallocfast.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/regallocfast.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/regallocfast.rs sha256:ed74d4ccbeb43e59874fe472173686273190023c81f2daa09522d0c25a8b31bd -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/regallocfast.rs sha256:902536a23b6adbd18cc0ade52106aaf54164c4c267369460cd28e46e823c9b47 -->
 
 # regallocfast
 
@@ -21,8 +21,11 @@ with a pin stand for physical registers: the use of one is `usePhysReg`, its
 def `definePhysReg`/`freePhysReg`. An instruction's `clobbers` are its
 register mask.
 
-DEVIATE R1 (no number, exit 2026-11-13): no copy hints (`traceCopies`, the
-hint of a copy into a pinned value): they only save a `mov`.
+DEVIATE R1 (no number, exit 2026-11-13): the static copy hints are one level
+deep (an argument's arrival, a copy out of a pinned value); `traceCopies`
+follows no chain of copies (the pin follows three). A use copied into a
+value already placed takes that value's register, so a chain ending in an
+argument register is followed to its end.
 
 DEVIATE R2 (no number, exit 2026-11-13): a body this does not cover is left
 to the greedy allocator (`Fallback`): x87 or SSE values, segment registers,

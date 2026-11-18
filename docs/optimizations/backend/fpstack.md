@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/fpstack.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/fpstack.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/fpstack.rs sha256:371b5d793f04fe839b22da3d1e7aa8dec757a17e568e0ab438c408e279de1e99 -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/fpstack.rs sha256:5b0a3e2bece59c175411c5dfa9605328548cd453213b6185bbd4051d5b4d7b28 -->
 
 # fpstack
 
@@ -68,7 +68,8 @@ DEVIATE 10 (owner x87, exit 2026-11-20): a memory-form operation (`fsub
 reading that operand (`fsubr st, st(i)`) where the target prices the copy
 (`fld st(i)`) and the memory form above the load and the register form
 (`unfold_copy_form`). The pin copies the operand and keeps the memory form
-(`handleOneArgFPRW`'s `duplicateToTop` branch, <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FloatingPoint.cpp#L1300-L1304>):
+(`handleOneArgFPRW`'s `duplicateToTop` branch,
+<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86FloatingPoint.cpp#L1300-L1304>):
 on a 486 `fld st(i)` is 4 clocks and `fld m` 3 (nbody -O2 m16, 1,200 trips).
 
 DEVIATE 4: an unreachable block with live floating values has no predecessor
