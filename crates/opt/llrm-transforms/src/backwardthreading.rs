@@ -114,6 +114,7 @@ impl FunctionPass for BackwardThreading {
         let relations = !llrm_support::env_flag!("LLRM_NO_BACKTHREAD_REL")
             && (self.relations || analyses.outer().target().tti().is_some_and(|tti| tti.threads_by_relation()));
         if !self.enabled
+            || analyses.outer().target().tti().is_some_and(|tti| !tti.backward_threading())
             || (self.early && !relations)
             || unit.function.attrs.iter().any(|attr| {
                 matches!(
