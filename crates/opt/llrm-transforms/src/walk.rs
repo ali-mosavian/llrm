@@ -344,6 +344,12 @@ impl ProgramPass for Walk {
             let module = &mut program.modules[at];
             let mut recursive = crate::inline::recursive(module);
             let mut linear_recursive = crate::inline::linear_recursive(module, &recursive);
+            // Peeling is for the functions that call themselves as the walk
+            // finds them: a cycle the splices close on one function is the
+            // pin's `InlineHistory` case, which it leaves alone.
+            let found: BTreeSet<GlobalId> = module.functions().map(|(id, _, _)| id).collect();
+            let direct = directly_recursive(module);
+            let peelable = |id: GlobalId| !found.contains(&id) || direct.contains(&id);
             let addressed = llrm_mir::callgraph::addressed(module);
             // The calls to each function as the splices leave them, as LLVM's
             // use lists do (`isSoleCallToLocalFunction`), and a callee with
@@ -424,6 +430,7 @@ impl ProgramPass for Walk {
                             .values()
                             .filter(|one| one.self_calls.is_some() && !self.inline.single && recursion.is_some())
                             .filter_map(|one| Some((one.callee?, one.clone())))
+                            .filter(|(callee, _)| peelable(*callee))
                             .collect();
                         let known = modules[at].cached::<llrm_analysis::manager::GlobalsModRefAnalysis>();
                         let by = crate::inline::Caller {
@@ -502,7 +509,7 @@ impl ProgramPass for Walk {
                                     })
                             }),
                         };
-                        if fits && recursion.is_some() && tree.is_some() {
+                        if fits && recursion.is_some() && tree.is_some() && peelable(id) {
                             function_mut(module, id)
                                 .1
                                 .attrs
@@ -1184,6 +1191,17 @@ impl ProgramPass for Walk {
         analyses.invalidate();
         Ok(())
     }
+}
+
+/// The functions with a call of themselves.
+fn directly_recursive(module: &Module) -> BTreeSet<GlobalId> {
+    module
+        .functions()
+        .filter(|(id, _, function)| {
+            function.walk().any(|(_, inst)| llrm_mir::memory::callee(&module.context, function, inst) == Some(*id))
+        })
+        .map(|(id, _, _)| id)
+        .collect()
 }
 
 /// DEVIATE (recursion): the frequency of each call in `id`, if it is to be

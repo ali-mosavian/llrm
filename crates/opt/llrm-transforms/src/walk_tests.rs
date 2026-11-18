@@ -417,6 +417,80 @@ b0:
     );
 }
 
+/// `msg` -> `nth` -> `entry` -> `msg`: no function calls itself, so the pin
+/// leaves the cycle as it finds it (`entry` is the one function that ends up
+/// calling itself, and LLVM never copies a function into itself). The walk's
+/// splices made `msg` call itself twice in a loop, and gcc's peeling then
+/// copied it three deep: QuickrBasic `cons_msg` -O2 m32 667 bytes against
+/// the pin's 82 and 100 with `-fno-inline-recursive`.
+#[test]
+fn test_a_cycle_the_splices_closed_is_not_copied_into_itself() {
+    let mut module = parsed(
+        "declare void @put(i32)
+
+define void @msg(i32 %id) {
+b0:
+  call void @nth(i32 %id)
+  ret void
+}
+
+define internal void @nth(i32 %n) {
+b0:
+  br label %loop
+
+loop:
+  %i = phi i32 [ %n, %b0 ], [ %next, %loop ]
+  %c = and i32 %i, 127
+  call void @entry(i32 %c)
+  %next = add i32 %i, 1
+  %more = icmp ult i32 %next, 200
+  br i1 %more, label %loop, label %done
+
+done:
+  ret void
+}
+
+define internal void @entry(i32 %c) {
+b0:
+  %high = icmp uge i32 %c, 95
+  br i1 %high, label %up, label %low
+
+up:
+  %m = sub i32 %c, 60
+  call void @msg(i32 %m)
+  ret void
+
+low:
+  %plain = icmp uge i32 %c, 32
+  br i1 %plain, label %out, label %ref
+
+out:
+  call void @put(i32 %c)
+  ret void
+
+ref:
+  %r = add i32 %c, 67
+  call void @msg(i32 %r)
+  ret void
+}
+",
+    );
+    llrm_mir::program::Program::lend(
+        &mut module,
+        std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()),
+        |program: &mut llrm_mir::program::Program| {
+            let mut options = crate::pipeline::Options::default();
+            options.inline.recursive = Some(true);
+            crate::pipeline::applied(program, &crate::pipeline::Applied { options, ..Default::default() })
+        },
+    )
+    .and_then(|done| done)
+    .expect("the pipeline runs");
+    let text = llrm_mir::print::module(&module);
+    let calls = text.matches("call void @msg").count() + text.matches("call void @entry").count();
+    assert!(calls <= 3, "the cycle was copied into itself, {calls} calls of its functions:\n{text}");
+}
+
 /// The Simplify list runs GVN before its jump threading, and the copies of a
 /// recursion in itself join their paths only in the threading: run once, each
 /// copy repeated the calls of the ones that dominate it (fib -O2, i486 rows:
