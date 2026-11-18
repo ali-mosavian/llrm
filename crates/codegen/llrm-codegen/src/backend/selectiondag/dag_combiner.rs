@@ -3724,16 +3724,18 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         None
     }
 
-    /// `visitFREEZE`: `freeze x` is `x` when `x` cannot be undef or poison; when
-    /// `x` has other users, they read the freeze (so `x` has the one use that
-    /// the push through its operands needs); else the freeze moves over `x`.
+    /// `visitFREEZE`: `freeze x` is `x` when `x` cannot be undef or poison;
+    /// when `x` has other users, they read the freeze (so `x` has the one
+    /// use that the push through its operands needs); else the freeze moves
+    /// over `x`.
     fn visit_freeze(
         &mut self,
         node: SDValue,
     ) -> Option<SDValue> {
         let x = self.dag.operand(node, 0);
         if !self.guaranteed_not_undef_or_poison(x, 0) {
-            // "If we have frozen and unfrozen users of N0, update so everything uses N."
+            // "If we have frozen and unfrozen users of N0, update so everything
+            // uses N."
             if !self.dag.is_undef(x) && !self.dag.has_one_use_of_value(x) {
                 self.replace_value_except(x, node, node.node);
                 self.add_to_worklist(node.node);
@@ -3806,7 +3808,8 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 continue;
             }
             let frozen = self.dag.get_node(ISD::Freeze, self.dag.value_type(unfrozen), &[unfrozen]);
-            // "Then, change all other uses of unfrozen operand to use frozen operand."
+            // "Then, change all other uses of unfrozen operand to use frozen
+            // operand."
             self.replace_value_except(unfrozen, frozen, frozen.node);
             for other in ops.iter_mut().filter(|o| **o == unfrozen) {
                 *other = frozen;
@@ -3824,12 +3827,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
     /// width. `srl` is left out as `visitFREEZE` does (an `assert ext` under
     /// it blocks its folds).
     ///
-    /// DEVIATE SD213: a left shift is not pushed through, and any node not
-    /// listed is taken to create poison. With `shl` pushed, a frozen
-    /// `x << 8` over `sub nuw a, select(c, 0, b)` left the freeze on the
-    /// `sub`, which arm64's `performConditionalSubCombine` then no longer
-    /// turned into `subs; csel` (sfm16_float* +4 B). Exit: that combine
-    /// reads through the freeze, then `shl`. Owner wasm-3, exit 2026-11-24.
+    /// DEVIATE SD213: any node not listed is taken to create poison (the
+    /// pin lists more: the saturating adds, `abs`, `rotate`, `fshl`, the FP
+    /// sign ops, vector shuffles). Exit: those. Owner wasm-3, exit 2026-11-24.
     fn cannot_create_undef_or_poison_without_flags(
         &self,
         op: SDValue,
@@ -3849,7 +3849,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             | ISD::SignExtendInReg => vt.is_integer() || (vt.is_vector() && vt.element().is_integer()),
             // Lanes moved as they are make no poison of their own.
             ISD::ConcatVectors => true,
-            ISD::Sra => {
+            ISD::Sra | ISD::Shl => {
                 vt.is_integer()
                     && self
                         .dag
@@ -3862,8 +3862,8 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
 
     /// `isGuaranteedNotToBeUndefOrPoison`, for the nodes the combiner builds:
     /// constants, registers, frame indexes and `freeze`; a load through such a
-    /// pointer; and an integer operation without a poison-generating flag whose
-    /// operands are.
+    /// pointer; and an integer operation (a `select`, a min or max, a byte or
+    /// bit count included) without a poison-generating flag whose operands are.
     ///
     /// DEVIATE SD213: no vector, `AssertSext`/`AssertZext`, overflow-flag or
     /// shift-amount range reasoning beyond a constant amount below the width.
@@ -3891,7 +3891,24 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             ISD::Register | ISD::FrameIndex | ISD::ValueType | ISD::CopyFromReg => true,
             ISD::Load => all(&[1]),
             ISD::SetCC => all(&[0, 1]),
-            ISD::And | ISD::Or | ISD::Xor | ISD::Add | ISD::Sub | ISD::Mul if !flagged => all(&[0, 1]),
+            // `case ISD::SELECT`: no poison of its own, so the three operands
+            // decide.
+            ISD::Select if !flagged => all(&[0, 1, 2]),
+            ISD::And
+            | ISD::Or
+            | ISD::Xor
+            | ISD::Add
+            | ISD::Sub
+            | ISD::Mul
+            | ISD::SMin
+            | ISD::SMax
+            | ISD::UMin
+            | ISD::UMax
+                if !flagged =>
+            {
+                all(&[0, 1])
+            }
+            ISD::BSwap | ISD::CtPop | ISD::BitReverse => all(&[0]),
             ISD::ZeroExtend | ISD::SignExtend | ISD::AnyExtend | ISD::Truncate if !flagged => all(&[0]),
             ISD::Shl | ISD::Srl | ISD::Sra if !flagged => {
                 let width = u128::from(self.dag.value_type(value).size_in_bits());
@@ -4935,7 +4952,8 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         if self.dag.is_undef(n0) || self.dag.is_undef(n1) {
             return Some(self.dag.get_constant(0, vt));
         }
-        // `isConstOrConstSplat`: a vector of one constant is the constant, at the width of its lane.
+        // `isConstOrConstSplat`: a vector of one constant is the constant, at
+        // the width of its lane.
         let is_const = |dag: &SelectionDAG, v: SDValue| dag.const_or_splat(v).is_some() && !dag.is_opaque(v);
         if is_const(self.dag, n0) && !is_const(self.dag, n1) {
             return Some(self.dag.get_node(ISD::Mul, vt, &[n1, n0]));
