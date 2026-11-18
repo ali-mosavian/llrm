@@ -351,7 +351,7 @@ impl InlineCost {
     }
 }
 
-fn has_flag(
+pub(crate) fn has_flag(
     attrs: &[Attribute],
     name: &str,
 ) -> bool {
@@ -2315,6 +2315,26 @@ impl<'a> Analyzer<'a> {
         tti.callee_frame_cost(&shape, kind).map_or(0, |cost| cost.value)
     }
 
+    /// What a caller with no frame builds for the callee's static allocas
+    /// where the callee stays: the callee keeps its own frame, so the inline
+    /// adds one (`callee_frame` has the case where the callee goes with its
+    /// frame, which moves).
+    fn frame_built_in_caller(
+        &self,
+        kind: llrm_mir::tti::CostKind,
+    ) -> i64 {
+        let Some(tti) = self.site.tti else { return 0 };
+        let Some(shape) = self.call_shape() else { return 0 };
+        if self.site.callee_dies
+            || shape.caller_frame_bytes != 0
+            || shape.callee_frame_bytes == 0
+            || !tti.inline_callee_that_stays_adds_a_caller_frame()
+        {
+            return 0;
+        }
+        tti.callee_frame_cost(&shape, kind).map_or(0, |cost| cost.value)
+    }
+
     /// DEVIATE REC-9 (gcc's peeling, ipa-inline.cc:1033; the pin refuses a
     /// recursive callee): the callee calls itself from one place
     /// (a linear recursion) and this is another function's call of it, on a
@@ -2350,7 +2370,11 @@ impl<'a> Analyzer<'a> {
             && k >= 2
             && (self.site.caller_size == CallerSize::Speed
                 || self.site.tti.is_none_or(|tti| tti.inline_dying_credit_at_os()));
-        if credit { (k - 1) * size > k * call + frame } else { size > call }
+        if credit {
+            (k - 1) * size > k * call + frame
+        } else {
+            size + self.frame_built_in_caller(llrm_mir::tti::CostKind::CodeSize) > call
+        }
     }
 
     /// Bytes of the caller's stores into a local that the callee reads only
@@ -2496,7 +2520,11 @@ impl<'a> Analyzer<'a> {
     fn growth_per_site(&self) -> i64 {
         let (size, call, k) = (self.size_units - self.folded_caller_stores(), self.call_size(), self.site.callee_calls);
         let frame = self.callee_frame(llrm_mir::tti::CostKind::CodeSize);
-        if self.site.callee_dies && k >= 2 { ((k - 1) * size - k * call - frame) / k } else { size - call }
+        if self.site.callee_dies && k >= 2 {
+            ((k - 1) * size - k * call - frame) / k
+        } else {
+            size + self.frame_built_in_caller(llrm_mir::tti::CostKind::CodeSize) - call
+        }
     }
 
     /// Whether a speed caller's inline costs more in bytes than it saves in

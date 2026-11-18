@@ -600,7 +600,11 @@ fn vector_fill(
     match (name, operands) {
         ("MOVIv16b_ns", [Operand::Imm(byte)]) => return Some(Ok(Fill::Byte(*byte as u8))),
         ("MOVIv8b_ns", [Operand::Imm(byte)]) => return Some(Ok(Fill::Byte8(*byte as u8))),
-        ("MOVIv2d_ns", [Operand::Imm(mask)]) => return Some(Ok(Fill::Mask(*mask as u8))),
+        // A zero mask is the one `Fill::Zero`, so the LIR description
+        // (`MOVIv2d_ns` #0) maps back to it.
+        ("MOVIv2d_ns", [Operand::Imm(mask)]) => {
+            return Some(Ok(if *mask as u8 == 0 { Fill::Zero } else { Fill::Mask(*mask as u8) }));
+        }
         ("MOVID", [Operand::Imm(mask)]) => return Some(Ok(Fill::MaskD(*mask as u8))),
         _ => {}
     }
@@ -935,6 +939,24 @@ fn vector_inst(
         return Some(match operands {
             [Operand::Fpr(rn), Operand::Fpr(rm), Operand::Imm(index)] => {
                 Ok(Inst::VectorFmulLane { lanes, rd, rn: *rn, rm: *rm, index: *index as u8 })
+            }
+            _ => wrong(),
+        });
+    }
+    // `FMLAv1i64_indexed`: the scalar form, `rm` a vector.
+    for (stem, op) in [("FMLA", VectorFma::Add), ("FMLS", VectorFma::Sub)] {
+        let Some(lanes) =
+            name.strip_prefix(stem).and_then(|rest| rest.strip_suffix("_indexed")).and_then(|rest| match rest {
+                "v1i32" => Some(Arrangement::S4),
+                "v1i64" => Some(Arrangement::D2),
+                _ => None,
+            })
+        else {
+            continue;
+        };
+        return Some(match operands {
+            [Operand::Fpr(_), Operand::Fpr(rn), Operand::Fpr(rm), Operand::Imm(index)] => {
+                Ok(Inst::ScalarFmaLane { op, lanes, rd, rn: *rn, rm: *rm, index: *index as u8 })
             }
             _ => wrong(),
         });
@@ -2454,6 +2476,7 @@ impl Emitter<'_> {
                     if let (
                         Inst::VectorFma { .. }
                         | Inst::VectorFmaLane { .. }
+                        | Inst::ScalarFmaLane { .. }
                         | Inst::VectorLong { op: VectorLongOp::Umlal | VectorLongOp::Smlal, .. }
                         | Inst::VectorShift { op: VectorShift::Usra | VectorShift::Ssra, .. }
                         | Inst::VectorNarrow { high: true, .. }
@@ -2918,6 +2941,12 @@ pub fn emit(
                 }
             }
         }
+        // An IR `unreachable` selects to nothing (no trap on this target) but
+        // leaves the block without a successor: `successors` names none and it
+        // does not return.
+        if block.successors.is_empty() && !emitter.ops.iter().any(Op::ends_the_function) {
+            emitter.ops.push(Op::Unreachable);
+        }
         let ops = std::mem::take(&mut emitter.ops);
         places.resize(ops.len(), None);
         let mut pairs: Vec<(Op, Option<SrcLoc>)> = ops.into_iter().zip(places).collect();
@@ -2947,6 +2976,7 @@ pub fn emit(
                     Some(
                         Op::Return { .. }
                             | Op::JumpTable { .. }
+                            | Op::Unreachable
                             | Op::I(Inst::Branch { link: false, .. } | Inst::Brk { .. })
                     )
                 ) && at + 1 < blocks.len()

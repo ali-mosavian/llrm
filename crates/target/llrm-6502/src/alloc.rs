@@ -3143,6 +3143,16 @@ pub fn build_with_places(
                 b.copy(dl, Reg::Phys(reg::A));
                 b.copy(dh, Reg::Phys(reg::X));
             }
+            // 1 << n: the bit is made in a byte and put in its half, no cell
+            // touched (`__shl1hi3`)
+            op::SHLV16 if b.word_constant(name(&o[1])?) == Some([1, 0]) => {
+                let (dl, dh) = b.write_word(name(&o[0])?)?;
+                let count = b.byte(name(&o[2])?)?;
+                b.copy(Reg::Phys(reg::A), count);
+                b.call_runtime("__shl1hi3");
+                b.copy(dl, Reg::Phys(reg::A));
+                b.copy(dh, Reg::Phys(reg::X));
+            }
             code @ (op::MUL16 | op::SDIV16 | op::SREM16 | op::SHLV16 | op::SRLV16 | op::SRAV16) => {
                 // a division and its remainder are one call: the routine leaves
                 // the remainder in `rc6:rc7`
@@ -5050,8 +5060,8 @@ fn emit_with<const STACK: bool>(
             y_callees.extend(entries_of(callee));
         }
     }
-    // `jsr callee` reads the scratch cells (`rc16`..) the call lists among the
-    // arguments
+    // `jsr callee` reads the argument cells (`rc2`.., `rc16`..) the call lists
+    // among the arguments
     let mut cell_callees: std::collections::BTreeMap<String, std::collections::BTreeSet<u8>> = Default::default();
     for inst in function.blocks.iter().flat_map(|block| &block.insts).filter(|inst| inst.kind == Kind::Op("JSR")) {
         if let [Operand::Symbol(callee, _), arguments @ ..] = &inst.operands[..] {
@@ -5059,7 +5069,7 @@ fn emit_with<const STACK: bool>(
             for operand in arguments {
                 if let Operand::Use(Reg::Phys(r)) = operand {
                     let bytes = if is_pair(*r) { vec![lane(*r, 0), lane(*r, 1)] } else { vec![*r] };
-                    cells.extend((BASE_CELLS..MOST_CELLS).filter(|&n| bytes.contains(&rc(n))));
+                    cells.extend((2..MOST_CELLS).filter(|&n| bytes.contains(&rc(n))));
                 }
             }
         }

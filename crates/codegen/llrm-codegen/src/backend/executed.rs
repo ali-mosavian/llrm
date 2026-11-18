@@ -213,6 +213,28 @@ pub fn executed(body: &LirBody) -> Option<Executed> {
     executed_over(body, true)
 }
 
+/// How often per call the printed instructions `is` picks run, by the block
+/// frequencies [`executed`] uses: a target prices the instructions it holds
+/// slow (a divide) apart from the one unit an instruction counts.
+pub fn count_where(
+    body: &LirBody,
+    is: &dyn Fn(&Insn) -> bool,
+) -> Option<f64> {
+    if !loops::irreducible(&body.blocks, Some(body.entry)).is_empty() {
+        return None;
+    }
+    let frequency = Frequency::counted(body);
+    Some(
+        body.blocks
+            .iter()
+            .map(|block| {
+                frequency.block(block.at)
+                    * block.insns.iter().filter(|one| crate::backend::masm::prints(one) && is(one)).count() as f64
+            })
+            .sum(),
+    )
+}
+
 /// [`executed`] with every loop at the heuristic's trips, proven or not
 /// (`MachineBlockFrequencyInfo` knows no trip count): the estimate that prices
 /// two shapes of one loop alike, where a rotation or an unrotation leaves a
@@ -318,7 +340,7 @@ mod tests {
 
     use llrm_lir::registers::RegId;
 
-    use super::{executed, executed_unproven};
+    use super::{count_where, executed, executed_unproven};
     use crate::backend::cpu;
     use crate::model::ir::{Addr, Loc, Mem, Operation, Reg, Semantics, Space};
     use crate::model::lir::{Block, BlockOdds, Insn, LirBlock, LirBody};
@@ -470,6 +492,35 @@ mod tests {
         // The entry's jump, the header's six tests, five trips of two, the
         // return.
         assert_eq!(executed(&body).expect("a counted loop").instructions.round(), 1.0 + 6.0 + 10.0 + 1.0);
+    }
+
+    /// The slow instructions of a loop count once a trip, not once: the
+    /// divide-by-constant trial priced a loop's `sdiv` as one run.
+    #[test]
+    fn test_a_slow_instruction_in_a_loop_counts_its_trips() {
+        let ax = Loc::Reg(Reg { register: RegId::AX, width: 2 });
+        let block =
+            |at, insns: Vec<Arc<Insn>>, succ: Vec<i64>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
+        let blocks = vec![
+            block(1, vec![insn(1, Operation::Jump, "jmp", vec![], vec![])], vec![2]),
+            block(2, vec![insn(2, Operation::Branch, "jne", vec![], vec![])], vec![3, 4]),
+            block(
+                3,
+                vec![
+                    insn(3, Operation::Move, "SDIVWr", vec![ax.clone()], vec![ax]),
+                    insn(4, Operation::Jump, "jmp", vec![], vec![]),
+                ],
+                vec![2],
+            ),
+            block(4, vec![insn(5, Operation::Return, "ret", vec![], vec![])], vec![]),
+        ];
+        let mut body =
+            LirBody::new("slow", 1, crate::model::lir::shared(blocks), IndexMap::default(), IndexMap::default());
+        body.loop_trip_counts = vec![(2, 5)];
+        let slow = |one: &Insn| {
+            one.what.as_ref().and_then(|what| what.name.as_deref()).is_some_and(|name| name.starts_with("SDIV"))
+        };
+        assert_eq!(count_where(&body, &slow).expect("a counted loop").round(), 5.0);
     }
 
     /// ROTATION-TRIAL priced a rotated nest 3.9x heavier than its unrotated

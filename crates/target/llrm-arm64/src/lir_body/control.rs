@@ -103,6 +103,9 @@ pub(super) fn to_op(
             let form = if matches!(callee, Callee::Symbol(_)) { "di" } else { "ri" };
             semantics(Operation::Return, format!("TCRETURN{form}"), vec![], sources, None)
         }
+        // No instruction: the end of a block that goes nowhere, as the shared
+        // passes see a return that reads nothing.
+        Op::Unreachable => semantics(Operation::Return, "UNREACHABLE", vec![], vec![], None),
         Op::FrameAddress { dst, slot, offset } => super::memory::frame_address(*dst, *slot, *offset),
         Op::JumpTable { dst, scratch, table, index, id, targets } => {
             let mut what = semantics(
@@ -143,6 +146,7 @@ pub(super) fn back(
     }
     Some(match name {
         "RET_ReallyLR" => Op::Return { uses: registers(0), tail: None },
+        "UNREACHABLE" => Op::Unreachable,
         "TCRETURNdi" | "TCRETURNri" => Op::Return { uses: registers(1), tail: Some(callee_of(cx, &s[0])) },
         "JumpTableDest32" => Op::JumpTable {
             dst: gpr_of(&what.dests[0]),

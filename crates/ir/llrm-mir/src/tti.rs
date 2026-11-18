@@ -1052,6 +1052,15 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE LSR-OUTER-SIZE: whether `reduces_outer_multiply` also holds at
+    /// -Os. A multiply that is a runtime call costs its setup and the routine's
+    /// bytes at each use; the counter stepped by the multiplier costs one add
+    /// and a cell pair. false: the pin's, which leaves a loop with a subloop
+    /// alone.
+    fn reduces_outer_multiply_at_size(&self) -> bool {
+        false
+    }
+
     /// `getJumpConditionMergingParams`: the budget for keeping the compares
     /// of a branch on `a && b` or `a || b` one condition. Split always, where
     /// the target says nothing.
@@ -1215,6 +1224,14 @@ pub trait Tti {
     ) -> Option<Cost> {
         let _ = (shape, kind);
         None
+    }
+
+    /// DEVIATE INLINE-FRAME: the code-size guard counts the frame a caller
+    /// with none builds for the callee's static allocas where the callee
+    /// stays (the pin's cost has no frame term). False: the frame is taken to
+    /// move, as before.
+    fn inline_callee_that_stays_adds_a_caller_frame(&self) -> bool {
+        false
     }
 
     /// What building and tearing down the callee's frame costs in `kind`,
@@ -1788,6 +1805,11 @@ pub trait Tti {
         false
     }
 
+    /// `Tuning::backward_threading`.
+    fn backward_threading(&self) -> bool {
+        true
+    }
+
     /// What a byte of code is worth in thousandths of a clock at speed, where
     /// the target trades bytes for clocks; 0: it does not.
     fn speed_milliclocks_per_byte(&self) -> i64 {
@@ -2125,6 +2147,13 @@ pub trait Tti {
     /// `Tuning::sink_select_arms`.
     fn sinks_select_arms(&self) -> bool {
         false
+    }
+
+    /// `Tuning::select_optimize_penalty`: `SelectOptimize` runs (the pin's
+    /// `llc` leaves it off) and a mispredicted branch costs this many
+    /// clocks.
+    fn select_optimize_penalty(&self) -> Option<u64> {
+        None
     }
 
     /// `Tuning::branch_constant_arm_selects`.
