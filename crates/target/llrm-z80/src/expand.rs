@@ -4123,6 +4123,7 @@ mod tests {
         let inst = |text: &str| Line::Inst(text.to_owned());
         let block = |live: &str| {
             let lines = vec![
+                Line::Label("M".to_owned()),
                 Line::Label("L".to_owned()),
                 inst("ld c, l"),
                 inst("ld a, h"),
@@ -4134,8 +4135,17 @@ mod tests {
             ];
             drop_dead_byte_loads(lines).len()
         };
-        assert_eq!(block("000000"), 5, "both loads of bc are dead");
-        assert_eq!(block("110000"), 7, "bc is live after the block");
+        assert_eq!(block("000000"), 6, "both loads of bc are dead");
+        assert_eq!(block("110000"), 8, "bc is live after the block");
+    }
+
+    /// `ld l, c; ld h, b` before `jp _report` was dropped as dead: a jump to a
+    /// label outside the function is a tail call, and the callee reads `hl`.
+    #[test]
+    fn a_load_a_tail_call_reads_is_kept() {
+        let inst = |text: &str| Line::Inst(text.to_owned());
+        let lines = vec![inst("ld l, c"), inst("ld h, b"), inst("jp _report"), inst(&format!("{LIVE_OUT}000000"))];
+        assert_eq!(drop_dead_byte_loads(lines).len(), 3);
     }
 
     /// `ld l, a` before `jp (hl)` was dropped as a dead load: the indirect jump
