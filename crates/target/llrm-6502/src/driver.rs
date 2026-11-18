@@ -459,17 +459,7 @@ fn trial_inlined(
     }
 }
 
-/// One function of [`size_audit`].
-pub struct SizeRow {
-    pub name: String,
-    /// `function_bytes` of the function the backend gets.
-    pub model: i64,
-    /// The bytes it is written as (`timing::estimate` of its text).
-    pub written: i64,
-    /// Its operations by class (`walk::operation_counts`), for the fit of
-    /// `opcosts::calibrate`.
-    pub counts: String,
-}
+pub use llrm_transforms::walk::SizeRow;
 
 /// The size audit of one program: per function, the bytes `function_bytes` says
 /// it will be against the bytes it is written as. The instrument

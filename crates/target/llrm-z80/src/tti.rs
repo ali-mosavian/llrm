@@ -106,6 +106,48 @@ impl Z80Tti {
         matches!(ty, Ty::Int(bits) if bits <= self.byte_bits.min(8))
     }
 
+    /// The forms of one call: `call nn`, the arguments' setup, and the `ret`
+    /// unless `in_body`, the call a callee's body makes (see `body_call_cost`).
+    fn call_forms(
+        &self,
+        shape: &CallShape,
+        kind: CostKind,
+        in_body: bool,
+    ) -> Cost {
+        let (mut bytes, mut clocks) = sum(if in_body { &["call nn"][..] } else { &["call nn", "ret"][..] });
+        let mut registers = 0;
+        for argument in &shape.arguments {
+            let words = match argument.ty {
+                Some(Ty::Int(bits)) if bits <= 8 => 0,
+                Some(Ty::Int(bits)) => i64::from(bits.div_ceil(16)),
+                Some(ty) => self.parts(ty),
+                None => 1,
+            };
+            if let Some(copied) = argument.byval_bytes {
+                // `ld hl,src; ld de,dst; ld bc,n; ldir`: 21 T a byte
+                let (b, c) = sum(&["ld hl;nn", "ld hl;nn", "ld bc;nn", "ldir"]);
+                bytes += b;
+                clocks += c + 21 * (copied as i64 - 1);
+            } else if words == 0 {
+                let (b, c) = sum(&["ld b;n"]);
+                bytes += b;
+                clocks += c;
+            } else {
+                for _ in 0..words {
+                    let form = if registers < 3 { &["ld bc;nn"][..] } else { &["push bc", "pop bc"][..] };
+                    registers += 1;
+                    let (b, c) = sum(form);
+                    bytes += b;
+                    clocks += c;
+                }
+            }
+        }
+        Cost::of(match kind {
+            CostKind::CodeSize => bytes,
+            _ => (clocks + 3) / 4,
+        })
+    }
+
     /// A call of a runtime loop of `bits` passes, each the forms `body`, plus
     /// the call and the return.
     fn call(
@@ -520,6 +562,11 @@ impl Tti for Z80Tti {
         true
     }
 
+    /// `function_bytes` prices the trial in the bytes the table says.
+    fn opt_size_inline_trial_by_bytes(&self) -> bool {
+        true
+    }
+
     /// SZ1, rule 1: a size build keeps a callee bigger than its call. The pin's
     /// `OptSizeThreshold` 50 allows growth, and a word update is 6 B where the
     /// call is 3.
@@ -559,38 +606,17 @@ impl Tti for Z80Tti {
         shape: &CallShape,
         kind: CostKind,
     ) -> Option<Cost> {
-        let (mut bytes, mut clocks) = sum(&["call nn", "ret"]);
-        let mut registers = 0;
-        for argument in &shape.arguments {
-            let words = match argument.ty {
-                Some(Ty::Int(bits)) if bits <= 8 => 0,
-                Some(Ty::Int(bits)) => i64::from(bits.div_ceil(16)),
-                Some(ty) => self.parts(ty),
-                None => 1,
-            };
-            if let Some(copied) = argument.byval_bytes {
-                // `ld hl,src; ld de,dst; ld bc,n; ldir`: 21 T a byte
-                let (b, c) = sum(&["ld hl;nn", "ld hl;nn", "ld bc;nn", "ldir"]);
-                bytes += b;
-                clocks += c + 21 * (copied as i64 - 1);
-            } else if words == 0 {
-                let (b, c) = sum(&["ld b;n"]);
-                bytes += b;
-                clocks += c;
-            } else {
-                for _ in 0..words {
-                    let form = if registers < 3 { &["ld bc;nn"][..] } else { &["push bc", "pop bc"][..] };
-                    registers += 1;
-                    let (b, c) = sum(form);
-                    bytes += b;
-                    clocks += c;
-                }
-            }
-        }
-        Some(Cost::of(match kind {
-            CostKind::CodeSize => bytes,
-            _ => (clocks + 3) / 4,
-        }))
+        Some(self.call_forms(shape, kind, false))
+    }
+
+    /// The call and its arguments without the `ret`: a call inside an inlined
+    /// body adds `call nn` and the setup; the callee's `ret` is not copied.
+    fn body_call_cost(
+        &self,
+        shape: &CallShape,
+        kind: CostKind,
+    ) -> Option<Cost> {
+        Some(self.call_forms(shape, kind, true))
     }
 
     /// DEVIATE INLINE-FRAME (owner z80, exit 2026-12-15): queens -Os inlined
