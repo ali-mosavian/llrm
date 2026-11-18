@@ -3724,15 +3724,21 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         None
     }
 
-    /// `visitFREEZE`, the first fold: `freeze x` is `x` when `x` cannot be
-    /// undef or poison. (The pin's second fold, hoisting the freeze over a
-    /// multi-use operand, is not translated.)
+    /// `visitFREEZE`: `freeze x` is `x` when `x` cannot be undef or poison; when
+    /// `x` has other users, they read the freeze (so `x` has the one use that
+    /// the push through its operands needs); else the freeze moves over `x`.
     fn visit_freeze(
         &mut self,
         node: SDValue,
     ) -> Option<SDValue> {
         let x = self.dag.operand(node, 0);
         if !self.guaranteed_not_undef_or_poison(x, 0) {
+            // "If we have frozen and unfrozen users of N0, update so everything uses N."
+            if !self.dag.is_undef(x) && !self.dag.has_one_use_of_value(x) {
+                self.replace_value_except(x, node, node.node);
+                self.add_to_worklist(node.node);
+                return Some(node);
+            }
             return self.push_freeze_through(x);
         }
         // The users now read `x` directly: their users may fold with it too
@@ -3742,6 +3748,22 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             self.add_to_worklist_with_users(user);
         }
         Some(x)
+    }
+
+    /// `ReplaceAllUsesOfValueWith(old, new)` but for the node `keep`, which
+    /// stays on `old` (the pin replaces its use too and mutates it back).
+    fn replace_value_except(
+        &mut self,
+        old: SDValue,
+        new: SDValue,
+        keep: u32,
+    ) {
+        for event in self.dag.replace_uses_except(old, new, keep) {
+            match event {
+                Rauw::Updated(user) => self.add_to_worklist(user),
+                Rauw::Merged { into, .. } => self.add_to_worklist_with_users(into),
+            }
+        }
     }
 
     /// `visitFREEZE`'s `freeze(op(x, ...))` to `op(freeze(x), ...)`: the
@@ -3779,11 +3801,14 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         }
         let mut ops: Vec<SDValue> = (0..self.dag.node(op).ops.len()).map(|at| self.dag.operand(op, at)).collect();
         for at in maybe_poison {
-            if self.dag.is_undef(ops[at]) {
+            let unfrozen = self.dag.operand(op, at);
+            if self.dag.is_undef(unfrozen) {
                 continue;
             }
-            let frozen = self.dag.get_node(ISD::Freeze, self.dag.value_type(ops[at]), &[ops[at]]);
-            for other in ops.iter_mut().filter(|o| **o == self.dag.operand(op, at)) {
+            let frozen = self.dag.get_node(ISD::Freeze, self.dag.value_type(unfrozen), &[unfrozen]);
+            // "Then, change all other uses of unfrozen operand to use frozen operand."
+            self.replace_value_except(unfrozen, frozen, frozen.node);
+            for other in ops.iter_mut().filter(|o| **o == unfrozen) {
                 *other = frozen;
             }
         }
