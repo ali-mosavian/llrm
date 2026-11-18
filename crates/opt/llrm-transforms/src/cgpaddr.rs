@@ -267,6 +267,9 @@ impl CgpAddr {
             let outer = std::rc::Rc::clone(analyses.outer());
             crate::cgpmemalign::raised(unit.context, unit.layout, &outer.globals, unit.function)
         };
+        // the vectors a word holds are that integer (`vectorlower`)
+        let lowered = analyses.outer().target().tti().is_some_and(|tti| tti.word_vectors())
+            && crate::vectorlower::lowered(unit.context, unit.function);
         let sunk_operands = match analyses.outer().target().tti() {
             Some(tti) => crate::cgpsinkops::free_operands_sunk(unit.context, &*tti, unit.function),
             None => false,
@@ -333,6 +336,7 @@ impl CgpAddr {
             PreservedAnalyses::none()
         } else if phis
             || aligned
+            || lowered
             || branched
             || sunk_compares
             || masks

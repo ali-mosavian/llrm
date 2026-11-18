@@ -40,6 +40,16 @@
 //! # Runs
 //! After the strength slot (the pin: `addIRPasses`, after LSR), before the
 //! code-generation-prepare passes.
+//!
+//! # Example
+//! A `sqrt` call that may set `errno` becomes a `memory(none)` call that the target turns into an instruction, with the real call kept for the NaN or negative case.
+//!
+//! ```text
+//! %r = call double @sqrt(double %x) memory(none)
+//! %c = fcmp ord double %r, %r
+//! br i1 %c, label %b.split, label %call.sqrt
+//! call.sqrt: %l = call double @sqrt(double %x)   ; joined by a phi in %b.split
+//! ```
 
 use llrm_mir::context::{Constant, ConstantKind};
 use llrm_mir::edit::Position;

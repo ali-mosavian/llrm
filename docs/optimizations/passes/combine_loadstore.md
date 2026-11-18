@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_loadstore.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_loadstore.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_loadstore.rs sha256:15588de9edf7a4eafec0b16a3f8f2012ec462031b926052e4c164be576f5cfef -->
+<!-- src: crates/opt/llrm-transforms/src/combine_loadstore.rs sha256:0a0d8a08a3811baeada30f48188dc681d67df4e76495bf2c3e3cc04709c6e980 -->
 
 # combine_loadstore
 
@@ -69,6 +69,9 @@ count of 1 is dropping the operand.
 `visitLoadInst`'s store-to-load forwarding: a load whose value one of the 6
 instructions before it in its block stored (`FindAvailableLoadedValue`) is
 that value, cast to the load's type.
+
+`combineLoadToOperationType` (:691): a load read once by a `bitcast` loads
+the cast's type.
 
 DEVIATE 8: the rest of `visitLoadInst` is not translated, and the load CSE
 of `FindAvailableLoadedValue` (an earlier load of the address) is left to

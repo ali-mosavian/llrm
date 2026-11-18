@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_fcmp.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_fcmp.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_fcmp.rs sha256:df8ed738558d006c3455c36638a151912bb5fc75ec520e41da2bca3bb937861b -->
+<!-- src: crates/opt/llrm-transforms/src/combine_fcmp.rs sha256:4ddf13854422da4b919df565842d49e4b74a268cf8d5c4c77bd8ae0e3eff80e8 -->
 
 # combine_fcmp
 
@@ -15,7 +15,7 @@ L9215-L9325) are translated; the fold-by-operand-kind ones (bitcast, fsub,
 phi, sitofp, fptrunc, fabs, sqrt, floor/ceil, the min/max-select exit) are
 not. Exit: the next PR on `combine_fcmp.rs`.
 
-DEVIATE 2: MIR has no vectors.
+DEVIATE 2: only the null value of a vector compare is vector-aware.
 
 ## Example
 ```text

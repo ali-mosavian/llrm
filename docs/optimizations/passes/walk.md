@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/walk.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/walk.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/walk.rs sha256:9c4e424a153085560c372058f5314218ab26d6169ca668a4a66767f9d3ccaa5c -->
+<!-- src: crates/opt/llrm-transforms/src/walk.rs sha256:867345c8f16704b99b5f5b7cda10935dec4f56c41ee749045a5623765ed2a598 -->
 
 # walk
 
@@ -22,12 +22,12 @@ unrolled after the call is inlined (keybind `_action_for`, 8 inlined copies
 of `_text_eq`, 325 instructions against 55).
 
 ## Deviations
-- W1: `deadargelim` runs before the Simplify list, LLVM's after the CGSCC
-  walk (`PassBuilderPipelines.cpp` l.1335). Fact: nothing here cleans a body
-  after the walk (LLVM's later module optimization pipeline does), and the
-  argument a dropped parameter leaves behind is dead code only the list
-  removes. Issue: it sees bodies simplified by Early only. Exit: a post-walk
-  cleanup stage, then `deadargelim` after the walk.
+- W1: `deadargelim` runs after the walk (`ipa-deadargs.`), as LLVM's
+  (`PassBuilderPipelines.cpp` l.1335), except for a function that calls
+  itself and, with the recursion copier on or at -Os, loses its unread
+  parameters before the walk: the copier works on the body gcc's IPA-SRA
+  leaves; at any level a tree recursion (two or more self-calls) does too.
+  Exit: the walk prices a body with its unread parameters dropped.
 - W2a: the walk is per function in callee-first order, not per SCC with the
   inliner's own updates; the clocks inliner still runs afterwards;
   `inlinecost::sites` stands for `decide` until it lands. Exit: W2.
