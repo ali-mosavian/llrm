@@ -163,6 +163,9 @@ pub struct SwitchTarget {
     pub min_size: bool,
     /// Not -O0.
     pub optimize: bool,
+    /// GCC's `switch_decision_tree`: one range test over every case value
+    /// first, so a value outside all of them pays one test, not the chain.
+    pub root_range_test: bool,
     /// `isOperationLegal(SHL, ptr)`: the target can build bit tests. None
     /// where a variable shift is a call.
     pub shift_legal: bool,
@@ -180,6 +183,7 @@ impl SwitchTarget {
             opt_size: false,
             min_size: false,
             optimize: true,
+            root_range_test: false,
             shift_legal: true,
         }
     }
@@ -303,6 +307,48 @@ fn peel_dominant_case_cluster(
         cluster.prob = scale_case_probability(cluster.prob, top);
     }
     Some((peeled, top))
+}
+
+/// Tests a value that matches no case pays: the peeled cluster's, then the
+/// balanced tree's depth and the linear chain at its leaf (a jump table or
+/// bit test is one).
+fn default_path_tests(plan: &SwitchPlan) -> u32 {
+    let mut left = plan.clusters.len();
+    let mut tests = u32::from(plan.peeled.is_some());
+    while left > 3 {
+        left = left.div_ceil(2);
+        tests += 1;
+    }
+    tests + left as u32
+}
+
+/// GCC's `switch_decision_tree` root test: the range `low..=high` of every
+/// case, when a value outside all of them would otherwise pay three tests or
+/// more and the range is narrower than the type. `tiled`: the clusters leave
+/// no hole in the range, so a value in it that reaches the last test matches.
+pub fn root_range(
+    plan: &SwitchPlan,
+    target: &SwitchTarget,
+    width: u32,
+) -> Option<RootRange> {
+    if !target.root_range_test || !target.optimize || target.min_size || default_path_tests(plan) < 3 {
+        return None;
+    }
+    let mut all: Vec<&CaseCluster> =
+        plan.clusters.iter().chain(plan.peeled.iter().map(|(cluster, _)| cluster)).collect();
+    all.sort_by_key(|cluster| cluster.low);
+    let low = all.first()?.low;
+    let high = all.iter().map(|cluster| cluster.high).max()?;
+    let tiled = all.windows(2).all(|pair| pair[0].high + 1 == pair[1].low);
+    (high - low + 1 < 1i128 << width.min(126)).then_some(RootRange { low, high, tiled })
+}
+
+/// See [`root_range`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RootRange {
+    pub low: i128,
+    pub high: i128,
+    pub tiled: bool,
 }
 
 fn limited(value: i128) -> u64 {

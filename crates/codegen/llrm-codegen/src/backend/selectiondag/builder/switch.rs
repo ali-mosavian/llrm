@@ -193,6 +193,10 @@ impl Builder<'_> {
             min_density: self.target.min_jump_table_density,
             size_growth_ratio: self.target.jump_table_size_growth_ratio,
             optimize: self.target.switch_optimize,
+            // a range test of a value wider than a register is a multi-word
+            // chain
+            root_range_test: self.target.switch_root_range_test
+                && self.target.legal_ints.last().is_some_and(|&native| width <= native),
             shift_legal: self.target.variable_shift_legal,
             opt_size: self.target.opt_size || self.function_has("optsize") || self.function_has("minsize"),
             min_size: self.has_min_size(),
@@ -211,27 +215,45 @@ impl Builder<'_> {
         }
         let clusters = plan.clusters.clone();
         let peeled = plan.peeled.clone();
+        let root = switchcg::root_range(&plan, &target, width);
         self.plan = Some(plan);
         let unreachable_default = self
             .function
             .iter_block(default)
             .next()
             .is_some_and(|inst| self.function.instruction(inst).opcode == Opcode::Unreachable);
+        // in a range with no hole, the last test of the rest cannot fail
+        let unreachable_default = unreachable_default || root.is_some_and(|range| range.tiled);
+        // `switch_decision_tree`: a value in none of the cases is sent to the
+        // default by one range test, before the peeled cluster and the rest.
+        let entry = match root {
+            Some(switchcg::RootRange { low, high, .. }) => {
+                let mut at = self.order.iter().position(|one| *one == self.block).expect("a placed block") + 1;
+                let body = self.new_block(&mut at);
+                self.export_condition(cond)?;
+                let mut one =
+                    [CaseCluster { kind: ClusterKind::Range, low, high, dest: body.0, prob: default_edge.compl() }];
+                let item =
+                    WorkItem { block: self.block, first: 0, last: 0, ge: None, lt: None, default_prob: default_edge };
+                self.lower_work_item(&item, &mut one, cond, default, false)?;
+                body
+            }
+            None => self.block,
+        };
         // `peelDominantCaseCluster`: the cluster most of the switch goes to is
         // tested first, in this block, and falls through to a block after it
         // where the rest of the switch is lowered.
         let (start, default_prob) = match peeled {
             Some((cluster, prob)) => {
-                let mut at = self.order.iter().position(|one| *one == self.block).expect("a placed block") + 1;
+                let mut at = self.order.iter().position(|one| *one == entry).expect("a placed block") + 1;
                 let rest = self.new_block(&mut at);
                 self.export_condition(cond)?;
                 let mut one = [cluster];
-                let item =
-                    WorkItem { block: self.block, first: 0, last: 0, ge: None, lt: None, default_prob: prob.compl() };
+                let item = WorkItem { block: entry, first: 0, last: 0, ge: None, lt: None, default_prob: prob.compl() };
                 self.lower_work_item(&item, &mut one, cond, rest, false)?;
                 (rest, switchcg::scale_case_probability(default_edge, prob))
             }
-            None => (self.block, default_edge),
+            None => (entry, default_edge),
         };
         let mut work =
             vec![WorkItem { block: start, first: 0, last: clusters.len() - 1, ge: None, lt: None, default_prob }];

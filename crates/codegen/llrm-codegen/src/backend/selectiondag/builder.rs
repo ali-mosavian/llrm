@@ -99,6 +99,8 @@ pub struct BuilderTarget {
     /// The pin optimizes (`getOptLevel() != None`): the jump table search, bit
     /// tests and peeling run.
     pub switch_optimize: bool,
+    /// `SwitchTarget::root_range_test`.
+    pub switch_root_range_test: bool,
     /// `TargetOptions::TrapUnreachable`: an `unreachable` is a trap, so control
     /// that reaches it stops.
     pub trap_unreachable: bool,
@@ -546,6 +548,7 @@ impl BuilderTarget {
             refuse_unknown_intrinsics: false,
             variable_shift_legal: true,
             switch_optimize: true,
+            switch_root_range_test: false,
             trap_unreachable: false,
             legal_ints: std::iter::successors(Some(8), |width| Some(width * 2))
                 .take_while(|width| *width <= bits.max(32))

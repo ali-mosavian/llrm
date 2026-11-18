@@ -238,6 +238,33 @@ fn a_dominant_case_is_peeled_at_optsize_and_not_at_minsize() {
     assert!(!peeled(true, true), "-Oz peels nothing");
 }
 
+/// GCC's root range test is the target's choice: with the knob off the plan
+/// has none (the pin's order, the other targets' code), and with it on it is
+/// the span of every case, only where a value in none of them pays three tests.
+#[test]
+fn the_root_range_test_is_the_targets_choice_and_needs_three_default_path_tests() {
+    use super::switchcg::{BranchProbability, RootRange, SwitchTarget, plan_with, root_range};
+    let cases = [
+        (1, 1, BranchProbability::new(1, 10)),
+        (20, 2, BranchProbability::new(1, 10)),
+        (40, 3, BranchProbability::new(8, 10)),
+    ];
+    let range = |root_range_test, cases: &[(i128, u32, BranchProbability)]| {
+        let target = SwitchTarget { root_range_test, ..SwitchTarget::x86(16) };
+        root_range(&plan_with(cases, 0, &target), &target, 16)
+    };
+    assert_eq!(range(false, &cases), None, "knob off");
+    assert_eq!(range(true, &cases), Some(RootRange { low: 1, high: 40, tiled: false }), "peeled test and two more");
+    assert_eq!(range(true, &cases[..2]), None, "two tests: the range test would be a third");
+    let tiled = [
+        (1, 1, BranchProbability::new(1, 10)),
+        (2, 2, BranchProbability::new(1, 10)),
+        (3, 3, BranchProbability::new(1, 10)),
+        (4, 4, BranchProbability::new(7, 10)),
+    ];
+    assert_eq!(range(true, &tiled), Some(RootRange { low: 1, high: 4, tiled: true }), "no hole in 1..=4");
+}
+
 const WIDE_SWITCH: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
 declare void @a()
 define void @f(i32 %x) ATTR {

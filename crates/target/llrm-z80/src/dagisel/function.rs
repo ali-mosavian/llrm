@@ -48,6 +48,9 @@ pub fn builder_target() -> BuilderTarget {
         // An entry is 2 B, a 16-bit compare-and-branch about 6: a table pays
         // from a third of its range filled, at speed as well as size.
         min_jump_table_density: Some(40),
+        // GCC `switch_decision_tree`: the default path of a switch pays one
+        // range test, not the peeled and table tests in turn
+        switch_root_range_test: true,
         preselection_blocks: Some(crate::prepare::PHI_EDGE),
         refuse_unknown_intrinsics: true,
         variable_shift_legal: false,
