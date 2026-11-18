@@ -26,3 +26,14 @@ fn an_outer_loop_does_not_carry_the_square_of_its_counter() {
     assert!(frame <= 30, "{frame} frame accesses:\n{text}");
     assert!(instructions <= 145, "{instructions} instructions:\n{text}");
 }
+
+/// -O1 reloaded the count into `bc` at the end of the fill's block and again
+/// at the head of the block it falls into (4 B and 22 T of dead loads in
+/// bench_sieve, 266 B against Os's 259).
+#[test]
+fn a_reload_the_successor_repeats_is_not_emitted() {
+    let text = sieve(Level::O1);
+    let code: Vec<&str> = text.lines().filter(|line| line.starts_with('\t')).collect();
+    let repeated = code.windows(4).any(|w| w[0].starts_with("\tld c, -") && w[0] == w[2] && w[1] == w[3]);
+    assert!(!repeated, "a count reload twice running:\n{text}");
+}

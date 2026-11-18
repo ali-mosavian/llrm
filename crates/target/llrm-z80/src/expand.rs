@@ -1183,6 +1183,10 @@ impl Printer<'_> {
                 if op == "RELOAD8" && self.updated_in_place(inst, rest)? {
                     return Ok(());
                 }
+                // a reload no instruction reads (the successor loads it again)
+                if op == "RELOAD8" && self.byte_unused_after(self.register(inst, 0)?, rest) {
+                    return Ok(());
+                }
                 let slot = self.frame_slots(index, 0, 1)?.remove(0);
                 if op == "RELOAD8" && self.held_since_stored(&[(slot.clone(), register.to_owned())]) {
                     return Ok(());
@@ -1223,6 +1227,9 @@ impl Printer<'_> {
                     if op == "SPILL16" { (self.frame_index(inst, 0)?, 1) } else { (self.frame_index(inst, 1)?, 0) };
                 let (lo, hi) = lanes(self.register(inst, register)?)?;
                 if op == "RELOAD16" && self.stepped_word_in_place(inst, rest)? {
+                    return Ok(());
+                }
+                if op == "RELOAD16" && self.pair_unused_after(self.register(inst, register)?, rest) {
                     return Ok(());
                 }
                 if op == "RELOAD16"
@@ -1555,6 +1562,22 @@ impl Printer<'_> {
             .liveness
             .live_before::<Z80Registers>(self.function, self.assignment, &REGISTER_INFO, self.at.0, self.at.1 + 1);
         ![pair, byte].into_iter().any(|one| after.is_live(&REGISTER_INFO, one))
+    }
+
+    /// [`Self::dead_after`], or the byte not live after this instruction by
+    /// the allocator's liveness.
+    fn byte_unused_after(
+        &self,
+        register: RegId,
+        rest: &[Inst],
+    ) -> bool {
+        if self.dead_after(register, rest) {
+            return true;
+        }
+        let after = self
+            .liveness
+            .live_before::<Z80Registers>(self.function, self.assignment, &REGISTER_INFO, self.at.0, self.at.1 + 1);
+        !after.is_live(&REGISTER_INFO, register)
     }
 
     /// Whether the byte register `register` holds nothing a later instruction
