@@ -1012,6 +1012,33 @@ impl Tti for X86 {
         (self.size_bytes && kind == CostKind::CodeSize).then(|| crate::sizes::memory_intrinsic(family, length))
     }
 
+    /// D11-MEM (owner llrm-target-x86-m16-b, exit 2026-11-30): where the size
+    /// guard holds, a constant-length copy or fill the DAG builder expands
+    /// counts as the loads and stores it becomes, not the pin's one
+    /// instruction: a 48-byte copy was inlined for a call of 10 bytes
+    /// (`them_dark`, 37 B). Above the -Os store limit it stays a call.
+    fn size_caller_memory_units(
+        &self,
+        family: &str,
+        length: u64,
+    ) -> Option<i64> {
+        if !self.tuning.inline_size_guard_at_size || self.real_mode.is_some() {
+            return None;
+        }
+        let tuning = &self.tuning;
+        let limit = match family {
+            "memset" => tuning.max_stores_per_memset_opt_size,
+            "memmove" => tuning.max_stores_per_memmove_opt_size,
+            _ => tuning.max_stores_per_memcpy_opt_size,
+        } as u64;
+        // The widest piece the DAG builder takes (a vector under SSE2), then
+        // one store per power of two of the tail.
+        let width = if self.sse2 { 16 } else { 4 };
+        let pieces = length / width + u64::from((length % width).count_ones());
+        let per_piece = if family == "memset" { 1 } else { 2 };
+        (pieces <= limit).then_some(pieces as i64 * per_piece)
+    }
+
     fn address_computation_cost(
         &self,
         kind: CostKind,
