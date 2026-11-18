@@ -6,7 +6,7 @@ mod common;
 use common::pipeline::datalayout;
 use llrm_6502::dagisel::hooks::Cpu;
 use llrm_6502::driver::{Level, Request, assembly};
-use llrm_6502::outline::{run, run_at};
+use llrm_6502::outline::{run, run_at, run_priced};
 
 fn bytes(text: &str) -> u32 {
     llrm_6502::timing::estimate(Cpu::Mos6502, text).expect("prices").bytes
@@ -228,4 +228,23 @@ fn a_place_outside_every_loop_is_never_priced() {
     let outlined = run(&text);
     assert!(outlined.contains("jsr __outl_0"), "{outlined}");
     assert!(bytes(&outlined) < bytes(&text), "{} -> {} B", bytes(&text), bytes(&outlined));
+}
+
+/// Five reports of constants, each with `ldx #0; stx rc2; stx rc3` made first,
+/// were five calls of one body at -O2: +12 clocks a run for 5 bytes a place, in
+/// a module of 72 bytes and 100 clocks (double_against_int: 439 clocks against
+/// llvm-mos's 417, 51 bytes against 72). Priced by the share of the module's
+/// clocks the calls add against the share of its bytes they save, they stay
+/// inline; the same text at -Os (no share) is outlined.
+#[test]
+fn a_run_outside_a_loop_is_outlined_where_its_bytes_are_a_larger_share_than_its_clocks() {
+    let report = "  lda #5
+  ldx #0
+  stx rc2
+  stx rc3
+  jsr report
+";
+    let text = probe(&report.repeat(5));
+    assert!(run_priced(&text, None, None).contains("jsr __outl_0"), "bytes alone outline them");
+    assert!(!run_priced(&text, None, Some(1)).contains("__outl_"), "{}", run_priced(&text, None, Some(1)));
 }

@@ -97,7 +97,8 @@ pub fn run_priced(
             .zip(&weights)
             .filter_map(|(line, weight)| {
                 let inst = line.inst()?;
-                let cycles = crate::timing::of(crate::dagisel::hooks::Cpu::Mos6502, inst).map_or(3, |cost| u64::from(cost.cycles));
+                let cycles = crate::timing::of(crate::dagisel::hooks::Cpu::Mos6502, inst)
+                    .map_or(3, |cost| u64::from(cost.cycles));
                 Some(weight * cycles)
             })
             .sum();
@@ -476,8 +477,9 @@ fn select(
             let saved = candidate.bytes.saturating_sub(CALL) as u64;
             places.retain(|&place| weights[place] == 1 || weights[place] * per_run <= rate * saved);
         }
-        // a place outside every loop is given up where the clocks its calls add are a larger share of the
-        // module's clocks than the bytes it saves are of the module's bytes
+        // a place outside every loop is given up where the clocks its calls add
+        // are a larger share of the module's clocks than the bytes it
+        // saves are of the module's bytes
         if let Some((percent, module_bytes, module_clocks)) = share {
             let per_run = if candidate.tail { JUMP_CLOCKS } else { CALL_CLOCKS };
             let outside = places.iter().filter(|&&place| weights[place] == 1).count() as u64;

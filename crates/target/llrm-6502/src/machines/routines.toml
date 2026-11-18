@@ -28,3 +28,6 @@ percent_per_percent = 4
 # The same, at the speed levels (O1-O3), per routine: clocks are the second goal there and a module's bytes
 # under the bytes bar are headroom (coordinator ruling 2026-11-18).
 division16 = 1
+# The outliner at -O2 and -O3: a place outside every loop is kept where the share of the module's clocks its
+# calls add is at most this many times the share of the module's bytes it saves.
+outline = 1
