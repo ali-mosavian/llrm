@@ -499,6 +499,7 @@ const BACKEND_PASSES: &[&str] = &[
     "tree-pre",
     "thread-jumps",
     "llrm-speed-rate",
+    "llrm-vect-very-cheap",
     "tree-switch-conversion",
     "jump-tables",
     "tree-dse",

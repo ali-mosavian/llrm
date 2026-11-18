@@ -268,7 +268,17 @@ pub fn pays_by_share(
     clocks: u64,
     bytes: u64,
 ) -> bool {
-    let percent = u128::from(crate::routines::share_percent());
+    pays_by_share_at(crate::routines::share_percent(), (saved, growth), clocks, bytes)
+}
+
+/// [`pays_by_share`] at `percent` clocks per percent of bytes.
+pub fn pays_by_share_at(
+    percent: u64,
+    (saved, growth): (u64, i64),
+    clocks: u64,
+    bytes: u64,
+) -> bool {
+    let percent = u128::from(percent);
     growth <= 0 || u128::from(saved) * u128::from(bytes) >= percent * growth as u128 * u128::from(clocks)
 }
 
