@@ -136,9 +136,13 @@ pub fn select_block(
         },
     };
     let arch = Mos;
-    DagCombiner::new(dag, &mut MosCombines { sized, synthesize }, CombineLevel::BeforeLegalizeTypes)
-        .with_tli(&tli)
-        .run();
+    DagCombiner::new(
+        dag,
+        &mut MosCombines { sized, synthesize, call_multiply: super::function::call_multiply_here() },
+        CombineLevel::BeforeLegalizeTypes,
+    )
+    .with_tli(&tli)
+    .run();
     TypeLegalizer::new(dag, &tli)
         .with_target(&arch)
         .with_hooks(&mut lowering)
