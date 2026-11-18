@@ -55,3 +55,19 @@ define void @put(i16 %i, i32 %v) {
         assert!(!text.contains("adc"), "{name}\n{text}");
     }
 }
+
+/// A byte of a global indexed by a byte, widened and added to a long
+/// (`t + buf[i]`): the zero- and any-extending load patterns had the pointer
+/// forms only, so the address went through `lda #<buf; clc; adc i; ...;
+/// ldy #0; lda (p),y` (memmove_overlap's `sum`: 24 clk a trip against 7 for
+/// `ldx i; lda buf,x`).
+#[test]
+fn a_widened_byte_indexed_by_a_byte_is_absolute_x() {
+    for extend in ["zext", "sext"] {
+        let ir = format!(
+            "@buf = global [32 x i8] zeroinitializer\ndefine i32 @f(i8 %i, i32 %t) {{\n  %x = zext i8 %i to i16\n  %p = getelementptr i8, ptr @buf, i16 %x\n  %v = load i8, ptr %p\n  %w = {extend} i8 %v to i32\n  %s = add i32 %t, %w\n  ret i32 %s\n}}"
+        );
+        let text = compile(&ir, "f");
+        assert!(text.contains("lda buf,x") && !text.contains("(rc"), "{extend}:\n{text}");
+    }
+}

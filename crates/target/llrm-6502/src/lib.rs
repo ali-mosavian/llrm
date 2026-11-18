@@ -38,6 +38,7 @@ pub mod target;
 pub mod timing;
 pub mod tti;
 pub mod weights;
+pub mod zerospill;
 
 use llrm_lir::registers::{RegId, Row};
 
