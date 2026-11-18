@@ -223,6 +223,6 @@ fn test_a_select_of_an_x87_value_stays_where_the_target_leaves_them() {
         .replace("ret i32 %s", "ret x86_fp80 %s");
     let (changed, text) = optimized(&fp80, |_| {});
     assert!(changed, "the premise: the pass takes it: {text}");
-    let (changed, text) = optimized(&fp80, |target| target.leave_x87_selects = true);
+    let (changed, text) = optimized(&fp80, |target| target.i486(16));
     assert!(!changed && text.contains("select i1"), "{text}");
 }
