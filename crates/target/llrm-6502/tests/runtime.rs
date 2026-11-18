@@ -877,6 +877,16 @@ fn the_fast_multiply_saves_what_hotmultiply_prices() {
     assert!((mean - priced).abs() <= priced / 10.0, "the fast multiply saves {mean} clocks a call, priced at {priced}");
 }
 
+/// `__shl1hi3` makes `1 << n` for every count of 0 to 15: low byte for 0 to 7,
+/// high byte for 8 to 15.
+#[test]
+fn one_shifted_by_a_count_is_the_bit_for_every_count() {
+    let table: String = (0..16u32).map(|n| format!("  .word {}\n", 1u32 << n)).collect();
+    let main = "  ldy #0\n@next:\n  sty rc8\n  tya\n  jsr __shl1hi3\n  sta rc10\n  stx rc11\n  lda rc8\n  asl a\n  tay\n  lda want,y\n  cmp rc10\n  bne @bad\n  lda want+1,y\n  cmp rc11\n  bne @bad\n  ldy rc8\n  iny\n  cpy #16\n  bne @next\n  lda #0\n  rts\n@bad:\n  lda rc8\n  clc\n  adc #1\n";
+    let extra = format!(".segment \"RODATA\"\nwant:\n{table}.segment \"CODE\"\n");
+    assert_eq!(common::run_with("shl1-all", main, &extra), 0, "a count whose bit is wrong (the count plus 1)");
+}
+
 /// The speed word divide shifts the divisor up to the dividend (a quotient of
 /// a few bits takes a few steps) and hands a wide quotient to the bit loops: it
 /// agrees with the compact bit loop over pairs of every quotient width, a
