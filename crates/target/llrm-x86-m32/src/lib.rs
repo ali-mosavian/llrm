@@ -249,6 +249,13 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // (64,485): the machine count and the measured flip agree.
         licm_float_register_limit: Some(5),
         loop_idiom_copy_trial_at_size: true,
+        // DEVIATE BACKTHREAD-M32 (owner x87-b, exit 2026-12-15): no backward
+        // threading. A/B over the 121 m32 programs at -O1..-Os (2026-11-18):
+        // 13 differ, none by more than +0.2% clocks with it off; x_ld_matmul
+        // -O3 91,538 -> 84,103 clk and 2,155 -> 540 B (gcc 84,571, 1,356 B),
+        // queens -O3 87,134 -> 79,866 clk and 12,765 -> 9,059 B, x_matmul_f
+        // -O3 -1.3% and -535 B, x_ld_dot/fma_chain/sum/max -O2 -91..-154 B.
+        backward_threading: false,
         // DEVIATE OB1 (owner w12, exit 2026-11-27, `unrollbound.rs`; -O3 only,
         // as gcc grows code only there): gcc
         // completely peels a loop whose trips the object it indexes bounds
