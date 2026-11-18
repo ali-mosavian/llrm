@@ -360,7 +360,7 @@ fn lower_rotate(
 ///
 /// DEVIATE 6502-SHIFT-CALL: the pin's `LowerShift` expands a constant shift
 /// of a legal type; its long shifts are the generic expansion over the
-/// halves. Owner: llrm-target-6502. Exit: 2026-11-30, with a pricing from the
+/// halves. Owner: llrm-target-6502. Exit: 2026-11-24, with a pricing from the
 /// emitted shift run rather than this table.
 fn long_shift_is_a_call(count: u128) -> bool {
     const CALL: u128 = 11;
