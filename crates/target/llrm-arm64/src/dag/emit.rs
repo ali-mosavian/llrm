@@ -600,7 +600,8 @@ fn vector_fill(
     match (name, operands) {
         ("MOVIv16b_ns", [Operand::Imm(byte)]) => return Some(Ok(Fill::Byte(*byte as u8))),
         ("MOVIv8b_ns", [Operand::Imm(byte)]) => return Some(Ok(Fill::Byte8(*byte as u8))),
-        // A zero mask is the one `Fill::Zero`, so the LIR description (`MOVIv2d_ns` #0) maps back to it.
+        // A zero mask is the one `Fill::Zero`, so the LIR description
+        // (`MOVIv2d_ns` #0) maps back to it.
         ("MOVIv2d_ns", [Operand::Imm(mask)]) => {
             return Some(Ok(if *mask as u8 == 0 { Fill::Zero } else { Fill::Mask(*mask as u8) }));
         }
