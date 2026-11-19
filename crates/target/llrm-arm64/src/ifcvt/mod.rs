@@ -318,6 +318,20 @@ fn fold_into_select(
     }
 }
 
+/// `value` is a virtual register whose unique definition is the constant 0 or
+/// a copy of the zero register.
+fn is_zero(
+    defs: &Defs,
+    value: Reg,
+) -> bool {
+    let value = remove_copies(defs, value);
+    value.is_virtual()
+        && matches!(
+            defs.get(&value),
+            Some(Op::Imm { value: 0, .. }) | Some(Op::Copy { src: Reg::Gpr(Gpr(31)), .. })
+        )
+}
+
 fn remove_copies(
     defs: &Defs,
     mut value: Reg,
@@ -704,6 +718,14 @@ fn select_ops(
         (Reg::Gpr(rd), Reg::Gpr(mut rn), Reg::Gpr(mut rm)) => {
             let width = value_width(defs, t).or_else(|| value_width(defs, f)).unwrap_or(Width::X);
             let (mut op, mut cond) = (Select::Csel, cc);
+            // A zero operand reads the zero register, as the pin's coalescer
+            // leaves `csel w0, w8, wzr, gt`.
+            if is_zero(defs, t) {
+                rn = Gpr(31);
+            }
+            if is_zero(defs, f) {
+                rm = Gpr(31);
+            }
             if let Some((kind, src)) = fold_into_select(defs, t) {
                 cond = cc.inverted();
                 rn = rm;
