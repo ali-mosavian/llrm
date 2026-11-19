@@ -71,9 +71,9 @@ fn sp_delta(inst: &mc::Inst) -> Option<i64> {
     }
 }
 
-/// Two `%sp` adjusts that meet at `at` (the cleanup a call owes, then the epilogue's) are one adjust of the sum: the
-/// pin's `adjustStackBy` keeps the second apart, and variadic.c -Os ended `main` with `lea (100,%sp),%sp` then
-/// `lea (24,%sp),%sp` (4 B). No flags are read: an adjust of `%sp` sets none.
+/// Two `%sp` adjusts that meet at `at` (the cleanup a call owes, then the epilogue's) are one adjust of the sum (the
+/// idea of x86's `mergeSPUpdates`): variadic.c -Os ended `main` with `lea (100,%sp),%sp` then `lea (24,%sp),%sp`
+/// (4 B). No flags are read: an adjust of `%sp` sets none.
 fn fold_sp_adjusts(
     out: &mut Vec<mc::Inst>,
     at: usize,
