@@ -3368,6 +3368,15 @@ fn addressed_pass(
                         }
                         depth = None;
                     }
+                    // An indirect jump that names no table is an indirect sibling
+                    // call (`built` made its return a jump): its epilogue has
+                    // run, and it leaves the procedure as a return does.
+                    Operation::Jump if what.indirect && what.table.is_empty() => {
+                        if here != 0 && !in_dead {
+                            return Err(stop(procedure, &format!("a sibling call at depth {here}")));
+                        }
+                        depth = None;
+                    }
                     Operation::Jump | Operation::Branch => {
                         // A jump table's targets are all the labels it names.
                         if what.indirect && what.table.is_empty() {
