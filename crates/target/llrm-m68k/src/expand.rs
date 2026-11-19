@@ -60,6 +60,34 @@ pub(crate) fn sp_adjust(
     }
 }
 
+/// The bytes `%sp` moves by `inst` (`sp_adjust`'s forms), where it is only that.
+fn sp_delta(inst: &mc::Inst) -> Option<i64> {
+    use mc::Operand::{Imm, Reg as R};
+    match (inst.opcode, &inst.operands[..]) {
+        ("ADDQ32ai" | "ADD32ai", [R(a), R(b), Imm(bytes)]) if *a == reg::SP && *b == reg::SP => Some(*bytes),
+        ("SUB32ai", [R(a), R(b), Imm(bytes)]) if *a == reg::SP && *b == reg::SP => Some(-*bytes),
+        ("LEA32p", [R(a), Imm(bytes), R(b)]) if *a == reg::SP && *b == reg::SP => Some(*bytes),
+        _ => None,
+    }
+}
+
+/// Two `%sp` adjusts that meet at `at` (the cleanup a call owes, then the epilogue's) are one adjust of the sum: the
+/// pin's `adjustStackBy` keeps the second apart, and variadic.c -Os ended `main` with `lea (100,%sp),%sp` then
+/// `lea (24,%sp),%sp` (4 B). No flags are read: an adjust of `%sp` sets none.
+fn fold_sp_adjusts(
+    out: &mut Vec<mc::Inst>,
+    at: usize,
+    short: bool,
+) {
+    let (Some(first), Some(second)) = (at.checked_sub(1).and_then(|one| out.get(one)).and_then(sp_delta), out.get(at).and_then(sp_delta)) else {
+        return;
+    };
+    out.drain(at - 1..=at);
+    if first + second != 0 {
+        out.insert(at - 1, sp_adjust(first + second, short));
+    }
+}
+
 fn frame_op(
     op: &FrameOp,
     out: &mut Vec<mc::Inst>,
@@ -761,12 +789,16 @@ pub fn finish_with(
             Kind::Op("ADJCALLSTACKDOWN" | "ADJCALLSTACKUP") => {}
             Kind::Op("UNREACHABLE") => {}
             Kind::Op("RET") => {
+                let at = out.len();
                 closing.iter().for_each(|op| frame_op(op, &mut out, short));
+                fold_sp_adjusts(&mut out, at, short);
                 out.push(mc::Inst { opcode: "RTS", operands: vec![] });
             }
             Kind::Op("TCRETURNq") => {
                 let [target, _] = &operands[..] else { return Err("TCRETURNq operands".to_owned()) };
+                let at = out.len();
                 closing.iter().for_each(|op| frame_op(op, &mut out, short));
+                fold_sp_adjusts(&mut out, at, short);
                 out.push(mc::Inst { opcode: "BRA16", operands: vec![target.clone()] });
             }
             Kind::Op("MOVM32pm_P") => {
