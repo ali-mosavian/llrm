@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/selectoptimize.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/selectoptimize.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/selectoptimize.rs sha256:b87d57f74169f2e18c2da6015b14913a72cc08f771004eb8f6cfa9cb4b6d6244 -->
+<!-- src: crates/opt/llrm-transforms/src/selectoptimize.rs sha256:a9149f1889c653cb2bc41ae6b3c3c6ab3472de76fb372b1ca37177eb783a8979 -->
 
 # selectoptimize
 
@@ -46,3 +46,14 @@ Not wired: the pin's `llc` leaves it off (`-disable-select-optimize`
 defaults to true, `TargetPassConfig.cpp` L278), so no pipeline slot holds
 it. Where the pin runs it, it is after `ExpandReductions` in
 `addIRPasses`.
+
+## Example
+A select whose branch form is cheaper becomes a branch and a phi, with a frozen condition.
+
+```text
+%s = select i1 %c, %a, %b
+=>
+%c.frozen = freeze i1 %c
+br i1 %c.frozen, label %end, label %select.false
+end: %s = phi [%a, %start], [%b, %select.false]
+```

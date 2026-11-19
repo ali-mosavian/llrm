@@ -3797,6 +3797,21 @@ pub fn _instruction(
     names: &IndexMap<(Space, i64), String>,
     number: usize,
 ) -> Result<Vec<String>, Unprintable> {
+    let mut lines = _instruction_unprefixed(regs, what, names, number)?;
+    if what.lock {
+        if let Some(first) = lines.first_mut() {
+            first.insert_str(0, "lock ");
+        }
+    }
+    Ok(lines)
+}
+
+fn _instruction_unprefixed(
+    regs: Regs,
+    what: &Semantics,
+    names: &IndexMap<(Space, i64), String>,
+    number: usize,
+) -> Result<Vec<String>, Unprintable> {
     let name = what.name.as_deref().unwrap_or("");
     if what.op == Operation::Fill {
         // Its operands are the registers the instruction names in its opcode.
@@ -4293,6 +4308,49 @@ mod tests {
         assert_eq!(_instruction(regs, &scan("bsf", true), &no_names(), 0).unwrap(), ["db 0F3h", "bsf eax, ecx"]);
         assert_eq!(_instruction(regs, &scan("bsf", false), &no_names(), 0).unwrap(), ["bsf eax, ecx"]);
         assert_eq!(_instruction(regs, &scan("bsr", false), &no_names(), 0).unwrap(), ["bsr eax, ecx"]);
+    }
+
+    /// An atomic read-modify-write printed without its `lock`: the listing
+    /// showed a plain `add`, `xadd` or `cmpxchg` where the object has `f0`.
+    #[test]
+    fn test_locked_read_modify_writes_print_their_prefix() {
+        let m32 = crate::backend::registerinfo::Regs(llrm_target::Target::registers(&llrm_x86_m32::M32));
+        let cell = |width| Loc::Mem(ir::Mem::new(Some(Addr::new(Space::Frame, -8)), width));
+        let reg = |register, width| Loc::Reg(ir::Reg { register, width });
+        let print = |what: Semantics| _instruction(m32, &what, &no_names(), 0).unwrap();
+        let locked = |op, name: &str, dests: Vec<Loc>, sources: Vec<Loc>| Semantics {
+            name: Some(name.into()),
+            dests,
+            sources,
+            lock: true,
+            ..Semantics::new(op)
+        };
+        let word = cell(4);
+        let ebx = reg(RegId::EBX, 4);
+        assert_eq!(
+            print(locked(Operation::Binary, "add", vec![word.clone()], vec![word.clone(), ebx.clone()])),
+            ["lock add dword ptr [ebp-8], ebx"]
+        );
+        assert_eq!(
+            print(locked(Operation::Unary, "dec", vec![word.clone()], vec![word.clone()])),
+            ["lock dec dword ptr [ebp-8]"]
+        );
+        assert_eq!(
+            print(locked(Operation::Binary, "xadd", vec![word.clone(), ebx.clone()], vec![word.clone(), ebx.clone()])),
+            ["lock xadd dword ptr [ebp-8], ebx"]
+        );
+        let eax = reg(RegId::EAX, 4);
+        assert_eq!(
+            print(locked(
+                Operation::Binary,
+                "cmpxchg",
+                vec![word.clone(), eax.clone()],
+                vec![word.clone(), ebx.clone(), eax.clone()]
+            )),
+            ["lock cmpxchg dword ptr [ebp-8], ebx"]
+        );
+        let plain = Semantics { lock: false, ..locked(Operation::Binary, "add", vec![word.clone()], vec![word, ebx]) };
+        assert_eq!(print(plain), ["add dword ptr [ebp-8], ebx"]);
     }
 
     /// A string move prints as the instruction it is: `rep` where it has a

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/inlinemetadata.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/inlinemetadata.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/inlinemetadata.rs sha256:0bbec84aaaae20eb3ed2c9b962a0920135f6759d942e200b10cf44c43826ba7c -->
+<!-- src: crates/opt/llrm-transforms/src/inlinemetadata.rs sha256:385e5670af3dadfb45344825d5556db1839c7c17e08f99ca4e0cafaed90842e9 -->
 
 # inlinemetadata
 
@@ -20,6 +20,16 @@ hidden and off in the pin: nothing to translate.
 ## Deviations
 - A node made here is not uniqued against the module's: two equal lists may
   have two ids. Nothing compares ids of non-distinct lists.
+
+## Example
+A call site's `!alias.scope` and `!noalias` go to the memory accesses of the
+inlined copy.
+
+```text
+call site:  call void @f(ptr %p), !alias.scope !1
+callee:     %v = load i32, ptr %a
+copy:       %v = load i32, ptr %p, !alias.scope !1
+```
 
 ## Used by
 Named by `inline`, `inlinealias`, `noaliasscopes`.
