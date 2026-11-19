@@ -70,7 +70,7 @@ def ours_command(cc: str, level: str, flags: list[str], obj: Path, source: Path)
 
 def gcc_command(tools: str, cpu: str, level: str, asm: Path, source: Path, flags: list[str], pcrel: bool = False) -> list[str]:
     """gcc's line with the program's own flags in gcc's spelling: `-fno-inline-functions` left out, gcc inlined what ours and the pin keep calls."""
-    return [f"{tools}gcc", f"-m{cpu}", f"-{level}", "-msoft-float", "-ffreestanding", *(["-mpcrel"] if pcrel else []), *external_flags.GCC_DIALECT, "-I", str(ROOT / "runtime/shared/posix"), *[flag for flag in external_flags.gcc_program_flags(flags) if not flag.startswith("-mcmodel")], "-S", "-o", str(asm), str(source)]
+    return [f"{tools}gcc", f"-m{cpu}", f"-{level}", "-msoft-float", "-ffreestanding", *(["-mpcrel"] if pcrel else []), *external_flags.GCC_DIALECT, *external_flags.gcc_source_defines(source.read_text()), "-I", str(ROOT / "runtime/shared/posix"), *[flag for flag in external_flags.gcc_program_flags(flags) if not flag.startswith("-mcmodel")], "-S", "-o", str(asm), str(source)]
 
 
 def measure(source: Path, cpu: str, level: str, compiler: str, cc: str, root: str, cache: Path, work: Path) -> dict[str, object]:
