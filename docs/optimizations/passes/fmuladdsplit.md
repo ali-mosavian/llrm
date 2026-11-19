@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/fmuladdsplit.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/fmuladdsplit.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/fmuladdsplit.rs sha256:58d6c45b8f99b18dbcd5a4a69f78f23c000a577b2fe68ef308821608082f211b -->
+<!-- src: crates/opt/llrm-transforms/src/fmuladdsplit.rs sha256:417c393e6d649627a9cc0bbe066f4cb83031b9b6ff9fd2d327ae552fca4ccdd1 -->
 
 # fmuladdsplit
 
@@ -33,6 +33,16 @@ the loop passes; gcc's `convert_mult_to_fma` runs after
 +3.2% clocks and +289 B at -O2: the split of a call whose product varies
 changes the unrolling price of the loop that holds it. Only the invariant
 product is split here.
+
+## Example
+A `llvm.fmuladd` in a loop whose factors are defined outside it and whose addend
+is not becomes `fmul` and `fadd`, so LICM hoists the multiply.
+
+```text
+loop:  %p = call fmuladd(%r, 6.7e7, %x)        loop:  %m = fmul %r, 6.7e7
+                                         =>           %p = fadd %m, %x
+                                                 (LICM: %m leaves the loop)
+```
 
 ## Used by
 Named by `pipeline`.
