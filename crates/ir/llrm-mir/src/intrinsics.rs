@@ -112,6 +112,9 @@ pub enum Intrinsic {
     VectorReduce(ReduceKind),
     /// `llvm.copysign`: the first argument with the second's sign.
     CopySign,
+    /// `llvm.is.fpclass`: whether the float is of one of the classes the
+    /// constant second argument (an `FPClassTest` mask) names.
+    IsFpClass,
     /// `llvm.fabs`, `llvm.sqrt` and their kin: a function of one float.
     Unary(FloatFunction),
     /// Rounds to an integer as the rounding mode says: by default, to
@@ -653,7 +656,7 @@ thread_local! {
     static PROBES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-const TABLE: [Spec; 99] = [
+const TABLE: [Spec; 100] = [
     overflow("llvm.sadd.with.overflow", BinaryOp::Add, true),
     overflow("llvm.uadd.with.overflow", BinaryOp::Add, false),
     overflow("llvm.ssub.with.overflow", BinaryOp::Sub, true),
@@ -719,6 +722,14 @@ const TABLE: [Spec; 99] = [
     reduce("llvm.vector.reduce.fadd", ReduceKind::FAdd),
     reduce("llvm.vector.reduce.fmul", ReduceKind::FMul),
     arithmetic("llvm.copysign", Intrinsic::CopySign, Slot::Any(0), &[Slot::Any(0), Slot::Any(0)], Kind::Float),
+    Spec {
+        name: "llvm.is.fpclass",
+        intrinsic: Intrinsic::IsFpClass,
+        overloads: &[Kind::Float],
+        returns: Slot::Int(1),
+        parameters: &[Slot::Any(0), Slot::Int(32)],
+        own: None,
+    },
     unary("llvm.fabs", FloatFunction::Fabs),
     unary("llvm.sqrt", FloatFunction::Sqrt),
     unary("llvm.sin", FloatFunction::Sin),

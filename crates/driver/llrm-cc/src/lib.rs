@@ -483,8 +483,15 @@ const LLC_FLAGS: &[&str] = &[
     "-fwhole-program",
     "-fno-whole-program",
 ];
-const LLC_PREFIXES: &[&str] =
-    &["--isel=", "-fobject-format=", "-mcode-segment=", "-fno-inline=", "-Wstack-usage=", "-fexcess-precision="];
+const LLC_PREFIXES: &[&str] = &[
+    "--isel=",
+    "-fobject-format=",
+    "-mcode-segment=",
+    "-fno-inline=",
+    "-Wstack-usage=",
+    "-fexcess-precision=",
+    "-mstack-alignment=",
+];
 /// The passes `-f[no-]PASS` switches in the backend's pipeline.
 const BACKEND_PASSES: &[&str] = &[
     "allocation-search",
@@ -827,11 +834,16 @@ pub fn dropped_pass_switches<'a>(
 /// What the last of clang's `-f[no-]pic`/`-f[no-]pie` family chose: whether
 /// the code is position independent; `None` where none is given.
 fn relocation_pic(clang: &[String]) -> Option<bool> {
-    clang.iter().rev().find_map(|flag| match flag.as_str() {
-        "-fpic" | "-fPIC" | "-fpie" | "-fPIE" => Some(true),
-        "-fno-pic" | "-fno-PIC" | "-fno-pie" | "-fno-PIE" => Some(false),
-        _ => None,
-    })
+    clang
+        .iter()
+        .rev()
+        .find_map(
+            |flag| match flag.as_str() {
+                "-fpic" | "-fPIC" | "-fpie" | "-fPIE" => Some(true),
+                "-fno-pic" | "-fno-PIC" | "-fno-pie" | "-fno-PIE" => Some(false),
+                _ => None,
+            },
+        )
 }
 
 pub fn llc_args(

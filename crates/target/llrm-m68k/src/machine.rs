@@ -683,6 +683,10 @@ impl Tti for M68k {
         AddressingMode::PostIndexed
     }
 
+    fn lsr_free_walk_beats_end_biased(&self) -> bool {
+        true
+    }
+
     fn is_post_inc_load_legal(
         &self,
         ty: Ty,
