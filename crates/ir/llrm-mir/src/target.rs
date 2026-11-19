@@ -477,6 +477,13 @@ pub struct Tuning {
     /// the mass and make the code after them cold (threshold 45, no bonuses).
     /// false: the pin's.
     pub cold_site_ignores_sinks: bool,
+    /// DEVIATE LASTCALL-COLD (owner x87-cordic-2, exit 2026-12-05): a local
+    /// function with one call keeps the `LastCallToStatic` bonus where the
+    /// call site is cold. GCC's `-finline-functions-called-once` inlines it
+    /// whatever the site's frequency (inlining it removes the body and the
+    /// call: bytes). false: the pin's, which drops the bonus and uses the cold
+    /// threshold.
+    pub inline_last_call_in_cold_site: bool,
     /// Read-only data (a private constant, a jump table) that one procedure
     /// only loads from follows that procedure in its code segment and is read
     /// through `cs:`, as `TargetLoweringObjectFile::getSectionForConstant`
@@ -907,6 +914,7 @@ impl Tuning {
         unswitch_threshold: None,
         inline_threshold: None,
         cold_site_ignores_sinks: false,
+        inline_last_call_in_cold_site: false,
         read_only_in_code: false,
         min_jump_table_density: None,
         licm_float_register_limit: None,
