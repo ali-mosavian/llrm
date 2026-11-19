@@ -2864,6 +2864,16 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE LSR-POSTINC-WALKS (owner m68k, exit 2026-12-17; gcc's ivopts
+    /// counts registers against the loop's pointers): a loop that indexes more
+    /// objects than this keeps no post-indexed preference, since each walk holds
+    /// an address register and the ones past the class are spilled and
+    /// reloaded every trip (early_exit_widths `reset`: eight walks, six address
+    /// registers). None: the preference holds at any count, as the pin's.
+    fn lsr_post_indexed_walk_limit(&self) -> Option<u32> {
+        None
+    }
+
     /// DEVIATE LSR-POSTINC-PAIR (target flag): the pair form of a load or
     /// store (`ldp`/`stp`) folds a pointer's bump only into its first access,
     /// so a post-indexed walk rates the lower access of an adjacent pair

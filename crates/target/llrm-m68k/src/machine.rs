@@ -679,6 +679,10 @@ impl Tti for M68k {
     /// by the access size for free (descriptors in `indexed.rs`), so LSR keeps
     /// a pointer walk rather than an index beside a counter. Exit: 2026-11-20,
     /// when LSR rates the indexed formula beside the walk (M68K-COPY-OS).
+    fn lsr_post_indexed_walk_limit(&self) -> Option<u32> {
+        Some(5)
+    }
+
     fn preferred_addressing_mode(&self) -> AddressingMode {
         AddressingMode::PostIndexed
     }
