@@ -3,7 +3,7 @@ import sys
 import unittest
 
 sys.path.insert(0, __file__.rsplit("/", 1)[0])
-from m68k_clk import parse_clocks  # noqa: E402
+from m68k_clk import gcc_is_comparable, parse_clocks  # noqa: E402
 
 TABLE = "| exe | insns | 68000 clk | 68000 clk/call |\n608\n| rc.exe | 5035 | 43404 | 14.5 |\n"
 
@@ -61,3 +61,9 @@ def test_cycles_traces_a_68020_program_on_a_68020():
 
     assert m68k_clk.cycles_env("68020", "/")["CYCLES_QEMU_CPU"] == "m68020"
     assert m68k_clk.cycles_env("68000", "/")["CYCLES_QEMU_CPU"] == "m68000"
+
+
+def test_a_program_naming_long_double_has_no_gcc_column():
+    """gcc's m68k long double is 12 bytes, ours 8: long_double_layout -Os read ours 2344 B against gcc's 438 B (+435%), a cell no compiler change can move."""
+    assert not gcc_is_comparable("long double x; int main(void) { return sizeof x; }")
+    assert gcc_is_comparable("// a long double in a comment\nint main(void) { return 0; }")
