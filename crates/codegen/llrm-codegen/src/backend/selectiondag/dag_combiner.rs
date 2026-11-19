@@ -1079,6 +1079,34 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         result
     }
 
+    /// `llvm.is.fpclass` where the target has no node for it: the class test
+    /// as compares and integer operations. DEVIATE: the pin expands in
+    /// `SelectionDAGBuilder` (`TLI.expandIS_FPCLASS`); the builder here has
+    /// no target actions, and this first combine runs before anything else
+    /// reads the node.
+    fn visit_is_fp_class(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let tli = self.tli?;
+        let op = self.dag.operand(node, 0);
+        if matches!(
+            tli.operation_action(ISD::IsFpClass, self.dag.value_type(op)),
+            Action::Legal | Action::Custom
+        ) {
+            return None;
+        }
+        let test = self.dag.constant(self.dag.operand(node, 1))?;
+        let result_vt = self.dag.value_type(node);
+        Some(super::expand_is_fpclass::expand_is_fp_class(
+            self.dag,
+            tli,
+            result_vt,
+            op,
+            llrm_mir::fpclass::FpClassTest(test as u32),
+        ))
+    }
+
     fn visit(
         &mut self,
         node: SDValue,
@@ -1197,6 +1225,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             ISD::FSub => self.visit_fsub(node),
             ISD::FMul => self.visit_fmul(node),
             ISD::FNeg => self.visit_fneg(node),
+            ISD::IsFpClass => self.visit_is_fp_class(node),
             ISD::FpRound => self.visit_fp_round(node),
             ISD::FpExtend => self.visit_fp_extend(node),
             ISD::SIntToFp | ISD::FpToSInt => self.visit_fp_int_convert(node),
