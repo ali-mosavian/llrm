@@ -37,7 +37,8 @@
 //! the other way. Exit: the dual.
 //!
 //! DEVIATE 3: the wide load's alignment is the narrow load's; a target is
-//! asked only whether it has vector registers (`vector_register_bits`), not
+//! asked only whether it has vector registers (`vector_register_bits`, word vectors
+//! excluded), not
 //! whether a misaligned access is fast.
 //!
 //! # Runs
@@ -318,7 +319,10 @@ impl FunctionPass for SlpCompares {
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
         let outer = analyses.outer().clone();
-        let vectors = outer.target().tti().is_some_and(|tti| tti.vector_register_bits() > 0);
+        // A word vector (`Tti::word_vectors`) is a general register, not a
+        // vector register: the pin's SLP has no vector to make there, and an
+        // 8-byte chain became an i64 compare split in two (m32 -Os).
+        let vectors = outer.target().tti().is_some_and(|tti| tti.vector_register_bits() > 0 && !tti.word_vectors());
         if vectors && merged(unit.context, unit.layout, unit.function, &outer) {
             PreservedAnalyses::none()
         } else {
