@@ -1248,6 +1248,8 @@ pub enum FpBinary {
     MaxNm,
     MinNm,
     Nmul,
+    /// `fabd`: the absolute difference, `fabs (fsub a, b)`.
+    Abd,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]

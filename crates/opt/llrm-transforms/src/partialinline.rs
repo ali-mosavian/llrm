@@ -31,9 +31,6 @@
 //! branch and a copy of the call, and -Os is strict bytes. Owner: alim; exit
 //! 2026-11-27, revisit when the -Os rows allow.
 //!
-//! DEVIATE PI2: MIR's text has no `strictfp`; the check reads the attribute
-//! where a front end states it, and no test can state it.
-//!
 //! DEVIATE PI1: the likely-branch weight the pin adds when the function has an
 //! entry count is not added: MIR has no profile counts.
 //!
