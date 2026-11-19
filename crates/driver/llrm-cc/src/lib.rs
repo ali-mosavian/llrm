@@ -126,6 +126,11 @@ pub struct Target {
     /// clang does not: the driver gives the flag to the backend alone.
     #[serde(default)]
     pub llc_mcmodel: bool,
+    /// The backend takes `-relocation-model=` (as the pin's llc does): the
+    /// driver states what clang's flags chose, since clang's IR carries it
+    /// only as a module flag it may leave out.
+    #[serde(default)]
+    pub llc_reloc: bool,
     /// DEVIATE UNROLL-O1 (owner x86-m32, exit 2026-11-27): `-funroll-loops` is
     /// the default at `-O1`. clang's `UnrollLoops` is off there, so it marks
     /// every loop `llvm.loop.unroll.disable` (CGLoopInfo.cpp#L820) and the
@@ -819,6 +824,16 @@ pub fn dropped_pass_switches<'a>(
     build.llc.iter().map(String::as_str).filter(|flag| is_pass_switch(flag)).collect()
 }
 
+/// What the last of clang's `-f[no-]pic`/`-f[no-]pie` family chose: whether
+/// the code is position independent; `None` where none is given.
+fn relocation_pic(clang: &[String]) -> Option<bool> {
+    clang.iter().rev().find_map(|flag| match flag.as_str() {
+        "-fpic" | "-fPIC" | "-fpie" | "-fPIE" => Some(true),
+        "-fno-pic" | "-fno-PIC" | "-fno-pie" | "-fno-PIE" => Some(false),
+        _ => None,
+    })
+}
+
 pub fn llc_args(
     target: &Target,
     build: &Build,
@@ -852,6 +867,11 @@ pub fn llc_args(
     }
     if target.llc_mcmodel {
         args.extend(build.clang.iter().filter(|flag| flag.starts_with("-mcmodel=")).cloned());
+    }
+    if target.llc_reloc
+        && let Some(pic) = relocation_pic(&build.clang)
+    {
+        args.push(format!("-relocation-model={}", if pic { "pic" } else { "static" }));
     }
     if build.stop == Stop::Assembly {
         args.push("-S".into());
