@@ -73,6 +73,8 @@ pub fn select_bitfield_insert_in_zero(
 
 use llrm_dagisel::dag::{Dag, SDValue as Value};
 use llrm_dagisel::generated::aarch64::ids::opcode as op;
+use llrm_dagisel::generated::aarch64::ids::reg::sub_32;
+use llrm_dagisel::generated::ids::target_opcode;
 use llrm_dagisel::matcher::Vt;
 
 use crate::mc::immediate::{decode_logical, logical};
@@ -442,18 +444,30 @@ fn bitfield_extract_from_and<D: AddrDag>(
     node: u32,
     ignored_low: u32,
     bigger: bool,
-) -> Option<(Value, u32, u32)> {
-    let bits = width_of(dag.value_type(Value::new(node, 0)))?;
+    through_truncate: bool,
+) -> Option<(Value, u32, u32, u32)> {
+    let mut bits = width_of(dag.value_type(Value::new(node, 0)))?;
     let mut and_imm = imm_operand(dag, node, isd::AND)?;
     and_imm |= all(ignored_low.min(64));
     if and_imm & and_imm.wrapping_add(1) != 0 {
         return None;
     }
     let op0 = dag.operand(node, 0);
-    let (src, srl) = if let Some(srl) = imm_operand(dag, op0.node, isd::SRL) {
-        (dag.operand(op0.node, 0), srl)
+    let (src, srl, clamp) = if let Some(srl) = imm_operand(dag, op0.node, isd::SRL) {
+        (dag.operand(op0.node, 0), srl, bits == 32)
+    } else if through_truncate
+        && bits == 32
+        && dag.opcode(op0.node) == isd::TRUNCATE
+        && let inner = dag.operand(op0.node, 0)
+        && let Some(srl) = imm_operand(dag, inner.node, isd::SRL)
+    {
+        // The shift result was truncated, so the `UBFM` is of the shifted
+        // value's own type; the type of the `SRL` node is the extract's.
+        let src = dag.operand(inner.node, 0);
+        bits = width_of(dag.value_type(inner))?;
+        (src, srl, false)
     } else if bigger {
-        (op0, 0)
+        (op0, 0, false)
     } else {
         return None;
     };
@@ -462,10 +476,10 @@ fn bitfield_extract_from_and<D: AddrDag>(
     }
     let ones = if bits == 32 { (and_imm as u32).trailing_ones() } else { and_imm.trailing_ones() };
     let mut msb = srl as u32 + ones - 1;
-    if bits == 32 && imm_operand(dag, op0.node, isd::SRL).is_some() {
+    if clamp {
         msb = msb.min(31);
     }
-    Some((src, srl as u32, msb))
+    Some((src, srl as u32, msb, bits))
 }
 
 /// `tryBitfieldInsertOpFromOr`.
@@ -485,7 +499,8 @@ fn bitfield_insert_from_or<D: AddrDag>(
         let opd1 = dag.operand(node, (i + 1) % 2);
         let (src, dst_lsb, width, imm_r, imm_s);
         if dag.opcode(opd0.node) == isd::AND
-            && let Some((extract_src, lsb, msb)) = bitfield_extract_from_and(dag, opd0.node, ignored_low, bigger)
+            && let Some((extract_src, lsb, msb, _)) =
+                bitfield_extract_from_and(dag, opd0.node, ignored_low, bigger, false)
         {
             // The range is a `UBFM` of the right type; `BFXIL` shares its
             // `immr` and `imms`.
@@ -603,9 +618,11 @@ fn bitfield_insert_from_or_and_imm<D: AddrDag>(
 /// `tryBitfieldExtractOp`: `and (srl x, n), mask`, `srl`/`sra` of a `shl` or
 /// of an `and`, and `sign_extend_inreg` of a shift are one `UBFM`/`SBFM`.
 ///
-/// DEVIATE SD530: the forms through `truncate`/`any_extend` (they select a
-/// 64-bit `UBFM` and take its low half) are not matched, as in SD529. Exit:
-/// the `Widen` helper.
+/// The `and (truncate (srl x, n)), mask` of an `i32` is a 64-bit `UBFM` of `x`
+/// and its low half (`isBitfieldExtractOpFromAnd`, the `TRUNCATE` arm).
+///
+/// DEVIATE SD530: the `any_extend` forms (`Widen`) are not matched, as in
+/// SD529. Exit: the `Widen` helper.
 ///
 /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Target/AArch64/AArch64ISelDAGToDAG.cpp#L3152>
 pub fn select_bitfield_extract<D: AddrDag>(
@@ -616,7 +633,18 @@ pub fn select_bitfield_extract<D: AddrDag>(
     let vt = dag.value_type(Value::new(node, 0));
     let bits = width_of(vt)?;
     let (signed, source, immr, imms) = if opcode == isd::AND {
-        let (source, lsb, msb) = bitfield_extract_from_and(dag, node, 0, false)?;
+        let (source, lsb, msb, source_bits) = bitfield_extract_from_and(dag, node, 0, false, true)?;
+        if source_bits != bits {
+            // A 64-bit `UBFM` of the shifted value, and its low half.
+            let wide = mvt::i64;
+            let (immr, imms) = (dag.target_constant(i64::from(lsb), wide), dag.target_constant(i64::from(msb), wide));
+            let extract = dag.machine_node(op::UBFMXri, &[wide], &[source, immr, imms]);
+            let index = dag.target_constant(i64::from(sub_32), mvt::i32);
+            let low = dag.machine_node(target_opcode::EXTRACT_SUBREG, &[vt], &[Value::new(extract, 0), index]);
+            dag.replace_uses(Value::new(node, 0), Value::new(low, 0));
+            dag.remove_dead_node(node);
+            return Some(Outcome::Selected);
+        }
         (false, source, lsb, msb)
     } else if opcode == isd::SRL || opcode == isd::SRA {
         let amount = u64::try_from(dag.constant(dag.operand(node, 1))?).ok()?;
