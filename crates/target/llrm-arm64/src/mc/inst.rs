@@ -1502,6 +1502,15 @@ pub enum Inst {
         rn: Vreg,
         rm: Option<Vreg>,
     },
+    /// `fccmp`: compares when `cond` holds of the flags, else sets them to
+    /// `nzcv`.
+    FpCondCompare {
+        size: FpSize,
+        rn: Vreg,
+        rm: Vreg,
+        nzcv: u8,
+        cond: Cond,
+    },
     FpSelect {
         size: FpSize,
         rd: Vreg,

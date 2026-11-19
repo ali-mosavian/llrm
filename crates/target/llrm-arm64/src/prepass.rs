@@ -624,7 +624,12 @@ fn flags_dead(
     for op in &ops[at + 1..] {
         if matches!(
             op,
-            Op::I(Inst::BranchCond { .. } | Inst::CondSelect { .. } | Inst::CondCompare { .. })
+            Op::I(
+                Inst::BranchCond { .. }
+                    | Inst::CondSelect { .. }
+                    | Inst::CondCompare { .. }
+                    | Inst::FpCondCompare { .. }
+            )
         ) {
             return false;
         }

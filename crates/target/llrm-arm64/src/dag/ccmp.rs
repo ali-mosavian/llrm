@@ -9,9 +9,9 @@
 //! if it fails, sets the flags so the final condition reads false. The caller
 //! branches or selects on the returned condition.
 //!
-//! DEVIATE SD527: a floating-point compare is not a leaf (`FCCMP`, and the
-//! two-condition compares, are not translated) so the tree is refused.
-//! Exit: floating-point conditional compares.
+//! A floating-point compare is a leaf too: `FCMP` first, then `FCCMP`. A
+//! condition one flag test cannot say (`one`, `ueq`) takes two chained
+//! compares.
 //!
 //! # See also
 //! `AArch64ISelLowering.cpp` at pin d1106deb7:
@@ -20,12 +20,14 @@
 //! [`canEmitConjunction`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L4207),
 //! [`emitConditionalComparison`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L4149).
 
-use llrm_codegen::backend::selectiondag::isd::ISD;
-use llrm_codegen::backend::selectiondag::mvt::EVT;
+use llrm_codegen::backend::selectiondag::isd::{CondCode, ISD};
+use llrm_codegen::backend::selectiondag::mvt::{EVT, MVT};
 use llrm_codegen::backend::selectiondag::{SDValue, SelectionDAG};
 use llrm_dagisel::generated::aarch64::ids::isd as a64;
 
-use super::lowering::{cc, cond_const, cond_of, emit_comparison, int_cc, is_cmn, is_equality, signed_constant};
+use super::lowering::{
+    cc, cond_const, cond_of, emit_comparison, emit_fcmp, fp_cc, int_cc, is_cmn, is_equality, signed_constant,
+};
 
 /// What `canEmitConjunction` reports about a subtree.
 #[derive(Clone, Copy)]
@@ -41,6 +43,22 @@ struct Shape {
 /// `AArch64CC::getInvertedCondCode`.
 fn invert(code: u128) -> u128 {
     code ^ 1
+}
+
+/// `changeFPCCToANDAArch64CC`: the condition, and a second one both must hold
+/// (`one` and `ueq` as an AND, not the OR of `changeFPCCToAArch64CC`).
+fn fp_cc_and(code: CondCode) -> (u128, u128) {
+    match code {
+        // (a one b) == ((a ord b) && (a une b))
+        CondCode::SetONe => (cc::VC, cc::NE),
+        // (a ueq b) == ((a ule b) && (a uge b))
+        CondCode::SetUEq => (cc::PL, cc::LE),
+        other => {
+            let (first, second) = fp_cc(other);
+            debug_assert!(second.is_none());
+            (first, cc::AL)
+        }
+    }
 }
 
 /// `AArch64CC::getNZCVToSatisfyCondCode`: flags (`NZCV`, as `ccmp` takes them)
@@ -74,7 +92,7 @@ fn can_emit_conjunction(
     if opcode == ISD::SetCC {
         let (lhs, rhs) = (dag.operand(val, 0), dag.operand(val, 1));
         let vt = dag.value_type(lhs);
-        if !vt.is_integer() {
+        if vt == EVT::Simple(MVT::F128) {
             return None;
         }
         // A compare whose subtraction already exists is better emitted first.
@@ -123,7 +141,11 @@ fn emit_conditional_comparison(
     out_cc: u128,
 ) -> SDValue {
     let mut opcode = a64::CCMP;
-    if let Some(imm) = signed_constant(dag, rhs) {
+    // No `f16` without full FP16 or `bf16` reaches here: type legalization has
+    // promoted them.
+    if dag.value_type(lhs).is_floating_point() {
+        opcode = a64::FCCMP;
+    } else if let Some(imm) = signed_constant(dag, rhs) {
         if imm < 0 && imm > -32 {
             opcode = a64::CCMN;
             let vt = dag.value_type(rhs);
@@ -157,10 +179,26 @@ fn emit_conjunction_rec(
     if opcode == ISD::SetCC {
         let (lhs, rhs) = (dag.operand(val, 0), dag.operand(val, 1));
         let mut code = cond_of(dag, dag.operand(val, 2));
+        let is_float = dag.value_type(lhs).is_floating_point();
         if negate {
-            code = code.inverse_integer();
+            code = if is_float { code.inverse_float() } else { code.inverse_integer() };
         }
-        *out_cc = int_cc(code, dag.is_null_constant(rhs));
+        let (mut cc_op, mut predicate) = (cc_op, predicate);
+        if is_float {
+            let (first, extra) = fp_cc_and(code);
+            *out_cc = first;
+            // A condition one flag test cannot say is two compares.
+            if extra != cc::AL {
+                let extra_cmp = match cc_op {
+                    None => emit_comparison(dag, lhs, rhs, code),
+                    Some(previous) => emit_conditional_comparison(dag, lhs, rhs, code, previous, predicate, extra),
+                };
+                cc_op = Some(extra_cmp);
+                predicate = extra;
+            }
+        } else {
+            *out_cc = int_cc(code, dag.is_null_constant(rhs));
+        }
         return match cc_op {
             None => emit_comparison(dag, lhs, rhs, code),
             Some(previous) => emit_conditional_comparison(dag, lhs, rhs, code, previous, predicate, *out_cc),
