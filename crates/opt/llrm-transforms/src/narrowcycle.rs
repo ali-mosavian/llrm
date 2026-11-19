@@ -42,6 +42,17 @@
 //!
 //! # See also
 //! [`crate::narrowiv`], [`crate::trunc_inst_combine`].
+//!
+//! # Example
+//! A 32-bit phi cycle that is only read in 16 bits is carried as a 16-bit cycle.
+//!
+//! ```text
+//! %p = phi i32 [ %a, %e ], [ %r, %l ]       ; read only through & 0xFFFF
+//! %s = shl i32 %p, 1
+//! =>
+//! %p = phi i16 [ %a.n, %e ], [ %r, %l ]
+//! %s = shl i16 %p, 1
+//! ```
 
 use llrm_analysis::demandedbits::{DemandedBits, Environment};
 use llrm_analysis::ivdescriptors::demanded_width;

@@ -58,6 +58,7 @@ pub fn hoist_region(
     let mut reassociated = Vec::new();
     // Taken once for the loop, at its first float load (DEVIATE LP1-FP).
     let mut float_room: Option<Option<usize>> = None;
+    let mut general_room: Option<Option<usize>> = None;
     for block in loop_blocks_rpo(ctx) {
         // Only the contents of a block outside the subloops: those have been
         // processed.
@@ -76,6 +77,7 @@ pub fn hoist_region(
                 && can_sink_or_hoist_inst(unit, outer, ctx, mssa, aa, flags, safety, inst, true)
                 && is_safe_to_execute_unconditionally(unit, outer, ctx, safety, preheader, inst)
                 && float_load_has_room(unit, outer, ctx, inst, &mut float_room)
+                && speculated_value_has_room(unit, outer, ctx, inst, safety, &mut general_room)
             {
                 ctx.state.moved.borrow_mut().insert(inst, preheader);
                 found.push(Hoist { inst, preheader, guaranteed: safety.is_guaranteed_to_execute(inst) });
@@ -117,6 +119,44 @@ fn float_load_has_room(
     }
     let room = room.get_or_insert_with(|| {
         super::pressure::Pressure::of_class(unit, outer, ctx, super::pressure::Class::Float).map(|held| held.room())
+    });
+    match room {
+        None => true,
+        Some(0) => false,
+        Some(left) => {
+            *left -= 1;
+            true
+        }
+    }
+}
+
+/// DEVIATE LICM-SPEC: whether hoisting `inst`, an integer or pointer value
+/// the loop does not compute on every trip, keeps the loop's held values within
+/// the target's registers (`Tti::licm_prices_speculated_values`). It is held
+/// across every trip to save a computation some trips make.
+fn speculated_value_has_room(
+    unit: &passes::Unit,
+    outer: &Outer,
+    ctx: &LoopCtx,
+    inst: InstId,
+    safety: &LoopSafety,
+    room: &mut Option<Option<usize>>,
+) -> bool {
+    let Some(tti) = outer.target().tti() else { return true };
+    if !tti.licm_prices_speculated_values() || safety.is_guaranteed_to_execute(inst) {
+        return true;
+    }
+    let data = unit.function.instruction(inst);
+    let is_value = !matches!(data.opcode, Opcode::Load { .. })
+        && data.result.is_some_and(|result| {
+            super::pressure::is_one_register_value(unit, unit.function.value(result).ty)
+                && unit.function.users(result).iter().count() == 1
+        });
+    if !is_value {
+        return true;
+    }
+    let room = room.get_or_insert_with(|| {
+        super::pressure::Pressure::of_class(unit, outer, ctx, super::pressure::Class::General).map(|held| held.room())
     });
     match room {
         None => true,

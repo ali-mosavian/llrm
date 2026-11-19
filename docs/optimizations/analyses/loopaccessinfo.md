@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/loopaccessinfo.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/loopaccessinfo.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/loopaccessinfo.rs sha256:daa6ebe74d965f6e5db1016fe52f46dc7f5d102c329c613173350002c0853f43 -->
+<!-- src: crates/opt/llrm-analysis/src/loopaccessinfo.rs sha256:127c83950350fb5cf7c277111133b58fb08b7fc6e799026d24ef630e360f8b7a -->
 
 # loopaccessinfo
 
@@ -33,4 +33,4 @@ debug location on a remark ("Memory location is the same as accessed at"
 is not added), and no vector function database (`VFDatabase`).
 
 ## Used by
-Named by `looploadelim`.
+Named by `interleavedaccess`, `looploadelim`, `loopvectorize`, `loopvectorizelegality`.

@@ -24,6 +24,15 @@
 //!
 //! # Runs
 //! After `FloatFold` (so a load that folds has folded), before `FloatAssign`.
+//!
+//! # Example
+//! The load of `b` moves down to the add that reads it, so the multiply needs no `fxch`.
+//!
+//! ```text
+//! fld a; fld b; fxch; fmul K; faddp
+//!         =>
+//! fld a; fmul K; fld b; faddp
+//! ```
 
 use std::sync::Arc;
 

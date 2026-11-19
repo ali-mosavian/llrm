@@ -11,6 +11,7 @@ use llrm_spike_mf::regalloc::{Assignment, Target as AllocTarget};
 use llrm_spike_mf::tolir::allocate_greedy;
 use llrm_support::hash::HashMap;
 
+use crate::mc::inst::Fill;
 use crate::mc::inst::{FpConvert, Gpr, Inst, Shift, Target, Vreg, Wide};
 use crate::mc::visit::{Reg, RegRef, Role};
 use crate::mfunc::{MFunc, Op};
@@ -384,6 +385,9 @@ fn view_with(
                     op,
                     Op::Imm { .. }
                         | Op::I(Inst::FpMoveImm { .. } | Inst::Adr { .. })
+                        // `MOVIv2d_ns`:
+                        // `isReMaterializable`, `isAsCheapAsAMove`.
+                        | Op::I(Inst::VectorFill { fill: Fill::Zero | Fill::Mask(_), .. })
                         | Op::I(Inst::MoveWide { op: Wide::Zero | Wide::Not, .. })
                 );
             inst.invariant_load = matches!(
@@ -394,7 +398,13 @@ fn view_with(
                 inst.memory =
                     Some(crate::lir_body::memref_of(mem, mmo, matches!(access, Inst::Store { .. }), &mut symbols));
             }
-            inst.cheap_as_move = zero || cheap_alu(&op) || matches!(op, Op::Imm { .. } | Op::I(Inst::MoveWide { .. }));
+            inst.cheap_as_move = zero
+                || cheap_alu(&op)
+                || matches!(
+                    op,
+                    Op::Imm { .. }
+                        | Op::I(Inst::MoveWide { .. } | Inst::VectorFill { fill: Fill::Zero | Fill::Mask(_), .. })
+                );
             insts.push(inst);
         }
         lir.blocks.push(Block { id: at as u32, insts, phis: Vec::new() });

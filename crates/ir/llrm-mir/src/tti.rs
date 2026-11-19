@@ -692,6 +692,15 @@ pub trait Tti {
         false
     }
 
+    /// A general register holds a vector of lanes narrower than itself: the
+    /// vectorizer widens bitwise loops by it, and the vectors are lowered to
+    /// the integer of their width before selection
+    /// (`crate::vectorlower`, gcc's `tree-vect-generic.cc`). Where the target
+    /// has vector registers the vectors stay.
+    fn word_vectors(&self) -> bool {
+        false
+    }
+
     /// `getRegisterBitWidth(RGK_Scalar)`: the bits of a scalar register, 0
     /// where the target does not say.
     fn scalar_register_bits(&self) -> u32 {
@@ -1938,6 +1947,17 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE UNROLL-THROUGH-CALLS (`loopunrollpass.rs`): whether the full
+    /// unroll's cost analysis goes on past a call, which it prices as one
+    /// instruction the copies keep. The pin gives up at the first call, so a
+    /// loop that calls is unrolled only under its size threshold; what the
+    /// unrolling folds around the call (a `switch` on the counter) is not
+    /// counted. gcc's `tree_estimate_loop_size` prices calls and counts what
+    /// becomes constant, and unrolls such a loop completely. Off by default.
+    fn unroll_prices_calls(&self) -> bool {
+        false
+    }
+
     /// DEVIATE UP1-CALL at -O1: the size-neutral rule above prices a call the
     /// copies keep as one instruction with its operands, where the pin's
     /// analysis gives up on a call (gcc's `estimate_num_insns` prices it).
@@ -2008,6 +2028,11 @@ pub trait Tti {
 
     /// DEVIATE BFS-1: `Tuning::cold_site_ignores_sinks`.
     fn cold_site_ignores_sinks(&self) -> bool {
+        false
+    }
+
+    /// DEVIATE LASTCALL-COLD: `Tuning::inline_last_call_in_cold_site`.
+    fn inline_last_call_in_cold_site(&self) -> bool {
         false
     }
 
@@ -3256,6 +3281,13 @@ pub trait Tti {
     /// the pin promotes without a cap.
     fn licm_register_limit(&self) -> Option<u32> {
         Some(self.number_of_gpr_registers())
+    }
+
+    /// DEVIATE LICM-SPEC: whether LICM prices the hoisting of an integer or
+    /// pointer value the loop computes on some trips only, as it does a
+    /// promotion (`licm_register_limit`). False: the pin's, which hoists it.
+    fn licm_prices_speculated_values(&self) -> bool {
+        false
     }
 
     /// DEVIATE LP1-FP: the values LICM (`licm/pressure.rs`) and GVN

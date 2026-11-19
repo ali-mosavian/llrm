@@ -82,3 +82,15 @@ fn a_restore_in_a_loop_writes_the_stack_pointer_register() {
     let call = h.iter().position(|line| line == "call\tuse").expect("the call");
     assert_eq!(h[call + 1..call + 3], ["local.get\t1", "local.set\t1"], "{h:?}");
 }
+
+/// The save used in another block than the alloca read the register the
+/// alloca then wrote (`peephole_opt` read through a copy of `SP32`): each trip
+/// of a VLA loop saved the new stack pointer, `stackrestore` restored nothing
+/// and the alloca address fell 16 bytes a trip (wasm32 -O1/-O2/-Os/-Oz;
+/// vla_callee_constant +2 B). The pin saves the register from before the sub.
+#[test]
+fn a_save_read_in_another_block_is_the_stack_pointer_from_before_the_alloca() {
+    let k = body(&assembly("-O1"), "k");
+    let sub = k.iter().position(|line| line == "i32.sub").expect("the alloca's sub");
+    assert_eq!(k[sub + 1..sub + 5], ["local.tee\t4", "drop", "local.get\t1", "local.set\t5"], "{k:?}");
+}

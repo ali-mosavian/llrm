@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/runtimecheck.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/runtimecheck.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/runtimecheck.rs sha256:b032fdfab45b497d9daf0eb039b8318f7b4d2b97e98d567b6ed8e765bc92104c -->
+<!-- src: crates/opt/llrm-analysis/src/runtimecheck.rs sha256:3709ba525f63fd39b3e6c0e64d8ac15ea426eda6e6f3f4c35254ff44da9a5790 -->
 
 # runtimecheck
 
@@ -32,4 +32,4 @@ dereferenceable bytes are the value's own. Exit: operand bundles in MIR.
 none). Exit: PredicatedScalarEvolution, with `replaceSymbolicStrideSCEV`.
 
 ## Used by
-Named by `accessanalysis`, `laa_testing`, `loopaccessinfo`, `looploadelim`, `loopversioning`, `memdepchecker`, `runtimechecks`.
+Named by `accessanalysis`, `laa_testing`, `loopaccessinfo`, `loopderef`, `looploadelim`, `loopvectorizeskeleton`, `loopversioning`, `memdepchecker`, `runtimechecks`.

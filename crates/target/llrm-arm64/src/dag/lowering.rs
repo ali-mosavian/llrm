@@ -95,7 +95,7 @@ pub(super) fn fp_cc(code: CondCode) -> (u128, Option<u128>) {
 }
 
 /// `emitComparison` for floats: `FCMP`, whose result is the flags.
-fn emit_fcmp(
+pub(super) fn emit_fcmp(
     dag: &mut SelectionDAG,
     lhs: SDValue,
     rhs: SDValue,
@@ -253,6 +253,9 @@ pub(super) fn emit_comparison(
     code: CondCode,
 ) -> SDValue {
     let vt = dag.value_type(lhs);
+    if vt.is_floating_point() {
+        return emit_fcmp(dag, lhs, rhs);
+    }
     let mut opcode = a64::SUBS;
     if is_cmn(dag, rhs, code) {
         opcode = a64::ADDS;
