@@ -994,6 +994,20 @@ impl Printer<'_> {
                     _ => self.push(format!("jp {}, {target}", op[2..].to_lowercase())),
                 }
             }
+            // The carry is set for a pair at most zero: `scf` stands for the zero (which `or` left clear), the sign
+            // is the carry of doubling the high byte. 7 B where the biased subtract is 13.
+            "TSTP16" => {
+                let (low, high) = lanes(self.register(inst, 1)?)?;
+                let (low, high) = (name(low), name(high));
+                let skip = format!("{}$", self.out.iter().filter(|line| !matches!(line, Line::Loc(_))).count());
+                self.push(format!("ld a, {high}"));
+                self.push(format!("or a, {low}"));
+                self.push("scf");
+                self.push(format!("jr z, {skip}"));
+                self.push(format!("ld a, {high}"));
+                self.push("add a, a");
+                self.out.push(Line::Label(skip));
+            }
             "CALL" => {
                 let Some(Operand::Symbol(symbol, _)) = inst.operands.first() else {
                     return Err("a CALL that names no symbol".to_owned());
