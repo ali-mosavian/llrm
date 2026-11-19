@@ -31,6 +31,7 @@
 use llrm_sdag::lowering::TypeAction;
 
 use super::{LegalizeError, SDValue, TypeLegalizer};
+use crate::backend::selectiondag::SelectionDAG;
 use crate::backend::selectiondag::dag::{MemInfo, NodeData};
 use crate::backend::selectiondag::isd::ISD;
 use crate::backend::selectiondag::mvt::{EVT, MVT};
@@ -385,6 +386,57 @@ impl TypeLegalizer<'_> {
                     let undef = self.dag.get_undef(lane_vt);
                     ops.resize(widen_vt.lanes() as usize, undef);
                     self.dag.get_build_vector(widen_vt, &ops)
+                }
+            }
+            // `WidenVecRes_Convert`: the conversion of the input widened to the
+            // result's lane count where that is a legal vector (padded with
+            // undefined lanes, or cut down), else the lanes one by one and
+            // undefined ones.
+            op if super::vector::is_extend(op) || super::vector::is_conversion(op) => {
+                let ops = self.dag.node(value).ops.clone();
+                let (input, rest) = (ops[0], &ops[1..]);
+                let wide_input = self.widen_operand(input);
+                let input_vt = self.dag.value_type(wide_input);
+                let in_widen_vt = match self.dag.value_type(input).element() {
+                    EVT::Simple(lane) => MVT::vector(lane, widen_vt.lanes()).map(EVT::Simple),
+                    _ => None,
+                };
+                let mut sized = None;
+                if let Some(in_widen_vt) = in_widen_vt {
+                    if input_vt == in_widen_vt {
+                        sized = Some(wide_input);
+                    } else if self.tli.types.is_type_legal(in_widen_vt) {
+                        let (wide, narrow) = (widen_vt.lanes(), input_vt.lanes());
+                        if wide % narrow == 0 {
+                            let undef = self.dag.get_undef(input_vt);
+                            let mut parts = vec![undef; (wide / narrow) as usize];
+                            parts[0] = wide_input;
+                            sized = Some(self.dag.get_node(ISD::ConcatVectors, in_widen_vt, &parts));
+                        } else if narrow % wide == 0 {
+                            let zero = self.dag.get_constant(0, EVT::I64);
+                            sized = Some(self.dag.get_node(ISD::ExtractSubvector, in_widen_vt, &[wide_input, zero]));
+                        }
+                    }
+                }
+                let convert = |dag: &mut SelectionDAG, ty: EVT, from: SDValue| {
+                    let mut operands = vec![from];
+                    operands.extend_from_slice(rest);
+                    dag.get_node_flags(op, ty, &operands, flags)
+                };
+                if let Some(sized) = sized {
+                    convert(self.dag, widen_vt, sized)
+                } else {
+                    // The pin's "nasty scalar code": only the result's own
+                    // lanes are converted.
+                    let (from_lane, lane_vt) = (input_vt.element(), widen_vt.element());
+                    let undef = self.dag.get_undef(lane_vt);
+                    let mut lanes = vec![undef; widen_vt.lanes() as usize];
+                    for (at, lane) in lanes.iter_mut().enumerate().take(vt.lanes() as usize) {
+                        let index = self.dag.get_constant(at as u128, EVT::I64);
+                        let element = self.dag.get_node(ISD::ExtractElement, from_lane, &[wide_input, index]);
+                        *lane = convert(self.dag, lane_vt, element);
+                    }
+                    self.dag.get_build_vector(widen_vt, &lanes)
                 }
             }
             // `WidenVecRes_BITCAST`, an input that is legal or widens: the same size is a bitcast; a
