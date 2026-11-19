@@ -36,6 +36,7 @@ pub mod z80isd {
     pub const WRAPPER: ISD = ISD::Target(ids::WRAPPER);
     pub const SUBZX: ISD = ISD::Target(ids::SUBZX);
     pub const BRCOND: ISD = ISD::Target(ids::BRCOND);
+    pub const TSTP: ISD = ISD::Target(ids::TSTP);
     pub const SETCC: ISD = ISD::Target(ids::SETCC);
     pub const TSTS: ISD = ISD::Target(ids::TSTS);
     pub const BIT: ISD = ISD::Target(ids::BIT);
@@ -932,6 +933,18 @@ fn compare(
     if matches!(cc, SetLt | SetGe) && dag.constant(op1) == Some(0) {
         let flags = dag.get_node(z80isd::TSTS, EVT::I8, &[op0]);
         return (if cc == SetLt { cond::NZ } else { cond::Z }, flags);
+    }
+    // x > 0 is x >= 1, x <= 0 is x < 1: on a word, the carry of `TSTP` (zero or negative). A byte has `cp`.
+    if vt == EVT::I16 {
+        let at_most_zero = match (cc, dag.constant(op1)) {
+            (SetLe, Some(0)) | (SetLt, Some(1)) => Some(true),
+            (SetGt, Some(0)) | (SetGe, Some(1)) => Some(false),
+            _ => None,
+        };
+        if let Some(at_most_zero) = at_most_zero {
+            let flags = dag.get_node(z80isd::TSTP, EVT::I8, &[op0]);
+            return (if at_most_zero { cond::C } else { cond::NC }, flags);
+        }
     }
     // `(x & (1 << n)) == 0` is `bit n, x`: the Z flag is set when the bit is clear. X86's `LowerAndToBT`, on the byte
     // of the word that holds the bit (`bit` has no word form).
