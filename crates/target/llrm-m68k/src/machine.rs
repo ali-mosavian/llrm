@@ -417,8 +417,17 @@ impl Tti for M68k {
     /// -O2: 3894 against 5264 clk). 300 seeds -O2 68020: 669352 -> 516950 B,
     /// the 24 programs unchanged. DEVIATE: the pin's target sets none. Exit:
     /// review 2026-11-20.
+    ///
+    /// DEVIATE UNROLL-BAR-68000 (owner wasm-3, exit 2026-11-26): the 68000 at
+    /// -O2/-O3 takes 600, twice the pin's -O3 bar. It has no cache and bytes
+    /// are free at speed (ruling 2026-11-14): over the 54 corpus programs
+    /// whose code moves, 35 cells run faster and 2 slower (long_shift_by_bits,
+    /// +0.06%), the card's at-or-below 41 -> 42. The 68020 keeps 32: its
+    /// 256 B cache holds the rolled loop (word_compares 49581 -> 61030 clk
+    /// unrolled). -O1 and -Os do not read it.
     fn unroll_threshold_overrides(&self) -> (Option<u32>, Option<u32>) {
-        (Some(32), Some(400))
+        let threshold = if self.cpu == crate::dagisel::hooks::Cpu::M68000 { 600 } else { 32 };
+        (Some(threshold), Some(400))
     }
 
     /// -O1, -O2 and -O3 are judged by clocks (user ruling 2026-11-14): a byte
