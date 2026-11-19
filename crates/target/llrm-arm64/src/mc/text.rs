@@ -548,6 +548,9 @@ impl fmt::Display for Inst {
                     None => write!(out, "{name} {}, #0.0", fpr(*rn, *size)),
                 }
             }
+            Inst::FpCondCompare { size, rn, rm, nzcv, cond } => {
+                write!(out, "fccmp {}, {}, #{nzcv}, {cond}", fpr(*rn, *size), fpr(*rm, *size))
+            }
             Inst::FpSelect { size, rd, rn, rm, cond } => {
                 write!(out, "fcsel {}, {}, {}, {cond}", fpr(*rd, *size), fpr(*rn, *size), fpr(*rm, *size))
             }

@@ -218,6 +218,9 @@ pub struct InlineParams {
     /// cold-site test reads the frequency in which failure sinks carry no mass.
     /// Off: the pin's.
     pub cold_site_ignores_sinks: bool,
+    /// DEVIATE LASTCALL-COLD: the `LastCallToStatic` bonus stays at a cold
+    /// call site of a caller optimized for size. Off: the pin's.
+    pub last_call_in_cold_site: bool,
     /// Which target's answers `getInstructionCost` and its kin give (D2).
     pub tti: Tti,
 }
@@ -252,6 +255,7 @@ impl InlineParams {
             recursive_edge_growth: i64::MAX,
             last_call_to_static: true,
             cold_site_ignores_sinks: false,
+            last_call_in_cold_site: false,
             tti: Tti::Generic,
         }
     }
@@ -944,15 +948,14 @@ impl<'a> Analyzer<'a> {
                 match (self.site.tti, kind, from.and_then(|ty| Ty::of(types, ty)), Ty::of(types, operation.ty)) {
                     (Some(tti), Some(kind), Some(src), Some(dst)) => {
                         let cost = tti.cast_cost(kind, dst, src, CostKind::SizeAndLatency);
-                        // BasicTTIImpl.h:1298-1311: the extension of a simple
-                        // load.
+                        // BasicTTIImpl.h:1298-1311: the extension of a load
+                        // (a volatile one too: the pin's `opt` prices the
+                        // `sext` of `load volatile i16` at none, 50 for
+                        // parity/algebra's `bench_algebra` where ours read 70).
                         let of_load = match operation.operands[0] {
                             Operand::Value(value) => match self.callee.value(value).def {
                                 llrm_mir::module::ValueDef::Instruction(def) => {
-                                    matches!(
-                                        self.callee.instruction(def).opcode,
-                                        Opcode::Load { volatile: false, .. }
-                                    )
+                                    matches!(self.callee.instruction(def).opcode, Opcode::Load { .. })
                                 }
                                 llrm_mir::module::ValueDef::Argument(_) => false,
                             },
@@ -1910,7 +1913,9 @@ impl<'a> Analyzer<'a> {
                 {
                     single_bb_percent = 0;
                     vector_percent = 0;
-                    last_call_bonus = 0;
+                    if !(self.params.last_call_in_cold_site && caller_size == CallerSize::OptSize) {
+                        last_call_bonus = 0;
+                    }
                     self.threshold = self.threshold.min(self.params.cold_callsite_threshold);
                 }
             }

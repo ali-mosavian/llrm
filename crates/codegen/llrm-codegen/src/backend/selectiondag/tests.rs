@@ -54,6 +54,7 @@ mod global_address;
 mod i1_branch;
 mod i1_m16;
 mod iminmax;
+mod sext_setcc;
 mod int_to_fp;
 mod ir_order;
 mod known_load;

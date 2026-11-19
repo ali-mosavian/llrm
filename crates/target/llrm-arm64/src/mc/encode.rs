@@ -436,6 +436,14 @@ pub fn encode(inst: &Inst) -> Result<Encoded, Error> {
             };
             0x1E20_2000 | size.field() << 22 | second << 16 | vreg(*rn)? << 5 | u32::from(*signalling) << 4 | zero
         }
+        Inst::FpCondCompare { size, rn, rm, nzcv, cond } => {
+            0x1E20_0400
+                | size.field() << 22
+                | vreg(*rm)? << 16
+                | cond.field() << 12
+                | vreg(*rn)? << 5
+                | field("nzcv", i64::from(*nzcv), 4, false)?
+        }
         Inst::FpSelect { size, rd, rn, rm, cond } => {
             0x1E20_0C00 | size.field() << 22 | vreg(*rm)? << 16 | cond.field() << 12 | vreg(*rn)? << 5 | vreg(*rd)?
         }

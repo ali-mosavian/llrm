@@ -2017,6 +2017,11 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE LASTCALL-COLD: `Tuning::inline_last_call_in_cold_site`.
+    fn inline_last_call_in_cold_site(&self) -> bool {
+        false
+    }
+
     /// `Tuning::inline_o1_weighs_entry`.
     fn inline_o1_weighs_entry(&self) -> bool {
         false
@@ -3262,6 +3267,13 @@ pub trait Tti {
     /// the pin promotes without a cap.
     fn licm_register_limit(&self) -> Option<u32> {
         Some(self.number_of_gpr_registers())
+    }
+
+    /// DEVIATE LICM-SPEC: whether LICM prices the hoisting of an integer or
+    /// pointer value the loop computes on some trips only, as it does a
+    /// promotion (`licm_register_limit`). False: the pin's, which hoists it.
+    fn licm_prices_speculated_values(&self) -> bool {
+        false
     }
 
     /// DEVIATE LP1-FP: the values LICM (`licm/pressure.rs`) and GVN
