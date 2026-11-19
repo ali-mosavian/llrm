@@ -1135,7 +1135,9 @@ fn build(
                     let fixed = text.replacen(&line, &format!("target datalayout = \"{}\"", target.datalayout), 1);
                     std::fs::write(&ir, fixed).map_err(|error| fail(format!("{}: {error}", ir.display())))?;
                 }
-                if text.contains(" asm sideeffect ") {
+                let flat = target.triple.starts_with("i486")
+                    || target.triple.starts_with("i386") && !target.triple.contains("code16");
+                if text.contains(" asm ") && flat || text.contains(" asm sideeffect ") {
                     let mut scratch_number = 0;
                     let mut assemble = |source: &str| -> Result<Vec<u8>, String> {
                         scratch_number += 1;
@@ -1156,10 +1158,12 @@ fn build(
                         }
                         std::fs::read(&b).map_err(|error| error.to_string())
                     };
-                    let translated = inline_asm::translate(
-                        &std::fs::read_to_string(&ir).map_err(|e| fail(e.to_string()))?,
-                        &mut assemble,
-                    )
+                    let source = std::fs::read_to_string(&ir).map_err(|e| fail(e.to_string()))?;
+                    let translated = if flat {
+                        inline_asm::translate_flat(&source, &mut assemble)
+                    } else {
+                        inline_asm::translate(&source, &mut assemble)
+                    }
                     .map_err(|why| fail(format!("{path}: {why}")))?;
                     std::fs::write(&ir, translated).map_err(|error| fail(format!("{}: {error}", ir.display())))?;
                 }

@@ -36,11 +36,27 @@ impl Builder<'_> {
             fixups.push(self.dag.get_target_global_address(pointer, global.0, offset + fixup.addend));
         }
         let mut registers = Vec::new();
+        // The x87 stack's top has no register to copy to: its value is an
+        // operand of the node, which the emitter stores to st(0) just
+        // before the block.
+        let mut x87 = Vec::new();
         for (operand, register) in inputs.iter().zip(&block.inputs) {
             let value = self.get_value(*operand)?;
             let vt = self.dag.value_type(value);
-            registers.push((self.sized_register(self.arch.register_named(register), vt), value));
+            match register.as_str() {
+                "st0" => x87.push(value),
+                "st1" => return Err(Refused("inline assembly that takes st(1) as an input")),
+                _ => registers.push((self.sized_register(self.arch.register_named(register), vt), value)),
+            }
         }
+        // An output in `st0` or `st1`: the top of the x87 stack, read in turn
+        // as a call's float result is (`st1` is what the first read
+        // left under it).
+        let top = self.arch.x87_stack_top();
+        let output_register = |this: &Self, register: &str, vt| match register {
+            "st0" | "st1" => top.map(|one| (one, vt)),
+            _ => Some((this.sized_register(this.arch.register_named(register), vt), vt)),
+        };
         let mut outputs = Vec::new();
         if block.outputs.len() > 1 {
             // several outputs come back as the fields of an aggregate
@@ -53,11 +69,12 @@ impl Builder<'_> {
             }
             for (register, field) in block.outputs.iter().zip(fields) {
                 let vt = self.type_of(field)?;
-                outputs.push((self.sized_register(self.arch.register_named(register), vt), vt));
+                outputs
+                    .push(output_register(self, register, vt).ok_or(Refused("an x87 output on a target without one"))?);
             }
         } else if let Some(register) = block.outputs.first() {
             let vt = self.type_of(instruction.ty)?;
-            outputs.push((self.sized_register(self.arch.register_named(register), vt), vt));
+            outputs.push(output_register(self, register, vt).ok_or(Refused("an x87 output on a target without one"))?);
         }
         let root = self.root();
         let (chain, results) = lower_asm(
@@ -67,6 +84,7 @@ impl Builder<'_> {
             name,
             &fixups,
             &registers,
+            &x87,
             &outputs,
         );
         self.dag.set_root(chain);
