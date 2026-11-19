@@ -2337,6 +2337,13 @@ pub trait Tti {
         false
     }
 
+    /// The target's full-unroll `Threshold` at `-O2` and `-O3`, where bytes are
+    /// free (ruling 2026-11-14); `-O1` and `-Os` do not read it. None: the
+    /// target's `unroll_threshold_overrides`, else the pass's own.
+    fn unroll_threshold_at_speed(&self) -> Option<u32> {
+        None
+    }
+
     /// The target's full-unroll `Threshold` at `-O3` alone; none: the pass's
     /// own (`Tuning::unroll_threshold_at_o3`).
     fn unroll_threshold_at_o3(&self) -> Option<u32> {

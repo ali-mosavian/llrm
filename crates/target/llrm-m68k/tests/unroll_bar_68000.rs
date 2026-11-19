@@ -1,4 +1,4 @@
-//! The 68000's full-unroll bar at -O2/-O3 is 600 (the pin's is 300, ours had
+//! The 68000's full-unroll bar at -O2/-O3 is 400 (the pin's is 300, ours had
 //! 32): `word_compares` -O3 left its 14-trip compare loop rolled at 26
 //! instructions a trip, the 68000 running 8,628 clk where gcc's unrolled copy
 //! ran 6,450. The 68020 keeps 32 (cache: unrolled, word_compares ran 49,581 ->
