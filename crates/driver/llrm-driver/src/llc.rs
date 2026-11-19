@@ -460,6 +460,7 @@ pub fn compiled_dumping(
     }
     let flags = &flags;
     let mut module = llrm_mir::parse::module(&text).map_err(|error| format!("{name}: {error}"))?;
+    module.relocation_pic = flags.relocation_pic();
     if llrm_codegen::support::debug::enabled("mir") {
         // The size of the program as read, before any pass: what the other
         // front ends report as they link their MIR.
