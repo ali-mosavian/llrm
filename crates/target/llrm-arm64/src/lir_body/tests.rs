@@ -200,6 +200,7 @@ pub(super) fn instructions() -> Vec<Inst> {
             FpBinary::MaxNm,
             FpBinary::MinNm,
             FpBinary::Nmul,
+            FpBinary::Abd,
         ] {
             out.push(Inst::FpBinary { op, size, rd: v(0), rn: v(1), rm: v(2) });
         }
