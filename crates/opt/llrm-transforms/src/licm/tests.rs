@@ -247,10 +247,11 @@ fn test_a_load_is_sunk_only_from_a_loop_with_no_defs() {
     assert_eq!(sunk_and_erased(&sinking("  %v = load i16, ptr @g\n  store i16 %i, ptr @h\n")).0, Vec::<String>::new());
 }
 
-/// A GEP the loop's load folds is cloned into the exit that reads it, so what it
-/// reads gains an LCSSA phi user: `hoistGEPAssociation` then sees `src` with two
-/// uses and leaves it. It reassociated anyway and erased `src` under the phi:
-/// "instruction's result still has 1 users" (QuickrBasic stmts.c, m32 -O1).
+/// A GEP the loop's load folds is cloned into the exit that reads it, so what
+/// it reads gains an LCSSA phi user: `hoistGEPAssociation` then sees `src` with
+/// two uses and leaves it. It reassociated anyway and erased `src` under the
+/// phi: "instruction's result still has 1 users" (QuickrBasic stmts.c, m32
+/// -O1).
 #[test]
 fn test_a_gep_cloned_to_the_exit_is_not_reassociated_away_from_under_it() {
     let text = "@buf = global [8 x i8] c\"\\20\\00\\00\\00\\00\\00\\00\\00\"
@@ -595,9 +596,7 @@ fn applied_on(
     let mut passes = llrm_mir::passes::PassManager::default();
     (passes.verify_each, passes.verify_invalidation) = (true, true);
     passes.add(Licm { apply: true, speculate });
-    passes
-        .run_module(&mut after, std::rc::Rc::new(machine))
-        .unwrap_or_else(|error| panic!("{error}\n{text}"));
+    passes.run_module(&mut after, std::rc::Rc::new(machine)).unwrap_or_else(|error| panic!("{error}\n{text}"));
     let inputs: Vec<&[i128]> = inputs.iter().map(Vec::as_slice).collect();
     assert_eq!(results(&after, &inputs), results(&before, &inputs), "{}", printed(&after));
     (printed(&before), printed(&after))

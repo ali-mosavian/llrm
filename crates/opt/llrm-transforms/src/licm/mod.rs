@@ -153,9 +153,12 @@ impl LoopCtx<'_> {
         value: llrm_mir::module::ValueId,
     ) -> bool {
         self.function.users(value).has_one_use()
-            && !self.state.cloned.borrow().iter().any(|clone| {
-                self.function.instruction(clone).operands.contains(&Operand::Value(value))
-            })
+            && !self
+                .state
+                .cloned
+                .borrow()
+                .iter()
+                .any(|clone| self.function.instruction(clone).operands.contains(&Operand::Value(value)))
     }
 
     /// `Loop::contains(BB)`.

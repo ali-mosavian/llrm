@@ -842,10 +842,8 @@ fn hoist_sub_add_association(
         let Operand::Value(value) = operand else { return None };
         let ValueDef::Instruction(def) = function.value(value).def else { return None };
         let Opcode::Binary(bo_op) = function.instruction(def).opcode else { return None };
-        (wanted.contains(&bo_op)
-            && ctx.has_one_use(value)
-            && !ctx.state.gone.borrow().contains(&def))
-        .then_some((def, bo_op))
+        (wanted.contains(&bo_op) && ctx.has_one_use(value) && !ctx.state.gone.borrow().contains(&def))
+            .then_some((def, bo_op))
     };
     let (bo, lv, c1, c2, inv_op, result_op);
     match op {
