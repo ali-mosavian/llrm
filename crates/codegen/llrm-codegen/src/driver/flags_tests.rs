@@ -202,6 +202,15 @@ fn stack_is_data_only_when_asked() {
     assert!(!machine(&["-mstack-is-data", "-mno-stack-is-data"]));
 }
 
+/// `-mstack-alignment=N` is a power of two of at least 4, absent unless given.
+#[test]
+fn stack_alignment_is_a_power_of_two_when_given() {
+    assert_eq!(parsed(&[]).unwrap().stack_alignment, None);
+    assert_eq!(parsed(&["-mstack-alignment=16"]).unwrap().stack_alignment, Some(16));
+    assert!(parsed(&["-mstack-alignment=12"]).is_err());
+    assert!(parsed(&["-mstack-alignment=x"]).is_err());
+}
+
 /// Far zero data is stored unless -mfar-bss says the start-up zeroes it: a
 /// start-up that does not (Borland's, Open Watcom's) would otherwise read
 /// whatever DOS left there.

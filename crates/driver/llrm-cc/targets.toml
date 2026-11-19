@@ -196,7 +196,7 @@ description = "x86-m32"
 triple = "i486-unknown-linux-gnu"
 datalayout = "{datalayout:x86-m32}"
 clang = ["-target", "i486-unknown-linux-gnu", "-fno-pic", "-fno-stack-protector", "-fno-asynchronous-unwind-tables"]
-llc = ["-fobject-format=elf", "-mabi=sysv"]
+llc = ["-fobject-format=elf", "-mabi=sysv", "-mstack-alignment=16"]
 object = "elf"
 link = ["clang", "-m32", "-no-pie", "-o", "{output}", "{objects}", "-lm"]
 run = []
