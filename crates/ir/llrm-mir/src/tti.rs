@@ -1943,6 +1943,17 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE UNROLL-THROUGH-CALLS (`loopunrollpass.rs`): whether the full
+    /// unroll's cost analysis goes on past a call, which it prices as one
+    /// instruction the copies keep. The pin gives up at the first call, so a
+    /// loop that calls is unrolled only under its size threshold; what the
+    /// unrolling folds around the call (a `switch` on the counter) is not
+    /// counted. gcc's `tree_estimate_loop_size` prices calls and counts what
+    /// becomes constant, and unrolls such a loop completely. Off by default.
+    fn unroll_prices_calls(&self) -> bool {
+        false
+    }
+
     /// DEVIATE UP1-CALL at -O1: the size-neutral rule above prices a call the
     /// copies keep as one instruction with its operands, where the pin's
     /// analysis gives up on a call (gcc's `estimate_num_insns` prices it).
