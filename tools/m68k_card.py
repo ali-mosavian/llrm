@@ -4,7 +4,7 @@
 m68k_card.py CLK.tsv [CLK.tsv ...]      (cpu, program, level, ours_B, ours_clk, gcc_B, gcc_clk, ours_lib, gcc_lib per row)
 
 Bytes are whole-program: the object's code plus the compiler-rt members it links (`ours_lib`, `gcc_lib`: gcc calls `__ashldi3` where ours
-inlines the shift, shift64_variable -Os: 416 B code against gcc's 330 B code + 216 B of libcalls). A row without the lib columns counts code only.
+inlines the shift, shift64_variable -Os: 416 B code against gcc's 330 B code + 216 B of libcalls). A row without the lib columns counts code only; an empty lib cell (the link failed) leaves that side's bytes unmeasured.
 
 A cell counts at or under the best when each judged axis is at most 1% over it (user ruling 2026-11-14, counted rule of oversight):
 -Os judges bytes AND clocks, -O1/-O2/-O3 judge clocks (bytes are reported, not counted). The reference is gcc: the corpus matrix has no
@@ -52,8 +52,8 @@ def excess(level, ours_bytes, ours_clocks, gcc_bytes, gcc_clocks):
 
 
 def whole(code, library):
-    """Code plus library bytes; None (unmeasured) when the code is."""
-    return None if code is None else code + library
+    """Code plus library bytes; None (unmeasured) when either is: a link that failed on a helper the archive lacks leaves the whole-program size unknown, not the code alone (widening_multiply -Os read ours 1587 B + 1366 B of library against gcc's bare 339 B)."""
+    return None if code is None or library is None else code + library
 
 
 def read(paths):
@@ -65,7 +65,7 @@ def read(paths):
                 continue
             cpu, program, level = cells[:3]
             ours_bytes, ours_clocks, gcc_bytes, gcc_clocks = (number(cell) for cell in cells[3:7])
-            ours_lib, gcc_lib = (number(cells[at]) or 0 if len(cells) > at else 0 for at in (7, 8))
+            ours_lib, gcc_lib = (number(cells[at]) if len(cells) > at else 0 for at in (7, 8))
             rows.append((cpu, program, level, whole(ours_bytes, ours_lib), ours_clocks, whole(gcc_bytes, gcc_lib), gcc_clocks))
     return rows
 
