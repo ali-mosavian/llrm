@@ -534,7 +534,8 @@ impl fmt::Display for Inst {
                 write!(out, "{} v{}.{suffix}, v{}.{suffix}", op.mnemonic(), rd.0, rn.0)
             }
             Inst::FpBinary { op, size, rd, rn, rm } => {
-                let name = ["fmul", "fdiv", "fadd", "fsub", "fmax", "fmin", "fmaxnm", "fminnm", "fnmul", "fabd"][*op as usize];
+                let name =
+                    ["fmul", "fdiv", "fadd", "fsub", "fmax", "fmin", "fmaxnm", "fminnm", "fnmul", "fabd"][*op as usize];
                 write!(out, "{name} {}, {}, {}", fpr(*rd, *size), fpr(*rn, *size), fpr(*rm, *size))
             }
             Inst::FpFused { op, size, rd, rn, rm, ra } => {
