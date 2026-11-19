@@ -41,6 +41,17 @@
 //! defaults to true, `TargetPassConfig.cpp` L278), so no pipeline slot holds
 //! it. Where the pin runs it, it is after `ExpandReductions` in
 //! `addIRPasses`.
+//!
+//! # Example
+//! A select whose branch form is cheaper becomes a branch and a phi, with a frozen condition.
+//!
+//! ```text
+//! %s = select i1 %c, %a, %b
+//! =>
+//! %c.frozen = freeze i1 %c
+//! br i1 %c.frozen, label %end, label %select.false
+//! end: %s = phi [%a, %start], [%b, %select.false]
+//! ```
 
 use std::collections::VecDeque;
 

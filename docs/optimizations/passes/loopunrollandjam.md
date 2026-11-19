@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/loopunrollandjam.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/loopunrollandjam.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/loopunrollandjam.rs sha256:cd3bca7a353a7929209b90eccb0f502d07989306617fb11b597c70c44162adeb -->
+<!-- src: crates/opt/llrm-transforms/src/loopunrollandjam.rs sha256:c362bc4f6eacfb04a2effa20d8e3a205a38e6950c21e60aa5a832f6daa5fa9fb -->
 
 # loopunrollandjam
 
@@ -53,6 +53,11 @@ load that does not move with the outer one, or the user asked.
   load and store of a cell the others touch; gcc folds them. The pin never
   forms the shape (`-O3` leaves the jam off), so no pin output shows it.
   Exit: none.
+- D9 (UJ-EARLY, owner arm64-vec, exit 2026-12-01): a second run, before the
+  vectorizer, on a target with vector registers. GCC's `pass_unroll_jam`
+  runs before its vectorizer; after the pin's (l.1474) a nest's inner loop is
+  a vector loop and its remainder, two loops, and the jam refuses it. particle
+  -O3 (arm64): 16,743 instructions run, 11,249 jammed first (gcc 12,539).
 - D2: no loop metadata is made: not `llvm.loop.unroll_and_jam.followup_*`,
   not `setLoopAlreadyUnrolled` (a function pass cannot add metadata nodes),
   not `llvm.loop.unroll.disable` on the epilog. llrm has no partial or

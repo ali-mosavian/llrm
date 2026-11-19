@@ -25,6 +25,18 @@
 //! where the target gives a width, at -O2 and -O3: at -O1 and -Os the libcall's
 //! pushes are fewer bytes than the extensions the narrow divide needs (div8_os
 //! 68000: +20 B at both, -14% and -38% clocks).
+//!
+//! # Example
+//! A divide whose operands ScalarEvolution proves to be 0..255 is done in 8 bits.
+//!
+//! ```text
+//! %q = udiv i32 %a, %b        ; %a, %b in 0..255
+//! =>
+//! %x = trunc i32 %a to i8
+//! %y = trunc i32 %b to i8
+//! %d = udiv i8 %x, %y
+//! %q = zext i8 %d to i32
+//! ```
 
 use llrm_analysis::scev::analysis::ScevSession;
 use llrm_mir::edit::Position;
