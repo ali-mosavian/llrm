@@ -1053,6 +1053,10 @@ impl Tti for X86 {
         self.tuning.cold_site_ignores_sinks
     }
 
+    fn inline_last_call_in_cold_site(&self) -> bool {
+        self.tuning.inline_last_call_in_cold_site
+    }
+
     fn unroll_object_bound(&self) -> Option<u32> {
         self.tuning.unroll_object_bound
     }
