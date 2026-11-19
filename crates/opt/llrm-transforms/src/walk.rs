@@ -331,6 +331,7 @@ impl ProgramPass for Walk {
             last_call_to_static: self.inline.last,
             o1_bound: !self.speed_rate,
             cold_site_ignores_sinks: program.target.tti().is_some_and(|tti| tti.cold_site_ignores_sinks()),
+            last_call_in_cold_site: program.target.tti().is_some_and(|tti| tti.inline_last_call_in_cold_site()),
             ..crate::inlinecost::InlineParams::from_level(if self.inline.limit >= 250 { 3 } else { 2 })
         };
         // The target's tuning table.
