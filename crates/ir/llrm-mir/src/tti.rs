@@ -2178,6 +2178,14 @@ pub trait Tti {
         false
     }
 
+    /// Whether `correlatedpredicates` runs: a sum of selects on predicates of one operand pair
+    /// becomes one value of the pair's order. DEVIATE CORR-PRED (owner wasm-3, exit 2026-12-17):
+    /// the pin has no such pass; on where a target has no conditional move to make the selects
+    /// cheap.
+    fn folds_correlated_predicates(&self) -> bool {
+        false
+    }
+
     /// `Tuning::select_optimize_penalty`: `SelectOptimize` runs (the pin's
     /// `llc` leaves it off) and a mispredicted branch costs this many
     /// clocks.

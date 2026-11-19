@@ -258,6 +258,13 @@ fn size_letter(bits: u32) -> Option<char> {
 }
 
 impl Tti for M68k {
+    /// No conditional move: a select is a branch, so a sum of selects on one pair's compares is
+    /// worth one decision on the pair's order (`word_compares` -O2 ran 49581 clk at 68020 against
+    /// gcc's 37926). DEVIATE CORR-PRED (owner wasm-3, exit 2026-12-17).
+    fn folds_correlated_predicates(&self) -> bool {
+        true
+    }
+
     /// The pin's M68k has no FP register class: `FADD` is not legal on `float`
     /// or `double`, so `getFPOpCost` is `TCC_Expensive` (every float
     /// operation is a soft-float call).

@@ -2014,6 +2014,10 @@ pub fn recorded(
     if !applied.options.prefers_size() && applied.options.wanted("cgpcondsplit") {
         manager.add(crate::cgpcondsplit::CondSplit);
     }
+    // DEVIATE CORR-PRED (owner wasm-3, exit 2026-12-17): where the target asks.
+    if applied.options.wanted("correlatedpredicates") {
+        manager.add(crate::correlatedpredicates::CorrelatedPredicates);
+    }
     // DEVIATE SELOPT-MINMAX (owner x86-m32-b, exit 2026-12-20): before the arms
     // are sunk.
     if applied.options.prices_bytes() && applied.options.wanted("selectoptimize") {
