@@ -633,9 +633,10 @@ impl Collection<'_, '_> {
             // model prices below `dec; je` (x_adler -O2: 47972 -> 50976
             // clocks).
             let counter_alone = base.scaled_reg.is_none() && base.base_regs.len() == 1;
-            let odd = self.tti.lsr_scales_zero_compare_past_overflow()
-                && ((factor & 1 == 1 && counter_alone)
-                    || (!self.size && self.factor_keeps_zero(se, cx, &base, factor, bits)));
+            let odd = (self.tti.lsr_scales_zero_compare_past_overflow() && factor & 1 == 1 && counter_alone)
+                || (self.tti.lsr_scales_even_zero_compare()
+                    && !self.size
+                    && self.factor_keeps_zero(se, cx, &base, factor, bits));
             // No base register may overflow when multiplied.
             for i in 0..f.base_regs.len() {
                 f.base_regs[i] = se

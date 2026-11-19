@@ -805,6 +805,21 @@ impl Tti for M68k {
         true
     }
 
+    /// The pin's odd-factor `GenerateICmpZeroScales`: an exit compare is scaled
+    /// by an odd factor only where `getExactSDiv` proves the product does not
+    /// wrap. With LG1 the exit test of a loop that also steps `3n` moved to
+    /// that counter and kept both live (loop_countdown_sum 68020 -O2: `moveq;
+    /// cmp; bne` and a fourth data register where the pin tests `n`). LG2
+    /// (even factors) stays: a byte-indexed copy loop counts by 2 on one
+    /// register (loop_copy_directions -Os +40 B without it).
+    fn lsr_scales_zero_compare_past_overflow(&self) -> bool {
+        false
+    }
+
+    fn lsr_scales_even_zero_compare(&self) -> bool {
+        true
+    }
+
     /// DEVIATE 19: `addi`/`subi`/`addq` and `cmpi` take any 32-bit immediate;
     /// the pin's M68k lowering keeps the base class's `false`. Exit
     /// 2026-11-12.

@@ -2222,6 +2222,13 @@ pub trait Tti {
         true
     }
 
+    /// DEVIATE LG2 alone: the even-factor half of
+    /// [`Tti::lsr_scales_zero_compare_past_overflow`], which a target can keep
+    /// where it turns the odd half (LG1) off. Follows it by default.
+    fn lsr_scales_even_zero_compare(&self) -> bool {
+        self.lsr_scales_zero_compare_past_overflow()
+    }
+
     /// `Tuning::ipsccp_widen_keeps_sign`.
     fn ipsccp_widen_keeps_sign(&self) -> bool {
         false
