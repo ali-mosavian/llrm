@@ -1855,9 +1855,12 @@ impl Builder<'_> {
     /// `visitCall` through `LowerCallTo` and X86's `LowerCall`, for a direct
     /// call of a function whose arguments and result fit single registers or
     /// the stack: `callseq_start`, the stack stores, the register copies,
-    /// An exchange `llrm_mir::atomic::lowered` left: `atomicrmw xchg`, or a
-    /// store that must be ordered, is `ATOMIC_SWAP`. The machine locks `xchg`
-    /// without asking, so every ordering is met.
+    /// What `llrm_mir::atomic::lowered` left for x86: `atomicrmw xchg`, or a
+    /// store that must be ordered, is `ATOMIC_SWAP` (the machine locks `xchg`
+    /// without asking, so every ordering is met); `add`, `sub`, `and`, `or` and
+    /// `xor` are `ATOMIC_LOAD_*` and a `cmpxchg` is `ATOMIC_CMP_SWAP_WITH_SUCCESS`
+    /// (`visitAtomicRMW`, `visitAtomicCmpXchg`), which the target's tables
+    /// select as `lock xadd`, `lock add` and `lock cmpxchg`.
     fn visit_atomic(
         &mut self,
         instruction: &llrm_mir::module::Instruction,
@@ -1869,9 +1872,9 @@ impl Builder<'_> {
             return self.visit_native_atomic(instruction, info);
         }
         let (pointer, value) = match info.kind {
-            AtomicKind::Rmw(RmwOp::Xchg) => (arguments[0], arguments[1]),
+            AtomicKind::Rmw(_) | AtomicKind::CmpXchg { .. } => (arguments[0], arguments[1]),
             AtomicKind::Store => (arguments[1], arguments[0]),
-            _ => return Err(Refused("an atomic other than an exchange")),
+            _ => return Err(Refused("an atomic other than a store or a locked read-modify-write")),
         };
         if self.operand_type(pointer)? == MVT::Far.into() {
             return Err(Refused("an atomic access through a far pointer"));
@@ -1880,10 +1883,28 @@ impl Builder<'_> {
         let (src, ptr) = (self.get_value(value)?, self.get_value(pointer)?);
         let mem = self.mem_info(ty, info.align, true, pointer)?;
         let root = self.root();
-        let swap = self.dag.get_atomic_swap(root, ptr, src, mem);
-        self.dag.set_root(SDValue { node: swap.node, res: 1 });
+        let (node, chain) = match info.kind {
+            AtomicKind::Rmw(RmwOp::Xchg) | AtomicKind::Store => (self.dag.get_atomic_swap(root, ptr, src, mem), 1),
+            AtomicKind::Rmw(op) => {
+                let isd = match op {
+                    RmwOp::Add => ISD::AtomicLoadAdd,
+                    RmwOp::Sub => ISD::AtomicLoadSub,
+                    RmwOp::And => ISD::AtomicLoadAnd,
+                    RmwOp::Or => ISD::AtomicLoadOr,
+                    RmwOp::Xor => ISD::AtomicLoadXor,
+                    _ => return Err(Refused("an atomic read-modify-write that needs a compare-exchange loop")),
+                };
+                (self.dag.get_atomic_rmw(isd, root, ptr, src, mem), 1)
+            }
+            AtomicKind::CmpXchg { .. } => {
+                let new = self.get_value(arguments[2])?;
+                (self.dag.get_atomic_cmp_swap(Some(EVT::I1), root, ptr, src, new, mem), 2)
+            }
+            AtomicKind::Load | AtomicKind::Fence => unreachable!("refused above"),
+        };
+        self.dag.set_root(SDValue { node: node.node, res: chain });
         if let Some(result) = instruction.result {
-            self.set_value(result, swap);
+            self.set_value(result, node);
         }
         Ok(())
     }
