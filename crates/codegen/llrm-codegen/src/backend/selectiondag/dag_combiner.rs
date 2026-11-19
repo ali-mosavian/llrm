@@ -5072,6 +5072,26 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         } else {
             return None;
         };
+        // the half multiply reads the low half of `x`: what extends it is dead, unless another user keeps it
+        // (divs of the same `x` then needs the extension and the copy of `x` it leaves is a live range more)
+        let sole_user = self.dag.has_one_use(x.node);
+        let x = match self.dag.opcode(x) {
+            ISD::SignExtendInReg if sole_user => {
+                let NodeData::ValueType(inner) = self.dag.node(self.dag.operand(x, 1)).data else { return None };
+                if inner.size_in_bits() >= narrow { self.dag.operand(x, 0) } else { x }
+            }
+            ISD::SignExtend if sole_user => {
+                let src = self.dag.operand(x, 0);
+                // a load keeps its own extension: `any_extend (load)` is the zero-extending load (`moveq #0` and
+                // a `move.w` with no post-increment), where `sext (load)` post-increments and `ext.l`s
+                if self.dag.value_type(src).size_in_bits() >= narrow && self.dag.opcode(src) != ISD::Load {
+                    self.dag.get_node(ISD::AnyExtend, vt, &[src])
+                } else {
+                    x
+                }
+            }
+            _ => x,
+        };
         let low = self.dag.get_node(ISD::Truncate, half.half, &[y]);
         Some(self.dag.get_node(ISD::Machine(opcode), vt, &[x, low]))
     }
