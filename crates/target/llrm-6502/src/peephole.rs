@@ -175,19 +175,30 @@ pub fn run_pair(asm: &Asm) -> (Asm, Asm) {
     if tail_copied {
         run_prefix(&mut copied);
     }
-    let finish = |known_loads: bool| {
-        let mut plain = base.clone();
-        run_suffix(&mut plain, known_loads);
-        if tail_copied {
-            let mut with_copy = copied.clone();
-            run_suffix(&mut with_copy, known_loads);
-            if code_bytes(&with_copy) < code_bytes(&plain) {
-                return with_copy;
-            }
+    // The two texts differ only by `drop_known_loads`, in the head of the
+    // suffix: where it changes nothing the heads are equal and the rest of the
+    // passes, a function of the text alone, runs once for both.
+    let heads = |from: &Asm| {
+        let (mut without, mut with) = (from.clone(), from.clone());
+        known_head(&mut without, false);
+        known_head(&mut with, true);
+        if with == without {
+            let mut rest = without;
+            run_rest(&mut rest);
+            (rest.clone(), rest)
+        } else {
+            run_rest(&mut without);
+            run_rest(&mut with);
+            (without, with)
         }
-        plain
     };
-    (finish(false), finish(true))
+    let (plain_false, plain_true) = heads(&base);
+    if !tail_copied {
+        return (plain_false, plain_true);
+    }
+    let (copy_false, copy_true) = heads(&copied);
+    let pick = |plain: Asm, with_copy: Asm| if code_bytes(&with_copy) < code_bytes(&plain) { with_copy } else { plain };
+    (pick(plain_false, copy_false), pick(plain_true, copy_true))
 }
 
 fn code_bytes(asm: &Asm) -> usize {
@@ -266,6 +277,25 @@ fn run_suffix(
     asm: &mut Asm,
     known_loads: bool,
 ) {
+    known_head(asm, known_loads);
+    run_rest(asm);
+}
+
+thread_local! {
+    static REST_RUNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread ran the passes after `drop_known_loads` (what a
+/// test counts to see they ran once for a pair whose texts are equal there).
+pub fn rest_runs() -> usize {
+    REST_RUNS.with(std::cell::Cell::get)
+}
+
+/// The only passes that read `known_loads`.
+fn known_head(
+    asm: &mut Asm,
+    known_loads: bool,
+) {
     if known_loads {
         drop_known_loads(asm);
     }
@@ -275,6 +305,10 @@ fn run_suffix(
     if known_loads {
         drop_known_loads(asm);
     }
+}
+
+fn run_rest(asm: &mut Asm) {
+    REST_RUNS.with(|runs| runs.set(runs.get() + 1));
     hoist_loop_constant(asm);
     sink_step_to_compare(asm);
     drop_zero_compares(asm);
