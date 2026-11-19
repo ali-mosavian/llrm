@@ -101,6 +101,7 @@ impl ProgramPass for AlwaysInline {
     ) -> Result<(), String> {
         let mut modules = managers(program, analyses);
         let roots = roots(program);
+        let mut changed = false;
         for at in 0..program.modules.len() {
             let wanted = procedures(program, at);
             let private = private(program, at);
@@ -147,6 +148,7 @@ impl ProgramPass for AlwaysInline {
                     if !spliced {
                         break;
                     }
+                    changed = true;
                     modules[at].changed(id);
                     modules[at].invalidate_bodies(
                         &PreservedAnalyses::none().preserve_module::<llrm_analysis::manager::GlobalsAA>(),
@@ -155,6 +157,14 @@ impl ProgramPass for AlwaysInline {
                     live.spliced(module, &mut modules[at], was, now);
                 }
             }
+        }
+        // What the managers worked out is the next pass's start, not lost: the
+        // summaries and globals' facts are made from nothing once for a program.
+        for (at, one) in modules.into_iter().enumerate() {
+            analyses.carry(at, one.carried());
+        }
+        if changed {
+            analyses.invalidate();
         }
         Ok(())
     }

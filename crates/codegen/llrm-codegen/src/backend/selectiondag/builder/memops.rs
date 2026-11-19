@@ -1817,6 +1817,7 @@ impl Builder<'_> {
             values.push(selector);
         }
         let block = llrm_mir::intrinsics::AsmBlock {
+            bits: 16,
             code,
             inputs: names.iter().map(|name| (*name).into()).collect(),
             outputs: Vec::new(),
@@ -1842,6 +1843,7 @@ impl Builder<'_> {
             &name,
             &[],
             &registers,
+            &[],
             &[],
         );
         chain
@@ -1882,6 +1884,7 @@ impl Builder<'_> {
             }
         };
         let block = llrm_mir::intrinsics::AsmBlock {
+            bits: 16,
             code: vec![0xFD, 0xF3, 0xA4, 0xFC],
             inputs: operands.iter().map(|(name, _)| *name).chain(segment.map(|(es, _)| es)).map(Into::into).collect(),
             outputs: Vec::new(),
@@ -1902,6 +1905,7 @@ impl Builder<'_> {
             &name,
             &[],
             &registers,
+            &[],
             &[],
         );
         chain

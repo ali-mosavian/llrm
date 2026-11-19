@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 310 documented, 5 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 311 documented, 5 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -321,5 +321,6 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | vncoercion | A value stored or loaded in one type, made the value a load of another type at a must-aliased address reads: GVN's `VNCoercion`, a translation of [`VNCoercion.cpp`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/VNCoercion.cpp) at d1106deb71cc. | Nothing yet; `gvn`'s load elimination (stage 4 of the GVN port) is the | [vncoercion](vncoercion.md) |
 | walk | The module passes that LLVM runs between the early function pipeline and the function simplification (`ipsccp`, `deadargelim`), so that a body they change goes through the Simplify list once and not again afterwards. | Once per compile, after the Early stage. | [walk](walk.md) |
 | widen | A loop counter read through `sext` or `zext` becomes a counter of the wider type, and the extensions go. | [`crate::simplifyindvar`](simplifyindvar.md) (`simplifyAndExtend`), from [`crate::indvars`](indvars.md). | [widen](widen.md) |
+| widenreturns | Return-value widening: a function only its own module calls, whose every caller extends the result to one wider type, returns the wider value itself. | In the interprocedural step, after dead-argument elimination, on a target | [widenreturns](widenreturns.md) |
 | window | A counted loop's huge pointers are split into windows, inside each of which the loop runs on far pointers that never carry into the segment selector. | Once per function, after LSR chose the pointers (the windows are made over | [window](window.md) |
 | zeromerge | One zero fill for the zeroed locals that follow each other in the entry block. | Once per body, after `extload`, with `wanted("zeromerge")`: on where a | [zeromerge](zeromerge.md) |
