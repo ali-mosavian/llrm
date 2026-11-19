@@ -261,7 +261,10 @@ fn lowered(
     // refused, inlined in a second compile, kept where the finished code is faster within the bytes ceiling
     // (`trial::keeps_within_headroom`). A module with no such call is compiled once.
     let sites = trial::take_refused();
-    let outlined = trial::take_accepted();
+    // A module with refused sites keeps their trial as it was: the callers they share with the accepted sites would
+    // make the accepted sites' bytes verdict cover them (sfm16_float_cmp: the four refused copies lost).
+    let accepted = trial::take_accepted();
+    let outlined = if sites.is_empty() { accepted } else { Vec::new() };
     if llrm_support::debug::enabled("trial") {
         eprintln!("trial inline {level:?}: {} refused site(s), {} accepted site(s)", sites.len(), outlined.len());
     }
