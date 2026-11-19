@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/remidiom.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/remidiom.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/remidiom.rs sha256:cb7fa1cd0b3d79d4d179e999eb4259defe7666869380cddfa7e0dce2b5c03144 -->
+<!-- src: crates/opt/llrm-transforms/src/remidiom.rs sha256:dd2f71768ade5c6dba71aebd584beb350ba1488a579885855996a0114ade2b38 -->
 
 # remidiom
 
@@ -23,6 +23,10 @@ is a second divide). The subtrahend's left operand is `x` itself, or a
 counter ScalarEvolution proves is `trunc x + k` for a constant `k` (`x % c +
 1` becomes `(x + 1) - (x / c) * c` once LSR picks the counter `x + 1`); the
 fold then adds `k` to the remainder.
+
+The same tree with the counter added after the subtraction, `a + (C - (x / c)
+* c)` (LSR's `i % 97 + 2` over the counter `i + 40`: `C` = 3, then `-41`), is
+`x % c + (k + C)` for `a` = `x + k`; the pin's fold does not see it either.
 
 DEVIATE REM1: the pin has this fold in the DAG (`foldRemainderIdiom`,
 [DAGCombiner.cpp#L4215](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L4215)),
