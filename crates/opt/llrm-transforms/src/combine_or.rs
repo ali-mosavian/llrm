@@ -328,6 +328,9 @@ pub fn visit_or(
     if let Some(found) = FOLDS.iter().find_map(|fold| fold(c, inst, op0, op1)) {
         return found;
     }
+    if let Some(found) = crate::combine_reassociate_for_uses::reassociate_for_uses(c, inst) {
+        return found;
+    }
     if let Some(found) = fold_boolean_and_or(c, inst, op0, op1, false, false) {
         return Visit::Replace(found);
     }
