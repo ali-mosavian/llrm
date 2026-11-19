@@ -14,6 +14,15 @@
 //! loop the target's trial size admits; the driver then compiles the program
 //! again with every loop under that size unrolled and keeps whichever
 //! assembly it prices cheaper.
+//!
+//! # Example
+//! A loop the pass refused to unroll is noted; the driver compiles again with it unrolled and keeps the cheaper assembly.
+//!
+//! ```text
+//! pass:   loop refused by the threshold -> noted (ELIGIBLE)
+//! driver: compile 1 (loop kept) vs compile 2 (loop unrolled)
+//!         -> keeps whichever assembly it prices cheaper
+//! ```
 
 use std::cell::{Cell, RefCell};
 

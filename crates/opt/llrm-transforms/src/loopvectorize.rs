@@ -105,6 +105,9 @@ pub struct LoopVectorize {
     /// Widen the loads and stores of interleave groups whatever the target
     /// says of its backend (the unit tests').
     pub interleaves: bool,
+    /// gcc's `vect-cost-model=very-cheap` (VP9 of the planner): no scalar
+    /// epilogue, as at `optsize`.
+    pub very_cheap: bool,
 }
 
 /// What an operand of a widened instruction is.
@@ -2313,10 +2316,12 @@ impl FunctionPass for LoopVectorize {
         }
         let outer = std::rc::Rc::clone(analyses.outer());
         let target = outer.target();
-        if !self.always && !target.has_vector_mir() {
+        let Some(tti) = target.tti() else { return PreservedAnalyses::all() };
+        // A target whose word is a vector register (`Tti::word_vectors`) widens
+        // too: its vectors are lowered to integers before selection.
+        if !self.always && !target.has_vector_mir() && !tti.word_vectors() {
             return PreservedAnalyses::all();
         }
-        let Some(tti) = target.tti() else { return PreservedAnalyses::all() };
         let accumulator_bits = if tti.narrows_reduction_accumulators() { tti.vector_register_bits() } else { 0 };
         if tti.vector_register_bits() == 0 {
             return PreservedAnalyses::all();
@@ -2325,6 +2330,7 @@ impl FunctionPass for LoopVectorize {
             eprintln!("{}", llrm_mir::print::body(unit.context, unit.function));
         }
         let opt_size = has_opt_size(unit.function);
+        let very_cheap = self.very_cheap;
         if opt_size && !tti.vectorizes_at_size() {
             return PreservedAnalyses::all();
         }
@@ -2392,7 +2398,10 @@ impl FunctionPass for LoopVectorize {
                                     .then(|| dep.store_load_forward_safe_distance_in_bits()),
                                 widest_induction_bits: legality.widest_induction_bits.unwrap_or(64),
                                 opt_size,
-                                // `early_exit::choose` prices the plan, not `iteration_cost`; the pin adds no outside work for it.
+                                very_cheap,
+                                // `early_exit::choose` prices the plan,
+                                // not `iteration_cost`; the pin adds no outside
+                                // work for it.
                                 size_priced: false,
                                 has_reductions: false,
                                 reduction_bits: Vec::new(),
@@ -2449,6 +2458,7 @@ impl FunctionPass for LoopVectorize {
                                 .then(|| dep.store_load_forward_safe_distance_in_bits()),
                             widest_induction_bits: legality.widest_induction_bits.unwrap_or(64),
                             opt_size,
+                            very_cheap,
                             size_priced: opt_size && tti.vectorizes_size_priced(),
                             has_reductions: !legality.reductions.is_empty(),
                             reduction_bits: widening
@@ -2531,6 +2541,7 @@ impl FunctionPass for LoopVectorize {
                             .then(|| dep.store_load_forward_safe_distance_in_bits()),
                         widest_induction_bits: legality.widest_induction_bits.unwrap_or(64),
                         opt_size,
+                        very_cheap,
                         size_priced: opt_size && tti.vectorizes_size_priced(),
                         has_reductions: !extracted.interleaving.reductions.is_empty(),
                         reduction_bits: extracted

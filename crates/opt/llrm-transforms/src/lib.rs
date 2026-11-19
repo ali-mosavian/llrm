@@ -76,6 +76,7 @@
 pub mod adce;
 pub mod aggressive_instcombine;
 pub mod algebraic;
+pub mod alwaysinline;
 pub mod alwaysundef;
 pub mod argpromotion;
 #[cfg(test)]
@@ -443,6 +444,7 @@ pub mod slpschedule;
 pub mod slpreduction;
 pub mod slptree;
 pub mod slpvectorize;
+pub mod vectorlower;
 pub mod spares;
 pub mod speculate;
 pub mod spill;

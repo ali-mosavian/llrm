@@ -3143,6 +3143,16 @@ pub fn build_with_places(
                 b.copy(dl, Reg::Phys(reg::A));
                 b.copy(dh, Reg::Phys(reg::X));
             }
+            // 1 << n: the bit is made in a byte and put in its half, no cell
+            // touched (`__shl1hi3`)
+            op::SHLV16 if b.word_constant(name(&o[1])?) == Some([1, 0]) => {
+                let (dl, dh) = b.write_word(name(&o[0])?)?;
+                let count = b.byte(name(&o[2])?)?;
+                b.copy(Reg::Phys(reg::A), count);
+                b.call_runtime("__shl1hi3");
+                b.copy(dl, Reg::Phys(reg::A));
+                b.copy(dh, Reg::Phys(reg::X));
+            }
             code @ (op::MUL16 | op::SDIV16 | op::SREM16 | op::SHLV16 | op::SRLV16 | op::SRAV16) => {
                 // a division and its remainder are one call: the routine leaves
                 // the remainder in `rc6:rc7`
