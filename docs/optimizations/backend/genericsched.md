@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/genericsched.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/genericsched.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/genericsched.rs sha256:6dc7f751bcb6e9c40531b8eaade788e0f93d734ea03ea864ca561558a196f025 -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/genericsched.rs sha256:8c579bd4e611a5bc9ba3123b3304d30d4b72c50c7146c74e7634608103e2d7a9 -->
 
 # genericsched
 
@@ -44,6 +44,17 @@ The enum is [`CandReason`](https://github.com/llvm/llvm-project/blob/d1106deb71c
 The ready queues, the clock and the resource counts of a zone
 (`SchedBoundary`) and the choice of zone (`pickNodeBidirectional`) are the
 callers'; this module is given what they measure.
+
+## Example
+Two ready nodes are compared by the heuristics in order; the first that
+differs decides and its reason is recorded on the winner (the values are
+illustrative; the `RegExcess` case is the one the unit test below checks).
+
+```text
+cand X: REG-EXCESS 0, height 3
+cand Y: REG-EXCESS 2, height 9
+try_candidate(Y, best X)  -> X stays, reason RegExcess  ; height is never looked at
+```
 
 ## Used by
 Named by `genericdriver`, `machinesched`.
