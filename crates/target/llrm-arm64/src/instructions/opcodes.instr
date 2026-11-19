@@ -126,6 +126,7 @@ FCMP{f}rr                cmp      -/x,x         f16,f32,f64              fp_arit
 FCMP{f}rz                cmp      -/x           f16,f32,f64              fp_arith   - - - -/N,Z,C,V          FCMP{f}ri
 FCMPE{f}rr               cmp      -/x,x         f16,f32,f64              fp_arith   - - - -/N,Z,C,V          FCMPE{f}rr
 FCMPE{f}rz               cmp      -/x           f16,f32,f64              fp_arith   - - - -/N,Z,C,V          FCMPE{f}ri
+FCCMP{f}rr               cmp      -/x,x,i,i     f16,f32,f64              fp_arith   - - - N,Z,C,V/N,Z,C,V    FCCMP{f}rr
 FCVT{D|D|S|S|H|H}{S|H|D|H|D|S}r unary    x/x           -                        fp_cvt     - - - -/-                FCVT{D|D|S|S|H|H}{S|H|D|H|D|S}r
 SCVTFv1i32               unary    x/x           -                        fp_cvt     - - - -/-                SCVTFv1i32
 SCVTFv1i64               unary    x/x           -                        fp_cvt     - - - -/-                SCVTFv1i64
