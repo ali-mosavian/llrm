@@ -692,6 +692,13 @@ pub trait Target {
         true
     }
 
+    /// Whether `MachineLICM` takes an instruction that reads no register (an address of a
+    /// symbol) as a candidate, as the pin's `IsLoopInvariantInst` does. DEVIATE: off where a
+    /// port has not measured it; the allocator makes a constant again where it wants it.
+    fn hoists_register_free_ops(&self) -> bool {
+        false
+    }
+
     /// The pressure sets of the register classes and each set's limit, for a
     /// target that has them (the pre-RA scheduler tracks pressure per set).
     fn pressure(&self) -> Option<(&'static pressure::PressureSets, Vec<u32>)> {
