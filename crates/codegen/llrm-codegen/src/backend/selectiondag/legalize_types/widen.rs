@@ -388,6 +388,61 @@ impl TypeLegalizer<'_> {
                     self.dag.get_build_vector(widen_vt, &ops)
                 }
             }
+            // `WidenVecRes_SETCC`: both operands widened to the result's lane
+            // count (those that widen already, else padded with undefined
+            // lanes). A split input is not translated.
+            ISD::SetCC => {
+                let ops = self.dag.node(value).ops.clone();
+                let input_vt = self.dag.value_type(ops[0]);
+                let widen_in_vt = match input_vt.element() {
+                    EVT::Simple(lane) => MVT::vector(lane, widen_vt.lanes()).map(EVT::Simple),
+                    _ => None,
+                }
+                .ok_or_else(|| unsupported("widen compare of an extended vector"))?;
+                let (lhs, rhs) = match self.action(input_vt) {
+                    TypeAction::SplitVector => return Err(unsupported("widen compare of a split vector")),
+                    TypeAction::WidenVector => (self.widened_vector(ops[0]), self.widened_vector(ops[1])),
+                    _ => {
+                        // `INSERT_SUBVECTOR` into undefined lanes: a
+                        // concatenation, there being no such node here.
+                        let (wide, narrow) = (widen_vt.lanes(), input_vt.lanes());
+                        if wide % narrow != 0 {
+                            return Err(unsupported("widen compare by a lane count that is not a multiple"));
+                        }
+                        let poison = self.dag.get_poison(input_vt);
+                        let pad = |dag: &mut SelectionDAG, operand| {
+                            let mut parts = vec![poison; (wide / narrow) as usize];
+                            parts[0] = operand;
+                            dag.get_node(ISD::ConcatVectors, widen_in_vt, &parts)
+                        };
+                        (pad(self.dag, ops[0]), pad(self.dag, ops[1]))
+                    }
+                };
+                if self.dag.value_type(lhs) != widen_in_vt || self.dag.value_type(rhs) != widen_in_vt {
+                    return Err(unsupported("widen compare whose input did not widen to the result's lanes"));
+                }
+                let mut operands = vec![lhs, rhs];
+                operands.extend_from_slice(&ops[2..]);
+                self.dag.get_node_flags(ISD::SetCC, widen_vt, &operands, flags)
+            }
+            // `WidenVecRes_Select`: the mask at the select's lane width where
+            // `WidenVSELECTMask` has one, else the condition widened like the
+            // arms.
+            ISD::VSelect => {
+                let ops = self.dag.node(value).ops.clone();
+                let cond = match self.widen_vselect_mask(value) {
+                    Some(mask) => mask,
+                    None => {
+                        let cond = self.widen_operand(ops[0]);
+                        if self.dag.value_type(cond).lanes() != widen_vt.lanes() {
+                            return Err(unsupported("widen select with a condition of another width"));
+                        }
+                        cond
+                    }
+                };
+                let (on_true, on_false) = (self.widened_vector(ops[1]), self.widened_vector(ops[2]));
+                self.dag.get_node_flags(ISD::VSelect, widen_vt, &[cond, on_true, on_false], flags)
+            }
             // `WidenVecRes_Convert`: the conversion of the input widened to the
             // result's lane count where that is a legal vector (padded with
             // undefined lanes, or cut down), else the lanes one by one and
