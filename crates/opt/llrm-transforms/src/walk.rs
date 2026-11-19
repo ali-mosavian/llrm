@@ -667,6 +667,7 @@ impl ProgramPass for Walk {
                                 }
                             }
                             let mut accepted: Vec<llrm_mir::module::InstId> = Vec::new();
+                            let mut accepted_light = false;
                             let mut hot_tried = 0;
                             for (calls, credit) in units {
                                 // INL-HOT: a unit of sites the pin's threshold
@@ -1055,6 +1056,7 @@ impl ProgramPass for Walk {
                                         .is_some_and(|site| crate::trial::inlines(&site.caller, &site.callees));
                                 if ruled || forced {
                                     best = tried;
+                                    accepted_light = light;
                                     accepted.extend(calls);
                                 } else {
                                     if let Some(site) = site.filter(|_| {
@@ -1091,6 +1093,17 @@ impl ProgramPass for Walk {
                                     modules[at]
                                         .invalidate_bodies(&PreservedAnalyses::none().preserve_module::<GlobalsAA>());
                                 }
+                            }
+                            // The pin simplifies a body once inlined with its
+                            // whole
+                            // function pipeline: the accepted copy only met the
+                            // cleanup list, which
+                            // has no DSE or GVN.
+                            if accepted_light {
+                                modules[at].changed(id);
+                                modules[at]
+                                    .invalidate_bodies(&PreservedAnalyses::none().preserve_module::<GlobalsAA>());
+                                (self.simplify)(module, &mut modules[at], id, "walk.trial.final.");
                             }
                         }
                         // The calls left after the splices and the
