@@ -1870,6 +1870,20 @@ impl SelectionDAG {
         node
     }
 
+    /// `getMemIntrinsicNode`: a target node that reads and writes the cell `info` describes, ordered on the
+    /// chain like an atomic (`X86ISD::LADD`, `LCMPXCHG_DAG`).
+    pub fn get_mem_intrinsic_node(
+        &mut self,
+        op: ISD,
+        values: &[EVT],
+        ops: &[SDValue],
+        info: MemInfo,
+    ) -> SDValue {
+        let node = self.intern(op, values, ops, SDNodeFlags::default(), NodeData::Mem(info));
+        self.volatile_accesses.insert(node.node);
+        node
+    }
+
     /// `getAtomic` of `ATOMIC_CMP_SWAP_WITH_SUCCESS`, or of `ATOMIC_CMP_SWAP`
     /// when `flag` is none: the old value at `ptr`, the success flag of
     /// type `flag` if asked for, and a chain.

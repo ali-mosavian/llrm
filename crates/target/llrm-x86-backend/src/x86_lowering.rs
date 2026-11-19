@@ -111,6 +111,16 @@ pub mod x86isd {
     /// `(far, far) -> i32`. Expanded by the type legalizer, never selected.
     pub const LLRM_PTRDIFF: ISD = ISD::Target(24583);
     pub const OR: ISD = ISD::Target(697);
+    /// `X86ISD::LADD`, `LSUB`, `LAND`, `LOR`, `LXOR`: the `lock`ed read-modify-write of a cell whose old value
+    /// nothing reads: `chain, pointer, value`, giving `i32` flags and the chain.
+    pub const LADD: ISD = ISD::Target(651);
+    pub const LAND: ISD = ISD::Target(652);
+    pub const LOR: ISD = ISD::Target(662);
+    pub const LSUB: ISD = ISD::Target(663);
+    pub const LXOR: ISD = ISD::Target(665);
+    /// `X86ISD::LCMPXCHG_DAG`: `chain, pointer, new value, size, glue`, the expected value in the accumulator
+    /// the glue carries; giving the chain and the glue (the flags the compare left).
+    pub const LCMPXCHG_DAG: ISD = ISD::Target(661);
     pub const SETCC: ISD = ISD::Target(739);
     pub const SBB: ISD = ISD::Target(728);
     pub const SUB: ISD = ISD::Target(762);
@@ -837,6 +847,10 @@ impl Hooks for X86Lowering<'_> {
             ISD::VecReduceAdd | ISD::VecReduceAnd | ISD::VecReduceOr | ISD::VecReduceXor => {
                 lower_shuffle_reduction(dag, node)
             }
+            ISD::AtomicLoadAdd | ISD::AtomicLoadSub | ISD::AtomicLoadAnd | ISD::AtomicLoadOr | ISD::AtomicLoadXor => {
+                lower_atomic_arith(dag, node)
+            }
+            ISD::AtomicCmpSwapWithSuccess => lower_cmp_swap(dag, node),
             ISD::SSubSat => Some(lower_ssubsat(dag, node)),
             ISD::FShl | ISD::FShr => lower_funnel_shift(dag, node),
             ISD::FNeg | ISD::FAbs => lower_fabs_or_fneg(dag, node),
@@ -1290,6 +1304,89 @@ fn emit_flags_for_setcc(
     let code = translate_cc(dag, cc, &mut rhs);
     let flags = emit_cmp(dag, op0, rhs, code);
     (flags, cond_code(dag, code))
+}
+
+/// `X86TargetLowering::lowerAtomicArith`. A sum whose old value is read stays an `ATOMIC_LOAD_ADD`
+/// (`lock xadd`) and a difference is a sum of the negation; one nothing reads is the `lock`ed instruction
+/// on the cell (`lowerAtomicArithWithLOCK`: `lock add`, `sub`, `and`, `or`, `xor`). Another operation
+/// whose old value is read is not here: `shouldExpandAtomicRMWInIR` makes it a compare-exchange loop.
+/// DEVIATE ATOMIC-IDEMPOTENT: the pin's `emitLockedStackOp` for `or p, 0` is not translated, so it is
+/// the `lock or [p], 0`.
+fn lower_atomic_arith(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let NodeData::Mem(info) = dag.node(node).data else { return None };
+    let op = dag.opcode(node);
+    let (chain, ptr, rhs) = (dag.operand(node, 0), dag.operand(node, 1), dag.operand(node, 2));
+    if dag.has_users(SDValue { node: node.node, res: 0 }) {
+        return match op {
+            ISD::AtomicLoadSub => {
+                let negated = dag.get_negative(rhs, dag.value_type(node));
+                Some(dag.get_atomic_rmw(ISD::AtomicLoadAdd, chain, ptr, negated, info))
+            }
+            ISD::AtomicLoadAdd => Some(node),
+            _ => None,
+        };
+    }
+    let locked = match op {
+        ISD::AtomicLoadAdd => x86isd::LADD,
+        ISD::AtomicLoadSub => x86isd::LSUB,
+        ISD::AtomicLoadAnd => x86isd::LAND,
+        ISD::AtomicLoadOr => x86isd::LOR,
+        _ => x86isd::LXOR,
+    };
+    Some(dag.get_mem_intrinsic_node(locked, &[EVT::I32, EVT::OTHER], &[chain, ptr, rhs], info))
+}
+
+/// `LowerCMP_SWAP`: the expected value into the accumulator, the `lock cmpxchg` on the cell, the
+/// accumulator read back as the old value and `COND_E` of the flags as the success.
+fn lower_cmp_swap(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    use llrm_codegen::backend::selectiondag::dagisel_adapter::{EFLAGS_ID, phys_reg};
+    use llrm_lir::registers::RegId;
+    let NodeData::Mem(info) = dag.node(node).data else { return None };
+    let vt = dag.value_type(node);
+    let (accumulator, size) = match vt {
+        EVT::Simple(MVT::I8) => (RegId::AL, 1),
+        EVT::Simple(MVT::I16) => (RegId::AX, 2),
+        EVT::Simple(MVT::I32) => (RegId::EAX, 4),
+        EVT::Simple(MVT::I64) => (RegId::RAX, 8),
+        _ => return None,
+    };
+    let flag_vt = dag.node(node).values[1];
+    let (chain, ptr, expected, new) =
+        (dag.operand(node, 0), dag.operand(node, 1), dag.operand(node, 2), dag.operand(node, 3));
+    let put = dag.get_copy_to_phys_reg(chain, accumulator, expected, None);
+    let size = dag.get_constant_with(size, EVT::I8, true, false);
+    let swap = dag.get_mem_intrinsic_node(
+        x86isd::LCMPXCHG_DAG,
+        &[EVT::OTHER, EVT::GLUE],
+        &[SDValue { node: put.node, res: 0 }, ptr, new, size, SDValue { node: put.node, res: 1 }],
+        info,
+    );
+    let old = dag.get_copy_from_phys_reg(
+        SDValue { node: swap.node, res: 0 },
+        accumulator,
+        vt,
+        SDValue { node: swap.node, res: 1 },
+    );
+    let eflags = dag.get_copy_from_phys_reg(
+        SDValue { node: old.node, res: 1 },
+        phys_reg(EFLAGS_ID)?,
+        EVT::I32,
+        SDValue { node: old.node, res: 2 },
+    );
+    let code = cond_code(dag, cond::E);
+    let set = dag.get_node(x86isd::SETCC, EVT::I8, &[code, SDValue { node: eflags.node, res: 0 }]);
+    let success = if flag_vt == EVT::I8 { set } else { dag.get_node(ISD::Truncate, flag_vt, &[set]) };
+    Some(dag.get_node_multi(
+        ISD::MergeValues,
+        &[vt, flag_vt, EVT::OTHER],
+        &[SDValue { node: old.node, res: 0 }, success, SDValue { node: eflags.node, res: 1 }],
+    ))
 }
 
 /// `LowerSETCC`, integers.

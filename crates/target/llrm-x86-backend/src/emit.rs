@@ -1554,6 +1554,12 @@ impl Emitter<'_, '_> {
             }
             return Ok(());
         }
+        // `LXADD`, `LCMPXCHG`: an exchange-add and a compare-exchange on a cell, under `lock`
+        // (X86InstrCompiler.td). The register the sum or the old value comes back in is a result of
+        // the form, the accumulator of the compare-exchange the glued `CopyToReg`'s value.
+        if name.starts_with("LXADD") || name.starts_with("LCMPXCHG") {
+            return self.lowered_atomic(n, name, desc);
+        }
         // `MOVZX32rr8_NOREX` is `movzx` of a byte register that needs no REX
         // prefix to name (AH): the same form at this target.
         let form = self
@@ -1621,11 +1627,71 @@ impl Emitter<'_, '_> {
         let op = Operation::named(&form.operation)
             .ok_or_else(|| EmitError::Unsupported(format!("{name}: operation {}", form.operation)))?;
         self.push(op, &form.name, dests, sources);
+        if self.ctx.map.locked(name) {
+            self.lock_last();
+        }
         if name.split('|').next().is_some_and(|pin| pin.ends_with("_DB"))
             && let Some(last) = self.blocks.last_mut().and_then(|block| block.insns.last_mut())
         {
             *last = Arc::new(Insn { disjoint: true, ..(**last).clone() });
         }
+        Ok(())
+    }
+
+    /// The last instruction runs under `lock`, and is not moved or dropped for what reads it.
+    fn lock_last(&mut self) {
+        if let Some(last) = self.blocks.last_mut().and_then(|block| block.insns.last_mut()) {
+            let what = last.what.clone().map(|what| Semantics { lock: true, ..what });
+            *last = Arc::new(Insn { volatile: true, what, ..(**last).clone() });
+        }
+    }
+
+    /// `LXADD8..64` (`xadd`: the cell takes the sum, the register the old value) and `LCMPXCHG8..64`
+    /// (`cmpxchg`: the cell takes the new value where it holds the accumulator, else the accumulator
+    /// takes the cell's), each `lock`ed.
+    fn lowered_atomic(
+        &mut self,
+        n: u32,
+        name: &str,
+        desc: &InstrDesc,
+    ) -> Result<(), EmitError> {
+        let node = self.dag.node(SDValue { node: n, res: 0 });
+        let cell_width = self
+            .ctx
+            .map
+            .memory_bytes(name)
+            .unwrap_or_else(|| width_of_node(self.ctx.map.scalar_sse(), self.dag, n));
+        let operands = self.operands(node.ops.as_slice(), desc, cell_width)?;
+        let (Some(Loc::Held(value)), Some(cell)) = (
+            operands.iter().find(|o| matches!(o, Loc::Held(_))).cloned(),
+            operands.iter().find(|o| matches!(o, Loc::Mem(_))).cloned(),
+        ) else {
+            return Err(EmitError::Unsupported(format!("{name}: operands")));
+        };
+        if name.starts_with("LXADD") {
+            let old = self
+                .exported_register(SDValue { node: n, res: 0 })
+                .unwrap_or_else(|| self.fresh(width(self.ctx.map.scalar_sse(), node.values[0])));
+            self.values.insert(SDValue { node: n, res: 0 }, old.value);
+            self.push(Operation::Binary, "xadd", vec![cell.clone(), Loc::Held(old)], vec![cell, Loc::Held(value)]);
+        } else {
+            let accumulator = match cell_width {
+                8 => RegId::RAX,
+                4 => RegId::EAX,
+                2 => RegId::AX,
+                _ => RegId::AL,
+            };
+            let expected = self.accumulated(accumulator)?;
+            let old = self.fresh(cell_width);
+            self.push(
+                Operation::Binary,
+                "cmpxchg",
+                vec![cell.clone(), Loc::Held(old)],
+                vec![cell, Loc::Held(value), Loc::Held(expected)],
+            );
+            self.accumulator.insert(accumulator, old);
+        }
+        self.lock_last();
         Ok(())
     }
 
@@ -2091,6 +2157,7 @@ impl Emitter<'_, '_> {
                 || name.starts_with("REP_")
                 || name.ends_with("rCL")
                 || name.ends_with("mCL")
+                || name.starts_with("LCMPXCHG")
         })
     }
 
@@ -2156,7 +2223,7 @@ impl Emitter<'_, '_> {
         }
         let ISD::Machine(op) = self.dag.opcode(glue) else { return false };
         let name = self.ctx.names.get(&(op as u16)).map_or("", |name| name.split('|').next().unwrap_or(name));
-        matches!(name, "CDQ" | "CWD" | "CQO") || is_div_or_mul(name)
+        matches!(name, "CDQ" | "CWD" | "CQO") || is_div_or_mul(name) || name.starts_with("LCMPXCHG")
     }
 
     /// (low, high, bytes): AX and DX, EAX and EDX, or RAX and RDX.

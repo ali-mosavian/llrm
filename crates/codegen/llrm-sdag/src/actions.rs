@@ -1285,6 +1285,11 @@ impl TargetLowering {
         let words: &[MVT] = if is64 { &[MVT::I32, MVT::I64] } else { &[MVT::I32] };
         let ints64 = [MVT::I8, MVT::I16, MVT::I32, MVT::I64];
 
+        // The atomic read-modify-writes and the compare-exchange are Custom at the widths the target has
+        // (`X86TargetLowering`: `lowerAtomicArith`, `LowerCMP_SWAP`).
+        t.set_ops(&[AtomicLoadAdd, AtomicLoadSub, AtomicLoadAnd, AtomicLoadOr, AtomicLoadXor], native, Custom);
+        t.set_ops(&[AtomicCmpSwapWithSuccess], native, Custom);
+
         // L186..L203
         for vt in INTS {
             t.set_load_ext_action(LoadExt::SExtLoad, vt, MVT::I1, Promote);
