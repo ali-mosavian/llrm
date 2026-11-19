@@ -248,6 +248,7 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // O3 clocks bar (gcc 61,005) is kept at 5 (61,150) and lost at 6
         // (64,485): the machine count and the measured flip agree.
         licm_float_register_limit: Some(5),
+        inline_trial_credit_gate: true,
         loop_idiom_copy_trial_at_size: true,
         // DEVIATE BACKTHREAD-M32 (owner x87-b, exit 2026-12-15): no backward
         // threading. A/B over the 121 m32 programs at -O1..-Os (2026-11-18):

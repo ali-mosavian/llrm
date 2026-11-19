@@ -1080,6 +1080,10 @@ impl Tti for X86 {
         self.tuning.switch_lookup_trial_at_size
     }
 
+    fn opt_size_inline_credit_gate(&self) -> bool {
+        self.tuning.inline_trial_credit_gate
+    }
+
     fn loop_idiom_copy_trial_at_size(&self) -> bool {
         self.tuning.loop_idiom_copy_trial_at_size
     }
