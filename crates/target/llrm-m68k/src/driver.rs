@@ -261,48 +261,79 @@ fn lowered(
     // refused, inlined in a second compile, kept where the finished code is faster within the bytes ceiling
     // (`trial::keeps_within_headroom`). A module with no such call is compiled once.
     let sites = trial::take_refused();
-    // one extra compile at most: the refused sites' trial (clocks within the bytes ceiling) and the outline trial
-    // (bytes alone) are different verdicts of one build, so a module with refused sites takes the first
-    let accepted = trial::take_accepted();
-    let outlined = if sites.is_empty() { accepted } else { Vec::new() };
+    let outlined = trial::take_accepted();
     if llrm_support::debug::enabled("trial") {
         eprintln!("trial inline {level:?}: {} refused site(s), {} accepted site(s)", sites.len(), outlined.len());
     }
     let mut inlined: Vec<trial::Site> = Vec::new();
+    let mut kept_outlined: Vec<trial::Site> = Vec::new();
     let mut base_kept: Option<Kept> = None;
     // only a program: a library unit has no entry to weigh the clocks against, and its functions run an unknown
     // number of times (the runtime's -Os objects grew up to 18 % for the same clocks)
     let is_program = base.functions().any(|(_, global, function)| !function.is_declaration() && global.name.owned().as_deref() == Some("main"));
+    // DEVIATE OS-OUTLINE-TRIAL (`Tti::opt_size_inline_outline_trial`): the cold sites the units accept are built as
+    // calls in the same second compile. Each group of sites that share a function is judged on its own functions: a
+    // refused site by the clocks within the bytes ceiling, a group with an accepted site by the bytes alone. A
+    // mixed verdict takes a third compile of the kept groups.
     if small && is_program && (!sites.is_empty() || !outlined.is_empty()) {
-        if let Ok(other) = trial::with_inlined(&sites, || trial::with_outlined(&outlined, || lowered_once(text, cpu, level, None, policy))) {
-            let other_notes = trial::take();
-            let _ = trial::take_refused();
+        let built = |refused: &[trial::Site], accepted: &[trial::Site]| {
+            let module = trial::with_inlined(refused, || trial::with_outlined(accepted, || lowered_once(text, cpu, level, None, policy)));
+            let notes = trial::take();
+            let _ = (trial::take_refused(), trial::take_accepted());
+            module.map(|module| (module, notes))
+        };
+        if let Ok((other, other_notes)) = built(&sites, &outlined) {
             let cut = trial::differing(&base, &other);
             if !cut.is_empty() {
                 let (with, without) = (lower(&other, &cut)?, lower(&base, &cut)?);
+                let rest = std::cell::OnceCell::new();
                 let rest_calls_mulsi3 = || {
-                    let rest: std::collections::BTreeSet<String> = other
-                        .functions()
-                        .filter(|(_, _, function)| !function.is_declaration())
-                        .filter_map(|(_, global, _)| global.name.owned().filter(|name| !cut.contains(name)))
-                        .collect();
-                    lower(&base, &rest).map_or(true, |kept| crate::trial::calls_mulsi3(&kept.items))
+                    *rest.get_or_init(|| {
+                        let names: std::collections::BTreeSet<String> = other
+                            .functions()
+                            .filter(|(_, _, function)| !function.is_declaration())
+                            .filter_map(|(_, global, _)| global.name.owned().filter(|name| !cut.contains(name)))
+                            .collect();
+                        lower(&base, &names).map_or(true, |kept| crate::trial::calls_mulsi3(&kept.items))
+                    })
                 };
-                // the calls kept by the outline trial are judged by the bytes alone; a refused site built inlined
-                // (the clocks it saves within the bytes ceiling) keeps its own verdict where there is none
-                let pays = if outlined.is_empty() {
-                    crate::trial::keeps_within_headroom(&with.items, &without.items, rest_calls_mulsi3, cpu)
-                } else {
-                    crate::trial::keeps_fewer_bytes(&with.items, &without.items, rest_calls_mulsi3, cpu)
+                let groups = trial::groups(&sites, &outlined);
+                let only = |items: &[(String, Vec<Item>)], names: &std::collections::BTreeSet<String>| -> Vec<(String, Vec<Item>)> {
+                    items.iter().filter(|(name, _)| names.contains(name)).cloned().collect()
                 };
+                let verdicts: Vec<bool> = groups
+                    .iter()
+                    .map(|group| {
+                        let (with, without) = (only(&with.items, &group.names), only(&without.items, &group.names));
+                        if group.accepted.is_empty() {
+                            crate::trial::keeps_within_headroom(&with, &without, rest_calls_mulsi3, cpu)
+                        } else {
+                            crate::trial::keeps_fewer_bytes(&with, &without, rest_calls_mulsi3, cpu)
+                        }
+                    })
+                    .collect();
+                let kept_groups = verdicts.iter().filter(|&&one| one).count();
                 if llrm_support::debug::enabled("trial") {
-                    eprintln!("trial inline {level:?}: {} functions differ: {}", cut.len(), if pays { "kept" } else { "put back" });
+                    eprintln!("trial inline {level:?}: {} functions differ: {kept_groups} of {} groups kept", cut.len(), groups.len());
                 }
-                if pays {
-                    (base, base_kept, inlined) = (other, Some(with), sites);
+                let pick = |index: fn(&trial::Group) -> &Vec<usize>, all: &[trial::Site]| -> Vec<trial::Site> {
+                    groups.iter().zip(&verdicts).filter(|(_, kept)| **kept).flat_map(|(group, _)| index(group).iter().map(|&at| all[at].clone())).collect()
+                };
+                if kept_groups == groups.len() {
+                    (base, base_kept, inlined, kept_outlined) = (other, Some(with), sites, outlined);
                     (noted, units) = other_notes;
-                } else {
+                } else if kept_groups == 0 {
                     base_kept = Some(without);
+                } else {
+                    let (chosen, chosen_outlined) = (pick(|group| &group.refused, &sites), pick(|group| &group.accepted, &outlined));
+                    if let Ok((third, third_notes)) = built(&chosen, &chosen_outlined) {
+                        let cut = trial::differing(&base, &third);
+                        if !cut.is_empty() {
+                            let kept = lower(&third, &cut)?;
+                            (base, base_kept, inlined, kept_outlined) = (third, Some(kept), chosen, chosen_outlined);
+                            (noted, units) = third_notes;
+                        }
+                    }
                 }
             }
         }
@@ -319,8 +350,8 @@ fn lowered(
     };
     let plain = |module: Module, kept: Option<Kept>| Lowered { module, kept };
     let Some(limit) = limit.filter(|_| !noted.is_empty() && units <= TRIAL_MAX_UNITS) else { return Ok(plain(base, base_kept)) };
-    let Ok(other) = trial::with_inlined(&inlined, || trial::with(limit, || lowered_once(text, cpu, level, None, policy))) else { return Ok(plain(base, base_kept)) };
-    let _ = trial::take();
+    let Ok(other) = trial::with_inlined(&inlined, || trial::with_outlined(&kept_outlined, || trial::with(limit, || lowered_once(text, cpu, level, None, policy)))) else { return Ok(plain(base, base_kept)) };
+    let _ = (trial::take(), trial::take_accepted());
     let cut = trial::differing(&base, &other);
     if cut.is_empty() {
         return Ok(plain(base, base_kept));
