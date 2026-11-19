@@ -125,6 +125,47 @@ pub fn mark_wide_shifts(module: &mut Module) {
     }
 }
 
+/// The attribute that marks a function with a shift of a 32- or 64-bit value
+/// by a constant that is not whole bytes: it is also selected with each such
+/// shift the routine's call (`pipeline::CALL_SHIFTS`), where the inline form
+/// is a step a bit, and the caller prices the two with the routine linked once.
+pub const LONG_SHIFT: &str = "llrm-lshift";
+
+/// Marks every function with a body that shifts an `i32` or `i64` by a
+/// constant that is not a multiple of eight.
+pub fn mark_long_shifts(module: &mut Module) {
+    let Some(Ok(layout)) = module.datalayout.as_deref().map(DataLayout::parse) else { return };
+    let names: Vec<String> = module
+        .functions()
+        .filter(|(_, _, function)| !function.is_declaration())
+        .filter(|(_, _, function)| {
+            let query = Query { globals: &module.globals, ..Query::bare(&module.context, function, &layout) };
+            function
+                .layout()
+                .iter()
+                .flat_map(|&block| function.iter_block(block))
+                .map(|inst| function.instruction(inst))
+                .any(|instruction| {
+                    matches!(
+                        instruction.opcode,
+                        Opcode::Binary(BinaryOp::Shl | BinaryOp::LShr | BinaryOp::AShr)
+                    )
+                        && matches!(module.context.types.int_bits(instruction.ty), Some(32 | 64))
+                        && instruction
+                            .operands
+                            .get(1)
+                            .is_some_and(|&amount| constant_int_u64(&query, amount).is_some_and(|by| by % 8 != 0))
+                })
+        })
+        .filter_map(|(_, global, _)| global.name.owned())
+        .collect();
+    for name in names {
+        if let Some((_, function)) = module.function_mut(&name) {
+            function.attrs.push(Attribute::Flag(LONG_SHIFT.into()));
+        }
+    }
+}
+
 /// The attribute that lets every word times a constant of a function be a
 /// shift-add chain whatever its bytes: no word multiply of the module needs
 /// `__mulhi3`, and the chains together are smaller than the routine and the
