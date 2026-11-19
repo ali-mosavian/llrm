@@ -1941,3 +1941,99 @@ fn a_target_with_a_higher_o3_threshold_unrolls_a_32_trip_fold_the_pin_keeps() {
     assert!(unrolls_table_fold(raised, 3));
     assert!(!unrolls_table_fold(raised, 2), "-O2 keeps its 150");
 }
+
+/// switch_jump_table x86-64 -O2: a 10-trip loop reports a value its `switch` on
+/// the counter picks. gcc unrolls it and folds the switch (main ran 373
+/// instructions against its 145); the analysis gave up at the call.
+const SWITCH_AROUND_A_CALL: &str = "declare void @report(i64)
+
+define void @f() {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i32 [ 0, %b0 ], [ %next, %join ]
+  switch i32 %i, label %d [ i32 0, label %a0
+                            i32 1, label %a1
+                            i32 2, label %a2
+                            i32 3, label %a3 ]
+
+a0:
+  %x0 = add i64 1000, 3
+  %y0 = mul i64 %x0, 5
+  %z0 = xor i64 %y0, 85
+  %w0 = add i64 %z0, 9
+  br label %join
+
+a1:
+  %x1 = add i64 2000, 3
+  %y1 = mul i64 %x1, 5
+  %z1 = xor i64 %y1, 85
+  %w1 = add i64 %z1, 9
+  br label %join
+
+a2:
+  %x2 = add i64 3000, 3
+  %y2 = mul i64 %x2, 5
+  %z2 = xor i64 %y2, 85
+  %w2 = add i64 %z2, 9
+  br label %join
+
+a3:
+  %x3 = add i64 4000, 3
+  %y3 = mul i64 %x3, 5
+  %z3 = xor i64 %y3, 85
+  %w3 = add i64 %z3, 9
+  br label %join
+
+d:
+  %x4 = add i64 5000, 3
+  %y4 = mul i64 %x4, 5
+  %z4 = xor i64 %y4, 85
+  %w4 = add i64 %z4, 9
+  br label %join
+
+join:
+  %v = phi i64 [ %w0, %a0 ], [ %w1, %a1 ], [ %w2, %a2 ], [ %w3, %a3 ], [ %w4, %d ]
+  call void @report(i64 %v)
+  %next = add i32 %i, 1
+  %more = icmp ult i32 %next, 10
+  br i1 %more, label %b1, label %exit
+
+exit:
+  ret void
+}
+";
+
+/// `SWITCH_AROUND_A_CALL` through the full unroll at -O2 on `cpu`.
+fn switch_around_a_call(cpu: &str) -> (bool, String) {
+    let mut module = parsed(SWITCH_AROUND_A_CALL);
+    let function = module.function_mut("f").expect("@f").1;
+    crate::loopsimplify::simplified(function);
+    crate::testing::closed(&mut module).expect("closes");
+    let tti = X86::of_cpu(cpu).expect("a cpu");
+    let options = Options {
+        opt_level: 2,
+        opt_size: false,
+        min_size: false,
+        only_when_forced: false,
+        prepare_for_lto: false,
+        target_unrolling: false,
+        inliner_follows: true,
+        speed_rate: false,
+    };
+    let changed = unroll_function(&mut module, "f", &tti, options).expect("unrolls");
+    (changed, printed(&module))
+}
+
+#[test]
+fn test_a_loop_of_a_switch_on_its_counter_around_a_call_is_unrolled_where_the_target_prices_calls() {
+    let (changed, text) = switch_around_a_call("x86-64");
+    assert!(changed, "{text}");
+}
+
+#[test]
+fn test_the_pin_does_not_unroll_a_loop_around_a_call_whose_copies_pass_the_threshold() {
+    let (changed, text) = switch_around_a_call("i486");
+    assert!(!changed, "{text}");
+}

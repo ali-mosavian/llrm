@@ -2706,6 +2706,68 @@ fn test_the_full_unroll_takes_a_loop_only_below_o2_when_asked() {
     assert!(!four_trips_under(pipeline::Options::standard()), "-O2 unrolls it");
 }
 
+/// shrink_wrapped_saves's loop after inlining (a switch in the body, four trips
+/// from constant starts), through the LLVM order: whether a loop phi is left.
+fn constant_loop_kept_under(options: pipeline::Options) -> bool {
+    let text = "define i32 @f() {
+b0:
+  br label %h
+h:
+  %a = phi i32 [ 151, %b0 ], [ %a2, %l ]
+  %b = phi i32 [ 604, %b0 ], [ %b2, %l ]
+  %c = phi i32 [ 4, %b0 ], [ %c2, %l ]
+  %d = phi i32 [ 88, %b0 ], [ %d2, %l ]
+  %acc = phi i32 [ 0, %b0 ], [ %acc2, %l ]
+  %e = add i32 %c, -4
+  %g = add i32 %c, -2
+  switch i32 %e, label %m [
+    i32 4, label %x
+    i32 0, label %z
+  ]
+z:
+  br label %l
+m:
+  %p = mul i32 %c, %g
+  %q = add i32 %a, -46
+  %r = add i32 %q, %p
+  %s = add i32 %r, %a
+  %t = add i32 %s, %d
+  %u = add i32 %t, %b
+  br label %l
+l:
+  %v = phi i32 [ %u, %m ], [ %g, %z ]
+  %acc2 = add i32 %v, %acc
+  %d2 = add nuw nsw i32 %d, 10
+  %c2 = add nuw nsw i32 %c, 1
+  %b2 = add nuw nsw i32 %b, 12
+  %a2 = add nuw nsw i32 %a, 3
+  br label %h
+x:
+  %res = add i32 %acc, 4
+  ret i32 %res
+}
+";
+    let mut module = llrm_analysis::testing::parsed(text);
+    let applied = Applied { options, ..Applied::default() };
+    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()), |program: &mut Program| {
+        program.exports.entries.insert("f".to_owned());
+        pipeline::applied(program, &applied)
+    })
+    .and_then(|done| done)
+    .unwrap_or_else(|error| panic!("{error}"));
+    llrm_mir::print::module(&module).contains(" = phi ")
+}
+
+/// shrink_wrapped_saves wasm32 -Oz was 160 B against the pin's 41: `-Oz` ran no
+/// unroller, so a loop whose every trip folds to a constant stayed a loop. The
+/// pin's `-Oz` is `-O2` plus `minsize`, and the unroller's size analysis takes
+/// such a loop at every size level.
+#[test]
+fn test_a_loop_that_folds_to_a_constant_is_unrolled_at_oz_as_at_os() {
+    assert!(!constant_loop_kept_under(pipeline::Options::size()), "-Os kept the loop");
+    assert!(!constant_loop_kept_under(pipeline::Options::min_size()), "-Oz kept the loop");
+}
+
 /// A loop of a runtime trip count over a `u16` counter, through the LLVM order:
 /// whether its body is entered by a guard and leaves by its own back edge (a
 /// rotated loop), as opposed to a header that tests first.
