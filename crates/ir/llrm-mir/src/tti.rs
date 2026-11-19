@@ -2017,6 +2017,11 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE LASTCALL-COLD: `Tuning::inline_last_call_in_cold_site`.
+    fn inline_last_call_in_cold_site(&self) -> bool {
+        false
+    }
+
     /// `Tuning::inline_o1_weighs_entry`.
     fn inline_o1_weighs_entry(&self) -> bool {
         false
