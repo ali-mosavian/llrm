@@ -100,6 +100,16 @@ fn a_computed_goto_round_trips_through_text() {
     assert_eq!(round(text), text);
 }
 
+/// A dispatch table of label addresses (`static void *t[] = {&&a, &&b}`) names
+/// a function read after it: the labels' ids must survive until the body.
+#[test]
+fn a_block_address_in_a_table_before_its_function_round_trips() {
+    let text = "@t = internal constant [2 x ptr] [ptr blockaddress(@f, %a), ptr blockaddress(@f, %b)]\n\ndefine void @f(i16 %0) {\n  %2 = getelementptr [2 x ptr], ptr @t, i16 0, i16 %0\n  %3 = load ptr, ptr %2\n  indirectbr ptr %3, [label %a, label %b]\n\na:\n  ret void\n\nb:\n  ret void\n}\n";
+    let module = parse::module(text).unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(crate::verify::verify(&module), Vec::<String>::new());
+    assert_eq!(print::module(&module), text);
+}
+
 #[test]
 fn an_indirectbr_listing_a_destination_twice_fails_verification() {
     let text = "define void @f(ptr %0) {\n  indirectbr ptr %0, [label %a, label %a]\n\na:\n  ret void\n}\n";

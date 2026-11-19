@@ -46,6 +46,11 @@ struct Parser {
     defined_metadata: HashSet<MetadataId>,
     /// Token ranges of the attribute groups, skipped by the main pass.
     group_spans: Vec<(usize, usize)>,
+    /// The blocks of each function read so far, by label.
+    finished_blocks: HashMap<GlobalId, HashMap<Name, BlockId>>,
+    /// The labels a `blockaddress` named before its function was read, in the
+    /// order of their ids: the function's first blocks.
+    reserved_blocks: HashMap<GlobalId, Vec<(Name, usize)>>,
 }
 
 /// A function being read: names to arena ids, and uses still undefined.
@@ -75,6 +80,8 @@ impl Parser {
             metadata: HashMap::default(),
             defined_metadata: HashSet::default(),
             group_spans: Vec::new(),
+            finished_blocks: HashMap::default(),
+            reserved_blocks: HashMap::default(),
         }
     }
 
@@ -648,6 +655,7 @@ impl Parser {
             self.body(&mut local)?;
         }
         local.function.index();
+        self.finished_blocks.insert(id, std::mem::take(&mut local.blocks));
         self.module.globals[id.0 as usize] = GlobalValue {
             name: self.module.globals[id.0 as usize].name.clone(),
             linkage,
@@ -978,6 +986,11 @@ impl Parser {
                     return self.fail_on(line, "`null` is a pointer");
                 }
                 ConstantKind::Null
+            }
+            Token::Word(word) if word == "blockaddress" => {
+                self.at -= 1;
+                let (function, block) = self.block_address(None)?;
+                ConstantKind::Expr(ConstantExpr::BlockAddress { function, block })
             }
             Token::Word(word) if word == "poison" => ConstantKind::Poison,
             Token::Word(word) if word == "undef" => ConstantKind::Undef,
@@ -1433,6 +1446,12 @@ impl Parser {
         local: &mut Local,
     ) -> Parsed<()> {
         self.expect_punct('{')?;
+        for (name, line) in self.reserved_blocks.remove(&local.global).unwrap_or_default() {
+            let id = BlockId(local.function.blocks.len() as u32);
+            local.function.blocks.push(Block::default());
+            local.blocks.insert(name, id);
+            local.pending_blocks.insert(id, line);
+        }
         let mut current: Option<BlockId> = None;
         loop {
             match self.peek().clone() {
@@ -1531,30 +1550,62 @@ impl Parser {
                 self.local_use(local, name, ty, line)
             }
             Token::Word(word) if word == "blockaddress" => {
-                self.next();
-                self.expect_punct('(')?;
-                let line = self.line();
-                let Token::Global(name) = self.next() else {
-                    self.at -= 1;
-                    return self.fail(format!("expected the function's name, found {}", self.describe()));
-                };
-                if self.globals.get(&name) != Some(&local.global) {
-                    return self.fail_on(line, "a blockaddress names a block of the function it is read in");
-                }
-                self.expect_punct(',')?;
-                let Token::Local(block) = self.next() else {
-                    self.at -= 1;
-                    return self.fail(format!("expected a block, found {}", self.describe()));
-                };
-                let block = self.block_id(local, block);
-                self.expect_punct(')')?;
+                let (function, block) = self.block_address(Some(local))?;
                 Ok(Operand::Constant(self.module.context.constant(Constant {
                     ty,
-                    kind: ConstantKind::Expr(ConstantExpr::BlockAddress { function: local.global, block }),
+                    kind: ConstantKind::Expr(ConstantExpr::BlockAddress { function, block }),
                 })))
             }
             _ => Ok(Operand::Constant(self.constant(ty)?)),
         }
+    }
+
+    /// `blockaddress(@function, %label)`: the function and the block. A block
+    /// of a function not yet read is given the next of its first ids, which
+    /// its body then takes for the label.
+    fn block_address(
+        &mut self,
+        local: Option<&mut Local>,
+    ) -> Parsed<(GlobalId, BlockId)> {
+        self.next();
+        self.expect_punct('(')?;
+        let line = self.line();
+        let Token::Global(name) = self.next() else {
+            self.at -= 1;
+            return self.fail(format!("expected the function's name, found {}", self.describe()));
+        };
+        let Some(&function) = self.globals.get(&name) else {
+            return self.fail_on(line, format!("@{} is not defined", display(&name)));
+        };
+        self.expect_punct(',')?;
+        let line = self.line();
+        let Token::Local(label) = self.next() else {
+            self.at -= 1;
+            return self.fail(format!("expected a block, found {}", self.describe()));
+        };
+        self.expect_punct(')')?;
+        let block = match local {
+            Some(local) if local.global == function => self.block_id(local, label),
+            _ => {
+                if let Some(blocks) = self.finished_blocks.get(&function) {
+                    match blocks.get(&label) {
+                        Some(&block) => block,
+                        None => return self.fail_on(line, format!("block %{} is not in @{}", display(&label), display(&name))),
+                    }
+                } else {
+                    let reserved = self.reserved_blocks.entry(function).or_default();
+                    let at = match reserved.iter().position(|(held, _)| *held == label) {
+                        Some(at) => at,
+                        None => {
+                            reserved.push((label, line));
+                            reserved.len() - 1
+                        }
+                    };
+                    BlockId(at as u32)
+                }
+            }
+        };
+        Ok((function, block))
     }
 
     fn typed_value(

@@ -17,7 +17,12 @@ use crate::types::{FloatKind, Type, TypeId, struct_text};
 
 pub fn module(module: &Module) -> String {
     let mut out = String::new();
-    let printer = Printer { context: &module.context, globals: global_names(module) };
+    let printer = Printer {
+        context: &module.context,
+        globals: global_names(module),
+        module: Some(module),
+        labels: Default::default(),
+    };
     if let Some(layout) = &module.datalayout {
         let _ = writeln!(out, "target datalayout = {}", string(layout.as_bytes()));
     }
@@ -97,7 +102,8 @@ pub fn body(
     context: &Context,
     function: &Function,
 ) -> String {
-    Printer { context, globals: Vec::new() }.blocks(function, &Slots::new(function))
+    Printer { context, globals: Vec::new(), module: None, labels: Default::default() }
+        .blocks(function, &Slots::new(function))
 }
 
 /// A 128-bit digest (not a cryptographic one) of what `body` prints, without
@@ -371,6 +377,10 @@ fn spaced(text: String) -> String {
 struct Printer<'a> {
     context: &'a Context,
     globals: Vec<String>,
+    /// What a `blockaddress` outside its function names a label of, read
+    /// from the function's own numbering.
+    module: Option<&'a Module>,
+    labels: std::cell::RefCell<HashMap<GlobalId, HashMap<BlockId, String>>>,
 }
 
 /// A function's local names: named values as they are, the rest numbered.
@@ -895,7 +905,17 @@ impl Printer<'_> {
             }
             // A block's label is the function's to say: `operand` prints it.
             ConstantKind::Expr(ConstantExpr::BlockAddress { function, block }) => {
-                format!("blockaddress({}, %{})", self.global_name(*function), block.0)
+                let mut labels = self.labels.borrow_mut();
+                let label = labels
+                    .entry(*function)
+                    .or_insert_with(|| match self.module.map(|module| &module.global(*function).kind) {
+                        Some(GlobalKind::Function(body)) => Slots::new(body).blocks,
+                        _ => HashMap::default(),
+                    })
+                    .get(block)
+                    .cloned()
+                    .unwrap_or_else(|| block.0.to_string());
+                format!("blockaddress({}, %{label})", self.global_name(*function))
             }
             ConstantKind::Expr(ConstantExpr::Cast { op, value }) => {
                 format!("{} ({} to {})", spelling(&CAST, *op), self.typed_constant(*value), self.ty(*ty))
