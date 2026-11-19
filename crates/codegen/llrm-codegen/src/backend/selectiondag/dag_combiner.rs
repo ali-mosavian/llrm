@@ -132,6 +132,16 @@ pub trait CombineHooks {
         true
     }
 
+    /// `foldSextSetcc`'s closing arm for a scalar: `sext (setcc)` is `select
+    /// (setcc), -1, 0`. The pin does it for every target that keeps selects
+    /// of constants. DEVIATE SXS1 (owner llrm-arm64-vec, exit 2026-11-26):
+    /// off by default; m68k and wasm32 grow by a few bytes on it (the
+    /// select's lowering there is not the pin's), z80 and 6502 shrink. Exit:
+    /// each target's owner answers true once its select lowering matches.
+    fn sext_setcc_as_select(&self) -> bool {
+        false
+    }
+
     /// `foldSelectCCToShiftAnd` (the "gzip trick"): `x < 0 ? A : 0` is `and
     /// (sra x, bits-1), A`. The pin runs it everywhere. DEVIATE: m16 opts out,
     /// its nbody_fixed -Os grows 9 B (a real-mode dword shift is two ops).
@@ -2412,19 +2422,23 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
     /// operands, `sext (setcc x, y)` is the compare made at the sext's own type
     /// (or at the matching integer vector, then resized).
     ///
-    /// DEVIATE FS1 (owner llrm-arm64-vec, exit 2026-11-24): the pin's closing
-    /// arm, a compare whose operands are free to extend (constants, simple
-    /// loads), is not translated.
+    /// DEVIATE FS1 (owner llrm-arm64-vec, exit 2026-11-24): the pin's vector
+    /// arm for a compare whose operands are free to extend (constants, simple
+    /// loads), and `SimplifySelectCC` ahead of the closing select, are not
+    /// translated. A scalar `sext (setcc x, y)` is `select (setcc x, y), -1,
+    /// 0` ([`Self::sext_setcc_as_select`]).
     fn fold_sext_setcc(
         &mut self,
         node: SDValue,
     ) -> Option<SDValue> {
         let (vt, n0) = (self.dag.value_type(node), self.dag.operand(node, 0));
-        if self.dag.opcode(node) != ISD::SignExtend
-            || self.dag.opcode(n0) != ISD::SetCC
-            || !vt.is_vector()
-            || self.legal_operations()
-        {
+        if self.dag.opcode(node) != ISD::SignExtend || self.dag.opcode(n0) != ISD::SetCC {
+            return None;
+        }
+        if !vt.is_vector() {
+            return self.sext_setcc_as_select(node);
+        }
+        if self.legal_operations() {
             return None;
         }
         let tli = self.tli?;
@@ -2448,6 +2462,71 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             return Some(self.dag.get_sext_or_trunc(compare, vt));
         }
         None
+    }
+
+    /// `foldSextSetcc`'s closing arm
+    /// ([L16069](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L16069)),
+    /// the scalar case: `sext (setcc x, y, cc)` is `select (setcc x, y, cc), T,
+    /// 0` with `T` all ones for an `i1` compare, else the target's true, where
+    /// `shouldConvertSelectOfConstantsToMath` does not turn the select back
+    /// into the extend. A compare made wider than `i1` only: for `i1` the
+    /// select fold would undo this.
+    fn sext_setcc_as_select(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let (vt, n0) = (self.dag.value_type(node), self.dag.operand(node, 0));
+        if !self.hooks.sext_setcc_as_select() {
+            return None;
+        }
+        let tli = self.tli?;
+        let (lhs, rhs, cc) = (self.dag.operand(n0, 0), self.dag.operand(n0, 1), self.dag.operand(n0, 2));
+        let operand_vt = self.dag.value_type(lhs);
+        if self.should_convert_select_of_constants_to_math(n0, vt) {
+            return None;
+        }
+        let setcc_vt = tli.types.set_cc_result_type(operand_vt);
+        if setcc_vt.size_in_bits() == 1 || (self.legal_operations() && !tli.is_operation_legal(ISD::SetCC, operand_vt))
+        {
+            return None;
+        }
+        let true_value = if self.dag.value_type(n0).size_in_bits() == 1 {
+            self.dag.get_all_ones_constant(vt)
+        } else {
+            match self.dag.config().boolean_contents_of(operand_vt) {
+                super::dag::BooleanContents::ZeroOrNegativeOne => self.dag.get_all_ones_constant(vt),
+                _ => self.dag.get_constant(1, vt),
+            }
+        };
+        let zero = self.dag.get_constant(0, vt);
+        let flags = self.dag.node(n0).flags;
+        let compare = self.dag.get_node_flags(ISD::SetCC, setcc_vt, &[lhs, rhs, cc], flags);
+        Some(self.dag.get_select(vt, compare, true_value, zero))
+    }
+
+    /// `shouldConvertSelectOfConstantsToMath`
+    /// ([L12992](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L12992)).
+    fn should_convert_select_of_constants_to_math(
+        &self,
+        cond: SDValue,
+        vt: EVT,
+    ) -> bool {
+        if !self.hooks.convert_select_of_constants_to_math(vt) {
+            return false;
+        }
+        if self.dag.opcode(cond) != ISD::SetCC || !self.dag.has_one_use(cond.node) {
+            return true;
+        }
+        if !self.tli.is_some_and(|tli| tli.is_operation_legal_or_custom(ISD::SelectCC, vt)) {
+            return true;
+        }
+        let (cc, rhs) = (self.dag.operand(cond, 2), self.dag.operand(cond, 1));
+        let code = match self.dag.node(cc).data {
+            NodeData::CondCode(code) => code,
+            _ => return false,
+        };
+        (code == CondCode::SetLt && self.dag.is_null_constant(rhs))
+            || (code == CondCode::SetGt && self.dag.constant(rhs) == Some(super::fold::mask(vt.size_in_bits())))
     }
 
     /// `visitZERO_EXTEND`'s vector arm for a compare
@@ -5072,9 +5151,28 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         } else {
             return None;
         };
-        // Both operands are read as halves: the tied one is the low half of `x`
-        // widened with undefined high bits, so an extension of it is not made
-        // (the pin's own patterns do the same, `MOVXd32d16`).
+        // the half multiply reads the low half of `x`: what extends it is dead, unless another user keeps it
+        // (divs of the same `x` then needs the extension and the copy of `x` it leaves is a live range more)
+        let sole_user = self.dag.has_one_use(x.node);
+        let x = match self.dag.opcode(x) {
+            ISD::SignExtendInReg if sole_user => {
+                let NodeData::ValueType(inner) = self.dag.node(self.dag.operand(x, 1)).data else { return None };
+                if inner.size_in_bits() >= narrow { self.dag.operand(x, 0) } else { x }
+            }
+            ISD::SignExtend if sole_user => {
+                let src = self.dag.operand(x, 0);
+                // a load keeps its own extension: `any_extend (load)` is the zero-extending load (`moveq #0` and
+                // a `move.w` with no post-increment), where `sext (load)` post-increments and `ext.l`s
+                if self.dag.value_type(src).size_in_bits() >= narrow && self.dag.opcode(src) != ISD::Load {
+                    self.dag.get_node(ISD::AnyExtend, vt, &[src])
+                } else {
+                    x
+                }
+            }
+            _ => x,
+        };
+        // The tied operand is `x`'s low half widened with undefined high bits (a copy of the truncate below), so no
+        // extension of it is made either (the pin's own patterns do the same, `MOVXd32d16`).
         let low = self.dag.get_node(ISD::Truncate, half.half, &[y]);
         let tied_low = self.dag.get_node(ISD::Truncate, half.half, &[x]);
         // `TargetOpcode::COPY` (no name in the pin's tables): a node the combiner

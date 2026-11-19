@@ -175,3 +175,34 @@ fn at_o1_a_chain_the_half_multiply_does_not_beat_on_both_axes_stays() {
     let out = asm(NINE_LAST, "68000", Level::O1);
     assert!(!out.contains("muls"), "{out}");
 }
+
+/// `sum += cells[i] * (i + 1)` over a `short i` kept the `ext.l` of `i + 1` (`move.l %d1,%d4; ext.l %d4; muls
+/// %d3,%d4`, 4 clocks an iteration in loop_versioning -O3 68000, +5.7% against gcc): `muls.w` reads the low word of
+/// its destination only.
+#[test]
+fn a_halfword_multiplicand_is_not_extended_first() {
+    let ir = "target datalayout = \"E-m:e-p:32:16:32-i8:8:8-i16:16:16-i32:16:32-n8:16:32-a:0:16-S16\"
+define i32 @f(ptr %cells, i16 %n) {
+  br label %l
+l:
+  %i = phi i16 [ 0, %0 ], [ %j, %l ]
+  %s = phi i32 [ 0, %0 ], [ %t, %l ]
+  %ie = sext i16 %i to i32
+  %p = getelementptr inbounds i16, ptr %cells, i32 %ie
+  %v = load i16, ptr %p
+  %ve = sext i16 %v to i32
+  %j = add i16 %i, 1
+  %je = sext i16 %j to i32
+  %m = mul i32 %ve, %je
+  %t = add i32 %s, %m
+  %c = icmp slt i16 %j, %n
+  br i1 %c, label %l, label %x
+x:
+  ret i32 %t
+}";
+    for cpu in NO_LONG_MULTIPLY {
+        let out = asm(ir, cpu, Level::O2);
+        let body = out.split(".LBB0_1:").nth(1).and_then(|rest| rest.split("\tb").next()).unwrap_or("");
+        assert!(body.contains("muls\t") && !body.contains("ext.l"), "{cpu}:\n{out}");
+    }
+}

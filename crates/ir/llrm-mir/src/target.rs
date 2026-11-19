@@ -357,6 +357,15 @@ pub struct Tuning {
     /// pin does not. DEVIATE DIVCONST-SIZE (owner llrm-target-x86-m64-b, exit
     /// 2026-11-30); none: the pin's.
     pub div_by_constant_size_cost: Option<u32>,
+    /// The code-size cost of a scalar divide or remainder by a variable: the
+    /// pin's X86 table says 2, LLVM 20 priced every divide 4. A loop whose
+    /// divisors the unroll turns into constants (div8_os: four divides by the
+    /// loop's `b`) is then 450 units in LLVM 20, which keeps it, and 302 in the
+    /// pin, which unrolls it at the raised -O3 threshold into four
+    /// multiply-high sequences per trip: 130,449 executed instructions against
+    /// clang's 116,608. DEVIATE DIVVAR-SIZE (owner x87-cordic-2, exit
+    /// 2026-11-30, with DIVCONST-SIZE); none: the pin's.
+    pub div_by_variable_size_cost: Option<u32>,
     /// gcc's `-fsplit-paths` (on at `-O3`): the join block of a loop's latch
     /// diamond is copied into its arm (`splitpaths.rs`). DEVIATE SP-O3
     /// (owner llrm-target-x86-m64-b, exit 2026-11-30): a target takes it
@@ -449,6 +458,12 @@ pub struct Tuning {
     /// (`backwardthreading.rs`). The pin has neither; gcc's `threadfull1` and
     /// `vrp1` do both. false: the pin's pipeline.
     pub threads_by_relation: bool,
+    /// DEVIATE BACKTHREAD-M32 (owner x87-b, exit 2026-12-15): backward
+    /// threading (`backwardthreading.rs`, no LLVM pass) runs. false at m32:
+    /// of 121 programs it changes 13 at -O2/-O3 and moves none by more than
+    /// 0.2% in clocks, while its copies of a peeled ladder cost x_ld_matmul
+    /// -O3 +8.1% clocks and 1,615 B, queens -O3 +8.3% and 3,706 B.
+    pub backward_threading: bool,
     /// DEVIATE SPILL-FOLD (owner x86-m16, exit 2026-11-29): the clocks a
     /// spilled value costs where its references fold into memory operands,
     /// which `tryRegionSplit` weighs against the split's copies. The pin
@@ -471,6 +486,13 @@ pub struct Tuning {
     /// the mass and make the code after them cold (threshold 45, no bonuses).
     /// false: the pin's.
     pub cold_site_ignores_sinks: bool,
+    /// DEVIATE LASTCALL-COLD (owner x87-cordic-2, exit 2026-12-05): a local
+    /// function with one call keeps the `LastCallToStatic` bonus where the
+    /// call site is cold. GCC's `-finline-functions-called-once` inlines it
+    /// whatever the site's frequency (inlining it removes the body and the
+    /// call: bytes). false: the pin's, which drops the bonus and uses the cold
+    /// threshold.
+    pub inline_last_call_in_cold_site: bool,
     /// Read-only data (a private constant, a jump table) that one procedure
     /// only loads from follows that procedure in its code segment and is read
     /// through `cs:`, as `TargetLoweringObjectFile::getSectionForConstant`
@@ -745,6 +767,12 @@ pub struct Tuning {
     /// runs at -O2/-O3 with constant-arm selects included. false: the
     /// pin's, which runs it nowhere.
     pub branch_constant_arm_selects: bool,
+    /// DEVIATE SELECT-OPT-I486 (`Tti::select_optimize_penalty`): the clocks a
+    /// taken branch costs over a fallen-through one. `Some`: where there is
+    /// no conditional move, `SelectOptimize` runs at -O2/-O3, pricing
+    /// a mispredicted branch at it. `None`: the pin's `llc`, which leaves the
+    /// pass off.
+    pub select_optimize_penalty: Option<u64>,
     /// DEVIATE IND-PREFIX (`Tti::narrow_counter_is_taxed`): 16-bit counters
     /// are widened like illegal ones, for the operand-size prefix.
     pub prefixed_16_bit_counters: bool,
@@ -876,6 +904,7 @@ impl Tuning {
         unroll_max_percent_threshold_boost: None,
         unroll_threshold_at_o3: None,
         div_by_constant_size_cost: None,
+        div_by_variable_size_cost: None,
         split_paths_at_o3: false,
         unroll_partial_threshold: None,
         unroll_jam_partial_threshold: None,
@@ -890,10 +919,12 @@ impl Tuning {
         address_reference_milliweight: 1000,
         unroll_recurrence_veto: false,
         threads_by_relation: false,
+        backward_threading: true,
         spill_fold: None,
         unswitch_threshold: None,
         inline_threshold: None,
         cold_site_ignores_sinks: false,
+        inline_last_call_in_cold_site: false,
         read_only_in_code: false,
         min_jump_table_density: None,
         licm_float_register_limit: None,
@@ -954,6 +985,7 @@ impl Tuning {
         phi_constant_chains: false,
         sink_select_arms: false,
         branch_constant_arm_selects: false,
+        select_optimize_penalty: None,
         prefixed_16_bit_counters: false,
         partial_libcalls_skip_at_size: false,
         inline_variable_memcpy: false,
@@ -1931,6 +1963,7 @@ mod tests {
         );
         assert_eq!(pin.unroll_threshold_at_o3, None);
         assert_eq!(pin.div_by_constant_size_cost, None);
+        assert_eq!(pin.div_by_variable_size_cost, None);
         assert!(!pin.split_paths_at_o3);
         assert_eq!(pin.x87_stack_slots, None);
         assert!(!pin.x87_share_negated_products);

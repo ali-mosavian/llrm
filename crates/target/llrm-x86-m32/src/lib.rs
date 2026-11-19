@@ -180,8 +180,8 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // over a constant table folds to nothing and stayed rolled: 64 -> 158
         // B).
         unroll_o1_analyzed_trips: Some(16),
-        // DEVIATE SD443 (owner w9, exit: a constant-argument pass after
-        // inlining, as gcc's IPA-CP): a function called directly only after
+        // DEVIATE SD443 (owner w9, exit 2026-11-24: a constant-argument pass
+        // after inlining, as gcc's IPA-CP): a function called directly only after
         // inlining keeps its address-taken parameters through the pin's one
         // IPSCCP; a second one after promotion folds them. m32
         // memory_expansion -1332 B (-O2/-O3), second_ipsccp.c -368 B.
@@ -249,7 +249,15 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // (64,485): the machine count and the measured flip agree.
         licm_float_register_limit: Some(5),
         loop_idiom_copy_trial_at_size: true,
-        // DEVIATE OB1 (owner w12, exit 2026-11-27, `unrollbound.rs`): gcc
+        // DEVIATE BACKTHREAD-M32 (owner x87-b, exit 2026-12-15): no backward
+        // threading. A/B over the 121 m32 programs at -O1..-Os (2026-11-18):
+        // 13 differ, none by more than +0.2% clocks with it off; x_ld_matmul
+        // -O3 91,538 -> 84,103 clk and 2,155 -> 540 B (gcc 84,571, 1,356 B),
+        // queens -O3 87,134 -> 79,866 clk and 12,765 -> 9,059 B, x_matmul_f
+        // -O3 -1.3% and -535 B, x_ld_dot/fma_chain/sum/max -O2 -91..-154 B.
+        backward_threading: false,
+        // DEVIATE OB1 (owner w12, exit 2026-11-27, `unrollbound.rs`; -O3 only,
+        // as gcc grows code only there): gcc
         // completely peels a loop whose trips the object it indexes bounds
         // (max-completely-peel-times 16); the pin does not. x_matmul_f /
         // x_ld_matmul -O3: 392 B and 3 fmul against gcc's 1183 B and 14. Tried
@@ -315,7 +323,8 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // -Os 147 -> 39 B (clang 23), 176 m32 programs, no other cell moves.
         inline_chain_trial: true,
         // DEVIATE REC-2: gcc 15.2's `max-inline-recursive-depth` 8 and
-        // `max-inline-insns-recursive` 450, at -O2/-O3 (never -Os). Owner w10.
+        // `max-inline-insns-recursive` 450, at -O2/-O3 (never -Os). Owner w9, exit
+        // 2026-11-24.
         recursive_inlining: Some((8, 450)),
         // DEVIATE REC-2/REC-10 bar: 22 `gcc_insns` at -O2 and -O3, fitted to
         // the corpus (gcc's own is 15 at -O2, 30 at -O3, in its size units).
@@ -377,6 +386,14 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // full unroll must repay its bytes at the speed rate.
         unroll_milliclocks_per_byte: per_byte,
         sink_select_arms: true,
+        // DEVIATE SELECT-OPT-I486 (owner x86-m32-b, exit 2026-12-20; the
+        // pin's `llc` has
+        // `-disable-select-optimize` on): the i486 has no `cmov`, so a select
+        // is a branch whatever is done;
+        // `SelectOptimize` makes it at IR level, where the arm's slice is sunk
+        // into the arm. A taken `jcc` is 3 clocks, a fallen-through one 1
+        // (`timings.times`).
+        select_optimize_penalty: Some(2),
         // DEVIATE IND-PREFIX (owner x87, exit 2026-11-30): `short i` is a
         // 32-bit counter; the 486 and P5 pay a prefix on every 16-bit
         // operation (ring -O2: 67177 clk, gcc 61179).
@@ -844,7 +861,9 @@ impl llrm_target::Target for M32 {
                     .and_then(|(tti, cpu)| llrm_x86::tti::X86::described(&tti, &cpu))
                     .map(|one| {
                         std::rc::Rc::new(
-                            one.with_registers(prices.registers as u32).with_tuning(tuning(&prices.operations)),
+                            one.with_registers(prices.registers as u32)
+                                .with_word_vectors(true)
+                                .with_tuning(tuning(&prices.operations)),
                         ) as std::rc::Rc<dyn llrm_mir::tti::Tti>
                     }),
                 Some(std::rc::Rc::new(llrm_x86::lowering::X86 { is_64bit: false })),

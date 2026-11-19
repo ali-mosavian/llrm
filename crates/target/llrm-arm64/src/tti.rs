@@ -599,6 +599,12 @@ impl Tti for AArch64 {
         true
     }
 
+    /// `Tti::opt_size_inline_guard_yields_to_inlinehint`: the pin's hint
+    /// threshold stands for a callee declared `inline`.
+    fn opt_size_inline_guard_yields_to_inlinehint(&self) -> bool {
+        true
+    }
+
     /// SZ1: at -Os an inline that stays must not grow the code, as gcc's `-Os`
     /// inlines only where the module shrinks. The pin's `OptSizeThreshold` 50
     /// inlines jpeg_fixed's `put32` (a 4-trip store loop) into eight sites
@@ -1138,16 +1144,15 @@ impl Tti for AArch64 {
 
     /// `AArch64TTIImpl::getShuffleCost`
     /// ([L6978](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Target/AArch64/AArch64TargetTransformInfo.cpp#L6978)),
-    /// `SK_Broadcast`: a `dup`, one for each register the vector takes. Every
-    /// other kind is not priced (DEVIATE SLP1 of `slptree`).
+    /// a single-source shuffle (`tti_vector::shuffle_cost`).
     fn shuffle_cost(
         &self,
         kind: llrm_mir::tti::ShuffleKind,
         ty: VectorTy,
-        _mask: &[i32],
+        mask: &[i32],
         cost_kind: CostKind,
     ) -> Option<Cost> {
-        crate::tti_vector::shuffle_cost(kind, ty, cost_kind)
+        crate::tti_vector::shuffle_cost(kind, ty, mask, cost_kind)
     }
 
     fn vector_instr_cost(

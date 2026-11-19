@@ -213,6 +213,7 @@ impl llrm_mir::target::Machine for Flat {
             issue_width: 0,
             position_independent: std::cell::Cell::new(true),
             size_bytes: false,
+            word_vectors: false,
         }))
     }
 }

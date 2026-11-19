@@ -16,6 +16,10 @@
 //! epilogue lose their `suba` and `adda`, which is where a pair of two-word
 //! calls gains.
 //!
+//! A window with another instruction that names the stack pointer (a frame load
+//! between the stores) is not pushed, but its stores still fuse with their loads
+//! (`move.l (20,%sp), (4,%sp)`), which moves no offset.
+//!
 //! A pushed register that a scratch-register load in the same block filled,
 //! and nothing else reads, is pushed from the load's memory instead
 //! (`move.l (4,%a0), -(%sp)`) when that is cheaper than the load and the push;
@@ -148,8 +152,10 @@ impl Plan {
     }
 }
 
-/// One convertible sequence: where it is, how big, and the two prices.
+/// One call sequence with a plan to make: where it is, how big, and the two prices. A sequence that cannot be pushed
+/// (`pushable` false) is here for its fusions alone.
 struct Sequence {
+    pushable: bool,
     down: usize,
     up: usize,
     bytes: i64,
@@ -398,7 +404,9 @@ fn foldable(
     let inst = insts[load];
     let Kind::Op(name) = inst.kind else { return None };
     memory_push(name)?;
-    if !inst.may_load || inst.may_store || inst.side_effects {
+    // a volatile load (the only load with side effects) is read once, in its place among the others, by a push or a
+    // store; a group of pushes would read it again
+    if !inst.may_load || inst.may_store || (inst.side_effects && together.len() > 1) {
         return None;
     }
     let address = reads(inst, assignment);
@@ -875,12 +883,14 @@ fn sequences(
             priced.0 = add(priced.0, kept);
             priced.1 = add(priced.1, pushed);
         }
-        if !convertible || sorted != wanted || !keeps_values {
+        let pushable = convertible && sorted == wanted && keeps_values;
+        if !pushable && fusions.is_empty() {
             others.push(bytes);
             continue;
         }
         let cleanup = crate::expand::sp_adjust(bytes, short);
         found.push(Sequence {
+            pushable,
             down,
             up,
             bytes,
@@ -1000,8 +1010,8 @@ pub fn plan(
         Ok(sum)
     };
     let none = vec![false; found.len()];
-    let all = vec![true; found.len()];
-    let alone: Vec<bool> = found.iter().map(|one| cheaper(one.pushed, one.kept, price, cpu)).collect();
+    let all: Vec<bool> = found.iter().map(|one| one.pushable).collect();
+    let alone: Vec<bool> = found.iter().map(|one| one.pushable && cheaper(one.pushed, one.kept, price, cpu)).collect();
     let mut best = (none.clone(), total(&none)?);
     for choice in [all, alone] {
         let sum = total(&choice)?;

@@ -1502,6 +1502,15 @@ pub enum Inst {
         rn: Vreg,
         rm: Option<Vreg>,
     },
+    /// `fccmp`: compares when `cond` holds of the flags, else sets them to
+    /// `nzcv`.
+    FpCondCompare {
+        size: FpSize,
+        rn: Vreg,
+        rm: Vreg,
+        nzcv: u8,
+        cond: Cond,
+    },
     FpSelect {
         size: FpSize,
         rd: Vreg,
@@ -1692,6 +1701,17 @@ pub enum Inst {
     /// `fmla v.4s, v.4s, v.s[index]`: `rd` is read and written; `lanes` is
     /// `S4` or `D2`.
     VectorFmaLane {
+        op: VectorFma,
+        lanes: Arrangement,
+        rd: Vreg,
+        rn: Vreg,
+        rm: Vreg,
+        index: u8,
+    },
+    /// `fmla d0, d1, v2.d[index]` (`FMLAv1i64_indexed`; `s` for `S4`,
+    /// `FMLAv1i32_indexed`): the scalar `rd` is read and written; `lanes` is
+    /// the arrangement of `rm`.
+    ScalarFmaLane {
         op: VectorFma,
         lanes: Arrangement,
         rd: Vreg,

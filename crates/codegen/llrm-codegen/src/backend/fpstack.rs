@@ -1314,12 +1314,14 @@ impl Ahead<'_> {
             None => block.succ.iter().find_map(|next| self.order(*next, seen))?,
         };
         // Back through the copies: a value a copy wrote was the copy's source.
-        Some(
-            after
-                .iter()
-                .map(|value| pairs.iter().find(|(result, _)| result == value).map_or(*value, |(_, source)| *source))
-                .collect(),
-        )
+        let before: Vec<u32> = after
+            .iter()
+            .map(|value| pairs.iter().find(|(result, _)| result == value).map_or(*value, |(_, source)| *source))
+            .collect();
+        // A copy whose source is still in `after` (and a result that is also
+        // a value live into the block) maps two places to one value: no order.
+        let distinct: BTreeSet<u32> = before.iter().copied().collect();
+        (distinct.len() == before.len()).then_some(before)
     }
 }
 
