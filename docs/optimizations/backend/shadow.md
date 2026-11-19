@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/shadow.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/shadow.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/shadow.rs sha256:43e9f5cb9a3c086d688074f8d141f29b7117505d7b8abc7b33f192f1b0f0bb82 -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/shadow.rs sha256:df64933e886281a396eab7735b54b26355f7303ae1f2ba2460df688c4133ff2f -->
 
 # shadow
 
@@ -27,7 +27,7 @@ A function of 3 instructions holding one register copy:
 [isel] id selector=old instructions=3 copies=1 executed=3 memory=0
 ```
 
-From `LLRM_DEBUG=isel llrm-c -m32 -O2` of `int id(int x) { return x; }`.
+From `LLRM_DEBUG=isel llrm-cc -m32 -O2` of `int id(int x) { return x; }`.
 
 ## Used by
 `assemble::staged` (the choice and the dump), `assemble::machined` (the

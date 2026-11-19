@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/basicaa.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/basicaa.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/basicaa.rs sha256:6454194a8d35a284c3be6f60630d171229b53c1ddd7ecb3e28c2fa72f5cde8b9 -->
+<!-- src: crates/opt/llrm-analysis/src/basicaa.rs sha256:4b197797bff3f2407418fa9d021ce74476106fadb6ae82c324176b5f5d4c8bcb -->
 
 # basicaa
 
@@ -13,10 +13,10 @@ Translated: `aliasCheck` (empty locations, casts stripped, the same value,
 the underlying objects, identified objects, arguments against function-local
 objects, an escape source against a non-captured local object, an access
 larger than the whole object), `DecomposeGEPExpression` (constant offsets,
-variable indices by value and scale), `subtractDecomposedGEPs` and
-`aliasGEP` as far as it needs no value ranges: the inbounds and
-constant-difference rules, nuw, and the GCD test. Not yet (deviations in the
-plan page): `GetLinearExpression` through casts, `analyzeVariableOffsets`'
+variable indices by value and scale, through `GetLinearExpression`),
+`subtractDecomposedGEPs` and `aliasGEP` as far as it needs no value ranges:
+the inbounds and constant-difference rules, nuw, and the GCD test. Not yet
+(deviations in the plan page): `analyzeVariableOffsets`'
 ranges, `aliasPHI`, `aliasSelect`, and the mod/ref queries
 other than `getModRefInfoMask` and `getModRefInfo(Call, Loc)` (they answer
 the top of the lattice). `getMemoryEffects(Call)` and `getArgModRefInfo`

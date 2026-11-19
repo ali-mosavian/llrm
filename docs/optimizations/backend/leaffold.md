@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/leaffold.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/leaffold.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/leaffold.rs sha256:dd9586fb1c2d9cdfd9575b5adf29cfdef3d809a1de613ec5bc11d87bcfddf886 -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/leaffold.rs sha256:04158f6228f930ecc55cf5ad4654f67f73f5b3f64082293593e661228a2fc721 -->
 
 # leaffold
 
@@ -27,10 +27,8 @@ DEVIATE LEAF-FOLD-OS (owner m32, exit 2026-11-20). The pin keeps the leaf:
 case. `Target::leaf_fold_at_size` turns it on (m32); only at -Os, where the
 jump counts and the move on the path that does not branch does not.
 
-The fold changes the registers after it, so the bytes are not its own: of the
-12 -Os cells it touched, 4 grew (jpeg_fixed +16, x_bubble +3, quicksort +2,
-x_switch_sparse +1). DEVIATE LEAF-FOLD-TRIAL (owner m32, exit 2026-11-24): a
-module the backend folded is assembled again without the fold
+DEVIATE LEAF-FOLD-TRIAL (owner m32, exit 2026-11-24): the fold changes the
+registers after it, so a module it folded is assembled again without it
 (`driver::trial`) and the smaller object is kept.
 
 ## Runs

@@ -688,6 +688,15 @@ pub trait Tti {
         false
     }
 
+    /// A general register holds a vector of lanes narrower than itself: the
+    /// vectorizer widens bitwise loops by it, and the vectors are lowered to
+    /// the integer of their width before selection
+    /// (`crate::vectorlower`, gcc's `tree-vect-generic.cc`). Where the target
+    /// has vector registers the vectors stay.
+    fn word_vectors(&self) -> bool {
+        false
+    }
+
     /// `getRegisterBitWidth(RGK_Scalar)`: the bits of a scalar register, 0
     /// where the target does not say.
     fn scalar_register_bits(&self) -> u32 {
@@ -1921,6 +1930,17 @@ pub trait Tti {
 
     /// `Tuning::second_ipsccp`.
     fn second_ipsccp(&self) -> bool {
+        false
+    }
+
+    /// DEVIATE UNROLL-THROUGH-CALLS (`loopunrollpass.rs`): whether the full
+    /// unroll's cost analysis goes on past a call, which it prices as one
+    /// instruction the copies keep. The pin gives up at the first call, so a
+    /// loop that calls is unrolled only under its size threshold; what the
+    /// unrolling folds around the call (a `switch` on the counter) is not
+    /// counted. gcc's `tree_estimate_loop_size` prices calls and counts what
+    /// becomes constant, and unrolls such a loop completely. Off by default.
+    fn unroll_prices_calls(&self) -> bool {
         false
     }
 

@@ -28,6 +28,16 @@
 //! +3.2% clocks and +289 B at -O2: the split of a call whose product varies
 //! changes the unrolling price of the loop that holds it. Only the invariant
 //! product is split here.
+//!
+//! # Example
+//! A `llvm.fmuladd` in a loop whose factors are defined outside it and whose addend
+//! is not becomes `fmul` and `fadd`, so LICM hoists the multiply.
+//!
+//! ```text
+//! loop:  %p = call fmuladd(%r, 6.7e7, %x)        loop:  %m = fmul %r, 6.7e7
+//!                                          =>           %p = fadd %m, %x
+//!                                                  (LICM: %m leaves the loop)
+//! ```
 
 use llrm_analysis::cfg;
 use llrm_mir::dense::IdMap;
