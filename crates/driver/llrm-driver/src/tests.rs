@@ -4560,7 +4560,7 @@ fn a_flagless_module_built_static_takes_the_dword_move_for_a_global_address() {
     assert!(encoded(&[]).windows(3).any(|code| code == [0x48, 0x8D, 0x3D]));
 }
 
-
+/// A local declared `align 16` sat at `[rsp+4]`: the frame clamped every
 /// alignment to 4 (bintree's array; a 16-byte `movaps` clear of it would
 /// fault).
 #[test]

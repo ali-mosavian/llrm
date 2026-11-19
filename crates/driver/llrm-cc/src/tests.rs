@@ -352,7 +352,7 @@ fn the_last_pic_flag_reaches_the_backend_as_the_relocation_model() {
         .any(|one| one.starts_with("-relocation-model")));
 }
 
- The cc65 rows name
+/// A C global `sp` collided with cc65's own `sp` at link. The cc65 rows name
 /// the platform whose C symbols take cc65's `_`; the sim65 rows keep bare
 /// names.
 #[test]
