@@ -1165,6 +1165,19 @@ fn float_inst(
             });
         }
     }
+    // The pin's `fabs (fsub a, b)` pattern: the size is a width, not a letter.
+    if let Some(size) = match name {
+        "FABD32" => Some(FpSize::S),
+        "FABD64" => Some(FpSize::D),
+        _ => None,
+    } {
+        return Some(match operands {
+            [Operand::Fpr(rn), Operand::Fpr(rm)] => {
+                Ok(Inst::FpBinary { op: FpBinary::Abd, size, rd, rn: *rn, rm: *rm })
+            }
+            _ => wrong(),
+        });
+    }
     let unary = [
         ("FNEG", FpUnary::Neg),
         ("FABS", FpUnary::Abs),
