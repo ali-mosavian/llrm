@@ -112,15 +112,19 @@ pub enum Intrinsic {
     VectorReduce(ReduceKind),
     /// `llvm.copysign`: the first argument with the second's sign.
     CopySign,
+    /// `llvm.is.fpclass`: whether the float is of one of the classes the
+    /// constant second argument (an `FPClassTest` mask) names.
+    IsFpClass,
     /// `llvm.fabs`, `llvm.sqrt` and their kin: a function of one float.
     Unary(FloatFunction),
     /// Rounds to an integer as the rounding mode says: by default, to
     /// nearest, ties to even.
     LRint,
-    /// `llvm.experimental.fp{to}{s,u}i.checked` (no LLVM counterpart; DEVIATE FPTOINT-CHECKED):
-    /// the float toward zero as an integer of the result's width, and whether
-    /// it fits that integer (NaN and a float past the range do not). The value
-    /// is unspecified where it does not fit, and no instruction faults.
+    /// `llvm.experimental.fp{to}{s,u}i.checked` (no LLVM counterpart; DEVIATE
+    /// FPTOINT-CHECKED): the float toward zero as an integer of the
+    /// result's width, and whether it fits that integer (NaN and a float
+    /// past the range do not). The value is unspecified where it does not
+    /// fit, and no instruction faults.
     FpToIntChecked {
         signed: bool,
     },
@@ -169,8 +173,9 @@ pub enum Intrinsic {
     Trap,
     /// `llvm.debugtrap`: a breakpoint (`int3` on x86).
     DebugTrap,
-    /// `llvm.ubsantrap`: stops with the sanitizer's check kind (`ud1 kind(%eax), %eax`
-    /// on x86, `X86MCInstLower.cpp` `UBSAN_UD1`); not translated.
+    /// `llvm.ubsantrap`: stops with the sanitizer's check kind (`ud1
+    /// kind(%eax), %eax` on x86, `X86MCInstLower.cpp` `UBSAN_UD1`); not
+    /// translated.
     UbsanTrap,
     /// `llvm.fake.use`: keeps its operands live for a debugger at `-Og`; no
     /// code runs it.
@@ -301,6 +306,11 @@ pub fn code(name: &str) -> Option<(Vec<u8>, Vec<(usize, i64)>)> {
 /// call's first arguments, in order, before the registers'.
 const ASM: &str = "llrm.ia16.asm.";
 
+/// The same block for flat 32-bit code: `llrm.ia32.asm.`, the grammar above,
+/// the registers the 32-bit target names (`eax`, `st0`, `st1`: the x87 stack's
+/// top and its next). One mechanism, the bitness the prefix.
+const ASM32: &str = "llrm.ia32.asm.";
+
 /// A word of an inline block that names a symbol: where, as what (`offset`,
 /// `segment`, `reloff`), and plus what.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -310,9 +320,10 @@ pub struct AsmFixup {
     pub addend: i64,
 }
 
-/// An inline assembly block: registers by their 16-bit names.
+/// An inline assembly block: registers by their names at `bits` (16 or 32).
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AsmBlock {
+    pub bits: u8,
     pub code: Vec<u8>,
     pub inputs: Vec<String>,
     pub outputs: Vec<String>,
@@ -326,7 +337,8 @@ pub fn asm_name(block: &AsmBlock) -> String {
     let list = |names: &[String]| if names.is_empty() { "-".to_owned() } else { names.join("_") };
     let fixups: String = block.fixups.iter().map(|one| format!(".f{}_{}_{}", one.at, one.kind, one.addend)).collect();
     format!(
-        "{ASM}{hex}.{}.{}.{}.{}{fixups}",
+        "{}{hex}.{}.{}.{}.{}{fixups}",
+        if block.bits == 32 { ASM32 } else { ASM },
         list(&block.inputs),
         list(&block.outputs),
         list(&block.clobbers),
@@ -335,7 +347,11 @@ pub fn asm_name(block: &AsmBlock) -> String {
 }
 
 pub fn asm(name: &str) -> Option<AsmBlock> {
-    let parts = name.strip_prefix(ASM)?.split('.').collect::<Vec<_>>();
+    let (bits, rest) = match name.strip_prefix(ASM) {
+        Some(rest) => (16, rest),
+        None => (32, name.strip_prefix(ASM32)?),
+    };
+    let parts = rest.split('.').collect::<Vec<_>>();
     let [hex, inputs, outputs, clobbers, memory, fixups @ ..] = &parts[..] else {
         return None;
     };
@@ -364,7 +380,15 @@ pub fn asm(name: &str) -> Option<AsmBlock> {
             })
         })
         .collect::<Option<Vec<_>>>()?;
-    Some(AsmBlock { code, inputs: list(inputs), outputs: list(outputs), clobbers: list(clobbers), memory, fixups })
+    Some(AsmBlock {
+        bits,
+        code,
+        inputs: list(inputs),
+        outputs: list(outputs),
+        clobbers: list(clobbers),
+        memory,
+        fixups,
+    })
 }
 
 /// What `llvm.ctlz`, `llvm.cttz` and `llvm.ctpop` count.
@@ -628,7 +652,7 @@ thread_local! {
     static PROBES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-const TABLE: [Spec; 99] = [
+const TABLE: [Spec; 100] = [
     overflow("llvm.sadd.with.overflow", BinaryOp::Add, true),
     overflow("llvm.uadd.with.overflow", BinaryOp::Add, false),
     overflow("llvm.ssub.with.overflow", BinaryOp::Sub, true),
@@ -694,6 +718,14 @@ const TABLE: [Spec; 99] = [
     reduce("llvm.vector.reduce.fadd", ReduceKind::FAdd),
     reduce("llvm.vector.reduce.fmul", ReduceKind::FMul),
     arithmetic("llvm.copysign", Intrinsic::CopySign, Slot::Any(0), &[Slot::Any(0), Slot::Any(0)], Kind::Float),
+    Spec {
+        name: "llvm.is.fpclass",
+        intrinsic: Intrinsic::IsFpClass,
+        overloads: &[Kind::Float],
+        returns: Slot::Int(1),
+        parameters: &[Slot::Any(0), Slot::Int(32)],
+        own: None,
+    },
     unary("llvm.fabs", FloatFunction::Fabs),
     unary("llvm.sqrt", FloatFunction::Sqrt),
     unary("llvm.sin", FloatFunction::Sin),
@@ -1138,7 +1170,11 @@ pub fn is_target_intrinsic(name: &str) -> bool {
 }
 
 pub fn is_reserved(name: &str) -> bool {
-    name.starts_with("llvm.") || name.starts_with("llrm.ia16.") || name.starts_with("llrm.noalias") || name.starts_with("llrm.vararg.")
+    name.starts_with("llvm.")
+        || name.starts_with("llrm.ia16.")
+        || name.starts_with("llrm.ia32.asm.")
+        || name.starts_with("llrm.noalias")
+        || name.starts_with("llrm.vararg.")
 }
 
 /// The type suffix LLVM mangles an overloaded type into.
@@ -1187,7 +1223,7 @@ impl Intrinsic {
         if name.starts_with(CODE) {
             return Some(Intrinsic::Code);
         }
-        if name.starts_with(ASM) {
+        if name.starts_with(ASM) || name.starts_with(ASM32) {
             return Some(Intrinsic::Asm);
         }
         // The longest table name that is `name` or a `.`-cut prefix of it.
@@ -1231,8 +1267,13 @@ impl Intrinsic {
         };
         if self == Intrinsic::Asm {
             let block = asm(name).ok_or("Inline assembly's name does not parse!")?;
+            // Flat code also passes bytes, and the x87 stack's values (`st0`,
+            // `st1`).
+            let flat = block.bits == 32;
             let word = |ty: &TypeId| {
-                matches!(types.int_bits(*ty), Some(16 | 32)) || matches!(types.get(*ty), Type::Pointer(0))
+                matches!(types.int_bits(*ty), Some(16 | 32))
+                    || matches!(types.get(*ty), Type::Pointer(0))
+                    || flat && (types.int_bits(*ty) == Some(8) || matches!(types.get(*ty), Type::Float(_)))
             };
             let answers = match &block.outputs[..] {
                 [] => types.is_void(*returns),
@@ -1344,12 +1385,7 @@ impl Intrinsic {
         if lane(&spec.returns) && !returns_ok(&mut matches) {
             return Err("Intrinsic has incorrect return type!".to_owned());
         }
-        if !spec
-            .parameters
-            .iter()
-            .zip(parameters)
-            .filter(|(slot, _)| lane(slot))
-            .all(|(slot, ty)| matches(*slot, *ty))
+        if !spec.parameters.iter().zip(parameters).filter(|(slot, _)| lane(slot)).all(|(slot, ty)| matches(*slot, *ty))
         {
             return Err("Intrinsic has incorrect argument type!".to_owned());
         }

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/slpinsert.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/slpinsert.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/slpinsert.rs sha256:061cb7e04d87e26d21e91fccb7bfa170aee7193c3d6ab212c165ac4e2f285f57 -->
+<!-- src: crates/opt/llrm-transforms/src/slpinsert.rs sha256:5473f8a3306d239ba1e7c765715c5dab7205c6a70166b2259202882e0d45e7c3 -->
 
 # slpinsert
 
@@ -26,3 +26,14 @@ In `slpvectorize`, after the phis and before the store chains.
 
 ## Used by
 `slpvectorize`, `slptree`.
+
+## Example
+A chain of `insertelement`s of scalars whose tree of operations pays becomes one vector operation.
+
+```text
+%x0 = add i32 %a0, %b0
+%x1 = add i32 %a1, %b1
+%i0 = insertelement <2 x i32> poison, i32 %x0, i64 0
+%i1 = insertelement <2 x i32> %i0, i32 %x1, i64 1
+=> %i1 = add <2 x i32> %va, %vb
+```

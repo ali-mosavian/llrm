@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/schedboundary.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/schedboundary.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/schedboundary.rs sha256:c685f2640d8bddec157bf03b2e11e3432ea0e3168b30a48086258f1522198f63 -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/schedboundary.rs sha256:9b68cd83e469de2e3dfe4b002d68b6b4afa7019a329f32728b341f55423bc61f -->
 
 # schedboundary
 
@@ -31,6 +31,16 @@ factors of `TargetSchedModel::init` (TargetSchedule.cpp#L53-L66).
 `ScheduleHazardRecognizer` (the pre-RA AArch64 scheduler has none) and
 `ResourceSegments` (`enableIntervals`, off for A510 and Cyclone). DEVIATE
 SB1, owner arm64-phi, exit with the first model that turns them on.
+
+## Example
+On an unbuffered machine a node released with a ready cycle after the current
+one goes to `Pending`; `bumpNode` and the clock move it to `Available`
+(the cycles are illustrative).
+
+```text
+now = 4, release node ready at cycle 6  -> Pending
+bump clock to 6, release pending        -> Available
+```
 
 ## Used by
 Named by `genericdriver`, `machinesched`, `schedmodel`.

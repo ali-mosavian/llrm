@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/cgpcondsplit.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/cgpcondsplit.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/cgpcondsplit.rs sha256:82dfbda21f558732b631b8cc761ac894da2f01172d7a32d044e1c307046f23ad -->
+<!-- src: crates/opt/llrm-transforms/src/cgpcondsplit.rs sha256:13272813a5ce8a6c90d80d83cc785aa4cf4e9b7b061969fdbc455a5850f18dc9 -->
 
 # cgpcondsplit
 
@@ -26,6 +26,16 @@ instruction): `SimplifyCFG`'s `FoldBranchToCommonDest` made the select
 from two branches, and the cone, made before the first branch in the
 source, stayed in front of both. gcc's `tree-ssa-sink` moves it behind the
 first test (sfm16_dbg -O1: 400 `fadd` against 384, +291 clocks).
+
+## Example
+A branch on `select %a, true, %b` whose `%b` is a dear cone only it reads
+becomes two branches, the cone after the first.
+
+```text
+ %b = <dear cone>                     br %a, %t, %side
+ %c = select %a, true, %b       side: %b = <dear cone>
+ br %c, %t, %f                        br %b, %t, %f
+```
 
 ## Used by
 Named by `pipeline`.
