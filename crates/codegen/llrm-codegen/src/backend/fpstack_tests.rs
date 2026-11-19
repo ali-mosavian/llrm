@@ -309,6 +309,7 @@ fn test_a_value_stays_on_the_stack_across_a_port_write() {
         indirect: false,
         table: vec![],
         repeat: false,
+        lock: false,
         table_id: None,
         pops: None,
         tied: None,

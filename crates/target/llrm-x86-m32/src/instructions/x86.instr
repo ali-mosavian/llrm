@@ -19,3 +19,9 @@ movsd     copy       m,r,r/r,r          32         rep_movs     s0=si,s1=di,d1=s
 movsb     copy       m,r,r,r/r,r,r      8          rep_movs     s0=cx,s1=si,s2=di,d1=si,d2=di,d3=cx  ds,es   rep     DF/-            Movsb_m8_m8
 movsw     copy       m,r,r,r/r,r,r      16         rep_movs     s0=cx,s1=si,s2=di,d1=si,d2=di,d3=cx  ds,es   rep     DF/-            Movsw_m16_m16
 movsd     copy       m,r,r,r/r,r,r      32         rep_movs     s0=cx,s1=si,s2=di,d1=si,d2=di,d3=cx  ds,es   rep     DF/-            Movsd_m32_m32
+
+# Atomic read-modify-write on a cell (X86InstrCompiler.td LXADD, LCMPXCHG). `lock` is Semantics.lock, not a form: the
+# pin's LOCK_ADD..XOR, INC and DEC are `add`.. with it. xadd: sum to the cell, old value to the register. cmpxchg:
+# the accumulator is written only where it differs from the cell (`cond`).
+xadd      binary     m,r/^0,^1          8,16,32   alu_mr       -                       -       -       -/OF,SF,ZF,AF,CF,PF  Xadd_rm{w}_r{w}
+cmpxchg   binary     m,r/^0,r,^1        8,16,32   cmpxchg_mr   d1=ax                   -       cond    -/OF,SF,ZF,AF,CF,PF  Cmpxchg_rm{w}_r{w}

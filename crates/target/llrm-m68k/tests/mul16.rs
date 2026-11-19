@@ -73,6 +73,28 @@ fn extended_halfwords_take_the_word_multiply_on_every_cpu() {
     }
 }
 
+/// `(long)a * b` of two shorts kept the extension of the tied operand: `move.w
+/// b,%d0; ext.l %d0; muls %d1,%d0` (parity's second loop, 68020 -Os, 2 B and a
+/// register over gcc's `muls.w mem,%d0`). `muls.w` reads the low word of both
+/// operands, so the extension is dead.
+#[test]
+fn the_tied_operand_of_a_word_multiply_is_not_extended() {
+    for cpu in CPUS {
+        for (how, mnemonic) in [("sext", "muls\t"), ("zext", "mulu\t")] {
+            for level in [Level::O1, Level::Os] {
+                let out = asm(&product(how, how), cpu, level);
+                assert!(out.contains(mnemonic), "{cpu} {how} {level:?}:\n{out}");
+                let extended =
+                    out.lines().any(|line| line.trim_start().starts_with("ext.") || line.contains("moveq\t#0"));
+                assert!(
+                    !extended,
+                    "{cpu} {how} {level:?}: the operand is extended for a multiply that reads one word:\n{out}"
+                );
+            }
+        }
+    }
+}
+
 /// Operands that are already full-width values known to fit 16 bits take
 /// the word multiply on every CPU: no extension, no copy, and 2 B shorter.
 #[test]
