@@ -170,6 +170,9 @@ wide_pairs = [["eax", "edx"], ["edx", "ecx"]]
 [sysv32]
 like = "cdecl32"
 cc = "sysv"
+# `-mregparm=N`: the arguments clang marks `inreg` (up to three i32 parts, none of a variadic call) take EAX, EDX, ECX in
+# order; every other one is on the stack (`CC_X86_32_C`).
+inreg_registers = ["eax", "edx", "ecx"]
 # i386 System V keeps the stack 16-aligned at a call (the pin's i386-linux); the DOS conventions above keep 8.
 stack_alignment = 16
 aggregate_in_register_bytes = []

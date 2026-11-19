@@ -424,8 +424,8 @@ impl llrm_target::Target for M64 {
                             inline_trial_defers_to_shared_growth: true,
                             // DEVIATE IPRA-DSO-LOCAL (owner llrm-target-x86-m64, exit 2026-11-24): see Tuning.
                             ipra_binds_local: true,
-                            // DEVIATE SD443 (owner w9, exit: a constant-argument pass after
-                            // inlining, as gcc's IPA-CP): see the m32 entry; m64 -O2
+                            // DEVIATE SD443 (owner w9, exit 2026-11-24: a constant-argument pass
+                            // after inlining, as gcc's IPA-CP): see the m32 entry; m64 -O2
                             // memory_expansion.c text -3281 B.
                             second_ipsccp: true,
                             // DEVIATE SD-DIVMAG (owner llrm-target-x86-m64, exit 2026-11-24): the m32
