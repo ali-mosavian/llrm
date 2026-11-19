@@ -491,6 +491,7 @@ impl<'a> Selector<'a> {
             }
             llrm_mir::ConstantExpr::Cast { .. } => refuse("a constant cast"),
             llrm_mir::ConstantExpr::Binary { .. } => refuse("a constant binary operator"),
+            llrm_mir::ConstantExpr::BlockAddress { .. } => refuse("a block address"),
         }
     }
 

@@ -3,7 +3,7 @@
 
 use std::fmt::Write;
 
-use crate::context::{Constant, ConstantExpr, ConstantId, ConstantKind, Context, signed};
+use crate::context::{Constant, ConstantExpr, ConstantId, ConstantKind, Context, GlobalId, signed};
 use crate::hash::HashMap;
 use crate::lexer::is_name;
 use crate::module::{
@@ -629,7 +629,12 @@ impl Printer<'_> {
     ) -> String {
         match operand {
             Operand::Value(id) => format!("%{}", slots.values[&id]),
-            Operand::Constant(id) => self.constant(id),
+            Operand::Constant(id) => match &self.context.get(id).kind {
+                ConstantKind::Expr(ConstantExpr::BlockAddress { function, block }) => {
+                    format!("blockaddress({}, %{})", self.global_name(*function), slots.blocks[block])
+                }
+                _ => self.constant(id),
+            },
             Operand::Block(id) => format!("%{}", slots.blocks[&id]),
         }
     }
@@ -678,6 +683,10 @@ impl Printer<'_> {
                     })
                     .collect();
                 format!("switch{flags} {}, {} [\n{cases}  ]", typed(0), typed(1))
+            }
+            Opcode::IndirectBr => {
+                let targets: Vec<String> = ops[1..].iter().map(|&target| self.typed(function, slots, target)).collect();
+                format!("indirectbr {}, [{}]", typed(0), targets.join(", "))
             }
             Opcode::Unreachable => "unreachable".to_owned(),
             Opcode::FNeg | Opcode::Freeze => format!("{}{flags} {}", inst.opcode.mnemonic(), typed(0)),
@@ -826,6 +835,13 @@ impl Printer<'_> {
         format!("{} {}", self.ty(self.context.get(id).ty), self.constant(id))
     }
 
+    fn global_name(
+        &self,
+        global: GlobalId,
+    ) -> String {
+        self.globals.get(global.0 as usize).cloned().unwrap_or_else(|| format!("@{}", global.0))
+    }
+
     fn constant(
         &self,
         id: ConstantId,
@@ -849,9 +865,7 @@ impl Printer<'_> {
             ConstantKind::Undef => "undef".to_owned(),
             ConstantKind::Zero => "zeroinitializer".to_owned(),
             ConstantKind::Bytes(bytes) => format!("c{}", string(bytes)),
-            ConstantKind::Global(global) => {
-                self.globals.get(global.0 as usize).cloned().unwrap_or_else(|| format!("@{}", global.0))
-            }
+            ConstantKind::Global(global) => self.global_name(*global),
             ConstantKind::Aggregate(ids) => match self.types().get(*ty) {
                 Type::Array { .. } => format!("[{}]", members(ids)),
                 Type::Vector { .. } => format!("<{}>", members(ids)),
@@ -878,6 +892,10 @@ impl Printer<'_> {
                     self.typed_constant(*lhs),
                     self.typed_constant(*rhs)
                 )
+            }
+            // A block's label is the function's to say: `operand` prints it.
+            ConstantKind::Expr(ConstantExpr::BlockAddress { function, block }) => {
+                format!("blockaddress({}, %{})", self.global_name(*function), block.0)
             }
             ConstantKind::Expr(ConstantExpr::Cast { op, value }) => {
                 format!("{} ({} to {})", spelling(&CAST, *op), self.typed_constant(*value), self.ty(*ty))

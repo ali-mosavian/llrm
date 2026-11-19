@@ -260,7 +260,7 @@ pub fn instruction_cost_with(
             };
             Cost::BASIC * (parameters + 1)
         }
-        Opcode::Br | Opcode::Ret | Opcode::Switch => tti.cf_instr_cost(false, kind),
+        Opcode::Br | Opcode::Ret | Opcode::Switch | Opcode::IndirectBr => tti.cf_instr_cost(false, kind),
         Opcode::Phi => tti.cf_instr_cost(true, kind),
         Opcode::Freeze => Cost::FREE,
         Opcode::ExtractValue(_) | Opcode::InsertValue(_) => {

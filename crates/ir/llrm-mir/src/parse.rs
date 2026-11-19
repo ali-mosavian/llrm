@@ -31,8 +31,7 @@ pub fn module(text: &str) -> Parsed<Module> {
 }
 
 /// Constructs llrm has no producer for, named so the refusal says why.
-const OUTSIDE_SUBSET: [&str; 8] =
-    ["fp128", "ppc_fp128", "half", "bfloat", "blockaddress", "indirectbr", "dso_local", "triple"];
+const OUTSIDE_SUBSET: [&str; 6] = ["fp128", "ppc_fp128", "half", "bfloat", "dso_local", "triple"];
 
 struct Parser {
     tokens: Vec<(Token, usize)>,
@@ -51,6 +50,8 @@ struct Parser {
 
 /// A function being read: names to arena ids, and uses still undefined.
 struct Local {
+    /// The function being read: what a `blockaddress` of its own blocks names.
+    global: GlobalId,
     function: Function,
     values: HashMap<Name, ValueId>,
     blocks: HashMap<Name, BlockId>,
@@ -578,6 +579,7 @@ impl Parser {
         function.return_attrs = return_attrs;
         function.calling_convention = calling_convention;
         let mut local = Local {
+            global: id,
             function,
             values: HashMap::default(),
             blocks: HashMap::default(),
@@ -1528,6 +1530,29 @@ impl Parser {
                 self.next();
                 self.local_use(local, name, ty, line)
             }
+            Token::Word(word) if word == "blockaddress" => {
+                self.next();
+                self.expect_punct('(')?;
+                let line = self.line();
+                let Token::Global(name) = self.next() else {
+                    self.at -= 1;
+                    return self.fail(format!("expected the function's name, found {}", self.describe()));
+                };
+                if self.globals.get(&name) != Some(&local.global) {
+                    return self.fail_on(line, "a blockaddress names a block of the function it is read in");
+                }
+                self.expect_punct(',')?;
+                let Token::Local(block) = self.next() else {
+                    self.at -= 1;
+                    return self.fail(format!("expected a block, found {}", self.describe()));
+                };
+                let block = self.block_id(local, block);
+                self.expect_punct(')')?;
+                Ok(Operand::Constant(self.module.context.constant(Constant {
+                    ty,
+                    kind: ConstantKind::Expr(ConstantExpr::BlockAddress { function: local.global, block }),
+                })))
+            }
             _ => Ok(Operand::Constant(self.constant(ty)?)),
         }
     }
@@ -1776,6 +1801,19 @@ impl Parser {
                         operands.push(self.label(local)?);
                     }
                     (Opcode::Switch, void, operands)
+                }
+                "indirectbr" => {
+                    let (_, address) = self.typed_value(local)?;
+                    self.expect_punct(',')?;
+                    self.expect_punct('[')?;
+                    let mut operands = vec![address];
+                    while !self.eat_punct(']') {
+                        if operands.len() > 1 {
+                            self.expect_punct(',')?;
+                        }
+                        operands.push(self.label(local)?);
+                    }
+                    (Opcode::IndirectBr, void, operands)
                 }
                 "unreachable" => (Opcode::Unreachable, void, vec![]),
                 "resume" => {

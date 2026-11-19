@@ -1001,6 +1001,12 @@ impl<'a> Analyzer<'a> {
             }
             Opcode::Select => self.visit_select(inst),
             Opcode::Switch => self.visit_switch(inst),
+            // `visitIndirectBrInst`: costs like any instruction, and the
+            // callee is noted as holding one.
+            Opcode::IndirectBr => {
+                self.has_indirect_br = true;
+                false
+            }
             Opcode::Resume => false,
             Opcode::Unreachable => true,
             Opcode::LandingPad { .. } | Opcode::Freeze => self.visit_default(inst),

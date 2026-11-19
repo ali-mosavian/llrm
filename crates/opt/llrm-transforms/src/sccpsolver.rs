@@ -91,7 +91,7 @@ use llrm_analysis::occurrence::arms;
 use llrm_mir::constantfolding::{self, Env as FoldEnv};
 use llrm_mir::constantrange::{ConstantRange, NO_SIGNED_WRAP, NO_UNSIGNED_WRAP, PreferredRangeType, RangeIntrinsic};
 use llrm_mir::context::GlobalId;
-use llrm_mir::context::{Constant, ConstantId, ConstantKind, Context};
+use llrm_mir::context::{Constant, ConstantExpr, ConstantId, ConstantKind, Context};
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::facts::Facts;
@@ -1119,6 +1119,28 @@ impl<'a> Solver<'a> {
                     succs.fill(true);
                 }
             }
+            // `IndirectBrInst`: a known block address picks its one
+            // destination; any other known address could be any of them.
+            Opcode::IndirectBr => {
+                let address = instruction.operands[0];
+                let state = self.get_value_state(address);
+                let ty = self.type_of(address);
+                let known = self.get_constant(&state, ty).and_then(|id| match self.context.get(id).kind {
+                    ConstantKind::Expr(ConstantExpr::BlockAddress { block, .. }) => Some(block),
+                    _ => None,
+                });
+                match known {
+                    Some(target) => {
+                        // A destination the branch does not list is
+                        // undefined behaviour: no successor is feasible.
+                        if let Some(at) = instruction.operands[1..].iter().position(|op| *op == Operand::Block(target)) {
+                            succs[at] = true;
+                        }
+                    }
+                    None if !state.is_unknown_or_undef() => succs.fill(true),
+                    None => {}
+                }
+            }
             _ => unreachable!("SCCP: don't know how to handle this terminator"),
         }
         succs
@@ -1134,7 +1156,7 @@ impl<'a> Solver<'a> {
         match &instruction.opcode {
             Opcode::Phi => self.visit_phi(inst),
             Opcode::Ret => self.visit_return(inst),
-            Opcode::Br | Opcode::Switch => self.visit_terminator(inst),
+            Opcode::Br | Opcode::Switch | Opcode::IndirectBr => self.visit_terminator(inst),
             Opcode::Invoke(_) => {
                 self.visit_call_base(inst);
                 self.visit_terminator(inst);

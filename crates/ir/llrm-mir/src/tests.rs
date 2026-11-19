@@ -91,6 +91,22 @@ fn constructs_outside_the_subset_are_refused() {
     assert_eq!(refusal("target triple = \"i386\"\n"), "line 1: `triple` is outside MIR's subset of LLVM");
 }
 
+/// Before: `blockaddress` and `indirectbr` were refused at the parser
+/// ("`blockaddress` is outside MIR's subset"), so a computed goto compiled on
+/// no target.
+#[test]
+fn a_computed_goto_round_trips_through_text() {
+    let text = "define i16 @f(i16 %0) {\n  %2 = icmp eq i16 %0, 0\n  %3 = select i1 %2, ptr blockaddress(@f, %one), ptr blockaddress(@f, %two)\n  indirectbr ptr %3, [label %one, label %two]\n\none:\n  ret i16 1\n\ntwo:\n  ret i16 2\n}\n";
+    assert_eq!(round(text), text);
+}
+
+#[test]
+fn an_indirectbr_listing_a_destination_twice_fails_verification() {
+    let text = "define void @f(ptr %0) {\n  indirectbr ptr %0, [label %a, label %a]\n\na:\n  ret void\n}\n";
+    let problems = crate::verify::verify(&parse::module(text).expect("parses"));
+    assert!(problems.iter().any(|one| one.contains("lists a destination twice")), "{problems:?}");
+}
+
 #[test]
 fn attribute_groups_may_follow_their_use() {
     let text = "declare void @stop(i16) #0\n\nattributes #0 = { noreturn memory(argmem: read) \"kind\"=\"error\" }\n";

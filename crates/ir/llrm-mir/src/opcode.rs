@@ -744,7 +744,8 @@ pub enum Clause {
 }
 
 /// Operands, in order: `ret [v]`; `br dest` or `br cond, true, false`;
-/// `switch v, default, (case, dest)*`; `invoke args.., normal, unwind,
+/// `switch v, default, (case, dest)*`; `indirectbr addr, dest*` (the blocks
+/// it may reach, each once); `invoke args.., normal, unwind,
 /// callee` and `call args.., callee`, as LLVM's CallBase keeps them;
 /// `phi (v, block)*`; `alloca [count]`; `store value, ptr`; `gep ptr,
 /// indices..`; `landingpad clauses..`.
@@ -753,6 +754,7 @@ pub enum Opcode {
     Ret,
     Br,
     Switch,
+    IndirectBr,
     Invoke(Box<CallInfo>),
     Resume,
     Unreachable,
@@ -873,7 +875,13 @@ impl Opcode {
     pub fn is_terminator(&self) -> bool {
         matches!(
             self,
-            Self::Ret | Self::Br | Self::Switch | Self::Invoke(_) | Self::Resume | Self::Unreachable
+            Self::Ret
+                | Self::Br
+                | Self::Switch
+                | Self::IndirectBr
+                | Self::Invoke(_)
+                | Self::Resume
+                | Self::Unreachable
         )
     }
 
@@ -882,6 +890,7 @@ impl Opcode {
             Self::Ret => "ret",
             Self::Br => "br",
             Self::Switch => "switch",
+            Self::IndirectBr => "indirectbr",
             Self::Invoke(_) => "invoke",
             Self::Resume => "resume",
             Self::Unreachable => "unreachable",
