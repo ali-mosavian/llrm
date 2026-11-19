@@ -300,7 +300,12 @@ fn lowered(
                         lower(&base, &names).map_or(true, |kept| crate::trial::calls_mulsi3(&kept.items))
                     })
                 };
-                let groups = trial::groups(&sites, &outlined);
+                // refused sites alone keep the one verdict over every function that differs
+                let groups = if outlined.is_empty() {
+                    vec![trial::Group { names: cut.clone(), refused: (0..sites.len()).collect(), accepted: Vec::new() }]
+                } else {
+                    trial::groups(&sites, &outlined)
+                };
                 let only = |items: &[(String, Vec<Item>)], names: &std::collections::BTreeSet<String>| -> Vec<(String, Vec<Item>)> {
                     items.iter().filter(|(name, _)| names.contains(name)).cloned().collect()
                 };
