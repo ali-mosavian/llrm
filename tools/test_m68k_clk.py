@@ -67,3 +67,15 @@ def test_a_program_naming_long_double_has_no_gcc_column():
     """gcc's m68k long double is 12 bytes, ours 8: long_double_layout -Os read ours 2344 B against gcc's 438 B (+435%), a cell no compiler change can move."""
     assert not gcc_is_comparable("long double x; int main(void) { return sizeof x; }")
     assert gcc_is_comparable("// a long double in a comment\nint main(void) { return 0; }")
+
+
+def test_gcc_builds_the_clang_branch_of_a_program_that_tests_it(tmp_path):
+    """variadic.c -Os 68020: gcc built the `#ifndef __clang__` macro walk, 168 B, where ours builds the stdarg branch, 230 B: the card read ours +37% worse; with the same branch gcc is 266 B."""
+    import m68k_clk
+
+    source = tmp_path / "p.c"
+    source.write_text("#ifdef __clang__\nint a;\n#endif\n")
+    assert "-D__clang__" in m68k_clk.gcc_command("gcc", "/", "68020", "Os", source, "p.o", False, [])
+    plain = tmp_path / "q.c"
+    plain.write_text("int a;\n")
+    assert "-D__clang__" not in m68k_clk.gcc_command("gcc", "/", "68020", "Os", plain, "p.o", False, [])

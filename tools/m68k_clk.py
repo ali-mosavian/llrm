@@ -88,7 +88,7 @@ def gcc_command(gcc, gcc_root, cpu, level, path, obj, pcrel, flags=()):
 
     return [gcc, f"-B{gcc_root}/usr/lib/gcc-cross/m68k-linux-gnu/15/", f"-B{gcc_root}/usr/m68k-linux-gnu/bin/",
             "-ffreestanding", "-nostdlib", "-w", "-msoft-float", *(["-mpcrel"] if pcrel else []), f"-mcpu={cpu}", f"-{level}",
-            *external_flags.GCC_DIALECT, *external_flags.gcc_program_flags(flags), "-isystem", str(ROOT / "runtime/shared/posix"), "-c", str(path), "-o", str(obj)]
+            *external_flags.GCC_DIALECT, *external_flags.gcc_source_defines(Path(path).read_text() if Path(path).is_file() else ""), *external_flags.gcc_program_flags(flags), *(["-isystem", os.environ["M68K_GCC_HEADERS"]] if os.environ.get("M68K_GCC_HEADERS") else []), "-isystem", str(ROOT / "runtime/shared/posix"), "-c", str(path), "-o", str(obj)]
 
 
 def main():
