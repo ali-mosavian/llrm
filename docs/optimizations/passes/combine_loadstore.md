@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_loadstore.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_loadstore.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_loadstore.rs sha256:0a0d8a08a3811baeada30f48188dc681d67df4e76495bf2c3e3cc04709c6e980 -->
+<!-- src: crates/opt/llrm-transforms/src/combine_loadstore.rs sha256:eec78ccdc78a2c2b6034c554aed7f13f598ec99eae48a86aca1ff38295b5b4f3 -->
 
 # combine_loadstore
 
@@ -41,9 +41,9 @@ between a stored `i32` and `float`); of the metadata only an equal `tbaa`
 is kept (`AAMDNodes::merge` and the access-group intersection are not
 translated). Exit 2026-11-20.
 
-DEVIATE 1: `combineStoreToValueType`, `unpackStoreToAggregate` and
-`replaceGEPIdxWithZero` are the next slices of this file, not yet
-translated.
+DEVIATE 1: `unpackStoreToAggregate` and `replaceGEPIdxWithZero` are the
+next slices of this file, not yet translated; `combineStoreToValueType`
+has its `bitcast` case only (`likeBitCastFromVector` is not translated).
 
 DEVIATE 2: a store to constant memory (`!isModSet(AA->getModRefInfoMask)`)
 is not erased: the combine holds no alias analysis.

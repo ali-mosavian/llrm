@@ -1947,6 +1947,16 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE WIDEN-RETURNS: a function only its own module calls, whose every
+    /// caller extends its result (`zext` or `sext` to one type), returns the
+    /// wider value itself, extended once where it returns rather than at each
+    /// call (`widenreturns`). A target whose wide return costs the callee one
+    /// extension and the callers none opts in; false: the result is returned as
+    /// written.
+    fn widen_private_returns(&self) -> bool {
+        false
+    }
+
     /// DEVIATE UNROLL-THROUGH-CALLS (`loopunrollpass.rs`): whether the full
     /// unroll's cost analysis goes on past a call, which it prices as one
     /// instruction the copies keep. The pin gives up at the first call, so a
