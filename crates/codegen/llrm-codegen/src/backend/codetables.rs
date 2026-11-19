@@ -21,6 +21,14 @@
 //!   mov al, byte ptr T[di]          mov al, byte ptr cs:T[di]
 //!   (T in _DATA, 12 B)       =>     (T after the procedure's last byte)
 //! ```
+//!
+//! # Example
+//! A table read by one procedure, only through loads, moves into the code after that procedure and is read through `cs:`.
+//!
+//! ```text
+//! mov al, byte ptr T[di]          mov al, byte ptr cs:T[di]
+//! (T in _DATA, 12 B)       =>     (T after the procedure's last byte)
+//! ```
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 
