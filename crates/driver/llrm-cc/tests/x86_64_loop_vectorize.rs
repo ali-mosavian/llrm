@@ -64,6 +64,48 @@ fn an_int_multiply_loop_uses_pmuludq() {
     assert!(multiply.contains("pmuludq") && multiply.contains("punpckldq"), "{multiply}");
 }
 
+/// A vector multiply by `2^n + 1`, `2^n - 1` or `-(2^n - 1)` is a shift and an add or subtract (`visitMUL` through
+/// `isConstOrConstSplat`, `decomposeMulByConstant`): it read only a scalar constant, so a splat stayed `pmuludq` twice
+/// with five shuffles (`loop_countdown_sum` +24% instructions against clang).
+#[test]
+fn a_vector_multiply_by_a_near_power_of_two_is_a_shift_and_an_add() {
+    let text = assembly("x86_64-linux", "-O2");
+    for (name, shift, op) in [
+        ("times_three", "pslld", "paddd"),
+        ("times_seven", "pslld", "psubd"),
+        ("times_minus_three", "pslld", "psubd"),
+    ] {
+        let body = body(&text, name);
+        assert!(!body.contains("pmuludq"), "{name} multiplies: {body}");
+        assert!(body.contains(shift) && body.contains(op), "{name} lacks {shift} and {op}: {body}");
+    }
+}
+
+/// A vector narrower than a register (`<8 x i8>`, `<4 x i16>`, `<2 x i32>`)
+/// stopped the compile (`Legalize(Unsupported { op: Load, ty: V8I8, "vector
+/// with no register class" })`, no output at all). It is now widened to the
+/// register as the pin's `TypeWidenVector` does and its accesses are `movq`, 8
+/// bytes, as wide as the vector: the host run in `lv_run.c` puts each buffer
+/// against an unmapped page.
+#[test]
+fn a_vector_narrower_than_a_register_is_widened_and_moved_by_movq() {
+    let text = assembly_of("lv_narrow.c", "x86_64-linux", "-O2");
+    for (name, op) in [("add_u8x8", "paddb"), ("sub_u16x4", "psubw"), ("xor_u32x2", "pxor")] {
+        let body = body(&text, name);
+        assert!(body.contains(op) && body.contains("movq"), "{name} lacks {op} and movq: {body}");
+        assert!(!body.contains("xmmword") && !body.contains("movups") && !body.contains("movdqu"), "{name}: {body}");
+    }
+}
+
+/// The vectors an unrolled vector loop stores are constants (`<0, 1, ..> + <8, ..>` per trip folds, #10074): with the
+/// sub-register vectors widened, `copy_runs`' init loops are stored constants and not `paddb`/`pmullw` at run time.
+#[test]
+fn the_vectors_a_fully_unrolled_ramp_loop_stores_are_constants() {
+    let text = assembly_of("lv_narrow.c", "x86_64-linux", "-O2");
+    let fill = body(&text, "fill_ramp");
+    assert!(!fill.contains("paddb") && !fill.contains("pmullw") && !fill.contains("paddw"), "{fill}");
+}
+
 #[test]
 fn the_32_bit_target_and_o1_keep_every_loop_scalar() {
     assert!(!assembly("x86_32-linux", "-O2").contains("xmm"));
@@ -79,6 +121,60 @@ fn a_sum_loop_is_vector_with_a_folded_total() {
     assert!(sum.contains("paddd"), "{sum}");
 }
 
+/// A vector sum is folded by shuffles, as the pin's `ExpandReductions` does
+/// (`pshufd` for the 64- and 32-bit halves, `psrld` and `psrlw` for the 16- and
+/// 8-bit ones, then `movd`): it was spilled to the stack and every lane loaded
+/// (`[rsp-24]`, two `add`s and a `mov`).
+#[test]
+fn a_vector_total_is_folded_by_shuffles_and_not_spilled_to_the_stack() {
+    let text = assembly("x86_64-linux", "-O2");
+    for (name, shift) in
+        [("sum_array", None), ("sum_longs", None), ("sum_shorts", Some("psrld")), ("sum_bytes", Some("psrlw"))]
+    {
+        let sum = body(&text, name);
+        assert!(sum.contains("pshufd") && (sum.contains("movd") || sum.contains("movq")), "{name}: {sum}");
+        assert!(!sum.contains("rsp"), "{name} spills the vector: {sum}");
+        if let Some(shift) = shift {
+            assert!(sum.contains(shift), "{name} lacks {shift}: {sum}");
+        }
+    }
+}
+
+/// `pshufd` was a tied two-address form (`movaps xmm1, xmm0; pshufd xmm1, xmm1, 0xee`), a copy before each fold step
+/// where the pin writes a fresh register (`pshufd xmm1, xmm0, 0xee`): countdown_sum 462,091 against 442,611 Ir.
+#[test]
+fn a_vector_total_shuffles_into_a_fresh_register_with_no_copy() {
+    let text = assembly("x86_64-linux", "-O2");
+    let sum = body(&text, "sum_array");
+    let lines: Vec<&str> = sum.lines().map(str::trim).collect();
+    let shuffles: Vec<usize> = (0..lines.len()).filter(|at| lines[*at].starts_with("pshufd")).collect();
+    assert!(!shuffles.is_empty(), "{sum}");
+    for at in shuffles {
+        assert!(!lines[at - 1].starts_with("movaps"), "a copy before {}: {sum}", lines[at]);
+    }
+}
+
+/// LSR charged a constant in a setup by `getIntImmCost` (a free 0 costs nothing), so the strlen loop started at 0 and
+/// copied the index before bumping it (`mov ecx, eax; inc eax; cmp [rdi+rcx]`, 4 a trip) where clang 20 starts at -1
+/// and indexes with the bumped register (3 a trip): strlen_idiom 2,895 against 2,759 Ir.
+#[test]
+fn a_loop_to_the_terminator_indexes_with_the_bumped_register() {
+    let text = assembly_of("lsr_strlen.c", "x86_64-linux", "-O2");
+    let len = body(&text, "len");
+    assert!(len.contains("[rdi+rax") && !len.contains("[rdi+rcx"), "{len}");
+}
+
+/// A byte sum into an `i64` (VF 16) kept its total as eight registers and interleaved twice: 16 accumulators spilled to
+/// the stack, mem_length_boundaries_m32 186,155 instructions to 142,319 scalar and gcc's 137,355. One register of lanes
+/// takes the eight pieces of a trip.
+#[test]
+fn a_byte_sum_into_a_wide_total_does_not_spill() {
+    let text = assembly_of("lv_bytesum.c", "x86_64-linux", "-O2");
+    let sum = body(&text, "sum_bytes_wide");
+    assert!(sum.contains("punpcklbw") || sum.contains("pmovzx"), "{sum}");
+    assert!(!sum.contains("rsp"), "{sum}");
+}
+
 /// The widened loops compute what the scalar ones do: sums and xors folded from vector lanes, and forward and backward copies that overlap by 1 to 5 bytes, every
 /// length under 100, run on the host. The count-down copy sat 31 bytes low at IC 2 (`bad 340`).
 #[test]
@@ -87,7 +183,7 @@ fn overlapping_forward_and_backward_copies_keep_their_bytes_at_o2() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let mut objects = Vec::new();
-    for source in ["lv_run.c", "lv_loops.c", "lv_lanes.c"] {
+    for source in ["lv_run.c", "lv_loops.c", "lv_lanes.c", "lv_casts.c", "lv_narrow.c"] {
         let object = dir.join(format!("{source}.o"));
         let built = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
             .env("LLRM_CC_TARGET", "x86_64-linux")
@@ -229,4 +325,105 @@ fn a_lane_written_at_a_constant_position_assembles_as_a_stack_round_trip() {
     let text = assembly_of("lv_lanes.c", "x86_64-linux", "-O2");
     let set = body(&text, "set_lanes");
     assert!(set.contains("mov byte ptr [rsp") && set.contains("mov word ptr [rsp"), "{set}");
+}
+
+/// A vector widened to or narrowed from more than one register had no lowering (`Unsupported { op: Truncate, ty:
+/// V4I16, "vector with no register class" }`, `"split extending load"`, no `punpcklwd`): `punpck` with zero or with
+/// the sign, `pand` and `packuswb`. The host run in `lv_run.c` checks every width pair on edge values.
+#[test]
+fn vectors_widened_or_narrowed_across_registers_use_unpack_and_pack() {
+    let text = assembly_of("lv_casts.c", "x86_64-linux", "-O2");
+    assert!(body(&text, "z8_32").contains("punpcklwd"), "{text}");
+    assert!(body(&text, "t32_8").contains("packuswb"), "{text}");
+    assert!(body(&text, "s32_64").contains("psrad"), "{text}");
+}
+
+/// A byte table computed in 32-bit lanes stayed a scalar loop because `trunc <16 x i32> to <16 x i8>` had no price
+/// (mem_length_boundaries_m32: 233,551 instructions to clang's 137,355): VF 16, `pand` and `packuswb`.
+#[test]
+fn a_byte_table_computed_in_32_bit_lanes_is_a_vector_loop_with_packuswb() {
+    let text = assembly("x86_64-linux", "-O2");
+    let pattern = body(&text, "pattern_bytes");
+    assert!(pattern.contains("packuswb") && pattern.contains("paddd"), "{pattern}");
+}
+
+/// The scalar remainder of a vector loop is not unrolled at run time: the unroller could not see the loop ID the
+/// vectorizer had just made, so the remainder got a 0-3 trip prologue and a 4-wide body (loop_countdown_sum: three
+/// loops in `down_sum` where the pin has two).
+#[test]
+fn a_vector_loop_remainder_is_not_unrolled_at_run_time() {
+    let text = assembly("x86_64-linux", "-O2");
+    let sum = body(&text, "down_sum");
+    assert!(sum.contains("paddd"), "vectorized: {sum}");
+    assert_eq!(sum.matches("align 16").count(), 2, "a vector loop and a rolled remainder: {sum}");
+}
+
+/// The pin keeps a 32-trip table fold at -O3 (386 units against its threshold of 300), gcc and clang 20 unroll it whole:
+/// loop_interchange +17.6% over the bar. m64 takes 450 at -O3.
+#[test]
+fn a_32_trip_table_fold_is_unrolled_whole_at_o3() {
+    let text = assembly("x86_64-linux", "-O3");
+    let fold = body(&text, "table_fold");
+    assert!(!fold.contains("align 16"), "a loop is left: {fold}");
+}
+
+/// A packed accumulator is the tied operand of the `paddd` that adds to it: the peephole's recurrence commute knew
+/// only the integer ops, so each trip of `down_sum`'s vector loop copied two accumulators (6 copies a trip, 4 now; the
+/// pin has 4).
+#[test]
+fn a_packed_accumulator_is_added_in_place() {
+    let text = assembly("x86_64-linux", "-O2");
+    let sum = body(&text, "down_sum");
+    let (_, rest) = sum.split_once("align 16").expect("a vector loop");
+    let vector = rest.split_once("jne").expect("its back edge").0;
+    let copies = vector.lines().filter(|line| line.trim_start().starts_with("movaps")).count();
+    assert!(copies <= 4, "the loop copies {copies} registers: {vector}");
+}
+
+/// `descent` carries a loaded `short` round its loop and indexes with it: the load was `movzx` and every trip
+/// extended it again (`movzx ecx, cx`). The extension is on the load now (gcc's `ree`).
+#[test]
+fn a_loop_carried_short_is_extended_on_its_load_and_not_in_every_trip() {
+    let text = assembly_of("ree_loops.c", "x86_64-linux", "-O3");
+    let descent = body(&text, "descent");
+    let widened = descent.lines().filter(|line| (line.contains("movsx") || line.contains("movzx")) && !line.contains("ptr")).count();
+    assert_eq!(widened, 0, "a register-to-register extension stays in the loop: {descent}");
+}
+
+/// `differ` of memory_expansion (a byte compare that leaves at the first difference) stayed a scalar loop, 1.69 M
+/// instructions against clang's 0.93 M: no loop of two blocks was planned and x86 priced no vector compare. The
+/// pin's vector loop compares 16 bytes (`pcmpeqb`) and leaves on any set lane (`pmovmskb`).
+#[test]
+fn an_early_exit_byte_compare_is_sixteen_lanes_wide() {
+    let text = assembly_of("lv_early_exit.c", "x86_64-linux", "-O3");
+    let differ = body(&text, "differ_arrays");
+    assert!(differ.contains("pcmpeqb"), "{differ}");
+    assert!(differ.contains("pmovmskb"), "{differ}");
+}
+
+/// The any-of of a vector compare is its sign-bit mask (`combineBitcastvxi1`): bytes `pmovmskb` as they are,
+/// words packed to bytes first, doublewords `movmskps`; an unsigned order flips the sign bits and a missing
+/// order (`<`) swaps the operands. Before, the vectorized loop refused to select (`CannotSelect(SetCC)`).
+#[test]
+fn an_early_exit_compare_of_each_lane_width_is_gathered_by_a_sign_mask() {
+    let text = assembly_of("lv_early_exit_widths.c", "x86_64-linux", "-O3");
+    let words = body(&text, "first_below");
+    assert!(words.contains("pcmpgtw") && words.contains("packsswb") && words.contains("pmovmskb"), "{words}");
+    assert!(words.contains("pxor"), "an unsigned `<` flips the sign bits: {words}");
+    let dwords = body(&text, "first_differs");
+    assert!(dwords.contains("pcmpeqd") && dwords.contains("movmskps"), "{dwords}");
+    let bytes = body(&text, "first_greater");
+    assert!(bytes.contains("pcmpgtb") && bytes.contains("pmovmskb"), "{bytes}");
+}
+
+/// A loop that returns the index of the first difference as an `int`: the induction is cast inside the loop
+/// (`trunc`) and only the exit phi reads it. Before, the loop stayed scalar (`recipes: An instruction the vectorizer
+/// does not widen yet`): no `pmovmskb` in `first_index32`.
+#[test]
+fn an_early_exit_that_returns_the_cast_index_is_a_vector_loop() {
+    let text = assembly_of("lv_early_exit_index.c", "x86_64-linux", "-O3");
+    for name in ["first_index32", "first_index16"] {
+        let words = body(&text, name);
+        assert!(words.contains("pmovmskb"), "{name}: {words}");
+    }
 }

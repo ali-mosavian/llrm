@@ -381,6 +381,7 @@ fn branches() {
         all.push(Inst::VectorFma { op, lanes, rd: Vreg(6), rn: Vreg(25), rm: Vreg(14) });
         all.push(Inst::VectorFmaLane { op, lanes, rd: Vreg(6), rn: Vreg(25), rm: Vreg(31), index: 1 });
         all.push(Inst::VectorFmaLane { op, lanes, rd: Vreg(5), rn: Vreg(6), rm: Vreg(17), index: 0 });
+        all.push(Inst::ScalarFmaLane { op, lanes, rd: Vreg(7), rn: Vreg(8), rm: Vreg(18), index: 1 });
     }
     for (lanes, index) in [(Arrangement::D2, 1), (Arrangement::S4, 3), (Arrangement::H8, 7), (Arrangement::B16, 15)] {
         all.push(Inst::VectorDupScalar { lanes, rd: Vreg(5), rn: Vreg(17), index });
@@ -406,9 +407,10 @@ fn branches() {
             all.push(Inst::VectorLong { op, lane, high, rd: Vreg(5), rn: Vreg(17), rm: Vreg(30) });
         }
     }
-    for lanes in [Arrangement::B16, Arrangement::H8, Arrangement::S4, Arrangement::D2] {
-        all.push(Inst::VectorUnzip { second: false, lanes, rd: Vreg(5), rn: Vreg(17), rm: Vreg(30) });
-        all.push(Inst::VectorUnzip { second: true, lanes, rd: Vreg(5), rn: Vreg(17), rm: Vreg(30) });
+    for lanes in ALL_ARRANGEMENTS {
+        for kind in Permute::ALL {
+            all.push(Inst::VectorPermute { kind, lanes, rd: Vreg(5), rn: Vreg(17), rm: Vreg(30) });
+        }
     }
     for (lanes, index) in [(Arrangement::S4, 3), (Arrangement::S4, 1), (Arrangement::D2, 1), (Arrangement::D2, 0)] {
         all.push(Inst::VectorFmulLane { lanes, rd: Vreg(5), rn: Vreg(6), rm: Vreg(17), index });
@@ -424,7 +426,19 @@ fn branches() {
         all.push(Inst::VectorInsGpr { lanes, rd: Vreg(7), rn: Gpr(9), index });
         all.push(Inst::VectorInsLane { lanes, rd: Vreg(7), rn: Vreg(21), index, src });
         all.push(Inst::VectorUmov { lanes, rd: Gpr(9), rn: Vreg(21), index });
+        for wide in [false, true] {
+            if lanes != Arrangement::D2 && (wide || lanes != Arrangement::S4) {
+                all.push(Inst::VectorSmov { lanes, wide, rd: Gpr(9), rn: Vreg(21), index });
+            }
+        }
         all.push(Inst::VectorStoreLane { lanes, rt: Vreg(21), index, base: Gpr(9) });
+    }
+    // `ld2`..`ld4` of consecutive registers, wrapping past v31.
+    for lanes in ALL_ARRANGEMENTS {
+        for count in 2..=4 {
+            all.push(Inst::VectorLoadStructure { count, lanes, rt: Vreg(30), base: Gpr(9) });
+            all.push(Inst::VectorStoreStructure { count, lanes, rt: Vreg(4), base: Gpr(31) });
+        }
     }
     for lanes in ALL_ARRANGEMENTS {
         all.push(Inst::VectorLoadReplicate { lanes, rt: Vreg(21), base: Gpr(9) });
@@ -613,6 +627,7 @@ fn floating_point() {
             FpBinary::MaxNm,
             FpBinary::MinNm,
             FpBinary::Nmul,
+            FpBinary::Abd,
         ] {
             all.push(Inst::FpBinary { op, size, rd: Vreg(1), rn: Vreg(2), rm: Vreg(3) });
         }
@@ -623,6 +638,7 @@ fn floating_point() {
             all.push(Inst::FpCompare { signalling, size, rn: Vreg(1), rm: Some(Vreg(2)) });
             all.push(Inst::FpCompare { signalling, size, rn: Vreg(1), rm: None });
         }
+        all.push(Inst::FpCondCompare { size, rn: Vreg(1), rm: Vreg(2), nzcv: 8, cond: Cond::Mi });
         all.push(Inst::FpSelect { size, rd: Vreg(1), rn: Vreg(2), rm: Vreg(3), cond: Cond::Mi });
         for fill in [
             Fill::Zero,

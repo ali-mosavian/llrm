@@ -61,10 +61,10 @@ def reachable_runtime(text):
         if not want[i]:
             want[i] = True; q += [j for j in toks(blocks[i][1]) if j != i]
     out = "".join(b for (n, b), w in zip(blocks, want) if w)
-    if out and ("__sa" in out or "__ra" in out or "__sa" in text or "__ra" in text): out += bss + ".export __sa, __ra, __sb, __st, __sr, __sg\n"
+    if out and ("__sa" in out or "__ra" in out or "__sa" in text or "__ra" in text): out += bss + ".export __sa, __ra, __st, __sr, __sg\n"
     return macros + out if out else out
 def driver():
-    s = ".export _main\n.import main\n.import _putchar\n.export report\nlp = $A0\nptr = $A2\n" + "".join(f"rc{i} = ${0x80 + i:X}\n" for i in range(6))
+    s = ".export _main\n.import main\n.import _putchar\n.export report\nlp = $70\nptr = $72\n" + "".join(f"rc{i} = ${0x80 + i:X}\n" for i in range(6))
     s += """.segment "CODE"
 _main:
   lda #0

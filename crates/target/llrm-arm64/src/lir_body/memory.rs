@@ -283,6 +283,25 @@ pub(super) fn to(
                 None,
             )
         }
+        Inst::VectorLoadStructure { count, lanes, rt, base } | Inst::VectorStoreStructure { count, lanes, rt, base } => {
+            let load = matches!(inst, Inst::VectorLoadStructure { .. });
+            let bits = u32::from(*count) * if lanes.full() == *lanes { 128 } else { 64 };
+            let mut at = Mem::new(None, bits);
+            (at.through, at.base) = place(*base);
+            let regs: Vec<Loc> = (0..u32::from(*count)).map(|one| vreg_loc(rt.in_run(one), 128)).collect();
+            let name = format!(
+                "{}{}{}v{}",
+                if load { "LD" } else { "ST" },
+                count,
+                ["Two", "Three", "Four"][usize::from(*count) - 2],
+                lanes.suffix()
+            );
+            if load {
+                semantics(Operation::Move, name, regs, vec![Loc::Mem(at)], None)
+            } else {
+                semantics(Operation::Move, name, vec![], [regs, vec![Loc::Mem(at)]].concat(), None)
+            }
+        }
         Inst::Adr { page, rd, target, got } => semantics(
             Operation::Address,
             format!("{}{}", if *page { "ADRP" } else { "ADR" }, if *got { ".got" } else { "" }),
@@ -315,6 +334,18 @@ pub(super) fn frame_address(
         vec![Loc::Address(AddressRef::new(Some(at)))],
         None,
     )
+}
+
+/// `LD2Twov4s`: the registers, the arrangement and whether it loads.
+fn structure_form(head: &str) -> Option<(u8, Arrangement, bool)> {
+    let (load, rest) = match (head.strip_prefix("LD"), head.strip_prefix("ST")) {
+        (Some(rest), _) => (true, rest),
+        (_, Some(rest)) => (false, rest),
+        _ => return None,
+    };
+    let count = rest.as_bytes().first().filter(|digit| (b'2'..=b'4').contains(digit))? - b'0';
+    let rest = rest[1..].strip_prefix(["Two", "Three", "Four"][usize::from(count) - 2])?.strip_prefix('v')?;
+    Arrangement::ALL.into_iter().find(|lanes| lanes.suffix() == rest).map(|lanes| (count, lanes, load))
 }
 
 pub(super) fn back(
@@ -375,6 +406,15 @@ pub(super) fn back(
             lanes,
             rt: vreg_of(dest?),
             base: unplace(at.through, at.base),
+        }));
+    }
+    if let Some((count, lanes, load)) = structure_form(head) {
+        let Some(Loc::Mem(at)) = s.last() else { return None };
+        let base = unplace(at.through, at.base);
+        return Some(Op::I(if load {
+            Inst::VectorLoadStructure { count, lanes, rt: vreg_of(dest?), base }
+        } else {
+            Inst::VectorStoreStructure { count, lanes, rt: vreg_of(&s[0]), base }
         }));
     }
     if let Some(lanes) = [

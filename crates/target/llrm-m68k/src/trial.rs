@@ -285,7 +285,12 @@ pub fn keeps_linking(
     if llrm_support::debug::enabled("trial") {
         eprintln!("trial keeps: with {with_cost:?} without {without_cost:?}");
     }
-    price.beats(cpu, with_cost, without_cost)
+    // at -Os both axes count: bytes grow only for a far larger share of the clocks ([`pays_by`])
+    if price == Price::Size {
+        pays_by(with_cost, without_cost, UNROLL_CLOCK_SHARE)
+    } else {
+        price.beats(cpu, with_cost, without_cost)
+    }
 }
 
 /// Bytes and clocks of `functions` (name, items): each function's clocks run once per call from the others, by the
@@ -365,18 +370,33 @@ fn pays(
     with: (usize, u32),
     without: (usize, u32),
 ) -> bool {
+    pays_by(with, without, 1.5)
+}
+
+/// How many times the share of bytes an unrolled loop grows by the share of clocks it saves must be: the unroll trial
+/// priced `known_loads_walks` at +0.2 % bytes for -29 % clocks (145 times) and put it back for 4 B, a program that then
+/// ran 5 times the instructions; the pairs that cost bytes for clocks at 1.7 to 10 times (`spill_store_order` +27 %
+/// for -45 %) are worth less than the bytes at -Os.
+const UNROLL_CLOCK_SHARE: f64 = 16.0;
+
+/// [`pays`] with the clocks falling by at least `share` times the share the bytes grow by.
+fn pays_by(
+    with: (usize, u32),
+    without: (usize, u32),
+    share: f64,
+) -> bool {
     let ((with_bytes, with_clocks), (bytes, clocks)) = (with, without);
     if (with_bytes, with_clocks) < (bytes, clocks) {
         return true;
     }
-    let grown = (with_bytes.saturating_sub(bytes)) as u64;
-    let saved = u64::from(clocks.saturating_sub(with_clocks));
-    with_bytes * 100 <= bytes * HEADROOM_PERCENT && with_clocks < clocks && grown * u64::from(clocks) * 3 <= saved * bytes as u64 * 2
+    let grown = (with_bytes.saturating_sub(bytes)) as f64;
+    let saved = f64::from(clocks.saturating_sub(with_clocks));
+    with_bytes * 100 <= bytes * HEADROOM_PERCENT && with_clocks < clocks && grown / bytes as f64 * share <= saved / f64::from(clocks)
 }
 
 #[cfg(test)]
 mod pays_tests {
-    use super::pays;
+    use super::{UNROLL_CLOCK_SHARE, pays, pays_by};
 
     /// The -Os trial priced these pairs (`LLRM_DEBUG=trial`, bytes and weighted clocks of the differing functions).
     /// With the ceiling alone `loop_versioning`, `loop_interchange` and `stack_arrays_copy` were kept and then sat
@@ -392,6 +412,18 @@ mod pays_tests {
         assert!(pays((90, 900), (100, 1000)), "smaller and faster");
         assert!(!pays((100, 1000), (100, 1000)), "a tie goes to the plain build");
     }
+
+    /// The -Os unroll trial priced these pairs (`LLRM_DEBUG=trial`): unrolled against the loop. The bytes-first rule put
+    /// `known_loads_walks` back for 4 B and the program ran 75185 instructions against 32920 (-Os 68000).
+    #[test]
+    fn an_unroll_costs_bytes_only_for_a_far_larger_share_of_clocks() {
+        let unroll = |with, without| pays_by(with, without, UNROLL_CLOCK_SHARE);
+        assert!(unroll((1996, 192910), (1992, 272731)), "known_loads_walks: +0.2 % bytes for -29 % clocks");
+        assert!(!unroll((384, 9151), (302, 16735)), "spill_store_order: +27 % for -45 %");
+        assert!(!unroll((122, 492), (104, 902)), "byval_inline: +17 % for -45 %");
+        assert!(!unroll((110, 5876), (106, 9372)), "rep_count: +3.8 % for -37 %");
+        assert!(unroll((2066, 204767), (2212, 310206)), "fewer bytes and clocks");
+    }
 }
 
 /// Whether `without` replaces `with`: `with` stays only where it beats
@@ -405,25 +437,25 @@ pub fn prefers_without(
     price: Price,
     cold_clocks: bool,
 ) -> bool {
-    prefers_without_linking(with, without, cpu, price, cold_clocks, true)
+    prefers_without_linking(with, without, cpu, price, cold_clocks, 0)
 }
 
-/// [`prefers_without`], the program linking `__mulsi3` once if a build calls it: `linked` says it is linked
-/// whatever the choice (the module multiplies two variables); else the build that calls it is charged the
-/// routine's bytes. A function priced by its own items looked 18 B smaller with the call (`div8_os` -Os 68000:
-/// 754 -> 800 B linked, 5.3 -> 7.5 M clocks).
+/// [`prefers_without`], the program linking `__mulsi3` once if a build calls it: the build that calls it is charged
+/// `routine` bytes (0 where it is linked whatever the choice, [`crate::routine::mulsi3_share`]). A function
+/// priced by its own items looked 18 B smaller with the call (`div8_os` -Os 68000: 754 -> 800 B linked, 5.3 ->
+/// 7.5 M clocks).
 pub fn prefers_without_linking(
     with: &[Item],
     without: &[Item],
     cpu: Cpu,
     price: Price,
     cold_clocks: bool,
-    linked: bool,
+    routine_bytes: usize,
 ) -> bool {
     let (Some(mut with_cost), Some(mut without_cost)) = (price_of(with, cpu, cold_clocks), price_of(without, cpu, cold_clocks)) else {
         return false;
     };
-    let routine = |items: &[Item]| if linked || !calls_mulsi3(&[(String::new(), items.to_vec())]) { 0 } else { crate::routine::mulsi3_bytes(cpu) };
+    let routine = |items: &[Item]| if calls_mulsi3(&[(String::new(), items.to_vec())]) { routine_bytes } else { 0 };
     with_cost.0 += routine(with);
     without_cost.0 += routine(without);
     if llrm_support::debug::enabled("trial") {

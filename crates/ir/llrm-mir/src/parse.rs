@@ -66,6 +66,8 @@ struct Local {
     /// Records read, to stand before the next instruction.
     pending_records: Vec<(MetadataId, DebugWhat, Option<MetadataId>, Option<MetadataId>)>,
     next_slot: u32,
+    /// `uselistorder` directives, applied once the use lists exist.
+    use_orders: Vec<(crate::uselist::Held, Vec<u32>, usize)>,
 }
 
 impl Parser {
@@ -337,10 +339,34 @@ impl Parser {
                 Token::Global(name) if self.alias_names.contains_key(&name) => self.alias(name)?,
                 Token::Global(name) => self.global_variable(name)?,
                 Token::Word(word) if word == "declare" || word == "define" => self.function(word == "define")?,
+                // The use list of a global or a constant: those lists are not
+                // kept here (DEVIATE), so the directive is read and dropped.
+                Token::Word(word) if word == "uselistorder" || word == "uselistorder_bb" => self.skip_use_list_order(),
                 Token::MetadataName(name) => self.named_metadata(name)?,
                 Token::MetadataId(number) => self.metadata_definition(number)?,
                 Token::Comdat(name) => self.comdat_definition(name)?,
                 _ => return self.fail(format!("unexpected {} at the top level", self.describe())),
+            }
+        }
+    }
+
+    /// The rest of a module-level `uselistorder` directive, read and dropped:
+    /// its value may be a constant with braces of its own (`uselistorder
+    /// %struct.S { i32 0, i16 1 }, { 1, 0 }`), so the directive ends at the
+    /// close of the last brace group, not the first.
+    fn skip_use_list_order(&mut self) {
+        let mut depth = 0_u32;
+        loop {
+            match self.next() {
+                Token::Punct('{') => depth += 1,
+                Token::Punct('}') => {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 && !matches!(self.peek(), Token::Punct(',')) {
+                        return;
+                    }
+                }
+                Token::Eof => return,
+                _ => {}
             }
         }
     }
@@ -730,6 +756,7 @@ impl Parser {
             pending_blocks: HashMap::default(),
             pending_records: Vec::new(),
             next_slot: 0,
+            use_orders: Vec::new(),
         };
         self.expect_punct('(')?;
         let mut parameters = Vec::new();
@@ -795,6 +822,10 @@ impl Parser {
             self.body(&mut local)?;
         }
         local.function.index();
+        local.function.order_forward_uses();
+        for (held, indexes, line) in std::mem::take(&mut local.use_orders) {
+            local.function.sort_use_list(held, &indexes).map_err(|message| ParseError { line, message })?;
+        }
         self.module.globals[id.0 as usize] = GlobalValue {
             name: self.module.globals[id.0 as usize].name.clone(),
             linkage,
@@ -1664,6 +1695,11 @@ impl Parser {
                     self.next();
                     break;
                 }
+                Token::Word(word)
+                    if current.is_none() && matches!(word.as_str(), "uselistorder" | "uselistorder_bb") =>
+                {
+                    self.use_list_order(local, word == "uselistorder_bb")?;
+                }
                 Token::Label(name) => {
                     if current.is_some() {
                         return self.fail("a block ends with its terminator");
@@ -1701,6 +1737,58 @@ impl Parser {
             let name =
                 local.values.iter().find(|(_, id)| **id == value).map(|(name, _)| display(name)).unwrap_or_default();
             return Err(ParseError { line, message: format!("%{name} is used but never defined") });
+        }
+        Ok(())
+    }
+
+    /// `uselistorder TYPE VALUE, { N, ... }` or `uselistorder_bb @f, %bb, { N,
+    /// ... }` (`LLParser::parseUseListOrder`, `parseUseListOrderBB`). A
+    /// constant's list is read and not applied: the lists of constants are
+    /// per function here (DEVIATE).
+    fn use_list_order(
+        &mut self,
+        local: &mut Local,
+        block: bool,
+    ) -> Parsed<()> {
+        let line = self.line();
+        self.next();
+        let held = if block {
+            let Token::Global(_) = self.next() else {
+                self.at -= 1;
+                return self.fail("expected the function's name");
+            };
+            self.expect_punct(',')?;
+            let Token::Local(name) = self.next() else {
+                self.at -= 1;
+                return self.fail("expected a block");
+            };
+            Some(crate::uselist::Held::Block(self.block_id(local, name).0))
+        } else if self.eat_word("label") {
+            // A block's list, as the writer spells it inside a function.
+            let Token::Local(name) = self.next() else {
+                self.at -= 1;
+                return self.fail("expected a block");
+            };
+            Some(crate::uselist::Held::Block(self.block_id(local, name).0))
+        } else {
+            match self.typed_value(local)?.1 {
+                Operand::Value(value) => Some(crate::uselist::Held::Value(value.0)),
+                _ => None,
+            }
+        };
+        self.expect_punct(',')?;
+        self.expect_punct('{')?;
+        let mut indexes = Vec::new();
+        loop {
+            let index = self.unsigned()?;
+            indexes.push(u32::try_from(index).or_else(|_| self.fail("a use index is out of range"))?);
+            if !self.eat_punct(',') {
+                break;
+            }
+        }
+        self.expect_punct('}')?;
+        if let Some(held) = held {
+            local.use_orders.push((held, indexes, line));
         }
         Ok(())
     }

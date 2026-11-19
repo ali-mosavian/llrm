@@ -572,7 +572,9 @@ fn _swappable(one: &Insn) -> Option<(u32, u32, u32)> {
 
 /// Whether the two sources of `what` can swap places (`isCommutable`). The
 /// scalar SSE `add` and `mul` (X86InstrSSE.td `sse12_fp_scalar`, `isCommutable
-/// = 1`) and the packed logic ops commute as the integer ones do.
+/// = 1`), the packed logic ops and the packed integer `add`, `pmullw` and
+/// `pmuludq` (`PDI_binop_rm`, `isCommutable = 1`) commute as the integer ones
+/// do.
 pub fn commutative(what: &Semantics) -> bool {
     (what.op == Operation::Binary
         && matches!(
@@ -593,6 +595,18 @@ pub fn commutative(what: &Semantics) -> bool {
                     | "orpd"
                     | "xorps"
                     | "xorpd"
+                    | "paddb"
+                    | "paddw"
+                    | "paddd"
+                    | "paddq"
+                    | "pand"
+                    | "pcmpeqb"
+                    | "pcmpeqw"
+                    | "pcmpeqd"
+                    | "por"
+                    | "pxor"
+                    | "pmullw"
+                    | "pmuludq"
             )
         ))
         || (what.op == Operation::Multiply && what.name.as_deref() == Some("imul"))

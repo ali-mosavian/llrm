@@ -278,6 +278,12 @@ pub struct DagConfig {
     /// 6502-SEXT-BOOL-ADD: a target fact the pin has no hook for. Exit
     /// 2026-12-15.
     pub sext_bool_add_max_bits: u32,
+    /// The caller's incoming argument slots are known to every block's DAG, as
+    /// `MachineFrameInfo`'s fixed objects are to the whole function: a sibling
+    /// call after a branch finds the slots it stores into. Off is the DAG of
+    /// the entry block alone. DEVIATE (target opt-in): the pin's targets read
+    /// `MFI` in `LowerCall`; here the entry's DAG held them.
+    pub fixed_args_in_every_block: bool,
     /// `isOffsetFoldingLegal`: `(add GlobalAddress, c)` folds into the symbol.
     pub offset_folding: bool,
     /// `isConstantIntBuildVectorOrConstantInt` counts a global address whose
@@ -355,6 +361,9 @@ pub struct DagConfig {
     /// until the judge has seen them. Exit: x86 judged, no later than
     /// 2026-11-20.
     pub add_to_or_disjoint: bool,
+    /// `aggressivelyPreferBuildVectorSources`: `visitINSERT_VECTOR_ELT` also
+    /// rebuilds from a `BUILD_VECTOR` that has other users.
+    pub prefers_build_vector_sources: bool,
     /// A signed divide or remainder whose operands fit this narrower legal
     /// type is made at that type ([`super::narrow_divrem`]); `None` keeps the
     /// wide divide. Set by the targets whose narrow routine is the cheaper.
@@ -389,6 +398,7 @@ impl Default for DagConfig {
             boolean_contents: BooleanContents::ZeroOrOne,
             vector_boolean_contents: None,
             sext_bool_add_max_bits: 0,
+            fixed_args_in_every_block: false,
             offset_folding: false,
             global_addresses_constant: false,
             dso_local_symbols: false,
@@ -411,6 +421,7 @@ impl Default for DagConfig {
             big_endian: false,
             fma_faster: false,
             add_to_or_disjoint: false,
+            prefers_build_vector_sources: false,
             narrow_divrem: None,
             narrow_srem_overflow_defined: false,
             use_aa: false,
@@ -874,6 +885,23 @@ impl SelectionDAG {
             }
             self.delete_dead(op);
         }
+    }
+
+    /// A node the legalizer replaced, which nothing reads now, is unfiled from the CSE table: a later
+    /// `getNode` of the same operation must make a node, not return the replaced one, which is not
+    /// legalized again (an `extract_element` made twice, the second one never lowered).
+    pub fn forget_replaced(
+        &mut self,
+        node: u32,
+    ) {
+        if node == self.root.node || node == self.entry.node || self.is_deleted(node) {
+            return;
+        }
+        let results = self.nodes[node as usize].values.len() as u8;
+        if (0..results).any(|res| self.has_users(SDValue { node, res })) {
+            return;
+        }
+        self.cse_forget(node);
     }
 
     /// `SDNode::DropOperands`: a deleted node leaves the use lists of what it

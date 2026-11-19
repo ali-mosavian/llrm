@@ -163,10 +163,6 @@ fn lowering_for(
     analyses.outer().target().lowering().filter(|lowering| lowering.runs_cgp_step(step))
 }
 
-/// `CgpAddr` at -Os and -O1, where code bytes outrank clocks: the deviations
-/// that trade bytes for clocks (`EXT-LOAD-COST`) stay off.
-pub struct CgpAddrBytesStrict;
-
 impl FunctionPass for CgpAddr {
     fn name(&self) -> &'static str {
         "cgpaddr"
@@ -181,31 +177,12 @@ impl FunctionPass for CgpAddr {
         unit: &mut passes::Unit,
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
-        Self::run_at(false, unit, analyses)
-    }
-}
-
-impl FunctionPass for CgpAddrBytesStrict {
-    fn name(&self) -> &'static str {
-        "cgpaddr"
-    }
-
-    fn adds_memory_operations(&self) -> bool {
-        false
-    }
-
-    fn run(
-        &mut self,
-        unit: &mut passes::Unit,
-        analyses: &mut Analyses,
-    ) -> PreservedAnalyses {
-        CgpAddr::run_at(true, unit, analyses)
+        Self::run_at(unit, analyses)
     }
 }
 
 impl CgpAddr {
     fn run_at(
-        bytes_strict: bool,
         unit: &mut passes::Unit,
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
@@ -290,6 +267,9 @@ impl CgpAddr {
             let outer = std::rc::Rc::clone(analyses.outer());
             crate::cgpmemalign::raised(unit.context, unit.layout, &outer.globals, unit.function)
         };
+        // the vectors a word holds are that integer (`vectorlower`)
+        let lowered = analyses.outer().target().tti().is_some_and(|tti| tti.word_vectors())
+            && crate::vectorlower::lowered(unit.context, unit.function);
         let sunk_operands = match analyses.outer().target().tti() {
             Some(tti) => crate::cgpsinkops::free_operands_sunk(unit.context, &*tti, unit.function),
             None => false,
@@ -308,8 +288,7 @@ impl CgpAddr {
         let extended = match lowering_for(analyses, CgpStep::ExtPromotion) {
             Some(lowering) => {
                 let mut state = crate::extpromotion::State::default();
-                let costs_extra =
-                    !bytes_strict && analyses.outer().target().tti().is_some_and(|tti| tti.ext_load_costs_extra());
+                let costs_extra = analyses.outer().target().tti().is_some_and(|tti| tti.ext_load_costs_extra());
                 let promoted = exts_optimized(unit, &*lowering, &mut state, costs_extra);
                 ext_uses(unit, &*lowering, &mut state) | promoted
             }
@@ -357,6 +336,7 @@ impl CgpAddr {
             PreservedAnalyses::none()
         } else if phis
             || aligned
+            || lowered
             || branched
             || sunk_compares
             || masks

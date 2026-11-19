@@ -16,6 +16,7 @@ pub mod hotmultiply;
 pub mod ir_lowering;
 pub mod mulimage;
 pub mod opcosts;
+pub mod outline;
 pub mod peephole;
 pub mod peephole_cells;
 pub mod platform;
@@ -23,9 +24,12 @@ pub mod pointer_alu;
 pub mod prepare;
 pub mod reassociate;
 pub mod relax;
+pub mod routine_clocks;
+pub mod routine_effects;
 pub mod routines;
 pub mod select;
 pub mod sharecmp;
+pub mod shift_forms;
 pub mod short_jump;
 pub mod sink_compare;
 pub mod staticlocals;
@@ -34,6 +38,7 @@ pub mod target;
 pub mod timing;
 pub mod tti;
 pub mod weights;
+pub mod zerospill;
 
 use llrm_lir::registers::{RegId, Row};
 

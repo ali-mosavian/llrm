@@ -67,3 +67,30 @@ fn a_trial_that_keeps_nothing_selects_the_kept_side_once() {
     let selected = driver::selected() - before;
     assert!(selected <= 2 * functions + 1, "{selected} selections for {functions} functions");
 }
+
+/// loop_fusion -O2/-O3: the rate refused `clear` and `total`, and the unroll
+/// trial priced their loops as calls (+1,388 B, put back): 1,190 B and 92,367
+/// clocks. Inlined and unrolled the whole program folds (133 B, 2,825 clocks)
+/// once the stores of the arrays no body loads any more are removed after the
+/// late unroll: the listing then has no call and no array.
+#[test]
+fn a_refused_copy_and_the_unroll_it_enables_are_priced_together() {
+    for level in [Level::O2, Level::O3] {
+        let text = at(level, "loop_fusion");
+        for gone in ["jsr clear", "jsr total", "clear:", "total:", "data__r_a_"] {
+            assert!(!text.contains(gone), "{level:?}: `{gone}` is still in the listing\n{text}");
+        }
+    }
+}
+
+/// local_initializers at -O1 kept `sum` as a call (316 B; the pin inlines it at
+/// cost 5 under its threshold of 225, llvm-mos 96 B): the -O1 rule keeps a
+/// modeled shrink only if it is an eighth of the caller, and no trial priced
+/// the finished chain. With the chain priced by the backend, and the loops it
+/// brings unrolled, the program folds to constants (72 B).
+#[test]
+fn a_callee_the_pin_inlines_at_o1_is_inlined_when_the_finished_chain_is_smaller() {
+    let text = driver::assembly(include_str!("data/local_initializers_o1.ll"), &Request::new(Level::O1)).unwrap();
+    let calls = text.lines().filter(|line| line.trim() == "jsr sum").count();
+    assert_eq!(calls, 0, "{calls} calls to sum stay:\n{text}");
+}

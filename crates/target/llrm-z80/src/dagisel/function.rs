@@ -76,23 +76,35 @@ pub fn builder_target() -> BuilderTarget {
             known_bits_of_build_pair: true,
             ..BuilderTarget::for_pointer_bits(16).dag
         },
-        // the target's limits (`driver::MEMCPY_STORES`), the same table the mid-end reads
+        // the target's limits (`driver::MEMCPY_STORES`), the same table the
+        // mid-end reads
         tuning: llrm_mir::target::Machine::tuning(&*crate::driver::machine()),
         ..BuilderTarget::for_pointer_bits(16)
     }
+    // DEVIATE Z80-NARROW-DIV (owner z80, exit 2026-12-15, as the 6502's and
+    // m68k's): the pin's O1 has no correlated-propagation to narrow a divide of
+    // values that fit 16 bits
+    // (`narrowSDivOrSRem`, `narrowUDivOrURem`): `__udivsi3` where -O2
+    // calls `__udivhi3` (nbody_fixed -O1, +375 B linked). `__divremhi4` gives 0
+    // for `INT_MIN % -1`, so the narrow remainder is defined there.
+    .with_narrow_divrem(EVT::I16, true)
 }
 
 thread_local! {
-    /// The pin's block frequencies as they are (`Request::flat_loop_trips`), for
-    /// the selections made on this thread.
+    /// The pin's block frequencies as they are (`Request::flat_loop_trips`),
+    /// for the selections made on this thread.
     pub static FLAT_LOOP_TRIPS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// One block, selected and scheduled.
+#[derive(Clone)]
 pub struct Selected {
     pub block: BlockId,
-    pub dag: SelectionDAG,
+    /// Shared by the `Source` and the `ILP` form of the block.
+    pub dag: std::sync::Arc<SelectionDAG>,
     pub units: Vec<Unit>,
+    /// The units under the `ILP` schedule (`Selection::scheduled_by_ilp`).
+    pub ilp_units: Vec<Unit>,
     /// The registers the block reads on arrival, with the virtual register each
     /// is copied to.
     pub live_ins: Vec<(RegId, u32)>,
@@ -104,6 +116,7 @@ pub struct Selected {
 
 /// The phi copies on the edge to `to` (a parallel copy), or on every edge when
 /// `to` is `None`.
+#[derive(Clone)]
 pub struct Edge {
     pub to: Option<BlockId>,
     pub copies: Vec<(u32, u32)>,
@@ -111,6 +124,7 @@ pub struct Edge {
 
 /// A selected function: its blocks and the sizes of its local frame objects, by
 /// frame index.
+#[derive(Clone)]
 pub struct Selection {
     pub blocks: Vec<Selected>,
     pub locals: Vec<i64>,
@@ -128,7 +142,8 @@ pub struct Selection {
     pub returns_twice: bool,
     /// `internal` or `private` linkage: the label is not exported.
     pub local: bool,
-    /// The function carries `optsize` or `minsize`: tuned for size at any level.
+    /// The function carries `optsize` or `minsize`: tuned for size at any
+    /// level.
     pub sized: bool,
     /// Selected the second time for the module price with the speed routines or
     /// the shift loops (`pipeline::SPEED_ROUTINES`, `INLINE_SHIFTS`): a
@@ -144,11 +159,25 @@ pub struct Selection {
     /// into the next one, so emission states the end.
     pub unreachable: llrm_mir::dense::IdSet<BlockId>,
     /// The pin's block frequency of each IR block over the entry's
-    /// (`BlockFrequencyInfo` over `BranchProbabilityInfo`), by block number: what
-    /// the prices that choose between variants of the function weigh by.
+    /// (`BlockFrequencyInfo` over `BranchProbabilityInfo`), by block number:
+    /// what the prices that choose between variants of the function weigh
+    /// by.
     pub frequencies: Vec<(u32, f64)>,
     /// The jump tables: the block of each entry, by table.
     pub tables: Vec<Vec<u32>>,
+}
+
+impl Selection {
+    /// This selection with every block under the `ILP` schedule: the DAGs are
+    /// the same (`pipeline::select_block`), only the units differ.
+    pub fn scheduled_by_ilp(&self) -> Selection {
+        let mut one = self.clone();
+        for block in &mut one.blocks {
+            std::mem::swap(&mut block.units, &mut block.ilp_units);
+        }
+        one.generic = self.generic.as_ref().map(|generic| Box::new(generic.scheduled_by_ilp()));
+        one
+    }
 }
 
 /// Function `name` of `module`, block by block in layout order.
@@ -188,7 +217,8 @@ pub fn select_function_with(
     let chain_credit = llrm_mir::memory::has(&function.attrs, crate::prepare::WORD_CHAINS);
     let long_multiply = llrm_mir::memory::has(&function.attrs, crate::prepare::LONG_MULTIPLY)
         && !super::pipeline::DECOMPOSE_MULS.with(std::cell::Cell::get);
-    let frequencies = crate::frequency::block_frequencies(module, function, &layout, FLAT_LOOP_TRIPS.with(std::cell::Cell::get));
+    let frequencies =
+        crate::frequency::block_frequencies(module, function, &layout, FLAT_LOOP_TRIPS.with(std::cell::Cell::get));
     let mut info = FunctionLoweringInfo::new(function);
     let mut locals = alloca_sizes(module, function, &layout, &info)?;
     let mut selected = Vec::new();
@@ -373,8 +403,9 @@ fn select_built(
     // the scratch slots the legalizers ask for (a long long result's memory)
     // are frame objects numbered after the function's
     built.dag.first_temporary = info.next_stack_object();
-    let units =
-        select_block(&mut built.dag, cpu, info, optimize, (sized, long_multiply, cold, chain_credit)).map_err(|why| format!("{why:?}"))?;
+    let (units, ilp_units) =
+        select_block(&mut built.dag, cpu, info, optimize, (sized, long_multiply, cold, chain_credit))
+            .map_err(|why| format!("{why:?}"))?;
     for (size, align) in std::mem::take(&mut built.dag.temporaries) {
         info.new_stack_object(size, align);
     }
@@ -410,7 +441,14 @@ fn select_built(
             None => edges.push(Edge { to, copies: vec![copy] }),
         }
     }
-    selected.push(Selected { block, dag: built.dag, units, live_ins: built.live_ins, edges });
+    selected.push(Selected {
+        block,
+        dag: std::sync::Arc::new(built.dag),
+        units,
+        ilp_units,
+        live_ins: built.live_ins,
+        edges,
+    });
     for (extra, made) in built.extra {
         select_built(None, extra, made, cpu, (optimize, sized, long_multiply, chain_credit), cold, info, selected)?;
     }

@@ -36,8 +36,8 @@ use crate::mc::inst::{
     Logic, MemObject, MemOperand, Memory, Mul3, Rounding, Select, Shift, Target, Unary, Vreg, Width,
 };
 use crate::mc::inst::{
-    Arrangement, Atomic, Barrier, Fill, ImmShape, NarrowLane, VectorFma, VectorFpOp, VectorFpUnary, VectorIntUnary,
-    VectorLongOp, VectorOp, VectorReduce, VectorShift,
+    Arrangement, Atomic, Barrier, Fill, ImmShape, NarrowLane, Permute, SMOV_FORMS, VectorFma, VectorFpOp,
+    VectorFpUnary, VectorIntUnary, VectorLongOp, VectorOp, VectorReduce, VectorShift,
 };
 use crate::mc::visit::Reg;
 use crate::mfunc::{Callee, INCOMING_ARGUMENTS, MBlock, MFunc, Op, OpList, PoolEntry, block_label};
@@ -460,6 +460,17 @@ fn build(
             _ => Err(format!("{name}: operands are not those of its form")),
         };
     }
+    // `FCCMPSrr`: the floating-point conditional compare.
+    if let Some(rest) = name.strip_prefix("FCCMP") {
+        let size =
+            rest.strip_suffix("rr").and_then(fp_size).ok_or_else(|| format!("{name}: no such conditional compare"))?;
+        return match operands {
+            [Operand::Fpr(rn), Operand::Fpr(rm), Operand::Imm(nzcv), Operand::Imm(cond), ..] => {
+                Ok(Inst::FpCondCompare { size, rn: *rn, rm: *rm, nzcv: *nzcv as u8, cond: cond_of(*cond)? })
+            }
+            _ => Err(format!("{name}: operands are not those of its form")),
+        };
+    }
     if let Some((op, invert, width, form)) = logic(name) {
         let bits = if width == Width::W { 32 } else { 64 };
         return match (form, operands) {
@@ -600,7 +611,11 @@ fn vector_fill(
     match (name, operands) {
         ("MOVIv16b_ns", [Operand::Imm(byte)]) => return Some(Ok(Fill::Byte(*byte as u8))),
         ("MOVIv8b_ns", [Operand::Imm(byte)]) => return Some(Ok(Fill::Byte8(*byte as u8))),
-        ("MOVIv2d_ns", [Operand::Imm(mask)]) => return Some(Ok(Fill::Mask(*mask as u8))),
+        // A zero mask is the one `Fill::Zero`, so the LIR description
+        // (`MOVIv2d_ns` #0) maps back to it.
+        ("MOVIv2d_ns", [Operand::Imm(mask)]) => {
+            return Some(Ok(if *mask as u8 == 0 { Fill::Zero } else { Fill::Mask(*mask as u8) }));
+        }
         ("MOVID", [Operand::Imm(mask)]) => return Some(Ok(Fill::MaskD(*mask as u8))),
         _ => {}
     }
@@ -886,22 +901,33 @@ fn vector_inst(
         }
     }
     // `UZP1v8i16`: two sources, no tied register.
-    for (second, lanes) in [Arrangement::B16, Arrangement::H8, Arrangement::S4, Arrangement::D2]
-        .into_iter()
-        .flat_map(|lanes| [(false, lanes), (true, lanes)])
-    {
-        let lane = match lanes {
-            Arrangement::B16 => "v16i8",
-            Arrangement::H8 => "v8i16",
-            Arrangement::S4 => "v4i32",
-            Arrangement::D2 => "v2i64",
-            Arrangement::B8 | Arrangement::H4 | Arrangement::S2 => unreachable!("listed above"),
-        };
-        if name == format!("UZP{}{lane}", if second { 2 } else { 1 }) {
-            return Some(match operands {
-                [Operand::Fpr(rn), Operand::Fpr(rm)] => Ok(Inst::VectorUnzip { second, lanes, rd, rn: *rn, rm: *rm }),
-                _ => wrong(),
-            });
+    for kind in Permute::ALL {
+        for lanes in [
+            Arrangement::B16,
+            Arrangement::H8,
+            Arrangement::S4,
+            Arrangement::D2,
+            Arrangement::B8,
+            Arrangement::H4,
+            Arrangement::S2,
+        ] {
+            let lane = match lanes {
+                Arrangement::B16 => "v16i8",
+                Arrangement::H8 => "v8i16",
+                Arrangement::S4 => "v4i32",
+                Arrangement::D2 => "v2i64",
+                Arrangement::B8 => "v8i8",
+                Arrangement::H4 => "v4i16",
+                Arrangement::S2 => "v2i32",
+            };
+            if name == format!("{}{lane}", kind.stem()) {
+                return Some(match operands {
+                    [Operand::Fpr(rn), Operand::Fpr(rm)] => {
+                        Ok(Inst::VectorPermute { kind, lanes, rd, rn: *rn, rm: *rm })
+                    }
+                    _ => wrong(),
+                });
+            }
         }
     }
     // `MULv4i32_indexed`: the multiplier is a lane of `rm`.
@@ -924,6 +950,24 @@ fn vector_inst(
         return Some(match operands {
             [Operand::Fpr(rn), Operand::Fpr(rm), Operand::Imm(index)] => {
                 Ok(Inst::VectorFmulLane { lanes, rd, rn: *rn, rm: *rm, index: *index as u8 })
+            }
+            _ => wrong(),
+        });
+    }
+    // `FMLAv1i64_indexed`: the scalar form, `rm` a vector.
+    for (stem, op) in [("FMLA", VectorFma::Add), ("FMLS", VectorFma::Sub)] {
+        let Some(lanes) =
+            name.strip_prefix(stem).and_then(|rest| rest.strip_suffix("_indexed")).and_then(|rest| match rest {
+                "v1i32" => Some(Arrangement::S4),
+                "v1i64" => Some(Arrangement::D2),
+                _ => None,
+            })
+        else {
+            continue;
+        };
+        return Some(match operands {
+            [Operand::Fpr(_), Operand::Fpr(rn), Operand::Fpr(rm), Operand::Imm(index)] => {
+                Ok(Inst::ScalarFmaLane { op, lanes, rd, rn: *rn, rm: *rm, index: *index as u8 })
             }
             _ => wrong(),
         });
@@ -1090,6 +1134,14 @@ fn float_inst(
             _ => wrong(),
         });
     }
+    if let Some(&(_, lanes, wide)) = SMOV_FORMS.iter().find(|form| form.0 == name) {
+        return Some(match operands {
+            [Operand::Fpr(rn), Operand::Imm(index)] => {
+                Ok(Inst::VectorSmov { lanes, wide, rd: gd, rn: *rn, index: *index as u8 })
+            }
+            _ => wrong(),
+        });
+    }
     if let Some(inst) = vector_inst(name, rd, operands) {
         return Some(inst);
     }
@@ -1112,6 +1164,19 @@ fn float_inst(
                 _ => wrong(),
             });
         }
+    }
+    // The pin's `fabs (fsub a, b)` pattern: the size is a width, not a letter.
+    if let Some(size) = match name {
+        "FABD32" => Some(FpSize::S),
+        "FABD64" => Some(FpSize::D),
+        _ => None,
+    } {
+        return Some(match operands {
+            [Operand::Fpr(rn), Operand::Fpr(rm)] => {
+                Ok(Inst::FpBinary { op: FpBinary::Abd, size, rd, rn: *rn, rm: *rm })
+            }
+            _ => wrong(),
+        });
     }
     let unary = [
         ("FNEG", FpUnary::Neg),
@@ -1445,7 +1510,7 @@ impl Emitter<'_> {
         // `FCMP` has no result but the flags.
         if matches!(
             node.opcode,
-            ISD::Machine(code) if opcode_name(code).is_some_and(|name| name.starts_with("FCMP"))
+            ISD::Machine(code) if opcode_name(code).is_some_and(|name| name.starts_with("FCMP") || name.starts_with("FCCMP"))
         ) {
             return Ok(Operand::Flags);
         }
@@ -1580,6 +1645,8 @@ impl Emitter<'_> {
         // keep the type, so no scalar compile can change.
         let to_float = match operands.get(1) {
             Some(Operand::Imm(class)) if to.is_vector() => matches!(class, 6 | 7 | 29 | 43 | 77),
+            // A plain `COPY` (a `FREEZE`) keeps its source's class.
+            None if to.is_vector() => matches!(operands.first(), Some(Operand::Fpr(_))),
             _ => to.is_floating_point(),
         };
         match (operands.first(), to_float) {
@@ -2165,6 +2232,17 @@ impl Emitter<'_> {
             // The stack pointer is register 31 only in an add: `mov x, sp` and
             // `mov sp, x` are `add #0`, and a body that writes it has a
             // frame record (`dynamic`).
+            // `joinReservedPhysReg`: every write is a restore of a value read
+            // from the stack pointer, and nothing else moves it.
+            ISD::CopyToReg
+                if !self.moves_sp
+                    && matches!(
+                        self.dag.node(node.ops[1]).data,
+                        NodeData::PhysReg(id) if id == crate::reg::SP
+                    ) =>
+            {
+                Ok(())
+            }
             ISD::CopyToReg
                 if matches!(
                     self.dag.node(node.ops[1]).data,
@@ -2333,6 +2411,34 @@ impl Emitter<'_> {
                     .map(|&op| self.operand(op))
                     .collect::<Result<Vec<_>, _>>()
                     .map_err(|why| format!("{name}: {why}"))?;
+                // A vector operand nothing defines (the undefined half of a
+                // widened vector) reads any register: the one the instruction
+                // reads otherwise, as the pin's coalescer leaves it.
+                let live: Vec<&SDValue> = node
+                    .ops
+                    .iter()
+                    .filter(|op| {
+                        let vt = self.dag.value_type(**op);
+                        (vt != EVT::OTHER || self.dag.opcode(**op) == ISD::BasicBlock) && vt != EVT::GLUE
+                    })
+                    .collect();
+                let undefined = |op: &SDValue| {
+                    self.dag.value_type(*op).is_vector() && matches!(self.dag.opcode(*op), ISD::Undef | ISD::Poison)
+                        || matches!(
+                            self.dag.opcode(*op),
+                            ISD::Machine(code) if opcode_name(code) == Some("IMPLICIT_DEF") && self.dag.value_type(*op).is_vector()
+                        )
+                };
+                if let Some(defined) = live.iter().zip(&operands).find_map(|(op, operand)| match operand {
+                    Operand::Fpr(register) if !undefined(op) => Some(*register),
+                    _ => None,
+                }) {
+                    for (op, operand) in live.iter().zip(operands.iter_mut()) {
+                        if undefined(op) && matches!(operand, Operand::Fpr(_)) {
+                            *operand = Operand::Fpr(defined);
+                        }
+                    }
+                }
                 self.constrain_register_classes(code, node, &mut operands);
                 if let Some(size) = name
                     .strip_prefix("FCMPE")
@@ -2375,13 +2481,18 @@ impl Emitter<'_> {
                 if name == "F128CSEL" {
                     return self.f128_select(id, &operands);
                 }
-                if float_inst(name, Vreg(0), Gpr(0), &operands).is_some() {
+                if let Some(probe) = float_inst(name, Vreg(0), Gpr(0), &operands) {
                     // A fill of a 64-bit vector (`MOVIv2i32`) has no type of
-                    // ours: it reads as an `i64`.
+                    // ours: it reads as an `i64`, as does the `FMOVDr` that
+                    // zeroes the upper half of a `concat_vectors`.
                     let float_result = node.values[0].is_floating_point()
                         || node.values[0].is_vector()
                         || vector_fill(name, &operands).is_some()
-                        || reduction(name).is_some();
+                        || reduction(name).is_some()
+                        // `DUPi16` reads a lane into an `h` register, which has
+                        // no type of ours: it reads as an `i16`.
+                        || matches!(probe, Ok(Inst::VectorDupScalar { .. }))
+                        || matches!(probe, Ok(Inst::FpUnary { op: FpUnary::Mov, .. }));
                     let (rd, gd) = if float_result { (self.mf.fpr(), Gpr(0)) } else { (Vreg(0), self.mf.gpr()) };
                     let inst = float_inst(name, rd, gd, &operands).expect("a float row")?;
                     // `FMLA` adds into the register it reads: `rd` is a copy of
@@ -2389,6 +2500,7 @@ impl Emitter<'_> {
                     if let (
                         Inst::VectorFma { .. }
                         | Inst::VectorFmaLane { .. }
+                        | Inst::ScalarFmaLane { .. }
                         | Inst::VectorLong { op: VectorLongOp::Umlal | VectorLongOp::Smlal, .. }
                         | Inst::VectorShift { op: VectorShift::Usra | VectorShift::Ssra, .. }
                         | Inst::VectorNarrow { high: true, .. }
@@ -2564,8 +2676,22 @@ impl Emitter<'_> {
                         self.values.insert((id, 0), rd);
                         return Ok(());
                     }
+                    // A vector or float value nothing defines (the undefined
+                    // half of a widened vector) is a float register.
+                    ("IMPLICIT_DEF", []) if in_float_file(node.values[0]) => {
+                        let one = self.mf.fpr();
+                        if is_quad(node.values[0]) {
+                            self.mf.wide.push(Reg::Fpr(one));
+                        }
+                        self.fvalues.insert((id, 0), one);
+                        return Ok(());
+                    }
                     ("IMPLICIT_DEF", []) => {
+                        // A scalar nothing defines can still be read (the
+                        // undefined lane of a vector built from it): it is
+                        // zero, which the dead-code pass drops where unread.
                         let dst = self.mf.gpr();
+                        self.ops.push(Op::Imm { dst, bits: 64, value: 0 });
                         self.values.insert((id, 0), dst);
                         return Ok(());
                     }
@@ -2680,6 +2806,67 @@ impl Emitter<'_> {
     }
 }
 
+/// Whether some block writes the stack pointer with a value that is not one
+/// read from it: a dynamic `alloca`'s `sub`, or a restore of another pointer.
+///
+/// `RegisterCoalescer::joinReservedPhysReg` makes `%v = COPY $sp ... $sp = COPY
+/// %v` an identity copy when nothing writes `$sp` between them. A function
+/// whose only writes are such restores has none that does, and keeps its
+/// reserved call frame (`hasVarSizedObjects` is false).
+///
+/// DEVIATE: the pin tests each live range; here a single write that is not a
+/// restore keeps every restore of the function.
+fn writes_stack_pointer(blocks: &[Selected]) -> bool {
+    let is_sp = |dag: &SelectionDAG, value: SDValue| {
+        matches!(
+            dag.node(value).data,
+            NodeData::PhysReg(id) if id == crate::reg::SP
+        )
+    };
+    let nodes = || {
+        blocks
+            .iter()
+            .flat_map(
+                |block| block
+                    .units
+                    .iter()
+                    .flat_map(|unit| &unit.nodes)
+                    .map(move |&node| (&block.dag, block.dag.node(SDValue { node, res: 0 }))),
+            )
+    };
+    // A read of the stack pointer, or of a register every def of which is one.
+    let reads_sp = |dag: &SelectionDAG, value: SDValue, saves: &HashMap<u32, bool>| {
+        let read = dag.node(value);
+        read.opcode == ISD::CopyFromReg
+            && match dag.node(read.ops[1]).data {
+                NodeData::PhysReg(id) => id == crate::reg::SP,
+                NodeData::Register(number) => saves.get(&number).copied().unwrap_or(false),
+                _ => false,
+            }
+    };
+    let mut saves: HashMap<u32, bool> = HashMap::default();
+    loop {
+        let mut next: HashMap<u32, bool> = HashMap::default();
+        for (dag, node) in nodes() {
+            if node.opcode != ISD::CopyToReg {
+                continue;
+            }
+            if let NodeData::Register(number) = dag.node(node.ops[1]).data {
+                let from_sp = reads_sp(dag, node.ops[2], &saves);
+                let one = next.entry(number).or_insert(true);
+                *one &= from_sp;
+            }
+        }
+        if next == saves {
+            break;
+        }
+        saves = next;
+    }
+    nodes().any(|(dag, node)| {
+        node.opcode == ISD::CopyToReg && is_sp(dag, node.ops[1]) && !reads_sp(dag, node.ops[2], &saves)
+    })
+}
+
 /// `blocks` of function `name` as a machine function, one block of ops each.
 /// `blocks` of function `name` as a machine function, one block of ops each;
 /// with `lines`, each op carries the source place of the IR instruction its
@@ -2708,24 +2895,7 @@ pub fn emit(
         splits: 0,
         sp_copies: rustc_hash::FxHashSet::default(),
         incoming: HashMap::default(),
-        moves_sp: blocks
-            .iter()
-            .any(
-                |block| block
-                    .units
-                    .iter()
-                    .flat_map(|unit| &unit.nodes)
-                    .any(
-                        |&node| {
-                            let node = block.dag.node(SDValue { node, res: 0 });
-                            node.opcode == ISD::CopyToReg
-                                && matches!(
-                                    block.dag.node(node.ops[1]).data,
-                                    NodeData::PhysReg(id) if id == crate::reg::SP
-                                )
-                        },
-                    ),
-            ),
+        moves_sp: writes_stack_pointer(blocks),
     };
     for &(size, align) in &first.frame {
         emitter.mf.slot(size, align);
@@ -2795,6 +2965,12 @@ pub fn emit(
                 }
             }
         }
+        // An IR `unreachable` selects to nothing (no trap on this target) but
+        // leaves the block without a successor: `successors` names none and it
+        // does not return.
+        if block.successors.is_empty() && !emitter.ops.iter().any(Op::ends_the_function) {
+            emitter.ops.push(Op::Unreachable);
+        }
         let ops = std::mem::take(&mut emitter.ops);
         places.resize(ops.len(), None);
         let mut pairs: Vec<(Op, Option<SrcLoc>)> = ops.into_iter().zip(places).collect();
@@ -2824,6 +3000,7 @@ pub fn emit(
                     Some(
                         Op::Return { .. }
                             | Op::JumpTable { .. }
+                            | Op::Unreachable
                             | Op::I(Inst::Branch { link: false, .. } | Inst::Brk { .. })
                     )
                 ) && at + 1 < blocks.len()

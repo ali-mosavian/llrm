@@ -1,7 +1,13 @@
 #include <stdio.h>
+#include <sys/mman.h>
 static unsigned char buf[200];
 __attribute__((noinline)) int run_sum(const int *a, int n) { int t = 0; for (int i = 0; i < n; i++) t += a[i]; return t; }
 __attribute__((noinline)) int run_xor(const int *a, int n) { int t = 0; for (int i = 0; i < n; i++) t ^= a[i] * 3; return t; }
+__attribute__((noinline)) long run_sum_l(const long *a, int n) { long t = 0; for (int i = 0; i < n; i++) t += a[i]; return t; }
+__attribute__((noinline)) short run_sum_s(const short *a, int n) { short t = 0; for (int i = 0; i < n; i++) t += a[i]; return t; }
+__attribute__((noinline)) signed char run_sum_b(const signed char *a, int n) { signed char t = 0; for (int i = 0; i < n; i++) t += a[i]; return t; }
+__attribute__((noinline)) int run_or(const int *a, int n) { int t = 0; for (int i = 0; i < n; i++) t |= a[i]; return t; }
+__attribute__((noinline)) int run_and(const int *a, int n) { int t = -1; for (int i = 0; i < n; i++) t &= a[i]; return t; }
 __attribute__((noinline)) void fwd(unsigned char *dst, const unsigned char *src, unsigned long n) {
     unsigned long i;
     for (i = 0; i < n; i++) dst[i] = src[i];
@@ -22,10 +28,21 @@ void multiply_byte_arrays(unsigned char *x, const unsigned char *y, const unsign
 extern unsigned char pa[4096], pb[4096];
 void multiply_arrays(void);
 extern int a[1024], b[1024];
+void times_three(void);
+void times_seven(void);
+void times_minus_three(void);
 unsigned char xor_toggle_count(unsigned char n);
+void pattern_bytes(unsigned char *dst, unsigned n);
+void z8_16(void *, const void *), s8_16(void *, const void *), z8_32(void *, const void *), s8_32(void *, const void *);
+void z16_32(void *, const void *), s16_32(void *, const void *), z32_64(void *, const void *), s32_64(void *, const void *);
+void t16_8(void *, const void *), t32_8(void *, const void *), t32_16(void *, const void *), t64_32(void *, const void *);
 void set_lanes(void *b, void *w, void *d, unsigned char x, unsigned short y, unsigned z);
 int stack_copy(int n);
 int square_sum(int n);
+void add_u8x8(void *, const void *, const void *), sub_u16x4(void *, const void *, const void *);
+void xor_u32x2(void *, const void *, const void *), set_u8x8(void *);
+void fill_ramp(void);
+unsigned char ramp_at(int);
 int main(void) {
     int bad = 0;
     for (int dir = 0; dir < 2; dir++)
@@ -48,6 +65,27 @@ int main(void) {
         int s = 0, x = 0;
         for (int i = 0; i < n; i++) { s += ints[i]; x ^= ints[i] * 3; }
         if (run_sum(ints, n) != s || run_xor(ints, n) != x) bad++;
+    }
+    /* A multiply by 2^n +- 1 is a shift and an add or subtract: every lane must still be the product. */
+    for (int i = 0; i < 1024; i++) { b[i] = i * 100003 - 51200000; }
+    times_three();
+    for (int i = 0; i < 1024; i++) if (a[i] != (int)((unsigned)b[i] * 3u)) bad++;
+    times_seven();
+    for (int i = 0; i < 1024; i++) if (a[i] != (int)((unsigned)b[i] * 7u)) bad++;
+    times_minus_three();
+    for (int i = 0; i < 1024; i++) if (a[i] != (int)((unsigned)b[i] * (unsigned)-3)) bad++;
+    {
+        /* Every lane differs, so a reduction that folds the wrong lanes gives another total. */
+        static long longs[300]; static short shorts[300]; static signed char bytes[300]; static int words[300], masks[300];
+        for (int i = 0; i < 300; i++) {
+            longs[i] = (long)i * 1000000007L - 5; shorts[i] = (short)(i * 211 - 300); bytes[i] = (signed char)(i * 7 + 1);
+            words[i] = (1 << (i % 31)) | (i * 3); masks[i] = ~(1 << (i % 29));
+        }
+        for (int n = 0; n < 300; n++) {
+            long l = 0; short s = 0; signed char b = 0; int o = 0, a = -1;
+            for (int i = 0; i < n; i++) { l += longs[i]; s = (short)(s + shorts[i]); b = (signed char)(b + bytes[i]); o |= words[i]; a &= masks[i]; }
+            if (run_sum_l(longs, n) != l || run_sum_s(shorts, n) != s || run_sum_b(bytes, n) != b || run_or(words, n) != o || run_and(masks, n) != a) bad++;
+        }
     }
     if (stack_copy(63) * 100 + stack_copy(5) != 303 || square_sum(5) != 30 || square_sum(50) != 40425) bad++;
     for (int i = 0; i < 1024; i++) { sa[i] = (short)(i * 31 - 7000); sb[i] = (short)(i * 17 + 3); }
@@ -94,6 +132,59 @@ int main(void) {
             if (w8[i] != (i == 6 ? 0xEF : i == 7 ? 0xCD : i + 1)) bad++;
             if (d8[i] != (i == 8 ? 0x78 : i == 9 ? 0x56 : i == 10 ? 0x34 : i == 11 ? 0x12 : i + 1)) bad++;
         }
+    }
+    {
+        /* Every width pair, on values at the edges of their lanes and between. */
+        static const unsigned long edge[] = {0, 1, 0x7f, 0x80, 0xff, 0x100, 0x7fff, 0x8000, 0xffff, 0x10000, 0x7fffffffUL,
+                                             0x80000000UL, 0xffffffffUL, 0x100000000UL, 0x7fffffffffffffffUL, 0x8000000000000000UL,
+                                             ~0UL, 0x123456789abcdef0UL};
+        unsigned long in[16] __attribute__((aligned(16))), out[16] __attribute__((aligned(16)));
+        for (int rot = 0; rot < 18; rot++) {
+            for (int i = 0; i < 16; i++) in[i] = edge[(i + rot) % 18];
+            unsigned char *b = (unsigned char *)in; unsigned short *h = (unsigned short *)in; unsigned *w = (unsigned *)in;
+            unsigned char o8[16] __attribute__((aligned(16))); unsigned short o16[16] __attribute__((aligned(16)));
+            unsigned o32[16] __attribute__((aligned(16))); unsigned long o64[4] __attribute__((aligned(16)));
+            z8_16(o16, b); for (int i = 0; i < 16; i++) if (o16[i] != b[i]) bad++;
+            s8_16(o16, b); for (int i = 0; i < 16; i++) if (o16[i] != (unsigned short)(short)(signed char)b[i]) bad++;
+            z8_32(o32, b); for (int i = 0; i < 16; i++) if (o32[i] != b[i]) bad++;
+            s8_32(o32, b); for (int i = 0; i < 16; i++) if (o32[i] != (unsigned)(int)(signed char)b[i]) bad++;
+            z16_32(o32, h); for (int i = 0; i < 8; i++) if (o32[i] != h[i]) bad++;
+            s16_32(o32, h); for (int i = 0; i < 8; i++) if (o32[i] != (unsigned)(int)(short)h[i]) bad++;
+            z32_64(o64, w); for (int i = 0; i < 4; i++) if (o64[i] != w[i]) bad++;
+            s32_64(o64, w); for (int i = 0; i < 4; i++) if (o64[i] != (unsigned long)(long)(int)w[i]) bad++;
+            t16_8(o8, in); for (int i = 0; i < 16; i++) if (o8[i] != (unsigned char)h[i]) bad++;
+            t32_8(o8, in); for (int i = 0; i < 16; i++) if (o8[i] != (unsigned char)w[i]) bad++;
+            t32_16(o16, in); for (int i = 0; i < 8; i++) if (o16[i] != (unsigned short)w[i]) bad++;
+            t64_32(o32, in); for (int i = 0; i < 4; i++) if (o32[i] != (unsigned)in[i]) bad++;
+        }
+        (void)out;
+    }
+    {
+        static unsigned char pat[300];
+        for (unsigned n = 0; n < 300; n += 7) {
+            for (unsigned i = 0; i < 300; i++) pat[i] = 0xEE;
+            pattern_bytes(pat, n);
+            for (unsigned i = 0; i < 300; i++) if (pat[i] != (i < n ? (unsigned char)((i & 3) + ((i >> 2) & 1)) : 0xEE)) bad++;
+        }
+    }
+    {
+        /* Each buffer ends where an unmapped page begins: an access past its 8 bytes faults. */
+        unsigned char *page = mmap(0, 4 * 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        mprotect(page + 3 * 4096, 4096, PROT_NONE);
+        unsigned char *x = page + 3 * 4096 - 8, *y = page + 2 * 4096 - 8, *o = page + 1 * 4096 - 8;
+        for (int i = 0; i < 8; i++) x[i] = (unsigned char)(i * 37 + 250), y[i] = (unsigned char)(i * 91 + 7);
+        add_u8x8(o, x, y);
+        for (int i = 0; i < 8; i++) if (o[i] != (unsigned char)(x[i] + y[i])) bad++;
+        unsigned short *hx = (unsigned short *)x, *hy = (unsigned short *)y, *ho = (unsigned short *)o;
+        sub_u16x4(ho, hx, hy);
+        for (int i = 0; i < 4; i++) if (ho[i] != (unsigned short)(hx[i] - hy[i])) bad++;
+        unsigned *wx = (unsigned *)x, *wy = (unsigned *)y, *wo = (unsigned *)o;
+        xor_u32x2(wo, wx, wy);
+        for (int i = 0; i < 2; i++) if (wo[i] != (wx[i] ^ wy[i])) bad++;
+        set_u8x8(o);
+        for (int i = 0; i < 8; i++) if (o[i] != i + 1) bad++;
+        fill_ramp();
+        for (int i = 0; i < 48; i++) if (ramp_at(i) != (unsigned char)(i * 5 - 20)) bad++;
     }
     printf("bad %d\n", bad);
 }

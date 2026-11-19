@@ -399,6 +399,12 @@ pub fn encode(inst: &Inst) -> Result<Encoded, Error> {
             0x1E20_4000 | size.field() << 22 | opcode << 15 | vreg(*rn)? << 5 | vreg(*rd)?
         }
         Inst::VectorMov { rd, rn } => 0x4EA0_1C00 | vreg(*rn)? << 16 | vreg(*rn)? << 5 | vreg(*rd)?,
+        Inst::FpBinary { op: FpBinary::Abd, size, rd, rn, rm } => {
+            // `fabd` is an Advanced SIMD scalar three-same form: its own word
+            // (the half form is the FP16 one).
+            let base = if *size == FpSize::H { 0x7EC0_1400 } else { 0x7EA0_D400 | size.field() << 22 };
+            base | vreg(*rm)? << 16 | vreg(*rn)? << 5 | vreg(*rd)?
+        }
         Inst::FpBinary { op, size, rd, rn, rm } => {
             let opcode = match op {
                 FpBinary::Mul => 0b0000,
@@ -410,6 +416,7 @@ pub fn encode(inst: &Inst) -> Result<Encoded, Error> {
                 FpBinary::MaxNm => 0b0110,
                 FpBinary::MinNm => 0b0111,
                 FpBinary::Nmul => 0b1000,
+                FpBinary::Abd => unreachable!("encoded above"),
             };
             0x1E20_0800 | size.field() << 22 | vreg(*rm)? << 16 | opcode << 12 | vreg(*rn)? << 5 | vreg(*rd)?
         }
@@ -435,6 +442,14 @@ pub fn encode(inst: &Inst) -> Result<Encoded, Error> {
                 None => (0, 0b01000),
             };
             0x1E20_2000 | size.field() << 22 | second << 16 | vreg(*rn)? << 5 | u32::from(*signalling) << 4 | zero
+        }
+        Inst::FpCondCompare { size, rn, rm, nzcv, cond } => {
+            0x1E20_0400
+                | size.field() << 22
+                | vreg(*rm)? << 16
+                | cond.field() << 12
+                | vreg(*rn)? << 5
+                | field("nzcv", i64::from(*nzcv), 4, false)?
         }
         Inst::FpSelect { size, rd, rn, rm, cond } => {
             0x1E20_0C00 | size.field() << 22 | vreg(*rm)? << 16 | cond.field() << 12 | vreg(*rn)? << 5 | vreg(*rd)?
@@ -549,9 +564,16 @@ pub fn encode(inst: &Inst) -> Result<Encoded, Error> {
                 if *lanes == Arrangement::D2 { (0b11, index & 1, 0) } else { (0b10, index >> 1, index & 1) };
             0x4F00_1000 | size << 22 | l << 21 | vreg(*rm)? << 16 | s << 14 | h << 11 | vreg(*rn)? << 5 | vreg(*rd)?
         }
-        Inst::VectorUnzip { second, lanes, rd, rn, rm } => {
+        Inst::ScalarFmaLane { op, lanes, rd, rn, rm, index } => {
+            let s = u32::from(*op == VectorFma::Sub);
+            let index = u32::from(*index);
+            let (size, h, l) =
+                if *lanes == Arrangement::D2 { (0b11, index & 1, 0) } else { (0b10, index >> 1, index & 1) };
+            0x5F00_1000 | size << 22 | l << 21 | vreg(*rm)? << 16 | s << 14 | h << 11 | vreg(*rn)? << 5 | vreg(*rd)?
+        }
+        Inst::VectorPermute { kind, lanes, rd, rn, rm } => {
             let size = lanes.size();
-            let base = if *second { 0x0E00_5800 } else { 0x0E00_1800 };
+            let base = 0x0E00_0800 | kind.opcode() << 12;
             base | lanes.q() << 30 | size << 22 | vreg(*rm)? << 16 | vreg(*rn)? << 5 | vreg(*rd)?
         }
         Inst::VectorNarrow { high, shift: None, wide, rd, rn } => {
@@ -591,6 +613,18 @@ pub fn encode(inst: &Inst) -> Result<Encoded, Error> {
             let (opcode, q, s, size) = single_structure_fields(*lanes, *index);
             0x0D40_0000 | q << 30 | opcode << 13 | s << 12 | size << 10 | reg(*base)? << 5 | vreg(*rt)?
         }
+        // "AdvSIMD load/store multiple structures": `L` is bit 22, the opcode
+        // 8 (two registers), 4 (three) or 0 (four).
+        Inst::VectorLoadStructure { count, lanes, rt, base } | Inst::VectorStoreStructure { count, lanes, rt, base } => {
+            let load = u32::from(matches!(inst, Inst::VectorLoadStructure { .. }));
+            let opcode = match count {
+                2 => 0b1000,
+                3 => 0b0100,
+                4 => 0b0000,
+                _ => return error(format!("a structure access of {count} registers")),
+            };
+            0x0C00_0000 | lanes.q() << 30 | load << 22 | opcode << 12 | lanes.size() << 10 | reg(*base)? << 5 | vreg(*rt)?
+        }
         Inst::VectorIntUnary { op, lanes, rd, rn } => {
             let (u, opcode) = op.fields();
             0x0E20_0800 | lanes.q() << 30 | u << 29 | op.size(*lanes) << 22 | opcode << 12 | vreg(*rn)? << 5 | vreg(*rd)?
@@ -599,6 +633,10 @@ pub fn encode(inst: &Inst) -> Result<Encoded, Error> {
             let imm5 = (u32::from(*index) << (lanes.imm5().trailing_zeros() + 1)) | lanes.imm5();
             let q = u32::from(*lanes == Arrangement::D2);
             0x0E00_3C00 | q << 30 | imm5 << 16 | vreg(*rn)? << 5 | reg(*rd)?
+        }
+        Inst::VectorSmov { lanes, wide, rd, rn, index } => {
+            let imm5 = (u32::from(*index) << (lanes.imm5().trailing_zeros() + 1)) | lanes.imm5();
+            0x0E00_2C00 | u32::from(*wide) << 30 | imm5 << 16 | vreg(*rn)? << 5 | reg(*rd)?
         }
         Inst::VectorInsLane { lanes, rd, rn, index, src } => {
             let shift = lanes.imm5().trailing_zeros();

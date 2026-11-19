@@ -304,6 +304,7 @@ pub fn run(
     dead_definitions(function);
     non_flag_setting(function);
     redundant_zero_extends(function);
+    redundant_zero_high_moves(function);
     narrow_extension_uses(function);
     dead_code(function);
 }
@@ -623,7 +624,12 @@ fn flags_dead(
     for op in &ops[at + 1..] {
         if matches!(
             op,
-            Op::I(Inst::BranchCond { .. } | Inst::CondSelect { .. } | Inst::CondCompare { .. })
+            Op::I(
+                Inst::BranchCond { .. }
+                    | Inst::CondSelect { .. }
+                    | Inst::CondCompare { .. }
+                    | Inst::FpCondCompare { .. }
+            )
         ) {
             return false;
         }
@@ -761,6 +767,41 @@ fn call_between(
     after.intersection(&before).any(|&one| one != from && one != to && blocks[one].ops.iter().any(is_call))
 }
 
+/// The `adrp`s the pin keeps inside a `MOVaddr`: a page register defined once
+/// and read only by the `add :lo12:` of the same symbol in its block. The pin
+/// has one instruction there, which `MachineCSE` never equates with the bare
+/// `ADRP` a folded load uses, so the two stay apart: sharing the page makes
+/// the address live across a call in a callee-saved register, and its holder
+/// saves it in the entry, which shrink wrapping then cannot move. Not at
+/// `optsize`, where a shared page is the smaller code (the DEVIATE of
+/// [`profitable`]).
+fn address_pair_heads(
+    function: &MFunc,
+    definitions: &HashMap<Reg, usize>,
+) -> HashSet<(usize, usize)> {
+    let readers = readers_of(function);
+    let mut heads = HashSet::default();
+    for (block, body) in function.blocks.iter().enumerate() {
+        for (index, op) in body.ops.iter().enumerate() {
+            let Op::I(Inst::Adr { page: true, rd, target, got: false }) = op else { continue };
+            let page = Reg::Gpr(*rd);
+            if definitions.get(&page) != Some(&1) {
+                continue;
+            }
+            if let [(reader_block, reader)] = readers.get(&page).map_or(&[][..], Vec::as_slice)
+                && *reader_block == block
+                && matches!(
+                    &body.ops[*reader],
+                    Op::I(Inst::AddPageOffset { rn, target: add, .. }) if rn == rd && add == target
+                )
+            {
+                heads.insert((block, index));
+            }
+        }
+    }
+    heads
+}
+
 fn cse(
     function: &mut MFunc,
     cfg: &Cfg,
@@ -776,13 +817,14 @@ fn cse(
     }
     let mut rename: HashMap<Reg, Reg> = HashMap::default();
     let mut removed: HashSet<(usize, usize)> = HashSet::default();
-    let mut table: HashMap<Op, Reg> = HashMap::default();
+    let mut table: HashMap<(Op, bool), Reg> = HashMap::default();
+    let heads = if optsize { HashSet::default() } else { address_pair_heads(function, &definitions) };
     // The block each table entry's register is defined in: equal operations in
     // one block are one DAG node in the pin, shared whatever their readers.
     let mut home: HashMap<Reg, usize> = HashMap::default();
     let copies = single_copies(function, &definitions);
     let readers = readers_of(function);
-    let mut stack: Vec<(usize, usize, Vec<Op>)> = vec![(0, 0, Vec::new())];
+    let mut stack: Vec<(usize, usize, Vec<(Op, bool)>)> = vec![(0, 0, Vec::new())];
     // Depth-first over the tree, undoing a block's entries when it is left.
     while let Some((block, next, added)) = stack.last_mut() {
         if *next == 0 {
@@ -796,7 +838,7 @@ fn cse(
                 if definitions.get(&register) != Some(&1) {
                     continue;
                 }
-                let key = keyed(&renamed(op, &rename, &copies));
+                let key = (keyed(&renamed(op, &rename, &copies)), heads.contains(&(*block, index)));
                 match table.get(&key) {
                     // A flag-setting instruction is shared where its own flags
                     // are dead: the earlier one still sets them
@@ -1730,6 +1772,52 @@ mod tests {
         assert_eq!((movzs(0), movzs(2)), (1, 1), "{function:#?}");
     }
 
+    /// getbit (jpeg_single -O3): the page a folded load reads and the page of a
+    /// `MOVaddr` two blocks away were one `adrp`, so the address lived across
+    /// the call in `x19`, saved in the entry, and shrink wrapping could not
+    /// move the frame: 160k more instructions than clang. The pin's `MOVaddr`
+    /// is one instruction, never equal to the bare `ADRP`.
+    #[test]
+    fn the_page_of_an_address_pair_is_not_shared_with_a_bare_page() {
+        let symbol = || Target::Symbol { name: "g".into(), addend: 4 };
+        let adrp = |rd: u32| Op::I(Inst::Adr { page: true, rd: Gpr(rd), target: symbol(), got: false });
+        let load = |rd: u32, base: u32| {
+            Op::I(Inst::Load {
+                mem: Memory::Int { width: Width::W, bytes: 4, sign: false, reg: Gpr(rd) },
+                addr: Addr::PageOffset { base: Gpr(base), target: symbol(), got: false },
+                mmo: MemOperand::default(),
+            })
+        };
+        let low = |rd: u32, rn: u32| Op::I(Inst::AddPageOffset { rd: Gpr(rd), rn: Gpr(rn), target: symbol() });
+        let mut function = function();
+        function.blocks = vec![
+            MBlock { label: "entry".into(), ops: vec![adrp(64), load(65, 64), branch_to("mid")].into() },
+            MBlock { label: "mid".into(), ops: vec![branch_to("tail")].into() },
+            MBlock {
+                label: "tail".into(),
+                ops: vec![
+                    adrp(66),
+                    low(67, 66),
+                    Op::I(Inst::Store {
+                        mem: Memory::Int { width: Width::X, bytes: 8, sign: false, reg: Gpr(67) },
+                        addr: Addr::Slot { slot: 0, offset: 0 },
+                        mmo: MemOperand::default(),
+                    }),
+                    Op::Return { uses: vec![], tail: None },
+                ]
+                .into(),
+            },
+        ];
+        run(&mut function, false);
+        let pages = function
+            .blocks
+            .iter()
+            .flat_map(|block| block.ops.iter())
+            .filter(|op| matches!(op, Op::I(Inst::Adr { .. })))
+            .count();
+        assert_eq!(pages, 2, "{function:#?}");
+    }
+
     /// A four-chunk 64-bit constant is not as cheap as a move: it was remade
     /// in the far block (three extra `movk`) instead of shared.
     #[test]
@@ -1996,6 +2084,67 @@ fn redundant_zero_extends(function: &mut MFunc) {
             op.visit(&mut |slot, _| {
                 if let Some(Reg::Gpr(new)) = rename.get(&slot.key())
                     && let RegRef::Gpr(slot) = slot
+                {
+                    *slot = *new;
+                }
+            });
+        }
+    }
+}
+
+/// `AArch64MIPeepholeOpt::visitFMOVDr`: an `fmov d, d` already follows an
+/// instruction that writes a `D` register (a 64-bit load, a `dup` of 64 bits,
+/// an `fmov d, x`), which clears the upper half; the move goes.
+/// `is64bitDefwithZeroHigh64bit` is translated for the instructions this
+/// selector makes; the pin's other cases (`COPY` of a general register, a load
+/// of a tuple) are not.
+fn redundant_zero_high_moves(function: &mut MFunc) {
+    let definitions = definitions(function);
+    let zeroed: HashSet<Reg> = function
+        .blocks
+        .iter()
+        .flat_map(|block| &block.ops)
+        .filter_map(|op| match op {
+            Op::I(Inst::Load { mem: Memory::Fp { bytes: 8, reg }, addr: Addr::Offset { .. }, .. })
+            | Op::I(Inst::VectorFill {
+                rd: reg,
+                fill: Fill::Dup(Arrangement::B8 | Arrangement::H4 | Arrangement::S2, _),
+            })
+            | Op::I(Inst::FpInt {
+                op: FpConvert::Bits { to_fp: true },
+                width: Width::X,
+                size: FpSize::D,
+                fpr: reg,
+                ..
+            }) => Some(Reg::Fpr(*reg)),
+            _ => None,
+        })
+        .filter(|register| definitions.get(register) == Some(&1))
+        .collect();
+    let mut rename: HashMap<Reg, Reg> = HashMap::default();
+    for block in &mut function.blocks {
+        block
+            .ops
+            .retain(
+                |op| {
+                    let Op::I(Inst::FpUnary { op: FpUnary::Mov, size: FpSize::D, rd, rn }) = op else { return true };
+                    let (from, to) = (Reg::Fpr(*rd), Reg::Fpr(*rn));
+                    if rd.is_virtual() && definitions.get(&from) == Some(&1) && zeroed.contains(&to) {
+                        rename.insert(from, to);
+                        return false;
+                    }
+                    true
+                },
+            );
+    }
+    if rename.is_empty() {
+        return;
+    }
+    for block in &mut function.blocks {
+        for op in &mut block.ops {
+            op.visit(&mut |slot, _| {
+                if let Some(Reg::Fpr(new)) = rename.get(&slot.key())
+                    && let RegRef::Fpr(slot) = slot
                 {
                     *slot = *new;
                 }

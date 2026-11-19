@@ -14,6 +14,15 @@
 //! loop the target's trial size admits; the driver then compiles the program
 //! again with every loop under that size unrolled and keeps whichever
 //! assembly it prices cheaper.
+//!
+//! # Example
+//! A loop the pass refused to unroll is noted; the driver compiles again with it unrolled and keeps the cheaper assembly.
+//!
+//! ```text
+//! pass:   loop refused by the threshold -> noted (ELIGIBLE)
+//! driver: compile 1 (loop kept) vs compile 2 (loop unrolled)
+//!         -> keeps whichever assembly it prices cheaper
+//! ```
 
 use std::cell::{Cell, RefCell};
 
@@ -38,6 +47,110 @@ thread_local! {
     static MORE: Cell<bool> = const { Cell::new(false) };
     /// The functions, and loops together, ROTATION-HOT left unrotated.
     static LEFT: RefCell<(Vec<String>, usize)> = const { RefCell::new((Vec::new(), 0)) };
+    /// Set while the trial compile of JT-LATCH-TRIAL runs: JumpThreading does
+    /// not copy a loop latch.
+    static LATCH_KEPT: Cell<bool> = const { Cell::new(false) };
+    /// The functions in which JumpThreading copied a latch.
+    static LATCH_COPIED: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    /// Set while the trial compile of SWITCH-LOOKUP-TRIAL runs: no switch is
+    /// turned into a lookup table.
+    static LOOKUPS_REFUSED: Cell<bool> = const { Cell::new(false) };
+    /// The lookup tables the base compile built.
+    static LOOKUPS_BUILT: Cell<usize> = const { Cell::new(0) };
+    /// Set while the trial compile of LIR-COPY-TRIAL runs: LoopIdiom leaves a
+    /// copy loop of an unknown count as a loop.
+    static COPY_LOOPS_KEPT: Cell<bool> = const { Cell::new(false) };
+    /// The functions in which LoopIdiom turned such a loop into a `memcpy`.
+    static COPY_CALLS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+}
+
+/// DEVIATE SWITCH-LOOKUP-TRIAL (beyond the pin; gcc's `-Os` keeps the compares
+/// of a sparse switch; owner x86-m32, exit 2026-11-30): whether the trial
+/// compile that builds no lookup table is running. The table is data bytes
+/// against the compares' code bytes, which only the object prices.
+pub fn refusing_lookup_tables() -> bool {
+    LOOKUPS_REFUSED.with(Cell::get)
+}
+
+/// Runs `body` with no switch turned into a lookup table.
+pub fn with_refused_lookup_tables<T>(body: impl FnOnce() -> T) -> T {
+    let before = LOOKUPS_REFUSED.with(|cell| cell.replace(true));
+    let value = body();
+    LOOKUPS_REFUSED.with(|cell| cell.set(before));
+    value
+}
+
+/// Notes a lookup table the base compile built, which a trial may refuse.
+pub(crate) fn note_lookup_table() {
+    LOOKUPS_BUILT.with(|count| count.set(count.get() + 1));
+}
+
+/// The tables [`note_lookup_table`] saw since the last call.
+pub fn take_lookup_tables() -> usize {
+    LOOKUPS_BUILT.with(|count| count.replace(0))
+}
+
+/// DEVIATE LIR-COPY-TRIAL (beyond the pin; owner x86-m32, exit 2026-11-30):
+/// whether the trial compile that keeps copy loops of an unknown count is
+/// running. The pin calls `memcpy` for them; whether the call is fewer bytes
+/// than the loop depends on the sequence around it, so the object decides.
+pub fn keeping_copy_loops() -> bool {
+    COPY_LOOPS_KEPT.with(Cell::get)
+}
+
+/// Runs `body` with those copy loops kept.
+pub fn with_kept_copy_loops<T>(body: impl FnOnce() -> T) -> T {
+    let before = COPY_LOOPS_KEPT.with(|cell| cell.replace(true));
+    let value = body();
+    COPY_LOOPS_KEPT.with(|cell| cell.set(before));
+    value
+}
+
+/// Notes that LoopIdiom made a `memcpy` of a copy loop of `function`, which a
+/// trial may refuse.
+pub(crate) fn note_copy_call(function: &str) {
+    COPY_CALLS.with(|list| {
+        let mut list = list.borrow_mut();
+        if !list.iter().any(|one| one == function) {
+            list.push(function.to_owned());
+        }
+    });
+}
+
+/// The functions [`note_copy_call`] saw since the last call.
+pub fn take_copy_calls() -> Vec<String> {
+    COPY_CALLS.with(|list| std::mem::take(&mut *list.borrow_mut()))
+}
+
+/// DEVIATE JT-LATCH-TRIAL (beyond the pin; gcc's `-Os` backward threader
+/// refuses a path through a loop latch; owner x86-m32, exit 2026-11-30):
+/// whether the trial compile that does not copy a loop latch is running.
+pub fn keeping_latches() -> bool {
+    LATCH_KEPT.with(Cell::get)
+}
+
+/// Runs `body` with loop latches kept in one copy.
+pub fn with_kept_latches<T>(body: impl FnOnce() -> T) -> T {
+    let before = LATCH_KEPT.with(|cell| cell.replace(true));
+    let value = body();
+    LATCH_KEPT.with(|cell| cell.set(before));
+    value
+}
+
+/// Notes that JumpThreading copied a loop latch of `function`, which a trial
+/// may refuse.
+pub(crate) fn note_latch_copy(function: &str) {
+    LATCH_COPIED.with(|list| {
+        let mut list = list.borrow_mut();
+        if !list.iter().any(|one| one == function) {
+            list.push(function.to_owned());
+        }
+    });
+}
+
+/// The functions [`note_latch_copy`] saw since the last call.
+pub fn take_latch_copies() -> Vec<String> {
+    LATCH_COPIED.with(|list| std::mem::take(&mut *list.borrow_mut()))
 }
 
 thread_local! {
@@ -120,15 +233,47 @@ pub fn restore(noted: (Vec<String>, u64)) {
     ELIGIBLE.with(|list| *list.borrow_mut() = noted);
 }
 
-/// Whether a trial unroll is kept at -O1, where each axis is strict: it adds no
-/// bytes (`added` <= 0) and costs no work (`saved` >= 0, work being what the
-/// code is expected to execute). The one rule of every target's -O1 trial
-/// (DEVIATE UNROLL-TRIAL, 6502-UNROLL-O1, UNROLL-O1-TRIAL).
+/// Whether a trial unroll is kept at -O1: the code is expected to execute no
+/// more (`saved` >= 0, work being what the code is expected to execute) and
+/// adds no bytes (`added` <= 0). Where the target prices bytes in clocks at -O1
+/// (`rate`, thousandths of a clock a byte, `Tti::unroll_milliclocks_per_byte`;
+/// 0 where it does not), an unroll that adds bytes is kept too if the work it
+/// saves repays them, as the -O2 unroll is (`unroll_pays`): -O1 is about clocks
+/// since the ruling of 2026-11-14, which replaced the strict rule of each axis.
+/// The one rule of every target's -O1 trial (DEVIATE UNROLL-TRIAL,
+/// 6502-UNROLL-O1, UNROLL-O1-TRIAL).
 pub fn keeps_at_o1(
     saved: i64,
     added: i64,
+    rate: i64,
 ) -> bool {
-    added <= 0 && saved >= 0
+    if added <= 0 {
+        return saved >= 0;
+    }
+    rate > 0 && saved > 0 && saved * 1000 >= added * rate
+}
+
+#[cfg(test)]
+mod tests {
+    use super::keeps_at_o1;
+
+    /// x_life -O1 (m32): the 3x3 nest unrolled ran half the work (212,914
+    /// against 425,704) for 32 B more once the outer loops' counters
+    /// spilled; the strict rule put it back and the nest ran twice as long. 312
+    /// is the 486's byte rate.
+    #[test]
+    fn an_unroll_that_halves_the_work_is_kept_for_a_few_bytes_where_bytes_are_priced() {
+        assert!(keeps_at_o1(212_790, 32, 312));
+        assert!(!keeps_at_o1(212_790, 32, 0), "the strict rule of a target that prices no bytes");
+    }
+
+    /// matmul -O1 (m32): +1601 B for a work saving the 486's byte rate does not
+    /// repay.
+    #[test]
+    fn an_unroll_that_does_not_repay_its_bytes_is_put_back() {
+        assert!(!keeps_at_o1(400, 1601, 312));
+        assert!(keeps_at_o1(0, -3, 312) && keeps_at_o1(0, 0, 0) && !keeps_at_o1(-1, -3, 312));
+    }
 }
 
 /// DEVIATE ROTATION-TRIAL (beyond the pin; gcc's `-Os` leaves a counted loop
@@ -334,6 +479,27 @@ pub(crate) fn inlines(
     callees: &[String],
 ) -> bool {
     INLINED.with(|list| list.borrow().iter().any(|one| one.caller == caller && one.callees == callees))
+}
+
+thread_local! {
+    /// Set while the compile that inlines as the pin's threshold alone says
+    /// runs.
+    static PIN_INLINES: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Whether the byte rate that refuses a growing inline is off, for the compile
+/// of the pin's own inline decisions.
+pub fn pinning_inlines() -> bool {
+    PIN_INLINES.with(Cell::get)
+}
+
+/// Runs `body` with every inline the pin's threshold takes made, whatever it
+/// grows.
+pub fn with_pin_inlines<T>(body: impl FnOnce() -> T) -> T {
+    let before = PIN_INLINES.with(|cell| cell.replace(true));
+    let value = body();
+    PIN_INLINES.with(|cell| cell.set(before));
+    value
 }
 
 /// Whether a trial compile is running.

@@ -7,10 +7,12 @@
 # `llc_program` (default llrm-llc) and `llc_level` (default true: it takes -O<n>) say how the backend is run; a row without a level must give `llc_level_reason`.
 # `llc_passes` (default true) says the backend takes the `-f[no-]PASS` switches; a row that does not gives `llc_passes_reason`, and the driver leaves them out with a warning (clang has written `noinline` and the loop hints into the IR).
 # `llc_mcmodel` (default false) says the backend takes `-mcmodel=` and clang does not (the pin's clang refuses it for m68k): the flag goes to the backend alone.
+# `llc_reloc` (default false) says the backend takes `-relocation-model=`: the driver gives it what clang's `-f[no-]pic` chose.
 # `unroll_at_o1` (default false) makes `-funroll-loops` the default at -O1 (DEVIATE UNROLL-O1: clang marks every loop unroll-disable there, so the pin's -O1 never unrolls).
 # `thread_jumps_at_o1` (default false) makes `-fthread-jumps` the default at -O1 for the backend (DEVIATE JUMPTHREAD-O1: the pin's -O1 pipeline has no JumpThreadingPass).
 # `speed_rate_at_o1` (default false) makes `-fllrm-speed-rate` the default at -O1 for the backend (DEVIATE SPEED-O1: the byte price at speed counts at -O1 as at -O2; user ruling 2026-11-14, O1-O3 by clocks).
 # `pre_at_o1` (default false) makes `-ftree-pre` the default at -O1 for the backend (DEVIATE PRE-O1: GVN makes a partial redundancy full at -O1 as at -O2; user ruling 2026-11-14, O1-O3 by clocks).
+# `no_recursion_at_o1` (default false) makes `-fno-inline-recursive` the default at -O1 for the backend (DEVIATE REC-O1: gcc's recursive inlining is -O2 and up; x86-m32 only).
 # `clang_env` names an environment variable holding a clang for the target (m16's carries the i8086 patch).
 # `link` is the recipe for objects to an executable; `{objects}` and `{flags}` stand for lists, `{output}` for a path, `{root}` for the llrm checkout.
 
@@ -22,6 +24,7 @@ clang = ["-target", "x86_64-unknown-linux-gnu"]
 llc = []
 object = "elf"
 link = ["cc", "{objects}", "{flags}", "-o", "{output}"]
+llc_reloc = true
 unroll_at_o1 = true
 thread_jumps_at_o1 = true
 
@@ -45,6 +48,7 @@ run = ["python3", "-I", "{root}/tools/dosbatch/run_exe.py", "x86-m32"]
 unroll_at_o1 = true
 thread_jumps_at_o1 = true
 speed_rate_at_o1 = true
+no_recursion_at_o1 = true
 
 # arm64 Linux, run under qemu-aarch64 against the freestanding runtime of the arm64 tests (tools/targets/arm64-link.sh).
 [arm64-linux]
@@ -58,7 +62,6 @@ llc_level = true
 object = "elf"
 link = ["{root}/tools/targets/arm64-link.sh", "{output}", "{objects}"]
 run = ["qemu-aarch64"]
-thread_jumps_at_o1 = true
 
 # Real-mode DOS, Borland medium model: far code (function pointers and `P1` functions), near data, byte-packed
 # structs. `far`, `huge`, `near` are Borland's keywords on clang's address spaces.
@@ -133,7 +136,7 @@ clang = [
   "-D__I86__=1", "-fno-stack-protector", "-fno-asynchronous-unwind-tables", "-D__DOS__=1", "-DPHYSICAL_TEXT_SCREEN=0xB8000UL", "-std=gnu99", "-Xclang", "-fdefault-calling-conv=regcall",
   "-fborland-extensions", "-fshort-wchar", "-mlong-double-64", "-include", "{root}/toolchain/clang/borland.h", "-fdeclspec", "-Wno-array-bounds", "-Wno-unknown-attributes", "-Wno-error=incompatible-function-pointer-types", "-Wno-ignored-attributes", "-include", "{root}/toolchain/clang/watcom.h", "-include", "{root}/toolchain/clang/floatm.h", "-nostdinc", "-isystem", "{root}/toolchain/clang/watcom", "-isystem", "{root}/toolchain/clang/os/x86-m16", "-isystem", "{ow}/bld/hdr/dos/h",
 ]
-llc = ["-mregcall-default"]
+llc = ["-mregcall-default", "-mfar-bss-init"]
 object = "omf"
 link = ["python3", "-I", "{root}/tools/wat_link.py", "m16", "{ow}", "{output}", "{objects}"]
 run = ["python3", "-I", "{root}/tools/dosbatch/run_exe.py", "x86-m16"]
@@ -158,6 +161,7 @@ run = ["python3", "-I", "{root}/tools/dosbatch/run_exe.py", "x86-m32"]
 unroll_at_o1 = true
 thread_jumps_at_o1 = true
 speed_rate_at_o1 = true
+no_recursion_at_o1 = true
 
 # arm64 Linux on glibc, for qemu-aarch64: LLRM_ARM64_SYSROOT is the unpacked *-arm64-cross packages.
 [arm64-glibc]
@@ -171,7 +175,6 @@ llc_level = true
 object = "elf"
 link = ["{root}/tools/targets/arm64-glibc-link.sh", "{output}", "{objects}"]
 run = ["qemu-aarch64"]
-thread_jumps_at_o1 = true
 
 # arm64 macOS, on an Apple-silicon Mac only; headers from SDKROOT (`export SDKROOT=$(xcrun --show-sdk-path)`). Untested.
 [arm64-macos]
@@ -186,7 +189,6 @@ llc_level = true
 object = "macho"
 link = ["clang", "-arch", "arm64", "-o", "{output}", "{objects}"]
 run = []
-thread_jumps_at_o1 = true
 
 # 32-bit Linux on the host's glibc (multilib), ELF32 objects linked by the system clang.
 [x86_32-linux]
@@ -194,13 +196,14 @@ description = "x86-m32"
 triple = "i486-unknown-linux-gnu"
 datalayout = "{datalayout:x86-m32}"
 clang = ["-target", "i486-unknown-linux-gnu", "-fno-pic", "-fno-stack-protector", "-fno-asynchronous-unwind-tables"]
-llc = ["-fobject-format=elf", "-mabi=sysv"]
+llc = ["-fobject-format=elf", "-mabi=sysv", "-mstack-alignment=16"]
 object = "elf"
 link = ["clang", "-m32", "-no-pie", "-o", "{output}", "{objects}", "-lm"]
 run = []
 unroll_at_o1 = true
 thread_jumps_at_o1 = true
 speed_rate_at_o1 = true
+no_recursion_at_o1 = true
 
 # 6502 on sim65: clang's msp430 is only the C front end (16-bit int and pointers, as cc65; unsigned char, packed structs),
 # its datalayout replaced by the 6502's. Stops at -S: ca65 text, which the tests assemble and link with cl65.

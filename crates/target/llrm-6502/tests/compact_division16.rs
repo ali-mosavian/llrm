@@ -23,7 +23,8 @@ fn a_cold_division_calls_the_compact_routine_at_speed() {
 /// `udivmod16` branches into `__udivhi3c` (`bne`), which the image scan read
 /// as a call only: the speed divide's image came out 16 B smaller than the
 /// compact one's (-16 for a 31 B growth), and the choice above never saw its
-/// bytes. The growth is 39 B since the compact routine lost its wrapper.
+/// bytes. The growth is 125 B since the speed divide shifts the divisor up to
+/// the dividend.
 #[test]
 fn an_image_includes_a_routine_the_speed_divide_branches_into() {
     use llrm_6502::mulimage::{image_bytes, image_of_texts};
@@ -31,19 +32,34 @@ fn an_image_includes_a_routine_the_speed_divide_branches_into() {
     let speed = image_of_texts(&names, &["  jsr __udivhi3\n".to_owned()]);
     let compact = image_of_texts(&names, &["  jsr __udivhi3c\n".to_owned()]);
     assert!(speed.contains("__udivhi3c"), "{speed:?}");
-    assert_eq!(image_bytes(&speed) - image_bytes(&compact), 39, "{speed:?} against {compact:?}");
+    assert_eq!(image_bytes(&speed) - image_bytes(&compact), 125, "{speed:?} against {compact:?}");
 }
 
 /// The compact word divide linked 55 B (an 8 B wrapper over a 47 B loop that
 /// compared, then subtracted again, and tested a 17th bit that a 16-step loop
 /// from a zero remainder never produces): k_tosudivax stood 6 B over sdcc's 64.
-/// The loop now returns the quotient itself and subtracts once.
+/// The loop now returns the quotient itself and subtracts once. The trial
+/// compare keeps its borrow for the subtract that follows (2 B more than the
+/// `sec`/`tay` form, 16 clocks a step on a quotient bit of 0 down to 12).
 #[test]
-fn the_compact_word_divide_image_is_42_bytes_and_the_remainder_one_50() {
+fn the_compact_word_divide_image_is_44_bytes_and_the_remainder_one_52() {
     use llrm_6502::mulimage::{image_bytes, image_of_texts};
     let names = vec!["f".to_owned()];
     let divide = image_of_texts(&names, &["  jsr __udivhi3c\n".to_owned()]);
     let remainder = image_of_texts(&names, &["  jsr __umodhi3c\n".to_owned()]);
-    assert!(image_bytes(&divide) <= 42, "{divide:?}: {} B", image_bytes(&divide));
-    assert!(image_bytes(&remainder) <= 50, "{remainder:?}: {} B", image_bytes(&remainder));
+    assert!(image_bytes(&divide) <= 44, "{divide:?}: {} B", image_bytes(&divide));
+    assert!(image_bytes(&remainder) <= 52, "{remainder:?}: {} B", image_bytes(&remainder));
+}
+
+/// The signed compact divide linked 109 B (2026-11-15): `neg16` twice in the
+/// sign pair, the result reloaded and renegated. The pair is one loop over the
+/// two words, and a result is negated in A:X: 95 B.
+#[test]
+fn the_compact_signed_word_divide_image_is_bounded() {
+    use llrm_6502::mulimage::{image_bytes, image_of_texts};
+    let names = vec!["f".to_owned()];
+    let divide = image_of_texts(&names, &["  jsr __divhi3c\n".to_owned()]);
+    let remainder = image_of_texts(&names, &["  jsr __modhi3c\n".to_owned()]);
+    assert!(image_bytes(&divide) <= 95, "{divide:?}");
+    assert!(image_bytes(&remainder) <= 98, "{remainder:?}: {} B", image_bytes(&remainder));
 }

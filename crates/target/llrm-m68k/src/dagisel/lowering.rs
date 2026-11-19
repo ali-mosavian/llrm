@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! `M68kTargetLowering`: the action table and the custom lowering of
 //! conditions.
 //!
@@ -94,7 +95,7 @@ pub fn target_lowering_with(
     let int = [MVT::I8, MVT::I16, MVT::I32];
     let m68020 = cpu.at_least(Cpu::M68020);
     let mut tl =
-        TargetLowering::empty(TargetLoweringInfo::new(&int, false).with_shift_by_value_type().with_soft_float());
+        TargetLowering::empty(TargetLoweringInfo::new(&int, false).with_shift_by_value_type().with_soft_float().with_soft_compare_classes());
     tl.init_actions();
     // no FPU at any CPU: every float operation is a compiler-rt call
     tl.set_soft_float_libcall_names();
@@ -149,6 +150,13 @@ pub fn target_lowering_with(
     set(&[SMulO, UMulO], &[MVT::I8, MVT::I16], Action::Custom);
     set(&[SMulO, UMulO], &[MVT::I32], if m68020 { Action::Custom } else { Action::Expand });
     set(&[ShlParts, SraParts, SrlParts], &[MVT::I32], Action::Custom);
+    // DEVIATE M68K-WIDE-SHIFT (see `lower_wide_shift`): the 68000's constant
+    // shifts of 16 or more. Custom, not a combine: the combiner folds the swap
+    // form back into the shift (`SimplifyDemandedBits` of a rotate), and does
+    // so only for an operation that is `Legal`. Owner w8, exit 2026-11-24.
+    if !m68020 {
+        set(&[Shl, Srl, Sra], &[MVT::I32], Action::Custom);
+    }
     set(&[SAddO, UAddO, SSubO, USubO], &int, Action::Custom);
     set(&[AddC, AddE, SubC, SubE], &int, if carry_chain { Action::Custom } else { Action::Expand });
     set(&[BrCond], &[MVT::Other], Action::Custom);
@@ -329,7 +337,8 @@ impl llrm_codegen::backend::selectiondag::dag_combiner::CombineHooks for M68kLow
         } else {
             Price::Size
         };
-        let plan = super::synth::plan(self.cpu, price, vt.size_in_bits(), c)?;
+        let plan = super::synth::plan(self.cpu, price, vt.size_in_bits(), c)
+            .or_else(|| super::synth::plan_unless_linked(self.cpu, price, vt.size_in_bits(), c))?;
         let taken = self.mul.allows(true).then_some(plan);
         if taken.is_some() {
             self.mul.note_synthesized();
@@ -350,7 +359,6 @@ impl llrm_codegen::backend::selectiondag::dag_combiner::CombineHooks for M68kLow
             half: EVT::I16,
             unsigned: u32::from(opcode::UMULd32d16),
             signed: u32::from(opcode::SMULd32d16),
-            has_full_multiply: !matches!(self.cpu, Cpu::M68000 | Cpu::M68010),
             constant: true,
         })
     }
@@ -428,6 +436,15 @@ impl llrm_codegen::backend::selectiondag::dag_combiner::CombineHooks for M68kLow
     }
 }
 
+impl M68kLowering {
+    /// The 68000 at a speed level: the constant shifts of 16 or more through
+    /// `swap` (the 68020's barrel shifter takes any count in a register at
+    /// the same price, and `-Os` keeps the 4-byte form).
+    fn wide_shifts(&self) -> bool {
+        self.cpu == Cpu::M68000 && self.price == crate::timing::Price::Rate
+    }
+}
+
 impl Hooks for M68kLowering {
     /// `getStackPointerRegisterToSaveRestore` and the frame's stack alignment,
     /// which the shared expansion of `DYNAMIC_STACKALLOC`, `STACKSAVE` and
@@ -447,6 +464,11 @@ impl Hooks for M68kLowering {
         match dag.opcode(node) {
             ISD::SetCC => lower_setcc(dag, node, self.cpu),
             ISD::SetCCCarry => Some(lower_setcc_carry(dag, node)),
+            ISD::Shl | ISD::Srl | ISD::Sra => {
+                // the node itself is what Custom answers for a shift that stays
+                let wide = if self.wide_shifts() { lower_wide_shift(dag, node) } else { None };
+                Some(wide.unwrap_or(node))
+            }
             ISD::ShlParts => Some(lower_shift_left_parts(dag, node)),
             ISD::SrlParts => Some(lower_shift_right_parts(dag, node, false)),
             ISD::SraParts => Some(lower_shift_right_parts(dag, node, true)),
@@ -1226,6 +1248,62 @@ fn lower_shift_right_parts(
 /// `HI`/`LS`, `CC`/`CS`, `NE`/`EQ`, ...
 fn opposite(code: u128) -> u128 {
     code ^ 1
+}
+
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+/// `i32` shifts by a constant of 16 to 31 on the 68000, which has no count
+/// above 8 in the instruction (`moveq #n, %dm; lsr.l %dm, %dn` is 8 + 2n clocks
+/// and a register): through the swap of the halves (`rotl x, 16` is `swap`, 4
+/// clocks), then a shift of 15 or fewer.
+///
+/// * `srl x, 16+k` is `srl (and (rotr x, 16), 0xFFFF), k`
+/// * `shl x, 16+k` is `shl (and (rotl x, 16), 0xFFFF0000), k`
+/// * `sra x, 16+k` is `sra (sext_in_reg (rotr x, 16), i16), k`
+///
+/// Clocks: 20..58 against 44..74 for the register form. The speed levels only
+/// (the swap forms are larger: `lsr.l` of 23 is 4 B, this is 10).
+///
+/// Translation: gcc `config/m68k/m68k.cc` `output_lshrsi3`, `output_ashlsi3`
+/// and `output_ashrsi3`, the counts of 16 and over (`swap`, `clr.w` / `ext.l`,
+/// then the rest). DEVIATE M68K-WIDE-SHIFT: the pin's `LSR32dd` loads the
+/// count into a register. Owner w8, exit 2026-11-24 (row M68K-FIX-USI-CLK).
+fn lower_wide_shift(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let vt = dag.value_type(node);
+    if vt != EVT::I32 {
+        return None;
+    }
+    let count = dag.constant(dag.operand(node, 1)).filter(|count| (16..32).contains(count))?;
+    let x = dag.operand(node, 0);
+    let rest = (count - 16) as u128;
+    let sixteen = dag.get_constant(16, EVT::I32);
+    let (swapped, cleaned) = match dag.opcode(node) {
+        ISD::Srl => {
+            let swapped = dag.get_node(ISD::Rotr, vt, &[x, sixteen]);
+            let mask = dag.get_constant(0xFFFF, vt);
+            (swapped, dag.get_node(ISD::And, vt, &[swapped, mask]))
+        }
+        ISD::Shl => {
+            let swapped = dag.get_node(ISD::Rotl, vt, &[x, sixteen]);
+            let mask = dag.get_constant(0xFFFF_0000, vt);
+            (swapped, dag.get_node(ISD::And, vt, &[swapped, mask]))
+        }
+        ISD::Sra => {
+            let swapped = dag.get_node(ISD::Rotr, vt, &[x, sixteen]);
+            let half = dag.get_value_type_node(EVT::I16);
+            (swapped, dag.get_node(ISD::SignExtendInReg, vt, &[swapped, half]))
+        }
+        _ => return None,
+    };
+    let _ = swapped;
+    if rest == 0 {
+        return Some(cleaned);
+    }
+    let amount = dag.get_constant(rest, EVT::I32);
+    Some(dag.get_node(dag.opcode(node), vt, &[cleaned, amount]))
 }
 
 /// `abs x` as `x < 0 ? 0 - x : x`, selected like any other `select`.

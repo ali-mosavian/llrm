@@ -525,13 +525,13 @@ struct Tables<'h> {
 }
 
 /// The weight of an edge a program practically never takes, against 1 for the
-/// other: a panic path ending `unreachable` (a failed bounds, shift, conversion,
-/// division or key check). Clang's `EmitCheck` states `(1 << 20) - 1` for a
-/// check (`CGExpr.cpp:4367` `createLikelyBranchWeights`, `MDBuilder.h:46`
-/// `kLikelyBranchWeight`), the same ratio the pin's unreachable heuristic gives
-/// the edge without a `!prof`. Branch odds are 2^31sts (pin
-/// `BranchProbability.h:37`), so the edge keeps 2048 units. A larger ratio is a
-/// DEVIATE (see the 2^26-1 change).
+/// other: a panic path ending `unreachable` (a failed bounds, shift,
+/// conversion, division or key check). Clang's `EmitCheck` states `(1 << 20) -
+/// 1` for a check (`CGExpr.cpp:4367` `createLikelyBranchWeights`,
+/// `MDBuilder.h:46` `kLikelyBranchWeight`), the same ratio the pin's
+/// unreachable heuristic gives the edge without a `!prof`. Branch odds are
+/// 2^31sts (pin `BranchProbability.h:37`), so the edge keeps 2048 units. A
+/// larger ratio is a DEVIATE (see the 2^26-1 change).
 pub const NEVER_TAKEN_WEIGHT: u32 = (1 << 20) - 1;
 
 /// The `!dbg` metadata kind: the source line an instruction came from.
@@ -1523,6 +1523,12 @@ fn lower_fact(
             Some(&global) => (global, Some(index)),
             None => return Ok(()),
         },
+        // A routine the module defines and nothing calls has no callable: its
+        // function carries the fact.
+        Subject::Callable(id) if !hir.callables.iter().any(|one| one.id == id) => match declared.get(&id) {
+            Some(&global) => (global, None),
+            None => return Err("a fact of no callable".to_owned()),
+        },
         Subject::Callable(id) => {
             let callable = hir.callables.iter().find(|one| one.id == id).ok_or("a fact of no callable")?;
             // A routine the module never calls has no declaration to carry it.
@@ -2264,6 +2270,7 @@ fn called(op: Op) -> Option<&'static str> {
 /// registers: it reaches memory only if it declares it.
 fn asm_name(asm: &model::Asm) -> String {
     llrm_mir::intrinsics::asm_name(&llrm_mir::intrinsics::AsmBlock {
+        bits: 16,
         code: asm.code.iter().map(|&byte| byte as u8).collect(),
         inputs: asm.inputs.clone(),
         outputs: asm.outputs.clone(),
@@ -2282,8 +2289,8 @@ fn asm_name(asm: &model::Asm) -> String {
 }
 
 /// What a block answers: nothing, its one register's value, or each as a field.
-/// `llvm.experimental.fp{to}{s,u}i.checked`'s name and signature for a float `from` taken
-/// to the integer `to`: `{ to, i1 }`.
+/// `llvm.experimental.fp{to}{s,u}i.checked`'s name and signature for a float
+/// `from` taken to the integer `to`: `{ to, i1 }`.
 fn checked_conversion(
     types: &mut Types,
     from: TypeId,

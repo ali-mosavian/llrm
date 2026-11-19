@@ -49,6 +49,43 @@ impl Function {
         }
     }
 
+    /// The order `LLParser` leaves a value's uses in. A use read before the
+    /// definition names a placeholder, and `RAUW` at the definition moves the
+    /// placeholder's uses, one by one at the head, so they end up behind every
+    /// use read after it and in the order read: for a value defined at 4,
+    /// `7 6 5 1 2 3` (`predictValueUseListOrderImpl`). `index` links every use
+    /// at the head in the order read, which is `7 6 5 3 2 1`.
+    pub(crate) fn order_forward_uses(&mut self) {
+        for value in 0..self.values.len() {
+            let ValueDef::Instruction(def) = self.values[value].def else { continue };
+            let held = Held::Value(value as u32);
+            let forward = |one: &Use| one.user.0 <= def.0;
+            if !self.uses.users(held).iter().any(forward) {
+                continue;
+            }
+            // Later uses stay as they are; the early ones follow, oldest first.
+            self.uses.sort_by_key(held, |_, one| if forward(one) { (1, one.user.0, one.index) } else { (0, 0, 0) });
+        }
+    }
+
+    /// `LLParser::sortUseListOrder`: the `i`th use of `held` goes to place
+    /// `indexes[i]`.
+    pub(crate) fn sort_use_list(
+        &mut self,
+        held: Held,
+        indexes: &[u32],
+    ) -> Result<(), String> {
+        let uses = self.uses.users(held).iter().count();
+        if uses < 2 {
+            return Err(if uses == 0 { "value has no uses" } else { "value only has one use" }.into());
+        }
+        if uses != indexes.len() {
+            return Err(format!("wrong number of indexes, expected {uses}"));
+        }
+        self.uses.sort_by_key(held, |at, _| indexes[at]);
+        Ok(())
+    }
+
     fn add_use(
         &mut self,
         operand: Operand,
@@ -1199,6 +1236,21 @@ impl Function {
         self.log(Change::Rewritten(inst));
     }
 
+    /// The call `inst` loses the flag attribute `name` on every argument.
+    pub fn drop_call_argument_flag(
+        &mut self,
+        inst: InstId,
+        name: &str,
+    ) {
+        let (Opcode::Call(info) | Opcode::Invoke(info)) = &mut self.instructions[inst.0 as usize].opcode else {
+            panic!("a call")
+        };
+        for attrs in &mut info.argument_attrs {
+            attrs.retain(|one| !matches!(one, crate::Attribute::Flag(flag) if flag == name));
+        }
+        self.log(Change::Rewritten(inst));
+    }
+
     /// New parameters of `types` stand before parameter `at`, bare of
     /// attributes; the function's type follows.
     pub fn insert_parameters(
@@ -1327,6 +1379,27 @@ impl Function {
         value
     }
 
+    /// The call `inst`, whose result `value` is read as `ty` now, returns `ty`
+    /// under `function_type`, with `return_attrs`: the callee returns the wider
+    /// value itself. The users of `value` read it as they did; the caller gives
+    /// them the wider type's operands.
+    pub fn retype_call_result(
+        &mut self,
+        inst: InstId,
+        ty: TypeId,
+        function_type: TypeId,
+        return_attrs: Vec<crate::opcode::Attribute>,
+    ) {
+        let value = self.instructions[inst.0 as usize].result.expect("a call with a result");
+        self.values[value.0 as usize].ty = ty;
+        let instruction = &mut self.instructions[inst.0 as usize];
+        instruction.ty = ty;
+        let Opcode::Call(info) = &mut instruction.opcode else { panic!("a call") };
+        info.function_type = function_type;
+        info.return_attrs = return_attrs;
+        self.log(Change::Rewritten(inst));
+    }
+
     /// From the first change of the parameters on, each one's origin is kept.
     fn track_parameters(&mut self) {
         if self.parameter_origins.is_empty() {
@@ -1357,6 +1430,16 @@ impl Function {
         let Opcode::Call(info) = &mut self.instructions[inst.0 as usize].opcode else { panic!("a call") };
         info.function_type = function_type;
         self.log(Change::Rewritten(inst));
+    }
+
+    /// The uses of `value` move to a new value one at a time, from the head:
+    /// the list comes out reversed, as LLVM's `replaceAllUsesWith` leaves the
+    /// uses of an argument that `DeadArgumentElimination` recreates.
+    pub fn reverse_uses(
+        &mut self,
+        value: ValueId,
+    ) {
+        self.uses.sort_by_key(Held::Value(value.0), |at, _| std::cmp::Reverse(at));
     }
 
     /// The call `inst`'s argument `at` becomes `with`, as the callee's

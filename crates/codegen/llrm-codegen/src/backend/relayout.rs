@@ -937,6 +937,7 @@ mod tests {
                 red_zone: 0,
                 slot_scratch: None,
                 slot_dead_checked: false,
+                slot_add_with_saved: false,
                 free: false,
                 kept: false,
                 exit_cfi: true,

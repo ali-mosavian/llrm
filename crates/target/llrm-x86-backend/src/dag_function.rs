@@ -1136,6 +1136,10 @@ fn selected_in(
     // Static code: every symbol is `dso_local`. A 64-bit PIE reaches a symbol
     // defined elsewhere through the GOT
     // (X86Subtarget::classifyGlobalReference).
+    // `setBooleanVectorContents(ZeroOrNegativeOneBooleanContent)`: `pcmpeq*`
+    // makes lanes of all ones.
+    builder_target.dag.vector_boolean_contents =
+        Some(llrm_codegen::backend::selectiondag::dag::BooleanContents::ZeroOrNegativeOne);
     builder_target.dag.dso_local_symbols = bitness != 64 || !module.position_independent();
     builder_target.dag.defined_dso_local = !builder_target.dag.dso_local_symbols;
     builder_target.dag.absolute_symbols = !module.position_independent();
@@ -1186,6 +1190,7 @@ fn selected_in(
                 }),
         )
         .with_min_jump_table_density(machine.tti().and_then(|tti| tti.min_jump_table_density()))
+        .with_jump_table_size_growth_ratio(machine.tti().and_then(|tti| tti.jump_table_size_growth_ratio()))
         .with_opt_size(cpu.size || cpu.min_size)
         .with_bytes_strict(cpu.bytes_strict())
         .with_min_size(cpu.min_size)
@@ -1449,7 +1454,11 @@ fn selected_in(
             .and_then(|id| module.global(id).function())
             .and_then(|function| arch.calling().by_number(function.calling_convention))
             .is_some_and(|convention| convention.reserve_call_frame),
-        call_alignment: if arch.aligned_calls() { (arch.stack_alignment() as i64).max(1) } else { 1 },
+        call_alignment: match cpu.aligned_calls {
+            Some(bytes) => bytes,
+            None if arch.aligned_calls() => (arch.stack_alignment() as i64).max(1),
+            None => 1,
+        },
         map: &tables.map,
         names: &tables.names,
     };

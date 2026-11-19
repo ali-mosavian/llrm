@@ -213,6 +213,7 @@ impl llrm_mir::target::Machine for Flat {
             issue_width: 0,
             position_independent: std::cell::Cell::new(true),
             size_bytes: false,
+            word_vectors: false,
         }))
     }
 }
@@ -522,21 +523,6 @@ fn test_an_extension_moves_next_to_its_load_without_the_cost() {
     let after = extended(llrm_x86_m16::Dos { pin_tuning: true, ..llrm_x86_m16::Dos::default() });
     let (entry, _) = after.split_once("hot:").expect("the hot arm");
     assert!(entry.contains("zext"), "premise: the pin moves it: {after}");
-}
-
-/// Where bytes outrank clocks (-O1, -Os) the extension moves next to its load
-/// as the pin does: the narrow load and the arm's widening are two
-/// instructions more than the one `movzx` (m32 -Os idioms +4 B, rep_tails +6
-/// B).
-#[test]
-fn test_an_extension_moves_next_to_its_load_where_bytes_outrank_clocks() {
-    let mut module = parsed(&format!("{HEAD}{HIT}"));
-    let mut manager = llrm_mir::passes::PassManager::default();
-    manager.add(super::CgpAddrBytesStrict);
-    manager.run_module(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::default())).unwrap();
-    let after = printed(&module);
-    let (entry, _) = after.split_once("hot:").expect("the hot arm");
-    assert!(entry.contains("zext"), "{after}");
 }
 
 /// parity/branch m16 -O2 (+14 B): both arms widen the value the compare read

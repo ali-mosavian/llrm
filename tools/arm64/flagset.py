@@ -33,7 +33,7 @@ def check_gcc(tokens):
     import external_flags
 
     neutral = external_flags.flags("arm64", RELOC, 15)
-    external_flags.check_gcc_flags([], tokens, allowed_extra=(*neutral, *(t for t in tokens if t in COLUMN_KIND)))
+    external_flags.check_gcc_flags([], tokens, allowed_extra=(*neutral, "-ffreestanding", *(t for t in tokens if t in COLUMN_KIND)))
 
 
 if __name__ == "__main__":

@@ -41,6 +41,8 @@ pub struct Function {
     pub tables: Vec<crate::jumptable::Table>,
     /// Whether it has an entry in the unwind tables.
     pub unwind: bool,
+    /// The labels of the blocks that end in a call that never returns.
+    pub dead_ends: Vec<String>,
 }
 
 /// A function's pieces for the layout: a block's label, then its words.
@@ -173,9 +175,24 @@ pub fn object(
         let size = function.blocks.iter().map(|block| words(block) * 4).sum();
         symbols.defined(&function.symbol, function.binding, text_index, *offset, size);
     }
-    // Data sections: constants, writable data, zero-filled.
-    let roles =
-        [(Role::ROData, ".rodata"), (Role::Data, ".data"), (Role::Bss, ".bss"), (Role::InitFunctions, ".init_array")];
+    // Data sections: constants, writable data, zero-filled. A constant the
+    // code loads from memory of 4, 8, 16 or 32 bytes sits in the mergeable
+    // section of its size (`getSectionForConstant`), the rest in `.rodata`.
+    let pool: rustc_hash::FxHashSet<&str> =
+        functions.iter().flat_map(|function| &function.pool).map(|entry| entry.label.as_str()).collect();
+    let mergeable = |one: &data::Placed| {
+        platform == Platform::Linux && pool.contains(one.name.as_str()) && matches!(one.bytes.len(), 4 | 8 | 16 | 32)
+    };
+    let roles = [
+        (Role::ROData, ".rodata"),
+        (Role::ROData, ".rodata.cst4"),
+        (Role::ROData, ".rodata.cst8"),
+        (Role::ROData, ".rodata.cst16"),
+        (Role::ROData, ".rodata.cst32"),
+        (Role::Data, ".data"),
+        (Role::Bss, ".bss"),
+        (Role::InitFunctions, ".init_array"),
+    ];
     let role_of = |one: &data::Placed| {
         if one.init_functions {
             Role::InitFunctions
@@ -187,12 +204,19 @@ pub fn object(
             Role::Data
         }
     };
+    let section_of = |one: &data::Placed| match role_of(one) {
+        Role::ROData if mergeable(one) => format!(".rodata.cst{}", one.bytes.len()),
+        Role::ROData => ".rodata".to_owned(),
+        Role::Data => ".data".to_owned(),
+        Role::Bss => ".bss".to_owned(),
+        _ => ".init_array".to_owned(),
+    };
     let mut data_sections: Vec<(Role, &str, Vec<u8>, Vec<(usize, &data::Placed)>, usize)> = Vec::new();
     for (role, section_name) in roles {
         let mut image = Vec::new();
         let mut members = Vec::new();
         let mut align = 1;
-        for one in placed.iter().filter(|one| role_of(one) == role) {
+        for one in placed.iter().filter(|one| role_of(one) == role && section_of(one) == section_name) {
             image.resize(image.len().next_multiple_of(one.align), 0);
             members.push((image.len(), one));
             align = align.max(one.align);
@@ -206,7 +230,7 @@ pub fn object(
     let mut table_places: Vec<(usize, usize, usize)> = Vec::new();
     let mut table_section = 0;
     if functions.iter().any(|function| !function.tables.is_empty()) {
-        table_section = match data_sections.iter().position(|one| one.0 == Role::ROData) {
+        table_section = match data_sections.iter().position(|one| one.1 == ".rodata") {
             Some(found) => found,
             None => {
                 data_sections.insert(0, (Role::ROData, ".rodata", Vec::new(), Vec::new(), 1));
@@ -334,7 +358,7 @@ pub fn object(
             section: text_index,
             offset,
             length: function.blocks.iter().map(|block| words(block) * 4).sum(),
-            rows: crate::cfi::rows(&function.blocks),
+            rows: crate::cfi::rows(&function.blocks, &function.dead_ends),
             cfi: function.blocks.iter().flat_map(|block| &block.insts).filter_map(directive).collect(),
             seh: Vec::new(),
         })

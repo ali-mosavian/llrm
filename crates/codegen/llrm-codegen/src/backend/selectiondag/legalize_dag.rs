@@ -174,6 +174,7 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
                 // `ReplaceAllUsesWith` deletes the node it replaced, and what
                 // only it read.
                 self.dag.delete_replaced(n);
+                self.dag.forget_replaced(n);
             }
             // A sweep that built no node leaves nothing new to legalize.
             if !any || self.dag.nodes().len() == nodes {
@@ -475,6 +476,45 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         Some(self.dag.get_store(chain, truncated, ptr, info))
     }
 
+    /// `LegalizeLoadOps` and `LegalizeStoreOps` where `getLoadExtAction` or
+    /// `getTruncStoreAction` is `Custom`: the target's lowering replaces the
+    /// access; where it declines the access is expanded as usual.
+    fn custom_extending_access(
+        &mut self,
+        node: SDValue,
+    ) -> bool {
+        let NodeData::Mem(info) = self.dag.node(node).data else { return false };
+        let custom = match self.dag.opcode(node) {
+            ISD::Load => match (info.ext, self.dag.value_type(node), info.mem_vt) {
+                (Some(ext), EVT::Simple(wide), EVT::Simple(mem)) => self.tli.load_ext_action(ext, wide, mem) == Action::Custom,
+                _ => false,
+            },
+            ISD::Store => match (self.dag.value_type(self.dag.operand(node, 1)), info.mem_vt) {
+                (EVT::Simple(wide), EVT::Simple(mem)) => {
+                    self.dag.value_type(self.dag.operand(node, 1)).bits_gt(info.mem_vt)
+                        && self.tli.trunc_store_action(wide, mem) == Action::Custom
+                }
+                _ => false,
+            },
+            _ => false,
+        };
+        if !custom {
+            return false;
+        }
+        let Some(result) = self.hooks.lower_operation(self.dag, node) else { return false };
+        if result != node {
+            let results = self.dag.node(node).values.len() as u8;
+            if results > 1 && self.dag.node(result).values.len() == results as usize {
+                for res in 0..results {
+                    self.replace_node(SDValue { node: node.node, res }, SDValue { node: result.node, res });
+                }
+            } else {
+                self.replace_node(node, result);
+            }
+        }
+        true
+    }
+
     /// `LegalizeOp`.
     fn legalize_op(
         &mut self,
@@ -487,6 +527,9 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         }
         if self.dag.opcode(node) == ISD::ConstantFP {
             return self.legalize_constant_fp(node);
+        }
+        if self.custom_extending_access(node) {
+            return Ok(());
         }
         if let Some(store) = self.promote_sub_byte_trunc_store(node).or_else(|| self.expand_trunc_store(node)) {
             self.replace_node(node, store);
@@ -504,7 +547,7 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         let vt = self.action_type(node);
         let mut action = match vt {
             EVT::Simple(_) => self.tli.operation_action(self.dag.opcode(node), vt),
-            EVT::Int(_) => Action::Expand,
+            EVT::Int(_) | EVT::Vector(..) => Action::Expand,
         };
         // `EXTRACT_ELEMENT` lies about being legal: when it claims to be, it is
         // expanded. The same node taking a vector is `EXTRACT_VECTOR_ELT`.
@@ -513,6 +556,14 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
             && !self.dag.value_type(self.dag.operand(node, 0)).is_vector()
         {
             action = Action::Expand;
+        }
+        // `EXTRACT_VECTOR_ELT` is asked of its vector's type: a target that lowers it by hand says so there.
+        if self.dag.opcode(node) == ISD::ExtractElement
+            && let source @ EVT::Simple(_) = self.dag.value_type(self.dag.operand(node, 0))
+            && source.is_vector()
+            && self.tli.operation_action(ISD::ExtractElement, source) == Action::Custom
+        {
+            action = Action::Custom;
         }
         if self.dag.opcode(node) == ISD::SetCC
             && let (EVT::Simple(operand), NodeData::CondCode(cc)) = (vt, self.dag.node(self.dag.operand(node, 2)).data)
@@ -677,6 +728,40 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         let joined = self.dag.get_node(ISD::Or, mask_vt, &[taken, kept]);
         let result_vt = self.dag.value_type(node);
         Some(if result_vt == mask_vt { joined } else { self.dag.get_node(ISD::BitCast, result_vt, &[joined]) })
+    }
+
+    /// `VectorLegalizer::ExpandSELECT`: a `select` of vectors on a scalar
+    /// condition is the arms masked by the broadcast condition, `and`, `and`
+    /// of the complement and `or`.
+    fn expand_vector_select(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let (cond, then, other) = (self.dag.operand(node, 0), self.dag.operand(node, 1), self.dag.operand(node, 2));
+        let vt = self.dag.value_type(node);
+        if self.dag.value_type(cond).is_vector() || !vt.is_vector() {
+            return None;
+        }
+        let tli = self.tli;
+        let expands = |op: ISD| tli.operation_action(op, vt) == Action::Expand;
+        if expands(ISD::And) || expands(ISD::Xor) || expands(ISD::Or) || expands(ISD::BuildVector) {
+            return None;
+        }
+        let mask_vt = vt.change_vector_element_type_to_integer();
+        let bit_vt = mask_vt.element();
+        let ones = self.dag.get_all_ones_constant(bit_vt);
+        let zero = self.dag.get_constant(0, bit_vt);
+        let lane = self.dag.get_select(bit_vt, cond, ones, zero);
+        let mask = self.dag.get_splat_build_vector(mask_vt, lane);
+        let as_mask = |this: &mut Self, value: SDValue| {
+            if this.dag.value_type(value) == mask_vt { value } else { this.dag.get_node(ISD::BitCast, mask_vt, &[value]) }
+        };
+        let (then, other) = (as_mask(self, then), as_mask(self, other));
+        let not_mask = self.dag.get_not(mask, mask_vt);
+        let taken = self.dag.get_node(ISD::And, mask_vt, &[then, mask]);
+        let kept = self.dag.get_node(ISD::And, mask_vt, &[other, not_mask]);
+        let joined = self.dag.get_node(ISD::Or, mask_vt, &[taken, kept]);
+        Some(if vt == mask_vt { joined } else { self.dag.get_node(ISD::BitCast, vt, &[joined]) })
     }
 
     /// `getLogicalNOT`: `xor v, 1` (`-1` where booleans are all ones).
@@ -1165,6 +1250,28 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         Some(lanes[0])
     }
 
+    /// `LegalizeDAG::ExpandNode`, `VECTOR_SHUFFLE`: a `build_vector` of the lanes the mask picks, each an
+    /// `extract_vector_elt` of the input it names; an undefined lane stays undefined.
+    fn expand_vector_shuffle(
+        &mut self,
+        node: SDValue,
+    ) -> SDValue {
+        let vt = self.dag.value_type(node);
+        let (inputs, lane_vt) = ([self.dag.operand(node, 0), self.dag.operand(node, 1)], vt.element());
+        let (mask, lanes) = (self.dag.shuffle_mask(node).to_vec(), vt.lanes() as i32);
+        let ops: Vec<SDValue> = mask
+            .iter()
+            .map(|&pick| {
+                if pick < 0 {
+                    return self.dag.get_undef(lane_vt);
+                }
+                let at = self.dag.get_constant((pick % lanes) as u128, EVT::I64);
+                self.dag.get_node(ISD::ExtractElement, lane_vt, &[inputs[(pick / lanes) as usize], at])
+            })
+            .collect();
+        self.dag.get_build_vector(vt, &ops)
+    }
+
     /// `ExpandBUILD_VECTOR`, constants only: a vector whose lanes are all
     /// constants or undefined is loaded from the constant pool, its lanes laid
     /// out in memory order (an undefined lane is zero). Any other `BUILD_VECTOR`
@@ -1253,7 +1360,9 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
                 Some(vec![self.unroll_vector_op(node)])
             }
             ISD::VSelect => self.expand_vselect(node).map(|selected| vec![selected]),
+            ISD::Select if vt.is_vector() => self.expand_vector_select(node).map(|selected| vec![selected]),
             ISD::BuildVector => self.expand_build_vector(node).map(|loaded| vec![loaded]),
+            ISD::VectorShuffle => Some(vec![self.expand_vector_shuffle(node)]),
             ISD::InsertVectorElt => self.expand_insert_vector_elt(node).map(|loaded| vec![loaded]),
             reduction if reduction.vec_reduce_base_opcode().is_some() => {
                 self.expand_vec_reduce(node).map(|total| vec![total])
@@ -1375,6 +1484,19 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
             ISD::FNeg => Some(vec![self.expand_fneg(node)]),
             ISD::FAbs => Some(vec![self.expand_fabs(node)]),
             ISD::FCopySign => Some(vec![self.expand_fcopysign(node)]),
+            // `LegalizeDAG.cpp#L3881`.
+            ISD::IsFpClass => {
+                let op = self.dag.operand(node, 0);
+                let test = self.dag.constant(self.dag.operand(node, 1)).unwrap_or(0);
+                let result_vt = self.dag.value_type(node);
+                Some(vec![super::expand_is_fpclass::expand_is_fp_class(
+                    self.dag,
+                    self.tli,
+                    result_vt,
+                    op,
+                    llrm_mir::fpclass::FpClassTest(test as u32),
+                )])
+            }
             ISD::ExtractElement => {
                 // 0 is the low half, 1 the high: a truncate, of a shift for the
                 // high.

@@ -10,7 +10,7 @@ use llrm_mir::MetadataId;
 use super::*;
 use crate::mc::inst::{
     AddSub, Atomic, Barrier, Bitfield, CcOperand, Cond, Div, Extend, Fill, FpBinary, FpConvert, FpFused, FpSize,
-    FpUnary, Logic, Memory, Mul3, Rounding, Select, Unary, Wide,
+    FpUnary, Logic, Memory, Mul3, Permute, Rounding, Select, Unary, Wide,
 };
 use crate::mc::inst::{
     Addr, Arrangement, Gpr, ImmShape, MulAcc, NarrowLane, VectorFma, VectorFpOp, VectorFpUnary, VectorIntUnary,
@@ -200,6 +200,7 @@ pub(super) fn instructions() -> Vec<Inst> {
             FpBinary::MaxNm,
             FpBinary::MinNm,
             FpBinary::Nmul,
+            FpBinary::Abd,
         ] {
             out.push(Inst::FpBinary { op, size, rd: v(0), rn: v(1), rm: v(2) });
         }
@@ -210,6 +211,7 @@ pub(super) fn instructions() -> Vec<Inst> {
             out.push(Inst::FpCompare { signalling, size, rn: v(1), rm: Some(v(2)) });
             out.push(Inst::FpCompare { signalling, size, rn: v(1), rm: None });
         }
+        out.push(Inst::FpCondCompare { size, rn: v(1), rm: v(2), nzcv: 4, cond: Cond::Le });
         out.push(Inst::FpSelect { size, rd: v(0), rn: v(1), rm: v(2), cond: Cond::Lt });
         out.push(Inst::FpMoveImm { size, rd: v(0), imm8: 0x70 });
         for from in SIZES {
@@ -297,6 +299,7 @@ pub(super) fn instructions() -> Vec<Inst> {
     for (op, lanes) in [(VectorFma::Add, Arrangement::S4), (VectorFma::Sub, Arrangement::D2)] {
         out.push(Inst::VectorFma { op, lanes, rd: v(0), rn: v(1), rm: v(2) });
         out.push(Inst::VectorFmaLane { op, lanes, rd: v(0), rn: v(1), rm: v(2), index: 1 });
+        out.push(Inst::ScalarFmaLane { op, lanes, rd: v(0), rn: v(1), rm: v(2), index: 1 });
     }
     out.push(Inst::VectorFmulLane { lanes: Arrangement::S4, rd: v(0), rn: v(1), rm: v(2), index: 1 });
     out.push(Inst::VectorMulLane { rd: v(0), rn: v(1), rm: v(2), index: 1 });
@@ -309,14 +312,20 @@ pub(super) fn instructions() -> Vec<Inst> {
             out.push(Inst::VectorLong { op, lane, high, rd: v(0), rn: v(1), rm: v(2) });
         }
     }
-    for lanes in [Arrangement::B16, Arrangement::H8, Arrangement::S4, Arrangement::D2] {
-        out.push(Inst::VectorUnzip { second: false, lanes, rd: v(0), rn: v(1), rm: v(2) });
-        out.push(Inst::VectorUnzip { second: true, lanes, rd: v(0), rn: v(1), rm: v(2) });
+    for lanes in Arrangement::ALL {
+        for kind in Permute::ALL {
+            out.push(Inst::VectorPermute { kind, lanes, rd: v(0), rn: v(1), rm: v(2) });
+        }
     }
     for lanes in [Arrangement::B16, Arrangement::H8, Arrangement::S4, Arrangement::D2] {
         out.push(Inst::VectorInsGpr { lanes, rd: v(0), rn: Gpr(3), index: 1 });
         out.push(Inst::VectorInsLane { lanes, rd: v(0), rn: v(1), index: 1, src: 0 });
         out.push(Inst::VectorUmov { lanes, rd: Gpr(3), rn: v(1), index: 1 });
+        for wide in [false, true] {
+            if lanes != Arrangement::D2 && (wide || lanes != Arrangement::S4) {
+                out.push(Inst::VectorSmov { lanes, wide, rd: Gpr(3), rn: v(1), index: 1 });
+            }
+        }
         out.push(Inst::VectorStoreLane { lanes, rt: v(1), index: 1, base: Gpr(3) });
     }
     for lanes in Arrangement::ALL {
@@ -331,6 +340,8 @@ pub(super) fn instructions() -> Vec<Inst> {
     }
     for lanes in [Arrangement::B16, Arrangement::H8, Arrangement::S4, Arrangement::D2] {
         out.push(Inst::VectorLoadLane { lanes, rt: v(1), index: 1, base: Gpr(3) });
+        out.push(Inst::VectorLoadStructure { count: 2, lanes, rt: v(1), base: Gpr(3) });
+        out.push(Inst::VectorStoreStructure { count: 4, lanes, rt: v(1), base: Gpr(3) });
     }
     for (op, lanes) in [
         (VectorReduce::Addv, Arrangement::B16),
@@ -414,6 +425,7 @@ fn variant(inst: &Inst) -> &'static str {
         Inst::FpBinary { .. } => "FpBinary",
         Inst::FpFused { .. } => "FpFused",
         Inst::FpCompare { .. } => "FpCompare",
+        Inst::FpCondCompare { .. } => "FpCondCompare",
         Inst::FpSelect { .. } => "FpSelect",
         Inst::FpMoveImm { .. } => "FpMoveImm",
         Inst::FpToFp { .. } => "FpToFp",
@@ -435,15 +447,19 @@ fn variant(inst: &Inst) -> &'static str {
         Inst::VectorInsGpr { .. } => "VectorInsGpr",
         Inst::VectorInsLane { .. } => "VectorInsLane",
         Inst::VectorUmov { .. } => "VectorUmov",
+        Inst::VectorSmov { .. } => "VectorSmov",
         Inst::VectorStoreLane { .. } => "VectorStoreLane",
         Inst::VectorLoadReplicate { .. } => "VectorLoadReplicate",
         Inst::VectorIntUnary { .. } => "VectorIntUnary",
         Inst::VectorLoadLane { .. } => "VectorLoadLane",
+        Inst::VectorLoadStructure { .. } => "VectorLoadStructure",
+        Inst::VectorStoreStructure { .. } => "VectorStoreStructure",
         Inst::VectorFmaLane { .. } => "VectorFmaLane",
+        Inst::ScalarFmaLane { .. } => "ScalarFmaLane",
         Inst::VectorFmulLane { .. } => "VectorFmulLane",
         Inst::VectorMulLane { .. } => "VectorMulLane",
         Inst::VectorNarrow { .. } => "VectorNarrow",
-        Inst::VectorUnzip { .. } => "VectorUnzip",
+        Inst::VectorPermute { .. } => "VectorPermute",
         Inst::VectorDupScalar { .. } => "VectorDupScalar",
         Inst::VectorReduce { .. } => "VectorReduce",
         Inst::VectorDupLane { .. } => "VectorDupLane",
@@ -461,7 +477,7 @@ fn variant(inst: &Inst) -> &'static str {
 /// The variants after frame lowering, which the body is never made from.
 const AFTER_FRAME: [&str; 3] = ["Mark", "Label", "Cfi"];
 
-const ALL: [&str; 75] = [
+const ALL: [&str; 80] = [
     "Mark",
     "Label",
     "Cfi",
@@ -496,6 +512,7 @@ const ALL: [&str; 75] = [
     "FpBinary",
     "FpFused",
     "FpCompare",
+    "FpCondCompare",
     "FpSelect",
     "FpMoveImm",
     "FpToFp",
@@ -517,15 +534,19 @@ const ALL: [&str; 75] = [
     "VectorInsGpr",
     "VectorInsLane",
     "VectorUmov",
+    "VectorSmov",
     "VectorStoreLane",
     "VectorLoadReplicate",
     "VectorIntUnary",
     "VectorLoadLane",
+    "VectorLoadStructure",
+    "VectorStoreStructure",
     "VectorFmaLane",
+    "ScalarFmaLane",
     "VectorFmulLane",
     "VectorMulLane",
     "VectorNarrow",
-    "VectorUnzip",
+    "VectorPermute",
     "VectorDupScalar",
     "VectorReduce",
     "VectorDupLane",

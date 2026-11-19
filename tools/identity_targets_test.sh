@@ -15,4 +15,10 @@ run "$t/refuse" "$t/refuse" m68k-68000 O2 "$t/p.c" && { echo "FAIL: all-refused 
 run "$t/ok" "$t/ok" m68k-68000 O2 "$t/p.c" || { echo "FAIL: identical build failed"; exit 1; }
 run "$t/ok" "$t/other" m68k-68000 O2 "$t/p.c" && { echo "FAIL: DIFF passed"; exit 1; }
 run "$t/ok" "$t/refuse" m68k-68000 O2 "$t/p.c" && { echo "FAIL: STATUS passed"; exit 1; }
+
+# x86_16 refused every program when LLRM_CLANG_M16 was unset (215 refused, no measurement) though the pinned fork clang sits in ~/scratch/clang-by-sha.
+printf '#!/bin/sh\n[ -n "${LLRM_CLANG_M16:-}" ] || exit 1\nwhile [ $# -gt 1 ]; do [ "$1" = -o ] && echo x > "$2"; shift; done\n' > "$t/needs_fork"
+chmod +x "$t/needs_fork"
+fork=$t/home/scratch/clang-by-sha/$(sed -n 2p "$root/toolchain/clang/pin" | cut -d' ' -f1)/bin; mkdir -p "$fork"; printf '#!/bin/sh\n' > "$fork/clang"; chmod +x "$fork/clang"
+(unset LLRM_CLANG_M16; HOME=$t/home; export HOME; run "$t/needs_fork" "$t/needs_fork" x86_16-dos O2 "$t/p.c") || { echo "FAIL: the pinned fork clang was not found"; exit 1; }
 echo ok

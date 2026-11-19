@@ -67,6 +67,20 @@ class Harness(unittest.TestCase):
             self.assertGreater(matrix_kb.kernel_bytes(os.path.join(out, "fib.2.clang.o")), 0)
             self.assertTrue(os.path.exists(os.path.join(out, "fib.2.clang.elf")))
 
+    def test_the_n_columns_record_ffreestanding_in_their_flag_set(self):
+        # 2026-11-16: -ffreestanding was on the command lines but not in $X.flags, so no table could see a column built without it.
+        tools = [os.path.join(LLVM_BIN, "clang"), os.path.join(LLVM_BIN, "ld.lld")]
+        if not all(os.path.exists(t) for t in tools) or not shutil.which("aarch64-linux-gnu-nm"):
+            self.skipTest("clang/ld.lld (LLVM_BIN) or aarch64 binutils missing")
+        with tempfile.TemporaryDirectory() as out:
+            done = subprocess.run(
+                ["bash", os.path.join(HERE, "build2.sh"), "fib", "2", "clangn"],
+                env={**os.environ, "OUT": out, "LLVM_BIN": LLVM_BIN}, capture_output=True, text=True,
+            )
+            self.assertEqual(done.returncode, 0, done.stderr)
+            with open(os.path.join(out, "fib.2.clangn.flags")) as recorded:
+                self.assertIn("-ffreestanding", recorded.read().split())
+
     def test_kernel_bytes_counts_a_helper_that_has_no_symbol(self):
         # Release main's objects carry no symbol for a static helper (queens: bench_queens 44 B, the 220 B helper
         # after it uncovered): the table read main at 44 B and 8 Os cells as +36..+172 B worse on a smaller build.
@@ -211,15 +225,23 @@ class FlagSet(unittest.TestCase):
         sys.path.insert(0, os.path.dirname(HERE))
         import external_flags
 
-        neutral = " ".join(external_flags.flags("arm64", ["-fPIE"], 15))
+        neutral = " ".join(external_flags.flags("arm64", ["-fPIE"], 15)) + " -ffreestanding"
         self.assertEqual(self.check_gcc(neutral).returncode, 0)
         self.assertEqual(self.check_gcc(neutral + " -fno-tree-vectorize").returncode, 0)
+
+    def test_a_gcc_column_built_without_ffreestanding_is_refused(self):
+        sys.path.insert(0, os.path.dirname(HERE))
+        import external_flags
+
+        done = self.check_gcc(" ".join(external_flags.flags("arm64", ["-fPIE"], 15)))
+        self.assertNotEqual(done.returncode, 0)
+        self.assertIn("missing ['-ffreestanding']", done.stderr)
 
     def test_a_gcc_column_with_a_flag_the_neutral_set_lacks_is_refused(self):
         sys.path.insert(0, os.path.dirname(HERE))
         import external_flags
 
-        neutral = " ".join(external_flags.flags("arm64", ["-fPIE"], 15))
+        neutral = " ".join(external_flags.flags("arm64", ["-fPIE"], 15)) + " -ffreestanding"
         done = self.check_gcc(neutral.replace("-fPIE", "-fno-pic -fno-pie"))
         self.assertNotEqual(done.returncode, 0)  # ours emits PIE unflagged: a static bar moved textfill O2 by 4 B
         self.assertIn("missing ['-fPIE']", done.stderr)

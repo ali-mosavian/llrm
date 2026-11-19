@@ -1,9 +1,10 @@
 # The ABI a program has without -mabi=, and, for each ABI, the convention an unmarked function has under it.
 default = "watcom"
 
-# The convention a function nothing outside the program reaches takes under every ABI: no one else sees it. The pin's `fastcc`
-# (CC1 in calleepop.rs); `LLRM_PRIVATE_WATCALL=1` gives them `private_instrument` instead, to compare the two.
-private = "fastcc32"
+# The convention a function nothing outside the program reaches takes under every ABI: no one else sees it. gcc's local
+# `regparm` (DEVIATE CC-LOCAL, owner x86-m32, exit 2026-11-24; CC1 in calleepop.rs had the pin's `fastcc32`);
+# `LLRM_PRIVATE_WATCALL=1` gives them `private_instrument` instead, to compare.
+private = "localregparm32"
 private_instrument = "watcall32"
 
 [abi.watcom]
@@ -138,7 +139,7 @@ pointer = ["eax"]
 float = ["st0"]
 
 # fastcc32: the pin's `fastcc` on i486 (llc d1106deb71cc, read from its disassembly): the first two integers take ECX then EDX (an i8
-# CL, an i16 DX, an i64 ECX:EDX), a float or what comes after goes on the stack, the caller pops. The private convention (CC1).
+# CL, an i16 DX, an i64 ECX:EDX), a float or what comes after goes on the stack, the caller pops. The convention a private function had until CC-LOCAL.
 [fastcc32]
 like = "cdecl32"
 cc = "fast"
@@ -149,6 +150,17 @@ skip_memory = true
 arguments_clobbered = true
 results_clobbered = true
 
+# localregparm32: gcc's `ix86_function_regparm` for a local function (i386.cc: `target->local && can_change_signature` takes
+# `local_regparm` = REGPARM_MAX = 3, none of the three taken by a fixed register): arguments in EAX, EDX, ECX in that order, a
+# pair of registers for an i64 (EAX:EDX, or EDX:ECX after a 32-bit one), the rest on the stack, the caller pops, EBX/ESI/EDI/EBP
+# kept as cdecl. With every argument in registers a call in tail position is a `jmp` (`isEligibleForSiblingCallOpt` refuses a
+# computed stack argument, so the pin's two-register `fastcc32` never gets one: x_sf_i2d -Os executes 1078 calls, gcc 0).
+[localregparm32]
+like = "fastcc32"
+cc = "regparm3"
+argument_registers = ["eax", "edx", "ecx"]
+wide_pairs = [["eax", "edx"], ["edx", "ecx"]]
+
 # sysv32: the i386 System V ABI, gcc's default on Linux, as `gcc -m32` emits it (read from its disassembly, not from the
 # psABI's text): every argument on the stack, pushed right to left in dword slots, which the caller removes; EBX, ESI, EDI and
 # EBP kept; results in EAX, EDX:EAX and ST0. Every struct result, whatever its size, is written through a pointer that is the
@@ -158,6 +170,9 @@ results_clobbered = true
 [sysv32]
 like = "cdecl32"
 cc = "sysv"
+# `-mregparm=N`: the arguments clang marks `inreg` (up to three i32 parts, none of a variadic call) take EAX, EDX, ECX in
+# order; every other one is on the stack (`CC_X86_32_C`).
+inreg_registers = ["eax", "edx", "ecx"]
 # i386 System V keeps the stack 16-aligned at a call (the pin's i386-linux); the DOS conventions above keep 8.
 stack_alignment = 16
 aggregate_in_register_bytes = []

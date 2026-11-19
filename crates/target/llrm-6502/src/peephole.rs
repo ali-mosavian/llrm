@@ -49,6 +49,9 @@
 //!   each a step of 1) of a byte in memory, with `a` and the carry dead after:
 //!   `inc m` (`dec m`), which sets the sign and zero flags as the store left
 //!   them.
+//! - [`fuse_shift_chain`]: the bit one word gives the next, `lda w; lsr a; ror
+//!   p; ror q; lsr h; ror w`, is `lsr h; ror w; ror p; ror q`: the carry of the
+//!   shift of `w`.
 //! - [`shift_in_place`]: `lda m; asl|lsr|rol|ror a; sta m` of a byte in memory
 //!   with `a` dead after: `asl|lsr|rol|ror m`, the same carry and sign and zero
 //!   flags (2 bytes and 3 clocks fewer on a zero-page cell).
@@ -172,19 +175,30 @@ pub fn run_pair(asm: &Asm) -> (Asm, Asm) {
     if tail_copied {
         run_prefix(&mut copied);
     }
-    let finish = |known_loads: bool| {
-        let mut plain = base.clone();
-        run_suffix(&mut plain, known_loads);
-        if tail_copied {
-            let mut with_copy = copied.clone();
-            run_suffix(&mut with_copy, known_loads);
-            if code_bytes(&with_copy) < code_bytes(&plain) {
-                return with_copy;
-            }
+    // The two texts differ only by `drop_known_loads`, in the head of the
+    // suffix: where it changes nothing the heads are equal and the rest of the
+    // passes, a function of the text alone, runs once for both.
+    let heads = |from: &Asm| {
+        let (mut without, mut with) = (from.clone(), from.clone());
+        known_head(&mut without, false);
+        known_head(&mut with, true);
+        if with == without {
+            let mut rest = without;
+            run_rest(&mut rest);
+            (rest.clone(), rest)
+        } else {
+            run_rest(&mut without);
+            run_rest(&mut with);
+            (without, with)
         }
-        plain
     };
-    (finish(false), finish(true))
+    let (plain_false, plain_true) = heads(&base);
+    if !tail_copied {
+        return (plain_false, plain_true);
+    }
+    let (copy_false, copy_true) = heads(&copied);
+    let pick = |plain: Asm, with_copy: Asm| if code_bytes(&with_copy) < code_bytes(&plain) { with_copy } else { plain };
+    (pick(plain_false, copy_false), pick(plain_true, copy_true))
 }
 
 fn code_bytes(asm: &Asm) -> usize {
@@ -263,6 +277,25 @@ fn run_suffix(
     asm: &mut Asm,
     known_loads: bool,
 ) {
+    known_head(asm, known_loads);
+    run_rest(asm);
+}
+
+thread_local! {
+    static REST_RUNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread ran the passes after `drop_known_loads` (what a
+/// test counts to see they ran once for a pair whose texts are equal there).
+pub fn rest_runs() -> usize {
+    REST_RUNS.with(std::cell::Cell::get)
+}
+
+/// The only passes that read `known_loads`.
+fn known_head(
+    asm: &mut Asm,
+    known_loads: bool,
+) {
     if known_loads {
         drop_known_loads(asm);
     }
@@ -272,14 +305,20 @@ fn run_suffix(
     if known_loads {
         drop_known_loads(asm);
     }
+}
+
+fn run_rest(asm: &mut Asm) {
+    REST_RUNS.with(|runs| runs.set(runs.get() + 1));
     hoist_loop_constant(asm);
     sink_step_to_compare(asm);
     drop_zero_compares(asm);
     zero_test_through_an_index(asm);
     step_in_place(asm);
     step_through_y(asm);
+    fuse_shift_chain(asm);
     shift_in_place(asm);
     load_straight_into_a(asm);
+    load_pair_without_transfers(asm);
     compare_through_an_index(asm);
     store_before_transfer(asm);
     drop_cancelling_transfers(asm);
@@ -314,12 +353,22 @@ fn run_suffix(
     // store
     drop_reloads(asm);
     crate::peephole_cells::store_then_index_load(asm);
-    // last of the cell passes: the choice is by the final size, after the
-    // chain passes have taken what they take from the loop's neighbours
-    crate::peephole_cells::shift_loop_in_a(asm);
+    fuse_shift_chain(asm);
     branch_on_shift_carry(asm);
     carry_made_again(asm);
     jump_to_return(asm);
+}
+
+/// The passes that follow the outliner: a byte made in `a` only to be stored
+/// and moved to `x` is made in `x` (`make_the_byte_in_x`), and a transfer left
+/// beside its reverse goes. After it, not before: a site the first rewrites and
+/// the outliner finds in another shape is a body of its own
+/// (constant_int_float_compare -O2: a second routine, +2 B).
+pub fn after_outlining(text: &str) -> String {
+    let mut asm = Asm::parse(text);
+    make_the_byte_in_x(&mut asm);
+    drop_cancelling_transfers(&mut asm);
+    asm.text()
 }
 
 /// How many lines name `label`: a branch or jump to it, or a directive.
@@ -1545,7 +1594,15 @@ fn load_straight_once(asm: &mut Asm) -> bool {
                     | Op::And
                     | Op::Ora
                     | Op::Eor => true,
-                    Op::Sta => matches!(operand, Operand::Direct(_)) && operand != from,
+                    Op::Sta => {
+                        (matches!(operand, Operand::Direct(_)) && operand != from)
+                            // a store through a pointer or by `y` leaves `x`
+                            // alone, and a constant is not what it writes
+                            || (register == Registers::X
+                                && load_pair_enabled()
+                                && matches!(from, Operand::Imm(_))
+                                && matches!(operand, Operand::IndirectY(_) | Operand::Indexed(_, Index::Y)))
+                    }
                     Op::Beq | Op::Bne | Op::Bcc | Op::Bcs | Op::Bmi | Op::Bpl => match operand {
                         Operand::Direct(target) => {
                             let reads_load = load_flags && !matches!(op, Op::Bcc | Op::Bcs);
@@ -1591,6 +1648,71 @@ fn load_straight_once(asm: &mut Asm) -> bool {
     }
     retain(asm, &keep);
     changed
+}
+
+/// `lda m; tay; lda n; tax; tya` (likewise through `x`): two loads. The first
+/// byte waited in the spare register while the second went through `a`, where
+/// `ldx n; lda m` reads each once. The spare register holds the first byte
+/// after the original, so it must be dead after, and `m` must not be indexed by
+/// the register the second load now writes first.
+pub fn load_pair_without_transfers(asm: &mut Asm) {
+    if !load_pair_enabled() {
+        return;
+    }
+    let hits: Vec<(usize, Op, Operand, Operand)> = {
+        let exits = Exits::of(asm);
+        (0..asm.lines.len().saturating_sub(4))
+            .filter_map(|at| load_pair_at(asm, at, exits).map(|(load, first, second)| (at, load, first, second)))
+            .collect()
+    };
+    // from the end: a rewrite shortens the text after it only
+    let mut taken = usize::MAX;
+    for (at, load_new, first, second) in hits.into_iter().rev() {
+        if at + 5 > taken {
+            continue;
+        }
+        asm.lines[at] = Line::Inst(Inst { op: load_new, operand: second, place: 0 });
+        asm.lines[at + 1] = Line::Inst(Inst { op: Op::Lda, operand: first, place: 0 });
+        asm.lines.drain(at + 2..at + 5);
+        taken = at;
+    }
+}
+
+/// `LLRM_6502_LOADPAIR=0` is the kill switch of this pass and of the store
+/// through a pointer that `load_straight_into_a` reads past, for an A/B of one
+/// binary.
+fn load_pair_enabled() -> bool {
+    crate::copyprop::enabled(std::env::var_os("LLRM_6502_LOADPAIR").as_deref())
+}
+
+/// The load that replaces the pair at `at`, and the two operands, where the
+/// five lines are `lda m; tay; lda n; tax; tya` or its mirror.
+fn load_pair_at(
+    asm: &Asm,
+    at: usize,
+    exits: Exits,
+) -> Option<(Op, Operand, Operand)> {
+    let window: Vec<&Inst> = asm.lines[at..at + 5].iter().filter_map(Line::inst).collect();
+    let [first, wait, second, keep, back] = window[..] else { return None };
+    let (spare, new, load_new, ops) = match wait.op {
+        Op::Tay => (Registers::Y, Index::X, Op::Ldx, (Op::Tay, Op::Tax, Op::Tya)),
+        Op::Tax => (Registers::X, Index::Y, Op::Ldy, (Op::Tax, Op::Tay, Op::Txa)),
+        _ => return None,
+    };
+    if first.op != Op::Lda
+        || second.op != Op::Lda
+        || (wait.op, keep.op, back.op) != ops
+        || !matches!(second.operand, Operand::Direct(_) | Operand::Imm(_))
+    {
+        return None;
+    }
+    let read_by_new = matches!(&first.operand, Operand::Indexed(_, i) if *i == new)
+        || matches!(
+            (&first.operand, new),
+            (Operand::IndirectX(_), Index::X) | (Operand::IndirectY(_), Index::Y)
+        );
+    (!read_by_new && dead_from(&asm.lines, at + 5, spare, &mut HashSet::default(), exits))
+        .then(|| (load_new, first.operand.clone(), second.operand.clone()))
 }
 
 /// `tax; ...; stx m` (likewise `tay` and `sty`): the byte is in `a` at the
@@ -1685,6 +1807,58 @@ pub fn drop_cancelling_transfers(asm: &mut Asm) {
         }
     }
     asm.lines = out;
+}
+
+/// `lda v; sta m; ...; tax` with `a` dead after the transfer: `ldx v; stx m;
+/// ...`. The byte is made in `x`, the register the stores and the transfer
+/// both end in, and the transfer goes: one byte and two clocks fewer a site
+/// (`f` of sibling_call_callees: `lda #0; sta rc2; sta rc3; tax; lda #1` is
+/// `ldx #0; stx rc2; stx rc3; lda #1`). The flags `ldx` sets are those of `lda`
+/// and `tax`. The pin's analogue is the register allocator's choice of the
+/// cheaper class for a constant used in two (`MachineCopyPropagation` would
+/// forward the copy; rematerialization puts the constant where it is needed).
+pub fn make_the_byte_in_x(asm: &mut Asm) {
+    let runs = {
+        // it runs on parsed text, which lost what the callees take: every
+        // call and return reads `a`
+        let exits = Exits::default();
+        let lines = &asm.lines;
+        let inst = |n: usize| lines.get(n).and_then(Line::inst);
+        let mut runs = Vec::new();
+        let mut at = 0;
+        while at < lines.len() {
+            let loads =
+                inst(at).is_some_and(|i| i.op == Op::Lda && matches!(i.operand, Operand::Imm(_) | Operand::Direct(_)));
+            if !loads {
+                at += 1;
+                continue;
+            }
+            let mut end = at + 1;
+            while inst(end).is_some_and(|i| i.op == Op::Sta && matches!(i.operand, Operand::Direct(_))) {
+                end += 1;
+            }
+            if end > at + 1
+                && inst(end).is_some_and(|i| i.op == Op::Tax)
+                && dead_from(lines, end + 1, Registers::A, &mut HashSet::default(), exits)
+            {
+                runs.push((at, end));
+            }
+            at = end.max(at + 1);
+        }
+        runs
+    };
+    for (at, end) in runs.into_iter().rev() {
+        let stores: Vec<Line> = asm.lines[at + 1..end]
+            .iter()
+            .filter_map(Line::inst)
+            .map(|i| Line::Inst(Inst { op: Op::Stx, operand: i.operand.clone(), place: i.place }))
+            .collect();
+        let load = asm.lines[at].inst().expect("a load");
+        let load = Line::Inst(Inst { op: Op::Ldx, operand: load.operand.clone(), place: load.place });
+        let mut made = vec![load];
+        made.extend(stores);
+        asm.lines.splice(at..=end, made);
+    }
 }
 
 /// Both paths of a branch start with `lda b; sta c`, and the straight-line code
@@ -1943,6 +2117,13 @@ pub fn sink_save_bracket(asm: &mut Asm) {
                     | Sec
             )
     };
+    // an indirect or zero-page indexed operand reaches cells it does not name
+    let reads_cell = |inst: &Inst, cell: &str| match &inst.operand {
+        Operand::Direct(name) => name == cell,
+        Operand::Indexed(name, _) => name == cell || name.starts_with("rc"),
+        Operand::IndirectY(_) | Operand::IndirectX(_) | Operand::Indirect(_) => true,
+        _ => false,
+    };
     let mut at = 0;
     while at + 3 < asm.lines.len() {
         let [Line::Inst(push), Line::Inst(load), Line::Inst(store), Line::Inst(pull)] = &asm.lines[at..at + 4] else {
@@ -1977,7 +2158,11 @@ pub fn sink_save_bracket(asm: &mut Asm) {
             for look in (at.saturating_sub(12)..at).rev() {
                 let Line::Inst(inst) = &asm.lines[look] else { break };
                 if overwrites(inst) {
-                    target = Some((look, false));
+                    // the bracket goes above this load, which must not read the
+                    // cell it sets
+                    if !reads_cell(inst, &cell) {
+                        target = Some((look, false));
+                    }
                     break;
                 }
                 if !passable(inst, &cell) {
@@ -2621,7 +2806,7 @@ pub(crate) fn carry_dead_from(
         };
         match inst.op {
             Op::Clc | Op::Sec | Op::Cmp | Op::Cpx | Op::Cpy | Op::Jsr | Op::Rts => return true,
-            Op::Asl | Op::Lsr if matches!(inst.operand, Operand::Acc | Operand::None) => return true,
+            Op::Asl | Op::Lsr => return true,
             Op::Lda
             | Op::Ldx
             | Op::Ldy
@@ -2676,22 +2861,39 @@ pub(crate) fn carry_dead_from(
 
 /// 65C02: `lda #0; sta m` (and further `[lda #0;] sta n` after it) with `a`
 /// dead after the last store: `stz m`, `stz n`. The zero reaches the cell
-/// without `a`: 2 bytes and 2 clocks fewer, and `a` is not clobbered.
+/// without `a`: 2 bytes and 2 clocks fewer, and `a` is not clobbered. The same
+/// through `x` and `y` (`ldy #0; sty rc2; sty rc3`, the high word of a long
+/// made from a short: 6 B, 4 as `stz`).
 pub fn zero_cells_with_stz(asm: &mut Asm) {
     if !asm.cmos {
         return;
     }
+    for (load, store, register) in [
+        (Op::Lda, Op::Sta, Registers::A),
+        (Op::Ldx, Op::Stx, Registers::X),
+        (Op::Ldy, Op::Sty, Registers::Y),
+    ] {
+        zero_run_with_stz(asm, load, store, register);
+    }
+}
+
+fn zero_run_with_stz(
+    asm: &mut Asm,
+    load: Op,
+    store: Op,
+    register: Registers,
+) {
     let runs = {
         let exits = Exits::of(asm);
         let lines = &asm.lines;
         let zero = |n: usize| {
-            lines.get(n).and_then(Line::inst).is_some_and(|i| i.op == Op::Lda && i.operand == Operand::Imm("0".into()))
+            lines.get(n).and_then(Line::inst).is_some_and(|i| i.op == load && i.operand == Operand::Imm("0".into()))
         };
         let cell = |n: usize| {
             lines
                 .get(n)
                 .and_then(Line::inst)
-                .is_some_and(|i| i.op == Op::Sta && matches!(i.operand, Operand::Direct(_)))
+                .is_some_and(|i| i.op == store && matches!(i.operand, Operand::Direct(_)))
         };
         let mut runs = Vec::new();
         let mut at = 0;
@@ -2700,8 +2902,8 @@ pub fn zero_cells_with_stz(asm: &mut Asm) {
                 at += 1;
                 continue;
             }
-            // the run: stores, each after a `lda #0` or straight after the last
-            // store
+            // the run: stores, each after a load of zero or straight after the
+            // last store
             let mut end = at + 2;
             loop {
                 if cell(end) {
@@ -2712,7 +2914,7 @@ pub fn zero_cells_with_stz(asm: &mut Asm) {
                     break;
                 }
             }
-            if flags_unread_after(lines, end) && dead_from(lines, end, Registers::A, &mut HashSet::default(), exits) {
+            if flags_unread_after(lines, end) && dead_from(lines, end, register, &mut HashSet::default(), exits) {
                 runs.push((at, end));
             }
             at = end;
@@ -2723,7 +2925,7 @@ pub fn zero_cells_with_stz(asm: &mut Asm) {
         let stores: Vec<Line> = asm.lines[at..end]
             .iter()
             .filter_map(Line::inst)
-            .filter(|i| i.op == Op::Sta)
+            .filter(|i| i.op == store)
             .map(|i| Line::Inst(Inst { op: Op::Stz, operand: i.operand.clone(), place: i.place }))
             .collect();
         asm.lines.splice(at..end, stores);
@@ -2786,6 +2988,90 @@ pub fn step_through_y(asm: &mut Asm) {
         }
         at += 1;
     }
+}
+
+/// `lda w; lsr a; ror p; ror q; lsr h; ror w` (a funnel step: the low bit of
+/// `w` into the word `q:p`, then the word `w:h`'s own shift) is `lsr h; ror w;
+/// ror p; ror q`: the shift of `w` leaves that bit in the carry. Likewise
+/// `lda w; asl a; rol p; rol q; asl h; rol w`. A long shifted by one bit was
+/// six instructions a step where llvm-mos has four (`x >> 1` 20 B, 14 B).
+/// Needs `a`, the carry and the sign and zero flags dead after: the chain
+/// ends on `q`, not on `w`.
+///
+/// DEVIATE 6502-SHIFT-CHAIN (owner llrm-target-6502, exit 2026-12-15): the pin
+/// has no funnel node; llvm-mos's `G_LSHRE` chain passes the carry on.
+pub fn fuse_shift_chain(asm: &mut Asm) {
+    let mut at = 0;
+    while at + 6 <= asm.lines.len() {
+        if let Some((length, fused)) = fused_chain(asm, at) {
+            asm.lines.splice(at..at + length, fused);
+        }
+        at += 1;
+    }
+}
+
+fn fused_chain(
+    asm: &Asm,
+    at: usize,
+) -> Option<(usize, Vec<Line>)> {
+    let inst = |n: usize| asm.lines.get(at + n).and_then(Line::inst);
+    let (load, step, first, second) = (inst(0)?, inst(1)?, inst(2)?, inst(3)?);
+    let (shift_op, rotate_op) = match step.op {
+        Op::Lsr => (Op::Lsr, Op::Ror),
+        Op::Asl => (Op::Asl, Op::Rol),
+        _ => return None,
+    };
+    let cell = |inst: &Inst| inst.operand.is_cell().then(|| inst.operand.clone());
+    let source = |inst: &Inst| match inst.op {
+        Op::Lda | Op::Sta => cell(inst).map(Some),
+        Op::Txa | Op::Tya => Some(None),
+        _ => None,
+    };
+    let held = source(load)?;
+    let (p, q) = (cell(first)?, cell(second)?);
+    if !matches!(step.operand, Operand::Acc | Operand::None) || first.op != rotate_op || second.op != rotate_op {
+        return None;
+    }
+    // the word's own shift, after the same load where `w` was in `a`
+    let (shift, last, length) = if held.is_some() {
+        (inst(4)?, inst(5)?, 6)
+    } else {
+        if inst(4)?.op != load.op {
+            return None;
+        }
+        (inst(5)?, inst(6)?, 7)
+    };
+    let h = cell(shift)?;
+    let ends_in_a = held.is_none() && matches!(last.operand, Operand::Acc | Operand::None);
+    let ends_in_w = held.as_ref().is_some_and(|w| cell(last).as_ref() == Some(w));
+    let mut cells = vec![&p, &q, &h];
+    if let Some(w) = &held {
+        cells.push(w);
+    }
+    let distinct = cells.iter().enumerate().all(|(i, a)| cells[i + 1..].iter().all(|b| a != b));
+    let shape = shift.op == shift_op && last.op == rotate_op && (ends_in_a || ends_in_w);
+    // the chain ends on `q`: what `rol w` left in the flags and, in the cell
+    // form, in `a`, is not there
+    (shape
+        && distinct
+        && (ends_in_a || dead_from(&asm.lines, at + length, Registers::A, &mut HashSet::default(), Exits::of(asm)))
+        && carry_dead_from(&asm.lines, at + length, &mut HashSet::default())
+        && flags_unread_after(&asm.lines, at + length))
+    .then(|| {
+        let mut lines = Vec::new();
+        if ends_in_a {
+            lines.extend([asm.lines[at].clone(), asm.lines[at + 5].clone(), asm.lines[at + 6].clone()]);
+        } else {
+            // the store of `a` into `w` stays: it is the copy the chain starts
+            // from
+            if load.op == Op::Sta {
+                lines.push(asm.lines[at].clone());
+            }
+            lines.extend([asm.lines[at + 4].clone(), asm.lines[at + 5].clone()]);
+        }
+        lines.extend([asm.lines[at + 2].clone(), asm.lines[at + 3].clone()]);
+        (length, lines)
+    })
 }
 
 /// `lda m; asl|lsr|rol|ror a; sta m` where `a` is dead after the store: the

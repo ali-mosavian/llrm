@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/memcpyoptimizer.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/memcpyoptimizer.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/memcpyoptimizer.rs sha256:90aaea15569a4f6673a8c62f4b816ac2025acef67b90fc4e075de26a47a55167 -->
+<!-- src: crates/opt/llrm-transforms/src/memcpyoptimizer.rs sha256:9c16ac0ab9fb78d304dde71b06799420a57efd56a9077eefe77f8322ba05c2a4 -->
 
 # memcpyoptimizer
 
@@ -33,8 +33,9 @@ MIRROR: `MemsetRanges::addRange`, `isProfitableToUseMemset`,
 `tryMergingIntoMemset`, `processStore`, `processMemSet`,
 `iterateOnFunction`, `runImpl`.
 
-DEVIATE 1: `getPointerOffsetFrom` is `MemRef`'s root and displacement: two
-pointers of one root with no variable index, no segment. Exit: none needed.
+DEVIATE 1: `getPointerOffsetFrom` is `MemRef`'s root, variable index and
+displacement: two pointers of one root and the same variable index (the
+pin: one value and a constant offset), no segment. Exit: none needed.
 DEVIATE 2: a call that only accesses inaccessible memory ends the scan
 (LLVM steps over it); `memory::of` has no such effect. Exit: model the
 effect.

@@ -33,6 +33,18 @@ pub struct Platform {
     /// `rc0`..`rc15` and scratch cells above them (`rc16`.., at most 26
     /// bytes). 16 where a row does not say.
     pub zero_page: u8,
+    /// The zero-page bytes after the registers (`imag_base + zero_page`) that
+    /// the runtime's scratch cells may take (15 are needed: `__sa`, `__ra`,
+    /// `__st`, `__sr`, `__sg` of `mos_rt.s`); 0 where a row does not say: they
+    /// are BSS then, addressed in three bytes. The rows whose cc65 ZEROPAGE is
+    /// exactly the registers' 26 bytes (apple2, c64, nes) have none to give;
+    /// bbc has 6.
+    pub scratch_zero_page: u8,
+    /// The zero-page bytes after the runtime's scratch
+    /// (`imag_base + zero_page + scratch_zero_page`) that a whole program's
+    /// `s_` cells may take (`zerospill`); 0 where a row does not say: they
+    /// stay BSS.
+    pub static_zero_page: u8,
     /// Where the soft stack (`rs0`) starts; it grows down.
     pub soft_stack: u16,
     /// What the platform's C libraries put before a C symbol (cc65's `_`), so
@@ -55,6 +67,14 @@ impl Platform {
             zero_page: match table.get("zero_page") {
                 None => 16,
                 Some(_) => u8::try_from(number("zero_page")?).map_err(|_| "zero_page is not 8 bits")?,
+            },
+            scratch_zero_page: match table.get("scratch_zero_page") {
+                None => 0,
+                Some(_) => u8::try_from(number("scratch_zero_page")?).map_err(|_| "scratch_zero_page is not 8 bits")?,
+            },
+            static_zero_page: match table.get("static_zero_page") {
+                None => 0,
+                Some(_) => u8::try_from(number("static_zero_page")?).map_err(|_| "static_zero_page is not 8 bits")?,
             },
             soft_stack: u16::try_from(number("soft_stack")?).map_err(|_| "soft_stack is not 16 bits")?,
             c_symbol_prefix: match table.get("c_symbol_prefix") {

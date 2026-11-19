@@ -462,8 +462,12 @@ impl fmt::Display for Inst {
                 let (suffix, lane) = (lanes.suffix(), lane_letter(*lanes));
                 write!(out, "{} v{}.{suffix}, v{}.{suffix}, v{}.{lane}[{index}]", op.mnemonic(), rd.0, rn.0, rm.0)
             }
-            Inst::VectorUnzip { second, lanes, rd, rn, rm } => {
-                let name = if *second { "uzp2" } else { "uzp1" };
+            Inst::ScalarFmaLane { op, lanes, rd, rn, rm, index } => {
+                let (scalar, lane) = if *lanes == Arrangement::D2 { ('d', 'd') } else { ('s', 's') };
+                write!(out, "{} {scalar}{}, {scalar}{}, v{}.{lane}[{index}]", op.mnemonic(), rd.0, rn.0, rm.0)
+            }
+            Inst::VectorPermute { kind, lanes, rd, rn, rm } => {
+                let name = kind.mnemonic();
                 let s = lanes.suffix();
                 write!(out, "{name} v{}.{s}, v{}.{s}, v{}.{s}", rd.0, rn.0, rm.0)
             }
@@ -493,6 +497,10 @@ impl fmt::Display for Inst {
                 let width = if *lanes == Arrangement::D2 { Width::X } else { Width::W };
                 write!(out, "umov {}, v{}.{lane}[{index}]", gpr(*rd, width, false), rn.0)
             }
+            Inst::VectorSmov { lanes, wide, rd, rn, index } => {
+                let width = if *wide { Width::X } else { Width::W };
+                write!(out, "smov {}, v{}.{}[{index}]", gpr(*rd, width, false), rn.0, lane_letter(*lanes))
+            }
             Inst::VectorInsLane { lanes, rd, rn, index, src } => {
                 let lane = lane_letter(*lanes);
                 write!(out, "ins v{}.{lane}[{index}], v{}.{lane}[{src}]", rd.0, rn.0)
@@ -515,12 +523,19 @@ impl fmt::Display for Inst {
             Inst::VectorLoadLane { lanes, rt, index, base } => {
                 write!(out, "ld1 {{ v{}.{} }}[{index}], [{}]", rt.0, lane_letter(*lanes), gpr(*base, Width::X, true))
             }
+            Inst::VectorLoadStructure { count, lanes, rt, base } | Inst::VectorStoreStructure { count, lanes, rt, base } => {
+                let name = if matches!(self, Inst::VectorLoadStructure { .. }) { "ld" } else { "st" };
+                let list: Vec<String> =
+                    (0..u32::from(*count)).map(|at| format!("v{}.{}", rt.in_run(at).0, lanes.suffix())).collect();
+                write!(out, "{name}{count} {{ {} }}, [{}]", list.join(", "), gpr(*base, Width::X, true))
+            }
             Inst::VectorFpUnary { op, lanes, rd, rn } => {
                 let suffix = lanes.suffix();
                 write!(out, "{} v{}.{suffix}, v{}.{suffix}", op.mnemonic(), rd.0, rn.0)
             }
             Inst::FpBinary { op, size, rd, rn, rm } => {
-                let name = ["fmul", "fdiv", "fadd", "fsub", "fmax", "fmin", "fmaxnm", "fminnm", "fnmul"][*op as usize];
+                let name =
+                    ["fmul", "fdiv", "fadd", "fsub", "fmax", "fmin", "fmaxnm", "fminnm", "fnmul", "fabd"][*op as usize];
                 write!(out, "{name} {}, {}, {}", fpr(*rd, *size), fpr(*rn, *size), fpr(*rm, *size))
             }
             Inst::FpFused { op, size, rd, rn, rm, ra } => {
@@ -533,6 +548,9 @@ impl fmt::Display for Inst {
                     Some(rm) => write!(out, "{name} {}, {}", fpr(*rn, *size), fpr(*rm, *size)),
                     None => write!(out, "{name} {}, #0.0", fpr(*rn, *size)),
                 }
+            }
+            Inst::FpCondCompare { size, rn, rm, nzcv, cond } => {
+                write!(out, "fccmp {}, {}, #{nzcv}, {cond}", fpr(*rn, *size), fpr(*rm, *size))
             }
             Inst::FpSelect { size, rd, rn, rm, cond } => {
                 write!(out, "fcsel {}, {}, {}, {cond}", fpr(*rd, *size), fpr(*rn, *size), fpr(*rm, *size))

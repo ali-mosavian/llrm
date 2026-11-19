@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """clocks.py DIST LEVEL OUT.json [FILE...]: user-mode instructions of tests/run/c programs, ours (DIST/llrm-cc) against gcc and clang.
 
-One run of the whole program, minus the same link's empty main. The output must equal the .out file.
+One run of the whole program, minus the same link's empty main. The output must equal the .lp64.out file where there is one, else the .out file.
 
 A count is read the one way for every column and every run (`count`): the binary is copied to a path of one fixed length, run
 under `env -i` with ASLR off, and the least of three runs is taken. The libc start-up scales with the length of argv[0] (+56
@@ -19,11 +19,40 @@ import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[2]
+HERE = Path(__file__).resolve().parent
+ROOT = HERE.parents[1]
+sys.path.insert(0, str(HERE))
+sys.path.insert(0, str(HERE.parent))
+import cell_flags  # noqa: E402
+import corpus_targets  # noqa: E402
+import vs_external  # noqa: E402
+
 SCRATCH = Path(tempfile.gettempdir()) / "llrm-clocks"
-FLAGS = ["-fPIE"]
+TARGET = "x86_64-linux"
+UNWIND = "-fno-asynchronous-unwind-tables"
 REPEATS = 3
 MOVED = 0.01
+
+
+def is_cell(source: str, path: Path | None = None) -> bool:
+    """Whether the program is for x86_64 (its `// targets:` line): the others are not cells of this matrix."""
+    return corpus_targets.applies(TARGET, source, path)
+
+
+def compile_lines(dist: str, source: str, level: str) -> dict[str, list[str] | None]:
+    """The compile line (without `-c SRC -o OUT`) of each column, as the size matrix builds them (`vs_external`): the
+    programs' own `// flags:` words on every column, gcc's in its spelling, no distro defaults (endbr64, canary) on the
+    bars. None where the column cannot be built (gcc: a program that splits on the compiler, a flag gcc lacks)."""
+    external = vs_external.external_commands(source, f"-{level}")
+    # Ours emits `.eh_frame`; the matrix bars drop it (not code bytes), but a program that has it runs 560 more instructions
+    # of start-up and exit, so an instruction count keeps it on every column.
+    for line in external.values():
+        if line is not None and UNWIND in line:
+            line.remove(UNWIND)
+    return {
+        "ours": [f"{dist}/llrm-cc", "-m64", f"-{level}", "-w", *cell_flags.cell_flags(source), *vs_external.INCLUDE],
+        **external,
+    }
 
 
 def sh(cmd, **kw):
@@ -49,6 +78,16 @@ def count(exe: Path, repeats: int = REPEATS) -> int | None:
         shutil.rmtree(home, ignore_errors=True)
 
 
+def expected_output(source: Path) -> str | None:
+    """What the program prints on an LP64 target (x86_64): `NAME.lp64.out` where the program prints different values for a
+    64-bit `long`, else `NAME.out`. The ILP32 file read for 24 programs made 42 cells "not ok" for ours, gcc and clang
+    alike, and left them out of every count (2026-11-15)."""
+    for suffix in (".lp64.out", ".out"):
+        if source.with_suffix(suffix).exists():
+            return source.with_suffix(suffix).read_text()
+    return None
+
+
 def moved(was: int, now: int, tolerance: float = MOVED) -> bool:
     """A count that changed by more than `tolerance` of the old one."""
     return abs(now - was) > tolerance * max(was, 1)
@@ -63,7 +102,7 @@ def verdicts(base: dict, new: dict) -> dict[str, list[str]]:
     than the larger of 1% and that drift.
     """
     def best(cell):
-        return min(cell["gcc"]["instr"], cell["clang"]["instr"])
+        return min(cell[column]["instr"] for column in ("gcc", "clang") if cell[column].get("instr") is not None)
 
     out: dict[str, list[str]] = {"gained": [], "lost": [], "moved": []}
     for name in sorted(base.keys() & new.keys()):
@@ -75,7 +114,11 @@ def verdicts(base: dict, new: dict) -> dict[str, list[str]]:
             continue
         if before is None or after is None:
             continue
-        drift = max(abs(now[column]["instr"] - was[column]["instr"]) / max(was[column]["instr"], 1) for column in ("gcc", "clang"))
+        drift = max(
+            abs(now[column]["instr"] - was[column]["instr"]) / max(was[column]["instr"], 1)
+            for column in ("gcc", "clang")
+            if was[column].get("instr") is not None and now[column].get("instr") is not None
+        )
         if not moved(before, after, max(MOVED, drift)):
             continue
         out["moved"].append(name)
@@ -89,15 +132,16 @@ def verdicts(base: dict, new: dict) -> dict[str, list[str]]:
 def main(argv: list[str]) -> int:
     dist, level, out = argv[0], argv[1], argv[2]
     files = [Path(f) for f in argv[3:]] or sorted((ROOT / "tests/run/c").glob("*.c"))
+    files = [f for f in files if is_cell(f.read_text(), f)]
     work = Path(tempfile.mkdtemp(prefix="clocks-"))
 
     def build(column: str, source: Path, tag: str):
         obj, exe = work / f"{tag}.{column}.o", work / f"{tag}.{column}"
-        if column == "ours":
-            env = {**os.environ, "LLRM_CC_TARGET": "x86_64-linux"}
-            done = sh([f"{dist}/llrm-cc", "-m64", f"-{level}", "-w", "-c", str(source), "-o", str(obj)], env=env)
-        else:
-            done = sh([column, *FLAGS, f"-{level}", "-w", "-c", str(source), "-o", str(obj)])
+        line = compile_lines(dist, source.read_text(), level)[column]
+        if line is None:
+            return None, "no column"
+        env = {**os.environ, "LLRM_CC_TARGET": TARGET} if column == "ours" else None
+        done = sh([*line, "-c", str(source), "-o", str(obj)], env=env)
         if done.returncode:
             return None, "compile"
         link = sh(["gcc", "-static", "-no-pie", "-o", str(exe), str(obj), str(Path(__file__).with_name("clocks_report.c")), "-lm"])
@@ -112,7 +156,7 @@ def main(argv: list[str]) -> int:
 
     def one(source: Path):
         tag, row = source.stem, {}
-        want = source.with_suffix(".out").read_text() if source.with_suffix(".out").exists() else None
+        want = expected_output(source)
         for column in ("ours", "gcc", "clang"):
             exe, why = build(column, source, tag)
             if not exe:

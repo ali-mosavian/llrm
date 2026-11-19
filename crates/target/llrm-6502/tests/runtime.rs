@@ -252,6 +252,28 @@ fn signed_word_division_by_a_long_divisor_keeps_its_sign() {
     assert_eq!(word("modhir", &two_words(1000, 65236), "__modhi3"), 100);
 }
 
+/// -4829 / 37 = -130 r -19 through the compact signed divide took 843 and 840
+/// clocks (2026-11-15), 13 more than before the compact divide took Y: the
+/// result was reloaded from the cells after the sign, a negative one went
+/// through a 13-byte `neg16` and a reload, and the loop's keep path (a trial
+/// subtract that is thrown away) cost 16 clocks a step. The limits sit under
+/// what the routines took before the regression (830 and 825 negative, 796 and
+/// 791 positive).
+#[test]
+fn a_signed_word_divide_by_a_byte_takes_no_more_clocks_than_before_the_compact_loop() {
+    let spent = |name: &str, routine: &str, a: u16, b: u16| {
+        let setup = two_words(a, b);
+        common::cycles_with(name, &format!("{setup}  jsr {routine}\n"), "")
+            - common::cycles_with(&format!("{name}-setup"), &setup, "")
+    };
+    for (routine, negative_limit, positive_limit) in [("__divhi3c", 822, 785), ("__modhi3c", 819, 788)] {
+        let n = spent(&format!("sdiv-{routine}-n"), routine, 60707, 37);
+        let p = spent(&format!("sdiv-{routine}-p"), routine, 4829, 37);
+        assert!(n <= negative_limit, "{routine}: -4829 / 37 took {n} clocks (limit {negative_limit})");
+        assert!(p <= positive_limit, "{routine}: 4829 / 37 took {p} clocks (limit {positive_limit})");
+    }
+}
+
 /// The compact signed divide (`__divhi3c`, `__modhi3c`: the same sign handling
 /// over the bit loop alone) gives the fast routines' answers, for divisors
 /// under and over 256: -1000 / 7 = -142 r -6, 7 / -2 = -3 r 1, -1000 / -300 = 3
@@ -290,26 +312,15 @@ fn word_shifts_by_a_variable() {
     assert_eq!(word("shl16-0", &value(0x1234, 0), "__ashlhi3"), 0x1234);
 }
 
-/// `__sa` and `__sb` loaded with `a` and `b`, `routine` called, `__sa` read
-/// back byte by byte.
+/// `routine` called with `a` and `b` as the compiler passes them (the mos
+/// convention), the result read back byte by byte.
 fn long(
     name: &str,
     routine: &str,
     a: u32,
     b: u32,
 ) -> u32 {
-    let mut setup = String::new();
-    for (cell, value) in [("__sa", a), ("__sb", b)] {
-        for at in 0..4 {
-            setup += &format!("  lda #{}\n  sta {cell}+{at}\n", (value >> (8 * at)) & 0xFF);
-        }
-    }
-    (0..4)
-        .map(|at| {
-            let main = format!("{setup}  jsr {routine}\n  lda __sa+{at}\n");
-            (common::run_with_runtime(&format!("{name}-{at}"), &main) as u32) << (8 * at)
-        })
-        .sum()
+    common::long_call(name, routine, a, b, common::Result32::Value)
 }
 
 /// Low 32 bits of the product: 70000 * 3 = 0x33450; 65535 * 65537 = 0xFFFFFFFF;
@@ -384,9 +395,9 @@ fn a_byte_multiplier_ends_with_its_last_set_bit() {
         let signed = i32::from(a as u16 as i16) * b as i32;
         assert_eq!(long(&format!("mulbyte-{a}-{b}"), "__mulhisi3_byte", a, b), signed as u32, "{a} * {b} signed");
     }
-    let setup = "  lda #0\n  sta __sa+1\n  sta __sb+1\n  lda #100\n  sta __sa\n  lda #3\n  sta __sb\n";
+    let setup = common::long_args("__umulhisi3_byte", 100, 3);
     let with = common::cycles_with("umulbyte-clocks", &format!("{setup}  jsr __umulhisi3_byte\n"), "");
-    let without = common::cycles_with("umulbyte-clocks-none", setup, "");
+    let without = common::cycles_with("umulbyte-clocks-none", &setup, "");
     assert!(with - without < 250, "{} clocks", with - without);
 }
 
@@ -395,9 +406,9 @@ fn a_byte_multiplier_ends_with_its_last_set_bit() {
 /// stops at the last set byte of 15: a third of that.
 #[test]
 fn multiply_longs_by_a_byte_is_not_a_walk_of_32_bits() {
-    let setup = "  lda #0\n  sta __sa+1\n  sta __sa+2\n  sta __sa+3\n  sta __sb+1\n  sta __sb+2\n  sta __sb+3\n  lda #100\n  sta __sa\n  lda #15\n  sta __sb\n";
+    let setup = common::long_args("__mulsi3_fast", 100, 15);
     let with = common::cycles_with("mulsi-clocks", &format!("{setup}  jsr __mulsi3_fast\n"), "");
-    let without = common::cycles_with("mulsi-clocks-none", setup, "");
+    let without = common::cycles_with("mulsi-clocks-none", &setup, "");
     assert!(with - without < 1000, "{} clocks", with - without);
 }
 
@@ -466,8 +477,8 @@ fn the_fast_long_shifts_agree_with_the_bit_loops_for_every_count() {
 #[test]
 fn a_long_shift_by_21_takes_whole_byte_steps() {
     let empty = common::cycles_with("fshl-empty", "", "");
-    let setup = "  lda #1\n  sta __sa\n  lda #21\n  sta __sb\n";
-    let setup_only = common::cycles_with("fshl-setup", setup, "") - empty;
+    let setup = common::long_args("__ashlsi3_fast", 1, 21);
+    let setup_only = common::cycles_with("fshl-setup", &setup, "") - empty;
     let fast = common::cycles_with("fshl-21", &format!("{setup}  jsr __ashlsi3_fast\n"), "") - empty - setup_only;
     assert!(fast < 300, "1 << 21 took {fast} clocks");
 }
@@ -652,7 +663,8 @@ fn division_cases() -> Vec<(u32, u32)> {
 }
 
 /// Runs `routine` over `cases`, `want` the result each should leave in
-/// `__sa`: the number of cases it got wrong, 255 at most.
+/// A:X:rc2:rc3: the number of cases it got wrong, 255 at most. The loop keeps
+/// its state in rc16..rc21, which the routines leave alone.
 fn division_mismatches(
     name: &str,
     routine: &str,
@@ -666,19 +678,21 @@ fn division_mismatches(
     }
     table += ".segment \"CODE\"\n";
     let mut main = String::from(
-        "  lda #<the_cases\n  sta rc2\n  lda #>the_cases\n  sta rc3\n  lda #0\n  sta rc4\n  sta rc5\nthe_next:\n",
+        "  lda #<the_cases\n  sta rc16\n  lda #>the_cases\n  sta rc17\n  lda #0\n  sta rc18\n  sta rc19\nthe_next:\n",
     );
-    for (cell, from) in [("__sa", 0), ("__sb", 4)] {
-        for at in 0..4 {
-            main += &format!("  ldy #{}\n  lda (rc2),y\n  sta {cell}+{at}\n", from + at);
-        }
-    }
-    main += &format!("  jsr {routine}\n");
     for at in 0..4 {
-        main += &format!("  ldy #{}\n  lda (rc2),y\n  cmp __sa+{at}\n  bne the_wrong\n", 8 + at);
+        main += &format!("  ldy #{}\n  lda (rc16),y\n  sta rc{}\n", 4 + at, 4 + at);
     }
-    main += "  jmp the_right\nthe_wrong:\n  inc rc4\nthe_right:\n  clc\n  lda rc2\n  adc #12\n  sta rc2\n  bcc the_same_page\n  inc rc3\nthe_same_page:\n  inc rc5\n";
-    main += &format!("  lda rc5\n  cmp #{}\n  beq the_end\n  jmp the_next\nthe_end:\n  lda rc4\n", cases.len());
+    for at in [2, 3] {
+        main += &format!("  ldy #{at}\n  lda (rc16),y\n  sta rc{at}\n");
+    }
+    main += "  ldy #1\n  lda (rc16),y\n  tax\n  ldy #0\n  lda (rc16),y\n";
+    main += &format!("  jsr {routine}\n  sta rc20\n  stx rc21\n");
+    for (at, cell) in ["rc20", "rc21", "rc2", "rc3"].into_iter().enumerate() {
+        main += &format!("  ldy #{}\n  lda (rc16),y\n  cmp {cell}\n  bne the_wrong\n", 8 + at);
+    }
+    main += "  jmp the_right\nthe_wrong:\n  inc rc18\nthe_right:\n  clc\n  lda rc16\n  adc #12\n  sta rc16\n  bcc the_same_page\n  inc rc17\nthe_same_page:\n  inc rc19\n";
+    main += &format!("  lda rc19\n  cmp #{}\n  beq the_end\n  jmp the_next\nthe_end:\n  lda rc18\n", cases.len());
     common::run_with(name, &main, &table)
 }
 
@@ -718,9 +732,9 @@ fn long_division_routines_agree_with_the_machine_on_edges_and_a_walk() {
 /// while it stays below the divisor.
 #[test]
 fn a_long_modulo_by_a_17_bit_divisor_does_not_walk_32_trips() {
-    let setup = "  lda #$C0\n  sta __sa\n  lda #$C6\n  sta __sa+1\n  lda #$2D\n  sta __sa+2\n  lda #0\n  sta __sa+3\n  lda #$A3\n  sta __sb\n  lda #$86\n  sta __sb+1\n  lda #1\n  sta __sb+2\n  lda #0\n  sta __sb+3\n";
+    let setup = common::long_args("__modsi3_fast", 0x002D_C6C0, 0x0001_86A3);
     let with = common::cycles_with("modsi-clocks", &format!("{setup}  jsr __modsi3_fast\n"), "");
-    let without = common::cycles_with("modsi-clocks-none", setup, "");
+    let without = common::cycles_with("modsi-clocks-none", &setup, "");
     assert!(with - without < 1800, "{} clocks", with - without);
 }
 
@@ -731,13 +745,10 @@ fn a_long_modulo_by_a_17_bit_divisor_does_not_walk_32_trips() {
 /// quotient. Seven calls took 6065 clocks before, 4639 now.
 #[test]
 fn a_long_modulo_builds_no_quotient_and_copies_no_remainder() {
-    let load = |at: &str, v: u32| {
-        (0..4).map(|k| format!("  lda #{}\n  sta {at}+{k}\n", (v >> (8 * k)) & 255)).collect::<String>()
-    };
     let dividends = [3_100_000u32, 1_550_001, 700_000, 250_000, 100_003, 100_002, 4_000_000_000];
     let mut total = 0;
     for a in dividends {
-        let setup = format!("{}{}", load("__sa", a), load("__sb", 100_003));
+        let setup = common::long_args("__umodsi3_fast", a, 100_003);
         let name = format!("mod-q-{a}");
         let with = common::cycles_with(&format!("{name}-with"), &format!("{setup}  jsr __umodsi3_fast\n"), "");
         total += with - common::cycles_with(&format!("{name}-none"), &setup, "");
@@ -753,10 +764,7 @@ fn a_long_modulo_builds_no_quotient_and_copies_no_remainder() {
 #[test]
 fn a_long_modulo_runs_for_the_quotients_bits_not_the_dividends_bytes() {
     let clocks = |name: &str, a: u32, b: u32| {
-        let load = |at: &str, v: u32| {
-            (0..4).map(|k| format!("  lda #{}\n  sta {at}+{k}\n", (v >> (8 * k)) & 255)).collect::<String>()
-        };
-        let setup = format!("{}{}", load("__sa", a), load("__sb", b));
+        let setup = common::long_args("__modsi3_fast", a, b);
         let with = common::cycles_with(&format!("{name}-with"), &format!("{setup}  jsr __modsi3_fast\n"), "");
         with - common::cycles_with(&format!("{name}-none"), &setup, "")
     };
@@ -841,10 +849,7 @@ fn the_wide_path_saves_a_call_what_the_hot_threshold_assumes() {
         (16_777_216, 256),
     ];
     let clocks = |routine: &str, a: u32, b: u32| {
-        let load = |at: &str, v: u32| {
-            (0..4).map(|k| format!("  lda #{}\n  sta {at}+{k}\n", (v >> (8 * k)) & 255)).collect::<String>()
-        };
-        let setup = format!("{}{}", load("__sa", a), load("__sb", b));
+        let setup = common::long_args(routine, a, b);
         let with = common::cycles_with(&format!("{routine}-{a}-{b}"), &format!("{setup}  jsr {routine}\n"), "");
         with - common::cycles_with(&format!("none-{routine}-{a}-{b}"), &setup, "")
     };
@@ -859,15 +864,118 @@ fn the_wide_path_saves_a_call_what_the_hot_threshold_assumes() {
 #[test]
 fn the_fast_multiply_saves_what_hotmultiply_prices() {
     let call = |routine: &str, b: u32| {
-        let mut setup = String::from("  lda #0\n  sta __sa+1\n  sta __sa+2\n  sta __sa+3\n  lda #100\n  sta __sa\n");
-        for at in 0..4 {
-            setup += &format!("  lda #{}\n  sta __sb+{at}\n", (b >> (8 * at)) & 0xFF);
-        }
+        let setup = common::long_args(routine, 100, b);
         common::cycles_with(&format!("mulsave-{routine}-{b}"), &format!("{setup}  jsr {routine}\n"), "")
             - common::cycles_with(&format!("mulsave-none-{b}"), &setup, "")
     };
     let shapes = [25u32, 0x1234, 0x0019_660D, 0x9E37_79B9];
     let saved: Vec<i64> = shapes.iter().map(|&b| call("__mulsi3", b) - call("__mulsi3_fast", b)).collect();
     let mean = saved.iter().sum::<i64>() as f64 / saved.len() as f64;
-    assert_eq!(mean.round(), llrm_6502::hotmultiply::SAVED_CLOCKS);
+    // sim65 charges a clock a page crossing, so the mean moves with where the
+    // runtime lies (615 and 586 over the same routines): a price within 10%
+    let priced = llrm_6502::hotmultiply::SAVED_CLOCKS;
+    assert!((mean - priced).abs() <= priced / 10.0, "the fast multiply saves {mean} clocks a call, priced at {priced}");
+}
+
+/// `__shl1hi3` makes `1 << n` for every count of 0 to 15: low byte for 0 to 7,
+/// high byte for 8 to 15.
+#[test]
+fn one_shifted_by_a_count_is_the_bit_for_every_count() {
+    let table: String = (0..16u32).map(|n| format!("  .word {}\n", 1u32 << n)).collect();
+    let main = "  ldy #0\n@next:\n  sty rc8\n  tya\n  jsr __shl1hi3\n  sta rc10\n  stx rc11\n  lda rc8\n  asl a\n  tay\n  lda want,y\n  cmp rc10\n  bne @bad\n  lda want+1,y\n  cmp rc11\n  bne @bad\n  ldy rc8\n  iny\n  cpy #16\n  bne @next\n  lda #0\n  rts\n@bad:\n  lda rc8\n  clc\n  adc #1\n";
+    let extra = format!(".segment \"RODATA\"\nwant:\n{table}.segment \"CODE\"\n");
+    assert_eq!(common::run_with("shl1-all", main, &extra), 0, "a count whose bit is wrong (the count plus 1)");
+}
+
+/// The speed word divide shifts the divisor up to the dividend (a quotient of
+/// a few bits takes a few steps) and hands a wide quotient to the bit loops: it
+/// agrees with the compact bit loop over pairs of every quotient width, a
+/// divisor under the dividend's top bit, at it, and over it, and a byte divisor
+/// under a dividend of 1024 or more.
+#[test]
+fn the_aligned_word_division_agrees_with_the_bit_loop() {
+    let mut pairs = vec![];
+    for a in [1, 7, 255, 256, 300, 1023, 1024, 4000, 32767, 32768, 40000, 65535] {
+        for b in [1, 2, 3, 10, 37, 100, 255, 256, 257, 300, 1500, 8191, 8192, 32767, 32768, 40000, 65535] {
+            pairs.push((a, b));
+        }
+    }
+    let table: String = pairs.iter().map(|(a, b)| format!("  .word {a}, {b}\n")).collect();
+    let main = format!(
+        "  lda #<pairs\n  sta rc8\n  lda #>pairs\n  sta rc9\n  lda #{}\n  sta rc10\n\
+@next:\n  ldy #0\n@copy:\n  lda (rc8),y\n  sta rc2,y\n  sta rc16,y\n  iny\n  cpy #4\n  bne @copy\n\
+  jsr __udivhi3\n  sta rc12\n  stx rc13\n  lda rc6\n  sta rc14\n  lda rc7\n  sta rc15\n\
+  ldy #3\n@back:\n  lda rc16,y\n  sta rc2,y\n  dey\n  bpl @back\n\
+  jsr __udivhi3c\n  cmp rc12\n  bne @bad\n  cpx rc13\n  bne @bad\n  lda rc6\n  cmp rc14\n  bne @bad\n  lda rc7\n  cmp rc15\n  bne @bad\n\
+  clc\n  lda rc8\n  adc #4\n  sta rc8\n  bcc @c\n  inc rc9\n@c:\n  dec rc10\n  bne @next\n  lda #0\n  rts\n@bad:\n  lda #1\n",
+        pairs.len()
+    );
+    let status = common::run_with(
+        "udivhi-aligned-all",
+        &main,
+        &format!(".segment \"RODATA\"\npairs:\n{table}.segment \"CODE\"\n"),
+    );
+    assert_eq!(status, 0, "the speed and compact divides differ on one of {} pairs", pairs.len());
+}
+
+/// The signed speed divides take two non-negative words as unsigned ones (no
+/// signs to take and give back) and agree with the compact signed ones on every
+/// sign pair.
+#[test]
+fn the_signed_speed_divides_agree_with_the_compact_ones_on_every_sign_pair() {
+    let mut pairs = vec![];
+    for a in [0i32, 1, 7, 300, 1500, 32767, -1, -7, -300, -32768, -32767] {
+        for b in [1i32, 2, 3, 10, 37, 300, 1500, 32767, -1, -2, -37, -1500, -32768] {
+            pairs.push((a as u16, b as u16));
+        }
+    }
+    let table: String = pairs.iter().map(|(a, b)| format!("  .word {a}, {b}\n")).collect();
+    for (name, fast, compact) in [
+        ("divhi", "__divhi3", "__divhi3c"),
+        ("modhi", "__modhi3", "__modhi3c"),
+        ("divmodhi", "__divmodhi4", "__divmodhi4c"),
+    ] {
+        let main = format!(
+            "  lda #<pairs\n  sta rc8\n  lda #>pairs\n  sta rc9\n  lda #{}\n  sta rc10\n\
+@next:\n  ldy #0\n@copy:\n  lda (rc8),y\n  sta rc2,y\n  sta rc16,y\n  iny\n  cpy #4\n  bne @copy\n\
+  jsr {fast}\n  sta rc12\n  stx rc13\n  lda rc6\n  sta rc14\n  lda rc7\n  sta rc15\n\
+  ldy #3\n@back:\n  lda rc16,y\n  sta rc2,y\n  dey\n  bpl @back\n\
+  jsr {compact}\n  cmp rc12\n  bne @bad\n  cpx rc13\n  bne @bad\n\
+  clc\n  lda rc8\n  adc #4\n  sta rc8\n  bcc @c\n  inc rc9\n@c:\n  dec rc10\n  bne @next\n  lda #0\n  rts\n@bad:\n  lda #1\n",
+            pairs.len()
+        );
+        let extra = format!(".segment \"RODATA\"\npairs:\n{table}.segment \"CODE\"\n");
+        assert_eq!(common::run_with(&format!("signed-{name}-all"), &main, &extra), 0, "{fast} differs from {compact}");
+    }
+}
+
+/// A remainder of two non-negative words took the sign handling anyway: 36
+/// clocks of `abs16_pair`, a `php` and a `plp` over the divide, on every call
+/// of a loop of gcd steps.
+#[test]
+fn a_remainder_of_two_non_negative_words_takes_no_sign_handling() {
+    let plain = divide_clocks("signed-fast-mod", "__umodhi3", 2100, 1500);
+    let signed = divide_clocks("signed-fast-mod-s", "__modhi3", 2100, 1500);
+    assert!(signed <= plain + 15, "__modhi3 took {signed} clocks, __umodhi3 {plain}");
+}
+
+fn divide_clocks(
+    name: &str,
+    routine: &str,
+    a: u16,
+    b: u16,
+) -> i64 {
+    let setup = two_words(a, b);
+    common::cycles_with(name, &format!("{setup}  jsr {routine}\n"), "")
+        - common::cycles_with(&format!("{name}-s"), &setup, "")
+}
+
+/// Euclid's steps divide a number by one a little smaller: the quotient is a
+/// bit or two. 2100 / 1500 took 700 clocks (the bit loop), 1500 / 360 600.
+#[test]
+fn a_divide_with_a_quotient_of_a_few_bits_takes_a_few_steps() {
+    for (a, b, limit) in [(2100, 1500, 260), (1500, 360, 400), (300, 60, 400), (9999, 5000, 260)] {
+        let spent = divide_clocks(&format!("udivhi-few-{a}-{b}"), "__udivhi3", a, b);
+        assert!(spent <= limit, "{a} / {b} took {spent} clocks");
+    }
 }

@@ -108,6 +108,15 @@ impl OpcodeMap {
         &self.forms
     }
 
+    /// Whether the machine instruction `name` runs under the `lock` prefix: the
+    /// atomic pseudos, which are the form of [`Self::form`] plus the prefix.
+    pub fn locked(
+        &self,
+        name: &str,
+    ) -> bool {
+        atomic(name).is_some()
+    }
+
     /// The index of the one form `name` is, or why it is none.
     pub fn form(
         &self,
@@ -156,7 +165,18 @@ impl OpcodeMap {
         // A move between a general and an SSE register: the pin's names for
         // the direction, the form is the one with that encoding.
         if let Some(iced) = gpr_xmm_move(name) {
-            return self.forms.iter().position(|f| f.iced.as_deref() == Some(iced)).ok_or(Unmapped::NoForm);
+            // `MOVPDI2DImr`/`MOVPDI2DIrr` and `MOVDI2PDIrm`/`MOVDI2PDIrr` share an iced form; the name says
+            // whether the general operand is memory.
+            let memory = name.ends_with("mr") || name.ends_with("rm");
+            let takes = |f: &Form| {
+                let general = if iced.starts_with("Movd_rm32") { f.dests.first() } else { f.sources.first() };
+                general.is_some_and(|operand| operand.allows('m')) == memory
+            };
+            return self
+                .forms
+                .iter()
+                .position(|f| f.iced.as_deref() == Some(iced) && (!iced.starts_with("Movd_") || takes(f)))
+                .ok_or(Unmapped::NoForm);
         }
         if let Some((mnemonic, width, result, letters)) =
             sse(name).filter(|(m, ..)| self.forms.iter().any(|f| &f.name == m))
@@ -174,7 +194,10 @@ impl OpcodeMap {
         {
             return Err(Unmapped::Vector);
         }
-        let Some((mnemonic, width, letters)) = split(name) else { return Err(Unmapped::Name) };
+        // `LOCK_ADD32mr`, `LXADD32`, `LCMPXCHG32`: the instruction on a cell,
+        // `lock`ed.
+        let atomic_name = atomic(name);
+        let Some((mnemonic, width, letters)) = atomic_name.or_else(|| split(name)) else { return Err(Unmapped::Name) };
         if matches!(mnemonic.as_str(), "cmov" | "set" | "j") || name.contains("CC") {
             return Err(Unmapped::Condition);
         }
@@ -224,8 +247,13 @@ fn gpr_xmm_move(name: &str) -> Option<&'static str> {
         "MOV64toSDrr" => "Movq_xmm_rm64",
         "MOVSS2DIrr" => "Movd_rm32_xmm",
         "MOVDI2SSrr" => "Movd_xmm_rm32",
-        "MOVDI2PDIrr" => "Movd_xmm_rm32",
+        "MOVDI2PDIrr" | "MOVDI2PDIrm" => "Movd_xmm_rm32",
         "MOV64toPQIrr" => "Movq_xmm_rm64",
+        "MOVPQIto64rr" => "Movq_rm64_xmm",
+        // `movq xmm, m64` (the upper lane zeroed) and `movq m64, xmm`.
+        "MOVQI2PQIrm" => "Movq_xmm_xmmm64",
+        "MOVPQI2QImr" => "Movq_xmmm64_xmm",
+        "MOVPDI2DIrr" | "MOVPDI2DImr" => "Movd_rm32_xmm",
         _ => return None,
     })
 }
@@ -236,12 +264,13 @@ fn gpr_xmm_move(name: &str) -> Option<&'static str> {
 /// is `movsd_x`. `SQRTSDr` names its tied source too. A pin name that is none
 /// of these is `None`.
 fn sse(name: &str) -> Option<(String, Option<u32>, Option<u32>, Vec<char>)> {
-    const ARITHMETIC: [&str; 53] = [
+    const ARITHMETIC: [&str; 67] = [
         "ADDSS", "ADDSD", "SUBSS", "SUBSD", "MULSS", "MULSD", "DIVSS", "DIVSD", "MINSS", "MINSD", "MAXSS", "MAXSD",
         "SQRTSS", "SQRTSD", "MOVSS", "MOVSD", "UCOMISS", "UCOMISD", "XORPS", "ANDPS", "ANDNPS", "ORPS", "CMPSS",
         "CMPSD", "PADDB", "PADDW", "PADDD", "PADDQ", "PSUBB", "PSUBW", "PSUBD", "PSUBQ", "PAND", "PANDN", "POR",
         "PXOR", "PMULLW", "PSLLW", "PSLLD", "PSLLQ", "PSRLW", "PSRLD", "PSRLQ", "PSRAW", "PSRAD", "PSHUFD", "PUNPCKLQDQ", "PMULUDQ", "PUNPCKLDQ",
-        "PUNPCKLBW", "PUNPCKHBW", "PACKUSWB", "PACKSSWB",
+        "PUNPCKLBW", "PUNPCKHBW", "PACKUSWB", "PACKSSWB", "PUNPCKLWD", "PUNPCKHWD", "PUNPCKHDQ", "PUNPCKHQDQ", "PACKSSDW",
+        "PCMPEQB", "PCMPEQW", "PCMPEQD", "PCMPGTB", "PCMPGTW", "PCMPGTD", "PMOVMSKB", "MOVMSKPS", "MOVMSKPD",
     ];
     const MOVES: [&str; 2] = ["MOVAPS", "MOVUPS"];
     const CONVERTS: [(&str, &str, Option<u32>); 8] = [
@@ -303,6 +332,12 @@ fn sse(name: &str) -> Option<(String, Option<u32>, Option<u32>, Vec<char>)> {
 pub fn memory_bytes(name: &str) -> Option<u32> {
     // `MOV8mr_NOREX` stores `AH`: the byte store it stands for.
     let name = name.strip_suffix("_NOREX").unwrap_or(name);
+    if matches!(name, "MOVQI2PQIrm" | "MOVPQI2QImr") {
+        return Some(8);
+    }
+    if matches!(name, "MOVPDI2DImr" | "MOVDI2PDIrm") {
+        return Some(4);
+    }
     // A scalar SSE access is the scalar's size: `MOVSDrm` 8, `MOVSSmr` 4.
     if sse(name.strip_suffix("_alt").unwrap_or(name)).is_some() {
         // A conversion reads its source's size: the float named first, or the
@@ -324,7 +359,7 @@ pub fn memory_bytes(name: &str) -> Option<u32> {
             Some(16)
         };
     }
-    let (mnemonic, width, _) = split(name)?;
+    let (mnemonic, width, _) = atomic(name).or_else(|| split(name))?;
     let bits = if matches!(mnemonic.as_str(), "movzx" | "movsx") {
         let rest = name.trim_start_matches(|c: char| c.is_ascii_uppercase());
         let rest = rest.trim_start_matches(|c: char| c.is_ascii_digit());
@@ -335,6 +370,29 @@ pub fn memory_bytes(name: &str) -> Option<u32> {
         width?
     };
     Some(bits.div_ceil(8))
+}
+
+/// The pin's atomic pseudos (X86InstrCompiler.td) as the form they are under
+/// `lock`: `LOCK_ADD32mr` -> (`add`, 32, `mr`), `LOCK_INC8m` -> (`inc`, 8,
+/// `m`), `LXADD32` -> (`xadd`, 32, `mr`: the sum's cell and the register),
+/// `LCMPXCHG32` -> (`cmpxchg`, 32, `mrr`: the cell, the new value, the
+/// accumulator). `LOCK_BTS` and the double-width `LCMPXCHG8B` are not these.
+fn atomic(name: &str) -> Option<(String, Option<u32>, Vec<char>)> {
+    if let Some(rest) = name.strip_prefix("LOCK_") {
+        let (mnemonic, width, letters) = split(rest)?;
+        let plain = matches!(
+            mnemonic.as_str(),
+            "add" | "sub" | "and" | "or" | "xor" | "inc" | "dec"
+        );
+        return (plain && letters.first() == Some(&'m')).then_some((mnemonic, width, letters));
+    }
+    let (mnemonic, letters) = match name.strip_prefix("LXADD") {
+        Some(_) => ("xadd", vec!['m', 'r']),
+        None => (name.strip_prefix("LCMPXCHG").map(|_| "cmpxchg")?, vec!['m', 'r', 'r']),
+    };
+    let digits = name.trim_start_matches(|c: char| c.is_ascii_uppercase());
+    let width: u32 = digits.parse().ok()?;
+    Some((mnemonic.to_owned(), Some(width), letters))
 }
 
 /// `ADD32ri8` -> (`add`, 32, `ri`); `SHL32rCL` -> (`shl`, 32, `rr`);

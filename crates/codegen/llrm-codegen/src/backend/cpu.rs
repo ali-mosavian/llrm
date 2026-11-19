@@ -89,6 +89,10 @@ use crate::support::hash::IndexMap;
 #[derive(Clone, Debug)]
 pub struct Profile {
     pub name: String,
+    /// `-mstack-alignment=N`: every call finds the stack a multiple of this
+    /// many bytes, whatever the callee holds; None where the target or the
+    /// callee's convention says (`aligned_calls`).
+    pub aligned_calls: Option<i64>,
     pub issue_width: i64,
     pub in_order: bool,
     pub prefix_cost: i64,
@@ -210,7 +214,8 @@ pub struct Profile {
     pub post_ra_tail_duplicate: bool,
     /// `TimingTable::tail_merge_pin_faithful`.
     pub tail_merge_pin_faithful: bool,
-    /// Equal literal stores share a register where bytes are strict (`TimingTable::share_literal_stores`).
+    /// Equal literal stores share a register where bytes are strict
+    /// (`TimingTable::share_literal_stores`).
     pub share_literal_stores: bool,
     /// `TimingTable::share_literal_stores_at_speed`.
     pub share_literal_stores_at_speed: bool,
@@ -434,6 +439,7 @@ impl Profile {
             rounds_float_spills: false,
             stable_loads: true,
             min_size: false,
+            aligned_calls: None,
             speed_rate: true,
             speed_level: true,
             post_ra_tail_duplicate: false,
@@ -474,18 +480,17 @@ impl Profile {
     }
 
     /// DEVIATE X87-FCMP-AH: whether a compare read from the status word is
-    /// `test ah, mask` rather than `sahf`: where the table prices `sahf` above a
-    /// register-immediate operation, code is not tuned for size, and the clock
-    /// saved pays for the two bytes the test adds at the target's speed rate
-    /// (m16's 500 milli-clocks a byte makes it a tie, which keeps `sahf`). A
-    /// target that keeps `sahf` where bytes are held (m32) tests at neither -O1
-    /// nor size: two bytes there are a worse cell.
+    /// `test ah, mask` rather than `sahf`: where the table prices `sahf` above
+    /// a register-immediate operation, code is not tuned for size, and the
+    /// clock saved pays for the two bytes the test adds at the target's
+    /// speed rate (m16's 500 milli-clocks a byte makes it a tie, which
+    /// keeps `sahf`). A target that keeps `sahf` where bytes are held (m32)
+    /// tests at neither -O1 nor size: two bytes there are a worse cell.
     pub fn tests_status_word(&self) -> bool {
         const EXTRA_BYTES: i64 = 2;
         !self.size
             && !self.min_size
-            && !(self.bytes_strict()
-                && self.target().tti().is_some_and(|tti| tti.keeps_sahf_where_bytes_are_held()))
+            && !(self.bytes_strict() && self.target().tti().is_some_and(|tti| tti.keeps_sahf_where_bytes_are_held()))
             && matches!(
                 (self.cost("sahf"), self.cost("alu_ri")),
                 (Ok(sahf), Ok(alu)) if alu < sahf
@@ -559,8 +564,10 @@ impl Profile {
         }
         let jump = self.cost("jmp_short").ok()?;
         let saved = self.cost("jcc").ok()? - self.cost("jcc_not_taken").ok()?;
-        (jump > 0 && saved > 0)
-            .then_some(crate::backend::jumps::placement::TopClocks { jump_clocks: jump as f64, saved_clocks: saved as f64 })
+        (jump > 0 && saved > 0).then_some(crate::backend::jumps::placement::TopClocks {
+            jump_clocks: jump as f64,
+            saved_clocks: saved as f64,
+        })
     }
 
     /// Clocks a mispredicted branch costs in this function: the size row at
@@ -655,7 +662,8 @@ impl Profile {
     /// off the stack in place of `add sp,2*words`: shorter for one or two
     /// words, and where size is not wanted, only if no slower.
     ///
-    /// DEVIATE PO1 (owner w10, 2026-10-30; x86-m32 off, `Tuning::pops_arguments_at_size`): the pin pops only at `minsize`
+    /// DEVIATE PO1 (owner w10, 2026-10-30; x86-m32 off,
+    /// `Tuning::pops_arguments_at_size`): the pin pops only at `minsize`
     /// (`X86FrameLowering::eliminateCallFramePseudoInstr`,
     /// X86FrameLowering.cpp:4116, `F.hasMinSize() && adjustStackWithPops`; pin
     /// llc -mcpu=i486 keeps `add esp,8` at `optsize`). Here -Os pops too: one
@@ -907,6 +915,23 @@ pub fn tuned_optimizing(
     Ok(one)
 }
 
+/// `profile` with every call aligned to `bytes` (`-mstack-alignment=`): one
+/// copy per profile and alignment.
+pub fn with_aligned_calls(
+    profile: &'static Profile,
+    bytes: i64,
+) -> &'static Profile {
+    static MADE: std::sync::Mutex<Vec<(usize, i64, &'static Profile)>> = std::sync::Mutex::new(Vec::new());
+    let mut made = MADE.lock().expect("the aligned profiles are not poisoned");
+    let key = profile as *const Profile as usize;
+    if let Some(&(_, _, one)) = made.iter().find(|(at, n, _)| *at == key && *n == bytes) {
+        return one;
+    }
+    let one: &'static Profile = Box::leak(Box::new(Profile { aligned_calls: Some(bytes), ..profile.clone() }));
+    made.push((key, bytes, one));
+    one
+}
+
 /// The registers a value may be placed in: the description's `gpr` class.
 fn general_registers(arch: &dyn Target) -> Vec<RegId> {
     let file = llrm_target::registers::file(&arch.registers_text()).expect("the target's registers parse");
@@ -956,8 +981,10 @@ mod tests {
         let targets: [&dyn Target; 3] = [&llrm_x86_m16::M16, &llrm_x86_m32::M32, &llrm_x86_m64::M64];
         for arch in targets {
             let file = llrm_target::registers::file(&arch.registers_text()).unwrap();
-            let old: Vec<RegId> =
-                llrm_target::registers::of_class(&file, "gpr").into_iter().map(|name| RegId::named(name).unwrap()).collect();
+            let old: Vec<RegId> = llrm_target::registers::of_class(&file, "gpr")
+                .into_iter()
+                .map(|name| RegId::named(name).unwrap())
+                .collect();
             assert!(!old.is_empty());
             assert_eq!(general_registers(arch), old, "{}", arch.name());
         }
@@ -1241,18 +1268,18 @@ pub fn private_convention_under(
 mod private_convention_tests {
     use super::*;
 
-    /// CC1: a private m32 function takes the pin's `fastcc` (ECX, EDX; the
-    /// caller pops); `LLRM_PRIVATE_WATCALL` (the comparison instrument) gives
-    /// it `watcall32` instead. A default of `watcall32` priced the rows against
-    /// the pin's convention and lost -O1..-O3 clocks (`rectwo` -9.6%).
+    /// CC-LOCAL: a private m32 function takes gcc's local `regparm(3)` (EAX,
+    /// EDX, ECX; the caller pops); `LLRM_PRIVATE_WATCALL` (the comparison
+    /// instrument) gives it `watcall32`. The pin's `fastcc` (ECX, EDX) put a
+    /// third argument on the stack and made a tail call a `call`+`ret`.
     #[test]
-    fn test_a_private_function_takes_the_pin_fastcc_and_the_instrument_watcall32() {
-        use llrm_mir::opcode::{FAST, WATCALL};
+    fn test_a_private_function_takes_gccs_local_regparm_and_the_instrument_watcall32() {
+        use llrm_mir::opcode::{REGPARM3, WATCALL};
         let ours = private_convention(&llrm_x86_m32::M32, false).expect("m32 states one");
         let old = private_convention(&llrm_x86_m32::M32, true).expect("m32 states one");
-        assert_eq!((ours.to, old.to), (FAST, WATCALL));
-        let found = llrm_x86_m32::M32.calling().by_number(FAST).expect("fastcc is stated");
-        assert_eq!(found.argument_registers, ["ecx", "edx"]);
+        assert_eq!((ours.to, old.to), (REGPARM3, WATCALL));
+        let found = llrm_x86_m32::M32.calling().by_number(REGPARM3).expect("regparm3 is stated");
+        assert_eq!(found.argument_registers, ["eax", "edx", "ecx"]);
         assert_eq!(found.cleanup, llrm_target::calling::Cleanup::Caller);
     }
 }

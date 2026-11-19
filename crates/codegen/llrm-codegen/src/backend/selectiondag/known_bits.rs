@@ -322,7 +322,7 @@ fn walk(
         // modelled, so no-wrap is false.
         ISD::Shl => binary(operand(0), operand(1), |a, b| Bits::shl(a, b, false, false, b.is_non_zero())),
         // `computeKnownBits` of a `ZEXTLOAD`: the bits above the memory type.
-        ISD::Load if value.res == 0 => match &dag.node(value).data {
+        ISD::Load | ISD::LoadPre | ISD::LoadPost if value.res == 0 => match &dag.node(value).data {
             super::dag::NodeData::Mem(info) if info.ext == Some(super::actions::LoadExt::ZExtLoad) => {
                 KnownBits { zero: all & !mask(info.mem_vt.size_in_bits()), one: 0, width }
             }
@@ -442,7 +442,10 @@ fn num_sign_bits_at(
     }
     // `ComputeNumSignBits` of a `SEXTLOAD` (`VTBits - MemBits + 1`) and a
     // `ZEXTLOAD` (`VTBits - MemBits`).
-    if dag.opcode(value) == ISD::Load
+    // The pin's `case ISD::LOAD` does not look at the addressing mode: an
+    // indexed load's value (result 0) has the same bits (here `LoadPre` and
+    // `LoadPost` are opcodes of their own).
+    if matches!(dag.opcode(value), ISD::Load | ISD::LoadPre | ISD::LoadPost)
         && value.res == 0
         && let super::dag::NodeData::Mem(info) = &dag.node(value).data
     {
@@ -545,6 +548,17 @@ fn num_sign_bits_at(
                 let valid = (width - left + 1) + (width - right + 1);
                 return if valid > width { 1 } else { width - valid + 1 };
             }
+        }
+        // `ComputeNumSignBits` of `CONCAT_VECTORS`: the least of the parts'.
+        ISD::ConcatVectors => {
+            let mut least = u32::MAX;
+            for at in 0..dag.node(value).ops.len() {
+                least = least.min(signs(at));
+                if least == 1 {
+                    break;
+                }
+            }
+            return least;
         }
         ISD::Truncate => {
             let source = scalar_bits(dag.value_type(dag.operand(value, 0)));

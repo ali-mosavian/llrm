@@ -31,15 +31,22 @@
 //! branch and a copy of the call, and -Os is strict bytes. Owner: alim; exit
 //! 2026-11-27, revisit when the -Os rows allow.
 //!
-//! DEVIATE PI2: MIR's text has no `strictfp`; the check reads the attribute
-//! where a front end states it, and no test can state it.
-//!
 //! DEVIATE PI1: the likely-branch weight the pin adds when the function has an
 //! entry count is not added: MIR has no profile counts.
 //!
 //! # Runs
 //! After the strength slot (the pin: `addIRPasses`, after LSR), before the
 //! code-generation-prepare passes.
+//!
+//! # Example
+//! A `sqrt` call that may set `errno` becomes a `memory(none)` call that the target turns into an instruction, with the real call kept for the NaN or negative case.
+//!
+//! ```text
+//! %r = call double @sqrt(double %x) memory(none)
+//! %c = fcmp ord double %r, %r
+//! br i1 %c, label %b.split, label %call.sqrt
+//! call.sqrt: %l = call double @sqrt(double %x)   ; joined by a phi in %b.split
+//! ```
 
 use llrm_mir::context::{Constant, ConstantKind};
 use llrm_mir::edit::Position;

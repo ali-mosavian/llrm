@@ -39,3 +39,18 @@ fn a_nest_over_constant_tables_is_unrolled_and_no_longer_reads_them() {
         assert!(!main.contains("bytes") && !main.contains("words"), "{level}: {main}");
     }
 }
+
+/// A loop holding a variable-length array has `llvm.stacksave` and
+/// `llvm.stackrestore` in its body; the unroller could not price the two calls
+/// ("no cost for call") and kept `nested(6)` a loop: `call nested`, 3,942
+/// executed instructions to clang's 2,752. The pin prices an intrinsic it has
+/// no case for as a library call (1 for size): the nest unrolls and
+/// folds to `183`.
+#[test]
+fn a_loop_with_a_variable_length_array_is_unrolled_and_folds_to_a_constant() {
+    for level in ["-O2", "-O3"] {
+        let text = assembly("vla_callee_constant.c", level);
+        let main = text.split("main proc near").nth(1).and_then(|rest| rest.split("main endp").next()).expect("a body");
+        assert!(!main.contains("call nested") && main.contains("mov rdi, 183"), "{level}: {main}");
+    }
+}

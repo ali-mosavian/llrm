@@ -50,23 +50,46 @@
 //! https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/LivePhysRegs.cpp#L141
 
 use llrm_lir::registers::{Info, RegId};
-use llrm_support::hash::HashMap;
 
 use crate::mfunc::{Inst, MFunction, Operand, Reg};
 use crate::regalloc::{Assignment, Target, successors};
 
-/// The live lanes of each root register.
+/// The live lanes of each root register, by root. A register file has a few
+/// dozen roots and few are live at once: a sorted list is searched and copied
+/// faster than a hash map.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub struct LiveLanes(HashMap<RegId, i64>);
+pub struct LiveLanes(Vec<(RegId, i64)>);
 
 impl LiveLanes {
+    fn find(
+        &self,
+        root: RegId,
+    ) -> Result<usize, usize> {
+        self.0.binary_search_by_key(&root, |(one, _)| *one)
+    }
+
+    /// The lanes of `root`, made an entry (of none) where it has none.
+    fn entry(
+        &mut self,
+        root: RegId,
+    ) -> &mut i64 {
+        let at = match self.find(root) {
+            Ok(at) => at,
+            Err(at) => {
+                self.0.insert(at, (root, 0));
+                at
+            }
+        };
+        &mut self.0[at].1
+    }
+
     /// `addReg`.
     pub fn add(
         &mut self,
         info: &Info,
         register: RegId,
     ) {
-        *self.0.entry(info.root(register)).or_default() |= info.lanes(register);
+        *self.entry(info.root(register)) |= info.lanes(register);
     }
 
     /// `removeReg`.
@@ -76,10 +99,10 @@ impl LiveLanes {
         register: RegId,
     ) {
         let root = info.root(register);
-        if let Some(live) = self.0.get_mut(&root) {
-            *live &= !info.lanes(register);
-            if *live == 0 {
-                self.0.remove(&root);
+        if let Ok(at) = self.find(root) {
+            self.0[at].1 &= !info.lanes(register);
+            if self.0[at].1 == 0 {
+                self.0.remove(at);
             }
         }
     }
@@ -90,7 +113,7 @@ impl LiveLanes {
         info: &Info,
         register: RegId,
     ) -> bool {
-        self.0.get(&info.root(register)).is_some_and(|live| live & info.lanes(register) != 0)
+        self.find(info.root(register)).is_ok_and(|at| self.0[at].1 & info.lanes(register) != 0)
     }
 
     fn union(
@@ -99,7 +122,7 @@ impl LiveLanes {
     ) -> bool {
         let mut changed = false;
         for (root, lanes) in &other.0 {
-            let mine = self.0.entry(*root).or_default();
+            let mine = self.entry(*root);
             if *mine | lanes != *mine {
                 *mine |= lanes;
                 changed = true;
@@ -140,6 +163,16 @@ impl LiveLanes {
     }
 }
 
+thread_local! {
+    static STEPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The instructions [`PhysLiveness::of`] has stepped over on this thread since
+/// the last call.
+pub fn take_steps() -> usize {
+    STEPS.with(std::cell::Cell::take)
+}
+
 /// How many instructions apart a block's checkpoints are.
 const STRIDE: usize = 16;
 
@@ -156,10 +189,84 @@ pub struct PhysLiveness {
     checkpoints: std::cell::RefCell<Vec<Option<Checkpoints>>>,
 }
 
+thread_local! {
+    /// Functions [`PhysLiveness::of`] solved on this thread since the last
+    /// [`take_solved`].
+    static SOLVED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The functions solved on this thread since the last call.
+pub fn take_solved() -> usize {
+    SOLVED.with(|one| one.replace(0))
+}
+
 impl PhysLiveness {
     /// Solves the live-outs of every block: a block's live-in is its live-out
     /// stepped back over its instructions.
     pub fn of<T: Target>(
+        function: &MFunction<T::Class>,
+        assignment: &Assignment,
+        info: &Info,
+    ) -> PhysLiveness {
+        SOLVED.with(|one| one.set(one.get() + 1));
+        let succs = successors(function);
+        let blocks = function.blocks.len();
+        let mut preds: Vec<Vec<usize>> = vec![Vec::new(); blocks];
+        for (b, out) in succs.iter().enumerate() {
+            for &s in out {
+                preds[s].push(b);
+            }
+        }
+        let mut live_in = vec![LiveLanes::default(); blocks];
+        let mut live_out = vec![LiveLanes::default(); blocks];
+        // Last block first, as a sweep would; a block is solved again only when
+        // a successor's live-in changed, so an acyclic function is stepped
+        // once.
+        let mut queue: std::collections::VecDeque<usize> = (0..blocks).rev().collect();
+        let mut queued = vec![true; blocks];
+        while let Some(b) = queue.pop_front() {
+            queued[b] = false;
+            let mut out = LiveLanes::default();
+            for &s in &succs[b] {
+                out.union(&live_in[s]);
+            }
+            let mut live = out.clone();
+            STEPS.with(|count| count.set(count.get() + function.blocks[b].insts.len()));
+            for inst in function.blocks[b].insts.iter().rev() {
+                live.step_backward::<T>(info, assignment, inst);
+            }
+            let moved = live != live_in[b];
+            if out != live_out[b] || moved {
+                live_out[b] = out;
+                live_in[b] = live;
+                if moved {
+                    for &p in &preds[b] {
+                        if !queued[p] {
+                            queued[p] = true;
+                            queue.push_back(p);
+                        }
+                    }
+                }
+            }
+        }
+        let solved =
+            PhysLiveness { live_out, checkpoints: std::cell::RefCell::new((0..blocks).map(|_| None).collect()) };
+        // `LLRM_VERIFY=1`: the answer of the sweeps, which the worklist must
+        // equal
+        if llrm_support::env_flag!("LLRM_VERIFY") {
+            let swept = Self::of_by_sweeps::<T>(function, assignment, info);
+            assert!(
+                solved.live_out == swept.live_out,
+                "livephys: the worklist's live-outs differ from the sweeps' in @{}",
+                function.name
+            );
+        }
+        solved
+    }
+
+    /// [`Self::of`] by sweeps over every block until none moves: the reference
+    /// the worklist is checked against (`LLRM_VERIFY`, the tests).
+    pub fn of_by_sweeps<T: Target>(
         function: &MFunction<T::Class>,
         assignment: &Assignment,
         info: &Info,
@@ -188,6 +295,14 @@ impl PhysLiveness {
             }
         }
         PhysLiveness { live_out, checkpoints: std::cell::RefCell::new((0..blocks).map(|_| None).collect()) }
+    }
+
+    /// What is live out of block `b`.
+    pub fn live_out_of(
+        &self,
+        b: usize,
+    ) -> &LiveLanes {
+        &self.live_out[b]
     }
 
     /// What is live just before instruction `at` of block `b`. The block's

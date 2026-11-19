@@ -1,0 +1,1297 @@
+# prog	compiler	level	flags	bytes	cycles	insns	note (external results; see prog_bars.py; `bars --refresh` rebuilds; n/a rows: no number, the reason)
+bit_setclear	cc65	O1	-	655	4599	1313	
+bit_setclear	cc65	O2	-O	562	3560	1040	
+bit_setclear	cc65	O3	-Oirs	561	3512	1032	
+bit_setclear	cc65	Os	-O	562	3560	1040	
+bit_setclear	llvm-mos	O1	-O1	147	793	-	
+bit_setclear	llvm-mos	O2	-O2	147	793	-	
+bit_setclear	llvm-mos	O3	-O3	147	793	-	
+bit_setclear	llvm-mos	Os	-Os	147	793	-	
+bit_setclear	llvm-mos-lto	O1	-O1 -flto	151	805	-	
+bit_setclear	llvm-mos-lto	O2	-O2 -flto	144	789	-	
+bit_setclear	llvm-mos-lto	O3	-O3 -flto	144	789	-	
+bit_setclear	llvm-mos-lto	Os	-Os -flto	144	789	-	
+bit_setclear	sdcc	O1	-	473	2508	730	
+bit_setclear	sdcc	O2	-	473	2508	730	
+bit_setclear	sdcc	O3	--opt-code-speed	473	2508	730	
+bit_setclear	sdcc	Os	--opt-code-size	473	2508	730	
+bit_test	cc65	O1	-	564	4943	1407	
+bit_test	cc65	O2	-O	489	3943	1126	
+bit_test	cc65	O3	-Oirs	495	3860	1122	
+bit_test	cc65	Os	-O	489	3943	1126	
+bit_test	llvm-mos	O1	-O1	212	2342	-	
+bit_test	llvm-mos	O2	-O2	212	2342	-	
+bit_test	llvm-mos	O3	-O3	212	2342	-	
+bit_test	llvm-mos	Os	-Os	213	2345	-	
+bit_test	llvm-mos-lto	O1	-O1 -flto	202	2304	-	
+bit_test	llvm-mos-lto	O2	-O2 -flto	195	2288	-	
+bit_test	llvm-mos-lto	O3	-O3 -flto	195	2288	-	
+bit_test	llvm-mos-lto	Os	-Os -flto	196	2291	-	
+bit_test	sdcc	O1	-	382	2991	802	
+bit_test	sdcc	O2	-	382	2991	802	
+bit_test	sdcc	O3	--opt-code-speed	382	2991	802	
+bit_test	sdcc	Os	--opt-code-size	382	2991	802	
+bitfield_long_long	cc65	O1	-	n/a	n/a	-	n/a: i64: cc65: prog.c(30): Error: ';' expected
+bitfield_long_long	cc65	O2	-O	n/a	n/a	-	n/a: i64: cc65: prog.c(30): Error: ';' expected
+bitfield_long_long	cc65	O3	-Oirs	n/a	n/a	-	n/a: i64: cc65: prog.c(30): Error: ';' expected
+bitfield_long_long	cc65	Os	-O	n/a	n/a	-	n/a: i64: cc65: prog.c(30): Error: ';' expected
+bitfield_long_long	llvm-mos	O1	-O1	103	525	-	
+bitfield_long_long	llvm-mos	O2	-O2	103	525	-	
+bitfield_long_long	llvm-mos	O3	-O3	103	525	-	
+bitfield_long_long	llvm-mos	Os	-Os	103	525	-	
+bitfield_long_long	llvm-mos-lto	O1	-O1 -flto	107	537	-	
+bitfield_long_long	llvm-mos-lto	O2	-O2 -flto	100	521	-	
+bitfield_long_long	llvm-mos-lto	O3	-O3 -flto	100	521	-	
+bitfield_long_long	llvm-mos-lto	Os	-Os -flto	100	521	-	
+bitfield_long_long	sdcc	O1	-	n/a	n/a	-	n/a: i64: sdcc: prog.c:30: error 31: bit-field size too wide for type (max 16 bits)
+bitfield_long_long	sdcc	O2	-	n/a	n/a	-	n/a: i64: sdcc: prog.c:30: error 31: bit-field size too wide for type (max 16 bits)
+bitfield_long_long	sdcc	O3	--opt-code-speed	n/a	n/a	-	n/a: i64: sdcc: prog.c:30: error 31: bit-field size too wide for type (max 16 bits)
+bitfield_long_long	sdcc	Os	--opt-code-size	n/a	n/a	-	n/a: i64: sdcc: prog.c:30: error 31: bit-field size too wide for type (max 16 bits)
+builtin_expect	cc65	O1	-	n/a	n/a	-	n/a: builtin: cc65: prog.c(31): Error: Call to undefined function '__builtin_expect'
+builtin_expect	cc65	O2	-O	n/a	n/a	-	n/a: builtin: cc65: prog.c(31): Error: Call to undefined function '__builtin_expect'
+builtin_expect	cc65	O3	-Oirs	n/a	n/a	-	n/a: builtin: cc65: prog.c(31): Error: Call to undefined function '__builtin_expect'
+builtin_expect	cc65	Os	-O	n/a	n/a	-	n/a: builtin: cc65: prog.c(31): Error: Call to undefined function '__builtin_expect'
+builtin_expect	llvm-mos	O1	-O1	50	261	-	
+builtin_expect	llvm-mos	O2	-O2	50	261	-	
+builtin_expect	llvm-mos	O3	-O3	50	261	-	
+builtin_expect	llvm-mos	Os	-Os	50	261	-	
+builtin_expect	llvm-mos-lto	O1	-O1 -flto	54	273	-	
+builtin_expect	llvm-mos-lto	O2	-O2 -flto	47	257	-	
+builtin_expect	llvm-mos-lto	O3	-O3 -flto	47	257	-	
+builtin_expect	llvm-mos-lto	Os	-Os -flto	47	257	-	
+builtin_expect	sdcc	O1	-	n/a	n/a	-	n/a: builtin: sdcc: prog.c:31: error 101: too many parameters
+builtin_expect	sdcc	O2	-	n/a	n/a	-	n/a: builtin: sdcc: prog.c:31: error 101: too many parameters
+builtin_expect	sdcc	O3	--opt-code-speed	n/a	n/a	-	n/a: builtin: sdcc: prog.c:31: error 101: too many parameters
+builtin_expect	sdcc	Os	--opt-code-size	n/a	n/a	-	n/a: builtin: sdcc: prog.c:31: error 101: too many parameters
+builtins_table	cc65	O1	-	n/a	n/a	-	n/a: builtin: cc65: prog.c(42): Error: Call to undefined function '__builtin_unreachable'
+builtins_table	cc65	O2	-O	n/a	n/a	-	n/a: builtin: cc65: prog.c(42): Error: Call to undefined function '__builtin_unreachable'
+builtins_table	cc65	O3	-Oirs	n/a	n/a	-	n/a: builtin: cc65: prog.c(42): Error: Call to undefined function '__builtin_unreachable'
+builtins_table	cc65	Os	-O	n/a	n/a	-	n/a: builtin: cc65: prog.c(42): Error: Call to undefined function '__builtin_unreachable'
+builtins_table	llvm-mos	O1	-O1	n/a	n/a	-	n/a: builtin: fatal error: error in backend: unable to legalize instruction: G_PREFETCH %0:_(p0), 0, 3, 1 :: (load unknown-size from %ir.1, align 1) (in function: p
+builtins_table	llvm-mos	O2	-O2	n/a	n/a	-	n/a: builtin: fatal error: error in backend: unable to legalize instruction: G_PREFETCH %0:_(p0), 0, 3, 1 :: (load unknown-size from %ir.1, align 1) (in function: p
+builtins_table	llvm-mos	O3	-O3	n/a	n/a	-	n/a: builtin: fatal error: error in backend: unable to legalize instruction: G_PREFETCH %0:_(p0), 0, 3, 1 :: (load unknown-size from %ir.1, align 1) (in function: p
+builtins_table	llvm-mos	Os	-Os	n/a	n/a	-	n/a: builtin: fatal error: error in backend: unable to legalize instruction: G_PREFETCH %0:_(p0), 0, 3, 1 :: (load unknown-size from %ir.1, align 1) (in function: p
+builtins_table	llvm-mos-lto	O1	-O1 -flto	n/a	n/a	-	n/a: builtin: link: LLVM ERROR: unable to legalize instruction: G_PREFETCH %0:_(p0), 0, 3, 1 :: (load unknown-size from %ir.1, align 1) (in function: prog_main)
+builtins_table	llvm-mos-lto	O2	-O2 -flto	n/a	n/a	-	n/a: builtin: link: LLVM ERROR: unable to legalize instruction: G_PREFETCH %0:_(p0), 0, 3, 1 :: (load unknown-size from %ir.1, align 1) (in function: main)
+builtins_table	llvm-mos-lto	O3	-O3 -flto	n/a	n/a	-	n/a: builtin: link: LLVM ERROR: unable to legalize instruction: G_PREFETCH %0:_(p0), 0, 3, 1 :: (load unknown-size from %ir.1, align 1) (in function: main)
+builtins_table	llvm-mos-lto	Os	-Os -flto	n/a	n/a	-	n/a: builtin: link: LLVM ERROR: unable to legalize instruction: G_PREFETCH %0:_(p0), 0, 3, 1 :: (load unknown-size from %ir.1, align 1) (in function: main)
+builtins_table	sdcc	O1	-	n/a	n/a	-	n/a: builtin: sdcc: prog.c:43: error 101: too many parameters
+builtins_table	sdcc	O2	-	n/a	n/a	-	n/a: builtin: sdcc: prog.c:43: error 101: too many parameters
+builtins_table	sdcc	O3	--opt-code-speed	n/a	n/a	-	n/a: builtin: sdcc: prog.c:43: error 101: too many parameters
+builtins_table	sdcc	Os	--opt-code-size	n/a	n/a	-	n/a: builtin: sdcc: prog.c:43: error 101: too many parameters
+byte_multiply	cc65	O1	-	948	3504464	1009136	
+byte_multiply	cc65	O2	-O	841	3387164	980319	
+byte_multiply	cc65	O3	-Oirs	832	3293159	961134	
+byte_multiply	cc65	Os	-O	841	3387164	980319	
+byte_multiply	llvm-mos	O1	-O1	469	272576	-	
+byte_multiply	llvm-mos	O2	-O2	469	272576	-	
+byte_multiply	llvm-mos	O3	-O3	286	52112	-	
+byte_multiply	llvm-mos	Os	-Os	465	272732	-	
+byte_multiply	llvm-mos-lto	O1	-O1 -flto	473	272588	-	
+byte_multiply	llvm-mos-lto	O2	-O2 -flto	468	272574	-	
+byte_multiply	llvm-mos-lto	O3	-O3 -flto	285	52110	-	
+byte_multiply	llvm-mos-lto	Os	-Os -flto	464	272730	-	
+byte_multiply	sdcc	O1	-	603	1300451	440394	
+byte_multiply	sdcc	O2	-	603	1300451	440394	
+byte_multiply	sdcc	O3	--opt-code-speed	605	1304299	440394	
+byte_multiply	sdcc	Os	--opt-code-size	605	1304299	440394	
+byval_initializes	cc65	O1	-	n/a	n/a	-	wrong: report #1 differs
+byval_initializes	cc65	O2	-O	n/a	n/a	-	wrong: report #1 differs
+byval_initializes	cc65	O3	-Oirs	n/a	n/a	-	wrong: report #1 differs
+byval_initializes	cc65	Os	-O	n/a	n/a	-	wrong: report #1 differs
+byval_initializes	llvm-mos	O1	-O1	39	183	-	
+byval_initializes	llvm-mos	O2	-O2	39	183	-	
+byval_initializes	llvm-mos	O3	-O3	39	183	-	
+byval_initializes	llvm-mos	Os	-Os	39	183	-	
+byval_initializes	llvm-mos-lto	O1	-O1 -flto	43	195	-	
+byval_initializes	llvm-mos-lto	O2	-O2 -flto	36	179	-	
+byval_initializes	llvm-mos-lto	O3	-O3 -flto	36	179	-	
+byval_initializes	llvm-mos-lto	Os	-Os -flto	36	179	-	
+byval_initializes	sdcc	O1	-	144	2202	649	
+byval_initializes	sdcc	O2	-	144	2202	649	
+byval_initializes	sdcc	O3	--opt-code-speed	144	2202	649	
+byval_initializes	sdcc	Os	--opt-code-size	144	2202	649	
+byval_inline	cc65	O1	-	n/a	n/a	-	wrong: report #0 differs
+byval_inline	cc65	O2	-O	n/a	n/a	-	wrong: report #0 differs
+byval_inline	cc65	O3	-Oirs	n/a	n/a	-	wrong: report #0 differs
+byval_inline	cc65	Os	-O	n/a	n/a	-	wrong: report #0 differs
+byval_inline	llvm-mos	O1	-O1	533	2408	-	
+byval_inline	llvm-mos	O2	-O2	283	784	-	
+byval_inline	llvm-mos	O3	-O3	283	784	-	
+byval_inline	llvm-mos	Os	-Os	506	2350	-	
+byval_inline	llvm-mos-lto	O1	-O1 -flto	525	2372	-	
+byval_inline	llvm-mos-lto	O2	-O2 -flto	84	496	-	
+byval_inline	llvm-mos-lto	O3	-O3 -flto	84	496	-	
+byval_inline	llvm-mos-lto	Os	-Os -flto	491	2298	-	
+byval_inline	sdcc	O1	-	574	8998	2708	
+byval_inline	sdcc	O2	-	574	8998	2708	
+byval_inline	sdcc	O3	--opt-code-speed	574	8998	2708	
+byval_inline	sdcc	Os	--opt-code-size	574	8998	2708	
+byval_struct	cc65	O1	-	n/a	n/a	-	wrong: report #0 differs
+byval_struct	cc65	O2	-O	n/a	n/a	-	wrong: report #0 differs
+byval_struct	cc65	O3	-Oirs	n/a	n/a	-	wrong: report #0 differs
+byval_struct	cc65	Os	-O	n/a	n/a	-	wrong: report #0 differs
+byval_struct	llvm-mos	O1	-O1	671	8158	-	
+byval_struct	llvm-mos	O2	-O2	54	266	-	
+byval_struct	llvm-mos	O3	-O3	54	266	-	
+byval_struct	llvm-mos	Os	-Os	494	5934	-	
+byval_struct	llvm-mos-lto	O1	-O1 -flto	675	8170	-	
+byval_struct	llvm-mos-lto	O2	-O2 -flto	51	262	-	
+byval_struct	llvm-mos-lto	O3	-O3 -flto	51	262	-	
+byval_struct	llvm-mos-lto	Os	-Os -flto	493	5932	-	
+byval_struct	sdcc	O1	-	662	12855	4026	
+byval_struct	sdcc	O2	-	662	12855	4026	
+byval_struct	sdcc	O3	--opt-code-speed	662	12855	4026	
+byval_struct	sdcc	Os	--opt-code-size	662	12855	4026	
+call_keeps	cc65	O1	-	1171	98327	26195	
+call_keeps	cc65	O2	-O	1134	99957	26202	
+call_keeps	cc65	O3	-Oirs	1165	98010	26130	
+call_keeps	cc65	Os	-O	1134	99957	26202	
+call_keeps	llvm-mos	O1	-O1	1893	16211	-	
+call_keeps	llvm-mos	O2	-O2	1893	16211	-	
+call_keeps	llvm-mos	O3	-O3	1935	16252	-	
+call_keeps	llvm-mos	Os	-Os	1893	16211	-	
+call_keeps	llvm-mos-lto	O1	-O1 -flto	1615	14363	-	
+call_keeps	llvm-mos-lto	O2	-O2 -flto	1615	14363	-	
+call_keeps	llvm-mos-lto	O3	-O3 -flto	1656	14404	-	
+call_keeps	llvm-mos-lto	Os	-Os -flto	1615	14363	-	
+call_keeps	sdcc	O1	-	1800	58324	15240	
+call_keeps	sdcc	O2	-	1800	58324	15240	
+call_keeps	sdcc	O3	--opt-code-speed	1800	58324	15240	
+call_keeps	sdcc	Os	--opt-code-size	1800	58324	15240	
+compare_to_int64	cc65	O1	-	n/a	n/a	-	n/a: i64: cc65: prog.c(29): Error: Identifier expected
+compare_to_int64	cc65	O2	-O	n/a	n/a	-	n/a: i64: cc65: prog.c(29): Error: Identifier expected
+compare_to_int64	cc65	O3	-Oirs	n/a	n/a	-	n/a: i64: cc65: prog.c(29): Error: Identifier expected
+compare_to_int64	cc65	Os	-O	n/a	n/a	-	n/a: i64: cc65: prog.c(29): Error: Identifier expected
+compare_to_int64	llvm-mos	O1	-O1	1104	9993	-	
+compare_to_int64	llvm-mos	O2	-O2	43	187	-	
+compare_to_int64	llvm-mos	O3	-O3	43	187	-	
+compare_to_int64	llvm-mos	Os	-Os	1006	9175	-	
+compare_to_int64	llvm-mos-lto	O1	-O1 -flto	1108	10006	-	
+compare_to_int64	llvm-mos-lto	O2	-O2 -flto	40	183	-	
+compare_to_int64	llvm-mos-lto	O3	-O3 -flto	40	183	-	
+compare_to_int64	llvm-mos-lto	Os	-Os -flto	1003	9164	-	
+compare_to_int64	sdcc	O1	-	2823	1701921	543676	
+compare_to_int64	sdcc	O2	-	2823	1701921	543676	
+compare_to_int64	sdcc	O3	--opt-code-speed	2823	1701921	543676	
+compare_to_int64	sdcc	Os	--opt-code-size	2823	1701921	543676	
+compound_assignment_types	cc65	O1	-	n/a	n/a	-	wrong: report #0 differs
+compound_assignment_types	cc65	O2	-O	n/a	n/a	-	wrong: report #0 differs
+compound_assignment_types	cc65	O3	-Oirs	n/a	n/a	-	wrong: report #0 differs
+compound_assignment_types	cc65	Os	-O	n/a	n/a	-	wrong: report #0 differs
+compound_assignment_types	llvm-mos	O1	-O1	1865	6121	-	
+compound_assignment_types	llvm-mos	O2	-O2	1855	6109	-	
+compound_assignment_types	llvm-mos	O3	-O3	1855	6109	-	
+compound_assignment_types	llvm-mos	Os	-Os	1855	6109	-	
+compound_assignment_types	llvm-mos-lto	O1	-O1 -flto	1927	6551	-	
+compound_assignment_types	llvm-mos-lto	O2	-O2 -flto	1914	6524	-	
+compound_assignment_types	llvm-mos-lto	O3	-O3 -flto	1914	6524	-	
+compound_assignment_types	llvm-mos-lto	Os	-Os -flto	1914	6524	-	
+compound_assignment_types	sdcc	O1	-	1015	11985	3368	
+compound_assignment_types	sdcc	O2	-	1015	11985	3368	
+compound_assignment_types	sdcc	O3	--opt-code-speed	1015	11985	3368	
+compound_assignment_types	sdcc	Os	--opt-code-size	1015	11985	3368	
+constant_int_float_compare	cc65	O1	-	n/a	n/a	-	n/a: float/double: cc65: prog.c(34): Error: Incompatible types
+constant_int_float_compare	cc65	O2	-O	n/a	n/a	-	n/a: float/double: cc65: prog.c(34): Error: Incompatible types
+constant_int_float_compare	cc65	O3	-Oirs	n/a	n/a	-	n/a: float/double: cc65: prog.c(34): Error: Incompatible types
+constant_int_float_compare	cc65	Os	-O	n/a	n/a	-	n/a: float/double: cc65: prog.c(34): Error: Incompatible types
+constant_int_float_compare	llvm-mos	O1	-O1	94	515	-	
+constant_int_float_compare	llvm-mos	O2	-O2	94	515	-	
+constant_int_float_compare	llvm-mos	O3	-O3	94	515	-	
+constant_int_float_compare	llvm-mos	Os	-Os	94	515	-	
+constant_int_float_compare	llvm-mos-lto	O1	-O1 -flto	98	527	-	
+constant_int_float_compare	llvm-mos-lto	O2	-O2 -flto	91	511	-	
+constant_int_float_compare	llvm-mos-lto	O3	-O3 -flto	91	511	-	
+constant_int_float_compare	llvm-mos-lto	Os	-Os -flto	91	511	-	
+constant_int_float_compare	sdcc	O1	-	n/a	n/a	-	wrong: report #0 differs
+constant_int_float_compare	sdcc	O2	-	n/a	n/a	-	wrong: report #0 differs
+constant_int_float_compare	sdcc	O3	--opt-code-speed	n/a	n/a	-	wrong: report #0 differs
+constant_int_float_compare	sdcc	Os	--opt-code-size	n/a	n/a	-	wrong: report #0 differs
+copy_runs	cc65	O1	-	2941	545937	150370	
+copy_runs	cc65	O2	-O	2226	514509	141487	
+copy_runs	cc65	O3	-Oirs	2239	510061	141317	
+copy_runs	cc65	Os	-O	2226	514509	141487	
+copy_runs	llvm-mos	O1	-O1	2010	48393	-	
+copy_runs	llvm-mos	O2	-O2	2010	48393	-	
+copy_runs	llvm-mos	O3	-O3	2010	48393	-	
+copy_runs	llvm-mos	Os	-Os	2010	48393	-	
+copy_runs	llvm-mos-lto	O1	-O1 -flto	1811	48428	-	
+copy_runs	llvm-mos-lto	O2	-O2 -flto	1799	48045	-	
+copy_runs	llvm-mos-lto	O3	-O3 -flto	1799	48045	-	
+copy_runs	llvm-mos-lto	Os	-Os -flto	1799	48045	-	
+copy_runs	sdcc	O1	-	2027	428090	118555	
+copy_runs	sdcc	O2	-	2027	428090	118555	
+copy_runs	sdcc	O3	--opt-code-speed	2027	428090	118555	
+copy_runs	sdcc	Os	--opt-code-size	2027	428090	118555	
+data_int64	cc65	O1	-	n/a	n/a	-	n/a: i64: cc65: prog.c(28): Error: Identifier expected
+data_int64	cc65	O2	-O	n/a	n/a	-	n/a: i64: cc65: prog.c(28): Error: Identifier expected
+data_int64	cc65	O3	-Oirs	n/a	n/a	-	n/a: i64: cc65: prog.c(28): Error: Identifier expected
+data_int64	cc65	Os	-O	n/a	n/a	-	n/a: i64: cc65: prog.c(28): Error: Identifier expected
+data_int64	llvm-mos	O1	-O1	1397	5460	-	
+data_int64	llvm-mos	O2	-O2	1397	5460	-	
+data_int64	llvm-mos	O3	-O3	1397	5460	-	
+data_int64	llvm-mos	Os	-Os	1397	5460	-	
+data_int64	llvm-mos-lto	O1	-O1 -flto	1401	5472	-	
+data_int64	llvm-mos-lto	O2	-O2 -flto	60	336	-	
+data_int64	llvm-mos-lto	O3	-O3 -flto	60	336	-	
+data_int64	llvm-mos-lto	Os	-Os -flto	60	336	-	
+data_int64	sdcc	O1	-	2447	200258	65721	
+data_int64	sdcc	O2	-	2447	200258	65721	
+data_int64	sdcc	O3	--opt-code-speed	2447	200258	65721	
+data_int64	sdcc	Os	--opt-code-size	2447	200258	65721	
+div_constants_long	cc65	O1	-	17342	411195864	117245350	
+div_constants_long	cc65	O2	-O	13862	408381077	116474313	
+div_constants_long	cc65	O3	-Oirs	14071	408276786	116474087	
+div_constants_long	cc65	Os	-O	13862	408381077	116474313	
+div_constants_long	llvm-mos	O1	-O1	25665	219772382	-	
+div_constants_long	llvm-mos	O2	-O2	25419	219572680	-	
+div_constants_long	llvm-mos	O3	-O3	43331	220063450	-	
+div_constants_long	llvm-mos	Os	-Os	25126	220416718	-	
+div_constants_long	llvm-mos-lto	O1	-O1 -flto	23036	217489206	-	
+div_constants_long	llvm-mos-lto	O2	-O2 -flto	22570	218105426	-	
+div_constants_long	llvm-mos-lto	O3	-O3 -flto	34724	217674221	-	
+div_constants_long	llvm-mos-lto	Os	-Os -flto	22277	217610571	-	
+div_constants_long	sdcc	O1	-	n/a	n/a	-	n/a: other: link: ?ASlink-Warning-Paged Area ZP Length Error
+div_constants_long	sdcc	O2	-	n/a	n/a	-	n/a: other: link: ?ASlink-Warning-Paged Area ZP Length Error
+div_constants_long	sdcc	O3	--opt-code-speed	n/a	n/a	-	n/a: other: link: ?ASlink-Warning-Paged Area ZP Length Error
+div_constants_long	sdcc	Os	--opt-code-size	n/a	n/a	-	n/a: other: link: ?ASlink-Warning-Paged Area ZP Length Error
+div_constants_short	cc65	O1	-	14932	180867514	51244301	
+div_constants_short	cc65	O2	-O	11303	175559057	49928006	
+div_constants_short	cc65	O3	-Oirs	11642	174406020	49732693	
+div_constants_short	cc65	Os	-O	11303	175559057	49928006	
+div_constants_short	llvm-mos	O1	-O1	15627	66440036	-	
+div_constants_short	llvm-mos	O2	-O2	15008	65722627	-	
+div_constants_short	llvm-mos	O3	-O3	27469	66199190	-	
+div_constants_short	llvm-mos	Os	-Os	14748	65643858	-	
+div_constants_short	llvm-mos-lto	O1	-O1 -flto	13547	65618504	-	
+div_constants_short	llvm-mos-lto	O2	-O2 -flto	12914	65257432	-	
+div_constants_short	llvm-mos-lto	O3	-O3 -flto	20587	65529695	-	
+div_constants_short	llvm-mos-lto	Os	-Os -flto	12654	65170572	-	
+div_constants_short	sdcc	O1	-	n/a	n/a	-	n/a: other: link: ?ASlink-Warning-Paged Area ZP Length Error
+div_constants_short	sdcc	O2	-	n/a	n/a	-	n/a: other: link: ?ASlink-Warning-Paged Area ZP Length Error
+div_constants_short	sdcc	O3	--opt-code-speed	n/a	n/a	-	n/a: other: link: ?ASlink-Warning-Paged Area ZP Length Error
+div_constants_short	sdcc	Os	--opt-code-size	n/a	n/a	-	n/a: other: link: ?ASlink-Warning-Paged Area ZP Length Error
+div_constants_ulong	cc65	O1	-	12610	270281822	76951607	
+div_constants_ulong	cc65	O2	-O	9684	268929121	76465623	
+div_constants_ulong	cc65	O3	-Oirs	9843	272307193	76465467	
+div_constants_ulong	cc65	Os	-O	9684	268929121	76465623	
+div_constants_ulong	llvm-mos	O1	-O1	17800	131095427	-	
+div_constants_ulong	llvm-mos	O2	-O2	17762	131677935	-	
+div_constants_ulong	llvm-mos	O3	-O3	30094	130904654	-	
+div_constants_ulong	llvm-mos	Os	-Os	17559	131039353	-	
+div_constants_ulong	llvm-mos-lto	O1	-O1 -flto	15713	130271261	-	
+div_constants_ulong	llvm-mos-lto	O2	-O2 -flto	15610	130429190	-	
+div_constants_ulong	llvm-mos-lto	O3	-O3 -flto	23978	130456729	-	
+div_constants_ulong	llvm-mos-lto	Os	-Os -flto	15407	131076312	-	
+div_constants_ulong	sdcc	O1	-	n/a	n/a	-	n/a: other: link: ?ASlink-Warning-Paged Area ZP Length Error
+div_constants_ulong	sdcc	O2	-	n/a	n/a	-	n/a: other: link: ?ASlink-Warning-Paged Area ZP Length Error
+div_constants_ulong	sdcc	O3	--opt-code-speed	n/a	n/a	-	n/a: other: link: ?ASlink-Warning-Paged Area ZP Length Error
+div_constants_ulong	sdcc	Os	--opt-code-size	n/a	n/a	-	n/a: other: link: ?ASlink-Warning-Paged Area ZP Length Error
+double_against_int	cc65	O1	-	n/a	n/a	-	n/a: float/double: cc65: prog.c(32): Fatal: Floating point type is currently unsupported
+double_against_int	cc65	O2	-O	n/a	n/a	-	n/a: float/double: cc65: prog.c(32): Fatal: Floating point type is currently unsupported
+double_against_int	cc65	O3	-Oirs	n/a	n/a	-	n/a: float/double: cc65: prog.c(32): Fatal: Floating point type is currently unsupported
+double_against_int	cc65	Os	-O	n/a	n/a	-	n/a: float/double: cc65: prog.c(32): Fatal: Floating point type is currently unsupported
+double_against_int	llvm-mos	O1	-O1	72	417	-	
+double_against_int	llvm-mos	O2	-O2	72	417	-	
+double_against_int	llvm-mos	O3	-O3	72	417	-	
+double_against_int	llvm-mos	Os	-Os	72	417	-	
+double_against_int	llvm-mos-lto	O1	-O1 -flto	76	429	-	
+double_against_int	llvm-mos-lto	O2	-O2 -flto	69	413	-	
+double_against_int	llvm-mos-lto	O3	-O3 -flto	69	413	-	
+double_against_int	llvm-mos-lto	Os	-Os -flto	69	413	-	
+double_against_int	sdcc	O1	-	1513	15109	4292	32-bit double, same output
+double_against_int	sdcc	O2	-	1513	15109	4292	32-bit double, same output
+double_against_int	sdcc	O3	--opt-code-speed	1513	15109	4292	32-bit double, same output
+double_against_int	sdcc	Os	--opt-code-size	1513	15109	4292	32-bit double, same output
+double_to_int64	cc65	O1	-	n/a	n/a	-	n/a: i64+float/double: cc65: prog.c(34): Error: Identifier expected
+double_to_int64	cc65	O2	-O	n/a	n/a	-	n/a: i64+float/double: cc65: prog.c(34): Error: Identifier expected
+double_to_int64	cc65	O3	-Oirs	n/a	n/a	-	n/a: i64+float/double: cc65: prog.c(34): Error: Identifier expected
+double_to_int64	cc65	Os	-O	n/a	n/a	-	n/a: i64+float/double: cc65: prog.c(34): Error: Identifier expected
+double_to_int64	llvm-mos	O1	-O1	1166	66128	-	
+double_to_int64	llvm-mos	O2	-O2	73	355	-	
+double_to_int64	llvm-mos	O3	-O3	73	355	-	
+double_to_int64	llvm-mos	Os	-Os	73	355	-	
+double_to_int64	llvm-mos-lto	O1	-O1 -flto	1170	66148	-	
+double_to_int64	llvm-mos-lto	O2	-O2 -flto	70	351	-	
+double_to_int64	llvm-mos-lto	O3	-O3 -flto	70	351	-	
+double_to_int64	llvm-mos-lto	Os	-Os -flto	70	351	-	
+double_to_int64	sdcc	O1	-	n/a	n/a	-	n/a: i64+float/double: link: ?ASlink-Warning-Undefined Global '___fs2slonglong_PARM_1' referenced by module 'prog_src'
+double_to_int64	sdcc	O2	-	n/a	n/a	-	n/a: i64+float/double: link: ?ASlink-Warning-Undefined Global '___fs2slonglong_PARM_1' referenced by module 'prog_src'
+double_to_int64	sdcc	O3	--opt-code-speed	n/a	n/a	-	n/a: i64+float/double: link: ?ASlink-Warning-Undefined Global '___fs2slonglong_PARM_1' referenced by module 'prog_src'
+double_to_int64	sdcc	Os	--opt-code-size	n/a	n/a	-	n/a: i64+float/double: link: ?ASlink-Warning-Undefined Global '___fs2slonglong_PARM_1' referenced by module 'prog_src'
+double_to_uint64	cc65	O1	-	n/a	n/a	-	n/a: i64+float/double: cc65: prog.c(29): Error: Identifier expected
+double_to_uint64	cc65	O2	-O	n/a	n/a	-	n/a: i64+float/double: cc65: prog.c(29): Error: Identifier expected
+double_to_uint64	cc65	O3	-Oirs	n/a	n/a	-	n/a: i64+float/double: cc65: prog.c(29): Error: Identifier expected
+double_to_uint64	cc65	Os	-O	n/a	n/a	-	n/a: i64+float/double: cc65: prog.c(29): Error: Identifier expected
+double_to_uint64	llvm-mos	O1	-O1	1061	21959	-	
+double_to_uint64	llvm-mos	O2	-O2	2981	19345	-	
+double_to_uint64	llvm-mos	O3	-O3	2981	19345	-	
+double_to_uint64	llvm-mos	Os	-Os	1061	21959	-	
+double_to_uint64	llvm-mos-lto	O1	-O1 -flto	1065	21950	-	
+double_to_uint64	llvm-mos-lto	O2	-O2 -flto	3041	20182	-	
+double_to_uint64	llvm-mos-lto	O3	-O3 -flto	3041	20182	-	
+double_to_uint64	llvm-mos-lto	Os	-Os -flto	1057	22033	-	
+double_to_uint64	sdcc	O1	-	n/a	n/a	-	n/a: i64+float/double: link: ?ASlink-Warning-Undefined Global '___fs2ulonglong_PARM_1' referenced by module 'prog_src'
+double_to_uint64	sdcc	O2	-	n/a	n/a	-	n/a: i64+float/double: link: ?ASlink-Warning-Undefined Global '___fs2ulonglong_PARM_1' referenced by module 'prog_src'
+double_to_uint64	sdcc	O3	--opt-code-speed	n/a	n/a	-	n/a: i64+float/double: link: ?ASlink-Warning-Undefined Global '___fs2ulonglong_PARM_1' referenced by module 'prog_src'
+double_to_uint64	sdcc	Os	--opt-code-size	n/a	n/a	-	n/a: i64+float/double: link: ?ASlink-Warning-Undefined Global '___fs2ulonglong_PARM_1' referenced by module 'prog_src'
+extension_chain_fused	cc65	O1	-	257	2325	658	
+extension_chain_fused	cc65	O2	-O	207	1938	557	
+extension_chain_fused	cc65	O3	-Oirs	211	1803	544	
+extension_chain_fused	cc65	Os	-O	207	1938	557	
+extension_chain_fused	llvm-mos	O1	-O1	63	496	-	
+extension_chain_fused	llvm-mos	O2	-O2	152	404	-	
+extension_chain_fused	llvm-mos	O3	-O3	172	406	-	
+extension_chain_fused	llvm-mos	Os	-Os	63	496	-	
+extension_chain_fused	llvm-mos-lto	O1	-O1 -flto	144	772	-	
+extension_chain_fused	llvm-mos-lto	O2	-O2 -flto	73	362	-	
+extension_chain_fused	llvm-mos-lto	O3	-O3 -flto	73	362	-	
+extension_chain_fused	llvm-mos-lto	Os	-Os -flto	137	756	-	
+extension_chain_fused	sdcc	O1	-	94	793	252	
+extension_chain_fused	sdcc	O2	-	94	793	252	
+extension_chain_fused	sdcc	O3	--opt-code-speed	94	793	252	
+extension_chain_fused	sdcc	Os	--opt-code-size	94	793	252	
+fill_nest	cc65	O1	-	991	4287653	1235983	
+fill_nest	cc65	O2	-O	811	2554601	722102	
+fill_nest	cc65	O3	-Oirs	817	2562263	768468	
+fill_nest	cc65	Os	-O	811	2554601	722102	
+fill_nest	llvm-mos	O1	-O1	482	405773	-	
+fill_nest	llvm-mos	O2	-O2	482	405773	-	
+fill_nest	llvm-mos	O3	-O3	1902	289448	-	
+fill_nest	llvm-mos	Os	-Os	495	426517	-	
+fill_nest	llvm-mos-lto	O1	-O1 -flto	486	405785	-	
+fill_nest	llvm-mos-lto	O2	-O2 -flto	479	405769	-	
+fill_nest	llvm-mos-lto	O3	-O3 -flto	1992	306287	-	
+fill_nest	llvm-mos-lto	Os	-Os -flto	479	405769	-	
+fill_nest	sdcc	O1	-	632	750580	249161	
+fill_nest	sdcc	O2	-	632	750580	249161	
+fill_nest	sdcc	O3	--opt-code-speed	632	750580	249161	
+fill_nest	sdcc	Os	--opt-code-size	632	750580	249161	
+float_bits	cc65	O1	-	n/a	n/a	-	n/a: float/double: cc65: prog.c(38): Fatal: Floating point type is currently unsupported
+float_bits	cc65	O2	-O	n/a	n/a	-	n/a: float/double: cc65: prog.c(38): Fatal: Floating point type is currently unsupported
+float_bits	cc65	O3	-Oirs	n/a	n/a	-	n/a: float/double: cc65: prog.c(38): Fatal: Floating point type is currently unsupported
+float_bits	cc65	Os	-O	n/a	n/a	-	n/a: float/double: cc65: prog.c(38): Fatal: Floating point type is currently unsupported
+float_bits	llvm-mos	O1	-O1	114	600	-	
+float_bits	llvm-mos	O2	-O2	114	600	-	
+float_bits	llvm-mos	O3	-O3	114	600	-	
+float_bits	llvm-mos	Os	-Os	114	600	-	
+float_bits	llvm-mos-lto	O1	-O1 -flto	118	612	-	
+float_bits	llvm-mos-lto	O2	-O2 -flto	111	596	-	
+float_bits	llvm-mos-lto	O3	-O3 -flto	111	596	-	
+float_bits	llvm-mos-lto	Os	-Os -flto	111	596	-	
+float_bits	sdcc	O1	-	n/a	n/a	-	wrong: report #0 differs
+float_bits	sdcc	O2	-	n/a	n/a	-	wrong: report #0 differs
+float_bits	sdcc	O3	--opt-code-speed	n/a	n/a	-	wrong: report #0 differs
+float_bits	sdcc	Os	--opt-code-size	n/a	n/a	-	wrong: report #0 differs
+float_in_memory_loop	cc65	O1	-	n/a	n/a	-	n/a: float/double: cc65: prog.c(36): Fatal: Floating point type is currently unsupported
+float_in_memory_loop	cc65	O2	-O	n/a	n/a	-	n/a: float/double: cc65: prog.c(36): Fatal: Floating point type is currently unsupported
+float_in_memory_loop	cc65	O3	-Oirs	n/a	n/a	-	n/a: float/double: cc65: prog.c(36): Fatal: Floating point type is currently unsupported
+float_in_memory_loop	cc65	Os	-O	n/a	n/a	-	n/a: float/double: cc65: prog.c(36): Fatal: Floating point type is currently unsupported
+float_in_memory_loop	llvm-mos	O1	-O1	7123	6990636	-	
+float_in_memory_loop	llvm-mos	O2	-O2	30	107	-	
+float_in_memory_loop	llvm-mos	O3	-O3	30	107	-	
+float_in_memory_loop	llvm-mos	Os	-Os	7029	6790933	-	
+float_in_memory_loop	llvm-mos-lto	O1	-O1 -flto	7127	6905948	-	
+float_in_memory_loop	llvm-mos-lto	O2	-O2 -flto	27	103	-	
+float_in_memory_loop	llvm-mos-lto	O3	-O3 -flto	27	103	-	
+float_in_memory_loop	llvm-mos-lto	Os	-Os -flto	6993	6790834	-	
+float_in_memory_loop	sdcc	O1	-	2358	2319881	692398	32-bit double, same output
+float_in_memory_loop	sdcc	O2	-	2358	2319881	692398	32-bit double, same output
+float_in_memory_loop	sdcc	O3	--opt-code-speed	2358	2319881	692398	32-bit double, same output
+float_in_memory_loop	sdcc	Os	--opt-code-size	2358	2319881	692398	32-bit double, same output
+float_in_place_update	cc65	O1	-	n/a	n/a	-	n/a: float/double: cc65: prog.c(34): Fatal: Floating point type is currently unsupported
+float_in_place_update	cc65	O2	-O	n/a	n/a	-	n/a: float/double: cc65: prog.c(34): Fatal: Floating point type is currently unsupported
+float_in_place_update	cc65	O3	-Oirs	n/a	n/a	-	n/a: float/double: cc65: prog.c(34): Fatal: Floating point type is currently unsupported
+float_in_place_update	cc65	Os	-O	n/a	n/a	-	n/a: float/double: cc65: prog.c(34): Fatal: Floating point type is currently unsupported
+float_in_place_update	llvm-mos	O1	-O1	13556	103977	-	
+float_in_place_update	llvm-mos	O2	-O2	28	105	-	
+float_in_place_update	llvm-mos	O3	-O3	28	105	-	
+float_in_place_update	llvm-mos	Os	-Os	13556	103977	-	
+float_in_place_update	llvm-mos-lto	O1	-O1 -flto	13560	103985	-	
+float_in_place_update	llvm-mos-lto	O2	-O2 -flto	25	101	-	
+float_in_place_update	llvm-mos-lto	O3	-O3 -flto	25	101	-	
+float_in_place_update	llvm-mos-lto	Os	-Os -flto	13553	103969	-	
+float_in_place_update	sdcc	O1	-	3385	29485	8013	32-bit double, same output
+float_in_place_update	sdcc	O2	-	3385	29485	8013	32-bit double, same output
+float_in_place_update	sdcc	O3	--opt-code-speed	3385	29485	8013	32-bit double, same output
+float_in_place_update	sdcc	Os	--opt-code-size	3385	29485	8013	32-bit double, same output
+frame_address_stack_args	cc65	O1	-	1027	17093	4699	
+frame_address_stack_args	cc65	O2	-O	933	15897	4391	
+frame_address_stack_args	cc65	O3	-Oirs	1066	14469	4038	
+frame_address_stack_args	cc65	Os	-O	933	15897	4391	
+frame_address_stack_args	llvm-mos	O1	-O1	75	226	-	
+frame_address_stack_args	llvm-mos	O2	-O2	75	226	-	
+frame_address_stack_args	llvm-mos	O3	-O3	75	226	-	
+frame_address_stack_args	llvm-mos	Os	-Os	75	226	-	
+frame_address_stack_args	llvm-mos-lto	O1	-O1 -flto	71	230	-	
+frame_address_stack_args	llvm-mos-lto	O2	-O2 -flto	40	183	-	
+frame_address_stack_args	llvm-mos-lto	O3	-O3 -flto	40	183	-	
+frame_address_stack_args	llvm-mos-lto	Os	-Os -flto	40	183	-	
+frame_address_stack_args	sdcc	O1	-	878	10933	3051	
+frame_address_stack_args	sdcc	O2	-	878	10933	3051	
+frame_address_stack_args	sdcc	O3	--opt-code-speed	878	10933	3051	
+frame_address_stack_args	sdcc	Os	--opt-code-size	878	10933	3051	
+frameless	cc65	O1	-	n/a	n/a	-	n/a: other: cc65: prog.c(63): Error: Too many local variables
+frameless	cc65	O2	-O	n/a	n/a	-	n/a: other: cc65: prog.c(63): Error: Too many local variables
+frameless	cc65	O3	-Oirs	n/a	n/a	-	n/a: other: cc65: prog.c(63): Error: Too many local variables
+frameless	cc65	Os	-O	n/a	n/a	-	n/a: other: cc65: prog.c(63): Error: Too many local variables
+frameless	llvm-mos	O1	-O1	1942	45903	-	
+frameless	llvm-mos	O2	-O2	2224	43082	-	
+frameless	llvm-mos	O3	-O3	2797	42081	-	
+frameless	llvm-mos	Os	-Os	1930	46669	-	
+frameless	llvm-mos-lto	O1	-O1 -flto	1666	46266	-	
+frameless	llvm-mos-lto	O2	-O2 -flto	1908	43157	-	
+frameless	llvm-mos-lto	O3	-O3 -flto	2507	40798	-	
+frameless	llvm-mos-lto	Os	-Os -flto	1652	46005	-	
+frameless	sdcc	O1	-	n/a	n/a	-	wrong: report #4 differs
+frameless	sdcc	O2	-	n/a	n/a	-	wrong: report #4 differs
+frameless	sdcc	O3	--opt-code-speed	n/a	n/a	-	wrong: report #4 differs
+frameless	sdcc	Os	--opt-code-size	n/a	n/a	-	wrong: report #4 differs
+function_table	cc65	O1	-	249	1077	308	
+function_table	cc65	O2	-O	221	1028	296	
+function_table	cc65	O3	-Oirs	188	829	250	
+function_table	cc65	Os	-O	221	1028	296	
+function_table	llvm-mos	O1	-O1	102	367	-	
+function_table	llvm-mos	O2	-O2	66	221	-	
+function_table	llvm-mos	O3	-O3	66	221	-	
+function_table	llvm-mos	Os	-Os	85	335	-	
+function_table	llvm-mos-lto	O1	-O1 -flto	182	646	-	
+function_table	llvm-mos-lto	O2	-O2 -flto	36	179	-	
+function_table	llvm-mos-lto	O3	-O3 -flto	36	179	-	
+function_table	llvm-mos-lto	Os	-Os -flto	158	595	-	
+function_table	sdcc	O1	-	n/a	n/a	-	n/a: other: sdcc: prog.c:38: error 92: Functions called via pointers must be 'reentrant' to take this many (bytes for) argument
+function_table	sdcc	O2	-	n/a	n/a	-	n/a: other: sdcc: prog.c:38: error 92: Functions called via pointers must be 'reentrant' to take this many (bytes for) argument
+function_table	sdcc	O3	--opt-code-speed	n/a	n/a	-	n/a: other: sdcc: prog.c:38: error 92: Functions called via pointers must be 'reentrant' to take this many (bytes for) argument
+function_table	sdcc	Os	--opt-code-size	n/a	n/a	-	n/a: other: sdcc: prog.c:38: error 92: Functions called via pointers must be 'reentrant' to take this many (bytes for) argument
+huffman_decode	cc65	O1	-	2096	511776	150044	
+huffman_decode	cc65	O2	-O	1780	395039	117006	
+huffman_decode	cc65	O3	-Oirs	1915	424025	127277	
+huffman_decode	cc65	Os	-O	1780	395039	117006	
+huffman_decode	llvm-mos	O1	-O1	1596	113269	-	
+huffman_decode	llvm-mos	O2	-O2	3822	109496	-	
+huffman_decode	llvm-mos	O3	-O3	6498	101048	-	
+huffman_decode	llvm-mos	Os	-Os	1590	113397	-	
+huffman_decode	llvm-mos-lto	O1	-O1 -flto	1413	100130	-	
+huffman_decode	llvm-mos-lto	O2	-O2 -flto	3553	96395	-	
+huffman_decode	llvm-mos-lto	O3	-O3 -flto	6167	87607	-	
+huffman_decode	llvm-mos-lto	Os	-Os -flto	1381	99225	-	
+huffman_decode	sdcc	O1	-	1264	173525	53315	
+huffman_decode	sdcc	O2	-	1264	173525	53315	
+huffman_decode	sdcc	O3	--opt-code-speed	1263	173285	53267	
+huffman_decode	sdcc	Os	--opt-code-size	1257	177445	53239	
+idioms	cc65	O1	-	3876	43173723	11643531	
+idioms	cc65	O2	-O	3293	38566746	10345055	
+idioms	cc65	O3	-Oirs	3718	38289729	10518406	
+idioms	cc65	Os	-O	3293	38566746	10345055	
+idioms	llvm-mos	O1	-O1	6391	11390022	-	
+idioms	llvm-mos	O2	-O2	6767	11312483	-	
+idioms	llvm-mos	O3	-O3	9884	11180298	-	
+idioms	llvm-mos	Os	-Os	6310	11313941	-	
+idioms	llvm-mos-lto	O1	-O1 -flto	6412	11322607	-	
+idioms	llvm-mos-lto	O2	-O2 -flto	6783	11312252	-	
+idioms	llvm-mos-lto	O3	-O3 -flto	9673	11241790	-	
+idioms	llvm-mos-lto	Os	-Os -flto	6326	11311333	-	
+idioms	sdcc	O1	-	3682	35545100	9819142	
+idioms	sdcc	O2	-	3682	35545100	9819142	
+idioms	sdcc	O3	--opt-code-speed	3682	35545100	9819142	
+idioms	sdcc	Os	--opt-code-size	3682	35545100	9819142	
+idiv_loop_os	cc65	O1	-	783	3006409	888262	
+idiv_loop_os	cc65	O2	-O	704	2708028	816399	
+idiv_loop_os	cc65	O3	-Oirs	691	2637484	803890	
+idiv_loop_os	cc65	Os	-O	704	2708028	816399	
+idiv_loop_os	llvm-mos	O1	-O1	686	1110282	-	
+idiv_loop_os	llvm-mos	O2	-O2	685	1070617	-	
+idiv_loop_os	llvm-mos	O3	-O3	685	1070617	-	
+idiv_loop_os	llvm-mos	Os	-Os	704	1071131	-	
+idiv_loop_os	llvm-mos-lto	O1	-O1 -flto	670	1085963	-	
+idiv_loop_os	llvm-mos-lto	O2	-O2 -flto	683	1071614	-	
+idiv_loop_os	llvm-mos-lto	O3	-O3 -flto	683	1071614	-	
+idiv_loop_os	llvm-mos-lto	Os	-Os -flto	670	1068860	-	
+idiv_loop_os	sdcc	O1	-	n/a	n/a	-	wrong: report #0 differs
+idiv_loop_os	sdcc	O2	-	n/a	n/a	-	wrong: report #0 differs
+idiv_loop_os	sdcc	O3	--opt-code-speed	n/a	n/a	-	wrong: report #0 differs
+idiv_loop_os	sdcc	Os	--opt-code-size	n/a	n/a	-	wrong: report #0 differs
+inlined_tail_call_keeps_frame_stores	cc65	O1	-	210	658	178	
+inlined_tail_call_keeps_frame_stores	cc65	O2	-O	165	513	141	
+inlined_tail_call_keeps_frame_stores	cc65	O3	-Oirs	163	433	124	
+inlined_tail_call_keeps_frame_stores	cc65	Os	-O	165	513	141	
+inlined_tail_call_keeps_frame_stores	llvm-mos	O1	-O1	73	172	-	
+inlined_tail_call_keeps_frame_stores	llvm-mos	O2	-O2	56	150	-	
+inlined_tail_call_keeps_frame_stores	llvm-mos	O3	-O3	56	150	-	
+inlined_tail_call_keeps_frame_stores	llvm-mos	Os	-Os	56	150	-	
+inlined_tail_call_keeps_frame_stores	llvm-mos-lto	O1	-O1 -flto	71	178	-	
+inlined_tail_call_keeps_frame_stores	llvm-mos-lto	O2	-O2 -flto	51	144	-	
+inlined_tail_call_keeps_frame_stores	llvm-mos-lto	O3	-O3 -flto	51	144	-	
+inlined_tail_call_keeps_frame_stores	llvm-mos-lto	Os	-Os -flto	51	144	-	
+inlined_tail_call_keeps_frame_stores	sdcc	O1	-	79	243	69	
+inlined_tail_call_keeps_frame_stores	sdcc	O2	-	79	243	69	
+inlined_tail_call_keeps_frame_stores	sdcc	O3	--opt-code-speed	79	243	69	
+inlined_tail_call_keeps_frame_stores	sdcc	Os	--opt-code-size	79	243	69	
+int64_division	cc65	O1	-	n/a	n/a	-	n/a: i64: cc65: prog.c(29): Error: Identifier expected
+int64_division	cc65	O2	-O	n/a	n/a	-	n/a: i64: cc65: prog.c(29): Error: Identifier expected
+int64_division	cc65	O3	-Oirs	n/a	n/a	-	n/a: i64: cc65: prog.c(29): Error: Identifier expected
+int64_division	cc65	Os	-O	n/a	n/a	-	n/a: i64: cc65: prog.c(29): Error: Identifier expected
+int64_division	llvm-mos	O1	-O1	5701	924934	-	
+int64_division	llvm-mos	O2	-O2	5397	923604	-	
+int64_division	llvm-mos	O3	-O3	62	326	-	
+int64_division	llvm-mos	Os	-Os	5653	925005	-	
+int64_division	llvm-mos-lto	O1	-O1 -flto	5705	925505	-	
+int64_division	llvm-mos-lto	O2	-O2 -flto	5401	923636	-	
+int64_division	llvm-mos-lto	O3	-O3 -flto	59	322	-	
+int64_division	llvm-mos-lto	Os	-Os -flto	5649	925017	-	
+int64_division	sdcc	O1	-	5748	21947631	7205184	
+int64_division	sdcc	O2	-	5748	21947631	7205184	
+int64_division	sdcc	O3	--opt-code-speed	5748	21947631	7205184	
+int64_division	sdcc	Os	--opt-code-size	5748	21947631	7205184	
+licm_graph_callee_footprint	cc65	O1	-	650	3781073	989407	
+licm_graph_callee_footprint	cc65	O2	-O	620	3770774	986403	
+licm_graph_callee_footprint	cc65	O3	-Oirs	603	3770740	986393	
+licm_graph_callee_footprint	cc65	Os	-O	620	3770774	986403	
+licm_graph_callee_footprint	llvm-mos	O1	-O1	319	297188	-	
+licm_graph_callee_footprint	llvm-mos	O2	-O2	319	297188	-	
+licm_graph_callee_footprint	llvm-mos	O3	-O3	319	297188	-	
+licm_graph_callee_footprint	llvm-mos	Os	-Os	313	295685	-	
+licm_graph_callee_footprint	llvm-mos-lto	O1	-O1 -flto	313	279344	-	
+licm_graph_callee_footprint	llvm-mos-lto	O2	-O2 -flto	313	279344	-	
+licm_graph_callee_footprint	llvm-mos-lto	O3	-O3 -flto	313	279344	-	
+licm_graph_callee_footprint	llvm-mos-lto	Os	-Os -flto	307	277841	-	
+licm_graph_callee_footprint	sdcc	O1	-	314	2768027	717170	
+licm_graph_callee_footprint	sdcc	O2	-	314	2768027	717170	
+licm_graph_callee_footprint	sdcc	O3	--opt-code-speed	314	2768027	717170	
+licm_graph_callee_footprint	sdcc	Os	--opt-code-size	314	2768027	717170	
+local_initializers	cc65	O1	-	968	30244	7985	
+local_initializers	cc65	O2	-O	844	27681	7285	
+local_initializers	cc65	O3	-Oirs	832	27806	7386	
+local_initializers	cc65	Os	-O	844	27681	7285	
+local_initializers	llvm-mos	O1	-O1	96	451	-	
+local_initializers	llvm-mos	O2	-O2	96	451	-	
+local_initializers	llvm-mos	O3	-O3	96	451	-	
+local_initializers	llvm-mos	Os	-Os	96	451	-	
+local_initializers	llvm-mos-lto	O1	-O1 -flto	100	463	-	
+local_initializers	llvm-mos-lto	O2	-O2 -flto	93	447	-	
+local_initializers	llvm-mos-lto	O3	-O3 -flto	93	447	-	
+local_initializers	llvm-mos-lto	Os	-Os -flto	93	447	-	
+local_initializers	sdcc	O1	-	913	22737	6036	
+local_initializers	sdcc	O2	-	913	22737	6036	
+local_initializers	sdcc	O3	--opt-code-speed	913	22737	6036	
+local_initializers	sdcc	Os	--opt-code-size	913	22737	6036	
+logical_value	cc65	O1	-	820	17678	5102	
+logical_value	cc65	O2	-O	677	14830	4309	
+logical_value	cc65	O3	-Oirs	688	14629	4351	
+logical_value	cc65	Os	-O	677	14830	4309	
+logical_value	llvm-mos	O1	-O1	582	4285	-	
+logical_value	llvm-mos	O2	-O2	41	185	-	
+logical_value	llvm-mos	O3	-O3	41	185	-	
+logical_value	llvm-mos	Os	-Os	450	2737	-	
+logical_value	llvm-mos-lto	O1	-O1 -flto	586	4297	-	
+logical_value	llvm-mos-lto	O2	-O2 -flto	38	181	-	
+logical_value	llvm-mos-lto	O3	-O3 -flto	38	181	-	
+logical_value	llvm-mos-lto	Os	-Os -flto	448	2634	-	
+logical_value	sdcc	O1	-	n/a	n/a	-	wrong: report #1 differs
+logical_value	sdcc	O2	-	n/a	n/a	-	wrong: report #1 differs
+logical_value	sdcc	O3	--opt-code-speed	n/a	n/a	-	wrong: report #1 differs
+logical_value	sdcc	Os	--opt-code-size	n/a	n/a	-	wrong: report #1 differs
+long_double_constant_store	cc65	O1	-	n/a	n/a	-	n/a: float/double: cc65: prog.c(40): Error: Identifier expected
+long_double_constant_store	cc65	O2	-O	n/a	n/a	-	n/a: float/double: cc65: prog.c(40): Error: Identifier expected
+long_double_constant_store	cc65	O3	-Oirs	n/a	n/a	-	n/a: float/double: cc65: prog.c(40): Error: Identifier expected
+long_double_constant_store	cc65	Os	-O	n/a	n/a	-	n/a: float/double: cc65: prog.c(40): Error: Identifier expected
+long_double_constant_store	llvm-mos	O1	-O1	110	2764	-	
+long_double_constant_store	llvm-mos	O2	-O2	110	2764	-	
+long_double_constant_store	llvm-mos	O3	-O3	336	979	-	
+long_double_constant_store	llvm-mos	Os	-Os	110	2764	-	
+long_double_constant_store	llvm-mos-lto	O1	-O1 -flto	114	2776	-	
+long_double_constant_store	llvm-mos-lto	O2	-O2 -flto	107	2760	-	
+long_double_constant_store	llvm-mos-lto	O3	-O3 -flto	237	783	-	
+long_double_constant_store	llvm-mos-lto	Os	-Os -flto	107	2760	-	
+long_double_constant_store	sdcc	O1	-	109	6608	2411	32-bit double, same output
+long_double_constant_store	sdcc	O2	-	109	6608	2411	32-bit double, same output
+long_double_constant_store	sdcc	O3	--opt-code-speed	109	6608	2411	32-bit double, same output
+long_double_constant_store	sdcc	Os	--opt-code-size	109	6608	2411	32-bit double, same output
+loop_fusion	cc65	O1	-	1927	581805	164128	
+loop_fusion	cc65	O2	-O	1467	343306	95191	
+loop_fusion	cc65	O3	-Oirs	1871	236528	73382	
+loop_fusion	cc65	Os	-O	1467	343306	95191	
+loop_fusion	llvm-mos	O1	-O1	1799	69106	-	
+loop_fusion	llvm-mos	O2	-O2	1503	24601	-	
+loop_fusion	llvm-mos	O3	-O3	1503	24601	-	
+loop_fusion	llvm-mos	Os	-Os	2029	72820	-	
+loop_fusion	llvm-mos-lto	O1	-O1 -flto	n/a	n/a	-	n/a: other: link: ld.lld: error: section '.zp.bss' will not fit in region 'zp': overflowed by 2 bytes
+loop_fusion	llvm-mos-lto	O2	-O2 -flto	1350	23124	-	
+loop_fusion	llvm-mos-lto	O3	-O3 -flto	1350	23124	-	
+loop_fusion	llvm-mos-lto	Os	-Os -flto	n/a	n/a	-	n/a: other: link: ld.lld: error: section '.zp.bss' will not fit in region 'zp': overflowed by 2 bytes
+loop_fusion	sdcc	O1	-	1852	214809	70707	
+loop_fusion	sdcc	O2	-	1852	214809	70707	
+loop_fusion	sdcc	O3	--opt-code-speed	1852	214809	70707	
+loop_fusion	sdcc	Os	--opt-code-size	1852	214809	70707	
+loop_interchange	cc65	O1	-	2041	19926504	5543913	
+loop_interchange	cc65	O2	-O	1847	18295241	5074038	
+loop_interchange	cc65	O3	-Oirs	1937	18698061	5198165	
+loop_interchange	cc65	Os	-O	1847	18295241	5074038	
+loop_interchange	llvm-mos	O1	-O1	2038	3277915	-	
+loop_interchange	llvm-mos	O2	-O2	2038	3277915	-	
+loop_interchange	llvm-mos	O3	-O3	6603	3256470	-	
+loop_interchange	llvm-mos	Os	-Os	2032	3277255	-	
+loop_interchange	llvm-mos-lto	O1	-O1 -flto	2042	3277928	-	
+loop_interchange	llvm-mos-lto	O2	-O2 -flto	2037	3277830	-	
+loop_interchange	llvm-mos-lto	O3	-O3 -flto	6600	3257438	-	
+loop_interchange	llvm-mos-lto	Os	-Os -flto	2031	3277169	-	
+loop_interchange	sdcc	O1	-	1451	14445805	4065197	
+loop_interchange	sdcc	O2	-	1451	14445805	4065197	
+loop_interchange	sdcc	O3	--opt-code-speed	1451	14445805	4065197	
+loop_interchange	sdcc	Os	--opt-code-size	1451	14445805	4065197	
+loop_versioning	cc65	O1	-	1161	2299185	623050	
+loop_versioning	cc65	O2	-O	987	1854862	495584	
+loop_versioning	cc65	O3	-Oirs	1109	1868772	511266	
+loop_versioning	cc65	Os	-O	987	1854862	495584	
+loop_versioning	llvm-mos	O1	-O1	696	573372	-	
+loop_versioning	llvm-mos	O2	-O2	696	573372	-	
+loop_versioning	llvm-mos	O3	-O3	696	573372	-	
+loop_versioning	llvm-mos	Os	-Os	690	573170	-	
+loop_versioning	llvm-mos-lto	O1	-O1 -flto	608	573298	-	
+loop_versioning	llvm-mos-lto	O2	-O2 -flto	608	573298	-	
+loop_versioning	llvm-mos-lto	O3	-O3 -flto	608	573298	-	
+loop_versioning	llvm-mos-lto	Os	-Os -flto	602	572446	-	
+loop_versioning	sdcc	O1	-	814	1500569	411565	
+loop_versioning	sdcc	O2	-	814	1500569	411565	
+loop_versioning	sdcc	O3	--opt-code-speed	814	1500569	411565	
+loop_versioning	sdcc	Os	--opt-code-size	814	1500569	411565	
+memcpy_libcall	cc65	O1	-	n/a	n/a	-	n/a: builtin: cc65: prog.c(61): Error: Call to undefined function '__builtin_memcpy'
+memcpy_libcall	cc65	O2	-O	n/a	n/a	-	n/a: builtin: cc65: prog.c(61): Error: Call to undefined function '__builtin_memcpy'
+memcpy_libcall	cc65	O3	-Oirs	n/a	n/a	-	n/a: builtin: cc65: prog.c(61): Error: Call to undefined function '__builtin_memcpy'
+memcpy_libcall	cc65	Os	-O	n/a	n/a	-	n/a: builtin: cc65: prog.c(61): Error: Call to undefined function '__builtin_memcpy'
+memcpy_libcall	llvm-mos	O1	-O1	498	50347	-	
+memcpy_libcall	llvm-mos	O2	-O2	498	50347	-	
+memcpy_libcall	llvm-mos	O3	-O3	498	50347	-	
+memcpy_libcall	llvm-mos	Os	-Os	487	50806	-	
+memcpy_libcall	llvm-mos-lto	O1	-O1 -flto	502	50359	-	
+memcpy_libcall	llvm-mos-lto	O2	-O2 -flto	495	50677	-	
+memcpy_libcall	llvm-mos-lto	O3	-O3 -flto	495	50677	-	
+memcpy_libcall	llvm-mos-lto	Os	-Os -flto	484	50789	-	
+memcpy_libcall	sdcc	O1	-	n/a	n/a	-	n/a: builtin: sdcc: prog.c:61: error 101: too many parameters
+memcpy_libcall	sdcc	O2	-	n/a	n/a	-	n/a: builtin: sdcc: prog.c:61: error 101: too many parameters
+memcpy_libcall	sdcc	O3	--opt-code-speed	n/a	n/a	-	n/a: builtin: sdcc: prog.c:61: error 101: too many parameters
+memcpy_libcall	sdcc	Os	--opt-code-size	n/a	n/a	-	n/a: builtin: sdcc: prog.c:61: error 101: too many parameters
+memmove_overlap	cc65	O1	-	1058	163248	44312	
+memmove_overlap	cc65	O2	-O	807	136050	36591	
+memmove_overlap	cc65	O3	-Oirs	825	131472	35683	
+memmove_overlap	cc65	Os	-O	807	136050	36591	
+memmove_overlap	llvm-mos	O1	-O1	756	14233	-	
+memmove_overlap	llvm-mos	O2	-O2	3498	11469	-	
+memmove_overlap	llvm-mos	O3	-O3	3498	11469	-	
+memmove_overlap	llvm-mos	Os	-Os	756	14233	-	
+memmove_overlap	llvm-mos-lto	O1	-O1 -flto	754	14118	-	
+memmove_overlap	llvm-mos-lto	O2	-O2 -flto	3373	11326	-	
+memmove_overlap	llvm-mos-lto	O3	-O3 -flto	3373	11326	-	
+memmove_overlap	llvm-mos-lto	Os	-Os -flto	747	14133	-	
+memmove_overlap	sdcc	O1	-	591	93834	25544	
+memmove_overlap	sdcc	O2	-	591	93834	25544	
+memmove_overlap	sdcc	O3	--opt-code-speed	591	93834	25544	
+memmove_overlap	sdcc	Os	--opt-code-size	590	93853	25554	
+mul_constants	cc65	O1	-	10030	43284906	11265267	
+mul_constants	cc65	O2	-O	8372	42538270	11236931	
+mul_constants	cc65	O3	-Oirs	8564	42536022	11236290	
+mul_constants	cc65	Os	-O	8372	42538270	11236931	
+mul_constants	llvm-mos	O1	-O1	11877	13610738	-	
+mul_constants	llvm-mos	O2	-O2	11877	13610738	-	
+mul_constants	llvm-mos	O3	-O3	11877	13610738	-	
+mul_constants	llvm-mos	Os	-Os	11877	13610738	-	
+mul_constants	llvm-mos-lto	O1	-O1 -flto	9263	13604095	-	
+mul_constants	llvm-mos-lto	O2	-O2 -flto	9263	13604095	-	
+mul_constants	llvm-mos-lto	O3	-O3 -flto	9263	13604095	-	
+mul_constants	llvm-mos-lto	Os	-Os -flto	9263	13604095	-	
+mul_constants	sdcc	O1	-	n/a	n/a	-	n/a: other: link: ?ASlink-Warning-Paged Area ZP Length Error
+mul_constants	sdcc	O2	-	n/a	n/a	-	n/a: other: link: ?ASlink-Warning-Paged Area ZP Length Error
+mul_constants	sdcc	O3	--opt-code-speed	n/a	n/a	-	n/a: other: link: ?ASlink-Warning-Paged Area ZP Length Error
+mul_constants	sdcc	Os	--opt-code-size	n/a	n/a	-	n/a: other: link: ?ASlink-Warning-Paged Area ZP Length Error
+old_style_extra_args	cc65	O1	-	n/a	n/a	-	n/a: other: cc65: prog.c(41): Error: Too many arguments in function call
+old_style_extra_args	cc65	O2	-O	n/a	n/a	-	n/a: other: cc65: prog.c(41): Error: Too many arguments in function call
+old_style_extra_args	cc65	O3	-Oirs	n/a	n/a	-	n/a: other: cc65: prog.c(41): Error: Too many arguments in function call
+old_style_extra_args	cc65	Os	-O	n/a	n/a	-	n/a: other: cc65: prog.c(41): Error: Too many arguments in function call
+old_style_extra_args	llvm-mos	O1	-O1	530	1899	-	
+old_style_extra_args	llvm-mos	O2	-O2	530	1899	-	
+old_style_extra_args	llvm-mos	O3	-O3	530	1899	-	
+old_style_extra_args	llvm-mos	Os	-Os	530	1899	-	
+old_style_extra_args	llvm-mos-lto	O1	-O1 -flto	480	1832	-	
+old_style_extra_args	llvm-mos-lto	O2	-O2 -flto	328	1602	-	
+old_style_extra_args	llvm-mos-lto	O3	-O3 -flto	328	1602	-	
+old_style_extra_args	llvm-mos-lto	Os	-Os -flto	328	1602	-	
+old_style_extra_args	sdcc	O1	-	n/a	n/a	-	n/a: other: sdcc: prog.c:41: error 9: FATAL Compiler Internal Error in file 'SDCCast.c' line number '982' : Setting of re
+old_style_extra_args	sdcc	O2	-	n/a	n/a	-	n/a: other: sdcc: prog.c:41: error 9: FATAL Compiler Internal Error in file 'SDCCast.c' line number '982' : Setting of re
+old_style_extra_args	sdcc	O3	--opt-code-speed	n/a	n/a	-	n/a: other: sdcc: prog.c:41: error 9: FATAL Compiler Internal Error in file 'SDCCast.c' line number '982' : Setting of re
+old_style_extra_args	sdcc	Os	--opt-code-size	n/a	n/a	-	n/a: other: sdcc: prog.c:41: error 9: FATAL Compiler Internal Error in file 'SDCCast.c' line number '982' : Setting of re
+overflow_builtins	cc65	O1	-	n/a	n/a	-	n/a: i64+builtin: cc65: prog.c(30): Error: Identifier expected
+overflow_builtins	cc65	O2	-O	n/a	n/a	-	n/a: i64+builtin: cc65: prog.c(30): Error: Identifier expected
+overflow_builtins	cc65	O3	-Oirs	n/a	n/a	-	n/a: i64+builtin: cc65: prog.c(30): Error: Identifier expected
+overflow_builtins	cc65	Os	-O	n/a	n/a	-	n/a: i64+builtin: cc65: prog.c(30): Error: Identifier expected
+overflow_builtins	llvm-mos	O1	-O1	7441	694023	-	
+overflow_builtins	llvm-mos	O2	-O2	7441	694023	-	
+overflow_builtins	llvm-mos	O3	-O3	7441	694023	-	
+overflow_builtins	llvm-mos	Os	-Os	7441	694023	-	
+overflow_builtins	llvm-mos-lto	O1	-O1 -flto	7457	694652	-	
+overflow_builtins	llvm-mos-lto	O2	-O2 -flto	7449	693420	-	
+overflow_builtins	llvm-mos-lto	O3	-O3 -flto	7449	693420	-	
+overflow_builtins	llvm-mos-lto	Os	-Os -flto	7449	693420	-	
+overflow_builtins	sdcc	O1	-	n/a	n/a	-	n/a: i64+builtin: sdcc: prog.c:54: error 101: too many parameters
+overflow_builtins	sdcc	O2	-	n/a	n/a	-	n/a: i64+builtin: sdcc: prog.c:54: error 101: too many parameters
+overflow_builtins	sdcc	O3	--opt-code-speed	n/a	n/a	-	n/a: i64+builtin: sdcc: prog.c:54: error 101: too many parameters
+overflow_builtins	sdcc	Os	--opt-code-size	n/a	n/a	-	n/a: i64+builtin: sdcc: prog.c:54: error 101: too many parameters
+pair_return	cc65	O1	-	n/a	n/a	-	n/a: i64: cc65: prog.c(27): Error: Identifier expected
+pair_return	cc65	O2	-O	n/a	n/a	-	n/a: i64: cc65: prog.c(27): Error: Identifier expected
+pair_return	cc65	O3	-Oirs	n/a	n/a	-	n/a: i64: cc65: prog.c(27): Error: Identifier expected
+pair_return	cc65	Os	-O	n/a	n/a	-	n/a: i64: cc65: prog.c(27): Error: Identifier expected
+pair_return	llvm-mos	O1	-O1	24	158	-	
+pair_return	llvm-mos	O2	-O2	24	158	-	
+pair_return	llvm-mos	O3	-O3	24	158	-	
+pair_return	llvm-mos	Os	-Os	24	158	-	
+pair_return	llvm-mos-lto	O1	-O1 -flto	28	170	-	
+pair_return	llvm-mos-lto	O2	-O2 -flto	21	154	-	
+pair_return	llvm-mos-lto	O3	-O3 -flto	21	154	-	
+pair_return	llvm-mos-lto	Os	-Os -flto	21	154	-	
+pair_return	sdcc	O1	-	972	2943	967	
+pair_return	sdcc	O2	-	972	2943	967	
+pair_return	sdcc	O3	--opt-code-speed	972	2943	967	
+pair_return	sdcc	Os	--opt-code-size	972	2943	967	
+pattern_fill	cc65	O1	-	1126	580950	166629	
+pattern_fill	cc65	O2	-O	903	464358	131602	
+pattern_fill	cc65	O3	-Oirs	953	404241	119516	
+pattern_fill	cc65	Os	-O	903	464358	131602	
+pattern_fill	llvm-mos	O1	-O1	693	165410	-	
+pattern_fill	llvm-mos	O2	-O2	693	165410	-	
+pattern_fill	llvm-mos	O3	-O3	693	165410	-	
+pattern_fill	llvm-mos	Os	-Os	681	164716	-	
+pattern_fill	llvm-mos-lto	O1	-O1 -flto	771	165549	-	
+pattern_fill	llvm-mos-lto	O2	-O2 -flto	766	165268	-	
+pattern_fill	llvm-mos-lto	O3	-O3 -flto	766	165268	-	
+pattern_fill	llvm-mos-lto	Os	-Os -flto	754	164883	-	
+pattern_fill	sdcc	O1	-	720	190015	61512	
+pattern_fill	sdcc	O2	-	720	190015	61512	
+pattern_fill	sdcc	O3	--opt-code-speed	720	190015	61512	
+pattern_fill	sdcc	Os	--opt-code-size	720	190015	61512	
+phi_slot_unknown_arm	cc65	O1	-	1310	5702233	1572179	
+phi_slot_unknown_arm	cc65	O2	-O	1142	5140127	1424709	
+phi_slot_unknown_arm	cc65	O3	-Oirs	1245	4648921	1337556	
+phi_slot_unknown_arm	cc65	Os	-O	1142	5140127	1424709	
+phi_slot_unknown_arm	llvm-mos	O1	-O1	1327	1754653	-	
+phi_slot_unknown_arm	llvm-mos	O2	-O2	1301	1332492	-	
+phi_slot_unknown_arm	llvm-mos	O3	-O3	1316	1334672	-	
+phi_slot_unknown_arm	llvm-mos	Os	-Os	1289	1311429	-	
+phi_slot_unknown_arm	llvm-mos-lto	O1	-O1 -flto	1403	1753027	-	
+phi_slot_unknown_arm	llvm-mos-lto	O2	-O2 -flto	1369	1330601	-	
+phi_slot_unknown_arm	llvm-mos-lto	O3	-O3 -flto	1384	1330697	-	
+phi_slot_unknown_arm	llvm-mos-lto	Os	-Os -flto	1357	1309473	-	
+phi_slot_unknown_arm	sdcc	O1	-	n/a	n/a	-	wrong: report #0 differs
+phi_slot_unknown_arm	sdcc	O2	-	n/a	n/a	-	wrong: report #0 differs
+phi_slot_unknown_arm	sdcc	O3	--opt-code-speed	n/a	n/a	-	wrong: report #0 differs
+phi_slot_unknown_arm	sdcc	Os	--opt-code-size	n/a	n/a	-	wrong: report #0 differs
+predefined_macros	cc65	O1	-	n/a	n/a	-	n/a: i64+float/double: cc65: prog.c(33): Error: Identifier expected
+predefined_macros	cc65	O2	-O	n/a	n/a	-	n/a: i64+float/double: cc65: prog.c(33): Error: Identifier expected
+predefined_macros	cc65	O3	-Oirs	n/a	n/a	-	n/a: i64+float/double: cc65: prog.c(33): Error: Identifier expected
+predefined_macros	cc65	Os	-O	n/a	n/a	-	n/a: i64+float/double: cc65: prog.c(33): Error: Identifier expected
+predefined_macros	llvm-mos	O1	-O1	72	417	-	
+predefined_macros	llvm-mos	O2	-O2	72	417	-	
+predefined_macros	llvm-mos	O3	-O3	72	417	-	
+predefined_macros	llvm-mos	Os	-Os	72	417	-	
+predefined_macros	llvm-mos-lto	O1	-O1 -flto	76	429	-	
+predefined_macros	llvm-mos-lto	O2	-O2 -flto	69	413	-	
+predefined_macros	llvm-mos-lto	O3	-O3 -flto	69	413	-	
+predefined_macros	llvm-mos-lto	Os	-Os -flto	69	413	-	
+predefined_macros	sdcc	O1	-	n/a	n/a	-	wrong: report #3 differs
+predefined_macros	sdcc	O2	-	n/a	n/a	-	wrong: report #3 differs
+predefined_macros	sdcc	O3	--opt-code-speed	n/a	n/a	-	wrong: report #3 differs
+predefined_macros	sdcc	Os	--opt-code-size	n/a	n/a	-	wrong: report #3 differs
+recdeep	cc65	O1	-	n/a	n/a	-	wrong: report #126 differs
+recdeep	cc65	O2	-O	n/a	n/a	-	wrong: report #126 differs
+recdeep	cc65	O3	-Oirs	n/a	n/a	-	wrong: report #126 differs
+recdeep	cc65	Os	-O	n/a	n/a	-	wrong: report #126 differs
+recdeep	llvm-mos	O1	-O1	1481	7409127	-	
+recdeep	llvm-mos	O2	-O2	1363	7683972	-	
+recdeep	llvm-mos	O3	-O3	1363	7683972	-	
+recdeep	llvm-mos	Os	-Os	1348	7716328	-	
+recdeep	llvm-mos-lto	O1	-O1 -flto	1321	7396877	-	
+recdeep	llvm-mos-lto	O2	-O2 -flto	1360	7716354	-	
+recdeep	llvm-mos-lto	O3	-O3 -flto	1360	7716354	-	
+recdeep	llvm-mos-lto	Os	-Os -flto	1345	7716324	-	
+recdeep	sdcc	O1	-	n/a	n/a	-	n/a: no halt (sim65 cycle cap or 120 s)
+recdeep	sdcc	O2	-	n/a	n/a	-	n/a: no halt (sim65 cycle cap or 120 s)
+recdeep	sdcc	O3	--opt-code-speed	n/a	n/a	-	n/a: no halt (sim65 cycle cap or 120 s)
+recdeep	sdcc	Os	--opt-code-size	n/a	n/a	-	n/a: no halt (sim65 cycle cap or 120 s)
+recmany_o1	cc65	O1	-	n/a	n/a	-	wrong: report #126 differs
+recmany_o1	cc65	O2	-O	n/a	n/a	-	wrong: report #126 differs
+recmany_o1	cc65	O3	-Oirs	n/a	n/a	-	wrong: report #126 differs
+recmany_o1	cc65	Os	-O	n/a	n/a	-	wrong: report #126 differs
+recmany_o1	llvm-mos	O1	-O1	1481	7409127	-	
+recmany_o1	llvm-mos	O2	-O2	1363	7683972	-	
+recmany_o1	llvm-mos	O3	-O3	1363	7683972	-	
+recmany_o1	llvm-mos	Os	-Os	1348	7716328	-	
+recmany_o1	llvm-mos-lto	O1	-O1 -flto	1321	7396877	-	
+recmany_o1	llvm-mos-lto	O2	-O2 -flto	1360	7716354	-	
+recmany_o1	llvm-mos-lto	O3	-O3 -flto	1360	7716354	-	
+recmany_o1	llvm-mos-lto	Os	-Os -flto	1345	7716324	-	
+recmany_o1	sdcc	O1	-	n/a	n/a	-	n/a: no halt (sim65 cycle cap or 120 s)
+recmany_o1	sdcc	O2	-	n/a	n/a	-	n/a: no halt (sim65 cycle cap or 120 s)
+recmany_o1	sdcc	O3	--opt-code-speed	n/a	n/a	-	n/a: no halt (sim65 cycle cap or 120 s)
+recmany_o1	sdcc	Os	--opt-code-size	n/a	n/a	-	n/a: no halt (sim65 cycle cap or 120 s)
+register_upper_half	cc65	O1	-	630	21835	6100	
+register_upper_half	cc65	O2	-O	591	21663	6062	
+register_upper_half	cc65	O3	-Oirs	589	21308	5998	
+register_upper_half	cc65	Os	-O	591	21663	6062	
+register_upper_half	llvm-mos	O1	-O1	567	7874	-	
+register_upper_half	llvm-mos	O2	-O2	567	7874	-	
+register_upper_half	llvm-mos	O3	-O3	567	7874	-	
+register_upper_half	llvm-mos	Os	-Os	555	7694	-	
+register_upper_half	llvm-mos-lto	O1	-O1 -flto	571	7886	-	
+register_upper_half	llvm-mos-lto	O2	-O2 -flto	557	7634	-	
+register_upper_half	llvm-mos-lto	O3	-O3 -flto	557	7634	-	
+register_upper_half	llvm-mos-lto	Os	-Os -flto	557	7670	-	
+register_upper_half	sdcc	O1	-	n/a	n/a	-	wrong: report #0 differs
+register_upper_half	sdcc	O2	-	n/a	n/a	-	wrong: report #0 differs
+register_upper_half	sdcc	O3	--opt-code-speed	n/a	n/a	-	wrong: report #0 differs
+register_upper_half	sdcc	Os	--opt-code-size	n/a	n/a	-	wrong: report #0 differs
+rep_count	cc65	O1	-	886	1417742	430910	
+rep_count	cc65	O2	-O	673	1041905	319213	
+rep_count	cc65	O3	-Oirs	687	991842	310738	
+rep_count	cc65	Os	-O	673	1041905	319213	
+rep_count	llvm-mos	O1	-O1	294	92236	-	
+rep_count	llvm-mos	O2	-O2	1260	86947	-	
+rep_count	llvm-mos	O3	-O3	2719	91056	-	
+rep_count	llvm-mos	Os	-Os	271	92186	-	
+rep_count	llvm-mos-lto	O1	-O1 -flto	298	93128	-	
+rep_count	llvm-mos-lto	O2	-O2 -flto	1253	86956	-	
+rep_count	llvm-mos-lto	O3	-O3 -flto	2606	88502	-	
+rep_count	llvm-mos-lto	Os	-Os -flto	291	92207	-	
+rep_count	sdcc	O1	-	419	183679	62554	
+rep_count	sdcc	O2	-	419	183679	62554	
+rep_count	sdcc	O3	--opt-code-speed	419	183679	62554	
+rep_count	sdcc	Os	--opt-code-size	419	183679	62554	
+sat_builtins	cc65	O1	-	n/a	n/a	-	n/a: i64+builtin: cc65: prog.c(30): Error: Identifier expected
+sat_builtins	cc65	O2	-O	n/a	n/a	-	n/a: i64+builtin: cc65: prog.c(30): Error: Identifier expected
+sat_builtins	cc65	O3	-Oirs	n/a	n/a	-	n/a: i64+builtin: cc65: prog.c(30): Error: Identifier expected
+sat_builtins	cc65	Os	-O	n/a	n/a	-	n/a: i64+builtin: cc65: prog.c(30): Error: Identifier expected
+sat_builtins	llvm-mos	O1	-O1	2085	28963	-	
+sat_builtins	llvm-mos	O2	-O2	2085	28963	-	
+sat_builtins	llvm-mos	O3	-O3	2085	28963	-	
+sat_builtins	llvm-mos	Os	-Os	2093	28981	-	
+sat_builtins	llvm-mos-lto	O1	-O1 -flto	2137	30239	-	
+sat_builtins	llvm-mos-lto	O2	-O2 -flto	2129	30226	-	
+sat_builtins	llvm-mos-lto	O3	-O3 -flto	2129	30226	-	
+sat_builtins	llvm-mos-lto	Os	-Os -flto	2137	30243	-	
+sat_builtins	sdcc	O1	-	n/a	n/a	-	n/a: i64+builtin: sdcc: prog.c:50: error 101: too many parameters
+sat_builtins	sdcc	O2	-	n/a	n/a	-	n/a: i64+builtin: sdcc: prog.c:50: error 101: too many parameters
+sat_builtins	sdcc	O3	--opt-code-speed	n/a	n/a	-	n/a: i64+builtin: sdcc: prog.c:50: error 101: too many parameters
+sat_builtins	sdcc	Os	--opt-code-size	n/a	n/a	-	n/a: i64+builtin: sdcc: prog.c:50: error 101: too many parameters
+shift_int64_masked_amount	cc65	O1	-	n/a	n/a	-	n/a: i64: cc65: prog.c(29): Error: Identifier expected
+shift_int64_masked_amount	cc65	O2	-O	n/a	n/a	-	n/a: i64: cc65: prog.c(29): Error: Identifier expected
+shift_int64_masked_amount	cc65	O3	-Oirs	n/a	n/a	-	n/a: i64: cc65: prog.c(29): Error: Identifier expected
+shift_int64_masked_amount	cc65	Os	-O	n/a	n/a	-	n/a: i64: cc65: prog.c(29): Error: Identifier expected
+shift_int64_masked_amount	llvm-mos	O1	-O1	1373	933006	-	
+shift_int64_masked_amount	llvm-mos	O2	-O2	2294	519265	-	
+shift_int64_masked_amount	llvm-mos	O3	-O3	2294	519265	-	
+shift_int64_masked_amount	llvm-mos	Os	-Os	1373	933006	-	
+shift_int64_masked_amount	llvm-mos-lto	O1	-O1 -flto	1377	933018	-	
+shift_int64_masked_amount	llvm-mos-lto	O2	-O2 -flto	46	243	-	
+shift_int64_masked_amount	llvm-mos-lto	O3	-O3 -flto	46	243	-	
+shift_int64_masked_amount	llvm-mos-lto	Os	-Os -flto	1369	933004	-	
+shift_int64_masked_amount	sdcc	O1	-	2015	5947541	1817140	
+shift_int64_masked_amount	sdcc	O2	-	2015	5947541	1817140	
+shift_int64_masked_amount	sdcc	O3	--opt-code-speed	2015	5947541	1817140	
+shift_int64_masked_amount	sdcc	Os	--opt-code-size	2015	5947541	1817140	
+shift_int64_variable	cc65	O1	-	n/a	n/a	-	n/a: i64: cc65: prog.c(29): Error: Identifier expected
+shift_int64_variable	cc65	O2	-O	n/a	n/a	-	n/a: i64: cc65: prog.c(29): Error: Identifier expected
+shift_int64_variable	cc65	O3	-Oirs	n/a	n/a	-	n/a: i64: cc65: prog.c(29): Error: Identifier expected
+shift_int64_variable	cc65	Os	-O	n/a	n/a	-	n/a: i64: cc65: prog.c(29): Error: Identifier expected
+shift_int64_variable	llvm-mos	O1	-O1	1349	1462767	-	
+shift_int64_variable	llvm-mos	O2	-O2	2517	1039675	-	
+shift_int64_variable	llvm-mos	O3	-O3	2517	1039675	-	
+shift_int64_variable	llvm-mos	Os	-Os	1349	1462767	-	
+shift_int64_variable	llvm-mos-lto	O1	-O1 -flto	1353	1462779	-	
+shift_int64_variable	llvm-mos-lto	O2	-O2 -flto	61	324	-	
+shift_int64_variable	llvm-mos-lto	O3	-O3 -flto	61	324	-	
+shift_int64_variable	llvm-mos-lto	Os	-Os -flto	1345	1462765	-	
+shift_int64_variable	sdcc	O1	-	n/a	n/a	-	wrong: report #1 differs
+shift_int64_variable	sdcc	O2	-	n/a	n/a	-	wrong: report #1 differs
+shift_int64_variable	sdcc	O3	--opt-code-speed	n/a	n/a	-	wrong: report #1 differs
+shift_int64_variable	sdcc	Os	--opt-code-size	n/a	n/a	-	wrong: report #1 differs
+shrink_wrapped_frame	cc65	O1	-	1027	213595	57146	
+shrink_wrapped_frame	cc65	O2	-O	939	212966	56970	
+shrink_wrapped_frame	cc65	O3	-Oirs	957	212452	56848	
+shrink_wrapped_frame	cc65	Os	-O	939	212966	56970	
+shrink_wrapped_frame	llvm-mos	O1	-O1	603	11824	-	
+shrink_wrapped_frame	llvm-mos	O2	-O2	54	266	-	
+shrink_wrapped_frame	llvm-mos	O3	-O3	54	266	-	
+shrink_wrapped_frame	llvm-mos	Os	-Os	632	15497	-	
+shrink_wrapped_frame	llvm-mos-lto	O1	-O1 -flto	613	12167	-	
+shrink_wrapped_frame	llvm-mos-lto	O2	-O2 -flto	51	262	-	
+shrink_wrapped_frame	llvm-mos-lto	O3	-O3 -flto	51	262	-	
+shrink_wrapped_frame	llvm-mos-lto	Os	-Os -flto	629	15493	-	
+shrink_wrapped_frame	sdcc	O1	-	n/a	n/a	-	wrong: report #2 differs
+shrink_wrapped_frame	sdcc	O2	-	n/a	n/a	-	wrong: report #2 differs
+shrink_wrapped_frame	sdcc	O3	--opt-code-speed	n/a	n/a	-	wrong: report #2 differs
+shrink_wrapped_frame	sdcc	Os	--opt-code-size	n/a	n/a	-	wrong: report #2 differs
+shuttle_value	cc65	O1	-	n/a	n/a	-	n/a: i64: cc65: prog.c(31): Error: Identifier expected
+shuttle_value	cc65	O2	-O	n/a	n/a	-	n/a: i64: cc65: prog.c(31): Error: Identifier expected
+shuttle_value	cc65	O3	-Oirs	n/a	n/a	-	n/a: i64: cc65: prog.c(31): Error: Identifier expected
+shuttle_value	cc65	Os	-O	n/a	n/a	-	n/a: i64: cc65: prog.c(31): Error: Identifier expected
+shuttle_value	llvm-mos	O1	-O1	145	713	-	
+shuttle_value	llvm-mos	O2	-O2	145	713	-	
+shuttle_value	llvm-mos	O3	-O3	145	713	-	
+shuttle_value	llvm-mos	Os	-Os	145	713	-	
+shuttle_value	llvm-mos-lto	O1	-O1 -flto	149	725	-	
+shuttle_value	llvm-mos-lto	O2	-O2 -flto	142	705	-	
+shuttle_value	llvm-mos-lto	O3	-O3 -flto	142	705	-	
+shuttle_value	llvm-mos-lto	Os	-Os -flto	142	705	-	
+shuttle_value	sdcc	O1	-	1531	10947	3508	
+shuttle_value	sdcc	O2	-	1531	10947	3508	
+shuttle_value	sdcc	O3	--opt-code-speed	1531	10947	3508	
+shuttle_value	sdcc	Os	--opt-code-size	1531	10947	3508	
+sibling_call_callees	cc65	O1	-	182	744	207	
+sibling_call_callees	cc65	O2	-O	109	512	152	
+sibling_call_callees	cc65	O3	-Oirs	109	512	152	
+sibling_call_callees	cc65	Os	-O	109	512	152	
+sibling_call_callees	llvm-mos	O1	-O1	73	249	-	
+sibling_call_callees	llvm-mos	O2	-O2	73	249	-	
+sibling_call_callees	llvm-mos	O3	-O3	73	249	-	
+sibling_call_callees	llvm-mos	Os	-Os	73	249	-	
+sibling_call_callees	llvm-mos-lto	O1	-O1 -flto	77	261	-	
+sibling_call_callees	llvm-mos-lto	O2	-O2 -flto	70	245	-	
+sibling_call_callees	llvm-mos-lto	O3	-O3 -flto	70	245	-	
+sibling_call_callees	llvm-mos-lto	Os	-Os -flto	70	245	-	
+sibling_call_callees	sdcc	O1	-	86	271	79	
+sibling_call_callees	sdcc	O2	-	86	271	79	
+sibling_call_callees	sdcc	O3	--opt-code-speed	86	271	79	
+sibling_call_callees	sdcc	Os	--opt-code-size	86	271	79	
+split_loops	cc65	O1	-	1290	213886	59683	
+split_loops	cc65	O2	-O	999	144509	40928	
+split_loops	cc65	O3	-Oirs	1063	110528	33153	
+split_loops	cc65	Os	-O	999	144509	40928	
+split_loops	llvm-mos	O1	-O1	701	21299	-	
+split_loops	llvm-mos	O2	-O2	702	21484	-	
+split_loops	llvm-mos	O3	-O3	646	17124	-	
+split_loops	llvm-mos	Os	-Os	556	31029	-	
+split_loops	llvm-mos-lto	O1	-O1 -flto	697	21129	-	
+split_loops	llvm-mos-lto	O2	-O2 -flto	687	21164	-	
+split_loops	llvm-mos-lto	O3	-O3 -flto	536	16863	-	
+split_loops	llvm-mos-lto	Os	-Os -flto	489	30453	-	
+split_loops	sdcc	O1	-	945	84493	26006	
+split_loops	sdcc	O2	-	945	84493	26006	
+split_loops	sdcc	O3	--opt-code-speed	945	84493	26006	
+split_loops	sdcc	Os	--opt-code-size	945	84493	26006	
+stack_arrays_copy	cc65	O1	-	684	88492	25577	
+stack_arrays_copy	cc65	O2	-O	467	58862	17152	
+stack_arrays_copy	cc65	O3	-Oirs	510	49482	14996	
+stack_arrays_copy	cc65	Os	-O	467	58862	17152	
+stack_arrays_copy	llvm-mos	O1	-O1	218	3244	-	
+stack_arrays_copy	llvm-mos	O2	-O2	218	3244	-	
+stack_arrays_copy	llvm-mos	O3	-O3	30	107	-	
+stack_arrays_copy	llvm-mos	Os	-Os	218	3244	-	
+stack_arrays_copy	llvm-mos-lto	O1	-O1 -flto	222	3256	-	
+stack_arrays_copy	llvm-mos-lto	O2	-O2 -flto	215	3240	-	
+stack_arrays_copy	llvm-mos-lto	O3	-O3 -flto	27	103	-	
+stack_arrays_copy	llvm-mos-lto	Os	-Os -flto	215	3240	-	
+stack_arrays_copy	sdcc	O1	-	230	13419	4609	
+stack_arrays_copy	sdcc	O2	-	230	13419	4609	
+stack_arrays_copy	sdcc	O3	--opt-code-speed	230	13419	4609	
+stack_arrays_copy	sdcc	Os	--opt-code-size	230	13419	4609	
+static_inline	cc65	O1	-	n/a	n/a	-	n/a: other: cc65: prog.c(30): Error: Identifier expected
+static_inline	cc65	O2	-O	n/a	n/a	-	n/a: other: cc65: prog.c(30): Error: Identifier expected
+static_inline	cc65	O3	-Oirs	n/a	n/a	-	n/a: other: cc65: prog.c(30): Error: Identifier expected
+static_inline	cc65	Os	-O	n/a	n/a	-	n/a: other: cc65: prog.c(30): Error: Identifier expected
+static_inline	llvm-mos	O1	-O1	54	265	-	
+static_inline	llvm-mos	O2	-O2	54	265	-	
+static_inline	llvm-mos	O3	-O3	54	265	-	
+static_inline	llvm-mos	Os	-Os	54	265	-	
+static_inline	llvm-mos-lto	O1	-O1 -flto	58	277	-	
+static_inline	llvm-mos-lto	O2	-O2 -flto	51	261	-	
+static_inline	llvm-mos-lto	O3	-O3 -flto	51	261	-	
+static_inline	llvm-mos-lto	Os	-Os -flto	51	261	-	
+static_inline	sdcc	O1	-	n/a	n/a	-	n/a: other: sdcc: prog.c:31: error 1: Syntax error, declaration ignored at '__inline'
+static_inline	sdcc	O2	-	n/a	n/a	-	n/a: other: sdcc: prog.c:31: error 1: Syntax error, declaration ignored at '__inline'
+static_inline	sdcc	O3	--opt-code-speed	n/a	n/a	-	n/a: other: sdcc: prog.c:31: error 1: Syntax error, declaration ignored at '__inline'
+static_inline	sdcc	Os	--opt-code-size	n/a	n/a	-	n/a: other: sdcc: prog.c:31: error 1: Syntax error, declaration ignored at '__inline'
+static_pointers	cc65	O1	-	1152	8926	2551	
+static_pointers	cc65	O2	-O	1014	7801	2263	
+static_pointers	cc65	O3	-Oirs	1056	7261	2182	
+static_pointers	cc65	Os	-O	1014	7801	2263	
+static_pointers	llvm-mos	O1	-O1	641	2799	-	
+static_pointers	llvm-mos	O2	-O2	608	2350	-	
+static_pointers	llvm-mos	O3	-O3	608	2350	-	
+static_pointers	llvm-mos	Os	-Os	645	2800	-	
+static_pointers	llvm-mos-lto	O1	-O1 -flto	709	3666	-	
+static_pointers	llvm-mos-lto	O2	-O2 -flto	167	1118	-	
+static_pointers	llvm-mos-lto	O3	-O3 -flto	167	1118	-	
+static_pointers	llvm-mos-lto	Os	-Os -flto	522	2545	-	
+static_pointers	sdcc	O1	-	n/a	n/a	-	n/a: other: sdcc: prog.c:55: error 92: Functions called via pointers must be 'reentrant' to take this many (bytes for) argumen
+static_pointers	sdcc	O2	-	n/a	n/a	-	n/a: other: sdcc: prog.c:55: error 92: Functions called via pointers must be 'reentrant' to take this many (bytes for) argumen
+static_pointers	sdcc	O3	--opt-code-speed	n/a	n/a	-	n/a: other: sdcc: prog.c:55: error 92: Functions called via pointers must be 'reentrant' to take this many (bytes for) argumen
+static_pointers	sdcc	Os	--opt-code-size	n/a	n/a	-	n/a: other: sdcc: prog.c:55: error 92: Functions called via pointers must be 'reentrant' to take this many (bytes for) argumen
+strlen_idiom	cc65	O1	-	391	9261	2558	
+strlen_idiom	cc65	O2	-O	316	6375	1756	
+strlen_idiom	cc65	O3	-Oirs	351	5654	1591	
+strlen_idiom	cc65	Os	-O	316	6375	1756	
+strlen_idiom	llvm-mos	O1	-O1	65	346	-	
+strlen_idiom	llvm-mos	O2	-O2	65	346	-	
+strlen_idiom	llvm-mos	O3	-O3	65	346	-	
+strlen_idiom	llvm-mos	Os	-Os	65	346	-	
+strlen_idiom	llvm-mos-lto	O1	-O1 -flto	69	358	-	
+strlen_idiom	llvm-mos-lto	O2	-O2 -flto	62	342	-	
+strlen_idiom	llvm-mos-lto	O3	-O3 -flto	62	342	-	
+strlen_idiom	llvm-mos-lto	Os	-Os -flto	62	342	-	
+strlen_idiom	sdcc	O1	-	254	2157	699	
+strlen_idiom	sdcc	O2	-	254	2157	699	
+strlen_idiom	sdcc	O3	--opt-code-speed	256	1860	549	
+strlen_idiom	sdcc	Os	--opt-code-size	254	2157	699	
+struct_odd_sizes	cc65	O1	-	n/a	n/a	-	wrong: report #0 differs
+struct_odd_sizes	cc65	O2	-O	n/a	n/a	-	wrong: report #0 differs
+struct_odd_sizes	cc65	O3	-Oirs	n/a	n/a	-	wrong: report #0 differs
+struct_odd_sizes	cc65	Os	-O	n/a	n/a	-	wrong: report #0 differs
+struct_odd_sizes	llvm-mos	O1	-O1	41	185	-	
+struct_odd_sizes	llvm-mos	O2	-O2	41	185	-	
+struct_odd_sizes	llvm-mos	O3	-O3	41	185	-	
+struct_odd_sizes	llvm-mos	Os	-Os	41	185	-	
+struct_odd_sizes	llvm-mos-lto	O1	-O1 -flto	45	197	-	
+struct_odd_sizes	llvm-mos-lto	O2	-O2 -flto	38	181	-	
+struct_odd_sizes	llvm-mos-lto	O3	-O3 -flto	38	181	-	
+struct_odd_sizes	llvm-mos-lto	Os	-Os -flto	38	181	-	
+struct_odd_sizes	sdcc	O1	-	630	5376	1614	
+struct_odd_sizes	sdcc	O2	-	630	5376	1614	
+struct_odd_sizes	sdcc	O3	--opt-code-speed	630	5376	1614	
+struct_odd_sizes	sdcc	Os	--opt-code-size	630	5376	1614	
+struct_with_i64	cc65	O1	-	n/a	n/a	-	n/a: i64: cc65: prog.c(28): Error: ';' expected
+struct_with_i64	cc65	O2	-O	n/a	n/a	-	n/a: i64: cc65: prog.c(28): Error: ';' expected
+struct_with_i64	cc65	O3	-Oirs	n/a	n/a	-	n/a: i64: cc65: prog.c(28): Error: ';' expected
+struct_with_i64	cc65	Os	-O	n/a	n/a	-	n/a: i64: cc65: prog.c(28): Error: ';' expected
+struct_with_i64	llvm-mos	O1	-O1	73	359	-	
+struct_with_i64	llvm-mos	O2	-O2	73	359	-	
+struct_with_i64	llvm-mos	O3	-O3	73	359	-	
+struct_with_i64	llvm-mos	Os	-Os	73	359	-	
+struct_with_i64	llvm-mos-lto	O1	-O1 -flto	77	371	-	
+struct_with_i64	llvm-mos-lto	O2	-O2 -flto	70	355	-	
+struct_with_i64	llvm-mos-lto	O3	-O3 -flto	70	355	-	
+struct_with_i64	llvm-mos-lto	Os	-Os -flto	70	355	-	
+struct_with_i64	sdcc	O1	-	n/a	n/a	-	n/a: i64: sdcc: prog.c:35: error 54: Function cannot return aggregate. Func body ignored
+struct_with_i64	sdcc	O2	-	n/a	n/a	-	n/a: i64: sdcc: prog.c:35: error 54: Function cannot return aggregate. Func body ignored
+struct_with_i64	sdcc	O3	--opt-code-speed	n/a	n/a	-	n/a: i64: sdcc: prog.c:35: error 54: Function cannot return aggregate. Func body ignored
+struct_with_i64	sdcc	Os	--opt-code-size	n/a	n/a	-	n/a: i64: sdcc: prog.c:35: error 54: Function cannot return aggregate. Func body ignored
+switch_empty_cases	cc65	O1	-	329	3913	1088	
+switch_empty_cases	cc65	O2	-O	238	3024	852	
+switch_empty_cases	cc65	O3	-Oirs	234	2629	784	
+switch_empty_cases	cc65	Os	-O	238	3024	852	
+switch_empty_cases	llvm-mos	O1	-O1	180	982	-	
+switch_empty_cases	llvm-mos	O2	-O2	180	982	-	
+switch_empty_cases	llvm-mos	O3	-O3	180	982	-	
+switch_empty_cases	llvm-mos	Os	-Os	180	982	-	
+switch_empty_cases	llvm-mos-lto	O1	-O1 -flto	180	990	-	
+switch_empty_cases	llvm-mos-lto	O2	-O2 -flto	120	671	-	
+switch_empty_cases	llvm-mos-lto	O3	-O3 -flto	120	671	-	
+switch_empty_cases	llvm-mos-lto	Os	-Os -flto	120	671	-	
+switch_empty_cases	sdcc	O1	-	221	4090	1204	
+switch_empty_cases	sdcc	O2	-	221	4090	1204	
+switch_empty_cases	sdcc	O3	--opt-code-speed	221	4090	1204	
+switch_empty_cases	sdcc	Os	--opt-code-size	221	4090	1204	
+switch_i64	cc65	O1	-	n/a	n/a	-	n/a: i64: cc65: prog.c(30): Error: ')' expected
+switch_i64	cc65	O2	-O	n/a	n/a	-	n/a: i64: cc65: prog.c(30): Error: ')' expected
+switch_i64	cc65	O3	-Oirs	n/a	n/a	-	n/a: i64: cc65: prog.c(30): Error: ')' expected
+switch_i64	cc65	Os	-O	n/a	n/a	-	n/a: i64: cc65: prog.c(30): Error: ')' expected
+switch_i64	llvm-mos	O1	-O1	94	573	-	
+switch_i64	llvm-mos	O2	-O2	94	573	-	
+switch_i64	llvm-mos	O3	-O3	94	573	-	
+switch_i64	llvm-mos	Os	-Os	94	573	-	
+switch_i64	llvm-mos-lto	O1	-O1 -flto	98	585	-	
+switch_i64	llvm-mos-lto	O2	-O2 -flto	91	569	-	
+switch_i64	llvm-mos-lto	O3	-O3 -flto	91	569	-	
+switch_i64	llvm-mos-lto	Os	-Os -flto	91	569	-	
+switch_i64	sdcc	O1	-	n/a	n/a	-	n/a: i64: sdcc: prog.c:36: error 56: Duplicate label 'case'
+switch_i64	sdcc	O2	-	n/a	n/a	-	n/a: i64: sdcc: prog.c:36: error 56: Duplicate label 'case'
+switch_i64	sdcc	O3	--opt-code-speed	n/a	n/a	-	n/a: i64: sdcc: prog.c:36: error 56: Duplicate label 'case'
+switch_i64	sdcc	Os	--opt-code-size	n/a	n/a	-	n/a: i64: sdcc: prog.c:36: error 56: Duplicate label 'case'
+switch_jump_table	cc65	O1	-	1346	24585	6885	
+switch_jump_table	cc65	O2	-O	1162	22467	6348	
+switch_jump_table	cc65	O3	-Oirs	1184	21656	6245	
+switch_jump_table	cc65	Os	-O	1162	22467	6348	
+switch_jump_table	llvm-mos	O1	-O1	1266	7896	-	
+switch_jump_table	llvm-mos	O2	-O2	1266	7896	-	
+switch_jump_table	llvm-mos	O3	-O3	1272	7884	-	
+switch_jump_table	llvm-mos	Os	-Os	1260	7863	-	
+switch_jump_table	llvm-mos-lto	O1	-O1 -flto	1270	7917	-	
+switch_jump_table	llvm-mos-lto	O2	-O2 -flto	1263	7892	-	
+switch_jump_table	llvm-mos-lto	O3	-O3 -flto	1269	7880	-	
+switch_jump_table	llvm-mos-lto	Os	-Os -flto	1257	7859	-	
+switch_jump_table	sdcc	O1	-	1253	13034	3732	
+switch_jump_table	sdcc	O2	-	1253	13034	3732	
+switch_jump_table	sdcc	O3	--opt-code-speed	1253	13034	3732	
+switch_jump_table	sdcc	Os	--opt-code-size	1253	13034	3732	
+switch_peeled_table	cc65	O1	-	706	186270	56904	
+switch_peeled_table	cc65	O2	-O	610	170061	54113	
+switch_peeled_table	cc65	O3	-Oirs	611	163029	52982	
+switch_peeled_table	cc65	Os	-O	610	170061	54113	
+switch_peeled_table	llvm-mos	O1	-O1	252	19579	-	
+switch_peeled_table	llvm-mos	O2	-O2	293	19675	-	
+switch_peeled_table	llvm-mos	O3	-O3	298	19675	-	
+switch_peeled_table	llvm-mos	Os	-Os	410	42913	-	
+switch_peeled_table	llvm-mos-lto	O1	-O1 -flto	252	19587	-	
+switch_peeled_table	llvm-mos-lto	O2	-O2 -flto	285	19667	-	
+switch_peeled_table	llvm-mos-lto	O3	-O3 -flto	285	19667	-	
+switch_peeled_table	llvm-mos-lto	Os	-Os -flto	249	19577	-	
+switch_peeled_table	sdcc	O1	-	346	39360	12673	
+switch_peeled_table	sdcc	O2	-	346	39360	12673	
+switch_peeled_table	sdcc	O3	--opt-code-speed	346	39360	12673	
+switch_peeled_table	sdcc	Os	--opt-code-size	346	39360	12673	
+switch_table_holes	cc65	O1	-	793	661320	174122	
+switch_table_holes	cc65	O2	-O	657	645841	169424	
+switch_table_holes	cc65	O3	-Oirs	706	641892	169181	
+switch_table_holes	cc65	Os	-O	657	645841	169424	
+switch_table_holes	llvm-mos	O1	-O1	401	56436	-	
+switch_table_holes	llvm-mos	O2	-O2	401	56436	-	
+switch_table_holes	llvm-mos	O3	-O3	201	51397	-	
+switch_table_holes	llvm-mos	Os	-Os	375	56289	-	
+switch_table_holes	llvm-mos-lto	O1	-O1 -flto	408	56467	-	
+switch_table_holes	llvm-mos-lto	O2	-O2 -flto	401	56458	-	
+switch_table_holes	llvm-mos-lto	O3	-O3 -flto	198	51386	-	
+switch_table_holes	llvm-mos-lto	Os	-Os -flto	375	56297	-	
+switch_table_holes	sdcc	O1	-	533	532016	134907	
+switch_table_holes	sdcc	O2	-	533	532016	134907	
+switch_table_holes	sdcc	O3	--opt-code-speed	533	532016	134907	
+switch_table_holes	sdcc	Os	--opt-code-size	533	532016	134907	
+tail_calls	cc65	O1	-	1675	141187	37959	
+tail_calls	cc65	O2	-O	1583	139619	37642	
+tail_calls	cc65	O3	-Oirs	1647	140360	37569	
+tail_calls	cc65	Os	-O	1583	139619	37642	
+tail_calls	llvm-mos	O1	-O1	1276	15537	-	
+tail_calls	llvm-mos	O2	-O2	1575	18419	-	
+tail_calls	llvm-mos	O3	-O3	1575	18419	-	
+tail_calls	llvm-mos	Os	-Os	1515	18734	-	
+tail_calls	llvm-mos-lto	O1	-O1 -flto	1265	17578	-	
+tail_calls	llvm-mos-lto	O2	-O2 -flto	1538	22220	-	
+tail_calls	llvm-mos-lto	O3	-O3 -flto	1538	22220	-	
+tail_calls	llvm-mos-lto	Os	-Os -flto	1508	22592	-	
+tail_calls	sdcc	O1	-	2220	76407	20543	
+tail_calls	sdcc	O2	-	2220	76407	20543	
+tail_calls	sdcc	O3	--opt-code-speed	2220	76407	20543	
+tail_calls	sdcc	Os	--opt-code-size	2220	76407	20543	
+uint64_to_float	cc65	O1	-	n/a	n/a	-	n/a: i64+float/double: cc65: prog.c(31): Error: Identifier expected
+uint64_to_float	cc65	O2	-O	n/a	n/a	-	n/a: i64+float/double: cc65: prog.c(31): Error: Identifier expected
+uint64_to_float	cc65	O3	-Oirs	n/a	n/a	-	n/a: i64+float/double: cc65: prog.c(31): Error: Identifier expected
+uint64_to_float	cc65	Os	-O	n/a	n/a	-	n/a: i64+float/double: cc65: prog.c(31): Error: Identifier expected
+uint64_to_float	llvm-mos	O1	-O1	244	2054	-	
+uint64_to_float	llvm-mos	O2	-O2	244	2054	-	
+uint64_to_float	llvm-mos	O3	-O3	244	2054	-	
+uint64_to_float	llvm-mos	Os	-Os	244	2054	-	
+uint64_to_float	llvm-mos-lto	O1	-O1 -flto	240	2068	-	
+uint64_to_float	llvm-mos-lto	O2	-O2 -flto	233	2052	-	
+uint64_to_float	llvm-mos-lto	O3	-O3 -flto	233	2052	-	
+uint64_to_float	llvm-mos-lto	Os	-Os -flto	233	2052	-	
+uint64_to_float	sdcc	O1	-	n/a	n/a	-	wrong: report #0 differs
+uint64_to_float	sdcc	O2	-	n/a	n/a	-	wrong: report #0 differs
+uint64_to_float	sdcc	O3	--opt-code-speed	n/a	n/a	-	wrong: report #0 differs
+uint64_to_float	sdcc	Os	--opt-code-size	n/a	n/a	-	wrong: report #0 differs
+value_of_valueless	cc65	O1	-	n/a	n/a	-	n/a: i64: cc65: prog.c(32): Error: Identifier expected
+value_of_valueless	cc65	O2	-O	n/a	n/a	-	n/a: i64: cc65: prog.c(32): Error: Identifier expected
+value_of_valueless	cc65	O3	-Oirs	n/a	n/a	-	n/a: i64: cc65: prog.c(32): Error: Identifier expected
+value_of_valueless	cc65	Os	-O	n/a	n/a	-	n/a: i64: cc65: prog.c(32): Error: Identifier expected
+value_of_valueless	llvm-mos	O1	-O1	28	105	-	
+value_of_valueless	llvm-mos	O2	-O2	28	105	-	
+value_of_valueless	llvm-mos	O3	-O3	28	105	-	
+value_of_valueless	llvm-mos	Os	-Os	28	105	-	
+value_of_valueless	llvm-mos-lto	O1	-O1 -flto	32	117	-	
+value_of_valueless	llvm-mos-lto	O2	-O2 -flto	25	101	-	
+value_of_valueless	llvm-mos-lto	O3	-O3 -flto	25	101	-	
+value_of_valueless	llvm-mos-lto	Os	-Os -flto	25	101	-	
+value_of_valueless	sdcc	O1	-	179	701	213	
+value_of_valueless	sdcc	O2	-	179	701	213	
+value_of_valueless	sdcc	O3	--opt-code-speed	179	701	213	
+value_of_valueless	sdcc	Os	--opt-code-size	179	701	213	
+volatile_bitfield	cc65	O1	-	n/a	n/a	-	n/a: other: cc65: prog.c(30): Error: Bit-field has invalid type
+volatile_bitfield	cc65	O2	-O	n/a	n/a	-	n/a: other: cc65: prog.c(30): Error: Bit-field has invalid type
+volatile_bitfield	cc65	O3	-Oirs	n/a	n/a	-	n/a: other: cc65: prog.c(30): Error: Bit-field has invalid type
+volatile_bitfield	cc65	Os	-O	n/a	n/a	-	n/a: other: cc65: prog.c(30): Error: Bit-field has invalid type
+volatile_bitfield	llvm-mos	O1	-O1	502	946	-	
+volatile_bitfield	llvm-mos	O2	-O2	502	946	-	
+volatile_bitfield	llvm-mos	O3	-O3	502	946	-	
+volatile_bitfield	llvm-mos	Os	-Os	502	946	-	
+volatile_bitfield	llvm-mos-lto	O1	-O1 -flto	438	889	-	
+volatile_bitfield	llvm-mos-lto	O2	-O2 -flto	427	871	-	
+volatile_bitfield	llvm-mos-lto	O3	-O3 -flto	427	871	-	
+volatile_bitfield	llvm-mos-lto	Os	-Os -flto	427	871	-	
+volatile_bitfield	sdcc	O1	-	426	1179	360	
+volatile_bitfield	sdcc	O2	-	426	1179	360	
+volatile_bitfield	sdcc	O3	--opt-code-speed	426	1179	360	
+volatile_bitfield	sdcc	Os	--opt-code-size	426	1179	360	
+wide_shift_by_one	cc65	O1	-	n/a	n/a	-	n/a: other: cc65: prog.c(31): Error: Identifier expected
+wide_shift_by_one	cc65	O2	-O	n/a	n/a	-	n/a: other: cc65: prog.c(31): Error: Identifier expected
+wide_shift_by_one	cc65	O3	-Oirs	n/a	n/a	-	n/a: other: cc65: prog.c(31): Error: Identifier expected
+wide_shift_by_one	cc65	Os	-O	n/a	n/a	-	n/a: other: cc65: prog.c(31): Error: Identifier expected
+wide_shift_by_one	llvm-mos	O1	-O1	1302	204855	-	
+wide_shift_by_one	llvm-mos	O2	-O2	1302	204855	-	
+wide_shift_by_one	llvm-mos	O3	-O3	1302	204855	-	
+wide_shift_by_one	llvm-mos	Os	-Os	1302	204855	-	
+wide_shift_by_one	llvm-mos-lto	O1	-O1 -flto	1381	207787	-	
+wide_shift_by_one	llvm-mos-lto	O2	-O2 -flto	1376	207731	-	
+wide_shift_by_one	llvm-mos-lto	O3	-O3 -flto	1376	207731	-	
+wide_shift_by_one	llvm-mos-lto	Os	-Os -flto	1376	207731	-	
+wide_shift_by_one	sdcc	O1	-	2720	4356800	1273983	
+wide_shift_by_one	sdcc	O2	-	2720	4356800	1273983	
+wide_shift_by_one	sdcc	O3	--opt-code-speed	2720	4356800	1273983	
+wide_shift_by_one	sdcc	Os	--opt-code-size	2720	4356800	1273983	
+word_compare_branches	cc65	O1	-	1400	2091381	570935	
+word_compare_branches	cc65	O2	-O	1239	2078689	567303	
+word_compare_branches	cc65	O3	-Oirs	1240	2066278	565209	
+word_compare_branches	cc65	Os	-O	1239	2078689	567303	
+word_compare_branches	llvm-mos	O1	-O1	1220	427883	-	
+word_compare_branches	llvm-mos	O2	-O2	1056	395229	-	
+word_compare_branches	llvm-mos	O3	-O3	1056	395229	-	
+word_compare_branches	llvm-mos	Os	-Os	1050	395269	-	
+word_compare_branches	llvm-mos-lto	O1	-O1 -flto	1291	429485	-	
+word_compare_branches	llvm-mos-lto	O2	-O2 -flto	1122	392988	-	
+word_compare_branches	llvm-mos-lto	O3	-O3 -flto	1122	392988	-	
+word_compare_branches	llvm-mos-lto	Os	-Os -flto	1116	393022	-	
+word_compare_branches	sdcc	O1	-	1488	1001707	269878	
+word_compare_branches	sdcc	O2	-	1488	1001707	269878	
+word_compare_branches	sdcc	O3	--opt-code-speed	1488	1001707	269878	
+word_compare_branches	sdcc	Os	--opt-code-size	1488	1001707	269878	
+word_compares	cc65	O1	-	1041	1248722	340456	
+word_compares	cc65	O2	-O	977	1242601	338769	
+word_compares	cc65	O3	-Oirs	972	1230189	336675	
+word_compares	cc65	Os	-O	977	1242601	338769	
+word_compares	llvm-mos	O1	-O1	705	93233	-	
+word_compares	llvm-mos	O2	-O2	705	93233	-	
+word_compares	llvm-mos	O3	-O3	712	93310	-	
+word_compares	llvm-mos	Os	-Os	699	93176	-	
+word_compares	llvm-mos-lto	O1	-O1 -flto	780	95644	-	
+word_compares	llvm-mos-lto	O2	-O2 -flto	774	95630	-	
+word_compares	llvm-mos-lto	O3	-O3 -flto	781	95525	-	
+word_compares	llvm-mos-lto	Os	-Os -flto	768	95528	-	
+word_compares	sdcc	O1	-	951	523982	146497	
+word_compares	sdcc	O2	-	951	523982	146497	
+word_compares	sdcc	O3	--opt-code-speed	951	523982	146497	
+word_compares	sdcc	Os	--opt-code-size	951	523982	146497	
+write_through_parameter	cc65	O1	-	1049	15191	4147	
+write_through_parameter	cc65	O2	-O	856	9726	2655	
+write_through_parameter	cc65	O3	-Oirs	988	9955	2866	
+write_through_parameter	cc65	Os	-O	856	9726	2655	
+write_through_parameter	llvm-mos	O1	-O1	316	1608	-	
+write_through_parameter	llvm-mos	O2	-O2	61	339	-	
+write_through_parameter	llvm-mos	O3	-O3	61	339	-	
+write_through_parameter	llvm-mos	Os	-Os	391	1439	-	
+write_through_parameter	llvm-mos-lto	O1	-O1 -flto	320	1620	-	
+write_through_parameter	llvm-mos-lto	O2	-O2 -flto	58	335	-	
+write_through_parameter	llvm-mos-lto	O3	-O3 -flto	58	335	-	
+write_through_parameter	llvm-mos-lto	Os	-Os -flto	388	1431	-	
+write_through_parameter	sdcc	O1	-	725	4998	1448	
+write_through_parameter	sdcc	O2	-	725	4998	1448	
+write_through_parameter	sdcc	O3	--opt-code-speed	725	4998	1448	
+write_through_parameter	sdcc	Os	--opt-code-size	725	4998	1448	
+zz_f	cc65	O1	-	n/a	n/a	-	n/a: i64+float/double: cc65: prog.c(26): Error: Identifier expected
+zz_f	cc65	O2	-O	n/a	n/a	-	n/a: i64+float/double: cc65: prog.c(26): Error: Identifier expected
+zz_f	cc65	O3	-Oirs	n/a	n/a	-	n/a: i64+float/double: cc65: prog.c(26): Error: Identifier expected
+zz_f	cc65	Os	-O	n/a	n/a	-	n/a: i64+float/double: cc65: prog.c(26): Error: Identifier expected
+zz_f	llvm-mos	O1	-O1	64	347	-	
+zz_f	llvm-mos	O2	-O2	64	347	-	
+zz_f	llvm-mos	O3	-O3	64	347	-	
+zz_f	llvm-mos	Os	-Os	64	347	-	
+zz_f	llvm-mos-lto	O1	-O1 -flto	68	359	-	
+zz_f	llvm-mos-lto	O2	-O2 -flto	61	343	-	
+zz_f	llvm-mos-lto	O3	-O3 -flto	61	343	-	
+zz_f	llvm-mos-lto	Os	-Os -flto	61	343	-	
+zz_f	sdcc	O1	-	73	378	99	32-bit double, same output
+zz_f	sdcc	O2	-	73	378	99	32-bit double, same output
+zz_f	sdcc	O3	--opt-code-speed	73	378	99	32-bit double, same output
+zz_f	sdcc	Os	--opt-code-size	73	378	99	32-bit double, same output

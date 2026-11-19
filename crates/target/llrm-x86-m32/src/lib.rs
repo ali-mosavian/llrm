@@ -147,6 +147,11 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // DEVIATE ROTATION-HOT (owner x86-m32, exit 2026-11-24):
         // see `Tti::rotation_hot_at_size`.
         rotation_hot_at_size: true,
+        // DEVIATE ROTATION-HOT-BYTES (owner x87-b, exit 2026-11-24): a
+        // rotated loop's guard is a `test` and a `jcc` (4 B) and its closing
+        // branch changes form (floats -Os +5 B, x_list +8 B for a loop each):
+        // 8 B a loop, not the default 4.
+        rotation_hot_bytes_per_loop: 8,
         // DEVIATE GVN-PRE-OPTSIZE (owner x86-m32, exit 2026-12-01):
         // see `Tti::load_pre_off_at_size`.
         load_pre_off_at_size: true,
@@ -175,16 +180,18 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // over a constant table folds to nothing and stayed rolled: 64 -> 158
         // B).
         unroll_o1_analyzed_trips: Some(16),
-        // DEVIATE SD443 (owner w9, exit: a constant-argument pass after
-        // inlining, as gcc's IPA-CP): a function called directly only after
+        // DEVIATE SD443 (owner w9, exit 2026-11-24: a constant-argument pass
+        // after inlining, as gcc's IPA-CP): a function called directly only after
         // inlining keeps its address-taken parameters through the pin's one
         // IPSCCP; a second one after promotion folds them. m32
         // memory_expansion -1332 B (-O2/-O3), second_ipsccp.c -368 B.
         second_ipsccp: true,
-        // DEVIATE MUL-OS (owner x86-m32, exit 2026-11-20): at -Os the pin
-        // decomposes a constant multiply (`lea; lea`, 8 B for x * 11) where
-        // gcc keeps the 3-byte `imul`; the pin keeps it at -Oz only.
-        imul_at_size: true,
+        // DEVIATE SLOT-ADD (owner x86-m32, exit 2026-11-24):
+        // see `Tti::frame_slot_add_with_saved`.
+        frame_slot_add_with_saved: true,
+        // DEVIATE SZ2-COLD (owner x86-m32, exit 2026-11-24):
+        // see `Tti::inline_trial_cold_margin`.
+        inline_trial_cold_margin: 3,
         // DEVIATE MUL-HOT (owner x86-m32, exit 2026-11-24):
         // see `Tuning::mul_chains_hot_at_size`.
         mul_chains_hot_at_size: true,
@@ -202,6 +209,7 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // see `Tuning::multiply_clocks`.
         multiply_clocks: costs.multiply,
         loop_carried_clocks: costs.store + costs.load,
+        counter_exit_compare_clocks: costs.add,
         rep_stos_at_size: true,
         rep_movs_at_size: true,
         sdiv_pow2_stays_at_size: false,
@@ -231,7 +239,25 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         promote_va_list: true,
         branch_compare_trees_at_size: true,
         inline_never_grows_without_rate: true,
-        // DEVIATE OB1 (owner w12, exit 2026-11-27, `unrollbound.rs`): gcc
+        jump_threading_latch_trial_at_size: true,
+        switch_lookup_trial_at_size: true,
+        jump_table_size_growth_ratio: Some(300),
+        // The x87 stack has eight slots; an operation in a loop needs three of
+        // them (its two operands and its result: `CARRY_RESERVE` of
+        // `machinelicm.rs`), so five values may cross the loop. The x_matmul_f
+        // O3 clocks bar (gcc 61,005) is kept at 5 (61,150) and lost at 6
+        // (64,485): the machine count and the measured flip agree.
+        licm_float_register_limit: Some(5),
+        loop_idiom_copy_trial_at_size: true,
+        // DEVIATE BACKTHREAD-M32 (owner x87-b, exit 2026-12-15): no backward
+        // threading. A/B over the 121 m32 programs at -O1..-Os (2026-11-18):
+        // 13 differ, none by more than +0.2% clocks with it off; x_ld_matmul
+        // -O3 91,538 -> 84,103 clk and 2,155 -> 540 B (gcc 84,571, 1,356 B),
+        // queens -O3 87,134 -> 79,866 clk and 12,765 -> 9,059 B, x_matmul_f
+        // -O3 -1.3% and -535 B, x_ld_dot/fma_chain/sum/max -O2 -91..-154 B.
+        backward_threading: false,
+        // DEVIATE OB1 (owner w12, exit 2026-11-27, `unrollbound.rs`; -O3 only,
+        // as gcc grows code only there): gcc
         // completely peels a loop whose trips the object it indexes bounds
         // (max-completely-peel-times 16); the pin does not. x_matmul_f /
         // x_ld_matmul -O3: 392 B and 3 fmul against gcc's 1183 B and 14. Tried
@@ -259,10 +285,11 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         x87_zero_fill_at_size: true,
         speed_milliclocks_per_byte: per_byte,
         // DEVIATE REPFILL (owner x86-m32, exit 2026-11-27): at -Os a constant
-        // fill is `rep stos` where its stores take more bytes (gcc -Os; the pin
-        // keeps up to MaxStoresPerMemsetOptSize stores). `mov dword/word/byte
-        // [esp+d8], imm` 8/7/5 B, at an absolute address 10/9/7; `xor eax, eax`
-        // 2,
+        // fill is `rep stos` where its stores take more bytes and are more
+        // than MaxStoresPerMemsetOptSize (the pin keeps up to that many
+        // stores; lru -Os: 7 stores were `rep stosd`, 201 clk against
+        // 124). `mov dword/word/byte [esp+d8], imm` 8/7/5 B, at an absolute
+        // address 10/9/7; `xor eax, eax` 2,
         // `or eax, -1` 3, `mov eax, imm32` 5; `lea edi, [esp+d8]` (4) or `mov
         // edi, imm32` (5), `mov ecx, imm32` 5, `rep stos` 2; `fst qword` 4 / 6.
         // DEVIATE SINK-CONST-PHI (owner x86-m32, exit 2026-11-27): the pin
@@ -281,6 +308,8 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
             setup: [11, 12],
             fst: [4, 6],
         }),
+        // DEVIATE LASTCALL-COLD (owner x86-m32-b, exit 2026-12-05): see `Tuning`.
+        inline_last_call_in_cold_site: true,
         // DEVIATE SZ1 (owner x86-m32, exit 2026-11-20): D11 holds at -Os, so a
         // callee whose copies grow the code stays a call (called_once_os:
         // gcc -Os does; the pin inlines it).
@@ -296,7 +325,8 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // -Os 147 -> 39 B (clang 23), 176 m32 programs, no other cell moves.
         inline_chain_trial: true,
         // DEVIATE REC-2: gcc 15.2's `max-inline-recursive-depth` 8 and
-        // `max-inline-insns-recursive` 450, at -O2/-O3 (never -Os). Owner w10.
+        // `max-inline-insns-recursive` 450, at -O2/-O3 (never -Os). Owner w9, exit
+        // 2026-11-24.
         recursive_inlining: Some((8, 450)),
         // DEVIATE REC-2/REC-10 bar: 22 `gcc_insns` at -O2 and -O3, fitted to
         // the corpus (gcc's own is 15 at -O2, 30 at -O3, in its size units).
@@ -358,6 +388,14 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // full unroll must repay its bytes at the speed rate.
         unroll_milliclocks_per_byte: per_byte,
         sink_select_arms: true,
+        // DEVIATE SELECT-OPT-I486 (owner x86-m32-b, exit 2026-12-20; the
+        // pin's `llc` has
+        // `-disable-select-optimize` on): the i486 has no `cmov`, so a select
+        // is a branch whatever is done;
+        // `SelectOptimize` makes it at IR level, where the arm's slice is sunk
+        // into the arm. A taken `jcc` is 3 clocks, a fallen-through one 1
+        // (`timings.times`).
+        select_optimize_penalty: Some(2),
         // DEVIATE IND-PREFIX (owner x87, exit 2026-11-30): `short i` is a
         // 32-bit counter; the 486 and P5 pay a prefix on every 16-bit
         // operation (ring -O2: 67177 clk, gcc 61179).
@@ -424,6 +462,14 @@ impl llrm_target::Target for M32 {
     // leaf stays and costs a `jmp`); at -Os the constant is made in the
     // branching block and the branch goes to the join.
     fn leaf_fold_at_size(&self) -> bool {
+        true
+    }
+
+    // DEVIATE SPLIT-PARAMS (owner x86-m32-b, exit 2026-11-24): the pin has no
+    // such split; its entry copy of an argument into a kept register (RA
+    // placement) blocks ShrinkWrap. gcc's IRA splits it
+    // (`split_live_ranges_for_shrink_wrap`).
+    fn splits_params_for_shrink_wrap(&self) -> bool {
         true
     }
 
@@ -817,7 +863,9 @@ impl llrm_target::Target for M32 {
                     .and_then(|(tti, cpu)| llrm_x86::tti::X86::described(&tti, &cpu))
                     .map(|one| {
                         std::rc::Rc::new(
-                            one.with_registers(prices.registers as u32).with_tuning(tuning(&prices.operations)),
+                            one.with_registers(prices.registers as u32)
+                                .with_word_vectors(true)
+                                .with_tuning(tuning(&prices.operations)),
                         ) as std::rc::Rc<dyn llrm_mir::tti::Tti>
                     }),
                 Some(std::rc::Rc::new(llrm_x86::lowering::X86 { is_64bit: false })),
@@ -1224,7 +1272,7 @@ mod tests {
         let one = CALLING.native();
         assert_eq!(
             (one.name.as_str(), CONVENTIONS.as_slice()),
-            ("watcall32", &["watcall32", "cdecl32", "fastcc32", "sysv32"][..])
+            ("watcall32", &["watcall32", "cdecl32", "fastcc32", "localregparm32", "sysv32"][..])
         );
         assert_eq!(one.aggregate.as_ref().map(|one| one.style.as_str()), Some("hidden-pointer"));
         assert_eq!(

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/indvars.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/indvars.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/indvars.rs sha256:eb06cd776387ab32e3c5cc2553a78c37fcfb5774a1564a7b413cc35547066ac5 -->
+<!-- src: crates/opt/llrm-transforms/src/indvars.rs sha256:35ad5ca1a5c1c9f59065013702564379b0ef608170f25180f8be26029beb4ed5 -->
 
 # indvars
 
@@ -35,6 +35,9 @@ One run is these steps.
    `!=` the strict compare of a unit-stride counter that never passes its
    bound, which LFTR left.
 5. `exitsink::sunk`: final updates only exit phis read move to the exits.
+   `invariantsink::sunk` (`sinkUnusedInvariants`): a loop preheader's values
+   the loop does not read move to its exit (wasm only:
+   `Tti::sinks_unused_invariants`).
 
 ## Example
 Step 1, the widening, on `for (unsigned short i = 0; i < n; ++i) a[i] = 1`

@@ -126,6 +126,11 @@ pub struct Target {
     /// clang does not: the driver gives the flag to the backend alone.
     #[serde(default)]
     pub llc_mcmodel: bool,
+    /// The backend takes `-relocation-model=` (as the pin's llc does): the
+    /// driver states what clang's flags chose, since clang's IR carries it
+    /// only as a module flag it may leave out.
+    #[serde(default)]
+    pub llc_reloc: bool,
     /// DEVIATE UNROLL-O1 (owner x86-m32, exit 2026-11-27): `-funroll-loops` is
     /// the default at `-O1`. clang's `UnrollLoops` is off there, so it marks
     /// every loop `llvm.loop.unroll.disable` (CGLoopInfo.cpp#L820) and the
@@ -154,6 +159,14 @@ pub struct Target {
     /// at -O2. The pin's -O1 GVN does not (`GVNOptions` default, PRE off).
     #[serde(default)]
     pub pre_at_o1: bool,
+    /// DEVIATE REC-O1 (owner x86-m32-b, exit 2026-11-24):
+    /// `-fno-inline-recursive` is the default at `-O1`. gcc's recursive
+    /// inlining is `-finline-small-functions` (-O2 and up), and neither bar
+    /// compiler makes copies of a recursion at -O1; SPEED-O1 turned them on
+    /// as a side effect (bintree -O1 995 B against 292 B, no counted clock
+    /// gained).
+    #[serde(default)]
+    pub no_recursion_at_o1: bool,
     /// `-fwhole-program` is the default where the driver links one C source
     /// into an executable: nothing else names its globals, so what `main`
     /// does not reach is not in the program (LLVM's `InternalizePass` with
@@ -455,6 +468,8 @@ const LLC_FLAGS: &[&str] = &[
     "-mno-stack-is-data",
     "-mfar-bss",
     "-mno-far-bss",
+    "-mfar-bss-init",
+    "-mno-far-bss-init",
     "-mregcall-default",
     "-mc-library",
     "-mbss-begin",
@@ -468,8 +483,15 @@ const LLC_FLAGS: &[&str] = &[
     "-fwhole-program",
     "-fno-whole-program",
 ];
-const LLC_PREFIXES: &[&str] =
-    &["--isel=", "-fobject-format=", "-mcode-segment=", "-fno-inline=", "-Wstack-usage=", "-fexcess-precision="];
+const LLC_PREFIXES: &[&str] = &[
+    "--isel=",
+    "-fobject-format=",
+    "-mcode-segment=",
+    "-fno-inline=",
+    "-Wstack-usage=",
+    "-fexcess-precision=",
+    "-mstack-alignment=",
+];
 /// The passes `-f[no-]PASS` switches in the backend's pipeline.
 const BACKEND_PASSES: &[&str] = &[
     "allocation-search",
@@ -489,6 +511,7 @@ const BACKEND_PASSES: &[&str] = &[
     "tree-pre",
     "thread-jumps",
     "llrm-speed-rate",
+    "llrm-vect-very-cheap",
     "tree-switch-conversion",
     "jump-tables",
     "tree-dse",
@@ -510,6 +533,31 @@ fn backend_pass(flag: &str) -> Option<&'static str> {
 }
 
 const REFUSED: &[&str] = &["-fsanitize", "-fprofile", "-fcs-profile", "-flto", "-fmemory-profile"];
+/// The first definition, declaration or call whose parameters carry `inreg`:
+/// what `-mregparm=N` and `__attribute__((regparm(N)))` make clang write. No
+/// backend gives it registers, so an object built that way took its arguments
+/// from the stack where its callers put them in registers.
+fn register_parameter(ir: &str) -> Option<&str> {
+    ir.lines().find(|line| {
+        let line = line.trim_start();
+        (line.starts_with("define ") || line.starts_with("declare ") || line.contains(" call "))
+            && line.split(|c: char| !(c.is_alphanumeric() || c == '_')).any(|word| word == "inreg")
+    })
+}
+
+/// Whether the backend places the `inreg` arguments of this build: the 32-bit
+/// x86 System V convention does (`inreg_registers`), no other does. The last
+/// `-mabi=` of the target's backend flags and the command line is the one the
+/// backend takes.
+fn places_inreg(
+    target: &Target,
+    build: &Build,
+) -> bool {
+    let arch = target.triple.split('-').next().unwrap_or_default();
+    let abi = target.llc.iter().chain(&build.llc).rev().find(|flag| flag.starts_with("-mabi="));
+    matches!(arch, "i386" | "i486" | "i586" | "i686") && abi.is_some_and(|flag| flag == "-mabi=sysv")
+}
+
 const PASSTHROUGH: &[&str] = &["-E", "-M", "-MM", "-emit-llvm", "-fsyntax-only", "-###", "-dumpmachine"];
 
 /// The target named by `-target`/`--target=`, and the job the rest of `argv`
@@ -725,6 +773,19 @@ fn prices_bytes_at_o1(
         && !build.llc.iter().any(|flag| flag == "-fllrm-speed-rate" || flag == "-fno-llrm-speed-rate")
 }
 
+/// Whether the target's `-O1` takes `-fno-inline-recursive` as its default:
+/// unless the command line states either `-f[no-]inline-recursive`, and only
+/// where the backend takes pass switches.
+fn no_recursion_at_o1(
+    target: &Target,
+    build: &Build,
+) -> bool {
+    target.no_recursion_at_o1
+        && target.llc_passes
+        && build.level == "1"
+        && !build.llc.iter().any(|flag| flag == "-finline-recursive" || flag == "-fno-inline-recursive")
+}
+
 /// Whether the target's `-O1` takes `-ftree-pre` as its default: unless the
 /// command line states either `-f[no-]tree-pre`, and only where the backend
 /// takes pass switches.
@@ -770,6 +831,21 @@ pub fn dropped_pass_switches<'a>(
     build.llc.iter().map(String::as_str).filter(|flag| is_pass_switch(flag)).collect()
 }
 
+/// What the last of clang's `-f[no-]pic`/`-f[no-]pie` family chose: whether
+/// the code is position independent; `None` where none is given.
+fn relocation_pic(clang: &[String]) -> Option<bool> {
+    clang
+        .iter()
+        .rev()
+        .find_map(
+            |flag| match flag.as_str() {
+                "-fpic" | "-fPIC" | "-fpie" | "-fPIE" => Some(true),
+                "-fno-pic" | "-fno-PIC" | "-fno-pie" | "-fno-PIE" => Some(false),
+                _ => None,
+            },
+        )
+}
+
 pub fn llc_args(
     target: &Target,
     build: &Build,
@@ -795,11 +871,19 @@ pub fn llc_args(
     if pre_at_o1(target, build) {
         args.push("-ftree-pre".into());
     }
+    if no_recursion_at_o1(target, build) {
+        args.push("-fno-inline-recursive".into());
+    }
     if sweeps_whole_program(target, build) {
         args.push("-fwhole-program".into());
     }
     if target.llc_mcmodel {
         args.extend(build.clang.iter().filter(|flag| flag.starts_with("-mcmodel=")).cloned());
+    }
+    if target.llc_reloc
+        && let Some(pic) = relocation_pic(&build.clang)
+    {
+        args.push(format!("-relocation-model={}", if pic { "pic" } else { "static" }));
     }
     if build.stop == Stop::Assembly {
         args.push("-S".into());
@@ -1049,13 +1133,29 @@ fn build(
                 args.extend(resource.iter().cloned());
                 args.extend(clang_flags(target, build));
                 args.extend(
-                    ["-S", "-emit-llvm", "-Xclang", "-disable-llvm-passes", "-Xclang", "-disable-O0-optnone", "-o"]
-                        .map(String::from),
+                    [
+                        "-S",
+                        "-emit-llvm",
+                        "-Xclang",
+                        "-emit-llvm-uselists",
+                        "-Xclang",
+                        "-disable-llvm-passes",
+                        "-Xclang",
+                        "-disable-O0-optnone",
+                        "-o",
+                    ]
+                    .map(String::from),
                 );
                 args.extend([ir.display().to_string(), path.clone()]);
                 run(&clang, &args)?;
                 let text = std::fs::read_to_string(&ir).map_err(|error| fail(format!("{}: {error}", ir.display())))?;
                 let text = lifetimes::upgraded(&text);
+                if let Some(line) = register_parameter(&text).filter(|_| !places_inreg(target, build)) {
+                    return Err(fail(format!(
+                        "{path}: regparm (an `inreg` parameter) is not translated yet: {}",
+                        line.trim()
+                    )));
+                }
                 std::fs::write(&ir, &text).map_err(|error| fail(format!("{}: {error}", ir.display())))?;
                 let printed = datalayout_of(&text).unwrap_or_default();
                 let expected = target.clang_datalayout.as_deref().unwrap_or(&target.datalayout);
@@ -1067,7 +1167,9 @@ fn build(
                     let fixed = text.replacen(&line, &format!("target datalayout = \"{}\"", target.datalayout), 1);
                     std::fs::write(&ir, fixed).map_err(|error| fail(format!("{}: {error}", ir.display())))?;
                 }
-                if text.contains(" asm sideeffect ") {
+                let flat = target.triple.starts_with("i486")
+                    || target.triple.starts_with("i386") && !target.triple.contains("code16");
+                if text.contains(" asm ") && flat || text.contains(" asm sideeffect ") {
                     let mut scratch_number = 0;
                     let mut assemble = |source: &str| -> Result<Vec<u8>, String> {
                         scratch_number += 1;
@@ -1088,10 +1190,12 @@ fn build(
                         }
                         std::fs::read(&b).map_err(|error| error.to_string())
                     };
-                    let translated = inline_asm::translate(
-                        &std::fs::read_to_string(&ir).map_err(|e| fail(e.to_string()))?,
-                        &mut assemble,
-                    )
+                    let source = std::fs::read_to_string(&ir).map_err(|e| fail(e.to_string()))?;
+                    let translated = if flat {
+                        inline_asm::translate_flat(&source, &mut assemble)
+                    } else {
+                        inline_asm::translate(&source, &mut assemble)
+                    }
                     .map_err(|why| fail(format!("{path}: {why}")))?;
                     std::fs::write(&ir, translated).map_err(|error| fail(format!("{}: {error}", ir.display())))?;
                 }

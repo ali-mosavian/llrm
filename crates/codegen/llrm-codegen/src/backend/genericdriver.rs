@@ -35,6 +35,17 @@
 //!   `ldst_update`.
 //!
 //! Owner arm64-phi; exit with the model branch that first needs each.
+//!
+//! # Example
+//! A region where `A` and `B` have no predecessor, `C` reads both and `D` reads `C`.
+//! Picking `A` (top), `D` (bottom), `B` (top), `C` (bottom) gives the order below
+//! (node names are illustrative).
+//!
+//! ```text
+//! top picks:     A  B
+//! bottom picks:  D  C
+//! order:         A  B  C  D     ; top in pick order, then bottom reversed
+//! ```
 
 use crate::backend::genericsched::{Cand, CandPolicy, Reason, Region, ResourceDelta, Zone, try_candidate};
 use crate::backend::machinesched::Graph;

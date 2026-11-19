@@ -247,6 +247,45 @@ fn test_a_load_is_sunk_only_from_a_loop_with_no_defs() {
     assert_eq!(sunk_and_erased(&sinking("  %v = load i16, ptr @g\n  store i16 %i, ptr @h\n")).0, Vec::<String>::new());
 }
 
+/// A GEP the loop's load folds is cloned into the exit that reads it, so what
+/// it reads gains an LCSSA phi user: `hoistGEPAssociation` then sees `src` with
+/// two uses and leaves it. It reassociated anyway and erased `src` under the
+/// phi: "instruction's result still has 1 users" (QuickrBasic stmts.c, m32
+/// -O1).
+#[test]
+fn test_a_gep_cloned_to_the_exit_is_not_reassociated_away_from_under_it() {
+    let text = "@buf = global [8 x i8] c\"\\20\\00\\00\\00\\00\\00\\00\\00\"
+@g = global i32 0
+
+define i32 @f() {
+b0:
+  %s = alloca i32
+  store i32 0, ptr %s
+  br label %b1
+
+b1:
+  %v = load i32, ptr %s
+  %inv = load i32, ptr @g
+  %a = getelementptr i8, ptr @buf, i32 %v
+  %b = getelementptr i8, ptr %a, i32 %inv
+  %x = load i8, ptr %b
+  switch i8 %x, label %b3 [ i8 32, label %b2 ]
+
+b2:
+  store i32 1, ptr %s
+  br label %b1
+
+b3:
+  %e = phi ptr [ %b, %b1 ]
+  %r = ptrtoint ptr %e to i32
+  ret i32 %r
+}
+";
+    let cloned = named_on(text, Addressing(llrm_mir::target::Neutral), |all| all.sunk.clone());
+    assert_eq!(cloned, ["b"], "the GEP is cloned into the exit");
+    applied_on(text, Addressing(llrm_mir::target::Neutral), &[vec![]], true);
+}
+
 /// A loop that reads and writes a local slot: `extra` goes in the loop before
 /// the read of the slot.
 fn slot_loop(
@@ -541,15 +580,23 @@ fn applied_speculating(
     inputs: &[Vec<i128>],
     speculate: bool,
 ) -> (String, String) {
+    applied_on(text, llrm_mir::target::Neutral, inputs, speculate)
+}
+
+/// As `applied_speculating` on `machine`.
+fn applied_on(
+    text: &str,
+    machine: impl llrm_mir::target::Machine + 'static,
+    inputs: &[Vec<i128>],
+    speculate: bool,
+) -> (String, String) {
     use crate::testing::{printed, results};
     let before = parsed(text);
     let mut after = before.clone();
     let mut passes = llrm_mir::passes::PassManager::default();
     (passes.verify_each, passes.verify_invalidation) = (true, true);
     passes.add(Licm { apply: true, speculate });
-    passes
-        .run_module(&mut after, std::rc::Rc::new(llrm_mir::target::Neutral))
-        .unwrap_or_else(|error| panic!("{error}\n{text}"));
+    passes.run_module(&mut after, std::rc::Rc::new(machine)).unwrap_or_else(|error| panic!("{error}\n{text}"));
     let inputs: Vec<&[i128]> = inputs.iter().map(Vec::as_slice).collect();
     assert_eq!(results(&after, &inputs), results(&before, &inputs), "{}", printed(&after));
     (printed(&before), printed(&after))
@@ -2815,6 +2862,134 @@ impl llrm_mir::target::Machine for RangeDeref {
     }
 }
 
+/// A machine where every address is legal: a GEP of a register and an index is
+/// free, as on x86, so `sinkRegion` clones it into the exit that reads it.
+struct Addressing(llrm_mir::target::Neutral);
+
+struct AddressingTti;
+
+impl llrm_mir::tti::Tti for AddressingTti {
+    fn cmp_sel_cost(
+        &self,
+        op: llrm_mir::tti::CmpSel,
+        ty: llrm_mir::tti::Ty,
+        kind: llrm_mir::tti::CostKind,
+    ) -> llrm_mir::tti::Cost {
+        llrm_mir::tti::Basic.cmp_sel_cost(op, ty, kind)
+    }
+
+    fn memory_op_cost(
+        &self,
+        op: llrm_mir::tti::MemoryOp,
+        ty: llrm_mir::tti::Ty,
+        kind: llrm_mir::tti::CostKind,
+        stored_constant: bool,
+    ) -> llrm_mir::tti::Cost {
+        llrm_mir::tti::Basic.memory_op_cost(op, ty, kind, stored_constant)
+    }
+
+    fn cf_instr_cost(
+        &self,
+        phi: bool,
+        kind: llrm_mir::tti::CostKind,
+    ) -> llrm_mir::tti::Cost {
+        llrm_mir::tti::Basic.cf_instr_cost(phi, kind)
+    }
+
+    fn int_imm_cost(
+        &self,
+        imm: i128,
+        bits: u32,
+    ) -> llrm_mir::tti::Cost {
+        llrm_mir::tti::Basic.int_imm_cost(imm, bits)
+    }
+
+    fn int_imm_cost_inst(
+        &self,
+        op: llrm_mir::tti::ImmUser,
+        index: u32,
+        imm: i128,
+        bits: u32,
+    ) -> llrm_mir::tti::Cost {
+        llrm_mir::tti::Basic.int_imm_cost_inst(op, index, imm, bits)
+    }
+
+    fn is_truncate_free(
+        &self,
+        from: llrm_mir::tti::Ty,
+        to: llrm_mir::tti::Ty,
+    ) -> bool {
+        llrm_mir::tti::Basic.is_truncate_free(from, to)
+    }
+
+    fn is_legal_addressing_mode(
+        &self,
+        base_gv: bool,
+        base_offset: i64,
+        has_base_reg: bool,
+        scale: i64,
+    ) -> bool {
+        let _ = (base_gv, base_offset, has_base_reg, scale);
+        true
+    }
+
+    fn cast_cost(
+        &self,
+        op: llrm_mir::tti::CastKind,
+        dst: llrm_mir::tti::Ty,
+        src: llrm_mir::tti::Ty,
+        kind: llrm_mir::tti::CostKind,
+    ) -> llrm_mir::tti::Cost {
+        llrm_mir::tti::Basic.cast_cost(op, dst, src, kind)
+    }
+
+    fn arithmetic_cost(
+        &self,
+        op: llrm_mir::tti::ArithOp,
+        ty: llrm_mir::tti::Ty,
+        kind: llrm_mir::tti::CostKind,
+        first: llrm_mir::tti::OperandInfo,
+        second: llrm_mir::tti::OperandInfo,
+    ) -> llrm_mir::tti::Cost {
+        llrm_mir::tti::Basic.arithmetic_cost(op, ty, kind, first, second)
+    }
+}
+
+impl llrm_mir::target::Machine for Addressing {
+    fn tti(&self) -> Option<std::rc::Rc<dyn llrm_mir::tti::Tti>> {
+        Some(std::rc::Rc::new(AddressingTti))
+    }
+
+    fn foreign_span(
+        &self,
+        selectors: (i64, i64),
+        offsets: (i64, i64),
+        width: i64,
+    ) -> Option<(i64, i64)> {
+        self.0.foreign_span(selectors, offsets, width)
+    }
+
+    fn spaces(&self) -> llrm_mir::spaces::Spaces {
+        self.0.spaces()
+    }
+
+    fn costs(&self) -> llrm_mir::target::OperationCosts {
+        self.0.costs()
+    }
+
+    fn registers(&self) -> i64 {
+        self.0.registers()
+    }
+
+    fn call_registers(&self) -> i64 {
+        self.0.call_registers()
+    }
+
+    fn address_forms(&self) -> Vec<llrm_mir::target::AddressForm> {
+        self.0.address_forms()
+    }
+}
+
 /// A signed divide of a vector in a loop panicked ("an integer division"):
 /// the speculation check read its type as an integer.
 #[test]
@@ -2827,4 +3002,56 @@ loop:\n  %i = phi i64 [ 0, %entry ], [ %i.next, %loop ]\n\
   %i.next = add i64 %i, 1\n  %e = icmp eq i64 %i.next, %n\n  br i1 %e, label %exit, label %loop\n\
 exit:\n  ret void\n}\n";
     let _ = decided(text);
+}
+
+/// x_ld_matmul -O3 m32: twelve `A[i][k]` long doubles, invariant in the `j`
+/// loop, were all hoisted across it onto the eight-slot x87 stack: ten `fstp`
+/// and ten `fxch` an iteration, 96,600 clk against gcc's 84,571 (which reads
+/// them in the loop). A float load is hoisted only while the float file has
+/// room for it.
+#[test]
+fn test_float_loads_are_hoisted_only_while_the_float_file_has_room() {
+    let mut body = String::new();
+    let mut sum = String::from("0.0");
+    for k in 0..12 {
+        body += &format!(
+            "  %p{k} = getelementptr i8, ptr @a, i32 {off}\n  %a{k} = load x86_fp80, ptr %p{k}\n  %q{k} = getelementptr x86_fp80, ptr @b, i32 %i\n  %b{k} = load x86_fp80, ptr %q{k}\n  %m{k} = fmul x86_fp80 %a{k}, %b{k}\n  %t{k} = fadd x86_fp80 {sum}, %m{k}\n",
+            off = k * 12
+        );
+        sum = format!("%t{k}");
+    }
+    let text = format!(
+        "target datalayout = \"e-p:32:32-i64:32-f80:32-n8:16:32\"
+
+@a = global [12 x x86_fp80] zeroinitializer
+@b = global [12 x x86_fp80] zeroinitializer
+
+define x86_fp80 @f(i32 %n) {{
+b0:
+  br label %b1
+
+b1:
+  %i = phi i32 [ 0, %b0 ], [ %i1, %b1 ]
+  %s = phi x86_fp80 [ 0.0, %b0 ], [ %e, %b1 ]
+{body}  %e = fadd x86_fp80 %s, {sum}
+  %i1 = add i32 %i, 1
+  %c = icmp slt i32 %i1, %n
+  br i1 %c, label %b1, label %b2
+
+b2:
+  ret x86_fp80 %e
+}}
+"
+    );
+    let hoisted = |float_limit| {
+        named_on(&text, crate::testing::FloatFile { inner: llrm_mir::target::Neutral, float_limit }, |all| {
+            all.hoisted.clone()
+        })
+        .iter()
+        .filter(|name| name.starts_with('a'))
+        .count()
+    };
+    assert_eq!(hoisted(None), 12, "premise: with no float limit every invariant load goes");
+    let held = hoisted(Some(5));
+    assert!(held < 5, "{held} of 12 loads hoisted with five float values allowed across the loop");
 }

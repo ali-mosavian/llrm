@@ -31,7 +31,7 @@ pub fn verify(module: &Module) -> Vec<String> {
             }
         }
         if let GlobalKind::Function(function) = &global.kind {
-            if intrinsics::is_reserved(name) {
+            if intrinsics::is_reserved(name) && !intrinsics::is_target_intrinsic(name) {
                 let problem = match Intrinsic::named(name) {
                     _ if !function.is_declaration() => Err("llvm intrinsics cannot be defined!".to_owned()),
                     None => Err("an intrinsic MIR does not have".to_owned()),
