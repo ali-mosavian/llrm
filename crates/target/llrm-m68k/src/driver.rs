@@ -261,16 +261,17 @@ fn lowered(
     // refused, inlined in a second compile, kept where the finished code is faster within the bytes ceiling
     // (`trial::keeps_within_headroom`). A module with no such call is compiled once.
     let sites = trial::take_refused();
+    let outlined = trial::take_accepted();
     if llrm_support::debug::enabled("trial") {
-        eprintln!("trial inline {level:?}: {} refused site(s)", sites.len());
+        eprintln!("trial inline {level:?}: {} refused site(s), {} accepted site(s)", sites.len(), outlined.len());
     }
     let mut inlined: Vec<trial::Site> = Vec::new();
     let mut base_kept: Option<Kept> = None;
     // only a program: a library unit has no entry to weigh the clocks against, and its functions run an unknown
     // number of times (the runtime's -Os objects grew up to 18 % for the same clocks)
     let is_program = base.functions().any(|(_, global, function)| !function.is_declaration() && global.name.owned().as_deref() == Some("main"));
-    if small && is_program && !sites.is_empty() {
-        if let Ok(other) = trial::with_inlined(&sites, || lowered_once(text, cpu, level, None, policy)) {
+    if small && is_program && (!sites.is_empty() || !outlined.is_empty()) {
+        if let Ok(other) = trial::with_inlined(&sites, || trial::with_outlined(&outlined, || lowered_once(text, cpu, level, None, policy))) {
             let other_notes = trial::take();
             let _ = trial::take_refused();
             let cut = trial::differing(&base, &other);
@@ -284,7 +285,13 @@ fn lowered(
                         .collect();
                     lower(&base, &rest).map_or(true, |kept| crate::trial::calls_mulsi3(&kept.items))
                 };
-                let pays = crate::trial::keeps_within_headroom(&with.items, &without.items, rest_calls_mulsi3, cpu);
+                // the calls kept by the outline trial are judged by the bytes alone; a refused site built inlined
+                // (the clocks it saves within the bytes ceiling) keeps its own verdict where there is none
+                let pays = if outlined.is_empty() {
+                    crate::trial::keeps_within_headroom(&with.items, &without.items, rest_calls_mulsi3, cpu)
+                } else {
+                    crate::trial::keeps_fewer_bytes(&with.items, &without.items, rest_calls_mulsi3, cpu)
+                };
                 if llrm_support::debug::enabled("trial") {
                     eprintln!("trial inline {level:?}: {} functions differ: {}", cut.len(), if pays { "kept" } else { "put back" });
                 }

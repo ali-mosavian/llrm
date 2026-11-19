@@ -502,6 +502,47 @@ pub fn with_pin_inlines<T>(body: impl FnOnce() -> T) -> T {
     value
 }
 
+thread_local! {
+    /// The sites the second compile keeps as calls, while it runs.
+    static OUTLINED: RefCell<Vec<Site>> = const { RefCell::new(Vec::new()) };
+    /// The sites a compile accepted within the byte model's error, at -Os.
+    static ACCEPTED: RefCell<Vec<Site>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Runs `body` with `sites` kept as calls whenever the pass reaches them.
+pub fn with_outlined<T>(
+    sites: &[Site],
+    body: impl FnOnce() -> T,
+) -> T {
+    let before = OUTLINED.with(|cell| cell.replace(sites.to_vec()));
+    let value = body();
+    OUTLINED.with(|cell| *cell.borrow_mut() = before);
+    value
+}
+
+/// Whether the trial compile in force keeps this site a call.
+pub(crate) fn outlines(
+    caller: &str,
+    callees: &[String],
+) -> bool {
+    OUTLINED.with(|list| list.borrow().iter().any(|one| one.caller == caller && one.callees == callees))
+}
+
+/// Notes a site accepted at -Os, a candidate for [`with_outlined`].
+pub(crate) fn note_accepted(site: Site) {
+    ACCEPTED.with(|list| {
+        let mut list = list.borrow_mut();
+        if !list.contains(&site) {
+            list.push(site);
+        }
+    });
+}
+
+/// The accepted sites noted since the last call.
+pub fn take_accepted() -> Vec<Site> {
+    ACCEPTED.with(|list| std::mem::take(&mut *list.borrow_mut()))
+}
+
 /// Whether a trial compile is running.
 pub(crate) fn inlining() -> bool {
     INLINED.with(|list| !list.borrow().is_empty())
