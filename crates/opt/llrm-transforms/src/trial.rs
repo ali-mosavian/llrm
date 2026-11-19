@@ -214,10 +214,13 @@ thread_local! {
 }
 
 /// DEVIATE PEEL-OS-PER-LOOP (beyond the pin, which never peels at -Os; owner
-/// m68k, exit 2026-12-20): notes a loop the trial compile peels and says
+/// 6502, exit 2026-12-20): notes a loop the trial compile peels and says
 /// whether the compile in force leaves it unpeeled. `site` names the loop
 /// (`function:header`); the compile is deterministic up to it.
-pub(crate) fn peel_site_skipped(site: &str, bytes: u32) -> bool {
+pub(crate) fn peel_site_skipped(
+    site: &str,
+    bytes: u32,
+) -> bool {
     PEEL_SITES.with(|sites| {
         let mut sites = sites.borrow_mut();
         if !sites.iter().any(|(one, _)| one == site) {

@@ -1411,7 +1411,10 @@ fn peel_on_trial(
         return;
     }
     if trial::active().is_some() {
-        let name = run.this.and_then(|this| run.globals[this.0 as usize].name.as_deref().map(str::to_owned)).unwrap_or_default();
+        let name = run
+            .this
+            .and_then(|this| run.globals[this.0 as usize].name.as_deref().map(str::to_owned))
+            .unwrap_or_default();
         // the body in bytes where the target prices it so (`inline_size_view`)
         let bytes = run
             .tti

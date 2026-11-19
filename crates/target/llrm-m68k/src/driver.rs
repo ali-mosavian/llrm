@@ -373,8 +373,11 @@ fn lowered(
         }
         let have: Vec<(String, Vec<Item>)> =
             current.iter().filter(|(name, _)| changed.contains(name)).cloned().collect();
-        let peeled =
-            if have.len() == changed.len() { Kept { libcalls: left.libcalls, items: have } } else { lower(&module, &changed)? };
+        let peeled = if have.len() == changed.len() {
+            Kept { libcalls: left.libcalls, items: have }
+        } else {
+            lower(&module, &changed)?
+        };
         let rest_calls = || {
             let rest: std::collections::BTreeSet<String> = module
                 .functions()
