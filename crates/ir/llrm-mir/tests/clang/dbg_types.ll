@@ -1,5 +1,5 @@
-; ModuleID = '/tmp/dbgt.c'
-source_filename = "/tmp/dbgt.c"
+; ModuleID = 'dbgt.c'
+source_filename = "dbgt.c"
 target datalayout = "e-m:e-p:32:32-p270:32:32-p271:32:32-p272:64:64-i128:128-f64:32:64-f80:32-n8:16:32-S128"
 
 @g = global i32 3, align 4, !dbg !0
