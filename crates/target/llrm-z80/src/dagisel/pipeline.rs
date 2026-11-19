@@ -92,6 +92,12 @@ thread_local! {
     /// (`Z80Lowering::lower_wide_shift`) where the first selection calls the
     /// shift routine; the caller prices the two with the routine linked once.
     pub static INLINE_SHIFTS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Set while a function with a constant shift of a long
+    /// (`prepare::LONG_SHIFT`) is selected the second time, each such shift the
+    /// routine's call where the first selection is the steps inline; the caller
+    /// prices the two with the routine linked once
+    /// (`compile::decomposed_functions`).
+    pub static CALL_SHIFTS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// Set while a function with a long divide is
     /// selected the second time, a function tuned for size calling the speed
     /// routines (`target_lowering(true)`); priced against the size routines by
@@ -543,7 +549,7 @@ pub fn select_block(
     // them to pay for the routine (`prepare::mark_long_multiplies`), at every
     // level: four word multiplies inline cost more bytes and more T-states
     let all_calls = CALL_MULS.with(std::cell::Cell::get);
-    tli.set_force_shift_calls(all_calls && !sized);
+    tli.set_force_shift_calls((all_calls || CALL_SHIFTS.with(std::cell::Cell::get)) && !sized);
     if long_multiply {
         tli.set_size_libcall_name(ISD::Mul, MVT::I32, "__mulsi3");
         if !sized {

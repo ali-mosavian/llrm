@@ -361,6 +361,15 @@ pub struct Tuning {
     /// pin does not. DEVIATE DIVCONST-SIZE (owner llrm-target-x86-m64-b, exit
     /// 2026-11-30); none: the pin's.
     pub div_by_constant_size_cost: Option<u32>,
+    /// The code-size cost of a scalar divide or remainder by a variable: the
+    /// pin's X86 table says 2, LLVM 20 priced every divide 4. A loop whose
+    /// divisors the unroll turns into constants (div8_os: four divides by the
+    /// loop's `b`) is then 450 units in LLVM 20, which keeps it, and 302 in the
+    /// pin, which unrolls it at the raised -O3 threshold into four
+    /// multiply-high sequences per trip: 130,449 executed instructions against
+    /// clang's 116,608. DEVIATE DIVVAR-SIZE (owner x87-cordic-2, exit
+    /// 2026-11-30, with DIVCONST-SIZE); none: the pin's.
+    pub div_by_variable_size_cost: Option<u32>,
     /// gcc's `-fsplit-paths` (on at `-O3`): the join block of a loop's latch
     /// diamond is copied into its arm (`splitpaths.rs`). DEVIATE SP-O3
     /// (owner llrm-target-x86-m64-b, exit 2026-11-30): a target takes it
@@ -900,6 +909,7 @@ impl Tuning {
         unroll_max_percent_threshold_boost: None,
         unroll_threshold_at_o3: None,
         div_by_constant_size_cost: None,
+        div_by_variable_size_cost: None,
         split_paths_at_o3: false,
         unroll_partial_threshold: None,
         unroll_jam_partial_threshold: None,
@@ -1965,6 +1975,7 @@ mod tests {
         );
         assert_eq!(pin.unroll_threshold_at_o3, None);
         assert_eq!(pin.div_by_constant_size_cost, None);
+        assert_eq!(pin.div_by_variable_size_cost, None);
         assert!(!pin.split_paths_at_o3);
         assert_eq!(pin.x87_stack_slots, None);
         assert!(!pin.x87_share_negated_products);

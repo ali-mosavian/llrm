@@ -5,7 +5,7 @@ import sys
 import unittest
 
 sys.path.insert(0, __file__.rsplit("/", 1)[0])
-from m68k_card import card, judge  # noqa: E402
+from m68k_card import card, judge, read  # noqa: E402
 
 
 class Rulings(unittest.TestCase):
@@ -34,6 +34,20 @@ class Rulings(unittest.TestCase):
         rows = [("68000", "a", "O2", 1, 100, 1, 100), ("68000", "b", "O2", 1, 200, 1, 100), ("68000", "c", "O1", 1, None, 1, 100)]
         found = card(rows)
         self.assertEqual({name: len(cells) for name, cells in found.items()}, {"at_or_below": 1, "bytes_worse": 0, "clocks_worse": 1, "both_worse": 0, "unmeasured": 1})
+
+    def test_a_libcall_the_other_side_links_counts_as_its_bytes(self):
+        """shift64_variable -Os 68020: 416 B code against gcc's 330 B, but gcc links 216 B of `__ashldi3` and friends: the card read +26% worse (ours is smaller)."""
+        import os
+        import tempfile
+
+        with tempfile.NamedTemporaryFile("w", suffix=".tsv", delete=False) as out:
+            out.write("68020\tshift64_variable\tOs\t416\t310265\t330\t319063\t0\t216\n")
+        try:
+            rows = read([out.name])
+        finally:
+            os.unlink(out.name)
+        self.assertEqual(rows, [("68020", "shift64_variable", "Os", 416, 310265, 546, 319063)])
+        self.assertEqual(judge("Os", *rows[0][3:]), "at_or_below")
 
 
 if __name__ == "__main__":
