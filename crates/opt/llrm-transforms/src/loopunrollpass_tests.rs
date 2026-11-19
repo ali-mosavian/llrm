@@ -2037,3 +2037,74 @@ fn test_the_pin_does_not_unroll_a_loop_around_a_call_whose_copies_pass_the_thres
     let (changed, text) = switch_around_a_call("i486");
     assert!(!changed, "{text}");
 }
+
+/// div8_os -O3 (x86_64): four byte divides by the loop's own variable, fifteen
+/// trips. Each is 2 units for size in the pin's X86 table (LLVM 20: 4), so the
+/// pin's loop is 302 units where LLVM 20's is 430 against 400: the pin's raised
+/// threshold unrolls it into multiply-high sequences (130,449 executed
+/// instructions against clang's 116,608).
+fn divide_loop(trips: u32) -> String {
+    format!(
+        "define i64 @f(i8 %u, i8 %s) {{
+b0:
+  br label %b1
+
+b1:
+  %i = phi i32 [ 1, %b0 ], [ %next, %b1 ]
+  %sum = phi i64 [ 0, %b0 ], [ %r, %b1 ]
+  %v = trunc i32 %i to i8
+  %q1 = udiv i8 %u, %v
+  %r1 = urem i8 %u, %v
+  %q2 = sdiv i8 %s, %v
+  %r2 = srem i8 %s, %v
+  %m1 = mul i8 %r1, 11
+  %m2 = mul i8 %r2, 13
+  %a1 = add i8 %q1, %m1
+  %a2 = add i8 %q2, %m2
+  %a3 = add i8 %a1, %a2
+  %w = zext i8 %a3 to i64
+  %t = mul i64 %sum, 3
+  %r = add i64 %t, %w
+  %next = add nuw nsw i32 %i, 17
+  %go = icmp ult i32 %next, {limit}
+  br i1 %go, label %b1, label %b2
+
+b2:
+  ret i64 %r
+}}
+",
+        limit = 1 + 17 * trips
+    )
+}
+
+fn unrolls_divide_loop(
+    tuning: llrm_mir::target::Tuning,
+    trips: u32,
+) -> bool {
+    let mut module = parsed(&divide_loop(trips));
+    let function = module.function_mut("f").expect("@f").1;
+    crate::loopsimplify::simplified(function);
+    crate::testing::closed(&mut module).expect("closes");
+    let tti = X86::of_cpu("x86-64").expect("a cpu").with_tuning(tuning);
+    let options = Options {
+        opt_level: 3,
+        opt_size: false,
+        min_size: false,
+        only_when_forced: false,
+        prepare_for_lto: false,
+        target_unrolling: true,
+        inliner_follows: true,
+        speed_rate: false,
+    };
+    unroll_function(&mut module, "f", &tti, options).expect("unrolls");
+    !printed(&module).contains("br i1")
+}
+
+#[test]
+fn a_loop_of_divides_by_its_variable_is_priced_as_llvm_20_does_on_a_target_that_says_so() {
+    let raised = llrm_mir::target::Tuning { unroll_threshold_at_o3: Some(400), ..llrm_mir::target::Tuning::PIN };
+    let priced = llrm_mir::target::Tuning { div_by_variable_size_cost: Some(4), ..raised };
+    let trips = (10..=30).find(|&trips| unrolls_divide_loop(raised, trips) && !unrolls_divide_loop(raised, trips + 1));
+    let trips = trips.expect("a trip count the raised threshold just takes");
+    assert!(!unrolls_divide_loop(priced, trips), "the 4-unit divides put {trips} trips over 400");
+}
