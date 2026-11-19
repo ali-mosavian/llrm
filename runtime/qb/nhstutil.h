@@ -16,6 +16,15 @@ extern SD str_nul;
 /* The program level the temporaries are made at (b$curlevel). */
 extern int cur_level;
 
+/* A string temporary (inc/string.inc LenTemp = 6): a descriptor, and the
+   program level that made it or -1 while it is free. */
+enum { NUMTEMPS = 20 };
+typedef struct Tmp {
+    SD sd;
+    int level;
+} Tmp;
+extern Tmp str_temps[NUMTEMPS];
+
 void str_init(char *first, char *end);
 void str_compact(void);
 uword str_free_bytes(void);
@@ -41,7 +50,15 @@ SD *str_tmp(uword len, char **data);
 void str_assign(SD *source, SD *destination);
 SD *str_tmp_copy(SD *source, uword from, uword len);
 byte str_is_tmp(const SD *sd);
+/* B$STDALCTMP: a temporary's string and descriptor, freed; anything else is left. Out of line, for the assembler's callers. */
 void str_tmp_free(SD *sd);
+/* The same, with the test of whether `sd` is a temporary in line: most strings a statement consumes are variables, and a call costs more
+   (a far call and a frame) than the two compares. */
+static inline __attribute__((always_inline)) void str_free_if_tmp(SD *sd)
+{
+    if ((Tmp *)sd >= str_temps && (Tmp *)sd < str_temps + NUMTEMPS)
+        str_tmp_free(sd);
+}
 void str_all_tmp_free(int level);
 
 #endif

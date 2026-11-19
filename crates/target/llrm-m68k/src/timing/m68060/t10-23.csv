@@ -1,0 +1,6 @@
+#title,MOVES Execution Times,page,10-23,notes,"¹ Add 2(1/0) cycles to the (bd,An,Xi*SF) time for a memory indirect address."
+MOVES Function,Destination / Size,Destination / (An),Destination / (An)+,Destination / -(An),"Destination / (d16,An)","Destination / (d8,An,Xi*SF)","Destination / (bd,An,Xi*SF)¹",Destination / (xxx).WL
+Source<SFC> -> Rn,"Byte, Word",1(1/0),1(1/0),1(1/0),1(1/0),2(1/0),3(1/0),2(1/0)
+"""",Long,1(1/0),1(1/0),1(1/0),1(1/0),2(1/0),3(1/0),2(1/0)
+Rn -> Dest <DFC>,"Byte, Word",1(0/1),1(0/1),1(0/1),1(0/1),2(0/1),3(0/1),2(0/1)
+"""",Long,1(0/1),1(0/1),1(0/1),1(0/1),2(0/1),3(0/1),2(0/1)

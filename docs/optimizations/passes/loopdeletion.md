@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/loopdeletion.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/loopdeletion.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/loopdeletion.rs sha256:75662ef99a01cb508008ecff76125ab7901da5b2955823cb6f0f2d31424ac10e -->
+<!-- src: crates/opt/llrm-transforms/src/loopdeletion.rs sha256:f84db2b66df4d59e0024a2a2081d6c6783628eec1550ed1c199c981e7dfdb8f5 -->
 
 # loopdeletion
 
@@ -59,4 +59,4 @@ becomes a jump from `b0` to `b2`.
 [`breakLoopBackedge`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/LoopUtils.cpp#L746).
 
 ## Used by
-Named by `loopinstsimplify`, `loopsimplifycfg`, `nontrivial`, `pipeline`.
+Named by `hardwareloops`, `loopinstsimplify`, `loopsimplifycfg`, `nontrivial`, `pass`, `pipeline`, `pipeline_text`.

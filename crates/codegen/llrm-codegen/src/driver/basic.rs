@@ -409,6 +409,18 @@ pub fn _basic_listing(
     if !runtime_frame && !module_body {
         return Ok(listing);
     }
+    // The shell is compared and stripped as instructions: the unwind
+    // directives the listing declares for it describe a frame the runtime
+    // builds, and an OMF object has no place for them.
+    let listing: Vec<masm::Item> = listing
+        .into_iter()
+        .filter(|item| {
+            !matches!(
+                item,
+                masm::Item::Cfi(_) | masm::Item::Seh(_) | masm::Item::Mark(masm::Mark::Declared)
+            )
+        })
+        .collect();
     // The procedure's first line stands before its prologue.
     let (mut stripped, listing): (Vec<masm::Item>, &[masm::Item]) = match listing.split_first() {
         Some((line @ masm::Item::Mark(_), rest)) => (vec![line.clone()], rest),
@@ -479,8 +491,9 @@ pub fn written_basic(
     module: &masm::Module,
     header: Vec<u8>,
     name: &str,
+    objects: &dyn llrm_debug::DebugObjectTarget,
 ) -> Result<Vec<u8>, String> {
-    written_basic_in(module, header, name, llrm_target::object::Format::Omf)
+    written_basic_in(module, header, name, llrm_target::object::Format::Omf, objects)
 }
 
 /// `written_basic` in the object format of a host: the header and data
@@ -490,8 +503,9 @@ pub fn written_basic_in(
     header: Vec<u8>,
     name: &str,
     format: llrm_target::object::Format,
+    objects: &dyn llrm_debug::DebugObjectTarget,
 ) -> Result<Vec<u8>, String> {
-    timed("object write", || written_basic_inner(module, header, name, format))
+    timed("object write", || written_basic_inner(module, header, name, format, objects))
 }
 
 fn written_basic_inner(
@@ -499,6 +513,7 @@ fn written_basic_inner(
     header: Vec<u8>,
     name: &str,
     format: llrm_target::object::Format,
+    objects: &dyn llrm_debug::DebugObjectTarget,
 ) -> Result<Vec<u8>, String> {
     // Build the same semantic segments as backend.objbuild.written, then add
     // the BASIC-owned MODULE_CODE envelope before asking its canonical record
@@ -513,13 +528,15 @@ fn written_basic_inner(
     for (name, _items) in &module.data {
         if named.insert(name.clone()) {
             let private = module.private.contains(name);
-            segments.push(objbuild::Segment::new(name, Role::Data, !private));
+            segments.push(objbuild::Segment::new(name, uninitialised_role(name), !private));
         }
     }
     let mut symbols: IndexMap<String, (usize, usize)> = IndexMap::default();
     for (name, items) in &module.data {
         let index = segments.iter().position(|one| &one.name == name).expect("every data segment was made");
-        objbuild::_data(&mut segments[index], index, items, &mut symbols, module.object.code_model());
+        let role = segments[index].role;
+        let held = if role == Role::Bss { holes(items) } else { items.clone() };
+        objbuild::_data(&mut segments[index], index, &held, &mut symbols, module.object.code_model());
     }
     if module.stack > 0 {
         let mut stack = objbuild::Segment::new("STACK", Role::Stack, true);
@@ -534,7 +551,7 @@ fn written_basic_inner(
         &every,
         &mut symbols,
         &mut Default::default(),
-        objbuild::asm_info(format).pref_align,
+        objbuild::asm_info(objects, format).pref_align,
         |procedure, number| _basic_listing(procedure, number),
     )
     .map_err(|error| error.to_string())?;
@@ -563,7 +580,13 @@ fn written_basic_inner(
         4 => objbuild::OFFSET32,
         _ => objbuild::OFFSET,
     };
-    code.fixups = [objbuild::Fixup::new(words.statements, offset_kind, statement_data)]
+    // A module with no row in its table states no line: BC /O leaves OF_STA 0,
+    // and B$STOP then reports "at address" where a non-zero word reports a
+    // line.
+    let has_rows =
+        module.procedures.last().is_some_and(|table| table.callees.values().any(|callee| callee.code.len() > 1));
+    code.fixups = has_rows
+        .then(|| objbuild::Fixup::new(words.statements, offset_kind, statement_data))
         .into_iter()
         .chain(
             NAMED
@@ -596,7 +619,7 @@ fn written_basic_inner(
     let externs: IndexMap<String, String> = module.externs.iter().cloned().collect();
     let object = objbuild::object_of(module, name, segments, &symbols, &Default::default(), &externs)
         .map_err(|error| error.to_string())?;
-    if objbuild::asm_info(format).hosted {
+    if objbuild::asm_info(objects, format).hosted {
         // A host's linker and C spell the runtime's `B$PESD` as `B_PESD`.
         let mut object = object;
         for symbol in &mut object.symbols {
@@ -614,11 +637,13 @@ fn written_basic_inner(
                     definition: llrm_object::Definition::Defined { section: code, offset: 0 },
                     size: header_size,
                     group: None,
+                    visibility: Default::default(),
                 },
             );
-        return objbuild::serialized(&object, format).map_err(|error| error.to_string());
+        return objbuild::serialized(objects, &object, format).map_err(|error| error.to_string());
     }
-    let emitted = llrm_omf::write::write(&object, &llrm_x86::mc::omf::X86Omf).map_err(|error| error.to_string())?;
+    let emitted = llrm_omf::write::write(&object.object, object.debug.as_ref(), &llrm_x86::mc::omf::X86Omf)
+        .map_err(|error| error.to_string())?;
     // QB's classes and combine modes shape a real-mode link; a flat object
     // keeps the ones its writer gave.
     if module.object.bitness != 16 {
@@ -694,6 +719,38 @@ pub fn finalized(
         blocks.push(block.with_insns(instructions));
     }
     Ok(Finalized { body: body.with_blocks(blocks), callees: sites })
+}
+
+/// The routine a module calls where its runtime does not zero `_BSS` (the Microsoft ones): at its
+/// entry and after each CLEAR, whose B$SCLR zeroes BC_DATA only.
+pub const ZERO_BSS: &str = "$QB$ZBSS";
+/// The routine's code around its two `_BSS` offsets: `push di; push es; push ds; pop es; mov di, start`,
+/// then `mov cx, end` and `sub cx, di; shr cx, 1; xor ax, ax; cld; rep stosw; pop es; pop di`.
+const ZEROING_ENTER: [u8; 5] = [0x57, 0x06, 0x1E, 0x07, 0xBF];
+const ZEROING_COUNT: [u8; 1] = [0xB9];
+const ZEROING_FINISH: [u8; 11] = [0x2B, 0xCF, 0xD1, 0xE9, 0x33, 0xC0, 0xFC, 0xF3, 0xAB, 0x07, 0x5F];
+/// What zeroing costs: the routine (its code, two offset words, a frame of `push bp; mov bp, sp` and `pop bp`, a
+/// `ret`) and one call to it (`push cs; call near`). Zero data of at most this many bytes is cheaper stored.
+pub const ZEROING_COST: usize = ZEROING_ENTER.len() + ZEROING_COUNT.len() + ZEROING_FINISH.len() + 2 * 2 + (1 + 2 + 1) + 1 + (1 + 3);
+/// The two ends of `_BSS`, which the routine zeroes between.
+const BSS_START: &str = "$QB$BSS";
+const BSS_END: &str = "$QB$BSSE";
+
+/// `ZERO_BSS`: `rep stosw` over `_BSS` with the registers it uses kept (x86-16, as every module of a
+/// Microsoft runtime is). A far routine, called as the runtime's are.
+fn zeroing_routine(
+    registers: llrm_target::FrameRegisters,
+    regs: Regs,
+) -> masm::Procedure {
+    use masm::InlinePart::{Bytes, Fixup};
+    let parts = vec![
+        Bytes(ZEROING_ENTER.to_vec()),
+        Fixup("offset".into(), BSS_START.into(), 0),
+        Bytes(ZEROING_COUNT.to_vec()),
+        Fixup("offset".into(), BSS_END.into(), 0),
+        Bytes(ZEROING_FINISH.to_vec()),
+    ];
+    masm::Procedure { far: true, ..masm::routine_of_parts(ZERO_BSS, parts, registers, regs) }
 }
 
 /// The main body's symbol.
@@ -894,7 +951,7 @@ pub fn object(
     options: &Options,
     name: &str,
 ) -> Result<Vec<u8>, String> {
-    written_basic(&assembled(module, object, runtime, options)?, object.header.clone(), name)
+    written_basic(&assembled(module, object, runtime, options)?, object.header.clone(), name, options.arch.objects())
 }
 
 /// The calls of the BASIC module object `object` lays out: its runtime's,
@@ -1014,10 +1071,26 @@ pub fn assembled(
         options.arch.frame_registers(),
         word,
         Regs(options.arch.registers()),
+        object.stack_check.is_some(),
     ));
     let mut data = Vec::new();
     for segment in &object.segments {
         data.push((segment.name.clone(), timed("data layout", || laid_out(module, segment, &names))?));
+    }
+    // A module whose `_BSS` holds nothing needs no zeroing: its calls lay down no code.
+    let bss = data
+        .iter()
+        .any(|(name, datums)| name == "_BSS" && datums.iter().any(|one| !matches!(one, masm::Datum::Label(_) | masm::Datum::Align(_))));
+    if referenced.remove(ZERO_BSS).is_some() {
+        if bss {
+            // The statement table stays the final code procedure.
+            let last = procedures.len() - 1;
+            procedures.insert(last, zeroing_routine(options.arch.frame_registers(), Regs(options.arch.registers())));
+        } else {
+            for callee in procedures.iter_mut().flat_map(|one| one.callees.values_mut()).filter(|one| one.name == ZERO_BSS) {
+                callee.code = vec![masm::InlinePart::Bytes(Vec::new())];
+            }
+        }
     }
     let mut pooled = Vec::new();
     if main_frame > 0 {
@@ -1085,12 +1158,11 @@ pub fn assembled(
     externs.extend(masm::stack_externs(&procedures, &mut names));
     externs.sort();
     externs.dedup();
-    let producer = if runtime == model::RuntimeProfile::Qb45 {
-        llrm_object::debug::Producer::Qb45
-    } else {
-        llrm_object::debug::Producer::Native
-    };
-    let mut debug = timed("debug info", || debuginfo::described(module, &names, producer, &*options.arch))?;
+    let producer =
+        if runtime == model::RuntimeProfile::Qb45 { llrm_debug::Producer::Qb45 } else { llrm_debug::Producer::Native };
+    let mut debug = timed("debug info", || {
+        debuginfo::described(module, &names, producer, &debuginfo::Machine::of(&*options.arch))
+    })?;
     if let Some(debug) = debug.as_mut() {
         debug.format = options.debug_format;
         debug.cfa = options.cfa_locations();
@@ -1102,12 +1174,18 @@ pub fn assembled(
         names,
         externs,
         publics: procedures.iter().filter(|one| one.public).map(|one| one.name.clone()).collect(),
+        visibility: Default::default(),
+        preemptible: Default::default(),
+        aliases: Vec::new(),
         data,
         procedures,
         private: object.private.clone(),
         requests: object.requests.clone(),
         far_bss: BTreeSet::new(),
+        weak: BTreeSet::new(),
         code_segments: Default::default(),
+        code_data: Default::default(),
+        comdats: Default::default(),
         debug,
         stack: 0,
         object: options.arch.object(),
@@ -1215,10 +1293,29 @@ fn procedure(
         size: target.cpu.size,
         entry,
         stack_check,
+        probe_stack: None,
         // What allocation used: a freed frame register and the registers saved.
         registers: machined.registers.clone(),
     };
     Ok((procedure, machined.landing, statics))
+}
+
+/// The BSS class's segments: the start-up zeroes them and the linker stores none of them.
+fn uninitialised_role(name: &str) -> Role {
+    if matches!(name, "_BSS" | "BSSB") { Role::Bss } else { Role::Data }
+}
+
+/// `items` with each run of zero bytes a hole: a zero byte in the image would make the linker store the segment up to it.
+fn holes(items: &[masm::Datum]) -> Vec<masm::Datum> {
+    items
+        .iter()
+        .map(|item| match item {
+            masm::Datum::Bytes(bytes) if bytes.iter().all(|byte| *byte == 0) => {
+                masm::Datum::Fill(masm::Fill { size: bytes.len() as i64, byte: None })
+            }
+            other => other.clone(),
+        })
+        .collect()
 }
 
 /// `segment`'s data: a segment the module header names starts with its
@@ -1233,6 +1330,9 @@ fn laid_out(
     let mut out = Vec::new();
     if let Some(&(_, _, label)) = NAMED.iter().find(|(_, one, _)| one == name) {
         out.push(masm::Datum::Label(masm::Label { name: label.to_owned() }));
+    }
+    if name == "_BSS" {
+        out.push(masm::Datum::Label(masm::Label { name: BSS_START.to_owned() }));
     }
     let mut offset = 0;
     for item in &segment.items {
@@ -1280,6 +1380,11 @@ fn laid_out(
     }
     if segment.size.is_some_and(|size| size != offset) {
         return Err(format!("{name} holds {offset:#x} of its {:#x} bytes", segment.size.unwrap_or_default()));
+    }
+    // The routine zeroes words: the end is even.
+    if name == "_BSS" {
+        out.push(masm::Datum::Align(masm::Align { to: 2 }));
+        out.push(masm::Datum::Label(masm::Label { name: BSS_END.to_owned() }));
     }
     Ok(out)
 }

@@ -41,6 +41,7 @@ use llrm_mir::valuetracking::power2::is_known_to_be_a_power_of_two;
 use llrm_mir::valuetracking::{Query, known, pattern};
 
 use crate::combine::{Combiner, Visit};
+use crate::combine_and_or_replaced::fold_and_or_with_op_replaced;
 use crate::combine_and_select::fold_and_select;
 use crate::combine_bitorder::fold_bitwise_logic_with_intrinsics;
 use crate::combine_distribute::fold_using_distributive_laws;
@@ -119,6 +120,35 @@ fn fold_and_to_xor(
         return Some(c.replace_with_binop(inst, BinaryOp::Xor, xor, ones, Flags::default()));
     }
     Some(c.replace_with_binop(inst, BinaryOp::Xor, a, b, Flags::default()))
+}
+
+/// An and/or recurrence with a loop-invariant step is `(and/or start, step)`:
+/// `b = b & c` repeated is `b0 & c` after one trip (the second trip changes
+/// nothing). `visitAnd` ([:2938]) and `visitOr` ([:4691]); one helper, the
+/// two folds are the same text with the operation changed.
+///
+/// [:2938]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineAndOrXor.cpp#L2938
+/// [:4691]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineAndOrXor.cpp#L4691
+pub fn fold_idempotent_recurrence(
+    c: &mut Combiner,
+    inst: InstId,
+    op: BinaryOp,
+) -> Option<Visit> {
+    let (phi, start, step) = {
+        let q = query(c, None);
+        pattern::match_simple_recurrence_of(&q, inst)?
+    };
+    // `DT.dominates(Step, PN)`: arguments and constants dominate everything.
+    let dominates = match step {
+        Operand::Value(value) => match c.function.value(value).def {
+            llrm_mir::module::ValueDef::Instruction(def) => {
+                c.env.analyses.dominator_tree().instruction_dominates(c.function, def, phi)
+            }
+            llrm_mir::module::ValueDef::Argument(_) => true,
+        },
+        _ => true,
+    };
+    dominates.then(|| c.replace_with_binop(inst, op, start, step, Flags::default()))
 }
 
 /// `(1 >> X) & 1` and `(C << X) & 1` (C odd) are `zext(X == 0)` (:2514).
@@ -265,6 +295,18 @@ fn fold_and_with_constant(
         return Some(c.replace_with_binop(inst, BinaryOp::Xor, new_and, op1, Flags::default()));
     }
     None
+}
+
+/// `foldBinOpIntoSelectOrPhi` (:2784), right after `narrowMaskedBinOp`: an
+/// `and` of a phi with a select or another phi of its block becomes the phi of
+/// the `and` per incoming value.
+fn into_select_or_phi(
+    c: &mut Combiner,
+    inst: InstId,
+    _: Operand,
+    _: Operand,
+) -> Option<Visit> {
+    Some(c.fold_bin_op_into_select_or_phi(inst)).filter(|found| !matches!(found, Visit::None))
 }
 
 /// `and (bo (zext X), C1), C` and the masks of a `zext` operand: the `and` and
@@ -437,12 +479,16 @@ pub fn visit_and(
     if let Some(r) = fold_binop_shift_with_shift(c, inst) {
         return r;
     }
-    let steps: [fn(&mut Combiner, InstId, Operand, Operand) -> Option<Visit>; 8] = [
+    if let Some(found) = fold_idempotent_recurrence(c, inst, BinaryOp::And) {
+        return found;
+    }
+    let steps: [fn(&mut Combiner, InstId, Operand, Operand) -> Option<Visit>; 9] = [
         fold_one_shifted_by,
         fold_negated_low_bit,
         fold_power_of_two_sum,
         fold_and_with_constant,
         fold_narrowed_binop,
+        into_select_or_phi,
         fold_mask_into_one_arm,
         fold_shifted_power_of_two,
         fold_bitwise_logic_with_intrinsics,
@@ -458,7 +504,10 @@ pub fn visit_and(
     if let Some(found) = fold_boolean_and_or(c, inst, op0, op1, true, false) {
         return Visit::Replace(found);
     }
-    reassociate_boolean_operands(c, inst, (op0, op1), true).map_or(Visit::None, Visit::Replace)
+    if let Some(found) = reassociate_boolean_operands(c, inst, (op0, op1), true) {
+        return Visit::Replace(found);
+    }
+    fold_and_or_with_op_replaced(c, inst, BinaryOp::And, op0, op1).unwrap_or(Visit::None)
 }
 
 #[cfg(test)]

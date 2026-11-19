@@ -42,7 +42,7 @@ use super::context::{
 use super::guarantee::{is_guaranteed_not_to_be_poison, is_guaranteed_not_to_be_undef};
 use super::nonzero::is_known_non_zero;
 use super::pattern::nested::{
-    any, bind, bind_apint, cast, exactly, match_any_binary, match_binary, match_icmp, neg, not, specific, specific_int,
+    any, bind, bind_apint, cast, exactly, match_binary, match_icmp, neg, not, specific, specific_int,
 };
 use super::pattern::{
     IntrinsicId, all_ones, apint, argument_range, call_arguments, call_intrinsic as intrinsic_id, call_range,
@@ -185,15 +185,45 @@ fn have_no_common_bits_set_special_cases(
     Unknown
 }
 
+/// `WithCache<const Value *>`: an operand whose known bits are computed the
+/// first time they are asked and kept, so that a chain of queries about one
+/// operand (`getNoCommonBitsSetResult`, then the overflow checks of an add)
+/// computes them once. The query of the first ask is the one that counts.
+///
+/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Analysis/WithCache.h#L26>
+pub struct WithCache {
+    value: Operand,
+    known: std::cell::OnceCell<KnownBits>,
+}
+
+impl WithCache {
+    pub fn new(value: Operand) -> Self {
+        Self { value, known: std::cell::OnceCell::new() }
+    }
+
+    pub fn value(&self) -> Operand {
+        self.value
+    }
+
+    /// `getKnownBits(Q)`: `computeKnownBits(V, Q, 0)`, computed once.
+    pub fn known_bits(
+        &self,
+        q: &Query,
+    ) -> &KnownBits {
+        self.known.get_or_init(|| compute_known_bits(q, self.value, 0))
+    }
+}
+
 /// `getNoCommonBitsSetResult(LHSCache, RHSCache, SQ)`.
 ///
 /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ValueTracking.cpp#L241>
 pub fn get_no_common_bits_set_result(
     q: &Query,
-    lhs: Operand,
-    rhs: Operand,
+    lhs_cache: &WithCache,
+    rhs_cache: &WithCache,
 ) -> NoCommonBitsSetResult {
     use NoCommonBitsSetResult::{Known, OnlyIfUndefIgnored, Unknown};
+    let (lhs, rhs) = (lhs_cache.value(), rhs_cache.value());
     let result = have_no_common_bits_set_special_cases(q, lhs, rhs);
     if result == Known {
         return Known;
@@ -202,7 +232,7 @@ pub fn get_no_common_bits_set_result(
     if commute_result == Known {
         return Known;
     }
-    if KnownBits::have_no_common_bits_set(&compute_known_bits(q, lhs, 0), &compute_known_bits(q, rhs, 0)) {
+    if KnownBits::have_no_common_bits_set(lhs_cache.known_bits(q), rhs_cache.known_bits(q)) {
         return Known;
     }
     if result == OnlyIfUndefIgnored || commute_result == OnlyIfUndefIgnored {
@@ -219,7 +249,7 @@ pub fn have_no_common_bits_set(
     lhs: Operand,
     rhs: Operand,
 ) -> bool {
-    get_no_common_bits_set_result(q, lhs, rhs) == NoCommonBitsSetResult::Known
+    get_no_common_bits_set_result(q, &WithCache::new(lhs), &WithCache::new(rhs)) == NoCommonBitsSetResult::Known
 }
 
 /// Whether `inst` has users and each is an `icmp` of it with zero whose
@@ -549,6 +579,42 @@ fn compute_known_bits_from_shift_operator(
     kf(&known2, &known, sh_amt_non_zero)
 }
 
+/// The `Y` of `m_c_BinOp(m_Value(X), m_c_Add(m_Deferred(X), m_Value(Y)))`,
+/// `..m_Sub(m_Deferred(X), m_Value(Y))` or `..m_Sub(m_Value(Y),
+/// m_Deferred(X))`, tried in that order. Each operand is looked up once, with
+/// no matcher closures: the miss path ran 126 Ir per call.
+fn low_bit_partner(
+    q: &Query,
+    instruction: &Instruction,
+) -> Option<Operand> {
+    let ops = [instruction.operands[0], instruction.operands[1]];
+    let inner = [q.instruction_of(ops[1]), q.instruction_of(ops[0])];
+    let find = |want: BinaryOp, commutes: bool, x_first: bool| {
+        for k in 0..2 {
+            let Some((_, i)) = inner[k] else { continue };
+            if i.opcode != Opcode::Binary(want) {
+                continue;
+            }
+            let x = ops[k];
+            let (p, r) = (i.operands[0], i.operands[1]);
+            if x_first {
+                if p == x {
+                    return Some(r);
+                }
+                if commutes && r == x {
+                    return Some(p);
+                }
+            } else if r == x {
+                return Some(p);
+            }
+        }
+        None
+    };
+    find(BinaryOp::Add, true, true)
+        .or_else(|| find(BinaryOp::Sub, false, true))
+        .or_else(|| find(BinaryOp::Sub, false, false))
+}
+
 /// `getKnownBitsFromAndXorOr(I, DemandedElts, KnownLHS, KnownRHS, Q, Depth)`.
 ///
 /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ValueTracking.cpp#L1187>
@@ -564,7 +630,6 @@ fn get_known_bits_from_and_xor_or(
     let mut is_and = false;
     let has_known_one = known_lhs.one != 0 || known_rhs.one != 0;
     let x: Cell<Option<Operand>> = Cell::new(None);
-    let y: Cell<Option<Operand>> = Cell::new(None);
 
     let mut known_out;
     match instruction.opcode {
@@ -600,20 +665,9 @@ fn get_known_bits_from_and_xor_or(
 
     if known_out.zero & 1 == 0
         && known_out.one & 1 == 0
-        && (match_any_binary(q, this, true, &bind(&x), &|n| {
-            match_binary(q, n, BinaryOp::Add, none, true, &specific(&x), &bind(&y))
-        })
-        .is_some()
-            || match_any_binary(q, this, true, &bind(&x), &|n| {
-                match_binary(q, n, BinaryOp::Sub, none, false, &specific(&x), &bind(&y))
-            })
-            .is_some()
-            || match_any_binary(q, this, true, &bind(&x), &|n| {
-                match_binary(q, n, BinaryOp::Sub, none, false, &bind(&y), &specific(&x))
-            })
-            .is_some())
+        && let Some(y) = low_bit_partner(q, instruction)
     {
-        let known_y = compute_known_bits(q, y.get().expect("matched"), depth + 1);
+        let known_y = compute_known_bits(q, y, depth + 1);
         if known_y.count_min_trailing_ones() > 0 {
             if is_and {
                 known_out.zero |= 1;
@@ -1709,6 +1763,18 @@ pub fn compute_known_bits(
     v: Operand,
     depth: u32,
 ) -> KnownBits {
+    crate::counts::bump(crate::counts::Event::KnownBitsComputed);
+    // DEVIATE (vectors, w11): the rules below are the scalar ones; a vector is
+    // what every lane holds, a splat constant's number, else nothing.
+    if let Some(lane) = q.int_vector_lane_bits(v) {
+        return match v {
+            Operand::Constant(id) => match q.context().splat_int(id) {
+                Some((bits, width)) => KnownBits::constant(width, bits),
+                None => KnownBits::unknown(lane),
+            },
+            _ => KnownBits::unknown(lane),
+        };
+    }
     let mut known = KnownBits::unknown(width_of(q, v));
     compute_known_bits_into(q, v, &mut known, depth);
     known

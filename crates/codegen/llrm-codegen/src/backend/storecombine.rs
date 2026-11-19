@@ -226,7 +226,7 @@ mod tests {
                         vec![Loc::Mem(cell.clone())],
                     );
                 }
-                Some("requirements") => high.requires = vec![(Held { value: 1, width: 2 }, RegId::AX)],
+                Some("requirements") => high.requires = vec![(Held { value: 1, width: 2, offset: 0 }, RegId::AX)],
                 _ => {}
             }
             let (low, marker, high) = (Arc::new(low), Arc::new(marker), Arc::new(high));

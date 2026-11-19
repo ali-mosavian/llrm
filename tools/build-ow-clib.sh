@@ -1,13 +1,13 @@
 #!/bin/sh
-# Open Watcom's DOS C library built from source with make -j: tools/build-ow-clib.sh [DIR] (default ~/scratch/ow-src)
+# Open Watcom's DOS C library built from source with make -j: tools/build-ow-clib.sh [DIR] (default ~/.cache/llrm/ow-src-<commit>, the tree llrm-cc's {ow} names)
 # DIR is a copy of the Open Watcom tree toolchain/owshim/ow-commit pins (~/.cache/llrm/open-watcom-v2-<commit>, bootstrapped by
 # toolchain/wdump.sh). The build runs on that tree's own bw* tools; an installed Open Watcom (WATCOM) is not needed, and its binl64 is
 # put on the path only when WATCOM is set. Makes DIR/bld/clib/library/msdos.086/mm/clibm.lib
 # (16-bit, medium, register calls) and msdos.386/ms_s/clib3s.lib (32-bit, small, stack calls) and msdos.386/ms_r/clib3r.lib (register calls, llrm's `watcom` ABI).
 set -eu
 root=$(cd "$(dirname "$0")/.." && pwd)
-ow=${1:-$HOME/scratch/ow-src}
 cache=${XDG_CACHE_HOME:-$HOME/.cache}/llrm
+ow=${1:-$cache/ow-src-$(cat "$root/toolchain/owshim/ow-commit")}
 [ -d "$ow/bld" ] || { mkdir -p "$ow"; cp -a "$cache/open-watcom-v2-$(cat "$root/toolchain/owshim/ow-commit")/." "$ow"; }
 export OWROOT=$ow OWOBJDIR=binbuild OWTOOLS=WATCOM OWTOOLSVER=1300
 export OWBLDVER=20 OWBLDVERSTR=2.0 OWBLDVERTOOL=1300 DEVDIR=$ow/bld

@@ -20,8 +20,9 @@
 //! - **SD22** The `MatchStateUpdater` is not installed around complex patterns;
 //!   a complex pattern that CSEs a node while matching is a C1 question. Owner
 //!   sdag-c. Exit: C1. Review 2026-12-10.
-//! - **SD23** `CheckImmAllOnesV`/`CheckImmAllZerosV` never match: no vectors
-//!   before 32-bit parity. Owner sdag-c. Exit: vector MIR. Review 2026-12-10.
+//! - **SD23** `CheckImmAllOnesV`/`CheckImmAllZerosV` ask
+//!   `Dag::is_build_vector_all`, which answers false for a DAG with no vectors
+//!   (retired for arm64's 128-bit integer vectors, 2026-11-10).
 //!
 //! # Used by
 //! `X86DAGToDAG` (C1) and the shadow harness.
@@ -85,9 +86,10 @@ thread_local! {
     static KEPT: std::cell::Cell<Option<Box<Scratch>>> = const { std::cell::Cell::new(None) };
 }
 
-/// The capacity the buffers kept for the next selection hold.
-#[cfg(test)]
-pub(crate) fn kept_capacity() -> usize {
+/// The capacity the buffers kept for the next selection hold (read by the
+/// x86 table's tests).
+#[doc(hidden)]
+pub fn kept_capacity() -> usize {
     let kept = KEPT.take();
     let capacity = kept.as_ref().map_or(0, |one| one.node_stack.capacity() + one.match_scopes.capacity());
     KEPT.set(kept);
@@ -243,6 +245,9 @@ impl Selector {
                     }
                     continue;
                 }
+                // llrm builds no `ISD::DEACTIVATION_SYMBOL` (PAuth), so there
+                // is none to capture.
+                Matcher::CaptureDeactivationSymbol => continue,
                 Matcher::MoveChild(child) => {
                     if usize::from(child) >= dag.num_operands(n.node) {
                         false
@@ -274,6 +279,7 @@ impl Selector {
                 | Matcher::CheckPredicate(_)
                 | Matcher::CheckOpcode(_)
                 | Matcher::CheckType(_)
+                | Matcher::CheckTypeRes { .. }
                 | Matcher::CheckChildType { .. }
                 | Matcher::CheckInteger(_)
                 | Matcher::CheckChildInteger { .. }
@@ -333,7 +339,12 @@ impl Selector {
                     }
                     false
                 }
-                Matcher::CheckImmAllOnesV | Matcher::CheckImmAllZerosV => false,
+                Matcher::CheckImmAllOnesV | Matcher::CheckImmAllZerosV => {
+                    if dag.is_build_vector_all(n, matches!(item, Matcher::CheckImmAllOnesV)) {
+                        continue;
+                    }
+                    false
+                }
                 Matcher::CheckUndef => {
                     if dag.is_undef(n) {
                         continue;
@@ -498,6 +509,7 @@ impl Selector {
             | Matcher::CheckPredicate(_)
             | Matcher::CheckOpcode(_)
             | Matcher::CheckType(_)
+            | Matcher::CheckTypeRes { .. }
             | Matcher::CheckChildType { .. }
             | Matcher::CheckInteger(_)
             | Matcher::CheckChildInteger { .. }
@@ -538,6 +550,7 @@ impl Selector {
             Matcher::CheckPredicate(predicate) => hooks.check_node_predicate(dag, n, predicate),
             Matcher::CheckOpcode(opcode) => dag.opcode(n.node) == opcode,
             Matcher::CheckType(vt) => check_type(vt, n),
+            Matcher::CheckTypeRes { res, vt } => check_type(vt, SDValue::new(n.node, res)),
             Matcher::CheckChildType { child: index, vt } => child(index).is_some_and(|c| check_type(vt, c)),
             Matcher::CheckInteger(value) => dag.constant(n) == Some(value),
             Matcher::CheckChildInteger { child: index, value } => {

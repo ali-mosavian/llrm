@@ -77,3 +77,9 @@ One PR per step, ledger pair in each body. Dates are land dates.
 | 11-17 | w-6 | Stamp 14.0 (`stamped_all` 10.0 + `Stamp` 3.9), llrm-only | none | up to 14 |
 
 Row-23 back half follows, 11-23 to 12-10. `Homes` 8.4 and `Spares` 8.0 are llrm-only module passes on w-6's retire list.
+
+## Option: panic=abort (2026-11-07, not adopted)
+
+Dist build with `panic=abort`: memexp -O2 6,574.6 M vs 6,688.1 M Ir (-1.70%),
+58 llc outputs identical. Not adopted: `catch_unwind` in `dag_function.rs`
+turns an isel stage panic into a refusal. Revisit when that fallback is retired.

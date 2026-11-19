@@ -62,7 +62,7 @@ def parse(name, lvl, err):
 def compiled(job):
     name, source, flags, level = job
     environment = dict(os.environ, LLRM_DEBUG="regalloc,candidates,routes", LLRM_CANDIDATES="measure")
-    command = [str(ROOT / "target/release/llrm-c"), *flags, level, "-S", "-o", "/dev/null", str(source)]
+    command = [str(ROOT / "target/release/llrm-cc"), *flags, level, "-S", "-o", "/dev/null", str(source)]
     done = subprocess.run(command, capture_output=True, text=True, env=environment, timeout=900)
     return name, level, done.stderr
 

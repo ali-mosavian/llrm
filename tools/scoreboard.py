@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """llrm against gcc: instructions:u per level, and where llrm's go, by family.
 
-    tools/scoreboard.py [--levels O1 O2] [--jobs N] [--json FILE] [llrm-c]
+    tools/scoreboard.py [--levels O1 O2] [--jobs N] [--json FILE] [llrm-cc]
 
 Two sets, from tools/compile-cost.py's files. The 66 programs (wrapped as vsgcc compiles them) are what gcc can compile: llrm/gcc
 over the whole compile, per level, and gcc's `-fsyntax-only` as its parse. QCport's modules are Open Watcom DOS C, which gcc
@@ -148,7 +148,7 @@ def main() -> int:
     parser.add_argument("llrm", nargs="?", type=Path)
     args = parser.parse_args()
 
-    runs = measure(args.llrm or llrmbin.bin_dir() / "llrm-c", [f"-{level.lstrip('-')}" for level in args.levels], args.jobs)
+    runs = measure(args.llrm or llrmbin.bin_dir() / "llrm-cc", [f"-{level.lstrip('-')}" for level in args.levels], args.jobs)
     if args.json:
         args.json.write_text(json.dumps(runs))
     print(report(runs))

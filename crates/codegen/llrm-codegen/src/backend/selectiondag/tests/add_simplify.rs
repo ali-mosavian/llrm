@@ -104,3 +104,20 @@ fn an_add_of_a_negation_or_a_sub_of_the_other_side_simplifies() {
     assert_eq!(dag.opcode(root), ISD::Sub);
     assert_eq!(dag.constant(dag.operand(root, 0)), Some(1));
 }
+
+/// `x + (1 - y)` stayed as it was and a compare of it with 1 kept the add
+/// (x_rle -O2: `neg; lea; cmp edx, 1; sete` where the pin has `cmp; sete`).
+#[test]
+fn a_one_use_constant_minus_y_is_hoisted_out_of_an_add() {
+    for left in [true, false] {
+        let (dag, root) = combined(|dag, x, y| {
+            let one = k(dag, 1);
+            let sub = dag.get_node(ISD::Sub, EVT::I32, &[one, y]);
+            let (a, b) = if left { (x, sub) } else { (sub, x) };
+            dag.get_node(ISD::Add, EVT::I32, &[a, b])
+        });
+        assert_eq!(dag.opcode(root), ISD::Add);
+        assert_eq!(dag.opcode(dag.operand(root, 0)), ISD::Sub);
+        assert_eq!(dag.constant(dag.operand(root, 1)), Some(1));
+    }
+}

@@ -24,9 +24,12 @@ HERE = Path(__file__).resolve().parent
 LINK_TEXT_BASE = 1 << 16
 sys.path.insert(0, str(HERE.parent))
 import targetdesc  # noqa: E402
+sys.path.insert(0, str(HERE))
+import irguard  # noqa: E402
 
 PINNED_BIN = Path(os.environ.get("LLVM_BIN") or Path.home() / "scratch/llvm-build/bin")  # LLVM d1106deb71cc
 FEATURES = {"x86": "-sse,-sse2,-mmx"}  # what an i486 has not: stated, so no default of the tool's can add it
+CPU_FEATURES = {"x86-64": "+sse,+sse2,+mmx"}  # what the x86-64 baseline has: floats go through SSE, as clang's do
 
 
 class Refused(Exception):
@@ -53,7 +56,8 @@ def target(mode: str, optsize: bool = False) -> Target:
     if found is None:
         raise Refused(f"no target `{mode}` in the target description: {sorted(targetdesc.targets())}")
     arch = found.get("tti", "X86").lower()
-    return Target(found["llvm_triple"], found["llvm_cpu"], found["datalayout"], FEATURES.get(arch, ""), optsize)
+    features = CPU_FEATURES.get(found["llvm_cpu"]) or FEATURES.get(arch, "")
+    return Target(found["llvm_triple"], found["llvm_cpu"], found["datalayout"], features, optsize)
 
 
 def header(of: Target) -> str:
@@ -94,12 +98,15 @@ def retarget(text: str, of: Target) -> str:
         text = f'target datalayout = "{of.datalayout}"\n{text}'
     if not re.search(r"^target triple", text, re.M):
         text = re.sub(r"^(target datalayout = .*)$", rf'\1\ntarget triple = "{of.triple}"', text, count=1, flags=re.M)
+    text = re.sub(r"^(define [^\n]*?)(?: llrm-[a-z][a-z-]*)+( \{)$", r"\1\2", text, flags=re.M)  # our words; the pin's parser stops at them
     text = re.sub(r"^(define [^\n]*?) \{$", r"\1 #9999 {", text, flags=re.M)
     # An intrinsic lives in address space 0 in LLVM; ours declares and calls it in the code space (m16 `addrspace(1)` after the
     # parameters of a declare and after `call cc N`). A pointer parameter in that space stays.
     text = re.sub(r"^(declare [^\n]*@llvm\.[^\n]*?\)) addrspace\(1\)(?= [a-z]|$)", r"\1", text, flags=re.M)
     text = re.sub(r"^(\s+(?:%\S+ = )?(?:(?:tail|musttail|notail) )?call(?: cc \d+)?) addrspace\(1\)( [^\n]*@llvm\.)", r"\1\2", text, flags=re.M)
     text = _with_stack_alignment(text, of)
+    # A dump's own groups carry clang's `target-cpu` (pentium4 for -m32): one CPU per module, or which of two groups wins is LLVM's merge.
+    text = re.sub(r' ?"(?:target-cpu|target-features|tune-cpu)"="[^"]*"', "", text)
     group = f'"target-cpu"="{of.cpu}" "target-features"="{of.features}"' + (" optsize" if of.optsize else "")
     return text + f"\nattributes #9999 = {{ {group} }}\n"
 
@@ -118,7 +125,7 @@ def opt(passes: str, text: str, of: Target | None = None, extra: list[str] | Non
     """`opt -passes=PASSES -S` over `text` retargeted to `of`; `stdout` starts with the `target:` line as a comment."""
     of = _need(of)
     done = subprocess.run([_tool("opt", bin_dir), f"-passes={passes}", "-S", *(extra or []), "-"], input=retarget(text, of), capture_output=True, text=True)
-    done.stdout = f"; {header(of)}\n" + done.stdout
+    done.stdout = f"; {header(of)}\n; optimised: {passes}\n" + done.stdout
     return done
 
 
@@ -131,6 +138,8 @@ def backend_ir(dump: Path) -> Path | None:
 def llc(args: list[str], text: str, of: Target | None = None, bin_dir: Path | None = None) -> subprocess.CompletedProcess:
     """`llc` over `text` retargeted to `of`, told `-mtriple`, `-mcpu` and `-mattr` besides."""
     of = _need(of)
+    if of.triple.startswith(("x86_64", "aarch64")) and (missing := irguard.missing_dso_local(text)):
+        raise Refused(f"the pin's llc is PIC on this IR and ours is not: {len(missing)} symbols without dso_local (first: {missing[0]}); add dso_local before a same-IR compare")
     cmd = [_tool("llc", bin_dir), f"-mtriple={of.triple}", f"-mcpu={of.cpu}", f"-mattr={of.features}", *args, "-"]
     done = subprocess.run(cmd, input=retarget(text, of), capture_output=True, text=True)
     done.stdout = f"; {header(of)}\n" + done.stdout

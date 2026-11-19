@@ -4,7 +4,7 @@ architecture-order: 277
 ---
 # DFAJumpThreading as a translation of LLVM's: the plan
 
-TL;DR: `DFAJumpThreading.cpp` (1,579 lines, pin `d1106deb71cc`) becomes a new `dfajumpthreading.rs` in three slices (about 1,300 + 350 + 150 lines); the registry row `dfa-jump-threading` is Missing, owner parity-pipeline. The old `jumpthread.rs` is deleted whole after S1–S3: its switch half is DFAJumpThreading's, the branch half is JumpThreading's, and `split_arms` is parity to drop at -O2/-Os (section 4).
+TL;DR: `DFAJumpThreading.cpp` (1,579 lines, pin `d1106deb71cc`) becomes a new `dfajumpthreading.rs` in three slices (about 1,300 + 350 + 150 lines); the registry row `dfa-jump-threading` is Missing, owner llrm-oversight (plan; start gated on parity). The old `jumpthread.rs` is deleted whole after S1–S3: its switch half is DFAJumpThreading's, the branch half is JumpThreading's, and `split_arms` is parity to drop at -O2/-Os (section 4).
 
 Rule for the code: each Rust function is a translation of the C++ function named in its comment (permalink at the pin); what is not translated is a numbered DEVIATE (`DF1`, `DF2`, ...) in the module header. Idiomatic Rust, no machine facts in the pass: the limits are fields of a `DfaJumpThreadingOptions` (defaults are the pin's values, as `JumpThreadingOptions` does), costs come from `CodeMetrics` and the TTI trait (`crates/ir/llrm-mir/src/tti.rs`). Near O(n): the pin's caps are the bound, kept as they are; a step beyond them needs a stated reason and a slope test at 1x and 4x.
 

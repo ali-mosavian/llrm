@@ -10,22 +10,23 @@ fn body(name: &str) -> String {
     asm[start..start + 1 + rest.find("\n_").unwrap_or(rest.len())].to_owned()
 }
 
-/// `acc + (long)(a * b)` was `madd w`, `sbfm`, `add`: three instructions where
-/// `smaddl` is one.
+/// `acc + (long)(a * b)`: the pin's `llc` makes the 32-bit product and adds it
+/// sign-extended (`mul w8, w1, w2; add x0, x0, w8, sxtw`): the extension is
+/// of the wrapped product, which `smaddl` of the operands does not compute.
 #[test]
-fn a_widened_product_added_is_smaddl() {
+fn a_widened_product_added_is_a_multiply_and_an_extended_add() {
     let asm = body("accumulate");
-    assert!(asm.contains("smaddl x"), "{asm}");
-    assert!(!asm.contains("sbfm") && !asm.contains("madd w"), "{asm}");
-    assert!(body("subtract").contains("smsubl x"));
-    assert!(body("unsigned_accumulate").contains("umaddl x"));
+    assert!(asm.contains("madd w") && asm.contains("sxtw") && !asm.contains("smaddl"), "{asm}");
+    assert!(!asm.contains("sbfm"), "{asm}");
+    let subtract = body("subtract");
+    assert!(subtract.contains("sub x0, x0, w") && subtract.contains("sxtw"), "{subtract}");
 }
 
-/// Alone it is `smull` (`smaddl` from the zero register).
+/// Alone it is the product and a `sxtw` (`sbfm x, x, #0, #31`).
 #[test]
-fn a_widened_product_alone_is_smull() {
+fn a_widened_product_alone_is_a_multiply_and_a_sign_extension() {
     let asm = body("alone");
-    assert!(asm.contains("smaddl x") && asm.contains("xzr"), "{asm}");
+    assert!(asm.contains("madd w") && asm.contains("sbfm x0, x9, #0, #31"), "{asm}");
 }
 
 /// Without `nsw` the 32-bit product may wrap before it is extended, so the

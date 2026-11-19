@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # sweep-targets.sh: runs prune-target.sh --apply on every cargo target dir over CAP_KB (default 15 GB) under SWEEP_ROOTS (default ~/scratch and the worktrees),
 # active dirs included: it removes only stale hashes (see prune-target.sh), which the owner's next build recreates. Prints `dir: pruned N entries, X bytes` per dir.
+. "$(dirname "${BASH_SOURCE[0]:-$0}")/branch.sh"
 HERE=$(cd "$(dirname "$0")" && pwd); cap=${CAP_KB:-15728640}
 # default: ~/scratch, and every worktree of this repo (taken from git, so no tool-named directory is spelled out here)
 roots=${SWEEP_ROOTS:-"$HOME/scratch $(git -C "$HERE" worktree list --porcelain | sed -n 's/^worktree //p' | xargs -r -n1 dirname | sort -u | tr '\n' ' ')"}
@@ -16,23 +17,23 @@ for root in $roots; do
       # a process with a file open under it (a running build or test) keeps it
       [ -z "$(lsof -t +D "$d" 2>/dev/null | head -1)" ] || continue
     fi
-    [ -n "${DRY:-}" ] && { echo "would prune stale hashes of: $d"; continue; }
+    [ -n "${DRY:-}" ] && { echo "would prune stale hashes of: $d: $("$HERE/prune-target.sh" "$d")"; continue; }
     out=$("$HERE/prune-target.sh" "$d" --apply) && echo "$d: pruned $out"
   done
 done
 
-# pair_build dists (`<root>/<name>/{ok,dist/llrm-c}`, 250 MB each, 400 of them by 10-24) and their `wt-pair-*` checkouts: pruned when older than DIST_MIN (default 180) minutes and no
+# pair_build dists (`<root>/<name>/{ok,dist/llrm-cc}`, 250 MB each, 400 of them by 10-24) and their `wt-pair-*` checkouts: pruned when older than DIST_MIN (default 180) minutes and no
 # process has the directory as its cwd or in its command line. `ok` is pair_build's marker; a dist without it is its owner's and is only listed (`kept: ...`). DRY=1 lists and removes nothing.
 # One snapshot of every process's cwd and command line, taken once: a scan of /proc per candidate took longer than the sweep's cadence.
 procs=$(mktemp); trap 'rm -f "$procs"' EXIT
 { for p in /proc/[0-9]*; do readlink "$p/cwd"; tr '\0' ' ' < "$p/cmdline"; echo; done; } > "$procs" 2>/dev/null
 in_use() { grep -qF -- "$1" "$procs"; }
-tip=${TIP_SHA:-$(git -C "$HERE" rev-parse --verify -q origin/feat/parity 2>/dev/null)}
+tip=${TIP_SHA:-$(git -C "$HERE" rev-parse --verify -q origin/$LAND_BRANCH 2>/dev/null)}
 for root in $roots; do
-  for holder in $(find "$root" -maxdepth 3 -path '*/dist/llrm-c' -mmin +"${DIST_MIN:-180}" -printf '%h\n' 2>/dev/null | xargs -r -n1 dirname | sort -u); do
+  for holder in $(find "$root" -maxdepth 3 -path '*/dist/llrm-cc' -mmin +"${DIST_MIN:-180}" -printf '%h\n' 2>/dev/null | xargs -r -n1 dirname | sort -u); do
     [ -e "$holder/ok" ] || { echo "kept (no ok marker): $holder"; continue; }
     name=$(basename "$holder")
-    # Never the pinned base (every base-vs-new measure compares against it) nor the dist of the tip last landed (the next pair's base): TIP_SHA overrides the head read from origin/feat/parity.
+    # Never the pinned base (every base-vs-new measure compares against it) nor the dist of the tip last landed (the next pair's base): TIP_SHA overrides the head read from origin/$LAND_BRANCH.
     case "$name" in sbp-${DIST_PINNED:-854bb7efc}*) echo "kept (pinned base): $holder"; continue;; esac
     [ -n "$tip" ] && case "$name" in sbp-"$tip"*|sbp-"${tip:0:9}"*) echo "kept (last landed tip): $holder"; continue;; esac
     in_use "$holder" && { echo "kept (in use): $holder"; continue; }

@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
-use llrm_dagisel::generated::x86_i486::MACHINE_OPCODES;
 use llrm_target::Target;
+use llrm_x86_dagisel::generated::x86_i486::MACHINE_OPCODES;
 
 use super::opcodes::{OpcodeMap, Unmapped};
 

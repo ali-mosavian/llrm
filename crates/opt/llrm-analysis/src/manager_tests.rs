@@ -1248,6 +1248,69 @@ fn a_branch_sent_to_other_blocks_makes_the_pointer_analyses_derive_again() {
     }
 }
 
+/// A branch replaced by another (the old one erased, a new one placed) sent
+/// the block elsewhere without a `set_operand` in the log, so `PointsTo` kept
+/// the old edges: `LLRM_CHECK_PRESERVED` with the other checks on x_crc32 -O1
+/// found 'points-to: the result kept past 3 changes is not what deriving it
+/// afresh gives' after an `lshr` moved and its block's branch was replaced.
+#[test]
+fn a_branch_replaced_by_one_to_other_blocks_makes_the_pointer_analyses_derive_again() {
+    let mut module = parsed(
+        "declare void @use(ptr)\ndeclare void @peek()\ndefine void @f(i1 %k) {\nentry:\n  %s = alloca i32\n  br i1 %k, label %a, label %b\na:\n  br label %c\nb:\n  call void @use(ptr %s)\n  br label %c\nc:\n  call void @peek()\n  ret void\n}\n",
+    );
+    let id = module.named("f").expect("f");
+    let void = module.context.types.void();
+    let llrm_mir::module::GlobalKind::Function(f) = &mut module.globals[id.0 as usize].kind else {
+        panic!("a function")
+    };
+    let entry = f.entry().expect("entry");
+    let br = f
+        .walk()
+        .map(|(_, inst)| inst)
+        .find(|&inst| matches!(f.instruction(inst).opcode, Opcode::Br) && f.instruction(inst).operands.len() == 3)
+        .expect("the branch");
+    let Operand::Block(a) = f.instruction(br).operands[1] else { panic!("a block") };
+    f.take_changes();
+    let before = f.mark();
+    let replacement = f.create_instruction(Opcode::Br, void, vec![Operand::Block(a)], Default::default(), None);
+    f.erase(br).expect("unused");
+    f.insert(replacement, llrm_mir::edit::Position::End(entry)).expect("placed");
+    let changes = f.changes_since(before).expect("on the log").to_vec();
+    assert!(
+        !Pointers::unaffected(&changes, &module.context, function(&module, "f")),
+        "points-to kept past a branch replaced by one to other blocks"
+    );
+}
+
+/// The accesses were kept past an edit when `Annotated` came out equal, though
+/// a call's footprint names the index its pointer argument is made of:
+/// `LLRM_CHECK_REPLAY` on bench/grep -O2 found a call's footprint with base
+/// %63 where deriving it gave %75, after a gep's index was replaced.
+#[test]
+fn accesses_are_derived_again_when_a_calls_footprint_changed() {
+    let mut module = parsed(&format!(
+        "{DOS}declare void @g(ptr) memory(argmem: readwrite)\ndefine void @f(ptr %p, i16 %i, i16 %j) {{\nentry:\n  %q = getelementptr i8, ptr %p, i16 %i\n  call void @g(ptr %q)\n  ret void\n}}\n"
+    ));
+    let layout = layout(&module);
+    let outer = Rc::new(Outer::of(&module, None));
+    let mut analyses = Analyses::new(Rc::clone(&outer));
+    {
+        let (context, function) = module.function_mut("f").unwrap();
+        analyses.get::<crate::memoryssa::Accesses>(context, &layout, function);
+        let gep = function.iter_block(function.layout()[0]).next().unwrap();
+        let j = Operand::Value(value(function, "j"));
+        function.set_operand(gep, 1, j);
+        analyses.invalidate(function, &PreservedAnalyses::none());
+    }
+    let (context, function) = module.function_mut("f").unwrap();
+    let after = analyses.get::<crate::memoryssa::Accesses>(context, &layout, function);
+    assert_eq!(
+        *after,
+        *Analyses::new(outer).get::<crate::memoryssa::Accesses>(context, &layout, function),
+        "what was brought up to date is what deriving it afresh gives"
+    );
+}
+
 /// `LLRM_CHECK_CAPTURES` judges the points-to facts each time `get` hands them
 /// out, so a fact a pass reads (dse dropping a store behind `phi [%slot, %q]`)
 /// is checked where it is used: a planted result that forgot the escape of

@@ -85,7 +85,7 @@ fn an_immutable_tag_is_constant_memory() {
     let f = function(&module, "f");
     let unit = Unit::of(&module, &layout, f);
     let [int, _, _, _, _, _, immutable] = tags(&module)[..] else { panic!() };
-    let at = |tag| MemoryLocation { aa_info: AAInfo { tbaa: tag, noalias_scope: None }, ..location(0) };
+    let at = |tag| MemoryLocation { aa_info: AAInfo { tbaa: tag, ..AAInfo::default() }, ..location(0) };
     let mut tbaa = TypeBasedAA::new(&unit);
     let aaqi = &mut AAQueryInfo::default();
     assert_eq!(tbaa.get_mod_ref_info_mask(&at(immutable), aaqi, false), ModRefInfo::NoModRef);

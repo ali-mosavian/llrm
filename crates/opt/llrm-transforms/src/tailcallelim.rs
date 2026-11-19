@@ -168,6 +168,36 @@ fn eliminate(
     }
 }
 
+/// The calls of `name` in its own body whose arguments are no constants for
+/// ipa-cp once the pass has made one of them a loop: GCC runs `tailr1` before
+/// ipa-cp, so what a call left passes is a phi of the loop (`jump function
+/// UNKNOWN` of `fib(n - 2)` in `fib.c.087i.cp`).
+pub fn eliminated_self_calls(
+    module: &mut llrm_mir::module::Module,
+    layout: &DataLayout,
+    name: GlobalId,
+) -> IdSet<InstId> {
+    let Some(body) = module.global(name).function() else { return Default::default() };
+    let own = |context: &Context, function: &Function| -> IdSet<InstId> {
+        function
+            .walk()
+            .map(|(_, inst)| inst)
+            .filter(|&inst| memory::callee(context, function, inst) == Some(name))
+            .collect()
+    };
+    let before = own(&module.context, body);
+    if before.is_empty() {
+        return Default::default();
+    }
+    let mut copy = body.clone();
+    let outer = Outer::of(module, None);
+    let mut declared = Declared::of(module);
+    eliminate(&mut module.context, layout, &mut copy, &mut declared, &outer, Some(name));
+    let after = own(&module.context, &copy);
+    // The calls left read their arguments from the loop's phis.
+    if after.len() < before.len() { before } else { Default::default() }
+}
+
 /// `canTRE`
 /// ([TailRecursionElimination.cpp:146](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/TailRecursionElimination.cpp#L146)):
 /// every alloca is static.
@@ -933,7 +963,7 @@ impl<'a> TailRecursionEliminator<'a> {
         let not_volatile = Operand::Constant(self.context.int(i1_type, 0));
         let callee =
             Operand::Constant(self.context.constant(Constant { ty: pointer_type, kind: ConstantKind::Global(callee) }));
-        let aligned = vec![Attribute::Int("align".to_owned(), alignment)];
+        let aligned = vec![Attribute::Int("align".into(), alignment)];
         let info = CallInfo {
             function_type,
             calling_convention: 0,

@@ -24,7 +24,7 @@ def test_the_table_is_shares_of_the_group_largest_first():
 
 
 def test_cpu_time_rows_are_no_counter(tmp_path):
-    fake = tmp_path / "llrm-c"
+    fake = tmp_path / "llrm-cc"
     fake.write_text("#!/bin/sh\necho '[instr]  1.000 Mcpu-ns own  1.000 Mcpu-ns total  1x mir gvn' >&2\n")
     fake.chmod(0o755)
     with pytest.raises(profile.compile_cost.NoCounter):

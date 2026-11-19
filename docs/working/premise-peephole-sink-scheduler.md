@@ -1,6 +1,6 @@
 # Premise tests: Peephole, MachineSink, Machine Scheduler
 
-TL;DR: by bytes only Peephole is worth something on the rows corpus (m32 i486); by clocks MachineSink is worth +1.0..1.6% (+25..35% on x_collatz) and ours lacks that piece, and the Machine Scheduler is worth +0.13..0.19% (DEVIATE MS1 on clocks).
+TL;DR: by bytes only Peephole is worth something on the rows corpus (m32 i486); by clocks MachineSink is worth +1.0..1.6% (+25..35% on x_collatz) and ours lacks that piece, and the Machine Scheduler is worth +0.13..0.19% (DEVIATE MS1 on clocks, closed: scheduler translated).
 
 Instrument: `tools/pairs/premise.py OURS_LLRM_C LEVEL PASSFLAG` (a copy of w-4's `leacmp.py` shape). Our pipeline's last MIR (`*-switchconv.ll`) of each of the 71 programs of the rows corpus goes to the pin's llc (`pin.py` target m32: `i486-unknown-linux-gnu`, cpu i486, no SSE, optsize at -Os) with and without one pass. It counts instructions per program, and `.text` bytes of the pin's object. Ours is our own `-S` listing of the same source. Run on dist `4d72d84065` (own worktree, stamped).
 
@@ -33,7 +33,7 @@ Ours against the pin on the programs the sink moves (clocks, our build 49a8d96bf
 ## Decisions
 
 - **MachineSink**: not zero. The pin's pass is worth +1.0% clocks (-O2) and +1.6% (-O3) as a geomean and up to +25..35% on x_collatz; ours is at the pin's no-sink clocks on x_collatz, so the sink is missing a step there. The x_collatz diagnosis (the constant copy on a guard edge that reaches a shared exit should sink into the shared block; the `emptyblocks` work, #3350) is a hypothesis for which step, not shown here. Translate the missing step into machinesink.rs; the byte reading above (+12 / +24 B) was the wrong price.
-- **Machine Scheduler**: on i486 the pin's pass is worth +0.13% clocks (-O2), +0.19% (-O3), spills unchanged (0 / -6), static copies +7 / +16; one program stands out (x_list +2.4% / +7.1%, where ours is +9.7% / +5.3% above the pin). DEVIATE MS1 stands now on clocks, not on bytes: no scheduler; `pressuresink.rs` stands in; owner llrm-w-2; review 2026-11-20, or when a P5 model is measured (this is i486 only).
+- **Machine Scheduler**: on i486 the pin's pass is worth +0.13% clocks (-O2), +0.19% (-O3), spills unchanged (0 / -6), static copies +7 / +16; one program stands out (x_list +2.4% / +7.1%, where ours is +9.7% / +5.3% above the pin). DEVIATE MS1 (no scheduler, `pressuresink.rs` stands in) is closed: the pin's pre-RA pass is translated (`backend/machinesched.rs`, wired in `flow.rs` after the coalescer) and `pressuresink.rs` was deleted in d50878167a (2026-10-26). The +0.13% / +0.19% figures above are the pass's worth on i486 before that. What remains of the scheduler is MS2..MS5 in `machinesched.rs`; P5 has no pre-RA model.
 - **Peephole**: its value in the pin is mostly the `sub`-to-`cmp` conversion (323 of the -O2 instructions), which ours does not need; what is left is the copy side (`mov`: the pin's pass removes 310, ours is +103 above the pin with it). A translation PR needs a function where ours keeps a copy the pin's `optimizeCoalescableCopy`/`foldImmediate`/copy rewriters remove; the next step is that per-function `mov` diff (not an instruction-count gap); plan note 11-02 stands and the PR date 11-06 is open until a piece is shown missing.
 
 ## Not measured

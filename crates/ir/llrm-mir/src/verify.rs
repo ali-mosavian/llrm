@@ -31,7 +31,7 @@ pub fn verify(module: &Module) -> Vec<String> {
             }
         }
         if let GlobalKind::Function(function) = &global.kind {
-            if intrinsics::is_reserved(name) {
+            if intrinsics::is_reserved(name) && !intrinsics::is_target_intrinsic(name) {
                 let problem = match Intrinsic::named(name) {
                     _ if !function.is_declaration() => Err("llvm intrinsics cannot be defined!".to_owned()),
                     None => Err("an intrinsic MIR does not have".to_owned()),
@@ -273,6 +273,19 @@ impl Checker<'_> {
                     record.variable.0, record.before.0
                 ));
             }
+            if let crate::module::DebugWhat::Assign { value, address, .. } = record.what {
+                for one in value.into_iter().chain(address) {
+                    if let Operand::Value(value) = one
+                        && let ValueDef::Instruction(defining) = function.value(value).def
+                        && function.is_erased(defining)
+                    {
+                        self.fail(format!(
+                            "a debug assignment of !{} names a value of erased instruction {}",
+                            record.variable.0, defining.0
+                        ));
+                    }
+                }
+            }
             if let crate::module::DebugWhat::Declare(Operand::Value(value))
             | crate::module::DebugWhat::Value(Operand::Value(value))
             | crate::module::DebugWhat::Piece { value: Operand::Value(value), .. } = record.what
@@ -437,7 +450,49 @@ impl Checker<'_> {
             Opcode::FCmp(_) if ty(0) != ty(1) || !is_float(self, ty(0)) => {
                 self.fail(format!("{at} compares {} with {}", self.show(ty(0)), self.show(ty(1))))
             }
-            Opcode::Select if ty(1) != ty(2) || ty(1) != result || !matches!(self.ty(ty(0)), Type::Int(1)) => {
+            // `SelectInst::areInvalidOperands`: an `i1` condition, or a vector
+            // of them as long as the values'.
+            Opcode::Select
+                if ty(1) != ty(2)
+                    || ty(1) != result
+                    || !match (self.ty(ty(0)), self.ty(result)) {
+                        (Type::Int(1), _) => true,
+                        (Type::Vector { element, count }, Type::Vector { count: lanes, .. }) => {
+                            count == lanes && matches!(self.ty(*element), Type::Int(1))
+                        }
+                        _ => false,
+                    } =>
+            {
+                self.fail(format!("{at} is ill-typed"))
+            }
+            // llvm/lib/IR/Instructions.cpp#L1728 `ExtractElementInst::isValidOperands`
+            Opcode::ExtractElement
+                if !matches!(self.ty(ty(0)), Type::Vector { element, .. } if *element == result)
+                    || !matches!(self.ty(ty(1)), Type::Int(_)) =>
+            {
+                self.fail(format!("{at} is ill-typed"))
+            }
+            // Instructions.cpp#L1750 `InsertElementInst::isValidOperands`
+            Opcode::InsertElement
+                if !matches!(self.ty(ty(0)), Type::Vector { element, .. } if *element == ty(1))
+                    || ty(0) != result
+                    || !matches!(self.ty(ty(2)), Type::Int(_)) =>
+            {
+                self.fail(format!("{at} is ill-typed"))
+            }
+            // Instructions.cpp#L1834 `ShuffleVectorInst::isValidOperands`: both
+            // inputs one vector type, every mask lane poison or below twice the
+            // input's lanes; the result has the mask's lanes.
+            Opcode::ShuffleVector(mask)
+                if !matches!(
+                    (self.ty(ty(0)), self.ty(result)),
+                    (Type::Vector { element: a, count }, Type::Vector { element: b, count: lanes })
+                        if a == b
+                            && ty(0) == ty(1)
+                            && *lanes as usize == mask.len()
+                            && mask.iter().all(|&lane| lane < 0 || (lane as u32) < count * 2)
+                ) =>
+            {
                 self.fail(format!("{at} is ill-typed"))
             }
             Opcode::Cast(op) => {
@@ -600,6 +655,13 @@ impl Checker<'_> {
                 {
                     self.fail(format!("{at}: bswap must be an even number of bytes"));
                 }
+                // Verifier.cpp#L6072: the size is -1, 0 or a positive number.
+                if self.called_intrinsic(callee) == Some(Intrinsic::InvariantStart)
+                    && !crate::intrinsics::length(self.context, instruction.operands[0])
+                        .is_some_and(|size| size <= i64::MAX as u64 || size == u64::MAX)
+                {
+                    self.fail(format!("{at}: invariant_start parameter must be -1, 0 or a positive number"));
+                }
                 if call_returns != result {
                     self.fail(format!(
                         "{at} returns {}, not its type's {}",
@@ -625,6 +687,21 @@ impl Checker<'_> {
         to: TypeId,
     ) -> Result<(), String> {
         let (a, b) = (self.ty(from), self.ty(to));
+        // `CastInst::castIsValid`: vectors of one lane count cast lane by
+        // lane; a bit cast keeps the total size.
+        if let (Type::Vector { element: x, count: m }, Type::Vector { element: y, count: n }) = (a, b) {
+            let bits = |ty: TypeId| match self.ty(ty) {
+                Type::Int(bits) => Some(u64::from(*bits)),
+                Type::Float(kind) => Some(u64::from(crate::datalayout::float_bits(*kind))),
+                _ => None,
+            };
+            let ok = if op == CastOp::BitCast {
+                matches!((bits(*x), bits(*y)), (Some(p), Some(q)) if p * u64::from(*m) == q * u64::from(*n))
+            } else {
+                m == n && self.cast(op, *x, *y).is_ok()
+            };
+            return if ok { Ok(()) } else { Err(format!("cannot take {} to {}", self.show(from), self.show(to))) };
+        }
         let ok = match (op, a, b) {
             (CastOp::Trunc, Type::Int(x), Type::Int(y)) => y < x,
             (CastOp::ZExt | CastOp::SExt, Type::Int(x), Type::Int(y)) => y > x,

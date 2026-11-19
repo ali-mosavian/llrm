@@ -26,13 +26,43 @@ exit:
 }
 ";
 
+thread_local! {
+    /// `phi_users_first` for the next `with_flagged_users` (DEVIATE IU1).
+    static PHI_FIRST: Cell<bool> = const { Cell::new(false) };
+    /// How many sets grew while the last `with_users` made its users.
+    static GROWN: Cell<usize> = const { Cell::new(0) };
+}
+
 /// `text`'s `@f` with its IV users, the number of instructions asked about,
 /// and the loop's header.
 fn with_users(
     text: &str,
     body: impl FnOnce(&Cx, &mut ScalarEvolution, &IvUsers, BlockId, usize),
 ) {
-    let module = llrm_mir::parse::module(text).expect("a module");
+    with_edited_users(text, false, |_| {}, body);
+}
+
+/// As `with_users`, with `edit` run on the parsed module first and the users
+/// met in use-list order when `use_list_order`.
+fn with_edited_users(
+    text: &str,
+    use_list_order: bool,
+    edit: impl FnOnce(&mut llrm_mir::module::Module),
+    body: impl FnOnce(&Cx, &mut ScalarEvolution, &IvUsers, BlockId, usize),
+) {
+    with_flagged_users(text, use_list_order, false, edit, body);
+}
+
+/// As `with_edited_users`, with `phi_operand_uses` (DEVIATE LSR-PHI) as asked.
+fn with_flagged_users(
+    text: &str,
+    use_list_order: bool,
+    phi_operand_uses: bool,
+    edit: impl FnOnce(&mut llrm_mir::module::Module),
+    body: impl FnOnce(&Cx, &mut ScalarEvolution, &IvUsers, BlockId, usize),
+) {
+    let mut module = llrm_mir::parse::module(text).expect("a module");
+    edit(&mut module);
     let (_, _, function) = module.functions().next().expect("a function");
     let layout = DataLayout::parse("e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32").unwrap();
     let tree = DomTree::of(function);
@@ -55,8 +85,10 @@ fn with_users(
         asked.set(asked.get() + 1);
         true
     };
-    let env = Env { safe_to_speculate: &safe, ephemeral: &|_| false };
+    let env = Env { safe_to_speculate: &safe, ephemeral: &|_| false, native_widths: &[], use_list_order, phi_operand_uses, phi_users_first: PHI_FIRST.with(Cell::get) };
+    let grown = llrm_mir::dense::idset_resizes::<InstId>();
     let users = IvUsers::of(&mut se, &cx, header, &env);
+    GROWN.with(|n| n.set(llrm_mir::dense::idset_resizes::<InstId>() - grown));
     body(&cx, &mut se, &users, header, asked.get());
 }
 
@@ -149,15 +181,46 @@ fn the_walk_is_linear_in_the_users() {
     assert!(large <= 2 * small + 4, "{small} questions for 100 loads, {large} for 200");
 }
 
-/// IU1 made the program-order map for every value with two users: d_faces -O2
-/// paid 6.2 M instructions for 38 loops (`IdMap::from_iter`, 4.4 M + 1.9 M).
-/// A loop makes it once, however many values have two users (`%i` and `%next`
-/// here).
+/// IU1 walked the whole layout to place the blocks of a loop's users, for each
+/// loop: memory_expansion -O2 paid 63 M instructions for 471 loops (`IdMap`
+/// `from_iter`), quadratic in the function. The function makes the places once
+/// for all its loops.
 #[test]
-fn test_the_program_order_map_is_made_once_for_a_loop() {
-    with_users(ARRAY, |_, _, users, _, _| {
-        assert_eq!(users.order_builds(), 1);
-    });
+fn test_the_block_places_are_made_once_for_all_the_loops_of_a_function() {
+    let mut text = String::from("define i32 @f(ptr %p, i32 %n) {\nentry:\n  br label %l0\n");
+    for k in 0..6 {
+        let from = if k == 0 { "entry".to_string() } else { format!("x{}", k - 1) };
+        let next = if k == 5 { "end".to_string() } else { format!("l{}", k + 1) };
+        text += &format!(
+            "l{k}:\n  %i{k} = phi i32 [ 0, %{from} ], [ %n{k}, %l{k} ]\n  %a{k} = getelementptr i32, ptr %p, i32 %i{k}\n  %v{k} = load i32, ptr %a{k}\n  %n{k} = add i32 %i{k}, 1\n  %c{k} = icmp slt i32 %n{k}, %n\n  br i1 %c{k}, label %l{k}, label %x{k}\nx{k}:\n  %r{k} = add i32 %n{k}, %v{k}\n  br label %{next}\n"
+        );
+    }
+    text += "end:\n  ret i32 0\n}\n";
+    let module = llrm_mir::parse::module(&text).expect("a module");
+    let (_, _, function) = module.functions().next().expect("a function");
+    let layout = DataLayout::parse("e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32").unwrap();
+    let tree = DomTree::of(function);
+    let loops = LoopInfo::analyze(function, || &tree);
+    let assumptions = AssumptionCache::new(&module, function);
+    let cx = Cx {
+        context: &module.context,
+        globals: &module.globals,
+        metadata: &module.metadata,
+        function,
+        layout: &layout,
+        loops: &loops,
+        tree: &tree,
+        assumptions: &assumptions,
+    };
+    let mut se = ScalarEvolution::new();
+    let env = Env { safe_to_speculate: &|_| true, ephemeral: &|_| false, native_widths: &[], use_list_order: false, phi_operand_uses: false, phi_users_first: false };
+    let before = llrm_mir::module::block_places_built();
+    let headers: Vec<_> = loops.top_level_loops().map(|one| one.get_header()).collect();
+    assert_eq!(headers.len(), 6);
+    for header in headers {
+        IvUsers::of(&mut se, &cx, header, &env);
+    }
+    assert_eq!(llrm_mir::module::block_places_built() - before, 1);
 }
 
 /// IU1 ordered every instruction of the function to sort the two users of a
@@ -193,4 +256,205 @@ fn a_set_carried_past_an_edit_that_changed_a_use_differs_from_a_fresh_one() {
     assert!(found.contains("carried"), "{found}");
     carried.pop();
     assert!(crate::ivusers::difference(&carried, &again).is_some());
+}
+
+/// Each instruction asked about made a set of its result's users that grew to
+/// the highest id (727 instructions apiece, 18 M on memory_expansion); the
+/// users of one IV grow no set but the processed one, made with room.
+#[test]
+fn the_users_of_an_induction_variable_grow_no_set() {
+    with_users(ARRAY, |_, _, users, _, _| assert!(!users.uses.is_empty()));
+    assert_eq!(GROWN.with(Cell::get), 0);
+}
+
+/// The users of `text`'s loop on a target whose layout has no 16-bit integer
+/// and declares 16 native (the 6502): the opcodes of the users found.
+fn users_on_a_16_bit_native_target(text: &str) -> Vec<String> {
+    let module = llrm_mir::parse::module(text).expect("a module");
+    let (_, _, function) = module.functions().next().expect("a function");
+    let layout = DataLayout::parse("e-p:16:8-i16:8-i32:8-i64:8-a:8-n8").unwrap();
+    let tree = DomTree::of(function);
+    let loops = LoopInfo::analyze(function, || &tree);
+    let assumptions = AssumptionCache::new(&module, function);
+    let cx = Cx {
+        context: &module.context,
+        globals: &module.globals,
+        metadata: &module.metadata,
+        function,
+        layout: &layout,
+        loops: &loops,
+        tree: &tree,
+        assumptions: &assumptions,
+    };
+    let mut se = ScalarEvolution::new();
+    let header = loops.top_level_loops().next().expect("a loop").get_header();
+    let env = Env { safe_to_speculate: &|_: InstId| true, ephemeral: &|_| false, native_widths: &[16], use_list_order: false, phi_operand_uses: false, phi_users_first: false };
+    let users = IvUsers::of(&mut se, &cx, header, &env);
+    users.uses.iter().map(|u| format!("{:?}", function.instruction(u.user).opcode)).collect()
+}
+
+/// DEVIATE LU19. `arr[zext i8 i]` was rewritten into a 16-bit pointer walk
+/// (`adc (rc2),y; iny; bne; inc rc3`) where `adc arr,x` was one instruction:
+/// six llrm-6502 tests went red on release/next (2026-11-11). A width the
+/// target declares native is for induction variables of that width; the same
+/// loop over a 16-bit counter is still reduced.
+#[test]
+fn a_native_width_is_not_for_a_narrow_counter_an_extension_widens() {
+    let walk = |phi: &str, index: &str, bound: &str| {
+        format!(
+            "@arr = global [256 x i8] zeroinitializer\n\
+             define i8 @f(i8 %n) {{\nentry:\n  br label %loop\nloop:\n  \
+             %i = phi {phi} [ 0, %entry ], [ %next, %loop ]\n  {index}\n  \
+             %a = getelementptr i8, ptr @arr, i16 %z\n  %v = load i8, ptr %a\n  \
+             %next = add nuw {phi} %i, 1\n  {bound}\n  \
+             br i1 %c, label %loop, label %exit\nexit:\n  ret i8 %v\n}}\n"
+        )
+    };
+    let widened = walk("i8", "%z = zext i8 %i to i16", "%w = zext i8 %next to i16\n  %c = icmp ne i16 %w, 200");
+    let native = walk("i16", "%z = add i16 %i, 0", "%c = icmp ne i16 %next, 200");
+    let widened = users_on_a_16_bit_native_target(&widened);
+    assert!(
+        !widened.is_empty() && widened.iter().all(|op| op.starts_with("Cast")),
+        "the walk stops at the extensions: {widened:?}"
+    );
+    let native = users_on_a_16_bit_native_target(&native);
+    assert!(
+        native.iter().any(|op| !op.starts_with("Cast")),
+        "a 16-bit counter reaches the gep and the compare: {native:?}"
+    );
+}
+
+/// Two address computations on one induction variable, the earlier one's use
+/// of it made last (an edit re-adds a use at the head of the list). Descending
+/// program order meets the later computation first; the pin walks the use
+/// list, newest first. wasm32 memcpy_runtime -O2 started the variable at 0
+/// where the pin's started at 3, and memory_expansion was 1307 B over the pin.
+#[test]
+fn test_the_users_are_met_in_use_list_order_when_the_target_asks() {
+    let text = "define i32 @f(ptr %p, ptr %q, i32 %n) {
+entry:
+  br label %loop
+loop:
+  %i = phi i32 [ 0, %entry ], [ %next, %loop ]
+  %a = getelementptr i32, ptr %p, i32 %i
+  %b = getelementptr i32, ptr %q, i32 %i
+  %v = load i32, ptr %a
+  %w = load i32, ptr %b
+  %next = add i32 %i, 1
+  %c = icmp slt i32 %next, %n
+  br i1 %c, label %loop, label %exit
+exit:
+  %r = add i32 %v, %w
+  ret i32 %r
+}
+";
+    let edit = |module: &mut llrm_mir::module::Module| {
+        let (_, function) = module.function_mut("f").expect("@f");
+        // The loop is the second block; its first gep is `%a`.
+        let a = function
+            .iter_block(function.layout()[1])
+            .find(|&inst| matches!(function.instruction(inst).opcode, Opcode::GetElementPtr { .. }))
+            .expect("the gep of %a");
+        let index = function.instruction(a).operands[1];
+        function.set_operand(a, 1, index);
+    };
+    let first = |use_list_order| {
+        let mut found = Vec::new();
+        with_edited_users(text, use_list_order, edit, |cx, _, users, _, _| {
+            found = users.uses.iter().map(|u| named(cx, u)).collect();
+        });
+        found
+    };
+    assert_eq!(first(true).first().map(|(_, v)| v.as_str()), Some("a"), "the newest use is met first");
+    assert_eq!(first(false).first().map(|(_, v)| v.as_str()), Some("next"), "the default is program order");
+}
+
+/// DEVIATE LSR-PHI. x_cordic m32 -O3 merges `i*300+21472` and `i*300-81472` in
+/// one phi: the pin's "do not recurse into a phi twice" keeps the first
+/// operand as a use and drops the second, which stays a multiply chain (100
+/// trips of 5 instructions that gcc does not run). Where the target asks, each
+/// incoming value of the phi is a use.
+#[test]
+fn a_phi_of_two_affine_values_has_a_use_per_operand_where_the_target_asks() {
+    let text = "define i32 @f(i32 %n) {
+entry:
+  br label %loop
+loop:
+  %i = phi i32 [ 0, %entry ], [ %next, %latch ]
+  %m = mul nuw nsw i32 %i, 300
+  %c = icmp ult i32 %i, 100
+  br i1 %c, label %a, label %b
+a:
+  %pa = add nuw nsw i32 %m, 21472
+  br label %latch
+b:
+  %pb = add nsw i32 %m, -81472
+  br label %latch
+latch:
+  %p = phi i32 [ %pa, %a ], [ %pb, %b ]
+  store volatile i32 %p, ptr null
+  %next = add nuw nsw i32 %i, 1
+  %e = icmp eq i32 %next, %n
+  br i1 %e, label %exit, label %loop
+exit:
+  ret i32 0
+}
+";
+    let phi_operands = |asked: bool| {
+        let mut found = Vec::new();
+        with_flagged_users(text, false, asked, |_| {}, |cx, _, users, _, _| {
+            found = users.uses.iter().map(|u| named(cx, u)).filter(|(opcode, _)| opcode == "Phi").collect();
+        });
+        found.sort();
+        found
+    };
+    assert_eq!(phi_operands(false).len(), 1, "the pin keeps one operand: {:?}", phi_operands(false));
+    let both = phi_operands(true);
+    assert_eq!(both.iter().map(|(_, v)| v.trim_start_matches('%')).collect::<Vec<_>>(), ["pa", "pb"], "{both:?}");
+}
+
+/// DEVIATE IU1, phis first. div_constants_ulong m64 -O1: a phi merges `i`,
+/// `16 - i` and more; the pin's "do not recurse into a phi twice" keeps the
+/// operand it meets first and drops the rest, so a phi met first leaves `16 - i`
+/// computed in place. In use-list order a re-added `16 - i` was met before the
+/// phi, which took it as the phi's use: a second counter, one more
+/// callee-saved push (4334 B against 4173 B).
+#[test]
+fn a_phi_is_met_before_the_other_users_of_a_counter_in_use_list_order() {
+    let text = "define i32 @f(i32 %n) {
+entry:
+  br label %loop
+loop:
+  %i = phi i32 [ 0, %entry ], [ %next, %latch ]
+  %c = icmp ult i32 %i, 6
+  br i1 %c, label %a, label %b
+a:
+  br label %latch
+b:
+  %s = sub nuw nsw i32 16, %i
+  br label %latch
+latch:
+  %p = phi i32 [ %i, %a ], [ %s, %b ]
+  store volatile i32 %p, ptr null
+  %next = add nuw nsw i32 %i, 1
+  %e = icmp eq i32 %next, %n
+  br i1 %e, label %exit, label %loop
+exit:
+  ret i32 0
+}
+";
+    let edit = |module: &mut llrm_mir::module::Module| {
+        let (_, function) = module.function_mut("f").expect("@f");
+        // An edit re-adds the use: `%s` becomes the newest user of `%i`.
+        let s = function.iter_block(function.layout()[3]).next().expect("%s");
+        let index = function.instruction(s).operands[1];
+        function.set_operand(s, 1, index);
+    };
+    let mut found = Vec::new();
+    PHI_FIRST.with(|one| one.set(true));
+    with_edited_users(text, true, edit, |cx, _, users, _, _| {
+        found = users.uses.iter().map(|u| named(cx, u)).filter(|(opcode, _)| opcode == "Phi").collect();
+    });
+    PHI_FIRST.with(|one| one.set(false));
+    assert_eq!(found, [("Phi".to_owned(), "i".to_owned())], "the phi's use is the counter itself: {found:?}");
 }

@@ -447,6 +447,82 @@ pub fn find_earliest_capture(
     (tracker.earliest, CaptureResult { without_ret: tracker.cc, with_ret: tracker.cc_with_ret })
 }
 
+/// `CapturesBefore`
+/// (CaptureTracking.cpp:92,
+/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/CaptureTracking.cpp#L92>):
+/// the captures that can reach `before`.
+struct Before<'a> {
+    function: &'a Function,
+    tree: &'a DomTree,
+    before: InstId,
+    include: bool,
+    return_captures: bool,
+    mask: CaptureComponents,
+    cc: CaptureComponents,
+}
+
+impl Before<'_> {
+    fn safe_to_prune(
+        &self,
+        inst: InstId,
+    ) -> bool {
+        if self.before == inst {
+            return !self.include;
+        }
+        let Some(block) = self.function.parent(inst) else { return true };
+        if !self.tree.is_reachable_from_entry(block) {
+            return true;
+        }
+        !crate::reachability::is_potentially_reachable(self.function, inst, self.before, Some(self.tree))
+    }
+}
+
+impl CaptureTracker for Before<'_> {
+    fn too_many_uses(&mut self) {
+        self.cc = self.mask;
+    }
+
+    fn captured(
+        &mut self,
+        used: Use,
+        info: UseCaptureInfo,
+    ) -> Action {
+        if !self.return_captures && matches!(self.function.instruction(used.user).opcode, Opcode::Ret) {
+            return Action::ContinueIgnoringReturn;
+        }
+        if self.safe_to_prune(used.user) {
+            return Action::ContinueIgnoringReturn;
+        }
+        let kept = info.use_cc.intersect(self.mask);
+        if kept.captures_nothing() {
+            return Action::Continue;
+        }
+        self.cc = self.cc.union(kept);
+        // The pin's stop function is `capturesAnything`.
+        Action::Stop
+    }
+}
+
+/// `PointerMayBeCapturedBefore(V, ReturnCaptures, I, DT, IncludeI, Mask)`
+/// (CaptureTracking.cpp:221,
+/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Analysis/CaptureTracking.cpp#L221>)
+/// with a tree: what may be captured by a use that can reach `before`.
+pub fn pointer_may_be_captured_before(
+    function: &Function,
+    globals: &[GlobalValue],
+    context: &Context,
+    tree: &DomTree,
+    value: ValueId,
+    return_captures: bool,
+    before: InstId,
+    include: bool,
+    mask: CaptureComponents,
+) -> CaptureComponents {
+    let mut tracker = Before { function, tree, before, include, return_captures, mask, cc: CaptureComponents::NONE };
+    pointer_may_be_captured_by(function, globals, context, value, &mut tracker, 0);
+    tracker.cc
+}
+
 #[cfg(test)]
 #[path = "capturetracking_tests.rs"]
 mod tests;

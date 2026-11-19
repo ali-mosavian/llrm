@@ -134,7 +134,7 @@ void B_INPP(SD *prompt, const InputBlock QB_FAR *block)
         cn_write(redo, sizeof redo - 1);
         cn_crlf();
     }
-    str_tmp_free(prompt);
+    str_free_if_tmp(prompt);
     qb_input_line = line;
 }
 
@@ -161,7 +161,7 @@ void B_LNIN(SD *prompt, qb_data_ptr destination, short fixed, short newline)
     }
     if (prompt) {
         cn_write(prompt->ptr, prompt->len);
-        str_tmp_free(prompt);
+        str_free_if_tmp(prompt);
     }
     read_line();
     if (newline)

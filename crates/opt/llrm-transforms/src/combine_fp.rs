@@ -15,7 +15,7 @@
 //! not translated.
 //!
 //! DEVIATE 3: `visitFSub` stops after `X - (-Y) --> X + Y`: the
-//! `foldFNegIntoConstant`, `foldFBinOpOfIntCasts`, cast-of-fneg, `fmul`/`fdiv`
+//! `foldFNegIntoConstant`, cast-of-fneg, `fmul`/`fdiv`
 //! of a negated factor and the `reassoc nsz` arms are not translated; a half or
 //! `x86_fp80` constant is not negated.
 //!
@@ -38,7 +38,7 @@ use llrm_mir::types::{FloatKind, Type};
 
 use crate::combine::{Combiner, Visit};
 use crate::combine_muldivrem::simplify_first;
-use crate::combine_shared::simplify_associative_or_commutative;
+use crate::combine_shared::{query, simplify_associative_or_commutative};
 
 /// `visitFAdd` and `visitFMul`, as far as translated: `simplify*Inst`, then
 /// `SimplifyAssociativeOrCommutative` (constants to the right; `(X op C1) op
@@ -50,7 +50,21 @@ pub fn visit_fadd_or_fmul(
     if let Some(found) = simplify_first(c, inst) {
         return Visit::Replace(found);
     }
-    if simplify_associative_or_commutative(c, inst) { Visit::Changed } else { Visit::None }
+    if simplify_associative_or_commutative(c, inst) {
+        return Visit::Changed;
+    }
+    if let Some(found) = crate::combine_fp_int_casts::fold_fbinop_of_int_casts(c, inst) {
+        return found;
+    }
+    // `foldBinopWithPhiOperands` and `foldBinOpIntoSelectOrPhi`, as the pin's
+    // `visitFAdd` (InstCombineAddSub.cpp L2133) and `visitFMul`
+    // (InstCombineMulDivRem.cpp L1013) have them after the vector fold.
+    for found in [c.fold_binop_with_phi_operands(inst), c.fold_bin_op_into_select_or_phi(inst)] {
+        if !matches!(found, Visit::None) {
+            return found;
+        }
+    }
+    Visit::None
 }
 
 /// `visitFSub` (InstCombineAddSub.cpp:3322), up to `X - (-Y) --> X + Y`: the
@@ -72,6 +86,10 @@ pub fn visit_fsub(
         if (negative_zero || nsz_zero) && kind != FloatKind::X86Fp80 {
             return c.replace_with_new(inst, Opcode::FNeg, instruction.ty, vec![op1], instruction.flags);
         }
+    } else if let Some(negative) = quad_zero(c, op0)
+        && (negative || instruction.flags.contains(Flags::NSZ))
+    {
+        return c.replace_with_new(inst, Opcode::FNeg, instruction.ty, vec![op1], instruction.flags);
     }
     // X - C --> X + (-C)
     if let Some(negated) = negated_constant(c, op1) {
@@ -81,11 +99,51 @@ pub fn visit_fsub(
     if let Some(y) = fneg_operand(c, op1) {
         return c.replace_with_binop(inst, BinaryOp::FAdd, op0, y, instruction.flags);
     }
+    if let Some(found) = crate::combine_fp_int_casts::fold_fbinop_of_int_casts(c, inst) {
+        return found;
+    }
+    // `foldBinopWithPhiOperands` and `foldBinOpIntoSelectOrPhi`, as the pin's
+    // `visitFAdd` (InstCombineAddSub.cpp L2133) and `visitFMul`
+    // (InstCombineMulDivRem.cpp L1013) have them after the vector fold.
+    for found in [c.fold_binop_with_phi_operands(inst), c.fold_bin_op_into_select_or_phi(inst)] {
+        if !matches!(found, Visit::None) {
+            return found;
+        }
+    }
     Visit::None
 }
 
+/// `visitCallInst`'s `Intrinsic::fmuladd`
+/// ([L3217](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCalls.cpp#L3217)):
+/// when the product alone simplifies, `fmuladd(a, b, c)` is that plus `c` with
+/// the call's flags (`fmuladd(0.0, x, 1.5)` for a finite `x` that is not
+/// negative is `0.0 + 1.5`, which folds). The `fma` arm is not translated.
+pub fn visit_fmuladd(
+    c: &mut Combiner,
+    call: InstId,
+) -> Visit {
+    let instruction = c.function.instruction(call).clone();
+    let [a, b, addend, ..] = instruction.operands[..] else { return Visit::None };
+    let env = c.env;
+    let Some(product) = llrm_mir::simplify::simplify_binop_with_flags_at(
+        c.context,
+        env.globals,
+        env.layout,
+        Some(&env.analyses),
+        c.function,
+        call,
+        BinaryOp::FMul,
+        instruction.flags,
+        a,
+        b,
+    ) else {
+        return Visit::None;
+    };
+    c.replace_with_binop(call, BinaryOp::FAdd, product, addend, instruction.flags)
+}
+
 /// `m_FNeg(Y)`: `fneg Y`, or `fsub -0.0, Y`.
-fn fneg_operand(
+pub(crate) fn fneg_operand(
     c: &Combiner,
     v: Operand,
 ) -> Option<Operand> {
@@ -101,14 +159,19 @@ fn fneg_operand(
     }
 }
 
-/// `ConstantFoldUnaryOpOperand(FNeg, C)` of a float or double constant.
-fn negated_constant(
+/// `ConstantFoldUnaryOpOperand(FNeg, C)` of a float, double or fp128 constant.
+pub(crate) fn negated_constant(
     c: &mut Combiner,
     v: Operand,
 ) -> Option<Operand> {
     let Operand::Constant(id) = v else { return None };
     let constant = c.context.get(id).clone();
     let Type::Float(kind) = *c.context.types.get(constant.ty) else { return None };
+    // The sign bit of a binary128 flips exactly as a double's.
+    if let ConstantKind::Float128(bits) = constant.kind {
+        let negated = ConstantKind::Float128(bits ^ (1 << 127));
+        return Some(Operand::Constant(c.context.constant(Constant { ty: constant.ty, kind: negated })));
+    }
     let ConstantKind::Float(bits) = constant.kind else { return None };
     let flipped = match kind {
         FloatKind::Float => bits ^ (1 << 31),
@@ -128,6 +191,21 @@ pub fn visit_fdiv(
         return Visit::Replace(found);
     }
     fold_fdiv_constant_divisor(c, inst)
+}
+
+/// `isa<Constant>` of an operand.
+pub(crate) fn is_constant(v: Operand) -> bool {
+    matches!(v, Operand::Constant(_))
+}
+
+/// Whether an fp128 constant is a zero, and if so whether it is `-0.0`.
+fn quad_zero(
+    c: &Combiner,
+    v: Operand,
+) -> Option<bool> {
+    let Operand::Constant(id) = v else { return None };
+    let ConstantKind::Float128(bits) = c.context.get(id).kind else { return None };
+    (bits << 1 == 0).then_some(bits >> 127 == 1)
 }
 
 /// The value of a float constant operand, with its format and type.
@@ -161,6 +239,8 @@ fn has_exact_inverse(
         FloatKind::Double | FloatKind::X86Fp80 => {
             divisor.is_normal() && divisor.to_bits() & 0xf_ffff_ffff_ffff == 0 && (1.0 / divisor).is_normal()
         }
+        // No f64 stands for an fp128 divisor: nothing is rewritten.
+        FloatKind::F128 => false,
     }
 }
 

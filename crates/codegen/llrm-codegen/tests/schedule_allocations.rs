@@ -75,7 +75,7 @@ fn test_scheduling_a_chain_takes_under_eight_allocations_per_node() {
     }
     let root = dag.get_node_multi(ISD::Machine(STORE), &[EVT::OTHER], &[address, address, chain]);
     let before = ALLOCATED.with(Cell::get);
-    let units = schedule(&dag, root, &Info);
+    let units = schedule(&mut dag, root, &Info);
     let allocated = ALLOCATED.with(Cell::get) - before;
     assert_eq!(units.len(), N + 1);
     assert!(allocated < MOST_PER_NODE * N, "{allocated} allocations to schedule {N} nodes");

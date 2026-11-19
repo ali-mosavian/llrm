@@ -251,7 +251,7 @@ mod tests {
         cell: Mem,
         uses: Vec<u32>,
     ) -> Arc<Insn> {
-        let destination = ir::Held { value, width: 2 };
+        let destination = ir::Held { value, width: 2, offset: 0 };
         Arc::new(Insn::new(
             at,
             Some((at, at)),
@@ -271,8 +271,8 @@ mod tests {
         let regs = crate::backend::registerinfo::test_regs();
         // qcport's dynamic far-struct fields emitted two loads per far pointer.
         let cell = |disp: i64| Mem {
-            base: Some(ir::Held { value: 10, width: 2 }),
-            selector: Some(ir::Held { value: 11, width: 2 }),
+            base: Some(ir::Held { value: 10, width: 2, offset: 0 }),
+            selector: Some(ir::Held { value: 11, width: 2, offset: 0 }),
             ..Mem::new(Some(Addr::new(Space::Far, disp)), 2)
         };
         let values = |cell: &Mem| ir::values(&Loc::Mem(cell.clone())).iter().map(|one| one.value).collect();

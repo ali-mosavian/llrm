@@ -149,16 +149,39 @@ pub struct SwitchTarget {
     pub min_jump_table_entries: usize,
     /// `areJTsAllowed`.
     pub jump_tables: bool,
+    /// `getMinimumJumpTableDensity`: percent of the range that cases fill,
+    /// where the target states one; none: the pin's 10, or 40 for size.
+    pub min_density: Option<u64>,
+    /// GCC's `jump-table-max-growth-ratio-for-size` (percent): when tuned for
+    /// size a table's range may be at most this share of the compares its
+    /// clusters need (a value costs one, a range two); none: the pin's density
+    /// alone.
+    pub size_growth_ratio: Option<u64>,
     /// `shouldOptimizeForSize`.
     pub opt_size: bool,
+    /// `hasMinSize`: no peeling, no balanced tree.
+    pub min_size: bool,
     /// Not -O0.
     pub optimize: bool,
+    /// `isOperationLegal(SHL, ptr)`: the target can build bit tests. None
+    /// where a variable shift is a call.
+    pub shift_legal: bool,
 }
 
 impl SwitchTarget {
     /// x86 at -O2 with the pin's defaults.
     pub fn x86(pointer_bits: u32) -> SwitchTarget {
-        SwitchTarget { pointer_bits, min_jump_table_entries: 4, jump_tables: true, opt_size: false, optimize: true }
+        SwitchTarget {
+            pointer_bits,
+            min_jump_table_entries: 4,
+            jump_tables: true,
+            min_density: None,
+            size_growth_ratio: None,
+            opt_size: false,
+            min_size: false,
+            optimize: true,
+            shift_legal: true,
+        }
     }
 }
 
@@ -263,7 +286,7 @@ fn peel_dominant_case_cluster(
     clusters: &mut Vec<CaseCluster>,
     target: &SwitchTarget,
 ) -> Option<(CaseCluster, BranchProbability)> {
-    if clusters.len() < 2 || !target.optimize || target.opt_size {
+    if clusters.len() < 2 || !target.optimize || target.min_size {
         return None;
     }
     let mut top = BranchProbability::new(SWITCH_PEEL_THRESHOLD, 100);
@@ -296,14 +319,26 @@ fn jump_table_range(
     span + 1
 }
 
-/// `isSuitableForJumpTable`.
+/// `isSuitableForJumpTable`, and at size GCC's
+/// `jump_table_cluster::can_be_handled`: the table may not outgrow the
+/// compares it replaces.
 fn suitable_for_jump_table(
+    clusters: &[CaseCluster],
     num_cases: u64,
     range: u64,
     target: &SwitchTarget,
 ) -> bool {
-    let min_density = if target.opt_size { 40 } else { 10 };
-    num_cases * 100 >= range * min_density
+    let min_density = target.min_density.unwrap_or(if target.opt_size { 40 } else { 10 });
+    if num_cases * 100 < range * min_density {
+        return false;
+    }
+    match target.size_growth_ratio {
+        Some(ratio) if target.opt_size => {
+            let compares: u64 = clusters.iter().map(|one| if one.low == one.high { 1 } else { 2 }).sum();
+            range.saturating_mul(100) <= ratio.saturating_mul(compares)
+        }
+        _ => true,
+    }
 }
 
 /// `isSuitableForBitTests`.
@@ -313,7 +348,7 @@ fn suitable_for_bit_tests(
     high: i128,
     target: &SwitchTarget,
 ) -> bool {
-    if !range_fits_in_word(low, high, target) {
+    if !target.shift_legal || !range_fits_in_word(low, high, target) {
         return false;
     }
     let num_dests = dests.len();
@@ -357,7 +392,7 @@ pub fn find_jump_tables(
     }
     let cases = |first: usize, last: usize| total[last] - if first == 0 { 0 } else { total[first - 1] };
     let range = jump_table_range(clusters, 0, n - 1);
-    if suitable_for_jump_table(cases(0, n - 1), range, target) {
+    if suitable_for_jump_table(clusters, cases(0, n - 1), range, target) {
         if let Some(cluster) = build_jump_table(clusters, 0, n - 1, default, target, tables) {
             *clusters = vec![cluster];
             return;
@@ -383,7 +418,7 @@ pub fn find_jump_tables(
         score[i] = score[i + 1] + SINGLE_CASE;
         for j in ((i + 1)..n).rev() {
             let range = jump_table_range(clusters, i, j);
-            if !suitable_for_jump_table(cases(i, j), range, target) {
+            if !suitable_for_jump_table(&clusters[i..=j], cases(i, j), range, target) {
                 continue;
             }
             let partitions = 1 + if j == n - 1 { 0 } else { min_partitions[j + 1] };

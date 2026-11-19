@@ -112,6 +112,45 @@ fn logic() {
     check("  %s = shl i16 %x, 8\n  %r = and i16 %s, 65280\n", "r", Some("%s"));
 }
 
+/// wasm32 known_loads_walks: `select n, (y|n), false` was not `n`, so
+/// FoldSelectWithAndOrCond found nothing to fold and the unrolled chain kept
+/// an or and a logical and per iteration (r3, a reduction of it: 312 B against the pin's 303). The i1 identities of
+/// `simplifySelectInst`, each.
+#[test]
+fn a_select_of_bools_that_is_one_of_its_operands_or_a_constant() {
+    let q = "  %q = icmp eq i16 %y, 0\n";
+    // Y && (X || Y) --> Y
+    check(&format!("{q}  %b = or i1 %q, %c\n  %r = select i1 %c, i1 %b, i1 false\n"), "r", Some("%c"));
+    // (X || Y) && Y --> Y
+    check(&format!("{q}  %b = or i1 %q, %c\n  %r = select i1 %b, i1 %c, i1 false\n"), "r", Some("%c"));
+    // Y || (X && Y) --> Y
+    check(&format!("{q}  %a = and i1 %q, %c\n  %r = select i1 %c, i1 true, i1 %a\n"), "r", Some("%c"));
+    // (X && Y) || Y --> Y
+    check(&format!("{q}  %a = and i1 %q, %c\n  %r = select i1 %a, i1 true, i1 %c\n"), "r", Some("%c"));
+    // (X || Y) && (X || !Y) --> X
+    check(
+        &format!(
+            "{q}  %ny = xor i1 %q, true\n  %o1 = or i1 %c, %ny\n  %o2 = or i1 %c, %q\n  %r = select i1 %o1, i1 %o2, i1 false\n"
+        ),
+        "r",
+        Some("%c"),
+    );
+    // !(X || Y) && X --> false
+    check(
+        &format!("{q}  %o = or i1 %c, %q\n  %n = xor i1 %o, true\n  %r = select i1 %n, i1 %c, i1 false\n"),
+        "r",
+        Some("0"),
+    );
+    // !(X && Y) || X --> true
+    check(
+        &format!("{q}  %a = and i1 %c, %q\n  %n = xor i1 %a, true\n  %r = select i1 %n, i1 true, i1 %c\n"),
+        "r",
+        Some("1"),
+    );
+    // Unrelated operands: nothing.
+    check(&format!("{q}  %p = icmp eq i16 %x, 0\n  %r = select i1 %q, i1 %p, i1 false\n"), "r", None);
+}
+
 #[test]
 fn select_phi_cast_and_compare() {
     check("  %r = select i1 true, i16 %x, i16 %y\n", "r", Some("%x"));
@@ -812,6 +851,28 @@ fn undef_in_a_phi_or_a_select_folds_as_the_pin_does() {
     check("  %r = select i1 %c, i16 undef, i16 %y\n", "r", None);
 }
 
+/// `phi [undef, entry], [%a, loop]` is not `%a` when `%a` is another phi of the
+/// same block: the back edge carries the previous trip's `%a`. `dominates(Def,
+/// PHI)` is true only of a definition in a dominating block, not an earlier
+/// phi of the block. instcombine made gcc.c-torture pr34415's `end` the
+/// current pointer, and `foo` returned it unchecked.
+#[test]
+fn a_phi_does_not_dominate_a_phi_of_its_block() {
+    let text = "define void @f(i16 noundef %x, i1 %c) {
+b0:
+  br label %h
+h:
+  %a = phi i16 [ %x, %b0 ], [ %n, %h ]
+  %r = phi i16 [ undef, %b0 ], [ %a, %h ]
+  %n = freeze i16 %a
+  br i1 %c, label %h, label %e
+e:
+  ret void
+}
+";
+    assert_eq!(simplified(text, "r"), None);
+}
+
 /// Old: `freeze` of a value that is neither undef nor poison was kept
 /// (`simplifyFreezeInst` was not translated): a constant, a freeze of a
 /// freeze. A freeze of an undef, a poison or an unknown argument stays.
@@ -1260,4 +1321,50 @@ fn the_difference_of_two_offsets_from_one_global_is_their_distance() {
     let text = "@s = internal constant [13 x i8] zeroinitializer\n\
         define i64 @f() {\nb0:\n  %r = sub i64 ptrtoint (ptr getelementptr inbounds (i8, ptr @s, i64 12) to i64), ptrtoint (ptr @s to i64)\n  ret i64 %r\n}\n";
     assert_eq!(simplified(text, "r").as_deref(), Some("12"));
+}
+
+/// `simplifySelectWithEquivalence` through a cast: `x == 0 ? 0 : trunc(ctpop x)`
+/// is the `trunc`. Guards the flag-free case: only the flagged one needed
+/// `foldSelectValueEquivalence` (wasm32 `ones64` +6 B).
+#[test]
+fn a_select_guarding_a_count_through_a_trunc_is_the_count() {
+    let text = "declare i64 @llvm.ctpop.i64(i64)
+define i32 @f(i64 %x) {
+b0:
+  %z = icmp eq i64 %x, 0
+  %c = call i64 @llvm.ctpop.i64(i64 %x)
+  %t = trunc i64 %c to i32
+  %r = select i1 %z, i32 0, i32 %t
+  ret i32 %r
+}
+";
+    assert_eq!(simplified(text, "r"), Some("%t".to_owned()));
+}
+
+/// A lane of a constant vector at a constant index is that lane: SROA's
+/// vector promotion leaves `extractelement` of a constant where a memcpy from
+/// a constant global was, and arm64 had no way to select it
+/// (`CannotSelect(ExtractElement)`).
+#[test]
+fn test_an_extractelement_of_a_constant_vector_is_its_lane() {
+    let text = "define void @f() {\nb0:\n  %e = extractelement <2 x i64> <i64 5, i64 6>, i32 1\n  ret void\n}\n";
+    assert_eq!(simplified(text, "e").as_deref(), Some("6"));
+}
+
+/// A lane past the end is poison.
+#[test]
+fn test_an_extractelement_past_the_end_is_poison() {
+    let text = "define void @f() {\nb0:\n  %e = extractelement <2 x i64> <i64 5, i64 6>, i32 2\n  ret void\n}\n";
+    assert_eq!(simplified(text, "e").as_deref(), Some("poison"));
+}
+
+/// An integer cast to a vector of integers is its bytes, lane 0 lowest, and a
+/// vector cast back is the integer: the two folds an `extractelement` of the
+/// bitcast needs.
+#[test]
+fn test_a_bitcast_between_an_integer_and_its_lanes_folds_both_ways() {
+    let text = "define void @f() {\nb0:\n  %v = bitcast i32 16909060 to <4 x i8>\n  %i = bitcast <4 x i8> <i8 4, i8 3, i8 2, i8 1> to i32\n  ret void\n}\n";
+    assert_eq!(simplified(text, "i").as_deref(), Some("16909060"));
+    let lanes = simplified(text, "v").expect("a constant");
+    assert!(lanes.starts_with("Aggregate"), "{lanes}");
 }

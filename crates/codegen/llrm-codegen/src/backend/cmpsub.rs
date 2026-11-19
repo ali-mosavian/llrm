@@ -172,7 +172,7 @@ mod tests {
     use crate::support::hash::IndexMap;
 
     fn held(value: u32) -> Loc {
-        Loc::Held(Held { value, width: 4 })
+        Loc::Held(Held { value, width: 4, offset: 0 })
     }
 
     fn imm(value: i64) -> Loc {
@@ -226,7 +226,7 @@ mod tests {
     /// Also with a constant of 32768 or more, and a negative one.
     #[test]
     fn test_a_compare_narrower_than_the_subtract_is_kept() {
-        let word = |value| Loc::Held(Held { value, width: 2 });
+        let word = |value| Loc::Held(Held { value, width: 2, offset: 0 });
         for (added, compared) in [(-65, 65), (-40000, 40000), (2, -2)] {
             let block = LirBlock {
                 succ: vec![1, 2].into(),

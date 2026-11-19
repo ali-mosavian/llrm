@@ -8,7 +8,7 @@ For frontend authors and contributors to `decide`, `dfajumpthreading` and isel. 
 
 - `decide` ([`decide.rs`](../../optimizations/passes/decide.md)) selects the case a known selector takes.
 - `jumpthreading` threads a switch's edges and `dfajumpthreading` the switch of a loop's state ([levels](../levels.md)).
-- `loopclone` remaps cases and default, keeping successor phis; `loopmotion` and `peelsize` read it.
+- `loopclone` remaps cases and default, keeping successor phis; `loopmotion` reads it.
 - isel ([`isel.rs`](../../optimizations/backend/isel.md)) expands it to compares and branches; a case equal to the default needs no compare.
 
 ```

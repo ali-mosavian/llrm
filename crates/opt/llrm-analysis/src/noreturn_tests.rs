@@ -405,3 +405,50 @@ after:
         ats(&module, "f", &["die"]).into_iter().collect::<Vec<_>>()
     );
 }
+
+/// `all_stranded` searched forward from the exits of every loop, over the
+/// whole body each time: 219 calls visited ~480 blocks each, 28.5 M of
+/// memory_expansion -O2 m64. The blocks that reach a return are found once per
+/// state of the body.
+#[test]
+fn test_all_stranded_finds_the_returning_blocks_once_per_body_state() {
+    let mut module = parsed(
+        "declare void @exit(i32)
+define void @f(i1 %c, i1 %d) {
+entry:
+  br label %header
+
+header:
+  br i1 %c, label %body, label %after
+
+body:
+  br i1 %d, label %header, label %die
+
+die:
+  unreachable
+
+after:
+  call void @exit(i32 1)
+  ret void
+}
+",
+    );
+    let (die, after, body) = {
+        let f = function(&module, "f");
+        (id(block(f, "die")), id(block(f, "after")), id(block(f, "body")))
+    };
+    let header = id(block(function(&module, "f"), "header"));
+    let starts = |blocks: &[i64]| blocks.iter().copied().collect::<IdSet<i64>>();
+    let before = returning_builds();
+    let f = function(&module, "f");
+    assert!(all_stranded(f, header, &starts(&[die])));
+    assert!(!all_stranded(f, header, &starts(&[after])), "after returns");
+    assert!(!all_stranded(f, header, &starts(&[body])), "body reaches the header");
+    assert!(!all_stranded(f, header, &starts(&[die, after])));
+    assert_eq!(returning_builds() - before, 1, "the returning blocks were found again for each call");
+    // An edit that makes `after` stop the program: the old answer is not reused.
+    assert!(cut(&mut module, "f", "exit"));
+    let f = function(&module, "f");
+    assert!(all_stranded(f, header, &starts(&[after])), "a held set of returning blocks outlived the edit");
+    assert_eq!(returning_builds() - before, 2);
+}

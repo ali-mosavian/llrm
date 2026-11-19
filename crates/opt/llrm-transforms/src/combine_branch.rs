@@ -12,17 +12,21 @@
 //! `DomConditionCache` (`DC.registerBranch`), so a query sees the branches
 //! visited before it and no others.
 //!
+//! MIRROR: a branch on a one-use `fcmp` with a non-canonical predicate (`one`,
+//! `ole`, `oge`; `isCanonicalPredicate`) takes the inverse predicate and swaps
+//! its successors, so `br (fcmp ole x, 0), %c, %v` is `br (fcmp ugt x, 0), %v,
+//! %c`.
+//!
 //! DEVIATE 1 (temporary): not made: the logical-and-with-invert form (MIR has
-//! no logical `select` pattern here yet), the `fcmp` predicate canonical form
-//! (`isCanonicalPredicate`), and the constant condition at visit time (the
-//! driver folds a branch on a number, and `combine::prepare` kills the edges
-//! of an undef or poison one, `combine.rs`).
+//! no logical `select` pattern here yet) and the constant condition at visit
+//! time (the driver folds a branch on a number, and `combine::prepare` kills
+//! the edges of an undef or poison one, `combine.rs`).
 //!
 //! MIRROR: every use of the condition that an edge dominates becomes `true`
 //! (the first edge) or `false` (the second): a second branch on the same
 //! compare, further down, reads a number.
 //!
-//! DEVIATE 2: branch weights are not swapped (MIR carries none on a branch).
+//! MIRROR: the weights swap with the successors (`swapSuccessors`).
 //!
 //! # Example
 //! ```text
@@ -34,13 +38,21 @@
 //! `visit` in [`combine`](crate::combine), which dispatches a `br` here
 //! (`visit_cond_br`).
 
-use llrm_mir::module::{InstId, Operand, Use};
-use llrm_mir::opcode::Opcode;
+use llrm_mir::module::{InstId, Operand, Use, ValueDef};
+use llrm_mir::opcode::{FloatPredicate, Opcode};
 use llrm_mir::valuetracking::pattern;
 use llrm_mir::valuetracking::range::edge_dominates_use;
 
 use crate::combine::{Combiner, Visit};
 use crate::combine_shared::{query, replace_operand};
+
+/// `InstCombiner::isCanonicalPredicate`, the `fcmp` cases.
+fn is_canonical_fcmp_predicate(pred: FloatPredicate) -> bool {
+    !matches!(
+        pred,
+        FloatPredicate::One | FloatPredicate::Ole | FloatPredicate::Oge
+    )
+}
 
 impl Combiner<'_> {
     /// `InstCombinerImpl::visitCondBrInst`.
@@ -58,8 +70,7 @@ impl Combiner<'_> {
         if let Some(x) = pattern::not(&query(self, Some(inst)), cond)
             && !matches!(x, Operand::Constant(_))
         {
-            self.function.set_operand(inst, 1, Operand::Block(other));
-            self.function.set_operand(inst, 2, Operand::Block(taken));
+            crate::profswap::swap_arms(self.context, self.env.metadata, self.declared, self.function, inst);
             replace_operand(self, inst, 0, x);
             return Visit::Changed;
         }
@@ -68,6 +79,18 @@ impl Combiner<'_> {
         if taken == other {
             let false_ = self.int(self.type_of(cond), 0);
             replace_operand(self, inst, 0, false_);
+            return Visit::Changed;
+        }
+        // Canonicalize, for example, fcmp_one -> fcmp_oeq.
+        if let Operand::Value(value) = cond
+            && self.has_one_use(cond)
+            && let ValueDef::Instruction(compare) = self.function.value(value).def
+            && let Opcode::FCmp(pred) = self.function.instruction(compare).opcode
+            && !is_canonical_fcmp_predicate(pred)
+        {
+            self.function.set_fcmp_predicate(compare, pred.inverse());
+            crate::profswap::swap_arms(self.context, self.env.metadata, self.declared, self.function, inst);
+            self.add_to_worklist(compare);
             return Visit::Changed;
         }
         // Replace all dominated uses of the condition with true/false.

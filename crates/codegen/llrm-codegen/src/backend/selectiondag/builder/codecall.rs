@@ -8,7 +8,7 @@ use llrm_mir::module::{Instruction, Operand, ValueDef};
 
 use super::super::dag::SDValue;
 use super::super::mvt::EVT;
-use super::super::x86isd;
+use super::LoweringNodes;
 use super::{Builder, Refused};
 
 impl Builder<'_> {
@@ -36,11 +36,17 @@ impl Builder<'_> {
                 *self.info.static_allocas.get(&value).ok_or(Refused("inline code naming other than a frame place"))?;
             ops.push(self.dag.get_target_frame_index(pointer, index));
         }
-        let node = self.dag.get_node_multi(x86isd::LLRM_CODE, &[EVT::OTHER, EVT::GLUE], &ops);
+        let node = self
+            .dag
+            .get_node_multi(
+                LoweringNodes::need(self.target.dag.nodes.code, "inline code")?,
+                &[EVT::OTHER, EVT::GLUE],
+                &ops,
+            );
         let mut chain = SDValue { node: node.node, res: 0 };
         let mut glue = SDValue { node: node.node, res: 1 };
         let vt = self.type_of(instruction.ty)?;
-        let registers = self.arch.results(vt.size_in_bits() / 8);
+        let registers = self.full_arch()?.results(vt.size_in_bits() / 8);
         let (part_vt, parts) = self.parts_in(vt, registers.len())?;
         if registers.len() != parts {
             return Err(Refused("result in registers the value does not fill"));

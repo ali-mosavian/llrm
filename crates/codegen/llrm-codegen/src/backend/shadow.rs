@@ -22,7 +22,7 @@
 //! [isel] id selector=old instructions=3 copies=1 executed=3 memory=0
 //! ```
 //!
-//! From `LLRM_DEBUG=isel llrm-c -m32 -O2` of `int id(int x) { return x; }`.
+//! From `LLRM_DEBUG=isel llrm-cc -m32 -O2` of `int id(int x) { return x; }`.
 //!
 //! # Used by
 //! `assemble::staged` (the choice and the dump), `assemble::machined` (the
@@ -130,6 +130,16 @@ pub(super) fn recorded_to(
     by: Selector,
 ) {
     record_to(path, name, by);
+}
+
+/// [`record`] for a function FastISel selected: `NAME fast`.
+pub fn record_fast(name: &str) {
+    if let Some(path) = llrm_support::env_var("LLRM_ISEL_REPORT") {
+        use std::io::Write;
+        if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(std::path::Path::new(&path)) {
+            let _ = file.write_all(format!("{name} fast\n").as_bytes());
+        }
+    }
 }
 
 /// The `isel` channel's row for `body`, finished by `selector`.

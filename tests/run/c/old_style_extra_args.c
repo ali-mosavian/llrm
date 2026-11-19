@@ -1,4 +1,5 @@
 // flags: -O2 -march=i486 -fno-inline-functions -fno-inline-functions-called-once | -O2 -march=i486 -m32 -fno-inline-functions -fno-inline-functions-called-once | -O2 -march=i486 -m32 -mabi=sysv -fno-inline-functions -fno-inline-functions-called-once
+// bar: none (SDCC internal error SDCCast.c:982)
 /* A function defined with () or fewer parameters than a call passes: what the callee does not declare is the caller's to remove,
    though the convention's callee pops its own (gcc.c-torture/20051012-1: the stack leaked the struct and main returned elsewhere). */
 extern void report(long value);

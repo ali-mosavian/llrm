@@ -1,0 +1,8 @@
+#title,Branch Execution Times,page,10-21,notes,
+Instruction,"Not Predicted, Forward, Taken","Not Predicted, Forward, Not Taken","Not Predicted, Backward, Taken","Not Predicted, Backward, Not Taken",Predicted Correctly as Taken,Predicted Correctly as Not Taken,Predicted Incorrectly
+Bcc,7(0/0),1(0/0),3(0/0),7(0/0),0(0/0),1(0/0),7(0/0)
+BRA,3(0/0),—,3(0/0),—,0(0/0),—,—
+BSR,3(0/1),—,3(0/1),—,1(0/1),—,—
+DBcc,3(0/0),8(0/0),3(0/0),8(0/0),2(0/0),2(0/0),8(0/0)
+DBRA,3(0/0),7(0/0),3(0/0),7(0/0),1(0/0),1(0/0),7(0/0)
+FBcc,8(0/0),2(0/0),8(0/0),2(0/0),2(0/0),2(0/0),8(0/0)

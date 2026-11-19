@@ -21,6 +21,10 @@ void gd_cga_color(unsigned background, unsigned palette);
  */
 void gd_palette_mix(unsigned index, unsigned red, unsigned green, unsigned blue);
 
+/* OUT and INP on a target without port instructions (a host's device answers the DAC's ports). */
+void qb_port_out(unsigned port, unsigned value);
+unsigned qb_port_in(unsigned port);
+
 void gd_plot(unsigned x, unsigned y, unsigned color, unsigned operation);
 
 /* A fill of a box of pixels: the routine for the mode, chosen with the

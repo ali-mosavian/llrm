@@ -42,12 +42,12 @@
 //!   poison-only form with no dominator tree: MIR has no `undef`.
 //! - SU6 ScalarEvolution is made for the one query, not kept and forgotten.
 //! - SU7, SU8, SU10, SU11 are the non-trivial form's: see `nontrivial.rs`.
-//! - SU9 No partially invariant conditions (`hasPartialIVCondition` and
-//!   `buildPartialInvariantUnswitchConditionalBranch`: a loop-header test of
-//!   loads MemorySSA shows unchanged on a path), no injected invariant
-//!   conditions, no guards (MIR has none). Costs 2 of the 21 corpus functions
-//!   `opt` unswitches (4 of 20 rotated), which the oracle classifies. Exit: the
-//!   MemorySSA migration lands (mssa-green-2127, 2026-10-29).
+//! - SU9 No injected invariant conditions: the pin injects only into a branch
+//!   with `!prof` weights that make it taken at least 15 in 16 times
+//!   (`shouldTryInjectBasingOnMetadata`,
+//!   [`SimpleLoopUnswitch.cpp`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/SimpleLoopUnswitch.cpp#L3043)),
+//!   and no IR here has profile data. No guards (MIR has none). Exit: program
+//!   PGO exists. Partially invariant conditions are `partial.rs` (SU12).
 //!
 //! # Example
 //! Before:
@@ -98,6 +98,7 @@ use crate::lcssa::{arms, from_arms};
 
 mod candidates;
 mod nontrivial;
+mod partial;
 
 /// What the pass reads and changes.
 pub struct Run<'a> {
@@ -108,6 +109,12 @@ pub struct Run<'a> {
     pub callees: &'a Callees,
     pub tti: &'a dyn Tti,
     pub function: &'a mut Function,
+    /// The module's analyses, for the alias query of a partially invariant
+    /// condition.
+    pub outer: &'a llrm_mir::passes::Outer,
+    /// The headers of the loops a partially invariant condition was unswitched
+    /// out of: `llvm.loop.unswitch.partial.disable`, kept for this run.
+    pub partial_done: IdSet<BlockId>,
 }
 
 struct Analyzed {
@@ -120,7 +127,13 @@ impl Analyzed {
     fn of(run: &Run) -> Self {
         let tree = DomTree::of(run.function);
         let loops = LoopInfo::analyze(run.function, || &tree);
-        let assumptions = AssumptionCache::of(run.context, run.globals, run.metadata, run.function);
+        let assumptions = AssumptionCache::of_declared(
+            run.context,
+            run.globals,
+            run.metadata,
+            run.function,
+            run.outer.assume_declared(),
+        );
         Self { tree, loops, assumptions }
     }
 }
@@ -403,7 +416,7 @@ fn hoist_loop_to_new_parent(
         return false;
     }
     crate::loopsimplify::simplified(run.function);
-    let _ = crate::lcssa::closed(run.function);
+    let _ = crate::lcssa::closed(run.context, run.layout, run.function);
     true
 }
 
@@ -437,6 +450,7 @@ fn build_partial_unswitch_conditional_branch(
                 dom_conditions: None,
                 cond_context: None,
                 cxt: judged_at.map(|(_, at)| at),
+                pending_intrinsics: &[],
             };
             if !llrm_mir::valuetracking::guarantee::is_guaranteed_not_to_be_undef_or_poison(&query, inv, 0) {
                 let ty = match inv {
@@ -977,6 +991,10 @@ fn unswitch_all_trivial_conditions(
 struct Unswitched {
     changed: bool,
     siblings: Vec<BlockId>,
+    /// `revisitCurrentLoop`: a non-trivial unswitch that is not a partial one.
+    revisit: bool,
+    /// The step was a non-trivial unswitch: the loop pass manager takes it from here.
+    non_trivial: bool,
 }
 
 /// `unswitchBestCondition`: the cheapest non-trivial candidate, if its cost is
@@ -985,7 +1003,7 @@ fn unswitch_best_condition(
     run: &mut Run,
     analyzed: &mut Analyzed,
     header: BlockId,
-) -> Option<Vec<BlockId>> {
+) -> Option<(Vec<BlockId>, bool)> {
     let lp = analyzed.loops.get_loop_for(header).expect("a loop headed by this block");
     // Collect all invariant conditions within this loop (as opposed to an
     // inner loop which would be handled when visiting that inner loop).
@@ -1014,7 +1032,12 @@ fn unswitch_best_condition(
         insert_freeze = nontrivial::should_insert_freeze(run, analyzed, lp, cond, best.terminator);
     }
     llrm_support::debug!("simpleloopunswitch", "unswitching non-trivial terminator in b{}", header.0);
-    Some(nontrivial::unswitch_nontrivial_invariants(run, analyzed, header, &best, insert_freeze).cloned_headers)
+    if best.partial.is_some() {
+        // `postUnswitch`: the loop is marked, not looked at again.
+        run.partial_done.insert(header);
+    }
+    let partial = best.partial.is_some();
+    Some((nontrivial::unswitch_nontrivial_invariants(run, analyzed, header, &best, insert_freeze).cloned_headers, partial))
 }
 
 /// `unswitchLoop`: the trivial path, then, with `non_trivial`, the best
@@ -1038,7 +1061,7 @@ fn unswitch_loop(
     }
     // Try trivial unswitch first before looking at other blocks in the loop.
     if unswitch_all_trivial_conditions(run, analyzed, header) {
-        return Unswitched { changed: true, siblings: Vec::new() };
+        return Unswitched { changed: true, siblings: Vec::new(), revisit: false, non_trivial: false };
     }
     // Skip non-trivial unswitching for optsize functions.
     let optsize = run
@@ -1056,7 +1079,7 @@ fn unswitch_loop(
         return Unswitched::default();
     }
     match unswitch_best_condition(run, analyzed, header) {
-        Some(siblings) => Unswitched { changed: true, siblings },
+        Some((siblings, partial)) => Unswitched { changed: true, siblings, revisit: !partial, non_trivial: true },
         None => Unswitched::default(),
     }
 }
@@ -1069,8 +1092,15 @@ pub fn unswitch_loops(
     non_trivial: bool,
 ) -> bool {
     let mut analyzed = Analyzed::of(run);
-    let mut work: std::collections::VecDeque<BlockId> =
+    let mut headers: Vec<BlockId> =
         analyzed.loops.get_loops_in_reverse_sibling_preorder().iter().rev().map(|one| one.get_header()).collect();
+    crate::loopfilter::retain(&mut headers);
+    let mut work: std::collections::VecDeque<BlockId> = headers.into();
+    // Run for one loop of a loop pass manager (`pipeline::Lpm1`): the manager
+    // owns the worklist, so the loops this makes and the revisit are handed to
+    // it (`LPMUpdater::addSiblingLoops`, `revisitCurrentLoop`) and not looked
+    // at here.
+    let scoped = crate::loopfilter::scoped();
     let mut changed = false;
     while let Some(header) = work.pop_front() {
         if !run.function.is_placed(header) || !analyzed.loops.is_loop_header(header) {
@@ -1083,6 +1113,10 @@ pub fn unswitch_loops(
                 break;
             }
             changed = true;
+            if scoped && step.non_trivial {
+                crate::loopfilter::note_unswitched(step.revisit, step.siblings);
+                break;
+            }
             work.extend(step.siblings);
             // The loops around it may have changed: derive them again where
             // the nest is not a top-level loop, or the pass cloned blocks.
@@ -1128,6 +1162,8 @@ impl FunctionPass for SimpleLoopUnswitch {
             callees: outer.callees(),
             tti: &*tti,
             function: unit.function,
+            outer: &outer,
+            partial_done: IdSet::new(),
         };
         if unswitch_loops(&mut run, self.non_trivial) { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
     }

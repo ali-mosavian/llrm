@@ -308,3 +308,32 @@ fn test_a_declaration_holds_room_for_its_parameters_only() {
     let declaration = crate::build::function_declaration(&module.context, "f", ty).expect("a function type");
     assert_eq!(declaration.parameter_attrs.capacity(), 5);
 }
+
+/// A global renamed or pushed after the first lookup is still found, and one
+/// renamed away is not.
+#[test]
+fn a_global_named_after_the_first_lookup_is_found() {
+    let mut module = parse::module("declare void @a()\ndeclare void @b()\n").unwrap();
+    assert_eq!(module.named("b").map(|id| id.0), Some(1));
+    module.globals[1].name = "c".to_owned().into();
+    assert_eq!(module.named("b"), None);
+    assert_eq!(module.named("c").map(|id| id.0), Some(1));
+    let copy = module.globals[0].clone();
+    module.globals.push(crate::module::GlobalValue { name: "d".to_owned().into(), ..copy });
+    assert_eq!(module.named("d").map(|id| id.0), Some(2));
+}
+
+/// `select <4 x i1>` was "ill-typed": the check took only an `i1` condition,
+/// so LoopVectorize's widened selects failed verification. LLVM's
+/// `SelectInst::areInvalidOperands` takes a vector of `i1` with the values' lanes.
+#[test]
+fn a_select_by_a_vector_of_conditions_verifies_when_the_lanes_agree() {
+    let select = |condition: &str| {
+        format!(
+            "define <4 x i32> @f({condition} %c, <4 x i32> %a, <4 x i32> %b) {{\nentry:\n  %r = select {condition} %c, <4 x i32> %a, <4 x i32> %b\n  ret <4 x i32> %r\n}}\n"
+        )
+    };
+    assert_eq!(verify::verify(&parse::module(&select("<4 x i1>")).unwrap()), Vec::<String>::new());
+    let said = verify::verify(&parse::module(&select("<2 x i1>")).unwrap());
+    assert!(said.iter().any(|one| one.contains("is ill-typed")), "{said:?}");
+}

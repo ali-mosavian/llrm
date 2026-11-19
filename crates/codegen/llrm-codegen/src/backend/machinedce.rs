@@ -141,7 +141,12 @@ fn _once(body: &LirBody) -> Option<LirBody> {
                 dead.clear();
                 continue;
             };
-            if !effect.writes.is_empty() && effect.writes.is_subset(&dead) && pure(regs, one) {
+            // `bsf` leaves its destination as it was when the source is zero:
+            // that register is written only maybe, so the effect omits it and
+            // the pass must ask for it, else a live count is removed.
+            let may_write = crate::backend::peephole::_register_effects(regs, body.bits, one, true, true)
+                .map_or_else(|| effect.writes.clone(), |(_, writes)| writes);
+            if !effect.writes.is_empty() && may_write.is_subset(&dead) && pure(regs, one) {
                 redundant.insert(id(one));
                 changed = true;
                 continue;
@@ -395,5 +400,46 @@ mod tests {
             block(20, vec![], vec![]).into(),
         ]));
         assert_eq!(result.blocks[0].insns[0].what, cleanup.what);
+    }
+
+    /// m64 `256u >> __builtin_ctz(m)` at -O1 printed garbage and segfaulted
+    /// stft_*: the `bsf ecx, edi` that sets the shift count was removed, though
+    /// `shr eax, cl` reads its low byte.
+    #[test]
+    fn test_a_bsf_whose_low_byte_a_shift_reads_is_kept() {
+        let wide = |register| Loc::Reg(Reg { register, width: 4 });
+        let bsf = Arc::new(Insn::new(
+            0,
+            Some((0, 3)),
+            what(Operation::Binary, "bsf", vec![wide(RegId::ECX)], vec![wide(RegId::ECX), wide(RegId::EDI)]),
+            vec![1],
+            vec![],
+        ));
+        let load = Arc::new(Insn::new(
+            3,
+            Some((3, 8)),
+            what(
+                Operation::Move,
+                "mov",
+                vec![wide(RegId::EAX)],
+                vec![Loc::Imm(Imm { value: 256, width: 4, address: None })],
+            ),
+            vec![2],
+            vec![],
+        ));
+        let shift = Arc::new(Insn::new(
+            8,
+            Some((8, 10)),
+            what(
+                Operation::Binary,
+                "shr",
+                vec![wide(RegId::EAX)],
+                vec![wide(RegId::EAX), Loc::Reg(Reg { register: RegId::CL, width: 1 })],
+            ),
+            vec![3],
+            vec![2],
+        ));
+        let result = eliminated(body(vec![block(0, vec![Arc::clone(&bsf), load, shift], vec![]).into()]));
+        assert_eq!(result.blocks[0].insns[0].what, bsf.what);
     }
 }

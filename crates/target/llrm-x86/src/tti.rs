@@ -39,6 +39,8 @@
 //! docs/architecture.
 
 use llrm_mir::tti::*;
+use llrm_sdag::lowering::{TargetLoweringInfo, TypeAction};
+use llrm_sdag::mvt::{EVT, MVT};
 
 /// X86's scalar profile: which tables its CPU reads.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -49,13 +51,39 @@ pub struct X86 {
     /// X86.td lists it); `branchfusion` is a Bulldozer-and-newer feature none
     /// of the profiles has.
     pub macro_fusion: bool,
+    /// `FeatureCMOV` (X86.td): the i386, i486, pentium, k5 and k6 have none.
+    pub cmov: bool,
     /// Long mode: the integer registers are 64 bits wide (`is64Bit`).
     pub quad: bool,
     /// What real mode's addressing and register file make of the hooks LSR
     /// reads (T6); none: the 32-bit mode's.
     pub real_mode: Option<RealMode>,
+    /// General registers a value may sit in, where the target's description
+    /// states them (frame and stack pointers excluded); none: the pin's count.
+    pub registers: Option<u32>,
     /// The target's tuning table (`Machine::tuning`); the pin's by default.
     pub tuning: llrm_mir::target::Tuning,
+    /// `getSchedModel().LoopMicroOpBufferSize` of the cpu's model: 28 for the
+    /// `SandyBridgeModel` of `core2` and `x86-64`, 0 for the `GenericModel` of
+    /// the rest (`LoopMicroOpBufferSize = -1`).
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86SchedSandyBridge.td#L28
+    pub loop_micro_op_buffer: u32,
+    /// `getSchedModel().IssueWidth`: 4 for the `SandyBridgeModel`, 0 for the
+    /// `GenericModel` of the rest.
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86SchedSandyBridge.td#L22
+    pub issue_width: u32,
+    /// The program's code is position independent (clang's "PIC Level"); set
+    /// by `Program::new`. A symbol in long mode is then `[rip + symbol]`
+    /// without index or displacement.
+    pub position_independent: std::cell::Cell<bool>,
+    /// This is the inliner's size view (`Tti::inline_size_view`): `CodeSize`
+    /// is bytes of 32-bit code (`sizes`), not the pin's units.
+    pub size_bytes: bool,
+    /// A 32-bit integer register holds the vector `<2 x i16>` or `<4 x i8>`:
+    /// a loop of bitwise operations is widened by it, and the vectors are
+    /// lowered to the word before selection (gcc's `ix86_preferred_simd_mode`
+    /// with no SSE, `tree-vect-generic.cc`). Off: the pin has no such vector.
+    pub word_vectors: bool,
 }
 
 /// T6: the 16-bit target's address forms and registers, from its description
@@ -73,6 +101,10 @@ pub struct RealMode {
     /// The space of huge pointers: an offset there carries into the selector,
     /// so an address is one register and no more.
     pub huge_space: Option<u32>,
+    /// Registers the target's cheapest address form can name (a base and an
+    /// index of its classes, the frame's excluded); none: any general
+    /// register.
+    pub address_registers: Option<u32>,
     /// The target's `-Os` growth guard for inlining (SZ1, D11): a callee that
     /// stays is inlined into an `optsize` caller only if its code does not
     /// outgrow the call. The pin has none (its `OptSizeThreshold` 50 counts
@@ -86,6 +118,12 @@ pub struct RealMode {
     /// (trips, bar): an `optsize` loop of at most that many trips is fully
     /// unrolled under that unrolled size (DEVIATE U1). (0, 0): the pin's.
     pub unroll_size_few_trips: (u32, u32),
+    /// DEVIATE REC-1: (depth, callee size) of the recursion taken at speed;
+    /// none: the pin's.
+    pub recursive_inlining: Option<(u32, i64)>,
+    /// DEVIATE REC-1: the ceilings of the priced copies of a function in
+    /// itself (`Tti::priced_self_inlining`); none: `recursive_inlining`.
+    pub priced_self_inlining: Option<(u32, i64)>,
 }
 
 impl RealMode {
@@ -98,39 +136,203 @@ impl RealMode {
 }
 
 impl X86 {
+    /// `getIntImmCost(const APInt &, Type *)`; `zext_basic` is ZIMM.
+    fn imm_cost(
+        &self,
+        imm: i128,
+        bits: u32,
+        zext_basic: bool,
+    ) -> Cost {
+        if bits == 0 {
+            return Cost::of(i64::from(u32::MAX));
+        }
+        if bits > 128 || imm == 0 {
+            return Cost::FREE;
+        }
+        // Sign-extended to a multiple of 64 bits, costed 64 bits at a time.
+        let extended = if bits >= 128 { imm } else { (imm << (128 - bits)) >> (128 - bits) };
+        let mut total = 0;
+        let mut shift = 0;
+        while shift < bits {
+            let chunk = (extended >> shift) as i64;
+            total += if zext_basic && bits == 64 && chunk > 0 && chunk <= i64::from(u32::MAX) {
+                1
+            } else {
+                int_imm_chunk(chunk)
+            };
+            shift += 64;
+        }
+        Cost::of(total.max(1))
+    }
+
+    /// `getIntImmCostInst`; `zext_basic` is ZIMM.
+    fn imm_cost_inst(
+        &self,
+        op: ImmUser,
+        index: u32,
+        imm: i128,
+        bits: u32,
+        zext_basic: bool,
+    ) -> Cost {
+        if bits == 0 {
+            return Cost::FREE;
+        }
+        let zext = if bits >= 128 { imm as u128 } else { (imm as u128) & ((1u128 << bits) - 1) };
+        let immediate = match op {
+            ImmUser::Unknown => return Cost::FREE,
+            ImmUser::GetElementPtr => return if index == 0 { Cost::of(2) } else { Cost::FREE },
+            ImmUser::Store => Some(0),
+            ImmUser::ICmp => {
+                if index == 1 && bits == 64 && (zext == 0x1_0000_0000 || zext == 0xffff_ffff) {
+                    return Cost::FREE;
+                }
+                Some(1)
+            }
+            ImmUser::And => {
+                if index == 1 && bits == 64 && zext <= u128::from(u32::MAX) {
+                    return Cost::FREE;
+                }
+                Some(1)
+            }
+            ImmUser::Add | ImmUser::Sub => {
+                if index == 1 && bits == 64 && zext == 0x8000_0000 {
+                    return Cost::FREE;
+                }
+                Some(1)
+            }
+            ImmUser::Divide => return Cost::FREE,
+            ImmUser::Mul | ImmUser::Or | ImmUser::Xor => Some(1),
+            ImmUser::Shift => {
+                if index == 1 {
+                    return Cost::FREE;
+                }
+                None
+            }
+            ImmUser::Other => None,
+        };
+        let cost = self.imm_cost(imm, bits, zext_basic);
+        if immediate == Some(index) {
+            let constants = i64::from(bits.div_ceil(64));
+            return if cost.value <= constants { Cost::FREE } else { cost };
+        }
+        cost
+    }
+
     /// The bits of the integer registers.
     pub fn native(&self) -> u32 {
         if self.quad { 64 } else { 32 }
+    }
+
+    /// Whether `inst` is a plain load whose one user, in its own block, takes
+    /// it as a memory operand beside a register: `op r,[m]` for the integer ALU
+    /// operations and the compare (the load in either place of a commutative
+    /// one, the second of `sub`), `fadd`/`fmul` for float and double.
+    fn load_folds_into_its_only_user(
+        &self,
+        context: &llrm_mir::context::Context,
+        function: &llrm_mir::module::Function,
+        inst: llrm_mir::module::InstId,
+    ) -> bool {
+        use llrm_mir::opcode::{BinaryOp, Opcode};
+        use llrm_mir::types::{FloatKind, Type};
+        let load = function.instruction(inst);
+        let (Opcode::Load { volatile: false, .. }, Some(result)) = (&load.opcode, load.result) else { return false };
+        let integer = context.types.int_bits(load.ty);
+        let float = matches!(
+            context.types.get(load.ty),
+            Type::Float(FloatKind::Float | FloatKind::Double)
+        );
+        if !float && !matches!(integer, Some(8 | 16 | 32)) && !(integer == Some(64) && self.native() == 64) {
+            return false;
+        }
+        let mut users = function.users(result).iter();
+        let (Some(only), None) = (users.next(), users.next()) else { return false };
+        if function.parent(only.user) != function.parent(inst) {
+            return false;
+        }
+        let place = only.index as usize;
+        // The memory form needs a register for the other operand: against an
+        // immediate `cmp [m],imm` is longer than the shared load plus
+        // `test`/`cmp r,imm`, and `add r,imm` cannot take the load at
+        // all.
+        let Some(&other) = function.instruction(only.user).operands.get(1 - place.min(1)) else { return false };
+        if !matches!(other, llrm_mir::module::Operand::Value(_)) {
+            return false;
+        }
+        match &function.instruction(only.user).opcode {
+            Opcode::Binary(BinaryOp::Add | BinaryOp::And | BinaryOp::Or | BinaryOp::Xor) => integer.is_some(),
+            Opcode::Binary(BinaryOp::Mul) => matches!(integer, Some(16 | 32 | 64)),
+            Opcode::Binary(BinaryOp::Sub) => integer.is_some() && place == 1,
+            Opcode::ICmp(_) => integer.is_some(),
+            Opcode::Binary(BinaryOp::FAdd | BinaryOp::FMul) => float,
+            Opcode::Binary(BinaryOp::FSub | BinaryOp::FDiv) => float && place == 1,
+            _ => false,
+        }
+    }
+
+    /// The profile of the baseline cpu of `triple`'s architecture: the 32-bit
+    /// ones by their `-march` (`i686` is `pentiumpro`), `x86_64` long mode.
+    pub fn of_triple(triple: &str) -> Option<X86> {
+        let cpu = match triple.split('-').next()? {
+            "x86_64" => "x86-64",
+            "i386" => "i386",
+            "i486" => "i486",
+            "i586" => "pentium",
+            "i686" => "pentiumpro",
+            _ => return None,
+        };
+        X86::of_cpu(cpu)
     }
 
     /// The profile of a `-march` llrm supports.
     pub fn of_cpu(cpu: &str) -> Option<X86> {
         match cpu {
             "i386" | "i486" | "pentium" | "pentiumpro" | "k5" | "k6" | "athlon" => Some(X86 {
+                cmov: !matches!(cpu, "i386" | "i486" | "pentium" | "k5" | "k6"),
                 sse1: false,
                 sse2: false,
                 macro_fusion: false,
                 quad: false,
                 real_mode: None,
+                registers: None,
                 tuning: llrm_mir::target::Tuning::PIN,
+                loop_micro_op_buffer: 0,
+                issue_width: 0,
+                position_independent: std::cell::Cell::new(true),
+                size_bytes: false,
+                word_vectors: false,
             }),
             "core2" => Some(X86 {
+                cmov: true,
                 sse1: true,
                 sse2: true,
                 macro_fusion: true,
                 quad: false,
                 real_mode: None,
+                registers: None,
                 tuning: llrm_mir::target::Tuning::PIN,
+                loop_micro_op_buffer: 28,
+                issue_width: 4,
+                position_independent: std::cell::Cell::new(true),
+                size_bytes: false,
+                word_vectors: false,
             }),
             // `-march=x86-64`: the baseline of long mode, SSE2
             // and `TuningMacroFusion` (X86.td `X86_64V1Tuning`).
             "x86-64" => Some(X86 {
+                cmov: true,
                 sse1: true,
                 sse2: true,
                 macro_fusion: true,
                 quad: true,
                 real_mode: None,
+                registers: None,
                 tuning: llrm_mir::target::Tuning::PIN,
+                loop_micro_op_buffer: 28,
+                issue_width: 4,
+                position_independent: std::cell::Cell::new(true),
+                size_bytes: false,
+                word_vectors: false,
             }),
             _ => None,
         }
@@ -156,6 +358,22 @@ impl X86 {
         X86 { real_mode: Some(real_mode), ..self.clone() }
     }
 
+    /// The registers the target's description allocates.
+    pub fn with_registers(
+        &self,
+        registers: u32,
+    ) -> X86 {
+        X86 { registers: Some(registers), ..self.clone() }
+    }
+
+    /// The word is a vector register (`word_vectors`).
+    pub fn with_word_vectors(
+        &self,
+        word_vectors: bool,
+    ) -> X86 {
+        X86 { word_vectors, ..self.clone() }
+    }
+
     /// The target's tuning table.
     pub fn with_tuning(
         &self,
@@ -163,6 +381,47 @@ impl X86 {
     ) -> X86 {
         X86 { tuning, ..self.clone() }
     }
+}
+
+/// `SSE2ConversionTbl`'s integer rows (the pin's `X86TargetTransformInfo.cpp`,
+/// L3526): a cast, its destination and source as (lane bits, lanes), and the
+/// throughput; the other three cost kinds are 1.
+/// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L3526
+const SSE2_INTEGER_CASTS: [(CastKind, (u32, u32), (u32, u32), i64); 23] = [
+    (CastKind::ZExt, (64, 2), (8, 16), 4),
+    (CastKind::SExt, (64, 2), (8, 16), 4),
+    (CastKind::ZExt, (32, 4), (8, 16), 2),
+    (CastKind::SExt, (32, 4), (8, 16), 3),
+    (CastKind::ZExt, (16, 8), (8, 16), 1),
+    (CastKind::SExt, (16, 8), (8, 16), 2),
+    (CastKind::ZExt, (64, 2), (16, 8), 2),
+    (CastKind::SExt, (64, 2), (16, 8), 3),
+    (CastKind::ZExt, (32, 4), (16, 8), 1),
+    (CastKind::SExt, (32, 4), (16, 8), 2),
+    (CastKind::ZExt, (64, 2), (32, 4), 1),
+    (CastKind::SExt, (64, 2), (32, 4), 2),
+    (CastKind::Trunc, (8, 16), (16, 8), 2),
+    (CastKind::Trunc, (8, 16), (16, 16), 3),
+    (CastKind::Trunc, (8, 16), (32, 4), 3),
+    (CastKind::Trunc, (8, 16), (32, 16), 7),
+    (CastKind::Trunc, (16, 2), (32, 2), 1),
+    (CastKind::Trunc, (16, 8), (32, 4), 3),
+    (CastKind::Trunc, (16, 8), (32, 8), 5),
+    (CastKind::Trunc, (16, 16), (32, 16), 10),
+    (CastKind::Trunc, (8, 16), (64, 2), 4),
+    (CastKind::Trunc, (16, 8), (64, 2), 2),
+    (CastKind::Trunc, (32, 4), (64, 2), 1),
+];
+
+/// `getTypeLegalizationCost` of an integer vector of 8 to 64-bit lanes and a
+/// power-of-two lane count: the registers it takes ([`xmm_pieces`]) and the
+/// register type of each.
+fn legalized_vector(ty: VectorTy) -> Option<(i64, (u32, u32))> {
+    let Ty::Int(bits @ (8 | 16 | 32 | 64)) = ty.lane else { return None };
+    if !ty.count.is_power_of_two() || ty.count < 2 {
+        return None;
+    }
+    Some((xmm_pieces(ty)?, (bits, 128 / bits)))
 }
 
 /// `getTypeLegalizationCost` for the scalar types: how many operations of what
@@ -504,17 +763,664 @@ fn intrinsic_price(
     None
 }
 
+impl X86 {
+    /// The intrinsic's row of `tti_intrinsics.txt` for this profile: long mode
+    /// has its own (`x64`), as the pin's `X64CostTbl` and 64-bit
+    /// legalization differ from the 32-bit ones. A `ctlz` or `cttz` called with
+    /// a zero-poison flag is priced from its own `.zp` row (the pin looks
+    /// up `*_ZERO_POISON`).
+    fn priced_intrinsic(
+        &self,
+        name: &str,
+        kind: CostKind,
+        zero_poison: bool,
+    ) -> Cost {
+        let profile = if self.quad {
+            "x64"
+        } else if self.sse2 {
+            "sse2"
+        } else {
+            "nosse"
+        };
+        let cost_kind = kind;
+        let kind = match kind {
+            CostKind::RecipThroughput => "throughput",
+            CostKind::Latency => "latency",
+            CostKind::CodeSize => "code-size",
+            CostKind::SizeAndLatency => "size-latency",
+        };
+        let priced = if zero_poison { intrinsic_price(profile, kind, &format!("{name}.zp")) } else { None };
+        match priced.or_else(|| intrinsic_price(profile, kind, name)) {
+            Some(Some(cost)) => Cost::of(cost),
+            Some(None) => Cost::INVALID,
+            None if is_free_intrinsic(name) => Cost::FREE,
+            None => base_intrinsic_cost(name)
+                .or_else(|| library_call_intrinsic_cost(name, cost_kind))
+                .unwrap_or(Cost::INVALID),
+        }
+    }
+}
+
+/// The legalizer's view of the SSE2 vector registers: what
+/// `getTypeLegalizationCost` asks the target's types.
+static SSE2_TYPES: std::sync::LazyLock<TargetLoweringInfo> = std::sync::LazyLock::new(TargetLoweringInfo::x86_64_sse2);
+
+/// `getTypeLegalizationCost(<count x lane>).first` of an integer vector of 8 to
+/// 64-bit lanes: the registers it takes. A vector under 128 bits is widened to
+/// one register (`TypeWidenVector`), a wider one split in halves until
+/// a half is a register. A type with no `MVT` (a count beyond `v128i8`) is
+/// priced by its size alone.
+fn xmm_pieces(ty: VectorTy) -> Option<i64> {
+    fn registers(
+        types: &TargetLoweringInfo,
+        vt: EVT,
+    ) -> Option<i64> {
+        match types.type_conversion(vt) {
+            (TypeAction::Legal, _) => Some(1),
+            (TypeAction::WidenVector, wide) => registers(types, wide),
+            (TypeAction::SplitVector, half) => Some(2 * registers(types, half)?),
+            _ => None,
+        }
+    }
+    let lane = match ty.lane {
+        Ty::Int(bits @ (8 | 16 | 32 | 64)) => bits,
+        _ => return None,
+    };
+    if let Some(mvt) = MVT::integer(lane).and_then(|element| MVT::vector(element, ty.count)) {
+        return registers(&SSE2_TYPES, EVT::Simple(mvt));
+    }
+    let total = u64::from(lane) * u64::from(ty.count);
+    (ty.count.is_power_of_two() && total >= 128 && total % 128 == 0).then(|| (total / 128) as i64)
+}
+
+/// A vector of 8- or 16-bit integer lanes that fills a 32-bit word.
+fn is_word_vector(ty: VectorTy) -> bool {
+    match ty.lane {
+        Ty::Int(bits @ (8 | 16)) => u64::from(ty.count) * u64::from(bits) == 32,
+        _ => false,
+    }
+}
+
 impl Tti for X86 {
     fn name(&self) -> &'static str {
         "X86"
+    }
+
+    /// x86-64 first (DEVIATE VPEE6, owner x87-cordic-2, exit 2026-12-10): the
+    /// other ports' backends are not known to select the vector loop's
+    /// `reduce.or` and `reduce.umin`.
+    fn vectorizes_early_exit(&self) -> bool {
+        self.vector_values()
+    }
+
+    fn selects_sub_register_vectors(&self) -> bool {
+        self.vector_values()
     }
 
     fn inline_threshold_override(&self) -> Option<i64> {
         self.tuning.inline_threshold
     }
 
+    fn fills_pattern_at_speed(&self) -> bool {
+        self.tuning.fills_pattern_at_speed
+    }
+
+    fn speed_milliclocks_per_byte(&self) -> i64 {
+        self.tuning.speed_milliclocks_per_byte
+    }
+
+    fn unroll_milliclocks_per_byte(&self) -> i64 {
+        self.tuning.unroll_milliclocks_per_byte
+    }
+
+    fn unroll_prices_nest_loops_without_outer_counter(&self) -> bool {
+        self.tuning.unroll_prices_nest
+    }
+
+    fn folds_phi_constant_chains(&self) -> bool {
+        self.tuning.phi_constant_chains
+    }
+
+    fn unroll_never_grows_at_o1(&self) -> bool {
+        self.tuning.unroll_never_grows_at_o1
+    }
+
+    /// DEVIATE UNROLL-THROUGH-CALLS: x86-64 (switch_jump_table O2: gcc unrolls
+    /// the 10-trip `byte()` loop and folds its switch, 228 instructions).
+    /// owner: llrm-target-x86-m16-b, exit: 2026-11-30, or when the pin's
+    /// analysis prices calls.
+    fn unroll_prices_calls(&self) -> bool {
+        self.quad
+    }
+
+    fn unroll_trial_threshold(&self) -> Option<u32> {
+        self.tuning.unroll_trial_at_o1
+    }
+
+    fn ipra_binds_local(&self) -> bool {
+        self.tuning.ipra_binds_local
+    }
+
+    fn unroll_trial_at_size(&self) -> Option<u32> {
+        self.tuning.unroll_trial_at_size
+    }
+
+    /// -O1 is strict on bytes where the -Os trial is
+    /// (`unroll_trial_bytes_strict`): a peel copies the loop body.
+    fn peels_at_o1(&self) -> bool {
+        !self.tuning.unroll_trial_bytes_strict
+    }
+
+    fn unroll_trial_bytes_strict(&self) -> bool {
+        self.tuning.unroll_trial_bytes_strict
+    }
+
+    fn unroll_trial_nests_only(&self) -> bool {
+        self.tuning.unroll_trial_nests_only
+    }
+
+    fn inline_dying_credit_at_os(&self) -> bool {
+        self.tuning.inline_dying_credit_at_os
+    }
+
+    fn inline_trial_keeps_shrinking_copy(&self) -> bool {
+        self.tuning.inline_trial_keeps_shrinking_copy
+    }
+
+    fn frame_slot_add_with_saved(&self) -> bool {
+        self.tuning.frame_slot_add_with_saved
+    }
+
+    fn inline_trial_cold_margin(&self) -> i64 {
+        self.tuning.inline_trial_cold_margin
+    }
+
+    fn second_ipsccp(&self) -> bool {
+        self.tuning.second_ipsccp
+    }
+
+    fn unroll_o1_analyzed_trips(&self) -> Option<u32> {
+        self.tuning.unroll_o1_analyzed_trips
+    }
+
+    fn pops_arguments_at_size(&self) -> bool {
+        self.tuning.pops_arguments_at_size
+    }
+
+    fn libc_memcpy(&self) -> bool {
+        self.tuning.libc_memcpy
+    }
+
+    fn multiply_by_clocks(&self) -> bool {
+        self.tuning.multiply_by_clocks
+    }
+
+    /// DEVIATE SYMPAIR-1: real mode keeps the two selects (see
+    /// `Tti::keeps_icmp_of_swapped_selects`).
+    fn keeps_icmp_of_swapped_selects(&self) -> bool {
+        self.real_mode.is_some()
+    }
+
+    fn keeps_sahf_where_bytes_are_held(&self) -> bool {
+        self.tuning.keeps_sahf_where_bytes_are_held
+    }
+
+    fn narrow_divide_live_limit(&self) -> u32 {
+        self.tuning.narrow_divide_live_limit
+    }
+
+    fn narrow_divide_live_max_bits(&self) -> u32 {
+        self.tuning.narrow_divide_live_max_bits
+    }
+
+    fn narrow_divide_live_at_size(&self) -> bool {
+        self.tuning.narrow_divide_live_at_size
+    }
+
+    /// DEVIATE INL-O1 SIZE: the inliner counts a callee in bytes of code.
+    fn inline_size_view(&self) -> Option<std::rc::Rc<dyn Tti>> {
+        ((self.tuning.inline_size_bytes || self.tuning.inline_trials_at_o1) && !self.size_bytes)
+            .then(|| std::rc::Rc::new(X86 { size_bytes: true, ..self.clone() }) as std::rc::Rc<dyn Tti>)
+    }
+
+    /// `Tuning::inline_trials_at_o1` alone gives the byte view to -O1 only: the
+    /// -O2 and -O3 callers keep the units their rate was fitted in.
+    fn inline_size_view_at(
+        &self,
+        speed: bool,
+    ) -> Option<std::rc::Rc<dyn Tti>> {
+        if speed && !self.tuning.inline_size_bytes { None } else { self.inline_size_view() }
+    }
+
+    fn access_address_cost(
+        &self,
+        form: AddressForm,
+        kind: CostKind,
+    ) -> Cost {
+        if self.size_bytes && kind == CostKind::CodeSize {
+            return crate::sizes::address(form, self.quad);
+        }
+        Cost::FREE
+    }
+
+    fn memory_intrinsic_cost(
+        &self,
+        family: &str,
+        length: Option<u64>,
+        kind: CostKind,
+    ) -> Option<Cost> {
+        (self.size_bytes && kind == CostKind::CodeSize).then(|| crate::sizes::memory_intrinsic(family, length))
+    }
+
+    fn address_computation_cost(
+        &self,
+        kind: CostKind,
+    ) -> Cost {
+        if self.size_bytes && kind == CostKind::CodeSize {
+            return Cost::of(3);
+        }
+        Cost::BASIC
+    }
+
+    fn direct_call_cost(
+        &self,
+        arguments: i64,
+        kind: CostKind,
+    ) -> Cost {
+        if self.size_bytes && kind == CostKind::CodeSize {
+            return crate::sizes::call(arguments, self.quad);
+        }
+        Cost::BASIC * (arguments + 1)
+    }
+
+    fn inline_never_grows_without_rate(&self) -> bool {
+        self.tuning.inline_never_grows_without_rate
+    }
+
+    fn switch_lookup_trial_at_size(&self) -> bool {
+        self.tuning.switch_lookup_trial_at_size
+    }
+
+    fn loop_idiom_copy_trial_at_size(&self) -> bool {
+        self.tuning.loop_idiom_copy_trial_at_size
+    }
+
+    fn jump_threading_latch_trial_at_size(&self) -> bool {
+        self.tuning.jump_threading_latch_trial_at_size
+    }
+
+    fn cold_site_ignores_sinks(&self) -> bool {
+        self.tuning.cold_site_ignores_sinks
+    }
+
+    fn inline_last_call_in_cold_site(&self) -> bool {
+        self.tuning.inline_last_call_in_cold_site
+    }
+
+    fn unroll_object_bound(&self) -> Option<u32> {
+        self.tuning.unroll_object_bound
+    }
+
+    fn inline_o1_weighs_entry(&self) -> bool {
+        self.tuning.inline_o1_weighs_entry
+    }
+
+    fn call_sequence_cost(
+        &self,
+        shape: &llrm_mir::tti::CallShape,
+        kind: CostKind,
+    ) -> Option<Cost> {
+        let tuning = &self.tuning;
+        if kind != CostKind::Latency || tuning.call_sequence_fixed_clocks == 0 {
+            return None;
+        }
+        let words: i64 = shape
+            .arguments
+            .iter()
+            .map(|argument| match (argument.byval_bytes, argument.ty) {
+                (Some(bytes), _) => (bytes as i64 + 3) / 4,
+                (None, Some(Ty::Int(bits))) => i64::from(bits.div_ceil(32).max(1)),
+                (None, Some(Ty::Double)) => 2,
+                (None, Some(Ty::X87)) => 3,
+                _ => 1,
+            })
+            .sum();
+        let pop = if words > 0 { tuning.call_sequence_pop_clocks } else { 0 };
+        Some(Cost::of(tuning.call_sequence_fixed_clocks + words * tuning.call_sequence_argument_clocks + pop))
+    }
+
+    fn sdiv_by_magnitude(&self) -> bool {
+        self.tuning.sdiv_by_magnitude
+    }
+
+    fn speed_inline_rate_at_o1(&self) -> bool {
+        self.tuning.speed_inline_rate_at_o1
+    }
+
+    fn rotation_of_exiting_latch_when_guard_folds(&self) -> bool {
+        self.tuning.rotate_exiting_latch_when_guard_folds
+    }
+
+    fn inline_trials_at_o1(&self) -> bool {
+        self.tuning.inline_size_bytes || self.tuning.inline_trials_at_o1
+    }
+
+    fn inline_size_view_is_measured(&self) -> bool {
+        self.tuning.inline_size_bytes || self.tuning.inline_trials_at_o1
+    }
+
+    fn inline_second_round_at_o1(&self) -> bool {
+        self.tuning.inline_size_bytes || self.tuning.inline_trials_at_o1
+    }
+
+    fn callee_saved_clocks(
+        &self,
+        peak: usize,
+    ) -> i64 {
+        self.tuning.callee_saved.map_or(0, |(scratch, preserved, clocks)| {
+            (i64::try_from(peak).unwrap_or(i64::MAX) - scratch).clamp(0, preserved) * clocks
+        })
+    }
+
+    fn inline_hot_trial_at_o3(&self) -> bool {
+        self.tuning.inline_hot_trial_at_o3
+    }
+
+    fn inline_hot_trial_frequency(&self) -> Option<i64> {
+        self.tuning.inline_hot_trial_frequency
+    }
+
+    fn speed_inline_milliclocks_per_byte(&self) -> i64 {
+        self.tuning.speed_inline_milliclocks_per_byte
+    }
+
+    fn inline_o1_unit_bytes_milli(&self) -> i64 {
+        self.tuning.inline_o1_unit_bytes_milli
+    }
+
+    fn inline_o1_milliclocks_per_byte(&self) -> i64 {
+        self.tuning.inline_o1_milliclocks_per_byte
+    }
+
+    fn promote_va_list(&self) -> bool {
+        self.tuning.promote_va_list
+    }
+
+    fn branch_compare_trees_at_size(&self) -> bool {
+        self.tuning.branch_compare_trees_at_size
+    }
+
+    fn sink_spares_ranges(&self) -> bool {
+        self.tuning.sink_spares_ranges
+    }
+
+    fn divide_by_bytes(&self) -> bool {
+        self.tuning.divide_by_bytes
+    }
+
+    fn immediate_forms_at_size(&self) -> bool {
+        self.tuning.immediate_forms_at_size
+    }
+
+    fn price_pin_multiplies(&self) -> bool {
+        self.tuning.price_pin_multiplies
+    }
+
+    fn lftr_any_stride(&self) -> bool {
+        self.tuning.lftr_any_stride
+    }
+
+    fn mul_chains_hot_at_size(&self) -> bool {
+        self.tuning.mul_chains_hot_at_size
+    }
+
+    fn imul_at_size(&self) -> bool {
+        self.tuning.imul_at_size
+    }
+
+    /// DEVIATE MERGEFUNC-LOCAL-X64 (owner llrm-target-x86-m16-b, exit
+    /// 2026-11-30): x86-64 drops a local function that is the same code as
+    /// another at -O1 to -O3, as gcc's `-fipa-icf` does at -O2 (signbit_idioms:
+    /// 8 of 24 functions were copies; each function is an FDE the start-up
+    /// unwinder registration walks, 110 instructions a function).
+    fn merge_local_functions_at_speed(&self) -> bool {
+        self.quad
+    }
+
+    fn merge_functions_at_size(&self) -> bool {
+        self.tuning.merge_functions_at_size
+    }
+
+    fn sdiv_pow2_stays_at_size(&self) -> bool {
+        self.tuning.sdiv_pow2_stays_at_size
+    }
+
+    fn rep_movs_at_size(&self) -> bool {
+        self.tuning.rep_movs_at_size
+    }
+
+    fn rep_movs_at_size_max(&self) -> u64 {
+        self.tuning.rep_movs_at_size_max
+    }
+
+    fn rep_stos_at_size(&self) -> bool {
+        self.tuning.rep_stos_at_size
+    }
+
+    fn rep_stos_at_size_max(&self) -> u64 {
+        self.tuning.rep_stos_at_size_max
+    }
+
+    fn rep_stos_priced_unit(&self) -> bool {
+        self.tuning.rep_stos_priced_unit
+    }
+
+    fn has_cmov(&self) -> bool {
+        self.cmov
+    }
+
+    /// DEVIATE D5-M16 (owner x86-m16-b, exit 2026-11-24): in real mode, with no
+    /// conditional move, each select a two-entry phi would become costs the
+    /// branch and move it lowers to. m16 grep -O1/-O2 `if (b == 10) { lines +=
+    /// inline_hit; inline_hit = 0; }` became two selects and an add run on
+    /// every byte of the scan loop (2 clk, and the byte spilled): 34.89M
+    /// clk against bcc's 33.86M, 29.72M without the fold.
+    fn select_branch_extra(
+        &self,
+        _optsize: bool,
+    ) -> i64 {
+        i64::from(!self.cmov && self.real_mode.is_some())
+    }
+
     fn unroll_threshold_overrides(&self) -> (Option<u32>, Option<u32>) {
         (self.tuning.unroll_threshold, self.tuning.unroll_max_percent_threshold_boost)
+    }
+
+    fn unroll_threshold_at_o3(&self) -> Option<u32> {
+        self.tuning.unroll_threshold_at_o3
+    }
+
+    fn split_paths_at_o3(&self) -> bool {
+        self.tuning.split_paths_at_o3
+    }
+
+    /// `X86.td` gives `core2` and `x86-64` the `SandyBridgeModel`; the base
+    /// `getUnrollingPreferences` then enables partial and runtime unrolling
+    /// (`Tti::get_unrolling_preferences`):
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/CodeGen/BasicTTIImpl.h#L768-L803
+    fn set_position_independent(
+        &self,
+        position_independent: bool,
+    ) {
+        self.position_independent.set(position_independent);
+    }
+
+    fn loop_micro_op_buffer_size(&self) -> u32 {
+        self.loop_micro_op_buffer
+    }
+
+    fn issue_width(&self) -> u32 {
+        self.issue_width
+    }
+
+    fn vetoes_recurrence_bound_unroll(&self) -> bool {
+        self.tuning.unroll_recurrence_veto
+    }
+
+    fn threads_by_relation(&self) -> bool {
+        self.tuning.threads_by_relation
+    }
+
+    fn backward_threading(&self) -> bool {
+        self.tuning.backward_threading
+    }
+
+    fn x87_stack_slots(&self) -> Option<u32> {
+        self.tuning.x87_stack_slots.filter(|_| !self.sse2)
+    }
+
+    fn x87_share_negated_products(&self) -> bool {
+        self.tuning.x87_share_negated_products && !self.sse2
+    }
+
+    fn x87_zero_fill_at_size(&self) -> bool {
+        self.tuning.x87_zero_fill_at_size && !self.sse2
+    }
+
+    fn wide_float_to_int(
+        &self,
+        bits: u32,
+    ) -> Option<u32> {
+        // `fistp` word, dword and qword: x87 only, where the SSE converts have
+        // their own forms (a 32-bit result is a dword, `cvttsd2si`)
+        (!self.sse2).then_some(match bits {
+            0..=16 => 32,
+            17..=32 => 64,
+            _ => return None,
+        })
+    }
+
+    fn size_fill(&self) -> Option<llrm_mir::target::SizeFill> {
+        self.tuning.size_fill
+    }
+
+    fn unroll_partial_threshold_override(&self) -> Option<u32> {
+        self.tuning.unroll_partial_threshold
+    }
+
+    fn unroll_jam_exact_count(&self) -> bool {
+        self.tuning.unroll_jam_exact_count
+    }
+
+    fn constant_hoisting(&self) -> bool {
+        self.tuning.constant_hoisting
+    }
+
+    fn unroll_jam_partial_threshold_override(&self) -> Option<u32> {
+        self.tuning.unroll_jam_partial_threshold
+    }
+
+    fn unswitch_threshold_override(&self) -> Option<i64> {
+        self.tuning.unswitch_threshold
+    }
+
+    fn licm_float_register_limit(&self) -> Option<u32> {
+        self.tuning.licm_float_register_limit
+    }
+
+    fn min_jump_table_density(&self) -> Option<u64> {
+        self.tuning.min_jump_table_density
+    }
+
+    fn jump_table_size_growth_ratio(&self) -> Option<u64> {
+        self.tuning.jump_table_size_growth_ratio
+    }
+
+    fn recursive_inlining(&self) -> Option<(u32, i64)> {
+        match self.real_mode.as_ref() {
+            Some(real) => real.recursive_inlining,
+            None => self.tuning.recursive_inlining,
+        }
+    }
+
+    fn recursive_edge_growth(&self) -> Option<(i64, i64)> {
+        self.tuning.recursive_edge_growth
+    }
+
+    fn recursive_inlining_growth(&self) -> Option<(i64, i64)> {
+        self.tuning.recursive_inlining_growth
+    }
+
+    fn recursive_inlining_depth(&self) -> Option<(u32, u32)> {
+        self.tuning.recursive_inlining_depth
+    }
+
+    fn ipa_cp_clones_at_speed(&self) -> bool {
+        self.tuning.ipa_cp_clones_at_speed
+    }
+
+    fn ipa_cp_max_clones(&self) -> usize {
+        self.tuning.ipa_cp_max_clones
+    }
+
+    fn lsr_spill_pressure_margin(&self) -> Option<u32> {
+        self.tuning.lsr_spill_pressure_margin
+    }
+
+    fn recursive_tre_first(&self) -> (bool, bool) {
+        self.tuning.recursive_tre_first
+    }
+
+    fn peels_folded_entry(&self) -> bool {
+        self.tuning.peel_folded_entry
+    }
+
+    fn carries_slot_indexes(&self) -> bool {
+        self.tuning.carry_slot_indexes
+    }
+
+    fn sinks_select_arms(&self) -> bool {
+        self.tuning.sink_select_arms
+    }
+
+    fn branches_constant_arm_selects(&self) -> bool {
+        self.tuning.branch_constant_arm_selects
+    }
+
+    fn select_optimize_penalty(&self) -> Option<u64> {
+        // Where a select is a conditional move, it is the cheaper form.
+        self.tuning.select_optimize_penalty.filter(|_| !self.cmov)
+    }
+
+    fn indvars_widens_narrow_counter_through_masks(&self) -> bool {
+        self.tuning.prefixed_16_bit_counters
+    }
+
+    fn narrow_counter_is_taxed(
+        &self,
+        bits: u32,
+    ) -> bool {
+        bits == 16 && self.tuning.prefixed_16_bit_counters
+    }
+
+    fn inlines_variable_memcpy(&self) -> bool {
+        self.tuning.inline_variable_memcpy
+    }
+
+    fn copy_price_for_size(&self) -> Option<llrm_mir::target::CopyPrice> {
+        self.tuning.size_copy_price
+    }
+
+    fn ipsccp_widen_keeps_sign(&self) -> bool {
+        self.tuning.ipsccp_widen_keeps_sign
+    }
+
+    fn ipsccp_widen_keeps_sign_at_size(&self) -> bool {
+        self.tuning.ipsccp_widen_keeps_sign_at_size
+    }
+
+    fn priced_self_inlining(&self) -> Option<(u32, i64)> {
+        self.real_mode.as_ref()?.priced_self_inlining
     }
 
     fn unroll_size_few_trips(&self) -> Option<(u32, u32)> {
@@ -526,7 +1432,361 @@ impl Tti for X86 {
     /// says so (`RealMode::inline_size_guard`): at m32 -Os follows the pin
     /// (crc, tile and recchop grow 52, 42 and 15 bytes there).
     fn opt_size_inline_by_code_size(&self) -> bool {
-        self.real_mode.as_ref().is_some_and(|real| real.inline_size_guard)
+        self.real_mode.as_ref().is_some_and(|real| real.inline_size_guard) || self.tuning.inline_size_guard_at_size
+    }
+
+    /// The pin's rule (`TotalAllocaSizeRecursiveCaller`) outside real mode,
+    /// where the stack is not 64 KiB shared with the data.
+    fn inline_frames_into_recursive_callers(&self) -> bool {
+        self.real_mode.is_none()
+    }
+
+    fn lftr_expansion_budget(
+        &self,
+        optsize: bool,
+    ) -> u32 {
+        if optsize { self.tuning.lftr_size_budget } else { 4 }
+    }
+
+    fn inline_trial_defers_to_shared_growth(&self) -> bool {
+        self.tuning.inline_trial_defers_to_shared_growth
+    }
+
+    fn add_to_or_disjoint(&self) -> bool {
+        self.tuning.add_to_or_disjoint
+    }
+
+    /// A word vector is a speed trade of a few bytes (the vector body, its
+    /// remainder and the splat); at -Os the bytes rank first, as in gcc, which
+    /// does not vectorize there.
+    fn vectorizes_at_size(&self) -> bool {
+        self.tuning.vectorize_at_size && (self.vector_values() || !self.word_vectors)
+    }
+
+    fn should_maximize_vector_bandwidth(&self) -> bool {
+        self.tuning.maximize_vector_bandwidth
+    }
+
+    fn narrows_reduction_accumulators(&self) -> bool {
+        self.tuning.narrow_reduction_accumulators
+    }
+
+    fn bandwidth_vf_without_epilogue(&self) -> bool {
+        self.tuning.bandwidth_vf_without_epilogue
+    }
+
+    /// `bsr` and `tzcnt`/`bsf` are one instruction at x86-64 (LI-18).
+    fn shift_loop_counts(&self) -> bool {
+        self.tuning.shift_loop_counts
+    }
+
+    /// The 128-bit integer vectors need SSE2 and, for now, the 64-bit mode (x86
+    /// vectors plan, PR-A).
+    fn vector_values(&self) -> bool {
+        self.sse2 && self.quad
+    }
+
+    /// The SLP vectorizer runs where the target takes vector values: its
+    /// store chains (a run of scalar stores of constants or of one tree is one
+    /// vector store) are priced by `vector_memory_op_cost`; a tree whose
+    /// operation this target does not price is not formed (the hooks are
+    /// `None`), so only what the SSE2 rows price vectorizes.
+    fn slp_priced(&self) -> bool {
+        self.vector_values()
+    }
+
+    /// `getRegisterBitWidth(RGK_FixedWidthVector)` of an SSE2 target: one XMM
+    /// register. Only where the 128-bit integer vectors are taken
+    /// (`vector_values`): the others stay scalar and read 0.
+    fn vector_register_bits(&self) -> u32 {
+        if self.vector_values() {
+            128
+        } else if self.word_vectors {
+            32
+        } else {
+            0
+        }
+    }
+
+    fn word_vectors(&self) -> bool {
+        self.word_vectors
+    }
+
+    /// A word vector has no horizontal step: `vectorlower` takes no `llvm.vector.reduce.*`,
+    /// so a loop with a reduction stays scalar (the pin's `ExpandReductions` has no word-mode form).
+    fn lowers_vector_reductions(&self) -> bool {
+        self.vector_values() || !self.word_vectors
+    }
+
+    /// `X86TTIImpl::getNumberOfRegisters`: 16 in long mode, for the general
+    /// and the vector class.
+    fn number_of_registers(
+        &self,
+        _class: RegisterClass,
+    ) -> u32 {
+        if self.vector_values() {
+            16
+        } else if self.word_vectors {
+            4
+        } else {
+            0
+        }
+    }
+
+    /// `X86TTIImpl::getMaxInterleaveFactor`: a scalar loop is left to the
+    /// unroller; a vector one is interleaved twice (4 needs AVX).
+    fn max_interleave_factor(
+        &self,
+        vf: u32,
+        _has_unordered_reductions: bool,
+    ) -> u32 {
+        if vf == 1 || !self.vector_values() { 1 } else { 2 }
+    }
+
+    /// `X86TTIImpl::getMemoryOpCost` of a contiguous vector access of whole XMM
+    /// registers (`movups`): one per register; a type under a register is one
+    /// `movq` or `movd` (widened). A lane that is not an integer of 8 to 64
+    /// bits, or a count with no `MVT`, is not priced (DEVIATE X86V1, owner
+    /// llrm-target-x86-m64-b, exit 2026-11-30).
+    fn vector_memory_op_cost(
+        &self,
+        op: MemoryOp,
+        ty: VectorTy,
+        _align: u64,
+        kind: CostKind,
+    ) -> Option<Cost> {
+        if !self.vector_values() {
+            // a word vector is one `mov` of a dword, the scalar load's price
+            return (self.word_vectors && is_word_vector(ty)).then(|| Cost::of(1));
+        }
+        let pieces = xmm_pieces(ty)?;
+        // Every other kind is `TCC_Basic` ("TODO: Handle other cost kinds"), a
+        // load's latency the base's 4.
+        Some(match kind {
+            CostKind::RecipThroughput => Cost::of(pieces),
+            CostKind::Latency if op == MemoryOp::Load => Cost::of(4),
+            _ => Cost::BASIC,
+        })
+    }
+
+    /// `X86TTIImpl::getCmpSelInstrCost` of an integer vector, the SSE2 rows
+    /// (L4062 and L4069): the compares `pcmpeqX` and `pcmpgtX` of 8, 16 and 32
+    /// bit lanes cost one per register, the selects (`pand`, `pandn`, `por`)
+    /// two; the predicates SSE2 has no compare for cost the instructions that
+    /// make them (L3877), taking the second operand as no constant. A float
+    /// lane or a 64-bit compare is not priced (DEVIATE X86V3, owner
+    /// llrm-target-x86-m64-b, exit 2026-12-10).
+    fn vector_cmp_sel_cost(
+        &self,
+        op: CmpSel,
+        ty: VectorTy,
+        predicate: Option<Predicate>,
+        kind: CostKind,
+    ) -> Option<Cost> {
+        use llrm_mir::opcode::IntPredicate;
+        if !self.vector_values() {
+            return None;
+        }
+        let Ty::Int(bits @ (8 | 16 | 32)) = ty.lane else { return None };
+        let pieces = xmm_pieces(ty)?;
+        let (row, extra) = match op {
+            CmpSel::ICmp => {
+                let extra = match predicate {
+                    Some(Predicate::Int(IntPredicate::Ne | IntPredicate::Sge | IntPredicate::Sle)) => 1,
+                    Some(Predicate::Int(IntPredicate::Ult | IntPredicate::Ugt)) => 2,
+                    Some(Predicate::Int(IntPredicate::Ule | IntPredicate::Uge)) if bits < 32 => 1,
+                    Some(Predicate::Int(IntPredicate::Ule | IntPredicate::Uge)) => 3,
+                    Some(Predicate::Int(_)) => 0,
+                    _ => 3,
+                };
+                (all(1, 1, 1, 1), extra)
+            }
+            CmpSel::Select => (all(2, 2, 3, 3), 0),
+            _ => return None,
+        };
+        row[kind.index()].map(|each| Cost::of(pieces * (extra + each)))
+    }
+
+    /// `X86TTIImpl::getArithmeticInstrCost`, the SSE2 rows of the integer ops
+    /// isel selects for every operand: `paddX`, `psubX`, `pand`, `por`, `pxor`
+    /// cost one per register; the multiplies of 8-, 16- and 32-bit lanes are
+    /// the pin's rows. Byte shifts, a variable shift count, the 64-bit
+    /// multiply and the divisions are not priced, so a loop holding one stays
+    /// scalar (DEVIATE X86V2, owner llrm-target-x86-m64-b, exit 2026-11-24).
+    fn vector_arithmetic_cost(
+        &self,
+        op: ArithOp,
+        ty: VectorTy,
+        kind: CostKind,
+    ) -> Option<Cost> {
+        if !self.vector_values() {
+            // only the bitwise operations act lane by lane on a word
+            return (self.word_vectors && is_word_vector(ty) && matches!(op, ArithOp::And | ArithOp::Or | ArithOp::Xor))
+                .then(|| Cost::of(1));
+        }
+        match op {
+            ArithOp::Add | ArithOp::Sub | ArithOp::And | ArithOp::Or | ArithOp::Xor => xmm_pieces(ty).map(Cost::of),
+            // `psllX`/`psrlX`/`psraX` by an immediate (a constant splat amount,
+            // the only one the lowering takes); there is no 64-bit arithmetic
+            // shift before AVX-512.
+            ArithOp::Shl | ArithOp::LShr if matches!(ty.lane, Ty::Int(16 | 32 | 64)) => xmm_pieces(ty).map(Cost::of),
+            ArithOp::AShr if matches!(ty.lane, Ty::Int(16 | 32)) => xmm_pieces(ty).map(Cost::of),
+            // The pin's SSE2 rows, a register each: {throughput, latency, code
+            // size, size and latency}.
+            // `v16i8`: 2*unpack/2*pmullw/2*and/pack. `v8i16`: `pmullw`, the one
+            // multiply that keeps its lane.
+            // `v4i32`: 3*pmuludq/4*shuffle.
+            ArithOp::Mul => {
+                let row = match ty.lane {
+                    Ty::Int(8) => [6, 18, 12, 12],
+                    Ty::Int(16) => [1, 5, 1, 1],
+                    Ty::Int(32) => [6, 8, 7, 7],
+                    _ => return None,
+                };
+                xmm_pieces(ty).map(|pieces| Cost::of(row[kind.index()] * pieces))
+            }
+            _ => None,
+        }
+    }
+
+    /// `X86TTIImpl::getCastInstrCost` for the integer extends and truncates
+    /// (the SSE2 rows): the row of the exact types, else of the legalized
+    /// ones times the larger register count; a truncate to the type it already
+    /// is, once legalized, is free. Anything else (a float, a mask, a
+    /// scalarized cast) is not priced.
+    fn vector_cast_cost(
+        &self,
+        kind: CastKind,
+        dst: VectorTy,
+        src: VectorTy,
+        cost_kind: CostKind,
+    ) -> Option<Cost> {
+        if !self.vector_values() || !matches!(kind, CastKind::ZExt | CastKind::SExt | CastKind::Trunc) {
+            return None;
+        }
+        let (Ty::Int(to), Ty::Int(from)) = (dst.lane, src.lane) else { return None };
+        let row = |kind: CastKind, dst: (u32, u32), src: (u32, u32)| {
+            SSE2_INTEGER_CASTS
+                .iter()
+                .find(|&&(one, to, from, _)| one == kind && to == dst && from == src)
+                .map(|&(.., throughput)| if cost_kind == CostKind::RecipThroughput { throughput } else { 1 })
+        };
+        if let Some(cost) = row(kind, (to, dst.count), (from, src.count)) {
+            return Some(Cost::of(cost));
+        }
+        let ((to_pieces, to_mvt), (from_pieces, from_mvt)) = (legalized_vector(dst)?, legalized_vector(src)?);
+        if kind == CastKind::Trunc && to_mvt == from_mvt {
+            return Some(Cost::FREE);
+        }
+        row(kind, to_mvt, from_mvt).map(|cost| Cost::of(to_pieces.max(from_pieces) * cost))
+    }
+
+    fn opt_size_inline_chain_trial(&self) -> bool {
+        self.tuning.inline_chain_trial
+    }
+
+    fn opt_size_inline_guard_min_sites(&self) -> i64 {
+        if self.real_mode.as_ref().is_some_and(|real| real.inline_size_guard)
+            || self.tuning.inline_size_guard_single_site
+        {
+            1
+        } else {
+            2
+        }
+    }
+
+    fn unroll_promotion_fits_registers(&self) -> bool {
+        self.tuning.unroll_promotion_fits_registers
+    }
+
+    fn unroll_store_immediate_bits(&self) -> u32 {
+        self.tuning.unroll_store_immediate_bits
+    }
+
+    fn lsr_size_model(&self) -> Option<llrm_mir::tti::LsrSizeModel> {
+        self.tuning
+            .lsr_size_order
+            .then(
+                || {
+                    let model = if self.tuning.lsr_size_x86_64 {
+                        crate::encoding::lsr_size_model_64()
+                    } else {
+                        llrm_mir::tti::LsrSizeModel::X86
+                    };
+                    llrm_mir::tti::LsrSizeModel { derived_setup_free: self.tuning.lsr_derived_setup_free, ..model }
+                },
+            )
+    }
+
+    fn lsr_phi_operand_uses(&self) -> bool {
+        self.tuning.lsr_phi_operand_uses
+    }
+
+    fn lsr_phi_users_first(&self) -> bool {
+        self.tuning.lsr_phi_users_first
+    }
+
+    fn splits_invariant_fmuladd(&self) -> bool {
+        self.tuning.splits_invariant_fmuladd
+    }
+
+    fn lsr_users_in_use_list_order(&self) -> bool {
+        self.tuning.lsr_users_in_use_list_order
+    }
+
+    fn unroll_promotion_fits_x87_stack(&self) -> bool {
+        self.tuning.unroll_promotion_fits_x87_stack && !self.sse2
+    }
+
+    fn rotation_guard_must_fold_at_size(&self) -> bool {
+        self.tuning.rotation_guard_must_fold_at_size
+    }
+
+    fn load_pre_off_at_size(&self) -> bool {
+        self.tuning.load_pre_off_at_size
+    }
+
+    fn rotation_trial_at_size(&self) -> bool {
+        self.tuning.rotation_trial_at_size
+    }
+
+    fn rotation_hot_at_size(&self) -> bool {
+        self.tuning.rotation_hot_at_size
+    }
+
+    fn rotation_hot_bytes_per_loop(&self) -> i64 {
+        self.tuning.rotation_hot_bytes_per_loop
+    }
+
+    fn size_rotation_header_limit(&self) -> Option<u32> {
+        self.tuning.size_rotation_header_limit
+    }
+
+    fn rotation_header_priced_at_size(&self) -> bool {
+        self.tuning.rotation_header_priced_at_size
+    }
+
+    fn constant_offset_phi_is_cheap(&self) -> bool {
+        !self.tuning.keep_constant_displacements
+    }
+
+    fn frame_slot_is_free_base(&self) -> bool {
+        self.tuning.frame_slot_is_free_base
+    }
+
+    fn lsr_address_fewest_registers(&self) -> bool {
+        self.tuning.lsr_address_fewest_registers
+    }
+
+    fn lsr_constant_setup_is_one(&self) -> bool {
+        self.tuning.lsr_constant_setup_is_one
+    }
+
+    fn constant_arith_phi_is_cheap(
+        &self,
+        optsize: bool,
+    ) -> bool {
+        optsize || !self.tuning.keep_constant_arith_operands
     }
 
     /// A call is 5 bytes and the push of an argument 1 to 4, against 2 to 3 for
@@ -534,11 +1794,94 @@ impl Tti for X86 {
     /// stayed (+408 bytes of the module); 150 inlines them and still keeps the
     /// 14-instruction loop of `idioms.bas` out of ten sites.
     fn call_code_size_percent(&self) -> i64 {
-        150
+        // The size view prices a call in bytes already: pushes and the pop.
+        if self.size_bytes { 100 } else { 150 }
     }
 
     fn float_code_size_percent(&self) -> i64 {
         self.real_mode.as_ref().map_or(100, |real| real.float_code_size_percent)
+    }
+
+    // X86TTIImpl::enableMemCmpExpansion
+    // (https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L7513).
+    // DEVIATE X1 (exit 2026-11-30, same permalink): the 16-, 32- and 64-byte
+    // vector load sizes of an equality compare are left out (vectors are
+    // deferred); the pin takes them from `getPreferVectorWidth`.
+    fn enable_mem_cmp_expansion(
+        &self,
+        _opt_size: bool,
+        is_zero_cmp: bool,
+    ) -> Option<MemCmpExpansionOptions> {
+        let mut load_sizes = Vec::new();
+        if self.quad {
+            load_sizes.push(8);
+        }
+        load_sizes.extend([4, 2, 1]);
+        Some(MemCmpExpansionOptions {
+            load_sizes,
+            // X86ISelLowering.cpp#L2946: MaxLoadsPerMemcmp and its OptSize
+            // twin.
+            max_num_loads: 2,
+            num_loads_per_block: if is_zero_cmp { 2 } else { 1 },
+            allow_overlapping_loads: true,
+            allowed_tail_expansions: Vec::new(),
+        })
+    }
+
+    // X86TargetLowering::allowsMisalignedMemoryAccesses
+    // (X86ISelLoweringCall.cpp#L371): any size, but a non-temporal vector.
+    fn allows_misaligned_memory_accesses(
+        &self,
+        _bits: u32,
+        _address_space: u32,
+        _align: u64,
+    ) -> bool {
+        true
+    }
+
+    // X86TTIImpl::hasDivRemOp (X86TargetTransformInfo.cpp#L7421) asks
+    // `isOperationLegal(SDIVREM/UDIVREM, VT)`; X86ISelLowering sets the scalar
+    // divides to `Expand` (L340) and leaves the two-result ones at the base
+    // class's `Legal`, so every register type has one.
+    //
+    // DEVIATE DR1 (exit 2026-11-20): the 32-bit mode's inline `i64` divide
+    // routine returns both, so `i64` has one too (the pin's x86 has none and
+    // `DivRemPairs` writes `x % y` as `x - x / y * y`: a 64-bit multiply and
+    // a subtract per remainder, x_ll_div).
+    fn has_div_rem_op(
+        &self,
+        bits: u32,
+        _signed: bool,
+    ) -> bool {
+        self.is_type_legal(Ty::Int(bits)) || (bits == 64 && !self.quad && self.real_mode.is_none())
+    }
+
+    /// `FSQRT` is legal on every scalar float: the SSE instruction, or x87's.
+    fn have_fast_sqrt(
+        &self,
+        ty: Ty,
+    ) -> bool {
+        matches!(ty, Ty::Float | Ty::Double | Ty::X87)
+    }
+
+    fn partial_libcalls_skip_at_size(&self) -> bool {
+        self.tuning.partial_libcalls_skip_at_size
+    }
+
+    /// `X86TTIImpl::isFCmpOrdCheaperThanFCmpZero`
+    /// ([X86TargetTransformInfo.cpp#L7435](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L7435)).
+    fn is_fcmp_ord_cheaper_than_fcmp_zero(
+        &self,
+        _ty: Ty,
+    ) -> bool {
+        false
+    }
+
+    /// Long mode's DAG selects an access of any byte size (an `i24` is a 16-bit
+    /// and an 8-bit access, an `i40` a dword and a byte), as the pin's
+    /// does: SROA cuts the slices where the pin cuts them.
+    fn selects_odd_sized_integers(&self) -> bool {
+        self.quad
     }
 
     fn is_type_legal(
@@ -588,6 +1931,38 @@ impl Tti for X86 {
         (kind != CostKind::RecipThroughput).then(|| Cost::of(2))
     }
 
+    fn reduces_outer_multiply(
+        &self,
+        multiplier: Option<u128>,
+    ) -> bool {
+        let llrm_mir::target::Tuning { multiply_clocks, loop_carried_clocks, .. } = self.tuning;
+        // a shift-and-add chain is a shift and an add for each term past the
+        // first
+        let chain = multiplier.map_or(i64::MAX, |m| 2 * (signed_digits(m) as i64 - 1).max(1));
+        multiply_clocks > 0 && multiply_clocks.min(chain) > loop_carried_clocks
+    }
+
+    fn reduces_outer_address_scale(
+        &self,
+        size: u128,
+    ) -> bool {
+        let llrm_mir::target::Tuning { multiply_clocks, loop_carried_clocks, counter_exit_compare_clocks, .. } =
+            self.tuning;
+        // The addressing mode scales by 1, 2, 4 or 8 for nothing; the rest of
+        // the size is a `lea` or a shift-and-add chain every trip, and the
+        // counter that stands for it also ends the loop, so the compare of the
+        // index goes too.
+        let rest = size >> size.trailing_zeros().min(3);
+        let chain = 2 * (signed_digits(rest) as i64 - 1).max(1);
+        rest > 1
+            && multiply_clocks > 0
+            && multiply_clocks.min(chain) + counter_exit_compare_clocks > loop_carried_clocks
+    }
+
+    fn splits_merged_conditions(&self) -> bool {
+        self.tuning.split_merged_conditions
+    }
+
     /// X86's `getJumpConditionMergingParams`: `x86-br-merging-base-cost` 2,
     /// one more for `a == b && a == c` (a fast pattern); an `or` of two `==`
     /// splits (no CCMP on these targets). Likely bias 0, unlikely bias -1.
@@ -611,10 +1986,28 @@ impl Tti for X86 {
             _ => false,
         };
         let both_eq = is_eq(query.lhs) && is_eq(query.rhs);
-        match query.logic {
-            Logic::Or if both_eq => CondMerging::SPLIT,
+        // DEVIATE SD103-M32: the `setcc` pair, logic op and `test` a merged
+        // pair costs come off the budget, unless the DAG folds the pair into
+        // one compare (`Tuning::merged_condition_clocks`).
+        let extra = if llrm_mir::jumpmerge::folds_logic_of_setccs(
+            query.context,
+            query.function,
+            query.logic,
+            (query.lhs, query.rhs),
+        ) {
+            0
+        } else {
+            self.tuning.merged_condition_clocks
+        };
+        let params = match query.logic {
+            Logic::Or if both_eq => return CondMerging::SPLIT,
             Logic::And if both_eq => CondMerging { base_cost: 3, likely_bias: 0, unlikely_bias: -1 },
             _ => CondMerging { base_cost: 2, likely_bias: 0, unlikely_bias: -1 },
+        };
+        if params.base_cost <= extra {
+            CondMerging::SPLIT
+        } else {
+            CondMerging { base_cost: params.base_cost - extra, ..params }
         }
     }
 
@@ -626,19 +2019,27 @@ impl Tti for X86 {
         kind: CostKind,
     ) -> Cost {
         let _ = (ret, args);
-        let profile = if self.sse2 { "sse2" } else { "nosse" };
-        let kind = match kind {
-            CostKind::RecipThroughput => "throughput",
-            CostKind::Latency => "latency",
-            CostKind::CodeSize => "code-size",
-            CostKind::SizeAndLatency => "size-latency",
-        };
-        match intrinsic_price(profile, kind, name) {
-            Some(Some(cost)) => Cost::of(cost),
-            Some(None) => Cost::INVALID,
-            None if is_free_intrinsic(name) => Cost::FREE,
-            None => base_intrinsic_cost(name).unwrap_or(Cost::INVALID),
+        if self.size_bytes && kind == CostKind::CodeSize {
+            return crate::sizes::intrinsic(name).unwrap_or_else(|| match is_free_intrinsic(name) {
+                true => Cost::FREE,
+                false => base_intrinsic_cost(name).map_or(Cost::INVALID, |units| units * 4),
+            });
         }
+        self.priced_intrinsic(name, kind, false)
+    }
+
+    fn zero_poison_intrinsic_cost(
+        &self,
+        name: &str,
+        ret: Option<Ty>,
+        args: &[Ty],
+        kind: CostKind,
+    ) -> Cost {
+        let _ = (ret, args);
+        if self.size_bytes && kind == CostKind::CodeSize {
+            return self.intrinsic_cost(name, ret, args, kind);
+        }
+        self.priced_intrinsic(name, kind, true)
     }
 
     fn cmp_sel_cost(
@@ -647,6 +2048,9 @@ impl Tti for X86 {
         ty: Ty,
         kind: CostKind,
     ) -> Cost {
+        if self.size_bytes && kind == CostKind::CodeSize {
+            return crate::sizes::cmp_sel(op, ty, self.cmov, self.quad);
+        }
         let Some((count, _)) = legalized(ty, self.native()) else { return Cost::INVALID };
         if let Some(each) = sse_cmp_sel(self, op, ty).and_then(|row| row[kind.index()]) {
             return Cost::of(count * each);
@@ -669,6 +2073,9 @@ impl Tti for X86 {
         kind: CostKind,
         stored_constant: bool,
     ) -> Cost {
+        if self.size_bytes && kind == CostKind::CodeSize {
+            return crate::sizes::memory(op, ty, stored_constant, self.quad);
+        }
         // Load latency is not modelled here: the base answers 4.
         if op == MemoryOp::Load && kind == CostKind::Latency {
             return Cost::of(4);
@@ -689,6 +2096,9 @@ impl Tti for X86 {
         phi: bool,
         kind: CostKind,
     ) -> Cost {
+        if self.size_bytes && kind == CostKind::CodeSize {
+            return crate::sizes::control_flow(phi);
+        }
         if kind != CostKind::RecipThroughput {
             return if phi { Cost::FREE } else { Cost::BASIC };
         }
@@ -703,21 +2113,7 @@ impl Tti for X86 {
         imm: i128,
         bits: u32,
     ) -> Cost {
-        if bits == 0 {
-            return Cost::of(i64::from(u32::MAX));
-        }
-        if bits > 128 || imm == 0 {
-            return Cost::FREE;
-        }
-        // Sign-extended to a multiple of 64 bits, costed 64 bits at a time.
-        let extended = if bits >= 128 { imm } else { (imm << (128 - bits)) >> (128 - bits) };
-        let mut total = 0;
-        let mut shift = 0;
-        while shift < bits {
-            total += int_imm_chunk((extended >> shift) as i64);
-            shift += 64;
-        }
-        Cost::of(total.max(1))
+        self.imm_cost(imm, bits, self.tuning.zext_imm_is_basic)
     }
 
     /// `X86TTIImpl::getIntImmCostInst`:
@@ -729,48 +2125,85 @@ impl Tti for X86 {
         imm: i128,
         bits: u32,
     ) -> Cost {
+        self.imm_cost_inst(op, index, imm, bits, self.tuning.zext_imm_is_basic)
+    }
+
+    fn int_imm_cost_inst_pin(
+        &self,
+        op: ImmUser,
+        index: u32,
+        imm: i128,
+        bits: u32,
+    ) -> Cost {
+        self.imm_cost_inst(op, index, imm, bits, false)
+    }
+
+    /// ZIMM does not apply to a function built for size: a hoisted constant
+    /// costs a 2-3 byte register copy per use where `mov r32, imm32` is 5.
+    fn int_imm_cost_inst_for_size(
+        &self,
+        op: ImmUser,
+        index: u32,
+        imm: i128,
+        bits: u32,
+        for_size: bool,
+    ) -> Cost {
+        self.imm_cost_inst(op, index, imm, bits, self.tuning.zext_imm_is_basic && !for_size)
+    }
+
+    /// `X86TTIImpl::getIntImmCostIntrin`:
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L7040
+    fn int_imm_cost_intrin(
+        &self,
+        name: &str,
+        index: u32,
+        imm: i128,
+        bits: u32,
+    ) -> Cost {
         if bits == 0 {
             return Cost::FREE;
         }
-        let zext = if bits >= 128 { imm as u128 } else { (imm as u128) & ((1u128 << bits) - 1) };
-        let immediate = match op {
-            ImmUser::Unknown => return Cost::FREE,
-            ImmUser::GetElementPtr => return if index == 0 { Cost::of(2) } else { Cost::FREE },
-            ImmUser::Store => Some(0),
-            ImmUser::ICmp => {
-                if index == 1 && bits == 64 && (zext == 0x1_0000_0000 || zext == 0xffff_ffff) {
-                    return Cost::FREE;
-                }
-                Some(1)
+        let name = name.strip_prefix("llvm.").unwrap_or(name);
+        // `getBitWidth() <= 64 && isSignedIntN(width)`.
+        let extended = if bits >= 128 { imm } else { (imm << (128 - bits)) >> (128 - bits) };
+        let fits = |width: u32| bits <= 64 && (-(1i128 << (width - 1))..1i128 << (width - 1)).contains(&extended);
+        let overflow = ["sadd", "uadd", "ssub", "usub", "smul", "umul"]
+            .iter()
+            .any(|op| name.strip_prefix(op).is_some_and(|rest| rest.starts_with(".with.overflow")));
+        if overflow {
+            if index == 1 && fits(32) {
+                return Cost::FREE;
             }
-            ImmUser::And => {
-                if index == 1 && bits == 64 && zext <= u128::from(u32::MAX) {
-                    return Cost::FREE;
-                }
-                Some(1)
+        } else if name.starts_with("experimental.stackmap") {
+            if index < 2 || fits(64) {
+                return Cost::FREE;
             }
-            ImmUser::Add | ImmUser::Sub => {
-                if index == 1 && bits == 64 && zext == 0x8000_0000 {
-                    return Cost::FREE;
-                }
-                Some(1)
+        } else if name.starts_with("experimental.patchpoint") {
+            if index < 4 || fits(64) {
+                return Cost::FREE;
             }
-            ImmUser::Divide => return Cost::FREE,
-            ImmUser::Mul | ImmUser::Or | ImmUser::Xor => Some(1),
-            ImmUser::Shift => {
-                if index == 1 {
-                    return Cost::FREE;
-                }
-                None
-            }
-            ImmUser::Other => None,
-        };
-        let cost = self.int_imm_cost(imm, bits);
-        if immediate == Some(index) {
-            let constants = i64::from(bits.div_ceil(64));
-            return if cost.value <= constants { Cost::FREE } else { cost };
+        } else {
+            return Cost::FREE;
         }
-        cost
+        self.int_imm_cost(imm, bits)
+    }
+
+    /// `X86TargetLowering::isIntDivCheap`: only at `minsize`.
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L65389
+    fn prefer_to_keep_constants_attached(
+        &self,
+        div_rem_by_constant: bool,
+        min_size: bool,
+    ) -> bool {
+        div_rem_by_constant && !min_size
+    }
+
+    fn keeps_select_mask_attached(
+        &self,
+        bits: u128,
+        width: u32,
+    ) -> bool {
+        self.tuning.zext_imm_is_basic && width == 64 && bits <= u128::from(u32::MAX)
     }
 
     /// `X86TargetLowering::isTruncateFree`:
@@ -821,10 +2254,11 @@ impl Tti for X86 {
             return false;
         }
         // Long mode, position independent (the PIE a default clang makes): a
-        // symbol is `[rip + symbol]`, which takes no displacement
-        // beside it and no index (the `isPositionIndependent() && is64Bit()`
-        // rule).
-        if self.quad && base_gv && (base_offset != 0 || scale > 1) {
+        // symbol is `[rip + symbol]`, which takes no displacement and no scaled
+        // index beside it; a base register is fine (`@sym + reg`, the symbol
+        // formed by a `lea`). The pin refuses only an offset or a scale above 1
+        // (`isPositionIndependent() && is64Bit()`).
+        if self.quad && self.position_independent.get() && base_gv && (base_offset != 0 || scale > 1) {
             return false;
         }
         match scale {
@@ -905,12 +2339,37 @@ impl Tti for X86 {
     /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L173
     /// Eight general registers, sixteen in long mode (`getNumberOfRegisters`).
     fn number_of_gpr_registers(&self) -> u32 {
-        self.real_mode.as_ref().map_or(if self.quad { 16 } else { 8 }, |real| real.registers)
+        self.real_mode.as_ref().map_or(self.registers.unwrap_or(if self.quad { 16 } else { 8 }), |real| real.registers)
     }
 
-    /// `lea` forms `base + index + displacement` in one instruction.
-    fn address_form_adds_offsets(&self) -> bool {
+    /// Real mode declares the registers the allocator has, and the live count
+    /// LSR keeps is exact there: the six fill (PLASMA's loop, 4 + 2 live).
+    fn lsr_reserved_registers(&self) -> u32 {
+        u32::from(self.real_mode.is_none())
+    }
+
+    /// `[bp+disp]` and `[esp+disp]` reach a stack slot with no register to hold
+    /// it.
+    fn frame_address_is_free(&self) -> bool {
         true
+    }
+
+    fn ext_load_costs_extra(&self) -> bool {
+        self.tuning.ext_load_extra_clocks > 0
+    }
+
+    /// 64 in long mode, else 32 (also at m16, on a 386 or later).
+    fn gpr_bits(&self) -> u32 {
+        if self.quad { 64 } else { 32 }
+    }
+
+    /// `lea` forms `base + index + displacement` in one instruction, from 16
+    /// bits up: there is no 8-bit `lea`.
+    fn address_form_adds_offsets(
+        &self,
+        bits: u32,
+    ) -> bool {
+        bits >= 16
     }
 
     /// DEVIATE LU4: real mode keeps the loop as written where LSR's own model
@@ -921,13 +2380,56 @@ impl Tti for X86 {
         self.real_mode.is_some()
     }
 
+    /// DEVIATE WIDEN-COLD-CHREC: x86-64 (sieve O2/O3: +595 instructions of the
+    /// 15223 for 2 phis the scan loop steps for 11 marking-loop entries).
+    /// owner: llrm-target-x86-m16-b, exit: 2026-11-30, or when the pin
+    /// weighs the entry frequency.
+    fn avoids_cold_outer_addrec_expansion(&self) -> bool {
+        self.quad
+    }
+
+    fn lsr_drops_worse_solution_at_size(&self) -> bool {
+        self.tuning.lsr_drop_worse_at_size
+    }
+
+    /// DEVIATE LU14: real mode searches both use orders (rcflip's RAMP loop:
+    /// 4 instructions in the pin's order, 2 in the other). owner:
+    /// llrm-target-x86-m16, exit: 2026-11-30, or when the pin's search is
+    /// order-free.
+    fn lsr_solves_both_use_orders(&self) -> bool {
+        self.real_mode.is_some() || self.tuning.lsr_both_use_orders
+    }
+
     fn lsr_charges_outer_nonaffine_ivs(&self) -> bool {
         self.real_mode.is_some()
+    }
+
+    fn congruent_ivs_truncate_to_narrowest_integer(&self) -> bool {
+        self.real_mode.is_some()
+    }
+
+    fn mirrors_conditional_counters(&self) -> bool {
+        self.real_mode.is_some()
+    }
+
+    /// DEVIATE LS1: real mode keeps every formula of the first use in play
+    /// (A/B 2026-11-07: the pin's rule is +1..+8 B in 41 of 192 m16 cells, in
+    /// none better; m32 -37 B net, m64 0). owner: w12, exit: 2026-11-30, when
+    /// the m16 cause cards close.
+    fn lsr_visited_registers_lose(&self) -> bool {
+        self.real_mode.is_none()
     }
 
     /// Real mode forms a scaled index with an address-size prefix.
     fn lsr_drops_spilling_solution(&self) -> bool {
         self.real_mode.is_some()
+    }
+
+    fn address_registers(&self) -> u32 {
+        self.real_mode
+            .as_ref()
+            .and_then(|real| real.address_registers)
+            .unwrap_or_else(|| self.number_of_gpr_registers())
     }
 
     fn scaled_index_insns(&self) -> u32 {
@@ -945,7 +2447,7 @@ impl Tti for X86 {
         matches!(op, CastKind::ZExt | CastKind::SExt)
             && matches!(
                 (src, dst),
-                (Ty::Int(8), Ty::Int(16 | 32)) | (Ty::Int(16), Ty::Int(32))
+                (Ty::Int(8), Ty::Int(16 | 32 | 64)) | (Ty::Int(16), Ty::Int(32 | 64)) | (Ty::Int(32), Ty::Int(64))
             )
             && matches!(
                 (legalized(src, self.native()), legalized(dst, self.native())),
@@ -965,6 +2467,9 @@ impl Tti for X86 {
         kind: CostKind,
     ) -> Cost {
         use CastKind::*;
+        if self.size_bytes && kind == CostKind::CodeSize {
+            return crate::sizes::cast(op, dst, src);
+        }
         if self.sse2 {
             if let Some(each) = sse2_conversion(op, dst, src).and_then(|row| row[kind.index()]) {
                 return Cost::of(each);
@@ -997,6 +2502,26 @@ impl Tti for X86 {
 
     /// `X86TTIImpl::getArithmeticInstrCost`, scalars:
     /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L255
+    /// The count must sit in `cl`. Not in real mode: its six registers spill
+    /// the multiplier's select (pack_ref -Os m16: +24 B).
+    fn variable_shift_count_in_fixed_register(&self) -> bool {
+        self.real_mode.is_none()
+    }
+
+    /// DEVIATE FOLD-HOIST (x87, exit 2026-11-20): the pin's X86 keeps the base
+    /// answer. A load that the arm's own user would take as a memory operand
+    /// stays in its arm: hoisted, it has two users and neither folds it, and
+    /// the register it holds across the branch is what spills
+    /// (x_cordic -O1: 2 spills a pass of the outer loop, +397 clk, +8 B).
+    fn is_profitable_to_hoist(
+        &self,
+        context: &llrm_mir::context::Context,
+        function: &llrm_mir::module::Function,
+        inst: llrm_mir::module::InstId,
+    ) -> bool {
+        !self.load_folds_into_its_only_user(context, function, inst)
+    }
+
     fn arithmetic_cost(
         &self,
         op: ArithOp,
@@ -1006,6 +2531,9 @@ impl Tti for X86 {
         second: OperandInfo,
     ) -> Cost {
         use ArithOp::*;
+        if self.size_bytes && kind == CostKind::CodeSize {
+            return crate::sizes::arithmetic(op, ty, second, self.quad);
+        }
         let Some((count, legal)) = legalized(ty, self.native()) else { return Cost::INVALID };
         let none = OperandInfo::ANY;
         // Multiply by a power of two (or its negation) is a shift:
@@ -1044,11 +2572,17 @@ impl Tti for X86 {
         if second.constant && !second.negated_power_of_two && matches!(op, UDiv | SDiv | URem | SRem) {
             let mut cost = if matches!(op, URem | SRem) { 6 } else { 5 };
             if matches!(kind, CostKind::CodeSize | CostKind::SizeAndLatency) {
-                cost += 2;
+                cost = self.tuning.div_by_constant_size_cost.map_or(cost + 2, i64::from);
             }
             return Cost::of(count * cost);
         }
         if !second.constant {
+            if kind == CostKind::CodeSize
+                && let Some(cost) = self.tuning.div_by_variable_size_cost
+                && scalar_variable_divide(op, legal).is_some()
+            {
+                return Cost::of(count * i64::from(cost));
+            }
             if let Some(row) = scalar_variable_divide(op, legal) {
                 if let Some(each) = row[kind.index()] {
                     return Cost::of(count * each);
@@ -1070,5 +2604,39 @@ impl Tti for X86 {
             return Cost::of(count);
         }
         generic_arithmetic(op, ty, kind, first, second, self)
+    }
+}
+
+/// The nonzero digits of `n` in signed-digit (non-adjacent) form: a multiply by
+/// `n` is that many shifted terms added or subtracted.
+fn signed_digits(n: u128) -> u32 {
+    let (mut n, mut count) = (n, 0);
+    while n > 0 {
+        if n & 1 == 1 {
+            // 1 mod 4 takes the digit +1, 3 mod 4 takes -1
+            n = if n & 3 == 1 { n - 1 } else { n + 1 };
+            count += 1;
+        }
+        n >>= 1;
+    }
+    count
+}
+
+#[cfg(test)]
+mod pieces_tests {
+    use super::*;
+
+    /// A vector under a register was priced as none (`<8 x i8>`: no
+    /// `getTypeLegalizationCost`), so no loop stored one: `copy_runs`' init
+    /// loops stayed scalar. The target widens it to one register
+    /// (`TypeWidenVector`); a wider one splits.
+    #[test]
+    fn a_vector_under_a_register_is_one_piece_and_a_wider_one_is_split() {
+        let pieces = |bits: u32, count: u32| xmm_pieces(VectorTy { lane: Ty::Int(bits), count });
+        assert_eq!([pieces(8, 8), pieces(16, 4), pieces(32, 2)], [Some(1); 3]);
+        assert_eq!([pieces(8, 16), pieces(16, 8), pieces(32, 4), pieces(64, 2)], [Some(1); 4]);
+        assert_eq!([pieces(8, 32), pieces(16, 16), pieces(32, 8), pieces(64, 4)], [Some(2); 4]);
+        assert_eq!(pieces(8, 64), Some(4));
+        assert_eq!(xmm_pieces(VectorTy { lane: Ty::Float, count: 4 }), None);
     }
 }

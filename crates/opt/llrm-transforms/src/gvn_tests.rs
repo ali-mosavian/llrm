@@ -1249,3 +1249,107 @@ fn the_uses_of_a_local_are_walked_once_however_many_accesses_ask() {
     let walks = llrm_analysis::frameescape::scans() - before;
     assert!(walks <= 3, "{walks} walks for 3 locals");
 }
+
+/// GVN simplifies with the dominator tree and the assumptions, as the pin's
+/// `simplifyInstruction(I, {DL, TLI, DT, AC})`: `umax(%p, 1)` of a phi whose
+/// edges are each guarded by `sgt x, 0` (one through a block the branch
+/// dominates) is `%p`. Without them the call stayed (grep -O2: the read loop's
+/// trip count).
+#[test]
+fn test_gvn_simplifies_a_umax_of_a_phi_guarded_on_every_edge() {
+    let text = "declare i32 @llvm.umax.i32(i32, i32)
+declare i32 @rd()
+define i32 @f() {
+e:
+  %a = call i32 @rd()
+  %g = icmp sgt i32 %a, 0
+  br i1 %g, label %m, label %x
+x:
+  %b = call i32 @rd()
+  %h = icmp sgt i32 %b, 0
+  br i1 %h, label %t2, label %z
+t2:
+  br label %m
+m:
+  %p = phi i32 [ %a, %e ], [ %b, %t2 ]
+  %u = call i32 @llvm.umax.i32(i32 %p, i32 1)
+  ret i32 %u
+z:
+  ret i32 0
+}
+";
+    let mut module = parsed(text);
+    let layout = llrm_analysis::testing::layout(&module);
+    let outer = llrm_mir::passes::Outer::of(&module, None);
+    let (context, function) = module.function_mut("f").expect("@f");
+    run_impl_cfg(context, &layout, function, &outer, true, None);
+    let out = printed(&module);
+    assert!(!out.contains("call i32 @llvm.umax"), "{out}");
+}
+
+/// PRE made `%r.pre-phi` with one input for a predecessor that reaches the
+/// join by two edges (a switch with two cases to it): "a phi in block 47 has 1
+/// inputs from %switch.early.test for 2 edges" in queens at m32 -O3.
+#[test]
+fn test_a_phi_made_for_a_join_has_an_input_per_edge_of_a_switch_predecessor() {
+    let text = "define i16 @f(i16 %x, i16 %y, i1 %c) {
+b0:
+  br i1 %c, label %b1, label %b2
+
+b1:
+  %a = add i16 %x, %y
+  switch i16 %x, label %b4 [
+    i16 1, label %b3
+    i16 2, label %b3
+  ]
+
+b2:
+  br label %b3
+
+b3:
+  %r = add i16 %x, %y
+  ret i16 %r
+
+b4:
+  ret i16 0
+}
+";
+    let mut module = parsed(text);
+    let layout = llrm_analysis::testing::layout(&module);
+    let outer = llrm_mir::passes::Outer::of(&module, None);
+    let (context, function) = module.function_mut("f").expect("@f");
+    run_impl_cfg(context, &layout, function, &outer, true, None);
+    let problems = llrm_mir::verify::phi_arity(function);
+    assert!(problems.is_empty(), "{problems:?}\n{}", printed(&module));
+}
+
+/// A switch with two cases to the join is two predecessors of it (`predecessors(CurrentBlock)` once per edge). With the
+/// value unavailable in the switch's block that is two predecessors without it, and the pin's scalar PRE refuses
+/// (`NumWithOut > 1`); walking each block once inserted into the switch block and made the phi.
+#[test]
+fn test_a_value_missing_on_two_edges_of_a_switch_is_not_made_available_by_pre() {
+    let text = "define i16 @f(i16 %x, i16 %y, i1 %c) {
+b0:
+  br i1 %c, label %b1, label %b2
+
+b1:
+  switch i16 %x, label %b4 [
+    i16 1, label %b3
+    i16 2, label %b3
+  ]
+
+b2:
+  %a = add i16 %x, %y
+  br label %b3
+
+b3:
+  %r = add i16 %x, %y
+  ret i16 %r
+
+b4:
+  ret i16 0
+}
+";
+    let (text, _) = joined_once(text, true);
+    assert!(!text.contains(".pre"), "{text}");
+}

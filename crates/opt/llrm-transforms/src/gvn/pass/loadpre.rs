@@ -12,8 +12,8 @@
 //! the load where it stands
 //! (`licm::hoist::is_safe_to_speculatively_execute_in`): the context-sensitive
 //! dereferenceability facts at `CtxI` are not used. DEVIATE 21,
-//! `Value::canBeFreed` is true for every pointer but an `alloca` or a global
-//! variable (and what is a GEP, cast or phi of them): MIR has no `nofree`
+//! `Value::canBeFreed` is true for every pointer but a constant or an `alloca`
+//! (a GEP instruction of a global too, as in the pin): MIR has no `nofree`
 //! dereferenceability to read, so a loop load of an argument or a loaded
 //! pointer is not moved to the preheader.
 //! DEVIATE 22, `ImplicitControlFlowTracking` is asked by scanning the block (a
@@ -141,17 +141,15 @@ impl GvnPass<'_> {
         )
     }
 
-    /// `Value::canBeFreed` (DEVIATE 21).
+    /// `Value::canBeFreed` (DEVIATE 21): false for a constant and an `alloca`
+    /// as the pin has it, and not looked through a GEP, cast or phi (the pin
+    /// asks the value itself, so a GEP instruction of a global is freeable).
     fn can_be_freed(
         &self,
         pointer: Operand,
     ) -> bool {
-        let (base, _) = llrm_mir::valuetracking::underlying(self.context, self.layout, self.function, pointer);
-        match base {
-            Operand::Constant(constant) => !matches!(
-                self.context.get(constant).kind,
-                llrm_mir::context::ConstantKind::Global(global) if matches!(self.outer.globals.get(global.0 as usize).map(|one| &one.kind), Some(llrm_mir::module::GlobalKind::Variable(_)))
-            ),
+        match pointer {
+            Operand::Constant(_) => false,
             Operand::Value(value) => match self.function.value(value).def {
                 llrm_mir::module::ValueDef::Instruction(inst) => {
                     !matches!(self.function.instruction(inst).opcode, Opcode::Alloca { .. })
@@ -359,7 +357,9 @@ impl GvnPass<'_> {
         // their predecessor.
         let mut critical_edge_pred_split: Vec<BlockId> = Vec::new();
         let mut critical_edge_pred_and_load: Vec<(BlockId, InstId)> = Vec::new();
-        for pred in self.function.predecessors(load_bb).iter().copied().collect::<Vec<_>>() {
+        // Once per edge, as LLVM's `predecessors`: a switch with two cases to
+        // the block is two unavailable predecessors, which refuses PRE.
+        for pred in self.function.edge_predecessors(load_bb) {
             // Landing pads and the like are not handled by MIR.
             if self.is_value_fully_available_in_block(pred, &mut fully_available_blocks) {
                 continue;
@@ -610,7 +610,7 @@ impl GvnPass<'_> {
 
     /// Makes the loop info of the function as it stands, when it is first
     /// asked.
-    fn ensure_loops(&mut self) {
+    pub(super) fn ensure_loops(&mut self) {
         if self.loops.is_none() {
             let function = &*self.function;
             let dt = &*self.dt;

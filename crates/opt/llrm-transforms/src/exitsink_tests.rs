@@ -168,3 +168,16 @@ j5:
     let looked = get(Event::ExitSinkPhis) - before;
     assert!(looked <= 2, "{looked} phis looked at, one is in an exit block");
 }
+
+/// `sunk` looked for the exit blocks of each loop by walking the whole layout
+/// and testing every block (18.9 M Ir self in IndVars on memory_expansion -O2,
+/// every run, whether or not anything sank). It takes the exit blocks from the
+/// loop's edges and puts them in layout order by the layout index.
+#[test]
+fn the_exits_are_found_by_the_layout_index_not_by_walking_the_layout() {
+    let mut module = parsed(&looped("add i16 %i, 7", "%i.next"));
+    let function = f(&mut module);
+    let before = llrm_mir::module::block_places_built();
+    assert!(sunk(function), "premise: the add sinks");
+    assert!(llrm_mir::module::block_places_built() > before, "the exits were put in order by the index");
+}

@@ -524,11 +524,17 @@ fn push(
 }
 
 pub mod build;
+pub mod common;
+pub mod countdown;
 pub mod crc;
 pub mod driver;
+pub mod ffs;
 pub mod hashrecognize;
 pub mod pass;
+pub mod popcount;
 pub mod process;
+pub mod shiftbit;
+pub mod shiftzero;
 pub mod strlen;
 
 #[cfg(test)]

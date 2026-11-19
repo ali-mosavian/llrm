@@ -52,7 +52,9 @@
 //! (`simplifyUsers`, `eliminateIVComparison`).
 
 use llrm_analysis::num::Num as BigInt;
+use llrm_analysis::scev::ScalarEvolution;
 use llrm_analysis::scev::analysis::ScevSession;
+use llrm_analysis::scev::expander::Env;
 use llrm_analysis::scev::expr::Kind;
 use llrm_analysis::scev::expr::Ty;
 use llrm_analysis::scev::expr::Use;
@@ -170,16 +172,21 @@ fn nearest_common_dominator(
 /// `header`: the users of each of its header phis simplified, without widening;
 /// whether any was. What the unroller runs after a peel, where the residual
 /// loop's steps and exit test get the no-wrap flags SCEV proves.
+///
+/// `se` and `env` are the caller's expressions and analyses (the pin runs it
+/// on the SE and LoopInfo it holds): valid for `function` as it stands, whose
+/// blocks and edges the edits leave as they are.
+#[allow(clippy::too_many_arguments)]
 pub fn simplified_loop_ivs(
     context: &mut Context,
     layout: &DataLayout,
     function: &mut Function,
     declared: &mut llrm_mir::passes::Declared,
     outer: &Outer,
+    se: &mut ScalarEvolution,
+    env: Env,
     header: BlockId,
 ) -> bool {
-    let mut session = ScevSession::within(context, &outer.globals, &outer.metadata, function);
-    let (se, env) = session.split(layout, &outer.globals, &outer.metadata);
     let mut rewriter = llrm_analysis::scev::expander::Expander::new("indvars");
     rewriter.set_canonical_mode(false);
     let mut dead: Vec<InstId> = Vec::new();
@@ -226,8 +233,7 @@ pub fn simplified_and_extended_in(
 ) -> bool {
     let (se, env) = session.split(layout, &outer.globals, &outer.metadata);
     let headers: Vec<BlockId> = {
-        let mut headers: Vec<BlockId> = env.loops.get_loops_in_preorder().iter().map(|one| one.get_header()).collect();
-        headers.reverse();
+        let mut headers: Vec<BlockId> = env.loops.get_loops_in_visit_order().iter().map(|one| one.get_header()).collect();
         crate::loopfilter::retain(&mut headers);
         headers
     };
@@ -375,6 +381,8 @@ fn simplify_users_of_iv(
         }
         if is_simple_iv_user_of(e, header, use_inst) {
             push_iv_users_of(e, header, use_inst, &mut simplified, &mut simple_iv_users);
+        } else if let Some(info) = info.as_deref_mut() {
+            visit_masked_extensions(e, use_inst, info);
         }
     }
     changed
@@ -1107,7 +1115,7 @@ fn strengthen_right_shift(
     let iv_range = {
         let cx = e.env.cx(&*e.context, &*e.function);
         let s = e.se.get_scev(&cx, iv_op);
-        e.se.get_unsigned_range(&cx, s)
+        e.se.get_unsigned_range(&cx, s).to_word::<u128>()
     };
     let mut changed = false;
     let bo_op = value_op(e, bo);
@@ -1138,6 +1146,40 @@ fn strengthen_right_shift(
 /// `visitIVCast`: update the information about the induction variable that is
 /// extended by this sign or zero extend operation. This is used to determine
 /// the final width of the IV before actually widening it.
+/// DEVIATE IND-MASK: the extensions of `mask`, an `and` of the counter's chain
+/// with a constant, count as extensions of the counter on a target that asks
+/// (`Tti::indvars_widens_narrow_counter_through_masks`) and whose width for
+/// the counter is not legal.
+fn visit_masked_extensions(
+    e: &mut Edit,
+    mask: InstId,
+    wi: &mut WideIvInfo,
+) {
+    let one = e.function.instruction(mask);
+    if one.opcode != Opcode::Binary(BinaryOp::And) || !matches!(one.operands[1], Operand::Constant(_)) {
+        return;
+    }
+    let Some(result) = one.result else { return };
+    let narrow_ty = e.function.instruction(wi.narrow_iv).ty;
+    let Some(width) = e.context.types.int_bits(narrow_ty) else { return };
+    let taxed = e.outer.target().tti().is_some_and(|tti| tti.narrow_counter_is_taxed(width));
+    if (e.layout.legal_integer(width) && !taxed)
+        || !e.outer.target().tti().is_some_and(|tti| tti.indvars_widens_narrow_counter_through_masks())
+    {
+        return;
+    }
+    let casts: Vec<InstId> = e
+        .function
+        .users(result)
+        .into_iter()
+        .map(|used| used.user)
+        .filter(|&user| matches!(e.function.instruction(user).opcode, Opcode::Cast(CastOp::SExt | CastOp::ZExt)))
+        .collect();
+    for cast in casts {
+        visit_iv_cast(e, cast, wi);
+    }
+}
+
 fn visit_iv_cast(
     e: &mut Edit,
     cast: InstId,
@@ -1171,10 +1213,12 @@ fn visit_iv_cast(
     // ADD is required to increment the induction variable. We could compute
     // more comprehensively the cost of all instructions on the induction
     // variable when necessary.
-    // DEVIATE 18: no widening past the pointer's index width (the 16-bit
-    // target's): its arithmetic on a wider type costs more, and `n32` states
-    // `i32` legal there, so the X86 model prices the add alike.
-    if width > e.layout.pointer(0).index_bits {
+    // DEVIATE 18: no widening past the pointer's index width where that is under
+    // 32 bits (the 16-bit targets): their arithmetic on a wider type costs more,
+    // and `n32` states `i32` legal there, so the X86 model prices the add alike.
+    // A 32-bit pointer with a legal `i64` (wasm32) widens a counter to `i64`, as the pin.
+    let index_bits = e.layout.pointer(0).index_bits;
+    if width > index_bits && index_bits < 32 {
         return;
     }
     if let Some(tti) = e.outer.target().tti() {

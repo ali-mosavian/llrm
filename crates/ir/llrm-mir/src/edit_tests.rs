@@ -1035,7 +1035,7 @@ fn a_block_takes_the_name_of_another_and_a_taken_name_gets_a_number() {
 }
 
 /// A `switch` with two cases to one block is two edges: a phi there has two
-/// inputs from it, and the exit phis of lcssa, lcssamerges and LSR gave one.
+/// inputs from it, and the exit phis of lcssa and LSR gave one.
 #[test]
 fn a_switch_with_two_cases_to_a_block_is_two_edge_predecessors() {
     let text = "define i16 @f(i16 %x) {\nentry:\n  switch i16 %x, label %d [\n    i16 1, label %t\n    i16 2, label %t\n  ]\n\nt:\n  ret i16 1\n\nd:\n  ret i16 2\n}\n";
@@ -1109,4 +1109,145 @@ fn rewriting_a_phi_after_its_first_arms_relinks_only_what_changed() {
     let links = crate::uselist::LINKS.with(std::cell::Cell::get);
     assert!(links <= 4, "{links} operands relinked for a rewrite that changed the end");
     assert!(f.check_uses().is_empty());
+}
+
+const ASSIGNED: &str = "define i16 @f(i16 %a) {\nentry:\n  %p = alloca i16, !DIAssignID !1\n  %x = add i16 %a, 1\n  store i16 %x, ptr %p, !DIAssignID !2\n  #dbg_assign(i16 %x, !0, !3, !2, ptr %p, !3, !4)\n  ret i16 %x\n}\n\n!0 = !{!\"v\"}\n!1 = distinct !{}\n!2 = distinct !{}\n!3 = !{}\n!4 = !{}\n";
+
+/// An assignment record follows its value and address like any other record:
+/// replaced where another value stands for them, and gone (not the whole
+/// record, whose id ties it to the store) once they are erased. `#dbg_assign`
+/// was refused by the parser, so no pass met one.
+#[test]
+fn an_assignment_record_follows_its_value_and_address_and_keeps_its_id() {
+    let mut parsed = module(ASSIGNED);
+    let f = function(&mut parsed);
+    let (x, value) = named(f, "x");
+    let (_, pointer) = named(f, "p");
+    let a = f.parameters()[0];
+    let assign = |f: &Function| match f
+        .debug_records()
+        .iter()
+        .map(|one| one.what)
+        .find(|one| matches!(one, crate::DebugWhat::Assign { .. }))
+    {
+        Some(crate::DebugWhat::Assign { value, address, id, .. }) => (value, address, id),
+        other => panic!("{other:?}"),
+    };
+    let (before, _, id) = (assign(f).0, (), assign(f).2);
+    assert_eq!(before, Some(Operand::Value(value)));
+    f.replace_value(value, Operand::Value(a));
+    assert_eq!(assign(f).0, Some(Operand::Value(a)));
+    assert_eq!(assign(f).1, Some(Operand::Value(pointer)));
+    assert_eq!(assign(f).2, id);
+    let _ = x;
+}
+
+/// `erase_block` tested every entry of the layout against a set of the blocks
+/// to erase: 16 k Ir for each of the 1,550 `empty_block_removed` calls of a
+/// memory_expansion -O2 compile. One block is found and taken out; the order
+/// of the rest stands.
+#[test]
+fn erasing_one_block_tests_no_layout_entry_and_keeps_the_order() {
+    let mut module = module("define void @f() {\nentry:\n  ret void\n}\n");
+    let f = function(&mut module);
+    let made: Vec<_> = (0..50).map(|k| f.create_block(Some(&format!("b{k}")))).collect();
+    for &block in &made {
+        f.insert_block(block, None).expect("placed");
+    }
+    let before = crate::edit::layout_tested();
+    f.erase_block(made[20]).expect("empty and unnamed");
+    assert_eq!(crate::edit::layout_tested(), before, "no entry was tested against a set");
+    let mut expected = vec![f.entry().unwrap()];
+    expected.extend(made.iter().copied().filter(|&one| one != made[20]));
+    assert_eq!(f.layout(), &expected[..]);
+    assert!(!f.is_placed(made[20]));
+}
+
+const LOOP: &str = "define i32 @f(i32 %n) {
+entry:
+  br label %loop
+loop:
+  %i = phi i32 [ 0, %entry ], [ %next, %loop ]
+  %j = phi i32 [ 0, %entry ], [ %next, %loop ]
+  %next = add i32 %i, 1
+  %sum = add i32 %j, %next
+  %c = icmp ult i32 %next, %n
+  br i1 %c, label %loop, label %out
+out:
+  ret i32 %sum
+}
+";
+
+/// The result names of the users of `%name`, in use-list order.
+fn users_of(
+    f: &Function,
+    name: &str,
+) -> Vec<String> {
+    let (_, value) = named(f, name);
+    f.users(value)
+        .iter()
+        .map(|one| f.value(f.instruction(one.user).result.unwrap_or(value)).name.clone().unwrap_or_default())
+        .collect()
+}
+
+/// A value read before its definition has its early uses behind the later
+/// ones, in the order read (`LLParser`'s placeholder `RAUW`): `[c, sum, i, j]`.
+/// They came out `[c, sum, j, i]`, so every pass that walks users met the loop
+/// phis in the other order than the pin.
+#[test]
+fn uses_read_before_the_definition_come_after_the_later_ones_in_read_order() {
+    let mut module = module(LOOP);
+    assert_eq!(users_of(function(&mut module), "next"), ["c", "sum", "i", "j"]);
+}
+
+/// `uselistorder` sorts the list: the `i`th use goes to place `indexes[i]`
+/// (`LLParser::sortUseListOrder`).
+#[test]
+fn a_uselistorder_directive_reorders_the_uses_of_a_value() {
+    let text = LOOP.replace("}\n", "  uselistorder i32 %next, { 1, 2, 3, 0 }\n}\n");
+    let mut module = module(&text);
+    assert_eq!(users_of(function(&mut module), "next"), ["j", "c", "sum", "i"]);
+}
+
+/// Clang's `-emit-llvm-uselists` writes the use lists of globals and
+/// constants as module-level directives after the functions. The reader
+/// refused them ("unexpected uselistorder at the top level"), so wasm and every
+/// other compile of such a module failed once llrm-cc asked for the lists.
+#[test]
+fn a_module_level_uselistorder_directive_is_read_and_dropped() {
+    let text = format!("{LOOP}\n@g = global i32 0\nuselistorder ptr @g, {{ 1, 0 }}\n");
+    let mut module = module(&text);
+    assert_eq!(users_of(function(&mut module), "next"), ["c", "sum", "i", "j"]);
+}
+
+/// What a reader would build prints no directive; a reordered list prints the
+/// shuffle that `opt -preserve-ll-uselistorder` prints for it (checked against
+/// the pin on this loop: `{ 1, 2, 3, 0 }`, and none without the directive).
+#[test]
+fn a_use_list_prints_its_shuffle_only_where_it_differs_from_the_readers() {
+    let mut plain = module(LOOP);
+    assert!(function(&mut plain).use_list_orders().is_empty());
+    let text = LOOP.replace("}\n", "  uselistorder i32 %next, { 1, 2, 3, 0 }\n}\n");
+    let mut module = module(&text);
+    let f = function(&mut module);
+    let (_, next) = named(f, "next");
+    assert_eq!(f.use_list_orders(), [(next, vec![1, 2, 3, 0])]);
+}
+
+/// Clang writes a block's use list inside the function as `uselistorder label
+/// %b, { .. }`. The reader took `label` for a type and then `%b` for a value
+/// never defined, so wasm refused `switch_empty_cases.c` at -O1/-O2/-Os.
+#[test]
+fn a_uselistorder_directive_reorders_the_uses_of_a_block() {
+    let users = |text: &str| {
+        let mut module = module(text);
+        let f = function(&mut module);
+        let block = f.layout().iter().copied().find(|&b| f.block(b).name.as_deref() == Some("loop")).expect("%loop");
+        f.block_users(block).iter().map(|one| one.user.0).collect::<Vec<_>>()
+    };
+    let plain = users(LOOP);
+    let text = LOOP.replace("}\n", "  uselistorder label %loop, { 1, 0 }\n}\n");
+    let swapped = users(&text);
+    assert_eq!(plain.len(), 2);
+    assert_eq!(swapped, [plain[1], plain[0]]);
 }

@@ -1,5 +1,7 @@
-//! Register allocation: linear scan over one live interval per register. It is
-//! the allocator the spike needs, not LLVM's greedy (`RAGreedy`): an interval
+//! Register allocation, the fallback: linear scan over one live interval per
+//! register. The default is the shared greedy (`lir_view::allocate`); this runs
+//! under `LLRM_ARM64_LINEAR` or for a function greedy refuses. It is not LLVM's
+//! greedy (`RAGreedy`): an interval
 //! has no holes, a spilled one lives in its frame object, and every use of it
 //! is reloaded into a reserved scratch register. An interval that crosses a
 //! call takes a callee-saved register or is spilled. A value that is one
@@ -17,11 +19,16 @@
 //! (`VectorMov`) and never takes `d8`-`d15`, whose upper half a call does not
 //! keep.
 //!
-//! DEVIATE 1: LLVM allocates with `RAGreedy` on the shared machine IR. This
-//! allocator stands in until the core machine passes run on arm64 LIR (see
-//! docs/architecture/arm64-spike.md); it is not a translation.
+//! DEVIATE 1: LLVM allocates with `RAGreedy` on the shared machine IR; the
+//! default here is the shared greedy on `MFunction` (`lir_view`), but the
+//! machine passes around it are arm64's own until arm64 runs on
+//! `flow::machine_with` (docs/architecture/arm64-spike.md). This scan is not a
+//! translation.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::BTreeSet;
+
+use llrm_codegen::model::lir::SrcLoc;
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
 use crate::mc::inst::*;
 use crate::mc::visit::{Reg, RegRef, Role};
@@ -180,8 +187,8 @@ fn analyse(function: &MFunc) -> (HashMap<Reg, Ranges>, Vec<u32>, HashMap<Reg, f6
             }
         }
     }
-    let mut ranges: HashMap<Reg, Ranges> = HashMap::new();
-    let mut weight: HashMap<Reg, f64> = HashMap::new();
+    let mut ranges: HashMap<Reg, Ranges> = HashMap::default();
+    let mut weight: HashMap<Reg, f64> = HashMap::default();
     let mut use_weight = Uses::default();
     for (at, block) in function.blocks.iter().enumerate() {
         let (first, last) = extents[at];
@@ -232,7 +239,7 @@ struct Uses {
 fn coalesce(function: &mut MFunc) {
     let (ranges, _, weight, _) = analyse(function);
     let mut ranges = ranges;
-    let mut parent: HashMap<Reg, Reg> = HashMap::new();
+    let mut parent: HashMap<Reg, Reg> = HashMap::default();
     fn find(
         parent: &mut HashMap<Reg, Reg>,
         register: Reg,
@@ -303,8 +310,8 @@ fn coalesce(function: &mut MFunc) {
 /// so does every register a copy ties to one. Such a register is spilled and
 /// copied whole, and a call preserves only the low 64 bits of `d8`-`d15`, so it
 /// never takes one.
-fn wide_registers(function: &MFunc) -> HashSet<Reg> {
-    let mut wide: HashSet<Reg> = HashSet::new();
+pub(crate) fn wide_registers(function: &MFunc) -> HashSet<Reg> {
+    let mut wide: HashSet<Reg> = function.wide.iter().copied().collect();
     let mut copies: Vec<(Reg, Reg)> = Vec::new();
     for op in function.blocks.iter().flat_map(|block| &block.ops) {
         match op {
@@ -312,7 +319,7 @@ fn wide_registers(function: &MFunc) -> HashSet<Reg> {
             | Op::I(Inst::Store { mem: Memory::Fp { bytes: 16, reg }, .. }) => {
                 wide.insert(Reg::Fpr(*reg));
             }
-            Op::I(Inst::VectorFill { rd, .. }) => {
+            Op::I(Inst::VectorFill { rd, fill }) if fill.is_quad() => {
                 wide.insert(Reg::Fpr(*rd));
             }
             Op::I(Inst::LoadPair { first, second, .. }) | Op::I(Inst::StorePair { first, second, .. }) => {
@@ -322,8 +329,93 @@ fn wide_registers(function: &MFunc) -> HashSet<Reg> {
                     }
                 }
             }
-            Op::I(Inst::VectorMov { rd, rn }) => {
+            Op::I(Inst::VectorMov { rd, rn })
+            | Op::I(Inst::VectorShift { rd, rn, .. })
+            | Op::I(Inst::VectorNot { quad: true, rd, rn })
+            | Op::I(Inst::VectorFpUnary { rd, rn, .. })
+            | Op::I(Inst::VectorIntUnary { rd, rn, .. }) => {
                 wide.extend([Reg::Fpr(*rd), Reg::Fpr(*rn)]);
+            }
+            Op::I(Inst::VectorLongShift { rd, rn, high, .. }) => {
+                wide.insert(Reg::Fpr(*rd));
+                if *high {
+                    wide.insert(Reg::Fpr(*rn));
+                }
+            }
+            // `uaddw`'s first operand is wide and its second narrow; `umull`'s
+            // are both narrow.
+            Op::I(Inst::VectorLong { op, rd, rn, rm, high, .. }) => {
+                wide.insert(Reg::Fpr(*rd));
+                let adds = op.adds_wide();
+                if adds {
+                    wide.insert(Reg::Fpr(*rn));
+                }
+                if *high {
+                    wide.insert(Reg::Fpr(*rm));
+                    if !adds {
+                        wide.insert(Reg::Fpr(*rn));
+                    }
+                }
+            }
+            Op::I(Inst::VectorPermute { rd, rn, rm, .. }) => {
+                wide.extend([Reg::Fpr(*rd), Reg::Fpr(*rn), Reg::Fpr(*rm)]);
+            }
+            // The multiplier is a vector; the accumulator and the other
+            // factor are scalars.
+            Op::I(Inst::ScalarFmaLane { rm, .. }) => {
+                wide.insert(Reg::Fpr(*rm));
+            }
+            Op::I(Inst::VectorNarrow { high, rd, rn, .. }) => {
+                wide.insert(Reg::Fpr(*rn));
+                if *high {
+                    wide.insert(Reg::Fpr(*rd));
+                }
+            }
+            Op::I(Inst::VectorInsGpr { rd, .. }) => {
+                wide.insert(Reg::Fpr(*rd));
+            }
+            Op::I(Inst::VectorStoreLane { rt, .. }) => {
+                wide.insert(Reg::Fpr(*rt));
+            }
+            Op::I(Inst::VectorUmov { rn, .. } | Inst::VectorSmov { rn, .. }) => {
+                wide.insert(Reg::Fpr(*rn));
+            }
+            Op::I(Inst::VectorInsLane { rd, rn, .. }) => {
+                wide.extend([Reg::Fpr(*rd), Reg::Fpr(*rn)]);
+            }
+            Op::I(Inst::VectorDupScalar { rn, .. }) => {
+                wide.insert(Reg::Fpr(*rn));
+            }
+            Op::I(Inst::VectorLoadStructure { count, rt, .. } | Inst::VectorStoreStructure { count, rt, .. }) => {
+                wide.extend((0..u32::from(*count)).map(|at| Reg::Fpr(rt.in_run(at))));
+            }
+            Op::I(Inst::VectorLoadReplicate { rt, .. } | Inst::VectorLoadLane { rt, .. }) => {
+                wide.insert(Reg::Fpr(*rt));
+            }
+            Op::I(Inst::VectorDupLane { rd, .. }) => {
+                wide.insert(Reg::Fpr(*rd));
+            }
+            Op::I(Inst::VectorReduce { rn, .. }) => {
+                wide.insert(Reg::Fpr(*rn));
+            }
+            Op::I(Inst::VectorBinary { rd, rn, rm, .. })
+            | Op::I(Inst::VectorFpBinary { rd, rn, rm, .. })
+            | Op::I(Inst::VectorFma { rd, rn, rm, .. })
+            | Op::I(Inst::VectorMulAcc { rd, rn, rm, .. })
+            | Op::I(Inst::VectorFmaLane { rd, rn, rm, .. })
+            | Op::I(Inst::VectorFmulLane { rd, rn, rm, .. })
+            | Op::I(Inst::VectorMulLane { rd, rn, rm, .. }) => {
+                wide.extend([Reg::Fpr(*rd), Reg::Fpr(*rn), Reg::Fpr(*rm)]);
+            }
+            Op::I(Inst::VectorCompare { quad: true, rd, rn, rm, .. })
+            | Op::I(Inst::VectorBitSelect { quad: true, rd, rn, rm, .. }) => {
+                wide.extend([Reg::Fpr(*rd), Reg::Fpr(*rn), Reg::Fpr(*rm)]);
+            }
+            Op::I(Inst::VectorCompareZero { quad: true, rd, rn, .. }) => {
+                wide.extend([Reg::Fpr(*rd), Reg::Fpr(*rn)]);
+            }
+            Op::I(Inst::VectorBsp { quad: true, rd, mask, rn, rm }) => {
+                wide.extend([Reg::Fpr(*rd), Reg::Fpr(*mask), Reg::Fpr(*rn), Reg::Fpr(*rm)]);
             }
             Op::Copy { dst: dst @ Reg::Fpr(_), src } => copies.push((*dst, *src)),
             _ => {}
@@ -349,7 +441,7 @@ pub fn allocate(function: &mut MFunc) -> Allocation {
     // What each physical register holds: its own live ranges (arguments,
     // results) and, once a virtual register is given it, that one's; a call
     // destroys every caller-saved register at its point.
-    let mut occupied: HashMap<Reg, Ranges> = HashMap::new();
+    let mut occupied: HashMap<Reg, Ranges> = HashMap::default();
     for (register, live) in ranges.iter().filter(|(register, _)| !register.is_virtual()) {
         occupied.entry(*register).or_default().extend(live);
     }
@@ -367,7 +459,7 @@ pub fn allocate(function: &mut MFunc) -> Allocation {
         }
     }
     // Copy partners, for hints.
-    let mut partners: HashMap<Reg, Vec<Reg>> = HashMap::new();
+    let mut partners: HashMap<Reg, Vec<Reg>> = HashMap::default();
     for block in &function.blocks {
         for op in &block.ops {
             if let Op::Copy { dst, src } = op {
@@ -386,9 +478,9 @@ pub fn allocate(function: &mut MFunc) -> Allocation {
     order.sort_by(|a, b| priority(b).partial_cmp(&priority(a)).unwrap_or(std::cmp::Ordering::Equal).then(a.cmp(b)));
     let candidates = rematerializable(function);
     let wide = wide_registers(function);
-    let mut made_again: HashMap<Reg, Vec<Op>> = HashMap::new();
-    let mut assigned: HashMap<Reg, Reg> = HashMap::new();
-    let mut spilled: HashMap<Reg, u32> = HashMap::new();
+    let mut made_again: HashMap<Reg, Vec<Op>> = HashMap::default();
+    let mut assigned: HashMap<Reg, Reg> = HashMap::default();
+    let mut spilled: HashMap<Reg, u32> = HashMap::default();
     let mut used_callee_saved: BTreeSet<Reg> = BTreeSet::new();
     for register in order {
         let live = &ranges[&register];
@@ -454,9 +546,9 @@ fn unused_constants(
     candidates: &HashMap<Reg, (Vec<Op>, u32)>,
     made_again: &HashMap<Reg, Vec<Op>>,
 ) -> HashSet<Reg> {
-    let mut unused: HashSet<Reg> = HashSet::new();
+    let mut unused: HashSet<Reg> = HashSet::default();
     loop {
-        let mut read: HashSet<Reg> = HashSet::new();
+        let mut read: HashSet<Reg> = HashSet::default();
         for op in function.blocks.iter().flat_map(|block| &block.ops) {
             let (defs, uses) = op.defs_and_uses();
             if defs.iter().any(|register| made_again.contains_key(register) || unused.contains(register)) {
@@ -491,8 +583,15 @@ fn rewrite(
 ) {
     let spill_slots: HashSet<u32> = spilled.values().copied().collect();
     for block in &mut function.blocks {
-        let mut out = Vec::with_capacity(block.ops.len());
-        for mut op in std::mem::take(&mut block.ops) {
+        let mut out: Vec<(Op, Option<SrcLoc>)> = Vec::with_capacity(block.ops.len());
+        for (mut op, loc) in std::mem::take(&mut block.ops) {
+            // A debug value names the register the value was given; one the
+            // allocator spilled, made again at its uses or dropped has none.
+            if let Op::DbgValue { reg, .. } = &mut op {
+                *reg = reg.and_then(|virtual_reg| assigned.get(&virtual_reg).copied());
+                out.push((op, loc));
+                continue;
+            }
             // The one definition of a value made at each use.
             if op
                 .defs_and_uses()
@@ -509,11 +608,13 @@ fn rewrite(
                 && !made_again.contains_key(dst)
             {
                 match spilled.get(dst) {
-                    None => out.extend(aimed_at(def, assigned.get(dst).copied().unwrap_or(*dst))),
+                    None => out.extend(
+                        aimed_at(def, assigned.get(dst).copied().unwrap_or(*dst)).into_iter().map(|one| (one, loc)),
+                    ),
                     Some(slot) => {
                         let scratch = Reg::Gpr(Gpr(pool::GPR_SCRATCH[0]));
-                        out.extend(aimed_at(def, scratch));
-                        out.push(spill_access(scratch, *slot, false, false));
+                        out.extend(aimed_at(def, scratch).into_iter().map(|one| (one, loc)));
+                        out.push((spill_access(scratch, *slot, false, false), loc));
                     }
                 }
                 continue;
@@ -527,7 +628,7 @@ fn rewrite(
             if let Op::Copy { dst, src } = &op
                 && let Some(done) = spilled_copy(*dst, *src, assigned, spilled, wide.contains(dst))
             {
-                out.extend(done);
+                out.extend(done.into_iter().map(|one| (one, loc)));
                 continue;
             }
             // A copy of 128 bits moves all of them.
@@ -540,7 +641,7 @@ fn rewrite(
             let mut again: Vec<(Reg, Reg)> = Vec::new();
             let (mut next_gpr, mut next_fpr) = (0usize, 0usize);
             // One scratch register per spilled register of this operation.
-            let mut scratch: HashMap<Reg, Reg> = HashMap::new();
+            let mut scratch: HashMap<Reg, Reg> = HashMap::default();
             op.visit(&mut |register, role| {
                 let key = register.key();
                 let replacement = if made_again.contains_key(&key) {
@@ -589,23 +690,23 @@ fn rewrite(
                 }
             });
             for (register, slot, quad) in loads {
-                out.push(spill_access(register, slot, true, quad));
+                out.push((spill_access(register, slot, true, quad), loc));
             }
             for (register, key) in again {
-                out.extend(aimed_at(&made_again[&key], register));
+                out.extend(aimed_at(&made_again[&key], register).into_iter().map(|one| (one, loc)));
             }
             let is_noop = matches!(&op, Op::Copy { dst, src } if dst == src)
                 || matches!(&op, Op::I(Inst::VectorMov { rd, rn }) if rd == rn);
             let is_return = matches!(op, Op::Return { .. });
             if !is_noop {
-                out.push(op);
+                out.push((op, loc));
             }
             debug_assert!(!(is_return && !stores.is_empty()));
             for (register, slot, quad) in stores {
-                out.push(spill_access(register, slot, false, quad));
+                out.push((spill_access(register, slot, false, quad), loc));
             }
         }
-        block.ops = forward_copies(forward_spills(out, &spill_slots));
+        block.ops = forward_copies(forward_spills(out, &spill_slots)).into_iter().collect();
     }
 }
 
@@ -613,14 +714,14 @@ fn rewrite(
 /// x0` then `mov x0, x19` with neither written between. A write to either ends
 /// the pair; a call ends every pair with a caller-saved register. The
 /// allocator's scratch registers are left alone.
-fn forward_copies(ops: Vec<Op>) -> Vec<Op> {
+fn forward_copies(ops: Vec<(Op, Option<SrcLoc>)>) -> Vec<(Op, Option<SrcLoc>)> {
     let scratch = |register: &Reg| match register {
         Reg::Gpr(gpr) => pool::GPR_SCRATCH.contains(&gpr.0),
         Reg::Fpr(fpr) => pool::FPR_SCRATCH.contains(&fpr.0),
     };
     let mut equal: Vec<(Reg, Reg)> = Vec::new();
     let mut out = Vec::with_capacity(ops.len());
-    for op in ops {
+    for (op, loc) in ops {
         if let Op::Copy { dst, src } = &op {
             if equal.iter().any(|&(a, b)| (a, b) == (*dst, *src) || (a, b) == (*src, *dst)) {
                 continue;
@@ -636,7 +737,7 @@ fn forward_copies(ops: Vec<Op>) -> Vec<Op> {
                 equal.retain(|&(a, b)| a != register && b != register);
             }
         }
-        out.push(op);
+        out.push((op, loc));
     }
     out
 }
@@ -646,9 +747,9 @@ fn forward_copies(ops: Vec<Op>) -> Vec<Op> {
 /// [slot]` with nothing writing `x15` between. Only the allocator's own slots,
 /// which nothing else writes; a call forgets everything.
 fn forward_spills(
-    ops: Vec<Op>,
+    ops: Vec<(Op, Option<SrcLoc>)>,
     spill_slots: &HashSet<u32>,
-) -> Vec<Op> {
+) -> Vec<(Op, Option<SrcLoc>)> {
     let spill = |op: &Op| -> Option<(Reg, u32, u8, bool)> {
         let (Op::I(Inst::Load { mem, addr: Addr::Slot { slot, offset: 0 }, .. })
         | Op::I(Inst::Store { mem, addr: Addr::Slot { slot, offset: 0 }, .. })) = op
@@ -661,9 +762,9 @@ fn forward_spills(
         };
         (spill_slots.contains(slot)).then(|| (register, *slot, bytes, matches!(op, Op::I(Inst::Load { .. }))))
     };
-    let mut held: HashMap<Reg, (u32, u8)> = HashMap::new();
+    let mut held: HashMap<Reg, (u32, u8)> = HashMap::default();
     let mut out = Vec::with_capacity(ops.len());
-    for op in ops {
+    for (op, loc) in ops {
         if matches!(op, Op::Call { .. }) {
             held.clear();
         } else if let Some((register, slot, bytes, is_load)) = spill(&op) {
@@ -680,7 +781,7 @@ fn forward_spills(
                 held.remove(&register);
             }
         }
-        out.push(op);
+        out.push((op, loc));
     }
     out
 }
@@ -709,13 +810,13 @@ fn cheaper_again(
 /// operation that adds a symbol's page offset), and the operations that make
 /// it, in order, with their count.
 fn rematerializable(function: &MFunc) -> HashMap<Reg, (Vec<Op>, u32)> {
-    let mut defined: HashMap<Reg, usize> = HashMap::new();
+    let mut defined: HashMap<Reg, usize> = HashMap::default();
     for op in function.blocks.iter().flat_map(|block| &block.ops) {
         for register in op.defs_and_uses().0 {
             *defined.entry(register).or_default() += 1;
         }
     }
-    let mut made: HashMap<Reg, (Vec<Op>, u32)> = HashMap::new();
+    let mut made: HashMap<Reg, (Vec<Op>, u32)> = HashMap::default();
     for op in function.blocks.iter().flat_map(|block| &block.ops) {
         let (defs, uses) = op.defs_and_uses();
         // The instructions it takes to make the value.
@@ -802,7 +903,7 @@ fn spilled_copy(
     }
 }
 
-fn spill_access(
+pub(crate) fn spill_access(
     register: Reg,
     slot: u32,
     load: bool,
@@ -813,11 +914,11 @@ fn spill_access(
         Reg::Gpr(reg) => Memory::Int { width: Width::X, bytes: 8, sign: false, reg },
         Reg::Fpr(reg) => Memory::Fp { bytes: if quad { 16 } else { 8 }, reg },
     };
-    Op::I(if load {
-        Inst::Load { mem, addr, mmo: MemOperand::default() }
-    } else {
-        Inst::Store { mem, addr, mmo: MemOperand::default() }
-    })
+    // The frame object itself (`getFixedStack`): a spill is disjoint from every
+    // other object, so the pair pass moves one past a global's load or a store
+    // through a pointer (`MachineInstr::mayAlias`).
+    let mmo = MemOperand { object: MemObject::Slot(slot), offset: Some(0), volatile: false };
+    Op::I(if load { Inst::Load { mem, addr, mmo } } else { Inst::Store { mem, addr, mmo } })
 }
 
 #[cfg(test)]
@@ -832,7 +933,7 @@ mod tests {
     fn function(ops: Vec<Op>) -> MFunc {
         let mut function = MFunc::new("f");
         function.slot(16, 16);
-        function.blocks.push(MBlock { label: "entry".into(), ops });
+        function.blocks.push(MBlock { label: "entry".into(), ops: ops.into() });
         function
     }
 
@@ -893,9 +994,16 @@ mod tests {
     #[test]
     fn a_spilled_value_used_at_once_is_not_reloaded() {
         let value = Reg::Gpr(Gpr(100));
-        let spilled = HashMap::from([(value, 1)]);
+        let spilled = [(value, 1)].into_iter().collect::<HashMap<_, _>>();
         let mut function = function(vec![add(100, 0), add(1, 100)]);
-        rewrite(&mut function, &HashMap::new(), &spilled, &HashMap::new(), &HashSet::new(), &HashSet::new());
+        rewrite(
+            &mut function,
+            &HashMap::default(),
+            &spilled,
+            &HashMap::default(),
+            &HashSet::default(),
+            &HashSet::default(),
+        );
         assert_eq!(spill_loads(&function), 0, "{:?}", function.blocks[0].ops);
     }
 
@@ -904,9 +1012,16 @@ mod tests {
     #[test]
     fn a_spilled_value_is_reloaded_after_a_call() {
         let value = Reg::Gpr(Gpr(100));
-        let spilled = HashMap::from([(value, 1)]);
+        let spilled = [(value, 1)].into_iter().collect::<HashMap<_, _>>();
         let mut function = function(vec![add(100, 0), call(), add(1, 100)]);
-        rewrite(&mut function, &HashMap::new(), &spilled, &HashMap::new(), &HashSet::new(), &HashSet::new());
+        rewrite(
+            &mut function,
+            &HashMap::default(),
+            &spilled,
+            &HashMap::default(),
+            &HashSet::default(),
+            &HashSet::default(),
+        );
         assert_eq!(spill_loads(&function), 1, "{:?}", function.blocks[0].ops);
     }
 
@@ -916,9 +1031,16 @@ mod tests {
     #[test]
     fn a_spilled_register_copied_to_itself_costs_nothing() {
         let value = Reg::Fpr(Vreg(100));
-        let spilled = HashMap::from([(value, 1)]);
+        let spilled = [(value, 1)].into_iter().collect::<HashMap<_, _>>();
         let mut function = function(vec![Op::Copy { dst: value, src: value }]);
-        rewrite(&mut function, &HashMap::new(), &spilled, &HashMap::new(), &HashSet::new(), &HashSet::new());
+        rewrite(
+            &mut function,
+            &HashMap::default(),
+            &spilled,
+            &HashMap::default(),
+            &HashSet::default(),
+            &HashSet::default(),
+        );
         assert!(function.blocks[0].ops.is_empty(), "{:?}", function.blocks[0].ops);
     }
 
@@ -950,6 +1072,34 @@ mod tests {
         allocate(&mut function);
         let ops = &function.blocks[0].ops;
         assert_eq!(eight_byte_fp_accesses(&function), 0, "{ops:?}");
+    }
+
+    /// A `movi d` / `movi .2s` made a 64-bit value that the allocator treated
+    /// as 128-bit: across a call it could not take `d8` and was spilled as
+    /// a `q` (jpeg_single -O3: two 16-byte slots and a reload per
+    /// iteration, +192 instructions).
+    #[test]
+    fn a_narrow_fill_across_a_call_stays_in_a_callee_saved_register() {
+        let fill = Op::I(Inst::VectorFill { rd: Vreg(100), fill: Fill::MaskD(0x55) });
+        let store = Op::I(Inst::Store {
+            mem: Memory::Fp { bytes: 8, reg: Vreg(100) },
+            addr: Addr::Slot { slot: 0, offset: 0 },
+            mmo: MemOperand::default(),
+        });
+        let mut function = function(vec![fill, call(), store]);
+        function.next_register = 101;
+        allocate(&mut function);
+        let ops = &function.blocks[0].ops;
+        let spills = ops
+            .iter()
+            .filter(|op| {
+                matches!(
+                    op,
+                    Op::I(Inst::Store { addr: Addr::Slot { slot, .. }, .. }) if *slot != 0
+                )
+            })
+            .count();
+        assert_eq!(spills, 0, "{ops:?}");
     }
 
     /// A copy of a 128-bit value that is not coalesced was `fmov d`, which

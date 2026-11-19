@@ -57,7 +57,7 @@ declare void @llvm.memcpy.p0.p0.i16(ptr, ptr, i16, i1)
 /// `int none() {..}` called as `none(t)` (gcc.c-torture/20051012-1,
 /// old_style_extra_args): the call kept its `byval` struct, so the caller built
 /// a 12-byte copy and pushed it for a callee that takes nothing (m16 -Os, 113
-/// bytes over llrm-c).
+/// bytes over llrm-cc).
 #[test]
 fn a_struct_passed_to_a_function_defined_without_parameters_is_dropped() {
     let after = combined(NONE_DEFINED);

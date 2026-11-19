@@ -414,5 +414,25 @@ fn a_condition_of_and_or_not_branches_on_its_operands() {
 #[test]
 fn an_and_that_is_a_value_still_makes_a_bool() {
     let json = compile_source("fn f(a: i16, b: i16) -> bool:\n    return a < 1 && b < 2\n").unwrap();
-    assert!(json.contains("$logical"), "{json}");
+    assert!(json.contains("$logical"));
+}
+
+/// A record returned by value and bound to a local was copied field by field
+/// (lru.nib: 5 load/store pairs and 2 memcpys, ~25 movs at m16), which
+/// MemCpyOpt cannot forward the call's result into. One whole copy can.
+#[test]
+fn a_record_copy_is_one_memcpy_not_one_per_field() {
+    let json = compile_source(
+        "struct Pair:\n\
+         \x20\x20\x20\x20a: i16\n\
+         \x20\x20\x20\x20b: i16\n\
+         \x20\x20\x20\x20c: i32\n\
+         fn make() -> Pair:\n\
+         \x20\x20\x20\x20return Pair(a=1, b=2, c=3)\n\
+         fn use_it() -> i32:\n\
+         \x20\x20\x20\x20let copy = make()\n\
+         \x20\x20\x20\x20return copy.c\n",
+    )
+    .unwrap();
+    assert_eq!(json.matches("\"op\":\"copy_bytes\"").count(), 1);
 }

@@ -35,7 +35,7 @@
 //! 8. `isRemovableAlloc`, `getFreedOperand`, `isMathLibCallNoop`: MIR has no
 //!    `allockind` attribute and no `TargetLibraryInfo`, so no call is a known
 //!    allocation, free or libm function.
-//! 9. `experimental_guard`, `wasm_trunc_*`, `ptrauth_*`, `stacksave`,
+//! 9. `experimental_guard`, `wasm_trunc_*`, `ptrauth_*`,
 //!    `launder_invariant_group`, `allow_runtime_check`, `allow_ubsan_check` and
 //!    the constrained FP intrinsics: not in the intrinsic table.
 //! 10. A non-volatile load from a constant global: a load has no atomic
@@ -105,6 +105,7 @@ use llrm_mir::module::{
 };
 use llrm_mir::opcode::{Attribute, BinaryOp, CastOp, Flags, Opcode};
 use llrm_mir::types::{Type, TypeId};
+use llrm_mir::valuetracking::pattern::IntrinsicId;
 use llrm_mir::valuetracking::{self, Sizes};
 use llrm_support::hash::HashMap;
 
@@ -178,7 +179,7 @@ fn edges_into(
 }
 
 /// The call `inst`'s intrinsic, if its callee is one.
-fn intrinsic_of(
+pub(crate) fn intrinsic_of(
     context: &Context,
     declarations: &Declarations,
     function: &Function,
@@ -546,6 +547,21 @@ pub fn is_instruction_trivially_dead(
     unused && would_instruction_be_trivially_dead(context, callees, declarations, function, inst)
 }
 
+/// `Function::getIntrinsicID` of a call's callee, for the intrinsics of
+/// [`IntrinsicId`] (found by name).
+pub(crate) fn named_intrinsic(
+    context: &Context,
+    declarations: &Declarations,
+    function: &Function,
+    inst: InstId,
+) -> Option<IntrinsicId> {
+    if !matches!(function.instruction(inst).opcode, Opcode::Call(_)) {
+        return None;
+    }
+    let callee = memory::callee(context, function, inst)?;
+    declarations.get(callee.0 as usize)?.name.intrinsic_id()
+}
+
 /// `wouldInstructionBeTriviallyDead`
 /// ([Local.cpp:409](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/Local.cpp#L409)):
 /// the instruction has no side effects, so it is dead once nothing reads it.
@@ -574,6 +590,10 @@ pub fn would_instruction_be_trivially_dead(
     }
     // Special case intrinsics that "may have side effects" but can be deleted
     // when dead.
+    // Safe to delete llvm.stacksave if dead.
+    if named_intrinsic(context, declarations, function, inst) == Some(IntrinsicId::StackSave) {
+        return true;
+    }
     match intrinsic_of(context, declarations, function, inst) {
         Some(Intrinsic::LifetimeStart | Intrinsic::LifetimeEnd) => match instruction.operands[1] {
             Operand::Constant(id) if context.get(id).kind == ConstantKind::Poison => true,
@@ -1248,8 +1268,12 @@ fn same_node(
     a: MetadataId,
     b: MetadataId,
 ) -> bool {
-    let (x, y) = (&metadata[a.0 as usize], &metadata[b.0 as usize]);
-    a == b || (!x.distinct && !y.distinct && x == y)
+    // A node this pass made is not in `metadata` yet: it is itself and no other.
+    match (metadata.get(a.0 as usize), metadata.get(b.0 as usize)) {
+        _ if a == b => true,
+        (Some(x), Some(y)) => !x.distinct && !y.distinct && x == y,
+        _ => false,
+    }
 }
 
 /// The metadata of `kind` on `inst`.

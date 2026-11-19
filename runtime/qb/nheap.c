@@ -231,6 +231,12 @@ static void nh_ini(void)
     nh_init(first, top);
 }
 
+/* CLEAR: the strings and the arrays in the local heap are gone, and the heap starts afresh (clear.c). */
+void nh_clear(void)
+{
+    nh_ini();
+}
+
 static Comp nh_comp = {0, C_NH, {nh_ini}};
 
 #define XI_FN nh_xinit

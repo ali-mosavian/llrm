@@ -2370,6 +2370,25 @@ pub fn eliminate_constraints(
     metadata: &[MetadataNode],
     function: &mut Function,
 ) -> bool {
+    eliminate_constraints_declared(
+        context,
+        layout,
+        declarations,
+        metadata,
+        function,
+        llrm_mir::valuetracking::assume_declared(declarations),
+    )
+}
+
+/// [`eliminate_constraints`], told whether the module declares `llvm.assume`.
+pub fn eliminate_constraints_declared(
+    context: &Context,
+    layout: &DataLayout,
+    declarations: &[GlobalValue],
+    metadata: &[MetadataNode],
+    function: &mut Function,
+    assume_declared: bool,
+) -> bool {
     let mut changed = false;
     if function.entry().is_none() {
         return false;
@@ -2389,7 +2408,7 @@ pub fn eliminate_constraints(
         q.globals = declarations;
         q.metadata = metadata;
         let mut state = State::new(&tree);
-        let mut inductions = Inductions::new(&q, &tree);
+        let mut inductions = Inductions::new(&q, &tree, assume_declared);
         // First, collect conditions implied by branches and blocks with their
         // Dominator DFS in and out numbers.
         for &bb in function.layout() {
@@ -2919,7 +2938,7 @@ fn apply(
     match action {
         Action::ReplaceCmp { check, is_true, uses } => {
             let ty = function.instruction(check).ty;
-            let constant = Operand::Constant(context.int(ty, i128::from(is_true)));
+            let constant = Operand::Constant(context.int_splat(ty, i128::from(is_true)));
             let changed = !uses.is_empty();
             for used in uses {
                 function.set_operand(used.user, used.index as usize, constant);
@@ -2939,7 +2958,7 @@ fn apply(
         }
         Action::ReplaceWithInt { inst, value } => {
             let ty = function.instruction(inst).ty;
-            let constant = Operand::Constant(context.int(ty, value));
+            let constant = Operand::Constant(context.int_splat(ty, value));
             let result = function.instruction(inst).result.expect("a compare has a result");
             function.replace_all_uses_with(result, constant);
             to_remove.push(inst);
@@ -3078,7 +3097,14 @@ impl FunctionPass for ConstraintElimination {
     ) -> PreservedAnalyses {
         let outer = std::rc::Rc::clone(analyses.outer());
         let declarations: &[GlobalValue] = outer.cached_ref::<passes::Declarations>().map_or(&[], Vec::as_slice);
-        if eliminate_constraints(unit.context, unit.layout, declarations, unit.metadata, unit.function) {
+        if eliminate_constraints_declared(
+            unit.context,
+            unit.layout,
+            declarations,
+            unit.metadata,
+            unit.function,
+            outer.assume_declared(),
+        ) {
             // The CFG is as it was.
             PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>()
         } else {

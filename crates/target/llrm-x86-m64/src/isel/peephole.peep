@@ -62,3 +62,21 @@ rule fused_call
     match   mov r:reg, c:mem ; ... delays_pushes(@0, *) ; call r
     when    free(@0, loaded_pointer), free(@1, called), same_width(r, c), dead(@1, lanes(r)), encodable($1)
     rewrite anchor @0 ; @1: =@1 c {uses: [], symbol: @0.symbol}
+
+// The forwarded reload of a scalar float: `movsd [cell], x ; movsd x, [cell]` reads what the
+// register still holds. nbody -O3 stood four such pairs in its loop (800 of 27.6k instructions);
+// the pin's allocator leaves none.
+meta forwarded_float = clobbers requires delivers spread group symbol frame_adjust volatile
+
+group forwarded_float_reloads
+    walk gap
+
+rule forwarded_double_reload
+    match   movsd_x c:mem, r:reg ; ... holds_after(@0, *) ; movsd_x r, c
+    when    free(@0, forwarded_float), free(@1, forwarded_float), same_width(r, c), width_in(r, [64])
+    rewrite @0 ; anchor @1
+
+rule forwarded_single_reload
+    match   movss c:mem, r:reg ; ... holds_after(@0, *) ; movss r, c
+    when    free(@0, forwarded_float), free(@1, forwarded_float), same_width(r, c), width_in(r, [32])
+    rewrite @0 ; anchor @1

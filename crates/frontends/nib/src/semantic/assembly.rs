@@ -6,7 +6,7 @@
 //! file's (`registers.regs`).
 
 use llrm_codegen::abi::runtime::Reg;
-use llrm_codegen::backend::inline_asm::{self, Part};
+use llrm_x86::inline_asm::{self, Part};
 
 use super::*;
 use crate::syntax::{Asm, AsmTarget};

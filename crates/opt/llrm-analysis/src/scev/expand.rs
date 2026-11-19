@@ -32,6 +32,12 @@ use super::expander::{Env, Expander};
 use super::expr::{Kind, Scev, Ty, Type, Use, flags};
 use super::{Flags, ScalarEvolution};
 
+/// `LLRM_NO_EXPAND_REUSE`, read once; set, the expander never reuses a value
+/// that computes the expression.
+fn reuse_enabled() -> bool {
+    !llrm_support::env_flag!("LLRM_NO_EXPAND_REUSE")
+}
+
 /// One call of the expander.
 pub(super) struct Run<'a> {
     pub x: &'a mut Expander,
@@ -525,7 +531,7 @@ impl Run<'_> {
             }
             Kind::AddRec(ops, header) => {
                 let mut found = Some(header);
-                for op in ops {
+                for op in ops.iter().copied() {
                     let l = self.get_relevant_loop(op.scev);
                     found = self.pick_most_relevant_loop(found, l);
                 }
@@ -539,7 +545,7 @@ impl Run<'_> {
             | Kind::SMin(ops)
             | Kind::SequentialUMin(ops) => {
                 let mut found = None;
-                for op in ops {
+                for op in ops.iter().copied() {
                     let l = self.get_relevant_loop(op.scev);
                     found = self.pick_most_relevant_loop(found, l);
                 }
@@ -605,7 +611,18 @@ impl Run<'_> {
         let here = self.x.insert_point.expect("an insert point");
         let mut at = here;
         let mut l = self.function.parent(here).and_then(|b| self.env.loops.get_loop_for(b)).map(|l| l.get_header());
-        loop {
+        // The insert point moves only where no division may be by zero: the
+        // loops guard its execution (PR35406).
+        let safe_to_hoist = !self
+            .se
+            .expr_contains(
+                s,
+                &|e| match &self.se.node(e).kind {
+                    Kind::UDiv(_, divisor) => self.se.as_constant(divisor.scev).is_none_or(|c| c.is_zero()),
+                    _ => false,
+                },
+            );
+        while safe_to_hoist {
             let invariant = {
                 let cx = cx!(self);
                 self.se.is_loop_invariant(&cx, s, l)
@@ -614,13 +631,13 @@ impl Run<'_> {
                 let Some(header) = l else { break };
                 let cx = cx!(self);
                 let l_ref = self.env.loops.get_loop_for(header).expect("a loop");
-                if let Some(preheader) = l_ref.get_loop_preheader(cx.function) {
-                    at = self.function.terminator(preheader).expect("a terminator");
-                    break;
-                }
-                // LSR puts the insert point of an addrec's start and step at
-                // the start of the block; correct it to a valid position.
-                at = self.first_insertion_pt(header);
+                at = match l_ref.get_loop_preheader(cx.function) {
+                    Some(preheader) => self.function.terminator(preheader).expect("a terminator"),
+                    // LSR puts the insert point of an addrec's start and step
+                    // at the start of the block; correct it to a valid
+                    // position.
+                    None => self.first_insertion_pt(header),
+                };
             } else {
                 // Not in a loop it is expanded post-incremented for: its
                 // increment is below the header's start, and
@@ -644,12 +661,52 @@ impl Run<'_> {
         if let Some(&found) = self.x.expressions.get(&(s, at)) {
             return found;
         }
-        self.x.insert_point = Some(at);
-        let v = self.visit(s);
-        let v = self.fixup_lcssa_form_for(v);
-        self.x.insert_point = Some(here);
-        self.x.expressions.insert((s, at), v);
+        // Expand the expression into instructions, or reuse a value that
+        // computes it (`findExistingExpansionAndDropPoisonFlags`).
+        let mut cache_at = at;
+        let mut found = self.find_existing_expansion(s, at);
+        if found.is_none() && at != here && self.x.post_inc_loops.is_empty() {
+            // Hoisting the insertion point can move it above a value that
+            // already computes S. Such a value is still usable: it only has to
+            // dominate the point we were asked to expand at.
+            found = self.find_existing_expansion(s, here);
+            if found.is_some() {
+                cache_at = here;
+            }
+        }
+        let v = match found {
+            Some(v) => v,
+            None => {
+                self.x.insert_point = Some(at);
+                let v = self.visit(s);
+                let v = self.fixup_lcssa_form_for(v);
+                self.x.insert_point = Some(here);
+                v
+            }
+        };
+        self.x.expressions.insert((s, cache_at), v);
         v
+    }
+
+    /// `findExistingExpansionAndDropPoisonFlags`: a value that computes `s`
+    /// where it is used, its poison-generating flags dropped as reusing it
+    /// needs.
+    fn find_existing_expansion(
+        &mut self,
+        s: Scev,
+        at: InstId,
+    ) -> Option<Operand> {
+        if !reuse_enabled() {
+            return None;
+        }
+        let (v, drop) = {
+            let cx = cx!(self);
+            self.x.find_value_in_expr_value_map(&cx, self.se, s, at)?
+        };
+        for inst in drop {
+            self.drop_poison_generating_annotations_and_reinfer(inst);
+        }
+        Some(v)
     }
 
     fn visit(
@@ -719,6 +776,16 @@ impl Run<'_> {
         s: Scev,
         ops: &[Use],
     ) -> Operand {
+        // Recognize the canonical representation of an unsimplifed urem.
+        let urem = {
+            let cx = cx!(self);
+            self.se.match_urem(&cx, s)
+        };
+        if let Some((lhs, rhs)) = urem {
+            let lhs = self.expand(lhs);
+            let rhs = self.expand(rhs);
+            return self.insert_binop(BinaryOp::URem, lhs, rhs, flags::NONE, false);
+        }
         let wrap = self.se.get_no_wrap_flags(s, flags::NUW | flags::NSW);
         let all = self.ops_and_loops(ops);
         let mut sum: Option<Operand> = None;
@@ -767,6 +834,19 @@ impl Run<'_> {
         s: Scev,
         ops: &[Use],
     ) -> Operand {
+        // `mul(PowerOf2C, (udiv X, PowerOf2C))` is `(X >> C) << C`, the mask
+        // `X & (-1 << C)`.
+        if let [c1, other] = ops
+            && let Some(multiple) = self.se.as_constant(c1.scev)
+            && multiple.bits.count_ones() == 1
+            && let Kind::UDiv(x, divisor) = self.se.node(other.scev).kind.clone()
+            && divisor.scev == c1.scev
+        {
+            let lhs = self.expand(x.scev);
+            let ty = self.ty_of_operand(lhs);
+            let mask = self.constant(ty, -1i128 << multiple.bits.trailing_zeros());
+            return self.insert_binop(BinaryOp::And, lhs, mask, flags::NONE, true);
+        }
         let mut wrap = self.se.get_no_wrap_flags(s, flags::NUW | flags::NSW);
         let all = self.ops_and_loops(ops);
         let mut prod: Option<Operand> = None;

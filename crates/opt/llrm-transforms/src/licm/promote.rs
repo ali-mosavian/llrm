@@ -9,8 +9,8 @@ use llrm_analysis::mssa::Mssa;
 use llrm_analysis::mssa::alias::{AliasQuery, Location};
 use llrm_mir::context::ConstantKind;
 use llrm_mir::dense::IdSet;
-use llrm_mir::module::{BlockId, GlobalKind, InstId, Operand, ValueDef, ValueId};
-use llrm_mir::opcode::Opcode;
+use llrm_mir::module::{BlockId, InstId, Operand, ValueDef, ValueId};
+use llrm_mir::opcode::{Attribute, Opcode};
 use llrm_mir::passes::{self, Outer};
 
 use super::{LoopCtx, LoopSafety};
@@ -367,35 +367,47 @@ fn is_not_visible_on_unwind_in_loop(
     is_alloca(unit, object) && !is_captured(unit, outer, exposed, object)
 }
 
-/// `isWritableObject`: an alloca or a variable that is not constant.
+/// [`isWritableObject`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/AliasAnalysis.cpp#L1000):
+/// an alloca, a `byval` or `writable noalias` argument, or the result of a
+/// `noalias` call. "We don't consider globals as writable: While the physical
+/// memory is writable, we may not have provenance to perform the write."
 pub(crate) fn is_writable_object(
     context: &llrm_mir::Context,
+    globals: &[llrm_mir::module::GlobalValue],
     function: &llrm_mir::module::Function,
-    outer: &Outer,
     object: Operand,
 ) -> bool {
     if is_alloca_in(function, object) {
         return true;
     }
-    match object {
-        Operand::Constant(id) => match context.get(id).kind {
-            ConstantKind::Global(global) => outer.globals.get(global.0 as usize).is_some_and(|one| {
-                matches!(
-                    &one.kind,
-                    GlobalKind::Variable(variable) if !variable.constant
-                )
-            }),
-            _ => false,
-        },
-        _ => false,
+    let Operand::Value(value) = object else { return false };
+    match function.value(value).def {
+        ValueDef::Argument(at) => {
+            let attrs = function.parameter_attrs.get(at as usize).map(Vec::as_slice).unwrap_or_default();
+            let named = |wanted: &str| {
+                attrs.iter().any(|one| {
+                    matches!(one, Attribute::Flag(name) | Attribute::Type(name, _) if name == wanted)
+                })
+            };
+            named("byval") || (named("writable") && llrm_mir::facts::Fact::NoAlias.stated_by(attrs))
+        }
+        ValueDef::Instruction(inst) => llrm_mir::memory::returns_noalias(context, globals, function, inst),
     }
 }
 
-/// `isThreadLocalObject`: LLVM's `isIdentifiedFunctionLocal` and not captured
-/// before the loop, or a single-threaded module. DEVIATE: llrm's targets run
-/// one thread, so every object is thread-local (`ThreadModel::Single`).
-fn is_thread_local_object() -> bool {
-    true
+/// [`isThreadLocalObject`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LICM.cpp#L1672):
+/// an identified function-local object (here an alloca) not captured, or any
+/// object of a single-threaded module (wasm: `Machine::single_threaded`; the
+/// other triples are `POSIX`, so a global's stores stay in the loop there).
+/// DEVIATE: `is_captured` asks of the whole function, not before the loop
+/// header.
+fn is_thread_local_object(
+    unit: &passes::Unit,
+    outer: &Outer,
+    exposed: &Exposed,
+    object: Operand,
+) -> bool {
+    (is_alloca(unit, object) && !is_captured(unit, outer, exposed, object)) || outer.target().single_threaded()
 }
 
 /// [`promoteLoopAccessesToScalars`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LICM.cpp#L1692):
@@ -574,7 +586,9 @@ pub fn promote_loop_accesses_to_scalars(
     // violating the memory model.
     if store_safety == StoreSafety::Unknown {
         let object = underlying_object(unit, first_pointer);
-        if is_writable_object(&*unit.context, &*unit.function, outer, object) && is_thread_local_object() {
+        if is_writable_object(&*unit.context, &outer.globals, &*unit.function, object)
+            && is_thread_local_object(unit, outer, exposed, object)
+        {
             store_safety = StoreSafety::Safe;
         }
     }

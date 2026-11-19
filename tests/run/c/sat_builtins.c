@@ -1,4 +1,5 @@
 // flags: -O1 | -O2 | -Os
+// bar: none (SDCC error 101: too many parameters)
 // __builtin_elementwise_{add,sub}_sat of 32 and 64 bit signed and unsigned integers (a narrower type promotes to int
 // first): the shape clang gives llvm.{u,s}{add,sub}.sat (the intrinsic was a refusal at every width).
 extern void report(long value);

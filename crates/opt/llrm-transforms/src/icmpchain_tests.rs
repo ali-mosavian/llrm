@@ -252,3 +252,48 @@ e:
     assert_eq!(gathered(lone), 0, "a lone compare is no chain");
     assert!(gathered(chain) >= 1, "an or of compares is gathered");
 }
+
+const SHARED_CHAIN: &str = "  %a = icmp eq i16 %x, 1
+  %b = icmp eq i16 %x, 5
+  %ab = or i1 %a, %b
+  br i1 %ab, label %b1, label %b2
+
+b1:
+  %r = zext i1 %ab to i16
+  store volatile i16 %r, ptr %p
+  ret i16 1
+
+b2:
+  ret i16 0
+}
+";
+
+/// pack_ref -Os: `planes > 1` was `mode == 16 || mode == 13`, also read as a
+/// value, and its branch became a switch that tests `mode` again on every
+/// trip. A size build keeps the branch on the value it has.
+#[test]
+fn test_a_size_build_keeps_a_branch_on_a_chain_its_value_is_read_elsewhere() {
+    let text = format!("define i16 @f(i16 %x, ptr %p) optsize {{\nb0:\n{SHARED_CHAIN}");
+    let after = simplified_text(&text);
+    assert!(after.contains("br i1 %ab") && !after.contains("switch"), "{after}");
+}
+
+/// The same function built for speed gets the switch, as in the pin.
+#[test]
+fn test_a_speed_build_turns_a_chain_its_value_is_read_elsewhere_into_a_switch() {
+    let text = format!("define i16 @f(i16 %x, ptr %p) {{\nb0:\n{SHARED_CHAIN}");
+    let after = simplified_text(&text);
+    assert!(after.contains("switch i16 %x"), "{after}");
+}
+
+/// `@f` after the pass.
+fn simplified_text(text: &str) -> String {
+    let mut module = parsed(text);
+    let outer = Outer::of(&module, None);
+    let layout = DataLayout::default();
+    let spec = Speculation { tti: &llrm_mir::tti::Basic, layout: &layout, outer: &outer };
+    let mut declared = Declared::of(&module);
+    let (context, function) = module.function_mut("f").expect("@f");
+    simplified(context, &spec, &mut declared, function);
+    printed(&module)
+}

@@ -1,7 +1,7 @@
 //! `.debug$T`: the model's types as `LF_*` records, numbered from 0x1000. A
 //! scalar is a primitive index and has no record.
 
-use llrm_object::debug::{Info, Reach, Scalar, Type, TypeId};
+use llrm_debug::{Info, Reach, Scalar, Type, TypeId};
 use llrm_object::{Object, Unsupported};
 use llrm_support::leaf::{numeric, pad};
 
@@ -205,7 +205,7 @@ impl Builder<'_> {
         id: TypeId,
         label: &str,
         bytes: u32,
-        fields: &[llrm_object::debug::Field],
+        fields: &[llrm_debug::Field],
         union: bool,
     ) -> Result<u32, Unsupported> {
         if self.started[id] {

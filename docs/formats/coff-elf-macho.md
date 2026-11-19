@@ -137,3 +137,7 @@ is written as the offset itself, unrelocated, as `dsymutil` reads it. Details: [
 Known gaps: Mach-O has no `LC_BUILD_VERSION`, a 32-bit absolute address is `UNSIGNED` and needs a non-PIE
 link, and arm64 would need `r_extern = 1` only and `ARM64_RELOC_ADDEND`. COFF has no COMDAT
 ([#767](https://github.com/ali-mosavian/llrm/issues/767)).
+
+x86-64 COFF (`.pdata`/`.xdata` from the declared `.seh_*`) and Mach-O (`__compact_unwind`, `__eh_frame`) are library-only
+(`objbuild::built_in`): `llrm-x86-m64`'s `object.toml` lists `elf` alone. Post-main item, 2026-10-29: `formats`, link
+recipes and the Win64 calling convention.

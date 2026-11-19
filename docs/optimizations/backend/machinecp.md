@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/machinecp.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/machinecp.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/machinecp.rs sha256:04ca98ccd9bb2e0267d4fffa3142fb029c79c4dc98f75db141bcf45f60b56eda -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/machinecp.rs sha256:16a63202954d3f2353f6ce4073e24007e69b8dd0796b4bfb26b7fde9f83eaf32 -->
 
 # machinecp
 
@@ -33,7 +33,7 @@ rewrite is kept only when the new spelling still selects and the decoded
 effects are the old ones with the renamed lanes replaced.
 
 LLVM's `CopyTracker` is one `DenseMap` of units; here the units are 28
-slots of an array and a set of units is a `u64` mask.
+slots of an array and a set of units is a `u128` mask.
 
 DEVIATE 1: LLVM asks a machine operand whether it is `renamable` and
 whether `getRegClassConstraint` admits the new register; llrm has neither

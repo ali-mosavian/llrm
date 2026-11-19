@@ -97,6 +97,13 @@ fn a_loop_and_a_call() {
     compare("loop");
 }
 
+/// Stack arguments of a call after a dynamic `alloca` were stored at `[sp]`, over the array: the program printed 826
+/// where the pinned clang's build printed 1213.
+#[test]
+fn a_call_with_stack_arguments_after_a_dynamic_alloca_keeps_the_array() {
+    compare("vla_call");
+}
+
 #[test]
 fn recursion() {
     compare("fib");
@@ -232,4 +239,12 @@ fn division_and_remainder_by_constants() {
 #[test]
 fn multiplication_by_all_ones_constants() {
     compare("mulconst");
+}
+
+/// The `switch` default edge carries a phi value (`0`): the DAG path's case
+/// blocks took none of the parent's phi copies, so `run` returned a stale
+/// register (`2 2 2` for `0 0 0` on the Mac).
+#[test]
+fn a_switch_default_edge_carries_its_phi_value() {
+    compare("dispatch_sum");
 }

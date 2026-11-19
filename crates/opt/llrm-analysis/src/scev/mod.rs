@@ -13,6 +13,10 @@
 //! function for function, each naming its C++ original, and verified against
 //! LLVM's own constructors through `tools/scev/oracle.cpp`.
 
+/// SCEV's ranges are 256 bits wide: `willNotOverflow` widens an `i128`
+/// operation to `i256`.
+pub type ConstantRange = llrm_mir::constantrange::Range<llrm_mir::apint::U256>;
+
 pub mod analysis;
 pub mod ap;
 pub mod arith;
@@ -20,6 +24,8 @@ pub mod backedge;
 pub mod cast;
 pub mod compare;
 pub mod compare_predicate;
+#[cfg(test)]
+mod constant_map_tests;
 pub mod create;
 pub mod create_addrec;
 pub mod create_phi;
@@ -67,6 +73,8 @@ pub mod print;
 pub mod quadratic;
 pub mod range;
 #[cfg(test)]
+mod range_attribute_tests;
+#[cfg(test)]
 mod range_factoring_tests;
 #[cfg(test)]
 mod range_recurrence_tests;
@@ -88,7 +96,7 @@ pub mod wrap_proof;
 
 use llrm_mir::context::Context;
 use llrm_mir::datalayout::DataLayout;
-use llrm_mir::dense::IdMap;
+use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::domtree::DomTree;
 use llrm_mir::hash::{HashMap, HashSet};
 use llrm_mir::loopinfo::LoopInfo;
@@ -256,14 +264,17 @@ pub struct ScalarEvolution {
     pub(super) nodes: Vec<Node>,
     /// `UniqueSCEVs`.
     pub(super) unique: HashMap<Key<'static>, Scev>,
+    /// The constants `unique` holds, by value: `getConstant` is the hottest
+    /// intern, and a constant needs none of the key's other fields.
+    pub(super) constants: HashMap<(u32, u64, u64), Scev>,
     /// `FoldCache`: the extensions already folded.
     pub(super) fold_cache: HashMap<(Type, Use, Ty), Scev>,
     /// `ProvingSplitPredicate`.
     pub(super) proving_split_predicate: bool,
     /// `UnsignedRanges`.
-    pub(super) unsigned_ranges: HashMap<Scev, llrm_mir::constantrange::ConstantRange>,
+    pub(super) unsigned_ranges: HashMap<Scev, ConstantRange>,
     /// `SignedRanges`.
-    pub(super) signed_ranges: HashMap<Scev, llrm_mir::constantrange::ConstantRange>,
+    pub(super) signed_ranges: HashMap<Scev, ConstantRange>,
     /// `ConstantMultipleCache`.
     pub(super) constant_multiple_cache: HashMap<Scev, Ap>,
     /// `getNotSCEV` of a non-constant: built once per expression (it is
@@ -281,6 +292,9 @@ pub struct ScalarEvolution {
     /// held: their SCEV is a constant node, made again for the price of a
     /// lookup.
     pub(super) value_expr_map: IdMap<ValueId, Scev>,
+    /// Values the caller wants read as unknown, whatever they compute
+    /// ([`Self::set_opaque`]). Beyond the pin.
+    pub(super) opaque: IdSet<ValueId>,
     /// `ExprValueMap`: the values a SCEV was made for, in insertion order.
     pub(super) expr_value_map: HashMap<Scev, Vec<ValueId>>,
     /// `SCEVUsers`: the expressions that have a SCEV as an operand.
@@ -315,11 +329,33 @@ impl Default for ScalarEvolution {
     }
 }
 
+thread_local! {
+    static MADE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many [`ScalarEvolution`]s this thread made, for a test that a pass
+/// asking many questions of one function keeps one table of expressions.
+pub fn made() -> usize {
+    MADE.with(std::cell::Cell::get)
+}
+
 impl ScalarEvolution {
     pub fn new() -> Self {
+        MADE.with(|made| made.set(made.get() + 1));
+        Self::with_capacity(256)
+    }
+
+    /// An empty table to stand in a slot while the real one is lent out; it is
+    /// never asked and not counted by [`made`].
+    pub fn placeholder() -> Self {
+        Self::with_capacity(0)
+    }
+
+    fn with_capacity(unique: usize) -> Self {
         let mut se = Self {
             nodes: Vec::new(),
-            unique: HashMap::with_capacity_and_hasher(256, Default::default()),
+            unique: HashMap::with_capacity_and_hasher(unique, Default::default()),
+            constants: HashMap::default(),
             fold_cache: HashMap::default(),
             proving_split_predicate: false,
             unsigned_ranges: HashMap::default(),
@@ -330,6 +366,7 @@ impl ScalarEvolution {
             loop_dispositions: HashMap::default(),
             block_dispositions: HashMap::default(),
             value_expr_map: IdMap::new(),
+            opaque: IdSet::new(),
             expr_value_map: HashMap::default(),
             scev_users: HashMap::default(),
             loop_users: IdMap::new(),
@@ -594,6 +631,13 @@ impl ScalarEvolution {
         &mut self,
         value: Ap,
     ) -> Scev {
+        // `Fx` has no `write_u128`: an `Ap` as key hashes byte-wise, slower
+        // than the `Key` it replaces. Keyed by words; wider than 128 bits takes
+        // the general intern.
+        let by_value = (value.hi == 0).then(|| (value.width, value.bits as u64, (value.bits >> 64) as u64));
+        if let Some(&found) = by_value.as_ref().and_then(|k| self.constants.get(k)) {
+            return found;
+        }
         let key = Key {
             tag: Type::Constant,
             ops: std::borrow::Cow::Borrowed(&[]),
@@ -602,7 +646,11 @@ impl ScalarEvolution {
             value: None,
             header: None,
         };
-        self.intern(key, || Kind::Constant(value), Some(Ty::Int(value.width)), 1)
+        let made = self.intern(key, || Kind::Constant(value), Some(Ty::Int(value.width)), 1);
+        if let Some(k) = by_value {
+            self.constants.insert(k, made);
+        }
+        made
     }
 
     /// `ScalarEvolution::getConstant(Type *, uint64_t, bool)`.
@@ -702,7 +750,7 @@ pub fn value_id(
             K::Zero => 2,
             K::Bytes(_) => 3,
             K::Int(_) => 5,
-            K::Float(_) | K::Float80(_) => 7,
+            K::Float(_) | K::Float80(_) | K::Float128(_) => 7,
             K::Null => 9,
             K::Aggregate(_) => match cx.context.types.get(cx.context.get(id).ty) {
                 MirType::Array { .. } => 11,
@@ -801,6 +849,10 @@ fn llvm_opcode(
         O::Phi => 57,
         O::Call(_) => 58,
         O::Select => 59,
+        O::VaArg => 62,
+        O::ExtractElement => 63,
+        O::InsertElement => 64,
+        O::ShuffleVector(_) => 65,
         O::ExtractValue(_) => 66,
         O::InsertValue(_) => 67,
         O::LandingPad { .. } => 68,

@@ -17,6 +17,13 @@ use crate::module::{Function, GlobalKind, GlobalValue, InstId, Instruction, Meta
 use crate::opcode::Opcode;
 use crate::types::{Type, TypeId};
 
+#[cfg(test)]
+thread_local! {
+    /// `Query::instruction_of` calls, for a test that a pattern reads each
+    /// operand once.
+    pub(crate) static LOOKUPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// `SimplifyQuery`.
 #[derive(Clone, Copy)]
 pub struct Query<'a> {
@@ -37,6 +44,11 @@ pub struct Query<'a> {
     pub cond_context: Option<&'a CondContext>,
     /// `CxtI`: the instruction the query is asked at.
     pub cxt: Option<InstId>,
+    /// Intrinsics a pass has declared and not yet placed in the module
+    /// (`globals` ends before them): a call of one is still that intrinsic,
+    /// as it is in LLVM the moment `getOrInsertDeclaration` returns. (global
+    /// index, intrinsic)
+    pub pending_intrinsics: &'a [(u32, crate::valuetracking::pattern::IntrinsicId)],
 }
 
 impl<'a> Query<'a> {
@@ -56,6 +68,7 @@ impl<'a> Query<'a> {
             dom_conditions: None,
             cond_context: None,
             cxt: None,
+            pending_intrinsics: &[],
         }
     }
 
@@ -77,6 +90,7 @@ impl<'a> Query<'a> {
             dom_conditions: None,
             cond_context: None,
             cxt: None,
+            pending_intrinsics: &[],
         }
     }
 
@@ -129,13 +143,31 @@ impl<'a> Query<'a> {
         self.function.operand_type(self.context(), operand)
     }
 
-    /// `getBitWidth(Ty, DL)`: an integer's width or a pointer's, 0 for anything
-    /// else.
+    /// The lane width of an integer vector, `None` for any other value. The
+    /// analyses here are translated for scalars: a vector is answered with
+    /// what holds of every lane (an unknown lane, a splat constant) and is not
+    /// looked through.
+    pub fn int_vector_lane_bits(
+        &self,
+        operand: Operand,
+    ) -> Option<u32> {
+        let ty = self.type_of(operand)?;
+        matches!(self.context().types.get(ty), Type::Vector { .. }).then(|| self.context().types.scalar_int_bits(ty))?
+    }
+
+    /// `getBitWidth(Ty, DL)`: an integer's width or a pointer's (a vector's:
+    /// its lane's), 0 for anything else.
     pub fn scalar_bits(
         &self,
         operand: Operand,
     ) -> u32 {
-        match self.type_of(operand).map(|ty| self.context().types.get(ty)) {
+        let types = &self.context().types;
+        let mut ty = self.type_of(operand).map(|ty| types.get(ty));
+        // `getScalarSizeInBits`: the lane of a vector.
+        if let Some(Type::Vector { element, .. }) = ty {
+            ty = Some(types.get(*element));
+        }
+        match ty {
             Some(Type::Int(bits)) => *bits,
             Some(Type::Pointer(space)) => self.layout.pointer(*space).bits,
             _ => 0,
@@ -158,12 +190,7 @@ impl<'a> Query<'a> {
         operand: Operand,
     ) -> Option<(u128, u32)> {
         let Operand::Constant(id) = operand else { return None };
-        let constant = self.context().get(id);
-        match constant.kind {
-            ConstantKind::Int(bits) => Some((bits, self.context().types.int_bits(constant.ty)?)),
-            ConstantKind::Zero | ConstantKind::Null => Some((0, self.context().types.int_bits(constant.ty)?)),
-            _ => None,
-        }
+        self.context().splat_int(id)
     }
 
     /// The instruction that defines `operand`, if one does.
@@ -171,6 +198,8 @@ impl<'a> Query<'a> {
         &self,
         operand: Operand,
     ) -> Option<(InstId, &'a Instruction)> {
+        #[cfg(test)]
+        LOOKUPS.with(|count| count.set(count.get() + 1));
         let Operand::Value(value) = operand else { return None };
         let ValueDef::Instruction(inst) = self.function.value(value).def else { return None };
         Some((inst, self.function.instruction(inst)))
@@ -200,7 +229,25 @@ impl<'a> Query<'a> {
         &self,
         inst: InstId,
     ) -> Option<crate::valuetracking::pattern::IntrinsicId> {
-        self.callee_function(inst)?.name.intrinsic_id()
+        let Some(global) = self.callee_global(inst) else { return None };
+        match self.globals.get(global as usize) {
+            Some(function) => {
+                matches!(function.kind, GlobalKind::Function(_)).then(|| function.name.intrinsic_id()).flatten()
+            }
+            None => self.pending_intrinsics.iter().find(|(id, _)| *id == global).map(|&(_, intrinsic)| intrinsic),
+        }
+    }
+
+    /// The index of the global a call's callee names.
+    fn callee_global(
+        &self,
+        inst: InstId,
+    ) -> Option<u32> {
+        let instruction = self.function.instruction(inst);
+        let (Opcode::Call(_) | Opcode::Invoke(_)) = instruction.opcode else { return None };
+        let Operand::Constant(id) = *instruction.operands.last()? else { return None };
+        let ConstantKind::Global(global) = self.context().get(id).kind else { return None };
+        Some(global.0)
     }
 
     /// The function global a call's callee names.
@@ -271,6 +318,38 @@ fn check_assume_skip() -> bool {
     *ON.get_or_init(|| llrm_env::set("LLRM_CHECK_ASSUME_SKIP"))
 }
 
+static SCANS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// How many times `assume_declared` has scanned a module's globals.
+pub fn assume_scans() -> u64 {
+    SCANS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Whether `globals` declare `llvm.assume`. A call reaches it only through a
+/// function of that name: with none declared no body holds an assume.
+pub fn assume_declared(globals: &[GlobalValue]) -> bool {
+    SCANS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    globals
+        .iter()
+        .any(|global| matches!(global.kind, GlobalKind::Function(_)) && global.intrinsic() == Some(Intrinsic::Assume))
+}
+
+static GUARD_SCANS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// How many times `guard_declared` has scanned a module's globals.
+pub fn guard_scans() -> u64 {
+    GUARD_SCANS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Whether `globals` declare `llvm.experimental.guard`: `LazyValueInfoImpl`'s
+/// `GuardDecl` (`Module::getFunction`, a symbol-table lookup at the pin).
+pub fn guard_declared(globals: &[GlobalValue]) -> bool {
+    GUARD_SCANS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    globals
+        .iter()
+        .any(|g| matches!(g.kind, GlobalKind::Function(_)) && g.name.as_deref() == Some("llvm.experimental.guard"))
+}
+
 impl AssumptionCache {
     /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/AssumptionCache.cpp#L261>
     pub fn new(
@@ -287,13 +366,21 @@ impl AssumptionCache {
         metadata: &[MetadataNode],
         function: &Function,
     ) -> Self {
+        Self::of_declared(context, globals, metadata, function, assume_declared(globals))
+    }
+
+    /// `of`, told whether the module declares `llvm.assume`
+    /// (`assume_declared`): a pass that holds the answer for the module
+    /// does not scan every global for each function.
+    pub fn of_declared(
+        context: &Context,
+        globals: &[GlobalValue],
+        metadata: &[MetadataNode],
+        function: &Function,
+        declared: bool,
+    ) -> Self {
         let layout = DataLayout::default();
         let query = Query { globals, metadata, ..Query::bare(context, function, &layout) };
-        // A call reaches `llvm.assume` only through a function of that name:
-        // with none declared there is nothing to find in the body.
-        let declared = globals.iter().any(|global| {
-            matches!(global.kind, GlobalKind::Function(_)) && global.intrinsic() == Some(Intrinsic::Assume)
-        });
         let check = !declared && check_assume_skip();
         let assumes: Vec<InstId> = if declared || check {
             function
@@ -450,10 +537,22 @@ impl FunctionAnalyses {
         layout: &DataLayout,
         function: &Function,
     ) -> Self {
+        Self::of_declared(context, globals, metadata, layout, function, assume_declared(globals))
+    }
+
+    /// `of`, told whether the module declares `llvm.assume`.
+    pub fn of_declared(
+        context: &Context,
+        globals: &[GlobalValue],
+        metadata: &[MetadataNode],
+        layout: &DataLayout,
+        function: &Function,
+        assume_declared: bool,
+    ) -> Self {
         Self {
             layout: layout.clone(),
             dt: DomTree::of(function),
-            assumptions: AssumptionCache::of(context, globals, metadata, function),
+            assumptions: AssumptionCache::of_declared(context, globals, metadata, function, assume_declared),
             dom_conditions: None,
         }
     }

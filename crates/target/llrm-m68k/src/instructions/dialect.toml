@@ -1,0 +1,33 @@
+# What the reader of m68k.instr must know: see llrm_target::instr::Dialect.
+file = "m68k.instr"
+registers = ["d0", "d1", "d2", "d3", "d4", "d5", "d6", "d7", "a0", "a1", "a2", "a3", "a4", "a5", "a6", "sp", "ccr"]
+widths = [8, 16, 32]
+assembler_column = false
+arithmetic = ["X", "N", "Z", "V", "C"]
+
+# `{cc}`: the condition codes of M68k::CondCode, with the flags each tests.
+conditions = [
+    { name = "t", flags = [] },
+    { name = "f", flags = [] },
+    { name = "hi", flags = ["C", "Z"] },
+    { name = "ls", flags = ["C", "Z"] },
+    { name = "cc", flags = ["C"] },
+    { name = "cs", flags = ["C"] },
+    { name = "ne", flags = ["Z"] },
+    { name = "eq", flags = ["Z"] },
+    { name = "vc", flags = ["V"] },
+    { name = "vs", flags = ["V"] },
+    { name = "pl", flags = ["N"] },
+    { name = "mi", flags = ["N"] },
+    { name = "ge", flags = ["N", "V"] },
+    { name = "lt", flags = ["N", "V"] },
+    { name = "gt", flags = ["N", "V", "Z"] },
+    { name = "le", flags = ["N", "V", "Z"] },
+]
+
+[flags]
+C = 1
+V = 2
+Z = 4
+N = 8
+X = 16

@@ -47,7 +47,7 @@ def test_every_step_has_an_owner_or_is_flagged_by_the_table():
 
 def test_the_map_names_its_commit_and_commands_and_flags_unowned_rows():
     result = {
-        "header": {"commit": "abc test", "llrm": "llrm-c -m32 -O1 f.c", "gcc": "gcc", "clang": "clang"},
+        "header": {"commit": "abc test", "llrm": "llrm-cc -m32 -O1 f.c", "gcc": "gcc", "clang": "clang"},
         "total_M": 1000.0, "instrumented_M": 1040.0, "rows_sum_M": 1030.0, "outside_every_step_M": 10.0, "scale": 1000 / 1040,
         "gcc_total_M": 100.0, "clang_total_M": 80.0,
         "rows": [{"name": "mir hoist", "count": 1, "own_M": 100.0, "total_M": 100.0, "category": "mir passes", "owner": None},
@@ -55,7 +55,7 @@ def test_the_map_names_its_commit_and_commands_and_flags_unowned_rows():
         "categories": {"mir passes": {"llrm_M": 96.0, "gcc_M": 10.0, "clang_M": 8.0}, "regalloc": {"llrm_M": 480.0, "gcc_M": 40.0, "clang_M": 10.0}},
     }
     text = m.show(result)
-    assert "abc test" in text and "llrm-c -m32 -O1 f.c" in text
+    assert "abc test" in text and "llrm-cc -m32 -O1 f.c" in text
     assert "UNOWNED" in text and "1 unowned row(s)" in text and "mir hoist (9.6%)" in text
     assert "WARNING" not in text
     result["rows_sum_M"] = 900.0
@@ -133,3 +133,25 @@ def test_the_report_states_the_host_load_it_ran_under():
     assert "load average at the run (1/5/15 min): 75.1 / 70.2 / 60.0" in m.show(result)
     del result["load_average"]
     assert "load average: not recorded" in m.show(result)
+
+
+def test_a_failed_compile_is_not_a_map():
+    """llrm-cc ran with `PATH` alone, exited 1 on the system clang's datalayout, and the map printed 10.8 M for the loader, rows 0.0%,
+    "llrm/gcc 0.0x": a number to quote from a compile that did not happen."""
+    import pytest
+
+    with pytest.raises(SystemExit) as stop:
+        m.checked(["python3", "-c", "import sys; sys.stderr.write('llrm-cc: clang datalayout differs\\n'); sys.exit(1)"])
+    assert "nothing to measure" in str(stop.value) and "datalayout differs" in str(stop.value)
+
+
+def test_llrm_cc_gets_the_pinned_clang_and_the_target(monkeypatch):
+    monkeypatch.setattr(m.pin_clang, "path", lambda: "/pin/clang")
+    env = m.llrm_environment()
+    assert env["LLRM_PIN_CLANG"] == "/pin/clang" and env["LLRM_CC_TARGET"] == "x86_32-linux"
+
+
+def test_llrm_cc_gets_the_keywords_defined_away_as_gcc_and_clang_do():
+    """`void far *` in qcshared.h stopped llrm-cc's clang (error: field has incomplete type 'void'): only gcc and clang were given `-Dfar=`."""
+    command = m.llrm_command("/x/llrm-cc", "-O2", ["-S", "-o", "/o"], "/src/d_faces.c")
+    assert "-Dfar=" in command and "-Dhuge=" in command and "-march=i486" in command and command[-1] == "/src/d_faces.c"

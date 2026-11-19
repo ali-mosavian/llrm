@@ -20,12 +20,20 @@ fn a_power_of_two_scale_beside_a_conversion_is_fractional_bits() {
     assert!(body("quarter").contains("scvtf d0, x0, #2"));
 }
 
-/// Not a power of two, more fractional bits than the integer has, a conversion
-/// read elsewhere: all stay a multiply.
+/// Not a power of two, more fractional bits than the integer has: both stay a
+/// multiply.
 #[test]
 fn a_scale_that_is_no_fixed_point_stays_a_multiply() {
-    for function in ["not_a_power_of_two", "too_many_bits", "converted_twice"] {
+    for function in ["not_a_power_of_two", "too_many_bits"] {
         let asm = body(function);
         assert!(asm.contains("fmul"), "{function}:\n{asm}");
     }
+}
+
+/// A conversion also stored is made twice, as the pin does (`scvtf d0, w0, #1`
+/// and `scvtf d1, w0`, no `fmul`): the hand selector kept the multiply.
+#[test]
+fn a_conversion_read_elsewhere_is_made_twice_as_the_pin_does() {
+    let asm = body("converted_twice");
+    assert!(asm.contains("scvtf d0, w0, #1") && !asm.contains("fmul"), "{asm}");
 }

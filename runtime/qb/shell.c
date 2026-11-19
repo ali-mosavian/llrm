@@ -39,7 +39,7 @@ void B_SSHL(SD *command)
     long result;
 
     if (length > TAIL_MAX - 3) {
-        str_tmp_free(command);
+        str_free_if_tmp(command);
         qb_error(BE_ILLFUN);
     }
     tail[1] = 0;
@@ -52,7 +52,7 @@ void B_SSHL(SD *command)
     }
     tail[0] = (char)length;
     tail[length + 1] = '\r';
-    str_tmp_free(command);
+    str_free_if_tmp(command);
     interpreter(shell);
     qb_shell_release();
     result = llrm_os_execute((os_path)shell, (os_path)tail);

@@ -1,90 +1,177 @@
-reason = "a BASIC procedure at m32 holds a value in the frame register and builds no frame (the driver now records the bytes a runtime callee pops, a push of a value is sized, x87 register bytes are inert, the freed registers reach masm): bq32 -O2 instructions -0..-10.5% (fib -10.5%, nbody -9.9%, particle -6.9%, shellsort -6.6%, hanoi -3.4%), code -3%..+7% ([esp+d] is a byte longer than [ebp+d]); -Os keeps BASIC's frame where size is tuned and masm compares the bytes: -4%..+0%, instructions +0..+2.5%"
-blessed = "2026-10-14"
+reason = "algebra reads its inputs from DATA: the references re-measured on the same kernel"
+blessed = "2026-11-14"
+corpus = "c4659e776b279a767169310e260c604b"
+
+[ow.O1]
+instructions = 184
+memory_operands = 24
+clocks = 622
+layout_clocks = 621
+pad_nops = 1
+code_bytes = 196
+data_bytes = 8
+bss_bytes = 4
+helper_bytes = 24
+kernel_ms = 0.0034
 
 [ow.O2]
-instructions = 186
-memory_operands = 20
-code_bytes = 172
-data_bytes = 0
+instructions = 190
+memory_operands = 24
+clocks = 600
+layout_clocks = 599
+pad_nops = 1
+code_bytes = 200
+data_bytes = 8
 bss_bytes = 4
-kernel_ms = 0.0038
+helper_bytes = 24
+kernel_ms = 0.0034
 
 [ow.Os]
-instructions = 180
-memory_operands = 20
-code_bytes = 168
-data_bytes = 0
+instructions = 184
+memory_operands = 24
+clocks = 622
+layout_clocks = 621
+pad_nops = 1
+code_bytes = 196
+data_bytes = 8
 bss_bytes = 4
-kernel_ms = 0.0037
+helper_bytes = 24
+kernel_ms = 0.0034
+
+[bcc.O1]
+instructions = 73
+memory_operands = 22
+clocks = 323
+layout_clocks = 323
+pad_nops = 0
+code_bytes = 166
+data_bytes = 8
+bss_bytes = 4
+helper_bytes = 0
+kernel_ms = 0.0021
 
 [bcc.O2]
-instructions = 72
-memory_operands = 19
-code_bytes = 177
-data_bytes = 0
+instructions = 77
+memory_operands = 24
+clocks = 286
+layout_clocks = 286
+pad_nops = 0
+code_bytes = 181
+data_bytes = 8
 bss_bytes = 4
+helper_bytes = 0
 kernel_ms = 0.0021
 
 [bcc.Os]
-instructions = 68
-memory_operands = 17
-code_bytes = 162
-data_bytes = 0
+instructions = 73
+memory_operands = 22
+clocks = 323
+layout_clocks = 323
+pad_nops = 0
+code_bytes = 166
+data_bytes = 8
 bss_bytes = 4
-kernel_ms = 0.002
+helper_bytes = 0
+kernel_ms = 0.0021
+
+[tc.O1]
+instructions = 220
+memory_operands = 27
+clocks = 682
+layout_clocks = 681
+pad_nops = 1
+code_bytes = 214
+data_bytes = 8
+bss_bytes = 4
+helper_bytes = 25
+kernel_ms = 0.004
 
 [tc.O2]
-instructions = 219
-memory_operands = 22
-code_bytes = 193
-data_bytes = 0
+instructions = 223
+memory_operands = 27
+clocks = 634
+layout_clocks = 634
+pad_nops = 0
+code_bytes = 221
+data_bytes = 8
 bss_bytes = 4
-kernel_ms = 0.004
-
-[tc.Os]
-instructions = 214
-memory_operands = 22
-code_bytes = 186
-data_bytes = 0
-bss_bytes = 4
-kernel_ms = 0.0039
-
-[tcpp.O2]
-instructions = 230
-memory_operands = 26
-code_bytes = 210
-data_bytes = 0
-bss_bytes = 4
+helper_bytes = 25
 kernel_ms = 0.0041
 
-[tcpp.Os]
-instructions = 224
-memory_operands = 26
-code_bytes = 206
-data_bytes = 0
+[tc.Os]
+instructions = 220
+memory_operands = 27
+clocks = 682
+layout_clocks = 681
+pad_nops = 1
+code_bytes = 214
+data_bytes = 8
 bss_bytes = 4
+helper_bytes = 25
 kernel_ms = 0.004
 
+[tcpp.O1]
+instructions = 228
+memory_operands = 30
+clocks = 735
+layout_clocks = 733
+pad_nops = 2
+code_bytes = 229
+data_bytes = 8
+bss_bytes = 4
+helper_bytes = 23
+kernel_ms = 0.0041
+
+[tcpp.O2]
+instructions = 234
+memory_operands = 30
+clocks = 702
+layout_clocks = 700
+pad_nops = 2
+code_bytes = 233
+data_bytes = 8
+bss_bytes = 4
+helper_bytes = 23
+kernel_ms = 0.0042
+
+[tcpp.Os]
+instructions = 228
+memory_operands = 30
+clocks = 735
+layout_clocks = 733
+pad_nops = 2
+code_bytes = 229
+data_bytes = 8
+bss_bytes = 4
+helper_bytes = 23
+kernel_ms = 0.0041
+
 [bc.O2]
-instructions = 344
-memory_operands = 147
-code_bytes = 323
-data_bytes = 7
-bss_bytes = 10
-kernel_ms = 0.0179
+instructions = 336
+memory_operands = 139
+clocks = 1208
+layout_clocks = 1208
+pad_nops = 0
+code_bytes = 352
+data_bytes = 42
+bss_bytes = 0
 
 [pds71.O2]
-instructions = 356
-memory_operands = 150
-code_bytes = 323
-data_bytes = 7
-bss_bytes = 10
-kernel_ms = 0.0156
+instructions = 348
+memory_operands = 142
+clocks = 1229
+layout_clocks = 1229
+pad_nops = 0
+code_bytes = 352
+data_bytes = 42
+bss_bytes = 0
 
 [vbdos.O2]
-instructions = 407
-memory_operands = 165
-code_bytes = 329
-data_bytes = 7
-bss_bytes = 10
-kernel_ms = 0.0138
+instructions = 399
+memory_operands = 157
+clocks = 1307
+layout_clocks = 1307
+pad_nops = 0
+code_bytes = 358
+data_bytes = 42
+bss_bytes = 0

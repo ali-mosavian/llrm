@@ -928,7 +928,9 @@ fn main() -> i16:
     print(sum(tail(a)))
     return 0
 ";
-    assert_eq!(uncaptured(views), ["sum.0"]);
+    // `sum.2`: a slice is passed as its two descriptor words, then its data
+    // pointer, the part the callee could keep.
+    assert_eq!(uncaptured(views), ["sum.2"]);
     // A generator's frame outlives its call; a raw pointer goes where nothing
     // follows it.
     let escapes = "\

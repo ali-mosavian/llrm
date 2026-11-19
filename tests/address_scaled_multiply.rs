@@ -59,18 +59,19 @@ fn a_factor_of_a_lea_and_an_address_scale_is_one_lea_at_every_level() {
     }
 }
 
-/// A multiply by 7 is no `lea` factor times a scale: the pin's `llc` on the
-/// same IR makes it `lea r, [i*8]` and `sub r, i` at both levels (no `imul`,
-/// which the selector once kept for `-Os` size), and so do we.
+/// A multiply by 7 is no `lea` factor times a scale. At -O2 and at -Os the
+/// pin's `llc` on the same IR makes it `lea r, [i*8]` and `sub r, i` (it keeps
+/// the `imul` at -Oz only), and so do we: the `imul` DEVIATE MUL-OS kept at -Os
+/// cost lru -Os 201 clk against 124.
 ///
 /// llrm-cc: the register that holds the index is `eax`, as in the pin's
 /// listing (pin-shape).
 #[test]
 fn a_factor_that_is_no_lea_times_a_scale_is_the_pins_lea_and_sub() {
     let source = "int a7(char *a, int i) { return a[7 * i]; }\n";
-    for level in ["-Os", "-O2"] {
-        let text = listing(source, level);
-        assert!(!text.contains("imul"), "{level}: {text}");
-        assert!(text.contains("*8]") && text.lines().any(|line| line.trim().starts_with("sub ")), "{level}: {text}");
-    }
+    let speed = listing(source, "-O2");
+    assert!(!speed.contains("imul"), "-O2: {speed}");
+    assert!(speed.contains("*8]") && speed.lines().any(|line| line.trim().starts_with("sub ")), "-O2: {speed}");
+    let size = listing(source, "-Os");
+    assert!(!size.contains("imul") && size.lines().any(|line| line.trim().starts_with("sub ")), "-Os: {size}");
 }

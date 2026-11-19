@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/framelowering.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/framelowering.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/framelowering.rs sha256:742c9645d2cacd346ce1033f71754756c782514674eda39c41e672e3ce8b9cad -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/framelowering.rs sha256:ea3abff6ce15e413e845f680f79fa2ca7b23f85110426520355d9e07c782e2ae -->
 
 # framelowering
 
@@ -32,11 +32,11 @@ dead caller-saved register in an epilogue) where one is free.
   add esp,12; pop edi; pop esi; pop ebp
 ```
 
-DEVIATE FL-1 (no number, owner w-6): Windows and SEH, funclets, the tail
+DEVIATE FL-1 (no number, owner object-refactor): Windows and SEH, funclets, the tail
 call return-address reserve, a Swift async context, the red zone, the
 stack probe and DWARF CFI are not translated: none applies to i486.
 
-DEVIATE FL-2 (no number, owner w-6): `mergeSPUpdates` and `mergeSPAdd`,
+DEVIATE FL-2 (no number, owner object-refactor): `mergeSPUpdates` and `mergeSPAdd`,
 which fold an adjacent stack update into this one, are not translated: a
 function of the frame alone sees no neighbour.
 

@@ -16,7 +16,7 @@ static int last_delta;
 void str_release(SD *sd) { if (sd->ptr) released++; }
 void str_owner_moved(SD *owner, int delta) { if (owner->ptr) { moves++; last_delta = delta; } }
 /* block.asm's B$COPY on the host: a forward byte copy. */
-void copy_bytes(char *to, const char *from, unsigned n) { while (n--) *to++ = *from++; }
+void copy_rt(char *to, const char *from, unsigned n) { while (n--) *to++ = *from++; }
 void lh_on_move(enum LhType type, LhMoved moved) { (void)type; (void)moved; }
 char *heap_low, *heap_top;
 void *lh_alloc(uword bytes, enum LhType type, void *owner, byte file)

@@ -344,17 +344,17 @@ fn a_xor_compared_with_its_operand_is_decided_by_the_other_operand() {
         "  %y = or i32 %y0, 1\n  %a = xor i32 %x, %y\n  %r = icmp sle i32 %x, %a\n  ret i1 %r\n",
         "  %y = or i32 %y0, 1\n  %a = xor i32 %x, %y\n  %0 = icmp sgt i32 %a, %x\n  ret i1 %0\n",
     );
-    // The pin goes on to `icmp slt i32 %x, 0` (`foldICmpBinOpWithConstant`,
-    // OWED).
+    // The sign-bit compare demands only the sign bit, which the xor leaves:
+    // `icmp slt i32 %x, 0`, as the pin (`SimplifyDemandedBits`).
     check(
         "i32 %x",
         "  %a = xor i32 %x, -8\n  %r = icmp ult i32 %a, %x\n  ret i1 %r\n",
-        "  %a = xor i32 %x, -8\n  %0 = icmp sgt i32 %a, -1\n  ret i1 %0\n",
+        "  %0 = icmp slt i32 %x, 0\n  ret i1 %0\n",
     );
     check(
         "i32 %x",
         "  %a = xor i32 %x, -8\n  %r = icmp sgt i32 %x, %a\n  ret i1 %r\n",
-        "  %a = xor i32 %x, -8\n  %0 = icmp slt i32 %a, 0\n  ret i1 %0\n",
+        "  %0 = icmp sgt i32 %x, -1\n  ret i1 %0\n",
     );
 }
 
@@ -455,14 +455,15 @@ fn two_operators_with_a_shared_second_operand_compare_their_first_operands() {
     );
 }
 
-/// `foldICmpBinOp`, `X * C == Y * C` for an even `C` compares the low bits
-/// (`opt` goes on to `icmp eq i32 (xor %a, %b) & 1073741823, 0`).
+/// `foldICmpBinOp`, `X * C == Y * C` for an even `C` compares the low bits,
+/// and `foldICmpEquality` makes it `icmp eq i32 (xor %a, %b) & 1073741823, 0`
+/// as `opt` does.
 #[test]
 fn an_even_shared_multiplier_in_an_equality_compares_the_low_bits() {
     check(
         "i32 %a, i32 %b",
         "  %p = mul i32 %a, 12\n  %q = mul i32 %b, 12\n  %r = icmp eq i32 %p, %q\n  ret i1 %r\n",
-        "  %0 = and i32 %a, 1073741823\n  %1 = and i32 %b, 1073741823\n  %2 = icmp eq i32 %0, %1\n  ret i1 %2\n",
+        "  %0 = xor i32 %a, %b\n  %1 = and i32 %0, 1073741823\n  %2 = icmp eq i32 %1, 0\n  ret i1 %2\n",
     );
 }
 
@@ -678,8 +679,10 @@ fn test_an_offset_and_mask_overflow_check_is_a_zero_test() {
         &format!("{m}  %r = icmp ule i16 %b, %m\n  ret i1 %r\n"),
         &format!("  %0 = icmp eq i16 %b, 0\n  ret i1 %0\n"),
     );
+    // Not a zero test; the mask shrinks the add's constant (`opt`: `add i16 %b,
+    // 1`).
     let other = "  %s = add i16 %b, 5\n  %m = and i16 %s, 3\n  %r = icmp ult i16 %m, %b\n  ret i1 %r\n";
-    check("i16 %b", other, other);
+    check("i16 %b", other, &other.replace("%b, 5", "%b, 1"));
 }
 
 /// `foldICmpMulConstant`; every shape pinned by `opt -passes=instcombine`
@@ -753,6 +756,26 @@ b0:
 ",
     );
     assert!(after.contains("icmp sgt i64 %x, 32") && !after.contains("getelementptr"), "{after}");
+}
+
+/// `foldGEPICmp` takes `GEPOperator`s, so a constant-expression GEP is a GEP:
+/// `p + %z` against `@cells + 3` compares `%z` with 3 Ours saw instruction
+/// GEPs only and kept the pointer compare (`frame_address_stack_args` -Os);
+/// the pin gives `icmp eq i32 %x, 3`.
+#[test]
+fn test_a_constant_expression_gep_compares_its_offset() {
+    let after = combined(
+        "@cells = global [16 x i8] zeroinitializer
+define i1 @f(i32 %x) {
+b0:
+  %z = zext nneg i32 %x to i64
+  %p = getelementptr inbounds nuw i8, ptr @cells, i64 %z
+  %c = icmp eq ptr %p, getelementptr inbounds nuw (i8, ptr @cells, i64 3)
+  ret i1 %c
+}
+",
+    );
+    assert!(after.contains("icmp eq i32 %x, 3") && !after.contains("icmp eq ptr"), "{after}");
 }
 
 /// Two GEPs of one base that differ in one index compare that index.
@@ -930,4 +953,344 @@ fn test_a_compare_of_a_narrower_inttoptr_is_kept() {
         "define i1 @f(i32 %x) {\nb0:\n  %p = inttoptr i32 %x to ptr\n  %r = icmp eq ptr %p, null\n  ret i1 %r\n}\n",
     );
     assert!(out.contains("icmp eq ptr"), "{out}");
+}
+
+/// `icmp-subadd.ll`: `sub`/`add` of the same operands under `pred`, as in
+/// the pin's cases, left as the compare of `y` alone.
+fn sub_add(
+    sub: &str,
+    add: &str,
+    pred: &str,
+    swapped: bool,
+    after: &str,
+) {
+    let (l, r) = if swapped { ("%add", "%sub") } else { ("%sub", "%add") };
+    let body = format!(
+        "  %sub = sub {sub} i8 %a, %b\n  %add = add {add} i8 %a, %b\n  %cmp = icmp {pred} i8 {l}, {r}\n  ret i1 %cmp\n"
+    );
+    check("i8 %a, i8 %b", &body, after);
+}
+
+/// `icmp sgt (sub nsw a, b), (add nsw a, b)` stayed three instructions
+/// instead of `icmp slt b, 0`; `slt`, `sle`, the commuted order and
+/// equality with `nsw` or `nuw` on each side follow.
+#[test]
+fn a_sub_and_an_add_of_the_same_operands_compare_as_b_against_zero() {
+    sub_add("nsw", "nsw", "sgt", false, "  %0 = icmp slt i8 %b, 0\n  ret i1 %0\n");
+    sub_add("nsw", "nsw", "slt", false, "  %0 = icmp sgt i8 %b, 0\n  ret i1 %0\n");
+    sub_add("nsw", "nsw", "sle", false, "  %0 = icmp sgt i8 %b, -1\n  ret i1 %0\n");
+    sub_add("nsw", "nsw", "sgt", true, "  %0 = icmp sgt i8 %b, 0\n  ret i1 %0\n");
+    sub_add("nsw", "nuw", "eq", false, "  %0 = icmp eq i8 %b, 0\n  ret i1 %0\n");
+    sub_add("nsw", "nsw", "eq", false, "  %0 = icmp eq i8 %b, 0\n  ret i1 %0\n");
+}
+
+/// A signed compare of `nuw` operands (and the reverse) is not the fold's.
+#[test]
+fn a_sub_and_an_add_without_the_flag_of_the_predicate_stay() {
+    let kept =
+        "  %sub = sub nuw i8 %a, %b\n  %add = add nuw i8 %a, %b\n  %cmp = icmp sge i8 %add, %sub\n  ret i1 %cmp\n";
+    sub_add("nuw", "nuw", "sge", true, kept);
+}
+
+/// `icmp-samesign-canonicalize.ll`, scalar cases: `x` against `c` under a
+/// `samesign` predicate.
+fn samesign(
+    pred: &str,
+    c: i32,
+    after: &str,
+) {
+    let body = format!("  %cmp = icmp samesign {pred} i8 %x, {c}\n  ret i1 %cmp\n");
+    check("i8 %x", &body, after);
+}
+
+/// `samesign uge x, 42` lost the flag (`icmp ugt x, 41`); the pin keeps it.
+#[test]
+fn canonicalizing_a_samesign_compare_keeps_samesign() {
+    samesign("uge", 42, "  %0 = icmp samesign ugt i8 %x, 41\n  ret i1 %0\n");
+    samesign("sge", 42, "  %0 = icmp samesign sgt i8 %x, 41\n  ret i1 %0\n");
+}
+
+/// A constant whose step crosses the sign boundary keeps its predicate:
+/// `samesign sge x, 0` was `sgt x, -1`.
+#[test]
+fn a_samesign_compare_is_not_canonicalized_across_the_sign_boundary() {
+    let kept = |pred: &str, c: i32| {
+        let body = format!("  %cmp = icmp samesign {pred} i8 %x, {c}\n  ret i1 %cmp\n");
+        check("i8 %x", &body, &body);
+    };
+    kept("sge", 0);
+    kept("sle", -1);
+}
+
+/// Both sides of an unsigned `samesign` compare share a sign: `ule x, 127`
+/// is true, `uge x, 127` is `x == 127`, `uge x, -128` is true. All three
+/// stayed compares.
+#[test]
+fn an_unsigned_samesign_compare_shares_the_known_sign_between_its_sides() {
+    samesign("ule", 127, "  ret i1 true\n");
+    samesign("uge", 127, "  %0 = icmp eq i8 %x, 127\n  ret i1 %0\n");
+    samesign("uge", -128, "  ret i1 true\n");
+}
+
+const CONSTANT_PHI_LOOP: &str = "declare void @report(i32)
+
+define i32 @f() {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i32 [ 0, %b0 ], [ 1, %b1 ]
+  %r = add nuw nsw i32 %i, 7
+  call void @report(i32 %r)
+  %c = icmp eq i32 %i, 0
+  br i1 %c, label %b1, label %b2
+
+b2:
+  ret i32 0
+}
+";
+
+/// `@f` after `visitICmpInst` on a target that does (`on`) or does not fold a
+/// compare of a constant phi.
+fn combined_on(
+    text: &str,
+    on: bool,
+) -> String {
+    let mut module = parsed(text);
+    let globals = module.globals.clone();
+    let metadata = module.metadata.clone();
+    let mut declared = llrm_mir::passes::Declared::of(&module);
+    let (context, function) = module.function_mut("f").expect("@f");
+    let hooks = crate::combine::TargetHooks { icmp_of_constant_phi: on, ..Default::default() };
+    crate::combine::combine_for(
+        context,
+        &globals,
+        &Default::default(),
+        &metadata,
+        &DataLayout::default(),
+        function,
+        visit,
+        false,
+        &mut declared,
+        hooks,
+    );
+    declared.place(&mut module).unwrap();
+    printed(&module)
+}
+
+/// `icmp eq (phi [0, 1]), 0` stayed a compare: the loop exit test never became
+/// `phi i1 [true], [false]`, so SimplifyCFG could not thread it and the
+/// two-trip loop was not unrolled at optsize (wasm function_table -Os, +4 B).
+#[test]
+fn test_a_compare_of_a_constant_phi_is_a_phi_of_the_folded_compares() {
+    let out = combined_on(CONSTANT_PHI_LOOP, true);
+    assert!(out.contains("phi i1 [ true, %b0 ], [ false, %b1 ]"), "{out}");
+    assert!(!out.contains("icmp"), "{out}");
+    assert!(out.contains("%i = phi i32"), "the integer phi keeps its other user: {out}");
+}
+
+/// m68k, z80 and 6502 handle the live i1 exit test badly (31 cells, +295 B):
+/// where the target says no, the compare stays.
+#[test]
+fn test_a_target_that_declines_keeps_the_compare_of_a_constant_phi() {
+    let out = combined_on(CONSTANT_PHI_LOOP, false);
+    assert!(out.contains("icmp eq i32 %i, 0"), "{out}");
+    assert!(!out.contains("phi i1"), "{out}");
+}
+
+fn division_compare_on(
+    keep: bool,
+) -> String {
+    let text = "define i1 @f(i16 %v, ptr %p) {
+  %q = udiv i16 %v, 10
+  store i16 %q, ptr %p
+  %c = icmp ugt i16 %q, 9
+  ret i1 %c
+}";
+    let mut module = parsed(text);
+    let globals = module.globals.clone();
+    let metadata = module.metadata.clone();
+    let mut declared = llrm_mir::passes::Declared::of(&module);
+    let (context, function) = module.function_mut("f").expect("@f");
+    let hooks = crate::combine::TargetHooks { keeps_shared_division_compare: keep, ..Default::default() };
+    crate::combine::combine_for(
+        context,
+        &globals,
+        &Default::default(),
+        &metadata,
+        &DataLayout::default(),
+        function,
+        visit,
+        false,
+        &mut declared,
+        hooks,
+    );
+    declared.place(&mut module).unwrap();
+    printed(&module)
+}
+
+/// `v / 10 >= 10` with the quotient also stored became `v > 99`, which kept
+/// `v` live across the divide call beside the quotient (6502 digits -Os: +63 B
+/// of push, pop and copies). The pin folds it; a target that keeps it does not.
+#[test]
+fn test_a_compare_of_a_shared_quotient_stays_a_compare_of_the_quotient_where_kept() {
+    let kept = division_compare_on(true);
+    assert!(kept.contains("%q, 9"), "{kept}");
+    let pin = division_compare_on(false);
+    assert!(pin.contains("%v, 99"), "{pin}");
+}
+
+/// The quotient has no other use: the range test saves the divide, on every target.
+#[test]
+fn test_a_compare_of_an_unshared_quotient_is_a_range_test_even_where_kept() {
+    let text = "define i1 @f(i16 %v) {
+  %q = udiv i16 %v, 10
+  %c = icmp ugt i16 %q, 9
+  ret i1 %c
+}";
+    let mut module = parsed(text);
+    let globals = module.globals.clone();
+    let metadata = module.metadata.clone();
+    let mut declared = llrm_mir::passes::Declared::of(&module);
+    let (context, function) = module.function_mut("f").expect("@f");
+    let hooks = crate::combine::TargetHooks { keeps_shared_division_compare: true, ..Default::default() };
+    crate::combine::combine_for(
+        context,
+        &globals,
+        &Default::default(),
+        &metadata,
+        &DataLayout::default(),
+        function,
+        visit,
+        false,
+        &mut declared,
+        hooks,
+    );
+    declared.place(&mut module).unwrap();
+    assert!(printed(&module).contains("%v, 99"), "{}", printed(&module));
+}
+
+/// A divide by a power of two is a shift: its compare folds as the pin's does
+/// (6502 idioms `i < n / 2`, +40 B when it was kept).
+#[test]
+fn test_a_compare_of_a_shared_quotient_by_a_power_of_two_is_a_range_test_even_where_kept() {
+    let text = "define i1 @f(i16 %v, ptr %p) {
+  %q = udiv i16 %v, 4
+  store i16 %q, ptr %p
+  %c = icmp ugt i16 %q, 9
+  ret i1 %c
+}";
+    let mut module = parsed(text);
+    let globals = module.globals.clone();
+    let metadata = module.metadata.clone();
+    let mut declared = llrm_mir::passes::Declared::of(&module);
+    let (context, function) = module.function_mut("f").expect("@f");
+    let hooks = crate::combine::TargetHooks { keeps_shared_division_compare: true, ..Default::default() };
+    crate::combine::combine_for(
+        context,
+        &globals,
+        &Default::default(),
+        &metadata,
+        &DataLayout::default(),
+        function,
+        visit,
+        false,
+        &mut declared,
+        hooks,
+    );
+    declared.place(&mut module).unwrap();
+    assert!(printed(&module).contains("%v, 39"), "{}", printed(&module));
+}
+
+/// `matchSymmetricPair` in `visitICmpInst`: two selects that swap their arms
+/// compare as the arms. The pin's `icmp ne %1, %0` kept `sf_cmp_bits`'s
+/// three-way compare a select chain (cost 50, not inlined into seven wrappers);
+/// ours, comparing the selects, made `scmp` (cost 35) and inlined it: wasm
+/// sfm16_float_* -Os +418 B over the pin with the size guard off.
+#[test]
+fn a_swapped_select_pair_compares_as_its_two_arms() {
+    let params = "i1 %c, i16 %a, i16 %b";
+    let body = "  %s = select i1 %c, i16 %a, i16 %b\n  %t = select i1 %c, i16 %b, i16 %a\n  %r = icmp ne i16 %s, %t\n  ret i1 %r\n";
+    let after = "  %r = icmp ne i16 %a, %b\n  ret i1 %r\n";
+    check(params, body, after);
+}
+
+/// m16 sfm16_float: the fold turned two 16-bit selects into a 64-bit arm compare,
+/// +4 B in 24 objects. A target that keeps the selects leaves the compare as written.
+#[test]
+fn test_a_swapped_select_pair_compare_stays_where_the_target_keeps_it() {
+    let text = "define i1 @f(i1 %c, i16 %a, i16 %b) {
+  %s = select i1 %c, i16 %a, i16 %b
+  %t = select i1 %c, i16 %b, i16 %a
+  %r = icmp ne i16 %s, %t
+  ret i1 %r
+}";
+    let run = |keep: bool| {
+        let mut module = parsed(text);
+        let globals = module.globals.clone();
+        let metadata = module.metadata.clone();
+        let mut declared = llrm_mir::passes::Declared::of(&module);
+        let (context, function) = module.function_mut("f").expect("@f");
+        let hooks = crate::combine::TargetHooks { keeps_swapped_select_compare: keep, ..Default::default() };
+        crate::combine::combine_for(
+            context,
+            &globals,
+            &Default::default(),
+            &metadata,
+            &DataLayout::default(),
+            function,
+            visit,
+            false,
+            &mut declared,
+            hooks,
+        );
+        declared.place(&mut module).unwrap();
+        printed(&module)
+    };
+    let kept = run(true);
+    assert!(kept.contains("icmp ne i16 %s, %t"), "{kept}");
+    let pin = run(false);
+    assert!(pin.contains("icmp ne i16 %a, %b"), "{pin}");
+}
+
+fn zero_quotient_compare_on(
+    keep: bool,
+) -> String {
+    let text = "define i1 @f(i16 %u, i16 %r, ptr %p) {
+  %q = udiv i16 %u, %r
+  store i16 %q, ptr %p
+  %c = icmp ne i16 %q, 0
+  ret i1 %c
+}";
+    let mut module = parsed(text);
+    let globals = module.globals.clone();
+    let metadata = module.metadata.clone();
+    let mut declared = llrm_mir::passes::Declared::of(&module);
+    let (context, function) = module.function_mut("f").expect("@f");
+    let hooks = crate::combine::TargetHooks { keeps_shared_division_compare: keep, ..Default::default() };
+    crate::combine::combine_for(
+        context,
+        &globals,
+        &Default::default(),
+        &metadata,
+        &DataLayout::default(),
+        function,
+        visit,
+        false,
+        &mut declared,
+        hooks,
+    );
+    declared.place(&mut module).unwrap();
+    printed(&module)
+}
+
+/// `u / radix != 0` with the quotient the next trip's `u` became `radix <= u`,
+/// keeping `u` live across the divide call (6502 k_itoa -Os: two more cells
+/// saved and copied). The pin folds it; a target that keeps the compare does not.
+#[test]
+fn test_a_zero_test_of_a_shared_quotient_stays_a_test_of_the_quotient_where_kept() {
+    let kept = zero_quotient_compare_on(true);
+    assert!(kept.contains("icmp ne i16 %q, 0"), "{kept}");
+    let pin = zero_quotient_compare_on(false);
+    assert!(pin.contains("icmp ule i16 %r, %u"), "{pin}");
 }

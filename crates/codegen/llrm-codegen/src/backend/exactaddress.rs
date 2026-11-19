@@ -440,8 +440,9 @@ fn rewritten(
         .try_fold(before.iter().filter(|term| term.0 != root).copied().collect(), add)?;
     let terms: Vec<(RegId, i64)> = sum.iter().map(|term| (term.0, term.1)).collect();
     let address = affine::form(regs, &terms, 0, &form.scales)?;
-    let value =
-        |register: RegId| sum.iter().find(|term| term.0 == register).map(|term| Held { value: term.2, width: 4 });
+    let value = |register: RegId| {
+        sum.iter().find(|term| term.0 == register).map(|term| Held { value: term.2, width: 4, offset: 0 })
+    };
     let (base, index) = (value(address.through), value(address.index_through));
     // A far cell keeps its origin as the base, unless the origin was a
     // constant and the one register the cell had was all offset.
@@ -739,8 +740,8 @@ mod tests {
             addr: Some(Addr { segment: (RegId::FS).iced(), ..Addr::new(Space::Far, 0) }),
             // The allocator names BX first for the 16-bit encoding.
             through: RegId::BX,
-            base: Some(Held { value: 26, width: 2 }),
-            index: Some(Held { value: 21, width: 2 }),
+            base: Some(Held { value: 26, width: 2, offset: 0 }),
+            index: Some(Held { value: 21, width: 2, offset: 0 }),
             index_through: RegId::DI,
             exact: true,
             ..Mem::new(None, 2)
@@ -778,7 +779,7 @@ mod tests {
         let Loc::Mem(cell) = &load.what.as_ref().unwrap().sources[0] else { panic!("not a cell") };
         assert_eq!(
             (cell.index, cell.scale, cell.through, cell.index_through),
-            (Some(Held { value: 20, width: 4 }), 2, RegId::EDI, RegId::EBX)
+            (Some(Held { value: 20, width: 4, offset: 0 }), 2, RegId::EDI, RegId::EBX)
         );
         assert!(load.uses.contains(&20) && !load.uses.contains(&21));
     }
@@ -790,7 +791,7 @@ mod tests {
         let cell = |index: i64| Mem {
             addr: Some(Addr { index, ..Addr::new(Space::Segment, 0) }),
             through: RegId::SI,
-            base: Some(Held { value: 12, width: 2 }),
+            base: Some(Held { value: 12, width: 2, offset: 0 }),
             exact: true,
             ..Mem::new(None, 2)
         };
@@ -834,7 +835,7 @@ mod tests {
         let cell = |index: i64| Mem {
             addr: Some(Addr { index, ..Addr::new(Space::Segment, 0) }),
             through: RegId::SI,
-            base: Some(Held { value: 12, width: 2 }),
+            base: Some(Held { value: 12, width: 2, offset: 0 }),
             exact: true,
             ..Mem::new(None, 2)
         };
@@ -889,7 +890,7 @@ mod tests {
         let cell = |index: i64| Mem {
             addr: Some(Addr { index, ..Addr::new(Space::Segment, 0) }),
             through: RegId::SI,
-            base: Some(Held { value: 12, width: 2 }),
+            base: Some(Held { value: 12, width: 2, offset: 0 }),
             exact: true,
             ..Mem::new(None, 2)
         };

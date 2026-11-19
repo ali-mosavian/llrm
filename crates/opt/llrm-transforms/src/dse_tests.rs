@@ -637,8 +637,17 @@ b3:
 
 /// `text` through Dse alone: @f printed. The interpreter does not run it.
 fn ran(text: &str) -> String {
+    ran_on("", text)
+}
+
+/// `ran` over a module of the given `target datalayout` ("" for the default).
+fn ran_on(
+    layout: &str,
+    text: &str,
+) -> String {
+    let layout = if layout.is_empty() { String::new() } else { format!("target datalayout = \"{layout}\"\n") };
     let mut module = parsed(&format!(
-        "@g = global [64 x i8] zeroinitializer\ndeclare void @anything()\ndeclare void @setter() memory(write)\n\n{text}"
+        "{layout}@g = global [64 x i8] zeroinitializer\ndeclare void @anything()\ndeclare void @setter() memory(write)\n\n{text}"
     ));
     let mut manager = PassManager::default();
     manager.verify_each = true;
@@ -718,4 +727,130 @@ fn test_an_unknown_pointer_does_not_observe_a_private_cell() {
         "define i16 @f(ptr %p) {\nb0:\n  %s = alloca i16\n  store i16 1, ptr %s\n  %x = load i16, ptr %p\n  ret i16 %x\n}\n",
     );
     assert!(!after.contains("store"), "{after}");
+}
+
+/// `getLocForWrite`/`isRemovable` of a call: `six` kept `call @w(%m)` (+120 B
+/// in tests/run/c/over_aligned_local_after_even_pushes.c on wasm32) though `@w`
+/// only writes its argument, comes back, and `%m` is dead after `lifetime.end`.
+/// A call that may not come back, may read, or whose result is used stays.
+#[test]
+fn a_dead_call_that_only_writes_its_argument_is_removed() {
+    for (attrs, ret, kept) in [
+        ("willreturn memory(argmem: write)", "void", 0),
+        ("memory(argmem: write)", "void", 1),
+        ("willreturn memory(argmem: write)", "i16", 1),
+        ("willreturn memory(argmem: readwrite)", "void", 1),
+    ] {
+        let def = if ret == "void" { "" } else { "%r = " };
+        let ret_value = if ret == "void" { "%x" } else { "%r" };
+        let after = ran(&format!(
+            "declare {ret} @w(ptr) {attrs}
+declare void @llvm.lifetime.start.p0(i64 immarg, ptr nocapture) nocallback nofree nosync nounwind willreturn memory(argmem: readwrite)
+declare void @llvm.lifetime.end.p0(i64 immarg, ptr nocapture) nocallback nofree nosync nounwind willreturn memory(argmem: readwrite)
+
+define i16 @f(i16 %x) {{
+b0:
+  %m = alloca [8 x i16]
+  call void @llvm.lifetime.start.p0(i64 16, ptr %m)
+  {def}call {ret} @w(ptr %m)
+  call void @llvm.lifetime.end.p0(i64 16, ptr %m)
+  ret i16 {ret_value}
+}}
+"
+        ));
+        assert_eq!(after.matches("@w(").count(), kept, "{attrs} {ret}: {after}");
+    }
+}
+
+/// A byte stored over the first byte of an `i16` constant is its high byte on a
+/// big-endian target: merged little-endian, m68k -O2 wrote 0x07060504 for
+/// 0x04050607 (tests/run/c/memmove_overlap printed 142037926, not 96854020).
+#[test]
+fn test_a_merged_partial_overlap_store_follows_the_byte_order() {
+    for (layout, merged) in [("E", 0x0902), ("e", 0x0109)] {
+        let after = ran_on(
+            layout,
+            &format!(
+                "define void @f() {{\nb0:\n  store i16 258, ptr {CELL}\n  store i8 9, ptr {CELL}\n  ret void\n}}\n"
+            ),
+        );
+        assert!(after.contains(&format!("store i16 {merged},")), "{layout}: {after}");
+    }
+}
+
+/// `text` through Dse alone, not run: @f printed.
+fn dropped_unrun(text: &str) -> String {
+    let mut module = parsed(text);
+    let mut manager = PassManager::default();
+    manager.verify_each = true;
+    manager.require::<Summaries>();
+    manager.add(Dse);
+    manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
+    let after = printed(&module);
+    after[after.find("@f(").unwrap()..].to_owned()
+}
+
+/// MemorySSA gave a `noalias.scope.decl` a MemoryDef (the pin's `createNewAccess`
+/// gives it none), so the load of other bytes before it read as a clobber and the
+/// byte store a later `i64` store covers survived: bitfield_long_long wasm32 +12 B
+/// (`i32.const 12; i32.store8` beside the covering `i64.store`).
+#[test]
+fn a_noalias_scope_declaration_does_not_keep_a_covered_store() {
+    let text = dropped_unrun(
+        "@g = global i64 0
+
+declare void @llvm.experimental.noalias.scope.decl()
+
+define void @f() {
+b0:
+  store i8 12, ptr @g
+  %p = getelementptr inbounds nuw i8, ptr @g, i32 5
+  %l = load i24, ptr %p, align 1
+  call void @llvm.experimental.noalias.scope.decl(), !noalias.scope.decl !1
+  %e = zext i24 %l to i64
+  %s = shl nuw i64 %e, 40
+  %o = or disjoint i64 %s, 884479243276
+  store i64 %o, ptr @g
+  ret void
+}
+
+!0 = distinct !{!0, !\"domain\"}
+!2 = distinct !{!2, !0, !\"scope\"}
+!1 = !{!2}
+",
+    );
+    assert!(!text.contains("store i8 12"), "{text}");
+}
+
+/// A memset cut at its start kept `align 16` on its moved destination: `memset(@a + 2, 0, 126) align 16` was stored
+/// with `movaps` at an address 2 bytes off a 16-byte boundary, a segfault (pattern_fill -O3 once the loop around it
+/// unrolled). The pin keeps the alignment true: a cut of less than one alignment is not made, a longer one is made as
+/// far as a multiple of it (`tryToShorten`).
+#[test]
+fn a_memset_is_cut_only_where_its_alignment_stays_true() {
+    let two_bytes = "  store i16 1, ptr @a\n";
+    let twenty_bytes = "  store i64 1, ptr @a
+  %p = getelementptr i8, ptr @a, i64 8
+  store i64 2, ptr %p
+  %q = getelementptr i8, ptr @a, i64 16
+  store i32 3, ptr %q
+";
+    for (stores, length, destination) in
+        [(two_bytes, "i64 128", "ptr align 16 @a"), (twenty_bytes, "i64 112", "ptr align 16 %0")]
+    {
+        let after = promoted(&format!(
+            "@a = global [64 x i16] zeroinitializer, align 16
+
+define void @f() {{
+b0:
+  call void @llvm.memset.p0.i64(ptr align 16 @a, i8 0, i64 128, i1 false)
+{stores}  ret void
+}}
+
+declare void @llvm.memset.p0.i64(ptr nocapture writeonly, i8, i64, i1 immarg) nocallback nofree nounwind willreturn memory(argmem: write)
+"
+        ));
+        let call = after.lines().find(|line| line.contains("call void @llvm.memset")).expect("a memset stays");
+        assert!(call.contains(length) && call.contains(destination), "{after}");
+    }
 }

@@ -36,6 +36,91 @@ impl Reg {
     }
 }
 
+/// The registers of one operation: held in place up to `INLINE`, more than
+/// that on the heap. Almost every operation names fewer, so listing them
+/// allocates nothing.
+#[derive(Clone, Debug)]
+pub struct RegList {
+    length: usize,
+    inline: [Reg; Self::INLINE],
+    spilled: Vec<Reg>,
+}
+
+impl RegList {
+    const INLINE: usize = 6;
+
+    pub fn new() -> Self {
+        Self { length: 0, inline: [Reg::Gpr(Gpr(0)); Self::INLINE], spilled: Vec::new() }
+    }
+
+    pub fn push(
+        &mut self,
+        register: Reg,
+    ) {
+        if self.spilled.is_empty() && self.length < Self::INLINE {
+            self.inline[self.length] = register;
+            self.length += 1;
+            return;
+        }
+        if self.spilled.is_empty() {
+            self.spilled.extend_from_slice(&self.inline);
+        }
+        self.spilled.push(register);
+    }
+
+    pub fn as_slice(&self) -> &[Reg] {
+        if self.spilled.is_empty() { &self.inline[..self.length] } else { &self.spilled }
+    }
+}
+
+impl Default for RegList {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl std::ops::Deref for RegList {
+    type Target = [Reg];
+
+    fn deref(&self) -> &[Reg] {
+        self.as_slice()
+    }
+}
+
+/// A [`RegList`] taken by value, one register at a time.
+pub struct RegListIter {
+    list: RegList,
+    at: usize,
+}
+
+impl Iterator for RegListIter {
+    type Item = Reg;
+
+    fn next(&mut self) -> Option<Reg> {
+        let next = self.list.as_slice().get(self.at).copied();
+        self.at += 1;
+        next
+    }
+}
+
+impl IntoIterator for RegList {
+    type IntoIter = RegListIter;
+    type Item = Reg;
+
+    fn into_iter(self) -> RegListIter {
+        RegListIter { list: self, at: 0 }
+    }
+}
+
+impl<'a> IntoIterator for &'a RegList {
+    type IntoIter = std::slice::Iter<'a, Reg>;
+    type Item = &'a Reg;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.as_slice().iter()
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Role {
     Def,
@@ -126,6 +211,11 @@ impl Inst {
                 f(G(rn), Role::Use);
                 f(G(rm), Role::Use);
             }
+            Inst::AddCarry { rd, rn, rm, .. } => {
+                f(G(rd), Role::Def);
+                f(G(rn), Role::Use);
+                f(G(rm), Role::Use);
+            }
             Inst::CondCompare { rn, rm_or_imm, .. } => {
                 f(G(rn), Role::Use);
                 if let CcOperand::Reg(rm) = rm_or_imm {
@@ -154,7 +244,7 @@ impl Inst {
             | Inst::Dmb { .. }
             | Inst::Nop => {}
             Inst::CompareBranch { rt, .. } | Inst::TestBranch { rt, .. } => f(G(rt), Role::Use),
-            Inst::Cfi(_) => {}
+            Inst::Cfi(_) | Inst::Mark(_) | Inst::Label(_) => {}
             Inst::BranchReg { rn, .. } | Inst::Ret { rn } => f(G(rn), Role::Use),
             Inst::Load { mem, addr, .. } => {
                 memory(mem, Role::Def, f);
@@ -176,7 +266,10 @@ impl Inst {
             }
             Inst::Adr { rd, .. } => f(G(rd), Role::Def),
             Inst::Prefetch { base, .. } => f(G(base), Role::Use),
-            Inst::FpUnary { rd, rn, .. } | Inst::FpToFp { rd, rn, .. } | Inst::VectorMov { rd, rn } => {
+            Inst::FpUnary { rd, rn, .. }
+            | Inst::FpToFp { rd, rn, .. }
+            | Inst::FpLaneToFp { rd, rn, .. }
+            | Inst::VectorMov { rd, rn } => {
                 f(Fpr(rd), Role::Def);
                 f(Fpr(rn), Role::Use);
             }
@@ -197,10 +290,131 @@ impl Inst {
                     f(Fpr(rm), Role::Use);
                 }
             }
+            Inst::FpCondCompare { rn, rm, .. } => {
+                f(Fpr(rn), Role::Use);
+                f(Fpr(rm), Role::Use);
+            }
             Inst::FpMoveImm { rd, .. } => f(Fpr(rd), Role::Def),
+            Inst::VectorBinary { rd, rn, rm, .. } => {
+                f(Fpr(rd), Role::Def);
+                f(Fpr(rn), Role::Use);
+                f(Fpr(rm), Role::Use);
+            }
+            Inst::VectorCompare { rd, rn, rm, .. } => {
+                f(Fpr(rd), Role::Def);
+                f(Fpr(rn), Role::Use);
+                f(Fpr(rm), Role::Use);
+            }
+            Inst::VectorCompareZero { rd, rn, .. } => {
+                f(Fpr(rd), Role::Def);
+                f(Fpr(rn), Role::Use);
+            }
+            Inst::VectorBitSelect { rd, rn, rm, .. } => {
+                f(Fpr(rd), Role::UseDef);
+                f(Fpr(rn), Role::Use);
+                f(Fpr(rm), Role::Use);
+            }
+            Inst::VectorBsp { rd, mask, rn, rm, .. } => {
+                f(Fpr(rd), Role::Def);
+                f(Fpr(mask), Role::Use);
+                f(Fpr(rn), Role::Use);
+                f(Fpr(rm), Role::Use);
+            }
+            Inst::VectorFma { rd, rn, rm, .. } | Inst::VectorMulAcc { rd, rn, rm, .. } => {
+                f(Fpr(rd), Role::UseDef);
+                f(Fpr(rn), Role::Use);
+                f(Fpr(rm), Role::Use);
+            }
+            Inst::VectorInsGpr { rd, rn, .. } => {
+                f(Fpr(rd), Role::UseDef);
+                f(G(rn), Role::Use);
+            }
+            Inst::VectorFmaLane { rd, rn, rm, .. } | Inst::ScalarFmaLane { rd, rn, rm, .. } => {
+                f(Fpr(rd), Role::UseDef);
+                f(Fpr(rn), Role::Use);
+                f(Fpr(rm), Role::Use);
+            }
+            Inst::VectorNarrow { high: false, rd, rn, .. } => {
+                f(Fpr(rd), Role::Def);
+                f(Fpr(rn), Role::Use);
+            }
+            Inst::VectorPermute { rd, rn, rm, .. } => {
+                f(Fpr(rd), Role::Def);
+                f(Fpr(rn), Role::Use);
+                f(Fpr(rm), Role::Use);
+            }
+            Inst::VectorNarrow { high: true, rd, rn, .. } => {
+                f(Fpr(rd), Role::UseDef);
+                f(Fpr(rn), Role::Use);
+            }
+            Inst::VectorFmulLane { rd, rn, rm, .. } | Inst::VectorMulLane { rd, rn, rm, .. } => {
+                f(Fpr(rd), Role::Def);
+                f(Fpr(rn), Role::Use);
+                f(Fpr(rm), Role::Use);
+            }
+            Inst::VectorLoadLane { rt, base, .. } => {
+                f(Fpr(rt), Role::UseDef);
+                f(G(base), Role::Use);
+            }
+            // The registers are physical and consecutive: a rewrite of one
+            // would break the run, so none is applied.
+            Inst::VectorLoadStructure { count, rt, base, .. } => {
+                for at in 0..u32::from(*count) {
+                    f(Fpr(&mut rt.in_run(at)), Role::Def);
+                }
+                f(G(base), Role::Use);
+            }
+            Inst::VectorStoreStructure { count, rt, base, .. } => {
+                for at in 0..u32::from(*count) {
+                    f(Fpr(&mut rt.in_run(at)), Role::Use);
+                }
+                f(G(base), Role::Use);
+            }
+            Inst::VectorLoadReplicate { rt, base, .. } => {
+                f(Fpr(rt), Role::Def);
+                f(G(base), Role::Use);
+            }
+            Inst::VectorStoreLane { rt, base, .. } => {
+                f(Fpr(rt), Role::Use);
+                f(G(base), Role::Use);
+            }
+            Inst::VectorUmov { rd, rn, .. } | Inst::VectorSmov { rd, rn, .. } => {
+                f(G(rd), Role::Def);
+                f(Fpr(rn), Role::Use);
+            }
+            Inst::VectorInsLane { rd, rn, .. } => {
+                f(Fpr(rd), Role::UseDef);
+                f(Fpr(rn), Role::Use);
+            }
+            Inst::VectorDupLane { rd, rn, .. } | Inst::VectorDupScalar { rd, rn, .. } => {
+                f(Fpr(rd), Role::Def);
+                f(Fpr(rn), Role::Use);
+            }
+            Inst::VectorFpBinary { rd, rn, rm, .. } => {
+                f(Fpr(rd), Role::Def);
+                f(Fpr(rn), Role::Use);
+                f(Fpr(rm), Role::Use);
+            }
+            Inst::VectorLong { op, rd, rn, rm, .. } => {
+                f(Fpr(rd), if op.accumulates() { Role::UseDef } else { Role::Def });
+                f(Fpr(rn), Role::Use);
+                f(Fpr(rm), Role::Use);
+            }
+            Inst::VectorShift { op, rd, rn, .. } => {
+                f(Fpr(rd), if op.accumulates() { Role::UseDef } else { Role::Def });
+                f(Fpr(rn), Role::Use);
+            }
+            Inst::VectorLongShift { rd, rn, .. }
+            | Inst::VectorNot { rd, rn, .. }
+            | Inst::VectorFpUnary { rd, rn, .. }
+            | Inst::VectorIntUnary { rd, rn, .. }
+            | Inst::VectorReduce { rd, rn, .. } => {
+                f(Fpr(rd), Role::Def);
+                f(Fpr(rn), Role::Use);
+            }
             Inst::VectorFill { rd, fill } => {
                 f(Fpr(rd), Role::Def);
-                if let Fill::Gpr(source) = fill {
+                if let Fill::Dup(_, source) = fill {
                     f(G(source), Role::Use);
                 }
             }
@@ -218,8 +432,8 @@ impl Inst {
     }
 
     /// The registers it writes and the registers it reads.
-    pub fn defs_and_uses(&self) -> (Vec<Reg>, Vec<Reg>) {
-        let (mut defs, mut uses) = (Vec::new(), Vec::new());
+    pub fn defs_and_uses(&self) -> (RegList, RegList) {
+        let (mut defs, mut uses) = (RegList::new(), RegList::new());
         self.clone().visit(&mut |register, role| {
             let key = register.key();
             if role.writes() {

@@ -27,7 +27,7 @@
 //! read from the tail, the tail's edge odds move to the predecessor, and the
 //! tail goes when nothing reaches it.
 //!
-//! DEVIATE ET1 (owner w-1, exit: step 3): a tail with a phi, or whose values
+//! DEVIATE ET1 (owner anyisa, exit: step 3): a tail with a phi, or whose values
 //! are read outside it, is left (`processPHI`, `updateSuccessorsPHIs`, the SSA
 //! update). Nothing calls `tail_duplicate` yet.
 //!
@@ -73,21 +73,21 @@ fn is_real(one: &crate::model::lir::Insn) -> bool {
 }
 
 /// The block's instructions that are neither meta nor a no-op.
-fn real(block: &Block) -> impl DoubleEndedIterator<Item = &crate::model::lir::Insn> {
+pub(super) fn real(block: &Block) -> impl DoubleEndedIterator<Item = &crate::model::lir::Insn> {
     block.insns.iter().map(|one| &**one).filter(|one| is_real(one))
 }
 
-fn operation(one: &crate::model::lir::Insn) -> Option<Operation> {
+pub(super) fn operation(one: &crate::model::lir::Insn) -> Option<Operation> {
     one.what.as_ref().map(|what| what.op)
 }
 
-fn indirect(one: &crate::model::lir::Insn) -> bool {
+pub(super) fn indirect(one: &crate::model::lir::Insn) -> bool {
     one.what.as_ref().is_some_and(|what| matches!(what.op, Operation::Jump | Operation::Branch) && what.indirect)
 }
 
 /// `canFallThrough`: the block's last instruction is not a jump with no
 /// condition or a return.
-fn can_fall_through(block: &Block) -> bool {
+pub(super) fn can_fall_through(block: &Block) -> bool {
     match real(block).next_back() {
         Some(last) => !matches!(operation(last), Some(Operation::Return | Operation::Jump)),
         None => true,
@@ -95,17 +95,17 @@ fn can_fall_through(block: &Block) -> bool {
 }
 
 /// Distinct successors of `block`.
-fn successors(block: &Block) -> Vec<i64> {
+pub(super) fn successors(block: &Block) -> Vec<i64> {
     crate::model::lir::distinct(&block.succ)
 }
 
 /// Where each block's edges come from, as places in `body.blocks`: made once
 /// for a round of `duplicated`, where each candidate would otherwise scan the
 /// body.
-struct Preds(HashMap<i64, Vec<usize>>);
+pub(super) struct Preds(HashMap<i64, Vec<usize>>);
 
 impl Preds {
-    fn of(body: &LirBody) -> Self {
+    pub(super) fn of(body: &LirBody) -> Self {
         let mut from: HashMap<i64, Vec<usize>> = HashMap::default();
         for (place, block) in body.blocks.iter().enumerate() {
             for to in crate::model::lir::distinct(&block.succ) {
@@ -116,7 +116,7 @@ impl Preds {
     }
 
     /// The places of the blocks that go to `at`.
-    fn places(
+    pub(super) fn places(
         &self,
         at: i64,
     ) -> &[usize] {
@@ -132,7 +132,7 @@ pub fn is_simple(
     is_simple_in(&Preds::of(body), tail)
 }
 
-fn is_simple_in(
+pub(super) fn is_simple_in(
     preds: &Preds,
     tail: &Block,
 ) -> bool {
@@ -251,7 +251,7 @@ fn should_tail_duplicate_in(
 /// predecessor that can go to its successor directly does, whatever it ends in.
 /// A predecessor that already goes to the successor, which has phis, is left
 /// (`bothUsedInPHI`).
-fn duplicate_simple(
+pub(super) fn duplicate_simple(
     body: &LirBody,
     at: usize,
 ) -> Option<LirBody> {
@@ -271,6 +271,26 @@ fn duplicate_simple(
         .enumerate()
         .any(|(one, block)| one != at && block.succ.contains(&tail.at) && !preds.contains(&one))
         || tail.at == body.entry;
+    let redirected = |old: &Block| {
+        old.phis
+            .iter()
+            .map(|phi| {
+                let mut phi = phi.clone();
+                let from_tail: Vec<u32> =
+                    phi.incoming.iter().filter(|(pred, _)| *pred == tail.at).map(|(_, value)| *value).collect();
+                for &pred in &preds {
+                    for value in &from_tail {
+                        phi.incoming.push((body.blocks[pred].at, *value));
+                    }
+                }
+                if !remains {
+                    phi.incoming.retain(|(pred, _)| *pred != tail.at);
+                }
+                phi
+            })
+            .collect::<Vec<_>>()
+            .into()
+    };
     let mut blocks: Vec<Block> = Vec::new();
     for (place, old) in body.blocks.iter().enumerate() {
         if place == at && !remains {
@@ -300,28 +320,13 @@ fn duplicate_simple(
                 }
             }
             new.succ = succ.into();
+            if old.at == to {
+                new.phis = redirected(old);
+            }
             blocks.push(new.into());
         } else if old.at == to {
             let mut new = LirBlock::clone(old);
-            new.phis = old
-                .phis
-                .iter()
-                .map(|phi| {
-                    let mut phi = phi.clone();
-                    let from_tail: Vec<u32> =
-                        phi.incoming.iter().filter(|(pred, _)| *pred == tail.at).map(|(_, value)| *value).collect();
-                    for &pred in &preds {
-                        for value in &from_tail {
-                            phi.incoming.push((body.blocks[pred].at, *value));
-                        }
-                    }
-                    if !remains {
-                        phi.incoming.retain(|(pred, _)| *pred != tail.at);
-                    }
-                    phi
-                })
-                .collect::<Vec<_>>()
-                .into();
+            new.phis = redirected(old);
             blocks.push(new.into());
         } else {
             blocks.push(old.clone());
@@ -345,7 +350,7 @@ fn duplicate_simple(
 /// `body`'s table without the tail's entry. A tail that stays now has fewer
 /// predecessors and runs as often as they send: a block the table does not hold
 /// is worked out from them (as `tailmerge` does for a tail it keeps).
-fn forgotten(
+pub(super) fn forgotten(
     body: &LirBody,
     tail: i64,
 ) -> Option<Arc<crate::model::lir::BlockFrequencies>> {
@@ -356,7 +361,7 @@ fn forgotten(
 }
 
 /// The block ends in an indirect jump.
-fn indirect_end(block: &Block) -> bool {
+pub(super) fn indirect_end(block: &Block) -> bool {
     real(block).next_back().is_some_and(|last| indirect(last))
 }
 
@@ -506,8 +511,8 @@ fn duplicate(
             let value = next;
             next += 1;
             let what = super::phielim::move_of(
-                crate::model::ir::Held { value, width },
-                crate::model::ir::Held { value: from, width },
+                crate::model::ir::Held { value, width, offset: 0 },
+                crate::model::ir::Held { value: from, width, offset: 0 },
             );
             let mut copy = Insn::new(beside.at, Some((beside.at, beside.at)), Some(what), vec![value], vec![from]);
             copy.call = beside.call.clone();
@@ -662,7 +667,7 @@ mod tests {
     fn work(value: u32) -> Arc<Insn> {
         let what = Semantics {
             name: Some("mov".into()),
-            dests: vec![Loc::Held(crate::model::ir::Held { value, width: 4 })],
+            dests: vec![Loc::Held(crate::model::ir::Held { value, width: 4, offset: 0 })],
             sources: vec![Loc::Imm(Imm { value: 1, width: 4, address: None })],
             ..Semantics::new(Operation::Move)
         };
@@ -846,6 +851,26 @@ mod tests {
         assert_eq!(done.odds.taken.get(&(0, 9)), Some(&777));
     }
 
+    /// A loop whose latch is one jump back to the header: the header is a
+    /// predecessor of the jump block, and its phi kept an arm from the removed
+    /// block (`earlytaildup: a phi reads from ..., which is not a
+    /// predecessor`).
+    #[test]
+    fn test_a_header_whose_latch_is_a_jump_block_reads_its_phi_from_itself() {
+        let mut header = block(2, vec![work(5), of("je", Operation::Branch, Some(9), false), jump(3)], &[9, 3]);
+        header.phis = vec![crate::model::lir::Phi { result: 5, incoming: vec![(0, 1), (3, 6)] }].into();
+        let shape = body(vec![
+            block(0, vec![jump(2)], &[2]),
+            header,
+            block(3, vec![jump(2)], &[2]),
+            block(9, vec![of("ret", Operation::Return, None, false)], &[]),
+        ]);
+        let done = tail_duplicate(&shape, 3, false).expect("bypassed");
+        assert!(done.blocks.iter().all(|block| block.at != 3), "the jump block is gone");
+        let arms = &at(&done, 2).phis[0].incoming;
+        assert_eq!(arms.as_slice(), [(0, 1), (2, 6)], "the phi reads the latch value from the header itself");
+    }
+
     /// A predecessor that cannot take a copy (two successors) stops a block
     /// that is not one jump: `canCompletelyDuplicateBB`.
     #[test]
@@ -904,8 +929,8 @@ mod tests {
     fn reading(value: u32) -> Arc<Insn> {
         let what = Semantics {
             name: Some("add".into()),
-            dests: vec![Loc::Held(crate::model::ir::Held { value: 90, width: 4 })],
-            sources: vec![Loc::Held(crate::model::ir::Held { value, width: 4 })],
+            dests: vec![Loc::Held(crate::model::ir::Held { value: 90, width: 4, offset: 0 })],
+            sources: vec![Loc::Held(crate::model::ir::Held { value, width: 4, offset: 0 })],
             ..Semantics::new(Operation::Binary)
         };
         Arc::new(Insn::new(0, Some((0, 0)), Some(what), vec![90], vec![value]))

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/liverangeshrink.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/liverangeshrink.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/liverangeshrink.rs sha256:e3ff1a699aadf06674b751e4f2355f9ba5a51aaf47546c8d3134206d2f002ccc -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/liverangeshrink.rs sha256:d36026b40c59e766ee92e409c6f2ab1194b6f8758d646e5c8ffd79f4d28560b0 -->
 
 # liverangeshrink
 
@@ -43,7 +43,7 @@ writes them (the pin: `EFLAGS` is a physical register, so an instruction
 with a live flags def does not move), and one that reads them does not
 move. Exit: none; the register and flag model of the LIR.
 
-DEVIATE LRS2 (owner w-8, review 2026-11-14): the pin's `COPY` from a
+DEVIATE LRS2 (owner x86-m64, review 2026-11-14): the pin's `COPY` from a
 physical register is a value the entry delivers; a call's result is a `COPY`
 there too, and counted here as a definition that shortens a range. Not
 counting it grew recchop -O3 by 16 bytes. Exit: the allocation that makes

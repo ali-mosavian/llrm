@@ -80,7 +80,7 @@ fn test_an_unsigned_less_than_guard_clamps_the_argument() {
             se.get_umin_expr(cx, vec![Use::of(n), Use::of(nine)], false)
         };
         assert_eq!(se.apply_loop_guards(cx, n, header), want);
-        let range = se.get_unsigned_range(cx, want);
+        let range = se.get_unsigned_range(cx, want).to_word::<u128>();
         assert_eq!(range.get_unsigned_max(), 9);
     });
 }

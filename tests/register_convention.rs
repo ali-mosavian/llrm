@@ -170,9 +170,10 @@ fn a_private_function_takes_registers_under_sysv_and_an_exported_one_keeps_the_s
     assert!(exported.iter().any(|line| line.contains("[esp+4]")), "{exported:?}");
     let caller = procedure(&text, "_use");
     // One stack argument per call. The pin stores it into the reserved call
-    // frame (`movl $3, (%esp)`) and pops nothing; ours pushes it and cleans
-    // up with `add esp, 4` (DEVIATE CF1, docs/working/ci.md
-    // call-frame-reserve).
+    // frame (`movl $3, (%esp)`) and pops nothing at its 16-byte stack
+    // alignment; the target keeps a slot's, so the translated
+    // X86CallFrameOptimization pushes it and cleans up with `add esp, 4`
+    // (DEVIATE CF1, `pushfold.rs`).
     assert!(
         !caller.iter().any(|line| line.starts_with("push") && line.contains("2"))
             && caller.iter().filter(|line| line.starts_with("pushd")).count() == 2,
@@ -208,6 +209,7 @@ fn a_variadic_function_on_a_flat_target_makes_a_full_width_list_pointer() {
         "int f(int a, int b, ...)\n{\n    __builtin_va_list ap;\n    __builtin_va_start(ap, b);\n    int c = __builtin_va_arg(ap, int);\n    __builtin_va_end(ap);\n    return c;\n}\n",
     );
     let lines = procedure(&text, "f_");
-    assert!(lines.iter().any(|one| one.starts_with("lea eax, [esp+")), "{lines:?}");
+    // #8029 keeps a one-pointer list in a register: the list folds away and `c` is read from the first variadic slot.
+    assert!(lines.iter().any(|one| one == "mov eax, dword ptr [esp+12]"), "{lines:?}");
     assert!(!lines.iter().any(|one| one.starts_with("lea ax,") || one.starts_with("mov word ptr")), "{lines:?}");
 }

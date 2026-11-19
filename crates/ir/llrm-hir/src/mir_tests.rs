@@ -318,11 +318,62 @@ fn an_allocation_and_a_place_are_tagged_apart() {
     assert_eq!(llrm_mir::verify::verify(&emitted.module), Vec::<String>::new());
     let text = llrm_mir::print::module(&emitted.module);
     assert!(
-        text.contains("  %3 = load i16, ptr %2, !tbaa !2\n  store i16 %3, ptr addrspace(1) %0, !tbaa !6\n"),
+        text.contains("  %3 = load i16, ptr %2, !tbaa !2\n  store i16 %3, ptr addrspace(1) %0, !tbaa !10\n"),
         "{text}"
     );
     assert!(
-        text.contains("!1 = !{!\"place\", !0, i64 0}\n") && text.contains("!5 = !{!\"allocation.0\", !3, i64 0}\n"),
+        text.contains("!1 = !{!\"place\", !5, i64 0}\n") && text.contains("!9 = !{!\"allocation.0\", !3, i64 0}\n"),
+        "{text}"
+    );
+}
+
+/// SORT's loop reloaded its array parameter's descriptor words every trip: the
+/// accesses through a parameter's pointer carried no `!tbaa`, so an element
+/// store might have written them. A descriptor word is tagged `place`; an
+/// element of an array no function-local place owns, the generic `allocation`.
+#[test]
+fn a_parameter_arrays_descriptor_and_elements_are_tagged_apart() {
+    use llrm_mir::facts::{Fact, Region};
+
+    use crate::facts::{Builder, Subject};
+    use crate::model::{AddressKind, IndirectPlace};
+    let values = vec![Value { id: 1, r#type: 2 }, Value { id: 2, r#type: 2 }, Value { id: 3, r#type: 1 }];
+    let indirect = |base, offset| {
+        Operand::IndirectPlace(IndirectPlace {
+            base,
+            offset,
+            r#type: 1,
+            volatile: false,
+            origin: None,
+            allocation: None,
+            member: None,
+        })
+    };
+    let instructions = vec![
+        Instruction::new(1, Op::Load, vec![3], vec![indirect(1, 2)]),
+        Instruction::new(2, Op::Store, vec![], vec![indirect(2, 0), Operand::value_ref(3)]),
+    ];
+    let block = Block::new(1, instructions, Terminator::new(TerminatorKind::Return, Vec::new(), Vec::new()));
+    let mut function = Function::new(1, "FILL", 0, values, Vec::new(), vec![block], 1);
+    function.parameters = vec![1, 2];
+    let mut program = program(function);
+    let mut far = Type::new(2, "far", TypeKind::Pointer, 4);
+    far.address = AddressKind::Far;
+    program.modules[0].types.push(far);
+    let mut facts = Builder::new("test");
+    facts.state(Subject::Instruction { function: 1, id: 1 }, Fact::Access(Region::Descriptor));
+    facts.state(Subject::Instruction { function: 1, id: 2 }, Fact::Access(Region::Element));
+    program.modules[0].facts = facts.finish();
+
+    let emitted = emit(&program).remove(0);
+    assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+    assert_eq!(llrm_mir::verify::verify(&emitted.module), Vec::<String>::new());
+    let text = llrm_mir::print::module(&emitted.module);
+    assert!(text.contains(", !tbaa !2\n"), "{text}");
+    assert!(text.contains("!4\n"), "{text}");
+    assert!(
+        text.lines().any(|line| line.contains("load i16") && line.ends_with("!tbaa !2"))
+            && text.lines().any(|line| line.contains("store i16") && line.ends_with("!tbaa !4")),
         "{text}"
     );
 }
@@ -571,6 +622,54 @@ fn fixed_point_arithmetic_is_the_fixed_point_intrinsics() {
   ret i32 %7
 ";
     assert!(text.contains(body), "{text}");
+}
+
+/// `1 / q` in Q9 was `sdiv i64 262144, sext q` and cost ~170 B of inline
+/// 64-bit divide at m16 -O1 (nbody_fixed 950 B against C's 459). A dividend
+/// whose bounds, shifted, stay in 32 bits (a constant, or a stated range)
+/// divides there; one whose bounds do not fit, or are unknown, keeps the
+/// 64-bit form.
+#[test]
+fn fixed_division_of_a_dividend_that_fits_is_a_32_bit_divide() {
+    use llrm_mir::facts::{Bounds, Fact};
+
+    use crate::facts::{Builder, Subject};
+
+    let mut long = Type::new(2, "long", TypeKind::Integer, 4);
+    long.signed = Some(true);
+    let mut byte = Type::new(3, "byte", TypeKind::Integer, 1);
+    byte.signed = Some(true);
+    let values = (1..=7).map(|id| Value { id, r#type: 2 }).collect();
+    let nine = Operand::constant(3, 9);
+    let divide = |id, result, dividend: Operand| {
+        Instruction::new(id, Op::FixedDiv, vec![result], vec![dividend, Operand::value_ref(1), nine.clone()])
+    };
+    let instructions = vec![
+        // 2: bounded by its stated range, 3: stated range too wide, 4: no range.
+        Instruction::new(1, Op::FixedMul, vec![2], vec![Operand::value_ref(1), Operand::value_ref(1), nine.clone()]),
+        Instruction::new(2, Op::FixedMul, vec![3], vec![Operand::value_ref(1), Operand::value_ref(1), nine.clone()]),
+        divide(3, 4, Operand::constant(2, 512)),
+        divide(4, 5, Operand::value_ref(2)),
+        divide(5, 6, Operand::value_ref(3)),
+        divide(6, 7, Operand::value_ref(1)),
+    ];
+    let block =
+        Block::new(1, instructions, Terminator::new(TerminatorKind::Return, vec![Operand::value_ref(7)], Vec::new()));
+    let mut function = Function::new(1, "INV", 2, values, Vec::new(), vec![block], 1);
+    function.parameters = vec![1];
+    let mut program = program(function);
+    program.modules[0].types.extend([long, byte]);
+    let mut facts = Builder::new("test");
+    facts.state(Subject::Instruction { function: 1, id: 1 }, Fact::Range(Bounds { lo: 0, hi: 1000 }));
+    facts.state(Subject::Instruction { function: 1, id: 2 }, Fact::Range(Bounds { lo: 0, hi: 1 << 30 }));
+    program.modules[0].facts = facts.finish();
+
+    let emitted = emit(&program).remove(0);
+    assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+    let text = llrm_mir::print::module(&emitted.module);
+    assert!(text.contains("= sdiv i32 262144, %0\n"), "a constant: {text}");
+    assert!(text.contains("= sdiv i32 %5, %0\n") || text.matches("sdiv i32").count() == 2, "a stated range: {text}");
+    assert_eq!(text.matches("sdiv i64").count(), 2, "too wide and unbounded stay wide: {text}");
 }
 
 /// HIR's frame starts zeroed, so a local read before any store is 0; MIR's
@@ -964,9 +1063,9 @@ fn a_languages_promises_reach_mir() {
     let emitted = emit(&program).remove(0);
     assert_eq!(emitted.refused, Vec::<(String, String)>::new());
     let text = llrm_mir::print::module(&emitted.module);
-    let body = "(ptr noalias %0) addrspace(1) \"llrm-fp-eval\"=\"x87-extended\" {\nb1:\n  %1 = alloca i16\n  %2 = getelementptr inbounds i8, ptr %0, i16 2\n  %3 = load i16, ptr %2, !tbaa !7\n  %4 = icmp slt i16 %3, 0\n  %5 = zext i1 %4 to i16\n  store i16 %5, ptr %1, !tbaa !2\n  ret i16 poison\n}";
+    let body = "(ptr noalias %0) addrspace(1) \"llrm-fp-eval\"=\"x87-extended\" {\nb1:\n  %1 = alloca i16\n  %2 = getelementptr inbounds i8, ptr %0, i16 2\n  %3 = load i16, ptr %2, !tbaa !11\n  %4 = icmp slt i16 %3, 0\n  %5 = zext i1 %4 to i16\n  store i16 %5, ptr %1, !tbaa !2\n  ret i16 poison\n}";
     assert!(text.contains(body), "{text}");
-    assert!(text.contains("!6 = !{!\"int2\", !5, i64 0}\n!7 = !{!6, !6, i64 0}"), "{text}");
+    assert!(text.contains("!10 = !{!\"int2\", !9, i64 0}\n!11 = !{!10, !10, i64 0}"), "{text}");
 }
 
 /// An exported object is defined, a literal private, and another module's
@@ -1210,6 +1309,23 @@ fn a_stated_fact_becomes_its_carrier() {
 }
 
 /// A fact of a kind it is not stated of was lowered to whatever the subject
+/// `norecurse` stated of a function the module defines and nothing calls
+/// (QB's `__main`) was refused as a fact of no callable.
+#[test]
+fn a_callable_fact_of_a_defined_entry_lowers_to_its_function() {
+    use llrm_mir::facts::Fact;
+
+    use crate::facts::{Builder, Subject};
+    let mut program = program(difference());
+    let mut facts = Builder::new("test");
+    facts.state(Subject::Callable(1), Fact::NoRecurse);
+    program.modules[0].facts = facts.finish();
+    assert!(crate::verify::verify(&program).is_ok());
+    let emitted = emit(&program).remove(0);
+    assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+    assert!(llrm_mir::print::module(&emitted.module).contains("norecurse"));
+}
+
 /// was; the verifier refuses it, as it does a subject the module lacks.
 #[test]
 fn a_fact_of_the_wrong_subject_is_refused() {
@@ -2138,4 +2254,66 @@ fn test_lowering_reserves_the_functions_instructions() {
     let (_, lowered) = emitted.module.function_mut("DIFF%").expect("lowered");
     assert_eq!(lowered.instruction_count(), 10);
     assert_eq!(lowered.instruction_capacity(), 10);
+}
+
+/// A relocation's addend was always an `i16` index (`getelementptr (i8, ptr @s,
+/// i16 8)`), whatever the pointer: on a flat 32-bit target the backends took it
+/// for a sign-extended 16-bit offset and the 64-bit one patched the text. The
+/// offset is as wide as the near pointer.
+#[test]
+fn a_relocation_addend_is_as_wide_as_the_near_pointer() {
+    use crate::model::{AddressKind, DataObject, DataRelocation};
+    let mut object = DataObject::new(3, "payload", vec![0, 0, 0, 0, 0, 0, 0, 0]);
+    object.relocations = vec![DataRelocation { at: 0, target: 3, addend: 8, address: AddressKind::Near, code: false }];
+    for (description, index) in [(FLAT, "i32 8)"), (REAL, "i16 8)")] {
+        let mut program = program(difference());
+        program.modules[0].data = vec![object.clone()];
+        let layout = Layout::parse(description).unwrap();
+        let emitted = crate::mir::emit(&program, &layout).remove(0);
+        let text = llrm_mir::print::module(&emitted.module);
+        assert!(text.contains(&format!("@payload, {index}")), "{text}");
+    }
+}
+
+/// ASC answers an INTEGER (`i16`) on every target, but its meaning was held to
+/// the target's word: on the flat target the declaration was not the word's
+/// type, no body was defined for the inliner, and every `ASC(MID$(s, i, 1))`
+/// kept a call to `B$FASC` (bench/crc bq32: 943 instructions against C's 461).
+#[test]
+fn a_routine_answering_an_integer_is_defined_on_a_target_whose_word_is_wider() {
+    use crate::meaning::{Descriptor, Expr, Meaning, Parameter, Returns};
+    let asc = Meaning {
+        routine: "B$FASC".to_owned(),
+        parameters: vec![Parameter::String],
+        result: Returns::Value(Expr::Byte(Box::new(Expr::Data(0)))),
+        result_bits: Some(16),
+        releases: Vec::new(),
+        always_inline: true,
+        check: None,
+    };
+    for (description, word) in [(FLAT, 4), (REAL, 2)] {
+        let mut function = difference();
+        function.values.extend([Value { id: 4, r#type: 1 }, Value { id: 5, r#type: 2 }]);
+        let mut call = Instruction::new(2, Op::Call, vec![4], vec![Operand::value_ref(5)]);
+        call.callee = Some("B$FASC".to_owned());
+        function.blocks[0].instructions.push(call);
+        function.parameters.push(5);
+        let mut program = program(function);
+        program.modules[0].types.push(Type::new(2, "near", TypeKind::Pointer, word));
+        program.promises.descriptor = Some(Descriptor { length: 0, word, data: word, size: 2 * word });
+        program.promises.routines = vec![asc.clone()];
+        let emitted = crate::mir::emit(&program, &Layout::parse(description).unwrap()).remove(0);
+        assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+        let text = llrm_mir::print::module(&emitted.module);
+        assert!(text.contains("define available_externally") && text.contains("i16 @llrm.qb.B$FASC("), "word {word}\n{text}");
+        assert!(text.contains("ret i16"), "word {word}\n{text}");
+        // A value as wide as the word is cut to the stated width, where the word is wider.
+        let wide = Meaning { result: Returns::Value(Expr::Length(0)), ..asc.clone() };
+        let mut program = program;
+        program.promises.routines = vec![wide];
+        let emitted = crate::mir::emit(&program, &Layout::parse(description).unwrap()).remove(0);
+        let text = llrm_mir::print::module(&emitted.module);
+        assert!(text.contains("ret i16"), "word {word}\n{text}");
+        assert_eq!(text.contains("trunc"), word == 4, "word {word}\n{text}");
+    }
 }

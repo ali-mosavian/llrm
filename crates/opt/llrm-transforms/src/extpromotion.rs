@@ -40,7 +40,7 @@
 use llrm_mir::context::{Constant, ConstantKind, Context, signed};
 use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::edit::Position;
-use llrm_mir::lowering::{Ext, Isd, LoadExt, Lowering};
+use llrm_mir::lowering::{Ext, ExtUser, Isd, LoadExt, Lowering};
 use llrm_mir::module::{Function, InstId, Operand, ValueDef};
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, Opcode};
 use llrm_mir::types::TypeId;
@@ -71,6 +71,7 @@ enum Action {
 
 struct Env<'a> {
     context: &'a Context,
+    layout: &'a llrm_mir::datalayout::DataLayout,
     lowering: &'a dyn Lowering,
 }
 
@@ -260,11 +261,58 @@ fn is_ext_free(
     else {
         return false;
     };
-    match kind {
+    let free = match kind {
         CastOp::ZExt => env.lowering.is_ext_free(Ext::ZExt, from, to),
         CastOp::SExt => env.lowering.is_ext_free(Ext::SExt, from, to),
-        _ => false,
-    }
+        _ => return false,
+    };
+    free || env.lowering.is_ext_free_impl(&ext_users(env, function, inst))
+}
+
+/// How each user of the extension `inst` reads it (`isExtFreeImpl`'s loop).
+fn ext_users(
+    env: &Env,
+    function: &Function,
+    inst: InstId,
+) -> Vec<ExtUser> {
+    let one = function.instruction(inst);
+    let Some(result) = one.result else { return Vec::new() };
+    function
+        .users(result)
+        .iter()
+        .map(|used| {
+            let user = function.instruction(used.user);
+            match &user.opcode {
+                Opcode::Binary(BinaryOp::Shl)
+                    if used.index == 0 && matches!(user.operands[1], Operand::Constant(_)) =>
+                {
+                    ExtUser::ConstShl
+                }
+                Opcode::Cast(CastOp::Trunc) if function.operand_type(env.context, one.operands[0]) == Some(user.ty) => {
+                    ExtUser::SameTypeTrunc
+                }
+                Opcode::GetElementPtr { source } if used.index >= 1 => {
+                    let mut current = *source;
+                    for &index in user.operands[2..=used.index as usize].iter() {
+                        let types = &env.context.types;
+                        current = match types.get(current) {
+                            llrm_mir::types::Type::Array { element, .. }
+                            | llrm_mir::types::Type::Vector { element, .. } => *element,
+                            _ => match index {
+                                Operand::Constant(c) => match env.context.get(c).kind {
+                                    ConstantKind::Int(at) => types.member(current, at as u64).unwrap_or(current),
+                                    _ => return ExtUser::Other,
+                                },
+                                _ => return ExtUser::Other,
+                            },
+                        };
+                    }
+                    ExtUser::Gep { store_bits: env.layout.store_size(&env.context.types, current) * 8 }
+                }
+                _ => ExtUser::Other,
+            }
+        })
+        .collect()
 }
 
 /// `TypePromotionHelper::promoteOperandForTruncAndAnyExt`: the value that
@@ -516,6 +564,40 @@ fn try_to_promote_exts(
     promoted
 }
 
+/// Whether some path from `load`'s block ends the function without passing a
+/// block that extends the load's value: where there is none, every path pays
+/// the extension and moving it next to the load costs nothing (and one
+/// extension in place of one in each arm).
+fn escapes_the_extensions(
+    function: &Function,
+    load: InstId,
+) -> bool {
+    let (Some(home), Some(result)) = (function.parent(load), function.instruction(load).result) else { return true };
+    let readers: std::collections::HashSet<_> = function
+        .users(result)
+        .iter()
+        .filter(|one| matches!(
+            function.instruction(one.user).opcode,
+            Opcode::Cast(CastOp::ZExt | CastOp::SExt)
+        ))
+        .filter_map(|one| function.parent(one.user))
+        .collect();
+    let mut seen = std::collections::HashSet::from([home]);
+    let mut work = vec![home];
+    while let Some(block) = work.pop() {
+        let next = function.successors(block);
+        if next.is_empty() {
+            return true;
+        }
+        for one in next {
+            if !readers.contains(&one) && seen.insert(one) {
+                work.push(one);
+            }
+        }
+    }
+    false
+}
+
 /// `isExtLoad`: whether the target folds `ext` into `load`.
 fn is_ext_load(
     env: &Env,
@@ -543,12 +625,14 @@ fn is_ext_load(
 /// stands after the load that feeds it.
 pub fn optimize_ext(
     context: &Context,
+    layout: &llrm_mir::datalayout::DataLayout,
     lowering: &dyn Lowering,
     function: &mut Function,
     state: &mut State,
     ext: InstId,
+    ext_load_costs_extra: bool,
 ) -> bool {
-    let env = Env { context, lowering };
+    let env = Env { context, layout, lowering };
     let mut tpt = Transaction::new();
     let good = tpt.restoration_point();
     let mut moved = Vec::new();
@@ -563,7 +647,11 @@ pub fn optimize_ext(
     if let Some(fed) = fed {
         let load = instruction_of(function, function.instruction(fed).operands[0]).expect("a load");
         let same_block = function.parent(load) == function.parent(fed);
-        if (promoted || !same_block) && is_ext_load(&env, function, load, fed) {
+        // DEVIATE EXT-LOAD-COST: an extension in another block than its load
+        // stays where it is read, where the extending load costs clocks over
+        // the plain one (`Tti::ext_load_costs_extra`).
+        let speculated = !same_block && ext_load_costs_extra && escapes_the_extensions(function, load);
+        if (promoted || !same_block) && !speculated && is_ext_load(&env, function, load, fed) {
             tpt.commit(function);
             let _ = function.move_to(fed, Position::After(load));
             return true;

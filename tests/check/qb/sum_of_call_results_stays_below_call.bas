@@ -1,5 +1,6 @@
-' RUN: llrm-qb %s -fqb-runtime=llrm --isel={dag | old} -Os -fno-inline-functions -fno-inline-functions-called-once -march=i486 -m32 -S -o /dev/stdout
+' RUN: llrm-qb %s -fqb-runtime=llrm --isel={dag | old} -Os -fno-inline=TMUL -march=i486 -m32 -S -o /dev/stdout
 ' LiveRangeShrink put `sum + Tmul(...)` above the call in the loop: the first sum read an unset register, the last result was dropped (#5768).
+' m32 -Os inlines the once-called Tmul (SZ2: 279 B against 318 B), so the call is kept by name.
 ' CHECK-LABEL: ROW proc
 ' CHECK: call TMUL
 ' CHECK: add {{.*}}, eax

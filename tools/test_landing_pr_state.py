@@ -14,7 +14,7 @@ def _graphql_reply(numbers):
     repository = {}
     for n in numbers:
         repository[f"p{n}"] = {
-            "state": "OPEN", "isDraft": False, "headRefOid": f"h{n}", "headRefName": f"b{n}", "title": "t", "body": "b", "baseRefName": "feat/parity", "mergeable": "MERGEABLE",
+            "state": "OPEN", "isDraft": False, "headRefOid": f"h{n}", "headRefName": f"b{n}", "title": "t", "body": "b", "baseRefName": "release/next", "mergeable": "MERGEABLE",
             "commits": {"nodes": [{"commit": {"committedDate": "2026-10-27T08:00:00Z", "statusCheckRollup": {"state": "SUCCESS"}}}]},
         }
     return json.dumps({"data": {"repository": repository}})
@@ -52,7 +52,7 @@ def test_a_filled_state_answers_until_it_is_old(monkeypatch, tmp_path):
 
 
 def test_an_unchanged_parity_is_a_304_that_costs_no_quota(monkeypatch, tmp_path):
-    """Each cycle polled the feat/parity ref with a full REST call; with If-None-Match an unchanged ref answers 304 and is not counted."""
+    """Each cycle polled the release/next ref with a full REST call; with If-None-Match an unchanged ref answers 304 and is not counted."""
     monkeypatch.setattr(pr_state, "TMP", tmp_path)
     monkeypatch.setattr(pr_state, "PARITY", tmp_path / "parity.etag")
     sent = []

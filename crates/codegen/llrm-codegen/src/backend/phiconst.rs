@@ -143,7 +143,7 @@ pub fn shared(body: &LirBody) -> LirBody {
                 }
                 let value = next;
                 next += 1;
-                made.entry(above).or_default().push((Held { value, width: into.width }, imm));
+                made.entry(above).or_default().push((Held { value, width: into.width, offset: 0 }, imm));
                 incoming.entry((block.at, phi.result)).or_default().push((wheres, value));
             }
         }

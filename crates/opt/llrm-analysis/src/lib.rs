@@ -90,6 +90,7 @@
 
 pub mod aa;
 pub mod accessanalysis;
+pub mod edges;
 pub mod aggregate;
 pub mod alias;
 pub mod aliasdiff;
@@ -100,6 +101,7 @@ pub mod attrsummary;
 pub mod avail;
 pub mod basicaa;
 pub mod blockfreq;
+pub mod entryweight;
 pub mod bpi;
 pub mod branchprob;
 pub mod captureanalysis;
@@ -130,6 +132,7 @@ pub mod globalsmodref;
 pub mod graph;
 pub mod guards;
 pub mod induction;
+pub mod interleavedaccess;
 pub mod initializes;
 pub mod interprocedural;
 pub mod ivdescriptors;
@@ -162,6 +165,7 @@ pub mod ranges;
 pub mod reachability;
 pub mod references;
 pub mod regions;
+pub mod loopderef;
 pub mod runtimecheck;
 pub mod saverestore;
 pub mod scev;
@@ -172,4 +176,6 @@ pub mod ssaupdater;
 pub mod ssaupdaterbulk;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
+pub mod scopednoaliasaa;
 pub mod typebasedaa;
+pub mod vectorutils;

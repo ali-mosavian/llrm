@@ -39,6 +39,7 @@ set 32 GR8_with_GR64_TC 44 GR8
 set 33 GR8_with_GR64PLTSafe 45 GR8
 set 34 GR8_with_LOW32_ADDR_ACCESS_RBP_with_sub_16bit_in_GR16_NOREX2 48 GR8
 set 35 GR16 66 LOW32_ADDR_ACCESS_RBP
+set 36 ADDR16 8 ADDR16
 
 class GR8 1 36 26,27,28,29,30,31,32,33,34,35 al,cl,dl,ah,ch,dh,bl,bh
 class GR8_NOREX2 1 20 25,26,27,28,29,30,31,32,33,34,35 al,cl,dl,ah,ch,dh,bl,bh
@@ -67,3 +68,4 @@ class GR32_CB 2 2 3,13,14,19,20,23,25,26,27,28,29,30,31,32,33,34,35 ecx,ebx
 class GR32_DC 2 2 13,14,15,19,20,21,22,23,25,26,27,28,29,30,31,32,33,34,35 edx,ecx
 class GR32_DIBP 2 2 1,5,6,19,23,25,27,30,33,34,35 edi,ebp
 class GR32_SIDI 2 2 4,5,19,22,23,25,28,30,32,33,34,35 esi,edi
+class ADDR16 2 4 35,36 ebx,esi,edi,ebp

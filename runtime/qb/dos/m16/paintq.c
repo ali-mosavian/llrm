@@ -27,5 +27,5 @@ void *qb_paint_queue_open(unsigned long *bytes)
 
 void qb_paint_queue_close(void)
 {
-    str_tmp_free(held);
+    str_free_if_tmp(held);
 }

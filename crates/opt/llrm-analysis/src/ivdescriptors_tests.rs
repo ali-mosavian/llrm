@@ -7,7 +7,7 @@ use llrm_mir::loopinfo::LoopInfo;
 use llrm_mir::module::Operand;
 use llrm_mir::valuetracking::AssumptionCache;
 
-use super::{is_fp_induction_phi, is_induction_phi, is_reduction_phi};
+use super::{Analyses, is_fp_induction_phi, is_induction_phi, is_reduction_phi};
 use crate::scev::{Cx, ScalarEvolution};
 
 /// One line per header phi of the only loop of `@f`: `name: Kind` of its
@@ -41,7 +41,7 @@ fn describe(
             continue;
         }
         let name = function.instruction(inst).result.and_then(|v| function.value(v).name.clone()).unwrap_or_default();
-        let reduction = is_reduction_phi(&cx, with_se.then_some(&mut se), inst, the_loop);
+        let reduction = is_reduction_phi(&cx, with_se.then_some(&mut se), inst, the_loop, &Analyses::NONE);
         match reduction {
             Some(found) => out.push(format!("{name}: {:?}", found.kind)),
             None => out.push(format!("{name}: none")),
@@ -254,4 +254,90 @@ exit:
   ret i32 %r
 }";
     assert_eq!(acc_of(ir), "acc: none");
+}
+
+/// `@f`'s `%acc` as `is_reduction_phi` describes it with `analyses`: `Kind` or
+/// `none`; the demanded bits are computed here when `demanded`.
+fn acc_with(
+    text: &str,
+    demanded: bool,
+) -> String {
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let layout = llrm_mir::datalayout::DataLayout::default();
+    let (_, _, function) = module.functions().find(|(_, _, f)| !f.layout().is_empty()).expect("a body");
+    let tree = DomTree::of(function);
+    let loops = LoopInfo::analyze(function, || &tree);
+    let assumptions = AssumptionCache::new(&module, function);
+    let cx = Cx {
+        context: &module.context,
+        globals: &module.globals,
+        metadata: &module.metadata,
+        function,
+        layout: &layout,
+        loops: &loops,
+        tree: &tree,
+        assumptions: &assumptions,
+    };
+    let callees = llrm_mir::memory::callees(&module);
+    let environment = crate::demandedbits::Environment {
+        context: &module.context,
+        layout: &layout,
+        callees: &callees,
+        globals: &module.globals,
+        metadata: &module.metadata,
+    };
+    let bits = crate::demandedbits::DemandedBits::of(&environment, function);
+    let analyses = Analyses { demanded: demanded.then_some((&bits, &environment)), value_tracking: false };
+    let the_loop = loops.top_level_loops().next().expect("a loop");
+    let acc = function
+        .iter_block(the_loop.get_header())
+        .find(|&inst| {
+            function.instruction(inst).opcode == llrm_mir::opcode::Opcode::Phi
+                && function.instruction(inst).result.and_then(|v| function.value(v).name.as_deref()) == Some("acc")
+        })
+        .expect("%acc");
+    match is_reduction_phi(&cx, None, acc, the_loop, &analyses) {
+        Some(found) => format!("{:?} {}", found.kind, module.context.types.int_bits(found.recurrence_type).unwrap()),
+        None => "none".to_owned(),
+    }
+}
+
+/// A reduction `acc = (acc & 255) + x` whose result leaves the loop through
+/// `& 255`: the `and` says the type is i8.
+fn promoted(exit: &str) -> String {
+    format!(
+        "define i32 @f(i32 %x, i32 %n) {{
+entry:
+  br label %loop
+loop:
+  %i = phi i32 [ 0, %entry ], [ %i.next, %loop ]
+  %acc = phi i32 [ 0, %entry ], [ %s, %loop ]
+  %a = and i32 %acc, 255
+  %s = add i32 %a, %x
+  %i.next = add nuw nsw i32 %i, 1
+  %done = icmp eq i32 %i.next, %n
+  br i1 %done, label %exit, label %loop
+exit:
+  %r = phi i32 [ %s, %loop ]
+{exit}
+}}"
+    )
+}
+
+/// Symptom: `computeRecurrenceType` without `DemandedBits` answered the type's
+/// width, so a reduction the pin accepts as a type-promoted i8 (the exit value
+/// read only through `& 255`) was refused: `none` where the pin says `Add`.
+#[test]
+fn a_reduction_whose_exit_is_read_through_a_byte_mask_is_the_narrow_type_with_demanded_bits() {
+    let ir = promoted("  %o = and i32 %r, 255\n  ret i32 %o");
+    assert_eq!(acc_with(&ir, false), "none");
+    assert_eq!(acc_with(&ir, true), "Add 8");
+}
+
+/// The exit value read whole demands every bit: the computed type is i32, not
+/// the `and`'s i8, so the speculative look-through fails as it does in the pin.
+#[test]
+fn a_reduction_whose_exit_is_read_whole_is_not_the_narrow_type() {
+    let ir = promoted("  ret i32 %r");
+    assert_eq!(acc_with(&ir, true), "none");
 }

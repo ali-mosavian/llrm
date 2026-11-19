@@ -80,6 +80,11 @@ pub struct Target {
     /// departures from it.
     #[serde(default)]
     pub description: Option<String>,
+    /// The file of `description`'s `src/machines` that states the layout and
+    /// the C sizes, where it is not `datalayout.toml` (wasm's has a file per
+    /// pointer width).
+    #[serde(default)]
+    pub description_file: Option<String>,
     #[serde(default)]
     pub wchar_bytes: Option<u32>,
     #[serde(default)]
@@ -106,6 +111,63 @@ pub struct Target {
     /// Whether the backend takes `-O<n>`.
     #[serde(default = "yes")]
     pub llc_level: bool,
+    /// Why the backend takes no `-O<n>`; required where `llc_level` is false.
+    pub llc_level_reason: Option<String>,
+    /// Whether the backend takes the `-f[no-]PASS` switches (`BACKEND_PASSES`,
+    /// `-f[no-]unroll-loops`). Where it does not, the driver leaves them out
+    /// and says so: the pin's clang writes `noinline` and the loop hints into
+    /// the IR, and the backend reads them there.
+    #[serde(default = "yes")]
+    pub llc_passes: bool,
+    /// Why the backend takes no pass switch; required where `llc_passes` is
+    /// false.
+    pub llc_passes_reason: Option<String>,
+    /// Whether the backend takes `-mcmodel=` (the pin's `llc -code-model`) and
+    /// clang does not: the driver gives the flag to the backend alone.
+    #[serde(default)]
+    pub llc_mcmodel: bool,
+    /// DEVIATE UNROLL-O1 (owner x86-m32, exit 2026-11-27): `-funroll-loops` is
+    /// the default at `-O1`. clang's `UnrollLoops` is off there, so it marks
+    /// every loop `llvm.loop.unroll.disable` (CGLoopInfo.cpp#L820) and the
+    /// pin's -O1 never unrolls; gcc does (x_life O1: 64k taken `jne` against
+    /// gcc's 16k).
+    #[serde(default)]
+    pub unroll_at_o1: bool,
+    /// DEVIATE JUMPTHREAD-O1 (owner m68k-lsr-addressing, exit 2026-12-04; the
+    /// m32 rows extend it, owner x87, exit 2026-11-27; the m64 rows, owner
+    /// x86-m64, exit 2026-11-24; the 6502 rows, owner 6502, exit
+    /// 2026-11-24): `-fthread-jumps` is the default at `-O1`. The pin's -O1
+    /// pipeline has no `JumpThreadingPass` (PassBuilderPipelines.cpp#L495),
+    /// so clang's IR keeps a latch branch on a compare tested one block up.
+    #[serde(default)]
+    pub thread_jumps_at_o1: bool,
+    /// DEVIATE SPEED-O1 (owner x86-m32-b, exit 2026-11-24; user ruling
+    /// 2026-11-14: -O1 to -O3 match the best compiler by clocks):
+    /// `-fllrm-speed-rate` is the default at `-O1`, so the target's byte
+    /// price at speed counts there as at -O2. The pin's -O1 gates every
+    /// metric alone.
+    #[serde(default)]
+    pub speed_rate_at_o1: bool,
+    /// DEVIATE PRE-O1 (owner x86-m16-b, exit 2026-11-24; user ruling
+    /// 2026-11-14: -O1 to -O3 match the best compiler by clocks): `-ftree-pre`
+    /// is the default at `-O1`, so GVN makes a partial redundancy full there as
+    /// at -O2. The pin's -O1 GVN does not (`GVNOptions` default, PRE off).
+    #[serde(default)]
+    pub pre_at_o1: bool,
+    /// DEVIATE REC-O1 (owner x86-m32-b, exit 2026-11-24):
+    /// `-fno-inline-recursive` is the default at `-O1`. gcc's recursive
+    /// inlining is `-finline-small-functions` (-O2 and up), and neither bar
+    /// compiler makes copies of a recursion at -O1; SPEED-O1 turned them on
+    /// as a side effect (bintree -O1 995 B against 292 B, no counted clock
+    /// gained).
+    #[serde(default)]
+    pub no_recursion_at_o1: bool,
+    /// `-fwhole-program` is the default where the driver links one C source
+    /// into an executable: nothing else names its globals, so what `main`
+    /// does not reach is not in the program (LLVM's `InternalizePass` with
+    /// `GlobalDCE`; llvm-mos's `--gc-sections` does the same).
+    #[serde(default)]
+    pub whole_program: bool,
     pub object: String,
     pub link: Vec<String>,
     /// The command that runs an executable of the target, the executable last;
@@ -132,6 +194,61 @@ const PIN_FILE: &str = include_str!("../../../../toolchain/clang/pin");
 fn pin() -> &'static str {
     PIN_FILE.lines().next().unwrap_or_default().trim()
 }
+const OW_COMMIT_FILE: &str = include_str!("../../../../toolchain/owshim/ow-commit");
+
+/// The Open Watcom tree `{ow}` names: `llrm/ow-src-<commit>` under the cache
+/// directory `cache`, the commit toolchain/owshim/ow-commit pins.
+/// tools/ow-fetch.sh makes it; llrm-cc never does.
+pub fn ow_tree_in(cache: &Path) -> PathBuf {
+    cache.join("llrm").join(format!("ow-src-{}", OW_COMMIT_FILE.trim()))
+}
+
+/// The Open Watcom tree on this machine (`ow_tree_in` of the cache directory).
+pub fn ow_tree() -> PathBuf {
+    ow_tree_in(&cache_dir())
+}
+
+/// Whether the tree under `cache` is whole: toolchain/cache.sh writes
+/// `.complete` last, so a directory without it is an interrupted or running
+/// fetch.
+pub fn ow_present_in(cache: &Path) -> bool {
+    ow_tree_in(cache).join(".complete").is_file()
+}
+
+/// `ow_present_in` the cache directory of this machine.
+pub fn ow_present() -> bool {
+    ow_present_in(&cache_dir())
+}
+
+/// `$XDG_CACHE_HOME`, else `~/.cache`: where toolchain/owclib.sh puts the tree.
+fn cache_dir() -> PathBuf {
+    std::env::var_os("XDG_CACHE_HOME")
+        .filter(|dir| !dir.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".cache"))
+}
+
+/// `word` with `{ow}` replaced by the tree under `cache` where it is whole;
+/// where it does not the word stays, and `missing_ow` says so.
+fn with_ow(
+    word: &str,
+    cache: &Path,
+) -> String {
+    let tree = ow_tree_in(cache);
+    if word.contains("{ow}") && ow_present_in(cache) {
+        word.replace("{ow}", &tree.display().to_string())
+    } else {
+        word.to_owned()
+    }
+}
+
+fn missing_ow(cache: &Path) -> String {
+    format!(
+        "llrm-cc: the Open Watcom tree {} is missing: run tools/ow-fetch.sh to make it",
+        ow_tree_in(cache).display()
+    )
+}
+
 /// The llrm checkout this driver was built in, for the tools the recipes name.
 const ROOT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../..");
 const DEFAULT_TARGET: &str = "x86_64-linux";
@@ -144,7 +261,7 @@ fn expanded(text: &str) -> Result<String, String> {
         let end = start + out[start..].find('}').ok_or("targets.toml: unclosed {datalayout:")?;
         let name = &out[start + "{datalayout:".len()..end];
         let path = format!("{ROOT}/crates/target/llrm-{name}/src/machines/datalayout.toml");
-        let description = std::fs::read_to_string(&path).map_err(|error| format!("{path}: {error}"))?;
+        let description = description_text(name, None, &path)?;
         let table: toml::Table = description.parse().map_err(|error| format!("{path}: {error}"))?;
         let layout = table.get("datalayout").and_then(toml::Value::as_str).ok_or(format!("{path}: no datalayout"))?;
         out.replace_range(start..=end, layout);
@@ -152,10 +269,94 @@ fn expanded(text: &str) -> Result<String, String> {
     Ok(out)
 }
 
+/// The description files targets.toml names, embedded: a dist read them from
+/// the checkout it was built in, so deleting or moving that checkout failed
+/// every compile ("No such file", 2345 of 3911 A/B cells void on 2026-11-07).
+const DESCRIPTIONS: &[(&str, &str, &str)] = &[
+    ("6502", "datalayout.toml", include_str!("../../../target/llrm-6502/src/machines/datalayout.toml")),
+    ("arm64", "datalayout.toml", include_str!("../../../target/llrm-arm64/src/machines/datalayout.toml")),
+    ("arm64", "datalayout-darwin.toml", include_str!("../../../target/llrm-arm64/src/machines/datalayout-darwin.toml")),
+    ("m68k", "datalayout.toml", include_str!("../../../target/llrm-m68k/src/machines/datalayout.toml")),
+    ("wasm", "datalayout32.toml", include_str!("../../../target/llrm-wasm/src/machines/datalayout32.toml")),
+    ("wasm", "datalayout64.toml", include_str!("../../../target/llrm-wasm/src/machines/datalayout64.toml")),
+    ("x86-m16", "datalayout.toml", include_str!("../../../target/llrm-x86-m16/src/machines/datalayout.toml")),
+    ("x86-m32", "datalayout.toml", include_str!("../../../target/llrm-x86-m32/src/machines/datalayout.toml")),
+    ("x86-m64", "datalayout.toml", include_str!("../../../target/llrm-x86-m64/src/machines/datalayout.toml")),
+    ("z80", "datalayout.toml", include_str!("../../../target/llrm-z80/src/machines/datalayout.toml")),
+];
+
+/// The text of crate `llrm-NAME`'s description `file` (default
+/// `datalayout.toml`): the embedded copy, else `path` on disk.
+fn description_text(
+    name: &str,
+    file: Option<&str>,
+    path: &str,
+) -> Result<String, String> {
+    let file = file.unwrap_or("datalayout.toml");
+    match DESCRIPTIONS.iter().find(|(crate_name, one, _)| *crate_name == name && *one == file) {
+        Some((_, _, text)) => Ok((*text).to_owned()),
+        None => std::fs::read_to_string(path).map_err(|error| format!("{path}: {error}")),
+    }
+}
+
+include!(concat!(env!("OUT_DIR"), "/toolchain.rs"));
+
+/// toolchain/clang as the recipes' `{root}/toolchain/clang`: the checkout's own
+/// where it still exists, else the embedded copy written once under the temp
+/// directory (named by its contents, so a changed header makes a new
+/// directory).
+fn toolchain_dir() -> String {
+    let own = format!("{ROOT}/toolchain/clang");
+    if std::path::Path::new(&own).is_dir() {
+        return own;
+    }
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for (name, bytes) in TOOLCHAIN_FILES {
+        for byte in name.bytes().chain(bytes.iter().copied()) {
+            hash = (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3);
+        }
+    }
+    let dir = std::env::temp_dir().join(format!("llrm-cc-toolchain-{hash:016x}"));
+    if !dir.join(".done").exists() {
+        for (name, bytes) in TOOLCHAIN_FILES {
+            let path = dir.join(name);
+            if let Some(parent) = path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            // written beside and renamed: two drivers starting together never
+            // read a half-written header
+            let part = path.with_extension(format!("part{}", std::process::id()));
+            if std::fs::write(&part, bytes).is_ok() {
+                let _ = std::fs::rename(&part, &path);
+            }
+        }
+        let _ = std::fs::write(dir.join(".done"), "");
+    }
+    dir.display().to_string()
+}
+
+/// `word` with `{root}/toolchain/clang` and `{root}` replaced.
+fn with_root(word: &str) -> String {
+    let word = if word.contains("{root}/toolchain/clang") {
+        word.replace("{root}/toolchain/clang", &toolchain_dir())
+    } else {
+        word.to_owned()
+    };
+    word.replace("{root}", ROOT)
+}
+
+/// The description file of crate `llrm-NAME`: `file`, else `datalayout.toml`.
+fn description_path(
+    name: &str,
+    file: Option<&str>,
+) -> String {
+    format!("{ROOT}/crates/target/llrm-{name}/src/machines/{}", file.unwrap_or("datalayout.toml"))
+}
+
 fn c_abi_of(target: &Target) -> Result<Option<CAbi>, String> {
     let Some(name) = &target.description else { return Ok(None) };
-    let path = format!("{ROOT}/crates/target/llrm-{name}/src/machines/datalayout.toml");
-    let text = std::fs::read_to_string(&path).map_err(|error| format!("{path}: {error}"))?;
+    let path = description_path(name, target.description_file.as_deref());
+    let text = description_text(name, target.description_file.as_deref(), &path)?;
     let table: toml::Table = text.parse().map_err(|error| format!("{path}: {error}"))?;
     let c = table.get("c").and_then(toml::Value::as_table).ok_or(format!("{path}: no [c]"))?;
     let size = |key: &str| -> Result<u32, String> {
@@ -189,10 +390,10 @@ pub fn targets(text: &str) -> Result<BTreeMap<String, Target>, String> {
         target.c_abi = c_abi_of(target)?;
         target.clang_datalayout = target.clang_datalayout.take().map(|one| expanded(&one)).transpose()?;
         for word in target.clang.iter_mut().chain(&mut target.llc) {
-            *word = word.replace("{root}", ROOT);
+            *word = with_root(word);
         }
         for word in target.clang.iter_mut().chain(&mut target.llc).chain(&mut target.link) {
-            *word = with_environment(word);
+            *word = with_ow(&with_environment(word), &cache_dir());
         }
     }
     Ok(table)
@@ -262,6 +463,8 @@ const LLC_FLAGS: &[&str] = &[
     "-mno-stack-is-data",
     "-mfar-bss",
     "-mno-far-bss",
+    "-mfar-bss-init",
+    "-mno-far-bss-init",
     "-mregcall-default",
     "-mc-library",
     "-mbss-begin",
@@ -270,6 +473,10 @@ const LLC_FLAGS: &[&str] = &[
     "-ffloat-store",
     "-fverify-ir",
     "-fno-float-store",
+    "-ffunction-sections",
+    "-fno-function-sections",
+    "-fwhole-program",
+    "-fno-whole-program",
 ];
 const LLC_PREFIXES: &[&str] =
     &["--isel=", "-fobject-format=", "-mcode-segment=", "-fno-inline=", "-Wstack-usage=", "-fexcess-precision="];
@@ -290,6 +497,9 @@ const BACKEND_PASSES: &[&str] = &[
     "inline-recursive",
     "gcse",
     "tree-pre",
+    "thread-jumps",
+    "llrm-speed-rate",
+    "llrm-vect-very-cheap",
     "tree-switch-conversion",
     "jump-tables",
     "tree-dse",
@@ -311,6 +521,31 @@ fn backend_pass(flag: &str) -> Option<&'static str> {
 }
 
 const REFUSED: &[&str] = &["-fsanitize", "-fprofile", "-fcs-profile", "-flto", "-fmemory-profile"];
+/// The first definition, declaration or call whose parameters carry `inreg`:
+/// what `-mregparm=N` and `__attribute__((regparm(N)))` make clang write. No
+/// backend gives it registers, so an object built that way took its arguments
+/// from the stack where its callers put them in registers.
+fn register_parameter(ir: &str) -> Option<&str> {
+    ir.lines().find(|line| {
+        let line = line.trim_start();
+        (line.starts_with("define ") || line.starts_with("declare ") || line.contains(" call "))
+            && line.split(|c: char| !(c.is_alphanumeric() || c == '_')).any(|word| word == "inreg")
+    })
+}
+
+/// Whether the backend places the `inreg` arguments of this build: the 32-bit
+/// x86 System V convention does (`inreg_registers`), no other does. The last
+/// `-mabi=` of the target's backend flags and the command line is the one the
+/// backend takes.
+fn places_inreg(
+    target: &Target,
+    build: &Build,
+) -> bool {
+    let arch = target.triple.split('-').next().unwrap_or_default();
+    let abi = target.llc.iter().chain(&build.llc).rev().find(|flag| flag.starts_with("-mabi="));
+    matches!(arch, "i386" | "i486" | "i586" | "i686") && abi.is_some_and(|flag| flag == "-mabi=sysv")
+}
+
 const PASSTHROUGH: &[&str] = &["-E", "-M", "-MM", "-emit-llvm", "-fsyntax-only", "-###", "-dumpmachine"];
 
 /// The target named by `-target`/`--target=`, and the job the rest of `argv`
@@ -354,7 +589,7 @@ pub fn parse(argv: &[String]) -> Result<(Option<String>, Job), String> {
         } else if let Some(list) = flag.strip_prefix("-fsanitize=").or_else(|| flag.strip_prefix("-fno-sanitize="))
             && list.split(',').all(|name| matches!(name, "bounds" | "stack"))
         {
-            // The checks are the backend's (gcc's names, as llrm-c took them):
+            // The checks are the backend's (gcc's names, as llrm-cc took them):
             // `stack` checks SP on entry; `bounds` checks nothing in IR, which
             // carries no subscripts.
             build.llc.push(flag.to_owned());
@@ -364,14 +599,9 @@ pub fn parse(argv: &[String]) -> Result<(Option<String>, Job), String> {
             // clang writes the debug metadata, the backend the format `flag`
             // names.
             if !build.clang.iter().any(|one| one == "-g") {
-                // No `#dbg_assign`: the importer reads `#dbg_value` and
-                // `#dbg_declare` only.
-                build
-                    .clang
-                    .extend(
-                        ["-g", "-fdebug-compilation-dir=.", "-Xclang", "-fexperimental-assignment-tracking=disabled"]
-                            .map(str::to_owned),
-                    );
+                // The backend makes the `#dbg_assign`s itself
+                // (`AssignmentTrackingPass`).
+                build.clang.extend(["-g", "-fdebug-compilation-dir=."].map(str::to_owned));
             }
             build.llc.push(flag.to_owned());
         } else if let Some(level) = flag.strip_prefix("-O") {
@@ -414,7 +644,7 @@ pub fn parse(argv: &[String]) -> Result<(Option<String>, Job), String> {
         } else if LLC_FLAGS.contains(&flag) || LLC_PREFIXES.iter().any(|one| flag.starts_with(one)) {
             build.llc.push(flag.to_owned());
         } else if flag == "--dump" {
-            // llrm-c's switch: each backend stage written to the directory.
+            // llrm-cc's switch: each backend stage written to the directory.
             build.llc.push(flag.to_owned());
             build.llc.push(value(&mut at)?);
         } else if flag.starts_with("--dump=") {
@@ -476,6 +706,119 @@ pub fn target_named<'a>(
 }
 
 /// `llrm-llc`'s argument list for one translated unit.
+/// The build's flags for clang: all of them, but the code model on a target
+/// whose backend takes it (clang refuses it there).
+pub fn clang_flags(
+    target: &Target,
+    build: &Build,
+) -> Vec<String> {
+    let mut flags: Vec<String> =
+        build.clang.iter().filter(|flag| !(target.llc_mcmodel && flag.starts_with("-mcmodel="))).cloned().collect();
+    if unrolls_at_o1(target, build) {
+        flags.push("-funroll-loops".into());
+    }
+    // Clang takes `-fexcess-precision=` where the backend does not.
+    if !target.llc_passes {
+        flags.extend(build.llc.iter().filter(|flag| flag.starts_with("-fexcess-precision=")).cloned());
+    }
+    flags
+}
+
+/// Whether the target's `-O1` takes `-funroll-loops` as its default: unless the
+/// command line states either `-f[no-]unroll-loops`.
+fn unrolls_at_o1(
+    target: &Target,
+    build: &Build,
+) -> bool {
+    target.unroll_at_o1
+        && build.level == "1"
+        && !build.clang.iter().any(|flag| flag == "-funroll-loops" || flag == "-fno-unroll-loops")
+}
+
+/// Whether the target's `-O1` takes `-fthread-jumps` as its default: unless the
+/// command line states either `-f[no-]thread-jumps`, and only where the backend
+/// takes pass switches.
+fn threads_jumps_at_o1(
+    target: &Target,
+    build: &Build,
+) -> bool {
+    target.thread_jumps_at_o1
+        && target.llc_passes
+        && build.level == "1"
+        && !build.llc.iter().any(|flag| flag == "-fthread-jumps" || flag == "-fno-thread-jumps")
+}
+
+/// Whether the target's `-O1` takes `-fllrm-speed-rate` as its default: unless
+/// the command line states either spelling, and only where the backend takes
+/// pass switches.
+fn prices_bytes_at_o1(
+    target: &Target,
+    build: &Build,
+) -> bool {
+    target.speed_rate_at_o1
+        && target.llc_passes
+        && build.level == "1"
+        && !build.llc.iter().any(|flag| flag == "-fllrm-speed-rate" || flag == "-fno-llrm-speed-rate")
+}
+
+/// Whether the target's `-O1` takes `-fno-inline-recursive` as its default:
+/// unless the command line states either `-f[no-]inline-recursive`, and only
+/// where the backend takes pass switches.
+fn no_recursion_at_o1(
+    target: &Target,
+    build: &Build,
+) -> bool {
+    target.no_recursion_at_o1
+        && target.llc_passes
+        && build.level == "1"
+        && !build.llc.iter().any(|flag| flag == "-finline-recursive" || flag == "-fno-inline-recursive")
+}
+
+/// Whether the target's `-O1` takes `-ftree-pre` as its default: unless the
+/// command line states either `-f[no-]tree-pre`, and only where the backend
+/// takes pass switches.
+fn pre_at_o1(
+    target: &Target,
+    build: &Build,
+) -> bool {
+    target.pre_at_o1
+        && target.llc_passes
+        && build.level == "1"
+        && !build.llc.iter().any(|flag| flag == "-ftree-pre" || flag == "-fno-tree-pre")
+}
+
+/// Whether the build links a single C source into an executable on a target
+/// that sweeps what `main` does not reach, unless the command line states
+/// either `-f[no-]whole-program`.
+fn sweeps_whole_program(
+    target: &Target,
+    build: &Build,
+) -> bool {
+    target.whole_program
+        && build.stop == Stop::Executable
+        && matches!(build.inputs.as_slice(), [Input::Source(_)])
+        && !build.llc.iter().any(|flag| flag == "-fwhole-program" || flag == "-fno-whole-program")
+}
+
+/// Whether `flag` is one of the backend pipeline's `-f[no-]PASS` switches.
+fn is_pass_switch(flag: &str) -> bool {
+    backend_pass(flag).is_some()
+        || flag == "-funroll-loops"
+        || flag == "-fno-unroll-loops"
+        || flag.starts_with("-fexcess-precision=")
+}
+
+/// The build's switches that the target's backend does not take.
+pub fn dropped_pass_switches<'a>(
+    target: &Target,
+    build: &'a Build,
+) -> Vec<&'a str> {
+    if target.llc_passes {
+        return vec![];
+    }
+    build.llc.iter().map(String::as_str).filter(|flag| is_pass_switch(flag)).collect()
+}
+
 pub fn llc_args(
     target: &Target,
     build: &Build,
@@ -487,7 +830,29 @@ pub fn llc_args(
         args.push(format!("-O{}", build.level));
     }
     args.extend(target.llc.iter().cloned());
-    args.extend(build.llc.iter().cloned());
+    let dropped = dropped_pass_switches(target, build);
+    args.extend(build.llc.iter().filter(|flag| !dropped.contains(&flag.as_str())).cloned());
+    if unrolls_at_o1(target, build) {
+        args.push("-funroll-loops".into());
+    }
+    if threads_jumps_at_o1(target, build) {
+        args.push("-fthread-jumps".into());
+    }
+    if prices_bytes_at_o1(target, build) {
+        args.push("-fllrm-speed-rate".into());
+    }
+    if pre_at_o1(target, build) {
+        args.push("-ftree-pre".into());
+    }
+    if no_recursion_at_o1(target, build) {
+        args.push("-fno-inline-recursive".into());
+    }
+    if sweeps_whole_program(target, build) {
+        args.push("-fwhole-program".into());
+    }
+    if target.llc_mcmodel {
+        args.extend(build.clang.iter().filter(|flag| flag.starts_with("-mcmodel=")).cloned());
+    }
     if build.stop == Stop::Assembly {
         args.push("-S".into());
     }
@@ -526,17 +891,40 @@ pub fn link_command(
             "{objects}" => command.extend(objects.iter().cloned()),
             "{flags}" => command.extend(flags.iter().cloned()),
             "{output}" => command.push(output.to_owned()),
-            other if other.contains("{root}") => command.push(other.replace("{root}", ROOT)),
+            other if other.contains("{root}") => command.push(with_root(other)),
             other => command.push(other.to_owned()),
         }
     }
     if let Some(open) = command.iter().find(|word| word.contains("{env:")) {
         return Err(unset(open));
     }
+    if command.iter().any(|word| word.contains("{ow}")) {
+        return Err(missing_ow(&cache_dir()));
+    }
     if command.is_empty() {
         return Err("empty link recipe".into());
     }
     Ok(command)
+}
+
+/// The error for a clang whose datalayout differs from the table's. A row with
+/// a `clang_env` takes the fork's clang from that variable, and falls back to
+/// the pin's, which has no 16-bit layout: the message names the variable when
+/// it is unset.
+fn layout_mismatch(
+    path: &str,
+    printed: &str,
+    target: &Target,
+    var: impl Fn(&str) -> Option<std::ffi::OsString>,
+) -> String {
+    let mut message = format!(
+        "{path}: clang's datalayout `{printed}` lays types out differently from the table's `{}`",
+        target.datalayout
+    );
+    if let Some(name) = target.clang_env.as_deref().filter(|name| var(name).is_none()) {
+        message.push_str(&format!(" (this row needs the fork's clang: set {name}; the pin's clang was used)"));
+    }
+    message
 }
 
 fn clang_path(target: &Target) -> PathBuf {
@@ -572,10 +960,35 @@ fn run(
     }
 }
 
+/// What `clang --version` is not asked twice for: the clang's path, size and
+/// modification time, with the pin file it was judged against.
+fn pin_stamp(clang: &Path) -> Option<String> {
+    let meta = std::fs::metadata(clang).ok()?;
+    let modified = meta.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?;
+    Some(format!("{}\n{}\n{}\n{PIN_FILE}", clang.display(), meta.len(), modified.as_nanos()))
+}
+
+/// Where the stamp of a clang found to be a pin is kept. Any read, write or
+/// mismatch falls back to asking the clang.
+fn pin_stamp_file(clang: &Path) -> PathBuf {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    clang.hash(&mut hasher);
+    std::env::temp_dir().join(format!("llrm-cc-pin-{:016x}", hasher.finish()))
+}
+
 fn check_pin(clang: &Path) -> Result<(), String> {
+    let stamp = pin_stamp(clang);
+    let file = pin_stamp_file(clang);
+    if stamp.as_deref().is_some_and(|stamp| std::fs::read_to_string(&file).is_ok_and(|kept| kept == stamp)) {
+        return Ok(());
+    }
     let out = Command::new(clang).arg("--version").output().map_err(|error| format!("{}: {error}", clang.display()))?;
     let said = String::from_utf8_lossy(&out.stdout);
     if PIN_FILE.lines().filter_map(|line| line.split_whitespace().next()).any(|sha| said.contains(sha)) {
+        if let Some(stamp) = stamp {
+            let _ = std::fs::write(&file, stamp);
+        }
         Ok(())
     } else {
         Err(format!("{} is not the pinned clang {}", clang.display(), pin()))
@@ -590,6 +1003,41 @@ fn stem(input: &str) -> String {
     Path::new(input).file_stem().and_then(|one| one.to_str()).unwrap_or("a").to_owned()
 }
 
+/// What the target's clang and llc words still name that this machine lacks: an
+/// unset `{env:NAME}` or the Open Watcom tree `{ow}`. Said before anything
+/// runs, so a missing tree never reads as a failed compile.
+fn unresolved(target: &Target) -> Option<String> {
+    let words = || target.clang.iter().chain(&target.llc);
+    if let Some(open) = words().find(|word| word.contains("{env:")) {
+        return Some(unset(open).trim_start_matches("llrm-cc: ").to_owned());
+    }
+    words()
+        .any(|word| word.contains("{ow}"))
+        .then(|| missing_ow(&cache_dir()).trim_start_matches("llrm-cc: ").to_owned())
+}
+
+/// Clang's resource dir is `<prefix>/lib/clang/<version>` for the binary at
+/// `<prefix>/bin/clang`; `spawn` (`clang -print-resource-dir`, a process per
+/// compile) runs only when that layout is absent or ambiguous.
+fn resource_include(
+    clang: &Path,
+    spawn: impl FnOnce() -> Option<PathBuf>,
+) -> Option<PathBuf> {
+    let derived = || {
+        let prefix = clang.canonicalize().ok()?.parent()?.parent()?.to_owned();
+        let mut versions = std::fs::read_dir(prefix.join("lib/clang"))
+            .ok()?
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|path| path.join("include").is_dir());
+        match (versions.next(), versions.next()) {
+            (Some(only), None) => Some(only),
+            _ => None,
+        }
+    };
+    derived().or_else(spawn)
+}
+
 fn build(
     target: &Target,
     build: &Build,
@@ -600,8 +1048,8 @@ fn build(
         eprintln!("llrm-cc: {why}");
         1
     };
-    if let Some(open) = target.clang.iter().chain(&target.llc).find(|word| word.contains("{env:")) {
-        return Err(fail(unset(open)));
+    if let Some(why) = unresolved(target) {
+        return Err(fail(why));
     }
     if build.output.is_some() && build.stop != Stop::Executable && build.inputs.len() > 1 {
         return Err(fail("cannot specify -o with -c or -S and several inputs".into()));
@@ -609,13 +1057,16 @@ fn build(
     // `-nostdinc` drops clang's own freestanding headers (`stdint.h`,
     // `stdarg.h`); they go back after the target's.
     let resource: Vec<String> = if target.clang.iter().any(|word| word == "-nostdinc") {
-        Command::new(&clang)
-            .arg("-print-resource-dir")
-            .output()
-            .ok()
-            .and_then(|out| String::from_utf8(out.stdout).ok())
-            .map(|dir| vec!["-idirafter".to_owned(), format!("{}/include", dir.trim())])
-            .unwrap_or_default()
+        resource_include(&clang, || {
+            Command::new(&clang)
+                .arg("-print-resource-dir")
+                .output()
+                .ok()
+                .and_then(|out| String::from_utf8(out.stdout).ok())
+                .map(|dir| PathBuf::from(dir.trim()))
+        })
+        .map(|dir| vec!["-idirafter".to_owned(), format!("{}/include", dir.display())])
+        .unwrap_or_default()
     } else {
         Vec::new()
     };
@@ -648,23 +1099,36 @@ fn build(
                 let ir = scratch.join(format!("{}.ll", stem(path)));
                 let mut args = target.clang.clone();
                 args.extend(resource.iter().cloned());
-                args.extend(build.clang.iter().cloned());
+                args.extend(clang_flags(target, build));
                 args.extend(
-                    ["-S", "-emit-llvm", "-Xclang", "-disable-llvm-passes", "-Xclang", "-disable-O0-optnone", "-o"]
-                        .map(String::from),
+                    [
+                        "-S",
+                        "-emit-llvm",
+                        "-Xclang",
+                        "-emit-llvm-uselists",
+                        "-Xclang",
+                        "-disable-llvm-passes",
+                        "-Xclang",
+                        "-disable-O0-optnone",
+                        "-o",
+                    ]
+                    .map(String::from),
                 );
                 args.extend([ir.display().to_string(), path.clone()]);
                 run(&clang, &args)?;
                 let text = std::fs::read_to_string(&ir).map_err(|error| fail(format!("{}: {error}", ir.display())))?;
                 let text = lifetimes::upgraded(&text);
+                if let Some(line) = register_parameter(&text).filter(|_| !places_inreg(target, build)) {
+                    return Err(fail(format!(
+                        "{path}: regparm (an `inreg` parameter) is not translated yet: {}",
+                        line.trim()
+                    )));
+                }
                 std::fs::write(&ir, &text).map_err(|error| fail(format!("{}: {error}", ir.display())))?;
                 let printed = datalayout_of(&text).unwrap_or_default();
                 let expected = target.clang_datalayout.as_deref().unwrap_or(&target.datalayout);
                 if printed != expected && layout_facts(printed) != layout_facts(&target.datalayout) {
-                    return Err(fail(format!(
-                        "{path}: clang's datalayout `{printed}` lays types out differently from the table's `{}`",
-                        target.datalayout
-                    )));
+                    return Err(fail(layout_mismatch(path, printed, target, |name| std::env::var_os(name))));
                 }
                 if printed != target.datalayout {
                     let line = format!("target datalayout = \"{printed}\"");
@@ -700,6 +1164,13 @@ fn build(
                     std::fs::write(&ir, translated).map_err(|error| fail(format!("{}: {error}", ir.display())))?;
                 }
                 let object = want(if build.stop == Stop::Assembly { "s" } else { "o" });
+                // A switch clang got as well is taken there.
+                let taken = clang_flags(target, build);
+                for flag in
+                    dropped_pass_switches(target, build).into_iter().filter(|flag| !taken.iter().any(|one| one == flag))
+                {
+                    eprintln!("llrm-cc: warning: {flag} is not a switch of this target's backend: ignored");
+                }
                 run(&llc_path(&target.llc_program), &llc_args(target, build, &ir, Path::new(&object)))?;
                 objects.push(object);
             }
@@ -783,6 +1254,10 @@ pub fn run_main(argv: &[String]) -> i32 {
             eprintln!("llrm-cc: {why}");
             1
         })?;
+        if let Some(why) = unresolved(target) {
+            eprintln!("llrm-cc: {why}");
+            return Err(1);
+        }
         check_pin(&clang_path(target)).map_err(|why| {
             eprintln!("llrm-cc: {why}");
             1

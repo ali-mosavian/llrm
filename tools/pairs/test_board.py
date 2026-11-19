@@ -26,7 +26,7 @@ def made(tmp_path, source_text="int a;", uptime="up 1 day, load average: 0.10"):
     source = tmp_path / "d_faces.c"
     source.write_text(source_text)
     clang = shim(tmp_path / "clang", "clang version 24.0.0git (pinned d1106deb71cc)")
-    head = shim(tmp_path / "llrm-c", "head")
+    head = shim(tmp_path / "llrm-cc", "head")
     lines = board.header(source, ["-I", str(tmp_path)], clang, [("head", head)], uptime)
     return board, lines, source
 
@@ -49,14 +49,14 @@ def test_an_input_that_changes_content_but_not_path_changes_the_header(tmp_path)
     _, first, source = made(tmp_path, "int a;")
     board = load("board")
     source.write_text("int b;")
-    second = board.header(source, ["-I", str(tmp_path)], str(tmp_path / "clang"), [("head", str(tmp_path / "llrm-c"))], "up 1 day, load average: 0.10")
+    second = board.header(source, ["-I", str(tmp_path)], str(tmp_path / "clang"), [("head", str(tmp_path / "llrm-cc"))], "up 1 day, load average: 0.10")
     assert first != second
     assert [line for line in first if line.startswith("input:")] != [line for line in second if line.startswith("input:")]
 
 
 def test_a_changed_compiler_changes_the_header(tmp_path):
     _, first, _ = made(tmp_path)
-    shim(tmp_path / "llrm-c", "other")
+    shim(tmp_path / "llrm-cc", "other")
     board = load("board")
-    second = board.header(tmp_path / "d_faces.c", ["-I", str(tmp_path)], str(tmp_path / "clang"), [("head", str(tmp_path / "llrm-c"))], "up 1 day, load average: 0.10")
+    second = board.header(tmp_path / "d_faces.c", ["-I", str(tmp_path)], str(tmp_path / "clang"), [("head", str(tmp_path / "llrm-cc"))], "up 1 day, load average: 0.10")
     assert first != second

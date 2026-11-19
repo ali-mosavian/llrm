@@ -12,8 +12,18 @@ fn store(
     slot: i32,
 ) -> SDValue {
     let value = dag.get_register(EVT::I32, 5);
-    let ptr = dag.get_register(EVT::I32, 7);
-    let info = MemInfo { mem_vt: EVT::I32, align: 4, volatile: false, base: MemBase::Stack(slot), ext: None, space: 0 };
+    // One pointer register per slot: two stores of one value to one pointer are
+    // the same store, and the combiner drops the first.
+    let ptr = dag.get_register(EVT::I32, 7 + slot as u32);
+    let info = MemInfo {
+        mem_vt: EVT::I32,
+        align: 4,
+        volatile: false,
+        base: MemBase::Stack(slot),
+        ext: None,
+        space: 0,
+        ordering: None,
+    };
     dag.get_store(chain, value, ptr, info)
 }
 

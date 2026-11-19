@@ -73,6 +73,8 @@ pub fn splice_before(
 pub struct Spliced {
     /// The instructions of the copy, in the order of the body's.
     pub copies: Vec<InstId>,
+    /// The call's block, which the copy was entered from.
+    pub block: BlockId,
     /// The copy of the body's entry block.
     pub entry: BlockId,
     /// What stands for each of the body's returns: the branch back, or for a
@@ -205,5 +207,33 @@ pub fn spliced(
         }
         returned_from = vec![head];
     }
-    Spliced { copies, entry, returns: returned_from }
+    Spliced { copies, block, entry, returns: returned_from }
+}
+
+/// The copy's entry joined to the block that branches to it, as `InlineFunction`
+/// splices CalleeEntry into OrigBB and erases the branch
+/// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/Utils/InlineFunction.cpp#L3556>).
+/// Made when every user of the entry block is done with it. Nothing changes
+/// if `entry` has another predecessor or opens with a phi.
+pub fn merge_entry(
+    function: &mut Function,
+    block: BlockId,
+    entry: BlockId,
+) {
+    if block == entry || function.entry() == Some(entry) {
+        return;
+    }
+    let Some(back) = function.terminator(block) else { return };
+    if function.instruction(back).opcode != Opcode::Br
+        || function.instruction(back).operands[..] != [Operand::Block(entry)]
+        || !(function.predecessors(entry).len() == 1 && function.predecessors(entry).contains(&block))
+        || function.block(entry).first().is_some_and(|first| function.instruction(first).opcode == Opcode::Phi)
+    {
+        return;
+    }
+    function.erase(back).expect("a branch has no value");
+    let run: Vec<InstId> = function.iter_block(entry).collect();
+    function.splice(&run, Position::End(block)).expect("placed instructions");
+    function.replace_block_uses_with(entry, block);
+    function.erase_block(entry).expect("an emptied block nothing names");
 }

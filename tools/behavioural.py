@@ -2,7 +2,7 @@
 """The behavioural tier: after a merge that touches the register allocator, the coalescer, liveness, the selector, the peephole or the frame, build the bins once and run
 the call-shaped tests/run programs (the regparm3_matrix family and the programs that keep values across calls), and say so within minutes when one is wrong.
 
-    tools/behavioural.py [--tip SHA] [--watch SECONDS]     one check of origin/feat/parity (or SHA), or a check every SECONDS after a fetch
+    tools/behavioural.py [--tip SHA] [--watch SECONDS]     one check of origin/release/next (or SHA), or a check every SECONDS after a fetch
 
 Not a gate and not before a merge: the hourly sweep stays the official line (the 23:00 sweep of 2026-10-23 found #4152's wrong output 18 minutes after it landed; this
 finds it after the build and a few seconds of runs). A red line is `BEHAVIOURAL RED: <merge> <program>`, appended to the log (BEHAVIOURAL_LOG, default
@@ -18,8 +18,10 @@ import sys
 import time
 from pathlib import Path
 
+BRANCH = os.environ.get("LAND_BRANCH", "release/next")  # the integration branch (tools/landing/branch.sh)
+
 ROOT = Path(__file__).resolve().parent.parent
-BASE = "origin/feat/parity"
+BASE = f"origin/{BRANCH}"
 LOG = Path(os.environ.get("BEHAVIOURAL_LOG") or Path.home() / "scratch/coordwork/behavioural.log")
 STATE = Path(os.environ.get("BEHAVIOURAL_STATE") or Path.home() / "scratch/coordwork/behavioural.state")
 WORKTREE = Path(os.environ.get("BEHAVIOURAL_WORKTREE") or Path.home() / "scratch/wt-behavioural")
@@ -105,7 +107,7 @@ def check(tip: str, last: str | None, build=build_and_run, log: Path | None = No
 
 
 def once(tip_ref: str | None) -> int:
-    subprocess.run(["git", "fetch", "-q", "origin", "feat/parity"], cwd=ROOT, check=True)
+    subprocess.run(["git", "fetch", "-q", "origin", BRANCH], cwd=ROOT, check=True)
     tip = subprocess.run(["git", "rev-parse", tip_ref or BASE], cwd=ROOT, capture_output=True, text=True, check=True).stdout.strip()
     last = STATE.read_text().strip() if STATE.exists() else None
     if last == tip:

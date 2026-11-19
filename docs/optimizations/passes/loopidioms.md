@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/loopidioms.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/loopidioms.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/loopidioms.rs sha256:eabb5369d823934f5353d151d37defc7b56e6691dae96025f9508d3475651d09 -->
+<!-- src: crates/opt/llrm-transforms/src/loopidioms.rs sha256:2143d2444e8241857f37c46de0623700bc0b1efed1ff6be6ad4e8cf611f01ea3 -->
 
 # loopidioms
 
@@ -27,7 +27,7 @@ these forms:
   here it is priced from the target's table, so a word fill is `rep stosw`
   where its clocks beat the loop's at speed, and its bytes at `-Os`; m16
   `fillw` of 100 words is 407 clocks against the loop's 500, break-even
-  near 16 trips with the segment setup; owner w-5). A loop with several
+  near 16 trips with the segment setup; owner w12). A loop with several
   fills to bytes no other reaches is a memset each; fills that tile adjacent
   bytes with the same byte are one.
 - A copy: a load and a store of one cell each trip, the stored value being

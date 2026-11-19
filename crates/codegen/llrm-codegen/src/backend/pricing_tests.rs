@@ -23,6 +23,16 @@ fn test_memory_compare_is_priced_as_a_read_not_a_read_modify_write() {
     assert_eq!(classify("add", "word [bp-4],1", "8346fc01"), "alu_mr");
 }
 
+/// `inc dword ptr [bp-8]` was priced `alu_rr` (1 clk) where the 486 charges a read/modify/write
+/// `alu_mr` (3): a loop counter kept in memory looked as cheap as one in a register.
+#[test]
+fn test_memory_inc_dec_neg_are_priced_as_a_read_modify_write() {
+    for (mnemonic, raw) in [("inc", "66ff46f8"), ("dec", "66ff4ef8"), ("neg", "66f75ef8")] {
+        assert_eq!(classify(mnemonic, "dword [bp-8]", raw), "alu_mr", "{mnemonic} on memory");
+        assert_eq!(classify(mnemonic, "ebx", ""), "alu_rr", "{mnemonic} on a register");
+    }
+}
+
 #[test]
 fn test_scalar_double_shifts_use_the_integer_shift_price() {
     for mnemonic in ["shld", "shrd"] {
@@ -73,13 +83,29 @@ fn test_complete_far_pointer_loads_share_one_priced_form() {
 
 #[test]
 fn test_x87_exchange_is_explicitly_priced_for_every_cpu() {
-    let expected = [("386", 18), ("486", 4), ("P5", 1), ("P6", 0), ("K5", 1), ("K6", 2), ("K7", 0), ("Core", 0)];
+    let expected = [("386", 4), ("486", 4), ("P5", 1), ("P6", 0), ("K5", 1), ("K6", 2), ("K7", 0), ("Core", 0)];
     assert_eq!(classify("fxch", "st1", "d9c9"), "x87_exchange");
     let got: Vec<(&str, i64)> = cpu::names()
         .into_iter()
         .map(|name| (name, cpu::profile(name).unwrap().cost("x87_exchange").unwrap()))
         .collect();
     assert_eq!(got, expected);
+}
+
+/// `fld st(i)` was priced as `fld m` (`x87_load`): on a 486 the copy takes 4
+/// clocks and the load 3, so a hoisted constant copied each trip looked free
+/// (nbody -O2 m16: two copies a pair-loop trip, 1,200 trips). Every CPU states
+/// the copy; the 486 data sheet's figure differs (the 386 column carries the
+/// 486 numbers since #8311, by the user's 486/P5 rule: nobody uses the 386), the others tie with the load until measured.
+#[test]
+fn test_x87_register_copy_is_its_own_priced_form() {
+    assert_eq!(classify("fld", "st1", "d9c1"), "x87_copy");
+    assert_eq!(classify("fld", "qword [bp-8]", "dd46f8"), "x87_load");
+    for name in cpu::names() {
+        let cpu = cpu::profile(name).unwrap();
+        let extra = i64::from(matches!(name, "386" | "486"));
+        assert_eq!(cpu.cost("x87_copy").unwrap(), cpu.cost("x87_load").unwrap() + extra, "{name}");
+    }
 }
 
 /// Homebrew's ndisasm 3.01 printed `D1EB` as `shr bx,0x0`, so the D1 shifts
@@ -165,8 +191,8 @@ fn test_a_lea_of_a_register_and_a_scaled_copy_of_it_has_a_byte_price() {
         addr: None,
         through: RegId::EBX,
         index_through: RegId::EBX,
-        index: Some(ir::Held { value: 1, width: 4 }),
-        base: Some(ir::Held { value: 1, width: 4 }),
+        index: Some(ir::Held { value: 1, width: 4, offset: 0 }),
+        base: Some(ir::Held { value: 1, width: 4, offset: 0 }),
         scale: 2,
         width: 4,
         ..ir::Mem::new(None, 0)

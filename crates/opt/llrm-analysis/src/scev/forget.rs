@@ -132,6 +132,12 @@ impl ScalarEvolution {
         touched: &llrm_mir::touched::Touched,
         keep_counts: bool,
     ) {
+        // `forgetBlockAndLoopDispositions()`: a block made or an edge changed
+        // moves what dominates what.
+        if !touched.cfg.is_empty() || !touched.blocks_created.is_empty() || !touched.blocks_erased.is_empty() {
+            self.block_dispositions.clear();
+            self.loop_dispositions.clear();
+        }
         let removed: Vec<Scev> = touched.values_removed.iter().filter_map(|v| self.value_expr_map.remove(&v)).collect();
         self.forget_memoized_results(&removed);
         for v in touched.operands_changed.iter().filter(|_| !keep_counts) {
@@ -197,6 +203,36 @@ impl ScalarEvolution {
         }
     }
 
+    /// `forgetTopmostLoop` / `forgetLoop`, for a nest an edit rewrote: the
+    /// expressions of the values still defined in `blocks`, and of their
+    /// users, and the counts and users of the loops headed by `headers`. A
+    /// value kept with an operand replaced (`%start = %i - 1` once `%i` is
+    /// a constant) holds an add recurrence of a loop that is gone; the
+    /// expression of the phi it read is no operand of its own.
+    pub fn forget_loop_nest(
+        &mut self,
+        cx: &Cx,
+        blocks: &[BlockId],
+        headers: &[BlockId],
+    ) {
+        let mut visited: IdSet<InstId> = IdSet::new();
+        let mut worklist = Vec::new();
+        for &block in blocks {
+            for inst in cx.function.iter_block(block) {
+                if visited.insert(inst) {
+                    worklist.push(inst);
+                }
+            }
+        }
+        let mut to_forget = Vec::new();
+        self.visit_and_clear_users(cx, worklist, &mut visited, &mut to_forget);
+        self.forget_memoized_results(&to_forget);
+        for &header in headers {
+            self.forget_loop_users(cx, header);
+            self.trips.forget(header);
+        }
+    }
+
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L8714
     /// `forgetValue`: the SCEV of `v` and of everything computed from it.
     pub fn forget_value(
@@ -212,6 +248,25 @@ impl ScalarEvolution {
         let mut to_forget = Vec::new();
         self.visit_and_clear_users(cx, vec![i], &mut visited, &mut to_forget);
         self.forget_memoized_results(&to_forget);
+    }
+
+    /// Reads `v` as an unknown value from now on (`on`), or as what it
+    /// computes again; the expressions made from it are forgotten.
+    ///
+    /// Beyond the pin, which has no such switch: a pass that does not want the
+    /// analysis to see through an instruction (LSR and a remainder by a
+    /// constant the target keeps as a divide) sets it around its run.
+    pub fn set_opaque(
+        &mut self,
+        cx: &Cx,
+        v: Operand,
+        on: bool,
+    ) {
+        let Operand::Value(value) = v else { return };
+        let changed = if on { self.opaque.insert(value) } else { self.opaque.remove(&value) };
+        if changed {
+            self.forget_value(cx, v);
+        }
     }
 
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/ScalarEvolution.cpp#L4536

@@ -20,7 +20,7 @@ target: i486-unknown-linux-gnu, cpu i486 (no schedule model, no itinerary): the 
 ## Not translated (numbered, on the PR that lands the piece)
 
 - MS2: clustering and weak edges (no load/store pairing on x86), `tryBiasPhysRegs` (no copy bias without a physical-register copy graph yet), the resource model (i486 has none).
-- MS1 (no scheduler) ends with piece 3.
+- MS1 (no scheduler): closed, piece 3 landed and `pressuresink.rs` is deleted (d50878167a, 2026-10-26).
 - P5 pairing is the post-RA `schedule.rs`; the pre-RA pass has no P5 model either (the pin's i486 and P5 differ only in the model, which P5 would add).
 
 Rows: x_list, sieve, matmul (the pin's largest scheduler effects), the 71 rows in clocks, QCport -Os bytes, spill marks in our listing (a queued instrument) before and after.

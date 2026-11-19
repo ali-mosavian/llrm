@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/ehprepare.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/ehprepare.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/ehprepare.rs sha256:14010e2c1316ef43a6dfe8f8594968c39433c1b5de881b1550b1512fdfbb764a -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/ehprepare.rs sha256:42a3b0c6600225186b824bc3764ca9374e261b165ab98408eda24dac161f5000 -->
 
 # ehprepare
 
@@ -37,7 +37,7 @@ Without it GVN forwarded the variables into 2,638 phis in GORILLA's
 MAKECITYSCAPE and the demotion below stored them all back: 189,936 bytes at
 m32 -Os where main's is 47,769. D-EH1 (DEVIATE): MIR has no variadic
 intrinsic, so one call per variable stands for `localescape`; exit: the
-intrinsic in `llrm-mir` (owner splitkit-port, 2026-11-06).
+intrinsic in `llrm-mir` (owner anyisa, 2026-11-06).
 
 Row D-EH2 (open): GORILLA m32 is 3.5%, 4.6%, 5.4% and 4.4% over main at
 -O1, -O2, -O3 and -Os (50,709 against 48,994; 51,219 against 48,976; 51,609

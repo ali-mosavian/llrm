@@ -84,7 +84,7 @@ def test_the_difftest_tests_that_need_opt_are_red_not_skipped_where_the_gate_req
 
 
 def test_the_pindiff_corpus_check_is_red_not_skipped_where_the_gate_requires_the_tools():
-    """test_pindiff.py's corpus check skipped on CI when LLRM_OW, LLRM_PIN_CLANG or LLRM_CLANG_M16 was unset."""
+    """test_pindiff.py's corpus check skipped on CI when the Open Watcom tree, LLRM_PIN_CLANG or LLRM_CLANG_M16 was missing."""
     text = (ROOT / "tools/pairs/test_pindiff.py").read_text()
     assert 'pytest.fail if os.environ.get("LLRM_REQUIRE_PINTOOLS") else pytest.skip' in text and "LLRM_CLANG_M16" in text
 

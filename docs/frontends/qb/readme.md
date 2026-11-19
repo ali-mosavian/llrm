@@ -84,6 +84,7 @@ Without `-o` and `-S` the HIR text is printed. `-o OUT` writes the OMF object,
 | `--mbf` | BC's `/MBF`: Microsoft binary floating point |
 | `--alternate-math` | BC's `/FPa` |
 | `--whole-program` | Procedures get internal linkage; nothing outside the source calls them |
+| `--export NAME` | With `--whole-program`, procedure `NAME` stays public (repeatable); the program's entry points |
 | `--array-merging` | Dynamic arrays read together share one allocation |
 | `--runtime-frames` | Every procedure uses the runtime's frame entry and exit |
 | `--error-lines` | Errors in a module handler report their BASIC line |

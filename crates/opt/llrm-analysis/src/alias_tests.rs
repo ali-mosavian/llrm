@@ -200,7 +200,7 @@ b0:
 #[test]
 fn test_a_pointer_advanced_through_memory_reaches_a_fixed_point() {
     // `*to++` in heap.c's copy_bytes: each pass stored one more offset into
-    // the cell, and llrm-c never finished.
+    // the cell, and llrm-cc never finished.
     let (sender, receiver) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let parsed = Parsed::new(
@@ -1812,4 +1812,31 @@ b0:
     let before = interner.lookups();
     assert_eq!(memory::extent_of(&unit, root), Some(4));
     assert_eq!(interner.lookups(), before, "extent_of interned the global's object");
+}
+
+/// BasicAA asked an alloca's size through the whole object: its exposure scan,
+/// an interner lookup and `alloc_size` (887 Ir per query, 2116 queries, 1.9 M
+/// of jpeg_fixed -O2's 755 M Ir) for a number the alloca's type and count give.
+#[test]
+fn test_the_extent_of_an_alloca_is_read_without_interning_its_object() {
+    let parsed = Parsed::new(
+        "define void @f() {
+b0:
+  %a = alloca [4 x i16]
+  store i8 0, ptr %a
+  ret void
+}
+",
+    );
+    let unit = parsed.unit();
+    let root = unit
+        .function
+        .walk()
+        .flat_map(|(_, inst)| unit.function.instruction(inst).operands.iter().copied().collect::<Vec<_>>())
+        .find(|operand| matches!(operand, Operand::Value(_)))
+        .expect("the alloca's address");
+    let interner = ObjectInterner::of(unit.context);
+    let before = interner.lookups();
+    assert_eq!(memory::extent_of(&unit, root), Some(8));
+    assert_eq!(interner.lookups(), before, "extent_of interned the alloca's object");
 }

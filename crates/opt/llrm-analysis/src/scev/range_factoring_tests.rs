@@ -59,6 +59,6 @@ fn test_an_affine_recurrence_of_selects_has_the_union_of_its_two_ranges() {
     let value = function.instruction(phi).result.expect("a result");
     let mut se = ScalarEvolution::new();
     let i = se.get_scev(&cx, Operand::Value(value));
-    let range = se.get_unsigned_range(&cx, i);
+    let range = se.get_unsigned_range(&cx, i).to_word::<u128>();
     assert_eq!((range.get_unsigned_min(), range.get_unsigned_max()), (10, 26), "{range:?}");
 }

@@ -178,6 +178,14 @@ pub struct Generic {
     pub size_t_bits: u32,
 }
 
+impl Generic {
+    /// The pin's defaults for a pointer `bits` wide: a 32-bit `int` unless the
+    /// pointer is 16 bits wide, `size_t` as wide as the pointer.
+    pub fn for_pointer(bits: u32) -> Self {
+        Self { int_bits: if bits == 16 { 16 } else { 32 }, size_t_bits: bits }
+    }
+}
+
 impl Library for Generic {
     fn int_bits(&self) -> u32 {
         self.int_bits
@@ -192,6 +200,35 @@ impl Library for Generic {
         func: LibFunc,
     ) -> Availability {
         if BASE_UNAVAILABLE.contains(&func) { Availability::Unavailable } else { Availability::Standard }
+    }
+}
+
+/// A Darwin target's library (`initializeLibCalls`, the `isOSDarwin` tests):
+/// what `Generic` states, and `memset_pattern{4,8,16}`, which a current macOS
+/// or iOS has (TargetLibraryInfo.cpp#L159).
+#[derive(Clone, Copy, Debug)]
+pub struct Darwin {
+    pub int_bits: u32,
+    pub size_t_bits: u32,
+}
+
+impl Library for Darwin {
+    fn int_bits(&self) -> u32 {
+        self.int_bits
+    }
+
+    fn size_t_bits(&self) -> u32 {
+        self.size_t_bits
+    }
+
+    fn availability(
+        &self,
+        func: LibFunc,
+    ) -> Availability {
+        match func {
+            LibFunc::MemsetPattern4 | LibFunc::MemsetPattern8 | LibFunc::MemsetPattern16 => Availability::Standard,
+            _ => Generic { int_bits: self.int_bits, size_t_bits: self.size_t_bits }.availability(func),
+        }
     }
 }
 
@@ -453,3 +490,20 @@ pub struct Routine {
     /// The MIR calling convention number of the ABI's C convention.
     pub calling_convention: u32,
 }
+
+impl Routine {
+    /// The routines `names` of a target's C library, each by the symbol
+    /// `symbol` spells it: what `SimplifyLibCalls` and `LoopIdiomRecognize` may
+    /// form where the program links that library.
+    pub fn stated<'a>(
+        names: impl IntoIterator<Item = &'static str>,
+        symbol: impl Fn(&str) -> String + 'a,
+        calling_convention: u32,
+    ) -> Vec<Routine> {
+        names.into_iter().map(|standard| Routine { standard, symbol: symbol(standard), calling_convention }).collect()
+    }
+}
+
+/// `memcmp` and `bcmp`: in every hosted C library the compare arms of
+/// `SimplifyLibCalls` form (the pin states them from the triple).
+pub const HOSTED_COMPARE: [&str; 2] = ["memcmp", "bcmp"];

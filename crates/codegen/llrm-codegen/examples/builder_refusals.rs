@@ -32,7 +32,7 @@ fn main() {
         let _ = llrm_codegen::backend::memsetpattern::expanded(&mut module);
         let layout =
             module.datalayout.as_deref().map_or_else(DataLayout::default, |t| DataLayout::parse(t).unwrap_or_default());
-        let target = if m16 { BuilderTarget::m16() } else { BuilderTarget::m32() };
+        let target = if m16 { BuilderTarget::for_pointer_bits(16) } else { BuilderTarget::for_pointer_bits(32) };
         let (mut functions, mut blocks, mut refused) = (0, 0, 0);
         for (id, global, function) in module.functions() {
             if function.is_declaration() {
@@ -48,7 +48,7 @@ fn main() {
             let mut info = FunctionLoweringInfo::new(function);
             for &block in function.layout() {
                 blocks += 1;
-                if let Err(why) = build_block(&module, function, &layout, &target, arch, &convention, &mut info, block)
+                if let Err(why) = build_block(&module, function, &layout, &target, &arch, &convention, &mut info, block)
                 {
                     refused += 1;
                     println!("REFUSED {name}:{} {}", function.block(block).name.as_deref().unwrap_or(""), why.0);

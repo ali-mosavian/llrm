@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""llrm-c's compile cost against clang's and gcc's, per level, on d_faces and chosen bench programs.
+"""llrm-cc's compile cost against clang's and gcc's, per level, on d_faces and chosen bench programs.
 
-    QCPORT=<qb-quake src> tools/compile-gap.py [--programs matmul,quicksort] [llrm-c]   (builds the dist llrm-c if none is given)
+    QCPORT=<qb-quake src> tools/compile-gap.py [--programs matmul,quicksort] [llrm-cc]   (builds the dist llrm-cc if none is given)
 
 Prints user-space instructions of `-S` compiles (perf stat; best of 3 by cycles) for the three compilers, then for d_faces
 llrm's phases in own instructions (`LLRM_DEBUG=time`'s `[instr]`, summed by phase) beside clang's `-ftime-report`
@@ -73,23 +73,23 @@ def clang_phases(clang: str, level: str, args: list[str]) -> list[float]:
 
 
 def dist_build() -> str:
-    """The tree's llrm-c as shipped (fat LTO, one codegen unit): compile-time claims quote it, as a release build
+    """The tree's llrm-cc as shipped (fat LTO, one codegen unit): compile-time claims quote it, as a release build
     reads about 10% to 20% more instructions; gates stay on release."""
     built = subprocess.run(
-        ["cargo", "build", "--profile", "dist", "--bin", "llrm-c", "--message-format=json"],
+        ["cargo", "build", "--profile", "dist", "--bin", "llrm-cc", "--message-format=json"],
         cwd=ROOT, capture_output=True, text=True,
     )
     if built.returncode:
         sys.exit(f"dist build failed\n{built.stderr[-400:]}")
     for line in reversed(built.stdout.splitlines()):
-        if '"executable":"' in line and '"name":"llrm-c"' in line:
+        if '"executable":"' in line and '"name":"llrm-cc"' in line:
             return json.loads(line)["executable"]
-    sys.exit("no llrm-c in the build")
+    sys.exit("no llrm-cc in the build")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    parser.add_argument("llrm", nargs="?", help="an llrm-c to measure; by default the tree's, built with the dist profile")
+    parser.add_argument("llrm", nargs="?", help="an llrm-cc to measure; by default the tree's, built with the dist profile")
     parser.add_argument("--programs", default="matmul,quicksort,nbody,sieve,switch")
     parser.add_argument(
         "--clang",
@@ -103,6 +103,8 @@ def main() -> None:
     parser.add_argument("--allow-other-corpus", action="store_true", help="measure a source tree whose hash is not the registered one (tools/corpora.py)")
     args = parser.parse_args()
     args.clang = args.clang or pin_clang.path()
+    os.environ.setdefault("LLRM_PIN_CLANG", args.clang)  # llrm-cc without them used the system clang and died on its datalayout
+    os.environ.setdefault("LLRM_CC_TARGET", "x86_32-linux")
     args.llrm = args.llrm or dist_build()
     qc = corpora.resolve("dfaces", os.environ.get("DFACES_SRC") or os.environ.get("QCPORT"), args.allow_other_corpus)
     print(corpora.header("dfaces", qc))
@@ -121,7 +123,7 @@ def main() -> None:
         print(f"{level}: compile M instructions   llrm / clang / gcc{extra_column}")
         for name, (source, extra) in inputs.items():
             cost = [
-                instructions([cc, *flags, *(["-w"] if cc != args.llrm else []), level, *extra, *(sink if cc == args.llrm else sink_cc), source])
+                instructions([cc, *flags, *(["-w"] if cc != args.llrm else []), level, *extra, *sink_cc, source])
                 / 1e6
                 for cc in (args.llrm, args.clang, "gcc")
             ]
@@ -130,7 +132,7 @@ def main() -> None:
                 users = f" / {instructions([args.distro_clang, *flags, '-w', level, *extra, *sink_cc, source]) / 1e6:7.0f}"
             print(f"  {name:10} {cost[0]:7.0f} / {cost[1]:7.0f} / {cost[2]:7.0f}{users}   ({cost[0] / min(cost[1:]):.1f}x)")
         source, extra = inputs["d_faces"]
-        ours = phases(args.llrm, level, [*extra, *sink, source])
+        ours = phases(args.llrm, level, [*extra, *sink_cc, source])
         theirs = clang_phases(args.clang, level, [*extra, *sink_cc, source])
         whole = sum(ours.values())
         print("  d_faces llrm own Minstr: " + ", ".join(f"{k} {v:.0f} ({100 * v / whole:.0f}%)" for k, v in ours.most_common(6)))

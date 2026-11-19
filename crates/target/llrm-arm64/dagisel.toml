@@ -1,0 +1,327 @@
+# The AArch64 DAG selector's source: read by tools/dagisel/regen-target.sh and `llrm-dagisel-gen --target`.
+# The tables sit in llrm-dagisel (`in_dagisel`); their node predicates are in its `aarch64_predicates`.
+[target]
+name = "aarch64"
+llvm_build = "llvm-build-aarch64"
+ns = "AArch64::"
+isd = "AArch64ISD::"
+llvm_dir = "AArch64"
+td = "AArch64.td"
+cpus = ["apple-m1"]
+# The scheduling models (sched.rs): `generic` is Cortex-A510's, `apple-m1` Cyclone's.
+sched_cpus = ["generic", "apple-m1"]
+hw_modes = ["i64", "i64"]
+in_dagisel = true
+# The directory of the checked-in tables, from this file.
+out = "../../backend/llrm-dagisel/src/generated/aarch64"
+predicates = "crate::aarch64_predicates"
+# The scalar registers the hand code maps to the arm64 file by name.
+registers = ["X0", "X1", "X2", "X3", "X4", "X5", "X6", "X7", "X8", "X9", "X10", "X11", "X12", "X13", "X14", "X15", "X16", "X17", "X18", "X19", "X20", "X21", "X22", "X23", "X24", "X25", "X26", "X27", "X28", "FP", "LR", "SP", "XZR", "W0", "W1", "W2", "W3", "W4", "W5", "W6", "W7", "W8", "W9", "W10", "W11", "W12", "W13", "W14", "W15", "W16", "W17", "W18", "W19", "W20", "W21", "W22", "W23", "W24", "W25", "W26", "W27", "W28", "W29", "W30", "WSP", "WZR", "NZCV"]
+# Selected by hand (tryIndexedLoad), so no pattern names them.
+extra_symbols = [
+  "AArch64::LDRXpre",
+  "AArch64::LDRWpre",
+  "AArch64::LDRSWpre",
+  "AArch64::LDRSHXpre",
+  "AArch64::LDRSHWpre",
+  "AArch64::LDRHHpre",
+  "AArch64::LDRSBXpre",
+  "AArch64::LDRSBWpre",
+  "AArch64::LDRBBpre",
+  "AArch64::LDRHpre",
+  "AArch64::LDRSpre",
+  "AArch64::LDRDpre",
+  "AArch64::LDRQpre",
+  "AArch64::LDRXpost",
+  "AArch64::LDRWpost",
+  "AArch64::LDRSWpost",
+  "AArch64::LDRSHXpost",
+  "AArch64::LDRSHWpost",
+  "AArch64::LDRHHpost",
+  "AArch64::LDRSBXpost",
+  "AArch64::LDRSBWpost",
+  "AArch64::LDRBBpost",
+  "AArch64::LDRHpost",
+  "AArch64::LDRSpost",
+  "AArch64::LDRDpost",
+  "AArch64::LDRQpost",
+  # Selected by hand (tryBitfieldInsertOp).
+  "AArch64::BFMWri",
+  # Selected by hand (LowerBR_JT).
+  "AArch64::JumpTableDest32",
+  # The machine combiner's `mla`/`mls` (`VectorMulAcc`).
+  "AArch64::MLAv16i8",
+  "AArch64::MLAv2i32",
+  "AArch64::MLAv4i16",
+  "AArch64::MLAv4i32",
+  "AArch64::MLAv8i16",
+  "AArch64::MLAv8i8",
+  "AArch64::MLSv16i8",
+  "AArch64::MLSv2i32",
+  "AArch64::MLSv4i16",
+  "AArch64::MLSv4i32",
+  "AArch64::MLSv8i16",
+  "AArch64::MLSv8i8",
+  # Every opcode a form of `opcodes.instr` stands for: the scheduling model resolves its class by number
+  # (checked by `every_opcode_a_form_stands_for_has_a_number_in_the_table`).
+  "TargetOpcode::COPY",
+  "TargetOpcode::DBG_VALUE",
+  "AArch64::DUPv16i8gpr",
+  "AArch64::FMOVDXr",
+  "AArch64::FMOVHWr",
+  "AArch64::FMOVHXr",
+  "AArch64::FMOVSWr",
+  "AArch64::FMOVXHr",
+  "AArch64::LDPDi",
+  "AArch64::LDPDpost",
+  "AArch64::LDPDpre",
+  "AArch64::LDPQi",
+  "AArch64::LDPQpost",
+  "AArch64::LDPQpre",
+  "AArch64::LDPSWi",
+  "AArch64::LDPSWpost",
+  "AArch64::LDPSWpre",
+  "AArch64::LDPSi",
+  "AArch64::LDPSpost",
+  "AArch64::LDPSpre",
+  "AArch64::LDPWi",
+  "AArch64::LDPWpost",
+  "AArch64::LDPWpre",
+  "AArch64::LDPXpost",
+  "AArch64::LDPXpre",
+  "AArch64::MOVIv16b_ns",
+  "AArch64::MOVIv2d_ns",
+  "AArch64::MOVKWi",
+  "AArch64::MOVNWi",
+  "AArch64::MOVNXi",
+  "AArch64::MOVZWi",
+  "AArch64::ORRv16i8",
+  "AArch64::RET",
+  "AArch64::STPDi",
+  "AArch64::STPDpost",
+  "AArch64::STPDpre",
+  "AArch64::STPQi",
+  "AArch64::STPQpost",
+  "AArch64::STPQpre",
+  "AArch64::STPSi",
+  "AArch64::STPSpost",
+  "AArch64::STPSpre",
+  "AArch64::STPWi",
+  "AArch64::STPWpost",
+  "AArch64::STPWpre",
+  "AArch64::STPXpost",
+  "AArch64::STPXpre",
+  "AArch64::SUBWri",
+  "AArch64::SUBWrs",
+  "AArch64::SUBWrx",
+  "AArch64::SUBXri",
+  "AArch64::SUBXrx",
+  "TargetOpcode::JUMP_TABLE_DEBUG_INFO",
+]
+# Selected by hand when the vectors are live (a 64-bit `mvni`, a byte load for a lane): the tables before
+# the vectors leave them out, so the scheduling model prices them only then.
+dynamic_extra_symbols = [
+  "AArch64::BIFv16i8",
+  "AArch64::BIFv8i8",
+  "AArch64::BITv16i8",
+  "AArch64::BITv8i8",
+  "AArch64::BSLv16i8",
+  "AArch64::BSLv8i8",
+  "AArch64::LD2Twov8b",
+  "AArch64::LD2Twov16b",
+  "AArch64::LD2Twov4h",
+  "AArch64::LD2Twov8h",
+  "AArch64::LD2Twov2s",
+  "AArch64::LD2Twov4s",
+  "AArch64::LD2Twov2d",
+  "AArch64::LD3Threev8b",
+  "AArch64::LD3Threev16b",
+  "AArch64::LD3Threev4h",
+  "AArch64::LD3Threev8h",
+  "AArch64::LD3Threev2s",
+  "AArch64::LD3Threev4s",
+  "AArch64::LD3Threev2d",
+  "AArch64::LD4Fourv8b",
+  "AArch64::LD4Fourv16b",
+  "AArch64::LD4Fourv4h",
+  "AArch64::LD4Fourv8h",
+  "AArch64::LD4Fourv2s",
+  "AArch64::LD4Fourv4s",
+  "AArch64::LD4Fourv2d",
+  "AArch64::LDRBpost",
+  "AArch64::LDRBpre",
+  "AArch64::MVNIv2i32",
+  "AArch64::ST2Twov8b",
+  "AArch64::ST2Twov16b",
+  "AArch64::ST2Twov4h",
+  "AArch64::ST2Twov8h",
+  "AArch64::ST2Twov2s",
+  "AArch64::ST2Twov4s",
+  "AArch64::ST2Twov2d",
+  "AArch64::ST3Threev8b",
+  "AArch64::ST3Threev16b",
+  "AArch64::ST3Threev4h",
+  "AArch64::ST3Threev8h",
+  "AArch64::ST3Threev2s",
+  "AArch64::ST3Threev4s",
+  "AArch64::ST3Threev2d",
+  "AArch64::ST4Fourv8b",
+  "AArch64::ST4Fourv16b",
+  "AArch64::ST4Fourv4h",
+  "AArch64::ST4Fourv8h",
+  "AArch64::ST4Fourv2s",
+  "AArch64::ST4Fourv4s",
+  "AArch64::ST4Fourv2d"
+]
+# Opcodes the hand code selects (a bitcast, a float round) that kept a scheduling class only through patterns of vector
+# types now pruned: they keep their row in instrinfo.rs and sched.rs.
+sched_symbols = [
+  "AArch64::FABD64",
+  "AArch64::FMOVDr",
+  "AArch64::FMOVHr",
+  "AArch64::FMOVWSr",
+  "AArch64::FMOVXDr",
+  "AArch64::FRINT32XDr",
+  "AArch64::FRINT32ZDr",
+  "AArch64::FRINT64XDr",
+  "AArch64::FRINT64ZDr",
+  "AArch64::STNPSi",
+]
+ids_includes = [
+  '#include "MCTargetDesc/AArch64MCTargetDesc.h"',
+  '#include "AArch64SelectionDAGInfo.h"',
+]
+
+# AArch64 pattern-predicate atoms for the scalar subset (NEON, SVE and SME off): the dry run of the DAG path
+# (docs/working/selectiondag-plan.md, SD520-SD531). `[atom]` rows are what the pin's Subtarget says; an atom nothing states is an error.
+# apple-m1: the pin's `Processor` list, the scalar subset.
+[cpu.apple-m1]
+features = ["FPARMv8", "FullFP16", "LSE", "CRC", "AES", "SHA2", "SHA3", "RCPC", "RDM"]
+
+[atom]
+"Subtarget->isLittleEndian()" = true
+"Subtarget->isSVEorStreamingSVEAvailable()" = false
+"Subtarget->isSVEAvailable()" = false
+"Subtarget->isStreaming()" = false
+"Subtarget->isNonStreamingSVEorSME2Available()" = false
+"Subtarget->requiresStrictAlign()" = false
+"Subtarget->disableUnpredicatedLdStLower()" = false
+"shouldOptForSize(MF)" = false
+"Subtarget->isSTRQroSlow()" = false
+"Subtarget->useAlternateSExtLoadCVTF32Pattern()" = false
+"Subtarget->useWzrToVecMove()" = false
+"MF->getSubtarget<AArch64Subtarget>().hardenSlsBlr()" = false
+"MF->getInfo<AArch64FunctionInfo>()->branchTargetEnforcement()" = false
+"MF->getInfo<AArch64FunctionInfo>()->branchProtectionPAuthLR()" = false
+"MF->getFunction().hasOptNone()" = false
+
+# Decided when a function is selected (the flag-gated vectors, ARM64-VEC POC): off, NEON patterns never match, as when they were pruned.
+[dynamic]
+"Subtarget->isNeonAvailable()" = "neon_available"
+# A feature the CPUs differ in (apple-m1 has SHA3, generic does not): the CPU answers at selection time, not the table.
+"Subtarget->hasSHA3()" = "has_feature(\"SHA3\")"
+
+[types]
+dead_prefixes = ["v", "nxv", "aarch64"]
+# The vectors the DAG builds (ARM64-VEC POC): their loads and stores, nothing NEON-gated; the 64-bit integer
+# vectors are the narrow operands of the long forms (`ushll`, `uaddw`, `smull`).
+live = ["v16i8", "v8i16", "v4i32", "v2i64", "v4f32", "v2f64", "v2f32", "v8i8", "v4i16", "v2i32"]
+
+[node_predicate]
+# One name per predicate number is enough (the pin groups equal bodies). Names with no Dag query answer false by name (see aarch64_predicates.rs).
+extloadi8 = "memory_vt_i8"
+extloadi16 = "memory_vt_i16"
+extloadi32 = "memory_vt_i32"
+atomic_cmp_swap_i64 = "memory_vt_i64"
+extloadi1 = "memory_vt_i1"
+unindexedload = "unindexed_load"
+zextload = "zext_load"
+sextload = "sext_load"
+store = "non_truncating_store"
+unindexedstore = "unindexed_store"
+load = "non_extending_load"
+extload = "ext_load"
+truncstore = "truncating_store"
+or_disjoint = "or_disjoint"
+VectorIndexS = "imm_u64_lt_4"
+VectorIndexB = "imm_u64_lt_16"
+VectorIndexH = "imm_u64_lt_8"
+VectorIndex0 = "imm_u64_eq_0"
+vecshiftR8 = "imm_u32_1_to_8"
+maski8_or_more = "imm_mask_low_8"
+maski16_or_more = "imm_mask_low_16"
+VectorIndexD = "imm_u64_lt_2"
+vecshiftR16 = "imm_u32_1_to_16"
+vecshiftR32 = "imm_u32_1_to_32"
+vecshiftR64 = "imm_u32_1_to_64"
+imm0_127 = "imm_u32_lt_128"
+imm32_0_7 = "imm_u32_lt_8"
+imm0_31 = "imm_u64_lt_32"
+vecshiftL32 = "imm_u32_lt_32"
+vecshiftL8 = "imm_u32_lt_8"
+vecshiftL16 = "imm_u32_lt_16"
+vecshiftL64 = "imm_u32_lt_64"
+AArch64vashr_exact = "exact_flag"
+simdimmtype10 = "simd_imm_type10"
+fpimm32SIMDModImmType4 = "fp_imm_simd_mod_imm_type4"
+AArch64fmul_p_oneuse = "has_one_use"
+AArch64mul_p_oneuse = "has_one_use"
+AArch64setcc_z_oneuse = "has_one_use"
+any_fp_to_sint_oneuse = "has_one_use"
+any_fp_to_uint_oneuse = "has_one_use"
+anyext_oneuse = "has_one_use"
+fmul_oneuse = "has_one_use"
+fneg_oneuse = "has_one_use"
+int_aarch64_sve_cntp_oneuse = "has_one_use"
+step_vector_oneuse = "has_one_use"
+imm32_0_15 = "imm_u32_lt_16"
+imm0_255 = "imm_u32_lt_256"
+imm0_63 = "imm_u64_lt_64"
+timm32_0_65535 = "imm_u32_lt_65536"
+imm0_7 = "imm_u64_lt_8"
+imm0_15 = "imm_u64_lt_16"
+tbz_imm32_63 = "imm_u32_32_to_63"
+imm64_0_65535 = "imm_u64_lt_65536"
+ubsan_trap_imm = "imm_u8"
+rprfop = "imm_u32_le_63"
+simm9 = "simm9"
+s64imm_32bit = "simm32"
+i64imm_32bit = "zimm32"
+fpimm0 = "fp_imm_pos_zero"
+fpimm32 = "fp_imm_fmov32"
+fpimm64 = "fp_imm_fmov64"
+top32Zero = "top32_zero"
+topbitsallzero64 = "topbits_all_zero64"
+topbitsallzero32 = "topbits_all_zero32"
+top16Zero = "top16_zero"
+logical_imm32 = "logical_imm32"
+logical_imm64 = "logical_imm64"
+copyFromSP = "copy_from_sp"
+nontemporalstore = "non_temporal_store"
+anonymous_23203 = "atomic_acquire"
+anonymous_23211 = "atomic_seq_cst"
+atomic_cmp_swap_i16_monotonic = "atomic_monotonic"
+atomic_cmp_swap_i16_release = "atomic_release"
+atomic_cmp_swap_i16_acq_rel = "atomic_acq_rel"
+anonymous_23315 = "atomic_store_hint"
+anonymous_23320 = "atomic_store_hint"
+anonymous_23214 = "atomic_not_acquire_or_stronger"
+anonymous_23253 = "atomic_not_release_or_stronger"
+anonymous_23251 = "atomic_release_or_stronger"
+anonymous_23350 = "atomic_store_hint"
+anonymous_23364 = "atomic_store_hint"
+atomic_load_aext = "atomic_load_ext"
+atomic_load_zext = "atomic_load_zext"
+atomic_load_nonext = "atomic_load_nonext"
+ldaxr_1 = "exclusive_load_intrinsic"
+ldaxr_2 = "exclusive_load_intrinsic"
+ldaxr_4 = "exclusive_load_intrinsic"
+ldaxr_8 = "exclusive_load_intrinsic"
+post_store = "post_indexed"
+pre_store = "pre_indexed"
+smullwithsignbits = "smull_with_sign_bits"
+svcr_op = "sme_streaming_mode"
+trunc_isWorthFoldingALU = "has_one_use"
+neg_cheaper_imm32 = "negated_immediate_cheaper"
+alignedglobal = "aligned_global_literal"
+fpimm16 = "f16_immediate"

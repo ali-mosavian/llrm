@@ -140,6 +140,7 @@ pub fn folded(
         dom_conditions: None,
         cond_context: None,
         cxt: Some(last),
+        pending_intrinsics: &[],
     };
     let ty = q.type_of(condition).expect("a switched value has a type");
     let width = q.scalar_bits(condition);

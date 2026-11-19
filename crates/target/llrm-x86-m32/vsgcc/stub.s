@@ -1,14 +1,26 @@
 .text
-.globl report, _report, input_read, _input_read, report_, input_read_
+.globl report, _report, report_
 report:
 _report:
-input_read:
-_input_read:
  ret
 # llrm's default convention takes the value in EAX, and the harness reads it there: a place of its own
 report_:
-input_read_:
  ret
+# File API of the bench programs that read or write files (bench_io_shim.h): each its own address, which the harness
+# emulates (cdecl, arguments on the stack) and then lets this `ret` run, so the call costs the same in every compiler's column.
+.macro filecall name
+.globl \name, _\name, \name\()_
+\name:
+_\name:
+\name\()_:
+ ret
+.endm
+ filecall input_read
+ filecall vs_open_read
+ filecall vs_create
+ filecall vs_read
+ filecall vs_write
+ filecall vs_close
 # libc stand-ins: dword string ops, then the tail bytes
 .globl memset, memcpy, memmove, memcpy_, memmove_, memset_
 memset:

@@ -33,6 +33,59 @@ fn test_a_branch_on_a_not_swaps_its_successors() {
     assert!(out.contains("br i1 %c, label %e, label %t"), "{out}");
 }
 
+/// Inverting `br (not c), ok, fail` left the `!prof` where it was, so the
+/// check's failure edge kept the hot weight and the loop edge the 1: queens'
+/// `place()` lost 87% in clocks once Nib checks carried weights.
+#[test]
+fn test_inverting_a_branch_swaps_its_weights_with_its_successors() {
+    use crate::combine::combine_with_declared;
+    let mut module = parsed(
+        "define void @f(i1 %c) {\nb0:\n  %n = xor i1 %c, true\n  br i1 %n, label %t, label %e, !prof !0\nt:\n  ret void\ne:\n  ret void\n}\n!0 = !{!\"branch_weights\", i32 7, i32 1}\n",
+    );
+    let globals = module.globals.clone();
+    let metadata = module.metadata.clone();
+    let mut declared = llrm_mir::passes::Declared::of(&module);
+    let (context, function) = module.function_mut("f").expect("@f");
+    combine_with_declared(context, &globals, &metadata, &DataLayout::default(), function, visit, &mut declared);
+    declared.place(&mut module).unwrap();
+    let out = printed(&module);
+    let line = out.lines().find(|l| l.contains("br i1 %c")).expect("the inverted branch");
+    assert!(line.contains("label %e, label %t"), "{out}");
+    let node = line.rsplit("!prof !").next().expect("a !prof").trim();
+    assert!(out.contains(&format!("!{node} = !{{!\"branch_weights\", i32 1, i32 7}}")), "{out}");
+}
+
+/// `freelyInvertAllUsersOf`: the compare is inverted for a `not` of it, and a
+/// branch on it swaps its arms and its weights.
+#[test]
+fn test_inverting_a_compare_for_a_not_swaps_the_weights_of_its_other_branch() {
+    use crate::combine::combine_with_declared;
+    fn visit_not(
+        c: &mut Combiner,
+        inst: InstId,
+    ) -> Visit {
+        if c.function.instruction(inst).opcode == Opcode::Binary(llrm_mir::opcode::BinaryOp::Xor) {
+            crate::combine_not::fold_not(c, inst).unwrap_or(Visit::None)
+        } else {
+            Visit::None
+        }
+    }
+    let mut module = parsed(
+        "define i1 @f(i16 %a, i16 %b) {\nb0:\n  %c = icmp slt i16 %a, %b\n  %n = xor i1 %c, true\n  br i1 %c, label %t, label %e, !prof !0\nt:\n  ret i1 %n\ne:\n  ret i1 %n\n}\n!0 = !{!\"branch_weights\", i32 7, i32 1}\n",
+    );
+    let globals = module.globals.clone();
+    let metadata = module.metadata.clone();
+    let mut declared = llrm_mir::passes::Declared::of(&module);
+    let (context, function) = module.function_mut("f").expect("@f");
+    combine_with_declared(context, &globals, &metadata, &DataLayout::default(), function, visit_not, &mut declared);
+    declared.place(&mut module).unwrap();
+    let out = printed(&module);
+    let line = out.lines().find(|l| l.contains("br i1 %c")).expect("the branch");
+    assert!(line.contains("label %e, label %t"), "{out}");
+    let node = line.rsplit("!prof !").next().expect("a !prof").trim();
+    assert!(out.contains(&format!("!{node} = !{{!\"branch_weights\", i32 1, i32 7}}")), "{out}");
+}
+
 #[test]
 fn test_a_branch_to_one_block_on_both_edges_reads_no_condition() {
     let out = combined("define void @f(i1 %c) {\nb0:\n  br i1 %c, label %x, label %x\nx:\n  ret void\n}\n");
@@ -111,4 +164,26 @@ fn test_a_phi_input_on_an_edge_reads_a_number() {
         "define i1 @f(i1 %c) {\nb0:\n  br i1 %c, label %t, label %e\nt:\n  br label %m\ne:\n  br label %m\nm:\n  %p = phi i1 [ %c, %t ], [ %c, %e ]\n  ret i1 %p\n}\n",
     );
     assert!(out.contains("phi i1 [ true, %t ], [ false, %e ]"), "{out}");
+}
+
+/// `br (fcmp ole x, 0)` kept its non-canonical predicate, so the select it
+/// became priced `fcmp ole` where the pin's `fcmp ugt` is outside AArch64's
+/// fast vector select: jpeg_single's idct y-loop was widened at VF8 (783)
+/// where the pin keeps it scalar (1668).
+#[test]
+fn test_a_branch_on_a_non_canonical_fcmp_takes_the_inverse_and_swaps() {
+    let out = combined(
+        "define void @f(float %x) {\nb0:\n  %c = fcmp ole float %x, 0.0\n  br i1 %c, label %t, label %e\nt:\n  ret void\ne:\n  ret void\n}\n",
+    );
+    assert!(out.contains("fcmp ugt float %x, 0.0"), "{out}");
+    assert!(out.contains("br i1 %c, label %e, label %t"), "{out}");
+}
+
+/// A compare with a second user keeps its predicate (`m_OneUse`).
+#[test]
+fn test_a_shared_fcmp_keeps_its_predicate() {
+    let out = combined(
+        "define i1 @f(float %x) {\nb0:\n  %c = fcmp ole float %x, 0.0\n  br i1 %c, label %t, label %e\nt:\n  br label %m\ne:\n  br label %m\nm:\n  ret i1 %c\n}\n",
+    );
+    assert!(out.contains("fcmp ole"), "{out}");
 }

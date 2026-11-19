@@ -33,10 +33,10 @@
 //! The copy is an internal function `<origin>.constprop.N` with each known
 //! parameter replaced by its constant. A later call with the same constants
 //! (`Cloning::contexts`) goes to the copy already made. A function gets at
-//! most eight clones (`ipa-cp-max-recursive-depth`), which also bounds the
+//! most four clones (`ipa-cp-max-recursive-depth` 8 in gcc, DEVIATE IPACP-DEPTH below), which also bounds the
 //! recursion: a clone that calls itself with a new constant (`place(q, row + 1,
 //! n)` in the clone for `row`) is a candidate for the next clone, so GCC's -O3
-//! unrolls `queens` into eight, one a row. The copy is an ordinary function:
+//! unrolls `queens` into eight, one a row (four here). The copy is an ordinary function:
 //! the inliner takes a clone with one caller into it.
 //!
 //! GCC propagates lattices over the whole call graph and prices a value with
@@ -111,6 +111,7 @@ use llrm_analysis::memory::Unit;
 use llrm_analysis::{cfg, consts};
 use llrm_mir::context::{Constant, ConstantId, ConstantKind, GlobalId};
 use llrm_mir::datalayout::DataLayout;
+use llrm_mir::dense::IdSet;
 use llrm_mir::memory::Callees;
 use llrm_mir::module::Function;
 use llrm_mir::module::{GlobalKind, GlobalValue, InstId, Linkage, Module, Operand};
@@ -125,7 +126,12 @@ use crate::profit::{self, OperationCosts};
 const EVAL_THRESHOLD: i64 = 500;
 /// `ipa-cp-max-recursive-depth` (params.opt:225), which
 /// `ipa-cp-value-list-size` (:253) also makes the clones one function gets.
-const MAX_CLONES: usize = 8;
+/// DEVIATE IPACP-DEPTH (owner x86-m32-b, exit 2026-11-24; gcc's is 8): a
+/// target's default is 4, as the clones' compile cost grows faster than their
+/// number (m32 -O3 instructions on queens against no clones: depth 2 x1.55,
+/// 4 x4.13, 8 x71). x86-m32 states 8 (`Tti::ipa_cp_max_clones`): queens -O3
+/// 140,156 -> 73,196 clk (gcc 94,851) for 5.8 G instructions to compile it.
+pub const DEFAULT_MAX_CLONES: usize = 4;
 /// Our clocks, at our block frequencies (held to ten trips), per GCC time unit:
 /// `place` with `row` known saves 667 here and 245.8 in GCC's dump
 /// (`-fdump-ipa-cp-details`), which also declines quicksort's clone (time 1)
@@ -134,6 +140,20 @@ const TIME_SCALE: i64 = 5;
 /// The most a block counts in a callee's time: the trips GCC's loop estimates
 /// stop at.
 const MAX_FREQUENCY: i64 = 10;
+/// What a target's default for `-fipa-cp-clone` tunes beyond gcc (DEVIATE
+/// IPACP-O2, IPACP-LOOPS); a flag given, or -Omax, is gcc's own.
+#[derive(Clone, Copy, Debug)]
+pub struct Tuning {
+    /// A copy whose only gain is a known loop bound is made.
+    pub hint_clones: bool,
+    /// The loop hint counts only bounds the unroller takes whole.
+    pub peel_limited: bool,
+    /// The most clones one function gets (`ipa-cp-max-recursive-depth`).
+    pub max_clones: usize,
+}
+
+/// `max-completely-peel-times` (params.opt): the most trips the unroller takes whole.
+const MAX_PEEL_TIMES: i128 = 16;
 /// `ipa-cp-loop-hint-bonus` (params.opt:221): time units added where the known
 /// actuals make a loop's bound known.
 const LOOP_HINT_BONUS: i64 = 64;
@@ -156,6 +176,10 @@ pub struct Cloning {
     grown: i64,
 }
 
+/// The clones made so far, shared by the cloning before the walk and the one
+/// after it: a function gets at most `Tuning::max_clones` between them.
+pub type Shared = std::rc::Rc<std::cell::RefCell<Cloning>>;
+
 /// One kind of call: a callee and the constants it is called with.
 type Key = (GlobalId, Vec<Option<ConstantId>>);
 
@@ -176,6 +200,7 @@ pub fn cloned(
     private: &BTreeSet<GlobalId>,
     costs: &OperationCosts,
     clone: bool,
+    tuning: Tuning,
     state: &mut Cloning,
 ) -> Changed {
     let mut changed = Changed { added: Vec::new(), edited: Vec::new(), unsound: Vec::new() };
@@ -191,14 +216,22 @@ pub fn cloned(
     let unit: i64 = procedures.iter().filter_map(|&id| module.global(id).function()).map(inline::operations).sum();
     // The calls, grouped by what they know.
     let mut groups: BTreeMap<Key, Vec<(GlobalId, InstId, i64)>> = BTreeMap::new();
+    // What each call of a callee passes, the calls that know nothing too: a
+    // parameter every call gives the same constant has a constant lattice
+    // (GCC), any other a variable one.
+    let mut passed: BTreeMap<GlobalId, Vec<Vec<Option<ConstantId>>>> = BTreeMap::new();
     for &id in procedures {
         let Some(caller) = module.global(id).function() else { continue };
         let constants = facts::current_call_constants(&module.context, caller);
+        // How often a call of itself runs is gcc's estimate (`sreal_frequency`,
+        // `freq_sum` in its dump).
+        let origin_of = |one: GlobalId| state.origin.get(&one).copied().unwrap_or(one);
         let frequency =
-            profit::_frequencies(&module.context, &module.metadata, &module.globals, caller, None).unwrap_or_default();
+            frequencies_with_recursion(module, layout, caller, &|callee| origin_of(callee) == origin_of(id));
         for (block, at) in caller.walk() {
             let Some(name) = llrm_mir::memory::callee(&module.context, caller, at) else { continue };
             let known = constants.get(&at).map_or(&[][..], Vec::as_slice);
+            passed.entry(name).or_default().push(known.to_vec());
             if known.iter().all(Option::is_none) {
                 continue;
             }
@@ -214,8 +247,16 @@ pub fn cloned(
                 );
         }
     }
+    // GCC's `tailr1` precedes ipa-cp: the self-calls the pass loops.
+    let mut tails: BTreeMap<GlobalId, IdSet<InstId>> = BTreeMap::new();
+    for &(name, _) in groups.keys().collect::<BTreeSet<_>>() {
+        if recursive.contains(&name) {
+            tails.entry(name).or_insert_with(|| crate::tailcallelim::eliminated_self_calls(module, layout, name));
+        }
+    }
     for ((name, known), sites) in groups {
         let Some(body) = module.global(name).function() else { continue };
+        let eliminated = tails.get(&name).cloned().unwrap_or_default();
         // DEVIATE: an `available_externally` body is read, not run: the
         // definition is elsewhere. A copy would become a definition of its own
         // (`isDefinitionExact` is false for it; GCC's `ipa-cp` versions only a
@@ -242,7 +283,14 @@ pub fn cloned(
             continue;
         }
         let origin = state.origin.get(&name).copied().unwrap_or(name);
-        if let Some(&existing) = state.contexts.get(&(origin, known.clone())) {
+        // A clone the walk inlined away is one `unreachable` (`is_deleted`): a call sent
+        // there never returns, and the context gets a new clone.
+        let existing = state
+            .contexts
+            .get(&(origin, known.clone()))
+            .copied()
+            .filter(|&clone| module.global(clone).function().is_some_and(|body| !body.is_deleted()));
+        if let Some(existing) = existing {
             if existing == name {
                 // A call of the clone, which still passes the constants it was
                 // made for.
@@ -253,7 +301,7 @@ pub fn cloned(
             redirect(module, existing, &sites, &mut changed);
             continue;
         }
-        if state.made.get(&origin).copied().unwrap_or(0) >= MAX_CLONES {
+        if state.made.get(&origin).copied().unwrap_or(0) >= tuning.max_clones {
             continue;
         }
         let size = inline::operations(body);
@@ -262,20 +310,78 @@ pub fn cloned(
         let replaces = private.contains(&name)
             && !addressed.contains(&name)
             && counts.get(&name).copied().unwrap_or(0) == sites.len() as i64;
-        let (saved, loops) = time_saved(module, layout, body, &known, &callees, costs);
-        let frequency: i64 = sites.iter().map(|site| site.2).sum();
-        let mut benefit = (saved / TIME_SCALE + if loops { LOOP_HINT_BONUS } else { 0 }) * frequency / profit::UNIT;
-        // GCC's `incorporate_penalties`: a function in a cycle with others, not
-        // one that calls itself.
         let own = body.walk().any(|(_, inst)| llrm_mir::memory::callee(&module.context, body, inst) == Some(name));
-        if recursive.contains(&name) && !own {
-            benefit = benefit * (100 - RECURSION_PENALTY) / 100;
+        let frequency: i64 = sites.iter().map(|site| site.2).sum();
+        // GCC prices a value of a variable lattice alone
+        // (`estimate_local_effects`: "estimates for value 0 for param
+        // #0"): `chop(0, 64)` of a halving recursion saves nothing from `lo =
+        // 0` or from `hi = 64`, though both together bound its loop
+        // (recchop -O3: gcc declines, 1204 B). The clone then binds
+        // every constant these calls agree on
+        // (`find_more_scalar_values_for_callers_subset`). A constant lattice
+        // (every call agrees) is part of each context.
+        let agreed: Vec<Option<ConstantId>> = (0..known.len())
+            .map(|at| {
+                let first = known[at]?;
+                let every = passed.get(&name)?;
+                let all = every.iter().all(|call| call.get(at).copied().flatten() == Some(first));
+                (all && private.contains(&name) && !addressed.contains(&name)).then_some(first)
+            })
+            .collect();
+        let variable: Vec<usize> = (0..known.len()).filter(|&at| known[at].is_some() && agreed[at].is_none()).collect();
+        let contexts: Vec<Vec<Option<ConstantId>>> = if variable.is_empty() {
+            vec![known.clone()]
+        } else {
+            variable
+                .iter()
+                .map(|&one| (0..known.len()).map(|at| if at == one { known[at] } else { agreed[at] }).collect())
+                .collect()
+        };
+        let mut verdict = false;
+        let (mut saved, mut loops, mut benefit) = (0, false, 0);
+        for context in &contexts {
+            let (context_saved, context_loops, _) =
+                time_saved(module, layout, name, body, context, &callees, costs, tuning.peel_limited, &eliminated);
+            let level = state.made.get(&origin).copied().unwrap_or(0);
+            let (chain, chain_size) = chain_benefit(
+                module,
+                layout,
+                name,
+                body,
+                context,
+                &callees,
+                costs,
+                tuning.peel_limited,
+                &eliminated,
+                tuning.max_clones,
+                level,
+                &mut BTreeMap::new(),
+            );
+            let mut context_benefit = chain.saturating_mul(frequency) / profit::UNIT;
+            // GCC's `incorporate_penalties`: a function in a cycle with others,
+            // not one that calls itself.
+            if recursive.contains(&name) && !own {
+                context_benefit = context_benefit * (100 - RECURSION_PENALTY) / 100;
+            }
+            // DEVIATE IPACP-SHARED (owner w10, exit 2026-11-24): gcc credits a
+            // value every call site that passes it. A recursion's context two
+            // sites pass (`fib(n - 1)` here, `fib(n - 2)` there) is one the
+            // copies share: it has two callers, is not inlined back, and the
+            // calls to one pure callee in different functions are merged by
+            // nothing (m64 -O2 fib(20) runs fib(16) three times, +50% clk;
+            // frames +2%). A copy with one caller is inlined into it.
+            let shared = own && sites.len() > 1 && !replaces;
+            let pays = !shared
+                && (context_saved > 0 || (context_loops && tuning.hint_clones))
+                && (replaces
+                    || (context_benefit * 1000 >= EVAL_THRESHOLD * chain_size
+                        && state.grown + size <= unit.max(LARGE_UNIT) * UNIT_GROWTH / 100 + 1));
+            if pays || !verdict && context_benefit >= benefit {
+                (saved, loops, benefit) = (context_saved, context_loops, context_benefit);
+            }
+            verdict |= pays;
         }
         let cost = if replaces { 0 } else { size };
-        let verdict = (saved > 0 || loops)
-            && (replaces
-                || (benefit * 1000 >= EVAL_THRESHOLD * size
-                    && state.grown + size <= unit.max(LARGE_UNIT) * UNIT_GROWTH / 100 + 1));
         llrm_support::debug!(
             "ipa-cp",
             "{}: {} sites, {} of {} actuals known, saved {saved} clocks, loops {loops}, benefit {benefit}, size {size}: {}",
@@ -314,6 +420,7 @@ pub fn cloned(
                 GlobalValue {
                     name: called.into(),
                     linkage: Linkage::Internal,
+                    visibility: llrm_mir::Visibility::Default,
                     unnamed_addr: unnamed,
                     address_space: space,
                     kind: GlobalKind::Function(Box::new(copy)),
@@ -329,17 +436,211 @@ pub fn cloned(
     changed
 }
 
+/// GCC follows a recursive call's actual only as a pass-through jump function:
+/// a constant, a parameter, or one operation on a single parameter and a
+/// constant (`ipa_compute_jump_functions`). `(lo + hi) / 2` is no such value,
+/// so a recursion that halves a range makes no chain of contexts.
+fn is_simple_jump(
+    body: &Function,
+    operand: Operand,
+) -> bool {
+    let Operand::Value(value) = operand else { return true };
+    if body.parameters().contains(&value) {
+        return true;
+    }
+    let llrm_mir::module::ValueDef::Instruction(made) = body.value(value).def else { return false };
+    let instruction = body.instruction(made);
+    if !matches!(instruction.opcode, Opcode::Binary(_)) {
+        return false;
+    }
+    let parameters: BTreeSet<_> = instruction
+        .operands
+        .iter()
+        .filter_map(|one| match one {
+            Operand::Value(v) if body.parameters().contains(v) => Some(*v),
+            _ => None,
+        })
+        .collect();
+    let constants = instruction.operands.iter().filter(|one| matches!(one, Operand::Constant(_))).count();
+    parameters.len() == 1 && parameters.len() + constants == instruction.operands.len()
+}
+
+/// The parameter a simple jump function (`is_simple_jump`) reads, if any.
+fn jump_source(
+    body: &Function,
+    operand: Operand,
+) -> Option<llrm_mir::module::ValueId> {
+    let Operand::Value(value) = operand else { return None };
+    if body.parameters().contains(&value) {
+        return Some(value);
+    }
+    let llrm_mir::module::ValueDef::Instruction(made) = body.value(value).def else { return None };
+    body.instruction(made)
+        .operands
+        .iter()
+        .find_map(
+            |one| match one {
+                Operand::Value(v) if body.parameters().contains(v) => Some(*v),
+                _ => None,
+            },
+        )
+}
+
+/// What a context is worth, with what the contexts it passes to its own calls
+/// are worth: GCC's `propagate_effects` adds a value's benefit to the value
+/// that produces it, times `ipa-cp-max-recursive-depth` less the level, so a
+/// clone for `row = 0` is credited with the rows after it. Each context also
+/// adds its clone's size (`prop_size_cost`), so a chain pays for every clone it
+/// counts: `fib(20)` credits clones for 19 and 18 and must carry their size.
+/// Returns the benefit and that size.
+fn chain_benefit(
+    module: &Module,
+    layout: &DataLayout,
+    name: GlobalId,
+    body: &Function,
+    known: &[Option<ConstantId>],
+    callees: &Callees,
+    costs: &OperationCosts,
+    peel_limited: bool,
+    eliminated: &IdSet<InstId>,
+    max_clones: usize,
+    level: usize,
+    memo: &mut BTreeMap<Vec<Option<ConstantId>>, (i64, i64)>,
+) -> (i64, i64) {
+    if let Some(&done) = memo.get(known) {
+        return done;
+    }
+    // A context met again while it is priced adds nothing; one met by another
+    // path is the value GCC's lattice holds once (`add_value` finds it again).
+    memo.insert(known.to_vec(), (0, 0));
+    let size_of = inline::operations(body);
+    let mut chain_size = size_of;
+    let (saved, loops, next) = time_saved(module, layout, name, body, known, callees, costs, peel_limited, eliminated);
+    let mut benefit = saved / TIME_SCALE + if loops { LOOP_HINT_BONUS } else { 0 };
+    if level + 1 < max_clones {
+        for (context, frequency) in next {
+            if context.as_slice() == known {
+                continue;
+            }
+            let (after, after_size) = chain_benefit(
+                module,
+                layout,
+                name,
+                body,
+                &context,
+                callees,
+                costs,
+                peel_limited,
+                eliminated,
+                max_clones,
+                level + 1,
+                memo,
+            );
+            let factor = (max_clones - level) as i64;
+            benefit = benefit.saturating_add(after.saturating_mul(factor).saturating_mul(frequency) / profit::UNIT);
+            chain_size = chain_size.saturating_add(after_size);
+        }
+    }
+    memo.insert(known.to_vec(), (benefit, chain_size));
+    (benefit, chain_size)
+}
+
+/// `PRED_LOOP_EXIT_WITH_RECURSION` (predict.def): the share of a loop's trips
+/// that leave it, `1 - HITRATE (78)`, where `PRED_LOOP_EXIT` has `1 - HITRATE
+/// (89)`.
+const RECURSIVE_LOOP_EXIT: f64 = 0.22;
+/// `predict_loops`' floor on an exit's probability, `HITRATE (2)`.
+const MIN_LOOP_EXIT: f64 = 0.02;
+
+/// `body`'s block frequencies (`profit::_frequencies`' per entry, in `UNIT`ths)
+/// with gcc's `predict_loops` rule for a loop that calls `name`, itself, or
+/// holds a loop that does (`with_recursion`): each exit edge of the loop is
+/// taken `0.22 / n` of the trips, `n` the exits not leading to an unreachable
+/// block, so a loop whose body recurses runs about twice, not the ten trips of
+/// an ordinary loop (QuickrBasic `read_file`: gcc's 1.945 against 10, which
+/// carried eight chained clones where gcc stops at four).
+fn frequencies_with_recursion(
+    module: &Module,
+    layout: &DataLayout,
+    body: &Function,
+    itself: &dyn Fn(GlobalId) -> bool,
+) -> BTreeMap<i64, i64> {
+    let loops = cfg::loops_of(body);
+    let calls_itself = |at: i64| {
+        body.iter_block(cfg::block(at))
+            .any(|inst| llrm_mir::memory::callee(&module.context, body, inst).is_some_and(itself))
+    };
+    let recursive: Vec<&llrm_analysis::graph::loops::Loop> =
+        loops.iter().filter(|one| one.body.iter().any(|&at| calls_itself(at))).collect();
+    // A recursive loop of a known trip count exits by it
+    // (`PRED_LOOP_ITERATIONS`, taken before the recursion rule); the other
+    // loops stay as they were.
+    let shape = cfg::Shape::of(body);
+    let proven = profit::proven_trips(&Unit::of(module, layout, body).with_shape(&shape));
+    let Some(mut counted) = profit::counted_by_header(&loops, Some(&proven)) else { return BTreeMap::new() };
+    counted.retain(|header, _| recursive.iter().any(|one| one.header == *header));
+    let mut taken = profit::_edge_odds(&module.context, &module.metadata, &module.globals, body, &loops, &counted);
+    let unlikely = |to: i64| {
+        body.terminator(cfg::block(to)).is_some_and(|end| body.instruction(end).opcode == Opcode::Unreachable)
+    };
+    // The loops come innermost first; a block an inner loop predicted keeps it.
+    let mut predicted: BTreeSet<i64> = BTreeSet::new();
+    for one in recursive.iter().filter(|one| !counted.contains_key(&one.header)) {
+        let exits: Vec<(i64, i64)> = one
+            .body
+            .iter()
+            .flat_map(|&at| body.successors(cfg::block(at)).into_iter().map(move |to| (at, cfg::id(to))))
+            .filter(|(_, to)| !one.body.contains(to))
+            .collect();
+        let n = exits.iter().filter(|(_, to)| !unlikely(*to)).count();
+        if n == 0 {
+            continue;
+        }
+        let chance = (RECURSIVE_LOOP_EXIT / n as f64).max(MIN_LOOP_EXIT);
+        let sources: BTreeSet<i64> =
+            exits.iter().map(|(from, _)| *from).filter(|from| !predicted.contains(from)).collect();
+        for &from in &sources {
+            let out: Vec<i64> = exits.iter().filter(|(source, _)| *source == from).map(|(_, to)| *to).collect();
+            let leaving = out.len() as f64 * chance;
+            let stays: Vec<i64> =
+                body.successors(cfg::block(from)).into_iter().map(cfg::id).filter(|to| !out.contains(to)).collect();
+            if stays.is_empty() || leaving >= 1.0 {
+                continue;
+            }
+            let old: f64 = stays.iter().map(|to| taken.get(&(from, *to)).copied().unwrap_or(0.0)).sum();
+            for to in &out {
+                taken.insert((from, *to), chance);
+            }
+            for to in &stays {
+                let share = if old > 0.0 { taken[&(from, *to)] / old } else { 1.0 / stays.len() as f64 };
+                taken.insert((from, *to), (1.0 - leaving) * share);
+            }
+        }
+        predicted.extend(sources);
+    }
+    let frequencies = llrm_analysis::blockfreq::BlockFrequencies::of_probabilities(body, &taken);
+    body.layout()
+        .iter()
+        .map(|&block| {
+            (cfg::id(block), ((frequencies.relative_to_entry(block) * profit::UNIT as f64).round() as i64).max(1))
+        })
+        .collect()
+}
+
 /// GCC's `time_benefit`: the clocks a call no longer spends in `body` given its
 /// known actuals: what they fold, and what only a branch they decide reaches,
 /// each at its block's frequency (a loop that does not run saves its trips).
 fn time_saved(
     module: &Module,
     layout: &DataLayout,
+    name: GlobalId,
     body: &Function,
     known: &[Option<ConstantId>],
     callees: &Callees,
     costs: &OperationCosts,
-) -> (i64, bool) {
+    peel_limited: bool,
+    eliminated: &IdSet<InstId>,
+) -> (i64, bool, Vec<(Vec<Option<ConstantId>>, i64)>) {
     let unit = Unit::of(module, layout, body);
     let mut values = IndexMap::default();
     for (&parameter, constant) in body.parameters().iter().zip(known) {
@@ -352,14 +653,14 @@ fn time_saved(
     // block's branch can go there; a phi is the meet of its reached edges. A
     // loop whose first test is decided never runs.
     let mut folded = BTreeSet::new();
-    let mut reached = BTreeSet::new();
+    let mut reached = IdSet::new();
     let mut edges: BTreeSet<(llrm_mir::module::BlockId, llrm_mir::module::BlockId)> = BTreeSet::new();
-    let mut varying: BTreeSet<llrm_mir::module::ValueId> = BTreeSet::new();
+    let mut varying: IdSet<llrm_mir::module::ValueId> = IdSet::new();
     reached.extend(body.entry());
     // Whether `operand` is a value of the body no block has made yet.
     let unseen = |operand: &Operand,
                   values: &IndexMap<llrm_mir::module::ValueId, consts::Known>,
-                  varying: &BTreeSet<llrm_mir::module::ValueId>| {
+                  varying: &IdSet<llrm_mir::module::ValueId>| {
         matches!(
             operand,
             Operand::Value(v) if !values.contains_key(v) && !varying.contains(v) && matches!(body.value(*v).def, llrm_mir::module::ValueDef::Instruction(made) if consts::_defined(&unit, made) == Some(*v))
@@ -443,11 +744,16 @@ fn time_saved(
     }
     let frequency =
         profit::_frequencies(&module.context, &module.metadata, &module.globals, body, None).unwrap_or_default();
+    // The hop to the context a recursive call passes on is weighed by how often
+    // gcc's estimate has the call run; the time the known actuals save keeps
+    // the clamp it was fitted with (TIME_SCALE).
+    let hops = frequencies_with_recursion(module, layout, body, &|callee| callee == name);
     // A block runs about as often as GCC guesses a loop does (its time
     // estimates stop at ten trips), not as often as the nest multiplies
     // out.
     let weight =
         |block| frequency.get(&cfg::id(block)).copied().unwrap_or(profit::UNIT).min(MAX_FREQUENCY * profit::UNIT);
+    let addresses = constant_addresses(body, &values, &reached);
     let (mut unknown, mut kept) = (0, 0);
     for (block, inst) in body.walk() {
         if matches!(body.instruction(inst).opcode, Opcode::Phi) {
@@ -455,12 +761,20 @@ fn time_saved(
         }
         let price = profit::operation(&module.context, layout, body, callees, inst, costs).unwrap_or(0) * weight(block);
         unknown += price;
-        if reached.contains(&block) && !folded.contains(&inst) {
+        // A constant address is an immediate of the access that uses it.
+        if reached.contains(&block) && !folded.contains(&inst) && !addresses.contains(&inst) {
             kept += price;
         }
     }
     // `INLINE_HINT_loop_iterations`: a loop's exit tests a value the known
-    // actuals make constant against one that varies.
+    // actuals make constant against a counter that starts at one they make
+    // constant too, so that the trip count is known (GCC's predicate on the
+    // `niter` expression needs every parameter it reads: `chop(0, 64)`'s
+    // `for (i = lo; i < hi; ++i)` has "loops with known iterations: 0" with
+    // `hi` alone, and recchop -O3 cloned `chop` for the bonus).
+    let number = |operand: &Operand| -> Option<i128> {
+        consts::_operand(&unit, *operand, &values, None)?.n.to_string().parse().ok()
+    };
     let hint = cfg::loops_of(body)
         .iter()
         .any(
@@ -476,20 +790,160 @@ fn time_saved(
                         operand,
                         Operand::Value(v) if values.contains_key(v) && !matches!(body.value(*v).def, llrm_mir::module::ValueDef::Instruction(_)) || matches!(operand, Operand::Value(v) if values.contains_key(v) && body.parameters().contains(v))
                     );
-                    let moving = |operand: &Operand| matches!(operand, Operand::Value(v) if varying.contains(v));
-                    compared.operands.len() == 2 && ((constant(&compared.operands[0]) && moving(&compared.operands[1])) || (constant(&compared.operands[1]) && moving(&compared.operands[0])))
+                    // A counter: a loop phi, or one step of it, whose arms from
+                    // outside the loop are constant.
+                    let starts_known = |operand: &Operand| -> Option<i128> {
+                        let Operand::Value(v) = operand else { return None };
+                        let llrm_mir::module::ValueDef::Instruction(made) = body.value(*v).def else { return None };
+                        let phi = if body.instruction(made).opcode == Opcode::Phi {
+                            made
+                        } else {
+                            let step = body.instruction(made);
+                            let phis = step
+                                .operands
+                                .iter()
+                                .filter_map(
+                                    |one| match one {
+                                        Operand::Value(w) => match body.value(*w).def {
+                                            llrm_mir::module::ValueDef::Instruction(inst)
+                                                if body.instruction(inst).opcode == Opcode::Phi => Some(inst),
+                                            _ => None,
+                                        },
+                                        _ => None,
+                                    },
+                                );
+                            let mut phis = phis;
+                            match (matches!(step.opcode, Opcode::Binary(_)), phis.next(), phis.next()) {
+                                (true, Some(only), None) => only,
+                                _ => return None,
+                            }
+                        };
+                        // The counter's start: the one arm from outside the loop.
+                        let mut start = Some(0i128);
+                        for (value, from) in crate::lcssa::arms(body, phi) {
+                            if one.body.contains(&cfg::id(from)) {
+                                continue;
+                            }
+                            start = Some(number(&value)?);
+                        }
+                        start
+                    };
+                    let moving = |operand: &Operand| {
+                        matches!(operand, Operand::Value(v) if varying.contains(v)).then(|| starts_known(operand)).flatten()
+                    };
+                    // DEVIATE IPACP-LOOPS (owner w10, exit 2026-11-24): gcc's
+                    // hint counts any known trip count; here a loop the
+                    // unroller cannot take whole (`MAX_PEEL_TIMES`, gcc's
+                    // `max-completely-peel-times`) is grown by the clone's
+                    // inlining instead: m64 nbody -O2 655 -> 1189 B for 3
+                    // instructions, recpow 1207 -> 3060 B.
+                    let reach = |bound: &Operand, counter: &Operand| {
+                        let (Some(start), Some(end)) = (moving(counter), number(bound)) else { return false };
+                        !peel_limited || (end - start).abs() <= MAX_PEEL_TIMES
+                    };
+                    compared.operands.len() == 2
+                        && ((constant(&compared.operands[0]) && reach(&compared.operands[0], &compared.operands[1]))
+                            || (constant(&compared.operands[1]) && reach(&compared.operands[1], &compared.operands[0])))
                 }
             }),
         );
-    ((unknown - kept) / profit::UNIT, hint)
+    // The contexts the body's calls of itself pass on: what the known actuals
+    // make constant at each (GCC's `propagate_effects` follows them).
+    let mut next: Vec<(Vec<Option<ConstantId>>, i64)> = Vec::new();
+    for (block, inst) in body.walk() {
+        // A call the tail-call pass makes a loop passes a phi: no context
+        // (GCC's `tailr1` runs before ipa-cp).
+        if !reached.contains(&block)
+            || eliminated.contains(&inst)
+            || llrm_mir::memory::callee(&module.context, body, inst) != Some(name)
+        {
+            continue;
+        }
+        let instruction = body.instruction(inst);
+        let context: Vec<Option<ConstantId>> = body
+            .parameters()
+            .iter()
+            .zip(&instruction.operands)
+            .map(|(&parameter, &operand)| {
+                if !is_simple_jump(body, operand) {
+                    return None;
+                }
+                // GCC follows a recursion only through the same parameter (a
+                // value generated by the call itself,
+                // `self_recursively_generated_p`): a
+                // permutation of the parameters (hanoi's `mv(n-1, via, to,
+                // from)`) makes the lattice variable, and no
+                // chain of contexts.
+                if jump_source(body, operand).is_some_and(|source| source != parameter) {
+                    return None;
+                }
+                let number = consts::_operand(&unit, operand, &values, None)?;
+                let value = number.n.to_string().parse::<i128>().ok()?;
+                module.context.types.int_bits(body.value(parameter).ty)?;
+                Some(module.context.int(body.value(parameter).ty, value))
+            })
+            .collect();
+        if context.iter().any(Option::is_some) {
+            let hop = hops.get(&cfg::id(block)).copied().unwrap_or(profit::UNIT).min(MAX_FREQUENCY * profit::UNIT);
+            next.push((context, hop));
+        }
+    }
+    ((unknown - kept) / profit::UNIT, hint, next)
 }
 
-/// Whether `id` is a function the program runs once: `main`.
+/// The `getelementptr`s in reached blocks whose base is a constant (a global)
+/// or another such address, and whose every index is a constant or a known
+/// actual: the access that uses one takes it as a displacement, so it costs
+/// nothing (GCC's `ipa-cp` prices the same fold through the address
+/// expression).
+fn constant_addresses(
+    body: &Function,
+    known: &IndexMap<llrm_mir::module::ValueId, consts::Known>,
+    reached: &IdSet<llrm_mir::module::BlockId>,
+) -> IdSet<InstId> {
+    let mut found = IdSet::new();
+    let mut values = IdSet::new();
+    loop {
+        let before = found.len();
+        for &block in body.layout() {
+            if !reached.contains(&block) {
+                continue;
+            }
+            for inst in body.iter_block(block) {
+                let instruction = body.instruction(inst);
+                let Some(result) = instruction.result else { continue };
+                if !matches!(instruction.opcode, Opcode::GetElementPtr { .. }) || found.contains(&inst) {
+                    continue;
+                }
+                let base = match instruction.operands[0] {
+                    Operand::Constant(_) => true,
+                    Operand::Value(v) => values.contains(&v),
+                    Operand::Block(_) => false,
+                };
+                let indices = instruction.operands[1..].iter().all(|index| match index {
+                    Operand::Constant(_) => true,
+                    Operand::Value(v) => known.contains_key(v),
+                    Operand::Block(_) => false,
+                });
+                if base && indices {
+                    found.insert(inst);
+                    values.insert(result);
+                }
+            }
+        }
+        if found.len() == before {
+            return found;
+        }
+    }
+}
+
+/// Whether `id` is a function the program runs once: `main`, as the object
+/// format spells it (`_main` for C's convention, `main_` for Open Watcom's).
 fn runs_once(
     module: &Module,
     id: GlobalId,
 ) -> bool {
-    module.global(id).name.as_deref().is_some_and(|name| name.trim_start_matches('_') == "main")
+    module.global(id).name.as_deref().is_some_and(|name| name.trim_matches('_') == "main")
 }
 
 /// The calls in `sites` made to `clone`.
@@ -532,5 +986,115 @@ fn redirect(
         if !same_said && !changed.unsound.contains(&caller) {
             changed.unsound.push(caller);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testing::parsed;
+
+    /// A loop that runs the function again on a branch: `read_file`'s shape.
+    const LOOPED: &str = "declare i32 @more()
+declare i32 @flag()
+declare void @other(i32)
+
+define void @f(i32 %n) {
+entry:
+  br label %loop
+
+loop:
+  %i = phi i32 [ 0, %entry ], [ %next, %latch ]
+  %c = call i32 @more()
+  %stop = icmp slt i32 %c, 0
+  br i1 %stop, label %out, label %body
+
+body:
+  %d = call i32 @flag()
+  %t = icmp ne i32 %d, 0
+  br i1 %t, label %again, label %latch
+
+again:
+  %m = sub i32 %n, 1
+  call void @CALLED(i32 %m)
+  br label %latch
+
+latch:
+  %next = add i32 %i, 1
+  br label %loop
+
+out:
+  ret void
+}
+";
+
+    /// The same, with the loop leaving after eight trips.
+    const COUNTED: &str = "declare i32 @flag()
+
+define void @f(i32 %n) {
+entry:
+  br label %loop
+
+loop:
+  %i = phi i32 [ 0, %entry ], [ %next, %latch ]
+  %d = call i32 @flag()
+  %t = icmp ne i32 %d, 0
+  br i1 %t, label %again, label %latch
+
+again:
+  %m = sub i32 %n, 1
+  call void @f(i32 %m)
+  br label %latch
+
+latch:
+  %next = add i32 %i, 1
+  %more = icmp slt i32 %next, 8
+  br i1 %more, label %loop, label %out
+
+out:
+  ret void
+}
+";
+
+    /// The frequency of the block `again`, per entry of `f`, in `UNIT`ths.
+    fn again(callee: &str) -> i64 {
+        frequency_of_again(&LOOPED.replace("CALLED", callee))
+    }
+
+    fn frequency_of_again(text: &str) -> i64 {
+        let module = parsed(text);
+        let id = module.named("f").expect("f");
+        let body = module.global(id).function().expect("a body");
+        let layout = DataLayout::default();
+        let frequency = frequencies_with_recursion(&module, &layout, body, &|callee| callee == id);
+        let block = body.layout().iter().copied().find(|&block| {
+            body.iter_block(block).any(|inst| {
+                matches!(body.instruction(inst).opcode, Opcode::Binary(llrm_mir::opcode::BinaryOp::Sub))
+            })
+        });
+        frequency[&cfg::id(block.expect("the block of the call"))]
+    }
+
+    /// `read_file` -O3 m32 chained eight clones where gcc 15 makes four: its
+    /// loop around the call of itself ran ten trips (the clamp) where gcc's
+    /// `PRED_LOOP_EXIT_WITH_RECURSION` makes it 1.945, so each hop of the
+    /// chain was worth ten times what gcc's is and the first clone 3.4e12 where
+    /// gcc has 25,605.
+    #[test]
+    fn a_loop_that_calls_its_function_runs_about_twice_not_ten_trips() {
+        let recursive = again("f");
+        assert!(recursive <= 3 * profit::UNIT, "{recursive} UNITths per entry; gcc estimates 1.9 trips");
+        // The same loop around another function keeps the ordinary estimate.
+        assert!(again("other") > 3 * profit::UNIT);
+    }
+
+    /// `queens`' column loop runs eight trips and its `place` takes the
+    /// recursion rule's 22% exit with it: the clones of `place` fell from 8 to
+    /// 1 and -O3 went from 79,866 to 145,621 clocks (gcc 94,851). gcc exits a
+    /// loop of a known count by the count.
+    #[test]
+    fn a_counted_loop_that_calls_its_function_keeps_its_trips() {
+        let counted = frequency_of_again(COUNTED);
+        assert!((3 * profit::UNIT..=5 * profit::UNIT).contains(&counted), "{counted} UNITths per entry; 8 trips, half taken");
     }
 }

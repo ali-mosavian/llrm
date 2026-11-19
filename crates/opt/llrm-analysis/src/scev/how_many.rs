@@ -27,10 +27,11 @@
 //! # Example
 //! `{0,+,1} < %n` is taken `(-1 + %n)` times.
 
-use llrm_mir::constantrange::ConstantRange;
+use llrm_mir::apint::Word;
 use llrm_mir::module::BlockId;
 use llrm_mir::opcode::{BinaryOp, IntPredicate};
 
+use super::ConstantRange;
 use super::ap::Ap;
 use super::expr::{Kind, Scev, Ty, Use, flags};
 use super::trip::ExitLimit;
@@ -1430,12 +1431,12 @@ impl ScalarEvolution {
         if let Some(start) = self.as_constant(operands[0].scev)
             && !start.is_zero()
         {
-            let mut shifted_operands = operands.clone();
+            let mut shifted_operands = operands.to_vec();
             shifted_operands[0] = Use::of(self.get_zero(cx, self.type_of(operands[0].scev)));
             let nw = self.get_no_wrap_flags(add_rec, flags::NW);
             let shifted = self.get_add_rec_expr(cx, shifted_operands, header, Flags::expr(nw)).scev;
             if self.is_add_rec_of(shifted, header) {
-                return self.get_num_iterations_in_range(cx, shifted, &range.subtract(start.bits));
+                return self.get_num_iterations_in_range(cx, shifted, &range.subtract(start.word()));
             }
             // This is strange and shouldn't happen.
             return self.get_could_not_compute();
@@ -1453,7 +1454,7 @@ impl ScalarEvolution {
         // First check to see if the range contains zero. If not, the first
         // iteration exits.
         let bit_width = self.get_type_size_in_bits(cx, ty);
-        if !range.contains(0) {
+        if !range.contains(llrm_mir::apint::U256::ZERO) {
             return self.get_zero(cx, ty);
         }
 
@@ -1468,9 +1469,9 @@ impl ScalarEvolution {
             // full range.
             let a = self.as_constant(operands[1].scev).expect("a constant");
             let end = if a.sext_value() >= 1 {
-                Ap::new(bit_width, range.upper).sub(Ap::one(bit_width))
+                Ap::from_word(bit_width, range.upper).sub(Ap::one(bit_width))
             } else {
-                Ap::new(bit_width, range.lower)
+                Ap::from_word(bit_width, range.lower)
             };
 
             // The exit value should be (End+A)/A.
@@ -1482,7 +1483,7 @@ impl ScalarEvolution {
             // around or other things must have happened.
             let val = self.evaluate_at_iteration(cx, add_rec, exit_value);
             let val = self.as_constant(val).expect("Evaluation of SCEV at constant didn't fold correctly?");
-            if range.contains(val.bits) {
+            if range.contains(val.word()) {
                 // Something strange happened.
                 return self.get_could_not_compute();
             }
@@ -1571,12 +1572,12 @@ impl ScalarEvolution {
             let uo = solve(a, b, -bound, bit_width + 1, bit_width + 1);
             let leaves_range = |this: &mut Self, (x, width): (i128, u32)| -> Option<bool> {
                 let v0 = this.evaluate_chrec_at_constant(cx, add_rec, x, width)?;
-                if range.contains(v0.bits) {
+                if range.contains(v0.word()) {
                     return Some(false);
                 }
                 // X should be at least 1, so X-1 is non-negative.
                 let v1 = this.evaluate_chrec_at_constant(cx, add_rec, x - 1, width)?;
-                Some(range.contains(v1.bits))
+                Some(range.contains(v1.word()))
             };
             // No solution found does not mean none exists.
             let (Some(so), Some(uo)) = (so, uo) else { return (None, false) };
@@ -1595,8 +1596,8 @@ impl ScalarEvolution {
 
         // The lower bound is inclusive: subtract 1 to represent the exiting
         // value.
-        let lower = Ap::new(bit_width, range.lower).sext_value() - 1;
-        let upper = Ap::new(bit_width, range.upper).sext_value();
+        let lower = Ap::from_word(bit_width, range.lower).sext_value() - 1;
+        let upper = Ap::from_word(bit_width, range.upper).sext_value();
         let (sl, sl_known) = solve_for_boundary(self, lower);
         let (su, su_known) = solve_for_boundary(self, upper);
         // If any of the solutions was unknown, no meaningful conclusion.

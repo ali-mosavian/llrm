@@ -1,0 +1,35 @@
+#title,Table 9-18. Miscellaneous Instruction Execution Times,page,9-12,notes,+Add effective address calculation time. | +Use nonfetching effective address calculation time. | **Source or destination is a memory location for the MOVEP instruction and a control register for the MOVEC instruction.
+Instruction,Size,Register,Memory,Register→Destination**,Source**→Register
+ANDI to CCR,—,16(2/0),—,—,—
+ANDI to SR,—,16(2/0),—,—,—
+CHK,—,8(1/0)+,—,—,—
+EORI to CCR,—,16(2/0),—,—,—
+EORI to SR,—,16(2/0),—,—,—
+EXG,—,6(1/0),—,—,—
+EXT,Word,4(1/0),—,—,—
+,Long,4(1/0),—,—,—
+LINK,—,16(2/2),—,—,—
+MOVE from CCR,—,4(1/0),8(1/1)+*,—,
+MOVE to CCR,—,12(2/0),12(2/0)+,—,—
+MOVE from SR,—,4(1/0),8(1/1)+*,—,—
+MOVE to SR,—,12(2/0),12(2/0)+,—,—
+MOVE from USP,—,6(1/0),—,—,—
+MOVE to USP,—,6(1/0),—,—,—
+MOVEC,—,—,—,10(2/0),12(2/0)
+MOVEP,Word,—,—,16(2/2),16(4/0)
+,Long,—,—,24(2/4),24(6/0)
+NOP,—,4(1/0),—,—,—
+ORI to CCR,—,16(2/0),—,—,—
+ORI to SR,—,16(2/0),—,—,—
+RESET,—,130(1/0),—,—,—
+RTD,—,16(4/0),—,—,—
+RTE,Short,24(6/0),—,—,—
+,"Long, Retry Read",112(27/10),—,—,—
+,"Long, Retry Write",112(26/1),—,—,—
+,"Long, No Retry",110(26/0),—,—,—
+RTR,—,20(5/0),—,—,—
+RTS,—,16(4/0),—,—,—
+STOP,—,4(0/0),—,—,—
+SWAP,—,4(1/0),—,—,—
+TRAPV,—,4(1/0),—,—,—
+UNLK,—,12(3/0),—,—,—

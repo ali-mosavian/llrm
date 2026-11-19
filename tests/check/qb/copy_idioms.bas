@@ -1,15 +1,18 @@
 ' RUN: llrm-qb %s --dialect {qb45 | pds71 | vbdos} --runtime {qb45 | pds71 | vbdos} -O2 -march=i486 -fno-inline-functions -S -o /dev/stdout
 ' Loops people write that are one string move, and look-alikes that are not.
-' The pin keeps a word fill and a descending copy as counted loops; only the ascending copy and the byte fill are string moves.
+' The pin keeps a descending copy as a counted loop. A word fill is `rep stosw` where it pays (loopidioms), the
+' pin keeps the loop: DEVIATE, 64 words execute 7 instructions and 1 memory operand as the fill, 194 and 64 as
+' the loop (nib twin).
 ' CHECK-LABEL: SETPAL proc
-' CHECK-NOT: rep
+' CHECK: rep stosw
 ' CHECK: SETPAL endp
 ' CHECK-LABEL: DOCOPY proc
 ' CHECK: rep movsd
 ' CHECK-NOT: std
 ' CHECK: DOCOPY endp
+' DEVIATE: n is known only at run time, so at m16 -O2 (1 clock = 2 B) the overlapping forward copy stays the 20-byte loop (m16 loopidiom `variable_copy_pays`).
 ' CHECK-LABEL: SCROLLUP proc
-' CHECK: rep movsd
+' CHECK-NOT: rep
 ' CHECK: SCROLLUP endp
 ' CHECK-LABEL: SCROLLDOWN proc
 ' CHECK-NOT: rep
@@ -21,21 +24,23 @@
 ' CHECK-LABEL: CHANGED proc
 ' CHECK-NOT: rep
 ' CHECK: CHANGED endp
-' The pin distributes it into llvm.memset (c) and llvm.memcpy (a <- b), as LoopIdiomRecognize does a loop of independent stores: two string moves.
+' The pin distributes it into llvm.memset (c) and llvm.memcpy (a <- b): two string moves. DEVIATE: n is known only at run time, so at
+' m16 -O2 (1 clock = 2 B) the loop of three stores stays, 20 bytes against about 45 (m16 loopidiom `fills_pay`).
 ' CHECK-LABEL: TWOSTORES proc
-' CHECK: rep stos
-' CHECK: rep movs
+' CHECK-NOT: rep
+' CHECK: mov word ptr C%[bx], 0
 ' CHECK: TWOSTORES endp
 ' CHECK-LABEL: STRIDES proc
 ' CHECK-NOT: rep
 ' CHECK: STRIDES endp
-' The pin makes b = 0 and a = b two llvm.memset calls (the second store reads what the first wrote, a constant).
+' The pin makes b = 0 and a = b two llvm.memset calls. DEVIATE: as TWOSTORES, the loop of two stores stays.
 ' CHECK-LABEL: WRITTEN proc
-' CHECK: rep stos
-' CHECK: rep stos
+' CHECK-NOT: rep
+' CHECK: mov word ptr A%[bx], 0
 ' CHECK: WRITTEN endp
+' DEVIATE: w is known only at run time, so the inner copy stays a loop at m16 -O2, as SCROLLUP.
 ' CHECK-LABEL: BLK proc
-' CHECK: rep movsd
+' CHECK-NOT: rep
 ' CHECK: BLK endp
 DEFINT A-Z
 DECLARE SUB DoCopy (n)

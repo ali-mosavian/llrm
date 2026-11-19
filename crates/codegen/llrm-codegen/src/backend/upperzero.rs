@@ -690,7 +690,7 @@ mod tests {
             (Loc::Reg(Reg { register: RegId::ESI, width: 4 }), Loc::Reg(Reg { register: RegId::EBX, width: 4 }));
         let cell = Mem {
             through: RegId::ESI,
-            base: Some(Held { value: 7, width: 4 }),
+            base: Some(Held { value: 7, width: 4, offset: 0 }),
             ..Mem::new(Some(Addr::new(Space::Segment, 0)), 2)
         };
         let load = one(
@@ -731,8 +731,12 @@ mod tests {
         use crate::model::ir::{Held, Mem};
         let (esi, ebx) =
             (Loc::Reg(Reg { register: RegId::ESI, width: 4 }), Loc::Reg(Reg { register: RegId::EBX, width: 4 }));
-        let cell =
-            Mem { through: RegId::ESI, base: Some(Held { value: 7, width: 4 }), offset: -1, ..Mem::new(None, 4) };
+        let cell = Mem {
+            through: RegId::ESI,
+            base: Some(Held { value: 7, width: 4, offset: 0 }),
+            offset: -1,
+            ..Mem::new(None, 4)
+        };
         let lea = one(
             1,
             Operation::Address,

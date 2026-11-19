@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/interprocedural.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/interprocedural.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/interprocedural.rs sha256:edb4953b88795b922c370f71f03c68e455bc461a0ae0dc4c5b977a46a0644adf -->
+<!-- src: crates/opt/llrm-transforms/src/interprocedural.rs sha256:1e66b3749fd826a7614575f934c713c77d37a30ec70ef8b61526c46bb2f73054 -->
 
 # interprocedural
 
@@ -44,7 +44,9 @@ The stages, in order:
    stays.
 5. A loop of `ipa-cp.` ([`crate::ipacp`](ipacp.md) cloning) and return propagation,
    until nothing changes. What every caller passes is IPSCCP's, before the
-   walk ([`crate::walk::ModuleIpo`](walk.md)); the pin does not run it again here.
+   walk ([`crate::walk::ModuleIpo`](walk.md)); the pin does not run it again here,
+   but it runs once more after `promote.` changed a body (DEVIATE, below
+   it).
 6. `ipa-deadargs.` ([`crate::deadargs`](deadargs.md)): parameters nothing reads go.
 7. `ipa-pure.` removes unused calls to bodies proved pure and terminating,
    and `ipa-noreturn.` cuts the code after a call to a private body every

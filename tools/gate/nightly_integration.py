@@ -22,6 +22,9 @@ from buildslot import slotted  # noqa: E402
 
 
 from parity_smoke import red_tests  # noqa: E402
+import os
+
+BRANCH = os.environ.get("LAND_BRANCH", "release/next")  # the integration branch (tools/landing/branch.sh)
 
 
 def attribution(
@@ -51,8 +54,8 @@ def window(
     since: str,
     run=subprocess.run,
 ) -> list[tuple[str, list[str]]]:
-    """The commits of feat/parity since `since` (a git date), newest first, with the files each changed."""
-    shas = run(["git", "log", "origin/feat/parity", "--first-parent", f"--since={since}", "--format=%H"], cwd=ROOT, capture_output=True, text=True).stdout.split()
+    """The commits of release/next since `since` (a git date), newest first, with the files each changed."""
+    shas = run(["git", "log", f"origin/{BRANCH}", "--first-parent", f"--since={since}", "--format=%H"], cwd=ROOT, capture_output=True, text=True).stdout.split()
     return [(sha, run(["git", "diff-tree", "--no-commit-id", "--name-only", "-r", sha], cwd=ROOT, capture_output=True, text=True).stdout.split()) for sha in shas]
 
 

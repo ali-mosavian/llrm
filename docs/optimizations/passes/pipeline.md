@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/pipeline.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/pipeline.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/pipeline.rs sha256:6a9b3b58ed21fe7fa39b42a8282ded19457315d10cd161a0e66c8792ab639e81 -->
+<!-- src: crates/opt/llrm-transforms/src/pipeline.rs sha256:822f2c48747e48c45b41d39d4d793c0c7e2a3f1deb6b360bd9d0092bbfbaf28e -->
 
 # pipeline
 
@@ -37,7 +37,7 @@ flowchart TB
   end
   c["<b>C  whole program,</b><br/><small>interprocedural: inline,<br/>constants, dead pure calls<br/>(stages: LLRM_DEBUG=runs)</small>"]:::mid
   d["<b>D  globaldce,</b><br/><small>available-externally,<br/>calleepop#59; freeze the<br/>Summaries and GlobalsAA</small>"]:::mid
-  e["<b>E  once, each body, with the</b><br/><small>analyses frozen<br/>[rotate#123;copy#125; loopsimplify<br/>lcssa fold algebraic<br/>indvars#123;exit#125; dead]: only<br/>with -ftree-ch, not at -Os<br/>fixednarrow lsr differences<br/>window rotate#123;proven#125;<br/>hoist gepoffset<br/>cgpaddr sink</small>"]:::mid
+  e["<b>E  once, each body, with the</b><br/><small>analyses frozen<br/>[rotate#123;copy#125; loopsimplify<br/>lcssa fold algebraic<br/>indvars#123;exit#125; dead]: only<br/>with -ftree-ch, not at -Os<br/>fixednarrow lsr differences<br/>maskscale window rotate#123;proven#125;<br/>hoist gepoffset<br/>cgpaddr sink</small>"]:::mid
   f["<b>F  last: spares, homes</b><br/><small>(instruction ids selection sees)</small>"]:::mid
   a --> sroa
   sroa --> rnd
@@ -83,7 +83,7 @@ loop; `cgpaddr` follows the last `gvn`, which makes the phis it sinks;
 
 ## Example
 No honest example: the pipeline is the order of the passes, not one rewrite,
-and no one function shows it. `llrm-c --dump DIR` writes the module after
+and no one function shows it. `llrm-cc --dump DIR` writes the module after
 each stage (`NN-stage.ll`) and, for each body, each changed step of the
 fixed point (`N/NNN-rRR-pass.ll`); the pass examples come from those.
 
@@ -107,7 +107,7 @@ LLVM counterpart of each limit, is
 | `drop_stores` | `dse` |
 | `sink` | `sink` |
 | `promote` | `sroa`, `promote` |
-| `strength` | `indvars`, `lsr`, `canonfreeze`, `window`, `gepoffset`, `cgpaddr` |
+| `strength` | `indvars`, `lsr`, `canonfreeze`, `window`, `gepoffset`, `typepromotion`, `cgpaddr` |
 | `loopidioms` | `loopidioms`, `merge`, `memcpyopt` |
 | `sibcalls` | `tailrec` |
 | `unswitch`, `interchange`, `unroll_and_jam` | the passes of that name (`unswitch` and `unroll_and_jam` on at -O3 and -Omax; `interchange` on at every level but -O0) |

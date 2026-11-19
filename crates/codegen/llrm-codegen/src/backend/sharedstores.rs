@@ -1,5 +1,6 @@
-//! At -Os, a run of stores of one literal becomes the literal loaded once into
-//! a dead register, then register stores.
+//! At -Os (and at -O1 on a target that allows it), a run of stores of one
+//! literal becomes the literal loaded once into a dead register, then register
+//! stores.
 //!
 //! # How it works
 //! `mov dword ptr [bp-8],0` is 8 bytes, `mov [bp-8],eax` is 4 and the one `xor
@@ -98,7 +99,11 @@ fn literal(one: &Insn) -> Option<(u32, i64)> {
     else {
         return None;
     };
-    (cell.width == *width && [1, 2, 4].contains(width)).then_some((*width, *value))
+    // A qword zero is the longest of them (`mov qword ptr [rsp+8],0` is 9
+    // bytes, the register store 5) and shares the register of a narrower
+    // zero, as every zero does; any other qword literal would need a 64-bit
+    // load.
+    (cell.width == *width && ([1, 2, 4].contains(width) || (*width == 8 && *value == 0))).then_some((*width, *value))
 }
 
 fn bytes(
@@ -117,9 +122,32 @@ pub fn shared(
     classes: &RegisterClasses,
 ) -> LirBody {
     let regs = body.regs();
-    if !cpu.size {
+    // Where the target allows it (`share_literal_stores`) a run is also shared
+    // where bytes decide (`Profile::bytes_strict`), and at -O1 to -O3 where it
+    // allows that too (`share_literal_stores_at_speed`).
+    let at_speed = cpu.speed_rate && cpu.share_literal_stores_at_speed;
+    if !cpu.size && !(cpu.share_literal_stores && (at_speed || cpu.bytes_strict())) {
         return body.clone();
     }
+    // DEVIATE ISS1 (owner x86-m32, exit 2026-11-30): at -O2/-O3 the load costs
+    // a clock a run, so a run is shared only outside any cycle (it runs
+    // once a call) and where its bytes at the speed rate outweigh that
+    // clock. DEVIATE ISS2 (owner x87, exit 2026-11-20, ruled 2026-11-09; the
+    // lone store dropped 2026-11-11, oversight): at -O1 the same rule with
+    // no rate, so a run of two or more outside any cycle is shared where it
+    // saves a byte (nbody -O1 kept 24 immediate stores of its f64
+    // constants, +82 B against gcc's 427 B with 3.8% fewer clocks; the pin
+    // keeps them too). Every changed cell is slower by the `xor` (executed
+    // clocks, tests/run/c at m32 -O1, cell +clk -B): bitcount_u32 +1 -2,
+    // bitcount_u64 +1 -6, clzll_ctzll_64 +3 -6, div_constants_long +14 -28,
+    // div_constants_short +12 -24, div_constants_ulong +10 -20,
+    // double_across_a_call_result +1 -6, fcmp_all +1 -3, frameless +1 -2,
+    // memfuncs_runtime +1 -2, memory_expansion +69 -1944, register_upper_half
+    // +1 -2, spill_store_order +5 -2, u64_shift_select_arms +1 -2,
+    // wrapv_overflow_check +1 -6. No cell above +14 clk but memory_expansion.
+    let speed = !cpu.size;
+    let cyclic = if speed { blocks_in_cycles(body) } else { Default::default() };
+    let rate = if speed && cpu.speed_rate { cpu.speed_milliclocks_per_byte() } else { 0 };
     // What the epilogue saves is what its convention preserves of the registers
     // the body names (`masm::_frame_parts`): one it does not name would be
     // pushed and popped for the run.
@@ -132,6 +160,9 @@ pub fn shared(
         .blocks
         .iter()
         .map(|block| {
+            if cyclic.contains(&block.at) {
+                return block.clone();
+            }
             let dead = regthrash::_dead_after(regs, body.bits, block, exits[&block.at].clone());
             let flags_dead_out = flags_out.entering.get(&block.at).is_some_and(|lanes| lanes.is_empty());
             let flags_dead = _flags_dead_after(regs, body.bits, block, flags_dead_out);
@@ -151,7 +182,23 @@ pub fn shared(
                         literal(one).is_some_and(|(wide, same)| same == value && (value == 0 || wide == width))
                     })
                     .count();
-                match shared_run(regs, body.bits, &block.insns[at..at + run], value, &scratch, &dead, &flags_dead) {
+                // A lone store is the pin's `mov m, imm` where no rate pays for
+                // the load (-O1: +1 clk for 3 B).
+                let shared = (run > 1 || !speed || rate > 0)
+                    .then(|| {
+                        shared_run(
+                            regs,
+                            body.bits,
+                            &block.insns[at..at + run],
+                            value,
+                            &scratch,
+                            &dead,
+                            &flags_dead,
+                            rate,
+                        )
+                    })
+                    .flatten();
+                match shared {
                     Some(made) => insns.extend(made),
                     None => insns.extend(block.insns[at..at + run].iter().cloned()),
                 }
@@ -171,6 +218,7 @@ fn shared_run(
     scratch: &[RegId],
     dead: &DeadAfter,
     flags_dead: &crate::support::hash::HashSet<usize>,
+    rate: i64,
 ) -> Option<Vec<Arc<Insn>>> {
     let last = run.last()?;
     let widths: Vec<u32> = run.iter().map(|one| literal(one).expect("a literal store").0).collect();
@@ -218,7 +266,9 @@ fn shared_run(
     let before: usize =
         run.iter().map(|one| bytes(bits, one.what.as_ref().expect("a literal store"))).sum::<Option<usize>>()?;
     let after = bytes(bits, &load)? + stores.iter().map(|what| bytes(bits, what)).sum::<Option<usize>>()?;
-    if after >= before {
+    // A clock for the load against `rate` thousandths of a clock a byte saved
+    // (0: any byte saved).
+    if after >= before || ((before - after) as i64) * rate < rate.min(1) * 1000 {
         return None;
     }
     let first = &run[0];
@@ -229,4 +279,17 @@ fn shared_run(
     let mut out = vec![made];
     out.extend(run.iter().zip(stores).map(|(one, what)| Arc::new(Insn { what: Some(what), ..(**one).clone() })));
     Some(out)
+}
+
+/// The blocks on a cycle: a store there runs more than once a call, so a clock
+/// for the load is not free. One walk over the strongly connected components
+/// (`scc_iterator` is LLVM's), a block being on a cycle when its component has
+/// more than one block or it branches to itself.
+pub(crate) fn blocks_in_cycles(body: &LirBody) -> crate::support::hash::HashSet<i64> {
+    let place: crate::support::hash::HashMap<i64, usize> =
+        body.blocks.iter().enumerate().map(|(index, block)| (block.at, index)).collect();
+    let successors: Vec<Vec<usize>> =
+        body.blocks.iter().map(|block| block.succ.iter().filter_map(|at| place.get(at).copied()).collect()).collect();
+    let (component, cyclic) = llrm_mir::callgraph::strong_components(&successors);
+    body.blocks.iter().enumerate().filter(|(index, _)| cyclic[component[*index]]).map(|(_, block)| block.at).collect()
 }

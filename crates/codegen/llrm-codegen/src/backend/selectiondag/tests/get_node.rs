@@ -129,6 +129,77 @@ fn setcc_of_constants_and_equal_operands() {
     assert_eq!(dag.constant(differ), Some(0));
 }
 
+/// wasm `uno x, 0.0` is `(x != x) | (0.0 != 0.0)` after legalisation; the
+/// constant half stayed a `setcc` (`FoldSetCC` was integers only), so
+/// sfm16_float -Os kept `f32.const 0; f32.const 0; f32.ne; i32.or` per call.
+#[test]
+fn setcc_of_two_float_constants_folds() {
+    let mut dag = dag();
+    let (zero, one) =
+        (dag.get_constant_fp(0, EVT::Simple(MVT::F32)), dag.get_constant_fp(0x3f80_0000, EVT::Simple(MVT::F32)));
+    let ne = dag.get_setcc(EVT::I1, zero, zero, CondCode::SetUNe);
+    assert_eq!(dag.constant(ne), Some(0), "0.0 une 0.0");
+    let lt = dag.get_setcc(EVT::I1, zero, one, CondCode::SetOLt);
+    assert_eq!(dag.constant(lt), Some(1), "0.0 olt 1.0");
+    let nan = dag.get_constant_fp(0x7fc0_0000, EVT::Simple(MVT::F32));
+    let uno = dag.get_setcc(EVT::I1, nan, zero, CondCode::SetUo);
+    assert_eq!(dag.constant(uno), Some(1), "uno with a NaN");
+    let oeq = dag.get_setcc(EVT::I1, nan, zero, CondCode::SetOEq);
+    assert_eq!(dag.constant(oeq), Some(0), "oeq with a NaN");
+    let ueq = dag.get_setcc(EVT::I1, nan, zero, CondCode::SetUEq);
+    assert_eq!(dag.constant(ueq), Some(1), "ueq with a NaN");
+}
+
+/// `FoldSetCC` on every condition code against less, greater, equal and
+/// unordered constants, as the pin's `APFloat::compare` switch: the `O` codes
+/// are false and the `U` codes true on a NaN, the plain codes undef.
+#[test]
+fn setcc_of_float_constants_follows_the_pin_table() {
+    use CondCode::*;
+    let mut dag = dag();
+    let f32_ = EVT::Simple(MVT::F32);
+    let (one, two, nan) = (
+        dag.get_constant_fp(0x3f80_0000, f32_),
+        dag.get_constant_fp(0x4000_0000, f32_),
+        dag.get_constant_fp(0x7fc0_0000, f32_),
+    );
+    // Columns: 1 ? 2 (less), 2 ? 1 (greater), 1 ? 1 (equal), NaN ? 1.
+    let table: [(CondCode, [u128; 4]); 14] = [
+        (SetOEq, [0, 0, 1, 0]),
+        (SetONe, [1, 1, 0, 0]),
+        (SetOLt, [1, 0, 0, 0]),
+        (SetOGt, [0, 1, 0, 0]),
+        (SetOLe, [1, 0, 1, 0]),
+        (SetOGe, [0, 1, 1, 0]),
+        (SetO, [1, 1, 1, 0]),
+        (SetUo, [0, 0, 0, 1]),
+        (SetUEq, [0, 0, 1, 1]),
+        (SetUNe, [1, 1, 0, 1]),
+        (SetULt, [1, 0, 0, 1]),
+        (SetUGt, [0, 1, 0, 1]),
+        (SetULe, [1, 0, 1, 1]),
+        (SetUGe, [0, 1, 1, 1]),
+    ];
+    let pairs = [(one, two), (two, one), (one, one), (nan, one)];
+    for (cond, row) in table {
+        for (column, (a, b)) in pairs.into_iter().enumerate() {
+            let folded = dag.get_setcc(EVT::I1, a, b, cond);
+            assert_eq!(dag.constant(folded), Some(row[column]), "{cond:?} column {column}");
+        }
+    }
+    // The plain codes are the ordered ones, and undef on a NaN.
+    for (plain, ordered) in
+        [(SetEq, SetOEq), (SetNe, SetONe), (SetLt, SetOLt), (SetGt, SetOGt), (SetLe, SetOLe), (SetGe, SetOGe)]
+    {
+        for (a, b) in [(one, two), (two, one), (one, one)] {
+            let (p, o) = (dag.get_setcc(EVT::I1, a, b, plain), dag.get_setcc(EVT::I1, a, b, ordered));
+            assert_eq!(dag.constant(p), dag.constant(o), "{plain:?}");
+        }
+        let unordered = dag.get_setcc(EVT::I1, nan, one, plain);
+        assert!(dag.is_undef(unordered), "{plain:?} of a NaN is undef");
+    }
+}
+
 #[test]
 fn select_on_a_constant_condition_and_equal_arms() {
     let mut dag = dag();
@@ -230,4 +301,106 @@ fn an_inexact_single_quotient_is_not_folded_under_extended_evaluation() {
     };
     assert_eq!(divide(false), (true, true));
     assert_eq!(divide(true), (false, true));
+}
+
+/// Two loads of one address on one chain that differ only in their atomic
+/// ordering are two nodes: merged, an `acquire` load would be selected as the
+/// plain load its twin is.
+#[test]
+fn loads_that_differ_in_ordering_are_not_merged() {
+    use llrm_mir::opcode::AtomicOrdering;
+
+    use crate::backend::selectiondag::{MemBase, MemInfo};
+    let mut dag = dag();
+    let ptr = dag.get_register(EVT::I32, 7);
+    let chain = dag.entry_node();
+    let info = |ordering| MemInfo {
+        mem_vt: EVT::I32,
+        align: 4,
+        volatile: false,
+        base: MemBase::Unknown,
+        ext: None,
+        space: 0,
+        ordering,
+    };
+    let plain = dag.get_load(EVT::I32, chain, ptr, info(None));
+    let acquire = dag.get_load(EVT::I32, chain, ptr, info(Some(AtomicOrdering::Acquire)));
+    let again = dag.get_load(EVT::I32, chain, ptr, info(Some(AtomicOrdering::Acquire)));
+    assert_ne!(plain.node, acquire.node);
+    assert_eq!(acquire.node, again.node, "equal accesses still share one node");
+}
+
+/// A token factor nothing reads is deleted at once (`DeleteNode`), so the
+/// token factor it read is no longer shared. Left in place it kept
+/// `hasOneUse` false, `visitTokenFactor` could not flatten the nest, and the
+/// alias walk ran past depth 18 (wasm matmul -O2: 2 `i64.store` where the pin
+/// has 6).
+#[test]
+fn a_dead_token_factor_no_longer_counts_as_a_user_of_its_operand() {
+    let mut dag = dag();
+    let x = arg(&mut dag, EVT::I32, 1);
+    let entry = dag.entry_node();
+    let a = dag.get_copy_to_reg(entry, 1, x);
+    let b = dag.get_copy_to_reg(entry, 2, x);
+    let c = dag.get_copy_to_reg(entry, 3, x);
+    let d = dag.get_copy_to_reg(entry, 4, x);
+    let inner = dag.get_token_factor(&[a, b]);
+    let _kept = dag.get_token_factor(&[inner, c]);
+    let dead = dag.get_token_factor(&[inner, d]);
+    assert!(!dag.has_one_use(inner.node), "two token factors read it");
+    dag.delete_dead(dead.node);
+    assert!(dag.has_one_use(inner.node), "the dead one let go of it");
+}
+
+/// A deleted node stayed in the use list of each operand, so `delete_dead` and
+/// `has_users` walked it again for every later query (memory_expansion: 5.6
+/// scans and 1.8 stale entries per created node). It leaves them at deletion
+/// (`DropOperands`); an operand it read twice loses both entries.
+#[test]
+fn a_deleted_node_leaves_the_use_lists_of_its_operands() {
+    let mut dag = dag();
+    let x = arg(&mut dag, EVT::I32, 1);
+    let y = arg(&mut dag, EVT::I32, 2);
+    let kept = dag.get_node(ISD::Add, EVT::I32, &[x, y]);
+    let twice = dag.get_node(ISD::Mul, EVT::I32, &[x, x]);
+    let dead = dag.get_node(ISD::Sub, EVT::I32, &[twice, y]);
+    assert_eq!(dag.use_candidates(x.node).iter().filter(|&&u| u == twice.node).count(), 2);
+    dag.delete_dead(dead.node);
+    assert!(dag.is_deleted(dead.node) && dag.is_deleted(twice.node));
+    for operand in [x.node, y.node, twice.node] {
+        let stale: Vec<u32> =
+            dag.use_candidates(operand).iter().copied().filter(|&user| dag.is_deleted(user)).collect();
+        assert!(stale.is_empty(), "node {operand} still lists deleted users {stale:?}");
+    }
+    assert_eq!(dag.use_candidates(x.node), &[kept.node]);
+}
+
+/// Two users of the replaced value that become equal: the one made first stays
+/// and the other merges into it, as `ReplaceAllUsesWith` updates users in
+/// creation order here. Walking them newest first kept the later one, moved
+/// every node number after it, and 6502 `memory_expansion` -O2 grew 14 B
+/// (51,459 -> 51,473) from the scheduler's different order.
+#[test]
+fn of_two_users_made_equal_by_a_replacement_the_earlier_one_stays() {
+    let mut dag = dag();
+    let (from, to) = (arg(&mut dag, EVT::I32, 1), arg(&mut dag, EVT::I32, 2));
+    let first = dag.get_node(ISD::Sub, EVT::I32, &[from, to]);
+    let second = dag.get_node(ISD::Sub, EVT::I32, &[to, from]);
+    let events = dag.replace_all_uses_with(from, to);
+    assert!(events.contains(&Rauw::Merged { from: second.node, into: first.node }), "{events:?}");
+}
+
+/// A use list has the newest use first, and `ReplaceAllUsesWith` adds each use
+/// to the new value as it walks the old list, so the order reverses: the pin's
+/// `CreateVirtualRegisters` reads it to pick which `CopyToReg` of a load names
+/// the load's register (the Aho-Corasick loop of bench/grep -O1 chose the
+/// other copy and ran 5,856 instructions over).
+#[test]
+fn a_replacement_reverses_the_use_list_of_the_new_value() {
+    let mut dag = dag();
+    let (from, to, a) = (arg(&mut dag, EVT::I32, 1), arg(&mut dag, EVT::I32, 2), arg(&mut dag, EVT::I32, 3));
+    let older = dag.get_node(ISD::Add, EVT::I32, &[from, a]);
+    let newer = dag.get_node(ISD::Mul, EVT::I32, &[from, a]);
+    dag.replace_all_uses_with(from, to);
+    assert_eq!(dag.use_candidates(to.node), &[newer.node, older.node]);
 }

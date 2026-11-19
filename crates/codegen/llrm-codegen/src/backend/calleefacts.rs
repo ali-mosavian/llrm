@@ -97,9 +97,32 @@ pub struct CalleeFacts {
     /// a double or an extended real (their 8-byte slots) and every function
     /// that calls one of them directly.
     aligned: BTreeSet<String>,
+    /// The convention (MIR's number) of each function, whose `stack_alignment`
+    /// is the alignment its callers keep at a call.
+    convention: BTreeMap<String, u32>,
     /// The functions no function of the module calls (itself included) and
     /// whose address is not taken.
     uncalled: BTreeSet<String>,
+}
+
+/// The functions of `module` no other definition can replace and that are not otherwise
+/// opaque: defined with external linkage, hidden or protected (or default visibility where
+/// the module is not shared-library code: `shouldAssumeDSOLocal`), and not named but as a callee.
+fn local_definitions(module: &Module) -> BTreeSet<GlobalId> {
+    use llrm_mir::module::{Linkage, Visibility};
+    let named = llrm_mir::callgraph::addressed(module);
+    module
+        .functions()
+        .filter(|(id, global, function)| {
+            !function.is_declaration()
+                && global.linkage == Linkage::External
+                && (global.visibility != Visibility::Default || !module.preempts_default_visibility())
+                && function.calling_convention != llrm_mir::opcode::X86_INTR
+                && !llrm_mir::facts::opaque(function)
+                && !named.contains(id)
+        })
+        .map(|(id, _, _)| id)
+        .collect()
 }
 
 /// Whether some function of `module` has a value of type double or x87
@@ -130,8 +153,21 @@ impl CalleeFacts {
     /// The functions of `module` that may take part, and the order to machine
     /// them in: callees before their callers.
     pub fn of(module: &Module) -> (Self, Vec<GlobalId>) {
+        Self::of_binding(module, false)
+    }
+
+    /// [`CalleeFacts::of`], where `binds_local` lets a function that binds locally
+    /// (`binds_local`) take part too: its callers in the module may rely on what it
+    /// writes though others call it by its convention, which it keeps.
+    pub fn of_binding(
+        module: &Module,
+        binds_local: bool,
+    ) -> (Self, Vec<GlobalId>) {
         let graph = CallGraph::new(module);
-        let private = direct_only(module);
+        let mut private = direct_only(module);
+        if binds_local {
+            private.extend(local_definitions(module));
+        }
         let mut aligned: BTreeSet<GlobalId> = BTreeSet::new();
         for id in graph.bottom_up() {
             let llrm_mir::GlobalKind::Function(function) = &module.global(id).kind else { continue };
@@ -152,8 +188,17 @@ impl CalleeFacts {
             .filter(|id| !called.contains(id) && !addressed.contains(id))
             .filter_map(|id| module.global(id).name.owned())
             .collect();
+        let convention = graph
+            .bottom_up()
+            .into_iter()
+            .filter_map(|id| {
+                let global = module.global(id);
+                Some((global.name.owned()?, global.function()?.calling_convention))
+            })
+            .collect();
         (
             Self {
+                convention,
                 uncalled,
                 callees: Some(std::rc::Rc::new(llrm_mir::memory::callees(module))),
                 eligible,
@@ -172,8 +217,9 @@ impl CalleeFacts {
         self.uncalled.contains(name)
     }
 
-    /// The bytes the stack pointer is a multiple of when `name` is entered: the
-    /// target's alignment where it needs the stack aligned (a quad on its stack
+    /// The bytes the stack pointer is a multiple of when `name` is entered: its
+    /// convention's alignment (else the target's) where it needs the stack
+    /// aligned (a quad on its stack
     /// is then 8-aligned, which a 486 charges 3 clocks for otherwise: Intel486
     /// data sheet 240440-002, section 10.1 and Table 2.1), else a slot, so code
     /// that holds no double pays nothing for it.
@@ -183,10 +229,25 @@ impl CalleeFacts {
         name: &str,
     ) -> i64 {
         if self.aligned.contains(name) || arch.aligned_calls() {
-            arch.stack_alignment()
+            self.convention
+                .get(name)
+                .and_then(|&number| arch.calling().by_number(number)?.stack_alignment)
+                .unwrap_or_else(|| arch.stack_alignment())
         } else {
             arch.stack_slot_bytes()
         }
+    }
+
+    /// The most an object of `name`'s frame is aligned to: the target's own
+    /// alignment at most. A convention that keeps the stack wider pads the call
+    /// and the frame's end, not each object (`calculateFrameObjectOffsets`:
+    /// `getObjectAlign` per object, `getStackAlign` for the total).
+    pub fn object_alignment(
+        &self,
+        arch: &dyn llrm_target::Target,
+        name: &str,
+    ) -> i64 {
+        self.stack_alignment(arch, name).min(arch.stack_alignment().max(arch.stack_slot_bytes()))
     }
 
     /// What each function of the module does to memory, where the facts were
@@ -277,7 +338,10 @@ pub fn written_by(body: &LirBody) -> BTreeSet<RegId> {
     let regs = body.regs();
     let root = |register: RegId| regs.root(register);
     let mut found = BTreeSet::new();
-    for one in body.insns() {
+    for (at, one) in body.insns().into_iter().enumerate() {
+        // The entry's `delivers` is where the arguments arrive, not a write of them: the pin's
+        // `RegUsageInfoCollector` takes the registers the body modifies (IPRA-ARGHINT).
+        let arrival = at == 0 && one.call.is_none() && one.requires.is_empty();
         if let Some(what) = &one.what {
             for place in &what.dests {
                 if let Loc::Reg(ir::Reg { register, .. }) = place {
@@ -293,7 +357,11 @@ pub fn written_by(body: &LirBody) -> BTreeSet<RegId> {
             Some(call) => found.extend(call.disturbs.iter().copied().map(root)),
             None => found.extend(one.clobbers.iter().copied().map(root)),
         }
-        found.extend(one.requires.iter().chain(&one.delivers).map(|(_, register)| root(*register)));
+        let delivered: &[_] = if arrival { &[] } else { &one.delivers };
+        // A sibling call is a `jmp` that reads the registers it passes; what its callee writes is added by `record`.
+        let sibling = one.what.as_ref().is_some_and(|what| what.is_sibling_call());
+        let required: &[_] = if sibling { &[] } else { &one.requires };
+        found.extend(required.iter().chain(delivered).map(|(_, register)| root(*register)));
     }
     found
 }
@@ -350,6 +418,35 @@ mod tests {
         assert!(!takes_part(cycle, "ping") && !takes_part(cycle, "pong"), "a cycle of calls");
     }
 
+    /// Every m32 function was entered at 8 whatever its convention: `-mabi=sysv`
+    /// code, whose System V convention keeps the stack 16-aligned at a call
+    /// (`calling.toml`), padded its calls to the default family's 8, and a
+    /// sysv `h` holding a double was framed for 8.
+    #[test]
+    fn a_function_is_entered_at_its_conventions_stack_alignment() {
+        let double = |cc: &str, name: &str| {
+            format!("define {cc} double @{name}(double %x) {{\nb0:\n  %r = fadd double %x, %x\n  ret double %r\n}}\n")
+        };
+        let text = [("", "plain"), ("sysvcc", "sysv"), ("watcallcc", "wat"), ("fastcc", "private")]
+            .iter()
+            .map(|&(cc, name)| double(cc, name))
+            .collect::<String>();
+        let module = parsed(&text);
+        let facts = CalleeFacts::of(&module).0;
+        let aligned = |name| facts.stack_alignment(&llrm_x86_m32::M32, name);
+        assert_eq!(
+            [aligned("plain"), aligned("sysv"), aligned("wat"), aligned("private")],
+            [8, 16, 8, 8],
+            "the stack alignment of a double-holder, by convention"
+        );
+        let objects = |name| facts.object_alignment(&llrm_x86_m32::M32, name);
+        assert_eq!(
+            [objects("plain"), objects("sysv"), objects("wat"), objects("private")],
+            [8, 8, 8, 8],
+            "a convention's wider stack pads the call, not each object"
+        );
+    }
+
     /// Callees come before their callers, which is when a caller finds the fact
     /// of what it calls.
     #[test]
@@ -387,16 +484,25 @@ mod tests {
             IndexMap::default(),
         );
         let frame = |saved: Vec<(RegId, RegId)>| llrm_target::FrameRegisters {
+            vector_saved: Vec::new(),
             pointer: RegId::BP,
             stack: RegId::SP,
             saved,
             slot: 2,
             align: 2,
+            object_align: 2,
             optional: false,
             enter: false,
             wrap_split_size: false,
+            object_aligned: false,
+            red_zone: 0,
             slot_scratch: None,
+            slot_dead_checked: false,
+            slot_add_with_saved: false,
             free: false,
+            kept: false,
+            exit_cfi: true,
+            saved_first: false,
         };
         let facts = CalleeFacts::of(&parsed(LEAF)).0;
         facts.record(
@@ -442,16 +548,25 @@ mod tests {
             IndexMap::default(),
         );
         let frame = llrm_target::FrameRegisters {
+            vector_saved: Vec::new(),
             pointer: RegId::BP,
             stack: RegId::SP,
             saved: vec![],
             slot: 2,
             align: 2,
+            object_align: 2,
             optional: false,
             enter: false,
             wrap_split_size: false,
+            object_aligned: false,
+            red_zone: 0,
             slot_scratch: None,
+            slot_dead_checked: false,
+            slot_add_with_saved: false,
             free: false,
+            kept: false,
+            exit_cfi: true,
+            saved_first: false,
         };
         let calls = IndexMap::from_iter([(7, "release".to_owned())]);
         facts.record("trim", &body, &frame, &calls);

@@ -18,7 +18,7 @@ target triple = "arm64-apple-macosx27.2.0"
 
 declare void @use()
 
-define void @f() {
+define void @f() "frame-pointer"="non-leaf" {
   call void @use()
   store volatile i32 1, ptr @g0, align 4
   call void @use()

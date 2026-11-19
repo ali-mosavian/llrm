@@ -1,9 +1,9 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/debuginfo.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/debuginfo.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/debuginfo.rs sha256:0f702ff7d4b00587b088c851625742de0beed7b1844c6083c622b4b80e5aef71 -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/debuginfo.rs sha256:151c92e56d30beb8c5c31cb8cdd2fbace29f1c5e72763b0a0fafec71b99b824b -->
 
 # debuginfo
 
-`-g`: build a module's debug information as `llrm_object::debug::Info`,
+`-g`: build a module's debug information as `llrm_debug::Info`,
 the format-neutral model each object format's writer encodes.
 
 ## How it works

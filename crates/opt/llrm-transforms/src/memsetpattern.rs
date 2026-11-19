@@ -39,6 +39,24 @@ use crate::expansion;
 
 /// Every `memset.pattern` call of `module` as a loop.
 pub fn expanded(module: &mut Module) -> Result<(), String> {
+    expand(module, false)
+}
+
+/// Every `memset.pattern` call of `module` as a loop that steps a pointer to
+/// an end pointer, for a target with no scaled or indexed address: the loop of
+/// [`expanded`] scales and adds its index on every trip.
+///
+/// DEVIATE: the pin's loop is indexed. Reason: pre-ISel lowering runs after
+/// loop strength reduction, so nothing rewrites the index (tests/run/c
+/// pattern_fill on the Z80). Exit: none; the form is the target's.
+pub fn expanded_stepping(module: &mut Module) -> Result<(), String> {
+    expand(module, true)
+}
+
+fn expand(
+    module: &mut Module,
+    stepping: bool,
+) -> Result<(), String> {
     let layout = module.datalayout.as_deref().map_or_else(|| Ok(DataLayout::default()), DataLayout::parse)?;
     expansion::expand_calls(
         module,
@@ -94,6 +112,19 @@ pub fn expanded(module: &mut Module) -> Result<(), String> {
             let void = function.instruction(jump).ty;
             let bool_type = context.types.int(1);
             function.erase(jump).map_err(|why| why.to_string())?;
+            let end = if stepping {
+                let end = function.create_instruction(
+                    Opcode::GetElementPtr { source: element },
+                    pointer_type,
+                    vec![dst, len],
+                    Flags::INBOUNDS,
+                    None,
+                );
+                function.insert(end, Position::End(pre)).map_err(|why| why.to_string())?;
+                Some(Operand::Value(function.instruction(end).result.ok_or("an end pointer")?))
+            } else {
+                None
+            };
             let entry = if constant_len.is_some() {
                 function.create_instruction(Opcode::Br, void, vec![Operand::Block(main)], Flags::default(), None)
             } else {
@@ -115,8 +146,8 @@ pub fn expanded(module: &mut Module) -> Result<(), String> {
                 )
             };
             function.insert(entry, Position::End(pre)).map_err(|why| why.to_string())?;
-            let phi =
-                function.create_instruction(Opcode::Phi, length_type, Vec::new(), Flags::default(), Some("loop-index"));
+            let phi_type = if stepping { pointer_type } else { length_type };
+            let phi = function.create_instruction(Opcode::Phi, phi_type, Vec::new(), Flags::default(), Some("loop-index"));
             let index = Operand::Value(function.instruction(phi).result.ok_or("a phi result")?);
             let address = function.create_instruction(
                 Opcode::GetElementPtr { source: element },
@@ -125,25 +156,40 @@ pub fn expanded(module: &mut Module) -> Result<(), String> {
                 Flags::INBOUNDS,
                 None,
             );
+            let at_address = if stepping {
+                index
+            } else {
+                Operand::Value(function.instruction(address).result.ok_or("an address")?)
+            };
             let store = function.create_instruction(
                 Opcode::Store { align: Some(align), volatile },
                 void,
-                vec![value, Operand::Value(function.instruction(address).result.ok_or("an address")?)],
+                vec![value, at_address],
                 Flags::default(),
                 None,
             );
-            let next = function.create_instruction(
-                Opcode::Binary(BinaryOp::Add),
-                length_type,
-                vec![index, Operand::Constant(one)],
-                Flags::default(),
-                None,
-            );
+            let next = if stepping {
+                function.create_instruction(
+                    Opcode::GetElementPtr { source: element },
+                    pointer_type,
+                    vec![index, Operand::Constant(one)],
+                    Flags::INBOUNDS,
+                    None,
+                )
+            } else {
+                function.create_instruction(
+                    Opcode::Binary(BinaryOp::Add),
+                    length_type,
+                    vec![index, Operand::Constant(one)],
+                    Flags::default(),
+                    None,
+                )
+            };
             let next_value = Operand::Value(function.instruction(next).result.ok_or("a sum")?);
             let again = function.create_instruction(
-                Opcode::ICmp(IntPredicate::Ult),
+                Opcode::ICmp(if stepping { IntPredicate::Ne } else { IntPredicate::Ult }),
                 bool_type,
-                vec![next_value, len],
+                vec![next_value, end.unwrap_or(len)],
                 Flags::default(),
                 None,
             );
@@ -155,13 +201,12 @@ pub fn expanded(module: &mut Module) -> Result<(), String> {
                 Flags::default(),
                 None,
             );
-            for inst in [phi, address, store, next, again, back] {
+            let body: &[_] = if stepping { &[phi, store, next, again, back] } else { &[phi, address, store, next, again, back] };
+            for &inst in body {
                 function.insert(inst, Position::End(main)).map_err(|why| why.to_string())?;
             }
-            function.set_operands(
-                phi,
-                vec![Operand::Constant(zero), Operand::Block(pre), next_value, Operand::Block(main)],
-            );
+            let first = if stepping { dst } else { Operand::Constant(zero) };
+            function.set_operands(phi, vec![first, Operand::Block(pre), next_value, Operand::Block(main)]);
             function.erase(call).map_err(|why| why.to_string())?;
             Ok(())
         },

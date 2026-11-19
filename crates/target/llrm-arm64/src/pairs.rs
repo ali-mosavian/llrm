@@ -1,13 +1,13 @@
 //! Adjacent loads or stores of two registers to neighbouring addresses become
 //! one `ldp`/`stp` (`AArch64LoadStoreOptimizer`'s `findMatchingInsn` and
 //! `mergePairedInsns`), when nothing between them touches the registers, the
-//! base or memory. This version looks at most `WINDOW` instructions ahead;
-//! LLVM's `LdStLimit` is 20.
+//! base or memory. It looks at most `WINDOW` instructions ahead, LLVM's
+//! `LdStLimit` of 20.
 
 use crate::frame::Lowered;
 use crate::mc::inst::*;
 
-const WINDOW: usize = 8;
+const WINDOW: usize = 20;
 
 /// A plain load or store of one register at `[base, #imm]`.
 pub(crate) struct Access {
@@ -28,7 +28,16 @@ pub(crate) struct Touch<'a> {
     at: Option<(Gpr, i64)>,
 }
 
+/// What a vector lane, replicate or structure load reaches: it carries no
+/// memory operand, so against a store it is unknown.
+static UNKNOWN: std::sync::LazyLock<MemOperand> = std::sync::LazyLock::new(MemOperand::default);
+
 pub(crate) fn touch(inst: &Inst) -> Option<Touch<'_>> {
+    // `LD1i32` and its kin are loads: they pass a load, as the pin's `mayAlias`
+    // lets any two loads pass.
+    if matches!(inst, Inst::VectorLoadLane { .. } | Inst::VectorLoadReplicate { .. } | Inst::VectorLoadStructure { .. }) {
+        return Some(Touch { store: false, mmo: &UNKNOWN, bytes: 16, at: None });
+    }
     let (store, mem, addr, mmo) = match inst {
         Inst::Load { mem, addr, mmo } => (false, mem, addr, mmo),
         Inst::Store { mem, addr, mmo } => (true, mem, addr, mmo),
@@ -117,10 +126,15 @@ pub(crate) fn is_memory(inst: &Inst) -> bool {
         || ordered(inst)
 }
 
-/// An atomic access or a barrier: no access moves across it, whatever it
-/// reaches.
+/// An atomic access, a barrier or a vector lane access: no access moves
+/// across it, whatever it reaches.
 fn ordered(inst: &Inst) -> bool {
-    matches!(inst, Inst::Atomic { .. } | Inst::Dmb { .. })
+    matches!(
+        inst,
+        Inst::Atomic { .. } | Inst::Dmb { .. } | Inst::VectorStoreLane { .. } | Inst::VectorLoadReplicate { .. } | Inst::VectorLoadLane { .. }
+            | Inst::VectorLoadStructure { .. }
+            | Inst::VectorStoreStructure { .. }
+    )
 }
 
 pub(crate) fn leaves_the_block(inst: &Inst) -> bool {
@@ -137,7 +151,10 @@ pub(crate) fn leaves_the_block(inst: &Inst) -> bool {
     )
 }
 
-fn pairs_in(insts: Vec<Inst>) -> Vec<Inst> {
+fn pairs_in(
+    insts: Vec<Inst>,
+    locs: Vec<Option<(u32, u32)>>,
+) -> (Vec<Inst>, Vec<Option<(u32, u32)>>) {
     let mut insts: Vec<Option<Inst>> = insts.into_iter().map(Some).collect();
     for i in 0..insts.len() {
         let Some(first) = insts[i].as_ref().and_then(access) else { continue };
@@ -146,25 +163,38 @@ fn pairs_in(insts: Vec<Inst>) -> Vec<Inst> {
             let Some(inst) = insts[j].as_ref() else { continue };
             if let Some(second) = access(inst)
                 && let Some(pair) = pair_of(&first, &second)
+                && (-64..64).contains(&(pair.low.imm / pair.low.bytes))
+            {
+                let between = || insts[i + 1..j].iter().flatten();
                 // The second access moves up to the first: what lies between
                 // must not care. The registers it carries and the base are
                 // checked at each step.
-                && (-64..64).contains(&(pair.low.imm / pair.low.bytes))
-                && insts[i + 1..j].iter().flatten().all(|between| {
-                    let (float, number) = register(&second.mem);
+                let (float, number) = register(&second.mem);
+                let second_touch = touch_of(&second);
+                let up = between().all(|between| {
                     // A load moves up over them: they must not meet its
                     // register. A store moves up: they must not change the
                     // register it stores.
                     let register_free = !defines_or_uses(between, float, number, !first.load);
                     // It also passes their memory accesses: they must commute
                     // with it.
-                    let second_touch = touch_of(&second);
                     register_free && touch(between).is_none_or(|other| commutes(&second_touch, &other))
-                })
-            {
-                insts[i] = Some(pair.inst);
-                insts[j] = None;
-                break;
+                });
+                // Or the first moves down to the second (`MergeForward` of
+                // `findMatchingInsn`): the same of its register. The scan
+                // stopped at the first memory access that did not commute
+                // with it, so those it passed do.
+                let (float, number) = register(&first.mem);
+                let down = between().all(|between| !defines_or_uses(between, float, number, !first.load));
+                if up {
+                    insts[i] = Some(pair.inst);
+                    insts[j] = None;
+                    break;
+                } else if down {
+                    insts[j] = Some(pair.inst);
+                    insts[i] = None;
+                    break;
+                }
             }
             // Passing `inst` is allowed only when it neither is control flow
             // nor changes the base, a store passes nothing in
@@ -177,7 +207,7 @@ fn pairs_in(insts: Vec<Inst>) -> Vec<Inst> {
             }
         }
     }
-    insts.into_iter().flatten().collect()
+    insts.into_iter().zip(locs).filter_map(|(inst, loc)| Some((inst?, loc))).unzip()
 }
 
 pub(crate) struct Pair {
@@ -228,7 +258,13 @@ pub(crate) fn pair_of(
 
 /// `blocks` with their adjacent accesses paired.
 pub fn fold(blocks: Vec<Lowered>) -> Vec<Lowered> {
-    blocks.into_iter().map(|block| Lowered { label: block.label, insts: pairs_in(block.insts) }).collect()
+    blocks
+        .into_iter()
+        .map(|block| {
+            let (insts, locs) = pairs_in(block.insts, block.locs);
+            Lowered { label: block.label, insts, locs }
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -260,7 +296,23 @@ mod tests {
     }
 
     fn folded(insts: Vec<Inst>) -> Vec<Inst> {
-        pairs_in(insts)
+        let places = vec![None; insts.len()];
+        pairs_in(insts, places).0
+    }
+
+    /// `ldr s23, [x, #176]` and `ldr s26, [x, #180]` with an `ld1 {v22.s}[1]`
+    /// between stayed two loads (a lane load stopped the scan), +1 instruction
+    /// a trip in sfm16_float_mul's loop; the pin's loads pass each other.
+    #[test]
+    fn a_lane_load_between_two_loads_does_not_keep_them_apart() {
+        let single = |reg: u32, imm: i64| Inst::Load {
+            mem: Memory::Fp { bytes: 4, reg: Vreg(reg) },
+            addr: Addr::Offset { base: Gpr(11), imm },
+            mmo: MemOperand::default(),
+        };
+        let lane = Inst::VectorLoadLane { lanes: Arrangement::S4, rt: Vreg(22), index: 1, base: Gpr(13) };
+        let out = folded(vec![single(23, 176), lane, single(26, 180)]);
+        assert!(out.iter().any(|inst| matches!(inst, Inst::LoadPair { .. })), "{out:?}");
     }
 
     /// Two loads of neighbouring doublewords were two instructions.
@@ -322,6 +374,29 @@ mod tests {
         assert_eq!(out.len(), 2, "{out:?}");
     }
 
+    /// `AArch64LoadStoreOptimizer` scans 20 instructions for the second access
+    /// (`LdStLimit`); a window of 8 left neighbouring spill stores 9 to 20
+    /// instructions apart as two (fpbench -O3 +8 B, jpeg_fixed -O2 +16 B).
+    #[test]
+    fn neighbouring_stores_pair_across_fifteen_instructions_but_not_twentyone() {
+        let add = |reg: u32| Inst::AddSubImm {
+            op: AddSub { subtract: false, set_flags: false },
+            width: Width::X,
+            rd: Gpr(reg),
+            rn: Gpr(reg),
+            imm12: 1,
+            shift12: false,
+        };
+        let between = |count: u32| {
+            let mut insts = vec![store(1, 0, 0)];
+            insts.extend((0..count).map(|n| add(9 + n % 4)));
+            insts.push(store(2, 0, 8));
+            insts
+        };
+        assert_eq!(folded(between(15)).len(), 16, "paired: one store left");
+        assert_eq!(folded(between(21)).len(), 23, "21 apart is past the window");
+    }
+
     fn store_to(
         reg: u32,
         base: u32,
@@ -332,7 +407,7 @@ mod tests {
         Inst::Store {
             mem: Memory::Int { width: Width::X, bytes: 8, sign: false, reg: Gpr(reg) },
             addr: Addr::Offset { base: Gpr(base), imm },
-            mmo: MemOperand { object: MemObject::Global(object.into()), offset: Some(offset) },
+            mmo: MemOperand { object: MemObject::Global(object.into()), offset: Some(offset), volatile: false },
         }
     }
 
@@ -342,7 +417,9 @@ mod tests {
     fn stores_pair_across_a_store_to_another_object_but_not_to_the_same_bytes() {
         let other = folded(vec![store_to(1, 20, 0, "_a", 0), store_to(2, 21, 0, "_b", 0), store_to(3, 20, 8, "_a", 8)]);
         assert!(matches!(other[0], Inst::StorePair { .. }), "{other:?}");
-        let same = folded(vec![store_to(1, 20, 0, "_a", 0), store_to(2, 21, 8, "_a", 8), store_to(3, 20, 8, "_a", 8)]);
+        // Overlapping both: the third cannot move up past it, the first cannot
+        // move down.
+        let same = folded(vec![store_to(1, 20, 0, "_a", 0), store_to(2, 21, 4, "_a", 4), store_to(3, 20, 8, "_a", 8)]);
         assert!(!same.iter().any(|inst| matches!(inst, Inst::StorePair { .. })), "{same:?}");
     }
 
@@ -354,5 +431,56 @@ mod tests {
         assert!(matches!(stores[0], Inst::StorePair { .. }) && stores.len() == 1, "{stores:?}");
         let loads = folded(vec![load(5, 20, 0), load(5, 20, 8)]);
         assert!(!loads.iter().any(|inst| matches!(inst, Inst::LoadPair { .. })), "{loads:?}");
+    }
+
+    /// A spill store and its neighbour's lay either side of a load of a global:
+    /// the spill carried no memory operand, so the load might alias it and no
+    /// `stp` was made (fpbench -O3: 19 pairs where the pin, whose spills name
+    /// their frame object, has 45).
+    #[test]
+    fn spill_stores_pair_across_a_load_of_a_global() {
+        use crate::mc::visit::Reg;
+        let spill = |register: u32, slot: u32, imm: i64| {
+            let crate::mfunc::Op::I(Inst::Store { mem, mmo, .. }) =
+                crate::regalloc::spill_access(Reg::Fpr(Vreg(register)), slot, false, false)
+            else {
+                unreachable!()
+            };
+            Inst::Store { mem, addr: Addr::Offset { base: Gpr(31), imm }, mmo }
+        };
+        let global = Inst::Load {
+            mem: Memory::Int { width: Width::X, bytes: 8, sign: false, reg: Gpr(9) },
+            addr: Addr::Offset { base: Gpr(20), imm: 0 },
+            mmo: MemOperand { object: MemObject::Global("_g".into()), offset: Some(0), volatile: false },
+        };
+        let out = folded(vec![spill(16, 3, 8), global, spill(17, 4, 0)]);
+        assert!(out.iter().any(|inst| matches!(inst, Inst::StorePair { .. })), "{out:?}");
+    }
+
+    /// The second of two spill stores was defined between them (`fsub d17`
+    /// above `str d17`), so it could not move up and no `stp` was made; the
+    /// pin moves the first down to the second (`MergeForward`). fpbench -O3 had
+    /// 19 pairs where the pin has 45.
+    #[test]
+    fn a_store_pairs_by_moving_down_over_the_definition_of_the_next_ones_register() {
+        use crate::mc::visit::Reg;
+        let spill = |register: u32, slot: u32, imm: i64| {
+            let crate::mfunc::Op::I(Inst::Store { mem, mmo, .. }) =
+                crate::regalloc::spill_access(Reg::Fpr(Vreg(register)), slot, false, false)
+            else {
+                unreachable!()
+            };
+            Inst::Store { mem, addr: Addr::Offset { base: Gpr(31), imm }, mmo }
+        };
+        let define = Inst::FpBinary { op: FpBinary::Sub, size: FpSize::D, rd: Vreg(17), rn: Vreg(1), rm: Vreg(2) };
+        let out = folded(vec![spill(16, 3, 8), define.clone(), spill(17, 4, 0)]);
+        assert_eq!(out.len(), 2, "{out:?}");
+        assert!(matches!(out[0], Inst::FpBinary { .. }) && matches!(out[1], Inst::StorePair { .. }), "{out:?}");
+        // Both registers written between them: neither store can move.
+        let write =
+            |rd: u32| Inst::FpBinary { op: FpBinary::Sub, size: FpSize::D, rd: Vreg(rd), rn: Vreg(1), rm: Vreg(2) };
+        let (first_define, second_define) = (write(16), write(17));
+        let blocked = folded(vec![spill(16, 3, 8), first_define, second_define, spill(17, 4, 0)]);
+        assert!(!blocked.iter().any(|inst| matches!(inst, Inst::StorePair { .. })), "{blocked:?}");
     }
 }

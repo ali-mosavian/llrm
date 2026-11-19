@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/leaopt.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/leaopt.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/leaopt.rs sha256:c96b16b5f622730c82341835b3d20ff4ae06343ba7d2708cb44a21bafd0b6599 -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/leaopt.rs sha256:20cc4332d328449209d4f8023d5d7c558bf205c33fab18954205f5a1ba3938f3 -->
 
 # leaopt
 
@@ -31,11 +31,11 @@ it.
 ```
 
 DEVIATE LO-1 (exit: displacements of a symbol or a frame cell shifted by
-`Addr::plus`, owner w-6, 2026-11-09): only an address of registers and a
+`Addr::plus`, owner anyisa, 2026-11-09): only an address of registers and a
 number is a candidate; the pin also takes a global, a constant-pool entry
 or a symbol as the displacement.
 
-DEVIATE LO-2 (exit: the wrap of a 16-bit offset proved, owner w-6,
+DEVIATE LO-2 (exit: the wrap of a 16-bit offset proved, owner anyisa,
 2026-11-09): only a body of 32-bit addresses is rewritten; a displacement
 moved between two 16-bit sums can change what wraps.
 

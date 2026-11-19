@@ -263,6 +263,26 @@ fn an_i64_divide_carries_the_routines_code_at_its_call() {
     assert_eq!(done.inline.get(&at), Some(&routine.code));
 }
 
+/// m32 -Os tests/run/c/int64_division was +329 B over the pin: the object carried
+/// the inline `$div64_u` routine (213 B) where the pin calls libgcc's
+/// `__udivdi3`. Where the runtime lists the routine (hosted ELF), the call is
+/// to it, no inline code travels, and the arguments are four dwords on the
+/// stack; DOS (no listing) keeps the routine.
+#[test]
+fn a_hosted_i64_divide_calls_libgcc_and_carries_no_routine() {
+    let module = crate::testing::module(DIV64).expect("parses");
+    let cpu = crate::backend::cpu::profile("486").expect("a cpu");
+    let sysv = llrm_target::calling::Calling::number_of(Some("sysv")).expect("sysv");
+    let listed: Vec<(String, u32, String)> =
+        ["__divdi3", "__udivdi3", "__moddi3", "__umoddi3"].map(|n| (n.to_owned(), sysv, n.to_owned())).to_vec();
+    let done = selected(&module, "f", &llrm_x86_m32::M32, cpu, &listed).unwrap_or_else(|e| panic!("{}", e.0));
+    let called: Vec<&str> = done.calls.values().map(String::as_str).collect();
+    assert_eq!(called, ["__divdi3"], "{called:?}");
+    assert!(done.inline.is_empty(), "no routine travels with the call");
+    let dos = selected(&module, "f", &llrm_x86_m32::M32, cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+    assert!(dos.calls.values().any(|name| name.starts_with("div64")), "{:?}", dos.calls);
+}
+
 const VARIADIC: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
 declare void @llvm.va_start.p0(ptr)
 define i32 @f(i32 %n, ...) {
@@ -789,9 +809,10 @@ declare i32 @llvm.sdiv.fix.i32(i32, i32, i32 immarg)
 #[test]
 fn a_fixed_point_divide_is_selected() {
     let made = names(SDIV_FIX).unwrap_or_else(|why| panic!("{why}"));
-    // the numerator shifted up, the 64-bit divide and remainder as helper calls
+    // the numerator shifted up, the 64-bit divide and remainder as one helper call
+    // (DEVIATE DIVREM-HELPER: the routine returns both; the pin's x86 makes two)
     assert!(made.iter().any(|name| name == "shld"), "{made:?}");
-    assert_eq!(made.iter().filter(|name| *name == "call").count(), 2, "{made:?}");
+    assert_eq!(made.iter().filter(|name| *name == "call").count(), 1, "{made:?}");
 }
 
 const TRUNCATED_LONG_RESULT: &str = "target datalayout = \"@m16-datalayout@-ni:2:3\"
@@ -1188,16 +1209,25 @@ entry:
     let module = crate::testing::module(IR).expect("parses");
     let (facts, _) = crate::backend::calleefacts::CalleeFacts::of(&module);
     let frame = llrm_target::FrameRegisters {
+        vector_saved: Vec::new(),
         pointer: RegId::BP,
         stack: RegId::SP,
         saved: vec![],
         slot: 2,
         align: 2,
+        object_align: 2,
         optional: false,
         enter: false,
         free: false,
+        kept: false,
+        exit_cfi: true,
+        saved_first: false,
         wrap_split_size: false,
+        object_aligned: false,
+        red_zone: 0,
         slot_scratch: None,
+        slot_dead_checked: false,
+        slot_add_with_saved: false,
     };
     let leaf = selected(&module, "leaf", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
         .unwrap_or_else(|e| panic!("{}", e.0));
@@ -1329,4 +1359,107 @@ fn a_call_disturbs_the_registers_its_arguments_arrive_in() {
     let regs = llrm_lir::registers::Regs(llrm_x86_m32::M32.registers());
     let named = |name: &str| regs.root(llrm_x86_m32::M32.register_named(name));
     assert!(disturbs.contains(&named("edx")) && disturbs.contains(&named("ebx")), "{disturbs:?}");
+}
+
+const MINSIZE_CONSTANT_ARGUMENTS: &str = "target datalayout = \"@m16-datalayout@-ni:2:3\"
+declare void @g(i32, i32)
+define void @f() minsize {
+entry:
+  call void @g(i32 0, i32 -1)
+  ret void
+}
+";
+
+/// At minsize 0 and -1 are stored with `and [m], 0` / `or [m], -1`; the
+/// arguments stayed stores (`sub sp, 8; mov bx, sp; and [bx], 0`, +4 B
+/// each, 4383 B over BAS at -Oz) where the pin's `classifyInstruction`
+/// converts both to pushes.
+#[test]
+fn minsize_constant_arguments_are_pushed_not_stored() {
+    let module = crate::testing::module(MINSIZE_CONSTANT_ARGUMENTS).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let names: Vec<String> = done
+        .body
+        .insns()
+        .iter()
+        .map(|i| i.what.as_ref().and_then(|w| w.name.as_deref().map(str::to_owned)).unwrap_or_default())
+        .collect();
+    let call = names.iter().position(|n| n == "call").expect("a call");
+    assert_eq!(&names[call - 2..call], ["push", "push"], "both arguments are pushed: {names:?}");
+    assert!(!names.iter().any(|n| n == "and" || n == "or"), "no constant store is left: {names:?}");
+}
+
+const MINSIZE_CONSTANT_STORES: &str = "target datalayout = \"@m16-datalayout@-ni:2:3\"
+@a = global i16 7
+@b = global i32 7
+define void @f() minsize {
+entry:
+  store i16 0, ptr @a
+  store i32 -1, ptr @b
+  ret void
+}
+";
+
+/// The pin's `OptForMinSize` store patterns (X86InstrCompiler.td:1308) key on
+/// the function's `minsize`, which the selector ignored: `mov dword [b], -1`
+/// (9 B at m16) stayed where `or dword [b], -1` is 6.
+#[test]
+fn minsize_stores_of_zero_and_minus_one_are_and_or() {
+    let module = crate::testing::module(MINSIZE_CONSTANT_STORES).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let names: Vec<String> = done
+        .body
+        .insns()
+        .iter()
+        .map(|i| i.what.as_ref().and_then(|w| w.name.as_deref().map(str::to_owned)).unwrap_or_default())
+        .collect();
+    assert!(names.iter().any(|n| n == "and") && names.iter().any(|n| n == "or"), "{names:?}");
+    assert!(!names.iter().any(|n| n == "mov"), "no mov of an immediate is left: {names:?}");
+}
+
+const I16_MULTIPLY_BY_SEVEN: &str = "target datalayout = \"@m16-datalayout@-ni:2:3\"
+define i16 @f(i16 %x) {
+entry:
+  %m = mul i16 %x, 7
+  %s = add i16 %m, 3
+  ret i16 %s
+}
+";
+
+/// histo -O2 `(data*7 + seed) & 255` was `imul ax, ax, 7` (13 clocks on the
+/// 486) where main had `shl; sub`: instructions -10%, clocks +26%. The pin
+/// leaves an `i16` multiply to `imul`; m16 prices at the 486 and does not.
+#[test]
+fn an_i16_multiply_by_seven_is_a_chain_at_m16_not_an_imul() {
+    let module = crate::testing::module(I16_MULTIPLY_BY_SEVEN).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let names: Vec<String> = done
+        .body
+        .insns()
+        .iter()
+        .map(|i| i.what.as_ref().and_then(|w| w.name.as_deref().map(str::to_owned)).unwrap_or_default())
+        .collect();
+    assert!(!names.iter().any(|n| n.starts_with("imul") || n == "mul"), "an imul is left: {names:?}");
+}
+
+/// A call of `memcpy` built the three huge-fill routines (5.9 M Ir of
+/// assembly on the first one in a process, jpeg_fixed -O2 m32) to learn it was
+/// not one of them.
+#[test]
+fn test_a_call_of_an_ordinary_function_builds_no_huge_routine() {
+    use super::dag_function::huge_routine_with;
+    let none = |_| -> Option<llrm_target::routines::HugeString> { panic!("a routine was built for `memcpy`") };
+    let none_copy = |_| -> Option<llrm_target::routines::HugeString> { panic!("a routine was built for `memcpy`") };
+    assert!(huge_routine_with("memcpy", none, none_copy).is_none());
+    let routine = |name: &'static str| llrm_target::routines::HugeString {
+        name,
+        code: vec![0x90],
+        reads: Vec::new(),
+        clobbers: Vec::new(),
+    };
+    let found = huge_routine_with("huge_copy", |_| Some(routine("huge_fill1")), |_| Some(routine("huge_copy")));
+    assert_eq!(found.map(|found| found.name), Some("huge_copy"));
 }

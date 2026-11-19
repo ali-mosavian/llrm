@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/latecleanup.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/latecleanup.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/latecleanup.rs sha256:ae4b15e2e2178b0c53b562f03505c34bb526e0a389590d87502dc4de715dd459 -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/latecleanup.rs sha256:d2e44e2dacd314fd2887596d3f04859e112faeeb09a0c68f0c5cc970abc5cbde -->
 
 # latecleanup
 
@@ -34,7 +34,8 @@ allocator's splitting have left the same constant loaded again.
 
 ## Segment registers
 DEVIATE LC2 (real mode): the pin has no segment registers to load. A load of
-a segment constant (`mov es, DGROUP`) into `ES`, `FS` or `GS` is a candidate
+a segment constant (`mov es, DGROUP`) or a general register (`mov es, di`,
+stale once the register is written) into `ES`, `FS` or `GS` is a candidate
 too, and the entries of the segment registers are taken to a fixed point
 over the whole graph, so a load a loop's back edge repeats goes as well
 (scroll.c: a `pushw DGROUP; pop es` before every string move). Owner w12.

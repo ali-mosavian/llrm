@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/inferalignment.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/inferalignment.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/inferalignment.rs sha256:db4950fef7684ace80d1120f8d4d28370ef52ecaf1877820faa2cbf453fb1957 -->
+<!-- src: crates/opt/llrm-transforms/src/inferalignment.rs sha256:c9c4859966c6f70d73369512e883c7f7849ff18cae7977cf3948a4bcd7396bd5 -->
 
 # inferalignment
 
@@ -44,4 +44,4 @@ Only alignments, and the operands of the folds above, change: blocks and
 edges are unchanged.
 
 ## Used by
-Named by `pipeline`.
+Named by `assume_declared_is_scanned_once_per_module`, `pipeline`.

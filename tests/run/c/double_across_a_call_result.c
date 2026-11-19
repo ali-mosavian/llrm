@@ -1,4 +1,5 @@
 // flags: -O2
+// bar: not comparable (SDCC double is 32 bits); twin double_across_a_call_result_f32
 // A double live across a call that returns a double, with a reload placed between the call and the pseudo-op that takes its result:
 // the stackifier refused it, "a call's floating result arrives on a stack that is not empty" (RFP-5, the QB runtime's B$CIRC at -Os).
 extern void report(long value);

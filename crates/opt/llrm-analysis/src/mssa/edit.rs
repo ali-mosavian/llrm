@@ -2,7 +2,7 @@
 //! graph with: replacing uses, moving and removing accesses, making one for
 //! an instruction.
 
-use llrm_mir::module::{BlockId, InstId};
+use llrm_mir::module::{BlockId, Function, InstId};
 
 use super::build::{Effect, Place};
 use super::{AccessId, BlockAccesses, Kind, MemoryAccess, Mssa};
@@ -40,6 +40,34 @@ impl Mssa {
         self.drop_phi_user(old, phi);
         self.accesses[phi as usize].incoming[index].1 = value;
         self.accesses[value as usize].phi_users.push(phi);
+    }
+
+    /// `MemoryPhi::setIncomingBlock`.
+    pub(crate) fn set_incoming_block(
+        &mut self,
+        phi: AccessId,
+        index: usize,
+        block: BlockId,
+    ) {
+        self.accesses[phi as usize].incoming[index].0 = block;
+    }
+
+    /// `MemoryPhi::unorderedDeleteIncomingIf`: the edges `drop` says go, each
+    /// replaced by the last one, as the pin orders them.
+    pub(crate) fn unordered_delete_incoming_if(
+        &mut self,
+        phi: AccessId,
+        mut drop: impl FnMut(AccessId, BlockId) -> bool,
+    ) {
+        let mut at = 0;
+        while at < self.accesses[phi as usize].incoming.len() {
+            let (block, value) = self.accesses[phi as usize].incoming[at];
+            if drop(value, block) {
+                self.unordered_delete_incoming_value(phi, at);
+            } else {
+                at += 1;
+            }
+        }
     }
 
     /// One edge of `phi` less in the uses of `value`.
@@ -253,12 +281,13 @@ impl Mssa {
     /// `definition`. None where the instruction touches no memory.
     pub(crate) fn create_defined_access(
         &mut self,
+        function: &Function,
         block: BlockId,
         inst: InstId,
         definition: Option<AccessId>,
         modref: &dyn Fn(InstId) -> Effect,
     ) -> Option<AccessId> {
-        let access = self.create_new_access(block, inst, modref)?;
+        let access = self.create_new_access(function, block, inst, modref)?;
         // `createDefinedAccess` always sets the definition (even none).
         self.set_defining_access(access, definition);
         Some(access)

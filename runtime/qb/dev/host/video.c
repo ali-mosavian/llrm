@@ -617,3 +617,55 @@ int host_dump_ppm(const char *path)
         fwrite(rgb[host_pixels()[at]], 1, 3, file);
     return fclose(file) ? -1 : 0;
 }
+
+/* The DAC's ports, as a program reaches them with OUT and INP: 3C7 the index a read starts at, 3C8 the one a write
+   starts at, 3C9 the data, three 6-bit components a colour in turn (red, green, blue), the index moving on after the
+   third. Any other port reads as 0xFF and ignores a write. */
+enum { PORT_DAC_READ_INDEX = 0x3C7, PORT_DAC_WRITE_INDEX = 0x3C8, PORT_DAC_DATA = 0x3C9 };
+
+static unsigned dac_read_index, dac_write_index, dac_read_part, dac_write_part;
+static uint8_t dac_written[3];
+
+void qb_port_out(unsigned port, unsigned value)
+{
+    port &= 0xFFFF;
+    value &= 0xFF;
+    host_state_lock();
+    if (port == PORT_DAC_READ_INDEX) {
+        dac_read_index = value;
+        dac_read_part = 0;
+    } else if (port == PORT_DAC_WRITE_INDEX) {
+        dac_write_index = value;
+        dac_write_part = 0;
+    } else if (port == PORT_DAC_DATA) {
+        dac_written[dac_write_part++] = (uint8_t)(value & 0x3F);
+        if (dac_write_part == 3) {
+            memcpy(dac[dac_write_index], dac_written, 3);
+            dac_write_index = (dac_write_index + 1) & 0xFF;
+            dac_write_part = 0;
+            touch_all();
+        }
+    }
+    host_state_unlock();
+}
+
+unsigned qb_port_in(unsigned port)
+{
+    unsigned value = 0xFF;
+
+    port &= 0xFFFF;
+    host_state_lock();
+    if (port == PORT_DAC_READ_INDEX) {
+        value = 3;
+    } else if (port == PORT_DAC_WRITE_INDEX) {
+        value = dac_write_index;
+    } else if (port == PORT_DAC_DATA) {
+        value = dac[dac_read_index][dac_read_part++];
+        if (dac_read_part == 3) {
+            dac_read_index = (dac_read_index + 1) & 0xFF;
+            dac_read_part = 0;
+        }
+    }
+    host_state_unlock();
+    return value;
+}

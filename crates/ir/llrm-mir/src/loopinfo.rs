@@ -660,6 +660,49 @@ impl LoopInfo<BlockId> {
         }
     }
 
+    /// `LoopInfoBase::removeBlock`, for `gone` at once: each block is in no
+    /// loop afterwards. Every block must be innermost in `loop_id`; the
+    /// loop and its parents shrink, and the loops after it move down.
+    pub fn remove_blocks_from_loop(
+        &mut self,
+        loop_id: LoopId,
+        gone: &[BlockId],
+    ) {
+        if gone.is_empty() {
+            return;
+        }
+        for block in gone {
+            debug_assert_eq!(self.bb_map[block.0 as usize], loop_id.0, "a block not innermost in this loop");
+            self.bb_map[block.0 as usize] = NONE;
+        }
+        let data = &self.loops[loop_id.0 as usize];
+        let (from, to) = (data.start as usize, (data.start + data.len) as usize);
+        let mut removed: Vec<u32> = Vec::new();
+        for at in from..to {
+            if self.bb_map[self.layout[at].0 as usize] == NONE {
+                removed.push(at as u32);
+            }
+        }
+        let mut next = 0;
+        self.layout = self
+            .layout
+            .iter()
+            .enumerate()
+            .filter(|&(at, _)| {
+                let drop = removed.get(next) == Some(&(at as u32));
+                next += usize::from(drop);
+                !drop
+            })
+            .map(|(_, &block)| block)
+            .collect();
+        for one in &mut self.loops {
+            let before = removed.partition_point(|&at| at < one.start);
+            let inside = removed.partition_point(|&at| at < one.start + one.len) - before;
+            one.start -= before as u32;
+            one.len -= inside as u32;
+        }
+    }
+
     /// `Loop::addBasicBlockToLoop` for one block.
     pub fn add_basic_block_to_loop(
         &mut self,
@@ -740,6 +783,41 @@ impl<B: BlockNumber> LoopInfo<B> {
                 found.push(one);
             }
         }
+        found
+    }
+
+    /// The order a loop pass manager visits the loops in: it pushes
+    /// `getLoopsInReverseSiblingPreorder` on its worklist and pops from the
+    /// back, so inner loops come before their parents and siblings in program
+    /// order (https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopPassManager.cpp#L248).
+    pub fn get_loops_in_visit_order(&self) -> Vec<Loop<'_, B>> {
+        let mut found = self.get_loops_in_reverse_sibling_preorder();
+        found.reverse();
+        found
+    }
+
+    /// The order the legacy loop pass manager visits the loops in, which the
+    /// code generator's `loop-reduce` runs under: the queue takes each loop
+    /// before its sub-loops (last sub-loop first), the top-level loops last
+    /// first, and the manager pops from the back
+    /// ([LoopPass.cpp#L109](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/LoopPass.cpp#L109),
+    /// [#L163](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/LoopPass.cpp#L163)).
+    /// Inner loops come before their parents and siblings in program order.
+    pub fn get_loops_in_legacy_visit_order(&self) -> Vec<Loop<'_, B>> {
+        fn queue<'a, B: BlockNumber>(
+            one: Loop<'a, B>,
+            found: &mut Vec<Loop<'a, B>>,
+        ) {
+            found.push(one);
+            for sub in one.get_sub_loops().collect::<Vec<_>>().into_iter().rev() {
+                queue(sub, found);
+            }
+        }
+        let mut found = Vec::new();
+        for root in self.top_level_loops().collect::<Vec<_>>().into_iter().rev() {
+            queue(root, &mut found);
+        }
+        found.reverse();
         found
     }
 

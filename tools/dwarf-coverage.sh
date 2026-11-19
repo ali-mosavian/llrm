@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# dwarf-coverage.sh llrm-c: llvm-dwarfdump --statistics of every bench C program built by llrm-c and by gcc, per level:
+# dwarf-coverage.sh llrm-cc: llvm-dwarfdump --statistics of every bench C program built by llrm-cc and by gcc, per level:
 # source variables with a location, and the share of their scope bytes a location covers. The scoreboard for -g's coverage.
 C=$1; D=${DWARFDUMP:-llvm-dwarfdump-20}; T=$(mktemp -d)
 for o in O1 O2 Os; do

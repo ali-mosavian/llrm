@@ -1,0 +1,11 @@
+# Apple II, DOS 3.3 binary. Values from the installed cc65 apple2.cfg (zero page $80..$99, program at
+# $0803, HIMEM $9600). CHECKED BY BUILD ONLY: the binary is assembled, linked and its header and
+# entry bytes are tested, but nothing here runs an Apple II.
+# zero_page = 26: cc65's own ZP segment for this target is $0080 size $001A (/usr/share/cc65/cfg/apple2.cfg:15); the program must assume: DOS 3.3 and the monitor are not called; no interrupt handler runs in $80..$99.
+[platform]
+name = "apple2"
+status = "built"
+load_address = 0x0803
+imag_base = 0x80
+zero_page = 26
+soft_stack = 0x9600

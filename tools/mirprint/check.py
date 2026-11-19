@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Allocate one function's pre-allocation LIR with the pin and with llrm, on the same input.
 
-    check.py FUNCTION FILE.c [llrm-c flags]      # default flags: -m32 -mabi=sysv -march=i486 -O2
+    check.py FUNCTION FILE.c [llrm-cc flags]      # default flags: -m32 -mabi=sysv -march=i486 -O2
 
-llrm-c prints the function as MIR (`LLRM_MIR_PRINT`); the pin's `llc -run-pass=greedy,virtregrewriter` allocates it; the stack
+llrm-cc prints the function as MIR (`LLRM_MIR_PRINT`); the pin's `llc -run-pass=greedy,virtregrewriter` allocates it; the stack
 references of the pin's result (spill stores, reloads, argument reads) is counted next to what llrm's spiller recorded for the same input (stores, reloads, folded reloads). Only the
 integer forms `backend/mirprint.rs` knows are printed; any other instruction is named and the run stops.
 """
@@ -21,7 +21,7 @@ LLC = Path(os.environ.get("LLC") or Path.home() / "scratch/llvm-build/bin/llc")
 
 
 def llrm_c() -> str:
-    return os.environ.get("LLRM_C") or str(REPO / "target/debug/llrm-c")
+    return os.environ.get("LLRM_C") or str(REPO / "target/debug/llrm-cc")
 
 
 def spill_counts(stderr: str) -> dict[str, int]:
@@ -67,14 +67,17 @@ def main(argv: list[str]) -> int:
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / "f.mir"
         path.write_text(mir)
-        pin = subprocess.run([str(LLC), "-mtriple=i486-unknown-linux-gnu", "-mcpu=i486", "-mattr=-sse,-sse2,-mmx", "-O2",
+        wide = "-m64" in flags  # x86-64: the quadword forms, no i486 feature list
+        target = ["-mtriple=x86_64-unknown-linux-gnu"] if wide else ["-mtriple=i486-unknown-linux-gnu", "-mcpu=i486", "-mattr=-sse,-sse2,-mmx"]
+        pin = subprocess.run([str(LLC), *target, "-O2",
                               "-start-before=greedy", "-stop-after=virtregrewriter", "-x", "mir", str(path), "-o", "-"],
                              capture_output=True, text=True)
     if pin.returncode:
         print("the pin refused the MIR:", pin.stderr[:600])
         return 1
-    stores = len(re.findall(r"MOV32mr %stack\.", pin.stdout))
-    reloads = len(re.findall(r"[A-Z0-9]+32rm %stack\.", pin.stdout))
+    word = "64" if "-m64" in flags else "32"
+    stores = len(re.findall(rf"MOV{word}mr %stack\.", pin.stdout))
+    reloads = len(re.findall(rf"[A-Z0-9]+{word}rm %stack\.", pin.stdout))
     arguments = len(re.findall(r"%fixed-stack\.", pin.stdout))
     dump = subprocess.run([llrm_c(), *flags, "-S", "-o", "/dev/null", source], capture_output=True, text=True,
                           env={**os.environ, "ISEL_DUMP": "1"})

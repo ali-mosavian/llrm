@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Cycles, instructions, branch and cache misses (user space) of one compile on both sides.
 
-    cycles.py QCPORT [--llrm llrm-c] [--llvm DIR] FILE.c ...   (a path under QCPORT/render is d_faces; others are plain)
+    cycles.py QCPORT [--llrm llrm-cc] [--llvm DIR] FILE.c ...   (a path under QCPORT/render is d_faces; others are plain)
 
 Minimum cycles of --runs, the two compilers alternating. Prints one row per file and side, then the ratio llrm / LLVM.
 """
@@ -34,7 +34,7 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("qcport")
     ap.add_argument("files", nargs="+")
-    ap.add_argument("--llrm", default="llrm-c")
+    ap.add_argument("--llrm", default="llrm-cc")
     ap.add_argument("--llvm", default=str(Path.home() / "scratch/llvm-build/bin"))
     ap.add_argument("--runs", type=int, default=3)
     a = ap.parse_args()

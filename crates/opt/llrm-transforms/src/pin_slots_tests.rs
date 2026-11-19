@@ -256,23 +256,9 @@ const ROWS: &[Disposition] = &[
     ),
     row(
         Late,
-        "drop-unnecessary-assumes",
-        Why::Missing,
-        "pin ablation (2026-10-27): 0 IRs of 65 QCport (i486 -O2 and m16 -Os), 0 of 58 QB (m16 -Os; the pin parses 58 of 101), 0 of 49 C examples/bench (m16 -Os and i486 -O2); DEFERRED, revisit after parity-green",
-        "w4",
-    ),
-    row(
-        Late,
         "alignment-from-assumptions",
         Why::Missing,
         "pin ablation (2026-10-27): 0 IRs of 65 QCport (i486 -O2 and m16 -Os), 0 of 58 QB (m16 -Os; the pin parses 58 of 101), 0 of 49 C examples/bench (m16 -Os and i486 -O2); DEFERRED, revisit after parity-green",
-        "w4",
-    ),
-    row(
-        Late,
-        "loop-rotate",
-        Why::Missing,
-        "the late loop nest's rotate; DEFERRED: pin ablation (2026-10-27) QCport 65 IRs 3 IRs / -3 instr (i486 -O2), 4 / -2 (m16 -Os); QB 58 IRs 1 / +1 (the pin parses 58 of 101); C examples/bench 49 IRs 3 / -14 (i486 -O2), 3 / -12 (m16 -Os), the pass adds instructions there; revisit after parity-green",
         "w4",
     ),
     row(
@@ -298,13 +284,6 @@ const ROWS: &[Disposition] = &[
     ),
     row(
         Late,
-        "loop-vectorize",
-        NA,
-        "vectors deferred (user ruling 10-20), -sse target Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang); with SSE on, removing the vectorizers changes 47 of 76 (O2), so the no-op is this target's (i486, -sse) and the deferral (user ruling 10-20) keeps them out.",
-        "",
-    ),
-    row(
-        Late,
         "transform-warning",
         NA,
         "diagnostic for failed pragmas; no output Evidence (tools/pairs/pin_noop.py): the printed default<O2>, <Os> and <O3> pipelines with this pass removed leave the final IR identical on all 76 IRs (12 bench C programs, 64 QCport modules through the pin's clang).",
@@ -316,20 +295,6 @@ const ROWS: &[Disposition] = &[
         Why::Missing,
         "pin ablation (2026-10-27): 0 IRs of 65 QCport (i486 -O2 and m16 -Os), 0 of 58 QB (m16 -Os; the pin parses 58 of 101), 0 of 49 C examples/bench (m16 -Os and i486 -O2); DEFERRED, revisit after parity-green",
         "w4",
-    ),
-    row(
-        Late,
-        "mergeicmps",
-        Why::Missing,
-        "DEFERRED, 0/77 IRs (12 bench + 65 QCport); revisit after parity-green",
-        "w-4, 11-09",
-    ),
-    row(
-        Late,
-        "expand-memcmp",
-        Why::Missing,
-        "DEFERRED, 0/77 IRs (12 bench + 65 QCport); revisit after parity-green",
-        "w-4, 11-09",
     ),
     row(
         Late,
@@ -451,7 +416,7 @@ const ROWS: &[Disposition] = &[
         Module,
         "deadargelim",
         Why::Deviate,
-        "DEVIATE W1 (walk.rs): ipo-early (walk::ModuleIpo: ipa-deadargs) runs before the Simplify list, the pin's after the CGSCC block. Measured 2026-10-27 (early run removed, the later one kept): QCport -18 B at -Os (2 of 65), 0 at -O2; bench/hanoi +51..+64 B (m16/m32, O2/Os) toward the pin's 62 instructions from our 30. Kept: ours is the smaller",
+        "DEVIATE W1 (walk.rs): ipo-early (walk::ModuleIpo: ipa-deadargs) runs before the Simplify list for a function that calls itself with the recursion copier on or at -Os, and at any level for one that calls itself at two or more sites (a tree recursion: gcc's IPA-SRA order); the pin's runs after the CGSCC block. Measured 2026-10-27 (early run removed, the later one kept): QCport -18 B at -Os (2 of 65), 0 at -O2; bench/hanoi +51..+64 B (m16/m32, O2/Os) toward the pin's 62 instructions from our 30. Kept: ours is the smaller",
         "",
     ),
     row(
@@ -472,7 +437,7 @@ const ROWS: &[Disposition] = &[
         Module,
         "globaldce",
         Why::Executed,
-        "globaldce (once). The pin's second globaldce, after the Late list, has no stage of ours: 0 B on 65 QCport modules (-Os and -O2) and 0 of 284 bench/example objects (m16/m32, O2/Os) with it added before constmerge (2026-10-27), so N/A until a row moves (owner w-6)",
+        "globaldce (once). The pin's second globaldce, after the Late list, has no stage of ours: 0 B on 65 QCport modules (-Os and -O2) and 0 of 284 bench/example objects (m16/m32, O2/Os) with it added before constmerge (2026-10-27), so N/A until a row moves (owner w10-instcombine)",
         "",
     ),
     row(Module, "elim-avail-extern", Why::Executed, "available-externally", ""),
@@ -516,6 +481,14 @@ const ROWS: &[Disposition] = &[
 
 /// The built slot groups no pin slot is matched to, with why.
 const OURS_ONLY: &[(&str, &str)] = &[
+    (
+        "1243: backthread@1243",
+        "DEVIATE BACKTHREAD-REL (owner llrm-target-x86-m64-b, exit 2026-12-15): gcc's relation-oracle backward threading before the first select-forming SimplifyCFG, on x86-64; the pin has no such pass",
+    ),
+    (
+        "early: loop-unroll-and-jam@early",
+        "-O3, DEVIATE UJ-EARLY (owner arm64-vec, exit 2026-12-01): gcc's `pass_unroll_jam` runs before its vectorizer; the pin's is after the vectorizer (l.1474)",
+    ),
     ("1474: loop-unroll-and-jam@1474", "-O3: the pin's printed list has no unroll-and-jam in this fixture; unverified"),
     (
         "764: loopsimplify@764 + lcssa@764",
@@ -523,15 +496,7 @@ const OURS_ONLY: &[(&str, &str)] = &[
     ),
     ("772: loopsimplify@772 + lcssa@772", "as 764"),
     (
-        "669: cvp@669",
-        "-O1 only: the pin's O1 list is buildO1FunctionSimplificationPipeline, a shorter one; ours runs the O2 order minus ABSENT_AT_O1 (unverified slot by slot)",
-    ),
-    (
         "787: inferspace@787",
-        "-O1 only: the pin's O1 list is buildO1FunctionSimplificationPipeline, a shorter one; ours runs the O2 order minus ABSENT_AT_O1 (unverified slot by slot)",
-    ),
-    (
-        "810: cvp@810",
         "-O1 only: the pin's O1 list is buildO1FunctionSimplificationPipeline, a shorter one; ours runs the O2 order minus ABSENT_AT_O1 (unverified slot by slot)",
     ),
     (

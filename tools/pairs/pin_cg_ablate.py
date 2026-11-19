@@ -24,6 +24,8 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import pin  # noqa: E402
+sys.path.insert(0, str(HERE.parent))
+import elfsize  # noqa: E402
 import pin_ablate  # noqa: E402
 
 HEAD = re.compile(r"^(?:# )?\*\*\* IR Dump After (.*?) \*\*\*:?$", re.M)
@@ -122,18 +124,16 @@ def measure(ir: str, of: pin.Target, extra: list[str]) -> tuple[int, int] | None
     return instructions, sum(sizes)
 
 
-OURS = os.environ.get("LLRM_C", str(Path.home() / "scratch/fa/tgtT/release/llrm-c"))
+OURS = os.environ.get("LLRM_C", str(Path.home() / "scratch/fa/tgtT/release/llrm-cc"))
 SOURCES = Path(os.environ.get("LLRM_CG_SOURCES", Path.home() / "scratch/rows/cc1d-new/b"))
 
 
 def text_bytes(path: str) -> int:
-    sizes = subprocess.run(["objdump", "-h", path], capture_output=True, text=True).stdout
-    found = re.search(r"\.text\s+([0-9a-f]+)", sizes)
-    return int(found.group(1), 16) if found else 0
+    return elfsize.text_bytes(subprocess.run(["size", "-A", path], capture_output=True, text=True).stdout)
 
 
 def instructions_of(asm: str) -> int:
-    """Instructions in llrm-c's masm output (indented lines that are neither labels nor data)."""
+    """Instructions in llrm-cc's masm output (indented lines that are neither labels nor data)."""
     return sum(
         1
         for l in asm.splitlines()
@@ -142,7 +142,7 @@ def instructions_of(asm: str) -> int:
 
 
 def ours_stage(source: Path, mode: str, level: str, includes: list[str]) -> tuple[str, int, int] | None:
-    """(the MIR llrm-c hands its backend, its instructions, its .text bytes): the same IR goes to the pin's llc, so the two backends are compared alone
+    """(the MIR llrm-cc hands its backend, its instructions, its .text bytes): the same IR goes to the pin's llc, so the two backends are compared alone
     (`switchconv`, the last stage the pin reads: the one tools of w-4's leacmp.py take). The dump goes to disk, not tmpfs."""
     flags = {"m32": ["-m32", "-mabi=sysv", "-march=i486"], "m16": ["-m16", "-march=i386"]}[mode]
     work = tempfile.mkdtemp(dir=str(Path.home() / "scratch/fa"))
@@ -173,7 +173,7 @@ def pin_text(ir: str, of: pin.Target, extra: list[str]) -> tuple[int, int] | Non
 
 
 def premise() -> None:
-    """Per switch of SWITCHES: over the programs it changes, ours against the pin with and without the pass (instructions, .text bytes), on the one IR llrm-c hands its backend."""
+    """Per switch of SWITCHES: over the programs it changes, ours against the pin with and without the pass (instructions, .text bytes), on the one IR llrm-cc hands its backend."""
     for level, optsize in (("O2", False), ("Os", True)):
         rows: dict[str, list[int]] = {}
         n = 0

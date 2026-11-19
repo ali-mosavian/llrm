@@ -133,6 +133,13 @@ fn every_binary_is_classified() {
 fn every_compiler_takes_m32_from_the_one_parser() {
     for tool in tools() {
         let directory = tempfile::tempdir().unwrap();
+        // The QB 4.5 runtime is 16-bit code, which a 32-bit target refuses by
+        // name (5458b82e96): llrm-qb takes the llrm one.
+        let tool = if tool.name == "llrm-qb" {
+            Tool { more: &["--dialect", "qb45", "--runtime", "llrm", "-S", "-o", "a.s"], ..tool }
+        } else {
+            tool
+        };
         let done = run(&tool, directory.path(), &["-m32"]);
         match tool.meets {
             Meets::Builds => assert!(done.status.success(), "{} -m32: {}", tool.name, text(&done)),

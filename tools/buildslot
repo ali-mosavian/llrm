@@ -1,15 +1,24 @@
 #!/usr/bin/env bash
-# buildslot CMD...: run CMD (a cargo build/check/test) holding one of 4 shared slots at nice 10; waits for a free slot.
+# buildslot CMD...: run CMD (a cargo build/check/test) holding one of 7 shared slots, each pinned to its own 4-core range, at nice 10; waits for a free slot.
 # CARGO_BUILD_JOBS defaults to 8 (cargo's own default is every core: four slots of 32 rustc at 1-1.7 GB each ran the host out of memory and
 # systemd-oomd killed whole sessions); set it to override. Installed to ~/.local/bin/buildslot from this file.
 # Usage: buildslot cargo build --release   (the parity merge loop does NOT use it)
-N=${BUILDSLOTS:-4}; D=${BUILDSLOT_DIR:-/tmp/buildslots}; mkdir -p $D
+# Slot i runs on its own core range: every build pinned to 0-3 left 28 of 32 cores idle while ~30 waiters queued (2026-11-02, mpstat). 4-7 stay free for the gate legs, 28-31 for the user.
+read -ra ranges <<< "${BUILDSLOT_RANGES:-0-3 8-11 12-15 16-19 20-23 24-27 4-7}"
+N=${BUILDSLOTS:-${#ranges[@]}}; [ $N -gt ${#ranges[@]} ] && N=${#ranges[@]}  # a slot without a range would share cores
+D=${BUILDSLOT_DIR:-/tmp/buildslots}; mkdir -p $D
+# 4-7 are w6's gate legs: that slot is not offered while a leg holds the lock file (w6 creates it for the length of a leg)
+gate_range=${BUILDSLOT_GATE_RANGE:-4-7}; gate_lock=${BUILDSLOT_GATE_LOCK:-$D/gate-leg.lock}
 export CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-8}
 # every test/bench binary cargo runs goes through testcap (a per-process memory cap); a caller's own runner wins
 here=$(dirname "$(readlink -f "$0")")
 triple=$(rustc -vV | sed -n 's/^host: //p' | tr 'a-z-' 'A-Z_')
 runner=CARGO_TARGET_${triple}_RUNNER
 [ -n "${!runner}" ] || export "$runner=$here/testcap"
+# Anything but cargo/rustc runs under testcap's memory cap and a timeout, so a script that forgets its own guard cannot take the host: two unbounded llrm-6502-llc (217 and 190 GB) did at 21:55 and 22:07.
+# cargo is exempt (its test binaries get the cap through the runner above); BUILDSLOT_TIMEOUT seconds (default 3 h, 0 = none).
+guard=()
+case ${1##*/} in cargo|rustc|rustup) ;; *) guard=(env TEST_MEM_CAP_GB="${BUILDSLOT_CMD_CAP_GB:-${TEST_MEM_CAP_GB:-96}}" "$here/testcap"); t=${BUILDSLOT_TIMEOUT:-10800}; [ "$t" != 0 ] && guard=(timeout "$t" "${guard[@]}");; esac
 # First come, first served: a waiter takes a ticket (BUILDSLOT_PRIORITY=0 sorts before the default 1) and only the N oldest live tickets may try the N slots. Random polling let short tests
 # keep beating a dist build that held the shared dist lock: 44 minutes at 0% CPU, 11 pair_builds queued behind it.
 poll=${BUILDSLOT_POLL:-0.5}
@@ -20,8 +29,9 @@ while true; do
   ahead=$(ls $D/q | sort | grep -n -x -F "${ticket##*/}" | cut -d: -f1)
   if [ $((ahead - 1)) -lt $N ]; then  # one of the first N waiters: with N free slots they all go at once
     for i in $(seq 1 $N); do
+      [ "${ranges[$((i - 1))]}" = "$gate_range" ] && [ -e "$gate_lock" ] && continue
       exec {fd}>$D/slot$i
-      if flock -n $fd; then rm -f $ticket; exec nice -n 10 "$@"; fi
+      if flock -n $fd; then rm -f $ticket; exec nice -n 10 taskset -c ${ranges[$((i - 1))]} "${guard[@]}" "$@"; fi
       exec {fd}>&-
     done
   fi

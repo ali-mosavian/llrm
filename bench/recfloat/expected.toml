@@ -1,2 +1,123 @@
-reason = "ch default (user decision 2026-10-12) and the shrinkwrap, frequency and layout fixes landed with it: the rows main's bq16/bq32 columns add moved by -0.1% to +0.05% except nbody bq32 -O2 (+4.6%, the guard and rotated loops of the BASIC loops); the rest fewer instructions"
-blessed = "2026-10-12"
+reason = "count the compiler-support routines a reference links: code_bytes includes helper_bytes (tools/bench/helpers.py)"
+blessed = "2026-11-10"
+corpus = "a09e3cace5c1a533d3c8abc04084be40"
+
+[ow.O1]
+instructions = 35067
+memory_operands = 17030
+clocks = 117225
+code_bytes = 202
+helper_bytes = 0
+data_bytes = 24
+bss_bytes = 8
+kernel_ms = 0.4823
+
+[ow.O2]
+instructions = 39074
+memory_operands = 16030
+clocks = 109199
+code_bytes = 210
+helper_bytes = 0
+data_bytes = 24
+bss_bytes = 8
+kernel_ms = 0.5358
+
+[ow.Os]
+instructions = 35067
+memory_operands = 17030
+clocks = 117225
+code_bytes = 202
+helper_bytes = 0
+data_bytes = 24
+bss_bytes = 8
+kernel_ms = 0.4823
+
+[bcc.O1]
+instructions = 33057
+memory_operands = 7017
+clocks = 100190
+code_bytes = 143
+helper_bytes = 0
+data_bytes = 12
+bss_bytes = 0
+kernel_ms = 0.4494
+
+[bcc.O2]
+instructions = 33056
+memory_operands = 7017
+clocks = 100187
+code_bytes = 145
+helper_bytes = 0
+data_bytes = 12
+bss_bytes = 0
+kernel_ms = 0.4494
+
+[bcc.Os]
+instructions = 33057
+memory_operands = 7017
+clocks = 100190
+code_bytes = 143
+helper_bytes = 0
+data_bytes = 12
+bss_bytes = 0
+kernel_ms = 0.4494
+
+[tc.O1]
+instructions = 32056
+memory_operands = 9013
+clocks = 97169
+code_bytes = 131
+helper_bytes = 0
+data_bytes = 24
+bss_bytes = 0
+kernel_ms = 0.435
+
+[tc.O2]
+instructions = 32056
+memory_operands = 9013
+clocks = 97169
+code_bytes = 133
+helper_bytes = 0
+data_bytes = 24
+bss_bytes = 0
+kernel_ms = 0.435
+
+[tc.Os]
+instructions = 32056
+memory_operands = 9013
+clocks = 97169
+code_bytes = 131
+helper_bytes = 0
+data_bytes = 24
+bss_bytes = 0
+kernel_ms = 0.435
+
+[tcpp.O1]
+instructions = 35060
+memory_operands = 7017
+clocks = 105196
+code_bytes = 149
+helper_bytes = 0
+data_bytes = 12
+bss_bytes = 0
+kernel_ms = 0.4762
+
+[tcpp.O2]
+instructions = 35060
+memory_operands = 7017
+clocks = 105196
+code_bytes = 151
+helper_bytes = 0
+data_bytes = 12
+bss_bytes = 0
+kernel_ms = 0.4762
+
+[tcpp.Os]
+instructions = 35060
+memory_operands = 7017
+clocks = 105196
+code_bytes = 149
+helper_bytes = 0
+data_bytes = 12
+bss_bytes = 0
+kernel_ms = 0.4762

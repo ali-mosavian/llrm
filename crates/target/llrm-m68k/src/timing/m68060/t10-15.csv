@@ -1,0 +1,10 @@
+#title,Bit Manipulation (Static Bit Count) Execution Times,page,10-20,notes,"¹ Add 2(1/0) cycles to the (bd,An,Xi*SF) time for a memory indirect address."
+Instruction,Size,Destination / Dn,Destination / An,Destination / (An),Destination / (An)+,Destination / -(An),"Destination / (d16,An)","Destination / (d8,An,Xi*SF)","Destination / (bd,An,Xi*SF)¹",Destination / (xxx).WL
+BCHG,Byte,—,—,1(1/1),1(1/1),1(1/1),2(1/1),2(1/1),3(1/1),2(1/1)
+"""",Long,1(0/0),—,—,—,—,—,—,—,—
+BCLR,Byte,—,—,1(1/1),1(1/1),1(1/1),2(1/1),2(1/1),3(1/1),2(1/1)
+"""",,1(0/0),—,—,—,—,—,—,—,—
+BSET,Byte,—,—,1(1/1),1(1/1),1(1/1),2(1/1),2(1/1),3(1/1),2(1/1)
+"""",Long,1(0/0),—,—,—,—,—,—,—,—
+BTST,Byte,—,—,1(1/0),1(1/0),1(1/0),2(1/0),2(1/0),3(1/0),2(1/0)
+"""",Long,1(0/0),—,—,—,—,—,—,—,—

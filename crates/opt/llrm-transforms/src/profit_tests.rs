@@ -551,3 +551,55 @@ fn a_nest_of_loops_past_the_end_of_i64_saturates_its_weights() {
         .expect("products by branch");
     assert!(by_branch[&named(&format!("h{}", DEPTH - 1))] >= 1_000_000_000_000_000_000, "{by_branch:?}");
 }
+
+/// With `native_bits` 8 an `i32` add, load, store and shift cost four times the
+/// `i8` one; they cost the same for a target that states no native width. The
+/// 6502 priced a 32-bit store fill at the unit price of an `i8` add, 220 B of
+/// fill read as a few instructions.
+#[test]
+fn an_operation_on_a_wider_integer_costs_its_native_words() {
+    let text = "@g = global i32 0
+@h = global i8 0
+
+define void @f(i32 %a, i32 %b, i8 %c) {
+b0:
+  %s = add i32 %a, %b
+  %t = add i8 %c, %c
+  %l = load i32, ptr @g
+  store i32 %a, ptr @g
+  %x = shl i32 %a, 1
+  ret void
+}
+";
+    let module = module(text);
+    let f = function(&module);
+    let callees = llrm_mir::memory::callees(&module);
+    let layout = llrm_mir::datalayout::DataLayout::default();
+    let prices = |native_bits| {
+        let costs = OperationCosts { native_bits, add: 3, load: 5, store: 7, shift: 2, ..OperationCosts::default() };
+        f.walk().map(|(_, one)| operation(&module.context, &layout, f, &callees, one, &costs)).collect::<Vec<_>>()
+    };
+    assert_eq!(prices(8), [Some(12), Some(3), Some(20), Some(28), Some(8), Some(1)]);
+    assert_eq!(prices(0), [Some(3), Some(3), Some(5), Some(7), Some(2), Some(1)]);
+}
+
+/// A 64-byte constant memset is 16 dword stores; flat code stores a dword with
+/// no operand-size prefix, 16-bit code with one. The prefix was charged on
+/// both, 32 clocks for 16 at m32 (fill_nest -O2 priced 42 a trip for 26).
+#[test]
+fn an_inline_memset_pays_the_dword_prefix_only_in_sixteen_bit_code() {
+    let price = |layout: &str| {
+        let text = format!(
+            "target datalayout = \"{layout}\"\n\ndeclare void @llvm.memset.p0.i32(ptr, i8, i32, i1)\n\n\
+             define void @f(ptr %p) {{\nb0:\n  call void @llvm.memset.p0.i32(ptr %p, i8 0, i32 64, i1 false)\n  ret void\n}}\n"
+        );
+        let module = module(&text);
+        let callees = llrm_mir::memory::callees(&module);
+        let layout = llrm_mir::datalayout::DataLayout::parse(module.datalayout.as_deref().unwrap()).unwrap();
+        let costs = OperationCosts { store_immediate: 1, prefix: 1, memset_stores: 16, ..OperationCosts::default() };
+        let f = function(&module);
+        f.walk().find_map(|(_, one)| operation(&module.context, &layout, f, &callees, one, &costs).filter(|&p| p > 1))
+    };
+    assert_eq!(price("e-p:32:32-n8:16:32"), Some(16));
+    assert_eq!(price("e-p:16:16-n8:16"), Some(32));
+}

@@ -13,6 +13,8 @@ tests/target_facts.baseline merge=union
 crates/ir/llrm-mir/src/idf_golden.txt whitespace=-trailing-space
 # Expected program output: lines end with the space printf left, which the diff check must not flag.
 crates/target/llrm-arm64/tests/darwin/*.out whitespace=-trailing-space
+# llc prints "i32.add " with a trailing space; the golden keeps it.
+crates/target/llrm-wasm/tests/**/*.s whitespace=-trailing-space
 tests/run/qb/*.out whitespace=-trailing-space
 # PRs that each add a row to a plan table merge as both rows.
 docs/working/selectiondag-plan.md merge=union

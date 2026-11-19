@@ -25,7 +25,7 @@ double *B_FVAL(SD *sd)
     cursor = text;
     fin_number(&cursor, VT_R8, &number);
     value = number.real;
-    str_tmp_free(copy);
-    str_tmp_free(sd);
+    str_free_if_tmp(copy);
+    str_free_if_tmp(sd);
     return &value;
 }

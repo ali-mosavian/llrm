@@ -116,7 +116,15 @@ pub fn folded(
         .collect();
     values.sort_unstable();
 
-    let opt_size = function.attrs.iter().any(|attr| matches!(attr, Attribute::Flag(name) if name == "optsize"));
+    let opt_size = function
+        .attrs
+        .iter()
+        .any(
+            |attr| matches!(
+                attr,
+                Attribute::Flag(name) if name == "optsize" || name == "minsize"
+            ),
+        );
     if values_dense(&values, opt_size) {
         return false;
     }

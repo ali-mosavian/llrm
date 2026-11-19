@@ -1,0 +1,10 @@
+#title,Shift/Rotate Execution Times,page,10-19,notes,"¹ For entries in this column, add the effective address calculation time. These operations are word-size only."
+Instruction,Size,Register,Memory¹
+"ASL, ASR","Byte, Word",1(0/0),1(1/1)
+"""",Long,1(0/0),—
+"LSL, LSR","Byte, Word",1(0/0),1(1/1)
+"""",Long,1(0/0),—
+"ROL, ROR","Byte, Word",1(0/0),1(1/1)
+"""",Long,1(0/0),—
+"ROXL, ROXR","Byte, Word",1(0/0),1(1/1)
+"""",Long,1(0/0),—

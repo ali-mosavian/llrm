@@ -62,6 +62,7 @@ impl Slots {
         id: InstId,
     ) {
         if !self.at.contains_key(&id) {
+            llrm_mir::counts::bump(llrm_mir::counts::Event::CombineInserts);
             self.at.insert(id, self.slots.len());
             self.slots.push(Some(id));
         }

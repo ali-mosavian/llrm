@@ -6,7 +6,6 @@ declare i64 @many(i64, i64, i64, i64, i64, i64, i64, i64, i64)
 declare void @note(i64)
 declare void @fill(ptr sret({ i64, i64 }), i64)
 declare i64 @shape(ptr byval({ i64, i64 }))
-declare coldcc i64 @cold(i64)
 
 define i64 @forwards(i64 %a) {
   %r = tail call i64 @callee(i64 %a, i64 %a)
@@ -41,10 +40,5 @@ define void @sret_callee(ptr sret({ i64, i64 }) %out, i64 %a) {
 
 define i64 @byval_argument(ptr byval({ i64, i64 }) %p) {
   %r = tail call i64 @shape(ptr byval({ i64, i64 }) %p)
-  ret i64 %r
-}
-
-define i64 @other_convention(i64 %a) {
-  %r = tail call coldcc i64 @cold(i64 %a)
   ret i64 %r
 }

@@ -9,7 +9,7 @@ mod common;
 /// `LLRM_CHECK_<name>` set to `value`.
 ///
 /// llrm-cc: the command is `common::cc::llrm_c()`, which names the target and
-/// keeps `LLRM_OW` and the pinned clang that the old `env_remove` of every
+/// keeps the pinned clang that the old `env_remove` of every
 /// `LLRM_*` variable dropped.
 fn reached(
     name: &str,

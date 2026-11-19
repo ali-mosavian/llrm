@@ -15,16 +15,13 @@
 //!
 //! OWED, each at its place as a `// OWED:` comment: the other opcodes of
 //! `foldICmpBinOpWithConstant` (`foldICmpXorConstant`, `foldICmpOrConstant`,
-//! `foldICmpShlConstant`, `foldICmpShrConstant`,
-//! `foldICmpSRemConstant`, `foldICmpUDivConstant`, `foldICmpDivConstant`,
-//! ),
+//! `foldICmpSRemConstant`, `foldICmpUDivConstant`),
 //! the `or`-of-select case of `foldICmpBinOpEqualityWithConstant`, the
 //! truth-table fold, and the select, truncate, intrinsic and `extractvalue`
 //! arms of `foldICmpInstWithConstant`.
 //!
-//! DEVIATE 1: the load from an indexed global fold
-//! (`foldCmpLoadFromIndexedGlobal`) and the floating-point class folds on a
-//! bitcast (`is.fpclass`) are not translated.
+//! DEVIATE 1: the floating-point class folds on a bitcast (`is.fpclass`) are
+//! not translated.
 //!
 //! # How it works
 //! The compare's left operand is an `and` of a value with a constant `C2`,
@@ -44,17 +41,18 @@
 //! %r = icmp ne i16 %m, 0          ; %r = icmp slt i16 %x, 0
 //! ```
 
-use llrm_mir::context::mask;
+use llrm_mir::context::{mask, signed};
 use llrm_mir::module::{InstId, Operand};
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
 use llrm_mir::valuetracking::fp::is_sign_bit_check;
+use llrm_mir::valuetracking::range::{self, SelectOperand};
 use llrm_mir::valuetracking::{Query, known, pattern};
 
 use crate::combine::{Combiner, Visit};
 use crate::combine_shared::{has_one_use, query};
 
 /// A new compare in place of `inst`: `new ICmpInst(pred, a, b)`.
-fn new_icmp(
+pub(crate) fn new_icmp(
     c: &mut Combiner,
     inst: InstId,
     pred: IntPredicate,
@@ -97,6 +95,13 @@ fn is_signed(pred: IntPredicate) -> bool {
     )
 }
 
+fn is_unsigned(pred: IntPredicate) -> bool {
+    matches!(
+        pred,
+        IntPredicate::Ugt | IntPredicate::Uge | IntPredicate::Ult | IntPredicate::Ule
+    )
+}
+
 fn is_equality(pred: IntPredicate) -> bool {
     matches!(pred, IntPredicate::Eq | IntPredicate::Ne)
 }
@@ -125,7 +130,7 @@ pub fn fold_icmp_inst_with_constant(
     let (value, width) = query(c, None).int_constant(op1)?;
     // foldICmpBinOpWithConstant, the `and`, `mul` and `add` cases.
     // OWED: the other opcodes, foldICmpBinOpEqualityWithConstant and the
-    // truth-table fold; the select, intrinsic and extractvalue arms, and the
+    // truth-table fold; the select and extractvalue arms, and the
     // rest of the trunc arm.
     let trunc = {
         let q = query(c, None);
@@ -148,6 +153,37 @@ pub fn fold_icmp_inst_with_constant(
     if let Some((flags, x, y)) = mul {
         return fold_icmp_mul_constant(c, inst, pred, flags, (x, y), value, width);
     }
+    let shl = {
+        let q = query(c, None);
+        pattern::binary(&q, op0, BinaryOp::Shl).map(|(_, shl, x, amount)| (shl.flags, x, amount))
+    };
+    if let Some((flags, x, amount)) = shl
+        && let Some(visit) = fold_icmp_shl_constant(c, inst, pred, flags, (op0, x, amount), op1, value, width)
+    {
+        return Some(visit);
+    }
+    let shr = {
+        let q = query(c, None);
+        [BinaryOp::LShr, BinaryOp::AShr]
+            .into_iter()
+            .find_map(|op| pattern::binary(&q, op0, op).map(|(_, shr, x, amount)| (op, shr.flags, x, amount)))
+    };
+    if let Some((op, flags, x, amount)) = shr
+        && let Some(visit) = fold_icmp_shr_constant(c, inst, pred, op0, (op, flags), (x, amount), value, width)
+    {
+        return Some(visit);
+    }
+    let div = {
+        let q = query(c, None);
+        [BinaryOp::UDiv, BinaryOp::SDiv]
+            .into_iter()
+            .find_map(|op| pattern::binary(&q, op0, op).map(|(_, div, x, y)| (op, div.flags, x, y)))
+    };
+    if let Some((op, flags, x, y)) = div
+        && let Some(visit) = fold_icmp_div_constant(c, inst, pred, op0, (op, flags), (x, y), value, width)
+    {
+        return Some(visit);
+    }
     let sub = {
         let q = query(c, None);
         pattern::binary(&q, op0, BinaryOp::Sub).map(|(_, sub, x, y)| (sub.flags, x, y))
@@ -166,7 +202,267 @@ pub fn fold_icmp_inst_with_constant(
     {
         return Some(visit);
     }
+    if let Some(visit) =
+        crate::combine_icmp_intrinsic::fold_icmp_intrinsic_with_constant(c, inst, pred, op0, value, width)
+    {
+        return Some(visit);
+    }
     fold_icmp_bin_op_equality_with_constant(c, inst, pred, op0, value, width)
+}
+
+/// `APInt::sadd_ov` and the like on `width`-bit patterns: the wrapped result
+/// and whether the exact one did not fit.
+fn add_ov(
+    a: u128,
+    b: u128,
+    width: u32,
+    is_signed: bool,
+) -> (u128, bool) {
+    let m = mask(width);
+    if is_signed {
+        let (sa, sb) = (signed(a, width), signed(b, width));
+        let exact = sa.checked_add(sb);
+        let wrapped = a.wrapping_add(b) & m;
+        (wrapped, exact.is_none_or(|e| signed(wrapped, width) != e))
+    } else {
+        let (sum, carry) = a.overflowing_add(b);
+        (sum & m, carry || sum > m)
+    }
+}
+
+/// `APInt::ssub_ov` and `usub_ov`.
+fn sub_ov(
+    a: u128,
+    b: u128,
+    width: u32,
+    is_signed: bool,
+) -> (u128, bool) {
+    let m = mask(width);
+    if is_signed {
+        let (sa, sb) = (signed(a, width), signed(b, width));
+        let exact = sa.checked_sub(sb);
+        let wrapped = a.wrapping_sub(b) & m;
+        (wrapped, exact.is_none_or(|e| signed(wrapped, width) != e))
+    } else {
+        (a.wrapping_sub(b) & m, a < b)
+    }
+}
+
+/// DEVIATE ICMPDIV-1 (`Tti::keeps_icmp_of_shared_division`): a compare of a
+/// division's quotient is not turned into a compare of its dividend while the
+/// quotient has another use, so the dividend would stay live beside it across
+/// the call a divide is on this target. A divisor that is a power of two is a
+/// shift, not a call.
+fn keeps_division_compare(
+    c: &mut Combiner,
+    div: Operand,
+    divisor: Operand,
+) -> bool {
+    if !c.env.hooks.keeps_shared_division_compare || has_one_use(c, div) {
+        return false;
+    }
+    !query(c, None).int_constant(divisor).is_some_and(|(value, _)| value.is_power_of_two())
+}
+
+// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCompares.cpp#L2857
+/// `foldICmpDivConstant`: `icmp pred ([us]div X, Y), C`. A constant divisor
+/// turns the compare into a range test of `X`; an equality with a huge
+/// quotient splits into `X == C && Y == 1`.
+///
+/// OWED 1 (owner llrm-wasm-b, exit 2026-11-20): `foldICmpUDivConstant`, which
+/// the pin tries before this fold for a `udiv`
+/// ([L4157](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCompares.cpp#L4157)).
+fn fold_icmp_div_constant(
+    c: &mut Combiner,
+    inst: InstId,
+    pred: IntPredicate,
+    div: Operand,
+    (op, flags): (BinaryOp, Flags),
+    (x, y): (Operand, Operand),
+    value: u128,
+    width: u32,
+) -> Option<Visit> {
+    let m = mask(width);
+    let ty = c.type_of(x);
+    let mut div_is_signed = op == BinaryOp::SDiv;
+    let exact = flags.contains(Flags::EXACT);
+    let min_signed = 1u128 << (width - 1);
+
+    // (X u/ Y) == C --> (X == C) && (Y == 1), for C above UMAX/2; likewise
+    // (X s/ Y) == SMIN.
+    if is_equality(pred) && has_one_use(c, div) && is_negative(value, width) && (!div_is_signed || value == min_signed)
+    {
+        let c_value = c.int(ty, value);
+        let one = c.int(ty, 1);
+        let x_big = c.create_icmp(inst, pred, x, c_value);
+        let y_one = c.create_icmp(inst, pred, y, one);
+        let logic = if pred == IntPredicate::Eq { BinaryOp::And } else { BinaryOp::Or };
+        return Some(c.replace_with_binop(inst, logic, x_big, y_one, Flags::default()));
+    }
+
+    // Fold: icmp pred ([us]div X, C2), C -> range test.
+    let (c2, _) = query(c, None).int_constant(y)?;
+
+    if keeps_division_compare(c, div, y) {
+        return None;
+    }
+
+    // (x /s C2) <s C differs from (x /u C2) <u C, so a divide of the other
+    // signedness than the compare bails, unless a positive divisor of a
+    // non-negative dividend makes sdiv a udiv.
+    if !is_equality(pred) && div_is_signed != pred.is_signed() {
+        if !div_is_signed || signed(c2, width) <= 0 || !known::is_known_non_negative(&query(c, Some(inst)), x, 0) {
+            return None;
+        }
+        div_is_signed = false;
+    }
+
+    // The ProdOV computation fails on divide by 0 and divide by -1.
+    if c2 == 0 || c2 == 1 || (div_is_signed && c2 == m) {
+        return None;
+    }
+
+    // Prod = C * C2: solve X / C2 = C for X.
+    let prod = value.wrapping_mul(c2) & m;
+    let back = if div_is_signed { (signed(prod, width) / signed(c2, width)) as u128 & m } else { prod / c2 };
+    let prod_ov = back != value;
+
+    // An exact divide has no remainder, so the covered range is one value.
+    let range_size = if exact { 1 } else { c2 };
+
+    // The interval [lo, hi) being checked; each overflow is 0 if its bound
+    // is valid, -1 if off the bottom of the range, +1 if off the top.
+    let (mut lo_ov, mut hi_ov) = (0i32, 0i32);
+    let (mut lo_bound, mut hi_bound) = (0u128, 0u128);
+    let mut pred = pred;
+    let neg = |v: u128| v.wrapping_neg() & m;
+    if !div_is_signed {
+        // e.g. X/5 op 3  --> [15, 20)
+        lo_bound = prod;
+        lo_ov = i32::from(prod_ov);
+        hi_ov = lo_ov;
+        if hi_ov == 0 {
+            let (hi, ov) = add_ov(lo_bound, range_size, width, false);
+            hi_bound = hi;
+            hi_ov = i32::from(ov);
+        }
+    } else if signed(c2, width) > 0 {
+        if value == 0 {
+            // (X / pos) op 0: can't overflow. e.g. X/2 op 0 --> [-1, 2)
+            lo_bound = neg(range_size.wrapping_sub(1) & m);
+            hi_bound = range_size;
+        } else if signed(value, width) > 0 {
+            // (X / pos) op pos. e.g. X/5 op 3 --> [15, 20)
+            lo_bound = prod;
+            lo_ov = i32::from(prod_ov);
+            hi_ov = lo_ov;
+            if hi_ov == 0 {
+                let (hi, ov) = add_ov(prod, range_size, width, true);
+                hi_bound = hi;
+                hi_ov = i32::from(ov);
+            }
+        } else {
+            // (X / pos) op neg. e.g. X/5 op -3 --> [-19, -14)
+            hi_bound = prod.wrapping_add(1) & m;
+            lo_ov = if prod_ov { -1 } else { 0 };
+            hi_ov = lo_ov;
+            if lo_ov == 0 {
+                let (lo, ov) = add_ov(hi_bound, neg(range_size), width, true);
+                lo_bound = lo;
+                lo_ov = if ov { -1 } else { 0 };
+            }
+        }
+    } else {
+        // Divisor is < 0.
+        let range_size = if exact { neg(range_size) } else { range_size };
+        if value == 0 {
+            // (X / neg) op 0. e.g. X/-5 op 0 --> [-4, 5)
+            lo_bound = range_size.wrapping_add(1) & m;
+            hi_bound = neg(range_size);
+            if hi_bound == c2 {
+                // -INTMIN = INTMIN: [INTMIN+1, overflow), X/INTMIN = 0 --> X >
+                // INTMIN
+                hi_ov = 1;
+                hi_bound = 0;
+            }
+        } else if signed(value, width) > 0 {
+            // (X / neg) op pos. e.g. X/-5 op 3 --> [-19, -14)
+            hi_bound = prod.wrapping_add(1) & m;
+            lo_ov = if prod_ov { -1 } else { 0 };
+            hi_ov = lo_ov;
+            if lo_ov == 0 {
+                let (lo, ov) = add_ov(hi_bound, range_size, width, true);
+                lo_bound = lo;
+                lo_ov = if ov { -1 } else { 0 };
+            }
+        } else {
+            // (X / neg) op neg. e.g. X/-5 op -3 --> [15, 20)
+            lo_bound = prod;
+            lo_ov = i32::from(prod_ov);
+            hi_ov = lo_ov;
+            if hi_ov == 0 {
+                let (hi, ov) = sub_ov(prod, range_size, width, true);
+                hi_bound = hi;
+                hi_ov = i32::from(ov);
+            }
+        }
+        // Dividing by a negative swaps the condition. LT <-> GT
+        pred = pred.swapped();
+    }
+
+    let i1 = c.context.types.int(1);
+    let (lo_c, hi_c) = (c.int(ty, lo_bound), c.int(ty, hi_bound));
+    let (ge, lt) =
+        if div_is_signed { (IntPredicate::Sge, IntPredicate::Slt) } else { (IntPredicate::Uge, IntPredicate::Ult) };
+    match pred {
+        IntPredicate::Eq => {
+            if lo_ov != 0 && hi_ov != 0 {
+                return Some(Visit::Replace(c.int(i1, 0)));
+            }
+            if hi_ov != 0 {
+                return Some(new_icmp(c, inst, ge, x, lo_c));
+            }
+            if lo_ov != 0 {
+                return Some(new_icmp(c, inst, lt, x, hi_c));
+            }
+            Some(Visit::Replace(c.insert_range_test(inst, x, (lo_bound, hi_bound), div_is_signed, true)))
+        }
+        IntPredicate::Ne => {
+            if lo_ov != 0 && hi_ov != 0 {
+                return Some(Visit::Replace(c.int(i1, 1)));
+            }
+            if hi_ov != 0 {
+                return Some(new_icmp(c, inst, lt, x, lo_c));
+            }
+            if lo_ov != 0 {
+                return Some(new_icmp(c, inst, ge, x, hi_c));
+            }
+            Some(Visit::Replace(c.insert_range_test(inst, x, (lo_bound, hi_bound), div_is_signed, false)))
+        }
+        IntPredicate::Ult | IntPredicate::Slt => {
+            // Low bound is greater than (+1) or less than (-1) the input range.
+            if lo_ov == 1 {
+                return Some(Visit::Replace(c.int(i1, 1)));
+            }
+            if lo_ov == -1 {
+                return Some(Visit::Replace(c.int(i1, 0)));
+            }
+            Some(new_icmp(c, inst, pred, x, lo_c))
+        }
+        IntPredicate::Ugt | IntPredicate::Sgt => {
+            // High bound greater than (+1) or less than (-1) the input range.
+            if hi_ov == 1 {
+                return Some(Visit::Replace(c.int(i1, 0)));
+            }
+            if hi_ov == -1 {
+                return Some(Visit::Replace(c.int(i1, 1)));
+            }
+            let pred = if pred == IntPredicate::Ugt { IntPredicate::Uge } else { IntPredicate::Sge };
+            Some(new_icmp(c, inst, pred, x, hi_c))
+        }
+        // InstCombine canonicalizes the non-strict compares away first.
+        _ => None,
+    }
 }
 
 // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCompares.cpp#L3046
@@ -344,6 +640,12 @@ fn fold_icmp_bin_op_equality_with_constant(
             // Replace ((add A, B) != 0) with (A != -B) if A or B is efficiently
             // invertible, or if the add has just this one use.
             if value == 0 {
+                if let Some(neg) = crate::combine_muldivrem::dyn_cast_neg_val(c, y) {
+                    return Some(new_icmp(c, inst, pred, x, neg));
+                }
+                if let Some(neg) = crate::combine_muldivrem::dyn_cast_neg_val(c, x) {
+                    return Some(new_icmp(c, inst, pred, neg, y));
+                }
                 if has_one_use(c, bo) {
                     // (add nuw A, B) != 0 -> (or A, B) != 0
                     if bo_inst.contains(Flags::NUW) {
@@ -390,7 +692,7 @@ fn fold_icmp_bin_op_equality_with_constant(
                     return Some(new_icmp(c, inst, pred, x, y));
                 }
             }
-            if op == BinaryOp::UDiv && value == 0 {
+            if op == BinaryOp::UDiv && value == 0 && !keeps_division_compare(c, bo, y) {
                 // (icmp eq/ne (udiv A, B), 0) -> (icmp ugt/ule B, A)
                 let new_pred = if pred == IntPredicate::Ne { IntPredicate::Ule } else { IntPredicate::Ugt };
                 return Some(new_icmp(c, inst, new_pred, y, x));
@@ -429,6 +731,476 @@ fn fold_icmp_trunc_constant(
     };
     let bound = c.int(src, wide);
     Some(new_icmp(c, inst, pred, x, bound))
+}
+
+// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCompares.cpp#L984
+/// `foldICmpShrConstConst`: `icmp eq/ne (lshr/ashr AP2, A), AP1` is
+/// `icmp eq/ne A, log2(AP2) - log2(AP1)`.
+fn fold_icmp_shr_const_const(
+    c: &mut Combiner,
+    inst: InstId,
+    pred: IntPredicate,
+    a: Operand,
+    (ap1, ap2): (u128, u128),
+    width: u32,
+    is_ashr: bool,
+) -> Option<Visit> {
+    let m = mask(width);
+    let ty = c.type_of(a);
+    let ne = pred == IntPredicate::Ne;
+    // `getICmp`: the inverse predicate for `ne`.
+    let get_icmp = |c: &mut Combiner, pred: IntPredicate, rhs: u128| {
+        let pred = if ne { pred.inverse() } else { pred };
+        let rhs = c.int(ty, rhs);
+        new_icmp(c, inst, pred, a, rhs)
+    };
+    // Don't bother doing any work for cases which InstSimplify handles.
+    if ap2 == 0 {
+        return None;
+    }
+    if is_ashr {
+        if ap2 == m || is_negative(ap2, width) != is_negative(ap1, width) {
+            return None;
+        }
+        if llrm_mir::context::signed(ap2, width) > llrm_mir::context::signed(ap1, width) {
+            return None;
+        }
+    }
+    let leading_zeros = |v: u128| v.leading_zeros() - (128 - width);
+    let leading_ones = |v: u128| leading_zeros(!v & m);
+    if ap1 == 0 {
+        // 'A' must be large enough to shift out the highest set bit.
+        return Some(get_icmp(c, IntPredicate::Ugt, u128::from(width - 1 - leading_zeros(ap2))));
+    }
+    if ap1 == ap2 {
+        return Some(get_icmp(c, IntPredicate::Eq, 0));
+    }
+    let shift = if is_ashr && is_negative(ap1, width) {
+        leading_ones(ap1) as i32 - leading_ones(ap2) as i32
+    } else {
+        leading_zeros(ap1) as i32 - leading_zeros(ap2) as i32
+    };
+    if shift > 0 {
+        let sh = shift as u32;
+        let ashr = |v: u128| (llrm_mir::context::signed(v, width) >> sh) as u128 & m;
+        if is_ashr && ap1 == ashr(ap2) {
+            // There are multiple solutions if we are comparing against -1 and
+            // the LHS of the ashr is not a power of two.
+            if ap1 == m && !ap2.is_power_of_two() {
+                return Some(get_icmp(c, IntPredicate::Uge, u128::from(sh)));
+            }
+            return Some(get_icmp(c, IntPredicate::Eq, u128::from(sh)));
+        } else if ap1 == ap2 >> sh {
+            return Some(get_icmp(c, IntPredicate::Eq, u128::from(sh)));
+        }
+    }
+    // Shifting const2 will never be equal to const1.
+    let i1 = c.context.types.int(1);
+    Some(Visit::Replace(c.int(i1, u128::from(ne))))
+}
+
+// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCompares.cpp#L2408
+/// `foldICmpShlConstant`: `icmp (shl X, Y), C`.
+#[allow(clippy::too_many_arguments)]
+fn fold_icmp_shl_constant(
+    c: &mut Combiner,
+    inst: InstId,
+    pred: IntPredicate,
+    flags: Flags,
+    (shl, x, amount): (Operand, Operand, Operand),
+    op1: Operand,
+    value: u128,
+    width: u32,
+) -> Option<Visit> {
+    let m = mask(width);
+    let ty = c.type_of(x);
+    let (nuw, nsw) = (flags.contains(Flags::NUW), flags.contains(Flags::NSW));
+    let equality = is_equality(pred);
+    let signed_c = llrm_mir::context::signed(value, width);
+    if equality && let Some((shifted, _)) = query(c, None).int_constant(x) {
+        return fold_icmp_shl_const_const(c, inst, pred, amount, (value, shifted), width);
+    }
+    // The nuw/nsw essentially freeze the sign bit for the shift op, so X's
+    // must be what is used.
+    if signed_c <= 0 && nuw && nsw {
+        return Some(new_icmp(c, inst, pred, x, op1));
+    }
+    if equality && value == 0 && (nuw || nsw) {
+        return Some(new_icmp(c, inst, pred, x, op1));
+    }
+    // NB: sge/sle with a constant will canonicalize to sgt/slt.
+    if nsw
+        && matches!(pred, IntPredicate::Sgt | IntPredicate::Slt)
+        && (value == 0 || if pred == IntPredicate::Sgt { value == m } else { value == 1 })
+    {
+        return Some(new_icmp(c, inst, pred, x, op1));
+    }
+
+    let Some((amount_c, _)) = query(c, None).int_constant(amount) else {
+        return fold_icmp_shl_lhsc(c, inst, pred, flags, (x, amount), value, width);
+    };
+    // An out-of-range shift is left to the shift's own simplification.
+    if amount_c >= u128::from(width) {
+        return None;
+    }
+    let sh = amount_c as u32;
+    let lshr = |v: u128| v >> sh;
+    let ashr = |v: u128| (llrm_mir::context::signed(v, width) >> sh) as u128 & m;
+    let min_signed = 1u128 << (width - 1);
+
+    // NSW guarantees that only sign bits are shifted out of the high bits, so
+    // the constant can be shifted with ASHR and the shift goes.
+    if nsw {
+        if pred == IntPredicate::Sgt || (equality && (ashr(value).wrapping_shl(sh) & m) == value) {
+            let bound = c.int(ty, ashr(value));
+            return Some(new_icmp(c, inst, pred, x, bound));
+        }
+        if pred == IntPredicate::Slt && value != min_signed {
+            // (X << S) <s C is equiv to X <s ((C - 1) >> S) + 1.
+            let bound = c.int(ty, ashr(value.wrapping_sub(1) & m).wrapping_add(1) & m);
+            return Some(new_icmp(c, inst, pred, x, bound));
+        }
+    }
+    // NUW guarantees that only zero bits are shifted out of the high bits.
+    if nuw {
+        if pred == IntPredicate::Ugt || (equality && (lshr(value).wrapping_shl(sh) & m) == value) {
+            let bound = c.int(ty, lshr(value));
+            return Some(new_icmp(c, inst, pred, x, bound));
+        }
+        if pred == IntPredicate::Ult && value != 0 {
+            // (X << S) <u C is equiv to X <u ((C - 1) >> S) + 1.
+            let bound = c.int(ty, lshr(value.wrapping_sub(1) & m).wrapping_add(1) & m);
+            return Some(new_icmp(c, inst, pred, x, bound));
+        }
+    }
+
+    let one_use = has_one_use(c, shl);
+    if equality && one_use {
+        // Strength-reduce the shift into an 'and'.
+        let low = c.int(ty, mask(width - sh));
+        let masked = c.create_binop(inst, BinaryOp::And, x, low, Flags::default());
+        let bound = c.int(ty, lshr(value));
+        return Some(new_icmp(c, inst, pred, masked, bound));
+    }
+    // A comparison of the sign bit is an and/test.
+    if one_use && let Some(true_if_signed) = is_sign_bit_check(pred, value, width) {
+        // (X << 31) <s 0  --> (X & 1) != 0
+        let bit = c.int(ty, 1u128 << (width - sh - 1));
+        let masked = c.create_binop(inst, BinaryOp::And, x, bit, Flags::default());
+        let zero = c.int(ty, 0);
+        let pred = if true_if_signed { IntPredicate::Ne } else { IntPredicate::Eq };
+        return Some(new_icmp(c, inst, pred, masked, zero));
+    }
+    // Simplify 'shl' inequality test into 'and' equality test.
+    if is_unsigned(pred) && one_use {
+        // (X l<< C2) u<=/u> C1 iff C1+1 is power of two -> X & (~C1 l>> C2)
+        // ==/!= 0
+        if (value.wrapping_add(1) & m).is_power_of_two() && matches!(pred, IntPredicate::Ule | IntPredicate::Ugt) {
+            let keep = c.int(ty, lshr(!value & m));
+            let masked = c.create_binop(inst, BinaryOp::And, x, keep, Flags::default());
+            let zero = c.int(ty, 0);
+            let pred = if pred == IntPredicate::Ule { IntPredicate::Eq } else { IntPredicate::Ne };
+            return Some(new_icmp(c, inst, pred, masked, zero));
+        }
+        // (X l<< C2) u</u>= C1 iff C1 is power of two -> X & (-C1 l>> C2) ==/!=
+        // 0
+        if value.is_power_of_two() && matches!(pred, IntPredicate::Ult | IntPredicate::Uge) {
+            let keep = c.int(ty, lshr(!value.wrapping_sub(1) & m));
+            let masked = c.create_binop(inst, BinaryOp::And, x, keep, Flags::default());
+            let zero = c.int(ty, 0);
+            let pred = if pred == IntPredicate::Ult { IntPredicate::Eq } else { IntPredicate::Ne };
+            return Some(new_icmp(c, inst, pred, masked, zero));
+        }
+    }
+
+    // icmp pred iM (shl iM %v, N) -> icmp pred i(M-N) (trunc %v), (C >> N): the
+    // shift becomes a trunc that may be free on the target, against a smaller
+    // constant.
+    if one_use && sh != 0 && crate::combine_shared::should_change_type(c.env.layout, width, width - sh) {
+        let mut cmp_pred = pred;
+        let mut rhs = value;
+        let trailing = |v: u128| if v == 0 { width } else { v.trailing_zeros() };
+        if trailing(rhs) < sh
+            && matches!(
+                pred,
+                IntPredicate::Ugt | IntPredicate::Ult | IntPredicate::Sgt | IntPredicate::Slt
+            )
+        {
+            // icmp ult i64 (shl X, 32), 8589934593 -> icmp ult i32 (trunc X), 3
+            let flipped = {
+                let q = query(c, None);
+                range::get_flipped_strictness_predicate_and_constant(
+                    &q,
+                    pred,
+                    false,
+                    SelectOperand::Int { ty, bits: value },
+                )
+            };
+            if let Some((new_pred, _, SelectOperand::Int { bits, .. })) = flipped {
+                cmp_pred = new_pred;
+                rhs = bits;
+            }
+        }
+        if trailing(rhs) >= sh {
+            let trunc_ty = c.context.types.int(width - sh);
+            let bound = c.int(trunc_ty, ashr(rhs) & mask(width - sh));
+            let trunc_flags = if nsw { Flags::NSW } else { Flags::default() };
+            let narrow = c.create_cast(inst, CastOp::Trunc, x, trunc_ty, trunc_flags);
+            return Some(new_icmp(c, inst, cmp_pred, narrow, bound));
+        }
+    }
+    None
+}
+
+// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCompares.cpp#L1043
+/// `foldICmpShlConstConst`: `icmp eq/ne (shl AP2, A), AP1` is
+/// `icmp eq/ne A, tz(AP1) - tz(AP2)`.
+fn fold_icmp_shl_const_const(
+    c: &mut Combiner,
+    inst: InstId,
+    pred: IntPredicate,
+    a: Operand,
+    (ap1, ap2): (u128, u128),
+    width: u32,
+) -> Option<Visit> {
+    let m = mask(width);
+    let ty = c.type_of(a);
+    let ne = pred == IntPredicate::Ne;
+    let get_icmp = |c: &mut Combiner, pred: IntPredicate, rhs: u128| {
+        let pred = if ne { pred.inverse() } else { pred };
+        let rhs = c.int(ty, rhs);
+        new_icmp(c, inst, pred, a, rhs)
+    };
+    // Don't bother doing any work for cases which InstSimplify handles.
+    if ap2 == 0 {
+        return None;
+    }
+    let tz2 = ap2.trailing_zeros();
+    if ap1 == 0 && tz2 != 0 {
+        return Some(get_icmp(c, IntPredicate::Uge, u128::from(width - tz2)));
+    }
+    if ap1 == ap2 {
+        return Some(get_icmp(c, IntPredicate::Eq, 0));
+    }
+    // The distance between the lowest bits that are set.
+    let tz1 = if ap1 == 0 { width } else { ap1.trailing_zeros() };
+    let shift = i64::from(tz1) - i64::from(tz2);
+    if shift > 0 && ap2.checked_shl(shift as u32).unwrap_or(0) & m == ap1 {
+        return Some(get_icmp(c, IntPredicate::Eq, shift as u128));
+    }
+    // Shifting const2 will never be equal to const1.
+    let i1 = c.context.types.int(1);
+    Some(Visit::Replace(c.int(i1, u128::from(ne))))
+}
+
+// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCompares.cpp#L2358
+/// `foldICmpShlLHSC`: `icmp (shl nuw C2, Y), C`.
+fn fold_icmp_shl_lhsc(
+    c: &mut Combiner,
+    inst: InstId,
+    pred: IntPredicate,
+    flags: Flags,
+    (c2_op, y): (Operand, Operand),
+    value: u128,
+    width: u32,
+) -> Option<Visit> {
+    let (c2, _) = query(c, None).int_constant(c2_op)?;
+    if !flags.contains(Flags::NUW) {
+        return None;
+    }
+    let ty = c.type_of(y);
+    if is_unsigned(pred) {
+        if c2 == 0 || c2 > value {
+            return None;
+        }
+        let (div, rem) = (value / c2, value % c2);
+        let mut pred = pred;
+        // (1 << Y) < 30 -> Y <= 4; (1 << Y) >= 30 -> Y > 4
+        if !(rem == 0 && div.is_power_of_two()) {
+            if pred == IntPredicate::Ult {
+                pred = IntPredicate::Ule;
+            } else if pred == IntPredicate::Uge {
+                pred = IntPredicate::Ugt;
+            }
+        }
+        let log2 = 127 - div.leading_zeros();
+        let bound = c.int(ty, u128::from(log2));
+        return Some(new_icmp(c, inst, pred, y, bound));
+    }
+    if is_signed(pred) && c2 == 1 {
+        let signed_c = llrm_mir::context::signed(value, width);
+        let top = c.int(ty, u128::from(width - 1));
+        // (1 << Y) > 0 -> Y != 31; (1 << Y) > C -> Y != 31 if C is negative.
+        if pred == IntPredicate::Sgt && signed_c <= 0 {
+            return Some(new_icmp(c, inst, IntPredicate::Ne, y, top));
+        }
+        // (1 << Y) < C -> Y == 31 if C is negative and not signed min.
+        if pred == IntPredicate::Slt && signed_c - 1 <= 0 && value != 1u128 << (width - 1) {
+            return Some(new_icmp(c, inst, IntPredicate::Eq, y, top));
+        }
+    }
+    None
+}
+
+// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCompares.cpp#L2588
+/// `foldICmpShrConstant`: `icmp (lshr/ashr X, Y), C`.
+#[allow(clippy::too_many_arguments)]
+fn fold_icmp_shr_constant(
+    c: &mut Combiner,
+    inst: InstId,
+    pred: IntPredicate,
+    shr: Operand,
+    (op, flags): (BinaryOp, Flags),
+    (x, amount): (Operand, Operand),
+    value: u128,
+    width: u32,
+) -> Option<Visit> {
+    let ty = c.type_of(x);
+    let m = mask(width);
+    let exact = flags.contains(Flags::EXACT);
+    let is_ashr = op == BinaryOp::AShr;
+    // An exact shr only shifts out zero bits.
+    if is_equality(pred) && exact && value == 0 {
+        let zero = c.int(ty, 0);
+        return Some(new_icmp(c, inst, pred, x, zero));
+    }
+
+    if let Some((shifted, _)) = query(c, None).int_constant(x) {
+        if is_equality(pred) {
+            return fold_icmp_shr_const_const(c, inst, pred, amount, (value, shifted), width, is_ashr);
+        }
+        // (ShiftValC >> Y) >s -1 --> Y != 0 with ShiftValC < 0
+        // (ShiftValC >> Y) <s  0 --> Y == 0 with ShiftValC < 0
+        if !is_ashr
+            && is_negative(shifted, width)
+            && let Some(true_if_signed) = is_sign_bit_check(pred, value, width)
+        {
+            let zero = c.int(ty, 0);
+            let pred = if true_if_signed { IntPredicate::Eq } else { IntPredicate::Ne };
+            return Some(new_icmp(c, inst, pred, amount, zero));
+        }
+        // If the shifted constant is a power-of-2, test the shift amount
+        // directly: (ShiftValC >> Y) >u C --> X <u (LZ(C) -
+        // LZ(ShiftValC)) (ShiftValC >> Y) <u C --> X >=u (LZ(C-1) -
+        // LZ(ShiftValC))
+        if !is_ashr && shifted.is_power_of_two() && matches!(pred, IntPredicate::Ugt | IntPredicate::Ult) {
+            let is_ugt = pred == IntPredicate::Ugt;
+            let leading_zeros = |v: u128| v.leading_zeros() - (128 - width);
+            let cmp_lz = if is_ugt { leading_zeros(value) } else { leading_zeros(value.wrapping_sub(1) & m) };
+            let bound = c.int(ty, u128::from(cmp_lz - leading_zeros(shifted)));
+            let pred = if is_ugt { IntPredicate::Ult } else { IntPredicate::Uge };
+            return Some(new_icmp(c, inst, pred, amount, bound));
+        }
+    }
+
+    let (amount_c, _) = query(c, None).int_constant(amount)?;
+    // An out-of-range shift is left to the shift's own simplification.
+    if amount_c >= u128::from(width) || amount_c == 0 {
+        return None;
+    }
+    let sh = amount_c as u32;
+    let shl = |v: u128| v.wrapping_shl(sh) & m;
+    let lshr = |v: u128| v >> sh;
+    let ashr = |v: u128| (llrm_mir::context::signed(v, width) >> sh) as u128 & m;
+    let min_signed = 1u128 << (width - 1);
+    let plus_one = value.wrapping_add(1) & m;
+
+    if is_ashr && has_one_use(c, shr) {
+        if exact && matches!(pred, IntPredicate::Slt | IntPredicate::Ult) {
+            let less_one = value.wrapping_sub(1) & m;
+            if less_one.is_power_of_two() && value.leading_zeros() - (128 - width) > sh {
+                // When C - 1 is a power of two and the transform can be legally
+                // performed, prefer this form so the produced
+                // constant is close to a power of two.
+                let bound = c.int(ty, shl(less_one).wrapping_add(1) & m);
+                return Some(new_icmp(c, inst, pred, x, bound));
+            }
+        }
+        if exact || matches!(pred, IntPredicate::Slt | IntPredicate::Ult) {
+            // When ShAmtC can be shifted losslessly.
+            let shifted = shl(value);
+            if ashr(shifted) == value {
+                let bound = c.int(ty, shifted);
+                return Some(new_icmp(c, inst, pred, x, bound));
+            }
+        }
+        if pred == IntPredicate::Sgt {
+            let shifted = shl(plus_one).wrapping_sub(1) & m;
+            if value != min_signed.wrapping_sub(1) & m
+                && shl(plus_one) != min_signed
+                && ashr(shifted.wrapping_add(1) & m) == plus_one
+            {
+                let bound = c.int(ty, shifted);
+                return Some(new_icmp(c, inst, pred, x, bound));
+            }
+        }
+        if pred == IntPredicate::Ugt {
+            // `C + 1 << ShAmtC` can overflow as a signed number, so the second
+            // clause accounts for that pattern.
+            let shifted = shl(plus_one).wrapping_sub(1) & m;
+            if ashr(shifted.wrapping_add(1) & m) == plus_one || shl(plus_one) == min_signed {
+                let bound = c.int(ty, shifted);
+                return Some(new_icmp(c, inst, pred, x, bound));
+            }
+        }
+        // If the compare constant has significant bits above the lowest
+        // sign-bit, then convert an unsigned cmp to a test of the
+        // sign-bit.
+        if width > 2 && num_sign_bits(value, width) <= sh {
+            if pred == IntPredicate::Ugt {
+                let zero = c.int(ty, 0);
+                return Some(new_icmp(c, inst, IntPredicate::Slt, x, zero));
+            }
+            if pred == IntPredicate::Ult {
+                let all_ones = c.int(ty, m);
+                return Some(new_icmp(c, inst, IntPredicate::Sgt, x, all_ones));
+            }
+        }
+    } else if !is_ashr {
+        if pred == IntPredicate::Ult || (pred == IntPredicate::Ugt && exact) {
+            let shifted = shl(value);
+            if lshr(shifted) == value {
+                let bound = c.int(ty, shifted);
+                return Some(new_icmp(c, inst, pred, x, bound));
+            }
+        }
+        if pred == IntPredicate::Ugt {
+            let shifted = shl(plus_one).wrapping_sub(1) & m;
+            if lshr(shifted.wrapping_add(1) & m) == plus_one {
+                let bound = c.int(ty, shifted);
+                return Some(new_icmp(c, inst, pred, x, bound));
+            }
+        }
+    }
+
+    if !is_equality(pred) {
+        return None;
+    }
+    // If the bits shifted out are known zero, compare the unshifted value.
+    if exact {
+        let bound = c.int(ty, shl(value));
+        return Some(new_icmp(c, inst, pred, x, bound));
+    }
+    if has_one_use(c, shr) {
+        // Canonicalize the shift into an 'and':
+        // icmp eq/ne (shr X, ShAmt), C --> icmp eq/ne (and X, HiMask), (C <<
+        // ShAmt)
+        let high_mask = c.int(ty, !mask(sh) & m);
+        let masked = c.create_binop(inst, BinaryOp::And, x, high_mask, Flags::default());
+        let bound = c.int(ty, shl(value));
+        return Some(new_icmp(c, inst, pred, masked, bound));
+    }
+    None
+}
+
+/// `APInt::getNumSignBits`.
+fn num_sign_bits(
+    value: u128,
+    width: u32,
+) -> u32 {
+    let sign = value >> (width - 1) & 1;
+    let run = if sign == 1 { !value & mask(width) } else { value };
+    run.leading_zeros() - (128 - width)
 }
 
 // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCompares.cpp#L2231
@@ -749,9 +1521,27 @@ fn fold_icmp_add_constant(
         let bound = c.int(ty, wrap(!value));
         return Some(new_icmp(c, inst, IntPredicate::Ult, shifted, bound));
     }
-    // OWED: zext(V) + C2 pred C -> V + C3 pred' C4 (needs
-    // `ConstantRange::truncate` with the no-unsigned-wrap kind, and
-    // `shouldChangeType`).
+    // zext(V) + C2 pred C -> V + C3 pred' C4
+    let narrow = {
+        let q = query(c, Some(inst));
+        pattern::cast(&q, x, CastOp::ZExt).map(|(_, _, v)| v)
+    };
+    if let Some(v) = narrow {
+        let new_ty = c.type_of(v);
+        let new_width = c.context.types.int_bits(new_ty)?;
+        if crate::combine_shared::should_change_type(c.env.layout, width, new_width) {
+            let source = region.truncate(new_width, llrm_mir::constantrange::NO_UNSIGNED_WRAP);
+            let (equivalent, bound, offset) = source.get_equivalent_icmp_offset();
+            let lhs = if offset == 0 {
+                v
+            } else {
+                let offset = c.int(new_ty, offset);
+                c.create_binop(inst, BinaryOp::Add, v, offset, Flags::default())
+            };
+            let bound = c.int(new_ty, bound);
+            return Some(new_icmp(c, inst, equivalent, lhs, bound));
+        }
+    }
     None
 }
 
@@ -791,7 +1581,15 @@ fn fold_icmp_and_constant(
             return Some(new_icmp(c, inst, new_pred, a, min_signed));
         }
     }
-    // OWED: foldCmpLoadFromIndexedGlobal (DEVIATE 1).
+    // Try to optimize things like "A[i] & 42 == 0" to index computations.
+    if let (Operand::Constant(mask_constant), Some(load)) =
+        (y, c.definition_of(x).filter(|&def| matches!(c.function.instruction(def).opcode, Opcode::Load { .. })))
+        && let Operand::Constant(rhs) = c.function.instruction(inst).operands[1]
+        && let Some(found) =
+            crate::combine_icmp_table::fold_cmp_load_from_indexed_global(c, inst, pred, load, rhs, Some(mask_constant))
+    {
+        return Some(found);
+    }
     if !is_equality(pred) {
         return None;
     }

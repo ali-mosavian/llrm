@@ -127,6 +127,10 @@ pub struct MergeOptions {
     pub may_include_undef: bool,
     pub check_widen: bool,
     pub max_widen_steps: u32,
+    /// DEVIATE REC5-1 (exit 2026-11-20): a range extended too often goes to
+    /// the half of the line its sign puts it in, not to overdefined (the pin's
+    /// `mergeIn`), so a counter that only grows stays non-negative.
+    pub widen_keeps_sign: bool,
 }
 
 impl Default for MergeOptions {
@@ -142,7 +146,7 @@ impl MergeOptions {
         check_widen: bool,
         max_widen_steps: u32,
     ) -> Self {
-        Self { may_include_undef, check_widen, max_widen_steps }
+        Self { may_include_undef, check_widen, max_widen_steps, widen_keeps_sign: false }
     }
 
     /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/include/llvm/Analysis/ValueLattice.h#L131>
@@ -160,6 +164,15 @@ impl MergeOptions {
         v: bool,
     ) -> Self {
         self.check_widen = v;
+        self
+    }
+
+    /// DEVIATE REC5-1: see [`Self::widen_keeps_sign`].
+    pub fn set_widen_keeps_sign(
+        mut self,
+        v: bool,
+    ) -> Self {
+        self.widen_keeps_sign = v;
         self
     }
 
@@ -455,7 +468,26 @@ impl ValueLatticeElement {
             if opts.check_widen {
                 self.num_range_extensions += 1;
                 if self.num_range_extensions > opts.max_widen_steps {
-                    return self.mark_overdefined();
+                    // DEVIATE REC5-1: gcc's VRP keeps the sign of a counter it
+                    // widens; recpow's `i % 97` was a signed divide because
+                    // `i`, a loop counter, went overdefined after ten steps.
+                    let width = new_r.width;
+                    let half = 1_u128 << (width - 1);
+                    let kept = if !opts.widen_keeps_sign {
+                        None
+                    } else if new_r.is_all_non_negative() {
+                        Some(ConstantRange::new(width, 0, half))
+                    } else if new_r.is_all_negative() {
+                        Some(ConstantRange::new(width, half, 0))
+                    } else {
+                        None
+                    };
+                    let Some(kept) = kept else { return self.mark_overdefined() };
+                    if self.get_constant_range(true) == &kept {
+                        return false;
+                    }
+                    self.range = Some(kept);
+                    return true;
                 }
             }
 

@@ -1,0 +1,1 @@
+ABI: 16-bit int (the program's LCG is over 32-bit unsigned under -m32); output equal to llvm-mos (mos-sim-clang, mos-sim) at O1/O2/Os, 2026-11-11.

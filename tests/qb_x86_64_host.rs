@@ -77,3 +77,54 @@ fn run(
 fn print_hello_runs_natively_on_x86_64() {
     assert_eq!(run("hello64", "PRINT \"HELLO\"\nEND\n").trim_end(), "HELLO");
 }
+
+/// DATESERIAL called B$DTSR, which no flat runtime defined: a program using it
+/// did not link. A month or day out of range carries (month 14 of 1992 is
+/// February 1993, day 0 of March the 29th of February), a year of 0 to 99 is
+/// 19xx.
+#[test]
+#[cfg(target_arch = "x86_64")]
+fn dateserial_counts_days_from_1899_12_30_and_carries_on_x86_64() {
+    let screen = run(
+        "dateserial64",
+        "' dialect: vbdos\nPRINT DATESERIAL(1992, 2, 29); DATESERIAL(1992, 14, 1); DATESERIAL(1992, 3, 0); DATESERIAL(95, 1, 1); DATESERIAL(1900, 1, 1)\nEND\n",
+    );
+    assert_eq!(screen.split_whitespace().collect::<Vec<_>>(), ["33663", "34001", "33663", "34700", "2"]);
+}
+
+/// A CURRENCY printed, read, turned to text and back did not link: B$PECY,
+/// B$PSCY, B$STCY, B$RDCY, B$FMKC and B$FCVC had no flat definition. The
+/// extremes are exact (a double holds 16 digits, not their 19), the fifth place
+/// rounds half away from zero, and USING shows the digits.
+#[test]
+#[cfg(target_arch = "x86_64")]
+fn currency_is_exact_to_four_places_on_x86_64() {
+    let screen = run(
+        "currency64",
+        "' dialect: pds71\nDIM c AS CURRENCY, d AS CURRENCY, e AS CURRENCY, f AS CURRENCY\nREAD c, d, e\nPRINT c; d; e\nf = CVC(MKC$(c))\nPRINT STR$(f); \"|\"; STR$(d); \"|\"; LTRIM$(STR$(0@)); \"|\"; STR$(-.05@)\nPRINT USING \"#.####\"; e\nWRITE e, d\nDATA 922337203685477.5807, -922337203685477.5808, 1.00005\nEND\n",
+    );
+    let words: Vec<&str> = screen.split_whitespace().collect();
+    assert_eq!(
+        words,
+        [
+            "922337203685477.5807",
+            "-922337203685477.5808",
+            "1.0001",
+            "922337203685477.5807|-922337203685477.5808|0|-.05",
+            "1.0001",
+            "1.0001,-922337203685477.5808"
+        ]
+    );
+}
+
+/// B$SCLR was defined by no flat runtime, x86-64's included: a program with
+/// CLEAR did not link. CLEAR zeroes numbers, strings and arrays.
+#[test]
+#[cfg(target_arch = "x86_64")]
+fn clear_zeroes_the_module_variables_on_x86_64() {
+    let screen = run(
+        "clear64",
+        "' dialect: qb45\nDIM a(3) AS INTEGER\nx% = 5: l& = 70000: s$ = \"hello\": a(2) = 9\nCLEAR\nPRINT STR$(x%); STR$(l&); s$; \"|\"; STR$(a(2))\nEND\n",
+    );
+    assert_eq!(screen.trim_end(), " 0 0| 0");
+}

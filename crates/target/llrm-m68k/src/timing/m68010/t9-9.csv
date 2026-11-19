@@ -1,0 +1,14 @@
+#title,Table 9-9. Single Operand Instruction Execution Times,page,9-7,notes,+Add effective address calculation time. | *Use nonfetching effective address calculation time.
+Instruction,Size,Register,Memory
+NBCD,Byte,6(1/0),8(1/1)+
+NEG,"Byte, Word",4(1/0),8(1/1)+
+,Long,6(1/0),12(1/2)+
+NEGX,"Byte, Word",4(1/0),8(1/1)+
+,Long,6(1/0),12(1/2)+
+NOT,"Byte, Word",4(1/0),8(1/1)+
+,Long,6(1/0),12(1/2)+
+Scc,"Byte, False",4(1/0),8(1/1)+*
+,"Byte, True",4(1/0),8(1/1)+*
+TAS,Byte,4(1/0),14(2/1)+*
+TST,"Byte, Word",4(1/0),4(1/0)+
+,Long,4(1/0),4(1/0)+

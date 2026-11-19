@@ -173,11 +173,21 @@ impl Machine {
                     let result = if count == 0 { left } else { left << count | source >> (32 - count) };
                     self.write(one, result)
                 }
+                Mnemonic::Bsr => {
+                    assert!(right != 0, "bsr of zero");
+                    self.write(one, 31 - right.leading_zeros())
+                }
                 Mnemonic::Mul => {
                     let product = u64::from(self.registers[0]) * u64::from(left);
                     (self.registers[0], self.registers[2]) = (product as u32, (product >> 32) as u32);
                 }
                 Mnemonic::Imul => self.write(one, left.wrapping_mul(right)),
+                Mnemonic::Rcl => {
+                    assert_eq!(right, 1);
+                    let result = left << 1 | u32::from(self.carry);
+                    self.write(one, result);
+                    self.carry = left >> 31 == 1;
+                }
                 Mnemonic::Rcr => {
                     assert_eq!(right, 1);
                     let result = left >> 1 | u32::from(self.carry) << 31;
@@ -338,6 +348,104 @@ fn a_divide_read_for_one_result_is_shorter_and_that_result_is_right() {
     }
 }
 
+/// The size routine divides as the speed one does, in under a third of its
+/// bytes (nbody_fixed at m16 -O1: one inline divide of 313 B).
+#[test]
+fn the_size_divide_agrees_with_the_speed_divide_and_is_short() {
+    for bits in [16, 32] {
+        for signed in [false, true] {
+            for wide in [false, true] {
+                let fast = divide(signed, wide, bits).expect("assembles");
+                let Ok(small) = divide_small(signed, wide, bits, Used::Both) else {
+                    assert!(!wide, "a divisor of two dwords has a size routine");
+                    continue;
+                };
+                assert!(small.code.len() * 3 < fast.code.len() * 2 || !wide, "{} {} B vs {} B", small.name, small.code.len(), fast.code.len());
+                for (a, b) in [
+                    (0x1234_5678_9ABC_DEF0u64, 0x1_0000_0001u64),
+                    (u64::MAX >> 1, 3),
+                    (262144, 0x7FFF_FFFF_FFFF_FFFF),
+                    (u64::MAX, 0x8000_0000_0000_0001),
+                    (u64::MAX - 5, u64::MAX >> 1),
+                    ((-7000i64) as u64, 13),
+                    (1 << 62, (-3i64) as u64 & if wide { u64::MAX } else { 0xFFFF_FFFF }),
+                ] {
+                    let b = if wide { b } else { b & 0xFFFF_FFFF };
+                    if b == 0 || (!signed && !wide && false) {
+                        continue;
+                    }
+                    let (got, _) = divided(&small, bits, a, b);
+                    let (want, quotient_bits) = if signed {
+                        let (a, b) = (a as i64, b as i64);
+                        ((a.wrapping_div(b) as u64, a.wrapping_rem(b) as u64), 0)
+                    } else {
+                        ((a / b, a % b), 0)
+                    };
+                    let _ = quotient_bits;
+                    assert_eq!(got, want, "{} {a:#x} / {b:#x}", small.name);
+                }
+            }
+        }
+    }
+}
+
+/// data_int64 at m16 -Os (Dag 441 B, Old 416): `x / 1000000` on `i64` called
+/// the 85-byte dword-divisor routine, whose test spares a `div` the size code
+/// can do without, and which fixed the sign of a remainder nobody read. A dword
+/// divisor has a size form per result read, shorter than the speed one, and
+/// each gives the right result.
+#[test]
+fn a_dword_divisor_has_a_size_divide_per_result_shorter_than_the_speed_one() {
+    for bits in [16, 32] {
+        for (signed, used) in [(false, Used::Both), (true, Used::Both), (true, Used::Quotient), (true, Used::Remainder)]
+        {
+            let small = divide_small(signed, false, bits, used).expect("a dword divisor has a size routine");
+            let fast = divide_used(signed, false, bits, used).expect("assembles");
+            assert!(
+                small.code.len() < fast.code.len(),
+                "{} {} B vs {} {} B",
+                small.name,
+                small.code.len(),
+                fast.name,
+                fast.code.len()
+            );
+            for &dividend in &values() {
+                for &divisor in values().iter().filter(|&&one| one != 0 && one >> 32 == 0) {
+                    let ((quotient, remainder), _) = divided(&small, bits, dividend, divisor);
+                    let (want_q, want_r) = if signed {
+                        (
+                            (dividend as i64).wrapping_div(divisor as i64) as u64,
+                            (dividend as i64).wrapping_rem(divisor as i64) as u64,
+                        )
+                    } else {
+                        (dividend / divisor, dividend % divisor)
+                    };
+                    if used != Used::Remainder {
+                        assert_eq!(quotient, want_q, "{} {dividend:#x} / {divisor:#x}", small.name);
+                    }
+                    if used != Used::Quotient {
+                        assert_eq!(remainder, want_r, "{} {dividend:#x} % {divisor:#x}", small.name);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// The size divide of operands that fit a dword is one `div`, not 64 rounds:
+/// at -O1 nbody_fixed took 57.9M clocks for 8.9M (bc: 38.1M).
+#[test]
+fn the_size_divide_of_dword_operands_is_a_few_instructions() {
+    for bits in [16, 32] {
+        for signed in [false, true] {
+            let small = divide_small(signed, true, bits, Used::Both).expect("assembles");
+            let (got, steps) = divided(&small, bits, 262144, 1000);
+            assert_eq!(got, (262, 144), "{}", small.name);
+            assert!(steps < 40, "{} took {steps} instructions", small.name);
+        }
+    }
+}
+
 /// A divide by a divisor of two dwords estimates the quotient with one `div`
 /// and corrects it: 144 instructions at the worst, where a round per bit of
 /// the quotient is some 600.
@@ -351,6 +459,18 @@ fn a_wide_divide_is_bounded_not_a_round_per_bit() {
         let routine = divide(signed, true, 16).expect("assembles");
         let (_, steps) = divided(&routine, 16, dividend, divisor);
         assert!(steps < 160, "{} took {steps} instructions", routine.name);
+    }
+}
+
+/// At 32 bits the divisor is normalized by one `bsr`, not a shift per leading
+/// zero: a divisor of 1:00000001 took 144 instructions (x_ll_div -O2, 17.8k
+/// clocks over gcc's).
+#[test]
+fn a_flat_wide_divide_normalizes_in_one_step() {
+    for signed in [false, true] {
+        let routine = divide(signed, true, 32).expect("assembles");
+        let (_, steps) = divided(&routine, 32, u64::MAX >> 1, 0x1_0000_0001);
+        assert!(steps < 80, "{} took {steps} instructions", routine.name);
     }
 }
 

@@ -39,8 +39,8 @@ fn a_load_of_a_global_names_its_symbol() {
 #[test]
 fn stack_temporaries_are_cells_below_the_frame_pointer() {
     use super::dag_function::{Frame, Temporaries};
-    use super::emit::FrameMap;
-    use super::x86_preprocess::FrameObjects;
+    use super::dag_target::FrameObjects;
+    use super::emit_api::FrameMap;
     let frame = Frame::new(vec![8, 12], 0);
     let mut temps = Temporaries(&frame);
     let (first, second) = (temps.create_stack_temporary(4, 4), temps.create_stack_temporary(8, 8));
@@ -85,7 +85,8 @@ const LOCAL: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
 define i32 @f(i32 %a) {
 entry:
   %p = alloca i32
-  store i32 %a, ptr %p
+  %b = add i32 %a, 1
+  store i32 %b, ptr %p
   %v = load volatile i32, ptr %p
   ret i32 %v
 }
@@ -496,7 +497,7 @@ fn a_memmove_with_a_proved_direction_is_a_string_copy() {
 fn a_backward_memmove_at_m32_of_an_odd_size_moves_bytes() {
     let ir = memmove_ir(", !llrm.backward !0").replace("78000", "78001");
     let backward = select_m32(&ir).unwrap_or_else(|why| panic!("{why}"));
-    let bytes = [0x1E, 0x07, 0xFD, 0xF3, 0xA4, 0xFC];
+    let bytes = [0xFD, 0xF3, 0xA4, 0xFC];
     assert!(backward.inline.values().any(|code| code[..] == bytes), "{:?}", backward.inline);
 }
 
@@ -1143,12 +1144,73 @@ entry:
     (fills, stores)
 }
 
+/// The Fill and mov-to-memory counts of a flat m32 constant fill of `length`
+/// bytes of `value`, `size` for -Os.
+fn memset_shape_m32(
+    length: u32,
+    value: i32,
+    size: bool,
+) -> (usize, usize) {
+    let text = format!(
+        "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+@g = global [64 x i8] zeroinitializer, align 4
+declare void @llvm.memset.p0.i32(ptr, i8, i32, i1)
+define void @f() {{
+  call void @llvm.memset.p0.i32(ptr align 4 @g, i8 {value}, i32 {length}, i1 false)
+  ret void
+}}
+"
+    );
+    let module = llrm_mir::parse::module(&text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m32::M32, "486", size).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let whats = || insns.iter().filter_map(|i| i.what.as_ref());
+    let fills = whats().filter(|w| w.op == crate::model::ir::Operation::Fill).count();
+    let stores = whats()
+        .filter(|w| w.name.as_deref() == Some("mov") && matches!(w.dests.as_slice(), [crate::model::ir::Loc::Mem(_)]))
+        .count();
+    (fills, stores)
+}
+
+/// lru -Os at m32: constant-store loops became memsets of 6..28 bytes, and
+/// `rep stosd` (201 clk against 124 for seven stores) lost clocks without
+/// beating the pin's eight-store limit. At -Os a fill is taken only past that
+/// limit, where it is fewer bytes; at speed the stores stay, and a lone dword
+/// stays a store.
+#[test]
+fn at_m32_os_a_fill_past_the_pin_store_limit_is_rep_stos_and_at_speed_stores() {
+    assert_eq!(memset_shape_m32(28, -1, true).0, 0, "-Os: seven stores are the pin's");
+    assert_eq!(memset_shape_m32(40, -1, true).0, 1, "-Os: ten stores are a fill");
+    assert_eq!(memset_shape_m32(40, -1, false).0, 0, "-O2: stores");
+    assert_eq!(memset_shape_m32(4, -1, true).0, 0, "one dword store is smaller than the fill");
+    // rep_tails -Os grew a byte when a 5-byte fill (no whole dwords) was a
+    // fill.
+    assert_eq!(memset_shape_m32(5, 7, true).0, 0, "a tail is stores");
+}
+
 /// A 10-byte clear at m16 -Os was a `rep stosb` on bytes alone (19 B of
 /// stores against 16): 57 clocks of a 486 for 3 bytes, 17 clocks a byte
 /// against the target's 10.
 #[test]
 fn at_os_a_10_byte_clear_is_stores_not_rep_stos() {
     assert_eq!(memset_shape(10, 0).0, 0);
+}
+
+/// The 10-byte clear was a fill because the model priced its stores at 19
+/// bytes (a 6-byte setup, 5 for the word) where the object has 14 (`xor ecx`,
+/// two dword stores and a word from the same register) against the fill's 16:
+/// the in-situ object grew. Whatever the boundary is, a longer clear of the
+/// same parity never goes back to stores (an odd one has a byte store more:
+/// 11 B is a fill, 12 B three dwords of stores).
+#[test]
+fn at_os_a_clear_that_is_a_fill_stays_a_fill_as_it_grows() {
+    for parity in [0, 1] {
+        let sizes: Vec<u32> = (4..=64).filter(|n| n % 2 == parity).collect();
+        let first = sizes.iter().copied().find(|&n| memset_shape(n, 0).0 == 1).expect("a fill");
+        assert!(first > 8, "{first}");
+        assert!(sizes.iter().filter(|&&n| n >= first).all(|&n| memset_shape(n, 0).0 == 1), "parity {parity}");
+    }
 }
 
 /// sc.c's 14-byte zero fill: 7 bytes saved for 66 clocks, 9.4 a byte, pay.
@@ -1410,4 +1472,434 @@ define i16 @f() {
     });
     let zero = zero.expect("a zero");
     assert!(matches!(zero.dests.as_slice(), [Loc::Held(held)] if held.width == 4), "{zero:?}");
+}
+
+/// The width in bytes of the register of the `rep stos` a `memset` of the size
+/// `%s` (defined by `size`, from the argument `%n`) bytes of `value` becomes at
+/// m16 on `cpu` (`None`: no fill).
+fn dynamic_fill_unit_of(
+    size: &str,
+    value: u8,
+    cpu: &str,
+) -> Option<String> {
+    let text = format!(
+        "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+declare void @llvm.memset.p0.i16(ptr, i8, i16, i1)
+define void @f(ptr %p, i16 %n) {{
+entry:
+  {size}
+  call void @llvm.memset.p0.i16(ptr %p, i8 {value}, i16 %s, i1 false)
+  ret void
+}}
+"
+    );
+    let module = llrm_mir::parse::module(&text).expect("parses");
+    let cpu = crate::backend::cpu::profile(cpu).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    insns
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .find(|w| w.op == crate::model::ir::Operation::Fill)
+        .and_then(
+            |w| w.sources
+                .iter()
+                .find_map(
+                    |source| match source {
+                        crate::model::ir::Loc::Held(held) => Some(held.width.to_string()),
+                        _ => None,
+                    },
+                ),
+        )
+}
+
+fn dynamic_fill_unit(shift: u32) -> Option<String> {
+    dynamic_fill_unit_of(&format!("%s = shl nuw i16 %n, {shift}"), 0, "486")
+}
+
+/// sieve bq16: `memset(p, 0, n << 1)` of a 2-byte array was `rep stosb` of
+/// 2048 bytes where `rep stosw` of 1024 stores half the operands: 1,024 of the
+/// 2,706 over main.
+#[test]
+fn a_fill_of_whole_words_is_rep_stosw() {
+    let unit = dynamic_fill_unit(1).expect("a fill");
+    assert_eq!(unit, "2");
+}
+
+/// The width in bytes of the register of the `rep stos` a `memset` of the
+/// constant `length` bytes of a word-aligned local becomes at m16 -Os on a 486.
+fn os_fill_unit(length: u32) -> String {
+    let text = format!(
+        "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+declare void @llvm.memset.p0.i16(ptr, i8, i16, i1)
+declare void @use(ptr)
+define void @f() {{
+entry:
+  %a = alloca [{length} x i8], align 2
+  call void @llvm.memset.p0.i16(ptr align 2 %a, i8 0, i16 {length}, i1 false)
+  call void @use(ptr %a)
+  ret void
+}}
+"
+    );
+    let module = llrm_mir::parse::module(&text).expect("parses");
+    let mut cpu = crate::backend::cpu::profile("486").expect("a cpu").clone();
+    cpu.size = true;
+    let done = selected(&module, "f", &llrm_x86_m16::M16, &cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    insns
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .find(|w| w.op == crate::model::ir::Operation::Fill)
+        .and_then(|w| {
+            w.sources
+                .iter()
+                .find_map(
+                    |source| match source {
+                        crate::model::ir::Loc::Held(held) => Some(held.width.to_string()),
+                        _ => None,
+                    },
+                )
+        })
+        .expect("a fill")
+}
+
+/// sieve bq16 -Os: the 2,048-byte entry clear of a frame array was a `rep
+/// stosb` (2,048 iterations, 600 clocks over the heap array's) where `rep
+/// stosw` is the same bytes of code and half the iterations.
+#[test]
+fn at_os_a_constant_fill_of_whole_words_is_rep_stosw() {
+    assert_eq!(os_fill_unit(2048), "2");
+}
+
+/// An odd length is bytes.
+#[test]
+fn at_os_a_constant_fill_of_an_odd_length_is_rep_stosb() {
+    assert_eq!(os_fill_unit(2047), "1");
+}
+
+/// A size that is no multiple of 2 stays bytes.
+#[test]
+fn a_fill_of_unknown_size_stays_rep_stosb() {
+    assert_eq!(dynamic_fill_unit(0).as_deref(), Some("1"));
+}
+
+/// The unit is only as wide as the known bits of the size allow: `n` and `n |
+/// 1` are bytes, `n & -2` and `n << 1` words, `n << 2` dwords on the lowest
+/// profile m16 has (the 386; there is no 8086 or 286 profile, llrm-cc rejects
+/// `-march=i286`), so no profile gets a unit its registers lack.
+#[test]
+fn the_unit_of_a_dynamic_fill_follows_the_known_bits_of_its_size() {
+    let of = |size: &str, cpu: &str| dynamic_fill_unit_of(size, 0, cpu).expect("a fill");
+    assert_eq!(of("%s = add i16 %n, 0", "486"), "1");
+    assert_eq!(of("%s = or i16 %n, 1", "486"), "1");
+    assert_eq!(of("%s = and i16 %n, -2", "486"), "2");
+    assert_eq!(of("%s = shl nuw i16 %n, 2", "386"), "4");
+    assert_eq!(of("%s = shl nuw i16 %n, 3", "486"), "4");
+}
+
+/// A non-zero fill byte is splatted across the unit (`0x0101`, `0x01010101`):
+/// the same `rep stos` for any constant byte, and a byte fill for a byte we
+/// cannot splat at compile time.
+#[test]
+fn a_constant_fill_byte_is_splatted_into_the_unit() {
+    assert_eq!(dynamic_fill_unit_of("%s = shl nuw i16 %n, 1", 7, "486").as_deref(), Some("2"));
+}
+
+/// sieve m32 -O2 grew 14 bytes when a `memset` of `n << 1` became `rep stosw`
+/// (an operand-size prefix in 32-bit code, and a shift pair): a word is no unit
+/// there. Returns the register width of the fill, and the names of the shifts
+/// that make its count.
+fn fill_at_m32(shift: u32) -> (Option<String>, usize) {
+    let text = format!(
+        "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+declare void @llvm.memset.p0.i32(ptr, i8, i32, i1)
+define void @f(ptr %p, i32 %n) {{
+entry:
+  %s = shl nuw i32 %n, {shift}
+  call void @llvm.memset.p0.i32(ptr %p, i8 0, i32 %s, i1 false)
+  ret void
+}}
+"
+    );
+    let module = llrm_mir::parse::module(&text).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let whats = || insns.iter().filter_map(|i| i.what.as_ref());
+    let unit = whats()
+        .find(|w| w.op == crate::model::ir::Operation::Fill)
+        .and_then(
+            |w| w.sources
+                .iter()
+                .find_map(
+                    |source| match source {
+                        crate::model::ir::Loc::Held(held) => Some(held.width.to_string()),
+                        _ => None,
+                    },
+                ),
+        );
+    (unit, whats().filter(|w| matches!(w.name.as_deref(), Some("shr" | "shl" | "sar"))).count())
+}
+
+#[test]
+fn at_m32_a_fill_of_whole_words_stays_bytes() {
+    assert_eq!(fill_at_m32(1).0.as_deref(), Some("1"));
+}
+
+#[test]
+fn at_m32_a_fill_of_whole_dwords_is_rep_stosd_with_no_shift() {
+    assert_eq!(fill_at_m32(2), (Some("4".to_owned()), 0));
+}
+
+/// `n << 1` bytes of zero at m16 is `cx = n`: the shift that built the size and
+/// the one that halves it cancel (`add cx, cx ; shr cx, 1` was 2 bytes + 2).
+#[test]
+fn a_fill_of_n_shl_1_counts_n_words_with_no_shift_pair() {
+    let text = "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+declare void @llvm.memset.p0.i16(ptr, i8, i16, i1)
+define void @f(ptr %p, i16 %n) {
+entry:
+  %s = shl nuw i16 %n, 1
+  call void @llvm.memset.p0.i16(ptr %p, i8 0, i16 %s, i1 false)
+  ret void
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::profile("486").expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+    let shifts = done
+        .body
+        .insns()
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .filter(|w| matches!(w.name.as_deref(), Some("shr" | "shl" | "sar" | "add")))
+        .count();
+    assert_eq!(shifts, 0);
+}
+
+/// matmul bas/bq16 -O2 grew 4 bytes when a 66-byte constant `memset` took
+/// `rep stosw`: only a size that is not a constant widens.
+#[test]
+fn a_fill_of_a_constant_size_that_is_not_a_dword_multiple_stays_bytes() {
+    assert_eq!(dynamic_fill_unit_of("%s = add i16 66, 0", 0, "486").as_deref(), Some("1"));
+}
+
+/// The `rep stos` unit of a constant `memset` of `size` bytes at `align`, in a
+/// function with no size attribute, at m16 on the 486.
+fn constant_fill_unit(
+    size: u32,
+    align: u32,
+) -> Option<String> {
+    let text = format!(
+        "target datalayout = \"e-p:16:16-p1:32:16:16:16-i32:16-i64:16-n8:16:32\"
+declare void @llvm.memset.p0.i16(ptr, i8, i16, i1)
+define void @f(ptr %p) {{
+entry:
+  call void @llvm.memset.p0.i16(ptr align {align} %p, i8 0, i16 {size}, i1 false)
+  ret void
+}}
+"
+    );
+    let module = llrm_mir::parse::module(&text).expect("parses");
+    let cpu = crate::backend::cpu::profile("486").expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+    done.body
+        .insns()
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .find(|w| w.op == crate::model::ir::Operation::Fill)
+        .and_then(|w| {
+            w.sources
+                .iter()
+                .find_map(
+                    |source| match source {
+                        crate::model::ir::Loc::Held(held) => Some(held.width.to_string()),
+                        _ => None,
+                    },
+                )
+        })
+}
+
+/// particle nib: five 202-byte clears at `align 2` were `rep stosb` of 202
+/// (~3.6k of its +12.9k clocks); the pin calls `memset` there and m16 has none,
+/// so the fill is words where the size and alignment allow.
+#[test]
+fn a_constant_fill_of_whole_words_at_word_alignment_is_rep_stosw() {
+    assert_eq!(constant_fill_unit(202, 2).as_deref(), Some("2"));
+}
+
+/// An odd size, or a byte-aligned buffer, stays bytes.
+#[test]
+fn a_constant_fill_of_odd_size_or_byte_alignment_stays_rep_stosb() {
+    assert_eq!(constant_fill_unit(203, 2).as_deref(), Some("1"));
+    assert_eq!(constant_fill_unit(202, 1).as_deref(), Some("1"));
+}
+
+/// `d / 1000` on a u64 at m32: the high-multiply expansion added its partial
+/// products with `add; setb; add` (6 `setb`, 6 `add`), where the pin folds
+/// `(add X, (zext carry))` and `(uaddo X, carry)` into `adc`. The pin has no
+/// `setb` at all (it expands the divide before type legalization, so every
+/// carry is still a node when the combine runs); ours keeps 2 until then.
+#[test]
+fn at_m32_a_carry_added_back_is_adc_not_setb() {
+    let module = llrm_mir::parse::module(
+        "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i64 @f(i64 %d) {
+  %q = udiv i64 %d, 1000
+  ret i64 %q
+}
+",
+    )
+    .expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m32::M32, "486", false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let named =
+        |name: &str| insns.iter().filter_map(|i| i.what.as_ref()).filter(|w| w.name.as_deref() == Some(name)).count();
+    assert!(named("setb") <= 2 && named("adc") >= 4, "setb {} adc {}", named("setb"), named("adc"));
+}
+
+/// rectwo -O2 at m32: gcc's depth-8 copies of `paths` into itself made 1965 B
+/// that ran 1449397 clk (gcc 849 B, 555823 clk). Depth 2 at -O2 is 277 B and
+/// 347314 clk. -O3 had gcc's 8 and lost to -O2 on fib, frames and rectwo
+/// (REC-8): two at both.
+#[test]
+fn at_m32_the_copies_of_a_recursive_function_are_two_deep_at_o2_and_o3() {
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m32::M32, "486", false).expect("a cpu");
+    let target = cpu.target();
+    let tti = target.tti();
+    let depth = |o3: bool| {
+        llrm_transforms::walk::Recursion::of(None, false, true, o3, tti.as_deref()).expect("m32 copies recursion").depth
+    };
+    assert_eq!((depth(false), depth(true)), (2, 2));
+}
+
+/// `(x & 0x7f800000) == 0x7f800000` (a float's exponent all ones) at m32 was
+/// `and; cmp; sete` with the mask loaded twice; the pin's `foldSetCCWithAnd`
+/// (`hasAndNotCompare`) makes it `not; test; sete` (gcc's too): x_sf_f2i -Os
+/// +27 B against gcc.
+#[test]
+fn at_m32_a_mask_equal_to_itself_is_not_and_test() {
+    let module = llrm_mir::parse::module(
+        "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i1 @f(i32 %x) {
+  %a = and i32 %x, 2139095040
+  %c = icmp eq i32 %a, 2139095040
+  ret i1 %c
+}
+",
+    )
+    .expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m32::M32, "486", false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let named =
+        |name: &str| insns.iter().filter_map(|i| i.what.as_ref()).filter(|w| w.name.as_deref() == Some(name)).count();
+    assert!(
+        named("not") == 1 && named("test") == 1 && named("cmp") == 0,
+        "not {} test {} cmp {}",
+        named("not"),
+        named("test"),
+        named("cmp")
+    );
+}
+
+/// `(x & y) == 0` on registers selected `and; test` (the `and` a register of
+/// its own): the sfm16_float `__mulsf3` entry guard read `and dh, dl; je`
+/// where the pin's `PostprocessISelDAG` makes it `test dl, dh; je`.
+#[test]
+fn at_m32_a_test_of_an_and_of_registers_is_one_test() {
+    let module = llrm_mir::parse::module(
+        "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i1 @f(i8 %x, i8 %y) {
+  %p = add i8 %x, 1
+  %q = add i8 %y, 2
+  %a = and i8 %p, %q
+  %c = icmp eq i8 %a, 0
+  ret i1 %c
+}
+",
+    )
+    .expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m32::M32, "486", false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let named =
+        |name: &str| insns.iter().filter_map(|i| i.what.as_ref()).filter(|w| w.name.as_deref() == Some(name)).count();
+    assert!(named("test") == 1 && named("and") == 0, "test {} and {}", named("test"), named("and"));
+}
+
+/// `(x & *p) == 0` selected `and r, [mem]; sete`: the `and` writes a register
+/// nothing reads. The pin's `PostprocessISelDAG` makes it `test [mem], r`
+/// (`AND8rm` + `TEST8rr` -> `TEST8mr`).
+#[test]
+fn at_m32_a_test_of_an_and_with_memory_is_one_test() {
+    let module = llrm_mir::parse::module(
+        "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i1 @f(i8 %x, ptr %p) {
+  %v = load i8, ptr %p
+  %q = add i8 %x, 1
+  %a = and i8 %q, %v
+  %c = icmp eq i8 %a, 0
+  ret i1 %c
+}
+",
+    )
+    .expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m32::M32, "486", false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let named =
+        |name: &str| insns.iter().filter_map(|i| i.what.as_ref()).filter(|w| w.name.as_deref() == Some(name)).count();
+    assert!(named("test") == 1 && named("and") == 0, "test {} and {}", named("test"), named("and"));
+}
+
+/// `x + y + ((z >> 3) & 1)` was `add; bt; adc eax, 0`: the pin folds
+/// `ADC(ADD(X,Y),0,Carry)` to `ADC(X,Y,Carry)` when nothing reads the carry
+/// out, giving `bt; adc` (sfm16_float `sf32_pack`, +3 B).
+#[test]
+fn at_m32_an_add_into_an_adc_of_zero_is_one_adc() {
+    let module = llrm_mir::parse::module(
+        "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(i32 %x, i32 %y, i32 %z) {
+  %s = add i32 %x, %y
+  %b = lshr i32 %z, 3
+  %m = and i32 %b, 1
+  %r = add i32 %s, %m
+  ret i32 %r
+}
+",
+    )
+    .expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m32::M32, "486", false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let named =
+        |name: &str| insns.iter().filter_map(|i| i.what.as_ref()).filter(|w| w.name.as_deref() == Some(name)).count();
+    assert!(named("adc") == 1 && named("add") == 0, "adc {} add {}", named("adc"), named("add"));
+}
+
+/// `(x << 1) + ((z >> 3) & 1)` was `add eax, eax; bt; adc eax, 0`; the pin's
+/// `ADC(SHL(X,1),0,Carry)` fold makes it `bt; adc eax, eax`.
+#[test]
+fn at_m32_a_double_into_an_adc_of_zero_is_adc_of_itself() {
+    let module = llrm_mir::parse::module(
+        "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"
+define i32 @f(i32 %x, i32 %z) {
+  %s = shl i32 %x, 1
+  %b = lshr i32 %z, 3
+  %m = and i32 %b, 1
+  %r = add i32 %s, %m
+  ret i32 %r
+}
+",
+    )
+    .expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m32::M32, "486", false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m32::M32, cpu, &[]).unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let named =
+        |name: &str| insns.iter().filter_map(|i| i.what.as_ref()).filter(|w| w.name.as_deref() == Some(name)).count();
+    assert!(named("adc") == 1 && named("add") == 0, "adc {} add {}", named("adc"), named("add"));
 }

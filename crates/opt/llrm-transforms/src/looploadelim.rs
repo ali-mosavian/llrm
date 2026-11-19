@@ -720,6 +720,7 @@ impl FunctionPass for LoopLoadElim {
                 let memory_unit = memory::Unit::within(&*unit.context, unit.layout, &*unit.function, &outer);
                 let mut aa = AggregateAA::new();
                 aa.add_aa_result(BasicAA::new(&memory_unit));
+                aa.add_aa_result(llrm_analysis::scopednoaliasaa::ScopedNoAliasAA::new(&memory_unit));
                 aa.add_aa_result(TypeBasedAA::new(&memory_unit));
                 let lai = LoopAccessInfo::new(se, &cx, header, &mut aa, false, self.max_target_vector_width_in_bits);
                 let mut lel = LoadEliminationForLoop { lp: header, lai: &lai, inst_order: IdMap::new() };
@@ -738,7 +739,7 @@ impl FunctionPass for LoopLoadElim {
                     is_recursively_lcssa_form(&*unit.function, env.loops, env.tree, found)
                 };
                 if !lcssa {
-                    let _ = crate::lcssa::formed(unit.function);
+                    let _ = crate::lcssa::closed(unit.context, unit.layout, unit.function);
                     session = ScevSession::of(unit.context, unit.function, &outer);
                 }
                 let (se, env) = session.split(unit.layout, &outer.globals, &outer.metadata);

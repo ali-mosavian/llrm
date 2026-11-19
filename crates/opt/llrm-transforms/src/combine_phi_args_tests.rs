@@ -196,3 +196,181 @@ j:
     );
     assert!(!after.contains("phi") && after.contains("ret i8 %s"), "{after}");
 }
+
+/// wasm32 r3 (an `i8` counter left over once the unroller used the trip
+/// count): the counter's add fed only its own phi and survived to the
+/// output, +20 B against the pin.
+#[test]
+fn an_induction_variable_nothing_reads_is_deleted() {
+    let after = combined(
+        "define i8 @f(i8 %n) {
+b0:
+  br label %loop
+loop:
+  %dead = phi i8 [ 0, %b0 ], [ %dead.next, %loop ]
+  %live = phi i8 [ 0, %b0 ], [ %live.next, %loop ]
+  %dead.next = add nuw i8 %dead, 4
+  %live.next = add nuw i8 %live, 1
+  %done = icmp eq i8 %live.next, %n
+  br i1 %done, label %exit, label %loop
+exit:
+  ret i8 %live.next
+}
+",
+    );
+    assert!(!after.contains("%dead"), "{after}");
+    assert!(after.contains("%live"), "{after}");
+}
+
+/// Phis that only read each other (a swap nothing observes) stayed, each one
+/// a copy at lowering.
+#[test]
+fn phis_used_only_by_each_other_are_deleted() {
+    let after = combined(
+        "define i8 @f(i8 %n) {
+b0:
+  br label %loop
+loop:
+  %a = phi i8 [ 0, %b0 ], [ %b, %loop ]
+  %b = phi i8 [ 1, %b0 ], [ %a, %loop ]
+  %live = phi i8 [ 0, %b0 ], [ %live.next, %loop ]
+  %live.next = add nuw i8 %live, 1
+  %done = icmp eq i8 %live.next, %n
+  br i1 %done, label %exit, label %loop
+exit:
+  ret i8 %live.next
+}
+",
+    );
+    assert_eq!(after.matches("phi i8").count(), 1, "{after}");
+}
+
+/// A web of 16 phis is left: the pin stops there to bound the walk.
+#[test]
+fn a_web_of_sixteen_phis_is_left() {
+    let mut phis = String::new();
+    for i in 0..16 {
+        phis.push_str(&format!("  %p{i} = phi i8 [ 0, %b0 ], [ %p{}, %loop ]\n", (i + 1) % 16));
+    }
+    let after = combined(&format!(
+        "define i8 @f(i8 %n) {{
+b0:
+  br label %loop
+loop:
+{phis}  %live = phi i8 [ 0, %b0 ], [ %live.next, %loop ]
+  %live.next = add nuw i8 %live, 1
+  %done = icmp eq i8 %live.next, %n
+  br i1 %done, label %exit, label %loop
+exit:
+  ret i8 %live.next
+}}
+"
+    ));
+    assert!(after.contains("%p15 = phi"), "{after}");
+}
+
+/// stft_fixed~bounds m16 -O2: the bounds check's join read `phi(load a[i], load
+/// a[0])`, a load in each arm where the pin's InstCombine has one load of a phi
+/// of the addresses (its walk 321 -> 293 lines, ours 318).
+#[test]
+fn a_phi_of_loads_in_both_arms_is_one_load_of_a_phi_of_the_addresses() {
+    let after = combined(
+        "@a = global [8 x i32] zeroinitializer, align 4
+define i32 @f(i1 %c, i16 %i) {
+b0:
+  br i1 %c, label %l, label %r
+l:
+  %p = getelementptr inbounds [4 x i8], ptr @a, i16 %i
+  %x = load i32, ptr %p, align 4, !tbaa !0
+  br label %m
+r:
+  %y = load i32, ptr @a, align 4, !tbaa !0
+  br label %m
+m:
+  %v = phi i32 [ %x, %l ], [ %y, %r ]
+  ret i32 %v
+}
+!0 = !{!1, !1, i64 0}
+!1 = !{!\"int\", !2, i64 0}
+!2 = !{!\"omnipotent char\"}
+",
+    );
+    assert_eq!(after.matches("load i32").count(), 1, "{after}");
+    assert!(after.contains("phi ptr") && !after.contains("phi i32"), "{after}");
+    assert!(after.contains("!tbaa"), "the load keeps what both loads agree on: {after}");
+}
+
+/// The same address in every arm: no phi at all.
+#[test]
+fn a_phi_of_loads_of_one_address_is_one_load_of_it() {
+    let after = combined(
+        "@a = global i32 0, align 4
+define i32 @f(i1 %c) {
+b0:
+  br i1 %c, label %l, label %r
+l:
+  %x = load i32, ptr @a, align 4
+  br label %m
+r:
+  %y = load i32, ptr @a, align 4
+  br label %m
+m:
+  %v = phi i32 [ %x, %l ], [ %y, %r ]
+  ret i32 %v
+}
+",
+    );
+    assert_eq!(after.matches("load i32").count(), 1, "{after}");
+    assert!(!after.contains("phi"), "{after}");
+}
+
+/// A write after the load, in its block, could change what the merged load
+/// reads: the loads stay.
+#[test]
+fn a_store_after_a_load_keeps_the_loads_where_they_are() {
+    let after = combined(
+        "@a = global [8 x i32] zeroinitializer, align 4
+@b = global i32 0, align 4
+define i32 @f(i1 %c, i16 %i) {
+b0:
+  br i1 %c, label %l, label %r
+l:
+  %p = getelementptr inbounds [4 x i8], ptr @a, i16 %i
+  %x = load i32, ptr %p, align 4
+  store i32 1, ptr @b, align 4
+  br label %m
+r:
+  %y = load i32, ptr @a, align 4
+  br label %m
+m:
+  %v = phi i32 [ %x, %l ], [ %y, %r ]
+  ret i32 %v
+}
+",
+    );
+    assert_eq!(after.matches("load i32").count(), 2, "{after}");
+}
+
+/// A volatile load is not moved.
+#[test]
+fn a_volatile_load_is_not_merged() {
+    let after = combined(
+        "@a = global [8 x i32] zeroinitializer, align 4
+define i32 @f(i1 %c, i16 %i) {
+b0:
+  br i1 %c, label %l, label %r
+l:
+  %p = getelementptr inbounds [4 x i8], ptr @a, i16 %i
+  %x = load volatile i32, ptr %p, align 4
+  br label %m
+r:
+  %y = load volatile i32, ptr @a, align 4
+  br label %m
+m:
+  %v = phi i32 [ %x, %l ], [ %y, %r ]
+  ret i32 %v
+}
+",
+    );
+    assert_eq!(after.matches("load volatile i32").count(), 2, "{after}");
+}

@@ -1,0 +1,19 @@
+#title,"10.6 INTEGER UNIT INSTRUCTION TIMINGS: BCHG, BCLR, BSET [a] | BFCHG, BFCLR, BFSET [b,c] | BFEXTS, BFEXTU [b,d]",page,10-15,notes,"a. Bit instruction <ea> calculate and execute times T1/T2 apply to #<xxx>/Dn bit numbers. b. This instruction interlocks the <ea> calculate and execute stages. c. If the bit field spans a long-word boundary, add ten and nine clocks to the <ea> calculate and execute times, respectively. Two memory addresses are accessed in this case. d. If the bit field spans a long-word boundary, add two clocks to the execute time. Two memory addresses are accessed in this case. e. Immediate count specified for both width and offset and width and/or offset specified in register, respectively."
+Addressing Mode,"BCHG, BCLR, BSET [a] <ea> Calculate","BCHG, BCLR, BSET [a] Execute","BFCHG, BFCLR, BFSET [b,c] <ea> Calculate","BFCHG, BFCLR, BFSET [b,c] Execute","BFEXTS, BFEXTU [b,d] <ea> Calculate","BFEXTS, BFEXTU [b,d] Execute"
+Dn,1,3/4,3/4 [e],6/7 [e],1/2 [e],4/5 [e]
+An,—,—,—,—,—,—
+(An),1,3/4,9,2L + 8,9,2L + 7
+(An)+,1,3/4,—,—,—,—
+–(An),1,3/4,—,—,—,—
+"(d 16,An)",2/1,1L + 3/4,9,2L + 8,9,2L + 7
+"(d 16,PC)",—,—,—,—,10,3L + 7
+"(xxx).W, (xxx).L",2/1,1L + 3/4,9,2L + 8,9,2L + 7
+#<xxx>,—,—,—,—,—,—
+"(d 8,An,Xn)",3,5/6,10,11,10,10
+"(d 8,PC,Xn)",—,—,—,—,11,1L + 10
+"(BR,Xn)",7,1L + 8/1L + 9,13,1L + 13,13,1L + 12
+"(bd,BR,Xn)",8,1L + 9/1L + 10,14,1L + 14,14,1L + 13
+"([bd,BR,Xn])",10,1L + 11/1L + 12,16,1L + 16,16,1L + 15
+"([bd,BR,Xn],od)",11,1L + 12/1L + 13,17,1L + 17,17,1L + 16
+"([bd,BR],Xn)",11,3L + 10/3L + 11,17,3L + 15,17,3L + 14
+"([bd,BR],Xn,od)",12,3L + 11/3L + 12,18,3L + 16,18,3L + 15

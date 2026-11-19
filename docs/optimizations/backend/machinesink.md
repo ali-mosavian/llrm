@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/machinesink.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/machinesink.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/machinesink.rs sha256:4c6407b4c8dff0d8f7d790edfcc0f9de55444d315e8ce5943f91cecd1d78c4b6 -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/machinesink.rs sha256:2ba2d93da51550b161425df0e5d8ae2a580aa67834b8295e519a4b759fdd4e7b -->
 
 # machinesink
 
@@ -33,10 +33,10 @@ block, which is its successor's only predecessor.
  b4: r = phi [b1: v] [b2: x]
 ```
 
-DEVIATE M7 (row 44): `hasStoreBetween` counts every store, call and
-ordered access as one that may alias the load: no alias analysis reaches
-LIR (`mayAlias(AA, MI)` is always true). Retires M1, which sank no load
-along a critical edge. Exit: memory operands with an alias query on LIR.
+`hasStoreBetween` asks `Insn::may_alias` of each store (`StoreInstrCache`);
+an instruction with no `Insn::memory` may alias anything, so a body whose
+target states none (x86) counts every store, as `mayAlias` without operands
+does. (Was DEVIATE M7, row 44, retired 2026-11-09 by the memory operand.)
 
 Row M2 (was DEVIATE M2 #2903, retired 2026-10-25): inside a cycle an
 instruction goes to a post-dominating block when no in-cycle operand it
@@ -74,13 +74,21 @@ larger by 1 to 2 B), no program slower; mandel.nib 185 -> 178 B and
 
 DEVIATE M6 (no number): an instruction that reads or writes any physical
 register stays, where `FindSuccToSinkTo` lets a physical def marked dead
-through (and a use of a constant register). Effect: none seen, 0 sinks
-missed over d_faces and the 820-object corpus at -O2 (counted: no
-instruction that passes `safe_to_move` has a physical write and no read).
+through (and a use of a constant register). The frame register of a frame
+cell, local or argument, is not one: the pin's frame index carries none
+(os_execute m64 -Os kept eight `mov r8,[rsp+k]` the pin sinks and folds,
++35 B). The earlier count (0 sinks missed over d_faces and the 820-object
+corpus at -O2) saw physical writes only, not reads.
 The flags are the pin's rule in full: a def moves only if dead (read by no
 later instruction of its block and no successor), and not into a block that
 reads them (`SinkInstruction`'s zombie check).
 Exit: honor a dead implicit def when LIR marks one.
+
+DEVIATE F1 (owner w2, exit 2026-11-12): the x87 compare is one pseudo here
+and writes the flags itself (the pin's `SAHF` does), so flags defs above it
+sink. tests_run_c_fcmp_all -Os m32 grew 4600 -> 4728 B (pin llc 6296); the
+cause is not yet read. Exit: cause found and fixed, or the growth shown to
+be the pin's own.
 
 DEVIATE M7 (no number): an instruction whose pinned operands are all
 sources (the count of `shld`/`shl r, cl`) stays, as the pin's `$cl = COPY`
@@ -89,9 +97,11 @@ class, so `touches_machine_state` asks the classes. One with a pinned result
 (a divide: `ax`, `dx`) still sinks: the pin's does not, but holding a divide
 in its block grew switch.c 16 B at m16 -Os. Exit: none.
 
-DEVIATE M3 (#2903): no `PerformSinkAndFold`, no sinking into cycles
-(`SinkInstsIntoCycle`, off by default), no debug-value handling (an
-instruction has none).
+Not ported, and not a deviation on x86 (#2903): `PerformSinkAndFold` runs
+in the pin only where the target sets `EnableSinkAndFold` (AArch64, RISC-V,
+LoongArch; `TargetPassConfig.h:136`, false by default), `SinkInstsIntoCycle`
+is off by default, and an instruction here has no debug values. A target
+here that enables sink-and-fold gets it as a per-target hook, default off.
 
 ## Example
 `b1: v = mov 0; cmp x, 0; je b4` and `b4: r = phi [b1: v] [b2: w]` leave

@@ -233,31 +233,6 @@ b6:
     assert_eq!(after.matches("load").count(), 1, "{after}");
 }
 
-/// Asks for the manager's MemorySSA and says nothing else; `forgets` returns
-/// `none()`, as a pass that edited without naming what it kept.
-struct AsksMssa {
-    forgets: bool,
-}
-
-impl llrm_mir::passes::FunctionPass for AsksMssa {
-    fn name(&self) -> &'static str {
-        "asks-mssa"
-    }
-
-    fn run(
-        &mut self,
-        unit: &mut llrm_mir::passes::Unit,
-        analyses: &mut llrm_mir::passes::Analyses,
-    ) -> llrm_mir::passes::PreservedAnalyses {
-        analyses.get::<llrm_analysis::manager::MemorySsa>(unit.context, unit.layout, unit.function);
-        if self.forgets {
-            llrm_mir::passes::PreservedAnalyses::none()
-        } else {
-            llrm_mir::passes::PreservedAnalyses::all()
-        }
-    }
-}
-
 const ONE_LOAD_TWICE: &str = "define i32 @f(ptr %p) {
 b0:
   %a = load i32, ptr %p
@@ -268,16 +243,7 @@ b0:
 ";
 
 fn mssa_misses_over(passes: Vec<Box<dyn llrm_mir::passes::FunctionPass>>) -> (u64, u64) {
-    let mut module = parsed(&format!("{DOS}{ONE_LOAD_TWICE}"));
-    let mut manager = llrm_mir::passes::PassManager::default();
-    manager.verify_invalidation = true;
-    for pass in passes {
-        manager.add_boxed(pass);
-    }
-    let before = llrm_mir::counts::analysed("mssa");
-    manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned::default())).unwrap();
-    let after = llrm_mir::counts::analysed("mssa");
-    (after.0 - before.0, after.1 - before.1)
+    crate::testing::mssa_misses_over(&format!("{DOS}{ONE_LOAD_TWICE}"), passes)
 }
 
 /// EarlyCSE removes the second load through `MemorySSAUpdater` and says it kept
@@ -289,9 +255,9 @@ fn mssa_misses_over(passes: Vec<Box<dyn llrm_mir::passes::FunctionPass>>) -> (u6
 #[test]
 fn test_the_memory_graph_early_cse_updated_is_the_one_the_next_pass_gets() {
     let (hits, misses) = mssa_misses_over(vec![
-        Box::new(AsksMssa { forgets: false }),
+        Box::new(crate::testing::AsksMssa { forgets: false }),
         Box::new(EarlyCse::default()),
-        Box::new(AsksMssa { forgets: false }),
+        Box::new(crate::testing::AsksMssa { forgets: false }),
     ]);
     assert_eq!(misses, 1, "MemorySSA was computed again after EarlyCSE updated it");
     assert!(hits >= 2, "EarlyCSE and the pass after it read the one graph: {hits} hits");
@@ -300,8 +266,10 @@ fn test_the_memory_graph_early_cse_updated_is_the_one_the_next_pass_gets() {
 /// A pass that edits and keeps nothing still drops it: the graph after is new.
 #[test]
 fn test_the_memory_graph_is_computed_again_after_a_pass_that_keeps_nothing() {
-    let (_, misses) =
-        mssa_misses_over(vec![Box::new(AsksMssa { forgets: true }), Box::new(AsksMssa { forgets: false })]);
+    let (_, misses) = mssa_misses_over(vec![
+        Box::new(crate::testing::AsksMssa { forgets: true }),
+        Box::new(crate::testing::AsksMssa { forgets: false }),
+    ]);
     assert_eq!(misses, 2, "a pass that named nothing kept MemorySSA");
 }
 
@@ -383,6 +351,25 @@ b:
     assert_eq!(get(Event::ContextClones), before, "earlycse cloned the context");
 }
 
+/// Every run forked the whole body for the view of the function as it was,
+/// though 15 of 22 runs on the corpus change nothing (EC-1): 9.8 M Ir and a
+/// drop of 3.1 M over 453 runs of memory_expansion.
+#[test]
+fn test_a_run_that_changes_nothing_forks_no_body() {
+    use llrm_mir::counts::{Event, get};
+    let before = get(Event::FunctionForks);
+    let after = run("define i32 @f(i32 %x, i32 %y) {
+b0:
+  %p = add i32 %x, 1
+  %q = add i32 %y, 2
+  %r = add i32 %p, %q
+  ret i32 %r
+}
+");
+    assert!(after.contains("%r = add i32 %p, %q"), "premise: nothing is removed: {after}");
+    assert_eq!(get(Event::FunctionForks), before, "earlycse forked the body");
+}
+
 /// Two loads with equal `!range` nodes were one load that lost its range, so
 /// `ipsccp` found no argument range for quicksort's `sort` (+30% clocks).
 #[test]
@@ -399,4 +386,128 @@ b0:
 ");
     assert_eq!(after.matches("load").count(), 1, "{after}");
     assert!(after.contains("!range"), "{after}");
+}
+
+/// EarlyCSE.cpp#L1459: an `invariant.start` of the location makes it
+/// invariant from the generation it stands in, so a load of it after a call
+/// that may write memory is the load before it. MIR had no `invariant.start`,
+/// so both loads stayed.
+#[test]
+fn test_a_load_past_a_call_is_the_one_before_under_an_invariant_start() {
+    let with = |start_before_first_load: bool, start_after_call: bool| {
+        let start = "%s = call ptr @llvm.invariant.start.p0(i64 4, ptr %q)";
+        run(&format!(
+            "declare ptr @llvm.invariant.start.p0(i64 immarg, ptr nocapture)
+declare void @ext(ptr)
+
+define i32 @f(ptr %q, ptr %p) {{
+b0:
+  {}
+  %a = load i32, ptr %q
+  call void @ext(ptr %p)
+  {}
+  %b = load i32, ptr %q
+  %c = add i32 %a, %b
+  ret i32 %c
+}}
+",
+            if start_before_first_load { start } else { "" },
+            if start_after_call { start } else { "" },
+        ))
+    };
+    let none = with(false, false);
+    assert_eq!(none.matches("load i32").count(), 2, "premise: the call separates the loads: {none}");
+    let scoped = with(true, false);
+    assert_eq!(scoped.matches("load i32").count(), 1, "{scoped}");
+    // The scope began after the call: the first load was of a location that
+    // was still being written.
+    let late = with(false, true);
+    assert_eq!(late.matches("load i32").count(), 2, "{late}");
+}
+
+const UMIN: &str =
+    "declare i16 @llvm.umin.i16(i16, i16) nocallback nofree nosync nounwind speculatable willreturn memory(none)\n";
+
+/// The C zip dot loop (`i < na && i < nb`) kept `umin(%na, %nb)` from LICM and
+/// `umin(%nb, %na)` from the trip count: a second call the pin's EarlyCSE
+/// numbers with the first (`llvm.` calls that touch no memory are values,
+/// commutative ones with their arguments in either order). +4 B in the
+/// preheader at m16.
+#[test]
+fn test_umin_with_swapped_arguments_is_the_one_before() {
+    let after = run(&format!(
+        "{UMIN}define i16 @f(i16 %a, i16 %b) {{
+b0:
+  %x = call i16 @llvm.umin.i16(i16 %a, i16 %b)
+  %y = call i16 @llvm.umin.i16(i16 %b, i16 %a)
+  %z = add i16 %x, %y
+  ret i16 %z
+}}
+"
+    ));
+    assert_eq!(after.matches("call i16 @llvm.umin").count(), 1, "{after}");
+}
+
+/// The same call twice is one, and `umin` is not `umax` and not a
+/// non-commutative intrinsic with its arguments swapped.
+#[test]
+fn test_distinct_intrinsics_and_noncommutative_swaps_stay() {
+    let after = run(
+        "declare i16 @llvm.umin.i16(i16, i16) nocallback nofree nosync nounwind speculatable willreturn memory(none)
+declare i16 @llvm.umax.i16(i16, i16) nocallback nofree nosync nounwind speculatable willreturn memory(none)
+declare i16 @llvm.usub.sat.i16(i16, i16) nocallback nofree nosync nounwind speculatable willreturn memory(none)
+
+define i16 @f(i16 %a, i16 %b) {
+b0:
+  %x = call i16 @llvm.umin.i16(i16 %a, i16 %b)
+  %y = call i16 @llvm.umax.i16(i16 %b, i16 %a)
+  %s = call i16 @llvm.usub.sat.i16(i16 %a, i16 %b)
+  %t = call i16 @llvm.usub.sat.i16(i16 %b, i16 %a)
+  %u = add i16 %x, %y
+  %v = add i16 %s, %t
+  %z = add i16 %u, %v
+  ret i16 %z
+}
+",
+    );
+    assert_eq!(after.matches("call i16 @llvm.umin").count(), 1, "{after}");
+    assert_eq!(after.matches("call i16 @llvm.umax").count(), 1, "{after}");
+    assert_eq!(after.matches("call i16 @llvm.usub.sat").count(), 2, "{after}");
+}
+
+/// `combineIRFlags` keeps the flags of the value reused when poison from it is
+/// already UB. The first `getelementptr inbounds` feeds a load, so it stays
+/// `inbounds` when a flagless twin is merged into it. Intersecting always
+/// left `a[i+1] = a[i]` with bare GEPs, so `nuw` was never inferred and wasm32
+/// idioms.c grew about 36 B.
+#[test]
+fn test_a_reused_address_keeps_its_flags_when_poison_from_it_is_ub() {
+    let after = run("@a = internal global [160 x i16] zeroinitializer
+
+define void @f(i32 %i) {
+b0:
+  %p = getelementptr inbounds [2 x i8], ptr @a, i32 %i
+  %v = load i16, ptr %p
+  %q = getelementptr [2 x i8], ptr @a, i32 %i
+  store i16 %v, ptr %q
+  ret void
+}
+");
+    assert_eq!(after.matches("getelementptr").count(), 1, "premise: the twins merge:\n{after}");
+    assert!(after.contains("getelementptr inbounds"), "{after}");
+}
+
+/// Poison that is not UB when it is the only use: the flags are intersected.
+#[test]
+fn test_a_reused_value_loses_flags_the_other_lacks_when_poison_is_not_ub() {
+    let after = run("define i32 @f(i32 %x, i32 %y) {
+b0:
+  %a = add nsw i32 %x, %y
+  %b = add i32 %x, %y
+  %c = mul i32 %a, %b
+  ret i32 %c
+}
+");
+    assert_eq!(after.matches("add").count(), 1, "premise: the adds merge:\n{after}");
+    assert!(!after.contains("add nsw"), "{after}");
 }

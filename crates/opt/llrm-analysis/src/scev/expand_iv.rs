@@ -18,7 +18,7 @@
 
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, InstId, Operand, ValueDef};
-use llrm_mir::opcode::{BinaryOp, CastOp, Flags as IrFlags, Opcode};
+use llrm_mir::opcode::{BinaryOp, CastOp, Flags as IrFlags, IntPredicate, Opcode};
 use llrm_mir::types::{Type as MirType, TypeId};
 
 use super::expand::Run;
@@ -957,7 +957,7 @@ impl Run<'_> {
 
     /// `FixupPoisonFlags` of `hoistIVInc`: drop the flags inferred from the old
     /// context and infer them again in the new one.
-    fn fixup_poison_flags(
+    pub(super) fn fixup_poison_flags(
         &mut self,
         inst: InstId,
     ) {
@@ -1009,6 +1009,38 @@ impl Run<'_> {
             }
         }
         self.function.set_flags(inst, f);
+    }
+
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/ScalarEvolutionExpander.cpp#L1790
+    /// `dropPoisonGeneratingAnnotationsAndReinfer`: the flags dropped, then
+    /// the no-wrap flags SCEV proves and a `zext`'s `nneg` where a dominating
+    /// condition makes its source non-negative.
+    pub(super) fn drop_poison_generating_annotations_and_reinfer(
+        &mut self,
+        inst: InstId,
+    ) {
+        self.fixup_poison_flags(inst);
+        let one = self.function.instruction(inst);
+        if one.opcode != Opcode::Cast(CastOp::ZExt) && one.opcode != Opcode::Cast(CastOp::UIToFP) {
+            return;
+        }
+        let src = one.operands[0];
+        let zero = self.constant(self.ty_of_operand(src), 0);
+        let implied = {
+            let cx = cx!(self);
+            llrm_mir::valuetracking::context::is_implied_by_dom_condition(
+                &cx.query(None),
+                IntPredicate::Sge,
+                src,
+                zero,
+                inst,
+            )
+        };
+        if implied == Some(true) {
+            let mut flags = self.function.instruction(inst).flags;
+            flags.insert(IrFlags::NNEG);
+            self.function.set_flags(inst, flags);
+        }
     }
 
     /// `LoopInfo::movementPreservesLCSSAForm`.
@@ -1308,7 +1340,13 @@ impl Run<'_> {
             });
             phis = keys.into_iter().map(|(phi, _)| phi).collect();
         }
-        let Some(&narrowest) = phis.last() else { return 0 };
+        // DEVIATE CIV1 (`Tti::congruent_ivs_truncate_to_narrowest_integer`):
+        // the pin takes the last phi, a pointer phi when the loop steps
+        // one.
+        let narrowest_integer = tti.is_some_and(|tti| tti.congruent_ivs_truncate_to_narrowest_integer());
+        let last =
+            if narrowest_integer { phis.iter().rev().find(|&&phi| width_of(self, phi).is_some()) } else { phis.last() };
+        let Some(&narrowest) = last else { return 0 };
         let narrowest_ty = self.function.value(self.result_phi(narrowest)).ty;
 
         let mut num_elim = 0;

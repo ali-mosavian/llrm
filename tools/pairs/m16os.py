@@ -3,8 +3,8 @@
 
     tools/pairs/m16os.py BASE_DIST NEW_DIST [--level -Os] [--top 30] [--clocks] [--out FILE]
 
-BASE_DIST and NEW_DIST are dist directories (llrm-c, llrm-qb, llrm-nib, nibfront). The header names both builds: the sha in the directory name or
-`llrm-c --version`, and the md5 of each binary. Bytes are `tools/sizes.py`'s measure (OMF code and data emitted, linked-in runtime not counted), per
+BASE_DIST and NEW_DIST are dist directories (llrm-cc with llrm-llc, llrm-qb, llrm-nib, nibfront). The header names both builds: the sha in the directory name or
+`llrm-cc --version`, and the md5 of each binary. Bytes are `tools/sizes.py`'s measure (OMF code and data emitted, linked-in runtime not counted), per
 program, the demos left out. A program one side cannot compile is listed, not compared. For the `--top` growers each function's instruction count in the
 `-S` listing is compared (a proxy: bytes per function are not in the object), the functions that grew most first, and those only one side has.
 `--clocks` runs tools/bench/bench.py (unicorn instruction streams priced by the 486 table) with each build and joins its rows by name.
@@ -45,12 +45,13 @@ def md5(path: Path) -> str:
 
 
 def identify(dist: Path) -> str:
-    """`DIST: sha (from llrm-c --version, else the directory's name), md5 of llrm-c llrm-qb llrm-nib`."""
-    done = subprocess.run([str(dist / "llrm-c"), "--version"], capture_output=True, text=True)
-    words = done.stdout.split()
+    """`DIST: sha (from llrm-cc --version, else the directory's name), md5 of llrm-cc llrm-llc llrm-qb llrm-nib`."""
+    compiler = dist / "llrm-cc"
+    done = subprocess.run([str(compiler), "--version"], capture_output=True, text=True) if compiler.is_file() else None
+    words = done.stdout.split() if done is not None else []
     named = re.search(r"sbp-([0-9a-f]{40})", str(dist.resolve()))
-    sha = words[1] if done.returncode == 0 and len(words) == 2 else (named[1] + " (from the directory name, no build stamp)" if named else "unknown")
-    return f"{dist}: {sha}; md5 " + " ".join(f"{name} {md5(dist / name)}" for name in ("llrm-c", "llrm-qb", "llrm-nib"))
+    sha = words[1] if done is not None and done.returncode == 0 and len(words) == 2 else (named[1] + " (from the directory name, no build stamp)" if named else "unknown")
+    return f"{dist}: {sha}; md5 " + " ".join(f"{name} {md5(dist / name)}" for name in ("llrm-cc", "llrm-llc", "llrm-qb", "llrm-nib"))
 
 
 PROC = re.compile(r"^(\S+)\s+proc\b")
@@ -76,10 +77,11 @@ def functions(listing: str) -> dict[str, int]:
     return found
 
 
-def listing(command: list[str], level: str) -> dict[str, int] | None:
+def listing(command: list[str], level: str, env: dict[str, str] | None = None) -> dict[str, int] | None:
+    """The functions of `command`'s -S listing; `env` is what the compiler needs (llrm-cc: its clang and Open Watcom's headers)."""
     with tempfile.TemporaryDirectory() as directory:
         out = f"{directory}/x.s"
-        done = subprocess.run([*command, level, "-S", "-o", out], capture_output=True, text=True, timeout=600)
+        done = subprocess.run([*command, level, "-S", "-o", out], capture_output=True, text=True, timeout=600, env=env)
         return functions(Path(out).read_text()) if done.returncode == 0 and Path(out).exists() else None
 
 
@@ -117,7 +119,7 @@ def main() -> None:
     commands_base, commands_new = dict(sizes.programs(args.base, demos=False)), dict(sizes.programs(args.new, demos=False))
     with ThreadPoolExecutor(8) as pool:
         top = grew[: args.top]
-        pairs = list(pool.map(lambda n: (listing(commands_base[n], args.level), listing(commands_new[n], args.level)), top))
+        pairs = list(pool.map(lambda n: (listing(commands_base[n], args.level, sizes.environment(commands_base[n])), listing(commands_new[n], args.level, sizes.environment(commands_new[n]))), top))
     for name, (was, now) in zip(top, pairs):
         lines.append(f"  {name} ({base[name]} -> {new[name]} B)")
         if was is None or now is None:

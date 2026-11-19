@@ -19,6 +19,10 @@
 //! 1` becomes `(x + 1) - (x / c) * c` once LSR picks the counter `x + 1`); the
 //! fold then adds `k` to the remainder.
 //!
+//! The same tree with the counter added after the subtraction, `a + (C - (x / c)
+//! * c)` (LSR's `i % 97 + 2` over the counter `i + 40`: `C` = 3, then `-41`), is
+//! `x % c + (k + C)` for `a` = `x + k`; the pin's fold does not see it either.
+//!
 //! DEVIATE REM1: the pin has this fold in the DAG (`foldRemainderIdiom`,
 //! [DAGCombiner.cpp#L4215](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L4215)),
 //! on a `UDIVREM` node, and not through a `trunc`. Ours is an IR fold so both
@@ -72,6 +76,11 @@ struct Idiom {
     narrow: u32,
     /// The subtrahend's left operand.
     left: Operand,
+    /// `left + (x / c) * c` with `left` = `k - x`: the result is `k - x % c`.
+    negated: bool,
+    /// `C - (x / c) * c` read by an `add` of a counter (`sub` is that `add`): the inner subtraction and its
+    /// constant `C`, which joins the remainder's offset.
+    inner: Option<(InstId, u128)>,
 }
 
 fn instruction_of(
@@ -119,10 +128,39 @@ fn matched(
     sub: InstId,
 ) -> Option<Idiom> {
     let one = function.instruction(sub);
-    if one.opcode != Opcode::Binary(BinaryOp::Sub) {
+    let negated = one.opcode == Opcode::Binary(BinaryOp::Add);
+    if one.opcode != Opcode::Binary(BinaryOp::Sub) && !negated {
         return None;
     }
-    let &[left, product] = &one.operands[..] else { return None };
+    let &[mut left, mut product] = &one.operands[..] else { return None };
+    // `a + (C - q * c)`: LSR adds the counter after the subtraction, whose left operand is the constant.
+    let mut inner = None;
+    let mut one = one;
+    let mut sub = sub;
+    if !negated
+        && let Some(constant_left) = constant(context, left)
+        && let Some(result) = one.result
+        && let [only] = function.users(result).iter().map(|user| user.user).collect::<Vec<_>>()[..]
+        && function.instruction(only).opcode == Opcode::Binary(BinaryOp::Add)
+        && function.instruction(only).ty == one.ty
+    {
+        let sums = &function.instruction(only).operands;
+        let other = if sums.first() == Some(&Operand::Value(result)) { sums.get(1) } else { sums.first() };
+        let &counter = other?;
+        inner = Some((sub, constant_left));
+        (sub, one, left) = (only, function.instruction(only), counter);
+        product = match &function.instruction(inner?.0).operands[..] {
+            &[_, product] => product,
+            _ => return None,
+        };
+    }
+    let is_product = |operand: Operand| {
+        instruction_of(function, operand)
+            .is_some_and(|def| function.instruction(def).opcode == Opcode::Binary(BinaryOp::Mul))
+    };
+    if negated && !is_product(product) {
+        (left, product) = (product, left);
+    }
     let narrow = context.types.int_bits(one.ty)?;
     let mul = instruction_of(function, product)?;
     if function.instruction(mul).opcode != Opcode::Binary(BinaryOp::Mul) || !single_user(function, mul) {
@@ -164,7 +202,7 @@ fn matched(
     if amount < 2 || amount >= limit || mask(amount, narrow) != mask(factor, narrow) {
         return None;
     }
-    Some(Idiom { sub, mul, trunc, div, dividend, divisor, signed, wide, narrow, left })
+    Some(Idiom { sub, mul, trunc, div, dividend, divisor, signed, wide, narrow, left, negated, inner })
 }
 
 /// The constant `k` with `left` = `trunc x + k`: zero where `left` is the
@@ -178,10 +216,11 @@ fn offset_of(
     layout: &llrm_mir::datalayout::DataLayout,
     outer: &llrm_mir::passes::Outer,
 ) -> Option<u128> {
-    if idiom.left == idiom.dividend {
+    if !idiom.negated && idiom.left == idiom.dividend {
         return (idiom.narrow == idiom.wide).then_some(0);
     }
-    if let Some(def) = instruction_of(function, idiom.left)
+    if !idiom.negated
+        && let Some(def) = instruction_of(function, idiom.left)
         && idiom.narrow != idiom.wide
         && function.instruction(def).opcode == Opcode::Cast(CastOp::Trunc)
         && function.instruction(def).operands[0] == idiom.dividend
@@ -189,12 +228,14 @@ fn offset_of(
         return Some(0);
     }
     let session = session.get_or_insert_with(|| ScevSession::of(context, function, outer));
-    let (left, dividend, narrow, wide) = (idiom.left, idiom.dividend, idiom.narrow, idiom.wide);
+    let (left, dividend, narrow, wide, negated) =
+        (idiom.left, idiom.dividend, idiom.narrow, idiom.wide, idiom.negated);
     session.ask(context, layout, function, outer, |se, cx| {
         let wanted = se.get_scev(cx, dividend);
         let wanted =
             if narrow == wide { wanted } else { se.get_truncate_expr(cx, Use::of(wanted), Ty::Int(narrow), 0) };
         let left = se.get_scev(cx, left);
+        let wanted = if negated { se.get_negative_scev(cx, wanted, 0) } else { wanted };
         let diff = se.get_minus_scev(cx, Use::of(left), Use::of(wanted), 0, 0);
         se.as_constant(diff).map(|k| mask(k.zext_value(), narrow))
     })
@@ -231,6 +272,7 @@ impl FunctionPass for RemainderIdiom {
             let Some(offset) = offset_of(unit.context, unit.function, &idiom, &mut session, unit.layout, &outer) else {
                 continue;
             };
+            let offset = mask(offset + idiom.inner.map_or(0, |(_, c)| c), idiom.narrow);
             replace(unit.context, unit.function, &idiom, offset);
             changed = true;
         }
@@ -269,19 +311,54 @@ fn replace(
         function.insert(narrowed, Position::Before(idiom.sub)).expect("a position before the subtraction");
         result = Operand::Value(function.instruction(narrowed).result.expect("a trunc has a value"));
     }
-    if offset != 0 {
+    if offset != 0 || idiom.negated {
         let ty = function.instruction(idiom.sub).ty;
         let k = Operand::Constant(context.constant(Constant { ty, kind: ConstantKind::Int(offset) }));
-        let shifted =
-            function.create_instruction(Opcode::Binary(BinaryOp::Add), ty, vec![result, k], Flags::default(), None);
+        let (opcode, operands) = if idiom.negated {
+            (BinaryOp::Sub, vec![k, result])
+        } else {
+            (BinaryOp::Add, vec![result, k])
+        };
+        let shifted = function.create_instruction(Opcode::Binary(opcode), ty, operands, Flags::default(), None);
         function.insert(shifted, Position::Before(idiom.sub)).expect("a position before the subtraction");
         result = Operand::Value(function.instruction(shifted).result.expect("an add has a value"));
     }
     let old = function.instruction(idiom.sub).result.expect("a subtraction has a value");
     function.replace_all_uses_with(old, result);
-    for gone in [Some(idiom.sub), Some(idiom.mul), idiom.trunc, Some(idiom.div)].into_iter().flatten() {
+    for gone in [Some(idiom.sub), idiom.inner.map(|(inner, _)| inner), Some(idiom.mul), idiom.trunc, Some(idiom.div)]
+        .into_iter()
+        .flatten()
+    {
         function.erase(gone).expect("the idiom's instructions are read only by each other");
     }
+    delete_dead_counter(function, idiom.left);
+}
+
+/// The counter `left` once only its own step reads it: the phi and the `phi +
+/// c` that feeds it back, erased. The expansion's `-x` counter is one.
+fn delete_dead_counter(
+    function: &mut Function,
+    left: Operand,
+) {
+    let Some(phi) = instruction_of(function, left) else { return };
+    if function.instruction(phi).opcode != Opcode::Phi {
+        return;
+    }
+    let value = function.instruction(phi).result.expect("a phi has a value");
+    let [only] = function.users(value).iter().map(|one| one.user).collect::<Vec<_>>()[..] else { return };
+    let step = function.instruction(only);
+    let feeds_back = step.opcode == Opcode::Binary(BinaryOp::Add)
+        && step.operands.first() == Some(&left)
+        && step.result.is_some_and(|result| {
+            let users: Vec<InstId> = function.users(result).iter().map(|one| one.user).collect();
+            users == [phi]
+        });
+    if !feeds_back {
+        return;
+    }
+    function.set_operands(phi, Vec::new());
+    function.erase(only).expect("read by the phi alone, which has no operands now");
+    function.erase(phi).expect("read by the step alone, which is gone");
 }
 
 #[cfg(test)]

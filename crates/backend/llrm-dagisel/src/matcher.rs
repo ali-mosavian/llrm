@@ -26,6 +26,19 @@ pub type Opcode = u16;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Vt(pub u16);
 
+impl Vt {
+    /// The 64-bit integer vectors only an arm64 table names, which
+    /// `generated/ids.rs` (the x86 tables' types) does not list; the pin's
+    /// numbers (`ValueTypes.td` order).
+    pub const V8I8: Vt = Vt(47);
+    pub const V4I16: Vt = Vt(58);
+    pub const V2I32: Vt = Vt(73);
+    /// The vectors under a D register (`ValueTypes.td` order).
+    pub const V2I8: Vt = Vt(41);
+    pub const V4I8: Vt = Vt(43);
+    pub const V2I16: Vt = Vt(56);
+}
+
 /// Operand flags of `EmitNode`/`MorphNodeTo` (`OPFL_*`).
 pub mod opfl {
     pub const CHAIN: u8 = 1;
@@ -72,6 +85,9 @@ pub enum Matcher {
     RecordChild(u8),
     RecordMemRef,
     CaptureGlueInput,
+    /// `OPC_CaptureDeactivationSymbol`: a trailing `ISD::DEACTIVATION_SYMBOL`
+    /// operand (PAuth).
+    CaptureDeactivationSymbol,
     MoveChild(u8),
     MoveSibling(u8),
     MoveParent,
@@ -96,6 +112,11 @@ pub enum Matcher {
         opcode: Opcode,
     },
     CheckType(Vt),
+    /// `OPC_CheckTypeRes`: the type of result `res` of the node.
+    CheckTypeRes {
+        res: u8,
+        vt: Vt,
+    },
     SwitchType,
     TypeCase {
         size: u32,

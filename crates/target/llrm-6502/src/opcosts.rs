@@ -1,0 +1,142 @@
+//! What each operation class costs on the 6502, in clocks and in code bytes,
+//! read off the sequences the backend emits for it.
+//!
+//! The mid-end prices a body by [`OperationCosts`]. The machine used to answer
+//! with the all-ones default, so an `i32` add cost what an `i8` add did and a
+//! 220-byte fill looked like a few instructions. These tables replace it: one
+//! canonical snippet per class, priced by [`timing::estimate`] (clocks and
+//! bytes of the same text), per native byte for the classes that scale with
+//! the operand's width (`OperationCosts::native_bits` = 8).
+//!
+//! DEVIATE (6502-OPCOSTS): the pin prices by its own target's scheduling model;
+//! the 6502 has none, so the tables are measured here. Exit: a generated
+//! scheduling description of the instruction tables (2026-11-20).
+//!
+//! # Example
+//! ```text
+//! add   clc; lda rc2; adc rc3; sta rc2   -> 7 B, 11 clk per byte of the operand
+//! load  ldy #0; lda (rc0),y; sta rc2     -> 6 B, 12 clk per byte
+//! ```
+
+use llrm_mir::target::OperationCosts;
+
+use crate::dagisel::hooks::Cpu;
+use crate::timing;
+
+/// The class of an operation and the text it is priced by. `per_byte` classes
+/// are multiplied by the operand's byte count in `profit::operation`.
+pub const SNIPPETS: &[(&str, &str)] = &[
+    ("add", "clc\n  lda rc2\n  adc rc3\n  sta rc2\n"),
+    ("load", "ldy #0\n  lda (rc0),y\n  sta rc2\n"),
+    ("store", "lda rc2\n  ldy #0\n  sta (rc0),y\n"),
+    ("move", "lda rc2\n  sta rc3\n"),
+    ("shift", "asl rc2\n"),
+    ("branch", "lda rc2\n  cmp rc3\n  bne l\nl:\n"),
+    ("address", "clc\n  lda rc2\n  adc #1\n  sta rc2\n  lda rc3\n  adc #0\n  sta rc3\n"),
+    ("call", ".import callee\n  jsr callee\n"),
+    // a 16-bit argument (an int or a pointer) is two cells
+    ("argument", "lda #1\n  sta rc2\n  lda #0\n  sta rc3\n"),
+    ("return", "rts\n"),
+];
+
+/// Clocks and bytes of the snippet of `class`.
+pub fn snippet(
+    cpu: Cpu,
+    class: &str,
+) -> (i64, i64) {
+    let (_, text) = SNIPPETS.iter().find(|(name, _)| *name == class).expect("a class of the table");
+    let priced = timing::estimate(cpu, text).expect("a snippet the estimator prices");
+    (priced.cycles as i64, i64::from(priced.bytes))
+}
+
+/// The class prices, `pick` choosing clocks (`.0`) or bytes (`.1`).
+fn table(
+    cpu: Cpu,
+    pick: fn((i64, i64)) -> i64,
+) -> OperationCosts {
+    let at = |class| pick(snippet(cpu, class));
+    OperationCosts {
+        native_bits: 8,
+        add: at("add"),
+        load: at("load"),
+        store: at("store"),
+        r#move: at("move"),
+        shift: at("shift"),
+        branch: at("branch"),
+        address: at("address"),
+        call: at("call"),
+        argument: at("argument"),
+        return_: at("return"),
+        ..OperationCosts::default()
+    }
+}
+
+/// Prices in clocks.
+pub fn clocks(cpu: Cpu) -> OperationCosts {
+    table(cpu, |(clocks, _)| clocks)
+}
+
+/// Prices in code bytes.
+pub fn bytes(cpu: Cpu) -> OperationCosts {
+    let mut costs = table(cpu, |(_, bytes)| bytes);
+    // `memcpy` is called with the two pointers in `rc2`..`rc5` and the length
+    // in `a`, `x`: two pointer arguments, the length, the `jsr`; its own
+    // bytes are linked once.
+    costs.copy = 2 * costs.argument + 4 + costs.call;
+    costs.copy_member = member_bytes("memcpy");
+    costs
+}
+
+/// The code bytes of the routine `name` of `runtime/mos_rt.s`, from its label
+/// to its `rts`.
+fn member_bytes(name: &str) -> i64 {
+    const RUNTIME: &str = include_str!("../runtime/mos_rt.s");
+    let label = format!("\n{name}:\n");
+    let from = RUNTIME.find(&label).expect("the runtime has the routine") + 1;
+    let body = &RUNTIME[from..];
+    let end = body.find("\n  rts\n").expect("the routine returns") + "\n  rts\n".len();
+    let text = body[..end].replace('@', &format!("{name}_"));
+    i64::from(timing::estimate(Cpu::Mos6502, &text).expect("a routine the estimator prices").bytes)
+}
+
+/// The prices of the Os inline trial's byte estimate: [`bytes`] refit to the
+/// bytes the backend writes.
+pub fn trial_bytes(cpu: Cpu) -> OperationCosts {
+    let mut costs = bytes(cpu);
+    calibrate(&mut costs);
+    costs
+}
+
+/// What the snippets do not say, fit to the bytes the backend writes: a
+/// non-negative least squares of each function's operation counts
+/// (width-weighted) against its written size, over the 86 programs of
+/// `tests/data_size` at -Os (`tools/6502/size_fit.py`, 182 functions; the fit
+/// is within 25% for 68% of them, the snippets alone for 39%).
+///
+/// DEVIATE (6502-OPCOSTS): measured here, the pin has no byte model for the
+/// 6502. Exit: a generated scheduling description of the instruction tables
+/// (2026-11-20).
+fn calibrate(costs: &mut OperationCosts) {
+    costs.width_scaled = true;
+    // A load or store from a global or a stack slot is an absolute address;
+    // through a pointer it is `(zp),y`.
+    costs.direct_load = 2;
+    costs.direct_store = 5;
+    costs.load = 5;
+    costs.store = 6;
+    // A compare and its branch are one `cmp`/`sbc` chain and a jump; a constant
+    // offset is the access's own `ldy`.
+    costs.branch_in_compare = true;
+    costs.constant_offsets_fold = true;
+    // A constant shift is a few `asl`/`rol` per byte; a call keeps what it
+    // needs across it.
+    costs.shift = 5;
+    costs.call = 12;
+    costs.argument = 2;
+    costs.multiply = 9;
+    costs.multiply_long = 9;
+    costs.divide = 22;
+    costs.divide_long = 22;
+    // `llvm.lifetime.*` writes nothing.
+    costs.free_intrinsics = true;
+}

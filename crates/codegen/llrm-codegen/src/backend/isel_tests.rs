@@ -78,8 +78,13 @@ fn assembled_by(
 ) -> String {
     let module =
         assemble::assembled(&parsed(text), abi, "T_TEXT", ProfileOrName::Name(cpu), segments).expect("assembles");
-    crate::backend::objbuild::written_as(&module, "t.asm", crate::backend::objbuild::CodeLayout::OneSegment)
-        .expect("encodes");
+    crate::backend::objbuild::written_as(
+        &module,
+        "t.asm",
+        crate::backend::objbuild::CodeLayout::OneSegment,
+        llrm_target::Target::objects(&llrm_x86_m32::M32),
+    )
+    .expect("encodes");
     masm::text(&module).expect("prints")
 }
 
@@ -110,6 +115,8 @@ fn listing_float_store(
         false,
         true,
         false,
+        true,
+        true,
     )
     .expect("the 486 profile");
     let module = assemble::assembled(
@@ -185,12 +192,13 @@ done:
 }
 ";
     let got = listing(text, "sum");
-    // The comparison stays flags beside its branch; the phis' zeros are made in
-    // the entry, which runs a copy of the test and falls into the loop (the
-    // likelier way) rather than copy the return over it. The scheduler may put
-    // the load of n and the two zeros in any order and register names, so the
-    // test pins the shape: three entry instructions (the load and two zeros),
-    // the test, and the loop with the registers its instructions name.
+    // The comparison stays flags beside its branch. m16's tail-duplication
+    // threshold is 1 (#6827), so the test is not copied into the loop: it
+    // closes with `jmp` (the mid-end rotates real loops first). The scheduler
+    // may put the load of n and the two zeros in any order and register
+    // names, so the test pins the shape: three entry instructions (the load
+    // and two zeros), the test, and the loop with the registers its
+    // instructions name.
     assert_eq!(&got[..3], ["push bp", "mov bp, sp", "L0_0:"], "{got:?}");
     let entry = &got[3..6];
     let load = entry.iter().find(|one| one.contains("[bp+6]")).unwrap_or_else(|| panic!("{got:?}"));
@@ -207,13 +215,13 @@ done:
     assert_eq!(
         &got[6..],
         [
+            "L0_1:".to_owned(),
             format!("cmp {i}, {n}"),
             "jge L0_8".to_owned(),
             "L0_5:".to_owned(),
             format!("add {sum}, {i}"),
             format!("inc {i}"),
-            format!("cmp {i}, {n}"),
-            "jl L0_5".to_owned(),
+            "jmp L0_1".to_owned(),
             "L0_8:".to_owned(),
             "pop bp".to_owned(),
             "retf".to_owned(),
@@ -501,7 +509,10 @@ fn test_an_odd_width_promoted_is_selected() {
     assert!(got.is_ok(), "{:?}", got.err());
 }
 
-/// A shift counts from cl: the count as a word printed `shl ax, cx`.
+/// A shift counts from cl: the count as a word printed `shl ax, cx`. The sum
+/// of the quotient and the remainder (a copy out of dx, #9857) is an `add`
+/// then a copy, as the pin's `addl %edx, %esi; shll %cl, %esi; movl %esi, %eax`,
+/// not a `lea` the walk no longer converts it to.
 #[test]
 fn test_division_and_variable_shifts() {
     let text = "define i16 @f(i16 %a, i16 %b) addrspace(1) {
@@ -520,17 +531,18 @@ fn test_division_and_variable_shifts() {
             "mov bp, sp",
             "push si",
             "L0_0:",
-            "mov bx, word ptr [bp+6]",
+            "mov si, word ptr [bp+6]",
             "mov cx, word ptr [bp+8]",
-            "mov ax, bx",
+            "mov ax, si",
             "cwd",
             "idiv cx",
-            "mov si, ax",
-            "mov ax, bx",
+            "mov bx, ax",
+            "mov ax, si",
             "xor dx, dx",
             "div cx",
-            "lea ax, [edx+esi]",
-            "shl ax, cl",
+            "add bx, dx",
+            "shl bx, cl",
+            "mov ax, bx",
             "pop si",
             "pop bp",
             "retf",
@@ -964,6 +976,31 @@ define cc1000 void @MAIN() addrspace(1) {
     );
 }
 
+/// m16 stft_single -O2: two string literals of 15 B came first, so `align 2` padded the next datum
+/// (+1 B of data against bcc, jpeg_single +2). A private constant of no alignment goes last.
+/// Two procedures read it: one reader alone moves it into its code segment (cs_tables).
+#[test]
+fn test_a_string_literal_follows_the_aligned_data_and_the_pool() {
+    let text = "@.str = private unnamed_addr constant [3 x i8] c\"ab\\00\"
+@count = internal global i16 5
+define cc1000 void @MAIN() addrspace(1) {
+  %c = load i16, ptr @count
+  %s = getelementptr i8, ptr @.str, i16 %c
+  %v = load i8, ptr %s
+  store i8 %v, ptr @count
+  ret void
+}
+define cc1000 void @OTHER() addrspace(1) {
+  %v = load i8, ptr @.str
+  store i8 %v, ptr @count
+  ret void
+}
+";
+    let got = assembled(text);
+    let data: Vec<&str> = got.lines().map(str::trim).skip_while(|line| *line != ".data").take_while(|line| !line.starts_with("extern") && !line.starts_with(".code")).collect();
+    assert_eq!(data, [".data", "align 2", "count label byte", "db 005h,000h", "G$0$str label byte", "db 061h,062h,000h"], "{got}");
+}
+
 /// An intrinsic is no symbol: declaring one refused the module as "no
 /// assembler symbol".
 #[test]
@@ -1342,7 +1379,9 @@ b1:
 
 /// A call names its callee as the procedure is defined: runtime.nib's
 /// `buffers.allocate`, no assembler symbol, was defined as `G$0` but called
-/// as `_buffers.allocate`, and the runtime did not link.
+/// as `_buffers.allocate`, and the runtime did not link. The private name keeps
+/// the source name, cleaned (`G$0$buffers$allocate`), so an object says where a
+/// function came from.
 #[test]
 fn test_a_call_names_an_internal_callee_as_it_is_defined() {
     let text = "define internal i16 @buffers.allocate() addrspace(1) {
@@ -1354,8 +1393,26 @@ define i16 @f() addrspace(1) {
 }
 ";
     let text = assembled(text);
-    assert!(text.contains("G$0 proc far"), "{text}");
-    assert!(text.lines().any(|line| line.trim() == "call far ptr G$0"), "{text}");
+    assert!(text.contains("G$0$buffers$allocate proc far"), "{text}");
+    assert!(text.lines().any(|line| line.trim() == "call far ptr G$0$buffers$allocate"), "{text}");
+}
+
+/// A library function's private name starts with the library it came from:
+/// `std.io.File.open` is `G$0$std$io$File$open`. The size tool counts a Nib
+/// object's standard-library instantiations apart from the program's own by it;
+/// they were `G$n` alone, and stft_fixed read 560 library bytes as its code.
+#[test]
+fn test_a_library_function_keeps_its_origin_in_its_private_name() {
+    let text = "define internal i16 @std.io.File.open() addrspace(1) {
+  ret i16 1
+}
+define i16 @f() addrspace(1) {
+  %v = call addrspace(1) i16 @std.io.File.open()
+  ret i16 %v
+}
+";
+    let text = assembled(text);
+    assert!(text.contains("G$0$std$io$File$open proc far"), "{text}");
 }
 
 /// Constant folding leaves `br i1 true` and a float constant as an operand,
@@ -1386,7 +1443,7 @@ b3:
             "L0_0:",
             "fnstcw word ptr [bp-4]",
             "fnstcw word ptr [bp-6]",
-            "or word ptr [bp-6], 3072",
+            "or byte ptr [bp-5], 12",
             "fld dword ptr $K1",
             "fadd dword ptr $K2",
             "fldcw word ptr [bp-6]",
@@ -1642,7 +1699,7 @@ fn test_a_float_to_an_integer_is_stored_toward_zero() {
             "L0_0:",
             "fnstcw word ptr [bp-6]",
             "fnstcw word ptr [bp-8]",
-            "or word ptr [bp-8], 3072",
+            "or byte ptr [bp-7], 12",
             "fld qword ptr [bp+6]",
             "fldcw word ptr [bp-8]",
             "fist word ptr [bp-2]",
@@ -1688,13 +1745,13 @@ b1:
             "cdq",
             "shld edx, eax, 16",
             "shl eax, 16",
-            "mov ecx, edx",
-            "sar ecx, 31",
-            "shr ecx, 22",
-            "xor ebx, ebx",
-            "add ecx, eax",
-            "adc ebx, edx",
-            "shrd ecx, ebx, 10",
+            "mov ebx, edx",
+            "sar ebx, 31",
+            "shr ebx, 22",
+            "xor ecx, ecx",
+            "add ebx, eax",
+            "adc ecx, edx",
+            "shld ecx, ebx, 22",
             "shld edx, ecx, 16",
             "mov ax, cx",
             "pop bp",
@@ -1826,8 +1883,11 @@ define i1 @uge(double %a, double %b) addrspace(1) {
             .filter(|line| !prologue.contains(&line.as_str()) && !line.ends_with(':') && !compares(line))
             .collect::<Vec<_>>()
     };
-    assert_eq!(answered("ult"), ["setb al"]);
-    assert_eq!(answered("uge"), ["setbe al"]);
+    // DEVIATE X87-FCMP-AH: the status word's carry bit is `test ah, 1` only where the clock it saves pays for its two
+    // bytes at the speed rate; m16's 500 milliclocks a byte make it a tie, which keeps `sahf` (#9259).
+    let (ult, uge) = (answered("ult"), answered("uge"));
+    assert_eq!(ult, ["setb al"]);
+    assert_eq!(uge, ["setbe al"]);
 }
 
 /// A port below 256 is an immediate, any other is in dx; the byte is in al.
@@ -2223,7 +2283,7 @@ define void @f(double %x) addrspace(1) {
             "L0_0:",
             "fnstcw word ptr [bp-2]",
             "fnstcw word ptr [bp-4]",
-            "or word ptr [bp-4], 3072",
+            "or byte ptr [bp-3], 12",
             "fld qword ptr [bp+6]",
             "fldcw word ptr [bp-4]",
             "fist word ptr b",
@@ -3361,6 +3421,8 @@ fn test_an_i64_to_a_float_is_filds_qword() {
 /// A float's bits are an integer's through a stack temporary (SROA turns a
 /// double stored and read as an i32 into `bitcast double to i64`; isel refused
 /// "BitCast to an i64" and "BitCast of a float", 48 of 260 QCport compiles).
+/// Where a register is free the copy into the temporary is dword moves
+/// (`floatslotcopy`), the same bits without the x87 round trip.
 #[test]
 fn test_a_float_bitcast_to_an_integer_goes_through_the_stack() {
     let text = |from: &str, to: &str| {
@@ -3369,9 +3431,12 @@ fn test_a_float_bitcast_to_an_integer_goes_through_the_stack() {
         ))
     };
     let single = text("float", "i32");
-    assert!(single.iter().any(|line| line.starts_with("fstp dword ptr [bp-")), "{single:?}");
+    let stored = |lines: &[String], x87: &str| {
+        lines.iter().any(|line| line.starts_with(x87) || line.starts_with("mov dword ptr [bp-"))
+    };
+    assert!(stored(&single, "fstp dword ptr [bp-"), "{single:?}");
     let double = text("double", "i64");
-    assert!(double.iter().any(|line| line.starts_with("fstp qword ptr [bp-")), "{double:?}");
+    assert!(stored(&double, "fstp qword ptr [bp-"), "{double:?}");
     let back = text("i32", "float");
     assert!(back.iter().any(|line| line.starts_with("fld dword ptr [bp-")), "{back:?}");
     let back = text("i64", "double");
@@ -3754,14 +3819,14 @@ b1:
             "sar ecx, 31",
             "imul esi, eax",
             "sub ebx, esi",
-            "xor esi, esi",
-            "sub esi, ebx",
-            "or esi, ebx",
-            "sar esi, 31",
-            "and esi, ecx",
-            "add esi, eax",
-            "shld edx, esi, 16",
-            "mov ax, si",
+            "xor edx, edx",
+            "sub edx, ebx",
+            "or edx, ebx",
+            "sar edx, 31",
+            "and ecx, edx",
+            "add ecx, eax",
+            "shld edx, ecx, 16",
+            "mov ax, cx",
             "pop si",
             "pop bp",
             "retf",
@@ -4169,7 +4234,8 @@ body:
   %vb = load i8, ptr %pb, !tbaa !5
   %xw = sext i16 %vw to i32
   %xb = sext i8 %vb to i32
-  %u = add i32 %vl, %xw
+  %a = add i32 %s, %vl
+  %u = add i32 %a, %xw
   %t = add i32 %u, %xb
   %j = add nuw nsw i32 %i, 1
   %more = icmp ult i32 %j, 16
@@ -4475,8 +4541,12 @@ b2:
         .map(|line| line.trim().to_owned())
         .collect();
     let writes_ax = |one: &str| {
-        one.split_once(' ')
-            .is_some_and(|(_, rest)| rest.starts_with("ax,") || rest.starts_with("eax,") || rest.starts_with("ah,"))
+        // `test` and `cmp` read their first operand (the 486 tests `ah` instead of `sahf`).
+        !one.starts_with("test ")
+            && !one.starts_with("cmp ")
+            && one
+                .split_once(' ')
+                .is_some_and(|(_, rest)| rest.starts_with("ax,") || rest.starts_with("eax,") || rest.starts_with("ah,"))
     };
     let mut status = false;
     for one in &got {
@@ -4633,9 +4703,13 @@ fn test_dbg_lines_become_linnum() {
         assemble::assembled(&module, &qb(), "T_TEXT", ProfileOrName::Name("486"), &crate::backend::target::BASIC)
             .expect("assembles");
     let records = |assembled: &crate::backend::masm::Module| {
-        let object =
-            crate::backend::objbuild::written_as(assembled, "t.asm", crate::backend::objbuild::CodeLayout::OneSegment)
-                .expect("encodes");
+        let object = crate::backend::objbuild::written_as(
+            assembled,
+            "t.asm",
+            crate::backend::objbuild::CodeLayout::OneSegment,
+            llrm_target::Target::objects(&llrm_x86_m32::M32),
+        )
+        .expect("encodes");
         llrm_omf::omf::parse(&object).expect("parses")
     };
     // Lines alone are a BASIC statement table's, not -g.
@@ -4646,15 +4720,17 @@ fn test_dbg_lines_become_linnum() {
         dialect: Default::default(),
         return_register: String::new(),
         frame: None,
-        producer: llrm_object::debug::Producer::Native,
+        producer: llrm_debug::Producer::Native,
         frame_register: "ebp".into(),
         cfa: false,
         ranges: false,
         file: Vec::new(),
         registers: Vec::new(),
+        target: llrm_debug::DebugTarget::of(32),
         types: Vec::new(),
         nodes: Default::default(),
         procedures: Default::default(),
+        declarations: Vec::new(),
         globals: Vec::new(),
         source: None,
         scopes: Default::default(),
@@ -5211,6 +5287,38 @@ fn test_a_fixed_address_pointer_selects_as_a_far_one() {
     assert_eq!(listing(4), listing(1));
 }
 
+/// An invariant scope is not code either (SelectionDAGBuilder.cpp#L7680: the
+/// region information is discarded): a body with `invariant.start` and `.end`
+/// selects as the same body without. They were refused.
+#[test]
+fn test_invariant_markers_are_no_code() {
+    let text = |markers: bool| {
+        let (start, end) = if markers {
+            (
+                "%s = call ptr @llvm.invariant.start.p0(i64 16, ptr %x)",
+                "call void @llvm.invariant.end.p0(ptr %s, i64 16, ptr %x)",
+            )
+        } else {
+            ("", "")
+        };
+        format!(
+            "declare ptr @llvm.invariant.start.p0(i64 immarg, ptr nocapture)
+declare void @llvm.invariant.end.p0(ptr, i64 immarg, ptr nocapture)
+define i16 @f(i16 %a, i16 %c) addrspace(1) {{
+  %x = alloca [8 x i16]
+  %p = getelementptr inbounds [8 x i16], ptr %x, i16 0, i16 %c
+  store volatile i16 %a, ptr %p
+  {start}
+  %v = load volatile i16, ptr %p
+  {end}
+  ret i16 %v
+}}
+"
+        )
+    };
+    assert_eq!(listing(&text(true), "f"), listing(&text(false), "f"));
+}
+
 /// A scope's lifetime markers are not code: a body with them selects as the
 /// same body without. They were refused: `@llvm.lifetime.start.p0`.
 #[test]
@@ -5500,9 +5608,13 @@ fn decoded_object(text: &str) -> (Vec<iced_x86::Instruction>, Vec<usize>, Vec<us
     let module =
         assemble::assembled(&parsed(text), &qb(), "T_TEXT", ProfileOrName::Name("486"), &crate::backend::target::BASIC)
             .expect("assembles");
-    let bytes =
-        crate::backend::objbuild::written_as(&module, "t.asm", crate::backend::objbuild::CodeLayout::OneSegment)
-            .expect("encodes");
+    let bytes = crate::backend::objbuild::written_as(
+        &module,
+        "t.asm",
+        crate::backend::objbuild::CodeLayout::OneSegment,
+        llrm_target::Target::objects(&llrm_x86_m32::M32),
+    )
+    .expect("encodes");
     let records = omf::parse(&bytes).expect("parses");
     let (code, _, size) = omf::code_segment(&records).expect("a code segment");
     let image = omf::segment_image(&records, code, size);
@@ -5847,7 +5959,15 @@ fn a_parameter_is_a_cell_a_register_or_gone() {
     let parameters = named.iter().enumerate().map(|(at, name)| (at as i64, (*name).to_owned(), int)).collect();
     di::add_function(
         &mut module,
-        &di::Function { function: "f".into(), module: false, name: "f".into(), r#type: int, parameters },
+        &di::Function {
+            function: "f".into(),
+            module: false,
+            name: "f".into(),
+            r#type: int,
+            parameters,
+            all_calls: false,
+            scope_line: None,
+        },
     );
     // a in a cell, b in AX, c in DX:AX; d is past the three the function has.
     let convention = Convention {
@@ -6038,8 +6158,10 @@ fn test_a_poison_float_or_address_is_zero() {
     let float = "define float @f(float %a) {\n  %v = fadd float poison, %a\n  ret float %v\n}\n";
     let address = "define i16 @g() addrspace(1) {\n  %v = load i16, ptr poison\n  ret i16 %v\n}\n";
     // As LLVM's X86FloatingPoint.cpp L1580: an IMPLICIT_DEF x87 register is
-    // loaded with `fldz`.
-    assert!(listing(float, "f").iter().any(|one| one == "fldz"), "{:?}", listing(float, "f"));
+    // loaded with `fldz`; FF2 reads the +0.0 from the pool as `fadd [K]`
+    // where that needs no exchange.
+    let zero = |one: &String| one == "fldz" || one.starts_with("fadd") && one.contains("$K");
+    assert!(listing(float, "f").iter().any(zero), "{:?}", listing(float, "f"));
     assert!(!listing(address, "g").is_empty());
 }
 
@@ -7101,4 +7223,62 @@ out:
     let listing = listing_on("486", text, "g");
     assert!(listing.iter().any(|line| line.starts_with("fcom dword ptr")), "{listing:?}");
     assert!(!listing.iter().any(|line| line.starts_with("fxch")), "{listing:?}");
+}
+
+mod expression_notes {
+    use llrm_debug::ExprOp;
+    use llrm_mir::DwOp;
+    use llrm_mir::module::DwBinary;
+
+    use crate::backend::isel::expression_note;
+    use crate::model::lir::{NoteArg, NoteExpr, NoteValue};
+
+    fn expr(
+        args: Vec<NoteArg>,
+        ops: Vec<ExprOp>,
+        value: bool,
+    ) -> NoteValue {
+        NoteValue::Expr(std::sync::Arc::new(NoteExpr { args, ops, value }))
+    }
+
+    /// A leading `DW_OP_deref` on a lone value (no `DW_OP_stack_value`) says
+    /// the variable lives in the memory the value addresses: a note of a value
+    /// that was not, and the dereference lost, made the pointer the variable.
+    #[test]
+    fn a_leading_deref_makes_the_value_an_address() {
+        let (note, piece) = expression_note(vec![NoteValue::Value(3)], vec![DwOp::Deref], false);
+        assert_eq!(piece, None);
+        assert_eq!(note, expr(vec![NoteArg::Value(3)], vec![ExprOp::Arg(0)], false));
+    }
+
+    /// A deref after other operations, then `DW_OP_stack_value`, is a value.
+    #[test]
+    fn a_deref_inside_a_value_expression_stays() {
+        let ops = vec![DwOp::PlusUconst(4), DwOp::Deref, DwOp::StackValue];
+        let (note, _) = expression_note(vec![NoteValue::Value(3)], ops, false);
+        assert_eq!(
+            note,
+            expr(vec![NoteArg::Value(3)], vec![ExprOp::Arg(0), ExprOp::PlusUconst(4), ExprOp::Deref], true)
+        );
+    }
+
+    /// A trailing fragment is the part of the variable, not an operation.
+    #[test]
+    fn a_trailing_fragment_is_the_piece() {
+        let ops =
+            vec![DwOp::Arg(0), DwOp::Constu(2), DwOp::Binary(DwBinary::Shl), DwOp::Fragment { offset: 32, size: 16 }];
+        let (note, piece) = expression_note(vec![NoteValue::Value(7)], ops, true);
+        assert_eq!(piece, Some((4, 2)));
+        assert_eq!(note, expr(vec![NoteArg::Value(7)], vec![ExprOp::Arg(0), ExprOp::Constu(2), ExprOp::Shl], true));
+    }
+
+    /// An argument no operation names, an operation not read, or an argument
+    /// with no value says nothing rather than a wrong value.
+    #[test]
+    fn what_cannot_be_said_is_nothing() {
+        let said = |args: Vec<NoteValue>, ops: Vec<DwOp>| expression_note(args, ops, true).0;
+        assert_eq!(said(vec![NoteValue::Value(1)], vec![DwOp::Arg(1)]), NoteValue::Nothing);
+        assert_eq!(said(vec![NoteValue::Value(1)], vec![DwOp::Arg(0), DwOp::Other]), NoteValue::Nothing);
+        assert_eq!(said(vec![NoteValue::Nothing], vec![DwOp::Arg(0)]), NoteValue::Nothing);
+    }
 }

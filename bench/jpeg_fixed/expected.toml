@@ -1,38 +1,174 @@
-reason = "re-bless on the merge of main: the narrow zero, the dword pop and sink; stft_fixed bq32 -Os +2 instructions of 99M (the zero change)"
-blessed = "2026-10-15"
+reason = "BASIC references re-measured under the stored-bytes rule of sizes.py: BC_VARS is stored data, not bss"
+blessed = "2026-11-14"
+corpus = "cf1f61aed72377daaeb82b208cdacda6"
 
-[bcc.O2]
-code_bytes = 3287
+[ow.O1]
+instructions = 126910037
+memory_operands = 23120180
+clocks = 347187314
+layout_clocks = 347123456
+pad_nops = 63858
+code_bytes = 3193
 data_bytes = 474
 bss_bytes = 15849
-kernel_ms = 641.9222
+helper_bytes = 235
 
-[bcc.Os]
+[ow.O2]
+instructions = 133377920
+memory_operands = 23720676
+clocks = 340997216
+layout_clocks = 340810478
+pad_nops = 186738
+code_bytes = 3382
+data_bytes = 474
+bss_bytes = 15849
+helper_bytes = 235
+
+[ow.Os]
+instructions = 126910037
+memory_operands = 23120180
+clocks = 347187314
+layout_clocks = 347123456
+pad_nops = 63858
+code_bytes = 3193
+data_bytes = 474
+bss_bytes = 15849
+helper_bytes = 235
+
+[bcc.O1]
+instructions = 58633477
+memory_operands = 13514932
+clocks = 236364439
+layout_clocks = 236364025
+pad_nops = 414
 code_bytes = 3150
 data_bytes = 474
 bss_bytes = 15849
-kernel_ms = 801.9115
+helper_bytes = 0
+kernel_ms = 802.0345
+
+[bcc.O2]
+instructions = 46629993
+memory_operands = 13922733
+clocks = 216897052
+layout_clocks = 216896833
+pad_nops = 219
+code_bytes = 3287
+data_bytes = 474
+bss_bytes = 15849
+helper_bytes = 0
+kernel_ms = 641.8
+
+[bcc.Os]
+instructions = 58633477
+memory_operands = 13514932
+clocks = 236364439
+layout_clocks = 236364025
+pad_nops = 414
+code_bytes = 3150
+data_bytes = 474
+bss_bytes = 15849
+helper_bytes = 0
+kernel_ms = 801.9122
+
+[tc.O1]
+instructions = 431735749
+memory_operands = 27712609
+clocks = 807041458
+layout_clocks = 805011347
+pad_nops = 2030111
+code_bytes = 3607
+data_bytes = 474
+bss_bytes = 15849
+helper_bytes = 250
+kernel_ms = 5778.6447
+
+[tc.O2]
+instructions = 431861107
+memory_operands = 26607227
+clocks = 804794479
+layout_clocks = 802557638
+pad_nops = 2236841
+code_bytes = 3673
+data_bytes = 474
+bss_bytes = 15849
+helper_bytes = 250
+kernel_ms = 5780.3169
+
+[tc.Os]
+instructions = 431735749
+memory_operands = 27712609
+clocks = 807041458
+layout_clocks = 805011347
+pad_nops = 2030111
+code_bytes = 3607
+data_bytes = 474
+bss_bytes = 15849
+helper_bytes = 250
+kernel_ms = 5778.6447
+
+[tcpp.O1]
+instructions = 429109960
+memory_operands = 27692811
+clocks = 805807633
+layout_clocks = 803741870
+pad_nops = 2065763
+code_bytes = 3617
+data_bytes = 474
+bss_bytes = 15849
+helper_bytes = 263
+kernel_ms = 5743.6199
 
 [tcpp.O2]
-code_bytes = 3528
+instructions = 428808226
+memory_operands = 26718861
+clocks = 802475245
+layout_clocks = 800949993
+pad_nops = 1525252
+code_bytes = 3791
 data_bytes = 474
 bss_bytes = 15849
-kernel_ms = 5739.5933
+helper_bytes = 263
+kernel_ms = 5739.594
 
 [tcpp.Os]
-code_bytes = 3354
+instructions = 429109960
+memory_operands = 27692811
+clocks = 805807633
+layout_clocks = 803741870
+pad_nops = 2065763
+code_bytes = 3617
 data_bytes = 474
 bss_bytes = 15849
-kernel_ms = 5743.6192
+helper_bytes = 263
+kernel_ms = 5743.6199
+
+[bc.O2]
+instructions = 327086743
+memory_operands = 112467885
+clocks = 1050709579
+layout_clocks = 1050709579
+pad_nops = 0
+code_bytes = 6754
+data_bytes = 4483
+bss_bytes = 0
 
 [pds71.O2]
-code_bytes = 6545
-data_bytes = 765
-bss_bytes = 3718
-kernel_ms = 4495.1913
+instructions = 333355379
+memory_operands = 113957626
+clocks = 1062193131
+layout_clocks = 1062193131
+pad_nops = 0
+code_bytes = 6546
+data_bytes = 4483
+bss_bytes = 0
 
 [vbdos.O2]
+instructions = 397791048
+memory_operands = 131240822
+clocks = 1188095660
+layout_clocks = 1188095660
+pad_nops = 0
 code_bytes = 6483
-data_bytes = 813
-bss_bytes = 3718
-kernel_ms = 5360.958
+data_bytes = 4531
+bss_bytes = 0

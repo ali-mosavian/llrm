@@ -133,13 +133,33 @@ fn an_fcmp_of_constants_is_left_alone() {
     assert_eq!(run(text), llrm_mir::print::module(&parsed(text)));
 }
 
-/// MIR has no operand bundles or lane operations: the `deopt` loop of
-/// `processCallSite` and the vector arms have nothing to read. A test fails
-/// the day MIR gains one. (`undef` arrived: its CVP/LVI states are owed,
-/// #2260.)
+/// MIR has no operand bundles: the `deopt` loop of `processCallSite` has
+/// nothing to read. A test fails the day MIR gains one. (`undef` arrived: its
+/// CVP/LVI states are owed, #2260.)
 #[test]
 fn mir_lacks_what_cvp_leaves_out() {
     let rejects = |text: &str| llrm_mir::parse::module(text).is_err();
     assert!(rejects("declare void @g()\ndefine void @f() {\n  call void @g() [ \"deopt\"(i32 1) ]\n  ret void\n}\n"));
-    assert!(rejects("define i32 @f(<2 x i32> %a) {\n  %x = extractelement <2 x i32> %a, i32 0\n  ret i32 %x\n}\n"));
+}
+
+/// MIR parses `extractelement` since #7658 (the vector arms of CVP had no
+/// lanes to read before); `cvp.rs` has no vector arm, so a lane extract of an
+/// argument stays as written.
+#[test]
+fn a_lane_extract_is_left_alone() {
+    let text = "define i32 @f(<2 x i32> %a) {\n  %x = extractelement <2 x i32> %a, i32 0\n  ret i32 %x\n}\n";
+    assert_eq!(run(text), llrm_mir::print::module(&parsed(text)));
+}
+
+/// `umax(e, 1)` feeds a phi through the `e != 0` edge, where it is `e`
+/// (GCC's ranger does this). m32 `x_sf_mul` kept the umax on both paths:
+/// `cmp; adc` (3 clk) twice per call, +987 clk. The phi must take `%e`.
+#[test]
+fn a_phi_takes_the_operand_of_a_max_the_edge_decides() {
+    let text = "declare i32 @llvm.umax.i32(i32, i32)\ndeclare i32 @llvm.ctlz.i32(i32, i1)\n\
+define i32 @f(i32 %x) {\nentry:\n  %e = and i32 %x, 255\n  %z = icmp eq i32 %e, 0\n  %m = call i32 @llvm.umax.i32(i32 %e, i32 1)\n  br i1 %z, label %zero, label %join\n\
+zero:\n  %s = sub i32 %m, 3\n  br label %join\n\
+join:\n  %p = phi i32 [ %s, %zero ], [ %m, %entry ]\n  ret i32 %p\n}\n";
+    let out = run(text);
+    assert!(out.contains("phi i32 [ %s, %zero ], [ %e, %entry ]"), "{out}");
 }

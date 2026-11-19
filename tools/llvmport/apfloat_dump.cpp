@@ -1,4 +1,4 @@
-// Writes one hash per APFloat operation over every value of two 8-bit formats and a sample of float, double and
+// Writes one hash per APFloat operation over every value of two 8-bit formats and a sample of float, double,
 // x87: the golden file crates/ir/llrm-mir/src/apfloat_golden.txt, which `apfloat_tests.rs` recomputes.
 // A line is `operation format hash distinct`: the hash of every answer, and how many different answers there were.
 // Build against the LLVM of d1106deb71cc:
@@ -54,7 +54,7 @@ int main(int argc, char **argv) {
     return 0;
   }
   H = 0xcbf29ce484222325ULL;
-  std::vector<Fmt> fmts = formats();
+  std::vector<Fmt> fmts = formatsWithQuad();
   const RoundingMode RMS[5] = {RoundingMode::TowardZero, RoundingMode::NearestTiesToEven, RoundingMode::TowardPositive,
                                RoundingMode::TowardNegative, RoundingMode::NearestTiesToAway};
 

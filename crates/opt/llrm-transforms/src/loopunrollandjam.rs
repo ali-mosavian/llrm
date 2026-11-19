@@ -42,6 +42,17 @@
 //!   pragma asks (`enable-unroll-and-jam` is false) and the targets leave
 //!   `UP.Partial` and `UP.Runtime` off; the `particle` row at -O3 is the
 //!   reason. The pragma and `-allow-unroll-and-jam` ask as they do at the pin.
+//! - D8: a function that was jammed runs `IndVarSimplify`, `GVN` and `DSE` once
+//!   after the jam. The pin has no pass after the jam that merges the copies'
+//!   counters (`movePHIs` leaves one phi per copy), so each copy keeps its own
+//!   load and store of a cell the others touch; gcc folds them. The pin never
+//!   forms the shape (`-O3` leaves the jam off), so no pin output shows it.
+//!   Exit: none.
+//! - D9 (UJ-EARLY, owner arm64-vec, exit 2026-12-01): a second run, before the
+//!   vectorizer, on a target with vector registers. GCC's `pass_unroll_jam`
+//!   runs before its vectorizer; after the pin's (l.1474) a nest's inner loop is
+//!   a vector loop and its remainder, two loops, and the jam refuses it. particle
+//!   -O3 (arm64): 16,743 instructions run, 11,249 jammed first (gcc 12,539).
 //! - D2: no loop metadata is made: not `llvm.loop.unroll_and_jam.followup_*`,
 //!   not `setLoopAlreadyUnrolled` (a function pass cannot add metadata nodes),
 //!   not `llvm.loop.unroll.disable` on the epilog. llrm has no partial or
@@ -672,7 +683,7 @@ fn update_phi_blocks_and_values(
 /// the epilog loop, which runs at most `count` times, copied out where its
 /// maximum trip count is `count` (the complete unroll; a partial one is not
 /// translated: nothing then is done).
-fn unroll_remainder_loop(
+pub(crate) fn unroll_remainder_loop(
     run: &mut Run,
     epilog_header: BlockId,
     count: u32,
@@ -699,6 +710,7 @@ fn unroll_remainder_loop(
         globals.push(llrm_mir::module::GlobalValue {
             name: "llvm.assume".to_owned().into(),
             linkage: llrm_mir::module::Linkage::External,
+            visibility: llrm_mir::Visibility::Default,
             unnamed_addr: Default::default(),
             address_space: 0,
             kind: llrm_mir::module::GlobalKind::Function(Box::new(function)),
@@ -706,6 +718,8 @@ fn unroll_remainder_loop(
     }
     let tree = DomTree::of(run.function);
     let loops = LoopInfo::analyze(run.function, || &tree);
+    // `globals` gained the `llvm.assume` declaration the epilog guard needs,
+    // which the module's memoized `Outer::assume_declared` does not know.
     let assumptions = AssumptionCache::of(run.context, &globals, run.metadata, run.function);
     let Some(lp) = loops.get_loop_for(epilog_header) else { return };
     let mut se = ScalarEvolution::new();
@@ -738,12 +752,18 @@ fn unroll_remainder_loop(
     let latches = lp.get_loop_latches(cx.function);
     let capacity = run.function.block_capacity();
     let options = crate::loopunroll::Options { count, max_trip_count: count, max_or_zero, exits };
-    if let Err(error) =
-        crate::loopunroll::unroll_loop_blocks(run.function, epilog_header, &body, &latches, &options, &mut run.emptied)
-    {
+    if let Err(error) = crate::loopunroll::unroll_loop_blocks(
+        run.function,
+        epilog_header,
+        &body,
+        &latches,
+        &options,
+        &mut run.emptied,
+        &mut |_, _, _| {},
+    ) {
         panic!("remainder unroll: {error}");
     }
-    let _ = crate::lcssa::closed(run.function);
+    let _ = crate::lcssa::closed(run.context, run.layout, run.function);
     let analyzed = Analyzed::of(run);
     let after = crate::loopunrollpass::unrolled_blocks(run, capacity, &body);
     simplify_loop_after_unroll(run, Some(&analyzed.loops), &after);
@@ -782,7 +802,7 @@ pub(crate) fn unroll_and_jam_loop(
             tti: expansion,
         };
         let done =
-            crate::loopunrollruntime::unroll_runtime_loop_remainder(&mut env, &mut session, header, count, false);
+            crate::loopunrollruntime::unroll_runtime_loop_remainder(&mut env, &mut session, header, count, false, true);
         if done.is_none() {
             llrm_support::debug!("unroll-jam", "the remainder loop could not be generated");
             return Jammed::Unmodified;
@@ -1062,25 +1082,14 @@ pub(crate) fn unroll_and_jam_loop(
     let analyzed = Analyzed::of(run);
     let sub_blocks_now: Blocks =
         analyzed.loops.get_loop_for(sub_header_now).map(|one| one.get_blocks().to_vec()).unwrap_or_default();
-    let did = crate::simplifyindvar::simplified_loop_ivs(
-        run.context,
-        run.layout,
-        run.function,
-        run.declared,
-        run.outer,
-        sub_header_now,
-    );
+    let did = simplified_ivs_of(run, &analyzed, sub_header_now);
     llrm_support::debug!("unroll-jam", "simplified the IVs of the inner loop: {did}");
     simplify_loop_after_unroll(run, Some(&analyzed.loops), &sub_blocks_now);
     if !completely_unroll && count > 1 {
-        let did = crate::simplifyindvar::simplified_loop_ivs(
-            run.context,
-            run.layout,
-            run.function,
-            run.declared,
-            run.outer,
-            header,
-        );
+        // `simplify_loop_after_unroll` may have changed the blocks: the
+        // analyses are made again.
+        let fresh = Analyzed::of(run);
+        let did = simplified_ivs_of(run, &fresh, header);
         llrm_support::debug!("unroll-jam", "simplified the IVs of the outer loop: {did}");
     }
     let analyzed = Analyzed::of(run);
@@ -1118,6 +1127,12 @@ pub struct JamOptions {
     /// D1: unroll and jam without being asked (-O3), with `Partial` and
     /// `Runtime` on.
     pub on: bool,
+    /// D8: clean the jammed function once (the pipeline's; the pin's own
+    /// tests run without).
+    pub clean: bool,
+    /// D8: whether the `GVN` after the jam inserts for partial redundancies,
+    /// as the pipeline's does.
+    pub pre: bool,
     /// `-allow-unroll-and-jam`.
     pub allow: Option<bool>,
     /// `-unroll-and-jam-count`.
@@ -1340,6 +1355,12 @@ fn compute_unroll_and_jam_count(
         llrm_support::debug!("unroll-jam", "no loop invariant loads");
         return (0, false);
     }
+    // UJ3: a divisor of a known trip count leaves no remainder copy of the nest.
+    if options.on && run.tti.unroll_jam_exact_count() && info.outer_trip_count > 1 && count > 1 {
+        if let Some(exact) = (2..=count).rev().find(|d| info.outer_trip_count % d == 0) {
+            count = exact;
+        }
+    }
     (count, false)
 }
 
@@ -1348,6 +1369,10 @@ pub struct LoopUnrollAndJam {
     pub opt_level: u32,
     pub opt_size: bool,
     pub options: JamOptions,
+    /// DEVIATE UJ-EARLY: the run before the vectorizer, which only a target
+    /// with vector values takes (the vectorizer leaves a nest two loops, a
+    /// vector loop and its remainder, that the jam refuses).
+    pub needs_vectors: bool,
 }
 
 impl LoopUnrollAndJam {
@@ -1368,6 +1393,10 @@ impl LoopUnrollAndJam {
             up.unroll_and_jam = true;
             up.partial = true;
             up.runtime = true;
+            // The target's own `PartialThreshold` for the outer loop (UJ2).
+            if let Some(threshold) = run.tti.unroll_jam_partial_threshold_override() {
+                up.partial_threshold = threshold;
+            }
         }
         if let Some(runtime) = self.options.runtime {
             up.runtime = runtime;
@@ -1415,6 +1444,7 @@ impl LoopUnrollAndJam {
             let memory_unit = llrm_analysis::memory::Unit::within(&*run.context, run.layout, &*run.function, run.outer);
             let mut aa = AggregateAA::new();
             aa.add_aa_result(BasicAA::new(&memory_unit));
+            aa.add_aa_result(llrm_analysis::scopednoaliasaa::ScopedNoAliasAA::new(&memory_unit));
             aa.add_aa_result(TypeBasedAA::new(&memory_unit));
             let mut di = DependenceInfo::new(&mut aa, &memory_unit, &cx, self.options.da);
             is_safe_to_unroll_and_jam(&cx, se, &mut di, l)
@@ -1517,6 +1547,9 @@ impl FunctionPass for LoopUnrollAndJam {
     ) -> PreservedAnalyses {
         let outer = std::rc::Rc::clone(analyses.outer());
         let tti = crate::looprotate::target_tti(outer.target());
+        if self.needs_vectors && tti.vector_register_bits() == 0 {
+            return PreservedAnalyses::all();
+        }
         let expansion = MachineCosts { tti: Some(std::rc::Rc::clone(&tti)), minimum_size: false };
         // Only a function with a loop that holds a loop is looked at.
         let tops: Vec<BlockId> = {
@@ -1535,7 +1568,7 @@ impl FunctionPass for LoopUnrollAndJam {
         // only if a loop is unrolled and jammed (as in `loopinterchange`).
         let saved = unit.function.clone();
         crate::loopsimplify::simplified(unit.function);
-        let _ = crate::lcssa::closed(unit.function);
+        let _ = crate::lcssa::closed(unit.context, unit.layout, unit.function);
         let mut run = Run {
             context: unit.context,
             layout: unit.layout,
@@ -1549,14 +1582,21 @@ impl FunctionPass for LoopUnrollAndJam {
             declared: unit.declared,
             emptied: Vec::new(),
             peeled: Default::default(),
+            finished: Default::default(),
             created: Vec::new(),
+            decided: Default::default(),
+            first: Default::default(),
             scev: llrm_analysis::scev::ScalarEvolution::new(),
+            cached: None,
             options: UnrollOptions {
                 opt_level: self.opt_level,
                 opt_size: self.opt_size,
                 min_size: false,
                 only_when_forced: false,
                 prepare_for_lto: false,
+                target_unrolling: false,
+                inliner_follows: true,
+                speed_rate: false,
             },
         };
         let mut changed = false;
@@ -1585,8 +1625,49 @@ impl FunctionPass for LoopUnrollAndJam {
             *unit.function = saved;
             return PreservedAnalyses::all();
         }
+        // D8: the jammed copies are cleaned once.
+        if self.options.clean {
+            let mut passes: [Box<dyn FunctionPass>; 3] = [
+                Box::new(crate::indvars::IndVars { lftr: crate::indvars::lftr_default(), size: self.opt_size }),
+                Box::new(crate::gvn::Gvn { pre: self.options.pre }),
+                Box::new(crate::deadstore::DeadStoreElimination),
+            ];
+            let mut preserved = PreservedAnalyses::none();
+            for pass in &mut passes {
+                analyses.invalidate(unit.function, &preserved);
+                preserved = llrm_mir::passes::run_checked(pass.as_mut(), unit, analyses);
+            }
+        }
         PreservedAnalyses::none()
     }
+}
+
+/// `simplifyLoopIVs` of the loop headed by `header` over `analyzed`, which
+/// describes the function as it stands, with expressions of its own.
+fn simplified_ivs_of(
+    run: &mut Run,
+    analyzed: &Analyzed,
+    header: BlockId,
+) -> bool {
+    let env = llrm_analysis::scev::expander::Env {
+        globals: run.globals,
+        metadata: run.metadata,
+        layout: run.layout,
+        loops: &analyzed.loops,
+        tree: &analyzed.tree,
+        assumptions: &analyzed.assumptions,
+    };
+    let mut se = ScalarEvolution::new();
+    crate::simplifyindvar::simplified_loop_ivs(
+        run.context,
+        run.layout,
+        run.function,
+        run.declared,
+        run.outer,
+        &mut se,
+        env,
+        header,
+    )
 }
 
 #[cfg(test)]

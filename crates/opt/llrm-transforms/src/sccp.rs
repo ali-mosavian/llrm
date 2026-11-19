@@ -155,7 +155,8 @@ pub fn run_sccp(
     let tracks_returns = can_track_returns_interprocedurally(outer, function, id);
     // `addPredicateInfo`: copies of the values a branch, switch or assume
     // tells something about, for the code it holds for.
-    let assumptions = AssumptionCache::of(&*context, &outer.globals, metadata, function);
+    let assumptions =
+        AssumptionCache::of_declared(&*context, &outer.globals, metadata, function, outer.assume_declared());
     let predicates = PredicateInfo::new(&*context, &outer.globals, metadata, function, dt, &assumptions);
     // Solve for constants.
     let results = {
@@ -289,6 +290,7 @@ impl<'a> Rewrite<'a> {
             dom_conditions: None,
             cond_context: None,
             cxt: None,
+            pending_intrinsics: &[],
         }
     }
 
@@ -299,7 +301,8 @@ impl<'a> Rewrite<'a> {
         op: Operand,
     ) -> ConstantRange {
         let ty = function.operand_type(self.context, op).expect("a value or constant");
-        let width = self.context.types.int_bits(ty).unwrap_or(1);
+        // A vector's range is its lane's (`getScalarSizeInBits`).
+        let width = self.context.types.scalar_int_bits(ty).unwrap_or(1);
         match op {
             Operand::Constant(id) => match LatticeConstant::of(self.context, id) {
                 LatticeConstant::Int { width, bits } => ConstantRange::single(width, bits),
@@ -510,8 +513,11 @@ impl<'a> Rewrite<'a> {
                 if flags.contains(Flags::NSW) && flags.contains(Flags::NUW) {
                     return false;
                 }
+                // A vector trunc has no range here (DEVIATE: scalars only).
+                let Some(dest) = self.context.types.int_bits(instruction.ty) else {
+                    return false;
+                };
                 let range = self.get_range(function, instruction.operands[0]);
-                let dest = self.context.types.int_bits(instruction.ty).expect("an integer trunc");
                 if !flags.contains(Flags::NUW) && range.get_active_bits() <= dest {
                     flags.insert(Flags::NUW);
                     changed = true;

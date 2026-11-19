@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The hourly post-landing sweep of the feat/parity tip, and the one line it reports.
+"""The hourly post-landing sweep of the release/next tip, and the one line it reports.
 
     python3 tools/sweep_hourly.py [--tip SHA] [--no-build] [--bisect-builds N] [--state FILE]
 
@@ -30,6 +30,8 @@ ROOT = HERE.parent
 sys.path.insert(0, str(HERE))
 import pidfile  # noqa: E402
 import stamp  # noqa: E402
+
+BRANCH = os.environ.get("LAND_BRANCH", "release/next")  # the integration branch (tools/landing/branch.sh)
 
 SCRATCH = Path(os.environ.get("SCRATCH", Path.home() / "scratch"))
 TARGET = SCRATCH / "sb-head3"
@@ -335,13 +337,13 @@ def main(argv: list[str]) -> int:
 
 def sweep(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--tip", help="the commit to sweep (default: origin/feat/parity after a fetch)")
+    parser.add_argument("--tip", help="the commit to sweep (default: origin/release/next after a fetch)")
     parser.add_argument("--no-build", action="store_true", help="use the binaries already in the target")
     parser.add_argument("--bisect-builds", type=int, default=6)
     parser.add_argument("--state", type=Path, default=STATE)
     args = parser.parse_args(argv)
-    subprocess.run(["git", "fetch", "-q", "origin", "feat/parity"], cwd=ROOT, check=True)
-    tip = subprocess.run(["git", "rev-parse", args.tip or "origin/feat/parity"], cwd=ROOT, capture_output=True, text=True, check=True).stdout.strip()
+    subprocess.run(["git", "fetch", "-q", "origin", BRANCH], cwd=ROOT, check=True)
+    tip = subprocess.run(["git", "rev-parse", args.tip or f"origin/{BRANCH}"], cwd=ROOT, capture_output=True, text=True, check=True).stdout.strip()
     binaries = TARGET / "release" if args.no_build else build(tip)
     sha, md5s = stamps(binaries)
     # The run is of the binary's own commit, whatever the ref says now.

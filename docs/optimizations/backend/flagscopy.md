@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/flagscopy.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/flagscopy.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/flagscopy.rs sha256:79c32d9e66ae9efe7f7ef3df058c547d3c963335a49cdec9387f9619489c0eda -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/flagscopy.rs sha256:ab448d0d4f8f35613f12ab2255ee1833427ffd92fd1b9508d7850503fae03340 -->
 
 # flagscopy
 
@@ -60,7 +60,7 @@ The NF variants (`hasNF` is APX) and the x87 `fcmov` forms have no
 counterpart: N/A.
 
 DEVIATE R2 (no number yet): no isel producer of `flags_copy`/`flags_restore`
-exists, so tests hand-build LIR; owner w-5, review 2026-11-19, exit an isel
+exists, so tests hand-build LIR; owner anyisa, review 2026-11-19, exit an isel
 producer.
 
 ## Example

@@ -3,7 +3,7 @@
 
   pr_state.py fill N...        one GraphQL call (up to 40 PRs): state, draft, base, mergeable, head, last commit date, checks -> $LAND_TMP/pr-state.json
   pr_state.py cached N FIELD   FIELD of PR N when the fill is younger than PR_STATE_MAX_AGE (default 90 s); nothing otherwise (the caller asks GitHub itself)
-  pr_state.py parity           the sha of feat/parity; an If-None-Match request, so an unchanged ref (a 304) costs no quota
+  pr_state.py parity           the sha of the integration branch ($LAND_BRANCH, release/next); an If-None-Match request, so an unchanged ref (a 304) costs no quota
 """
 import json
 import os
@@ -45,7 +45,7 @@ def parity_sha(run=subprocess.run) -> str:
         known = json.loads(PARITY.read_text())
     except (OSError, ValueError):
         known = {}
-    cmd = ["gh", "api", "-i", f"repos/{repo}/git/ref/heads/feat/parity"] + (["-H", f"If-None-Match: {known['etag']}"] if known.get("etag") else [])
+    cmd = ["gh", "api", "-i", f"repos/{repo}/git/ref/heads/{ps.BRANCH}"] + (["-H", f"If-None-Match: {known['etag']}"] if known.get("etag") else [])
     done = run(cmd, capture_output=True, text=True, errors="replace")
     text = done.stdout
     first = (text.splitlines() or [""])[0]

@@ -238,7 +238,13 @@ pub fn main(argv: &[String]) -> i32 {
         let bytes = if args.flags.assembly {
             masm::text(&module).map_err(|error| error.to_string())?.into_bytes()
         } else {
-            nib::object(&module, &args.source, args.layout, args.flags.format(&*args.codegen.arch)?)?
+            nib::object(
+                &module,
+                &args.source,
+                args.layout,
+                args.flags.format(&*args.codegen.arch)?,
+                args.codegen.arch.objects(),
+            )?
         };
         llrm_codegen::support::debug::timed("write output", || {
             llrm_codegen::driver::flags::write_output(&output, &bytes)
@@ -268,6 +274,12 @@ mod tests {
     struct Bare(llrm_x86_m16::M16);
 
     impl Target for Bare {
+        fn objects(&self) -> &'static dyn llrm_debug::DebugObjectTarget {
+            self.0.objects()
+        }
+        fn debug_target(&self) -> llrm_debug::DebugTarget {
+            self.0.debug_target()
+        }
         fn name(&self) -> &'static str {
             self.0.name()
         }
@@ -385,6 +397,20 @@ mod tests {
             used: llrm_target::routines::Used,
         ) -> Result<llrm_target::routines::Divide, String> {
             self.0.divide_routine_used(signed, wide_divisor, used)
+        }
+        fn small_divide_at_o1(&self) -> bool {
+            self.0.small_divide_at_o1()
+        }
+        fn fast_divide_in_loops_at_size(&self) -> bool {
+            self.0.fast_divide_in_loops_at_size()
+        }
+        fn divide_routine_small(
+            &self,
+            signed: bool,
+            wide_divisor: bool,
+            used: llrm_target::routines::Used,
+        ) -> Result<llrm_target::routines::Divide, String> {
+            self.0.divide_routine_small(signed, wide_divisor, used)
         }
         fn float_width(
             &self,

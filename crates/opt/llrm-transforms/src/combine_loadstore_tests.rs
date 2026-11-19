@@ -16,6 +16,7 @@ fn visit(
     match c.function.instruction(inst).opcode {
         Opcode::Store { .. } => c.visit_store(inst),
         Opcode::Alloca { .. } => c.visit_alloca(inst),
+        Opcode::Br => c.visit_uncond_br(inst),
         _ => Visit::None,
     }
 }
@@ -198,6 +199,40 @@ b0:
 ",
     );
     assert_eq!(n, 1);
+}
+
+/// `store i32 (bitcast float %x)` stayed an integer store, so arm64 moved the
+/// value through a GPR (`fmov w9, s16; str w9`) where the pin stores `s16`:
+/// +4 B per float op in QuickrBasic operands.c.
+#[test]
+fn a_store_of_a_bitcast_stores_the_operand() {
+    let out = combined(
+        "define void @f(float %x, ptr %p) {
+b0:
+  %b = bitcast float %x to i32
+  store i32 %b, ptr %p, align 8, !tbaa !1
+  ret void
+}
+!1 = !{!2, !2, i64 0}
+!2 = !{!\"int\"}
+",
+    );
+    assert!(out.contains("store float %x, ptr %p, align 8, !tbaa") && !out.contains("bitcast"), "{out}");
+}
+
+/// A volatile store of a bitcast keeps its type.
+#[test]
+fn a_volatile_store_of_a_bitcast_keeps_its_type() {
+    let out = combined(
+        "define void @f(float %x, ptr %p) {
+b0:
+  %b = bitcast float %x to i32
+  store volatile i32 %b, ptr %p
+  ret void
+}
+",
+    );
+    assert!(out.contains("store volatile i32 %b"), "{out}");
 }
 
 /// An alloca with a count of 4 stayed a count: it is `alloca [4 x i16]`.
@@ -439,6 +474,73 @@ b0:
     assert!(out.contains("load"), "{out}");
 }
 
+/// `combineLoadToOperationType`: `%x = load i32` read only by `bitcast ... to
+/// float` stayed an integer load plus a cast, so a loop that adds floats kept
+/// its loads typed `i16`/`i32` and LoopVectorize read them as integer work
+/// (`sfm16_float_sub` stayed scalar).
+#[test]
+fn a_load_read_only_by_a_bitcast_loads_the_cast_type() {
+    let out = combined_with_loads(
+        "define float @f(ptr %p) {
+b0:
+  %x = load i32, ptr %p
+  %y = bitcast i32 %x to float
+  ret float %y
+}
+",
+    );
+    assert!(out.contains("load float"), "{out}");
+    assert!(!out.contains("bitcast") && !out.contains("load i32"), "{out}");
+}
+
+/// The load is read twice: the pin leaves the type alone (it must not add a
+/// load).
+#[test]
+fn a_load_with_two_users_keeps_its_type() {
+    let out = combined_with_loads(
+        "define i32 @f(ptr %p) {
+b0:
+  %x = load i32, ptr %p
+  %y = bitcast i32 %x to float
+  %z = fptosi float %y to i32
+  %w = add i32 %x, %z
+  ret i32 %w
+}
+",
+    );
+    assert!(out.contains("load i32") && out.contains("bitcast"), "{out}");
+}
+
+/// A pointer loaded as an integer is type punning: left alone.
+#[test]
+fn a_load_cast_between_pointer_and_integer_keeps_its_type() {
+    let out = combined_with_loads(
+        "define i64 @f(ptr %p) {
+b0:
+  %x = load ptr, ptr %p
+  %y = ptrtoint ptr %x to i64
+  ret i64 %y
+}
+",
+    );
+    assert!(out.contains("load ptr") && out.contains("ptrtoint"), "{out}");
+}
+
+/// A volatile load keeps its type.
+#[test]
+fn a_volatile_load_read_by_a_bitcast_keeps_its_type() {
+    let out = combined_with_loads(
+        "define float @f(ptr %p) {
+b0:
+  %x = load volatile i32, ptr %p
+  %y = bitcast i32 %x to float
+  ret float %y
+}
+",
+    );
+    assert!(out.contains("load volatile i32") && out.contains("bitcast"), "{out}");
+}
+
 #[test]
 fn a_volatile_load_is_kept() {
     let out = combined_with_loads(
@@ -496,4 +598,74 @@ b0:
 ",
     );
     assert!(text.contains("alloca"), "{text}");
+}
+
+/// jpeg_fixed `emit`: a store, then the same address stored again on one
+/// path. The pin's InstCombine makes it a phi and one store in the join
+/// (`mergeStoreIntoSuccessor`); ours left both stores, and LICM later
+/// promoted the address with two selects: wasm32 jpeg_fixed -O1 was 294 B
+/// over the pin.
+#[test]
+fn a_store_and_a_conditional_store_of_one_address_become_a_phi_and_a_store() {
+    let text = combined(
+        "@g = global i32 0
+define void @f(i32 %a, i32 %b, i1 %c) {
+entry:
+  store i32 %a, ptr @g
+  br i1 %c, label %then, label %join
+then:
+  store i32 %b, ptr @g
+  br label %join
+join:
+  ret void
+}
+",
+    );
+    assert_eq!(text.matches("store ").count(), 1, "{text}");
+    assert!(text.contains("%storemerge = phi i32 [ %b, %then ], [ %a, %entry ]"), "{text}");
+}
+
+/// `if () { *P = v1 } else { *P = v2 }`.
+#[test]
+fn the_stores_of_both_arms_become_a_phi_and_a_store() {
+    let text = combined(
+        "@g = global i32 0
+define void @f(i32 %a, i32 %b, i1 %c) {
+entry:
+  br i1 %c, label %then, label %else
+then:
+  store i32 %a, ptr @g
+  br label %join
+else:
+  store i32 %b, ptr @g
+  br label %join
+join:
+  ret void
+}
+",
+    );
+    assert_eq!(text.matches("store ").count(), 1, "{text}");
+    assert!(text.contains("phi i32"), "{text}");
+}
+
+/// A load between the two stores reads the first: they stay.
+#[test]
+fn a_read_between_the_stores_keeps_both() {
+    let text = combined(
+        "@g = global i32 0
+define i32 @f(i32 %a, i32 %b, i1 %c) {
+entry:
+  store i32 %a, ptr @g
+  br i1 %c, label %then, label %join
+then:
+  %x = load i32, ptr @g
+  store i32 %b, ptr @g
+  br label %join
+join:
+  %r = phi i32 [ 0, %entry ], [ %x, %then ]
+  ret i32 %r
+}
+",
+    );
+    assert_eq!(text.matches("store ").count(), 2, "{text}");
 }

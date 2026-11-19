@@ -50,7 +50,7 @@ Each stage is a PR that lands alone, deletes what it replaces, and is gated by s
 
 ### L1. LoopInfo (before any SCEV code)
 
-L1b-1 (#2228, draft) makes `analyzeImpl` generic over a `LoopGraph` so LIR and the graph walks use it and `forest::forest` loses its algorithm; L1b-2 (#2231, draft) adds the `Loop` queries memoryssa-port's LICM asked for and `LoopBlocksDFS`/`RPO`. The adapter exits after the lsr/indvars migration in S7 (#2197, owner scev-port).
+L1b-1 (#2228, draft) makes `analyzeImpl` generic over a `LoopGraph` so LIR and the graph walks use it and `forest::forest` loses its algorithm; L1b-2 (#2231, draft) adds the `Loop` queries memoryssa-port's LICM asked for and `LoopBlocksDFS`/`RPO`. The adapter exits after the lsr/indvars migration in S7 (#2197, scev-port, closed 2026-10-20, #2228).
 
 L1a landed as #2195: `llrm-mir/src/loopinfo.rs`, `analyzeImpl` translated (pinned LLVM finds loops by Wei et al.'s single depth-first search, not by back edges and dominance; the dominator tree is asked only for a re-entered cycle), the `Loop` queries, `tools/loops_oracle.py` (equal to `print<loops>` on 306 corpus files and the irreducible and odd-shape fixtures); `llrm_mir::loops` deleted; `Shape` reads it through `Forest::of_loop_info`. L1b: the mutators below, `analyzeImpl` generic over the CFG so LIR and the graph walks use it and the address forest's builder goes, and the flat `Loop` consumers move.
 

@@ -255,3 +255,205 @@ b0:
 ");
     assert!(after.contains("call i16 @f(i16 12)"), "{after}");
 }
+
+const SINK: &str = "@sink = global i16 0\n";
+
+/// QB's ON ERROR handler returned a resume code every call dropped: 25 of 152
+/// corpus programs kept the `mov`/`xor` that built it and a result nobody read.
+#[test]
+fn a_return_value_no_call_reads_is_not_returned() {
+    let after = run(&format!(
+        "{SINK}define internal i16 @f(i16 %a) {{
+b0:
+  store i16 %a, ptr @sink, align 2
+  ret i16 %a
+}}
+define void @top(i16 %x) {{
+b0:
+  %r = call i16 @f(i16 %x)
+  ret void
+}}
+"
+    ));
+    assert!(after.contains("define internal void @f"), "{after}");
+    assert!(after.contains("call void @f(i16 %x)"), "{after}");
+    assert!(!after.contains("ret i16 %a"), "{after}");
+}
+
+/// One caller that reads the result keeps it for all.
+#[test]
+fn a_return_value_one_call_reads_is_kept() {
+    let after = run(&format!(
+        "{SINK}define internal i16 @f(i16 %a) {{
+b0:
+  store i16 %a, ptr @sink, align 2
+  ret i16 %a
+}}
+define i16 @top(i16 %x) {{
+b0:
+  %r = call i16 @f(i16 %x)
+  %s = call i16 @f(i16 %r)
+  ret i16 %s
+}}
+"
+    ));
+    assert!(after.contains("define internal i16 @f"), "{after}");
+}
+
+/// A caller that returns the result on to a caller that drops it reads
+/// nothing: the chain is dead end to end.
+#[test]
+fn a_return_value_passed_on_to_a_dropped_return_is_not_returned() {
+    let after = run(&format!(
+        "{SINK}define internal i16 @f(i16 %a) {{
+b0:
+  store i16 %a, ptr @sink, align 2
+  ret i16 %a
+}}
+define internal i16 @g(i16 %a) {{
+b0:
+  %r = call i16 @f(i16 %a)
+  ret i16 %r
+}}
+define void @top(i16 %x) {{
+b0:
+  %r = call i16 @g(i16 %x)
+  ret void
+}}
+"
+    ));
+    assert!(after.contains("define internal void @f") && after.contains("define internal void @g"), "{after}");
+    assert!(after.contains("call void @f") && after.contains("call void @g"), "{after}");
+}
+
+/// The same chain read at the top keeps both.
+#[test]
+fn a_return_value_passed_on_to_a_read_return_is_kept() {
+    let after = run(&format!(
+        "{SINK}define internal i16 @f(i16 %a) {{
+b0:
+  store i16 %a, ptr @sink, align 2
+  ret i16 %a
+}}
+define internal i16 @g(i16 %a) {{
+b0:
+  %r = call i16 @f(i16 %a)
+  ret i16 %r
+}}
+define i16 @top(i16 %x) {{
+b0:
+  %r = call i16 @g(i16 %x)
+  ret i16 %r
+}}
+"
+    ));
+    assert!(after.contains("define internal i16 @f") && after.contains("define internal i16 @g"), "{after}");
+}
+
+/// A caller outside the module may read it.
+#[test]
+fn an_exported_function_keeps_its_return_value() {
+    let after = run(&format!(
+        "{SINK}define i16 @f(i16 %a) {{
+b0:
+  store i16 %a, ptr @sink, align 2
+  ret i16 %a
+}}
+define void @top(i16 %x) {{
+b0:
+  %r = call i16 @f(i16 %x)
+  ret void
+}}
+"
+    ));
+    assert!(after.contains("define i16 @f"), "{after}");
+}
+
+/// A function whose address is taken is called by whoever has it.
+#[test]
+fn a_function_whose_address_is_taken_keeps_its_return_value() {
+    let after = run(&format!(
+        "{SINK}@table = global ptr @f
+define internal i16 @f(i16 %a) {{
+b0:
+  store i16 %a, ptr @sink, align 2
+  ret i16 %a
+}}
+define void @top(i16 %x) {{
+b0:
+  %r = call i16 @f(i16 %x)
+  ret void
+}}
+"
+    ));
+    assert!(after.contains("define internal i16 @f"), "{after}");
+}
+
+/// The pin builds `f` again without the dead parameter and moves the uses of
+/// `%a` over one at a time, so its use list comes out reversed. Ours kept the
+/// order, which sent `shrink_wrapped_saves` wasm32 -O1 through another LSR
+/// choice: 257 B against the pin's 246.
+#[test]
+fn the_uses_of_a_kept_parameter_come_out_reversed() {
+    let mut module = parsed(&format!(
+        "{}define internal i16 @f(i16 %a, i16 %unused) {{
+b0:
+  %x = add i16 %a, 1
+  %y = add i16 %a, 2
+  %z = add i16 %a, 3
+  %s = add i16 %x, %y
+  %t = add i16 %s, %z
+  ret i16 %t
+}}
+{CALLER}",
+        llrm_analysis::testing::DOS
+    ));
+    let users = |module: &llrm_mir::module::Module| {
+        let function = module.globals.iter().find_map(|global| global.function()).expect("@f is first");
+        let a = function.parameters()[0];
+        function.users(a).iter().map(|one| one.user).collect::<Vec<_>>()
+    };
+    let before = users(&module);
+    removed(&mut module);
+    let mut after = users(&module);
+    after.reverse();
+    assert_eq!(before.len(), 3);
+    assert_eq!(after, before);
+}
+
+/// A dead return value rebuilds the function in the pin as a dead parameter
+/// does: the uses of `%a` come out reversed. Ours kept the order.
+#[test]
+fn the_uses_of_a_parameter_come_out_reversed_when_only_the_return_is_dead() {
+    let mut module = parsed(&format!(
+        "{}@sink = global i16 0
+define internal i16 @f(i16 %a) {{
+b0:
+  %x = add i16 %a, 1
+  %y = add i16 %a, 2
+  %z = add i16 %a, 3
+  %s = add i16 %x, %y
+  %t = add i16 %s, %z
+  store i16 %t, ptr @sink
+  ret i16 %t
+}}
+define i16 @top(i16 %x) {{
+b0:
+  %r = call i16 @f(i16 %x)
+  ret i16 0
+}}
+",
+        llrm_analysis::testing::DOS
+    ));
+    let users = |module: &llrm_mir::module::Module| {
+        let function = module.globals.iter().find_map(|global| global.function()).expect("@f is first");
+        let a = function.parameters()[0];
+        function.users(a).iter().map(|one| one.user).collect::<Vec<_>>()
+    };
+    let before = users(&module);
+    removed(&mut module);
+    let mut after = users(&module);
+    after.reverse();
+    assert_eq!(before.len(), 3);
+    assert_eq!(after, before);
+}

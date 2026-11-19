@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/shrinkwrap.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/shrinkwrap.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/shrinkwrap.rs sha256:bb3aa730646210c9d642a32712832923e526c9ef78a19a5d3d0feeb9188a79bc -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/shrinkwrap.rs sha256:baea2126aef247c945d89e12371ebbff73dd661ddd6a6867ec35aa216769438d -->
 
 # shrinkwrap
 
@@ -102,13 +102,16 @@ at the end of each block that was to get the split block: before its jump to
 the restore, or where it falls into it. A block that reaches the restore any
 other way refuses the placement (`saverestore`'s DEVIATE 2).
 
-DEVIATE 2: under `size` (the m16 `-Os` targets) a restore that needs the
-epilogue on an edge, or that does not end in a return, is refused; the
-registers stay saved at the entry. The pin wraps those and duplicates the
-`ret` into each early exit, which costs a byte per exit, and the branch that
-skips the epilogue grows past its short form (QCport m16 -Os +9 B, nothing
-smaller). Exit: the placement is made as the pin does once jumps are sized
-after the epilogue is placed.
+DEVIATE 2: under `size` (the m16 `-Os` targets) a restore is wrapped only
+where it adds no byte: one epilogue, on the late path's fall-through or
+unconditional jump, that pushes no short branch past its range (127 forward,
+128 back; sizes from the encoder). Two epilogues, a landing pad for a taken
+edge, or a branch that would grow keep the registers saved at the entry. The
+pin wraps all of those and duplicates the `ret` into each early exit, which
+costs a byte per exit (QCport m16 -Os +9 B; queens bq16 +12 B with three
+exits). Before: every split refused (fib bq16 -Os 1017956 clocks); now fib
+908496 at the same bytes. Exit: the placement is made as the pin does once
+jumps are sized after the epilogue is placed.
 
 ## See also
 LLVM's

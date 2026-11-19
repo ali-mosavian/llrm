@@ -1,0 +1,18 @@
+#title,11.6.11 Single Operand Instructions,page,11-44,notes,*Add Fetch Effective Address Time. **Add Calculate Effective Address Time.
+Group,Mark,Instruction or Address Mode,Operands or Condition,Head,Tail,I-Cache Case,No-Cache Case
+,,CLR,Dn,2,0,2(0/0/0),2(0/1/0)
+,**,CLR,Mem,0,1,3(0/0/1),4(0/1/1)
+,,NEG,Dn,2,0,2(0/0/0),2(0/1/0)
+,*,NEG,Mem,0,1,3(0/0/1),4(0/1/1)
+,,NEGX,Dn,2,0,2(0/0/0),2(0/1/0)
+,*,NEGX,Mem,0,1,3(0/0/1),4(0/1/1)
+,,NOT,Dn,2,0,2(0/0/0),2(0/1/0)
+,*,NOT,Mem,0,1,3(0/0/1),4(0/1/1)
+,,EXT,Dn,4,0,4(0/0/0),4(0/1/0)
+,,NBCD,Dn,0,0,6(0/0/0),6(0/1/0)
+,,Scc,Dn,4,0,4(0/0/0),4(0/1/0)
+,**,Scc,Mem,0,1,5(0/0/1),5(0/1/1)
+,,TAS,Dn,4,0,4(0/0/0),4(0/1/0)
+,**,TAS,Mem,3,0,12(1/0/1),12(1/1/1)
+,,TST,Dn,0,0,2(0/0/0),2(0/1/0)
+,*,TST,Mem,0,0,2(0/0/0),2(0/1/0)

@@ -5,12 +5,12 @@
 //!
 //! # How it works
 //! Constants: stores of integer constants to adjacent cells of one object are
-//! one store of their bytes, little-endian, when the bytes are a legal integer
-//! (`getConsecutiveStores` finds the run of cells of one width, the widest
-//! legal prefix is taken, and a store made is a candidate again, so a byte pair
-//! and a word beside it become a dword). A load of any of the cells, another
-//! store, a call or a volatile store ends the span; stores that overlap leave
-//! the object alone.
+//! one store of their bytes, in the target's byte order, when the bytes are a
+//! legal integer (`getConsecutiveStores` finds the run of cells of one width,
+//! the widest legal prefix is taken, and a store made is a candidate again, so
+//! a byte pair and a word beside it become a dword). A load of any of the
+//! cells, another store, a call or a volatile store ends the span; stores that
+//! overlap leave the object alone.
 //!
 //! Loads:
 //! In straight-line code, a store of a value another instruction loaded, the
@@ -41,8 +41,9 @@
 //! widen the span.
 //!
 //! DEVIATE M3 (pinned by `constants_that_cannot_be_one_wider_store_are_kept`):
-//! a wider constant store starts at a multiple of its size. LLVM's
-//! `allowsMemoryAccess` calls any x86 access fast.
+//! a wider constant store starts at a multiple of its size, unless the target
+//! says an unaligned one is fast (`Tti::merges_unaligned_stores`, AArch64:
+//! `allowsMisalignedMemoryAccesses`). Exit 11-12: the other targets' answers.
 //!
 //! DEVIATE M4 (rows, `sum_three -Os`): tuned for size, a merge is made only
 //! where the one store is no more code bytes than the ones it replaces, a
@@ -190,12 +191,17 @@ struct Call {
 /// of copies of adjacent cells that `rep movs` does in fewer code bytes than
 /// the loads and stores `MEMCPY_MOVES` makes of it is `llvm.memcpy`. The pin
 /// merges the run into dword copies and stops there (24 pairs for 96 bytes).
+/// A target whose `Tti::string_runs_at_speed` says bytes first lifts the size
+/// gate (6502, 6502-UNROLL-RATE): the pin's MemCpyOpt forms the call at every
+/// level.
 /// The calls made, and the pairs left.
 fn string_runs(
     unit: &Unit,
     span: &mut Vec<Pair>,
     reads: &[Operand],
     costs: &OperationCosts,
+    member_paid: &mut bool,
+    member_linked: &mut dyn FnMut() -> bool,
 ) -> (Vec<Call>, Vec<Pair>) {
     let kept = std::mem::take(span);
     if kept.iter().any(|one| reads.contains(&one.dst)) {
@@ -234,9 +240,21 @@ fn string_runs(
             at = end;
             let length: i64 = run.iter().map(|one| one.width).sum();
             let pairs = length / 4 + i64::from((length % 4).count_ones());
-            if pairs <= 8 || crate::loopidioms::copy_price(costs, length, false) >= pairs * (costs.load + costs.store) {
+            // The loads and stores the run is otherwise, in native words: a
+            // dword is four on a byte machine.
+            let words = (length / 4) * costs.words(32)
+                + i64::from(length & 2 != 0) * costs.words(16)
+                + i64::from(length & 1 != 0) * costs.words(8);
+            if pairs <= 8 {
                 continue;
             }
+            // The library routine the call links in is paid once per program:
+            // by the first run made a call, not the next.
+            let member = if costs.copy_member == 0 || *member_paid || member_linked() { 0 } else { costs.copy_member };
+            if crate::loopidioms::copy_price(costs, length, false) + member >= words * (costs.load + costs.store) {
+                continue;
+            }
+            *member_paid = true;
             let (Some(to), Some(from)) = (unit.space(run[0].dst_pointer), unit.space(run[0].src_pointer)) else {
                 continue;
             };
@@ -276,6 +294,8 @@ pub fn merged_copies(
     let legal = layout.largest_legal_integer();
     let mut plan: Vec<Vec<Pair>> = Vec::new();
     let mut calls: Vec<Call> = Vec::new();
+    let mut member_paid = false;
+    let mut linked: Option<bool> = None;
     {
         let unit = Unit::within(context, layout, function, outer);
         // The loads of the span, by result: one map for the function, emptied
@@ -291,7 +311,13 @@ pub fn merged_copies(
                              put: &mut Vec<ValueId>| {
                 let kept = match run_costs {
                     Some(costs) => {
-                        let (taken, kept) = string_runs(&unit, span, reads, costs);
+                        let mut member_linked = || {
+                            *linked.get_or_insert_with(|| {
+                                declared.as_mut().is_some_and(|declared| declared.declares_prefixed("llvm.memcpy."))
+                            })
+                        };
+                        let (taken, kept) =
+                            string_runs(&unit, span, reads, costs, &mut member_paid, &mut member_linked);
                         calls.extend(taken);
                         kept
                     }
@@ -449,6 +475,25 @@ struct Constant {
     value: u128,
     /// The pointer of the lowest cell.
     pointer: Operand,
+    /// The least alignment, in bytes, the stores promised: that of the
+    /// narrowest.
+    align: u32,
+}
+
+/// Whether `inst` is a store of an integer to an object that none of the
+/// open cells is in: it leaves them where they are, as the DAG's chains do
+/// (`findBetterNeighborChains` puts the stores that do not alias under one
+/// root).
+fn stored_elsewhere(
+    unit: &Unit,
+    inst: InstId,
+    open: &[Constant],
+) -> bool {
+    let op = unit.function.instruction(inst);
+    let Opcode::Store { volatile: false, .. } = op.opcode else { return false };
+    let Some(bits) = unit.int_bits(op.operands[0]) else { return false };
+    let Some((root, _)) = cell(unit, op.operands[1], bits.div_ceil(8)) else { return false };
+    open.iter().all(|one| one.root != root)
 }
 
 /// A store of an integer constant to a cell of an object.
@@ -472,6 +517,7 @@ fn constant(
         high: low + i64::from(bits / 8),
         value: value & ((1u128 << bits) - 1),
         pointer,
+        align: bits / 8,
     })
 }
 
@@ -514,6 +560,7 @@ fn constants_merged(
     stored: &IndexMap<(u128, u32), usize>,
     costs: &OperationCosts,
     size: bool,
+    unaligned: bool,
 ) -> Vec<Constant> {
     let mut cells = group;
     loop {
@@ -538,7 +585,7 @@ fn constants_merged(
                         let bits = width * count as i64 * 8;
                         matches!(bits, 16 | 32 | 64)
                             && bits <= i64::from(legal)
-                            && cells[at].low % (width * count as i64) == 0
+                            && (unaligned || cells[at].low % (width * count as i64) == 0)
                             && (!size || smaller(unit, costs, &cells[at..at + count], width * count as i64, stored))
                     },
                 );
@@ -549,8 +596,12 @@ fn constants_merged(
             let low = cells[at].low;
             let mut value = 0u128;
             let mut stores = Vec::new();
+            let top = cells[at + take - 1].high;
             for one in &cells[at..at + take] {
-                value |= one.value << (8 * (one.low - low) as u32);
+                // the lowest address holds the low bits of a little-endian
+                // value and the high bits of a big-endian one
+                let place = if unit.layout.big_endian { top - one.high } else { one.low - low };
+                value |= one.value << (8 * place as u32);
                 stores.extend(one.stores.iter().copied());
             }
             let latest = cells[at..at + take].iter().max_by_key(|one| one.order).expect("a run has cells");
@@ -564,6 +615,7 @@ fn constants_merged(
                 high: cells[at + take - 1].high,
                 value,
                 pointer: cells[at].pointer,
+                align: cells[at..at + take].iter().map(|one| one.align).min().unwrap_or(1),
             };
             cells.splice(at..at + take, [merged]);
             changed = true;
@@ -587,6 +639,7 @@ pub fn merged_constants(
 ) -> bool {
     let legal = layout.largest_legal_integer();
     let costs = outer.target().size_costs();
+    let unaligned = outer.target().tti().is_some_and(|tti| tti.merges_unaligned_stores());
     let mut plan: Vec<Constant> = Vec::new();
     {
         let unit = Unit::within(context, layout, function, outer);
@@ -601,8 +654,9 @@ pub fn merged_constants(
                 if let Some(one) = constant(&unit, inst, order) {
                     *stored.entry((one.value, (one.high - one.low) as u32)).or_default() += 1;
                     open.push(one);
-                } else if !memory::speculatable(unit.context, callees, function, inst)
-                    || matches!(function.instruction(inst).opcode, Opcode::Store { .. })
+                } else if (!memory::speculatable(unit.context, callees, function, inst)
+                    || matches!(function.instruction(inst).opcode, Opcode::Store { .. }))
+                    && !stored_elsewhere(&unit, inst, &open)
                 {
                     spans.push(std::mem::take(&mut open));
                 }
@@ -628,7 +682,7 @@ pub fn merged_constants(
                     continue;
                 }
                 plan.extend(
-                    constants_merged(&unit, group, legal, &stored, &costs, size)
+                    constants_merged(&unit, group, legal, &stored, &costs, size, unaligned)
                         .into_iter()
                         .filter(|one| one.stores.len() > 1),
                 );
@@ -640,8 +694,10 @@ pub fn merged_constants(
         let value = crate::counting::constant(context, &llrm_analysis::num::Num::from(wide.value), bits);
         let void = context.types.void();
         let last = wide.last;
+        // A merge made off its own size promises only what the cells did.
+        let align = (unaligned && wide.low % (wide.high - wide.low) != 0).then_some(u64::from(wide.align));
         let store = function.create_instruction(
-            Opcode::Store { align: None, volatile: false },
+            Opcode::Store { align, volatile: false },
             void,
             vec![value, wide.pointer],
             Flags::default(),
@@ -701,7 +757,8 @@ mod tests {
     /// `a[0] = b[0]; a[1] = b[1]` is a dword load and a dword store.
     /// 24 word copies from `@b` to `@a`, with `size` the pass's mode: the
     /// printed form. Priced in code bytes on the DOS target.
-    fn forty_eight_bytes(size: bool) -> String {
+    /// 24 word copies from `@b` to `@a`, `declares` text before the function.
+    fn forty_eight_module(declares: &str) -> String {
         let steps = (0..24)
             .map(|at| {
                 format!(
@@ -709,10 +766,13 @@ mod tests {
                 )
             })
             .collect::<String>();
-        let text = format!(
-            "@a = global [24 x i16] zeroinitializer\n@b = global [24 x i16] zeroinitializer\n\ndefine i16 @f(i16 %q) {{\n{steps}  ret i16 %q\n}}\n"
-        );
-        let before = parsed(&format!("{DOS}{text}"));
+        format!(
+            "@a = global [24 x i16] zeroinitializer\n@b = global [24 x i16] zeroinitializer\n{declares}\ndefine i16 @f(i16 %q) {{\n{steps}  ret i16 %q\n}}\n"
+        )
+    }
+
+    fn forty_eight_bytes(size: bool) -> String {
+        let before = parsed(&format!("{DOS}{}", forty_eight_module("")));
         let mut module = before.clone();
         let machine = std::rc::Rc::new(llrm_x86_m16::Dos::default());
         let (layout, outer) = (layout(&module), Outer::of(&module, Some(machine.clone())));
@@ -723,6 +783,27 @@ mod tests {
         let runs = size.then_some((&mut declared, &bytes));
         merged_copies(context, &layout, &callees, function, &outer, runs);
         printed(&module)
+    }
+
+    /// The same run through the `Merge` pass tuned for speed, on a byte
+    /// machine whose `memcpy` is `copy` bytes a call and `member` bytes linked
+    /// once, `at_speed` saying whether the target lets a run be a call there.
+    fn forty_eight_at_speed(
+        declares: &str,
+        at_speed: bool,
+        member: i64,
+    ) -> String {
+        let mut module = parsed(&format!("{DOS}{}", forty_eight_module(declares)));
+        let sizes = llrm_mir::target::OperationCosts {
+            native_bits: 8,
+            load: 1,
+            store: 1,
+            copy: 23,
+            copy_member: member,
+            ..Default::default()
+        };
+        let machine = crate::testing::Tuned { sizes, string_runs_at_speed: at_speed, ..Default::default() };
+        crate::testing::managed_on(&mut module, crate::loopidioms::Merge { size: false, widen: true }, machine)
     }
 
     /// 96 bytes of word copies were 24 dword loads and stores (copy_runs -Os
@@ -739,6 +820,30 @@ mod tests {
         let speed = forty_eight_bytes(false);
         assert!(!speed.contains("i16 48"), "{speed}");
         assert_eq!(speed.matches("load i32").count(), 12, "{speed}");
+    }
+
+    /// 6502 copy_runs -O1..-O3: the 96-byte run stayed 96 loads and stores
+    /// (2,106 bytes against 1,392 at -Os, sdcc 2,027) because the run was a
+    /// call only tuned for size. A target that says bytes first at every
+    /// level makes it one call at speed too; any other target keeps the loads.
+    #[test]
+    fn test_a_long_run_of_copies_is_a_memcpy_at_speed_where_the_target_says_bytes_first() {
+        let first = forty_eight_at_speed("", true, 45);
+        assert!(first.contains("i16 48, i1 false)") && !first.contains("load"), "{first}");
+        let other = forty_eight_at_speed("", false, 45);
+        assert!(!other.contains("i16 48"), "{other}");
+    }
+
+    /// The routine a call links in is paid by the first call of a program, not
+    /// the next: 48 byte-pairs cost 96; the call 23, and 80 for the routine
+    /// that no other call has linked.
+    #[test]
+    fn test_the_memcpy_member_is_counted_once_per_program() {
+        let alone = forty_eight_at_speed("", true, 80);
+        assert!(!alone.contains("i16 48"), "{alone}");
+        let linked = "declare void @llvm.memcpy.p0.p0.i16(ptr, ptr, i16, i1)\n";
+        let shared = forty_eight_at_speed(linked, true, 80);
+        assert!(shared.contains("i16 48, i1 false)") && !shared.contains("load"), "{shared}");
     }
 
     #[test]
@@ -828,6 +933,21 @@ mod constant_tests {
         let inputs: &[&[i128]] = &[&[0, 0], &[0, 1], &[0, 2], &[0, 3], &[0, 4], &[0, 5]];
         assert_eq!(results(&module, inputs), results(&before, inputs), "{after}");
         (after, changed)
+    }
+
+    /// On a big-endian layout the first byte is the high one: the bytes 18, 52
+    /// are 0x1234 (4660), not 0x3412 (13330).
+    #[test]
+    fn test_a_big_endian_pair_joins_its_first_byte_high() {
+        let text = "@s = global [8 x i8] zeroinitializer\n\ndefine void @f() {\n  %p1 = getelementptr inbounds [8 x i8], ptr @s, i16 0, i16 1\n  store i8 18, ptr @s\n  store i8 52, ptr %p1\n  ret void\n}\n";
+        let mut module = parsed(&format!("{}{text}", DOS.replacen("\"e-", "\"E-", 1)));
+        let (layout, outer) =
+            (layout(&module), Outer::of(&module, Some(std::rc::Rc::new(llrm_x86_m16::Dos::default()))));
+        let callees = llrm_mir::memory::callees(&module);
+        let (context, function) = module.function_mut("f").expect("@f");
+        let changed = merged_constants(context, &layout, &callees, function, &outer, false);
+        let after = printed(&module);
+        assert!(changed && after.contains("store i16 4660, ptr @s"), "{after}");
     }
 
     /// A byte pair and a word beside it are a dword: the store made from the

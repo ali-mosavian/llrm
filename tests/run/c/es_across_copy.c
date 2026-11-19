@@ -1,4 +1,5 @@
 // flags: -O2 -march=i486 | -Os -march=i486 | -O2 -march=i486 -fsanitize=bounds | -O2 -march=i486 -m32 | -Os -march=i486 -m32 | -O2 -march=i486 -fsanitize=bounds -m32
+// targets: dos
 /* A string op sets ES to DGROUP; a far pointer read after it must still hold its own selector. */
 extern void report(long value);
 short __far far_a[100];

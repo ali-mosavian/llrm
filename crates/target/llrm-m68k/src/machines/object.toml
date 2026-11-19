@@ -1,0 +1,6 @@
+# m68k Linux: ELF32 big-endian objects (EM_68K). The other platforms (Amiga hunk, Atari PRG, classic Mac)
+# are rows of their own when their writers exist.
+formats = ["elf"]
+default = "elf"
+bitness = 32
+header = []

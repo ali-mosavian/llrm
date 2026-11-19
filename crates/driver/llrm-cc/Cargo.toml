@@ -13,6 +13,8 @@ llrm-x86-m16 = { workspace = true }
 serde = { workspace = true }
 toml = { workspace = true }
 
+# Named apart from the root package's `llrm-cc` (src/bin/llrm-cc.rs), which tools and scripts run: two bins of one name wrote one file.
+# This one is the crate's own integration tests' (CARGO_BIN_EXE_llrm-cc-bin).
 [[bin]]
-name = "llrm-cc"
+name = "llrm-cc-bin"
 path = "src/main.rs"

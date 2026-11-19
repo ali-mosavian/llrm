@@ -56,7 +56,7 @@ use crate::model::passes::LIRTransform;
 
 /// What a call leaves alone.
 pub enum Calls {
-    /// llrm-c's: everything but ax, bx, cx, dx, es and the flags.
+    /// llrm-cc's: everything but ax, bx, cx, dx, es and the flags.
     C,
     /// A Nib or BASIC program's: nothing.
     Everything,

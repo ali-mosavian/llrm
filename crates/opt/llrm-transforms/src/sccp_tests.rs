@@ -692,3 +692,114 @@ live:
     let out = printed(&module);
     assert!(out.contains("\ndead:\n  unreachable"), "{out}");
 }
+
+/// recpow -O2 (REC-5): `power(i % 97 + 2, ...)` is called from a loop whose
+/// counter grows by one each solver step. Ten extensions and the pin's
+/// `mergeIn` makes it overdefined, so `i % 97` spans both signs and the
+/// callee's argument is signed all the way down (27268 cycles against 19758 for
+/// the `unsigned` source). With the target's widening the counter keeps its
+/// sign.
+const COUNTED_CALL: &str = "define internal i64 @g(i64 %b) {
+b0:
+  ret i64 %b
+}
+
+define i64 @f(i32 %n) {
+b0:
+  br label %h
+
+h:
+  %i = phi i32 [ 1, %b0 ], [ %j, %h ]
+  %r = srem i32 %i, 97
+  %a = add i32 %r, 2
+  %w = sext i32 %a to i64
+  %x = call i64 @g(i64 %w)
+  %j = add nuw nsw i32 %i, 1
+  %c = icmp eq i32 %i, %n
+  br i1 %c, label %done, label %h
+
+done:
+  ret i64 %x
+}
+";
+
+#[test]
+fn a_counter_widened_for_growing_keeps_its_sign_where_the_target_says_so() {
+    let non_negative = |keeps: bool| {
+        let (module, results) = module_solved(COUNTED_CALL, &["g"], &["g"], |solver| {
+            solver.keep_sign_when_widening(keeps);
+            solve_all(solver);
+        });
+        lattice_of(&module, &results, "g", "b").get_constant_range(true).is_all_non_negative()
+    };
+    assert!(!non_negative(false), "premise: the pin's widening loses the sign");
+    assert!(non_negative(true));
+}
+
+/// A vector `trunc` (LoopVectorize makes them) panicked in `refineInstruction`
+/// ("an integer trunc"): it is left as written.
+#[test]
+fn test_a_vector_trunc_is_left_alone() {
+    let text = "define <4 x i16> @f(<4 x i32> %x) {
+b0:
+  %t = trunc <4 x i32> %x to <4 x i16>
+  ret <4 x i16> %t
+}
+";
+    let mut module = parsed(text);
+    assert!(!sccped(&mut module));
+    assert_eq!(printed(&module), text);
+}
+
+/// `refineInstruction` read a vector's range as one bit wide (`unwrap_or(1)`):
+/// every vector `add`, `sub`, `mul` and `shl` came out `nuw nsw`, so `mul <2 x
+/// i64> %y, %y` was poison for any `%y` over 32 bits.
+#[test]
+fn test_a_vector_operation_gets_no_wrap_flags_from_a_one_bit_range() {
+    let text = "define <2 x i64> @f(<2 x i64> %x, <2 x i64> %y) {
+b0:
+  %m = mul <2 x i64> %x, %y
+  %a = add <2 x i64> %m, %x
+  %s = shl <2 x i64> %a, %y
+  ret <2 x i64> %s
+}
+";
+    let mut module = parsed(text);
+    assert!(!sccped(&mut module));
+    assert_eq!(printed(&module), text);
+}
+
+/// The same one-bit range for a vector took the mask of `and <4 x i16> %x, 255`
+/// for redundant: the `and` was dropped, and `zext` of `%x` kept the high
+/// byte of every lane (arm64 -O2: `ldr d; ushll`, no `bic`).
+#[test]
+fn test_a_vector_and_mask_is_not_dropped_by_a_one_bit_range() {
+    let text = "define <4 x i64> @f(<4 x i16> %x) {
+b0:
+  %a = and <4 x i16> %x, <i16 255, i16 255, i16 255, i16 255>
+  %z = zext <4 x i16> %a to <4 x i64>
+  ret <4 x i64> %z
+}
+";
+    let mut module = parsed(text);
+    assert!(!sccped(&mut module));
+    assert_eq!(printed(&module), text);
+}
+
+/// The mask of a vector `and` is kept at every lane width, and when the
+/// operand is an `add` result: the one-bit range took all of them for redundant.
+#[test]
+fn test_a_splat_mask_of_a_vector_is_kept_at_every_lane_width() {
+    let text = "define <4 x i32> @f(<4 x i32> %x, <8 x i8> %y, <4 x i16> %z) {
+b0:
+  %m = and <4 x i32> %x, <i32 255, i32 255, i32 255, i32 255>
+  %n = and <8 x i8> %y, <i8 15, i8 15, i8 15, i8 15, i8 15, i8 15, i8 15, i8 15>
+  %s = add <4 x i16> %z, %z
+  %o = and <4 x i16> %s, <i16 255, i16 255, i16 255, i16 255>
+  ret <4 x i32> %m
+}
+";
+    let mut module = parsed(text);
+    assert!(!sccped(&mut module));
+    assert_eq!(printed(&module), text);
+}

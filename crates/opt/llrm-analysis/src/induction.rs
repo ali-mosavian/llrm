@@ -596,7 +596,7 @@ fn _control(
     }
     // Or, where `leaving`, go on: the count then holds as long as the loop
     // does.
-    let leaves = !elsewhere.is_empty() && !elsewhere.is_subset(&noreturn::stranded(function, header.at));
+    let leaves = !elsewhere.is_empty() && !noreturn::all_stranded(function, header.at, &elsewhere);
     if !leaving && leaves {
         return None;
     }

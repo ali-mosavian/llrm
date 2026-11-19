@@ -1039,3 +1039,112 @@ b0:
     assert!(!aa.mod_ref_instructions(ended, load_a) && aa.mod_ref_instructions(ended, load_b));
     assert!(!aa.mod_set_call(store, ended), "a store to %a against a call that touches %b");
 }
+
+/// MemorySSA.cpp#L298: an `invariant.start` shows up as a def that touches
+/// the memory it covers, but it is a marker and clobbers no query. A call after
+/// it was clobbered by it (the call's attributes against the start's).
+#[test]
+fn test_an_invariant_start_clobbers_no_later_call() {
+    use super::alias::AliasQuery;
+    let parsed = Parsed::new(
+        "declare ptr @llvm.invariant.start.p0(i64 immarg, ptr nocapture)
+declare void @ext(ptr)
+
+define void @f(ptr %q, ptr %p) {
+b0:
+  %s = call ptr @llvm.invariant.start.p0(i64 2, ptr %q)
+  call void @ext(ptr %p)
+  ret void
+}
+",
+    );
+    let unit = parsed.unit();
+    let accesses = Accesses::plain(&unit, &crate::consts::Calls::default());
+    let mssa = Mssa::build(unit.function, &unit.shape().dominance, &shadow::effect_of(&accesses, unit.function));
+    let aa = AliasQuery::new(&unit, &accesses);
+    let insts: Vec<_> = unit.function.iter_block(crate::testing::block(unit.function, "b0")).collect();
+    let (start, ext) = (insts[0], insts[1]);
+    let def = mssa.get_memory_access(start).expect("the start is a def");
+    assert!(!super::walker::instruction_clobbers_query(&mssa, &aa, def, None, Some(ext)), "a marker clobbers nothing");
+}
+
+/// Placing the memory phis made the dominance frontier of every block (a map
+/// of sets) for each build: a third of `Mssa::build`, 2.5 M of a jpeg_fixed
+/// compile. They are the iterated frontier of the blocks that define, by the
+/// walk of the dominator tree LLVM's `IDFCalculator` makes.
+#[test]
+fn the_memory_phis_are_placed_without_the_frontier_of_every_block() {
+    let parsed = Parsed::new(
+        "define void @f(i1 %c, i1 %d) {
+entry:
+  br i1 %c, label %left, label %right
+left:
+  store i8 1, ptr @g
+  br label %join
+right:
+  br i1 %d, label %loop, label %join
+loop:
+  store i8 2, ptr @g
+  br i1 %d, label %loop, label %join
+join:
+  store i8 3, ptr @g
+  ret void
+}
+",
+    );
+    crate::cfg::FRONTIERS.with(|count| count.set(0));
+    let (mssa, _) = translated(&parsed.unit());
+    let made = crate::cfg::FRONTIERS.with(std::cell::Cell::get);
+    assert_eq!(made, 0, "{made} frontier maps for one build");
+    // Phis of `loop` and `join`, as the frontier of the stores' blocks says.
+    let function = function(&parsed.module, "f");
+    let phis = function.layout().iter().filter(|&&block| mssa.get_memory_phi(block).is_some()).count();
+    assert_eq!(phis, 2, "memory phis of the loop header and the join");
+    same_as_today("define void @f(i1 %c) {\nentry:\n  store i8 1, ptr @g\n  ret void\n}\n");
+}
+
+/// `renamePass` read the dominator tree's children from the tree. It scanned
+/// every block for its immediate dominator and rebuilt the child lists on each
+/// call (1.9 M Ir over 54 builds on jpeg_fixed, once per updater call too).
+#[test]
+fn test_the_renaming_does_not_scan_the_blocks_for_immediate_dominators() {
+    let mut body = String::from("define i16 @f(i16 %n) {\nb0:\n  br label %b1\n");
+    for i in 1..40 {
+        body.push_str(&format!(
+            "\nb{i}:\n  store i16 %n, ptr getelementptr (i8, ptr @g, i16 32)\n  br label %b{}\n",
+            i + 1
+        ));
+    }
+    body.push_str("\nb40:\n  ret i16 0\n}\n");
+    let parsed = Parsed::new(&body);
+    let unit = parsed.unit();
+    crate::cfg::IMMEDIATE_QUERIES.with(|count| count.set(0));
+    let _ = translated(&unit);
+    let queries = crate::cfg::IMMEDIATE_QUERIES.with(std::cell::Cell::get);
+    assert!(queries < 10, "{queries} immediate-dominator queries for a 41-block build");
+}
+
+/// The AA stack is made once for the batch of questions, as the pin's one
+/// `AAResults`. It was made and dropped per question: 7,375 stacks and 1.1 M Ir
+/// of drops over jpeg_fixed.
+#[test]
+fn test_the_alias_stack_is_made_once_per_batch_of_questions() {
+    use super::alias::AliasQuery;
+    let parsed = Parsed::new(&loads_and_a_store(64));
+    let unit = parsed.unit();
+    let accesses = Accesses::plain(&unit, &crate::consts::Calls::default());
+    let aa = AliasQuery::new(&unit, &accesses);
+    let store = unit
+        .function
+        .walk()
+        .map(|(_, inst)| inst)
+        .find(|&inst| accesses.writes(inst).is_some_and(|w| !w.is_empty()))
+        .expect("the store");
+    let locations: Vec<_> = unit.function.walk().filter_map(|(_, inst)| aa.location_of(inst)).collect();
+    for loc in &locations {
+        aa.mod_set_loc(store, loc);
+    }
+    let (_, worked) = aa.questions();
+    assert!(worked > 1, "{worked} questions worked out");
+    assert_eq!(aa.stacks_made(), 1, "a stack per question: {} for {worked}", aa.stacks_made());
+}

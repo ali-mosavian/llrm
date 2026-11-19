@@ -1,6 +1,8 @@
 """`uv run --project tools python -m pytest tools/bench/test_shards.py`"""
 
 import sys
+
+import pytest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -29,3 +31,15 @@ def test_the_checked_in_table_names_every_benchmark_and_only_those():
 
 def test_the_table_lists_names_sorted_with_their_seconds():
     assert shards.table({"grep": 24.24, "fib": 3.0}) == '"fib" = 3.0\n"grep" = 24.2\n'
+
+
+def test_a_run_with_cells_that_did_not_build_still_costs_its_cpu_seconds(tmp_path):
+    """bench.py exits 1 (NOHEAD) when a cell did not build; `measure` stopped on jpeg_fixed (bq32 O2/Os) and wrote no table."""
+    finished = [sys.executable, "-c", "import sys; sum(range(10**6)); print('bench: [1s] measured 3 rows', file=sys.stderr); sys.exit(1)"]
+    assert shards.cpu_seconds("x", tmp_path, finished) > 0
+
+
+def test_a_run_that_never_measured_is_no_cost_and_stops_the_table(tmp_path):
+    early = [sys.executable, "-c", "import sys; print('boom', file=sys.stderr); sys.exit(1)"]
+    with pytest.raises(SystemExit):
+        shards.cpu_seconds("x", tmp_path, early)

@@ -5,7 +5,7 @@
 
 use std::collections::BTreeMap;
 
-use llrm_mir::constantrange::ConstantRange;
+use super::ConstantRange;
 use llrm_mir::dense::IdSet;
 use llrm_mir::hash::HashSet;
 use llrm_mir::module::{BlockId, Operand, ValueDef};
@@ -259,7 +259,7 @@ impl ScalarEvolution {
             let mut simplified_by_constant_range = false;
 
             if !is_equality(*pred) {
-                let exact_cr = ConstantRange::make_exact_icmp_region(*pred, ra.width, ra.bits);
+                let exact_cr = ConstantRange::make_exact_icmp_region(*pred, ra.width, ra.word());
                 if exact_cr.is_full_set() {
                     trivial_case!(self, pred, lhs, rhs, true);
                 }
@@ -272,7 +272,7 @@ impl ScalarEvolution {
                 {
                     // We were able to convert an inequality to an equality.
                     *pred = new_pred;
-                    *rhs = self.get_constant(Ap::new(ra.width, new_rhs));
+                    *rhs = self.get_constant(Ap::from_word(ra.width, new_rhs));
                     changed = true;
                     simplified_by_constant_range = true;
                 }

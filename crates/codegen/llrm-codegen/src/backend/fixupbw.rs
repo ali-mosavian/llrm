@@ -31,6 +31,9 @@
 //! 32-bit user of the loaded word reads the upper lanes, which `dead_after`
 //! counts as live though nothing ever defined them.
 //!
+//! DEVIATE FB1 (see `Profile::widens_load`): a load is widened only where the
+//! target prices the extension no higher than the load.
+//!
 //! DEVIATE W1 (no number yet): in real mode the dword form takes the 0x66
 //! prefix, so the pin's claim that the size is the same is false there; the
 //! rewrite is made only if it is no longer. Exit: none (a fact of the
@@ -60,7 +63,7 @@ use crate::backend::peep::guards::{free_fields, short_in_real_mode_at};
 use crate::backend::peep::{field, make};
 use crate::backend::peephole::{_lanes, id};
 use crate::backend::regthrash::_dead_after;
-use crate::model::ir::{Loc, Operation, Reg};
+use crate::model::ir::{Loc, Operation, Reg, Space};
 use crate::model::lir::{Insn, LirBody};
 use crate::model::passes::LIRTransform;
 
@@ -80,6 +83,18 @@ const WIDENING_LOAD: u32 = WIDENING & !field::REQUIRES;
 pub struct FixupBw {
     /// The code is for size (`shouldOptimizeForSize`).
     pub size: bool,
+    /// The target prices the extending load no higher than the byte and the
+    /// word load (`Profile::widens_load`).
+    pub widens_byte: bool,
+    pub widens_word: bool,
+    /// Bytes are strict (-O1, -Os, -Oz): a form longer than the one it
+    /// replaces is not made (the pin widens a byte load at -O1, `8A /r` to
+    /// `0F B6 /r`, a byte more). DEVIATE FB2, exit 2026-11-12 (M64-FBW-O1).
+    pub strict_bytes: bool,
+    /// DEVIATE FB3 (`Profile::widens_word_immediate`): `mov r16, imm` is the
+    /// dword form, a byte longer, where the rest of the register is dead; the
+    /// pin leaves it (its pass has no `MOV16ri`).
+    pub widens_word_immediate: bool,
 }
 
 impl LIRTransform for FixupBw {
@@ -100,6 +115,20 @@ impl LIRTransform for FixupBw {
 }
 
 impl FixupBw {
+    /// The replacement `new` is allowed: it encodes, and where bytes are
+    /// strict it is no longer than `one`.
+    fn short_enough(
+        &self,
+        bits: u32,
+        one: &Insn,
+        new: &Insn,
+    ) -> bool {
+        if self.strict_bytes {
+            return crate::backend::peep::guards::no_longer_when_strict(bits, one, new);
+        }
+        short_in_real_mode_at(bits, one, new) || (bits != 16 && reads_frame_cell(new))
+    }
+
     /// `runOnMachineFunction`: every block.
     fn fixed(
         &self,
@@ -146,12 +175,18 @@ impl FixupBw {
         let ([Loc::Reg(dest)], [source]) = (what.dests.as_slice(), what.sources.as_slice()) else { return None };
         match (name, dest.width, source) {
             // MOV8rm: not for size, the extending form takes a byte more.
-            ("mov", 1, Loc::Mem(_)) if !self.size => self.try_replace_load(regs, bits, one, *dest, dead),
+            ("mov", 1, Loc::Mem(_)) if !self.size && self.widens_byte => {
+                self.try_replace_load(regs, bits, one, *dest, dead)
+            }
             // MOV16rm
-            ("mov", 2, Loc::Mem(_)) => self.try_replace_load(regs, bits, one, *dest, dead),
+            ("mov", 2, Loc::Mem(_)) if self.widens_word => self.try_replace_load(regs, bits, one, *dest, dead),
             // MOV8rr, MOV16rr
             ("mov", 1 | 2, Loc::Reg(src)) if src.width == dest.width => {
                 self.try_replace_copy(regs, bits, one, *dest, *src, dead)
+            }
+            // DEVIATE FB3: MOV16ri
+            ("mov", 2, Loc::Imm(_)) if self.widens_word_immediate => {
+                self.try_replace_immediate(regs, one, *dest, dead)
             }
             // MOVSX16rr8, MOVZX16rr8
             ("movsx" | "movzx", 2, Loc::Reg(src)) if src.width == 1 => {
@@ -198,7 +233,31 @@ impl FixupBw {
     ) -> Option<Insn> {
         let wide = Self::super_reg_dest_if_dead(regs, dest, dead, one.undef_super)?;
         let new = rebuilt(one, "movzx", Operation::Extend, wide, None);
-        (free_fields(one, WIDENING_LOAD) && short_in_real_mode_at(bits, one, &new)).then_some(new)
+        (free_fields(one, WIDENING_LOAD) && self.short_enough(bits, one, &new)).then_some(new)
+    }
+
+    /// DEVIATE FB3: `mov r16, imm` is `mov r32, imm` when the rest of the
+    /// register is dead, whatever the bytes (the prefix costs a clock).
+    fn try_replace_immediate(
+        &self,
+        regs: Regs,
+        one: &Arc<Insn>,
+        dest: Reg,
+        dead: &crate::backend::peephole::Lanes,
+    ) -> Option<Insn> {
+        let wide = Self::super_reg_dest_if_dead(regs, dest, dead, one.undef_super)?;
+        let Some(Loc::Imm(imm)) = one.what.as_ref()?.sources.first() else { return None };
+        if imm.address.is_some() {
+            return None;
+        }
+        let new = rebuilt(
+            one,
+            "mov",
+            Operation::Move,
+            wide,
+            Some(Loc::Imm(llrm_lir::Imm { value: imm.value & 0xFFFF, width: 4, address: None })),
+        );
+        free_fields(one, WIDENING).then_some(new)
     }
 
     /// `tryReplaceCopy`: a byte or word copy is the dword copy.
@@ -219,7 +278,7 @@ impl FixupBw {
         }
         let Loc::Reg(wide_src) = make::dword_of(regs, src) else { unreachable!("a register") };
         let new = rebuilt(one, "mov", Operation::Move, wide, Some(Loc::Reg(wide_src)));
-        (free_fields(one, WIDENING) && short_in_real_mode_at(bits, one, &new)).then_some(new)
+        (free_fields(one, WIDENING) && self.short_enough(bits, one, &new)).then_some(new)
     }
 
     /// `tryReplaceExtend`: a byte extended to a word is extended to a dword.
@@ -244,8 +303,16 @@ impl FixupBw {
         }
         let new = rebuilt(one, &name, Operation::Extend, wide, None);
         let fields = if src.is_some() { WIDENING } else { WIDENING_LOAD };
-        (free_fields(one, fields) && short_in_real_mode_at(bits, one, &new)).then_some(new)
+        (free_fields(one, fields) && self.short_enough(bits, one, &new)).then_some(new)
     }
+}
+
+/// `one` reads a frame cell. Before the frame layout it has no encoding to size, and the pin widens a spill
+/// reload (`MOV8rm` of a slot) as it does any load: above real mode the dword form is not refused for it.
+fn reads_frame_cell(one: &Insn) -> bool {
+    one.what.as_ref().is_some_and(|what| {
+        what.sources.iter().any(|place| matches!(place, Loc::Mem(cell) if cell.addr.is_some_and(|addr| addr.space == Space::Frame)))
+    })
 }
 
 /// `one` with the opcode `name`, the destination `wide` and, if given, the
@@ -311,7 +378,7 @@ mod tests {
             IndexMap::default(),
         );
         body.bits = 32;
-        let done = FixupBw { size: false }.fixed(&body);
+        let done = FixupBw { size: false, widens_byte: true, widens_word: true, strict_bytes: false, widens_word_immediate: false }.fixed(&body);
         let one = &done.blocks[0].insns[0];
         let what = one.what.as_ref().expect("semantics");
         (what.name.as_deref().expect("a name").to_owned(), what.dests[0].clone())
@@ -324,6 +391,53 @@ mod tests {
     fn only_movsx_ax_al_stays_as_cbw() {
         assert_eq!(extended(reg(RegId::AX, 2), reg(RegId::AL, 1)).1, reg(RegId::AX, 2));
         assert_eq!(extended(reg(RegId::CX, 2), reg(RegId::CL, 1)).1, reg(RegId::ECX, 4));
+    }
+
+    /// crc -Os: `mov dx, 8` into a register whose upper half nothing reads paid
+    /// the operand-size prefix a clock on each of the outer loop's nine trips
+    /// (1029 clk against gcc's 1020 with its `movl $8, %ecx`). DEVIATE FB3 makes
+    /// it `mov edx, 8`; where the upper half is read, or the key is off, it
+    /// stays.
+    #[test]
+    fn a_word_immediate_into_a_register_with_a_dead_upper_half_is_the_dword_move() {
+        let run = |widens: bool, later_reads_edx: bool| -> Loc {
+            let mov = Semantics {
+                name: Some("mov".into()),
+                dests: vec![reg(RegId::DX, 2)],
+                sources: vec![Loc::Imm(llrm_lir::Imm { value: 8, width: 2, address: None })],
+                ..Semantics::new(Operation::Move)
+            };
+            let first = Arc::new(Insn::new(0, Some((0, 0)), Some(mov), vec![], vec![]));
+            let mut insns = vec![first];
+            if later_reads_edx {
+                let read = Semantics {
+                    name: Some("mov".into()),
+                    dests: vec![reg(RegId::EAX, 4)],
+                    sources: vec![reg(RegId::EDX, 4)],
+                    ..Semantics::new(Operation::Move)
+                };
+                insns.push(Arc::new(Insn::new(1, Some((1, 1)), Some(read), vec![], vec![])));
+            }
+            let ret = Semantics { name: Some("ret".into()), ..Semantics::new(Operation::Return) };
+            let mut ret = Insn::new(2, Some((2, 2)), Some(ret), vec![], vec![]);
+            ret.reads_complete = true;
+            insns.push(Arc::new(ret));
+            let mut body =
+                LirBody::new("f", 0, vec![LirBlock::new(0, insns).into()], IndexMap::default(), IndexMap::default());
+            body.bits = 32;
+            let done = FixupBw {
+                size: true,
+                widens_byte: true,
+                widens_word: true,
+                strict_bytes: true,
+                widens_word_immediate: widens,
+            }
+            .fixed(&body);
+            done.blocks[0].insns[0].what.as_ref().expect("semantics").dests[0].clone()
+        };
+        assert_eq!(run(true, false), reg(RegId::EDX, 4), "dead upper half, key on, -Os");
+        assert_eq!(run(false, false), reg(RegId::DX, 2), "key off: the pin's form");
+        assert_eq!(run(true, true), reg(RegId::DX, 2), "edx is read after: the upper half is live");
     }
 
     /// `mov ax, [esi]` then `reader`, whose result nobody reads: the name of
@@ -349,7 +463,7 @@ mod tests {
             IndexMap::default(),
         );
         body.bits = 32;
-        let done = FixupBw { size: false }.fixed(&body);
+        let done = FixupBw { size: false, widens_byte: true, widens_word: true, strict_bytes: false, widens_word_immediate: false }.fixed(&body);
         done.blocks[0].insns[0].what.as_ref().expect("semantics").name.clone().expect("a name").to_string()
     }
 
@@ -372,5 +486,112 @@ mod tests {
     fn a_word_load_stays_where_the_dword_is_read_after_it() {
         assert_eq!(load_before(copy(reg(RegId::EBX, 4), reg(RegId::EAX, 4))), "mov");
         assert_eq!(load_before(copy(reg(RegId::BX, 2), reg(RegId::AX, 2))), "movzx");
+    }
+    /// `mov dx, [frame-128 + rax*2]` at 64 bits: the cell has no encoding
+    /// until the frame layout names the frame register, so the encodability
+    /// probe refused `movzx edx, ...` and shellsort -O2 kept the partial
+    /// write (+25% clocks against clang).
+    #[test]
+    fn a_word_load_of_a_frame_cell_with_a_wide_index_is_widened_at_64_bits() {
+        use crate::model::ir::{Addr, Held, Mem, Space};
+        let mut cell = Mem::new(Some(Addr::new(Space::Frame, -128)), 2);
+        cell.through = RegId::BP;
+        cell.index = Some(Held { value: 40, width: 8, offset: 0 });
+        cell.index_through = RegId::RAX;
+        cell.scale = 2;
+        let what = copy(reg(RegId::DX, 2), Loc::Mem(cell));
+        let load = Arc::new(Insn::new(0, Some((0, 0)), Some(what), vec![], vec![]));
+        let ret = Semantics { name: Some("ret".into()), ..Semantics::new(Operation::Return) };
+        let mut ret = Insn::new(1, Some((1, 1)), Some(ret), vec![], vec![]);
+        ret.reads_complete = true;
+        let mut body = LirBody::new(
+            "f",
+            0,
+            vec![LirBlock::new(0, vec![load, Arc::new(ret)]).into()],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        body.bits = 64;
+        let done = FixupBw { size: false, widens_byte: true, widens_word: true, strict_bytes: false, widens_word_immediate: false }.fixed(&body);
+        let name = done.blocks[0].insns[0].what.as_ref().and_then(|what| what.name.clone()).expect("a name");
+        assert_eq!(&*name, "movzx");
+    }
+    /// `mov cl, [frame-54]` at 64 bits: a spill slot has no encoding until the frame layout either, so the probe
+    /// refused `movzx ecx, ...` and the partial write waited on the last write of RCX, a whole clamp chain of
+    /// the loop before (jpeg_fixed -O2/-O3 m64: +8% clocks against clang at 3% fewer instructions).
+    #[test]
+    fn a_byte_reload_of_a_frame_slot_is_widened_at_64_bits() {
+        use crate::model::ir::{Addr, Mem, Space};
+        let cell = Mem::new(Some(Addr::new(Space::Frame, -54)), 1);
+        let what = copy(reg(RegId::CL, 1), Loc::Mem(cell));
+        let load = Arc::new(Insn::new(0, Some((0, 0)), Some(what), vec![], vec![]));
+        let ret = Semantics { name: Some("ret".into()), ..Semantics::new(Operation::Return) };
+        let mut ret = Insn::new(1, Some((1, 1)), Some(ret), vec![], vec![]);
+        ret.reads_complete = true;
+        let mut body = LirBody::new(
+            "f",
+            0,
+            vec![LirBlock::new(0, vec![load, Arc::new(ret)]).into()],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        body.bits = 64;
+        let done = FixupBw { size: false, widens_byte: true, widens_word: true, strict_bytes: false, widens_word_immediate: false }.fixed(&body);
+        let name = done.blocks[0].insns[0].what.as_ref().and_then(|what| what.name.clone()).expect("a name");
+        assert_eq!(&*name, "movzx");
+    }
+    /// Real mode sizes exactly (`0F B6` is a byte longer there, and the 66h prefix more): the same reload at 16
+    /// bits keeps the byte load, as before the frame-cell exception.
+    #[test]
+    fn a_byte_reload_of_a_frame_slot_stays_at_16_bits() {
+        use crate::model::ir::{Addr, Mem, Space};
+        let cell = Mem::new(Some(Addr::new(Space::Frame, -54)), 1);
+        let what = copy(reg(RegId::CL, 1), Loc::Mem(cell));
+        let load = Arc::new(Insn::new(0, Some((0, 0)), Some(what), vec![], vec![]));
+        let ret = Semantics { name: Some("ret".into()), ..Semantics::new(Operation::Return) };
+        let mut ret = Insn::new(1, Some((1, 1)), Some(ret), vec![], vec![]);
+        ret.reads_complete = true;
+        let mut body = LirBody::new(
+            "f",
+            0,
+            vec![LirBlock::new(0, vec![load, Arc::new(ret)]).into()],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        body.bits = 16;
+        let done = FixupBw { size: false, widens_byte: true, widens_word: true, strict_bytes: false, widens_word_immediate: false }.fixed(&body);
+        let name = done.blocks[0].insns[0].what.as_ref().and_then(|what| what.name.clone()).expect("a name");
+        assert_eq!(&*name, "mov");
+    }
+    /// `mov cl, [esi]` then nothing: the extending load is a byte longer
+    /// (`8A /r`, `0F B6 /r`). Where bytes are strict (-O1) it stays; at speed
+    /// it widens. memory_expansion -O1 was +62 B at m64.
+    #[test]
+    fn a_byte_load_stays_where_bytes_are_strict_and_widens_at_speed() {
+        let kept = |strict_bytes: bool| {
+            let cell = Loc::Mem(crate::model::ir::Mem { through: RegId::ESI, ..crate::model::ir::Mem::new(None, 1) });
+            let load = Arc::new(Insn::new(
+                0,
+                Some((0, 0)),
+                Some(copy(reg(RegId::CL, 1), cell)),
+                vec![],
+                vec![],
+            ));
+            let ret = Semantics { name: Some("ret".into()), ..Semantics::new(Operation::Return) };
+            let mut ret = Insn::new(1, Some((1, 1)), Some(ret), vec![], vec![]);
+            ret.reads_complete = true;
+            let mut body = LirBody::new(
+                "f",
+                0,
+                vec![LirBlock::new(0, vec![load, Arc::new(ret)]).into()],
+                IndexMap::default(),
+                IndexMap::default(),
+            );
+            body.bits = 32;
+            let done = FixupBw { size: false, widens_byte: true, widens_word: true, strict_bytes, widens_word_immediate: false }.fixed(&body);
+            done.blocks[0].insns[0].what.as_ref().and_then(|what| what.name.clone()).expect("a name").to_string()
+        };
+        assert_eq!(kept(true), "mov");
+        assert_eq!(kept(false), "movzx");
     }
 }

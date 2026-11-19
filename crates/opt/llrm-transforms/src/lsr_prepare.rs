@@ -335,6 +335,19 @@ pub struct ShadowEdit {
     pub dest: llrm_mir::types::TypeId,
     pub init: i128,
     pub step: u64,
+    /// The conversions of the increment are the new increment too: where
+    /// floats live on the x87 stack (`floats_live_on_the_x87_stack`).
+    pub twins: bool,
+}
+
+/// DEVIATE LS-SH: `OptimizeShadowIV` makes one variable per loop and breaks;
+/// where floats live on the x87 stack a further one is made: an FP counter
+/// costs one stack slot and an `fadd`, a conversion of the integer counter a
+/// store and a `fild` every trip. The x86 cost table (an SSE model, checked
+/// against the pin) prices both alike, so the hook that says floats are on the
+/// stack decides. Exit: 2026-11-20, x87 conversion prices in the table.
+fn floats_live_on_the_x87_stack(tti: &dyn Tti) -> bool {
+    tti.x87_stack_slots().is_some()
 }
 
 /// `OptimizeShadowIV`, read-only: `(double)i` in `for (i = 0; ...; i += c)` is
@@ -343,8 +356,10 @@ pub struct ShadowEdit {
 pub fn analyze_shadow(
     se: &mut ScalarEvolution,
     cx: &Cx,
+    tti: &dyn Tti,
     l: BlockId,
     users: &IvUsers,
+    shadowed: bool,
 ) -> Option<ShadowEdit> {
     let function = cx.function;
     let btc = se.get_backedge_taken_count(cx, l, ExitCountKind::Exact);
@@ -367,6 +382,9 @@ pub fn analyze_shadow(
             llrm_mir::types::Type::Float(llrm_mir::types::FloatKind::X86Fp80) => 64,
             _ => continue,
         };
+        if shadowed && !floats_live_on_the_x87_stack(tti) {
+            continue;
+        }
         let Operand::Value(phi_value) = instruction.operands[0] else { continue };
         let ValueDef::Instruction(phi) = function.value(phi_value).def else { continue };
         let phi_inst = function.instruction(phi);
@@ -422,6 +440,7 @@ pub fn analyze_shadow(
             dest: instruction.ty,
             init,
             step: step_bits as u64,
+            twins: floats_live_on_the_x87_stack(tti),
         });
     }
     None
@@ -470,7 +489,35 @@ pub fn apply_shadow(
     let incr_value = Operand::Value(function.instruction(new_incr).result.expect("an increment value"));
     function.set_operand(new_phi, 2, incr_value);
     // The conversion goes.
+    let cast = function.instruction(edit.cast).opcode.clone();
     let cast_value = function.instruction(edit.cast).result.expect("a conversion value");
     function.replace_all_uses_with(cast_value, new_value);
     function.erase(edit.cast).expect("the conversion");
+    // Beyond the pin: a conversion of the increment, in the same way, is the
+    // new increment (`1.0 / (double)(i + 1)` beside `(double)i`): it would
+    // otherwise convert the integer every trip beside the counter that holds
+    // the same number. Where floats live on the x87 stack only: a soft-float
+    // target keeps one more value live across its calls (6502 x_ldmath +32 B).
+    let wrap = if matches!(cast, Opcode::Cast(llrm_mir::opcode::CastOp::SIToFP)) {
+        llrm_mir::opcode::Flags::NSW
+    } else {
+        llrm_mir::opcode::Flags::NUW
+    };
+    let incr_int = function.instruction(edit.incr).result.expect("an increment value");
+    if edit.twins && function.instruction(edit.incr).flags.contains(wrap) {
+        let twins: Vec<InstId> = function
+            .users(incr_int)
+            .iter()
+            .map(|one| one.user)
+            .filter(|&user| {
+                let one = function.instruction(user);
+                one.opcode == cast && one.ty == edit.dest
+            })
+            .collect();
+        for twin in twins {
+            let twin_value = function.instruction(twin).result.expect("a conversion value");
+            function.replace_all_uses_with(twin_value, incr_value);
+            function.erase(twin).expect("the conversion");
+        }
+    }
 }

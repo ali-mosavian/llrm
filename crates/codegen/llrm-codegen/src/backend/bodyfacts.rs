@@ -275,15 +275,8 @@ pub(crate) fn _stable_loads_from(
             _holds_at(flow, &events, &use_places[value])
         } else {
             let flow = flow.get_or_init(|| Flow::of(body));
-            _unchanged(body, flow, define, cell, &uses[value])
+            _unchanged_near(body, flow, *define_at, cell, &use_places[value])
         };
-        if llrm_support::env_flag!("LLRM_CHECK_UNCHANGED") {
-            assert!(
-                held == _unchanged_reference(body, define, cell, &uses[value]),
-                "{}: whether the cell holds differs from working it out as before",
-                body.name
-            );
-        }
         if held {
             result.insert(*value, cell.clone());
         }
@@ -620,6 +613,72 @@ pub(crate) fn _holds_at(
     })
 }
 
+/// `_unchanged` for a cell any instruction may write, over the blocks between
+/// the load and its uses alone: a block is read only when a use's answer
+/// depends on it, as `_holds_at` goes over them. `define` and `uses` are
+/// (block, position).
+pub(crate) fn _unchanged_near(
+    body: &LirBody,
+    flow: &Flow,
+    define: (usize, usize),
+    cell: &Mem,
+    uses: &[(usize, usize)],
+) -> bool {
+    use crate::support::hash::HashSet;
+    let load = &body.blocks[define.0].insns[define.1];
+    let mut events = Events::default();
+    let mut scanned: HashSet<usize> = HashSet::default();
+    let mut scan = |block: usize, events: &mut Events| {
+        if !scanned.insert(block) {
+            return;
+        }
+        let list: Vec<(usize, bool)> = body.blocks[block]
+            .insns
+            .iter()
+            .enumerate()
+            .filter_map(|(position, one)| {
+                if Arc::ptr_eq(one, load) {
+                    Some((position, true))
+                } else {
+                    (!_keeps(one, load, cell, true, body)).then_some((position, false))
+                }
+            })
+            .collect();
+        if !list.is_empty() {
+            events.own.insert(block, list);
+        }
+    };
+    let mut region: Vec<usize> = Vec::new();
+    let mut queued: HashSet<usize> = HashSet::default();
+    for &(block, position) in uses {
+        scan(block, &mut events);
+        if events.before(block, Some(position)).is_none() && queued.insert(block) {
+            region.push(block);
+        }
+    }
+    let mut next = 0;
+    while next < region.len() {
+        for &parent in &flow.parents[region[next]] {
+            scan(parent, &mut events);
+            if events.before(parent, None).is_none() && queued.insert(parent) {
+                region.push(parent);
+            }
+        }
+        next += 1;
+    }
+    let held = _holds_at(flow, &events, uses);
+    if llrm_support::env_flag!("LLRM_CHECK_UNCHANGED") {
+        let readers: Vec<Arc<Insn>> =
+            uses.iter().map(|&(block, at)| Arc::clone(&body.blocks[block].insns[at])).collect();
+        assert!(
+            held == _unchanged_reference(body, load, cell, &readers),
+            "{}: whether the cell holds differs from working it out over the whole body",
+            body.name
+        );
+    }
+    held
+}
+
 /// Whether `cell` still holds what it held at `define` after `one`.
 /// Whether `cell`, as the load `define` read it, still holds after `one`, given
 /// it held before.
@@ -662,7 +721,10 @@ pub(crate) fn _keeps(
             }
         }
     };
-    holds && !(!apart && _may_write(one, cell, sealed)) && !written.clone().any(meets)
+    // A register the cell is addressed by, written, names another cell.
+    let moved = one.defines.iter().any(|defined| define.uses.contains(defined));
+    // An invariant load (a pool constant) is written by nothing.
+    holds && !moved && (define.invariant || !(!apart && _may_write(one, cell, sealed)) && !written.clone().any(meets))
 }
 
 /// Whether allocated LIR names one fixed BP-relative frame range.
@@ -748,90 +810,9 @@ pub(crate) fn _predecessors(body: &LirBody) -> IndexMap<i64, Vec<i64>> {
     predecessors
 }
 
-/// Whether every use of the loaded value sees the cell the load saw.
-///
-/// A block takes the cell in as it leaves its predecessors alike and, one
-/// instruction after another, keeps it unless that instruction may write it:
-/// `_keeps(one, ..., holds) = holds && K(one)` for every instruction but the
-/// load, which makes it hold. So a block's answer is that of its instructions
-/// after its last load, or of all of them: asked of each instruction once, not
-/// once for each time the blocks are gone over until they settle.
-pub(crate) fn _unchanged(
-    body: &LirBody,
-    flow: &Flow,
-    define: &Arc<Insn>,
-    cell: &Mem,
-    uses: &[Arc<Insn>],
-) -> bool {
-    let (predecessors, blocks) = (&flow.predecessors, &flow.blocks);
-    // Per block: whether the cell holds out of it whatever came in, and where
-    // it is made to hold from.
-    let mut gives: IndexMap<i64, (bool, bool)> = IndexMap::default();
-    let mut kept: IndexMap<i64, Vec<bool>> = IndexMap::default();
-    let wanted: BTreeSet<usize> = uses.iter().map(key).collect();
-    for (at, block) in blocks {
-        let mut after_load = None;
-        let mut every = true;
-        let mut sure = true;
-        let mut per_insn: Vec<bool> = Vec::with_capacity(block.insns.len());
-        for one in &block.insns {
-            // Whether the instruction leaves a held cell held.
-            let keeps = std::ptr::eq(Arc::as_ptr(one), Arc::as_ptr(define)) || _keeps(one, define, cell, true, body);
-            per_insn.push(keeps);
-            if std::ptr::eq(Arc::as_ptr(one), Arc::as_ptr(define)) {
-                after_load = Some(true);
-                sure = true;
-            } else if !keeps {
-                every = false;
-                sure = false;
-            }
-        }
-        // (holds out when nothing held coming in, holds out when it did)
-        gives.insert(*at, (after_load.is_some() && sure, if after_load.is_some() { sure } else { every }));
-        if block.insns.iter().any(|one| wanted.contains(&key(one))) {
-            kept.insert(*at, per_insn);
-        }
-    }
-    let mut into: IndexMap<i64, bool> = blocks.keys().map(|at| (*at, *at != body.entry)).collect();
-    let mut outof: IndexMap<i64, bool> = IndexMap::default();
-    let mut changing = true;
-    while changing {
-        changing = false;
-        for at in blocks.keys() {
-            let (empty, full) = gives[at];
-            let holds = if into[at] { full } else { empty };
-            if outof.get(at) != Some(&holds) {
-                outof.insert(*at, holds);
-                changing = true;
-            }
-        }
-        for at in blocks.keys() {
-            if *at == body.entry || predecessors[at].is_empty() {
-                continue;
-            }
-            let met = predecessors[at].iter().all(|parent| outof.get(parent).copied().unwrap_or(true));
-            if met != into[at] {
-                into.insert(*at, met);
-                changing = true;
-            }
-        }
-    }
-    for block in &body.blocks {
-        let Some(per_insn) = kept.get(&block.at) else { continue };
-        let mut holds = into[&block.at];
-        for (position, one) in block.insns.iter().enumerate() {
-            if wanted.contains(&key(one)) && !holds {
-                return false;
-            }
-            holds =
-                if std::ptr::eq(Arc::as_ptr(one), Arc::as_ptr(define)) { true } else { holds && per_insn[position] };
-        }
-    }
-    true
-}
-
-/// `_unchanged` as it was written: the blocks gone over, each instruction asked
-/// of again, until they settle.
+/// Whether every use of the loaded value sees the cell the load saw, as it was
+/// first written: the whole body gone over, each instruction asked of again,
+/// until they settle. The oracle of `_unchanged_near`.
 pub(crate) fn _unchanged_reference(
     body: &LirBody,
     define: &Arc<Insn>,
@@ -921,14 +902,9 @@ pub(crate) fn _literals(
 ) -> IndexMap<u32, Imm> {
     let mut definitions: IndexMap<u32, Vec<Arc<Insn>>> = IndexMap::default();
     let mut excluded: BTreeSet<u32> = BTreeSet::new();
-    let mut widths: IndexMap<u32, u32> = IndexMap::default();
     for one in body.blocks.iter().flat_map(|block| &block.insns) {
         for value in &one.defines {
             definitions.entry(*value).or_default().push(Arc::clone(one));
-        }
-        for value in &one.uses {
-            let had = widths.get(value).copied().unwrap_or(0);
-            widths.insert(*value, had.max(_width(one, *value)));
         }
         if one.group.is_some() {
             excluded.extend(one.defines.iter().copied());
@@ -967,12 +943,30 @@ pub(crate) fn _literals(
             Loc::Held(held) => (held.width, vec![held.value]),
             _ => continue,
         };
-        if into.width == source_width
-            && one.uses == source_uses
-            && (any_width || widths.get(value).copied().unwrap_or(0) <= source_width)
-        {
+        if into.width == source_width && one.uses == source_uses {
             sources.insert(*value, source.clone());
         }
+    }
+    // How wide each use reads a value matters only for those that could be
+    // remade, which are few: most values are not a copy of a literal.
+    if !any_width && !sources.is_empty() {
+        let mut widest: IndexMap<u32, u32> = IndexMap::default();
+        for one in body.blocks.iter().flat_map(|block| &block.insns) {
+            for value in &one.uses {
+                if sources.contains_key(value) {
+                    let had = widest.get(value).copied().unwrap_or(0);
+                    widest.insert(*value, had.max(_width(one, *value)));
+                }
+            }
+        }
+        sources.retain(|value, source| {
+            let source_width = match source {
+                Loc::Imm(imm) => imm.width,
+                Loc::Held(held) => held.width,
+                _ => return false,
+            };
+            widest.get(value).copied().unwrap_or(0) <= source_width
+        });
     }
     let mut result: IndexMap<u32, Imm> = IndexMap::default();
     loop {
@@ -1095,14 +1089,14 @@ mod keeps_tests {
     #[test]
     fn test_a_store_through_a_register_does_not_keep_a_cell_of_its_symbol() {
         let symbol = |disp| Addr { index: 3, ..Addr::new(Space::Segment, disp) };
-        let held = |value| Held { value, width: 4 };
+        let held = |value| Held { value, width: 4, offset: 0 };
         let cell = Mem::new(Some(symbol(2)), 2);
         let load = Arc::new(Insn::new(
             1,
             None,
             Some(Semantics {
                 name: Some("mov".into()),
-                dests: vec![Loc::Held(Held { value: 9, width: 2 })],
+                dests: vec![Loc::Held(Held { value: 9, width: 2, offset: 0 })],
                 sources: vec![Loc::Mem(cell.clone())],
                 ..Semantics::new(Operation::Move)
             }),
@@ -1133,5 +1127,38 @@ mod keeps_tests {
             Default::default(),
         );
         assert!(!_keeps(&store, &load, &cell, true, &body));
+    }
+
+    /// Every use of every value recorded how wide it reads (a map entry, a scan
+    /// of the instruction's operands): 1.2 M of a 179 M -O0 compile, for values
+    /// of which a handful could be remade. Only those that are a copy of a
+    /// literal are measured; the literals found are the same.
+    #[test]
+    fn test_use_widths_are_kept_only_for_values_that_could_be_remade() {
+        let mut insns = vec![Arc::new(Insn::new(
+            0,
+            None,
+            Some(Semantics {
+                name: Some("mov".into()),
+                dests: vec![Loc::Held(Held { value: 1, width: 4, offset: 0 })],
+                sources: vec![Loc::Imm(Imm { value: 7, width: 4, address: None })],
+                ..Semantics::new(Operation::Move)
+            }),
+            vec![1],
+            vec![],
+        ))];
+        // 200 distinct values read, none of them a copy of a literal
+        insns.extend((0..200).map(|at| Arc::new(Insn::new(at + 1, None, None, vec![], vec![at as u32 + 1000]))));
+        let body = LirBody::new(
+            "f",
+            0,
+            vec![crate::model::lir::LirBlock::new(0, insns).into()],
+            Default::default(),
+            Default::default(),
+        );
+        let values: BTreeSet<u32> = [1].into_iter().collect();
+        let (found, made) = llrm_support::alloc_count::counted(|| _literals(&body, &values, false));
+        assert_eq!(found.get(&1).map(|imm| imm.value), Some(7));
+        assert!(made <= 12, "{made} allocations (23 before)");
     }
 }

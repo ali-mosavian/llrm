@@ -4,6 +4,8 @@
 # a .fingerprint); logs, bench data and gate binaries stay. Per dir, just before it is touched: idle again (newest mtime of the dir and its profile dirs), and not in
 # use: no process with its cwd, CARGO_TARGET_DIR, an open file or a tmux pane inside it (or inside the worktree of a `target` dir). Prints `dir: N bytes (idle H h)`.
 set -u
+# PROC_ROOT and TMUX_PANES are injected by the test: a live process table made it depend on what runs on the host.
+PROC_ROOT=${PROC_ROOT:-/proc}; TMUX_PANES=${TMUX_PANES:-tmux list-panes -a -F #{pane_current_path}}
 hours=72; apply=0
 while [ $# -gt 0 ]; do case $1 in --hours) hours=$2; shift 2;; --apply) apply=1; shift;; *) echo "usage: $0 [--hours N] [--apply]" >&2; exit 2;; esac; done
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -14,12 +16,12 @@ newest() { local m=0 t; for p in "$1" $(profiles "$1") ; do t=$(stat -c %Y "$p" 
 in_use() {
   local d=$1 guard=$1; [ "$(basename "$d")" = target ] && guard=$(dirname "$d")
   local p
-  for p in /proc/[0-9]*; do
+  for p in "$PROC_ROOT"/[0-9]*; do
     case $(readlink "$p/cwd" 2>/dev/null) in "$guard"|"$guard"/*) return 0;; esac
     { tr "\0" "\n" < "$p/environ"; } 2>/dev/null | grep -qx "CARGO_TARGET_DIR=$d\(/.*\)\?" && return 0
     for f in "$p"/fd/*; do case $(readlink "$f" 2>/dev/null) in "$d"/*) return 0;; esac; done 2>/dev/null
   done
-  tmux list-panes -a -F '#{pane_current_path}' 2>/dev/null | grep -q "^$guard\(/\|$\)" && return 0
+  $TMUX_PANES 2>/dev/null | grep -q "^$guard\(/\|$\)" && return 0
   return 1
 }
 total=0

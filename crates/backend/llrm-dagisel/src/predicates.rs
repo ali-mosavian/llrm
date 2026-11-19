@@ -87,10 +87,6 @@ pub fn extload_i64_i32<D: Dag, H: Hooks<D>>((dag, _, v): Args<D, H>) -> bool {
         && (dag.memory_vt(v.node) == mvt::i32 || (dag.alignment(v.node) >= 4 && dag.is_simple(v.node)))
 }
 
-pub fn memop<D: Dag, H: Hooks<D>>((dag, hooks, v): Args<D, H>) -> bool {
-    hooks.has_sse_unaligned_mem() || dag.alignment(v.node) >= dag.memory_store_size(v.node)
-}
-
 pub fn simple_load<D: Dag, H: Hooks<D>>((dag, _, v): Args<D, H>) -> bool {
     dag.is_simple(v.node)
 }
@@ -148,6 +144,23 @@ pub fn memory_vt_f64<D: Dag, H: Hooks<D>>(args: Args<D, H>) -> bool {
 
 pub fn memory_vt_f80<D: Dag, H: Hooks<D>>(args: Args<D, H>) -> bool {
     memory_vt_is(args, mvt::f80)
+}
+
+pub fn memory_vt_v2i64<D: Dag, H: Hooks<D>>(args: Args<D, H>) -> bool {
+    memory_vt_is(args, mvt::v2i64)
+}
+
+pub fn memory_vt_v4i32<D: Dag, H: Hooks<D>>(args: Args<D, H>) -> bool {
+    memory_vt_is(args, mvt::v4i32)
+}
+
+/// The pin's `MaskedValueIsZero(Op, high half of the element)` of
+/// `PMULUDQ`/`PMULDQ`'s operand predicates. DEVIATE VEC-PRED1 (owner
+/// llrm-target-x86-m64-b, exit 2026-11-20, PR-C): never true, so those patterns
+/// are not used and a vector multiply is expanded instead. Never selects
+/// a wrong instruction.
+pub fn upper_half_is_zero<D: Dag, H: Hooks<D>>(_: Args<D, H>) -> bool {
+    false
 }
 
 /// `nontemporalstore`: the builder sets no `!nontemporal`, so none is.
@@ -220,66 +233,14 @@ pub fn btr_mask_64<D: Dag, H: Hooks<D>>(args: Args<D, H>) -> bool {
     imm(args, |i| u32::try_from(i).is_err() && i32::try_from(i).is_err() && (!(i as u64)).is_power_of_two())
 }
 
-pub fn not_avoid_immediate_forms<D: Dag, H: Hooks<D>>((dag, hooks, v): Args<D, H>) -> bool {
-    !hooks.should_avoid_immediate_inst_forms_for_size(dag, v.node)
-}
-
-pub fn shift_mask_8<D: Dag, H: Hooks<D>>((dag, hooks, v): Args<D, H>) -> bool {
-    hooks.is_unneeded_shift_mask(dag, v.node, 3)
-}
-
-pub fn shift_mask_16<D: Dag, H: Hooks<D>>((dag, hooks, v): Args<D, H>) -> bool {
-    hooks.is_unneeded_shift_mask(dag, v.node, 4)
-}
-
-pub fn shift_mask_32<D: Dag, H: Hooks<D>>((dag, hooks, v): Args<D, H>) -> bool {
-    hooks.is_unneeded_shift_mask(dag, v.node, 5)
-}
-
-pub fn shift_mask_64<D: Dag, H: Hooks<D>>((dag, hooks, v): Args<D, H>) -> bool {
-    hooks.is_unneeded_shift_mask(dag, v.node, 6)
-}
-
-pub fn reloc_imm_sext_32<D: Dag, H: Hooks<D>>((dag, hooks, v): Args<D, H>) -> bool {
-    hooks.is_sext_absolute_symbol_ref(dag, 32, v.node)
-}
-
-pub fn reloc_imm_sext_8<D: Dag, H: Hooks<D>>((dag, hooks, v): Args<D, H>) -> bool {
-    hooks.is_sext_absolute_symbol_ref(dag, 8, v.node)
-}
-
 /// `xor_flag_dead_result`: the value result of the `X86xor_flag` has no use,
 /// only its flags (64-bit mode).
 pub fn xor_flag_dead_result<D: Dag, H: Hooks<D>>((dag, _, v): Args<D, H>) -> bool {
     dag.has_n_uses_of_value(SDValue::new(v.node, 0), 0)
 }
 
-/// `X86add_flag_nocf` and its kin: no use of the flags result reads the carry.
-pub fn no_carry_flag_uses_of_flags<D: Dag, H: Hooks<D>>((dag, hooks, v): Args<D, H>) -> bool {
-    hooks.has_no_carry_flag_uses(dag, SDValue::new(v.node, 1))
-}
-
-/// `X86sub_flag_nocf`: only when the result is used too, so `dec` is not a pure
-/// compare.
-pub fn sub_no_carry_flag_uses<D: Dag, H: Hooks<D>>((dag, hooks, v): Args<D, H>) -> bool {
-    !dag.has_n_uses_of_value(SDValue::new(v.node, 0), 0) && hooks.has_no_carry_flag_uses(dag, SDValue::new(v.node, 1))
-}
-
-/// `X86lock_add_nocf`: the flags are the node's first result.
-pub fn no_carry_flag_uses_of_result<D: Dag, H: Hooks<D>>((dag, hooks, v): Args<D, H>) -> bool {
-    hooks.has_no_carry_flag_uses(dag, SDValue::new(v.node, 0))
-}
-
-pub fn def32<D: Dag, H: Hooks<D>>((dag, hooks, v): Args<D, H>) -> bool {
-    hooks.is_def32(dag, v.node)
-}
-
 pub fn or_disjoint<D: Dag, H: Hooks<D>>((dag, _, v): Args<D, H>) -> bool {
     dag.has_disjoint_flag(v.node) || dag.have_no_common_bits_set(dag.operand(v.node, 0), dag.operand(v.node, 1))
-}
-
-pub fn tcret_enough_regs<D: Dag, H: Hooks<D>>((dag, hooks, v): Args<D, H>) -> bool {
-    hooks.check_tc_ret_enough_regs(dag, v.node)
 }
 
 /// `anyext_sdiv`: the remainder result of a signed divide.

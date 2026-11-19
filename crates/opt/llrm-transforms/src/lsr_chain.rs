@@ -173,7 +173,7 @@ fn is_high_cost_expansion(
     }
     match se.node(s).kind.clone() {
         Kind::Add(ops) => {
-            for op in ops {
+            for op in ops.iter().copied() {
                 if is_high_cost_expansion(se, cx, op.scev, processed) {
                     return true;
                 }

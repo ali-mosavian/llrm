@@ -61,7 +61,7 @@ pub fn folded(
     // The trailing zeros count must not be too expensive.
     let cost = spec
         .tti
-        .intrinsic_cost(
+        .zero_poison_intrinsic_cost(
             &format!("llvm.cttz.i{width}"),
             Some(Ty::Int(width)),
             &[Ty::Int(width), Ty::Int(1)],
@@ -88,7 +88,15 @@ pub fn folded(
         values.push(bits as u64);
     }
     values.sort_unstable();
-    let opt_size = function.attrs.iter().any(|attr| matches!(attr, Attribute::Flag(name) if name == "optsize"));
+    let opt_size = function
+        .attrs
+        .iter()
+        .any(
+            |attr| matches!(
+                attr,
+                Attribute::Flag(name) if name == "optsize" || name == "minsize"
+            ),
+        );
     let exponents = u64::from(values[values.len() - 1].trailing_zeros() - values[0].trailing_zeros()) + 1;
     if !is_dense(cases as u64, exponents, opt_size) {
         return false;

@@ -31,6 +31,13 @@ static LAYOUT: std::sync::LazyLock<llrm_target::layout::Layout> = std::sync::Laz
     llrm_target::layout::Layout::parse(DATALAYOUT_TOML).expect("real mode's datalayout.toml parses")
 });
 
+/// `kept_stack_align` and `max_alloca_align` of `DATALAYOUT_TOML`, in bytes.
+pub fn stack_keeps() -> (Option<u64>, Option<u64>) {
+    let table: toml::Table = DATALAYOUT_TOML.parse().expect("real mode's datalayout.toml parses");
+    let read = |key: &str| table.get(key).and_then(|one| one.as_integer()).and_then(|one| u64::try_from(one).ok());
+    (read("kept_stack_align"), read("max_alloca_align"))
+}
+
 /// `DATALAYOUT_TOML`, parsed.
 pub fn layout() -> llrm_target::layout::Layout {
     LAYOUT.clone()
@@ -45,8 +52,8 @@ pub fn spaces() -> llrm_mir::spaces::Spaces {
 pub struct M16;
 
 /// The registers the description states.
-static REGISTERS: std::sync::LazyLock<Vec<llrm_target::registers::Register>> = std::sync::LazyLock::new(|| {
-    llrm_target::registers::parse(include_str!("registers.regs")).expect("registers.regs parses")
+static REGISTERS: std::sync::LazyLock<std::sync::Arc<Vec<llrm_target::registers::Register>>> = std::sync::LazyLock::new(|| {
+    llrm_target::registers::file(include_str!("registers.regs")).expect("registers.regs parses")
 });
 
 /// The pin's register pressure sets for the registers described above:
@@ -87,6 +94,14 @@ fn cost_model(prices: &llrm_target::CpuPrices) -> std::rc::Rc<dyn llrm_mir::targ
 }
 
 impl llrm_target::Target for M16 {
+    fn objects(&self) -> &'static dyn llrm_debug::DebugObjectTarget {
+        &llrm_x86::mc::X86Objects
+    }
+
+    fn debug_target(&self) -> llrm_debug::DebugTarget {
+        llrm_x86::mc::fixup::debug_target(16)
+    }
+
     fn registers(&self) -> &'static llrm_lir::registers::Info {
         &REGISTER_INFO
     }
@@ -170,11 +185,32 @@ impl llrm_target::Target for M16 {
         llrm_x86::helpers::divide_used(signed, wide_divisor, 16, used).map_err(|refused| refused.message)
     }
 
+    fn small_divide_at_o1(&self) -> bool {
+        true
+    }
+
+    fn divide_routine_small(
+        &self,
+        signed: bool,
+        wide_divisor: bool,
+        used: llrm_target::routines::Used,
+    ) -> Result<llrm_target::routines::Divide, String> {
+        llrm_x86::helpers::divide_small(signed, wide_divisor, 16, used).map_err(|refused| refused.message)
+    }
+
     fn float_width(
         &self,
         _: u32,
     ) -> u32 {
         llrm_x86::X87_WIDTH
+    }
+
+    fn move_bytes(&self) -> Option<llrm_target::MoveBytes> {
+        Some(llrm_target::MoveBytes {
+            plain: 2,
+            copy: llrm_x86::encoding::copy_move_bytes,
+            literal: llrm_x86::encoding::literal_move_bytes,
+        })
     }
 
     fn register_op_bytes(
@@ -210,6 +246,12 @@ impl llrm_target::Target for M16 {
     /// their definitions require.
     fn pref_function_alignment(&self) -> u8 {
         0
+    }
+
+    /// DEVIATE SD543: no `rep` on `bsf`; the 386, 486 and Pentium have no
+    /// `tzcnt`, so the pin's prefix is a dead byte. Owner m16. Exit 2026-11-20.
+    fn bsf_rep_prefix(&self) -> bool {
+        false
     }
 
     /// DEVIATE E2-1: no loop is aligned (the pin's is 16 bytes).
@@ -269,6 +311,10 @@ impl llrm_target::Target for M16 {
         layout()
     }
 
+    fn address_roles(&self) -> llrm_mir::spaces::Spaces {
+        LAYOUT.spaces.roles
+    }
+
     fn conventions(&self) -> &'static [&'static str] {
         &CONVENTIONS
     }
@@ -313,8 +359,17 @@ impl llrm_target::Target for M16 {
         CALLING.native().slot_bytes
     }
 
+    /// Real mode has no `and sp` frame the pin builds.
+    fn can_realign_stack(&self) -> bool {
+        false
+    }
+
     fn frame_register(&self) -> RegId {
         llrm_x86::calling::frame(CALLING.native())
+    }
+
+    fn frame_enter(&self) -> bool {
+        CALLING.native().frame_enter
     }
 
     /// Past BP and a 2-byte return address, or a 4-byte far one.
@@ -342,6 +397,14 @@ impl llrm_target::Target for M16 {
 
     fn stack_pointer(&self) -> RegId {
         llrm_x86::calling::stack(CALLING.native())
+    }
+
+    fn string_roots(&self) -> Option<llrm_target::StringRoots> {
+        Some(llrm_x86::registers::STRING_ROOTS)
+    }
+
+    fn x87_stack_top(&self) -> Option<RegId> {
+        Some(llrm_x86::registers::X87_TOP)
     }
 
     fn string_registers(&self) -> Option<llrm_target::StringRegisters> {
@@ -395,6 +458,18 @@ impl llrm_target::Target for M16 {
 
 #[cfg(test)]
 mod tests {
+    /// A value confined to bx, si, di (a word address) was counted against
+    /// all of GR32's registers (limit 12), so the MachineLICM gate kept a
+    /// loop-invariant `lea` in bintree -O1's loop (+6,579 clk). Its class holds
+    /// the three allocatable address registers: limit 8 - bp's 2 = 6.
+    #[test]
+    fn test_address_registers_are_their_own_pressure_class() {
+        let class = PRESSURE.class_holding(&["ebx", "esi", "edi"]).unwrap();
+        assert_eq!(class.name, "ADDR16");
+        let set = PRESSURE.sets.iter().position(|one| one.largest == "ADDR16").unwrap();
+        assert_eq!(M16::pressure_limit(set), 6);
+    }
+
     /// `object()` and the runtime tables are parsed once and kept; each must
     /// equal a fresh parse of its toml (35 parses of object.toml and 4 of the
     /// runtime table cost 3.3 M Ir of every compile).
@@ -587,7 +662,33 @@ mod tuning_tests {
         assert_eq!(table.max_stores_per_memset_opt_size, 4);
         assert_eq!((table.max_stores_per_memcpy_opt_size, table.max_stores_per_memmove_opt_size), (2, 2));
         assert_eq!(table.size_milliclocks_per_byte, 10_000);
+        assert_eq!(
+            table.speed_milliclocks_per_byte,
+            crate::timings::speed_milliclocks_per_byte(),
+            "the compiler reads the judge's row"
+        );
+        assert_eq!(table.speed_milliclocks_per_byte, 500, "policy: user 2026-10-31, 1 clk = 2 B");
+        assert!(table.divide_by_bytes, "DEVIATE SD446: m16 weighs the bytes of a divide by a constant");
         assert_eq!((table.unroll_threshold, table.unroll_max_percent_threshold_boost), (Some(0), Some(100)));
+        assert_eq!(table.unroll_partial_threshold, Some(0));
+        assert_eq!(table.x87_stack_slots, Some(8));
+        assert!(table.slots_loop_width_rule, "m16 keeps a word out of a loop-held wider stack slot (SLOTS-LOOPWIDTH)");
+        assert!(!table.carry_slot_indexes, "DEVIATE CARRY-SI: x86 numbers the function afresh after the scheduler until priced");
+        assert_eq!(table.address_reference_milliweight, 3000, "DEVIATE RA-CLK: an address component weighs three references");
+        assert_eq!(table.unswitch_threshold, Some(0));
+        assert_eq!(table.min_jump_table_density, Some(40), "DEVIATE M16-JT-DENSITY: a table pays from 40% at every level");
+        // The later overrides, each with its source: a new one must be named here.
+        assert_eq!((table.narrow_divide_live_limit, table.narrow_divide_live_max_bits), (3, 32), "#9067: -O1 divide yields to register pressure");
+        assert!(!table.narrow_divide_live_at_size, "#9067: -Os keeps every divide");
+        assert!(!table.inline_dying_credit_at_os, "#9253, D13: the units undercount a 16-bit copy");
+        assert!(table.cold_site_ignores_sinks, "#9102, DEVIATE BFS-1");
+        assert!(table.frame_slot_is_free_base && table.lsr_address_fewest_registers, "#9312, DEVIATE LU31: [bp+si+disp] and the narrow filter");
+        assert!(table.lsr_size_order, "#9352, DEVIATE LSR-SIZE: -Os LSR orders by x86 bytes");
+        assert!(!table.libc_memcpy, "m16 has no libc: a run-time copy stays a loop where `rep movs` is more bytes");
+        assert!(table.pops_arguments_at_size, "DEVIATE PO1: -Os pops a call's arguments; only x86-m32 is the pin's");
+        assert_eq!(table.ext_load_extra_clocks, 2, "DEVIATE EXT-LOAD-COST: a widening load costs the extend's clocks over a load");
+        assert!(table.spill_fold.is_some(), "DEVIATE SPILL-FOLD: a folded spill is priced in clocks");
+        assert!(table.read_only_in_code, "#9694: a table one procedure reads follows it into its code segment (not at -Os, #9695)");
         assert_eq!(
             Tuning {
                 max_stores_per_memset: 16,
@@ -597,12 +698,67 @@ mod tuning_tests {
                 max_stores_per_memcpy_opt_size: 4,
                 max_stores_per_memmove_opt_size: 4,
                 size_milliclocks_per_byte: 0,
+                multiply_by_clocks: false,
+                fills_pattern_at_speed: false,
+                divide_by_bytes: false,
+                price_pin_multiplies: false,
+                // The pin's value: m16 sets it (DEVIATE LFTR1, `target.rs`).
+                lftr_any_stride: false,
+                imul_at_size: false,
+                speed_milliclocks_per_byte: 0,
+                price_fills: false,
                 unroll_threshold: None,
                 unroll_max_percent_threshold_boost: None,
+                unroll_partial_threshold: None,
+                x87_stack_slots: None,
+                slots_loop_width_rule: false,
+                carry_slot_indexes: true,
+                address_reference_milliweight: 1000,
+                rotation_header_priced_at_size: false,
+                unswitch_threshold: None,
+                min_jump_table_density: None,
                 inline_threshold: None,
+                split_merged_conditions: false,
+                inline_size_guard_at_size: false,
+                keep_constant_displacements: false,
+                narrow_divide_live_limit: 0,
+                narrow_divide_live_max_bits: 31,
+                narrow_divide_live_at_size: true,
+                inline_dying_credit_at_os: true,
+                cold_site_ignores_sinks: false,
+                frame_slot_is_free_base: false,
+                lsr_address_fewest_registers: false,
+                lsr_size_order: false,
+                x87_share_negated_products: false,
+                x87_zero_fill_at_size: false,
+                unroll_promotion_fits_x87_stack: false,
+                read_only_in_code: false,
+                ext_load_extra_clocks: 0,
+                spill_fold: None,
                 ..table
             },
             Tuning::PIN
         );
+    }
+}
+
+#[cfg(test)]
+mod stack_natural_alignment_tests {
+    fn stated(key: &str) -> Option<&'static str> {
+        super::DATALAYOUT_TOML.lines().find_map(|line| line.strip_prefix(key)?.strip_prefix(" = \"")?.strip_suffix('"'))
+    }
+
+    /// S16 made bench/parity/qbsp -Os zero a packed 16-byte local with `rep stosb` x16 where the pin's m16 (no S in its string) raises the
+    /// local and zeroes it with `rep stosw` x8. The datalayout follows the pin: no S, and the reason is data.
+    #[test]
+    fn the_datalayout_follows_the_pin_in_naming_no_stack_alignment() {
+        llrm_target::testing::assert_unstated_stack("x86-m16", stated("datalayout").unwrap(), stated("stack_alignment_unstated"));
+    }
+
+    /// A target that is exempt for having no S in its pin string and declares one anyway is caught by name.
+    #[test]
+    #[should_panic(expected = "declares an S though its pin string has none")]
+    fn an_exempt_target_that_declares_a_stack_alignment_fails() {
+        llrm_target::testing::assert_unstated_stack("x86-m16", "e-p:16:16-S16", Some("the pin's m16 datalayout has no S"));
     }
 }

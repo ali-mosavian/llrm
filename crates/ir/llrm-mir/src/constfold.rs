@@ -29,9 +29,10 @@
 
 use std::cmp::Ordering;
 
-use crate::apfloat::{CmpResult, IEEE_DOUBLE, IEEE_SINGLE};
+use crate::apfloat::{CmpResult, IEEE_DOUBLE, IEEE_QUAD, IEEE_SINGLE};
 use crate::context::{Constant, ConstantExpr, ConstantId, ConstantKind, Context, mask, signed};
 use crate::fp80;
+use crate::fp128;
 use crate::fpclass::RoundingMode;
 use crate::module::{GlobalKind, GlobalValue, Linkage, UnnamedAddr};
 use crate::opcode::{BinaryOp, CastOp, Flags, FloatPredicate, IntPredicate};
@@ -73,7 +74,7 @@ pub fn null_value(
 ) -> ConstantId {
     let kind = match context.types.get(ty) {
         Type::Int(_) => ConstantKind::Int(0),
-        Type::Float(_) => ConstantKind::Float(0),
+        Type::Float(kind) => ConstantKind::float_zero(*kind),
         Type::Pointer(_) => ConstantKind::Null,
         _ => ConstantKind::Zero,
     };
@@ -109,6 +110,118 @@ fn undef(
     context.constant(Constant { ty, kind: ConstantKind::Undef })
 }
 
+/// The lanes of a vector constant: `getAggregateElement` of each.
+pub(crate) fn lanes_of(
+    context: &Context,
+    id: ConstantId,
+    element: TypeId,
+    count: usize,
+) -> Option<Vec<ConstantId>> {
+    let constant = context.get(id);
+    match &constant.kind {
+        ConstantKind::Aggregate(lanes) if lanes.len() == count => Some(lanes.clone()),
+        ConstantKind::Zero | ConstantKind::Null => {
+            let zero = context.constant(Constant { ty: element, kind: ConstantKind::Zero });
+            let zero = if context.types.int_bits(element).is_some() { context.int(element, 0) } else { zero };
+            Some(vec![zero; count])
+        }
+        ConstantKind::Poison => Some(vec![poison(context, element); count]),
+        ConstantKind::Undef => Some(vec![undef(context, element); count]),
+        _ => None,
+    }
+}
+
+fn low_mask(width: u32) -> u128 {
+    if width >= 128 { u128::MAX } else { (1u128 << width) - 1 }
+}
+
+/// The bits of an integer constant or of a vector of integer constants, lane 0
+/// lowest, and how many: none past 128 bits, nor with an undef or poison lane.
+fn integer_bits_of(
+    context: &Context,
+    c: ConstantId,
+) -> Option<(u128, u32)> {
+    let constant = context.get(c);
+    match context.types.get(constant.ty).clone() {
+        Type::Int(width) => match constant.kind {
+            ConstantKind::Int(bits) => Some((bits & low_mask(width), width)),
+            ConstantKind::Zero | ConstantKind::Null => Some((0, width)),
+            _ => None,
+        },
+        Type::Vector { element, count } => {
+            let width = context.types.int_bits(element)?;
+            if u64::from(width) * u64::from(count) > 128 {
+                return None;
+            }
+            let mut bits = 0u128;
+            for (lane, one) in lanes_of(context, c, element, count as usize)?.into_iter().enumerate() {
+                let value = match context.get(one).kind {
+                    ConstantKind::Int(value) => value & low_mask(width),
+                    ConstantKind::Zero | ConstantKind::Null => 0,
+                    _ => return None,
+                };
+                bits |= value << (lane as u32 * width);
+            }
+            Some((bits, width * count))
+        }
+        _ => None,
+    }
+}
+
+/// `FoldBitCast` of the integer shapes (ConstantFold.cpp,
+/// `foldConstantCastPair` aside): an integer or a vector of integers as another
+/// of the same total width, lane 0 the low bits (little endian).
+fn bitcast_integer_lanes(
+    context: &Context,
+    c: ConstantId,
+    to: TypeId,
+) -> Option<ConstantId> {
+    let (bits, total) = integer_bits_of(context, c)?;
+    match context.types.get(to).clone() {
+        Type::Int(width) if width == total => Some(context.int(to, bits as i128)),
+        Type::Vector { element, count } => {
+            let width = context.types.int_bits(element)?;
+            if width * count != total {
+                return None;
+            }
+            if bits == 0 {
+                return Some(context.constant(Constant { ty: to, kind: ConstantKind::Zero }));
+            }
+            let lanes = (0..count)
+                .map(|lane| context.int(element, ((bits >> (lane * width)) & low_mask(width)) as i128))
+                .collect();
+            Some(context.constant(Constant { ty: to, kind: ConstantKind::Aggregate(lanes) }))
+        }
+        _ => None,
+    }
+}
+
+/// `ConstantFoldBinaryInstruction` of fixed vectors
+/// ([ConstantFold.cpp:699](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/IR/ConstantFold.cpp#L699)):
+/// the operation of each pair of lanes, none left unfolded.
+fn binary_lanes(
+    context: &Context,
+    op: BinaryOp,
+    c1: ConstantId,
+    c2: ConstantId,
+    ty: TypeId,
+    element: TypeId,
+    count: usize,
+) -> Option<ConstantId> {
+    context.types.int_bits(element)?;
+    let (left, right) = (lanes_of(context, c1, element, count)?, lanes_of(context, c2, element, count)?);
+    let mut folded = Vec::with_capacity(count);
+    for (a, b) in left.into_iter().zip(right) {
+        folded.push(binary(context, op, a, b)?);
+    }
+    let zero = |lane: ConstantId| matches!(
+        context.get(lane).kind,
+        ConstantKind::Int(0) | ConstantKind::Zero
+    );
+    let kind = if folded.iter().all(|lane| zero(*lane)) { ConstantKind::Zero } else { ConstantKind::Aggregate(folded) };
+    Some(context.constant(Constant { ty, kind }))
+}
+
 /// `ConstantFoldBinaryInstruction`
 /// ([ConstantFold.cpp:637](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/IR/ConstantFold.cpp#L637)).
 pub fn binary(
@@ -118,6 +231,9 @@ pub fn binary(
     c2: ConstantId,
 ) -> Option<ConstantId> {
     let ty = context.get(c1).ty;
+    if let Type::Vector { element, count } = context.types.get(ty).clone() {
+        return binary_lanes(context, op, c1, c2, ty, element, count as usize);
+    }
     let ones = |width: u32| mask(width);
     // The identity values first: no-ops that return the other value, a poison
     // one included.
@@ -267,6 +383,25 @@ fn is_x87(
     )
 }
 
+/// Whether `id` is of type `fp128`.
+fn is_f128(
+    context: &Context,
+    id: ConstantId,
+) -> bool {
+    matches!(
+        context.types.get(context.get(id).ty),
+        Type::Float(FloatKind::F128)
+    )
+}
+
+/// The value of an `x86_fp80` or `fp128` constant.
+fn wide_value(
+    context: &Context,
+    id: ConstantId,
+) -> Option<crate::apfloat::ApFloat> {
+    if is_f128(context, id) { fp128::value(&context.get(id).kind) } else { fp80::value(&context.get(id).kind) }
+}
+
 /// A floating constant's value as a double and its kind: `Float` bits are IEEE
 /// single in the low 32, `Double` IEEE double, `X86Fp80` the double nearest its
 /// value (MIR holds an 80-bit constant that way), and a zero is +0.0.
@@ -282,6 +417,8 @@ fn float_number(
             match kind {
                 FloatKind::Float => f64::from(f32::from_bits(bits as u32)),
                 FloatKind::Double | FloatKind::X86Fp80 => f64::from_bits(bits),
+                // An fp128 constant is Float128, never Float.
+                FloatKind::F128 => return None,
             },
         )),
         ConstantKind::Null | ConstantKind::Zero => Some((kind, 0.0)),
@@ -301,6 +438,7 @@ fn float_constant(
     let bits = match kind {
         FloatKind::Float => u64::from((value as f32).to_bits()),
         FloatKind::Double | FloatKind::X86Fp80 => value.to_bits(),
+        FloatKind::F128 => unreachable!("float_number gives no fp128, so nothing folds into one"),
     };
     context.constant(Constant { ty, kind: ConstantKind::Float(bits) })
 }
@@ -328,7 +466,27 @@ pub fn cast(
     if is_null_value(context, c) && op != CastOp::AddrSpaceCast {
         return Some(null_value(context, to));
     }
+    if op == CastOp::BitCast {
+        if let Some(folded) = bitcast_integer_lanes(context, c, to) {
+            return Some(folded);
+        }
+    }
     let dest = context.types.get(to).clone();
+    // A fixed vector casts lane by lane (`ConstantFoldCastInstruction`, L116);
+    // a bitcast regroups the lanes and is not one.
+    if let (Type::Vector { element: to_element, count }, Type::Vector { element, .. }) =
+        (&dest, context.types.get(context.get(c).ty).clone())
+        && op != CastOp::BitCast
+    {
+        let lanes = lanes_of(context, c, element, *count as usize)?;
+        let folded = lanes.into_iter().map(|lane| cast(context, op, lane, *to_element)).collect::<Option<Vec<_>>>()?;
+        let zero = |lane: &ConstantId| matches!(
+            context.get(*lane).kind,
+            ConstantKind::Int(0) | ConstantKind::Zero
+        );
+        let kind = if folded.iter().all(zero) { ConstantKind::Zero } else { ConstantKind::Aggregate(folded) };
+        return Some(context.constant(Constant { ty: to, kind }));
+    }
     match (op, dest) {
         // The bits of a number are those of the float of the same width.
         (CastOp::BitCast, Type::Float(kind @ (FloatKind::Float | FloatKind::Double))) => {
@@ -338,6 +496,30 @@ pub fn cast(
             }
             Some(context.constant(Constant { ty: to, kind: ConstantKind::Float(x as u64) }))
         }
+        // `bitcastToAPInt` / `APFloat(Semantics, APInt)` of the wider formats.
+        (CastOp::BitCast, Type::Int(80)) => {
+            let ConstantKind::Float80(bits) = context.get(c).kind else { return None };
+            Some(context.constant(Constant { ty: to, kind: ConstantKind::Int(bits) }))
+        }
+        (CastOp::BitCast, Type::Int(128)) => {
+            let ConstantKind::Float128(bits) = context.get(c).kind else { return None };
+            Some(context.constant(Constant { ty: to, kind: ConstantKind::Int(bits) }))
+        }
+        (CastOp::BitCast, Type::Float(FloatKind::X86Fp80)) => {
+            let (ConstantKind::Int(bits), Type::Int(80)) = (&context.get(c).kind, context.types.get(context.get(c).ty))
+            else {
+                return None;
+            };
+            Some(context.constant(Constant { ty: to, kind: ConstantKind::Float80(*bits) }))
+        }
+        (CastOp::BitCast, Type::Float(FloatKind::F128)) => {
+            let (ConstantKind::Int(bits), Type::Int(128)) =
+                (&context.get(c).kind, context.types.get(context.get(c).ty))
+            else {
+                return None;
+            };
+            Some(context.constant(Constant { ty: to, kind: ConstantKind::Float128(*bits) }))
+        }
         (CastOp::BitCast, Type::Int(width @ (32 | 64))) => {
             let ConstantKind::Float(bits) = context.get(c).kind else { return None };
             let float = match context.types.get(context.get(c).ty) {
@@ -346,6 +528,46 @@ pub fn cast(
                 _ => return None,
             };
             (float == width).then(|| context.constant(Constant { ty: to, kind: ConstantKind::Int(u128::from(bits)) }))
+        }
+        (CastOp::FPTrunc | CastOp::FPRound, Type::Float(kind @ (FloatKind::Float | FloatKind::Double)))
+            if is_f128(context, c) =>
+        {
+            let mut number = fp128::value(&context.get(c).kind)?;
+            if !number.is_finite() {
+                return None;
+            }
+            number.convert(
+                if kind == FloatKind::Float { IEEE_SINGLE } else { IEEE_DOUBLE },
+                RoundingMode::NearestTiesToEven,
+            );
+            (number.is_finite())
+                .then(|| context.constant(Constant { ty: to, kind: ConstantKind::Float(number.to_bits() as u64) }))
+        }
+        (CastOp::FPExt, Type::Float(FloatKind::F128))
+            if matches!(
+                context.types.get(context.get(c).ty),
+                Type::Float(FloatKind::Float | FloatKind::Double)
+            ) =>
+        {
+            let ConstantKind::Float(bits) = context.get(c).kind else { return None };
+            let semantics = match context.types.get(context.get(c).ty) {
+                Type::Float(FloatKind::Float) => IEEE_SINGLE,
+                _ => IEEE_DOUBLE,
+            };
+            let mut number = crate::apfloat::ApFloat::from_bits(semantics, u128::from(bits));
+            if !number.is_finite() {
+                return None;
+            }
+            number.convert(IEEE_QUAD, RoundingMode::NearestTiesToEven);
+            Some(fp128::constant(context, to, &number))
+        }
+        (CastOp::FPToSI | CastOp::FPToUI, Type::Int(width)) if width <= 127 && is_f128(context, c) => {
+            let number = fp128::value(&context.get(c).kind)?;
+            // Out of range or not a number is poison, as for the other formats.
+            let Some(value) = fp128::to_integer(&number, RoundingMode::TowardZero, width, op == CastOp::FPToSI) else {
+                return Some(poison(context, to));
+            };
+            Some(context.constant(Constant { ty: to, kind: ConstantKind::Int(value as u128 & mask(width)) }))
         }
         (CastOp::FPTrunc | CastOp::FPRound, Type::Float(kind @ (FloatKind::Float | FloatKind::Double)))
             if is_x87(context, c) =>
@@ -408,6 +630,28 @@ pub fn cast(
             }
             Some(context.constant(Constant { ty: to, kind: ConstantKind::Int((value as i128) as u128 & mask(width)) }))
         }
+        // An integer of up to 64 significant bits is exact in binary128.
+        (CastOp::SIToFP | CastOp::UIToFP, Type::Float(FloatKind::F128)) => {
+            let (x, from) = number(context, c)?;
+            let (magnitude, negative) = if op == CastOp::SIToFP && signed(x, from) < 0 {
+                (signed(x, from).unsigned_abs(), true)
+            } else if op == CastOp::SIToFP {
+                (signed(x, from) as u128, false)
+            } else {
+                (x, false)
+            };
+            let bits = if magnitude == 0 {
+                0
+            } else {
+                let top = 127 - magnitude.leading_zeros();
+                if top > 112 {
+                    return None;
+                }
+                let fraction = (magnitude << (112 - top)) & ((1u128 << 112) - 1);
+                (u128::from(negative) << 127) | ((0x3FFF + u128::from(top)) << 112) | fraction
+            };
+            Some(context.constant(Constant { ty: to, kind: ConstantKind::Float128(bits) }))
+        }
         (CastOp::SIToFP | CastOp::UIToFP, Type::Float(kind)) if kind != FloatKind::X86Fp80 => {
             let (x, from) = number(context, c)?;
             // Straight from the integer to the target precision: no rounding
@@ -468,8 +712,8 @@ pub fn compare_float(
     if is_undef(context, c1) || is_undef(context, c2) {
         return Some(result(predicate.holds(None)));
     }
-    if is_x87(context, c1) {
-        let (a, b) = (fp80::value(&context.get(c1).kind)?, fp80::value(&context.get(c2).kind)?);
+    if is_x87(context, c1) || is_f128(context, c1) {
+        let (a, b) = (wide_value(context, c1)?, wide_value(context, c2)?);
         let order = match a.compare(&b) {
             CmpResult::LessThan => Some(Ordering::Less),
             CmpResult::Equal => Some(Ordering::Equal),
@@ -517,6 +761,11 @@ pub fn float_binary(
         let (a, b) = (fp80::value(&context.get(c1).kind)?, fp80::value(&context.get(c2).kind)?);
         let ty = context.get(c1).ty;
         return Some(fp80::constant(context, ty, &fp80::binary(op, &a, &b)?));
+    }
+    if is_f128(context, c1) {
+        let (a, b) = (fp128::value(&context.get(c1).kind)?, fp128::value(&context.get(c2).kind)?);
+        let ty = context.get(c1).ty;
+        return Some(fp128::constant(context, ty, &fp128::binary(op, &a, &b)?));
     }
     let ((kind, x), (kind2, y)) = (float_number(context, c1)?, float_number(context, c2)?);
     if kind != kind2 || kind == FloatKind::X86Fp80 || !x.is_finite() || !y.is_finite() {
@@ -862,6 +1111,61 @@ mod tests {
         context.constant(Constant { ty, kind: ConstantKind::Int(value) })
     }
 
+    /// `<3, 3> + <4, 4>` stayed an unfolded expression: `binary` read the
+    /// width of a vector's type as that of a number, so `(x + 3) + 4` on
+    /// vectors never became `x + 7` (recsum's loop on arm64). The operation
+    /// is that of each pair of lanes.
+    #[test]
+    fn a_vector_of_numbers_folds_lane_by_lane() {
+        let context = Context::new();
+        let i32 = context.types.int(32);
+        let vector = context.types.intern(Type::Vector { element: i32, count: 4 });
+        let splat = |value: i128| context.int(vector, value);
+        assert_eq!(binary(&context, BinaryOp::Add, splat(3), splat(4)), Some(splat(7)));
+        assert_eq!(binary(&context, BinaryOp::Sub, splat(3), splat(3)), Some(splat(0)));
+        let lanes = |values: [i128; 4]| {
+            let lanes = values.iter().map(|value| context.int(i32, *value)).collect();
+            context.constant(Constant { ty: vector, kind: ConstantKind::Aggregate(lanes) })
+        };
+        assert_eq!(binary(&context, BinaryOp::Mul, lanes([1, 2, 3, 4]), splat(2)), Some(lanes([2, 4, 6, 8])));
+    }
+
+    /// `sext <8 x i16> <-66, ...> to <8 x i64>` stayed an instruction (`cast`
+    /// knew numbers, not vectors), so the products of constant vectors were
+    /// computed at run time: arm64 `dot` -O2 loaded sixteen constant vectors
+    /// and widened and multiplied them per call (838 instructions against
+    /// clang's 739). A cast of a vector is that of each lane.
+    #[test]
+    fn a_vector_of_numbers_casts_lane_by_lane() {
+        let context = Context::new();
+        let (i16, i64) = (context.types.int(16), context.types.int(64));
+        let narrow = context.types.intern(Type::Vector { element: i16, count: 4 });
+        let wide = context.types.intern(Type::Vector { element: i64, count: 4 });
+        let lanes = |ty, element, values: [i128; 4]| {
+            let lanes = values.iter().map(|value| context.int(element, *value)).collect();
+            context.constant(Constant { ty, kind: ConstantKind::Aggregate(lanes) })
+        };
+        let source = lanes(narrow, i16, [-66, 54, 0, -1]);
+        assert_eq!(cast(&context, CastOp::SExt, source, wide), Some(lanes(wide, i64, [-66, 54, 0, -1])));
+        let unsigned = lanes(wide, i64, [0xFFBE, 54, 0, 0xFFFF]);
+        assert_eq!(cast(&context, CastOp::ZExt, source, wide), Some(unsigned));
+        assert_eq!(cast(&context, CastOp::SExt, context.int(narrow, 0), wide), Some(context.int(wide, 0)));
+    }
+
+    /// `<0, 0, 0, 0>` was an aggregate that `m_Zero` did not see, so `0 - x`
+    /// of a vector built from lanes was no negation, and `(0 - x) * (0 - y)`
+    /// stayed. A vector of zeros is the zero value of its type.
+    #[test]
+    fn a_vector_of_zeros_is_the_zero_value() {
+        let context = Context::new();
+        let i32 = context.types.int(32);
+        let vector = context.types.intern(Type::Vector { element: i32, count: 4 });
+        let zero = context.int(i32, 0);
+        let lanes = context.constant(Constant { ty: vector, kind: ConstantKind::Aggregate(vec![zero; 4]) });
+        assert_eq!(lanes, context.int(vector, 0));
+        assert_eq!(context.get(lanes).kind, ConstantKind::Zero);
+    }
+
     /// `X * 0`, `X | -1`, `0 << X`, `0 / X`, `X % 1` and `X / 0` fold with `X`
     /// not a number; they stayed unfolded (the builder made the
     /// instruction) because the number test came first.
@@ -903,6 +1207,21 @@ mod tests {
         assert_eq!(context.get(float).kind, ConstantKind::Float(0x3f80_0000));
         let back = cast(&mut context, CastOp::BitCast, float, i32t).expect("bitcast to int");
         assert_eq!(back, one);
+    }
+
+    /// `bitcast (x86_fp80 0xK403791A2B3C4D5E6F780 to i80)` stayed a constant
+    /// expression: only float and double folded. The pin folds every format
+    /// (`bitcastToAPInt`), and the long double pun in long_double_union_pun
+    /// then selects as five immediates, not a store, a load and shifts.
+    #[test]
+    fn the_bits_of_an_extended_float_are_an_i80_and_back() {
+        let mut context = Context::new();
+        let (i80, f80) = (context.types.int(80), context.types.intern(Type::Float(FloatKind::X86Fp80)));
+        let bits = 0x4037_91A2_B3C4_D5E6_F780_u128;
+        let float = context.constant(Constant { ty: f80, kind: ConstantKind::Float80(bits) });
+        let int = cast(&mut context, CastOp::BitCast, float, i80).expect("bitcast to i80");
+        assert_eq!(context.get(int).kind, ConstantKind::Int(bits));
+        assert_eq!(cast(&mut context, CastOp::BitCast, int, f80), Some(float));
     }
 }
 
@@ -1041,6 +1360,7 @@ mod relation_tests {
         GlobalValue {
             name: Default::default(),
             linkage,
+            visibility: crate::module::Visibility::Default,
             unnamed_addr: UnnamedAddr::None,
             address_space: 0,
             kind: GlobalKind::Variable(GlobalVariable {

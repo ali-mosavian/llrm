@@ -4,7 +4,7 @@
 //! prologue analysis has nothing to go on (a frameless function, registers
 //! saved where first needed).
 
-use llrm_object::debug::{FrameRow, Info};
+use llrm_debug::{FrameRow, Info};
 use llrm_object::{Object, Unsupported};
 
 use crate::buffer::{Buf, Done};
@@ -45,26 +45,29 @@ fn number(
     info: &Info,
     name: &str,
 ) -> Result<u64, Unsupported> {
-    match info.registers.iter().find(|one| one.name == name).and_then(|one| one.dwarf) {
+    match info.registers().dwarf(name) {
         Some(number) => Ok(u64::from(number)),
         None => refused(format!("register {name} has no DWARF number, which a frame rule names")),
     }
 }
 
 /// The instructions that take the state `from` to `to`: its frame address, then
-/// each register's rule.
+/// each register's rule. `full_cfa`: a new frame register is written with its
+/// offset (`DW_CFA_def_cfa`) even where the offset is the same, as the pin's
+/// `.cfi_def_cfa w29, 16` is.
 pub(crate) fn changes(
     number: &dyn Fn(&str) -> Result<u64, Unsupported>,
     buf: &mut Buf,
     from: &FrameRow,
     to: &FrameRow,
     alignment: i64,
+    full_cfa: bool,
 ) -> Result<(), Unsupported> {
     if (&from.cfa_register, from.cfa_offset) != (&to.cfa_register, to.cfa_offset) {
         if from.cfa_register == to.cfa_register {
             buf.u8(DW_CFA_DEF_CFA_OFFSET);
             buf.uleb(to.cfa_offset as u64);
-        } else if from.cfa_offset == to.cfa_offset {
+        } else if from.cfa_offset == to.cfa_offset && !full_cfa {
             buf.u8(DW_CFA_DEF_CFA_REGISTER);
             buf.uleb(number(&to.cfa_register)?);
         } else {
@@ -129,10 +132,11 @@ pub fn section(
     address: usize,
 ) -> Result<Option<Done>, Unsupported> {
     let Some(entry) = info.functions.iter().find_map(|one| one.frame.first()) else { return Ok(None) };
-    if info.return_register.is_empty() {
+    let return_register = &info.registers().return_register;
+    if return_register.is_empty() {
         return Ok(None);
     }
-    let return_column = number(info, &info.return_register)?;
+    let return_column = number(info, return_register)?;
     let mut buf = Buf::default();
     // The CIE: the frame address at entry, and the return address in its slot
     // just below it.
@@ -187,7 +191,7 @@ pub fn section(
             if row.offset > 0 || state != row {
                 advance(&mut buf, row.offset - state.offset.min(row.offset));
             }
-            changes(&|name| number(info, name), &mut buf, state, row, data_alignment(address))?;
+            changes(&|name| number(info, name), &mut buf, state, row, data_alignment(address), false)?;
             state = row;
         }
         while buf.at() % address != 0 {

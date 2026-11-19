@@ -47,8 +47,9 @@ fn a_loop_is_blocks_with_phis_and_branches() {
         assert!(block.succ.iter().all(|at| addresses.contains(at)), "{block:#?}");
     }
     // The builder swaps a branch whose true edge is the next block: it jumps to
-    // `done` and falls into the body.
-    assert_eq!(header.succ.iter().copied().collect::<Vec<_>>(), [addresses[3], addresses[2]]);
+    // `done` and falls into the body. The successors stay in `addSuccessor`
+    // order, true edge (the body) first.
+    assert_eq!(header.succ.iter().copied().collect::<Vec<_>>(), [addresses[2], addresses[3]]);
     assert_eq!(blocks[2].succ.iter().copied().collect::<Vec<_>>(), [addresses[1]]);
     assert!(blocks[3].succ.is_empty());
 }
@@ -1147,4 +1148,209 @@ define void @f() {
         stores.iter().all(|w| matches!(w.sources.as_slice(), [crate::model::ir::Loc::Imm(_)])),
         "each store is an immediate's: {stores:?}"
     );
+}
+
+const LONG_RESULT: &str = "target datalayout = \"@m16-datalayout@-ni:2:3\"
+declare i32 @g()
+define i32 @f() {
+entry:
+  %r = call i32 @g()
+  %s = add i32 %r, 1
+  ret i32 %s
+}
+";
+
+/// A LONG returned in `dx:ax` was packed as `movzx`, `shl`, `or`, a byte longer
+/// per call than the `shl`, `shrd` pair (+2 B at every call of a LONG function:
+/// parity/branch, qlight, qmove, loop).
+#[test]
+fn a_long_returned_in_dx_ax_is_packed_by_a_shrd() {
+    let module = llrm_mir::parse::module(m16_ir(LONG_RESULT)).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let names: Vec<_> =
+        done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.as_deref().map(str::to_owned)).collect();
+    let count = |n: &str| names.iter().filter(|x| x.as_str() == n).count();
+    assert_eq!((count("shrd"), count("movzx"), count("or")), (1, 0, 0), "{names:?}");
+}
+
+fn pack_names(source: &str) -> Vec<String> {
+    let module = llrm_mir::parse::module(m16_ir(source)).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    done.body.insns().iter().filter_map(|i| i.what.as_ref()?.name.as_deref().map(str::to_owned)).collect()
+}
+
+/// A far pointer taken as an integer and computed with was packed by the
+/// `shrd` form too, and its halves were taken apart again (the first A built
+/// that: bintree and grep red). Its pair is marked, so it keeps the `or`.
+#[test]
+fn a_far_pointer_taken_as_an_integer_is_not_packed_by_a_shrd() {
+    let names = pack_names(
+        "target datalayout = \"@m16-datalayout@-ni:2:3\"
+define i32 @f(ptr addrspace(1) %p) {
+entry:
+  %i = ptrtoint ptr addrspace(1) %p to i32
+  %s = add i32 %i, 1
+  ret i32 %s
+}
+",
+    );
+    assert!(!names.iter().any(|n| n == "shrd"), "{names:?}");
+}
+
+/// A LONG returned by a call and compared, or divided, is the same dword as one
+/// added to: one `shrd` at each call, not `movzx`, `shl`, `or`.
+#[test]
+fn a_long_returned_and_compared_is_packed_by_a_shrd() {
+    let names = pack_names(
+        "target datalayout = \"@m16-datalayout@-ni:2:3\"
+declare i32 @g()
+define i1 @f() {
+entry:
+  %r = call i32 @g()
+  %c = icmp slt i32 %r, 1000
+  ret i1 %c
+}
+",
+    );
+    assert_eq!(
+        (names.iter().filter(|n| *n == "shrd").count(), names.iter().filter(|n| *n == "or").count()),
+        (1, 0),
+        "{names:?}"
+    );
+}
+
+/// A LONG returned and tested against zero kept `movzx`, `shl`, `or` (the `or`
+/// sets the flags); the `shrd` pack cost Nib's grep a `test` and 3 bytes.
+#[test]
+fn a_long_returned_and_tested_against_zero_is_not_packed_by_a_shrd() {
+    let names = pack_names(
+        "target datalayout = \"@m16-datalayout@-ni:2:3\"
+declare i32 @g()
+define i1 @f() {
+entry:
+  %r = call i32 @g()
+  %c = icmp slt i32 %r, 0
+  ret i1 %c
+}
+",
+    );
+    assert_eq!(
+        (names.iter().filter(|n| *n == "shrd").count(), names.iter().filter(|n| *n == "or").count()),
+        (0, 1),
+        "{names:?}"
+    );
+}
+
+fn pair_kinds(source: &str) -> Vec<Option<crate::model::lir::PairKind>> {
+    let module = llrm_mir::parse::module(m16_ir(source)).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    done.body.insns().iter().filter_map(|i| i.pair).map(Some).collect()
+}
+
+/// A far pointer's join was an `or` like any other once selected, so the
+/// allocator could not tell its join from a long's: no instruction carried the
+/// pair kind.
+#[test]
+fn a_far_pointer_join_and_a_long_join_reach_the_lir_marked() {
+    use crate::model::lir::PairKind::{Far, Long};
+    let far = pair_kinds(
+        "target datalayout = \"@m16-datalayout@-ni:2:3\"
+define i32 @f(ptr addrspace(1) %p) {
+entry:
+  %i = ptrtoint ptr addrspace(1) %p to i32
+  %s = xor i32 %i, 1
+  ret i32 %s
+}
+",
+    );
+    let long = pair_kinds(
+        "target datalayout = \"@m16-datalayout@-ni:2:3\"
+declare i32 @g()
+define i1 @f() {
+entry:
+  %r = call i32 @g()
+  %c = icmp slt i32 %r, 1000
+  ret i1 %c
+}
+",
+    );
+    assert_eq!((far, long), (vec![Some(Far)], vec![Some(Long)]));
+}
+
+const STACK_POINTER_LOAD: &str = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-p4:32:16:16:16-i32:16-i64:16-f80:16-n8:16:32-ni:2:3\"
+define i16 @f(ptr addrspace(5) %p, i16 %i) {
+  %q = getelementptr i16, ptr addrspace(5) %p, i16 %i
+  %v = load i16, ptr addrspace(5) %q
+  ret i16 %v
+}
+";
+
+/// The segment of every memory cell `text`'s `f` reads or writes at m16 under
+/// `segments`.
+fn stack_pointer_segments(segments: &crate::backend::target::Segments) -> Vec<llrm_lir::registers::RegId> {
+    stack_pointer_segments_of(STACK_POINTER_LOAD, segments)
+}
+
+fn stack_pointer_segments_of(
+    text: &str,
+    segments: &crate::backend::target::Segments,
+) -> Vec<llrm_lir::registers::RegId> {
+    let module = crate::testing::module(text).expect("parses");
+    let contracts = super::dag_function::RuntimeContracts {
+        hole: 0,
+        abi: &super::dag_function_tests::Stub { flags: false },
+        segments,
+        runtime: false,
+        frame_zeroed: false,
+        facts: None,
+    };
+    let pool = &mut crate::backend::constpool::Pool::new(module.globals.len() as i64);
+    let done = super::dag_function::selected_in_pool(
+        &module,
+        "f",
+        &llrm_x86_m16::M16,
+        crate::backend::cpu::profile("386").expect("a cpu"),
+        &[],
+        Some(&contracts),
+        pool,
+    )
+    .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    insns
+        .iter()
+        .filter_map(|i| i.what.as_ref())
+        .flat_map(|w| w.sources.iter().chain(w.dests.iter()))
+        .filter_map(|l| match l {
+            crate::model::ir::Loc::Mem(m) => m.addr.as_ref(),
+            _ => None,
+        })
+        .map(|addr| llrm_lir::registers::RegId::from(addr.segment))
+        .collect()
+}
+
+/// A Nib `&mut [i16]` is a pointer into the stack segment, read as `ss:[bx+si]`
+/// (quicksort -O1: 9 `ss:` bytes of an 8-byte gap to the bar). Where the
+/// start-up makes SS the data group's selector (`stack_shares_data`) the cell
+/// carries no override, and where it does not it still does.
+#[test]
+fn a_stack_pointer_is_read_through_ss_unless_the_start_up_shares_ss_with_ds() {
+    use llrm_lir::registers::RegId;
+    let ss = |segments: &[RegId]| segments.contains(&RegId::SS);
+    assert!(ss(&stack_pointer_segments(&crate::backend::target::BUILT_IN)), "the default keeps ss:");
+    assert!(!ss(&stack_pointer_segments(&crate::backend::target::SHARED_STACK)), "a shared stack needs no ss:");
+}
+
+/// A handler runs on the stack of whatever it interrupted, so a module that
+/// has one keeps `ss:` on its stack pointers even where the start-up shares SS
+/// with DS.
+#[test]
+fn a_module_with_an_interrupt_handler_keeps_ss_on_its_stack_pointers() {
+    use llrm_lir::registers::RegId;
+    let number = llrm_mir::opcode::X86_INTR;
+    let text = format!("{STACK_POINTER_LOAD}define cc {number} void @h() addrspace(1) {{\n  ret void\n}}\n");
+    let segments = stack_pointer_segments_of(&text, &crate::backend::target::SHARED_STACK);
+    assert!(segments.contains(&RegId::SS), "{segments:?}");
 }

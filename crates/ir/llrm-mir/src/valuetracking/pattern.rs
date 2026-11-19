@@ -323,9 +323,18 @@ pub fn intrinsic_call<'a>(
     base: &str,
 ) -> Option<(InstId, &'a [Operand])> {
     let (inst, instruction) = q.instruction_of(v)?;
-    let name = q.callee_name(inst)?;
+    // `m_Intrinsic` is a `CallInst` match first: anything else answers before
+    // `base` is resolved to an id.
+    let (Opcode::Call(_) | Opcode::Invoke(_)) = instruction.opcode else { return None };
+    let args = &instruction.operands[..instruction.operands.len().checked_sub(1)?];
+    let Some(name) = q.callee_name(inst) else {
+        // A callee this run declared is not among the module's globals yet:
+        // its id, not its name, says which intrinsic it is.
+        let wanted = intrinsic_id_of_name(base)?;
+        return (q.callee_intrinsic_id(inst) == Some(wanted)).then_some((inst, args));
+    };
     let rest = name.strip_prefix(base)?;
-    (rest.is_empty() || rest.starts_with('.')).then(|| (inst, &instruction.operands[..instruction.operands.len() - 1]))
+    (rest.is_empty() || rest.starts_with('.')).then_some((inst, args))
 }
 
 /// `m_c_Intrinsic<..>(P, m_Value())`: a two-argument call of `base` where
@@ -494,6 +503,8 @@ intrinsics! {
     Assume => "assume",
     Vscale => "vscale",
     LaunderInvariantGroup => "launder.invariant.group",
+    StackSave => "stacksave",
+    StackRestore => "stackrestore",
     Aarch64Irg => "aarch64.irg",
     Aarch64Tagp => "aarch64.tagp",
     AmdgcnMakeBufferRsrc => "amdgcn.make.buffer.rsrc",

@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import sys
 import unittest
+import unittest.mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -64,3 +65,51 @@ class MemoryLimitTests(unittest.TestCase):
             cpulimit.run([sys.executable, "-c", "x = bytearray(900 * 1024 * 1024)"], 60, memory_kb=300_000, capture_output=True, text=True)
         done = cpulimit.run([sys.executable, "-c", "x = bytearray(10 * 1024 * 1024); print('ok')"], 60, memory_kb=300_000, capture_output=True, text=True)
         self.assertEqual(done.stdout.strip(), "ok")
+
+
+class GroupKillTests(unittest.TestCase):
+    def test_a_wall_stop_kills_the_commands_children_and_names_the_limit(self):
+        """An orphaned `gcc` ran 11.5 h: the wall-clock stop killed the driver, not cc1 under it, and nothing said which limit fired."""
+        import tempfile
+        import time
+
+        with tempfile.TemporaryDirectory() as where:
+            pidfile = Path(where) / "child.pid"
+            stub = Path(where) / "stub-cc"
+            stub.write_text(f"#!/bin/sh\nsleep 300 &\necho $! > {pidfile}\nwait\n")
+            stub.chmod(0o755)
+            with self.assertRaises(cpulimit.LimitExpired) as caught:
+                cpulimit.run([str(stub)], 300, capture_output=True, text=True, timeout=1)
+            self.assertEqual(caught.exception.limit, "wall")
+            self.assertIn("wall limit of 1 s", str(caught.exception))
+            time.sleep(0.2)
+            with self.assertRaises(ProcessLookupError):
+                os.kill(int(pidfile.read_text()), 0)
+
+    def test_a_cpu_stop_names_the_cpu_limit(self):
+        with self.assertRaises(cpulimit.LimitExpired) as caught:
+            cpulimit.run([sys.executable, "-c", SPIN], 1, capture_output=True, text=True)
+        self.assertEqual(caught.exception.limit, "cpu")
+
+
+class PoolSizeTests(unittest.TestCase):
+    TOOLS = Path(__file__).resolve().parents[1]
+
+    def test_the_pool_takes_the_guards_base_slot_count(self):
+        for slots, size in (("3", 3), ("5", 5), ("0", 1), ("", 3)):
+            with unittest.mock.patch.dict(os.environ, {"LG_SLOTS": slots}):
+                self.assertEqual(cpulimit.pool_workers(), size, slots)
+
+    def test_no_tool_leaves_a_pool_at_cpu_count(self):
+        """An admitted job whose pool defaulted to cpu_count (32) loaded the host like six slots: load 31.7 at 17:34Z on 2026-11-06,
+        from benches fanning out 21 and 10 processes inside one slot. A pool names its size, and none is sized by cpu_count."""
+        import re
+        bare = re.compile(r"(Thread|Process)PoolExecutor\(\s*\)|max_workers=[^)]*cpu_count|PoolExecutor\([^)]*cpu_count")
+        found = []
+        for path in sorted(self.TOOLS.rglob("*.py")):
+            if ".venv" in path.parts or path.name.startswith("test_") or path.name == "conftest.py":
+                continue
+            for number, line in enumerate(path.read_text().splitlines(), 1):
+                if bare.search(line):
+                    found.append(f"{path.relative_to(self.TOOLS)}:{number}: {line.strip()}")
+        self.assertEqual(found, [])

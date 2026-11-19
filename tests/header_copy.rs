@@ -23,27 +23,16 @@ fn listing(
 }
 
 /// `for (j = i - 1; j >= 0 && a[j] > v; --j)` behind the copy: the phi combine
-/// (#4888) tests `j + 1 > 1`, so the step ends `dec; lea; cmp $1; jg`. The
-/// pin's best on the C is four instructions from the step to the branch (`dec;
-/// add -4; cmp $1; jg`); so is this. The IR before #4888 gave `dec; jge`; a
-/// fold past the pin (the compare on the biased counter) is a later row
-/// (#4952).
+/// (#4888) tested `j + 1 > 1`, so the step ended `dec; lea; cmp $1; jg`, the
+/// pin's four instructions from the step to the branch. The loop now ends on
+/// the step's own flags, `dec; jne` (the fold past the pin, #4952): two.
 #[test]
-fn test_a_loop_entered_behind_a_folded_guard_steps_and_branches_in_the_pins_four() {
+fn test_a_loop_entered_behind_a_folded_guard_ends_on_the_flags_of_its_step() {
     let text = listing("x_insertion", &["-ftree-ch"]);
     let lines: Vec<&str> = text.lines().map(str::trim).collect();
-    // The pin's `cmp r, 1; jg` or, as now, the step's own flags: `dec; jg`.
-    let branch = (0..lines.len())
-        .find(|&at| {
-            lines[at].starts_with("jg ") && lines[..at].iter().rev().take(3).any(|line| line.starts_with("dec e"))
-        })
-        .unwrap_or_else(|| panic!("no `dec r; ..; jg` ends the inner loop: {text}"));
-    let step = lines[..branch].iter().rposition(|line| line.starts_with("dec e")).unwrap();
-    assert!(
-        branch - step < 4,
-        "{} instructions from the step to the branch, the pin's best is 4: {text}",
-        branch - step + 1
-    );
+    let ends_on_the_step = lines.windows(2).any(|pair| pair[0].starts_with("dec e") && pair[1].starts_with("jne "));
+    assert!(ends_on_the_step, "no `dec r; jne` ends the inner loop: {text}");
+    assert!(!lines.iter().any(|line| line.starts_with("jg ")), "a `cmp $1; jg` test is back: {text}");
 }
 
 /// gcc copies headers after `pass_ipa_inline` (passes.def:232), so the inliner

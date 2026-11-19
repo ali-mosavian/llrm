@@ -8,6 +8,7 @@ description = "llrm's DWARF writer: debug::Info as .debug_info, .debug_abbrev, .
 [dependencies]
 llrm-support = { workspace = true }
 llrm-object = { workspace = true }
+llrm-debug = { workspace = true }
 
 [dev-dependencies]
 llrm-macho = { workspace = true }

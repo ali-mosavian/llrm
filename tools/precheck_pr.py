@@ -6,17 +6,18 @@
 Run in the worktree of the PR's branch. Every check runs and every failure is named; exit 1 if any failed, and a PR that fails
 stays draft. The checks are the runner's (tools/parity_squash.py `refusals`, `new_lib_failures`) on the branch itself:
 
-1. the branch contains the current feat/parity tip, and merges with it cleanly (a conflict names its files);
+1. the branch contains the current release/next tip, and merges with it cleanly (a conflict names its files);
 2. the description has `Owner:` and `Rows:` lines at the start of a line, a perf PR's description states the ledger command and a
    `d_faces qbq-llrm` number, a `Deletes:` or `Reverts:` line naming every path whose
    squash deletes lines or whole test functions, no link to a deleted page, and a `Rows:` line where the title is a perf PR;
 3. no added line, commit message, title or description names the assistant, and no added line names the assistant's config directory;
-4. `RUSTFLAGS="-D warnings" cargo check -p <changed crates> --tests` is clean;
+4. `RUSTFLAGS="-D warnings" cargo check -p <changed crates> --tests` is clean, and `cargo check --bins` of the root package compiles;
 5. the changed .rs files are formatted (tools/fmt.sh);
+5b. no file under crates, runtime or tools is ignored by git (build caches excepted): a bare `target` ignore hid crates/target/**;
 6. a PR that adds a pass slot (registry entry or phase-table row) adds a test at pipeline level;
 7. the root scanners (tests that read sources and docs; the landing layer runs them on every batch) have no failure the tip does not have, and
    `tools/docs/docsbuild/build.py --check` finds no generated page stale that the tip has not (seconds);
-6. the lib tests of the changed crates (`cargo test -p <crate> --lib`, the layer's command) have no failure the feat/parity tip
+6. the lib tests of the changed crates (`cargo test -p <crate> --lib`, the layer's command) have no failure the release/next tip
    does not have, and where the change touches the backend's phase list or the parity registry, the slot-list tests of
    llrm-transforms (`parity`) run too: a new phase not listed in `parity_tests` is the trap that refused #3708.
 """
@@ -37,7 +38,9 @@ import parity_smoke  # noqa: E402
 import parity_squash  # noqa: E402
 from buildslot import slotted  # noqa: E402
 
-BASE = "origin/feat/parity"
+BRANCH = os.environ.get("LAND_BRANCH", "release/next")  # the integration branch (tools/landing/branch.sh)
+
+BASE = f"origin/{BRANCH}"
 OWNER = re.compile(r"^Owner:\s*\S+", re.M)
 # The board's compile-cost command (docs/working/ledger-command.md): a perf PR's before/after pair is taken with it.
 LEDGER_COMMAND = "-m32 -mabi=sysv -march=i486 -O2"
@@ -104,6 +107,18 @@ def config_dir_paths(
     return []
 
 
+# Build and tool caches that are ignored on purpose; anything else ignored under the source trees is a source the branch never committed.
+IGNORED_OK = re.compile(r"(?:^|/)(?:__pycache__|\.pytest_cache|\.ruff_cache|\.mypy_cache|\.venv)(?:/|$)")
+
+
+def ignored_sources(root: Path) -> list[str]:
+    """Files under crates, runtime and tools that git ignores: a bare `target` line in .gitignore hid crates/target/**, so a PR added sources the
+    runner's clean checkout never had and the build failed there (and locally everything passed)."""
+    listed = git("ls-files", "--others", "--ignored", "--exclude-standard", "--", "crates", "runtime", "tools", cwd=root).splitlines()
+    hidden = [path for path in listed if not IGNORED_OK.search(path)]
+    return [f"{path}: git ignores this file under a source tree; the runner's checkout will not have it (fix .gitignore or `git add -f`)" for path in hidden[:5]]
+
+
 SLOT_ADDED = re.compile(r'^\+\s*(?:entry|partial)\("[\w-]+@\d+"|^\+\s*\("[A-Z]\w+", "[\w]+@\d+"\)')
 PIPELINE_TEST_FILES = re.compile(r"(?:^|/)(?:pipeline\w*_tests\.rs|tests/[^/]+\.rs)$")
 
@@ -143,7 +158,7 @@ def warning_failures(
     """`RUSTFLAGS="-D warnings" cargo check -p <crates> --tests`: its errors, one line each (a dead-code error refused a landing)."""
     if not packages:
         return []
-    # A package whose tests exist only with a feature (llrm-c's `toolchain`) is checked with it: without, its lib tests are a compile_error.
+    # A package whose tests exist only with a feature (llrm-cc's `toolchain`) is checked with it: without, its lib tests are a compile_error.
     features = [f"{package}/{feature}" for package in packages for feature in parity_smoke.LIB_FEATURES.get(package, ())]
     command = slotted(["cargo", "check", "-q", "--tests", *[arg for package in packages for arg in ("-p", package)], *(["--features", ",".join(features)] if features else [])])
     done = run(command, cwd=root, capture_output=True, text=True, env={**(env or {}), "RUSTFLAGS": "-D warnings"})
@@ -151,6 +166,23 @@ def warning_failures(
         return []
     errors = [line.strip() for line in (done.stdout + done.stderr).splitlines() if line.startswith("error")]
     return [f"cargo check -D warnings: {line[:160]}" for line in errors[:8]] or ["cargo check -D warnings failed"]
+
+
+def bin_failures(
+    root: Path,
+    packages: list[str],
+    run=subprocess.run,
+    env: dict | None = None,
+) -> list[str]:
+    """`cargo check --bins` of the root package, for a PR that changes any crate: a struct field added in a crate left `src/bin/llrm-mir.rs`
+    without it (#8829), and `cargo build --bins` then failed and left stale llrm-cc/llrm-llc in the target dir."""
+    if not packages:
+        return []
+    done = run(slotted(["cargo", "check", "-q", "--bins"]), cwd=root, capture_output=True, text=True, env=env)
+    if not done.returncode:
+        return []
+    errors = [line.strip() for line in (done.stdout + done.stderr).splitlines() if line.startswith("error")]
+    return [f"cargo check --bins: {line[:160]}" for line in errors[:8]] or ["cargo check --bins failed"]
 
 
 def lib_failures(
@@ -277,8 +309,10 @@ def precheck(
     why += [f"{path}: tools/fmt.sh would change it; run tools/fmt.sh (the runner formats an unformatted PR with a commit on your branch, which races with your pushes)" for path in sorted(parity_squash.fmt_differs(root, files))]
     why += slot_without_pipeline_test(root, base)
     why += config_dir_paths(root, base)
+    why += ignored_sources(root)
     packages = changed_packages(root, files)
     why += warning_failures(root, packages, run, dict(os.environ))
+    why += bin_failures(root, packages, run, dict(os.environ))
     why += lib_failures(root, packages, files, base, run, on_base)
     why += scanner_failures(root, files, base, run)
     why += docs_failures(root, base)
@@ -292,7 +326,7 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--title", default="")
     args = parser.parse_args(argv)
     root = Path(git("rev-parse", "--show-toplevel", cwd=Path.cwd()).strip())
-    subprocess.run(["git", "fetch", "-q", "origin", "feat/parity"], cwd=root)
+    subprocess.run(["git", "fetch", "-q", "origin", BRANCH], cwd=root)
     title, body = args.title, args.body_file.read_text() if args.body_file else None
     if body is None:
         shown = subprocess.run(["gh", "pr", "view", *([args.pr] if args.pr else []), "--json", "title,body"], cwd=root, capture_output=True, text=True)

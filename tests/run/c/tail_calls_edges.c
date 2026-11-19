@@ -1,4 +1,5 @@
 // flags: -O2 -march=i486 -fno-inline=sum5 -fno-inline=big_sum -fno-inline=make_big -fno-inline=vsum -fno-inline=half -fno-inline=twice | -O2 -march=i486 -mabi=regparm3 -fno-inline=sum5 -fno-inline=big_sum -fno-inline=make_big -fno-inline=vsum -fno-inline=half -fno-inline=twice | -O2 -march=i486 -m32 -fno-inline=sum5 -fno-inline=big_sum -fno-inline=make_big -fno-inline=vsum -fno-inline=half -fno-inline=twice
+// targets: x86-m16 x86-m32
 /* Calls in tail position that must stay calls, or jump with the callee's pops: a callee that pops its stack
    arguments, a call with more stack arguments than the caller has, a structure passed and returned by value, a
    variadic call, a float result and a call through a pointer. Each result is checked against a host compiler's. */

@@ -25,6 +25,8 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / "pairs"))
 sys.path.insert(0, str(HERE.parent / "difftest"))
+sys.path.insert(0, str(HERE.parent))
+import elfsize  # noqa: E402
 import difftest  # noqa: E402
 import pin  # noqa: E402
 
@@ -44,10 +46,7 @@ def emitted(path: Path) -> int:
 
 
 def pin_text(size_output: str) -> int:
-    for line in size_output.splitlines():
-        if line.startswith(".text"):
-            return int(line.split()[1])
-    return 0
+    return elfsize.text_bytes(size_output)
 
 
 def one(llrm_c: str, source: Path, level: str) -> tuple[str, int | None, int | None, int | None, str]:

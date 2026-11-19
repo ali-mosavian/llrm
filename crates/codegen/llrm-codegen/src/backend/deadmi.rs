@@ -162,7 +162,7 @@ mod tests {
     use crate::model::lir::LirBlock;
 
     fn held(value: u32) -> Loc {
-        Loc::Held(Held { value, width: 2 })
+        Loc::Held(Held { value, width: 2, offset: 0 })
     }
 
     fn insn(

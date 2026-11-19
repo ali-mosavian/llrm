@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/tailmerge.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/tailmerge.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/tailmerge.rs sha256:40e4965e069010e2ca988295656cfec5595f419a07598e6dc928a90cb6cccc88 -->
+<!-- src: crates/opt/llrm-transforms/src/tailmerge.rs sha256:1154db295426e3693a461a4d8878c04a50da5d8eb554425d041d8a9e252d60e8 -->
 
 # tailmerge
 
@@ -34,4 +34,4 @@ Two returns become one block that returns a phi:
   locations are not kept.
 
 ## Used by
-Named by `jumps`, `simplifycfg`.
+Named by `fold`, `jumps`, `simplifycfg`.

@@ -102,7 +102,6 @@ impl Visited {
         self.count = 0;
     }
 }
-
 pub trait Dag {
     fn opcode(
         &self,
@@ -219,6 +218,14 @@ pub trait Dag {
         &self,
         node: u32,
     ) -> bool;
+    /// `getAddressingMode()` is `POST_INC`/`POST_DEC`: the update comes after
+    /// the access.
+    fn is_post_indexed(
+        &self,
+        _node: u32,
+    ) -> bool {
+        false
+    }
     fn is_truncating_store(
         &self,
         node: u32,
@@ -248,11 +255,56 @@ pub trait Dag {
         &self,
         value: SDValue,
     ) -> Option<FpClass>;
+    /// The bit pattern of a `ConstantFPSDNode`
+    /// (`getValueAPF().bitcastToAPInt()`); `None` for any other node.
+    fn fp_bits(
+        &self,
+        _value: SDValue,
+    ) -> Option<u128> {
+        None
+    }
     /// `SDNodeFlags::hasDisjoint`.
     fn has_disjoint_flag(
         &self,
         node: u32,
     ) -> bool;
+    /// `ISD::isBuildVectorAllZeros` / `isBuildVectorAllOnes`: a `BUILD_VECTOR`
+    /// whose defined lanes are all zero (all ones), at least one defined.
+    fn is_build_vector_all(
+        &self,
+        _value: SDValue,
+        _ones: bool,
+    ) -> bool {
+        false
+    }
+    /// `SDNodeFlags::hasExact`.
+    fn has_exact_flag(
+        &self,
+        node: u32,
+    ) -> bool;
+    /// `AtomicSDNode::getMergedOrdering`, as LLVM's `AtomicOrdering` number
+    /// (monotonic 2, acquire 4, release 5, acq_rel 6, seq_cst 7); none for a
+    /// node that is not atomic.
+    fn atomic_ordering(
+        &self,
+        node: u32,
+    ) -> Option<u8>;
+    /// `SDNodeFlags::hasNoUnsignedWrap`.
+    fn has_no_unsigned_wrap(
+        &self,
+        node: u32,
+    ) -> bool;
+    /// `SelectionDAG::ComputeNumSignBits`. The least a DAG says is one (every
+    /// value is its own sign bit), so a DAG with no analysis keeps the pin's
+    /// conservative answer.
+    fn compute_num_sign_bits(
+        &self,
+        value: SDValue,
+    ) -> u32 {
+        let _ = value;
+        1
+    }
+
     /// `SelectionDAG::MaskedValueIsZero`: every bit of `mask` is known zero in
     /// `value`.
     fn masked_value_is_zero(
@@ -406,6 +458,25 @@ pub trait Hooks<D: Dag> {
         pattern: u8,
         results: &mut Vec<(SDValue, Option<u32>)>,
     ) -> bool;
+    /// How many nodes used `node` when selection began, if the target keeps
+    /// that (a user selected since no longer names it, so the live count
+    /// depends on the order selection visits them).
+    fn uses_at_selection_start(
+        &self,
+        _node: u32,
+    ) -> Option<usize> {
+        None
+    }
+    /// `AArch64_AM::getFP32Imm` / `getFP64Imm` of a float constant's bits: the
+    /// 8-bit code of an `fmov` immediate, `None` if there is none. A target
+    /// without the form never has one.
+    fn fp_imm_code(
+        &self,
+        _bits: u128,
+        _double: bool,
+    ) -> Option<u8> {
+        None
+    }
     /// The generated `RunSDNodeXForm`.
     fn run_xform(
         &mut self,
@@ -443,46 +514,6 @@ pub trait Hooks<D: Dag> {
         rhs: i64,
         desired: i64,
     ) -> bool;
-    /// `Subtarget->hasSSEUnalignedMem()`.
-    fn has_sse_unaligned_mem(&self) -> bool;
-    /// `shouldAvoidImmediateInstFormsForSize(N)`.
-    fn should_avoid_immediate_inst_forms_for_size(
-        &self,
-        dag: &D,
-        node: u32,
-    ) -> bool;
-    /// `isUnneededShiftMask(N, width)`.
-    fn is_unneeded_shift_mask(
-        &self,
-        dag: &D,
-        node: u32,
-        width: u32,
-    ) -> bool;
-    /// `isSExtAbsoluteSymbolRef(width, N)`.
-    fn is_sext_absolute_symbol_ref(
-        &self,
-        dag: &D,
-        width: u32,
-        node: u32,
-    ) -> bool;
-    /// `hasNoCarryFlagUses(Flags)`.
-    fn has_no_carry_flag_uses(
-        &self,
-        dag: &D,
-        flags: SDValue,
-    ) -> bool;
-    /// `isDef32(N)`.
-    fn is_def32(
-        &self,
-        dag: &D,
-        node: u32,
-    ) -> bool;
-    /// `checkTCRetEnoughRegs(N)`.
-    fn check_tc_ret_enough_regs(
-        &self,
-        dag: &D,
-        node: u32,
-    ) -> bool;
     /// `MCInstrDesc::mayLoad` and `mayStore` of a machine opcode.
     fn may_load_store(
         &self,
@@ -499,6 +530,17 @@ pub trait PatternContext {
     fn has_min_size(&self) -> bool;
     /// `Subtarget->getFrameLowering()->hasFP(*MF)`.
     fn has_frame_pointer(&self) -> bool;
+    /// `Subtarget->isNeonAvailable()`: false unless the target takes vectors.
+    fn neon_available(&self) -> bool {
+        false
+    }
     /// `Subtarget->isLegalToCallImmediateAddr()`.
     fn is_legal_to_call_immediate_addr(&self) -> bool;
+    /// `Subtarget->hasX()` for a target whose features differ per function.
+    fn has_feature(
+        &self,
+        name: &str,
+    ) -> bool {
+        unreachable!("this target decides no feature at selection time: {name}")
+    }
 }

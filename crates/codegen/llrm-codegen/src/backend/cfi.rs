@@ -58,8 +58,8 @@
 use iced_x86::{
     Code, Decoder, DecoderOptions, FlowControl, Instruction, InstructionInfoFactory, Mnemonic, OpAccess, OpKind,
 };
+use llrm_debug::FrameRow;
 use llrm_lir::registers::RegId;
-use llrm_object::debug::FrameRow;
 
 /// Where the canonical frame address is measured from.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -26,6 +26,14 @@ fn cx() -> Loc {
     Loc::Reg(Reg { register: RegId::CX, width: 2 })
 }
 
+fn dx() -> Loc {
+    Loc::Reg(Reg { register: RegId::DX, width: 2 })
+}
+
+fn si() -> Loc {
+    Loc::Reg(Reg { register: RegId::SI, width: 2 })
+}
+
 fn imm(value: i64) -> Loc {
     Loc::Imm(Imm { value, width: 2, address: None })
 }
@@ -107,6 +115,7 @@ fn listed(
         size: false,
         entry: 0,
         stack_check: None,
+        probe_stack: None,
         registers: llrm_target::Target::frame_registers(&llrm_x86_m16::M16),
     };
     masm::_procedure(&procedure, &IndexMap::default(), 0).unwrap().iter().map(|line| line.trim().to_owned()).collect()
@@ -1499,7 +1508,7 @@ fn test_for_size_a_join_of_two_instructions_is_not_copied() {
     let join = || vec![_move(30, imm(3)), _return(31)];
     let speed = placed(&diamond_joined(0.9, join())).unwrap();
     assert!(speed.blocks.iter().all(|one| one.at != 30), "copied for speed");
-    let size = _placed(&diamond_joined(0.9, join()), true, false).unwrap();
+    let size = _placed(&diamond_joined(0.9, join()), true, false, None, None, 0).unwrap();
     assert!(size.blocks.iter().any(|one| one.at == 30), "kept for size");
 }
 
@@ -1508,10 +1517,78 @@ fn test_for_size_a_join_of_two_instructions_is_not_copied() {
 #[test]
 fn test_at_o3_a_join_of_four_instructions_is_copied() {
     let join = || vec![_move(30, imm(3)), _move(31, imm(4)), _move(32, imm(5)), _return(33)];
-    let o2 = _placed(&diamond_joined(0.9, join()), false, false).unwrap();
+    let o2 = _placed(&diamond_joined(0.9, join()), false, false, None, None, 0).unwrap();
     assert!(o2.blocks.iter().any(|one| one.at == 30), "kept at -O2");
-    let o3 = _placed(&diamond_joined(0.9, join()), false, true).unwrap();
+    let o3 = _placed(&diamond_joined(0.9, join()), false, true, None, None, 0).unwrap();
     assert!(o3.blocks.iter().all(|one| one.at != 30), "copied at -O3");
+}
+
+/// A target's `tail_dup_placement_threshold` below the pin's bound keeps a join
+/// the pin would copy: at m16 -O2 a copied compare-and-branch tail cost bytes
+/// and clocks (qlight, grep: +84 B, +3.1M clk).
+#[test]
+fn test_a_target_threshold_keeps_a_join_the_pin_copies() {
+    let join = || vec![_move(30, imm(3)), _return(31)];
+    let pin = _placed(&diamond_joined(0.9, join()), false, false, None, None, 0).unwrap();
+    assert!(pin.blocks.iter().all(|one| one.at != 30), "copied by the pin's bound");
+    let target = _placed(&diamond_joined(0.9, join()), false, false, Some(1), None, 0).unwrap();
+    assert!(target.blocks.iter().any(|one| one.at == 30), "kept at the target's bound");
+}
+
+/// DEVIATE TAILDUP-HOT. x_cordic -O3 ran a jump per step over the next step's
+/// six-instruction head (31734 clk against gcc's 26743): the pin copies up to
+/// four instructions, gcc eight. A target's hot bound copies a longer join where
+/// the jump saved, at the join's frequency, outweighs the bytes of the copy.
+#[test]
+fn test_a_hot_join_above_the_pin_bound_is_copied_where_the_jump_pays() {
+    use super::placement::HotTailDup;
+    let join = || (30..36).map(|id| _move(id, imm(3))).chain([_return(36)]).collect::<Vec<_>>();
+    let placed_with = |hot: Option<HotTailDup>, per_byte: f64| {
+        let hot = hot.map(|one| HotTailDup { clocks_per_byte: per_byte, ..one });
+        _placed(&diamond_joined(0.9, join()), false, true, None, hot, 0).unwrap()
+    };
+    let bound = Some(HotTailDup { size: 8, jump_clocks: 3.0, back_edge_clocks: 0.0, clocks_per_byte: 0.0 });
+    assert!(placed_with(None, 0.0).blocks.iter().any(|one| one.at == 30), "premise: the pin keeps seven instructions");
+    assert!(placed_with(bound, 0.01).blocks.iter().all(|one| one.at != 30), "a cheap copy of a hot join is made");
+    assert!(placed_with(bound, 0.312).blocks.iter().any(|one| one.at == 30), "run once, the jump does not pay for it");
+}
+
+/// A loop's latch is copied above the pin's bound only where the jump it saves
+/// is worth more than the back edge the copy takes (`HotTailDup::back_edge_clocks`,
+/// #9145): x_jpeg_fixed -O2 ran 137354 clocks longer when `inc; jne` latches went
+/// into their predecessors at a back edge as dear as the jump.
+#[test]
+fn test_a_loop_latch_is_copied_only_where_the_jump_outweighs_the_back_edge() {
+    use super::placement::HotTailDup;
+    let hot = |back_edge_clocks: f64| Some(HotTailDup { size: 8, jump_clocks: 3.0, back_edge_clocks, clocks_per_byte: 0.01 });
+    let looped = |latch_back: bool, back_edge_clocks: f64| {
+        let to_header = if latch_back { 2 } else { 50 };
+        let mut made = body(
+            "f",
+            1,
+            vec![
+                block(1, vec![_move(1, imm(0)), _jump(2, 2)], vec![2]).into(),
+                block(2, vec![_compare(3), _branch(4, "je", 20)], vec![20, 10]).into(),
+                block(10, vec![_move(10, imm(1)), _jump(11, 30)], vec![30]).into(),
+                block(20, vec![_move(20, imm(2)), _jump(21, 30)], vec![30]).into(),
+                block(
+                    30,
+                    vec![_move(30, imm(3)), _move(31, imm(4)), _move(32, imm(5)), _move(33, imm(6)), _compare(34), _branch(35, "jne", to_header)],
+                    vec![to_header, 40],
+                )
+                .into(),
+                block(40, vec![_return(41)], vec![]).into(),
+                block(50, vec![_return(51)], vec![]).into(),
+            ],
+        );
+        let fixed = |probability: f64| (probability * crate::model::lir::BlockOdds::CERTAIN) as u32;
+        made.odds.taken.insert((2, 10), fixed(0.5));
+        made.odds.taken.insert((2, 20), fixed(0.5));
+        _placed(&made, false, false, None, hot(back_edge_clocks), 0).unwrap()
+    };
+    assert!(looped(true, 3.0).blocks.iter().any(|one| one.at == 30), "a back edge as dear as the jump: the latch is kept");
+    assert!(looped(true, 0.0).blocks.iter().all(|one| one.at != 30), "a free back edge: the jump pays, the latch is copied");
+    assert!(looped(false, 3.0).blocks.iter().all(|one| one.at != 30), "premise: the same block, no back edge, is copied");
 }
 
 /// Only a block that goes to the join and nowhere else takes a copy: one that
@@ -1567,7 +1644,7 @@ fn test_a_copied_test_keeps_its_loops_odds() {
 #[test]
 fn test_for_size_a_diamond_is_placed_as_for_speed() {
     let order =
-        |body: LirBody| _placed(&body, true, false).unwrap().blocks.iter().map(|one| one.at).collect::<Vec<_>>();
+        |body: LirBody| _placed(&body, true, false, None, None, 0).unwrap().blocks.iter().map(|one| one.at).collect::<Vec<_>>();
     assert_eq!(order(weighted_diamond(0.7)), vec![1, 10, 20, 30]);
     assert_eq!(order(weighted_diamond(0.9)), vec![1, 10, 30, 20]);
 }
@@ -1774,7 +1851,8 @@ fn test_the_liveness_of_some_values_is_what_the_solve_of_all_of_them_gives() {
                 let uses = if next(3) > 0 { vec![next(6) as u32] } else { Vec::new() };
                 let mut one = Insn::new(at * 10 + step as i64, None, None, defines, uses);
                 if next(5) == 0 {
-                    one.requires = vec![(crate::model::ir::Held { value: next(6) as u32, width: 2 }, RegId::AX)];
+                    one.requires =
+                        vec![(crate::model::ir::Held { value: next(6) as u32, width: 2, offset: 0 }, RegId::AX)];
                 }
                 insns.push(Arc::new(one));
             }
@@ -1950,6 +2028,58 @@ fn test_a_loop_block_nothing_falls_into_is_aligned() {
     size.size = true;
     assert!(align(&size).iter().all(|(_, align)| *align == 0), "size aligns nothing");
     assert!(align(m16).iter().all(|(_, align)| *align == 0), "m16 aligns nothing");
+}
+
+/// DEVIATE ALIGN-O1: below -O2 (`speed_rate` off) a target that says so
+/// aligns no loop, as gcc: m32 `mandel` -O1 ran 5,376 one-byte nops, gcc 0.
+#[test]
+fn test_a_target_that_does_not_align_at_o1_aligns_no_loop_there() {
+    let source = body(
+        "f",
+        1,
+        vec![
+            block(1, vec![_move(1, imm(0)), _jump(2, 3)], vec![3]).into(),
+            block(8, vec![_move(8, bx())], vec![3]).into(),
+            block(3, vec![_compare(3), _branch(4, "jl", 8), _jump(5, 17)], vec![8, 17]).into(),
+            block(17, vec![_return(17)], vec![]).into(),
+        ],
+    );
+    let mut on = cpu::profile("486").unwrap().clone();
+    on.loop_alignment = 4;
+    on.speed_rate = false;
+    let aligned_blocks = |one: &cpu::Profile| aligned(&source, one).blocks.iter().filter(|one| one.align != 0).count();
+    on.align_loops_at_o1 = true;
+    assert_eq!(aligned_blocks(&on), 1, "the pin's -O1 aligns");
+    on.align_loops_at_o1 = false;
+    assert_eq!(aligned_blocks(&on), 0, "m32 -O1 aligns nothing");
+    on.speed_rate = true;
+    assert_eq!(aligned_blocks(&on), 1, "-O2 aligns");
+}
+
+/// DEVIATE SD545: an aligned loop header takes at most the target's
+/// `loop_max_skip` bytes of padding. jpeg_single -O2 m32 padded 15 bytes of
+/// one-byte nops before a loop it falls into 58% of the time, 216,077 nops
+/// executed (+1.4%).
+#[test]
+fn test_an_aligned_loop_header_gives_up_a_pad_longer_than_the_targets_limit() {
+    let source = body(
+        "f",
+        1,
+        vec![
+            block(1, vec![_move(1, imm(0)), _jump(2, 3)], vec![3]).into(),
+            block(8, vec![_move(8, bx())], vec![3]).into(),
+            block(3, vec![_compare(3), _branch(4, "jl", 8), _jump(5, 17)], vec![8, 17]).into(),
+            block(17, vec![_return(17)], vec![]).into(),
+        ],
+    );
+    let mut on = cpu::profile("486").unwrap().clone();
+    on.loop_alignment = 4;
+    on.loop_max_skip = 10;
+    let skip =
+        |one: &cpu::Profile| aligned(&source, one).blocks.iter().map(|one| (one.at, one.max_skip)).collect::<Vec<_>>();
+    assert_eq!(skip(&on), [(1, 0), (8, 10), (3, 0), (17, 0)]);
+    on.loop_max_skip = 0;
+    assert!(skip(&on).iter().all(|(_, skip)| *skip == 0), "no limit stated, no limit set");
 }
 
 /// A table jump's index to a block that only jumps goes to where it jumps: the
@@ -2298,6 +2428,94 @@ fn test_a_zeroing_xor_both_ways_begin_with_is_hoisted_above_the_compare() {
     assert!(at < lines.iter().position(|line| line.starts_with("cmp")).unwrap(), "{lines:?}");
 }
 
+/// One way puts an unrelated move ahead of the zeroing `xor` both ways need
+/// (`for (...) sum += ...; return sum` at -Os: `mov esi, 1` before `xor ecx,
+/// ecx` in the loop's entry, the bare `xor` on the skip edge): the leading-run
+/// hoist saw different first instructions and left two xors, 4 B over main/gcc
+/// (idiv_loop_os, recgcd 114 B against 110 B).
+#[test]
+fn test_a_zeroing_xor_behind_an_unrelated_move_is_hoisted_above_the_compare() {
+    let zero = |at| _inserted(_insn(at, Operation::Binary, "xor", vec![cx()], vec![cx(), cx()], None));
+    let lines = _printed(vec![
+        block(1, vec![_compare(1), _branch(2, "je", 9)], vec![9, 4]).into(),
+        block(
+            4,
+            vec![
+                _inserted(_insn(4, Operation::Move, "mov", vec![bx()], vec![imm(1)], None)),
+                zero(5),
+                _move(6, bx()),
+                _return(7),
+            ],
+            vec![],
+        )
+        .into(),
+        block(9, vec![zero(9), _move(10, ax()), _return(11)], vec![]).into(),
+    ]);
+    assert_eq!(lines.iter().filter(|line| line.as_str() == "xor cx, cx").count(), 1, "{lines:?}");
+    let at = lines.iter().position(|line| line.as_str() == "xor cx, cx").unwrap();
+    assert!(at < lines.iter().position(|line| line.starts_with("cmp")).unwrap(), "{lines:?}");
+}
+
+/// The ways end with the same tail, the move both have behind an unrelated one
+/// (a duplicated join, m16 sfm16_float_add -O2): tail merging takes the whole
+/// tail, and lifting the move out left tails that no longer merged, +4 B.
+#[test]
+fn test_a_move_inside_the_tail_both_ways_end_with_is_not_lifted() {
+    let copy = |at| _inserted(_insn(at, Operation::Move, "mov", vec![cx()], vec![si()], None));
+    let lines = _printed(vec![
+        block(1, vec![_compare(1), _branch(2, "je", 9)], vec![9, 4]).into(),
+        block(
+            4,
+            vec![_inserted(_insn(4, Operation::Move, "mov", vec![dx()], vec![imm(1)], None)), copy(5), _return(7)],
+            vec![],
+        )
+        .into(),
+        block(9, vec![copy(9), _return(11)], vec![]).into(),
+    ]);
+    let at = lines.iter().position(|line| line.as_str() == "mov cx, si").unwrap();
+    assert!(at > lines.iter().position(|line| line.starts_with("cmp")).unwrap(), "{lines:?}");
+}
+
+/// One way jumps to the block the other falls into: the tail is the same
+/// (m16 sfm16_float_add -O2 again, the lift ran on the jump's difference).
+#[test]
+fn test_a_jump_where_the_other_way_falls_does_not_hide_the_common_tail() {
+    let copy = |at| _inserted(_insn(at, Operation::Move, "mov", vec![cx()], vec![si()], None));
+    let lines = _printed(vec![
+        block(1, vec![_compare(1), _branch(2, "je", 9)], vec![9, 4]).into(),
+        block(4, vec![_inserted(_insn(4, Operation::Move, "mov", vec![dx()], vec![imm(1)], None)), copy(5), _jump(6, 20)], vec![20]).into(),
+        block(9, vec![copy(9)], vec![20]).into(),
+        block(20, vec![_return(20)], vec![]).into(),
+    ]);
+    let at = lines.iter().position(|line| line.as_str() == "mov cx, si").unwrap();
+    assert!(at > lines.iter().position(|line| line.starts_with("cmp")).unwrap(), "{lines:?}");
+}
+
+/// The move the `xor` would pass is what the `xor` reads: it stays behind it.
+#[test]
+fn test_a_def_that_reads_what_the_move_before_it_writes_is_not_lifted() {
+    let lines = _printed(vec![
+        block(1, vec![_compare(1), _branch(2, "je", 9)], vec![9, 4]).into(),
+        block(
+            4,
+            vec![
+                _inserted(_insn(4, Operation::Move, "mov", vec![cx()], vec![imm(1)], None)),
+                _inserted(_insn(5, Operation::Binary, "add", vec![bx()], vec![bx(), cx()], None)),
+                _return(7),
+            ],
+            vec![],
+        )
+        .into(),
+        block(
+            9,
+            vec![_inserted(_insn(9, Operation::Binary, "add", vec![bx()], vec![bx(), cx()], None)), _return(11)],
+            vec![],
+        )
+        .into(),
+    ]);
+    assert_eq!(lines.iter().filter(|line| line.as_str() == "add bx, cx").count(), 2, "{lines:?}");
+}
+
 fn lined(
     one: Arc<Insn>,
     line: u32,
@@ -2381,7 +2599,8 @@ fn test_a_flag_setting_instruction_is_not_hoisted_over_a_branch_with_no_compare(
 }
 
 /// The pin copies propagation twice, again after tail duplication and block
-/// placement (row 84): the phases end `ControlFlow`, `CopyPropagation`.
+/// placement (row 84): `ControlFlow`, `CopyPropagation`, then `BreakFalseDeps`;
+/// `KnownZero` (beyond the pin) runs between the last two.
 #[test]
 fn test_copy_propagation_runs_again_after_the_control_flow() {
     let names = |cpu: &str| -> Vec<&'static str> {
@@ -2400,5 +2619,270 @@ fn test_copy_propagation_runs_again_after_the_control_flow() {
         .collect()
     };
     let optimized = names("386");
-    assert_eq!(&optimized[optimized.len() - 2..], ["ControlFlow", "CopyPropagation"]);
+    assert_eq!(&optimized[optimized.len() - 4..], ["ControlFlow", "CopyPropagation", "KnownZero", "BreakFalseDeps"]);
+}
+
+fn dword() -> Loc {
+    Loc::Reg(Reg { register: RegId::EAX, width: 4 })
+}
+
+/// `mov eax, value; <test|cmp> eax, ..; <cc> 3; jmp 2` in block 1, and the two
+/// ways out.
+fn constant_compare(
+    value: i64,
+    name: &str,
+    other: Loc,
+    cc: &str,
+) -> LirBody {
+    let load =
+        _insn(1, Operation::Move, "mov", vec![dword()], vec![Loc::Imm(Imm { value, width: 4, address: None })], None);
+    let compare = _insn(1, Operation::Compare, name, vec![], vec![dword(), other], None);
+    let mut source = body(
+        "f",
+        0,
+        vec![
+            block(0, vec![_branch(0, "jp", 2), _jump(0, 1)], vec![2, 1]).into(),
+            block(
+                1,
+                vec![load, compare, _branch(1, cc, 3), _jump(1, 2)].into_iter().map(_inserted).collect(),
+                vec![3, 2],
+            )
+            .into(),
+            block(2, vec![_move(2, imm(0)), _jump(2, 3)], vec![3]).into(),
+            block(3, vec![_return(3)], vec![]).into(),
+        ],
+    );
+    source.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+    source
+}
+
+fn names(result: &LirBody) -> Vec<String> {
+    result
+        .blocks
+        .iter()
+        .flat_map(|block| block.insns.iter())
+        .filter(|one| !one.is_meta())
+        .filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned))
+        .collect()
+}
+
+/// qlight's byte clamp ended `mov eax, 255; test eax, eax; jg out` on the
+/// path that had just set eax to 255: a compare and a branch that always go
+/// one way, +5 bytes and 2 instructions on every clamped value.
+#[test]
+fn test_a_branch_on_a_compare_of_a_loaded_constant_goes_one_way() {
+    let eax = dword();
+    let cases = [
+        // (constant, compare, other operand, branch, taken)
+        (255, "test", eax.clone(), "jg", true),
+        (255, "test", eax.clone(), "jle", false),
+        (0, "test", eax.clone(), "je", true),
+        (-1, "test", eax.clone(), "js", true),
+        (-1, "test", eax.clone(), "jb", false),
+        (255, "cmp", Loc::Imm(Imm { value: 255, width: 4, address: None }), "jge", true),
+        (255, "cmp", Loc::Imm(Imm { value: 256, width: 4, address: None }), "jge", false),
+        // unsigned: 0xFFFFFFFF is above 1; signed it is below.
+        (-1, "cmp", Loc::Imm(Imm { value: 1, width: 4, address: None }), "ja", true),
+        (-1, "cmp", Loc::Imm(Imm { value: 1, width: 4, address: None }), "jl", true),
+        // signed overflow: i32::MIN < 1 though the difference is positive.
+        (i64::from(i32::MIN), "cmp", Loc::Imm(Imm { value: 1, width: 4, address: None }), "jl", true),
+        (i64::from(i32::MAX), "cmp", Loc::Imm(Imm { value: -1, width: 4, address: None }), "jg", true),
+    ];
+    for (value, name, other, cc, taken) in cases {
+        let result = threaded(&placed(&constant_compare(value, name, other, cc)).unwrap());
+        let got = names(&result);
+        assert!(!got.iter().any(|one| one == name), "{name} {cc} {value}: {got:?}");
+        // Nothing follows a jump: an anchor after it made `masm` refuse to
+        // free the frame register (qlight at -m32 kept `push ebp`).
+        for block in &result.blocks {
+            let ends = block
+                .insns
+                .iter()
+                .position(
+                    |one| one.what.as_ref().is_some_and(|what| matches!(what.op, Operation::Jump | Operation::Return)),
+                );
+            assert!(ends.is_none_or(|at| at + 1 == block.insns.len()), "{name} {cc} {value}: {:?}", block.insns);
+        }
+        assert!(!got.iter().any(|one| one == cc), "{name} {cc} {value}: the branch stays {got:?}");
+        let jumps = got.iter().filter(|one| *one == "jmp").count();
+        assert_eq!(jumps > 0, taken, "{name} {cc} {value}: a decided branch is a jump or nothing {got:?}");
+    }
+}
+
+/// A write to the register between the load and the compare, or a compare
+/// that is not the one before the branch's flags, decides nothing.
+#[test]
+fn test_a_branch_after_the_constant_is_changed_keeps_its_compare() {
+    let mut source = constant_compare(255, "test", dword(), "jg");
+    let byte = _insn(
+        1,
+        Operation::Move,
+        "mov",
+        vec![Loc::Reg(Reg { register: RegId::AX, width: 1 })],
+        vec![Loc::Imm(Imm { value: 0, width: 1, address: None })],
+        None,
+    );
+    let block = source.blocks[1].clone();
+    let mut insns = block.insns.to_vec();
+    insns.insert(1, byte);
+    source.blocks[1] = block.with_insns(insns).into_inner().into();
+    let got = names(&threaded(&source));
+    assert!(got.iter().any(|one| one == "test"), "{got:?}");
+}
+
+/// Deciding a branch removed the flow into a block, and the blocks it led to
+/// kept their recorded runs: the verifier read "block 0x78 runs 0.009 times,
+/// its predecessors 0.001" and llrm-nib failed on jpeg_single at -Os.
+#[test]
+fn test_a_decided_branch_leaves_no_stale_frequency_downstream() {
+    let mut source = constant_compare(255, "test", dword(), "jg");
+    source.blocks[2] = block(2, vec![_move(2, imm(0)), _jump(2, 4)], vec![4]).into();
+    source.blocks.push(block(4, vec![_return(4)], vec![]).into());
+    let table = [(0, 1.0), (1, 0.5), (2, 1.0), (3, 1.0), (4, 3.0)].into_iter().collect();
+    source.frequencies = Some(Arc::new(crate::model::lir::BlockFrequencies(table)));
+
+    let result = threaded(&source);
+
+    assert_eq!(Frequency::violations(&result), Vec::<String>::new());
+}
+
+/// The tail merge sorts its candidates by `hash_of`, so a digest that moved
+/// with any field of `Semantics` reordered the merges: a field added for
+/// something else (`table_id`) swapped two landing labels of level.nib m16 -O2
+/// (objects fd6a6eb8 and ce3fe036). The pin's `HashMachineInstr` hashes the
+/// operation and the operands only.
+#[test]
+fn the_tail_merge_digest_ignores_what_is_no_operand_and_sees_what_is() {
+    let one = _insn(1, Operation::Move, "mov", vec![ax()], vec![imm(3)], None);
+    let with = |change: &dyn Fn(&mut Semantics)| {
+        let mut what = one.what.clone().expect("semantics");
+        change(&mut what);
+        tailmerge::hash_of(&Insn::new(1, Some((1, 1)), Some(what), Vec::new(), Vec::new()))
+    };
+    let base = tailmerge::hash_of(&one);
+    assert_eq!(base, with(&|what| what.repeat = true), "repeat is no operand");
+    assert_eq!(base, with(&|what| what.pops = Some(4)), "pops is no operand");
+    assert_ne!(base, with(&|what| what.sources = vec![imm(4)]), "an immediate is an operand");
+    assert_ne!(base, with(&|what| what.dests = vec![bx()]), "a register is an operand");
+    assert_ne!(base, with(&|what| what.name = Some("add".into())), "the opcode is hashed");
+}
+
+/// x_prefix -Os (m32): `jle` into an edge block holding an identity copy's
+/// anchor and a `jmp` stayed `jle L; ...; L: jmp M`, 2 B and a taken jump more.
+/// `threaded` keeps the anchor's dataflow; the late pass, past every reader of
+/// values, goes round it.
+#[test]
+fn test_a_branch_into_an_identity_copy_anchor_and_a_jump_goes_to_the_jump_target_late() {
+    let anchor = {
+        let one = _inserted(nothing(7, None));
+        Arc::new(Insn { defines: vec![500], uses: vec![600], ..(*one).clone() })
+    };
+    let blocks = || -> Vec<Block> {
+        vec![
+            block(1, vec![_compare(1), _branch(2, "je", 7)], vec![7, 4]).into(),
+            block(4, vec![Arc::new(Insn { uses: vec![500], ..(*_move(4, cx())).clone() }), _return(5)], vec![]).into(),
+            block(7, vec![Arc::clone(&anchor), _inserted(_jump(8, 9))], vec![9]).into(),
+            block(9, vec![_return(9)], vec![]).into(),
+        ]
+    };
+    let early = threaded(&body("f", 1, blocks()));
+    assert!(early.blocks[0].succ.contains(&7), "the anchor keeps the edge block while values are read");
+    let late = threaded_late(&body("f", 1, blocks()));
+    assert!(late.blocks[0].succ.contains(&9) && !late.blocks[0].succ.contains(&7), "{:?}", late.blocks[0].succ);
+}
+
+/// x_ld_dot's outer loop at -O2 (m32 486): the guard `n <= 0` is estimated at
+/// 12 in 32, so the latch, entered from the guard's block and from the inner
+/// loop's exit, was chosen as the loop's top: the inner loop then left by a
+/// `jmp` to the latch every outer trip (9 `jmp` and 8 `je` for +37 clk over
+/// gcc, whose bottom `jne` falls through). Counting a lost fall-through at the
+/// `jmp` it costs and a gained one at what the taken branch cost over one
+/// not taken keeps the latch below the inner loop.
+#[test]
+fn test_the_latch_stays_below_the_inner_loop_it_falls_from() {
+    use super::placement::TopClocks;
+    let source = {
+        let mut made = body(
+            "f",
+            1,
+            vec![
+                block(1, vec![_move(1, imm(0)), _jump(2, 3)], vec![3]).into(),
+                block(3, vec![_compare(3), _branch(4, "jle", 20), _jump(5, 4)], vec![20, 4]).into(),
+                block(20, vec![_move(20, imm(1)), _jump(21, 6)], vec![6]).into(),
+                block(4, vec![_move(7, imm(2)), _jump(8, 5)], vec![5]).into(),
+                block(5, vec![_move(9, imm(3)), _compare(10), _branch(11, "jne", 5), _jump(12, 6)], vec![5, 6]).into(),
+                block(6, vec![_move(13, imm(4)), _compare(14), _branch(15, "jne", 3), _jump(16, 7)], vec![3, 7]).into(),
+                block(7, vec![_return(17)], vec![]).into(),
+            ],
+        );
+        let fixed = |probability: f64| (probability * crate::model::lir::BlockOdds::CERTAIN) as u32;
+        made.odds.taken.insert((3, 20), fixed(12.0 / 32.0));
+        made.odds.taken.insert((3, 4), fixed(20.0 / 32.0));
+        made.odds.taken.insert((5, 5), fixed(31.0 / 32.0));
+        made.odds.taken.insert((5, 6), fixed(1.0 / 32.0));
+        made.odds.taken.insert((6, 3), fixed(31.0 / 32.0));
+        made.odds.taken.insert((6, 7), fixed(1.0 / 32.0));
+        made
+    };
+    let order = |top: Option<TopClocks>| {
+        let placed = super::_placed_ext(&source, false, false, None, None, top, 0, false).unwrap();
+        placed.blocks.iter().map(|one| one.at).collect::<Vec<_>>()
+    };
+    let at = |order: &[i64], block: i64| order.iter().position(|&one| one == block).unwrap();
+    let pin = order(None);
+    assert!(at(&pin, 6) < at(&pin, 3), "premise: the pin puts the latch above the header: {pin:?}");
+    let priced = order(Some(TopClocks { jump_clocks: 3.0, saved_clocks: 2.0 }));
+    assert!(at(&priced, 6) == at(&priced, 5) + 1, "the inner loop falls into the latch: {priced:?}");
+}
+
+/// x_cordic -O2: an inner loop whose header splits in two arms that join in
+/// a small latch. Placement copies the latch into both arms, so the arm's jump
+/// to it is no loss when the latch goes above the header and falls into it.
+/// Priced as a lost `jmp`, the latch stayed below, both arms paid a taken
+/// `jne` and the loop took 50,653 clk against 48,939.
+#[test]
+fn test_a_latch_copied_into_two_arms_goes_above_the_header() {
+    use super::placement::TopClocks;
+    let source = {
+        let mut made = body(
+            "f",
+            1,
+            vec![
+                block(1, vec![_move(1, imm(0)), _jump(2, 3)], vec![3]).into(),
+                block(3, vec![_compare(3), _branch(4, "js", 4), _jump(5, 5)], vec![4, 5]).into(),
+                block(4, vec![_move(6, imm(1)), _jump(7, 6)], vec![6]).into(),
+                block(5, vec![_move(8, imm(2)), _jump(9, 6)], vec![6]).into(),
+                block(6, vec![_compare(10), _branch(11, "jne", 3), _jump(12, 7)], vec![3, 7]).into(),
+                block(7, vec![_return(13)], vec![]).into(),
+            ],
+        );
+        let fixed = |probability: f64| (probability * crate::model::lir::BlockOdds::CERTAIN) as u32;
+        made.odds.taken.insert((3, 4), fixed(25.0 / 40.0));
+        made.odds.taken.insert((3, 5), fixed(15.0 / 40.0));
+        made.odds.taken.insert((6, 3), fixed(31.0 / 32.0));
+        made.odds.taken.insert((6, 7), fixed(1.0 / 32.0));
+        made
+    };
+    let order = |top: Option<TopClocks>| {
+        let placed = super::_placed_ext(&source, false, false, None, None, top, 0, false).unwrap();
+        placed.blocks.iter().map(|one| one.at).collect::<Vec<_>>()
+    };
+    let at = |order: &[i64], block: i64| order.iter().position(|&one| one == block).unwrap();
+    let pin = order(None);
+    assert!(at(&pin, 5) < at(&pin, 3), "premise: the pin has an arm, with the latch copied in, above the header: {pin:?}");
+    let priced = order(Some(TopClocks { jump_clocks: 3.0, saved_clocks: 2.0 }));
+    assert!(at(&priced, 5) < at(&priced, 3), "an arm with the latch is the loop top: {priced:?}");
+}
+
+/// Control: the clock weights and the exit rule are for a loop's top and a
+/// loop's exit; a diamond's join keeps the pin's order (sfm16_float_cmp -O2
+/// ran 1,364 clk longer when every join took the hotter-edge rule).
+#[test]
+fn test_a_diamond_is_placed_as_the_pin_does_under_the_loop_top_clocks() {
+    use super::placement::TopClocks;
+    let order = |top: Option<TopClocks>| {
+        let placed = super::_placed_ext(&weighted_diamond(0.7), false, false, None, None, top, 0, false).unwrap();
+        placed.blocks.iter().map(|one| one.at).collect::<Vec<_>>()
+    };
+    assert_eq!(order(Some(TopClocks { jump_clocks: 3.0, saved_clocks: 2.0 })), order(None));
 }

@@ -16,6 +16,7 @@ pub mod visit;
 #[cfg(test)]
 pub(crate) mod tests;
 
+use llrm_debug::{DebugObjectTarget, Info};
 use llrm_object::{AsmInfo, Object, ObjectTarget, Unsupported, UnwindKind};
 
 /// arm64's object writers.
@@ -27,25 +28,7 @@ impl ObjectTarget for Arm64Objects {
         format: &str,
         object: &Object,
     ) -> Result<Vec<u8>, Unsupported> {
-        let expanded;
-        let object = match (format, &object.debug) {
-            ("elf" | "macho", Some(info)) => {
-                expanded = llrm_dwarf::expanded(object, info)?;
-                &expanded
-            }
-            _ => object,
-        };
-        match format {
-            "macho" if !object.frames.is_empty() => llrm_macho::write(&with_unwind(object)?, &macho::Arm64MachO),
-            "macho" => llrm_macho::write(object, &macho::Arm64MachO),
-            "elf" if !object.frames.is_empty() => {
-                // `.eh_frame` goes in whether or not `-g` is on, for the frames
-                // the backend declared.
-                elf::write(&llrm_dwarf::eh_frame::expanded(object, &unwind::eh_target())?)
-            }
-            "elf" => elf::write(object),
-            _ => Err(Unsupported(format!("no {format} writer for arm64 yet"))),
-        }
+        self.write_described(format, object, None)
     }
 
     fn asm_info(
@@ -55,10 +38,46 @@ impl ObjectTarget for Arm64Objects {
         matches!(format, "macho" | "elf").then_some(AsmInfo {
             pref_align: false,
             hosted: true,
-            location_ranges: true,
-            cfa_locations: true,
             unwind: if format == "macho" { UnwindKind::Compact } else { UnwindKind::EhFrame },
+            dwarf_relocs_across_sections: format != "macho",
         })
+    }
+}
+
+impl DebugObjectTarget for Arm64Objects {
+    fn write_described(
+        &self,
+        format: &str,
+        object: &Object,
+        debug: Option<&Info>,
+    ) -> Result<Vec<u8>, Unsupported> {
+        let dwarf = llrm_dwarf::Dwarf {
+            relocs_across_sections: self.asm_info(format).is_some_and(|one| one.dwarf_relocs_across_sections),
+        };
+        let expanded = match format {
+            "elf" | "macho" => llrm_debug::expanded(object, debug, &dwarf)?,
+            _ => std::borrow::Cow::Borrowed(object),
+        };
+        let object = &*expanded;
+        match format {
+            "macho" if !object.frames.is_empty() => llrm_macho::write(&with_unwind(object)?, &macho::Arm64MachO),
+            "macho" => llrm_macho::write(object, &macho::Arm64MachO),
+            "elf" if !object.frames.is_empty() => {
+                // `.eh_frame` goes in whether or not `-g` is on, for the frames
+                // the backend declared.
+                elf::write(&llrm_dwarf::eh_frame::expanded(object, &unwind::eh_target(false))?)
+            }
+            "elf" => elf::write(object),
+            _ => Err(Unsupported(format!("no {format} writer for arm64 yet"))),
+        }
+    }
+
+    fn debug_caps(
+        &self,
+        _: &str,
+        _: llrm_debug::Format,
+    ) -> llrm_debug::DebugCaps {
+        llrm_dwarf::CAPS
     }
 }
 
@@ -67,27 +86,41 @@ impl ObjectTarget for Arm64Objects {
 /// its length, the encoding, a personality and a language-specific area).
 fn with_unwind(object: &Object) -> Result<Object, Unsupported> {
     use llrm_object::{Fix, Reloc, Role, Section, Target};
-    let (mut expanded, fdes) = llrm_dwarf::eh_frame::expanded_as(object, &unwind::eh_target(), "__eh_frame")?;
+    let encodings: Vec<u32> = object.frames.iter().map(|frame| unwind::compact_encoding(&frame.cfi)).collect();
     let (mut image, mut relocs) = (Vec::new(), Vec::new());
-    for (frame, fde) in object.frames.iter().zip(fdes) {
+    for (frame, encoding) in object.frames.iter().zip(&encodings) {
         relocs.push(Reloc::new(image.len(), Fix::abs(8), Target::Section(frame.section), frame.offset as i64));
         image.extend(0u64.to_le_bytes());
         image.extend((frame.length as u32).to_le_bytes());
-        image.extend(unwind::compact_encoding(&frame.rows, fde).to_le_bytes());
+        image.extend(encoding.to_le_bytes());
         image.extend([0u8; 16]);
     }
-    expanded
-        .sections
-        .push(
-            Section {
-                name: "__compact_unwind".to_owned(),
-                role: Role::Unwind,
-                near: true,
-                align: 8,
-                spans: vec![[0, image.len()]],
-                image,
-                relocs,
-            },
-        );
-    Ok(expanded)
+    // The pin writes `__compact_unwind` before `__eh_frame`.
+    let mut sections = object.sections.clone();
+    sections.push(Section {
+        name: "__compact_unwind".to_owned(),
+        role: Role::Unwind,
+        near: true,
+        align: 8,
+        spans: vec![[0, image.len()]],
+        image,
+        relocs,
+    });
+    // `__eh_frame` holds the frames the compact words leave to DWARF, and is
+    // not there without one.
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/MC/MCDwarf.cpp#L2170-L2222:
+    // `NeedsEHFrameSection` is set only by a DWARF-mode word, and a frame
+    // with another word is skipped (`OmitDwarfIfHaveCompactUnwind`, Darwin).
+    let frames: Vec<_> = object
+        .frames
+        .iter()
+        .zip(&encodings)
+        .filter(|(_, encoding)| unwind::is_dwarf(**encoding))
+        .map(|(frame, _)| frame.clone())
+        .collect();
+    let object = Object { sections, frames, ..object.clone() };
+    if object.frames.is_empty() {
+        return Ok(object);
+    }
+    Ok(llrm_dwarf::eh_frame::expanded_as(&object, &unwind::eh_target(true), "__eh_frame")?.0)
 }

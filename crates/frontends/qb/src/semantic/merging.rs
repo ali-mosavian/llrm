@@ -526,8 +526,13 @@ fn merged(
                             Operand::Constant(INTEGER, Number::Integer(0)),
                             Operand::Constant(INTEGER, Number::Integer(words - 1)),
                         )];
-                        one.tag =
-                            Some(Tag::Allocate(Shape { descriptor: shape.descriptor, records, element: INTEGER }));
+                        one.tag = Some(Tag::Allocate(Shape {
+                            frame: false,
+                            name: String::new(),
+                            descriptor: shape.descriptor,
+                            records,
+                            element: INTEGER,
+                        }));
                         reordered.insert(one.id);
                     }
                     Some(Tag::Allocate(shape)) if member_of(&shape.descriptor).is_some() => {

@@ -22,9 +22,11 @@ fn _nib(
 
 #[test]
 fn test_a_dword_read_only_as_offset_and_selector_is_one_far_load() {
-    // Nib's sum split each far pointer through the stack.
+    // Nib's sum split each far pointer through the stack. Now its slice arrives
+    // as the data pointer itself (the length folded into the loop), so no far
+    // pointer is read from memory at all.
     let function = _nib("sum", "sum", "_sum");
-    assert_eq!(function.matches("les ").count(), 2);
+    assert_eq!(function.matches("les ").count(), 0);
     assert!(!function.contains("pop es"));
 }
 
@@ -39,6 +41,7 @@ fn _stack_of(fixture: &str) -> Result<(String, Vec<u8>), String> {
         &nib::fixture(&format!("{fixture}.nib")),
         llrm_codegen::backend::objbuild::CodeLayout::OneSegment,
         llrm_target::object::Format::Omf,
+        llrm_target::Target::objects(&llrm_x86_m16::M16),
     )?;
     Ok((llrm_codegen::backend::masm::text(&module).expect("prints"), object))
 }
@@ -49,8 +52,8 @@ fn _stack_of(fixture: &str) -> Result<(String, Vec<u8>), String> {
 fn test_a_frame_larger_than_the_start_stack_adds_a_stack_segment() {
     let (listing, object) = _stack_of("bigframe").unwrap();
     // `print` takes its integer in AX: the chain is a word shorter than with
-    // the stack convention (4618).
-    assert!(listing.contains(".stack 4616"), "{listing}");
+    // the stack convention. The listing saves both `si` and `di`: two words of saves, 4618.
+    assert!(listing.contains(".stack 4618"), "{listing}");
     assert!(object.windows(5).any(|one| one == b"STACK"));
 }
 
@@ -203,6 +206,7 @@ fn test_a_loop_admitted_on_a_tie_in_counted_bytes_does_not_grow_the_object() {
         &source,
         llrm_codegen::backend::objbuild::CodeLayout::OneSegment,
         llrm_target::object::Format::Omf,
+        llrm_target::Target::objects(&llrm_x86_m16::M16),
     )
     .expect("an object")
     .len();
@@ -426,6 +430,24 @@ fn the_stack_reserve_is_the_os_layers_and_no_startup_names_one() {
     }
 }
 
+/// A Nib `&mut [T]` is a pointer into the stack, read as `ss:[bx+si]`, and the
+/// machine said the stack need not be in the data group. The DOS start-up
+/// makes SS the data group's selector (`mov ss, ax`) for every program, and
+/// `os.toml` states it: the Nib machine carries it, so the override is dropped
+/// (quicksort -O1: 9 B).
+#[test]
+fn the_dos_start_up_that_rebases_ss_makes_the_nib_machine_share_the_stack_with_the_data() {
+    use llrm_target::Target;
+    let target = &llrm_x86_m16::M16;
+    let os = crate::Os::for_target(target).unwrap();
+    assert!(crate::compile::machine(target, &os).segments.unwrap().stack_shares_data);
+    let text =
+        std::fs::read_to_string(std::path::Path::new(env!("LLRM_ROOT")).join("runtime/shared/dos/m16/start.asm"))
+            .unwrap();
+    assert!(text.contains("mov     ss, ax"), "the start-up no longer makes SS the data group's selector");
+    assert!(!target.machine().segments.unwrap().stack_shares_data, "other models keep ss:");
+}
+
 /// A convention spells a symbol as the object format asks: `f_` for OMF's
 /// default convention, and `f` for ELF's, where the description's `symbol`
 /// table says `*`. Nib spelled `Abi::symbol`'s pattern whatever format was
@@ -450,4 +472,34 @@ fn test_an_exported_symbol_is_spelled_as_the_object_format_asks() {
     };
     assert!(spelled(&[]).contains(&"f_".to_owned()));
     assert!(spelled(&[("watcall32", "*")]).contains(&"f".to_owned()));
+}
+
+/// #6736 gave the `promote.` rerun the minimal cleanup list: `sort` kept its length parameter, the bounds checks
+/// and a far array pointer (`ret 4`), which the full list folds into a two-index call on the stack array. Nib
+/// quicksort -O2 went from 258,793 to 324,077 clocks (+25%) and from 334 to 411 B (those figures are #6736's, fixed by #6916).
+/// #7082 brought the same `ret 4` back by another cause (the walk's promotion left the second IPSCCP unrun, #7476): measured
+/// on its own, Nib quicksort m16 -O2 355 -> 331 B and 5.2% fewer executed instructions (base de3796acc7).
+#[test]
+fn test_sort_takes_only_its_two_indices_after_the_ipo_reruns() {
+    let function = _nib("quicksort", "main", "_sort");
+    assert!(!function.contains("ret 4"), "the length and the far pointer were not folded away\n{function}");
+    assert!(function.contains("\n    ret\n"), "{function}");
+}
+
+/// An immutable literal table was built on the stack by one `mov` per element on every call (jpeg_fixed's `cosine`: 64
+/// dword stores, 398 B of frame, +570 B of code against C's static table). It is read from a read-only object.
+#[test]
+fn test_an_immutable_literal_table_is_read_from_its_object_not_stored_per_call() {
+    let function = _nib("table", "pick", "_pick");
+    assert!(function.contains("$constant"), "{function}");
+    assert!(function.matches("mov dword ptr [bp-").count() < 4, "{function}");
+}
+
+/// A local f32 literal table was built by one `mov dword ptr [bp-N], imm` per element (jpeg_single's `cosine`: 64 stores, 102
+/// instructions, ~550 B at -Os m16): `constant_source` took only integer-like elements. It is read from a read-only object too.
+#[test]
+fn test_an_immutable_f32_literal_table_is_read_from_its_object_not_stored_per_call() {
+    let function = _nib("ftable", "pick", "_pick");
+    assert!(function.contains("$constant"), "{function}");
+    assert!(function.matches("mov dword ptr [bp-").count() < 4, "{function}");
 }

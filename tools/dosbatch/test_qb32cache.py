@@ -87,3 +87,16 @@ def test_the_runtime_objects_a_program_links_come_in_the_same_order_whatever_the
         for seed in (1, 2, 3, 4)
     }
     assert len(seen) == 1, seen
+
+
+def test_a_compiler_switch_in_the_environment_misses_both_caches(tmp_path, monkeypatch):
+    """A runtime object built under `LLRM_NOKNOB` served the runs without it: jpeg_fixed bq32 -Os read 84096413 once and 84096618 in
+    every other run of the same binary (205 instructions, one timer-tick handler)."""
+    source = tmp_path / "p.bas"
+    source.write_text("PRINT 1\n")
+    monkeypatch.setattr(qb32, "_stamp", lambda tool: "stamp")
+    runtime = qb32.runtime_key(source, "tree", "tools")
+    basic = qb32.basic_key(source, ("-O2",))
+    monkeypatch.setenv("LLRM_NOKNOB", "lu2")
+    assert qb32.runtime_key(source, "tree", "tools") != runtime
+    assert qb32.basic_key(source, ("-O2",)) != basic

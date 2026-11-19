@@ -107,7 +107,7 @@ struct Access {
 }
 
 /// Each function's uses of each global.
-fn reaching(module: &Module) -> BTreeMap<GlobalId, BTreeMap<GlobalId, Option<Reach>>> {
+pub(crate) fn reaching(module: &Module) -> BTreeMap<GlobalId, BTreeMap<GlobalId, Option<Reach>>> {
     let mut named = BTreeMap::new();
     let mut all = BTreeMap::new();
     for (function_id, _, function) in module.functions() {
@@ -234,14 +234,14 @@ fn forwarded(
 }
 
 /// The loads and stores one function makes of a variable.
-struct Direct {
-    function: GlobalId,
-    loads: Vec<InstId>,
-    stores: Vec<InstId>,
+pub(crate) struct Direct {
+    pub(crate) function: GlobalId,
+    pub(crate) loads: Vec<InstId>,
+    pub(crate) stores: Vec<InstId>,
 }
 
 /// Whether `constant` is `id`'s own address, through casts alone.
-fn is_the_variable(
+pub(crate) fn is_the_variable(
     context: &llrm_mir::context::Context,
     constant: llrm_mir::context::ConstantId,
     id: GlobalId,
@@ -259,7 +259,7 @@ fn is_the_variable(
 
 /// The functions that use `id`, or none where a use is not a direct, simple
 /// load or store: a gep on the way is an offset another pass folds.
-fn direct_uses(
+pub(crate) fn direct_uses(
     module: &Module,
     id: GlobalId,
     reached: &BTreeMap<GlobalId, BTreeMap<GlobalId, Option<Reach>>>,
@@ -482,6 +482,7 @@ fn rewrite(
                 GlobalValue {
                     name: unique.into(),
                     linkage: Linkage::Internal,
+                    visibility: llrm_mir::Visibility::Default,
                     unnamed_addr: Default::default(),
                     address_space: space,
                     kind: GlobalKind::Variable(GlobalVariable {

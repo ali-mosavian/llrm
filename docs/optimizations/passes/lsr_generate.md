@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/lsr_generate.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/lsr_generate.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/lsr_generate.rs sha256:3a04062d206fe8c1585db40a3ccf84745e59900201f66201e8f7ec5e504bf7f2 -->
+<!-- src: crates/opt/llrm-transforms/src/lsr_generate.rs sha256:970d47e7e5e51aef1ea9ef17488ff25d6e5c61d8c573705479f96b4a39911c90 -->
 
 # lsr_generate
 
@@ -30,8 +30,8 @@ the compare's register.
 Nothing runs it yet: stage 4 of the translation of LSR.
 
 ## Limits
-DEVIATE: the pre- and post-indexed addressing branches
-(`AMK_PreIndexed`, `AMK_PostIndexed`; x86 prefers none) are not ported.
+DEVIATE: the pre-indexed addressing branches (`AMK_PreIndexed`; no target
+of ours prefers it) are not ported; the post-indexed ones are.
 Work per use is bounded by the formulae it has, which the caps bound.
 
 DEVIATE LG1: `GenerateICmpZeroScales` asks `getExactSDiv` for no overflow
@@ -41,4 +41,13 @@ significant bits there, for the counter alone compared to zero. The pin
 keeps a loop's exit counter beside the scaled one it is a multiple of
 (recsum: `dec; add -3; jne`); this exits on the scaled one (`add -3; jne`),
 as the stand-in LSR did. Exit: none, a proof; if LLVM does the same, delete
-the line.
+the line. A target turns LG1 and LG2 off with
+`Tti::lsr_scales_zero_compare_past_overflow` (wasm: the pin's formulae).
+
+DEVIATE LG2: for an even factor `getExactSDiv` fails where the compared
+value cannot reach 2^(bits - ctz(factor)) under the loop's guards, although
+only 0 then has a product of 0. Without it a byte-stepped loop kept a second
+counter beside the byte index (examples/dot m16: `dec cx` and a spill).
+Exit: none, a proof; if LLVM's SCEV proves the same, delete the check.
+Not at size: the doubled limit costs an `add` and a `cmp` over the `dec`
+(m16 -Os corpus: idioms +51 B, idiom_edges +15, none smaller).

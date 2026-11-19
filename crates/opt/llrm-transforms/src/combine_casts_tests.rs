@@ -423,6 +423,16 @@ fn a_zext_of_a_select_with_a_constant_arm_goes_into_the_arms() {
     );
 }
 
+/// `commonCastTransforms` leaves a cast of a select alone when its condition is
+/// a `trunc` of the select's own type, as for a compare: `select_ext_const`
+/// folds the cast back out, so folding it in looped. A seed of the
+/// 6502 difftest ran `combine` to 80 GB.
+#[test]
+fn a_zext_of_a_select_on_a_trunc_of_its_own_type_stays() {
+    let body = "  %c = trunc i8 %a to i1\n  %s = select i1 %c, i8 %y, i8 5\n  %r = zext i8 %s to i16\n  ret i16 %r\n";
+    check("i16", "i8 %a, i8 %y", body, body);
+}
+
 /// `trunc(smax(zext(a) - zext(b), 0))` is `usub.sat(a, b)`. Stayed a wide
 /// subtract, a max and a truncate before.
 #[test]
@@ -605,4 +615,15 @@ b0:
     declared.place(&mut module).unwrap();
     let out = printed(&module);
     assert!(out.contains("call i8 @llvm.fshl.i8(i8 %"), "{out}");
+}
+
+/// A vector `sext`, `zext` and `trunc` (LoopVectorize makes them) panicked in
+/// `bits_of` ("an integer"): the folds are for scalars, so they stay as
+/// written.
+#[test]
+fn a_vector_cast_is_left_alone() {
+    let body = "  %e = sext <8 x i16> %x to <8 x i64>\n  %t = trunc <8 x i64> %e to <8 x i16>\n  \
+                %z = zext <8 x i16> %t to <8 x i32>\n  %u = trunc <8 x i32> %z to <8 x i16>\n  \
+                ret <8 x i16> %u\n";
+    check("<8 x i16>", "<8 x i16> %x", body, body);
 }

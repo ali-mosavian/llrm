@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/earlytaildup.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/earlytaildup.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/earlytaildup.rs sha256:aa4079285156c5eedcd6eb83e613f064aa36d8cb2f03507644fbdf4f447449fc -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/earlytaildup.rs sha256:9ea0cc3e115027259d2d729f32fa561d78008afcb1b15a06bda73bf5c0033118 -->
 
 # earlytaildup
 
@@ -32,7 +32,7 @@ new in each copy), the successors' phis read from the predecessor what they
 read from the tail, the tail's edge odds move to the predecessor, and the
 tail goes when nothing reaches it.
 
-DEVIATE ET1 (owner w-1, exit: step 3): a tail with a phi, or whose values
+DEVIATE ET1 (owner anyisa, exit: step 3): a tail with a phi, or whose values
 are read outside it, is left (`processPHI`, `updateSuccessorsPHIs`, the SSA
 update). Nothing calls `tail_duplicate` yet.
 

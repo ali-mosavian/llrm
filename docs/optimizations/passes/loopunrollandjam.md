@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/loopunrollandjam.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/loopunrollandjam.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/loopunrollandjam.rs sha256:c73f033bf8573b08257004ec928cf770df6fcb0b5e072748dbea8b8bc62bd581 -->
+<!-- src: crates/opt/llrm-transforms/src/loopunrollandjam.rs sha256:c362bc4f6eacfb04a2effa20d8e3a205a38e6950c21e60aa5a832f6daa5fa9fb -->
 
 # loopunrollandjam
 
@@ -47,6 +47,17 @@ load that does not move with the outer one, or the user asked.
   pragma asks (`enable-unroll-and-jam` is false) and the targets leave
   `UP.Partial` and `UP.Runtime` off; the `particle` row at -O3 is the
   reason. The pragma and `-allow-unroll-and-jam` ask as they do at the pin.
+- D8: a function that was jammed runs `IndVarSimplify`, `GVN` and `DSE` once
+  after the jam. The pin has no pass after the jam that merges the copies'
+  counters (`movePHIs` leaves one phi per copy), so each copy keeps its own
+  load and store of a cell the others touch; gcc folds them. The pin never
+  forms the shape (`-O3` leaves the jam off), so no pin output shows it.
+  Exit: none.
+- D9 (UJ-EARLY, owner arm64-vec, exit 2026-12-01): a second run, before the
+  vectorizer, on a target with vector registers. GCC's `pass_unroll_jam`
+  runs before its vectorizer; after the pin's (l.1474) a nest's inner loop is
+  a vector loop and its remainder, two loops, and the jam refuses it. particle
+  -O3 (arm64): 16,743 instructions run, 11,249 jammed first (gcc 12,539).
 - D2: no loop metadata is made: not `llvm.loop.unroll_and_jam.followup_*`,
   not `setLoopAlreadyUnrolled` (a function pass cannot add metadata nodes),
   not `llvm.loop.unroll.disable` on the epilog. llrm has no partial or

@@ -26,7 +26,7 @@ env:
 
 jobs:
   # The pin clang tree tools/identical.py drives for the C programs (as ci.yml's toolchain job): restored or built, and saved under this ref.
-  # Without it the C programs were skipped and the run failed (feat/parity).
+  # Without it the C programs were skipped and the run failed (release/next).
   toolchain:
     runs-on: ubuntu-24.04
     timeout-minutes: 120

@@ -9,7 +9,7 @@ SCRIPT = Path(__file__).resolve().parent / "qcport.py"
 
 
 def compiler(path: Path, works: bool) -> Path:
-    path.write_text("#!/bin/sh\n" + "[ \"$1\" = --version ] && { echo 'llrm-c abc123'; exit 0; }\n" + ("echo x > \"$(echo \"$@\" | sed 's/.*-o \\([^ ]*\\) .*/\\1/')\"\n" if works else "exit 1\n"))
+    path.write_text("#!/bin/sh\n" + "[ \"$1\" = --version ] && { echo 'llrm-cc abc123'; exit 0; }\n" + ("echo x > \"$(echo \"$@\" | sed 's/.*-o \\([^ ]*\\) .*/\\1/')\"\n" if works else "exit 1\n"))
     path.chmod(path.stat().st_mode | stat.S_IEXEC)
     return path
 

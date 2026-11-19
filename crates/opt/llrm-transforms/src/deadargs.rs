@@ -55,7 +55,7 @@
 //! [`crate::argpromotion`]; LLVM's DeadArgumentElimination (`MarkValue`,
 //! `SurveyUse`).
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use llrm_mir::callgraph::{direct_calls, direct_only};
 use llrm_mir::context::GlobalId;
@@ -68,6 +68,7 @@ pub fn any_dead(module: &Module) -> bool {
     let only = direct_only(module);
     let llrm_mir::callgraph::DirectCalls { sites, refused } = direct_calls(module);
     only.iter().filter(|id| !refused.contains(id)).any(|id| sites.contains_key(id) && !dead(module, *id).is_empty())
+        || !dead_returns(module).is_empty()
 }
 
 /// The functions of `module` that lost a parameter, and the functions that call
@@ -81,12 +82,53 @@ pub fn removed(module: &mut Module) -> Vec<GlobalId> {
 /// argument went from whose value then has no other reader (what computed it
 /// is dead now).
 pub fn removed_with(module: &mut Module) -> (Vec<GlobalId>, BTreeSet<GlobalId>) {
+    removed_among(module, SelfCalls::No)
+}
+
+/// [`removed_with`] over the functions that call themselves: the recursion
+/// copier prices a body without the parameters nothing reads, as gcc's IPA-SRA
+/// leaves it for `-finline-recursive` (W1). With `tree` only those with two
+/// or more self-calls: the calls of a tree recursion merge once the
+/// arguments they differ in are gone (hanoi), the one gain an early removal
+/// has where the pin removes after the walk.
+pub fn removed_from_recursions(
+    module: &mut Module,
+    tree: bool,
+) -> (Vec<GlobalId>, BTreeSet<GlobalId>) {
+    removed_among(module, if tree { SelfCalls::Tree } else { SelfCalls::Any })
+}
+
+/// Which functions [`removed_among`] looks at.
+#[derive(Clone, Copy, PartialEq)]
+enum SelfCalls {
+    /// Every function.
+    No,
+    /// Those that call themselves.
+    Any,
+    /// Those that call themselves at two or more sites.
+    Tree,
+}
+
+fn removed_among(
+    module: &mut Module,
+    calls_of: SelfCalls,
+) -> (Vec<GlobalId>, BTreeSet<GlobalId>) {
     let mut unsound = BTreeSet::new();
     let only = direct_only(module);
     let llrm_mir::callgraph::DirectCalls { sites, refused } = direct_calls(module);
     let mut changed = BTreeSet::new();
+    // The functions the pin builds again (`removeDeadStuffFromFunction`).
+    let mut rebuilt = BTreeSet::new();
     for &id in only.iter().filter(|id| !refused.contains(id)) {
         let Some(calls) = sites.get(&id) else { continue };
+        let own_calls = calls.iter().filter(|&&(caller, _)| caller == id).count();
+        if own_calls < match calls_of {
+            SelfCalls::No => 0,
+            SelfCalls::Any => 1,
+            SelfCalls::Tree => 2,
+        } {
+            continue;
+        }
         let gone = dead(module, id);
         if gone.is_empty() {
             continue;
@@ -134,8 +176,110 @@ pub fn removed_with(module: &mut Module) -> (Vec<GlobalId>, BTreeSet<GlobalId>) 
         // The function itself has other parameters now.
         unsound.insert(id);
         changed.insert(id);
+        rebuilt.insert(id);
+    }
+    for id in remove_dead_returns(module, &mut rebuilt) {
+        unsound.insert(id);
+        changed.insert(id);
+    }
+    // The new function takes the uses of the old one's other parameters one at a
+    // time, so each list comes out reversed, once however much was removed.
+    for id in rebuilt {
+        let GlobalKind::Function(function) = &mut module.globals[id.0 as usize].kind else { unreachable!("a function") };
+        for parameter in function.parameters().to_vec() {
+            function.reverse_uses(parameter);
+        }
     }
     (changed.into_iter().collect(), unsound)
+}
+
+/// The functions whose return value no call reads, with every call of them
+/// (LLVM's DeadArgumentElimination, `surveyFunction`'s return values and
+/// `removeDeadStuffFromFunction`): the function returns nothing and each call
+/// has no result. Returns the functions and callers it edited.
+fn remove_dead_returns(
+    module: &mut Module,
+    rebuilt: &mut BTreeSet<GlobalId>,
+) -> Vec<GlobalId> {
+    let gone = dead_returns(module);
+    if gone.is_empty() {
+        return Vec::new();
+    }
+    let sites = direct_calls(module).sites;
+    let mut changed: BTreeSet<GlobalId> = BTreeSet::new();
+    for &id in &gone {
+        let Module { context, globals, .. } = &mut *module;
+        let GlobalKind::Function(function) = &mut globals[id.0 as usize].kind else { unreachable!("a function") };
+        function.drop_return_value(context);
+        changed.insert(id);
+        rebuilt.insert(id);
+    }
+    for &id in &gone {
+        let ty = module.global(id).function().expect("a function").ty;
+        for &(caller, call) in &sites[&id] {
+            let Module { context, globals, .. } = &mut *module;
+            let GlobalKind::Function(function) = &mut globals[caller.0 as usize].kind else { unreachable!("a caller") };
+            function.drop_call_result(context, call, ty);
+            changed.insert(caller);
+        }
+    }
+    changed.into_iter().collect()
+}
+
+/// The functions `remove_dead_returns` would edit: every call of the function
+/// is a plain direct one, and none reads the result but a `ret` of a caller
+/// that returns it on, taken to a fixed point. `DEVIATE`: scalar returns only
+/// (an `extractvalue` of the result reads it); the pin splits aggregate
+/// returns per element.
+fn dead_returns(module: &Module) -> BTreeSet<GlobalId> {
+    let only = direct_only(module);
+    let llrm_mir::callgraph::DirectCalls { sites, refused } = direct_calls(module);
+    let void = module.context.types.void();
+    let candidates: BTreeSet<GlobalId> = only
+        .iter()
+        .copied()
+        .filter(|id| !refused.contains(id) && sites.contains_key(id))
+        .filter(|&id| {
+            let function = module.global(id).function().expect("a function");
+            let llrm_mir::types::Type::Function { returns, .. } = module.context.types.get(function.ty) else {
+                return false;
+            };
+            *returns != void
+        })
+        .collect();
+    // Who a callee's result goes on to: the callers whose own `ret` returns it,
+    // or `None` when something else reads it.
+    let mut passed_on: BTreeMap<GlobalId, Option<BTreeSet<GlobalId>>> = BTreeMap::new();
+    for &id in &candidates {
+        let mut through = Some(BTreeSet::new());
+        'sites: for &(caller, call) in &sites[&id] {
+            let function = module.global(caller).function().expect("a caller");
+            if matches!(&function.instruction(call).opcode, Opcode::Call(info) if info.tail == llrm_mir::opcode::Tail::MustTail)
+            {
+                through = None;
+                break;
+            }
+            let Some(result) = function.instruction(call).result else { continue };
+            for one in function.users(result).iter() {
+                if function.instruction(one.user).opcode == Opcode::Ret && candidates.contains(&caller) {
+                    through.as_mut().expect("still passing on").insert(caller);
+                } else {
+                    through = None;
+                    break 'sites;
+                }
+            }
+        }
+        passed_on.insert(id, through);
+    }
+    let mut live: BTreeSet<GlobalId> = candidates.iter().copied().filter(|id| passed_on[id].is_none()).collect();
+    while let Some(id) = candidates
+        .iter()
+        .copied()
+        .find(|id| !live.contains(id) && passed_on[id].iter().flatten().any(|caller| live.contains(caller)))
+    {
+        live.insert(id);
+    }
+    candidates.difference(&live).copied().collect()
 }
 
 /// The parameters of `id` nothing reads but its own calls to itself, each as

@@ -33,9 +33,9 @@
 //! | [`InvertBranch`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/BasicBlockUtils.cpp#L1879) | `inverted` | MIRROR |
 //! | `simplifycfg-branch-fold-threshold` (2), `-bonus-inst-threshold` (1), `-branch-fold-common-dest-vector-multiplier` (2) | `FOLD_THRESHOLD`, `BONUS_THRESHOLD`, `VECTOR_MULTIPLIER` | MIRROR |
 //!
-//! - D1. No pseudo probes, no `minsize` (the cost kind is size and latency).
-//! - D2. The MIR has no branch weights or `!unpredictable`: the fold is never
-//!   held back for a predictable branch, and no weights are computed.
+//! - D1. No pseudo probes (a `minsize` function is priced as `CodeSize`).
+//! - D2. (retired) the fold reads `!prof` and `!unpredictable`, holds back for
+//!   a probably-decided first branch, and computes the merged weights.
 //! - D3. No debug locations. The bonus instructions lose the metadata that can
 //!   make a speculated instruction undefined, as in
 //!   [`twoentryphi`](crate::twoentryphi) (D4 there).
@@ -45,7 +45,7 @@ use llrm_mir::edit::Position;
 use llrm_mir::instructioncost::instruction_cost;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
 use llrm_mir::opcode::{Flags, Opcode};
-use llrm_mir::tti::{ArithOp, CostKind, OperandInfo, Ty};
+use llrm_mir::tti::{ArithOp, OperandInfo, Ty};
 use llrm_mir::valuetracking::Query;
 use llrm_support::hash::HashMap;
 
@@ -86,22 +86,54 @@ fn conditional(
     }
 }
 
-/// `shouldFoldCondBranchesToCommonDestination`.
+/// `getPredictableBranchThreshold` (99%), in the pin's 2^31 fractions.
+const LIKELY: u64 = 2126008812;
+
+/// `BranchProbability::getBranchProbability(n, n + m)`: rounded to nearest.
+fn probability_of(
+    taken: u64,
+    other: u64,
+) -> u64 {
+    let total = u128::from(taken) + u128::from(other);
+    (((u128::from(taken) << 31) + total / 2) / total) as u64
+}
+
+/// `shouldFoldCondBranchesToCommonDestination`. `weights` are `pbi`'s, when it
+/// has them and is not `!unpredictable`: the second condition is not
+/// speculated when the first is probably decided.
 fn recipe(
     bi: (BlockId, BlockId),
     pbi: (BlockId, BlockId),
+    weights: Option<(u64, u64)>,
 ) -> Option<Recipe> {
+    let true_probability = weights.filter(|&(t, f)| t + f != 0).map(|(t, f)| probability_of(t, f));
+    let unlikely_true = true_probability.is_none_or(|p| p < LIKELY);
+    let unlikely_false = true_probability.is_none_or(|p| (1u64 << 31) - p < LIKELY);
     if pbi.0 == bi.0 {
-        Some(Recipe { join: Join::Or, invert: false })
+        unlikely_true.then_some(Recipe { join: Join::Or, invert: false })
     } else if pbi.1 == bi.1 {
-        Some(Recipe { join: Join::And, invert: false })
+        unlikely_false.then_some(Recipe { join: Join::And, invert: false })
     } else if pbi.0 == bi.1 {
-        Some(Recipe { join: Join::And, invert: true })
+        unlikely_true.then_some(Recipe { join: Join::And, invert: true })
     } else if pbi.1 == bi.0 {
-        Some(Recipe { join: Join::Or, invert: true })
+        unlikely_false.then_some(Recipe { join: Join::Or, invert: true })
     } else {
         None
     }
+}
+
+/// `pbi`'s weights, when the fold may read them.
+fn predictor_weights(
+    context: &Context,
+    spec: &Speculation,
+    declared: &llrm_mir::passes::Declared,
+    function: &Function,
+    pbi: InstId,
+) -> Option<(u64, u64)> {
+    if function.instruction(pbi).metadata.iter().any(|(kind, _)| kind == "unpredictable") {
+        return None;
+    }
+    crate::profswap::weights_of(context, &spec.outer.metadata, declared, function, pbi)
 }
 
 /// `safeToMergeTerminators`: the phis of a successor both blocks reach take
@@ -159,6 +191,7 @@ fn has_one_use(
 pub fn folded(
     context: &Context,
     spec: &Speculation,
+    declared: &mut llrm_mir::passes::Declared,
     function: &mut Function,
     block: BlockId,
 ) -> bool {
@@ -188,15 +221,18 @@ pub fn folded(
         let Some((_, pcondition, ptaken, pother)) = conditional(function, pred) else { continue };
         // The recipe is the cheaper test, and neither reads what the other
         // writes: the pin asks `safeToMergeTerminators` first.
-        let Some(plan) = recipe((taken, other), (ptaken, pother)) else { continue };
+        let pbi_inst = function.terminator(pred).expect("a terminator");
+        let weights = predictor_weights(context, spec, declared, function, pbi_inst);
+        let Some(plan) = recipe((taken, other), (ptaken, pother), weights) else { continue };
         if !safe_to_merge_terminators(function, block, pred) {
             continue;
         }
         let ty = Ty::of(&context.types, cond_ty);
         if let Some(ty) = ty {
             let op = if plan.join == Join::Or { ArithOp::Or } else { ArithOp::And };
-            let mut cost =
-                spec.tti.arithmetic_cost(op, ty, CostKind::SizeAndLatency, OperandInfo::ANY, OperandInfo::ANY);
+            let mut cost = spec
+                .tti
+                .arithmetic_cost(op, ty, crate::speculate::cost_kind(function), OperandInfo::ANY, OperandInfo::ANY);
             let invertible = has_one_use(function, pcondition)
                 && matches!(
                     pcondition,
@@ -207,7 +243,7 @@ pub fn folded(
                     + spec.tti.arithmetic_cost(
                         ArithOp::Xor,
                         ty,
-                        CostKind::SizeAndLatency,
+                        crate::speculate::cost_kind(function),
                         OperandInfo::ANY,
                         OperandInfo::ANY,
                     );
@@ -250,7 +286,7 @@ pub fn folded(
             &spec.outer.globals,
             function,
             inst,
-            CostKind::SizeAndLatency,
+            crate::speculate::cost_kind(function),
         );
         if !price.valid || price.value != 0 {
             bonus += count;
@@ -277,13 +313,15 @@ pub fn folded(
     if bonus > BONUS_THRESHOLD * if vector { VECTOR_MULTIPLIER } else { 1 } {
         return false;
     }
-    performed(context, spec, function, block, preds[0])
+    performed(context, spec, declared, function, block, preds[0])
 }
 
 /// `InvertBranch`: `pbi` branches the other way on the negation of its
 /// condition.
 fn inverted(
     context: &Context,
+    metadata: &[llrm_mir::module::MetadataNode],
+    declared: &mut llrm_mir::passes::Declared,
     function: &mut Function,
     pbi: InstId,
 ) {
@@ -319,9 +357,7 @@ fn inverted(
         let value = Operand::Value(function.instruction(not).result.expect("a value"));
         function.set_operand(pbi, 0, value);
     }
-    let operands = function.instruction(pbi).operands.clone();
-    function.set_operand(pbi, 1, operands[2]);
-    function.set_operand(pbi, 2, operands[1]);
+    crate::profswap::swap_arms(context, metadata, declared, function, pbi);
 }
 
 /// `createLogicalOp`: `lhs` joined to `rhs`, by the operation where `rhs`
@@ -363,21 +399,40 @@ pub(crate) fn logical_op(
 fn performed(
     context: &Context,
     spec: &Speculation,
+    declared: &mut llrm_mir::passes::Declared,
     function: &mut Function,
     block: BlockId,
     pred: BlockId,
 ) -> bool {
     let (branch, _, taken, other) = conditional(function, block).expect("a conditional branch");
     let (pbi, _, ptaken, pother) = conditional(function, pred).expect("a conditional branch");
-    let plan = recipe((taken, other), (ptaken, pother)).expect("a recipe");
+    let weights = predictor_weights(context, spec, declared, function, pbi);
+    let plan = recipe((taken, other), (ptaken, pother), weights).expect("a recipe");
     if plan.invert {
-        inverted(context, function, pbi);
+        inverted(context, &spec.outer.metadata, declared, function, pbi);
     }
     let (ptaken, _) = match (function.instruction(pbi).operands[1], function.instruction(pbi).operands[2]) {
         (Operand::Block(a), Operand::Block(b)) => (a, b),
         _ => unreachable!("a conditional branch"),
     };
     let unique = if ptaken == block { taken } else { other };
+    // `extractPredSuccWeights`: either side's weights make the merged ones.
+    let merged = {
+        let pred = crate::profswap::weights_of(context, &spec.outer.metadata, declared, function, pbi);
+        let succ = crate::profswap::weights_of(context, &spec.outer.metadata, declared, function, branch);
+        (pred.is_some() || succ.is_some()).then(|| {
+            let ((pt, pf), (st, sf)) = (pred.unwrap_or((1, 1)), succ.unwrap_or((1, 1)));
+            if ptaken == block {
+                [pt.saturating_mul(st), pf.saturating_mul(sf + st).saturating_add(pt.saturating_mul(sf))]
+            } else {
+                [pt.saturating_mul(sf + st).saturating_add(pf.saturating_mul(st)), pf.saturating_mul(sf)]
+            }
+        })
+    };
+    match merged {
+        Some(weights) => crate::profswap::set_fitted_weights(context, declared, function, pbi, weights),
+        None => function.unannotate(pbi, "prof"),
+    }
     // The successor gains a predecessor with what `block` gave it.
     for phi in crate::edges::phis(function, unique) {
         let arms = llrm_analysis::occurrence::arms(function, phi);
@@ -425,6 +480,13 @@ fn performed(
     let pcondition = function.instruction(pbi).operands[0];
     let joined = logical_op(context, spec, function, pbi, plan.join, pcondition, copied);
     function.set_operand(pbi, 0, joined);
+    // A `select` in the role of the logical op carries the merged weights.
+    if let (Some(weights), Operand::Value(value)) = (merged, joined)
+        && let ValueDef::Instruction(select) = function.value(value).def
+        && function.instruction(select).opcode == Opcode::Select
+    {
+        crate::profswap::set_fitted_weights(context, declared, function, select, weights);
+    }
     true
 }
 

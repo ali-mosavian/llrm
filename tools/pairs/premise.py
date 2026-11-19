@@ -11,6 +11,8 @@ from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import pin
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import elfsize
 
 OURS, LV, FLAG = sys.argv[1], sys.argv[2], sys.argv[3]
 LIMIT = int(sys.argv[4]) if len(sys.argv) > 4 else 10**9
@@ -30,8 +32,7 @@ def text_bytes(obj):
     with tempfile.NamedTemporaryFile(suffix=".o") as f:
         f.write(obj); f.flush()
         out = subprocess.run(["size", "-A", f.name], capture_output=True, text=True).stdout
-    m = re.search(r"^\.text\s+(\d+)", out, re.M)
-    return int(m.group(1)) if m else 0
+    return elfsize.text_bytes(out)
 
 
 # Not instructions: our listing's directives (`public f`, `extern g`, `f endp`, `align 16`, `db`) began with a letter too and made ours 5.9% larger than it is.

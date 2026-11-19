@@ -61,13 +61,15 @@ fn the_frame_is_restored_before_the_branch() {
     assert!(!asm.contains("ret"), "{asm}");
 }
 
-/// The caller's own hidden result pointer, a `byval` argument and a convention
-/// that passes differently are the gate's refusals
-/// (`isEligibleForTailCallOptimization`): each stays `bl`.
+/// A `byval` argument is one of the gate's refusals
+/// (`isEligibleForTailCallOptimization`): it stays `bl`. A convention the pin has
+/// no table for is a compile error (`dag_refusal_is_an_error.rs`). The
+/// caller's own hidden result pointer, passed on in `x8`, is not one: the pin's
+/// `llc` makes `b _fill` of `sret_callee` (`x8` is no stack argument).
 #[test]
-fn sret_byval_and_another_convention_stay_calls() {
-    for (function, callee) in [("sret_callee", "_fill"), ("byval_argument", "_shape"), ("other_convention", "_cold")] {
-        let asm = body(function);
-        assert!(asm.contains(&format!("bl {callee}")), "{asm}");
-    }
+fn byval_stays_a_call_and_sret_is_forwarded() {
+    let asm = body("byval_argument");
+    assert!(asm.contains("bl _shape"), "{asm}");
+    let asm = body("sret_callee");
+    assert!(asm.contains("b _fill") && !asm.contains("bl _fill"), "{asm}");
 }

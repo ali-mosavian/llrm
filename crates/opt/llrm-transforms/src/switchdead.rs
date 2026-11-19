@@ -184,6 +184,7 @@ fn dead_cases_eliminated(
         dom_conditions: None,
         cond_context: None,
         cxt: Some(switch),
+        pending_intrinsics: &[],
     };
     let known = compute_known_bits(&q, cond, 0);
     let mut known_values = possible_values(&q, cond, 4);
@@ -299,6 +300,7 @@ fn cmp_intrinsic_folded(
             dom_conditions: None,
             cond_context: None,
             cxt: None,
+            pending_intrinsics: &[],
         };
         let found = [IntrinsicId::Scmp, IntrinsicId::Ucmp]
             .into_iter()

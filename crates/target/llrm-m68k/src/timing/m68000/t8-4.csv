@@ -1,0 +1,18 @@
+#title,Table 8-4. Standard Instruction Execution Times,page,8-4,notes,"+ Add effective address calculation time. | † Word or long only | * Indicates maximum basic value added to word effective address time | ** The base time of six clock periods is increased to eight if the effective address mode is register direct or immediate (effective address time should also be added). | *** Only available effective address mode is data register direct. | DIVS, DIVU — The divide algorithm used by the MC68000 provides less than 10% difference between the best- and worst-case timings. | MULS, MULU — The multiply algorithm requires 38+2n clocks where n is defined as: MULU: n = the number of ones in the <ea>; MULS: n = concatenate the <ea> with a zero as the LSB; n is the resultant number of 10 or 01 patterns in the 17-bit source; i.e., worst case happens when the source is $5555."
+Instruction,Size,"op<ea>, An†","op<ea>, Dn","op Dn, <M>"
+ADD/ADDA,"Byte, Word",8(1/0)+,4(1/0)+,8(1/1)+
+,Long,6(1/0)+**,6(1/0)+**,12(1/2)+
+AND,"Byte, Word",—,4(1/0)+,8(1/1)+
+,Long,—,6(1/0)+**,12(1/2)+
+CMP/CMPA,"Byte, Word",6(1/0)+,4(1/0)+,—
+,Long,6(1/0)+,6(1/0)+,—
+DIVS,—,—,158(1/0)+*,—
+DIVU,—,—,140(1/0)+*,—
+EOR,"Byte, Word",—,4(1/0)***,8(1/1)+
+,Long,—,8(1/0)***,12(1/2)+
+MULS,—,—,70(1/0)+*,—
+MULU,—,—,70(1/0)+*,—
+OR,"Byte, Word",—,4(1/0)+,8(1/1)+
+,Long,—,6(1/0)+**,12(1/2)+
+SUB,"Byte, Word",8(1/0)+,4(1/0)+,8(1/1)+
+,Long,6(1/0)+**,6(1/0)+**,12(1/2)+

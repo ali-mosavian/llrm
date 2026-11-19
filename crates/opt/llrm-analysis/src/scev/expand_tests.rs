@@ -31,6 +31,16 @@ fn expanded_in(
     body: &str,
     build: impl FnOnce(&mut ScalarEvolution, &Cx, &[Operand]) -> Scev,
 ) -> String {
+    expanded_in_block(body, None, build)
+}
+
+/// [`expanded_in`], before the terminator of the block named `block`, the
+/// `ret`'s where none is.
+fn expanded_in_block(
+    body: &str,
+    block: Option<&str>,
+    build: impl FnOnce(&mut ScalarEvolution, &Cx, &[Operand]) -> Scev,
+) -> String {
     let module = llrm_mir::parse::module(body).expect("a module");
     let (_, _, original) = module.functions().next().expect("a function");
     let mut function = original.clone();
@@ -52,12 +62,18 @@ fn expanded_in(
     let entry = function.entry().expect("an entry");
     arguments.extend(function.iter_block(entry).filter_map(|one| function.instruction(one).result.map(Operand::Value)));
     let s = build(&mut se, &env.cx(&context, &function), &arguments);
-    let ret = function.terminator(function.entry().expect("an entry")).expect("a ret");
+    let ret = function
+        .layout()
+        .iter()
+        .find_map(|&one| match block {
+            Some(name) => function.terminator(one).filter(|_| function.block(one).name.as_deref() == Some(name)),
+            None => function.terminator(one).filter(|&t| matches!(function.instruction(t).opcode, Opcode::Ret)),
+        })
+        .expect("the insert point");
     let mut expander = Expander::new("t");
     expander.set_insert_point(ret);
     let mut declared = Declared::of(&module);
     let result = expander.expand_code_for(&env, &mut context, &mut declared, &mut function, &mut se, s, None);
-    assert!(matches!(function.instruction(ret).opcode, Opcode::Ret));
     let _ = result;
     llrm_mir::print::body(&context, &function)
 }
@@ -116,6 +132,20 @@ fn test_a_udiv_by_a_power_of_two_is_a_shift_right() {
         se.get_udiv_expr(cx, a, eight)
     });
     assert_eq!(lines(&text), ["%0 = lshr i32 %a, 3"]);
+}
+
+/// `mul(4, (udiv a, 4))` is the mask `a & -4`, not `(a >> 2) << 2`
+/// (object_extent_loop +4 B at -O2: the unrolled loop's trip count).
+#[test]
+fn test_a_multiple_of_a_udiv_by_the_same_power_of_two_is_a_mask() {
+    let text = expanded(|se, cx, args| {
+        let a = unknown(se, cx, args[0]);
+        let four = constant(se, 32, 4);
+        let quotient = se.get_udiv_expr(cx, a, four);
+        let four = constant(se, 32, 4);
+        se.get_mul_expr(cx, vec![four, Use::of(quotient)], Flags::default(), 0).scev
+    });
+    assert_eq!(lines(&text), ["%0 = and i32 %a, -4"]);
 }
 
 #[test]
@@ -180,6 +210,73 @@ entry:
         se.get_add_expr(cx, vec![x, one], Flags::default(), 0).scev
     });
     assert_eq!(lines(&text).len(), 1, "{text}");
+}
+
+/// `FindValueInExprValueMap` was only in the cost model: the expander wrote
+/// `x - (x & 3)` as `zext(trunc x)` again (a `trunc`, a `zext`) beside the
+/// `and` that already holds it, and recchop -O2 at wasm32 paid 12 B and 347
+/// instructions for the loop bound LSR rebuilt.
+#[test]
+fn test_a_value_that_computes_the_expression_is_reused() {
+    let body = "define i32 @f(i32 %a, i32 %b, i64 %w) {
+entry:
+  %x = and i32 %a, 3
+  ret i32 0
+}
+";
+    let text = expanded_in(body, |se, cx, args| {
+        let found = se.get_scev(cx, args[3]);
+        assert!(!matches!(se.node(found).kind, super::expr::Kind::Unknown(_)), "premise: and 3 is zext(trunc)");
+        found
+    });
+    assert_eq!(lines(&text).len(), 1, "{text}");
+}
+
+/// Reusing a value whose flags SCEV does not guarantee drops them: an `add nuw`
+/// that stands for the same sum without the proof.
+#[test]
+fn test_reusing_a_flagged_value_drops_the_flags_the_expression_does_not_carry() {
+    let body = "define i32 @f(i32 %a, i32 %b, i64 %w) {
+entry:
+  %x = add nuw i32 %a, %b
+  ret i32 0
+}
+";
+    let text = expanded_in(body, |se, cx, args| {
+        let a = unknown(se, cx, args[0]);
+        let b = unknown(se, cx, args[1]);
+        let _ = se.get_scev(cx, args[3]);
+        se.get_add_expr(cx, vec![a, b], Flags::default(), 0).scev
+    });
+    assert!(!text.contains("nuw"), "{text}");
+    assert_eq!(lines(&text).len(), 1, "{text}");
+}
+
+/// Reusing a `zext nneg` drops the flag; the pin infers it again from the
+/// dominating `icmp sgt`. LSR rebuilt `fillw`'s `zext nneg i16 %n` without it
+/// and wasm32 -O2 masked the signext parameter with `i32.const 65535`.
+#[test]
+fn test_reusing_a_zext_keeps_nneg_a_dominating_condition_proves() {
+    let body = "define i32 @f(i32 %a, i32 %b, i64 %w) {
+entry:
+  %c = icmp sgt i32 %a, 0
+  br i1 %c, label %then, label %out
+then:
+  %x = zext nneg i32 %a to i64
+  ret i32 0
+out:
+  ret i32 1
+}
+";
+    let text = expanded_in(body, |se, cx, args| {
+        let a = unknown(se, cx, args[0]);
+        let then = cx.function.layout()[1];
+        let x = cx.function.instruction(cx.function.iter_block(then).next().expect("%x")).result.expect("a value");
+        let _ = se.get_scev(cx, Operand::Value(x));
+        se.get_zero_extend_expr(cx, a, Ty::Int(64), 0)
+    });
+    assert!(text.contains("zext nneg"), "{text}");
+    assert_eq!(text.matches("zext").count(), 1, "{text}");
 }
 
 /// `isSafeToExpand` was `todo!`: a udiv by an unknown divisor may divide by
@@ -595,4 +692,90 @@ fn test_asking_for_a_constant_again_makes_no_node() {
         assert_eq!(llrm_mir::counts::get(llrm_mir::counts::Event::ScevNodes), before, "a constant is not a node");
         first
     });
+}
+
+/// `a - (a /u 11) * 11` is the canonical remainder; the pin's
+/// `visitAddExpr` writes it as `urem` (wasm recsum -O2 kept `udiv; mul; sub`:
+/// 42032 instructions against the pin's 30030 on the same IR).
+#[test]
+fn test_a_canonical_remainder_is_a_urem() {
+    let text = expanded(|se, cx, args| {
+        let a = unknown(se, cx, args[0]);
+        let eleven = constant(se, 32, 11);
+        let minus_eleven = constant(se, 32, u32::MAX as u128 - 10);
+        let quotient = Use::of(se.get_udiv_expr(cx, a.clone(), eleven));
+        let scaled = se.get_mul_expr(cx, vec![minus_eleven, quotient], Flags::default(), 0);
+        se.get_add_expr(cx, vec![a, scaled], Flags::default(), 0).scev
+    });
+    assert_eq!(lines(&text), ["%0 = urem i32 %a, 11"], "{text}");
+}
+
+const NEST: &str = "define i32 @f(i32 %a, i32 %b, i32 %n) {
+entry:
+  br label %outer
+
+outer:
+  %i = phi i32 [ 0, %entry ], [ %i2, %latch ]
+  br label %ph
+
+ph:
+  br label %inner
+
+inner:
+  %j = phi i32 [ 0, %ph ], [ %j2, %inner ]
+  %j2 = add i32 %j, 1
+  %c = icmp slt i32 %j2, %n
+  br i1 %c, label %inner, label %latch
+
+latch:
+  %i2 = add i32 %i, 1
+  %d = icmp slt i32 %i2, %n
+  br i1 %d, label %outer, label %exit
+
+exit:
+  ret i32 0
+}
+";
+
+/// The block of `text`'s body that has an instruction with `part` in it.
+fn block_of<'a>(
+    text: &'a str,
+    part: &str,
+) -> &'a str {
+    let mut block = "";
+    for one in text.lines().map(str::trim) {
+        if one.ends_with(':') && !one.starts_with('%') {
+            block = one.trim_end_matches(':');
+        } else if one.contains(part) {
+            return block;
+        }
+    }
+    panic!("no `{part}` in {text}");
+}
+
+/// A `umax` of the arguments, expanded in the inner loop, is invariant in the
+/// outer loop too and goes to the outer loop's preheader, as
+/// `SCEVExpander::expand` hoists it "as far out in the loop nest as possible"
+/// (memfuncs_runtime -O3 +35 B: a `umax` of the trip count made again in the
+/// preheader of each loop of a nest).
+#[test]
+fn test_an_expression_invariant_in_the_nest_goes_to_the_outermost_preheader() {
+    let text = expanded_in_block(NEST, Some("inner"), |se, cx, args| {
+        let a = unknown(se, cx, args[0]);
+        let b = unknown(se, cx, args[1]);
+        se.get_umax_expr(cx, vec![a, b])
+    });
+    assert_eq!(block_of(&text, "= call i32"), "entry", "{text}");
+}
+
+/// A division by a value that may be zero is not hoisted: the loops guard
+/// its execution (`SCEVExpander::expand`'s `SafeToHoist`, PR35406).
+#[test]
+fn test_a_division_by_an_unknown_is_not_hoisted_out_of_its_loop() {
+    let text = expanded_in_block(NEST, Some("inner"), |se, cx, args| {
+        let a = unknown(se, cx, args[0]);
+        let b = unknown(se, cx, args[1]);
+        se.get_udiv_expr(cx, a, b)
+    });
+    assert_eq!(block_of(&text, "= udiv i32 %a, %b"), "inner", "{text}");
 }

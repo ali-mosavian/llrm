@@ -47,7 +47,7 @@ def test_a_file_changed_since_the_cached_build_is_newer_than_it_whatever_its_com
 
 
 def test_a_directory_is_as_new_as_the_newest_tracked_file_below_it(tmp_path):
-    """llrm-c's build.rs watches ../../../crates/target as a directory; the checkout's fresh directory mtimes reran it and rebuilt the compiler."""
+    """llrm-cc's build.rs watches ../../../crates/target as a directory; the checkout's fresh directory mtimes reran it and rebuilt the compiler."""
     git(tmp_path, "init", "-q")
     (tmp_path / "a/b").mkdir(parents=True)
     (tmp_path / "a/b/x.rs").write_text("a")

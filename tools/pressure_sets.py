@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """The pin's x86 register pressure sets for a target's integer registers, as `pressure.sets`.
 
-usage: pressure_sets.py <X86GenRegisterInfoTargetDesc.inc> <x86.json> <registers.regs>
+usage: pressure_sets.py <X86GenRegisterInfoTargetDesc.inc> <x86.json> <registers.regs> [overlay]
+
+The optional overlay is a file of `set`/`class` lines appended after the pin's (m16's ADDR16).
 
 The .inc (from the pin's build) gives the pressure sets, their raw limits, the largest class
 of each set, each class's weight and its sets; the JSON (`llvm-tblgen --dump-json X86.td`)
@@ -43,7 +45,7 @@ def members_of(classes, dag):
     raise SystemExit(f"unhandled MemberList operator {op}")
 
 
-def main(inc_path, json_path, regs_path):
+def main(inc_path, json_path, regs_path, overlay=None):
     inc = open(inc_path).read()
     classes = json.load(open(json_path))
     visible = {
@@ -84,6 +86,8 @@ def main(inc_path, json_path, regs_path):
                 break
             ids.append(n)
         out.append(f"class {name} {weight} {len(members)} {','.join(map(str, ids)) or '-'} {','.join(shown)}")
+    if overlay:
+        out += ["", *[line.rstrip() for line in open(overlay) if line.strip()]]
     print("\n".join(out))
 
 

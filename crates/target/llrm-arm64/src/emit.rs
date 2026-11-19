@@ -3,19 +3,28 @@
 
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::{GlobalKind, Linkage, Module};
-use llrm_object::assembler::{Fragment, layout as place};
+use llrm_object::assembler::{AsmBackend, Fragment, layout as place};
 use llrm_object::{Binding, Definition, Object, Reloc, Role, Section, Symbol, Target as RelocTarget};
 use llrm_support::hash::HashMap;
 
 use crate::data::{self, DataReloc};
 use crate::frame::Lowered;
 use crate::machine::Platform;
-use crate::mc::encode::{FixupKind, encode, resolve};
+use crate::mc::backend::Arm64Backend;
+use crate::mc::encode::{FixupKind, encode};
 use crate::mc::inst::{Inst, Target};
 
 /// The words a block's instructions encode to (a directive has none).
-fn words(block: &Lowered) -> usize {
-    block.insts.iter().filter(|inst| !matches!(inst, Inst::Cfi(_))).count()
+pub(crate) fn words(block: &Lowered) -> usize {
+    block.insts.iter().filter(|inst| !inst.is_directive()).count()
+}
+
+/// The unwind directive an instruction states, if it is one.
+fn directive(inst: &Inst) -> Option<llrm_object::assembler::Cfi> {
+    match inst {
+        Inst::Cfi(cfi) => Some(*cfi),
+        _ => None,
+    }
 }
 
 /// One lowered function.
@@ -23,6 +32,17 @@ pub struct Function {
     pub symbol: String,
     pub binding: Binding,
     pub blocks: Vec<Lowered>,
+    /// The source variables in the frame: each variable's metadata node and its
+    /// distance below the canonical frame address.
+    pub variables: Vec<(llrm_mir::MetadataId, i64)>,
+    /// The constants the code loads, each under its label.
+    pub pool: Vec<crate::mfunc::PoolEntry>,
+    /// The jump tables its jumps read.
+    pub tables: Vec<crate::jumptable::Table>,
+    /// Whether it has an entry in the unwind tables.
+    pub unwind: bool,
+    /// The labels of the blocks that end in a call that never returns.
+    pub dead_ends: Vec<String>,
 }
 
 /// A function's pieces for the layout: a block's label, then its words.
@@ -83,6 +103,7 @@ impl Symbols {
             definition: Definition::Defined { section, offset },
             size,
             group: None,
+            visibility: Default::default(),
         });
     }
 
@@ -101,6 +122,7 @@ impl Symbols {
             definition: Definition::Undefined,
             size: 0,
             group: None,
+            visibility: Default::default(),
         });
         self.list.len() - 1
     }
@@ -125,7 +147,20 @@ pub fn object(
     name: &str,
     functions: &[Function],
 ) -> Result<Object, String> {
-    let placed = data::globals(module, layout, platform)?;
+    let mut placed = data::globals(module, layout, platform)?;
+    // The constant pools sit with the read-only data, local to the object.
+    for entry in functions.iter().flat_map(|function| &function.pool) {
+        placed.push(data::Placed {
+            name: entry.label.clone(),
+            binding: Binding::Local,
+            bytes: entry.bytes.clone(),
+            relocs: Vec::new(),
+            align: entry.align,
+            constant: true,
+            zero: false,
+            init_functions: false,
+        });
+    }
     let mut symbols = Symbols { list: Vec::new(), index: HashMap::default() };
     // Section indices: text, then each data role that has contents.
     let text_index = 0;
@@ -140,9 +175,24 @@ pub fn object(
         let size = function.blocks.iter().map(|block| words(block) * 4).sum();
         symbols.defined(&function.symbol, function.binding, text_index, *offset, size);
     }
-    // Data sections: constants, writable data, zero-filled.
-    let roles =
-        [(Role::ROData, ".rodata"), (Role::Data, ".data"), (Role::Bss, ".bss"), (Role::InitFunctions, ".init_array")];
+    // Data sections: constants, writable data, zero-filled. A constant the
+    // code loads from memory of 4, 8, 16 or 32 bytes sits in the mergeable
+    // section of its size (`getSectionForConstant`), the rest in `.rodata`.
+    let pool: rustc_hash::FxHashSet<&str> =
+        functions.iter().flat_map(|function| &function.pool).map(|entry| entry.label.as_str()).collect();
+    let mergeable = |one: &data::Placed| {
+        platform == Platform::Linux && pool.contains(one.name.as_str()) && matches!(one.bytes.len(), 4 | 8 | 16 | 32)
+    };
+    let roles = [
+        (Role::ROData, ".rodata"),
+        (Role::ROData, ".rodata.cst4"),
+        (Role::ROData, ".rodata.cst8"),
+        (Role::ROData, ".rodata.cst16"),
+        (Role::ROData, ".rodata.cst32"),
+        (Role::Data, ".data"),
+        (Role::Bss, ".bss"),
+        (Role::InitFunctions, ".init_array"),
+    ];
     let role_of = |one: &data::Placed| {
         if one.init_functions {
             Role::InitFunctions
@@ -154,12 +204,19 @@ pub fn object(
             Role::Data
         }
     };
+    let section_of = |one: &data::Placed| match role_of(one) {
+        Role::ROData if mergeable(one) => format!(".rodata.cst{}", one.bytes.len()),
+        Role::ROData => ".rodata".to_owned(),
+        Role::Data => ".data".to_owned(),
+        Role::Bss => ".bss".to_owned(),
+        _ => ".init_array".to_owned(),
+    };
     let mut data_sections: Vec<(Role, &str, Vec<u8>, Vec<(usize, &data::Placed)>, usize)> = Vec::new();
     for (role, section_name) in roles {
         let mut image = Vec::new();
         let mut members = Vec::new();
         let mut align = 1;
-        for one in placed.iter().filter(|one| role_of(one) == role) {
+        for one in placed.iter().filter(|one| role_of(one) == role && section_of(one) == section_name) {
             image.resize(image.len().next_multiple_of(one.align), 0);
             members.push((image.len(), one));
             align = align.max(one.align);
@@ -169,10 +226,56 @@ pub fn object(
             data_sections.push((role, section_name, image, members, align));
         }
     }
+    // The jump tables go after the constants, in the read-only section.
+    let mut table_places: Vec<(usize, usize, usize)> = Vec::new();
+    let mut table_section = 0;
+    if functions.iter().any(|function| !function.tables.is_empty()) {
+        table_section = match data_sections.iter().position(|one| one.1 == ".rodata") {
+            Some(found) => found,
+            None => {
+                data_sections.insert(0, (Role::ROData, ".rodata", Vec::new(), Vec::new(), 1));
+                0
+            }
+        };
+        let (_, _, image, _, align) = &mut data_sections[table_section];
+        for (f, function) in functions.iter().enumerate() {
+            for (t, table) in function.tables.iter().enumerate() {
+                image.resize(image.len().next_multiple_of(table.width()), 0);
+                table_places.push((f, t, image.len()));
+                symbols.defined(
+                    &table.symbol,
+                    Binding::Local,
+                    1 + table_section,
+                    image.len(),
+                    table.entries.len() * table.width(),
+                );
+                image.resize(image.len() + table.entries.len() * table.width(), 0);
+                *align = (*align).max(table.width());
+            }
+        }
+    }
     for (offset_of_section, (_, _, _, members, _)) in data_sections.iter().enumerate() {
         for (offset, one) in members.iter().filter(|(_, one)| !one.init_functions) {
             symbols.defined(&one.name, one.binding, 1 + offset_of_section, *offset, one.bytes.len());
         }
+    }
+    // An alias is a second name at its aliasee's place (`globals::exports`).
+    for alias in &module.aliases {
+        let target = data::symbol_name(platform, &module.global(alias.aliasee).name.owned().unwrap_or_default());
+        let Some(&found) = symbols.index.get(&target) else {
+            return Err(format!("@{} aliases @{}, which this object does not define", alias.name, target));
+        };
+        let Definition::Defined { section, offset } = symbols.list[found].definition else {
+            return Err(format!("@{} aliases @{}, which this object does not define", alias.name, target));
+        };
+        let size = symbols.list[found].size;
+        symbols.defined(
+            &data::symbol_name(platform, &alias.name),
+            data::binding_of(alias.linkage),
+            section,
+            offset,
+            size,
+        );
     }
     // The code.
     let mut text = Vec::with_capacity(text_size);
@@ -183,14 +286,34 @@ pub fn object(
         let mut fragments = Vec::new();
         for block in &function.blocks {
             fragments.push(Laid::Label(block.label.as_str()));
-            fragments.push(Laid::Words(words(block)));
+            // A label inside the block (a jump table's base) splits its words.
+            let mut run = 0;
+            for inst in &block.insts {
+                match inst {
+                    Inst::Label(name) => {
+                        fragments.push(Laid::Words(std::mem::take(&mut run)));
+                        fragments.push(Laid::Label(name.as_str()));
+                    }
+                    _ if inst.is_directive() => {}
+                    _ => run += 1,
+                }
+            }
+            fragments.push(Laid::Words(run));
         }
         let placed = place(&mut fragments, &()).map_err(|error| format!("{}: {}", function.symbol, error.0))?;
         let labels: HashMap<String, usize> =
             placed.into_iter().map(|(name, at)| (name, function_offset + at as usize)).collect();
+        for (f, t, offset) in table_places.iter().filter(|(f, ..)| std::ptr::eq(&functions[*f], function)) {
+            let table = &functions[*f].tables[*t];
+            let bytes = llrm_object::table::differences(table.entry, &table.base, &table.entries, &|name| {
+                labels.get(name).map(|&at| at as i64)
+            })
+            .map_err(|error| format!("{}: {}", function.symbol, error.0))?;
+            data_sections[table_section].2[*offset..*offset + bytes.len()].copy_from_slice(&bytes);
+        }
         let mut cursor = *function_offset;
         for block in &function.blocks {
-            for inst in block.insts.iter().filter(|inst| !matches!(inst, Inst::Cfi(_))) {
+            for inst in block.insts.iter().filter(|inst| !inst.is_directive()) {
                 let encoded = encode(inst).map_err(|error| format!("{}: {inst}: {error}", function.symbol))?;
                 let mut word = encoded.word;
                 if let Some(fixup) = encoded.fixup {
@@ -199,8 +322,17 @@ pub fn object(
                             let Some(&target) = labels.get(label.as_str()) else {
                                 return Err(format!("{}: no block {label}", function.symbol));
                             };
-                            word = resolve(word, fixup.kind, target as i64 - cursor as i64)
-                                .map_err(|error| format!("{}: {inst}: {error}", function.symbol))?;
+                            let kind = fixup
+                                .kind
+                                .label_kind()
+                                .ok_or_else(
+                                    || format!("{}: {inst}: {:?} does not name a label", function.symbol, fixup.kind),
+                                )?;
+                            let mut bytes = word.to_le_bytes();
+                            Arm64Backend
+                                .apply_fixup(&mut bytes, 0, kind, true, target as i64 - cursor as i64, &function.symbol)
+                                .map_err(|error| format!("{}: {inst}: {}", function.symbol, error.0))?;
+                            word = u32::from_le_bytes(bytes);
                         }
                         Target::Symbol { name, addend } => {
                             let Some(fix) = fixup.kind.relocation() else {
@@ -221,11 +353,13 @@ pub fn object(
     let frames = functions
         .iter()
         .zip(&text_offsets)
+        .filter(|(function, _)| function.unwind)
         .map(|(function, &offset)| llrm_object::Frame {
             section: text_index,
             offset,
             length: function.blocks.iter().map(|block| words(block) * 4).sum(),
-            rows: crate::cfi::rows(&function.blocks),
+            rows: crate::cfi::rows(&function.blocks, &function.dead_ends),
+            cfi: function.blocks.iter().flat_map(|block| &block.insts).filter_map(directive).collect(),
             seh: Vec::new(),
         })
         .collect();
@@ -252,7 +386,7 @@ pub fn object(
         symbols: symbols.list,
         omf_groups: Vec::new(),
         omf_comdat: Vec::new(),
+        comdats: Vec::new(),
         frames,
-        debug: None,
     })
 }

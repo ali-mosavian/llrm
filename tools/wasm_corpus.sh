@@ -1,0 +1,146 @@
+#!/usr/bin/env bash
+# tools/wasm_corpus.sh LEVEL FILE.c...: per program, the bytes (Code + Data sections; the last two columns Code alone) and the instructions executed (wasm-interp --trace) of
+# llrm-cc -target wasm32 and of the pin's clang at -LEVEL, and whether `report` saw the same values.
+#   LLRM_CLANG_WASM  the pin clang built with the WebAssembly target (default: $HOME/scratch/llvm-build-clang-wasm/bin/clang)
+#   WASM_CPU         -mcpu for both sides (mvp: the secondary column; default: the pin's generic)
+# The stub is the same bytes on both sides: `run` calls main and answers a hash of what main reported.
+set -u
+. "$(dirname "$0")/ab_env.sh"; ab_env_check || exit 2
+. "$(dirname "$0")/wasm_corpus_lib.sh"
+ulimit -v 16777216 # one runaway compile must not take the box
+root=$(cd "$(dirname "$0")/.." && pwd)
+clang=${LLRM_CLANG_WASM:-$HOME/scratch/llvm-build-clang-wasm/bin/clang}
+llrm_cc=${LLRM_CC:-$(python3 "$root/tools/llrmbin.py" bin)/llrm-cc}
+out=$(mktemp -d); trap 'rm -rf "$out"' EXIT
+level=$1; shift
+# A broken tool is a failure of the run, not a row: exit 2 without it; exit 1 when no program was measured.
+[ -x "$clang" ] && [ -x "$llrm_cc" ] || { echo "wasm_corpus: missing compiler ($clang, $llrm_cc)" >&2; exit 2; }
+[ $# -gt 0 ] || { echo "wasm_corpus: no program given" >&2; exit 2; }
+cpu=${WASM_CPU:+-mcpu=$WASM_CPU}
+cat > "$out/stub.c" <<'EOF'
+int __main_void(void) __attribute__((weak));
+int __main_argc_argv(int, char **) __attribute__((weak));
+static unsigned long state;
+void report(long value) { state = state * 31u + (unsigned long)value; }
+/* The input of the benches that read one (grep): 64 KB of words, the same bytes on both sides. */
+int input_read(char *buffer, int count)
+{
+    static const char *const words[] = {"Oliver ", "Scrooge ", "ghost ", "Marley ", "and ", "the ", "of ", "Tiny Tim\n", "a "};
+    static unsigned long seed = 1, sent;
+    enum { input_bytes = 64 << 10 };
+    int n = 0;
+    while (n < count && sent < input_bytes) {
+        const char *w;
+        seed = seed * 1103515245u + 12345u;
+        for (w = words[(seed >> 16) % 9]; *w && n < count; ++w, ++sent) buffer[n++] = *w;
+    }
+    return n;
+}
+/* The libc and compiler-rt entry points a program leans on and a bare module lacks. Both sides link these same bytes; the loops are
+   plain byte and word steps (-fno-builtin keeps the compiler from turning them back into calls to themselves). */
+void *memcpy(void *d, const void *s, unsigned long n)
+{
+    unsigned char *a = d; const unsigned char *b = s;
+    while (n--) *a++ = *b++;
+    return d;
+}
+void *memmove(void *d, const void *s, unsigned long n)
+{
+    unsigned char *a = d; const unsigned char *b = s;
+    if (a < b) while (n--) *a++ = *b++;
+    else { a += n; b += n; while (n--) *--a = *--b; }
+    return d;
+}
+void *memset(void *d, int c, unsigned long n)
+{
+    unsigned char *a = d;
+    while (n--) *a++ = (unsigned char)c;
+    return d;
+}
+int memcmp(const void *x, const void *y, unsigned long n)
+{
+    const unsigned char *a = x, *b = y;
+    for (; n; --n, ++a, ++b) if (*a != *b) return *a - *b;
+    return 0;
+}
+/* __multi3: the low 128 bits of a 128-bit product, from 32-bit partial products (a 128-bit shift or multiply here would call the
+   routine being defined). Weak: the compiler-rt archive of a `long double` program brings its own. */
+typedef union { __int128 v; unsigned long long w[2]; } wide;
+__attribute__((weak)) __int128 __multi3(__int128 a, __int128 b)
+{
+    wide x = {a}, y = {b}, r;
+    unsigned long long a0 = (unsigned)x.w[0], a1 = x.w[0] >> 32, b0 = (unsigned)y.w[0], b1 = y.w[0] >> 32;
+    unsigned long long p00 = a0 * b0, p01 = a0 * b1, p10 = a1 * b0, p11 = a1 * b1;
+    unsigned long long mid = (p00 >> 32) + (unsigned)p01 + (unsigned)p10;
+    r.w[0] = (p00 & 0xffffffffu) | (mid << 32);
+    r.w[1] = p11 + (p01 >> 32) + (p10 >> 32) + (mid >> 32) + x.w[0] * y.w[1] + x.w[1] * y.w[0];
+    return r.v;
+}
+/* The two hooks a bench and the OS layer lean on: `keep` is opaque to the compiler only because it is another translation unit than the
+   program; `llrm_os_exit` records its code and returns, the same on both sides. */
+int keep(int value) { return value; }
+void llrm_os_exit(unsigned char code) { state = state * 31u + code; }
+/* Named so that a program's own `run` is no clash (inlined_tail_call_keeps_frame_stores defines one). */
+int llrm_harness_run(void)
+{
+    if (__main_void) __main_void();
+    else __main_argc_argv(0, 0);
+    return (int)state;
+}
+EOF
+"$clang" --target=wasm32 -O2 -fno-builtin -c "$out/stub.c" -o "$out/stub.o" || { echo "wasm_corpus: the pin clang cannot compile the stub" >&2; exit 2; }
+
+# The 128-bit float and integer routines a `long double` program calls, built once by the pin clang: both sides link these same bytes.
+rt="$root/runtime/compiler-rt"; RT_OBJS=
+for f in $(cd "$rt" && sh tests/fp_sources.sh f128) lib/fp/f32/pack.c lib/fp/f64/pack.c lib/int/int128.c lib/int/clzsi2.c lib/int/clzdi2.c; do
+  o="$out/rt_$(echo "$f" | tr / _).o"
+  "$clang" --target=wasm32 -O2 -w -ffreestanding -I"$rt/include" -c "$rt/$f" -o "$o" 2> /dev/null && RT_OBJS="$RT_OBJS $o"
+done
+# An archive: a routine the stub already defines (`__multi3`) is not pulled from it a second time.
+rm -f "$out/rt.a"; [ -z "$RT_OBJS" ] || llvm-ar-20 rcs "$out/rt.a" $RT_OBJS; RT_OBJS="$out/rt.a"
+export RT_OBJS
+
+# The two sides must compile with the same codegen flags (arm64: 24/72 cells off to one side's -fomit-frame-pointer). Both command lines
+# are taken from what actually ran: ours through a wrapper around the same clang, the pin's from the one list used below.
+pin_flags=(--target=wasm32 -ffreestanding "-$level" $cpu)
+printf '#!/bin/bash\necho "$@" >> "%s/ours.argv"\nexec "%s" "$@"\n' "$out" "$clang" > "$out/clang-wrap"; chmod +x "$out/clang-wrap"
+LLRM_CLANG_WASM=$out/clang-wrap LLRM_CC_TARGET=wasm32 "$llrm_cc" "-$level" $cpu -c "$out/stub.c" -o "$out/stub.l.o" 2> /dev/null ||
+  { echo "wasm_corpus: llrm-cc cannot compile the stub" >&2; exit 2; }
+python3 "$root/tools/wasm_flag_check.py" "$(grep -e '-emit-llvm' "$out/ours.argv" | head -1)" "${pin_flags[@]}" || exit 2
+
+# Section sizes of a relocatable object, summed over its sections of that name.
+section() { wasm-objdump -h "$2" | sed -n "s/^ *$1 start=.*(size=0x\\([0-9a-f]*\\)).*/\\1/p" | while read -r h; do echo $((16#$h)); done; }
+code() { section Code "$1"; }
+# The bytes a cell is judged by: the code and the initialised data it loads (a lookup table, a string).
+image() { echo $(($(code "$1") + $(section Data "$1" | tr -d "\n" | grep . || echo 0))); }
+
+printf '%-22s %9s %9s %12s %12s %9s %9s  %s\n' program llrm_B clang_B llrm_instr clang_instr llrm_code clang_code result
+measured=0; unjudged=
+for f in "$@"; do
+  n=$(basename "$f" .c)
+  LLRM_CLANG_WASM=$clang LLRM_CC_TARGET=wasm32 timeout 300 "$llrm_cc" "-$level" $cpu -c "$f" -I"$root/bench" -I"$root/runtime/shared/posix" -o "$out/$n.l.o" 2> "$out/$n.err" ||
+    { printf '%-22s llrm-cc FAIL: %s\n' "$n" "$(head -c 90 "$out/$n.err" | tr '\n' ' ')"; continue; }
+  timeout 300 "$clang" "${pin_flags[@]}" -c "$f" -I"$root/bench" -I"$root/runtime/shared/posix" -o "$out/$n.c.o" 2> /dev/null ||
+    { printf '%-22s clang FAIL\n' "$n"; continue; }
+  # A program that reads or writes through the `llrm_os_*` layer gets it in memory, with its `// data:` file (the same bytes on
+  # both sides); without it the import is unresolved and the run has no result.
+  stub="$out/stub.o"
+  if python3 "$root/tools/wasm_stub_os.py" "$f" > "$out/$n.os.c" 2> "$out/$n.os.err" && [ -s "$out/$n.os.c" ]; then
+    cat "$out/stub.c" "$out/$n.os.c" > "$out/$n.stub.c"
+    "$clang" --target=wasm32 -O2 -fno-builtin -c "$out/$n.stub.c" -o "$out/$n.stub.o" 2> /dev/null && stub="$out/$n.stub.o"
+  fi
+  read -r lv li lm <<< "$(count "$out/$n.l.o" "$stub")"
+  read -r cv ci cm <<< "$(count "$out/$n.c.o" "$stub")"
+  # A side that did not run (unresolved import, trap) has no result, and sides on different stubs have nothing to compare: unjudged, never "same".
+  ok=$(judge "$lv" "$cv" "$lm" "$cm")
+  printf '%-22s %9s %9s %12s %12s %9s %9s  %s\n' "$n" "$(image "$out/$n.l.o")" "$(image "$out/$n.c.o")" "${li:-0}" "${ci:-0}" \
+    "$(code "$out/$n.l.o")" "$(code "$out/$n.c.o")" "$ok"
+  measured=$((measured + 1))
+  # The first import nothing satisfied, from either side's run, rides on the name: a missing libc or compiler-rt routine is a gap in the
+  # harness, to be read in the failure and not mistaken for a program that does not run.
+  missing=$(cat "$out/$n.l.o.import" "$out/$n.c.o.import" 2> /dev/null | head -1)
+  case $ok in n/a*) unjudged="$unjudged $n${missing:+[$missing]}";; esac
+done
+[ "$measured" -gt 0 ] || { echo "wasm_corpus: no program was measured" >&2; exit 1; }
+# A program that did not run is not a pass: the run fails and names it.
+[ -z "$unjudged" ] || { echo "wasm_corpus: NO RESULT for:$unjudged" >&2; exit 3; }

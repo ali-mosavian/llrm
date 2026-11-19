@@ -126,7 +126,7 @@ impl ScalarEvolution {
             // if the a predicate is invariant for X, it is also invariant for
             // umin(X, ...). So try to find something that works among
             // subexpressions of MaxIter expressed as umin.
-            for op in ops {
+            for op in ops.iter().copied() {
                 if let Some(lip) = self
                     .get_loop_invariant_exit_cond_during_first_iterations_impl(cx, pred, lhs, rhs, l, ctx_i, op.scev)
                 {

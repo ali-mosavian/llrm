@@ -1,0 +1,22 @@
+# What the reader of z80.instr must know: see llrm_target::instr::Dialect. No forms are described yet.
+file = "z80.instr"
+registers = ["a", "b", "c", "d", "e", "h", "l", "bc", "de", "hl", "ix", "iy", "sp", "flags"]
+widths = [8, 16]
+assembler_column = false
+arithmetic = ["S", "Z", "H", "PV", "N", "C"]
+
+[flags]
+C = 1
+N = 2
+PV = 4
+H = 16
+Z = 64
+S = 128
+
+# `{cc}`: the condition codes of lowering.rs `cond`, with the flags each tests.
+conditions = [
+    { name = "nz", flags = ["Z"] },
+    { name = "z", flags = ["Z"] },
+    { name = "nc", flags = ["C"] },
+    { name = "c", flags = ["C"] },
+]

@@ -1,0 +1,42 @@
+//! A target-neutral machine function and register allocator for the m68k and
+//! 6502 spikes: instructions on virtual registers, phi elimination, two-address
+//! rewriting, a graph-colouring allocator and a spill layer, over a
+//! [`Target`]'s register classes.
+//!
+//! DEVIATE: spike-local, not `llrm-lir`'s function (its `RegId` is numbered by
+//! iced's x86 registers; here an id is an opaque register of the target's own
+//! `registers.regs`). The allocator is not the pin's greedy one. Reason: there
+//! is no neutral machine function yet (neutral-lir-need.md). Exit: the
+//! neutral-LIR task.
+
+pub mod cfg;
+pub mod commute;
+pub mod deadmi;
+pub mod fold;
+pub mod livephys;
+pub mod mfunc;
+pub mod placement;
+pub mod regalloc;
+pub mod reloads;
+pub mod reschedule;
+pub mod sink;
+pub mod slotreg;
+pub mod spill;
+pub mod taildup;
+pub mod tailmerge;
+pub mod tolir;
+
+pub use commute::{commute_accumulator, commute_tied};
+pub use deadmi::dead_machine_instruction_elim;
+pub use fold::{
+    branch_fold, branch_fold_hoisting, branch_fold_hoisting_across_hot_loops, branch_fold_hoisting_across_loops,
+    remove_identity_copies, remove_redundant_copies, remove_redundant_copies_between,
+};
+pub use mfunc::{Block, Inst, Kind, MFunction, Operand, Phi, Reg, Variable, VariablePlace};
+pub use regalloc::{Allocate, Assignment, GraphColoring, Join, Side, Target};
+pub use reloads::forward_reloads;
+pub use reschedule::reschedule_kills;
+pub use sink::{Jump, liveness_words, machine_sink, machine_sink_in_place, split_critical_edge};
+pub use tailmerge::{
+    Crossing, TailMergeFunction, merge_tails, merge_tails_across_loops, merge_tails_crossing, tail_merge_blocks,
+};

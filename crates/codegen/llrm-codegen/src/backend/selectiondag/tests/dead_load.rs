@@ -6,7 +6,15 @@ use super::super::{MemBase, MemInfo};
 use super::*;
 
 fn info(slot: i32) -> MemInfo {
-    MemInfo { mem_vt: EVT::I32, align: 4, volatile: false, base: MemBase::Stack(slot), ext: None, space: 0 }
+    MemInfo {
+        mem_vt: EVT::I32,
+        align: 4,
+        volatile: false,
+        base: MemBase::Stack(slot),
+        ext: None,
+        space: 0,
+        ordering: None,
+    }
 }
 
 fn chain_after_load(volatile: bool) -> (SelectionDAG, SDValue) {

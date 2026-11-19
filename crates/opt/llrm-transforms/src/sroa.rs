@@ -7,18 +7,22 @@
 //! lifetime intrinsics, phis and selects of pointers, pre-splitting).
 //!
 //! DEVIATE, each with its reason (line numbers are SROA.cpp's):
-//! - The mode is `sroa<preserve-cfg>` (`PreserveCFG`, L174): a select whose
-//!   load is not speculatable, a store through a select, and a store through a
-//!   phi on a critical edge are not rewritten (they need
-//!   `SplitBlockAndInsertIfThenElse` or `SplitBlockPredecessors`), and the
-//!   alloca is left. LLVM's early and late `sroa` of -O2 run with CFG
-//!   modification allowed.
-//! - Vectors (`isVectorPromotionViable` L2374, `rewriteVectorized*`
-//!   L3451-L3637, `rewriteTreeStructuredMerge` L3002,
-//!   `tryCanonicalizeStructToVector` L5460): the targets have no vector
-//!   registers, and `AggregateToVector` is off at -O2.
+//! - Two modes, as the pin's slots: `Sroa` is `sroa<preserve-cfg>`
+//!   (`PreserveCFG`, L174: the late slot), where a select whose load is not
+//!   speculatable, a store through a select and a store through a phi on a
+//!   critical edge are not rewritten and the alloca is left; `SroaModifyCfg` is
+//!   the early slots' `ModifyCFG`, which makes the blocks
+//!   (`SplitBlockAndInsertIfThen(Else)`, `SplitBlockPredecessors`). No
+//!   `DomTreeUpdater` either way: the analyses are dropped.
+//! - Vector promotion (`isVectorPromotionViable` L2374, `rewriteVectorized*`
+//!   L3451-L3637) is translated; `rewriteTreeStructuredMerge` L3002 and
+//!   `tryCanonicalizeStructToVector` L5460 are not (`AggregateToVector` is off
+//!   at -O2), and a vector of pointers is no candidate (`is_vector_element`).
 //! - Calls and invokes escape a pointer whatever their attributes
-//!   (`visitCallBase` L1402 looks at read-only, nocapture operands).
+//!   (`visitCallBase` L1402 looks at read-only, nocapture operands). Owner
+//!   softfloat, kept because: 542 call escapes in tests/run/c + bench, none
+//!   with a call-site nocapture, and `strlen(b)+b[0]` forwards the same as the
+//!   pin at -Os; exit when a cell shows a missed forward, review 2026-12-10.
 //! - Address-space casts abort; pointers in a space that is a selector and an
 //!   offset are not converted to integers (`canConvertValue` L2057).
 //! - Debug records (`migrateDebugInfo` L348, the migration in `splitAlloca`
@@ -28,8 +32,7 @@
 //!   the new allocas as fragments. DEVIATE SR-G1: 2 of 448 bench C variables
 //!   lose their location at -O1 (190 -> 188 of 437 at -O2, 205 -> 203 of 461 at
 //!   -Os; scope bytes covered unchanged, `tools/dwarf-coverage.sh`). Exit: a
-//!   `Declare` that carries a fragment; owner mir-undef; review 2026-11-14.
-//! - `unfoldGEPSelect`, `unfoldGEPPhi` (L4578, L4673): gep over select or phi.
+//!   `Declare` that carries a fragment; owner anyisa; review 2026-11-14.
 //! - `isSafeToLoadUnconditionally` (L1655, L1840) is `dereferenceable` alone:
 //!   an alloca or a sized argument, no alignment, no global, no "a load of it
 //!   already dominates" proof. `mayWriteToMemory` (L1613) counts any call as a
@@ -74,8 +77,42 @@ use llrm_mir::types::{Type, TypeId};
 use llrm_mir::{Constant, ConstantKind, Context};
 use llrm_support::hash::{HashMap, HashSet};
 
-/// The pass: LLVM's `SROAPass` (`SROA.cpp` L6490).
+/// The pass: LLVM's `SROAPass` (`SROA.cpp` L6490) in `preserve-cfg` mode, the
+/// pin's late slots.
 pub struct Sroa;
+
+/// `SROAPass(SROAOptions::ModifyCFG)`: the pin's early slots. A store through a
+/// select, a load of a select that is not speculatable and a store through a
+/// phi on a critical edge are rewritten with new blocks.
+pub struct SroaModifyCfg;
+
+impl FunctionPass for SroaModifyCfg {
+    fn name(&self) -> &'static str {
+        "sroa-real-modify-cfg"
+    }
+
+    fn translation(&self) -> Option<&'static str> {
+        Some("sroa<modify-cfg>")
+    }
+
+    fn reads(&self) -> llrm_mir::footprint::Footprint {
+        llrm_mir::footprint::Footprint::MEMORY | llrm_mir::footprint::Footprint::STRUCTURE
+    }
+
+    fn adds_memory_operations(&self) -> bool {
+        true
+    }
+
+    fn run(
+        &mut self,
+        unit: &mut passes::Unit,
+        analyses: &mut Analyses,
+    ) -> PreservedAnalyses {
+        let before = unit.function.mark();
+        let changed = State::new(unit, analyses, false).run_sroa();
+        llrm_mir::depends::kept_after(unit.context, unit.function, before, changed)
+    }
+}
 
 impl FunctionPass for Sroa {
     fn name(&self) -> &'static str {
@@ -100,8 +137,9 @@ impl FunctionPass for Sroa {
         unit: &mut passes::Unit,
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
-        let changed = State::new(unit, analyses).run_sroa();
-        if changed { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
+        let before = unit.function.mark();
+        let changed = State::new(unit, analyses, true).run_sroa();
+        llrm_mir::depends::kept_after(unit.context, unit.function, before, changed)
     }
 }
 
@@ -161,12 +199,16 @@ fn size_equals_store_size(
 }
 
 /// DEVIATE: whether isel selects an integer of `bytes` bytes (LLVM legalizes
-/// any width, so SROA makes i24 where a 3-byte slice is cut).
+/// any width, so SROA makes i24 where a 3-byte slice is cut). Owner softfloat,
+/// kept because: all 60 triggers in tests/run/c + bench are 10-byte x87
+/// `long double` slices, and an i80 lowering costs more than the alloca; exit
+/// when isel lowers odd widths, review 2026-12-10.
 fn supported_int_size(
     layout: &DataLayout,
     bytes: u64,
+    odd_sizes: bool,
 ) -> bool {
-    matches!(bytes, 1 | 2 | 4 | 8) || layout.legal_integer((bytes * 8) as u32)
+    odd_sizes || matches!(bytes, 1 | 2 | 4 | 8) || layout.legal_integer((bytes * 8) as u32)
 }
 
 /// `commonAlignment(A, Offset)`: the alignment `offset` bytes into something
@@ -191,13 +233,6 @@ fn can_convert_value(
     }
     // Integers of different widths are not converted.
     if int_bits(context, old).is_some() && int_bits(context, new).is_some() {
-        return false;
-    }
-    // DEVIATE: a float is not reinterpreted as an integer or a pointer, nor an
-    // integer as a float: isel selects no such bitcast (x87 has no register
-    // move to a general register).
-    let is_float = |ty: TypeId| matches!(context.types.get(ty), Type::Float(_));
-    if is_float(old) || is_float(new) {
         return false;
     }
     if layout.size_bits(&context.types, new) != layout.size_bits(&context.types, old) {
@@ -1022,6 +1057,7 @@ fn is_integer_widening_viable_for_slice(
     alloc_begin_offset: u64,
     alloca_ty: TypeId,
     whole_alloca_op: &mut bool,
+    odd_sizes: bool,
 ) -> bool {
     let size = layout.store_size(&context.types, alloca_ty);
     // A split tail starts before the partition.
@@ -1037,7 +1073,7 @@ fn is_integer_widening_viable_for_slice(
         return false;
     }
     // DEVIATE: an odd-sized slice would be cut as an i24 or the like.
-    if !supported_int_size(layout, rel_end - rel_begin) {
+    if !supported_int_size(layout, rel_end - rel_begin, odd_sizes) {
         return false;
     }
     match user.opcode {
@@ -1101,6 +1137,7 @@ fn is_integer_widening_viable(
     slices: &[Slice],
     p: &Partition,
     alloca_ty: TypeId,
+    odd_sizes: bool,
 ) -> bool {
     let size_in_bits = layout.size_bits(&context.types, alloca_ty);
     // The widest integer MIR names.
@@ -1125,6 +1162,7 @@ fn is_integer_widening_viable(
             p.begin,
             alloca_ty,
             &mut whole_alloca_op,
+            odd_sizes,
         ) {
             return false;
         }
@@ -1138,11 +1176,309 @@ fn is_integer_widening_viable(
             p.begin,
             alloca_ty,
             &mut whole_alloca_op,
+            odd_sizes,
         ) {
             return false;
         }
     }
     whole_alloca_op
+}
+
+/// A vector a partition could be promoted to: its element and lane count.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct VecShape {
+    element: TypeId,
+    count: u32,
+}
+
+impl VecShape {
+    fn ty(
+        self,
+        context: &Context,
+    ) -> TypeId {
+        context.types.intern(Type::Vector { element: self.element, count: self.count })
+    }
+}
+
+fn vector_shape(
+    context: &Context,
+    ty: TypeId,
+) -> Option<VecShape> {
+    match context.types.get(ty) {
+        Type::Vector { element, count } => Some(VecShape { element: *element, count: *count }),
+        _ => None,
+    }
+}
+
+/// `VectorType::isValidElementType`. DEVIATE: a pointer is no element: the
+/// pointer conversions of `canConvertValue` are written for scalars here, so
+/// a partition that touches a vector of pointers is not promoted to a vector.
+/// Exit: a vector-of-pointers `canConvertValue`; owner x87-cordic-2; review
+/// 2026-12-10.
+fn is_vector_element(
+    context: &Context,
+    ty: TypeId,
+) -> bool {
+    matches!(context.types.get(ty), Type::Int(_) | Type::Float(_))
+}
+
+/// `isVectorPromotionViableForSlice`. SROA.cpp#L2145
+fn is_vector_promotion_viable_for_slice(
+    layout: &DataLayout,
+    context: &Context,
+    function: &Function,
+    p: &Partition,
+    slice: &Slice,
+    shape: VecShape,
+    element_size: u64,
+) -> bool {
+    // First validate the slice offsets.
+    let begin_offset = slice.begin.max(p.begin) - p.begin;
+    let begin_index = begin_offset / element_size;
+    if begin_index * element_size != begin_offset || begin_index >= u64::from(shape.count) {
+        return false;
+    }
+    let end_offset = slice.end.min(p.end) - p.begin;
+    let end_index = end_offset / element_size;
+    if end_index * element_size != end_offset || end_index > u64::from(shape.count) || end_index <= begin_index {
+        return false;
+    }
+    let elements = end_index - begin_index;
+    if !elements.is_power_of_two() {
+        return false;
+    }
+    let slice_ty = if elements == 1 {
+        shape.element
+    } else {
+        context.types.intern(Type::Vector { element: shape.element, count: elements as u32 })
+    };
+    let split_int_ty = context.types.int((elements * element_size * 8) as u32);
+    let used = slice.used.expect("a live slice");
+    let user = function.instruction(used.user);
+    match slice.kind {
+        Kind::MemSet | Kind::Transfer => {
+            if constant_unsigned(context, user.operands[3]) != Some(0) || !slice.splittable {
+                return false;
+            }
+            if slice.kind == Kind::MemSet {
+                let splat_ty = context.types.int((element_size * 8) as u32);
+                if !can_convert_value(layout, context, splat_ty, shape.element) {
+                    return false;
+                }
+            }
+        }
+        Kind::Lifetime => {}
+        Kind::Memory => {
+            let split = p.begin > slice.begin || p.end < slice.end;
+            match user.opcode {
+                Opcode::Load { volatile, .. } => {
+                    // Loads and stores of a first-class aggregate disable it.
+                    if volatile || is_aggregate(context, user.ty) {
+                        return false;
+                    }
+                    let load_ty = if split { split_int_ty } else { user.ty };
+                    if !can_convert_value(layout, context, slice_ty, load_ty) {
+                        return false;
+                    }
+                }
+                Opcode::Store { volatile, .. } => {
+                    let value_ty = function.operand_type(context, user.operands[0]).expect("a typed value");
+                    if volatile || is_aggregate(context, value_ty) {
+                        return false;
+                    }
+                    let store_ty = if split { split_int_ty } else { value_ty };
+                    if !can_convert_value(layout, context, store_ty, slice_ty) {
+                        return false;
+                    }
+                }
+                _ => return false,
+            }
+        }
+        Kind::PhiOrSelect => return false,
+    }
+    true
+}
+
+/// The candidate vector types of a partition (`CandidateTys` and the flags
+/// `isVectorPromotionViable` keeps beside it).
+struct VectorCandidates {
+    list: Vec<VecShape>,
+    common_element: Option<TypeId>,
+    have_common_element: bool,
+    /// A vector of pointers was seen (`HaveVecPtrTy`): see `is_vector_element`.
+    pointers: bool,
+}
+
+impl VectorCandidates {
+    /// `CheckCandidateType`.
+    fn check(
+        &mut self,
+        layout: &DataLayout,
+        context: &Context,
+        ty: TypeId,
+    ) {
+        let Some(shape) = vector_shape(context, ty) else { return };
+        if !is_vector_element(context, shape.element) {
+            self.pointers = true;
+            return;
+        }
+        // Return if bitcast to vectors is different for total size in bits.
+        if let Some(first) = self.list.first() {
+            if layout.size_bits(&context.types, ty) != layout.size_bits(&context.types, first.ty(context)) {
+                self.list.clear();
+                return;
+            }
+        }
+        self.list.push(shape);
+        match self.common_element {
+            None => self.common_element = Some(shape.element),
+            Some(common) if common != shape.element => self.have_common_element = false,
+            _ => {}
+        }
+    }
+}
+
+/// `checkVectorTypesForPromotion`. SROA.cpp#L2225
+fn check_vector_types_for_promotion(
+    layout: &DataLayout,
+    context: &Context,
+    function: &Function,
+    slices: &[Slice],
+    p: &Partition,
+    candidates: &mut VectorCandidates,
+) -> Option<VecShape> {
+    // If we didn't find a vector type, nothing to do here.
+    if candidates.list.is_empty() || candidates.pointers {
+        return None;
+    }
+    if !candidates.have_common_element {
+        // Integer-ify vector types.
+        for shape in &mut candidates.list {
+            if int_bits(context, shape.element).is_none() {
+                let bits = layout.size_bits(&context.types, shape.element) as u32;
+                shape.element = context.types.int(bits);
+            }
+        }
+        // Rank the candidates by ascending number of elements, one per count.
+        candidates.list.sort_by_key(|shape| shape.count);
+        candidates.list.dedup_by_key(|shape| shape.count);
+    } else {
+        // The same element type in every vector type is the same vector type.
+        candidates.list.truncate(1);
+    }
+    // SDAG SDNode can't have more than 65535 operands.
+    candidates.list.retain(|shape| shape.count <= u32::from(u16::MAX));
+    // DEVIATE: only a power-of-two lane count (a vector or a slice of one). Reason: the DAG has no
+    // vector type of an odd lane count (the pin widens `<3 x i8>` to `<4 x i8>`, then `<16 x i8>`), so
+    // `<3 x i8>` compiled nowhere. Exit: extended vector types in the type legalizer (`v3i8` to `v4i8` to
+    // `v16i8`); owner x87-cordic-2; review 2026-11-27.
+    candidates.list.retain(|shape| shape.count.is_power_of_two());
+    candidates.list.iter().copied().find(|&shape| {
+        let element_bits = layout.size_bits(&context.types, shape.element);
+        // Vectors of elements that aren't byte sized are not supported.
+        if element_bits % 8 != 0 {
+            return false;
+        }
+        let element_size = element_bits / 8;
+        slices[p.first..p.last]
+            .iter()
+            .chain(p.split_tails.iter().map(|&tail| &slices[tail]))
+            .all(|slice| is_vector_promotion_viable_for_slice(layout, context, function, p, slice, shape, element_size))
+    })
+}
+
+/// `createAndCheckVectorTypesForPromotion`. SROA.cpp#L2330
+fn create_and_check_vector_types_for_promotion(
+    layout: &DataLayout,
+    context: &Context,
+    function: &Function,
+    slices: &[Slice],
+    p: &Partition,
+    other_tys: &[TypeId],
+    copy: &[VecShape],
+    candidates: &mut VectorCandidates,
+) -> Option<VecShape> {
+    // Consider additional vector types where the element type size is a
+    // multiple of load/store element size.
+    for &ty in other_tys {
+        if !is_vector_element(context, ty) {
+            continue;
+        }
+        let type_size = layout.size_bits(&context.types, ty);
+        for shape in copy {
+            let vector_size = layout.size_bits(&context.types, shape.ty(context));
+            let element_size = layout.size_bits(&context.types, shape.element);
+            if type_size != vector_size && type_size != element_size && vector_size % type_size == 0 {
+                let made = context.types.intern(Type::Vector { element: ty, count: (vector_size / type_size) as u32 });
+                candidates.check(layout, context, made);
+            }
+        }
+    }
+    check_vector_types_for_promotion(layout, context, function, slices, p, candidates)
+}
+
+/// `isVectorPromotionViable`. SROA.cpp#L2374
+fn is_vector_promotion_viable(
+    layout: &DataLayout,
+    context: &Context,
+    function: &Function,
+    slices: &[Slice],
+    p: &Partition,
+) -> Option<VecShape> {
+    let mut candidates =
+        VectorCandidates { list: Vec::new(), common_element: None, have_common_element: true, pointers: false };
+    let mut load_store_tys: Vec<TypeId> = Vec::new();
+    let mut deferred_tys: Vec<TypeId> = Vec::new();
+    // Put load and store types into a set for de-duplication.
+    for slice in &slices[p.first..p.last] {
+        let used = slice.used.expect("a live slice");
+        let user = function.instruction(used.user);
+        let ty = match user.opcode {
+            Opcode::Load { .. } if slice.kind == Kind::Memory => user.ty,
+            Opcode::Store { .. } if slice.kind == Kind::Memory => {
+                function.operand_type(context, user.operands[0]).expect("a typed value")
+            }
+            _ => continue,
+        };
+        let partial = slice.begin != p.begin || slice.end != p.end;
+        if is_pointer(context, ty) && partial {
+            if !deferred_tys.contains(&ty) {
+                deferred_tys.push(ty);
+            }
+            continue;
+        }
+        if !load_store_tys.contains(&ty) {
+            load_store_tys.push(ty);
+        }
+        // Consider any loads or stores that are the exact size of the slice.
+        if !partial {
+            candidates.check(layout, context, ty);
+        }
+    }
+    let copy = candidates.list.clone();
+    if let Some(found) = create_and_check_vector_types_for_promotion(
+        layout,
+        context,
+        function,
+        slices,
+        p,
+        &load_store_tys,
+        &copy,
+        &mut candidates,
+    ) {
+        return Some(found);
+    }
+    candidates.list.clear();
+    create_and_check_vector_types_for_promotion(
+        layout,
+        context,
+        function,
+        slices,
+        p,
+        &deferred_tys,
+        &copy,
+        &mut candidates,
+    )
 }
 
 /// `BasicLoadAndStorePromoter`
@@ -1184,7 +1520,19 @@ struct State<'a, 'b, 'c> {
     /// `SpeculatablePHIs`, `PHIsWithStoreToRewrite`, `SelectsToRewrite`.
     speculatable_phis: Vec<InstId>,
     phis_with_store_to_rewrite: Vec<InstId>,
-    selects_to_rewrite: Vec<(InstId, Vec<InstId>)>,
+    selects_to_rewrite: Vec<(InstId, Vec<SelectOp>)>,
+    /// `PreserveCFG` (L178): no block is made.
+    preserve_cfg: bool,
+    /// `Tti::selects_odd_sized_integers`.
+    odd_sizes: bool,
+}
+
+/// A load or store through a select, with the hands (`SelectHandSpeculativity`,
+/// L132) whose pointer may be loaded before the select's condition is known.
+struct SelectOp {
+    inst: InstId,
+    true_speculatable: bool,
+    false_speculatable: bool,
 }
 
 /// What `AllocaSliceRewriter` carries from slice to slice (L2811).
@@ -1197,6 +1545,10 @@ struct Rewriter {
     /// The integer the accesses are widened to, when the partition passed
     /// `isIntegerWideningViable`.
     int_ty: Option<TypeId>,
+    /// The vector the partition's accesses are rewritten onto when it passed
+    /// `isVectorPromotionViable` (`VecTy`, `ElementTy`, `ElementSize`).
+    vec_ty: Option<VecShape>,
+    element_size: u64,
     begin: u64,
     end: u64,
     new_begin: u64,
@@ -1218,8 +1570,10 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
     fn new(
         unit: &'a mut passes::Unit<'b>,
         analyses: &'c mut Analyses,
+        preserve_cfg: bool,
     ) -> Self {
         let globals = std::rc::Rc::clone(&analyses.outer().globals);
+        let odd_sizes = crate::looprotate::target_tti(analyses.outer().target()).selects_odd_sized_integers();
         Self {
             unit,
             analyses,
@@ -1231,6 +1585,8 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
             speculatable_phis: Vec::new(),
             phis_with_store_to_rewrite: Vec::new(),
             selects_to_rewrite: Vec::new(),
+            preserve_cfg,
+            odd_sizes,
         }
     }
 
@@ -1555,8 +1911,8 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
         for phi in std::mem::take(&mut self.phis_with_store_to_rewrite).into_iter().rev() {
             self.rewrite_phi_node_store(phi);
         }
-        for (select, loads) in std::mem::take(&mut self.selects_to_rewrite).into_iter().rev() {
-            self.rewrite_select_inst_mem_ops(select, &loads);
+        for (select, ops) in std::mem::take(&mut self.selects_to_rewrite).into_iter().rev() {
+            self.rewrite_select_inst_mem_ops(select, &ops);
         }
         changed
     }
@@ -1627,7 +1983,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
                     }
                     let piece = slice.end.min(p.end) - slice.begin.max(p.begin);
                     let user = slice.used.expect("a live slice").user;
-                    if !supported_int_size(layout, piece)
+                    if !supported_int_size(layout, piece, self.odd_sizes)
                         && matches!(
                             self.unit.function.instruction(user).opcode,
                             Opcode::Load { .. } | Opcode::Store { .. }
@@ -1764,6 +2120,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
         }
         // DEVIATE: a candidate cut into a part isel has no integer for stays.
         let layout_for_parts = self.unit.layout;
+        let odd_sizes = self.odd_sizes;
         let unsupported: Vec<InstId> = split_offsets
             .iter()
             .filter(|(_, offsets)| {
@@ -1776,7 +2133,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
                     .chain(std::iter::once(slice.end - slice.begin))
                     .any(
                         |to| {
-                            let bad = !supported_int_size(layout_for_parts, to - from);
+                            let bad = !supported_int_size(layout_for_parts, to - from, odd_sizes);
                             from = to;
                             bad
                         },
@@ -2026,17 +2383,35 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
         alloca: InstId,
         slices: &[Slice],
         p: &Partition,
-    ) -> (TypeId, bool) {
+    ) -> (TypeId, bool, Option<VecShape>) {
         let layout = self.unit.layout;
         let Opcode::Alloca { allocated, .. } = self.function().instruction(alloca).opcode else { unreachable!() };
-        // DEVIATE: no vector promotion (`isVectorPromotionViable`, L5559).
+        // First check if the partition is viable for vector promotion: it is
+        // preferred where the element is floating point, or where a type
+        // common to all slices spans the partition.
+        let vec = is_vector_promotion_viable(layout, self.context(), self.function(), slices, p);
+        if let Some(shape) = vec {
+            if matches!(self.context().types.get(shape.element), Type::Float(_)) && shape.count > 1 {
+                return (shape.ty(self.context()), false, vec);
+            }
+        }
         let (common, largest_int) = find_common_type(self.context(), self.function(), slices, p.first, p.last, p.end);
         if let Some(common) = common {
             let common_size = layout.alloc_size(&self.context().types, common);
             if common_size >= p.size() {
-                let widen =
-                    is_integer_widening_viable(layout, self.unit.context, self.unit.function, slices, p, common);
-                return (common, widen);
+                if let Some(shape) = vec {
+                    return (shape.ty(self.context()), false, vec);
+                }
+                let widen = is_integer_widening_viable(
+                    layout,
+                    self.unit.context,
+                    self.unit.function,
+                    slices,
+                    p,
+                    common,
+                    self.odd_sizes,
+                );
+                return (common, widen, None);
             }
         }
         // Can we find an appropriate subtype in the original allocated type?
@@ -2047,28 +2422,47 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
                     partition_ty = self.unit.context.types.int((p.size() * 8) as u32);
                 }
             }
-            if is_integer_widening_viable(layout, self.unit.context, self.unit.function, slices, p, partition_ty) {
-                return (partition_ty, true);
+            if is_integer_widening_viable(
+                layout,
+                self.unit.context,
+                self.unit.function,
+                slices,
+                p,
+                partition_ty,
+                self.odd_sizes,
+            ) {
+                return (partition_ty, true, None);
+            }
+            if let Some(shape) = vec {
+                return (shape.ty(self.context()), false, vec);
             }
             if let Some(largest) = largest_int {
                 if layout.alloc_size(&self.context().types, largest) >= p.size()
-                    && is_integer_widening_viable(layout, self.unit.context, self.unit.function, slices, p, largest)
+                    && is_integer_widening_viable(
+                        layout,
+                        self.unit.context,
+                        self.unit.function,
+                        slices,
+                        p,
+                        largest,
+                        self.odd_sizes,
+                    )
                 {
-                    return (largest, true);
+                    return (largest, true, None);
                 }
             }
-            return (partition_ty, false);
+            return (partition_ty, false, None);
         }
         if let Some(largest) = largest_int {
             if layout.alloc_size(&self.context().types, largest) >= p.size() {
-                return (largest, false);
+                return (largest, false, None);
             }
         }
         if layout.legal_integer((p.size() * 8) as u32) {
-            return (self.unit.context.types.int((p.size() * 8) as u32), false);
+            return (self.unit.context.types.int((p.size() * 8) as u32), false, None);
         }
         let byte = self.unit.context.types.int(8);
-        (self.unit.context.types.intern(Type::Array { element: byte, count: p.size() }), false)
+        (self.unit.context.types.intern(Type::Array { element: byte, count: p.size() }), false, None)
     }
 
     /// `SROA::rewritePartition`. SROA.cpp#L5666
@@ -2081,7 +2475,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
         number: usize,
     ) -> Option<InstId> {
         let layout = self.unit.layout;
-        let (partition_ty, widen) = self.select_partition_type(alloca, slices, p);
+        let (partition_ty, widen, vec_ty) = self.select_partition_type(alloca, slices, p);
         let Opcode::Alloca { allocated, align, address_space } = self.function().instruction(alloca).opcode else {
             unreachable!("an alloca")
         };
@@ -2121,6 +2515,8 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
             new_alloca_end: p.end,
             new_alloca_ty: partition_ty,
             int_ty,
+            vec_ty,
+            element_size: vec_ty.map_or(0, |shape| layout.size_bits(&self.context().types, shape.element) / 8),
             begin: 0,
             end: 0,
             new_begin: 0,
@@ -2157,7 +2553,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
                 break;
             }
         }
-        let mut new_selects: Vec<(InstId, Vec<InstId>)> = Vec::new();
+        let mut new_selects: Vec<(InstId, Vec<SelectOp>)> = Vec::new();
         for &select in &select_users {
             match self.is_safe_select_to_speculate(select) {
                 Some(loads) => new_selects.push((select, loads)),
@@ -2182,9 +2578,24 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
             } else {
                 // The phis and selects to rewrite are queued and the new
                 // alloca is looked at again to promote it next time.
-                self.speculatable_phis.extend(new_speculatable_phis);
-                self.phis_with_store_to_rewrite.extend(new_phis_with_store);
-                self.selects_to_rewrite.extend(new_selects);
+                // `SmallSetVector` and `SmallMapVector` insert: a phi or
+                // select two partitions use is queued once (the second
+                // speculation read an erased phi).
+                for phi in new_speculatable_phis {
+                    if !self.speculatable_phis.contains(&phi) {
+                        self.speculatable_phis.push(phi);
+                    }
+                }
+                for phi in new_phis_with_store {
+                    if !self.phis_with_store_to_rewrite.contains(&phi) {
+                        self.phis_with_store_to_rewrite.push(phi);
+                    }
+                }
+                for (select, ops) in new_selects {
+                    if !self.selects_to_rewrite.iter().any(|(queued, _)| *queued == select) {
+                        self.selects_to_rewrite.push((select, ops));
+                    }
+                }
                 self.worklist.push(new_ai);
             }
         } else {
@@ -2300,6 +2711,164 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
             CastOp::BitCast
         };
         self.build(at, Opcode::Cast(op), new_ty, vec![value], None)
+    }
+
+    /// `getIndex`: the lane an offset of the new alloca is.
+    fn vector_index(
+        &self,
+        rewriter: &Rewriter,
+        offset: u64,
+    ) -> u64 {
+        (offset - rewriter.new_alloca_begin) / rewriter.element_size
+    }
+
+    /// `extractVector`. SROA.cpp#L2650
+    fn extract_vector(
+        &mut self,
+        at: InstId,
+        value: Operand,
+        begin: u64,
+        end: u64,
+        name: &str,
+    ) -> Operand {
+        let ty = self.type_of(value);
+        let shape = vector_shape(self.context(), ty).expect("a vector");
+        let elements = end - begin;
+        if elements == u64::from(shape.count) {
+            return value;
+        }
+        let name = format!("{name}.extract");
+        if elements == 1 {
+            let i32_ty = self.unit.context.types.int(32);
+            let index = self.int_constant(i32_ty, begin as i128);
+            return self.build(at, Opcode::ExtractElement, shape.element, vec![value, index], Some(&name));
+        }
+        let result = self.unit.context.types.intern(Type::Vector { element: shape.element, count: elements as u32 });
+        let poison = self.poison_of(ty);
+        let mask = (begin..end).map(|lane| lane as i32).collect();
+        self.build(at, Opcode::ShuffleVector(mask), result, vec![value, poison], Some(&name))
+    }
+
+    /// `insertVector`. SROA.cpp#L2671
+    fn insert_vector(
+        &mut self,
+        at: InstId,
+        old: Operand,
+        value: Operand,
+        begin: u64,
+        name: &str,
+    ) -> Operand {
+        let old_ty = self.type_of(old);
+        let shape = vector_shape(self.context(), old_ty).expect("a vector");
+        let Some(sub) = vector_shape(self.context(), self.type_of(value)) else {
+            // A single element to insert.
+            let i32_ty = self.unit.context.types.int(32);
+            let index = self.int_constant(i32_ty, begin as i128);
+            return self.build(
+                at,
+                Opcode::InsertElement,
+                old_ty,
+                vec![old, value, index],
+                Some(&format!("{name}.insert")),
+            );
+        };
+        let (sub_elements, elements) = (u64::from(sub.count), u64::from(shape.count));
+        if sub_elements == elements {
+            return value;
+        }
+        let end = begin + sub_elements;
+        // Widen the smaller vector with undef elements, then select between
+        // the old vector and it.
+        let expand: Vec<i32> =
+            (0..elements).map(|lane| if (begin..end).contains(&lane) { (lane - begin) as i32 } else { -1 }).collect();
+        let value_ty = self.type_of(value);
+        let poison = self.poison_of(value_ty);
+        let expanded =
+            self.build(at, Opcode::ShuffleVector(expand), old_ty, vec![value, poison], Some(&format!("{name}.expand")));
+        let blend: Vec<i32> = (0..elements)
+            .map(|lane| if (begin..end).contains(&lane) { lane as i32 } else { (lane + elements) as i32 })
+            .collect();
+        self.build(at, Opcode::ShuffleVector(blend), old_ty, vec![expanded, old], Some(&format!("{name}blend")))
+    }
+
+    /// `getVectorSplat`: `value` in every one of `elements` lanes.
+    fn vector_splat(
+        &mut self,
+        at: InstId,
+        value: Operand,
+        elements: u64,
+    ) -> Operand {
+        let element = self.type_of(value);
+        let ty = self.unit.context.types.intern(Type::Vector { element, count: elements as u32 });
+        let poison = self.poison_of(ty);
+        let i32_ty = self.unit.context.types.int(32);
+        let zero = self.int_constant(i32_ty, 0);
+        let inserted = self.build(at, Opcode::InsertElement, ty, vec![poison, value, zero], Some("vsplat"));
+        let poison = self.poison_of(ty);
+        self.build(at, Opcode::ShuffleVector(vec![0; elements as usize]), ty, vec![inserted, poison], Some("vsplat"))
+    }
+
+    /// `rewriteVectorizedLoadInst`. SROA.cpp#L3451
+    fn rewrite_vectorized_load(
+        &mut self,
+        rewriter: &Rewriter,
+        load: InstId,
+    ) -> Operand {
+        let begin = self.vector_index(rewriter, rewriter.new_begin);
+        let end = self.vector_index(rewriter, rewriter.new_end);
+        let align = self.new_ai_align(rewriter);
+        let loaded = self.build(
+            load,
+            Opcode::Load { align: Some(align), volatile: false },
+            rewriter.new_alloca_ty,
+            vec![Operand::Value(rewriter.new_ai_value)],
+            Some("load"),
+        );
+        self.extract_vector(load, loaded, begin, end, "vec")
+    }
+
+    /// `rewriteVectorizedStoreInst`. SROA.cpp#L3601
+    fn rewrite_vectorized_store(
+        &mut self,
+        rewriter: &Rewriter,
+        store: InstId,
+        mut value: Operand,
+    ) -> bool {
+        let shape = rewriter.vec_ty.expect("a vector partition");
+        if self.type_of(value) != rewriter.new_alloca_ty {
+            let begin = self.vector_index(rewriter, rewriter.new_begin);
+            let end = self.vector_index(rewriter, rewriter.new_end);
+            let elements = end - begin;
+            let slice_ty = if elements == 1 {
+                shape.element
+            } else {
+                self.unit.context.types.intern(Type::Vector { element: shape.element, count: elements as u32 })
+            };
+            if self.type_of(value) != slice_ty {
+                value = self.bit_preserving_cast_chain(store, value, slice_ty);
+            }
+            // Mix in the existing elements.
+            let align = self.new_ai_align(rewriter);
+            let old = self.build(
+                store,
+                Opcode::Load { align: Some(align), volatile: false },
+                rewriter.new_alloca_ty,
+                vec![Operand::Value(rewriter.new_ai_value)],
+                Some("load"),
+            );
+            value = self.insert_vector(store, old, value, begin, "vec");
+        }
+        let void = self.unit.context.types.void();
+        let align = self.new_ai_align(rewriter);
+        self.build(
+            store,
+            Opcode::Store { align: Some(align), volatile: false },
+            void,
+            vec![value, Operand::Value(rewriter.new_ai_value)],
+            None,
+        );
+        self.dead_insts.push(store);
+        true
     }
 
     /// `extractInteger`. SROA.cpp#L2592
@@ -2534,7 +3103,9 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
         let whole = rewriter.new_begin == rewriter.new_alloca_begin && rewriter.new_end == rewriter.new_alloca_end;
         let mut ptr_adjusted = false;
         let mut value;
-        if rewriter.int_ty.is_some() && int_bits(self.context(), load_ty).is_some() {
+        if rewriter.vec_ty.is_some() {
+            value = self.rewrite_vectorized_load(rewriter, load);
+        } else if rewriter.int_ty.is_some() && int_bits(self.context(), load_ty).is_some() {
             value = self.rewrite_integer_load(rewriter, load);
         } else if whole
             && (can_convert_value(layout, self.context(), rewriter.new_alloca_ty, target_ty)
@@ -2702,6 +3273,9 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
             value = self.extract_integer(store, value, narrow, rewriter.new_begin - rewriter.begin, "extract");
             value_ty = self.type_of(value);
         }
+        if rewriter.vec_ty.is_some() {
+            return self.rewrite_vectorized_store(rewriter, store, value);
+        }
         if rewriter.int_ty.is_some() && int_bits(self.context(), value_ty).is_some() {
             return self.rewrite_integer_store(rewriter, store, value);
         }
@@ -2821,7 +3395,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
         };
         self.dead_insts.push(memset);
         let new_ty = rewriter.new_alloca_ty;
-        let can_continue = rewriter.int_ty.is_some() || {
+        let can_continue = rewriter.vec_ty.is_some() || rewriter.int_ty.is_some() || {
             if rewriter.begin > rewriter.new_alloca_begin || rewriter.end < rewriter.new_alloca_end {
                 false
             } else if len > u64::from(u32::MAX) {
@@ -2843,7 +3417,26 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
             self.call_like(memset, new_operands);
             return false;
         }
-        let value = if let Some(int_ty) = rewriter.int_ty {
+        let value = if let Some(shape) = rewriter.vec_ty {
+            // A memset of a vectorized alloca is inserted into it.
+            let (begin, end) =
+                (self.vector_index(rewriter, rewriter.new_begin), self.vector_index(rewriter, rewriter.new_end));
+            let elements = end - begin;
+            let mut splat = self.get_integer_splat(memset, byte, rewriter.element_size);
+            splat = self.bit_preserving_cast_chain(memset, splat, shape.element);
+            if elements > 1 {
+                splat = self.vector_splat(memset, splat, elements);
+            }
+            let align = self.new_ai_align(rewriter);
+            let old = self.build(
+                memset,
+                Opcode::Load { align: Some(align), volatile: false },
+                new_ty,
+                vec![Operand::Value(rewriter.new_ai_value)],
+                Some("oldload"),
+            );
+            self.insert_vector(memset, old, splat, begin, "vec")
+        } else if let Some(int_ty) = rewriter.int_ty {
             let size = rewriter.new_end - rewriter.new_begin;
             let mut value = self.get_integer_splat(memset, byte, size);
             if rewriter.new_begin != rewriter.new_alloca_begin || rewriter.new_end != rewriter.new_alloca_end {
@@ -2900,6 +3493,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
         // which does not escape, so a memmove is a memcpy.
         let new_ty = rewriter.new_alloca_ty;
         let emit_memcpy = rewriter.int_ty.is_none()
+            && rewriter.vec_ty.is_none()
             && (rewriter.begin > rewriter.new_alloca_begin
                 || rewriter.end < rewriter.new_alloca_end
                 || rewriter.slice_size != layout.store_size(&self.context().types, new_ty)
@@ -2939,8 +3533,18 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
         let whole = rewriter.new_begin == rewriter.new_alloca_begin && rewriter.new_end == rewriter.new_alloca_end;
         let size = rewriter.new_end - rewriter.new_begin;
         let sub_int_ty = rewriter.int_ty.map(|_| self.unit.context.types.int((size * 8) as u32));
-        let other_ty = match (rewriter.int_ty, whole) {
-            (Some(_), false) => sub_int_ty.expect("an integer"),
+        let (begin_index, end_index) = match rewriter.vec_ty {
+            Some(_) => (self.vector_index(rewriter, rewriter.new_begin), self.vector_index(rewriter, rewriter.new_end)),
+            None => (0, 0),
+        };
+        let other_ty = match (rewriter.vec_ty, rewriter.int_ty, whole) {
+            (Some(shape), _, false) if end_index - begin_index == 1 => shape.element,
+            (Some(shape), _, false) => self
+                .unit
+                .context
+                .types
+                .intern(Type::Vector { element: shape.element, count: (end_index - begin_index) as u32 }),
+            (None, Some(_), false) => sub_int_ty.expect("an integer"),
             _ => new_ty,
         };
         let adjusted = self.adjusted_ptr(transfer, other, other_offset);
@@ -2951,7 +3555,16 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
         };
         let new_align = self.new_ai_align(rewriter);
         let mut value;
-        if let (Some(int_ty), false, false) = (rewriter.int_ty, whole, is_dest) {
+        if rewriter.vec_ty.is_some() && !whole && !is_dest {
+            value = self.build(
+                transfer,
+                Opcode::Load { align: Some(new_align), volatile: false },
+                new_ty,
+                vec![Operand::Value(rewriter.new_ai_value)],
+                Some("load"),
+            );
+            value = self.extract_vector(transfer, value, begin_index, end_index, "vec");
+        } else if let (Some(int_ty), false, false) = (rewriter.int_ty, whole, is_dest) {
             value = self.build(
                 transfer,
                 Opcode::Load { align: Some(new_align), volatile: false },
@@ -2971,7 +3584,16 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
                 Some("copyload"),
             );
         }
-        if let (Some(int_ty), false, true) = (rewriter.int_ty, whole, is_dest) {
+        if rewriter.vec_ty.is_some() && !whole && is_dest {
+            let old = self.build(
+                transfer,
+                Opcode::Load { align: Some(new_align), volatile: false },
+                new_ty,
+                vec![Operand::Value(rewriter.new_ai_value)],
+                Some("oldload"),
+            );
+            value = self.insert_vector(transfer, old, value, begin_index, "vec");
+        } else if let (Some(int_ty), false, true) = (rewriter.int_ty, whole, is_dest) {
             let old = self.build(
                 transfer,
                 Opcode::Load { align: Some(new_align), volatile: false },
@@ -3197,8 +3819,8 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
         }
     }
 
-    /// `getPHIStoreToRewrite` (preserving the CFG: every predecessor has the
-    /// block as its only successor). SROA.cpp#L1659
+    /// `getPHIStoreToRewrite`: with `preserve_cfg`, every predecessor has the
+    /// block as its only successor. SROA.cpp#L1659
     fn get_phi_store_to_rewrite(
         &self,
         phi: InstId,
@@ -3225,10 +3847,21 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
                 continue;
             }
             seen.push(pred);
-            if pred == block || self.successor_edges(pred) != 1 {
+            // TODO in the pin: support other terminators.
+            let terminator = function.terminator(pred)?;
+            if function.instruction(terminator).opcode != Opcode::Br || pred == block {
                 return None;
             }
             if !self.available_at_end_of(stored, pred) {
+                return None;
+            }
+            if self.successor_edges(pred) == 1 {
+                continue;
+            }
+            // More than one successor: the block is split so the store runs
+            // only on the path to this one (`canSplitPredecessors` holds
+            // for every block here: the only pad is a landing pad).
+            if self.preserve_cfg {
                 return None;
             }
         }
@@ -3289,6 +3922,7 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
     ) {
         let result = self.function().instruction(phi).result.expect("a phi");
         let store = self.function().users(result).first().expect("the phi's store").user;
+        let block = self.function().parent(phi).expect("a placed phi");
         let pairs: Vec<Operand> = self.function().instruction(phi).operands.clone();
         let mut seen: Vec<llrm_mir::module::BlockId> = Vec::new();
         for pair in pairs.chunks(2) {
@@ -3301,7 +3935,14 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
             if let Some(root) = self.strip_in_bounds_offsets(pair[0]) {
                 self.worklist.push(root);
             }
-            let terminator = self.function().terminator(pred).expect("a terminated block");
+            // A predecessor with other successors gets a block of its own on
+            // the edge (`SplitBlockPredecessors(BB, {Pred}, ".sroa.store")`).
+            let store_block = if self.successor_edges(pred) != 1 {
+                crate::edges::split_block_predecessors(self.unit.function, block, &[pred])
+            } else {
+                pred
+            };
+            let terminator = self.function().terminator(store_block).expect("a terminated block");
             let mut operands = self.function().instruction(store).operands.clone();
             operands[1] = pair[0];
             let opcode = self.function().instruction(store).opcode.clone();
@@ -3312,61 +3953,86 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
         self.unit.function.erase(phi).expect("its store is gone");
     }
 
-    /// `isSafeSelectToSpeculate` (preserving the CFG: simple loads whose both
-    /// pointers are safe to load). SROA.cpp#L1854
+    /// `isSafeSelectToSpeculate`: the loads and stores through `select` and,
+    /// per hand, whether the pointer may be loaded before the condition is
+    /// known. With `preserve_cfg` only loads with both hands speculatable
+    /// are safe. SROA.cpp#L1854
     fn is_safe_select_to_speculate(
         &self,
         select: InstId,
-    ) -> Option<Vec<InstId>> {
+    ) -> Option<Vec<SelectOp>> {
         let function = self.function();
         let result = function.instruction(select).result?;
-        let mut loads = Vec::new();
+        let mut ops = Vec::new();
         for user in function.users(result) {
+            if let Opcode::Store { volatile, .. } = function.instruction(user.user).opcode {
+                // Stores are not speculatable, so if we can't turn it into a
+                // predicated store, we are done.
+                if volatile || self.preserve_cfg {
+                    return None;
+                }
+                ops.push(SelectOp { inst: user.user, true_speculatable: false, false_speculatable: false });
+                continue;
+            }
             if !self.is_simple_load(user.user) {
                 return None;
             }
             let ty = function.instruction(user.user).ty;
             let size = self.unit.layout.store_size(&self.context().types, ty);
             let operands = &function.instruction(select).operands;
-            if !self.safe_to_load_unconditionally(operands[1], size)
-                || !self.safe_to_load_unconditionally(operands[2], size)
-            {
+            let true_speculatable = self.safe_to_load_unconditionally(operands[1], size);
+            let false_speculatable = self.safe_to_load_unconditionally(operands[2], size);
+            if self.preserve_cfg && !(true_speculatable && false_speculatable) {
                 return None;
             }
-            loads.push(user.user);
+            ops.push(SelectOp { inst: user.user, true_speculatable, false_speculatable });
         }
-        Some(loads)
+        Some(ops)
     }
 
-    /// `rewriteSelectInstMemOps` with every load speculatable: each load of the
-    /// select is a select of two loads. SROA.cpp#L2002, L1897
+    /// `rewriteSelectInstMemOps`: a load with both hands speculatable is a
+    /// select of two loads; any other load or store through the select is
+    /// made once on each path or, with one hand speculatable, once before the
+    /// branch and once on the other path. SROA.cpp#L2002, L1897
     fn rewrite_select_inst_mem_ops(
         &mut self,
         select: InstId,
-        loads: &[InstId],
+        ops: &[SelectOp],
     ) {
         let operands = self.function().instruction(select).operands.clone();
-        for &load in loads {
-            let ty = self.function().instruction(load).ty;
-            let Opcode::Load { align, .. } = self.function().instruction(load).opcode else { unreachable!("a load") };
-            let true_load = self.build(
-                load,
-                Opcode::Load { align, volatile: false },
-                ty,
-                vec![operands[1]],
-                Some("sroa.speculate.load.true"),
-            );
-            let false_load = self.build(
-                load,
-                Opcode::Load { align, volatile: false },
-                ty,
-                vec![operands[2]],
-                Some("sroa.speculate.load.false"),
-            );
-            let chosen =
-                self.build(load, Opcode::Select, ty, vec![operands[0], true_load, false_load], Some("sroa.speculated"));
-            let loaded = self.function().instruction(load).result.expect("a load");
-            self.unit.function.replace_value(loaded, chosen);
+        for op in ops {
+            let load = op.inst;
+            if op.true_speculatable && op.false_speculatable {
+                let ty = self.function().instruction(load).ty;
+                let Opcode::Load { align, .. } = self.function().instruction(load).opcode else {
+                    unreachable!("a load")
+                };
+                let true_load = self.build(
+                    load,
+                    Opcode::Load { align, volatile: false },
+                    ty,
+                    vec![operands[1]],
+                    Some("sroa.speculate.load.true"),
+                );
+                let false_load = self.build(
+                    load,
+                    Opcode::Load { align, volatile: false },
+                    ty,
+                    vec![operands[2]],
+                    Some("sroa.speculate.load.false"),
+                );
+                let chosen = self.build(
+                    load,
+                    Opcode::Select,
+                    ty,
+                    vec![operands[0], true_load, false_load],
+                    Some("sroa.speculated"),
+                );
+                let loaded = self.function().instruction(load).result.expect("a load");
+                self.unit.function.replace_value(loaded, chosen);
+            } else {
+                self.rewrite_mem_op_of_select(&operands, op);
+            }
             self.unit.function.erase(load).expect("its uses were replaced");
         }
         // The select goes with the pointers it chose between.
@@ -3375,6 +4041,95 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
             self.unit.function.erase(user).ok();
         }
         self.dead_insts.push(select);
+    }
+
+    /// `rewriteMemOpOfSelect`: the access `op.inst` through the select
+    /// `[condition, true pointer, false pointer]` is made on the path of its
+    /// pointer, in a block of its own unless that hand is speculatable, where
+    /// it is made before the branch. A load's value is a phi of the copies.
+    /// SROA.cpp#L1936
+    fn rewrite_mem_op_of_select(
+        &mut self,
+        select: &[Operand],
+        op: &SelectOp,
+    ) {
+        use llrm_mir::module::BlockId;
+        let inst = op.inst;
+        let void = self.unit.context.types.void();
+        let head = self.function().parent(inst).expect("a placed access");
+        let tail = crate::edges::split_block_at(self.unit.function, head, inst);
+        let branch = self.function().terminator(head).expect("the jump the split made");
+        self.unit.function.set_operands(branch, Vec::new());
+        self.unit.function.erase(branch).expect("a jump nothing reads");
+        let new_block = |this: &mut Self, after: BlockId| -> BlockId {
+            let block = this.unit.function.create_block(None);
+            this.unit.function.insert_block(block, Some(after)).expect("a new block");
+            let jump = this
+                .unit
+                .function
+                .create_instruction(Opcode::Br, void, vec![Operand::Block(tail)], Flags::default(), None);
+            this.unit.function.insert(jump, Position::End(block)).expect("a placed block");
+            block
+        };
+        // The two successors of the head, as `HeadBI` has them.
+        let (first, second);
+        if !op.true_speculatable && !op.false_speculatable {
+            let then_block = new_block(self, head);
+            let else_block = new_block(self, then_block);
+            (first, second) = (then_block, else_block);
+        } else {
+            let then_block = new_block(self, head);
+            // A speculatable true hand is made in the head: its successor is
+            // the tail.
+            (first, second) = if op.true_speculatable { (tail, then_block) } else { (then_block, tail) };
+        }
+        let jump = self
+            .unit
+            .function
+            .create_instruction(
+                Opcode::Br,
+                void,
+                vec![select[0], Operand::Block(first), Operand::Block(second)],
+                Flags::default(),
+                None,
+            );
+        self.unit.function.insert(jump, Position::End(head)).expect("a placed block");
+        let is_load = matches!(self.function().instruction(inst).opcode, Opcode::Load { .. });
+        let mut incoming: Vec<Operand> = Vec::new();
+        for (at, successor) in [first, second].into_iter().enumerate() {
+            let target = if successor == tail { head } else { successor };
+            let terminator = self.function().terminator(target).expect("a terminated block");
+            let pointer = select[1 + at];
+            let copy = if target == head {
+                // Made before the branch, where the access may not fault
+                // (`dropUBImplyingAttrsAndMetadata`): a plain one.
+                let ty = self.function().instruction(inst).ty;
+                let opcode = match self.function().instruction(inst).opcode {
+                    Opcode::Load { align, .. } => Opcode::Load { align, volatile: false },
+                    ref other => other.clone(),
+                };
+                let mut operands = self.function().instruction(inst).operands.clone();
+                operands[usize::from(!is_load)] = pointer;
+                self.build_inst(terminator, opcode, ty, operands, None)
+            } else {
+                let copy = self.unit.function.clone_instruction(inst);
+                self.unit.function.insert(copy, Position::Before(terminator)).expect("a placed block");
+                self.unit.function.set_operand(copy, usize::from(!is_load), pointer);
+                copy
+            };
+            if is_load {
+                let value = Operand::Value(self.function().instruction(copy).result.expect("a load's value"));
+                incoming.extend([value, Operand::Block(target)]);
+            }
+        }
+        if is_load {
+            let ty = self.function().instruction(inst).ty;
+            let phi = self.unit.function.create_instruction(Opcode::Phi, ty, incoming, Flags::default(), None);
+            self.unit.function.insert(phi, Position::Before(inst)).expect("a placed access");
+            let loaded = self.function().instruction(inst).result.expect("a load");
+            let value = Operand::Value(self.function().instruction(phi).result.expect("a phi"));
+            self.unit.function.replace_value(loaded, value);
+        }
     }
 
     /// `Value::stripInBoundsOffsets` to an alloca of the entry block.
@@ -3438,10 +4193,25 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
                         changed = true;
                     }
                 }
-                Opcode::Cast(CastOp::BitCast | CastOp::AddrSpaceCast)
-                | Opcode::GetElementPtr { .. }
-                | Opcode::Phi
-                | Opcode::Select => {
+                Opcode::GetElementPtr { .. } => {
+                    // `visitGetElementPtrInst`: the unfolded select or phi
+                    // takes the gep's place and its users are walked.
+                    let plain = instruction.result;
+                    let unfolded = match self.unfold_gep_select(used.user) {
+                        Some(new) => Some(new),
+                        None => self.unfold_gep_phi(used.user),
+                    };
+                    if let Some(new) = unfolded {
+                        visited.remove(&used.user);
+                        visited.insert(new);
+                        changed = true;
+                        let result = self.function().instruction(new).result.expect("a select or phi");
+                        enqueue(self.unit.function, &mut queue, &mut visited, result);
+                    } else if let Some(result) = plain {
+                        enqueue(self.unit.function, &mut queue, &mut visited, result);
+                    }
+                }
+                Opcode::Cast(CastOp::BitCast | CastOp::AddrSpaceCast) | Opcode::Phi | Opcode::Select => {
                     if let Some(result) = instruction.result {
                         enqueue(self.unit.function, &mut queue, &mut visited, result);
                     }
@@ -3450,6 +4220,208 @@ impl<'a, 'b, 'c> State<'a, 'b, 'c> {
             }
         }
         changed
+    }
+
+    /// The instruction that defines `operand`, if one does.
+    fn defining(
+        &self,
+        operand: Operand,
+    ) -> Option<InstId> {
+        let Operand::Value(value) = operand else { return None };
+        match self.function().value(value).def {
+            llrm_mir::module::ValueDef::Instruction(def) => Some(def),
+            _ => None,
+        }
+    }
+
+    /// `gep` with the operand `old` replaced by `new` as a fresh gep before
+    /// `at`: `GetNewOps` and the `CreateGEP` after it.
+    fn gep_with(
+        &mut self,
+        gep: InstId,
+        at: InstId,
+        old: Operand,
+        new: Operand,
+        name: String,
+    ) -> Operand {
+        let instruction = self.function().instruction(gep);
+        let (opcode, ty, flags) = (instruction.opcode.clone(), instruction.ty, instruction.flags);
+        let operands: Vec<Operand> =
+            instruction.operands.iter().map(|&one| if one == old { new } else { one }).collect();
+        let created = self.unit.function.create_instruction(opcode, ty, operands, flags, Some(&name));
+        self.unit.function.insert(created, Position::Before(at)).expect("a placed instruction");
+        Operand::Value(self.function().instruction(created).result.expect("a pointer"))
+    }
+
+    /// `AggLoadStoreRewriter::unfoldGEPSelect`: `gep (select c, p1, p2), idx`
+    /// becomes `select c, gep p1 idx, gep p2 idx`, and the same for one select
+    /// or `zext i1` index with constant arms, so every index is constant.
+    /// SROA.cpp#L4578
+    fn unfold_gep_select(
+        &mut self,
+        gep: InstId,
+    ) -> Option<InstId> {
+        let operands = self.function().instruction(gep).operands.clone();
+        let mut chosen =
+            self.defining(operands[0]).filter(|&one| self.function().instruction(one).opcode == Opcode::Select);
+        let mut constant_arms = true;
+        for &index in &operands[1..] {
+            let def = self.defining(index).map(|one| (one, self.function().instruction(one)));
+            match def {
+                Some((one, inst)) if inst.opcode == Opcode::Select => {
+                    if chosen.is_some() {
+                        return None;
+                    }
+                    chosen = Some(one);
+                    constant_arms &= matches!(inst.operands[1], Operand::Constant(_))
+                        && matches!(inst.operands[2], Operand::Constant(_));
+                    if !constant_arms {
+                        return None;
+                    }
+                }
+                Some((one, inst)) if inst.opcode == Opcode::Cast(CastOp::ZExt) => {
+                    if chosen.is_some() {
+                        return None;
+                    }
+                    chosen = Some(one);
+                    if self.type_of(inst.operands[0]) != self.unit.context.types.int(1) {
+                        return None;
+                    }
+                }
+                _ => {
+                    if !matches!(index, Operand::Constant(_)) {
+                        return None;
+                    }
+                }
+            }
+        }
+        let selected = chosen?;
+        let old = Operand::Value(self.function().instruction(selected).result.expect("a select"));
+        let (condition, if_true, if_false) = if self.function().instruction(selected).opcode == Opcode::Select {
+            let inner = &self.function().instruction(selected).operands;
+            (inner[0], inner[1], inner[2])
+        } else {
+            let ty = self.function().instruction(selected).ty;
+            let condition = self.function().instruction(selected).operands[0];
+            (condition, self.int_constant(ty, 1), self.int_constant(ty, 0))
+        };
+        let result = self.function().instruction(gep).result.expect("a gep");
+        let name = |arm: Operand, this: &Self| {
+            let named = match arm {
+                Operand::Value(value) => this.function().value(value).name.clone(),
+                _ => None,
+            };
+            named.unwrap_or_default()
+        };
+        let (true_name, false_name) = (name(if_true, self), name(if_false, self));
+        let selected_name = self
+            .function()
+            .value(match old {
+                Operand::Value(value) => value,
+                _ => unreachable!("a value"),
+            })
+            .name
+            .clone();
+        let new_true = self.gep_with(gep, gep, old, if_true, format!("{true_name}.sroa.gep"));
+        let new_false = self.gep_with(gep, gep, old, if_false, format!("{false_name}.sroa.gep"));
+        let ty = self.function().instruction(gep).ty;
+        let select = self.build_inst(
+            gep,
+            Opcode::Select,
+            ty,
+            vec![condition, new_true, new_false],
+            Some(&format!("{}.sroa.sel", selected_name.unwrap_or_default())),
+        );
+        let value = Operand::Value(self.function().instruction(select).result.expect("a select"));
+        self.unit.function.replace_value(result, value);
+        self.unit.function.erase(gep).expect("its uses were replaced");
+        Some(select)
+    }
+
+    /// `AggLoadStoreRewriter::unfoldGEPPhi`: `gep (phi p1, p2), idx` becomes
+    /// `phi (gep p1 idx), (gep p2 idx)`, and the same for one phi index with
+    /// constant incoming values. The pointer operand must be a constant, an
+    /// argument or a static alloca, so the geps go at the end of the entry
+    /// block and a recursive phi does not grow forever. SROA.cpp#L4673
+    fn unfold_gep_phi(
+        &mut self,
+        gep: InstId,
+    ) -> Option<InstId> {
+        let operands = self.function().instruction(gep).operands.clone();
+        let invalid = |this: &Self, operand: Operand| match this.defining(operand) {
+            None => false,
+            Some(def) => {
+                !(matches!(this.function().instruction(def).opcode, Opcode::Alloca { .. })
+                    && llrm_mir::instructioncost::is_static_alloca(this.function(), def))
+            }
+        };
+        let is_phi = |this: &Self, operand: Operand| {
+            this.defining(operand).filter(|&one| this.function().instruction(one).opcode == Opcode::Phi)
+        };
+        let mut chosen = is_phi(self, operands[0]);
+        match chosen {
+            Some(phi) => {
+                if self.function().instruction(phi).operands.chunks(2).any(|pair| invalid(self, pair[0])) {
+                    return None;
+                }
+            }
+            None => {
+                if invalid(self, operands[0]) {
+                    return None;
+                }
+            }
+        }
+        for &index in &operands[1..] {
+            if let Some(phi) = is_phi(self, index) {
+                if chosen.is_some() {
+                    return None;
+                }
+                chosen = Some(phi);
+                let constants = self
+                    .function()
+                    .instruction(phi)
+                    .operands
+                    .chunks(2)
+                    .all(|pair| matches!(pair[0], Operand::Constant(_)));
+                if !constants {
+                    return None;
+                }
+            } else if !matches!(index, Operand::Constant(_)) {
+                return None;
+            }
+        }
+        let phi = chosen?;
+        let old = Operand::Value(self.function().instruction(phi).result.expect("a phi"));
+        let phi_name = match old {
+            Operand::Value(value) => self.function().value(value).name.clone().unwrap_or_default(),
+            _ => unreachable!("a value"),
+        };
+        let ty = self.function().instruction(gep).ty;
+        let new_phi = self.build_inst(phi, Opcode::Phi, ty, Vec::new(), Some(&format!("{phi_name}.sroa.phi")));
+        let entry_end = {
+            let entry = self.function().entry().expect("a function with a body");
+            self.function().terminator(entry).expect("a terminated entry block")
+        };
+        let pairs: Vec<Operand> = self.function().instruction(phi).operands.clone();
+        let mut incoming: Vec<Operand> = Vec::new();
+        let mut made: Vec<(Operand, Operand)> = Vec::new();
+        for pair in pairs.chunks(2) {
+            let block = pair[1];
+            // One gep for each predecessor, as `getBasicBlockIndex` finds.
+            if let Some(&(_, new_gep)) = made.iter().find(|(seen, _)| *seen == block) {
+                incoming.extend([new_gep, block]);
+                continue;
+            }
+            let new_gep = self.gep_with(gep, entry_end, old, pair[0], format!("{phi_name}.sroa.gep"));
+            incoming.extend([new_gep, block]);
+            made.push((block, new_gep));
+        }
+        self.unit.function.set_operands(new_phi, incoming);
+        let result = self.function().instruction(gep).result.expect("a gep");
+        let value = Operand::Value(self.function().instruction(new_phi).result.expect("a phi"));
+        self.unit.function.replace_value(result, value);
+        self.unit.function.erase(gep).expect("its uses were replaced");
+        Some(new_phi)
     }
 
     /// The leaves of `ty` as (indices, type) in order.

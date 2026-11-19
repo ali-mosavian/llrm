@@ -28,8 +28,8 @@
 //! DEVIATE A1: `nofree_obj` has no MIR spelling, so only `nofree` is looked
 //! for. DEVIATE A2: only `captures(none)` can be stated (see
 //! [`crate::capturetracking`]), so a parameter that would be
-//! `captures(ret: ...)` stays unstated. Not translated yet:
-//! `returned`; `inferInitializes` is
+//! `captures(ret: ...)` stays unstated. `returned` is
+//! [`add_argument_returned_attrs`]; `inferInitializes` is
 //! [`crate::initializes`].
 //!
 //! # Example
@@ -63,7 +63,9 @@ use llrm_mir::module::{Function, InstId, Linkage, Module, Operand, Use};
 use llrm_mir::opcode::{Attribute, Opcode};
 use llrm_mir::types::Type;
 use llrm_mir::valuetracking::Query;
-use llrm_mir::valuetracking::guarantee::is_guaranteed_to_transfer_execution_to_successor;
+use llrm_mir::valuetracking::guarantee::{
+    is_guaranteed_to_transfer_execution_to_successor, strip_pointer_casts_same_representation,
+};
 use llrm_mir::valuetracking::nonzero::null_pointer_is_defined;
 use llrm_support::hash::HashSet;
 
@@ -635,6 +637,69 @@ impl ArgumentGraph {
 fn only_reads_memory(attrs: &[Attribute]) -> bool {
     let facts = Facts::of(attrs);
     facts.read_only() || facts.read_none()
+}
+
+/// `addArgumentReturnedAttrs` (FunctionAttrs.cpp:973,
+/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/IPO/FunctionAttrs.cpp#L973>):
+/// a parameter every `ret` of the body returns (through pointer casts and
+/// calls that return one of their arguments) is `returned`. The members whose
+/// parameter attributes changed.
+///
+/// DEVIATE: `stripPointerCasts` is `strip_pointer_casts_same_representation`,
+/// which does not look through an `addrspacecast`. Reason: such a cast changes
+/// the type, and the type test that follows refuses it either way. Exit: none.
+pub fn add_argument_returned_attrs(
+    module: &mut Module,
+    members: &BTreeSet<GlobalId>,
+) -> BTreeSet<GlobalId> {
+    let mut changed = BTreeSet::new();
+    for &id in members {
+        if !exact_definition(module, id) {
+            continue;
+        }
+        let function = module.global(id).function().expect("a procedure");
+        let Type::Function { returns, .. } = module.context.types.get(function.ty) else { continue };
+        if matches!(module.context.types.get(*returns), Type::Void)
+            || function.parameter_attrs.iter().flatten().any(is_returned)
+        {
+            continue;
+        }
+        let layout = DataLayout::default();
+        let q = Query::new(module, function, &layout);
+        let mut found: Option<usize> = None;
+        let mut all_return_one = true;
+        for &block in function.layout() {
+            let Some(last) = function.terminator(block) else { continue };
+            let ret = function.instruction(last);
+            if ret.opcode != Opcode::Ret {
+                continue;
+            }
+            let value = ret.operands.first().map(|&value| strip_pointer_casts_same_representation(&q, value));
+            let index = match value {
+                Some(Operand::Value(value)) if function.value(value).ty == *returns => {
+                    function.parameters().iter().position(|&one| one == value)
+                }
+                _ => None,
+            };
+            match (index, found) {
+                (Some(index), None) => found = Some(index),
+                (Some(index), Some(seen)) if index == seen => {}
+                _ => {
+                    all_return_one = false;
+                    break;
+                }
+            }
+        }
+        if let Some(index) = found.filter(|_| all_return_one) {
+            parameter_mut(module, Arg { function: id, index }).push(Attribute::Flag("returned".into()));
+            changed.insert(id);
+        }
+    }
+    changed
+}
+
+fn is_returned(attr: &Attribute) -> bool {
+    matches!(attr, Attribute::Flag(name) if name == "returned")
 }
 
 /// `addArgumentAttrs` (FunctionAttrs.cpp:1238,

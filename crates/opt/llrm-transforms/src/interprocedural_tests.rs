@@ -34,7 +34,10 @@ fn stepped(
     let roots = ids(module, roots).into_iter().map(|id| (0, id)).collect();
     let mut stages = Vec::new();
     let costs = OperationCosts { call, ..OperationCosts::default() };
-    let proved = Program::lend(module, std::rc::Rc::new(llrm_mir::target::Neutral), |program| {
+    // The second IPSCCP the promotion tests below rest on is a target's choice
+    // (SD443): a target that asks for it.
+    let target = crate::testing::Tuned { second_ipsccp: true, ..Default::default() };
+    let proved = Program::lend(module, std::rc::Rc::new(target), |program| {
         let mut modules = managers(program, &mut ProgramAnalyses::default());
         optimized_with::<String>(
             program,
@@ -44,6 +47,7 @@ fn stepped(
             None,
             0,
             threshold,
+            &mut crate::ipacp::Cloning::default(),
             &mut |module, _, id, stage| {
                 stages.push((module.global(id).name.owned().unwrap(), stage.to_owned()));
                 Ok(())
@@ -289,10 +293,10 @@ fn a_body_is_stamped_with_what_its_summary_says_as_llvm_states_it() {
     assert_eq!(
         defined,
         [
-            "define internal i16 @read(ptr nocapture nofree readonly %p) memory(argmem: read) willreturn nounwind nofree nosync norecurse {",
-            "define internal void @write(ptr nocapture nofree writeonly initializes((0, 2)) %p, i16 %x) memory(argmem: write) willreturn nounwind nofree nosync norecurse {",
+            "define internal i16 @read(ptr nocapture nofree readonly \"llrm.reads\"=\"0:2\" \"llrm.writes\"=\"\" %p) memory(argmem: read) willreturn nounwind nofree nosync norecurse {",
+            "define internal void @write(ptr nocapture nofree writeonly initializes((0, 2)) \"llrm.reads\"=\"\" \"llrm.writes\"=\"0:2\" %p, i16 %x) memory(argmem: write) willreturn nounwind nofree nosync norecurse {",
             "define internal void @keep(ptr %p) memory(write, argmem: none, inaccessiblemem: none) willreturn nounwind nofree nosync norecurse {",
-            "define internal void @calls(ptr nocapture nofree initializes((0, 2)) %p, i16 %x) memory(write, argmem: readwrite, inaccessiblemem: none) willreturn nounwind nofree nosync norecurse {",
+            "define internal void @calls(ptr nocapture nofree initializes((0, 2)) \"llrm.reads\"=\"0:2\" \"llrm.writes\"=\"0:2\" %p, i16 %x) memory(write, argmem: readwrite, inaccessiblemem: none) willreturn nounwind nofree nosync norecurse {",
             "define internal void @hides(ptr %p) {",
             "define internal void @ordered() memory(inaccessiblemem: readwrite) willreturn nounwind nofree nosync norecurse {",
             "define i16 @f(i16 %a) memory(readwrite, argmem: write, inaccessiblemem: none) willreturn nounwind nofree nosync norecurse {",
@@ -348,6 +352,54 @@ b:
     assert_eq!(loads(read, false), 1);
     assert_eq!(loads("call void @write(ptr @x)", true), 1);
     assert_eq!(loads("call void @unknown(ptr @x)", true), 1);
+}
+
+/// A caller reloaded a record field after a call whose callee wrote two other
+/// fields: the call was taken to write the whole record (qmove -Os, +8 clocks).
+#[test]
+fn a_field_is_kept_across_a_call_that_writes_other_fields_of_the_record() {
+    let loads = |body: &str, frame: bool, which: u8| {
+        let (decl, record) = if frame {
+            ("", "%r = alloca [3 x i16]")
+        } else {
+            ("@r = global [3 x i16] zeroinitializer\n", "%r = getelementptr i8, ptr @r, i16 0")
+        };
+        let mut module = parsed(&format!(
+            "{decl}
+
+define internal void @fill(ptr %p, i16 %i) {{
+b:
+{body}
+  ret void
+}}
+
+define i16 @f(i16 %c, i16 %i) {{
+b:
+  {record}
+  %z = getelementptr i8, ptr %r, i16 4
+  store i16 %c, ptr %z
+  call void @fill(ptr %r, i16 %i)
+  %v = load i16, ptr %z
+  ret i16 %v
+}}
+"
+        ));
+        crate::testing::stamped(&mut module).unwrap();
+        match which {
+            0 => drop(managed(&mut module, Promote)),
+            1 => drop(managed(&mut module, crate::gvn::Gvn::default())),
+            _ => drop(managed(&mut module, crate::earlycse::EarlyCse::default())),
+        }
+        let f = module.function_mut("f").unwrap().1;
+        f.walk().filter(|(_, inst)| matches!(f.instruction(*inst).opcode, Opcode::Load { .. })).count()
+    };
+    let x_and_y = "  store i16 1, ptr %p\n  %y = getelementptr i8, ptr %p, i16 2\n  store i16 2, ptr %y";
+    for (frame, which) in [(false, 0), (true, 0), (true, 1), (true, 2)] {
+        assert_eq!(loads(x_and_y, frame, which), 0, "{frame} {which}");
+        let and_z = format!("{x_and_y}\n  %z = getelementptr i8, ptr %p, i16 4\n  store i16 3, ptr %z");
+        assert_eq!(loads(&and_z, frame, which), 1);
+        assert_eq!(loads("  %q = getelementptr i8, ptr %p, i16 %i\n  store i16 1, ptr %q", frame, which), 1);
+    }
 }
 
 /// The bodies of `text` its stamp states pure, by name.
@@ -891,12 +943,153 @@ fn test_a_function_called_with_two_constants_is_cloned_for_each_at_o3() {
     let inputs: &[&[i128]] = &[&[0], &[1], &[7], &[-3]];
     let cloned = |clone: bool| {
         let mut module = parsed(TWO_CONTEXTS);
-        stepped(&mut module, &["f", "g"], 20, Threshold { cp_clone: clone, ..Threshold::none() });
+        stepped(&mut module, &["f", "g"], 20, Threshold { cp_clone: Some(clone), ..Threshold::none() });
         assert_eq!(results(&module, inputs), results(&parsed(TWO_CONTEXTS), inputs), "{}", printed(&module));
         (module.named("g.constprop.1").is_some(), module.named("g.constprop.2").is_some())
     };
     assert_eq!(cloned(false), (false, false));
     assert_eq!(cloned(true), (true, true));
+}
+
+/// A copy whose only gain is a known loop bound is gcc's -O3 (`-fipa-cp-clone`
+/// is on there only); at -O2 on a target that copies there, the copy for
+/// `pack_ref`'s four agreed constants kept the caller's mode loop from
+/// unrolling: m32 x_spill_store_order 53,652 -> 76,462 clk.
+#[test]
+fn test_a_copy_that_only_makes_a_loop_bound_known_waits_for_o3() {
+    let cloned = |hints: bool| {
+        let mut module = parsed(TWO_CONTEXTS);
+        let threshold = Threshold { cp_clone: Some(true), cp_hint_clones: hints, ..Threshold::none() };
+        stepped(&mut module, &["f", "g"], 20, threshold);
+        module.named("g.constprop.1").is_some()
+    };
+    assert_eq!((cloned(false), cloned(true)), (false, true));
+}
+
+/// A known bound the unroller cannot take whole is no reason to copy: gcc's
+/// hint counts it, but m64 nbody -O2 went 655 -> 1189 B and recpow 1207 ->
+/// 3060 B for a loop of 400 trips, so a target's default counts the hint up to
+/// `max-completely-peel-times` (16) trips; a flag given, or -Omax, is gcc's own
+/// (m16 recchop -O3 clones `chop(0, 64)`).
+#[test]
+fn test_a_loop_bound_past_the_peel_limit_is_no_reason_to_clone() {
+    let cloned = |trips: &str| {
+        let text = TWO_CONTEXTS.replace("i16 4,", &format!("i16 {trips},")).replace("i16 5,", &format!("i16 {trips},"));
+        let mut module = parsed(&text);
+        stepped(&mut module, &["f", "g"], 20, Threshold { cp_clone: Some(true), cp_peel_limited: true, ..Threshold::none() });
+        module.named("g.constprop.1").is_some()
+    };
+    assert_eq!((cloned("4"), cloned("400")), (true, false));
+}
+
+/// `fib(20)` credited clones for 19 and 18 but counted only the first's size:
+/// m64 fib -O2 grew 424 -> 595 B and 12.7 k -> 19.1 k clocks. A chain pays for
+/// every clone it credits (gcc's `prop_size_cost`).
+const BRANCHING: &str = "define i32 @fib(i32 %n) {
+b0:
+  %small = icmp slt i32 %n, 2
+  br i1 %small, label %done, label %rec
+
+rec:
+  %a1 = sub i32 %n, 1
+  %a = call i32 @fib(i32 %a1)
+  %b1 = sub i32 %n, 2
+  %b = call i32 @fib(i32 %b1)
+  %m1 = mul i32 %n, %n
+  %m2 = mul i32 %m1, %n
+  %m3 = mul i32 %m2, %n
+  %m4 = mul i32 %m3, %n
+  %m5 = mul i32 %m4, %n
+  %m6 = mul i32 %m5, %n
+  %m7 = mul i32 %m6, %n
+  %m8 = mul i32 %m7, %n
+  %m9 = mul i32 %m8, %n
+  %m10 = mul i32 %m9, %n
+  %m11 = mul i32 %m10, %n
+  %m12 = mul i32 %m11, %n
+  %m13 = mul i32 %m12, %n
+  %m14 = mul i32 %m13, %n
+  %m15 = mul i32 %m14, %n
+  %m16 = mul i32 %m15, %n
+  %m17 = mul i32 %m16, %n
+  %m18 = mul i32 %m17, %n
+  %m19 = mul i32 %m18, %n
+  %m20 = mul i32 %m19, %n
+  %m21 = mul i32 %m20, %n
+  %m22 = mul i32 %m21, %n
+  %m23 = mul i32 %m22, %n
+  %m24 = mul i32 %m23, %n
+  %m25 = mul i32 %m24, %n
+  %m26 = mul i32 %m25, %n
+  %m27 = mul i32 %m26, %n
+  %m28 = mul i32 %m27, %n
+  %m29 = mul i32 %m28, %n
+  %m30 = mul i32 %m29, %n
+  %m31 = mul i32 %m30, %n
+  %m32 = mul i32 %m31, %n
+  %m33 = mul i32 %m32, %n
+  %m34 = mul i32 %m33, %n
+  %m35 = mul i32 %m34, %n
+  %m36 = mul i32 %m35, %n
+  %m37 = mul i32 %m36, %n
+  %m38 = mul i32 %m37, %n
+  %m39 = mul i32 %m38, %n
+  %m40 = mul i32 %m39, %n
+  %m41 = mul i32 %m40, %n
+  %m42 = mul i32 %m41, %n
+  %m43 = mul i32 %m42, %n
+  %m44 = mul i32 %m43, %n
+  %m45 = mul i32 %m44, %n
+  %m46 = mul i32 %m45, %n
+  %m47 = mul i32 %m46, %n
+  %m48 = mul i32 %m47, %n
+  %m49 = mul i32 %m48, %n
+  %m50 = mul i32 %m49, %n
+  %m51 = mul i32 %m50, %n
+  %m52 = mul i32 %m51, %n
+  %m53 = mul i32 %m52, %n
+  %m54 = mul i32 %m53, %n
+  %m55 = mul i32 %m54, %n
+  %m56 = mul i32 %m55, %n
+  %m57 = mul i32 %m56, %n
+  %m58 = mul i32 %m57, %n
+  %m59 = mul i32 %m58, %n
+  %m60 = mul i32 %m59, %n
+  %s0 = add i32 %a, %b
+  %s = add i32 %s0, %m60
+  ret i32 %s
+
+done:
+  ret i32 %n
+}
+
+define i32 @f(i32 %x) {
+b0:
+  %r = call i32 @fib(i32 20)
+  ret i32 %r
+}
+";
+
+#[test]
+fn test_a_branching_recursion_called_once_is_not_cloned_down_a_chain() {
+    let mut module = parsed(BRANCHING);
+    stepped(&mut module, &["f", "fib"], 20, Threshold { cp_clone: Some(true), ..Threshold::none() });
+    assert!(module.named("fib.constprop.1").is_none(), "{}", printed(&module));
+}
+
+/// A copy for a context two call sites pass has two callers, so nothing inlines
+/// it back and the calls to one pure callee end up in different functions:
+/// m64 -O2 fib(20) ran fib(16) three times (+50% clk), frames +2%.
+#[test]
+fn test_a_recursion_is_not_copied_for_a_context_several_sites_pass() {
+    let text = BRANCHING.replace(
+        "  %r = call i32 @fib(i32 20)\n  ret i32 %r",
+        "  %r = call i32 @fib(i32 20)\n  %q = call i32 @fib(i32 20)\n  %p = call i32 @fib(i32 20)\n  %u = add i32 %r, %q\n  %t = add i32 %u, %p\n  ret i32 %t",
+    );
+    assert_ne!(text, BRANCHING);
+    let mut module = parsed(&text);
+    stepped(&mut module, &["f", "fib"], 20, Threshold { cp_clone: Some(true), ..Threshold::none() });
+    assert!(module.named("fib.constprop.1").is_none(), "{}", printed(&module));
 }
 
 /// A function only an invoke or a `!callees` list names is still called.
@@ -1047,6 +1240,370 @@ fn a_noipa_body_is_stamped_with_nothing_and_read_as_a_declaration() {
 fn test_an_available_externally_function_is_not_cloned_for_a_constant() {
     let text = TWO_CONTEXTS.replacen("define i16 @g", "define available_externally i16 @g", 1);
     let mut module = parsed(&text);
-    stepped(&mut module, &["f", "g"], 20, Threshold { cp_clone: true, ..Threshold::none() });
+    stepped(&mut module, &["f", "g"], 20, Threshold { cp_clone: Some(true), ..Threshold::none() });
     assert!(module.named("g.constprop.1").is_none(), "{}", printed(&module));
+}
+
+/// A slice descriptor read for its length, passed on by the recursion; the one
+/// outside call fills it with 1024. Promotion makes the length a value that
+/// crosses the call, so the recursion's own pass-through must meet the outside
+/// 1024 and fold.
+const SLICE_RECURSION: &str = "@slice = internal addrspace(1) constant { i16, i16, i16 } { i16 0, i16 0, i16 1024 }
+
+define internal i16 @sum(ptr addrspace(1) noalias readonly dereferenceable(6) nocapture %d, i16 %n) {
+b0:
+  %at = getelementptr i8, ptr addrspace(1) %d, i16 4
+  %len = load i16, ptr addrspace(1) %at
+  %done = icmp sle i16 %n, 0
+  br i1 %done, label %out, label %again
+again:
+  %m = sub i16 %n, 1
+  %r = call i16 @sum(ptr addrspace(1) %d, i16 %m)
+  %s = add i16 %r, %n
+  %c = icmp ult i16 %s, %len
+  %t = select i1 %c, i16 %s, i16 0
+  ret i16 %t
+out:
+  ret i16 %len
+}
+
+define i16 @top(i16 %k) {
+b0:
+  %r = call i16 @sum(ptr addrspace(1) @slice, i16 %k)
+  ret i16 %r
+}
+";
+
+/// The length the descriptor holds is 1024 at every call, the recursion's
+/// included; `@sum` kept it as a parameter, compared against a live value
+/// (quicksort's `cmp di, [bp-4]`) where the old pipeline had the immediate.
+#[test]
+fn test_a_length_promoted_from_a_descriptor_folds_through_the_recursion() {
+    let mut module = parsed(SLICE_RECURSION);
+    step_no_inline(&mut module);
+    let text = printed(&module);
+    assert!(text.contains("icmp ult i16 %s, 1024") || text.contains("1024"), "{text}");
+    assert!(!text.contains("define internal i16 @sum(i16 %0, i16 %n)"), "{text}");
+}
+
+fn step_no_inline(module: &mut Module) {
+    stepped(module, &["top"], 40, Threshold::none());
+}
+
+/// Queens' `place(q, row, n)`: a bounds check against the descriptor's length
+/// before the store, the recursion passing the descriptor on. `slice_len` is
+/// the length each outside call's descriptor holds.
+fn queens_shaped(outside: &str) -> String {
+    format!(
+        "@twelve = internal addrspace(1) constant {{ i16, i16, i16 }} {{ i16 0, i16 0, i16 12 }}
+@five = internal addrspace(1) constant {{ i16, i16, i16 }} {{ i16 0, i16 0, i16 5 }}
+declare void @trap() noreturn
+
+define internal i16 @place(ptr addrspace(1) noalias readonly dereferenceable(6) nocapture %q, i16 %row) {{
+b0:
+  %at = getelementptr i8, ptr addrspace(1) %q, i16 4
+  %len = load i16, ptr addrspace(1) %at
+  %done = icmp eq i16 %row, 7
+  br i1 %done, label %out, label %go
+go:
+  %in = icmp ult i16 %row, %len
+  br i1 %in, label %ok, label %bad
+bad:
+  call void @trap()
+  unreachable
+ok:
+  %next = add i16 %row, 1
+  %r = call i16 @place(ptr addrspace(1) %q, i16 %next)
+  ret i16 %r
+out:
+  ret i16 1
+}}
+
+define i16 @top() {{
+b0:
+{outside}
+}}
+"
+    )
+}
+
+/// The length the one outside call's descriptor holds is 12 on every call, the
+/// recursion's included: the bounds check compares against 12 and `@place`
+/// takes no length, and the bounds-check call is gone. It carried the length as
+/// a parameter and the check stayed a comparison with a live value (queens:
+/// 225467 instructions, main's 167694).
+#[test]
+fn test_a_queens_shaped_recursion_folds_the_descriptor_length() {
+    let mut module = parsed(&queens_shaped("  %r = call i16 @place(ptr addrspace(1) @twelve, i16 0)\n  ret i16 %r"));
+    stepped(&mut module, &["top"], 40, Threshold::none());
+    let text = printed(&module);
+    // Row 0..7 against a length of 12: the check, and the call it guards, go.
+    assert!(!text.contains("@trap()\n") && !text.contains("%0"), "{text}");
+    assert!(text.contains("@place(i16 range(i16 0, 8) %row)"), "{text}");
+}
+
+/// Two outside calls with different lengths agree on nothing: the length stays
+/// a parameter (the control that the extra IPSCCP folds only a constant).
+#[test]
+fn test_a_recursion_called_with_two_lengths_keeps_the_length_a_parameter() {
+    let mut module = parsed(&queens_shaped(
+        "  %a = call i16 @place(ptr addrspace(1) @twelve, i16 0)\n  %b = call i16 @place(ptr addrspace(1) @five, i16 0)\n  %r = add i16 %a, %b\n  ret i16 %r",
+    ));
+    stepped(&mut module, &["top"], 40, Threshold::none());
+    let text = printed(&module);
+    assert!(text.contains("icmp ult i16 %row, %0") && text.contains("call void @trap()"), "{text}");
+    assert!(!text.contains("icmp ult i16 %row, 12") && !text.contains("icmp ult i16 %row, 5"), "{text}");
+}
+
+/// `willreturn` for a loop nothing proves finite summarized every global again
+/// for each such function (8.3G of 28G instructions at 1200 functions): the
+/// summaries are made once for the walk over the components.
+#[test]
+fn stamping_does_not_summarize_every_global_for_each_function() {
+    let scans = |functions: usize| {
+        let text: String = (0..functions)
+            .map(|n| {
+                format!(
+                    "define i32 @f{n}(ptr %p) {{\nb0:\n  br label %b1\nb1:\n  %v = load i32, ptr %p\n  %c = icmp ne i32 %v, 0\n  br i1 %c, label %b1, label %b2\nb2:\n  ret i32 %v\n}}\n"
+                )
+            })
+            .collect();
+        let mut module = parsed(&text);
+        let before = llrm_mir::memory::callee_map_scans();
+        crate::testing::stamped(&mut module).unwrap();
+        llrm_mir::memory::callee_map_scans() - before
+    };
+    let (few, many) = (scans(4), scans(32));
+    assert!(many <= few + 2, "4 functions: {few} scans, 32: {many}");
+}
+
+/// `row` indexes a global: with it known, the address of its cell is an
+/// immediate, and a loop of stores through it saves the address arithmetic.
+/// `time_saved` priced that fold at nothing, so a call with only that
+/// constant (hanoi2's `mv(n, 0, 2, 1)`: 28% of its clocks to gcc, which cloned
+/// it) was never cloned.
+const CONSTANT_ROW: &str = "@cells = global [4 x [8 x i16]] zeroinitializer
+
+define i16 @fill(i16 %row, i16 %n) {
+b0:
+  br label %head
+
+head:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %body ]
+  %go = icmp slt i16 %i, %n
+  br i1 %go, label %body, label %done
+
+body:
+  %p = getelementptr [8 x i16], ptr @cells, i16 %row
+  %q = getelementptr i16, ptr %p, i16 %i
+  store i16 %i, ptr %q
+  %i1 = add nsw i16 %i, 1
+  br label %head
+
+done:
+  ret i16 0
+}
+
+define i16 @f(i16 %n) {
+b0:
+  %a = call i16 @fill(i16 2, i16 %n)
+  %b = call i16 @fill(i16 2, i16 %n)
+  ret i16 %a
+}
+";
+
+#[test]
+fn test_a_constant_index_into_a_global_is_priced_as_a_saving() {
+    let cloned = |clone: bool| {
+        let mut module = parsed(CONSTANT_ROW);
+        stepped(&mut module, &["f"], 20, Threshold { cp_clone: Some(clone), ..Threshold::none() });
+        module.named("fill.constprop.1").is_some()
+    };
+    assert!(!cloned(false));
+    assert!(cloned(true));
+}
+
+/// `CONSTANT_ROW` with a second caller, `h`, that the first round does not see.
+const TWO_CALLERS: &str = "@cells = global [4 x [8 x i16]] zeroinitializer
+
+define i16 @fill(i16 %row, i16 %n) {
+b0:
+  br label %head
+
+head:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %body ]
+  %go = icmp slt i16 %i, %n
+  br i1 %go, label %body, label %done
+
+body:
+  %p = getelementptr [8 x i16], ptr @cells, i16 %row
+  %q = getelementptr i16, ptr %p, i16 %i
+  store i16 %i, ptr %q
+  %i1 = add nsw i16 %i, 1
+  br label %head
+
+done:
+  ret i16 0
+}
+
+define i16 @f(i16 %n) {
+b0:
+  %a = call i16 @fill(i16 2, i16 %n)
+  %b = call i16 @fill(i16 2, i16 %n)
+  ret i16 %a
+}
+
+define i16 @h(i16 %n) {
+b0:
+  %a = call i16 @fill(i16 2, i16 %n)
+  ret i16 %a
+}
+";
+
+/// The clone for a context is remembered across the walk, which empties the
+/// bodies it inlined (`is_deleted`: one `unreachable`). A call that met the
+/// same constants afterwards was sent to that empty body: m32 x_hanoi2 -O3 with
+/// the clone bound at 4, 5 or 6 lost the tail of a function (no second recursive
+/// call, no `ret`) and ran off its end, a `UC_ERR_EXCEPTION` in the emulator.
+#[test]
+fn test_a_call_is_not_sent_to_a_clone_the_walk_emptied() {
+    let mut module = parsed(TWO_CALLERS);
+    Program::lend(&mut module, std::rc::Rc::new(crate::testing::Tuned::default()), |program| {
+        let costs = program.target.costs();
+        let (f, h) = (program.modules[0].named("f").unwrap(), program.modules[0].named("h").unwrap());
+        let private = private(program, 0);
+        let mut state = crate::ipacp::Cloning::default();
+        let first = crate::ipacp::cloned(&mut program.modules[0], &program.layout, &[f], &private, &costs, true, crate::ipacp::Tuning { hint_clones: true, peel_limited: false, max_clones: crate::ipacp::DEFAULT_MAX_CLONES }, &mut state);
+        assert_eq!(first.added.len(), 1, "the first round clones fill for row 2");
+        let mut analyses = managers(program, &mut ProgramAnalyses::default());
+        // What `bare` leaves, without its check that no call stands: the callers
+        // of the clone were inlined away in the walk this stands for.
+        let module = &mut program.modules[0];
+        let mut stub = module.global(first.added[0]).function().map(llrm_mir::module::Function::declaration).unwrap();
+        let void = module.context.types.void();
+        let entry = stub.create_block(None);
+        stub.insert_block(entry, None).unwrap();
+        let end = stub.create_instruction(Opcode::Unreachable, void, Vec::new(), llrm_mir::opcode::Flags::default(), None);
+        stub.insert(end, llrm_mir::edit::Position::End(entry)).unwrap();
+        module.globals[first.added[0].0 as usize].kind = GlobalKind::Function(Box::new(stub));
+        analyses[0].changed(first.added[0]);
+        crate::ipacp::cloned(&mut program.modules[0], &program.layout, &[f, h], &private, &costs, true, crate::ipacp::Tuning { hint_clones: true, peel_limited: false, max_clones: crate::ipacp::DEFAULT_MAX_CLONES }, &mut state);
+        let module = &program.modules[0];
+        let caller = module.global(h).function().unwrap();
+        let target = caller
+            .walk()
+            .find_map(|(_, inst)| llrm_mir::memory::callee(&module.context, caller, inst))
+            .expect("h still calls something");
+        assert!(!module.global(target).function().unwrap().is_deleted(), "h calls an emptied clone:\n{}", printed(module));
+    })
+    .unwrap();
+}
+
+/// Each level of `down` saves a few clocks, too little to pay for a copy; the
+/// four levels, each called four times, do, and GCC's `propagate_effects` credits the copy for
+/// `row = 0` with the ones after it. Priced alone, the copy was refused: queens
+/// got four clones of eight, hanoi2 none.
+const DOWN: &str = "@cells = global [8 x [8 x i16]] zeroinitializer
+
+define void @down(i16 %row, i16 %x) {
+b0:
+  %done = icmp eq i16 %row, 4
+  br i1 %done, label %out, label %go
+
+go:
+  %p = getelementptr [8 x i16], ptr @cells, i16 %row
+  %a = add i16 %x, 1
+  %b = mul i16 %a, %x
+  %c = add i16 %b, %a
+  %d = mul i16 %c, %b
+  %e = add i16 %d, %c
+  %f = mul i16 %e, %d
+  %r1 = add nsw i16 %row, 1
+  %q1 = mul i16 %r1, %r1
+  %q2 = mul i16 %q1, %r1
+  %q3 = mul i16 %q2, %r1
+  %q4 = mul i16 %q3, %r1
+  %q5 = mul i16 %q4, %r1
+  %q6 = mul i16 %q5, %r1
+  %q7 = mul i16 %q6, %r1
+  %q8 = mul i16 %q7, %r1
+  %q9 = mul i16 %q8, %r1
+  %q10 = mul i16 %q9, %r1
+  %q11 = mul i16 %q10, %r1
+  %q12 = mul i16 %q11, %r1
+  %g = add i16 %f, %q12
+  store i16 %g, ptr %p
+  br label %head
+
+head:
+  %i = phi i16 [ 0, %go ], [ %i1, %next ]
+  %more = icmp slt i16 %i, 4
+  br i1 %more, label %next, label %out
+
+next:
+  call void @down(i16 %r1, i16 %e)
+  %i1 = add nsw i16 %i, 1
+  br label %head
+
+out:
+  ret void
+}
+
+define void @f(i16 %x) {
+b0:
+  call void @down(i16 0, i16 %x)
+  call void @down(i16 0, i16 3)
+  ret void
+}
+";
+
+#[test]
+fn test_a_clone_is_credited_with_the_clones_its_recursion_makes() {
+    let mut module = parsed(DOWN);
+    stepped(&mut module, &["f"], 20, Threshold { cp_clone: Some(true), ..Threshold::none() });
+    assert!(module.named("down.constprop.1").is_some(), "{}", printed(&module));
+}
+
+/// `down` halves the range it passes on: `(row + hi) / 2` is no pass-through
+/// of one parameter, so GCC follows no chain of contexts from it. Credited
+/// with the contexts anyway, recchop got nine clones (+3485 B, 650 clk) at
+/// -O3.
+const HALVING: &str = "@cells = global [8 x [8 x i16]] zeroinitializer
+
+define void @down(i16 %row, i16 %hi, i16 %x) {
+b0:
+  %done = icmp eq i16 %row, %hi
+  br i1 %done, label %out, label %go
+
+go:
+  %p = getelementptr [8 x i16], ptr @cells, i16 %row
+  %a = add i16 %x, 1
+  %b = mul i16 %a, %x
+  %c = add i16 %b, %a
+  %d = mul i16 %c, %b
+  %e = add i16 %d, %c
+  %f = mul i16 %e, %d
+  store i16 %f, ptr %p
+  %s = add i16 %row, %hi
+  %m = udiv i16 %s, 2
+  call void @down(i16 %m, i16 %hi, i16 %e)
+  br label %out
+
+out:
+  ret void
+}
+
+define void @f(i16 %x) {
+b0:
+  call void @down(i16 0, i16 7, i16 %x)
+  call void @down(i16 0, i16 7, i16 3)
+  ret void
+}
+";
+
+#[test]
+fn test_a_recursion_that_halves_a_range_makes_no_chain_of_contexts() {
+    let mut module = parsed(HALVING);
+    stepped(&mut module, &["f"], 20, Threshold { cp_clone: Some(true), ..Threshold::none() });
+    assert!(module.named("down.constprop.1").is_none(), "{}", printed(&module));
 }

@@ -1,0 +1,19 @@
+#title,"10.6 INTEGER UNIT INSTRUCTION TIMINGS: MOVES <ea>,An* | MOVES <ea>,Dn* | MOVES Rn,<ea>*",page,10-24,notes,*Times listed are typical. This instruction interlocks the <ea> calculate and execute stages and synchronizes some portions of the processor before execution.
+Addressing Mode,"MOVES <ea>,An* <ea> Calculate","MOVES <ea>,An* Execute","MOVES <ea>,Dn* <ea> Calculate","MOVES <ea>,Dn* Execute","MOVES Rn,<ea>* <ea> Calculate","MOVES Rn,<ea>* Execute"
+Dn,—,—,—,—,—,—
+An,—,—,—,—,—,—
+(An),28,4L + 24,20,4L + 19,13,4L + 9
+(An)+,28,4L + 24,20,4L + 19,13,4L + 9
+–(An),17,2L + 15,11,12,11,2L + 9
+"(d 16,An)",29,4L + 24,21,4L + 19,14,4L + 9
+"(d 16,PC)",—,—,—,—,—,—
+"(xxx).W, (xxx).L",17,2L + 15,11,4L + 10,11,2L + 9
+#<xxx>,—,—,—,—,—,—
+"(d 8,An,Xn)",29,1L + 27,21,1L + 22,14,1L + 12
+"(d 8,PC,Xn)",—,—,—,—,—,—
+"(BR,Xn)",21,2L + 19,15,2L + 14,15,2L + 13
+"(bd,BR,Xn)",22,2L + 20,16,2L + 15,16,2L + 14
+"([bd,BR,Xn])",35,2L + 32,26,2L + 27,21,2L + 17
+"([bd,BR,Xn],od)",31,2L + 29,23,2L + 24,20,2L + 18
+"([bd,BR],Xn)",36,4L + 31,27,4L + 26,21,4L + 16
+"([bd,BR],Xn,od)",32,4L + 28,24,4L + 23,21,4L + 17

@@ -5,8 +5,9 @@
 //! [`CommonPointerBase`](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/InstCombine/InstCombineAddSub.cpp#L2244)
 //! and
 //! [`InstCombinerImpl::EmitGEPOffsets`](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/InstCombine/InstructionCombining.cpp#L238)
-//! at d1106deb71cc. `foldGEPICmp` asks them today; `OptimizePointerDifference`
-//! will.
+//! at d1106deb71cc, and `OptimizePointerDifference`
+//! ([:2327](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/InstCombine/InstCombineAddSub.cpp#L2327)).
+//! `foldGEPICmp` and `visitSub` ask them.
 //!
 //! MIRROR: the chains are walked from each side to the first pointer they
 //! share, their flags are folded with `intersectForOffsetAdd`, a chain is
@@ -16,8 +17,9 @@
 //!
 //! DEVIATE 1: no vector GEPs: MIR has none.
 //!
-//! DEVIATE 2: `RewriteGEPs` is always true, the only way `foldGEPICmp` calls
-//! it. Exit: `OptimizePointerDifference`, which passes false.
+//! DEVIATE 2: `OptimizePointerDifference` does not set `nuw` on the one GEP's
+//! multiply or shift (:2336-2343). Exit: the `nuw` it would set is read by
+//! no fold translated yet.
 //!
 //! # Used by
 //! `foldGEPICmp` (`combine_compares.rs`).
@@ -35,15 +37,15 @@ use llrm_mir::opcode::{BinaryOp, Flags};
 use llrm_mir::types::TypeId;
 
 use crate::combine::Combiner;
-use crate::combine_gep::GepFlags;
+use crate::combine_gep::{GepFlags, GepRef};
 
 /// What `CommonPointerBase::compute` found: `ptr` is `None` when the chains
 /// share no pointer.
 pub(crate) struct CommonPointerBase {
     pub ptr: Option<Operand>,
     /// The GEPs from the left pointer down to `ptr`, outermost first.
-    pub lhs_geps: Vec<InstId>,
-    pub rhs_geps: Vec<InstId>,
+    pub lhs_geps: Vec<GepRef>,
+    pub rhs_geps: Vec<GepRef>,
     pub lhs_flags: GepFlags,
     pub rhs_flags: GepFlags,
 }
@@ -55,6 +57,26 @@ impl Combiner<'_> {
         v: Operand,
     ) -> Option<InstId> {
         self.definition_of(v).filter(|&def| self.gep_of(def).is_some())
+    }
+
+    /// The `GEPOperator` that defines `v`: an instruction or a constant
+    /// expression.
+    pub(crate) fn defining_gep_ref(
+        &self,
+        v: Operand,
+    ) -> Option<GepRef> {
+        self.gep_ref(v)
+    }
+
+    /// `Value::hasOneUse` of a `GEPOperator`.
+    fn gep_has_one_use(
+        &self,
+        gep: GepRef,
+    ) -> bool {
+        match gep {
+            GepRef::Inst(inst) => self.has_one_use(self.value_of(inst)),
+            GepRef::Const(id) => self.function.constant_users(id).has_one_use(),
+        }
     }
 
     /// `CommonPointerBase::compute`.
@@ -78,17 +100,17 @@ impl Combiner<'_> {
         let mut at = lhs;
         loop {
             pointers.insert(at);
-            match self.defining_gep(at) {
-                Some(gep) => at = self.gep_of(gep).expect("a getelementptr").ptr,
+            match self.defining_gep_ref(at) {
+                Some(gep) => at = self.gep_view(gep).ptr,
                 None => break,
             }
         }
         // Down the right chain to the first of them.
         let mut at = rhs;
         while !pointers.contains(&at) {
-            let Some(gep) = self.defining_gep(at) else { return base };
+            let Some(gep) = self.defining_gep_ref(at) else { return base };
             let (ptr, flags) = {
-                let found = self.gep_of(gep).expect("a getelementptr");
+                let found = self.gep_view(gep);
                 (found.ptr, GepFlags::of(found.flags))
             };
             base.rhs_flags =
@@ -100,9 +122,9 @@ impl Combiner<'_> {
         // And the left chain down to it.
         let mut at = lhs;
         while at != base.ptr.expect("set above") {
-            let gep = self.defining_gep(at).expect("the left chain reaches the shared pointer");
+            let gep = self.defining_gep_ref(at).expect("the left chain reaches the shared pointer");
             let (ptr, flags) = {
-                let found = self.gep_of(gep).expect("a getelementptr");
+                let found = self.gep_view(gep);
                 (found.ptr, GepFlags::of(found.flags))
             };
             base.lhs_flags =
@@ -120,8 +142,8 @@ impl Combiner<'_> {
         &self,
         base: &CommonPointerBase,
     ) -> bool {
-        let extra_multi_use = |geps: &[InstId]| {
-            let multi_use = geps.iter().filter(|&&gep| !self.has_one_use(self.value_of(gep))).count();
+        let extra_multi_use = |geps: &[GepRef]| {
+            let multi_use = geps.iter().filter(|&&gep| !self.gep_has_one_use(gep)).count();
             multi_use.saturating_sub(1)
         };
         extra_multi_use(&base.lhs_geps) + extra_multi_use(&base.rhs_geps) > 2
@@ -134,9 +156,10 @@ impl Combiner<'_> {
     pub(crate) fn emit_gep_offsets(
         &mut self,
         at: InstId,
-        geps: &[InstId],
+        geps: &[GepRef],
         flags: GepFlags,
         index_ty: TypeId,
+        rewrite: bool,
     ) -> Operand {
         let add = |this: &mut Self, sum: Option<Operand>, offset: Operand| match sum {
             Some(sum) => {
@@ -157,10 +180,15 @@ impl Combiner<'_> {
         let mut one_use_flags = GepFlags::ALL;
         for &gep in geps.iter().rev() {
             // At the GEP, so it can be rewritten; the sums go at `at`.
-            let mut offset = self.emit_gep_offset(gep, false);
-            let found = self.gep_of(gep).expect("a getelementptr");
+            let found = self.gep_view(gep);
+            // Only an instruction can be rewritten (`dyn_cast<Instruction>`).
+            let inst = match gep {
+                GepRef::Inst(inst) if rewrite => Some(inst),
+                _ => None,
+            };
+            let mut offset = self.emit_gep_offset_of(inst.unwrap_or(at), &found, false);
             let gep_flags = GepFlags::of(found.flags);
-            if self.has_one_use(self.value_of(gep)) {
+            if self.gep_has_one_use(gep) {
                 // Merged into the next multi-use GEP.
                 one_use_sum = Some(add(self, one_use_sum, offset));
                 one_use_flags = one_use_flags.intersect_for_offset_add(gep_flags);
@@ -172,12 +200,12 @@ impl Combiner<'_> {
             }
             let byte_gep_of_it =
                 self.context.types.int_bits(found.source) == Some(8) && found.indices.first() == Some(&offset);
-            if !byte_gep_of_it {
+            if let Some(inst) = inst.filter(|_| !byte_gep_of_it) {
                 let rewritten_flags = one_use_flags.intersect_for_offset_add(gep_flags);
                 let ptr = one_use_base.unwrap_or(found.ptr);
-                let new = self.create_ptr_add(gep, ptr, offset, rewritten_flags.flags());
-                self.replace_inst_with(gep, new);
-                self.erase(gep);
+                let new = self.create_ptr_add(inst, ptr, offset, rewritten_flags.flags());
+                self.replace_inst_with(inst, new);
+                self.erase(inst);
             }
             sum = Some(add(self, sum, offset));
             one_use_sum = None;
@@ -188,5 +216,40 @@ impl Combiner<'_> {
             sum = Some(add(self, sum, merged));
         }
         sum.unwrap_or_else(|| self.int(index_ty, 0))
+    }
+
+    /// `OptimizePointerDifference`: `lhs - rhs` of two pointers into one
+    /// object as the difference of their offsets, cast to `ty`.
+    pub(crate) fn optimize_pointer_difference(
+        &mut self,
+        at: InstId,
+        lhs: Operand,
+        rhs: Operand,
+        ty: TypeId,
+        is_nuw: bool,
+    ) -> Option<Operand> {
+        let base = self.common_pointer_base(lhs, rhs);
+        base.ptr?;
+        if self.is_expensive(&base) {
+            return None;
+        }
+        // To avoid duplicating the offset arithmetic, rewrite the GEP to use
+        // the computed offset.
+        let rewrite = !base.lhs_geps.is_empty() && !base.rhs_geps.is_empty();
+        let index_ty = self.index_type(self.type_of(lhs));
+        let mut result = self.emit_gep_offsets(at, &base.lhs_geps, base.lhs_flags, index_ty, rewrite);
+        let offset2 = self.emit_gep_offsets(at, &base.rhs_geps, base.rhs_flags, index_ty, rewrite);
+        // If we have a 2nd GEP of the same base pointer, subtract the offsets.
+        if !self.is_zero_constant(offset2) {
+            let mut wrap = Flags::default();
+            if is_nuw && base.lhs_flags.nuw && base.rhs_flags.nuw {
+                wrap.insert(Flags::NUW);
+            }
+            if base.lhs_flags.in_bounds && base.rhs_flags.in_bounds {
+                wrap.insert(Flags::NSW);
+            }
+            result = self.create_binop(at, BinaryOp::Sub, result, offset2, wrap);
+        }
+        Some(self.int_cast(at, result, ty))
     }
 }

@@ -1,5 +1,7 @@
 # What the reader of arm64.instr must know: see llrm_target::instr::Dialect.
 file = "arm64.instr"
+# The bridge of producer form names to LLVM opcodes: kinds, ties, flags and cost (`parse_opcodes`).
+opcodes = "opcodes.instr"
 # Register roots: the 64-bit general registers, sp, the zero register, the vector registers.
 registers = [
     "x0", "x1", "x2", "x3", "x4", "x5", "x6", "x7",
@@ -42,3 +44,13 @@ N = 0x8
 Z = 0x4
 C = 0x2
 V = 0x1
+
+# The letters of an opcode file's placeholders at each width (`{g}` is W at 32): the
+# general registers, the floating-point registers (`f` the result, `s` the source of a
+# conversion), and the sizes of an atomic access (`z` LLVM's letter, `zn` the producer's digit).
+[letters]
+g = { 32 = "W", 64 = "X" }
+f = { 16 = "H", 32 = "S", 64 = "D" }
+s = { 16 = "H", 32 = "S", 64 = "D" }
+z = { 8 = "B", 16 = "H", 32 = "W", 64 = "X" }
+zn = { 8 = "0", 16 = "1", 32 = "2", 64 = "3" }

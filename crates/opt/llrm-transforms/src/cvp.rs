@@ -70,6 +70,12 @@
 //!     per doubling). The pass's own work is O(n) (slope test on LVI solves).
 //!     Exit: #2348.
 //!
+//! ADDED beyond LLVM (GCC ranger, `gimple-range-edge`/`tree-vrp` edge
+//! simplification; no exit, LLVM has no such arm):
+//! 13. `min_max_value_on_edge`: `getValueOnEdge` also looks through a
+//!     min/max call, as it does a select; the phi takes the operand the ranges
+//!     on the edge decide.
+//!
 //! # Example
 //! In the block entered when `%x u< 10`, `udiv i32 %x, 16` is `0`: the range
 //! `[0, 10)` is below the divisor.
@@ -133,10 +139,18 @@ impl FunctionPass for Cvp {
             return PreservedAnalyses::all();
         }
         let globals = Rc::clone(&analyses.outer().globals);
-        let assumptions = AssumptionCache::of(unit.context, &globals, unit.metadata, unit.function);
+        let assumptions = AssumptionCache::of_declared(
+            unit.context,
+            &globals,
+            unit.metadata,
+            unit.function,
+            unit.declared.assume_declared(&globals),
+        );
 
         let shared = analyses.get::<llrm_mir::lazyvalueinfo::LviCache>(unit.context, unit.layout, unit.function);
-        let mut pass = State { unit, analyses, globals, assumptions, lvi: shared.take(), cfg_changed: false };
+        let guard_declared = unit.declared.guard_declared(&globals);
+        let mut pass =
+            State { unit, analyses, globals, assumptions, guard_declared, lvi: shared.take(), cfg_changed: false };
         #[cfg(test)]
         let before = pass.lvi.get_impl().map_or(0, |one| one.steps.solve);
         let changed = pass.run_impl();
@@ -159,6 +173,8 @@ struct State<'a, 'u> {
     analyses: &'a mut Analyses,
     globals: Rc<Vec<GlobalValue>>,
     assumptions: AssumptionCache,
+    /// Whether the module declares `llvm.experimental.guard`.
+    guard_declared: bool,
     lvi: LazyValueInfo,
     /// A `switch` edge went: the dominator tree is brought up to date before
     /// its next query and the pass does not claim to keep it.
@@ -209,6 +225,7 @@ impl State<'_, '_> {
             dom_conditions: None,
             cond_context: None,
             cxt: None,
+            pending_intrinsics: &[],
         }
     }
 
@@ -466,7 +483,8 @@ impl State<'_, '_> {
             &*self.unit.function,
             self.unit.layout,
             &self.assumptions,
-        );
+        )
+        .with_guard_declared(self.guard_declared);
         let found = self.lvi.get_constant(&mut env, v, at);
         found.map(|lattice| self.constant_of(lattice, v))
     }
@@ -484,7 +502,8 @@ impl State<'_, '_> {
             &*self.unit.function,
             self.unit.layout,
             &self.assumptions,
-        );
+        )
+        .with_guard_declared(self.guard_declared);
         self.lvi.get_constant_range(&mut env, v, at, undef_allowed)
     }
 
@@ -501,7 +520,8 @@ impl State<'_, '_> {
             &*self.unit.function,
             self.unit.layout,
             &self.assumptions,
-        );
+        )
+        .with_guard_declared(self.guard_declared);
         self.lvi.get_constant_range_at_use(&mut env, Use { user, index }, undef_allowed)
     }
 
@@ -519,9 +539,29 @@ impl State<'_, '_> {
             &*self.unit.function,
             self.unit.layout,
             &self.assumptions,
-        );
+        )
+        .with_guard_declared(self.guard_declared);
         let found = self.lvi.get_constant_on_edge(&mut env, v, from, to, Some(cxt));
         found.map(|lattice| self.constant_of(lattice, v))
+    }
+
+    fn lvi_range_on_edge(
+        &mut self,
+        v: Operand,
+        from: BlockId,
+        to: BlockId,
+        cxt: InstId,
+    ) -> ConstantRange {
+        let mut env = Env::new(
+            &mut *self.unit.context,
+            &self.globals,
+            self.unit.metadata,
+            &*self.unit.function,
+            self.unit.layout,
+            &self.assumptions,
+        )
+        .with_guard_declared(self.guard_declared);
+        self.lvi.get_constant_range_on_edge(&mut env, v, from, to, Some(cxt))
     }
 
     fn lvi_predicate_on_edge(
@@ -540,7 +580,8 @@ impl State<'_, '_> {
             &*self.unit.function,
             self.unit.layout,
             &self.assumptions,
-        );
+        )
+        .with_guard_declared(self.guard_declared);
         self.lvi.get_predicate_on_edge(&mut env, pred, v, c, from, to, Some(cxt))
     }
 
@@ -559,7 +600,8 @@ impl State<'_, '_> {
             &*self.unit.function,
             self.unit.layout,
             &self.assumptions,
-        );
+        )
+        .with_guard_declared(self.guard_declared);
         self.lvi.get_predicate_at(&mut env, pred, v, c, at, use_block_value)
     }
 
@@ -578,7 +620,8 @@ impl State<'_, '_> {
             &*self.unit.function,
             self.unit.layout,
             &self.assumptions,
-        );
+        )
+        .with_guard_declared(self.guard_declared);
         self.lvi.get_predicate_at_values(&mut env, pred, lhs, rhs, at, use_block_value)
     }
 
@@ -802,7 +845,7 @@ impl State<'_, '_> {
         // often allows us to remove the select later.
         let (si, select) = self.query().instruction_of(incoming)?;
         if select.opcode != Opcode::Select {
-            return None;
+            return self.min_max_value_on_edge(si, from, to, cxt);
         }
         let (condition, true_value, false_value) = (select.operands[0], select.operands[1], select.operands[2]);
 
@@ -844,6 +887,36 @@ impl State<'_, '_> {
             return Some(false_value);
         }
 
+        None
+    }
+
+    /// DEVIATE (GCC ranger edge simplification; LLVM has the select arm
+    /// only): a min/max is a select of its operands, so when the ranges of
+    /// the operands on the edge decide the compare, the phi takes the winner.
+    fn min_max_value_on_edge(
+        &mut self,
+        mm: InstId,
+        from: BlockId,
+        to: BlockId,
+        cxt: InstId,
+    ) -> Option<Operand> {
+        let id = self.intrinsic_id(mm)?;
+        let pred = match Self::min_max_predicate(id)? {
+            IntPredicate::Ult => IntPredicate::Ule,
+            IntPredicate::Ugt => IntPredicate::Uge,
+            IntPredicate::Slt => IntPredicate::Sle,
+            IntPredicate::Sgt => IntPredicate::Sge,
+            other => other,
+        };
+        let (lhs, rhs) = (self.op(mm, 0), self.op(mm, 1));
+        let lhs_cr = self.lvi_range_on_edge(lhs, from, to, cxt);
+        let rhs_cr = self.lvi_range_on_edge(rhs, from, to, cxt);
+        if lhs_cr.icmp(pred, &rhs_cr) {
+            return Some(lhs);
+        }
+        if rhs_cr.icmp(pred, &lhs_cr) {
+            return Some(rhs);
+        }
         None
     }
 
@@ -2176,6 +2249,7 @@ impl State<'_, '_> {
             let declaration = GlobalValue {
                 name: name.into(),
                 linkage: Linkage::External,
+                visibility: llrm_mir::Visibility::Default,
                 unnamed_addr: Default::default(),
                 address_space: 0,
                 kind: GlobalKind::Function(Box::new(function)),
@@ -2214,7 +2288,7 @@ impl State<'_, '_> {
             _ => true,
         };
         let at = attrs.iter().position(after).unwrap_or(attrs.len());
-        attrs.insert(at, Attribute::Flag("nonnull".to_owned()));
+        attrs.insert(at, Attribute::Flag("nonnull".into()));
         self.unit.function.set_call_attributes(call, info.attrs, info.return_attrs, arguments);
     }
 

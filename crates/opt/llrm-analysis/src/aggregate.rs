@@ -43,12 +43,19 @@ use llrm_mir::module::InstId;
 
 use crate::aa::{AAQueryInfo, AAResults, AliasResult, MemoryEffects, MemoryLocation, ModRefInfo};
 
-/// `AAResults` as a list of analyses (`addAAResult`).
-#[derive(Default)]
-pub struct AggregateAA<'a> {
-    results: Vec<Box<dyn AAResults + 'a>>,
+/// `AAResults` as a list of analyses (`addAAResult`). The providers are boxed
+/// by default; a fixed set of concrete ones (`DefaultAA`) is held without a
+/// box, which also leaves the aggregate without drop glue over its borrows.
+pub struct AggregateAA<'a, R = Box<dyn AAResults + 'a>> {
+    results: Vec<R>,
     /// The body the loads and stores asked of are read in.
     unit: Option<&'a crate::memory::Unit<'a>>,
+}
+
+impl<R> Default for AggregateAA<'_, R> {
+    fn default() -> Self {
+        Self { results: Vec::new(), unit: None }
+    }
 }
 
 impl<'a> AggregateAA<'a> {
@@ -75,7 +82,191 @@ impl<'a> AggregateAA<'a> {
     }
 }
 
-impl AAResults for AggregateAA<'_> {
+impl<'a> AggregateAA<'a, DefaultAA<'a>> {
+    /// The pin's default pipeline over `unit` (`buildDefaultAAPipeline`):
+    /// BasicAA first, so that type-based answers are asked only of what it
+    /// leaves MayAlias, then scoped no-alias, type-based and, where the module
+    /// analysis is held, GlobalsAA.
+    pub fn default_pipeline(unit: &'a crate::memory::Unit<'a>) -> Self {
+        let mut stack = Self { results: Vec::with_capacity(4), unit: Some(unit) };
+        stack.results.push(DefaultAA::Basic(crate::basicaa::BasicAA::new(unit)));
+        stack.results.push(DefaultAA::ScopedNoAlias(crate::scopednoaliasaa::ScopedNoAliasAA::new(unit)));
+        stack.results.push(DefaultAA::TypeBased(crate::typebasedaa::TypeBasedAA::new(unit)));
+        if let Some(info) = unit.globals_mr {
+            stack.results.push(DefaultAA::Globals(crate::globalsmodref::GlobalsAAResult::new(unit, info)));
+        }
+        stack
+    }
+}
+
+/// The providers of the default pipeline, by value.
+pub enum DefaultAA<'a> {
+    Basic(crate::basicaa::BasicAA<'a>),
+    ScopedNoAlias(crate::scopednoaliasaa::ScopedNoAliasAA<'a>),
+    TypeBased(crate::typebasedaa::TypeBasedAA<'a>),
+    Globals(crate::globalsmodref::GlobalsAAResult<'a>),
+}
+
+macro_rules! each {
+    ($self:ident, $one:ident => $call:expr) => {
+        match $self {
+            DefaultAA::Basic($one) => $call,
+            DefaultAA::ScopedNoAlias($one) => $call,
+            DefaultAA::TypeBased($one) => $call,
+            DefaultAA::Globals($one) => $call,
+        }
+    };
+}
+
+impl AAResults for DefaultAA<'_> {
+    fn alias(
+        &mut self,
+        a: &MemoryLocation,
+        b: &MemoryLocation,
+        aaqi: &mut AAQueryInfo,
+        ctx: Option<InstId>,
+    ) -> AliasResult {
+        each!(self, one => one.alias(a, b, aaqi, ctx))
+    }
+
+    fn get_mod_ref_info_mask(
+        &mut self,
+        loc: &MemoryLocation,
+        aaqi: &mut AAQueryInfo,
+        ignore_locals: bool,
+    ) -> ModRefInfo {
+        each!(self, one => one.get_mod_ref_info_mask(loc, aaqi, ignore_locals))
+    }
+
+    fn get_arg_mod_ref_info(
+        &mut self,
+        call: InstId,
+        arg: u32,
+    ) -> ModRefInfo {
+        each!(self, one => one.get_arg_mod_ref_info(call, arg))
+    }
+
+    fn get_memory_effects(
+        &mut self,
+        call: InstId,
+        aaqi: &mut AAQueryInfo,
+    ) -> MemoryEffects {
+        each!(self, one => one.get_memory_effects(call, aaqi))
+    }
+
+    fn get_mod_ref_info(
+        &mut self,
+        inst: InstId,
+        loc: Option<&MemoryLocation>,
+        aaqi: &mut AAQueryInfo,
+    ) -> ModRefInfo {
+        each!(self, one => one.get_mod_ref_info(inst, loc, aaqi))
+    }
+
+    fn get_mod_ref_info_with(
+        &mut self,
+        inst: InstId,
+        loc: Option<&MemoryLocation>,
+        aaqi: &mut AAQueryInfo,
+        others: &mut dyn FnMut(&MemoryLocation, &MemoryLocation, &mut AAQueryInfo, Option<InstId>) -> AliasResult,
+    ) -> ModRefInfo {
+        each!(self, one => one.get_mod_ref_info_with(inst, loc, aaqi, others))
+    }
+
+    fn get_mod_ref_info_call(
+        &mut self,
+        inst: InstId,
+        call: InstId,
+        aaqi: &mut AAQueryInfo,
+    ) -> ModRefInfo {
+        each!(self, one => one.get_mod_ref_info_call(inst, call, aaqi))
+    }
+
+    fn call_captures_before(
+        &mut self,
+        inst: InstId,
+        loc: &MemoryLocation,
+        aaqi: &mut AAQueryInfo,
+    ) -> ModRefInfo {
+        each!(self, one => one.call_captures_before(inst, loc, aaqi))
+    }
+}
+
+impl AAResults for Box<dyn AAResults + '_> {
+    fn alias(
+        &mut self,
+        a: &MemoryLocation,
+        b: &MemoryLocation,
+        aaqi: &mut AAQueryInfo,
+        ctx: Option<InstId>,
+    ) -> AliasResult {
+        (**self).alias(a, b, aaqi, ctx)
+    }
+
+    fn get_mod_ref_info_mask(
+        &mut self,
+        loc: &MemoryLocation,
+        aaqi: &mut AAQueryInfo,
+        ignore_locals: bool,
+    ) -> ModRefInfo {
+        (**self).get_mod_ref_info_mask(loc, aaqi, ignore_locals)
+    }
+
+    fn get_arg_mod_ref_info(
+        &mut self,
+        call: InstId,
+        arg: u32,
+    ) -> ModRefInfo {
+        (**self).get_arg_mod_ref_info(call, arg)
+    }
+
+    fn get_memory_effects(
+        &mut self,
+        call: InstId,
+        aaqi: &mut AAQueryInfo,
+    ) -> MemoryEffects {
+        (**self).get_memory_effects(call, aaqi)
+    }
+
+    fn get_mod_ref_info(
+        &mut self,
+        inst: InstId,
+        loc: Option<&MemoryLocation>,
+        aaqi: &mut AAQueryInfo,
+    ) -> ModRefInfo {
+        (**self).get_mod_ref_info(inst, loc, aaqi)
+    }
+
+    fn get_mod_ref_info_with(
+        &mut self,
+        inst: InstId,
+        loc: Option<&MemoryLocation>,
+        aaqi: &mut AAQueryInfo,
+        others: &mut dyn FnMut(&MemoryLocation, &MemoryLocation, &mut AAQueryInfo, Option<InstId>) -> AliasResult,
+    ) -> ModRefInfo {
+        (**self).get_mod_ref_info_with(inst, loc, aaqi, others)
+    }
+
+    fn get_mod_ref_info_call(
+        &mut self,
+        inst: InstId,
+        call: InstId,
+        aaqi: &mut AAQueryInfo,
+    ) -> ModRefInfo {
+        (**self).get_mod_ref_info_call(inst, call, aaqi)
+    }
+
+    fn call_captures_before(
+        &mut self,
+        inst: InstId,
+        loc: &MemoryLocation,
+        aaqi: &mut AAQueryInfo,
+    ) -> ModRefInfo {
+        (**self).call_captures_before(inst, loc, aaqi)
+    }
+}
+
+impl<R: AAResults> AAResults for AggregateAA<'_, R> {
     fn alias(
         &mut self,
         a: &MemoryLocation,
@@ -209,13 +400,13 @@ impl AAResults for AggregateAA<'_> {
 
 /// The meet of the providers' answers from the top, stopping at the first that
 /// leaves nothing.
-fn meet<'a>(
-    results: &mut [Box<dyn AAResults + 'a>],
-    mut ask: impl FnMut(&mut dyn AAResults) -> ModRefInfo,
+fn meet<R: AAResults>(
+    results: &mut [R],
+    mut ask: impl FnMut(&mut R) -> ModRefInfo,
 ) -> ModRefInfo {
     let mut answer = ModRefInfo::ModRef;
     for result in results {
-        answer = answer.intersect(ask(result.as_mut()));
+        answer = answer.intersect(ask(result));
         if answer.is_no_mod_ref() {
             break;
         }

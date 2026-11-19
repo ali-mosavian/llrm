@@ -1,5 +1,5 @@
 #!/bin/sh
-# Open Watcom's DOS C library (LLRM_OW), built from the source tree owshim/ow-commit pins and cached as ~/.cache/llrm/ow-clib-<commit>; its path
+# Open Watcom's tree with its DOS C library built (llrm-cc's {ow}), from the source tree owshim/ow-commit pins, cached as ~/.cache/llrm/ow-src-<commit>; its path
 # is printed. No installed Open Watcom: the tree's own bw* tools build it (tools/build-ow-clib.sh), the way toolchain/wdump.sh builds wdump.
 #   toolchain/owclib.sh           build (cached per commit) and print the directory
 #   toolchain/owclib.sh --print   print the directory it would be, building nothing
@@ -7,7 +7,7 @@ set -eu
 HERE="$(cd "$(dirname "$0")" && pwd)"
 OW_COMMIT=$(cat "$HERE/owshim/ow-commit")
 CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/llrm"
-DIR="$CACHE/ow-clib-$OW_COMMIT"
+DIR="$CACHE/ow-src-$OW_COMMIT"
 if [ "${1:-}" = --print ]; then
     echo "$DIR"
     exit 0

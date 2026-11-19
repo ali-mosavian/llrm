@@ -14,7 +14,7 @@
 //! DEVIATE 2: the folds that call a helper not yet translated are left out,
 //! each named where it stood: `foldXorToXor`, `visitMaskedMerge`, the
 //! `ctlz`/`cttz` and `fneg` bitcast folds, the `i1` select form of `(A & B) ^
-//! (A | C)`, `foldXorOfICmps`, `foldCastedBitwiseLogic`, `canonicalizeAbs`,
+//! (A | C)`, `foldXorOfICmps`, `canonicalizeAbs`,
 //! `reassociateForUses`, `canonicalizeLogicFirst`, `foldLogicOfIsFPClass`,
 //! `canonicalizeConditionalNegationViaMathToSelect`,
 //! `foldBinOpOfDisplacedShifts`, `foldBitwiseLogicWithIntrinsics` and
@@ -39,6 +39,7 @@ use llrm_mir::valuetracking::{Query, known, pattern};
 
 use crate::combine::{Combiner, Visit};
 use crate::combine_bitorder::fold_bitwise_logic_with_intrinsics;
+use crate::combine_casted_logic::fold_casted_bitwise_logic;
 use crate::combine_distribute::fold_using_distributive_laws;
 use crate::combine_shared::{
     binop, has_one_use, other_of, parts, query, simplify_associative_or_commutative, simplify_visited, width,
@@ -71,6 +72,7 @@ const FOLDS: &[Fold] = &[
     not_or_xor,
     or_or_common,
     hoist_xor_constant,
+    fold_casted_bitwise_logic,
     fold_bitwise_logic_with_intrinsics,
 ];
 

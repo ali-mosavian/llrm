@@ -19,7 +19,7 @@ use crate::abi::machine::Machine;
 use crate::backend::shadow::Selector;
 
 /// The options' usage line, for a frontend's own.
-pub const USAGE: &str = "[-O0|-O1|-O2|-O3|-Omax|-Os|-Oz|-Og] [-f[no-]PASS] [-fno-inline=NAME]... [-disable-lsr] [-f[no-]sanitize=CHECKS] [-f[no-]trapv] [-f[no-]wrapv] [-fexcess-precision=standard|fast] [-f[no-]float-store] [-m16|-m32|-m64] [-march=CPU] [-mtune=CPU] [-mabi=ABI] [-m[no-]stack-is-data] [-m[no-]far-bss] [-m[no-]bss-begin] [-mcode-segment=NAME] [--isel=old|dag|shadow] [--clocks-per-byte N] [--machine MACHINE] [-fstack-usage] [-Wstack-usage=N] [-fobject-format=omf|elf|macho|coff] [-g] [-o OUTPUT] [-S]";
+pub const USAGE: &str = "[-O0|-O1|-O2|-O3|-Omax|-Os|-Oz|-Og] [-f[no-]PASS] [-fno-inline=NAME]... [-disable-lsr] [-f[no-]sanitize=CHECKS] [-f[no-]trapv] [-f[no-]wrapv] [-fexcess-precision=standard|fast] [-f[no-]float-store] [-m16|-m32|-m64] [-march=CPU] [-mtune=CPU] [-mabi=ABI] [-m[no-]stack-is-data] [-m[no-]far-bss] [-m[no-]far-bss-init] [-m[no-]bss-begin] [-mcode-segment=NAME] [--isel=old|dag|shadow] [--no-midend] [--clocks-per-byte N] [--machine MACHINE] [-fstack-usage] [-Wstack-usage=N] [-fobject-format=omf|elf|macho|coff] [-f[no-]function-sections] [-g] [-o OUTPUT] [-S]";
 
 /// An `-O` level.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -72,6 +72,34 @@ impl Level {
     }
 }
 
+/// `-f<pass>` or `-fno-<pass>` applied to `options`; false when `flag` names
+/// no pass.
+pub fn apply_pass_flag(
+    options: &mut pipeline::Options,
+    flag: &str,
+) -> bool {
+    if INERT.contains(&flag) {
+        return true;
+    }
+    let Some(name) = flag.strip_prefix("-f") else { return false };
+    let (name, on) = name.strip_prefix("no-").map_or((name, true), |rest| (rest, false));
+    PASSES
+        .iter()
+        .find(|(one, _)| *one == name)
+        .is_some_and(
+            |(_, set)| {
+                set(options, on);
+                true
+            },
+        )
+}
+
+/// gcc switches for what this pipeline does by the pin's rules: taken,
+/// changing nothing, so a gcc or clang command line still builds
+/// (`-f[no-]peel-loops`: the translated LoopUnrollPass peels by the pin's
+/// rules).
+const INERT: &[&str] = &["-fpeel-loops", "-fno-peel-loops"];
+
 /// gcc's `-f` pass names, each with the options it sets.
 const PASSES: &[(&str, fn(&mut pipeline::Options, bool))] = &[
     ("allocation-search", |options, on| options.search = on),
@@ -80,7 +108,6 @@ const PASSES: &[(&str, fn(&mut pipeline::Options, bool))] = &[
         options.unroll = on;
         options.loop_unrolling = on;
     }),
-    ("peel-loops", |options, on| options.peel = on),
     ("inline-functions-called-once", |options, on| options.inline.last = on),
     ("inline-functions", |options, on| {
         options.inline = if !on {
@@ -96,16 +123,25 @@ const PASSES: &[(&str, fn(&mut pipeline::Options, bool))] = &[
     ("unswitch-loops", |options, on| options.unswitch = on),
     ("loop-interchange", |options, on| options.interchange = on),
     ("loop-unroll-and-jam", |options, on| options.unroll_and_jam = on),
+    ("tree-loop-vectorize", |options, on| options.vectorize = on),
+    ("llrm-vect-very-cheap", |options, on| options.vect_very_cheap = on),
     ("tree-ch", |options, on| options.copy_headers = on),
-    ("ipa-cp-clone", |options, on| options.inline.cp_clone = on),
-    ("inline-recursive", |options, on| options.inline.recursive = on),
+    ("ipa-cp-clone", |options, on| options.inline.cp_clone = Some(on)),
+    ("inline-recursive", |options, on| options.inline.recursive = Some(on)),
     ("gcse", |options, on| (options.forward, options.drop_loads) = (on, on)),
     ("tree-pre", |options, on| options.pre = on),
+    ("thread-jumps", |options, on| options.thread_jumps = on),
+    ("backward-threading", |options, on| options.backward_threading = on),
+    ("llrm-speed-rate", |options, on| options.speed_rate = on),
     ("tree-switch-conversion", |options, on| options.switch_conversion = on),
     ("jump-tables", |options, on| options.jump_tables = on),
     ("tree-dse", |options, on| options.drop_stores = on),
     ("tree-dce", |options, on| options.dead = on),
     ("tree-sink", |options, on| options.sink = on),
+    ("aarch64-atomic-cfg-tidy", |options, on| options.atomic_cfg_tidy = on),
+    ("llrm-cgpaddr", |options, on| options.cgpaddr = on),
+    ("llrm-typepromotion", |options, on| options.typepromotion = on),
+    ("llrm-zero-merge", |options, on| options.zero_merge = on),
     ("llrm-spares", |options, on| options.spare_loads = on),
     ("llrm-homes", |options, on| options.stored_homes = on),
     ("llrm-stable-loads", |options, on| options.stable_loads = on),
@@ -182,6 +218,7 @@ pub struct Flags {
     /// `-m[no-]stack-is-data`: whether the stack lives in the data group.
     stack_is_data: Option<bool>,
     far_bss: Option<bool>,
+    far_bss_init: Option<bool>,
     bss_begin: Option<bool>,
     /// `-mcode-segment=NAME`: every module's code goes in the segment NAME, not
     /// in `<MODULE>_TEXT`: the near calls and jumps between modules reach.
@@ -192,6 +229,9 @@ pub struct Flags {
     pub output: Option<PathBuf>,
     /// `-S`: assembly rather than an object.
     pub assembly: bool,
+    /// `-ffunction-sections`: on OMF each function is a COMDAT of its own,
+    /// which the linker drops where nothing refers to it.
+    pub function_sections: bool,
     pub sanitize: Sanitize,
     /// `-fwrapv`: signed arithmetic wraps, so a front end states no no-overflow
     /// promise of it.
@@ -205,13 +245,20 @@ pub struct Flags {
     /// `x86_regcallcc` (clang's `-fdefault-calling-conv=regcall`), so `ccc`
     /// is an explicit `__cdecl`.
     pub regcall_default: bool,
+    /// `-fallow-pending-abi`: emit for a platform whose description says its
+    /// ABI is not yet carried.
+    pub allow_pending_abi: bool,
+    /// `-frame-pointer=<all|non-leaf|non-leaf-no-reserve|reserved|none>`, the
+    /// pin's `cl::opt` of `CommandFlags.cpp` (:204): the `"frame-pointer"`
+    /// attribute of each function that has none.
+    pub frame_pointer: Option<String>,
     /// `-mc-library`: the library's functions (`cos`, `strlen`) keep their
     /// C convention, as the Borland library the program links has them.
     pub c_library: bool,
     /// `-g`: debug information, in the object format's own format unless
     /// `-gcodeview`, `-gdwarf[-N]` or `-gtd` says which.
     pub debug: bool,
-    pub debug_format: llrm_object::debug::Format,
+    pub debug_format: llrm_debug::Format,
     /// `-gdwarf` without a version: the target's default.
     dwarf_unversioned: bool,
     /// `-fobject-format=`: the object format to write, where the target has
@@ -228,6 +275,9 @@ pub struct Flags {
     pub no_inline: Vec<String>,
     /// `--isel=`: the instruction selector.
     pub isel: Option<Selector>,
+    /// `--no-midend`: the mid-end pipeline is skipped, the backend taking the
+    /// module as given.
+    pub no_midend: bool,
 }
 
 impl Default for Flags {
@@ -236,6 +286,8 @@ impl Default for Flags {
             wrapv: false,
             float_store: false,
             regcall_default: false,
+            allow_pending_abi: false,
+            frame_pointer: None,
             c_library: false,
             level: Level::O2,
             passes: Vec::new(),
@@ -246,11 +298,13 @@ impl Default for Flags {
             code_model: None,
             stack_is_data: None,
             far_bss: None,
+            far_bss_init: None,
             bss_begin: None,
             code_segment: None,
             milliclocks_per_byte: None,
             output: None,
             assembly: false,
+            function_sections: false,
             sanitize: Sanitize::default(),
             debug: false,
             abi: None,
@@ -261,6 +315,7 @@ impl Default for Flags {
             stack_limit: None,
             no_inline: Vec::new(),
             isel: None,
+            no_midend: false,
         }
     }
 }
@@ -289,6 +344,8 @@ impl Flags {
         match flag {
             "-o" | "--output" => self.output = Some(PathBuf::from(value("-o/--output")?)),
             "-S" => self.assembly = true,
+            "-ffunction-sections" => self.function_sections = true,
+            "-fno-function-sections" => self.function_sections = false,
             // LLVM's `-disable-lsr` (TargetPassConfig), also
             // as `-mllvm -disable-lsr`.
             "-disable-lsr" => self.disable_lsr(),
@@ -298,30 +355,42 @@ impl Flags {
             },
             "-g" => (self.debug, self.debug_format) = (true, Default::default()),
             "-g0" => self.debug = false,
-            "-gcodeview" => (self.debug, self.debug_format) = (true, llrm_object::debug::Format::CodeView),
+            "-gcodeview" => (self.debug, self.debug_format) = (true, llrm_debug::Format::CodeView),
             "-gdwarf" | "-gdwarf-5" => {
-                (self.debug, self.debug_format) = (true, llrm_object::debug::Format::Dwarf { version: 5 });
+                (self.debug, self.debug_format) = (true, llrm_debug::Format::Dwarf { version: 5 });
                 self.dwarf_unversioned = flag == "-gdwarf";
             }
             "-gdwarf-4" => {
-                (self.debug, self.debug_format) = (true, llrm_object::debug::Format::Dwarf { version: 4 });
+                (self.debug, self.debug_format) = (true, llrm_debug::Format::Dwarf { version: 4 });
                 self.dwarf_unversioned = false;
             }
             "-gdwarf-3" => {
-                (self.debug, self.debug_format) = (true, llrm_object::debug::Format::Dwarf { version: 3 });
+                (self.debug, self.debug_format) = (true, llrm_debug::Format::Dwarf { version: 3 });
                 self.dwarf_unversioned = false;
             }
             "-gdwarf-2" => {
-                (self.debug, self.debug_format) = (true, llrm_object::debug::Format::Dwarf { version: 2 });
+                (self.debug, self.debug_format) = (true, llrm_debug::Format::Dwarf { version: 2 });
                 self.dwarf_unversioned = false;
             }
-            "-gtd" => (self.debug, self.debug_format) = (true, llrm_object::debug::Format::TurboDebugger),
+            "-gtd" => (self.debug, self.debug_format) = (true, llrm_debug::Format::TurboDebugger),
             "-mstack-is-data" => self.stack_is_data = Some(true),
             "-mno-stack-is-data" => self.stack_is_data = Some(false),
             "-mregcall-default" => self.regcall_default = true,
+            "-fallow-pending-abi" => self.allow_pending_abi = true,
+            _ if flag.starts_with("-frame-pointer=") => {
+                let policy = &flag["-frame-pointer=".len()..];
+                if !["all", "non-leaf", "non-leaf-no-reserve", "reserved", "none"].contains(&policy) {
+                    return Err(format!(
+                        "-frame-pointer={policy}: expected all, non-leaf, non-leaf-no-reserve, reserved or none"
+                    ));
+                }
+                self.frame_pointer = Some(policy.to_owned());
+            }
             "-mc-library" => self.c_library = true,
             "-mfar-bss" => self.far_bss = Some(true),
             "-mno-far-bss" => self.far_bss = Some(false),
+            "-mfar-bss-init" => self.far_bss_init = Some(true),
+            "-mno-far-bss-init" => self.far_bss_init = Some(false),
             _ if flag.starts_with("-mcode-segment=") => {
                 self.code_segment = Some(flag["-mcode-segment=".len()..].to_owned())
             }
@@ -336,6 +405,7 @@ impl Flags {
                 );
             }
             "--isel" => self.isel = Some(Selector::parse(&value("--isel")?)?),
+            "--no-midend" => self.no_midend = true,
             "--machine" => self.machine = Some(PathBuf::from(value("--machine")?)),
             _ if flag.starts_with("-O") => self.level = Level::parse(&flag[2..])?,
             _ if Self::mode_flag(flag).is_some() => self.set_mode(Self::mode_flag(flag), flag)?,
@@ -383,6 +453,7 @@ impl Flags {
             "-ftrapv" | "-fno-trapv" => self.sanitize.signed_integer_overflow = flag == "-ftrapv",
             _ if flag.starts_with("-fsanitize=") => self.sanitize.set(&flag["-fsanitize=".len()..], true)?,
             _ if flag.starts_with("-fno-sanitize=") => self.sanitize.set(&flag["-fno-sanitize=".len()..], false)?,
+            _ if INERT.contains(&flag) => {}
             _ if flag.starts_with("-f") => {
                 let (name, on) = match flag[2..].strip_prefix("no-") {
                     Some(name) => (name, false),
@@ -511,6 +582,9 @@ impl Flags {
         if let Some(far_bss) = self.far_bss {
             machine.far_bss = far_bss;
         }
+        if let Some(far_bss_init) = self.far_bss_init {
+            machine.far_bss_init = far_bss_init;
+        }
         if let Some(bss_begin) = self.bss_begin {
             machine.bss_begin = bss_begin;
         }
@@ -529,8 +603,8 @@ impl Flags {
         // is.
         let object_format = self.format(&*arch).map_or("omf", |format| format.name());
         let debug_format = match self.debug_format {
-            llrm_object::debug::Format::Dwarf { .. } if self.dwarf_unversioned => {
-                llrm_object::debug::Format::Dwarf { version: arch.object().dwarf_version }
+            llrm_debug::Format::Dwarf { .. } if self.dwarf_unversioned => {
+                llrm_debug::Format::Dwarf { version: arch.object().dwarf_version }
             }
             other => other,
         };
@@ -543,6 +617,7 @@ impl Flags {
             no_inline: self.no_inline.clone(),
             stack_check: self.sanitize.stack,
             isel: self.isel.unwrap_or_else(|| Selector::for_target(&*arch)),
+            no_midend: self.no_midend,
             abi: self.abi.clone(),
             float_store: self.float_store,
             code_segment: self.code_segment.clone(),

@@ -36,10 +36,9 @@
 //! docs/architecture/gvn-port.md (stage 2).
 //!
 //! DEVIATE, permanent (MIR lacks the construct):
-//! 1. Atomics, fences, `va_arg`, masked loads and stores,
-//!    `invariant.start`/`end`: MIR has none, so the ordering and fence arms of
-//!    `GetLocation` and of the scan are absent. A volatile access has no
-//!    location (it is `isUnordered` false).
+//! 1. Atomics, fences, `va_arg`, masked loads and stores: MIR has none, so the
+//!    ordering and fence arms of `GetLocation` and of the scan are absent. A
+//!    volatile access has no location (it is `isUnordered` false).
 //! 2. `getInvariantGroupPointerDependency` (and with it `NonLocalDefsCache`,
 //!    only it fills): MIR has no `invariant.group`. A query on an instruction
 //!    that carries one panics, `test_invariant_group_metadata_is_refused`.
@@ -74,6 +73,11 @@ use crate::aa::{AAInfo, AAResults, AliasResult, BatchAAResults, LocationSize, Me
 use crate::effects;
 use crate::memory::Unit;
 use crate::mssa::phitrans::{Env as PhiEnv, PhiTransAddr, SelectAddrs};
+
+/// The pointer operand of `llvm.lifetime.start` / `.end`. MIR's markers still
+/// take the size first (`Intrinsics.td` has dropped it), so the pointer is
+/// operand 1, not the pin's 0.
+const LIFETIME_POINTER: u32 = 1;
 
 /// [`BlockScanLimit`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/MemoryDependenceAnalysis.cpp#L65),
 /// `memdep-block-scan-limit`.
@@ -256,6 +260,19 @@ pub fn get_location(
         Opcode::Load { .. } => (MemoryLocation::get(unit, inst), ModRefInfo::Ref),
         Opcode::Store { .. } => (MemoryLocation::get(unit, inst), ModRefInfo::Mod),
         opcode => {
+            // `MemoryDependenceAnalysis.cpp#L153-L162`.
+            if matches!(opcode, Opcode::Call(_)) {
+                let arg = match unit.intrinsic(inst) {
+                    Some(Intrinsic::InvariantStart) => Some(1),
+                    Some(Intrinsic::InvariantEnd) => Some(2),
+                    _ => None,
+                };
+                if let Some(arg) = arg {
+                    // They don't modify the memory, but Mod makes them
+                    // conservative.
+                    return (MemoryLocation::get_for_argument(unit, inst, arg), ModRefInfo::Mod);
+                }
+            }
             if matches!(opcode, Opcode::Call(_))
                 && matches!(
                     unit.intrinsic(inst),
@@ -264,7 +281,7 @@ pub fn get_location(
             {
                 // They don't modify the memory, but Mod makes them
                 // conservative.
-                return (MemoryLocation::get_for_argument(unit, inst, 0), ModRefInfo::Mod);
+                return (MemoryLocation::get_for_argument(unit, inst, LIFETIME_POINTER), ModRefInfo::Mod);
             }
             // The coarse-grained thing that always works.
             let calls = matches!(opcode, Opcode::Call(_) | Opcode::Invoke(_));
@@ -576,6 +593,7 @@ impl MemoryDependenceResults {
                 dom_conditions: None,
                 cond_context: None,
                 cxt: None,
+                pending_intrinsics: &[],
             };
             valuetracking::known::pointer_alignment(&q, mem_loc.ptr)
         };
@@ -601,7 +619,8 @@ impl MemoryDependenceResults {
             if matches!(function.instruction(inst).opcode, Opcode::Call(_))
                 && unit.intrinsic(inst) == Some(Intrinsic::LifetimeStart)
             {
-                let arg_loc = MemoryLocation::get_for_argument(unit, inst, 0).expect("lifetime names its object");
+                let arg_loc =
+                    MemoryLocation::get_for_argument(unit, inst, LIFETIME_POINTER).expect("lifetime names its object");
                 match batch.alias(&arg_loc, mem_loc) {
                     AliasResult::MustAlias => return MemDepResult::Def(inst),
                     AliasResult::NoAlias => continue,

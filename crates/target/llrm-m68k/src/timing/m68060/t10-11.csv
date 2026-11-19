@@ -1,0 +1,16 @@
+#title,Single-Operand Instruction Execution Times,page,10-18,notes,"¹ Add (1 + effective address calculation time) cycles for all addressing modes except Rn, (An), (An)+, -(An), and (d16,An). ² Add the effective address calculation time to these instructions."
+Instruction,Size,Register,Memory
+CAS,"Byte, Word¹",—,19(1/1)
+"""",Long¹,—,19(1/1)
+NBCD,Byte,1(0/0),1(1/1)²
+NEG,"Byte, Word",1(0/0),1(1/1)²
+"""",Long,1(0/0),1(1/1)²
+NEGX,"Byte, Word",1(0/0),1(1/1)²
+"""",Long,1(0/0),1(1/1)²
+NOT,"Byte, Word",1(0/0),1(1/1)²
+"""",Long,1(0/0),1(1/1)²
+Scc,Byte -> False,1(0/0),1(1/1)²
+"""",Byte -> True,1(0/0),1(1/1)²
+TAS,Byte,1(0/0),17(1/1)²
+TST,"Byte, Word",1(0/0),1(1/0)²
+"""",Long,1(0/0),1(1/0)²

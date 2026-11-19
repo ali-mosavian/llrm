@@ -161,7 +161,7 @@ impl<'m> ValueFacts<'m> {
                         return None;
                     }
                     let s = scev.get_scev(cx, operand);
-                    Some((scev.get_unsigned_range(cx, s), scev.get_signed_range(cx, s)))
+                    Some((scev.get_unsigned_range(cx, s).to_word::<u128>(), scev.get_signed_range(cx, s).to_word::<u128>()))
                 },
             )?;
         // What the conditions that dominate `at` and the assumptions say.

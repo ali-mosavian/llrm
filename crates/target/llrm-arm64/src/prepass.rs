@@ -12,11 +12,26 @@
 //! and equal values made in several blocks count once and are one value in the
 //! preheader (a second `MachineCSE` after the hoist).
 //!
-//! DEVIATE 3: LLVM runs these on the shared machine IR; this is a small version
-//! over the arm64 selector's operations, standing in until the core machine
-//! passes run on arm64 (docs/architecture/arm64-spike.md).
+//! A flag-setting add or subtract defines a register as the pin's `SUBSWri`
+//! does, so equal ones merge: one whose flags are dead is shared with an
+//! earlier equal one (`MachineCSE`). Afterwards one whose register nothing
+//! reads defines the zero register (`AArch64DeadRegisterDefinitions`, a
+//! compare) and one whose flags nothing reads is the plain instruction
+//! (`optimizeCompareInstr`, `convertToNonFlagSettingOpc`). A copy of a
+//! single-definition register is read through when expressions are compared
+//! (`PerformTrivialCopyPropagation`).
+//!
+//! A pure value, or a copy of the zero register, that is read only below its
+//! block is moved to the start of the nearest block dominating its readers
+//! (`MachineSink`), so a phi's constant is made on its edge and not on the
+//! paths that skip it. The pin pays the same extra jump where that edge block
+//! does not fall through to its target.
+//!
+//! DEVIATE SD530: LLVM runs these on the shared machine IR; this is a small
+//! version over the arm64 selector's operations, standing in until the core
+//! machine passes run on arm64 (docs/architecture/arm64-spike.md).
 
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
 use crate::mc::inst::*;
 use crate::mc::visit::{Reg, RegRef, Role};
@@ -37,6 +52,13 @@ fn pure(op: &Op) -> bool {
             let (defs, uses) = op.defs_and_uses();
             defs.iter().chain(&uses).all(|register| register.is_virtual())
         }
+        // A load from the GOT: the slot is constant memory, so a store in the
+        // loop does not change it (the pin: `PseudoSourceValue::GOT` is
+        // constant, `MachineLICM` hoists it).
+        Op::I(Inst::Load { addr: Addr::PageOffset { got: true, .. }, .. }) => {
+            let (defs, uses) = op.defs_and_uses();
+            defs.iter().chain(&uses).all(|register| register.is_virtual())
+        }
         Op::I(inst) => {
             matches!(
                 inst,
@@ -46,7 +68,7 @@ fn pure(op: &Op) -> bool {
                     | Inst::AddPageOffset { .. }
                     | Inst::Adr { .. }
                     | Inst::FpMoveImm { .. }
-                    | Inst::VectorFill { fill: Fill::Zero | Fill::Byte(_), .. }
+                    | Inst::VectorFill { fill: Fill::Zero | Fill::Byte(_) | Fill::Byte8(_) | Fill::Imm { .. } | Fill::Mask(_) | Fill::MaskD(_), .. }
                     | Inst::FpInt { op: FpConvert::Bits { to_fp: true }, .. }
             ) && !matches!(inst, Inst::AddSubImm { rd, .. } if !rd.is_virtual())
                 // Reading the stack pointer (stacksave, a dynamic alloca's
@@ -68,7 +90,7 @@ fn defined(op: &Op) -> Option<Reg> {
 
 /// `op` with its destination register made a fixed one, so that equal
 /// computations compare equal.
-fn keyed(op: &Op) -> String {
+pub fn keyed(op: &Op) -> Op {
     let mut copy = op.clone();
     copy.visit(&mut |register, role| {
         if role == Role::Def {
@@ -78,10 +100,10 @@ fn keyed(op: &Op) -> String {
             }
         }
     });
-    format!("{copy:?}")
+    copy
 }
 
-struct Cfg {
+pub struct Cfg {
     successors: Vec<Vec<usize>>,
     predecessors: Vec<Vec<usize>>,
     /// Immediate dominators; the entry's is itself.
@@ -90,7 +112,8 @@ struct Cfg {
     order: Vec<usize>,
 }
 
-fn cfg(function: &MFunc) -> Cfg {
+pub fn cfg(function: &MFunc) -> Cfg {
+    CFGS_BUILT.with(|built| built.set(built.get() + 1));
     let count = function.blocks.len();
     let labels: HashMap<&str, usize> =
         function.blocks.iter().enumerate().map(|(at, one)| (one.label.as_str(), at)).collect();
@@ -175,13 +198,32 @@ fn dominates(
 }
 
 /// How many definitions each virtual register has.
-fn definitions(function: &MFunc) -> HashMap<Reg, usize> {
-    let mut count: HashMap<Reg, usize> = HashMap::new();
+pub(crate) fn definitions(function: &MFunc) -> HashMap<Reg, usize> {
+    let mut count: HashMap<Reg, usize> = HashMap::default();
     for block in &function.blocks {
         for op in &block.ops {
-            for register in op.defs_and_uses().0 {
-                *count.entry(register).or_default() += 1;
-            }
+            op.for_each_register(&mut |register, role| {
+                if role.writes() {
+                    *count.entry(register).or_default() += 1;
+                }
+            });
+        }
+    }
+    count
+}
+
+/// How many fresh definitions each virtual register has: a write that is
+/// not also a read. A pre- or post-indexed access updates its base in place
+/// (`UseDef`), which is no second input of a phi.
+fn fresh_definitions(function: &MFunc) -> HashMap<Reg, usize> {
+    let mut count: HashMap<Reg, usize> = HashMap::default();
+    for block in &function.blocks {
+        for op in &block.ops {
+            op.for_each_register(&mut |register, role| {
+                if role == Role::Def {
+                    *count.entry(register).or_default() += 1;
+                }
+            });
         }
     }
     count
@@ -213,6 +255,7 @@ fn removable(op: &Op) -> bool {
             | Inst::FpSelect { .. }
             | Inst::FpMoveImm { .. }
             | Inst::FpToFp { .. }
+            | Inst::FpLaneToFp { .. }
             | Inst::FpInt { .. } => true,
             _ => false,
         },
@@ -241,64 +284,596 @@ fn dead_code(function: &mut MFunc) {
     }
 }
 
-pub fn run(function: &mut MFunc) {
+pub fn run(
+    function: &mut MFunc,
+    optsize: bool,
+) {
     dead_code(function);
+    unsplit_edges(function);
     if function.blocks.len() < 2 && function.blocks.iter().all(|block| block.ops.len() < 3) {
         return;
     }
-    cse(function);
-    hoist(function);
+    // No stage below adds, removes or retargets a block: the edges stay.
+    let graph = cfg(function);
+    cse(function, &graph, optsize);
+    hoist(function, &graph);
     // What was hoisted from several blocks is one value in the preheader.
-    cse(function);
+    cse(function, &graph, optsize);
+    sink(function, &graph);
+    crate::sinkfold::run(function, &graph);
+    dead_definitions(function);
+    non_flag_setting(function);
+    redundant_zero_extends(function);
+    redundant_zero_high_moves(function);
+    narrow_extension_uses(function);
+    dead_code(function);
+}
+
+/// The registers `op` reads as 32 bits: the operands of a `W` form and of the
+/// long multiplies.
+fn narrow_reads(op: &mut Op) -> Vec<&mut Gpr> {
+    match op {
+        Op::I(Inst::ThreeSource { op, width, rn, rm, ra, .. }) => match (op, width) {
+            (Mul3::Smaddl | Mul3::Smsubl | Mul3::Umaddl | Mul3::Umsubl, _) => vec![rn, rm],
+            (Mul3::Madd | Mul3::Msub, Width::W) => vec![rn, rm, ra],
+            _ => Vec::new(),
+        },
+        Op::I(Inst::AddSubImm { width: Width::W, rn, .. } | Inst::LogicImm { width: Width::W, rn, .. }) => vec![rn],
+        Op::I(
+            Inst::AddSubShifted { width: Width::W, rn, rm, .. } | Inst::LogicShifted { width: Width::W, rn, rm, .. },
+        ) => vec![rn, rm],
+        _ => Vec::new(),
+    }
+}
+
+/// `PeepholeOptimizer::optimizeExtInstr`
+/// ([PeepholeOptimizer.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/PeepholeOptimizer.cpp#L587),
+/// `AArch64InstrInfo::isCoalescableExtInstr`): a 32 to 64 bit extension whose
+/// result is only read as 32 bits (through copies) is not needed; the readers
+/// take its source. `switch`'s `digit * digit` kept `sxtw` for the `smull`
+/// that reads its low half.
+fn narrow_extension_uses(function: &mut MFunc) {
+    let definitions = definitions(function);
+    let copies = single_copies(function, &definitions);
+    let root = |mut register: Reg| {
+        while let Some(&next) = copies.get(&register) {
+            register = next;
+        }
+        register
+    };
+    let mut extensions: HashMap<Reg, Reg> = HashMap::default();
+    for op in function.blocks.iter().flat_map(|block| &block.ops) {
+        if let Op::I(Inst::BitfieldMove {
+            op: Bitfield::Sbfm | Bitfield::Ubfm,
+            width: Width::X,
+            rd,
+            rn,
+            immr: 0,
+            imms: 31,
+        }) = op
+            && rd.is_virtual()
+            && rn.is_virtual()
+            && definitions.get(&Reg::Gpr(*rd)) == Some(&1)
+            && definitions.get(&Reg::Gpr(*rn)) == Some(&1)
+        {
+            extensions.insert(Reg::Gpr(*rd), Reg::Gpr(*rn));
+        }
+    }
+    if extensions.is_empty() {
+        return;
+    }
+    // An extension is dropped only when every read of it, through copies, is
+    // a 32-bit one.
+    let mut blocked: HashSet<Reg> = HashSet::default();
+    for block in &mut function.blocks {
+        for op in &mut block.ops {
+            let is_copy = matches!(op, Op::Copy { .. });
+            let narrow: Vec<Gpr> = narrow_reads(op).into_iter().map(|slot| *slot).collect();
+            let uses = op.defs_and_uses().1;
+            let mut narrow_left = narrow;
+            for used in uses {
+                let at = root(used);
+                if !extensions.contains_key(&at) || is_copy && used == at {
+                    continue;
+                }
+                match used {
+                    Reg::Gpr(gpr) => match narrow_left.iter().position(|one| *one == gpr) {
+                        Some(index) if !is_copy => {
+                            narrow_left.remove(index);
+                        }
+                        _ if is_copy => {}
+                        _ => {
+                            blocked.insert(at);
+                        }
+                    },
+                    Reg::Fpr(_) => {
+                        blocked.insert(at);
+                    }
+                }
+            }
+        }
+    }
+    for block in &mut function.blocks {
+        for op in &mut block.ops {
+            for slot in narrow_reads(op) {
+                let at = root(Reg::Gpr(*slot));
+                if let Some(&Reg::Gpr(source)) = extensions.get(&at).filter(|_| !blocked.contains(&at)) {
+                    *slot = source;
+                }
+            }
+        }
+    }
+}
+
+/// A flag-setting instruction whose register nothing reads defines the zero
+/// register (`AArch64DeadRegisterDefinitions`): that is a compare.
+fn dead_definitions(function: &mut MFunc) {
+    let read: HashSet<Reg> =
+        function.blocks.iter().flat_map(|block| &block.ops).flat_map(|op| op.defs_and_uses().1).collect();
+    for block in &mut function.blocks {
+        for op in &mut block.ops {
+            if let Op::I(Inst::AddSubImm { rd, .. } | Inst::AddSubShifted { rd, .. } | Inst::AddSubExtended { rd, .. }) =
+                op
+                && rd.is_virtual()
+                && !read.contains(&Reg::Gpr(*rd))
+            {
+                *rd = Gpr::R31;
+            }
+        }
+    }
+}
+
+/// An add or subtract that sets flags nothing reads is the plain instruction
+/// (`optimizeCompareInstr`, `convertToNonFlagSettingOpc`).
+fn non_flag_setting(function: &mut MFunc) {
+    for block in &mut function.blocks {
+        for at in 0..block.ops.len() {
+            if flag_setting(&block.ops[at]) && flags_dead(&block.ops, at) {
+                if let Op::I(
+                    Inst::AddSubImm { op, .. } | Inst::AddSubShifted { op, .. } | Inst::AddSubExtended { op, .. },
+                ) = block.ops.op_mut(at)
+                {
+                    op.set_flags = false;
+                }
+            }
+        }
+    }
+}
+
+/// A pure value that is read only below the block making it is made at the
+/// start of the nearest block that dominates its readers, so the paths that
+/// skip them do not pay for it (`MachineSink`; a phi's constant is made on its
+/// edge). A block in a loop the maker is not in is no target. A value moves one
+/// step at a time: what it reads goes next, in the following round.
+fn sink(
+    function: &mut MFunc,
+    cfg: &Cfg,
+) {
+    forward_coalesce(function);
+    for _ in 0..16 {
+        let definitions = definitions(function);
+        let loops = natural_loops(function, cfg);
+        let depth = |block: usize| loops.iter().filter(|(_, body)| body.contains(&block)).count();
+        let mut readers: HashMap<Reg, Vec<usize>> = HashMap::default();
+        for (at, block) in function.blocks.iter().enumerate() {
+            for op in &block.ops {
+                for register in op.defs_and_uses().1 {
+                    readers.entry(register).or_default().push(at);
+                }
+            }
+        }
+        let mut moves: Vec<(usize, usize, usize)> = Vec::new();
+        for &from in &cfg.order {
+            for (index, op) in function.blocks[from].ops.iter().enumerate() {
+                // The zero register is the same value everywhere.
+                let zero = matches!(
+                    op,
+                    Op::Copy { dst, src } if dst.is_virtual() && *src == Reg::Gpr(Gpr::R31)
+                );
+                if !(pure(op) || zero) {
+                    continue;
+                }
+                let Some(register) = defined(op) else { continue };
+                // The zero register is a constant (`isConstantPhysReg`), not a
+                // value some definition makes.
+                let once = |one: &Reg| definitions.get(one) == Some(&1) || *one == Reg::Gpr(Gpr::R31);
+                if !once(&register) || !(zero || op.defs_and_uses().1.iter().all(once)) {
+                    continue;
+                }
+                let Some(blocks) = readers.get(&register) else { continue };
+                let mut target = blocks[0];
+                for &reader in &blocks[1..] {
+                    while !dominates(cfg, target, reader) {
+                        target = cfg.idom[target];
+                    }
+                }
+                // "Don't sink into a deeper cycle": the work would repeat on
+                // each trip of an inner loop.
+                if target != from
+                    && cfg.order.contains(&target)
+                    && dominates(cfg, from, target)
+                    && depth(target) <= depth(from)
+                {
+                    moves.push((from, index, target));
+                }
+            }
+        }
+        if moves.is_empty() {
+            return;
+        }
+        let mut sunk: HashMap<usize, Vec<Op>> = HashMap::default();
+        for &(from, index, target) in &moves {
+            sunk.entry(target).or_default().push(function.blocks[from].ops[index].clone());
+        }
+        for &(from, index, _) in moves.iter().rev() {
+            function.blocks[from].ops.remove(index);
+        }
+        for (target, ops) in sunk {
+            for op in ops.into_iter().rev() {
+                function.blocks[target].ops.insert(0, op);
+            }
+        }
+    }
+}
+
+/// A copy of a once-defined register that nothing else reads is its source
+/// under the copy's name, and the copy goes: the pin's
+/// `PerformTrivialForwardCoalescing`, run on each instruction `MachineSink`
+/// looks at. Without it the copies a phi's constant passes through (`Imm`,
+/// `copy`, `copy`) keep it from sinking onto its edge.
+fn forward_coalesce(function: &mut MFunc) {
+    let definitions = definitions(function);
+    let mut reads: HashMap<Reg, usize> = HashMap::default();
+    for block in &function.blocks {
+        for op in &block.ops {
+            for register in op.defs_and_uses().1 {
+                *reads.entry(register).or_default() += 1;
+            }
+        }
+    }
+    let mut rename: HashMap<Reg, Reg> = HashMap::default();
+    let mut gone: Vec<(usize, usize)> = Vec::new();
+    for (at, block) in function.blocks.iter().enumerate() {
+        for (index, op) in block.ops.iter().enumerate() {
+            let Op::Copy { dst, src } = op else { continue };
+            if dst.is_virtual()
+                && src.is_virtual()
+                && std::mem::discriminant(dst) == std::mem::discriminant(src)
+                && definitions.get(dst) == Some(&1)
+                && definitions.get(src) == Some(&1)
+                && reads.get(src) == Some(&1)
+            {
+                rename.insert(*dst, *src);
+                gone.push((at, index));
+            }
+        }
+    }
+    if rename.is_empty() {
+        return;
+    }
+    let none = HashMap::default();
+    for block in &mut function.blocks {
+        for index in 0..block.ops.len() {
+            let op = renamed(&block.ops[index], &rename, &none);
+            *block.ops.op_mut(index) = op;
+        }
+    }
+    for &(at, index) in gone.iter().rev() {
+        function.blocks[at].ops.remove(index);
+    }
+}
+
+/// The virtual registers that are plain copies of another, each defined once:
+/// reading the copy is reading its source (`PerformTrivialCopyPropagation`).
+fn single_copies(
+    function: &MFunc,
+    definitions: &HashMap<Reg, usize>,
+) -> HashMap<Reg, Reg> {
+    function
+        .blocks
+        .iter()
+        .flat_map(|block| &block.ops)
+        .filter_map(|op| match op {
+            Op::Copy { dst, src } if dst.is_virtual() && src.is_virtual() => Some((*dst, *src)),
+            _ => None,
+        })
+        .filter(|(dst, src)| definitions.get(dst) == Some(&1) && definitions.get(src) == Some(&1))
+        .collect()
+}
+
+/// `op` with the uses that earlier removals renamed, and copies read through.
+fn renamed(
+    op: &Op,
+    rename: &HashMap<Reg, Reg>,
+    copies: &HashMap<Reg, Reg>,
+) -> Op {
+    let mut copy = op.clone();
+    copy.visit(&mut |slot, role| {
+        if role == Role::Use {
+            let mut key = slot.key();
+            while let Some(&found) = rename.get(&key).or_else(|| copies.get(&key)) {
+                key = found;
+            }
+            match (slot, key) {
+                (RegRef::Gpr(slot), Reg::Gpr(new)) => *slot = new,
+                (RegRef::Fpr(slot), Reg::Fpr(new)) => *slot = new,
+                _ => {}
+            }
+        }
+    });
+    copy
+}
+
+/// Whether `op` sets the flags and defines a register, as the pin's `SUBSWri`
+/// with a `$nzcv` def that may be dead.
+fn flag_setting(op: &Op) -> bool {
+    match op {
+        Op::I(
+            Inst::AddSubImm { op, rd, .. } | Inst::AddSubShifted { op, rd, .. } | Inst::AddSubExtended { op, rd, .. },
+        ) => op.set_flags && rd.is_virtual(),
+        _ => false,
+    }
+}
+
+/// Whether the flags `block.ops[at]` sets are overwritten before anything reads
+/// them (`$nzcv` is `dead`). The flags do not live out of a block.
+fn flags_dead(
+    ops: &[Op],
+    at: usize,
+) -> bool {
+    for op in &ops[at + 1..] {
+        if matches!(
+            op,
+            Op::I(
+                Inst::BranchCond { .. }
+                    | Inst::CondSelect { .. }
+                    | Inst::CondCompare { .. }
+                    | Inst::FpCondCompare { .. }
+            )
+        ) {
+            return false;
+        }
+        if crate::flagcse::writes_flags(op) {
+            return true;
+        }
+    }
+    true
 }
 
 /// Equal pure computations of a dominating block are used instead of repeated.
-fn cse(function: &mut MFunc) {
-    let cfg = cfg(function);
+/// Where each register is read: (block, index).
+fn readers_of(function: &MFunc) -> HashMap<Reg, Vec<(usize, usize)>> {
+    let mut readers: HashMap<Reg, Vec<(usize, usize)>> = HashMap::default();
+    for (block, body) in function.blocks.iter().enumerate() {
+        for (index, op) in body.ops.iter().enumerate() {
+            for used in op.defs_and_uses().1 {
+                readers.entry(used).or_default().push((block, index));
+            }
+        }
+    }
+    readers
+}
+
+/// `MachineCSE::isProfitableToCSE`: sharing `earlier` with `register` stretches
+/// `earlier`'s range, so it is not done for an operation with no register
+/// operand whose result is only copied (heuristic 2) unless every reader of
+/// `register` already reads `earlier`.
+///
+/// Heuristics 1 (a cheap operation across non-adjacent blocks) and 3 (phi
+/// readers) follow the pin
+/// ([MachineCSE.cpp#L435](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/MachineCSE.cpp#L435));
+/// within one block equal operations always merge (one DAG node in the pin).
+///
+/// DEVIATE: at `optsize` they always merge (a shared constant is the smaller
+/// code; the heuristics guard register pressure). Without it 9 of 36 arm64
+/// -Os cells are bigger and 1 smaller (recpow -4 B; jpeg_fixed +20, stft_single
+/// +24, lru +16, handoff/w15-cse-heur-only-ab-2026-11-10.md). Owner w15.
+/// Exit: 11-30. Not over a call: a constant shared past one is kept in a
+/// callee-saved register (two more instructions per call level, recpow -Os),
+/// where the pin makes it again after the call.
+fn profitable(
+    readers: &HashMap<Reg, Vec<(usize, usize)>>,
+    fresh: &HashMap<Reg, usize>,
+    blocks: &[crate::mfunc::MBlock],
+    earlier: Reg,
+    register: Reg,
+    op: &Op,
+    earlier_block: usize,
+    block: usize,
+    successors: &[Vec<usize>],
+) -> bool {
+    let reads = |one: Reg| readers.get(&one).map_or(&[][..], Vec::as_slice);
+    let seen = reads(earlier);
+    if reads(register).iter().all(|reader| seen.contains(reader)) {
+        return true;
+    }
+    // Heuristic 1: a cheap operation is not shared past the block after the
+    // one that made it.
+    if as_cheap_as_a_move(op) && earlier_block != block && !successors[earlier_block].contains(&block) {
+        return false;
+    }
+    let no_register_operand = !op.defs_and_uses().1.iter().any(|used| used.is_virtual());
+    // A copy chain that ends in a register written in several places is a
+    // phi's input: the pin sees a PHI there, which is no copy.
+    let phi_input = |start: Reg| {
+        let mut pending = vec![start];
+        let mut steps = 0;
+        while let Some(one) = pending.pop() {
+            steps += 1;
+            if steps > 16 {
+                return true;
+            }
+            for &(block, index) in reads(one) {
+                if let Op::Copy { dst, .. } = blocks[block].ops[index] {
+                    if fresh.get(&dst) != Some(&1) {
+                        return true;
+                    }
+                    pending.push(dst);
+                }
+            }
+        }
+        false
+    };
+    let only_copied = reads(register).iter().all(|&(block, index)| matches!(blocks[block].ops[index], Op::Copy { .. }))
+        && !phi_input(register);
+    if no_register_operand && only_copied {
+        return false;
+    }
+    // Heuristic 3: a value a phi reads is not reused unless it is read in
+    // this block already.
+    reads(earlier).iter().any(|&(reader, _)| reader == block) || !phi_input(earlier)
+}
+
+/// AArch64 `isAsCheapAsAMove`: one move-immediate-like instruction.
+fn as_cheap_as_a_move(op: &Op) -> bool {
+    match op {
+        Op::Imm { bits, value, .. } => crate::expand_imm::cheap_move_immediate((*bits / 8) as u8, *value as i64),
+        Op::I(inst) => matches!(
+            inst,
+            Inst::MoveWide { .. } | Inst::LogicImm { .. } | Inst::AddSubImm { .. } | Inst::FpMoveImm { .. }
+        ),
+        _ => false,
+    }
+}
+
+/// Whether a call runs between the definition of `earlier` (in `from`) and
+/// the operation `at` of `to`, on some path: sharing a constant over it keeps
+/// the value in a callee-saved register or reloads it, where the pin's greedy
+/// makes it again after the call (a rematerializable `MOVi32imm`).
+fn call_between(
+    blocks: &[crate::mfunc::MBlock],
+    cfg: &Cfg,
+    earlier: Reg,
+    from: usize,
+    to: usize,
+    at: usize,
+) -> bool {
+    let is_call = |op: &Op| matches!(op, Op::Call { .. });
+    let defined_at = blocks[from].ops.iter().position(|op| defined(op) == Some(earlier)).unwrap_or(0);
+    if blocks[from].ops[defined_at..].iter().any(is_call) || blocks[to].ops[..at].iter().any(is_call) {
+        return true;
+    }
+    let reach = |start: usize, edges: &[Vec<usize>]| {
+        let mut seen = HashSet::default();
+        let mut pending = vec![start];
+        while let Some(one) = pending.pop() {
+            if seen.insert(one) {
+                pending.extend(edges[one].iter().copied());
+            }
+        }
+        seen
+    };
+    let (after, before) = (reach(from, &cfg.successors), reach(to, &cfg.predecessors));
+    after.intersection(&before).any(|&one| one != from && one != to && blocks[one].ops.iter().any(is_call))
+}
+
+/// The `adrp`s the pin keeps inside a `MOVaddr`: a page register defined once
+/// and read only by the `add :lo12:` of the same symbol in its block. The pin
+/// has one instruction there, which `MachineCSE` never equates with the bare
+/// `ADRP` a folded load uses, so the two stay apart: sharing the page makes
+/// the address live across a call in a callee-saved register, and its holder
+/// saves it in the entry, which shrink wrapping then cannot move. Not at
+/// `optsize`, where a shared page is the smaller code (the DEVIATE of
+/// [`profitable`]).
+fn address_pair_heads(
+    function: &MFunc,
+    definitions: &HashMap<Reg, usize>,
+) -> HashSet<(usize, usize)> {
+    let readers = readers_of(function);
+    let mut heads = HashSet::default();
+    for (block, body) in function.blocks.iter().enumerate() {
+        for (index, op) in body.ops.iter().enumerate() {
+            let Op::I(Inst::Adr { page: true, rd, target, got: false }) = op else { continue };
+            let page = Reg::Gpr(*rd);
+            if definitions.get(&page) != Some(&1) {
+                continue;
+            }
+            if let [(reader_block, reader)] = readers.get(&page).map_or(&[][..], Vec::as_slice)
+                && *reader_block == block
+                && matches!(
+                    &body.ops[*reader],
+                    Op::I(Inst::AddPageOffset { rn, target: add, .. }) if rn == rd && add == target
+                )
+            {
+                heads.insert((block, index));
+            }
+        }
+    }
+    heads
+}
+
+fn cse(
+    function: &mut MFunc,
+    cfg: &Cfg,
+    optsize: bool,
+) {
     let definitions = definitions(function);
+    let fresh = fresh_definitions(function);
     // The table, scoped by the dominator tree: a block sees what its
     // dominators computed.
     let mut children: Vec<Vec<usize>> = vec![Vec::new(); function.blocks.len()];
     for &block in cfg.order.iter().skip(1) {
         children[cfg.idom[block]].push(block);
     }
-    let mut rename: HashMap<Reg, Reg> = HashMap::new();
-    let mut removed: HashSet<(usize, usize)> = HashSet::new();
-    let mut table: HashMap<String, Reg> = HashMap::new();
-    let mut stack: Vec<(usize, usize, Vec<String>)> = vec![(0, 0, Vec::new())];
+    let mut rename: HashMap<Reg, Reg> = HashMap::default();
+    let mut removed: HashSet<(usize, usize)> = HashSet::default();
+    let mut table: HashMap<(Op, bool), Reg> = HashMap::default();
+    let heads = if optsize { HashSet::default() } else { address_pair_heads(function, &definitions) };
+    // The block each table entry's register is defined in: equal operations in
+    // one block are one DAG node in the pin, shared whatever their readers.
+    let mut home: HashMap<Reg, usize> = HashMap::default();
+    let copies = single_copies(function, &definitions);
+    let readers = readers_of(function);
+    let mut stack: Vec<(usize, usize, Vec<(Op, bool)>)> = vec![(0, 0, Vec::new())];
     // Depth-first over the tree, undoing a block's entries when it is left.
     while let Some((block, next, added)) = stack.last_mut() {
         if *next == 0 {
             let mut entries = Vec::new();
             for (index, op) in function.blocks[*block].ops.iter().enumerate() {
-                if !pure(op) {
+                let setter = flag_setting(op);
+                if !(pure(op) || setter) {
                     continue;
                 }
                 let Some(register) = defined(op) else { continue };
                 if definitions.get(&register) != Some(&1) {
                     continue;
                 }
-                // Uses renamed already by earlier removals.
-                let mut copy = op.clone();
-                copy.visit(&mut |slot, role| {
-                    if role == Role::Use {
-                        let key = slot.key();
-                        if let Some(found) = rename.get(&key) {
-                            match (slot, found) {
-                                (RegRef::Gpr(slot), Reg::Gpr(new)) => *slot = *new,
-                                (RegRef::Fpr(slot), Reg::Fpr(new)) => *slot = *new,
-                                _ => {}
-                            }
-                        }
-                    }
-                });
-                let key = keyed(&copy);
+                let key = (keyed(&renamed(op, &rename, &copies)), heads.contains(&(*block, index)));
                 match table.get(&key) {
-                    Some(&earlier) => {
+                    // A flag-setting instruction is shared where its own flags
+                    // are dead: the earlier one still sets them
+                    // (`MachineCSE`, `PhysRegDefsReach`).
+                    Some(&earlier)
+                        if (!setter || flags_dead(&function.blocks[*block].ops, index))
+                            && ((optsize
+                                && !(as_cheap_as_a_move(op)
+                                    && call_between(
+                                        &function.blocks,
+                                        cfg,
+                                        earlier,
+                                        home[&earlier],
+                                        *block,
+                                        index,
+                                    )))
+                                || home.get(&earlier) == Some(block)
+                                || profitable(
+                                    &readers,
+                                    &fresh,
+                                    &function.blocks,
+                                    earlier,
+                                    register,
+                                    op,
+                                    home[&earlier],
+                                    *block,
+                                    &cfg.successors,
+                                )) =>
+                    {
                         rename.insert(register, earlier);
                         removed.insert((*block, index));
                     }
+                    Some(_) => {}
                     None => {
+                        home.insert(register, *block);
                         table.insert(key.clone(), register);
                         entries.push(key);
                     }
@@ -362,8 +937,8 @@ fn invariants(
         changed = false;
         for &block in blocks {
             let ops = std::mem::take(&mut function.blocks[block].ops);
-            let mut kept = Vec::with_capacity(ops.len());
-            for op in ops {
+            let mut kept = crate::mfunc::OpList::default();
+            for (op, loc) in ops {
                 let invariant = pure(&op)
                     && defined(&op).is_some_and(|register| {
                         definitions.get(&register) == Some(&1) && only.is_none_or(|chosen| chosen.contains(&register))
@@ -373,13 +948,15 @@ fn invariants(
                         .1
                         .iter()
                         .all(|used| !inside_defs.contains(used) || !used.is_virtual() && false)
-                    && op.defs_and_uses().1.iter().all(|used| used.is_virtual());
+                    // The zero register is a constant, not a value the loop
+                    // could change.
+                    && op.defs_and_uses().1.iter().all(|used| used.is_virtual() || *used == Reg::Gpr(Gpr::R31));
                 if invariant {
                     inside_defs.remove(&defined(&op).expect("a definition"));
                     hoisted.push(op);
                     changed = true;
                 } else {
-                    kept.push(op);
+                    kept.push_at(op, loc);
                 }
             }
             function.blocks[block].ops = kept;
@@ -388,54 +965,180 @@ fn invariants(
     hoisted
 }
 
-/// The registers among `candidates` (what `probe`, the loop without them,
-/// would have hoisted) worth a register for the whole loop: those the loop
-/// reads most, as many as the registers not already held by what the loop
-/// reads from outside, plus what they are made from.
-/// The virtual registers live into each block.
-fn live_in(
+/// The virtual registers live into each block: one row of bits per block over
+/// the virtual registers the function mentions.
+pub struct Liveness {
+    index: HashMap<Reg, u32>,
+    registers: Vec<Reg>,
+    words: usize,
+    rows: Vec<u64>,
+}
+
+impl Liveness {
+    fn row(
+        &self,
+        block: usize,
+    ) -> &[u64] {
+        &self.rows[block * self.words..(block + 1) * self.words]
+    }
+
+    pub fn contains(
+        &self,
+        block: usize,
+        register: Reg,
+    ) -> bool {
+        self.index.get(&register).is_some_and(|&at| self.row(block)[at as usize / 64] >> (at % 64) & 1 == 1)
+    }
+
+    /// The registers live into `block`.
+    pub fn iter(
+        &self,
+        block: usize,
+    ) -> impl Iterator<Item = Reg> + '_ {
+        self.row(block).iter().enumerate().flat_map(move |(word, &bits)| {
+            (0..64).filter(move |bit| bits >> bit & 1 == 1).map(move |bit| self.registers[word * 64 + bit])
+        })
+    }
+}
+
+thread_local! {
+    static LIVENESS_RUNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static CFGS_BUILT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread has built a [`Cfg`].
+pub fn cfgs_built() -> usize {
+    CFGS_BUILT.with(std::cell::Cell::get)
+}
+
+/// How many times this thread has computed liveness (for the tests that pin
+/// when a stage asks for it).
+pub fn liveness_runs() -> usize {
+    LIVENESS_RUNS.with(std::cell::Cell::get)
+}
+
+pub fn live_in(
     function: &MFunc,
     cfg: &Cfg,
-) -> Vec<HashSet<Reg>> {
+) -> Liveness {
+    LIVENESS_RUNS.with(|runs| runs.set(runs.get() + 1));
     let count = function.blocks.len();
-    let mut gen_kill: Vec<(HashSet<Reg>, HashSet<Reg>)> = Vec::with_capacity(count);
-    for block in &function.blocks {
-        let (mut gen_set, mut kill) = (HashSet::new(), HashSet::new());
+    // One walk of the operations: what each reads and writes, by number.
+    let (mut index, mut registers): (HashMap<Reg, u32>, Vec<Reg>) = (HashMap::default(), Vec::new());
+    let mut touches: Vec<(u32, bool, bool)> = Vec::new();
+    let mut ends: Vec<(usize, usize)> = Vec::new();
+    for (at, block) in function.blocks.iter().enumerate() {
         for op in &block.ops {
-            let (defs, uses) = op.defs_and_uses();
-            gen_set.extend(uses.into_iter().filter(|used| used.is_virtual() && !kill.contains(used)));
-            kill.extend(defs.into_iter().filter(|def| def.is_virtual()));
+            op.for_each_register(&mut |register, role| {
+                if register.is_virtual() {
+                    let next = registers.len() as u32;
+                    let number = *index.entry(register).or_insert(next);
+                    if number == next {
+                        registers.push(register);
+                    }
+                    touches.push((number, role.reads(), role.writes()));
+                }
+            });
+            ends.push((at, touches.len()));
         }
-        gen_kill.push((gen_set, kill));
     }
-    let mut live: Vec<HashSet<Reg>> = vec![HashSet::new(); count];
+    let words = registers.len().div_ceil(64);
+    let mut gen_rows = vec![0u64; count * words];
+    let mut kill_rows = vec![0u64; count * words];
+    let mut from = 0;
+    for &(block, end) in &ends {
+        let row = block * words..(block + 1) * words;
+        let (gen_row, kill_row) = (&mut gen_rows[row.clone()], &mut kill_rows[row]);
+        // Reads happen before the writes of the same operation.
+        for &(number, reads, _) in &touches[from..end] {
+            let (word, bit) = (number as usize / 64, number % 64);
+            if reads && kill_row[word] >> bit & 1 == 0 {
+                gen_row[word] |= 1 << bit;
+            }
+        }
+        for &(number, _, writes) in &touches[from..end] {
+            if writes {
+                kill_row[number as usize / 64] |= 1 << (number % 64);
+            }
+        }
+        from = end;
+    }
+    let mut rows = vec![0u64; count * words];
+    let mut input = vec![0u64; words];
     let mut changed = true;
     while changed {
         changed = false;
         for &block in cfg.order.iter().rev() {
-            let mut input: HashSet<Reg> =
-                cfg.successors[block].iter().flat_map(|&next| live[next].iter().copied()).collect();
-            input.retain(|register| !gen_kill[block].1.contains(register));
-            input.extend(gen_kill[block].0.iter().copied());
-            if input != live[block] {
-                live[block] = input;
+            input.fill(0);
+            for &next in &cfg.successors[block] {
+                for (word, bits) in input.iter_mut().zip(&rows[next * words..(next + 1) * words]) {
+                    *word |= bits;
+                }
+            }
+            let row = block * words..(block + 1) * words;
+            for ((word, kill), gen_bits) in input.iter_mut().zip(&kill_rows[row.clone()]).zip(&gen_rows[row.clone()]) {
+                *word = *word & !kill | gen_bits;
+            }
+            if input != rows[row.clone()] {
+                rows[row].copy_from_slice(&input);
                 changed = true;
             }
         }
     }
-    live
+    Liveness { index, registers, words, rows }
 }
 
+/// The most virtual registers (general, floating point) live at once at a
+/// point of `blocks`, leaving out `skip` (`MachineLICM`'s `RegPressure` over
+/// the loop: its temporaries count, not only what it holds across trips).
+pub(crate) fn peak_pressure(
+    function: &MFunc,
+    blocks: &[usize],
+    cfg: &Cfg,
+    live: &Liveness,
+    skip: &HashMap<Reg, &Op>,
+) -> (usize, usize) {
+    let count = |set: &HashSet<Reg>| {
+        let gprs = set.iter().filter(|register| matches!(register, Reg::Gpr(_))).count();
+        (gprs, set.len() - gprs)
+    };
+    let (mut gprs, mut fprs) = (0, 0);
+    for &block in blocks {
+        let mut now: HashSet<Reg> = cfg.successors[block]
+            .iter()
+            .flat_map(|&next| live.iter(next))
+            .filter(|register| register.is_virtual() && !skip.contains_key(register))
+            .collect();
+        let (g, f) = count(&now);
+        (gprs, fprs) = (gprs.max(g), fprs.max(f));
+        for op in function.blocks[block].ops.iter().rev() {
+            let (defs, uses) = op.defs_and_uses();
+            for register in defs {
+                now.remove(&register);
+            }
+            now.extend(uses.into_iter().filter(|register| register.is_virtual() && !skip.contains_key(register)));
+            let (g, f) = count(&now);
+            (gprs, fprs) = (gprs.max(g), fprs.max(f));
+        }
+    }
+    (gprs, fprs)
+}
+
+/// The registers among `candidates` (what `probe`, the loop without them,
+/// would have hoisted) worth a register for the whole loop: those the loop
+/// reads most, as many as the registers not already held by what the loop
+/// reads from outside, plus what they are made from.
 fn within_pressure(
     probe: &MFunc,
     blocks: &[usize],
     candidates: &[Op],
-    held: &HashSet<Reg>,
+    cfg: &Cfg,
+    live: &Liveness,
 ) -> HashSet<Reg> {
     use crate::regalloc::pool;
     let made: HashMap<Reg, &Op> =
         candidates.iter().filter_map(|op| defined(op).map(|register| (register, op))).collect();
-    let (mut reads, mut calls) = (HashMap::<Reg, usize>::new(), false);
+    let (mut reads, mut calls) = (HashMap::<Reg, usize>::default(), false);
     for op in blocks.iter().flat_map(|&block| &probe.blocks[block].ops) {
         calls |= matches!(op, Op::Call { .. });
         for used in op.defs_and_uses().1 {
@@ -444,22 +1147,19 @@ fn within_pressure(
             }
         }
     }
-    // Held throughout the loop: what is live into its header (read from
-    // outside, or carried round it), which is not one of the values hoisted.
-    let outside: HashSet<Reg> = held.iter().copied().filter(|register| !made.contains_key(register)).collect();
+    let (held_gprs, held_fprs) = peak_pressure(probe, blocks, cfg, live, &made);
     // Across a call only the callee-saved registers keep a value.
     let room = |gpr: bool| {
         let (kept, rest) = if gpr {
-            (pool::GPR_CALLEE_SAVED.len(), pool::GPR_CALLER_SAVED.len())
+            (pool::GPR_CALLEE_SAVED.len(), crate::lir_view::gpr_caller_saved_count())
         } else {
             (pool::FPR_CALLEE_SAVED.len(), pool::FPR_CALLER_SAVED.len())
         };
-        (if calls { kept } else { kept + rest })
-            .saturating_sub(outside.iter().filter(|register| matches!(register, Reg::Gpr(_)) == gpr).count())
+        (if calls { kept } else { rest }).saturating_sub(if gpr { held_gprs } else { held_fprs })
     };
     // Equal values made in different blocks are one value once hoisted (the
     // `cse` after it joins them): they cost one register, and are read by all.
-    let mut groups: HashMap<String, (Vec<Reg>, usize)> = HashMap::new();
+    let mut groups: HashMap<Op, (Vec<Reg>, usize)> = HashMap::default();
     for (register, count) in reads {
         let group = groups.entry(keyed(made[&register])).or_default();
         group.0.push(register);
@@ -470,7 +1170,7 @@ fn within_pressure(
         registers.sort();
     }
     roots.sort_by(|(a, x), (b, y)| y.cmp(x).then(a.cmp(b)));
-    let mut chosen: HashSet<Reg> = HashSet::new();
+    let mut chosen: HashSet<Reg> = HashSet::default();
     let (mut gprs, mut fprs) = (room(true), room(false));
     for (registers, _) in roots {
         let gpr = matches!(registers[0], Reg::Gpr(_));
@@ -490,17 +1190,17 @@ fn within_pressure(
     chosen
 }
 
-/// Loop-invariant pure definitions move to the end of the loop's preheader.
-fn hoist(function: &mut MFunc) {
-    let cfg = cfg(function);
-    let definitions = definitions(function);
-    let live = live_in(function, &cfg);
-    // The natural loops: a back edge's header dominates its tail.
+/// The natural loops, each as its header and body: a back edge's header
+/// dominates its tail.
+fn natural_loops(
+    function: &MFunc,
+    cfg: &Cfg,
+) -> Vec<(usize, HashSet<usize>)> {
     let mut loops: Vec<(usize, HashSet<usize>)> = Vec::new();
     for tail in 0..function.blocks.len() {
         for &header in &cfg.successors[tail] {
-            if cfg.idom[tail] != usize::MAX && dominates(&cfg, header, tail) {
-                let mut body: HashSet<usize> = HashSet::from([header, tail]);
+            if cfg.idom[tail] != usize::MAX && dominates(cfg, header, tail) {
+                let mut body: HashSet<usize> = [header, tail].into_iter().collect();
                 let mut work = vec![tail];
                 while let Some(block) = work.pop() {
                     if block == header {
@@ -519,6 +1219,17 @@ fn hoist(function: &mut MFunc) {
             }
         }
     }
+    loops
+}
+
+/// Loop-invariant pure definitions move to the end of the loop's preheader.
+fn hoist(
+    function: &mut MFunc,
+    cfg: &Cfg,
+) {
+    let definitions = definitions(function);
+    let live = live_in(function, cfg);
+    let mut loops = natural_loops(function, cfg);
     // Innermost first, so a value hoisted out of an inner loop can go on out of
     // the outer one.
     loops.sort_by_key(|(_, body)| body.len());
@@ -526,7 +1237,7 @@ fn hoist(function: &mut MFunc) {
         let outside: Vec<usize> = cfg.predecessors[header].iter().copied().filter(|one| !body.contains(one)).collect();
         let [preheader] = outside[..] else { continue };
         // What the loop defines.
-        let mut inside_defs: HashSet<Reg> = HashSet::new();
+        let mut inside_defs: HashSet<Reg> = HashSet::default();
         for &block in &body {
             for op in &function.blocks[block].ops {
                 inside_defs.extend(op.defs_and_uses().0);
@@ -537,7 +1248,7 @@ fn hoist(function: &mut MFunc) {
         // What the loop would hoist, on a copy, and how much of it fits.
         let mut probe = function.clone();
         let candidates = invariants(&mut probe, &order, &definitions, inside_defs.clone(), None);
-        let chosen = within_pressure(&probe, &order, &candidates, &live[header]);
+        let chosen = within_pressure(&probe, &order, &candidates, cfg, &live);
         let hoisted = invariants(function, &order, &definitions, inside_defs, Some(&chosen));
         if hoisted.is_empty() {
             continue;
@@ -599,7 +1310,7 @@ mod tests {
         let (a, b, c, d) = (64, 65, 66, 67);
         function.next_register = 70;
         function.blocks = vec![
-            MBlock { label: "entry".into(), ops: vec![movz(a, 5000), movz(b, 0), branch_to("loop")] },
+            MBlock { label: "entry".into(), ops: vec![movz(a, 5000), movz(b, 0), branch_to("loop")].into() },
             MBlock {
                 label: "loop".into(),
                 ops: vec![
@@ -612,11 +1323,79 @@ mod tests {
                         target: Target::Label("loop".into()),
                     }),
                     branch_to("exit"),
-                ],
+                ]
+                .into(),
             },
-            MBlock { label: "exit".into(), ops: vec![Op::Return { uses: vec![], tail: None }] },
+            MBlock { label: "exit".into(), ops: vec![Op::Return { uses: vec![], tail: None }].into() },
         ];
         function
+    }
+
+    /// head -> head.e1 -> head | exit: the back edge's block holds one phi
+    /// copy.
+    fn split_back_edge() -> MFunc {
+        let mut function = MFunc::new("f");
+        let (a, b, c, d) = (64, 65, 66, 67);
+        function.next_register = 70;
+        let cbnz = |target: &str| {
+            Op::I(Inst::CompareBranch {
+                nonzero: true,
+                width: Width::X,
+                rt: Gpr(d),
+                target: Target::Label(target.into()),
+            })
+        };
+        function.blocks = vec![
+            MBlock { label: "entry".into(), ops: vec![movz(a, 1), movz(b, 2), branch_to("head")].into() },
+            MBlock { label: "head".into(), ops: vec![add(d, a, b), cbnz("head.e1"), branch_to("exit")].into() },
+            MBlock {
+                label: "head.e1".into(),
+                ops: vec![Op::Copy { dst: Reg::Gpr(Gpr(c)), src: Reg::Gpr(Gpr(a)) }, branch_to("head")].into(),
+            },
+            MBlock { label: "exit".into(), ops: vec![Op::Return { uses: vec![], tail: None }].into() },
+        ];
+        function
+    }
+
+    /// `unsplit_edges` computed liveness for every function at the top of each
+    /// round, 3 of queens' 9 liveness runs, although only an edge that passes
+    /// every other test asks what is live.
+    #[test]
+    fn a_function_with_no_edge_block_computes_no_liveness_to_unsplit_edges() {
+        let mut quiet = function();
+        let before = liveness_runs();
+        unsplit_edges(&mut quiet);
+        assert_eq!(liveness_runs(), before, "liveness computed for a function with no edge block");
+        let mut split = split_back_edge();
+        let before = liveness_runs();
+        unsplit_edges(&mut split);
+        assert_eq!(split.blocks.len(), 3, "the premise: the back edge's block is merged");
+        assert!(liveness_runs() > before, "the premise: a merge asks what is live");
+    }
+
+    /// Every stage of `run` built the block graph again (13 times in queens'
+    /// one function, 0.3 M of its prepass) although none changes the edges.
+    #[test]
+    fn the_prepass_builds_the_block_graph_once_for_its_stages() {
+        let mut function = function();
+        let before = cfgs_built();
+        run(&mut function, false);
+        let built = cfgs_built() - before;
+        // One for `unsplit_edges`' look at the edges, one for the stages.
+        assert!(built <= 2, "{built} block graphs for one function");
+    }
+
+    /// A value made in the entry and read in the exit is live into the loop
+    /// and the exit, not into the entry that makes it; a value made and read
+    /// in the loop is live into no block.
+    #[test]
+    fn a_value_is_live_from_its_block_to_its_last_reader() {
+        let function = function();
+        let live = live_in(&function, &cfg(&function));
+        let (b, c) = (Reg::Gpr(Gpr(65)), Reg::Gpr(Gpr(66)));
+        assert!(live.contains(1, b) && !live.contains(0, b), "b is made in the entry and read in the loop");
+        assert!(!live.contains(1, c) && !live.contains(0, c), "c is made and read in the loop");
+        assert_eq!(live.iter(1).collect::<Vec<_>>(), vec![b]);
     }
 
     /// The loop made 5000 again on each trip although the entry had it in a
@@ -624,11 +1403,314 @@ mod tests {
     #[test]
     fn a_constant_the_loop_remakes_is_the_entrys() {
         let mut function = function();
-        run(&mut function);
+        run(&mut function, false);
         let movzs = |block: usize| {
             function.blocks[block].ops.iter().filter(|op| matches!(op, Op::I(Inst::MoveWide { .. }))).count()
         };
         assert_eq!((movzs(0), movzs(1)), (2, 0), "{function:#?}");
+    }
+
+    /// The loop used 30011 and so did a block after a call, which read it as a
+    /// copy: the two were one value, held in a callee-saved register across
+    /// the call (recpow -O1: a third saved register, +2.6k instructions over
+    /// the pin; `isProfitableToCSE` heuristic 2 keeps them apart).
+    #[test]
+    fn a_constant_only_copied_is_not_shared_with_the_loops() {
+        let mut function = MFunc::new("f");
+        let (a, b, c, d, e) = (64, 65, 66, 67, 68);
+        function.next_register = 70;
+        let copy = |dst: u32, src: u32| Op::Copy { dst: Reg::Gpr(Gpr(dst)), src: Reg::Gpr(Gpr(src)) };
+        function.blocks = vec![
+            MBlock { label: "entry".into(), ops: vec![movz(b, 0), branch_to("loop")].into() },
+            MBlock {
+                label: "loop".into(),
+                ops: vec![
+                    movz(a, 5000),
+                    add(d, b, a),
+                    Op::I(Inst::CompareBranch {
+                        nonzero: true,
+                        width: Width::X,
+                        rt: Gpr(d),
+                        target: Target::Label("loop".into()),
+                    }),
+                    branch_to("after"),
+                ]
+                .into(),
+            },
+            MBlock {
+                label: "after".into(),
+                ops: vec![
+                    movz(c, 5000),
+                    copy(e, c),
+                    add(69, e, d),
+                    Op::Return { uses: vec![Reg::Gpr(Gpr(69))], tail: None },
+                ]
+                .into(),
+            },
+        ];
+        run(&mut function, false);
+        let movzs = |block: usize| {
+            function.blocks[block].ops.iter().filter(|op| matches!(op, Op::I(Inst::MoveWide { .. }))).count()
+        };
+        assert_eq!(movzs(2), 1, "{function:#?}");
+    }
+
+    /// At `optsize` the constant a later block makes is the loop's: one
+    /// `mov` (jpeg_fixed -Os: a seventh `mov w, #1024` for the kept `sdiv`,
+    /// +4 bytes over the pin-faithful heuristic alone).
+    #[test]
+    fn at_optsize_a_constant_only_copied_is_shared() {
+        let mut function = MFunc::new("f");
+        let (a, b, c, d, e) = (64, 65, 66, 67, 68);
+        function.next_register = 70;
+        let copy = |dst: u32, src: u32| Op::Copy { dst: Reg::Gpr(Gpr(dst)), src: Reg::Gpr(Gpr(src)) };
+        function.blocks = vec![
+            MBlock { label: "entry".into(), ops: vec![movz(b, 0), branch_to("loop")].into() },
+            MBlock {
+                label: "loop".into(),
+                ops: vec![
+                    movz(a, 5000),
+                    add(d, b, a),
+                    Op::I(Inst::CompareBranch {
+                        nonzero: true,
+                        width: Width::X,
+                        rt: Gpr(d),
+                        target: Target::Label("loop".into()),
+                    }),
+                    branch_to("after"),
+                ]
+                .into(),
+            },
+            MBlock {
+                label: "after".into(),
+                ops: vec![
+                    movz(c, 5000),
+                    copy(e, c),
+                    add(69, e, d),
+                    Op::Return { uses: vec![Reg::Gpr(Gpr(69))], tail: None },
+                ]
+                .into(),
+            },
+        ];
+        run(&mut function, true);
+        let movzs = |block: usize| {
+            function.blocks[block].ops.iter().filter(|op| matches!(op, Op::I(Inst::MoveWide { .. }))).count()
+        };
+        assert_eq!(movzs(2), 0, "{function:#?}");
+    }
+
+    /// recpow -Os: the divisor of `power`'s even path was shared with the
+    /// one after the recursive call, so it lived over the call in `x20`
+    /// (`stp x20, x19` and `ldp x20, x19` where gcc and the pin save one
+    /// register): +9.0% executed instructions at -104 B of headroom.
+    #[test]
+    fn at_optsize_a_constant_is_not_shared_over_a_call() {
+        let mut function = MFunc::new("f");
+        let (a, b, c, d, e) = (64, 65, 66, 67, 68);
+        function.next_register = 70;
+        let copy = |dst: u32, src: u32| Op::Copy { dst: Reg::Gpr(Gpr(dst)), src: Reg::Gpr(Gpr(src)) };
+        function.blocks = vec![
+            MBlock { label: "entry".into(), ops: vec![movz(b, 0), branch_to("loop")].into() },
+            MBlock {
+                label: "loop".into(),
+                ops: vec![
+                    movz(a, 5000),
+                    add(d, b, a),
+                    Op::I(Inst::CompareBranch {
+                        nonzero: true,
+                        width: Width::X,
+                        rt: Gpr(d),
+                        target: Target::Label("loop".into()),
+                    }),
+                    branch_to("call"),
+                ]
+                .into(),
+            },
+            MBlock {
+                label: "call".into(),
+                ops: vec![
+                    Op::Call {
+                        callee: crate::mfunc::Callee::Symbol("g".into()),
+                        uses: Vec::new(),
+                        defs: Vec::new(),
+                        tail: false,
+                    },
+                    branch_to("after"),
+                ]
+                .into(),
+            },
+            MBlock {
+                label: "after".into(),
+                ops: vec![
+                    movz(c, 5000),
+                    copy(e, c),
+                    add(69, e, d),
+                    Op::Return { uses: vec![Reg::Gpr(Gpr(69))], tail: None },
+                ]
+                .into(),
+            },
+        ];
+        run(&mut function, true);
+        let movzs = |block: usize| {
+            function.blocks[block].ops.iter().filter(|op| matches!(op, Op::I(Inst::MoveWide { .. }))).count()
+        };
+        assert_eq!(movzs(3), 1, "{function:#?}");
+    }
+
+    /// Heuristic 3: a value a phi reads is not reused in a block that does not
+    /// read it already (the pin: `isProfitableToCSE`, the PHI scan).
+    #[test]
+    fn a_value_a_phi_reads_is_not_reused_in_another_block() {
+        let mut function = MFunc::new("f");
+        let (a, b, c, d, phi) = (64, 65, 66, 67, 70);
+        function.next_register = 80;
+        let copy = |dst: u32, src: u32| Op::Copy { dst: Reg::Gpr(Gpr(dst)), src: Reg::Gpr(Gpr(src)) };
+        function.blocks = vec![
+            MBlock {
+                label: "entry".into(),
+                ops: vec![movz(b, 1), movz(c, 2), add(a, b, c), copy(phi, a), branch_to("next")].into(),
+            },
+            MBlock {
+                label: "next".into(),
+                ops: vec![add(d, b, c), copy(phi, d), Op::Return { uses: vec![Reg::Gpr(Gpr(phi))], tail: None }].into(),
+            },
+        ];
+        run(&mut function, false);
+        let adds = function.blocks[1].ops.iter().filter(|op| matches!(op, Op::I(Inst::AddSubShifted { .. }))).count();
+        assert_eq!(adds, 1, "{function:#?}");
+    }
+
+    /// A loop of 15 constants kept two in the loop (`switch`: `mov w1, #37` on
+    /// every trip, +2177 executed over the pin): the allocatable set lacked x15
+    /// and x18, which the pin hands out on Linux, so hoisting had room for 13.
+    #[test]
+    fn fifteen_loop_constants_are_all_hoisted_on_linux() {
+        crate::lir_view::set_darwin(false);
+        let mut ops = Vec::new();
+        for n in 0..15u32 {
+            ops.push(movz(100 + n, n as u16 + 1));
+            ops.push(add(64, 64, 100 + n));
+        }
+        ops.push(Op::I(Inst::CompareBranch {
+            nonzero: true,
+            width: Width::X,
+            rt: Gpr(64),
+            target: Target::Label("loop".into()),
+        }));
+        ops.push(branch_to("exit"));
+        let mut function = MFunc::new("f");
+        function.next_register = 300;
+        function.blocks = vec![
+            MBlock { label: "entry".into(), ops: vec![movz(64, 0), branch_to("loop")].into() },
+            MBlock { label: "loop".into(), ops: ops.into() },
+            MBlock { label: "exit".into(), ops: vec![Op::Return { uses: vec![], tail: None }].into() },
+        ];
+        let graph = cfg(&function);
+        hoist(&mut function, &graph);
+        let made = |block: usize| {
+            function.blocks[block].ops.iter().filter(|op| matches!(op, Op::I(Inst::MoveWide { .. }))).count()
+        };
+        assert_eq!(made(1), 0, "{function:#?}");
+    }
+
+    /// `sxtw` was kept for a `smull` that reads only the low half of its
+    /// result (`switch`: `sbfm x15, x1, #0, #31` and +4 B). The pin's
+    /// `optimizeExtInstr` has the reader take the source.
+    #[test]
+    fn an_extension_read_only_as_32_bits_is_dropped() {
+        let sext = Op::I(Inst::BitfieldMove {
+            op: Bitfield::Sbfm,
+            width: Width::X,
+            rd: Gpr(71),
+            rn: Gpr(70),
+            immr: 0,
+            imms: 31,
+        });
+        let smull = Op::I(Inst::ThreeSource {
+            op: Mul3::Smaddl,
+            width: Width::X,
+            rd: Gpr(72),
+            rn: Gpr(71),
+            rm: Gpr(71),
+            ra: Gpr(31),
+        });
+        let mut function = MFunc::new("f");
+        function.next_register = 80;
+        function.blocks = vec![MBlock {
+            label: "entry".into(),
+            ops: vec![movz(70, 3), sext, smull, Op::Return { uses: vec![Reg::Gpr(Gpr(72))], tail: None }].into(),
+        }];
+        narrow_extension_uses(&mut function);
+        dead_code(&mut function);
+        let extensions =
+            function.blocks[0].ops.iter().filter(|op| matches!(op, Op::I(Inst::BitfieldMove { .. }))).count();
+        assert_eq!(extensions, 0, "{function:#?}");
+    }
+
+    /// A value made in an outer loop was sunk into the inner loop that reads it
+    /// and made on every trip of it (tile at -O1: `add x13, x11, x13, lsl #7`
+    /// in the inner loop, +975 executed, 3%). `MachineSink` does not sink into
+    /// a deeper cycle.
+    #[test]
+    fn a_value_is_not_sunk_into_a_deeper_loop() {
+        let back = |rt: u32, label: &str| {
+            Op::I(Inst::CompareBranch {
+                nonzero: true,
+                width: Width::X,
+                rt: Gpr(rt),
+                target: Target::Label(label.into()),
+            })
+        };
+        let mut function = MFunc::new("f");
+        function.next_register = 80;
+        function.blocks = vec![
+            MBlock { label: "entry".into(), ops: vec![movz(0, 0), branch_to("outer")].into() },
+            // outer loop: makes a constant, runs the inner loop
+            MBlock { label: "outer".into(), ops: vec![movz(71, 7), branch_to("inner")].into() },
+            // inner loop reads the copy
+            MBlock { label: "inner".into(), ops: vec![add(72, 71, 0), back(72, "inner"), branch_to("latch")].into() },
+            MBlock { label: "latch".into(), ops: vec![back(0, "outer"), branch_to("exit")].into() },
+            MBlock { label: "exit".into(), ops: vec![Op::Return { uses: vec![], tail: None }].into() },
+        ];
+        let graph = cfg(&function);
+        sink(&mut function, &graph);
+        let made = |block: usize| {
+            function.blocks[block].ops.iter().filter(|op| matches!(op, Op::I(Inst::MoveWide { .. }))).count()
+        };
+        assert_eq!((made(1), made(2)), (1, 0), "{function:#?}");
+    }
+
+    /// A phi's constant reaches its edge through copies (`Imm`, `copy`,
+    /// `copy`), and the copies kept the sink from moving it: `movz w9, #1`
+    /// ran in the entry of the `power` of recpow at -O2, took `x9` and not
+    /// `x0`, and cost a `mov x0, x9` on every return (+4.2% net against the
+    /// pin).
+    #[test]
+    fn a_constant_reaching_its_edge_through_copies_is_made_on_that_edge() {
+        let copy = |dst: u32, src: u32| Op::Copy { dst: Reg::Gpr(Gpr(dst)), src: Reg::Gpr(Gpr(src)) };
+        let skip = Op::I(Inst::CompareBranch {
+            nonzero: false,
+            width: Width::W,
+            rt: Gpr(1),
+            target: Target::Label("edge".into()),
+        });
+        let mut function = MFunc::new("f");
+        function.next_register = 80;
+        function.blocks = vec![
+            MBlock {
+                label: "entry".into(),
+                ops: vec![movz(66, 1), copy(67, 66), copy(68, 67), skip, branch_to("body")].into(),
+            },
+            MBlock { label: "body".into(), ops: vec![add(72, 0, 0), copy(71, 72), branch_to("join")].into() },
+            MBlock { label: "edge".into(), ops: vec![copy(71, 68), branch_to("join")].into() },
+            MBlock { label: "join".into(), ops: vec![Op::Return { uses: vec![], tail: None }].into() },
+        ];
+        let graph = cfg(&function);
+        sink(&mut function, &graph);
+        let made = |block: usize| {
+            function.blocks[block].ops.iter().filter(|op| matches!(op, Op::I(Inst::MoveWide { .. }))).count()
+        };
+        assert_eq!((made(0), made(2)), (0, 1), "{function:#?}");
     }
 
     /// `sp + 0` before a dynamic allocation and after it are different values:
@@ -655,10 +1737,113 @@ mod tests {
                 mmo: MemOperand::default(),
             })
         };
-        function.blocks[0].ops = vec![read(64), movz(65, 1), read(66), keep(64), keep(65), keep(66), branch_to("loop")];
-        run(&mut function);
+        function.blocks[0].ops =
+            vec![read(64), movz(65, 1), read(66), keep(64), keep(65), keep(66), branch_to("loop")].into();
+        run(&mut function, false);
         let reads = function.blocks[0].ops.iter().filter(|op| matches!(op, Op::I(Inst::AddSubImm { .. }))).count();
         assert_eq!(reads, 2, "{function:#?}");
+    }
+
+    /// A constant made two blocks away was shared: it lived in a callee-saved
+    /// register and cost a `mov` at every use (jpeg_single -Os: seven
+    /// `mov x0, x25` for fd 1, +42 reg-reg over the pin).
+    #[test]
+    fn a_cheap_constant_two_blocks_away_is_remade() {
+        let keep = |rd: u32| {
+            Op::I(Inst::Store {
+                mem: Memory::Int { width: Width::X, bytes: 8, sign: false, reg: Gpr(rd) },
+                addr: Addr::Slot { slot: 0, offset: 0 },
+                mmo: MemOperand::default(),
+            })
+        };
+        let mut function = function();
+        function.blocks = vec![
+            MBlock { label: "entry".into(), ops: vec![movz(64, 1), keep(64), branch_to("mid")].into() },
+            MBlock { label: "mid".into(), ops: vec![branch_to("far")].into() },
+            MBlock {
+                label: "far".into(),
+                ops: vec![movz(66, 1), keep(66), Op::Return { uses: vec![], tail: None }].into(),
+            },
+        ];
+        run(&mut function, false);
+        let movzs = |block: usize| {
+            function.blocks[block].ops.iter().filter(|op| matches!(op, Op::I(Inst::MoveWide { .. }))).count()
+        };
+        assert_eq!((movzs(0), movzs(2)), (1, 1), "{function:#?}");
+    }
+
+    /// getbit (jpeg_single -O3): the page a folded load reads and the page of a
+    /// `MOVaddr` two blocks away were one `adrp`, so the address lived across
+    /// the call in `x19`, saved in the entry, and shrink wrapping could not
+    /// move the frame: 160k more instructions than clang. The pin's `MOVaddr`
+    /// is one instruction, never equal to the bare `ADRP`.
+    #[test]
+    fn the_page_of_an_address_pair_is_not_shared_with_a_bare_page() {
+        let symbol = || Target::Symbol { name: "g".into(), addend: 4 };
+        let adrp = |rd: u32| Op::I(Inst::Adr { page: true, rd: Gpr(rd), target: symbol(), got: false });
+        let load = |rd: u32, base: u32| {
+            Op::I(Inst::Load {
+                mem: Memory::Int { width: Width::W, bytes: 4, sign: false, reg: Gpr(rd) },
+                addr: Addr::PageOffset { base: Gpr(base), target: symbol(), got: false },
+                mmo: MemOperand::default(),
+            })
+        };
+        let low = |rd: u32, rn: u32| Op::I(Inst::AddPageOffset { rd: Gpr(rd), rn: Gpr(rn), target: symbol() });
+        let mut function = function();
+        function.blocks = vec![
+            MBlock { label: "entry".into(), ops: vec![adrp(64), load(65, 64), branch_to("mid")].into() },
+            MBlock { label: "mid".into(), ops: vec![branch_to("tail")].into() },
+            MBlock {
+                label: "tail".into(),
+                ops: vec![
+                    adrp(66),
+                    low(67, 66),
+                    Op::I(Inst::Store {
+                        mem: Memory::Int { width: Width::X, bytes: 8, sign: false, reg: Gpr(67) },
+                        addr: Addr::Slot { slot: 0, offset: 0 },
+                        mmo: MemOperand::default(),
+                    }),
+                    Op::Return { uses: vec![], tail: None },
+                ]
+                .into(),
+            },
+        ];
+        run(&mut function, false);
+        let pages = function
+            .blocks
+            .iter()
+            .flat_map(|block| block.ops.iter())
+            .filter(|op| matches!(op, Op::I(Inst::Adr { .. })))
+            .count();
+        assert_eq!(pages, 2, "{function:#?}");
+    }
+
+    /// A four-chunk 64-bit constant is not as cheap as a move: it was remade
+    /// in the far block (three extra `movk`) instead of shared.
+    #[test]
+    fn a_four_chunk_constant_two_blocks_away_is_shared() {
+        let wide = |rd: u32, value: u64| Op::Imm { dst: Gpr(rd), bits: 64, value };
+        let keep = |rd: u32| {
+            Op::I(Inst::Store {
+                mem: Memory::Int { width: Width::X, bytes: 8, sign: false, reg: Gpr(rd) },
+                addr: Addr::Slot { slot: 0, offset: 0 },
+                mmo: MemOperand::default(),
+            })
+        };
+        let count = |value: u64| {
+            let mut function = function();
+            function.blocks = vec![
+                MBlock { label: "entry".into(), ops: vec![wide(64, value), keep(64), branch_to("mid")].into() },
+                MBlock { label: "mid".into(), ops: vec![branch_to("far")].into() },
+                MBlock {
+                    label: "far".into(),
+                    ops: vec![wide(66, value), keep(66), Op::Return { uses: vec![], tail: None }].into(),
+                },
+            ];
+            run(&mut function, false);
+            function.blocks[2].ops.iter().filter(|op| matches!(op, Op::Imm { .. })).count()
+        };
+        assert_eq!((count(0x1234_5678_9abc_def0), count(0x1_0000_0000)), (0, 1));
     }
 
     /// A constant only the loop makes goes to the preheader.
@@ -666,13 +1851,39 @@ mod tests {
     fn a_constant_only_the_loop_makes_is_hoisted() {
         let mut function = function();
         function.blocks[0].ops.remove(0);
-        run(&mut function);
+        run(&mut function, false);
         let count = |block: usize| {
             function.blocks[block]
                 .ops
                 .iter()
                 .filter(|op| matches!(op, Op::I(Inst::MoveWide { imm16: 5000, .. })))
                 .count()
+        };
+        assert_eq!((count(0), count(1)), (1, 0), "{function:#?}");
+    }
+
+    /// `0.0` is `fmov s, wzr`; the zero register is a constant, so a loop that
+    /// makes it each trip has it made once before the loop (nbody_single -O2:
+    /// 6,000 executed `fmov s28, wzr`, the pin's one hoisted zero).
+    #[test]
+    fn a_float_zero_the_loop_makes_is_hoisted() {
+        let mut function = function();
+        function.blocks[0].ops.remove(0);
+        let zero = Op::I(Inst::FpInt {
+            op: FpConvert::Bits { to_fp: true },
+            width: Width::W,
+            size: FpSize::S,
+            gpr: Gpr(31),
+            fpr: Vreg(80),
+        });
+        let sum =
+            Op::I(Inst::FpBinary { op: FpBinary::Add, size: FpSize::S, rd: Vreg(81), rn: Vreg(80), rm: Vreg(80) });
+        function.blocks[1].ops.insert(0, sum);
+        function.blocks[1].ops.insert(0, zero);
+        function.blocks[2].ops = vec![Op::Return { uses: vec![Reg::Fpr(Vreg(81))], tail: None }].into();
+        run(&mut function, false);
+        let count = |block: usize| {
+            function.blocks[block].ops.iter().filter(|op| matches!(op, Op::I(Inst::FpInt { .. }))).count()
         };
         assert_eq!((count(0), count(1)), (1, 0), "{function:#?}");
     }
@@ -686,7 +1897,7 @@ mod tests {
 /// is one move, `x0 <- v; x1 <- v` two (the register coalescer's answer, by
 /// ordering).
 pub fn order_copies(function: &mut MFunc) {
-    let mut home: HashMap<Reg, Reg> = HashMap::new();
+    let mut home: HashMap<Reg, Reg> = HashMap::default();
     for block in &function.blocks {
         for op in &block.ops {
             if let Op::Copy { dst, src } = op
@@ -712,8 +1923,9 @@ pub fn order_copies(function: &mut MFunc) {
             // Stable: a copy into its source's home register moves behind the
             // others.
             block
-                .ops[at..end]
+                .ops
                 .sort_by_key(
+                    at..end,
                     |op| match op {
                         Op::Copy { dst, src } => home.get(src) == Some(dst),
                         _ => false,
@@ -721,5 +1933,245 @@ pub fn order_copies(function: &mut MFunc) {
                 );
             at = end.max(at + 1);
         }
+    }
+}
+
+/// A back edge's phi copies go to the end of the latch, not into a block of
+/// their own: `PHIElimination::SplitPHIEdges` never splits one
+/// ([PHIElimination.cpp#L827-L832](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/PHIElimination.cpp#L827-L832)).
+/// `recfloat`'s loop ran `fmov; b` in an edge block each trip, the pin one
+/// `fmov` before the branch.
+///
+/// DEVIATE PE1: the DAG path splits every critical edge as it emits, before
+/// any liveness exists, and the pin decides after it. This pass is that
+/// decision for back edges, with the check the pin's per-phi temporary gives
+/// it (the copy's destinations are dead on the other successor). Exit: phi
+/// elimination onto the shared machine function with liveness (dated 11-20),
+/// then this pass goes.
+pub fn unsplit_edges(function: &mut MFunc) {
+    let is_edge = |label: &str| {
+        label.rsplit_once(".e").is_some_and(|(_, n)| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+    };
+    let is_branch = |op: &Op| {
+        matches!(
+            op,
+            Op::I(Inst::Branch { .. } | Inst::BranchCond { .. } | Inst::CompareBranch { .. } | Inst::TestBranch { .. })
+        )
+    };
+    loop {
+        let graph = cfg(function);
+        // Only an edge that passes every other test asks what is live.
+        let mut live: Option<Liveness> = None;
+        let found = (0..function.blocks.len()).find_map(|edge| {
+            let block = &function.blocks[edge];
+            if !is_edge(&block.label) || graph.predecessors[edge].len() != 1 {
+                return None;
+            }
+            let from = graph.predecessors[edge][0];
+            let [Op::I(Inst::Branch { link: false, target: Target::Label(head) }), ..] =
+                &block.ops.iter().rev().take(1).cloned().collect::<Vec<_>>()[..]
+            else {
+                return None;
+            };
+            let copies = &block.ops[..block.ops.len() - 1];
+            if copies.is_empty() || !copies.iter().all(|op| matches!(op, Op::Copy { .. })) {
+                return None;
+            }
+            // The other successors must not need what the copies read or write,
+            // and the branches must not read what they write.
+            let others: Vec<usize> = graph.successors[from].iter().copied().filter(|&one| one != edge).collect();
+            if others.len() + 1 != graph.successors[from].len() || from == edge {
+                return None;
+            }
+            let defined: Vec<Reg> = copies.iter().flat_map(|op| op.defs_and_uses().0).collect();
+            // Only a back edge: `SplitPHIEdges` never splits one, and
+            // `MachineSink` never breaks it for a sink. Any other edge may
+            // still be one the sink lands a value on.
+            let back = function
+                .blocks
+                .iter()
+                .position(|one| one.label == *head)
+                .is_some_and(|header| dominates(&graph, header, from));
+            if !back {
+                return None;
+            }
+            let touched = defined.clone();
+            let live = live.get_or_insert_with(|| live_in(function, &graph));
+            if others.iter().any(|&one| touched.iter().any(|reg| live.contains(one, *reg))) {
+                return None;
+            }
+            let reads_defined = function.blocks[from]
+                .ops
+                .iter()
+                .filter(|op| is_branch(op))
+                .any(|op| op.defs_and_uses().1.iter().any(|reg| defined.contains(reg)));
+            if reads_defined {
+                return None;
+            }
+            Some((edge, from, head.clone()))
+        });
+        let Some((edge, from, head)) = found else { return };
+        let label = function.blocks[edge].label.clone();
+        let mut copies = std::mem::take(&mut function.blocks[edge].ops).into_iter().collect::<Vec<_>>();
+        copies.pop();
+        let ops = &mut function.blocks[from].ops;
+        for index in 0..ops.len() {
+            if let Op::I(
+                Inst::Branch { target, .. }
+                | Inst::BranchCond { target, .. }
+                | Inst::CompareBranch { target, .. }
+                | Inst::TestBranch { target, .. },
+            ) = ops.op_mut(index)
+            {
+                if *target == Target::Label(label.clone()) {
+                    *target = Target::Label(head.clone());
+                }
+            }
+        }
+        let at = ops.iter().rposition(|op| !is_branch(op)).map_or(0, |last| last + 1);
+        for (offset, copy) in copies.into_iter().enumerate() {
+            ops.insert(at + offset, copy.0);
+        }
+        function.blocks.remove(edge);
+    }
+}
+
+/// `AArch64MIPeepholeOpt::visitORR`
+/// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64MIPeepholeOpt.cpp#L290>):
+/// `orr w, wzr, w` is how `zext i32 to i64` is made, and a 32-bit instruction
+/// already clears the upper half of its result, so the copy goes where the
+/// register it copies is the single result of such an instruction. Not
+/// translated: a source that is a copy of a float register (made an `fmov`).
+fn redundant_zero_extends(function: &mut MFunc) {
+    let definitions = definitions(function);
+    let narrow_defs: HashSet<Reg> = function
+        .blocks
+        .iter()
+        .flat_map(|block| &block.ops)
+        .filter(|op| clears_upper_half(op))
+        .filter_map(defined)
+        .filter(|register| definitions.get(register) == Some(&1))
+        .collect();
+    let mut rename: HashMap<Reg, Reg> = HashMap::default();
+    for block in &mut function.blocks {
+        block.ops.retain(|op| {
+            let Op::I(Inst::LogicShifted {
+                op: Logic::Orr,
+                invert: false,
+                width: Width::W,
+                rd,
+                rn: Gpr::R31,
+                rm,
+                shift: Shift::Lsl,
+                amount: 0,
+            }) = op
+            else {
+                return true;
+            };
+            let (from, to) = (Reg::Gpr(*rd), Reg::Gpr(*rm));
+            if rd.is_virtual() && rm.is_virtual() && definitions.get(&from) == Some(&1) && narrow_defs.contains(&to) {
+                rename.insert(from, to);
+                return false;
+            }
+            true
+        });
+    }
+    if rename.is_empty() {
+        return;
+    }
+    for block in &mut function.blocks {
+        for op in &mut block.ops {
+            op.visit(&mut |slot, _| {
+                if let Some(Reg::Gpr(new)) = rename.get(&slot.key())
+                    && let RegRef::Gpr(slot) = slot
+                {
+                    *slot = *new;
+                }
+            });
+        }
+    }
+}
+
+/// `AArch64MIPeepholeOpt::visitFMOVDr`: an `fmov d, d` already follows an
+/// instruction that writes a `D` register (a 64-bit load, a `dup` of 64 bits,
+/// an `fmov d, x`), which clears the upper half; the move goes.
+/// `is64bitDefwithZeroHigh64bit` is translated for the instructions this
+/// selector makes; the pin's other cases (`COPY` of a general register, a load
+/// of a tuple) are not.
+fn redundant_zero_high_moves(function: &mut MFunc) {
+    let definitions = definitions(function);
+    let zeroed: HashSet<Reg> = function
+        .blocks
+        .iter()
+        .flat_map(|block| &block.ops)
+        .filter_map(|op| match op {
+            Op::I(Inst::Load { mem: Memory::Fp { bytes: 8, reg }, addr: Addr::Offset { .. }, .. })
+            | Op::I(Inst::VectorFill {
+                rd: reg,
+                fill: Fill::Dup(Arrangement::B8 | Arrangement::H4 | Arrangement::S2, _),
+            })
+            | Op::I(Inst::FpInt {
+                op: FpConvert::Bits { to_fp: true },
+                width: Width::X,
+                size: FpSize::D,
+                fpr: reg,
+                ..
+            }) => Some(Reg::Fpr(*reg)),
+            _ => None,
+        })
+        .filter(|register| definitions.get(register) == Some(&1))
+        .collect();
+    let mut rename: HashMap<Reg, Reg> = HashMap::default();
+    for block in &mut function.blocks {
+        block
+            .ops
+            .retain(
+                |op| {
+                    let Op::I(Inst::FpUnary { op: FpUnary::Mov, size: FpSize::D, rd, rn }) = op else { return true };
+                    let (from, to) = (Reg::Fpr(*rd), Reg::Fpr(*rn));
+                    if rd.is_virtual() && definitions.get(&from) == Some(&1) && zeroed.contains(&to) {
+                        rename.insert(from, to);
+                        return false;
+                    }
+                    true
+                },
+            );
+    }
+    if rename.is_empty() {
+        return;
+    }
+    for block in &mut function.blocks {
+        for op in &mut block.ops {
+            op.visit(&mut |slot, _| {
+                if let Some(Reg::Fpr(new)) = rename.get(&slot.key())
+                    && let RegRef::Fpr(slot) = slot
+                {
+                    *slot = *new;
+                }
+            });
+        }
+    }
+}
+
+/// Whether `op` is a 32-bit instruction (or a 32-bit constant) whose result
+/// register has its upper 32 bits cleared by the architecture.
+fn clears_upper_half(op: &Op) -> bool {
+    match op {
+        Op::Imm { bits: 32, .. } => true,
+        Op::I(
+            Inst::AddSubImm { width: Width::W, .. }
+            | Inst::AddSubShifted { width: Width::W, .. }
+            | Inst::AddSubExtended { width: Width::W, .. }
+            | Inst::LogicImm { width: Width::W, .. }
+            | Inst::LogicShifted { width: Width::W, .. }
+            | Inst::MoveWide { width: Width::W, .. }
+            | Inst::BitfieldMove { width: Width::W, .. }
+            | Inst::Extract { width: Width::W, .. }
+            | Inst::Divide { width: Width::W, .. }
+            | Inst::OneSource { width: Width::W, .. }
+            | Inst::ThreeSource { width: Width::W, .. }
+            | Inst::CondSelect { width: Width::W, .. },
+        ) => true,
+        _ => false,
     }
 }

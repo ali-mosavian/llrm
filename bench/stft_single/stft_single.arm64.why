@@ -1,0 +1,1 @@
+Float model: arm64 fuses a*b+c (-ffp-contract=on, the default of clang and gcc -O2), which changes the single-precision checksum: 40144774 (llrm-cc and gcc -O2 under qemu-aarch64 agree; -ffp-contract=off gives the strict 502187692). The DOS .out is x87 excess precision (78803551).

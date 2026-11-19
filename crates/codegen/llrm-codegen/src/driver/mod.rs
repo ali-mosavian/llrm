@@ -6,6 +6,8 @@
 pub mod basic;
 mod data;
 pub mod flags;
+pub mod policy;
+pub mod trial;
 
 use std::path::PathBuf;
 
@@ -66,12 +68,12 @@ pub struct Options {
     pub abi: Option<String>,
     /// `-gcodeview`, `-gdwarf`...: the debug format asked for, where `-g`
     /// writes any.
-    pub debug_format: llrm_object::debug::Format,
+    pub debug_format: llrm_debug::Format,
     /// `-fexcess-precision=standard` or `-ffloat-store`: a float conversion
     /// rounds to its type.
     pub float_store: bool,
     /// Whether a spill of a float rounds to the float's type (`Profile`'s
-    /// `rounds_float_spills`): set by llrm-c, which follows the pin.
+    /// `rounds_float_spills`): set by llrm-cc, which follows the pin.
     pub rounds_float_spills: bool,
     /// Whether a spill of an x87 value keeps its 80 bits (`Profile`'s
     /// `spills_extended`): set by llrm-qb, which follows real BC.
@@ -87,11 +89,20 @@ pub struct Options {
     pub stack_check: bool,
     /// `--isel=`: the instruction selector.
     pub isel: crate::backend::shadow::Selector,
+    /// `--no-midend`: the pipeline's passes do not run, so the backend takes
+    /// the module as it is given: the instrument for pricing the backend alone
+    /// on an IR the mid-end already made (the pin's `llc` takes its input as it
+    /// is).
+    pub no_midend: bool,
     /// The library routines the target's runtime has, each with the calling
     /// convention (LLVM's number) a call of it is made in: `memcpy` is a call
     /// where it is named, the selector's `rep movs` where not; and the symbol
     /// the routine has in the object (Open Watcom's `memcpy_`, C's `_memcpy`).
     pub libcalls: Vec<(String, u32, String)>,
+    /// The object format unwinds natively (wasm exception handling): the host
+    /// hand-over of a QB module keeps the `invoke`s and landing pads for the
+    /// backend instead of a `setjmp` frame. The mid-end is the same.
+    pub wasm_exceptions: bool,
 }
 
 impl Options {
@@ -121,7 +132,9 @@ impl Options {
             no_inline: Vec::new(),
             stack_check: false,
             isel,
+            no_midend: false,
             libcalls: Vec::new(),
+            wasm_exceptions: false,
         }
     }
 
@@ -145,7 +158,7 @@ impl Options {
             // older ones.
             if matches!(
                 debug.format,
-                llrm_object::debug::Format::Dwarf { version } if version < 5
+                llrm_debug::Format::Dwarf { version } if version < 5
             ) && let Some((_, md5)) = debug.source.as_mut()
             {
                 *md5 = None;
@@ -156,21 +169,18 @@ impl Options {
     /// Whether the debug writer this object format and `-g` flavor pick says
     /// where a value is over a range of code.
     pub fn location_ranges(&self) -> bool {
-        self.debug_format.location_ranges().unwrap_or_else(|| self.format_info().location_ranges)
+        self.debug_caps().location_ranges
     }
 
     /// Whether that writer places a frame cell from the canonical frame
     /// address, so `-g` need not keep a frame register.
     pub fn cfa_locations(&self) -> bool {
-        self.debug_format.cfa_locations().unwrap_or_else(|| self.format_info().cfa_locations)
+        self.debug_caps().cfa_locations
     }
 
-    /// What the object format says of the debug writer it picks by default; a
-    /// format unknown to the target is ELF's.
-    fn format_info(&self) -> llrm_object::AsmInfo {
-        use llrm_target::object::Format;
-        let format = Format::parse(self.object_format).unwrap_or(Format::Elf);
-        crate::backend::objbuild::asm_info(format)
+    /// What the debug writer asked for in this object format can say.
+    fn debug_caps(&self) -> llrm_debug::DebugCaps {
+        self.arch.objects().debug_caps(self.object_format, self.debug_format)
     }
 
     pub fn cpu(&self) -> Result<&'static Profile, String> {
@@ -187,6 +197,8 @@ impl Options {
             self.spills_extended,
             self.pipeline.stable_loads,
             self.pipeline.has_min_size,
+            self.pipeline.prices_bytes(),
+            self.pipeline.pre,
         )
     }
 }
@@ -252,7 +264,7 @@ fn without_jump_tables(program: &mut Program) {
             if let llrm_mir::GlobalKind::Function(function) = &mut global.kind
                 && !function.is_declaration()
             {
-                function.attrs.push(llrm_mir::Attribute::Str("no-jump-tables".to_owned(), Some("true".to_owned())));
+                function.attrs.push(llrm_mir::Attribute::Str("no-jump-tables".into(), Some("true".to_owned())));
             }
         }
     }
@@ -353,20 +365,51 @@ pub fn compiled_module(
     name: &str,
     options: &Options,
 ) -> Result<masm::Module, String> {
-    let layout = options.arch.layout().datalayout;
+    let program = optimized_program(module, options)?;
+    assembled(&program, name, options)
+}
+
+/// `module` through the mid-end: the program the backend takes.
+pub fn optimized_program(
+    module: Module,
+    options: &Options,
+) -> Result<Program, String> {
+    let description = options.arch.layout();
+    let layout = description.datalayout;
     match module.datalayout.as_deref() {
-        Some(stated) if stated == layout => {}
+        Some(stated) if stated == layout || description.platforms.iter().any(|one| one.datalayout == stated) => {}
         Some(stated) => {
             return Err(format!("the module's datalayout `{stated}` is not {}'s `{layout}`", options.arch.name()));
         }
         None => return Err(format!("the module states no datalayout; {}'s is `{layout}`", options.arch.name())),
     }
     let cpu = options.cpu()?;
-    let mut program = Program::new(vec![module], cpu.target())?;
+    let mut program = Program::new(vec![module], cpu.target_under(&*options.arch, options.abi.as_deref()))?;
     if llrm_support::debug::verifying() {
         timed("mir verify frontend", || verified(&program, "the frontend"))?;
     }
     optimized(&mut program, options)?;
+    Ok(program)
+}
+
+/// The backend over a program the mid-end finished: its module as masm.
+pub fn assembled(
+    program: &Program,
+    name: &str,
+    options: &Options,
+) -> Result<masm::Module, String> {
+    assembled_module(&program.modules[0], program, name, options)
+}
+
+/// `module`, a version of `program`'s only module, as masm: the program
+/// supplies the segments.
+pub fn assembled_module(
+    module: &Module,
+    program: &Program,
+    name: &str,
+    options: &Options,
+) -> Result<masm::Module, String> {
+    let cpu = options.cpu()?;
     let segments = Segments::of(
         &options.machine,
         Regs(options.arch.registers()),
@@ -374,11 +417,11 @@ pub fn compiled_module(
     );
     let assembled = timed("assemble", || {
         assemble::assembled_by(
-            &program.modules[0],
+            module,
             &crate::abi::llvm::LlvmAbi {
                 stack_check: if options.stack_check { Some(runtime_stack_check(&*options.arch)?) } else { None },
             },
-            &format!("{}_TEXT", name.to_uppercase()),
+            &options.code_segment.clone().unwrap_or_else(|| format!("{}_TEXT", name.to_uppercase())),
             ProfileOrName::Profile(cpu),
             &segments,
             options.selection,
@@ -389,9 +432,17 @@ pub fn compiled_module(
     })?;
     let mut assembled = assembled;
     options.describe_debug(&mut assembled);
-    data::zero_to_bss(&mut assembled, &program.modules[0], program.segments.data_space, options.machine.bss_begin);
+    data::zero_to_bss(
+        &mut assembled,
+        module,
+        program.segments.data_space,
+        options.machine.bss_begin,
+        options.arch.layout().segment_bytes().is_some(),
+    );
     if options.machine.far_bss {
-        data::zero_far_to_bss(&mut assembled, &program.modules[0]);
+        data::zero_far_to_bss(&mut assembled, module);
+    } else if options.machine.far_bss_init {
+        data::zero_far_with_init(&mut assembled, module);
     }
     stage_files(options, "", &assembled)?;
     Ok(assembled)
@@ -522,11 +573,22 @@ pub fn optimized(
     // SelectionDAGBuilder does; the shadow run keeps the old selector's
     // lowering for the functions the DAG path refuses.
     pipeline.lower_switches &= options.isel != crate::backend::shadow::Selector::Dag;
+    if pipeline.optimize {
+        // clang's `-fexperimental-assignment-tracking` runs this first.
+        timed("mir track assignments", || {
+            program
+                .modules
+                .iter_mut()
+                .try_for_each(|module| crate::backend::assignment_tracking::tracked(module).map(drop))
+        })?;
+    }
     let applied =
         llrm_transforms::pipeline::Applied { options: pipeline, dump: options.dump.clone(), ..Default::default() };
     // The pipeline sees an atomic access as a call it cannot move.
     program.modules.iter_mut().try_for_each(llrm_mir::atomic::hidden)?;
-    timed("mir pipeline", || llrm_transforms::pipeline::applied(program, &applied))?;
+    if !options.no_midend {
+        timed("mir pipeline", || llrm_transforms::pipeline::applied(program, &applied))?;
+    }
     // The widest atomic access: a 64-bit one needs `cmpxchg8b` below 64 bits.
     let native = if llrm_target::Target::layout(&*options.arch).mode == 64 { 64 } else { 32 };
     let tso = options.arch.name().starts_with("x86");
@@ -537,7 +599,11 @@ pub fn optimized(
             .modules
             .iter_mut()
             .try_for_each(
-                |module| crate::backend::ehprepare::prepared(module, &llrm_target::Target::layout(&*options.arch)),
+                |module| crate::backend::ehprepare::prepared_for(
+                    module,
+                    &llrm_target::Target::layout(&*options.arch),
+                    options.wasm_exceptions,
+                ),
             )
     })?;
     // The DAG route expands it itself (`expandFP_TO_UINT`), after the combines.
@@ -548,17 +614,23 @@ pub fn optimized(
         program.modules.iter_mut().try_for_each(|module| crate::backend::libmcalls::expanded(module, &options.libcalls))
     })?;
     if let Some((_, convention, symbol)) = options.libcalls.iter().find(|(name, ..)| name == "memcpy") {
+        let inline_variable = !options.cpu()?.bytes_strict()
+            && options.cpu()?.target().tti().is_some_and(|tti| tti.inlines_variable_memcpy());
+        let rep_movsb = options.cpu()?.min_size
+            || (options.cpu()?.size && options.cpu()?.target().tti().is_some_and(|tti| tti.rep_movs_at_size()));
         timed("mir memcpy calls", || {
-            program
-                .modules
-                .iter_mut()
-                .try_for_each(|module| crate::backend::memcpycall::expanded(module, *convention, symbol))
+            program.modules.iter_mut().try_for_each(|module| {
+                crate::backend::memcpycall::expanded(module, *convention, symbol, inline_variable, rep_movsb)
+            })
         })?;
     }
     timed("mir constant intrinsics", || {
         program.modules.iter_mut().try_for_each(llrm_transforms::lowerconstantintrinsics::module_lowered)
     })?;
-    if crate::backend::memsetpattern::expands_for(options.isel) {
+    if crate::backend::memsetpattern::expands_for(options.isel)
+        && !options.cpu()?.target().fills_by_pattern()
+        && !options.cpu()?.target().tti().is_some_and(|tti| tti.fills_pattern_at_speed())
+    {
         timed("mir memset patterns", || {
             program.modules.iter_mut().try_for_each(crate::backend::memsetpattern::expanded)
         })?;
@@ -597,6 +669,13 @@ pub fn optimized(
                 ),
             )
     })?;
+    timed("mir checked conversions", || {
+        let tti = program.target.tti().unwrap_or_else(|| std::rc::Rc::new(llrm_mir::tti::Basic));
+        program
+            .modules
+            .iter_mut()
+            .try_for_each(|module| crate::backend::checkedconv::expanded(module, |bits| tti.wide_float_to_int(bits)))
+    })?;
     timed("mir absolute values", || {
         program
             .modules
@@ -611,6 +690,10 @@ pub fn optimized(
                 },
             )
     })?;
+    // the DAG lowers `llvm.fmuladd` itself (`FMAD`)
+    if options.isel != crate::backend::shadow::Selector::Dag {
+        timed("mir fmuladd", || program.modules.iter_mut().try_for_each(crate::backend::fmuladd::expanded))?;
+    }
     timed("mir compares", || {
         program
             .modules
@@ -631,10 +714,26 @@ pub fn optimized(
                 let wanted = |ty: &str| {
                     layout.expands_for("select", ty) && !crate::backend::selects::kept_for_isel(options.isel, ty)
                 };
-                crate::backend::selects::priced(module, &*tti, &wanted, &|name| profile.cost(name).ok())
+                // DEVIATE SETCC-TREE-BRANCH: at -Os only, where the table is
+                // bytes.
+                let trees = |ty: &str| {
+                    options.pipeline.prefers_size()
+                        && tti.branch_compare_trees_at_size()
+                        && layout.expands_for("select", ty)
+                };
+                crate::backend::selects::priced_with_trees(
+                    module,
+                    &*tti,
+                    &wanted,
+                    &|name| profile.cost(name).ok(),
+                    &trees,
+                )
             })
         })?;
     }
+    timed("mir assignment tracking", || {
+        program.modules.iter_mut().try_for_each(crate::backend::assignment_tracking::module_rewritten)
+    })?;
     if llrm_support::debug::enabled("spillmodel") || llrm_support::debug::enabled("pressure") {
         timed("mir spill model", || spill_model(program));
     }
@@ -720,6 +819,7 @@ pub fn statement_table(
     registers: llrm_target::FrameRegisters,
     word: usize,
     regs: Regs,
+    listed: bool,
 ) -> masm::Procedure {
     // A row is two words: where the statement is, and its line; the table ends
     // with a word of 0. The word is the target's near pointer.
@@ -729,6 +829,12 @@ pub fn statement_table(
         code.push(masm::InlinePart::Bytes((*line as u32).to_le_bytes()[..word].to_vec()));
     }
     code.push(masm::InlinePart::Bytes(vec![0; word]));
+    // BC /O leaves OF_STA 0 for a module with no row; BC /D (here
+    // -fsanitize=stack) points it at a table all the same. An empty part ahead
+    // of the end word marks a table the header names (`written_basic_inner`).
+    if listed && rows.is_empty() {
+        code.insert(0, masm::InlinePart::Bytes(Vec::new()));
+    }
     let what = Semantics { name: Some("statement-table".into()), ..Semantics::new(Operation::Call) };
     let instruction = lir::Insn::new(1, None, Some(what), vec![], vec![]);
     let mut body = lir::LirBody::new(
@@ -753,6 +859,7 @@ pub fn statement_table(
         size: false,
         entry: 0,
         stack_check: None,
+        probe_stack: None,
         registers,
     }
 }
@@ -762,7 +869,7 @@ mod lifetimes_tests;
 
 #[cfg(test)]
 mod location_ranges_tests {
-    use llrm_object::debug::Format;
+    use llrm_debug::Format;
 
     use super::Options;
 
@@ -793,6 +900,7 @@ mod location_ranges_tests {
             llrm_x86_m16::M16.frame_registers(),
             2,
             llrm_lir::registers::Regs(llrm_x86_m32::M32.registers()),
+            false,
         );
         // m32's file, which a body made with no target (m16's, in tests) is
         // not.

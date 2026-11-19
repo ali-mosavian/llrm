@@ -1,0 +1,526 @@
+//! Bytes and cycles of the instructions the emitter writes, on the NMOS 6502
+//! and the 65C02.
+//!
+//! Sources: the W65C02S datasheet's Table 4-1 (cycles and bytes per addressing
+//! mode, with its notes: +1 for a page cross, +1 for a taken branch, +2 for
+//! read-modify-write, STA abs,X always pays the page cycle) and Table 7-1 (what
+//! the 65C02 changes),
+//! <https://westerndesigncenter.com/wdc/documentation/w65c02s.pdf>; and
+//! masswerk's 6502 instruction set tables,
+//! <https://www.masswerk.at/6502/6502_instruction_set.html>, for the
+//! per-instruction rows. `tests/timing.rs` runs each row on sim65 and compares.
+//!
+//! DEVIATE: a page cross is not charged (the address is not known here).
+//! Reason: the placement is the linker's. Exit: none for a static estimate. A
+//! conditional branch counts as taken when it goes backwards (a loop edge) and
+//! not taken when it goes forwards.
+
+use crate::dagisel::hooks::Cpu;
+
+/// The cost of one instruction.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Cost {
+    pub bytes: u32,
+    pub cycles: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Mode {
+    Implied,
+    Accumulator,
+    Immediate,
+    ZeroPage,
+    ZeroPageX,
+    ZeroPageY,
+    Absolute,
+    AbsoluteX,
+    AbsoluteY,
+    IndirectX,
+    IndirectY,
+    ZeroPageIndirect,
+    AbsoluteIndirect,
+    Relative,
+}
+
+/// Whether `name` is a zero-page byte the emitter names (`rc5`, `rc5+1`).
+fn zero_page(name: &str) -> bool {
+    let name = name.split('+').next().unwrap_or(name);
+    name.strip_prefix("rc").is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+}
+
+fn mode(
+    mnemonic: &str,
+    operand: &str,
+) -> Option<Mode> {
+    let operand = operand.trim();
+    if matches!(
+        mnemonic,
+        "bcc" | "bcs" | "beq" | "bmi" | "bne" | "bpl" | "bvc" | "bvs" | "bra"
+    ) {
+        return Some(Mode::Relative);
+    }
+    if operand.is_empty() {
+        return Some(Mode::Implied);
+    }
+    if operand.eq_ignore_ascii_case("a") {
+        return Some(Mode::Accumulator);
+    }
+    if operand.starts_with('#') {
+        return Some(Mode::Immediate);
+    }
+    if let Some(inner) = operand.strip_prefix('(') {
+        if let Some(inner) = inner.strip_suffix("),y") {
+            return zero_page(inner).then_some(Mode::IndirectY);
+        }
+        if let Some(inner) = inner.strip_suffix(",x)") {
+            return zero_page(inner).then_some(Mode::IndirectX);
+        }
+        let inner = inner.strip_suffix(')')?;
+        return Some(if mnemonic == "jmp" {
+            Mode::AbsoluteIndirect
+        } else if zero_page(inner) {
+            Mode::ZeroPageIndirect
+        } else {
+            return None;
+        });
+    }
+    let (base, index) = match operand.rsplit_once(',') {
+        Some((base, index)) => (base, Some(index)),
+        None => (operand, None),
+    };
+    let zp = zero_page(base);
+    Some(match (index, zp) {
+        (None, true) => Mode::ZeroPage,
+        (None, false) => Mode::Absolute,
+        (Some("x"), true) => Mode::ZeroPageX,
+        (Some("x"), false) => Mode::AbsoluteX,
+        (Some("y"), true) => Mode::ZeroPageY,
+        (Some("y"), false) => Mode::AbsoluteY,
+        _ => return None,
+    })
+}
+
+fn bytes(mode: Mode) -> u32 {
+    match mode {
+        Mode::Implied | Mode::Accumulator => 1,
+        Mode::Absolute | Mode::AbsoluteX | Mode::AbsoluteY | Mode::AbsoluteIndirect => 3,
+        _ => 2,
+    }
+}
+
+/// The bytes and cycles of `mnemonic operand` (ca65 text, lower case) on `cpu`,
+/// or `None` for a form the emitter does not write or the CPU does not have.
+pub fn instruction(
+    cpu: Cpu,
+    mnemonic: &str,
+    operand: &str,
+) -> Option<Cost> {
+    cost_in_mode(cpu, mnemonic, mode(mnemonic, operand)?)
+}
+
+/// [`instruction`] of an instruction the passes hold, its mode read from the
+/// operand's variant and not from its text printed and read back. It prices
+/// every form the same: `tests/timing_typed.rs` compares the two.
+pub fn of(
+    cpu: Cpu,
+    inst: &crate::asm::Inst,
+) -> Option<Cost> {
+    let mnemonic = inst.op.name();
+    cost_in_mode(cpu, mnemonic, mode_of(mnemonic, &inst.operand)?)
+}
+
+/// [`mode`] of an operand that is already parsed.
+fn mode_of(
+    mnemonic: &str,
+    operand: &crate::asm::Operand,
+) -> Option<Mode> {
+    use crate::asm::{Index, Operand};
+    if matches!(
+        mnemonic,
+        "bcc" | "bcs" | "beq" | "bmi" | "bne" | "bpl" | "bvc" | "bvs" | "bra"
+    ) {
+        return Some(Mode::Relative);
+    }
+    Some(match operand {
+        Operand::None => Mode::Implied,
+        Operand::Acc => Mode::Accumulator,
+        Operand::Imm(_) => Mode::Immediate,
+        Operand::IndirectY(name) => return zero_page(name).then_some(Mode::IndirectY),
+        Operand::IndirectX(name) => return zero_page(name).then_some(Mode::IndirectX),
+        Operand::Indirect(name) => {
+            if mnemonic == "jmp" {
+                Mode::AbsoluteIndirect
+            } else if zero_page(name) {
+                Mode::ZeroPageIndirect
+            } else {
+                return None;
+            }
+        }
+        Operand::Direct(name) => {
+            if zero_page(name) {
+                Mode::ZeroPage
+            } else {
+                Mode::Absolute
+            }
+        }
+        Operand::Indexed(name, index) => match (index, zero_page(name)) {
+            (Index::X, true) => Mode::ZeroPageX,
+            (Index::X, false) => Mode::AbsoluteX,
+            (Index::Y, true) => Mode::ZeroPageY,
+            (Index::Y, false) => Mode::AbsoluteY,
+        },
+    })
+}
+
+fn cost_in_mode(
+    cpu: Cpu,
+    mnemonic: &str,
+    m: Mode,
+) -> Option<Cost> {
+    let cmos = cpu == Cpu::W65c02;
+    let read = matches!(
+        mnemonic,
+        "lda" | "ldx" | "ldy" | "adc" | "sbc" | "and" | "ora" | "eor" | "cmp" | "cpx" | "cpy" | "bit"
+    );
+    let store = matches!(mnemonic, "sta" | "stx" | "sty" | "stz");
+    let modify = matches!(mnemonic, "asl" | "lsr" | "rol" | "ror" | "inc" | "dec");
+    let cycles = if mnemonic == "jmp" {
+        match m {
+            Mode::Absolute => 3,
+            Mode::AbsoluteIndirect => {
+                if cmos {
+                    6
+                } else {
+                    5
+                }
+            }
+            _ => return None,
+        }
+    } else if mnemonic == "jsr" {
+        6
+    } else if matches!(mnemonic, "rts" | "rti") {
+        6
+    } else if m == Mode::Relative {
+        // not taken; a taken one is added by the caller
+        if mnemonic == "bra" {
+            if !cmos {
+                return None;
+            }
+            3
+        } else {
+            2
+        }
+    } else if read {
+        match m {
+            Mode::Immediate => 2,
+            Mode::ZeroPage => 3,
+            Mode::ZeroPageX | Mode::ZeroPageY | Mode::Absolute | Mode::AbsoluteX | Mode::AbsoluteY => 4,
+            Mode::ZeroPageIndirect => {
+                if cmos {
+                    5
+                } else {
+                    return None;
+                }
+            }
+            Mode::IndirectY => 5,
+            Mode::IndirectX => 6,
+            _ => return None,
+        }
+    } else if store {
+        if mnemonic == "stz" && !cmos {
+            return None;
+        }
+        match m {
+            Mode::ZeroPage => 3,
+            Mode::ZeroPageX | Mode::ZeroPageY | Mode::Absolute => 4,
+            Mode::AbsoluteX | Mode::AbsoluteY => 5,
+            Mode::IndirectY => 6,
+            Mode::IndirectX => 6,
+            Mode::ZeroPageIndirect => {
+                if cmos {
+                    5
+                } else {
+                    return None;
+                }
+            }
+            _ => return None,
+        }
+    } else if modify {
+        match m {
+            Mode::Accumulator => {
+                if matches!(mnemonic, "inc" | "dec") && !cmos {
+                    return None;
+                }
+                2
+            }
+            Mode::ZeroPage => 5,
+            Mode::ZeroPageX => 6,
+            Mode::Absolute => 6,
+            Mode::AbsoluteX => {
+                if cmos && !matches!(mnemonic, "inc" | "dec") {
+                    6
+                } else {
+                    7
+                }
+            }
+            _ => return None,
+        }
+    } else if m == Mode::Implied {
+        match mnemonic {
+            "tax" | "tay" | "txa" | "tya" | "tsx" | "txs" | "inx" | "iny" | "dex" | "dey" | "clc" | "sec" | "cli"
+            | "sei" | "cld" | "sed" | "clv" | "nop" => 2,
+            "pha" | "php" => 3,
+            "pla" | "plp" => 4,
+            "phx" | "phy" if cmos => 3,
+            "plx" | "ply" if cmos => 4,
+            _ => return None,
+        }
+    } else {
+        return None;
+    };
+    Some(Cost { bytes: bytes(m), cycles })
+}
+
+/// A static estimate of ca65 text from [`crate::alloc::emit`]: its bytes, and
+/// its cycles with each line counted once per trip, where a trip through a loop
+/// is ten for each level it is nested.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct Estimate {
+    pub bytes: u32,
+    pub cycles: u64,
+}
+
+/// `text` with each use of a `.macro` replaced by its body, the parameters by
+/// the arguments; the definitions stay, for the loop below to skip.
+pub(crate) fn expand_macros(text: &str) -> String {
+    let mut macros: Vec<(String, Vec<String>, Vec<String>)> = Vec::new();
+    let mut open: Option<(String, Vec<String>, Vec<String>)> = None;
+    for line in text.lines() {
+        let code = line.split(';').next().unwrap_or("").trim();
+        if let Some(header) = code.strip_prefix(".macro") {
+            let mut names = header.split(|c: char| c == ',' || c.is_whitespace()).filter(|name| !name.is_empty());
+            open = names.next().map(|name| (name.to_owned(), names.map(str::to_owned).collect(), Vec::new()));
+        } else if code.starts_with(".endmacro") {
+            macros.extend(open.take());
+        } else if let Some((_, _, body)) = &mut open {
+            body.push(line.to_owned());
+        }
+    }
+    let substitute = |line: &str, parameters: &[String], arguments: &[&str]| -> String {
+        let mut out = String::new();
+        let mut word = String::new();
+        let flush = |word: &mut String, out: &mut String| {
+            match parameters.iter().position(|parameter| parameter == word) {
+                Some(at) => out.push_str(arguments.get(at).copied().unwrap_or("")),
+                None => out.push_str(word),
+            }
+            word.clear();
+        };
+        for c in line.chars() {
+            if c.is_alphanumeric() || c == '_' {
+                word.push(c);
+            } else {
+                flush(&mut word, &mut out);
+                out.push(c);
+            }
+        }
+        flush(&mut word, &mut out);
+        out
+    };
+    let mut out = String::new();
+    let mut in_macro = false;
+    for line in text.lines() {
+        let code = line.split(';').next().unwrap_or("").trim();
+        if in_macro || code.starts_with(".macro") {
+            in_macro = !code.starts_with(".endmacro");
+            out.push_str(line);
+            out.push('\n');
+            continue;
+        }
+        let (word, rest) = code.split_once(char::is_whitespace).unwrap_or((code, ""));
+        match macros.iter().find(|(name, ..)| name == word) {
+            Some((_, parameters, body)) => {
+                let arguments: Vec<&str> = rest.split(',').map(str::trim).collect();
+                for body_line in body {
+                    out.push_str(&substitute(body_line, parameters, &arguments));
+                    out.push('\n');
+                }
+            }
+            None => {
+                out.push_str(line);
+                out.push('\n');
+            }
+        }
+    }
+    out
+}
+
+/// [`Estimate`] of `text`, or the first line it cannot price.
+pub fn estimate(
+    cpu: Cpu,
+    text: &str,
+) -> Result<Estimate, String> {
+    estimate_calling(cpu, text, &[], None)
+}
+
+thread_local! {
+    static LINES_READ: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static LABEL_SCANS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The lines [`estimate_calling`] has read for their control flow on this
+/// thread, for a test that each is read once and not once per loop it is in.
+pub fn lines_read() -> usize {
+    LINES_READ.with(std::cell::Cell::get)
+}
+
+/// The lines [`estimate_calling`] has looked at for labels on this thread, for
+/// a test that it reads the text once and not once per branch.
+pub fn label_scans() -> usize {
+    LABEL_SCANS.with(std::cell::Cell::get)
+}
+
+/// [`estimate`], a `jsr` of one of `routines` also costing the clocks given,
+/// and the lines of a block `n` (label `<function>_b<n>`) weighed by the loops
+/// `depth_of(n)` says it is in, where the text's own jumps back would say more:
+/// a function laid out with far branches has them nested into one another.
+pub fn estimate_calling(
+    cpu: Cpu,
+    text: &str,
+    routines: &[(&str, u64)],
+    depth_of: Option<&dyn Fn(u32) -> u32>,
+) -> Result<Estimate, String> {
+    let weight = depth_of.map(|depth_of| move |block| 10u64.pow(depth_of(block).min(3)));
+    estimate_weighted(cpu, text, routines, weight.as_ref().map(|weight| weight as &dyn Fn(u32) -> u64))
+}
+
+/// [`estimate_calling`] with the weight of block `n` given outright: how many
+/// times it runs per run of the function, which a loop with a proven trip count
+/// knows and a loop depth guesses at as ten.
+pub fn estimate_weighted(
+    cpu: Cpu,
+    text: &str,
+    routines: &[(&str, u64)],
+    weight_of: Option<&dyn Fn(u32) -> u64>,
+) -> Result<Estimate, String> {
+    let expanded = expand_macros(text);
+    let lines: Vec<&str> = expanded.lines().map(|l| l.split(';').next().unwrap_or("")).collect();
+    // the first line of each label, found once: a lookup per branch is a scan
+    // of the function per branch
+    let mut labels: llrm_support::hash::HashMap<&str, usize> = llrm_support::hash::HashMap::default();
+    for (at, line) in lines.iter().enumerate() {
+        LABEL_SCANS.with(|scans| scans.set(scans.get() + 1));
+        if let Some(label) = line.trim_end().strip_suffix(':') {
+            labels.entry(label).or_insert(at);
+        }
+    }
+    let label_at = |name: &str| labels.get(name).copied();
+    // what each line does to control flow, read once: the loop test below asks
+    // it again for every line a backward branch's walk visits. A branch or
+    // jump to a label of the text goes there; `jmp`, `bra`, `rts` and `rti`
+    // do not run on to the next line.
+    let flow: Vec<(bool, Option<usize>)> = lines
+        .iter()
+        .map(|line| {
+            LINES_READ.with(|read| read.set(read.get() + 1));
+            let mut parts = line.split_whitespace();
+            let mnemonic = parts.next();
+            let target =
+                matches!(
+                    mnemonic,
+                    Some("bcc" | "bcs" | "beq" | "bmi" | "bne" | "bpl" | "bvc" | "bvs" | "bra" | "jmp")
+                )
+                    .then(|| parts.next().and_then(label_at))
+                    .flatten();
+            (!matches!(mnemonic, Some("jmp" | "bra" | "rts" | "rti")), target)
+        })
+        .collect();
+    // a backward branch makes the lines from its label to it a loop, if the
+    // code at the label can run on to the branch: a branch up to a block that
+    // ends in `rts` is an exit placed above the code, not a loop
+    let mut seen = vec![0usize; lines.len()];
+    let mut walks = 0;
+    let mut reaches = |from: usize, to: usize| {
+        walks += 1;
+        let mut work = vec![from];
+        while let Some(at) = work.pop() {
+            if at == to {
+                return true;
+            }
+            if at >= lines.len() || std::mem::replace(&mut seen[at], walks) == walks {
+                continue;
+            }
+            let (runs_on, target) = flow[at];
+            if runs_on {
+                work.push(at + 1);
+            }
+            work.extend(target);
+        }
+        false
+    };
+    let mut depth = vec![0u32; lines.len()];
+    let mut backward = vec![false; lines.len()];
+    for (at, &(_, target)) in flow.iter().enumerate() {
+        if let Some(to) = target.filter(|to| *to <= at && reaches(*to, at)) {
+            backward[at] = true;
+            for d in &mut depth[to..=at] {
+                *d += 1;
+            }
+        }
+    }
+    let mut out = Estimate::default();
+    let mut block = None;
+    let mut in_data = false;
+    let mut segment = "CODE";
+    // a macro's body is text for ca65, not code until it is used
+    let mut in_macro = false;
+    for (at, line) in lines.iter().enumerate() {
+        let trimmed = line.trim();
+        if in_macro {
+            in_macro = !trimmed.starts_with(".endmacro");
+            continue;
+        }
+        if trimmed.starts_with(".macro") {
+            in_macro = true;
+            continue;
+        }
+        if let Some(label) = trimmed.strip_suffix(':') {
+            if let Some((_, number)) = label.rsplit_once("_b") {
+                block = number.parse().ok().or(block);
+            }
+            continue;
+        }
+        if trimmed.is_empty() {
+            continue;
+        }
+        if let Some(directive) = trimmed.strip_prefix('.') {
+            if directive.starts_with("segment") {
+                segment = directive.split('"').nth(1).unwrap_or("CODE");
+                in_data = segment != "CODE";
+            } else if segment != "BSS" {
+                // data in the file: a lookup table the compiler made
+                let unit = if directive.starts_with("byte") {
+                    1
+                } else if directive.starts_with("word") {
+                    2
+                } else {
+                    0
+                };
+                out.bytes +=
+                    unit * directive.split_whitespace().nth(1).map_or(0, |list| list.split(',').count() as u32);
+            }
+            continue;
+        }
+        if in_data || trimmed.contains(" = ") {
+            continue;
+        }
+        let (mnemonic, operand) = trimmed.split_once(char::is_whitespace).unwrap_or((trimmed, ""));
+        let cost = instruction(cpu, mnemonic, operand).ok_or_else(|| format!("cannot price `{trimmed}`"))?;
+        let taken = u32::from(backward[at] && mnemonic != "jmp" && mnemonic != "bra");
+        out.bytes += cost.bytes;
+        let called = routines.iter().find(|(name, _)| mnemonic == "jsr" && operand.trim() == *name).map_or(0, |r| r.1);
+        out.cycles += (u64::from(cost.cycles + taken) + called)
+            * block.zip(weight_of).map_or_else(|| 10u64.pow(depth[at].min(3)), |(block, weight_of)| weight_of(block));
+    }
+    Ok(out)
+}

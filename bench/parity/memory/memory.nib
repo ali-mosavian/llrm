@@ -2,10 +2,12 @@
 var demo_value: i16 = 0
 var demo_delta: i16 = 0
 
+@noipa
 fn parity_memory(value: &mut i16, delta: &i16) -> i32:
     value = value * 3 + delta
     return i32(value) * i32(value)
 
+@noipa
 fn bench_memory() -> i32:
     demo_value = 7
     demo_delta = -2

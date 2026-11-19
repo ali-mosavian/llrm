@@ -56,7 +56,7 @@ void B_FILS(SD *pattern)
     if (length >= PATH_MAX)
         qb_error(BE_BADNAME);
     copy_bytes(path, pattern->ptr, length);
-    str_tmp_free(pattern);
+    str_free_if_tmp(pattern);
     path[length] = 0;
     if (length >= 2 && path[1] == ':')
         drive = (path[0] & 0xDF) - 'A' + 1;

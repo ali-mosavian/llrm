@@ -9,7 +9,7 @@ Owner: w-6. Each slot PR shows d_faces -O2 m32 Ir (dists, `-m32 -mabi=sysv -marc
 | fold@801 | 1202.5 -> 1089.9 (-112.6) | 0 of 568 changed | +846 of 1,233,858 (34 objects, 3 smaller) | #3870 |
 | fold@837 | 1088.0 -> 1071.5 (-16.5) | 11 of 568 changed (+800 B net) | +553 of 1,234,704 (33 objects, 23 larger) | this PR |
 
-## FR-1: the eight objects larger without fold@677 (owner w-6, review 2026-11-04)
+## FR-1: the eight objects larger without fold@677 (owner w10-instcombine, review 2026-11-04)
 
 Asm of the `fold677` dists (62d45c8880 vs 77048ad015) per object, instruction multiset and diff:
 
@@ -25,7 +25,7 @@ The pin cannot give asm for these m16 objects (its code16 target has 32-bit regi
 (2026-11-04), find the stores' pass (2026-11-04); the layout rows stay as growth with this number.
 Later slot PRs carry a row per growth cause in their body.
 
-## FR-2: objects larger without fold@801, by cause (owner w-6, 2026-11-06)
+## FR-2: objects larger without fold@801, by cause (owner w10-instcombine, 2026-11-06)
 
 All 34 changed QCport objects (m16, +846 B net), the earliest stage where the bodies differ, `LLRM_MIR_STAGES` of the
 `fold801` dists with value numbers normalised (`run.py`, results `fr2_result.json`):
@@ -43,7 +43,7 @@ among the folds left out (DEVIATE 2). Plan: translate `foldNot` and `getFreelyIn
 float constant fold of `fmul`/`fptosi` in `combine` (w-6, 2026-11-06; the pin folds a binop of constants in `simplifyFMul`);
 C and D close as numbers (C is a gain).
 
-## FR-3: objects changed by removing fold@837, by cause (owner w-6, 2026-11-06)
+## FR-3: objects changed by removing fold@837, by cause (owner w10-instcombine, 2026-11-06)
 
 QCport m16 (+553 B, 33 objects; earliest differing normalised stage of `LLRM_MIR_STAGES` of the `fold837` dists, `run3.py`):
 

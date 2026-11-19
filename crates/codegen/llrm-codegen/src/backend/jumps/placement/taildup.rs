@@ -74,6 +74,9 @@ impl Placer {
         // `jcc next; jmp other` is `jncc other` and a fall-through: the form
         // LLVM has once the branches are folded, which placement follows.
         let mut count = real.len();
+        if real.last().and_then(|one| one.what.as_ref()).is_some_and(|what| what.op == Operation::Return) {
+            count += self.epilogue;
+        }
         let ops: Vec<_> = real.iter().filter_map(|one| one.what.as_ref()).collect();
         if let Some(last) = ops.last()
             && last.op == Operation::Jump
@@ -86,7 +89,21 @@ impl Placer {
                 count -= 1;
             }
         }
-        count <= self.dup_size
+        count <= self.dup_size || self.hot.is_some_and(|hot| self.hot_pays(hot, block, count))
+    }
+
+    /// DEVIATE TAILDUP-HOT: whether the copies of `block` into the predecessors
+    /// that jump to it save, by those jumps' own run counts, more than their
+    /// bytes cost.
+    fn hot_pays(
+        &self,
+        hot: super::HotTailDup,
+        block: usize,
+        count: usize,
+    ) -> bool {
+        let jumpers: Vec<usize> = self.pred[block].iter().copied().filter(|&from| self.can_tail_duplicate(block, from)).collect();
+        let jumped: f64 = jumpers.iter().map(|&from| self.freq[from]).sum();
+        hot.pays(count, jumped, jumpers.len(), jumpers.len() == self.pred[block].len(), self.latch[block])
     }
 
     fn at(

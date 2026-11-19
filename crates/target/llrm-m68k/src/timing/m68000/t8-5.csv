@@ -1,0 +1,19 @@
+#title,Table 8-5. Immediate Instruction Execution Times,page,8-5,notes,
+Instruction,Size,"op #, Dn","op #, An","op #, M"
+ADDI,"Byte, Word",8(2/0),—,12(2/1)+
+,Long,16(3/0),—,20(3/2)+
+ADDQ,"Byte, Word",4(1/0),4(1/0)*,8(1/1)+
+,Long,8(1/0),8(1/0),12(1/2)+
+ANDI,"Byte, Word",8(2/0),—,12(2/1)+
+,Long,14(3/0),—,20(3/2)+
+CMPI,"Byte, Word",8(2/0),—,8(2/0)+
+,Long,14(3/0),—,12(3/0)+
+EORI,"Byte, Word",8(2/0),—,12(2/1)+
+,Long,16(3/0),—,20(3/2)+
+MOVEQ,Long,4(1/0),—,—
+ORI,"Byte, Word",8(2/0),—,12(2/1)+
+,Long,16(3/0),—,20(3/2)+
+SUBI,"Byte, Word",8(2/0),—,12(2/1)+
+,Long,16(3/0),—,20(3/2)+
+SUBQ,"Byte, Word",4(1/0),8(1/0)*,8(1/1)+
+,Long,8(1/0),8(1/0),12(1/2)+

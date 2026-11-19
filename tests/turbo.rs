@@ -440,38 +440,45 @@ fn turbo_debugger_shows_the_same_values_for_an_llrm_program_as_for_turbo_cs() {
 /// A variable the allocator keeps in one register from its first value to the
 /// last statement is a register variable to Turbo Debugger too: `k` of
 /// `regvar.c`, built optimised, is in TLINK's table as a `register`.
+/// `regvar5.c` makes `k` with a scaled `lea` instead of a pair of adds.
 #[test]
 fn tdump_names_a_variable_the_allocator_keeps_in_a_register_as_a_register() {
-    let Some((borland, _)) = toolchain() else {
-        skipped("needs Turbo C++ 3.0 (TCPP30_DIR) and DOSBox-X");
-        return;
-    };
-    let scratch = tempfile::tempdir().unwrap();
-    std::fs::copy(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/dwarf/regvar.c"),
-        scratch.path().join("rv.c"),
-    )
-    .unwrap();
-    let made = common::cc::llrm_c()
-        .env("LLRM_CC_TARGET", "x86_16-dos")
-        .args(["-m16", "-gtd", "-O2", "-fno-inline-functions", "-fno-inline-functions-called-once"])
-        .arg(scratch.path().join("rv.c"))
-        .arg("-o")
-        .arg(scratch.path().join("lrv.obj"))
-        .output()
+    for fixture in ["regvar.c", "regvar5.c"] {
+        let Some((borland, _)) = toolchain() else {
+            skipped("needs Turbo C++ 3.0 (TCPP30_DIR) and DOSBox-X");
+            return;
+        };
+        if std::env::var_os("LLRM_CLANG_M16").is_none() {
+            skipped("needs LLRM_CLANG_M16, the fork clang");
+            return;
+        }
+        let scratch = tempfile::tempdir().unwrap();
+        std::fs::copy(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/dwarf").join(fixture),
+            scratch.path().join("rv.c"),
+        )
         .unwrap();
-    assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
-    dosbox::run(
-        &[('c', &borland), ('w', scratch.path())],
-        "c:\\bin",
-        &["tlink /v c:\\lib\\c0m lrv.obj, lrv.exe,, c:\\lib\\cm > lrv.tl".into(), "tdump lrv.exe > lrv.tx".into()],
-    );
-    let dump = std::fs::read_to_string(scratch.path().join("LRV.TX")).expect("TDUMP's output");
-    let (_, locals, _) = module(&dump);
-    assert!(
-        locals.iter().any(|one| one.contains("register") && one.split_whitespace().any(|word| word == "k")),
-        "no register k in {locals:?}"
-    );
+        let made = common::cc::llrm_c()
+            .env("LLRM_CC_TARGET", "x86_16-dos")
+            .args(["-m16", "-gtd", "-O2", "-fno-inline-functions", "-fno-inline-functions-called-once"])
+            .arg(scratch.path().join("rv.c"))
+            .arg("-o")
+            .arg(scratch.path().join("lrv.obj"))
+            .output()
+            .unwrap();
+        assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
+        dosbox::run(
+            &[('c', &borland), ('w', scratch.path())],
+            "c:\\bin",
+            &["tlink /v c:\\lib\\c0m lrv.obj, lrv.exe,, c:\\lib\\cm > lrv.tl".into(), "tdump lrv.exe > lrv.tx".into()],
+        );
+        let dump = std::fs::read_to_string(scratch.path().join("LRV.TX")).expect("TDUMP's output");
+        let (_, locals, _) = module(&dump);
+        assert!(
+            locals.iter().any(|one| one.contains("register") && one.split_whitespace().any(|word| word == "k")),
+            "{fixture}: no register k in {locals:?}"
+        );
+    }
 }
 
 /// `-gtd` refused the whole compile of what its records cannot say: any program

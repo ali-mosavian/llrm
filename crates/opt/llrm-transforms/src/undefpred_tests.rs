@@ -16,6 +16,7 @@ fn simplify(text: &str) -> String {
     let mut declared = Declared::of(&module);
     let (context, function) = module.function_mut("f").expect("@f");
     simplified(context, &spec, &mut declared, function);
+    declared.place(&mut module).unwrap();
     printed(&module)
 }
 
@@ -44,9 +45,13 @@ b3:
         ),
         "define i16 @f(ptr %q, i1 %c) {
 b0:
+  %0 = xor i1 %c, true
+  call void @llvm.assume(i1 %0)
   %v = load i16, ptr %q
   ret i16 %v
 }
+
+declare void @llvm.assume(i1 noundef) nocallback nofree nosync nounwind willreturn memory(inaccessiblemem: write)
 "
     );
 }
@@ -73,4 +78,74 @@ b3:
 ";
     let out = simplify(text);
     assert!(out.contains("null"), "{out}");
+}
+
+/// The way into a block that divides by a null-fed phi is cut by a conditional
+/// branch: the pin keeps `assume(cond)` where we kept nothing, so the facts that
+/// the branch gave (`%c` holds past the cut) were lost to later passes.
+#[test]
+fn test_a_cut_conditional_branch_keeps_an_assume_of_its_condition() {
+    let out = simplify(
+        "define i32 @f(i1 %c, i32 %x) {
+e:
+  br i1 %c, label %a, label %m
+
+a:
+  br label %m
+
+m:
+  %p = phi i32 [ 0, %e ], [ %x, %a ]
+  %r = udiv i32 7, %p
+  ret i32 %r
+}
+",
+    );
+    assert!(out.contains("call void @llvm.assume(i1 %c)"), "{out}");
+    assert!(out.contains("declare void @llvm.assume(i1"), "{out}");
+}
+
+/// The cut edge was the true one: the assume holds the negation.
+#[test]
+fn test_a_cut_true_edge_assumes_the_negation() {
+    let out = simplify(
+        "define i32 @f(i1 %c, i32 %x) {
+e:
+  br i1 %c, label %m, label %a
+
+a:
+  br label %m
+
+m:
+  %p = phi i32 [ 0, %e ], [ %x, %a ]
+  %r = udiv i32 7, %p
+  ret i32 %r
+}
+",
+    );
+    assert!(out.contains("xor i1 %c, true"), "{out}");
+    assert!(out.contains("call void @llvm.assume(i1 %"), "{out}");
+}
+
+/// Negative control: the entry's unconditional way into the loop is cut and
+/// leaves no condition to keep (`opt` answers `unreachable`).
+#[test]
+fn test_a_cut_unconditional_branch_assumes_nothing() {
+    let out = simplify(
+        "define i32 @f(i1 %c, i32 %n) {
+e:
+  br label %m
+
+m:
+  %p = phi i32 [ 0, %e ], [ %q, %m ]
+  %r = udiv i32 7, %p
+  %q = add i32 %p, %r
+  br i1 %c, label %m, label %x
+
+x:
+  ret i32 %r
+}
+",
+    );
+    assert!(!out.contains("llvm.assume"), "{out}");
+    assert!(out.contains("unreachable"), "{out}");
 }

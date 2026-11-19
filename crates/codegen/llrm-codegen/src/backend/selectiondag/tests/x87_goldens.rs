@@ -5,16 +5,18 @@
 
 use std::collections::BTreeMap;
 
-use llrm_dagisel::generated::x86_i486 as table;
+use llrm_dagisel::addr::AddrMode;
 use llrm_dagisel::interp::Selector;
-use llrm_dagisel::x86_addr::AddrMode;
-use llrm_dagisel::x86_hooks::{Cpu, Options, X86Hooks};
 use llrm_mir::datalayout::DataLayout;
+use llrm_x86_dagisel::generated::x86_i486 as table;
+use llrm_x86_dagisel::x86_hooks::{Cpu, Options, X86Hooks};
 
 use super::super::actions::{Features, TargetLowering};
 use super::super::builder::{BuilderTarget, build_block};
-use super::super::dag_select::{do_instruction_selection, legalized, users_first};
+use super::super::dag_select::users_first;
 use super::super::function_lowering::FunctionLoweringInfo;
+use super::super::select::do_instruction_selection;
+use super::super::select::legalized;
 use super::super::x86_lowering::X86Lowering;
 use super::*;
 
@@ -46,14 +48,23 @@ fn selected(text: &str) -> BTreeMap<String, Result<Counts, String>> {
             opt_for_size: false,
             min_size: false,
             has_frame_pointer: true,
+            multiply_early_out: false,
             address_mode: AddrMode::Flat32,
         });
         let mut info = FunctionLoweringInfo::new(function);
         let mut counts = Counts::new();
         let mut failure = None;
         for &block in function.layout() {
-            let built =
-                build_block(&module, function, &layout, &BuilderTarget::m32(), &machine, &convention, &mut info, block);
+            let built = build_block(
+                &module,
+                function,
+                &layout,
+                &BuilderTarget::for_pointer_bits(32),
+                &machine,
+                &convention,
+                &mut info,
+                block,
+            );
             let mut built = match built {
                 Ok(b) => b,
                 Err(why) => {
@@ -62,9 +73,27 @@ fn selected(text: &str) -> BTreeMap<String, Result<Counts, String>> {
                 }
             };
             let dag = &mut built.dag;
-            if let Err(why) =
-                legalized(dag, &tli, &mut X86Lowering { cmov: false, sse2: false, min_size: false }, &machine)
-                    .and_then(|()| do_instruction_selection(dag, &selector, &mut hooks))
+            if let Err(why) = legalized(
+                dag,
+                &tli,
+                &mut X86Lowering {
+                    multiply_early_out: None,
+                    imul_if_smaller: false, hot_chains: false,
+                    share_products: false,
+                    cmov: false,
+                    sse2: false,
+                    min_size: false,
+                    three_address_adds: false,
+                    i16_mul_chains: false,
+                    sext_load: false,
+                    zext_free: false,
+                    branch_constant_selects: false,
+                    status_word_tests: false,
+                    profile: None,
+                },
+                &machine,
+            )
+            .and_then(|()| do_instruction_selection(dag, &selector, &mut hooks))
             {
                 failure = Some(format!("{why:?}"));
                 break;
@@ -102,8 +131,9 @@ fn pin(text: &str) -> BTreeMap<String, Counts> {
 
 /// The functions that differ from the pin today, and whose stage it is. The
 /// test requires this list to be exact, so a fixed function must come off it.
-const DIFFERS: [(&str, &str); 4] = [
+const DIFFERS: [(&str, &str); 5] = [
     ("compare", "sdag-b: SetCC on f64 has no lowering (x87 UCOM_FPr + FNSTSW)"),
+    ("from_int", "SD332 (DEVIATE): a single-use i16/i32 load folds into FILD; the pin does it only for i64"),
     ("narrow", "sdag-b: FP_ROUND through a stack slot (truncating store, reload)"),
     ("to_int", "sdag-d: the custom inserter for FP_TO_INT32_IN_MEM (control word) is not run"),
     ("widen", "sdag-b: fp_extend of a load is not an extending load"),

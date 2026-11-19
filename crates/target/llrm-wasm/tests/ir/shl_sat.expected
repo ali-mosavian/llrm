@@ -1,0 +1,86 @@
+== sshl_sat_8
+.local  	i32
+local.get	0
+i32.const	24
+i32.shl
+local.tee	0
+i32.const	31
+i32.shr_s
+i32.const	2130706432
+i32.xor
+local.get	0
+local.get	1
+i32.const	255
+i32.and
+local.tee	1
+i32.shl
+local.tee	2
+local.get	0
+local.get	2
+local.get	1
+i32.shr_s
+i32.ne
+i32.select
+i32.const	24
+i32.shr_s
+== sshl_sat_16
+.local  	i32
+local.get	0
+i32.const	16
+i32.shl
+local.tee	0
+i32.const	31
+i32.shr_s
+i32.const	2147418112
+i32.xor
+local.get	0
+local.get	1
+i32.const	65535
+i32.and
+local.tee	1
+i32.shl
+local.tee	2
+local.get	0
+local.get	2
+local.get	1
+i32.shr_s
+i32.ne
+i32.select
+i32.const	16
+i32.shr_s
+== sshl_sat_32
+.local  	i32
+local.get	0
+i32.const	31
+i32.shr_s
+i32.const	2147483647
+i32.xor
+local.get	0
+local.get	1
+i32.shl
+local.tee	2
+local.get	0
+local.get	2
+local.get	1
+i32.shr_s
+i32.ne
+i32.select
+== sshl_sat_then_sra
+.local  	i32
+local.get	0
+i32.const	31
+i32.shr_s
+i32.const	2130706432
+i32.xor
+local.get	0
+local.get	1
+i32.shl
+local.tee	2
+local.get	0
+local.get	2
+local.get	1
+i32.shr_s
+i32.ne
+i32.select
+i32.const	24
+i32.shr_s

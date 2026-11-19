@@ -36,14 +36,15 @@
 use llrm_lir::registers::RegId;
 
 use super::dag::{SDValue, SelectionDAG};
+use super::isd::ISD;
 use super::mvt::EVT;
-use super::x86isd;
 
 /// The nodes of the block: the chain after it, and the value read from each
 /// output register in order. `fixups` are the symbols' addresses, `inputs`
 /// the registers and their values, `outputs` the registers and their types.
 pub fn lower_asm(
     dag: &mut SelectionDAG,
+    asm: ISD,
     root: SDValue,
     name: &str,
     fixups: &[SDValue],
@@ -64,7 +65,7 @@ pub fn lower_asm(
         ops.push(dag.get_phys_register(vt, reg));
     }
     ops.extend(glue);
-    let node = dag.get_node_multi(x86isd::LLRM_ASM, &[EVT::OTHER, EVT::GLUE], &ops);
+    let node = dag.get_node_multi(asm, &[EVT::OTHER, EVT::GLUE], &ops);
     let mut chain = SDValue { node: node.node, res: 0 };
     let mut glue = SDValue { node: node.node, res: 1 };
     let mut results = Vec::new();
@@ -92,12 +93,19 @@ mod tests {
         let value = dag.get_constant(7, EVT::I32);
         let fixup = dag.get_target_global_address(EVT::I32, 0, 0);
         let root = dag.entry_node();
-        let (chain, results) =
-            lower_asm(&mut dag, root, "llrm.ia16.asm.90", &[fixup], &[(ax, value)], &[(dx, EVT::I32)]);
+        let (chain, results) = lower_asm(
+            &mut dag,
+            super::super::builder::LoweringNodes::installed().asm.unwrap(),
+            root,
+            "llrm.ia16.asm.90",
+            &[fixup],
+            &[(ax, value)],
+            &[(dx, EVT::I32)],
+        );
         assert_eq!(results.len(), 1);
         let read = dag.operand(results[0], 2);
         let node = SDValue { node: read.node, res: 0 };
-        assert_eq!(dag.opcode(node), x86isd::LLRM_ASM);
+        assert_eq!(dag.opcode(node), super::super::builder::LoweringNodes::installed().asm.unwrap());
         let ops: Vec<ISD> = (0..5).map(|at| dag.opcode(dag.operand(node, at))).collect();
         assert_eq!(
             ops,

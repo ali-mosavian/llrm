@@ -23,7 +23,27 @@ fn counted(
     let test = dag.get_setcc(EVT::I8, sum, zero, code);
     let branch = dag.get_node(ISD::BrCond, EVT::OTHER, &[chain, test, dest]);
     dag.set_root(branch);
-    DagLegalizer::new(&mut dag, &tli, &mut X86Lowering { cmov: false, sse2: false, min_size: false }).run().unwrap();
+    DagLegalizer::new(
+        &mut dag,
+        &tli,
+        &mut X86Lowering {
+            multiply_early_out: None,
+            imul_if_smaller: false, hot_chains: false,
+            share_products: false,
+            cmov: false,
+            sse2: false,
+            min_size: false,
+            three_address_adds: false,
+            i16_mul_chains: false,
+            sext_load: false,
+            zext_free: false,
+            branch_constant_selects: false,
+            status_word_tests: false,
+            profile: None,
+        },
+    )
+    .run()
+    .unwrap();
     let root = dag.get_root();
     (dag, root, x)
 }

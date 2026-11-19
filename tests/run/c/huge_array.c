@@ -1,4 +1,5 @@
 // flags: -O2 -march=i486 | -O2 -march=i486 -m32
+// targets: dos
 /* A __huge array of 80000 bytes, written and summed by index and pointer, with a pointer difference
    and a step. On m32, with one address space, __huge is near and warns (tests/toolchain.rs): the output is m16's. */
 extern void report(long value);

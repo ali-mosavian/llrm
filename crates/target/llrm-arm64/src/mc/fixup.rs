@@ -15,6 +15,13 @@ pub const LDST_IMM12_SCALE4: FixupKind = FixupKind(LDST_IMM12_SCALE1.0 + 2);
 pub const LDST_IMM12_SCALE8: FixupKind = FixupKind(LDST_IMM12_SCALE1.0 + 3);
 pub const LDST_IMM12_SCALE16: FixupKind = FixupKind(LDST_IMM12_SCALE1.0 + 4);
 
+/// The word offset in bits 23:5 of `b.cond`, `cbz` and `cbnz`.
+pub const BRANCH19: FixupKind = FixupKind(FixupKind::FIRST_TARGET.0 + 9);
+/// The word offset in bits 18:5 of `tbz` and `tbnz`.
+pub const BRANCH14: FixupKind = FixupKind(FixupKind::FIRST_TARGET.0 + 10);
+/// The byte offset of an `adr`, its low two bits in 30:29 and the rest in 23:5.
+pub const ADR21: FixupKind = FixupKind(FixupKind::FIRST_TARGET.0 + 11);
+
 pub const BRANCH26_FIX: Fix = Fix::relative(BRANCH26, 0);
 pub const PAGE21_FIX: Fix = Fix::relative(PAGE21, 0);
 /// `PAGE21` of the target's GOT entry.
@@ -36,7 +43,7 @@ pub fn is_page_offset12(kind: FixupKind) -> bool {
 /// What `kind` says of its field; the generic kinds are the object's.
 pub fn kind_info(kind: FixupKind) -> FixupKindInfo {
     let (name, bits) = match kind {
-        BRANCH26 | PAGE21 | ADD_IMM12 => ("arm64", 32),
+        BRANCH26 | BRANCH19 | BRANCH14 | ADR21 | PAGE21 | ADD_IMM12 => ("arm64", 32),
         kind if is_page_offset12(kind) => ("arm64_ldst_imm12", 32),
         generic => return generic.info(),
     };

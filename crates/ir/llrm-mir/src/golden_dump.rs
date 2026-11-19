@@ -127,6 +127,14 @@ pub(crate) fn formats() -> Vec<Fmt> {
     ]
 }
 
+/// `formats()` and IEEE quad, which only the APFloat dump runs on:
+/// `formatsWithQuad` of `tools/llvmport/fpinputs.h`.
+pub(crate) fn formats_with_quad() -> Vec<Fmt> {
+    let mut all = formats();
+    all.push(Fmt { name: "quad", sem: IEEE_QUAD, eb: 15, fb: 112, explicit: false, size: 128, tiny: false });
+    all
+}
+
 pub(crate) fn ones(bits: u32) -> u128 {
     if bits >= 128 { u128::MAX } else { (1_u128 << bits) - 1 }
 }

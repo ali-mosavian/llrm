@@ -16,6 +16,7 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [f2-plan](f2-plan.md) | F2 `emit_module`: profile, pin counterpart, four rows |
 | [alias-stack-plan](alias-stack-plan.md) | Alias stack: module-by-module route to the pin's BasicAA/TBAA/CaptureTracking structure, Ir budget per stage |
 | [count-to-zero-plan](count-to-zero-plan.md) | Count-to-zero cost term in LSR, read from the target cost table: findings and rows AM-CZ-1 (x_bubble m32), AM-CZ-2 (PLASMA m16) |
+| [wasm-libc-plan](wasm-libc-plan.md) | wasm: libc per platform and the shared .td generator; owner llrm-target-wasm, due 2026-11-08 |
 | [module-ipo-plan](module-ipo-plan.md) | Module walk and IPO against the pin: what `_sift` lacks in `-print-after-all`, rows by 2026-11-09 |
 | [frontend-bucket-plan](frontend-bucket-plan.md) | Front end compile-time bucket (qbq-llrm d_faces): attribution and rows F1-F4 (2026-10-23) |
 | [loop-bucket-callees](loop-bucket-callees.md) | Loop and scalar buckets: top 10 callees on d_faces -O2 with owner and date |
@@ -29,6 +30,15 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [bench-table-a33fdfff7](bench-table-a33fdfff7.md) | vsgcc bench table at tip a33fdfff7: old and dag selectors against min(gcc, clang) |
 | [flip-packet](flip-packet.md) | The default flip to `--isel=dag`: the five conditions, status and evidence per condition |
 | [greedy-switchover-plan](greedy-switchover-plan.md) | Switching over to the translated greedy allocator: what the old modules still provide (2026-10-22) |
+| [dagisel-target-seam](dagisel-target-seam.md) | The `DagTarget` seam: shared `select_units`, the x86 and m68k implementations, the proof |
+| [dagisel-seam-merge](dagisel-seam-merge.md) | Merge order and conflicts of the DAG seam with the shared legalizer stack |
+| [m68k-enabler-series](m68k-enabler-series.md) | The shared enablers the m68k backend needs, in landing order |
+| [m68k-block-placement-plan](m68k-block-placement-plan.md) | Block placement for m68k: the pin's `MachineBlockPlacement` over the spike's machine function |
+| [m68k parity](../../crates/target/llrm-m68k/PARITY.md) | m68k against the pin: numbered deviations, what the removed overlay bought per piece, open rows |
+| [m68k-isa](m68k-isa.md) | The 68k family opcode table: how it is checked against binutils and the manual, numbered limits, sources |
+| [m68k-timing](m68k-timing.md) | Clocks per CPU of the 68k family: tables used, how they were checked, numbered limits |
+| [m68k-timing-cycles](m68k-timing-cycles.md) | The kernels priced on each CPU of the 68k family |
+| [wasm-eh](wasm-eh.md) | Wasm exception handling for ON ERROR landing: the stages, the oracle, which touch shared crates |
 | [testing](testing.md) | Running the tests |
 | [pr-rules](pr-rules.md) | The goal, what a PR carries, how it lands, how to measure, safety |
 | [gate](gate.md) | What CI and the gate run, the tiers, what must pass |
@@ -70,6 +80,7 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [combine-fsub-rows.md](combine-fsub-rows.md) | QCport growers of `fsub x, C` -> `fadd x, -C` (#5642) |
 | [simplifycfg-resimplify-rows.md](simplifycfg-resimplify-rows.md) | QCport growers of SimplifyCFG's repeated block visit (#5662) |
 | [icmp-mul-constant-rows.md](icmp-mul-constant-rows.md) | QCport growers of `foldICmpMulConstant` (#5670) |
+| [icmp-div-constant-rows.md](icmp-div-constant-rows.md) | Worse cells of `foldICmpDivConstant` and the indexed-global table fold (#8438) |
 | [lsr-pin-faithful-rows.md](lsr-pin-faithful-rows.md) | loop-reduce rows at m16 -Os that equal the pin on the same IR: TL-1 tile i6, TL-2 crc.c (#5013) |
 | [compile-ledger-w1](compile-ledger-w1.md) | Plan for the regalloc-glue and scalar buckets of the compile ledger: ours vs the pin per pass, callees, levers and dates |
 | [unroll-o1-rows](unroll-o1-rows.md) | x_life and x_isqrt against main: the -O1 unroll mechanism and the select diamond, both the pin's |
@@ -163,7 +174,7 @@ For contributors: running tests, finding a miscompile, measuring, and what has b
 | [selectiondag-huge-memmove](selectiondag-huge-memmove.md) | memmove of huge pointers: the pin's behaviour, options, decision date 10-30 (sdag-a) |
 | [selectiondag-x87-contract](selectiondag-x87-contract.md) | What the DAG legalizer hands the x87 emitter and stackifier (sdag-b) |
 | [setcc-chain-plan](setcc-chain-plan.md) | setcc chain vs branch (x_mergesort, stft bq32, nhstutil leaves) |
-| [shared-liveintervals-plan](shared-liveintervals-plan.md) | TwoAddress on a shared LiveIntervals (row 62, row 62b) — owner w-1, due 2026-11-20 |
+| [shared-liveintervals-plan](shared-liveintervals-plan.md) | TwoAddress on a shared LiveIntervals (row 62, row 62b) — owner anyisa, due 2026-11-20 |
 | [shared-se](shared-se.md) | One ScalarEvolution across the loop passes — w-3, plan note 2026-10-28 |
 | [simplifycfg-jt-cvp-cost](simplifycfg-jt-cvp-cost.md) | SimplifyCFG + JumpThreading + CVP compile cost: ranked callees |
 | [struct-copy-rows](struct-copy-rows.md) | Struct-copy rows R2 and R3 (#3621): cause |
@@ -182,3 +193,5 @@ A change to a pass, analysis, flag, level, tool, target or runtime updates its d
 | [cgp-switch-type](cgp-switch-type.md) | `optimizeSwitchType`: a switch on i8/i16 is widened to i32 as the pin does; m16 keeps it narrow; byte evidence |
 | [scaling-gate-rebaseline-2026-10-28](scaling-gate-rebaseline-2026-10-28.md) | The 43 `test_scaling_gate` tests re-baselined per test against the current step names: old to new mapping, bounds |
 | [scev-persistent-se](scev-persistent-se.md) | One persistent SE across the loop passes: trip-count computes 7 -> 3, plan, files, risks |
+| [darwin-cause-cards-2026-11-03](darwin-cause-cards-2026-11-03.md) | arm64-macos: cells worse than the best of pin and gcc-13, same-IR check, cause per cell, DOS-flavoured programs (2026-11-03) |
+| [darwin-winners-2026-11-03](darwin-winners-2026-11-03.md) | arm64-macos winner table per level (bytes, clocks) from the 440-row matrix, with the cause card of each cell above best |

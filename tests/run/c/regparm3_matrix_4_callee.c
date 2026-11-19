@@ -1,3 +1,4 @@
+// targets: dos
 typedef signed char i8_t;
 struct S4 { short a, b; };
 struct S8 { long a; short b, c; };

@@ -13,6 +13,7 @@
 //!               flags_dead_out        the instruction or the block
 //!   encoding    encodable, no_longer, the rewrite encodes, in no more bytes
 //!               same_length,          than the original (via `select`)
+//!               shorter_pair,         the two rewrites in fewer bytes than the original
 //!               splits_smaller, ...
 //!   operands    same_width, narrower, widths, roots, register classes,
 //!               same_root, segment    segments
@@ -217,6 +218,54 @@ pub fn no_longer(
     )
 }
 
+/// The nearest write before `one` to the root of `source` is a 32-bit write
+/// (which zeroes bits 32 to 63), with nothing unknown between: the instructions
+/// walked of this block, nothing earlier than its start.
+pub fn zero_above_dword(
+    cx: &Cx,
+    one: &Arc<Insn>,
+    source: Reg,
+) -> bool {
+    let regs = cx.regs();
+    let root = ir::root(source.register);
+    let touched: Lanes = _lanes(regs, source.register).into_iter().collect();
+    for prev in cx.insns[..cx.place(one)].iter().rev() {
+        let Some((_, writes)) = _register_effects(regs, cx.bits(), prev, true, false) else { return false };
+        if writes.is_disjoint(&touched) {
+            continue;
+        }
+        // A dword write, or the `movzx` of a dword to the whole register (the
+        // same instruction, written wide).
+        let dword_write = prev.what.as_ref().is_some_and(|what| {
+            let from_dword = what.name.as_deref() == Some("movzx")
+                && what.sources.first().is_some_and(|source| match source {
+                    Loc::Reg(Reg { width, .. }) => *width == 4,
+                    Loc::Mem(Mem { width, .. }) => *width == 4,
+                    _ => false,
+                });
+            what.dests.iter().any(|dest| match dest {
+                Loc::Reg(Reg { register, width }) if ir::root(*register) == root => *width == 4 || from_dword,
+                _ => false,
+            })
+        });
+        return dword_write;
+    }
+    false
+}
+
+/// Both encode, the pair `first` then `second` in fewer bytes than `before`.
+pub fn shorter_pair(
+    cx: &Cx,
+    before: &Arc<Insn>,
+    first: &Arc<Insn>,
+    second: &Arc<Insn>,
+) -> bool {
+    matches!(
+        (emitted(cx.bits(), before), emitted(cx.bits(), first), emitted(cx.bits(), second)),
+        (Some(before), Some(first), Some(second)) if first.code.len() + second.code.len() < before.code.len()
+    )
+}
+
 /// `after` encodes, and in real mode in no more bytes than `before`: the
 /// dword form takes the operand-size prefix there. DEVIATE W1 of the byte/word
 /// fixup (`peephole.peep`).
@@ -240,8 +289,40 @@ pub fn short_in_real_mode_at(
             (Some(before), Some(after)) if after.code.len() <= before.code.len()
         )
     } else {
-        emitted(bits, after).is_some()
+        awaits_frame_layout(after) || emitted(bits, after).is_some()
     }
+}
+
+/// `after` encodes in no more bytes than `before`, the frame cell that has no
+/// encoding until the layout (see below) sized through `rbp`: what differs is
+/// the opcode, not the displacement. Where bytes are strict (-O1, -Os).
+pub fn no_longer_when_strict(
+    bits: u32,
+    before: &Insn,
+    after: &Insn,
+) -> bool {
+    let sized = |one: &Insn| -> Option<usize> {
+        let mut what = one.what.clone()?;
+        for place in what.dests.iter_mut().chain(what.sources.iter_mut()) {
+            if let Loc::Mem(cell) = place
+                && llrm_x86::select::awaits_frame_layout(cell)
+            {
+                cell.through = RegId::RBP;
+            }
+        }
+        select::priced_in(bits, &what, 0, None, false, false, None).map(|code| code.code.len())
+    };
+    matches!((sized(before), sized(after)), (Some(before), Some(after)) if after <= before)
+}
+
+/// A frame cell reached by a wide index has no encoding until the frame
+/// layout names the frame register; `after` is not one that cannot encode.
+fn awaits_frame_layout(one: &Insn) -> bool {
+    one.what.as_ref().is_some_and(|what| {
+        what.dests.iter().chain(&what.sources).any(
+            |place| matches!(place, Loc::Mem(cell) if llrm_x86::select::awaits_frame_layout(cell)),
+        )
+    })
 }
 
 /// Both encode, in as many bytes.
@@ -532,7 +613,34 @@ pub fn holds_after(
         guarded.insert(RegId::from(addr.segment));
     }
     let guarded: Lanes = guarded.into_iter().flat_map(|one| _lanes(regs, one)).collect();
-    writes.is_disjoint(&guarded) && crate::backend::bodyfacts::_keeps(crossed, store, cell, true, cx.facts.body())
+    if !writes.is_disjoint(&guarded) {
+        return false;
+    }
+    // An SSE register has no lanes, so the check above sees none of its writes.
+    if what.dests.iter().any(|dest| {
+        matches!(
+            dest,
+            Loc::Reg(one) if ir::root(one.register) == ir::root(held.register)
+        )
+    }) {
+        return false;
+    }
+    // DEVIATE (pin: a spill slot is a FixedStack operand, alias-free against
+    // every other access; the pin's reload there is not kept either). Exit:
+    // pin-faithful spill placement leaves no such pair. ASSUMPTION: an access
+    // through an array index never reaches a spill slot unless the program is
+    // out of bounds (C: undefined; QB: bounds-checked). Inline asm and runtime
+    // frame accesses are volatile or clobbering here and stop the forwarding.
+    // A slot only the allocator's spills use is reached by no program pointer
+    // (nothing takes its address): a write through a register, a string
+    // instruction or a call cannot change it, only an access naming the slot.
+    if cell.addr.and_then(|addr| addr.slot_home()).is_some_and(|home| cx.facts.spill_homes().contains(&home)) {
+        return !crate::backend::bodyfacts::_written(crossed, cell).any(|dest| {
+            crate::backend::bodyfacts::_in_frame(dest)
+                && crate::backend::overlap::may_overlap(cell.addr, cell.width, dest.addr, dest.width)
+        });
+    }
+    crate::backend::bodyfacts::_keeps(crossed, store, cell, true, cx.facts.body())
 }
 
 /// `load` may read its cell after `crossed`, which only materializes a

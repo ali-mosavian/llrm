@@ -362,6 +362,7 @@ fn folded_to_select(
                 dom_conditions: None,
                 cond_context: None,
                 cxt: None,
+                pending_intrinsics: &[],
             };
             compute_known_bits(&q, condition, 0)
         };

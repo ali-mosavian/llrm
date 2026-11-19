@@ -11,7 +11,7 @@
 //!
 //! DEVIATE 1: `SimplifyAddWithRemainder` (:1739), the align-up and
 //! `(A & -A) - 1` idioms, `~(A*C)+A`, signum, `select` of `icmp eq`,
-//! ceiling division, `~X + ~Y` (`isFreeToInvert`) and everything after
+//! `~X + ~Y` (`isFreeToInvert`) and everything after
 //! `canonicalizeLowbitMask` are the next strip.
 //!
 //! DEVIATE 2: `sext(A<B) + zext(A>B)` (:1766) and `X + (or X, -X)`'s
@@ -36,8 +36,9 @@
 
 use llrm_mir::context::mask;
 use llrm_mir::module::{InstId, Operand};
-use llrm_mir::opcode::{BinaryOp, CastOp, Flags, Opcode};
-use llrm_mir::valuetracking::known::{NoCommonBitsSetResult, get_no_common_bits_set_result};
+use llrm_mir::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
+use llrm_mir::valuetracking::known::{NoCommonBitsSetResult, WithCache, get_no_common_bits_set_result};
+use llrm_mir::valuetracking::range::compute_constant_range;
 use llrm_mir::valuetracking::{Query, pattern, signbits};
 
 use crate::combine::{Combiner, Visit};
@@ -331,10 +332,11 @@ fn fold_extended_pair(
 fn fold_no_common_bits(
     c: &mut Combiner,
     inst: InstId,
-    lhs: Operand,
-    rhs: Operand,
+    lhs_cache: &WithCache,
+    rhs_cache: &WithCache,
 ) -> Option<Visit> {
-    let result = get_no_common_bits_set_result(&query(c, Some(inst)), lhs, rhs);
+    let (lhs, rhs) = (lhs_cache.value(), rhs_cache.value());
+    let result = get_no_common_bits_set_result(&query(c, Some(inst)), lhs_cache, rhs_cache);
     let flags = match result {
         NoCommonBitsSetResult::Known => Flags::DISJOINT,
         NoCommonBitsSetResult::OnlyIfUndefIgnored => Flags::default(),
@@ -382,6 +384,72 @@ fn fold_bitwise_pair(
     Some(Visit::Changed)
 }
 
+/// `checkDivCeilNUW`: `X + (Y - 1)` cannot wrap in the unsigned sense.
+///
+/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineAddSub.cpp#L1564>
+fn check_div_ceil_nuw(
+    q: &Query,
+    x: Operand,
+    y: Operand,
+    bits: u32,
+) -> bool {
+    let max_x = compute_constant_range(q, x, false, 0).get_unsigned_max();
+    let range_y = compute_constant_range(q, y, false, 0);
+    let (min_y, max_y) = (range_y.get_unsigned_min(), range_y.get_unsigned_max());
+    // `!MaxX.ugt(-MaxY)`, in the width of Y.
+    min_y != 0 && max_x <= 0u128.wrapping_sub(max_y) & mask(bits)
+}
+
+/// `add(udiv X, Y), zext(icmp ne (urem X, Y), 0)` is `udiv (add nuw X, Y-1),
+/// Y`; with a `zext` of the `udiv` it is the `zext` of that (`foldDivCeil`,
+/// :1583).
+fn fold_div_ceil(
+    c: &mut Combiner,
+    inst: InstId,
+    lhs: Operand,
+    rhs: Operand,
+) -> Option<Visit> {
+    let ty = c.function.instruction(inst).ty;
+    let matched = {
+        let q = query(c, Some(inst));
+        let shape = |div: Operand, cmp: Operand| {
+            if !has_one_use(c, div) || !has_one_use(c, cmp) {
+                return None;
+            }
+            // m_ZExtOrSelf(m_OneUse(m_UDiv(X, Y)))
+            let udiv = match pattern::cast(&q, div, CastOp::ZExt) {
+                Some((_, _, inner)) => inner,
+                None => div,
+            };
+            if !has_one_use(c, udiv) {
+                return None;
+            }
+            let (x, y, _) = binop(&q, udiv, BinaryOp::UDiv)?;
+            let (_, _, zext_in) = pattern::cast(&q, cmp, CastOp::ZExt)?;
+            if !has_one_use(c, zext_in) {
+                return None;
+            }
+            let (_, _, pred, urem, zero) = pattern::icmp(&q, zext_in)?;
+            if pred.pred != IntPredicate::Ne || !pattern::zero(&q, zero) || !has_one_use(c, urem) {
+                return None;
+            }
+            let (x1, y1, _) = binop(&q, urem, BinaryOp::URem)?;
+            ((x1, y1) == (x, y) && check_div_ceil_nuw(&q, x, y, width(c, y))).then_some((x, y))
+        };
+        shape(lhs, rhs).or_else(|| shape(rhs, lhs))
+    };
+    let (x, y) = matched?;
+    let y_ty = c.type_of(y);
+    let all_ones = c.all_ones(y_ty);
+    let y_minus_one = c.create_add(inst, y, all_ones);
+    let nuw_add = c.create_binop(inst, BinaryOp::Add, x, y_minus_one, Flags::NUW);
+    if c.type_of(x) != ty {
+        let div = c.create_binop(inst, BinaryOp::UDiv, nuw_add, y, Flags::default());
+        return Some(c.replace_with_new(inst, Opcode::Cast(CastOp::ZExt), ty, vec![div], Flags::default()));
+    }
+    Some(c.replace_with_binop(inst, BinaryOp::UDiv, nuw_add, y, Flags::default()))
+}
+
 /// The rest of `visitAdd` this module holds, in the order `visitAdd`
 /// reaches it.
 pub fn fold_add_rest(
@@ -395,18 +463,73 @@ pub fn fold_add_rest(
     if let Some(value) = check_for_negative_operand(c, inst, lhs, rhs) {
         return Visit::Replace(value);
     }
-    let folds: [fn(&mut Combiner, InstId, Operand, Operand) -> Option<Visit>; 9] = [
+    type Fold = fn(&mut Combiner, InstId, Operand, Operand) -> Option<Visit>;
+    let before: [Fold; 6] = [
         fold_add_one_not,
         fold_add_const_not,
         fold_reassociated_add,
         fold_constant_sub,
         fold_masked_sign_bit,
         fold_extended_pair,
-        fold_no_common_bits,
-        fold_narrow_math,
-        fold_bitwise_pair,
     ];
-    folds.iter().find_map(|fold| fold(c, inst, lhs, rhs)).unwrap_or(Visit::None)
+    if let Some(found) = before.iter().find_map(|fold| fold(c, inst, lhs, rhs)) {
+        return found;
+    }
+    // `LHSCache` and `RHSCache` of `visitAdd` (:1782): the known bits of an
+    // operand are computed once for the disjoint-or fold and the wrap flags.
+    let (lhs_cache, rhs_cache) = (WithCache::new(lhs), WithCache::new(rhs));
+    if let Some(found) = fold_no_common_bits(c, inst, &lhs_cache, &rhs_cache) {
+        return found;
+    }
+    let after: [Fold; 3] = [fold_narrow_math, fold_bitwise_pair, fold_div_ceil];
+    if let Some(found) = after.iter().find_map(|fold| fold(c, inst, lhs, rhs)) {
+        return found;
+    }
+    infer_wrap_flags(c, inst, &lhs_cache, &rhs_cache, flags)
+}
+
+/// The `willNotOverflowSignedAdd` / `willNotOverflowUnsignedAdd` block that
+/// ends `visitAdd`: an add that cannot wrap gains `nsw` / `nuw`, and the users
+/// of its induction variable are queued again (:1973).
+///
+/// DEVIATE 1: the folds the module header lists as untranslated sit before this
+/// block in `visitAdd`; here it simply runs after the translated ones.
+///
+/// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineAddSub.cpp#L1973>
+fn infer_wrap_flags(
+    c: &mut Combiner,
+    inst: InstId,
+    lhs: &WithCache,
+    rhs: &WithCache,
+    flags: Flags,
+) -> Visit {
+    use llrm_mir::valuetracking::range::{
+        OverflowResult::NeverOverflows, compute_overflow_for_cached_signed_add, compute_overflow_for_cached_unsigned_add,
+    };
+    let mut new = flags;
+    {
+        let q = query(c, Some(inst));
+        if !flags.contains(Flags::NSW) && compute_overflow_for_cached_signed_add(&q, lhs, rhs) == NeverOverflows {
+            new.insert(Flags::NSW);
+        }
+        if !flags.contains(Flags::NUW) && compute_overflow_for_cached_unsigned_add(&q, lhs, rhs) == NeverOverflows {
+            new.insert(Flags::NUW);
+        }
+    }
+    if new == flags {
+        return Visit::None;
+    }
+    c.function.set_flags(inst, new);
+    // Re-enqueue users of the induction variable of add recurrence.
+    let recurrence = pattern::match_simple_recurrence_of(&query(c, Some(inst)), inst);
+    if let Some((phi, ..)) = recurrence {
+        let result = c.function.instruction(phi).result.expect("a phi value");
+        let users: Vec<InstId> = c.function.users(result).iter().map(|one| one.user).collect();
+        for user in users {
+            c.worklist.push(user);
+        }
+    }
+    Visit::Changed
 }
 
 #[cfg(test)]

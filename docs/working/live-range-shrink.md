@@ -37,4 +37,4 @@ Without the pass the code is the same size and the clocks are lower by 0.005%; t
 
 ## Decision
 
-Clocks and counts both say nil. Proposed: DEVIATE L1 stands, now with the pressure counts; Live Range Shrink is not translated; `pressuresink.rs` is the stand-in; owner w-4; review 2026-12-01 or with the Machine Scheduler work (w-2), whichever comes first.
+Clocks and counts both say nil. Proposed: DEVIATE L1 stands, now with the pressure counts; Live Range Shrink is not translated; `pressuresink.rs` is the stand-in; owner x86-m64; review 2026-12-01 or with the Machine Scheduler work (w-2), whichever comes first.

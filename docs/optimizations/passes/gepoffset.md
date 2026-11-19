@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/gepoffset.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/gepoffset.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/gepoffset.rs sha256:47af1195ce5f00b6e3f615d4d949f415de6905ed795a7b37b1c3800273778ac3 -->
+<!-- src: crates/opt/llrm-transforms/src/gepoffset.rs sha256:1e8259c09d041c5ae7ffb8db4dee8383e7543ba35a852d0cb30192cd5a5f6b14 -->
 
 # gepoffset
 
@@ -27,7 +27,7 @@ drops `inbounds` too.
 DEVIATE LP-2 (no pin pass: LLVM gets `a[i + 8]` as a displacement from
 InstCombine's gep canonicalization, LSR and CodeGenPrepare's address-mode
 matching (row CG DEVIATE C1); exit: that matching translated, then deleted;
-owner w-6; review 2026-11-13).
+owner w10-instcombine; review 2026-11-13).
 
 ## Example
 Before:

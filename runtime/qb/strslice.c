@@ -9,7 +9,7 @@ static SD *slice(SD *sd, unsigned from, int len)
     if (len < 0)
         qb_error(BE_ILLFUN);
     if (len == 0) {
-        str_tmp_free(sd);
+        str_free_if_tmp(sd);
         return &str_nul;
     }
     if ((unsigned)len > sd->len - from)
@@ -43,7 +43,7 @@ SD *B_FMID(SD *sd, int start, int len)
     if (len < 0 || start < 1)
         qb_error(BE_ILLFUN);
     if ((unsigned)start > sd->len) {
-        str_tmp_free(sd);
+        str_free_if_tmp(sd);
         return &str_nul;
     }
     return slice(sd, start - 1, len);
@@ -71,8 +71,8 @@ int B_SCMP(SD *first, SD *second)
 
     if (order == 0)
         order = first->len == second->len ? 0 : first->len < second->len ? -1 : 1;
-    str_tmp_free(first);
-    str_tmp_free(second);
+    str_free_if_tmp(first);
+    str_free_if_tmp(second);
     return order;
 }
 
@@ -97,8 +97,8 @@ static int instr(unsigned start, SD *source, SD *match)
             }
         }
     }
-    str_tmp_free(source);
-    str_tmp_free(match);
+    str_free_if_tmp(source);
+    str_free_if_tmp(match);
     return found;
 }
 

@@ -1,0 +1,10 @@
+#title,"Table 8-10. JMP, JSR, LEA, PEA, and MOVEM Instruction Execution Times",page,8-8,notes,n is the number of registers to move. | *The size of the index register (Xn) does not affect the instruction's execution time.
+Instruction,Size,(An),(An)+,–(An),"(d16,An)","(d8,An,Xn)+",(xxx).W,(xxx).L,(d16 PC),"(d8, PC, Xn)*"
+JMP,—,8(2/0),—,—,10(2/0),14(3/0),10(2/0),12(3/0),10(2/0),14(3/0)
+JSR,—,16(2/2),—,—,18(2/2),22(2/2),18(2/2),20(3/2),18(2/2),22(2/2)
+LEA,—,4(1/0),—,—,8(2/0),12(2/0),8(2/0),12(3/0),8(2/0),12(2/0)
+PEA,—,12(1/2),—,—,16(2/2),20(2/2),16(2/2),20(3/2),16(2/2),20(2/2)
+MOVEM M→R,Word,12+4n(3+n/0),12+4n(3+n/0),—,16+4n(4+n/0),18+4n(4+n/0),16+4n(4+n/0),20+4n(5+n/0),16+4n(4n/0),18+4n(4+n/0)
+,Long,12+8n(3+2n/0),12+8n(3+n/0),—,16+8n(4+2n/0),18+8n(4+2n/0),16+8n(4+2n/0),20+8n(5+2n/0),16+8n(4+2n/0),18+8n(4+2n/0)
+MOVEM R→M,Word,8+4n(2/n),—,8+4n(2/n),12+4n(3/n),14+4n(3/n),12+4n(3/n),16+4n(4/n),— —,— —
+,Long,8+8n(2/2n),— —,8+8n(2/2n),12+8n(3/2n),14+8n(3/2n),12+8n(3/2n),16+8n(4/2n),— —,— —

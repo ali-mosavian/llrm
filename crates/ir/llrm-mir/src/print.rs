@@ -3,12 +3,18 @@
 
 use std::fmt::Write;
 
+/// MIR keeps a `llvm.experimental.noalias.scope.decl` call's node as this
+/// attachment and the call without operands; the pin's text has it as the
+/// argument, `(metadata !N)`.
+pub(crate) const SCOPE_DECL_KIND: &str = "noalias.scope.decl";
+pub(crate) const SCOPE_DECL_NAME: &str = "llvm.experimental.noalias.scope.decl";
+
 use crate::context::{Constant, ConstantExpr, ConstantId, ConstantKind, Context, GlobalId, signed};
 use crate::hash::HashMap;
 use crate::lexer::is_name;
 use crate::module::{
-    BlockId, DebugWhat, Function, GlobalKind, GlobalValue, InstId, LINKAGE, Linkage, MetadataId, MetadataOperand,
-    Module, Operand, Special, UnnamedAddr, ValueId,
+    Alias, BlockId, DebugWhat, Function, GlobalKind, GlobalValue, InstId, LINKAGE, Linkage, MetadataId,
+    MetadataOperand, Module, Operand, Special, UnnamedAddr, VISIBILITY, ValueId, Visibility,
 };
 use crate::opcode::{
     AtomicKind, Attribute, CAST, Clause, FLOAT_PREDICATE, INT_PREDICATE, Opcode, RMW_OPS, Tail, spelling,
@@ -20,6 +26,7 @@ pub fn module(module: &Module) -> String {
     let printer = Printer {
         context: &module.context,
         globals: global_names(module),
+        comdats: comdat_markers(module),
         module: Some(module),
         labels: Default::default(),
     };
@@ -47,13 +54,27 @@ pub fn module(module: &Module) -> String {
     );
     section(
         &mut out,
+        module.comdats.iter().map(|(name, kind)| format!("${} = comdat {kind}\n", quoted(name))),
+    );
+    section(
+        &mut out,
         module
             .globals
             .iter()
             .enumerate()
             .filter(|(_, one)| matches!(one.kind, GlobalKind::Variable(_)))
-            .map(|(at, one)| printer.variable(at, one, module.global_metadata.get(&(at as u32)))),
+            .map(
+                |(at, one)| {
+                    printer.variable(
+                        at,
+                        one,
+                        module.global_metadata.get(&(at as u32)),
+                        one.name.owned().and_then(|name| module.sections.get(&name)),
+                    )
+                },
+            ),
     );
+    section(&mut out, module.aliases.iter().map(|one| printer.alias(one)));
     for (at, global) in module.globals.iter().enumerate() {
         if let GlobalKind::Function(function) = &global.kind {
             if !out.is_empty() {
@@ -102,7 +123,7 @@ pub fn body(
     context: &Context,
     function: &Function,
 ) -> String {
-    Printer { context, globals: Vec::new(), module: None, labels: Default::default() }
+    Printer { context, globals: Vec::new(), comdats: Vec::new(), module: None, labels: Default::default() }
         .blocks(function, &Slots::new(function))
 }
 
@@ -237,6 +258,12 @@ pub fn fingerprint(function: &Function) -> u128 {
                         digest.write_u8(2);
                         operand(&mut digest, at);
                     }
+                    DebugWhat::Args(list) => {
+                        digest.write_u8(6);
+                        for &one in function.debug_args(list) {
+                            operand(&mut digest, one);
+                        }
+                    }
                     DebugWhat::Piece { value, offset, bytes } => {
                         digest.write_u8(3);
                         operand(&mut digest, value);
@@ -244,6 +271,15 @@ pub fn fingerprint(function: &Function) -> u128 {
                     }
                     DebugWhat::GonePiece { offset, bytes } => (4u8, offset, bytes).hash(&mut digest),
                     DebugWhat::Gone => digest.write_u8(5),
+                    DebugWhat::Assign { value, address, id, address_expression } => {
+                        digest.write_u8(7);
+                        value.is_some().hash(&mut digest);
+                        address.is_some().hash(&mut digest);
+                        for one in value.into_iter().chain(address) {
+                            operand(&mut digest, one);
+                        }
+                        (id, address_expression).hash(&mut digest);
+                    }
                 }
             }
             let instruction = function.instruction(inst);
@@ -295,6 +331,20 @@ fn string(bytes: &[u8]) -> String {
     out
 }
 
+/// Each global's `comdat` marker: bare when the comdat has the global's own
+/// name, else `comdat($name)`.
+fn comdat_markers(module: &Module) -> Vec<Option<String>> {
+    module
+        .globals
+        .iter()
+        .map(|one| {
+            let own = one.name.owned()?;
+            let comdat = module.comdat_of.get(&own)?;
+            Some(if *comdat == own { "comdat".to_owned() } else { format!("comdat(${})", quoted(comdat)) })
+        })
+        .collect()
+}
+
 /// `@name`, or `@N` for the unnamed, numbered in order.
 fn global_names(module: &Module) -> Vec<String> {
     let mut next = 0;
@@ -320,6 +370,7 @@ fn float(
     let value = match kind {
         FloatKind::Double | FloatKind::X86Fp80 => f64::from_bits(bits),
         FloatKind::Float => f64::from(f32::from_bits(bits as u32)),
+        FloatKind::F128 => unreachable!("an fp128 constant is Float128, printed in hex"),
     };
     if value.is_finite() {
         let text = format!("{value:.6e}");
@@ -340,7 +391,7 @@ fn attributes(
     attrs
         .iter()
         .map(|one| match one {
-            Attribute::Flag(name) => name.clone(),
+            Attribute::Flag(name) => name.to_string(),
             Attribute::Int(name, value) if name == "align" => format!("align {value}"),
             Attribute::Int(name, value) => format!("{name}({value})"),
             Attribute::Type(name, ty) => format!("{name}({})", context.types.display(*ty)),
@@ -381,6 +432,7 @@ struct Printer<'a> {
     /// from the function's own numbering.
     module: Option<&'a Module>,
     labels: std::cell::RefCell<HashMap<GlobalId, HashMap<BlockId, String>>>,
+    comdats: Vec<Option<String>>,
 }
 
 /// A function's local names: named values as they are, the rest numbered.
@@ -458,6 +510,10 @@ impl Printer<'_> {
         (linkage != Linkage::External).then(|| spelling(&LINKAGE, linkage))
     }
 
+    fn visibility(visibility: Visibility) -> Option<&'static str> {
+        (visibility != Visibility::Default).then(|| spelling(&VISIBILITY, visibility))
+    }
+
     fn unnamed_addr(unnamed_addr: UnnamedAddr) -> Option<&'static str> {
         match unnamed_addr {
             UnnamedAddr::None => None,
@@ -481,11 +537,31 @@ impl Printer<'_> {
         (space != 0).then(|| format!("addrspace({space})"))
     }
 
+    fn alias(
+        &self,
+        alias: &Alias,
+    ) -> String {
+        let words: Vec<&str> =
+            [Self::linkage(alias.linkage), Self::visibility(alias.visibility), Self::unnamed_addr(alias.unnamed_addr)]
+                .into_iter()
+                .flatten()
+                .collect();
+        let space = Self::address_space(alias.address_space).map(|one| format!(" {one}")).unwrap_or_default();
+        format!(
+            "@{} = {}alias {}, ptr{space} {}\n",
+            quoted(&alias.name),
+            words.iter().map(|one| format!("{one} ")).collect::<String>(),
+            self.ty(alias.ty),
+            self.globals[alias.aliasee.0 as usize],
+        )
+    }
+
     fn variable(
         &self,
         at: usize,
         global: &GlobalValue,
         attached: Option<&Vec<(String, MetadataId)>>,
+        section: Option<&String>,
     ) -> String {
         let GlobalKind::Variable(variable) = &global.kind else { unreachable!("a variable") };
         let linkage = match (global.linkage, variable.initializer) {
@@ -493,7 +569,11 @@ impl Printer<'_> {
             (linkage, _) => Self::linkage(linkage),
         };
         let mut words: Vec<String> =
-            [linkage, Self::unnamed_addr(global.unnamed_addr)].into_iter().flatten().map(str::to_owned).collect();
+            [linkage, Self::visibility(global.visibility), Self::unnamed_addr(global.unnamed_addr)]
+                .into_iter()
+                .flatten()
+                .map(str::to_owned)
+                .collect();
         words.extend(Self::address_space(global.address_space));
         if variable.externally_initialized {
             words.push("externally_initialized".to_owned());
@@ -501,10 +581,12 @@ impl Printer<'_> {
         words.push((if variable.constant { "constant" } else { "global" }).to_owned());
         words.push(self.ty(variable.ty));
         words.extend(variable.initializer.map(|one| self.constant(one)));
+        let section = section.map(|one| format!(", section \"{one}\"")).unwrap_or_default();
+        let comdat = self.comdats.get(at).and_then(Option::as_ref).map(|one| format!(", {one}")).unwrap_or_default();
         let align = variable.align.map(|one| format!(", align {one}")).unwrap_or_default();
         let attached: String =
             attached.into_iter().flatten().map(|(kind, node)| format!(", !{kind} !{}", node.0)).collect();
-        format!("{} = {}{align}{attached}\n", self.globals[at], words.join(" "))
+        format!("{} = {}{section}{comdat}{align}{attached}\n", self.globals[at], words.join(" "))
     }
 
     fn function(
@@ -532,11 +614,15 @@ impl Printer<'_> {
         if variadic {
             parameters.push("...".to_owned());
         }
+        if parameters.is_empty() && global.name.as_deref() == Some(SCOPE_DECL_NAME) {
+            parameters.push("metadata".to_owned());
+        }
         let mut words: Vec<String> = vec![(if declaration { "declare" } else { "define" }).to_owned()];
         // A declaration has no linkage but external's, in LLVM's syntax.
         if !declaration {
             words.extend(Self::linkage(global.linkage).map(str::to_owned));
         }
+        words.extend(Self::visibility(global.visibility).map(str::to_owned));
         words.extend(Self::convention(function.calling_convention));
         let return_attrs = attributes(&self.context, &function.return_attrs);
         if !return_attrs.is_empty() {
@@ -549,6 +635,9 @@ impl Printer<'_> {
         let attrs = attributes(&self.context, &function.attrs);
         if !attrs.is_empty() {
             words.push(attrs);
+        }
+        if let Some(comdat) = self.comdats.get(at).and_then(Option::as_ref).filter(|_| !declaration) {
+            words.push(comdat.clone());
         }
         if let Some(personality) = function.personality {
             words.push(format!("personality {}", self.typed_constant(personality)));
@@ -570,6 +659,20 @@ impl Printer<'_> {
         }
         out.push_str(" {\n");
         out.push_str(&self.blocks(function, &slots));
+        // `LLRM_USELISTS=1`: the use-list orders, as
+        // `-preserve-ll-uselistorder`.
+        if std::env::var_os("LLRM_USELISTS").is_some() {
+            for (value, shuffle) in function.use_list_orders() {
+                let order: Vec<String> = shuffle.iter().map(u32::to_string).collect();
+                let _ = writeln!(
+                    out,
+                    "  uselistorder {} %{}, {{ {} }}",
+                    self.ty(function.value(value).ty),
+                    slots.values[&value],
+                    order.join(", ")
+                );
+            }
+        }
         out.push_str("}\n");
         out
     }
@@ -608,6 +711,17 @@ impl Printer<'_> {
                             self.typed(function, slots, at),
                             record.variable.0
                         ),
+                        DebugWhat::Args(list) => writeln!(
+                            out,
+                            "  #dbg_value(!DIArgList({}), !{}{extra})",
+                            function
+                                .debug_args(list)
+                                .iter()
+                                .map(|&one| self.typed(function, slots, one))
+                                .collect::<Vec<_>>()
+                                .join(", "),
+                            record.variable.0
+                        ),
                         DebugWhat::Piece { value, offset, bytes } => writeln!(
                             out,
                             "  #dbg_piece({}, !{}, {offset}, {bytes})",
@@ -618,6 +732,17 @@ impl Printer<'_> {
                             writeln!(out, "  #dbg_gonepiece(!{}, {offset}, {bytes})", record.variable.0)
                         }
                         DebugWhat::Gone => writeln!(out, "  #dbg_gone(!{})", record.variable.0),
+                        DebugWhat::Assign { value, address, id, address_expression } => writeln!(
+                            out,
+                            "  #dbg_assign({}, !{}, !{}, !{}, {}, !{}, !{})",
+                            value.map_or_else(|| "i1 poison".to_owned(), |one| self.typed(function, slots, one)),
+                            record.variable.0,
+                            record.expression.map_or(0, |one| one.0),
+                            id.0,
+                            address.map_or_else(|| "ptr poison".to_owned(), |one| self.typed(function, slots, one)),
+                            address_expression.0,
+                            record.location.map_or(0, |one| one.0)
+                        ),
                     };
                 }
                 out.push_str("  ");
@@ -730,6 +855,15 @@ impl Printer<'_> {
                 let indices: Vec<String> = indices.iter().map(u32::to_string).collect();
                 format!("{} {}, {}", inst.opcode.mnemonic(), values.join(", "), indices.join(", "))
             }
+            Opcode::ExtractElement | Opcode::InsertElement => {
+                let values: Vec<String> = (0..ops.len()).map(typed).collect();
+                format!("{} {}", inst.opcode.mnemonic(), values.join(", "))
+            }
+            Opcode::ShuffleVector(mask) => {
+                let lanes: Vec<String> =
+                    mask.iter().map(|&lane| if lane < 0 { "i32 poison".to_owned() } else { format!("i32 {lane}") }).collect();
+                format!("shufflevector {}, {}, <{} x i32> <{}>", typed(0), typed(1), mask.len(), lanes.join(", "))
+            }
             Opcode::Alloca { allocated, align, address_space } => {
                 let mut text = format!("alloca {}", self.ty(*allocated));
                 if !ops.is_empty() {
@@ -743,6 +877,7 @@ impl Printer<'_> {
                 }
                 text
             }
+            Opcode::VaArg => format!("va_arg {}, {}", typed(0), self.ty(inst.ty)),
             Opcode::Load { align, volatile } => {
                 let align = align.map(|one| format!(", align {one}")).unwrap_or_default();
                 format!("load {}{}, {}{align}", if *volatile { "volatile " } else { "" }, self.ty(inst.ty), typed(0))
@@ -799,6 +934,13 @@ impl Printer<'_> {
                         )
                     })
                     .collect();
+                // The pin's spelling of a scope declaration: its node is the
+                // argument.
+                let scope_decl = inst.metadata.iter().find(|(kind, _)| kind == SCOPE_DECL_KIND);
+                let arguments = match scope_decl {
+                    Some((_, node)) if arguments.is_empty() => vec![format!("metadata !{}", node.0)],
+                    _ => arguments,
+                };
                 let tail = match info.tail {
                     Tail::None => "",
                     Tail::Tail => "tail ",
@@ -838,7 +980,11 @@ impl Printer<'_> {
                 text
             }
         };
+        let spelled_as_argument = matches!(inst.opcode, Opcode::Call(_)) && ops.len() == 1;
         for (kind, node) in &inst.metadata {
+            if spelled_as_argument && kind == SCOPE_DECL_KIND {
+                continue;
+            }
             let _ = write!(body, ", !{kind} !{}", node.0);
         }
         match inst.result {
@@ -879,6 +1025,7 @@ impl Printer<'_> {
                 _ => unreachable!("a floating constant has a floating type"),
             },
             ConstantKind::Float80(bits) => format!("0xK{bits:020X}"),
+            ConstantKind::Float128(bits) => format!("0xL{:016X}{:016X}", *bits as u64, (*bits >> 64) as u64),
             ConstantKind::Null => "null".to_owned(),
             ConstantKind::Poison => "poison".to_owned(),
             ConstantKind::Undef => "undef".to_owned(),

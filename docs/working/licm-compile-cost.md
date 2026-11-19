@@ -26,3 +26,8 @@ The pass proper (14.5 M with promotion) is at parity with the pin's 14.0 M. The 
 3. LICM itself: none (parity). Not a row.
 
 Evidence: `w3-cg/{cg.out,ann_all.txt,tree2.txt}` in w-3's scratch; reproduce with `valgrind --tool=callgrind` on the command line above and `callgrind_annotate --tree=calling --inclusive=yes`.
+
+## Re-take 2026-11-11 (softfloat): AM-MS-1..3 closed
+
+d_faces -O2 callgrind, `llrm-llc` of dist xid/dist-rc1 (release/next d6bfc5f306; llrm-cc ccc93b452ff2, llc a65cb0f156a9), total 1298.7 M Ir (llc alone). Source `qbq-llrm/src/render/d_faces.c` built under llrm-cc with `-Dpascal= -Dfar= -Dnear= -Dhuge=` (the Watcom keywords; not the same input as the 1435 M run, so shares, not totals, are comparable).
+`PlainAccesses`, `Annotated` and `Writes` do not appear in the profile: the MemorySSA is built by `mssa` (memoryssa-port; `manager_tests` asserts the build asks no `PlainAccesses`). `MemorySsa::run` is 4.68 M inclusive (0.36%; was 59.9 M in 41 builds), `licm::run` 28.9 M (was 60.2 M). Positive control: the same profile holds `MemorySsaUpdater::move_to_place` and `Analyses::get::<MemorySsa>`, so the reader sees MemorySSA code. Raw: `~/scratch/sf-fix32/cg/cg.1131350.out`.

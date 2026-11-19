@@ -17,10 +17,6 @@
 //! even): MIR has no constrained intrinsics, so `canIgnoreSNaN` is true and
 //! `canRoundingModeBe(TowardNegative)` false.
 //!
-//! DEVIATE 2: `cannotBeNegativeZero` of a value (#2209) is answered for
-//! constants alone; the `fadd X, 0.0` fold therefore finds less than LLVM,
-//! never more.
-//!
 //! DEVIATE 3: `frem` of two constants is folded with the host's `fmod` (exact)
 //! where neither is a NaN: `APFloat` has no `mod` here.
 //!
@@ -32,7 +28,7 @@
 
 use super::*;
 use crate::apfloat::{ApFloat, IEEE_DOUBLE, IEEE_SINGLE, Sem};
-use crate::fpclass::{FC_INF, FC_NAN, RoundingMode};
+use crate::fpclass::{FC_ALL_FLAGS, FC_INF, FC_NAN, FC_NEG_ZERO, RoundingMode};
 use crate::types::{FloatKind, Type};
 use crate::valuetracking::fp::compute_known_fp_class;
 
@@ -47,6 +43,9 @@ fn value(
     let Type::Float(kind) = *q.context.types.get(constant.ty) else { return None };
     if kind == FloatKind::X86Fp80 {
         return crate::fp80::value(&constant.kind);
+    }
+    if kind == FloatKind::F128 {
+        return crate::fp128::value(&constant.kind);
     }
     let (sem, bits): (Sem, u64) = match (kind, &constant.kind) {
         (FloatKind::Float, ConstantKind::Float(bits)) => (IEEE_SINGLE, *bits),
@@ -65,6 +64,7 @@ fn sem_of(
     match q.context.types.get(ty) {
         Type::Float(FloatKind::Float) => IEEE_SINGLE,
         Type::Float(FloatKind::X86Fp80) => crate::apfloat::X87_DOUBLE_EXTENDED,
+        Type::Float(FloatKind::F128) => crate::apfloat::IEEE_QUAD,
         _ => IEEE_DOUBLE,
     }
 }
@@ -85,6 +85,9 @@ fn constant_of(
 ) -> Operand {
     if matches!(q.context.types.get(ty), Type::Float(FloatKind::X86Fp80)) {
         return Operand::Constant(crate::fp80::constant(q.context, ty, value));
+    }
+    if matches!(q.context.types.get(ty), Type::Float(FloatKind::F128)) {
+        return Operand::Constant(q.context.constant(Constant { ty, kind: ConstantKind::Float128(value.to_bits()) }));
     }
     Operand::Constant(q.context.constant(Constant { ty, kind: ConstantKind::Float(value.to_bits() as u64) }))
 }
@@ -191,12 +194,12 @@ fn fneg_of(
     pattern::fneg(&q.tracking(), v)
 }
 
-/// `cannotBeNegativeZero(V, Q)`, for a constant (DEVIATE 2).
+/// `cannotBeNegativeZero(V, Q)`: `computeKnownFPClass` asked for `fcNegZero`.
 fn cannot_be_negative_zero(
     q: &Query,
     v: Operand,
 ) -> bool {
-    value(q, v).is_some_and(|a| !a.is_neg_zero())
+    compute_known_fp_class(&q.tracking(), v, FC_NEG_ZERO, 0).is_known_never_neg_zero()
 }
 
 /// `ConstantFoldUnaryOpOperand(FNeg, ..)`.
@@ -377,8 +380,8 @@ pub(super) fn simplify_fneg(
 /// two constants fold, a constant moves to the right, then the trivial
 /// predicates, poison, an undef operand (a NaN, so true where the predicate
 /// is unordered), `x fcmp x`, `ord`/`uno` under `nnan`, and a NaN on the
-/// right. DEVIATE 5: the folds that read `computeKnownFPClass` of a value
-/// (`ord`/`uno` of two values, `fcmpToClassTest`, the compares against a
+/// right, then `ord`/`uno` of two values by `computeKnownFPClass`. DEVIATE 5:
+/// the folds that read it otherwise (`fcmpToClassTest`, the compares against a
 /// negative or zero constant), `isImpliedByDomCondition` (the integer
 /// predicates only), `min/maxnum` with a constant, and the select and phi
 /// threading are not translated; a vector compare is left alone.
@@ -429,6 +432,18 @@ pub(super) fn simplify_fcmp(
     }
     if matches!(pred, FloatPredicate::Ord | FloatPredicate::Uno) && flags.contains(Flags::NNAN) {
         return Some(answer(pred == FloatPredicate::Ord));
+    }
+    // `ord`/`uno` of two values: no NaN in either, or a NaN in one.
+    if matches!(pred, FloatPredicate::Ord | FloatPredicate::Uno) {
+        let tracking = q.tracking();
+        let right = compute_known_fp_class(&tracking, rhs, FC_ALL_FLAGS, 0);
+        let left = compute_known_fp_class(&tracking, lhs, FC_ALL_FLAGS, 0);
+        if right.is_known_never_nan() && left.is_known_never_nan() {
+            return Some(answer(pred == FloatPredicate::Ord));
+        }
+        if right.is_known_always_nan() || left.is_known_always_nan() {
+            return Some(answer(pred == FloatPredicate::Uno));
+        }
     }
     // `C->isNaN()`.
     if value(q, rhs).is_some_and(|c| c.is_nan()) {

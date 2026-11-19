@@ -1,9 +1,9 @@
 ' RUN: llrm-qb %s --dialect {qb45 | pds71 | vbdos} --runtime {qb45 | pds71 | vbdos} -O2 -march=i486 -S -o /dev/stdout
-' A loop storing one word that no one byte repeats stays a counted loop, as in the pin.
+' A loop storing one word that no one byte repeats is `rep stosw` where the fill pays (loopidioms). The pin
+' keeps a counted loop: DEVIATE, the nib twin's 100 words execute 12 instructions as the fill, 609 as the loop.
 ' CHECK-LABEL: FILLW proc
-' CHECK: mov word ptr A%[bx], 4660
-' CHECK: jb
-' CHECK-NOT: rep stosw
+' CHECK: mov ax, 4660
+' CHECK: rep stosw
 ' CHECK: FILLW endp
 DEFINT A-Z
 DECLARE SUB FillW (n)

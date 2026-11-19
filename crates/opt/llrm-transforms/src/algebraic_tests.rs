@@ -68,7 +68,7 @@ fn checked_copied(
     inputs: &[Vec<i128>],
 ) -> String {
     let flagged = |module: &mut Module| {
-        let attr = llrm_mir::opcode::Attribute::Flag(crate::walk::SELF_COPIED.to_owned());
+        let attr = llrm_mir::opcode::Attribute::Flag(crate::walk::SELF_COPIED.into());
         module.function_mut("f").expect("@f").1.attrs.push(attr);
     };
     let mut before = parsed(text);
@@ -1402,7 +1402,7 @@ b0:
                 .expect("@f")
                 .1
                 .attrs
-                .push(llrm_mir::opcode::Attribute::Flag(crate::walk::SELF_COPIED.to_owned()));
+                .push(llrm_mir::opcode::Attribute::Flag(crate::walk::SELF_COPIED.into()));
         }
         let mut passes = llrm_mir::passes::PassManager::default();
         (passes.verify_each, passes.verify_invalidation) = (true, true);

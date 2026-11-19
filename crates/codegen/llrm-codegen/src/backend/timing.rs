@@ -109,6 +109,32 @@ pub fn multiply_clocks_of<'a>(
     Ok(Some(minimum + (maximum - minimum) * (bits - 3) / (width * 8 - 3)))
 }
 
+/// Which operand of a two- or three-operand `imul` a CPU's early-out reads
+/// (`smul_multiplier`; Intel 240440-002 Table 10.1 note 3 names a multiplier
+/// only for the one-operand forms, so the description states it).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MultiplierOperand {
+    /// The register being multiplied (the first operand).
+    Destination,
+    /// The immediate of the three-operand form, else the r/m.
+    Source,
+    /// Whichever of the two is cheaper.
+    Cheaper,
+}
+
+/// The operand the CPU's multiply reads as its multiplier, where it ends early
+/// on a short one and the description says which.
+pub fn multiplier_operand<'a>(cpu: impl Into<ProfileOrName<'a>>) -> Result<Option<MultiplierOperand>, String> {
+    let profile = targets::profile(cpu)?;
+    match stated(profile, "smul_multiplier") {
+        None => Ok(None),
+        Some(0) => Ok(Some(MultiplierOperand::Destination)),
+        Some(1) => Ok(Some(MultiplierOperand::Source)),
+        Some(2) => Ok(Some(MultiplierOperand::Cheaper)),
+        Some(other) => Err(format!("smul_multiplier {other} is no operand (0 destination, 1 source, 2 cheaper)")),
+    }
+}
+
 pub fn signed_divide<'a>(
     cpu: impl Into<ProfileOrName<'a>>,
     width: i64,
@@ -160,10 +186,20 @@ mod tests {
     fn test_486_reciprocal_is_priced_by_the_dividend_s_length_and_by_the_minimum_where_unknown() {
         let mut count = 4..;
         let mut fresh = || count.next().unwrap();
-        let results = [ir::Held { value: 2, width: 4 }, ir::Held { value: 3, width: 4 }];
-        let held = ir::Held { value: 1, width: 4 };
+        let results = [ir::Held { value: 2, width: 4, offset: 0 }, ir::Held { value: 3, width: 4, offset: 0 }];
+        let held = ir::Held { value: 1, width: 4, offset: 0 };
         assert_eq!(division::reciprocal(held, 7, &results, &mut fresh, "486", true, Some(32)), Ok(None));
         assert!(division::reciprocal(held, 7, &results, &mut fresh, "486", true, None).unwrap().is_some());
+    }
+
+    /// The 486's early-out reads the source operand of a two-operand `imul`
+    /// (the harness priced `source`, `dest` and `min` as a choice: quicksort
+    /// -O2 moved 29.4k, 8.0k or 18.7k clocks against the old compiler with
+    /// it); the P5's multiply has no early-out and states none.
+    #[test]
+    fn test_the_486_states_which_operand_its_multiply_reads() {
+        assert_eq!(multiplier_operand("486"), Ok(Some(MultiplierOperand::Source)));
+        assert_eq!(multiplier_operand("P5"), Ok(None));
     }
 
     #[test]
@@ -176,10 +212,11 @@ mod tests {
     /// remainder.
     #[test]
     fn test_quotient_only_reciprocal_omits_remainder_reconstruction() {
-        let (quotient, remainder) = (ir::Held { value: 2, width: 4 }, ir::Held { value: 3, width: 4 });
+        let (quotient, remainder) =
+            (ir::Held { value: 2, width: 4, offset: 0 }, ir::Held { value: 3, width: 4, offset: 0 });
         let mut count = 4..;
         let mut fresh = || count.next().unwrap();
-        let held = ir::Held { value: 1, width: 4 };
+        let held = ir::Held { value: 1, width: 4, offset: 0 };
         let parts = division::reciprocal(held, 7, &[quotient, remainder], &mut fresh, "P5", false, None)
             .unwrap()
             .expect("a reciprocal");

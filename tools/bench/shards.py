@@ -54,13 +54,15 @@ def of(index: int, count: int, benchmarks: list[str] | None = None, cost: dict[s
     return split(benchmarks if benchmarks is not None else names(), count, cost if cost is not None else costs())[index - 1]
 
 
-def cpu_seconds(name: str, work: Path) -> float:
+def cpu_seconds(name: str, work: Path, command: list[str] | None = None) -> float:
     """CPU seconds (user+system, children included) one `bench.py NAME --no-judge` run takes: what a runner pays, whatever else the host is doing."""
-    command = ["uv", "run", "-q", "--project", str(HERE.parent), "python", str(HERE / "bench.py"), name, "--no-judge", "--work", str(work / name.replace("/", "_"))]
+    command = command or ["uv", "run", "-q", "--project", str(HERE.parent), "python", str(HERE / "bench.py"), name, "--no-judge", "--work", str(work / name.replace("/", "_"))]
     child = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
     _, status, usage = os.wait4(child.pid, 0)
-    if status:  # a run that failed early costs nothing and would be a table of zeros
-        raise SystemExit(f"shards: {name} did not measure: {child.stderr.read()[-300:]}")
+    stderr = child.stderr.read()
+    # bench.py exits 1 after measuring when some cell did not build (NOHEAD): the CPU was spent all the same. Only a run that never measured is no cost.
+    if status and " measured " not in stderr:
+        raise SystemExit(f"shards: {name} did not measure: {stderr[-300:]}")
     return usage.ru_utime + usage.ru_stime
 
 

@@ -99,11 +99,16 @@ fn _sinkable(
         // A candidate phi has an input from the loop: it is in a block the loop
         // exits to, found by the edges and not by every phi of the function.
         let exits = loop_.exits(function).into_iter().map(|(_, to)| to).collect::<std::collections::BTreeSet<_>>();
-        for &block in function
-            .layout()
+        // In layout order, as a walk of the layout finds them, taken from the
+        // exits: a walk of the whole layout for each loop, on every run of
+        // IndVars, was O(loops x blocks).
+        let mut placed: Vec<(usize, llrm_mir::module::BlockId)> = exits
             .iter()
-            .filter(|&&block| exits.contains(&cfg::id(block)) && !loop_.body.contains(&cfg::id(block)))
-        {
+            .filter(|&&to| !loop_.body.contains(&to))
+            .filter_map(|&to| function.layout_index(cfg::block(to)).map(|at| (at, cfg::block(to))))
+            .collect();
+        placed.sort_unstable_by_key(|&(at, _)| at);
+        for &(_, block) in &placed {
             for phi in edges::phis(function, block) {
                 llrm_mir::counts::bump(llrm_mir::counts::Event::ExitSinkPhis);
                 let [(Operand::Value(value), from)] = arms(function, phi)[..] else { continue };

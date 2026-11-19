@@ -131,6 +131,17 @@ pub trait SpillWeightEnv {
         &self,
         instr: &crate::model::lir::Insn,
     ) -> Option<(u32, u32)>;
+    /// `MachineOperand::getSubReg` of the operand of `instr` that names `reg`:
+    /// where it reads or writes a part of the value (its lane offset and
+    /// width), `None` for the whole of it. A value has no sub-register index
+    /// where the target does not say.
+    fn sub_register(
+        &self,
+        _instr: &crate::model::lir::Insn,
+        _reg: u32,
+    ) -> Option<(u32, u32)> {
+        None
+    }
     /// The register a value is pinned to, where it is (a physical register
     /// hint).
     fn pinned(
@@ -144,6 +155,17 @@ pub trait SpillWeightEnv {
     ) -> bool;
     /// `LIS.getRegMaskSlots()`: where a call destroys registers.
     fn reg_mask_slots(&self) -> Vec<SlotIndex>;
+    /// What one reference to `reg` in `instr` adds to its weight, as a
+    /// multiple of LLVM's one: a target whose instruction takes the operand
+    /// from memory as cheaply (`fadd m`) says less, one that pays a copy to
+    /// read it from a register says more.
+    fn reference_weight(
+        &self,
+        _instr: &crate::model::lir::Insn,
+        _reg: u32,
+    ) -> f32 {
+        1.0
+    }
     /// `TRI.getSpillWeightScaleFactor(RC)` of the value's register class.
     fn spill_weight_scale(
         &self,
@@ -212,9 +234,15 @@ impl<'a> VirtRegAuxInfo<'a> {
     }
 
     /// `copyHint` (CalcSpillWeights.cpp#L57): the preferred allocation register
-    /// for `reg`, given a copy.
+    /// for `reg`, given a copy. A virtual register is a hint only when both
+    /// ends name the same sub-register of theirs (L72-73).
+    ///
+    /// DEVIATE (no number): a pinned partner is a physical register of its
+    /// root whatever sub-register the copy names (the pin's `getSubReg` and
+    /// `getMatchingSuperReg`, L75-82, are not translated).
     fn copy_hint(
         &self,
+        instr: &crate::model::lir::Insn,
         copy: (u32, u32),
         reg: u32,
     ) -> Option<Hint> {
@@ -222,7 +250,7 @@ impl<'a> VirtRegAuxInfo<'a> {
         if let Some(phys) = self.env.pinned(h_reg) {
             return Some(Hint::Phys(phys));
         }
-        Some(Hint::Virt(h_reg))
+        (self.env.sub_register(instr, reg) == self.env.sub_register(instr, h_reg)).then_some(Hint::Virt(h_reg))
     }
 
     /// `isRematerializable` (CalcSpillWeights.cpp#L84): every value of `li` is
@@ -370,7 +398,8 @@ impl<'a> VirtRegAuxInfo<'a> {
                 }
                 // Calculate instr weight.
                 weight =
-                    get_spill_weight(writes, reads, self.env.block_freq_relative_to_entry(block), self.opt_for_size);
+                    get_spill_weight(writes, reads, self.env.block_freq_relative_to_entry(block), self.opt_for_size)
+                        * self.env.reference_weight(&insn, li.reg());
                 // Give extra weight to what looks like a loop induction
                 // variable update.
                 if writes && is_exiting && is_live_out_of_mbb(li, block, lis) {
@@ -380,7 +409,7 @@ impl<'a> VirtRegAuxInfo<'a> {
             }
             // Get allocation hints from copies.
             let Some(copy) = copy else { continue };
-            if let Some(hint_reg) = self.copy_hint(copy, li.reg()) {
+            if let Some(hint_reg) = self.copy_hint(&insn, copy, li.reg()) {
                 let allocatable = match hint_reg {
                     Hint::Virt(_) => true,
                     Hint::Phys(reg) => self.env.is_allocatable(reg),
@@ -457,7 +486,8 @@ mod tests {
     #[test]
     fn test_the_operands_of_one_instruction_need_not_be_adjacent() {
         use crate::liveness::liverangecalc::Operand;
-        let operand = |instr, is_def, reads_reg| Operand { instr, is_def, reads_reg, early_clobber: false };
+        let operand =
+            |instr, is_def, reads_reg| Operand { instr, is_def, reads_reg, early_clobber: false, lanes: Operand::ALL };
         let got = by_instruction(&[operand(7, false, true), operand(9, false, true), operand(7, true, false)]);
         assert_eq!(got, vec![(7, true, true), (9, true, false)]);
     }
@@ -469,6 +499,8 @@ mod tests {
 
     struct Env {
         freq: Vec<f32>,
+        /// What a reference weighs (`reference_weight`): 1 as in LLVM.
+        reference: f32,
     }
 
     impl SpillWeightEnv for Env {
@@ -518,6 +550,14 @@ mod tests {
             1.0
         }
 
+        fn reference_weight(
+            &self,
+            _instr: &Insn,
+            _reg: u32,
+        ) -> f32 {
+            self.reference
+        }
+
         fn is_allocatable(
             &self,
             _reg: RegId,
@@ -555,7 +595,7 @@ mod tests {
     fn test_a_weight_is_the_block_frequencies_of_its_references_over_size_and_the_constant() {
         let body = body(vec![vec![insn(vec![1], vec![])], vec![insn(vec![], vec![1]), insn(vec![], vec![1])]]);
         let mut lis = LiveIntervals::new(&body);
-        let env = Env { freq: vec![1.0, 4.0] };
+        let env = Env { freq: vec![1.0, 4.0], reference: 1.0 };
         let original = HashMap::default();
         let mut aux = VirtRegAuxInfo::new(&env, &original);
         aux.calculate_spill_weights_and_hints(&mut lis);
@@ -564,13 +604,28 @@ mod tests {
         assert!((li.weight() - 9.0 / 448.0).abs() < 1e-6, "{}", li.weight());
     }
 
+    /// A target that reads an operand from memory as cheaply as from a register
+    /// says a reference weighs less: the value is worth less to keep.
+    #[test]
+    fn test_a_target_can_weigh_a_reference_less_than_the_pin_does() {
+        let body = body(vec![vec![insn(vec![1], vec![])], vec![insn(vec![], vec![1]), insn(vec![], vec![1])]]);
+        let weight = |reference| {
+            let mut lis = LiveIntervals::new(&body);
+            let env = Env { freq: vec![1.0, 4.0], reference };
+            let original = HashMap::default();
+            VirtRegAuxInfo::new(&env, &original).calculate_spill_weights_and_hints(&mut lis);
+            lis.interval(1).weight()
+        };
+        assert!((weight(0.5) - weight(1.0) / 2.0).abs() < 1e-6, "{} {}", weight(0.5), weight(1.0));
+    }
+
     /// A value that lives for one instruction and is not live over a call is
     /// not worth spilling: it is marked not spillable.
     #[test]
     fn test_a_tiny_interval_is_not_spillable() {
         let body = body(vec![vec![insn(vec![1], vec![]), insn(vec![], vec![1])], vec![]]);
         let mut lis = LiveIntervals::new(&body);
-        let env = Env { freq: vec![1.0, 1.0] };
+        let env = Env { freq: vec![1.0, 1.0], reference: 1.0 };
         let original = HashMap::default();
         let mut aux = VirtRegAuxInfo::new(&env, &original);
         aux.calculate_spill_weights_and_hints(&mut lis);
@@ -587,13 +642,13 @@ mod tests {
         let mut copy = (*Arc::new(Insn::new(0, None, None, vec![1], vec![]))).clone();
         copy.what = Some(crate::model::ir::Semantics {
             name: Some("mov".into()),
-            dests: vec![crate::model::ir::Loc::Held(crate::model::ir::Held { value: 1, width: 4 })],
-            sources: vec![crate::model::ir::Loc::Held(crate::model::ir::Held { value: 1, width: 4 })],
+            dests: vec![crate::model::ir::Loc::Held(crate::model::ir::Held { value: 1, width: 4, offset: 0 })],
+            sources: vec![crate::model::ir::Loc::Held(crate::model::ir::Held { value: 1, width: 4, offset: 0 })],
             ..crate::model::ir::Semantics::new(crate::model::ir::Operation::Move)
         });
         let body = body(vec![vec![Arc::new(copy), insn(vec![], vec![1])], vec![]]);
         let mut lis = LiveIntervals::new(&body);
-        let env = Env { freq: vec![1.0, 1.0] };
+        let env = Env { freq: vec![1.0, 1.0], reference: 1.0 };
         let original = HashMap::default();
         let aux = VirtRegAuxInfo::new(&env, &original);
         let li = (*lis.interval_rc(1)).clone();
@@ -605,8 +660,8 @@ mod tests {
         let mut copy = (*Arc::new(Insn::new(0, None, None, vec![2], vec![1]))).clone();
         copy.what = Some(crate::model::ir::Semantics {
             name: Some("mov".into()),
-            dests: vec![crate::model::ir::Loc::Held(crate::model::ir::Held { value: 2, width: 4 })],
-            sources: vec![crate::model::ir::Loc::Held(crate::model::ir::Held { value: 1, width: 4 })],
+            dests: vec![crate::model::ir::Loc::Held(crate::model::ir::Held { value: 2, width: 4, offset: 0 })],
+            sources: vec![crate::model::ir::Loc::Held(crate::model::ir::Held { value: 1, width: 4, offset: 0 })],
             ..crate::model::ir::Semantics::new(crate::model::ir::Operation::Move)
         });
         let body = body(vec![
@@ -614,7 +669,7 @@ mod tests {
             vec![],
         ]);
         let mut lis = LiveIntervals::new(&body);
-        let env = Env { freq: vec![1.0, 1.0] };
+        let env = Env { freq: vec![1.0, 1.0], reference: 1.0 };
         let original = HashMap::default();
         let mut aux = VirtRegAuxInfo::new(&env, &original);
         aux.calculate_spill_weights_and_hints(&mut lis);

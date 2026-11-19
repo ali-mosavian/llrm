@@ -17,8 +17,9 @@
 //! DEVIATE, permanent (MIR lacks the construct; the fact is stated):
 //! 1. Vectors: `FoldBitCast`'s vector arms (L189-L406),
 //!    `ConstantFoldFixedVectorCall`, the vector intrinsics, `masked_load`
-//!    (L1776-L1801); `is_constant` of a vector. MIR types vectors but has no
-//!    lane operation and nothing produces one (#2201).
+//!    (L1776-L1801); `is_constant` of a vector. MIR has no lane operation
+//!    (#2201): an integer operation and a cast that keeps the lanes fold lane
+//!    by lane, nothing else of a vector does.
 //! 2. `ptrtoaddr`: MIR has no `ptrtoaddr` opcode (#2202, #2204). Byte types and
 //!    `inrange`: MIR has no byte type and its constant GEP has no `inrange`.
 //! 3. Target intrinsics (AMDGCN, ARM, AArch64, Wasm, NVVM, x86): the MIR
@@ -745,7 +746,7 @@ fn global_variable<'a>(
 
 /// `GlobalVariable::isConstant() && hasDefinitiveInitializer()`: the
 /// initializer.
-fn definitive_constant_initializer(
+pub fn definitive_constant_initializer(
     env: Env,
     context: &Context,
     c: ConstantId,
@@ -1614,7 +1615,21 @@ fn constant_fold_inst_operands_impl(
 ) -> Option<ConstantId> {
     let vector = |ty: TypeId| matches!(context.types.get(ty), Type::Vector { .. });
     if vector(dest) || ops.iter().any(|&one| vector(ty_of(context, one))) {
-        return None;
+        // Lane by lane: an integer operation and a cast that keeps the lanes
+        // (`ConstantFoldBinaryInstruction`, `ConstantFoldCastInstruction`); the
+        // rest of the vector folds waits for lane operations (DEVIATE 1).
+        return match opcode {
+            Opcode::Binary(op)
+                if !matches!(
+                    op,
+                    BinaryOp::FAdd | BinaryOp::FSub | BinaryOp::FMul | BinaryOp::FDiv | BinaryOp::FRem
+                ) =>
+            {
+                constfold::binary(context, *op, ops[0], ops[1])
+            }
+            Opcode::Cast(op) if *op != CastOp::BitCast => constfold::cast(context, *op, ops[0], dest),
+            _ => None,
+        };
     }
     match opcode {
         Opcode::FNeg => constant_fold_unary_op_operand(context, ops[0]),
@@ -2069,11 +2084,18 @@ pub fn constant_fold_integer_cast(
 enum Folded {
     Id(IntrinsicId),
     IsConstant,
+    /// `llvm.experimental.fp{to}{s,u}i.checked` (`Intrinsic::FpToIntChecked`): MIR's own.
+    FpToIntChecked { signed: bool },
 }
 
 fn folded_intrinsic(name: &str) -> Option<Folded> {
     if name.strip_prefix("llvm.is.constant").is_some_and(|rest| rest.is_empty() || rest.starts_with('.')) {
         return Some(Folded::IsConstant);
+    }
+    for (prefix, signed) in [("llvm.experimental.fptosi.checked", true), ("llvm.experimental.fptoui.checked", false)] {
+        if name.strip_prefix(prefix).is_some_and(|rest| rest.starts_with('.')) {
+            return Some(Folded::FpToIntChecked { signed });
+        }
     }
     intrinsic_id_of_name(name).map(Folded::Id)
 }
@@ -2084,7 +2106,7 @@ fn folded_intrinsic(name: &str) -> Option<Folded> {
 fn can_constant_fold_intrinsic(id: Folded) -> bool {
     use IntrinsicId::*;
     match id {
-        Folded::IsConstant => true,
+        Folded::IsConstant | Folded::FpToIntChecked { .. } => true,
         Folded::Id(id) => matches!(
             id,
             Bswap
@@ -2220,6 +2242,9 @@ fn constant_fold_scalar_call1(
 ) -> Option<ConstantId> {
     if id == Folded::IsConstant {
         return is_manifest_constant(context, operand).then(|| int(context, 1, 1));
+    }
+    if let Folded::FpToIntChecked { signed } = id {
+        return fold_fp_to_int_checked(context, ty, operand, signed);
     }
     if matches!(
         context.get(operand).kind,
@@ -2385,6 +2410,37 @@ fn exact_rint(
     }
     let limit = 2f64.powi(width as i32 - 1);
     (-limit <= value && value < limit).then(|| int(context, width, (value as i128 as u128) & mask(width)))
+}
+
+/// `llvm.experimental.fp{to}{s,u}i.checked` of a float constant: the integer toward zero and
+/// `true`, or an unspecified value (poison) and `false` where the float is a
+/// NaN, an infinity or past the integer's range.
+fn fold_fp_to_int_checked(
+    context: &Context,
+    ty: TypeId,
+    operand: ConstantId,
+    signed: bool,
+) -> Option<ConstantId> {
+    let value = match (&context.get(operand).kind, context.types.get(ty_of(context, operand))) {
+        (ConstantKind::Float(bits), Type::Float(FloatKind::Double)) => f64::from_bits(*bits),
+        (ConstantKind::Float(bits), Type::Float(FloatKind::Float)) => f64::from(f32::from_bits(*bits as u32)),
+        (ConstantKind::Zero, Type::Float(_)) => 0.0,
+        _ => return None,
+    };
+    let value_ty = *context.types.fields(ty)?.first()?;
+    let width = context.types.int_bits(value_ty)?;
+    if width > 64 {
+        return None;
+    }
+    let value = value.trunc();
+    let (low, high) =
+        if signed { (-(2f64.powi(width as i32 - 1)), 2f64.powi(width as i32 - 1)) } else { (0.0, 2f64.powi(width as i32)) };
+    let members = if value.is_finite() && low <= value && value < high {
+        vec![int(context, width, (value as i128 as u128) & mask(width)), int(context, 1, 1)]
+    } else {
+        vec![poison(context, value_ty), int(context, 1, 0)]
+    };
+    Some(aggregate(context, ty, members))
 }
 
 /// `lrint` of an `x86_fp80` constant. A caller that evaluates at the x87's
@@ -2644,6 +2700,14 @@ fn constant_fold_scalar_call3(
         // folds `fmuladd` fused.
         IntrinsicId::Fma | IntrinsicId::Fmuladd => {
             let Type::Float(kind) = context.types.get(ty) else { return None };
+            // DEVIATE (narrower than the pin): an fp128 `fusedMultiplyAdd` is
+            // not ported, so the fold is the unfused sum when the product is
+            // exact, where fused and unfused are one number.
+            if *kind == FloatKind::F128 {
+                let value = |operand: ConstantId| crate::fp128::value(&context.get(operand).kind);
+                let sum = crate::fp128::multiply_add_exact(&value(ops[0])?, &value(ops[1])?, &value(ops[2])?)?;
+                return Some(crate::fp128::constant(context, ty, &sum));
+            }
             let bits = |operand: ConstantId| match context.get(operand).kind {
                 ConstantKind::Float(bits) => Some(bits),
                 _ => None,

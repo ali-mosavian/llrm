@@ -1,5 +1,6 @@
 // flags: -O2 -march=i486 -mabi=watcom
 // link: fsgs_call_callee.c
+// targets: dos
 /* A far pointer kept across calls of a routine in another unit. The routine loads two more far pointers, using FS as well as ES; the
    caller read through its own pointer after each call, and under -mabi=watcom (and any convention with registers) it still held it in FS. */
 extern void report(long value);

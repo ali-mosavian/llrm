@@ -5,7 +5,10 @@ use llrm_mir::domtree::DomTree;
 use llrm_mir::loopinfo::LoopInfo;
 use llrm_mir::module::{BlockId, Operand};
 use llrm_mir::opcode::{BinaryOp, Opcode};
-use llrm_mir::tti::{Cost as TtiCost, LsrCost};
+use llrm_mir::tti::{
+    AddressingMode, ArithOp, CastKind, CmpSel, Cost as TtiCost, CostKind, ImmUser, LsrCost, MemoryOp, OperandInfo, Tti,
+    Ty as TtiTy,
+};
 use llrm_mir::valuetracking::AssumptionCache;
 use llrm_support::hash::HashSet;
 use llrm_x86::tti::{RealMode, X86};
@@ -29,7 +32,15 @@ exit:
 /// `body` with the SCEV of the invariants `%a` and `%b`, the loop's header and
 /// its recurrence `{0,+,1}`.
 fn with_loop(body: impl FnOnce(&Cx, &mut ScalarEvolution, Scev, Scev, BlockId, Scev)) {
-    let module = llrm_mir::parse::module(LOOP).expect("a module");
+    with_loop_of(LOOP, body)
+}
+
+/// `with_loop` over `source`, whose parameters are `%a` and `%b`.
+fn with_loop_of(
+    source: &str,
+    body: impl FnOnce(&Cx, &mut ScalarEvolution, Scev, Scev, BlockId, Scev),
+) {
+    let module = llrm_mir::parse::module(source).expect("a module");
     let (_, _, function) = module.functions().next().expect("a function");
     let layout = DataLayout::default();
     let tree = DomTree::of(function);
@@ -62,8 +73,32 @@ fn rated(
     f: &Formula,
     visited: &HashSet<Scev>,
 ) -> Cost {
-    let tti = X86::of_cpu("core2").unwrap();
-    let mut rating = Rating { se, cx, tti: &tti, l: header, hardware_loop_profitable: false, as_written: false };
+    rated_by(&X86::of_cpu("core2").unwrap(), cx, se, header, lu, f, visited)
+}
+
+/// [`rated`] on the target `tti`.
+fn rated_by(
+    tti: &dyn Tti,
+    cx: &Cx,
+    se: &mut ScalarEvolution,
+    header: BlockId,
+    lu: &Use,
+    f: &Formula,
+    visited: &HashSet<Scev>,
+) -> Cost {
+    let mut rating = Rating {
+        se,
+        cx,
+        tti,
+        l: header,
+        hardware_loop_profitable: false,
+        as_written: false,
+        other_register_units: 0,
+        size: false,
+        bytes_counted: false,
+        across_call: false,
+        amk: tti.preferred_addressing_mode(),
+    };
     let (mut cost, mut regs) = (Cost::new(), HashSet::default());
     cost.rate_formula(&mut rating, f, &mut regs, visited, lu, None);
     cost
@@ -85,7 +120,34 @@ fn use_of(
         fixup.offset = Immediate(offset);
         lu.push_fixup(fixup);
     }
+    // A use in the loop;
+    // `a_use_after_the_loop_runs_its_adds_once_where_the_target_says_so` sets
+    // it.
+    lu.all_fixups_outside_loop = false;
     lu
+}
+
+/// z80 find: the exit value `i` of an 8-bit counter was taken from a second
+/// counter (regs 2, addrecs 2) because `base + i` and the `dec` after the loop
+/// were rated as adds of every trip (1 base add). Where the target says a use
+/// whose fixups all lie after the loop runs its adds once, they cost the loop
+/// nothing; elsewhere (m16 fib: +9350 clk) they are the pin's every-trip add.
+#[test]
+fn a_use_after_the_loop_runs_its_adds_once_where_the_target_says_so() {
+    with_loop(|cx, se, a, b, header, _| {
+        let mut f = Formula { base_regs: vec![a, b], has_base_reg: true, ..Formula::default() };
+        f.canonicalize(se, header);
+        let mut after = use_of(Kind::Basic, &[0]);
+        let once = PostInc { favored: false, zero_test: 0, exit_adds_once: true };
+        let every = PostInc { favored: false, zero_test: 0, exit_adds_once: false };
+        let base_adds = |tti: &dyn Tti, lu: &Use, se: &mut ScalarEvolution| {
+            rated_by(tti, cx, se, header, lu, &f, &HashSet::default()).c.num_base_adds
+        };
+        assert_eq!(base_adds(&once, &after, se), 1, "in the loop the registers cost an add");
+        after.all_fixups_outside_loop = true;
+        assert_eq!(base_adds(&every, &after, se), 1, "the pin rates it every trip");
+        assert_eq!(base_adds(&once, &after, se), 0, "after the loop they run once");
+    });
 }
 
 /// The loop's own recurrence is one register and one recurrence, and a start of
@@ -139,6 +201,22 @@ fn an_offset_beside_two_registers_is_the_displacement_of_the_lea() {
     });
 }
 
+/// DEVIATE LU2 holds from 16 bits up: x86 has no 8-bit `lea`, so `a + b + 1`
+/// in i8 is two adds. Charged as one, switch_table_holes (m32 -O2) lost its
+/// i8 counter `{1,+,1}` to an i32 one with a `+ 25` the store paid for.
+#[test]
+fn an_offset_beside_two_byte_registers_is_an_add_of_its_own() {
+    let byte_loop = LOOP.replace("i32", "i8");
+    with_loop_of(&byte_loop, |cx, se, a, b, header, _| {
+        let mut f = Formula { base_regs: vec![a, b], has_base_reg: true, ..Formula::default() };
+        f.unfolded_offset = Immediate(1);
+        f.canonicalize(se, header);
+        let basic = use_of(Kind::Basic, &[0]);
+        let cost = rated(cx, se, header, &basic, &f, &HashSet::default());
+        assert_eq!(cost.c.num_base_adds, 2, "the registers, then the offset");
+    });
+}
+
 /// A register a chosen formula already holds is not counted twice, and one that
 /// the caller marked visited makes the formula lose.
 #[test]
@@ -150,7 +228,19 @@ fn a_visited_register_loses_and_a_chosen_one_is_free() {
         assert!(rated(cx, se, header, &lu, &f, &visited).is_loser());
 
         let tti = X86::of_cpu("core2").unwrap();
-        let mut rating = Rating { se, cx, tti: &tti, l: header, hardware_loop_profitable: false, as_written: false };
+        let mut rating = Rating {
+            se,
+            cx,
+            tti: &tti,
+            l: header,
+            hardware_loop_profitable: false,
+            as_written: false,
+            other_register_units: 0,
+            size: false,
+            bytes_counted: false,
+            across_call: false,
+            amk: tti.preferred_addressing_mode(),
+        };
         let (mut cost, mut regs) = (Cost::new(), [a].into_iter().collect::<HashSet<Scev>>());
         cost.rate_formula(&mut rating, &f, &mut regs, &HashSet::default(), &lu, None);
         assert_eq!(cost.c, LsrCost::default(), "a chosen register costs nothing more");
@@ -180,11 +270,25 @@ fn fewer_instructions_win_before_fewer_registers() {
     assert!(few.is_loser() && many.is_less(&tti, &few));
 }
 
+/// `Cost::isLess` ranks by instructions first only when `-lsr-insns-cost` is on
+/// the command line, which nothing passes: a target with the default order
+/// (registers first) kept a solution of 2 instructions and 4 registers over the
+/// pin's 3 and 3, and a copy loop got a shared index instead of two pointers.
+#[test]
+fn the_default_order_ranks_registers_before_instructions() {
+    let tti = llrm_mir::tti::Basic;
+    let (mut few, mut many) = (Cost::new(), Cost::new());
+    few.c = LsrCost { insns: 2, num_regs: 4, ..LsrCost::default() };
+    many.c = LsrCost { insns: 3, num_regs: 3, ..LsrCost::default() };
+    assert!(many.is_less(&tti, &few) && !few.is_less(&tti, &many));
+}
+
 #[test]
 fn what_an_address_mode_folds_by_kind() {
     let tti = X86::of_cpu("core2").unwrap();
-    let fold =
-        |kind, gv, offset, base, scale| is_am_completely_folded_at(&tti, kind, 0, gv, Immediate(offset), base, scale);
+    let fold = |kind, gv, offset, base, scale| {
+        is_am_completely_folded_at(&tti, kind, MemAccessTy::unknown(0), gv, Immediate(offset), base, scale)
+    };
     assert!(fold(Kind::Address, false, 8, true, 4));
     assert!(!fold(Kind::Address, false, 1 << 40, true, 1), "a displacement is 32 bits");
     assert!(fold(Kind::Basic, false, 0, true, 0) && !fold(Kind::Basic, false, 0, true, 1));
@@ -205,7 +309,7 @@ fn offsets_that_wrap_with_the_base_do_not_fold() {
             Immediate(min),
             Immediate(max),
             Kind::Address,
-            0,
+            MemAccessTy::unknown(0),
             false,
             Immediate(base),
             true,
@@ -324,9 +428,12 @@ fn a_scaled_index_costs_its_instructions_once_for_each_scaled_register() {
             registers: 6,
             scaled_index_insns: 2,
             huge_space: None,
+            address_registers: None,
             inline_size_guard: false,
             float_code_size_percent: 100,
             unroll_size_few_trips: (0, 0),
+            recursive_inlining: None,
+            priced_self_inlining: None,
         };
         let real = X86::of_cpu("i486").unwrap().in_real_mode(real);
         let flat = X86::of_cpu("i486").unwrap();
@@ -344,12 +451,551 @@ fn a_scaled_index_costs_its_instructions_once_for_each_scaled_register() {
         };
         let (fa, fb) = (scaled(a), scaled(b));
         for (tti, first, both) in [(&real as &dyn llrm_mir::tti::Tti, 3, 3), (&flat, 1, 1)] {
-            let mut rating = Rating { se, cx, tti, l: header, hardware_loop_profitable: false, as_written: false };
+            let mut rating = Rating {
+                se,
+                cx,
+                tti,
+                l: header,
+                hardware_loop_profitable: false,
+                as_written: false,
+                other_register_units: 0,
+                size: false,
+                bytes_counted: false,
+                across_call: false,
+                amk: tti.preferred_addressing_mode(),
+            };
             let (mut cost, mut regs, visited) = (Cost::new(), HashSet::default(), HashSet::default());
             cost.rate_formula(&mut rating, &fa, &mut regs, &visited, &lu, None);
             assert_eq!(cost.c.insns, first, "the recurrence and the prefixed index");
             cost.rate_formula(&mut rating, &fb, &mut regs, &visited, &lu, None);
             assert_eq!(cost.c.insns, both, "the same scaled register is not paid for again");
         }
+    });
+}
+
+/// A target that favors post-indexed addressing and has `(An)+` for every type,
+/// on the basic cost model.
+struct PostInc {
+    favored: bool,
+    zero_test: u32,
+    exit_adds_once: bool,
+}
+
+impl Tti for PostInc {
+    fn lsr_exit_use_adds_run_once(&self) -> bool {
+        self.exit_adds_once
+    }
+
+    fn zero_test_cost(&self) -> u32 {
+        self.zero_test
+    }
+
+    fn cmp_sel_cost(
+        &self,
+        _: CmpSel,
+        _: TtiTy,
+        _: CostKind,
+    ) -> TtiCost {
+        TtiCost::BASIC
+    }
+
+    fn memory_op_cost(
+        &self,
+        _: MemoryOp,
+        _: TtiTy,
+        _: CostKind,
+        _: bool,
+    ) -> TtiCost {
+        TtiCost::BASIC
+    }
+
+    fn cf_instr_cost(
+        &self,
+        phi: bool,
+        kind: CostKind,
+    ) -> TtiCost {
+        if phi && kind != CostKind::RecipThroughput { TtiCost::FREE } else { TtiCost::BASIC }
+    }
+
+    fn int_imm_cost(
+        &self,
+        _: i128,
+        _: u32,
+    ) -> TtiCost {
+        TtiCost::BASIC
+    }
+
+    fn int_imm_cost_inst(
+        &self,
+        _: ImmUser,
+        _: u32,
+        _: i128,
+        _: u32,
+    ) -> TtiCost {
+        TtiCost::FREE
+    }
+
+    fn is_truncate_free(
+        &self,
+        _: TtiTy,
+        _: TtiTy,
+    ) -> bool {
+        false
+    }
+
+    /// `d16(An)` and `(An)`.
+    fn is_legal_addressing_mode(
+        &self,
+        base_gv: bool,
+        base_offset: i64,
+        has_base_reg: bool,
+        scale: i64,
+    ) -> bool {
+        !base_gv && has_base_reg && scale == 0 && i16::try_from(base_offset).is_ok()
+    }
+
+    fn cast_cost(
+        &self,
+        _: CastKind,
+        _: TtiTy,
+        _: TtiTy,
+        _: CostKind,
+    ) -> TtiCost {
+        TtiCost::BASIC
+    }
+
+    fn arithmetic_cost(
+        &self,
+        _: ArithOp,
+        _: TtiTy,
+        _: CostKind,
+        _: OperandInfo,
+        _: OperandInfo,
+    ) -> TtiCost {
+        TtiCost::BASIC
+    }
+
+    fn preferred_addressing_mode(&self) -> AddressingMode {
+        if self.favored { AddressingMode::PostIndexed } else { AddressingMode::None }
+    }
+
+    fn is_post_inc_load_legal(
+        &self,
+        _ty: TtiTy,
+    ) -> bool {
+        true
+    }
+
+    fn is_post_inc_store_legal(
+        &self,
+        _ty: TtiTy,
+    ) -> bool {
+        true
+    }
+}
+
+/// A pointer `{%a,+,1}` that a store walks is the access's own increment where
+/// the target favors post-indexed addressing and has `(An)+` for the access:
+/// it costs no recurrence. Without that, or without `(An)+`, it costs one.
+#[test]
+fn a_pointer_stepping_by_a_constant_is_free_where_post_indexed_access_is_favored() {
+    with_loop(|cx, se, a, _, header, _| {
+        let one = se.get_constant_of_type(cx, Ty::Int(32), 1);
+        let walk = se.get_add_rec_expr(cx, vec![Operand32::of(a), Operand32::of(one)], header, Flags::default()).scev;
+        let f = Formula { base_regs: vec![walk], has_base_reg: true, ..Formula::default() };
+        let lu = use_of(Kind::Address, &[0]);
+        let rate = |tti: &dyn Tti, se: &mut ScalarEvolution| {
+            let mut rating = Rating {
+                se,
+                cx,
+                tti,
+                l: header,
+                hardware_loop_profitable: false,
+                as_written: false,
+                other_register_units: 0,
+                size: false,
+                bytes_counted: false,
+                across_call: false,
+                amk: tti.preferred_addressing_mode(),
+            };
+            let (mut cost, mut regs) = (Cost::new(), HashSet::default());
+            cost.rate_formula(&mut rating, &f, &mut regs, &HashSet::default(), &lu, None);
+            cost.c.add_rec_cost
+        };
+        assert_eq!(
+            rate(&PostInc { favored: false, zero_test: 0, exit_adds_once: false }, se),
+            1,
+            "premise: the recurrence costs one"
+        );
+        assert_eq!(rate(&PostInc { favored: true, zero_test: 0, exit_adds_once: false }, se), 0);
+    });
+}
+
+/// A counter that ends at zero was free to test on every target; where the
+/// zero test is an instruction of its own (z80's 16-bit `inc`), it costs one.
+#[test]
+fn a_zero_ending_counter_pays_the_targets_zero_test() {
+    with_loop(|cx, se, _, _, header, ar| {
+        let f = Formula { base_regs: vec![ar], has_base_reg: true, ..Formula::default() };
+        let lu = use_of(Kind::ICmpZero, &[0]);
+        let mut insns = |zero_test| {
+            let tti = PostInc { favored: false, zero_test, exit_adds_once: false };
+            let mut rating = Rating {
+                se,
+                cx,
+                tti: &tti,
+                l: header,
+                hardware_loop_profitable: false,
+                as_written: false,
+                other_register_units: 0,
+                size: false,
+                bytes_counted: false,
+                across_call: false,
+                amk: tti.preferred_addressing_mode(),
+            };
+            let (mut cost, mut regs) = (Cost::new(), HashSet::default());
+            cost.rate_formula(&mut rating, &f, &mut regs, &HashSet::default(), &lu, None);
+            cost.c.insns
+        };
+        assert_eq!(insns(1), insns(0) + 1);
+    });
+}
+
+/// A target with `(An)` and `d16(An)`, and the hooks of LU16, LU17 and LU20.
+#[derive(Default)]
+struct Lu {
+    folds_offsets: bool,
+    step_multiplies: u32,
+    exit_bound_live: bool,
+}
+
+impl Tti for Lu {
+    fn lsr_written_exit_bound_is_live(&self) -> bool {
+        self.exit_bound_live
+    }
+
+    fn unfolded_address_offsets_fold(&self) -> bool {
+        self.folds_offsets
+    }
+
+    fn lsr_written_step_multiplies(
+        &self,
+        _: i64,
+        _: u32,
+    ) -> u32 {
+        self.step_multiplies
+    }
+
+    fn cmp_sel_cost(
+        &self,
+        _: CmpSel,
+        _: TtiTy,
+        _: CostKind,
+    ) -> TtiCost {
+        TtiCost::BASIC
+    }
+
+    fn memory_op_cost(
+        &self,
+        _: MemoryOp,
+        _: TtiTy,
+        _: CostKind,
+        _: bool,
+    ) -> TtiCost {
+        TtiCost::BASIC
+    }
+
+    fn cf_instr_cost(
+        &self,
+        phi: bool,
+        kind: CostKind,
+    ) -> TtiCost {
+        if phi && kind != CostKind::RecipThroughput { TtiCost::FREE } else { TtiCost::BASIC }
+    }
+
+    fn int_imm_cost(
+        &self,
+        _: i128,
+        _: u32,
+    ) -> TtiCost {
+        TtiCost::BASIC
+    }
+
+    fn int_imm_cost_inst(
+        &self,
+        _: ImmUser,
+        _: u32,
+        _: i128,
+        _: u32,
+    ) -> TtiCost {
+        TtiCost::FREE
+    }
+
+    fn is_truncate_free(
+        &self,
+        _: TtiTy,
+        _: TtiTy,
+    ) -> bool {
+        false
+    }
+
+    fn is_legal_addressing_mode(
+        &self,
+        base_gv: bool,
+        base_offset: i64,
+        has_base_reg: bool,
+        scale: i64,
+    ) -> bool {
+        !base_gv && has_base_reg && scale == 0 && (0..=255).contains(&base_offset)
+    }
+
+    fn arithmetic_cost(
+        &self,
+        _: ArithOp,
+        _: TtiTy,
+        _: CostKind,
+        _: OperandInfo,
+        _: OperandInfo,
+    ) -> TtiCost {
+        TtiCost::BASIC
+    }
+
+    fn cast_cost(
+        &self,
+        _: CastKind,
+        _: TtiTy,
+        _: TtiTy,
+        _: CostKind,
+    ) -> TtiCost {
+        TtiCost::BASIC
+    }
+}
+
+/// 54 stores `g[i][k]` kept 53 unfolded offsets, one base add each, and the
+/// loop kept its `__mulhi3` (rep_count, 6502 -O1): the pin rates an offset a
+/// target takes in the address itself as an add. Where the target says the
+/// offset folds later, an address use pays nothing for it; a basic use still
+/// does.
+#[test]
+fn an_unfolded_offset_of_an_address_is_no_add_where_the_target_folds_it_later() {
+    with_loop(|cx, se, _, _, header, ar| {
+        let f =
+            Formula { base_regs: vec![ar], has_base_reg: true, unfolded_offset: Immediate(53), ..Formula::default() };
+        let (folds, keeps) =
+            (Lu { folds_offsets: true, ..Lu::default() }, Lu { folds_offsets: false, ..Lu::default() });
+        let adds = |tti: &dyn Tti, kind, se: &mut ScalarEvolution| {
+            rated_by(tti, cx, se, header, &use_of(kind, &[0]), &f, &HashSet::default()).c.num_base_adds
+        };
+        assert_eq!(adds(&keeps, Kind::Address, se), 1, "the pin: an add");
+        assert_eq!(adds(&folds, Kind::Address, se), 0);
+        assert_eq!(adds(&folds, Kind::Basic, se), 1, "a basic use has no address to fold it into");
+    });
+}
+
+/// `memset(g[i], 0, 16)` over 54-byte rows: the baseline is one recurrence
+/// `{g,+,54}`, the written loop is a counter and a multiply per trip
+/// (`__mulhi3`), so the reduced loop looked dearer (3 instructions against 2)
+/// and was dropped. Only the loop as written pays, and only where no phi of the
+/// loop is that recurrence.
+#[test]
+fn the_loop_as_written_pays_for_the_multiply_that_forms_a_recurrence() {
+    with_loop(|cx, se, _, _, header, _| {
+        let ty = Ty::Int(32);
+        let (zero, step) = (se.get_constant_of_type(cx, ty, 0), se.get_constant_of_type(cx, ty, 54));
+        let row =
+            se.get_add_rec_expr(cx, vec![Operand32::of(zero), Operand32::of(step)], header, Flags::default()).scev;
+        let f = Formula { base_regs: vec![row], has_base_reg: true, ..Formula::default() };
+        let tti = Lu { step_multiplies: 1, ..Lu::default() };
+        let rate = |as_written: bool, se: &mut ScalarEvolution| {
+            let mut rating = Rating {
+                se,
+                cx,
+                tti: &tti,
+                l: header,
+                hardware_loop_profitable: false,
+                as_written,
+                other_register_units: 0,
+                size: false,
+                bytes_counted: false,
+                across_call: false,
+                amk: tti.preferred_addressing_mode(),
+            };
+            let (mut cost, mut regs) = (Cost::new(), HashSet::default());
+            cost.rate_formula(&mut rating, &f, &mut regs, &HashSet::default(), &use_of(Kind::Address, &[0]), None);
+            cost.c.num_iv_muls
+        };
+        assert_eq!(rate(true, se), 1, "as written: a multiply");
+        assert_eq!(rate(false, se), 0, "a candidate's recurrence is a pointer that steps");
+    });
+}
+
+/// `for (i = 0; i != n; ++i)`: the exit test is the one recurrence `{-n,+,1}`
+/// against zero (the pin's `getUse`: `N - other`), so the baseline held one
+/// register where the loop as written holds two, `i` and `n`; every rewrite
+/// that keeps the bound in a register then looked one dearer and, tied on
+/// work, was dropped (known_loads_walks at 6502 -O1: 2441 B to 2570 B, the
+/// counter out of Y into a cell). Only the loop as written pays, and only for
+/// a bound that is not a constant.
+#[test]
+fn the_loop_as_written_keeps_the_exit_bound_live() {
+    with_loop(|cx, se, a, _, header, _| {
+        let ty = Ty::Int(32);
+        let one = se.get_constant_of_type(cx, ty, 1);
+        let counted = |se: &mut ScalarEvolution, start: Scev| {
+            se.get_add_rec_expr(cx, vec![Operand32::of(start), Operand32::of(one)], header, Flags::default()).scev
+        };
+        let (to_bound, to_const) = (counted(se, a), counted(se, one));
+        let regs = |as_written: bool, live: bool, reg: Scev, se: &mut ScalarEvolution| {
+            let tti = Lu { exit_bound_live: live, ..Lu::default() };
+            let mut rating = Rating {
+                se,
+                cx,
+                tti: &tti,
+                l: header,
+                hardware_loop_profitable: false,
+                as_written,
+                other_register_units: 0,
+                size: false,
+                bytes_counted: false,
+                across_call: false,
+                amk: tti.preferred_addressing_mode(),
+            };
+            let f = Formula { base_regs: vec![reg], has_base_reg: true, ..Formula::default() };
+            let (mut cost, mut seen) = (Cost::new(), HashSet::default());
+            cost.rate_formula(&mut rating, &f, &mut seen, &HashSet::default(), &use_of(Kind::ICmpZero, &[0]), None);
+            cost.c.num_regs
+        };
+        assert_eq!(regs(true, true, to_bound, se), 2, "as written: the counter and the bound");
+        assert_eq!(regs(true, false, to_bound, se), 1, "the target does not ask");
+        assert_eq!(regs(false, true, to_bound, se), 1, "a candidate is what it says");
+        assert_eq!(regs(true, true, to_const, se), 1, "a constant bound is no register");
+    });
+}
+
+/// A static alloca in an address is the frame register: a formula with one
+/// register beside it is `[frame + reg]`, and one with a base and a scaled
+/// register is three registers, which no mode names. Bench matmul's fill nest
+/// paid two `lea` for reading the alloca as a register.
+#[test]
+fn a_frame_slot_takes_the_base_register_and_leaves_one_for_an_index() {
+    use crate::lsr_formula::{Mode, Symbol};
+    let frame = Some(Symbol::Frame(llrm_mir::module::ValueId(0)));
+    let alone = Formula { symbol: frame, ..Formula::default() };
+    assert_eq!(alone.mode(), Some(Mode { global: false, has_base_reg: true, scale: 0 }));
+    let indexed = Formula { symbol: frame, has_base_reg: true, ..Formula::default() };
+    assert_eq!(indexed.mode(), Some(Mode { global: false, has_base_reg: true, scale: 1 }));
+    let three = Formula { symbol: frame, has_base_reg: true, scale: 2, ..Formula::default() };
+    assert_eq!(three.mode(), None);
+    let global = Formula { has_base_reg: true, scale: 2, ..Formula::default() };
+    assert_eq!(global.mode(), Some(Mode { global: false, has_base_reg: true, scale: 2 }));
+}
+
+/// DEVIATE LSR-SIZE at m16: two solutions of the same instructions and registers, one holding two address registers where the other
+/// holds one for more bytes of setup. Ranked by bytes alone the two-register one won, and QCport render/d_alias grew 159 B at -Os
+/// (the allocator then spills the restricted base/index registers).
+#[test]
+fn fewer_address_registers_win_before_fewer_bytes_when_sized() {
+    let real = RealMode {
+        scale_costs: vec![(1, 0), (2, 2)],
+        registers: 6,
+        scaled_index_insns: 2,
+        huge_space: None,
+        address_registers: Some(4),
+        inline_size_guard: false,
+        float_code_size_percent: 100,
+        unroll_size_few_trips: (0, 0),
+        recursive_inlining: None,
+        priced_self_inlining: None,
+    };
+    let tti = X86::of_cpu("i486")
+        .unwrap()
+        .in_real_mode(real)
+        .with_tuning(llrm_mir::target::Tuning { lsr_size_order: true, ..llrm_mir::target::Tuning::PIN });
+    let sized = |addressed: &[u32], size_bytes| {
+        let mut cost = Cost::new();
+        cost.c = LsrCost { insns: 2, num_regs: 3, ..LsrCost::default() };
+        cost.size = true;
+        cost.addressed = addressed.iter().map(|&at| Scev(at)).collect();
+        cost.size_bytes = size_bytes;
+        cost
+    };
+    let (one_register, two_registers) = (sized(&[1], 9), sized(&[1, 2], 6));
+    assert!(one_register.is_less(&tti, &two_registers) && !two_registers.is_less(&tti, &one_register));
+    // Flat addressing takes any register: the count is no key and the fewer bytes win.
+    let flat = X86::of_cpu("i486")
+        .unwrap()
+        .with_tuning(llrm_mir::target::Tuning { lsr_size_order: true, ..llrm_mir::target::Tuning::PIN });
+    assert!(two_registers.is_less(&flat, &one_register) && !one_register.is_less(&flat, &two_registers));
+}
+
+/// switch_peeled_table (6502 -Os): `i << 4` and `i - 192` as written are one
+/// instruction each from the counter `i`, but were priced as recurrences
+/// stepped from a start: a step and a setup each, so the model took 124 B for
+/// the loop as written against 98 B for its rewrite where the object was
+/// 91 lines against 114. The loop as written pays no setup for them.
+#[test]
+fn the_loop_as_written_pays_no_setup_for_a_recurrence_it_derives_from_its_counter() {
+    with_loop(|cx, se, a, _, header, _| {
+        let step = se.get_constant_of_type(cx, Ty::Int(32), 16);
+        let row = se.get_add_rec_expr(cx, vec![Operand32::of(a), Operand32::of(step)], header, Flags::default()).scev;
+        let f = Formula { base_regs: vec![row], has_base_reg: true, ..Formula::default() };
+        let tti = X86::of_cpu("core2").unwrap().with_tuning(llrm_mir::target::Tuning {
+            lsr_size_order: true,
+            lsr_derived_setup_free: true,
+            ..llrm_mir::target::Tuning::PIN
+        });
+        let bytes = |as_written: bool, se: &mut ScalarEvolution| {
+            let mut rating = Rating {
+                se,
+                cx,
+                tti: &tti,
+                l: header,
+                hardware_loop_profitable: false,
+                as_written,
+                other_register_units: 0,
+                size: true,
+                bytes_counted: true,
+                across_call: false,
+                amk: tti.preferred_addressing_mode(),
+            };
+            let (mut cost, mut regs) = (Cost::new(), HashSet::default());
+            cost.rate_formula(&mut rating, &f, &mut regs, &HashSet::default(), &use_of(Kind::Basic, &[0]), None);
+            cost.size_bytes
+        };
+        let model = tti.lsr_size_model().expect("x86 prices bytes");
+        assert_eq!(bytes(false, se), bytes(true, se) + model.setup.bytes, "a stepped register: step and setup");
+    });
+}
+
+/// A target that did not state the fact keeps the pin's count: m16 -Os grew 28 QCport modules by
+/// 302 B and `huge` by 27% with the discount (#9587), its setup being real bytes.
+#[test]
+fn a_target_without_the_fact_pays_setup_for_a_derived_recurrence() {
+    with_loop(|cx, se, a, _, header, _| {
+        let step = se.get_constant_of_type(cx, Ty::Int(32), 16);
+        let row = se.get_add_rec_expr(cx, vec![Operand32::of(a), Operand32::of(step)], header, Flags::default()).scev;
+        let f = Formula { base_regs: vec![row], has_base_reg: true, ..Formula::default() };
+        let tti = X86::of_cpu("core2")
+            .unwrap()
+            .with_tuning(llrm_mir::target::Tuning { lsr_size_order: true, ..llrm_mir::target::Tuning::PIN });
+        let bytes = |as_written: bool, se: &mut ScalarEvolution| {
+            let mut rating = Rating {
+                se,
+                cx,
+                tti: &tti,
+                l: header,
+                hardware_loop_profitable: false,
+                as_written,
+                other_register_units: 0,
+                size: true,
+                bytes_counted: true,
+                across_call: false,
+                amk: tti.preferred_addressing_mode(),
+            };
+            let (mut cost, mut regs) = (Cost::new(), HashSet::default());
+            cost.rate_formula(&mut rating, &f, &mut regs, &HashSet::default(), &use_of(Kind::Basic, &[0]), None);
+            cost.size_bytes
+        };
+        assert_eq!(bytes(false, se), bytes(true, se), "as written or not, the setup is counted");
     });
 }

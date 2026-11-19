@@ -1,0 +1,19 @@
+#title,10.6 INTEGER UNIT INSTRUCTION TIMINGS: JSR | LEA | MOVE from CCR,page,10-21,notes,
+Addressing Mode,JSR <ea> Calculate,JSR Execute,LEA <ea> Calculate,LEA Execute,MOVE from CCR <ea> Calculate,MOVE from CCR Execute
+Dn,—,—,—,—,1,2
+An,—,—,—,—,—,—
+(An),3,2L + 1,1,1,1,2
+(An)+,—,—,—,—,1,2
+–(An),—,—,—,—,1,2
+"(d 16,An)",4,3L + 1,2,1L + 1,1,2
+"(d 16,PC)",6,5L + 1,4,3L + 1,—,—
+"(xxx).W, (xxx).L",3,2L + 1,1,1,1,2
+#<xxx>,—,—,—,—,—,—
+"(d 8,An,Xn)",6,6,4,4,3,4
+"(d 8,PC,Xn)",7,1L + 6,5,1L + 4,—,—
+"(BR,Xn)",8,1L + 7,6,1L + 5,6,1L + 6
+"(bd,BR,Xn)",9,1L + 8,7,1L + 6,7,1L + 7
+"([bd,BR,Xn])",12,1L + 11,9,1L + 8,10,1L + 10
+"([bd,BR,Xn],od)",13,1L + 12,10,1L + 9,11,1L + 11
+"([bd,BR],Xn)",13,3L + 10,10,3L + 7,11,3L + 9
+"([bd,BR],Xn,od)",14,3L + 11,11,3L + 8,12,3L + 10

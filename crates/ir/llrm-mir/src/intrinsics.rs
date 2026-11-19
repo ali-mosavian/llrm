@@ -23,6 +23,29 @@ pub fn length(
     u64::try_from(bits & mask(context.types.int_bits(constant.ty)?)).ok()
 }
 
+/// The operation of an `llvm.vector.reduce.*`.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum ReduceKind {
+    Add,
+    Mul,
+    And,
+    Or,
+    Xor,
+    SMax,
+    SMin,
+    UMax,
+    UMin,
+    FAdd,
+    FMul,
+}
+
+impl ReduceKind {
+    /// Whether the operation is on floats, and so has a start operand.
+    pub fn is_float(self) -> bool {
+        matches!(self, Self::FAdd | Self::FMul)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Intrinsic {
     /// `llvm.{s,u}{add,sub,mul}.with.overflow`: the wrapped result, and
@@ -82,6 +105,11 @@ pub enum Intrinsic {
         signed: bool,
     },
     FMulAdd,
+    /// `llvm.vector.reduce.*`: the lanes of its vector argument combined by
+    /// one operation. The float forms (`fadd`, `fmul`) take the value the
+    /// result starts from first, and add the lanes in order unless the call
+    /// carries the `reassoc` fast-math flag.
+    VectorReduce(ReduceKind),
     /// `llvm.copysign`: the first argument with the second's sign.
     CopySign,
     /// `llvm.fabs`, `llvm.sqrt` and their kin: a function of one float.
@@ -89,6 +117,16 @@ pub enum Intrinsic {
     /// Rounds to an integer as the rounding mode says: by default, to
     /// nearest, ties to even.
     LRint,
+    /// `llvm.experimental.fp{to}{s,u}i.checked` (no LLVM counterpart; DEVIATE FPTOINT-CHECKED):
+    /// the float toward zero as an integer of the result's width, and whether
+    /// it fits that integer (NaN and a float past the range do not). The value
+    /// is unspecified where it does not fit, and no instruction faults.
+    FpToIntChecked {
+        signed: bool,
+    },
+    /// `llvm.llrint`: `LRint` with a `long long` result, which a target
+    /// without the instruction calls `llrint` for.
+    LLRint,
     MemSet,
     /// `llvm.experimental.memset.pattern`: its first argument's cells, as many
     /// as the third says and as wide as the second, each become the second.
@@ -102,6 +140,15 @@ pub enum Intrinsic {
     MemMove,
     LifetimeStart,
     LifetimeEnd,
+    /// `llvm.invariant.start`: from here the memory its second argument
+    /// reaches, as far as the constant first one says (-1: the whole object),
+    /// is never written, until the `invariant.end` of its result or the end of
+    /// the program. Returns the pointer-typed scope that ends it. A pass may
+    /// use it and no code runs it.
+    InvariantStart,
+    /// `llvm.invariant.end`: ends the scope its first argument, an
+    /// `invariant.start`'s result, began, over the same size and memory.
+    InvariantEnd,
     /// `llvm.assume`: its condition holds here, which a pass may use and no
     /// code checks. Undefined where it does not.
     Assume,
@@ -117,13 +164,45 @@ pub enum Intrinsic {
     /// `llvm.prefetch`: a hint to bring an address into the cache; no code is
     /// needed where the target has no prefetch instruction.
     Prefetch,
+    /// `llvm.trap`: the program stops here (`ud2` on x86); control does not
+    /// continue.
+    Trap,
+    /// `llvm.debugtrap`: a breakpoint (`int3` on x86).
+    DebugTrap,
+    /// `llvm.ubsantrap`: stops with the sanitizer's check kind (`ud1 kind(%eax), %eax`
+    /// on x86, `X86MCInstLower.cpp` `UBSAN_UD1`); not translated.
+    UbsanTrap,
     /// `llvm.fake.use`: keeps its operands live for a debugger at `-Og`; no
     /// code runs it.
     FakeUse,
+    /// `llvm.experimental.noalias.scope.decl`: a scope of `!alias.scope` and
+    /// `!noalias` starts here and lives for one run of the code around it; a
+    /// pass that copies the code gives the copy its own. MIR has no metadata
+    /// call operand, so the call has none and its scope list is the
+    /// `!noalias.scope.decl` attachment. No code runs it.
+    NoAliasScopeDecl,
     /// `llvm.expect`: its first argument, which the second says it is expected
     /// to be: a hint `lower-expect` turns into branch weights and removes
     /// (LowerExpectIntrinsic.cpp); no code runs it.
     Expect,
+    /// `llvm.set.loop.iterations`: the loop that follows runs its argument's
+    /// count of iterations (HardwareLoops.cpp); a target that has no counter
+    /// register lowers it to nothing.
+    SetLoopIterations,
+    /// `llvm.test.set.loop.iterations`: as `set.loop.iterations`, and whether
+    /// the count is not zero, which lets it guard a loop that may run no
+    /// iteration.
+    TestSetLoopIterations,
+    /// `llvm.start.loop.iterations`: as `set.loop.iterations`, and its
+    /// argument again, to be carried round the loop by a phi.
+    StartLoopIterations,
+    /// `llvm.loop.decrement.reg`: its first argument, the iterations still to
+    /// run, less its second: the next value of the phi that carries them.
+    LoopDecrementReg,
+    /// `llvm.loop.decrement`: takes its argument off the loop counter and
+    /// says whether the loop goes on. Only a target that opts in to hardware
+    /// loops has one.
+    LoopDecrement,
     /// `llrm.noalias`: its argument, which it, and what is based on it, is
     /// reached by no pointer that is not, while anything based on it is used:
     /// C's `restrict`, said of a loop's pointers by the pass that tested that
@@ -143,6 +222,10 @@ pub enum Intrinsic {
     /// `llvm.va_start`: the list its argument points to made to point at
     /// the calling function's first variadic argument.
     VaStart,
+    /// `llrm.vararg.address`: the address of the calling function's first
+    /// variadic argument, the value `va_start` writes into a list that is one
+    /// pointer (DEVIATE VASTART-PROMOTE).
+    VarargAddress,
     /// `llvm.va_end`: the list its argument points to is no longer read. It
     /// does nothing where the list owns no resource.
     VaEnd,
@@ -372,9 +455,16 @@ enum Kind {
 enum Slot {
     /// The nth overloaded type.
     Any(usize),
+    /// The nth overloaded type, a vector.
+    VectorOf(usize),
+    /// The element of the nth overloaded type, a vector: the result of a
+    /// reduction.
+    Lane(usize),
     /// `{ T, i1 }` of the nth overloaded type.
     WithFlag(usize),
     Int(u32),
+    /// A pointer in address space 0, whatever the overload is.
+    Ptr,
     Void,
 }
 
@@ -416,6 +506,26 @@ const fn arithmetic(
         _ => &[Kind::Int],
     };
     Spec { name, intrinsic, overloads, returns, parameters, own: None }
+}
+
+const INT_REDUCE: &[Slot] = &[Slot::VectorOf(0)];
+const FLOAT_REDUCE: &[Slot] = &[Slot::Lane(0), Slot::VectorOf(0)];
+
+/// `llvm.vector.reduce.<op>.v<N><ty>`: a vector of integers to one integer;
+/// the float operations take the start value first.
+const fn reduce(
+    name: &'static str,
+    kind: ReduceKind,
+) -> Spec {
+    let float = matches!(kind, ReduceKind::FAdd | ReduceKind::FMul);
+    Spec {
+        name,
+        intrinsic: Intrinsic::VectorReduce(kind),
+        overloads: if float { &[Kind::Float] } else { &[Kind::Int] },
+        returns: Slot::Lane(0),
+        parameters: if float { FLOAT_REDUCE } else { INT_REDUCE },
+        own: None,
+    }
 }
 
 const fn overflow(
@@ -499,7 +609,26 @@ const LIFETIME: &[Slot] = &[Slot::Int(64), Slot::Any(0)];
 const LIFETIME_PARAMETERS: &[&[&str]] = &[&["immarg"], &["nocapture"]];
 const LIFETIME_ATTRS: &[&str] = &["nocallback", "nofree", "nosync", "nounwind", "willreturn"];
 
-const TABLE: [Spec; 73] = [
+static NAMES: std::sync::OnceLock<crate::hash::HashMap<&'static str, Intrinsic>> = std::sync::OnceLock::new();
+
+thread_local! {
+    static NAMED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many names this thread has looked up, for a test that a query about a
+/// call does not name its callee again.
+pub fn names_looked_up() -> usize {
+    NAMED.with(std::cell::Cell::get)
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Names looked up by `named`, for a test that a lookup does not scan the
+    /// table.
+    static PROBES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+const TABLE: [Spec; 99] = [
     overflow("llvm.sadd.with.overflow", BinaryOp::Add, true),
     overflow("llvm.uadd.with.overflow", BinaryOp::Add, false),
     overflow("llvm.ssub.with.overflow", BinaryOp::Sub, true),
@@ -553,6 +682,17 @@ const TABLE: [Spec; 73] = [
         &[Slot::Any(0), Slot::Any(0), Slot::Any(0)],
         Kind::Float,
     ),
+    reduce("llvm.vector.reduce.add", ReduceKind::Add),
+    reduce("llvm.vector.reduce.mul", ReduceKind::Mul),
+    reduce("llvm.vector.reduce.and", ReduceKind::And),
+    reduce("llvm.vector.reduce.or", ReduceKind::Or),
+    reduce("llvm.vector.reduce.xor", ReduceKind::Xor),
+    reduce("llvm.vector.reduce.smax", ReduceKind::SMax),
+    reduce("llvm.vector.reduce.smin", ReduceKind::SMin),
+    reduce("llvm.vector.reduce.umax", ReduceKind::UMax),
+    reduce("llvm.vector.reduce.umin", ReduceKind::UMin),
+    reduce("llvm.vector.reduce.fadd", ReduceKind::FAdd),
+    reduce("llvm.vector.reduce.fmul", ReduceKind::FMul),
     arithmetic("llvm.copysign", Intrinsic::CopySign, Slot::Any(0), &[Slot::Any(0), Slot::Any(0)], Kind::Float),
     unary("llvm.fabs", FloatFunction::Fabs),
     unary("llvm.sqrt", FloatFunction::Sqrt),
@@ -573,6 +713,30 @@ const TABLE: [Spec; 73] = [
     Spec {
         name: "llvm.lrint",
         intrinsic: Intrinsic::LRint,
+        overloads: &[Kind::Int, Kind::Float],
+        returns: Slot::Any(0),
+        parameters: &[Slot::Any(1)],
+        own: None,
+    },
+    Spec {
+        name: "llvm.experimental.fptosi.checked",
+        intrinsic: Intrinsic::FpToIntChecked { signed: true },
+        overloads: &[Kind::Int, Kind::Float],
+        returns: Slot::WithFlag(0),
+        parameters: &[Slot::Any(1)],
+        own: Some(Own { attrs: PURE, memory: NO_MEMORY, parameters: &[] }),
+    },
+    Spec {
+        name: "llvm.experimental.fptoui.checked",
+        intrinsic: Intrinsic::FpToIntChecked { signed: false },
+        overloads: &[Kind::Int, Kind::Float],
+        returns: Slot::WithFlag(0),
+        parameters: &[Slot::Any(1)],
+        own: Some(Own { attrs: PURE, memory: NO_MEMORY, parameters: &[] }),
+    },
+    Spec {
+        name: "llvm.llrint",
+        intrinsic: Intrinsic::LLRint,
         overloads: &[Kind::Int, Kind::Float],
         returns: Slot::Any(0),
         parameters: &[Slot::Any(1)],
@@ -619,6 +783,46 @@ const TABLE: [Spec; 73] = [
         own: None,
     },
     Spec {
+        name: "llvm.set.loop.iterations",
+        intrinsic: Intrinsic::SetLoopIterations,
+        overloads: &[Kind::Int],
+        returns: Slot::Void,
+        parameters: &[Slot::Any(0)],
+        own: None,
+    },
+    Spec {
+        name: "llvm.test.set.loop.iterations",
+        intrinsic: Intrinsic::TestSetLoopIterations,
+        overloads: &[Kind::Int],
+        returns: Slot::Int(1),
+        parameters: &[Slot::Any(0)],
+        own: None,
+    },
+    Spec {
+        name: "llvm.start.loop.iterations",
+        intrinsic: Intrinsic::StartLoopIterations,
+        overloads: &[Kind::Int],
+        returns: Slot::Any(0),
+        parameters: &[Slot::Any(0)],
+        own: None,
+    },
+    Spec {
+        name: "llvm.loop.decrement.reg",
+        intrinsic: Intrinsic::LoopDecrementReg,
+        overloads: &[Kind::Int],
+        returns: Slot::Any(0),
+        parameters: INTS,
+        own: None,
+    },
+    Spec {
+        name: "llvm.loop.decrement",
+        intrinsic: Intrinsic::LoopDecrement,
+        overloads: &[Kind::Int],
+        returns: Slot::Int(1),
+        parameters: &[Slot::Any(0)],
+        own: None,
+    },
+    Spec {
         name: "llvm.is.constant",
         intrinsic: Intrinsic::IsConstant,
         overloads: &[Kind::Int],
@@ -643,11 +847,43 @@ const TABLE: [Spec; 73] = [
         own: None,
     },
     Spec {
+        name: "llvm.trap",
+        intrinsic: Intrinsic::Trap,
+        overloads: &[],
+        returns: Slot::Void,
+        parameters: &[],
+        own: None,
+    },
+    Spec {
+        name: "llvm.debugtrap",
+        intrinsic: Intrinsic::DebugTrap,
+        overloads: &[],
+        returns: Slot::Void,
+        parameters: &[],
+        own: None,
+    },
+    Spec {
+        name: "llvm.ubsantrap",
+        intrinsic: Intrinsic::UbsanTrap,
+        overloads: &[],
+        returns: Slot::Void,
+        parameters: &[Slot::Int(8)],
+        own: None,
+    },
+    Spec {
         name: "llvm.prefetch",
         intrinsic: Intrinsic::Prefetch,
         overloads: &[Kind::Pointer],
         returns: Slot::Void,
         parameters: &[Slot::Any(0), Slot::Int(32), Slot::Int(32), Slot::Int(32)],
+        own: None,
+    },
+    Spec {
+        name: "llvm.experimental.noalias.scope.decl",
+        intrinsic: Intrinsic::NoAliasScopeDecl,
+        overloads: &[],
+        returns: Slot::Void,
+        parameters: &[],
         own: None,
     },
     Spec {
@@ -684,6 +920,24 @@ const TABLE: [Spec; 73] = [
         parameters: LIFETIME,
         own: Some(Own { attrs: LIFETIME_ATTRS, memory: &[(Some("argmem"), "write")], parameters: LIFETIME_PARAMETERS }),
     },
+    // `Intrinsics.td` states both: the size is `immarg`, the scope result and
+    // argument are `ptr` whatever the overloaded pointer is.
+    Spec {
+        name: "llvm.invariant.start",
+        intrinsic: Intrinsic::InvariantStart,
+        overloads: &[Kind::Pointer],
+        returns: Slot::Ptr,
+        parameters: &[Slot::Int(64), Slot::Any(0)],
+        own: None,
+    },
+    Spec {
+        name: "llvm.invariant.end",
+        intrinsic: Intrinsic::InvariantEnd,
+        overloads: &[Kind::Pointer],
+        returns: Slot::Void,
+        parameters: &[Slot::Ptr, Slot::Int(64), Slot::Any(0)],
+        own: None,
+    },
     Spec {
         name: "llrm.ia16.in",
         intrinsic: Intrinsic::PortIn,
@@ -699,6 +953,14 @@ const TABLE: [Spec; 73] = [
         returns: Slot::Void,
         parameters: &[Slot::Any(0)],
         own: None,
+    },
+    Spec {
+        name: "llrm.vararg.address",
+        intrinsic: Intrinsic::VarargAddress,
+        overloads: &[Kind::Pointer],
+        returns: Slot::Any(0),
+        parameters: &[],
+        own: Some(Own { attrs: PURE, memory: NO_MEMORY, parameters: &[] }),
     },
     Spec {
         name: "llvm.va_end",
@@ -787,7 +1049,14 @@ fn from_intrinsics_td(
 ) {
     let Some(set) = table_set(name) else { return };
     let Type::Function { returns, parameters, .. } = types.get(function.ty).clone() else { return };
-    function.attrs = set.function.iter().map(|one| Attribute::Flag((*one).to_owned())).collect();
+    // DEVIATE: the declaration does not carry `nocreateundeforpoison`; see
+    // `never_creates_undef_or_poison`.
+    function.attrs = set
+        .function
+        .iter()
+        .filter(|&&one| one != "nocreateundeforpoison")
+        .map(|one| Attribute::Flag((*one).into()))
+        .collect();
     if !set.memory.is_empty() {
         function.attrs.push(Attribute::Memory(
             set.memory.iter().map(|&(location, access)| (location.map(str::to_owned), access.to_owned())).collect(),
@@ -799,8 +1068,8 @@ fn from_intrinsics_td(
         let ty = if at == 0 { Some(returns) } else { parameters.get(at as usize - 1).copied() };
         let Some(ty) = ty else { continue };
         let attrs = attrs.iter().filter_map(|attr| match *attr {
-            intrinsic_attrs::Attr::Flag(one) => Some(Attribute::Flag(one.to_owned())),
-            intrinsic_attrs::Attr::Int(one, value) => Some(Attribute::Int(one.to_owned(), value)),
+            intrinsic_attrs::Attr::Flag(one) => Some(Attribute::Flag(one.into())),
+            intrinsic_attrs::Attr::Int(one, value) => Some(Attribute::Int(one.into(), value)),
             // At the argument's own width; `lower == upper` is no range.
             intrinsic_attrs::Attr::Range(lower, upper) => {
                 let bits = types.int_bits(ty)?;
@@ -833,6 +1102,12 @@ pub(crate) fn table_set(name: &str) -> Option<&'static intrinsic_attrs::Set> {
     }
 }
 
+/// `IntrNoCreateUndefOrPoison`: whether `Intrinsics.td` says the intrinsic
+/// `name` names never creates undef or poison from defined operands.
+pub fn never_creates_undef_or_poison(name: &str) -> bool {
+    table_set(name).is_some_and(|set| set.function.contains(&"nocreateundeforpoison"))
+}
+
 /// Whether `name` is in LLVM's reserved namespace, or llrm's own for
 /// its target's intrinsics.
 /// `Intrinsic::Window`'s name, from `huge` pointers to `far` ones.
@@ -844,12 +1119,31 @@ pub fn window_name(
     format!("llrm.ia16.window.{}.{}", mangle(types, far), mangle(types, huge))
 }
 
+/// DEVIATE DV1: the 64 by 32 bit unsigned divides a target lowers by name
+/// (`unsigned long long f(unsigned hi, unsigned lo, unsigned d)`, the
+/// remainder in the high half of the result, the quotient in the low half):
+/// a plain declaration to every pass, a target's divide instruction in the
+/// backend. One table: a target adds its name as data.
+pub const WIDE_DIVIDES: &[&str] = &["llrm.x86.udiv64by32"];
+
+/// Whether `name` is one of [`WIDE_DIVIDES`].
+pub fn is_wide_divide(name: &str) -> bool {
+    WIDE_DIVIDES.contains(&name)
+}
+
+/// A target's own intrinsic, which a pass of the target's IR slot may call
+/// and the target's selector lowers: MIR keeps no table of its types.
+pub fn is_target_intrinsic(name: &str) -> bool {
+    name.starts_with("llvm.aarch64.neon.")
+}
+
 pub fn is_reserved(name: &str) -> bool {
-    name.starts_with("llvm.") || name.starts_with("llrm.ia16.") || name.starts_with("llrm.noalias")
+    name.starts_with("llvm.") || name.starts_with("llrm.ia16.") || name.starts_with("llrm.noalias") || name.starts_with("llrm.vararg.")
 }
 
 /// The type suffix LLVM mangles an overloaded type into.
-fn mangle(
+/// The suffix an overloaded intrinsic's name has for `ty` (`i32`, `v4f32`).
+pub fn mangle(
     types: &Types,
     ty: TypeId,
 ) -> String {
@@ -858,7 +1152,9 @@ fn mangle(
         Type::Float(FloatKind::Float) => "f32".to_owned(),
         Type::Float(FloatKind::Double) => "f64".to_owned(),
         Type::Float(FloatKind::X86Fp80) => "f80".to_owned(),
+        Type::Float(FloatKind::F128) => "f128".to_owned(),
         Type::Pointer(space) => format!("p{space}"),
+        Type::Vector { element, count } => format!("v{count}{}", mangle(types, *element)),
         _ => types.display(ty),
     }
 }
@@ -887,17 +1183,24 @@ impl Intrinsic {
 
     /// The intrinsic `name` declares, its type suffixes aside.
     pub fn named(name: &str) -> Option<Intrinsic> {
+        NAMED.with(|made| made.set(made.get() + 1));
         if name.starts_with(CODE) {
             return Some(Intrinsic::Code);
         }
         if name.starts_with(ASM) {
             return Some(Intrinsic::Asm);
         }
-        TABLE
-            .iter()
-            .filter(|spec| name.strip_prefix(spec.name).is_some_and(|rest| rest.is_empty() || rest.starts_with('.')))
-            .max_by_key(|spec| spec.name.len())
-            .map(|spec| spec.intrinsic)
+        // The longest table name that is `name` or a `.`-cut prefix of it.
+        let names = NAMES.get_or_init(|| TABLE.iter().map(|spec| (spec.name, spec.intrinsic)).collect());
+        let mut cut = name;
+        loop {
+            #[cfg(test)]
+            PROBES.with(|probes| probes.set(probes.get() + 1));
+            if let Some(&found) = names.get(cut) {
+                return Some(found);
+            }
+            cut = &cut[..cut.rfind('.')?];
+        }
     }
 
     /// The function's attributes and each parameter's, where MIR states them;
@@ -907,7 +1210,7 @@ impl Intrinsic {
             return Some((vec![crate::facts::Fact::NoUnwind.carrier()], Vec::new()));
         }
         let own = self.spec().own?;
-        let flags = |names: &[&str]| names.iter().map(|one| Attribute::Flag((*one).to_owned())).collect::<Vec<_>>();
+        let flags = |names: &[&str]| names.iter().map(|one| Attribute::Flag((*one).into())).collect::<Vec<_>>();
         let mut attrs = flags(own.attrs);
         attrs.push(Attribute::Memory(
             own.memory.iter().map(|&(location, access)| (location.map(str::to_owned), access.to_owned())).collect(),
@@ -984,7 +1287,12 @@ impl Intrinsic {
         let mut bound: Vec<Option<TypeId>> = vec![None; spec.overloads.len()];
         let mut matches = |slot: Slot, ty: TypeId| -> bool {
             let mut overload = |at: usize, ty: TypeId| {
-                let kind = match types.get(ty) {
+                // `llvm_anyint_ty` and its kin take a vector of the kind too.
+                let lane = match types.get(ty) {
+                    Type::Vector { element, .. } => *element,
+                    _ => ty,
+                };
+                let kind = match types.get(lane) {
                     Type::Int(_) => Kind::Int,
                     Type::Float(_) => Kind::Float,
                     Type::Pointer(_) => Kind::Pointer,
@@ -994,6 +1302,13 @@ impl Intrinsic {
             };
             match slot {
                 Slot::Any(at) => overload(at, ty),
+                Slot::VectorOf(at) => matches!(types.get(ty), Type::Vector { .. }) && overload(at, ty),
+                Slot::Lane(at) => bound[at].is_some_and(|vector| {
+                    matches!(
+                        types.get(vector),
+                        Type::Vector { element, .. } if *element == ty
+                    )
+                }),
                 Slot::WithFlag(at) => match types.get(ty) {
                     Type::Struct { fields, packed: false } => {
                         matches!(
@@ -1004,15 +1319,37 @@ impl Intrinsic {
                     _ => false,
                 },
                 Slot::Int(bits) => types.int_bits(ty) == Some(bits),
+                Slot::Ptr => matches!(types.get(ty), Type::Pointer(0)),
                 Slot::Void => types.is_void(ty),
             }
         };
-        if !matches(spec.returns, *returns) {
+        // A lane of an overload is checked once the vector that binds it is
+        // known: the vector parameters first, the lanes (result, start) after.
+        let lane = |slot: &Slot| matches!(slot, Slot::Lane(_));
+        let returns_ok = |matches: &mut dyn FnMut(Slot, TypeId) -> bool| matches(spec.returns, *returns);
+        if !lane(&spec.returns) && !returns_ok(&mut matches) {
             return Err("Intrinsic has incorrect return type!".to_owned());
         }
         if *variadic
             || parameters.len() != spec.parameters.len()
-            || !spec.parameters.iter().zip(parameters).all(|(slot, ty)| matches(*slot, *ty))
+            || !spec
+                .parameters
+                .iter()
+                .zip(parameters)
+                .filter(|(slot, _)| !lane(slot))
+                .all(|(slot, ty)| matches(*slot, *ty))
+        {
+            return Err("Intrinsic has incorrect argument type!".to_owned());
+        }
+        if lane(&spec.returns) && !returns_ok(&mut matches) {
+            return Err("Intrinsic has incorrect return type!".to_owned());
+        }
+        if !spec
+            .parameters
+            .iter()
+            .zip(parameters)
+            .filter(|(slot, _)| lane(slot))
+            .all(|(slot, ty)| matches(*slot, *ty))
         {
             return Err("Intrinsic has incorrect argument type!".to_owned());
         }
@@ -1030,6 +1367,35 @@ impl Intrinsic {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `named` compared the name with every one of the 76 table entries on each
+    /// call (2465 Ir a call, 211 M Ir in DSE of 600 memcpy/memset/store
+    /// triples): a lookup probes a name per `.`-cut, however long the
+    /// table.
+    #[test]
+    fn naming_an_intrinsic_does_not_scan_the_table() {
+        let before = PROBES.with(std::cell::Cell::get);
+        assert_eq!(Intrinsic::named("llvm.memcpy.p0.p0.i32"), Some(Intrinsic::MemCpy));
+        assert_eq!(Intrinsic::named("llvm.memset"), Some(Intrinsic::MemSet));
+        assert_eq!(Intrinsic::named("foo"), None);
+        let probes = PROBES.with(std::cell::Cell::get) - before;
+        assert!(probes <= 10, "{probes} names probed for 3 lookups");
+    }
+
+    /// Every table name, bare and with type suffixes, names its own intrinsic;
+    /// a name that only shares a prefix without a `.` names none.
+    #[test]
+    fn every_table_name_names_its_intrinsic_with_or_without_suffixes() {
+        for spec in TABLE.iter() {
+            assert_eq!(Intrinsic::named(spec.name), Some(spec.intrinsic), "{}", spec.name);
+            assert_eq!(Intrinsic::named(&format!("{}.p0.i32", spec.name)), Some(spec.intrinsic), "{}", spec.name);
+            assert!(
+                Intrinsic::named(&format!("{}x", spec.name)).is_none_or(|got| got != spec.intrinsic),
+                "{}",
+                spec.name
+            );
+        }
+    }
 
     /// An enumerated `llvm.*` intrinsic with no entry would have no
     /// attributes at all; only the ones MIR states itself have none.

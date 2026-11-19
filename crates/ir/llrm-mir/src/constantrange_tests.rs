@@ -482,3 +482,19 @@ fn test_print_names_the_full_and_empty_sets() {
     assert_eq!(CR::empty(8).print(), "empty-set");
     assert_eq!(CR::new(8, 250, 5).print(), "[-6,5)", "bounds print signed, as LLVM's APInt does");
 }
+
+/// A 256-bit range multiplied at 512 bits. The `u128` ranges stopped at width
+/// 128, so SCEV's `willNotOverflow` on an i128 add (checked at i256) panicked
+/// the compile of a 128-bit fixed-point divide.
+#[test]
+fn test_ranges_wider_than_128_bits_multiply_and_divide() {
+    use crate::apint::{U256, Word};
+    use crate::constantrange::Range;
+    let w = |v: u128| U256::from_u128(v);
+    let (a, b) = (Range::new(256, w(3), w(5)), Range::new(256, w(2), w(4)));
+    assert_eq!(a.multiply(&b, 0), Range::new(256, w(6), w(13)));
+    assert_eq!(a.udiv(&b), Range::new(256, w(1), w(3)));
+    let high = w(1) << 200;
+    assert_eq!(Range::single(256, high).multiply(&Range::single(256, w(3)), 0), Range::single(256, high.wrapping_add(high).wrapping_add(high)));
+    assert_eq!(Range::new(256, w(16), w(26)).sqrt_floor(), Range::new(256, w(4), w(6)));
+}

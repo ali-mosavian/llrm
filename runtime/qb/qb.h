@@ -62,14 +62,25 @@ enum {
     BE_NOTFOUND = 76
 };
 
-#pragma aux copy_bytes "B$COPY"
+#pragma aux copy_rt "B$COPY"
 #pragma aux fill_bytes "B$FILLB"
 #pragma aux compare_bytes "B$CMPB"
 #pragma aux qb_error "B$ERROR"
 
 /* `n` bytes copied forward, a word at a time (the target's block.asm); where
    the regions overlap, `to` is below `from`. */
-void copy_bytes(char *to, const char *from, unsigned n);
+void copy_rt(char *to, const char *from, unsigned n);
+
+/* A copy of a few bytes, known at compile time, is loads and stores: the call
+   (far, with the registers saved) costs more than they do (CVI, MKI, ... were
+   60 instructions per call). */
+static inline __attribute__((always_inline)) void copy_bytes(char *to, const char *from, unsigned n)
+{
+    if (__builtin_constant_p(n) && n <= 8)
+        __builtin_memcpy(to, from, n);
+    else
+        copy_rt(to, from, n);
+}
 
 /* `n` bytes at `to` set to `value`, by dwords (block.asm). */
 void fill_bytes(char *to, int value, unsigned n);

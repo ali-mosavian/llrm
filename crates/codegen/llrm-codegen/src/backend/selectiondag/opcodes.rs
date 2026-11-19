@@ -53,9 +53,11 @@ pub enum Unmapped {
 
 /// `x86.instr`'s forms, by mnemonic.
 pub struct OpcodeMap {
-    forms: Vec<Form>,
+    forms: std::sync::Arc<Vec<Form>>,
     /// [`Self::scalar_sse`], asked per operand width: found once.
     scalar_sse: bool,
+    /// [`Self::vector128`]: found once.
+    vector128: bool,
     /// The answer for each name asked: every machine node of a function asks,
     /// and a name has one answer.
     asked: std::sync::Mutex<llrm_support::hash::HashMap<String, Result<usize, Unmapped>>>,
@@ -65,14 +67,27 @@ pub struct OpcodeMap {
 
 impl OpcodeMap {
     pub fn new(forms: Vec<Form>) -> OpcodeMap {
+        OpcodeMap::shared(std::sync::Arc::new(forms))
+    }
+
+    /// The map of forms read once (`llrm_target::instr::shared`).
+    pub fn shared(forms: std::sync::Arc<Vec<Form>>) -> OpcodeMap {
         let scalar_sse = forms.iter().any(|form| form.name == "addsd");
-        OpcodeMap { forms, scalar_sse, asked: Default::default(), sized: Default::default() }
+        let vector128 = forms.iter().any(|form| form.name == "movups");
+        OpcodeMap { forms, scalar_sse, vector128, asked: Default::default(), sized: Default::default() }
     }
 
     /// Whether this target does scalar floating point in xmm registers (it has
     /// `addsd`): a floating value is then 4 or 8 bytes, not the x87's 10.
     pub fn scalar_sse(&self) -> bool {
         self.scalar_sse
+    }
+
+    /// Whether this target holds the 128-bit integer vectors in xmm registers
+    /// (it has `movups`): `v16i8`, `v8i16`, `v4i32` and `v2i64` are then legal
+    /// types.
+    pub fn vector128(&self) -> bool {
+        self.vector128
     }
 
     /// [`memory_bytes`] of `name`, memoized: every machine node asks.
@@ -141,7 +156,18 @@ impl OpcodeMap {
         // A move between a general and an SSE register: the pin's names for
         // the direction, the form is the one with that encoding.
         if let Some(iced) = gpr_xmm_move(name) {
-            return self.forms.iter().position(|f| f.iced.as_deref() == Some(iced)).ok_or(Unmapped::NoForm);
+            // `MOVPDI2DImr`/`MOVPDI2DIrr` and `MOVDI2PDIrm`/`MOVDI2PDIrr` share an iced form; the name says
+            // whether the general operand is memory.
+            let memory = name.ends_with("mr") || name.ends_with("rm");
+            let takes = |f: &Form| {
+                let general = if iced.starts_with("Movd_rm32") { f.dests.first() } else { f.sources.first() };
+                general.is_some_and(|operand| operand.allows('m')) == memory
+            };
+            return self
+                .forms
+                .iter()
+                .position(|f| f.iced.as_deref() == Some(iced) && (!iced.starts_with("Movd_") || takes(f)))
+                .ok_or(Unmapped::NoForm);
         }
         if let Some((mnemonic, width, result, letters)) =
             sse(name).filter(|(m, ..)| self.forms.iter().any(|f| &f.name == m))
@@ -209,6 +235,13 @@ fn gpr_xmm_move(name: &str) -> Option<&'static str> {
         "MOV64toSDrr" => "Movq_xmm_rm64",
         "MOVSS2DIrr" => "Movd_rm32_xmm",
         "MOVDI2SSrr" => "Movd_xmm_rm32",
+        "MOVDI2PDIrr" | "MOVDI2PDIrm" => "Movd_xmm_rm32",
+        "MOV64toPQIrr" => "Movq_xmm_rm64",
+        "MOVPQIto64rr" => "Movq_rm64_xmm",
+        // `movq xmm, m64` (the upper lane zeroed) and `movq m64, xmm`.
+        "MOVQI2PQIrm" => "Movq_xmm_xmmm64",
+        "MOVPQI2QImr" => "Movq_xmmm64_xmm",
+        "MOVPDI2DIrr" | "MOVPDI2DImr" => "Movd_rm32_xmm",
         _ => return None,
     })
 }
@@ -219,11 +252,15 @@ fn gpr_xmm_move(name: &str) -> Option<&'static str> {
 /// is `movsd_x`. `SQRTSDr` names its tied source too. A pin name that is none
 /// of these is `None`.
 fn sse(name: &str) -> Option<(String, Option<u32>, Option<u32>, Vec<char>)> {
-    const ARITHMETIC: [&str; 22] = [
+    const ARITHMETIC: [&str; 67] = [
         "ADDSS", "ADDSD", "SUBSS", "SUBSD", "MULSS", "MULSD", "DIVSS", "DIVSD", "MINSS", "MINSD", "MAXSS", "MAXSD",
-        "SQRTSS", "SQRTSD", "MOVSS", "MOVSD", "UCOMISS", "UCOMISD", "XORPS", "ANDPS", "ANDNPS", "ORPS",
+        "SQRTSS", "SQRTSD", "MOVSS", "MOVSD", "UCOMISS", "UCOMISD", "XORPS", "ANDPS", "ANDNPS", "ORPS", "CMPSS",
+        "CMPSD", "PADDB", "PADDW", "PADDD", "PADDQ", "PSUBB", "PSUBW", "PSUBD", "PSUBQ", "PAND", "PANDN", "POR",
+        "PXOR", "PMULLW", "PSLLW", "PSLLD", "PSLLQ", "PSRLW", "PSRLD", "PSRLQ", "PSRAW", "PSRAD", "PSHUFD", "PUNPCKLQDQ", "PMULUDQ", "PUNPCKLDQ",
+        "PUNPCKLBW", "PUNPCKHBW", "PACKUSWB", "PACKSSWB", "PUNPCKLWD", "PUNPCKHWD", "PUNPCKHDQ", "PUNPCKHQDQ", "PACKSSDW",
+        "PCMPEQB", "PCMPEQW", "PCMPEQD", "PCMPGTB", "PCMPGTW", "PCMPGTD", "PMOVMSKB", "MOVMSKPS", "MOVMSKPD",
     ];
-    const MOVES: [&str; 1] = ["MOVAPS"];
+    const MOVES: [&str; 2] = ["MOVAPS", "MOVUPS"];
     const CONVERTS: [(&str, &str, Option<u32>); 8] = [
         ("CVTSS2SD", "cvtss2sd", None),
         ("CVTSD2SS", "cvtsd2ss", None),
@@ -243,12 +280,12 @@ fn sse(name: &str) -> Option<(String, Option<u32>, Option<u32>, Vec<char>)> {
         ("CVTTSS2SI", "cvttss2si", 32),
     ];
     let letters_of = |tail: &str| -> Option<Vec<char>> {
-        (!tail.is_empty() && tail.chars().all(|c| c == 'r' || c == 'm')).then(|| tail.chars().collect())
+        (!tail.is_empty() && tail.chars().all(|c| matches!(c, 'r' | 'm' | 'i'))).then(|| tail.chars().collect())
     };
     let mut found = None;
     for prefix in ARITHMETIC.iter().chain(&MOVES) {
         if let Some(letters) = name.strip_prefix(prefix).and_then(letters_of) {
-            let mnemonic = if *prefix == "MOVSD" { "movsd_x".to_owned() } else { prefix.to_ascii_lowercase() };
+            let mnemonic = if matches!(*prefix, "MOVSD" | "CMPSD") { format!("{}_x", prefix.to_ascii_lowercase()) } else { prefix.to_ascii_lowercase() };
             // The longest prefix wins (`ANDNPS` is not `ANDPS`).
             if found
                 .as_ref()
@@ -270,6 +307,8 @@ fn sse(name: &str) -> Option<(String, Option<u32>, Option<u32>, Vec<char>)> {
     }
     found.map(|(mnemonic, width, result, letters)| {
         let letters = if mnemonic.starts_with("sqrt") && letters.len() == 1 { vec!['r', 'r'] } else { letters };
+        // `PSHUFDri` names its source and the immediate; the destination is not tied to the source.
+        let letters = if mnemonic == "pshufd" { std::iter::once('r').chain(letters).collect() } else { letters };
         (mnemonic, width, result, letters)
     })
 }
@@ -281,6 +320,12 @@ fn sse(name: &str) -> Option<(String, Option<u32>, Option<u32>, Vec<char>)> {
 pub fn memory_bytes(name: &str) -> Option<u32> {
     // `MOV8mr_NOREX` stores `AH`: the byte store it stands for.
     let name = name.strip_suffix("_NOREX").unwrap_or(name);
+    if matches!(name, "MOVQI2PQIrm" | "MOVPQI2QImr") {
+        return Some(8);
+    }
+    if matches!(name, "MOVPDI2DImr" | "MOVDI2PDIrm") {
+        return Some(4);
+    }
     // A scalar SSE access is the scalar's size: `MOVSDrm` 8, `MOVSSmr` 4.
     if sse(name.strip_suffix("_alt").unwrap_or(name)).is_some() {
         // A conversion reads its source's size: the float named first, or the

@@ -7,4 +7,5 @@ description = "llrm's CodeView C13 debug-information writer"
 
 [dependencies]
 llrm-object = { workspace = true }
+llrm-debug = { workspace = true }
 llrm-support = { workspace = true }

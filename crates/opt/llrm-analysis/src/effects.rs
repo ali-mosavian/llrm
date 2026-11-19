@@ -69,7 +69,7 @@
 //! LLVM `MemoryEffects`, `FunctionAttrs`.
 
 use llrm_mir::Context;
-use llrm_mir::facts::{Fact, Facts};
+use llrm_mir::facts::Fact;
 pub use llrm_mir::memory::callee;
 use llrm_mir::memory::{Effects, stated_at};
 use llrm_mir::module::{Function, GlobalValue, InstId};
@@ -99,8 +99,8 @@ pub fn states(
     fact: Fact,
 ) -> bool {
     let (Opcode::Call(info) | Opcode::Invoke(info)) = &function.instruction(inst).opcode else { return false };
-    Facts::of(&info.attrs).contains(fact)
-        || declared(context, declarations, function, inst).is_some_and(|one| Facts::of(&one.attrs).contains(fact))
+    fact.stated_by(&info.attrs)
+        || declared(context, declarations, function, inst).is_some_and(|one| fact.stated_by(&one.attrs))
 }
 
 /// What the call `inst` may do to locations `counted` admits: what both the
@@ -417,5 +417,35 @@ pad:
         let exposes =
             f.walk().map(|(_, inst)| exposes_memory(&module.context, &declarations, f, inst)).collect::<Vec<_>>();
         assert_eq!(exposes[..3], [false, true, false]);
+    }
+
+    /// `combine`'s dead-instruction check asked `willreturn` of a call by
+    /// building the fact set of the call and of its callee each time (79 M
+    /// Ir of memexp -O1's 404 M Combine, 6x the pin's
+    /// `isInstructionTriviallyDead`); a flag is looked up in the attributes, no
+    /// set built.
+    #[test]
+    fn test_asking_a_call_for_a_flag_builds_no_fact_set() {
+        let module = parsed(
+            "declare void @returns() willreturn nounwind
+declare void @unknown()
+
+define void @f() {
+b:
+  call void @returns()
+  call void @unknown()
+  call void @unknown() willreturn
+  ret void
+}
+",
+        );
+        let declarations = module.declarations();
+        let f = function(&module, "f");
+        let calls: Vec<InstId> = f.walk().map(|(_, inst)| inst).take(3).collect();
+        let before = llrm_mir::counts::get(llrm_mir::counts::Event::FactSets);
+        let answers: Vec<bool> =
+            calls.iter().map(|&call| states(&module.context, &declarations, f, call, Fact::WillReturn)).collect();
+        assert_eq!(answers, [true, false, true]);
+        assert_eq!(llrm_mir::counts::get(llrm_mir::counts::Event::FactSets) - before, 0);
     }
 }

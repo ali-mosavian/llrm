@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/jumptableswitch.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/jumptableswitch.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/jumptableswitch.rs sha256:836a495d4d310f6182cf9a361b51b8812bc295f03a5b244708db0f151eaad9c3 -->
+<!-- src: crates/opt/llrm-transforms/src/jumptableswitch.rs sha256:3299f27ab512a3b6a5d87ae303b4e9ecd573a6b2d7478c631cb6a76fc4846e28 -->
 
 # jumptableswitch
 
@@ -31,7 +31,7 @@ The pass sits after `cvp` in the simplify phase (PassBuilderPipelines.cpp
 [L672](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Passes/PassBuilderPipelines.cpp#L672)),
 so the inliner then takes the direct calls.
 
-DEVIATE JT-1 (no number, owner w-6): no profile data (`!prof` value
+DEVIATE JT-1 (no number, owner w10-instcombine): no profile data (`!prof` value
 profile) and no `!prof` on the switch: llrm has none.
 
 ## Example

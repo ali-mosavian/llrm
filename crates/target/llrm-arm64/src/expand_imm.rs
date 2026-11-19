@@ -20,6 +20,15 @@ pub fn mov_imm(
     out.insns
 }
 
+/// `isCheapImmediate`: whether a `bytes`-wide register is given `value` in at
+/// most two instructions (any constant of 32 bits or less is).
+pub fn cheap_move_immediate(
+    bytes: u8,
+    value: i64,
+) -> bool {
+    bytes < 8 || mov_imm(value as u64, 64, Gpr(0)).len() <= 2
+}
+
 struct Sequence {
     rd: Gpr,
     width: Width,
@@ -599,6 +608,18 @@ fn ror(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// x86's rule called a 64-bit constant of more than 32 bits dear however
+    /// few instructions AArch64 makes it in (`movz x0, #1, lsl #32` is one), so
+    /// MachineSink split an edge for it. `isCheapImmediate`: two or fewer.
+    #[test]
+    fn a_constant_is_cheap_when_it_takes_two_instructions_or_fewer() {
+        assert!(cheap_move_immediate(4, 0x1234_5678));
+        assert!(cheap_move_immediate(8, 0x1_0000_0000), "one movz");
+        assert!(cheap_move_immediate(8, -0x1_0000), "one movn");
+        assert!(cheap_move_immediate(8, 0x0001_0000_1234), "movz, movk");
+        assert!(!cheap_move_immediate(8, 0x1234_5678_9abc_def0), "four chunks");
+    }
 
     fn run(insns: &[Inst]) -> u64 {
         // Interpret the sequence on one register, which starts at zero.

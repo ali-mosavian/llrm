@@ -16,15 +16,24 @@ fn checked_in_tables_match_a_fresh_regeneration() {
     }
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
     let checked_in = root.join("crates/backend/llrm-dagisel/src/generated");
+    let checked_in_x86 = root.join("crates/target/llrm-x86-dagisel/src/generated");
     let fresh = tempfile::tempdir().unwrap();
+    let fresh_x86 = tempfile::tempdir().unwrap();
     let status = Command::new(root.join("tools/dagisel/regen.sh"))
         .arg(fresh.path())
+        .arg(fresh_x86.path())
         .env("DAGISEL_GEN", env!("CARGO_BIN_EXE_llrm-dagisel-gen"))
         .status()
         .expect("run regen.sh");
     assert!(status.success(), "regen.sh failed; set DAGISEL_SKIP_PIN=1 where the pin is not installed");
 
-    let mut names: Vec<_> = std::fs::read_dir(&checked_in).unwrap().map(|e| e.unwrap().file_name()).collect();
+    // `aarch64/` is written by `aarch64/regen.sh` and checked by
+    // `stale_aarch64.rs`.
+    let mut names: Vec<_> = std::fs::read_dir(&checked_in)
+        .unwrap()
+        .map(|e| e.unwrap().file_name())
+        .filter(|name| name != "aarch64")
+        .collect();
     names.sort();
     let mut fresh_names: Vec<_> = std::fs::read_dir(fresh.path()).unwrap().map(|e| e.unwrap().file_name()).collect();
     fresh_names.sort();
@@ -32,6 +41,17 @@ fn checked_in_tables_match_a_fresh_regeneration() {
     for name in names {
         let old = std::fs::read_to_string(checked_in.join(&name)).unwrap();
         let new = std::fs::read_to_string(fresh.path().join(&name)).unwrap();
+        assert!(old == new, "{} is stale: run tools/dagisel/regen.sh", name.to_string_lossy());
+    }
+    let mut names: Vec<_> = std::fs::read_dir(&checked_in_x86).unwrap().map(|e| e.unwrap().file_name()).collect();
+    names.sort();
+    let mut fresh_names: Vec<_> =
+        std::fs::read_dir(fresh_x86.path()).unwrap().map(|e| e.unwrap().file_name()).collect();
+    fresh_names.sort();
+    assert_eq!(names, fresh_names, "the set of generated x86 files changed");
+    for name in names {
+        let old = std::fs::read_to_string(checked_in_x86.join(&name)).unwrap();
+        let new = std::fs::read_to_string(fresh_x86.path().join(&name)).unwrap();
         assert!(old == new, "{} is stale: run tools/dagisel/regen.sh", name.to_string_lossy());
     }
 }

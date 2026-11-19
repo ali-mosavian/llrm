@@ -1,4 +1,5 @@
 // flags: -O2 -march=i486 | -O2 -march=i486 -m32
+// targets: dos
 /* The OS layer's file-name calls: make a directory and a file in it, rename the file, delete it, change into the
    directory and out, remove it; a missing file or directory and a directory still holding a file are the
    interface's negative codes, and every success is 0 (DOS leaves AX undefined there). */

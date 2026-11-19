@@ -82,16 +82,33 @@ use llrm_support::debug::timed;
 use crate::abi::runtime::Contract;
 use crate::backend::calleefacts;
 use crate::backend::classes::RegisterClasses;
+use crate::backend::codetables;
 use crate::backend::constpool::Pool;
 use crate::backend::cpu::{Profile, ProfileOrName};
-use crate::backend::isel::{self, Selected};
+use crate::backend::isel::{self, Selected, Unselected};
 use crate::backend::shadow::{self, Selector};
 use crate::backend::target::Segments;
-use crate::backend::{addressvalues, executed, frame, globals, jumps, masm, returnsplit, select};
+use crate::backend::{addressvalues, constrain, executed, frame, globals, jumps, masm, returnsplit, select};
 use crate::flow;
 use crate::model::ir::{Addr, AddressRef, Loc, Semantics, Space};
 use crate::model::lir::LirBody;
 use crate::support::hash::IndexMap;
+
+/// `kept` and the freed frame register `freed`, in the order of the
+/// convention's whole callee-saved list `order` (the frame register's place in
+/// it included); `freed` last where the list does not name it.
+fn in_list_order(
+    order: &[(RegId, RegId)],
+    mut kept: Vec<(RegId, RegId)>,
+    freed: (RegId, RegId),
+) -> Vec<(RegId, RegId)> {
+    kept.push(freed);
+    let mut sorted: Vec<(RegId, RegId)> = order.iter().copied().filter(|one| kept.contains(one)).collect();
+    if !sorted.contains(&freed) {
+        sorted.push(freed);
+    }
+    sorted
+}
 
 /// What only the frontend knows: each call's contract, and the symbol each
 /// MIR name links as.
@@ -144,6 +161,30 @@ const HUGE_SPACE: u32 = 3;
 
 /// `module` as masm, its code in the segment `code`, selected by the 16-bit x86
 /// selector: what the tests of this crate are written for.
+/// The register a one-slot frame's `pop` takes at the returns of `body`: the
+/// first of `order` that no return takes a result in (the convention's
+/// `returned` registers, and any a return pins) and the function does not save, as `X86RegisterInfo::findDeadCallerSavedReg` walks the register class
+/// at the `RET` (its result registers are the live-outs, the saved ones are
+/// restored before it). `None` where every register is live.
+fn dead_pop(
+    order: &[RegId],
+    body: &LirBody,
+    saved: &[(RegId, RegId)],
+    returned: &[RegId],
+) -> Option<RegId> {
+    let live: Vec<RegId> = returned
+        .iter()
+        .map(|register| register.full_register())
+        .chain(body
+        .insns()
+        .iter()
+        .filter(|one| one.what.as_ref().is_some_and(|what| what.op == crate::model::ir::Operation::Return))
+        .flat_map(|one| one.requires.iter().map(|(_, register)| register.full_register()).collect::<Vec<_>>()))
+        .chain(saved.iter().map(|(whole, _)| whole.full_register()))
+        .collect();
+    order.iter().copied().find(|register| !live.contains(&register.full_register()))
+}
+
 #[cfg(test)]
 pub fn assembled(
     module: &Module,
@@ -183,13 +224,32 @@ pub fn assembled_by(
     let mut shared: IndexMap<String, Vec<u8>> = IndexMap::default();
     let mut shared_registers = None;
     let mut data = Vec::new();
+    // A variable of zeros moves to `.data?` after this (`zero_to_bss`): the
+    // pool's start offset in `.data` is where the others end.
+    let mut staying_end = 0_i64;
     let mut far_data = Vec::new();
+    // Private constants of no alignment (string literals) go after every aligned datum: the pin
+    // gives them their own mergeable `.rodata.str1.1` section, so an odd-sized one never pads what
+    // follows it (m16 stft_single -O2: +1 B of `align 2` after two strings, jpeg_single +2).
+    let mut unaligned_tail: Vec<codetables::Table> = Vec::new();
+    // Off when tuned for size: each load site costs the `cs:` byte, which the moved table's
+    // data bytes do not repay (QCport -Os grew).
+    let reads_in_code = cpu.target().tuning().read_only_in_code && !cpu.size;
+    let mut aligned_tables: Vec<codetables::Table> = Vec::new();
     let mut sectioned: IndexMap<String, Vec<masm::Datum>> = IndexMap::default();
     let mut huge_objects: Vec<(String, Vec<masm::Datum>)> = Vec::new();
     let mut data_publics = Vec::new();
+    let mut weak: BTreeSet<String> = BTreeSet::new();
+    let is_weak = |linkage: Linkage| {
+        matches!(linkage, Linkage::Weak | Linkage::WeakOdr | Linkage::LinkOnce | Linkage::LinkOnceOdr)
+    };
+    let mut comdats: std::collections::BTreeMap<String, masm::Comdat> = Default::default();
     let pool = Rc::new(RefCell::new(Pool::new(module.globals.len() as i64)));
     let classes = Rc::new(RegisterClasses::of(arch));
-    let (facts, order) = calleefacts::CalleeFacts::of(module);
+    let (facts, order) = calleefacts::CalleeFacts::of_binding(
+        module,
+        cpu.target().tti().is_some_and(|tti| tti.ipra_binds_local()),
+    );
     let target = Target {
         facts: &facts,
         cpu,
@@ -216,7 +276,7 @@ pub fn assembled_by(
         }
     }
     let layout = module.datalayout.as_deref().and_then(|text| llrm_mir::datalayout::DataLayout::parse(text).ok());
-    // DEVIATE SD231: a routine one site calls is pasted there, as the old
+    // DEVIATE SD231 (owner x86-m32, review 2026-11-27): a routine one site calls is pasted there, as the old
     // selector does: its procedure, call and return cost more than it saves.
     // The pin has no such routine (a libcall in the library).
     let mut sites: IndexMap<String, usize> = IndexMap::default();
@@ -265,17 +325,57 @@ pub fn assembled_by(
                     huge_objects.push((name.to_owned(), datums));
                 } else if matches!(global.address_space, FAR_SPACE | HUGE_SPACE) {
                     far_data.extend(datums);
+                } else if variable.constant
+                    && global.linkage == Linkage::Private
+                    && comdat_of(module, name).is_none()
+                    && segment_bytes != i64::MAX
+                    && !datums.iter().any(|one| matches!(one, masm::Datum::Align(_) | masm::Datum::Pointer(_)))
+                {
+                    unaligned_tail.push(codetables::Table { key: (globals::space(module, id), at as i64), datums });
+                } else if reads_in_code
+                    && variable.constant
+                    && global.linkage == llrm_mir::Linkage::Private
+                    && comdat_of(module, name).is_none()
+                    && segment_bytes != i64::MAX
+                    && codetables::movable(&datums)
+                {
+                    // Aligned like the rest, a table that stays in data goes
+                    // after it (`tables`).
+                    aligned_tables.push(codetables::Table { key: (globals::space(module, id), at as i64), datums });
                 } else {
+                    let start = data.len();
+                    let zero_may_move = !variable.constant
+                        && datums.iter().all(|one| match one {
+                            masm::Datum::Align(_) | masm::Datum::Label(_) => true,
+                            masm::Datum::Bytes(bytes) => bytes.iter().all(|byte| *byte == 0),
+                            _ => false,
+                        });
+                    if !zero_may_move {
+                        staying_end += masm::data_size(&datums, staying_end);
+                    }
                     data.extend(datums);
+                    if let Some(comdat) = comdat_of(module, name) {
+                        let symbol = names[&(globals::space(module, id), at as i64)].clone();
+                        comdats.insert(
+                            symbol,
+                            masm::Comdat {
+                                extent: Some(("_DATA".to_owned(), start..data.len())),
+                                constant: variable.constant,
+                                ..comdat
+                            },
+                        );
+                    }
                 }
                 if global.linkage == llrm_mir::Linkage::External {
                     data_publics.push(names[&(globals::space(module, id), at as i64)].clone());
+                } else if is_weak(global.linkage) {
+                    weak.insert(names[&(globals::space(module, id), at as i64)].clone());
                 }
             }
             GlobalKind::Function(function) if !function.is_declaration() => {
                 let unselected = |error: isel::Unselected| format!("@{name}: {}", error.0);
                 let Machined { body, reserve, calls, inline, inline_symbols, far, pops, popped, registers, .. } =
-                    done.shift_remove(&id).expect("every function with a body was machined");
+                    done.swap_remove(&id).expect("every function with a body was machined");
                 let body = timed("masm cleaned returns", || {
                     masm::cleaned_returns(
                         &addressvalues::converted(&body),
@@ -353,7 +453,10 @@ pub fn assembled_by(
                     // A global of this module is called by the name it is
                     // defined or declared as.
                     let linked = match module.named(callee) {
-                        Some(id) => names[&(globals::space(module, id), i64::from(id.0))].clone(),
+                        Some(id) => names
+                            .get(&(globals::space(module, id), i64::from(id.0)))
+                            .cloned()
+                            .ok_or_else(|| format!("{callee}: a call to an intrinsic this target does not lower"))?,
                         None => abi.linked(callee),
                     };
                     referenced.insert(linked.clone(), far.contains(at));
@@ -369,8 +472,11 @@ pub fn assembled_by(
                 let interrupt = (function.calling_convention == llrm_mir::opcode::X86_INTR).then(|| {
                     let (space, index) = crate::hir::symbols::DGROUP;
                     names.insert((space, index), globals::DGROUP.to_owned());
-                    Addr { index, ..Addr::new(space, 0) }
+                    masm::Interrupt::of(arch, Addr { index, ..Addr::new(space, 0) })
                 });
+                if is_weak(global.linkage) {
+                    weak.insert(names[&(Space::Segment, at as i64)].clone());
+                }
                 let procedure = masm::Procedure {
                     name: names[&(Space::Segment, at as i64)].clone(),
                     public: global.linkage == Linkage::External,
@@ -387,11 +493,13 @@ pub fn assembled_by(
                         .any(|one| Fact::of_attribute(one) == Some(Fact::StackCheck))
                         .then(|| abi.stack_check().cloned())
                         .flatten(),
+                    probe_stack: None,
                     registers,
                 };
                 // Copies of returns and split tails only make code better: -O0
                 // has neither.
                 let procedure = if !cpu.optimized {
+                    let procedure = masm::Procedure { body: LirBody { unwrapped: true, ..procedure.body }, ..procedure };
                     if let Some(why) = masm::realign_refusal(&procedure) {
                         return Err(why);
                     }
@@ -412,7 +520,7 @@ pub fn assembled_by(
                         })
                     };
                     let body = timed("lir duplicated returns", || {
-                        jumps::duplicated_returns(procedure.body.clone(), &overhead)
+                        jumps::duplicated_returns(jumps::threaded_late(&procedure.body), &overhead)
                     });
                     if let Some(error) = unprintable.take() {
                         return Err(error);
@@ -422,13 +530,14 @@ pub fn assembled_by(
                         return Err(why);
                     }
                     let procedure = masm::exits_inserted(masm::saved_first(procedure));
-                    if procedure.body.frame_exit.is_some() {
-                        let body = jumps::tails_merged_after_exits(procedure.body.clone(), cpu.size, Some(&calls))
+                    let procedure = if procedure.body.frame_exit.is_some() {
+                        let body = jumps::tails_merged_after_exits(procedure.body.clone(), cpu.size, Some(&calls), cpu.tail_merge_pin_faithful)
                             .map_err(|error| error.to_string())?;
                         masm::Procedure { body, ..procedure }
                     } else {
                         procedure
-                    }
+                    };
+                    masm::tail_calls_folded(procedure)
                 };
                 procedures.push(procedure);
             }
@@ -439,20 +548,83 @@ pub fn assembled_by(
         let registers = shared_registers.clone().expect("a routine is shared by a function");
         procedures.push(masm::routine_procedure(&name, code, registers, Regs(arch.registers())));
     }
-    for (bytes, id) in crate::backend::constpool::wide_first(pool.borrow().entries()) {
+    let flat_elf = arch.object().default == llrm_target::object::Format::Elf && arch.object().code_model().flat();
+    // A flat ELF object keeps the pool in mergeable sections, with no gap to fill.
+    let entries = pool.borrow();
+    let pooled = if flat_elf {
+        crate::backend::constpool::wide_first(entries.entries())
+    } else {
+        crate::backend::constpool::gap_filled(entries.entries(), staying_end)
+    };
+    let mut pool_end = staying_end;
+    for (bytes, id) in pooled {
         let name = format!("$K{id}");
         names.insert((Space::Segment, id), name.clone());
         // A double is on an 8-byte boundary: a 486 takes 3 clocks more for one
         // off it (Intel486 data sheet 240440-002, section 10.1 and
         // Table 2.1).
         // A 16-byte one is a bitwise SSE instruction's memory operand, which
-        // must be aligned.
-        if bytes.len() >= 8 {
-            data.push(masm::Datum::Align(masm::Align { to: if bytes.len() >= 16 { 16 } else { 8 } }));
+        // must be aligned. Every entry is aligned to its size, as the pin's
+        // `emitConstantPool` aligns each to its type
+        // (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/AsmPrinter/AsmPrinter.cpp#L3383>):
+        // a dword after a 10-byte extended constant sat at 2 mod 4, 3 clocks a
+        // read.
+        let to = match bytes.len() {
+            16.. => 16,
+            8..16 => 8,
+            4..8 => 4,
+            2..4 => 2,
+            _ => 1,
+        };
+        // A dword or word entry already on its boundary asks for nothing: the
+        // `align` would still raise the segment to dword, and the linker pads
+        // the next module's data up to it (+2 B in the linked exe of nine
+        // programs at m16 -Os).
+        // A flat ELF object keeps a constant of 4, 8, 16 or 32 bytes in the pin's
+        // read-only mergeable section of its size, not in the writable data.
+        if flat_elf && matches!(bytes.len(), 4 | 8 | 16 | 32) {
+            let section = sectioned.entry(format!(".rodata.cst{}", bytes.len())).or_default();
+            if section.is_empty() {
+                section.push(masm::Datum::Align(masm::Align { to: bytes.len() as i64 }));
+            }
+            section.extend([masm::Datum::Label(masm::Label { name }), masm::Datum::Bytes(bytes.to_vec())]);
+            continue;
         }
+        // The offset counts what stays in `.data`: the variables of zeros that
+        // `zero_to_bss` moves are not before the pool.
+        if to > 1 && (to >= 8 || pool_end % to != 0) {
+            data.push(masm::Datum::Align(masm::Align { to }));
+            pool_end += (to - pool_end % to) % to;
+        }
+        pool_end += bytes.len() as i64;
         data.extend([masm::Datum::Label(masm::Label { name }), masm::Datum::Bytes(bytes.to_vec())]);
     }
-    data.extend(masm::jump_tables(&procedures, &mut names, module));
+    let (read_only, tables_of_jumps) = masm::split_read_only(masm::jump_tables(&procedures, &mut names, module));
+    let mut code_data = std::collections::BTreeMap::new();
+    if reads_in_code {
+        let mut tables = aligned_tables;
+        tables.extend(codetables::jump_tables(tables_of_jumps, &names));
+        tables.extend(unaligned_tail);
+        let others: Vec<&[masm::Datum]> = [&data[..], &far_data[..], &read_only[..]]
+            .into_iter()
+            .chain(sectioned.values().map(Vec::as_slice))
+            .chain(huge_objects.iter().map(|(_, datums)| datums.as_slice()))
+            .collect();
+        let aliased: BTreeSet<codetables::Key> = module
+            .aliases
+            .iter()
+            .map(|alias| (globals::space(module, alias.aliasee), i64::from(alias.aliasee.0)))
+            .collect();
+        let (placed, kept) = codetables::placed(&mut procedures, tables, &names, &others, &aliased);
+        code_data = placed;
+        data.extend(kept.into_iter().flat_map(|table| table.datums));
+    } else {
+        data.extend(tables_of_jumps);
+        data.extend(unaligned_tail.into_iter().flat_map(|table| table.datums));
+    }
+    if !read_only.is_empty() {
+        sectioned.entry("CONST".to_owned()).or_default().extend(read_only);
+    }
     timed("stack checks", || {
         crate::backend::stackusage::elide_checks(&mut procedures, &masm::entered_directly(module, &names), &*arch)
     });
@@ -507,12 +679,18 @@ pub fn assembled_by(
     externs.sort();
     externs.dedup();
     let debug = timed("debug info", || {
-        crate::backend::debuginfo::described(module, &names, llrm_object::debug::Producer::Native, arch)
+        crate::backend::debuginfo::described(
+            module,
+            &names,
+            llrm_debug::Producer::Native,
+            &crate::backend::debuginfo::Machine::of(arch),
+        )
     })?;
     let code_segments: std::collections::BTreeMap<String, String> = procedures
         .iter()
         .filter_map(|one| module.sections.get(&one.name).map(|section| (one.name.clone(), section.clone())))
         .collect();
+    comdats.extend(procedures.iter().filter_map(|one| Some((one.name.clone(), comdat_of(module, &one.name)?))));
     let has_far = !far_data.is_empty();
     let far_segment = format!("{}_FARDATA", code.strip_suffix("_TEXT").unwrap_or(code));
     let mut huge_segments: Vec<(String, Vec<masm::Datum>)> = Vec::new();
@@ -523,12 +701,28 @@ pub fn assembled_by(
         }
     }
     let huge_names: Vec<String> = huge_segments.iter().map(|(name, _)| name.clone()).collect();
+    let (visibility, aliases) = globals::exports(module, &names, &|name| abi.linked(name));
+    // `shouldAssumeDSOLocal`: shared-library code binds no default-visibility
+    // definition itself, and no code binds a weak one.
+    let preemptible: BTreeSet<String> = weak
+        .iter()
+        .cloned()
+        .chain(
+            procedures
+                .iter()
+                .filter(|one| one.public && module.preempts_default_visibility() && !visibility.contains_key(&one.name))
+                .map(|one| one.name.clone()),
+        )
+        .collect();
     Ok(masm::Module {
         registers: Regs(arch.registers()),
         code: code.to_owned(),
         names,
         externs,
         publics: procedures.iter().filter(|one| one.public).map(|one| one.name.clone()).chain(data_publics).collect(),
+        visibility,
+        preemptible,
+        aliases,
         data: std::iter::once(("_DATA".to_owned(), data))
             .chain(has_far.then(|| (far_segment.clone(), far_data)))
             .chain(huge_segments)
@@ -539,7 +733,10 @@ pub fn assembled_by(
         requests: BTreeSet::new(),
         debug,
         far_bss: BTreeSet::new(),
+        weak,
         code_segments,
+        code_data,
+        comdats,
         stack: 0,
         object: arch.object(),
         padding: masm::Padding { function: arch.pref_function_alignment(), nop: arch.max_nop_bytes() },
@@ -665,7 +862,20 @@ pub fn machined(
     target: &Target<'_>,
 ) -> Result<Machined, String> {
     let first = staged(module, name, abi, pool, target, 0)?;
+    let _ = constrain::narrowed();
     let mut kept = machined_once(module, name, abi, pool, target, first.clone())?;
+    // A cold read of a narrowly confined value given a copy is kept only where
+    // the function costs less for it: the copy is a move executed where the
+    // read is, and pays only if the value's other references then find
+    // registers (sieve -O2: one move a trip, nothing gained).
+    if constrain::narrowed() {
+        let plain = constrain::narrowing(false, || machined_once(module, name, abi, pool, target, first.clone()))?;
+        if let Some((with, without)) = route_cost_if_priced(&kept, target).zip(route_cost_if_priced(&plain, target)) {
+            if without <= with {
+                kept = plain;
+            }
+        }
+    }
     // With -Omax, a function that calls one whose registers are known is made
     // without that too, and the cheaper kept: what the allocator costs is
     // an estimate, and a freer choice of registers is not always the better
@@ -689,6 +899,12 @@ pub fn machined(
             }
         }
     }
+    llrm_support::debug!(
+        "notes",
+        "{name} after allocation: {} of {} notes stand",
+        kept.body.notes_standing(),
+        kept.body.notes.len()
+    );
     // What the function's cost in `timefunc` is measured against.
     llrm_support::debug!("size", "{name} {}", kept.body.insns().len());
     // Reported once the choice is made: a rejected candidate is no function's
@@ -749,16 +965,21 @@ fn machined_once(
     // `PrologEpilogInserter` orders the frame objects by use density
     // (`X86FrameLowering::orderFrameObjects`); taken over the layouts below
     // where it brings fewer operands past a one-byte displacement than they do.
-    let far = far_frame(&first.body);
+    let sp = first_stage.registers.free;
+    let far = far_frame(&first, sp);
     // An over-aligned local lies on its alignment below the aligned top: a
     // layout that moves objects would break it.
-    let ordered = if far > 0 && first.body.over_aligned.is_empty() {
-        crate::backend::relayout::ordered(&first, &frame, target.basic).map(|(ordered, _)| ordered)
+    // Built only where it has fewer far cells than the first layout, which is told by counting them.
+    let ordered = if far > 0
+        && first.body.over_aligned.is_empty()
+        && crate::backend::relayout::far_ordered(&first, &frame, sp).is_none_or(|ordered| ordered < far)
+    {
+        crate::backend::relayout::ordered(&first, &frame, sp).map(|(ordered, _)| ordered)
     } else {
         None
     };
     let best = |chosen: Machined| match ordered {
-        Some(ordered) if far_frame(&ordered.body) < far_frame(&chosen.body) => ordered,
+        Some(ordered) if far_frame(&ordered, sp) < far_frame(&chosen, sp) => ordered,
         _ => chosen,
     };
     let spilled = frame.floor + first.reserve;
@@ -767,7 +988,7 @@ fn machined_once(
     // spill slots can end on a word, so a 4-aligned frame needs it too: the
     // backend run again aligns the allocas and the frame moved by the hole
     // did not (reserve 286 against 288).
-    let align = frame.align.max(frame.alloca_align);
+    let align = frame.object_cap().max(frame.alloca_align);
     let spilled = if align > 1 { (spilled + align - 1).div_euclid(align) * align } else { spilled };
     if target.basic || frame.native.is_some() || spilled <= 0 || frame.floor == 0 || far == 0 {
         return Ok(best(first));
@@ -776,8 +997,15 @@ fn machined_once(
     // backend again; `LLRM_CHECK_FRAME=1` runs it again beside, and the two
     // must be the same function. A frame that cannot be moved keeps its first
     // layout.
-    let laid = timed("frame laid again", || crate::backend::relayout::laid_again(&first, &frame, spilled));
-    if llrm_support::env_flag!("LLRM_CHECK_FRAME") {
+    // Built only where it has fewer far cells, which is told by counting them.
+    let check = llrm_support::env_flag!("LLRM_CHECK_FRAME");
+    let worth = check || crate::backend::relayout::far_again(&first, &frame, spilled, sp).is_none_or(|again| again < far);
+    let laid = if worth {
+        timed("frame laid again", || crate::backend::relayout::laid_again(&first, &frame, spilled))
+    } else {
+        None
+    };
+    if check {
         let (again, _) = cheaper(&staged(module, name, abi, pool, target, spilled)?, name, pool, target)?;
         match &laid {
             Some((laid, _)) => {
@@ -791,7 +1019,7 @@ fn machined_once(
         }
     }
     Ok(best(match laid {
-        Some((second, _)) if far_frame(&second.body) < far => second,
+        Some((second, _)) if far_frame(&second, sp) < far => second,
         _ => first,
     }))
 }
@@ -848,7 +1076,16 @@ fn route_cost(
     made: &Machined,
     target: &Target<'_>,
 ) -> Option<f64> {
-    cost(made, target).map(|one| one + saves(made) as f64 * 2.0)
+    cost(made, target, true).map(|one| one + saves(made) as f64 * 2.0)
+}
+
+/// `route_cost` for a function with an instruction the encoder cannot price:
+/// None, as the routes cannot be compared, where the checked build stops.
+fn route_cost_if_priced(
+    made: &Machined,
+    target: &Target<'_>,
+) -> Option<f64> {
+    cost(made, target, false).map(|one| one + saves(made) as f64 * 2.0)
 }
 
 /// `what` with the stack and frame tokens of its register-addressed cells
@@ -885,6 +1122,7 @@ fn stack_as_addressed(
 fn cost(
     made: &Machined,
     target: &Target<'_>,
+    checked: bool,
 ) -> Option<f64> {
     if target.cpu.size {
         made.body
@@ -899,7 +1137,7 @@ fn cost(
                 // priced as nothing: its routes compare as
                 // unpriced and the first kept (nbody_fixed -Os: `lea esi,
                 // [ebx+ebx*2]` had no price).
-                if priced.is_none() && llrm_support::debug::verifying() {
+                if checked && priced.is_none() && llrm_support::debug::verifying() {
                     panic!("@{}: no byte price for {what:?}", made.body.name);
                 }
                 priced
@@ -910,14 +1148,22 @@ fn cost(
     }
 }
 
-/// The frame operands a one-byte displacement does not reach.
-fn far_frame(body: &LirBody) -> usize {
-    body.insns()
+/// The frame operands a one-byte displacement does not reach. Through the
+/// frame register that is the cell's displacement; through the stack pointer
+/// (`sp`) the cell lies `reserve` bytes above it, so a cell near the top of the
+/// frame is far and one near the bottom is not.
+pub(crate) fn far_frame(
+    made: &Machined,
+    sp: bool,
+) -> usize {
+    let above = if sp { made.reserve } else { 0 };
+    made.body
+        .insns()
         .iter()
         .filter_map(|one| one.what.as_ref())
         .flat_map(|what| what.dests.iter().chain(&what.sources))
         .filter_map(|place| place.address().and_then(|one| one.addr))
-        .filter(|addr| addr.space == Space::Frame && !(-128..128).contains(&addr.disp))
+        .filter(|addr| addr.space == Space::Frame && !(-128..128).contains(&(addr.disp + above)))
         .count()
 }
 
@@ -940,6 +1186,9 @@ struct Staged {
     /// The register classes the routes allocate from: the target's, with the
     /// frame register a value register where the function needs none.
     classes: Rc<RegisterClasses>,
+    /// Every block was selected by FastISel, which leaves out the jump to the
+    /// next block (`fastEmitBranch`) as the pin's does.
+    fast: bool,
 }
 
 impl Staged {
@@ -1005,7 +1254,7 @@ fn staged(
     SELECTED.with(|count| count.set(count.get() + 1));
     llrm_mir::counts::bump(llrm_mir::counts::Event::Selections);
     let zeroed = target.zeroed && module.named(name).is_some_and(|global| crate::driver::framed(module, global));
-    let contracts = Some(crate::backend::selectiondag::dag_function::RuntimeContracts {
+    let contracts = Some(crate::backend::selectiondag::select_api::RuntimeContracts {
         abi,
         segments: target.segments,
         runtime: abi.runtime_contracts(),
@@ -1022,7 +1271,7 @@ fn staged(
         // old selector.
         Selector::Dag | Selector::Shadow if !shadow::only(name) || calls_atomic(module, name) => None,
         Selector::Dag => Some(timed("dag isel", || {
-            crate::backend::selectiondag::dag_function::selected_in_pool(
+            select_in_pool(
                 module,
                 name,
                 target.arch,
@@ -1034,7 +1283,7 @@ fn staged(
         })),
         Selector::Shadow => {
             match timed("dag isel", || {
-                crate::backend::selectiondag::dag_function::selected_in_pool(
+                select_in_pool(
                     module,
                     name,
                     target.arch,
@@ -1052,9 +1301,15 @@ fn staged(
             }
         }
     };
+    let mut fast = false;
     let selected = if let Some(done) = dag {
         if done.is_ok() {
-            shadow::record(name, Selector::Dag);
+            if crate::backend::hooks::installed().is_some_and(|hooks| hooks.take_fast_took()) {
+                fast = true;
+                shadow::record_fast(name);
+            } else {
+                shadow::record(name, Selector::Dag);
+            }
         }
         done
     } else {
@@ -1106,19 +1361,42 @@ fn staged(
             .collect();
         std::sync::Arc::make_mut(&mut body.call_pops).extend(open.into_iter().map(|at| (at, 0)));
     }
-    let mut registers =
-        llrm_target::FrameRegisters { saved: convention.saved.clone(), ..target.arch.frame_registers() };
-    // The convention's entry functions (`entry_clobbers_all`) keep nothing for
-    // a caller that does not exist.
+    // Win64's xmm6-15 are kept too, but saved into the frame, not pushed.
+    let (vector_saved, pushed): (Vec<_>, Vec<_>) =
+        convention.saved.iter().copied().partition(|(whole, _)| whole.is_xmm());
     let entry = module
         .named(name)
         .and_then(|id| module.global(id).function())
         .and_then(|function| target.arch.calling().by_number(function.calling_convention));
+    // The red zone is the function's convention's (Win64 has none).
+    let base = target.arch.frame_registers();
+    let mut registers = llrm_target::FrameRegisters {
+        saved: pushed,
+        vector_saved,
+        red_zone: entry.map_or(base.red_zone, |one| one.frame_red_zone),
+        slot_scratch: entry
+            .and_then(|one| target.arch.frame_slot_scratch_of(one))
+            .or(base.slot_scratch)
+            .filter(|_| target.cpu.pops_frame_slot())
+            .filter(|&(_, pop)| !entry.is_some_and(|one| keeps(target.arch, one, pop))),
+        ..base
+    };
+    // The convention's entry functions (`entry_clobbers_all`) keep nothing for
+    // a caller that does not exist.
     if target.facts.uncalled(name) && entry.is_some_and(|one| one.entry_clobbers_all.iter().any(|entry| entry == name))
     {
         registers.saved.clear();
+        registers.vector_saved.clear();
     }
+    let pop_order = target.arch.frame_slot_pop_order();
+    if let Some((push, _)) = registers.slot_scratch.filter(|_| !pop_order.is_empty()) {
+        // No dead register: the pin's `emitSPUpdate` adjusts with `add`.
+        registers.slot_scratch = dead_pop(&pop_order, &body, &registers.saved, &convention.returns).map(|pop| (push, pop));
+        registers.slot_dead_checked = entry.is_some_and(|one| one.frame_slot_sibling);
+    }
+    registers.slot_add_with_saved = target.cpu.target().tti().is_some_and(|tti| tti.frame_slot_add_with_saved());
     registers.align = target.facts.stack_alignment(target.arch, name);
+    registers.object_align = target.facts.object_alignment(target.arch, name);
     // LLVM's `hasFP`, before allocation: a function that can do without its
     // frame register has it as a value register.
     // A frame the BASIC runtime builds (`B$ENRA`) is BP's and the runtime walks
@@ -1128,11 +1406,25 @@ fn staged(
     // (`fsin` as bytes) touches no stack cell. Not where BASIC is tuned for
     // size: `[esp+d]` is a byte longer than `[ebp+d]`, and masm's comparison of
     // the two cannot run once the register holds a value (bq32 -Os grew 4-7%).
+    // `MachineFunction::disableFramePointerElim`: the function's own
+    // `"frame-pointer"` attribute keeps the frame register, in allocation and
+    // in the entry.
+    let function_attrs: &[llrm_mir::opcode::Attribute] =
+        module.named(name).and_then(|id| module.global(id).function()).map_or(&[], |function| &function.attrs);
+    if crate::backend::framefree::disable_frame_pointer_elim(function_attrs, !calls.is_empty()) {
+        registers.optional = false;
+        registers.kept = true;
+    }
+    // `noredzone`: the function is entered where the zone below the stack
+    // pointer is not safe (a kernel, an interrupt).
+    if llrm_mir::memory::has(function_attrs, "noredzone") {
+        registers.red_zone = 0;
+    }
     let classes: Rc<RegisterClasses> = if !(target.basic && (target.zeroed || target.cpu.size))
         && !crate::backend::framefree::has_fp(
             &body,
             &registers,
-            &pops.iter().map(|(at, bytes)| (*at, *bytes)).collect(),
+            &pops.iter().map(|(at, bytes)| (*at, *bytes)).chain(body.call_pops.iter().map(|(at, bytes)| (*at, *bytes))).collect(),
             // Tuned for size any inline code keeps the frame register until
             // masm has compared the two forms; x87 register operations alone
             // do not otherwise.
@@ -1147,7 +1439,18 @@ fn staged(
         registers.free = true;
         // Saved as any kept register is: its root, and the register a prologue
         // pushes.
-        registers.saved.push((body.regs().root(registers.pointer), registers.pointer));
+        let freed = (body.regs().root(registers.pointer), registers.pointer);
+        match entry {
+            // At its place in the convention's list, as the pin's callee-saved
+            // order has it (Win64 lists RBP second, System V last).
+            Some(entry) => {
+                let mut open = entry.clone();
+                open.frame = String::new();
+                let order = target.arch.convention_callee_saved(&open);
+                registers.saved = in_list_order(&order, std::mem::take(&mut registers.saved), freed);
+            }
+            None => registers.saved.push(freed),
+        }
         Rc::new(target.classes.with_frame_free())
     } else {
         Rc::clone(target.classes)
@@ -1161,6 +1464,13 @@ fn staged(
             )
         );
     }
+    llrm_support::debug!(
+        "notes",
+        "{} after selection: {} of {} notes stand",
+        body.name,
+        body.notes_standing(),
+        body.notes.len()
+    );
     let body = if llrm_support::debug::verifying() {
         timed("lir verify", || flow::verified(body, "isel", true, None, &target.arch.layout().spaces.roles))
             .map_err(|error| error.0)?
@@ -1171,11 +1481,13 @@ fn staged(
         timed("lir frame", || frame::of(&body, Some(&calls), target.runtime, None)).map_err(|error| error.0)?;
     frame.floor = frame.floor.min(-depth);
     frame.align = registers.align.max(registers.slot).max(frame.align);
+    frame.object_align = Some(registers.object_align.max(registers.slot));
     frame.hole = hole;
     frame.alloca_align = alloca_align;
     frame.extents = extents;
     let body = frame.tagged(&body).map_err(|error| error.0)?;
-    // DEVIATE D14: the pin gives each rounding store and reload its own
+    // DEVIATE D14 (owner frame / x86-m32, review 2026-11-27, exit none while
+    // slot coloring shares them): the pin gives each rounding store and reload its own
     // `CreateStackTemporary` and no lifetime marker, so neither StackColoring
     // nor StackSlotColoring shares them; here they are spill slots, which
     // `slots_colored` shares.
@@ -1200,6 +1512,7 @@ fn staged(
         landing,
         registers,
         classes,
+        fast,
     })
 }
 
@@ -1234,9 +1547,14 @@ fn phased(
         target.selection.rules(),
         &registers,
         target.selector,
+        &target.arch.omitted_phases().iter().map(|(name, _)| *name).collect::<Vec<_>>(),
     )? {
         // masm writes the prologue from the frame's reserve.
         if phase.class_name() == "Prologue" {
+            continue;
+        }
+        // The pin's -O0 has no BranchFolder, and what FastISel selects has no jump to the next block.
+        if staged.fast && !target.cpu.optimized && phase.class_name() == "ControlFlow" {
             continue;
         }
         if phase.class_name() == "PhiElimination" {
@@ -1286,6 +1604,18 @@ fn phased(
         }
         None => (body, None),
     };
+    // The widest alignment of an object of the frame: an alloca's, or a spill
+    // slot's as its width up to the slot cap.
+    let object_align = frame
+        .capacities
+        .values()
+        .filter(|&&size| size > 0)
+        .map(|&size| (1i64 << size.ilog2()).min(frame.object_cap()))
+        .chain([frame.alloca_align])
+        .max()
+        .unwrap_or(1)
+        .max(1);
+    let body = LirBody { object_align, ..body };
     Ok((
         Machined {
             body,
@@ -1322,4 +1652,70 @@ fn landed_last(
     let at = pad.at;
     blocks.push(pad);
     Ok((body.with_blocks(blocks), at))
+}
+
+#[cfg(test)]
+mod saved_order_tests {
+    use llrm_lir::registers::RegId;
+
+    use super::in_list_order;
+
+    fn pair(number: u8) -> (RegId, RegId) {
+        (RegId::from_raw(number), RegId::from_raw(number))
+    }
+
+    /// A freed frame register was pushed first whatever the convention lists:
+    /// Win64's hanoi pushed `rbp, r14, rsi, rdi, rbx` where the pin has `r14,
+    /// rsi, rdi, rbp, rbx` (RBP is second in Win64's list, last in System V's).
+    #[test]
+    fn a_freed_frame_register_takes_its_place_in_the_convention_list() {
+        let order = [pair(1), pair(2), pair(3), pair(4)];
+        assert_eq!(in_list_order(&order, vec![pair(4), pair(1)], pair(2)), [pair(1), pair(2), pair(4)]);
+        assert_eq!(in_list_order(&order, vec![pair(3)], pair(9)), [pair(3), pair(9)]);
+    }
+}
+
+/// The COMDAT the function or global `name` is in, if the module states one.
+fn comdat_of(
+    module: &llrm_mir::module::Module,
+    name: &str,
+) -> Option<masm::Comdat> {
+    let comdat = module.comdat_of.get(name)?;
+    let selection = match module.comdats.get(comdat)?.as_str() {
+        "any" => llrm_object::Selection::Any,
+        "exactmatch" => llrm_object::Selection::ExactMatch,
+        "largest" => llrm_object::Selection::Largest,
+        "nodeduplicate" => llrm_object::Selection::NoDuplicates,
+        "samesize" => llrm_object::Selection::SameSize,
+        _ => return None,
+    };
+    Some(masm::Comdat { name: comdat.clone(), selection, extent: None, constant: false })
+}
+
+/// The installed backend's function selector. Without one no function is
+/// selected by the DAG path: a refusal, which `Selector::Shadow` takes to the
+/// old selector.
+fn select_in_pool(
+    module: &Module,
+    name: &str,
+    arch: &dyn llrm_target::Target,
+    cpu: &crate::backend::cpu::Profile,
+    libcalls: &[(String, u32, String)],
+    contracts: Option<&crate::backend::selectiondag::select_api::RuntimeContracts<'_>>,
+    pool: &mut Pool,
+) -> Result<Selected, Unselected> {
+    match crate::backend::hooks::installed() {
+        Some(hooks) => hooks.select_function(module, name, arch, cpu, libcalls, contracts, pool),
+        None => Err(Unselected("no backend installed (llrm_x86_backend::install)".to_owned())),
+    }
+}
+
+/// Whether `convention` keeps `register` for its caller: a one-slot frame's `pop` into it would hand the caller back the pushed value
+/// (`findDeadCallerSavedReg` picks only caller-saved registers; x86 has no register convention keeping ecx, watcall32 does).
+fn keeps(
+    arch: &dyn llrm_target::Target,
+    convention: &llrm_target::calling::Convention,
+    register: RegId,
+) -> bool {
+    convention.preserved.iter().any(|kept| arch.register_named(&kept.full) == register)
 }

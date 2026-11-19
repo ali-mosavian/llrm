@@ -821,3 +821,38 @@ mod operand_map_footprint {
         assert!(LARGEST.with(Cell::get) < 4096);
     }
 }
+
+/// `swapOperands` is `Use::swap`: each use keeps its place in its value's
+/// list. Two `set_operand`s put both first, so the use of `%a` by `%x` moved
+/// ahead of `%p`'s (recchop's `chop`: `add`/`call` of `%.tr` swapped, which
+/// LSR later read as another IV order).
+#[test]
+fn canonicalizing_an_add_keeps_the_use_order_of_its_operand() {
+    let mut module = parsed(
+        "define i32 @f(i32 %a) {\nb0:\n  %x = add i32 5, %a\n  %p = mul i32 %a, 7\n  %r = xor i32 %x, %p\n  ret i32 %r\n}\n",
+    );
+    assert!(reassociated(&mut module));
+    let (_, _, function) = module.functions().next().expect("@f");
+    assert!(printed(&module).contains("%x = add i32 %a, 5"), "{}", printed(&module));
+    // `%a`'s users newest first, as (instruction number, operand).
+    let a = llrm_mir::module::ValueId(0);
+    let users: Vec<_> = function
+        .users(a)
+        .iter()
+        .map(|one| (function.walk().position(|(_, inst)| inst == one.user).expect("placed"), one.index))
+        .collect();
+    assert_eq!(users, [(1, 0), (0, 0)]);
+}
+
+/// A `xor <8 x i16>` of two operands made `optimize_xor` ask for an integer
+/// width and panic ("an integer xor") in the arm64 compile of a widened loop.
+/// The vector operations are left as they are.
+#[test]
+fn a_vector_operation_is_left_alone() {
+    for op in ["xor", "add", "mul", "and", "or", "sub", "shl"] {
+        let mut module = parsed(&format!(
+            "define <8 x i16> @f(<8 x i16> %x, <8 x i16> %y, <8 x i16> %z) {{\nb0:\n  %a = {op} <8 x i16> %x, %y\n  %b = {op} <8 x i16> %a, %z\n  ret <8 x i16> %b\n}}\n"
+        ));
+        assert!(!reassociated(&mut module), "{op}");
+    }
+}

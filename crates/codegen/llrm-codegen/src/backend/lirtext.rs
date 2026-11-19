@@ -93,6 +93,9 @@ fn _lir_body(
             if let Some(group) = one.group {
                 notes.push(format!("parallel-copy {group}"));
             }
+            if let Some(place) = one.line {
+                notes.push(format!("line {}", place.line));
+            }
             if one.spill_reload {
                 notes.push("spill reload".to_owned());
             }

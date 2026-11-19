@@ -99,8 +99,7 @@ pub fn canonicalized_in(
 ) -> bool {
     let headers: Vec<BlockId> = {
         let (_, env) = session.split(layout, &outer.globals, &outer.metadata);
-        let mut headers: Vec<BlockId> = env.loops.get_loops_in_preorder().iter().map(|one| one.get_header()).collect();
-        headers.reverse();
+        let headers: Vec<BlockId> = env.loops.get_loops_in_visit_order().iter().map(|one| one.get_header()).collect();
         headers
     };
     let mut changed = false;

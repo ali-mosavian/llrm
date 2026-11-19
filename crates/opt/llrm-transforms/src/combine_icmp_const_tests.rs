@@ -178,6 +178,28 @@ fn on_i386(
     }
 }
 
+/// `foldICmpShrConstConst`: a constant shifted right by a variable amount and
+/// compared for equality was left as a shift and a compare; the pin tests the
+/// amount directly (`(lshr 40, %x) == 5` is `%x == 3`).
+#[test]
+fn an_equality_of_a_constant_shifted_by_a_variable_tests_the_amount() {
+    let eq = |op: &str, pred: &str, shifted: i32, c: i32| {
+        format!("  %s = {op} i32 {shifted}, %x\n  %r = icmp {pred} i32 %s, {c}\n")
+    };
+    on_i386(&eq("lshr", "eq", 40, 5), &["icmp eq i32 %x, 3"]);
+    on_i386(&eq("lshr", "ne", 40, 5), &["icmp ne i32 %x, 3"]);
+    // Zero: the amount must shift out the highest set bit (log2 40 = 5).
+    on_i386(&eq("lshr", "eq", 40, 0), &["icmp ugt i32 %x, 5"]);
+    on_i386(&eq("lshr", "ne", 40, 0), &["icmp ult i32 %x, 6"]);
+    on_i386(&eq("lshr", "eq", 40, 40), &["icmp eq i32 %x, 0"]);
+    // 40 >> 3 = 5, never 7.
+    on_i386(&eq("lshr", "eq", 40, 7), &["ret i1 false"]);
+    on_i386(&eq("lshr", "ne", 40, 7), &["ret i1 true"]);
+    // Several solutions when comparing against -1: any amount of 4 or more.
+    on_i386(&eq("ashr", "eq", -16, -1), &["icmp ugt i32 %x, 3"]);
+    on_i386(&eq("ashr", "eq", -16, -4), &["icmp eq i32 %x, 2"]);
+}
+
 /// shellsort's gap-32 copy kept `icmp ult (trunc nuw i32 %x to i16), 32`: the
 /// compare stayed narrow, SCEV found no exit count and the one-trip inner loop
 /// stayed (3 blocks the pin deletes). `foldICmpTruncConstant`'s nuw/nsw arm was
@@ -189,4 +211,163 @@ fn a_compare_of_a_nuw_or_nsw_trunc_with_a_constant_is_the_wide_compare() {
     on_i386("  %t = trunc nsw i32 %x to i16\n  %r = icmp slt i16 %t, -5\n", &["icmp slt i32 %x, -5"]);
     // nuw alone cannot widen a signed compare.
     on_i386("  %t = trunc nuw i32 %x to i16\n  %r = icmp slt i16 %t, 32\n", &["icmp slt i16 %t, 32"]);
+}
+
+/// volatile_bitfield: `icmp ugt (lshr i32 %x, 18), 300` stayed a shift and a
+/// compare (+33 B at m16 -Os); the pin compares `%x` with `((300 + 1) << 18) -
+/// 1`. `foldICmpShrConstant` was not translated.
+#[test]
+fn a_compare_of_a_shift_right_with_a_constant_is_the_compare_of_the_value() {
+    let shr = |op: &str, pred: &str, amount: u32, c: i32| {
+        format!("  %s = {op} i32 %x, {amount}\n  %r = icmp {pred} i32 %s, {c}\n")
+    };
+    on_i386(&shr("lshr", "ugt", 18, 300), &["icmp ugt i32 %x, 78905343"]);
+    on_i386(&shr("lshr", "ult", 3, 100), &["icmp ult i32 %x, 800"]);
+    on_i386(&shr("ashr", "slt", 3, 5), &["icmp slt i32 %x, 40"]);
+    on_i386(&shr("ashr", "ugt", 3, 5), &["icmp ugt i32 %x, 47"]);
+    on_i386(&shr("ashr", "sgt", 3, 5), &["icmp sgt i32 %x, 47"]);
+    // Equality: the shift becomes a mask of the high bits.
+    on_i386(&shr("lshr", "eq", 3, 5), &["and i32 %x, -8", "icmp eq i32 %0, 40"]);
+}
+/// A zero-extended offset compare is made in the narrow type (`opt`: `add i32
+/// %n, -1` then `icmp ult`); the wide add and zext stayed.
+#[test]
+fn an_offset_compare_of_a_zero_extension_is_made_in_the_narrow_type() {
+    let out = run_visit_icmp(
+        "define i1 @f(i32 %n) {
+b0:
+  %w = zext i32 %n to i64
+  %a = add i64 %w, -1
+  %c = icmp ult i64 %a, 7
+  ret i1 %c
+}
+",
+    );
+    assert!(out.contains("add i32 %n, -1") && !out.contains("i64"), "{out}");
+}
+
+/// A range check on `hi + ~lo` is a compare of `lo - hi` (wasm32 recchop:
+/// +11 instructions, +414 executed); `opt` drops the `xor` and the `add`.
+#[test]
+fn a_range_check_on_a_sum_with_a_complement_is_a_compare_of_the_difference() {
+    let out = run_visit_icmp(
+        "define i1 @f(i32 %lo, i32 %hi) {
+b0:
+  %n = xor i32 %lo, -1
+  %b = add i32 %hi, %n
+  %g = icmp ult i32 %b, 3
+  ret i1 %g
+}
+",
+    );
+    assert!(out.contains("sub i32 %lo, %hi") && out.contains(", -4") && !out.contains("xor"), "{out}");
+}
+
+fn run_visit_icmp(text: &str) -> String {
+    let mut module = parsed(text);
+    let globals = module.globals.clone();
+    let metadata = module.metadata.clone();
+    let (context, function) = module.function_mut("f").expect("@f");
+    combine_with(context, &globals, &metadata, &DataLayout::default(), function, visit);
+    printed(&module)
+}
+
+/// `__cmpdf2` at m32: the NaN test `(x << 1) u> C` stayed a shift and a 64-bit
+/// compare against a constant that needs two registers; the pin compares the
+/// low 63 bits.
+#[test]
+fn a_shifted_compare_is_a_narrower_compare_of_a_trunc() {
+    check(
+        "i64 %x",
+        "  %s = shl i64 %x, 1\n  %r = icmp ugt i64 %s, -9007199254740992\n",
+        &["trunc i64 %x to i63", "icmp ugt i63", "-4503599627370496"],
+    );
+    check(
+        "i64 %x",
+        "  %s = shl i64 %x, 32\n  %r = icmp ult i64 %s, 8589934593\n",
+        &["trunc i64 %x to i32", "icmp ult i32", ", 3"],
+    );
+}
+
+#[test]
+fn a_shifted_equality_is_a_mask_and_a_sign_test_a_bit() {
+    check(
+        "i32 %x",
+        "  %s = shl i32 %x, 4\n  %r = icmp eq i32 %s, 48\n",
+        &["and i32 %x, 268435455", "icmp eq i32", ", 3"],
+    );
+    check("i32 %x", "  %s = shl i32 %x, 4\n  %r = icmp slt i32 %s, 0\n", &["and i32 %x, 134217728", "icmp ne i32"]);
+}
+
+#[test]
+fn a_power_of_two_shifted_left_is_a_compare_of_the_amount() {
+    check("i32 %y", "  %s = shl nuw i32 1, %y\n  %r = icmp ult i32 %s, 30\n", &["icmp ult i32 %y, 5"]);
+}
+
+/// wasm idioms.c -O2: `clear_rows(n / 10)`'s guard `n / 10 > 0` stayed a
+/// divide and a compare, where the pin has `n > 9` (and then a table range
+/// test).
+#[test]
+fn a_signed_divide_compared_with_zero_is_a_compare_of_the_dividend() {
+    check("i16 %x", "  %d = sdiv i16 %x, 10\n  %r = icmp sgt i16 %d, 0\n", &["icmp sgt i16 %x, 9"]);
+    check("i16 %x", "  %d = sdiv i16 %x, -5\n  %r = icmp slt i16 %d, 3\n", &["icmp sgt i16 %x, -15"]);
+    check("i16 %x", "  %d = sdiv i16 %x, 5\n  %r = icmp slt i16 %d, -3\n", &["icmp slt i16 %x, -19"]);
+}
+
+/// The pin prints `add X, -30` and `ult X-20, -5`: later folds of the new
+/// `sub` and compare canonicalize them; this runs `visitICmpInst` once.
+#[test]
+fn a_divide_equal_to_a_constant_is_a_range_test() {
+    check(
+        "i16 %x",
+        "  %d = sdiv i16 %x, 10\n  %r = icmp eq i16 %d, 3\n",
+        &["sub i16 %x, 30", "icmp ult i16", ", 10\n"],
+    );
+    check("i16 %x", "  %d = udiv i16 %x, 5\n  %r = icmp ne i16 %d, 3\n", &["sub i16 %x, 15", "icmp ugt i16", ", 4\n"]);
+    check("i16 %x", "  %d = sdiv i16 %x, -5\n  %r = icmp eq i16 %d, 0\n", &["sub i16 %x, -4", "icmp ult i16", ", 9\n"]);
+}
+
+#[test]
+fn an_exact_divide_equal_to_a_constant_is_one_value() {
+    check("i16 %x", "  %d = sdiv exact i16 %x, 10\n  %r = icmp eq i16 %d, 3\n", &["icmp eq i16 %x, 30"]);
+}
+
+#[test]
+fn an_unsigned_quotient_above_half_is_the_dividend_and_a_one_divisor() {
+    check(
+        "i16 %x, i16 %y",
+        "  %d = udiv i16 %x, %y\n  %r = icmp eq i16 %d, -1\n",
+        &["icmp eq i16 %x, -1", "icmp eq i16 %y, 1", "and i1"],
+    );
+}
+
+#[test]
+fn a_quotient_above_the_largest_is_false_and_the_edge_is_one_value() {
+    check("i16 %x", "  %d = udiv i16 %x, 5\n  %r = icmp ugt i16 %d, 13107\n", &["ret i1 false"]);
+    check("i16 %x", "  %d = udiv i16 %x, 5\n  %r = icmp ugt i16 %d, 13106\n", &["icmp eq i16 %x, -1"]);
+}
+
+/// The divisor is `INT_MIN`: `-INT_MIN` is `INT_MIN`, so the high bound
+/// overflows and the quotient is zero for every dividend but `INT_MIN`.
+#[test]
+fn a_divide_by_int_min_compared_with_zero_is_one_edge_of_the_dividend() {
+    check("i16 %x", "  %d = sdiv i16 %x, -32768\n  %r = icmp eq i16 %d, 0\n", &["icmp ne i16 %x, -32768"]);
+    check("i16 %x", "  %d = sdiv i16 %x, -32768\n  %r = icmp sgt i16 %d, 0\n", &["icmp eq i16 %x, -32768"]);
+}
+
+/// `foldICmpBinOpEqualityWithConstant`'s add arm: `(add A, (sub 0, B)) != 0`
+/// is `A != B` whatever uses the add has (`dyn_castNegVal`); without the arm
+/// only a one-use add was rewritten, so this one kept the add and the compare.
+#[test]
+fn an_add_of_a_negated_operand_compared_with_zero_is_a_compare_of_the_operands() {
+    check(
+        "i8 %a, i8 %b, ptr %p",
+        "  %n = sub i8 0, %b\n  %s = add i8 %a, %n\n  store i8 %s, ptr %p\n  %r = icmp ne i8 %s, 0\n",
+        &["icmp ne i8 %a, %b"],
+    );
+    check(
+        "i8 %a, i8 %b, ptr %p",
+        "  %n = sub i8 0, %a\n  %s = add i8 %n, %b\n  store i8 %s, ptr %p\n  %r = icmp eq i8 %s, 0\n",
+        &["icmp eq i8 %a, %b"],
+    );
 }

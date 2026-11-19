@@ -110,3 +110,40 @@ fn two_ors_of_one_value_under_disjoint_masks_are_one_or_under_both() {
         &["240"],
     );
 }
+
+/// `(1 << X) | ((1 << X) + -1)`, the mask up to and including bit X, is
+/// `-1 >>u (31 - X)`: the loop-idiom bit test left the pair of shifts and an
+/// add (`until_bit` at wasm32 -O2: 30 bytes, the pin 23).
+#[test]
+fn the_mask_up_to_and_including_a_bit_is_an_all_ones_shift() {
+    for or in ["or i32 %lo, %b", "or i32 %b, %lo"] {
+        check(
+            "i32 %x",
+            &format!("  %b = shl i32 1, %x\n  %lo = add i32 %b, -1\n  %r = {or}\n"),
+            &["sub i32 31, %x", "lshr i32 -1, %"],
+            &[" or ", "shl"],
+        );
+    }
+}
+
+/// Another shift amount is not the same mask.
+#[test]
+fn the_mask_fold_needs_one_shift_amount() {
+    check(
+        XY,
+        "  %b = shl i32 1, %x\n  %c = shl i32 1, %y\n  %lo = add i32 %b, -1\n  %r = or i32 %lo, %c\n",
+        &[" or i32 %lo, %c"],
+        &["lshr"],
+    );
+}
+
+/// With every operand used again the fold would add instructions.
+#[test]
+fn the_mask_fold_keeps_a_pair_that_has_other_users() {
+    check(
+        "i32 %x, ptr %p",
+        "  %b = shl i32 1, %x\n  %lo = add i32 %b, -1\n  store i32 %b, ptr %p\n  store i32 %lo, ptr %p\n  %r = or i32 %lo, %b\n",
+        &[" or i32 "],
+        &["lshr"],
+    );
+}

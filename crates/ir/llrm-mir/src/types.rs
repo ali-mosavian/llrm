@@ -15,6 +15,8 @@ pub enum FloatKind {
     /// x87's 80-bit extended format, 10 bytes in memory. A constant of it
     /// holds the bits of the double nearest its value.
     X86Fp80,
+    /// IEEE binary128, 16 bytes. A constant of it is always `Float128`.
+    F128,
 }
 
 impl FloatKind {
@@ -119,6 +121,14 @@ impl Default for SmallInts {
 }
 
 impl Types {
+    /// Whether `ty` was ever interned.
+    pub fn contains(
+        &self,
+        ty: &Type,
+    ) -> bool {
+        self.interned.borrow().contains_key(ty)
+    }
+
     /// LLVM's `IntegerType::get` and kin: `ty`, made on the first ask. The
     /// table is borrowed for the lookup and again for the insert, never across
     /// a call.
@@ -199,6 +209,18 @@ impl Types {
         self.intern(Type::Pointer(space))
     }
 
+    /// The width of an integer or of an integer vector's lane
+    /// (`getScalarSizeInBits`).
+    pub fn scalar_int_bits(
+        &self,
+        id: TypeId,
+    ) -> Option<u32> {
+        match self.get(id) {
+            Type::Vector { element, .. } => self.int_bits(*element),
+            _ => self.int_bits(id),
+        }
+    }
+
     #[inline]
     pub fn int_bits(
         &self,
@@ -271,6 +293,7 @@ impl Types {
             Type::Float(FloatKind::Float) => "float".to_owned(),
             Type::Float(FloatKind::Double) => "double".to_owned(),
             Type::Float(FloatKind::X86Fp80) => "x86_fp80".to_owned(),
+            Type::Float(FloatKind::F128) => "fp128".to_owned(),
             Type::Pointer(0) => "ptr".to_owned(),
             Type::Pointer(space) => format!("ptr addrspace({space})"),
             Type::Array { element, count } => format!("[{count} x {}]", self.display(*element)),

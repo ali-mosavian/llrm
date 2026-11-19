@@ -4,6 +4,8 @@
 //! <registers> <sets> <visible registers>`, sets comma separated and `-` for
 //! none.
 
+use crate::registers::Register;
+
 /// A pressure set: its raw limit, before the reserved registers are taken off.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PressureSet {
@@ -69,6 +71,162 @@ pub fn parse(text: &str) -> Result<PressureSets, String> {
                 visible: list(visible),
             }),
             _ => return Err(at("a `set` or a `class` line")),
+        }
+    }
+    Ok(out)
+}
+
+/// A register class given to [`derive`]: its name and the registers it holds
+/// (names in the register file), in the order of the class.
+pub struct ClassSpec<'a> {
+    pub name: &'a str,
+    pub members: Vec<&'a str>,
+}
+
+/// The pressure sets of a target that has no LLVM description, from its
+/// register file and classes: `CodeGenRegBank::computeRegUnitSets`
+/// (CodeGenRegisters.cpp#L2217) and `RegisterInfoEmitter` (the weights and the
+/// largest class of each set), every register unit weighing one.
+///
+/// A unit is a leaf register (no smaller register of the same root lies in
+/// it); a register is the units inside its lanes. The sets are those of the
+/// pin's emitter: one per class, the near-subsets pruned, the unions of
+/// overlapping sets added, pruned again, ordered by size. The classes are
+/// those of the target's allocation, in the order it states them.
+///
+/// DEVIATE PS1: every unit weighs one and a register with sub-registers has
+/// no adopted unit; the pin's x86 has both (the upper bits of `eax` are a
+/// unit of weight 0), and 49 of its 135 classes are made by tblgen's
+/// intersections, which the caller must list. So x86's own tables are not
+/// reproduced here (the z80 has neither). Exit: a target with adopted units
+/// moves onto `derive` (weighted units, then the identity test on x86).
+/// Owner llrm-greedy-anyisa, by 2026-11-24 (after Z80S1 step 2).
+pub fn derive(
+    registers: &[Register],
+    classes: &[ClassSpec],
+) -> Result<PressureSets, String> {
+    let within = |inner: &Register, outer: &Register| {
+        inner.root == outer.root && inner.lane >= outer.lane && inner.lane + inner.bits <= outer.lane + outer.bits
+    };
+    let leaves: Vec<&Register> = registers
+        .iter()
+        .filter(|one| !registers.iter().any(|other| other.bits < one.bits && within(other, one)))
+        .collect();
+    let units_of = |name: &str| -> Result<Vec<u32>, String> {
+        let register = registers
+            .iter()
+            .find(|one| one.name == name)
+            .ok_or_else(|| format!("pressure: class member `{name}` is not in the register file"))?;
+        Ok(leaves.iter().enumerate().filter(|(_, leaf)| within(leaf, register)).map(|(at, _)| at as u32).collect())
+    };
+    struct Unit {
+        name: String,
+        units: Vec<u32>,
+    }
+    let mut class_units: Vec<Vec<u32>> = Vec::new();
+    let mut class_weight: Vec<u32> = Vec::new();
+    for class in classes {
+        let mut all = std::collections::BTreeSet::new();
+        let mut weight = 0;
+        for member in &class.members {
+            let units = units_of(member)?;
+            weight = weight.max(units.len() as u32);
+            all.extend(units);
+        }
+        class_units.push(all.into_iter().collect());
+        class_weight.push(weight);
+    }
+    let subset = |sub: &[u32], sup: &[u32]| sub.iter().all(|unit| sup.contains(unit));
+    let find = |sets: &[Unit], units: &[u32]| sets.iter().any(|one| one.units == units);
+    let prune = |sets: Vec<Unit>| -> Vec<Unit> {
+        let mut sets = sets;
+        let mut kept = Vec::new();
+        for sub in 0..sets.len() {
+            let mut subsumed = false;
+            for sup in 0..sets.len() {
+                if sup != sub
+                    && subset(&sets[sub].units, &sets[sup].units)
+                    && sets[sub].units.len() + 3 > sets[sup].units.len()
+                {
+                    if sets[sub].name.len() < sets[sup].name.len() {
+                        sets[sup].name = sets[sub].name.clone();
+                    }
+                    subsumed = true;
+                    break;
+                }
+            }
+            if !subsumed {
+                kept.push(sub);
+            }
+        }
+        let mut sets: Vec<Option<Unit>> = sets.into_iter().map(Some).collect();
+        kept.into_iter().filter_map(|at| sets[at].take()).collect()
+    };
+    let mut sets: Vec<Unit> = Vec::new();
+    for (class, units) in classes.iter().zip(&class_units) {
+        if !units.is_empty() && !find(&sets, units) {
+            sets.push(Unit { name: class.name.to_owned(), units: units.clone() });
+        }
+    }
+    if sets.is_empty() {
+        return Err("pressure: no class has a register".to_owned());
+    }
+    let mut sets = prune(sets);
+    let (initial, end) = (sets.len(), sets.len());
+    for at in 0..end {
+        if at >= 2 * initial {
+            return Err("pressure: runaway unit set inference".to_owned());
+        }
+        for other in (if at >= initial { 0 } else { at + 1 })..end {
+            let union: std::collections::BTreeSet<u32> =
+                sets[at].units.iter().chain(&sets[other].units).copied().collect();
+            if union.len() == sets[at].units.len() + sets[other].units.len() {
+                continue;
+            }
+            let units: Vec<u32> = union.into_iter().collect();
+            if !find(&sets, &units) {
+                let name = format!("{}_with_{}", sets[at].name, sets[other].name);
+                sets.push(Unit { name, units });
+            }
+        }
+    }
+    let sets = prune(sets);
+    // Ordered by size, the emitter's `RegUnitSetOrder`.
+    let mut order: Vec<usize> = (0..sets.len()).collect();
+    order.sort_by_key(|&at| sets[at].units.len());
+    let place: Vec<usize> = (0..sets.len()).map(|at| order.iter().position(|&one| one == at).unwrap()).collect();
+    let mut out = PressureSets::default();
+    for &at in &order {
+        out.sets.push(PressureSet {
+            name: sets[at].name.clone(),
+            limit: sets[at].units.len() as u32,
+            largest: String::new(),
+        });
+    }
+    for (index, class) in classes.iter().enumerate() {
+        let units = &class_units[index];
+        let mut in_sets: Vec<usize> = if units.is_empty() {
+            Vec::new()
+        } else {
+            (0..sets.len()).filter(|&at| subset(units, &sets[at].units)).map(|at| place[at]).collect()
+        };
+        in_sets.sort_unstable();
+        out.classes.push(PressureClass {
+            name: class.name.to_owned(),
+            weight: class_weight[index],
+            registers: class.members.len() as u32,
+            sets: in_sets,
+            visible: class.members.iter().map(|one| (*one).to_owned()).collect(),
+        });
+    }
+    // The largest class of a set: the first with the most units.
+    let mut best = vec![0usize; out.sets.len()];
+    for (index, class) in out.classes.iter().enumerate() {
+        for &set in &class.sets {
+            if out.sets[set].largest.is_empty() || class_units[index].len() > best[set] {
+                out.sets[set].largest = class.name.clone();
+                best[set] = class_units[index].len();
+            }
         }
     }
     Ok(out)
@@ -145,5 +303,69 @@ class PAIR 2 2 1 a,b
         let sets = parse(SAMPLE).expect("parses");
         assert_eq!(sets.class_holding(&["a", "b"]).map(|class| class.name.as_str()), Some("PAIR"));
         assert_eq!(sets.class_holding(&["a", "c"]).map(|class| class.name.as_str()), Some("BIG"));
+    }
+    /// The z80's registers and classes as the pin's `llvm-tblgen
+    /// -gen-register-info` makes them of the same description
+    /// (tests/z80_pressure.td): the pairs are pruned into the byte set, so
+    /// every byte and pair counts against one set of seven units.
+    #[test]
+    fn the_z80_sets_are_the_pins() {
+        let registers = crate::registers::parse(
+            "a 8 a 0 - - -\nbc 16 bc 0 - - -\nde 16 de 0 - - -\nhl 16 hl 0 - - -\niy 16 iy 0 - - -\n\
+             c 8 bc 0 - - -\nb 8 bc 8 - - -\ne 8 de 0 - - -\nd 8 de 8 - - -\nl 8 hl 0 - - -\nh 8 hl 8 - - -\n",
+        )
+        .expect("parses");
+        let class = |name, members: &[&'static str]| ClassSpec { name, members: members.to_vec() };
+        let derived = derive(
+            &registers,
+            &[
+                class("GR8", &["b", "c", "d", "e", "h", "l", "a"]),
+                class("ACC", &["a"]),
+                class("GR16", &["bc", "de", "hl"]),
+                class("HLR", &["hl"]),
+                class("IYR", &["iy"]),
+            ],
+        )
+        .expect("derives");
+        let sets: Vec<(&str, u32, &str)> =
+            derived.sets.iter().map(|one| (one.name.as_str(), one.limit, one.largest.as_str())).collect();
+        assert_eq!(sets, [("ACC", 1, "ACC"), ("IYR", 1, "IYR"), ("HLR", 2, "HLR"), ("GR8", 7, "GR8")]);
+        let classes: Vec<(&str, u32, &[usize])> =
+            derived.classes.iter().map(|one| (one.name.as_str(), one.weight, &one.sets[..])).collect();
+        assert_eq!(
+            classes,
+            [
+                ("GR8", 1, &[3][..]),
+                ("ACC", 1, &[0, 3][..]),
+                ("GR16", 2, &[3][..]),
+                ("HLR", 2, &[2, 3][..]),
+                ("IYR", 1, &[1][..]),
+            ]
+        );
+    }
+    /// Two classes that overlap and a small one inside: the union set
+    /// (`Q_with_P`) is made, not pruned, and each class lists the sets that
+    /// contain its units; the tables of the pin's `llvm-tblgen` of
+    /// tests/overlap_pressure.td (whose `P_and_Q` the pin makes itself and the
+    /// caller lists).
+    #[test]
+    fn overlapping_classes_make_their_union_set() {
+        let text: String = (0..12).map(|at| format!("r{at} 32 r{at} 0 - - -\n")).collect();
+        let registers = crate::registers::parse(&text).expect("parses");
+        let class = |name, from: usize, to: usize| ClassSpec {
+            name,
+            members: (from..=to).map(|at| &*Box::leak(format!("r{at}").into_boxed_str())).collect(),
+        };
+        let derived =
+            derive(&registers, &[class("Q", 4, 11), class("P", 0, 5), class("P_and_Q", 4, 5), class("S", 0, 1)])
+                .expect("derives");
+        let sets: Vec<(&str, u32, &str)> =
+            derived.sets.iter().map(|one| (one.name.as_str(), one.limit, one.largest.as_str())).collect();
+        assert_eq!(
+            sets,
+            [("P_and_Q", 2, "P_and_Q"), ("S", 2, "S"), ("P", 6, "P"), ("Q", 8, "Q"), ("Q_with_P", 12, "Q")]
+        );
+        let classes: Vec<&[usize]> = derived.classes.iter().map(|one| &one.sets[..]).collect();
+        assert_eq!(classes, [&[3, 4][..], &[2, 4][..], &[0, 2, 3, 4][..], &[1, 2, 4][..]]);
     }
 }

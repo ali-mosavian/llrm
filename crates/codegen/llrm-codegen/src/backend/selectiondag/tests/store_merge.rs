@@ -11,7 +11,7 @@ fn info(
     vt: EVT,
     volatile: bool,
 ) -> MemInfo {
-    MemInfo { mem_vt: vt, align: 2, volatile, base: MemBase::Global(0), ext: None, space: 0 }
+    MemInfo { mem_vt: vt, align: 2, volatile, base: MemBase::Global(0), ext: None, space: 0, ordering: None }
 }
 
 /// Stores of `value` of type `vt` to `_g+offset` for each offset, chained one

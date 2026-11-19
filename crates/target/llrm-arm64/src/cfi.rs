@@ -6,10 +6,10 @@
 //! row is written wherever the code changes the state or enters a block in
 //! another one.
 
-use std::collections::HashMap;
+use llrm_support::hash::HashMap;
 
+use llrm_debug::FrameRow;
 use llrm_object::assembler::Cfi;
-use llrm_object::debug::FrameRow;
 
 use crate::frame::Lowered;
 use crate::layout::label_of;
@@ -17,6 +17,47 @@ use crate::mc::inst::Inst;
 use crate::mc::unwind::{SP, register_label};
 
 type State = (String, i64, Vec<(String, i64)>);
+
+/// What unwind table a function gets (`Function::needsUnwindTableEntry`,
+/// `getUWTableKind`, `hasMinSize`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Unwind {
+    /// No entry: `nounwind` without `uwtable`, and no personality.
+    None,
+    /// The frame as the prologue leaves it: `uwtable(sync)`, an entry the
+    /// function needs without `uwtable`, or `uwtable` at `minsize`.
+    Sync,
+    /// Every step of the frame's construction and removal: `uwtable`.
+    Async,
+}
+
+impl Default for Unwind {
+    fn default() -> Self {
+        Self::Async
+    }
+}
+
+impl Unwind {
+    /// `MachineFunction::needsFrameMoves` for the entry in `.eh_frame` and
+    /// `__compact_unwind`, then
+    /// `AArch64FunctionInfo::needsAsyncDwarfUnwindInfo`.
+    ///
+    /// DEVIATE CFI-DEBUG-1: a function that is `nounwind` without `uwtable`
+    /// in a module with debug compile units keeps no frame rows here; the pin
+    /// states them for `.debug_frame`, which is not written.
+    pub fn of(function: &llrm_mir::Function) -> Self {
+        use llrm_mir::opcode::{Attribute, UnwindTable, unwind_table};
+        let has = |name: &str| function.attrs.iter().any(|attr| matches!(attr, Attribute::Flag(flag) if flag == name));
+        let table = unwind_table(&function.attrs);
+        if table.is_none() && has("nounwind") && function.personality.is_none() {
+            return Self::None;
+        }
+        match table {
+            Some(UnwindTable::Async) if !has("minsize") => Self::Async,
+            _ => Self::Sync,
+        }
+    }
+}
 
 fn apply(
     state: &mut State,
@@ -34,17 +75,25 @@ fn apply(
     }
 }
 
-/// Whether control goes on to the next block after `block`.
-fn falls_through(block: &Lowered) -> bool {
-    !matches!(
-        block.insts.iter().rev().find(|inst| !matches!(inst, Inst::Cfi(_))),
+/// Whether control goes on to the next block after `block`: not from a block
+/// that ends in a call that never returns (`dead_ends`).
+fn falls_through(
+    block: &Lowered,
+    dead_ends: &[String],
+) -> bool {
+    !dead_ends.contains(&block.label)
+        && !matches!(
+        block.insts.iter().rev().find(|inst| !inst.is_directive()),
         Some(Inst::Ret { .. } | Inst::Branch { link: false, .. } | Inst::BranchReg { link: false, .. })
     )
 }
 
 /// The rows of the function made of `blocks`, as byte offsets from its start;
 /// empty where it declares no frame.
-pub fn rows(blocks: &[Lowered]) -> Vec<FrameRow> {
+pub fn rows(
+    blocks: &[Lowered],
+    dead_ends: &[String],
+) -> Vec<FrameRow> {
     if !blocks.iter().flat_map(|block| &block.insts).any(|inst| matches!(inst, Inst::Cfi(_))) {
         return Vec::new();
     }
@@ -61,7 +110,7 @@ pub fn rows(blocks: &[Lowered]) -> Vec<FrameRow> {
             }
         }
         let leaves = blocks[at].insts.iter().filter_map(label_of).filter_map(|label| index.get(label).copied());
-        let next = (falls_through(&blocks[at]) && at + 1 < blocks.len()).then_some(at + 1);
+        let next = (falls_through(&blocks[at], dead_ends) && at + 1 < blocks.len()).then_some(at + 1);
         for to in leaves.chain(next) {
             if starts[to].is_none() {
                 starts[to] = Some(state.clone());
@@ -91,6 +140,7 @@ pub fn rows(blocks: &[Lowered]) -> Vec<FrameRow> {
                     apply(&mut state, *cfi);
                     row(offset, &state, &mut out);
                 }
+                Inst::Mark(_) | Inst::Label(_) => {}
                 _ => offset += 4,
             }
         }

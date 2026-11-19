@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# unlogged.sh [GIT_RANGE]: prints every commit of feat/parity's first-parent history (default: the last 6 hours) whose sha is not in landed.log, with its PR,
+# unlogged.sh [GIT_RANGE]: prints every commit of $LAND_BRANCH's first-parent history (default: the last 6 hours) whose sha is not in landed.log, with its PR,
 # the PR's `Owner:` line and its time: a landing that did not go through the gate. Exit 1 when there is any.
+. "$(dirname "${BASH_SOURCE[0]:-$0}")/branch.sh"
 LANDED_LOG=${LANDED_LOG:-$HOME/scratch/coordwork/landed.log}; R=${R:-ali-mosavian/llrm}
-range=${1:---since=6.hours.ago origin/feat/parity}
+range=${1:---since=6.hours.ago origin/$LAND_BRANCH}
 # a commit's line is looked up once (two gh calls) and kept: the runner calls this every cycle and ~2 min went to re-asking GitHub about the same commits
 CACHE=${UNLOGGED_CACHE:-${LAND_TMP:-/tmp/landing}/unlogged.cache}; touch "$CACHE"
 git log --first-parent --format='%H %ct %s' $range | while read -r sha ts subject; do

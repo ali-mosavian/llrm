@@ -187,11 +187,33 @@ pub fn loop_instsimplify(
     callees: &Callees,
     function: &mut Function,
 ) -> bool {
+    loop_instsimplify_declared(
+        context,
+        globals,
+        metadata,
+        layout,
+        callees,
+        function,
+        llrm_mir::valuetracking::assume_declared(globals),
+    )
+}
+
+/// `loop_instsimplify`, told whether the module declares `llvm.assume`.
+pub fn loop_instsimplify_declared(
+    context: &mut Context,
+    globals: &[GlobalValue],
+    metadata: &[MetadataNode],
+    layout: &DataLayout,
+    callees: &Callees,
+    function: &mut Function,
+    assume_declared: bool,
+) -> bool {
     let tree = DomTree::of(function);
     let loops = LoopInfo::analyze(function, || &tree);
-    let analyses = FunctionAnalyses::of(context, globals, metadata, layout, function);
-    let headers: Vec<_> =
+    let analyses = FunctionAnalyses::of_declared(context, globals, metadata, layout, function, assume_declared);
+    let mut headers: Vec<_> =
         loops.get_loops_in_reverse_sibling_preorder().iter().rev().map(|one| one.get_header()).collect();
+    crate::loopfilter::retain(&mut headers);
     let mut changed = false;
     for header in headers {
         changed |= simplify_loop_inst(context, globals, layout, callees, function, &loops, &tree, &analyses, header);
@@ -220,7 +242,15 @@ impl FunctionPass for LoopInstSimplify {
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
         let outer = analyses.outer().clone();
-        if loop_instsimplify(unit.context, &outer.globals, unit.metadata, unit.layout, outer.callees(), unit.function) {
+        if loop_instsimplify_declared(
+            unit.context,
+            &outer.globals,
+            unit.metadata,
+            unit.layout,
+            outer.callees(),
+            unit.function,
+            outer.assume_declared(),
+        ) {
             PreservedAnalyses::none().preserve::<Dominators>().preserve::<Loops>()
         } else {
             PreservedAnalyses::all()

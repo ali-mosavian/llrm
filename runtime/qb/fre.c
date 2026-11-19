@@ -21,7 +21,7 @@ static long stack_free(void)
 /* B$FRSD: FRE(string), the free string space. */
 long B_FRSD(SD *sd)
 {
-    str_tmp_free(sd);
+    str_free_if_tmp(sd);
     nh_compact();
     return str_free_bytes();
 }

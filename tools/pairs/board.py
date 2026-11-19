@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The compile board: d_faces compile cost, one flag set, perf instructions:u, minimum of 3, for several llrm-c builds and the pinned clang.
+"""The compile board: d_faces compile cost, one flag set, perf instructions:u, minimum of 3, for several llrm-cc builds and the pinned clang.
 
     QCPORT=<qb-quake src> tools/pairs/board.py --clang CLANG NAME=LLRM_C... [--levels O1,O2,O3,Os]
 

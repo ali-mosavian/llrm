@@ -18,13 +18,20 @@ fn named(
     text: &str,
     pick: impl Fn(&Decisions) -> Vec<super::Hoisted>,
 ) -> Vec<String> {
+    named_on(text, llrm_mir::target::Neutral, pick)
+}
+
+/// [`named`] on `machine`.
+fn named_on(
+    text: &str,
+    machine: impl llrm_mir::target::Machine + 'static,
+    pick: impl Fn(&Decisions) -> Vec<super::Hoisted>,
+) -> Vec<String> {
     DECIDED.with(|all| *all.borrow_mut() = Decisions::default());
     let mut module = parsed(text);
     let mut passes = llrm_mir::passes::PassManager::default();
     passes.add(Licm { apply: false, speculate: true });
-    passes
-        .run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral))
-        .unwrap_or_else(|error| panic!("{error}\n{text}"));
+    passes.run_module(&mut module, std::rc::Rc::new(machine)).unwrap_or_else(|error| panic!("{error}\n{text}"));
     let (_, _, function) = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("f")).expect("@f");
     let hoisted = DECIDED.with(|all| pick(&all.borrow()));
     hoisted
@@ -42,13 +49,19 @@ fn named(
 /// The pointers `Licm` promotes out of `@f`'s loops (by name) and whether their
 /// stores leave too.
 fn promoted(text: &str) -> Vec<(Vec<String>, bool)> {
+    promoted_on(text, llrm_mir::target::Neutral)
+}
+
+/// [`promoted`] on `machine`.
+fn promoted_on(
+    text: &str,
+    machine: impl llrm_mir::target::Machine + 'static,
+) -> Vec<(Vec<String>, bool)> {
     DECIDED.with(|all| *all.borrow_mut() = Decisions::default());
     let mut module = parsed(text);
     let mut passes = llrm_mir::passes::PassManager::default();
     passes.add(Licm { apply: false, speculate: true });
-    passes
-        .run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral))
-        .unwrap_or_else(|error| panic!("{error}\n{text}"));
+    passes.run_module(&mut module, std::rc::Rc::new(machine)).unwrap_or_else(|error| panic!("{error}\n{text}"));
     let (_, _, function) = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("f")).expect("@f");
     DECIDED.with(|all| {
         all.borrow()
@@ -318,13 +331,153 @@ fn test_a_global_stored_on_some_paths_and_never_loaded_is_not_promoted() {
     assert_eq!(promoted(&conditional_store_loop("  %t = icmp eq i32 %i, 3\n")), Vec::<(Vec<String>, bool)>::new());
 }
 
-/// With a load in the loop the promotion saves it: promoted, stores and all.
+/// With a load in the loop the promotion saves it: the load is promoted.
+/// Changed meaning (the thread-local deviation is gone): the stores are not
+/// sunk (the pin's `StoreSafety` stays unknown for a global whose store may not
+/// run), so the second field, `store_safe`, is false.
 #[test]
 fn test_a_global_stored_on_some_paths_and_loaded_is_promoted() {
     assert_eq!(
         promoted(&conditional_store_loop("  %x = load i32, ptr @g\n  %t = icmp eq i32 %x, 3\n")),
-        [(vec!["constant".to_owned()], true)]
+        [(vec!["constant".to_owned()], false)]
     );
+}
+
+/// A machine whose module is single-threaded, as wasm's is.
+struct SingleThreaded(llrm_mir::target::Neutral);
+
+impl llrm_mir::target::Machine for SingleThreaded {
+    fn single_threaded(&self) -> bool {
+        true
+    }
+
+    fn foreign_span(
+        &self,
+        selectors: (i64, i64),
+        offsets: (i64, i64),
+        width: i64,
+    ) -> Option<(i64, i64)> {
+        self.0.foreign_span(selectors, offsets, width)
+    }
+
+    fn spaces(&self) -> llrm_mir::spaces::Spaces {
+        self.0.spaces()
+    }
+
+    fn costs(&self) -> llrm_mir::target::OperationCosts {
+        self.0.costs()
+    }
+
+    fn registers(&self) -> i64 {
+        self.0.registers()
+    }
+
+    fn call_registers(&self) -> i64 {
+        self.0.call_registers()
+    }
+
+    fn address_forms(&self) -> Vec<llrm_mir::target::AddressForm> {
+        self.0.address_forms()
+    }
+}
+
+/// A slot whose address a call took before the loop, stored on one path only.
+fn captured_slot_loop() -> String {
+    "declare void @use(ptr)
+
+define i32 @f(i32 %n) {
+b0:
+  %s = alloca i32
+  call void @use(ptr %s)
+  store i32 0, ptr %s
+  br label %b1
+
+b1:
+  %i = phi i32 [ 0, %b0 ], [ %i1, %b4 ]
+  %c = icmp slt i32 %i, %n
+  br i1 %c, label %b2, label %b5
+
+b2:
+  %x = load i32, ptr %s
+  %t = icmp eq i32 %x, 3
+  br i1 %t, label %b3, label %b4
+
+b3:
+  store i32 %i, ptr %s
+  br label %b4
+
+b4:
+  %i1 = add i32 %i, 1
+  br label %b1
+
+b5:
+  ret i32 %n
+}
+"
+    .to_owned()
+}
+
+/// The pin's `isThreadLocalObject` takes every object of a single-threaded
+/// module, so a slot a call captured before the loop still has its store sunk
+/// with its load; in a `POSIX` module a captured slot is not thread-local.
+/// long_double_variadic -Os wasm32: `sum`'s `va_list` slot, handed to
+/// `va_start`, kept its store and was read back, +12 B.
+#[test]
+fn test_a_captured_slot_stored_on_some_paths_is_sunk_only_in_a_single_threaded_module() {
+    let text = captured_slot_loop();
+    assert_eq!(promoted(&text), [(vec!["s".to_owned()], false)]);
+    assert_eq!(promoted_on(&text, SingleThreaded(llrm_mir::target::Neutral)), [(vec!["s".to_owned()], true)]);
+}
+
+/// The pin's `isWritableObject` takes no global ("we may not have provenance
+/// to perform the write"), so single-threaded or not a global stored on some
+/// paths keeps its store in the loop: jpeg_fixed `emit` -O1 wasm32 stored
+/// `adler_a` and `adler_b` on the path where the loop does not run, +28 B.
+#[test]
+fn test_a_global_stored_on_some_paths_keeps_its_store_in_a_single_threaded_module() {
+    let text = conditional_store_loop("  %x = load i32, ptr @g\n  %t = icmp eq i32 %x, 3\n");
+    assert_eq!(promoted_on(&text, SingleThreaded(llrm_mir::target::Neutral)), [(vec!["constant".to_owned()], false)]);
+}
+
+/// `isWritableObject` takes a `byval` argument and a `noalias` call's result,
+/// not only an alloca: with the object thread-local (single-threaded module)
+/// the store made on some paths is sunk. A plain pointer argument stays
+/// unwritable, so its store stayed in the loop and the other two did too.
+#[test]
+fn test_a_byval_argument_stored_on_some_paths_is_sunk_but_a_plain_pointer_is_not() {
+    let loop_over = |attrs: &str| {
+        format!(
+            "define i32 @f(i32 %n, ptr {attrs} %g) {{
+b0:
+  br label %b1
+
+b1:
+  %i = phi i32 [ 0, %b0 ], [ %i1, %b4 ]
+  %c = icmp slt i32 %i, %n
+  br i1 %c, label %b2, label %b5
+
+b2:
+  %x = load i32, ptr %g
+  %t = icmp eq i32 %x, 3
+  br i1 %t, label %b3, label %b4
+
+b3:
+  store i32 %i, ptr %g
+  br label %b4
+
+b4:
+  %i1 = add i32 %i, 1
+  br label %b1
+
+b5:
+  ret i32 %n
+}}
+"
+        )
+    };
+    let sunk = |attrs: &str| promoted_on(&loop_over(attrs), SingleThreaded(llrm_mir::target::Neutral));
+    assert_eq!(sunk("byval(i32) align 4 dereferenceable(4)"), [(vec!["g".to_owned()], true)]);
+    assert_eq!(sunk("dereferenceable(4) align 4"), [(vec!["g".to_owned()], false)]);
 }
 
 /// A call that is handed the slot's address may read or write it: no promotion.
@@ -407,7 +560,8 @@ fn block_of(
     text: &str,
     name: &str,
 ) -> Vec<String> {
-    let f = &text[text.find("define i16 @f(").expect("@f")..];
+    // Any return type: the function is the one named `@f`.
+    let f = &text[text.find(" @f(").expect("@f")..];
     let start = f.find(&format!("\n{name}:\n")).unwrap_or_else(|| panic!("no {name} in\n{text}")) + name.len() + 3;
     f[start..].lines().take_while(|line| line.starts_with("  ")).map(|line| line.trim().to_owned()).collect()
 }
@@ -510,13 +664,42 @@ b3:
     )
 }
 
+/// As `global_loop`, rotated: the body runs at least once, so its stores are
+/// guaranteed to execute.
+fn rotated_global_loop(body: &str) -> String {
+    format!(
+        "@g = global i16 5
+@h = global i16 7
+
+define i16 @f(i16 %n) {{
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %b1 ]
+{body}  %i1 = add i16 %i, 1
+  %c = icmp slt i16 %i1, %n
+  br i1 %c, label %b1, label %b3
+
+b3:
+  %r = load i16, ptr @g
+  ret i16 %r
+}}
+"
+    )
+}
+
 /// A global read and written in the loop is one value there: loaded before it,
-/// stored once after, the loop's own loads and stores gone.
+/// stored once after, the loop's own loads and stores gone. Changed meaning
+/// (the thread-local deviation is gone): this holds for a loop whose store is
+/// guaranteed to execute, the rotated shape; the loop that may run no trip
+/// keeps its stores
+/// (`test_a_global_store_the_loop_may_skip_stays_in_the_loop`).
 #[test]
 fn test_a_global_read_and_written_in_a_loop_lives_in_a_register() {
-    let text = global_loop("  %x = load i16, ptr @g\n  %y = add i16 %x, %i\n  store i16 %y, ptr @g\n");
+    let text = rotated_global_loop("  %x = load i16, ptr @g\n  %y = add i16 %x, %i\n  store i16 %y, ptr @g\n");
     let (_, after) = applied(&text, &trips());
-    let body = block_of(&after, "b2");
+    let body = block_of(&after, "b1");
     assert!(!body.iter().any(|line| line.contains("@g")), "{after}");
     assert!(block_of(&after, "b0").iter().any(|line| line.contains("load i16, ptr @g")), "{after}");
     assert!(
@@ -556,13 +739,33 @@ b3:
     assert!(block_of(&after, "b3").iter().any(|line| line.starts_with("store i16")), "{after}");
 }
 
+/// A global the loop stores to, in a loop that may run no trip, is not
+/// thread-local (`isThreadLocalObject`): the stores stay in the loop and only
+/// the load leaves it. Sunk, a loop that ran no trip still stored (jpeg_fixed
+/// -O1 wasm: `emit` +28 B over the pin, four phis and identity copies).
+#[test]
+fn test_a_global_store_the_loop_may_skip_stays_in_the_loop() {
+    let text = global_loop("  %x = load i16, ptr @g\n  %y = add i16 %x, %i\n  store i16 %y, ptr @g\n");
+    let (_, after) = applied_speculating(&text, &trips(), false);
+    assert!(block_of(&after, "b2").iter().any(|line| line.starts_with("store i16")), "{after}");
+    assert!(!block_of(&after, "b3").iter().any(|line| line.starts_with("store i16")), "{after}");
+    assert!(block_of(&after, "b0").iter().any(|line| line.contains("load i16, ptr @g")), "{after}");
+}
+
 /// A store made only on some trips: the value before the loop is loaded first,
-/// so a loop that never stores leaves it as it was.
+/// so a loop that never stores leaves it as it was. Changed meaning (the
+/// thread-local deviation is gone): the load leaves for the preheader and the
+/// store stays, as the global is not thread-local and the store is not
+/// guaranteed; sunk, it would run on the no-trip path.
 #[test]
 fn test_a_store_made_on_some_trips_is_preceded_by_a_load_before_the_loop() {
     let text = global_loop("  %x = load i16, ptr @g\n  store i16 %x, ptr @h\n  store i16 %i, ptr @g\n");
     let (_, after) = applied(&text, &trips());
-    assert!(!block_of(&after, "b2").iter().any(|line| line.contains("@g")), "{after}");
+    assert!(!block_of(&after, "b2").iter().any(|line| line.contains("load i16, ptr @g")), "{after}");
+    assert!(
+        block_of(&after, "b2").iter().any(|line| line.starts_with("store i16") && line.contains("ptr @g")),
+        "{after}"
+    );
     assert!(block_of(&after, "b0").iter().any(|line| line.contains("load i16, ptr @g")), "{after}");
 }
 
@@ -597,6 +800,48 @@ b3:
 ";
     let (_, after) = applied(text, &[vec![0], vec![1], vec![3]]);
     assert!(block_of(&after, "b2").iter().any(|line| line.starts_with("store i16")), "{after}");
+}
+
+/// LPM1 runs per loop (`loopfilter::only`): LICM over one loop hoists from that
+/// loop alone. The apply path ignored the scope and hoisted from every loop at
+/// the first loop's turn, so the outer loops' own `no-allowspeculation` LICM
+/// found nothing to leave in place (klw -O1: 240 blocks where the pin has 248,
+/// +37k executed instructions).
+#[test]
+fn test_a_scoped_run_hoists_from_the_named_loop_only() {
+    let text = "define i16 @f(i16 %n, i16 %a) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %j, %b1 ]
+  %k = mul i16 %a, 3
+  %j = add i16 %i, %k
+  %c = icmp slt i16 %j, %n
+  br i1 %c, label %b1, label %b2
+
+b2:
+  br label %b3
+
+b3:
+  %x = phi i16 [ 0, %b2 ], [ %y, %b3 ]
+  %m = mul i16 %a, 5
+  %y = add i16 %x, %m
+  %d = icmp slt i16 %y, %n
+  br i1 %d, label %b3, label %b4
+
+b4:
+  ret i16 %y
+}
+";
+    let mut module = parsed(text);
+    let _scope = crate::loopfilter::only(&[llrm_mir::module::BlockId(1)]);
+    let after = crate::testing::managed(&mut module, Licm { apply: true, speculate: true });
+    assert!(!block_of(&after, "b1").iter().any(|line| line.contains("mul i16 %a, 3")), "{after}");
+    assert!(
+        block_of(&after, "b3").iter().any(|line| line.contains("mul i16 %a, 5")),
+        "the other loop was hoisted: {after}"
+    );
 }
 
 /// LPM1's first LICM is `licm<no-allowspeculation>`: a multiply the loop may
@@ -643,10 +888,35 @@ b5:
 /// the global holds at the exit is the counter of the trip before, not the
 /// counter the header holds then (`fill` stored 8 where the loop's last store
 /// was 7).
+///
+/// Changed meaning (the thread-local deviation is gone): the sunk store now
+/// happens for a slot that is thread-local, an alloca not captured; a global
+/// keeps the store in the loop.
 #[test]
 fn test_a_store_after_the_exit_test_leaves_the_value_of_the_last_trip() {
-    let text = global_loop("  %x = load i16, ptr @g\n  store i16 %x, ptr @h\n  store i16 %i, ptr @g\n");
-    let (_, after) = applied(&text, &trips());
+    let text = "define i16 @f(i16 %n) {
+b0:
+  %s = alloca i16
+  store i16 5, ptr %s
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %b2 ]
+  %c = icmp slt i16 %i, %n
+  br i1 %c, label %b2, label %b3
+
+b2:
+  %x = load i16, ptr %s
+  store i16 %i, ptr %s
+  %i1 = add i16 %i, 1
+  br label %b1
+
+b3:
+  %r = load i16, ptr %s
+  ret i16 %r
+}
+";
+    let (_, after) = applied(text, &trips());
     assert!(block_of(&after, "b3").iter().any(|line| line.starts_with("store i16")), "{after}");
 }
 
@@ -938,6 +1208,300 @@ b3:
     assert!(block_of(&stated, "b0").iter().any(|line| line.contains("load i16, ptr @g")), "{stated}");
 }
 
+/// A loop around a load of `%q` that a store through `%p` cannot be ruled out
+/// of, with `start` in the entry block and `loop_start` in the loop (the
+/// printed function).
+fn invariant_start_loop(
+    start: &str,
+    loop_start: &str,
+) -> String {
+    licm_printed(&format!(
+        "declare ptr @llvm.invariant.start.p0(i64 immarg, ptr nocapture)
+declare void @llvm.invariant.end.p0(ptr, i64 immarg, ptr nocapture)
+
+define i16 @f(i16 %n, ptr %p, ptr dereferenceable(2) %q) {{
+b0:
+  {start}
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %b2 ]
+  %c = icmp slt i16 %i, %n
+  br i1 %c, label %b2, label %b3
+
+b2:
+  {loop_start}
+  %v = load i16, ptr %q
+  store i16 %i, ptr %p
+  %w = add i16 %i, %v
+  %i1 = add i16 %w, 1
+  br label %b1
+
+b3:
+  ret i16 %i
+}}
+"
+    ))
+}
+
+fn load_of_q_in(
+    printed: &str,
+    block: &str,
+) -> bool {
+    block_of(printed, block).iter().any(|line| line.contains("load i16, ptr %q"))
+}
+
+/// LICM.cpp#L1053 `isLoadInvariantInLoop`: an `invariant.start` over the
+/// load's address, in a block that properly dominates the loop's header and
+/// with no use of its own, lets the load leave past a store the loop cannot
+/// rule out. The load stayed (MIR had no `invariant.start`).
+#[test]
+fn test_a_load_under_a_dominating_invariant_start_leaves_past_a_store() {
+    let plain = invariant_start_loop("", "");
+    assert!(load_of_q_in(&plain, "b2"), "premise: without a scope the load stays: {plain}");
+    let scoped = invariant_start_loop("%s = call ptr @llvm.invariant.start.p0(i64 2, ptr %q)", "");
+    assert!(!load_of_q_in(&scoped, "b2") && load_of_q_in(&scoped, "b0"), "{scoped}");
+}
+
+/// The scope must cover the load (`LocSizeInBits <= InvariantSizeInBits`) and
+/// end nowhere (`II->use_empty()`), and must stand outside the loop
+/// (`properlyDominates(II->getParent(), CurLoop->getHeader())`); -1, an object
+/// of unknown size, covers nothing (`InvariantSize->isNegative()`).
+#[test]
+fn test_an_invariant_start_that_does_not_cover_or_ends_or_sits_in_the_loop_keeps_the_load() {
+    let narrow = invariant_start_loop("%s = call ptr @llvm.invariant.start.p0(i64 1, ptr %q)", "");
+    assert!(load_of_q_in(&narrow, "b2"), "a one byte scope does not cover an i16: {narrow}");
+    let ended = invariant_start_loop(
+        "%s = call ptr @llvm.invariant.start.p0(i64 2, ptr %q)\n  call void @llvm.invariant.end.p0(ptr %s, i64 2, ptr %q)",
+        "",
+    );
+    assert!(load_of_q_in(&ended, "b2"), "a scope that something ends is not one: {ended}");
+    let inside = invariant_start_loop("", "%s = call ptr @llvm.invariant.start.p0(i64 2, ptr %q)");
+    assert!(load_of_q_in(&inside, "b2"), "a scope inside the loop does not dominate its header: {inside}");
+    let unknown = invariant_start_loop("%s = call ptr @llvm.invariant.start.p0(i64 -1, ptr %q)", "");
+    assert!(load_of_q_in(&unknown, "b2"), "-1 is skipped: {unknown}");
+}
+
+const SCOPE_DECLS: &str = "declare ptr @llvm.invariant.start.p0(i64 immarg, ptr nocapture)
+declare void @llvm.invariant.end.p0(ptr, i64 immarg, ptr nocapture)
+";
+const START: &str = "%s = call ptr @llvm.invariant.start.p0(i64 2, ptr %q)";
+const END: &str = "call void @llvm.invariant.end.p0(ptr %s, i64 2, ptr %q)";
+
+/// A loop `b1`/`b2` around the load of `%q` and a store the load cannot be
+/// ruled out of, entered from `b0` and left to `b3`, with `{b0}` ahead of the
+/// branch, `{b1}` and `{b2}` in the loop and `{b3}` after it.
+fn scoped_loop(
+    b0: &str,
+    b1: &str,
+    b2: &str,
+    b3: &str,
+) -> String {
+    licm_printed(&format!(
+        "{SCOPE_DECLS}
+define i16 @f(i16 %n, ptr %p, ptr dereferenceable(2) %q) {{
+b0:
+  {b0}
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %b2 ]
+  {b1}
+  %c = icmp slt i16 %i, %n
+  br i1 %c, label %b2, label %b3
+
+b2:
+  {b2}
+  %v = load i16, ptr %q
+  store i16 %i, ptr %p
+  %w = add i16 %i, %v
+  %i1 = add i16 %w, 1
+  br label %b1
+
+b3:
+  {b3}
+  ret i16 %i
+}}
+"
+    ))
+}
+
+/// DEVIATE from LICM.cpp#L1086 (`II->use_empty()`): an `invariant.end` that
+/// cannot run between the start and the loop leaves the scope open at the
+/// header. The load stayed, the pin's answer for any end at all.
+#[test]
+fn test_an_invariant_end_after_the_loop_keeps_the_scope_open_for_the_load() {
+    let after = scoped_loop(START, "", "", END);
+    assert!(!load_of_q_in(&after, "b2") && load_of_q_in(&after, "b0"), "{after}");
+}
+
+/// The ends that do run between the start and the header close the scope the
+/// load needs: right after the start, in the header, in the body, on the
+/// entry path of a join, and when an outer loop runs the end again before the
+/// inner loop. Each hoisted the load past the store.
+#[test]
+fn test_an_invariant_end_that_can_run_before_the_header_keeps_the_load() {
+    let entry = scoped_loop(&format!("{START}\n  {END}"), "", "", "");
+    assert!(load_of_q_in(&entry, "b2"), "end right after the start: {entry}");
+    let header = scoped_loop(START, END, "", "");
+    assert!(load_of_q_in(&header, "b2"), "end in the header: {header}");
+    let body = scoped_loop(START, "", END, "");
+    assert!(load_of_q_in(&body, "b2"), "end in the body: {body}");
+}
+
+/// A side path that ends the scope and rejoins the loop's entry runs the end
+/// before the header; one that leaves the function does not.
+#[test]
+fn test_an_invariant_end_on_a_side_path_matters_only_if_it_rejoins_the_loop() {
+    let side = |leave: &str| {
+        licm_printed(&format!(
+            "{SCOPE_DECLS}
+define i16 @f(i16 %n, i1 %k, ptr %p, ptr dereferenceable(2) %q) {{
+b0:
+  {START}
+  br i1 %k, label %e, label %pre
+
+e:
+  {END}
+  {leave}
+
+pre:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %pre ], [ %i1, %b2 ]
+  %c = icmp slt i16 %i, %n
+  br i1 %c, label %b2, label %b3
+
+b2:
+  %v = load i16, ptr %q
+  store i16 %i, ptr %p
+  %w = add i16 %i, %v
+  %i1 = add i16 %w, 1
+  br label %b1
+
+b3:
+  ret i16 %i
+}}
+"
+        ))
+    };
+    let leaves = side("ret i16 0");
+    assert!(!load_of_q_in(&leaves, "b2"), "an end on a path that returns: {leaves}");
+    let rejoins = side("br label %pre");
+    assert!(load_of_q_in(&rejoins, "b2"), "an end on a path into the header: {rejoins}");
+}
+
+/// The start outside an outer loop and the end after the inner loop, in the
+/// outer body, runs before the inner header on the next outer round; with the
+/// start in the outer body too, it reopens the scope first.
+#[test]
+fn test_an_invariant_end_after_an_inner_loop_matters_if_the_outer_loop_repeats_it() {
+    let nest = |outer_entry: &str, outer_head: &str| {
+        licm_printed(&format!(
+            "{SCOPE_DECLS}
+define i16 @f(i16 %n, ptr %p, ptr dereferenceable(2) %q) {{
+b0:
+  {outer_entry}
+  br label %o
+
+o:
+  %j = phi i16 [ 0, %b0 ], [ %j1, %t ]
+  {outer_head}
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %o ], [ %i1, %b2 ]
+  %c = icmp slt i16 %i, %n
+  br i1 %c, label %b2, label %t
+
+b2:
+  %v = load i16, ptr %q
+  store i16 %i, ptr %p
+  %w = add i16 %i, %v
+  %i1 = add i16 %w, 1
+  br label %b1
+
+t:
+  {END}
+  %j1 = add i16 %j, 1
+  %d = icmp slt i16 %j1, %n
+  br i1 %d, label %o, label %x
+
+x:
+  ret i16 %j
+}}
+"
+        ))
+    };
+    let outside = nest(START, "");
+    assert!(load_of_q_in(&outside, "b2"), "the end runs again before the inner header: {outside}");
+    let restarted = nest("", START);
+    assert!(!load_of_q_in(&restarted, "b2"), "the start comes after the end each round: {restarted}");
+}
+
+/// Two starts on one pointer: the one ended in the body no longer covers the
+/// load, the one never ended still does. Each is judged by its own ends.
+#[test]
+fn test_one_of_two_starts_on_a_pointer_ended_in_the_loop_leaves_the_other_to_cover() {
+    let two = |second_ended: bool| {
+        let end = if second_ended { "call void @llvm.invariant.end.p0(ptr %t, i64 2, ptr %q)" } else { "" };
+        scoped_loop(
+            &format!("{START}\n  %t = call ptr @llvm.invariant.start.p0(i64 2, ptr %q)"),
+            "",
+            &format!("call void @llvm.invariant.end.p0(ptr %s, i64 2, ptr %q)\n  {end}"),
+            "",
+        )
+    };
+    let one_open = two(false);
+    assert!(!load_of_q_in(&one_open, "b2"), "the second start is still open: {one_open}");
+    let both_ended = two(true);
+    assert!(load_of_q_in(&both_ended, "b2"), "both ended in the body: {both_ended}");
+}
+
+/// A scope that two starts reach through a phi is ended through the phi, which
+/// names neither start. The load stayed in the loop.
+#[test]
+fn test_an_invariant_end_through_a_phi_keeps_the_load() {
+    let printed = licm_printed(&format!(
+        "{SCOPE_DECLS}
+define i16 @f(i16 %n, i1 %k, ptr %p, ptr dereferenceable(2) %q) {{
+b0:
+  br i1 %k, label %a, label %c
+
+a:
+  %s = call ptr @llvm.invariant.start.p0(i64 2, ptr %q)
+  br label %j
+
+c:
+  %t = call ptr @llvm.invariant.start.p0(i64 2, ptr %q)
+  br label %j
+
+j:
+  %u = phi ptr [ %s, %a ], [ %t, %c ]
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %j ], [ %i1, %b2 ]
+  %cc = icmp slt i16 %i, %n
+  br i1 %cc, label %b2, label %b3
+
+b2:
+  %v = load i16, ptr %q
+  store i16 %i, ptr %p
+  %w = add i16 %i, %v
+  %i1 = add i16 %w, 1
+  br label %b1
+
+b3:
+  call void @llvm.invariant.end.p0(ptr %u, i64 2, ptr %q)
+  ret i16 %i
+}}
+"
+    ));
+    assert!(load_of_q_in(&printed, "b2"), "{printed}");
+}
+
 /// A GEP the target folds into the loop's load, also read by an exit phi: LLVM
 /// copies it into the exit and keeps it in the loop. llrm left the exit phi
 /// reading the loop's pointer, where `opt -passes=licm` re-forms the address
@@ -1069,6 +1633,41 @@ b2:
 ";
     let after = licm_printed(chain);
     assert!(block_of(&after, "b1").iter().filter(|line| line.contains(".reass =")).count() <= 1, "{after}");
+}
+
+/// `hoistBOAssociation` edits in place, so each link of an add chain reads the
+/// one before it as already reassociated and the chain collapses to one add in
+/// one run. llrm skipped every link whose `bo0` an earlier link had replaced:
+/// a chain of six invariants kept three adds in the loop (`dot` at -O3, where
+/// the unroll decision then saw 26 instructions, not 6, and left the loop).
+#[test]
+fn test_an_add_chain_of_invariants_collapses_in_one_run() {
+    let terms = ["a", "b", "c", "d", "e", "f"];
+    let mut body = String::from("  %t0 = add i16 %i, %a\n");
+    for at in 1..terms.len() {
+        body += &format!("  %t{at} = add i16 %t{}, %{}\n", at - 1, terms[at]);
+    }
+    let text = format!(
+        "define i16 @f(i16 %n, i16 %a, i16 %b, i16 %c, i16 %d, i16 %e, i16 %f) {{
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %b1 ]
+{body}  %i1 = add i16 %i, %t{last}
+  %k = icmp slt i16 %i1, %n
+  br i1 %k, label %b1, label %b2
+
+b2:
+  ret i16 %i1
+}}
+",
+        last = terms.len() - 1
+    );
+    let after = licm_printed(&text);
+    let looped = block_of(&after, "b1");
+    assert_eq!(looped.iter().filter(|line| line.contains(".reass =")).count(), 1, "{after}");
+    assert_eq!(looped.iter().filter(|line| line.contains(" = add ")).count(), 2, "{after}");
 }
 
 /// `collectChildrenInLoop` looked at every block of the function once per loop
@@ -1344,4 +1943,940 @@ fn test_a_promotion_past_the_target_register_count_is_refused() {
     assert_eq!(counters_promoted(llrm_mir::target::Neutral), 10);
     assert_eq!(counters_promoted(llrm_x86_m16::Dos::default()), 3);
     assert_eq!(counters_promoted(I486(llrm_mir::target::Neutral)), 5);
+}
+
+/// Ten globals the loop only stores to, each a promotion candidate.
+fn ten_stored() -> String {
+    let globals: String = (1..=10).map(|k| format!("@g{k} = global i16 0\n")).collect();
+    let body: String = (1..=10).map(|k| format!("  store i16 %i, ptr @g{k}\n")).collect();
+    format!(
+        "{globals}
+define i16 @f(i16 %n) {{
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %b1 ]
+{body}  %i1 = add i16 %i, 1
+  %c = icmp eq i16 %i1, %n
+  br i1 %c, label %b2, label %b1
+
+b2:
+  ret i16 0
+}}
+"
+    )
+}
+
+/// A location the loop only stores to holds no register across the loop, so
+/// the cap does not count it. Charged as a load-promoted one, the pass that
+/// sinks the stores of locations the pass before it loaded found no room:
+/// jpeg_single m32 -O2 kept two stores a byte in its checksum loop.
+#[test]
+fn test_a_store_only_promotion_is_not_charged_a_register() {
+    let promoted = |machine: Box<dyn llrm_mir::target::Machine>| {
+        DECIDED.with(|all| *all.borrow_mut() = Decisions::default());
+        let mut module = parsed(&ten_stored());
+        let mut passes = llrm_mir::passes::PassManager::default();
+        passes.add(Licm { apply: false, speculate: true });
+        passes.run_module(&mut module, std::rc::Rc::from(machine)).expect("runs");
+        DECIDED.with(|all| all.borrow().promoted.len())
+    };
+    assert_eq!(promoted(Box::new(llrm_x86_m16::Dos::default())), 10);
+    assert_eq!(promoted(Box::new(I486(llrm_mir::target::Neutral))), 10);
+}
+
+/// The dot loop of a Nib zip (`i < a && i < b`, both bounds invariant) tested
+/// both bounds on every trip: the pin's LICM (`hoistMinMax`) makes one compare
+/// against `umin(a, b)`, the `umin` in the preheader.
+#[test]
+fn test_two_invariant_upper_bounds_become_one_compare_against_their_min() {
+    let after = licm_printed(
+        "define i16 @f(i16 %a, i16 %b) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %b1 ]
+  %i1 = add nuw i16 %i, 1
+  %c1 = icmp ult i16 %i1, %a
+  %c2 = icmp ult i16 %i1, %b
+  %c = select i1 %c1, i1 %c2, i1 false
+  br i1 %c, label %b1, label %b2
+
+b2:
+  ret i16 %i1
+}
+",
+    );
+    let entry = block_of(&after, "b0");
+    assert!(entry.iter().any(|line| line.contains("%invariant.umin = call i16 @llvm.umin.i16")), "{after}");
+    let body = block_of(&after, "b1");
+    assert_eq!(body.iter().filter(|line| line.contains("icmp")).count(), 1, "{after}");
+    assert!(body.iter().any(|line| line.contains("icmp ult i16 %i1, %invariant.umin")), "{after}");
+}
+
+/// A select does not evaluate its second compare on every path, so the bound
+/// the preheader now reads is frozen; the logical `and` form needs no freeze.
+#[test]
+fn test_a_select_freezes_the_second_bound_and_an_and_does_not() {
+    let select = "  %c = select i1 %c1, i1 %c2, i1 false\n";
+    let and = "  %c = and i1 %c1, %c2\n";
+    for (logic, frozen) in [(select, true), (and, false)] {
+        let text = format!(
+            "define i16 @f(i16 %a, i16 %b) {{
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %b1 ]
+  %i1 = add nuw i16 %i, 1
+  %c1 = icmp ult i16 %i1, %a
+  %c2 = icmp ult i16 %i1, %b
+{logic}  br i1 %c, label %b1, label %b2
+
+b2:
+  ret i16 %i1
+}}
+"
+        );
+        let after = licm_printed(&text);
+        let entry = block_of(&after, "b0");
+        assert_eq!(entry.iter().any(|line| line.contains("freeze")), frozen, "{after}");
+        assert!(entry.iter().any(|line| line.contains("llvm.umin.i16")), "{after}");
+    }
+}
+
+/// `||` of two upper-bound tests is the min's inverse: exit when `i >= min`.
+/// Signed lower bounds take the max.
+#[test]
+fn test_or_of_bounds_and_signed_lower_bounds() {
+    let or = licm_printed(
+        "define i16 @f(i16 %a, i16 %b) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %b1 ]
+  %i1 = add nuw i16 %i, 1
+  %c1 = icmp uge i16 %i1, %a
+  %c2 = icmp uge i16 %i1, %b
+  %c = or i1 %c1, %c2
+  br i1 %c, label %b2, label %b1
+
+b2:
+  ret i16 %i1
+}
+",
+    );
+    assert!(block_of(&or, "b0").iter().any(|line| line.contains("llvm.umin.i16")), "{or}");
+    let max = licm_printed(
+        "define i16 @f(i16 %a, i16 %b) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %b1 ]
+  %i1 = add nuw i16 %i, 1
+  %c1 = icmp sgt i16 %i1, %a
+  %c2 = icmp sgt i16 %i1, %b
+  %c = and i1 %c1, %c2
+  br i1 %c, label %b1, label %b2
+
+b2:
+  ret i16 %i1
+}
+",
+    );
+    assert!(block_of(&max, "b0").iter().any(|line| line.contains("llvm.smax.i16")), "{max}");
+}
+
+/// Mixed directions (`i < a && i > b`) have no single bound: untouched.
+#[test]
+fn test_opposite_directions_are_not_merged() {
+    let after = licm_printed(
+        "define i16 @f(i16 %a, i16 %b) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %b1 ]
+  %i1 = add nuw i16 %i, 1
+  %c1 = icmp ult i16 %i1, %a
+  %c2 = icmp ugt i16 %i1, %b
+  %c = and i1 %c1, %c2
+  br i1 %c, label %b1, label %b2
+
+b2:
+  ret i16 %i1
+}
+",
+    );
+    assert!(!after.contains("llvm.umin") && !after.contains("llvm.umax"), "{after}");
+}
+
+/// The loops of @f that `seeded` lets reach the memory graph.
+fn seeded_loops(text: &str) -> Vec<bool> {
+    use llrm_analysis::testing::{DOS, layout};
+    use llrm_mir::passes::{Analyses, Outer};
+    let module = parsed(&format!("{DOS}{text}"));
+    let (layout, outer) = (layout(&module), Outer::of(&module, None));
+    let mut module = module;
+    let (context, function) = module.function_mut("f").expect("@f");
+    let mut analyses = Analyses::new(std::rc::Rc::new(outer));
+    let shape = analyses.get::<llrm_analysis::cfg::Shape>(context, &layout, function);
+    let innermost = super::innermost_loops(&shape);
+    shape.loops.iter().map(|one| super::seeded(function, &shape, &innermost, one)).collect()
+}
+
+/// #6706 widened the `seeded` look to any `and`, `or` or select of a compare:
+/// nearly every loop then built MemorySSA and walked sink/hoist, licm 43.2M to
+/// 198.9M and mssa 88.2M to 165.6M instructions on memory_expansion.ll. A
+/// logical operation of two compares of variant values seeds nothing.
+#[test]
+fn a_logical_operation_of_variant_compares_does_not_seed_a_loop() {
+    let text = "define i16 @f(i16 %n, i16 %m) {
+entry:
+  br label %loop
+loop:
+  %i = phi i16 [ 0, %entry ], [ %inc, %loop ]
+  %j = phi i16 [ 0, %entry ], [ %jnc, %loop ]
+  %a = icmp ult i16 %i, %j
+  %b = icmp slt i16 %j, %i
+  %c = and i1 %a, %b
+  %inc = add i16 %i, 1
+  %jnc = add i16 %j, 2
+  br i1 %c, label %loop, label %exit
+exit:
+  ret i16 %inc
+}
+";
+    assert_eq!(seeded_loops(text), [false]);
+}
+
+/// The look #6706 added still seeds the loop it can act on: two compares of
+/// one variant value against two invariant bounds.
+#[test]
+fn two_invariant_bounds_of_one_variant_value_seed_a_loop() {
+    let text = "define i16 @f(i16 %n, i16 %m) {
+entry:
+  br label %loop
+loop:
+  %i = phi i16 [ 0, %entry ], [ %inc, %loop ]
+  %a = icmp ult i16 %i, %n
+  %b = icmp ult i16 %i, %m
+  %c = and i1 %a, %b
+  %inc = add i16 %i, 1
+  br i1 %c, label %loop, label %exit
+exit:
+  ret i16 %inc
+}
+";
+    assert_eq!(seeded_loops(text), [true]);
+}
+
+/// Every alias query between two stack slots asked `exposes` for each slot's
+/// uses afresh: LICM's alias queries took no `ExposedFrames`, and jpeg_fixed
+/// spent 11 of the pass's 36 M Ir in those scans. LICM reads the manager's
+/// set once.
+#[test]
+fn test_licm_alias_queries_do_not_rescan_each_slots_uses() {
+    let text = "define void @f(i16 %n) {
+b0:
+  %a = alloca i16
+  %b = alloca i16
+  %c = alloca i16
+  store i16 0, ptr %a
+  br label %head
+head:
+  %i = phi i16 [ 0, %b0 ], [ %j, %head ]
+  %x = load i16, ptr %a
+  %y = load i16, ptr %c
+  %s = add i16 %x, %y
+  store i16 %s, ptr %b
+  %j = add i16 %i, 1
+  %t = icmp slt i16 %j, %n
+  br i1 %t, label %head, label %exit
+exit:
+  ret void
+}
+";
+    let before = llrm_analysis::frameescape::scans();
+    decided(text);
+    assert_eq!(llrm_analysis::frameescape::scans() - before, 0);
+}
+
+/// `hoistSubAddAssociation`'s three shapes, `a` and `b` invariant:
+/// `(LV + a) - b` to `LV + (a - b)`, `(LV - a) - b` to `LV - (a + b)`,
+/// `(LV - a) + b` (either order) to `LV + (b - a)`. llrm kept the invariant
+/// sub or add in the loop, where `opt -passes=licm` hoists it.
+#[test]
+fn test_sub_and_add_chains_with_invariant_operands_are_reassociated_out() {
+    let text = |inner: &str, outer: &str| {
+        format!(
+            "define i16 @f(i16 %n, i16 %a, i16 %b) {{
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %b1 ]
+  %x = {inner}
+  %y = {outer}
+  %i1 = add i16 %i, %y
+  %c = icmp slt i16 %i1, %n
+  br i1 %c, label %b1, label %b2
+
+b2:
+  ret i16 %i1
+}}
+"
+        )
+    };
+    let cases = [
+        ("add i16 %i, %a", "sub i16 %x, %b", "%invariant.op = sub i16 %a, %b", "%y.reass = add i16 %i, %invariant.op"),
+        ("sub i16 %i, %a", "sub i16 %x, %b", "%invariant.op = add i16 %a, %b", "%y.reass = sub i16 %i, %invariant.op"),
+        ("sub i16 %i, %a", "add i16 %x, %b", "%invariant.op = sub i16 %b, %a", "%y.reass = add i16 %i, %invariant.op"),
+        ("sub i16 %i, %a", "add i16 %b, %x", "%invariant.op = sub i16 %b, %a", "%y.reass = add i16 %i, %invariant.op"),
+    ];
+    for (inner, outer, invariant, rebuilt) in cases {
+        let after = licm_printed(&text(inner, outer));
+        assert!(block_of(&after, "b0").iter().any(|line| line.contains(invariant)), "{inner} / {outer}\n{after}");
+        let body = block_of(&after, "b1");
+        assert!(body.iter().any(|line| line.contains(rebuilt)), "{inner} / {outer}\n{after}");
+        assert!(body.iter().all(|line| !line.contains("%x = ")), "{inner} / {outer}\n{after}");
+    }
+}
+
+/// `hoistAddSub`: `LV + C1 < C2` is `LV < C2 - C1` and `LV - C1 < C2` is
+/// `LV < C1 + C2` when the move cannot overflow; `C1 - LV < C2` is `LV > C1 -
+/// C2`. llrm kept the add in the loop, where `opt -passes=licm` hoists the
+/// bound.
+#[test]
+fn test_a_compare_of_an_add_or_sub_with_an_invariant_operand_is_reassociated_out() {
+    let text = |operation: &str, flags: &str, compare: &str, p: &str, q: &str| {
+        format!(
+            "define i16 @f(i16 %n, i16 %a, i16 %b) {{
+b0:
+  %p = {p}
+  %q = {q}
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %b1 ]
+  %x = {operation} {flags} i16 {compare}
+  %go = icmp ult i16 %x, %q
+  %gz = zext i1 %go to i16
+  %j = add i16 %i, %gz
+  %i1 = add i16 %j, 1
+  %c = icmp slt i16 %i1, %n
+  br i1 %c, label %b1, label %b2
+
+b2:
+  ret i16 %i1
+}}
+"
+        )
+    };
+    // add: LV + C1 u< C2.
+    let after = licm_printed(&text("add", "nuw", "%i, %p", "and i16 %a, 255", "or i16 %b, 255"));
+    assert!(block_of(&after, "b0").iter().any(|line| line.contains("%invariant.op = sub nuw i16 %q, %p")), "{after}");
+    assert!(block_of(&after, "b1").iter().any(|line| line.contains("icmp ult i16 %i, %invariant.op")), "{after}");
+    assert!(block_of(&after, "b1").iter().all(|line| !line.contains("%x = ")), "{after}");
+    // sub: LV - C1 u< C2.
+    let after = licm_printed(&text("sub", "nuw", "%i, %p", "and i16 %a, 255", "and i16 %b, 255"));
+    assert!(block_of(&after, "b0").iter().any(|line| line.contains("%invariant.op = add nuw i16 %p, %q")), "{after}");
+    // C1 - LV u< C2: LV u> C1 - C2.
+    let after = licm_printed(&text("sub", "nuw", "%p, %i", "or i16 %a, 255", "and i16 %b, 255"));
+    assert!(block_of(&after, "b0").iter().any(|line| line.contains("%invariant.op = sub nuw i16 %p, %q")), "{after}");
+    assert!(block_of(&after, "b1").iter().any(|line| line.contains("icmp ugt i16 %i, %invariant.op")), "{after}");
+    // No wrap flag: untouched.
+    let after = licm_printed(&text("add", "", "%i, %p", "and i16 %a, 255", "or i16 %b, 255"));
+    assert!(!after.contains("invariant.op"), "{after}");
+}
+
+/// `m_NUWAddLike`: an `or disjoint` is the add `hoistAdd` takes, so `i | 1 u<
+/// 999` in a loop unrolled by two is `i u< 998` (wasm `floats` -O3 kept the
+/// `or` and its constant: +1000 instructions).
+#[test]
+fn test_a_compare_of_a_disjoint_or_with_an_invariant_operand_is_reassociated_out() {
+    let after = licm_printed(
+        "define i16 @f(i16 %n, i16 %a) {
+b0:
+  %p = and i16 %a, 255
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %b1 ]
+  %x = or disjoint i16 %i, %p
+  %go = icmp ult i16 %x, 999
+  %gz = zext i1 %go to i16
+  %j = add i16 %i, %gz
+  %i1 = add i16 %j, 1
+  %c = icmp slt i16 %i1, %n
+  br i1 %c, label %b1, label %b2
+
+b2:
+  ret i16 %i1
+}
+",
+    );
+    assert!(block_of(&after, "b0").iter().any(|line| line.contains("%invariant.op = sub nuw i16 999, %p")), "{after}");
+    assert!(block_of(&after, "b1").iter().all(|line| !line.contains("%x = ")), "{after}");
+}
+
+/// `hoistMulAddAssociation`: `(a * x + b * y) * c` with `a`, `b`, `c` invariant
+/// is `(a * c) * x + (b * c) * y`, the two products made in the preheader.
+/// llrm left the whole tree in the loop, where `opt -passes=licm` hoists them.
+#[test]
+fn test_a_product_of_a_sum_of_products_with_invariant_factors_is_reassociated_out() {
+    let text = "define i16 @f(i16 %n, i16 %a, i16 %b, i16 %c) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %b1 ]
+  %x = mul i16 %a, %i
+  %y = mul i16 %i, %b
+  %s = add nsw i16 %x, %y
+  %t = mul i16 %s, %c
+  %i1 = add i16 %i, %t
+  %k = icmp slt i16 %i1, %n
+  br i1 %k, label %b1, label %b2
+
+b2:
+  ret i16 %i1
+}
+";
+    let after = licm_printed(text);
+    let pre = block_of(&after, "b0");
+    assert!(pre.iter().any(|line| line.contains("= mul i16 %a, %c")), "{after}");
+    assert!(pre.iter().any(|line| line.contains("= mul i16 %b, %c")), "{after}");
+    let body = block_of(&after, "b1");
+    assert!(body.iter().all(|line| !line.contains("%t = ")), "{after}");
+    assert!(body.iter().any(|line| line.contains("%x.reass = mul i16 %factor.op.mul1, %i")), "{after}");
+}
+
+/// mul_constants m64 -O2: `sum = sum * 31 + x * K` unrolled four times is a
+/// chain of products of sums. The pin reassociates the instruction it has just
+/// made, in the same walk, until one multiply of `sum` is left (31, 961, 29791,
+/// 923521); llrm left alone whatever an earlier reassociation of the loop had
+/// replaced, so two `mul 31` of the chain stayed in the body (+931 B over the
+/// pin's whole file).
+#[test]
+fn test_a_chain_of_products_of_sums_is_reassociated_until_no_multiply_by_the_factor_is_left() {
+    let text = "define i64 @f() {
+b0:
+  br label %b1
+
+b1:
+  %p = phi i64 [ 2654435769, %b0 ], [ %x4, %b1 ]
+  %c = phi i64 [ 0, %b0 ], [ %n, %b1 ]
+  %s = phi i64 [ 47235554646, %b0 ], [ %s4, %b1 ]
+  %m1 = mul i64 %p, 1664525
+  %x1 = add i64 %m1, 1013904223
+  %t1 = mul i64 %s, 31
+  %u1 = mul i64 %x1, 7
+  %s1 = add i64 %u1, %t1
+  %m2 = mul i64 %x1, 1664525
+  %x2 = add i64 %m2, 1013904223
+  %t2 = mul i64 %s1, 31
+  %u2 = mul i64 %x2, 7
+  %s2 = add i64 %u2, %t2
+  %m3 = mul i64 %x2, 1664525
+  %x3 = add i64 %m3, 1013904223
+  %t3 = mul i64 %s2, 31
+  %u3 = mul i64 %x3, 7
+  %s3 = add i64 %u3, %t3
+  %m4 = mul i64 %x3, 1664525
+  %x4 = add i64 %m4, 1013904223
+  %t4 = mul i64 %s3, 31
+  %u4 = mul i64 %x4, 7
+  %s4 = add i64 %u4, %t4
+  %n = add nuw nsw i64 %c, 4
+  %e = icmp eq i64 %n, 200
+  br i1 %e, label %b2, label %b1
+
+b2:
+  ret i64 %s4
+}
+";
+    let after = licm_printed(text);
+    let body = block_of(&after, "b1");
+    let left: Vec<_> =
+        body.iter().filter(|line| line.contains("= mul i64 ") && line.trim_end().ends_with(", 31")).collect();
+    assert!(left.is_empty(), "{left:?}\n{after}");
+}
+
+/// `hoistMulAddAssociation` rewrites in place, so the next product of a
+/// 4x-unrolled `t = t * 31 + x * 6` chain sees the factor already folded in:
+/// `t * 923521 + ...`, no `* 31` left (pin LICM after the unroll,
+/// PassBuilderPipelines.cpp#L1508). llrm decided on the loop as it stood and
+/// skipped every product that read a replaced one: the running sum was
+/// multiplied twice (`* 31` each) where the pin multiplies it once
+/// (`mul_constants` -O2 wasm32, +3..4 B in each of 31 functions).
+#[test]
+fn test_a_chain_of_products_of_sums_is_reassociated_through_every_link() {
+    let text = "define i32 @f() {
+b0:
+  br label %b1
+
+b1:
+  %n = phi i32 [ 200, %b0 ], [ %n1, %b1 ]
+  %x0 = phi i32 [ 7, %b0 ], [ %x4, %b1 ]
+  %t0 = phi i32 [ 9, %b0 ], [ %t4, %b1 ]
+  %a1 = mul i32 %x0, 1664525
+  %x1 = add i32 %a1, 1013904223
+  %m1 = mul i32 %t0, 31
+  %c1 = mul i32 %x1, 6
+  %t1 = add i32 %c1, %m1
+  %a2 = mul i32 %x1, 1664525
+  %x2 = add i32 %a2, 1013904223
+  %m2 = mul i32 %t1, 31
+  %c2 = mul i32 %x2, 6
+  %t2 = add i32 %c2, %m2
+  %a3 = mul i32 %x2, 1664525
+  %x3 = add i32 %a3, 1013904223
+  %m3 = mul i32 %t2, 31
+  %c3 = mul i32 %x3, 6
+  %t3 = add i32 %c3, %m3
+  %a4 = mul i32 %x3, 1664525
+  %x4 = add i32 %a4, 1013904223
+  %m4 = mul i32 %t3, 31
+  %c4 = mul i32 %x4, 6
+  %t4 = add i32 %c4, %m4
+  %n1 = add nsw i32 %n, -4
+  %k = icmp eq i32 %n1, 0
+  br i1 %k, label %b2, label %b1
+
+b2:
+  ret i32 %t4
+}
+";
+    let after = licm_printed(text);
+    let body = &after[after.find("\nb1:\n").expect("b1")..];
+    // Only the phi `%t0` is multiplied in the loop; the sums `%t1..%t3` are
+    // not.
+    let sums = body.lines().filter(|line| line.contains("= mul i32 %t")).count();
+    assert_eq!(sums, 1, "{sums} products of the running sum in the loop, want 1:\n{after}");
+}
+
+/// `Instruction::mayHaveSideEffects` of a call was the list of every location
+/// it writes (a `Vec` of `MemRef`s, `memory::stated` read three times over)
+/// asked for a yes: 1 M Ir of a jpeg_fixed -O2 compile in `sink_region` alone.
+/// Whether it writes is derived from its attributes, with no list.
+#[test]
+fn test_whether_a_call_in_a_loop_has_side_effects_derives_no_list() {
+    let text = "declare i16 @g(i16) nounwind willreturn
+define void @f(i16 %n) {
+b0:
+  br label %head
+head:
+  %i = phi i16 [ 0, %b0 ], [ %j, %head ]
+  %u = call i16 @g(i16 %i)
+  %v = call i16 @g(i16 %n)
+  %j = add i16 %i, 1
+  %t = icmp slt i16 %j, %n
+  br i1 %t, label %head, label %exit
+exit:
+  ret void
+}
+";
+    let before = llrm_analysis::memoryssa::lazy_lists();
+    let mut module = parsed(text);
+    let mut passes = llrm_mir::passes::PassManager::default();
+    passes.add(Licm { apply: true, speculate: true });
+    passes.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).expect("licm");
+    let made = llrm_analysis::memoryssa::lazy_lists() - before;
+    assert_eq!(made, 0, "{made} access lists made for a loop of calls");
+}
+
+/// A loop with nothing to promote priced its register pressure anyway: 1.6 M
+/// Ir of a jpeg_fixed -O2 compile, in 121 loops. It is priced only for a loop
+/// with a candidate.
+#[test]
+fn test_a_loop_with_nothing_to_promote_prices_no_register_pressure() {
+    let text = "define i16 @f(i16 %n) {
+b0:
+  br label %head
+head:
+  %i = phi i16 [ 0, %b0 ], [ %j, %head ]
+  %j = add i16 %i, 1
+  %t = icmp slt i16 %j, %n
+  br i1 %t, label %head, label %exit
+exit:
+  ret i16 %j
+}
+";
+    let before = super::pressure::COUNTED.with(std::cell::Cell::get);
+    let mut module = parsed(text);
+    let mut passes = llrm_mir::passes::PassManager::default();
+    passes.add(Licm { apply: true, speculate: true });
+    passes.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).expect("licm");
+    let priced = super::pressure::COUNTED.with(std::cell::Cell::get) - before;
+    assert_eq!(priced, 0, "pressure priced {priced} times for a loop with no memory access");
+}
+
+/// LICM hoists the load through `MemorySSAUpdater` and says it kept MemorySSA
+/// (LICM.cpp `PA.preserve<MemorySSAAnalysis>()`): the graph asked for after it
+/// is the one it updated. Before, the updater's graph was dropped with the
+/// pass's change and the next pass computed MemorySSA again (2 computations,
+/// not 1; 21 LICM misses against the pin's 11 on jpeg_fixed).
+#[test]
+fn test_the_memory_graph_licm_updated_is_the_one_the_next_pass_gets() {
+    let text = looped(GLOBALS, "", "", "  %v = load i16, ptr @g\n");
+    let (hits, misses) = crate::testing::mssa_misses_over(
+        &text,
+        vec![
+            Box::new(crate::testing::AsksMssa { forgets: false }),
+            Box::new(Licm { apply: true, speculate: true }),
+            Box::new(crate::testing::AsksMssa { forgets: false }),
+        ],
+    );
+    assert_eq!(misses, 1, "MemorySSA was computed again after LICM updated it");
+    assert!(hits >= 2, "LICM and the pass after it read the one graph: {hits} hits");
+}
+
+/// How many times `@f`'s loops were scanned for a block that may throw
+/// (`Decisions::safety_scans`).
+fn safety_scans(
+    text: &str,
+    apply: bool,
+) -> usize {
+    DECIDED.with(|all| *all.borrow_mut() = Decisions::default());
+    let mut module = parsed(text);
+    let mut passes = llrm_mir::passes::PassManager::default();
+    passes.add(Licm { apply, speculate: true });
+    passes
+        .run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral))
+        .unwrap_or_else(|error| panic!("{error}\n{text}"));
+    DECIDED.with(|all| all.borrow().safety_scans)
+}
+
+/// How many predecessor lookups the loops' safety info made.
+fn safety_pred_lookups(text: &str) -> usize {
+    DECIDED.with(|all| *all.borrow_mut() = Decisions::default());
+    let mut module = parsed(text);
+    let mut passes = llrm_mir::passes::PassManager::default();
+    passes.add(Licm { apply: true, speculate: true });
+    passes
+        .run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral))
+        .unwrap_or_else(|error| panic!("{error}\n{text}"));
+    DECIDED.with(|all| all.borrow().safety_pred_lookups)
+}
+
+/// A loop of `n` diamonds, each arm holding a hoistable add.
+fn diamond_chain(n: usize) -> String {
+    let mut text = String::from(
+        "@g = global i16 0\n\ndefine void @f(i16 %n, i16 %m) {\nb0:\n  br label %h\n\nh:\n  %i = phi i16 [ 0, %b0 ], [ %i1, %latch ]\n  br label %t0\n\n",
+    );
+    for k in 0..n {
+        text += &format!(
+            "t{k}:\n  %c{k} = icmp slt i16 %i, %m\n  br i1 %c{k}, label %l{k}, label %r{k}\n\nl{k}:\n  %x{k} = add i16 %n, {}\n  store i16 %x{k}, ptr @g\n  br label %t{}\n\nr{k}:\n  br label %t{}\n\n",
+            k + 1,
+            k + 1,
+            k + 1
+        );
+    }
+    text += &format!(
+        "t{n}:\n  br label %latch\n\nlatch:\n  %i1 = add i16 %i, 1\n  %e = icmp slt i16 %i1, %m\n  br i1 %e, label %h, label %out\n\nout:\n  ret void\n}}\n"
+    );
+    text
+}
+
+/// A loop of 3n blocks asked for each arm whether it is guaranteed to execute
+/// looked a block's predecessors up in the function once for every block the
+/// walk back from each arm reached: 40 diamonds made 4,840 lookups, and
+/// queens at -O3 (360-block loop, 53 runs of LICM) spent 2.1 G Ir there. The
+/// lists of the loop's blocks are made once, so the lookups follow the blocks,
+/// not their product.
+#[test]
+fn test_the_walk_back_from_each_block_reads_the_loops_predecessors_once() {
+    let n = 40;
+    let lookups = safety_pred_lookups(&diamond_chain(n));
+    assert!(lookups <= 4 * 3 * n, "{lookups} predecessor lookups for a loop of {} blocks", 3 * n + 3);
+}
+
+/// The sinking, the hoisting and the promotion of one loop shared two
+/// `LoopSafety` that each scanned the loop (153 loops of `jpeg_fixed` scanned
+/// twice, 2 x 153 where the pin's one `ICFLoopSafetyInfo` per `runOnLoop`
+/// scans 153 times). Decided without edits, the loop is scanned once.
+#[test]
+fn test_a_loop_decided_without_edits_is_scanned_for_a_throwing_block_once() {
+    assert_eq!(safety_scans(&slot_loop("", "", "load i16, ptr %s"), false), 1);
+}
+
+/// With the edits made, what was found of the loop stands only until the next
+/// edit: the sinking and hoisting found nothing to do and share their scan with
+/// the first promotion round; the promotion edits the loop, so the second round
+/// scans again. A scan kept across that edit would answer for a loop that is no
+/// longer there.
+#[test]
+fn test_what_was_found_of_a_loop_is_dropped_by_the_next_edit() {
+    assert_eq!(safety_scans(&slot_loop("", "", "load i16, ptr %s"), true), 2);
+}
+
+/// `Instruction::willReturn` is false for any volatile operation, a load
+/// included: a loop with one may not reach its store, so the store to a global
+/// is not guaranteed and stays in the loop. LICM sank it after the loop and
+/// divided the loop's size by one unit the pin's did not: div_constants_long
+/// peeled twice, +137 B per function on wasm32.
+#[test]
+fn a_volatile_load_before_a_global_store_keeps_the_store_in_the_loop() {
+    for (volatile, stays) in [("", false), ("volatile ", true)] {
+        let text = format!(
+            "@g = global i16 5
+@h = global i16 7
+
+define i16 @f(i16 %n) {{
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %b2 ]
+  %c = icmp slt i16 %i, 12
+  br i1 %c, label %b2, label %b3
+
+b2:
+  %x = load i16, ptr @g
+  %v = load {volatile}i16, ptr @h
+  %y = add i16 %x, %v
+  store i16 %y, ptr @g
+  %i1 = add i16 %i, 1
+  br label %b1
+
+b3:
+  %r = load i16, ptr @g
+  ret i16 %r
+}}
+"
+        );
+        let (_, after) = applied(&text, &trips());
+        let kept = block_of(&after, "b2").iter().any(|line| line.starts_with("store i16") && line.contains("@g"));
+        assert_eq!(kept, stays, "{volatile}: {after}");
+    }
+}
+
+/// DEVIATE LM2: `@a[o]` read behind a guard of the inner loop is invariant
+/// there and in bounds because the outer loop counts `o` below 6; with `o`
+/// unbounded the guarded load stays. Cost before the fix: the load was redone
+/// on every inner trip (nbody_fixed arm64 -O3: 723,134 instructions against
+/// 645,136).
+#[test]
+fn test_a_guarded_load_indexed_by_an_outer_counter_is_hoisted_when_it_stays_in_the_object() {
+    let nest = |bound: &str| {
+        format!(
+            "@a = global [6 x i64] zeroinitializer\n\
+             define i64 @f(i64 %n, i64 %k) {{\n\
+             entry:\n  br label %outer\n\
+             outer:\n  %o = phi i64 [ 0, %entry ], [ %o.next, %outer.latch ]\n  %acc = phi i64 [ 0, %entry ], [ %acc.in, %outer.latch ]\n  br label %inner\n\
+             inner:\n  %j = phi i64 [ 0, %outer ], [ %j.next, %inner.latch ]\n  %s = phi i64 [ %acc, %outer ], [ %s.next, %inner.latch ]\n  %guard = icmp ne i64 %j, %k\n  br i1 %guard, label %then, label %inner.latch\n\
+             then:\n  %p = getelementptr i64, ptr @a, i64 %o\n  %v = load i64, ptr %p\n  %t = add i64 %s, %v\n  br label %inner.latch\n\
+             inner.latch:\n  %s.next = phi i64 [ %s, %inner ], [ %t, %then ]\n  %j.next = add nuw i64 %j, 1\n  %again = icmp ult i64 %j.next, %n\n  br i1 %again, label %inner, label %outer.latch\n\
+             outer.latch:\n  %acc.in = phi i64 [ %s.next, %inner.latch ]\n  %o.next = add nuw nsw i64 %o, 1\n  %more = icmp ult i64 %o.next, {bound}\n  br i1 %more, label %outer, label %exit\n\
+             exit:\n  ret i64 %acc.in\n}}\n"
+        )
+    };
+    let on = |bound: &str| named_on(&nest(bound), RangeDeref(llrm_mir::target::Neutral), |all| all.hoisted.clone());
+    assert_eq!(on("6"), ["p", "v"]);
+    assert_eq!(on("7"), ["p"]);
+    // The pin's rule, the default: the load stays.
+    assert_eq!(decided(&nest("6")), ["p"]);
+}
+
+/// A machine that opts in to `licm_range_deref`.
+struct RangeDeref(llrm_mir::target::Neutral);
+
+struct RangeTti;
+
+use llrm_mir::tti::Tti as _;
+
+impl llrm_mir::tti::Tti for RangeTti {
+    fn licm_range_deref(&self) -> bool {
+        true
+    }
+
+    fn cmp_sel_cost(
+        &self,
+        op: llrm_mir::tti::CmpSel,
+        ty: llrm_mir::tti::Ty,
+        kind: llrm_mir::tti::CostKind,
+    ) -> llrm_mir::tti::Cost {
+        llrm_mir::tti::Basic.cmp_sel_cost(op, ty, kind)
+    }
+
+    fn memory_op_cost(
+        &self,
+        op: llrm_mir::tti::MemoryOp,
+        ty: llrm_mir::tti::Ty,
+        kind: llrm_mir::tti::CostKind,
+        stored_constant: bool,
+    ) -> llrm_mir::tti::Cost {
+        llrm_mir::tti::Basic.memory_op_cost(op, ty, kind, stored_constant)
+    }
+
+    fn cf_instr_cost(
+        &self,
+        phi: bool,
+        kind: llrm_mir::tti::CostKind,
+    ) -> llrm_mir::tti::Cost {
+        llrm_mir::tti::Basic.cf_instr_cost(phi, kind)
+    }
+
+    fn int_imm_cost(
+        &self,
+        imm: i128,
+        bits: u32,
+    ) -> llrm_mir::tti::Cost {
+        llrm_mir::tti::Basic.int_imm_cost(imm, bits)
+    }
+
+    fn int_imm_cost_inst(
+        &self,
+        op: llrm_mir::tti::ImmUser,
+        index: u32,
+        imm: i128,
+        bits: u32,
+    ) -> llrm_mir::tti::Cost {
+        llrm_mir::tti::Basic.int_imm_cost_inst(op, index, imm, bits)
+    }
+
+    fn is_truncate_free(
+        &self,
+        from: llrm_mir::tti::Ty,
+        to: llrm_mir::tti::Ty,
+    ) -> bool {
+        llrm_mir::tti::Basic.is_truncate_free(from, to)
+    }
+
+    fn is_legal_addressing_mode(
+        &self,
+        base_gv: bool,
+        base_offset: i64,
+        has_base_reg: bool,
+        scale: i64,
+    ) -> bool {
+        llrm_mir::tti::Basic.is_legal_addressing_mode(base_gv, base_offset, has_base_reg, scale)
+    }
+
+    fn cast_cost(
+        &self,
+        op: llrm_mir::tti::CastKind,
+        dst: llrm_mir::tti::Ty,
+        src: llrm_mir::tti::Ty,
+        kind: llrm_mir::tti::CostKind,
+    ) -> llrm_mir::tti::Cost {
+        llrm_mir::tti::Basic.cast_cost(op, dst, src, kind)
+    }
+
+    fn arithmetic_cost(
+        &self,
+        op: llrm_mir::tti::ArithOp,
+        ty: llrm_mir::tti::Ty,
+        kind: llrm_mir::tti::CostKind,
+        first: llrm_mir::tti::OperandInfo,
+        second: llrm_mir::tti::OperandInfo,
+    ) -> llrm_mir::tti::Cost {
+        llrm_mir::tti::Basic.arithmetic_cost(op, ty, kind, first, second)
+    }
+}
+
+impl llrm_mir::target::Machine for RangeDeref {
+    fn tti(&self) -> Option<std::rc::Rc<dyn llrm_mir::tti::Tti>> {
+        Some(std::rc::Rc::new(RangeTti))
+    }
+
+    fn foreign_span(
+        &self,
+        selectors: (i64, i64),
+        offsets: (i64, i64),
+        width: i64,
+    ) -> Option<(i64, i64)> {
+        self.0.foreign_span(selectors, offsets, width)
+    }
+
+    fn spaces(&self) -> llrm_mir::spaces::Spaces {
+        self.0.spaces()
+    }
+
+    fn costs(&self) -> llrm_mir::target::OperationCosts {
+        self.0.costs()
+    }
+
+    fn registers(&self) -> i64 {
+        self.0.registers()
+    }
+
+    fn call_registers(&self) -> i64 {
+        self.0.call_registers()
+    }
+
+    fn address_forms(&self) -> Vec<llrm_mir::target::AddressForm> {
+        self.0.address_forms()
+    }
+}
+
+/// A signed divide of a vector in a loop panicked ("an integer division"):
+/// the speculation check read its type as an integer.
+#[test]
+fn test_a_vector_signed_divide_in_a_loop_does_not_panic() {
+    let text = "define void @f(ptr %p, <4 x i32> %v, i64 %n) {\n\
+entry:\n  br label %loop\n\
+loop:\n  %i = phi i64 [ 0, %entry ], [ %i.next, %loop ]\n\
+  %d = sdiv <4 x i32> %v, <i32 11, i32 11, i32 11, i32 11>\n\
+  store <4 x i32> %d, ptr %p, align 16\n\
+  %i.next = add i64 %i, 1\n  %e = icmp eq i64 %i.next, %n\n  br i1 %e, label %exit, label %loop\n\
+exit:\n  ret void\n}\n";
+    let _ = decided(text);
+}
+
+/// x_ld_matmul -O3 m32: twelve `A[i][k]` long doubles, invariant in the `j`
+/// loop, were all hoisted across it onto the eight-slot x87 stack: ten `fstp`
+/// and ten `fxch` an iteration, 96,600 clk against gcc's 84,571 (which reads
+/// them in the loop). A float load is hoisted only while the float file has
+/// room for it.
+#[test]
+fn test_float_loads_are_hoisted_only_while_the_float_file_has_room() {
+    let mut body = String::new();
+    let mut sum = String::from("0.0");
+    for k in 0..12 {
+        body += &format!(
+            "  %p{k} = getelementptr i8, ptr @a, i32 {off}\n  %a{k} = load x86_fp80, ptr %p{k}\n  %q{k} = getelementptr x86_fp80, ptr @b, i32 %i\n  %b{k} = load x86_fp80, ptr %q{k}\n  %m{k} = fmul x86_fp80 %a{k}, %b{k}\n  %t{k} = fadd x86_fp80 {sum}, %m{k}\n",
+            off = k * 12
+        );
+        sum = format!("%t{k}");
+    }
+    let text = format!(
+        "target datalayout = \"e-p:32:32-i64:32-f80:32-n8:16:32\"
+
+@a = global [12 x x86_fp80] zeroinitializer
+@b = global [12 x x86_fp80] zeroinitializer
+
+define x86_fp80 @f(i32 %n) {{
+b0:
+  br label %b1
+
+b1:
+  %i = phi i32 [ 0, %b0 ], [ %i1, %b1 ]
+  %s = phi x86_fp80 [ 0.0, %b0 ], [ %e, %b1 ]
+{body}  %e = fadd x86_fp80 %s, {sum}
+  %i1 = add i32 %i, 1
+  %c = icmp slt i32 %i1, %n
+  br i1 %c, label %b1, label %b2
+
+b2:
+  ret x86_fp80 %e
+}}
+"
+    );
+    let hoisted = |float_limit| {
+        named_on(&text, crate::testing::FloatFile { inner: llrm_mir::target::Neutral, float_limit }, |all| {
+            all.hoisted.clone()
+        })
+        .iter()
+        .filter(|name| name.starts_with('a'))
+        .count()
+    };
+    assert_eq!(hoisted(None), 12, "premise: with no float limit every invariant load goes");
+    let held = hoisted(Some(5));
+    assert!(held < 5, "{held} of 12 loads hoisted with five float values allowed across the loop");
 }

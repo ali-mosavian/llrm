@@ -7,6 +7,7 @@
 //! d1106deb71cc81016406a1917d0508d2df296266; the function-by-function check
 //! is `docs/architecture/jumps-placement-check.md`.
 
+mod ext_tsp;
 mod postdom;
 mod taildup;
 
@@ -80,6 +81,8 @@ struct Placer {
     active: u32,
     serial: u32,
     optimize_size: bool,
+    /// DEVIATE LOOP-TOP-JMP: fall-throughs weighed in clocks; `None`: the pin's count.
+    top: Option<TopClocks>,
     entry: usize,
     /// The loop's blocks in layout order (`BlockFilterSet`), and where
     /// `getFirstUnplacedBlock` stands in them and in the function.
@@ -94,10 +97,19 @@ struct Placer {
     dead: Vec<bool>,
     /// The tail-duplication threshold in instructions (`TailDupSize`).
     dup_size: usize,
+    /// DEVIATE TAILDUP-HOT: blocks above `dup_size` copied where it pays.
+    hot: Option<HotTailDup>,
+    /// The blocks that jump back to a loop header. The pin's bound copies them
+    /// like any other; a copy past it prices the taken branch back that the
+    /// copy ends in (`HotTailDup::back_edge_clocks`).
+    latch: Vec<bool>,
     postdom: postdom::PostDom,
     /// Edges rerouted by copies, for the odds: (from, its successors before,
     /// the tail, the tail's successors with their chances).
     rerouted: Vec<(i64, Vec<i64>, i64, Vec<(i64, f64)>)>,
+    /// Instructions of frame teardown a return block will carry: the pin
+    /// places after the epilogue is in (DEVIATE: counted, not emitted yet).
+    epilogue: usize,
 }
 
 fn succ_seen(
@@ -106,6 +118,57 @@ fn succ_seen(
     to: i64,
 ) -> bool {
     index.get(&to).is_some_and(|to| seen.contains(to))
+}
+
+/// DEVIATE TAILDUP-HOT (owner x86-m32, exit 2026-12-05): a block of up to
+/// `size` instructions above the pin's bound (`TailDupSize`, 2 at -O2, 4 at
+/// -O3) is copied into the predecessors that jump to it when the jumps the
+/// copies save, at those predecessors' own run counts, are worth more than the
+/// copies' bytes at the speed rate. A loop latch is priced like any block,
+/// less the taken branch back its copy ends in (x_cordic -O2, x_collatz -O2).
+#[derive(Clone, Copy, Debug)]
+pub struct HotTailDup {
+    pub size: usize,
+    /// Clocks of the unconditional jump the copy removes.
+    pub jump_clocks: f64,
+    /// Clocks a taken branch costs over a not-taken one: the copy of a loop
+    /// latch branches back to the header, which its original fell into.
+    pub back_edge_clocks: f64,
+    /// Clocks a byte of code is worth at speed.
+    pub clocks_per_byte: f64,
+}
+
+/// DEVIATE LOOP-TOP-JMP: what `findBestLoopTop` weighs a fall-through by
+/// (the pin counts each as one): the clocks of a `jmp`, which a fall-through
+/// lost costs, and of a taken conditional branch over one not taken, which a
+/// fall-through gained saves.
+#[derive(Clone, Copy, Debug)]
+pub struct TopClocks {
+    pub jump_clocks: f64,
+    pub saved_clocks: f64,
+}
+
+/// Bytes of an x86 instruction on average, to price a copy by its length in
+/// instructions.
+const AVERAGE_INSN_BYTES: f64 = 3.0;
+
+impl HotTailDup {
+    /// Whether a block of `count` instructions is worth copying into the
+    /// `copies` predecessors that reach it by a jump, which run `jumped` times
+    /// per call in all: each copy saves its jump, and costs the block's bytes
+    /// (the original goes when every predecessor takes a copy, `all`).
+    pub(super) fn pays(
+        &self,
+        count: usize,
+        jumped: f64,
+        copies: usize,
+        all: bool,
+        latch: bool,
+    ) -> bool {
+        let added = (copies as i64 - i64::from(all)).max(0) as f64 * count as f64 * AVERAGE_INSN_BYTES;
+        let saved = self.jump_clocks - if latch { self.back_edge_clocks } else { 0.0 };
+        count <= self.size && copies > 0 && saved > 0.0 && jumped * saved >= added * self.clocks_per_byte
+    }
 }
 
 /// The blocks of `blocks` in the order `MachineBlockPlacement` lays them out,
@@ -119,10 +182,31 @@ pub(super) fn order(
     natural: &[Loop],
     size: bool,
     aggressive: bool,
+    tail_dup: Option<usize>,
+    hot: Option<HotTailDup>,
+    top: Option<TopClocks>,
+    epilogue: usize,
+    ext_tsp: bool,
 ) -> (Vec<Block>, BlockOdds) {
     let index: IndexMap<i64, usize> = blocks.iter().enumerate().map(|(place, block)| (block.at, place)).collect();
     let entry = index.get(&entry).copied().unwrap_or(0);
-    let mut placer = Placer::new(blocks, odds, busy, &index, size, aggressive, entry);
+    // `-apply-ext-tsp-for-size` skips `buildCFGChains` altogether.
+    if ext_tsp && size {
+        if let Some(order) = ext_tsp::apply_for_size(blocks, &index, entry) {
+            return (order.into_iter().map(|one| blocks[one].clone()).collect(), odds.clone());
+        }
+    }
+    let mut placer = Placer::new(blocks, odds, busy, &index, size, aggressive, tail_dup, hot, entry);
+    placer.top = top;
+    placer.epilogue = epilogue;
+    for found in natural {
+        let Some(&header) = index.get(&found.header) else { continue };
+        for at in found.body.to_set().iter() {
+            if let Some(&member) = index.get(at).filter(|&&member| placer.succ[member].contains(&header)) {
+                placer.latch[member] = true;
+            }
+        }
+    }
     let order = placer.build(natural, &index);
     let mut out = odds.clone();
     for (from, succ, tail, into) in &placer.rerouted {
@@ -141,6 +225,8 @@ impl Placer {
         index: &IndexMap<i64, usize>,
         size: bool,
         aggressive: bool,
+        tail_dup: Option<usize>,
+        hot: Option<HotTailDup>,
         entry: usize,
     ) -> Self {
         let n = blocks.len();
@@ -162,6 +248,13 @@ impl Placer {
                 pred[to].push(from);
             }
         }
+        // `predecessors()` lists a block's predecessors in the order isel made
+        // their edges: it visits the blocks in reverse post-order, so a
+        // branch's last successor first. Ties between trellis edges follow it.
+        let rank = reverse_post_order(&succ, entry);
+        for list in &mut pred {
+            list.sort_by_key(|from| rank[*from]);
+        }
         let postdom = postdom::PostDom::of(&succ, &pred);
         Self {
             postdom,
@@ -178,6 +271,7 @@ impl Placer {
             active: 0,
             serial: 0,
             optimize_size: size,
+            top: None,
             entry,
             members: Vec::new(),
             next_member: 0,
@@ -185,14 +279,18 @@ impl Placer {
             exit: None,
             blocks: blocks.to_vec(),
             dead: vec![false; n],
-            dup_size: if size {
+            // DEVIATE (timings.times): a target may state a smaller bound.
+            dup_size: tail_dup.unwrap_or(usize::MAX).min(if size {
                 1
             } else if aggressive {
                 TAIL_DUPLICATION_AGGRESSIVE
             } else {
                 TAIL_DUPLICATION
-            },
+            }),
+            hot: hot.filter(|_| !size),
+            latch: vec![false; n],
             rerouted: Vec::new(),
+            epilogue: 0,
         }
     }
 
@@ -425,7 +523,15 @@ impl Placer {
                 continue;
             }
             let theirs = self.freq[from] * self.prob(from, to);
-            if theirs * HOT >= candidate * (1.0 - HOT) {
+            // DEVIATE LOOP-TOP-JMP: a loop's exit falls into what follows it
+            // unless another block's edge to it is hotter; the pin's ratio
+            // gave a guard's edge block (12 in 32) the latch above it.
+            let ends_loop = self.succ[block].iter().any(|&one| one == block || one == self.head(chain));
+            let better = match self.top {
+                Some(_) if ends_loop => theirs > candidate,
+                _ => theirs * HOT >= candidate * (1.0 - HOT),
+            };
+            if better {
                 return true;
             }
         }
@@ -790,7 +896,16 @@ impl Placer {
                 from_pred = 0.0;
             }
         }
-        let (gains, lost) = (back_edge + other, to_top + to_exit + from_pred);
+        let (gains, lost) = match self.top {
+            Some(clocks) => {
+                // A block placement copies into the one jump to it: the jump
+                // goes with the copy, so the fall-through lost is no clocks.
+                let copied = best.is_some_and(|best| self.succ[best].len() == 1) && self.should_tail_duplicate(new);
+                let from_pred = if copied { 0.0 } else { from_pred };
+                ((back_edge + other) * clocks.saved_clocks, (to_top + to_exit + from_pred) * clocks.jump_clocks)
+            }
+            None => (back_edge + other, to_top + to_exit + from_pred),
+        };
         if gains > lost { gains - lost } else { 0.0 }
     }
 
@@ -962,4 +1077,34 @@ impl Placer {
         }
         self.chains[chain].blocks.rotate_left(at + 1);
     }
+}
+
+/// Each block's place in the reverse post-order of a walk from `entry` that
+/// takes successors in order; blocks it does not reach come last.
+fn reverse_post_order(
+    succ: &[Vec<usize>],
+    entry: usize,
+) -> Vec<usize> {
+    let n = succ.len();
+    let mut done = vec![false; n];
+    let mut post = Vec::with_capacity(n);
+    let mut stack = vec![(entry, 0usize)];
+    done[entry] = true;
+    while let Some(&mut (block, ref mut next)) = stack.last_mut() {
+        if let Some(&to) = succ[block].get(*next) {
+            *next += 1;
+            if !done[to] {
+                done[to] = true;
+                stack.push((to, 0));
+            }
+        } else {
+            post.push(block);
+            stack.pop();
+        }
+    }
+    let mut rank = vec![n; n];
+    for (place, block) in post.iter().rev().enumerate() {
+        rank[*block] = place;
+    }
+    rank
 }

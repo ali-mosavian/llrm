@@ -97,7 +97,11 @@ pub fn machine(
     target: &dyn llrm_target::Target,
     os: &crate::Os,
 ) -> llrm_codegen::abi::machine::Machine {
-    llrm_codegen::abi::machine::Machine { far_bss: os.far_bss, ..target.machine() }
+    let mut machine = llrm_codegen::abi::machine::Machine { far_bss: os.far_bss, ..target.machine() };
+    if let Some(segments) = machine.segments.as_mut() {
+        segments.stack_shares_data = os.stack_shares_data;
+    }
+    machine
 }
 
 /// `module` as an object file of `format`, its code laid out as `layout` says.
@@ -106,7 +110,8 @@ pub fn object(
     source: &Path,
     layout: objbuild::CodeLayout,
     format: llrm_target::object::Format,
+    objects: &dyn llrm_debug::DebugObjectTarget,
 ) -> Result<Vec<u8>, String> {
     let name = source.file_name().map(|one| one.to_string_lossy().into_owned()).unwrap_or_default();
-    objbuild::written_in(module, &name, layout, format).map_err(|error| error.to_string())
+    objbuild::written_in(module, &name, layout, format, objects).map_err(|error| error.to_string())
 }

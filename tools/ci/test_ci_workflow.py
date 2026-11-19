@@ -51,7 +51,7 @@ def test_the_verdict_line_of_a_pull_request_is_the_candidate_pass_and_no_cheap_f
 
 
 def test_only_a_pull_request_into_main_starts_the_gate():
-    """A parity pull request into feat/parity merges on a build and a smoke set (tools/parity_smoke.py); its CI runs were cancelled by hand."""
+    """A parity pull request into release/next merges on a build and a smoke set (tools/parity_smoke.py); its CI runs were cancelled by hand."""
     assert "branches: [main]" in CI.split("pull_request:")[1].split("push:")[0]
 
 

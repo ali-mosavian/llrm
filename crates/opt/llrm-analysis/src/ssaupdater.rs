@@ -81,7 +81,7 @@ struct BbInfo {
 /// `SSAUpdaterImpl`.
 struct Impl<'a> {
     updater: &'a mut SsaUpdater,
-    context: &'a mut Context,
+    context: &'a Context,
     function: &'a mut Function,
     infos: Vec<BbInfo>,
     /// The predecessors of every info, end to end: one buffer for the walk,
@@ -120,7 +120,7 @@ impl SsaUpdater {
     /// `GetValueAtEndOfBlock`.
     pub fn get_value_at_end_of_block(
         &mut self,
-        context: &mut Context,
+        context: &Context,
         function: &mut Function,
         block: BlockId,
     ) -> Operand {
@@ -141,7 +141,7 @@ impl SsaUpdater {
     /// `GetValueInMiddleOfBlock`.
     pub fn get_value_in_middle_of_block(
         &mut self,
-        context: &mut Context,
+        context: &Context,
         layout: &DataLayout,
         function: &mut Function,
         block: BlockId,
@@ -237,7 +237,7 @@ impl SsaUpdater {
     /// `RewriteUse`.
     pub fn rewrite_use(
         &mut self,
-        context: &mut Context,
+        context: &Context,
         layout: &DataLayout,
         function: &mut Function,
         one: Use,

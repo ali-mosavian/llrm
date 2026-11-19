@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""The post-landing loop: per new head of feat/parity, run the checks once, find what failed that the previous head did not, and name the PR that did it.
+"""The post-landing loop: per new head of release/next, run the checks once, find what failed that the previous head did not, and name the PR that did it.
 
-    tools/postland.py once [SHA]      check SHA (default origin/feat/parity) against the last checked head; report to $POSTLAND/<sha>.md
+    tools/postland.py once [SHA]      check SHA (default origin/release/next) against the last checked head; report to $POSTLAND/<sha>.md
     tools/postland.py loop            `once` for each new head, polling
 
 A failure is NEW when it is neither in the previous head's failure set nor on the XFAIL list. A new failure is bisected over the first-parent commits
@@ -23,6 +23,8 @@ import llrmbin  # noqa: E402
 import pairruns  # noqa: E402
 import parity_smoke  # noqa: E402
 import xfail  # noqa: E402
+
+BRANCH = os.environ.get("LAND_BRANCH", "release/next")  # the integration branch (tools/landing/branch.sh)
 
 ROOT = Path(__file__).resolve().parent.parent
 HOME = Path(os.environ.get("POSTLAND", Path.home() / "scratch" / "postland"))
@@ -154,7 +156,7 @@ def group_summary(output: str) -> str:
 
 
 def unit_summary(output: str) -> str:
-    """`llrm-c 142/6, llrm-mir 900/1 ...` (tests run / failing) per crate, from each binary's `test result:` line."""
+    """`llrm-cc 142/6, llrm-mir 900/1 ...` (tests run / failing) per crate, from each binary's `test result:` line."""
     parts = []
     for block in output.split("     Running ")[1:]:
         binary = re.search(r"/(\w+)-[0-9a-f]+\)", block.splitlines()[0])
@@ -201,7 +203,7 @@ def unit_result(output: str, code: int) -> set[str]:
 
 def unit_failures(at: Path, name: str | None = None) -> tuple[set[str], str]:
     """`unit <crate>::<test>` for each failing lib test of the workspace (or of one test), in one cargo through buildslot: a crate alone lacks the features the
-    root package turns on (llrm-c's `toolchain`: 19 tests failed with "built without the toolchain feature" on a run per crate), a workspace run has them."""
+    root package turns on (llrm-cc's `toolchain`: 19 tests failed with "built without the toolchain feature" on a run per crate), a workspace run has them."""
     env = {**os.environ, "CARGO_TARGET_DIR": str(HOME / "target-test"), "CARGO_INCREMENTAL": "0"}
     env.pop("RUSTFLAGS", None)
     command = [*LOW, "buildslot", "cargo", "test", "--release", "--workspace", "--lib", "--no-fail-fast", *([name] if name else [])]
@@ -362,7 +364,7 @@ class Inconclusive(Exception):
 def once(sha: str | None = None) -> str:
     """Check one head against the last checked one; write and return its report path."""
     git("fetch", "-q", "origin")
-    sha = git("rev-parse", sha or "origin/feat/parity")
+    sha = git("rev-parse", sha or f"origin/{BRANCH}")
     state = load_state()
     previous = state["last"]
     HOME.mkdir(parents=True, exist_ok=True)
@@ -396,7 +398,7 @@ def main() -> int:
     if len(sys.argv) > 1 and sys.argv[1] == "loop":
         while True:
             git("fetch", "-q", "origin")
-            if git("rev-parse", "origin/feat/parity") != load_state()["last"]:
+            if git("rev-parse", f"origin/{BRANCH}") != load_state()["last"]:
                 print(once(), flush=True)
             time.sleep(300)
     print(once(sys.argv[2] if len(sys.argv) > 2 else None))

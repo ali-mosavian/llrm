@@ -46,7 +46,7 @@ fn _RESULTS(op: model::Op) -> Option<Option<usize>> {
         | model::Op::LifetimeStart
         | model::Op::LifetimeEnd => Some(Some(0)),
         model::Op::Call | model::Op::Asm => Some(None),
-        model::Op::Divmod => Some(Some(2)),
+        model::Op::Divmod | model::Op::TruncateChecked => Some(Some(2)),
         model::Op::Udivmod => Some(Some(2)),
         _ => None,
     }
@@ -201,14 +201,18 @@ fn _facts(module: &model::Module) -> Result<(), InvalidHIR> {
         }
         let function = |id: i64| index.function(id);
         let found = match subject {
-            Subject::Callable(id) => callables.contains(&id),
+            // A routine called, or one the module defines (its entry, which no
+            // statement calls).
+            Subject::Callable(id) => callables.contains(&id) || function(id).is_some(),
             Subject::Param { function: id, index } => {
                 function(id).is_some_and(|one| (0..one.parameters.len() as i64).contains(&index))
             }
             Subject::Instruction { function: id, id: at } => index.instruction(id, at).is_some_and(|i| match fact {
                 // Of what it yields, and of what it accesses.
                 llrm_mir::facts::Fact::Range(_) => !i.results.is_empty(),
-                llrm_mir::facts::Fact::Align(_) => matches!(i.op, model::Op::Load | model::Op::Store),
+                llrm_mir::facts::Fact::Align(_) | llrm_mir::facts::Fact::Access(_) => {
+                    matches!(i.op, model::Op::Load | model::Op::Store)
+                }
                 _ => true,
             }),
             Subject::Operand { function: id, instruction, operand } => {
@@ -705,6 +709,15 @@ fn _function(
                     || types[&result_types[0]].kind != model::TypeKind::Integer)
             {
                 invalid!("{prefix}: truncate does not take a float to an integer");
+            }
+            if instruction.op == model::Op::TruncateChecked
+                && (operand_types.len() != 1
+                    || result_types.len() != 2
+                    || types[&operand_types[0]].kind != model::TypeKind::Float
+                    || types[&result_types[0]].kind != model::TypeKind::Integer
+                    || types[&result_types[1]].kind != model::TypeKind::Boolean)
+            {
+                invalid!("{prefix}: truncate_checked does not take a float to an integer and a boolean");
             }
             if _INTEGER.contains(&instruction.op) {
                 let involved: Vec<i64> = instruction

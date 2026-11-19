@@ -22,12 +22,9 @@
 //!           + evict  a round  (S2)                 recoloring
 //! ```
 //!
-//! DEVIATE (until S2, named, no number): `trySplitAroundHintReg` is not
-//! translated (LLVM skips it at `-Os`), so a
-//! range that cannot get a register goes from `RS_Split` straight to spill;
-//! this target's register costs are all zero (`RegCosts`), so the cost-per-use
-//! path of `tryAssign` is dropped. Callee-saved register cost is the shrink
-//! wrapping pass's.
+//! DEVIATE (until S2, named, no number): this target's register costs are all
+//! zero (`RegCosts`), so the cost-per-use path of `tryAssign` is dropped.
+//! Callee-saved register cost is the shrink wrapping pass's.
 //!
 //! DEVIATE D-G1: at -Os m16 the greedy allocator is not at the shipped
 //! allocator's size (QCport, 65 modules, 2026-10-19: 78518 against 77618
@@ -72,6 +69,11 @@ use crate::liveness::liveintervals::LiveIntervals;
 use crate::liveness::liverange::LiveInterval;
 use crate::liveness::slotindex::SlotIndex;
 use crate::support::hash::{HashMap, HashSet};
+
+thread_local! {
+    /// `MF->getFunction().hasOptSize()` for the body being allocated.
+    pub static OPT_SIZE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
 
 /// `-lcr-max-depth` (RegAllocGreedy.cpp#L95).
 pub const LAST_CHANCE_RECOLORING_MAX_DEPTH: u32 = 5;
@@ -255,12 +257,17 @@ impl AllocationOrder {
         vrm: &VirtRegMap,
         order: Vec<RegId>,
         hints: &BTreeMap<u32, Vec<Hint>>,
+        target_hints: &[RegId],
+        root: &dyn Fn(RegId) -> RegId,
     ) -> Self {
         let mut found: Vec<RegId> = Vec::new();
-        for hint in hints.get(&virt).into_iter().flatten() {
+        let copy_hints = hints.get(&virt).into_iter().flatten().copied();
+        // the target's hints come after the copies' (`getRegAllocationHints`
+        // of Thumb2 appends to the default ones)
+        for hint in copy_hints.chain(target_hints.iter().map(|r| Hint::Phys(*r))) {
             let phys = match hint {
-                Hint::Virt(v) => vrm.get_phys(*v),
-                Hint::Phys(r) => Some(*r),
+                Hint::Virt(v) => vrm.get_phys(v),
+                Hint::Phys(r) => Some(r),
             };
             // Don't add the same reg twice; check Phys is in the allocation
             // order.
@@ -271,8 +278,8 @@ impl AllocationOrder {
                 if order.contains(&phys) {
                     phys
                 } else {
-                    let root = crate::model::ir::root(phys);
-                    order.iter().copied().find(|one| crate::model::ir::root(*one) == root).unwrap_or(phys)
+                    let family = root(phys);
+                    order.iter().copied().find(|one| root(*one) == family).unwrap_or(phys)
                 }
             });
             if let Some(phys) = phys {
@@ -320,6 +327,47 @@ pub trait GreedyEnv: SpillWeightEnv {
         &self,
         virt: u32,
     ) -> Vec<RegId>;
+    /// `RegClassInfo.isProperSubClass(MRI->getRegClass(VirtReg))`: a larger
+    /// class exists, so isolating one instruction can move its piece to it.
+    fn is_proper_subclass(
+        &self,
+        _virt: u32,
+    ) -> bool {
+        false
+    }
+    /// Whether `insn` narrows `virt` below the larger class its own has
+    /// (`getNumAllocatableRegsForConstraints` against the super class's
+    /// count): an instruction that does not has nothing to gain from a piece
+    /// of its own.
+    fn constrains(
+        &self,
+        _insn: &crate::model::lir::Insn,
+        _virt: u32,
+    ) -> bool {
+        true
+    }
+    /// DEVIATE SPILL-FOLD: `Tuning::spill_fold`; none for the pin.
+    fn spill_fold_prices(&self) -> Option<llrm_mir::target::SpillFoldClocks> {
+        None
+    }
+    /// DEVIATE SPILL-FOLD: the clocks of one split copy of `virt` as `insn`
+    /// names it; none for the pin.
+    fn spill_fold_copy_clocks(
+        &self,
+        _insn: &crate::model::lir::Insn,
+        _virt: u32,
+    ) -> Option<i64> {
+        None
+    }
+    /// DEVIATE SPILL-FOLD: whether `insn` takes a stack cell in place of
+    /// `virt` (`foldMemoryOperand`).
+    fn folds_to_cell(
+        &self,
+        _insn: &crate::model::lir::Insn,
+        _virt: u32,
+    ) -> bool {
+        false
+    }
     /// `RegClassInfo.getNumAllocatableRegs(RC)`.
     fn num_allocatable_regs(
         &self,
@@ -349,6 +397,25 @@ pub trait GreedyEnv: SpillWeightEnv {
     ) -> Option<RegId> {
         None
     }
+    /// `getRegAllocationHints`' target part: the registers `insn` is cheaper
+    /// with, as (value, register).
+    fn preferred_registers(
+        &self,
+        _insn: &crate::model::lir::Insn,
+    ) -> Vec<(u32, RegId)> {
+        Vec::new()
+    }
+    /// `TII.getInstrCost(COPY, {to, from})` (llvm-mos `MOSInstrCost`): what
+    /// the copy of `from` into `to` costs, in one unit for every pair; all 0
+    /// is the pin's order (no copy scores a register).
+    fn copy_register_cost(
+        &self,
+        _to: RegId,
+        _from: RegId,
+        _size: bool,
+    ) -> u32 {
+        0
+    }
     /// `RegCosts[phys]` (`TargetRegisterInfo::getRegisterCosts`, the
     /// registers' `CostPerUse`): X86 sets none (D133902 dropped R8-R15's).
     fn reg_cost(
@@ -357,10 +424,56 @@ pub trait GreedyEnv: SpillWeightEnv {
     ) -> u8 {
         0
     }
+    /// DEVIATE C5: the bytes `insn` takes with `virt` in `phys` against the
+    /// cheapest register (a REX prefix, a longer form), where the target says;
+    /// 0 for all registers is the pin's order.
+    fn encoding_bytes(
+        &self,
+        _insn: &crate::model::lir::Insn,
+        _virt: u32,
+        _phys: RegId,
+    ) -> i64 {
+        0
+    }
+    /// DEVIATE C5: see `TargetInstrInfo::encoding_class`.
+    fn encoding_class(
+        &self,
+        _phys: RegId,
+    ) -> Option<u8> {
+        None
+    }
     /// `TRI->getCSRFirstUseCost(MF)`: what the first use of a callee-saved
     /// register costs in entry-block executions (X86: `push` and `pop`).
     fn csr_first_use_cost(&self) -> u32 {
         0
+    }
+    /// `TRI->getCSRCostScale(MF)`: the percentage of the first-use cost
+    /// charged.
+    fn csr_cost_scale(&self) -> u32 {
+        DEFAULT_CSR_COST_SCALE
+    }
+    /// DEVIATE CSR3: whether a range that would take a callee-saved register
+    /// for the first time is spilled instead when its spill costs less than
+    /// that use, at any stage before `RS_Spill` (LLVM takes the register
+    /// once no pre-split pays). Off for every target but one whose save and
+    /// restore cost more than a spill. Exit: none, a target knob.
+    fn csr_spill_first(&self) -> bool {
+        false
+    }
+    /// DEVIATE CSR5: where code is sized in bytes, whether spilling `virt`
+    /// (`reads` instructions read it, `writes` write it; `def_reads_registers`:
+    /// a definition of it reads a register) is shorter than the
+    /// first use of the callee-saved `phys`, counted in static bytes, not
+    /// frequency. None: the pin's rule. Exit: none, a target knob.
+    fn csr_spill_costs_less(
+        &self,
+        _virt: u32,
+        _phys: RegId,
+        _reads: u32,
+        _writes: u32,
+        _def_reads_registers: bool,
+    ) -> Option<bool> {
+        None
     }
 }
 
@@ -370,7 +483,7 @@ const NO_COST_LIMIT: u8 = u8::MAX;
 
 /// `-regalloc-csr-cost-scale` / `TRI->getCSRCostScale(MF)`: the percentage of
 /// the first-use cost the allocator charges (X86 takes the default).
-const CSR_COST_SCALE: u32 = 30;
+const DEFAULT_CSR_COST_SCALE: u32 = 30;
 
 /// `DefaultEvictionAdvisor::isUnusedCalleeSavedReg`
 /// (RegAllocEvictionAdvisor.cpp): `phys` is a callee-saved register no
@@ -387,14 +500,11 @@ pub(crate) fn is_unused_callee_saved_reg(
 /// pop (`first_use` entry executions) scaled by `CSR_COST_SCALE` percent.
 fn csr_cost_of(
     first_use: u32,
+    scale: u32,
     entry: u64,
 ) -> BlockFrequency {
     let cost = BlockFrequency(u64::from(first_use) * entry);
-    if CSR_COST_SCALE < 100 {
-        cost * BranchProbability::new(CSR_COST_SCALE, 100)
-    } else {
-        cost / BranchProbability::new(100, CSR_COST_SCALE)
-    }
+    if scale < 100 { cost * BranchProbability::new(scale, 100) } else { cost / BranchProbability::new(100, scale) }
 }
 
 /// What `RAGreedy` gives a spiller to work with (`LiveRangeEdit`'s world).
@@ -486,6 +596,19 @@ fn decision_line(
     format!("dec v{reg} stage={stage:?} size={size} w={weight:.4} -> {verdict}")
 }
 
+/// One line of `LLRM_GREEDY_DECISIONS` for `tryEvict`: why `virt` may or may
+/// not take `phys` by evicting what holds it (`verdict`: the interfering
+/// interval and the rule that denied or allowed it). Two builds' lines diff to
+/// the first eviction that changed; without them a spill the pin avoids by
+/// evicting a lighter interval cannot be told from a split.
+fn eviction_line(
+    virt: u32,
+    phys: &str,
+    verdict: &str,
+) -> String {
+    format!("  evict? v{virt} {phys}: {verdict}")
+}
+
 type RecolorStack = Vec<(Rc<LiveInterval>, RegId)>;
 
 /// `RAGreedy` (RegAllocGreedy.h#L55) over `RegAllocBase`.
@@ -508,7 +631,7 @@ pub struct RAGreedy<'a> {
     pub stats: Stats,
     /// What `trySplit` works with; none until the caller gives it the
     /// function's blocks (then a range that does not fit is spilled).
-    pub split: Option<SplitSupport>,
+    pub split: Option<SplitSupport<'a>>,
     /// `CSRCost`: what the first use of a callee-saved register costs,
     /// relative to the entry block's frequency (`initializeCSRCost`).
     csr_cost: BlockFrequency,
@@ -713,11 +836,18 @@ impl<'a> RAGreedy<'a> {
             let decision = self.select_or_split(&virt_reg, &mut split_vregs);
             if llrm_support::env_flag!("LLRM_GREEDY_DECISIONS") {
                 let verdict = match &decision {
-                    Select::Reg(phys) => format!("assign {phys:?}"),
+                    Select::Reg(phys) => format!("assign {}", self.matrix.tri().name(*phys)),
                     Select::Fail => "FAIL".to_owned(),
                     Select::None => format!("split/spill into {split_vregs:?}"),
                 };
-                eprintln!("  hint {:?} prio {:#x}", self.simple_hint(virt_reg.reg()), self.get_priority(&virt_reg));
+                eprintln!(
+                    "  hint {:?} prio {:#x}",
+                    self.simple_hint(virt_reg.reg()).map(|hint| match hint {
+                        Hint::Phys(phys) => self.matrix.tri().name(phys),
+                        Hint::Virt(virt) => format!("v{virt}"),
+                    }),
+                    self.get_priority(&virt_reg)
+                );
                 eprintln!(
                     "{}",
                     decision_line(
@@ -768,7 +898,11 @@ impl<'a> RAGreedy<'a> {
                 let split = self.lis.interval_rc(reg);
                 assert!(!self.matrix.vrm.has_phys(reg), "Register already assigned");
                 if self.lis.reg_nodbg_empty(reg) {
-                    assert!(split.empty(), "Non-empty but used interval");
+                    // LLVM asserts `split.empty()` here, with assertions on
+                    // only; a release build removes the
+                    // interval. A region split can leave the
+                    // complement a phi-only range around a loop, with nothing
+                    // to hold.
                     self.lis.remove_interval(reg);
                     continue;
                 }
@@ -894,7 +1028,91 @@ impl<'a> RAGreedy<'a> {
         &self,
         virt: u32,
     ) -> AllocationOrder {
-        AllocationOrder::create(virt, &self.matrix.vrm, self.env.allocation_order(self.class_reg(virt)), &self.hints)
+        AllocationOrder::create(
+            virt,
+            &self.matrix.vrm,
+            self.env.allocation_order(self.class_reg(virt)),
+            &self.hints,
+            &self.target_hints(virt),
+            &|reg| self.matrix.root(reg),
+        )
+    }
+
+    /// The target's hints for `virt`: the register each instruction naming it
+    /// is cheaper with, the one the busiest uses want first.
+    fn target_hints(
+        &self,
+        virt: u32,
+    ) -> Vec<RegId> {
+        let mut wanted: Vec<(RegId, f32)> = Vec::new();
+        for operand in self.lis.operands(virt) {
+            let at = self.lis.indexes.get_instruction_index(operand.instr);
+            let freq = self.env.block_freq_relative_to_entry(self.lis.indexes.get_mbb_from_index(&at));
+            for (value, reg) in self.env.preferred_registers(self.lis.instr(operand.instr)) {
+                if value != virt {
+                    continue;
+                }
+                match wanted.iter_mut().find(|(one, _)| *one == reg) {
+                    Some((_, weight)) => *weight += freq,
+                    None => wanted.push((reg, freq)),
+                }
+            }
+        }
+        self.score_copy_hints(virt, &mut wanted);
+        wanted.sort_by(|a, b| b.1.total_cmp(&a.1));
+        wanted.into_iter().map(|(reg, _)| reg).collect()
+    }
+
+    /// `getRegAllocationHints`, the `COPY` case of llvm-mos
+    /// (MOSRegisterInfo.cpp#L753, Apache-2.0 WITH LLVM-exception): for each
+    /// copy that names `virt` and whose other side holds a register, every
+    /// register of the order that makes the copy cheaper than its worst one
+    /// scores the saving. DEVIATE: the saving is weighted by the copy's block
+    /// frequency, as the other target hints are (llvm-mos sums it plain).
+    fn score_copy_hints(
+        &self,
+        virt: u32,
+        wanted: &mut Vec<(RegId, f32)>,
+    ) {
+        let order = self.env.allocation_order(self.class_reg(virt));
+        // `MOSInstrCost::getModeFor(MF)`: the cost in bytes when the function
+        // is sized
+        let size = OPT_SIZE.with(std::cell::Cell::get);
+        let mut seen = Vec::new();
+        for operand in self.lis.operands(virt) {
+            if seen.contains(&operand.instr) {
+                continue;
+            }
+            seen.push(operand.instr);
+            let one = self.lis.instr(operand.instr);
+            let Some((into, out_of)) = one.copy_of() else { continue };
+            let (is_def, other) = if into == virt { (true, out_of) } else { (false, into) };
+            if other == virt || !self.matrix.vrm.has_phys(other) {
+                continue;
+            }
+            let other = self.matrix.vrm.get_phys(other).expect("assigned");
+            let cost = |reg: RegId| {
+                if is_def {
+                    self.env.copy_register_cost(reg, other, size)
+                } else {
+                    self.env.copy_register_cost(other, reg, size)
+                }
+            };
+            let worst = order.iter().map(|reg| cost(*reg)).max().unwrap_or(0);
+            let at = self.lis.indexes.get_instruction_index(operand.instr);
+            let freq = self.env.block_freq_relative_to_entry(self.lis.indexes.get_mbb_from_index(&at));
+            for reg in &order {
+                let price = cost(*reg);
+                if price >= worst {
+                    continue;
+                }
+                let gain = freq * (worst - price) as f32;
+                match wanted.iter_mut().find(|(one, _)| one == reg) {
+                    Some((_, weight)) => *weight += gain,
+                    None => wanted.push((*reg, gain)),
+                }
+            }
+        }
     }
 
     /// `tryAssign` (RegAllocGreedy.cpp#L532), without the cost-per-use path.
@@ -915,7 +1133,7 @@ impl<'a> RAGreedy<'a> {
                 break;
             }
         }
-        let phys = phys?;
+        let phys = self.cheapest_equal_register(virt, order, phys?);
         // PhysReg is available, but there may be a better choice.
         // If we missed a simple hint, try to cheaply evict interference from
         // the preferred register.
@@ -925,15 +1143,132 @@ impl<'a> RAGreedy<'a> {
                     self.evict_interference(virt, hint, new_vregs);
                     return Some(hint);
                 }
-                // DEVIATE (until S2): `trySplitAroundHintReg` is not
-                // translated. Record the missed hint, we may be able to
-                // recover at the end if the surrounding allocation changed.
+                // We can also split the virtual register in cold blocks.
+                if self.try_split_around_hint_reg(hint, virt, new_vregs) {
+                    return None;
+                }
+                // Record the missed hint, we may be able to recover at the end
+                // if the surrounding allocation changed.
                 self.record_broken_hint(virt.reg());
             }
         }
         // Most registers have 0 additional cost (RegCosts): nothing cheaper to
         // try.
-        Some(phys)
+        let cost = self.env.reg_cost(phys);
+        if cost == 0 {
+            return Some(phys);
+        }
+        // `phys` is available at a cost: evict interference from a cheaper
+        // alternative, if a lighter range holds one.
+        Some(self.try_evict(virt, order, new_vregs, cost, fixed).unwrap_or(phys))
+    }
+
+    /// DEVIATE C5 (owner greedy-subreg; exit 2026-12-05: replaced by a general
+    /// rule or kept with a new number). Without it the m32+m64 bench has 17
+    /// rows worse, +299 B (grep O2 +48, matmul +32, nbody_fixed +32); it costs
+    /// 30.9 M Ir on memory_expansion O2 (0.3%). Pin: `tryAssign` takes the
+    /// first free register of the allocation order
+    /// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/RegAllocGreedy.cpp#L532>),
+    /// whatever its encoding costs. Evidence: m64 O2 frames 243 B against
+    /// main's 241 (`xor r8d,r8d` for `xor edi,edi`), scroll 319/317, histo,
+    /// shellsort; on those the pin makes the same pick, so main was luckier
+    /// than the pin. Of the registers after `first`
+    /// that are free for `virt` and equal to it on what costs bytes (cost per
+    /// use, a push and pop still to pay), the one whose
+    /// instructions encode shortest; the first in the pin's order on a tie.
+    fn cheapest_equal_register(
+        &mut self,
+        virt: &Rc<LiveInterval>,
+        order: &AllocationOrder,
+        first: RegId,
+    ) -> RegId {
+        let lis = &self.lis;
+        let mut keys: Vec<_> = lis.operands(virt.reg()).iter().map(|operand| operand.instr).collect();
+        keys.dedup();
+        let bytes = |env: &dyn GreedyEnv, phys: RegId| -> i64 {
+            keys.iter().map(|key| env.encoding_bytes(lis.instr(*key), virt.reg(), phys)).sum()
+        };
+        // Equal on what the pin ranks that costs bytes: the cost per use, and
+        // a push and a pop that a callee-saved register not yet used brings.
+        let class =
+            |this: &Self, reg: RegId| (this.env.reg_cost(reg), is_unused_callee_saved_reg(this.env, &this.matrix, reg));
+        let (mut best, mut best_bytes, kind) = (first, bytes(self.env, first), class(self, first));
+        // Registers of one encoding class take the same bytes: price each once.
+        let mut priced = ClassPrices::default();
+        priced.seed(self.env.encoding_class(first), best_bytes);
+        let mut after = false;
+        for (reg, is_hint) in order.iter() {
+            if reg == first {
+                after = true;
+                continue;
+            }
+            if !after || is_hint || class(self, reg) != kind {
+                continue;
+            }
+            let one = priced.price(self.env.encoding_class(reg), || bytes(self.env, reg));
+            if one < best_bytes && self.matrix.check_interference(virt, reg) == InterferenceKind::Free {
+                (best, best_bytes) = (reg, one);
+            }
+        }
+        best
+    }
+
+    /// `trySplitAroundHintReg` (RegAllocGreedy.cpp#L1376): `virt` has a
+    /// physical `hint`; split it around the hint where the new copies fall in
+    /// cold blocks. The ranges are in `new_vregs`.
+    fn try_split_around_hint_reg(
+        &mut self,
+        hint: RegId,
+        virt: &Rc<LiveInterval>,
+        new_vregs: &mut Vec<u32>,
+    ) -> bool {
+        // Split the VirtReg may generate COPY instructions in multiple cold
+        // basic blocks, and increase code size. So we avoid it when the
+        // function is optimized for size.
+        if OPT_SIZE.with(std::cell::Cell::get) {
+            return false;
+        }
+        // Don't allow repeated splitting as a safe guard against looping.
+        if self.extra.get_stage(virt.reg()) >= LiveRangeStage::Split2 {
+            return false;
+        }
+        // The total frequency of broken COPY instructions to/from Hint, which
+        // after the split can be deleted.
+        let reg = virt.reg();
+        let mut blocks: Vec<u32> = Vec::new();
+        for operand in self.lis.operands(reg) {
+            let instr = self.lis.instr(operand.instr);
+            let Some((dest, source)) = self.env.copy_of(instr) else { continue };
+            let other = if operand.is_def { source } else { dest };
+            if other == reg {
+                continue;
+            }
+            // Check if VirtReg interferes with OtherReg after this COPY
+            // instruction.
+            let index = self.lis.indexes.get_instruction_index(operand.instr);
+            if !operand.is_def && virt.live_at(&index.get_reg_slot(false)) {
+                continue;
+            }
+            let other_phys = self.env.pinned(other).or_else(|| self.matrix.vrm.get_phys(other));
+            if other_phys == Some(hint) {
+                blocks.push(self.lis.indexes.get_mbb_from_index(&index) as u32);
+            }
+        }
+        let Some(ss) = self.split.as_mut() else { return false };
+        let mut splitter = Splitter {
+            lis: &mut self.lis,
+            matrix: &mut self.matrix,
+            extra: &mut self.extra,
+            ss,
+            env: self.env,
+            original: &self.original,
+            hints: &mut self.hints,
+        };
+        let split = splitter.split_around_hint_reg(hint, virt, &blocks, new_vregs);
+        if split && llrm_support::env_flag!("LLRM_GREEDY_DECISIONS") {
+            eprintln!("dec v{} hint-split around {hint:?} in {} blocks -> {new_vregs:?}", virt.reg(), blocks.len());
+        }
+        split
     }
 
     /// `isUrgentEviction` (RegAllocEvictionAdvisor.cpp#L146): an unspillable
@@ -982,6 +1317,19 @@ impl<'a> RAGreedy<'a> {
     /// `canEvictInterferenceBasedOnCost` (RegAllocEvictionAdvisor.cpp#L207):
     /// all interferences between `virt` and `phys` can be evicted for less
     /// than `max_cost` (updated when true).
+    /// The `LLRM_GREEDY_DECISIONS` line of one eviction check
+    /// ([`eviction_line`]).
+    fn trace_eviction(
+        &self,
+        virt: &Rc<LiveInterval>,
+        phys: RegId,
+        verdict: impl FnOnce() -> String,
+    ) {
+        if llrm_support::env_flag!("LLRM_GREEDY_DECISIONS") {
+            eprintln!("{}", eviction_line(virt.reg(), &self.matrix.tri().name(phys), &verdict()));
+        }
+    }
+
     fn can_evict_interference_based_on_cost(
         &mut self,
         virt: &Rc<LiveInterval>,
@@ -992,6 +1340,7 @@ impl<'a> RAGreedy<'a> {
     ) -> bool {
         // It is only possible to evict virtual register interference.
         if self.matrix.check_interference(virt, phys) > InterferenceKind::VirtReg {
+            self.trace_eviction(virt, phys, || "a fixed range holds it".to_owned());
             return false;
         }
         let is_local = virt.empty() || self.lis.interval_is_in_one_mbb(virt).is_some();
@@ -1005,6 +1354,7 @@ impl<'a> RAGreedy<'a> {
             // If there is 10 or more interferences, chances are one is heavier.
             let interferences = self.matrix.query_vregs(virt.reg(), &virt.range, unit, EVICT_INTERFERENCE_CUTOFF);
             if interferences.len() >= EVICT_INTERFERENCE_CUTOFF {
+                self.trace_eviction(virt, phys, || format!("{} or more interferences", EVICT_INTERFERENCE_CUTOFF));
                 return false;
             }
             // Check if any interfering live range is heavier than MaxWeight.
@@ -1015,20 +1365,26 @@ impl<'a> RAGreedy<'a> {
                 // virtual register is one that we
                 // have scavenged a physical register for.
                 if fixed.contains(&intf_reg) {
+                    self.trace_eviction(virt, phys, || format!("v{intf_reg} is fixed (last-chance recoloring)"));
                     return false;
                 }
                 // Never evict spill products. They cannot split or spill.
                 if self.extra.get_stage(intf_reg) == LiveRangeStage::Done {
+                    self.trace_eviction(virt, phys, || format!("v{intf_reg} is a spill product"));
                     return false;
                 }
                 let urgent = self.is_urgent_eviction(virt, &intf);
                 // Only evict older cascades or live ranges without a cascade.
                 let intf_cascade = self.extra.get_cascade(intf_reg);
                 if cascade == intf_cascade {
+                    self.trace_eviction(virt, phys, || format!("v{intf_reg} has the same cascade {cascade}"));
                     return false;
                 }
                 if cascade < intf_cascade {
                     if !urgent {
+                        self.trace_eviction(virt, phys, || {
+                            format!("v{intf_reg} has a newer cascade {intf_cascade} than {cascade}, not urgent")
+                        });
                         return false;
                     }
                     // We permit breaking cascades for urgent evictions. It
@@ -1050,6 +1406,9 @@ impl<'a> RAGreedy<'a> {
                 cost.max_weight = cost.max_weight.max(intf.weight());
                 // Abort if this would be too expensive.
                 if cost.at_least(max_cost) {
+                    self.trace_eviction(virt, phys, || {
+                        format!("v{intf_reg} w={:.4} costs at least the best so far", intf.weight())
+                    });
                     return false;
                 }
                 if urgent {
@@ -1057,6 +1416,14 @@ impl<'a> RAGreedy<'a> {
                 }
                 // Apply the eviction policy for non-urgent evictions.
                 if !self.should_evict(virt, is_hint, &intf, breaks_hint) {
+                    self.trace_eviction(virt, phys, || {
+                        format!(
+                            "v{intf_reg} w={:.4} is not lighter than v{} w={:.4}",
+                            intf.weight(),
+                            virt.reg(),
+                            virt.weight()
+                        )
+                    });
                     return false;
                 }
                 // If !MaxCost.isMax(), then we're just looking for a cheap
@@ -1069,10 +1436,12 @@ impl<'a> RAGreedy<'a> {
                     && self.lis.interval_is_in_one_mbb(&intf).is_some()
                     && !self.can_reassign(&intf, phys)
                 {
+                    self.trace_eviction(virt, phys, || format!("local v{intf_reg} cannot move"));
                     return false;
                 }
             }
         }
+        self.trace_eviction(virt, phys, || format!("ok, evicts up to w={:.4}", cost.max_weight));
         *max_cost = cost;
         true
     }
@@ -1236,7 +1605,12 @@ impl<'a> RAGreedy<'a> {
         cost_per_use_limit: u8,
         fixed: &HashSet<u32>,
     ) -> Option<RegId> {
-        let best = self.try_find_eviction_candidate(virt, order, cost_per_use_limit, fixed)?;
+        let best = self.try_find_eviction_candidate(virt, order, cost_per_use_limit, fixed);
+        if llrm_support::env_flag!("LLRM_GREEDY_DECISIONS") {
+            let verdict = best.map_or_else(|| "none".to_owned(), |phys| self.matrix.tri().name(phys));
+            eprintln!("  try evict v{} -> {verdict}", virt.reg());
+        }
+        let best = best?;
         self.evict_interference(virt, best, new_vregs);
         Some(best)
     }
@@ -1262,7 +1636,7 @@ impl<'a> RAGreedy<'a> {
         self.csr_cost = BlockFrequency(0);
         let Some(split) = &self.split else { return };
         let entry = split.mbfi.get_entry_freq().get_frequency();
-        self.csr_cost = csr_cost_of(self.env.csr_first_use_cost(), entry);
+        self.csr_cost = csr_cost_of(self.env.csr_first_use_cost(), self.env.csr_cost_scale(), entry);
     }
 
     /// `tryAssignCSRFirstTime` (RegAllocGreedy.cpp#L2384): a callee-saved
@@ -1281,6 +1655,7 @@ impl<'a> RAGreedy<'a> {
     ) -> Option<RegId> {
         let stage = self.extra.get_stage(virt.reg());
         let csr_cost = self.csr_cost;
+        let spill_first = self.env.csr_spill_first();
         let ss = self.split.as_mut()?;
         let mut splitter = Splitter {
             lis: &mut self.lis,
@@ -1291,14 +1666,28 @@ impl<'a> RAGreedy<'a> {
             original: &self.original,
             hints: &mut self.hints,
         };
+        if OPT_SIZE.with(std::cell::Cell::get) && virt.is_spillable() {
+            let (reads, writes, def_reads) = splitter.static_accesses(virt);
+            if splitter.env.csr_spill_costs_less(virt.reg(), phys, reads, writes, def_reads) == Some(true) {
+                // A split would only make the register this range is not
+                // worth: spill it.
+                splitter.extra.set_stage(virt.reg(), LiveRangeStage::Spill);
+                *cost_per_use_limit = 1;
+                return None;
+            }
+        }
         if stage == LiveRangeStage::Spill && virt.is_spillable() {
             // We choose spill over using the CSR for the first time if the
             // spill cost is lower than CSRCost.
-            if splitter.csr_spill_is_dearer(virt, csr_cost) {
+            if splitter.csr_spill_is_dearer(virt, csr_cost, false) {
                 return Some(phys);
             }
             // We are going to spill, set CostPerUseLimit to 1 to make sure that
             // we will not use a callee-saved register in tryEvict.
+            *cost_per_use_limit = 1;
+            return None;
+        }
+        if spill_first && virt.is_spillable() && !splitter.csr_spill_is_dearer(virt, csr_cost, true) {
             *cost_per_use_limit = 1;
             return None;
         }
@@ -1606,6 +1995,39 @@ impl<'a> RAGreedy<'a> {
     }
 }
 
+/// DEVIATE C5's prices of one vreg's candidate registers, one per encoding
+/// class (`TargetInstrInfo::encoding_class`).
+#[derive(Default)]
+struct ClassPrices(Vec<(u8, i64)>);
+
+impl ClassPrices {
+    fn seed(
+        &mut self,
+        class: Option<u8>,
+        bytes: i64,
+    ) {
+        if let Some(class) = class {
+            self.0.push((class, bytes));
+        }
+    }
+
+    /// The bytes of a register of `class`, from `compute` unless the class has
+    /// been priced; a register with no class is always priced.
+    fn price(
+        &mut self,
+        class: Option<u8>,
+        compute: impl FnOnce() -> i64,
+    ) -> i64 {
+        let Some(class) = class else { return compute() };
+        if let Some(&(_, known)) = self.0.iter().find(|(one, _)| *one == class) {
+            return known;
+        }
+        let bytes = compute();
+        self.0.push((class, bytes));
+        bytes
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -1616,6 +2038,28 @@ mod tests {
     use crate::greedy::matrix::NoFixed;
     use crate::greedy::spill::SimpleSpiller;
     use crate::greedy::virtregmap::RegisterInfo;
+
+    /// C5 priced every candidate register of a vreg by walking all its
+    /// instructions (137 k `encoding_bytes` calls, 23.6 M Ir on
+    /// memory_expansion O2); eight candidates of two classes are two prices.
+    #[test]
+    fn test_candidates_of_one_class_are_priced_once() {
+        let mut prices = ClassPrices::default();
+        prices.seed(Some(0), 0);
+        let mut computed = 0;
+        for class in [0, 1, 1, 0, 1, 1, 0, 1] {
+            prices.price(Some(class), || {
+                computed += 1;
+                i64::from(class)
+            });
+        }
+        assert_eq!(computed, 1, "class 0 was seeded; class 1 priced once");
+        prices.price(None, || {
+            computed += 1;
+            0
+        });
+        assert_eq!(computed, 2, "a register without a class is always priced");
+    }
     use crate::model::lir::{Block, Insn, LirBlock, LirBody};
     use crate::support::hash::IndexMap;
 
@@ -1623,6 +2067,12 @@ mod tests {
     /// reads: it names the interval, its stage, size and weight, and the
     /// outcome. A sys.c function's allocation changed by one removed copy, and
     /// no line said which interval it was (v127, w 0.4365 to 0.3018).
+    #[test]
+    fn test_an_eviction_line_names_the_interval_the_register_and_the_rule() {
+        let line = eviction_line(289, "ECX", "v545 w=6404.0000 is not lighter than v289 w=4717.0000");
+        assert_eq!(line, "  evict? v289 ECX: v545 w=6404.0000 is not lighter than v289 w=4717.0000");
+    }
+
     #[test]
     fn test_a_decision_line_names_the_interval_its_stage_weight_and_outcome() {
         let line = decision_line(127, LiveRangeStage::Split, 1, 0.30180937, "assign EBX");
@@ -1637,7 +2087,7 @@ mod tests {
     fn test_a_first_use_of_a_callee_saved_register_costs_thirty_percent_of_two_entries() {
         // BranchProbability is 31-bit fixed point: 30/100 of 2000 rounds to
         // 599.
-        let cost = csr_cost_of(2, 1000).get_frequency();
+        let cost = csr_cost_of(2, DEFAULT_CSR_COST_SCALE, 1000).get_frequency();
         assert!(cost.abs_diff(600) <= 1, "{cost}");
     }
 

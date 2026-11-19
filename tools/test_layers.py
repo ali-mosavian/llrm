@@ -11,28 +11,29 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 
 LAYERS = [
-    ("support", ["llrm-env", "llrm-support", "llrm-alloc", "llrm-adt"]),
+    ("support", ["llrm-env", "llrm-support", "llrm-alloc", "llrm-adt", "llrm-cgen"]),
     ("ir", ["llrm-mir", "llrm-lir", "llrm-hir"]),
     ("analysis", ["llrm-analysis"]),
     ("transforms", ["llrm-transforms", "llrm-sroa-poc"]),
     (
         "mc and target interface",
         [
-            "llrm-object", "llrm-dwarf", "llrm-omf", "llrm-elf",
+            "llrm-object", "llrm-debug", "llrm-dwarf", "llrm-omf", "llrm-elf",
             "llrm-coff", "llrm-codeview", "llrm-macho", "llrm-target", "llrm-iselgen",
             "llrm-peepgen",
         ],
     ),
-    ("codegen", ["llrm-codegen", "llrm-dagisel", "llrm-dagisel-gen"]),
+    ("codegen", ["llrm-codegen", "llrm-dagisel", "llrm-dagisel-gen", "llrm-sdag", "llrm-spike-mf"]),
     (
         "concrete targets",
         [
             "llrm-x86", "llrm-x86-m16", "llrm-x86-m32", "llrm-x86-m64", "llrm-x86-m16-select", "llrm-x86-m32-select",
-            "llrm-x86-m64-select", "llrm-arm64",
+            "llrm-x86-m64-select", "llrm-arm64", "llrm-6502", "llrm-m68k", "llrm-wasm",
+            "llrm-x86-backend", "llrm-x86-dagisel",
         ],
     ),
-    ("driver", ["llrm-driver", "llrm-cc", "llrm-bcdriver"]),
-    ("frontends", ["llrm-c", "llrm-nib", "llrm-qb", "llrm-qbruntime", "llrm-bcobj"]),
+    ("driver", ["llrm-driver", "llrm-cc", "llrm-bcdriver", "llrm-opt"]),
+    ("frontends", ["llrm-cc", "llrm-nib", "llrm-qb", "llrm-qbruntime", "llrm-bcobj"]),
     ("tools", ["llrm"]),
 ]
 RANK = {name: at for at, (_, names) in enumerate(LAYERS) for name in names}
@@ -98,7 +99,7 @@ def test_the_root_mir_directory_is_not_tracked():
 
 
 def test_the_default_build_does_not_make_llrm_c():
-    """llrm-llc and llrm-cc are the C compiler; llrm-c builds only with feature c-legacy (and wccq, which brings it)."""
+    """llrm-llc and llrm-cc are the C compiler; llrm-cc builds only with feature c-legacy (and wccq, which brings it)."""
     import tomllib
 
     manifest = tomllib.loads((ROOT / "Cargo.toml").read_text())
@@ -110,7 +111,7 @@ def test_the_default_build_does_not_make_llrm_c():
             seen.add(name)
             wanted += [f for f in features.get(name, []) if "/" not in f and not f.startswith("dep:")]
     assert "c-legacy" not in seen and "wccq" not in seen, seen
-    binary = next(b for b in manifest["bin"] if b["name"] == "llrm-c")
+    binary = next(b for b in manifest["bin"] if b["name"] == "llrm-cc")
     assert binary["required-features"] == ["c-legacy"]
 
 
@@ -133,6 +134,29 @@ def test_the_workspace_members_follow_the_layer_glob():
 
 
 def test_llrm_c_lib_tests_build_without_the_root_enabling_its_feature():
-    """llrm-c became optional in the root: `--workspace --all-targets` then compiled its lib tests without `toolchain` and stopped at the compile_error (#5586 refused 00:51)."""
-    done = subprocess.run(["cargo", "check", "-p", "llrm-c", "--lib", "--tests"], cwd=ROOT, capture_output=True, text=True)
+    """llrm-cc became optional in the root: `--workspace --all-targets` then compiled its lib tests without `toolchain` and stopped at the compile_error (#5586 refused 00:51)."""
+    done = subprocess.run(["cargo", "check", "-p", "llrm-cc", "--lib", "--tests"], cwd=ROOT, capture_output=True, text=True)
     assert done.returncode == 0, done.stderr[-600:]
+
+
+def test_codegen_names_no_object_target():
+    """`objbuild` wrote `X86Objects` by name, a second dispatch beside arm64's; codegen is handed the target's `ObjectTarget` (`Target::objects`)."""
+    named = sorted(
+        str(path.relative_to(ROOT))
+        for path in (ROOT / "crates" / "codegen" / "llrm-codegen" / "src").rglob("*.rs")
+        if "X86Objects" in path.read_text() or "Arm64Objects" in path.read_text()
+    )
+    assert not named, named
+
+
+def test_llrm_target_depends_on_the_object_and_debug_crates_alone_among_the_mc_crates():
+    """`Target::objects` returns a `DebugObjectTarget` (an `ObjectTarget` that also writes debug information): the edges from the target interface to the mc layer."""
+    target = next(p for p in workspace() if p["name"] == "llrm-target")
+    mc = {d["name"] for d in target["dependencies"] if d["kind"] is None and d["name"].startswith(("llrm-elf", "llrm-coff", "llrm-codeview", "llrm-macho", "llrm-omf", "llrm-dwarf", "llrm-object", "llrm-debug"))}
+    assert mc == {"llrm-object", "llrm-debug"}, sorted(mc)
+
+
+def test_the_object_crate_holds_no_debug_model():
+    """`Object.debug` and `llrm_object::debug` were the debug model inside the object crate; it is `llrm-debug`'s, and an object travels with its information as `llrm_debug::Described`."""
+    source = "\n".join(path.read_text() for path in (ROOT / "crates" / "mc" / "llrm-object" / "src").rglob("*.rs"))
+    assert "debug::Info" not in source and "pub mod debug" not in source and "pub debug:" not in source

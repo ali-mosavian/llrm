@@ -1,0 +1,10 @@
+#title,Table 9-14. Bit Manipulation Instruction Execution Times,page,9-9,notes,+Add effective address calculation time. | * Indicates maximum value; data addressing mode only.
+Instruction,Size,Dynamic / Register,Dynamic / Memory,Static / Register,Static / Memory
+BCHG,Byte,—,8(1/1)+,—,12(2/1)+
+,Long,8(1/0)*,—,12(2/0)*,—
+BCLR,Byte,—,10(1/1)+,—,14(2/1)+
+,Long,10(1/0)*,—,14(2/0)*,—
+BSET,Byte,—,8(1/1)+,—,12(2/1)+
+,Long,8(1/0)*,—,12(2/0)*,—
+BTST,Byte,—,4(1/0)+,—,8(2/0)+
+,Long,6(1/0)*,—,10(2/0),—

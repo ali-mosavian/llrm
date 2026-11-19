@@ -1,0 +1,8 @@
+#title,"JMP, JSR Execution Times¹",page,10-21,notes,¹ Add the effective address calculation time for each entry.
+Instruction,"Not Predicted, Forward, Taken","Not Predicted, Forward, Not Taken","Not Predicted, Backward, Taken","Not Predicted, Backward, Not Taken",Predicted Correctly as Taken,Predicted Correctly as Not Taken,Predicted Incorrectly
+"JMP (d16,PC)",3(0/0),—,3(0/0),—,0(0/0),—,—
+JMP xxx.WL,3(0/0),—,3(0/0),—,0(0/0),—,—
+Remaining JMP,5(0/0),—,5(0/0),—,5(0/0),—,—
+"JSR (d16,PC)",3(0/1),—,3(0/1),—,1(0/1),—,—
+JSR xxx.WL,3(0/1),—,3(0/1),—,1(0/1),—,—
+Remaining JSR,5(0/1),—,5(0/1),—,5(0/1),—,—

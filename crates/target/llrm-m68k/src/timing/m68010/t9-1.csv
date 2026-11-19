@@ -1,0 +1,16 @@
+#title,Table 9-1. Effective Address Calculation Times,page,9-2,notes,*The size of the index register (Xn) does not affect execution time.
+Addressing Mode,,"Byte, Word / Fetch","Byte, Word / No Fetch",Long / Fetch,Long / No Fetch
+Register,,,,,
+Dn,Data Register Direct,0(0/0),—,0(0/0),—
+An,Address Register Direct,0(0/0),—,0(0/0),—
+Memory,,,,,
+(An),Address Register Indirect,4(1/0),2(0/0),8(2/0),2(0/0)
+(An)+,Address Register Indirect with Postincrement,4(1/0),4(0/0),8(2/0),4(0/0)
+–(An),Address Register Indirect with Predecrement,6(1/0),4(0/0),10(2/0),4(0/0)
+"(d16, An)",Address Register Indirect with Displacement,8(2/0),4(0/0),12(3/0),4(1/0)
+"(d8, An, Xn)*",Address Register Indirect with Index,10(2/0),8(1/0),14(3/0),8(1/0)
+(xxx).W,Absolute Short,8(2/0),4(1/0),12(3/0),4(1/0)
+(xxx).L,Absolute Long,12(3/0),8(2/0),16(4/0),8(2/0)
+"(d16, PC)",Program Counter Indirect with Displacement,8(2/0),—,12(3/0),—
+"(d8, PC, Xn)*",Program Counter Indirect with Index,10(2/0),—,14(3/0),—
+#<data>,Immediate,4(1/0),—,8(2/0),—

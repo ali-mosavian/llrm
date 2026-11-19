@@ -1,0 +1,19 @@
+#title,"10.6 INTEGER UNIT INSTRUCTION TIMINGS: ADDQ, SUBQ | ASL | ASR, LSL, LSR",page,10-14,notes,"*Immediate count specified for shift count/shift count specified in register, respectively."
+Addressing Mode,"ADDQ, SUBQ <ea> Calculate","ADDQ, SUBQ Execute",ASL <ea> Calculate,ASL Execute,"ASR, LSL, LSR <ea> Calculate","ASR, LSL, LSR Execute"
+Dn,1,1,1,3/4 *,1,2/3 *
+An,1,1,—,—,—,—
+(An),1,1,1,3,1,2
+(An)+,2,1L + 1,1,3,1,2
+–(An),2,1L + 1,1,3,1,2
+"(d 16,An)",2,1L + 1,1,3,1,2
+"(d 16,PC)",—,—,—,—,—,—
+"(xxx).W, (xxx).L",1,1,1,3,1,2
+#<xxx>,—,—,—,—,—,—
+"(d 8,An,Xn)",3,3,3,5,3,4
+"(d 8,PC,Xn)",—,—,—,—,—,—
+"(BR,Xn)",7,1L + 6,7,1L + 8,7,1L + 7
+"(bd,BR,Xn)",8,1L + 7,8,1L + 9,8,1L + 8
+"([bd,BR,Xn])",10,1L + 9,10,1L + 11,10,1L + 10
+"([bd,BR,Xn],od)",11,1L + 11,11,1L + 12,11,1L + 11
+"([bd,BR],Xn)",11,3L + 8,11,3L + 10,11,3L + 9
+"([bd,BR],Xn,od)",12,3L + 10,12,3L + 11,12,3L + 10

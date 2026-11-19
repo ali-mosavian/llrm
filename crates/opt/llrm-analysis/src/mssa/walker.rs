@@ -82,6 +82,19 @@ pub fn instruction_clobbers_query(
 ) -> bool {
     let def_inst = mssa.access(md).inst.expect("defining instruction not actually an instruction");
     let function = aa.unit().function;
+    // These intrinsics show up as affecting memory, but they are markers
+    // (the `allow.*check`, `noalias.scope.decl` and `pseudoprobe` ones of the
+    // switch are not in MIR).
+    if matches!(
+        aa.unit().intrinsic(def_inst),
+        Some(
+            llrm_mir::intrinsics::Intrinsic::InvariantStart
+                | llrm_mir::intrinsics::Intrinsic::InvariantEnd
+                | llrm_mir::intrinsics::Intrinsic::Assume
+        )
+    ) {
+        return false;
+    }
     if let Some(use_inst) = use_inst {
         if matches!(
             function.instruction(use_inst).opcode,

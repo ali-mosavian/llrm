@@ -25,8 +25,8 @@
 //! Nothing runs it yet: stage 4 of the translation of LSR.
 //!
 //! # Limits
-//! DEVIATE: the pre- and post-indexed addressing branches
-//! (`AMK_PreIndexed`, `AMK_PostIndexed`; x86 prefers none) are not ported.
+//! DEVIATE: the pre-indexed addressing branches (`AMK_PreIndexed`; no target
+//! of ours prefers it) are not ported; the post-indexed ones are.
 //! Work per use is bounded by the formulae it has, which the caps bound.
 //!
 //! DEVIATE LG1: `GenerateICmpZeroScales` asks `getExactSDiv` for no overflow
@@ -36,19 +36,28 @@
 //! keeps a loop's exit counter beside the scaled one it is a multiple of
 //! (recsum: `dec; add -3; jne`); this exits on the scaled one (`add -3; jne`),
 //! as the stand-in LSR did. Exit: none, a proof; if LLVM does the same, delete
-//! the line.
+//! the line. A target turns LG1 and LG2 off with
+//! `Tti::lsr_scales_zero_compare_past_overflow` (wasm: the pin's formulae).
+//!
+//! DEVIATE LG2: for an even factor `getExactSDiv` fails where the compared
+//! value cannot reach 2^(bits - ctz(factor)) under the loop's guards, although
+//! only 0 then has a product of 0. Without it a byte-stepped loop kept a second
+//! counter beside the byte index (examples/dot m16: `dec cx` and a spill).
+//! Exit: none, a proof; if LLVM's SCEV proves the same, delete the check.
+//! Not at size: the doubled limit costs an `add` and a `cmp` over the `dec`
+//! (m16 -Os corpus: idioms +51 B, idiom_edges +15, none smaller).
 
 use std::collections::BTreeMap;
 
 use llrm_analysis::scev::expr::{Kind as ScevKind, Scev, Ty, Use as ScevUse};
 use llrm_analysis::scev::{Flags, ScalarEvolution};
 use llrm_mir::context::GlobalId;
-use llrm_mir::tti::Ty as TtiTy;
+use llrm_mir::tti::{AddressingMode, Ty as TtiTy};
 use llrm_support::hash::{HashMap, HashSet};
 
 use crate::lsr_collect::{Collection, extract_immediate, extract_symbol, get_exact_sdiv, is_always_foldable_scev};
-use crate::lsr_formula::{Formula, Immediate};
-use crate::lsr_use::{Cost, Kind, Rating, is_legal_add_immediate, is_legal_use};
+use crate::lsr_formula::{Formula, Immediate, Symbol};
+use crate::lsr_use::{Cost, Kind, Rating, is_legal_add_immediate, is_legal_use, may_use_post_inc_mode};
 
 /// Which register of a formula a generator works on.
 #[derive(Clone, Copy)]
@@ -72,7 +81,7 @@ fn log2_floor(n: usize) -> u32 {
 }
 
 /// The cost model's view of a SCEV type.
-fn tti_ty(ty: Ty) -> TtiTy {
+pub(crate) fn tti_ty(ty: Ty) -> TtiTy {
     match ty {
         Ty::Int(bits) => TtiTy::Int(bits),
         Ty::Ptr(_) => TtiTy::Pointer,
@@ -102,7 +111,7 @@ fn collect_subexprs(
     };
     match se.node(s).kind.clone() {
         ScevKind::Add(operands) => {
-            for op in operands {
+            for op in operands.iter().copied() {
                 if let Some(remainder) = collect_subexprs(se, cx, op.scev, c, ops, l, depth + 1) {
                     let r = times(se, c, remainder);
                     ops.push(r);
@@ -162,23 +171,43 @@ fn collect_subexprs(
 impl Collection<'_, '_> {
     /// The formula `f` of use `lu_idx` is legal as it is: used before
     /// inserting a variant.
-    fn legal(
+    pub(crate) fn legal(
         &self,
         lu_idx: usize,
         f: &Formula,
     ) -> bool {
         let lu = &self.uses[lu_idx];
+        let Some(mode) = f.mode() else { return false };
         is_legal_use(
             self.tti,
             lu.min_offset,
             lu.max_offset,
             lu.kind,
-            lu.access_ty.addr_space,
-            f.base_gv.is_some(),
+            lu.access_ty,
+            mode.global,
             f.base_offset,
-            f.has_base_reg,
-            f.scale,
-        )
+            mode.has_base_reg,
+            mode.scale,
+        ) || self.scales_basic_use(lu.kind, &mode, f.base_offset)
+    }
+
+    /// DEVIATE LSR-CALL-SCALE (`Tti::lsr_basic_use_scale_shifts`): a basic use
+    /// of a loop with a call is a register shifted left, `{0,+,1} << k` for
+    /// the use `{0,+,2^k}`, where the call would keep `{0,+,2^k}` in the frame.
+    fn scales_basic_use(
+        &self,
+        kind: Kind,
+        mode: &crate::lsr_formula::Mode,
+        base_offset: Immediate,
+    ) -> bool {
+        let shifts = self.tti.lsr_basic_use_scale_shifts();
+        kind == Kind::Basic
+            && self.across_call
+            && !mode.global
+            && base_offset.is_zero()
+            && mode.scale > 1
+            && mode.scale.count_ones() == 1
+            && mode.scale.trailing_zeros() <= shifts
     }
 
     fn reg_at(
@@ -204,6 +233,14 @@ impl Collection<'_, '_> {
     ) {
         let cx = self.cx;
         let reg = Self::reg_at(base, slot);
+        // No reassociation of the base register of a value that may be
+        // post-incremented: it would make base+register formulae that win,
+        // and the post-increment is better.
+        if self.amk == AddressingMode::PostIndexed
+            && may_use_post_inc_mode(self.tti, se, cx, &self.uses[lu_idx], reg, self.l)
+        {
+            return;
+        }
         let mut add_ops = Vec::new();
         if let Some(remainder) = collect_subexprs(se, cx, reg, None, &mut add_ops, self.l, 0) {
             add_ops.push(remainder);
@@ -220,7 +257,7 @@ impl Collection<'_, '_> {
             }
             let (min, max, kind, space) = {
                 let lu = &self.uses[lu_idx];
-                (lu.min_offset, lu.max_offset, lu.kind, lu.access_ty.addr_space)
+                (lu.min_offset, lu.max_offset, lu.kind, lu.access_ty)
             };
             // A constant that could be folded into an immediate stays there.
             if is_always_foldable_scev(self.tti, se, cx, min, max, kind, space, piece, base.num_regs() > 1) {
@@ -295,7 +332,7 @@ impl Collection<'_, '_> {
         base: Formula,
         depth: u32,
     ) {
-        assert!(base.is_canonical(se, self.l), "Input must be in the canonical form");
+        debug_assert!(base.is_canonical(se, self.l), "Input must be in the canonical form");
         // Capped, to protect compile time.
         if depth >= 3 {
             return;
@@ -372,13 +409,25 @@ impl Collection<'_, '_> {
         base: &Formula,
         slot: Slot,
     ) {
-        let (gv, g) = extract_symbol(se, self.cx, Self::reg_at(base, slot));
+        let (gv, g) = extract_symbol(se, self.cx, Self::reg_at(base, slot), self.tti.frame_slot_is_free_base());
         let Some(gv) = gv else { return };
         if se.match_zero(g) {
+            // DEVIATE LU30: a frame slot that was a register of its own is
+            // the frame register and a displacement; the register goes.
+            if let (Symbol::Frame(_), Slot::Base(at)) = (gv, slot) {
+                let mut f = base.clone();
+                f.symbol = Some(gv);
+                f.delete_base_reg(at);
+                f.has_base_reg = !f.base_regs.is_empty();
+                f.canonicalize(se, self.l);
+                if self.legal(lu_idx, &f) {
+                    let _ = self.insert_formula(se, lu_idx, &f);
+                }
+            }
             return;
         }
         let mut f = base.clone();
-        f.base_gv = Some(gv);
+        f.symbol = Some(gv);
         if !self.legal(lu_idx, &f) {
             return;
         }
@@ -397,7 +446,7 @@ impl Collection<'_, '_> {
         base: Formula,
     ) {
         // An address with a global has no room for another.
-        if base.base_gv.is_some() {
+        if base.symbol.is_some() {
             return;
         }
         for i in 0..base.base_regs.len() {
@@ -519,7 +568,7 @@ impl Collection<'_, '_> {
         {
             return;
         }
-        assert!(base.base_gv.is_none(), "ICmpZero use is not legal!");
+        assert!(base.symbol.is_none(), "ICmpZero use is not legal!");
 
         'factor: for factor in self.factors.clone() {
             if !valid_for_bits(bits, factor) {
@@ -555,16 +604,17 @@ impl Collection<'_, '_> {
             // This scale must be legal.
             {
                 let lu = &self.uses[lu_idx];
+                let Some(mode) = f.mode() else { continue };
                 if !is_legal_use(
                     self.tti,
                     offset,
                     offset,
                     lu.kind,
-                    lu.access_ty.addr_space,
-                    f.base_gv.is_some(),
+                    lu.access_ty,
+                    mode.global,
                     f.base_offset,
-                    f.has_base_reg,
-                    f.scale,
+                    mode.has_base_reg,
+                    mode.scale,
                 ) {
                     continue;
                 }
@@ -582,7 +632,10 @@ impl Collection<'_, '_> {
             // multiply in the preheader and an add in the loop, which the cost
             // model prices below `dec; je` (x_adler -O2: 47972 -> 50976
             // clocks).
-            let odd = factor & 1 == 1 && base.scaled_reg.is_none() && base.base_regs.len() == 1;
+            let counter_alone = base.scaled_reg.is_none() && base.base_regs.len() == 1;
+            let odd = self.tti.lsr_scales_zero_compare_past_overflow()
+                && ((factor & 1 == 1 && counter_alone)
+                    || (!self.size && self.factor_keeps_zero(se, cx, &base, factor, bits)));
             // No base register may overflow when multiplied.
             for i in 0..f.base_regs.len() {
                 f.base_regs[i] = se
@@ -619,6 +672,39 @@ impl Collection<'_, '_> {
         }
     }
 
+    /// `x * c == 0` iff `x` is a multiple of 2^(bits - ctz(c)), so for an even
+    /// `c` the compared value `x` of `base` keeps its zero test when its range
+    /// under the loop's guards stays below that: only 0 is such a multiple.
+    fn factor_keeps_zero(
+        &self,
+        se: &mut ScalarEvolution,
+        cx: &llrm_analysis::scev::Cx,
+        base: &Formula,
+        factor: i64,
+        bits: u32,
+    ) -> bool {
+        if factor & 1 == 1 {
+            return false;
+        }
+        let mut parts: Vec<ScevUse> = base.base_regs.iter().map(|&r| ScevUse::of(r)).collect();
+        if let Some(scaled) = base.scaled_reg {
+            let scale = se.get_constant_of_type(cx, se.type_of(scaled), i128::from(base.scale));
+            parts.push(se.get_mul_expr(cx, vec![ScevUse::of(scaled), ScevUse::of(scale)], Flags::default(), 0));
+        }
+        let x = se.get_add_expr(cx, parts, Flags::default(), 0).scev;
+        let ops = se.operands(x).to_vec();
+        // `applyLoopGuards` leaves a recurrence's start alone, so guard that.
+        let guarded = if ops.len() == 2 && se.is_affine(x) {
+            let start = se.apply_loop_guards(cx, ops[0].scev, self.l);
+            se.get_add_rec_expr(cx, vec![ScevUse::of(start), ops[1]], self.l, Flags::default()).scev
+        } else {
+            se.apply_loop_guards(cx, x, self.l)
+        };
+        let lo = se.get_signed_range_min(cx, guarded).sext_value();
+        let hi = se.get_signed_range_max(cx, guarded).sext_value();
+        zero_test_survives(bits, factor, lo.unsigned_abs().max(hi.unsigned_abs()))
+    }
+
     /// `GenerateScales`: formulae using a factor of the strides as the scale of
     /// a scaled-offset address mode, for example.
     pub fn generate_scales(
@@ -642,20 +728,22 @@ impl Collection<'_, '_> {
             // Whether this scale will be legal.
             let (min, max, kind, outside, space) = {
                 let lu = &self.uses[lu_idx];
-                (lu.min_offset, lu.max_offset, lu.kind, lu.all_fixups_outside_loop, lu.access_ty.addr_space)
+                (lu.min_offset, lu.max_offset, lu.kind, lu.all_fixups_outside_loop, lu.access_ty)
             };
             let legal = |kind| {
-                is_legal_use(
-                    self.tti,
-                    min,
-                    max,
-                    kind,
-                    space,
-                    base.base_gv.is_some(),
-                    base.base_offset,
-                    base.has_base_reg,
-                    base.scale,
-                )
+                base.mode().is_some_and(|mode| {
+                    is_legal_use(
+                        self.tti,
+                        min,
+                        max,
+                        kind,
+                        space,
+                        mode.global,
+                        base.base_offset,
+                        mode.has_base_reg,
+                        mode.scale,
+                    ) || self.scales_basic_use(kind, &mode, base.base_offset)
+                })
             };
             if !legal(kind) {
                 // An out-of-loop basic use is special, and takes a -1 scale.
@@ -667,7 +755,7 @@ impl Collection<'_, '_> {
             }
             let kind = self.uses[lu_idx].kind;
             // Negating a solitary base register of a compare gives nothing new.
-            if kind == Kind::ICmpZero && !base.has_base_reg && base.base_offset.is_zero() && base.base_gv.is_none() {
+            if kind == Kind::ICmpZero && !base.has_base_reg && base.base_offset.is_zero() && base.symbol.is_none() {
                 continue;
             }
             // Each addrec base register of this loop is scaled.
@@ -738,7 +826,7 @@ impl Collection<'_, '_> {
     ) {
         let cx = self.cx;
         // Symbolic values are not truncated.
-        if base.base_gv.is_some() {
+        if base.symbol.is_some() {
             return;
         }
         let Some(dst) = base.ty(se, cx) else { return };
@@ -905,6 +993,11 @@ impl Collection<'_, '_> {
                         let mut new_f = f.clone();
                         new_f.base_offset = new_f.base_offset.add_unsigned(imm);
                         if !self.legal(lu_idx, &new_f) {
+                            if self.amk == AddressingMode::PostIndexed
+                                && may_use_post_inc_mode(self.tti, se, cx, &self.uses[lu_idx], orig_reg, self.l)
+                            {
+                                continue;
+                            }
                             let unfolded = new_f.unfolded_offset.add_unsigned(imm);
                             if !is_legal_add_immediate(self.tti, unfolded) {
                                 continue;
@@ -947,6 +1040,7 @@ impl Collection<'_, '_> {
         &mut self,
         se: &mut ScalarEvolution,
     ) {
+        GENERATED.with(|n| n.set(n.get() + 1));
         for lu_idx in 0..self.uses.len() {
             for i in 0..self.uses[lu_idx].formulae.len() {
                 let f = self.uses[lu_idx].formulae[i].clone();
@@ -982,6 +1076,116 @@ impl Collection<'_, '_> {
             }
         }
         self.generate_cross_use_constant_offsets(se);
+    }
+
+    /// `GenerateEndBiased` (DEVIATE LG3, gcc's `ubase - ratio * cbase`,
+    /// `get_computation_aff_1`): an address that steps by `r` times the step of
+    /// a register `Z` that ends at zero on the exit trip is `(a - r * start(Z))
+    /// + r * Z`. Its formula shares `Z` with the exit test, so the loop keeps
+    /// one counter and the bases sit at the end of their arrays. Neither the
+    /// pin nor gcc builds it: the pin's address uses never name the exit
+    /// test's register, and gcc compares against the end instead.
+    ///
+    /// The biased bases are new registers the pin's solution does not hold;
+    /// where a base names a global's address each costs the target's setup
+    /// (`Tti::lsr_symbol_base_setup_insns`), which the solution's cost ignores:
+    /// `plan_loop` prices it in the keep rule.
+    ///
+    /// Work: one formula for each (zero-ending register, address formula
+    /// holding an addrec of this loop), the registers capped at four.
+    pub fn generate_end_biased(
+        &mut self,
+        se: &mut ScalarEvolution,
+    ) {
+        // A loop instruction saved costs setup ones; at -Os that is bytes lost.
+        if self.size {
+            return;
+        }
+        let cx = self.cx;
+        // The saving is one compare a trip; the biased bases cost setup
+        // instructions once. A loop that runs few trips (an unroll's
+        // remainder) never pays them back.
+        let trips = se.get_small_constant_max_trip_count(cx, self.l);
+        if trips != 0 && trips <= END_BIAS_SETUP_INSNS {
+            return;
+        }
+        // The registers that end at zero, in the exit test's formulae.
+        let mut zero_ending: Vec<Scev> = Vec::new();
+        for lu in &self.uses {
+            if lu.kind != Kind::ICmpZero {
+                continue;
+            }
+            for f in &lu.formulae {
+                if f.has_zero_end()
+                    && let Some((_, _, header)) = se.match_affine_add_rec(f.base_regs[0])
+                    && header == self.l
+                    && !zero_ending.contains(&f.base_regs[0])
+                {
+                    zero_ending.push(f.base_regs[0]);
+                }
+            }
+        }
+        zero_ending.truncate(4);
+        if zero_ending.is_empty() {
+            return;
+        }
+        for lu_idx in 0..self.uses.len() {
+            if self.uses[lu_idx].kind != Kind::Address {
+                continue;
+            }
+            let (min, max, kind, space) = {
+                let lu = &self.uses[lu_idx];
+                (lu.min_offset, lu.max_offset, lu.kind, lu.access_ty)
+            };
+            for i in 0..self.uses[lu_idx].formulae.len() {
+                let f = self.uses[lu_idx].formulae[i].clone();
+                if f.scaled_reg.is_some() {
+                    continue;
+                }
+                for &z in &zero_ending {
+                    let Some((z_start, z_step, _)) = se.match_affine_add_rec(z) else { continue };
+                    for at in 0..f.base_regs.len() {
+                        let reg = f.base_regs[at];
+                        let Some((r_start, r_step, header)) = se.match_affine_add_rec(reg) else { continue };
+                        if header != self.l || se.type_of(r_step) != se.type_of(z) {
+                            continue;
+                        }
+                        // The address steps by a whole number of Z's steps.
+                        let Some(ratio) = get_exact_sdiv(se, cx, r_step, z_step, false) else { continue };
+                        let Some(r) = se.as_constant(ratio).map(|c| c.sext_value() as i64) else { continue };
+                        if r == 0 || !legal_scale(self.tti, min, max, kind, space, &f, r) {
+                            continue;
+                        }
+                        // a - r * start(Z), with the other registers of the
+                        // formula: one invariant register in the preheader.
+                        let ratio_s = se.get_constant_of_type(cx, se.type_of(z), -i128::from(r));
+                        let shifted = se
+                            .get_mul_expr(cx, vec![ScevUse::of(ratio_s), ScevUse::of(z_start)], Flags::default(), 0)
+                            .scev;
+                        let bias = se
+                            .get_add_expr(cx, vec![ScevUse::of(r_start), ScevUse::of(shifted)], Flags::default(), 0)
+                            .scev;
+                        let mut f2 = f.clone();
+                        f2.delete_base_reg(at);
+                        let mut sums: Vec<ScevUse> = f2.base_regs.iter().map(|&b| ScevUse::of(b)).collect();
+                        sums.push(ScevUse::of(bias));
+                        let base = se.get_add_expr(cx, sums, Flags::default(), 0).scev;
+                        if !se.is_loop_invariant(cx, base, Some(self.l)) {
+                            continue;
+                        }
+                        f2.base_regs.clear();
+                        if se.as_constant(base).is_none_or(|c| !c.is_zero()) {
+                            f2.base_regs.push(base);
+                        }
+                        f2.has_base_reg = !f2.base_regs.is_empty();
+                        f2.scaled_reg = Some(z);
+                        f2.scale = r;
+                        f2.canonicalize(se, self.l);
+                        let _ = self.insert_formula(se, lu_idx, &f2);
+                    }
+                }
+            }
+        }
     }
 
     /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopStrengthReduce.cpp#L4792
@@ -1072,6 +1276,11 @@ impl Collection<'_, '_> {
             l: self.l,
             hardware_loop_profitable: self.hardware_loop_profitable,
             as_written: false,
+            other_register_units: self.pressure_units(),
+            size: self.size,
+            bytes_counted: self.bytes_counted,
+            across_call: self.across_call,
+            amk: self.amk,
         };
         cost.rate_formula(&mut rating, f, regs, visited, &self.uses[lu_idx], losers);
     }
@@ -1090,4 +1299,46 @@ impl Collection<'_, '_> {
             _ => None,
         }
     }
+}
+
+/// Instructions the biased bases of an end-biased formula cost in the
+/// preheader: the start scaled and negated, and the sum.
+const END_BIAS_SETUP_INSNS: u32 = 3;
+
+thread_local! {
+    static GENERATED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread generated a loop's reuse formulae, for a test
+/// that a loop's space is generated once however many solutions are rated.
+pub fn reuse_formulae_generated() -> usize {
+    GENERATED.with(std::cell::Cell::get)
+}
+
+/// Whether `x * factor == 0` (mod 2^bits) iff `x == 0` for every `x` with
+/// `|x| <= reach`: the product is zero iff `x` is a multiple of
+/// 2^(bits - ctz(factor)).
+pub(crate) fn zero_test_survives(
+    bits: u32,
+    factor: i64,
+    reach: u128,
+) -> bool {
+    let kept = bits.saturating_sub(factor.trailing_zeros());
+    kept > 0 && kept < 128 && reach < 1u128 << kept
+}
+
+/// Whether `f` with its scaled register taken `scale` times is a legal
+/// address of the use.
+fn legal_scale(
+    tti: &dyn llrm_mir::tti::Tti,
+    min: Immediate,
+    max: Immediate,
+    kind: Kind,
+    access: crate::lsr_formula::MemAccessTy,
+    f: &Formula,
+    scale: i64,
+) -> bool {
+    // The end-biased form is not made for a frame slot.
+    !matches!(f.symbol, Some(Symbol::Frame(_)))
+        && is_legal_use(tti, min, max, kind, access, f.has_global(), f.base_offset, true, scale)
 }

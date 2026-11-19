@@ -73,6 +73,9 @@ struct Open {
     /// have taken.
     work: u64,
     children_work: u64,
+    /// What opening it cost before `work` was read, charged to the step around
+    /// it as the span's, not that step's own.
+    opening: u64,
 }
 
 /// The thread's user-space instruction counter, opened on first use:
@@ -195,6 +198,9 @@ struct Clock {
     /// The work counter when the clock started, and in the outermost steps.
     work_start: Option<u64>,
     work_top: u64,
+    /// What opening and closing spans cost the thread, in `work_unit`s: in no
+    /// step's own work.
+    span_work: u64,
     /// Per counted event: (hits, misses).
     counts: Vec<(&'static str, usize, usize)>,
     /// The function being worked on, and its steps' own time, by function.
@@ -244,6 +250,11 @@ pub fn span(name: &'static str) -> Span {
     if !enabled("time") {
         return Span(false);
     }
+    opened(name)
+}
+
+fn opened(name: &'static str) -> Span {
+    let entered = work_now();
     CLOCK.with(|clock| {
         let mut clock = clock.borrow_mut();
         let now = Instant::now();
@@ -251,7 +262,9 @@ pub fn span(name: &'static str) -> Span {
         let cpu = cpu_now();
         clock.cpu_start.get_or_insert(cpu);
         clock.work_start.get_or_insert_with(work_now);
-        clock.open.push(Open { name, start: now, children: Duration::ZERO, cpu, work: work_now(), children_work: 0 });
+        let work = work_now();
+        let opening = work.saturating_sub(entered);
+        clock.open.push(Open { name, start: now, children: Duration::ZERO, cpu, work, children_work: 0, opening });
     });
     Span(true)
 }
@@ -263,9 +276,11 @@ impl Drop for Span {
         }
         CLOCK.with(|clock| {
             let mut clock = clock.borrow_mut();
-            let Open { name, start, children, cpu, work, children_work } = clock.open.pop().expect("a span is open");
+            let Open { name, start, children, cpu, work, children_work, opening } =
+                clock.open.pop().expect("a span is open");
             let spent = start.elapsed();
-            let done = work_now().saturating_sub(work);
+            let closed = work_now();
+            let done = closed.saturating_sub(work);
             let own_work = done.saturating_sub(children_work);
             let own = spent.saturating_sub(children);
             // A name inside itself counts its outer span's time once.
@@ -291,6 +306,13 @@ impl Drop for Span {
                     clock.cpu_top += cpu_now().saturating_sub(cpu);
                     clock.work_top += done;
                 }
+            }
+            // The bookkeeping above ran after the counter was read, and the open
+            // before it: inside the step around this one, but not its work.
+            let overhead = opening + work_now().saturating_sub(closed);
+            clock.span_work += overhead;
+            if let Some(parent) = clock.open.last_mut() {
+                parent.children_work += overhead;
             }
             if let Some(function) = clock.function.clone() {
                 let steps = match clock.functions.iter().position(|(one, _)| *one == function) {
@@ -456,6 +478,10 @@ pub fn report_times() {
         }
         let spans: usize = flat.iter().map(|(_, stat)| stat.calls).sum();
         eprintln!("{}", work_total_line(work, clock.work_top, &unit, spans));
+        eprintln!(
+            "[instr] the {spans} spans' own cost, {:.3} {unit}, is in no row above",
+            clock.span_work as f64 / 1e6
+        );
         let floor = wall / 200;
         eprintln!("[time] nesting (own / total ms, steps under 0.5% left out):");
         let mut tree = clock.tree;
@@ -534,7 +560,7 @@ pub fn report_checks(extra: &[(&str, u32)]) {
 
 #[cfg(test)]
 mod tests {
-    use super::{work_fd, work_now, work_total_line};
+    use super::{CLOCK, opened, work_fd, work_now, work_total_line};
 
     fn spin(rounds: u64) -> u64 {
         let mut sum = 0u64;
@@ -601,6 +627,29 @@ mod tests {
             idle.abs_diff(loaded) * 100 <= idle,
             "the loop read {idle} instructions in {idle_time:?} idle and {loaded} in {loaded_time:?} under load"
         );
+    }
+
+    /// Opening and closing a span ran inside the step around it, so a step of
+    /// 9 070 spans (sfm16_dbg) read 42 M instructions of its own that were the
+    /// report's: `mir walk` 42.4 M of 767 M, taken for plumbing. A step holding
+    /// 2 000 empty spans has about 110 instructions each of its own (was 4 600).
+    #[test]
+    fn test_empty_spans_add_nothing_to_the_step_around_them() {
+        if work_fd() < 0 {
+            return;
+        }
+        let outer = opened("outer");
+        for _ in 0..2000 {
+            drop(opened("empty"));
+        }
+        drop(outer);
+        let (own, spans) = CLOCK.with(|clock| {
+            let clock = clock.borrow();
+            let own = clock.flat.iter().find(|(name, _)| *name == "outer").map(|(_, stat)| stat.own_work).unwrap();
+            (own, clock.span_work)
+        });
+        assert!(own < 2000 * 500, "the step read {own} instructions of its own for 2000 empty spans");
+        assert!(spans > 2000 * 500, "the spans' cost {spans} was not counted");
     }
 
     /// The `[instr]` total row said nothing of how many spans it timed, so the

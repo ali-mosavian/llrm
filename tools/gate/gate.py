@@ -39,6 +39,9 @@ import envflag  # noqa: E402
 LANGUAGES = ("qb", "c", "nib")
 TREE_ONLY = {"fmt", "docs", "products"}  # steps that read the tree and build nothing: the `static` group
 NO_BINARIES = {"pytest", "pytest-perf", "fmt", "rfmt-post", "docs", "facts"}  # steps that do not run the release binaries, so need no build first
+# Steps that run `tools/measure.py dist`: they share its build lock, and a waiter has no CPU of its own, so the stall check killed pytest-perf
+# and objsweep (gate 9a0cd57af1) while the measure step's dist build ran. The gate builds it once, before them.
+DIST_USERS = frozenset({"pytest-perf", "objsweep", "measure"})
 SERIAL_STEPS = frozenset({"rfmt-post", "qcport", "oracle-qcport"})  # the last two count frames in real time: starved by a step beside them, their runs differ from Borland's
 
 
@@ -271,8 +274,21 @@ def link_strays(root: Path) -> list[str]:
     return found
 
 
+def stale_lock(root: Path) -> str:
+    """What `cargo metadata --locked` says when Cargo.lock does not match the manifests (llrm-6502 declared llrm-alloc in #8562 with no
+    lock entry: every `--locked` build failed). Empty when it is current or there is no lock. A build rewrites a stale lock, so this
+    has to run before one: the `static` group does."""
+    if not (root / "Cargo.lock").is_file():
+        return ""
+    done = subprocess.run(["cargo", "metadata", "--locked", "--offline", "--format-version", "1"], cwd=root, capture_output=True, text=True)
+    return "" if done.returncode == 0 else done.stderr.strip()
+
+
 def products_main(root: Path | None = None) -> int:
     root = root or ROOT
+    if stale := stale_lock(root):
+        print(f"Cargo.lock is stale: {stale}")
+        return 1
     listed = subprocess.run(["git", "ls-files"], cwd=root, capture_output=True, text=True, check=True).stdout.split("\n")
     if found := strays([n for n in listed if n]):
         print(f"build products are tracked: {found}")
@@ -324,7 +340,7 @@ def plan(files: list[str], forced: str = "auto") -> Plan:
 
     touched = {crate_of(f, pkgs) for f in live} - {None}
     cargo = any(not f.startswith("tools/") or f.startswith("tools/bench/") for f in live)
-    p.packages = None if p.tier == "full" else sorted(dependents(pkgs, touched) | {"llrm"} | reading(cfg, pkgs, live))  # the root crate enables features (llrm-c's toolchain) the others lack alone
+    p.packages = None if p.tier == "full" else sorted(dependents(pkgs, touched) | {"llrm"} | reading(cfg, pkgs, live))  # the root crate enables features (llrm-cc's toolchain) the others lack alone
     if narrow:
         return narrowed(p, cfg, live)
     steps = []
@@ -460,15 +476,15 @@ def restricted(p: Plan, names: list[str], known: set[str]) -> Plan:
     return Plan(p.tier, p.reason + " (steps asked for)", steps, p.packages, p.languages, p.files)
 
 
-# The build every step runs after, and every measurement is taken with: `cargo build --bins` alone produces a different llrm-c (the
+# The build every step runs after, and every measurement is taken with: `cargo build --bins` alone produces a different llrm-cc (the
 # test build unifies features differently), whose compile costs differ by up to 6% a step. tools/measure.py builds a base with it too.
 # So there is no `cargo build --bins` here: it made a second set of every crate (238 CPU-s) for binaries the test build then links over
 # (all of them but hir-mir, which the corpus scripts build themselves).
 WARNING_FLAGS = "-D warnings"
 WARNINGS_AS_ERRORS = f"RUSTFLAGS='{WARNING_FLAGS}'"
-# Every step runs with the same RUSTFLAGS: a `cargo test --test X` without them rebuilt llrm-c apart from the build step's and put
-# its binary over target/release/llrm-c (the inode changed after `integration`), while `torture`, `run` and the like were running it:
-# "No such file or directory: .../release/llrm-c" in torture. One set of flags, one build, one binary.
+# Every step runs with the same RUSTFLAGS: a `cargo test --test X` without them rebuilt llrm-cc apart from the build step's and put
+# its binary over target/release/llrm-cc (the inode changed after `integration`), while `torture`, `run` and the like were running it:
+# "No such file or directory: .../release/llrm-cc" in torture. One set of flags, one build, one binary.
 # RUSTC_BOOTSTRAP too, for the lib step's `--shuffle`: libtest reads it when the tests run, but cargo takes it for an input of every
 # crate it builds, so set on the lib step alone it rebuilt the whole workspace there (1,088 CPU-s) and again in the next cargo step.
 # CARGO_INCREMENTAL=0 as CI builds: profile.release is incremental (256 units), and the same commit counts 10.3 -> 33.3 Minstr in lir pressuresink
@@ -477,7 +493,8 @@ STEP_ENV = {"RUSTFLAGS": WARNING_FLAGS, "RUSTC_BOOTSTRAP": "1", "CARGO_INCREMENT
 BUILD = (
     f"{WARNINGS_AS_ERRORS} cargo check --workspace --all-targets -q && "
     f"{WARNINGS_AS_ERRORS} cargo check --release --workspace --all-targets -q && "
-    f"{WARNINGS_AS_ERRORS} cargo test --release -q --workspace --no-run"
+    # llrm-cc is behind `c-legacy` (off by default): without the feature the test build does not make it, and the tests that guard the m16 bar through it skipped.
+    f"{WARNINGS_AS_ERRORS} cargo test --release -q --workspace --no-run --features c-legacy"
 )
 # Measurements compare two revisions, so their historical base is built without
 # today's warning policy.
@@ -490,7 +507,7 @@ DIST_BUILD = "cargo build --profile dist -q --bins"
 SKIPPED_DOC = "echo 'test result: ok. 0 passed; 0 failed; no doc comment has a fence to run, rustdoc not run'"
 
 # A lib test that depends on the order tests run in passes in the plain order and fails when the threads start in
-# another (llrm-c's m16 tests, 29 of 136, when an m32 test bound the register file first). The lib step runs the
+# another (llrm-cc's m16 tests, 29 of 136, when an m32 test bound the register file first). The lib step runs the
 # tests in a random order; each test binary prints its seed ("running 136 tests (shuffle seed: N)", kept in the
 # failed step's log), and LLRM_SHUFFLE_SEED=N repeats that order. (RUSTC_BOOTSTRAP is in STEP_ENV.)
 
@@ -515,7 +532,7 @@ def changed_tests(files: list[str]) -> str:
             python.append(str(beside.relative_to(ROOT)))
     commands = []
     if python:
-        commands.append("PYTHONPATH=tools/gate${PYTHONPATH:+:$PYTHONPATH} uv run -q --project tools python tools/gate/pytest_shards.py " + " ".join(sorted(set(python))) + " -- -q -p no:cacheprovider -p pytest_cpulimit -p pytest_qcport")
+        commands.append("PYTHONPATH=tools/gate${PYTHONPATH:+:$PYTHONPATH} uv run -q --project tools python tools/gate/pytest_shards.py " + " ".join(sorted(set(python))) + " -- -q -p no:cacheprovider -p pytest_cpulimit -p pytest_qcport -p pytest_strict_bins")
     if binaries:
         commands.append("cargo test --release -q --no-fail-fast " + " ".join(f"--test {b}" for b in sorted(set(binaries))))
     return " && ".join(commands) or "true"
@@ -544,7 +561,7 @@ def commands(p: Plan, cfg: dict, pkgs: dict[str, dict], skip_bins: frozenset[str
         # twice, 160 s of a loaded host)
         own = {"tests/test_programs_compile.py", "tests/test_loops.py"}
         tests = " ".join(sorted(f"tests/{one.name}" for one in (ROOT / "tests").glob("*.py") if f"tests/{one.name}" not in own | set(skipped)))
-        return f"PYTHONPATH=tools/gate${{PYTHONPATH:+:$PYTHONPATH}} uv run -q --project tools python tools/gate/pytest_shards.py --durations ${{CARGO_TARGET_DIR:-target}}/{durations}.json tools crates {tests}" + "".join(f" --ignore={f}" for f in skipped) + " -- -q -p no:cacheprovider -p pytest_cpulimit -p pytest_qcport"
+        return f"PYTHONPATH=tools/gate${{PYTHONPATH:+:$PYTHONPATH}} uv run -q --project tools python tools/gate/pytest_shards.py --durations ${{CARGO_TARGET_DIR:-target}}/{durations}.json tools crates {tests}" + "".join(f" --ignore={f}" for f in skipped) + " -- -q -p no:cacheprovider -p pytest_cpulimit -p pytest_qcport -p pytest_strict_bins"
 
     steps = {
         "build": BUILD,
@@ -566,7 +583,10 @@ def commands(p: Plan, cfg: dict, pkgs: dict[str, dict], skip_bins: frozenset[str
         + "".join(f"; {cargo} --test {Path(one['file']).stem} || rc=1" for one in cfg["scan"] if p.tier == "smoke" and one.get("step") == "integration" and Path(one["file"]).stem != "target_facts")
         + "; exit $rc",
         "bench": bench,
-        "torture": "uv run -q --project tools python tools/torture/torture.py --gate --work $CARGO_TARGET_DIR/torture-work",
+        # The 64-bit sample is a plain regression sweep: it passes on the tree where tailmerge merged two sibling-call jumps (#6146), so a green line is no safety net for that class.
+        "torture": "uv run -q --project tools python tools/torture/torture.py --gate --work $CARGO_TARGET_DIR/torture-work || rc=1"
+        "; echo 'torture --bits 64 --gate (a plain regression sweep: passes on the pre-fix tree of #6146)'"
+        "; uv run -q --project tools python tools/torture/torture.py --bits 64 --gate --work $CARGO_TARGET_DIR/torture-work64 || rc=1; exit ${rc:-0}",
         # Every LLRM_CHECK_* oracle over the BASIC and Nib programs (needs perf: it first checks each oracle ran). Red on a finding nothing
         # expects, or on an expected one that stopped failing: tools/oracle_expected.toml.
         "oracle-sweep": 'uv run -q --project tools python tools/oracle_sweep.py --no-premise --jobs ${JOBS:-8} --expected tools/oracle_expected.toml ${ORACLE_SHARD:+--shard "$ORACLE_SHARD"}',
@@ -583,7 +603,7 @@ def commands(p: Plan, cfg: dict, pkgs: dict[str, dict], skip_bins: frozenset[str
         # the build the cost gate measures (tools/measure.py).
         "pytest-perf": "LLRM_BIN=$(python3 tools/measure.py dist) PYTHONPATH=tools/gate${PYTHONPATH:+:$PYTHONPATH} uv run -q --project tools python tools/gate/pytest_shards.py --durations ${CARGO_TARGET_DIR:-target}/pytest-perf-durations.json "
         + " ".join(perf_files())
-        + " -- -q -p no:cacheprovider -p pytest_cpulimit -p pytest_qcport",
+        + " -- -q -p no:cacheprovider -p pytest_cpulimit -p pytest_qcport -p pytest_strict_bins",
         # The slow DOS tier (tools/dosbatch/conftest.py): the demos played on dos32 and the graphics sweeps. The demo sources are
         # Microsoft's and not in the repository, so without them the step is skipped (77), not passed.
         "dos-slow": 'd="${QB45_DEMOS_DIR:-$HOME/scratch/gor}"; [ -f "$d/NIBBLES.BAS" ] || { echo "SKIPPED: no NIBBLES.BAS in $d (set QB45_DEMOS_DIR)"; exit 77; }; rm -f "${CARGO_TARGET_DIR:-target}/gate-logs/demo-hashes.txt"; { lscpu | grep -E "Vendor ID|Model name"; rustc -vV | head -n 4; "${DOSBOX_BIN:-${CARGO_TARGET_DIR:-target}/release/dosbox-x}" --version 2>&1 | grep -m1 "DOSBox-X version"; uv run -q --project tools python -c "import sys; sys.path.insert(0, \'tools/dosbatch\'); import qb32; print(\'demo conf:\', \', \'.join(l for l in qb32.DEMO_CONF.splitlines() if l.startswith((\'core=\', \'cputype=\', \'virtual\'))))"; uv run -q --project tools python tools/dosbatch/x87probe.py || true; readelf -p .comment "${DOSBOX_BIN:-${CARGO_TARGET_DIR:-target}/release/dosbox-x}" | grep -m1 "GCC:" || true; } 2>&1 | sed \'s/^/[diag!] /\'; QB45_DEMOS_DIR="$d" uv run -q --project tools python tools/gate/pytest_shards.py --must-pass tools/dosbatch/test_qbdemos.py --rerun tools/dosbatch/test_qbdemos.py --durations ${CARGO_TARGET_DIR:-target}/dos-durations.json tools/dosbatch -- -m slow_dos -q -p no:cacheprovider; rc=$?; QB45_DEMOS_DIR="$d" uv run -q --project tools python tools/dosbatch/nibprobe.py 2>&1 | sed \'s/^/[diag!] /\'; sed \'s/^/[diag] /\' "${CARGO_TARGET_DIR:-target}/gate-logs/demo-hashes.txt" 2>/dev/null; exit $rc',
@@ -593,6 +613,7 @@ def commands(p: Plan, cfg: dict, pkgs: dict[str, dict], skip_bins: frozenset[str
         "pytest-programs": "uv run -q --project tools python -m pytest tests/test_programs_compile.py tests/test_loops.py -q -p no:cacheprovider",
         "qcport": '[ -f ~/scratch/qcport-env.sh ] && . ~/scratch/qcport-env.sh; : "${QCPORT:?QCPORT is not set}" "${QCPORT_INC:?QCPORT_INC is not set}" "${QCPORT_BORLAND:?QCPORT_BORLAND is not set}"; export JWLINK="${JWLINK:-$LLRM_BIN/jwlink}"; uv run -q --project tools python tools/qcport-run-cc.py',
         "oracle-qcport": '[ -f ~/scratch/qcport-env.sh ] && . ~/scratch/qcport-env.sh; : "${QCPORT:?QCPORT is not set}" "${QCPORT_INC:?QCPORT_INC is not set}" "${QCPORT_BORLAND:?QCPORT_BORLAND is not set}"; export JWLINK="${JWLINK:-$LLRM_BIN/jwlink}"; uv run -q --project tools python tools/oracle_qcport.py --jobs ${JOBS:-8}',
+        "objsweep": "python3 tools/pairs/objsweep_gate.py",
         "measure": "[ -f ~/scratch/qcport-env.sh ] && . ~/scratch/qcport-env.sh; python3 tools/measure.py check",
         "run": f"LLRM_RUN_ONLY='{' '.join(p.languages)}' {cargo} -p llrm --test run -- test_every_program_under_tests_run_prints_its_out",
     }
@@ -809,6 +830,11 @@ class LogTail:
             print(f"[{self.name}] " + line.decode(errors="replace"), flush=True)
 
 
+def shared_builds(steps: list[str]) -> list[tuple[str, str]]:
+    """(name, command) of the builds several steps wait on, to run once before them."""
+    return [("measure-dist", "python3 tools/measure.py dist")] * bool(DIST_USERS & set(steps))
+
+
 def run_step(name: str, command: str, logs: Path, env: dict, check: tuple[int | None, bool] | None = None, unset: tuple[str, ...] = (), stall: float | None = None) -> tuple[str, int, float, float]:
     """(name, exit code, wall seconds, CPU seconds): the CPU is user+sys of the step's process tree, which a loaded host does not stretch.
     A step that neither writes to its log nor uses CPU for `stall` seconds is killed (a pytest step sat 84 minutes on a hung test with
@@ -871,9 +897,9 @@ def run_step(name: str, command: str, logs: Path, env: dict, check: tuple[int | 
 
 def snapshot_binaries(release: Path, into: Path) -> Path:
     """The executables cargo left in `release`, linked into `into` for the steps to run. Every `cargo test --release --test X` compiles
-    the root package's binaries again as a test does (another metadata hash) and links `release/llrm-c` to its own: cargo removes the file
+    the root package's binaries again as a test does (another metadata hash) and links `release/llrm-cc` to its own: cargo removes the file
     and links the new one, even for a unit that was fresh, so with steps running cargo side by side the path has moments with no file
-    (torture: `No such file .../release/llrm-c`). A hard link keeps the inode it was made of: the next link cargo makes is another file."""
+    (torture: `No such file .../release/llrm-cc`). A hard link keeps the inode it was made of: the next link cargo makes is another file."""
     into.mkdir(parents=True, exist_ok=True)
     for one in sorted(release.iterdir()):
         if one.is_file() and os.access(one, os.X_OK) and one.suffix != ".d":
@@ -885,7 +911,7 @@ def snapshot_binaries(release: Path, into: Path) -> Path:
 
 
 # The steps that run the compiler's binaries (the others build what they test, or read the tree).
-USES_BINARIES = ("pytest", "pytest-perf", "pytest-programs", "pytest-quick", "changed-tests", "bench", "run", "torture", "oracle-sweep", "oracle-premise", "oracle-qcport", "identity", "measure", "qcport", "turbo", "cv4", "dos-slow")
+USES_BINARIES = ("pytest", "pytest-perf", "pytest-programs", "pytest-quick", "changed-tests", "bench", "run", "torture", "oracle-sweep", "oracle-premise", "oracle-qcport", "identity", "measure", "objsweep", "qcport", "turbo", "cv4", "dos-slow")
 
 
 def group_plan(p: Plan, group: str) -> Plan:
@@ -960,6 +986,11 @@ def execute(p: Plan, group: str | None = None) -> tuple[int, list[str]]:
                 return 2, ["build"]
         else:
             env["LLRM_BIN"] = str(snapshot_binaries(Path(target) / "release", Path(target) / "gate-bins"))
+    for name, command in shared_builds(p.steps):
+        report(*run_step(name, command, logs, env, unset=unset))
+        if results[name][0]:
+            print(verdict_line(p.tier, [name], [], time.time() - start, [], head_state()[0]))
+            return 1, [name]
     alone = [s for s in p.steps if s in load()["exclusive"] or s in SERIAL_STEPS]
     rest = [s for s in p.steps if s != "build" and s not in alone]
     jobs = default_jobs(os.environ)
@@ -1023,7 +1054,7 @@ def watch_main(force: bool, every: int = 5, hours: float = 2.0) -> int:
         full = plan(["Cargo.toml"], "full")
         execute(restricted(full, ["measure"], set(commands(full, load(), packages())) | set(load()["exclusive"])))
     # And against the main commit 50 merges or a week back: a branch may add up to the tolerance, ten of them may not.
-    # Both ends of the creep are built as the shipped llrm-c is (`dist`): the slow drift is the user's, not the gate's build's.
+    # Both ends of the creep are built as the shipped llrm-cc is (`dist`): the slow drift is the user's, not the gate's build's.
     subprocess.run(["bash", "-c", DIST_BUILD], cwd=ROOT, env=os.environ, check=True)
     creep = subprocess.run([sys.executable, "tools/measure.py", "creep", "HEAD"], cwd=ROOT, env={**os.environ, "LLRM_BIN": f"{target}/dist", "LLRM_MEASURE_PROFILE": "dist"})
     if creep.returncode == 1:

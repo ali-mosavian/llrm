@@ -1169,3 +1169,106 @@ b2:
     }
     assert_eq!(store_block(&module, &mut analyses), b0, "the store moved to b0, the structure still has it in b1");
 }
+
+/// A load through the pointer a slot holds of a parameter, past
+/// `lifetime.start` of a local, whose address is passed on only after the
+/// load. `opt -passes='print<memoryssa>'` (24.0.0git d1106deb71cc) gives
+/// `MemoryUse(2)`, the `lifetime.start`: its capture analysis does not follow
+/// the order. The objects-that-cannot-meet filter ruled the call out, so the
+/// default build answered live-on-entry where the pin answers the call (and
+/// `LLRM_CHECK_CLOBBERS` asserted): memory_expansion.c's lr<N> under
+/// `LLRM_CHECK_ORDER=1`, 186 bodies.
+#[test]
+fn test_a_local_published_after_the_load_is_still_a_clobber_where_the_pin_says_so() {
+    let parsed = Parsed::new(
+        "declare void @llvm.lifetime.start.p0(i64, ptr)
+declare void @take(ptr)
+
+define i8 @f(ptr %p, i16 %i) {
+b0:
+  %slot = alloca ptr
+  %a = alloca [700 x i8]
+  store ptr %p, ptr %slot
+  call void @llvm.lifetime.start.p0(i64 -1, ptr %a)
+  %l = load ptr, ptr %slot
+  %q = getelementptr inbounds i8, ptr %l, i16 %i
+  %v = load i8, ptr %q
+  call void @take(ptr %a)
+  ret i8 %v
+}
+",
+    );
+    let unit = parsed.unit();
+    let (start, load) = (site(&unit, "b0", 3), site(&unit, "b0", 6));
+    // As the manager gives them: each reference with its provenance.
+    let mut analyses =
+        llrm_mir::passes::Analyses::new(std::rc::Rc::new(llrm_mir::passes::Outer::of(&parsed.module, None)));
+    let accesses =
+        Accesses::managed(&parsed.module.context, &parsed.layout, unit.function, &mut analyses).expect("accesses");
+    let graph = built(&unit, &accesses);
+    let reference = accesses.references[&load].clone();
+    assert!(reference.provenance.is_some(), "the premise: the load names its objects");
+    assert_eq!(graph.clobbers(load, &reference), BTreeSet::from([graph.at(start).id]));
+}
+
+/// The address of the local passed on before `lifetime.start` and the load:
+/// the pin gives `MemoryUse(3)`, the `lifetime.start`.
+#[test]
+fn test_a_local_published_before_the_load_is_a_clobber() {
+    let parsed = Parsed::new(
+        "declare void @llvm.lifetime.start.p0(i64, ptr)
+declare void @take(ptr)
+
+define i8 @f(ptr %p) {
+b0:
+  %slot = alloca ptr
+  %a = alloca [700 x i8]
+  store ptr %p, ptr %slot
+  call void @take(ptr %a)
+  call void @llvm.lifetime.start.p0(i64 -1, ptr %a)
+  %l = load ptr, ptr %slot
+  %v = load i8, ptr %l
+  ret i8 %v
+}
+",
+    );
+    let unit = parsed.unit();
+    let (start, load) = (site(&unit, "b0", 4), site(&unit, "b0", 6));
+    let graph = graph(&unit);
+    assert_eq!(graph.clobbers(load, &cell(&unit, load)), BTreeSet::from([graph.at(start).id]));
+}
+
+/// A local never passed on: the pin gives `MemoryUse(liveOnEntry)`; the load
+/// must not be reported clobbered by `lifetime.start`.
+#[test]
+fn test_a_local_never_published_is_not_a_clobber() {
+    let parsed = Parsed::new(
+        "declare void @llvm.lifetime.start.p0(i64, ptr)
+
+define i8 @f(ptr %p) {
+b0:
+  %slot = alloca ptr
+  %a = alloca [700 x i8]
+  store ptr %p, ptr %slot
+  call void @llvm.lifetime.start.p0(i64 -1, ptr %a)
+  %l = load ptr, ptr %slot
+  %v = load i8, ptr %l
+  ret i8 %v
+}
+",
+    );
+    let unit = parsed.unit();
+    let load = site(&unit, "b0", 5);
+    let graph = graph(&unit);
+    assert_eq!(graph.clobbers(load, &cell(&unit, load)), BTreeSet::from([graph.live.id]));
+}
+
+/// The check asserts the objects-apart filter only where the footprint alone
+/// answers: a call the pin's stack answered Mod (QB runtime footprints the
+/// stack lacks) is the filter's DEVIATE and is not a fault.
+#[test]
+fn test_the_check_does_not_assert_a_footprint_summarized_call() {
+    assert!(!reach_contradicts(true, true, true), "a stack-answered call with a footprint was asserted");
+    assert!(reach_contradicts(false, true, true), "the footprint's own contradiction was not");
+    assert!(!reach_contradicts(false, false, true) && !reach_contradicts(false, true, false));
+}

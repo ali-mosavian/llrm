@@ -94,6 +94,12 @@ pub struct GvnPass<'a> {
     to_split: Vec<(BlockId, BlockId)>,
     /// A block was merged or an edge split.
     cfg_changed: bool,
+    /// `SimplifyQuery{DL, TLI, DT, AC}`: made at the first simplification and
+    /// dropped when the CFG changes.
+    simplifier: Option<llrm_mir::valuetracking::FunctionAnalyses>,
+    /// DEVIATE LP1-FP: the float values a loop (by its header) carries around
+    /// its back edge that GVN made, on top of the phis it had.
+    carried_floats: IdMap<BlockId, usize>,
 }
 
 /// `runImpl`'s scalar part. Whether anything changed.
@@ -150,6 +156,8 @@ pub fn run_impl_exposed(
         block_rpo_number: None,
         to_split: Vec::new(),
         cfg_changed: false,
+        simplifier: None,
+        carried_floats: IdMap::new(),
     };
     let mark = pass.function.mark();
     let computed = pass.run_impl();
@@ -184,6 +192,7 @@ impl GvnPass<'_> {
 
     fn refresh_dominators(&mut self) {
         self.loops = None;
+        self.simplifier = None;
         self.dt = std::borrow::Cow::Owned(DomTree::of(self.function));
     }
 
@@ -806,21 +815,29 @@ impl GvnPass<'_> {
         // `simplifyInstruction` has no arm of MIR's for the other kinds, and
         // building its operands costs.
         let simplified = match self.function.instruction(inst).opcode {
-            Opcode::Binary(_) | Opcode::ICmp(_) | Opcode::Select | Opcode::Cast(_) => {
-                llrm_mir::simplify::simplify_instruction(self.context, self.layout, self.function, inst)
+            Opcode::Binary(_) | Opcode::ICmp(_) | Opcode::Select | Opcode::Cast(_) | Opcode::Call(_) | Opcode::Phi => {
+                // `simplifyCall` knows the callees by `globals`.
+                let analyses = self
+                    .simplifier
+                    .get_or_insert_with(
+                        || llrm_mir::valuetracking::FunctionAnalyses::of_declared(
+                            self.context,
+                            &self.outer.globals,
+                            &self.outer.metadata,
+                            self.layout,
+                            self.function,
+                            self.outer.assume_declared(),
+                        ),
+                    );
+                llrm_mir::simplify::simplify_instruction_in(
+                    self.context,
+                    &self.outer.globals,
+                    self.layout,
+                    Some(analyses),
+                    self.function,
+                    inst,
+                )
             }
-            // A call to an intrinsic (`umax` of two constants a load
-            // forwarded):
-            // `simplifyCall` knows the callees by `globals`.
-            Opcode::Call(_) => llrm_mir::simplify::simplify_instruction_in(
-                self.context,
-                &self.outer.globals,
-                self.layout,
-                None,
-                self.function,
-                inst,
-            ),
-            Opcode::Phi => llrm_mir::simplify::simplify_instruction(self.context, self.layout, self.function, inst),
             _ => None,
         };
         if let Some(simplified) = simplified {

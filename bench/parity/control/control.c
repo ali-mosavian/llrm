@@ -20,15 +20,21 @@ long parity_control(short *value, short *limit)
 static short demo_value;
 static short demo_limit;
 
+/* Read through volatile so no build folds the kernel to a constant. */
+static volatile short input_value1 = 7;
+static volatile short input_limit1 = 6;
+static volatile short input_value2 = -3;
+static volatile short input_limit2 = 5;
+
 long bench_control(void)
 {
     long first;
 
-    demo_value = 7;
-    demo_limit = 6;
+    demo_value = input_value1;
+    demo_limit = input_limit1;
     first = parity_control(&demo_value, &demo_limit);
-    demo_value = -3;
-    demo_limit = 5;
+    demo_value = input_value2;
+    demo_limit = input_limit2;
     return first * 1000L + parity_control(&demo_value, &demo_limit);
 }
 

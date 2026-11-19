@@ -161,10 +161,19 @@ impl ScalarEvolution {
             if cx.function.parent(inst).is_none() {
                 continue;
             }
-            let was = bare(self.print(cx, &labels, kept));
+            // As `verify` does (`SCEVMapper`): the kept expression is rebuilt
+            // in the new universe.
+            let mapped = self.mapped_into(&mut fresh, cx, kept);
+            let was = bare(fresh.print(cx, &labels, mapped));
             let new = fresh.get_scev(cx, Operand::Value(value));
             let now = bare(fresh.print(cx, &labels, new));
-            if was != now && !weaker(&was, &now) {
+            // The same sum in another order: terms tied in complexity keep the
+            // order they were made in, so the pin compares by the difference.
+            let same = fresh.type_of(mapped) == fresh.type_of(new) && {
+                let delta = fresh.get_minus_scev(cx, Use::of(mapped), Use::of(new), 0, 0);
+                fresh.as_constant(delta).is_some_and(|difference| difference.is_zero())
+            };
+            if was != now && !same && !weaker(&was, &now) {
                 return Err(format!(
                     "{}: kept {was}, now {now}",
                     self.print_value_name(&labels, Operand::Value(value))
@@ -304,5 +313,72 @@ b0:
             se.get_scev(cx, y);
             assert_eq!(se.verify(cx), Ok(()));
         });
+    }
+
+    const SUM: &str = "define i16 @f(i16 %a, i16 %b, i16 %c, i16 %d) {
+b0:
+  %p = and i16 %a, %b
+  %q = and i16 %a, %c
+  %s = add i16 %p, %q
+  ret i16 %s
+}
+";
+
+    /// A kept `(%p + %q)` that a fresh `ScalarEvolution` orders `(%q + %p)`
+    /// once an edit has made `%p` the more complex operand (the order follows
+    /// `CompareValueComplexity` of what the operands are built from) is the
+    /// same expression: `lsr` left `scev` "held but stale" on x_dct -O1/-O2
+    /// (`kept (%128 + %131 + %105 + %107), now (%105 + %107 + %128 + %131)`)
+    /// under `LLRM_CHECK_PRESERVED`. One whose value changed still is stale.
+    #[test]
+    fn a_kept_sum_in_another_order_is_the_same_expression_and_a_changed_one_is_not() {
+        let mut module = llrm_mir::parse::module(SUM).expect("a module");
+        let mut se = ScalarEvolution::new();
+        let (s, p) = (value_named(&module, "s"), value_named(&module, "p"));
+        with_cx(&module, |cx| {
+            se.get_scev(cx, s);
+            assert_eq!(se.verify_same(cx), Ok(()), "a fresh cache is right");
+        });
+        let inst_of = |module: &Module, value: Operand| {
+            let (_, _, function) = module.functions().next().unwrap();
+            let Operand::Value(value) = value else { unreachable!() };
+            let llrm_mir::module::ValueDef::Instruction(inst) = function.value(value).def else { unreachable!() };
+            inst
+        };
+        // %p = and %a, %d: after %q = and %a, %c in operand order.
+        let d = {
+            let (_, _, function) = module.functions().next().unwrap();
+            Operand::Value(function.parameters()[3])
+        };
+        let p_inst = inst_of(&module, p);
+        module.function_mut("f").expect("@f").1.set_operand(p_inst, 1, d);
+        with_cx(&module, |cx| {
+            assert_eq!(se.verify(cx), Ok(()), "the pin's check passes");
+            assert_eq!(se.verify_same(cx), Ok(()), "{:?}", se.verify_same(cx));
+        });
+    }
+
+    /// The other half: a kept expression of a value that changed is stale.
+    #[test]
+    fn a_kept_expression_whose_value_changed_is_stale_for_the_oracle() {
+        let mut module = llrm_mir::parse::module(TEXT).expect("a module");
+        let mut se = ScalarEvolution::new();
+        let (x, y) = (value_named(&module, "x"), value_named(&module, "y"));
+        with_cx(&module, |cx| {
+            se.get_scev(cx, y);
+        });
+        let two = {
+            let ty = module.functions().next().unwrap().2.operand_type(&module.context, x).unwrap();
+            Operand::Constant(module.context.int(ty, 2))
+        };
+        let inst = {
+            let (_, _, function) = module.functions().next().unwrap();
+            let Operand::Value(value) = x else { unreachable!() };
+            let llrm_mir::module::ValueDef::Instruction(inst) = function.value(value).def else { unreachable!() };
+            inst
+        };
+        module.function_mut("f").expect("@f").1.set_operand(inst, 1, two);
+        let stale = with_cx(&module, |cx| se.verify_same(cx));
+        assert!(stale.as_ref().is_err_and(|why| why.contains("kept")), "{stale:?}");
     }
 }

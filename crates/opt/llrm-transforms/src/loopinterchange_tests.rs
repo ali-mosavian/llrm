@@ -293,6 +293,7 @@ exit:
     let unit = llrm_analysis::memory::Unit::of(&module, &layout, function);
     let mut aa = AggregateAA::new();
     aa.add_aa_result(BasicAA::new(&unit));
+    aa.add_aa_result(llrm_analysis::scopednoaliasaa::ScopedNoAliasAA::new(&unit));
     aa.add_aa_result(TypeBasedAA::new(&unit));
     let options = Options::default();
     let mut info = DependenceInfo::new(&mut aa, &unit, &cx, options.da);

@@ -380,3 +380,76 @@ fn a_constant_minus_an_extended_value_that_cannot_wrap_is_subtracted_narrow() {
         "  %m = and i8 %x, 15\n  %0 = sub nuw nsw i8 20, %m\n  %1 = zext i8 %0 to i32\n  ret i32 %1\n",
     );
 }
+
+/// `(p + n) - p` is `n` (`opt` agrees). `OptimizePointerDifference` was not
+/// translated: `slen`'s `strlen` call left `(s + len) - s` standing, 3
+/// instructions and a register pair on a Z80.
+#[test]
+fn the_difference_of_a_pointer_and_its_gep_is_the_offset() {
+    check(
+        "i64",
+        "ptr %p, i64 %n",
+        "  %g = getelementptr i8, ptr %p, i64 %n\n  %a = ptrtoint ptr %g to i64\n  %b = ptrtoint ptr %p to i64\n  %r = sub i64 %a, %b\n  ret i64 %r\n",
+        "  ret i64 %n\n",
+    );
+}
+
+/// `trunc(p) - trunc(q)` is `trunc(p - q)` (`opt` agrees).
+#[test]
+fn the_difference_of_truncated_pointers_is_the_truncated_offset() {
+    check(
+        "i32",
+        "ptr %p, i64 %n",
+        "  %g = getelementptr i8, ptr %p, i64 %n\n  %a = ptrtoint ptr %g to i64\n  %b = ptrtoint ptr %p to i64\n  %c = trunc i64 %a to i32\n  %d = trunc i64 %b to i32\n  %r = sub i32 %c, %d\n  ret i32 %r\n",
+        "  %0 = trunc i64 %n to i32\n  ret i32 %0\n",
+    );
+}
+
+/// `zext(&p[n]) - zext(p)` with a `nuw` GEP is the zero-extended offset,
+/// `nneg` when the GEP is also `inbounds` (`opt` agrees).
+#[test]
+fn the_difference_of_extended_pointers_is_the_extended_offset() {
+    let sub = "  %a = ptrtoint ptr %g to i64\n  %b = ptrtoint ptr %p to i64\n  %c = zext i64 %a to i128\n  %d = zext i64 %b to i128\n  %r = sub i128 %c, %d\n  ret i128 %r\n";
+    check(
+        "i128",
+        "ptr %p, i64 %n",
+        &format!("  %g = getelementptr nuw i8, ptr %p, i64 %n\n{sub}"),
+        "  %0 = zext i64 %n to i128\n  ret i128 %0\n",
+    );
+    check(
+        "i128",
+        "ptr %p, i64 %n",
+        &format!("  %g = getelementptr inbounds nuw i8, ptr %p, i64 %n\n{sub}"),
+        "  %0 = zext nneg i64 %n to i128\n  ret i128 %0\n",
+    );
+}
+
+/// `n - (n & 1)`, the trip count LoopUnroll's runtime remainder makes, stayed a
+/// `sub` and an `and` where the pin has `n & -2`: wasm `floats` -O3 recomputed
+/// the bound every iteration (+1000 instructions).
+#[test]
+fn x_minus_x_and_a_constant_is_x_and_its_complement() {
+    check(
+        "i32",
+        "i32 %x",
+        "  %a = and i32 %x, 1\n  %r = sub i32 %x, %a\n  ret i32 %r\n",
+        "  %0 = and i32 %x, -2\n  ret i32 %0\n",
+    );
+}
+
+/// With a variable mask the `and` must have no other user (`opt` agrees).
+#[test]
+fn x_minus_x_and_y_is_x_and_not_y_only_for_a_one_use_and() {
+    check(
+        "i32",
+        "i32 %x, i32 %y",
+        "  %a = and i32 %x, %y\n  %r = sub i32 %x, %a\n  ret i32 %r\n",
+        "  %0 = xor i32 %y, -1\n  %1 = and i32 %x, %0\n  ret i32 %1\n",
+    );
+    check(
+        "i32",
+        "i32 %x, i32 %y",
+        "  %a = and i32 %x, %y\n  %r = sub i32 %x, %a\n  %s = add i32 %r, %a\n  ret i32 %s\n",
+        "  %a = and i32 %x, %y\n  %r = sub i32 %x, %a\n  %s = add i32 %r, %a\n  ret i32 %s\n",
+    );
+}

@@ -68,9 +68,23 @@
 //!   `CodeSize` of the callee's instructions that the walk did not fold must
 //!   not exceed the `CodeSize` of the call and the pushes of its arguments.
 //!   LLVM's `OptSizeThreshold` 50 allows growth; a fixed bound (25) copied a
-//!   14-instruction loop into ten sites (`idioms.bas`, +690 B). The last call
-//!   of a local callee, which goes with it, is the pin's. No shape of callee
-//!   but the loop and the one smaller than its call is tested.
+//!   14-instruction loop into ten sites (`idioms.bas`, +690 B). Measured
+//!   2026-11-07 (m32 -Os, 176 programs, guard off = the pin's rule): 47 cells
+//!   worse, 4 better, +22946 B net (`memory_expansion` 23740 -> 40688,
+//!   `div_constants_long` +989, `idioms` +507, `rep_tails` +485); the one gain
+//!   is `byvalue_struct_address` 147 -> 16. The guard stays. The last call of a
+//!   local callee, which goes with it, is the pin's. No shape of callee but the
+//!   loop and the one smaller than its call is tested. A target may say the
+//!   guard stands down for an `inlinehint` callee at an `optsize` caller
+//!   (`Tti::opt_size_inline_guard_yields_to_inlinehint`, arm64: yes): the
+//!   pin's `updateThreshold` raises the threshold to `InlineHintThreshold`
+//!   (325) there, and its cost under that is the verdict (QuickrBasic
+//!   operands.c -Os `hot_operand` into `hot_int`, 26 units against two 3-unit
+//!   calls: 15,344 -> 10,400 B, the pin's 9,464). The guard still holds for a
+//!   callee with no hint.
+//! - SZ1-SITE (owner m68k-b, exit 2026-11-24): the size rule (D11) prices a
+//!   callee's instruction with the call site's constant arguments, not only a
+//!   GEP as `isGEPFree` does (z80 `rotate_small` -O1 922 -> 576 B).
 //! - D12 (SZ2): a call the -Os bound (D11) alone refuses, that passes the
 //!   address of a stack slot or a global the caller stored a constant to and
 //!   whose callee loads through that parameter, is inlined if the caller,
@@ -78,16 +92,29 @@
 //!   cost (`walk.rs`, callers of at most 300 instructions; the sites of a
 //!   private callee that dies with its last call are tried together, its body
 //!   credited; so are the sites of a private callee called only from this
-//!   caller, whatever they pass). The pin's cost does not follow a load through
-//!   a pointer argument, so it never sees the loop or the arithmetic fold.
+//!   caller, whatever they pass). A trial the instruction units refuse stays if
+//!   the caller is an eighth or more smaller in bytes by the target's byte
+//!   prices (`function_bytes`), at a caller with no byte rate, the callee
+//!   staying: the units count a call by its parameters, not the far-pointer
+//!   words it pushes (`sum_three` -Os, +38 B). The pin's cost does not follow a
+//!   load through a pointer argument, so it never sees the loop or the
+//!   arithmetic fold.
+//! - D13 (SZ5, owner x86-m32, exit 2026-11-24; extends D12): at -Os the credit
+//!   for the callee that goes with its last call (`(k - 1) * size > k * call +
+//!   frame`) is not taken in the instruction units; those sites are tried in
+//!   bytes (SZ2). The units count the callee's own instructions, not what a
+//!   copy carries at the site: QCport `pl_box_axis` (9 arguments, floats), 21
+//!   units, ~70 B a copy, inlined three times was +181 B. The pin has no byte
+//!   trial; its `OptSizeThreshold` alone decides.
 //! - D9: `noipa` (GCC's; LLVM has no IR form) is `Never` before any other
 //!   attribute decision.
 //! - D7: the minsize loop penalty counts retreating-edge headers, not
 //!   `LoopInfo`.
-//! - D10 (`-finline-recursive`, off by default): a callee that calls itself is
-//!   priced as any (LLVM: "recursive", `IsRecursiveCall`, unless
-//!   `AllowRecursiveCall`), and `decide` leaves a call of the caller itself to
-//!   the copies `walk::SelfInline` makes (gcc's `recursive_inlining`,
+//! - D10 (`-finline-recursive`; on by default at -O2 and -O3 where the target
+//!   states bounds (x86), `-fno-inline-recursive` turns it off): a callee that
+//!   calls itself is priced as any (LLVM: "recursive", `IsRecursiveCall`,
+//!   unless `AllowRecursiveCall`), and `decide` leaves a call of the caller
+//!   itself to the copies `walk::SelfInline` makes (gcc's `recursive_inlining`,
 //!   ipa-inline.cc:1645: depth `MAX_INLINE_RECURSIVE_DEPTH` 3 against gcc's 8,
 //!   `MAX_INLINE_INSNS_RECURSIVE` 150 against 450, the call's frequency above
 //!   10%; none at -Os; calls of a function that reads and writes nothing with
@@ -122,6 +149,8 @@ use llrm_mir::opcode::{AtomicKind, Attribute, BinaryOp, CallInfo, CastOp, FloatP
 use llrm_mir::tti::{CastKind, CostKind, Ty};
 use llrm_mir::types::{FloatKind, Type};
 use llrm_support::hash::HashMap;
+
+use crate::trial;
 
 // InlineCost.cpp:58-186, the `cl::opt` defaults.
 /// `inline-instr-cost`.
@@ -166,6 +195,9 @@ const COLD_CC: u32 = 9;
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct InlineParams {
     pub default_threshold: i64,
+    /// -O1 (and -Og): the pass prices no byte in clocks (`Options::speed_rate`
+    /// off). The only level INL-O1's `inline_never_grows_without_rate` binds.
+    pub o1_bound: bool,
     pub hint_threshold: i64,
     pub opt_size_hint_threshold: i64,
     pub cold_threshold: i64,
@@ -180,9 +212,22 @@ pub struct InlineParams {
     /// `AllowRecursiveCall`: a callee that calls itself is priced, not
     /// refused. The pin's is false; D10 (`-finline-recursive`) sets it.
     pub allow_recursive_call: bool,
+    /// With `allow_recursive_call`, the largest recursive callee (`gcc_insns`)
+    /// priced rather than refused.
+    pub recursive_callee_limit: i64,
+    /// With `allow_recursive_call`, the most a recursive callee may grow its
+    /// caller (`recursive_edge_growth`, gcc's `max-inline-insns-auto`).
+    pub recursive_edge_growth: i64,
     /// The `LastCallToStatic` bonus applies. The pin's always does;
     /// `-fno-inline-functions-called-once` turns it off.
     pub last_call_to_static: bool,
+    /// DEVIATE BFS-1 (owner x86-m16-b, exit: A/B, then land or drop): the
+    /// cold-site test reads the frequency in which failure sinks carry no mass.
+    /// Off: the pin's.
+    pub cold_site_ignores_sinks: bool,
+    /// DEVIATE LASTCALL-COLD: the `LastCallToStatic` bonus stays at a cold
+    /// call site of a caller optimized for size. Off: the pin's.
+    pub last_call_in_cold_site: bool,
     /// Which target's answers `getInstructionCost` and its kin give (D2).
     pub tti: Tti,
 }
@@ -202,6 +247,7 @@ impl InlineParams {
     pub fn new(threshold: i64) -> Self {
         Self {
             default_threshold: threshold,
+            o1_bound: false,
             hint_threshold: HINT_THRESHOLD,
             opt_size_hint_threshold: HINT_THRESHOLD,
             cold_threshold: COLD_THRESHOLD,
@@ -212,7 +258,11 @@ impl InlineParams {
             opt_size_threshold: OPT_SIZE_THRESHOLD,
             compute_full_inline_cost: false,
             allow_recursive_call: false,
+            recursive_callee_limit: i64::MAX,
+            recursive_edge_growth: i64::MAX,
             last_call_to_static: true,
+            cold_site_ignores_sinks: false,
+            last_call_in_cold_site: false,
             tti: Tti::Generic,
         }
     }
@@ -251,11 +301,31 @@ pub struct Site<'a> {
     /// The callee has local linkage and this call is its only use
     /// (`isSoleCallToLocalFunction`).
     pub sole_call_to_local: bool,
+    /// The direct calls to the callee in the module.
+    pub callee_calls: i64,
+    /// The callee has local linkage and its address is not taken: its body
+    /// goes once every call of it is inlined.
+    pub callee_dies: bool,
     /// The caller calls itself (`IsCallerRecursive`).
     pub caller_recursive: bool,
+    /// The callee calls itself from exactly one place
+    /// (`inline::linear_recursive`).
+    pub callee_linear_recursive: bool,
     pub caller_size: CallerSize,
     /// The site's block frequency over the caller's entry block's (D1).
     pub relative_frequency: Option<f64>,
+    /// [`Self::relative_frequency`] with failure sinks carrying no mass
+    /// (BFS-1); read by the cold-site test when
+    /// `InlineParams::cold_site_ignores_sinks`.
+    pub cold_frequency: Option<f64>,
+    /// How often the caller runs per run of the program, from the calls to it
+    /// up the call graph (read only where the target weighs it,
+    /// `Tti::inline_o1_weighs_entry`); none: once.
+    pub entry_weight: Option<&'a dyn Fn() -> f64>,
+    /// The caller's calls already decided to be inlined in this sweep: the
+    /// pin's inliner splices each before it prices the next, so a later site
+    /// sees their bodies (`folded_caller_stores`).
+    pub planned: Option<&'a IdSet<InstId>>,
     /// The target's LLVM cost model (`Machine::tti`); none: the generic rules.
     pub tti: Option<&'a dyn llrm_mir::tti::Tti>,
 }
@@ -273,6 +343,9 @@ pub enum InlineCost {
         /// Refused by the target's -Os bound alone (D11): the pin's threshold
         /// would have allowed it.
         blocked: bool,
+        /// Refused by the pin's threshold alone at a site hot enough to try
+        /// (INL-HOT): the walk inlines it where the rate pays.
+        hot: bool,
     },
 }
 
@@ -289,7 +362,7 @@ impl InlineCost {
     }
 }
 
-fn has_flag(
+pub(crate) fn has_flag(
     attrs: &[Attribute],
     name: &str,
 ) -> bool {
@@ -317,7 +390,7 @@ fn call_info(
 /// `getAttributeBasedInliningDecision` (InlineCost.cpp:3191): some verdict the
 /// callee's and call's attributes settle, or none.
 ///
-/// D4: no coroutine, target-feature, strict FP, `optnone`, `flatten` checks.
+/// D4: no coroutine, target-feature, strict FP, `flatten` checks.
 pub fn attribute_decision(site: &Site) -> Option<Result<(), String>> {
     let call = call_info(site.caller, site.call)?;
     let callee_attrs = &site.callee.attrs;
@@ -336,6 +409,10 @@ pub fn attribute_decision(site: &Site) -> Option<Result<(), String>> {
     }
     if has_flag(&call.attrs, "noinline") {
         return Some(Err("noinline call site attribute".into()));
+    }
+    // Don't inline into a function that has the optnone attribute.
+    if site.caller.has_opt_none() {
+        return Some(Err("optnone attribute".into()));
     }
     // Don't inline what can be interposed at link time: the body is not the
     // definition that runs.
@@ -482,10 +559,16 @@ struct Analyzer<'a> {
     single_bb_bonus: i64,
     threshold: i64,
     static_bonus_applied: i64,
+    /// `updateThreshold` raised the threshold for `inlinehint` at an `optsize` caller.
+    hint_applied: bool,
     cost: i64,
     single_bb: bool,
     decided_by_threshold: bool,
     blocked_by_bound: bool,
+    /// A loop's exit test compares against a bound that this site's arguments
+    /// make constant: the copy knows its trip count (see
+    /// `Tti::inline_hints_known_loop_bound`).
+    loop_bound_known: bool,
     sroa_arg_costs: IdMap<ValueId, i64>,
 }
 
@@ -524,10 +607,12 @@ impl<'a> Analyzer<'a> {
             single_bb_bonus: 0,
             threshold: params.default_threshold,
             static_bonus_applied: 0,
+            hint_applied: false,
             cost: 0,
             single_bb: true,
             decided_by_threshold: false,
             blocked_by_bound: false,
+            loop_bound_known: false,
             sroa_arg_costs: IdMap::new(),
         }
     }
@@ -881,15 +966,14 @@ impl<'a> Analyzer<'a> {
                 match (self.site.tti, kind, from.and_then(|ty| Ty::of(types, ty)), Ty::of(types, operation.ty)) {
                     (Some(tti), Some(kind), Some(src), Some(dst)) => {
                         let cost = tti.cast_cost(kind, dst, src, CostKind::SizeAndLatency);
-                        // BasicTTIImpl.h:1298-1311: the extension of a simple
-                        // load.
+                        // BasicTTIImpl.h:1298-1311: the extension of a load
+                        // (a volatile one too: the pin's `opt` prices the
+                        // `sext` of `load volatile i16` at none, 50 for
+                        // parity/algebra's `bench_algebra` where ours read 70).
                         let of_load = match operation.operands[0] {
                             Operand::Value(value) => match self.callee.value(value).def {
                                 llrm_mir::module::ValueDef::Instruction(def) => {
-                                    matches!(
-                                        self.callee.instruction(def).opcode,
-                                        Opcode::Load { volatile: false, .. }
-                                    )
+                                    matches!(self.callee.instruction(def).opcode, Opcode::Load { .. })
                                 }
                                 llrm_mir::module::ValueDef::Argument(_) => false,
                             },
@@ -1017,7 +1101,14 @@ impl<'a> Analyzer<'a> {
             }
             Opcode::Resume => false,
             Opcode::Unreachable => true,
-            Opcode::LandingPad { .. } | Opcode::Freeze => self.visit_default(inst),
+            // CallAnalyzer has no visitor for the lane
+            // operations: `visitInstruction`.
+            Opcode::LandingPad { .. }
+            | Opcode::Freeze
+            | Opcode::VaArg
+            | Opcode::ExtractElement
+            | Opcode::InsertElement
+            | Opcode::ShuffleVector(_) => self.visit_default(inst),
         }
     }
 
@@ -1255,17 +1346,21 @@ impl<'a> Analyzer<'a> {
             Opcode::Cast(
                 CastOp::FPTrunc | CastOp::FPExt | CastOp::UIToFP | CastOp::SIToFP | CastOp::FPToUI | CastOp::FPToSI
             )
-        ) && self.fp_expensive()
+        ) && self.fp_expensive(operation.ty)
         {
             self.add_cost(CALL_PENALTY);
         }
         self.free_instruction(inst)
     }
 
-    /// `getFPOpCost == TCC_Expensive` (D2): the generic answer, an FP type the
-    /// hardware does not have; x86 with an x87 has them all.
-    fn fp_expensive(&self) -> bool {
-        false
+    /// `getFPOpCost(ty) == TCC_Expensive` (D2): an FP type the target has no
+    /// legal `FADD` on (`Tti::fp_op_expensive`); none: generic, legal.
+    fn fp_expensive(
+        &self,
+        ty: llrm_mir::types::TypeId,
+    ) -> bool {
+        let Some(tti) = self.site.tti else { return false };
+        Ty::of(&self.context.types, ty).is_some_and(|ty| tti.fp_op_expensive(ty))
     }
 
     /// `visitCmpInst` (:2206).
@@ -1283,6 +1378,9 @@ impl<'a> Analyzer<'a> {
             return false;
         }
         let Some(result) = operation.result else { return false };
+        if matches!(operation.opcode, Opcode::ICmp(_)) && !self.loop_bound_known {
+            self.loop_bound_known = self.tests_a_loop_against_an_argument_bound(inst, lhs, rhs);
+        }
         if let Operand::Value(left) = lhs
             && let Some((base, left_offset)) = self.offsets.get(&left).copied()
             && let Operand::Value(right) = rhs
@@ -1309,6 +1407,37 @@ impl<'a> Analyzer<'a> {
             }
         }
         self.handle_sroa(lhs, null_rhs)
+    }
+
+    /// Whether the compare `inst` ends a loop trip (it sits in a loop header or
+    /// in a block that branches back to one) and one side is a value this
+    /// site's arguments made constant while the other is not.
+    fn tests_a_loop_against_an_argument_bound(
+        &self,
+        inst: InstId,
+        lhs: Operand,
+        rhs: Operand,
+    ) -> bool {
+        let from_arguments =
+            |operand: Operand| matches!(operand, Operand::Value(_)) && self.constant(operand).is_some();
+        if from_arguments(lhs) == from_arguments(rhs) || (self.constant(lhs).is_some() && self.constant(rhs).is_some())
+        {
+            return false;
+        }
+        let Some(block) = self.callee.parent(inst) else { return false };
+        let headers = loop_headers(self.callee);
+        // the loop the compare ends: its own header, or the header it branches
+        // to
+        let header = if headers.contains(&block) {
+            Some(block)
+        } else {
+            self.callee.successors(block).into_iter().find(|next| headers.contains(next))
+        };
+        // Only an innermost loop is copied out whole (`LoopFullUnrollPass`
+        // takes a loop with no inner loop): the constant bound of an
+        // outer loop leaves its copy as big as the callee (idiv_loop_os -O2:
+        // `total(300)` kept beside the call, +128 B).
+        header.is_some_and(|header| is_innermost(self.callee, header, &headers))
     }
 
     /// `isKnownNonNullInCallee` (:1974).
@@ -1359,7 +1488,7 @@ impl<'a> Analyzer<'a> {
         }
         self.disable_sroa(operation.operands[0]);
         self.disable_sroa(operation.operands[1]);
-        if matches!(self.context.types.get(operation.ty), Type::Float(_)) && self.fp_expensive() {
+        if matches!(self.context.types.get(operation.ty), Type::Float(_)) && self.fp_expensive(operation.ty) {
             self.add_cost(CALL_PENALTY);
         }
         false
@@ -1477,7 +1606,17 @@ impl<'a> Analyzer<'a> {
         };
         // `F == Call.getCalledFunction()`: "This flag will fully abort the
         // analysis" unless the params allow a recursive call (:2481).
-        if target == self.site.callee_id && !self.params.allow_recursive_call {
+        if target == self.site.callee_id
+            && (!self.params.allow_recursive_call
+                || if self.peels_linear_recursion() {
+                    // DEVIATE REC-9: gcc's bar for a copy of a small function;
+                    // the rest is the peeling's own caps.
+                    crate::inline::gcc_insns(self.callee) - 1 > crate::inline::MAX_INLINE_INSNS_AUTO
+                } else {
+                    crate::inline::gcc_work(self.callee) > self.params.recursive_callee_limit
+                        || crate::inline::recursive_edge_growth(self.callee) > self.params.recursive_edge_growth
+                })
+        {
             self.is_recursive_call = true;
             return false;
         }
@@ -1643,6 +1782,10 @@ impl<'a> Analyzer<'a> {
             let compares = 3 * clusters as i64 / 2 - 1;
             self.add_cost(compares * 2 * INSTR_COST);
         }
+        if let Some(tti) = self.site.tti {
+            let view = tti.inline_size_view();
+            self.size_units += view.as_deref().unwrap_or(tti).switch_code_size(clusters, table);
+        }
         false
     }
 
@@ -1713,6 +1856,8 @@ impl<'a> Analyzer<'a> {
                 // onMissedSimplification (:835)
                 self.add_cost(INSTR_COST);
                 self.size_units += self.code_size_of(inst);
+            } else if self.free_but_encoded(inst) {
+                self.size_units += self.code_size_of(inst);
             }
             if llrm_support::env_flag!("LLRM_EXP_INLINETRACE") {
                 eprintln!(
@@ -1778,6 +1923,7 @@ impl<'a> Analyzer<'a> {
                     self.params.hint_threshold
                 };
                 if has_flag(&self.callee.attrs, "inlinehint") {
+                    self.hint_applied = caller_size == CallerSize::OptSize && hint > self.threshold;
                     self.threshold = self.threshold.max(hint);
                 }
                 let frequency = self.site.relative_frequency;
@@ -1787,10 +1933,14 @@ impl<'a> Analyzer<'a> {
                     .filter(|_| frequency.is_some_and(|ratio| ratio >= HOT_CALLSITE_REL_FREQ));
                 if caller_size != CallerSize::OptSize && locally_hot.is_some() {
                     self.threshold = locally_hot.expect("some");
-                } else if frequency.is_some_and(|ratio| ratio < COLD_CALLSITE_REL_FREQ / 100.0) {
+                } else if (if self.params.cold_site_ignores_sinks { self.site.cold_frequency } else { frequency })
+                    .is_some_and(|ratio| ratio < COLD_CALLSITE_REL_FREQ / 100.0)
+                {
                     single_bb_percent = 0;
                     vector_percent = 0;
-                    last_call_bonus = 0;
+                    if !(self.params.last_call_in_cold_site && caller_size == CallerSize::OptSize) {
+                        last_call_bonus = 0;
+                    }
                     self.threshold = self.threshold.min(self.params.cold_callsite_threshold);
                 }
             }
@@ -1974,21 +2124,81 @@ impl<'a> Analyzer<'a> {
     }
 
     /// The target's `CostKind::CodeSize` of `inst` of the callee.
+    /// Whether an instruction the analyzer prices at nothing still encodes
+    /// bytes in the spliced body. The pin counts phis, jumps, the first
+    /// return and free casts as free because they cost no work, not because
+    /// they vanish; only a folded result (a known constant, an SROA'd
+    /// address) vanishes. The byte view prices what stays.
+    fn free_but_encoded(
+        &self,
+        inst: InstId,
+    ) -> bool {
+        let operation = self.callee.instruction(inst);
+        let stays = match &operation.opcode {
+            Opcode::Phi | Opcode::Cast(_) => true,
+            Opcode::Br => operation.operands.len() == 1,
+            Opcode::Ret => true,
+            _ => false,
+        };
+        stays
+            && self.measured()
+            && operation
+                .result
+                .is_none_or(|result| self.simplified.get(&result).is_none() && self.offsets.get(&result).is_none())
+    }
+
+    /// The target's byte view of the callee's code, for a speed caller only: a
+    /// size caller keeps the units its -Os bound was fitted in (DEVIATE
+    /// INL-O1 SIZE, owner m32-o1-small, exit 2026-11-14). The view's lowering
+    /// is the -O2/-O3 one: -O1 keeps the pricing its bound was fitted in.
+    fn size_view(&self) -> Option<std::rc::Rc<dyn llrm_mir::tti::Tti>> {
+        let tti = self.site.tti?;
+        let speed = self.site.caller_size == CallerSize::Speed;
+        tti.inline_size_view_at(speed && !self.params.o1_bound).filter(|_| !tti.inline_size_view_is_measured() || speed)
+    }
+
+    /// Whether the size view is the measured one
+    /// (`inline_size_view_is_measured`) and serves this caller.
+    fn measured(&self) -> bool {
+        self.size_view().is_some() && self.site.tti.is_some_and(|tti| tti.inline_size_view_is_measured())
+    }
+
     fn code_size_of(
         &self,
         inst: InstId,
     ) -> i64 {
         let Some(tti) = self.site.tti else { return 0 };
-        llrm_mir::instructioncost::instruction_cost(
-            tti,
+        let view = self.size_view();
+        llrm_mir::instructioncost::instruction_cost_known(
+            view.as_deref().unwrap_or(tti),
             self.context,
             self.site.layout,
             &self.site.module.globals,
             self.callee,
             inst,
+            &self.callee.instruction(inst).operands,
             llrm_mir::tti::CostKind::CodeSize,
+            &|operand| self.site_constant_info(operand),
         )
         .value
+    }
+
+    /// What a callee operand is at this site when the call's constant arguments
+    /// fix it (`SimplifiedValues`), for a size priced as the copy would be: a
+    /// shift by 5 is not a library call of a variable amount.
+    ///
+    /// DEVIATE SZ1-SITE (owner m68k-b, exit 2026-11-24): the pin prices only a
+    /// GEP with the site's constants (`isGEPFree`); the byte size view
+    /// prices every instruction the analysis could not fold. Exit: the
+    /// pin's flat `InstrCost` there, or keep with the measured numbers.
+    fn site_constant_info(
+        &self,
+        operand: Operand,
+    ) -> Option<llrm_mir::tti::OperandInfo> {
+        match self.constant(operand)? {
+            Simple::Int(width, bits) => Some(llrm_mir::tti::OperandInfo::constant(bits as i128, width)),
+            _ => None,
+        }
     }
 
     /// The target's code size of the call and the pushes of its arguments,
@@ -1996,8 +2206,12 @@ impl<'a> Analyzer<'a> {
     /// counted as.
     fn call_size(&self) -> i64 {
         let Some(tti) = self.site.tti else { return 0 };
+        if let Some(sequence) = self.call_sequence(llrm_mir::tti::CostKind::CodeSize) {
+            return sequence;
+        }
+        let view = self.size_view();
         let size = llrm_mir::instructioncost::instruction_cost(
-            tti,
+            view.as_deref().unwrap_or(tti),
             self.context,
             self.site.layout,
             &self.site.module.globals,
@@ -2006,7 +2220,438 @@ impl<'a> Analyzer<'a> {
             llrm_mir::tti::CostKind::CodeSize,
         )
         .value;
-        (size * tti.call_code_size_percent() + 50) / 100
+        let size = size - self.unread_arguments_cost(llrm_mir::tti::CostKind::CodeSize);
+        let percent = if self.measured() {
+            view.as_deref().unwrap_or(tti).call_code_size_percent()
+        } else {
+            tti.call_code_size_percent()
+        };
+        (size * percent + 50) / 100 + self.byval_copy_size()
+    }
+
+    /// What the arguments of parameters the callee never reads add to the
+    /// call's price: `deadargelim` removes them after the walk (the pin's
+    /// order), so the code the inline replaces has no setup for them. The
+    /// pin's own cost keeps them; the guards below price the call the code
+    /// will contain, so an inline's verdict does not turn on a parameter that
+    /// is about to go (x_jpeg_fixed -O2: `emit`'s constant `out`).
+    fn unread_arguments_cost(
+        &self,
+        kind: llrm_mir::tti::CostKind,
+    ) -> i64 {
+        let Some(tti) = self.site.tti else { return 0 };
+        let linkage = self.site.module.global(self.site.callee_id).linkage;
+        if !matches!(
+            linkage,
+            llrm_mir::module::Linkage::Internal | llrm_mir::module::Linkage::Private
+        ) {
+            return 0;
+        }
+        let parameters = self.callee.parameters();
+        let unread = self.unread_parameters().iter().filter(|&&one| one).count() as i64;
+        if unread == 0 {
+            return 0;
+        }
+        let all = parameters.len() as i64;
+        let with = tti.direct_call_cost(all, kind);
+        let without = tti.direct_call_cost(all - unread, kind);
+        if with.valid && without.valid { (with.value - without.value).max(0) } else { 0 }
+    }
+
+    /// Per parameter: nothing reads it and `deadargelim` will drop it (an
+    /// internal or private callee).
+    fn unread_parameters(&self) -> Vec<bool> {
+        unread_parameters_of(self.site.module, self.site.callee_id)
+    }
+
+    /// The by-value arguments' copy onto the stack, which the call's flat
+    /// price leaves out and inlining removes: a load and a store per word.
+    fn byval_copy_size(&self) -> i64 {
+        let Some(shape) = self.call_shape() else { return 0 };
+        let word = (i64::from(self.site.layout.pointer(0).bits) / 8).max(1);
+        shape
+            .arguments
+            .iter()
+            .filter_map(|argument| argument.byval_bytes)
+            .map(|bytes| 2 * ((bytes as i64 + word - 1) / word))
+            .sum()
+    }
+
+    /// The call site as the target's call sequence sees it.
+    fn call_shape(&self) -> Option<llrm_mir::tti::CallShape> {
+        use llrm_mir::tti::{CallArgument, CallShape, Ty};
+        let call = self.site.caller.instruction(self.site.call);
+        let info = call_info(self.site.caller, self.site.call)?;
+        let arguments = call.operands.len().saturating_sub(1);
+        // an argument for a parameter nothing reads is gone once `deadargelim`
+        // runs after the walk
+        let unread = self.unread_parameters();
+        let arguments = (0..arguments)
+            .filter(|&index| !unread.get(index).copied().unwrap_or(false))
+            .map(|index| {
+                let byval = info
+                    .argument_attrs
+                    .get(index)
+                    .and_then(
+                        |attrs| attrs
+                            .iter()
+                            .find_map(
+                                |one| match one {
+                                    Attribute::Type(name, ty) if name == "byval" => Some(*ty),
+                                    _ => None,
+                                },
+                            ),
+                    );
+                let ty = llrm_mir::instructioncost::operand_type(self.context, self.site.caller, call.operands[index])
+                    .and_then(|ty| Ty::of(&self.context.types, ty));
+                CallArgument { ty, byval_bytes: byval.map(|ty| self.site.layout.alloc_size(&self.context.types, ty)) }
+            })
+            .collect();
+        let caller = self.site.caller;
+        let caller_frame_bytes = caller
+            .layout()
+            .first()
+            .map(|&entry| {
+                caller
+                    .iter_block(entry)
+                    .filter_map(|inst| match &caller.instruction(inst).opcode {
+                        Opcode::Alloca { allocated, .. } if caller.instruction(inst).operands.is_empty() => {
+                            Some(self.site.layout.alloc_size(&self.context.types, *allocated))
+                        }
+                        _ => None,
+                    })
+                    .sum()
+            })
+            .unwrap_or(0);
+        Some(CallShape { arguments, callee_frame_bytes: self.allocated_size, caller_frame_bytes })
+    }
+
+    /// The target's price of the call and its argument setup
+    /// (`Tti::call_sequence_cost`), or none where it states none.
+    fn call_sequence(
+        &self,
+        kind: llrm_mir::tti::CostKind,
+    ) -> Option<i64> {
+        let tti = self.site.tti?;
+        tti.call_sequence_cost(&self.call_shape()?, kind).map(|cost| cost.value)
+    }
+
+    /// What the callee's frame costs (`Tti::callee_frame_cost`) where inlining
+    /// removes it: none where the caller has no frame to put it in.
+    fn callee_frame(
+        &self,
+        kind: llrm_mir::tti::CostKind,
+    ) -> i64 {
+        let Some(tti) = self.site.tti else { return 0 };
+        let Some(shape) = self.call_shape() else { return 0 };
+        if shape.caller_frame_bytes == 0 {
+            return 0;
+        }
+        tti.callee_frame_cost(&shape, kind).map_or(0, |cost| cost.value)
+    }
+
+    /// What a caller with no frame builds for the callee's static allocas
+    /// where the callee stays: the callee keeps its own frame, so the inline
+    /// adds one (`callee_frame` has the case where the callee goes with its
+    /// frame, which moves).
+    fn frame_built_in_caller(
+        &self,
+        kind: llrm_mir::tti::CostKind,
+    ) -> i64 {
+        let Some(tti) = self.site.tti else { return 0 };
+        let Some(shape) = self.call_shape() else { return 0 };
+        if self.site.callee_dies
+            || shape.caller_frame_bytes != 0
+            || shape.callee_frame_bytes == 0
+            || !tti.inline_callee_that_stays_adds_a_caller_frame()
+        {
+            return 0;
+        }
+        tti.callee_frame_cost(&shape, kind).map_or(0, |cost| cost.value)
+    }
+
+    /// DEVIATE REC-9 (gcc's peeling, ipa-inline.cc:1033; the pin refuses a
+    /// recursive callee): the callee calls itself from one place
+    /// (a linear recursion) and this is another function's call of it, on a
+    /// target that peels (`Tti::peels_linear_recursion`) with recursive
+    /// inlining on. The copy is peeled (`inline::Plan`: depth 8, 15 `gcc_insns`
+    /// a copy, 450 in all, the calls of it to itself per call below 1 -
+    /// 1/8), so the call's latency is not what it saves: it removes a call,
+    /// frame and return per level, which `grows_more_than_it_saves` does
+    /// not count (recpow -O2: growth x rate 2.0 M against saved x frequency 93
+    /// k). A tree (two self-calls) keeps REC-1.
+    fn peels_linear_recursion(&self) -> bool {
+        self.params.allow_recursive_call
+            && self.site.tti.is_some_and(|tti| tti.peels_linear_recursion())
+            && self.site.caller_id != self.site.callee_id
+            && self.site.callee_linear_recursive
+    }
+
+    /// Whether inlining leaves the module's code bigger. A callee that stays
+    /// grows it by its unfolded size less the call it replaces, per site. One
+    /// that dies with its calls (local, address not taken) is also removed:
+    /// all `k` calls inlined cost `k * size` against `size + k * call`, so
+    /// `(k - 1) * size > k * call` (two calls of a 19-unit callee, 10-unit
+    /// calls: 19 > 20 does not grow).
+    fn grows_the_code(&self) -> bool {
+        let (size, call, k) = (self.size_units - self.folded_caller_stores(), self.call_size(), self.site.callee_calls);
+        // the callee's frame goes once, with the callee
+        let frame = self.callee_frame(llrm_mir::tti::CostKind::CodeSize);
+        // D13: where the target says the units undercount a copy
+        // (`inline_dying_credit_at_os`), -Os takes no credit for the
+        // callee that goes (a 9-argument float callee, 21 units against
+        // ~70 B a copy, inlined three times was +193 B at x86-m16).
+        let credit = self.site.callee_dies
+            && k >= 2
+            && (self.site.caller_size == CallerSize::Speed
+                || self.site.tti.is_none_or(|tti| tti.inline_dying_credit_at_os()));
+        if credit {
+            (k - 1) * size > k * call + frame
+        } else {
+            size + self.frame_built_in_caller(llrm_mir::tti::CostKind::CodeSize) > call
+        }
+    }
+
+    /// Bytes of the caller's stores into a local that the callee reads only
+    /// through uses SROA resolves (`enabled_sroa` at the end of the walk): once
+    /// inlined they have no reader, as `getCallerAllocaCost`'s sibling
+    /// `SROACostSavings` counts on the callee's side. Only a local whose every
+    /// use in the caller is a store, an offset of it, this call or a lifetime
+    /// marker: any other use keeps the stores.
+    fn folded_caller_stores(&self) -> i64 {
+        let Some(tti) = self.site.tti else { return 0 };
+        let view = self.size_view();
+        let caller = self.site.caller;
+        let mut total = 0;
+        for root in self.enabled_sroa.iter() {
+            let mut derived = IdSet::<ValueId>::new();
+            derived.insert(root);
+            let mut stores = Vec::new();
+            let mut folded_by_calls = 0;
+            let mut sound = true;
+            loop {
+                let before = derived.len();
+                stores.clear();
+                folded_by_calls = 0;
+                for &block in caller.layout() {
+                    for inst in caller.iter_block(block) {
+                        let operation = caller.instruction(inst);
+                        let uses = |derived: &IdSet<ValueId>| {
+                            operation.operands.iter().any(|one| matches!(one, Operand::Value(v) if derived.contains(v)))
+                        };
+                        if !uses(&derived) {
+                            continue;
+                        }
+                        match &operation.opcode {
+                            Opcode::GetElementPtr { .. } => {
+                                if let Some(result) = operation.result {
+                                    derived.insert(result);
+                                }
+                            }
+                            Opcode::Store { volatile: false, .. }
+                                if matches!(
+                                    operation.operands[1],
+                                    Operand::Value(v) if derived.contains(&v)
+                                ) && !matches!(
+                                    operation.operands[0],
+                                    Operand::Value(v) if derived.contains(&v)
+                                ) =>
+                            {
+                                stores.push(inst);
+                            }
+                            Opcode::Call(_) if inst == self.site.call => {}
+                            Opcode::Call(_) if self.planned_stores(inst, &derived).is_some() => {
+                                folded_by_calls += self.planned_stores(inst, &derived).unwrap_or(0);
+                            }
+                            Opcode::Call(_)
+                                if llrm_mir::memory::callee(self.context, caller, inst).is_some_and(|callee| {
+                                    self.site
+                                        .module
+                                        .global(callee)
+                                        .name
+                                        .as_deref()
+                                        .is_some_and(|name| name.starts_with("llvm.lifetime."))
+                                }) => {}
+                            _ => sound = false,
+                        }
+                    }
+                }
+                if !sound || derived.len() == before {
+                    break;
+                }
+            }
+            if !sound {
+                continue;
+            }
+            total += folded_by_calls;
+            for &inst in &stores {
+                total += llrm_mir::instructioncost::instruction_cost(
+                    view.as_deref().unwrap_or(tti),
+                    self.context,
+                    self.site.layout,
+                    &self.site.module.globals,
+                    caller,
+                    inst,
+                    llrm_mir::tti::CostKind::CodeSize,
+                )
+                .value;
+            }
+        }
+        total
+    }
+
+    /// The bytes of the stores a call of the caller, decided to be inlined,
+    /// makes through the pointers it is given from `derived`, where its
+    /// callee only stores through them: once spliced they are in the caller
+    /// with no reader. None for any other call.
+    fn planned_stores(
+        &self,
+        call: InstId,
+        derived: &IdSet<ValueId>,
+    ) -> Option<i64> {
+        if !self.site.planned.is_some_and(|planned| planned.contains(&call)) {
+            return None;
+        }
+        let tti = self.site.tti?;
+        let view = self.size_view();
+        let caller = self.site.caller;
+        let callee_id = llrm_mir::memory::callee(self.context, caller, call)?;
+        let llrm_mir::module::GlobalKind::Function(callee) = &self.site.module.global(callee_id).kind else {
+            return None;
+        };
+        let mut bytes = 0;
+        for (index, one) in caller.instruction(call).operands.iter().enumerate() {
+            if !matches!(one, Operand::Value(v) if derived.contains(v)) {
+                continue;
+            }
+            let parameter = *callee.parameters().get(index)?;
+            for inst in stores_through(callee, parameter)? {
+                bytes += llrm_mir::instructioncost::instruction_cost(
+                    view.as_deref().unwrap_or(tti),
+                    self.context,
+                    self.site.layout,
+                    &self.site.module.globals,
+                    callee,
+                    inst,
+                    llrm_mir::tti::CostKind::CodeSize,
+                )
+                .value;
+            }
+        }
+        Some(bytes)
+    }
+
+    /// `Tti::inline_o1_hot_growth_percent`: a locally hot site (the pin's
+    /// `HotCallSiteRelFreq`, the test of its `LocallyHotCallSiteThreshold`)
+    /// whose growth is within that share of the call sequence it removes.
+    fn hot_site_within_growth_budget(&self) -> bool {
+        let Some(percent) = self.site.tti.and_then(|tti| tti.inline_o1_hot_growth_percent()) else { return false };
+        self.site.relative_frequency.is_some_and(|ratio| ratio >= HOT_CALLSITE_REL_FREQ)
+            && self.growth_per_site() * 100 <= self.call_size() * percent
+    }
+
+    /// Bytes one inlined site adds to the module: the callee's unfolded size
+    /// less the call, spread over the sites when the callee dies with them.
+    fn growth_per_site(&self) -> i64 {
+        let (size, call, k) = (self.size_units - self.folded_caller_stores(), self.call_size(), self.site.callee_calls);
+        let frame = self.callee_frame(llrm_mir::tti::CostKind::CodeSize);
+        if self.site.callee_dies && k >= 2 {
+            ((k - 1) * size - k * call - frame) / k
+        } else {
+            size + self.frame_built_in_caller(llrm_mir::tti::CostKind::CodeSize) - call
+        }
+    }
+
+    /// Whether a speed caller's inline costs more in bytes than it saves in
+    /// clocks: the growth at the target's price of a byte against the call's
+    /// latency, weighted by the site's frequency. Off where the target does
+    /// not trade bytes for clocks.
+    fn grows_more_than_it_saves(&self) -> bool {
+        let Some(tti) = self.site.tti else { return false };
+        let rate = tti.inline_policy().by_rate;
+        // DEVIATE UNROLL-SPEED-TRIAL: the compile that takes no inline that
+        // adds bytes; a compile of the pin's decisions notes each
+        // growing inline it takes, for a driver to try that variant.
+        let rate = if rate > 0 && trial::speed_unroll().is_some_and(trial::SpeedUnroll::refuses_inline_growth) {
+            trial::NO_GROW_RATE
+        } else if trial::pinning_inlines() {
+            0
+        } else {
+            rate
+        };
+        let grows =
+            self.grows_more_than_it_saves_at(rate, tti.inline_o1_unit_bytes_milli(), tti.inline_o1_weighs_entry());
+        if !grows
+            && rate > 0
+            && !self.params.o1_bound
+            && trial::speed_unroll().is_none()
+            && tti.unroll_speed_trial()
+            && self.adds_bytes_to_price()
+        {
+            trial::note_speed_inline();
+        }
+        grows
+    }
+
+    /// Whether the inline's growth is one the byte rate prices: over the call
+    /// it removes, not a dying callee's sole site, not the peel of a linear
+    /// recursion.
+    fn adds_bytes_to_price(&self) -> bool {
+        self.growth_per_site() > self.call_size() && !self.site.sole_call_to_local && !self.peels_linear_recursion()
+    }
+
+    /// [`Self::grows_more_than_it_saves`] at a byte rate of the caller's
+    /// choosing, in thousandths of a clock.
+    fn grows_more_than_it_saves_at(
+        &self,
+        rate: i64,
+        unit_bytes_milli: i64,
+        weigh_entry: bool,
+    ) -> bool {
+        let Some(tti) = self.site.tti else { return false };
+        let growth = self.growth_per_site();
+        // Growth under one call's size is inside the estimate's resolution: the
+        // sites of a dying callee fold differently and must not split.
+        if rate == 0 || !self.adds_bytes_to_price() {
+            return false;
+        }
+        let saved = self
+            // -O1 keeps the flat price of the call: its rate was fitted to it
+            // (INL-O1) and the level is strict on bytes.
+            .call_sequence(llrm_mir::tti::CostKind::Latency)
+            .filter(|_| !self.params.o1_bound)
+            .unwrap_or_else(|| {
+                llrm_mir::instructioncost::instruction_cost(
+                    tti,
+                    self.context,
+                    self.site.layout,
+                    &self.site.module.globals,
+                    self.site.caller,
+                    self.site.call,
+                    llrm_mir::tti::CostKind::Latency,
+                )
+                .value
+            })
+            .saturating_add(self.callee_frame(llrm_mir::tti::CostKind::Latency))
+            .max(1);
+        let mut frequency = self.site.relative_frequency.unwrap_or(1.0).max(0.0);
+        if weigh_entry && let Some(entry) = self.site.entry_weight {
+            frequency *= entry();
+        }
+        let grows = (growth * unit_bytes_milli / 1000 * rate) as f64 > saved as f64 * 1000.0 * frequency;
+        if llrm_support::debug::enabled("inline") {
+            eprintln!(
+                "inline:   bytes-vs-clocks: growth={growth} (stores folded {}) rate={rate} saved={saved} frequency={frequency:.2} -> {}",
+                self.folded_caller_stores(),
+                if grows { "grows" } else { "pays" }
+            );
+        }
+        grows
+    }
+
+    /// Whether the cost reached the pin's threshold, however it stopped.
+    fn verdict_is_over_threshold(&self) -> bool {
+        self.cost >= self.threshold.max(1)
     }
 
     fn finalize(&mut self) -> Result<(), String> {
@@ -2019,13 +2664,52 @@ impl<'a> Analyzer<'a> {
         } else if self.vector_instructions <= self.instructions / 2 {
             self.threshold -= self.vector_bonus / 2;
         }
+        if llrm_support::debug::enabled("inline") {
+            eprintln!(
+                "inline:   size={} call={} frame={} k={} dies={}",
+                self.size_units - self.folded_caller_stores(),
+                self.call_size(),
+                self.callee_frame(llrm_mir::tti::CostKind::CodeSize),
+                self.site.callee_calls,
+                self.site.callee_dies
+            );
+        }
         // D11: the analysis above stops at LLVM's threshold; at -Os the verdict
         // is also held to the callee's code size against the call's.
         let pin = self.threshold.max(1);
-        let grows = self.site.caller_size != CallerSize::Speed
-            && !self.site.sole_call_to_local
-            && self.site.tti.is_some_and(|tti| tti.opt_size_inline_by_code_size())
-            && self.size_units > self.call_size();
+        let at_o1 = self.site.caller_size == CallerSize::Speed && self.params.o1_bound;
+        let unpriced = at_o1 && self.site.tti.is_some_and(|tti| tti.inline_never_grows_without_rate());
+        // -O1 keeps the pin's threshold alone where the target's rate binds at
+        // -O2 and -O3 only.
+        let rate_off = at_o1 && self.site.tti.is_some_and(|tti| !tti.speed_inline_rate_at_o1());
+        let grows = if self.site.caller_size == CallerSize::Speed && !unpriced && !rate_off {
+            self.grows_more_than_it_saves()
+                && !(self.loop_bound_known && self.site.tti.is_some_and(|tti| tti.inline_hints_known_loop_bound()))
+        } else if unpriced {
+            // INL-O1: a growing inline stays only where the call's clocks, at
+            // the site's frequency, pay for the bytes at the target's -O1 rate
+            // (`inline_o1_milliclocks_per_byte`).
+            let rate = self.site.tti.map_or(0, |tti| tti.inline_o1_milliclocks_per_byte());
+            !self.site.sole_call_to_local
+                && self.grows_the_code()
+                && !(rate > 0
+                    && !self.grows_more_than_it_saves_at(
+                        rate,
+                        self.site.tti.map_or(1000, |tti| tti.inline_o1_unit_bytes_milli()),
+                        self.site.tti.is_some_and(|tti| tti.inline_o1_weighs_entry()),
+                    ))
+        } else {
+            !self.site.sole_call_to_local
+                && self.site.tti.is_some_and(|tti| {
+                    tti.inline_policy().by_size.is_some_and(|rule| {
+                        self.site.callee_calls >= rule.min_sites
+                            && !(rule.yields_to_negative_cost && self.cost < 0)
+                            && !(rule.yields_to_inlinehint && self.hint_applied)
+                    })
+                })
+                && self.grows_the_code()
+                && !(at_o1 && self.hot_site_within_growth_budget())
+        };
         self.blocked_by_bound = grows && self.cost < pin;
         if grows {
             // The verdict is `cost < threshold`: the call stays.
@@ -2033,6 +2717,66 @@ impl<'a> Analyzer<'a> {
         }
         self.decided_by_threshold = true;
         if self.cost < self.threshold.max(1) && !grows { Ok(()) } else { Err("Cost over threshold.".into()) }
+    }
+}
+
+/// Per parameter of `callee`: nothing reads it and `deadargelim` will drop it
+/// (an internal or private callee). The one rule the inline guard and the size
+/// trial price a call by.
+pub(crate) fn unread_parameters_of(
+    module: &Module,
+    callee: GlobalId,
+) -> Vec<bool> {
+    let global = module.global(callee);
+    let GlobalKind::Function(body) = &global.kind else { return Vec::new() };
+    let droppable = matches!(
+        global.linkage,
+        llrm_mir::module::Linkage::Internal | llrm_mir::module::Linkage::Private
+    );
+    body.parameters().iter().map(|&value| droppable && body.users(value).is_empty()).collect()
+}
+
+/// The stores of `function` through `value` (a pointer), directly or through
+/// offsets of it; none where it also reads or passes the pointer on.
+fn stores_through(
+    function: &Function,
+    value: ValueId,
+) -> Option<Vec<InstId>> {
+    let mut derived = IdSet::<ValueId>::new();
+    derived.insert(value);
+    loop {
+        let before = derived.len();
+        let mut stores = Vec::new();
+        for &block in function.layout() {
+            for inst in function.iter_block(block) {
+                let operation = function.instruction(inst);
+                if !operation.operands.iter().any(|one| matches!(one, Operand::Value(v) if derived.contains(v))) {
+                    continue;
+                }
+                match &operation.opcode {
+                    Opcode::GetElementPtr { .. } => {
+                        if let Some(result) = operation.result {
+                            derived.insert(result);
+                        }
+                    }
+                    Opcode::Store { volatile: false, .. }
+                        if matches!(
+                            operation.operands[1],
+                            Operand::Value(v) if derived.contains(&v)
+                        ) && !matches!(
+                            operation.operands[0],
+                            Operand::Value(v) if derived.contains(&v)
+                        ) =>
+                    {
+                        stores.push(inst);
+                    }
+                    _ => return None,
+                }
+            }
+        }
+        if derived.len() == before {
+            return Some(stores);
+        }
     }
 }
 
@@ -2056,6 +2800,14 @@ pub fn inline_cost(
             threshold: analyzer.threshold,
             static_bonus: analyzer.static_bonus_applied,
             blocked: analyzer.blocked_by_bound,
+            hot: !analyzer.blocked_by_bound
+                && analyzer.verdict_is_over_threshold()
+                && site.caller_size == CallerSize::Speed
+                && !params.o1_bound
+                && site
+                    .tti
+                    .and_then(|tti| tti.inline_hot_trial_frequency())
+                    .is_some_and(|least| site.relative_frequency.is_some_and(|ratio| ratio >= least as f64)),
         };
     }
     match verdict {
@@ -2220,8 +2972,44 @@ fn only_reads_memory(info: &CallInfo) -> bool {
     !llrm_mir::memory::stated(&info.attrs).writes
 }
 
+/// Whether the natural loop of `header` holds no other loop
+/// (`Loop::isInnermost`): the blocks that reach a latch (a block reached from
+/// `header` that branches back to it) without passing `header`, none of them
+/// another header.
+fn is_innermost(
+    function: &Function,
+    header: BlockId,
+    headers: &IdSet<BlockId>,
+) -> bool {
+    let blocks: Vec<BlockId> = function.layout().to_vec();
+    let mut predecessors: HashMap<u32, Vec<BlockId>> = HashMap::default();
+    for &block in &blocks {
+        for next in function.successors(block) {
+            predecessors.entry(next.0).or_default().push(block);
+        }
+    }
+    let mut reached: std::collections::HashSet<u32> = std::collections::HashSet::new();
+    let mut stack = vec![header];
+    while let Some(block) = stack.pop() {
+        if reached.insert(block.0) {
+            stack.extend(function.successors(block));
+        }
+    }
+    let mut body: std::collections::HashSet<u32> = std::collections::HashSet::from([header.0]);
+    let mut work: Vec<BlockId> =
+        predecessors.get(&header.0).into_iter().flatten().copied().filter(|latch| reached.contains(&latch.0)).collect();
+    while let Some(block) = work.pop() {
+        if body.insert(block.0) {
+            work.extend(
+                predecessors.get(&block.0).into_iter().flatten().copied().filter(|one| reached.contains(&one.0)),
+            );
+        }
+    }
+    body.iter().all(|&block| block == header.0 || !headers.contains(&BlockId(block)))
+}
+
 /// The headers of the callee's loops: targets of a retreating edge (D7).
-fn loop_headers(function: &Function) -> IdSet<BlockId> {
+pub(crate) fn loop_headers(function: &Function) -> IdSet<BlockId> {
     let Some(&entry) = function.layout().first() else { return IdSet::new() };
     let mut headers = IdSet::new();
     let mut state: HashMap<u32, u8> = HashMap::default();
@@ -2305,9 +3093,16 @@ pub fn shadow(
                     sole_call_to_local: local_linkage(callee_global.linkage)
                         && counts.get(&callee_id).copied() == Some(1)
                         && !addressed.contains(&callee_id),
+                    callee_calls: counts.get(&callee_id).copied().unwrap_or(0),
+                    callee_dies: local_linkage(callee_global.linkage) && !addressed.contains(&callee_id),
                     caller_recursive,
+                    // No target in the shadow: nothing peels.
+                    callee_linear_recursive: false,
                     caller_size: CallerSize::Speed,
                     relative_frequency: caller.parent(inst).and_then(|block| relative_to_entry(&frequencies, block)),
+                    cold_frequency: caller.parent(inst).and_then(|block| cold_relative_to_entry(&frequencies, block)),
+                    entry_weight: None,
+                    planned: None,
                     // The shadow is the oracle's: opt without a triple prices
                     // generically.
                     tti: None,
@@ -2328,13 +3123,7 @@ pub fn shadow(
                             ),
                     );
                 let verdict = inline_cost(&site, params);
-                let line = match &verdict {
-                    InlineCost::Always(why) => format!("always ({why})"),
-                    InlineCost::Never(why) => format!("never ({why})"),
-                    InlineCost::Cost { cost, threshold, .. } => {
-                        format!("cost={cost} threshold={threshold} {}", if verdict.is_ok() { "inline" } else { "no" })
-                    }
-                };
+                let line = describe(&verdict);
                 eprintln!(
                     "[inlinecost] {} -> {} #{}: {line}{}",
                     caller_global_name(module, caller_id),
@@ -2343,6 +3132,18 @@ pub fn shadow(
                     if leaf { " leaf" } else { "" }
                 );
             }
+        }
+    }
+}
+
+/// A verdict as `LLRM_DEBUG=inline` and `LLRM_EXP_INLINECOST` print it:
+/// `cost=90 threshold=225 inline`, set beside `clang -Rpass=inline`.
+pub fn describe(verdict: &InlineCost) -> String {
+    match verdict {
+        InlineCost::Always(why) => format!("always ({why})"),
+        InlineCost::Never(why) => format!("never ({why})"),
+        InlineCost::Cost { cost, threshold, .. } => {
+            format!("cost={cost} threshold={threshold} {}", if verdict.is_ok() { "inline" } else { "no" })
         }
     }
 }
@@ -2378,16 +3179,7 @@ pub fn caller_frequencies(
     layout: &DataLayout,
     caller: &Function,
 ) -> llrm_analysis::blockfreq::BlockFrequencies {
-    let bpi = llrm_analysis::bpi::BranchProbabilityInfo::of(
-        llrm_analysis::bpi::Module {
-            context: &module.context,
-            declarations: &module.globals,
-            metadata: &module.metadata,
-            layout,
-        },
-        caller,
-    );
-    llrm_analysis::blockfreq::BlockFrequencies::of_bpi(caller, &bpi)
+    llrm_analysis::entryweight::caller_frequencies(module, layout, caller)
 }
 
 /// The frequency of each instruction of `function` over its entry's; none
@@ -2411,11 +3203,28 @@ pub fn call_frequencies(
 
 /// `block`'s frequency over the entry's, as `isColdCallSite` and
 /// `getHotCallSiteThreshold` compare them; none where the entry's is 0.
+fn cold_relative_to_entry(
+    frequencies: &llrm_analysis::blockfreq::BlockFrequencies,
+    block: BlockId,
+) -> Option<f64> {
+    (frequencies.get_entry_freq().get_frequency() > 0).then(|| frequencies.sink_free_relative_to_entry(block))
+}
+
 fn relative_to_entry(
     frequencies: &llrm_analysis::blockfreq::BlockFrequencies,
     block: BlockId,
 ) -> Option<f64> {
-    (frequencies.get_entry_freq().get_frequency() > 0).then(|| frequencies.relative_to_entry(block))
+    llrm_analysis::entryweight::relative_to_entry(frequencies, block)
+}
+
+/// [`llrm_analysis::entryweight::entry_weight`].
+fn caller_entry_weight(
+    module: &Module,
+    layout: &DataLayout,
+    function: GlobalId,
+    addressed: &BTreeSet<GlobalId>,
+) -> f64 {
+    llrm_analysis::entryweight::entry_weight(module, layout, function, addressed)
 }
 
 fn caller_global_name(
@@ -2571,6 +3380,7 @@ pub fn sites(
     counts: &crate::inline::Counter,
     addressed: &BTreeSet<GlobalId>,
     recursive: &BTreeSet<GlobalId>,
+    linear_recursive: &BTreeSet<GlobalId>,
     params: InlineParams,
     size: CallerSize,
     always_only: bool,
@@ -2584,6 +3394,7 @@ pub fn sites(
         counts,
         addressed,
         recursive,
+        linear_recursive,
         params,
         size,
         always_only,
@@ -2605,6 +3416,7 @@ pub fn sites_with_trials(
     counts: &crate::inline::Counter,
     addressed: &BTreeSet<GlobalId>,
     recursive: &BTreeSet<GlobalId>,
+    linear_recursive: &BTreeSet<GlobalId>,
     params: InlineParams,
     size: CallerSize,
     always_only: bool,
@@ -2614,7 +3426,7 @@ pub fn sites_with_trials(
 ) -> llrm_support::hash::SparseIdMap<InstId, crate::inline::Candidate> {
     let mut out = llrm_support::hash::SparseIdMap::default();
     let GlobalKind::Function(caller) = &module.global(caller_id).kind else { return out };
-    let context = DecideContext { counts, addressed, recursive, params, size, always_only, tti };
+    let context = DecideContext { counts, addressed, recursive, linear_recursive, params, size, always_only, tti };
     let frequencies = caller_frequencies(module, layout, caller);
     // The calls to each callee here: a private callee all of whose calls are
     // here goes with the last one inlined.
@@ -2626,20 +3438,51 @@ pub fn sites_with_trials(
             }
         }
     }
-    let goes = |callee: GlobalId| {
-        local_linkage(module.global(callee).linkage)
-            && !addressed.contains(&callee)
-            && counts.get(&callee).is_some_and(|all| here.get(&callee) == Some(all))
-    };
+    // DEVIATE LOOP-COPY-TRIAL (`Tti::inline_loop_copy_trial`): the sites of
+    // each callee here, for the copies a trial compile may refuse
+    let mut sites: llrm_support::hash::IndexMap<GlobalId, i64> = Default::default();
+    if tti.is_some_and(|tti| tti.inline_loop_copy_trial()) {
+        for (_, inst) in caller.walk() {
+            if let Some(callee) = llrm_mir::memory::callee(&module.context, caller, inst) {
+                *sites.entry(callee).or_default() += 1;
+            }
+        }
+    }
+    let mut planned = IdSet::<InstId>::new();
     for (_, inst) in caller.walk() {
-        let Some(decision) = decide(module, layout, caller_id, inst, &context, &frequencies) else { continue };
+        let Some(decision) = decide(module, layout, caller_id, inst, &context, &frequencies, Some(&planned)) else {
+            continue;
+        };
+        // a callee that holds a loop, at one of several sites of a loop of the
+        // caller: the registers its copy needs next to the caller's are
+        // not in the cost
+        if decision.inline && sites.get(&decision.callee).is_some_and(|&here| here >= 2) {
+            let in_loop = caller.parent(inst).is_some_and(|block| frequencies.relative_to_entry(block) >= 2.0);
+            let holds_loop =
+                module.global(decision.callee).function().is_some_and(|callee| !loop_headers(callee).is_empty());
+            if in_loop && holds_loop {
+                if crate::trial::refusing_loop_copies() {
+                    continue;
+                }
+                crate::trial::note_loop_copy();
+            }
+        }
+        if decision.inline {
+            planned.insert(inst);
+        }
         if let Some(decided) = decided.as_deref_mut() {
             decided.push((inst, decision.callee, decision.cost.clone()));
         }
         let blocked = matches!(decision.cost, InlineCost::Cost { blocked: true, .. });
-        let worth = blocked
-            && trials.is_some()
-            && (goes(decision.callee) || worth_a_trial(module, caller, inst, decision.callee));
+        // INL-HOT: a caller that goes with its one call is inlined where its
+        // arguments are known, and that site decides
+        // (x_spill_store_order -O2: `pack_ref` into `run_main` first: +40%
+        // clk).
+        let leaving = local_linkage(module.global(caller_id).linkage)
+            && !addressed.contains(&caller_id)
+            && counts.get(&caller_id) == Some(&1);
+        let hot = matches!(decision.cost, InlineCost::Cost { hot: true, .. }) && !leaving;
+        let worth = (blocked || hot) && trials.is_some() && if size == CallerSize::Speed { !always_only } else { true };
         if !decision.inline && !worth {
             continue;
         }
@@ -2660,6 +3503,7 @@ pub fn sites_with_trials(
                 && counts.get(&decision.callee) == Some(&1),
             callee: Some(decision.callee),
             self_sites: own.len(),
+            hot,
             self_calls: (!own.is_empty()).then(|| {
                 let frequencies = call_frequencies(module, layout, callee);
                 own.iter().map(|one| frequencies.get(one).copied().unwrap_or(0.0)).sum()
@@ -2674,122 +3518,6 @@ pub fn sites_with_trials(
     out
 }
 
-/// The stack slot or the parameter a pointer is made from, through casts and
-/// offsets.
-enum Root {
-    Slot(InstId),
-    Parameter(llrm_mir::module::ValueId),
-}
-
-fn root_of(
-    function: &llrm_mir::module::Function,
-    operand: llrm_mir::module::Operand,
-) -> Option<Root> {
-    let llrm_mir::module::Operand::Value(mut at) = operand else { return None };
-    loop {
-        match function.value(at).def {
-            llrm_mir::module::ValueDef::Argument(_) => return Some(Root::Parameter(at)),
-            llrm_mir::module::ValueDef::Instruction(def) => {
-                let instruction = function.instruction(def);
-                match instruction.opcode {
-                    Opcode::Alloca { .. } => return Some(Root::Slot(def)),
-                    Opcode::GetElementPtr { .. } | Opcode::Cast(_) => match instruction.operands[0] {
-                        llrm_mir::module::Operand::Value(next) => at = next,
-                        _ => return None,
-                    },
-                    _ => return None,
-                }
-            }
-        }
-    }
-}
-
-/// The global a constant pointer is the address of, or a step or a cast of.
-fn global_of(
-    context: &llrm_mir::context::Context,
-    operand: llrm_mir::module::Operand,
-) -> Option<GlobalId> {
-    use llrm_mir::context::{ConstantExpr, ConstantKind};
-    let llrm_mir::module::Operand::Constant(mut at) = operand else { return None };
-    loop {
-        match &context.get(at).kind {
-            ConstantKind::Global(global) => return Some(*global),
-            ConstantKind::Expr(ConstantExpr::GetElementPtr { operands, .. }) => at = *operands.first()?,
-            ConstantKind::Expr(ConstantExpr::Cast { value, .. }) => at = *value,
-            _ => return None,
-        }
-    }
-}
-
-/// SZ2: whether a site refused by the -Os bound is worth inlining to see: the
-/// call passes the address of a stack slot (or of a global) the caller wrote a
-/// constant to, and the callee reads through that parameter, which the cost
-/// model does not follow (a constant argument it folds itself).
-fn worth_a_trial(
-    module: &Module,
-    caller: &llrm_mir::module::Function,
-    call: InstId,
-    callee_id: GlobalId,
-) -> bool {
-    let GlobalKind::Function(callee) = &module.global(callee_id).kind else { return false };
-    let operands = &caller.instruction(call).operands;
-    let arguments = &operands[..operands.len().saturating_sub(1)];
-    let written = |slot: InstId| {
-        caller
-            .walk()
-            .any(
-                |(_, inst)| {
-                    let store = caller.instruction(inst);
-                    matches!(store.opcode, Opcode::Store { .. })
-                        && matches!(store.operands[0], llrm_mir::module::Operand::Constant(_))
-                        && matches!(
-                            root_of(caller, store.operands[1]),
-                            Some(Root::Slot(one)) if one == slot
-                        )
-                },
-            )
-    };
-    // A gate, not dataflow: the store may be to another field, or after the
-    // call; the trial decides on bytes.
-    let written_global = |global: GlobalId| {
-        caller
-            .walk()
-            .any(
-                |(_, inst)| {
-                    let store = caller.instruction(inst);
-                    matches!(store.opcode, Opcode::Store { .. })
-                        && matches!(store.operands[0], llrm_mir::module::Operand::Constant(_))
-                        && global_of(&module.context, store.operands[1]) == Some(global)
-                },
-            )
-    };
-    let read_through: Vec<llrm_mir::module::ValueId> = callee
-        .walk()
-        .filter_map(|(_, inst)| {
-            let load = callee.instruction(inst);
-            match (&load.opcode, root_of(callee, *load.operands.first()?)) {
-                (Opcode::Load { .. }, Some(Root::Parameter(parameter))) => Some(parameter),
-                _ => None,
-            }
-        })
-        .collect();
-    // A callee that reads a global directly (its pointer arguments were
-    // propagated into it), one the caller has stored a constant to.
-    let reads_written_global = callee.walk().any(|(_, inst)| {
-        let load = callee.instruction(inst);
-        matches!(load.opcode, Opcode::Load { .. })
-            && load.operands.first().and_then(|ptr| global_of(&module.context, *ptr)).is_some_and(written_global)
-    });
-    reads_written_global
-        || arguments.iter().zip(callee.parameters()).any(|(argument, parameter)| {
-            read_through.contains(parameter)
-                && (matches!(
-                    root_of(caller, *argument),
-                    Some(Root::Slot(slot)) if written(slot)
-                ) || global_of(&module.context, *argument).is_some_and(written_global))
-        })
-}
-
 /// What `decide` reads of the module besides the site.
 pub struct DecideContext<'a> {
     /// Direct calls by callee (`inline::call_counts`).
@@ -2797,6 +3525,9 @@ pub struct DecideContext<'a> {
     /// The functions whose address is taken.
     pub addressed: &'a BTreeSet<GlobalId>,
     pub recursive: &'a BTreeSet<GlobalId>,
+    /// Those of `recursive` that call themselves from one place
+    /// (`inline::linear_recursive`).
+    pub linear_recursive: &'a BTreeSet<GlobalId>,
     pub params: InlineParams,
     pub size: CallerSize,
     /// `-fno-inline-functions`: only `alwaysinline` is inlined.
@@ -2823,6 +3554,7 @@ pub fn decide(
     call: InstId,
     context: &DecideContext,
     frequencies: &llrm_analysis::blockfreq::BlockFrequencies,
+    planned: Option<&IdSet<InstId>>,
 ) -> Option<Decision> {
     let GlobalKind::Function(caller) = &module.global(caller_id).kind else { return None };
     let callee_id = llrm_mir::memory::callee(&module.context, caller, call)?;
@@ -2833,6 +3565,7 @@ pub fn decide(
     if callee.layout().is_empty() || callee_id == caller_id || !crate::inline::copyable(module, callee) {
         return None;
     }
+    let entry_weight = || caller_entry_weight(module, layout, caller_id, context.addressed);
     let site = Site {
         module,
         layout,
@@ -2844,12 +3577,51 @@ pub fn decide(
         sole_call_to_local: local_linkage(callee_global.linkage)
             && context.counts.get(&callee_id).copied() == Some(1)
             && !context.addressed.contains(&callee_id),
+        callee_calls: context.counts.get(&callee_id).copied().unwrap_or(0),
+        callee_dies: local_linkage(callee_global.linkage) && !context.addressed.contains(&callee_id),
         caller_recursive: context.recursive.contains(&caller_id),
+        callee_linear_recursive: context.linear_recursive.contains(&callee_id),
         caller_size: context.size,
         relative_frequency: caller.parent(call).and_then(|block| relative_to_entry(frequencies, block)),
+        cold_frequency: caller.parent(call).and_then(|block| cold_relative_to_entry(frequencies, block)),
+        entry_weight: Some(&entry_weight),
+        planned,
         tti: context.tti,
     };
     let cost = inline_cost(&site, context.params);
+    if llrm_support::debug::enabled("inline") {
+        eprintln!(
+            "inline: {} -> {}: {} (site frequency {:?})",
+            caller_global_name(module, caller_id),
+            callee_global.name.as_deref().unwrap_or("?"),
+            describe(&cost),
+            site.relative_frequency
+        );
+        // The callee's whole body in the size view's units (bytes where the
+        // target has a byte view): what the estimate is checked against the
+        // callee's symbol size with.
+        if let Some(tti) = context.tti {
+            let view = tti.inline_size_view();
+            let bytes: i64 = callee
+                .layout()
+                .iter()
+                .flat_map(|&block| callee.iter_block(block))
+                .map(|inst| {
+                    llrm_mir::instructioncost::instruction_cost(
+                        view.as_deref().unwrap_or(tti),
+                        &module.context,
+                        layout,
+                        &module.globals,
+                        callee,
+                        inst,
+                        llrm_mir::tti::CostKind::CodeSize,
+                    )
+                    .value
+                })
+                .sum();
+            eprintln!("inline:   callee-size {} {bytes}", callee_global.name.as_deref().unwrap_or("?"));
+        }
+    }
     // `-fno-inline-functions`: clang's pipeline is the always-inliner
     // alone.
     let inline =

@@ -66,11 +66,11 @@ void B_SENV(SD *spec)
     int remove;
 
     if (n == 0 || n > SPEC_MAX) {
-        str_tmp_free(spec);
+        str_free_if_tmp(spec);
         qb_error(BE_ILLFUN);
     }
     copy_bytes(text, spec->ptr, n);
-    str_tmp_free(spec);
+    str_free_if_tmp(spec);
     for (name = 0; name < n && text[name] != ' ' && text[name] != '='; name++)
         ;
     if (name == 0 || name == n)

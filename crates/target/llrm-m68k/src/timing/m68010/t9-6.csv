@@ -1,0 +1,18 @@
+#title,Table 9-6. Standard Instruction Execution Times,page,9-5,notes,+ Add effective address calculation time. | * Indicates maximum value. | ** Only available address mode is data register direct. | *** Word or long word only.
+Instruction,Size,"op<ea>, An***","op<ea>, Dn","op Dn, <M>"
+ADD/ADDA,"Byte, Word",8(1/0)+,4(1/0)+,8(1/1)+
+,Long,6(1/0)+,6(1/0)+,12(1/2)+
+AND,"Byte, Word",—,4(1/0)+,8(1/1)+
+,Long,—,6(1/0)+,12(1/2)+
+CMP/CMPA,"Byte, Word",6(1/0)+,4(1/0)+,—
+,Long,6(1/0)+,6(1/0)+,—
+DIVS,—,—,122(1/0)+,—
+DIVU,—,—,108(1/0)+,—
+EOR,"Byte, Word",—,4(1/0)**,8(1/1)+
+,Long,—,6(1/0)**,12(1/2)+
+MULS/MULU,—,—,42(1/0)+*,—
+,—,—,40(1/0)*,—
+OR,"Byte, Word",—,4(1/0)+,8(1/1)+
+,Long,—,6(1/0)+,12(1/2)+
+SUB/SUBA,"Byte, Word",8(1/0)+,4(1/0)+,8(1/1)+
+,Long,6(1/0)+,6(1/0)+,12(1/2)+

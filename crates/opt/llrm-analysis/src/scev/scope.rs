@@ -573,7 +573,7 @@ impl ScalarEvolution {
                 let is_add = matches!(node.kind, Kind::Add(_));
                 let mut pointer: Option<ConstantId> = None;
                 let mut acc: Option<ConstantId> = None;
-                for op in ops {
+                for op in ops.iter().copied() {
                     let c = self.build_constant_from_scev(cx, op.scev)?;
                     if self.node(op.scev).ty?.is_pointer() {
                         if !is_add || pointer.replace(c).is_some() {

@@ -25,9 +25,20 @@
 //!
 //! MIRROR: every check and its order, the scan of 6 and what ends it.
 //!
-//! DEVIATE 1: `combineStoreToValueType`, `unpackStoreToAggregate` and
-//! `replaceGEPIdxWithZero` are the next slices of this file, not yet
-//! translated.
+//! `mergeStoreIntoSuccessor` (:1639, called from `visitUncondBrInst`): a store
+//! before an unconditional branch whose successor has two edges, and the
+//! other predecessor stores the same address (last in an if/else arm, or in
+//! the block that branches to this one: the triangle), becomes a `storemerge`
+//! phi and one store in the successor.
+//!
+//! DEVIATE 9: only stores of one type merge (no `CreateBitOrPointerCast`
+//! between a stored `i32` and `float`); of the metadata only an equal `tbaa`
+//! is kept (`AAMDNodes::merge` and the access-group intersection are not
+//! translated). Exit 2026-11-20.
+//!
+//! DEVIATE 1: `unpackStoreToAggregate` and `replaceGEPIdxWithZero` are the
+//! next slices of this file, not yet translated; `combineStoreToValueType`
+//! has its `bitcast` case only (`likeBitCastFromVector` is not translated).
 //!
 //! DEVIATE 2: a store to constant memory (`!isModSet(AA->getModRefInfoMask)`)
 //! is not erased: the combine holds no alias analysis.
@@ -53,6 +64,9 @@
 //! `visitLoadInst`'s store-to-load forwarding: a load whose value one of the 6
 //! instructions before it in its block stored (`FindAvailableLoadedValue`) is
 //! that value, cast to the load's type.
+//!
+//! `combineLoadToOperationType` (:691): a load read once by a `bitcast` loads
+//! the cast's type.
 //!
 //! DEVIATE 8: the rest of `visitLoadInst` is not translated, and the load CSE
 //! of `FindAvailableLoadedValue` (an earlier load of the address) is left to
@@ -96,6 +110,39 @@ const MAX_ALLOC_SITE_REMOVABLE_USERS: usize = 128;
 /// looks at.
 const SCAN_INSTS: u32 = 6;
 
+/// The kinds `combineStoreToNewValue` keeps: every kind that does not describe
+/// the stored type (`invariant.load`, `nonnull`, `noundef`, `range`, `align`
+/// and `dereferenceable` are dropped).
+const COPIED_STORE_METADATA: &[&str] = &[
+    "tbaa",
+    "prof",
+    "fpmath",
+    "tbaa_struct",
+    "alias.scope",
+    "noalias",
+    "nontemporal",
+    "llvm.mem.parallel_loop_access",
+    "llvm.access.group",
+];
+
+/// The kinds `copyMetadataForLoad` copies as they are (`dbg` is the builder's).
+const COPIED_LOAD_METADATA: &[&str] = &[
+    "tbaa",
+    "prof",
+    "fpmath",
+    "tbaa_struct",
+    "invariant.load",
+    "alias.scope",
+    "noalias",
+    "nontemporal",
+    "mem.cache_hint",
+    "llvm.mem.parallel_loop_access",
+    "llvm.access.group",
+    "noundef",
+    "noalias_addrspace",
+    "invariant.group",
+];
+
 impl Combiner<'_> {
     /// The instruction that defines `v`, when it is in the body.
     fn instruction_of(
@@ -133,11 +180,57 @@ impl Combiner<'_> {
             && a.is_identical_to_when_defined(b)
     }
 
-    /// `visitLoadInst`, the store-to-load forwarding only: DEVIATE 8.
+    /// `combineLoadToOperationType`
+    /// ([:691](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineLoadStoreAlloca.cpp#L691)):
+    /// a load read once, by a `bitcast`, loads the cast's type instead. A
+    /// pointer cast to an integer is punning and stays. Metadata that holds
+    /// for any type is copied (`copyMetadataForLoad`); `range`, `nonnull`,
+    /// `align`, `dereferenceable` and `nofpclass` describe the old type and
+    /// are dropped (no pointer or same-type case reaches here).
+    fn combine_load_to_operation_type(
+        &mut self,
+        load: InstId,
+    ) -> Visit {
+        let Opcode::Load { align, volatile: false } = self.function.instruction(load).opcode else {
+            return Visit::None;
+        };
+        let Some(result) = self.function.instruction(load).result else { return Visit::None };
+        let users = self.function.users(result);
+        if !users.has_one_use() {
+            return Visit::None;
+        }
+        let Some(cast) = users.iter().next().map(|one| one.user) else { return Visit::None };
+        let Opcode::Cast(CastOp::BitCast) = self.function.instruction(cast).opcode else { return Visit::None };
+        let ty = self.function.instruction(cast).ty;
+        let is_pointer = |c: &Self, ty| matches!(c.context.types.get(ty), Type::Pointer(_));
+        if is_pointer(self, ty) != is_pointer(self, self.function.instruction(load).ty) {
+            return Visit::None;
+        }
+        let pointer = self.function.instruction(load).operands.clone();
+        let metadata = self.function.instruction(load).metadata.clone();
+        let new = self.insert_before(load, Opcode::Load { align, volatile: false }, ty, pointer, Flags::default());
+        for (kind, node) in metadata {
+            if COPIED_LOAD_METADATA.contains(&kind.as_str()) {
+                self.function.annotate(new, &kind, node);
+            }
+        }
+        let new_value = self.value_of(new);
+        self.replace_inst_with(cast, new_value);
+        self.erase(cast);
+        self.erase(load);
+        Visit::Erased
+    }
+
+    /// `visitLoadInst`: `combineLoadToOperationType` and the store-to-load
+    /// forwarding (DEVIATE 8).
     pub fn visit_load(
         &mut self,
         load: InstId,
     ) -> Visit {
+        match self.combine_load_to_operation_type(load) {
+            Visit::None => {}
+            done => return done,
+        }
         let available = {
             let context: &llrm_mir::context::Context = &*self.context;
             let function = &*self.function;
@@ -200,6 +293,39 @@ impl Combiner<'_> {
         )
     }
 
+    /// `combineStoreToValueType` (:1301): a store of a `bitcast` stores the
+    /// cast's operand instead, keeping the metadata that holds for any type
+    /// (`combineStoreToNewValue`). A pointer cast to or from an integer is
+    /// punning and stays, as in `combine_load_to_operation_type`.
+    fn combine_store_to_value_type(
+        &mut self,
+        inst: InstId,
+    ) -> Visit {
+        let Opcode::Store { align, volatile: false } = self.function.instruction(inst).opcode else {
+            return Visit::None;
+        };
+        let [val, ptr] = self.function.instruction(inst).operands[..] else { return Visit::None };
+        let Some(cast) = self.instruction_of(val) else { return Visit::None };
+        let Opcode::Cast(CastOp::BitCast) = self.function.instruction(cast).opcode else { return Visit::None };
+        let source = self.function.instruction(cast).operands[0];
+        let is_pointer = |c: &Self, ty| matches!(c.context.types.get(ty), Type::Pointer(_));
+        let from = self.type_of(source);
+        if is_pointer(self, from) != is_pointer(self, self.type_of(val)) {
+            return Visit::None;
+        }
+        let metadata = self.function.instruction(inst).metadata.clone();
+        let ty = self.function.instruction(inst).ty;
+        let new =
+            self.insert_before(inst, Opcode::Store { align, volatile: false }, ty, vec![source, ptr], Flags::default());
+        for (kind, node) in metadata {
+            if COPIED_STORE_METADATA.contains(&kind.as_str()) {
+                self.function.annotate(new, &kind, node);
+            }
+        }
+        self.erase(inst);
+        Visit::Erased
+    }
+
     /// `InstCombinerImpl::visitStoreInst`.
     pub fn visit_store(
         &mut self,
@@ -211,6 +337,12 @@ impl Combiner<'_> {
         // Don't hack volatile/ordered stores.
         if volatile {
             return Visit::None;
+        }
+
+        // Try to canonicalize the stored type.
+        match self.combine_store_to_value_type(inst) {
+            Visit::None => {}
+            done => return done,
         }
 
         // If the RHS is an alloca with a single use, zapify the store, making
@@ -285,6 +417,141 @@ impl Combiner<'_> {
         }
 
         Visit::None
+    }
+
+    /// `InstCombinerImpl::visitUncondBrInst`: the store just before an
+    /// unconditional branch, merged into the successor if it can be.
+    pub fn visit_uncond_br(
+        &mut self,
+        inst: InstId,
+    ) -> Visit {
+        if self.function.instruction(inst).operands.len() != 1 {
+            return Visit::None;
+        }
+        let Some(store) = self.function.prev_in_block(inst) else { return Visit::None };
+        if !matches!(self.function.instruction(store).opcode, Opcode::Store { .. }) {
+            return Visit::None;
+        }
+        if self.merge_store_into_successor(store) { Visit::Changed } else { Visit::None }
+    }
+
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineLoadStoreAlloca.cpp#L1639
+    /// `mergeStoreIntoSuccessor`: `if () { *P = v1; } else { *P = v2 }` or
+    /// `*P = v1; if () { *P = v2; }` becomes a phi and one store in the
+    /// successor.
+    fn merge_store_into_successor(
+        &mut self,
+        store: InstId,
+    ) -> bool {
+        let Opcode::Store { volatile: false, .. } = self.function.instruction(store).opcode else { return false };
+        let [value, ptr] = self.function.instruction(store).operands[..] else { return false };
+        let store_bb = self.function.parent(store).expect("a placed store");
+        let Some(&Operand::Block(dest_bb)) = self.function.instruction(self.function.terminator(store_bb).expect("terminated")).operands.first()
+        else {
+            return false;
+        };
+        // The successor has exactly two incoming edges.
+        let preds = self.function.predecessors(dest_bb);
+        if preds.len() != 2 {
+            return false;
+        }
+        let Some(&other_bb) = preds.iter().find(|&&one| one != store_bb) else { return false };
+        // The blocks must be distinct, and the other one not empty apart from
+        // its terminator.
+        if store_bb == dest_bb || other_bb == dest_bb {
+            return false;
+        }
+        let other_term = self.function.terminator(other_bb).expect("terminated");
+        if self.function.prev_in_block(other_term).is_none() {
+            return false;
+        }
+        let mergeable = |c: &Self, other: InstId| {
+            let one = c.function.instruction(other);
+            one.opcode == c.function.instruction(store).opcode
+                && one.operands[1] == ptr
+                && c.type_of(one.operands[0]) == c.type_of(value)
+        };
+        let other_store = if self.function.instruction(other_term).operands.len() == 1 {
+            // If the other block ends in an unconditional branch, this is the
+            // 'if then else' case: the store is the instruction before it.
+            let before = self.function.prev_in_block(other_term).expect("not empty");
+            if !mergeable(self, before) {
+                return false;
+            }
+            before
+        } else {
+            // Otherwise the other block ended with a conditional branch to
+            // `store_bb` and `dest_bb`, the if/then triangle.
+            let targets = &self.function.instruction(other_term).operands[1..];
+            if !targets.contains(&Operand::Block(store_bb)) {
+                return false;
+            }
+            let mut at = other_term;
+            let found = loop {
+                if let Some(before) = self.function.prev_in_block(at) {
+                    at = before;
+                } else {
+                    return false;
+                }
+                if matches!(self.function.instruction(at).opcode, Opcode::Store { .. }) && mergeable(self, at) {
+                    break at;
+                }
+                if self.touches_memory_or_throws(at) {
+                    return false;
+                }
+            };
+            // Nothing may read or overwrite the stored value in `store_bb`.
+            let mut one = self.function.iter_block(store_bb).next().expect("not empty");
+            while one != store {
+                if self.touches_memory_or_throws(one) {
+                    return false;
+                }
+                one = self.function.next_in_block(one).expect("the store is in its block");
+            }
+            found
+        };
+
+        let other_value = self.function.instruction(other_store).operands[0];
+        let merged = if other_value != value {
+            let ty = self.type_of(value);
+            let first = self.function.iter_block(dest_bb).next().expect("not empty");
+            let operands = vec![value, Operand::Block(store_bb), other_value, Operand::Block(other_bb)];
+            let phi = self.insert_before(first, Opcode::Phi, ty, operands, Flags::default());
+            let result = self.function.instruction(phi).result.expect("a value");
+            self.function.set_name(result, "storemerge");
+            Operand::Value(result)
+        } else {
+            other_value
+        };
+        let at = self.first_insertion_point(dest_bb);
+        let void = self.context.types.void();
+        let opcode = self.function.instruction(store).opcode.clone();
+        let new = self.insert_before(at, opcode, void, vec![merged, ptr], Flags::default());
+        // Metadata both stores carry alike stays; DEVIATE 9.
+        let kept: Vec<_> = self
+            .function
+            .instruction(store)
+            .metadata
+            .iter()
+            .filter(|(kind, node)| {
+                kind == "tbaa" && self.function.instruction(other_store).metadata.iter().any(|(k, n)| k == kind && n == node)
+            })
+            .cloned()
+            .collect();
+        for (kind, node) in kept {
+            self.function.set_metadata(new, &kind, Some(node));
+        }
+        self.erase(store);
+        self.erase(other_store);
+        true
+    }
+
+    /// `mayReadFromMemory() || mayThrow() || mayWriteToMemory()`.
+    fn touches_memory_or_throws(
+        &self,
+        inst: InstId,
+    ) -> bool {
+        self.ends_scan(inst) || matches!(self.function.instruction(inst).opcode, Opcode::Atomic(_))
     }
 
     /// `AllocaInst::getAllocationSize`: the bytes it allocates, when its count
@@ -657,7 +924,11 @@ impl Combiner<'_> {
                                 users.push(one.user);
                             }
                         }
-                        Intrinsic::LifetimeStart | Intrinsic::LifetimeEnd | Intrinsic::Assume => {
+                        Intrinsic::LifetimeStart
+                        | Intrinsic::LifetimeEnd
+                        | Intrinsic::InvariantStart
+                        | Intrinsic::InvariantEnd
+                        | Intrinsic::Assume => {
                             if !users.contains(&one.user) {
                                 users.push(one.user);
                             }

@@ -140,7 +140,7 @@ impl ScalarEvolution {
 
         let can_add_one_without_overflow = |se: &mut ScalarEvolution| {
             let range = se.get_unsigned_range(cx, exit_count);
-            if !range.contains(super::ap::Ap::all_ones(exit_count_size).bits) {
+            if !range.contains(super::ap::Ap::all_ones(exit_count_size).word()) {
                 return true;
             }
 

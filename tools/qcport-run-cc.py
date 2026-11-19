@@ -21,8 +21,15 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import qcport_run as qr  # noqa: E402
+sys.path.insert(0, str(HERE / "dosbatch"))
+import cpulimit  # noqa: E402
 
 dosbatch = qr.dosbatch
+
+
+def compiler(root: Path = HERE.parent, env=os.environ) -> Path:
+    """The gate builds into CARGO_TARGET_DIR and names the binaries LLRM_BIN: qcport and oracle-qcport failed `FileNotFoundError .../target/release/llrm-cc`."""
+    return Path(env["LLRM_BIN"]) / "llrm-cc" if env.get("LLRM_BIN") else root / "target/release/llrm-cc"
 
 
 def main() -> int:
@@ -39,7 +46,7 @@ def main() -> int:
     qcport, include, borland = qr.required("QCPORT"), qr.required("QCPORT_INC"), qr.required("QCPORT_BORLAND")
     borland_include = qr.required("LLRM_BORLAND_INC")
     root = HERE.parent
-    cc = root / "target/release/llrm-cc"
+    cc = compiler(root)
     built_already = Path(os.environ["QCPORT_OBJECTS"]).expanduser() if os.environ.get("QCPORT_OBJECTS") else None
     sources = sorted(source for part in qr.MODULES for source in (qcport / part).glob("*.c"))
     dirs = [flag for part in (*qr.MODULES, "qgl") for flag in ("-I", str(qcport / part))]
@@ -85,7 +92,7 @@ def main() -> int:
             print(f"{name}: link failed\n" + (done.stdout + done.stderr)[-800:])
             return 1
     cap, stall = float(os.environ.get("QCPORT_RUN_SECONDS", "900")), float(os.environ.get("QCPORT_STALL_SECONDS", "90"))
-    with ThreadPoolExecutor() as pool:
+    with ThreadPoolExecutor(max_workers=cpulimit.pool_workers()) as pool:
         stopped = [why for why in pool.map(lambda side: qr.run(side, qcport, stall, cap, over=qr.faults), sides.values()) if why]
     if stopped:
         print(f"a run did not finish: {', '.join(stopped)} ({work})")
@@ -99,7 +106,7 @@ def main() -> int:
     for side in sides.values():  # run.sh clears error.log, and the program writes ERROR.LOG: the benchmark run's would be read as the attract run's
         (side / "ERROR.LOG").unlink(missing_ok=True)
     attract_cap, attract_stall = float(os.environ.get("QCPORT_ATTRACT_SECONDS", "900")), float(os.environ.get("QCPORT_ATTRACT_STALL_SECONDS", "300"))  # loading a demo is silent for minutes at the pinned 75000 cycles
-    with ThreadPoolExecutor() as pool:
+    with ThreadPoolExecutor(max_workers=cpulimit.pool_workers()) as pool:
         stopped = [why for why in pool.map(lambda side: qr.run(side, qcport, attract_stall, attract_cap, arguments=qr.ATTRACT_ARGUMENTS, over=qr.attract_over), sides.values()) if why]
     failures = qr.attract_verdict({name: qr.attract_problems(side) for name, side in sides.items()})
     if stopped or failures:

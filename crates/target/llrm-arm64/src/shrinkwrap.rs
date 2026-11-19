@@ -6,13 +6,12 @@
 //! shared with a path that never made the frame (`tryToSplitRestore`), at the
 //! end of each block that reaches it through the frame.
 
-use std::collections::HashMap;
-
 use llrm_analysis::saverestore::{self, Frame, Frequencies};
 use llrm_mir::blocklist::BlockList;
 use llrm_mir::cycleinfo::FlowGraph;
 use llrm_mir::domtree::{DomGraph, DomTreeBase};
 use llrm_mir::module::BlockId;
+use rustc_hash::FxHashMap as HashMap;
 
 use crate::mc::inst::{Addr, Inst};
 use crate::mfunc::{MFunc, Op, successors_of};
@@ -24,6 +23,12 @@ pub struct Wrapped {
     /// The blocks whose end takes the frame down: the Restore block, or the
     /// blocks that reach it through the frame when it is shared.
     pub restores: Vec<usize>,
+    /// The blocks that reach the shared return through the frame and also have
+    /// another way on: the frame comes down on a new block between them and
+    /// the return (`tryToSplitRestore`'s `NMBB`).
+    pub edges: Vec<usize>,
+    /// The shared return the edges leave for.
+    pub restore: usize,
     /// Whether the epilogue goes at a block's end (split) and not before its
     /// return.
     pub at_end: bool,
@@ -75,6 +80,18 @@ impl FlowGraph for Graph {}
 
 /// Whether `op` needs the frame: it calls, addresses a frame object or the
 /// caller's arguments, or touches a callee-saved register.
+/// `IsKnownNonStackPtr` (`ShrinkWrap.cpp` `useOrDefCSROrFI`): an access to a
+/// global or the constant pool is not an access to this function's stack, even
+/// where a stack address escaped.
+fn known_non_stack(op: &Op) -> bool {
+    use crate::mc::inst::MemObject;
+    matches!(
+        op,
+        Op::I(Inst::Load { mmo, .. } | Inst::Store { mmo, .. })
+            if matches!(mmo.object, MemObject::Global(_) | MemObject::ConstantPool)
+    )
+}
+
 fn needs_frame(op: &Op) -> bool {
     match op {
         Op::Call { .. } | Op::FrameAddress { .. } => true,
@@ -114,9 +131,16 @@ impl Frame for Uses<'_> {
         block: BlockId,
         stack_address_used: bool,
     ) -> bool {
-        self.function.blocks[block.0 as usize].ops.iter().any(|op| {
-            needs_frame(op) || (stack_address_used && matches!(op, Op::I(Inst::Load { .. } | Inst::Store { .. })))
-        })
+        self.function
+            .blocks[block.0 as usize]
+            .ops
+            .iter()
+            .any(
+                |op| needs_frame(op)
+                    || (stack_address_used
+                        && matches!(op, Op::I(Inst::Load { .. } | Inst::Store { .. }))
+                        && !known_non_stack(op)),
+            )
     }
 
     fn terminators_touch(
@@ -155,6 +179,39 @@ impl Frequencies for Depth {
     }
 }
 
+/// How many natural loops each block is in: a back edge is an edge into a
+/// block that dominates its source, and the loop is what reaches the source
+/// without passing the header. (Layout order says nothing: a join placed before
+/// the loop that feeds it is not in it.)
+fn loop_depths(graph: &Graph) -> Vec<u32> {
+    let count = graph.nodes.len();
+    let mut dominators = DomTreeBase::<false>::new();
+    dominators.recalculate(graph);
+    let mut bodies: Vec<Option<Vec<bool>>> = vec![None; count];
+    for (from, targets) in graph.successors.iter().enumerate() {
+        for &header in targets {
+            if !dominators.dominates(id(header), id(from)) {
+                continue;
+            }
+            let body = bodies[header].get_or_insert_with(|| vec![false; count]);
+            body[header] = true;
+            let mut work = vec![from];
+            while let Some(block) = work.pop() {
+                if !std::mem::replace(&mut body[block], true) {
+                    work.extend(graph.predecessors[block].iter().copied());
+                }
+            }
+        }
+    }
+    let mut depth = vec![0u32; count];
+    for body in bodies.iter().flatten() {
+        for (block, _) in body.iter().enumerate().filter(|(_, inside)| **inside) {
+            depth[block] += 1;
+        }
+    }
+    depth
+}
+
 /// The placement of the prologue and the epilogue of `function`, if it is not
 /// the entry and the end of every return.
 pub fn place(function: &MFunc) -> Option<Wrapped> {
@@ -172,34 +229,36 @@ pub fn place(function: &MFunc) -> Option<Wrapped> {
             predecessors[to].push(from);
         }
     }
-    let mut depth = vec![0u32; count];
-    for (at, targets) in successors.iter().enumerate() {
-        for &target in targets {
-            if target <= at {
-                for block in target..=at {
-                    depth[block] += 1;
-                }
-            }
-        }
-    }
     let graph = Graph { nodes: (0..count).map(id).collect(), successors, predecessors };
+    let depth = loop_depths(&graph);
     let frequencies = Depth(depth.iter().map(|&one| 10u64.pow(one.min(6))).collect());
     let placement = saverestore::run(&graph, &Uses { function }, &frequencies)?;
     let (save, restore) = (placement.save.0 as usize, placement.restore.0 as usize);
     let uses = Uses { function };
+    let mut edges = Vec::new();
     let (restores, at_end) = match &placement.split {
         Some(split) => {
             // The epilogue goes at the end of a block whose only way on is the
-            // shared return.
-            if !split.iter().all(|one| graph.successors[one.0 as usize] == [restore]) {
+            // shared return; a block with another way on gets the new block.
+            let (ends, branching): (Vec<_>, Vec<_>) =
+                split.iter().map(|one| one.0 as usize).partition(|&one| graph.successors[one] == [restore]);
+            if !branching.iter().all(|&one| graph.successors[one].contains(&restore)) {
                 return None;
             }
-            (split.iter().map(|one| one.0 as usize).collect::<Vec<_>>(), true)
+            edges = branching;
+            (ends, true)
         }
         // The Restore's return, or the end of a Restore that does not return:
         // what follows it needs no frame.
         None => (vec![restore], !uses.is_return(placement.restore)),
     };
+    // `PrologEpilogInserter::calculateSaveRestoreBlocks`: a restore block with
+    // no successor that is no return ends in a call that never returns, and
+    // gets no epilogue.
+    let restores: Vec<usize> = restores
+        .into_iter()
+        .filter(|&block| !graph.successors[block].is_empty() || uses.is_return(id(block)))
+        .collect();
     // A block the frame reaches is entered with the frame made only by the
     // Save: any other way in would find the stack as the caller left it.
     let mut dominators = DomTreeBase::<false>::new();
@@ -216,7 +275,9 @@ pub fn place(function: &MFunc) -> Option<Wrapped> {
         if restores.contains(&block) && at_end || (block == restore && !at_end) {
             continue;
         }
-        work.extend(graph.successors[block].iter().copied());
+        // An edge block leaves the frame by its new block, not by the return.
+        let leaves = edges.contains(&block);
+        work.extend(graph.successors[block].iter().copied().filter(|&next| !(leaves && next == restore)));
     }
-    Some(Wrapped { save, restores, at_end })
+    Some(Wrapped { save, restores, edges, restore, at_end })
 }

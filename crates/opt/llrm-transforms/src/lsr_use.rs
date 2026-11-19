@@ -54,19 +54,21 @@
 //!
 //! DEVIATE: the target hooks have no access type or address space on the
 //! legality call, and no per-instruction query (`LSRWithInstrQueries`); x86 has
-//! neither. `getPreferredAddressingMode` is none on x86, so the pre- and
-//! post-indexed branches of `RateRegister` never apply and are not ported. A
+//! neither. `getPreferredAddressingMode` is none on x86; the post-indexed
+//! branch of `RateRegister` is ported (m68k prefers it), the pre-indexed one
+//! is not, nor are the post-indexed sites in the other LSR modules. A
 //! scalable `Immediate` does not exist (see [`crate::lsr_formula`]).
 
-use llrm_analysis::scev::expr::{Scev, Type};
+use llrm_analysis::scev::expr::{Scev, Ty, Type, Use as ScevUse};
 use llrm_analysis::scev::{Cx, ScalarEvolution};
 use llrm_mir::module::{BlockId, InstId, Operand};
-use llrm_mir::opcode::Opcode;
-use llrm_mir::tti::{Cost as TtiCost, LsrCost, Tti};
+use llrm_mir::opcode::{CastOp, Opcode};
+use llrm_mir::tti::{AddressingMode, Cost as TtiCost, LsrBytes, LsrCost, Tti};
 use llrm_mir::valuetracking::pattern::{phi_incoming, result_of};
 use llrm_support::hash::{HashSet, IndexSet};
 
-use crate::lsr_formula::{Formula, Immediate, MemAccessTy, RegUseTracker};
+use crate::cold_chrec::expands_cold_outer_chrec;
+use crate::lsr_formula::{Formula, Immediate, MemAccessTy, RegUseTracker, Symbol};
 
 /// `SetupCostDepthLimit`.
 const SETUP_COST_DEPTH_LIMIT: u32 = 7;
@@ -218,7 +220,7 @@ impl Use {
         f: &Formula,
         l: BlockId,
     ) -> bool {
-        assert!(f.is_canonical(se, l), "Invalid canonical representation");
+        debug_assert!(f.is_canonical(se, l), "Invalid canonical representation");
         if !self.formulae.is_empty() && self.rigid_formula {
             return false;
         }
@@ -270,14 +272,21 @@ impl Use {
 pub fn is_am_completely_folded_at(
     tti: &dyn Tti,
     kind: Kind,
-    addr_space: u32,
+    access: MemAccessTy,
     base_gv: bool,
     base_offset: Immediate,
     has_base_reg: bool,
     scale: i64,
 ) -> bool {
     match kind {
-        Kind::Address => tti.is_legal_addressing_mode_in(addr_space, base_gv, base_offset.0, has_base_reg, scale),
+        Kind::Address => tti.is_legal_addressing_mode_at(
+            access.addr_space,
+            access.bytes,
+            base_gv,
+            base_offset.0,
+            has_base_reg,
+            scale,
+        ),
         Kind::ICmpZero => {
             // There is no hook for folding a global into a compare.
             if base_gv {
@@ -313,7 +322,7 @@ pub fn is_am_completely_folded_between(
     min_offset: Immediate,
     max_offset: Immediate,
     kind: Kind,
-    addr_space: u32,
+    access: MemAccessTy,
     base_gv: bool,
     base_offset: Immediate,
     has_base_reg: bool,
@@ -329,8 +338,8 @@ pub fn is_am_completely_folded_between(
     if (high > base) != (max > 0) {
         return false;
     }
-    is_am_completely_folded_at(tti, kind, addr_space, base_gv, Immediate(low), has_base_reg, scale)
-        && is_am_completely_folded_at(tti, kind, addr_space, base_gv, Immediate(high), has_base_reg, scale)
+    is_am_completely_folded_at(tti, kind, access, base_gv, Immediate(low), has_base_reg, scale)
+        && is_am_completely_folded_at(tti, kind, access, base_gv, Immediate(high), has_base_reg, scale)
 }
 
 /// `isAMCompletelyFolded(TTI, MinOffset, MaxOffset, Kind, AccessTy, F, L)`.
@@ -340,23 +349,24 @@ pub fn is_am_completely_folded_formula(
     min_offset: Immediate,
     max_offset: Immediate,
     kind: Kind,
-    addr_space: u32,
+    access: MemAccessTy,
     f: &Formula,
     l: BlockId,
 ) -> bool {
     // Either a canonical formula or a scale is right; a non-canonical one with
     // no scale is not.
-    assert!(f.is_canonical(se, l) || f.scale != 0);
+    debug_assert!(f.is_canonical(se, l) || f.scale != 0);
+    let Some(mode) = f.mode() else { return false };
     is_am_completely_folded_between(
         tti,
         min_offset,
         max_offset,
         kind,
-        addr_space,
-        f.base_gv.is_some(),
+        access,
+        mode.global,
         f.base_offset,
-        f.has_base_reg,
-        f.scale,
+        mode.has_base_reg,
+        mode.scale,
     )
 }
 
@@ -368,16 +378,17 @@ pub fn is_am_completely_folded(
     lu: &Use,
     f: &Formula,
 ) -> bool {
+    let Some(mode) = f.mode() else { return false };
     is_am_completely_folded_between(
         tti,
         lu.min_offset,
         lu.max_offset,
         lu.kind,
-        lu.access_ty.addr_space,
-        f.base_gv.is_some(),
+        lu.access_ty,
+        mode.global,
         f.base_offset,
-        f.has_base_reg,
-        f.scale,
+        mode.has_base_reg,
+        mode.scale,
     )
 }
 
@@ -389,7 +400,7 @@ pub fn is_legal_use(
     min_offset: Immediate,
     max_offset: Immediate,
     kind: Kind,
-    addr_space: u32,
+    access: MemAccessTy,
     base_gv: bool,
     base_offset: Immediate,
     has_base_reg: bool,
@@ -400,23 +411,13 @@ pub fn is_legal_use(
         min_offset,
         max_offset,
         kind,
-        addr_space,
+        access,
         base_gv,
         base_offset,
         has_base_reg,
         scale,
     ) || (scale == 1
-        && is_am_completely_folded_between(
-            tti,
-            min_offset,
-            max_offset,
-            kind,
-            addr_space,
-            base_gv,
-            base_offset,
-            true,
-            0,
-        ))
+        && is_am_completely_folded_between(tti, min_offset, max_offset, kind, access, base_gv, base_offset, true, 0))
 }
 
 /// `isLegalUse(TTI, MinOffset, MaxOffset, Kind, AccessTy, F)`.
@@ -425,20 +426,11 @@ pub fn is_legal_use_formula(
     min_offset: Immediate,
     max_offset: Immediate,
     kind: Kind,
-    addr_space: u32,
+    access: MemAccessTy,
     f: &Formula,
 ) -> bool {
-    is_legal_use(
-        tti,
-        min_offset,
-        max_offset,
-        kind,
-        addr_space,
-        f.base_gv.is_some(),
-        f.base_offset,
-        f.has_base_reg,
-        f.scale,
-    )
+    let Some(mode) = f.mode() else { return false };
+    is_legal_use(tti, min_offset, max_offset, kind, access, mode.global, f.base_offset, mode.has_base_reg, mode.scale)
 }
 
 /// `isLegalAddImmediate`.
@@ -462,18 +454,21 @@ pub fn scaling_factor_cost(
         return TtiCost::FREE;
     }
     // Not completely folded: an extra cost only for a scale other than 1.
-    if !is_am_completely_folded_formula(tti, se, lu.min_offset, lu.max_offset, lu.kind, lu.access_ty.addr_space, f, l) {
+    if !is_am_completely_folded_formula(tti, se, lu.min_offset, lu.max_offset, lu.kind, lu.access_ty, f, l) {
         return TtiCost::of(i64::from(f.scale != 1));
     }
     match lu.kind {
         Kind::Address => {
             // The price at both ends of the offsets.
+            // Folded above, so the formula has a mode.
+            let mode = f.mode().expect("a folded formula has a mode");
             let at = |offset: Immediate| {
-                tti.scaling_factor_cost(
-                    f.base_gv.is_some(),
+                tti.scaling_factor_cost_at(
+                    lu.access_ty.bytes,
+                    mode.global,
                     f.base_offset.add_unsigned(offset).0,
-                    f.has_base_reg,
-                    f.scale,
+                    mode.has_base_reg,
+                    mode.scale,
                 )
             };
             let (min, max) = (at(lu.min_offset), at(lu.max_offset));
@@ -500,6 +495,17 @@ pub struct Rating<'a, 'b> {
     /// The formulae rated are the loop as it stands: its values exist, and
     /// nothing is expanded (DEVIATE LU5 charges only an expansion).
     pub as_written: bool,
+    /// Registers held across the loop by values LSR does not manage.
+    pub other_register_units: u32,
+    /// The compile is for size.
+    pub size: bool,
+    /// The bytes of the code a formula leaves are counted (-Os, and -O1 where
+    /// bytes outrank clocks), which `size` alone did.
+    pub bytes_counted: bool,
+    /// The loop calls, and the target's call takes every register (LU13).
+    pub across_call: bool,
+    /// `AMK`: the indexed addressing this loop favors.
+    pub amk: AddressingMode,
 }
 
 /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopStrengthReduce.cpp#L1232
@@ -510,6 +516,40 @@ pub struct Cost {
     /// The registers rated scaled so far, with their scale: the target's
     /// `scaled_index_insns` is paid once for each (DEVIATE LU1).
     scaled: Vec<(Scev, i64)>,
+    /// The registers rated so far as part of an address (DEVIATE LU8).
+    pub(crate) addressed: Vec<Scev>,
+    /// The base registers, offset and access size of each address rated so
+    /// far, for the pairs of DEVIATE LSR-POSTINC-PAIR.
+    walked: Vec<(Vec<Scev>, i64, i64)>,
+    /// Rated for size (set by `rate_formula`).
+    pub(crate) size: bool,
+    /// DEVIATE LU32: the phis the formulae's starts add to outer loops.
+    pub(crate) outer_phis: u32,
+    /// DEVIATE LG3: the bytes of the setup and exit-test code, for a target
+    /// that gives a byte model (`Tti::lsr_bytes`); 0 elsewhere.
+    pub bytes: u32,
+    /// DEVIATE LSR-SIZE: x86 bytes of the displacements, adds and setup the
+    /// formulae need, where the target sizes by `Tti::lsr_size_model`.
+    pub size_bytes: u32,
+    /// DEVIATE LSR-TIE: the recurrences rated that step by a register, not a
+    /// constant.
+    pub(crate) variable_steps: u32,
+}
+
+/// DEVIATE LSR-POSTINC-PAIR: the two a pointer's accesses cost more when they
+/// are exactly an adjacent pair with the lower one before the pointer.
+fn pair_walk_penalty(
+    walked: &[(Vec<Scev>, i64, i64)],
+    base: &[Scev],
+) -> u32 {
+    let mut same = walked.iter().filter(|(regs, _, _)| regs == base);
+    match (same.next(), same.next(), same.next()) {
+        (Some(&(_, a, size)), Some(&(_, b, other)), None) if size == other => {
+            let (low, high) = (a.min(b), a.max(b));
+            if low < 0 && high == low + size { 2 } else { 0 }
+        }
+        _ => 0,
+    }
 }
 
 impl Cost {
@@ -528,6 +568,7 @@ impl Cost {
             imm_cost: u32::MAX,
             setup_cost: u32::MAX,
             scale_cost: u32::MAX,
+            spills: u32::MAX,
         };
     }
 
@@ -535,17 +576,69 @@ impl Cost {
         self.c.num_regs == u32::MAX
     }
 
-    /// `isLess`: fewer instructions first (`-lsr-insns-cost` is on), then the
-    /// target's order.
+    /// `isLess`: the target's order. The pin ranks by instructions first only
+    /// when `-lsr-insns-cost` is on the command line
+    /// (`getNumOccurrences() > 0`), which nothing here passes; x86 puts them
+    /// first in its own `isLSRCostLess`, AArch64 second.
     pub fn is_less(
         &self,
         tti: &dyn Tti,
         other: &Cost,
     ) -> bool {
-        if self.c.insns != other.c.insns {
-            return self.c.insns < other.c.insns;
+        // DEVIATE LU8: where the address forms name fewer registers than the
+        // target has (m16: bx, si, di), a solution that fits them beats one
+        // that does not, whatever the model counts: the registers past the
+        // class are reloaded every trip. Between two that both fit, or both
+        // overflow, the target's order stands.
+        // The reloads an overflow costs are about two instructions a trip: a
+        // fitting solution that spends more than that on other instructions
+        // (the bases computed into non-address registers) does not win.
+        let (mine, theirs) = (self.overflows(tti), other.overflows(tti));
+        if mine != theirs {
+            let (fits, over) = if mine { (&other.c, &self.c) } else { (&self.c, &other.c) };
+            // For size the reloads fold into memory operands and cost bytes
+            // only, while every extra instruction costs its own (DEVIATE LU8).
+            let spare = if self.size || other.size { 0 } else { 2 };
+            if fits.insns <= over.insns.saturating_add(spare) {
+                return theirs;
+            }
+        }
+        // DEVIATE LSR-SIZE: sized for bytes, the bytes of the displacements,
+        // adds and setup come before the cost of the recurrences, the
+        // instructions and registers staying first. Where addresses take a
+        // class smaller than the register file (real mode: bx, bp, si, di),
+        // the registers an address holds come next: LLVM's `NumRegs` comes
+        // before the rest in `isLess`, and an address register is the scarcer
+        // one there (DEVIATE LU8).
+        if (self.size || other.size) && tti.lsr_size_model().is_some() {
+            let restricted = tti.address_registers() < tti.number_of_gpr_registers();
+            let key = |x: &Cost| {
+                let c = &x.c;
+                (
+                    c.insns,
+                    c.num_regs,
+                    if restricted { x.addressed.len() } else { 0 },
+                    x.size_bytes,
+                    c.add_rec_cost,
+                    c.num_iv_muls,
+                    c.num_base_adds,
+                    c.scale_cost,
+                    c.imm_cost,
+                    c.setup_cost,
+                )
+            };
+            return key(self) < key(other);
         }
         tti.is_lsr_cost_less(&self.c, &other.c)
+    }
+
+    /// Whether the address registers rated exceed the target's address class.
+    fn overflows(
+        &self,
+        tti: &dyn Tti,
+    ) -> bool {
+        let class = tti.address_registers();
+        class < tti.number_of_gpr_registers() && self.addressed.len() > class as usize && !self.is_loser()
     }
 
     /// `RateFormula`: the cost of `f` for `lu`, `regs` the registers already
@@ -560,11 +653,13 @@ impl Cost {
         lu: &Use,
         mut losers: Option<&mut HashSet<Scev>>,
     ) {
+        self.size = r.size;
         if self.is_loser() {
             return;
         }
-        assert!(f.is_canonical(r.se, r.l), "Cost is accurate only for canonical formula");
+        debug_assert!(f.is_canonical(r.se, r.l), "Cost is accurate only for canonical formula");
         let (prev_add_rec, prev_regs, prev_base_adds) = (self.c.add_rec_cost, self.c.num_regs, self.c.num_base_adds);
+        let bytes_model = r.tti.lsr_bytes();
         for reg in f.scaled_reg.into_iter().chain(f.base_regs.iter().copied()) {
             if visited.contains(&reg) {
                 self.lose();
@@ -576,9 +671,29 @@ impl Cost {
             }
         }
 
+        // DEVIATE LU8: tally the registers the address forms hold, for
+        // `overflows`.
+        if lu.kind == Kind::Address {
+            for reg in f.scaled_reg.into_iter().chain(f.base_regs.iter().copied()) {
+                // A constant or a global folds into the displacement; a far
+                // pointer cast from a segment alone has no offset to hold.
+                if !holds_no_offset(r, reg) && !self.addressed.contains(&reg) {
+                    self.addressed.push(reg);
+                }
+            }
+        }
+
         // The unfolded adds inside the loop.
+        // DEVIATE LU12: the pin counts the adds of a use whose fixups all lie
+        // outside the loop as if they ran every trip; they run once. Where the
+        // target says so, they do not weigh against the formulae that share
+        // the loop's counter (z80 find: an exit value `i` taken from a second
+        // counter beat `base + i` and a `dec` after the loop). Off for x86: a
+        // short loop entered often (m16 fib, frames) pays the once-run adds
+        // on every entry.
+        let inside = !(lu.all_fixups_outside_loop && r.tti.lsr_exit_use_adds_run_once());
         let parts = f.num_regs();
-        if parts > 1 {
+        if parts > 1 && inside {
             // Not the base and a possible second register, if the target folds
             // two.
             let folded = f.scale != 0 && is_am_completely_folded(r.tti, lu, f);
@@ -590,10 +705,58 @@ impl Cost {
         let absorbed = f.unfolded_offset.is_non_zero()
             && lu.kind != Kind::Address
             && parts >= 2
-            && r.tti.address_form_adds_offsets()
-            && r.tti.is_legal_addressing_mode(f.base_gv.is_some(), f.unfolded_offset.0, true, f.scale);
-        if !absorbed {
+            && r.tti.address_form_adds_offsets(narrowest_bits(r, lu, f))
+            && r.tti.is_legal_addressing_mode(f.has_global(), f.unfolded_offset.0, true, f.scale);
+        // DEVIATE LU16: where the target says so, the unfolded offset of an
+        // address use that the target takes beside its one base register
+        // (no scale) is the address's own immediate once the offset is folded
+        // after this pass: no add.
+        let absorbed = absorbed
+            || (f.unfolded_offset.is_non_zero()
+                && lu.kind == Kind::Address
+                && f.scale == 0
+                && r.tti.unfolded_address_offsets_fold()
+                && r.tti.is_legal_addressing_mode(f.has_global(), f.unfolded_offset.0, true, 0));
+        if !absorbed && inside {
             self.c.num_base_adds += u32::from(f.unfolded_offset.is_non_zero());
+        }
+
+        if let Some(m) = bytes_model {
+            let constant = |v: i64| m.constant + leb_len(v);
+            if !absorbed && inside && f.unfolded_offset.is_non_zero() {
+                self.bytes += constant(f.unfolded_offset.0) + m.op;
+            }
+            if lu.kind == Kind::ICmpZero && !f.has_zero_end() {
+                self.bytes += constant(f.base_offset.0) + m.op;
+            }
+            if lu.kind == Kind::Address {
+                for fixup in &lu.fixups {
+                    let offset = fixup.offset.add_unsigned(f.base_offset);
+                    if offset.is_non_zero() {
+                        self.bytes += leb_len(offset.0);
+                    }
+                }
+            }
+        }
+
+        if r.bytes_counted
+            && let Some(m) = r.tti.lsr_size_model()
+        {
+            if lu.kind == Kind::Address {
+                for fixup in &lu.fixups {
+                    let offset = fixup.offset.add_unsigned(f.base_offset).0;
+                    self.size_bytes +=
+                        m.displacement(offset, f.has_global(), matches!(f.symbol, Some(Symbol::Frame(_))));
+                }
+            }
+            // An add or lea for each register not folded, and its immediate.
+            self.size_bytes += m.base_add.bytes * (self.c.num_base_adds - prev_base_adds);
+            // The exit test's `cmp` unless the counter ends at zero.
+            if lu.kind == Kind::ICmpZero && !f.has_zero_end() {
+                let immediate = f.base_regs.len() == 1 && f.scaled_reg.is_none();
+                let immediate = immediate.then_some(f.base_offset.0);
+                self.size_bytes += (m.exit_compare)(narrowest_bits(r, lu, f), immediate);
+            }
         }
 
         // Scaling amounts that are not free.
@@ -613,24 +776,51 @@ impl Cost {
         // The non-zero immediates.
         for fixup in &lu.fixups {
             let offset = fixup.offset.add_unsigned(f.base_offset);
-            if f.base_gv.is_some() {
+            if f.has_global() {
                 // Symbolic values are rated conservatively.
                 self.c.imm_cost += 64;
             } else if offset.is_non_zero() {
-                self.c.imm_cost += 65 - (offset.0 ^ (offset.0 >> 63)).leading_zeros();
+                let bits = 65 - (offset.0 ^ (offset.0 >> 63)).leading_zeros();
+                self.c.imm_cost += bits;
+            }
+            // DEVIATE LSR-POSTINC-PAIR (owner arm64, exit 2026-11-30): a
+            // walked pointer's writeback folds into the first access of an
+            // adjacent pair (`ldp [p], #n`), so the walk starts there: a pair
+            // that is all a pointer reaches, its lower access before the
+            // pointer (a negative offset), costs two more; a third access
+            // takes the bump alone from the last, as the pin starts it. The
+            // pin's two's complement width rates `-4` cheaper than `4` and
+            // starts every walk at the last access.
+            if lu.kind == Kind::Address
+                && r.amk.has_post_indexed()
+                && r.tti.lsr_pair_first_walk()
+                && !f.has_global()
+                && f.scaled_reg.is_none()
+            {
+                let size = lu.access_ty.bytes as i64;
+                // Only a 4-, 8- or 16-byte access has a pair form (`ldp`).
+                if matches!(size, 4 | 8 | 16) {
+                    let before = pair_walk_penalty(&self.walked, &f.base_regs);
+                    self.walked.push((f.base_regs.clone(), offset.0, size));
+                    let after = pair_walk_penalty(&self.walked, &f.base_regs);
+                    self.c.imm_cost = (self.c.imm_cost + after).saturating_sub(before);
+                }
             }
             // The target may not support this offset for this instruction.
             if lu.kind == Kind::Address
+                && inside
                 && offset.is_non_zero()
-                && !is_am_completely_folded_at(
-                    r.tti,
-                    Kind::Address,
-                    lu.access_ty.addr_space,
-                    f.base_gv.is_some(),
-                    offset,
-                    f.has_base_reg,
-                    f.scale,
-                )
+                && !f.mode().is_some_and(|mode| {
+                    is_am_completely_folded_at(
+                        r.tti,
+                        Kind::Address,
+                        lu.access_ty,
+                        mode.global,
+                        offset,
+                        mode.has_base_reg,
+                        mode.scale,
+                    )
+                })
             {
                 self.c.num_base_adds += 1;
             }
@@ -638,7 +828,11 @@ impl Cost {
 
         // Every register past the target's, less one, is another instruction
         // (a fill).
-        let target_regs = r.tti.number_of_gpr_registers() - 1;
+        // DEVIATE LU3c: the pin keeps one register back for what it does not
+        // count; where the target says LU3b's live count is exact it is not
+        // taken twice.
+        let reserve = if r.other_register_units == 0 { 1 } else { r.tti.lsr_reserved_registers() };
+        let target_regs = (r.tti.number_of_gpr_registers() - reserve).saturating_sub(r.other_register_units);
         if self.c.num_regs > target_regs {
             // Already past: only the newly added registers add instructions.
             if prev_regs > target_regs {
@@ -654,11 +848,18 @@ impl Cost {
         if lu.kind == Kind::ICmpZero && !f.has_zero_end() && !r.tti.can_macro_fuse_cmp() {
             self.c.insns += 1;
         }
+        // A counter that ends at zero pays the target's zero test.
+        if lu.kind == Kind::ICmpZero && f.has_zero_end() {
+            self.c.insns += r.tti.zero_test_cost();
+        }
         // Each new addrec adds one instruction.
         self.c.insns += self.c.add_rec_cost - prev_add_rec;
         // The base adds are instructions for unfolded registers.
         if lu.kind != Kind::ICmpZero {
             self.c.insns += self.c.num_base_adds - prev_base_adds;
+        }
+        if let Some(m) = bytes_model {
+            self.bytes += (self.c.num_base_adds - prev_base_adds) * (m.op + m.local_get);
         }
     }
 
@@ -699,8 +900,12 @@ impl Cost {
             // An addrec of another loop is invariant in `l` (LSR handles
             // innermost loops only).
             if header != r.l {
-                // One that exists as a phi is free.
-                if is_existing_phi(r.se, r.cx, reg) {
+                // One that exists as a phi is free (unless post-indexed
+                // addressing is favored).
+                if (is_existing_phi(r.se, r.cx, reg)
+                    || r.tti.lsr_extension_of_phi_exists() && is_extension_of_existing_phi(r.se, r.cx, reg))
+                    && !r.amk.has_post_indexed()
+                {
                     return;
                 }
                 // A sibling's induction variable is not for this loop to add.
@@ -709,17 +914,126 @@ impl Cost {
                     self.lose();
                     return;
                 }
+                // DEVIATE COLD-CHREC: not one the loop that holds it steps on
+                // every trip for an inner loop entered on some.
+                if !r.as_written
+                    && r.tti.avoids_cold_outer_addrec_expansion()
+                    && expands_cold_outer_chrec(r.se, r.cx, reg, r.l)
+                {
+                    self.lose();
+                    return;
+                }
                 self.c.num_regs += 1;
                 return;
             }
 
             let mut loop_cost = 1;
+            // A pointer that steps by a constant from an invariant start is a
+            // post-indexed access's own increment: free where every fixup of
+            // the use runs each trip.
+            let ty = crate::lsr_generate::tti_ty(r.se.type_of(reg));
+            if r.amk.has_post_indexed()
+                && (r.tti.is_post_inc_load_legal(ty) || r.tti.is_post_inc_store_legal(ty))
+                && let Some((start, step, _)) = r.se.match_affine_add_rec(reg)
+                && let Some(step_bytes) = r.se.as_constant(step).map(|c| c.sext_value() as i64)
+                && lu
+                    .access_ty
+                    .mem_ty
+                    .and_then(|t| r.cx.context.types.int_bits(t))
+                    .is_none_or(|bits| r.tti.is_post_inc_step_legal(i64::from(bits / 8), step_bytes))
+                && r.se.as_constant(start).is_none()
+                && r.se.is_loop_invariant(r.cx, start, Some(r.l))
+                && lu.all_fixups_unconditional
+            {
+                loop_cost = 0;
+            }
             // A loop that counts down to zero under a hardware loop folds its
             // addrec into the loop instruction.
             if lu.kind == Kind::ICmpZero && f.counts_down_to_zero(r.se) && r.hardware_loop_profitable {
                 loop_cost = 0;
             }
             self.c.add_rec_cost += loop_cost;
+            if loop_cost > 0
+                && r.se.match_affine_add_rec(reg).is_some_and(|(_, step, _)| r.se.as_constant(step).is_none())
+            {
+                self.variable_steps += 1;
+            }
+            // DEVIATE LU32: a start that is a multi-level addrec of an outer
+            // loop no phi carries is expanded there by a phi a level.
+            if r.tti.lsr_outer_addrec_regs_per_level() && !r.as_written {
+                let start = r.se.operands(reg)[0].scev;
+                let phis = outer_addrec_phis(r.se, r.cx, start, r.l);
+                self.outer_phis += phis;
+                self.c.num_regs += phis;
+            }
+            // DEVIATE COLD-CHREC: nor a start that expands to such phis.
+            if !r.as_written && r.tti.avoids_cold_outer_addrec_expansion() {
+                let start = r.se.operands(reg)[0].scev;
+                if expands_cold_outer_chrec(r.se, r.cx, start, r.l) {
+                    self.lose();
+                    return;
+                }
+            }
+            // DEVIATE LU17: the loop as written forms an addrec that is no phi
+            // by multiplying a counter; the target says what that costs.
+            if r.as_written
+                && !is_existing_phi(r.se, r.cx, reg)
+                && let Some((_, step, _)) = r.se.match_affine_add_rec(reg)
+                && let Some(c) = r.se.as_constant(step)
+            {
+                let bits = r.se.get_type_size_in_bits(r.cx, r.se.type_of(reg));
+                self.c.num_iv_muls += r.tti.lsr_written_step_multiplies(c.sext_value() as i64, bits);
+            }
+            // DEVIATE LU23: `gep p, n` where only `n` is a phi forms the
+            // pointer addrec by an add each trip it is used, not a recurrence
+            // of its own: LSR's baseline counted it as one and so kept the
+            // index and the add.
+            if r.as_written
+                && lu.kind == Kind::Address
+                && lu.all_fixups_unconditional
+                && r.tti.lsr_written_pointer_add_is_base_add()
+                && !is_existing_phi(r.se, r.cx, reg)
+                && r.se.type_of(reg).is_pointer()
+                && let Some((start, _, _)) = r.se.match_affine_add_rec(reg)
+                && r.se.as_constant(start).is_none()
+            {
+                self.c.add_rec_cost = self.c.add_rec_cost.saturating_sub(loop_cost);
+                self.c.num_base_adds += 1;
+            }
+            // DEVIATE LU20: the loop as written keeps the bound of its exit
+            // test next to the counter; the folded `{-bound,+,1}` counts one.
+            if r.as_written
+                && lu.kind == Kind::ICmpZero
+                && r.tti.lsr_written_exit_bound_is_live()
+                && let Some((start, _, _)) = r.se.match_affine_add_rec(reg)
+                && r.se.as_constant(start).is_none()
+                && r.se.is_loop_invariant(r.cx, start, Some(r.l))
+            {
+                self.c.num_regs += 1;
+            }
+            if loop_cost > 0
+                && r.bytes_counted
+                && let Some(m) = r.tti.lsr_size_model()
+            {
+                let bits = r.se.get_type_size_in_bits(r.cx, r.se.type_of(reg));
+                let (start, step) = match r.se.match_affine_add_rec(reg) {
+                    Some((start, step, _)) => (r.se.as_constant(start), r.se.as_constant(step)),
+                    None => (None, None),
+                };
+                self.size_bytes += (m.step)(bits, step.map(|c| c.sext_value() as i64));
+                if let (Some(start), Some(bytes)) = (start, m.constant_start) {
+                    self.size_bytes += bytes(bits, start.sext_value() as i64);
+                }
+            }
+            if loop_cost > 0
+                && let Some(m) = r.tti.lsr_bytes()
+            {
+                // The step added each trip.
+                let step = r.se.operands(reg)[1].scev;
+                let step_bytes =
+                    r.se.as_constant(step).map_or(m.local_get, |c| m.constant + leb_len(c.sext_value() as i64));
+                self.bytes += m.local_get + step_bytes + m.op + m.local_set;
+            }
 
             // DEVIATE LU5: a start that is a non-affine addrec of an enclosing
             // loop is expanded as an induction variable for each of its steps,
@@ -745,17 +1059,88 @@ impl Cost {
                 }
             }
         }
+        // DEVIATE LU6: a stack slot alone under an address is its frame
+        // register and a displacement, so it takes no register; the pin counts
+        // it (x86 `isLegalAddressingMode` sees an alloca as a base register).
+        if lu.kind == Kind::Address && f.base_regs.len() == 1 && r.tti.frame_address_is_free() && is_stack_slot(r, reg)
+        {
+            return;
+        }
         self.c.num_regs += 1;
+        // DEVIATE LU13: kept across a call, a recurrence is reloaded and
+        // stored every trip, an invariant reloaded.
+        if r.across_call {
+            self.c.spills += if r.se.addrec_header(reg) == Some(r.l) { 2 } else { 1 };
+        }
 
         // Favor registers that need no setup in the preheader.
+        let prev_setup = self.c.setup_cost;
         self.c.setup_cost += setup_cost(r.se, r.cx, r.tti, reg, SETUP_COST_DEPTH_LIMIT);
         // Even with the depth limit, the cost stays valid.
         self.c.setup_cost = self.c.setup_cost.min(1 << 16);
+        if r.bytes_counted
+            && let Some(m) = r.tti.lsr_size_model()
+        {
+            // A `mov` or `lea` of the register's start in the preheader; a
+            // constant start the model prices by value is counted already.
+            let priced_start = m.constant_start.is_some()
+                && r.se.match_affine_add_rec(reg).is_some_and(|(start, _, _)| r.se.as_constant(start).is_some());
+            // DEVIATE LSR-DERIVED (a target fact, off by default: m16 -Os grew
+            // without it checked): not for an integer recurrence
+            // the loop as written derives from its counter by one
+            // instruction each trip (`i << 4`, `i - 192`): it is no
+            // register stepped from a start, so there is nothing to
+            // set up. The pin counts it a recurrence
+            // like any other; a byte model prices the two apart.
+            let derived = m.derived_setup_free
+                && r.as_written
+                && r.se.addrec_header(reg) == Some(r.l)
+                && !r.se.type_of(reg).is_pointer()
+                && r.se.match_affine_add_rec(reg).is_some_and(|(_, step, _)| r.se.as_constant(step).is_some())
+                && !is_existing_phi(r.se, r.cx, reg);
+            if !priced_start && !derived {
+                self.size_bytes += m.setup.bytes * (self.c.setup_cost - prev_setup).min(m.setup_cap);
+            }
+        }
+        if let Some(m) = r.tti.lsr_bytes() {
+            // A local set in the preheader, and a constant for each
+            // immediate the setup makes.
+            self.bytes += m.local_set + setup_bytes(r.se, r.cx, &m, reg, SETUP_COST_DEPTH_LIMIT);
+        }
 
         if r.se.scev_type(reg) == Type::Mul && r.se.has_computable_loop_evolution(r.cx, reg, Some(r.l)) {
             self.c.num_iv_muls += 1;
         }
     }
+}
+
+/// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopStrengthReduce.cpp#L3960
+/// `mayUsePostIncMode`: `s` steps by a constant from a start invariant in the
+/// loop, and the target has a post-indexed access of its type, for an integer
+/// address use.
+pub fn may_use_post_inc_mode(
+    tti: &dyn Tti,
+    se: &mut ScalarEvolution,
+    cx: &Cx,
+    lu: &Use,
+    s: Scev,
+    l: BlockId,
+) -> bool {
+    let access_bits = lu.access_ty.mem_ty.and_then(|ty| cx.context.types.int_bits(ty));
+    let Some(access_bits) = access_bits.filter(|_| lu.kind == Kind::Address) else { return false };
+    let Some((start, step, _)) = se.match_affine_add_rec(s) else { return false };
+    let Some(step_bytes) = se.as_constant(step).map(|c| c.sext_value() as i64) else { return false };
+    let ty = crate::lsr_generate::tti_ty(se.type_of(s));
+    // DEVIATE LSR-POSTINC-COND (owner arm64, exit 2026-11-30; where
+    // `lsr_post_indexed_amortized`): a use with a conditional fixup cannot
+    // fold the step into an access on every trip (`RateRegister` prices it as
+    // a step), so the pointer walk is no better than the index with a scaled
+    // address, and reassociation still offers that one.
+    (lu.all_fixups_unconditional || !tti.lsr_post_indexed_amortized())
+        && (tti.is_post_inc_load_legal(ty) || tti.is_post_inc_store_legal(ty))
+        && tti.is_post_inc_step_legal(i64::from(access_bits / 8), step_bytes)
+        && se.as_constant(start).is_none()
+        && se.is_loop_invariant(cx, start, Some(l))
 }
 
 /// Whether the loop of header `outer` contains the loop of header `inner`.
@@ -765,6 +1150,33 @@ fn cx_loop_contains(
     inner: BlockId,
 ) -> bool {
     cx.loops.get_loop_for(outer).is_some_and(|lp| lp.contains_loop(cx.loops.get_loop_for(inner)))
+}
+
+/// DEVIATE LU32 (`Tti::lsr_outer_addrec_regs_per_level`): the phis expanding
+/// `s` adds to the loops other than `l`: a phi a level of each addrec with
+/// more than one that no phi carries.
+fn outer_addrec_phis(
+    se: &mut ScalarEvolution,
+    cx: &Cx,
+    s: Scev,
+    l: BlockId,
+) -> u32 {
+    use llrm_analysis::scev::expr::Kind as K;
+    match se.node(s).kind.clone() {
+        K::AddRec(operands, header) if header != l => {
+            if is_existing_phi(se, cx, s) {
+                0
+            } else if operands.len() > 2 {
+                operands.len() as u32 - 1
+            } else {
+                operands.iter().map(|op| outer_addrec_phis(se, cx, op.scev, l)).sum()
+            }
+        }
+        K::Add(operands) | K::Mul(operands) | K::AddRec(operands, _) => {
+            operands.iter().map(|op| outer_addrec_phis(se, cx, op.scev, l)).sum()
+        }
+        _ => 0,
+    }
 }
 
 /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopStrengthReduce.cpp#L1123
@@ -792,8 +1204,83 @@ pub fn is_existing_phi(
     false
 }
 
+/// DEVIATE LU22 (`Tti::lsr_extension_of_phi_exists`): a phi of the addrec's
+/// loop header narrower than the addrec, whose zero or sign extension is the
+/// addrec. The extension is an instruction the loop already has (`zext i8 j`).
+pub fn is_extension_of_existing_phi(
+    se: &mut ScalarEvolution,
+    cx: &Cx,
+    ar: Scev,
+) -> bool {
+    extension_of_existing_phi(se, cx, ar).is_some()
+}
+
+/// The phi `is_extension_of_existing_phi` found, and whether the extension is
+/// a sign extension.
+pub fn extension_of_existing_phi(
+    se: &mut ScalarEvolution,
+    cx: &Cx,
+    ar: Scev,
+) -> Option<(InstId, bool)> {
+    let header = se.addrec_header(ar)?;
+    let ty = se.type_of(ar);
+    let bits = se.get_type_size_in_bits(cx, ty);
+    for inst in cx.function.iter_block(header) {
+        let phi = cx.function.instruction(inst);
+        if phi.opcode != Opcode::Phi {
+            break;
+        }
+        let value = result_of(phi);
+        if !se.is_value_scevable(cx, value) {
+            continue;
+        }
+        let narrow = se.get_scev(cx, value);
+        if se.get_type_size_in_bits(cx, se.type_of(narrow)) >= bits || se.addrec_header(narrow) != Some(header) {
+            continue;
+        }
+        if se.get_zero_extend_expr(cx, ScevUse::of(narrow), ty, 0) == ar {
+            return Some((inst, false));
+        }
+        if se.get_sign_extend_expr(cx, ScevUse::of(narrow), ty, 0) == ar {
+            return Some((inst, true));
+        }
+    }
+    None
+}
+
 /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopStrengthReduce.cpp#L1397
 /// `getSetupCost`: the instructions `reg` needs in the preheader, to a depth.
+/// The length of the LEB128 of `v`.
+fn leb_len(v: i64) -> u32 {
+    let bits = 65 - (v ^ (v >> 63)).leading_zeros();
+    bits.div_ceil(7).max(1)
+}
+
+/// What the code in the preheader that makes `reg` is in bytes, as
+/// `setup_cost` walks it.
+fn setup_bytes(
+    se: &ScalarEvolution,
+    cx: &Cx,
+    m: &LsrBytes,
+    reg: Scev,
+    depth: u32,
+) -> u32 {
+    match se.scev_type(reg) {
+        Type::Unknown => m.local_get,
+        Type::Constant => m.constant + leb_len(se.as_constant(reg).expect("a constant").sext_value() as i64),
+        _ if depth == 0 => 0,
+        Type::AddRec => setup_bytes(se, cx, m, se.operands(reg)[0].scev, depth - 1),
+        Type::Truncate | Type::ZeroExtend | Type::SignExtend | Type::PtrToAddr => {
+            setup_bytes(se, cx, m, se.operands(reg)[0].scev, depth - 1)
+        }
+        Type::Add | Type::Mul => {
+            let ops = se.operands(reg);
+            ops.iter().map(|op| setup_bytes(se, cx, m, op.scev, depth - 1)).sum::<u32>() + (ops.len() as u32 - 1) * m.op
+        }
+        _ => 0,
+    }
+}
+
 pub fn setup_cost(
     se: &ScalarEvolution,
     cx: &Cx,
@@ -806,7 +1293,7 @@ pub fn setup_cost(
         Type::Constant => {
             let value = se.as_constant(reg).expect("a constant");
             let bits = se.get_type_size_in_bits(cx, se.type_of(reg));
-            u32::from(tti.int_imm_cost(value.sext_value(), bits) != TtiCost::FREE)
+            u32::from(tti.lsr_constant_setup_is_one() || tti.int_imm_cost(value.sext_value(), bits) != TtiCost::FREE)
         }
         _ if depth == 0 => 0,
         Type::AddRec => setup_cost(se, cx, tti, se.operands(reg)[0].scev, depth - 1),
@@ -822,4 +1309,56 @@ pub fn setup_cost(
         }
         _ => 0,
     }
+}
+
+/// Whether `s` takes no register in an address: a constant, or an address-space
+/// cast (a far pointer made of a segment, its offset zero).
+fn holds_no_offset(
+    r: &mut Rating,
+    s: Scev,
+) -> bool {
+    // A local is addressed off the frame register, outside the class.
+    if is_stack_slot(r, s) {
+        return true;
+    }
+    match r.se.unknown_value(s) {
+        Some(Operand::Constant(_)) => true,
+        Some(Operand::Value(v)) => {
+            let llrm_mir::module::ValueDef::Instruction(def) = r.cx.function.value(v).def else { return false };
+            matches!(
+                r.cx.function.instruction(def).opcode,
+                Opcode::Cast(CastOp::AddrSpaceCast)
+            )
+        }
+        _ => false,
+    }
+}
+
+/// Whether `s` is the address of a stack slot: an `alloca`.
+fn is_stack_slot(
+    r: &mut Rating,
+    s: Scev,
+) -> bool {
+    let Some(Operand::Value(v)) = r.se.unknown_value(s) else { return false };
+    let llrm_mir::module::ValueDef::Instruction(def) = r.cx.function.value(v).def else { return false };
+    matches!(r.cx.function.instruction(def).opcode, Opcode::Alloca { .. })
+}
+
+/// The width the offset is added at: the formula's, or the use's own when the
+/// formula is a wider one truncated back.
+fn narrowest_bits(
+    r: &Rating,
+    lu: &Use,
+    f: &Formula,
+) -> u32 {
+    let bits = |ty: Option<Ty>| match ty {
+        Some(Ty::Int(bits)) => bits,
+        _ => u32::MAX,
+    };
+    lu.fixups
+        .iter()
+        .map(|fixup| bits(r.cx.function.operand_type(r.cx.context, fixup.operand).and_then(|t| r.se.ty_of(r.cx, t))))
+        .chain([bits(f.ty(r.se, r.cx))])
+        .min()
+        .unwrap_or(u32::MAX)
 }

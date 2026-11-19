@@ -80,7 +80,7 @@ mod tests {
         let global = &mut module.globals[0];
         global.address_space = space;
         if let GlobalKind::Function(function) = &mut global.kind {
-            function.attrs.push(Attribute::Flag(NEAR_CODE.to_owned()));
+            function.attrs.push(Attribute::Flag(NEAR_CODE.into()));
         }
         module
     }

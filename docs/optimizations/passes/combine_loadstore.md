@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_loadstore.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_loadstore.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_loadstore.rs sha256:de9588ffd78aa688dd0f9fdaf78b0836c26d3518828967c51fe0044dd04a691a -->
+<!-- src: crates/opt/llrm-transforms/src/combine_loadstore.rs sha256:0a0d8a08a3811baeada30f48188dc681d67df4e76495bf2c3e3cc04709c6e980 -->
 
 # combine_loadstore
 
@@ -30,6 +30,17 @@ store i16 %x, ptr %p
 
 MIRROR: every check and its order, the scan of 6 and what ends it.
 
+`mergeStoreIntoSuccessor` (:1639, called from `visitUncondBrInst`): a store
+before an unconditional branch whose successor has two edges, and the
+other predecessor stores the same address (last in an if/else arm, or in
+the block that branches to this one: the triangle), becomes a `storemerge`
+phi and one store in the successor.
+
+DEVIATE 9: only stores of one type merge (no `CreateBitOrPointerCast`
+between a stored `i32` and `float`); of the metadata only an equal `tbaa`
+is kept (`AAMDNodes::merge` and the access-group intersection are not
+translated). Exit 2026-11-20.
+
 DEVIATE 1: `combineStoreToValueType`, `unpackStoreToAggregate` and
 `replaceGEPIdxWithZero` are the next slices of this file, not yet
 translated.
@@ -58,6 +69,9 @@ count of 1 is dropping the operand.
 `visitLoadInst`'s store-to-load forwarding: a load whose value one of the 6
 instructions before it in its block stored (`FindAvailableLoadedValue`) is
 that value, cast to the load's type.
+
+`combineLoadToOperationType` (:691): a load read once by a `bitcast` loads
+the cast's type.
 
 DEVIATE 8: the rest of `visitLoadInst` is not translated, and the load CSE
 of `FindAvailableLoadedValue` (an earlier load of the address) is left to

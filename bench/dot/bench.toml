@@ -1,0 +1,7 @@
+description = "Dot product of two arrays of different lengths, to the shorter"
+repetitions = 1
+
+[region]
+bas = "BenchDot"
+c = "bench_dot"
+nib = "bench_dot"

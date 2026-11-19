@@ -49,7 +49,7 @@ States: done; partial (what is missing is in the blocker column); missing; N/A (
 | 41 | DeleteDeadBlock sweep, simplifyOffsetableRelocate, placeDbgValues, placePseudoProbes | [L9242](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/CodeGenPrepare.cpp#L9242) | N/A | no GC statepoints, dbg.value or pseudo probes in MIR | - |
 ## Ownership
 
-- **w-3** writes `combineToUAddWithOverflow` and `combineToUSubWithOverflow` (11-13, x_adler), with `matchUAddWithOverflowConstantEdgeCases`, `replaceMathCmpWithIntrinsic` and `optimizeMulWithOverflow` as the one overflow family; they add a function beside `cgpaddr.rs` and touch none of mine. Confirmed by w-3 (date 2026-11-13, owner w-3; usubo fires in 0/71 m32 programs and 2/65 QCport m16 modules, #3786).
+- **w-3** writes `combineToUAddWithOverflow` and `combineToUSubWithOverflow` (11-13, x_adler), with `matchUAddWithOverflowConstantEdgeCases`, `replaceMathCmpWithIntrinsic` and `optimizeMulWithOverflow` as the one overflow family; they add a function beside `cgpaddr.rs` and touch none of mine. Confirmed by w-3 (date 2026-11-13, owner w10-instcombine; usubo fires in 0/71 m32 programs and 2/65 QCport m16 modules, #3786).
 - **w-4** writes every other row.
 
 ## The hooks

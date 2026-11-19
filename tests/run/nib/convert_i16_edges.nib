@@ -1,0 +1,19 @@
+# flags: -O2 -march=i486 | -Os -march=i486
+# i16(f) of the edges that pass: the minimum, a fraction past it, the maximum and a fraction past that.
+# The values are stored through an opaque call, so nothing folds the conversions.
+var v: f64 = 0.0
+
+@noipa
+fn put(x: f64) -> void:
+    v = x
+
+fn main() -> i16:
+    put(-32768.0)
+    print(i16(v))
+    put(-32768.9)
+    print(i16(v))
+    put(32767.0)
+    print(i16(v))
+    put(32767.9)
+    print(i16(v))
+    return 0

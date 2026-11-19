@@ -1,4 +1,5 @@
 // flags: -O0 -m32 | -O2 -m32
+// targets: !int16
 // A struct of a byte-sized and a 24-bit field, initialised with braces: Open Watcom stores the 24-bit field's int at
 // offset 1, one byte past the struct, and cutting that back to the struct's end died with "Bad initializer quad"
 // (11 gcc.c-torture programs: pr103417, bf64-1, bitfld-3, 20230630-1 ...).

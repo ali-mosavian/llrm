@@ -1,4 +1,4 @@
-# TwoAddress on a shared LiveIntervals (row 62, row 62b) — owner w-1, due 2026-11-20
+# TwoAddress on a shared LiveIntervals (row 62, row 62b) — owner anyisa, due 2026-11-20
 
 Why: TwoAddress costs 7.84 M Ir on d_faces -O2 m32 against the pin's 1.07 M. The pin builds one `LiveIntervals` per function, TwoAddress edits it, the Coalescer reads it; ours builds `BodyFacts` in TwoAddress (DEVIATE TA-6) and a fresh `LiveIntervals` in the Coalescer (`coalescer/env.rs::joined`).
 

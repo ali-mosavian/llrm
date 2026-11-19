@@ -1,4 +1,4 @@
-// flags: -O2 -march=i486 | -O2 -march=i486 -m32 | -O2 -march=i486 -m32 -mabi=sysv | -Os -march=i486 -m32
+// flags: -O2 -march=i486 | -O2 -march=i486 -m32 | -O2 -march=i486 -m32 -mabi=sysv | -Os -march=i486 -m32 | -O0 -march=i486 -m32
 /* A function that leaves before it touches its frame sets the frame up after that test: the early path
    builds none, and the late one builds and takes back its own, whatever the call depth. */
 extern void report(long value);

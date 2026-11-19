@@ -40,6 +40,59 @@ pub fn only(headers: &[BlockId]) -> Scope {
     Scope(ONLY.with(|only| only.borrow_mut().replace(headers.to_vec())))
 }
 
+/// The loop headed by `from` is headed by `to` now (`LoopRotate` makes the
+/// header's successor the header): the scope follows it. LLVM's loop pass
+/// manager holds the `Loop`, which keeps its identity when its header moves;
+/// ours holds the header block.
+pub fn moved(
+    from: BlockId,
+    to: BlockId,
+) {
+    ONLY.with(|only| {
+        if let Some(only) = only.borrow_mut().as_mut() {
+            for header in only.iter_mut().filter(|header| **header == from) {
+                *header = to;
+            }
+        }
+    });
+}
+
+/// The headers of the scope now, after any [`moved`]; empty without one.
+pub fn current() -> Vec<BlockId> {
+    ONLY.with(|only| only.borrow().clone().unwrap_or_default())
+}
+
+/// Whether a scope narrows the loops now: a run for one loop of a loop pass
+/// manager, not for the function.
+pub fn scoped() -> bool {
+    ONLY.with(|only| only.borrow().is_some())
+}
+
+/// Whether the loop headed by `header` is in the scope; every loop is, without
+/// one.
+pub fn allows(header: BlockId) -> bool {
+    ONLY.with(|only| only.borrow().as_ref().is_none_or(|only| only.contains(&header)))
+}
+
+thread_local! {
+    static UNSWITCHED: RefCell<(bool, Vec<BlockId>)> = const { RefCell::new((false, Vec::new())) };
+}
+
+/// What a scoped `SimpleLoopUnswitch` hands the loop pass manager
+/// (`LPMUpdater::addSiblingLoops` and `revisitCurrentLoop`): the sibling loops
+/// it cloned and whether the loop is to be run again.
+pub fn note_unswitched(
+    revisit: bool,
+    siblings: Vec<BlockId>,
+) {
+    UNSWITCHED.with(|noted| *noted.borrow_mut() = (revisit, siblings));
+}
+
+/// The last [`note_unswitched`], cleared.
+pub fn take_unswitched() -> (bool, Vec<BlockId>) {
+    UNSWITCHED.with(|noted| std::mem::take(&mut *noted.borrow_mut()))
+}
+
 /// `headers` less the loops outside the scope; all of them without one.
 pub fn retain(headers: &mut Vec<BlockId>) {
     ONLY.with(|only| {

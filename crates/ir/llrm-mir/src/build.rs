@@ -26,6 +26,7 @@ impl Module {
         self.globals.push(GlobalValue {
             name: name.to_owned().into(),
             linkage,
+            visibility: crate::module::Visibility::Default,
             unnamed_addr: Default::default(),
             address_space: 0,
             kind,

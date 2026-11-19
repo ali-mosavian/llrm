@@ -8,6 +8,10 @@
 //!   `readnone`, `readonly` and `writeonly` do not rule out.
 //! - Any other location (`other`, `inaccessiblemem`, `errnomem`) is an unknown
 //!   read or write.
+//! - A parameter whose every use in the body is a constant-offset load, store
+//!   or constant-length memory intrinsic is accessed at those bytes only
+//!   (`llrm.reads`/`llrm.writes`, stated by `initializes::add_access_ranges`,
+//!   DEVIATE I3).
 //! - A pointer parameter without `nocapture` is captured.
 //!
 //! # Example
@@ -35,7 +39,7 @@ use std::rc::Rc;
 use llrm_mir::GlobalId;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::facts::Facts;
-use llrm_mir::module::{GlobalKind, GlobalValue, Module};
+use llrm_mir::module::{GlobalKind, Module};
 use llrm_mir::types::Type;
 use llrm_support::hash::IndexMap;
 
@@ -58,9 +62,8 @@ pub fn summaries_made() -> usize {
 /// What the last `summaries` made and read: a function whose declaration and
 /// globals' facts stand has the summary it had.
 pub struct Last<'a> {
-    /// The declarations then, and now.
-    pub declared: &'a [GlobalValue],
-    pub declared_now: &'a [GlobalValue],
+    /// Whether a global's declaration differs from what it was then.
+    pub moved: &'a dyn Fn(GlobalId) -> bool,
     pub found: &'a crate::globalsmodref::GlobalsModRef,
     pub tracked: &'a std::collections::BTreeSet<GlobalId>,
     pub made: &'a mut IndexMap<String, Rc<Summary>>,
@@ -109,19 +112,15 @@ pub fn summaries_reusing(
     let mut last = last.filter(|last| {
         last.tracked == tracked
             && listable == tracked.iter().all(|&id| last.found.is_non_address_taken(id))
-            && tracked.iter().all(|id| last.declared.get(id.0 as usize) == last.declared_now.get(id.0 as usize))
+            && tracked.iter().all(|&id| !(last.moved)(id))
     });
     let mut out = IndexMap::default();
     for (id, global, function) in module.functions() {
         // A declaration is not described: a call to one is answered from its
         // own attributes (`calls_by_attributes`).
         let Some(name) = global.name.as_ref().filter(|_| !function.is_declaration()) else { continue };
-        let kept = last
-            .as_mut()
-            .filter(
-                |last| last.declared.get(id.0 as usize) == last.declared_now.get(id.0 as usize)
-                    && last.found.function_info(id) == found.function_info(id),
-            );
+        let kept =
+            last.as_mut().filter(|last| !(last.moved)(id) && last.found.function_info(id) == found.function_info(id));
         if let Some(summary) = kept.and_then(|last| last.made.swap_remove(name)) {
             out.insert(name.clone(), summary);
             continue;
@@ -229,12 +228,26 @@ fn summary_of(
             ..MemoryObject::new(MemoryKind::Parameter)
         });
         debug_assert_eq!(object.key, Key::Int(index as i64));
-        let whole = Slice::whole(object);
+        let attrs = &function.parameter_attrs[index];
+        let narrowed = (
+            llrm_mir::memory::access_ranges(attrs, llrm_mir::memory::READS),
+            llrm_mir::memory::access_ranges(attrs, llrm_mir::memory::WRITES),
+        );
+        let state = |set: &mut crate::sliceset::SliceSet, ranges: Option<&Vec<(i64, i64)>>| match ranges {
+            Some(ranges) => {
+                for &(low, high) in ranges {
+                    set.insert(Slice::new(object, low, high, 1, 1).expect("a non-empty range"));
+                }
+            }
+            None => {
+                set.insert(Slice::whole(object));
+            }
+        };
         if access.is_ref_set() {
-            summary.reads.insert(whole);
+            state(&mut summary.reads, narrowed.0.as_ref());
         }
         if access.is_mod_set() {
-            summary.writes.insert(whole);
+            state(&mut summary.writes, narrowed.1.as_ref());
         }
     }
     summary

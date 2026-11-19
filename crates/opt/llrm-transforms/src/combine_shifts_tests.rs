@@ -998,3 +998,63 @@ b0:
     assert!(after.contains("call i16 @llvm.bswap.i16(i16 %x)"), "{after}");
     assert!(after.contains("shl nuw nsw i32 %1, 8"), "{after}");
 }
+
+/// DEVIATE 6 (gcc `match.pd`): `(x + 262144) >> 18` with the add `nuw` is `(x >> 18) + 1`, through a tree of one-use
+/// `add nuw`s too (nbody_fixed -Os: `add`, `lsr`, `add` where gcc has `asr`, `add`; the sum `dx*dx + dy*dy + 512*512`
+/// has the constant under the first add).
+#[test]
+fn a_shifted_constant_leaves_an_nuw_add() {
+    check(
+        "i32",
+        "i32 %x",
+        "  %a = add nuw i32 %x, 64\n  %r = lshr i32 %a, 3\n  ret i32 %r\n",
+        "  %0 = lshr i32 %x, 3\n  %1 = add nuw i32 %0, 8\n  ret i32 %1\n",
+    );
+    check(
+        "i32",
+        "i32 %x, i32 %y",
+        "  %a = add nuw i32 %x, 64\n  %b = add nuw i32 %a, %y\n  %r = lshr i32 %b, 3\n  ret i32 %r\n",
+        "  %0 = add nuw i32 %x, %y\n  %1 = lshr i32 %0, 3\n  %2 = add nuw i32 %1, 8\n  ret i32 %2\n",
+    );
+}
+
+/// The wrap case: without `nuw` `(200 + 64) >> 6` is 0 and `(200 >> 6) + 1` is 4. The add stays, and the
+/// interpreter agrees over every input.
+#[test]
+fn a_shifted_constant_stays_where_the_add_can_wrap() {
+    let text = "define i8 @f(i8 %x) {\nb0:\n  %a = add i8 %x, 64\n  %r = lshr i8 %a, 6\n  ret i8 %r\n}\n";
+    assert_eq!(combined(text), text);
+    let text = "define i8 @f(i8 %x) {\nb0:\n  %a = add nsw i8 %x, 64\n  %r = lshr i8 %a, 6\n  ret i8 %r\n}\n";
+    assert_eq!(combined(text), text);
+    let text = "define i8 @f(i8 %x, i8 %y) {\nb0:\n  %a = add nuw i8 %x, 64\n  %b = add i8 %a, %y\n  %r = lshr i8 %b, 6\n  ret i8 %r\n}\n";
+    assert_eq!(combined(text), text);
+}
+
+/// A constant that is not a multiple of `2^s` has bits that carry into the result: it stays.
+#[test]
+fn a_shifted_constant_stays_where_it_is_not_a_multiple() {
+    let text = "define i32 @f(i32 %x) {\nb0:\n  %a = add nuw i32 %x, 65\n  %r = lshr i32 %a, 3\n  ret i32 %r\n}\n";
+    assert_eq!(combined(text), text);
+}
+
+/// `ashr` needs `nsw` and the direct add: `(x + 64) >>s 3` is `(x >>s 3) + 8`, negative `x` included; a tree is
+/// left (a regrouped partial sum may leave the range the original did not).
+#[test]
+fn an_arithmetic_shifted_constant_leaves_an_nsw_add() {
+    check(
+        "i32",
+        "i32 %x",
+        "  %a = add nsw i32 %x, 64\n  %r = ashr i32 %a, 3\n  ret i32 %r\n",
+        "  %0 = ashr i32 %x, 3\n  %1 = add nsw i32 %0, 8\n  ret i32 %1\n",
+    );
+    check(
+        "i32",
+        "i32 %x",
+        "  %a = add nsw i32 %x, -64\n  %r = ashr i32 %a, 3\n  ret i32 %r\n",
+        "  %0 = ashr i32 %x, 3\n  %1 = add nsw i32 %0, -8\n  ret i32 %1\n",
+    );
+    let text = "define i32 @f(i32 %x, i32 %y) {\nb0:\n  %a = add nsw i32 %x, 64\n  %b = add nsw i32 %a, %y\n  %r = ashr i32 %b, 3\n  ret i32 %r\n}\n";
+    assert_eq!(combined(text), text);
+    let text = "define i8 @f(i8 %x) {\nb0:\n  %a = add i8 %x, 64\n  %r = ashr i8 %a, 3\n  ret i8 %r\n}\n";
+    assert_eq!(combined(text), text);
+}
