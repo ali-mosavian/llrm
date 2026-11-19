@@ -1111,6 +1111,7 @@ fn items_once(
     }
     preserve_flags(&mut function, &assignment)?;
     restore_remade_flags(&mut function);
+    crate::ccrcopy::drop_redundant_restores(&mut function, &assignment);
     branch_fold(&mut function, &assignment);
     if !wants_size {
         if options.tail_duplicate {
