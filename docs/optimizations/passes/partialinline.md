@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/partialinline.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/partialinline.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/partialinline.rs sha256:f41c3f6eb7e75929ab5038c7038aae593bb899d77bdaed9f089d5d871d80a6e7 -->
+<!-- src: crates/opt/llrm-transforms/src/partialinline.rs sha256:2fce8ef65e9498995ea5ebf04aa35af366300f2b6c045c186d4f2fafd3ee4060 -->
 
 # partialinline
 
@@ -45,3 +45,13 @@ entry count is not added: MIR has no profile counts.
 ## Runs
 After the strength slot (the pin: `addIRPasses`, after LSR), before the
 code-generation-prepare passes.
+
+## Example
+A `sqrt` call that may set `errno` becomes a `memory(none)` call that the target turns into an instruction, with the real call kept for the NaN or negative case.
+
+```text
+%r = call double @sqrt(double %x) memory(none)
+%c = fcmp ord double %r, %r
+br i1 %c, label %b.split, label %call.sqrt
+call.sqrt: %l = call double @sqrt(double %x)   ; joined by a phi in %b.split
+```

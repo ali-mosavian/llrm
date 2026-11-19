@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/trial.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/trial.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/trial.rs sha256:9bb810933692d109ae56cbc3accdfa372f3d9974ec5aa60945539f227524a4ad -->
+<!-- src: crates/opt/llrm-transforms/src/trial.rs sha256:41253e58412faa165d7e7c13c73da3d2eeef8ca01870ce1571444690ac575116 -->
 
 # trial
 
@@ -19,6 +19,15 @@ threshold is large in its own units. Here the pass notes that it refused a
 loop the target's trial size admits; the driver then compiles the program
 again with every loop under that size unrolled and keeps whichever
 assembly it prices cheaper.
+
+## Example
+A loop the pass refused to unroll is noted; the driver compiles again with it unrolled and keeps the cheaper assembly.
+
+```text
+pass:   loop refused by the threshold -> noted (ELIGIBLE)
+driver: compile 1 (loop kept) vs compile 2 (loop unrolled)
+        -> keeps whichever assembly it prices cheaper
+```
 
 ## Used by
 Named by `inlinecost`, `jumpthreading`, `llc`, `looprotate`, `loopunrollpass`, `price`, `process`, `switchlookup`, `target`, `tti`, `walk`.

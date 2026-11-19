@@ -16,6 +16,7 @@
 //! `getCopyFromParts` are skipped for an attribute that already says so) does
 //! not rebuild the high part from a `range` it infers.
 //!
+//! # Example
 //! ```text
 //!  define internal i16 @f(i16 %n)        define internal i32 @f(i16 %n)
 //!    ret i16 %v                  ==>       %w = zext i16 %v to i32
