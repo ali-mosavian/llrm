@@ -64,9 +64,9 @@ int memcmp(const void *x, const void *y, unsigned long n)
     return 0;
 }
 /* __multi3: the low 128 bits of a 128-bit product, from 32-bit partial products (a 128-bit shift or multiply here would call the
-   routine being defined). */
+   routine being defined). Weak: the compiler-rt archive of a `long double` program brings its own. */
 typedef union { __int128 v; unsigned long long w[2]; } wide;
-__int128 __multi3(__int128 a, __int128 b)
+__attribute__((weak)) __int128 __multi3(__int128 a, __int128 b)
 {
     wide x = {a}, y = {b}, r;
     unsigned long long a0 = (unsigned)x.w[0], a1 = x.w[0] >> 32, b0 = (unsigned)y.w[0], b1 = y.w[0] >> 32;
@@ -76,6 +76,10 @@ __int128 __multi3(__int128 a, __int128 b)
     r.w[1] = p11 + (p01 >> 32) + (p10 >> 32) + (mid >> 32) + x.w[0] * y.w[1] + x.w[1] * y.w[0];
     return r.v;
 }
+/* The two hooks a bench and the OS layer lean on: `keep` is opaque to the compiler only because it is another translation unit than the
+   program; `llrm_os_exit` records its code and returns, the same on both sides. */
+int keep(int value) { return value; }
+void llrm_os_exit(unsigned char code) { state = state * 31u + code; }
 /* Named so that a program's own `run` is no clash (inlined_tail_call_keeps_frame_stores defines one). */
 int llrm_harness_run(void)
 {
@@ -85,6 +89,16 @@ int llrm_harness_run(void)
 }
 EOF
 "$clang" --target=wasm32 -O2 -fno-builtin -c "$out/stub.c" -o "$out/stub.o" || { echo "wasm_corpus: the pin clang cannot compile the stub" >&2; exit 2; }
+
+# The 128-bit float and integer routines a `long double` program calls, built once by the pin clang: both sides link these same bytes.
+rt="$root/runtime/compiler-rt"; RT_OBJS=
+for f in $(cd "$rt" && sh tests/fp_sources.sh f128) lib/fp/f32/pack.c lib/fp/f64/pack.c lib/int/int128.c lib/int/clzsi2.c lib/int/clzdi2.c; do
+  o="$out/rt_$(echo "$f" | tr / _).o"
+  "$clang" --target=wasm32 -O2 -w -ffreestanding -I"$rt/include" -c "$rt/$f" -o "$o" 2> /dev/null && RT_OBJS="$RT_OBJS $o"
+done
+# An archive: a routine the stub already defines (`__multi3`) is not pulled from it a second time.
+rm -f "$out/rt.a"; [ -z "$RT_OBJS" ] || llvm-ar-20 rcs "$out/rt.a" $RT_OBJS; RT_OBJS="$out/rt.a"
+export RT_OBJS
 
 # The two sides must compile with the same codegen flags (arm64: 24/72 cells off to one side's -fomit-frame-pointer). Both command lines
 # are taken from what actually ran: ours through a wrapper around the same clang, the pin's from the one list used below.
