@@ -4552,6 +4552,36 @@ fn a_function_ending_in_an_indirect_sibling_call_is_addressed_through_the_stack_
     assert!(listing.contains("jmp "), "{listing}");
 }
 
+/// clang writes no module flag for `-fno-pic -fno-asynchronous-unwind-tables`;
+/// the module read as not clang's, so position independent, and QuickrBasic's
+/// 484 global addresses at m64 -Os were `lea reg, [rip+sym]` (7 bytes) for the
+/// pin's `mov r32, sym` (5): -4,295 B of 182,836. `-relocation-model` states it.
+#[test]
+fn a_flagless_module_built_static_takes_the_dword_move_for_a_global_address() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                @arr = internal global [100 x i32] zeroinitializer\n\
+                declare void @use(ptr)\n\
+                define void @f() {\n  call void @use(ptr @arr)\n  ret void\n}\n";
+    let encoded = |model: &[&str]| {
+        let args: Vec<&str> = ["-m64", "-Os", "--isel=dag"].iter().chain(model).copied().collect();
+        let (built, format) = compiled(&flags(&args), text, "f").unwrap();
+        llrm_codegen::backend::objbuild::written_in(
+            &built,
+            "f.ll",
+            llrm_codegen::backend::objbuild::CodeLayout::OneSegment,
+            format,
+            llrm_target::Target::objects(&llrm_x86_m32::M32),
+        )
+        .unwrap()
+    };
+    let is_static = encoded(&["-relocation-model=static"]);
+    assert!(is_static.windows(5).any(|code| code == [0xBF, 0, 0, 0, 0]), "no `mov edi, sym`");
+    assert!(!is_static.windows(3).any(|code| code == [0x48, 0x8D, 0x3D]), "a `lea rdi, [rip+sym]`");
+    // No statement keeps the flagless module position independent.
+    assert!(encoded(&[]).windows(3).any(|code| code == [0x48, 0x8D, 0x3D]));
+}
+
 /// A local declared `align 16` sat at `[rsp+4]`: the frame clamped every
 /// alignment to 4 (bintree's array; a 16-byte `movaps` clear of it would
 /// fault).

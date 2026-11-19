@@ -110,6 +110,7 @@ FMUL{f}rr                binary   x/x,x         f16,f32,f64              fp_arit
 FDIV{f}rr                binary   x/x,x         f16,f32,f64              fp_div     - - - -/-                FDIV{f}rr
 FNMUL{f}rr               binary   x/x,x         f16,f32,f64              fp_arith   - - - -/-                FNMUL{f}rr
 FMAX{f}rr                binary   x/x,x         f16,f32,f64              fp_arith   - - - -/-                FMAX{f}rr
+FABD{H|S|D}rr            binary   x/x,x         -                        fp_arith   - - - -/-                FABD{16|32|64}
 FMAXNM{f}rr              binary   x/x,x         f16,f32,f64              fp_arith   - - - -/-                FMAXNM{f}rr
 FMIN{f}rr                binary   x/x,x         f16,f32,f64              fp_arith   - - - -/-                FMIN{f}rr
 FMINNM{f}rr              binary   x/x,x         f16,f32,f64              fp_arith   - - - -/-                FMINNM{f}rr
