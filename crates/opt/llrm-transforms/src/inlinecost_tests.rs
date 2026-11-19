@@ -816,9 +816,9 @@ fn test_a_site_after_a_checked_loop_nest_is_not_cold_for_the_checks_sake() {
     assert!(threshold > 45, "held to the cold threshold: {threshold}");
 }
 
-/// suggest.c -Os (x86-64): a function called once, from a site the pin reads as cold, stayed out of line (threshold 45,
-/// no last-call bonus) where gcc's called-once inlining removes it: +1,118 B over gcc. With the bonus kept at cold sites
-/// of an -Os caller the site is taken; at -O2 and off, the pin's verdict.
+/// suggest.c -Os (x86-64): a function called once, from a site the pin reads as cold, stayed out of line (threshold
+/// 45, no last-call bonus) where gcc's called-once inlining removes it. With the bonus kept at cold sites of an -Os
+/// caller the site is taken; at -O2 and off, the pin's verdict.
 #[test]
 fn test_the_last_call_bonus_stays_at_a_cold_site_of_an_os_caller_where_the_target_says_so() {
     let module = after_a_checked_loop_nest();
@@ -845,7 +845,8 @@ fn test_the_last_call_bonus_stays_at_a_cold_site_of_an_os_caller_where_the_targe
     let on = InlineParams { last_call_in_cold_site: true, ..InlineParams::from_level(1) };
     let pin = cost_of(InlineParams::from_level(1), CallerSize::OptSize);
     assert_eq!(cost_of(on, CallerSize::OptSize), pin - 15_000, "the bonus stays for an -Os caller");
-    assert_eq!(cost_of(on, CallerSize::Speed), cost_of(InlineParams::from_level(1), CallerSize::Speed), "-O2: the pin's");
+    let speed = cost_of(InlineParams::from_level(1), CallerSize::Speed);
+    assert_eq!(cost_of(on, CallerSize::Speed), speed, "-O2: the pin's");
 }
 
 /// `decide`, the walk's question of one site, is the verdict `sites` gives it,
