@@ -1916,6 +1916,12 @@ pub trait Tti {
         true
     }
 
+    /// D13 keeps the credit at -Os for a hot call site (the pin's `HotCallSiteRelFreq`): a copy in a loop saves the
+    /// call's clocks every trip, which the byte trial does not price. Off by default (x86-m16 is strict bytes).
+    fn inline_hot_dying_credit_at_os(&self) -> bool {
+        false
+    }
+
     /// `Tuning::unroll_never_grows_at_o1`.
     fn unroll_never_grows_at_o1(&self) -> bool {
         false
