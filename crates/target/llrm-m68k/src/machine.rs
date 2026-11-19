@@ -569,17 +569,6 @@ impl Tti for M68k {
         true
     }
 
-    /// DEVIATE PEEL-OS-THRESHOLD (owner m68k, exit 2026-12-20): bodies of up
-    /// to three instructions (`computePeelCount` peels when twice the body
-    /// fits). known_loads_walks -Os, 36 peelable loops: every one peeled
-    /// 1936 B, none 2124; the loops of four or more instructions were each
-    /// smaller unpeeled (leave-one-out: 12 to 82 B); at 7, 1771 B (68000) and
-    /// 1765 (68020), 1761 and 1727 with each loop priced by a compile (14 s,
-    /// not linear). The 166-program -Os sweep moves no other cell.
-    fn peel_trial_threshold(&self) -> Option<u32> {
-        Some(7)
-    }
-
     /// The inliner counts a callee in bytes of code (`sizes`).
     fn inline_size_view(&self) -> Option<Rc<dyn Tti>> {
         Some(Rc::new(M68k { code_size_bytes: true, ..*self }))

@@ -197,6 +197,43 @@ pub fn with<T>(
     value
 }
 
+thread_local! {
+    /// The peel sites (`function:header`) the trial compile reached, in order.
+    static PEEL_SITES: RefCell<Vec<(String, u32)>> = const { RefCell::new(Vec::new()) };
+    /// The peel sites the trial compile leaves unpeeled.
+    static PEEL_SKIPPED: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+}
+
+/// DEVIATE PEEL-OS-PER-LOOP (beyond the pin, which never peels at -Os; owner
+/// m68k, exit 2026-12-20): notes a loop the trial compile peels and says
+/// whether the compile in force leaves it unpeeled. `site` names the loop
+/// (`function:header`); the compile is deterministic up to it.
+pub(crate) fn peel_site_skipped(site: &str, bytes: u32) -> bool {
+    PEEL_SITES.with(|sites| {
+        let mut sites = sites.borrow_mut();
+        if !sites.iter().any(|(one, _)| one == site) {
+            sites.push((site.to_owned(), bytes));
+        }
+    });
+    PEEL_SKIPPED.with(|skipped| skipped.borrow().iter().any(|one| one == site))
+}
+
+/// The peel sites reached since the last call, with the bytes of each body.
+pub fn take_peel_sites() -> Vec<(String, u32)> {
+    PEEL_SITES.with(|sites| std::mem::take(&mut *sites.borrow_mut()))
+}
+
+/// Runs `body` with the loops `sites` names left unpeeled.
+pub fn with_peels_skipped<T>(
+    sites: &[String],
+    body: impl FnOnce() -> T,
+) -> T {
+    let before = PEEL_SKIPPED.with(|skipped| std::mem::replace(&mut *skipped.borrow_mut(), sites.to_vec()));
+    let value = body();
+    PEEL_SKIPPED.with(|skipped| *skipped.borrow_mut() = before);
+    value
+}
+
 /// Notes that `function` has a loop of `size` unrolled that the threshold
 /// refused and a trial may take.
 pub(crate) fn note(

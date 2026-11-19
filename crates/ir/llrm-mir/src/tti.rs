@@ -1849,15 +1849,6 @@ pub trait Tti {
         false
     }
 
-    /// DEVIATE PEEL-OS-THRESHOLD: the `computePeelCount` threshold of that
-    /// trial, where it is not the unroll trial's. A peel copies the loop
-    /// body and adds a guard for the trips left, and pays only where the
-    /// copy folds: larger bodies were smaller unpeeled. None: the unroll
-    /// trial's.
-    fn peel_trial_threshold(&self) -> Option<u32> {
-        None
-    }
-
     /// DEVIATE UNROLL-SPEED-TRIAL (owner z80, exit 2026-11-24): whether the
     /// driver compiles the module again under unroll variants at -O2 and
     /// -O3 (`llrm_transforms::trial::SpeedUnroll`), so the pass notes which of

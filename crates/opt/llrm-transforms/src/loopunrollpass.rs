@@ -1384,7 +1384,9 @@ fn note_for_trial(
 /// A target that states `Tti::peels_on_trial_at_size` has the peels the
 /// `unroll_trial_at_size` bar would admit noted at -Os, and taken in the trial
 /// compile; the driver keeps them where the finished functions are smaller
-/// (what a peel frees lands in later passes, so only the code decides).
+/// (what a peel frees lands in later passes, so only the code decides). The
+/// driver also leaves single peels out (`trial::peel_site_skipped`,
+/// PEEL-OS-PER-LOOP) where the finished functions are smaller without them.
 #[allow(clippy::too_many_arguments)]
 fn peel_on_trial(
     run: &Run,
@@ -1395,20 +1397,28 @@ fn peel_on_trial(
     already: u32,
     before: crate::looppeel::PeelingPreferences,
     pp: &mut crate::looppeel::PeelingPreferences,
+    eph: &IdSet<InstId>,
+    be_insns: u32,
 ) {
     if !run.options.opt_size || pp.peel_count != 0 || !run.tti.peels_on_trial_at_size() {
         return;
     }
-    let Some(limit) = run.tti.peel_trial_threshold().or(trial::active()).or(run.tti.unroll_trial_at_size()) else {
-        return;
-    };
+    let Some(limit) = trial::active().or(run.tti.unroll_trial_at_size()) else { return };
     let mut wide = before;
     crate::looppeel::compute_peel_count(se, cx, run.callees, lp, loop_size, &mut wide, limit, already);
     if wide.peel_count == 0 {
         return;
     }
     if trial::active().is_some() {
-        *pp = wide;
+        let name = run.this.and_then(|this| run.globals[this.0 as usize].name.as_deref().map(str::to_owned)).unwrap_or_default();
+        // the body in bytes where the target prices it so (`inline_size_view`)
+        let bytes = run
+            .tti
+            .inline_size_view()
+            .map_or(loop_size, |view| cost_estimator_with(run, &*view, lp, eph, be_insns).loop_size.value as u32);
+        if !trial::peel_site_skipped(&format!("{name}:{:?}", lp.get_header()), bytes) {
+            *pp = wide;
+        }
     } else if let Some(this) = run.this
         && let Some(name) = run.globals[this.0 as usize].name.as_deref()
     {
@@ -1667,7 +1677,7 @@ pub(crate) fn compute_unroll_count(
         let already = run.peeled.get(&lp.get_header()).copied().unwrap_or(0);
         let before = *pp;
         crate::looppeel::compute_peel_count(se, &cx, run.callees, lp, loop_size, pp, up.threshold, already);
-        peel_on_trial(run, &cx, se, lp, loop_size, already, before, pp);
+        peel_on_trial(run, &cx, se, lp, loop_size, already, before, pp, eph, up.be_insns);
         // DEVIATE UNROLL-O1: a target that cannot pay for the copy does not
         // peel at -O1.
         if run.options.opt_level == 1 && !run.options.opt_size && !run.tti.peels_at_o1() {
@@ -2322,11 +2332,22 @@ pub(crate) fn cost_estimator(
     eph: &IdSet<InstId>,
     be_insns: u32,
 ) -> UnrollCostEstimator {
+    cost_estimator_with(run, run.tti, lp, eph, be_insns)
+}
+
+/// [`cost_estimator`] priced by `tti`.
+fn cost_estimator_with(
+    run: &Run,
+    tti: &dyn Tti,
+    lp: Loop,
+    eph: &IdSet<InstId>,
+    be_insns: u32,
+) -> UnrollCostEstimator {
     let mut metrics = CodeMetrics::default();
     {
         let one_live_use = |callee: GlobalId| has_one_live_use(run, callee);
         let query = Query {
-            tti: run.tti,
+            tti,
             context: run.context,
             layout: run.layout,
             globals: run.globals,
