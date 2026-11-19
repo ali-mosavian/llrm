@@ -331,6 +331,7 @@ impl ProgramPass for Walk {
             last_call_to_static: self.inline.last,
             o1_bound: !self.speed_rate,
             cold_site_ignores_sinks: program.target.tti().is_some_and(|tti| tti.cold_site_ignores_sinks()),
+            last_call_in_cold_site: program.target.tti().is_some_and(|tti| tti.inline_last_call_in_cold_site()),
             ..crate::inlinecost::InlineParams::from_level(if self.inline.limit >= 250 { 3 } else { 2 })
         };
         // The target's tuning table.
@@ -667,6 +668,7 @@ impl ProgramPass for Walk {
                                 }
                             }
                             let mut accepted: Vec<llrm_mir::module::InstId> = Vec::new();
+                            let mut accepted_light = false;
                             let mut hot_tried = 0;
                             for (calls, credit) in units {
                                 // INL-HOT: a unit of sites the pin's threshold
@@ -1055,6 +1057,7 @@ impl ProgramPass for Walk {
                                         .is_some_and(|site| crate::trial::inlines(&site.caller, &site.callees));
                                 if ruled || forced {
                                     best = tried;
+                                    accepted_light = light;
                                     accepted.extend(calls);
                                 } else {
                                     if let Some(site) = site.filter(|_| {
@@ -1091,6 +1094,17 @@ impl ProgramPass for Walk {
                                     modules[at]
                                         .invalidate_bodies(&PreservedAnalyses::none().preserve_module::<GlobalsAA>());
                                 }
+                            }
+                            // The pin simplifies a body once inlined with its
+                            // whole
+                            // function pipeline: the accepted copy only met the
+                            // cleanup list, which
+                            // has no DSE or GVN.
+                            if accepted_light {
+                                modules[at].changed(id);
+                                modules[at]
+                                    .invalidate_bodies(&PreservedAnalyses::none().preserve_module::<GlobalsAA>());
+                                (self.simplify)(module, &mut modules[at], id, "walk.trial.final.");
                             }
                         }
                         // The calls left after the splices and the

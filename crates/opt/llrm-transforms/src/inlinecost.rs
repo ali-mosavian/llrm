@@ -218,6 +218,9 @@ pub struct InlineParams {
     /// cold-site test reads the frequency in which failure sinks carry no mass.
     /// Off: the pin's.
     pub cold_site_ignores_sinks: bool,
+    /// DEVIATE LASTCALL-COLD: the `LastCallToStatic` bonus stays at a cold
+    /// call site of a caller optimized for size. Off: the pin's.
+    pub last_call_in_cold_site: bool,
     /// Which target's answers `getInstructionCost` and its kin give (D2).
     pub tti: Tti,
 }
@@ -252,6 +255,7 @@ impl InlineParams {
             recursive_edge_growth: i64::MAX,
             last_call_to_static: true,
             cold_site_ignores_sinks: false,
+            last_call_in_cold_site: false,
             tti: Tti::Generic,
         }
     }
@@ -1910,7 +1914,9 @@ impl<'a> Analyzer<'a> {
                 {
                     single_bb_percent = 0;
                     vector_percent = 0;
-                    last_call_bonus = 0;
+                    if !(self.params.last_call_in_cold_site && caller_size == CallerSize::OptSize) {
+                        last_call_bonus = 0;
+                    }
                     self.threshold = self.threshold.min(self.params.cold_callsite_threshold);
                 }
             }

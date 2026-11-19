@@ -24,6 +24,16 @@
 //!
 //! # Used by
 //! `slptree`.
+//!
+//! # Example
+//! A bundle whose lanes repeat is packed once with its distinct lanes and read back through a shuffle mask.
+//!
+//! ```text
+//! bundle lanes: (%a, %b, %a, %b)
+//! =>
+//! %v = <2 x T> (%a, %b)
+//! %r = shufflevector %v, poison, <0, 1, 0, 1>
+//! ```
 
 use llrm_mir::module::Operand;
 use llrm_mir::tti::{CostKind, LaneOp, ShuffleKind, Tti, Ty, VectorInstrContext, VectorTy};

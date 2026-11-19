@@ -2316,10 +2316,12 @@ impl FunctionPass for LoopVectorize {
         }
         let outer = std::rc::Rc::clone(analyses.outer());
         let target = outer.target();
-        if !self.always && !target.has_vector_mir() {
+        let Some(tti) = target.tti() else { return PreservedAnalyses::all() };
+        // A target whose word is a vector register (`Tti::word_vectors`) widens
+        // too: its vectors are lowered to integers before selection.
+        if !self.always && !target.has_vector_mir() && !tti.word_vectors() {
             return PreservedAnalyses::all();
         }
-        let Some(tti) = target.tti() else { return PreservedAnalyses::all() };
         let accumulator_bits = if tti.narrows_reduction_accumulators() { tti.vector_register_bits() } else { 0 };
         if tti.vector_register_bits() == 0 {
             return PreservedAnalyses::all();
