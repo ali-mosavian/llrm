@@ -361,7 +361,7 @@ fn lowered_once(
     program.modules.iter_mut().try_for_each(|module| llrm_codegen::backend::compares::expanded(module, |_| true))?;
     // The mid-end is the module's, run once: `text_with` runs it over the whole
     // module for each function it is given.
-    crate::compile::mid_end_for_narrowing(
+    let module = crate::compile::mid_end_for_narrowing(
         &program.modules[0],
         cpu,
         crate::compile::NarrowMultiplies::of(
@@ -369,8 +369,18 @@ fn lowered_once(
             level != Level::O0,
             matches!(level, Level::O2 | Level::O3 | Level::Omax),
         ),
-    )
+    )?;
+    // The target's LSR (with the m68k TTI), exit-test and multiply narrowing edit the IR after the shared pipeline's
+    // last stage: the dump ends with what selection reads.
+    if let Some(dump) = dump {
+        let file = dump.join(TARGET_MID_END_STAGE);
+        std::fs::write(&file, llrm_mir::print::module(&module)).map_err(|error| format!("{}: {error}", file.display()))?;
+    }
+    Ok(module)
 }
+
+/// The dump's last stage: the IR after the module's own mid-end, as selection reads it.
+pub const TARGET_MID_END_STAGE: &str = "99-target-midend.ll";
 
 /// [`assembly`] with the debug lines and the stage dump chosen.
 pub fn assembly_with(
