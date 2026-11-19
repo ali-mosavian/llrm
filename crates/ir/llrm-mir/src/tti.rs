@@ -585,6 +585,10 @@ pub struct SizeRule {
     /// shrinking the caller (a one-instruction wrapper, a callee whose body
     /// folds away).
     pub yields_to_negative_cost: bool,
+    /// Whether the rule stands down for a callee the pin's threshold raises
+    /// for `inlinehint` (the C `inline` keyword): where its own cost is under
+    /// that threshold the pin's verdict is the rule's.
+    pub yields_to_inlinehint: bool,
 }
 
 /// What a target states of the inliner's verdict beyond the pin's analyzer.
@@ -1092,6 +1096,7 @@ pub trait Tti {
                     || SizeRule {
                         min_sites: self.opt_size_inline_guard_min_sites(),
                         yields_to_negative_cost: self.opt_size_inline_guard_yields_to_negative_cost(),
+                        yields_to_inlinehint: self.opt_size_inline_guard_yields_to_inlinehint(),
                     },
                 ),
             by_rate: self.speed_inline_milliclocks_per_byte(),
@@ -1692,6 +1697,15 @@ pub trait Tti {
         false
     }
 
+    /// Whether the bound above stands down for a callee that is `inlinehint`
+    /// at an `optsize` caller: the pin's `updateThreshold` raises the threshold
+    /// to `InlineHintThreshold` (325) there, and the bound refused what that
+    /// threshold passed (QuickrBasic operands.c -Os `hot_operand` into
+    /// `hot_int`: 15,344 B against the pin's 9,464 B). False: the bound holds.
+    fn opt_size_inline_guard_yields_to_inlinehint(&self) -> bool {
+        false
+    }
+
     /// Whether a constant address offset may become a phi: false where the
     /// access folds it as a displacement and the target says to keep it. A
     /// boolean as the pin's `replacingOperandWithVariableIsCheap` is: a
@@ -2024,6 +2038,11 @@ pub trait Tti {
 
     /// DEVIATE BFS-1: `Tuning::cold_site_ignores_sinks`.
     fn cold_site_ignores_sinks(&self) -> bool {
+        false
+    }
+
+    /// DEVIATE LASTCALL-COLD: `Tuning::inline_last_call_in_cold_site`.
+    fn inline_last_call_in_cold_site(&self) -> bool {
         false
     }
 
@@ -3272,6 +3291,13 @@ pub trait Tti {
     /// the pin promotes without a cap.
     fn licm_register_limit(&self) -> Option<u32> {
         Some(self.number_of_gpr_registers())
+    }
+
+    /// DEVIATE LICM-SPEC: whether LICM prices the hoisting of an integer or
+    /// pointer value the loop computes on some trips only, as it does a
+    /// promotion (`licm_register_limit`). False: the pin's, which hoists it.
+    fn licm_prices_speculated_values(&self) -> bool {
+        false
     }
 
     /// DEVIATE LP1-FP: the values LICM (`licm/pressure.rs`) and GVN

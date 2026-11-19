@@ -50,7 +50,10 @@ fn compared_with_zero(op: &Op) -> Option<Gpr> {
 fn flag_reader(op: &Op) -> Option<Option<Cond>> {
     match op {
         Op::I(
-            Inst::BranchCond { cond, .. } | Inst::CondSelect { cond, .. } | Inst::CondCompare { cond, .. },
+            Inst::BranchCond { cond, .. }
+            | Inst::CondSelect { cond, .. }
+            | Inst::CondCompare { cond, .. }
+            | Inst::FpCondCompare { cond, .. },
         ) => Some(Some(*cond)),
         Op::I(Inst::FpSelect { cond, .. }) => Some(Some(*cond)),
         _ => None,

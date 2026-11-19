@@ -24,7 +24,7 @@ const UNARY: [(FpUnary, &str); 11] = [
     (FpUnary::Rint(Rounding::Exact), "FRINTX"),
     (FpUnary::Rint(Rounding::Current), "FRINTI"),
 ];
-const BINARY: [(FpBinary, &str); 9] = [
+const BINARY: [(FpBinary, &str); 10] = [
     (FpBinary::Mul, "FMUL"),
     (FpBinary::Div, "FDIV"),
     (FpBinary::Add, "FADD"),
@@ -34,6 +34,7 @@ const BINARY: [(FpBinary, &str); 9] = [
     (FpBinary::MaxNm, "FMAXNM"),
     (FpBinary::MinNm, "FMINNM"),
     (FpBinary::Nmul, "FNMUL"),
+    (FpBinary::Abd, "FABD"),
 ];
 const FUSED: [(FpFused, &str); 4] =
     [(FpFused::Madd, "FMADD"), (FpFused::Msub, "FMSUB"), (FpFused::Nmadd, "FNMADD"), (FpFused::Nmsub, "FNMSUB")];
@@ -405,6 +406,13 @@ pub(super) fn to(inst: &Inst) -> Option<Semantics> {
                 None,
             )
         }
+        Inst::FpCondCompare { size, rn, rm, nzcv, cond } => semantics(
+            Operation::ConditionalCompare,
+            format!("FCCMP{}rr", size_letter(*size)),
+            vec![],
+            vec![f(*rn, *size), f(*rm, *size), imm(i64::from(*nzcv)), imm(position(&super::integer::CONDS, *cond))],
+            None,
+        ),
         Inst::FpSelect { size, rd, rn, rm, cond } => semantics(
             Operation::Select,
             format!("FCSEL{}rrr", size_letter(*size)),
@@ -1078,6 +1086,16 @@ pub(super) fn back(what: &Semantics) -> Option<Inst> {
     if let Some((signalling, rest)) = prefix(&[(false, "FCMP"), (true, "FCMPE")], name) {
         let (size, form) = letters(rest);
         return Some(Inst::FpCompare { signalling, size: first(size), rn: at(0), rm: (form == "rr").then(|| at(1)) });
+    }
+    if let Some(rest) = name.strip_prefix("FCCMP") {
+        let (size, _) = letters(rest);
+        return Some(Inst::FpCondCompare {
+            size: first(size),
+            rn: at(0),
+            rm: at(1),
+            nzcv: value_of(&s[2]) as u8,
+            cond: member::<Cond>(&super::integer::CONDS, &s[3]),
+        });
     }
     if let Some(rest) = name.strip_prefix("FCSEL") {
         let (size, _) = letters(rest);

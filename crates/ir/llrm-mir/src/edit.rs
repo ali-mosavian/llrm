@@ -1236,6 +1236,21 @@ impl Function {
         self.log(Change::Rewritten(inst));
     }
 
+    /// The call `inst` loses the flag attribute `name` on every argument.
+    pub fn drop_call_argument_flag(
+        &mut self,
+        inst: InstId,
+        name: &str,
+    ) {
+        let (Opcode::Call(info) | Opcode::Invoke(info)) = &mut self.instructions[inst.0 as usize].opcode else {
+            panic!("a call")
+        };
+        for attrs in &mut info.argument_attrs {
+            attrs.retain(|one| !matches!(one, crate::Attribute::Flag(flag) if flag == name));
+        }
+        self.log(Change::Rewritten(inst));
+    }
+
     /// New parameters of `types` stand before parameter `at`, bare of
     /// attributes; the function's type follows.
     pub fn insert_parameters(
