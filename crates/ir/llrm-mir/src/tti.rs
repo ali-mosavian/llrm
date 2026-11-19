@@ -2796,6 +2796,13 @@ pub trait Tti {
         key(a) < key(b)
     }
 
+    /// DEVIATE LG4 (owner w8, exit 2026-11-26): where post-indexed addressing is favored, a pointer walk
+    /// the end-biased formula would replace stays unless that formula saves a recurrence or a register
+    /// (m68k `(An)+`). `false`: the end-biased formula wins on its saved compare.
+    fn lsr_free_walk_beats_end_biased(&self) -> bool {
+        false
+    }
+
     /// DEVIATE LSR-TIE: a loop with an address that LSR rates no better than
     /// the loop as written is left as written where a recurrence steps by a
     /// register and the loop's values number more than this (the pin
