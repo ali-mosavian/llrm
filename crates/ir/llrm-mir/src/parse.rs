@@ -51,6 +51,8 @@ struct Parser {
     /// The labels a `blockaddress` named before its function was read, in the
     /// order of their ids: the function's first blocks.
     reserved_blocks: HashMap<GlobalId, Vec<(Name, usize)>>,
+    /// The blocks a `blockaddress` named, marked on their functions at the end.
+    address_taken: Vec<(GlobalId, BlockId)>,
 }
 
 /// A function being read: names to arena ids, and uses still undefined.
@@ -82,6 +84,7 @@ impl Parser {
             group_spans: Vec::new(),
             finished_blocks: HashMap::default(),
             reserved_blocks: HashMap::default(),
+            address_taken: Vec::new(),
         }
     }
 
@@ -351,6 +354,11 @@ impl Parser {
         for (number, id) in &self.metadata {
             if !self.defined_metadata.contains(id) {
                 return Err(ParseError { line: 0, message: format!("!{number} is used but never defined") });
+            }
+        }
+        for (function, block) in std::mem::take(&mut self.address_taken) {
+            if let GlobalKind::Function(body) = &mut self.module.globals[function.0 as usize].kind {
+                body.mark_address_taken(block);
             }
         }
         self.renumber_metadata();
@@ -1590,7 +1598,10 @@ impl Parser {
                 if let Some(blocks) = self.finished_blocks.get(&function) {
                     match blocks.get(&label) {
                         Some(&block) => block,
-                        None => return self.fail_on(line, format!("block %{} is not in @{}", display(&label), display(&name))),
+                        None => {
+                            return self
+                                .fail_on(line, format!("block %{} is not in @{}", display(&label), display(&name)));
+                        }
                     }
                 } else {
                     let reserved = self.reserved_blocks.entry(function).or_default();
@@ -1605,6 +1616,7 @@ impl Parser {
                 }
             }
         };
+        self.address_taken.push((function, block));
         Ok((function, block))
     }
 

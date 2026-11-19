@@ -62,8 +62,7 @@
 //!    operands are known). Exit: the ConstantFolding translation's FP fold.
 //! 5. No `DomTreeUpdater`: the manager recomputes dominators when the CFG
 //!    changed.
-//! 6. No `!implicit.ref`, `clang.arc.attachedcall` bundles or `indirectbr`: MIR
-//!    has none.
+//! 6. No `!implicit.ref` or `clang.arc.attachedcall` bundles: MIR has none.
 //! 7. A phi has one input per edge in MIR, so a block reached twice by one
 //!    predecessor is read twice (`removePredecessor` per edge, as ADCE).
 //! 8. `ValueId` and `InstId` are local to a function, so the state keyed by
@@ -1125,15 +1124,20 @@ impl<'a> Solver<'a> {
                 let address = instruction.operands[0];
                 let state = self.get_value_state(address);
                 let ty = self.type_of(address);
-                let known = self.get_constant(&state, ty).and_then(|id| match self.context.get(id).kind {
-                    ConstantKind::Expr(ConstantExpr::BlockAddress { block, .. }) => Some(block),
-                    _ => None,
-                });
+                let known = self
+                    .get_constant(&state, ty)
+                    .and_then(
+                        |id| match self.context.get(id).kind {
+                            ConstantKind::Expr(ConstantExpr::BlockAddress { block, .. }) => Some(block),
+                            _ => None,
+                        },
+                    );
                 match known {
                     Some(target) => {
                         // A destination the branch does not list is
                         // undefined behaviour: no successor is feasible.
-                        if let Some(at) = instruction.operands[1..].iter().position(|op| *op == Operand::Block(target)) {
+                        if let Some(at) = instruction.operands[1..].iter().position(|op| *op == Operand::Block(target))
+                        {
                             succs[at] = true;
                         }
                     }

@@ -180,7 +180,9 @@ pub fn split_critical_edge(
     from: BlockId,
     to: BlockId,
 ) -> Option<BlockId> {
-    if !is_critical_edge(function, from, to) {
+    // `SplitCriticalEdge` (BreakCriticalEdges.cpp:122): an edge by address
+    // cannot be split.
+    if !is_critical_edge(function, from, to) || function.ends_in_indirect_branch(from) {
         return None;
     }
     let first = function.iter_block(to).find(|&one| function.instruction(one).opcode != Opcode::Phi);

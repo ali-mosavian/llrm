@@ -110,11 +110,25 @@ fn a_block_address_in_a_table_before_its_function_round_trips() {
     assert_eq!(print::module(&module), text);
 }
 
+/// A block replaced by another (`replaceAllUsesWith`) takes its address along;
+/// one erased with nothing to replace it has none (LLVM's `inttoptr 1`).
 #[test]
-fn an_indirectbr_listing_a_destination_twice_fails_verification() {
-    let text = "define void @f(ptr %0) {\n  indirectbr ptr %0, [label %a, label %a]\n\na:\n  ret void\n}\n";
-    let problems = crate::verify::verify(&parse::module(text).expect("parses"));
-    assert!(problems.iter().any(|one| one.contains("lists a destination twice")), "{problems:?}");
+fn a_block_address_follows_the_block_that_replaced_it() {
+    let text = "@t = internal constant [1 x ptr] [ptr blockaddress(@f, %e)]\n\ndefine void @f(ptr %0) {\n  indirectbr ptr %0, [label %e]\n\ne:\n  br label %s\n\ns:\n  ret void\n}\n";
+    let mut module = parse::module(text).expect("parses");
+    let (_, function) = module.function_mut("f").expect("@f");
+    let layout = function.layout().to_vec();
+    let (e, s) = (layout[1], layout[2]);
+    assert!(function.has_address_taken(e) && !function.has_address_taken(s));
+    assert_eq!(function.resolve_block_address(e), Some(e));
+    function.replace_block_uses_with(e, s);
+    assert_eq!(function.resolve_block_address(e), Some(s), "the address is now the replacement's");
+    assert!(function.has_address_taken(s));
+    let (_, function) = module.function_mut("f").expect("@f");
+    let jump = function.terminator(e).expect("a terminator");
+    function.erase(jump).expect("a jump");
+    function.erase_block(e).expect("an emptied block");
+    assert_eq!(function.resolve_block_address(e), Some(s));
 }
 
 #[test]

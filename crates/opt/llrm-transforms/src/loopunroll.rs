@@ -158,6 +158,11 @@ pub fn unroll_loop_blocks(
     if options.count == 0 || options.max_trip_count == 0 || options.count != options.max_trip_count {
         return Err("a complete unroll's count is the maximum trip count (D2)".to_owned());
     }
+    // Loops with indirectbr cannot be cloned; and a header whose address is
+    // taken cannot be unrolled (LoopUnroll.cpp:945-955).
+    if body.iter().any(|&at| function.ends_in_indirect_branch(at)) || function.has_address_taken(header) {
+        return Ok(Unrolled::Unmodified);
+    }
     let inside = |at: BlockId| body.contains(&at);
     let outside_predecessors = function.predecessors(header).into_iter().filter(|&at| !inside(at)).collect::<Vec<_>>();
     let [preheader] = outside_predecessors[..] else { return Ok(Unrolled::Unmodified) };

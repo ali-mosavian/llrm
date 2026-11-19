@@ -467,10 +467,6 @@ impl Checker<'_> {
                 if !is_pointer(self, ty(0)) {
                     self.fail(format!("{at} branches to {}", self.show(ty(0))));
                 }
-                let mut seen = HashSet::default();
-                if !instruction.operands[1..].iter().all(|target| seen.insert(*target)) {
-                    self.fail(format!("{at} lists a destination twice"));
-                }
             }
             Opcode::Load { .. } => {
                 if !is_pointer(self, ty(0)) {

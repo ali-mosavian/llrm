@@ -372,6 +372,11 @@ pub fn hoisted(
     if unique.len() < 2 {
         return false;
     }
+    // The code hoisted would no longer run when a successor is jumped into by
+    // its address (SimplifyCFG.cpp:1891).
+    if unique.iter().any(|&successor| function.has_address_taken(successor)) {
+        return false;
+    }
     for &successor in &unique {
         let alone = function.predecessors(successor).iter().all(|&one| one == block);
         let unreachable = function

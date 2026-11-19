@@ -1301,3 +1301,121 @@ bx:
     assert!(!after.contains("br i1"), "{after}");
     assert_eq!(results(&module, inputs), before);
 }
+
+/// Before: `indirectbr` was never folded, so a jump to a known label kept the
+/// branch, the address and the block no one else reached.
+#[test]
+fn test_an_indirectbr_on_a_known_block_address_is_a_jump() {
+    let text = "define i32 @f() {
+entry:
+  indirectbr ptr blockaddress(@f, %b), [label %a, label %b]
+
+a:
+  ret i32 1
+
+b:
+  ret i32 2
+}
+";
+    let mut module = parsed(text);
+    assert!(simplify(&mut module));
+    let out = printed(&module);
+    // The address is gone with the branch, so the block merges up: the
+    // function returns 2 and the other destination is dead.
+    assert!(!out.contains("indirectbr") && !out.contains("ret i32 1") && out.contains("ret i32 2"), "{out}");
+}
+
+/// A destination the address is not among is undefined behaviour:
+/// `unreachable`.
+#[test]
+fn test_an_indirectbr_on_an_unlisted_block_address_is_unreachable() {
+    let text = "define i32 @f() {
+entry:
+  indirectbr ptr blockaddress(@f, %b), [label %a]
+
+a:
+  ret i32 1
+
+b:
+  ret i32 2
+}
+";
+    let mut module = parsed(text);
+    assert!(simplify(&mut module));
+    let out = printed(&module);
+    assert!(out.contains("unreachable") && !out.contains("indirectbr"), "{out}");
+}
+
+#[test]
+fn test_an_indirectbr_on_a_select_of_block_addresses_is_a_conditional_branch() {
+    let text = "define i32 @f(i1 %c) {
+entry:
+  %a = select i1 %c, ptr blockaddress(@f, %t), ptr blockaddress(@f, %e)
+  indirectbr ptr %a, [label %t, label %e]
+
+t:
+  ret i32 1
+
+e:
+  ret i32 2
+}
+";
+    let mut module = parsed(text);
+    assert!(simplify(&mut module));
+    let out = printed(&module);
+    // Folded to a conditional branch, which then becomes a select.
+    assert!(!out.contains("indirectbr") && !out.contains("blockaddress"), "{out}");
+    assert!(out.contains("select i1 %c, i32 1, i32 2"), "{out}");
+}
+
+/// A destination no `blockaddress` names cannot be reached by an address, so
+/// the branch drops it; one listed twice goes once.
+#[test]
+fn test_an_indirectbr_drops_destinations_whose_address_is_not_taken() {
+    let text = "@t = internal constant [2 x ptr] [ptr blockaddress(@f, %a), ptr blockaddress(@f, %b)]
+
+define i32 @f(ptr %p) {
+entry:
+  indirectbr ptr %p, [label %a, label %b, label %c, label %a]
+
+a:
+  ret i32 1
+
+b:
+  ret i32 2
+
+c:
+  ret i32 3
+}
+";
+    let mut module = parsed(text);
+    assert!(simplify(&mut module));
+    let out = printed(&module);
+    assert!(!out.contains("ret i32 3"), "{out}");
+    assert_eq!(out.matches("indirectbr").count(), 1, "{out}");
+    assert_eq!(
+        out.lines().find(|line| line.contains("indirectbr")).expect("an indirectbr").matches("label").count(),
+        2
+    );
+}
+
+/// Before: the block merged into its predecessor, and the table's label named
+/// code in the middle of another block.
+#[test]
+fn test_a_block_whose_address_is_taken_is_not_merged_into_its_predecessor() {
+    let text = "@t = internal constant [1 x ptr] [ptr blockaddress(@f, %b)]
+
+define i32 @f(i32 %x) {
+entry:
+  %y = add i32 %x, 1
+  br label %b
+
+b:
+  ret i32 %y
+}
+";
+    let mut module = parsed(text);
+    simplify(&mut module);
+    let out = printed(&module);
+    assert!(out.contains("\nb:\n"), "{out}");
+}

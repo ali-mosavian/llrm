@@ -1513,6 +1513,25 @@ impl Run<'_, '_> {
         let depth = list.len();
         let mut matrix: CharMatrix = Vec::new();
 
+        // A loop entered by an `indirectbr` cannot have a preheader made for it
+        // (LoopInterchange.cpp:1507).
+        {
+            let (se, env) = self.session.split(self.unit.layout, &self.outer.globals, &self.outer.metadata);
+            let _ = se;
+            let cx = env.cx(&*self.unit.context, &*self.unit.function);
+            for &header in list.iter() {
+                let lp = cx.loops.get_loop_for(header).expect("a loop");
+                if cx
+                    .function
+                    .predecessors(header)
+                    .iter()
+                    .any(|&pred| !lp.contains(pred) && cx.function.ends_in_indirect_branch(pred))
+                {
+                    return false;
+                }
+            }
+        }
+
         // The dependence matrix of the whole nest.
         {
             let (se, env) = self.session.split(self.unit.layout, &self.outer.globals, &self.outer.metadata);

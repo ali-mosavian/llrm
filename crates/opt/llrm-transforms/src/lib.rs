@@ -74,6 +74,8 @@
 //! module's own header.
 
 pub mod adce;
+#[cfg(test)]
+mod addresstaken_tests;
 pub mod algebraic;
 pub mod alwaysundef;
 pub mod argpromotion;
