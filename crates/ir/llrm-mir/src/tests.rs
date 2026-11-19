@@ -984,6 +984,23 @@ fn clangs_target_attributes_and_captures_are_read() {
     round(&format!("{DATALAYOUT}\ndeclare ptr @calloc(i16, i16) allocsize(0, 1) allockind(\"alloc,zeroed\")\n"));
 }
 
+/// QB's `pfpu.c` was refused at parse ("expected `}`, found `strictfp`"): clang
+/// states `strictfp` on a function and on its calls, and the reader knew only
+/// some of the valueless attributes LLVM has. Each now reads and prints back;
+/// `strictfp` on a call is the flag the folders and `partialinline` look for.
+#[test]
+fn strictfp_and_the_other_valueless_attributes_are_read() {
+    let text = format!(
+        "{DATALAYOUT}\ndeclare double @sqrt(double)\n\ndefine double @f(double %x) strictfp nonlazybind {{\nb0:\n  %r = call double @sqrt(double %x) #0\n  ret double %r\n}}\n\nattributes #0 = {{ strictfp }}\n"
+    );
+    let once = round(&text);
+    assert!(once.contains("strictfp"), "{once}");
+    assert_eq!(round(&once), once);
+    for word in crate::opcode::TARGET_FLAG_ATTRIBUTES.iter().filter(|word| !matches!(**word, "allockind" | "allocsize")) {
+        round(&format!("{DATALAYOUT}\ndeclare void @g() {word}\n"));
+    }
+}
+
 /// Each use asked `instruction_dominates` of its definition, which scanned the
 /// block for both: the verifier was 12% of compiling 800 BASIC statements
 /// (#560). The positions are made once.

@@ -627,6 +627,7 @@ fn floating_point() {
             FpBinary::MaxNm,
             FpBinary::MinNm,
             FpBinary::Nmul,
+            FpBinary::Abd,
         ] {
             all.push(Inst::FpBinary { op, size, rd: Vreg(1), rn: Vreg(2), rm: Vreg(3) });
         }
