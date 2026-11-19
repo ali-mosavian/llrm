@@ -19,7 +19,7 @@ use crate::abi::machine::Machine;
 use crate::backend::shadow::Selector;
 
 /// The options' usage line, for a frontend's own.
-pub const USAGE: &str = "[-O0|-O1|-O2|-O3|-Omax|-Os|-Oz|-Og] [-f[no-]PASS] [-fno-inline=NAME]... [-disable-lsr] [-f[no-]sanitize=CHECKS] [-f[no-]trapv] [-f[no-]wrapv] [-fexcess-precision=standard|fast] [-f[no-]float-store] [-m16|-m32|-m64] [-march=CPU] [-mtune=CPU] [-mabi=ABI] [-m[no-]stack-is-data] [-m[no-]far-bss] [-m[no-]far-bss-init] [-m[no-]bss-begin] [-mcode-segment=NAME] [--isel=old|dag|shadow] [--no-midend] [--clocks-per-byte N] [--machine MACHINE] [-fstack-usage] [-Wstack-usage=N] [-fobject-format=omf|elf|macho|coff] [-f[no-]function-sections] [-g] [-o OUTPUT] [-S]";
+pub const USAGE: &str = "[-O0|-O1|-O2|-O3|-Omax|-Os|-Oz|-Og] [-f[no-]PASS] [-fno-inline=NAME]... [-disable-lsr] [-f[no-]sanitize=CHECKS] [-f[no-]trapv] [-f[no-]wrapv] [-fexcess-precision=standard|fast] [-f[no-]float-store] [-m16|-m32|-m64] [-march=CPU] [-mtune=CPU] [-mabi=ABI] [-relocation-model=static|pic] [-m[no-]stack-is-data] [-m[no-]far-bss] [-m[no-]far-bss-init] [-m[no-]bss-begin] [-mcode-segment=NAME] [--isel=old|dag|shadow] [--no-midend] [--clocks-per-byte N] [--machine MACHINE] [-fstack-usage] [-Wstack-usage=N] [-fobject-format=omf|elf|macho|coff] [-f[no-]function-sections] [-g] [-o OUTPUT] [-S]";
 
 /// An `-O` level.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -212,6 +212,9 @@ pub struct Flags {
     /// `-m16`, `-m32`, `-m64`: the target to build for, by the number its
     /// description gives.
     mode: Option<u32>,
+    /// `-relocation-model=static|pic`: whether symbol addresses are absolute or
+    /// from the instruction pointer; the module's "PIC Level" flag when absent.
+    relocation_pic: Option<bool>,
     /// `-mcmodel=small|medium|large`: the code model of real mode's segmented
     /// memory; the target's own (medium) when absent.
     code_model: Option<String>,
@@ -296,6 +299,7 @@ impl Default for Flags {
             machine: None,
             mode: None,
             code_model: None,
+            relocation_pic: None,
             stack_is_data: None,
             far_bss: None,
             far_bss_init: None,
@@ -419,6 +423,13 @@ impl Flags {
                 };
                 self.set_mode(Some(mode), &format!("--memory-model={model}"))?
             }
+            _ if flag.starts_with("-relocation-model=") => {
+                self.relocation_pic = Some(match &flag["-relocation-model=".len()..] {
+                    "static" => false,
+                    "pic" => true,
+                    _ => return Err(format!("{flag}: expected static or pic")),
+                });
+            }
             _ if flag.starts_with("-mcmodel=") => {
                 let model = &flag["-mcmodel=".len()..];
                 if !matches!(model, "small" | "medium" | "large") {
@@ -513,6 +524,11 @@ impl Flags {
     /// The `-m` number given, if any: the target whose description names it.
     pub fn mode(&self) -> Option<u32> {
         self.mode
+    }
+
+    /// `-relocation-model=`, if given: whether the code is position independent.
+    pub fn relocation_pic(&self) -> Option<bool> {
+        self.relocation_pic
     }
 
     /// `-mcmodel=`, if given.
