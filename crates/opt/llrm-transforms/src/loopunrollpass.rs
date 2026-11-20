@@ -1312,7 +1312,12 @@ fn analyzed_at_speed(
     run: &Run,
     lp: Loop,
 ) -> bool {
-    run.options.opt_level >= 2 && !run.options.opt_size && lp.is_innermost() && run.tti.unroll_trial_analyzed_at_speed()
+    lp.is_innermost()
+        && if run.options.opt_size {
+            run.tti.unroll_trial_analyzed_at_size()
+        } else {
+            run.options.opt_level >= 2 && run.tti.unroll_trial_analyzed_at_speed()
+        }
 }
 
 /// DEVIATE UNROLL-TRIAL-NEST (owner 6502): `shouldFullUnroll`'s second test at
@@ -1340,13 +1345,16 @@ fn analyzed_trial_size(
     if unrolled_size < u64::from(limit) {
         return unrolled_size;
     }
-    let bound = (u64::from(limit) * u64::from(up.max_percent_threshold_boost) / 100).min(u64::from(u32::MAX)) as u32;
+    // -Os clamps the pin's boost to 100; the trial is priced by bytes after,
+    // so it is tried at the boost -O2 has
+    let cap = if run.options.opt_size { UNROLL_MAX_PERCENT_THRESHOLD_BOOST } else { up.max_percent_threshold_boost };
+    let bound = (u64::from(limit) * u64::from(cap) / 100).min(u64::from(u32::MAX)) as u32;
     // the pin's own reach: no loop of more trips than
     // `MaxIterationsCountToAnalyze`
     let reach = up.max_iterations_count_to_analyze;
     match analyze_loop_unroll_cost(run, se, analyzed, lp, trips, eph, bound, reach, None, false) {
         Some(cost) => {
-            let boost = full_unroll_boosting_factor(&cost, up.max_percent_threshold_boost).max(100);
+            let boost = full_unroll_boosting_factor(&cost, cap).max(100);
             unrolled_size.min(u64::from(cost.unrolled_cost) * 100 / u64::from(boost))
         }
         None => unrolled_size,
