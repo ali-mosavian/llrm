@@ -2473,7 +2473,9 @@ impl Emitter<'_, '_> {
                 }
                 // The area is a multiple of the call alignment; the callee pops
                 // `popped` of it, the caller the rest.
-                let bytes = if self.ctx.reserved_calls {
+                // The flat frames pad the area where the frame is laid out
+                // (`ReserveCallFrame`).
+                let bytes = if self.ctx.reserved_calls || self.ctx.address_mode != AddrMode::Real16 {
                     bytes
                 } else {
                     (bytes + self.ctx.call_alignment - 1) / self.ctx.call_alignment * self.ctx.call_alignment

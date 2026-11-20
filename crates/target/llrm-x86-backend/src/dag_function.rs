@@ -1454,11 +1454,7 @@ fn selected_in(
             .and_then(|id| module.global(id).function())
             .and_then(|function| arch.calling().by_number(function.calling_convention))
             .is_some_and(|convention| convention.reserve_call_frame),
-        call_alignment: match cpu.aligned_calls {
-            Some(bytes) => bytes,
-            None if arch.aligned_calls() => (arch.stack_alignment() as i64).max(1),
-            None => 1,
-        },
+        call_alignment: cpu.call_alignment(),
         map: &tables.map,
         names: &tables.names,
     };
