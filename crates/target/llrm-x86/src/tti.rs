@@ -1117,6 +1117,10 @@ impl Tti for X86 {
         self.tuning.inline_size_bytes || self.tuning.inline_trials_at_o1
     }
 
+    fn memset_gap_merge_at_size(&self) -> bool {
+        self.tuning.memset_gap_merge_at_size && self.real_mode.is_none()
+    }
+
     fn callee_saved_clocks(
         &self,
         peak: usize,
@@ -1729,6 +1733,10 @@ impl Tti for X86 {
         } else {
             2
         }
+    }
+
+    fn opt_size_inline_guard_yields_to_inlinehint(&self) -> bool {
+        self.tuning.inline_size_guard_yields_to_inlinehint
     }
 
     fn unroll_promotion_fits_registers(&self) -> bool {

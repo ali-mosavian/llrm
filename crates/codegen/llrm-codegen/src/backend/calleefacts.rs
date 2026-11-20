@@ -325,6 +325,12 @@ impl CalleeFacts {
                     tail_high.extend(callee.high);
                 }
             }
+            // A one-slot frame is `push rax` / `pop rcx`: the epilogue writes
+            // the dead register. Masm sizes the frame after this, so a function
+            // that may have one is taken to write it.
+            if let Some((_, pop)) = frame.slot_scratch {
+                whole.insert(regs.root(pop));
+            }
             // The frame's own registers are its prologue's and epilogue's.
             for own in [frame.pointer, frame.stack] {
                 whole.remove(&regs.root(own));
@@ -552,6 +558,50 @@ mod tests {
         assert_eq!(facts.written("leaf").unwrap().high, BTreeSet::from([RegId::EDI]), "saved by the word");
         facts.record("leaf", &body, &frame(vec![(RegId::EDI, RegId::EDI)]), &IndexMap::default());
         assert!(facts.written("leaf").unwrap().high.is_empty(), "saved whole");
+    }
+
+    /// A function with a one-slot frame ends `pop rcx`; its fact said it wrote
+    /// no `rcx`, so a caller kept a partial sum there across it
+    /// (word_sign_zero_guard m64: `gt0() * 1000 + le0() * 100` read garbage).
+    #[test]
+    fn a_one_slot_frames_pop_register_is_written() {
+        use crate::model::lir::{Insn, LirBlock};
+
+        let ret = Arc::new(Insn::new(
+            1,
+            Some((1, 1)),
+            Some(crate::model::ir::Semantics::new(crate::model::ir::Operation::Return)),
+            vec![],
+            vec![],
+        ));
+        let body =
+            LirBody::new("leaf", 1, vec![LirBlock::new(1, vec![ret]).into()], IndexMap::default(), IndexMap::default());
+        let frame = |slot_scratch| llrm_target::FrameRegisters {
+            vector_saved: Vec::new(),
+            pointer: RegId::BP,
+            stack: RegId::SP,
+            saved: vec![],
+            slot: 2,
+            align: 2,
+            object_align: 2,
+            optional: false,
+            enter: false,
+            wrap_split_size: false,
+            object_aligned: false,
+            red_zone: 0,
+            slot_scratch,
+            slot_dead_checked: false,
+            slot_add_with_saved: false,
+            free: false,
+            kept: false,
+            exit_cfi: true,
+            saved_first: false,
+        };
+        let facts = CalleeFacts::of(&parsed(LEAF)).0;
+        facts.record("leaf", &body, &frame(Some((RegId::EAX, RegId::ECX))), &IndexMap::default());
+        assert!(facts.written("leaf").unwrap().whole.contains(&RegId::ECX), "the pop writes ecx");
+        facts.record("leaf", &body, &frame(None), &IndexMap::default());
+        assert!(!facts.written("leaf").unwrap().whole.contains(&RegId::ECX), "no slot, no pop");
     }
 
     /// `heap.trim` ended in a sibling `jmp` to `heap.release`, which writes
