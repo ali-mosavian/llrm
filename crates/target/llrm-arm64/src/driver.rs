@@ -371,7 +371,7 @@ fn lower_function(
         &dead_ends,
     );
     let blocks = crate::pairs::fold(blocks);
-    let mut blocks = crate::ldst_update::fold(blocks, &crate::mfunc::returned_registers(&machine));
+    let mut blocks = crate::ldst_update::fold(blocks, &crate::mfunc::returned_registers(&machine), &tables);
     crate::jumptable::compress(&mut blocks, &mut tables).map_err(|why| format!("@{name}: {why}"))?;
     crate::trial::add(&machine, &blocks, &likelihood);
     let written = crate::ipra::written(&machine);
