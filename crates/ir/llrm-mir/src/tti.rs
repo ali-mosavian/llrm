@@ -2232,6 +2232,13 @@ pub trait Tti {
         true
     }
 
+    /// DEVIATE LG2 alone: the even-factor half of
+    /// [`Tti::lsr_scales_zero_compare_past_overflow`], which a target can keep
+    /// where it turns the odd half (LG1) off. Follows it by default.
+    fn lsr_scales_even_zero_compare(&self) -> bool {
+        self.lsr_scales_zero_compare_past_overflow()
+    }
+
     /// `Tuning::ipsccp_widen_keeps_sign`.
     fn ipsccp_widen_keeps_sign(&self) -> bool {
         false
@@ -2879,6 +2886,16 @@ pub trait Tti {
     /// pin's.
     fn lsr_post_indexed_amortized(&self) -> bool {
         false
+    }
+
+    /// DEVIATE LSR-POSTINC-WALKS (owner m68k, exit 2026-12-17; gcc's ivopts
+    /// counts registers against the loop's pointers): a loop that indexes more
+    /// objects than this keeps no post-indexed preference, since each walk holds
+    /// an address register and the ones past the class are spilled and
+    /// reloaded every trip (early_exit_widths `reset`: eight walks, six address
+    /// registers). None: the preference holds at any count, as the pin's.
+    fn lsr_post_indexed_walk_limit(&self) -> Option<u32> {
+        None
     }
 
     /// DEVIATE LSR-POSTINC-PAIR (target flag): the pair form of a load or
