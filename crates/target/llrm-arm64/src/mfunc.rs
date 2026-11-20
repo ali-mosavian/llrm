@@ -733,6 +733,20 @@ pub fn lower_phis(function: &mut MFunc) -> Result<(), String> {
         let copies = |to: usize| -> Vec<Op> {
             edge_copies[&(from, to)].iter().map(|&(via, value)| Op::Copy { dst: via, src: value }).collect()
         };
+        // An `indirectbr`'s edges are never split (`canSplitCriticalEdge`): the
+        // jump lands on the block's own address, past any block made on the
+        // edge. The copies go before the jump, each into the phi's own fresh
+        // register, so the edges that do not read it are not harmed.
+        if let Some(jump) = function.blocks[from].ops.iter().position(|op| matches!(op, Op::IndirectJump { .. })) {
+            let mut at = jump;
+            for to in carrying {
+                for copy in copies(to) {
+                    function.blocks[from].ops.insert(at, copy);
+                    at += 1;
+                }
+            }
+            continue;
+        }
         if targets.len() == 1 {
             let ops = &mut function.blocks[from].ops;
             let first_branch = ops.iter().rposition(|op| !is_branch(op)).map_or(0, |last| last + 1);

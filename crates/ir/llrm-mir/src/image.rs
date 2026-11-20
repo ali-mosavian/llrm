@@ -87,7 +87,19 @@ impl Writer<'_> {
                 let Some(symbol_of) = self.block_symbol else {
                     return Err("a blockaddress in a constant: this target has no symbol for a block".into());
                 };
-                relocs.push(Reloc { at, symbol: symbol_of(*function, *block), addend: 0 });
+                // The block the address follows to, or LLVM's `inttoptr 1` where
+                // it is gone.
+                let target = match &self.module.global(*function).kind {
+                    GlobalKind::Function(target) => target.resolve_block_address(*block),
+                    _ => None,
+                };
+                match target {
+                    Some(block) => relocs.push(Reloc { at, symbol: symbol_of(*function, block), addend: 0 }),
+                    None => {
+                        let bytes = self.layout.pointer(0).bits as usize / 8;
+                        out[at..at + bytes].copy_from_slice(&1u64.to_le_bytes()[..bytes]);
+                    }
+                }
                 Ok(())
             }
             (ConstantKind::Global(global), Type::Pointer(_)) => {

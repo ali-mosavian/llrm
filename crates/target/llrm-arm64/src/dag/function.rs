@@ -326,8 +326,12 @@ pub fn select_function_in(
             successors,
             phis,
             tables: info.jump_tables.clone(),
+            // A block that replaced another answers to both addresses: one
+            // symbol.
             address_taken: function
                 .address_taken_blocks()
+                .collect::<std::collections::BTreeSet<_>>()
+                .into_iter()
                 .map(|block| (block.0, super::globals::block_symbol(globals.local_prefix(), function_id, block.0)))
                 .collect(),
             declared: declared.clone(),
