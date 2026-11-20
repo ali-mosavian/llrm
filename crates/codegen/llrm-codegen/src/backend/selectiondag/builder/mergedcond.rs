@@ -526,7 +526,7 @@ fn cond_has_one_use(
 }
 
 /// `getFCmpCodeWithoutNaN`: the code of a compare that cannot see a NaN.
-fn without_nan(cc: CondCode) -> CondCode {
+pub(super) fn without_nan(cc: CondCode) -> CondCode {
     match cc {
         CondCode::SetOEq | CondCode::SetUEq => CondCode::SetEq,
         CondCode::SetOGt | CondCode::SetUGt => CondCode::SetGt,

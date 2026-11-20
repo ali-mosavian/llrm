@@ -1016,6 +1016,45 @@ impl Tti for X86 {
         (self.size_bytes && kind == CostKind::CodeSize).then(|| crate::sizes::memory_intrinsic(family, length))
     }
 
+    /// D11-MEM (owner llrm-target-x86-m16-b, exit 2026-11-30): where the size
+    /// guard holds, a constant-length copy or fill the DAG builder expands
+    /// counts as the loads and stores it becomes, not the pin's one
+    /// instruction: a 48-byte copy was inlined for a call of 10 bytes
+    /// (`them_dark`, 37 B). Above the -Os store limit it stays a call.
+    fn size_caller_memory_units(
+        &self,
+        family: &str,
+        length: u64,
+    ) -> Option<i64> {
+        if !self.tuning.inline_size_guard_at_size || self.real_mode.is_some() {
+            return None;
+        }
+        let tuning = &self.tuning;
+        let limit = match family {
+            "memset" => tuning.max_stores_per_memset_opt_size,
+            "memmove" => tuning.max_stores_per_memmove_opt_size,
+            _ => tuning.max_stores_per_memcpy_opt_size,
+        } as u64;
+        // The widest piece the DAG builder takes (a vector under SSE2), then
+        // one store per power of two of the tail.
+        let width = if self.sse2 { 16 } else { 4 };
+        let pieces = length / width + u64::from((length % width).count_ones());
+        let per_piece = if family == "memset" { 1 } else { 2 };
+        (pieces <= limit).then_some(pieces as i64 * per_piece)
+    }
+
+    /// An unknown or long length stays a call of three arguments: `justify`
+    /// (two fills and a move, 8 units against a call of 9) went into `set`
+    /// three times (`file.c`, 445 B against gcc's 212). The guard only: the
+    /// size trial's units keep the pin's one instruction, which its byte
+    /// model corrects (`idioms.c` m32 Os +94 B when its margin shifted).
+    fn size_caller_memory_call_units(&self) -> Option<i64> {
+        if !self.tuning.inline_size_guard_at_size || self.real_mode.is_some() {
+            return None;
+        }
+        Some((self.direct_call_cost(3, CostKind::CodeSize).value * self.call_code_size_percent() + 50) / 100)
+    }
+
     fn address_computation_cost(
         &self,
         kind: CostKind,
@@ -1043,6 +1082,10 @@ impl Tti for X86 {
 
     fn switch_lookup_trial_at_size(&self) -> bool {
         self.tuning.switch_lookup_trial_at_size
+    }
+
+    fn opt_size_inline_credit_gate(&self) -> bool {
+        self.tuning.inline_trial_credit_gate
     }
 
     fn loop_idiom_copy_trial_at_size(&self) -> bool {
@@ -1450,6 +1493,12 @@ impl Tti for X86 {
         self.real_mode.as_ref().is_some_and(|real| real.inline_size_guard) || self.tuning.inline_size_guard_at_size
     }
 
+    /// The size guard binds -Os; -O1 keeps it only where the target says
+    /// so (real mode).
+    fn opt_size_inline_rule_at_o1(&self) -> bool {
+        self.real_mode.is_some() || self.tuning.inline_size_guard_at_o1
+    }
+
     /// The pin's rule (`TotalAllocaSizeRecursiveCaller`) outside real mode,
     /// where the stack is not 64 KiB shared with the data.
     fn inline_frames_into_recursive_callers(&self) -> bool {
@@ -1661,6 +1710,18 @@ impl Tti for X86 {
             // shift before AVX-512.
             ArithOp::Shl | ArithOp::LShr if matches!(ty.lane, Ty::Int(16 | 32 | 64)) => xmm_pieces(ty).map(Cost::of),
             ArithOp::AShr if matches!(ty.lane, Ty::Int(16 | 32)) => xmm_pieces(ty).map(Cost::of),
+            // `SSE2UniformConstCostTable`: `v16i8` is `psllw` + `pand` (an
+            // arithmetic shift also `pxor`, `psubb`), `v2i64` `psrad` and
+            // shuffles.
+            ArithOp::Shl | ArithOp::LShr if ty.lane == Ty::Int(8) => {
+                xmm_pieces(ty).map(|pieces| Cost::of(pieces * [1, 7, 2, 3][kind.index()]))
+            }
+            ArithOp::AShr if ty.lane == Ty::Int(8) => {
+                xmm_pieces(ty).map(|pieces| Cost::of(pieces * [3, 9, 5, 6][kind.index()]))
+            }
+            ArithOp::AShr if ty.lane == Ty::Int(64) => {
+                xmm_pieces(ty).map(|pieces| Cost::of(pieces * [3, 5, 6, 6][kind.index()]))
+            }
             // `vXi8` multiplications are promoted to `vXi16`; a type of 64
             // bits or less is extended and packed more cheaply.
             ArithOp::Mul if ty.lane == Ty::Int(8) && ty.count <= 8 => {
@@ -1687,6 +1748,44 @@ impl Tti for X86 {
             }
             _ => None,
         }
+    }
+
+    /// `getArithmeticInstrCost` of a vector shift by an amount that is not a
+    /// constant: the `SSE2CostTable` rows of what `LowerShift` makes of it
+    /// (the `pcmpgt` ladders, a shift a lane and a blend). The other kinds of
+    /// amount, and every other operation, are `vector_arithmetic_cost`. A
+    /// splat of a variable has its own, cheaper rows (`SSE2UniformCostTable`),
+    /// and constants that differ by lane dearer ones (`SSE2ConstCostTable`);
+    /// the operand information has no uniform flag, so the first is priced as
+    /// the dearer variable and the second as a uniform constant (DEVIATE
+    /// X86V5, owner llrm-target-x86-m64-b, exit 2026-11-27).
+    fn vector_arithmetic_cost_op2(
+        &self,
+        op: ArithOp,
+        ty: VectorTy,
+        second: OperandInfo,
+        kind: CostKind,
+    ) -> Option<Cost> {
+        if !self.vector_values() || second.constant || !matches!(op, ArithOp::Shl | ArithOp::LShr | ArithOp::AShr) {
+            return self.vector_arithmetic_cost(op, ty, kind);
+        }
+        let bits = match ty.lane {
+            Ty::Int(bits @ (8 | 16 | 32 | 64)) => bits,
+            _ => return None,
+        };
+        let row: [i64; 4] = match (op, bits) {
+            (ArithOp::Shl, 8) => [13, 21, 26, 28],
+            (ArithOp::Shl, 16) => [24, 27, 16, 20],
+            (ArithOp::Shl, 32) => [17, 19, 10, 12],
+            (ArithOp::LShr, 8) => [14, 28, 27, 30],
+            (ArithOp::LShr, 16) => [16, 19, 31, 31],
+            (ArithOp::LShr | ArithOp::AShr, 32) => [12, 12, 15, 19],
+            (ArithOp::Shl | ArithOp::LShr, _) => [4, 6, 5, 7],
+            (ArithOp::AShr, 8) => [27, 30, 54, 54],
+            (ArithOp::AShr, 16) => [16, 19, 31, 31],
+            _ => [8, 11, 12, 16],
+        };
+        xmm_pieces(ty).map(|pieces| Cost::of(pieces * row[kind.index()]))
     }
 
     /// `X86TTIImpl::getCastInstrCost` for the integer extends and truncates

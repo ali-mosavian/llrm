@@ -1130,6 +1130,14 @@ pub trait Tti {
         false
     }
 
+    /// Whether the `opt_size_inline_by_code_size` rule also holds a speed
+    /// caller at -O1. true: it does (wasm SZ1, the small targets). false: -O1
+    /// keeps the pin's threshold, which inlines a small callee that grows the
+    /// code (clang -O1, the bar where clocks are judged).
+    fn opt_size_inline_rule_at_o1(&self) -> bool {
+        true
+    }
+
     /// The cost model the inliner counts a callee's size with, where the
     /// target's `CodeSize` is not bytes: the same model with `CodeSize` in
     /// bytes of code. None: `CodeSize` as it is. The other passes keep
@@ -1171,6 +1179,26 @@ pub trait Tti {
         kind: CostKind,
     ) -> Option<Cost> {
         let _ = (family, length, kind);
+        None
+    }
+
+    /// Units a size-optimized caller's inline guard (D11) counts for a
+    /// `memcpy`, `memmove` or `memset` of constant `length` bytes that the
+    /// target expands inline, as the loads and stores it becomes; the pin
+    /// counts one instruction. None: the call-shaped count stands.
+    fn size_caller_memory_units(
+        &self,
+        family: &str,
+        length: u64,
+    ) -> Option<i64> {
+        let _ = (family, length);
+        None
+    }
+
+    /// Units the inline guard counts for such an intrinsic that stays a call
+    /// (an unknown length, or one past the inline limit): its call with
+    /// three arguments. None: the pin's count stands.
+    fn size_caller_memory_call_units(&self) -> Option<i64> {
         None
     }
 
@@ -1395,6 +1423,14 @@ pub trait Tti {
     /// pin's MemCpyOpt forms it, and the size gate is this target's to lift.
     /// False: only when tuned for size.
     fn string_runs_at_speed(&self) -> bool {
+        false
+    }
+
+    /// DEVIATE OS-OUTLINE-TRIAL (owner llrm-target-m68k, exit 2026-12-20): whether a cold -Os site the size bound
+    /// accepts, of a callee that goes with its calls, is also built as a call in a second compile, the driver keeping
+    /// the finished code with fewer bytes. The units price a copy under the bytes the backend writes for it (jpeg_fixed
+    /// `put32`: 15 units a copy, a call 18; -20 B outlined). False: the bound's verdict stands.
+    fn opt_size_inline_outline_trial(&self) -> bool {
         false
     }
 
@@ -1674,6 +1710,14 @@ pub trait Tti {
     /// against objects (m68k, `size_calibration.rs`); the x86 model is not, and
     /// a truthful credit refuses trials that shrink the build there.
     fn opt_size_inline_byte_gate(&self) -> bool {
+        false
+    }
+
+    /// `Tuning::inline_trial_credit_gate`: at a size caller, a trial the
+    /// instruction count accepts only through the dying callee's credit must
+    /// leave the bytes no larger (the byte gate's rule, where the estimate is
+    /// calibrated but not exact enough for the -O1 eighth).
+    fn opt_size_inline_credit_gate(&self) -> bool {
         false
     }
 

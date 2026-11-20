@@ -192,6 +192,10 @@ pub struct Tuning {
     /// turned into a lookup table left as switches (compares, or the backend's
     /// own jump table) and the smaller object kept. false: the pin's.
     pub switch_lookup_trial_at_size: bool,
+    /// gcc `estimate_growth`: an -Os SZ2 trial that only the dying callee's
+    /// credit made acceptable by the instruction count must also leave the
+    /// bytes no larger (`Tti::opt_size_inline_credit_gate`).
+    pub inline_trial_credit_gate: bool,
     /// DEVIATE LIR-COPY-TRIAL (owner x86-m32, exit 2026-11-30): at -Os the
     /// module is compiled again with the copy loops of a count the loop alone
     /// knows left as loops (no `memcpy` call) and the smaller object kept.
@@ -562,6 +566,10 @@ pub struct Tuning {
     /// code, summed over its sites. false: the pin's `OptSizeThreshold` 50
     /// alone decides, which allows the growth.
     pub inline_size_guard_at_size: bool,
+    /// With `inline_size_guard_at_size`, the bound also holds an -O1 caller.
+    /// false: -O1 keeps the pin's threshold alone, where clang inlines a small
+    /// callee that grows the code and clocks are the bar.
+    pub inline_size_guard_at_o1: bool,
     /// With `inline_size_guard_at_size`, the bound holds a callee with one
     /// site too (otherwise only two or more: the pin's single-site inline
     /// stands). A callee that stays and is copied once only grows the code.
@@ -888,6 +896,7 @@ impl Tuning {
         inline_never_grows_without_rate: false,
         jump_threading_latch_trial_at_size: false,
         switch_lookup_trial_at_size: false,
+        inline_trial_credit_gate: false,
         loop_idiom_copy_trial_at_size: false,
         unroll_object_bound: None,
         inline_size_bytes: false,
@@ -953,6 +962,7 @@ impl Tuning {
         ext_load_extra_clocks: 0,
         immediate_forms_at_size: false,
         inline_size_guard_at_size: false,
+        inline_size_guard_at_o1: false,
         inline_size_guard_single_site: false,
         inline_size_guard_yields_to_inlinehint: false,
         memset_gap_merge_at_size: false,
@@ -1559,6 +1569,11 @@ pub struct OperationCosts {
     /// by for what the lowering adds that no operation names (spills, branch
     /// relaxation), measured against objects; 100: none.
     pub function_scale: i64,
+    /// What a size caller's -Os trial adds to `function` and scales
+    /// `function_scale` by (percent), where the estimate is calibrated for it
+    /// and the -O1 trial's bar was fitted without: 0 and 100 state none.
+    pub size_caller_function: i64,
+    pub size_caller_scale: i64,
     /// Whether `function_bytes` scales the prices by [`OperationCosts::words`]
     /// (an `i32` add on an 8-bit machine is four byte adds). False: one
     /// price per operation, the table the other byte decisions read.
@@ -1778,6 +1793,8 @@ impl Default for OperationCosts {
             jump_table: 0,
             function: 0,
             function_scale: 100,
+            size_caller_function: 0,
+            size_caller_scale: 100,
             exact_call_arguments: false,
             constant_word_shifts: false,
             width_scaled: false,

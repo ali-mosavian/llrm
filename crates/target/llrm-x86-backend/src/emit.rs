@@ -100,7 +100,7 @@ struct Emitter<'a, 'd> {
     glue_users: HashMap<SDValue, Vec<u32>>,
     /// The `fcom` operands of each float compare, by the `SAHF` that reads its
     /// status word: the `fcom` is pushed there, next to the flag reader.
-    pending_fcom: HashMap<u32, (Held, Held)>,
+    pending_fcom: HashMap<u32, (Held, Held, &'static str)>,
     first_at: HashMap<u32, i64>,
     /// The floating constants loaded where they are read: (mnemonic, cell).
     lazy: HashMap<SDValue, (&'static str, Option<Mem>)>,
@@ -2801,18 +2801,23 @@ impl Emitter<'_, '_> {
                 if !block.fixups.is_empty() {
                     return Err(EmitError::Unsupported("inline assembly naming symbols".to_owned()));
                 }
-                // The value an `st0` input takes is the stack's top and the
-                // only thing on it: the unnamed store the
-                // stackifier reads as `handleReturn`, which
-                // consumes it, so the block sees it in
-                // st(0) with the stack otherwise empty.
+                // The values the `st0` and `st1` inputs take are the stack's
+                // two top entries and the only ones on it: the unnamed store
+                // the stackifier reads as `handleReturn`, which
+                // consumes them, so the block sees them in
+                // st(0), st(1) with the stack otherwise empty.
                 let registers = block.inputs.iter().filter(|one| !one.starts_with("st")).count();
                 let first = 2 + block.fixups.len() + registers;
-                for &op in node.ops.iter().skip(first).take(block.inputs.iter().filter(|one| *one == "st0").count()) {
+                let count = block.inputs.iter().filter(|one| one.starts_with("st")).count();
+                let mut stack = Vec::new();
+                for &op in node.ops.iter().skip(first).take(count) {
                     match self.operand(op)? {
-                        Loc::Held(value) => self.push(Operation::FloatStore, "", Vec::new(), vec![Loc::Held(value)]),
-                        _ => return Err(EmitError::Unsupported("an st0 input that is no x87 value".to_owned())),
+                        Loc::Held(value) => stack.push(Loc::Held(value)),
+                        _ => return Err(EmitError::Unsupported("an st input that is no x87 value".to_owned())),
                     }
+                }
+                if !stack.is_empty() {
+                    self.push(Operation::FloatStore, "", Vec::new(), stack);
                 }
                 let callee = Callee::Named(name);
                 let at = self.push_call(
@@ -3057,9 +3062,13 @@ impl Emitter<'_, '_> {
                 else {
                     return Err(EmitError::Unsupported(format!("{name}: an operand that is no register")));
                 };
+                // A chained compare is a constrained one: the quiet one is
+                // `fucom`, which does not raise invalid on a quiet NaN, and the
+                // signaling one `fcom`. The plain compare is `fcom` as before.
+                let mnemonic = if name.starts_with("UCOM") && node.ops.len() > 2 { "fucom" } else { "fcom" };
                 match self.status_reader(n) {
                     Some(sahf) => {
-                        self.pending_fcom.insert(sahf, (left, right));
+                        self.pending_fcom.insert(sahf, (left, right, mnemonic));
                     }
                     // DEVIATE X87-STATUS: no `sahf` follows; the compare
                     // defines the status word as a value its readers test.
@@ -3071,13 +3080,13 @@ impl Emitter<'_, '_> {
                             self.values.insert(SDValue { node: word, res: 0 }, held.value);
                             self.push(
                                 Operation::Compare,
-                                "fcom",
+                                mnemonic,
                                 vec![Loc::Held(held)],
                                 vec![Loc::Held(left), Loc::Held(right)],
                             );
                         }
                         None => {
-                            self.push(Operation::Compare, "fcom", Vec::new(), vec![Loc::Held(left), Loc::Held(right)])
+                            self.push(Operation::Compare, mnemonic, Vec::new(), vec![Loc::Held(left), Loc::Held(right)])
                         }
                     },
                 }
@@ -3101,8 +3110,8 @@ impl Emitter<'_, '_> {
                 return Ok(Some(()));
             }
             "SAHF" => {
-                if let Some((left, right)) = self.pending_fcom.remove(&n) {
-                    self.push(Operation::Compare, "fcom", Vec::new(), vec![Loc::Held(left), Loc::Held(right)]);
+                if let Some((left, right, mnemonic)) = self.pending_fcom.remove(&n) {
+                    self.push(Operation::Compare, mnemonic, Vec::new(), vec![Loc::Held(left), Loc::Held(right)]);
                 }
                 return Ok(Some(()));
             }
