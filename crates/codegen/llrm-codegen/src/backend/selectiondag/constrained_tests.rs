@@ -107,29 +107,50 @@ fn an_unknown_exception_behavior_is_refused() {
     assert!(why.contains("exception behavior"), "{why}");
 }
 
+/// The x87 does constrained arithmetic and both widths of conversion with the
+/// instructions it does the plain ones with (`X86ISelLowering.cpp` L789..L868
+/// make them legal). Before, the legalizer stopped at "convert node to
+/// libcall" for each.
 #[test]
-fn probe_each() {
+fn constrained_arithmetic_and_float_conversions_select_to_the_x87_instructions() {
     use super::dag_function::selected;
-    let ops = [
-        ("x86_fp80", "fadd.f80(x86_fp80 %a, x86_fp80 %b, metadata !\"round.dynamic\", metadata !\"fpexcept.strict\")", "x86_fp80 @llvm.experimental.constrained.fadd.f80(x86_fp80, x86_fp80, metadata, metadata)"),
-        ("double", "fdiv.f64(double %d, double %d, metadata !\"round.dynamic\", metadata !\"fpexcept.strict\")", "double @llvm.experimental.constrained.fdiv.f64(double, double, metadata, metadata)"),
-        ("x86_fp80", "fpext.f80.f64(double %d, metadata !\"fpexcept.strict\")", "x86_fp80 @llvm.experimental.constrained.fpext.f80.f64(double, metadata)"),
-        ("double", "fptrunc.f64.f80(x86_fp80 %a, metadata !\"round.dynamic\", metadata !\"fpexcept.strict\")", "double @llvm.experimental.constrained.fptrunc.f64.f80(x86_fp80, metadata, metadata)"),
-        ("x86_fp80", "sitofp.f80.i32(i32 %i, metadata !\"round.dynamic\", metadata !\"fpexcept.strict\")", "x86_fp80 @llvm.experimental.constrained.sitofp.f80.i32(i32, metadata, metadata)"),
-        ("i32", "fptosi.i32.f80(x86_fp80 %a, metadata !\"fpexcept.strict\")", "i32 @llvm.experimental.constrained.fptosi.i32.f80(x86_fp80, metadata)"),
-        ("x86_fp80", "rint.f80(x86_fp80 %a, metadata !\"round.dynamic\", metadata !\"fpexcept.strict\")", "x86_fp80 @llvm.experimental.constrained.rint.f80(x86_fp80, metadata, metadata)"),
-        ("i1", "fcmps.f80(x86_fp80 %a, x86_fp80 %a, metadata !\"olt\", metadata !\"fpexcept.strict\")", "i1 @llvm.experimental.constrained.fcmps.f80(x86_fp80, x86_fp80, metadata, metadata)"),
-        ("i1", "fcmp.f80(x86_fp80 %a, x86_fp80 %a, metadata !\"une\", metadata !\"fpexcept.strict\")", "i1 @llvm.experimental.constrained.fcmp.f80(x86_fp80, x86_fp80, metadata, metadata)"),
-    ];
-    let mut report = String::new();
-    for (ty, call, decl) in ops {
-        let name = call.split('(').next().unwrap();
-        let text = format!("{HEAD}define {ty} @f(x86_fp80 %a, x86_fp80 %b, double %d, i32 %i) strictfp {{\n  %s = call {ty} @llvm.experimental.constrained.{call} strictfp\n  ret {ty} %s\n}}\ndeclare {decl}\n");
+    let select = |ty: &str, call: &str, decl: &str| {
+        let text = format!(
+            "{HEAD}define {ty} @f(x86_fp80 %a, x86_fp80 %b, double %d) strictfp {{\n  %s = call {ty} @llvm.experimental.constrained.{call} strictfp\n  ret {ty} %s\n}}\ndeclare {decl}\n"
+        );
         let module = llrm_mir::parse::module(&text).expect("parses");
-        match selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[]) {
-            Ok(done) => report += &format!("{name}: ok {} insns\n", done.body.insns().len()),
-            Err(e) => report += &format!("{name}: refused {}\n", e.0),
-        }
-    }
-    panic!("\n{report}");
+        let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+            .unwrap_or_else(|why| panic!("{call}: {}", why.0));
+        done.body
+            .insns()
+            .iter()
+            .filter_map(|insn| insn.what.as_ref())
+            .map(|what| what.name.as_deref().unwrap_or("").to_owned())
+            .collect::<Vec<_>>()
+    };
+    let e = "metadata !\"round.dynamic\", metadata !\"fpexcept.strict\"";
+    let add = select(
+        "x86_fp80",
+        &format!("fadd.f80(x86_fp80 %a, x86_fp80 %b, {e})"),
+        "x86_fp80 @llvm.experimental.constrained.fadd.f80(x86_fp80, x86_fp80, metadata, metadata)",
+    );
+    assert_eq!(add[..3].to_vec(), ["fld", "fld", "fadd"], "{add:?}");
+    let div = select(
+        "double",
+        &format!("fdiv.f64(double %d, double %d, {e})"),
+        "double @llvm.experimental.constrained.fdiv.f64(double, double, metadata, metadata)",
+    );
+    assert!(div.contains(&"fdiv".to_owned()), "{div:?}");
+    let extended = select(
+        "x86_fp80",
+        "fpext.f80.f64(double %d, metadata !\"fpexcept.strict\")",
+        "x86_fp80 @llvm.experimental.constrained.fpext.f80.f64(double, metadata)",
+    );
+    assert_eq!(extended[0], "fld", "{extended:?}");
+    let truncated = select(
+        "double",
+        &format!("fptrunc.f64.f80(x86_fp80 %a, {e})"),
+        "double @llvm.experimental.constrained.fptrunc.f64.f80(x86_fp80, metadata, metadata)",
+    );
+    assert_eq!(truncated[0], "fld", "{truncated:?}");
 }
