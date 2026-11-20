@@ -211,3 +211,37 @@ fn a_norex_byte_store_is_one_byte() {
     assert_eq!(super::opcodes::memory_bytes("MOV8mr_NOREX"), Some(1));
     assert_eq!(super::opcodes::memory_bytes("MOV8mr"), Some(1));
 }
+
+/// The pin's atomic pseudos (`LOCK_ADD32mr`, `LXADD32`, `LCMPXCHG32`) had no
+/// form: 79 names stood in `opcodes_unmapped.txt` and a `lock add` stopped the
+/// compile. Each is the form of its instruction, plus the prefix.
+#[test]
+fn the_atomic_pseudos_are_their_forms_under_lock() {
+    let (map, wide) = (map(), map64());
+    let name = |map: &OpcodeMap, opcode: &str| form_name(map, opcode);
+    for opcode in ["LOCK_ADD32mr", "LOCK_ADD32mi", "LOCK_ADD16mi8", "LOCK_ADD8mr"] {
+        assert_eq!(name(&map, opcode), "add", "{opcode}");
+    }
+    for (opcode, mnemonic) in
+        [("LOCK_SUB32mr", "sub"), ("LOCK_AND8mi", "and"), ("LOCK_OR16mr", "or"), ("LOCK_XOR32mi8", "xor")]
+    {
+        assert_eq!(name(&map, opcode), mnemonic, "{opcode}");
+    }
+    for (opcode, mnemonic) in
+        [("LOCK_INC8m", "inc"), ("LOCK_DEC32m", "dec"), ("LXADD16", "xadd"), ("LCMPXCHG8", "cmpxchg")]
+    {
+        assert_eq!(name(&map, opcode), mnemonic, "{opcode}");
+    }
+    for opcode in ["LOCK_ADD64mr", "LOCK_ADD64mi32", "LOCK_ADD64mi8", "LOCK_INC64m", "LXADD64", "LCMPXCHG64"] {
+        assert_eq!(map.form(opcode), Err(Unmapped::Wide64), "{opcode} at m32");
+        assert!(wide.forms()[wide.form(opcode).unwrap_or_else(|e| panic!("{opcode}: {e:?}"))].widths.contains(&64));
+    }
+    assert!(wide.locked("LXADD32") && wide.locked("LOCK_SUB64mr") && wide.locked("LCMPXCHG16"));
+    assert!(!wide.locked("ADD32mr") && !wide.locked("XCHG32rm"));
+    // The bit operations and the double-width compare are not these forms.
+    assert!(map.form("LOCK_BTS32m").is_err() && map.form("LCMPXCHG8B").is_err());
+    assert_eq!(
+        ["LXADD16", "LCMPXCHG8", "LOCK_ADD32mi8", "LOCK_INC64m"].map(|opcode| map.memory_bytes(opcode)),
+        [Some(2), Some(1), Some(4), Some(8)]
+    );
+}

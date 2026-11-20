@@ -1,3 +1,7 @@
+---
+architecture-index: arm64 selector emits phis (ARM64-PHI-AT-ISEL)
+architecture-order: 10
+---
 # arm64: the selector emits phis (ARM64-PHI-AT-ISEL)
 
 Done (#8597). The hand selector this plan names was deleted 2026-11-09; the

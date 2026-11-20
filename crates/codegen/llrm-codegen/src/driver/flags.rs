@@ -19,7 +19,7 @@ use crate::abi::machine::Machine;
 use crate::backend::shadow::Selector;
 
 /// The options' usage line, for a frontend's own.
-pub const USAGE: &str = "[-O0|-O1|-O2|-O3|-Omax|-Os|-Oz|-Og] [-f[no-]PASS] [-fno-inline=NAME]... [-disable-lsr] [-f[no-]sanitize=CHECKS] [-f[no-]trapv] [-f[no-]wrapv] [-fexcess-precision=standard|fast] [-f[no-]float-store] [-m16|-m32|-m64] [-march=CPU] [-mtune=CPU] [-mabi=ABI] [-relocation-model=static|pic] [-m[no-]stack-is-data] [-m[no-]far-bss] [-m[no-]far-bss-init] [-m[no-]bss-begin] [-mcode-segment=NAME] [--isel=old|dag|shadow] [--no-midend] [--clocks-per-byte N] [--machine MACHINE] [-fstack-usage] [-Wstack-usage=N] [-fobject-format=omf|elf|macho|coff] [-f[no-]function-sections] [-g] [-o OUTPUT] [-S]";
+pub const USAGE: &str = "[-O0|-O1|-O2|-O3|-Omax|-Os|-Oz|-Og] [-f[no-]PASS] [-fno-inline=NAME]... [-disable-lsr] [-f[no-]sanitize=CHECKS] [-f[no-]trapv] [-f[no-]wrapv] [-fexcess-precision=standard|fast] [-f[no-]float-store] [-m16|-m32|-m64] [-march=CPU] [-mtune=CPU] [-mabi=ABI] [-relocation-model=static|pic] [-m[no-]stack-is-data] [-mstack-alignment=N] [-m[no-]far-bss] [-m[no-]far-bss-init] [-m[no-]bss-begin] [-mcode-segment=NAME] [--isel=old|dag|shadow] [--no-midend] [--clocks-per-byte N] [--machine MACHINE] [-fstack-usage] [-Wstack-usage=N] [-fobject-format=omf|elf|macho|coff] [-f[no-]function-sections] [-g] [-o OUTPUT] [-S]";
 
 /// An `-O` level.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -220,6 +220,10 @@ pub struct Flags {
     code_model: Option<String>,
     /// `-m[no-]stack-is-data`: whether the stack lives in the data group.
     stack_is_data: Option<bool>,
+    /// `-mstack-alignment=N` (the pin's llc `-stack-alignment`): the bytes the
+    /// stack is a multiple of at every call, the ABI's (i386 System V on
+    /// Linux: 16); the convention's own when absent.
+    stack_alignment: Option<i64>,
     far_bss: Option<bool>,
     far_bss_init: Option<bool>,
     bss_begin: Option<bool>,
@@ -301,6 +305,7 @@ impl Default for Flags {
             code_model: None,
             relocation_pic: None,
             stack_is_data: None,
+            stack_alignment: None,
             far_bss: None,
             far_bss_init: None,
             bss_begin: None,
@@ -380,6 +385,15 @@ impl Flags {
             "-mstack-is-data" => self.stack_is_data = Some(true),
             "-mno-stack-is-data" => self.stack_is_data = Some(false),
             "-mregcall-default" => self.regcall_default = true,
+            _ if flag.starts_with("-mstack-alignment=") => {
+                let text = &flag["-mstack-alignment=".len()..];
+                self.stack_alignment = Some(
+                    text.parse::<i64>()
+                        .ok()
+                        .filter(|bytes| *bytes >= 4 && bytes.count_ones() == 1)
+                        .ok_or_else(|| format!("{flag}: a power of two of at least 4"))?,
+                );
+            }
             "-fallow-pending-abi" => self.allow_pending_abi = true,
             _ if flag.starts_with("-frame-pointer=") => {
                 let policy = &flag["-frame-pointer=".len()..];
@@ -526,7 +540,8 @@ impl Flags {
         self.mode
     }
 
-    /// `-relocation-model=`, if given: whether the code is position independent.
+    /// `-relocation-model=`, if given: whether the code is position
+    /// independent.
     pub fn relocation_pic(&self) -> Option<bool> {
         self.relocation_pic
     }
@@ -636,6 +651,7 @@ impl Flags {
             no_midend: self.no_midend,
             abi: self.abi.clone(),
             float_store: self.float_store,
+            stack_alignment: self.stack_alignment,
             code_segment: self.code_segment.clone(),
             ..super::Options::new(machine, arch, selection)
         }

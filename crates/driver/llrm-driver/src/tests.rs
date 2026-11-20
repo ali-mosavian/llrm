@@ -4530,6 +4530,28 @@ fn the_address_of_a_global_in_static_code_at_m64_is_a_dword_move() {
     assert!(!bytes.windows(3).any(|code| code == [0x48, 0x8D, 0x3D]), "a `lea rdi, [rip+sym]`: {listing}");
 }
 
+/// An indirect sibling call (`jmp reg` after the epilogue) made `masm` keep the
+/// frame register, which the allocator had given to a value: "the frame
+/// register was given to a value and the frame cannot be addressed through the
+/// stack pointer", QuickrBasic's `tabl_moved` and `text_delete` at m64 -Os.
+#[test]
+fn a_function_ending_in_an_indirect_sibling_call_is_addressed_through_the_stack_pointer() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                declare i32 @g(ptr)\n\
+                define void @f(ptr %t) {\n\
+                \x20 %p = getelementptr i8, ptr %t, i64 8\n\
+                \x20 %o = load i32, ptr %p\n\
+                \x20 %r = call i32 @g(ptr %t)\n\
+                \x20 store i32 %r, ptr %p\n\
+                \x20 %fp = load ptr, ptr %t\n\
+                \x20 tail call void %fp(ptr %t, i32 %o)\n\
+                \x20 ret void\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-Os", "--isel=dag"]), text, "f").unwrap_or_else(|why| panic!("{why}"));
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("jmp "), "{listing}");
+}
+
 /// clang writes no module flag for `-fno-pic -fno-asynchronous-unwind-tables`;
 /// the module read as not clang's, so position independent, and QuickrBasic's
 /// 484 global addresses at m64 -Os were `lea reg, [rip+sym]` (7 bytes) for the
