@@ -258,6 +258,7 @@ impl<'m> Machine<'m> {
             }
             ConstantKind::Global(global) => Val::Ptr(self.addresses[global]),
             ConstantKind::Expr(ConstantExpr::BlockAddress { .. }) => return unsupported("a block's address"),
+            ConstantKind::MetadataString(_) => return unsupported("a metadata string"),
             ConstantKind::Expr(ConstantExpr::Cast { op, value }) => {
                 let from = self.module.context.get(*value).ty;
                 cast(self.types(), &self.layout, *op, self.constant(*value)?, from, constant.ty, Flags::default())?
@@ -726,6 +727,7 @@ impl<'m> Machine<'m> {
             | Intrinsic::FakeUse
             | Intrinsic::NoAliasScopeDecl
             | Intrinsic::SetLoopIterations => void,
+            Intrinsic::Constrained(_) => return unsupported("a constrained floating-point operation"),
             Intrinsic::Expect => argument(0),
             Intrinsic::TestSetLoopIterations => match argument(0) {
                 Val::Int { bits, .. } => Val::Int { bits: u128::from(bits != 0), width: 1 },
