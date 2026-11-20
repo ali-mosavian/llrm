@@ -452,6 +452,23 @@ fn module_bytes(
     Ok(bytes + crate::runtime_size::reached(&reached) + crate::data::image_bytes(&crate::data::text_at(ir, request)?))
 }
 
+/// Each function's emitted bytes at `request.level`, runtime routines left out:
+/// what `driver::size_audit` sets the trial's estimate against.
+pub fn function_sizes(
+    ir: &str,
+    request: &Request,
+) -> Result<Vec<(String, u32)>, String> {
+    let (selected, alternatives) = cached_both(ir, request)?;
+    selected
+        .iter()
+        .enumerate()
+        .map(|(number, (name, ..))| {
+            let lines = lines_in(&selected, &alternatives, name, number, request)?;
+            Ok((name.clone(), expand::price_emitted(&lines, false).0))
+        })
+        .collect()
+}
+
 /// [`selections`] of `ir`, kept for the next function of the same module:
 /// every function was run through the whole mid-end and the selection of every
 /// function once for each time it was built (twice, with the return block
