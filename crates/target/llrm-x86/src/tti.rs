@@ -1113,6 +1113,10 @@ impl Tti for X86 {
         self.tuning.inline_size_bytes || self.tuning.inline_trials_at_o1
     }
 
+    fn memset_gap_merge_at_size(&self) -> bool {
+        self.tuning.memset_gap_merge_at_size && self.real_mode.is_none()
+    }
+
     fn callee_saved_clocks(
         &self,
         peak: usize,
@@ -1440,6 +1444,12 @@ impl Tti for X86 {
     /// (crc, tile and recchop grow 52, 42 and 15 bytes there).
     fn opt_size_inline_by_code_size(&self) -> bool {
         self.real_mode.as_ref().is_some_and(|real| real.inline_size_guard) || self.tuning.inline_size_guard_at_size
+    }
+
+    /// The size guard binds -Os; -O1 keeps it only where the target says
+    /// so (real mode).
+    fn opt_size_inline_rule_at_o1(&self) -> bool {
+        self.real_mode.is_some() || self.tuning.inline_size_guard_at_o1
     }
 
     /// The pin's rule (`TotalAllocaSizeRecursiveCaller`) outside real mode,
