@@ -854,6 +854,8 @@ impl Hooks for X86Lowering<'_> {
             ISD::SIntToFp | ISD::UIntToFp => lower_int_to_fp(dag, node, self.sse2),
             ISD::StrictSIntToFp => lower_strict_sint_to_fp(dag, node, self.sse2),
             ISD::StrictFpToSInt => lower_strict_fp_to_sint(dag, node, self.sse2),
+            ISD::StrictUIntToFp => lower_strict_uint_to_fp(dag, node),
+            ISD::StrictFpToUInt => lower_strict_fp_to_uint(dag, node),
             ISD::ConstantPool => lower_constant_pool(dag, node),
             ISD::JumpTable => lower_jump_table(dag, node),
             ISD::ShlParts | ISD::SraParts | ISD::SrlParts => Some(lower_shift_parts(dag, node)),
@@ -1512,6 +1514,38 @@ fn lower_strict_sint_to_fp(
     };
     let stored = dag.get_store(chain, src, slot, info);
     Some(build_fild(dag, dst, src_vt, stored, slot, info))
+}
+
+/// `LowerUINT_TO_FP` of `STRICT_UINT_TO_FP` from an `i32`: the zero-extended
+/// value is a non-negative `i64`, converted as signed on the node's chain.
+/// The `i64` source needs the 2^64 correction and is not translated.
+fn lower_strict_uint_to_fp(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let (chain, src) = (dag.operand(node, 0), dag.operand(node, 1));
+    if dag.value_type(src) != EVT::I32 {
+        return None;
+    }
+    let wide = dag.get_node(ISD::ZeroExtend, EVT::I64, &[src]);
+    let dst = dag.value_type(node);
+    Some(dag.get_node_multi(ISD::StrictSIntToFp, &[dst, EVT::OTHER], &[chain, wide]))
+}
+
+/// `LowerFP_TO_INT` of `STRICT_FP_TO_UINT` to an `i32`: the signed `i64`
+/// conversion truncated, on the node's chain. The `i64` result needs the
+/// 2^63 split and is not translated.
+fn lower_strict_fp_to_uint(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let (chain, value) = (dag.operand(node, 0), dag.operand(node, 1));
+    if dag.value_type(node) != EVT::I32 {
+        return None;
+    }
+    let wide = dag.get_node_multi(ISD::StrictFpToSInt, &[EVT::I64, EVT::OTHER], &[chain, value]);
+    let narrow = dag.get_node(ISD::Truncate, EVT::I32, &[SDValue { node: wide.node, res: 0 }]);
+    Some(dag.get_node_multi(ISD::MergeValues, &[EVT::I32, EVT::OTHER], &[narrow, SDValue { node: wide.node, res: 1 }]))
 }
 
 /// `LowerFP_TO_INT` of `STRICT_FP_TO_SINT` on the x87: `fist` to a stack slot

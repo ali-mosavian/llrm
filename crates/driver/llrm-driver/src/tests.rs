@@ -6560,3 +6560,29 @@ declare i1 @llvm.experimental.constrained.fcmp.f80(x86_fp80, x86_fp80, metadata,
         );
     }
 }
+
+/// A constrained conversion of an `i8`, or an unsigned `i32`, stopped the
+/// legalizer ("promote node", "convert node to libcall"): QB `pfpu.c` at m64.
+#[test]
+fn constrained_narrow_and_unsigned_conversions_select_to_sse_at_m64() {
+    for (int, float, op, mnemonic) in [
+        ("i8", "double", "sitofp", "cvtsi2sd"),
+        ("i8", "double", "uitofp", "cvtsi2sd"),
+        ("i32", "double", "uitofp", "cvtsi2sd"),
+        ("i8", "double", "fptosi", "cvttsd2si"),
+        ("i32", "double", "fptoui", "cvttsd2si"),
+    ] {
+        let (to_float, round) = (op.ends_with("tofp"), op.ends_with("tofp"));
+        let (ret, arg) = if to_float { (float, int) } else { (int, float) };
+        let (r, a) = (ret.replace("double", "f64"), arg.replace("double", "f64"));
+        let rounding = if round { ", metadata !\"round.dynamic\"" } else { "" };
+        let tail = if round { "metadata, metadata" } else { "metadata" };
+        let text = format!(
+            "target datalayout = \"@m64-datalayout@\"\ndefine {ret} @f({arg} %x) strictfp {{\n  %r = call {ret} @llvm.experimental.constrained.{op}.{r}.{a}({arg} %x{rounding}, metadata !\"fpexcept.strict\") strictfp\n  ret {ret} %r\n}}\ndeclare {ret} @llvm.experimental.constrained.{op}.{r}.{a}({arg}, {tail})\n"
+        );
+        let (built, _) = compiled(&flags(&["-m64", "-O1", "--isel=dag"]), &text, "f")
+            .unwrap_or_else(|error| panic!("{op} {int}: {error:?}"));
+        let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+        assert!(listing.contains(mnemonic), "{op} {int}: no {mnemonic}\n{listing}");
+    }
+}

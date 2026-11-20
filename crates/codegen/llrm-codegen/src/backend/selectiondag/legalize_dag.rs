@@ -2097,6 +2097,9 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
     ) -> Result<(), LegalizeError> {
         let op = self.dag.opcode(node);
         let vt = self.dag.value_type(node);
+        if op.is_strict_fp() {
+            return self.promote_strict_conversion(node);
+        }
         let result = match op {
             ISD::SIntToFp | ISD::UIntToFp => {
                 let src = self.dag.operand(node, 0);
@@ -2119,6 +2122,35 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         Ok(())
     }
 
+    /// `PromoteNode` for a constrained conversion: the same node on the
+    /// widened integer, chained as the original; its value is truncated back
+    /// (or widened going in) and its out chain replaces the original's.
+    fn promote_strict_conversion(
+        &mut self,
+        node: SDValue,
+    ) -> Result<(), LegalizeError> {
+        let op = self.dag.opcode(node);
+        let vt = self.dag.value_type(node);
+        let (chain, input) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+        let into_float = matches!(op, ISD::StrictSIntToFp | ISD::StrictUIntToFp);
+        let narrow = if into_float { self.dag.value_type(input) } else { vt };
+        let EVT::Simple(from) = narrow else { unreachable!("promotion applies to simple types") };
+        let to: EVT = self.tli.type_to_promote_to(op, from).into();
+        let (wide, value) = if into_float {
+            let extend = if op == ISD::StrictSIntToFp { ISD::SignExtend } else { ISD::ZeroExtend };
+            let widened = self.dag.get_node(extend, to, &[input]);
+            (self.dag.get_node_multi(op, &[vt, EVT::OTHER], &[chain, widened]), None)
+        } else {
+            let wide = self.dag.get_node_multi(op, &[to, EVT::OTHER], &[chain, input]);
+            let narrowed = self.dag.get_node(ISD::Truncate, vt, &[SDValue { node: wide.node, res: 0 }]);
+            (wide, Some(narrowed))
+        };
+        let value = value.unwrap_or(SDValue { node: wide.node, res: 0 });
+        self.replace_node(SDValue { node: node.node, res: 0 }, value);
+        self.replace_node(SDValue { node: node.node, res: 1 }, SDValue { node: wide.node, res: 1 });
+        Ok(())
+    }
+
     /// `ReplaceNode(Old, New)` for a node with one value result.
     fn replace_node(
         &mut self,
@@ -2137,7 +2169,14 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         let op = self.dag.opcode(node);
         if matches!(
             op,
-            ISD::SIntToFp | ISD::UIntToFp | ISD::FpToSInt | ISD::FpToUInt
+            ISD::SIntToFp
+                | ISD::UIntToFp
+                | ISD::FpToSInt
+                | ISD::FpToUInt
+                | ISD::StrictSIntToFp
+                | ISD::StrictUIntToFp
+                | ISD::StrictFpToSInt
+                | ISD::StrictFpToUInt
         ) {
             return self.promote_conversion(node);
         }
