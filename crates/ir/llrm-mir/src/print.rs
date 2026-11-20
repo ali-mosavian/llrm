@@ -1030,6 +1030,7 @@ impl Printer<'_> {
             ConstantKind::Undef => "undef".to_owned(),
             ConstantKind::Zero => "zeroinitializer".to_owned(),
             ConstantKind::Bytes(bytes) => format!("c{}", string(bytes)),
+            ConstantKind::MetadataString(text) => format!("!{}", string(text.as_bytes())),
             ConstantKind::Global(global) => self.global_name(*global),
             ConstantKind::Aggregate(ids) => match self.types().get(*ty) {
                 Type::Array { .. } => format!("[{}]", members(ids)),

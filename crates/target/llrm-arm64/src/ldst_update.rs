@@ -30,6 +30,7 @@ use llrm_object::assembler::Cfi;
 use llrm_support::hash::HashMap;
 
 use crate::frame::Lowered;
+use crate::jumptable::Table;
 use crate::layout::label_of;
 use crate::mc::inst::*;
 use crate::mc::visit::Reg;
@@ -247,6 +248,8 @@ struct Function<'a> {
     /// The registers the function leaves live: what it returns and passes to a
     /// tail call.
     exits: &'a [Reg],
+    /// The jump tables: the blocks a `br` reaches are its successors.
+    tables: &'a [Table],
     /// A register's live-in blocks, once asked for.
     live: HashMap<Gpr, Vec<bool>>,
 }
@@ -287,6 +290,19 @@ impl Function<'_> {
         );
         if !ends && block + 1 < self.blocks.len() {
             out.push(block + 1);
+        }
+        // A jump table's `br` goes to any of its entries (the pin's MBB
+        // successors); the table is the one whose base label is in this block.
+        for table in self.tables {
+            let here = self.labels.get(table.base.as_str()) == Some(&block)
+                || insts.iter().flatten().any(|inst| matches!(inst, Inst::Label(label) if *label == table.base));
+            if here {
+                for entry in table.entries.iter().filter_map(|label| self.labels.get(label.as_str()).copied()) {
+                    if !out.contains(&entry) {
+                        out.push(entry);
+                    }
+                }
+            }
         }
         out
     }
@@ -608,6 +624,7 @@ fn merge_in(
 pub fn fold(
     blocks: Vec<Lowered>,
     exits: &[Reg],
+    tables: &[Table],
 ) -> Vec<Lowered> {
     let labels: Vec<String> = blocks.iter().map(|block| block.label.clone()).collect();
     let mut function = Function {
@@ -615,6 +632,7 @@ pub fn fold(
         locs: blocks.iter().map(|block| block.locs.clone()).collect(),
         labels: labels.iter().enumerate().map(|(at, label)| (label.as_str(), at)).collect(),
         exits,
+        tables,
         live: HashMap::default(),
     };
     for block in 0..function.blocks.len() {
@@ -676,7 +694,7 @@ mod tests {
     fn merged(insts: Vec<Inst>) -> Vec<Inst> {
         let places = vec![None; insts.len()];
         let block = Lowered { label: "b".into(), insts, locs: places };
-        fold(vec![block], &[]).remove(0).insts
+        fold(vec![block], &[], &[]).remove(0).insts
     }
 
     /// The folded stack bump of QB `floats` sat after two ALU instructions
@@ -835,7 +853,7 @@ mod tests {
             block("body", vec![step(9, 4), branch_to("head")]),
             block("exit", vec![leave()]),
         ];
-        let out = fold(blocks, &[]);
+        let out = fold(blocks, &[], &[]);
         assert!(matches!(&out[0].insts[0], Inst::Load { addr: Addr::Post { imm: 4, .. }, .. }), "{out:?}");
         assert_eq!(out[1].insts.len(), 1, "{out:?}");
     }
@@ -849,9 +867,31 @@ mod tests {
             block("body", vec![step(9, 4), branch_to("head")]),
             block("exit", vec![at(int(4, 1), true, 9, 0), leave()]),
         ];
-        let out = fold(blocks, &[]);
+        let out = fold(blocks, &[], &[]);
         assert!(matches!(&out[0].insts[0], Inst::Load { addr: Addr::Offset { .. }, .. }), "{out:?}");
         assert_eq!(out[1].insts.len(), 2, "{out:?}");
+    }
+
+    /// QB `decl_line`: the dispatch `ldrb [x9]` took a sparse arm's `add x9,
+    /// #1` as its post-index, and the jump table's arms (a `br`, no label)
+    /// read the stepped base: 40 regression tests failed.
+    #[test]
+    fn an_update_is_not_moved_above_a_jump_table_arm_that_reads_the_base() {
+        let table = Table {
+            symbol: "G$0".into(),
+            base: "base".into(),
+            entries: vec!["arm".into()],
+            entry: llrm_object::table::Entry { width: 4, shift: 0, signed: true },
+        };
+        let blocks = vec![
+            block("head", vec![at(int(1, 11), true, 9, 0), cond_to("sparse")]),
+            block("dispatch", vec![Inst::Label("base".into()), Inst::BranchReg { link: false, rn: Gpr(12) }]),
+            block("arm", vec![at(int(1, 0), true, 9, 1), leave()]),
+            block("sparse", vec![step(9, 1), leave()]),
+        ];
+        let out = fold(blocks, &[], &[table]);
+        assert!(matches!(&out[0].insts[0], Inst::Load { addr: Addr::Offset { .. }, .. }), "{out:?}");
+        assert_eq!(out[3].insts.len(), 2, "{out:?}");
     }
 
     /// A function that returns the base leaves it live at the `ret`.
@@ -862,7 +902,7 @@ mod tests {
             block("body", vec![step(0, 4), branch_to("head")]),
             block("exit", vec![leave()]),
         ];
-        let out = fold(blocks, &[Reg::Gpr(Gpr(0))]);
+        let out = fold(blocks, &[Reg::Gpr(Gpr(0))], &[]);
         assert!(matches!(&out[0].insts[0], Inst::Load { addr: Addr::Offset { .. }, .. }), "{out:?}");
     }
 

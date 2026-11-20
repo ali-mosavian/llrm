@@ -1966,6 +1966,11 @@ pub trait Tti {
         false
     }
 
+    /// `Tuning::memset_gap_merge_at_size` (MEMSET-GAP).
+    fn memset_gap_merge_at_size(&self) -> bool {
+        false
+    }
+
     /// `Tuning::inline_dying_credit_at_os` (D13).
     fn inline_dying_credit_at_os(&self) -> bool {
         true
