@@ -400,3 +400,24 @@ fn test_a_select_of_values_on_the_counter_splits_into_two_loops() {
         "the guard is not decided:\n{after}"
     );
 }
+
+/// A loop of `body` adds beside the guard: `SELECT_OF_VALUES` grown.
+fn heavy(body: usize) -> String {
+    let mut text = SELECT_OF_VALUES.replace("  %sum.next = add nuw nsw i32 %v, %sum\n", "");
+    let mut last = "%v".to_string();
+    let mut adds = String::new();
+    for k in 0..body {
+        adds.push_str(&format!("  %w{k} = add i32 {last}, {}\n", k + 1));
+        last = format!("%w{k}");
+    }
+    adds.push_str(&format!("  %sum.next = add nuw nsw i32 {last}, %sum\n"));
+    text = text.replace("  %i.next = add nuw nsw i32 %i, 1\n", &format!("{adds}  %i.next = add nuw nsw i32 %i, 1\n"));
+    text
+}
+
+#[test]
+fn test_a_loop_of_more_than_the_peel_bound_is_left_whole() {
+    // idioms -O3 split an outer loop of inlined bodies and doubled the program
+    assert_split(&heavy(60));
+    assert_whole(&heavy(120));
+}

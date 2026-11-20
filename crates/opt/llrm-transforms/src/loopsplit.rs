@@ -44,6 +44,9 @@ use crate::edges::{self, phis};
 use crate::lcssa::{arms, from_arms};
 use crate::loopclone::clone_loop_with_preheader;
 
+/// `param_max_peeled_insns`: GCC's bound on the instructions a loop copy adds.
+const MAX_PEELED_INSNS: usize = 100;
+
 /// The comparison of a guard: `counter code border`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Code {
@@ -377,6 +380,26 @@ fn plan_for(
                 Opcode::Invoke(_) | Opcode::LandingPad { .. } | Opcode::Resume
             ))
     }) {
+        return None;
+    }
+
+    // DEVIATE LSPLIT-SIZE (owner wasm-3, exit 2026-12-17): `split_loop` has no
+    // cap on the copy; its sister `split_loop_on_cond` refuses where
+    // `compute_added_num_insns` passes `param_max_peeled_insns` (100,
+    // params.opt), the bound GCC puts on a loop copy in this file. The loop's
+    // instructions, as `eni_size_weights` counts statements: phis and jumps
+    // are free. Reason: idioms -O3 split its 6-trip outer loop of inlined
+    // bodies and doubled (m68k 1544 -> 3008 B, arm64 10052 -> 19184).
+    let size = l
+        .get_blocks()
+        .iter()
+        .flat_map(|&b| f.iter_block(b))
+        .filter(|&i| {
+            let one = f.instruction(i);
+            !(one.opcode == Opcode::Phi || one.opcode == Opcode::Br && one.operands.len() == 1)
+        })
+        .count();
+    if size > MAX_PEELED_INSNS {
         return None;
     }
 
