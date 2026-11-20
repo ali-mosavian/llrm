@@ -263,3 +263,23 @@ fn a_run_in_a_loop_is_given_up_where_its_clocks_are_a_larger_share_than_its_byte
     assert!(run_priced(&looped, None, None).contains("jsr __outl_0"), "bytes alone outline them");
     assert!(!run_priced(&looped, None, Some(1)).contains("__outl_"), "{}", run_priced(&looped, None, Some(1)));
 }
+
+/// double_against_int, old_style_extra_args and switch_i64 at -O1 ran 5% over
+/// llvm-mos (439 clocks against 417): five calls with the same constant were
+/// five `jsr __outl_0` of one body, 12 clocks a run in a 72-byte module. At
+/// -O1 to -O3 the share rule gives them up; at -Os (bytes alone) they stay.
+#[test]
+fn five_calls_with_one_constant_are_inline_at_every_speed_level() {
+    let call = "  call void @report(i32 5)\n";
+    let ir = format!(
+        "target datalayout = \"{}\"\ndeclare void @report(i32)\ndefine void @main() {{\n{}  ret void\n}}\n",
+        datalayout(),
+        call.repeat(5)
+    );
+    for level in [Level::O1, Level::O2, Level::O3] {
+        let text = assembly(&ir, &Request::new(level)).unwrap_or_else(|e| panic!("{e}"));
+        assert!(!text.contains("__outl_"), "{level:?}\n{text}");
+    }
+    let text = assembly(&ir, &Request::new(Level::Os)).unwrap_or_else(|e| panic!("{e}"));
+    assert!(text.contains("__outl_"), "-Os outlines them for bytes\n{text}");
+}

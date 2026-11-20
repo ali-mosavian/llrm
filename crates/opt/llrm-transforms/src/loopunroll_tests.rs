@@ -348,3 +348,12 @@ fn test_the_copies_stand_after_the_latch_before_the_exit() {
         function.layout().iter().map(|&one| function.block(one).name.clone().unwrap_or("new".into())).collect();
     assert_eq!(order, ["b0", "b1", "b2", "new", "new", "b3"], "{}", printed(&module));
 }
+
+/// Before: a loop whose header's address was taken was unrolled, and the
+/// table's label named only the first copy (LoopUnroll.cpp:951).
+#[test]
+fn test_a_loop_whose_header_address_is_taken_is_not_unrolled() {
+    let text = format!("@t = internal constant [1 x ptr] [ptr blockaddress(@f, %b1)]\n\n{HEADER_TESTED}");
+    let mut module = parsed(&text);
+    assert_eq!(unrolled(&mut module, "b1", 4, &[("b1", 4)]), Unrolled::Unmodified);
+}

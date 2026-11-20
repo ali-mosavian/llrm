@@ -358,8 +358,8 @@ fn plan_loop(
             }
         };
         if lsr.amk.has_post_indexed()
-            && tti.lsr_post_indexed_amortized()
-            && (size || !post_indexed_repays(se, &cx, header))
+            && ((tti.lsr_post_indexed_amortized() && (size || !post_indexed_repays(se, &cx, header)))
+                || tti.lsr_post_indexed_walk_limit().is_some_and(|limit| walked_bases(&cx, header) > limit))
         {
             lsr.amk = AddressingMode::None;
         }
@@ -546,6 +546,17 @@ pub fn reduced(
     reduced_with(context, layout, function, declared, outer, tti, false)
 }
 
+thread_local! {
+    /// The functions `LoopStrengthReduce` has been run over on this thread (M68K-LSR-TWICE: the m68k mid-end runs it
+    /// again after the shared pipeline, which the pin does not).
+    static RUNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times LSR has run over a function on this thread.
+pub fn runs_taken() -> usize {
+    RUNS.with(std::cell::Cell::get)
+}
+
 /// [`reduced`], with every IV chain made if `stress_chains`
 /// (`-lsr-stress-ivchain`): for tests of the chains' generation.
 pub fn reduced_with(
@@ -578,7 +589,9 @@ pub fn reduced_held(
     // The pass requires `LoopSimplify` (`getAnalysisUsage`): an outer loop
     // entered by a conditional branch gets the preheader its invariants'
     // induction variables are made in.
+    RUNS.with(|runs| runs.set(runs.get() + 1));
     let mut changed = crate::loopsimplify::simplified(function);
+    llrm_support::debug!("lsr-split", "loopsimplify before LSR: changed {changed}, {} blocks", function.layout().len());
     // The held expressions are read in the CFG they were made in.
     let mut stable = !changed;
     // The dominator tree, loops and assumptions of the function are made once:
@@ -855,6 +868,53 @@ fn remainders_kept_as_divides(
         })
         .filter_map(|one| one.result)
         .collect()
+}
+
+/// DEVIATE LSR-POSTINC-WALKS: how many objects the loop's loads and stores
+/// reach through an address computed in the loop (a GEP off a base, or a
+/// pointer phi already walked): the pointer walks a post-indexed preference
+/// would keep, one register each.
+fn walked_bases(
+    cx: &llrm_analysis::scev::Cx,
+    header: BlockId,
+) -> u32 {
+    use llrm_mir::module::{Operand, ValueDef};
+    use llrm_mir::opcode::{CastOp, Opcode};
+    let Some(lp) = cx.loops.get_loop_for(header) else { return 0 };
+    let mut bases: Vec<Operand> = Vec::new();
+    for &block in lp.get_blocks() {
+        for inst in cx.function.iter_block(block) {
+            let instruction = cx.function.instruction(inst);
+            let pointer = match instruction.opcode {
+                Opcode::Load { .. } => instruction.operands.first().copied(),
+                Opcode::Store { .. } => instruction.operands.get(1).copied(),
+                _ => None,
+            };
+            let Some(mut at) = pointer else { continue };
+            let mut stepped = false;
+            while let Operand::Value(v) = at {
+                let ValueDef::Instruction(def) = cx.function.value(v).def else { break };
+                let one = cx.function.instruction(def);
+                match one.opcode {
+                    Opcode::GetElementPtr { .. } => stepped = true,
+                    Opcode::Cast(CastOp::BitCast) => {}
+                    _ => break,
+                }
+                at = one.operands[0];
+            }
+            // A pointer already walked is a phi of the loop.
+            if let Operand::Value(v) = at
+                && let ValueDef::Instruction(def) = cx.function.value(v).def
+                && cx.function.instruction(def).opcode == Opcode::Phi
+            {
+                stepped = true;
+            }
+            if stepped && !bases.contains(&at) {
+                bases.push(at);
+            }
+        }
+    }
+    bases.len() as u32
 }
 
 /// DEVIATE LSR-POSTINC-TRIPS: whether the loop makes more trips than twice the

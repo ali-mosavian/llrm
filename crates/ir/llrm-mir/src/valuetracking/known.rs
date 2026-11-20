@@ -1681,6 +1681,7 @@ fn constant_expression(
     let constant = q.context().get(id);
     let ConstantKind::Expr(expr) = &constant.kind else { return None };
     let (opcode, operands, flags) = match expr {
+        ConstantExpr::BlockAddress { .. } => return None,
         ConstantExpr::Cast { op, value } => (Opcode::Cast(*op), vec![Operand::Constant(*value)], Flags::default()),
         ConstantExpr::Binary { op, lhs, rhs } => {
             (Opcode::Binary(*op), vec![Operand::Constant(*lhs), Operand::Constant(*rhs)], Flags::default())

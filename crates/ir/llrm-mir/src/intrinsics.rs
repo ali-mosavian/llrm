@@ -186,6 +186,12 @@ pub enum Intrinsic {
     /// call operand, so the call has none and its scope list is the
     /// `!noalias.scope.decl` attachment. No code runs it.
     NoAliasScopeDecl,
+    /// `llvm.experimental.constrained.*` (`ConstrainedFPIntrinsic`): the
+    /// operation under the rounding mode and exception behaviour its
+    /// `metadata` arguments name. Ordered with every other call that touches
+    /// the floating-point environment (`memory(inaccessiblemem: readwrite)`);
+    /// never folded, merged or moved by a pass.
+    Constrained(ConstrainedOp),
     /// `llvm.expect`: its first argument, which the second says it is expected
     /// to be: a hint `lower-expect` turns into branch weights and removes
     /// (LowerExpectIntrinsic.cpp); no code runs it.
@@ -424,6 +430,25 @@ impl BitCount {
     }
 }
 
+/// The operation of an `llvm.experimental.constrained.*`: the ones
+/// QuickrBasic's `pfpu.c` needs; the others are refused by name.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum ConstrainedOp {
+    FAdd,
+    FSub,
+    FMul,
+    FDiv,
+    FpExt,
+    FpTrunc,
+    SiToFp,
+    FpToSi,
+    Rint,
+    /// `fcmp`: quiet.
+    FCmp,
+    /// `fcmps`: signaling.
+    FCmps,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FloatFunction {
     Fabs,
@@ -493,6 +518,8 @@ enum Slot {
     Int(u32),
     /// A pointer in address space 0, whatever the overload is.
     Ptr,
+    /// `metadata`.
+    Metadata,
     Void,
 }
 
@@ -637,6 +664,73 @@ const LIFETIME: &[Slot] = &[Slot::Int(64), Slot::Any(0)];
 const LIFETIME_PARAMETERS: &[&[&str]] = &[&["immarg"], &["nocapture"]];
 const LIFETIME_ATTRS: &[&str] = &["nocallback", "nofree", "nosync", "nounwind", "willreturn"];
 
+/// `Intrinsics.td`'s constrained family: `DefaultAttrsIntrinsic` plus
+/// `IntrInaccessibleMemOnly`, `IntrWillReturn` and `IntrStrictFP`.
+const CONSTRAINED_ATTRS: &[&str] = &["nocallback", "nofree", "nosync", "nounwind", "strictfp", "willreturn"];
+const FP_ENVIRONMENT: &[(Option<&str>, &str)] = &[(Some("inaccessiblemem"), "readwrite")];
+const CONSTRAINED_OWN: Option<Own> = Some(Own { attrs: CONSTRAINED_ATTRS, memory: FP_ENVIRONMENT, parameters: &[] });
+
+/// Rounding mode and exception behaviour.
+const BINARY_ROUNDED: &[Slot] = &[Slot::Any(0), Slot::Any(0), Slot::Metadata, Slot::Metadata];
+const UNARY_ROUNDED: &[Slot] = &[Slot::Any(0), Slot::Metadata, Slot::Metadata];
+/// Predicate and exception behaviour.
+const COMPARED: &[Slot] = &[Slot::Any(0), Slot::Any(0), Slot::Metadata, Slot::Metadata];
+const FPEXT: &[Slot] = &[Slot::Any(1), Slot::Metadata];
+const FPTRUNC: &[Slot] = &[Slot::Any(1), Slot::Metadata, Slot::Metadata];
+const SITOFP: &[Slot] = &[Slot::Any(1), Slot::Metadata, Slot::Metadata];
+const FPTOSI: &[Slot] = &[Slot::Any(1), Slot::Metadata];
+
+const fn constrained(
+    name: &'static str,
+    op: ConstrainedOp,
+    parameters: &'static [Slot],
+) -> Spec {
+    Spec {
+        name,
+        intrinsic: Intrinsic::Constrained(op),
+        overloads: &[Kind::Float],
+        returns: Slot::Any(0),
+        parameters,
+        own: CONSTRAINED_OWN,
+    }
+}
+
+const fn compare_constrained(
+    name: &'static str,
+    op: ConstrainedOp,
+) -> Spec {
+    Spec {
+        name,
+        intrinsic: Intrinsic::Constrained(op),
+        overloads: &[Kind::Float],
+        returns: Slot::Int(1),
+        parameters: COMPARED,
+        own: CONSTRAINED_OWN,
+    }
+}
+
+/// A conversion: the result type is the first overload, the operand's the
+/// second (`fpext.f80.f64`, `fptosi.i32.f80`).
+const fn conversion(
+    name: &'static str,
+    op: ConstrainedOp,
+    overloads: [Kind; 2],
+    parameters: &'static [Slot],
+) -> Spec {
+    Spec {
+        name,
+        intrinsic: Intrinsic::Constrained(op),
+        overloads: match overloads {
+            [Kind::Float, Kind::Float] => &[Kind::Float, Kind::Float],
+            [Kind::Float, Kind::Int] => &[Kind::Float, Kind::Int],
+            _ => &[Kind::Int, Kind::Float],
+        },
+        returns: Slot::Any(0),
+        parameters,
+        own: CONSTRAINED_OWN,
+    }
+}
+
 static NAMES: std::sync::OnceLock<crate::hash::HashMap<&'static str, Intrinsic>> = std::sync::OnceLock::new();
 
 thread_local! {
@@ -656,7 +750,7 @@ thread_local! {
     static PROBES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-const TABLE: [Spec; 100] = [
+const TABLE: [Spec; 111] = [
     overflow("llvm.sadd.with.overflow", BinaryOp::Add, true),
     overflow("llvm.uadd.with.overflow", BinaryOp::Add, false),
     overflow("llvm.ssub.with.overflow", BinaryOp::Sub, true),
@@ -1054,6 +1148,17 @@ const TABLE: [Spec; 100] = [
         parameters: &[Slot::Int(16), Slot::Any(0)],
         own: Some(Own { attrs: PORT_ATTRS, memory: PORT_MEMORY, parameters: &[] }),
     },
+    constrained("llvm.experimental.constrained.fadd", ConstrainedOp::FAdd, BINARY_ROUNDED),
+    constrained("llvm.experimental.constrained.fsub", ConstrainedOp::FSub, BINARY_ROUNDED),
+    constrained("llvm.experimental.constrained.fmul", ConstrainedOp::FMul, BINARY_ROUNDED),
+    constrained("llvm.experimental.constrained.fdiv", ConstrainedOp::FDiv, BINARY_ROUNDED),
+    constrained("llvm.experimental.constrained.rint", ConstrainedOp::Rint, UNARY_ROUNDED),
+    compare_constrained("llvm.experimental.constrained.fcmp", ConstrainedOp::FCmp),
+    compare_constrained("llvm.experimental.constrained.fcmps", ConstrainedOp::FCmps),
+    conversion("llvm.experimental.constrained.fpext", ConstrainedOp::FpExt, [Kind::Float, Kind::Float], FPEXT),
+    conversion("llvm.experimental.constrained.fptrunc", ConstrainedOp::FpTrunc, [Kind::Float, Kind::Float], FPTRUNC),
+    conversion("llvm.experimental.constrained.sitofp", ConstrainedOp::SiToFp, [Kind::Float, Kind::Int], SITOFP),
+    conversion("llvm.experimental.constrained.fptosi", ConstrainedOp::FpToSi, [Kind::Int, Kind::Float], FPTOSI),
 ];
 
 /// Gives a function named `name` its intrinsic's attributes, if it names
@@ -1367,6 +1472,7 @@ impl Intrinsic {
                 },
                 Slot::Int(bits) => types.int_bits(ty) == Some(bits),
                 Slot::Ptr => matches!(types.get(ty), Type::Pointer(0)),
+                Slot::Metadata => matches!(types.get(ty), Type::Metadata),
                 Slot::Void => types.is_void(ty),
             }
         };

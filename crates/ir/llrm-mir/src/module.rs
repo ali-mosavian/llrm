@@ -561,6 +561,12 @@ pub struct Function {
     pub(crate) lineage: Lineage,
     /// The names of the live values and blocks, for `unique_name`.
     pub(crate) names: NameIndex,
+    /// The blocks some `blockaddress` names (`BasicBlock::hasAddressTaken`):
+    /// an `indirectbr` or a table may reach one by an address no edge shows.
+    pub(crate) address_taken: Vec<BlockId>,
+    /// Where the address of a block that was replaced by another now points
+    /// (`BlockAddress::handleOperandChange`): (old, new).
+    pub(crate) address_forward: Vec<(BlockId, BlockId)>,
 }
 
 /// A count per name held by a live value or block, made at the first new name
@@ -627,6 +633,63 @@ impl Function {
             parameter_origins: Vec::new(),
             lineage: Lineage::default(),
             names: NameIndex::default(),
+            address_taken: Vec::new(),
+            address_forward: Vec::new(),
+        }
+    }
+
+    /// `BasicBlock::hasAddressTaken`: a `blockaddress` names `block`, so it
+    /// may be reached from anywhere and its label must stay.
+    #[inline]
+    pub fn has_address_taken(
+        &self,
+        block: BlockId,
+    ) -> bool {
+        !self.address_taken.is_empty() && self.address_taken.contains(&block)
+    }
+
+    /// `isa<IndirectBrInst>(block->getTerminator())`: the edges out of the
+    /// block go by an address, so none of them can be split.
+    #[inline]
+    pub fn ends_in_indirect_branch(
+        &self,
+        block: BlockId,
+    ) -> bool {
+        self.terminator(block).is_some_and(|last| self.instruction(last).opcode == Opcode::IndirectBr)
+    }
+
+    /// Whether any block has its address taken.
+    #[inline]
+    pub fn has_any_address_taken(&self) -> bool {
+        !self.address_taken.is_empty()
+    }
+
+    /// The block `blockaddress(block)` is the address of now: `block` after the
+    /// blocks it was replaced by, or `None` where it was erased with nothing
+    /// to replace it (LLVM's `inttoptr 1`: an address no `indirectbr` lists).
+    pub fn resolve_block_address(
+        &self,
+        block: BlockId,
+    ) -> Option<BlockId> {
+        let mut at = block;
+        // Each forward is recorded once, so a chain is as short as the
+        // forwards.
+        for _ in 0..=self.address_forward.len() {
+            match self.address_forward.iter().find(|(old, _)| *old == at) {
+                Some(&(_, new)) => at = new,
+                None => return self.is_placed(at).then_some(at),
+            }
+        }
+        None
+    }
+
+    /// Records that a `blockaddress` names `block`.
+    pub fn mark_address_taken(
+        &mut self,
+        block: BlockId,
+    ) {
+        if !self.address_taken.contains(&block) {
+            self.address_taken.push(block);
         }
     }
 

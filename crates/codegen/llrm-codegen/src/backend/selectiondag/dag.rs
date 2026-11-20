@@ -887,9 +887,10 @@ impl SelectionDAG {
         }
     }
 
-    /// A node the legalizer replaced, which nothing reads now, is unfiled from the CSE table: a later
-    /// `getNode` of the same operation must make a node, not return the replaced one, which is not
-    /// legalized again (an `extract_element` made twice, the second one never lowered).
+    /// A node the legalizer replaced, which nothing reads now, is unfiled from
+    /// the CSE table: a later `getNode` of the same operation must make a
+    /// node, not return the replaced one, which is not legalized again (an
+    /// `extract_element` made twice, the second one never lowered).
     pub fn forget_replaced(
         &mut self,
         node: u32,
@@ -1866,6 +1867,21 @@ impl SelectionDAG {
         let vt = self.value_type(value);
         let node =
             self.intern(op, &[vt, EVT::OTHER], &[chain, ptr, value], SDNodeFlags::default(), NodeData::Mem(info));
+        self.volatile_accesses.insert(node.node);
+        node
+    }
+
+    /// `getMemIntrinsicNode`: a target node that reads and writes the cell
+    /// `info` describes, ordered on the chain like an atomic
+    /// (`X86ISD::LADD`, `LCMPXCHG_DAG`).
+    pub fn get_mem_intrinsic_node(
+        &mut self,
+        op: ISD,
+        values: &[EVT],
+        ops: &[SDValue],
+        info: MemInfo,
+    ) -> SDValue {
+        let node = self.intern(op, values, ops, SDNodeFlags::default(), NodeData::Mem(info));
         self.volatile_accesses.insert(node.node);
         node
     }
