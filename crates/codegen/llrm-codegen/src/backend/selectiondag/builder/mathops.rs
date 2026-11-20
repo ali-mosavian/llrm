@@ -91,6 +91,18 @@ impl Builder<'_> {
                 let second = self.get_value(instruction.operands[1])?;
                 self.dag.get_node(ISD::FCopySign, dest, &[first, second])
             }
+            // `visitIntrinsicCall`: the test is a target constant; the first
+            // combine expands it where the target's actions are known.
+            Intrinsic::IsFpClass => {
+                let Operand::Constant(id) = instruction.operands[1] else {
+                    return Err(Refused("is.fpclass of a test that is not a constant"));
+                };
+                let llrm_mir::context::ConstantKind::Int(test) = self.module.context.get(id).kind else {
+                    return Err(Refused("is.fpclass of a test that is not an integer"));
+                };
+                let test = self.dag.get_constant_with(test as u128, EVT::I32, true, false);
+                self.dag.get_node(ISD::IsFpClass, dest, &[first, test])
+            }
             Intrinsic::Fixed { divide: false } => {
                 let second = self.get_value(instruction.operands[1])?;
                 let scale = self.get_value(instruction.operands[2])?;

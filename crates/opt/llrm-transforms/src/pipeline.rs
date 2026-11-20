@@ -882,7 +882,10 @@ impl FunctionPass for LoopPassManager {
             if !unit.function.is_placed(header) || !found.is_loop_header(header) {
                 continue;
             }
-            {
+            // LLVM's loop pass manager holds the `Loop`, which keeps its identity
+            // when `LoopRotate` moves its header; the scope follows the header, so
+            // the loop to run again is read from it.
+            let header = {
                 let _scope = crate::loopfilter::only(&[header]);
                 for part in self.passes.iter_mut() {
                     let name = part.name();
@@ -894,7 +897,8 @@ impl FunctionPass for LoopPassManager {
                         analyses.invalidate(unit.function, &preserved);
                     }
                 }
-            }
+                crate::loopfilter::current().first().copied().unwrap_or(header)
+            };
             // The loop itself is popped first, then its siblings in order.
             let (revisit, mut siblings) = crate::loopfilter::take_unswitched();
             siblings.reverse();

@@ -129,6 +129,31 @@ pub(crate) fn relaxed(opcode: &str) -> Option<&'static str> {
     encoding(&wide).map(|(name, ..)| *name)
 }
 
+/// A `bra` to a label the items define starts as the 8-bit branch, which the
+/// layout widens where the displacement needs it, as gas does for a symbol of
+/// its own section (`MCAssembler::relaxInstruction`). `TCRETURNq` expands to
+/// the 16-bit form because the callee may be another object's.
+pub(crate) fn tail_jumps_narrowed(items: &[Item]) -> Vec<Item> {
+    use crate::mc::Operand;
+    let defined: std::collections::HashSet<&str> =
+        items.iter().filter_map(|item| if let Item::Label(name) = item { Some(name.as_str()) } else { None }).collect();
+    items
+        .iter()
+        .map(|item| match item {
+            Item::Inst(inst)
+                if inst.opcode == "BRA16"
+                    && matches!(
+                        &inst.operands[..],
+                        [Operand::Symbol(name, 0)] if defined.contains(name.as_str())
+                    ) =>
+            {
+                Item::Inst(crate::mc::Inst { opcode: "BRA8", operands: inst.operands.clone() })
+            }
+            other => other.clone(),
+        })
+        .collect()
+}
+
 /// The code of `items` placed at `base`, every fixup resolved. A branch whose
 /// 8-bit displacement does not fit, or is 0 (which the 8-bit form reads as
 /// "16 bits follow"), becomes its 16-bit form and the code is laid out again
@@ -141,7 +166,7 @@ pub fn assemble(
     items: &[Item],
     base: u32,
 ) -> Result<Assembled, String> {
-    let mut items = items.to_vec();
+    let mut items = tail_jumps_narrowed(items);
     loop {
         let (assembled, wide) = place(&items, base)?;
         if wide.is_empty() {
