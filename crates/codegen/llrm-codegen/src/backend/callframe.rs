@@ -515,7 +515,10 @@ impl CallFrameOpt {
         true
     }
 
-    /// `MFI.hasVarSizedObjects()`: a `sub sp, reg`, as `framefree` reads it.
+    /// `MFI.hasVarSizedObjects()`: a `sub sp, reg`, as `framefree` reads it, or
+    /// a `mov sp, reg|mem`: an alloca kept to a 16-byte call alignment computes
+    /// the new `sp` in a register (`sub`, `and`) and copies it back, and a
+    /// `stackrestore` loads it.
     fn allocates_dynamically(
         &self,
         body: &LirBody,
@@ -525,12 +528,17 @@ impl CallFrameOpt {
             .flat_map(|block| block.insns.iter())
             .filter_map(|one| one.what.as_ref())
             .any(
-                |what| matches!(what.name.as_deref(), Some("add" | "sub"))
+                |what| (matches!(what.name.as_deref(), Some("add" | "sub"))
                     && matches!(
                         (&what.dests[..], &what.sources[..]),
                         ([Loc::Reg(dest)], [Loc::Reg(source), Loc::Reg(_)])
                             if dest.register == self.stack && source.register == self.stack
-                    ),
+                    ))
+                    || (what.name.as_deref() == Some("mov")
+                        && matches!(
+                            (&what.dests[..], &what.sources[..]),
+                            ([Loc::Reg(dest)], [Loc::Reg(_) | Loc::Mem(_)]) if dest.register == self.stack
+                        )),
             )
     }
 
@@ -1150,6 +1158,20 @@ mod tests {
             insn(0, Operation::Barrier, "call_frame_setup", vec![], vec![imm(4), imm(0), imm(4)], vec![], vec![]);
         let (after, area) = reserve([vec![made, pushed, call(), destroy(4)], plain].concat());
         assert_eq!(after, ["push", "call", "add", "sub", "mov", "call", "add"]);
+        assert_eq!(area, 0);
+    }
+
+    /// An alloca kept to a 16-byte call alignment is `mov r, sp; sub r, n; and
+    /// r, -16; mov sp, r`, no `sub sp, reg`: the frame was reserved, and a
+    /// call's `mov [esp], arg` then overwrote the array it
+    /// sat on (vla_loop_stack_restored m32 reported 90, not 93).
+    #[test]
+    fn an_alloca_that_copies_the_stack_pointer_back_reserves_no_frame() {
+        let sp = || Loc::Reg(Reg { register: RegId::SP, width: 4 });
+        let cx = || Loc::Reg(Reg { register: RegId::CX, width: 4 });
+        let alloca = insn(0, Operation::Move, "mov", vec![sp()], vec![cx()], vec![], vec![]);
+        let (after, area) = reserve(vec![alloca, setup(4), store(0, held(1), vec![1]), call(), destroy(4)]);
+        assert_eq!(after, ["mov", "sub", "mov", "call", "add"]);
         assert_eq!(area, 0);
     }
 
