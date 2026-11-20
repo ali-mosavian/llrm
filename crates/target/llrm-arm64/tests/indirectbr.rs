@@ -51,27 +51,30 @@ two:
     assert_ne!(at[0], at[1]);
 }
 
-/// Early if-conversion folded the block whose address a global holds into its
-/// head: the symbol named a block that was gone ("no block .Lf.1").
+/// Early if-conversion folded the arms of a diamond whose addresses a global
+/// holds into its head: the symbols named blocks that were gone ("no block").
 #[test]
 fn an_address_taken_arm_is_not_if_converted_away() {
     let at = block_symbols(
-        "@keep = global [1 x ptr] [ptr blockaddress(@f, %then)]
-define i32 @f(i32 %x) {
+        "@k = global [2 x ptr] [ptr blockaddress(@f, %one), ptr blockaddress(@f, %two)]
+define i32 @f(i32 %w, i32 %x) {
 entry:
-  %c = icmp sgt i32 %x, 0
-  br i1 %c, label %then, label %join
-then:
-  %y = add i32 %x, 1
+  %c = icmp ne i32 %w, 0
+  br i1 %c, label %one, label %two
+one:
+  %a = add i32 %x, 1
+  br label %join
+two:
+  %b = mul i32 %x, 2
   br label %join
 join:
-  %r = phi i32 [ %y, %then ], [ %x, %entry ]
+  %r = phi i32 [ %a, %one ], [ %b, %two ]
   ret i32 %r
 }
 ",
     )
     .expect("an object");
-    assert_eq!(at.len(), 1, "{at:?}");
+    assert_eq!(at.len(), 2, "{at:?}");
 }
 
 /// A block's address read by a function that comes before the one that holds

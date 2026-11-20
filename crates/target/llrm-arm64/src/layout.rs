@@ -732,12 +732,6 @@ pub fn fold_with_odds(
         }
     }
     forward.remove(&entry);
-    // A block whose address is taken stays where its label is
-    // (`MachineBasicBlock::hasAddressTaken`, which `BranchFolder` and block
-    // placement check): an `indirectbr` reaches it by that address.
-    for label in kept {
-        forward.remove(label);
-    }
     for block in &mut blocks {
         for inst in &mut block.insts {
             retarget(inst, &forward);
@@ -775,13 +769,6 @@ pub fn fold_with_odds(
     let mut seen: HashSet<usize> = HashSet::default();
     let mut pending: Vec<usize> = vec![0];
     seen.insert(0);
-    for label in kept {
-        if let Some(&at) = index.get(label.as_str())
-            && seen.insert(at)
-        {
-            pending.push(at);
-        }
-    }
     while let Some(at) = pending.pop() {
         reachable.push(at);
         for next in successors(at) {
