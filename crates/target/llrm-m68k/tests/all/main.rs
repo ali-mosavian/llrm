@@ -141,6 +141,7 @@ mod indexed;
 mod inline_bar;
 mod inline_call_prices;
 mod inline_constant_division;
+mod inline_dying_credit;
 mod inline_second_round;
 mod inline_threshold;
 mod inst_price;

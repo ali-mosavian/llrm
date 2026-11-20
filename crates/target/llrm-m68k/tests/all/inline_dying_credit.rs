@@ -44,7 +44,7 @@ fn a_callee_of_a_hot_loop_is_still_copied_at_speed() {
 /// loop, stayed a call at -Os (188,470 -> 276,962 clocks for -6 B). A hot site keeps the credit.
 #[test]
 fn a_callee_of_a_hot_loop_is_still_copied_at_size() {
-    let ir = include_str!("ir/hot_callee_at_size.ll");
+    let ir = include_str!("../ir/hot_callee_at_size.ll");
     for cpu in ["68000", "68020"] {
         let asm = assembly(ir, cpu_of(cpu).unwrap(), Level::Os).expect("compiles");
         assert!(!asm.contains("jsr\t(mix"), "{cpu}: the hot callee stayed a call at -Os:\n{asm}");
