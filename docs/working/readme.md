@@ -195,3 +195,59 @@ A change to a pass, analysis, flag, level, tool, target or runtime updates its d
 | [scev-persistent-se](scev-persistent-se.md) | One persistent SE across the loop passes: trip-count computes 7 -> 3, plan, files, risks |
 | [darwin-cause-cards-2026-11-03](darwin-cause-cards-2026-11-03.md) | arm64-macos: cells worse than the best of pin and gcc-13, same-IR check, cause per cell, DOS-flavoured programs (2026-11-03) |
 | [darwin-winners-2026-11-03](darwin-winners-2026-11-03.md) | arm64-macos winner table per level (bytes, clocks) from the 440-row matrix, with the cause card of each cell above best |
+
+## Dated notes
+
+A/B runs, cause cards and plans by target, kept for the numbers they hold.
+
+| Doc | Holds |
+|---|---|
+| [6502-alloca](6502-alloca.md) | 6502-ALLOCA: DynamicStackAlloc at 6502 |
+| [6502-byte-multiplier-ab-2026-11-12](6502-byte-multiplier-ab-2026-11-12.md) | 6502: a product by a byte stops at its last set bit (-O2, 2026-11-12) |
+| [6502-flag-motion-audit-2026-11-13](6502-flag-motion-audit-2026-11-13.md) | 6502 flag motion audit, 2026-11-13 |
+| [6502-float-compare-ab-2026-11-12](6502-float-compare-ab-2026-11-12.md) | 6502 hand-written float compares, A/B (2026-11-12) |
+| [6502-gcc-rejudge](6502-gcc-rejudge.md) | 6502 vs gcc: the re-judge after the flag fix |
+| [6502-held-splat-ab-2026-11-12](6502-held-splat-ab-2026-11-12.md) | 6502: a sign byte that is held is not splatted again (2026-11-12) |
+| [6502-image-bytes](6502-image-bytes.md) | 6502 bytes are linked image bytes, in every column |
+| [6502-lto-order-ab-2026-11-12](6502-lto-order-ab-2026-11-12.md) | 6502: whole program internalizes before the mid-end (2026-11-12) |
+| [6502-narrowiv-os-ab-2026-11-11](6502-narrowiv-os-ab-2026-11-11.md) | 6502 narrowiv at -Os A/B, 2026-11-11 |
+| [6502-narrowiv-speed-ab-2026-11-12](6502-narrowiv-speed-ab-2026-11-12.md) | 6502 narrow counters at speed + LU19/LU22, A/B, 2026-11-12 |
+| [6502-revisit-demanded-ab-2026-11-12](6502-revisit-demanded-ab-2026-11-12.md) | A node simplified by demanded bits is revisited (2026-11-12) |
+| [6502-scaled-counter-ab-2026-11-12](6502-scaled-counter-ab-2026-11-12.md) | 6502: a constant multiple of a narrow counter steps (LU19, 2026-11-12) |
+| [6502-sign-splat-ab-2026-11-12](6502-sign-splat-ab-2026-11-12.md) | 6502: a word shifted right by 15 splats its sign once (2026-11-12) |
+| [6502-sink-save-bracket-ab-2026-11-12](6502-sink-save-bracket-ab-2026-11-12.md) | 6502: a literal stored while a is live is stored where a is dead (2026-11-12) |
+| [6502-varargs](6502-varargs.md) | 6502-VARARGS: va_start/va_arg/va_end/va_copy at 6502 |
+| [6502-whole-program-ab-2026-11-11](6502-whole-program-ab-2026-11-11.md) | 6502 -fwhole-program A/B, 2026-11-11 |
+| [6502-widening-multiply-ab-2026-11-12](6502-widening-multiply-ab-2026-11-12.md) | 6502: a product of two words is one 16 x 16 -> 32 multiply (-O2/-O3, 2026-11-12) |
+| [arm64-ldn-stn-rows](arm64-ldn-stn-rows.md) | arm64 ld2/st2/st4 selection (S4): what is left |
+| [arm64-vectorization-poc](arm64-vectorization-poc.md) | arm64 vectorization POC: card (2026-11-10, branch alim/arm64-vec-poc, local, no merge) |
+| [codegen-slot-table](codegen-slot-table.md) | Codegen slot table: pin pass, state, ours, why |
+| [external-comparator-traps](external-comparator-traps.md) | External columns that are not comparisons |
+| [looprotate-analyses-plan](looprotate-analyses-plan.md) | LoopRotate keeps its analyses: port plan |
+| [m16-open-rows](m16-open-rows.md) | m16 open rows vs the best external (2026-11-08) |
+| [m32-io-clocks](m32-io-clocks.md) | m32 file programs: clocks against main and gcc/clang |
+| [m68k-alloca](m68k-alloca.md) | M68K-ALLOCA: DynamicStackAlloc at m68k |
+| [m68k-bitcount-cells](m68k-bitcount-cells.md) | M68K-BITCOUNT: whole-program bytes against the gcc-style call form (68020) |
+| [m68k-clocks-table](m68k-clocks-table.md) | m68k executed clocks and bytes: ours against the best of gcc and clang (2026-11-11 00:20Z, m68k-b) |
+| [m68k-compile-failures](m68k-compile-failures.md) | M68K-CS: valid programs the m68k selector refused (2026-11-09) |
+| [m68k-float-in-memory-loop](m68k-float-in-memory-loop.md) | m68k float_in_memory_loop (2026-11-11) |
+| [m68k-inline-sieve-card-2026-11-12](m68k-inline-sieve-card-2026-11-12.md) | m68k sieve -O2: why the inline trial cannot see its loss (2026-11-12) |
+| [m68k-known-wrong-align](m68k-known-wrong-align.md) | M68K-KNOWN-WRONG-ALIGN: an over-aligned local is silently misaligned |
+| [m68k-medium-pin-pc16](m68k-medium-pin-pc16.md) | The pin's medium model at the 68020 cannot link past 32 KiB (2026-11-09) |
+| [m68k-mul-price-worse-cells](m68k-mul-price-worse-cells.md) | 8532 priced multiply decomposition: the cells worse than base |
+| [m68k-stack-align-row](m68k-stack-align-row.md) | M68K-STACK-ALIGN: the frame rounds to 4, not the pin's 8 |
+| [m68k-va-double-row](m68k-va-double-row.md) | M68K-VA-DOUBLE: a variadic double after an odd-size named argument |
+| [m68k-worse-families](m68k-worse-families.md) | m68k: the 478 clock-worse cells by family (2026-11-11 01:25Z, m68k-b) |
+| [nib-twin-template](nib-twin-template.md) | Nib reference twins |
+| [snapshot-resume-trials](snapshot-resume-trials.md) | Snapshot-resume for trial passes (design note, 2026-11-11) |
+| [spill-zext-ab-2026-11-12](spill-zext-ab-2026-11-12.md) | SPILL-ZEXT A/B, 2026-11-12 |
+| [wsz-cause-cards-2026-11-11](wsz-cause-cards-2026-11-11.md) | wasm32 cause cards WSZ-6..31 (llrm-wasm-b, 2026-11-11) |
+| [z80-alloca](z80-alloca.md) | Z80-ALLOCA: DynamicStackAlloc at z80 |
+| [z80-carry-ops-ab-2026-11-10](z80-carry-ops-ab-2026-11-10.md) | z80 carry ops: sweep against the release/next tip (2026-11-10) |
+| [z80-commute-ab-2026-11-09](z80-commute-ab-2026-11-09.md) | z80 commute A/B, 2026-11-09 |
+| [z80-fshr1-ab-2026-11-11](z80-fshr1-ab-2026-11-11.md) | z80 FSHR1: a long shifted right by one, A/B (2026-11-11) |
+| [z80-long-order-ab-2026-11-10](z80-long-order-ab-2026-11-10.md) | z80 long argument/result order: A/B (2026-11-10) |
+| [z80-routine-pricing-card-2026-11-11](z80-routine-pricing-card-2026-11-11.md) | z80 module-level routine pricing: design card, 2026-11-11 |
+| [z80-shl32-ab-2026-11-11](z80-shl32-ab-2026-11-11.md) | z80 SHL32 over any two pairs: A/B (2026-11-11) |
+| [z80-sp-frame-ab-2026-11-12](z80-sp-frame-ab-2026-11-12.md) | z80 SP-addressed frames: A/B (2026-11-12) |
+| [z80-wshift-ab-2026-11-12](z80-wshift-ab-2026-11-12.md) | z80 WSHIFT: a variable i64 shift as an in-place loop, A/B (2026-11-12) |
