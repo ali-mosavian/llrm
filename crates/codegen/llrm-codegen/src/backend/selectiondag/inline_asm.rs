@@ -12,8 +12,8 @@
 //! 2. `TargetExternalSymbol(name)`;
 //! 3. one `TargetGlobalAddress` per fixup, in `fixups` order;
 //! 4. one `Register` per input, in `inputs` order;
-//! 4a. the value an `st0` input takes, after them (the emitter stores it to the
-//!     x87 stack's top before the block);
+//! 4a. the values the `st0` and `st1` inputs take, `st0`'s first, after them
+//!     (the emitter pushes them on the x87 stack before the block);
 //! 5. the glue of the last input copy, when there is an input.
 //!
 //! Results: the chain and the glue.
