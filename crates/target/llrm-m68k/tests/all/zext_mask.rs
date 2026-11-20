@@ -8,7 +8,7 @@ use std::process::Command;
 
 use llrm_m68k::driver::{Level, assembly, cpu_of};
 
-mod support;
+use crate::support;
 
 const WORD_MASKS: [u32; 6] = [63, 127, 255, 1000, 0x7FFF, 0xFFFE];
 const BYTE_MASKS: [u32; 4] = [7, 0x3F, 0x80, 0xFE];

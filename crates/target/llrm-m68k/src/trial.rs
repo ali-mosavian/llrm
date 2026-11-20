@@ -338,6 +338,26 @@ pub fn calls_mulsi3(functions: &[(String, Vec<Item>)]) -> bool {
     })
 }
 
+/// DEVIATE OS-OUTLINE-TRIAL: whether `with` has fewer bytes than `without` (a function a compile does not define is
+/// 0), the `__mulsi3` routine counted once where only one side links it, as in [`keeps_within_headroom`].
+pub fn keeps_fewer_bytes(
+    with: &[(String, Vec<Item>)],
+    without: &[(String, Vec<Item>)],
+    rest_calls_mulsi3: impl FnOnce() -> bool,
+    cpu: Cpu,
+) -> bool {
+    let (Some((with_bytes, _)), Some((bytes, _))) = (price_of_functions(with, cpu), price_of_functions(without, cpu)) else {
+        return false;
+    };
+    let (links_with, links_without) = (calls_mulsi3(with), calls_mulsi3(without));
+    let routine = if links_with != links_without && !rest_calls_mulsi3() { crate::routine::mulsi3_bytes(cpu) } else { 0 };
+    let (with_bytes, bytes) = if links_with { (with_bytes + routine, bytes) } else { (with_bytes, bytes + routine) };
+    if llrm_support::debug::enabled("trial") {
+        eprintln!("trial fewer bytes: with {with_bytes} B, without {bytes} B");
+    }
+    with_bytes < bytes
+}
+
 /// The bytes `with` may have in [`keeps_within_headroom`], in percent of `without`'s.
 pub const HEADROOM_PERCENT: usize = 150;
 
