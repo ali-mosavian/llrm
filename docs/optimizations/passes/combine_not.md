@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_not.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_not.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_not.rs sha256:8cacd5243b67155523f8aeaf8b7e792bb9c88fefb6614304d2e307612126258b -->
+<!-- src: crates/opt/llrm-transforms/src/combine_not.rs sha256:bda2d10949698cd3d3446c8f75c560f4da30410c128647c198f5322ac21cb132 -->
 
 # combine_not
 
@@ -29,4 +29,4 @@ after its definition).
 ```
 
 ## Used by
-Named by `combine_xor`.
+Named by `combine_and`, `combine_or`, `combine_visit_select`, `combine_xor`.
