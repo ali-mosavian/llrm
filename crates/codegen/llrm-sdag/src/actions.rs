@@ -998,8 +998,8 @@ impl TargetLowering {
         // `movd`.
         t.set_ops(&[ISD::ScalarToVector], &[MVT::V16I8, MVT::V8I16], Action::Custom);
         // `LowerMUL`: `v4i32` without `pmulld` is `pmuludq` on the even and the
-        // odd lanes.
-        t.set_ops(&[ISD::Mul], &[MVT::V4I32, MVT::V16I8], Action::Custom);
+        // odd lanes, `v2i64` three of them with shifts.
+        t.set_ops(&[ISD::Mul], &[MVT::V4I32, MVT::V16I8, MVT::V2I64], Action::Custom);
         // `LowerShift`: a shift by a constant splat is `VSHLI`/`VSRLI`/`VSRAI`;
         // `psraq` is AVX-512, so a 64-bit arithmetic shift is left to the
         // expansion.

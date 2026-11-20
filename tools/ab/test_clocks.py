@@ -48,13 +48,13 @@ def test_a_tie_that_moves_by_noise_is_neither_gained_nor_lost():
     """switch_header_marker_loop read 2441 then 2423 against a best of 2426 on one compiler: a counted cell lost and regained."""
     base = {"tie": cell(2441, 2422, 2427), "flat": cell(1000, 1000, 1010)}
     new = {"tie": cell(2423, 2426, 2427), "flat": cell(1004, 1000, 1010)}
-    assert clocks.verdicts(base, new) == {"gained": [], "lost": [], "moved": []}
+    assert clocks.verdicts(base, new) == {"gained": [], "lost": [], "moved": [], "failed": []}
 
 
 def test_a_move_of_more_than_one_percent_across_the_bar_is_gained_or_lost():
     base = {"win": cell(1000, 950, 980), "regress": cell(900, 950, 980)}
     new = {"win": cell(900, 950, 980), "regress": cell(1000, 950, 980)}
-    assert clocks.verdicts(base, new) == {"gained": ["win"], "lost": ["regress"], "moved": ["regress", "win"]}
+    assert clocks.verdicts(base, new) == {"gained": ["win"], "lost": ["regress"], "moved": ["regress", "win"], "failed": []}
 
 
 def test_a_cell_that_falls_with_both_bar_columns_is_not_lost():
@@ -62,13 +62,13 @@ def test_a_cell_that_falls_with_both_bar_columns_is_not_lost():
     It read as a counted cell lost, on drift of the instrument and no code change."""
     base = {"merge_icmps_fields": cell(2680, 2708, 2697)}
     new = {"merge_icmps_fields": cell(2579, 2607, 2569)}
-    assert clocks.verdicts(base, new) == {"gained": [], "lost": [], "moved": []}
+    assert clocks.verdicts(base, new) == {"gained": [], "lost": [], "moved": [], "failed": []}
 
 
 def test_a_move_larger_than_the_drift_still_counts():
     base = {"win": cell(1000, 950, 980)}
     new = {"win": cell(850, 960, 990)}
-    assert clocks.verdicts(base, new) == {"gained": ["win"], "lost": [], "moved": ["win"]}
+    assert clocks.verdicts(base, new) == {"gained": ["win"], "lost": [], "moved": ["win"], "failed": []}
 
 
 def test_a_program_with_an_lp64_expectation_is_checked_against_it():
@@ -124,3 +124,11 @@ def test_every_column_has_the_same_unwind_tables():
     lines = clocks.compile_lines("/dist", FLAGGED, "O2")
     for column in ("gcc", "clang"):
         assert "-fno-asynchronous-unwind-tables" not in lines[column], column
+
+
+def test_a_program_ours_no_longer_builds_is_failed_not_unchanged():
+    """The v2i64 multiply row made llc refuse scroll, quicksort and dot (CannotSelect): their `ours` count read None, the
+    verdicts skipped them and the A/B said "no loss" while dot lost 97% once it built."""
+    cell = lambda ours: {"ours": {"instr": ours}, "gcc": {"instr": 100}, "clang": {"instr": 100}}
+    base, new = {"a": cell(100), "b": cell(100)}, {"a": cell(None), "b": cell(100)}
+    assert clocks.verdicts(base, new)["failed"] == ["a"]

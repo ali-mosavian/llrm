@@ -108,6 +108,21 @@ fn visit_trunc_computes_in_the_narrow_type() {
     );
 }
 
+/// A vector truncate reached no visitor (DEVIATE COMBINE-VEC skipped casts), so
+/// `narrowBinOp` never ran on the loop vectorizer's `trunc (add <8 x i64> X, C)
+/// to <8 x i16>`: bench tile's fill kept `paddq` and the shuffles.
+#[test]
+fn visit_trunc_of_a_vector_binop_with_a_constant_is_narrow() {
+    check(
+        "trunc",
+        "<8 x i16>",
+        "<8 x i64> %x",
+        "  %s = add <8 x i64> %x, <i64 0, i64 3, i64 6, i64 9, i64 12, i64 15, i64 18, i64 21>\n  %r = trunc <8 x i64> %s to <8 x i16>\n  ret <8 x i16> %r\n",
+        &["add <8 x i16>"],
+        &["add <8 x i64>"],
+    );
+}
+
 #[test]
 fn visit_zext_of_a_trunc_is_a_mask() {
     check(

@@ -600,8 +600,10 @@ pub fn visit(
     // DEVIATE COMBINE-VEC (owner w11, exit 2026-11-24): the arithmetic visitors
     // read integer widths, so an operation on vectors, which the loop
     // vectorizer makes, only simplifies (`add zeroinitializer, x` is `x`); the
-    // visitors are enabled by operation, each with its own identity sweep.
+    // visitors are enabled by operation, each with its own identity sweep (a
+    // truncate gets `narrowBinOp` only).
     let operation = c.function.instruction(inst).opcode.clone();
+    let truncates = matches!(operation, Opcode::Cast(CastOp::Trunc));
     let skips_visitors = match operation {
         Opcode::Binary(op) => !vector_visited(op),
         Opcode::Cast(_) => true,
@@ -617,6 +619,10 @@ pub fn visit(
             && found != Operand::Value(result)
         {
             return Visit::Replace(found);
+        }
+        // `narrowBinOp` of a vector truncate (`visit_trunc` gates the rest).
+        if truncates {
+            return visit_trunc(c, inst);
         }
         return Visit::None;
     }

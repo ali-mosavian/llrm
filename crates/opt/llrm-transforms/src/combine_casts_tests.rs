@@ -163,6 +163,19 @@ fn a_truncated_binop_with_a_constant_or_an_extension_is_narrow() {
     );
 }
 
+/// `narrowBinOp` of a vector: `trunc (add X, C)` of `<8 x i64>` is an `<8 x
+/// i16>` add (`opt` agrees). bench tile's 64-wide fill kept its `paddq` and
+/// `trunc` chain, 13,000 instructions over clang's `paddw`.
+#[test]
+fn a_truncated_vector_binop_with_a_constant_is_narrow() {
+    check(
+        "<8 x i16>",
+        "<8 x i64> %x",
+        "  %s = add <8 x i64> %x, <i64 0, i64 3, i64 6, i64 9, i64 12, i64 15, i64 18, i64 21>\n  %r = trunc <8 x i64> %s to <8 x i16>\n  ret <8 x i16> %r\n",
+        "  %0 = trunc <8 x i64> %x to <8 x i16>\n  %1 = add <8 x i16> %0, <i16 0, i16 3, i16 6, i16 9, i16 12, i16 15, i16 18, i16 21>\n  ret <8 x i16> %1\n",
+    );
+}
+
 /// `narrowBinOp`: `trunc (lshr (trunc A), C)` shifts A itself (`opt` agrees).
 #[test]
 fn a_truncated_shift_of_a_truncate_shifts_the_source() {
