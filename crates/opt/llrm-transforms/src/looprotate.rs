@@ -427,6 +427,9 @@ fn simplify_loop_latch(
     lp: Loop,
 ) -> Option<BlockId> {
     let latch = lp.get_loop_latch(run.function)?;
+    if run.function.has_address_taken(latch) {
+        return None;
+    }
     let jump = run.function.terminator(latch)?;
     let operation = run.function.instruction(jump);
     if operation.opcode != Opcode::Br || operation.operands.len() != 1 {

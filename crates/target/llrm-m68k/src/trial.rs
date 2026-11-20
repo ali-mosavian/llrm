@@ -425,6 +425,7 @@ mod pays_tests {
     fn growth_must_be_paid_for_by_as_large_a_share_of_clocks() {
         assert!(pays((302, 820), (236, 1556)), "u64_shift_select_arms: +28 % bytes for -47 % clocks");
         assert!(pays((520, 4092), (512, 4440)), "copy_runs: +1.6 % for -8 %");
+        assert!(!pays((302, 820), (228, 1540)), "u64_shift_select_arms with the volatile loads fused (#10057): +32 % for -10 % real clocks (8590 -> 7704 qemu), 228 B against gcc's 354 with its library");
         assert!(!pays((346, 9092), (242, 10130)), "loop_versioning: +43 % for -10 %");
         assert!(!pays((358, 52284), (290, 55054)), "loop_interchange: +23 % for -5 %");
         assert!(!pays((174, 1414), (100, 1606)), "stack_arrays_copy with __mulsi3: +74 % for -12 %");

@@ -3299,3 +3299,39 @@ fn a_module_takes_the_speed_divide_where_the_clocks_it_saves_are_its_own() {
     let text = assembly(&beside, &Request::new(Level::Os)).unwrap();
     assert!(text.contains("__umodsi3\n") && !text.contains("_fast"), "{text}");
 }
+
+/// Bytes first at -Os: the pin admits the full unroll of a four-trip loop where
+/// the unrolled cost after folding (7) is under the loop's size plus one (10),
+/// a count of IR instructions that gives the loop's counter and exit test to
+/// the copies. `sum4` unrolled is 20 B and the loop 18 B, so `-Os` was 2 B
+/// larger than `-O2`, which keeps the loop (#9928). The unroll is priced on the
+/// backend's bytes at -Os as at -O2.
+#[test]
+fn a_four_trip_loop_is_no_larger_at_os_than_at_o2() {
+    let ir = module(
+        r#"@buf = global [4 x i8] [i8 1, i8 2, i8 3, i8 4]
+define i8 @sum4() {
+entry:
+  br label %loop
+loop:
+  %i = phi i16 [ 0, %entry ], [ %next, %loop ]
+  %s = phi i8 [ 0, %entry ], [ %sum, %loop ]
+  %p = getelementptr inbounds i8, ptr @buf, i16 %i
+  %v = load volatile i8, ptr %p
+  %sum = add i8 %s, %v
+  %next = add nuw nsw i16 %i, 1
+  %done = icmp eq i16 %next, 4
+  br i1 %done, label %out, label %loop
+out:
+  ret i8 %sum
+}"#,
+    );
+    let bytes = |level| {
+        let request = Request::new(level);
+        let text = assembly(&ir, &request).unwrap_or_else(|e| panic!("{e}"));
+        (llrm_6502::timing::estimate(request.cpu, &text).unwrap().bytes, text)
+    };
+    let ((o2, _), (os, text)) = (bytes(Level::O2), bytes(Level::Os));
+    assert!(os <= o2, "-Os is {os} B, -O2 {o2} B:\n{text}");
+    assert_eq!(exit_code_of(&text, "sum4"), 10, "{text}");
+}

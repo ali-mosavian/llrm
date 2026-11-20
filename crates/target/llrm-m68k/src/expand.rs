@@ -465,15 +465,6 @@ pub fn finish_with(
     pushes: Option<crate::timing::Price>,
 ) -> Result<Vec<Line>, String> {
     EXPANSIONS.with(|count| count.set(count.get() + 1));
-    if let Some(folded) = crate::frameindexed::fold(function, assignment, slots, short) {
-        // the fold proved its range for the stack depth it could foresee; call
-        // cleanups left owed grow the depth, which only emission knows:
-        // a function that overflows keeps its `lea`s
-        match finish_with(&folded, assignment, number, slots, cpu, push_frame, short, pushes) {
-            Err(why) if why == crate::frameindexed::OUT_OF_RANGE => {}
-            done => return done,
-        }
-    }
     let kept: Vec<(usize, &crate::mfunc::Inst)> = function
         .blocks
         .iter()
@@ -499,6 +490,7 @@ pub fn finish_with(
     let call_area = |kept_sequences: &dyn Fn(usize) -> bool| call_area(&insts, kept_sequences);
     let frame_of = |max_call_frame: i64| inputs.layout(max_call_frame);
     let wants_size = pushes == Some(crate::timing::Price::Size);
+    let allowed = pushes;
     let pushes = match pushes {
         Some(price) => crate::callpush::plan(&insts, &blocks, assignment, cpu, price, short, |max_call_frame| {
             let (opening, closing) = frame_ops(&frame_of(max_call_frame), cpu, push_frame, short, wants_size)?;
@@ -506,7 +498,19 @@ pub fn finish_with(
         })?,
         None => crate::callpush::Plan::default(),
     };
-    let layout = frame_of(call_area(&|at| pushes.keeps_frame(at)));
+    let kept_area = call_area(&|at| pushes.keeps_frame(at));
+    // the fold sees the frame this emission lays out: the arguments `pushes`
+    // pushes are not in it
+    if let Some(folded) = crate::frameindexed::fold(function, assignment, slots, short, kept_area) {
+        // the fold proved its range for the stack depth it could foresee; call
+        // cleanups left owed grow the depth, which only emission knows:
+        // a function that overflows keeps its `lea`s
+        match finish_with(&folded, assignment, number, slots, cpu, push_frame, short, allowed) {
+            Err(why) if why == crate::frameindexed::OUT_OF_RANGE => {}
+            done => return done,
+        }
+    }
+    let layout = frame_of(kept_area);
     let mut out = Vec::new();
     let (opening, closing) = frame_ops(&layout, cpu, push_frame, short, wants_size)?;
     opening.iter().for_each(|op| frame_op(op, &mut out, short));

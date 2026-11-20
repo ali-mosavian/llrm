@@ -308,6 +308,29 @@ fn only_a_shared_exit_is_split() {
     assert_eq!(a.function.predecessors(exit).len(), 1);
 }
 
+/// Before: an exit that an `indirectbr` of the loop reaches got a block of its
+/// own, rewriting the branch's destination (LoopUtils.cpp:76).
+#[test]
+fn an_exit_an_indirectbr_of_the_loop_reaches_is_not_split() {
+    let mut a = analysed(
+        "define void @f(ptr %p, i64 %n) {
+entry:
+  %g = icmp sgt i64 %n, 0
+  br i1 %g, label %loop, label %exit
+loop:
+  %i = phi i64 [ 0, %entry ], [ %i.next, %loop ]
+  %i.next = add nuw nsw i64 %i, 1
+  indirectbr ptr %p, [label %loop, label %exit]
+exit:
+  ret void
+}
+",
+    );
+    let blocks: Vec<_> = a.loops.get_loop_for(a.header).expect("the loop").get_blocks().to_vec();
+    assert!(!form_dedicated_exit_blocks(&mut a.function, &blocks));
+    assert_eq!(a.function.predecessors(a.block("exit")).len(), 2);
+}
+
 /// Equal scope lists are one node, found among the module's too.
 #[test]
 fn a_tuple_is_made_once() {

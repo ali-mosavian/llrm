@@ -94,6 +94,46 @@ fn constructs_outside_the_subset_are_refused() {
     assert_eq!(refusal("target triple = \"i386\"\n"), "line 1: `triple` is outside MIR's subset of LLVM");
 }
 
+/// Before: `blockaddress` and `indirectbr` were refused at the parser
+/// ("`blockaddress` is outside MIR's subset"), so a computed goto compiled on
+/// no target.
+#[test]
+fn a_computed_goto_round_trips_through_text() {
+    let text = "define i16 @f(i16 %0) {\n  %2 = icmp eq i16 %0, 0\n  %3 = select i1 %2, ptr blockaddress(@f, %one), ptr blockaddress(@f, %two)\n  indirectbr ptr %3, [label %one, label %two]\n\none:\n  ret i16 1\n\ntwo:\n  ret i16 2\n}\n";
+    assert_eq!(round(text), text);
+}
+
+/// A dispatch table of label addresses (`static void *t[] = {&&a, &&b}`) names
+/// a function read after it: the labels' ids must survive until the body.
+#[test]
+fn a_block_address_in_a_table_before_its_function_round_trips() {
+    let text = "@t = internal constant [2 x ptr] [ptr blockaddress(@f, %a), ptr blockaddress(@f, %b)]\n\ndefine void @f(i16 %0) {\n  %2 = getelementptr [2 x ptr], ptr @t, i16 0, i16 %0\n  %3 = load ptr, ptr %2\n  indirectbr ptr %3, [label %a, label %b]\n\na:\n  ret void\n\nb:\n  ret void\n}\n";
+    let module = parse::module(text).unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(crate::verify::verify(&module), Vec::<String>::new());
+    assert_eq!(print::module(&module), text);
+}
+
+/// A block replaced by another (`replaceAllUsesWith`) takes its address along;
+/// one erased with nothing to replace it has none (LLVM's `inttoptr 1`).
+#[test]
+fn a_block_address_follows_the_block_that_replaced_it() {
+    let text = "@t = internal constant [1 x ptr] [ptr blockaddress(@f, %e)]\n\ndefine void @f(ptr %0) {\n  indirectbr ptr %0, [label %e]\n\ne:\n  br label %s\n\ns:\n  ret void\n}\n";
+    let mut module = parse::module(text).expect("parses");
+    let (_, function) = module.function_mut("f").expect("@f");
+    let layout = function.layout().to_vec();
+    let (e, s) = (layout[1], layout[2]);
+    assert!(function.has_address_taken(e) && !function.has_address_taken(s));
+    assert_eq!(function.resolve_block_address(e), Some(e));
+    function.replace_block_uses_with(e, s);
+    assert_eq!(function.resolve_block_address(e), Some(s), "the address is now the replacement's");
+    assert!(function.has_address_taken(s));
+    let (_, function) = module.function_mut("f").expect("@f");
+    let jump = function.terminator(e).expect("a terminator");
+    function.erase(jump).expect("a jump");
+    function.erase_block(e).expect("an emptied block");
+    assert_eq!(function.resolve_block_address(e), Some(s));
+}
+
 #[test]
 fn attribute_groups_may_follow_their_use() {
     let text = "declare void @stop(i16) #0\n\nattributes #0 = { noreturn memory(argmem: read) \"kind\"=\"error\" }\n";

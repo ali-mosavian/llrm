@@ -14,6 +14,7 @@ pub mod chain;
 pub mod classcheck;
 pub mod classsplit;
 pub mod cmpcarry;
+pub mod ccrcopy;
 pub mod cmpdup;
 pub mod cmpelim;
 pub mod cmpshift;

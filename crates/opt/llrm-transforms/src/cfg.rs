@@ -151,7 +151,8 @@ pub(crate) fn emptied_into(
     entry: llrm_mir::module::BlockId,
 ) -> Option<llrm_mir::module::BlockId> {
     let target = function.sole_successor(first)?;
-    if target == entry || target == first {
+    // A block whose address is taken keeps its label (BasicBlockUtils.cpp:242).
+    if target == entry || target == first || function.has_address_taken(target) {
         return None;
     }
     // Only `first` names it: the first other terminator found ends the look,
@@ -214,6 +215,10 @@ pub fn merge_block_into_predecessor(
     bb: BlockId,
     with_two_successors: bool,
 ) -> bool {
+    // An address-taken block keeps its label (BasicBlockUtils.cpp:242).
+    if function.has_address_taken(bb) {
+        return false;
+    }
     // Can't merge if there are multiple predecessors, or no predecessors.
     let predecessors = function.predecessors(bb);
     let [pred] = predecessors[..] else { return false };
