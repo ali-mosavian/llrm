@@ -89,7 +89,7 @@ pub fn bytes(cpu: Cpu) -> OperationCosts {
 
 /// The code bytes of the routine `name` of `runtime/mos_rt.s`, from its label
 /// to its `rts`.
-fn member_bytes(name: &str) -> i64 {
+pub fn member_bytes(name: &str) -> i64 {
     const RUNTIME: &str = include_str!("../runtime/mos_rt.s");
     let label = format!("\n{name}:\n");
     let from = RUNTIME.find(&label).expect("the runtime has the routine") + 1;

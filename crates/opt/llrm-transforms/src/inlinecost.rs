@@ -76,12 +76,12 @@
 //!   local callee, which goes with it, is the pin's. No shape of callee but the
 //!   loop and the one smaller than its call is tested. A target may say the
 //!   guard stands down for an `inlinehint` callee at an `optsize` caller
-//!   (`Tti::opt_size_inline_guard_yields_to_inlinehint`, arm64: yes): the pin's
-//!   `updateThreshold` raises the threshold to `InlineHintThreshold` (325)
-//!   there, and its cost under that is the verdict (QuickrBasic operands.c -Os
-//!   `hot_operand` into `hot_int`, 26 units against two 3-unit calls: 15,344 ->
-//!   10,400 B, the pin's 9,464). The guard still holds for a callee with no
-//!   hint.
+//!   (`Tti::opt_size_inline_guard_yields_to_inlinehint`, arm64 and x86-m32: yes): the
+//!   pin's `updateThreshold` raises the threshold to `InlineHintThreshold`
+//!   (325) there, and its cost under that is the verdict (QuickrBasic
+//!   operands.c -Os `hot_operand` into `hot_int`, 26 units against two 3-unit
+//!   calls: 15,344 -> 10,400 B, the pin's 9,464). The guard still holds for a
+//!   callee with no hint.
 //! - SZ1-SITE (owner m68k-b, exit 2026-11-24): the size rule (D11) prices a
 //!   callee's instruction with the call site's constant arguments, not only a
 //!   GEP as `isGEPFree` does (z80 `rotate_small` -O1 922 -> 576 B).

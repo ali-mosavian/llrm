@@ -288,7 +288,7 @@ pub fn with_fast_division<R>(
 
 /// `f` with the shared callee-save helpers allowed or not. A function that
 /// keeps `n >= 3` callee-saved cells saves `6n - 9` bytes with them , but the
-/// runtime that holds them is [`SAVE_HELPERS_BYTES`] a module: only a module
+/// runtime that holds them is [`save_helpers_bytes`] a module: only a module
 /// whose users together save more than that should link it
 /// (`select::module_text`).
 pub fn with_shared_saves<R>(
@@ -301,8 +301,16 @@ pub fn with_shared_saves<R>(
     result
 }
 
-/// The bytes `__csave` and `__crest` take once linked.
-pub const SAVE_HELPERS_BYTES: i64 = 34;
+/// The bytes the callee-save helpers the `texts` call take once linked: each
+/// routine of `runtime/mos_rt.s` they reach, once.
+pub fn save_helpers_bytes<'a>(texts: impl IntoIterator<Item = &'a str>) -> i64 {
+    let texts: Vec<&str> = texts.into_iter().collect();
+    ["jsr __csave", "jsr __csave_ax", "jmp __crest", "jmp __crest_ax"]
+        .into_iter()
+        .filter(|call| texts.iter().any(|text| text.lines().any(|line| line.trim() == *call)))
+        .map(|call| crate::opcosts::member_bytes(call.split_once(' ').map_or(call, |(_, name)| name)))
+        .sum()
+}
 
 /// What a function that keeps `n` callee-saved cells and returns from one place
 /// saves by calling the helpers: six bytes a cell inline, and two for the
@@ -4885,8 +4893,8 @@ fn emit_with<const STACK: bool>(
                     }
                 }
                 (Kind::Op("CSAVE"), _) => {
-                    if after[b][i].contains(&reg::Y) || after[b][i].contains(&reg::X) || a_live {
-                        // `__csave` changes a, x and y: the same bytes pushed
+                    if after[b][i].contains(&reg::Y) {
+                        // `y` is the count the helper takes: the same bytes pushed
                         // one at a time, the argument
                         // in `a` waiting in an index register nothing holds,
                         // with all three live in a cell nothing holds
@@ -4912,6 +4920,9 @@ fn emit_with<const STACK: bool>(
                                 (None, None) => {}
                             }
                         }
+                    } else if after[b][i].contains(&reg::X) || a_live {
+                        // a value in `a` or `x` (a word argument): the helper that keeps them
+                        writeln!(out, "  ldy #{}\n  jsr __csave_ax", regs.len()).unwrap();
                     } else {
                         writeln!(out, "  ldy #{}\n  jsr __csave", regs.len()).unwrap();
                     }
@@ -4924,6 +4935,11 @@ fn emit_with<const STACK: bool>(
                         out.push_str("  tay\n");
                     }
                     writeln!(out, "  ldx #{}\n  jmp __crest", regs.len()).unwrap();
+                    repeated = 1;
+                }
+                // a word result in `a` and `x`, `y` free: the helper that keeps them
+                (Kind::Op("CREST"), _) if !after[b][i].contains(&reg::Y) => {
+                    writeln!(out, "  ldy #{}\n  jmp __crest_ax", regs.len()).unwrap();
                     repeated = 1;
                 }
                 (Kind::Op("CREST"), _) => {
