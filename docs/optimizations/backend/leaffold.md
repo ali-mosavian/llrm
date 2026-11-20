@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/leaffold.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/leaffold.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/leaffold.rs sha256:04158f6228f930ecc55cf5ad4654f67f73f5b3f64082293593e661228a2fc721 -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/leaffold.rs sha256:2a61e286d15ff87dff4e15abd01f0ea9982ba09b11293ed89e8279e7ab235618 -->
 
 # leaffold
 
@@ -33,3 +33,13 @@ registers after it, so a module it folded is assembled again without it
 
 ## Runs
 Phase 1 of the machine phases, after `SharedConstants`, before `SsaSpill`.
+
+## Example
+At -Os on a target that enables it, a leaf block holding only a constant and a
+jump is removed and the constant is made in the block that branched to it.
+
+```text
+p:  cmp x, 7 ; je l    l: v := mov 3 ; jmp j   j: r = phi [l: v]
+  becomes
+p:  v := mov 3 ; cmp x, 7 ; je j               j: r = phi [p: v]
+```

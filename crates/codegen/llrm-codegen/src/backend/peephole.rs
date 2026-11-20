@@ -1668,6 +1668,7 @@ fn shape<H: std::hash::Hasher>(
     what.target.is_some().hash(into);
     what.indirect.hash(into);
     what.repeat.hash(into);
+    what.lock.hash(into);
     for list in [&what.dests, &what.sources] {
         list.len().hash(into);
         for place in list {

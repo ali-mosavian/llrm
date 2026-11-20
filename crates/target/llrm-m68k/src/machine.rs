@@ -421,6 +421,18 @@ impl Tti for M68k {
         (Some(32), Some(400))
     }
 
+    /// DEVIATE UNROLL-BAR-68000 (owner wasm-3, exit 2026-11-26): the 68000 at
+    /// -O2/-O3 takes 400, over the pin's -O3 bar (300). It has no cache and
+    /// bytes are free at speed (ruling 2026-11-14). Over the 68 programs whose
+    /// code moves between 32 and 600 (68000 -O2/-O3 clocks): 400 runs 37 cells
+    /// faster and none slower (+118 KB of code; 500 and 600 slow shellsort
+    /// 8% and 4%); the card's at-or-below 55 -> 56. The 68020 keeps 32: its
+    /// 256 B cache holds the rolled loop (word_compares 49581 -> 61030 clk
+    /// unrolled). -O1 and -Os do not read it.
+    fn unroll_threshold_at_speed(&self) -> Option<u32> {
+        (self.cpu == crate::dagisel::hooks::Cpu::M68000).then_some(400)
+    }
+
     /// -O1, -O2 and -O3 are judged by clocks (user ruling 2026-11-14): a byte
     /// of growth costs nothing there, so an inline into a speed caller stops
     /// at the pin's threshold (225) alone. The rate that held a growing inline
@@ -466,6 +478,20 @@ impl Tti for M68k {
     /// A size build refuses an inline of a callee that stays when it grows
     /// the code (SZ1): the callee's bytes against the call sequence's.
     fn opt_size_inline_by_code_size(&self) -> bool {
+        true
+    }
+
+    /// D13 (owner llrm-target-m68k, exit 2026-12-20; the m16 rule): at -Os a callee that goes with its last call takes
+    /// no credit in instruction units. A copy carries its argument setup and the call's result moves that the units
+    /// leave out: jpeg_fixed's `message`, 10 sites of a loop and a call, was copied ten times (+198 B against gcc).
+    /// The sites are tried in bytes instead (SZ2).
+    fn inline_dying_credit_at_os(&self) -> bool {
+        false
+    }
+
+    /// D13 keeps the credit for a hot site: shift_int64_masked_amount's `mix`, called three times per trip of a nested
+    /// loop, stayed a call at -Os (188,470 -> 276,962 clocks, -6 B).
+    fn inline_hot_dying_credit_at_os(&self) -> bool {
         true
     }
 
@@ -681,6 +707,10 @@ impl Tti for M68k {
     /// when LSR rates the indexed formula beside the walk (M68K-COPY-OS).
     fn preferred_addressing_mode(&self) -> AddressingMode {
         AddressingMode::PostIndexed
+    }
+
+    fn lsr_free_walk_beats_end_biased(&self) -> bool {
+        true
     }
 
     fn is_post_inc_load_legal(

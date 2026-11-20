@@ -74,7 +74,14 @@
 //!   `div_constants_long` +989, `idioms` +507, `rep_tails` +485); the one gain
 //!   is `byvalue_struct_address` 147 -> 16. The guard stays. The last call of a
 //!   local callee, which goes with it, is the pin's. No shape of callee but the
-//!   loop and the one smaller than its call is tested.
+//!   loop and the one smaller than its call is tested. A target may say the
+//!   guard stands down for an `inlinehint` callee at an `optsize` caller
+//!   (`Tti::opt_size_inline_guard_yields_to_inlinehint`, arm64: yes): the
+//!   pin's `updateThreshold` raises the threshold to `InlineHintThreshold`
+//!   (325) there, and its cost under that is the verdict (QuickrBasic
+//!   operands.c -Os `hot_operand` into `hot_int`, 26 units against two 3-unit
+//!   calls: 15,344 -> 10,400 B, the pin's 9,464). The guard still holds for a
+//!   callee with no hint.
 //! - SZ1-SITE (owner m68k-b, exit 2026-11-24): the size rule (D11) prices a
 //!   callee's instruction with the call site's constant arguments, not only a
 //!   GEP as `isGEPFree` does (z80 `rotate_small` -O1 922 -> 576 B).
@@ -544,6 +551,8 @@ struct Analyzer<'a> {
     single_bb_bonus: i64,
     threshold: i64,
     static_bonus_applied: i64,
+    /// `updateThreshold` raised the threshold for `inlinehint` at an `optsize` caller.
+    hint_applied: bool,
     cost: i64,
     single_bb: bool,
     decided_by_threshold: bool,
@@ -590,6 +599,7 @@ impl<'a> Analyzer<'a> {
             single_bb_bonus: 0,
             threshold: params.default_threshold,
             static_bonus_applied: 0,
+            hint_applied: false,
             cost: 0,
             single_bb: true,
             decided_by_threshold: false,
@@ -1899,6 +1909,7 @@ impl<'a> Analyzer<'a> {
                     self.params.hint_threshold
                 };
                 if has_flag(&self.callee.attrs, "inlinehint") {
+                    self.hint_applied = caller_size == CallerSize::OptSize && hint > self.threshold;
                     self.threshold = self.threshold.max(hint);
                 }
                 let frequency = self.site.relative_frequency;
@@ -2138,6 +2149,9 @@ impl<'a> Analyzer<'a> {
         inst: InstId,
     ) -> i64 {
         let Some(tti) = self.site.tti else { return 0 };
+        if let Some(size) = self.body_call_size(inst) {
+            return size;
+        }
         let view = self.size_view();
         if view.is_none()
             && self.site.caller_size != CallerSize::Speed
@@ -2256,34 +2270,11 @@ impl<'a> Analyzer<'a> {
 
     /// The call site as the target's call sequence sees it.
     fn call_shape(&self) -> Option<llrm_mir::tti::CallShape> {
-        use llrm_mir::tti::{CallArgument, CallShape, Ty};
-        let call = self.site.caller.instruction(self.site.call);
-        let info = call_info(self.site.caller, self.site.call)?;
-        let arguments = call.operands.len().saturating_sub(1);
+        use llrm_mir::tti::CallShape;
         // an argument for a parameter nothing reads is gone once `deadargelim`
         // runs after the walk
         let unread = self.unread_parameters();
-        let arguments = (0..arguments)
-            .filter(|&index| !unread.get(index).copied().unwrap_or(false))
-            .map(|index| {
-                let byval = info
-                    .argument_attrs
-                    .get(index)
-                    .and_then(
-                        |attrs| attrs
-                            .iter()
-                            .find_map(
-                                |one| match one {
-                                    Attribute::Type(name, ty) if name == "byval" => Some(*ty),
-                                    _ => None,
-                                },
-                            ),
-                    );
-                let ty = llrm_mir::instructioncost::operand_type(self.context, self.site.caller, call.operands[index])
-                    .and_then(|ty| Ty::of(&self.context.types, ty));
-                CallArgument { ty, byval_bytes: byval.map(|ty| self.site.layout.alloc_size(&self.context.types, ty)) }
-            })
-            .collect();
+        let arguments = self.call_arguments(self.site.caller, self.site.call, &unread)?;
         let caller = self.site.caller;
         let caller_frame_bytes = caller
             .layout()
@@ -2301,6 +2292,56 @@ impl<'a> Analyzer<'a> {
             })
             .unwrap_or(0);
         Some(CallShape { arguments, callee_frame_bytes: self.allocated_size, caller_frame_bytes })
+    }
+
+    /// The arguments of `call` in `function`, but those `unread` says nothing reads.
+    fn call_arguments(
+        &self,
+        function: &Function,
+        call: InstId,
+        unread: &[bool],
+    ) -> Option<Vec<llrm_mir::tti::CallArgument>> {
+        use llrm_mir::tti::{CallArgument, Ty};
+        let operands = &function.instruction(call).operands;
+        let info = call_info(function, call)?;
+        Some(
+            (0..operands.len().saturating_sub(1))
+                .filter(|&index| !unread.get(index).copied().unwrap_or(false))
+                .map(|index| {
+                    let byval = info.argument_attrs.get(index).and_then(|attrs| {
+                        attrs.iter().find_map(|one| match one {
+                            Attribute::Type(name, ty) if name == "byval" => Some(*ty),
+                            _ => None,
+                        })
+                    });
+                    let ty = llrm_mir::instructioncost::operand_type(self.context, function, operands[index])
+                        .and_then(|ty| Ty::of(&self.context.types, ty));
+                    CallArgument { ty, byval_bytes: byval.map(|ty| self.site.layout.alloc_size(&self.context.types, ty)) }
+                })
+                .collect(),
+        )
+    }
+
+    /// What a direct call in the callee's body adds to the caller once the
+    /// body is copied there (`Tti::body_call_cost`), where the target states
+    /// it: the flat price of one unit and one per argument stands for a site
+    /// that `call_sequence` prices as bytes, and a body that calls then
+    /// looked smaller than the call it replaced.
+    fn body_call_size(
+        &self,
+        inst: InstId,
+    ) -> Option<i64> {
+        let tti = self.site.tti?;
+        let target = llrm_mir::memory::callee(self.context, self.callee, inst)?;
+        if !lowered_to_call(self.site.module, target) || self.site.module.global(target).name.as_deref()?.starts_with("llvm.") {
+            return None;
+        }
+        let shape = llrm_mir::tti::CallShape {
+            arguments: self.call_arguments(self.callee, inst, &[])?,
+            callee_frame_bytes: 0,
+            caller_frame_bytes: 0,
+        };
+        tti.body_call_cost(&shape, llrm_mir::tti::CostKind::CodeSize).map(|cost| cost.value)
     }
 
     /// The target's price of the call and its argument setup
@@ -2378,10 +2419,13 @@ impl<'a> Analyzer<'a> {
         // (`inline_dying_credit_at_os`), -Os takes no credit for the
         // callee that goes (a 9-argument float callee, 21 units against
         // ~70 B a copy, inlined three times was +193 B at x86-m16).
+        let hot = self.site.relative_frequency.is_some_and(|ratio| ratio >= HOT_CALLSITE_REL_FREQ)
+            && self.site.tti.is_some_and(|tti| tti.inline_hot_dying_credit_at_os());
         let credit = self.site.callee_dies
             && k >= 2
             && (self.site.caller_size == CallerSize::Speed
-                || self.site.tti.is_none_or(|tti| tti.inline_dying_credit_at_os()));
+                || self.site.tti.is_none_or(|tti| tti.inline_dying_credit_at_os())
+                || hot);
         if credit {
             (k - 1) * size > k * call + frame
         } else {
@@ -2679,7 +2723,9 @@ impl<'a> Analyzer<'a> {
             !self.site.sole_call_to_local
                 && self.site.tti.is_some_and(|tti| {
                     tti.inline_policy().by_size.is_some_and(|rule| {
-                        self.site.callee_calls >= rule.min_sites && !(rule.yields_to_negative_cost && self.cost < 0)
+                        self.site.callee_calls >= rule.min_sites
+                            && !(rule.yields_to_negative_cost && self.cost < 0)
+                            && !(rule.yields_to_inlinehint && self.hint_applied)
                     })
                 })
                 && self.grows_the_code()

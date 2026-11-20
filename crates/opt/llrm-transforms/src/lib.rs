@@ -154,6 +154,7 @@ pub mod combine_gep_index;
 pub mod combine_gep_merge;
 pub mod combine_gep_phi;
 pub mod combine_icmp_binop;
+pub mod combine_icmp_bitcast;
 pub mod combine_icmp_const;
 pub mod combine_icmp_equality;
 pub mod combine_icmp_intrinsic;
@@ -165,6 +166,7 @@ pub mod combine_icmp_table;
 #[cfg(test)]
 mod combine_icmp_table_tests;
 pub mod combine_invert;
+pub mod combine_reassociate_for_uses;
 pub mod combine_loadstore;
 pub mod combine_memintrinsics;
 pub mod combine_minmax;
@@ -486,6 +488,9 @@ pub mod vncoercion;
 mod vncoercion_tests;
 pub mod walk;
 pub mod widen;
+pub mod widenreturns;
+#[cfg(test)]
+mod widenreturns_tests;
 pub mod window;
 pub mod zeromerge;
 // Not ported, meaning nothing where a value is whole: `wholephis` and

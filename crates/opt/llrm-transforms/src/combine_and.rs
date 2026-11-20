@@ -500,6 +500,13 @@ pub fn visit_and(
     if let Some(found) = fold_and_select(c, inst, op0, op1) {
         return found;
     }
+    // (~x) & y  -->  ~(x | (~y))  iff that gets rid of inversions
+    if crate::combine_not::sink_not_into_other_hand_of_logical_op(c, inst) {
+        return Visit::Changed;
+    }
+    if let Some(found) = crate::combine_reassociate_for_uses::reassociate_for_uses(c, inst) {
+        return found;
+    }
     // DEVIATE 4: the rest of visitAnd after this.
     if let Some(found) = fold_boolean_and_or(c, inst, op0, op1, true, false) {
         return Visit::Replace(found);

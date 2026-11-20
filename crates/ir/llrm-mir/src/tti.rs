@@ -585,6 +585,10 @@ pub struct SizeRule {
     /// shrinking the caller (a one-instruction wrapper, a callee whose body
     /// folds away).
     pub yields_to_negative_cost: bool,
+    /// Whether the rule stands down for a callee the pin's threshold raises
+    /// for `inlinehint` (the C `inline` keyword): where its own cost is under
+    /// that threshold the pin's verdict is the rule's.
+    pub yields_to_inlinehint: bool,
 }
 
 /// What a target states of the inliner's verdict beyond the pin's analyzer.
@@ -1092,6 +1096,7 @@ pub trait Tti {
                     || SizeRule {
                         min_sites: self.opt_size_inline_guard_min_sites(),
                         yields_to_negative_cost: self.opt_size_inline_guard_yields_to_negative_cost(),
+                        yields_to_inlinehint: self.opt_size_inline_guard_yields_to_inlinehint(),
                     },
                 ),
             by_rate: self.speed_inline_milliclocks_per_byte(),
@@ -1237,6 +1242,19 @@ pub trait Tti {
     /// read it in place of the call instruction's flat price. None: the pin's
     /// flat price (the call as one instruction and one per argument).
     fn call_sequence_cost(
+        &self,
+        shape: &CallShape,
+        kind: CostKind,
+    ) -> Option<Cost> {
+        let _ = (shape, kind);
+        None
+    }
+
+    /// What a direct call inside a callee's body adds to the caller once the
+    /// body is inlined, in `kind`: the call and the arguments' setup, not the
+    /// return or the frame, which belong to the function called. None: the
+    /// call's flat price.
+    fn body_call_cost(
         &self,
         shape: &CallShape,
         kind: CostKind,
@@ -1720,6 +1738,15 @@ pub trait Tti {
         false
     }
 
+    /// Whether the bound above stands down for a callee that is `inlinehint`
+    /// at an `optsize` caller: the pin's `updateThreshold` raises the threshold
+    /// to `InlineHintThreshold` (325) there, and the bound refused what that
+    /// threshold passed (QuickrBasic operands.c -Os `hot_operand` into
+    /// `hot_int`: 15,344 B against the pin's 9,464 B). False: the bound holds.
+    fn opt_size_inline_guard_yields_to_inlinehint(&self) -> bool {
+        false
+    }
+
     /// Whether a constant address offset may become a phi: false where the
     /// access folds it as a displacement and the target says to keep it. A
     /// boolean as the pin's `replacingOperandWithVariableIsCheap` is: a
@@ -1944,6 +1971,12 @@ pub trait Tti {
         true
     }
 
+    /// D13 keeps the credit at -Os for a hot call site (the pin's `HotCallSiteRelFreq`): a copy in a loop saves the
+    /// call's clocks every trip, which the byte trial does not price. Off by default (x86-m16 is strict bytes).
+    fn inline_hot_dying_credit_at_os(&self) -> bool {
+        false
+    }
+
     /// `Tuning::unroll_never_grows_at_o1`.
     fn unroll_never_grows_at_o1(&self) -> bool {
         false
@@ -1958,6 +1991,16 @@ pub trait Tti {
 
     /// `Tuning::second_ipsccp`.
     fn second_ipsccp(&self) -> bool {
+        false
+    }
+
+    /// DEVIATE WIDEN-RETURNS: a function only its own module calls, whose every
+    /// caller extends its result (`zext` or `sext` to one type), returns the
+    /// wider value itself, extended once where it returns rather than at each
+    /// call (`widenreturns`). A target whose wide return costs the callee one
+    /// extension and the callers none opts in; false: the result is returned as
+    /// written.
+    fn widen_private_returns(&self) -> bool {
         false
     }
 
@@ -2363,6 +2406,13 @@ pub trait Tti {
     /// (`Tuning::split_paths_at_o3`).
     fn split_paths_at_o3(&self) -> bool {
         false
+    }
+
+    /// The target's full-unroll `Threshold` at `-O2` and `-O3`, where bytes are
+    /// free (ruling 2026-11-14); `-O1` and `-Os` do not read it. None: the
+    /// target's `unroll_threshold_overrides`, else the pass's own.
+    fn unroll_threshold_at_speed(&self) -> Option<u32> {
+        None
     }
 
     /// The target's full-unroll `Threshold` at `-O3` alone; none: the pass's
@@ -2798,6 +2848,13 @@ pub trait Tti {
             (c.num_regs, c.add_rec_cost, c.num_iv_muls, c.num_base_adds, c.scale_cost, c.imm_cost, c.setup_cost)
         };
         key(a) < key(b)
+    }
+
+    /// DEVIATE LG4 (owner w8, exit 2026-11-26): where post-indexed addressing is favored, a pointer walk
+    /// the end-biased formula would replace stays unless that formula saves a recurrence or a register
+    /// (m68k `(An)+`). `false`: the end-biased formula wins on its saved compare.
+    fn lsr_free_walk_beats_end_biased(&self) -> bool {
+        false
     }
 
     /// DEVIATE LSR-TIE: a loop with an address that LSR rates no better than

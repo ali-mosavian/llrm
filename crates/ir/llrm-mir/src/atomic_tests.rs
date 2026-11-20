@@ -64,15 +64,59 @@ fn an_ordered_atomic_is_refused_where_the_target_has_no_lowering() {
     assert!(refused.contains("load acquire"), "{refused}");
 }
 
-/// A 64-bit atomic at a 32-bit target needs `cmpxchg8b`: refused, never two
-/// plain loads.
-#[test]
-fn a_wide_atomic_is_refused_not_split() {
-    let text = "target datalayout = \"e-p:16:16-i32:16-i64:16\"
+const WIDE: &str = "target datalayout = \"e-p:16:16-i32:16-i64:16\"
 @w = global i64 0
-define i64 @f() {
+define i64 @f(i64 %v, i64 %e) {
 entry:
   %a = load atomic i64, ptr @w monotonic, align 8
+  store atomic i64 %v, ptr @w release, align 8
+  %b = atomicrmw add ptr @w, i64 %v seq_cst
+  %c = cmpxchg ptr @w, i64 %e, i64 %v acq_rel monotonic
+  %d = extractvalue { i64, i1 } %c, 0
+  %s = add i64 %a, %b
+  %t = add i64 %s, %d
+  ret i64 %t
+}
+";
+
+/// A 64-bit atomic at a target whose widest is 32 was refused ("`load
+/// monotonic` of 64 bits is not supported": QuickrBasic's `pmou.c` did not
+/// compile on m32). It is the runtime's `__atomic_*_8` call, as the pin's `llc`
+/// makes it on a 486 (`AtomicExpandPass::expandAtomicOpToLibcall`), never two
+/// plain loads.
+#[test]
+fn a_wide_atomic_is_a_libcall_not_a_refusal_or_a_split() {
+    let mut module = parse::module(WIDE).unwrap();
+    hidden(&mut module).unwrap();
+    lowered(&mut module, 32, true, false).unwrap();
+    assert_eq!(crate::verify::verify(&module), Vec::<String>::new());
+    let called: Vec<&str> = module
+        .globals
+        .iter()
+        .filter_map(|global| global.name.as_deref())
+        .filter(|name| name.starts_with("__atomic_"))
+        .collect();
+    for want in ["__atomic_load_8", "__atomic_store_8", "__atomic_fetch_add_8", "__atomic_compare_exchange_8"] {
+        assert!(called.contains(&want), "{want} in {called:?}");
+    }
+    // the compare-exchange's slot is read back by a plain load; no volatile one
+    // stands for an atomic
+    assert!(
+        !opcodes(&module)
+            .iter()
+            .any(|opcode| matches!(opcode, Opcode::Load { volatile: true, .. } | Opcode::Atomic(_)))
+    );
+}
+
+/// What the runtime has no function for (`umax`) stays refused by name: the
+/// pass's compare-exchange loop is not translated.
+#[test]
+fn a_wide_unsigned_max_is_refused_by_name() {
+    let text = "target datalayout = \"e-p:16:16-i32:16-i64:16\"
+@w = global i64 0
+define i64 @f(i64 %v) {
+entry:
+  %a = atomicrmw umax ptr @w, i64 %v monotonic
   ret i64 %a
 }
 ";

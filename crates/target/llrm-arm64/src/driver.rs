@@ -358,6 +358,7 @@ fn lower_function(
         .map_err(|why| format!("@{name}: {why}"))?;
     let blocks = crate::expand_pseudo::run(blocks);
     let mut tables = crate::jumptable::tables_of(&machine);
+    let dead_ends = crate::mfunc::dead_end_labels(&machine);
     let (blocks, likelihood) = crate::layout::fold_with_odds(
         blocks,
         &mut tables,
@@ -367,6 +368,7 @@ fn lower_function(
         ),
         optsize,
         &crate::mfunc::returned_registers(&machine),
+        &dead_ends,
     );
     let blocks = crate::pairs::fold(blocks);
     let mut blocks = crate::ldst_update::fold(blocks, &crate::mfunc::returned_registers(&machine));
@@ -382,6 +384,7 @@ fn lower_function(
             variables,
             pool: machine.pool.clone(),
             unwind: machine.unwind != crate::cfi::Unwind::None,
+            dead_ends,
         },
         written,
     ))

@@ -79,6 +79,7 @@ mov_rm = 6
 mov_mr = 6
 mov_mi = 10
 alu_mr = 6
+cmpxchg_mr = 7
 jcc = 2
 call_near = 5
 ret_near = 1

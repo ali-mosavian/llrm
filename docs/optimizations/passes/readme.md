@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 310 documented, 4 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 313 documented, 5 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -68,6 +68,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | combine_gep_merge | `visitGEPOfGEP`: a `getelementptr` of a `getelementptr` as one. | [`combine_gep`](combine_gep.md), which calls `visit_gep_of_gep` when a | [combine_gep_merge](combine_gep_merge.md) |
 | combine_gep_phi | `foldGEPOfPhi`: a `getelementptr` of a phi of `getelementptr`s as a `getelementptr` of a phi of the one index they differ in. | The `getelementptr` visit of [`combine_gep`](combine_gep.md), which | [combine_gep_phi](combine_gep_phi.md) |
 | combine_icmp_binop | InstCombine's `foldICmpBinOp`, the add and subtract arms ([`InstCombineCompares.cpp:5301`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCompares.cpp#L5301) at d1106deb71cc). | Named by `combine_compares`. | [combine_icmp_binop](combine_icmp_binop.md) |
+| combine_icmp_bitcast | InstCombine's `foldICmpBitCast`, the `sitofp` and `uitofp` arms ([`InstCombineCompares.cpp:3491`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCompares.cpp#L3491)) at d1106deb71cc. | `combine_compares::visit_icmp`. | [combine_icmp_bitcast](combine_icmp_bitcast.md) |
 | combine_icmp_const | `icmp (binop ...), C`: the folds of a compare of a binary operator with a constant, so far the `and` family. | `combine_compares::visit_icmp`. | [combine_icmp_const](combine_icmp_const.md) |
 | combine_icmp_equality | InstCombine's `foldICmpEquality` ([`InstCombineCompares.cpp:6222`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCompares.cpp#L6222)) at d1106deb71cc, up to the `ashr`/`trunc` range check. | Named by `combine_compares`. | [combine_icmp_equality](combine_icmp_equality.md) |
 | combine_icmp_intrinsic | `icmp` of an intrinsic and a constant. | `fold_icmp_inst_with_constant`. | [combine_icmp_intrinsic](combine_icmp_intrinsic.md) |
@@ -83,12 +84,13 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | combine_muldivrem | InstCombine's `visitMul`, `visitUDiv`, `visitSDiv`, `visitURem`, `visitSRem` and the helpers they call, from [`InstCombineMulDivRem.cpp`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineMulDivRem.cpp) at d1106deb71cc. | `combine::visit`, once the mul, div and rem slots are flipped. | [combine_muldivrem](combine_muldivrem.md) |
 | combine_narrow | `narrowMathIfNoOverflow`: `bo (ext X), (ext Y)` or `bo (ext X), C` as `ext (bo X, Y)` when the math cannot overflow in the narrow width. | `visitAdd`, `visitSub` (`TryToNarrowDeduceFlags`) and `visitMul`. | [combine_narrow](combine_narrow.md) |
 | combine_negator | `Negator`: sinks a negation into an expression tree when that does not add an instruction. | `combine_addsub::visit_sub`, `combine_muldivrem`. | [combine_negator](combine_negator.md) |
-| combine_not | `InstCombinerImpl::foldNot`: a `not` (`xor X, -1`) pushed into its operand. | Named by `combine_xor`. | [combine_not](combine_not.md) |
+| combine_not | `InstCombinerImpl::foldNot`: a `not` (`xor X, -1`) pushed into its operand. | Named by `combine_and`, `combine_or`, `combine_visit_select`, `combine_xor`. | [combine_not](combine_not.md) |
 | combine_or | `InstCombinerImpl::visitOr`: the integer `or` folds. | Named by `combine`, `combine_casted_logic`. | [combine_or](combine_or.md) |
 | combine_pass | The pass: InstCombine as a function pass of the pipeline. | `pipeline` (`combine@N`, in front of the old `fold@N` of each InstCombine | [combine_pass](combine_pass.md) |
 | combine_phi | `foldOpIntoPhi`: an instruction that reads a phi becomes a phi of the instruction applied to each incoming value. | The `visit*` of the families that fold an operation into a phi | [combine_phi](combine_phi.md) |
 | combine_phi_args | `visitPHINode`'s argument folds: a phi of the same operation applied to different values is the operation applied to a phi of those values. | `combine` (its `visit`, the `Phi` opcode). | [combine_phi_args](combine_phi_args.md) |
 | combine_ptrcast | InstCombine's pointer-integer casts: `visitIntToPtr` and `visitPtrToInt` ([InstCombineCasts.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCasts.cpp#L2673)). | `combine` (its dispatch on `PtrToInt` and `IntToPtr`). | [combine_ptrcast](combine_ptrcast.md) |
+| combine_reassociate_for_uses | `reassociateForUses`: `(X op Y) op Z` with `X` or `Y` used elsewhere is rebuilt so the one-use values share an instruction. | Named by `combine_and`, `combine_or`, `combine_xor`. | [combine_reassociate_for_uses](combine_reassociate_for_uses.md) |
 | combine_replace_in | `replaceInInstruction`: the uses of a value inside the one-use chain that feeds a `select` arm read a constant instead. |  | [combine_replace_in](combine_replace_in.md) |
 | combine_returned_arg | InstCombine's call that returns one of its arguments: the call's value is that argument. | `combine_memintrinsics` (`visit_call`). | [combine_returned_arg](combine_returned_arg.md) |
 | combine_select | `FoldOpIntoSelect`: an instruction that reads a select becomes a select of the instruction applied to each arm. | `foldBinOpIntoSelectOrPhi` and the `visit*` of the families that fold an | [combine_select](combine_select.md) |
@@ -317,8 +319,10 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | unrollbound | The most trips a loop can make, from the size of the object it accesses. | Named by `loopunrollpass`. | [unrollbound](unrollbound.md) |
 | uremloop | CodeGenPrepare's `foldURemOfLoopIncrement`: the remainder of a loop's counter by a loop-invariant amount is a second counter that wraps ([CodeGenPrepare.cpp#L2227](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/CodeGenPrepare.cpp#L2227)). | In `cgpaddr`'s run, before the store split. | [uremloop](uremloop.md) |
 | vastart | `llvm.va_start` of a one-pointer `va_list` as a store the mid-end can see. | First in the mid-end, before `sroa`, in a variadic function. | [vastart](vastart.md) |
+| vectorlower | undocumented | | [source](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/vectorlower.rs) |
 | vncoercion | A value stored or loaded in one type, made the value a load of another type at a must-aliased address reads: GVN's `VNCoercion`, a translation of [`VNCoercion.cpp`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/VNCoercion.cpp) at d1106deb71cc. | Nothing yet; `gvn`'s load elimination (stage 4 of the GVN port) is the | [vncoercion](vncoercion.md) |
 | walk | The module passes that LLVM runs between the early function pipeline and the function simplification (`ipsccp`, `deadargelim`), so that a body they change goes through the Simplify list once and not again afterwards. | Once per compile, after the Early stage. | [walk](walk.md) |
 | widen | A loop counter read through `sext` or `zext` becomes a counter of the wider type, and the extensions go. | [`crate::simplifyindvar`](simplifyindvar.md) (`simplifyAndExtend`), from [`crate::indvars`](indvars.md). | [widen](widen.md) |
+| widenreturns | Return-value widening: a function only its own module calls, whose every caller extends the result to one wider type, returns the wider value itself. | In the interprocedural step, after dead-argument elimination, on a target | [widenreturns](widenreturns.md) |
 | window | A counted loop's huge pointers are split into windows, inside each of which the loop runs on far pointers that never carry into the segment selector. | Once per function, after LSR chose the pointers (the windows are made over | [window](window.md) |
 | zeromerge | One zero fill for the zeroed locals that follow each other in the entry block. | Once per body, after `extload`, with `wanted("zeromerge")`: on where a | [zeromerge](zeromerge.md) |
