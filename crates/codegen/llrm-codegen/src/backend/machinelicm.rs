@@ -297,9 +297,12 @@ fn candidate(
         Loc::Mem(one) => cell(one),
         _ => false,
     };
+    // The pin hoists an instruction that reads no register (an address of a symbol) like any
+    // other (`IsLoopInvariantInst` L1133, `IsProfitableToHoist` L1273), by pressure; where a
+    // target has not measured that, only a load or an instruction with a use is a candidate.
     pure && what.target.is_none()
         && !what.indirect
-        && (!one.uses.is_empty() || load && one.invariant())
+        && (classes.hoists_register_free_ops || !one.uses.is_empty() || load && one.invariant())
         && one.defines.len() == 1
         && matches!(what.dests.as_slice(), [Loc::Held(_)])
         && what.sources.iter().all(held)
