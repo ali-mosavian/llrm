@@ -2749,11 +2749,20 @@ impl<'a> Analyzer<'a> {
             && !self.params.o1_bound
             && trial::speed_unroll().is_none()
             && tti.unroll_speed_trial()
-            && self.adds_bytes_to_price()
+            && self.may_add_bytes_to_price()
         {
             trial::note_speed_inline();
         }
         grows
+    }
+
+    /// Whether the inline may add bytes the estimate cannot see: it prices the
+    /// operations alone, a floor (fib -O2: `bench_fib` inlined into `main` is
+    /// 2 B estimated, 8 B built: the call's argument stays for the call the
+    /// body makes, and the sign extension has its register moves), so a growth
+    /// under the call's size is still tried and the module price decides.
+    fn may_add_bytes_to_price(&self) -> bool {
+        self.growth_per_site() > 0 && !self.site.sole_call_to_local && !self.peels_linear_recursion()
     }
 
     /// Whether the inline's growth is one the byte rate prices: over the call
@@ -2775,7 +2784,10 @@ impl<'a> Analyzer<'a> {
         let growth = self.growth_per_site();
         // Growth under one call's size is inside the estimate's resolution: the
         // sites of a dying callee fold differently and must not split.
-        if rate == 0 || !self.adds_bytes_to_price() {
+        // the variant that takes no growth refuses what the estimate may have
+        // under-counted, as the trial noted it
+        let adds = if rate == trial::NO_GROW_RATE { self.may_add_bytes_to_price() } else { self.adds_bytes_to_price() };
+        if rate == 0 || !adds {
             return false;
         }
         let saved = self
