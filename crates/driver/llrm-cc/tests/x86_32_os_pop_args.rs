@@ -35,5 +35,7 @@ fn a_call_pops_its_one_or_two_argument_words_at_os() {
         assert!(code.contains("pop "), "{straight} has no pop cleanup:\n{code}");
     }
     let looped = body("loop");
-    assert!(looped.contains("add esp, 4") && !looped.contains("pop ecx"), "a call in a loop popped:\n{looped}");
+    // x86_32-linux keeps esp 16-aligned at calls: the loop pads (`sub esp, 12`,
+    // `push`, `add esp, 16`), so the cleanup is not the 4-byte `add esp, 4`.
+    assert!(looped.contains("add esp, ") && !looped.contains("pop ecx"), "a call in a loop popped:\n{looped}");
 }
