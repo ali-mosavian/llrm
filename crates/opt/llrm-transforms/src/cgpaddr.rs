@@ -331,6 +331,11 @@ impl CgpAddr {
                 ),
                 None => false,
             };
+        // `splitLargeGEPOffsets`, after the blocks' addresses are as sunk.
+        let split_gep = match analyses.outer().target().tti() {
+            Some(tti) => crate::cgpsplitgep::large_offsets_split(unit.context, unit.layout, &*tti, unit.function),
+            None => false,
+        };
         if merged || converted {
             // A block went or came: the blocks and edges are not as they were.
             PreservedAnalyses::none()
@@ -341,6 +346,7 @@ impl CgpAddr {
             || sunk_compares
             || masks
             || addresses
+            || split_gep
             || extended
             || sunk_casts
             || sunk_operands

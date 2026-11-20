@@ -236,6 +236,20 @@ pub trait CombineHooks {
         false
     }
 
+    /// `TargetLowering::isLegalAddressingMode` of a base register and `offset`
+    /// for an access of `bytes`: what
+    /// `reassociationCanBreakAddressingModePattern` asks. DEVIATE SD210:
+    /// the default is x86's, a signed 32-bit displacement; a target with
+    /// another reach states it. Exit 2026-12-10.
+    fn is_legal_address_offset(
+        &self,
+        offset: i128,
+        bytes: u64,
+    ) -> bool {
+        let _ = bytes;
+        i128::from(i32::MIN) <= offset && offset <= i128::from(i32::MAX)
+    }
+
     /// `DataLayout::isLittleEndian`: whether the first of several merged
     /// stores is the least significant part of the joined value.
     fn little_endian(&self) -> bool {
@@ -5223,8 +5237,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         } else {
             return None;
         };
-        // the half multiply reads the low half of `x`: what extends it is dead, unless another user keeps it
-        // (divs of the same `x` then needs the extension and the copy of `x` it leaves is a live range more)
+        // the half multiply reads the low half of `x`: what extends it is dead,
+        // unless another user keeps it (divs of the same `x` then needs
+        // the extension and the copy of `x` it leaves is a live range more)
         let sole_user = self.dag.has_one_use(x.node);
         let x = match self.dag.opcode(x) {
             ISD::SignExtendInReg if sole_user => {
@@ -5233,8 +5248,10 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             }
             ISD::SignExtend if sole_user => {
                 let src = self.dag.operand(x, 0);
-                // a load keeps its own extension: `any_extend (load)` is the zero-extending load (`moveq #0` and
-                // a `move.w` with no post-increment), where `sext (load)` post-increments and `ext.l`s
+                // a load keeps its own extension: `any_extend (load)` is the
+                // zero-extending load (`moveq #0` and
+                // a `move.w` with no post-increment), where `sext (load)`
+                // post-increments and `ext.l`s
                 if self.dag.value_type(src).size_in_bits() >= narrow && self.dag.opcode(src) != ISD::Load {
                     self.dag.get_node(ISD::AnyExtend, vt, &[src])
                 } else {
@@ -5243,13 +5260,14 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             }
             _ => x,
         };
-        // The tied operand is `x`'s low half widened with undefined high bits (a copy of the truncate below), so no
-        // extension of it is made either (the pin's own patterns do the same, `MOVXd32d16`).
+        // The tied operand is `x`'s low half widened with undefined high bits
+        // (a copy of the truncate below), so no extension of it is made
+        // either (the pin's own patterns do the same, `MOVXd32d16`).
         let low = self.dag.get_node(ISD::Truncate, half.half, &[y]);
         let tied_low = self.dag.get_node(ISD::Truncate, half.half, &[x]);
-        // `TargetOpcode::COPY` (no name in the pin's tables): a node the combiner
-        // leaves alone, where an `any_extend` of a load would be formed into an
-        // extending load again.
+        // `TargetOpcode::COPY` (no name in the pin's tables): a node the
+        // combiner leaves alone, where an `any_extend` of a load would
+        // be formed into an extending load again.
         let tied = self.dag.get_node(ISD::Machine(TARGET_OPCODE_COPY), vt, &[tied_low]);
         Some(self.dag.get_node(ISD::Machine(opcode), vt, &[tied, low]))
     }
