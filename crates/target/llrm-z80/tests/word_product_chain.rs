@@ -44,7 +44,19 @@ fn a_module_of_constant_word_products_links_no_routine_at_o1() {
     }
 }
 
+/// The routine is linked for the module's variable product, so the call costs 6 B and a loop of about 65 T a bit of the
+/// constant (about 495 T for 100); -O1 judges by clocks too (2026-11-14 ruling) and pays a byte at 40 T: `x * 100` is the
+/// chain.
 #[test]
-fn a_variable_word_product_keeps_the_calls_at_o1() {
-    assert!(strict(IR, "by_hundred").contains("__mulhi3"));
+fn a_constant_word_product_is_the_chain_at_o1_where_the_clocks_repay_the_bytes() {
+    assert!(!strict(IR, "by_hundred").contains("__mulhi3"));
+}
+
+/// -Os and -Oz take no byte for clocks: the call stays where the chain is larger.
+#[test]
+fn a_constant_word_product_keeps_the_call_at_os_where_the_module_links_the_routine() {
+    let request = Request::new(Level::Os);
+    let prepared = prepare(IR, &request).expect("prepares");
+    let (number, name) = prepared.names().enumerate().find(|(_, name)| *name == "by_hundred").expect("function");
+    assert!(text_in(&prepared, name, number, &request).expect("compiles").contains("__mulhi3"));
 }
