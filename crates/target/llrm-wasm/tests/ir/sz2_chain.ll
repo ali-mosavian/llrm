@@ -1,5 +1,5 @@
-; ModuleID = '/home/alim/scratch/bs2-wt/tests/run/c/call_keeps.c'
-source_filename = "/home/alim/scratch/bs2-wt/tests/run/c/call_keeps.c"
+; ModuleID = 'call_keeps.c'
+source_filename = "call_keeps.c"
 target datalayout = "e-m:e-p:32:32-p10:8:8-p20:8:8-i64:64-i128:128-n32:64-S128-ni:1:10:20"
 target triple = "wasm32"
 

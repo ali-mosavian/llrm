@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/genericdriver.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/genericdriver.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/genericdriver.rs sha256:1db2fd39324d61095814972b13115b09f2b5e0897139b0e9847a21b1eaa3db99 -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/genericdriver.rs sha256:eb6365edd03d483797451dc4cf29a966d4ac8dd56abca2996012258d33babeb8 -->
 
 # genericdriver
 
@@ -40,6 +40,17 @@ L4300) and `ScheduleDAGMI::schedule`, `releaseSucc`, `releasePred`.
   `ldst_update`.
 
 Owner arm64-phi; exit with the model branch that first needs each.
+
+## Example
+A region where `A` and `B` have no predecessor, `C` reads both and `D` reads `C`.
+Picking `A` (top), `D` (bottom), `B` (top), `C` (bottom) gives the order below
+(node names are illustrative).
+
+```text
+top picks:     A  B
+bottom picks:  D  C
+order:         A  B  C  D     ; top in pick order, then bottom reversed
+```
 
 ## Used by
 Named by `machinesched`, `schedmodel`.

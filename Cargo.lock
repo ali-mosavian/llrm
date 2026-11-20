@@ -320,6 +320,8 @@ dependencies = [
  "llrm-mir",
  "llrm-target",
  "llrm-x86-m16",
+ "llrm-x86-m32",
+ "llrm-x86-m64",
  "serde",
  "toml",
 ]

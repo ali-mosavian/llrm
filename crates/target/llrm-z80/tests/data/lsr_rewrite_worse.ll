@@ -1,6 +1,6 @@
 target datalayout = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8"
-; ModuleID = '/home/alim/scratch/wt-align/tests/run/c/switch_empty_cases.c'
-source_filename = "/home/alim/scratch/wt-align/tests/run/c/switch_empty_cases.c"
+; ModuleID = 'switch_empty_cases.c'
+source_filename = "switch_empty_cases.c"
 target triple = "msp430"
 
 @seen = internal global i16 0, align 2

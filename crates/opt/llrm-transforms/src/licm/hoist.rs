@@ -348,7 +348,7 @@ fn against_invariant(
     let ValueDef::Instruction(def) = function.value(value).def else { return None };
     let compare = function.instruction(def);
     let Opcode::ICmp(mut pred) = compare.opcode else { return None };
-    if !function.users(value).has_one_use() || ctx.state.gone.borrow().contains(&def) {
+    if !ctx.has_one_use(value) || ctx.state.gone.borrow().contains(&def) {
         return None;
     }
     let [mut lhs, mut rhs] = compare.operands[..] else { return None };
@@ -483,7 +483,7 @@ fn hoist_gep(
     let ValueDef::Instruction(src_inst) = function.value(base).def else { return None };
     let src = function.instruction(src_inst);
     if !matches!(src.opcode, Opcode::GetElementPtr { .. })
-        || function.users(base).iter().count() != 1
+        || !ctx.has_one_use(base)
         || !ctx.contains(src_inst)
         || ctx.state.gone.borrow().contains(&src_inst)
     {
@@ -630,7 +630,7 @@ fn hoist_add_sub(
     // The initial operation goes after the reassociation: only with no other
     // use.
     let Operand::Value(lhs_value) = lhs else { return None };
-    if ctx.is_loop_invariant(lhs) || !ctx.is_loop_invariant(rhs) || function.users(lhs_value).iter().count() != 1 {
+    if ctx.is_loop_invariant(lhs) || !ctx.is_loop_invariant(rhs) || !ctx.has_one_use(lhs_value) {
         return None;
     }
     let ValueDef::Instruction(dead) = function.value(lhs_value).def else { return None };
@@ -842,10 +842,8 @@ fn hoist_sub_add_association(
         let Operand::Value(value) = operand else { return None };
         let ValueDef::Instruction(def) = function.value(value).def else { return None };
         let Opcode::Binary(bo_op) = function.instruction(def).opcode else { return None };
-        (wanted.contains(&bo_op)
-            && function.users(value).iter().count() == 1
-            && !ctx.state.gone.borrow().contains(&def))
-        .then_some((def, bo_op))
+        (wanted.contains(&bo_op) && ctx.has_one_use(value) && !ctx.state.gone.borrow().contains(&def))
+            .then_some((def, bo_op))
     };
     let (bo, lv, c1, c2, inv_op, result_op);
     match op {

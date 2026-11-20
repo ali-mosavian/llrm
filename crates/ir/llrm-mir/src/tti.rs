@@ -1947,6 +1947,16 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE WIDEN-RETURNS: a function only its own module calls, whose every
+    /// caller extends its result (`zext` or `sext` to one type), returns the
+    /// wider value itself, extended once where it returns rather than at each
+    /// call (`widenreturns`). A target whose wide return costs the callee one
+    /// extension and the callers none opts in; false: the result is returned as
+    /// written.
+    fn widen_private_returns(&self) -> bool {
+        false
+    }
+
     /// DEVIATE UNROLL-THROUGH-CALLS (`loopunrollpass.rs`): whether the full
     /// unroll's cost analysis goes on past a call, which it prices as one
     /// instruction the copies keep. The pin gives up at the first call, so a
@@ -2349,6 +2359,13 @@ pub trait Tti {
     /// (`Tuning::split_paths_at_o3`).
     fn split_paths_at_o3(&self) -> bool {
         false
+    }
+
+    /// The target's full-unroll `Threshold` at `-O2` and `-O3`, where bytes are
+    /// free (ruling 2026-11-14); `-O1` and `-Os` do not read it. None: the
+    /// target's `unroll_threshold_overrides`, else the pass's own.
+    fn unroll_threshold_at_speed(&self) -> Option<u32> {
+        None
     }
 
     /// The target's full-unroll `Threshold` at `-O3` alone; none: the pass's
@@ -2784,6 +2801,13 @@ pub trait Tti {
             (c.num_regs, c.add_rec_cost, c.num_iv_muls, c.num_base_adds, c.scale_cost, c.imm_cost, c.setup_cost)
         };
         key(a) < key(b)
+    }
+
+    /// DEVIATE LG4 (owner w8, exit 2026-11-26): where post-indexed addressing is favored, a pointer walk
+    /// the end-biased formula would replace stays unless that formula saves a recurrence or a register
+    /// (m68k `(An)+`). `false`: the end-biased formula wins on its saved compare.
+    fn lsr_free_walk_beats_end_biased(&self) -> bool {
+        false
     }
 
     /// DEVIATE LSR-TIE: a loop with an address that LSR rates no better than
