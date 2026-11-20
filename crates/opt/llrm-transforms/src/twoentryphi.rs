@@ -296,6 +296,11 @@ pub fn folded(
         .map(|(_, from)| from)
         .filter(|&from| matches!(ending(function, from), Ending::Jump))
         .collect();
+    // The blocks go, and so does the code run by jumping to one by its
+    // address (SimplifyCFG.cpp:3977).
+    if if_blocks.iter().any(|&one| function.has_address_taken(one)) {
+        return false;
+    }
     // The phi itself cannot be the condition of the select that replaces it.
     if let Operand::Value(id) = if_cond
         && let ValueDef::Instruction(inst) = function.value(id).def

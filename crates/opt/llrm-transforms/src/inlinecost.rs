@@ -431,6 +431,14 @@ pub fn inline_viable(
 ) -> Result<(), String> {
     let returns_twice = has_flag(&callee.attrs, "returns_twice");
     for &block in callee.layout() {
+        // Disallow inlining of functions which contain indirect branches and
+        // of blockaddresses (InlineCost.cpp:3328).
+        if callee.ends_in_indirect_branch(block) {
+            return Err("contains indirect branches".into());
+        }
+        if callee.has_address_taken(block) {
+            return Err("blockaddress used".into());
+        }
         for inst in callee.iter_block(block) {
             let opcode = &callee.instruction(inst).opcode;
             if !matches!(opcode, Opcode::Call(_) | Opcode::Invoke(_)) {
@@ -556,6 +564,9 @@ struct Analyzer<'a> {
     cost: i64,
     single_bb: bool,
     decided_by_threshold: bool,
+    /// The analysis of an indirect call's known target inside another one
+    /// (`onLoweredCall`, :732): the pin's verdict alone, no further boost.
+    nested: bool,
     blocked_by_bound: bool,
     /// A loop's exit test compares against a bound that this site's arguments
     /// make constant: the copy knows its trip count (see
@@ -603,6 +614,7 @@ impl<'a> Analyzer<'a> {
             cost: 0,
             single_bb: true,
             decided_by_threshold: false,
+            nested: false,
             blocked_by_bound: false,
             loop_bound_known: false,
             sroa_arg_costs: IdMap::new(),
@@ -1085,6 +1097,12 @@ impl<'a> Analyzer<'a> {
             }
             Opcode::Select => self.visit_select(inst),
             Opcode::Switch => self.visit_switch(inst),
+            // `visitIndirectBrInst`: costs like any instruction, and the
+            // callee is noted as holding one.
+            Opcode::IndirectBr => {
+                self.has_indirect_br = true;
+                false
+            }
             Opcode::Resume => false,
             Opcode::Unreachable => true,
             // CallAnalyzer has no visitor for the lane
@@ -1581,7 +1599,11 @@ impl<'a> Analyzer<'a> {
         if matches!(operation.opcode, Opcode::Call(_)) && has_flag(&info.attrs, "noduplicate") {
             self.contains_noduplicate_call = true;
         }
-        let target = llrm_mir::memory::callee(self.context, self.callee, inst);
+        let direct = llrm_mir::memory::callee(self.context, self.callee, inst);
+        // `getSimplifiedValue<Function>` (:2490): an indirect call through a
+        // value this site makes a function of the call's type is a call of it.
+        let target = direct.or_else(|| self.known_function(&operation, &info));
+        let indirect = direct.is_none() && target.is_some();
         let Some(target) = target else {
             // Indirect: argument setup, the memory it may write.
             self.add_cost(arguments as i64 * INSTR_COST);
@@ -1655,14 +1677,80 @@ impl<'a> Analyzer<'a> {
             return self.visit_default(inst);
         }
         if lowered_to_call(self.site.module, target) {
-            // onLoweredCall (:732), a direct call.
+            // onLoweredCall (:732).
             self.add_cost(arguments as i64 * INSTR_COST);
-            self.add_cost(CALL_PENALTY);
+            if indirect && !self.nested {
+                let bonus = self.indirect_call_bonus(inst, target);
+                self.add_cost(-bonus);
+            } else {
+                self.add_cost(CALL_PENALTY);
+            }
         }
-        if !only_reads_memory(&info) {
+        let target_reads_only = indirect
+            && matches!(&self.site.module.global(target).kind, GlobalKind::Function(function)
+                if !llrm_mir::memory::stated(&function.attrs).writes);
+        if !(only_reads_memory(&info) || target_reads_only) {
             self.disable_load_elimination();
         }
         self.visit_default(inst)
+    }
+
+    /// The function an indirect call calls at this site: its callee operand is
+    /// a function constant here, of the call's type.
+    fn known_function(
+        &self,
+        operation: &llrm_mir::module::Instruction,
+        info: &CallInfo,
+    ) -> Option<GlobalId> {
+        let Some(Simple::Const(id)) = self.constant(*operation.operands.last()?) else { return None };
+        let ConstantKind::Global(global) = self.context.get(id).kind else { return None };
+        match &self.site.module.global(global).kind {
+            GlobalKind::Function(function) if function.ty == info.function_type => Some(global),
+            _ => None,
+        }
+    }
+
+    /// `onLoweredCall`'s indirect branch (:741): pretend to inline the known
+    /// target into this call with `IndirectCallThreshold` as the threshold;
+    /// what that leaves of the threshold, never below zero, comes off the cost.
+    fn indirect_call_bonus(
+        &self,
+        inst: InstId,
+        target: GlobalId,
+    ) -> i64 {
+        let module = self.site.module;
+        let GlobalKind::Function(function) = &module.global(target).kind else { return 0 };
+        let frequencies = caller_frequencies(module, self.site.layout, self.callee);
+        let block = self.callee.parent(inst);
+        let site = Site {
+            module,
+            layout: self.site.layout,
+            caller: self.callee,
+            caller_id: self.site.callee_id,
+            call: inst,
+            callee: function,
+            callee_id: target,
+            // The call is indirect: no sole call to a local function.
+            sole_call_to_local: false,
+            callee_calls: 0,
+            callee_dies: false,
+            caller_recursive: false,
+            callee_linear_recursive: false,
+            caller_size: self.site.caller_size,
+            relative_frequency: block.and_then(|block| relative_to_entry(&frequencies, block)),
+            cold_frequency: block.and_then(|block| cold_relative_to_entry(&frequencies, block)),
+            entry_weight: None,
+            planned: None,
+            tti: self.site.tti,
+        };
+        let params = InlineParams { default_threshold: INDIRECT_CALL_THRESHOLD, ..self.params };
+        let mut nested = Analyzer::new(&site, params);
+        nested.nested = true;
+        if nested.analyze().is_ok() && !nested.verdict_is_over_threshold() {
+            (nested.threshold - nested.cost).max(0)
+        } else {
+            0
+        }
     }
 
     /// `visitSelectInst` (:2585).
@@ -2045,6 +2133,11 @@ impl<'a> Analyzer<'a> {
             at += 1;
             if self.callee.block(block).is_empty() {
                 continue;
+            }
+            // The blockaddress may escape the function, and inlining then makes
+            // an invalid cross-function reference (InlineCost.cpp:3001).
+            if self.callee.has_address_taken(block) {
+                return Err("blockaddress used".into());
             }
             // onBlockStart: CostAtBBStart unused without cost-benefit (D4).
             self.analyze_block(block)?;
@@ -2696,7 +2789,9 @@ impl<'a> Analyzer<'a> {
         // -O1 keeps the pin's threshold alone where the target's rate binds at
         // -O2 and -O3 only.
         let rate_off = at_o1 && self.site.tti.is_some_and(|tti| !tti.speed_inline_rate_at_o1());
-        let grows = if self.site.caller_size == CallerSize::Speed && !unpriced && !rate_off {
+        let grows = if self.nested {
+            false
+        } else if self.site.caller_size == CallerSize::Speed && !unpriced && !rate_off {
             self.grows_more_than_it_saves()
                 && !(self.loop_bound_known && self.site.tti.is_some_and(|tti| tti.inline_hints_known_loop_bound()))
         } else if unpriced {

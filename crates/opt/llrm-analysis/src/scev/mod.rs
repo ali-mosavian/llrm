@@ -791,6 +791,7 @@ fn llvm_opcode(
             }
         }
         O::Switch => 4,
+        O::IndirectBr => 5,
         O::Invoke(_) => 6,
         O::Resume => 7,
         O::Unreachable => 8,
