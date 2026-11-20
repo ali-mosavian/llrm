@@ -1776,6 +1776,10 @@ impl Tti for X86 {
         }
     }
 
+    fn opt_size_inline_guard_yields_to_inlinehint(&self) -> bool {
+        self.tuning.inline_size_guard_yields_to_inlinehint
+    }
+
     fn unroll_promotion_fits_registers(&self) -> bool {
         self.tuning.unroll_promotion_fits_registers
     }

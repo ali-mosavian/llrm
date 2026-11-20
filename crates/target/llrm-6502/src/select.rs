@@ -285,7 +285,7 @@ fn function_text_once(
 }
 
 /// The functions `parts` of `module` as ca65 text, in order. The callee-save
-/// helpers are linked once and cost [`alloc::SAVE_HELPERS_BYTES`], so the
+/// helpers are linked once and cost [`alloc::save_helpers_bytes`], so the
 /// functions that would use them keep them only where together they save more
 /// than that; otherwise each saves its cells inline. Break-even: `k` users of
 /// `n = 3` cells (9 bytes each) pay from 4 users; one user of 8 cells (39
@@ -315,7 +315,7 @@ pub fn module_text(
             gain += bytes(&text)? - bytes(&texts[at])?;
             inline.push(text);
         }
-        if gain <= alloc::SAVE_HELPERS_BYTES {
+        if gain <= alloc::save_helpers_bytes(users.iter().map(|&at| texts[at].as_str())) {
             for (at, text) in users.into_iter().zip(inline) {
                 alloc::keep_saves_inline(parts[at].0);
                 texts[at] = text;
