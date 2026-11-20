@@ -947,6 +947,10 @@ impl Tti for X86 {
         self.tuning.pops_arguments_at_size
     }
 
+    fn pops_arguments_cold_only_at_size(&self) -> bool {
+        self.tuning.pops_arguments_cold_only_at_size
+    }
+
     fn libc_memcpy(&self) -> bool {
         self.tuning.libc_memcpy
     }
@@ -1078,6 +1082,10 @@ impl Tti for X86 {
 
     fn switch_lookup_trial_at_size(&self) -> bool {
         self.tuning.switch_lookup_trial_at_size
+    }
+
+    fn opt_size_inline_credit_gate(&self) -> bool {
+        self.tuning.inline_trial_credit_gate
     }
 
     fn loop_idiom_copy_trial_at_size(&self) -> bool {
