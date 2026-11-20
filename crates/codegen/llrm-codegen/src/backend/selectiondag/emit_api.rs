@@ -200,6 +200,9 @@ pub struct EmitContext<'a> {
     pub globals: &'a dyn GlobalMap,
     /// The LIR address of each MIR block, by `BlockId`: what a branch names.
     pub block_at: &'a HashMap<u32, i64>,
+    /// The LIR blocks an `indirectbr` may reach, by the address of the MIR
+    /// block it ends.
+    pub indirect: &'a HashMap<i64, Vec<i64>>,
     pub frame: &'a dyn FrameMap,
     /// How addresses are formed: real mode constrains a base and an index to
     /// their register classes (SD4).

@@ -47,6 +47,7 @@ fn allocations_pricing_registers(repeats: usize) -> usize {
         indirect: false,
         table: vec![],
         table_id: None,
+        computed: false,
         repeat: false,
         lock: false,
         pops: None,

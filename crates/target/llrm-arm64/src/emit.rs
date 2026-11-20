@@ -9,6 +9,7 @@ use llrm_support::hash::HashMap;
 
 use crate::data::{self, DataReloc};
 use crate::frame::Lowered;
+use crate::layout;
 use crate::machine::Platform;
 use crate::mc::backend::Arm64Backend;
 use crate::mc::encode::{FixupKind, encode};
@@ -174,6 +175,19 @@ pub fn object(
     for (function, offset) in functions.iter().zip(&text_offsets) {
         let size = function.blocks.iter().map(|block| words(block) * 4).sum();
         symbols.defined(&function.symbol, function.binding, text_index, *offset, size);
+        // The symbol of a block whose address is taken, where its first word
+        // is: code and data name it before the function that holds it is
+        // placed.
+        let mut at = *offset;
+        for inst in function.blocks.iter().flat_map(|block| &block.insts) {
+            match inst {
+                Inst::Label(name) if layout::is_address_symbol(name) => {
+                    symbols.defined(name, Binding::Local, text_index, at, 0);
+                }
+                _ if inst.is_directive() => {}
+                _ => at += 4,
+            }
+        }
     }
     // Data sections: constants, writable data, zero-filled. A constant the
     // code loads from memory of 4, 8, 16 or 32 bytes sits in the mergeable

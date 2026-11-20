@@ -58,7 +58,12 @@ pub fn globals(
 ) -> Result<Vec<Placed>, String> {
     let symbol_of = |name: &str| symbol_name(platform, name);
     let mut out = Vec::new();
-    for variable in llrm_mir::image::variables(module, layout, &symbol_of)? {
+    for variable in llrm_mir::image::variables_with_blocks(
+        module,
+        layout,
+        &symbol_of,
+        Some(&llrm_codegen::backend::blockaddress::symbol),
+    )? {
         if variable.name == "llvm.global_dtors" {
             return Err("llvm.global_dtors: destructors are not supported".to_owned());
         }

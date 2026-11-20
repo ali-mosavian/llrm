@@ -245,6 +245,8 @@ mod dag_function_soft_float_tests;
 #[cfg(test)]
 mod dag_function_switch_tests;
 #[cfg(test)]
+mod dag_function_indirectbr_tests;
+#[cfg(test)]
 mod dag_function_tail_tests;
 #[cfg(test)]
 mod dag_function_tests;
