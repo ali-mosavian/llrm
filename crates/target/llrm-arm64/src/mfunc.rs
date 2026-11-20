@@ -64,6 +64,12 @@ pub enum Op {
         /// The labels of the blocks the entries go to; the table's successors.
         targets: Vec<String>,
     },
+    /// `BR rn` of an `indirectbr`: a jump through a register to one of
+    /// `targets`, the labels of the blocks it may reach (its successors).
+    IndirectJump {
+        rn: Gpr,
+        targets: Vec<String>,
+    },
     /// The end of a block the IR ends in `unreachable`: no code (the pin traps
     /// only for MachO and Windows CFI) and no successor, not even the block
     /// after it. Selection puts it last in the block.
@@ -111,6 +117,7 @@ impl Op {
                 f(RegRef::Gpr(dst), Role::Def);
                 f(RegRef::Gpr(scratch), Role::Def);
             }
+            Op::IndirectJump { rn, .. } => f(RegRef::Gpr(rn), Role::Use),
             Op::Call { callee, uses, defs, .. } => {
                 if let Callee::Register(register) = callee {
                     f(RegRef::Gpr(register), Role::Use);
@@ -506,6 +513,7 @@ pub fn falls_through(block: &MBlock) -> bool {
                 Op::I(Inst::Branch { link: false, target: Target::Label(_) })
                     | Op::Return { .. }
                     | Op::JumpTable { .. }
+                    | Op::IndirectJump { .. }
                     | Op::Unreachable
                     | Op::I(Inst::Brk { .. })
             ),
@@ -531,7 +539,7 @@ pub fn successors_of(
             | Op::I(Inst::TestBranch { target: Target::Label(label), .. }) => {
                 out.extend(labels.get(label.as_str()).copied());
             }
-            Op::JumpTable { targets, .. } => {
+            Op::JumpTable { targets, .. } | Op::IndirectJump { targets, .. } => {
                 out.extend(targets.iter().filter_map(|label| labels.get(label.as_str()).copied()));
             }
             _ => {}
@@ -736,7 +744,7 @@ pub fn lower_phis(function: &mut MFunc) -> Result<(), String> {
                         *target = Target::Label(edge.clone());
                         retargeted = true;
                     }
-                    Op::JumpTable { targets, .. } => {
+                    Op::JumpTable { targets, .. } | Op::IndirectJump { targets, .. } => {
                         for entry in targets.iter_mut().filter(|entry| **entry == label) {
                             *entry = edge.clone();
                             retargeted = true;
