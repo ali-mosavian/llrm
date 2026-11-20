@@ -1178,8 +1178,12 @@ fn a_callee_saved_cell_goes_to_the_loop_values_only() {
               %hot = phi i8 [ 0, %entry ], [ %hot2, %loop ]\n  %r = call i8 @ext(i8 %i)\n  %hot2 = add i8 %hot, %r\n  %i2 = add i8 %i, 1\n  \
               %more = icmp ult i8 %i2, %n\n  br i1 %more, label %loop, label %done\ndone:\n  %out = add i8 %hot2, %cold\n  ret i8 %out\n}";
     let text = compile(ir, "mix");
-    let saved = (8..16).filter(|n| text.contains(&format!("  lda rc{n}\n  pha"))).count();
-    assert_eq!(saved, 3, "{text}");
+    // inline, or `ldy #n` before the helper that saves rc8.. up to n of them
+    let inline = (8..16).filter(|n| text.contains(&format!("  lda rc{n}\n  pha"))).count();
+    let shared = text.split_once("  ldy #").filter(|(_, rest)| rest.contains("jsr __csave")).and_then(|(_, rest)| {
+        rest.split_once('\n').and_then(|(n, _)| n.parse::<usize>().ok())
+    });
+    assert_eq!(shared.unwrap_or(inline), 3, "{text}");
     // cold arrives in a
     assert!(text.contains("  sta s_mix"), "cold is in a slot: {text}");
 }
@@ -1254,7 +1258,10 @@ fn cells_saved_on_the_stack_leave_the_result_and_the_callers_cells_alone() {
         .replacen("  ret i8 %r\n}", "  store i8 %r, ptr %o\n  ret void\n}", 1);
     // the word: 58 in both halves
     let text = compile(&word, "quad");
-    assert!(text.contains("  pla\n") && text.contains("  tay\n"), "pops with a result live:\n{text}");
+    assert!(
+        (text.contains("  pla\n") && text.contains("  tay\n")) || text.contains("jmp __crest_ax"),
+        "pops with a result live:\n{text}"
+    );
     let program = format!("{text}{data}");
     let low = common::run_with("alloc-pushed-lo", &format!("{set}{pushed_args}  jsr quad\n"), &program);
     let high = common::run_with("alloc-pushed-hi", &format!("{set}{pushed_args}  jsr quad\n  txa\n"), &program);
