@@ -200,6 +200,7 @@ impl Builder<'_> {
                 self.set_value(instruction.result.ok_or(Refused("a decrement without a result"))?, node);
                 Ok(())
             }
+            Intrinsic::Constrained(op) => self.visit_constrained_fp(instruction, *op),
             _ => Err(Refused("intrinsic call")),
         }
     }
