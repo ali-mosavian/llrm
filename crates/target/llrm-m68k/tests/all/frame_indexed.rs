@@ -134,10 +134,15 @@ fn slot_leas(text: &str) -> Vec<i64> {
 /// The slot folds exactly where its displacement plus the margin for a call of
 /// two arguments (8) fits: 96 folds, 100 does not (127 - 28 = 99). With the
 /// guard loosened by one, the margin short by one or the pushed arguments left
-/// out, 100 folds.
+/// out, 100 folds. The premise is stored arguments (`-Os`): at speed levels
+/// `callpush` pushes the two after the fold, the frame's call area shrinks by
+/// 4 and the emitted slot sits 4 below the displacement the fold judged, so
+/// `-O2` read as exact (96 kept at pad 92) went red once pushes were chosen
+/// there; it keeps the safe side (folded <= 99) and the 4 B slack.
 #[test]
 fn a_slot_folds_exactly_where_the_displacement_and_the_margin_fit() {
     let (mut folded, mut kept) = (Vec::new(), Vec::new());
+    let mut speed_edge = (Vec::new(), Vec::new());
     for cpu in ["68000", "68020"] {
         for level in [Level::O2, Level::Os] {
             for pad in (4..140).step_by(4) {
@@ -150,16 +155,20 @@ fn a_slot_folds_exactly_where_the_displacement_and_the_margin_fit() {
                         .max()
                         .unwrap_or_else(|| panic!("no lea {cpu} {level:?} pad {pad}:\n{out}")),
                 };
-                assert_eq!(
-                    !displacements.is_empty(),
-                    reference <= 127 - margin(8),
-                    "{cpu} {level:?} pad {pad}:\n{out}"
-                );
-                if displacements.is_empty() { kept.push(reference) } else { folded.push(reference) }
+                let (folds, edge) = (!displacements.is_empty(), 127 - margin(8));
+                if level == Level::Os {
+                    assert_eq!(folds, reference <= edge, "{cpu} {level:?} pad {pad}:\n{out}");
+                    if folds { folded.push(reference) } else { kept.push(reference) }
+                } else {
+                    assert!(!folds || reference <= edge, "{cpu} {level:?} pad {pad} folds past the edge:\n{out}");
+                    assert!(folds || reference > edge - 4, "{cpu} {level:?} pad {pad} kept inside the edge:\n{out}");
+                    if folds { speed_edge.0.push(reference) } else { speed_edge.1.push(reference) }
+                }
             }
         }
     }
     assert_eq!((folded.iter().max(), kept.iter().min()), (Some(&96), Some(&100)));
+    assert!(speed_edge.0.iter().max() <= Some(&96) && speed_edge.1.iter().min() >= Some(&96), "{speed_edge:?}");
 }
 
 /// Two stack arrays of `n` words filled by a loop, read at `k` and passed to a
