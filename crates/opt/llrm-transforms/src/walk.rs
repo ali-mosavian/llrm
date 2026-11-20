@@ -2269,6 +2269,14 @@ fn sized(
                     function,
                     inst,
                     tti,
+                    layout,
+                    &|length| match length {
+                        llrm_mir::module::Operand::Constant(id) => match module.context.get(id).kind {
+                            llrm_mir::context::ConstantKind::Int(bits) => u64::try_from(bits).ok(),
+                            _ => None,
+                        },
+                        _ => None,
+                    },
                     false,
                 )
             {
