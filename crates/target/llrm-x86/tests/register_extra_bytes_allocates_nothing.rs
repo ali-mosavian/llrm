@@ -46,6 +46,7 @@ fn pricing_a_register_allocates_nothing() {
         table: vec![],
         table_id: None,
         repeat: false,
+        lock: false,
         pops: None,
         tied: None,
     };

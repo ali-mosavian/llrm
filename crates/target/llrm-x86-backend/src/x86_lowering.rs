@@ -1874,7 +1874,7 @@ fn combine_setcc(
 
 /// `combineCarryThroughADD`: flags of `(add carry, -1)`, where the carry is a
 /// `setb` (through extends, truncates and `and 1`), are the flags the `setb`
-/// read. DEVIATE SD242: the `COND_A` form (a swapped `sub`) is not
+/// read. DEVIATE SD259: the `COND_A` form (a swapped `sub`) is not
 /// translated. Reason: nothing produces it at 32 bits yet. Exit: with
 /// `combineSBB`'s remaining folds. Owner: sdag-b. Review 2026-12-10.
 fn carry_through_add(
