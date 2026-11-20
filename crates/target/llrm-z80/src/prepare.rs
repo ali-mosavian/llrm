@@ -172,7 +172,8 @@ pub fn mark_long_shifts(module: &mut Module) {
 /// form is partial products, and the caller prices the two.
 pub const WORD_PRODUCT: &str = "llrm-word-product";
 
-/// Marks every function with a body that multiplies two zero-extended words.
+/// Marks every function with a body that multiplies two zero-extended words, or
+/// multiplies 32 bits or more through an intrinsic the selector expands to them.
 pub fn mark_word_products(module: &mut Module) {
     let names: Vec<String> = module
         .functions()
@@ -195,16 +196,26 @@ pub fn mark_word_products(module: &mut Module) {
                 })
                 .filter_map(|one| one.result)
                 .collect();
-            // a fixed-point multiply of 32 bits or more is expanded to the
-            // same word products at selection
-            let fixed = function.walk().any(|(_, call)| {
+            // a fixed-point or overflow-checked multiply of 32 bits or more
+            // is expanded to the same word products at selection
+            let expanded = function.walk().any(|(_, call)| {
                 let Some(callee) = llrm_mir::memory::callee(&module.context, function, call) else { return false };
                 matches!(
                     module.globals.get(callee.0 as usize).and_then(GlobalValue::intrinsic),
-                    Some(Intrinsic::FixedMul { .. } | Intrinsic::Fixed { divide: false })
-                ) && module.context.types.int_bits(function.instruction(call).ty).is_some_and(|bits| bits >= 32)
+                    Some(
+                        Intrinsic::FixedMul { .. }
+                            | Intrinsic::Fixed { divide: false }
+                            | Intrinsic::WithOverflow { op: BinaryOp::Mul, .. }
+                    )
+                ) && function
+                    .instruction(call)
+                    .operands
+                    .first()
+                    .and_then(|&operand| function.operand_type(&module.context, operand))
+                    .and_then(|ty| module.context.types.int_bits(ty))
+                    .is_some_and(|bits| bits >= 32)
             });
-            fixed
+            expanded
                 || instructions.iter().any(|one| {
                     matches!(one.opcode, Opcode::Binary(BinaryOp::Mul))
                         && module.context.types.int_bits(one.ty) == Some(32)
