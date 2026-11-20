@@ -1,5 +1,5 @@
-; ModuleID = '/home/alim/work/personal/llrm-zed/bench/parity/control.c'
-source_filename = "/home/alim/work/personal/llrm-zed/bench/parity/control.c"
+; ModuleID = 'control.c'
+source_filename = "control.c"
 target datalayout = "e-m:e-p:16:16-i32:16-i64:16-f32:16-f64:16-a:8-n8:16-S16"
 
 ; Function Attrs: nofree norecurse nosync nounwind memory(argmem: read)

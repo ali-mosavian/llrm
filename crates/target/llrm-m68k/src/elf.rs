@@ -136,7 +136,7 @@ pub fn object_with(
     exports: &HashMap<String, Export>,
     variables: &[Variable],
 ) -> Result<Object, String> {
-    let mut items = items.to_vec();
+    let mut items = crate::object::tail_jumps_narrowed(items);
     loop {
         match place(name, &items, exports, variables)? {
             Placed::Wide(wide) => {

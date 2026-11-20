@@ -1609,3 +1609,48 @@ define zeroext i1 @same(ptr %0, ptr %1) {
         .collect();
     assert!(widths.contains(&4), "one xor is a word: {widths:?}");
 }
+
+/// QB `core/vm/system.c` at -O2 and -O3 stopped with `Legalize(Unsupported {
+/// op: Truncate, ty: V2I8, what: "widen result" })`: a vector conversion whose
+/// result type widens had no `WidenVecRes_Convert`, so SLP's `<2 x i16>` to
+/// `<2 x i8>` store was refused. One function stands for each way the pin
+/// widens a conversion (and a `select` of the same lanes); the lanes one by one
+/// (`trunc`, `zext`, `sext`) is the one an SSE2 target reaches, the wider input
+/// types being illegal.
+#[test]
+fn an_m64_vector_conversion_whose_result_widens_is_selected() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"
+define void @trunc_v2(ptr %p, ptr %q) {
+  %a = load <2 x i16>, ptr %q, align 2
+  %t = trunc <2 x i16> %a to <2 x i8>
+  store <2 x i8> %t, ptr %p, align 1
+  ret void
+}
+define void @zext_v3(ptr %p, ptr %q) {
+  %a = load <3 x i16>, ptr %q, align 2
+  %t = zext <3 x i16> %a to <3 x i32>
+  store <3 x i32> %t, ptr %p, align 4
+  ret void
+}
+define void @select_v2(ptr %p, ptr %q, ptr %r) {
+  %x = load <2 x i8>, ptr %q, align 1
+  %y = load <2 x i8>, ptr %r, align 1
+  %c = icmp eq <2 x i8> %x, %y
+  %s = select <2 x i1> %c, <2 x i8> %x, <2 x i8> %y
+  store <2 x i8> %s, ptr %p, align 1
+  ret void
+}
+define void @sext_v3(ptr %p, ptr %q) {
+  %a = load <3 x i8>, ptr %q, align 1
+  %t = sext <3 x i8> %a to <3 x i16>
+  store <3 x i16> %t, ptr %p, align 2
+  ret void
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    for name in ["trunc_v2", "zext_v3", "sext_v3", "select_v2"] {
+        let done = selected(&module, name, &llrm_x86_m64::M64, cpu, &[]);
+        assert!(done.is_ok(), "{name}: {:?}", done.err());
+    }
+}

@@ -53,14 +53,14 @@ fn position(
     items.iter().position(|item| matches!(item, Item::Inst(inst) if inst.opcode == opcode)).expect(opcode)
 }
 
-/// A register-to-register `move.l` of the build, to be added as the cost of a
-/// fold.
-fn a_move(items: &[Item]) -> Item {
-    items
-        .iter()
-        .find(|item| matches!(item, Item::Inst(inst) if inst.opcode == "MOV32rr"))
-        .expect("the build has a data-register move")
-        .clone()
+/// A register-to-register `move.l`, to be added as the cost of a fold. Made
+/// here: the build no longer has one to copy (the functions built once at -O2,
+/// #9934, allocate without the moves the test looked for), and what the tests
+/// ask is how the trial prices an added move, not which builds contain one.
+fn a_move() -> Item {
+    use llrm_m68k::mc::{Inst, Operand};
+    use llrm_m68k::reg;
+    Item::Inst(Inst { opcode: "MOV32rr", operands: vec![Operand::Reg(reg::D0), Operand::Reg(reg::D1)] })
 }
 
 #[test]
@@ -78,7 +78,7 @@ fn a_fold_whose_moves_cost_more_than_it_saves_is_dropped() {
     let (with, without) = (build(true), build(false));
     let at = position(&with, "SUBA16r");
     let mut dearer = with.clone();
-    let extra = a_move(&without);
+    let extra = a_move();
     dearer.insert(at, extra.clone());
     dearer.insert(at, extra);
     let kept = llrm_m68k::trial::cheaper(dearer, without.clone(), Cpu::M68000, Price::Rate);
@@ -92,7 +92,7 @@ fn a_move_outside_the_loop_does_not_outweigh_a_saving_inside_it() {
     let (with, without) = (build(true), build(false));
     let end = position(&with, "RTS");
     let mut dearer = with.clone();
-    dearer.insert(end, a_move(&without));
+    dearer.insert(end, a_move());
     let kept = llrm_m68k::trial::cheaper(dearer.clone(), without, Cpu::M68000, Price::Rate);
     assert_eq!(text(&kept), text(&dearer));
 }

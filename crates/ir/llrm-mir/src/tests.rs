@@ -434,6 +434,21 @@ fn an_inline_assembly_declaration_is_checked_against_its_name() {
     assert!(problems(&format!("declare {{i16, i16}} @{name}(i16, i16)\n"))[0].contains("incorrect argument type"));
 }
 
+/// A flat 64-bit block (`llrm.ia64.asm.`) keeps its bitness through its name
+/// and takes `i64` registers, which a 32-bit block's declaration refuses
+/// ("incorrect return type").
+#[test]
+fn a_64_bit_inline_assembly_block_keeps_its_bits_and_takes_i64_registers() {
+    let name = "llrm.ia64.asm.48f7e1.rax_rcx.rax_rdx.-.n";
+    let block = crate::intrinsics::asm(name).expect("parses");
+    assert_eq!(block.bits, 64);
+    assert_eq!(crate::intrinsics::asm_name(&block), name);
+    let problems = |text: &str| crate::verify::verify(&parse::module(text).unwrap_or_else(|error| panic!("{error}")));
+    assert_eq!(problems(&format!("declare {{i64, i64}} @{name}(i64, i64)\n")), Vec::<String>::new());
+    let narrow = name.replace("ia64", "ia32");
+    assert!(problems(&format!("declare {{i64, i64}} @{narrow}(i64, i64)\n"))[0].contains("incorrect return type"));
+}
+
 /// BCC stores 3.125L as 00 00 00 00 00 00 00 C8 00 40; a long double
 /// global llrm lays down must hold the same ten bytes.
 #[test]
@@ -982,6 +997,23 @@ fn clangs_target_attributes_and_captures_are_read() {
     round(&format!("{DATALAYOUT}\ndeclare i16 @h(ptr nofreeobj dead_on_return %p) nocreateundeforpoison\n"));
     // `allocsize(0, 1)` on a declaration (clang's `malloc`, `calloc`).
     round(&format!("{DATALAYOUT}\ndeclare ptr @calloc(i16, i16) allocsize(0, 1) allockind(\"alloc,zeroed\")\n"));
+}
+
+/// QB's `pfpu.c` was refused at parse ("expected `}`, found `strictfp`"): clang
+/// states `strictfp` on a function and on its calls, and the reader knew only
+/// some of the valueless attributes LLVM has. Each now reads and prints back;
+/// `strictfp` on a call is the flag the folders and `partialinline` look for.
+#[test]
+fn strictfp_and_the_other_valueless_attributes_are_read() {
+    let text = format!(
+        "{DATALAYOUT}\ndeclare double @sqrt(double)\n\ndefine double @f(double %x) strictfp nonlazybind {{\nb0:\n  %r = call double @sqrt(double %x) #0\n  ret double %r\n}}\n\nattributes #0 = {{ strictfp }}\n"
+    );
+    let once = round(&text);
+    assert!(once.contains("strictfp"), "{once}");
+    assert_eq!(round(&once), once);
+    for word in crate::opcode::TARGET_FLAG_ATTRIBUTES.iter().filter(|word| !matches!(**word, "allockind" | "allocsize")) {
+        round(&format!("{DATALAYOUT}\ndeclare void @g() {word}\n"));
+    }
 }
 
 /// Each use asked `instruction_dominates` of its definition, which scanned the

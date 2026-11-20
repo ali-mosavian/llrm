@@ -19,6 +19,16 @@
 //! too. A member is charged in full to this translation unit's sites: a unit
 //! cannot know the uses of another (conservative). Sizes come from the target
 //! description. Owner m68k. Review: 2026-12-20.
+//!
+//! # Example
+//! Each candidate carries what calling it saves; [`choose`] calls the set whose
+//! savings, less the routines it links once, are the greatest and positive
+//! (the byte sizes are illustrative).
+//!
+//! ```text
+//! mul: saves 40 bytes, calls __mulsi3 (20 bytes)  -> 40 - 20 > 0  call
+//! div: saves 30 bytes, calls __divsi3 (50 bytes)  -> 30 - 50 < 0  inline
+//! ```
 
 use std::collections::{HashMap, HashSet};
 use std::hash::Hash;

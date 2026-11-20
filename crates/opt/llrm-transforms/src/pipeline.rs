@@ -515,9 +515,9 @@ impl Options {
         self.limits.target_percent >= 200
     }
 
-    /// -Oz: no loop is copied.
+    /// -Oz: -Os without header copies.
     pub fn min_size() -> Self {
-        Self { unroll: false, has_min_size: true, inline: inline::Threshold::default().for_min_size(), ..Self::size() }
+        Self { has_min_size: true, inline: inline::Threshold::default().for_min_size(), ..Self::size() }
     }
 
     /// Whether pass `name` is on. Every pass can be turned off, which is
@@ -882,7 +882,10 @@ impl FunctionPass for LoopPassManager {
             if !unit.function.is_placed(header) || !found.is_loop_header(header) {
                 continue;
             }
-            {
+            // LLVM's loop pass manager holds the `Loop`, which keeps its identity
+            // when `LoopRotate` moves its header; the scope follows the header, so
+            // the loop to run again is read from it.
+            let header = {
                 let _scope = crate::loopfilter::only(&[header]);
                 for part in self.passes.iter_mut() {
                     let name = part.name();
@@ -894,7 +897,8 @@ impl FunctionPass for LoopPassManager {
                         analyses.invalidate(unit.function, &preserved);
                     }
                 }
-            }
+                crate::loopfilter::current().first().copied().unwrap_or(header)
+            };
             // The loop itself is popped first, then its siblings in order.
             let (revisit, mut siblings) = crate::loopfilter::take_unswitched();
             siblings.reverse();

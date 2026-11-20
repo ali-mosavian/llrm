@@ -232,6 +232,21 @@ impl Tti for Z80Tti {
         true
     }
 
+    /// DEVIATE LICM-SPEC (owner z80, exit 2026-12-15): `bc`, `de`, `hl`, `ix`
+    /// and `iy` are the values a loop keeps; past them an invariant word the
+    /// loop computes on some trips only is a frame slot stored once and
+    /// reloaded each trip it is read, where the computation is an `inc` or an
+    /// `add`. GCC's `loop-invariant.cc` with `-fira-loop-pressure` moves an
+    /// invariant only while its class has registers left. queens -Os: `&q[row]`
+    /// and `row + 1` hoisted out of the column loop, 379 B against 360 B.
+    fn licm_prices_speculated_values(&self) -> bool {
+        true
+    }
+
+    fn licm_register_limit(&self) -> Option<u32> {
+        Some(5)
+    }
+
     /// DEVIATE LSR-TIE (owner z80, exit 2026-12-15): a recurrence stepped by
     /// a register is an `add hl, rr` through `hl` and a frame slot for the
     /// step, where a constant step is an `inc` of the pair itself; LSR counts

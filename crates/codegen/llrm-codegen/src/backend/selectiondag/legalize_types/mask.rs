@@ -8,8 +8,8 @@
 //! `unifyMaskTypes` of
 //! [LegalizeVectorTypes.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/LegalizeVectorTypes.cpp#L7408).
 //!
-//! DEVIATE VM1 (owner llrm-arm64-vec, exit 2026-11-24): a scalable vector, a
-//! widened (`TypeWidenVector`) select and strict compares do not exist here.
+//! DEVIATE VM1 (owner llrm-arm64-vec, exit 2026-11-24): a scalable vector and
+//! strict compares do not exist here.
 
 use llrm_sdag::lowering::TypeAction;
 
@@ -81,7 +81,11 @@ impl TypeLegalizer<'_> {
         } else if self.legal_form(cond_vt).element().size_in_bits() == 1 {
             return None;
         }
+        // The select's result widened, where it is to be.
         let mut to_mask = select_vt;
+        if self.action(to_mask) == TypeAction::WidenVector {
+            to_mask = self.tli.types.type_conversion(to_mask).1;
+        }
         if !to_mask.element().is_integer() {
             to_mask = to_mask.change_vector_element_type_to_integer();
         }

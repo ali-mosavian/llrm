@@ -41,6 +41,8 @@ pub struct Function {
     pub tables: Vec<crate::jumptable::Table>,
     /// Whether it has an entry in the unwind tables.
     pub unwind: bool,
+    /// The labels of the blocks that end in a call that never returns.
+    pub dead_ends: Vec<String>,
 }
 
 /// A function's pieces for the layout: a block's label, then its words.
@@ -356,7 +358,7 @@ pub fn object(
             section: text_index,
             offset,
             length: function.blocks.iter().map(|block| words(block) * 4).sum(),
-            rows: crate::cfi::rows(&function.blocks),
+            rows: crate::cfi::rows(&function.blocks, &function.dead_ends),
             cfi: function.blocks.iter().flat_map(|block| &block.insts).filter_map(directive).collect(),
             seh: Vec::new(),
         })

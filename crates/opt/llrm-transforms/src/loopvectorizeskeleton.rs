@@ -41,6 +41,16 @@
 //!   of a reduction (the interleaved loops' `bin.rdx`, LVI2), which the middle
 //!   block computes; any other loop-defined value used outside is refused by
 //!   the recipe extraction, LVP2.
+//!
+//! # Example
+//! A loop gets a trip-count check, a vector trip count `n.vec` and a scalar remainder loop around it.
+//!
+//! ```text
+//! %n = sub %bound, %start
+//! %min.iters.check = icmp ult %n, VF*IC   ; br to scalar.ph or vector.ph
+//! %n.vec = sub %n, (and %n, VF*IC-1)      ; vector loop runs to %ind.end
+//! middle.block: br (%n == %n.vec), exit, scalar.ph
+//! ```
 
 use llrm_analysis::runtimecheck::{RuntimePointerChecking, VectorizerParams};
 use llrm_analysis::scev::expander::Expander;

@@ -21,6 +21,17 @@
 //!
 //! # Used by
 //! `slpvectorize`, `slptree`.
+//!
+//! # Example
+//! A chain of `insertelement`s of scalars whose tree of operations pays becomes one vector operation.
+//!
+//! ```text
+//! %x0 = add i32 %a0, %b0
+//! %x1 = add i32 %a1, %b1
+//! %i0 = insertelement <2 x i32> poison, i32 %x0, i64 0
+//! %i1 = insertelement <2 x i32> %i0, i32 %x1, i64 1
+//! => %i1 = add <2 x i32> %va, %vb
+//! ```
 
 use llrm_mir::context::{ConstantKind, Context};
 use llrm_mir::datalayout::DataLayout;

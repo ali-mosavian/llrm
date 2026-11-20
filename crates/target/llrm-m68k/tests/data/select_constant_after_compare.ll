@@ -1,5 +1,5 @@
-; ModuleID = '/home/alim/scratch/m68k2/o/f334.c'
-source_filename = "/home/alim/scratch/m68k2/o/f334.c"
+; ModuleID = 'f334.c'
+source_filename = "f334.c"
 target datalayout = "E-m:e-p:32:16:32-i8:8:8-i16:16:16-i32:16:32-n8:16:32-a:0:16-S16"
 target triple = "m68k-unknown-linux-gnu"
 

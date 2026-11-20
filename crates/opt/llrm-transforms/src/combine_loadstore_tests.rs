@@ -201,6 +201,40 @@ b0:
     assert_eq!(n, 1);
 }
 
+/// `store i32 (bitcast float %x)` stayed an integer store, so arm64 moved the
+/// value through a GPR (`fmov w9, s16; str w9`) where the pin stores `s16`:
+/// +4 B per float op in QuickrBasic operands.c.
+#[test]
+fn a_store_of_a_bitcast_stores_the_operand() {
+    let out = combined(
+        "define void @f(float %x, ptr %p) {
+b0:
+  %b = bitcast float %x to i32
+  store i32 %b, ptr %p, align 8, !tbaa !1
+  ret void
+}
+!1 = !{!2, !2, i64 0}
+!2 = !{!\"int\"}
+",
+    );
+    assert!(out.contains("store float %x, ptr %p, align 8, !tbaa") && !out.contains("bitcast"), "{out}");
+}
+
+/// A volatile store of a bitcast keeps its type.
+#[test]
+fn a_volatile_store_of_a_bitcast_keeps_its_type() {
+    let out = combined(
+        "define void @f(float %x, ptr %p) {
+b0:
+  %b = bitcast float %x to i32
+  store volatile i32 %b, ptr %p
+  ret void
+}
+",
+    );
+    assert!(out.contains("store volatile i32 %b"), "{out}");
+}
+
 /// An alloca with a count of 4 stayed a count: it is `alloca [4 x i16]`.
 #[test]
 fn a_constant_count_is_an_array_type() {
