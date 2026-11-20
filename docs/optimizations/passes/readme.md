@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 312 documented, 5 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 313 documented, 5 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -90,6 +90,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | combine_phi | `foldOpIntoPhi`: an instruction that reads a phi becomes a phi of the instruction applied to each incoming value. | The `visit*` of the families that fold an operation into a phi | [combine_phi](combine_phi.md) |
 | combine_phi_args | `visitPHINode`'s argument folds: a phi of the same operation applied to different values is the operation applied to a phi of those values. | `combine` (its `visit`, the `Phi` opcode). | [combine_phi_args](combine_phi_args.md) |
 | combine_ptrcast | InstCombine's pointer-integer casts: `visitIntToPtr` and `visitPtrToInt` ([InstCombineCasts.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCasts.cpp#L2673)). | `combine` (its dispatch on `PtrToInt` and `IntToPtr`). | [combine_ptrcast](combine_ptrcast.md) |
+| combine_reassociate_for_uses | `reassociateForUses`: `(X op Y) op Z` with `X` or `Y` used elsewhere is rebuilt so the one-use values share an instruction. | Named by `combine_and`, `combine_or`, `combine_xor`. | [combine_reassociate_for_uses](combine_reassociate_for_uses.md) |
 | combine_replace_in | `replaceInInstruction`: the uses of a value inside the one-use chain that feeds a `select` arm read a constant instead. |  | [combine_replace_in](combine_replace_in.md) |
 | combine_returned_arg | InstCombine's call that returns one of its arguments: the call's value is that argument. | `combine_memintrinsics` (`visit_call`). | [combine_returned_arg](combine_returned_arg.md) |
 | combine_select | `FoldOpIntoSelect`: an instruction that reads a select becomes a select of the instruction applied to each arm. | `foldBinOpIntoSelectOrPhi` and the `visit*` of the families that fold an | [combine_select](combine_select.md) |
