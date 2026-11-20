@@ -65,6 +65,9 @@ fn a_vector_shift_is_vector_instructions_and_no_scalar_ones() {
     }
     // The splat of a variable is one `psllw` by a register, not the ladder.
     assert!(!body(&text, "words_by_splat").contains("pcmpgt"), "{text}");
+    // The loop vectorizer priced a constant shift as a variable one (the loop
+    // stayed scalar) when the amount carried no operand information.
+    assert!(body(&text, "shift_loop").contains("psrld "), "{text}");
     // A constant splat with an undef lane is still one immediate shift: it was
     // four shifts and four shuffles.
     let undef = body(&text, "dwords_by_undef_splat");

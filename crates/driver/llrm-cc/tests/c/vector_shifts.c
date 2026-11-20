@@ -35,3 +35,8 @@ void dwords_by_undef_splat(u4i32 *r, u4i32 *a) {
     s[3] = 3;
     *r = *a >> s;
 }
+unsigned shift_loop(int n) {
+    unsigned s = 0;
+    for (int i = n; i >= 0; i--) s += (((unsigned)i * 3u) ^ ((unsigned)i >> 2));
+    return s;
+}
