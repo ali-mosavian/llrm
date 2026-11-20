@@ -1480,6 +1480,9 @@ impl Parser {
                 let i64 = self.module.context.types.int(64);
                 Ok(MetadataOperand::Constant(self.module.context.int(i64, value)))
             }
+            // A typed constant (`extraData: i64 928`): a word and then an
+            // integer.
+            Token::Word(_) if matches!(self.peek_at(1), Token::Int { .. }) => self.metadata_operand(),
             Token::Word(word) => {
                 self.next();
                 let mut text = word;
@@ -2039,6 +2042,15 @@ impl Parser {
     ) -> Parsed<()> {
         let Token::Word(word) = self.next() else { unreachable!("a record") };
         self.expect_punct('(')?;
+        if word == "#dbg_label" {
+            // `#dbg_label(!label, !loc)`: no variable, no value; a label's
+            // address is debug info nothing here reads, so the record is
+            // dropped.
+            self.record_node()?;
+            self.expect_punct(',')?;
+            self.record_node()?;
+            return self.expect_punct(')');
+        }
         let what = match word.as_str() {
             "#dbg_value" if matches!(self.peek(), Token::MetadataName(name) if name == "DIArgList") => {
                 // clang's `!DIArgList(i32 %a, i32 %b)`: the values an
