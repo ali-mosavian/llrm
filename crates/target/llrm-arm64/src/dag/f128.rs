@@ -11,11 +11,13 @@
 //! `softenSetCCOperands`: the routine named by `RTLIB`, its result an integer
 //! that a compare reads against zero.
 //!
-//! `SELECT` is the pin's `F128CSEL` block split (`emit.rs`), and `FNEG`, `FABS` and `FCOPYSIGN` its sign-byte rewrite
-//! through a stack slot (`ExpandFNEG`, in the shared legalizer).
+//! `SELECT` is the pin's `F128CSEL` block split (`emit.rs`), and `FNEG`, `FABS`
+//! and `FCOPYSIGN` its sign-byte rewrite through a stack slot (`ExpandFNEG`, in
+//! the shared legalizer).
 //!
-//! DEVIATE SD534: `f128` `FSQRT`, `FMA`, `FRINT`, `FSIN`, `FCOS` and the other libm routines are not translated: the
-//! node is refused as a libcall the table does not name. Exit: B3.
+//! DEVIATE SD534: `f128` `FSQRT`, `FMA`, `FSIN`, `FCOS` and the other libm
+//! routines are not translated: the node is refused as a libcall the table does
+//! not name. Exit: B3.
 //!
 //! # See also
 //! `AArch64ISelLowering.cpp`: `LowerF128Call`, `LowerFP_EXTEND`,
@@ -162,6 +164,10 @@ pub fn compare(
     let op = dag.opcode(node);
     let (lhs, rhs, code) = match op {
         ISD::SetCC => (dag.operand(node, 0), dag.operand(node, 1), cond_of(dag, dag.operand(node, 2))),
+        // The chain first; the caller joins the value with the calls' chain.
+        ISD::StrictFSetCC | ISD::StrictFSetCCS => {
+            (dag.operand(node, 1), dag.operand(node, 2), cond_of(dag, dag.operand(node, 3)))
+        }
         ISD::BrCC => (dag.operand(node, 2), dag.operand(node, 3), cond_of(dag, dag.operand(node, 1))),
         ISD::SelectCC => (dag.operand(node, 0), dag.operand(node, 1), cond_of(dag, dag.operand(node, 4))),
         _ => return None,
@@ -170,12 +176,13 @@ pub fn compare(
         return None;
     }
     let vt = dag.value_type(node);
-    let result_vt = if op == ISD::SetCC { vt } else { EVT::I32 };
+    let value_only = matches!(op, ISD::SetCC | ISD::StrictFSetCC | ISD::StrictFSetCCS);
+    let result_vt = if value_only { vt } else { EVT::I32 };
     let Some(softened) = soften_compare(dag, lhs, rhs, code, result_vt, call) else { return Some(None) };
     let (new_lhs, new_rhs, new_code) = match softened {
         Softened::Compare { lhs, rhs, code } => (lhs, rhs, code),
         Softened::Boolean(boolean) => {
-            if op == ISD::SetCC {
+            if value_only {
                 return Some(Some(boolean));
             }
             let zero = dag.get_constant(0, dag.value_type(boolean));
@@ -184,7 +191,7 @@ pub fn compare(
     };
     let cc = dag.get_cond_code(new_code);
     Some(Some(match op {
-        ISD::SetCC => dag.get_setcc(vt, new_lhs, new_rhs, new_code),
+        ISD::SetCC | ISD::StrictFSetCC | ISD::StrictFSetCCS => dag.get_setcc(vt, new_lhs, new_rhs, new_code),
         ISD::BrCC => {
             let (chain, dest) = (dag.operand(node, 0), dag.operand(node, 4));
             dag.get_node(ISD::BrCC, EVT::OTHER, &[chain, cc, new_lhs, new_rhs, dest])

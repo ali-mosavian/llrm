@@ -495,6 +495,9 @@ impl TargetLowering {
                 ISD::FSub => libcalls::name(Libcall::Sub(vt)),
                 ISD::FMul => libcalls::name(Libcall::Mul(vt)),
                 ISD::FDiv => libcalls::name(Libcall::Div(vt)),
+                // `RTLIB::RINT_F128`: libm's, not compiler-rt's, so not in
+                // `libcalls::TABLE` (soft-float symbols only).
+                ISD::FRint => Some("rintl"),
                 _ => None,
             };
         }
@@ -1268,13 +1271,19 @@ impl TargetLowering {
         let quad = [MVT::F128];
         t.set_ops(&[FAdd, FSub, FMul, FDiv], &quad, LibCall);
         // The sign-bit operations are Expand, a rewrite of the bits
-        // (`ExpandFNEG`). The pin's FCOS, FMA, FRINT, FSIN and FSQRT
-        // are Expand too, to libcalls this table does not name yet.
+        // (`ExpandFNEG`). The pin's FCOS, FMA, FSIN and FSQRT
+        // are Expand too, to libcalls this table does not name yet (FRINT's is
+        // `rintl`).
         // <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L641>
-        t.set_ops(&[FAbs, FCopySign, FNeg], &quad, Expand);
+        t.set_ops(&[FAbs, FCopySign, FNeg, FRint], &quad, Expand);
         t.set_ops(&[ConstantFP], &quad, Expand);
         t.set_ops(&[SetCC, BrCC, Select, SelectCC], &quad, Custom);
+        // A constrained operation on `f128` is a routine on its chain.
+        t.set_ops(&STRICT_FP, &quad, Expand);
+        t.set_ops(&STRICT_FP_CONVERT, &quad, Expand);
         t.set_ops(&[FpExtend], &quad, Custom);
+        // `LowerSETCC` softens a strict compare on its own chain.
+        t.set_ops(&[StrictFSetCC, StrictFSetCCS], &quad, Custom);
 
         // Atomics.
         let narrow = [MVT::I8, MVT::I16, MVT::I32, MVT::I64];
