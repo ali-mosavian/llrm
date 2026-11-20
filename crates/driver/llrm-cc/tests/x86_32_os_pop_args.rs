@@ -1,7 +1,8 @@
 //! x86-32 -Os: a call's one or two argument words come off the stack by
 //! `pop` (1 byte each), not `add esp,N` (3). QuickrBasic's `ctrl_stmt` carried
-//! 108 of them: m32 Os was +21 B over the best of gcc and clang. Needs
-//! `LLRM_LLC`.
+//! 108 of them: m32 Os was +21 B over the best of gcc and clang. A pop is 4
+//! clocks on the 486, the add 1: a call in a loop keeps the add
+//! (select_of_constants +10% clocks). Needs `LLRM_LLC`.
 
 use std::path::Path;
 use std::process::Command;
@@ -23,6 +24,16 @@ fn a_call_pops_its_one_or_two_argument_words_at_os() {
         .unwrap();
     assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
     let text = std::fs::read_to_string(&asm).unwrap();
-    assert!(!text.contains("add esp, 4") && !text.contains("add esp, 8"), "a call cleaned up by add:\n{text}");
-    assert!(text.contains("pop "), "no pop cleanup:\n{text}");
+    let body = |name: &str| {
+        let start = format!("{name} proc near");
+        let end = format!("{name} endp");
+        text.split(start.as_str()).nth(1).and_then(|rest| rest.split(end.as_str()).next()).expect("a body").to_owned()
+    };
+    for straight in ["a", "b"] {
+        let code = body(straight);
+        assert!(!code.contains("add esp, 4") && !code.contains("add esp, 8"), "{straight} cleaned up by add:\n{code}");
+        assert!(code.contains("pop "), "{straight} has no pop cleanup:\n{code}");
+    }
+    let looped = body("loop");
+    assert!(looped.contains("add esp, 4") && !looped.contains("pop ecx"), "a call in a loop popped:\n{looped}");
 }

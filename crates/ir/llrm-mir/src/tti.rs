@@ -2032,6 +2032,11 @@ pub trait Tti {
         true
     }
 
+    /// `Tuning::pops_arguments_cold_only_at_size`.
+    fn pops_arguments_cold_only_at_size(&self) -> bool {
+        false
+    }
+
     /// `Tuning::libc_memcpy`.
     fn libc_memcpy(&self) -> bool {
         false
