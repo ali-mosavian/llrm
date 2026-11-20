@@ -9,7 +9,7 @@ use std::process::Command;
 
 use llrm_m68k::driver::{Level, assembly, cpu_of};
 
-mod support;
+use crate::support;
 
 const OPS: [(&str, &str); 4] = [("add", "+"), ("sub", "-"), ("and", "&"), ("or", "|")];
 const WIDTHS: [(u32, &str, &str); 3] = [(8, "b", "char"), (16, "w", "short"), (32, "l", "long")];

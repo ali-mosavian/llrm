@@ -6,7 +6,7 @@
 
 use llrm_m68k::driver::{Level, assembly, cpu_of};
 
-const ORDERS: &str = include_str!("data/unroll_bar_orders.ll");
+const ORDERS: &str = include_str!("../data/unroll_bar_orders.ll");
 
 fn instructions(
     cpu: &str,
