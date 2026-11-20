@@ -1398,6 +1398,14 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE OS-OUTLINE-TRIAL (owner llrm-target-m68k, exit 2026-12-20): whether a cold -Os site the size bound
+    /// accepts, of a callee that goes with its calls, is also built as a call in a second compile, the driver keeping
+    /// the finished code with fewer bytes. The units price a copy under the bytes the backend writes for it (jpeg_fixed
+    /// `put32`: 15 units a copy, a call 18; -20 B outlined). False: the bound's verdict stands.
+    fn opt_size_inline_outline_trial(&self) -> bool {
+        false
+    }
+
     /// Whether a callee the -O1 size bound refused is tried inline as at -Os
     /// (SZ2: the copy stays if the caller comes out smaller), where -O1
     /// prices no byte in clocks. False: the bound's verdict stands.
