@@ -1292,12 +1292,23 @@ pub(crate) fn pressure_model(
         }
         return model;
     };
-    Model::of_values(
+    let mut model = Model::of_values(
         sets,
         body.regs(),
         |set| limits[set],
         allowed.iter().map(|(value, width, roots)| (*value, *width, roots.as_deref().unwrap_or(&everywhere))),
-    )
+    );
+    // A value takes the class its definition constrains it to (the pin's vreg class is its
+    // def operand's `RegClass`), where the registers its uses allow name no smaller one.
+    for one in body.blocks.iter().flat_map(|block| block.insns.iter()) {
+        let class = one.what.as_ref().and_then(|what| what.name.as_deref()).and_then(registers.def_register_class);
+        if let (Some(class), [value]) = (class.and_then(|name| sets.class(name)), one.defines.as_slice())
+            && counted(*value)
+        {
+            model.count(*value, class.weight, Rc::from(class.sets.clone()));
+        }
+    }
+    model
 }
 
 /// The values of the float operations: the x87 stack is its own register set,

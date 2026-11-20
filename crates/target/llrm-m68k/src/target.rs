@@ -21,6 +21,30 @@ const CPUS: &[&str] = &["m68000", "m68010", "m68020", "m68030", "m68040", "m6806
 static TIMINGS: LazyLock<timings::Timings> =
     LazyLock::new(|| timings::Timings::parse(include_str!("timings.times")).expect("m68k timings.times parses"));
 
+/// The pin's register pressure sets: `pressure.sets`.
+static PRESSURE: LazyLock<llrm_target::pressure::PressureSets> =
+    LazyLock::new(|| llrm_target::pressure::parse(include_str!("pressure.sets")).expect("pressure.sets parses"));
+
+static REGISTERS: LazyLock<Vec<llrm_target::registers::Register>> =
+    LazyLock::new(|| llrm_target::registers::parse(include_str!("registers.regs")).expect("registers.regs parses"));
+
+/// The limit of pressure set `set` here (`computePSetLimit`): a register may
+/// be allocated if its root is a `gpr` (a6 and sp are not).
+fn pressure_limit(set: usize) -> u32 {
+    PRESSURE.limit(set, |name| {
+        REGISTERS
+            .iter()
+            .find(|one| one.name == name)
+            .and_then(|one| REGISTERS.iter().find(|root| root.name == one.root))
+            .is_some_and(|root| root.is("gpr"))
+    })
+}
+
+/// The pin's `MCInstrDesc` of the opcode `name`.
+fn described(name: &str) -> Option<&'static llrm_dagisel::instr::InstrDesc> {
+    crate::dagisel::local::code_of(name).and_then(crate::dagisel::local::desc)
+}
+
 /// The CPU table of `name`: the price of a byte of code each CPU is judged by.
 pub fn cpu_table(name: &str) -> Option<timings::CpuTable> {
     TIMINGS.cpu(name).cloned()
@@ -292,6 +316,50 @@ impl Target for M68k {
         llrm_target::registers::allocatable(
             &llrm_target::registers::parse(include_str!("registers.regs")).expect("registers.regs parses"),
         ) as i64
+    }
+
+    fn pressure(&self) -> Option<(&'static llrm_target::pressure::PressureSets, Vec<u32>)> {
+        Some((
+            &PRESSURE,
+            (0..PRESSURE.sets.len())
+                // A set whose largest class the table leaves out holds no value
+                // here: its raw limit stands.
+                .map(|set| {
+                    if PRESSURE.class(&PRESSURE.sets[set].largest).is_some() {
+                        pressure_limit(set)
+                    } else {
+                        PRESSURE.sets[set].limit
+                    }
+                })
+                .collect(),
+        ))
+    }
+
+    /// An opcode this target adds above the pin's table is not described: it
+    /// counts as flagged.
+    fn rematerializable_opcode(&self) -> fn(&str) -> bool {
+        |name| {
+            described(name)
+                .is_none_or(|desc| desc.flags & crate::dagisel::generated::instrinfo::flag::REMATERIALIZABLE != 0)
+        }
+    }
+
+    fn def_register_class(&self) -> fn(&str) -> Option<&'static str> {
+        |name| {
+            use crate::dagisel::generated::ids::reg;
+            let desc = described(name)?;
+            let operand = desc.operands.first().filter(|_| desc.num_defs == 1)?;
+            match u16::try_from(operand.reg_class).ok()? {
+                reg::AR32RegClassID => Some("AR32"),
+                reg::DR32RegClassID => Some("DR32"),
+                reg::XR32RegClassID => Some("XR32"),
+                reg::AR16RegClassID => Some("AR16"),
+                reg::DR16RegClassID => Some("DR16"),
+                reg::DR8RegClassID => Some("DR8"),
+                reg::XR16RegClassID => Some("XR16"),
+                _ => None,
+            }
+        }
     }
 
     fn address_forms(

@@ -70,14 +70,15 @@ entry:
     let registers: Vec<_> = call.requires.iter().map(|(held, reg)| (held.width, *reg)).collect();
     let expected = [RegId::RDI, RegId::RSI, RegId::RDX, RegId::RCX, RegId::R8, RegId::R9].map(|r| (8, r));
     assert_eq!(registers, expected);
-    // The argument area is a multiple of 16: a call finds the stack aligned
-    // (printf crashed in `movaps` with the 8-byte area).
+    // The area is the one stack argument: the padding that aligns the call is
+    // the frame's (`call_phase`), checked at the call by
+    // `x86_64_sysv_aligned_calls`.
     let setup = insns
         .iter()
         .filter_map(|i| i.what.as_ref())
         .find(|w| w.name.as_deref() == Some("call_frame_setup"))
         .expect("the area reserved");
-    assert!(matches!(setup.sources[0], crate::model::ir::Loc::Imm(ref i) if i.value == 16), "{setup:?}");
+    assert!(matches!(setup.sources[0], crate::model::ir::Loc::Imm(ref i) if i.value == 8), "{setup:?}");
     let store = insns
         .iter()
         .filter_map(|i| i.what.as_ref())
