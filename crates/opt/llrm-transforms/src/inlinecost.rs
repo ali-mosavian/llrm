@@ -2412,10 +2412,13 @@ impl<'a> Analyzer<'a> {
         // (`inline_dying_credit_at_os`), -Os takes no credit for the
         // callee that goes (a 9-argument float callee, 21 units against
         // ~70 B a copy, inlined three times was +193 B at x86-m16).
+        let hot = self.site.relative_frequency.is_some_and(|ratio| ratio >= HOT_CALLSITE_REL_FREQ)
+            && self.site.tti.is_some_and(|tti| tti.inline_hot_dying_credit_at_os());
         let credit = self.site.callee_dies
             && k >= 2
             && (self.site.caller_size == CallerSize::Speed
-                || self.site.tti.is_none_or(|tti| tti.inline_dying_credit_at_os()));
+                || self.site.tti.is_none_or(|tti| tti.inline_dying_credit_at_os())
+                || hot);
         if credit {
             (k - 1) * size > k * call + frame
         } else {

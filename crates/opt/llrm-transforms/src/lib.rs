@@ -166,6 +166,7 @@ pub mod combine_icmp_table;
 #[cfg(test)]
 mod combine_icmp_table_tests;
 pub mod combine_invert;
+pub mod combine_reassociate_for_uses;
 pub mod combine_loadstore;
 pub mod combine_memintrinsics;
 pub mod combine_minmax;
@@ -332,6 +333,7 @@ pub mod looppeel;
 pub mod looprotate;
 pub mod loopsimplify;
 pub mod loopsimplifycfg;
+pub mod loopsplit;
 pub mod looptermfold;
 pub mod loopunroll;
 pub mod loopunrollandjam;
