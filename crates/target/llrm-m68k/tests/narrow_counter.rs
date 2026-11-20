@@ -20,7 +20,7 @@ loop:
   %w = sext i16 %v to i32
   %add = add nsw i32 %sum, %w
   %i.next = add nuw nsw i32 %i, 1
-  %done = icmp eq i32 %i.next, 40
+  %done = icmp eq i32 %i.next, 100
   br i1 %done, label %exit, label %loop
 exit:
   ret i32 {result}
@@ -30,7 +30,9 @@ exit:
 }
 
 /// tile's inner loop kept `addq.l #1,%d0; bne`: 8 clk a trip on the 68000 where
-/// `addq.w` is 4, 34 clk against gcc's 32.
+/// `addq.w` is 4, 34 clk against gcc's 32. The loop has 100 trips so that it
+/// stays a loop: at 40 the 68000's full-unroll bar of 400 (#10343) leaves no
+/// counter, and 20 clk a trip.
 #[test]
 fn a_counter_nothing_else_reads_steps_by_a_word() {
     let text = assembly(&row("%add"), Cpu::M68000, Level::O2).expect("compiles");
