@@ -1218,6 +1218,7 @@ impl Parser {
             Token::Word(word) if word == "undef" => ConstantKind::Undef,
             Token::Word(word) if word == "zeroinitializer" => ConstantKind::Zero,
             Token::Global(name) => return self.global_ref(&name, ty, line),
+            Token::Exclaim if matches!(shape, Type::Metadata) => ConstantKind::MetadataString(self.string()?),
             Token::Bytes(bytes) => {
                 let byte = self.module.context.types.int(8);
                 if shape != (Type::Array { element: byte, count: bytes.len() as u64 }) {

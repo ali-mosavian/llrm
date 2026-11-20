@@ -762,6 +762,9 @@ pub fn value_id(
                 _ => 17,
             },
             K::Expr(_) => 19,
+            // `MetadataAsValue`: an argument of a constrained call, never an
+            // operand an order is asked of.
+            K::MetadataString(_) => 4,
         },
         Operand::Value(id) => match cx.function.value(id).def {
             ValueDef::Argument(_) => 30,
