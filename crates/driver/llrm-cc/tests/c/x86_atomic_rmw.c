@@ -6,3 +6,5 @@ void or_only(int v) { __atomic_fetch_or(&w, v, __ATOMIC_SEQ_CST); }
 int cas(int expected, int desired) {
     return __atomic_compare_exchange_n(&w, &expected, desired, 0, __ATOMIC_SEQ_CST, __ATOMIC_RELAXED);
 }
+long long wq;
+long long swap64(long long v) { return __atomic_exchange_n(&wq, v, __ATOMIC_SEQ_CST); }

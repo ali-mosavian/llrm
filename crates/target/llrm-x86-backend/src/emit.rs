@@ -1530,7 +1530,7 @@ impl Emitter<'_, '_> {
         }
         // `ATOMIC_SWAP`: the register takes the old value and the cell the new,
         // both ways at once as the `xchg` the machine locks.
-        if matches!(name, "XCHG8rm" | "XCHG16rm" | "XCHG32rm") {
+        if matches!(name, "XCHG8rm" | "XCHG16rm" | "XCHG32rm" | "XCHG64rm") {
             let node = self.dag.node(SDValue { node: n, res: 0 });
             let cell_width = self
                 .ctx

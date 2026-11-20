@@ -1324,6 +1324,28 @@ mod tests {
         assert_eq!(sources(tied), vec![held(3, 4), held(2, 4), Loc::Imm(Imm { value: 9, width: 1, address: None })]);
     }
 
+    /// `lock xadd [w], v2 := v1` ties its register (source 1) to the second
+    /// destination, not the first: the tie was never made, so x86_64
+    /// returned the old value in eax from `lock xadd w, edi`.
+    #[test]
+    fn test_an_instruction_states_the_tie_of_its_second_destination() {
+        let cell = Loc::Mem(crate::model::ir::Mem::new(None, 4));
+        let what = Semantics {
+            name: Some("xadd".into()),
+            dests: vec![cell.clone(), held(2, 4)],
+            sources: vec![cell, held(1, 4)],
+            tied: Some(vec![(1, 1)]),
+            lock: true,
+            ..Semantics::new(Operation::Binary)
+        };
+        let one = Insn::new(0, Some((0, 0)), Some(what), vec![2], vec![1]);
+        let mut counter = 1000..2000;
+        let fix = _untied(None, &one, &mut || counter.next().unwrap()).expect("untied");
+        let [copy, tied] = fix.as_slice() else { panic!("{} instructions", fix.len()) };
+        assert_eq!(sources(copy), vec![held(1, 4)]);
+        assert_eq!(sources(tied)[1], held(2, 4));
+    }
+
     /// copy1d's huge pointer stepped `c := a + 4` then copied `a := c` back
     /// at the latch; under BASIC's register pressure the allocator kept both
     /// copies, and its loop differed from C's by two moves.

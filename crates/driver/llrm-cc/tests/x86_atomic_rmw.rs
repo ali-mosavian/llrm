@@ -42,6 +42,13 @@ fn function<'a>(
 fn x86_add_sub_or_and_cmpxchg_are_the_locked_instructions() {
     for target in ["x86_32-linux", "x86_64-linux"] {
         for level in ["-O1", "-Os"] {
+            if target == "x86_64-linux" {
+                // a 64-bit exchange: the form has one destination, which the
+                // encoder refused (pmou.c)
+                let text = listing(target, level);
+                let body = function(&text, "swap64");
+                assert!(body.iter().any(|line| line.starts_with("xchg ")), "{level}: {}", body.join("\n"));
+            }
             let text = listing(target, level);
             let has = |name: &str, what: &str| {
                 let body = function(&text, name);
