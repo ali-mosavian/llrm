@@ -120,3 +120,23 @@ fn an_fp128_rint_calls_rintl() {
     let asm = driver::assembly(&ir, Platform::Linux, true).unwrap_or_else(|why| panic!("{why}"));
     assert!(asm.contains("bl rintl"), "{asm}");
 }
+
+/// A strict routine's out chain, not the entry node, orders the next strict
+/// operation: `add`, a mode change, `mul`, a mode change keep their order.
+#[test]
+fn a_strict_routines_out_chain_orders_the_next_strict_operation() {
+    let ir = format!(
+        "{LAYOUT}declare i32 @fesetround(i32)\n\
+         declare fp128 @llvm.experimental.constrained.fadd.f128(fp128, fp128, metadata, metadata)\n\
+         declare fp128 @llvm.experimental.constrained.fmul.f128(fp128, fp128, metadata, metadata)\n\
+         define fp128 @f(fp128 %x, fp128 %y) strictfp {{\n\
+           %s = call fp128 @llvm.experimental.constrained.fadd.f128(fp128 %x, fp128 %y, {ROUND}) strictfp\n\
+           %a = call i32 @fesetround(i32 1) strictfp\n\
+           %p = call fp128 @llvm.experimental.constrained.fmul.f128(fp128 %s, fp128 %y, {ROUND}) strictfp\n\
+           %b = call i32 @fesetround(i32 0) strictfp\n\
+           ret fp128 %p\n}}\n"
+    );
+    let asm = driver::assembly(&ir, Platform::Linux, true).unwrap_or_else(|why| panic!("{why}"));
+    let order: Vec<&str> = asm.lines().filter_map(|line| line.trim().strip_prefix("bl ")).collect();
+    assert_eq!(order, ["__addtf3", "fesetround", "__multf3", "fesetround"]);
+}
