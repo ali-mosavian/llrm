@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_visit_select.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_visit_select.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_visit_select.rs sha256:8ea19b318828afe558ff0fc3f823dd9513e14f150b5cb53a0c4e19c338fc91c2 -->
+<!-- src: crates/opt/llrm-transforms/src/combine_visit_select.rs sha256:6ddf149ff4ab82a7d7cf6997367b92b08b64b1a9ff6aba9f2188960652e6df26 -->
 
 # combine_visit_select
 
@@ -40,4 +40,4 @@ are dropped, not swapped.
 ```
 
 ## Used by
-Named by `combine_select_andor`, `combine_select_bit_test`, `combine_select_bools`, `combine_select_cttz_ctlz`, `combine_select_equivalence`, `combine_select_ext_const`, `combine_select_fabs`, `combine_select_fcmp_swap`, `combine_select_into_op`, `combine_select_minmax_cast`, `combine_select_op_op`, `combine_select_spf`, `combine_select_tail`, `combine_select_to_cmp`.
+Named by `combine_select_andor`, `combine_select_bit_test`, `combine_select_bools`, `combine_select_cttz_ctlz`, `combine_select_equivalence`, `combine_select_ext_const`, `combine_select_fabs`, `combine_select_fcmp_swap`, `combine_select_into_op`, `combine_select_minmax_cast`, `combine_select_op_op`, `combine_select_spf`, `combine_select_tail`, `combine_select_to_cmp`, `combine_select_to_phi`.

@@ -1474,6 +1474,12 @@ impl<'a> Commuter<'a> {
             && let Some(source) = self.copied_from(c)
             && self.is_copy_flow(a, source)
             && !self.copied_from(b).is_some_and(|other| self.is_copy_flow(a, other))
+            // B itself the web the result flows into (a phi's register, with
+            // a definition in each predecessor, has no one copy source to
+            // ask): tying B leaves no copy either, as the pin ties it
+            // (`first = c ? i : first` in a loop: sfm16_dbg, +1 `mov` an
+            // iteration).
+            && !self.is_copy_flow(a, b)
         {
             return true;
         }

@@ -200,6 +200,16 @@ fn decided(
             let function = module.global(callee).function()?;
             let (_, parameters, variadic) = module.signature(function.ty);
             let twin = target.callee_pop(function.calling_convention)?;
+            // Checked before the arguments are sized: a declaration may take a
+            // parameter with no size (`metadata`).
+            if function.is_declaration()
+                || !internal.contains(&callee)
+                || variadic
+                || parameters.is_empty()
+                || other.contains(&callee)
+            {
+                return None;
+            }
             // The stack words its arguments take: each a word at least, a dword
             // or a far pointer two; the convention's registers take
             // the ones it puts there.
@@ -212,15 +222,9 @@ fn decided(
             let returns =
                 function.walk().filter(|&(_, inst)| matches!(function.instruction(inst).opcode, Opcode::Ret)).count()
                     as i64;
-            (!function.is_declaration()
-                && internal.contains(&callee)
-                && !variadic
-                && !parameters.is_empty()
-                && !other.contains(&callee)
-                // A pop's worth of bytes saved is not worth an instruction more
-                // at every call.
-                && words > 0
-                && sites.len() as i64 * costs.cleanup(words) + costs.pop >= returns * costs.return_pops)
+            // A pop's worth of bytes saved is not worth an instruction more
+            // at every call.
+            (words > 0 && sites.len() as i64 * costs.cleanup(words) + costs.pop >= returns * costs.return_pops)
                 .then_some((callee, twin))
         })
         .collect();
