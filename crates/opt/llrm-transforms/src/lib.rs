@@ -334,6 +334,7 @@ pub mod looppeel;
 pub mod looprotate;
 pub mod loopsimplify;
 pub mod loopsimplifycfg;
+pub mod loopsplit;
 pub mod looptermfold;
 pub mod loopunroll;
 pub mod loopunrollandjam;

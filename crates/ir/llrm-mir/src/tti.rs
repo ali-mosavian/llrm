@@ -1598,6 +1598,13 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE LSPLIT (owner arm64, exit 2026-11-24): `loopsplit`, GCC's
+    /// `-fsplit-loops` (`tree-ssa-loop-split.cc`), a pass the pin does not
+    /// have. False: the loop is left whole.
+    fn loop_split(&self) -> bool {
+        false
+    }
+
     /// DEVIATE LM2 (target opt-in, owner w11, exit 2026-11-24): LICM may hoist
     /// a load behind a loop guard when SCEV bounds the offset of its pointer
     /// inside the object it is based on (`licm::range_deref`), not only where
@@ -1893,6 +1900,17 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE UNROLL-PRICED-OS (owner 6502, exit 2026-11-24): whether a full
+    /// unroll that `-Os` admits by the pin's size estimate (`LoopSize + 1`,
+    /// counted in IR instructions) is priced on the backend's bytes as at
+    /// -O2, so one that adds a byte stays a loop. The estimate counts the
+    /// loop's counter and exit test as code the copies lose; a target whose
+    /// loop control is cheaper than the copies it replaces writes the
+    /// unrolled code larger.
+    fn unroll_priced_at_size(&self) -> bool {
+        false
+    }
+
     /// DEVIATE UNROLL-OS-TRIAL: see `Tuning::unroll_trial_at_size`.
     fn unroll_trial_at_size(&self) -> Option<u32> {
         None
@@ -1904,6 +1922,16 @@ pub trait Tti {
     /// by its unrolled size alone, so that a loop the pin unrolls under its own
     /// threshold is tried where this target's units count it larger.
     fn unroll_trial_analyzed_at_speed(&self) -> bool {
+        false
+    }
+
+    /// DEVIATE UNROLL-TRIAL-NEST-OS (owner 6502, exit 2026-11-24): the same
+    /// at -Os: an innermost loop the pin refuses by `LoopSize + 1` is tried
+    /// at the cost the analysis finds once the trips' constants fold, scaled by
+    /// the boost the pin gives at -O2 (its -Os boost is 100), and kept only if
+    /// the module is smaller (`trial_pays`). A nest the pin unrolls whole at
+    /// -O2 folds to 62 B (int64_division); at -Os it stayed 3,336 B.
+    fn unroll_trial_analyzed_at_size(&self) -> bool {
         false
     }
 

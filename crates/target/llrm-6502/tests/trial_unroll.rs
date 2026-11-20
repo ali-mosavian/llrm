@@ -192,9 +192,11 @@ done:
 /// units but over this target's trial size of 1,100; held to the cost the
 /// analysis finds (1,200, boosted by 1.18 to 1,017) it is tried, and with it
 /// gone the outer loop folds. llvm-mos -O3 and the pin's x86 -O3 do the same.
+/// -Os kept the nest too (3,336 B against 62 B at -O2): the pin's size bar is
+/// the loop's size plus one and its boost is 100, so the trial never saw it.
 #[test]
 fn a_nest_of_constant_divisions_folds_to_its_results() {
-    for level in [Level::O2, Level::O3] {
+    for level in [Level::O2, Level::O3, Level::Os] {
         let text = assembly(include_str!("data/division_nest.ll"), &Request::new(level)).unwrap();
         let divisions = text.lines().filter(|line| line.contains("jsr __") && line.contains("div")).count();
         let reports = text.lines().filter(|line| line.contains("jsr report")).count();

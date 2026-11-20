@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 313 documented, 5 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 314 documented, 5 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -201,6 +201,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | looprotate | `LoopRotate`: a loop with its exit test in the header becomes a loop with its exit test in the latch, behind a copy of the test that guards the entry. | The `loop-rotate` slot of the pipeline. | [looprotate](looprotate.md) |
 | loopsimplify | Loop canonical form: every reducible loop gets one preheader, one latch and dedicated exits, so the loop passes can assume them. | In [`crate::pipeline`](pipeline.md)'s per-body fixed point, after `tailrec` and before | [loopsimplify](loopsimplify.md) |
 | loopsimplifycfg | LoopSimplifyCFG: the branches and switches of a loop with a constant condition become jumps, the blocks that leaves unreachable go, and a block with one predecessor that jumps to it is merged into it. | Named by `pipeline`. | [loopsimplifycfg](loopsimplifycfg.md) |
+| loopsplit | `loopsplit`: a loop whose branch tests a counter against an invariant runs as two loops, one on each side of the border. | Named by `pipeline`. | [loopsplit](loopsplit.md) |
 | looptermfold | `LoopTermFold`: the loop's last induction variable use, its exit compare, is given to another induction variable (`LoopTermFold.cpp` at `d1106deb71cc`). | In the strength slot right after `lsr`, for a target whose TTI enables it | [looptermfold](looptermfold.md) |
 | loopunroll | Complete unrolling of a loop over any exiting block: LLVM's `UnrollLoop` (`LoopUnroll.cpp`) for the count that is the loop's maximum trip count. | Not a pass: a library, called by the full-unroll pass when it is wired in. | [loopunroll](loopunroll.md) |
 | loopunrollandjam | Unroll and jam: a loop with a loop inside is unrolled by `count`, and the copies of the inner loop are fused into one, so a load of the inner loop that does not move with the outer one is made once for all the copies (`Utils/LoopUnrollAndJam.cpp` and `Scalar/LoopUnrollAndJamPass.cpp` at `d1106deb71cc`). | -O3 and -Omax, in the `Late` stage (`loop-unroll-and-jam@1474`). | [loopunrollandjam](loopunrollandjam.md) |

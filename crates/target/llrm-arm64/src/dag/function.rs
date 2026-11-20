@@ -47,6 +47,7 @@ pub fn builder_target(platform: Platform) -> BuilderTarget {
         shift_amount: EVT::I64,
         legal_ints: vec![32, 64],
         legal_vectors: llrm_sdag::lowering::TargetLoweringInfo::aarch64().legal_vectors().to_vec(),
+        vector_registers: llrm_sdag::lowering::TargetLoweringInfo::aarch64().vector_registers(),
         soft_float: false,
         stack_align: Some(16),
         max_alloca_align: Some(16),

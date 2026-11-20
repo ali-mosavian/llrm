@@ -2415,7 +2415,7 @@ pub fn exchange_mem(
 ) -> Option<Emitted> {
     let width = width_of(register);
     let built = operand_of(cell, at.bits);
-    let Some(width) = width.filter(|width| [1, 2, 4].contains(width)) else {
+    let Some(width) = width.filter(|width| [1, 2, 4].contains(width) || (*width == 8 && at.bits == 64)) else {
         return None;
     };
     let Some((r#where, relocated)) = built.filter(|_| i64::from(cell.width) == width) else {

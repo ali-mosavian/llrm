@@ -170,13 +170,19 @@ pub fn restored(module: &mut Module) -> Result<(), String> {
 /// where `tso` (x86: every access is acquire and release already) or the
 /// ordering is `monotonic` or `unordered`; a fence short of `seq_cst` is
 /// nothing there. Where the target `locked` selects `xchg` itself, an exchange
-/// and a `seq_cst` store stay calls it takes. What the target has no
-/// instruction for is refused, never made a plain access.
+/// and a `seq_cst` store stay calls it takes; where it has `rmw` (`lock xadd`,
+/// `lock cmpxchg`, `lock add`: a 486 and later), so do an `add` or `sub`, a
+/// compare-exchange, and an `and`, `or` or `xor` whose result nothing reads
+/// (`X86TargetLowering::shouldExpandAtomicRMWInIR`: the rest is expanded to a
+/// compare-exchange loop by `AtomicExpandPass`, which is not translated, so
+/// they are refused by name). What the target has no instruction for is
+/// refused, never made a plain access.
 pub fn lowered(
     module: &mut Module,
     native: u32,
     tso: bool,
     locked: bool,
+    rmw: bool,
 ) -> Result<(), String> {
     let mut found: Vec<(usize, InstId, AtomicInfo)> = Vec::new();
     let mut kept = vec![false; module.globals.len()];
@@ -211,6 +217,23 @@ pub fn lowered(
         if locked && exchange {
             kept[callee] = true;
             continue;
+        }
+        if rmw {
+            let unread = instruction.result.is_none_or(|result| function.users(result).is_empty());
+            let lockable = match info.kind {
+                AtomicKind::CmpXchg { .. } | AtomicKind::Rmw(RmwOp::Add | RmwOp::Sub) => true,
+                AtomicKind::Rmw(RmwOp::And | RmwOp::Or | RmwOp::Xor) => unread,
+                _ => false,
+            };
+            if lockable {
+                kept[callee] = true;
+                continue;
+            }
+            if matches!(info.kind, AtomicKind::Rmw(_)) {
+                return Err(format!(
+                    "`{spelled}` whose result is read needs AtomicExpandPass's compare-exchange loop, which is not translated"
+                ));
+            }
         }
         if tso && info.kind == AtomicKind::Fence && info.ordering != AtomicOrdering::SeqCst {
             function.erase(inst).map_err(|why| why.to_string())?;

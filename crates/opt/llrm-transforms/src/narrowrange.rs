@@ -123,6 +123,21 @@ pub fn multiplies_narrowed(
     narrowed(context, layout, function, outer, limit, Kind::Multiplies)
 }
 
+/// `udiv`/`urem` of operands ScalarEvolution proves `limit` bits wide, as the
+/// pass does, run again after the target's strength reduction: it folds
+/// `zext (udiv iN (trunc a), C)` of a constant divisor back into the wide
+/// divide (`udiv i32 a, C`), so a loop unrolled to constant divisors called
+/// `__udivsi3` where the rolled one had `divu`.
+pub fn divides_narrowed(
+    context: &mut llrm_mir::context::Context,
+    layout: &llrm_mir::datalayout::DataLayout,
+    function: &mut Function,
+    outer: &llrm_mir::passes::Outer,
+    limit: u32,
+) -> bool {
+    narrowed(context, layout, function, outer, limit, Kind::Divides)
+}
+
 fn narrowed(
     context: &mut llrm_mir::context::Context,
     layout: &llrm_mir::datalayout::DataLayout,
@@ -142,10 +157,13 @@ fn narrowed(
                     Kind::Divides => matches!(one.opcode, Opcode::Binary(BinaryOp::UDiv | BinaryOp::URem)),
                     Kind::Multiplies => one.opcode == Opcode::Binary(BinaryOp::Mul),
                 };
-                // a constant operand is the magic multiply's or the shifts'
-                // (`x * 11`, `x / 7`)
+                // a constant multiplier is the shifts' and adds' (`x * 11`); a
+                // constant divisor is narrowed like any other: a loop unrolled
+                // to constant divisors (`u / 18`, `u / 35`, ...) had them as
+                // 32-bit divides, `__udivsi3`
                 opcode
-                    && one.operands.iter().all(|operand| !matches!(operand, Operand::Constant(_)))
+                    && (kind == Kind::Divides
+                        || one.operands.iter().all(|operand| !matches!(operand, Operand::Constant(_))))
                     && context
                         .types
                         .int_bits(one.ty)
