@@ -562,6 +562,10 @@ pub struct Tuning {
     /// site too (otherwise only two or more: the pin's single-site inline
     /// stands). A callee that stays and is copied once only grows the code.
     pub inline_size_guard_single_site: bool,
+    /// With `inline_size_guard_at_size`, the bound stands down for an
+    /// `inlinehint` callee (C's `inline`) the pin's raised threshold (325)
+    /// passes: its cost under that is the verdict.
+    pub inline_size_guard_yields_to_inlinehint: bool,
     /// An -Os caller's SZ2 trial also inlines the sites its splice brings,
     /// priced by the ordinary rules, before it measures: `foo` into `main`
     /// and then `bar` into that copy meet the constants together, as the
@@ -937,6 +941,7 @@ impl Tuning {
         immediate_forms_at_size: false,
         inline_size_guard_at_size: false,
         inline_size_guard_single_site: false,
+        inline_size_guard_yields_to_inlinehint: false,
         inline_chain_trial: false,
         lftr_size_budget: 4,
         inline_trial_defers_to_shared_growth: false,

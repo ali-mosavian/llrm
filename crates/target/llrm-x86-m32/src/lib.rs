@@ -317,6 +317,10 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // DEVIATE SZ2 (owner x86-m32, exit 2026-11-20): -Os keeps a once-called
         // callee whose copy grows the code (gcc does; the pin copies it).
         inline_size_guard_single_site: true,
+        // The SZ1 guard yields where the pin's `updateThreshold` raises an
+        // `inlinehint` callee to 325 at an `optsize` caller (QuickrBasic
+        // operands.c: `hot_int` into its wrappers).
+        inline_size_guard_yields_to_inlinehint: true,
         // DEVIATE SZ3 (owner x86-m32, exit 2026-11-20): an -Os SZ2 trial also
         // inlines the sites its splice brings. The pin inlines callee-first
         // (`bar` into `foo`, cost 15 < 75, then `foo` into
