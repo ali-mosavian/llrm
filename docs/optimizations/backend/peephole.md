@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/peephole.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/peephole.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/peephole.rs sha256:73d34b184d2039d12a33eeb312df3149b93152052eff0ab168cdccc805b1ef1a -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/peephole.rs sha256:4c12b792a44d519ef73514c1f6308e9b36babd418fc248e0f405b8e9d1de2397 -->
 
 # peephole
 
@@ -99,7 +99,7 @@ block 0x0001
 The zero load became `xor`, the subtraction of one `dec`, and the compare
 with zero `or`, which sets the flags `jne` reads as `cmp` did.
 
-From `ISEL_DUMP=1` of a C countdown loop compiled with `llrm-c -O2 -m16`:
+From `ISEL_DUMP=1` of a C countdown loop compiled with `llrm-cc -O2 -m16`:
 the `ParallelCopy` and `Peephole` stages.
 
 ## Runs

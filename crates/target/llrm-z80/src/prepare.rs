@@ -125,13 +125,58 @@ pub fn mark_wide_shifts(module: &mut Module) {
     }
 }
 
-/// The attribute that lets every word times a constant of a function be a shift-add chain whatever its bytes: no word
-/// multiply of the module needs `__mulhi3`, and the chains together are smaller than the routine and the calls.
+/// The attribute that marks a function with a shift of a 32- or 64-bit value
+/// by a constant that is not whole bytes: it is also selected with each such
+/// shift the routine's call (`pipeline::CALL_SHIFTS`), where the inline form
+/// is a step a bit, and the caller prices the two with the routine linked once.
+pub const LONG_SHIFT: &str = "llrm-lshift";
+
+/// Marks every function with a body that shifts an `i32` or `i64` by a
+/// constant that is not a multiple of eight.
+pub fn mark_long_shifts(module: &mut Module) {
+    let Some(Ok(layout)) = module.datalayout.as_deref().map(DataLayout::parse) else { return };
+    let names: Vec<String> = module
+        .functions()
+        .filter(|(_, _, function)| !function.is_declaration())
+        .filter(|(_, _, function)| {
+            let query = Query { globals: &module.globals, ..Query::bare(&module.context, function, &layout) };
+            function
+                .layout()
+                .iter()
+                .flat_map(|&block| function.iter_block(block))
+                .map(|inst| function.instruction(inst))
+                .any(|instruction| {
+                    matches!(
+                        instruction.opcode,
+                        Opcode::Binary(BinaryOp::Shl | BinaryOp::LShr | BinaryOp::AShr)
+                    )
+                        && matches!(module.context.types.int_bits(instruction.ty), Some(32 | 64))
+                        && instruction
+                            .operands
+                            .get(1)
+                            .is_some_and(|&amount| constant_int_u64(&query, amount).is_some_and(|by| by % 8 != 0))
+                })
+        })
+        .filter_map(|(_, global, _)| global.name.owned())
+        .collect();
+    for name in names {
+        if let Some((_, function)) = module.function_mut(&name) {
+            function.attrs.push(Attribute::Flag(LONG_SHIFT.into()));
+        }
+    }
+}
+
+/// The attribute that lets every word times a constant of a function be a
+/// shift-add chain whatever its bytes: no word multiply of the module needs
+/// `__mulhi3`, and the chains together are smaller than the routine and the
+/// calls.
 pub const WORD_CHAINS: &str = "llrm-mulhi3-chains";
 
-/// Marks every function with a body when each word multiply of the module is by a constant and has a chain, and the
-/// chains add fewer bytes over the calls (6 B each) than the 24 B routine is (`runtime/sizes.csv`). Strict levels only
-/// (above them the rate prices each site, `dagisel::pipeline::word_chain`). Pin-decomposed constants need no call.
+/// Marks every function with a body when each word multiply of the module is by
+/// a constant and has a chain, and the chains add fewer bytes over the calls (6
+/// B each) than the 24 B routine is (`runtime/sizes.csv`). Strict levels only
+/// (above them the rate prices each site, `dagisel::pipeline::word_chain`).
+/// Pin-decomposed constants need no call.
 pub fn mark_word_chains(module: &mut Module) {
     const ROUTINE: i64 = 24;
     let Some(Ok(layout)) = module.datalayout.as_deref().map(DataLayout::parse) else { return };
@@ -149,7 +194,8 @@ pub fn mark_word_chains(module: &mut Module) {
             let Some(&operand) = function.instruction(inst).operands.get(1) else { return };
             let Some(c) = constant_int_u64(&query, operand) else { return };
             let wide = module.context.types.int_bits(function.instruction(inst).ty) != Some(16);
-            // a long product is expanded to word products, some of them calls: the routine stays
+            // a long product is expanded to word products, some of them calls:
+            // the routine stays
             if wide {
                 if crate::dagisel::pipeline::pin_decomposes(c) {
                     continue;
@@ -160,7 +206,8 @@ pub fn mark_word_chains(module: &mut Module) {
             if crate::dagisel::pipeline::pin_decomposes(c) {
                 continue;
             }
-            let Some((_, (bytes, _), (call, _))) = crate::dagisel::pipeline::word_chain(c as i64, true, true) else {
+            let Some((_, (bytes, _), (call, _))) = crate::dagisel::pipeline::word_chain(c as i64, true, false, true)
+            else {
                 return;
             };
             extra += bytes - call;
@@ -220,9 +267,10 @@ pub fn mark_wide_divides(module: &mut Module) {
 /// (`driver::selections_with_alternatives`).
 pub const CONSTANT_FILL: &str = "llrm-fill";
 
-/// Marks every function with a body that calls `llvm.memset` with a constant count of two or more. The
-/// selection decides which of them reach `emit_memset` (a short fill is stored inline); one that does not
-/// leaves the two selections identical and the alternative is dropped.
+/// Marks every function with a body that calls `llvm.memset` with a count that
+/// is not a constant or is two or more. The selection decides which of them
+/// reach `emit_memset` (a short fill is stored inline); one that
+/// does not leaves the two selections identical and the alternative is dropped.
 pub fn mark_constant_fills(module: &mut Module) {
     let Some(Ok(layout)) = module.datalayout.as_deref().map(DataLayout::parse) else { return };
     let names: Vec<String> = module
@@ -232,12 +280,14 @@ pub fn mark_constant_fills(module: &mut Module) {
             let query = Query { globals: &module.globals, ..Query::bare(&module.context, function, &layout) };
             function.walk().any(|(_, call)| {
                 let Some(callee) = llrm_mir::memory::callee(&module.context, function, call) else { return false };
-                let is_memset = module.globals.get(callee.0 as usize).and_then(GlobalValue::intrinsic)
-                    == Some(Intrinsic::MemSet);
+                let is_memset =
+                    module.globals.get(callee.0 as usize).and_then(GlobalValue::intrinsic) == Some(Intrinsic::MemSet);
                 is_memset
-                    && function.instruction(call).operands.get(2).is_some_and(|&length| {
-                        constant_int_u64(&query, length).is_some_and(|bytes| bytes >= 2)
-                    })
+                    && function
+                        .instruction(call)
+                        .operands
+                        .get(2)
+                        .is_some_and(|&length| constant_int_u64(&query, length).is_none_or(|bytes| bytes >= 2))
             })
         })
         .filter_map(|(_, global, _)| global.name.owned())
@@ -247,4 +297,30 @@ pub fn mark_constant_fills(module: &mut Module) {
             function.attrs.push(Attribute::Flag(CONSTANT_FILL.into()));
         }
     }
+}
+
+/// The functions with two or more direct calls to themselves, before the
+/// mid-end: tail-recursion elimination turns one of them into a loop that
+/// carries an accumulator and the argument across the other call, which the
+/// z80 often spills where the plain recursion pushes (fib 62 B against 31 B).
+/// Two calls keep the recursion's depth either way, so the loop's form may be
+/// priced against the plain one; a function with one call must stay a loop
+/// (`recdeep` runs 24350 deep).
+pub fn multi_recursive(module: &Module) -> Vec<String> {
+    module
+        .functions()
+        .filter(|(_, _, function)| !function.is_declaration())
+        .filter(|(_, global, function)| {
+            function
+                .walk()
+                .filter(|&(_, call)| {
+                    llrm_mir::memory::callee(&module.context, function, call)
+                        .and_then(|callee| module.globals.get(callee.0 as usize))
+                        .is_some_and(|callee| callee.name.as_deref() == global.name.as_deref())
+                })
+                .count()
+                >= 2
+        })
+        .filter_map(|(_, global, _)| global.name.owned())
+        .collect()
 }

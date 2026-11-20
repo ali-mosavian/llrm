@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/loopidioms.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/loopidioms.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/loopidioms.rs sha256:eabb5369d823934f5353d151d37defc7b56e6691dae96025f9508d3475651d09 -->
+<!-- src: crates/opt/llrm-transforms/src/loopidioms.rs sha256:2143d2444e8241857f37c46de0623700bc0b1efed1ff6be6ad4e8cf611f01ea3 -->
 
 # loopidioms
 

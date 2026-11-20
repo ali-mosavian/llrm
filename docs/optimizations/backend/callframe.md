@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/callframe.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/callframe.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/callframe.rs sha256:cabc0db11993231f021fa8a2d40af48e9e92aab720912717249bff45c9dfd4fe -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/callframe.rs sha256:b17e71350f17331571b23ecd045aee6254f3eea17c5e86e9b77177bcc2ff7891 -->
 
 # callframe
 
@@ -26,12 +26,14 @@ is folded into `push [m]` unless `slowTwoMemOps`.
 The producer is the call lowering of the SelectionDAG port: `LowerCall`
 stores the arguments to `[sp+k]` between `ADJCALLSTACKDOWN` and
 `ADJCALLSTACKUP`. `emit.rs` turns the pair into `call_frame_setup` /
-`call_frame_destroy` at m32 only (`AddrMode::Flat32`, DEVIATE CF4); the
-pass is in the flow at every x86 width. At m16 (`Real16`) and m64 `emit.rs`
-makes `sub sp, N` / `add sp, N - M` itself, so the pass finds no setup and
-changes nothing there. The m16 steps left: emit the pseudos for `Real16`
-(`slot` 2, 16-bit `Held` cells), let `ReserveCallFrame` lay the reserved
-area out in the m16 prologue, and re-check the readers of the old
+`call_frame_destroy` at every call at m32 and m64 (DEVIATE CF4), also the
+zero-byte ones, as the pin's; the pass is in the flow at every x86 width. At
+m16 (`Real16`) `emit.rs` makes `sub sp, N` / `add sp, N - M` itself (none
+for a call of no bytes), so the pass finds no setup and changes nothing
+there. A zero-byte pair at m16 moved no cell of the cause-A list (0 B on 14
+cells, jpeg_fixed -Os +4 B). The m16 steps left: emit the pseudos for
+`Real16` (`slot` 2, 16-bit `Held` cells), let `ReserveCallFrame` lay the
+reserved area out in the m16 prologue, and re-check the readers of the old
 `sub`/`add` (`cfi.rs`, `framefree`, `call_pops`) and the m16 byte and clock
 rows. Pushes made at m32 selection time (DEVIATE CG6 of row 50,
 `pushfold.rs`) are not this pass's input.
@@ -41,6 +43,13 @@ N/A: the Darwin and Win64 conditions of `isLegal`, the stack probe, the
 instruction). DEVIATE CF2 (no number yet): `hasVarSizedObjects` is not in
 LIR; the pass is given it (false until row 80). Owner llrm-target-x86-m16,
 review 2026-11-20.
+
+DEVIATE CF3 (owner x86-m32, exit: never; upstream-report candidate): as
+`pushfold.rs`'s CF2, a volatile load is not folded into `push [m]`, nor is
+one moved past another volatile access. The pin's `canFoldIntoRegPush` asks
+only `isLoadFoldBarrier`, so it loads `p[0]`, `p[1]` (the IR's last reads)
+before `pushl 28(%esp)` six times (the first reads). Cost:
+os_locals_between_pushes -O2 m32 +29 B (226 vs 197).
 
 [L147]:
 https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86CallFrameOptimization.cpp#L147

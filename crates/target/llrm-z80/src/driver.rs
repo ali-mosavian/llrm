@@ -200,6 +200,36 @@ pub fn program(
     made
 }
 
+pub use llrm_transforms::walk::SizeRow;
+
+/// The size audit of one program: per function, the bytes `function_bytes`
+/// says it will be against the bytes it is written as
+/// (`tests/size_calibration.rs`).
+pub fn size_audit(
+    text: &str,
+    request: &Request,
+) -> Result<Vec<SizeRow>, String> {
+    let built = program(text, request)?;
+    let costs = built.target.trial_costs();
+    let module = &built.modules[0];
+    let mut rows: Vec<SizeRow> = module
+        .functions()
+        .filter(|(_, _, function)| !function.is_declaration())
+        .map(|(_, global, function)| SizeRow {
+            name: global.name.as_deref().unwrap_or("?").to_owned(),
+            model: llrm_transforms::walk::function_bytes(module, &built.layout, &costs, function),
+            written: 0,
+            counts: llrm_transforms::walk::operation_counts(module, &built.layout, function, &costs),
+        })
+        .collect();
+    for (name, bytes) in crate::compile::function_sizes(text, request)? {
+        if let Some(row) = rows.iter_mut().find(|row| row.name == name) {
+            row.written = i64::from(bytes);
+        }
+    }
+    Ok(rows)
+}
+
 /// What a mid-end module is, for comparing a variant's to the base compile's:
 /// its text hashed, and its instructions.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -255,6 +285,7 @@ pub fn mid_end_fingerprint() -> Option<Fingerprint> {
 }
 
 thread_local! {
+    static MULTI_RECURSIVE: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
     static DATA_OF_LAST: std::cell::RefCell<Option<Result<String, String>>> = const { std::cell::RefCell::new(None) };
     static MID_END_RUNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static FINGERPRINT: std::cell::Cell<Option<Fingerprint>> = const { std::cell::Cell::new(None) };
@@ -290,6 +321,9 @@ fn program_of(
         Some(stated) => return Err(format!("the module's datalayout `{stated}` is not the Z80's `{layout}`")),
         None => return Err(format!("the module states no datalayout; the Z80's is `{layout}`")),
     }
+    if request.level != Level::O0 {
+        MULTI_RECURSIVE.with(|held| *held.borrow_mut() = crate::prepare::multi_recursive(&module));
+    }
     if request.optsize_only {
         for global in &mut module.globals {
             if let llrm_mir::module::GlobalKind::Function(function) = &mut global.kind {
@@ -321,6 +355,10 @@ fn program_of(
         // compound_assignment_types Os/Oz +2 B. Layout and allocation
         // noise after the pin's own plan; no pass is wrong.
         options.lower_switches = false;
+        // Bytes first at every level: a recursive callee is a loop before the
+        // inliner prices it, as at -Os (DEVIATE TRE-O1, owner z80, exit
+        // 2026-12-15).
+        options.tail_recursion_early = true;
         // The runtime's `strlen` (`cpir`): LoopIdiomRecognize may form a call.
         // and `memcmp` (SDCC's libc has no `bcmp`).
         options.library = llrm_mir::libfunc::Routine::stated(["strlen", "memcmp"], |name| format!("_{name}"), 0);
@@ -332,6 +370,7 @@ fn program_of(
         program.modules.iter_mut().for_each(crate::prepare::mark_long_multiplies);
         program.modules.iter_mut().for_each(crate::prepare::mark_constant_fills);
         program.modules.iter_mut().for_each(crate::prepare::mark_wide_shifts);
+        program.modules.iter_mut().for_each(crate::prepare::mark_long_shifts);
         program.modules.iter_mut().for_each(crate::prepare::mark_wide_divides);
         if request.level != Level::O0 {
             program.modules.iter_mut().for_each(crate::prepare::mark_word_chains);
@@ -384,12 +423,14 @@ pub fn selections_with_alternatives(
         .filter(|global| global.function().is_some_and(|one| !one.is_declaration()))
         .filter_map(|global| global.name.as_deref().map(str::to_owned))
         .collect();
-    let select_form = |name: &str| {
+    let select_form = |module: &llrm_mir::module::Module, name: &str| {
         crate::dagisel::function::FLAT_LOOP_TRIPS.with(|one| one.set(request.flat_loop_trips));
         crate::dagisel::pipeline::STRICT_LEVEL
             .with(|one| one.set(matches!(request.level, Level::O1 | Level::Os | Level::Oz)));
+        crate::dagisel::pipeline::O1_LEVEL.with(|one| one.set(request.level == Level::O1));
         let one = select_function_with(module, name, request.cpu, request.level != Level::O0);
         crate::dagisel::pipeline::STRICT_LEVEL.with(|one| one.set(false));
+        crate::dagisel::pipeline::O1_LEVEL.with(|one| one.set(false));
         one
     };
     // A form whose long adds became carry ops is also selected with them left
@@ -401,25 +442,26 @@ pub fn selections_with_alternatives(
     // each sum to `hl`, which costs spills where several longs are live
     // (register_upper_half -Os +28 B; call_keeps -O1 all-calls form +65 B).
     // The selection is scheduled by `Source` and by `ILP` from one DAG.
-    let select = |name: &str| -> (Result<Selection, String>, Result<Selection, String>) {
-        crate::dagisel::pipeline::CARRY_OPS.with(|count| count.set(0));
-        let mut one = select_form(name);
-        if crate::dagisel::pipeline::CARRY_OPS.with(std::cell::Cell::get) > 0 {
-            crate::dagisel::pipeline::GENERIC_CARRY.with(|flag| flag.set(true));
-            let generic = select_form(name);
-            crate::dagisel::pipeline::GENERIC_CARRY.with(|flag| flag.set(false));
-            if let (Ok(one), Ok(generic)) = (&mut one, generic) {
-                one.generic = Some(Box::new(generic));
+    let select =
+        |module: &llrm_mir::module::Module, name: &str| -> (Result<Selection, String>, Result<Selection, String>) {
+            crate::dagisel::pipeline::CARRY_OPS.with(|count| count.set(0));
+            let mut one = select_form(module, name);
+            if crate::dagisel::pipeline::CARRY_OPS.with(std::cell::Cell::get) > 0 {
+                crate::dagisel::pipeline::GENERIC_CARRY.with(|flag| flag.set(true));
+                let generic = select_form(module, name);
+                crate::dagisel::pipeline::GENERIC_CARRY.with(|flag| flag.set(false));
+                if let (Ok(one), Ok(generic)) = (&mut one, generic) {
+                    one.generic = Some(Box::new(generic));
+                }
             }
-        }
-        match one {
-            Ok(one) => {
-                let ilp = one.scheduled_by_ilp();
-                (Ok(one), Ok(ilp))
+            match one {
+                Ok(one) => {
+                    let ilp = one.scheduled_by_ilp();
+                    (Ok(one), Ok(ilp))
+                }
+                Err(why) => (Err(why.clone()), Err(why)),
             }
-            Err(why) => (Err(why.clone()), Err(why)),
-        }
-    };
+        };
     // A function with the routine for its long multiplies
     // (`prepare::mark_long_multiplies`) is also selected the other way: a
     // sized one with every multiply inline (`DECOMPOSE_MULS`), an unsized one
@@ -459,6 +501,16 @@ pub fn selections_with_alternatives(
             })
         })
     };
+    // A function with a constant shift of a long (`prepare::mark_long_shifts`)
+    // is also selected with each such shift the routine's call
+    // (`CALL_SHIFTS`); the caller prices the two with the routine linked once.
+    let has_long_shifts = |name: &str| -> bool {
+        module.globals.iter().any(|global| {
+            global.function().is_some_and(|one| {
+                global.name.as_deref() == Some(name) && llrm_mir::memory::has(&one.attrs, crate::prepare::LONG_SHIFT)
+            })
+        })
+    };
     // A function with a long divide (`prepare::mark_wide_divides`) is also
     // selected with the speed routines in a function tuned for size
     // (`SPEED_ROUTINES`).
@@ -472,11 +524,11 @@ pub fn selections_with_alternatives(
     let main: Vec<Selected> = names
         .iter()
         .map(|name| {
-            let (source, ilp) = select(name);
+            let (source, ilp) = select(module, name);
             (name.clone(), source, ilp)
         })
         .collect();
-    let alternatives: Vec<Selected> = names
+    let mut alternatives: Vec<Selected> = names
         .iter()
         .filter_map(|name| {
             // The all-calls form is priced bytes first at every level (it was
@@ -487,7 +539,8 @@ pub fn selections_with_alternatives(
             let fills = has_fills(name);
             let shifts = has_shifts(name);
             let divides = has_divides(name);
-            if muls.is_none() && !fills && !shifts && !divides {
+            let call_shifts = has_long_shifts(name);
+            if muls.is_none() && !fills && !shifts && !divides && !call_shifts {
                 return None;
             }
             let switch = muls.map(|sized| {
@@ -498,16 +551,18 @@ pub fn selections_with_alternatives(
             }
             crate::dagisel::pipeline::INLINE_FILLS.with(|one| one.set(fills));
             crate::dagisel::pipeline::INLINE_SHIFTS.with(|one| one.set(shifts));
+            crate::dagisel::pipeline::CALL_SHIFTS.with(|one| one.set(call_shifts));
             // the alternative is one switch for every reason a function has
             // one: the speed routines ride along only where nothing
             // else is switched, or the form that decomposes a multiply would
             // also carry the divide's price
             crate::dagisel::pipeline::SPEED_ROUTINES
-                .with(|one| one.set(divides && muls.is_none() && !fills && !shifts));
-            let (source, ilp) = select(name);
+                .with(|one| one.set(divides && muls.is_none() && !fills && !shifts && !call_shifts));
+            let (source, ilp) = select(module, name);
             let selected = (name.clone(), source, ilp);
             crate::dagisel::pipeline::INLINE_FILLS.with(|one| one.set(false));
             crate::dagisel::pipeline::INLINE_SHIFTS.with(|one| one.set(false));
+            crate::dagisel::pipeline::CALL_SHIFTS.with(|one| one.set(false));
             crate::dagisel::pipeline::SPEED_ROUTINES.with(|one| one.set(false));
             if let Some(switch) = switch {
                 switch.with(|one| one.set(false));
@@ -515,6 +570,36 @@ pub fn selections_with_alternatives(
             Some(selected)
         })
         .collect();
+    // A function that calls itself twice is also selected without the
+    // tail-recursion elimination (`prepare::multi_recursive`): the caller
+    // keeps the loop or the plain recursion, whichever the module price
+    // says. DEVIATE Z80-TRE-PRICE (owner x87-b, exit 2026-11-30): the pin
+    // eliminates unpriced, and its x86 pays a spill for the carried values
+    // where the z80 pays a frame access of 3 B.
+    let recursive = MULTI_RECURSIVE.with(|held| std::mem::take(&mut *held.borrow_mut()));
+    let wanted: Vec<&String> = recursive
+        .iter()
+        .filter(|name| names.contains(name) && !alternatives.iter().any(|(one, ..)| one == *name))
+        .collect();
+    if !wanted.is_empty() {
+        let mut without = request.clone();
+        without.passes.push("-fno-optimize-sibling-calls".to_owned());
+        if let Ok(mut plain) = program_of(text, &without) {
+            plain.modules.iter_mut().for_each(crate::prepare::split_phi_edges);
+            let plain = &plain.modules[0];
+            let convention = |module: &llrm_mir::module::Module, name: &str| {
+                module.named(name).and_then(|id| module.global(id).function()).map(|one| one.calling_convention)
+            };
+            for name in wanted {
+                if convention(module, name).is_none() || convention(module, name) != convention(plain, name) {
+                    continue;
+                }
+                let (source, ilp) = select(plain, name);
+                alternatives.push((name.clone(), source, ilp));
+            }
+        }
+        MULTI_RECURSIVE.with(|held| held.borrow_mut().clear());
+    }
     Ok((main, alternatives))
 }
 
@@ -562,6 +647,11 @@ impl llrm_mir::target::Machine for Z80Machine {
     /// bytes).
     fn size_costs(&self) -> llrm_mir::target::OperationCosts {
         llrm_mir::target::OperationCosts { jump_table: 4, ..llrm_mir::target::Neutral.costs() }
+    }
+
+    /// The prices of the Os inline trial's byte estimate (`function_bytes`).
+    fn trial_costs(&self) -> llrm_mir::target::OperationCosts {
+        crate::clocks::trial_bytes()
     }
 
     /// Real code bytes for the decisions weighed at a rate (`opcosts.txt`).

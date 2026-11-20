@@ -40,7 +40,8 @@ use trial::NO_GROW_RATE;
 
 /// Whether the full unroll of `lp` by `trips` stays, at the target's rate
 /// (`Tti::unroll_milliclocks_per_byte`). At -O2/-O3, and -O1 where bytes are
-/// priced at speed: -Os and -Oz hold to the pin's bytes.
+/// priced at speed: -Os and -Oz hold to the pin's bytes, -Os too priced where
+/// the target says so (`Tti::unroll_priced_at_size`).
 pub(super) fn full_unroll_pays(
     run: &mut Run,
     se: &mut ScalarEvolution,
@@ -75,7 +76,7 @@ pub(super) fn full_unroll_pays(
             ));
     if inlinable
         || rate <= 0
-        || run.options.opt_size
+        || (run.options.opt_size && !run.tti.unroll_priced_at_size())
         || run.options.min_size
         || (run.options.opt_level < 2 && !run.options.speed_rate)
     {

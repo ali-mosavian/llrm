@@ -22,14 +22,13 @@ fn a_small_tree_recursion_is_copied_into_itself_at_o2_and_not_at_os() {
     assert!(instructions(ir, Level::Os) < 40);
 }
 
-/// bintree -O2: `walk` (two calls and three loads, a multiply and adds; the
-/// calls are 16 of 33 body clocks) was copied into itself like `paths`, 280 ->
-/// 680 B for 9% fewer instructions, +97k at 250 clk/B. Copies need the calls
-/// to be at least 3/5 of the body's clocks (`paths` 12 of 15). Not copied here:
-/// 35 instructions, 140 with the copies.
+/// bintree -O2: `walk` (two calls and three loads, a multiply and adds) was left
+/// alone by a bar on the share of clocks the calls spend (3/5; `walk` 16 of
+/// 33), 29,488 instructions where its copies run 26,797 (gcc 35,673). 35
+/// instructions, 140 with the copies.
 #[test]
-fn a_recursion_whose_body_is_mostly_work_is_not_copied() {
+fn a_recursion_whose_body_is_mostly_work_is_copied_at_o2() {
     let ir = include_str!("data/self_inline_walk.ll");
     let o2 = instructions(ir, Level::O2);
-    assert!(o2 < 60, "{o2} instructions");
+    assert!(o2 > 60, "{o2} instructions");
 }

@@ -89,6 +89,13 @@ use crate::support::hash::IndexMap;
 #[derive(Clone, Debug)]
 pub struct Profile {
     pub name: String,
+    /// `-mstack-alignment=N`: every call finds the stack a multiple of this
+    /// many bytes, whatever the callee holds; None where the target or the
+    /// callee's convention says (`aligned_calls`).
+    pub aligned_calls: Option<i64>,
+    /// What the target's own convention keeps at every call
+    /// (`Target::aligned_calls`); 1 where it keeps none.
+    pub arch_call_alignment: i64,
     pub issue_width: i64,
     pub in_order: bool,
     pub prefix_cost: i64,
@@ -304,6 +311,13 @@ impl std::hash::Hash for MultiplyChains {
 }
 
 impl Profile {
+    /// The bytes every call finds the stack a multiple of:
+    /// `-mstack-alignment=`, else the target's; 1 where none.
+    #[must_use]
+    pub fn call_alignment(&self) -> i64 {
+        self.aligned_calls.unwrap_or(self.arch_call_alignment)
+    }
+
     /// What the CPU prices, as a target builds its cost model from.
     pub fn cpu_prices(&self) -> llrm_target::CpuPrices {
         llrm_target::CpuPrices {
@@ -435,6 +449,8 @@ impl Profile {
             rounds_float_spills: false,
             stable_loads: true,
             min_size: false,
+            aligned_calls: None,
+            arch_call_alignment: 1,
             speed_rate: true,
             speed_level: true,
             post_ra_tail_duplicate: false,
@@ -773,6 +789,7 @@ fn _profile(
     operations.cache_line = table.cache_line.unwrap_or(0);
     operations.line_fill_clocks = table.line_fill_clocks.unwrap_or(0);
     Ok(Profile {
+        arch_call_alignment: if arch.aligned_calls() { arch.stack_alignment().max(1) } else { 1 },
         pentium_pairing: table.pairing,
         address_forms: _address_forms(arch, &operations, table.prefix, table.lcp_stall),
         operations,
@@ -908,6 +925,23 @@ pub fn tuned_optimizing(
     }));
     made.insert(key, one);
     Ok(one)
+}
+
+/// `profile` with every call aligned to `bytes` (`-mstack-alignment=`): one
+/// copy per profile and alignment.
+pub fn with_aligned_calls(
+    profile: &'static Profile,
+    bytes: i64,
+) -> &'static Profile {
+    static MADE: std::sync::Mutex<Vec<(usize, i64, &'static Profile)>> = std::sync::Mutex::new(Vec::new());
+    let mut made = MADE.lock().expect("the aligned profiles are not poisoned");
+    let key = profile as *const Profile as usize;
+    if let Some(&(_, _, one)) = made.iter().find(|(at, n, _)| *at == key && *n == bytes) {
+        return one;
+    }
+    let one: &'static Profile = Box::leak(Box::new(Profile { aligned_calls: Some(bytes), ..profile.clone() }));
+    made.push((key, bytes, one));
+    one
 }
 
 /// The registers a value may be placed in: the description's `gpr` class.

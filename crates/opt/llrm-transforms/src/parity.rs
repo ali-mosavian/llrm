@@ -119,6 +119,13 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "criterion: the families of combine.rs `visitors` (add, icmp, gep, store, and what they call: phi, select) match `opt -passes=instcombine` on the cases of their tests; exit: the remaining visit* (sub, and/or/xor, mul/div/rem, shifts, casts, select, phi, load, alloca, calls) translated, then fold@N and dead@N deleted (instcombine-port); the opcodes of foldICmpBinOpWithConstant not yet translated (xor, or, mul, shl, shr, srem, div, sub, add: InstCombineCompares.cpp:4124; only and is, combine_icmp_const.rs) are owed by llrm-w-4, 2026-10-24 onward; on by default, LLRM_NO_COMBINE turns it off",
     ),
     entry("dead@1242", Cleanup, "instcombine", Old, "instcombine-port"),
+    entry(
+        "backthread@1243",
+        Cleanup,
+        "none (DEVIATE BACKTHREAD-REL, GCC tree-ssa-threadbackward + value-relation)",
+        Old,
+        "backwardthreading.rs",
+    ),
     partial(
         "decide@1244",
         Cleanup,
@@ -327,6 +334,20 @@ pub(crate) const REGISTRY: &[Entry] = &[
         Late,
         "slp-vectorizer",
         "slpvectorize.rs makes vector stores of runs of constant stores (arm64 only: cost-priced, VF down from the register width, DEVIATE SLP1: constants only), slpcompares.rs makes the wide compare the pin's SLP, VectorCombine and InstCombine leave of an and-chain of equalities of adjacent bytes; no vectors; criterion: the chain of eight bytes is one ldr and one cmp as the pin's (tests/slp_compares.rs); exit: vector types in the backend",
+    ),
+    // Before the vectorizer, after loop-invariant motion, as gcc's order.
+    partial(
+        "loop-split@gcc",
+        Late,
+        "none (DEVIATE LSPLIT, no pin pass)",
+        "translation of gcc tree-ssa-loop-split `split_loop` (loopsplit.rs; -O3 and -Omax, `Tti::loop_split`, arm64 only); untranslated: split_loop_on_cond, guards that are not a header phi, equality against a range bound, bounds computed in the loop, <= and >= exits, strides but one on a != exit; criterion: the sieve loop splits in two and the interpreter agrees on every input (loopsplit_tests.rs); exit: arm64 sieve -O3 clocks drop or the pass is deleted (2026-11-24)",
+    ),
+    entry(
+        "loop-unroll-and-jam@early",
+        Late,
+        "none (DEVIATE UJ-EARLY, GCC pass_unroll_jam)",
+        Old,
+        "loopunrollandjam.rs, before the vectorizer on a target with vector values",
     ),
     partial(
         "loop-vectorize@1354",
@@ -827,6 +848,7 @@ pub const ABSENT_AT_O1: &[&str] = &[
     "jumpthreading@668",
     "jumpthreading@809",
     "backthread@809",
+    "backthread@1243",
     "cvp@669",
     "cvp@810",
     "dfajumpthreading@806",

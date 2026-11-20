@@ -27,9 +27,11 @@
 //! ```
 //!
 //! DEVIATE (J1..J15):
-//! - J1. No `indirectbr` or `blockaddress` in MIR: `processBlock`'s
-//!   `IndirectBrInst` arm, `hasAddressTakenAndUsed` and the block-address
-//!   preference of `getKnownConstant` are absent.
+//! - J1. `processBlock`'s `IndirectBrInst` arm and the block-address preference
+//!   of `getKnownConstant` are absent: no thread goes through an `indirectbr`
+//!   (`SimplifyCFG` folds one on a known address). A predecessor that ends in
+//!   one is skipped where LLVM skips it, and `hasAddressTakenAndUsed` is
+//!   `has_address_taken` (it keeps a block whose constant is dead).
 //! - J2. No guards: `processGuards` and `threadGuard` are skipped. A guard call
 //!   needs exactly one `"deopt"` operand bundle (`opt`'s verifier rejects it
 //!   without), MIR has no operand bundles, and no front end emits the
@@ -143,6 +145,7 @@ use llrm_mir::valuetracking::{AssumptionCache, Query};
 
 use crate::lcssa::{arms, from_arms};
 use crate::local::{is_instruction_trivially_dead, may_have_side_effects};
+use crate::trial;
 
 mod loadpre;
 
@@ -157,6 +160,9 @@ pub struct JumpThreadingOptions {
     /// `BBDuplicateThreshold` of a function with `minsize`
     /// ([L310](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/JumpThreading.cpp#L310)).
     pub min_size_bb_dup_threshold: u32,
+    /// DEVIATE JT-LATCH-TRIAL: an `optsize` function keeps a loop latch in
+    /// one copy (the trial compile sets it through `trial::keeping_latches`).
+    pub keep_latch_at_size: bool,
     /// `PhiDuplicateThreshold` (`jump-threading-phi-threshold`): a block with
     /// more phis is not copied
     /// ([L99](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/JumpThreading.cpp#L99)).
@@ -174,6 +180,7 @@ impl Default for JumpThreadingOptions {
         Self {
             bb_dup_threshold: 6,
             min_size_bb_dup_threshold: 3,
+            keep_latch_at_size: false,
             phi_duplicate_threshold: 76,
             implication_search_threshold: 3,
         }
@@ -250,6 +257,7 @@ impl FunctionPass for JumpThreading {
             unreachable: IdSet::new(),
             options: self.options,
             bb_dup_threshold: self.options.bb_dup_threshold,
+            latch_trial: false,
         };
         if pass.run_impl() { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
     }
@@ -302,6 +310,9 @@ struct State<'a, 'u> {
     unreachable: IdSet<BlockId>,
     options: JumpThreadingOptions,
     bb_dup_threshold: u32,
+    /// DEVIATE JT-LATCH-TRIAL: this is an `optsize` function whose latch copies
+    /// a trial may refuse.
+    latch_trial: bool,
 }
 
 impl State<'_, '_> {
@@ -635,6 +646,9 @@ impl State<'_, '_> {
             } else {
                 self.options.bb_dup_threshold
             };
+        // DEVIATE JT-LATCH-TRIAL
+        self.latch_trial = (self.options.keep_latch_at_size || self.tti.jump_threading_latch_trial_at_size())
+            && self.function().attrs.iter().any(|attr| matches!(attr, Attribute::Flag(flag) if flag == "optsize"));
         let Some(entry) = self.function().entry() else { return false };
 
         self.unreachable.clear();
@@ -820,6 +834,26 @@ impl State<'_, '_> {
             changed = true;
         }
         changed
+    }
+
+    /// DEVIATE JT-LATCH-TRIAL: whether the copy of `bb` is refused: it is a
+    /// loop latch (it branches back to a loop header) of an `optsize` function
+    /// and the trial compile that keeps latches runs. The base compile notes
+    /// the copy it makes instead.
+    fn refuses_latch_copy(
+        &self,
+        bb: BlockId,
+    ) -> bool {
+        if !self.latch_trial || !self.successor_edges(bb).iter().any(|succ| self.loop_headers.contains(succ)) {
+            return false;
+        }
+        if self.options.keep_latch_at_size || trial::keeping_latches() {
+            return true;
+        }
+        if let Some(name) = self.unit.id.and_then(|id| self.globals[id.0 as usize].name.as_deref()) {
+            trial::note_latch_copy(name);
+        }
+        false
     }
 
     /// `getJumpThreadDuplicationCost`
@@ -1613,6 +1647,11 @@ impl State<'_, '_> {
                     multiple_val = true;
                 }
             }
+            // If the predecessor ends with an indirect goto, we can't change
+            // its destination.
+            if self.function().ends_in_indirect_branch(pred) {
+                continue;
+            }
             pred_to_dest.push((pred, dest_bb));
         }
 
@@ -1772,7 +1811,7 @@ impl State<'_, '_> {
         }
         let term = self.function().terminator(bb).expect("a terminator");
         let cost = self.duplication_cost(bb, term, self.bb_dup_threshold);
-        if cost > self.bb_dup_threshold {
+        if cost > self.bb_dup_threshold || self.refuses_latch_copy(bb) {
             return false;
         }
         self.thread_edge(bb, pred_bbs, succ_bb);
@@ -2133,7 +2172,12 @@ impl State<'_, '_> {
         let Some(single_pred) = self.single_predecessor(bb) else { return false };
         let term = self.function().terminator(single_pred).expect("a terminator");
         let special = matches!(*self.opcode(term), Opcode::Invoke(_) | Opcode::Resume);
-        if special || self.successor_edges(single_pred).len() != 1 || single_pred == bb {
+        // `hasAddressTakenAndUsed`: a `blockaddress` of `bb` keeps its label.
+        if special
+            || self.successor_edges(single_pred).len() != 1
+            || single_pred == bb
+            || self.function().has_address_taken(bb)
+        {
             return false;
         }
         // MergeBasicBlockIntoOnlyPred may delete SinglePred, we need to avoid
@@ -2419,6 +2463,10 @@ impl State<'_, '_> {
         let (mut zero_count, mut one_count) = (0, 0);
         let (mut zero_pred, mut one_pred) = (None, None);
         for pred in self.pred_edges(pred_bb) {
+            // If PredPred ends with IndirectBrInst, we can't handle it.
+            if self.function().ends_in_indirect_branch(pred) {
+                continue;
+            }
             let mut visited = HashSet::default();
             let Some(known) = self.evaluate_on_predecessor_edge(bb, pred, cond, &mut visited) else { continue };
             match self.int_bits(known) {
@@ -2469,6 +2517,8 @@ impl State<'_, '_> {
         if bb_cost > self.bb_dup_threshold
             || pred_bb_cost > self.bb_dup_threshold
             || bb_cost + pred_bb_cost > self.bb_dup_threshold
+            || self.refuses_latch_copy(bb)
+            || self.refuses_latch_copy(pred_bb)
         {
             return false;
         }
@@ -2657,6 +2707,11 @@ impl State<'_, '_> {
         }
 
         // Try to duplicate BB into PredBB.
+        // If any of predecessors end with an indirect goto, we can't change
+        // its destination.
+        if blocks_to_fold_into.iter().any(|&pred| self.function().ends_in_indirect_branch(pred)) {
+            return false;
+        }
         self.duplicate_cond_branch_on_phi_into_pred(bb, &blocks_to_fold_into)
     }
 
@@ -2681,7 +2736,7 @@ impl State<'_, '_> {
 
         let term = self.function().terminator(bb).expect("a terminator");
         let duplication_cost = self.duplication_cost(bb, term, self.bb_dup_threshold);
-        if duplication_cost > self.bb_dup_threshold {
+        if duplication_cost > self.bb_dup_threshold || self.refuses_latch_copy(bb) {
             return false;
         }
 

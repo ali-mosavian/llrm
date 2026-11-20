@@ -46,6 +46,14 @@
 //!   divisibility test against the largest VF before any smaller one are not
 //!   translated: the divisibility is tested on the chosen VF x IC. Exit: VEC3
 //!   (LV-X3, 2026-11-20).
+//! - VP9 DEVIATE (owner arm64-vec, exit: the pin's -O2 cost model gains it, or
+//!   2026-12-31): a target's driver row may turn on gcc's
+//!   `vect-cost-model=very-cheap` at -O2 (`-fllrm-vect-very-cheap`): a loop of
+//!   an unknown trip count is planned only if VF x IC divides it, which nothing
+//!   says, so none is: no scalar epilogue, as for `optsize` (VP6), where the
+//!   pin's -O2 leaves one. A known trip count keeps the pin's plan: gcc
+//!   vectorizes those (particle -O2: 9,311 clocks vectorized, 73,733 with the
+//!   101 trips left scalar).
 //! - VP8 closed: the loop-control prices are the pin's. The scalar loop pays
 //!   its `add` and exit `icmp` (the phis, the branch and the address
 //!   computations are free at throughput), the vector loop its
@@ -163,6 +171,13 @@ pub struct LoopFacts {
     pub widest_induction_bits: u32,
     /// The function is `optsize` or `minsize` (VP6).
     pub opt_size: bool,
+    /// gcc's `--param vect-cost-model=very-cheap`: a loop of an unknown trip
+    /// count gets no scalar epilogue, as at `optsize`, but is priced for speed
+    /// (VP9).
+    pub very_cheap: bool,
+    /// `optsize` and the target prices a vector loop by size, outside work
+    /// included (`Tti::vectorizes_size_priced`).
+    pub size_priced: bool,
     /// The loop carries reductions (`!Legal->getReductionVars().empty()`).
     pub has_reductions: bool,
     /// The recurrence types' widths of the reductions
@@ -413,8 +428,8 @@ fn iteration_cost(
                     tti.vector_arithmetic_cost_op2(op, vector(lane), second, kind).ok_or(NotTaken)?
                 }
             }
-            // `getInterleaveGroupCost`: the target's price of the group; at VF 1
-            // a group is its scalar accesses (the members' recipes are one).
+            // `getInterleaveGroupCost`: the target's price of the group; at VF
+            // 1 a group is its scalar accesses (the members' recipes are one).
             Recipe::Interleave { op, lane, factor } => {
                 if vf == 1 {
                     let access = tti.memory_op_cost(op, lane, kind, false);
@@ -554,6 +569,30 @@ fn is_more_profitable(
     for_trip_count(vf_a, cost_a, scalar_a) < for_trip_count(vf_b, cost_b, scalar_b)
 }
 
+/// DEVIATE LV-SIZE (owner arm64, exit 2026-11-30): the work outside the vector
+/// loop at `vf`, which `VPlan::cost` leaves out (VPlan.cpp L1024: the loop
+/// region only). Each reduction starts one accumulator (an insert) and ends in
+/// a horizontal step in the middle block (`ComputeReductionResult`), priced as
+/// an `add` reduction of its width: the plan keeps a reduction's width, not
+/// its kind.
+fn outside_loop_cost(
+    tti: &dyn Tti,
+    facts: &LoopFacts,
+    vf: u64,
+) -> i64 {
+    facts
+        .reduction_bits
+        .iter()
+        .map(|&bits| {
+            let vector = VectorTy { lane: Ty::Int(bits), count: vf as u32 };
+            let step = tti
+                .vector_reduction_cost(llrm_mir::intrinsics::ReduceKind::Add, vector, false, CostKind::RecipThroughput)
+                .map_or_else(|| i64::from(vf.ilog2()) + 1, |cost| cost.value);
+            step + 1
+        })
+        .sum()
+}
+
 /// `VPRegisterUsage::spillCost` added by `LoopVectorizationPlanner::cost`
 /// (L5612) where `shouldConsiderRegPressureForVF`: the target maximizes the
 /// vector bandwidth and `vf` is past `MaxPermissibleVFWithoutMaxBW`. Each
@@ -619,6 +658,12 @@ fn best_vf(
                 Err(_) => eprintln!("Cost for VF {vf}: not priced"),
             }
         }
+        // DEVIATE LV-SIZE: at `optsize` the vector loop and its outside work
+        // must cost less than the scalar loop, whatever the cost per lane.
+        let priced = priced.and_then(|cost| {
+            let outside = outside_loop_cost(tti, facts, vf);
+            if facts.size_priced && cost + outside >= scalar { Err(NotTaken) } else { Ok(cost) }
+        });
         if let Ok(cost) = priced {
             let candidate = (cost, vf, scalar);
             if is_more_profitable(candidate, best, facts.trip_count, true) {
@@ -1013,7 +1058,9 @@ const TINY_TRIP_COUNT: u64 = 16;
 /// `CM_EpilogueNotAllowedOptSize` (L7076) and
 /// `CM_EpilogueNotAllowedLowTripLoop` (L7809).
 fn epilogue_allowed(facts: &LoopFacts) -> bool {
-    !facts.opt_size && !(facts.trip_count != 0 && facts.trip_count < TINY_TRIP_COUNT)
+    !facts.opt_size
+        && !(facts.very_cheap && facts.trip_count == 0)
+        && !(facts.trip_count != 0 && facts.trip_count < TINY_TRIP_COUNT)
 }
 
 /// [`choose`], then the epilogue policy: where none is allowed the plan must

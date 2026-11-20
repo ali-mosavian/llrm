@@ -1309,6 +1309,23 @@ fn a_stated_fact_becomes_its_carrier() {
 }
 
 /// A fact of a kind it is not stated of was lowered to whatever the subject
+/// `norecurse` stated of a function the module defines and nothing calls
+/// (QB's `__main`) was refused as a fact of no callable.
+#[test]
+fn a_callable_fact_of_a_defined_entry_lowers_to_its_function() {
+    use llrm_mir::facts::Fact;
+
+    use crate::facts::{Builder, Subject};
+    let mut program = program(difference());
+    let mut facts = Builder::new("test");
+    facts.state(Subject::Callable(1), Fact::NoRecurse);
+    program.modules[0].facts = facts.finish();
+    assert!(crate::verify::verify(&program).is_ok());
+    let emitted = emit(&program).remove(0);
+    assert_eq!(emitted.refused, Vec::<(String, String)>::new());
+    assert!(llrm_mir::print::module(&emitted.module).contains("norecurse"));
+}
+
 /// was; the verifier refuses it, as it does a subject the module lacks.
 #[test]
 fn a_fact_of_the_wrong_subject_is_refused() {

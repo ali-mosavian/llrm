@@ -379,6 +379,11 @@ impl GvnPass<'_> {
                 })
                 .unwrap_or(0);
             if edges != 1 {
+                // COULD NOT PRE LOAD BECAUSE OF INDBR CRITICAL EDGE
+                // (GVN.cpp:1803).
+                if self.function.ends_in_indirect_branch(pred) {
+                    return false;
+                }
                 // A landing pad cannot take a new predecessor.
                 if self
                     .function
@@ -605,7 +610,7 @@ impl GvnPass<'_> {
 
     /// Makes the loop info of the function as it stands, when it is first
     /// asked.
-    fn ensure_loops(&mut self) {
+    pub(super) fn ensure_loops(&mut self) {
         if self.loops.is_none() {
             let function = &*self.function;
             let dt = &*self.dt;

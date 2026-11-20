@@ -416,6 +416,8 @@ impl llrm_target::Target for M64 {
                     .map(|one| {
                         one.with_tuning(llrm_mir::target::Tuning {
                             inline_size_guard_at_size: true,
+                            // DEVIATE MEMSET-GAP (owner llrm-target-x86-m16-b, exit 2026-11-27): see Tuning.
+                            memset_gap_merge_at_size: true,
                             // DEVIATE LFTR-SIZE (owner llrm-target-x86-m64, exit 2026-11-24; gcc-bar only): see
                             // Tuning. m64 -Os 22 files smaller (-189 B), sieve +1 cell, spill_store_order +16 B.
                             lftr_size_budget: 1,
@@ -424,8 +426,8 @@ impl llrm_target::Target for M64 {
                             inline_trial_defers_to_shared_growth: true,
                             // DEVIATE IPRA-DSO-LOCAL (owner llrm-target-x86-m64, exit 2026-11-24): see Tuning.
                             ipra_binds_local: true,
-                            // DEVIATE SD443 (owner w9, exit: a constant-argument pass after
-                            // inlining, as gcc's IPA-CP): see the m32 entry; m64 -O2
+                            // DEVIATE SD443 (owner w9, exit 2026-11-24: a constant-argument pass
+                            // after inlining, as gcc's IPA-CP): see the m32 entry; m64 -O2
                             // memory_expansion.c text -3281 B.
                             second_ipsccp: true,
                             // DEVIATE SD-DIVMAG (owner llrm-target-x86-m64, exit 2026-11-24): the m32
@@ -485,6 +487,8 @@ impl llrm_target::Target for M64 {
                             lsr_constant_setup_is_one: true,
                             // DEVIATE RU-REC (owner x86-m64, exit 2026-11-24): see Tuning.
                             unroll_recurrence_veto: true,
+                            // DEVIATE BACKTHREAD-REL (owner llrm-target-x86-m64-b, exit 2026-12-15): see Tuning.
+                            threads_by_relation: true,
                             // DEVIATE SZ2 (owner m64, exit 2026-11-19): the bound holds a
                             // callee with one site too; the pin copies it (crc, floats,
                             // tile -Os: gcc keeps the call, +40 B each).
@@ -499,6 +503,8 @@ impl llrm_target::Target for M64 {
                             // instructions; unrolled, 4442 (clang 5116 at -O3). The x86-m32 target
                             // keeps its own rate.
                             unroll_milliclocks_per_byte: 0,
+                            // DEVIATE LASTCALL-COLD (owner x87-cordic-2, exit 2026-12-05): see `Tuning`.
+                            inline_last_call_in_cold_site: true,
                             unroll_prices_nest: true,
                             unroll_promotion_fits_registers: true,
                             // `mov m64, imm32`: sign-extended.
@@ -584,7 +590,7 @@ impl llrm_target::Target for M64 {
                             size_copy_price: Some(llrm_mir::target::CopyPrice { call: 14, wide_piece: 8, narrow_piece: 6 }),
                             // DEVIATE IMM-1 (owner greedy-os-causes, exit 2026-11-20): see Tuning.
                             immediate_forms_at_size: true,
-                            // DEVIATE IPACP-O2 (owner w10, exit 2026-11-24): see Tuning.
+                            // DEVIATE IPACP-O3 (owner x86-m32-c, exit 2026-12-20): see Tuning; none at -O2.
                             ipa_cp_clones_at_speed: true,
                             // DEVIATE IPACP-O3-M64 (owner x87-cordic-2, exit 2026-12-20): gcc clones `place`
                             // for each row of queens; 4 left rows 4.. generic (+4.3% clk). 8 clones grow
@@ -594,6 +600,8 @@ impl llrm_target::Target for M64 {
                             unroll_threshold_at_o3: Some(400),
                             // DEVIATE DIVCONST-SIZE (owner llrm-target-x86-m64-b, exit 2026-11-30): see Tuning.
                             div_by_constant_size_cost: Some(4),
+                            // DEVIATE DIVVAR-SIZE (owner x87-cordic-2, exit 2026-11-30): see Tuning.
+                            div_by_variable_size_cost: Some(4),
                             // DEVIATE SP-O3 (owner llrm-target-x86-m64-b, exit 2026-11-30): see Tuning.
                             split_paths_at_o3: true,
                             ..llrm_mir::target::Tuning::PIN

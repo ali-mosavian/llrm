@@ -106,6 +106,48 @@ impl Z80Tti {
         matches!(ty, Ty::Int(bits) if bits <= self.byte_bits.min(8))
     }
 
+    /// The forms of one call: `call nn`, the arguments' setup, and the `ret`
+    /// unless `in_body`, the call a callee's body makes (see `body_call_cost`).
+    fn call_forms(
+        &self,
+        shape: &CallShape,
+        kind: CostKind,
+        in_body: bool,
+    ) -> Cost {
+        let (mut bytes, mut clocks) = sum(if in_body { &["call nn"][..] } else { &["call nn", "ret"][..] });
+        let mut registers = 0;
+        for argument in &shape.arguments {
+            let words = match argument.ty {
+                Some(Ty::Int(bits)) if bits <= 8 => 0,
+                Some(Ty::Int(bits)) => i64::from(bits.div_ceil(16)),
+                Some(ty) => self.parts(ty),
+                None => 1,
+            };
+            if let Some(copied) = argument.byval_bytes {
+                // `ld hl,src; ld de,dst; ld bc,n; ldir`: 21 T a byte
+                let (b, c) = sum(&["ld hl;nn", "ld hl;nn", "ld bc;nn", "ldir"]);
+                bytes += b;
+                clocks += c + 21 * (copied as i64 - 1);
+            } else if words == 0 {
+                let (b, c) = sum(&["ld b;n"]);
+                bytes += b;
+                clocks += c;
+            } else {
+                for _ in 0..words {
+                    let form = if registers < 3 { &["ld bc;nn"][..] } else { &["push bc", "pop bc"][..] };
+                    registers += 1;
+                    let (b, c) = sum(form);
+                    bytes += b;
+                    clocks += c;
+                }
+            }
+        }
+        Cost::of(match kind {
+            CostKind::CodeSize => bytes,
+            _ => (clocks + 3) / 4,
+        })
+    }
+
     /// A call of a runtime loop of `bits` passes, each the forms `body`, plus
     /// the call and the return.
     fn call(
@@ -188,6 +230,31 @@ impl Tti for Z80Tti {
 
     fn lsr_dropped_solution_spares_addresses(&self) -> bool {
         true
+    }
+
+    /// DEVIATE LICM-SPEC (owner z80, exit 2026-12-15): `bc`, `de`, `hl`, `ix`
+    /// and `iy` are the values a loop keeps; past them an invariant word the
+    /// loop computes on some trips only is a frame slot stored once and
+    /// reloaded each trip it is read, where the computation is an `inc` or an
+    /// `add`. GCC's `loop-invariant.cc` with `-fira-loop-pressure` moves an
+    /// invariant only while its class has registers left. queens -Os: `&q[row]`
+    /// and `row + 1` hoisted out of the column loop, 379 B against 360 B.
+    fn licm_prices_speculated_values(&self) -> bool {
+        true
+    }
+
+    fn licm_register_limit(&self) -> Option<u32> {
+        Some(5)
+    }
+
+    /// DEVIATE LSR-TIE (owner z80, exit 2026-12-15): a recurrence stepped by
+    /// a register is an `add hl, rr` through `hl` and a frame slot for the
+    /// step, where a constant step is an `inc` of the pair itself; LSR counts
+    /// both as one. Past four values (`bc`, `de`, `hl`, `iy`) a rewrite it
+    /// rates equal costs frame traffic it does not see: shellsort -O1 664 B
+    /// rewritten, 523 B as written (SDCC 445 B).
+    fn lsr_register_step_loses_a_tie_above(&self) -> Option<u32> {
+        Some(4)
     }
 
     /// `long i < 12` compares four bytes a test where a byte would do
@@ -322,6 +389,14 @@ impl Tti for Z80Tti {
             )
         };
         key(a) < key(b)
+    }
+
+    /// DEVIATE LU32: an inner loop starting at `i * i` made the outer loop
+    /// carry two more induction variables (a pointer and its step); the
+    /// Z80's outer loops hold their counter, sum and bound in the frame
+    /// already (sieve -Os: 312 B a body, 240 B with the product opaque).
+    fn lsr_outer_addrec_regs_per_level(&self) -> bool {
+        true
     }
 
     /// DEVIATE LU13: a call takes every register of the Z80, so what a loop
@@ -502,6 +577,11 @@ impl Tti for Z80Tti {
         true
     }
 
+    /// `function_bytes` prices the trial in the bytes the table says.
+    fn opt_size_inline_trial_by_bytes(&self) -> bool {
+        true
+    }
+
     /// SZ1, rule 1: a size build keeps a callee bigger than its call. The pin's
     /// `OptSizeThreshold` 50 allows growth, and a word update is 6 B where the
     /// call is 3.
@@ -541,38 +621,25 @@ impl Tti for Z80Tti {
         shape: &CallShape,
         kind: CostKind,
     ) -> Option<Cost> {
-        let (mut bytes, mut clocks) = sum(&["call nn", "ret"]);
-        let mut registers = 0;
-        for argument in &shape.arguments {
-            let words = match argument.ty {
-                Some(Ty::Int(bits)) if bits <= 8 => 0,
-                Some(Ty::Int(bits)) => i64::from(bits.div_ceil(16)),
-                Some(ty) => self.parts(ty),
-                None => 1,
-            };
-            if let Some(copied) = argument.byval_bytes {
-                // `ld hl,src; ld de,dst; ld bc,n; ldir`: 21 T a byte
-                let (b, c) = sum(&["ld hl;nn", "ld hl;nn", "ld bc;nn", "ldir"]);
-                bytes += b;
-                clocks += c + 21 * (copied as i64 - 1);
-            } else if words == 0 {
-                let (b, c) = sum(&["ld b;n"]);
-                bytes += b;
-                clocks += c;
-            } else {
-                for _ in 0..words {
-                    let form = if registers < 3 { &["ld bc;nn"][..] } else { &["push bc", "pop bc"][..] };
-                    registers += 1;
-                    let (b, c) = sum(form);
-                    bytes += b;
-                    clocks += c;
-                }
-            }
-        }
-        Some(Cost::of(match kind {
-            CostKind::CodeSize => bytes,
-            _ => (clocks + 3) / 4,
-        }))
+        Some(self.call_forms(shape, kind, false))
+    }
+
+    /// The call and its arguments without the `ret`: a call inside an inlined
+    /// body adds `call nn` and the setup; the callee's `ret` is not copied.
+    fn body_call_cost(
+        &self,
+        shape: &CallShape,
+        kind: CostKind,
+    ) -> Option<Cost> {
+        Some(self.call_forms(shape, kind, true))
+    }
+
+    /// DEVIATE INLINE-FRAME (owner z80, exit 2026-12-15): queens -Os inlined
+    /// `bench_queens` (it stays, 37 B, a 24 B array) into a `main` with no
+    /// frame: `main` grew a frame and a copy of the body, 410 B against SDCC's
+    /// 342 B, 379 B without it.
+    fn inline_callee_that_stays_adds_a_caller_frame(&self) -> bool {
+        true
     }
 
     /// The callee's frame: `push ix; ld ix,#0; add ix,sp` and its undoing, with

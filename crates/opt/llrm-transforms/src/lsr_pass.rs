@@ -34,7 +34,7 @@ use llrm_mir::datalayout::DataLayout;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
 use llrm_mir::opcode::{BinaryOp, Opcode};
 use llrm_mir::passes::{Analyses, Declared, FunctionPass, Outer, PreservedAnalyses, Unit};
-use llrm_mir::tti::Tti;
+use llrm_mir::tti::{AddressingMode, Tti};
 
 use crate::ivusers::{Env, IvUsers};
 use crate::lsr_collect::Collection;
@@ -322,14 +322,15 @@ fn plan_loop(
     // DEVIATE LSR-OUTER (owner x87, exit 2026-11-27; the pin skips every loop
     // that has a subloop): where the target prices it
     // (`Tti::reduces_outer_multiply`: the multiply's clocks against a
-    // counter held across the inner loop) and not at -Os, an outer loop
+    // counter held across the inner loop) and not at -Os unless the target
+    // says so (`reduces_outer_multiply_at_size`), an outer loop
     // that computes an affine value with a multiply is reduced as
     // an inner loop is, so `i * 300` feeding the inner loop becomes a counter
     // stepped by 300. gcc's ivopts does this on every loop (named behaviour
     // only, its code is not translated). x_cordic -O1: 200 `imul` x 19
     // clocks.
     if !lp.is_innermost()
-        && !(!size
+        && !((!size || tti.reduces_outer_multiply_at_size())
             && users.uses.iter().any(|one| computed_by_priced_multiply(tti, context, layout, function, one.operand, 3)))
     {
         return planned(None);
@@ -356,6 +357,12 @@ fn plan_loop(
                 counted
             }
         };
+        if lsr.amk.has_post_indexed()
+            && ((tti.lsr_post_indexed_amortized() && (size || !post_indexed_repays(se, &cx, header)))
+                || tti.lsr_post_indexed_walk_limit().is_some_and(|limit| walked_bases(&cx, header) > limit))
+        {
+            lsr.amk = AddressingMode::None;
+        }
         lsr.size = size;
         lsr.bytes_counted = size || bytes_strict;
         lsr.across_call = across_call;
@@ -441,15 +448,32 @@ fn plan_loop(
         let bytes_outweigh_saving = bytes_strict
             && tti.lsr_size_model().is_some_and(|m| size || !m.size_only)
             && cost.size_bytes > pin_cost.size_bytes;
+        let saves_nothing = !(cost.c.add_rec_cost < pin_cost.c.add_rec_cost || cost.c.num_regs < pin_cost.c.num_regs);
+        // DEVIATE LG4 (owner w8, exit 2026-11-26; no pin line: the pin has no end-biased formulae): where the
+        // target favors post-indexed addressing, the pin's pointer walk is free (`RateRegister`, loop cost 0),
+        // so, where the target says so and every address of the pin's solution steps by what `(An)+` takes (`lsr_free_walk_beats_end_biased`; arm64 grew 21 cells of 181 at -O1/-O2 with it), the end-biased form must save a recurrence or a register to replace it: its saved compare is
+        // not a saving where the counter stays live for the loop's other readers.
+        let walk_is_free = tti.preferred_addressing_mode().has_post_indexed()
+            && tti.lsr_free_walk_beats_end_biased()
+            && {
+                let mut walks = pin.uses.iter().zip(&pin_solution).filter(|(lu, _)| lu.kind == crate::lsr_use::Kind::Address).peekable();
+                walks.peek().is_some()
+                    && walks.all(|(lu, &chosen)| {
+                        let f = &lu.formulae[chosen];
+                        // a pointer alone: a base with an index beside it is not a walk
+                        f.scaled_reg.is_none()
+                            && f.base_regs.len() == 1
+                            && crate::lsr_use::may_use_post_inc_mode(tti, se, &cx, lu, f.base_regs[0], header)
+                    })
+            };
         let kept = !pin_solution.is_empty()
             && (solution.is_empty()
                 || symbols_outweigh_saving
                 || bytes_outweigh_saving
                 || pin_cost.is_less(tti, &cost)
+                || (walk_is_free && saves_nothing)
                 || (!folds_base_and_counter
-                    && (cost.c.num_base_adds > pin_cost.c.num_base_adds
-                        || spent > saved
-                        || !(cost.c.add_rec_cost < pin_cost.c.add_rec_cost || cost.c.num_regs < pin_cost.c.num_regs))));
+                    && (cost.c.num_base_adds > pin_cost.c.num_base_adds || spent > saved || saves_nothing)));
         llrm_support::debug!(
             "lsr",
             "  pin's space solved: kept {kept} (bytes {} against the pin's {}; size_bytes {} against {}; insns {} against {})",
@@ -522,6 +546,17 @@ pub fn reduced(
     reduced_with(context, layout, function, declared, outer, tti, false)
 }
 
+thread_local! {
+    /// The functions `LoopStrengthReduce` has been run over on this thread (M68K-LSR-TWICE: the m68k mid-end runs it
+    /// again after the shared pipeline, which the pin does not).
+    static RUNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times LSR has run over a function on this thread.
+pub fn runs_taken() -> usize {
+    RUNS.with(std::cell::Cell::get)
+}
+
 /// [`reduced`], with every IV chain made if `stress_chains`
 /// (`-lsr-stress-ivchain`): for tests of the chains' generation.
 pub fn reduced_with(
@@ -554,7 +589,9 @@ pub fn reduced_held(
     // The pass requires `LoopSimplify` (`getAnalysisUsage`): an outer loop
     // entered by a conditional branch gets the preheader its invariants'
     // induction variables are made in.
+    RUNS.with(|runs| runs.set(runs.get() + 1));
     let mut changed = crate::loopsimplify::simplified(function);
+    llrm_support::debug!("lsr-split", "loopsimplify before LSR: changed {changed}, {} blocks", function.layout().len());
     // The held expressions are read in the CFG they were made in.
     let mut stable = !changed;
     // The dominator tree, loops and assumptions of the function are made once:
@@ -831,4 +868,76 @@ fn remainders_kept_as_divides(
         })
         .filter_map(|one| one.result)
         .collect()
+}
+
+/// DEVIATE LSR-POSTINC-WALKS: how many objects the loop's loads and stores
+/// reach through an address computed in the loop (a GEP off a base, or a
+/// pointer phi already walked): the pointer walks a post-indexed preference
+/// would keep, one register each.
+fn walked_bases(
+    cx: &llrm_analysis::scev::Cx,
+    header: BlockId,
+) -> u32 {
+    use llrm_mir::module::{Operand, ValueDef};
+    use llrm_mir::opcode::{CastOp, Opcode};
+    let Some(lp) = cx.loops.get_loop_for(header) else { return 0 };
+    let mut bases: Vec<Operand> = Vec::new();
+    for &block in lp.get_blocks() {
+        for inst in cx.function.iter_block(block) {
+            let instruction = cx.function.instruction(inst);
+            let pointer = match instruction.opcode {
+                Opcode::Load { .. } => instruction.operands.first().copied(),
+                Opcode::Store { .. } => instruction.operands.get(1).copied(),
+                _ => None,
+            };
+            let Some(mut at) = pointer else { continue };
+            let mut stepped = false;
+            while let Operand::Value(v) = at {
+                let ValueDef::Instruction(def) = cx.function.value(v).def else { break };
+                let one = cx.function.instruction(def);
+                match one.opcode {
+                    Opcode::GetElementPtr { .. } => stepped = true,
+                    Opcode::Cast(CastOp::BitCast) => {}
+                    _ => break,
+                }
+                at = one.operands[0];
+            }
+            // A pointer already walked is a phi of the loop.
+            if let Operand::Value(v) = at
+                && let ValueDef::Instruction(def) = cx.function.value(v).def
+                && cx.function.instruction(def).opcode == Opcode::Phi
+            {
+                stepped = true;
+            }
+            if stepped && !bases.contains(&at) {
+                bases.push(at);
+            }
+        }
+    }
+    bases.len() as u32
+}
+
+/// DEVIATE LSR-POSTINC-TRIPS: whether the loop makes more trips than twice the
+/// accesses it holds, the copy and add that start each access's pointer on an
+/// entry to the loop. A loop of unknown trips makes `AVG_LOOP_NITER` of them,
+/// as in gcc's ivopts (`avg_loop_niter`, param `avg-loop-niter`).
+fn post_indexed_repays(
+    se: &mut ScalarEvolution,
+    cx: &llrm_analysis::scev::Cx,
+    header: BlockId,
+) -> bool {
+    const AVG_LOOP_NITER: u64 = 10;
+    let known = u64::from(se.get_small_constant_max_trip_count(cx, header));
+    let trips = if known == 0 { AVG_LOOP_NITER } else { known };
+    let accesses = cx.loops.get_loop_for(header).map_or(0, |one| {
+        one.get_blocks()
+            .iter()
+            .flat_map(|&block| cx.function.iter_block(block))
+            .filter(|&inst| matches!(
+                cx.function.instruction(inst).opcode,
+                Opcode::Load { .. } | Opcode::Store { .. }
+            ))
+            .count()
+    }) as u64;
+    trips > 2 * accesses
 }

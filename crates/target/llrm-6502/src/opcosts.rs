@@ -89,7 +89,7 @@ pub fn bytes(cpu: Cpu) -> OperationCosts {
 
 /// The code bytes of the routine `name` of `runtime/mos_rt.s`, from its label
 /// to its `rts`.
-fn member_bytes(name: &str) -> i64 {
+pub fn member_bytes(name: &str) -> i64 {
     const RUNTIME: &str = include_str!("../runtime/mos_rt.s");
     let label = format!("\n{name}:\n");
     let from = RUNTIME.find(&label).expect("the runtime has the routine") + 1;
@@ -110,7 +110,7 @@ pub fn trial_bytes(cpu: Cpu) -> OperationCosts {
 /// What the snippets do not say, fit to the bytes the backend writes: a
 /// non-negative least squares of each function's operation counts
 /// (width-weighted) against its written size, over the 86 programs of
-/// `tests/data_size` at -Os (`tools/6502/size_fit.py`, 182 functions; the fit
+/// `tests/data_size` at -Os (`tools/size_fit.py`, 182 functions; the fit
 /// is within 25% for 68% of them, the snippets alone for 39%).
 ///
 /// DEVIATE (6502-OPCOSTS): measured here, the pin has no byte model for the

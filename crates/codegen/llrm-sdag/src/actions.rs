@@ -101,6 +101,23 @@ pub enum LoadExt {
 
 const INTS: [MVT; 6] = [MVT::I1, MVT::I8, MVT::I16, MVT::I32, MVT::I64, MVT::I128];
 const FLOATS: [MVT; 3] = [MVT::F32, MVT::F64, MVT::F80];
+
+/// The constrained nodes whose result is a float.
+const STRICT_FP: [ISD; 10] = [
+    ISD::StrictFAdd,
+    ISD::StrictFSub,
+    ISD::StrictFMul,
+    ISD::StrictFDiv,
+    ISD::StrictFRem,
+    ISD::StrictFMA,
+    ISD::StrictFSqrt,
+    ISD::StrictFRint,
+    ISD::StrictFpExtend,
+    ISD::StrictFpRound,
+];
+/// The constrained conversions whose other side is an integer.
+const STRICT_FP_CONVERT: [ISD; 4] =
+    [ISD::StrictFpToSInt, ISD::StrictFpToUInt, ISD::StrictSIntToFp, ISD::StrictUIntToFp];
 const ALL: [MVT; 10] =
     [MVT::I1, MVT::I8, MVT::I16, MVT::I32, MVT::I64, MVT::I128, MVT::F32, MVT::F64, MVT::F80, MVT::Other];
 
@@ -886,10 +903,18 @@ impl TargetLowering {
         self.set_operation_action(Trap, MVT::Other, Action::Expand);
         self.set_operation_action(DebugTrap, MVT::Other, Action::Expand);
         self.set_ops(&[ConstantFP], &FLOATS, Action::Expand);
+        // TargetLoweringBase.cpp#L851: a class test of a float is expanded.
+        self.set_ops(&[IsFpClass], &FLOATS, Action::Expand);
         // TargetLoweringBase.cpp#L864: a target without minss/maxss has no
         // pseudo min/max node, so `combineSelectToPseudoMinMax`
         // (legal-or-custom only) leaves the select alone.
         self.set_ops(&[PseudoFMin, PseudoFMax], &FLOATS, Action::Expand);
+        // TargetLoweringBase.cpp#L930: constrained operations default to
+        // expand (ConstrainedOps.def's DAG_INSTRUCTION list).
+        // The default covers every type (a conversion is keyed by either side).
+        self.set_ops(&STRICT_FP, &FLOATS, Action::Expand);
+        self.set_ops(&STRICT_FP_CONVERT, &FLOATS, Action::Expand);
+        self.set_ops(&STRICT_FP_CONVERT, &[MVT::I8, MVT::I16, MVT::I32, MVT::I64], Action::Expand);
     }
 
     /// m32 for i486/P5 with the x87 and no SSE: `initActions`, then the
@@ -931,9 +956,11 @@ impl TargetLowering {
         // expansion. DEVIATE X86V3 now covers only the 8- and 16-bit
         // lanes and the non-splat builds.
         t.set_ops(&[ISD::BuildVector], &[MVT::V16I8, MVT::V8I16, MVT::V4I32, MVT::V2I64], Action::Custom);
-        // `LowerEXTEND_VECTOR_INREG`, `LowerTRUNCATE`: a vector widened to more than one register (`punpck`, `psra`),
-        // or narrowed from more than one (`pand` + `packuswb`). No vector has an extending load or a truncating store
-        // of another vector's memory type without `pmovzx` (SSE4.1).
+        // `LowerEXTEND_VECTOR_INREG`, `LowerTRUNCATE`: a vector widened to more
+        // than one register (`punpck`, `psra`), or narrowed from more
+        // than one (`pand` + `packuswb`). No vector has an extending load or a
+        // truncating store of another vector's memory type without
+        // `pmovzx` (SSE4.1).
         let wide = [MVT::V16I16, MVT::V8I32, MVT::V16I32, MVT::V4I64, MVT::V8I64, MVT::V16I64];
         t.set_ops(&[ISD::ZeroExtend, ISD::SignExtend], &[MVT::V8I16, MVT::V4I32, MVT::V2I64], Action::Custom);
         t.set_ops(&[ISD::ZeroExtend, ISD::SignExtend], &wide, Action::Custom);
@@ -949,16 +976,26 @@ impl TargetLowering {
         // `LowerSELECT`: a scalar condition over a vector is a `CMOV` of the
         // register.
         t.set_ops(&[ISD::Select], &[MVT::V16I8, MVT::V8I16, MVT::V4I32, MVT::V2I64], Action::Custom);
+        // `LowerVSETCC`: the integer compares SSE2 has (`pcmpeq*`, `pcmpgt*`),
+        // the others made from them.
+        t.set_ops(&[ISD::SetCC], &[MVT::V16I8, MVT::V8I16, MVT::V4I32], Action::Custom);
+        // `LowerVSELECT` without SSE4.1's `pblendvb`: the arms masked by the
+        // lanes' sign masks, `pand`, `pandn`, `por` (`ExpandVSELECT`).
+        t.set_ops(&[ISD::VSelect], &[MVT::V16I8, MVT::V8I16, MVT::V4I32, MVT::V2I64], Action::Expand);
         // `LowerINSERT_VECTOR_ELT`: lane 0 of an undefined or zero vector is a
-        // `movd`; another position is `ExpandINSERT_VECTOR_ELT` (the stack). DEVIATE
-        // X86V3 (owner llrm-target-x86-m64-b, exit 2026-11-24): the pin shuffles
-        // (`movss`, `punpck`) or uses `pinsrw`/`pinsrb`.
+        // `movd`; another position is `ExpandINSERT_VECTOR_ELT` (the stack).
+        // DEVIATE X86V3 (owner llrm-target-x86-m64-b, exit 2026-11-24):
+        // the pin shuffles (`movss`, `punpck`) or uses
+        // `pinsrw`/`pinsrb`.
         t.set_ops(&[ISD::InsertVectorElt], &[MVT::V16I8, MVT::V8I16, MVT::V4I32, MVT::V2I64], Action::Custom);
-        // `LowerEXTRACT_VECTOR_ELT`: a constant lane is a shuffle and a `movd`; a variable one is the stack.
+        // `LowerEXTRACT_VECTOR_ELT`: a constant lane is a shuffle and a `movd`;
+        // a variable one is the stack.
         t.set_ops(&[ISD::ExtractElement], &[MVT::V16I8, MVT::V8I16, MVT::V4I32, MVT::V2I64], Action::Custom);
-        // No shuffle is selected by pattern: `LegalizeDAG` builds the vector of the lanes the mask picks.
+        // No shuffle is selected by pattern: `LegalizeDAG` builds the vector of
+        // the lanes the mask picks.
         t.set_ops(&[ISD::VectorShuffle], &[MVT::V16I8, MVT::V8I16, MVT::V4I32, MVT::V2I64], Action::Expand);
-        // `LowerSCALAR_TO_VECTOR`: a byte or a word is widened to a dword for `movd`.
+        // `LowerSCALAR_TO_VECTOR`: a byte or a word is widened to a dword for
+        // `movd`.
         t.set_ops(&[ISD::ScalarToVector], &[MVT::V16I8, MVT::V8I16], Action::Custom);
         // `LowerMUL`: `v4i32` without `pmulld` is `pmuludq` on the even and the
         // odd lanes.
@@ -968,8 +1005,9 @@ impl TargetLowering {
         // expansion.
         t.set_ops(&[ISD::Shl, ISD::Srl], &[MVT::V8I16, MVT::V4I32, MVT::V2I64], Action::Custom);
         t.set_ops(&[ISD::Sra], &[MVT::V8I16, MVT::V4I32], Action::Custom);
-        // `ExpandReductions` (`getShuffleReduction`) makes a sum, `and`, `or` or
-        // `xor` a shuffle and an operation a step, then `extractelement`.
+        // `ExpandReductions` (`getShuffleReduction`) makes a sum, `and`, `or`
+        // or `xor` a shuffle and an operation a step, then
+        // `extractelement`.
         t.set_ops(
             &[ISD::VecReduceAdd, ISD::VecReduceAnd, ISD::VecReduceOr, ISD::VecReduceXor],
             &[MVT::V16I8, MVT::V8I16, MVT::V4I32, MVT::V2I64],
@@ -980,13 +1018,7 @@ impl TargetLowering {
         // llrm-target-x86-m64-b, exit 2026-11-24): the pin shuffles those too
         // (a vector multiply, `pcmpgt` and blend steps).
         t.set_ops(
-            &[
-                ISD::VecReduceMul,
-                ISD::VecReduceSMax,
-                ISD::VecReduceSMin,
-                ISD::VecReduceUMax,
-                ISD::VecReduceUMin,
-            ],
+            &[ISD::VecReduceMul, ISD::VecReduceSMax, ISD::VecReduceSMin, ISD::VecReduceUMax, ISD::VecReduceUMin],
             &[MVT::V16I8, MVT::V8I16, MVT::V4I32, MVT::V2I64],
             Action::Expand,
         );
@@ -1091,10 +1123,10 @@ impl TargetLowering {
                 t.set_trunc_store_action(vt, mem, Expand);
             }
         }
-        // `AArch64TargetLowering` (L1515, L1526): the small vectors a D register
-        // does not hold are loaded as a scalar and widened in registers
-        // (`tryLowerSmallVectorExtLoad`), and `v4i8` is stored by narrowing
-        // `v4i16` (`LowerTruncateVectorStore`).
+        // `AArch64TargetLowering` (L1515, L1526): the small vectors a D
+        // register does not hold are loaded as a scalar and widened in
+        // registers (`tryLowerSmallVectorExtLoad`), and `v4i8` is
+        // stored by narrowing `v4i16` (`LowerTruncateVectorStore`).
         for (vt, mem) in [
             (MVT::V2I32, MVT::V2I8),
             (MVT::V2I64, MVT::V2I8),
@@ -1131,7 +1163,11 @@ impl TargetLowering {
         // `addTypeForNEON`: the conversions of a vector are
         // `LowerVectorINT_TO_FP` and `LowerVectorFP_TO_INT`, by the
         // operand's type.
-        t.set_ops(&[SIntToFp, UIntToFp], &vectors, Custom);
+        // The 64-bit types are `addDRType`'s, each through `addTypeForNEON`:
+        // their conversions are custom too (`v2i32` to `v2f64`:
+        // `ushll`, `ucvtf`).
+        let converted: Vec<MVT> = [MVT::V8I8, MVT::V4I16, MVT::V2I32].into_iter().chain(vectors).collect();
+        t.set_ops(&[SIntToFp, UIntToFp], &converted, Custom);
         t.set_ops(&[FpToSInt, FpToUInt], &[MVT::V4F32, MVT::V2F64, MVT::V2F32], Custom);
         // `addTypeForNEON`: a compare is `LowerVSETCC`, a select a mask
         // expression (`ExpandVSELECT`), and the integer codes the compares
@@ -1277,6 +1313,12 @@ impl TargetLowering {
         let words: &[MVT] = if is64 { &[MVT::I32, MVT::I64] } else { &[MVT::I32] };
         let ints64 = [MVT::I8, MVT::I16, MVT::I32, MVT::I64];
 
+        // The atomic read-modify-writes and the compare-exchange are Custom at
+        // the widths the target has (`X86TargetLowering`:
+        // `lowerAtomicArith`, `LowerCMP_SWAP`).
+        t.set_ops(&[AtomicLoadAdd, AtomicLoadSub, AtomicLoadAnd, AtomicLoadOr, AtomicLoadXor], native, Custom);
+        t.set_ops(&[AtomicCmpSwapWithSuccess], native, Custom);
+
         // L186..L203
         for vt in INTS {
             t.set_load_ext_action(LoadExt::SExtLoad, vt, MVT::I1, Promote);
@@ -1316,6 +1358,25 @@ impl TargetLowering {
         t.set_ops(&[FpToSInt], &[MVT::I16, MVT::I32, MVT::I64], Custom);
         t.set_ops(&[FpToUInt], &[MVT::I8, MVT::I16], Promote);
         t.set_ops(&[FpToUInt], &[MVT::I32, MVT::I64], Custom);
+        // The same arms for the constrained forms (L254..L299).
+        t.set_ops(&[StrictUIntToFp], &[MVT::I8, MVT::I16], Promote);
+        t.set_ops(&[StrictUIntToFp], &[MVT::I32, MVT::I64], Custom);
+        t.set_ops(&[StrictSIntToFp], &[MVT::I8], Promote);
+        t.set_ops(&[StrictSIntToFp], &[MVT::I16, MVT::I32, MVT::I64], Custom);
+        t.set_ops(&[StrictFpToSInt], &[MVT::I8], Promote);
+        t.set_ops(&[StrictFpToSInt], &[MVT::I16, MVT::I32, MVT::I64], Custom);
+        t.set_ops(&[StrictFpToUInt], &[MVT::I8, MVT::I16], Promote);
+        t.set_ops(&[StrictFpToUInt], &[MVT::I32, MVT::I64], Custom);
+        // L473: a constrained compare is lowered by the target.
+        t.set_ops(&[StrictFSetCC, StrictFSetCCS], &FLOATS, Custom);
+        // L575, L789..L798, L854..L868: the constrained arithmetic and
+        // conversions the x87 does itself.
+        t.set_ops(&[StrictFpExtend], &[MVT::F64, MVT::F80], Legal);
+        t.set_ops(&[StrictFAdd, StrictFSub, StrictFMul, StrictFDiv, StrictFpRound, StrictFSqrt], &FLOATS, Legal);
+        // DEVIATE CFP3: `rint` is `frndint`, as the plain one is (SD214); the
+        // pin expands both to `rint`. Exit: none. Owner w9-tests. Review
+        // 2026-11-27.
+        t.set_ops(&[StrictFRint], &FLOATS, Legal);
         // L300-L303, L850: `lrint` of an x87 value is `fist`
         t.set_ops(&[LRint, LLRint], &[MVT::F32, MVT::F64, MVT::F80], Custom);
         // an i64 result at 32 bits is expanded after the same `fist`, as
@@ -1453,8 +1514,44 @@ mod tests {
         TargetLowering::aarch64(Aarch64Features::default())
     }
 
-    /// A function tuned for size called the speed routine of a divide: a
-    /// target's smaller one was never asked for.
+    /// `initActions` expands every constrained node: a selector that finds a
+    /// `STRICT_FADD` legal by default would emit it unchained. Before the
+    /// default, a target that sets nothing read `Legal`.
+    #[test]
+    fn a_constrained_node_is_expanded_until_a_target_makes_it_legal() {
+        let t = a64();
+        for op in [ISD::StrictFAdd, ISD::StrictFSqrt, ISD::StrictFpRound, ISD::StrictFMA] {
+            for vt in [MVT::F32, MVT::F64, MVT::F80] {
+                assert_eq!(t.operation_action(op, EVT::Simple(vt)), Action::Expand, "{op:?} {vt:?}");
+            }
+        }
+        for op in [ISD::StrictFpToSInt, ISD::StrictUIntToFp] {
+            assert_eq!(t.operation_action(op, EVT::Simple(MVT::I32)), Action::Expand);
+        }
+    }
+
+    /// The x87 does constrained arithmetic and the widening itself; the
+    /// integer conversions and the compares are the target's own code, and a
+    /// remainder or a fused multiply-add stays expanded (`X86ISelLowering.cpp`
+    /// L254..L299, L473, L789..L868).
+    #[test]
+    fn the_x87_target_legalizes_constrained_arithmetic_and_customizes_the_rest() {
+        let t = TargetLowering::x86_32(Features::default(), MVT::I32);
+        let at = |op, vt| t.operation_action(op, EVT::Simple(vt));
+        for vt in [MVT::F32, MVT::F64, MVT::F80] {
+            assert_eq!(at(ISD::StrictFAdd, vt), Action::Legal, "{vt:?}");
+            assert_eq!(at(ISD::StrictFDiv, vt), Action::Legal, "{vt:?}");
+            assert_eq!(at(ISD::StrictFpRound, vt), Action::Legal, "{vt:?}");
+            assert_eq!(at(ISD::StrictFSetCCS, vt), Action::Custom, "{vt:?}");
+            assert_eq!(at(ISD::StrictFRem, vt), Action::Expand, "{vt:?}");
+            assert_eq!(at(ISD::StrictFMA, vt), Action::Expand, "{vt:?}");
+        }
+        assert_eq!(at(ISD::StrictFpExtend, MVT::F80), Action::Legal);
+        assert_eq!(at(ISD::StrictSIntToFp, MVT::I32), Action::Custom);
+        assert_eq!(at(ISD::StrictSIntToFp, MVT::I8), Action::Promote);
+        assert_eq!(at(ISD::StrictFpToSInt, MVT::I16), Action::Custom);
+    }
+
     #[test]
     fn a_function_tuned_for_size_calls_the_size_routine() {
         let mut t = TargetLowering::empty(TargetLoweringInfo::aarch64());

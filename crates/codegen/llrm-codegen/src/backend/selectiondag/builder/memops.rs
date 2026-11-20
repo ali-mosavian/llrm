@@ -176,6 +176,7 @@ impl Builder<'_> {
             Intrinsic::Compare { .. }
             | Intrinsic::FMulAdd
             | Intrinsic::CopySign
+            | Intrinsic::IsFpClass
             | Intrinsic::Fixed { .. }
             | Intrinsic::FixedMul { .. }
             | Intrinsic::ShiftSat { .. } => self.visit_math(instruction, intrinsic),
@@ -199,6 +200,7 @@ impl Builder<'_> {
                 self.set_value(instruction.result.ok_or(Refused("a decrement without a result"))?, node);
                 Ok(())
             }
+            Intrinsic::Constrained(op) => self.visit_constrained_fp(instruction, *op),
             _ => Err(Refused("intrinsic call")),
         }
     }
@@ -1455,8 +1457,16 @@ impl Builder<'_> {
                 }
             }
             _ => {
+                // DEVIATE SD223: at the speed rate `fill_is_smaller` prices the
+                // fill against the stores, so the pin's count
+                // (`MaxStoresPerMemset`) is the limit, not the
+                // target's fitted one: a 32-byte clear is eight
+                // stores where the fill loses (parity -O2: `rep stosd`
+                // 46 clk over the stores). Owner llrm-target-x86-m16.
                 let limit = if opt_size {
                     self.target.tuning.max_stores_per_memset_opt_size
+                } else if self.target.size_trade.is_some() {
+                    self.target.tuning.max_stores_per_memset.max(llrm_mir::target::Tuning::PIN.max_stores_per_memset)
                 } else {
                     self.target.tuning.max_stores_per_memset
                 };
@@ -1809,6 +1819,7 @@ impl Builder<'_> {
             values.push(selector);
         }
         let block = llrm_mir::intrinsics::AsmBlock {
+            bits: 16,
             code,
             inputs: names.iter().map(|name| (*name).into()).collect(),
             outputs: Vec::new(),
@@ -1834,6 +1845,7 @@ impl Builder<'_> {
             &name,
             &[],
             &registers,
+            &[],
             &[],
         );
         chain
@@ -1874,6 +1886,7 @@ impl Builder<'_> {
             }
         };
         let block = llrm_mir::intrinsics::AsmBlock {
+            bits: 16,
             code: vec![0xFD, 0xF3, 0xA4, 0xFC],
             inputs: operands.iter().map(|(name, _)| *name).chain(segment.map(|(es, _)| es)).map(Into::into).collect(),
             outputs: Vec::new(),
@@ -1894,6 +1907,7 @@ impl Builder<'_> {
             &name,
             &[],
             &registers,
+            &[],
             &[],
         );
         chain

@@ -236,7 +236,7 @@ impl Collection<'_, '_> {
         // No reassociation of the base register of a value that may be
         // post-incremented: it would make base+register formulae that win,
         // and the post-increment is better.
-        if self.tti.preferred_addressing_mode() == AddressingMode::PostIndexed
+        if self.amk == AddressingMode::PostIndexed
             && may_use_post_inc_mode(self.tti, se, cx, &self.uses[lu_idx], reg, self.l)
         {
             return;
@@ -633,9 +633,10 @@ impl Collection<'_, '_> {
             // model prices below `dec; je` (x_adler -O2: 47972 -> 50976
             // clocks).
             let counter_alone = base.scaled_reg.is_none() && base.base_regs.len() == 1;
-            let odd = self.tti.lsr_scales_zero_compare_past_overflow()
-                && ((factor & 1 == 1 && counter_alone)
-                    || (!self.size && self.factor_keeps_zero(se, cx, &base, factor, bits)));
+            let odd = (self.tti.lsr_scales_zero_compare_past_overflow() && factor & 1 == 1 && counter_alone)
+                || (self.tti.lsr_scales_even_zero_compare()
+                    && !self.size
+                    && self.factor_keeps_zero(se, cx, &base, factor, bits));
             // No base register may overflow when multiplied.
             for i in 0..f.base_regs.len() {
                 f.base_regs[i] = se
@@ -993,7 +994,7 @@ impl Collection<'_, '_> {
                         let mut new_f = f.clone();
                         new_f.base_offset = new_f.base_offset.add_unsigned(imm);
                         if !self.legal(lu_idx, &new_f) {
-                            if self.tti.preferred_addressing_mode() == AddressingMode::PostIndexed
+                            if self.amk == AddressingMode::PostIndexed
                                 && may_use_post_inc_mode(self.tti, se, cx, &self.uses[lu_idx], orig_reg, self.l)
                             {
                                 continue;
@@ -1280,6 +1281,7 @@ impl Collection<'_, '_> {
             size: self.size,
             bytes_counted: self.bytes_counted,
             across_call: self.across_call,
+            amk: self.amk,
         };
         cost.rate_formula(&mut rating, f, regs, visited, &self.uses[lu_idx], losers);
     }

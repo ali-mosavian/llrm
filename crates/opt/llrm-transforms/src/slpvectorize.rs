@@ -28,6 +28,15 @@
 //!
 //! # Used by
 //! `pipeline` (Late).
+//!
+//! # Example
+//! Eighty adjacent `store i16 1824` become ten `store <8 x i16>` of the constant (the const_stores test).
+//!
+//! ```text
+//! store i16 1824, ptr %p0 ... store i16 1824, ptr %p79
+//!         =>
+//! store <8 x i16> <i16 1824 x 8>, ptr %p0 ... ptr %p72 (ten stores)
+//! ```
 
 use llrm_analysis::memory::{MemRef, Unit as MemUnit};
 use llrm_mir::context::{Constant, ConstantKind, Context};
@@ -86,6 +95,10 @@ fn chains(
         let reference = MemRef::at(unit, instruction.operands[1], bytes as u32);
         let Some(root) = reference.root.filter(|_| reference.segment.is_none()) else { continue };
         let key = (root, reference.base, reference.scale);
+        // `StoreInst::getAlign`: a store with no `align` has the ABI alignment
+        // of its value, which the vector store takes (not the vector's
+        // own).
+        let align = align.or_else(|| Some(unit.layout.align(&unit.context.types, ty)));
         let seed = Seed { store: inst, order, disp: reference.disp, align, value };
         match groups.iter_mut().find(|group| group.0 == key && group.1 == ty) {
             Some(group) => group.2.push(seed),
@@ -151,15 +164,18 @@ fn is_scalar_constant(
     )
 }
 
-/// Nothing between the window's first and last store reads or writes memory
-/// but the window's own stores: the vector store may stand at the last.
+/// Nothing between the window's first and last store reads or writes the bytes
+/// the window's own stores write (`BlockScheduling`, as `slptree`'s
+/// `StoreSeparation`): the vector store may stand at the last.
 fn movable(
+    unit: &MemUnit,
     function: &Function,
     block: BlockId,
     window: &[Seed],
 ) -> bool {
     let first = window.iter().map(|seed| seed.order).min().expect("a window");
     let last = window.iter().map(|seed| seed.order).max().expect("a window");
+    let mut separation = crate::slptree::StoreSeparation::new(unit, window.iter().map(|seed| seed.store));
     function
         .iter_block(block)
         .enumerate()
@@ -176,7 +192,7 @@ fn movable(
                         | Opcode::Invoke(_)
                         | Opcode::Atomic(_)
                         | Opcode::VaArg
-                )
+                ) || separation.clear(function, inst)
             },
         )
 }
@@ -194,8 +210,17 @@ fn vectorize(
     let last = window.iter().max_by_key(|seed| seed.order).expect("a window");
     let pointer = function.instruction(first.store).operands[1];
     let Operand::Constant(lane) = first.value else { unreachable!("a window of constants") };
+    let zero = |seed: &Seed| match seed.value {
+        Operand::Constant(one) => {
+            matches!(
+                context.get(one).kind,
+                ConstantKind::Int(0) | ConstantKind::Float(0) | ConstantKind::Zero
+            )
+        }
+        _ => false,
+    };
     let kind = match context.get(lane).kind.clone() {
-        ConstantKind::Int(0) | ConstantKind::Float(0) | ConstantKind::Zero => ConstantKind::Zero,
+        _ if window.iter().all(zero) => ConstantKind::Zero,
         _ if window.iter().all(|seed| seed.value == first.value) => ConstantKind::Aggregate(vec![lane; vf]),
         _ => ConstantKind::Aggregate(
             window
@@ -231,6 +256,9 @@ fn run_function(
     outer: &Outer,
     tti: &dyn Tti,
 ) -> bool {
+    // `vectorizeChainsInBlock` looks at the phis before the stores.
+    let phis = crate::slpphi::run_function(context, layout, declared, function, outer, tti);
+    let inserts = crate::slpinsert::run_function(context, layout, declared, function, outer, tti);
     let mut plan: Vec<(TypeId, Vec<Seed>)> = Vec::new();
     {
         let unit = MemUnit::within(context, layout, function, outer);
@@ -252,7 +280,7 @@ fn run_function(
                         let align = window[0].align.unwrap_or(bytes);
                         if free
                             && worthwhile(tti, lane, align, window, unit.context)
-                            && movable(function, block, window)
+                            && movable(&unit, function, block, window)
                         {
                             taken[at..at + vf as usize].fill(true);
                             plan.push((ty, window.to_vec()));
@@ -269,10 +297,10 @@ fn run_function(
     for (ty, window) in &plan {
         vectorize(context, function, *ty, window);
     }
-    let mut changed = !plan.is_empty();
+    let mut changed = phis || inserts || !plan.is_empty();
     // One tree at a time, the function read again after each.
     while let Some((tree, align)) = next_tree(context, layout, function, outer, tti) {
-        crate::slptree::emit(context, declared, function, &tree, align);
+        crate::slptree::emit(context, layout, declared, function, &tree, align);
         changed = true;
     }
     changed

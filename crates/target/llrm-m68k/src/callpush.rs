@@ -16,6 +16,10 @@
 //! epilogue lose their `suba` and `adda`, which is where a pair of two-word
 //! calls gains.
 //!
+//! A window with another instruction that names the stack pointer (a frame load
+//! between the stores) is not pushed, but its stores still fuse with their loads
+//! (`move.l (20,%sp), (4,%sp)`), which moves no offset.
+//!
 //! A pushed register that a scratch-register load in the same block filled,
 //! and nothing else reads, is pushed from the load's memory instead
 //! (`move.l (4,%a0), -(%sp)`) when that is cheaper than the load and the push;
@@ -148,8 +152,10 @@ impl Plan {
     }
 }
 
-/// One convertible sequence: where it is, how big, and the two prices.
+/// One call sequence with a plan to make: where it is, how big, and the two prices. A sequence that cannot be pushed
+/// (`pushable` false) is here for its fusions alone.
 struct Sequence {
+    pushable: bool,
     down: usize,
     up: usize,
     bytes: i64,
@@ -169,10 +175,6 @@ struct Sequence {
     addresses: Vec<(usize, Vec<usize>, llrm_lir::registers::RegId, i64)>,
     kept: (usize, u32),
     pushed: (usize, u32),
-    /// The stores can become pushes. A sequence that cannot (the pushes would
-    /// reorder volatile loads, or need a register the next load overwrites)
-    /// stays a plan only for its `fusions`.
-    pushable: bool,
     /// The cleanup `pushed` includes: owed calls merge theirs.
     cleanup: (usize, u32),
 }
@@ -402,10 +404,9 @@ fn foldable(
     let inst = insts[load];
     let Kind::Op(name) = inst.kind else { return None };
     memory_push(name)?;
-    // A volatile load folds too: the access stays, once, and the loop below
-    // refuses to move it past another side effect, as `canFoldIntoRegPush`
-    // asks of the instructions between (`isLoadFoldBarrier`), not of the load.
-    if !inst.may_load || inst.may_store {
+    // a volatile load (the only load with side effects) is read once, in its place among the others, by a push or a
+    // store; a group of pushes would read it again
+    if !inst.may_load || inst.may_store || (inst.side_effects && together.len() > 1) {
         return None;
     }
     let address = reads(inst, assignment);
@@ -889,6 +890,7 @@ fn sequences(
         }
         let cleanup = crate::expand::sp_adjust(bytes, short);
         found.push(Sequence {
+            pushable,
             down,
             up,
             bytes,
@@ -900,7 +902,6 @@ fn sequences(
             fusions,
             addresses,
             kept: priced.0,
-            pushable,
             pushed: add(priced.1, cost(&cleanup, cpu)?),
             cleanup: cost(&cleanup, cpu)?,
         });

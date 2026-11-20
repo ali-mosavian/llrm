@@ -381,6 +381,7 @@ fn branches() {
         all.push(Inst::VectorFma { op, lanes, rd: Vreg(6), rn: Vreg(25), rm: Vreg(14) });
         all.push(Inst::VectorFmaLane { op, lanes, rd: Vreg(6), rn: Vreg(25), rm: Vreg(31), index: 1 });
         all.push(Inst::VectorFmaLane { op, lanes, rd: Vreg(5), rn: Vreg(6), rm: Vreg(17), index: 0 });
+        all.push(Inst::ScalarFmaLane { op, lanes, rd: Vreg(7), rn: Vreg(8), rm: Vreg(18), index: 1 });
     }
     for (lanes, index) in [(Arrangement::D2, 1), (Arrangement::S4, 3), (Arrangement::H8, 7), (Arrangement::B16, 15)] {
         all.push(Inst::VectorDupScalar { lanes, rd: Vreg(5), rn: Vreg(17), index });
@@ -626,6 +627,7 @@ fn floating_point() {
             FpBinary::MaxNm,
             FpBinary::MinNm,
             FpBinary::Nmul,
+            FpBinary::Abd,
         ] {
             all.push(Inst::FpBinary { op, size, rd: Vreg(1), rn: Vreg(2), rm: Vreg(3) });
         }
@@ -636,6 +638,7 @@ fn floating_point() {
             all.push(Inst::FpCompare { signalling, size, rn: Vreg(1), rm: Some(Vreg(2)) });
             all.push(Inst::FpCompare { signalling, size, rn: Vreg(1), rm: None });
         }
+        all.push(Inst::FpCondCompare { size, rn: Vreg(1), rm: Vreg(2), nzcv: 8, cond: Cond::Mi });
         all.push(Inst::FpSelect { size, rd: Vreg(1), rn: Vreg(2), rm: Vreg(3), cond: Cond::Mi });
         for fill in [
             Fill::Zero,

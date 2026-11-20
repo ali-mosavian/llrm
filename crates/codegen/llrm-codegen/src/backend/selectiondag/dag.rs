@@ -38,6 +38,9 @@ impl SDNodeFlags {
     /// DEVIATE PAIR1: a `BUILD_PAIR` of the two words of a value the calling
     /// convention returns or passes in two registers (`dx:ax`).
     pub const PAIR_LONG: SDNodeFlags = SDNodeFlags(16384);
+    /// `NoFPExcept`: `fpexcept.ignore`; the operation's exceptions are not
+    /// observed.
+    pub const NO_FP_EXCEPT: SDNodeFlags = SDNodeFlags(32768);
 
     pub fn union(
         self,
@@ -766,6 +769,15 @@ impl SelectionDAG {
         self.use_count_up_to(node, 2) == 1
     }
 
+    /// `SDValue::hasOneUse`: one operand of one node reads this result
+    /// (`hasNUsesOfValue(1, ResNo)`); `has_one_use` counts every result.
+    pub fn has_one_use_of_value(
+        &self,
+        value: SDValue,
+    ) -> bool {
+        self.users(value).map(|user| self.nodes[user as usize].ops.iter().filter(|&&op| op == value).count()).sum::<usize>() == 1
+    }
+
     /// The live nodes that read any result of `node`, in creation order, once
     /// each; the use list is usually sorted already and is then walked in
     /// place.
@@ -887,9 +899,10 @@ impl SelectionDAG {
         }
     }
 
-    /// A node the legalizer replaced, which nothing reads now, is unfiled from the CSE table: a later
-    /// `getNode` of the same operation must make a node, not return the replaced one, which is not
-    /// legalized again (an `extract_element` made twice, the second one never lowered).
+    /// A node the legalizer replaced, which nothing reads now, is unfiled from
+    /// the CSE table: a later `getNode` of the same operation must make a
+    /// node, not return the replaced one, which is not legalized again (an
+    /// `extract_element` made twice, the second one never lowered).
     pub fn forget_replaced(
         &mut self,
         node: u32,
@@ -1159,21 +1172,45 @@ impl SelectionDAG {
         from: SDValue,
         to: SDValue,
     ) -> Vec<Rauw> {
+        self.replace_uses(from, to, None)
+    }
+
+    /// `ReplaceAllUsesOfValueWith(From, To)` followed by the undo of the use
+    /// `to` itself made of `from` (`visitFREEZE` mutates the freeze back): every
+    /// operand `from` becomes `to` except those of the node `keep`, which still
+    /// reads `from`. No stale handle to `from` is forwarded: `keep` reads it.
+    pub fn replace_uses_except(
+        &mut self,
+        from: SDValue,
+        to: SDValue,
+        keep: u32,
+    ) -> Vec<Rauw> {
+        self.replace_uses(from, to, Some(keep))
+    }
+
+    fn replace_uses(
+        &mut self,
+        from: SDValue,
+        to: SDValue,
+        keep: Option<u32>,
+    ) -> Vec<Rauw> {
         let mut events = Vec::new();
         if from == to {
             return events;
         }
-        let mut work = vec![(from, to)];
-        while let Some((from, to)) = work.pop() {
-            self.forwarded.insert(from, to);
-            if self.root == from {
-                self.root = to;
+        let mut work = vec![(from, to, keep)];
+        while let Some((from, to, keep)) = work.pop() {
+            if keep.is_none() {
+                self.forwarded.insert(from, to);
+                if self.root == from {
+                    self.root = to;
+                }
             }
             // The pin walks the use list newest first and adds each use to `to`
             // as it goes; the users are still updated in creation order, which
             // fixes which of two equal nodes a CSE merge keeps.
-            let use_list_order = self.users_newest_first(from);
-            for user in self.users(from).collect::<Vec<_>>() {
+            let use_list_order: Vec<u32> = self.users_newest_first(from).into_iter().filter(|&user| Some(user) != keep).collect();
+            for user in self.users(from).filter(|&user| Some(user) != keep).collect::<Vec<_>>() {
                 self.cse_forget(user);
                 for op in &mut self.nodes[user as usize].ops {
                     if *op == from {
@@ -1191,7 +1228,7 @@ impl SelectionDAG {
                         self.nodes[existing as usize].flags = flags;
                         let results = self.nodes[user as usize].values.len() as u8;
                         for res in 0..results {
-                            work.push((SDValue { node: user, res }, SDValue { node: existing, res }));
+                            work.push((SDValue { node: user, res }, SDValue { node: existing, res }, None));
                         }
                     }
                     _ => {
@@ -1866,6 +1903,21 @@ impl SelectionDAG {
         let vt = self.value_type(value);
         let node =
             self.intern(op, &[vt, EVT::OTHER], &[chain, ptr, value], SDNodeFlags::default(), NodeData::Mem(info));
+        self.volatile_accesses.insert(node.node);
+        node
+    }
+
+    /// `getMemIntrinsicNode`: a target node that reads and writes the cell
+    /// `info` describes, ordered on the chain like an atomic
+    /// (`X86ISD::LADD`, `LCMPXCHG_DAG`).
+    pub fn get_mem_intrinsic_node(
+        &mut self,
+        op: ISD,
+        values: &[EVT],
+        ops: &[SDValue],
+        info: MemInfo,
+    ) -> SDValue {
+        let node = self.intern(op, values, ops, SDNodeFlags::default(), NodeData::Mem(info));
         self.volatile_accesses.insert(node.node);
         node
     }

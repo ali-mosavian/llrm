@@ -36,6 +36,16 @@
 //! The condition is branched on as it is (no `freeze`): a poison condition
 //! made a poison select, and now a branch on poison, which the pin's
 //! `optimizeSelectInst` guards with `freeze`.
+//!
+//! # Example
+//! A `fptosi` of a select with a constant arm becomes a branch, the conversion made
+//! on the other arm only.
+//!
+//! ```text
+//!  %s = select c, -3.0, %x            br c, %join, %other
+//!  %r = fptosi %s                 other: %f = fptosi %x ; br %join
+//!                                 join:  %r = phi [-3, %b], [%f, %other]
+//! ```
 
 use llrm_mir::constantfolding::constant_fold_cast_operand;
 use llrm_mir::context::{ConstantKind, Context};

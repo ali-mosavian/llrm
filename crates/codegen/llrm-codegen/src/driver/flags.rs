@@ -19,7 +19,7 @@ use crate::abi::machine::Machine;
 use crate::backend::shadow::Selector;
 
 /// The options' usage line, for a frontend's own.
-pub const USAGE: &str = "[-O0|-O1|-O2|-O3|-Omax|-Os|-Oz|-Og] [-f[no-]PASS] [-fno-inline=NAME]... [-disable-lsr] [-f[no-]sanitize=CHECKS] [-f[no-]trapv] [-f[no-]wrapv] [-fexcess-precision=standard|fast] [-f[no-]float-store] [-m16|-m32|-m64] [-march=CPU] [-mtune=CPU] [-mabi=ABI] [-m[no-]stack-is-data] [-m[no-]far-bss] [-m[no-]far-bss-init] [-m[no-]bss-begin] [-mcode-segment=NAME] [--isel=old|dag|shadow] [--no-midend] [--clocks-per-byte N] [--machine MACHINE] [-fstack-usage] [-Wstack-usage=N] [-fobject-format=omf|elf|macho|coff] [-f[no-]function-sections] [-g] [-o OUTPUT] [-S]";
+pub const USAGE: &str = "[-O0|-O1|-O2|-O3|-Omax|-Os|-Oz|-Og] [-f[no-]PASS] [-fno-inline=NAME]... [-disable-lsr] [-f[no-]sanitize=CHECKS] [-f[no-]trapv] [-f[no-]wrapv] [-fexcess-precision=standard|fast] [-f[no-]float-store] [-m16|-m32|-m64] [-march=CPU] [-mtune=CPU] [-mabi=ABI] [-relocation-model=static|pic] [-m[no-]stack-is-data] [-mstack-alignment=N] [-m[no-]far-bss] [-m[no-]far-bss-init] [-m[no-]bss-begin] [-mcode-segment=NAME] [--isel=old|dag|shadow] [--no-midend] [--clocks-per-byte N] [--machine MACHINE] [-fstack-usage] [-Wstack-usage=N] [-fobject-format=omf|elf|macho|coff] [-f[no-]function-sections] [-g] [-o OUTPUT] [-S]";
 
 /// An `-O` level.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -121,9 +121,11 @@ const PASSES: &[(&str, fn(&mut pipeline::Options, bool))] = &[
     ("strength-reduce", |options, on| options.strength = on),
     ("lsr", |options, on| options.lsr = on),
     ("unswitch-loops", |options, on| options.unswitch = on),
+    ("split-loops", |options, on| options.split_loops = on),
     ("loop-interchange", |options, on| options.interchange = on),
     ("loop-unroll-and-jam", |options, on| options.unroll_and_jam = on),
     ("tree-loop-vectorize", |options, on| options.vectorize = on),
+    ("llrm-vect-very-cheap", |options, on| options.vect_very_cheap = on),
     ("tree-ch", |options, on| options.copy_headers = on),
     ("ipa-cp-clone", |options, on| options.inline.cp_clone = Some(on)),
     ("inline-recursive", |options, on| options.inline.recursive = Some(on)),
@@ -211,11 +213,18 @@ pub struct Flags {
     /// `-m16`, `-m32`, `-m64`: the target to build for, by the number its
     /// description gives.
     mode: Option<u32>,
+    /// `-relocation-model=static|pic`: whether symbol addresses are absolute or
+    /// from the instruction pointer; the module's "PIC Level" flag when absent.
+    relocation_pic: Option<bool>,
     /// `-mcmodel=small|medium|large`: the code model of real mode's segmented
     /// memory; the target's own (medium) when absent.
     code_model: Option<String>,
     /// `-m[no-]stack-is-data`: whether the stack lives in the data group.
     stack_is_data: Option<bool>,
+    /// `-mstack-alignment=N` (the pin's llc `-stack-alignment`): the bytes the
+    /// stack is a multiple of at every call, the ABI's (i386 System V on
+    /// Linux: 16); the convention's own when absent.
+    stack_alignment: Option<i64>,
     far_bss: Option<bool>,
     far_bss_init: Option<bool>,
     bss_begin: Option<bool>,
@@ -295,7 +304,9 @@ impl Default for Flags {
             machine: None,
             mode: None,
             code_model: None,
+            relocation_pic: None,
             stack_is_data: None,
+            stack_alignment: None,
             far_bss: None,
             far_bss_init: None,
             bss_begin: None,
@@ -375,6 +386,15 @@ impl Flags {
             "-mstack-is-data" => self.stack_is_data = Some(true),
             "-mno-stack-is-data" => self.stack_is_data = Some(false),
             "-mregcall-default" => self.regcall_default = true,
+            _ if flag.starts_with("-mstack-alignment=") => {
+                let text = &flag["-mstack-alignment=".len()..];
+                self.stack_alignment = Some(
+                    text.parse::<i64>()
+                        .ok()
+                        .filter(|bytes| *bytes >= 4 && bytes.count_ones() == 1)
+                        .ok_or_else(|| format!("{flag}: a power of two of at least 4"))?,
+                );
+            }
             "-fallow-pending-abi" => self.allow_pending_abi = true,
             _ if flag.starts_with("-frame-pointer=") => {
                 let policy = &flag["-frame-pointer=".len()..];
@@ -417,6 +437,13 @@ impl Flags {
                     _ => return Err(format!("--memory-model={model}: expected real16, flat32 or flat64")),
                 };
                 self.set_mode(Some(mode), &format!("--memory-model={model}"))?
+            }
+            _ if flag.starts_with("-relocation-model=") => {
+                self.relocation_pic = Some(match &flag["-relocation-model=".len()..] {
+                    "static" => false,
+                    "pic" => true,
+                    _ => return Err(format!("{flag}: expected static or pic")),
+                });
             }
             _ if flag.starts_with("-mcmodel=") => {
                 let model = &flag["-mcmodel=".len()..];
@@ -512,6 +539,12 @@ impl Flags {
     /// The `-m` number given, if any: the target whose description names it.
     pub fn mode(&self) -> Option<u32> {
         self.mode
+    }
+
+    /// `-relocation-model=`, if given: whether the code is position
+    /// independent.
+    pub fn relocation_pic(&self) -> Option<bool> {
+        self.relocation_pic
     }
 
     /// `-mcmodel=`, if given.
@@ -619,6 +652,7 @@ impl Flags {
             no_midend: self.no_midend,
             abi: self.abi.clone(),
             float_store: self.float_store,
+            stack_alignment: self.stack_alignment,
             code_segment: self.code_segment.clone(),
             ..super::Options::new(machine, arch, selection)
         }

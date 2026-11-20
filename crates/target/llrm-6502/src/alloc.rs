@@ -28,7 +28,7 @@ use llrm_support::hash::{HashMap, HashSet};
 use crate::asm::{Asm, Inst as AsmInst, Line, Op as AsmOp};
 use crate::dagisel::generated::ids::opcode as op;
 use crate::dagisel::hooks::Cpu;
-use crate::emit::{MInst, Operand as Machine, address, indexed_address, spill};
+use crate::emit::{MInst, Operand as Machine, address, indexed_address, indexed_address_part, spill};
 use crate::reg;
 use crate::select::Item;
 
@@ -288,7 +288,7 @@ pub fn with_fast_division<R>(
 
 /// `f` with the shared callee-save helpers allowed or not. A function that
 /// keeps `n >= 3` callee-saved cells saves `6n - 9` bytes with them , but the
-/// runtime that holds them is [`SAVE_HELPERS_BYTES`] a module: only a module
+/// runtime that holds them is [`save_helpers_bytes`] a module: only a module
 /// whose users together save more than that should link it
 /// (`select::module_text`).
 pub fn with_shared_saves<R>(
@@ -301,8 +301,16 @@ pub fn with_shared_saves<R>(
     result
 }
 
-/// The bytes `__csave` and `__crest` take once linked.
-pub const SAVE_HELPERS_BYTES: i64 = 34;
+/// The bytes the callee-save helpers the `texts` call take once linked: each
+/// routine of `runtime/mos_rt.s` they reach, once.
+pub fn save_helpers_bytes<'a>(texts: impl IntoIterator<Item = &'a str>) -> i64 {
+    let texts: Vec<&str> = texts.into_iter().collect();
+    ["jsr __csave", "jsr __csave_ax", "jmp __crest", "jmp __crest_ax"]
+        .into_iter()
+        .filter(|call| texts.iter().any(|text| text.lines().any(|line| line.trim() == *call)))
+        .map(|call| crate::opcosts::member_bytes(call.split_once(' ').map_or(call, |(_, name)| name)))
+        .sum()
+}
 
 /// What a function that keeps `n` callee-saved cells and returns from one place
 /// saves by calling the helpers: six bytes a cell inline, and two for the
@@ -847,7 +855,7 @@ impl Builder {
             "a" => Some(reg::A),
             "x" => Some(reg::X),
             "y" => Some(reg::Y),
-            _ => n.strip_prefix("rc").and_then(|n| n.parse::<u8>().ok()).filter(|n| *n < 16).map(rc),
+            _ => n.strip_prefix("rc").and_then(|n| n.parse::<u8>().ok()).filter(|n| *n < MOST_CELLS).map(rc),
         };
         if let Some(r) = named(name) {
             return Ok(Reg::Phys(r));
@@ -994,10 +1002,9 @@ impl Builder {
     ) -> Result<Reg, Unsupported> {
         if let Some(n) = name.strip_prefix("rs").and_then(|n| n.parse::<u8>().ok()) {
             return match n {
-                0 => Ok(Reg::Phys(reg::RS0)),
-                1 => Ok(Reg::Phys(reg::RS1)),
-                2 => Ok(Reg::Phys(reg::RS2)),
-                3 => Ok(Reg::Phys(reg::RS3)),
+                // the pairs an argument arrives in (`calling.toml`): rs1..rs3
+                // and rs8..rs12
+                0..=3 | 8..=12 => Ok(Reg::Phys(RegId::from_raw(reg::RS0.index() as u8 + n))),
                 _ => Err(Unsupported(format!("pair {name}"))),
             };
         }
@@ -1018,14 +1025,18 @@ impl Builder {
         &self,
         name: &str,
     ) -> bool {
-        self.pointers.contains(name) || matches!(name, "rs0" | "rs1" | "rs2" | "rs3")
+        self.pointers.contains(name)
+            || matches!(
+                name,
+                "rs0" | "rs1" | "rs2" | "rs3" | "rs8" | "rs9" | "rs10" | "rs11" | "rs12"
+            )
     }
 
     fn word(
         &mut self,
         name: &str,
     ) -> Result<(Reg, Reg), Unsupported> {
-        if let Some(n) = name.strip_prefix("rs").and_then(|n| n.parse::<u8>().ok()).filter(|n| *n < 8) {
+        if let Some(n) = name.strip_prefix("rs").and_then(|n| n.parse::<u8>().ok()).filter(|n| *n < MOST_CELLS / 2) {
             return Ok((Reg::Phys(rc(2 * n)), Reg::Phys(rc(2 * n + 1))));
         }
         let name = name.strip_suffix("+1").unwrap_or(name);
@@ -2536,26 +2547,44 @@ pub fn build_with_places(
                     }
                 }
             }
-            op::LDAX | op::STAX => {
-                let symbol = indexed_address(&o[1], &o[2]).map_err(Unsupported)?;
+            // `ldx i; lda g+k,x`; a word is two of them, `g+k` and `g+k+1`,
+            // one `x`
+            op::LDAX | op::STAX | op::LDAX16 | op::STAX16 => {
+                indexed_address(&o[1], &o[2]).map_err(Unsupported)?;
                 let (acc, x) = (Reg::Phys(reg::A), Reg::Phys(reg::X));
                 let index = b.byte(name(&o[3])?)?;
                 b.copy(x, index);
-                if inst.opcode == op::LDAX {
-                    b.define(name(&o[0])?);
-                    let d = b.byte(name(&o[0])?)?;
-                    b.push(Inst::new(
-                        Kind::Op("LDAX"),
-                        vec![Operand::Def(acc), Operand::Symbol(symbol.clone(), 0), Operand::Use(x)],
-                    ));
-                    b.copy(d, acc);
+                let wide = matches!(inst.opcode, op::LDAX16 | op::STAX16);
+                let load = matches!(inst.opcode, op::LDAX | op::LDAX16);
+                let halves = if load {
+                    if wide {
+                        let (low, high) = b.write_word(name(&o[0])?)?;
+                        vec![low, high]
+                    } else {
+                        b.define(name(&o[0])?);
+                        vec![b.byte(name(&o[0])?)?]
+                    }
+                } else if wide {
+                    let (low, high) = b.read_word(name(&o[0])?)?;
+                    vec![low, high]
                 } else {
-                    let value = b.byte(name(&o[0])?)?;
-                    b.copy(acc, value);
-                    b.push(Inst::new(
-                        Kind::Op("STAX"),
-                        vec![Operand::Use(acc), Operand::Symbol(symbol.clone(), 0), Operand::Use(x)],
-                    ));
+                    vec![b.byte(name(&o[0])?)?]
+                };
+                for (part, half) in halves.into_iter().enumerate() {
+                    let symbol = indexed_address_part(&o[1], &o[2], part as i64).map_err(Unsupported)?;
+                    if load {
+                        b.push(Inst::new(
+                            Kind::Op("LDAX"),
+                            vec![Operand::Def(acc), Operand::Symbol(symbol, 0), Operand::Use(x)],
+                        ));
+                        b.copy(half, acc);
+                    } else {
+                        b.copy(acc, half);
+                        b.push(Inst::new(
+                            Kind::Op("STAX"),
+                            vec![Operand::Use(acc), Operand::Symbol(symbol, 0), Operand::Use(x)],
+                        ));
+                    }
                 }
             }
             // The flags are made where they are read.
@@ -3119,6 +3148,16 @@ pub fn build_with_places(
                 b.copy(Reg::Phys(rc(2)), x);
                 b.copy(Reg::Phys(rc(3)), y);
                 b.call_runtime(if code == op::SMUL8X8 { "__mulqihi3" } else { "__umulqihi3" });
+                b.copy(dl, Reg::Phys(reg::A));
+                b.copy(dh, Reg::Phys(reg::X));
+            }
+            // 1 << n: the bit is made in a byte and put in its half, no cell
+            // touched (`__shl1hi3`)
+            op::SHLV16 if b.word_constant(name(&o[1])?) == Some([1, 0]) => {
+                let (dl, dh) = b.write_word(name(&o[0])?)?;
+                let count = b.byte(name(&o[2])?)?;
+                b.copy(Reg::Phys(reg::A), count);
+                b.call_runtime("__shl1hi3");
                 b.copy(dl, Reg::Phys(reg::A));
                 b.copy(dh, Reg::Phys(reg::X));
             }
@@ -4854,8 +4893,8 @@ fn emit_with<const STACK: bool>(
                     }
                 }
                 (Kind::Op("CSAVE"), _) => {
-                    if after[b][i].contains(&reg::Y) || after[b][i].contains(&reg::X) || a_live {
-                        // `__csave` changes a, x and y: the same bytes pushed
+                    if after[b][i].contains(&reg::Y) {
+                        // `y` is the count the helper takes: the same bytes pushed
                         // one at a time, the argument
                         // in `a` waiting in an index register nothing holds,
                         // with all three live in a cell nothing holds
@@ -4881,6 +4920,9 @@ fn emit_with<const STACK: bool>(
                                 (None, None) => {}
                             }
                         }
+                    } else if after[b][i].contains(&reg::X) || a_live {
+                        // a value in `a` or `x` (a word argument): the helper that keeps them
+                        writeln!(out, "  ldy #{}\n  jsr __csave_ax", regs.len()).unwrap();
                     } else {
                         writeln!(out, "  ldy #{}\n  jsr __csave", regs.len()).unwrap();
                     }
@@ -4893,6 +4935,11 @@ fn emit_with<const STACK: bool>(
                         out.push_str("  tay\n");
                     }
                     writeln!(out, "  ldx #{}\n  jmp __crest", regs.len()).unwrap();
+                    repeated = 1;
+                }
+                // a word result in `a` and `x`, `y` free: the helper that keeps them
+                (Kind::Op("CREST"), _) if !after[b][i].contains(&reg::Y) => {
+                    writeln!(out, "  ldy #{}\n  jmp __crest_ax", regs.len()).unwrap();
                     repeated = 1;
                 }
                 (Kind::Op("CREST"), _) => {
@@ -5029,6 +5076,21 @@ fn emit_with<const STACK: bool>(
             y_callees.extend(entries_of(callee));
         }
     }
+    // `jsr callee` reads the argument cells (`rc2`.., `rc16`..) the call lists
+    // among the arguments
+    let mut cell_callees: std::collections::BTreeMap<String, std::collections::BTreeSet<u8>> = Default::default();
+    for inst in function.blocks.iter().flat_map(|block| &block.insts).filter(|inst| inst.kind == Kind::Op("JSR")) {
+        if let [Operand::Symbol(callee, _), arguments @ ..] = &inst.operands[..] {
+            let cells = cell_callees.entry(callee.clone()).or_default();
+            for operand in arguments {
+                if let Operand::Use(Reg::Phys(r)) = operand {
+                    let bytes = if is_pair(*r) { vec![lane(*r, 0), lane(*r, 1)] } else { vec![*r] };
+                    cells.extend((2..MOST_CELLS).filter(|&n| bytes.contains(&rc(n))));
+                }
+            }
+        }
+    }
+    let cell_callees = std::sync::Arc::new(cell_callees);
     // the cells a return reads: the bytes of a long result
     let mut result_cells = std::collections::BTreeSet::new();
     for operand in function
@@ -5085,11 +5147,12 @@ fn emit_with<const STACK: bool>(
         out.no_y_result = !returns_y;
         out.y_callees = y_callees.clone();
         out.result_cells = result_cells.clone();
+        out.cell_callees = cell_callees.clone();
         crate::shift_forms::choose(&mut out, &sites, &exits);
     }
     let lines_of = source.map(|(file, scope)| (file, scope, &function.places[..]));
     out.cmos = cmos;
-    let tails = ((!returns_a, a_callees), (!returns_x, x_callees), (!returns_y, y_callees), result_cells);
+    let tails = ((!returns_a, a_callees), (!returns_x, x_callees), (!returns_y, y_callees), result_cells, cell_callees);
     let (priced, text, finished) = finish_pair(out, lines_of, tails);
     let named = |text: &str| own_labels(text, &function.name);
     Ok((named(&text), named(&priced), slots, sunk, shared, moved, named(&finished)))
@@ -5137,11 +5200,12 @@ fn own_labels(
 fn finish_pair(
     mut code: Asm,
     lines_of: Option<(&str, Option<u32>, &[llrm_codegen::model::lir::SrcLoc])>,
-    ((no_a_result, a_callees), (no_x_result, x_callees), (no_y_result, y_callees), result_cells): (
+    ((no_a_result, a_callees), (no_x_result, x_callees), (no_y_result, y_callees), result_cells, cell_callees): (
         (bool, std::collections::BTreeSet<String>),
         (bool, std::collections::BTreeSet<String>),
         (bool, std::collections::BTreeSet<String>),
         std::collections::BTreeSet<String>,
+        std::sync::Arc<std::collections::BTreeMap<String, std::collections::BTreeSet<u8>>>,
     ),
 ) -> (String, String, String) {
     code.no_a_result = no_a_result;
@@ -5151,6 +5215,7 @@ fn finish_pair(
     code.no_y_result = no_y_result;
     code.y_callees = y_callees;
     code.result_cells = result_cells;
+    code.cell_callees = cell_callees;
     let (mut priced, mut kept) = crate::peephole::run_pair(&code);
     crate::relax::relax(&mut priced);
     crate::relax::relax(&mut kept);

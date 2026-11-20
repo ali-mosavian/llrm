@@ -184,6 +184,14 @@ impl CombineHooks for Aarch64Lowering {
         true
     }
 
+    /// `AArch64TargetLowering::hasAndNotCompare`: `bics` for any scalar.
+    fn has_and_not_compare(
+        &self,
+        vt: EVT,
+    ) -> bool {
+        vt.is_integer() && !vt.is_vector()
+    }
+
     fn fold_sext_in_reg_of_load(&self) -> bool {
         true
     }
@@ -197,6 +205,10 @@ impl CombineHooks for Aarch64Lowering {
         _vt: EVT,
     ) -> bool {
         false
+    }
+
+    fn sext_setcc_as_select(&self) -> bool {
+        true
     }
 
     fn reduce_load_width_through_freeze(&self) -> bool {

@@ -20,7 +20,7 @@
 //! DEVIATE 1: tail merging is `tail_merge`'s, no `OptimizeBranches` outside
 //! these cases, and not in a function with a personality (try scopes name their
 //! blocks). Exit: the shared branch folder over the neutral machine function
-//! (S4), no later than 2026-11-20; deleting this file is part of that PR.
+//! (S4), no later than 2026-11-27; deleting this file is part of that PR.
 //!
 //! # See also
 //! `BranchFolding.cpp`, pin d1106deb71cc: `OptimizeBlock`, `IsBranchOnlyBlock`.
@@ -104,6 +104,58 @@ pub(crate) fn reversed(cond: &Inst) -> Inst {
     let mut cond = cond.clone();
     cond.opcode = if cond.opcode == op::BR_IF { op::BR_UNLESS } else { op::BR_IF };
     cond
+}
+
+/// `MachineBasicBlock::updateTerminator`: the branches of `block` after the
+/// block laid out after it changed from `previous` (what used to follow it) to
+/// the next block of the function: a branch to the new fall-through goes, a
+/// conditional branch to it is reversed, and a fall-through that moved gets a
+/// branch. The layout is the order of `f.blocks`.
+pub(crate) fn update_terminator(
+    f: &mut Function,
+    block: usize,
+    previous: Option<usize>,
+) {
+    if f.succs[block].is_empty() {
+        return;
+    }
+    let Some(end) = ending(f, block) else { return };
+    let layout = (block + 1 < f.blocks.len()).then_some(block + 1);
+    match (end.taken, end.other, &end.cond) {
+        (Some(taken), None, None) => {
+            if layout == Some(taken) {
+                set_branches(f, block, None, None, None);
+            }
+        }
+        (None, _, _) => {
+            let Some(previous) = previous else { return };
+            if f.succs[block].contains(&previous) && !f.is_eh_pad(previous) && layout != Some(previous) {
+                set_branches(f, block, Some(previous), None, None);
+            }
+        }
+        (Some(taken), Some(other), Some(cond)) => {
+            if layout == Some(taken) {
+                set_branches(f, block, Some(other), None, Some(&reversed(cond)));
+            } else if layout == Some(other) {
+                set_branches(f, block, Some(taken), None, Some(cond));
+            }
+        }
+        (Some(taken), None, Some(cond)) => {
+            let Some(previous) = previous else { return };
+            if previous == taken {
+                // The fall-through went where the branch goes: the branch goes.
+                set_branches(f, block, None, None, None);
+                if layout != Some(taken) {
+                    set_branches(f, block, Some(taken), None, None);
+                }
+            } else if layout == Some(taken) {
+                set_branches(f, block, Some(previous), None, Some(&reversed(cond)));
+            } else if layout != Some(previous) {
+                set_branches(f, block, Some(taken), Some(previous), Some(cond));
+            }
+        }
+        (Some(_), Some(_), None) => {}
+    }
 }
 
 /// The layout as a list of blocks that can be moved in constant time.
@@ -725,6 +777,37 @@ mod tests {
         // The pin's order for this shape, by `OptimizeBlock` read by hand; the
         // block that returns follows the back edge.
         assert_eq!(labels, [10, 11, 13, 12, 14, -1, -1]);
+    }
+
+    /// `SplitCriticalEdge` ends with `updateTerminator`: the block that had
+    /// `br_unless S; br A` with A next now has the split block after it, and
+    /// A is not next any more, so the branch is `br_if A` falling into the
+    /// split block. Ours kept both branches, and the block was not the shape
+    /// the pin's branch folder moves after a predecessor (tail_calls -Os: the
+    /// second switch loop's latch sat before the blocks the pin puts it after).
+    #[test]
+    fn a_split_edge_leaves_a_fall_through_conditional_branch() {
+        let mut f = Function::default();
+        let c = f.new_vreg(ValType::I32);
+        let block = Operand::Block;
+        f.blocks = vec![
+            vec![
+                Inst::new(op::CONST_I32, &[Operand::Def(c), Operand::Imm(0)]),
+                Inst::new(op::BR_UNLESS, &[block(2), Operand::Use(c)]),
+                Inst::new(op::BR, &[block(1)]),
+            ],
+            vec![Inst::new(op::RETURN, &[])],
+            vec![Inst::new(op::RETURN, &[])],
+        ];
+        f.succs = vec![vec![2, 1], vec![], vec![]];
+        crate::phi_elimination::split_edge(&mut f, 0, 2);
+        // [P, split, A, S]: P branches to A when the condition holds and falls
+        // into the split block.
+        assert_eq!(f.blocks.len(), 4);
+        let last = f.blocks[0].last().unwrap();
+        assert_eq!((last.opcode, last.operands[0]), (op::BR_IF, block(2)), "{:?}", f.blocks[0]);
+        assert_eq!(f.blocks[1].len(), 1);
+        assert_eq!(f.blocks[1][0].operands[0], block(3));
     }
 
     /// Both arms of a branch began with the same constant, which the register

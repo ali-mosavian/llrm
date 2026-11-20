@@ -183,6 +183,21 @@ pub struct Tuning {
     /// stated (-O1), an inline that stays is held to the -Os bound (the callee
     /// copied only if it does not grow the code); false: the pin's threshold.
     pub inline_never_grows_without_rate: bool,
+    /// DEVIATE SWITCH-LOOKUP-TRIAL (owner x86-m32, exit 2026-11-30): at -Os
+    /// the module is compiled again with the switches `simplifySwitchLookup`
+    /// turned into a lookup table left as switches (compares, or the backend's
+    /// own jump table) and the smaller object kept. false: the pin's.
+    pub switch_lookup_trial_at_size: bool,
+    /// DEVIATE LIR-COPY-TRIAL (owner x86-m32, exit 2026-11-30): at -Os the
+    /// module is compiled again with the copy loops of a count the loop alone
+    /// knows left as loops (no `memcpy` call) and the smaller object kept.
+    /// false: the pin's, which always calls.
+    pub loop_idiom_copy_trial_at_size: bool,
+    /// DEVIATE JT-LATCH-TRIAL (owner x86-m32, exit 2026-11-30): at -Os the
+    /// module is compiled again without the copies of a loop latch
+    /// JumpThreading made (gcc's backward threader refuses a path through the
+    /// latch) and the smaller object kept. false: the pin's.
+    pub jump_threading_latch_trial_at_size: bool,
     /// DEVIATE OB1: see `Tti::unroll_object_bound`.
     pub unroll_object_bound: Option<u32>,
     /// With `inline_never_grows_without_rate`: what a byte of growth costs an
@@ -342,9 +357,19 @@ pub struct Tuning {
     /// pin does not. DEVIATE DIVCONST-SIZE (owner llrm-target-x86-m64-b, exit
     /// 2026-11-30); none: the pin's.
     pub div_by_constant_size_cost: Option<u32>,
-    /// gcc's `-fsplit-paths` (on at `-O3`): the join block of a loop's latch diamond is copied into its arm
-    /// (`splitpaths.rs`). DEVIATE SP-O3 (owner llrm-target-x86-m64-b, exit 2026-11-30): a
-    /// target takes it once measured; false: the pin's, none.
+    /// The code-size cost of a scalar divide or remainder by a variable: the
+    /// pin's X86 table says 2, LLVM 20 priced every divide 4. A loop whose
+    /// divisors the unroll turns into constants (div8_os: four divides by the
+    /// loop's `b`) is then 450 units in LLVM 20, which keeps it, and 302 in the
+    /// pin, which unrolls it at the raised -O3 threshold into four
+    /// multiply-high sequences per trip: 130,449 executed instructions against
+    /// clang's 116,608. DEVIATE DIVVAR-SIZE (owner x87-cordic-2, exit
+    /// 2026-11-30, with DIVCONST-SIZE); none: the pin's.
+    pub div_by_variable_size_cost: Option<u32>,
+    /// gcc's `-fsplit-paths` (on at `-O3`): the join block of a loop's latch
+    /// diamond is copied into its arm (`splitpaths.rs`). DEVIATE SP-O3
+    /// (owner llrm-target-x86-m64-b, exit 2026-11-30): a target takes it
+    /// once measured; false: the pin's, none.
     pub split_paths_at_o3: bool,
     /// `UnrollingPreferences::PartialThreshold`: what a partly unrolled loop
     /// (the runtime unroll, the unroll-and-jam outer count) may total; none:
@@ -426,6 +451,19 @@ pub struct Tuning {
     /// run time (`loopunrollpass::recurrence`); the pin's `UP.Runtime` asks
     /// nothing of the loop. false: the pin's.
     pub unroll_recurrence_veto: bool,
+    /// DEVIATE BACKTHREAD-REL (owner llrm-target-x86-m64-b, exit 2026-12-15):
+    /// backward threading also reads the compares of one pair of values as
+    /// relations (`a < b` taken: `a <= b` taken), and runs before the first
+    /// SimplifyCFG that makes selects of the branches
+    /// (`backwardthreading.rs`). The pin has neither; gcc's `threadfull1` and
+    /// `vrp1` do both. false: the pin's pipeline.
+    pub threads_by_relation: bool,
+    /// DEVIATE BACKTHREAD-M32 (owner x87-b, exit 2026-12-15): backward
+    /// threading (`backwardthreading.rs`, no LLVM pass) runs. false at m32:
+    /// of 121 programs it changes 13 at -O2/-O3 and moves none by more than
+    /// 0.2% in clocks, while its copies of a peeled ladder cost x_ld_matmul
+    /// -O3 +8.1% clocks and 1,615 B, queens -O3 +8.3% and 3,706 B.
+    pub backward_threading: bool,
     /// DEVIATE SPILL-FOLD (owner x86-m16, exit 2026-11-29): the clocks a
     /// spilled value costs where its references fold into memory operands,
     /// which `tryRegionSplit` weighs against the split's copies. The pin
@@ -448,6 +486,13 @@ pub struct Tuning {
     /// the mass and make the code after them cold (threshold 45, no bonuses).
     /// false: the pin's.
     pub cold_site_ignores_sinks: bool,
+    /// DEVIATE LASTCALL-COLD (owner x87-cordic-2, exit 2026-12-05): a local
+    /// function with one call keeps the `LastCallToStatic` bonus where the
+    /// call site is cold. GCC's `-finline-functions-called-once` inlines it
+    /// whatever the site's frequency (inlining it removes the body and the
+    /// call: bytes). false: the pin's, which drops the bonus and uses the cold
+    /// threshold.
+    pub inline_last_call_in_cold_site: bool,
     /// Read-only data (a private constant, a jump table) that one procedure
     /// only loads from follows that procedure in its code segment and is read
     /// through `cs:`, as `TargetLoweringObjectFile::getSectionForConstant`
@@ -459,6 +504,16 @@ pub struct Tuning {
     /// `getMinimumJumpTableDensity`, in percent, at every level; none: the
     /// pin's 10 (40 when tuned for size).
     pub min_jump_table_density: Option<u64>,
+    /// DEVIATE LP1-FP (owner x86-m32, exit 2026-11-30): the float registers
+    /// LICM may fill with hoisted float loads and GVN with float loads it
+    /// carries around a loop (`Tti::licm_float_register_limit`); none: both
+    /// do every one, as the pin.
+    pub licm_float_register_limit: Option<u32>,
+    /// DEVIATE SWITCH-SIZE-RATIO (owner x86-m32, exit 2026-11-30): GCC's
+    /// `jump-table-max-growth-ratio-for-size`, in percent: tuned for size, a
+    /// jump table's range may be at most this share of the compares its
+    /// clusters need. none: the pin's density alone.
+    pub jump_table_size_growth_ratio: Option<u64>,
     /// Two compares joined by `and`/`or` stay two branches at every level, as
     /// the pin does at optsize; false: the pin's cost rule decides.
     pub split_merged_conditions: bool,
@@ -503,10 +558,26 @@ pub struct Tuning {
     /// code, summed over its sites. false: the pin's `OptSizeThreshold` 50
     /// alone decides, which allows the growth.
     pub inline_size_guard_at_size: bool,
+    /// With `inline_size_guard_at_size`, the bound also holds an -O1 caller.
+    /// false: -O1 keeps the pin's threshold alone, where clang inlines a small
+    /// callee that grows the code and clocks are the bar.
+    pub inline_size_guard_at_o1: bool,
     /// With `inline_size_guard_at_size`, the bound holds a callee with one
     /// site too (otherwise only two or more: the pin's single-site inline
     /// stands). A callee that stays and is copied once only grows the code.
     pub inline_size_guard_single_site: bool,
+    /// With `inline_size_guard_at_size`, the bound stands down for an
+    /// `inlinehint` callee (C's `inline`) the pin's raised threshold (325)
+    /// passes: its cost under that is the verdict.
+    pub inline_size_guard_yields_to_inlinehint: bool,
+    /// DEVIATE MEMSET-GAP (owner llrm-target-x86-m16-b, exit 2026-11-27): at
+    /// size, `MemCpyOpt` joins two memsets of one byte whose gap later stores
+    /// of another value overwrite whole, into one memset placed before the
+    /// first of them. SROA splits a zeroed aggregate's memset where a field is
+    /// then set, and each piece is a `rep stos` of its own (QB `forloop`: two
+    /// of 73 and 23 bytes; gcc clears the 104 once and stores the fields).
+    /// false: the pin's ranges, which end at a store of another value.
+    pub memset_gap_merge_at_size: bool,
     /// An -Os caller's SZ2 trial also inlines the sites its splice brings,
     /// priced by the ordinary rules, before it measures: `foo` into `main`
     /// and then `bar` into that copy meet the constants together, as the
@@ -558,12 +629,12 @@ pub struct Tuning {
     /// DEVIATE LV-BW (owner llrm-target-x86-m64-b, exit 2026-11-24): the pin's
     /// own `-vectorizer-maximize-bandwidth`, a tuning limit, not a new rule.
     pub maximize_vector_bandwidth: bool,
-    /// gcc's single accumulator (`vectorizable_reduction`, `single_defuse_cycle`):
-    /// a reduction wider than a register keeps one register's lanes and folds
-    /// the pieces of each trip into it, not one accumulator per register. The
-    /// pin keeps the whole vector (a byte sum into an `i64` at VF 16 holds eight
-    /// registers and spills). DEVIATE LV-ACC (owner llrm-target-x86-m64-b, exit
-    /// 2026-11-30).
+    /// gcc's single accumulator (`vectorizable_reduction`,
+    /// `single_defuse_cycle`): a reduction wider than a register keeps one
+    /// register's lanes and folds the pieces of each trip into it, not one
+    /// accumulator per register. The pin keeps the whole vector (a byte sum
+    /// into an `i64` at VF 16 holds eight registers and spills). DEVIATE
+    /// LV-ACC (owner llrm-target-x86-m64-b, exit 2026-11-30).
     pub narrow_reduction_accumulators: bool,
     /// gcc's very-cheap cost model (`vect_analyze_loop_costing`): a vector
     /// factor above the widest type's, taken for the bandwidth of the smallest
@@ -571,8 +642,9 @@ pub struct Tuning {
     /// epilogue is left). DEVIATE LV-BW-DIV (owner llrm-target-x86-m64-b, exit
     /// 2026-11-30).
     pub bandwidth_vf_without_epilogue: bool,
-    /// `Tti::shift_loop_counts`: the shift-loop count idioms form (`ctlz`/`cttz`
-    /// are one instruction). Wasm and x86-64 say true (LI-18).
+    /// `Tti::shift_loop_counts`: the shift-loop count idioms form
+    /// (`ctlz`/`cttz` are one instruction). Wasm and x86-64 say true
+    /// (LI-18).
     pub shift_loop_counts: bool,
     /// DEVIATE LSR-DERIVED: with `lsr_size_order`, a recurrence the loop as
     /// written derives from its counter in one instruction a trip (`i <<
@@ -641,11 +713,13 @@ pub struct Tuning {
     pub frame_slot_is_free_base: bool,
     /// DEVIATE LU31, see `Tti::lsr_address_fewest_registers`.
     pub lsr_address_fewest_registers: bool,
-    /// DEVIATE LSR-CONST (owner llrm-target-x86-m64-b, exit 2026-11-30): a constant in a formula's setup
-    /// costs one, as in LLVM 20.1.8 (`getSetupCost`); the pin charges it by `getIntImmCost` (a free 0 costs
-    /// nothing), which makes `{0,+,1}` beat `{-1,+,1}` where clang 20 keeps the post-incremented index
-    /// (strlen: `mov eax, -1; inc eax; cmp [rdi+rax]` against `xor eax, eax; mov ecx, eax; inc eax; cmp [rdi+rcx]`).
-    /// false: the pin's.
+    /// DEVIATE LSR-CONST (owner llrm-target-x86-m64-b, exit 2026-11-30): a
+    /// constant in a formula's setup costs one, as in LLVM 20.1.8
+    /// (`getSetupCost`); the pin charges it by `getIntImmCost` (a free 0 costs
+    /// nothing), which makes `{0,+,1}` beat `{-1,+,1}` where clang 20 keeps the
+    /// post-incremented index (strlen: `mov eax, -1; inc eax; cmp
+    /// [rdi+rax]` against `xor eax, eax; mov ecx, eax; inc eax; cmp
+    /// [rdi+rcx]`). false: the pin's.
     pub lsr_constant_setup_is_one: bool,
     /// DEVIATE SINK-CONST-PHI: a constant operand of an arithmetic instruction
     /// is not made a phi by sinking (the pin: cheap), except at size.
@@ -674,9 +748,8 @@ pub struct Tuning {
     pub recursive_tre_first: (bool, bool),
     /// DEVIATE IPACP-O3 (owner x86-m32-c, exit 2026-12-20): ipa-cp clones at
     /// -O3, as gcc's `-fipa-cp-clone` is on there; the pin makes none
-    /// (`Tti::ipa_cp_clones_at_speed`). DEVIATE IPACP-O2 (owner w10, exit
-    /// 2026-11-24): and at -O2, where gcc has none: queens m32 151807 ->
-    /// 139804 clk for +293 B, m64 -9.4% instructions for +830 B.
+    /// (`Tti::ipa_cp_clones_at_speed`). At -O2 neither gcc nor the pin clones
+    /// (`Tti::ipa_cp_clones_at_o2`; IPACP-O2 ended 2026-11-18).
     pub ipa_cp_clones_at_speed: bool,
     /// DEVIATE IPACP-DEPTH: the most clones ipa-cp makes of one function.
     pub ipa_cp_max_clones: usize,
@@ -709,6 +782,12 @@ pub struct Tuning {
     /// runs at -O2/-O3 with constant-arm selects included. false: the
     /// pin's, which runs it nowhere.
     pub branch_constant_arm_selects: bool,
+    /// DEVIATE SELECT-OPT-I486 (`Tti::select_optimize_penalty`): the clocks a
+    /// taken branch costs over a fallen-through one. `Some`: where there is
+    /// no conditional move, `SelectOptimize` runs at -O2/-O3, pricing
+    /// a mispredicted branch at it. `None`: the pin's `llc`, which leaves the
+    /// pass off.
+    pub select_optimize_penalty: Option<u64>,
     /// DEVIATE IND-PREFIX (`Tti::narrow_counter_is_taxed`): 16-bit counters
     /// are widened like illegal ones, for the operand-size prefix.
     pub prefixed_16_bit_counters: bool,
@@ -806,6 +885,9 @@ impl Tuning {
         inline_trials_at_o1: false,
         rotate_exiting_latch_when_guard_folds: false,
         inline_never_grows_without_rate: false,
+        jump_threading_latch_trial_at_size: false,
+        switch_lookup_trial_at_size: false,
+        loop_idiom_copy_trial_at_size: false,
         unroll_object_bound: None,
         inline_size_bytes: false,
         inline_o1_milliclocks_per_byte: 0,
@@ -837,6 +919,7 @@ impl Tuning {
         unroll_max_percent_threshold_boost: None,
         unroll_threshold_at_o3: None,
         div_by_constant_size_cost: None,
+        div_by_variable_size_cost: None,
         split_paths_at_o3: false,
         unroll_partial_threshold: None,
         unroll_jam_partial_threshold: None,
@@ -850,12 +933,17 @@ impl Tuning {
         carry_slot_indexes: true,
         address_reference_milliweight: 1000,
         unroll_recurrence_veto: false,
+        threads_by_relation: false,
+        backward_threading: true,
         spill_fold: None,
         unswitch_threshold: None,
         inline_threshold: None,
         cold_site_ignores_sinks: false,
+        inline_last_call_in_cold_site: false,
         read_only_in_code: false,
         min_jump_table_density: None,
+        licm_float_register_limit: None,
+        jump_table_size_growth_ratio: None,
         split_merged_conditions: false,
         merged_condition_clocks: 0,
         multiply_clocks: 0,
@@ -864,7 +952,10 @@ impl Tuning {
         ext_load_extra_clocks: 0,
         immediate_forms_at_size: false,
         inline_size_guard_at_size: false,
+        inline_size_guard_at_o1: false,
         inline_size_guard_single_site: false,
+        inline_size_guard_yields_to_inlinehint: false,
+        memset_gap_merge_at_size: false,
         inline_chain_trial: false,
         lftr_size_budget: 4,
         inline_trial_defers_to_shared_growth: false,
@@ -912,6 +1003,7 @@ impl Tuning {
         phi_constant_chains: false,
         sink_select_arms: false,
         branch_constant_arm_selects: false,
+        select_optimize_penalty: None,
         prefixed_16_bit_counters: false,
         partial_libcalls_skip_at_size: false,
         inline_variable_memcpy: false,
@@ -1370,6 +1462,12 @@ pub struct OperationCosts {
     /// What one argument word costs around a call: pushed by the caller, read
     /// by the callee.
     pub argument: i64,
+    /// Where the target passes the first words of the arguments in registers:
+    /// how many, and what a word past them costs (a push the caller builds
+    /// and the callee reads), where it is not `argument`. 0: every word is
+    /// `argument`.
+    pub argument_registers: i64,
+    pub argument_stacked: i64,
     /// What a caller pays to take `n` words of arguments off the stack: the
     /// cheaper of `n` pops (`pop` each) and one `adjust` of the stack
     /// pointer.
@@ -1465,6 +1563,20 @@ pub struct OperationCosts {
     /// (an `i32` add on an 8-bit machine is four byte adds). False: one
     /// price per operation, the table the other byte decisions read.
     pub width_scaled: bool,
+    /// Whether `function_bytes` prices a call's arguments (every operand but
+    /// the callee, which is last). False: all but the first operand, which
+    /// leaves the first argument out and counts the callee as a word, as the
+    /// 6502 and m68k tables were fit.
+    ///
+    /// DEVIATE (CALL-ARGS-SKIP, owners 6502 and m68k, exit 2026-11-26): their
+    /// `function_bytes` and `operation_counts` have read the call this way
+    /// since SZ2; their tables were fit with it. Exit: refit with the flag on.
+    pub exact_call_arguments: bool,
+    /// Whether `function_bytes` prices a shift by a constant of whole native
+    /// words as the moves of the words that stay (an `i64` shifted by 32 on a
+    /// 16-bit machine is two register pairs renamed), and the rest of the
+    /// amount as `shift` on them. Needs `width_scaled`.
+    pub constant_word_shifts: bool,
     /// Whether a GEP with only constant indices costs nothing: the displacement
     /// is part of the load or store that reads the address (`ldy #offset`,
     /// an absolute address plus a constant). False: priced as `address`.
@@ -1629,6 +1741,8 @@ impl Default for OperationCosts {
             call: 1,
             return_: 1,
             argument: 2,
+            argument_registers: 0,
+            argument_stacked: 0,
             pop: 1,
             adjust: 1,
             return_pops: 0,
@@ -1664,6 +1778,8 @@ impl Default for OperationCosts {
             jump_table: 0,
             function: 0,
             function_scale: 100,
+            exact_call_arguments: false,
+            constant_word_shifts: false,
             width_scaled: false,
             constant_offsets_fold: false,
             branch_in_compare: false,
@@ -1889,6 +2005,7 @@ mod tests {
         );
         assert_eq!(pin.unroll_threshold_at_o3, None);
         assert_eq!(pin.div_by_constant_size_cost, None);
+        assert_eq!(pin.div_by_variable_size_cost, None);
         assert!(!pin.split_paths_at_o3);
         assert_eq!(pin.x87_stack_slots, None);
         assert!(!pin.x87_share_negated_products);

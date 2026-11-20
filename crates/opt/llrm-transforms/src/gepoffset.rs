@@ -399,7 +399,10 @@ pub fn separated(
         let price = |list: &mut dyn Iterator<Item = InstId>| {
             list.map(|one| profit::operation(context, layout, function, callees, one, &costs)).sum::<Option<i64>>()
         };
-        let made = price(&mut splitter.created.iter().copied());
+        // The displacement is free only where what reads the address takes it;
+        // else it is an add.
+        let displacement = if moved != BigInt::from(0) && !folds(function, gep, 0) { costs.add } else { 0 };
+        let made = price(&mut splitter.created.iter().copied()).map(|made| made + displacement);
         let saved = price(&mut dying.iter().copied());
         let created = splitter.created.clone();
         if !matches!(
@@ -438,6 +441,30 @@ pub fn separated(
     changed
 }
 
+/// Whether a displacement added to `gep` folds into its readers: an access
+/// takes it as its own, another `gep` carries it on. A phi, select, call,
+/// compare or a stored value keeps the address in a register, so there the
+/// constant is an add (`down1_s`: both starts of a count-down copy read `sum -
+/// 2`).
+fn folds(
+    function: &Function,
+    gep: InstId,
+    depth: u32,
+) -> bool {
+    let Some(result) = function.instruction(gep).result else { return true };
+    function
+        .users(result)
+        .iter()
+        .all(
+            |one| match function.instruction(one.user).opcode {
+                Opcode::Phi | Opcode::Select | Opcode::Call(_) | Opcode::Invoke(_) | Opcode::ICmp(_) => false,
+                Opcode::Store { .. } => one.index == 1,
+                Opcode::GetElementPtr { .. } => depth < 4 && folds(function, one.user, depth + 1),
+                _ => true,
+            },
+        )
+}
+
 /// The instructions of `cone` nothing but addresses and each other read: the
 /// others' indices split the same way, so a sum read only by addresses dies.
 fn _dying(
@@ -455,10 +482,11 @@ fn _dying(
                 && function.users(result).iter().all(|one| {
                     one.user == gep
                         || dying.contains(&one.user)
-                        || matches!(
+                        || (matches!(
                             function.instruction(one.user).opcode,
                             Opcode::GetElementPtr { .. }
                         )
+                            && folds(function, one.user, 0))
                 })
             {
                 dying.insert(inst);

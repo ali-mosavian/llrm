@@ -462,6 +462,10 @@ impl fmt::Display for Inst {
                 let (suffix, lane) = (lanes.suffix(), lane_letter(*lanes));
                 write!(out, "{} v{}.{suffix}, v{}.{suffix}, v{}.{lane}[{index}]", op.mnemonic(), rd.0, rn.0, rm.0)
             }
+            Inst::ScalarFmaLane { op, lanes, rd, rn, rm, index } => {
+                let (scalar, lane) = if *lanes == Arrangement::D2 { ('d', 'd') } else { ('s', 's') };
+                write!(out, "{} {scalar}{}, {scalar}{}, v{}.{lane}[{index}]", op.mnemonic(), rd.0, rn.0, rm.0)
+            }
             Inst::VectorPermute { kind, lanes, rd, rn, rm } => {
                 let name = kind.mnemonic();
                 let s = lanes.suffix();
@@ -530,7 +534,8 @@ impl fmt::Display for Inst {
                 write!(out, "{} v{}.{suffix}, v{}.{suffix}", op.mnemonic(), rd.0, rn.0)
             }
             Inst::FpBinary { op, size, rd, rn, rm } => {
-                let name = ["fmul", "fdiv", "fadd", "fsub", "fmax", "fmin", "fmaxnm", "fminnm", "fnmul"][*op as usize];
+                let name =
+                    ["fmul", "fdiv", "fadd", "fsub", "fmax", "fmin", "fmaxnm", "fminnm", "fnmul", "fabd"][*op as usize];
                 write!(out, "{name} {}, {}, {}", fpr(*rd, *size), fpr(*rn, *size), fpr(*rm, *size))
             }
             Inst::FpFused { op, size, rd, rn, rm, ra } => {
@@ -543,6 +548,9 @@ impl fmt::Display for Inst {
                     Some(rm) => write!(out, "{name} {}, {}", fpr(*rn, *size), fpr(*rm, *size)),
                     None => write!(out, "{name} {}, #0.0", fpr(*rn, *size)),
                 }
+            }
+            Inst::FpCondCompare { size, rn, rm, nzcv, cond } => {
+                write!(out, "fccmp {}, {}, #{nzcv}, {cond}", fpr(*rn, *size), fpr(*rm, *size))
             }
             Inst::FpSelect { size, rd, rn, rm, cond } => {
                 write!(out, "fcsel {}, {}, {}, {cond}", fpr(*rd, *size), fpr(*rn, *size), fpr(*rm, *size))

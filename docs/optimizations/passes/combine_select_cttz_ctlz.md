@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_select_cttz_ctlz.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_select_cttz_ctlz.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_select_cttz_ctlz.rs sha256:d91f8d4de83db60430521290f5a68b610794fa5baf08c8f15a14d197b3fbe815 -->
+<!-- src: crates/opt/llrm-transforms/src/combine_select_cttz_ctlz.rs sha256:def5f802765d3c404fd174732afe87b90c7221df09fa5b3c04f994b7a4288152 -->
 
 # combine_select_cttz_ctlz
 

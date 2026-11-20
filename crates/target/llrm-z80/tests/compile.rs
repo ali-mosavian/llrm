@@ -1434,7 +1434,16 @@ fn a_far_frame_access_between_a_compare_and_its_branch_keeps_the_carry() {
         ..Inst::new(Kind::Op("JPC"), vec![Operand::Block(1), Operand::Use(Reg::Phys(llrm_z80::reg::FLAGS))])
     };
     function.blocks.push(Block { id: 0, insts: vec![compare, reload, branch], phis: Vec::new() });
-    function.blocks.push(Block { id: 1, insts: vec![Inst::new(Kind::Op("RET"), vec![])], phis: Vec::new() });
+    // the reloaded byte is returned: a reload nothing reads is not emitted
+    function
+        .blocks
+        .push(
+            Block {
+                id: 1,
+                insts: vec![Inst::new(Kind::Op("RET"), vec![Operand::Use(Reg::Virt(2))])],
+                phis: Vec::new(),
+            },
+        );
     let assignment = Assignment(vec![llrm_z80::reg::A, llrm_z80::reg::B, llrm_z80::reg::C]);
     // object 100 sits below 100 words of other objects: out of ix's reach
     let slots: Vec<(i32, usize)> = (0..101).map(|at| (at, 2)).collect();
@@ -1578,6 +1587,113 @@ fn finding_predecessors_does_not_read_the_whole_function() {
     };
     let (short, long) = (diamonds(2), diamonds(24));
     assert!(short > 0 && long < short * 2, "{short} instructions looked at with 2 calls in each arm, {long} with 24");
+}
+
+/// At -O1 a self-recursive callee was still recursive when the inliner priced
+/// it (the pin's -O1 function pipeline has no TailCallElim before it), so it
+/// stayed a call in the loop that used it: idiv_loop_os -O1 was 301 B where -Os
+/// gave 257 B. Bytes first at every level: the recursion is a loop before the
+/// inliner looks.
+#[test]
+fn a_self_recursive_callee_is_inlined_at_o1_as_at_os() {
+    let ir = format!(
+        "target datalayout = \"{DATALAYOUT}\"
+define internal i16 @gcd(i16 %a, i16 %b) {{
+  %z = icmp eq i16 %b, 0
+  br i1 %z, label %done, label %rec
+rec:
+  %m = srem i16 %a, %b
+  %r = call i16 @gcd(i16 %b, i16 %m)
+  ret i16 %r
+done:
+  ret i16 %a
+}}
+define i16 @total(i16 %n) {{
+entry:
+  br label %loop
+loop:
+  %i = phi i16 [ 1, %entry ], [ %next, %loop ]
+  %sum = phi i16 [ 0, %entry ], [ %more, %loop ]
+  %x = mul i16 %i, 7
+  %y = add i16 %x, 3
+  %p = mul i16 %i, 5
+  %q = add i16 %p, 2
+  %g1 = call i16 @gcd(i16 %y, i16 %q)
+  %w = add i16 %i, 90
+  %g2 = call i16 @gcd(i16 %w, i16 360)
+  %both = add i16 %g1, %g2
+  %more = add i16 %sum, %both
+  %next = add i16 %i, 1
+  %done = icmp eq i16 %i, %n
+  br i1 %done, label %out, label %loop
+out:
+  ret i16 %more
+}}
+"
+    );
+    let asm = text(&ir, "total", 0, &Request::new(Level::O1)).expect("compiles");
+    assert!(
+        !asm.contains("call\t_gcd") && !asm.contains("call _gcd"),
+        "the recursive callee is still a call at -O1:\n{asm}"
+    );
+}
+
+/// A callee whose loop bound the call's constant fixes was exempt from the byte
+/// rate, as a copy that unrolls and folds. Only an innermost loop is copied out
+/// whole: `total(300)` holds two gcd loops of unknown trip count inside the
+/// counted one, so the inlined copy kept `total` beside it (idiv_loop_os -O2:
+/// 385 B, -Os 257 B).
+#[test]
+fn a_counted_outer_loop_over_inner_loops_does_not_earn_a_copy_at_o2() {
+    let ir = format!(
+        "target datalayout = \"{DATALAYOUT}\"
+define i32 @total(i16 %n) {{
+entry:
+  %skip = icmp slt i16 %n, 1
+  br i1 %skip, label %out, label %outer
+outer:
+  %i = phi i16 [ 1, %entry ], [ %i1, %latch ]
+  %sum = phi i32 [ 0, %entry ], [ %sum1, %latch ]
+  %a = mul i16 %i, 7
+  %b = add i16 %a, 3
+  %c = mul i16 %i, 5
+  %d = add i16 %c, 2
+  br label %first
+first:
+  %p = phi i16 [ %q, %first ], [ %d, %outer ]
+  %o = phi i16 [ %p, %first ], [ %b, %outer ]
+  %q = srem i16 %o, %p
+  %z = icmp eq i16 %q, 0
+  br i1 %z, label %second.in, label %first
+second.in:
+  %w = add i16 %i, 90
+  br label %second
+second:
+  %t = phi i16 [ %u, %second ], [ 360, %second.in ]
+  %s = phi i16 [ %t, %second ], [ %w, %second.in ]
+  %u = srem i16 %s, %t
+  %y = icmp eq i16 %u, 0
+  br i1 %y, label %latch, label %second
+latch:
+  %both = add i16 %t, %p
+  %wide = sext i16 %both to i32
+  %sum1 = add i32 %sum, %wide
+  %i1 = add i16 %i, 1
+  %last = icmp eq i16 %i, %n
+  br i1 %last, label %out, label %outer
+out:
+  %result = phi i32 [ 0, %entry ], [ %sum1, %latch ]
+  ret i32 %result
+}}
+define i16 @main() {{
+  %t = call i32 @total(i16 300)
+  %r = trunc i32 %t to i16
+  ret i16 %r
+}}
+"
+    );
+    let asm = text(&ir, "main", 1, &Request::new(Level::O2)).expect("compiles");
+    assert!(asm.contains("call _total"), "the counted outer loop was copied into main beside `total`:\n{asm}");
 }
 
 /// The same allocation was priced again (finished into text and priced)
@@ -2097,7 +2213,9 @@ fn one_long_multiply_in_a_module_stays_inline_at_size() {
 /// (-Os). The bytes still shifted times the bits beyond whole bytes are the
 /// cost: 5 and 13 take the routine; whole bytes, one or two bits and the last
 /// byte (29, 31) stay unrolled, as a 64-bit shift's halves did (data_int64
-/// +199 B when 29 and 31 called); speed levels never take it.
+/// +199 B when 29 and 31 called). Not tuned for size, the call is taken where
+/// the module is smaller for it (bytes first at every level, 2026-11-14
+/// ruling).
 #[test]
 fn a_function_tuned_for_size_shifts_a_long_by_a_constant_in_the_routine() {
     let shifted = |op: &str, count: u32, attr: &str| {
@@ -2110,7 +2228,7 @@ fn a_function_tuned_for_size_shifts_a_long_by_a_constant_in_the_routine() {
         for count in [1, 2, 8, 16, 29, 31] {
             assert!(!shifted(op, count, "optsize").contains("__"), "{op} {count} stays unrolled");
         }
-        assert!(!shifted(op, 5, "").contains("__"), "{op} 5 at speed levels");
+        assert!(shifted(op, 5, "").contains(routine), "{op} 5 not tuned for size");
     }
 }
 

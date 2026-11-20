@@ -23,6 +23,12 @@ pub struct Wrapped {
     /// The blocks whose end takes the frame down: the Restore block, or the
     /// blocks that reach it through the frame when it is shared.
     pub restores: Vec<usize>,
+    /// The blocks that reach the shared return through the frame and also have
+    /// another way on: the frame comes down on a new block between them and
+    /// the return (`tryToSplitRestore`'s `NMBB`).
+    pub edges: Vec<usize>,
+    /// The shared return the edges leave for.
+    pub restore: usize,
     /// Whether the epilogue goes at a block's end (split) and not before its
     /// return.
     pub at_end: bool,
@@ -229,19 +235,30 @@ pub fn place(function: &MFunc) -> Option<Wrapped> {
     let placement = saverestore::run(&graph, &Uses { function }, &frequencies)?;
     let (save, restore) = (placement.save.0 as usize, placement.restore.0 as usize);
     let uses = Uses { function };
+    let mut edges = Vec::new();
     let (restores, at_end) = match &placement.split {
         Some(split) => {
             // The epilogue goes at the end of a block whose only way on is the
-            // shared return.
-            if !split.iter().all(|one| graph.successors[one.0 as usize] == [restore]) {
+            // shared return; a block with another way on gets the new block.
+            let (ends, branching): (Vec<_>, Vec<_>) =
+                split.iter().map(|one| one.0 as usize).partition(|&one| graph.successors[one] == [restore]);
+            if !branching.iter().all(|&one| graph.successors[one].contains(&restore)) {
                 return None;
             }
-            (split.iter().map(|one| one.0 as usize).collect::<Vec<_>>(), true)
+            edges = branching;
+            (ends, true)
         }
         // The Restore's return, or the end of a Restore that does not return:
         // what follows it needs no frame.
         None => (vec![restore], !uses.is_return(placement.restore)),
     };
+    // `PrologEpilogInserter::calculateSaveRestoreBlocks`: a restore block with
+    // no successor that is no return ends in a call that never returns, and
+    // gets no epilogue.
+    let restores: Vec<usize> = restores
+        .into_iter()
+        .filter(|&block| !graph.successors[block].is_empty() || uses.is_return(id(block)))
+        .collect();
     // A block the frame reaches is entered with the frame made only by the
     // Save: any other way in would find the stack as the caller left it.
     let mut dominators = DomTreeBase::<false>::new();
@@ -258,7 +275,9 @@ pub fn place(function: &MFunc) -> Option<Wrapped> {
         if restores.contains(&block) && at_end || (block == restore && !at_end) {
             continue;
         }
-        work.extend(graph.successors[block].iter().copied());
+        // An edge block leaves the frame by its new block, not by the return.
+        let leaves = edges.contains(&block);
+        work.extend(graph.successors[block].iter().copied().filter(|&next| !(leaves && next == restore)));
     }
-    Some(Wrapped { save, restores, at_end })
+    Some(Wrapped { save, restores, edges, restore, at_end })
 }

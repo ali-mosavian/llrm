@@ -74,8 +74,11 @@
 //! module's own header.
 
 pub mod adce;
+#[cfg(test)]
+mod addresstaken_tests;
 pub mod aggressive_instcombine;
 pub mod algebraic;
+pub mod alwaysinline;
 pub mod alwaysundef;
 pub mod argpromotion;
 #[cfg(test)]
@@ -107,6 +110,7 @@ pub mod cgpswitch;
 pub mod cmpopt;
 #[cfg(test)]
 mod codegen_slots_tests;
+pub(crate) mod cold_chrec;
 pub mod combine;
 pub mod combine_abs;
 pub mod combine_add_idioms;
@@ -152,6 +156,7 @@ pub mod combine_gep_index;
 pub mod combine_gep_merge;
 pub mod combine_gep_phi;
 pub mod combine_icmp_binop;
+pub mod combine_icmp_bitcast;
 pub mod combine_icmp_const;
 pub mod combine_icmp_equality;
 pub mod combine_icmp_intrinsic;
@@ -163,6 +168,7 @@ pub mod combine_icmp_table;
 #[cfg(test)]
 mod combine_icmp_table_tests;
 pub mod combine_invert;
+pub mod combine_reassociate_for_uses;
 pub mod combine_loadstore;
 pub mod combine_memintrinsics;
 pub mod combine_minmax;
@@ -194,6 +200,7 @@ pub mod combine_select_op_op;
 pub mod combine_select_spf;
 pub mod combine_select_tail;
 pub mod combine_select_to_cmp;
+pub mod combine_select_to_phi;
 #[cfg(test)]
 mod combine_semantics_tests;
 pub mod combine_shared;
@@ -328,6 +335,7 @@ pub mod looppeel;
 pub mod looprotate;
 pub mod loopsimplify;
 pub mod loopsimplifycfg;
+pub mod loopsplit;
 pub mod looptermfold;
 pub mod loopunroll;
 pub mod loopunrollandjam;
@@ -336,6 +344,7 @@ pub mod loopunrollpass;
 pub mod loopunrollruntime;
 pub mod loopvectorize;
 pub mod loopvectorizeaccumulator;
+pub mod loopvectorizeearlyexit;
 pub mod loopvectorizeinterleave;
 pub mod loopvectorizelegality;
 pub mod loopvectorizeplan;
@@ -434,9 +443,14 @@ pub mod simplifylibcalls;
 pub mod sinkcast;
 pub mod sinkcommon;
 pub mod slpcompares;
+pub mod slpgather;
+pub mod slpinsert;
+pub mod slpphi;
+pub mod slpschedule;
 pub mod slpreduction;
 pub mod slptree;
 pub mod slpvectorize;
+pub mod vectorlower;
 pub mod spares;
 pub mod speculate;
 pub mod spill;
@@ -478,6 +492,9 @@ pub mod vncoercion;
 mod vncoercion_tests;
 pub mod walk;
 pub mod widen;
+pub mod widenreturns;
+#[cfg(test)]
+mod widenreturns_tests;
 pub mod window;
 pub mod zeromerge;
 // Not ported, meaning nothing where a value is whole: `wholephis` and

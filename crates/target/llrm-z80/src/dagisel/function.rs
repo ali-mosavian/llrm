@@ -81,6 +81,13 @@ pub fn builder_target() -> BuilderTarget {
         tuning: llrm_mir::target::Machine::tuning(&*crate::driver::machine()),
         ..BuilderTarget::for_pointer_bits(16)
     }
+    // DEVIATE Z80-NARROW-DIV (owner z80, exit 2026-12-15, as the 6502's and
+    // m68k's): the pin's O1 has no correlated-propagation to narrow a divide of
+    // values that fit 16 bits
+    // (`narrowSDivOrSRem`, `narrowUDivOrURem`): `__udivsi3` where -O2
+    // calls `__udivhi3` (nbody_fixed -O1, +375 B linked). `__divremhi4` gives 0
+    // for `INT_MIN % -1`, so the narrow remainder is defined there.
+    .with_narrow_divrem(EVT::I16, true)
 }
 
 thread_local! {

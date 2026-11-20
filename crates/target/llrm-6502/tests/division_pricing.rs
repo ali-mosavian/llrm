@@ -51,11 +51,13 @@ fn the_run_of_a_divide_gives_its_quotient_and_sim65s_clocks() {
 }
 
 /// The figures `select::speed_division16_pays` prices with are the runtime's:
-/// the mean over the four shapes of the compact divide and of what the speed
+/// the mean over the shapes of the compact divide and of what the speed
 /// divide saves, on sim65.
 #[test]
-fn the_priced_division_clocks_are_what_sim65_takes_over_the_four_shapes() {
-    let mean = |routine: &str| SHAPES_16.iter().map(|&shape| sim65("mean", routine, shape) as f64).sum::<f64>() / 4.0;
+fn the_priced_division_clocks_are_what_sim65_takes_over_the_shapes() {
+    let mean = |routine: &str| {
+        SHAPES_16.iter().map(|&shape| sim65("mean", routine, shape) as f64).sum::<f64>() / SHAPES_16.len() as f64
+    };
     let (compact, speed) = (mean("__udivhi3c"), mean("__udivhi3"));
     let (priced_compact, priced_saved) = (clocks_compact_16(Cpu::Mos6502), saved_at_speed_16(Cpu::Mos6502));
     assert!((priced_compact - compact).abs() <= compact / 50.0, "compact: priced {priced_compact}, sim65 {compact}");

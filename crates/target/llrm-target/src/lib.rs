@@ -17,9 +17,9 @@ pub mod registers;
 pub mod routines;
 pub mod runtime;
 pub mod schedule;
+pub mod testing;
 pub mod timings;
 pub mod tune;
-pub mod testing;
 
 use std::rc::Rc;
 
@@ -56,14 +56,16 @@ pub struct StringRegisters {
     pub tail: RegId,
 }
 
-/// The registers a string instruction (`rep movs`, `rep stos`) uses, each by its
-/// root: the view of the pointer's width is the operand (`cx`, `ecx`, `rcx`).
+/// The registers a string instruction (`rep movs`, `rep stos`) uses, each by
+/// its root: the view of the pointer's width is the operand (`cx`, `ecx`,
+/// `rcx`).
 #[derive(Clone, Copy, Debug)]
 pub struct StringRoots {
     pub count: RegId,
     pub source: RegId,
     pub destination: RegId,
-    /// The data register a store or compare is made through (`al`, `ax`, `eax`, `rax`).
+    /// The data register a store or compare is made through (`al`, `ax`, `eax`,
+    /// `rax`).
     pub accumulator: RegId,
 }
 
@@ -670,6 +672,12 @@ pub trait Target {
         x86_cheap_move_immediate
     }
 
+    /// The rows besides moves the target flags `isAsCheapAsAMove`, by the row's
+    /// name (M68k's `SWAP`, `M68kInstrShiftRotate.td`). The default has none.
+    fn cheap_move_row(&self) -> fn(&str) -> bool {
+        |_| false
+    }
+
     /// A constant that, in a build for size, is not `isAsCheapAsAMove` though
     /// `cheap_move_immediate` says it is (see
     /// [`x86_uncheap_move_immediate_at_size`]). The default has none.
@@ -682,6 +690,13 @@ pub trait Target {
     /// values the loop names against the registers (the rule before it).
     fn hoist_by_pressure(&self) -> bool {
         true
+    }
+
+    /// Whether `MachineLICM` takes an instruction that reads no register (an address of a
+    /// symbol) as a candidate, as the pin's `IsLoopInvariantInst` does. DEVIATE: off where a
+    /// port has not measured it; the allocator makes a constant again where it wants it.
+    fn hoists_register_free_ops(&self) -> bool {
+        false
     }
 
     /// The pressure sets of the register classes and each set's limit, for a
@@ -844,9 +859,10 @@ pub trait Target {
         false
     }
 
-    /// DEVIATE DIV-HOT: where a size build takes the size divide, an `i64` divide in a loop
-    /// takes the speed routine. The size routine is a bit a round, some 600 instructions
-    /// slower; the module pays the speed one's extra bytes once.
+    /// DEVIATE DIV-HOT: where a size build takes the size divide, an `i64`
+    /// divide in a loop takes the speed routine. The size routine is a bit
+    /// a round, some 600 instructions slower; the module pays the speed
+    /// one's extra bytes once.
     fn fast_divide_in_loops_at_size(&self) -> bool {
         false
     }
@@ -1121,7 +1137,8 @@ pub struct FrameRegisters {
     pub enter: bool,
     /// A size build may skip the frame on an early exit into a shared return.
     pub wrap_split_size: bool,
-    /// The locals' base takes the widest object's alignment (`frame_object_aligned`).
+    /// The locals' base takes the widest object's alignment
+    /// (`frame_object_aligned`).
     pub object_aligned: bool,
     /// The bytes below the stack pointer a leaf function's locals may use
     /// without a `sub`; 0 where the ABI has no red zone.
@@ -1129,12 +1146,13 @@ pub struct FrameRegisters {
     /// The registers a one-slot frame pushes and pops (`calling.toml`'s
     /// `frame_slot_push`/`frame_slot_pop`), where it does.
     pub slot_scratch: Option<(RegId, RegId)>,
-    /// The popped register of `slot_scratch` was chosen as dead at every return, a sibling call's
-    /// arguments included (`X86RegisterInfo::findDeadCallerSavedReg`): the frame may be a push and
+    /// The popped register of `slot_scratch` was chosen as dead at every
+    /// return, a sibling call's arguments included
+    /// (`X86RegisterInfo::findDeadCallerSavedReg`): the frame may be a push and
     /// a pop where a return is a sibling call.
     pub slot_dead_checked: bool,
-    /// The slot is released by `add` where callee-saved registers are restored, as the pin's `emitEpilogue` does
-    /// (`Tti::frame_slot_add_with_saved`).
+    /// The slot is released by `add` where callee-saved registers are restored,
+    /// as the pin's `emitEpilogue` does (`Tti::frame_slot_add_with_saved`).
     pub slot_add_with_saved: bool,
     /// The function has no frame register: it holds a value, and a frame cell
     /// is addressed through the stack pointer.

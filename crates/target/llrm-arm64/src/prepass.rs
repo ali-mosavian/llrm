@@ -406,14 +406,20 @@ fn narrow_extension_uses(function: &mut MFunc) {
 }
 
 /// A flag-setting instruction whose register nothing reads defines the zero
-/// register (`AArch64DeadRegisterDefinitions`): that is a compare.
+/// register (`AArch64DeadRegisterDefinitions`): that is a compare (`cmp`,
+/// `tst`, `bics`).
 fn dead_definitions(function: &mut MFunc) {
     let read: HashSet<Reg> =
         function.blocks.iter().flat_map(|block| &block.ops).flat_map(|op| op.defs_and_uses().1).collect();
     for block in &mut function.blocks {
         for op in &mut block.ops {
-            if let Op::I(Inst::AddSubImm { rd, .. } | Inst::AddSubShifted { rd, .. } | Inst::AddSubExtended { rd, .. }) =
-                op
+            if let Op::I(
+                Inst::AddSubImm { rd, .. }
+                | Inst::AddSubShifted { rd, .. }
+                | Inst::AddSubExtended { rd, .. }
+                | Inst::LogicImm { op: Logic::Ands, rd, .. }
+                | Inst::LogicShifted { op: Logic::Ands, rd, .. },
+            ) = op
                 && rd.is_virtual()
                 && !read.contains(&Reg::Gpr(*rd))
             {
@@ -624,7 +630,12 @@ fn flags_dead(
     for op in &ops[at + 1..] {
         if matches!(
             op,
-            Op::I(Inst::BranchCond { .. } | Inst::CondSelect { .. } | Inst::CondCompare { .. })
+            Op::I(
+                Inst::BranchCond { .. }
+                    | Inst::CondSelect { .. }
+                    | Inst::CondCompare { .. }
+                    | Inst::FpCondCompare { .. }
+            )
         ) {
             return false;
         }

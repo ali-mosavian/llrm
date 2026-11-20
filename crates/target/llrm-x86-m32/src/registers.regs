@@ -25,6 +25,9 @@
 @scratch cx dx bx ax
 # @lanes: x86's lane table (`llrm_codegen::backend::lanes`).
 @lanes x86
+# @asm: the registers inline asm may name in a constraint (`{eax}`, `={edx}`, `{st}`): whole values only, no ebp, esp or
+# segment register; `st0` and `st1` are the x87 stack's top and its next (`t` and `u`).
+@asm al bl cl dl ax bx cx dx si di eax ebx ecx edx esi edi st0 st1
 #
 # @bytes: the 8-bit allocation order, GR8 of X86RegisterInfo.td: the high bytes come before bl and bh.
 @bytes al cl dl ah ch dh bl bh

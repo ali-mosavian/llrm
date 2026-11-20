@@ -124,7 +124,8 @@ pub struct Options {
     /// M68K-WORD-TABLE, [`crate::wordtable`]).
     pub word_jump_tables: bool,
     /// A `tst` of the register an `add` of it to itself just doubled reads the
-    /// carry the `add` left instead ([`crate::cmpcarry`]).
+    /// carry the `add` left instead, and a `cmpi.l #-1` of a `subq.l #1`
+    /// result reads its borrow ([`crate::cmpcarry`]).
     pub reuse_shift_out_flags: bool,
     /// A load and the step of its pointer in another block are one `(An)+`
     /// ([`crate::loopinc`]).
@@ -292,7 +293,7 @@ impl Default for Options {
             spill_fold: !llrm_support::env_flag!("LLRM_NO_SPILL_FOLD"),
             shared_cse: true,
             direct_copies: false,
-            shared_licm: false,
+            shared_licm: true,
             shared_prelude: false,
             tail_duplicate: true,
             rematerialize_arguments: true,
@@ -352,7 +353,13 @@ pub fn items_with(
         } else {
             NarrowMultiplies::Off
         };
-        optimized = mid_end_narrowing(module, &M68k::for_cpu(cpu), Some(Rc::new(M68kMachine { cpu })), narrow)?;
+        optimized = mid_end_narrowing(
+            module,
+            &M68k::for_cpu(cpu),
+            Some(Rc::new(M68kMachine { cpu })),
+            narrow,
+            narrow == NarrowMultiplies::Speed,
+        )?;
         &optimized
     } else {
         module
@@ -686,6 +693,19 @@ fn size_build(
             .is_some_and(|one| has(&one.attrs, "optsize") || has(&one.attrs, "minsize"))
 }
 
+/// Whether the shared `MachineLICM` runs on a function.
+///
+/// DEVIATE M68K-LICM-SPEED (owner wasm-3, exit 2026-12-10, when `m68k/shared-licm-direct-copies`
+/// lands): speed builds only. A hoisted address holds a register for the loop; at -Os and -O1 the
+/// private passes lose bytes and clocks to the spills it causes (-Os +1.5 KB over 186 programs).
+/// The trial's variants read this too: a stage that does not run must not change the emission.
+fn licm_runs(
+    options: Options,
+    wants_size: bool,
+) -> bool {
+    options.shared_licm && !wants_size && !options.strict
+}
+
 fn same_instructions(
     a: &crate::mfunc::MFunction,
     b: &crate::mfunc::MFunction,
@@ -844,7 +864,14 @@ fn before_late_stage(options: Options) -> Options {
 
 /// The options that only allocation and the stages after it read.
 fn before_allocation(options: Options) -> Options {
-    Options { global_copies: false, tail_duplicate: false, return_dup: false, slot_registers: false, ..options }
+    Options {
+        global_copies: false,
+        tail_duplicate: false,
+        return_dup: false,
+        slot_registers: false,
+        spill_fold: false,
+        ..options
+    }
 }
 
 /// One build of the function, and the optional rewrites that changed it.
@@ -890,7 +917,7 @@ fn items_once(
         direct_copies: options.direct_copies,
         // what the hosted stages read: a result is defined in its copy's
         // register
-        copy_destinations: options.direct_copies || options.shared_cse || options.shared_licm,
+        copy_destinations: options.direct_copies || options.shared_cse || licm_runs(options, wants_size),
     };
     let (emitted, mul_used, mul_synthesized) = prefixes
         .emitted
@@ -981,7 +1008,7 @@ fn items_once(
             }
             function.odds = Some(edge_odds(module, name)?);
             expand_cmov(&mut function)?;
-            if options.shared_licm {
+            if licm_runs(options, wants_size) {
                 function = crate::regalloc::shared_licm(&function, wants_size)?;
             }
             if options.shared_cse {
@@ -998,6 +1025,7 @@ fn items_once(
             machine_sink(&mut function);
             if options.short && options.reuse_shift_out_flags {
                 crate::cmpcarry::reuse_shift_out_flags(&mut function);
+                crate::cmpcarry::reuse_borrow_flags(&mut function);
             }
             crate::regalloc::split_flag_edges(&mut function);
             if !options.shared_prelude {
@@ -1056,6 +1084,7 @@ fn items_once(
         crate::addrcmp::compare_address_registers(&mut function, &assignment);
         crate::addrcmp::word_immediates(&mut function);
         crate::narrow::merge_logic_immediates(&mut function, &assignment);
+        crate::narrow::copied_masks_as_extensions(&mut function, &assignment);
         crate::narrow::narrow_logic_immediates(&mut function, &assignment);
         crate::consts::materialize_constants(&mut function, &assignment, cpu, wants_size);
         crate::constreg::constant_into_destination(&mut function, &assignment);
@@ -1090,6 +1119,7 @@ fn items_once(
     }
     preserve_flags(&mut function, &assignment)?;
     restore_remade_flags(&mut function);
+    crate::ccrcopy::drop_redundant_restores(&mut function, &assignment);
     branch_fold(&mut function, &assignment);
     if !wants_size {
         if options.tail_duplicate {
@@ -1401,8 +1431,9 @@ pub fn mid_end_for_narrowing(
     module: &Module,
     cpu: Cpu,
     narrow_multiplies: NarrowMultiplies,
+    narrow_divides: bool,
 ) -> Result<Module, String> {
-    mid_end_narrowing(module, &M68k::for_cpu(cpu), Some(Rc::new(M68kMachine { cpu })), narrow_multiplies)
+    mid_end_narrowing(module, &M68k::for_cpu(cpu), Some(Rc::new(M68kMachine { cpu })), narrow_multiplies, narrow_divides)
 }
 
 /// [`mid_end`] with another target description: what a test compares the
@@ -1412,16 +1443,17 @@ pub fn mid_end_described_by(
     tti: &dyn llrm_mir::tti::Tti,
     machine: Option<Rc<dyn llrm_mir::target::Machine>>,
 ) -> Result<Module, String> {
-    mid_end_narrowing(module, tti, machine, NarrowMultiplies::Off)
+    mid_end_narrowing(module, tti, machine, NarrowMultiplies::Off, false)
 }
 
 /// [`mid_end_described_by`], narrowing the multiplies the range proves narrow
-/// (`narrow_multiplies`).
+/// (`narrow_multiplies`) and, at speed (`narrow_divides`), the divides.
 pub fn mid_end_narrowing(
     module: &Module,
     tti: &dyn llrm_mir::tti::Tti,
     machine: Option<Rc<dyn llrm_mir::target::Machine>>,
     narrow_multiplies: NarrowMultiplies,
+    narrow_divides: bool,
 ) -> Result<Module, String> {
     MID_ENDS.with(|runs| runs.set(runs.get() + 1));
     use llrm_mir::datalayout::DataLayout;
@@ -1453,6 +1485,11 @@ pub fn mid_end_narrowing(
         };
         if let (true, Some(limit)) = (wanted, tti.range_narrowing_width()) {
             llrm_transforms::narrowrange::multiplies_narrowed(context, &layout, function, &outer, limit);
+        }
+        // at speed only: at -Os the libcall's pushes are fewer bytes than the
+        // extensions (narrowrange.rs)
+        if let (true, false, Some(limit)) = (narrow_divides, for_size, tti.range_narrowing_width()) {
+            llrm_transforms::narrowrange::divides_narrowed(context, &layout, function, &outer, limit);
         }
         // the ids the pass handed out for declarations name nothing until they
         // are placed

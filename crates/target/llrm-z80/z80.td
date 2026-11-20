@@ -55,6 +55,10 @@ def SDTZ80Cmpc : SDTypeProfile<1, 4, [SDTCisVT<0, i8>, SDTCisSameAs<1, 2>, SDTCi
 def Z80cmpc : SDNode<"Z80ISD::CMPC", SDTZ80Cmpc>;
 // The signed order of two words: the carry holds the sign of a - b corrected for overflow.
 def Z80cmps : SDNode<"Z80ISD::CMPS", SDTZ80Cmp>;
+// A word against 0 and 1, signed: the carry is set when it is at most zero (so `x > 0` is NC, `x <= 0` is C). No flag
+// of a compare answers it alone (0x8000 breaks each one); the zero test and the sign are joined in the expansion.
+def SDTZ80Tstp : SDTypeProfile<1, 1, [SDTCisVT<0, i8>, SDTCisVT<1, i16>]>;
+def Z80tstp : SDNode<"Z80ISD::TSTP", SDTZ80Tstp>;
 
 // A word op with its carry out in the flags: (sum, flags), and with the carry in (the flags before it).
 def SDTZ80Alf : SDTypeProfile<2, 2, [SDTCisVT<0, i16>, SDTCisVT<1, i8>, SDTCisVT<2, i16>, SDTCisVT<3, i16>]>;
@@ -80,6 +84,8 @@ def Z80ldirg : SDNode<"Z80ISD::LDIRG", SDTZ80Ldir, [SDNPHasChain, SDNPMayLoad, S
 // (so the count is one less than the bytes filled, and nonzero). `de` is made from the pointer by the expansion.
 def SDTZ80Fill : SDTypeProfile<0, 3, [SDTCisVT<0, i16>, SDTCisVT<1, i8>, SDTCisVT<2, i16>]>;
 def Z80ldfill : SDNode<"Z80ISD::LDFILL", SDTZ80Fill, [SDNPHasChain, SDNPMayStore]>;
+// A fill of any count (the bytes filled, zero allowed): the expansion tests it, as LDIRG does a copy's.
+def Z80ldfillg : SDNode<"Z80ISD::LDFILLG", SDTZ80Fill, [SDNPHasChain, SDNPMayStore]>;
 // A 64-bit value in eight bytes of memory shifted in place by a count of bits: the node carries the address of the low
 // byte (of the high byte for a right shift), the count in BC, and the kind (0 shl, 1 lshr, 2 ashr). One loop, a bit a trip.
 def SDTZ80WShift : SDTypeProfile<0, 3, [SDTCisVT<0, i16>, SDTCisVT<1, i16>, SDTCisVT<2, i8>]>;
@@ -282,6 +288,8 @@ let Defs = [A] in {
 }
 def BIT7_8 : Z80Inst<(outs Flags:$f), (ins GR8:$a), "bit 7, $a", [(set i8:$f, (Z80tsts i8:$a))]>;
 def BIT8 : Z80Inst<(outs Flags:$f), (ins GR8:$a, i8imm:$n), "bit $n, $a", [(set i8:$f, (Z80bit i8:$a, (i8 imm:$n)))]>;
+let Defs = [A] in
+  def TSTP16 : Z80Inst<(outs Flags:$f), (ins GR16:$a), "tstp $a", [(set i8:$f, (Z80tstp i16:$a))]>;
 def BIT7_16 : Z80Inst<(outs Flags:$f), (ins GR16:$a), "bit7 $a", [(set i8:$f, (Z80tsts i16:$a))]>;
 let isBranch = 1, isTerminator = 1 in {
   def JPNZ : Z80Inst<(outs), (ins brtarget:$t, Flags:$f), "jp nz, $t", [(Z80brcond bb:$t, (i8 0), i8:$f)]>;
@@ -388,6 +396,11 @@ let mayLoad = 1, mayStore = 1, Defs = [HL, DE, BC, F] in
 let mayLoad = 1, mayStore = 1, Defs = [HL, DE, BC, F] in {
   def LDFILLi : Z80Inst<(outs), (ins HLR:$p, i8imm:$v, BCR:$n), "ldfill $p, $v, $n", [(Z80ldfill i16:$p, (i8 imm:$v), i16:$n)]>;
   def LDFILLr : Z80Inst<(outs), (ins HLR:$p, ACC:$v, BCR:$n), "ldfill $p, $v, $n", [(Z80ldfill i16:$p, i8:$v, i16:$n)]>;
+}
+// The same behind a test of the count (a, f clobbered): a count of zero or one skips the `ldir`.
+let mayLoad = 1, mayStore = 1, Defs = [HL, DE, BC, F, A] in {
+  def LDFILLGi : Z80Inst<(outs), (ins HLR:$p, i8imm:$v, BCR:$n), "ldfillg $p, $v, $n", [(Z80ldfillg i16:$p, (i8 imm:$v), i16:$n)]>;
+  def LDFILLGr : Z80Inst<(outs), (ins HLR:$p, ACC:$v, BCR:$n), "ldfillg $p, $v, $n", [(Z80ldfillg i16:$p, i8:$v, i16:$n)]>;
 }
 
 // `ld b, c; inc b; jr test; loop: push hl; sla (hl) or srl/sra (hl); (inc or dec hl; rl or rr (hl)) x 7; pop hl; test: djnz loop`.

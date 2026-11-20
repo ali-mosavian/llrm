@@ -68,22 +68,34 @@ pub mod x86isd {
     pub const CMP: ISD = ISD::Target(508);
     /// `X86ISD::MUL_IMM`: a multiply by 3, 5 or 9 that is one `lea`.
     pub const MUL_IMM: ISD = ISD::Target(694);
-    /// `X86ISD::VSHLI`, `VSRAI`, `VSRLI`: a vector shifted by an `i8` target constant (`PSLL*ri`, `PSRA*ri`,
-    /// `PSRL*ri`).
-    /// `X86ISD::PSHUFD`: `v4i32` lanes by an `i8` target constant (two bits a lane).
+    /// `X86ISD::VSHLI`, `VSRAI`, `VSRLI`: a vector shifted by an `i8` target
+    /// constant (`PSLL*ri`, `PSRA*ri`, `PSRL*ri`).
+    /// `X86ISD::PSHUFD`: `v4i32` lanes by an `i8` target constant (two bits a
+    /// lane).
     pub const PSHUFD: ISD = ISD::Target(714);
+    /// `X86ISD::MOVMSK`: the sign bit of each lane gathered into the low bits
+    /// of an `i32` (`pmovmskb`, `movmskps`).
+    pub const MOVMSK: ISD = ISD::Target(684);
+    /// `X86ISD::PCMPEQ`, `PCMPGT`: the lanes of two vectors equal (signed
+    /// greater), all ones or zero (`pcmpeq*`, `pcmpgt*`).
+    pub const PCMPEQ: ISD = ISD::Target(702);
+    pub const PCMPGT: ISD = ISD::Target(703);
     /// `X86ISD::UNPCKL`: the low lanes of two vectors interleaved (`punpckl*`).
     pub const UNPCKL: ISD = ISD::Target(779);
     /// `X86ISD::VZEXT_MOVL`: lane 0 kept, the other lanes zeroed (`movd`/`movq`
     /// from a register).
     pub const VZEXT_MOVL: ISD = ISD::Target(951);
-    /// `X86ISD::UNPCKH`: the high lanes of two vectors interleaved (`punpckh*`).
+    /// `X86ISD::UNPCKH`: the high lanes of two vectors interleaved
+    /// (`punpckh*`).
     pub const UNPCKH: ISD = ISD::Target(778);
-    /// `X86ISD::PACKSS`: the lanes of two vectors narrowed by half with signed saturation (`packss*`).
+    /// `X86ISD::PACKSS`: the lanes of two vectors narrowed by half with signed
+    /// saturation (`packss*`).
     pub const PACKSS: ISD = ISD::Target(698);
-    /// `X86ISD::PACKUS`: the lanes of two vectors narrowed by half with unsigned saturation (`packus*`).
+    /// `X86ISD::PACKUS`: the lanes of two vectors narrowed by half with
+    /// unsigned saturation (`packus*`).
     pub const PACKUS: ISD = ISD::Target(699);
-    /// `X86ISD::PMULUDQ`: the unsigned products of the even `i32` lanes, as `v2i64`.
+    /// `X86ISD::PMULUDQ`: the unsigned products of the even `i32` lanes, as
+    /// `v2i64`.
     pub const PMULUDQ: ISD = ISD::Target(710);
     pub const VSHLI: ISD = ISD::Target(933);
     pub const VSRAI: ISD = ISD::Target(937);
@@ -105,6 +117,18 @@ pub mod x86isd {
     /// `(far, far) -> i32`. Expanded by the type legalizer, never selected.
     pub const LLRM_PTRDIFF: ISD = ISD::Target(24583);
     pub const OR: ISD = ISD::Target(697);
+    /// `X86ISD::LADD`, `LSUB`, `LAND`, `LOR`, `LXOR`: the `lock`ed
+    /// read-modify-write of a cell whose old value nothing reads: `chain,
+    /// pointer, value`, giving `i32` flags and the chain.
+    pub const LADD: ISD = ISD::Target(651);
+    pub const LAND: ISD = ISD::Target(652);
+    pub const LOR: ISD = ISD::Target(662);
+    pub const LSUB: ISD = ISD::Target(663);
+    pub const LXOR: ISD = ISD::Target(665);
+    /// `X86ISD::LCMPXCHG_DAG`: `chain, pointer, new value, size, glue`, the
+    /// expected value in the accumulator the glue carries; giving the chain
+    /// and the glue (the flags the compare left).
+    pub const LCMPXCHG_DAG: ISD = ISD::Target(661);
     pub const SETCC: ISD = ISD::Target(739);
     pub const SBB: ISD = ISD::Target(728);
     pub const SUB: ISD = ISD::Target(762);
@@ -120,6 +144,10 @@ pub mod x86isd {
     /// `X86ISD::FCMP`: the flags of an x87 compare (`fucom`, `fnstsw`,
     /// `sahf` on a 486).
     pub const FCMP: ISD = ISD::Target(576);
+    /// `X86ISD::STRICT_FCMP`: (chain, lhs, rhs) to (flags, chain), a quiet compare.
+    pub const STRICT_FCMP: ISD = ISD::Target(753);
+    /// `X86ISD::STRICT_FCMPS`: the signaling compare.
+    pub const STRICT_FCMPS: ISD = ISD::Target(754);
     /// `X86ISD::FSETCC`: `cmpss`/`cmpsd` with an immediate predicate, all
     /// ones or all zeros in the scalar.
     pub const FSETCC: ISD = ISD::Target(622);
@@ -310,11 +338,14 @@ impl CombineHooks for X86Lowering<'_> {
         !self.i16_mul_chains || self.min_size
     }
 
-    /// `X86TargetLowering::decomposeMulByConstant` ([L3636][pin]), a vector: a multiply by `2^n + 1`, `2^n - 1`, `1 - 2^n` or
-    /// `-(2^n + 1)` is a shift and an add or subtract unless the multiply is legal and fast (`pmullw`). A scalar is
-    /// `combineMul`'s (DEVIATE M1). DEVIATE X86V2: a byte lane has no shift here, so `v16i8` keeps `LowerMUL`.
+    /// `X86TargetLowering::decomposeMulByConstant` ([L3636][pin]), a vector: a
+    /// multiply by `2^n + 1`, `2^n - 1`, `1 - 2^n` or `-(2^n + 1)` is a
+    /// shift and an add or subtract unless the multiply is legal and fast
+    /// (`pmullw`). A scalar is `combineMul`'s (DEVIATE M1). DEVIATE X86V2:
+    /// a byte lane has no shift here, so `v16i8` keeps `LowerMUL`.
     ///
-    /// [pin]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L3636
+    /// [pin]:
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L3636
     fn decompose_mul_by_constant(
         &self,
         vt: EVT,
@@ -576,6 +607,8 @@ impl CombineHooks for X86Lowering<'_> {
             || op == ISD::Xor
             || op == ISD::And
             || op == ISD::Sub
+            || op == ISD::VecReduceOr
+            || op == ISD::VecReduceAnd
             || op == x86isd::ADD
             || op == x86isd::SUB
             || op == x86isd::CMOV
@@ -635,6 +668,7 @@ impl CombineHooks for X86Lowering<'_> {
             x86isd::BRCOND => combine_brcond(dag, node),
             x86isd::ADC | x86isd::SBB => combine_adc_sbb(dag, node),
             ISD::UIntToFp => combine_uint_to_fp(dag, node),
+            ISD::VecReduceOr | ISD::VecReduceAnd => combine_reduce_of_compare(dag, node, level),
             _ => None,
         }
     }
@@ -803,7 +837,9 @@ impl Hooks for X86Lowering<'_> {
         node: SDValue,
     ) -> Option<SDValue> {
         match dag.opcode(node) {
+            ISD::SetCC if dag.value_type(node).is_vector() => lower_vector_setcc(dag, node),
             ISD::SetCC => lower_setcc(dag, node, self.min_size, self.status_word_tests),
+            ISD::StrictFSetCC | ISD::StrictFSetCCS => lower_strict_fsetcc(dag, node),
             ISD::Select => lower_select(dag, node, self.cmov, self.min_size, self.status_word_tests),
             ISD::BrCond => lower_brcond(dag, node, self.min_size, self.status_word_tests),
             ISD::UAddO | ISD::USubO | ISD::SAddO | ISD::SSubO | ISD::UMulO | ISD::SMulO => Some(lower_xalu(dag, node)),
@@ -816,6 +852,8 @@ impl Hooks for X86Lowering<'_> {
             ISD::FpToSInt | ISD::FpToUInt => lower_fp_to_int(dag, node, self.sse2),
             ISD::LRint | ISD::LLRint => lower_lrint(dag, node),
             ISD::SIntToFp | ISD::UIntToFp => lower_int_to_fp(dag, node, self.sse2),
+            ISD::StrictSIntToFp if !self.sse2 => lower_strict_sint_to_fp(dag, node),
+            ISD::StrictFpToSInt if !self.sse2 => lower_strict_fp_to_sint(dag, node),
             ISD::ConstantPool => lower_constant_pool(dag, node),
             ISD::JumpTable => lower_jump_table(dag, node),
             ISD::ShlParts | ISD::SraParts | ISD::SrlParts => Some(lower_shift_parts(dag, node)),
@@ -827,6 +865,10 @@ impl Hooks for X86Lowering<'_> {
             ISD::VecReduceAdd | ISD::VecReduceAnd | ISD::VecReduceOr | ISD::VecReduceXor => {
                 lower_shuffle_reduction(dag, node)
             }
+            ISD::AtomicLoadAdd | ISD::AtomicLoadSub | ISD::AtomicLoadAnd | ISD::AtomicLoadOr | ISD::AtomicLoadXor => {
+                lower_atomic_arith(dag, node)
+            }
+            ISD::AtomicCmpSwapWithSuccess => lower_cmp_swap(dag, node),
             ISD::SSubSat => Some(lower_ssubsat(dag, node)),
             ISD::FShl | ISD::FShr => lower_funnel_shift(dag, node),
             ISD::FNeg | ISD::FAbs => lower_fabs_or_fneg(dag, node),
@@ -1282,6 +1324,92 @@ fn emit_flags_for_setcc(
     (flags, cond_code(dag, code))
 }
 
+/// `X86TargetLowering::lowerAtomicArith`. A sum whose old value is read stays
+/// an `ATOMIC_LOAD_ADD` (`lock xadd`) and a difference is a sum of the
+/// negation; one nothing reads is the `lock`ed instruction on the cell
+/// (`lowerAtomicArithWithLOCK`: `lock add`, `sub`, `and`, `or`, `xor`). Another
+/// operation whose old value is read is not here: `shouldExpandAtomicRMWInIR`
+/// makes it a compare-exchange loop. DEVIATE ATOMIC-IDEMPOTENT: the pin's
+/// `emitLockedStackOp` for `or p, 0` is not translated, so it is the `lock or
+/// [p], 0`.
+fn lower_atomic_arith(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let NodeData::Mem(info) = dag.node(node).data else { return None };
+    let op = dag.opcode(node);
+    let (chain, ptr, rhs) = (dag.operand(node, 0), dag.operand(node, 1), dag.operand(node, 2));
+    if dag.has_users(SDValue { node: node.node, res: 0 }) {
+        return match op {
+            ISD::AtomicLoadSub => {
+                let negated = dag.get_negative(rhs, dag.value_type(node));
+                Some(dag.get_atomic_rmw(ISD::AtomicLoadAdd, chain, ptr, negated, info))
+            }
+            ISD::AtomicLoadAdd => Some(node),
+            _ => None,
+        };
+    }
+    let locked = match op {
+        ISD::AtomicLoadAdd => x86isd::LADD,
+        ISD::AtomicLoadSub => x86isd::LSUB,
+        ISD::AtomicLoadAnd => x86isd::LAND,
+        ISD::AtomicLoadOr => x86isd::LOR,
+        _ => x86isd::LXOR,
+    };
+    Some(dag.get_mem_intrinsic_node(locked, &[EVT::I32, EVT::OTHER], &[chain, ptr, rhs], info))
+}
+
+/// `LowerCMP_SWAP`: the expected value into the accumulator, the `lock cmpxchg`
+/// on the cell, the accumulator read back as the old value and `COND_E` of the
+/// flags as the success.
+fn lower_cmp_swap(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    use llrm_codegen::backend::selectiondag::dagisel_adapter::EFLAGS_ID;
+    use llrm_lir::registers::RegId;
+    let NodeData::Mem(info) = dag.node(node).data else { return None };
+    let vt = dag.value_type(node);
+    let (accumulator, size) = match vt {
+        EVT::Simple(MVT::I8) => (RegId::AL, 1),
+        EVT::Simple(MVT::I16) => (RegId::AX, 2),
+        EVT::Simple(MVT::I32) => (RegId::EAX, 4),
+        EVT::Simple(MVT::I64) => (RegId::RAX, 8),
+        _ => return None,
+    };
+    let flag_vt = dag.node(node).values[1];
+    let (chain, ptr, expected, new) =
+        (dag.operand(node, 0), dag.operand(node, 1), dag.operand(node, 2), dag.operand(node, 3));
+    let put = dag.get_copy_to_phys_reg(chain, accumulator, expected, None);
+    let size = dag.get_constant_with(size, EVT::I8, true, false);
+    let swap = dag.get_mem_intrinsic_node(
+        x86isd::LCMPXCHG_DAG,
+        &[EVT::OTHER, EVT::GLUE],
+        &[SDValue { node: put.node, res: 0 }, ptr, new, size, SDValue { node: put.node, res: 1 }],
+        info,
+    );
+    let old = dag.get_copy_from_phys_reg(
+        SDValue { node: swap.node, res: 0 },
+        accumulator,
+        vt,
+        SDValue { node: swap.node, res: 1 },
+    );
+    let eflags = dag.get_copy_from_phys_reg(
+        SDValue { node: old.node, res: 1 },
+        EFLAGS_ID,
+        EVT::I32,
+        SDValue { node: old.node, res: 2 },
+    );
+    let code = cond_code(dag, cond::E);
+    let set = dag.get_node(x86isd::SETCC, EVT::I8, &[code, SDValue { node: eflags.node, res: 0 }]);
+    let success = if flag_vt == EVT::I8 { set } else { dag.get_node(ISD::Truncate, flag_vt, &[set]) };
+    Some(dag.get_node_multi(
+        ISD::MergeValues,
+        &[vt, flag_vt, EVT::OTHER],
+        &[SDValue { node: old.node, res: 0 }, success, SDValue { node: eflags.node, res: 1 }],
+    ))
+}
+
 /// `LowerSETCC`, integers.
 fn lower_setcc(
     dag: &mut SelectionDAG,
@@ -1319,6 +1447,92 @@ fn lower_setcc(
     }
     let (flags, code) = emit_flags_for_setcc(dag, op0, op1, cc, min_size);
     Some(dag.get_node(x86isd::SETCC, EVT::I8, &[code, flags]))
+}
+
+/// `LowerSETCC` of `STRICT_FSETCC(S)`: the compare is a chained
+/// `STRICT_FCMP(S)` whose out chain is the node's, then the same `SETCC` of
+/// its flags as a plain compare. The chain is what keeps the compare, which
+/// may raise an exception, in order with the other constrained operations.
+/// DEVIATE CFP2: the flags are read by `sahf` (the pin's), never by the
+/// status word of DEVIATE X87-STATUS. Exit: that deviation's. Owner w9-tests.
+/// Review 2026-11-27.
+fn lower_strict_fsetcc(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let chain = dag.operand(node, 0);
+    let (mut lhs, mut rhs) = (dag.operand(node, 1), dag.operand(node, 2));
+    let cc = cond_of(dag, dag.operand(node, 3));
+    let code = translate_fp_cc(dag, cc, &mut lhs, &mut rhs)?;
+    let opcode = if dag.opcode(node) == ISD::StrictFSetCCS { x86isd::STRICT_FCMPS } else { x86isd::STRICT_FCMP };
+    let flags = dag.get_node_multi(opcode, &[EVT::I32, EVT::OTHER], &[chain, lhs, rhs]);
+    let code = cond_code(dag, code);
+    let result = dag.get_node(x86isd::SETCC, EVT::I8, &[code, SDValue { node: flags.node, res: 0 }]);
+    Some(dag.get_node_multi(ISD::MergeValues, &[EVT::I8, EVT::OTHER], &[result, SDValue { node: flags.node, res: 1 }]))
+}
+
+/// `LowerSINT_TO_FP` of `STRICT_SINT_TO_FP` on the x87: the integer stored to
+/// a stack slot on the node's chain and `fild`ed from it, whose out chain is
+/// the node's. The `i64` source and the unsigned and SSE forms are not
+/// translated: the legalizer refuses them.
+fn lower_strict_sint_to_fp(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let (chain, src) = (dag.operand(node, 0), dag.operand(node, 1));
+    let (dst, src_vt) = (dag.value_type(node), dag.value_type(src));
+    if !matches!(dst, EVT::Simple(MVT::F32 | MVT::F64 | MVT::F80)) || !matches!(src_vt, EVT::I16 | EVT::I32) {
+        return None;
+    }
+    let size = src_vt.size_in_bits() / 8;
+    let index = dag.create_stack_temporary(size, size);
+    let slot = dag.get_frame_index(dag.config().pointer, index);
+    let info = MemInfo {
+        mem_vt: src_vt,
+        align: size,
+        volatile: false,
+        base: MemBase::Stack(index),
+        ext: None,
+        space: 0,
+        ordering: None,
+    };
+    let stored = dag.get_store(chain, src, slot, info);
+    Some(build_fild(dag, dst, src_vt, stored, slot, info))
+}
+
+/// `LowerFP_TO_INT` of `STRICT_FP_TO_SINT` on the x87: `fist` to a stack slot
+/// on the node's chain, then a load whose out chain is the node's.
+fn lower_strict_fp_to_sint(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let (chain, value) = (dag.operand(node, 0), dag.operand(node, 1));
+    let result_vt = dag.value_type(node);
+    if !matches!(dag.value_type(value), EVT::Simple(MVT::F32 | MVT::F64 | MVT::F80))
+        || !matches!(result_vt, EVT::I16 | EVT::I32)
+    {
+        return None;
+    }
+    let size = result_vt.size_in_bits() / 8;
+    let index = dag.create_stack_temporary(size, size);
+    let slot = dag.get_frame_index(dag.config().pointer, index);
+    let info = MemInfo {
+        mem_vt: result_vt,
+        align: size,
+        volatile: false,
+        base: MemBase::Stack(index),
+        ext: None,
+        space: 0,
+        ordering: None,
+    };
+    let fist = dag.intern(
+        x86isd::FP_TO_INT_IN_MEM,
+        &[EVT::OTHER],
+        &[chain, value, slot],
+        SDNodeFlags::default(),
+        NodeData::Mem(info),
+    );
+    Some(dag.get_load(result_vt, fist, slot, info))
 }
 
 /// `isX86LogicalCmp`: flags a `CMOV` can read directly.
@@ -1742,6 +1956,123 @@ fn combine_integer_setcc(
     Some(dag.get_setcc(dag.value_type(node), source, constant, cond))
 }
 
+/// `LowerVSETCC` for the integer lanes SSE2 compares (8, 16, 32 bits): the
+/// `pcmpeq` or `pcmpgt` that holds the order, and whether its lanes mean the
+/// opposite (`ne`, `ge`, `le`). An unsigned order is the signed one of operands
+/// with the sign bit flipped; `<` swaps the operands.
+fn vector_compare(
+    dag: &mut SelectionDAG,
+    mut lhs: SDValue,
+    mut rhs: SDValue,
+    mut cond: CondCode,
+) -> Option<(SDValue, bool)> {
+    let vt = dag.value_type(lhs);
+    let bits = vt.element().size_in_bits();
+    if !vt.element().is_integer() || vt.size_in_bits() != 128 || !matches!(bits, 8 | 16 | 32) {
+        return None;
+    }
+    if matches!(
+        cond,
+        CondCode::SetUGt | CondCode::SetUGe | CondCode::SetULt | CondCode::SetULe
+    ) {
+        let top = dag.get_constant(1u128 << (bits - 1), vt.element());
+        let sign = dag.get_splat_build_vector(vt, top);
+        lhs = dag.get_node(ISD::Xor, vt, &[lhs, sign]);
+        rhs = dag.get_node(ISD::Xor, vt, &[rhs, sign]);
+        cond = match cond {
+            CondCode::SetUGt => CondCode::SetGt,
+            CondCode::SetUGe => CondCode::SetGe,
+            CondCode::SetULt => CondCode::SetLt,
+            _ => CondCode::SetLe,
+        };
+    }
+    Some(match cond {
+        CondCode::SetEq => (dag.get_node(x86isd::PCMPEQ, vt, &[lhs, rhs]), false),
+        CondCode::SetNe => (dag.get_node(x86isd::PCMPEQ, vt, &[lhs, rhs]), true),
+        CondCode::SetGt => (dag.get_node(x86isd::PCMPGT, vt, &[lhs, rhs]), false),
+        CondCode::SetLt => (dag.get_node(x86isd::PCMPGT, vt, &[rhs, lhs]), false),
+        CondCode::SetLe => (dag.get_node(x86isd::PCMPGT, vt, &[lhs, rhs]), true),
+        CondCode::SetGe => (dag.get_node(x86isd::PCMPGT, vt, &[rhs, lhs]), true),
+        _ => return None,
+    })
+}
+
+/// `LowerVSETCC`: a vector compare of lanes SSE2 compares, its lanes all ones
+/// or zero.
+fn lower_vector_setcc(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let (lhs, rhs) = (dag.operand(node, 0), dag.operand(node, 1));
+    let vt = dag.value_type(node);
+    if vt != dag.value_type(lhs) {
+        return None;
+    }
+    let (compare, flipped) = vector_compare(dag, lhs, rhs, cond_of(dag, dag.operand(node, 2)))?;
+    if !flipped {
+        return Some(compare);
+    }
+    let ones = dag.get_all_ones_constant(vt);
+    Some(dag.get_node(ISD::Xor, vt, &[compare, ones]))
+}
+
+/// `combineBitcastvxi1` for the reduction of a vector compare: `reduce.or`
+/// (`reduce.and`) of the `<N x i1>` that `pcmpeqb` makes is whether `pmovmskb`
+/// of the compare is not zero (is all ones), one `test` and branch where the
+/// shuffle ladder is five instructions and a `movd`. A compare SSE2 has no
+/// instruction for is the one it has, its result inverted (`LowerVSETCC`: `ne`,
+/// `ge`, `le`) or its operands swapped and, unsigned, their sign bits flipped.
+/// The lanes of 8 and 32 bits are gathered as they are, those of 16 bits are
+/// packed to bytes first.
+fn combine_reduce_of_compare(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+    level: CombineLevel,
+) -> Option<SDValue> {
+    let mut mask = dag.operand(node, 0);
+    let mask_vt = dag.value_type(mask);
+    if level != CombineLevel::BeforeLegalizeTypes || !mask_vt.is_vector() || mask_vt.element() != EVT::I1 {
+        return None;
+    }
+    // `xor <N x i1> %c, true` is the compare's inverse.
+    let mut inverted = false;
+    if dag.opcode(mask) == ISD::Xor && dag.const_or_splat(dag.operand(mask, 1)) == Some(1) {
+        inverted = true;
+        mask = dag.operand(mask, 0);
+    }
+    if dag.opcode(mask) != ISD::SetCC {
+        return None;
+    }
+    let (lhs, rhs) = (dag.operand(mask, 0), dag.operand(mask, 1));
+    let source_vt = dag.value_type(lhs);
+    let bits = source_vt.element().size_in_bits();
+    let (compare, flipped) = vector_compare(dag, lhs, rhs, cond_of(dag, dag.operand(mask, 2)))?;
+    let (gathered, lanes) = if bits == 16 {
+        (dag.get_node(x86isd::PACKSS, EVT::Simple(MVT::V16I8), &[compare, compare]), 8)
+    } else {
+        (compare, mask_vt.lanes())
+    };
+    let mut movmsk = dag.get_node(x86isd::MOVMSK, EVT::I32, &[gathered]);
+    let full = (1u128 << lanes) - 1;
+    if bits == 16 {
+        let low = dag.get_constant(full, EVT::I32);
+        movmsk = dag.get_node(ISD::And, EVT::I32, &[movmsk, low]);
+    }
+    // Lanes of the reduced mask: `compare` as it is, or its inverse.
+    let inverse = inverted != flipped;
+    let any = dag.opcode(node) == ISD::VecReduceOr;
+    // any(c) is `movmsk != 0`, all(c) is `movmsk == full`; of the inverse,
+    // any(!c) is `movmsk != full` and all(!c) is `movmsk == 0`.
+    let (expected, cond) = match (any, inverse) {
+        (true, false) => (0, CondCode::SetNe),
+        (true, true) => (full, CondCode::SetNe),
+        (false, false) => (full, CondCode::SetEq),
+        (false, true) => (0, CondCode::SetEq),
+    };
+    let expected = dag.get_constant(expected, EVT::I32);
+    Some(dag.get_setcc(dag.value_type(node), movmsk, expected, cond))
+}
+
 /// `combineX86SetCC`: a `setcc` of a boolean test reads the inner flags.
 fn combine_setcc(
     dag: &mut SelectionDAG,
@@ -1755,7 +2086,7 @@ fn combine_setcc(
 
 /// `combineCarryThroughADD`: flags of `(add carry, -1)`, where the carry is a
 /// `setb` (through extends, truncates and `and 1`), are the flags the `setb`
-/// read. DEVIATE SD242: the `COND_A` form (a swapped `sub`) is not
+/// read. DEVIATE SD259: the `COND_A` form (a swapped `sub`) is not
 /// translated. Reason: nothing produces it at 32 bits yet. Exit: with
 /// `combineSBB`'s remaining folds. Owner: sdag-b. Review 2026-12-10.
 fn carry_through_add(
@@ -3527,17 +3858,21 @@ fn lower_dynamic_stackalloc(
     Some(dag.get_node_multi(ISD::MergeValues, &[vt, EVT::OTHER], &[result, SDValue { node: end.node, res: 0 }]))
 }
 
-/// `LowerBUILD_VECTOR`, a splat of one scalar (`v4i32`, `v2i64`): `movd`/`movq` into the low lane, then
-/// `pshufd` (`punpcklqdq` for quadwords) copies it ([L12031][pin], `X86ISD::VBROADCAST` with AVX). Any other build is left to the expansion.
+/// `LowerBUILD_VECTOR`, a splat of one scalar (`v4i32`, `v2i64`): `movd`/`movq`
+/// into the low lane, then `pshufd` (`punpcklqdq` for quadwords) copies it
+/// ([L12031][pin], `X86ISD::VBROADCAST` with AVX). Any other build is left to
+/// the expansion.
 ///
-/// [pin]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L12031
+/// [pin]:
+/// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L12031
 fn lower_build_vector_splat(
     dag: &mut SelectionDAG,
     node: SDValue,
 ) -> Option<SDValue> {
     let vt = dag.value_type(node);
     let lanes = dag.node(node).ops.clone();
-    // `ISD::isBuildVectorAllZeros`: legal as it is; isel selects `V_SET0` (`pxor`), no pool entry.
+    // `ISD::isBuildVectorAllZeros`: legal as it is; isel selects `V_SET0`
+    // (`pxor`), no pool entry.
     if lanes.iter().all(|lane| dag.is_undef(*lane) || dag.constant(*lane) == Some(0)) {
         return Some(node);
     }
@@ -3608,7 +3943,8 @@ fn lower_shuffle_reduction(
         current = dag.get_node(base, vt, &[current, moved]);
         half_bits /= 2;
     }
-    // Lane 0 of a narrow-lane vector is the low bits of the `movd` of lane 0 of the `v4i32`.
+    // Lane 0 of a narrow-lane vector is the low bits of the `movd` of lane 0 of
+    // the `v4i32`.
     let (whole, lane_vt) = if element.size_in_bits() < 32 { (four, EVT::I32) } else { (vt, element) };
     let current = if whole == vt { current } else { dag.get_node(ISD::BitCast, whole, &[current]) };
     let zero = dag.get_constant(0, EVT::I64);
@@ -3616,12 +3952,14 @@ fn lower_shuffle_reduction(
     Some(dag.get_any_ext_or_trunc(lane, dag.value_type(node)))
 }
 
-/// `LowerEXTRACT_VECTOR_ELT`, a constant lane of a 128-bit integer vector without SSE4.1: the dword
-/// that holds it is shuffled to lane 0 (`pshufd`) and moved out (`movd`/`movq`), then shifted and
-/// narrowed for a byte or a word. A variable lane is the pin's too: through memory.
+/// `LowerEXTRACT_VECTOR_ELT`, a constant lane of a 128-bit integer vector
+/// without SSE4.1: the dword that holds it is shuffled to lane 0 (`pshufd`) and
+/// moved out (`movd`/`movq`), then shifted and narrowed for a byte or a word. A
+/// variable lane is the pin's too: through memory.
 ///
-/// DEVIATE X86V6: the pin reads a word with `pextrw` and a byte as a word's half. Reason: no
-/// `X86ISD::PEXTRW` node here yet. Exit: add the node and its pattern; owner x87-cordic-2, review 2026-12-10.
+/// DEVIATE X86V6: the pin reads a word with `pextrw` and a byte as a word's
+/// half. Reason: no `X86ISD::PEXTRW` node here yet. Exit: add the node and its
+/// pattern; owner x87-cordic-2, review 2026-12-10.
 fn lower_extract_vector_elt(
     dag: &mut SelectionDAG,
     node: SDValue,
@@ -3686,8 +4024,8 @@ fn lower_insert_vector_elt(
     Some(scalar_in_lane0(dag, vt, lane_vt, element, zero_rest))
 }
 
-/// `LowerSCALAR_TO_VECTOR` for byte and word lanes: the scalar any-extended to an `i32`, moved to lane 0 of a
-/// `v4i32` (`movd`) and bitcast.
+/// `LowerSCALAR_TO_VECTOR` for byte and word lanes: the scalar any-extended to
+/// an `i32`, moved to lane 0 of a `v4i32` (`movd`) and bitcast.
 fn lower_scalar_to_vector(
     dag: &mut SelectionDAG,
     node: SDValue,
@@ -3756,12 +4094,14 @@ fn reinterpreted(
     if dag.value_type(value) == vt { value } else { dag.get_node(ISD::BitCast, vt, &[value]) }
 }
 
-/// `LowerEXTEND_VECTOR_INREG` ([pin]) for a 128-bit integer source: each step interleaves the lanes with zeros
-/// (`punpckl*`, `punpckh*`), or for a sign extension with themselves and then shifts arithmetically right by the lane
-/// width (a 32-bit lane, with no `psraq`, interleaves with its own sign, `psrad 31`). The halves, low first, are
-/// the parts of the result.
+/// `LowerEXTEND_VECTOR_INREG` ([pin]) for a 128-bit integer source: each step
+/// interleaves the lanes with zeros (`punpckl*`, `punpckh*`), or for a sign
+/// extension with themselves and then shifts arithmetically right by the lane
+/// width (a 32-bit lane, with no `psraq`, interleaves with its own sign, `psrad
+/// 31`). The halves, low first, are the parts of the result.
 ///
-/// [pin]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L24800
+/// [pin]:
+/// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L24800
 fn lower_vector_extend(
     dag: &mut SelectionDAG,
     node: SDValue,
@@ -3783,7 +4123,8 @@ fn lower_vector_extend(
         parts = parts
             .into_iter()
             .flat_map(|part| {
-                // A sign extension pairs a lane with its sign: itself for lanes that `psra` reaches (the shift then
+                // A sign extension pairs a lane with its sign: itself for lanes
+                // that `psra` reaches (the shift then
                 // leaves the sign), the `psrad 31` mask for 32 bits.
                 let second = match (signed, lane) {
                     (false, _) => zeros,
@@ -3813,14 +4154,19 @@ fn lower_vector_extend(
     Some(if parts.len() == 1 { parts[0] } else { dag.get_node(ISD::ConcatVectors, vt, &parts) })
 }
 
-/// `LowerTRUNCATE` / `truncateVectorWithPACK` ([pin]) of a vector of whole 128-bit parts to one 128-bit result:
+/// `LowerTRUNCATE` / `truncateVectorWithPACK` ([pin]) of a vector of whole
+/// 128-bit parts to one 128-bit result:
 ///
-/// - to bytes: each lane masked to its low byte, then `packuswb` of the pairs (the lanes viewed as words) until one
-///   register is left; the mask makes the unsigned saturation exact for any source lane;
-/// - 32 to 16 bits: `pslld 16` and `psrad 16` (a sign-extended word), then `packssdw`;
-/// - 64 to 32 bits: `pshufd` of the even doublewords of each part, then `punpcklqdq`.
+/// - to bytes: each lane masked to its low byte, then `packuswb` of the pairs
+///   (the lanes viewed as words) until one register is left; the mask makes the
+///   unsigned saturation exact for any source lane;
+/// - 32 to 16 bits: `pslld 16` and `psrad 16` (a sign-extended word), then
+///   `packssdw`;
+/// - 64 to 32 bits: `pshufd` of the even doublewords of each part, then
+///   `punpcklqdq`.
 ///
-/// [pin]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L21400
+/// [pin]:
+/// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L21400
 fn lower_vector_truncate(
     dag: &mut SelectionDAG,
     node: SDValue,
@@ -3829,7 +4175,12 @@ fn lower_vector_truncate(
     let svt = dag.value_type(source);
     let (from, to) = (svt.element().size_in_bits(), vt.element().size_in_bits());
     let parts = svt.size_in_bits() / 128;
-    if vt != v128(to) || svt.size_in_bits() % 128 != 0 || parts < 2 || from <= to || !matches!((from, to), (16 | 32 | 64, 8) | (32, 16) | (64, 32)) {
+    if vt != v128(to)
+        || svt.size_in_bits() % 128 != 0
+        || parts < 2
+        || from <= to
+        || !matches!((from, to), (16 | 32 | 64, 8) | (32, 16) | (64, 32))
+    {
         return None;
     }
     let per_part = 128 / from;
@@ -3877,18 +4228,23 @@ fn lower_vector_truncate(
                 dag.get_node(x86isd::PSHUFD, v128(32), &[doublewords, even])
             })
             .collect();
-        regs = regs.chunks(2).map(|pair| {
-            let (a, b) = (reinterpreted(dag, v128(64), pair[0]), reinterpreted(dag, v128(64), pair[1]));
-            dag.get_node(x86isd::UNPCKL, v128(64), &[a, b])
-        }).collect();
+        regs = regs
+            .chunks(2)
+            .map(|pair| {
+                let (a, b) = (reinterpreted(dag, v128(64), pair[0]), reinterpreted(dag, v128(64), pair[1]));
+                dag.get_node(x86isd::UNPCKL, v128(64), &[a, b])
+            })
+            .collect();
     }
     (regs.len() == 1).then(|| reinterpreted(dag, vt, regs[0]))
 }
 
-/// `LowerMUL` for `v4i32` without `pmulld` ([L30010][pin]): `pmuludq` of the even lanes and of the odd lanes (moved
-/// down by `pshufd`), then the two products' low halves interleaved by `pshufd` and `punpckldq`.
+/// `LowerMUL` for `v4i32` without `pmulld` ([L30010][pin]): `pmuludq` of the
+/// even lanes and of the odd lanes (moved down by `pshufd`), then the two
+/// products' low halves interleaved by `pshufd` and `punpckldq`.
 ///
-/// [pin]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L30010
+/// [pin]:
+/// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L30010
 fn lower_mul_v4i32(
     dag: &mut SelectionDAG,
     node: SDValue,
@@ -3907,7 +4263,8 @@ fn lower_mul_v4i32(
         dag.get_node(ISD::BitCast, four, &[wide])
     };
     let (evens, odds) = (product(dag, a, b), product(dag, a_odd, b_odd));
-    // The low half of each 64-bit product: {0, 2, 2, 3}, then the evens' and the odds' first two lanes interleaved.
+    // The low half of each 64-bit product: {0, 2, 2, 3}, then the evens' and
+    // the odds' first two lanes interleaved.
     let (evens, odds) = (shuffle(dag, evens, 0xE8), shuffle(dag, odds, 0xE8));
     dag.get_node(x86isd::UNPCKL, four, &[evens, odds])
 }
@@ -4003,7 +4360,8 @@ fn lower_vector_shift(
         ISD::Srl => x86isd::VSRLI,
         _ => x86isd::VSRAI,
     };
-    // The immediate is one byte: the instruction clamps what is not below the lane width.
+    // The immediate is one byte: the instruction clamps what is not below the
+    // lane width.
     let by = dag.get_constant_with(first.min(bits), EVT::I8, true, false);
     Some(dag.get_node(opcode, vt, &[dag.operand(node, 0), by]))
 }

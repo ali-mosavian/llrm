@@ -153,9 +153,38 @@ udivmod8:
   bne @next
   rts
 
-; rs1 / rs2: the quotient in rc2:rc3, the remainder in rc6:rc7. Uses A and X, and Y and the bit loop for a divisor
-; of 256 or more.
+; rs1 / rs2: the quotient in rc2:rc3, the remainder in rc6:rc7. Uses A and X; rc4:rc5 is kept.
+; A divisor of 256 or more makes a quotient under 256, and most are a few bits (Euclid's steps, a ratio near 1):
+; the divisor shifts up to the dividend, then one restoring step a place, so the clocks follow the quotient's
+; width and not 16 (compiler-rt's `__udivmodhi4`). A byte divisor under 32 times the dividend's high byte (so a
+; zero divisor too) has a wide quotient: it takes the walks below, the bit loop for 256 or more and the
+; short-remainder loop for a byte.
 udivmod16:
+  lda rc5
+  bne @shift
+  lda rc3
+  cmp #32
+  bcs @walk
+  asl a
+  asl a
+  asl a
+  cmp rc4
+  bcs @walk
+@shift:
+  ldx #1                        ; X = the steps to take: the places the divisor shifts, and one more
+@align:
+  lda rc4
+  cmp rc2
+  lda rc5
+  sbc rc3
+  bcs @steps                    ; the divisor is not under the dividend
+  lda rc5
+  bmi @steps                    ; its top bit is set: no further shift fits 16 bits
+  asl rc4
+  rol rc5
+  inx
+  bne @align
+@walk:
   lda rc5
   bne __udivhi3c
   ; a divisor under 256: the remainder is a byte, in A, with the carry of the shift as its ninth bit
@@ -176,6 +205,34 @@ udivmod16:
   sta rc6
   lda #0
   sta rc7
+  rts
+@steps:                         ; the dividend is the remainder; the quotient, under 256, builds in rc2
+  lda rc2
+  sta rc6
+  lda rc3
+  sta rc7
+  lda #0
+  sta rc2
+  sta rc3
+  beq @first
+@next:
+  lsr rc5
+  ror rc4
+@first:
+  asl rc2
+  lda rc6
+  cmp rc4
+  lda rc7
+  sbc rc5
+  bcc @keep
+  sta rc7
+  lda rc6
+  sbc rc4
+  sta rc6
+  inc rc2
+@keep:
+  dex
+  bne @next
   rts
 ; the bit loop alone, what the compact entry points run: the quotient in rc2:rc3 and A:X, the remainder in
 ; rc6:rc7. Uses A, X, Y. The remainder before step k is under 2^(k-1), so the shifted one never carries out of
@@ -341,6 +398,14 @@ abs16_pair:
 .export __divhi3
 __divhi3:                       ; rs1 / rs2 -> A:X
   lda rc3
+  ora rc5
+  bmi @signed
+  jsr udivmod16                 ; two non-negative words: no signs to take and give back
+  lda rc2
+  ldx rc3
+  rts
+@signed:
+  lda rc3
   eor rc5
   php
   jsr abs16_pair
@@ -356,6 +421,14 @@ __divhi3:                       ; rs1 / rs2 -> A:X
 .export __modhi3
 __modhi3:                       ; rs1 % rs2 -> A:X
   lda rc3
+  ora rc5
+  bmi @signed
+  jsr udivmod16                 ; two non-negative words: no signs to take and give back
+  lda rc6
+  ldx rc7
+  rts
+@signed:
+  lda rc3
   php
   jsr abs16_pair
   jsr udivmod16
@@ -370,6 +443,11 @@ __modhi3:                       ; rs1 % rs2 -> A:X
 
 .export __divmodhi4
 __divmodhi4:                    ; rs1 / rs2 -> A:X, the remainder (the dividend's sign) in rc6:rc7
+  lda rc3
+  ora rc5
+  bmi @signed
+  jmp __udivhi3
+@signed:
   lda rc3
   pha                           ; the remainder's sign
   eor rc5
@@ -484,6 +562,34 @@ __ashlhi3:                      ; rs1 << rc4 -> A:X
   ldx rc3
   rts
 
+; 1 << n for a count in A (0 to 15): the bit is made in a byte, which half it is in is the count's bit 3. A:X in, none of
+; the rc cells touched.
+.export __shl1hi3
+__shl1hi3:                      ; A = n -> A:X = 1 << n
+  ldy #0
+  cmp #8
+  bcc @low
+  sbc #8                        ; carry is set: the bit is in the high byte
+  iny
+@low:
+  tax
+  lda #1
+  cpx #0
+  beq @made
+@next:
+  asl a
+  dex
+  bne @next
+@made:
+  cpy #0
+  bne @high
+  ldx #0
+  rts
+@high:
+  tax
+  lda #0
+  rts
+
 .export __lshrhi3
 __lshrhi3:                      ; rs1 >> rc4 (logical) -> A:X
   ldx rc4
@@ -525,6 +631,7 @@ __ashrhi3:                      ; rs1 >> rc4 (arithmetic) -> A:X
 ; body, `jmp out32`) that copy the first operand to __sa, work there and in rc4..rc7 (`__sb` in the
 ; comments), and copy __sa back; the bodies are the s32_ labels.
 
+; zero-page equates after the registers where the platform row has `scratch_zero_page` (tools/6502/mkrt.py), BSS otherwise
 .segment "BSS"
 __sa: .res 4
 __ra: .res 2
@@ -2007,4 +2114,47 @@ umod32s_fast:                        ; __sa % __sb -> __sa (signed, the sign of 
   beq @done
   jmp neg_sa
 @done:
+  rts
+
+; ---- save helpers that keep A and X (last in the file: no routine above moves) ----------------------
+
+; __csave_ax and __crest_ax: the same for a function that has a value in A and X (a word argument at
+; entry, a word result at return), the way RISC-V's save-restore libcalls leave the argument registers
+; alone. Y = n and is changed; A and X come back as they went in.
+.export __csave_ax
+__csave_ax:
+  sta __sa
+  stx __sa+1
+  pla
+  sta __ra
+  pla
+  sta __ra+1
+  ldx #1
+@next:
+  lda rc7,x                     ; [rc8..rc15]
+  pha
+  inx
+  dey
+  bne @next
+  lda __ra+1
+  pha
+  lda __ra
+  pha
+  lda __sa
+  ldx __sa+1
+  rts
+
+.export __crest_ax
+__crest_ax:
+  sta __sa
+  stx __sa+1
+  tya
+  tax
+@next:
+  pla
+  sta rc7,x                     ; [rc8..rc15]
+  dex
+  bne @next
+  lda __sa
+  ldx __sa+1
   rts

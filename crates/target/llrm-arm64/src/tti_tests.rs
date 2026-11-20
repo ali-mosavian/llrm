@@ -454,6 +454,14 @@ fn lftr_counts_any_constant_stride() {
     assert!(AArch64::of_cpu("generic").unwrap().lftr_any_stride());
 }
 
+/// DEVIATE LSPLIT: `loopsplit` runs on arm64 only; the default is off.
+#[test]
+fn arm64_splits_loops_and_the_default_does_not() {
+    use llrm_mir::tti::Tti;
+    assert!(AArch64::of_cpu("generic").unwrap().loop_split());
+    assert!(!llrm_mir::tti::Basic.loop_split());
+}
+
 /// AArch64 has no `isSExtCheaperThanZExt` override at the pin (the base class
 /// says no, TargetLowering.h#L3329); the hook said yes for 32 -> 64 and cited a
 /// pin line that does not exist.
@@ -924,4 +932,25 @@ fn a_vector_min_or_max_costs_one_a_register_and_two_for_64_bit_lanes() {
     assert_eq!((cost(true, i(64, 2)), cost(true, i(64, 4))), (Some(2), Some(4)));
     assert_eq!((cost(true, i(8, 2)), cost(false, i(16, 2)), cost(true, i(8, 4))), (Some(5), Some(3), Some(5)));
     assert_eq!(tti.vector_min_max_cost(true, true, i(32, 4), CostKind::Latency), None);
+}
+
+/// `getShuffleCost` of a single-source shuffle (L6978), the prices the pin's
+/// `slp-vectorizer` printed (`ReuseShuffleCost`): `<0,0,1,1>` of 4 floats is a
+/// `zip1` (1), of 4 doubles a `dup` a register (2), no mask the table's
+/// worst case (3); identity is free. The port priced only `SK_Broadcast`, so
+/// a reused lane made the tree "not priced" and it stayed scalar.
+#[test]
+fn a_single_source_shuffle_costs_what_the_pin_prices() {
+    let tti = AArch64::of_cpu("generic").unwrap();
+    let k = CostKind::RecipThroughput;
+    let single = |lane, count, mask: &[i32]| {
+        tti.shuffle_cost(ShuffleKind::PermuteSingleSrc, VectorTy { lane, count }, mask, k).map(|c| c.value)
+    };
+    assert_eq!(single(Ty::Float, 4, &[0, 0, 1, 1]), Some(1));
+    assert_eq!(single(Ty::Double, 4, &[0, 0, 1, 1]), Some(2));
+    assert_eq!(single(Ty::Float, 4, &[]), Some(3));
+    assert_eq!(single(Ty::Float, 4, &[0, 1, 2, 3]), Some(0));
+    assert_eq!(single(Ty::Float, 4, &[0, 0, 0, 0]), Some(1));
+    // The 4-lane perfect-shuffle table is not translated: unpriced.
+    assert_eq!(single(Ty::Float, 4, &[2, 0, 3, 1]), None);
 }

@@ -1,10 +1,11 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/sharedstores.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/sharedstores.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/sharedstores.rs sha256:daa52e2eab231f55f150e38b178ae8244c109ad716bb700fa8226493c2f21ab0 -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/sharedstores.rs sha256:afa5995dbe0efeacab00ae80c66f78c84ee63d7941eba3caed4f847bbd221eca -->
 
 # sharedstores
 
-At -Os, a run of stores of one literal becomes the literal loaded once into
-a dead register, then register stores.
+At -Os (and at -O1 on a target that allows it), a run of stores of one
+literal becomes the literal loaded once into a dead register, then register
+stores.
 
 ## How it works
 `mov dword ptr [bp-8],0` is 8 bytes, `mov [bp-8],eax` is 4 and the one `xor

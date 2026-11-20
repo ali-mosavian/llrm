@@ -138,6 +138,26 @@ pub enum ISD {
     FNeg,
     FAbs,
     FSqrt,
+    /// The constrained forms (`STRICT_*`): operands (chain, value...) and
+    /// results (value, chain) -- `STRICT_FSETCC(S)` (chain, lhs, rhs, cc).
+    /// The chain keeps them in program order and ahead of anything that
+    /// reads or writes the floating-point environment.
+    StrictFAdd,
+    StrictFSub,
+    StrictFMul,
+    StrictFDiv,
+    StrictFRem,
+    StrictFMA,
+    StrictFSqrt,
+    StrictFRint,
+    StrictFpExtend,
+    StrictFpRound,
+    StrictFpToSInt,
+    StrictFpToUInt,
+    StrictSIntToFp,
+    StrictUIntToFp,
+    StrictFSetCC,
+    StrictFSetCCS,
     /// `PSEUDO_FMIN`: `x olt y ? x : y`, with the select's NaN and signed-zero
     /// behaviour (x86 `minss`).
     PseudoFMin,
@@ -167,6 +187,8 @@ pub enum ISD {
     LRint,
     LLRint,
     FCopySign,
+    /// `IS_FPCLASS`: whether a float is of the classes a constant mask names.
+    IsFpClass,
 
     SetCC,
     Select,
@@ -404,6 +426,22 @@ impl ISD {
             FNeg => "fneg",
             FAbs => "fabs",
             FSqrt => "fsqrt",
+            StrictFAdd => "strict_fadd",
+            StrictFSub => "strict_fsub",
+            StrictFMul => "strict_fmul",
+            StrictFDiv => "strict_fdiv",
+            StrictFRem => "strict_frem",
+            StrictFMA => "strict_fma",
+            StrictFSqrt => "strict_fsqrt",
+            StrictFRint => "strict_frint",
+            StrictFpExtend => "strict_fp_extend",
+            StrictFpRound => "strict_fp_round",
+            StrictFpToSInt => "strict_fp_to_sint",
+            StrictFpToUInt => "strict_fp_to_uint",
+            StrictSIntToFp => "strict_sint_to_fp",
+            StrictUIntToFp => "strict_uint_to_fp",
+            StrictFSetCC => "strict_fsetcc",
+            StrictFSetCCS => "strict_fsetccs",
             PseudoFMin => "pseudo_fmin",
             PseudoFMax => "pseudo_fmax",
             Freeze => "freeze",
@@ -429,6 +467,7 @@ impl ISD {
             LRint => "lrint",
             LLRint => "llrint",
             FCopySign => "fcopysign",
+            IsFpClass => "is_fpclass",
             SetCC => "setcc",
             Select => "select",
             VSelect => "vselect",
@@ -481,6 +520,60 @@ impl ISD {
             Machine(code) => return format!("<<Unknown Machine Node #{code}>>"),
         };
         name.to_string()
+    }
+
+    /// `ConstrainedOps.def`'s `DAGN` column read backwards: the non-strict
+    /// opcode a `STRICT_*` node is the constrained form of, `None` for any
+    /// other node. `STRICT_FSETCC(S)` have no single non-strict opcode but
+    /// `SetCC`.
+    pub fn non_strict(self) -> Option<ISD> {
+        use ISD::*;
+        Some(match self {
+            StrictFAdd => FAdd,
+            StrictFSub => FSub,
+            StrictFMul => FMul,
+            StrictFDiv => FDiv,
+            StrictFRem => FRem,
+            StrictFMA => FMA,
+            StrictFSqrt => FSqrt,
+            StrictFRint => FRint,
+            StrictFpExtend => FpExtend,
+            StrictFpRound => FpRound,
+            StrictFpToSInt => FpToSInt,
+            StrictFpToUInt => FpToUInt,
+            StrictSIntToFp => SIntToFp,
+            StrictUIntToFp => UIntToFp,
+            StrictFSetCC | StrictFSetCCS => SetCC,
+            _ => return None,
+        })
+    }
+
+    /// The `STRICT_*` form of a floating-point opcode; the inverse of
+    /// [`ISD::non_strict`] over the arithmetic and conversion nodes.
+    pub fn strict(self) -> Option<ISD> {
+        use ISD::*;
+        Some(match self {
+            FAdd => StrictFAdd,
+            FSub => StrictFSub,
+            FMul => StrictFMul,
+            FDiv => StrictFDiv,
+            FRem => StrictFRem,
+            FMA => StrictFMA,
+            FSqrt => StrictFSqrt,
+            FRint => StrictFRint,
+            FpExtend => StrictFpExtend,
+            FpRound => StrictFpRound,
+            FpToSInt => StrictFpToSInt,
+            FpToUInt => StrictFpToUInt,
+            SIntToFp => StrictSIntToFp,
+            UIntToFp => StrictUIntToFp,
+            _ => return None,
+        })
+    }
+
+    /// `SDNode::isStrictFPOpcode`.
+    pub fn is_strict_fp(self) -> bool {
+        self.non_strict().is_some()
     }
 
     /// `TargetLowering::isBinOp` for the generic opcodes: the commutative
@@ -737,5 +830,27 @@ mod tests {
         assert_eq!(ISD::AtomicCmpSwapWithSuccess.name(), "atomic_cmp_swap_with_success");
         assert_eq!(ISD::AtomicStore.name(), "atomic_store");
         assert_eq!(ISD::AtomicFence.name(), "atomic_fence");
+    }
+
+    /// A constrained FP node maps back to the plain node it constrains and
+    /// forward again; a plain integer node is not strict. A selector that
+    /// treated `STRICT_FADD` as `FADD` would drop the chain and let the
+    /// operation move across an `fldcw`.
+    #[test]
+    fn strict_nodes_map_to_their_plain_forms_and_back() {
+        for (plain, strict) in [
+            (ISD::FAdd, ISD::StrictFAdd),
+            (ISD::FSqrt, ISD::StrictFSqrt),
+            (ISD::FpToSInt, ISD::StrictFpToSInt),
+            (ISD::UIntToFp, ISD::StrictUIntToFp),
+            (ISD::FpRound, ISD::StrictFpRound),
+        ] {
+            assert_eq!(strict.non_strict(), Some(plain));
+            assert_eq!(plain.strict(), Some(strict));
+            assert!(strict.is_strict_fp() && !plain.is_strict_fp());
+        }
+        assert_eq!(ISD::StrictFSetCCS.non_strict(), Some(ISD::SetCC));
+        assert!(!ISD::Add.is_strict_fp());
+        assert_eq!(ISD::StrictFMA.name(), "strict_fma");
     }
 }

@@ -13,6 +13,7 @@ use llrm_support::hash::HashMap;
 mod aggregates;
 mod asmcall;
 mod codecall;
+mod strictfp;
 mod mathops;
 mod memops;
 mod mergedcond;
@@ -84,6 +85,8 @@ pub struct BuilderTarget {
     pub min_jump_table_entries: usize,
     /// `getMinimumJumpTableDensity`, where the target states one.
     pub min_jump_table_density: Option<u64>,
+    /// `SwitchTarget::size_growth_ratio`.
+    pub jump_table_size_growth_ratio: Option<u64>,
     /// Name prefix of the blocks the target added to the IR before selection
     /// (phi edges): the pin has none at this point, so a switch's layout
     /// successor is the next block without it.
@@ -106,6 +109,10 @@ pub struct BuilderTarget {
     /// is carried across blocks in several of them
     /// (`getVectorTypeBreakdown`).
     pub legal_vectors: Vec<MVT>,
+    /// A vector type with no register class and the legal one a register
+    /// carries it as (`getVectorTypeBreakdown`: `TypeWidenVector` and
+    /// `TypePromoteInteger` come before the halving).
+    pub vector_registers: Vec<(MVT, MVT)>,
     /// The narrowest integer an argument register carries: a narrower one is
     /// promoted to it (`CCPromoteToType`).
     pub min_argument_bits: u32,
@@ -429,6 +436,15 @@ impl BuilderTarget {
         self
     }
 
+    /// This target with GCC's size growth ratio for jump tables.
+    pub fn with_jump_table_size_growth_ratio(
+        mut self,
+        percent: Option<u64>,
+    ) -> BuilderTarget {
+        self.jump_table_size_growth_ratio = percent;
+        self
+    }
+
     /// This target with `getMinimumJumpTableDensity` stated at every level.
     pub fn with_min_jump_table_density(
         mut self,
@@ -530,6 +546,7 @@ impl BuilderTarget {
             shift_amount_of: None,
             min_jump_table_entries: 4,
             min_jump_table_density: None,
+            jump_table_size_growth_ratio: None,
             preselection_blocks: None,
             refuse_unknown_intrinsics: false,
             variable_shift_legal: true,
@@ -539,6 +556,7 @@ impl BuilderTarget {
                 .take_while(|width| *width <= bits.max(32))
                 .collect(),
             legal_vectors: Vec::new(),
+            vector_registers: Vec::new(),
             min_argument_bits: 32,
             soft_float: false,
             libcalls: None,
@@ -803,6 +821,8 @@ impl<'a> Builder<'a> {
             node_map: IdMap::new(),
             pending_loads: Vec::new(),
             pending_exports: Vec::new(),
+            pending_constrained_fp: Vec::new(),
+            pending_constrained_fp_strict: Vec::new(),
             constants_out: HashMap::default(),
             phi_updates: Vec::new(),
             tail_calls: Vec::new(),
@@ -817,6 +837,7 @@ impl<'a> Builder<'a> {
             call_attrs_move_arguments: false,
             call_sret: Vec::new(),
             call_pointers: Vec::new(),
+            call_convention: 0,
             call_result_assert: None,
             call_result_range_bits: None,
             fixed_args: 0,
@@ -848,6 +869,11 @@ struct Builder<'a> {
     node_map: IdMap<ValueId, SDValue>,
     pending_loads: Vec<SDValue>,
     pending_exports: Vec<SDValue>,
+    /// `PendingConstrainedFP`: the out chains of `fpexcept.ignore` and
+    /// `maytrap` constrained operations, not yet joined to the root.
+    pending_constrained_fp: Vec<SDValue>,
+    /// `PendingConstrainedFPStrict`: the same for `fpexcept.strict`.
+    pending_constrained_fp_strict: Vec<SDValue>,
     constants_out: HashMap<ConstantId, u32>,
     phi_updates: Vec<(ValueId, u32)>,
     tail_calls: Vec<InstId>,
@@ -885,6 +911,8 @@ struct Builder<'a> {
     /// The arguments of the call being lowered that are pointers
     /// (`ArgFlags.isPointer()`); none listed means none are.
     call_pointers: Vec<bool>,
+    /// The LLVM calling convention of the call `visit_call` is lowering.
+    call_convention: u32,
     /// The `AssertSext`/`AssertZext` a call's `signext`/`zeroext` result asks
     /// for.
     call_result_assert: Option<ISD>,
@@ -985,15 +1013,18 @@ impl Builder<'_> {
             Type::Vector { element, count } if self.target.dag.vectors => {
                 // `v16i8`, `v8i16`, `v4i32`, `v2i64`: the vectors VR128 holds.
                 match self.module.context.types.get(*element) {
-                    // A lane count no `MVT` has (`<3 x i8>`) is an extended vector type: the type legalizer widens it.
+                    // A lane count no `MVT` has (`<3 x i8>`) is an extended
+                    // vector type: the type legalizer widens it.
                     Type::Int(bits) => MVT::integer(*bits)
                         .and_then(|lane| {
-                            MVT::vector(lane, *count).map(EVT::Simple).or_else(|| {
-                                (EVT::Simple(lane).size_in_bits() % 8 == 0
-                                    && !count.is_power_of_two()
-                                    && MVT::vector(lane, count.next_power_of_two()).is_some())
-                                .then(|| EVT::vector(lane, *count))
-                            })
+                            MVT::vector(lane, *count)
+                                .map(EVT::Simple)
+                                .or_else(
+                                    || (EVT::Simple(lane).size_in_bits() % 8 == 0
+                                        && !count.is_power_of_two()
+                                        && MVT::vector(lane, count.next_power_of_two()).is_some())
+                                    .then(|| EVT::vector(lane, *count)),
+                                )
                         })
                         .ok_or(Refused("vector with no register class")),
                     // `v4f32`, `v2f64`
@@ -1040,6 +1071,9 @@ impl Builder<'_> {
         let (EVT::Simple(mvt), true) = (vt, vt.is_vector()) else {
             return Err(Refused("vector with no register class"));
         };
+        if let Some(&(_, register)) = self.target.vector_registers.iter().find(|&&(from, _)| from == mvt) {
+            return Ok((EVT::Simple(register), 1));
+        }
         let element = mvt.element().ok_or(Refused("vector with no register class"))?;
         let (mut lanes, mut count) = (mvt.lanes().ok_or(Refused("vector with no register class"))?, 1usize);
         loop {
@@ -1248,12 +1282,21 @@ impl Builder<'_> {
         self.update_root(pending)
     }
 
-    /// `getRoot`.
+    /// `getRoot`: the pending constrained operations are chained with the
+    /// pending loads.
     fn root(&mut self) -> SDValue {
+        let constrained = std::mem::take(&mut self.pending_constrained_fp);
+        let strict = std::mem::take(&mut self.pending_constrained_fp_strict);
+        self.pending_loads.extend(constrained);
+        self.pending_loads.extend(strict);
         self.memory_root()
     }
 
+    /// `getControlRoot`: an `fpexcept.strict` operation is exported with the
+    /// block's values.
     fn control_root(&mut self) -> SDValue {
+        let strict = std::mem::take(&mut self.pending_constrained_fp_strict);
+        self.pending_exports.extend(strict);
         let pending = std::mem::take(&mut self.pending_exports);
         self.update_root(pending)
     }
@@ -1571,7 +1614,14 @@ impl Builder<'_> {
             objects.push((size, immutable));
             -(offsets.len() as i32)
         };
-        let mut parts = calling.lower_formal_arguments(&mut self.dag, entry, &ins, &mut make_object, &mut live_in);
+        let mut parts = calling.lower_formal_arguments_in(
+            self.function.calling_convention,
+            &mut self.dag,
+            entry,
+            &ins,
+            &mut make_object,
+            &mut live_in,
+        );
         // `SaveVarArgRegisters`: the save areas are stack objects made after
         // the allocas', numbered from the next frame index.
         let mut requests: Vec<(u32, u32)> = Vec::new();
@@ -1830,9 +1880,12 @@ impl Builder<'_> {
     /// `visitCall` through `LowerCallTo` and X86's `LowerCall`, for a direct
     /// call of a function whose arguments and result fit single registers or
     /// the stack: `callseq_start`, the stack stores, the register copies,
-    /// An exchange `llrm_mir::atomic::lowered` left: `atomicrmw xchg`, or a
-    /// store that must be ordered, is `ATOMIC_SWAP`. The machine locks `xchg`
-    /// without asking, so every ordering is met.
+    /// What `llrm_mir::atomic::lowered` left for x86: `atomicrmw xchg`, or a
+    /// store that must be ordered, is `ATOMIC_SWAP` (the machine locks `xchg`
+    /// without asking, so every ordering is met); `add`, `sub`, `and`, `or` and
+    /// `xor` are `ATOMIC_LOAD_*` and a `cmpxchg` is `ATOMIC_CMP_SWAP_WITH_SUCCESS`
+    /// (`visitAtomicRMW`, `visitAtomicCmpXchg`), which the target's tables
+    /// select as `lock xadd`, `lock add` and `lock cmpxchg`.
     fn visit_atomic(
         &mut self,
         instruction: &llrm_mir::module::Instruction,
@@ -1844,9 +1897,9 @@ impl Builder<'_> {
             return self.visit_native_atomic(instruction, info);
         }
         let (pointer, value) = match info.kind {
-            AtomicKind::Rmw(RmwOp::Xchg) => (arguments[0], arguments[1]),
+            AtomicKind::Rmw(_) | AtomicKind::CmpXchg { .. } => (arguments[0], arguments[1]),
             AtomicKind::Store => (arguments[1], arguments[0]),
-            _ => return Err(Refused("an atomic other than an exchange")),
+            _ => return Err(Refused("an atomic other than a store or a locked read-modify-write")),
         };
         if self.operand_type(pointer)? == MVT::Far.into() {
             return Err(Refused("an atomic access through a far pointer"));
@@ -1855,10 +1908,28 @@ impl Builder<'_> {
         let (src, ptr) = (self.get_value(value)?, self.get_value(pointer)?);
         let mem = self.mem_info(ty, info.align, true, pointer)?;
         let root = self.root();
-        let swap = self.dag.get_atomic_swap(root, ptr, src, mem);
-        self.dag.set_root(SDValue { node: swap.node, res: 1 });
+        let (node, chain) = match info.kind {
+            AtomicKind::Rmw(RmwOp::Xchg) | AtomicKind::Store => (self.dag.get_atomic_swap(root, ptr, src, mem), 1),
+            AtomicKind::Rmw(op) => {
+                let isd = match op {
+                    RmwOp::Add => ISD::AtomicLoadAdd,
+                    RmwOp::Sub => ISD::AtomicLoadSub,
+                    RmwOp::And => ISD::AtomicLoadAnd,
+                    RmwOp::Or => ISD::AtomicLoadOr,
+                    RmwOp::Xor => ISD::AtomicLoadXor,
+                    _ => return Err(Refused("an atomic read-modify-write that needs a compare-exchange loop")),
+                };
+                (self.dag.get_atomic_rmw(isd, root, ptr, src, mem), 1)
+            }
+            AtomicKind::CmpXchg { .. } => {
+                let new = self.get_value(arguments[2])?;
+                (self.dag.get_atomic_cmp_swap(Some(EVT::I1), root, ptr, src, new, mem), 2)
+            }
+            AtomicKind::Load | AtomicKind::Fence => unreachable!("refused above"),
+        };
+        self.dag.set_root(SDValue { node: node.node, res: chain });
         if let Some(result) = instruction.result {
-            self.set_value(result, swap);
+            self.set_value(result, node);
         }
         Ok(())
     }
@@ -2296,6 +2367,7 @@ impl Builder<'_> {
             .map(|argument| info.argument_attrs.get(*argument).is_some_and(|attrs| has_sret(attrs)))
             .collect();
         self.call_pointers = owner.iter().map(|argument| self.is_pointer_type(arg_types[*argument])).collect();
+        self.call_convention = info.calling_convention;
         self.call_attrs_move_arguments = match self.calling() {
             Some(calling) => info.argument_attrs.iter().any(|attrs| self.moves_argument(calling, attrs)),
             None => info.argument_attrs.iter().any(|attrs| relocating_attribute(attrs).is_some()),
@@ -2565,6 +2637,7 @@ impl Builder<'_> {
         let variadic = std::mem::take(&mut self.variadic_call);
         let sret_args = std::mem::take(&mut self.call_sret);
         let pointer_args = std::mem::take(&mut self.call_pointers);
+        let call_convention = std::mem::take(&mut self.call_convention);
         let in_area = calling.byval_in_area();
         if sibling || flags_answer || (byvals.iter().any(Option::is_some) && !calling.byval_by_reference() && !in_area)
         {
@@ -2701,7 +2774,8 @@ impl Builder<'_> {
             return Ok(None);
         }
         let info = &mut *self.info;
-        let (chain, parts) = calling.lower_call_with_frame(
+        let (chain, parts) = calling.lower_call_in(
+            call_convention,
             &mut self.dag,
             root,
             callee_node,
@@ -4396,9 +4470,11 @@ impl Builder<'_> {
                     _ => None,
                 }
                 .ok_or(Refused("a shufflevector padded to a vector with no register class"))?;
-                // DEVIATE: no padding past a register (the pin widens `v18i8` to `v32i8` and splits it); the
-                // lanes are built one at a time instead. Exit: splitting an extended vector type; owner
-                // x87-cordic-2; review 2026-11-27.
+                // DEVIATE: no padding past a register (the pin widens `v18i8`
+                // to `v32i8` and splits it); the
+                // lanes are built one at a time instead. Exit: splitting an
+                // extended vector type; owner x87-cordic-2;
+                // review 2026-11-27.
                 if padded.size_in_bits() <= 128 {
                     for operand in [&mut first, &mut second] {
                         if self.dag.is_undef(*operand) {

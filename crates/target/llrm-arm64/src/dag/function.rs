@@ -47,6 +47,7 @@ pub fn builder_target(platform: Platform) -> BuilderTarget {
         shift_amount: EVT::I64,
         legal_ints: vec![32, 64],
         legal_vectors: llrm_sdag::lowering::TargetLoweringInfo::aarch64().legal_vectors().to_vec(),
+        vector_registers: llrm_sdag::lowering::TargetLoweringInfo::aarch64().vector_registers(),
         soft_float: false,
         stack_align: Some(16),
         max_alloca_align: Some(16),
@@ -190,25 +191,29 @@ pub fn select_function_in(
     };
     let tti = crate::tti::AArch64::of_cpu(platform.cpu())
         .map(|one| std::rc::Rc::new(one) as std::rc::Rc<dyn llrm_mir::tti::Tti>);
-    // `isIntDivCheap` keeps a divide by a constant a divide where it is smaller
-    // than the multiply-high sequence. DEVIATE SD535 (exit: none, arm64 is
-    // strict on bytes): the pin answers `minsize` only
-    // ([L33827](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L33827));
-    // `-Os` is `optsize` and gcc's `-Os` divides there too (2 instructions
-    // against 7).
-    let opt_for_size = function
-        .attrs
-        .iter()
-        .any(
-            |attr| matches!(
-                attr,
-                llrm_mir::opcode::Attribute::Flag(name) if name == "optsize" || name == "minsize"
-            ),
-        );
-    let mut target = builder_target(platform).with_int_div_cheap(opt_for_size);
+    // `isIntDivCheap` keeps a divide by a constant a divide: the pin answers
+    // `minsize` only
+    // ([L33827](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L33827)).
+    // DEVIATE SD535 (`crate::trial`): the compile that keeps the divides at
+    // `-Os` (`optsize`) is the trial's, kept where the expansion's bytes are
+    // not repaid.
+    let flagged = |names: &[&str]| {
+        function
+            .attrs
+            .iter()
+            .any(
+                |attr| matches!(
+                    attr,
+                    llrm_mir::opcode::Attribute::Flag(name) if names.contains(&name.as_str())
+                ),
+            )
+    };
+    let opt_for_size = flagged(&["optsize", "minsize"]);
+    let divide_cheap = flagged(&["minsize"]) || (flagged(&["optsize"]) && crate::trial::divides_kept());
+    let mut target = builder_target(platform).with_int_div_cheap(divide_cheap);
     // `AArch64TargetLowering::BuildSDIVPow2`: where a divide is cheap, a divide
     // by a power of two stays one.
-    target.dag.sdiv_pow2_stays = opt_for_size;
+    target.dag.sdiv_pow2_stays = divide_cheap;
     let target = target
         .with_tti(tti)
         .with_tail_calls(llrm_support::env_var("LLRM_TAIL_CALLS").is_none_or(|value| value != "0"))
@@ -236,7 +241,7 @@ pub fn select_function_in(
         let made = !extras.is_empty();
         let parent_updates = built.phi_updates.clone();
         // The branches are read before selection turns them into machine nodes.
-        let exits = (branch_targets(&built.dag), ends_in_jump(&built.dag));
+        let exits = (branch_targets(&built.dag, &info.jump_tables), ends_in_jump(&built.dag));
         let units = select_block(&mut built.dag, &globals, &mut info, opt_for_size, platform == Platform::Linux)
             .map_err(|why| format!("{why:?}"))?;
         work.push((block.0, made, built, units, exits));
@@ -245,7 +250,7 @@ pub fn select_function_in(
             // of the successors too, so each takes the phi values the block
             // that made it does.
             extra.phi_updates = parent_updates.clone();
-            let exits = (branch_targets(&extra.dag), ends_in_jump(&extra.dag));
+            let exits = (branch_targets(&extra.dag, &info.jump_tables), ends_in_jump(&extra.dag));
             let units = select_block(&mut extra.dag, &globals, &mut info, opt_for_size, platform == Platform::Linux)
                 .map_err(|why| format!("{why:?}"))?;
             work.push((id.0, true, extra, units, exits));
@@ -278,7 +283,10 @@ pub fn select_function_in(
                 let part = updates[..at].iter().filter(|(one, _)| *one == phi).count();
                 let dst = if part == 0 { reg } else { info.part_regs(reg, part + 1)[part] };
                 let ty = function.value(phi).ty;
-                let vector = matches!(module.context.types.get(ty), llrm_mir::types::Type::Vector { .. });
+                let vector = matches!(
+                    module.context.types.get(ty),
+                    llrm_mir::types::Type::Vector { .. }
+                );
                 let float = vector || matches!(module.context.types.get(ty), llrm_mir::types::Type::Float(_));
                 let quad = vector && layout.size_bits(&module.context.types, ty) == 128;
                 Ok(PhiCopy { to, dst, src, float, quad })
@@ -329,8 +337,12 @@ pub fn select_function_in(
 
 /// The blocks the branches of a built block name, in the order they execute.
 /// The chain from the root passes the nodes between the branches (the copies
-/// that export a value to another block).
-fn branch_targets(dag: &SelectionDAG) -> Vec<u32> {
+/// that export a value to another block). A table jump goes to each entry of
+/// its table.
+fn branch_targets(
+    dag: &SelectionDAG,
+    tables: &[Vec<u32>],
+) -> Vec<u32> {
     let mut targets = Vec::new();
     let mut at = dag.get_root();
     loop {
@@ -344,6 +356,15 @@ fn branch_targets(dag: &SelectionDAG) -> Vec<u32> {
         {
             targets.push(block);
         }
+        if dag.opcode(at) == ISD::BrJT
+            && let NodeData::JumpTable(table) = dag.node(dag.operand(at, 1)).data
+        {
+            for block in tables.get(table as usize).into_iter().flatten().rev() {
+                if !targets.contains(block) {
+                    targets.push(*block);
+                }
+            }
+        }
         match dag.node(at).ops.first() {
             Some(&chain) if dag.value_type(chain) == EVT::OTHER => at = chain,
             _ => break,
@@ -353,10 +374,10 @@ fn branch_targets(dag: &SelectionDAG) -> Vec<u32> {
     targets
 }
 
-/// Whether the last thing a built block does is an unconditional branch (else
-/// it falls through).
+/// Whether the last thing a built block does is an unconditional branch or a
+/// table jump (else it falls through).
 fn ends_in_jump(dag: &SelectionDAG) -> bool {
-    dag.opcode(dag.get_root()) == ISD::Br
+    matches!(dag.opcode(dag.get_root()), ISD::Br | ISD::BrJT)
 }
 
 /// The (size, alignment) of each static alloca, by the frame index

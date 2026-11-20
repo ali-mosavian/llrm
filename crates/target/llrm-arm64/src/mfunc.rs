@@ -64,6 +64,10 @@ pub enum Op {
         /// The labels of the blocks the entries go to; the table's successors.
         targets: Vec<String>,
     },
+    /// The end of a block the IR ends in `unreachable`: no code (the pin traps
+    /// only for MachO and Windows CFI) and no successor, not even the block
+    /// after it. Selection puts it last in the block.
+    Unreachable,
     /// `DBG_VALUE`: from here on the source variable `variable` is the value
     /// in `reg` (`llvm.dbg.value`); none once nothing keeps the value. It is
     /// no code and no use: liveness, allocation and every pass that looks at
@@ -134,8 +138,17 @@ impl Op {
             }
             // Not a use: the allocator renames it by hand
             // (`regalloc::rewrite`).
-            Op::DbgValue { .. } => {}
+            Op::DbgValue { .. } | Op::Unreachable => {}
         }
+    }
+
+    /// Whether control never goes on from here: a return, a trap, or the end
+    /// of a block that goes nowhere.
+    pub fn ends_the_function(&self) -> bool {
+        matches!(
+            self,
+            Op::Return { .. } | Op::Unreachable | Op::I(Inst::Brk { .. })
+        )
     }
 
     /// Whether the operation is debug information only
@@ -419,6 +432,12 @@ pub struct MFunc {
     /// The critical edges `lower_phis` split: `(from, to, the block made)`, by
     /// label. The block odds of the edge it replaced are the new block's.
     pub split_edges: Vec<(String, String, String)>,
+    /// The joins early if-conversion made, `(head, tail)` by label in the
+    /// order made: the tail's operations and edges are the head's.
+    pub joined: Vec<(String, String)>,
+    /// The tails early if-conversion left behind a jump: the head's one edge
+    /// is to the tail, certain.
+    pub branched: Vec<(String, String)>,
     /// The IR's edge odds the allocator reads (`MachineBranchProbabilityInfo`);
     /// set just before allocation.
     pub alloc_odds: Option<llrm_spike_mf::placement::Odds>,
@@ -487,6 +506,7 @@ pub fn falls_through(block: &MBlock) -> bool {
                 Op::I(Inst::Branch { link: false, target: Target::Label(_) })
                     | Op::Return { .. }
                     | Op::JumpTable { .. }
+                    | Op::Unreachable
                     | Op::I(Inst::Brk { .. })
             ),
         )
@@ -554,8 +574,9 @@ pub fn sequence_copies(
     out
 }
 
-/// `UnreachableMachineBlockElim`: the blocks no path from the entry reaches are deleted, and the phi operands that
-/// came from them. Selection makes one for every IR block, such as the `unreachable` default of a `switch`.
+/// `UnreachableMachineBlockElim`: the blocks no path from the entry reaches are
+/// deleted, and the phi operands that came from them. Selection makes one for
+/// every IR block, such as the `unreachable` default of a `switch`.
 /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/UnreachableBlockElim.cpp>
 pub fn remove_unreachable_blocks(function: &mut MFunc) {
     let count = function.blocks.len();
@@ -580,10 +601,14 @@ pub fn remove_unreachable_blocks(function: &mut MFunc) {
         .map(|(block, _)| block.label.clone())
         .collect();
     let mut at = 0;
-    function.blocks.retain(|_| {
-        at += 1;
-        reached[at - 1]
-    });
+    function
+        .blocks
+        .retain(
+            |_| {
+                at += 1;
+                reached[at - 1]
+            },
+        );
     for block in &mut function.blocks {
         for op in &mut block.ops {
             if let Op::Phi { incoming, .. } = op {
@@ -861,6 +886,17 @@ mod verify_tests {
         function.blocks[0].ops.insert(0, Op::Copy { dst: Reg::Gpr(b), src: Reg::Gpr(Gpr(1)) });
         assert_eq!(undefined_reads(&function), vec![]);
     }
+}
+
+/// The labels of the blocks that end in a call that never returns: they run
+/// into no block, though their last instruction is no jump.
+pub fn dead_end_labels(function: &MFunc) -> Vec<String> {
+    function
+        .blocks
+        .iter()
+        .filter(|block| block.ops.iter().any(|op| matches!(op, Op::Unreachable)))
+        .map(|block| block.label.clone())
+        .collect()
 }
 
 /// The registers `function` leaves live: those it returns and passes to a tail

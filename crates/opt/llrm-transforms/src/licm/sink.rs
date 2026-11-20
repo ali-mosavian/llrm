@@ -140,6 +140,7 @@ pub fn sink_region(
                 && can_sink(ctx, inst)
             {
                 if foldable {
+                    ctx.state.cloned.borrow_mut().insert(inst);
                     found.push((inst, Sinking::Cloned));
                     continue;
                 }
@@ -248,5 +249,8 @@ fn can_split_predecessors(
     let function = ctx.function;
     let Some(block) = function.parent(phi) else { return false };
     let first = function.iter_block(block).find(|&one| !matches!(function.instruction(one).opcode, Opcode::Phi));
+    // And no predecessor ends in an `indirectbr`, whose edges cannot be split
+    // (LICM.cpp:1275).
     !first.is_some_and(|one| matches!(function.instruction(one).opcode, Opcode::LandingPad { .. }))
+        && !function.predecessors(block).iter().any(|&pred| function.ends_in_indirect_branch(pred))
 }

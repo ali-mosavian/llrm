@@ -78,6 +78,7 @@ pub struct TargetLoweringInfo {
     /// A library shift keeps the shift-amount type (z80's asm helpers read a
     /// byte).
     narrow_library_shift: bool,
+    soft_compare_classes: bool,
     /// `f128` has a register class (AArch64 `FPR128`), no arithmetic: its
     /// operations are library calls on `q` registers.
     legal_f128: bool,
@@ -130,6 +131,7 @@ impl TargetLoweringInfo {
             set_cc_result: MVT::I8,
             int_size: 32,
             narrow_library_shift: false,
+            soft_compare_classes: false,
             legal_f128: false,
             widen_vectors: false,
             vectors: legal.iter().copied().filter(|vt| vt.is_vector()).collect(),
@@ -203,6 +205,23 @@ impl TargetLoweringInfo {
         self.narrow_library_shift
     }
 
+    /// DEVIATE SOFT-CMP-CSE: soften a float compare by the routine's class,
+    /// not its name: `eq`, `ne`, `lt` and `le` are all `__lesf2`'s three-way
+    /// result (-1, 0, 1; unordered 1), `gt` and `ge` are `__gesf2`'s (unordered
+    /// -1). The pin calls the routine named for each predicate, so six
+    /// predicates of one pair are six calls where two answer them. For a
+    /// runtime whose four low routines are aliases of one core and whose two
+    /// high ones are (compiler-rt's, which m68k, z80 and 6502 ship). Owner w8,
+    /// exit 2026-11-27.
+    pub fn with_soft_compare_classes(mut self) -> TargetLoweringInfo {
+        self.soft_compare_classes = true;
+        self
+    }
+
+    pub fn soft_compare_classes(&self) -> bool {
+        self.soft_compare_classes
+    }
+
     /// `getIntSize`: the type a library shift takes its amount in
     /// (`ExpandIntRes_Shift`).
     pub fn int_size(&self) -> u32 {
@@ -269,6 +288,22 @@ impl TargetLoweringInfo {
     /// The vector types with a register class.
     pub fn legal_vectors(&self) -> &[MVT] {
         &self.vectors
+    }
+
+    /// The vector types a register holds after one conversion, as
+    /// `getVectorTypeBreakdown` first asks: a type widened or promoted to a
+    /// legal one (`v2i8` is `v16i8` on x86, `v4i8` is `v4i16` on arm64),
+    /// each with that type.
+    pub fn vector_registers(&self) -> Vec<(MVT, MVT)> {
+        MVT::vectors()
+            .filter(|&vt| !self.is_type_legal(vt.into()))
+            .filter_map(|vt| match self.type_conversion(vt.into()) {
+                (TypeAction::WidenVector | TypeAction::PromoteInteger, EVT::Simple(to)) if self.vectors.contains(&to) => {
+                    Some((vt, to))
+                }
+                _ => None,
+            })
+            .collect()
     }
 
     /// `computeRegisterProperties`, the `TypeWidenVector` case: a power-of-two
@@ -471,6 +506,17 @@ mod tests {
         let x86 = TargetLoweringInfo::x86_64_sse2();
         assert_eq!(x86.type_conversion(EVT::Simple(MVT::V4I8)), (TypeAction::WidenVector, MVT::V16I8.into()));
         assert_eq!(x86.type_conversion(EVT::Simple(MVT::V2I16)), (TypeAction::WidenVector, MVT::V8I16.into()));
+    }
+
+    /// A narrow vector is carried in the legal register type its conversion
+    /// names (`getVectorTypeBreakdown`'s first step); a legal one is not listed.
+    #[test]
+    fn a_narrow_vector_is_carried_in_the_register_its_conversion_names() {
+        let x86 = TargetLoweringInfo::x86_64_sse2().vector_registers();
+        assert!(x86.contains(&(MVT::V2I8, MVT::V16I8)) && x86.contains(&(MVT::V4I16, MVT::V8I16)));
+        assert!(!x86.iter().any(|&(from, _)| from == MVT::V16I8));
+        let arm = TargetLoweringInfo::aarch64().vector_registers();
+        assert!(arm.contains(&(MVT::V4I8, MVT::V4I16)));
     }
 
     /// Every target compared into an `i8`; AArch64 compares into an `i32`.

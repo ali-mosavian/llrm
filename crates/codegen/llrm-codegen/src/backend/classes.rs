@@ -93,10 +93,14 @@ pub struct RegisterClasses {
     pub cse_keeps_compare_with_live_minuend: bool,
     /// `Target::cheap_move_immediate`.
     pub cheap_move_immediate: fn(u8, i64) -> bool,
+    /// `Target::cheap_move_row`.
+    pub cheap_move_row: fn(&str) -> bool,
     /// `Target::uncheap_move_immediate_at_size`.
     pub uncheap_move_immediate_at_size: fn(u8, i64) -> bool,
     /// `Target::hoist_by_pressure`.
     pub hoist_by_pressure: bool,
+    /// `Target::hoists_register_free_ops`.
+    pub hoists_register_free_ops: bool,
 }
 
 impl RegisterClasses {
@@ -144,8 +148,8 @@ impl RegisterClasses {
         let named = |name: &str| {
             arch.registers().by_name(name).unwrap_or_else(|| panic!("the target names no register `{name}`"))
         };
-        // The word view of each root, the first the file names: a scan of the file for every root of
-        // every class was most of this function.
+        // The word view of each root, the first the file names: a scan of the
+        // file for every root of every class was most of this function.
         let mut word_views: HashMap<&str, &str> = HashMap::default();
         for one in file.iter().filter(|one| one.bits == 16) {
             word_views.entry(one.root.as_str()).or_insert(one.name.as_str());
@@ -194,8 +198,10 @@ impl RegisterClasses {
             splits_params_for_shrink_wrap: arch.splits_params_for_shrink_wrap(),
             cse_keeps_compare_with_live_minuend: arch.cse_keeps_compare_with_live_minuend(),
             cheap_move_immediate: arch.cheap_move_immediate(),
+            cheap_move_row: arch.cheap_move_row(),
             uncheap_move_immediate_at_size: arch.uncheap_move_immediate_at_size(),
             hoist_by_pressure: arch.hoist_by_pressure(),
+            hoists_register_free_ops: arch.hoists_register_free_ops(),
         };
         classes.status_word = classes.found_status_word();
         classes
@@ -312,7 +318,9 @@ mod tests {
     /// table of x86 names: `ax` is EAX, `es` stays ES.
     #[test]
     fn test_a_root_names_its_full_register() {
-        for (root, full) in [("ax", RegId::EAX), ("sp", RegId::ESP), ("bp", RegId::EBP), ("es", RegId::ES), ("gs", RegId::GS)] {
+        for (root, full) in
+            [("ax", RegId::EAX), ("sp", RegId::ESP), ("bp", RegId::EBP), ("es", RegId::ES), ("gs", RegId::GS)]
+        {
             assert_eq!(root_register(llrm_target::Target::registers(&llrm_x86_m16::M16), root), full, "{root}");
         }
     }
@@ -328,8 +336,8 @@ mod tests {
     }
 
     /// The class table read the forms a second time after the DAG tables had
-    /// read them (0.6 M Ir at start-up): the classes of one target, asked twice,
-    /// read its forms at most once.
+    /// read them (0.6 M Ir at start-up): the classes of one target, asked
+    /// twice, read its forms at most once.
     #[test]
     fn test_the_class_table_reads_the_forms_once() {
         let before = llrm_target::instr::parsed();

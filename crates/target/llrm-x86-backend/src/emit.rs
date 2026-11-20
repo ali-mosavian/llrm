@@ -100,7 +100,7 @@ struct Emitter<'a, 'd> {
     glue_users: HashMap<SDValue, Vec<u32>>,
     /// The `fcom` operands of each float compare, by the `SAHF` that reads its
     /// status word: the `fcom` is pushed there, next to the flag reader.
-    pending_fcom: HashMap<u32, (Held, Held)>,
+    pending_fcom: HashMap<u32, (Held, Held, &'static str)>,
     first_at: HashMap<u32, i64>,
     /// The floating constants loaded where they are read: (mnemonic, cell).
     lazy: HashMap<SDValue, (&'static str, Option<Mem>)>,
@@ -912,30 +912,70 @@ impl Emitter<'_, '_> {
     /// A load of a GOT entry reads `[rip + sym]`; the encoder relocates an
     /// External symbol's immediate as the entry's offset, so the load is that
     /// immediate (`mov r, offset sym`, as `isel.rs` makes the legacy GOT load).
+    /// A load folded into another operation (`add r, [sym]`) has no such
+    /// form: the encoder would read the symbol's contents (`R_X86_64_PC32`),
+    /// not its address, so the load comes out again as the `mov` and the
+    /// operation reads its register.
     fn make_got_loads(
         &mut self,
         before: usize,
     ) {
         let Some(block) = self.blocks.last_mut() else { return };
-        for one in block.insns.iter_mut().skip(before) {
-            let Some(what) = one.what.as_ref() else { continue };
-            let ([Loc::Held(dest)], [Loc::Mem(mem)]) = (what.dests.as_slice(), what.sources.as_slice()) else {
-                continue;
-            };
-            let Some(address) = mem.addr else { continue };
-            if what.op != Operation::Move
-                || mem.base.is_some()
-                || mem.index.is_some()
-                || address.space != llrm_codegen::model::ir::Space::External
-            {
-                continue;
+        let tail: Vec<Arc<Insn>> = block.insns.drain(before..).collect();
+        for one in tail {
+            let moved = self.got_load(&one);
+            if let Some(block) = self.blocks.last_mut() {
+                block.insns.push(moved.unwrap_or(one));
             }
+        }
+    }
+
+    /// `one` with its GOT load made the symbol's immediate, if it has one.
+    fn got_load(
+        &mut self,
+        one: &Arc<Insn>,
+    ) -> Option<Arc<Insn>> {
+        let what = one.what.as_ref()?;
+        let external = |source: &Loc| match source {
+            Loc::Mem(mem) if mem.base.is_none() && mem.index.is_none() => {
+                mem.addr.filter(|address| address.space == llrm_codegen::model::ir::Space::External)
+            }
+            _ => None,
+        };
+        if let ([Loc::Held(dest)], [source]) = (what.dests.as_slice(), what.sources.as_slice())
+            && what.op == Operation::Move
+            && let Some(address) = external(source)
+        {
             let mut moved = (**one).clone();
             if let Some(what) = moved.what.as_mut() {
                 what.sources = vec![Loc::Imm(Imm { value: 0, width: dest.width, address: Some(address) })];
             }
-            *one = Arc::new(moved);
+            return Some(Arc::new(moved));
         }
+        let [(at, address)] = what
+            .sources
+            .iter()
+            .enumerate()
+            .filter(|(_, source)| matches!(source, Loc::Mem(_)))
+            .map(|(at, source)| external(source).map(|address| (at, address)))
+            .collect::<Option<Vec<_>>>()?[..]
+        else {
+            return None;
+        };
+        if what.dests.iter().any(|dest| matches!(dest, Loc::Mem(_))) {
+            return None;
+        }
+        let entry = self.fresh(8);
+        self.push(
+            Operation::Move,
+            "mov",
+            vec![Loc::Held(entry)],
+            vec![Loc::Imm(Imm { value: 0, width: 8, address: Some(address) })],
+        );
+        let mut what = what.clone();
+        what.sources[at] = Loc::Held(entry);
+        let uses = _read(&what);
+        Some(Arc::new(Insn { uses, ..one.with_what(Some(what)) }))
     }
 
     fn mark_invariant_loads(
@@ -1530,7 +1570,7 @@ impl Emitter<'_, '_> {
         }
         // `ATOMIC_SWAP`: the register takes the old value and the cell the new,
         // both ways at once as the `xchg` the machine locks.
-        if matches!(name, "XCHG8rm" | "XCHG16rm" | "XCHG32rm") {
+        if matches!(name, "XCHG8rm" | "XCHG16rm" | "XCHG32rm" | "XCHG64rm") {
             let node = self.dag.node(SDValue { node: n, res: 0 });
             let cell_width = self
                 .ctx
@@ -1553,6 +1593,14 @@ impl Emitter<'_, '_> {
                 *last = Arc::new(Insn { volatile: true, ..(**last).clone() });
             }
             return Ok(());
+        }
+        // `LXADD`, `LCMPXCHG`: an exchange-add and a compare-exchange on a
+        // cell, under `lock` (X86InstrCompiler.td). The register the
+        // sum or the old value comes back in is a result of
+        // the form, the accumulator of the compare-exchange the glued
+        // `CopyToReg`'s value.
+        if name.starts_with("LXADD") || name.starts_with("LCMPXCHG") {
+            return self.lowered_atomic(n, name, desc);
         }
         // `MOVZX32rr8_NOREX` is `movzx` of a byte register that needs no REX
         // prefix to name (AH): the same form at this target.
@@ -1621,11 +1669,86 @@ impl Emitter<'_, '_> {
         let op = Operation::named(&form.operation)
             .ok_or_else(|| EmitError::Unsupported(format!("{name}: operation {}", form.operation)))?;
         self.push(op, &form.name, dests, sources);
+        if self.ctx.map.locked(name) {
+            self.lock_last(None);
+        }
         if name.split('|').next().is_some_and(|pin| pin.ends_with("_DB"))
             && let Some(last) = self.blocks.last_mut().and_then(|block| block.insns.last_mut())
         {
             *last = Arc::new(Insn { disjoint: true, ..(**last).clone() });
         }
+        Ok(())
+    }
+
+    /// The last instruction runs under `lock`, and is not moved or dropped for
+    /// what reads it.
+    fn lock_last(
+        &mut self,
+        tied: Option<(usize, usize)>,
+    ) {
+        if let Some(last) = self.blocks.last_mut().and_then(|block| block.insns.last_mut()) {
+            let what = last
+                .what
+                .clone()
+                .map(
+                    |what| Semantics {
+                        lock: true,
+                        tied: tied.map(|pair| vec![pair]).or(what.tied.clone()),
+                        ..what
+                    },
+                );
+            *last = Arc::new(Insn { volatile: true, what, ..(**last).clone() });
+        }
+    }
+
+    /// `LXADD8..64` (`xadd`: the cell takes the sum, the register the old
+    /// value) and `LCMPXCHG8..64` (`cmpxchg`: the cell takes the new value
+    /// where it holds the accumulator, else the accumulator takes the cell'
+    /// s), each `lock`ed.
+    fn lowered_atomic(
+        &mut self,
+        n: u32,
+        name: &str,
+        desc: &InstrDesc,
+    ) -> Result<(), EmitError> {
+        let node = self.dag.node(SDValue { node: n, res: 0 });
+        let cell_width =
+            self.ctx.map.memory_bytes(name).unwrap_or_else(|| width_of_node(self.ctx.map.scalar_sse(), self.dag, n));
+        let operands = self.operands(node.ops.as_slice(), desc, cell_width)?;
+        let (Some(Loc::Held(value)), Some(cell)) = (
+            operands.iter().find(|o| matches!(o, Loc::Held(_))).cloned(),
+            operands.iter().find(|o| matches!(o, Loc::Mem(_))).cloned(),
+        ) else {
+            return Err(EmitError::Unsupported(format!("{name}: operands")));
+        };
+        // The tied register takes the old value where it held the addend
+        // (`xadd`'s `^1`) or the expected value (`cmpxchg`'s `^1`).
+        let tied = if name.starts_with("LXADD") {
+            let old = self
+                .exported_register(SDValue { node: n, res: 0 })
+                .unwrap_or_else(|| self.fresh(width(self.ctx.map.scalar_sse(), node.values[0])));
+            self.values.insert(SDValue { node: n, res: 0 }, old.value);
+            self.push(Operation::Binary, "xadd", vec![cell.clone(), Loc::Held(old)], vec![cell, Loc::Held(value)]);
+            (1, 1)
+        } else {
+            let accumulator = match cell_width {
+                8 => RegId::RAX,
+                4 => RegId::EAX,
+                2 => RegId::AX,
+                _ => RegId::AL,
+            };
+            let expected = self.accumulated(accumulator)?;
+            let old = self.fresh(cell_width);
+            self.push(
+                Operation::Binary,
+                "cmpxchg",
+                vec![cell.clone(), Loc::Held(old)],
+                vec![cell, Loc::Held(value), Loc::Held(expected)],
+            );
+            self.accumulator.insert(accumulator, old);
+            (2, 1)
+        };
+        self.lock_last(Some(tied));
         Ok(())
     }
 
@@ -2091,6 +2214,7 @@ impl Emitter<'_, '_> {
                 || name.starts_with("REP_")
                 || name.ends_with("rCL")
                 || name.ends_with("mCL")
+                || name.starts_with("LCMPXCHG")
         })
     }
 
@@ -2156,7 +2280,7 @@ impl Emitter<'_, '_> {
         }
         let ISD::Machine(op) = self.dag.opcode(glue) else { return false };
         let name = self.ctx.names.get(&(op as u16)).map_or("", |name| name.split('|').next().unwrap_or(name));
-        matches!(name, "CDQ" | "CWD" | "CQO") || is_div_or_mul(name)
+        matches!(name, "CDQ" | "CWD" | "CQO") || is_div_or_mul(name) || name.starts_with("LCMPXCHG")
     }
 
     /// (low, high, bytes): AX and DX, EAX and EDX, or RAX and RDX.
@@ -2473,7 +2597,9 @@ impl Emitter<'_, '_> {
                 }
                 // The area is a multiple of the call alignment; the callee pops
                 // `popped` of it, the caller the rest.
-                let bytes = if self.ctx.reserved_calls {
+                // The flat frames pad the area where the frame is laid out
+                // (`ReserveCallFrame`).
+                let bytes = if self.ctx.reserved_calls || self.ctx.address_mode != AddrMode::Real16 {
                     bytes
                 } else {
                     (bytes + self.ctx.call_alignment - 1) / self.ctx.call_alignment * self.ctx.call_alignment
@@ -2674,6 +2800,19 @@ impl Emitter<'_, '_> {
                     .ok_or_else(|| EmitError::Unsupported("inline assembly that does not parse".to_owned()))?;
                 if !block.fixups.is_empty() {
                     return Err(EmitError::Unsupported("inline assembly naming symbols".to_owned()));
+                }
+                // The value an `st0` input takes is the stack's top and the
+                // only thing on it: the unnamed store the
+                // stackifier reads as `handleReturn`, which
+                // consumes it, so the block sees it in
+                // st(0) with the stack otherwise empty.
+                let registers = block.inputs.iter().filter(|one| !one.starts_with("st")).count();
+                let first = 2 + block.fixups.len() + registers;
+                for &op in node.ops.iter().skip(first).take(block.inputs.iter().filter(|one| *one == "st0").count()) {
+                    match self.operand(op)? {
+                        Loc::Held(value) => self.push(Operation::FloatStore, "", Vec::new(), vec![Loc::Held(value)]),
+                        _ => return Err(EmitError::Unsupported("an st0 input that is no x87 value".to_owned())),
+                    }
                 }
                 let callee = Callee::Named(name);
                 let at = self.push_call(
@@ -2918,9 +3057,13 @@ impl Emitter<'_, '_> {
                 else {
                     return Err(EmitError::Unsupported(format!("{name}: an operand that is no register")));
                 };
+                // A chained compare is a constrained one: the quiet one is
+                // `fucom`, which does not raise invalid on a quiet NaN, and the
+                // signaling one `fcom`. The plain compare is `fcom` as before.
+                let mnemonic = if name.starts_with("UCOM") && node.ops.len() > 2 { "fucom" } else { "fcom" };
                 match self.status_reader(n) {
                     Some(sahf) => {
-                        self.pending_fcom.insert(sahf, (left, right));
+                        self.pending_fcom.insert(sahf, (left, right, mnemonic));
                     }
                     // DEVIATE X87-STATUS: no `sahf` follows; the compare
                     // defines the status word as a value its readers test.
@@ -2932,13 +3075,13 @@ impl Emitter<'_, '_> {
                             self.values.insert(SDValue { node: word, res: 0 }, held.value);
                             self.push(
                                 Operation::Compare,
-                                "fcom",
+                                mnemonic,
                                 vec![Loc::Held(held)],
                                 vec![Loc::Held(left), Loc::Held(right)],
                             );
                         }
                         None => {
-                            self.push(Operation::Compare, "fcom", Vec::new(), vec![Loc::Held(left), Loc::Held(right)])
+                            self.push(Operation::Compare, mnemonic, Vec::new(), vec![Loc::Held(left), Loc::Held(right)])
                         }
                     },
                 }
@@ -2962,8 +3105,8 @@ impl Emitter<'_, '_> {
                 return Ok(Some(()));
             }
             "SAHF" => {
-                if let Some((left, right)) = self.pending_fcom.remove(&n) {
-                    self.push(Operation::Compare, "fcom", Vec::new(), vec![Loc::Held(left), Loc::Held(right)]);
+                if let Some((left, right, mnemonic)) = self.pending_fcom.remove(&n) {
+                    self.push(Operation::Compare, mnemonic, Vec::new(), vec![Loc::Held(left), Loc::Held(right)]);
                 }
                 return Ok(Some(()));
             }
