@@ -226,6 +226,11 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         match self.dag.opcode(node) {
             ISD::Br | ISD::BrCond | ISD::BrCC | ISD::BrJT | ISD::VAArg => EVT::OTHER,
             ISD::SIntToFp | ISD::UIntToFp | ISD::LRint | ISD::LLRint => self.dag.value_type(self.dag.operand(node, 0)),
+            // The constrained forms are registered by the input type too, and
+            // it is operand 1 (operand 0 is the chain).
+            ISD::StrictSIntToFp | ISD::StrictUIntToFp | ISD::StrictFSetCC | ISD::StrictFSetCCS => {
+                self.dag.value_type(self.dag.operand(node, 1))
+            }
             // `VectorLegalizer::LegalizeOp`: a reduction is asked of its
             // vector's type.
             op if op.vec_reduce_base_opcode().is_some() => self.dag.value_type(self.dag.operand(node, 0)),
@@ -565,8 +570,16 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         {
             action = Action::Custom;
         }
-        if self.dag.opcode(node) == ISD::SetCC
-            && let (EVT::Simple(operand), NodeData::CondCode(cc)) = (vt, self.dag.node(self.dag.operand(node, 2)).data)
+        // `LegalizeOp`'s `CCOperand`: the code of a constrained compare is
+        // operand 3, after the chain and the two values.
+        let cc_operand = match self.dag.opcode(node) {
+            ISD::SetCC => Some(2),
+            ISD::StrictFSetCC | ISD::StrictFSetCCS => Some(3),
+            _ => None,
+        };
+        if let Some(cc_operand) = cc_operand
+            && let (EVT::Simple(operand), NodeData::CondCode(cc)) =
+                (vt, self.dag.node(self.dag.operand(node, cc_operand)).data)
             && self.tli.cond_code_action(cc, operand) == Action::Expand
         {
             action = Action::Expand;
@@ -782,13 +795,21 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
     /// `TargetLowering::LegalizeSetCCCondCode` of a `SETCC` whose code the
     /// target expands: the operands swapped, the condition inverted (and
     /// the result negated), or two compares joined by `and` or `or`. The `i1`
-    /// case is not translated.
+    /// case is not translated. A constrained compare (`STRICT_FSETCC(S)`)
+    /// keeps its chain: every compare it becomes hangs on the node's input
+    /// chain, and the results are the value and the chain (the
+    /// `TokenFactor` of the compares' out chains where there are two).
     fn expand_setcc_code(
         &mut self,
         node: SDValue,
-    ) -> Option<SDValue> {
-        let NodeData::CondCode(cc) = self.dag.node(self.dag.operand(node, 2)).data else { return None };
-        let (lhs, rhs, vt) = (self.dag.operand(node, 0), self.dag.operand(node, 1), self.dag.value_type(node));
+    ) -> Option<Vec<SDValue>> {
+        let opcode = self.dag.opcode(node);
+        let strict = opcode != ISD::SetCC;
+        let at = usize::from(strict);
+        let NodeData::CondCode(cc) = self.dag.node(self.dag.operand(node, at + 2)).data else { return None };
+        let (lhs, rhs, vt) = (self.dag.operand(node, at), self.dag.operand(node, at + 1), self.dag.value_type(node));
+        let chain = strict.then(|| self.dag.operand(node, 0));
+        let flags = self.dag.node(node).flags;
         let EVT::Simple(op_vt) = self.dag.value_type(lhs) else { return None };
         let tli = self.tli;
         let legal_or_custom = |cc: CondCode| matches!(
@@ -797,10 +818,24 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         );
         let legal = |cc: CondCode| tli.cond_code_action(cc, op_vt) == Action::Legal;
         let float = self.dag.value_type(lhs).is_floating_point();
+        // One compare of the node's kind: the value, and for a constrained
+        // one the out chain.
+        let compare = |this: &mut Self, l: SDValue, r: SDValue, code: CondCode| -> (SDValue, Option<SDValue>) {
+            match chain {
+                None => (this.dag.get_setcc(vt, l, r, code), None),
+                Some(chain) => {
+                    let cc = this.dag.get_cond_code(code);
+                    let made = this.dag.intern(opcode, &[vt, EVT::OTHER], &[chain, l, r, cc], flags, NodeData::None);
+                    (SDValue { node: made.node, res: 0 }, Some(SDValue { node: made.node, res: 1 }))
+                }
+            }
+        };
+        let results = |value: SDValue, out: Option<SDValue>| Some(std::iter::once(value).chain(out).collect());
         // Swapping the operands.
         let swapped = cc.swapped_operands();
         if legal_or_custom(swapped) {
-            return Some(self.dag.get_setcc(vt, rhs, lhs, swapped));
+            let (value, out) = compare(self, rhs, lhs, swapped);
+            return results(value, out);
         }
         // Inverting the condition, then swapping on top of it.
         let mut inverse = if float { cc.inverse_float() } else { cc.inverse_integer() };
@@ -811,8 +846,9 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         }
         if legal_or_custom(inverse) {
             let (l, r) = if swap { (rhs, lhs) } else { (lhs, rhs) };
-            let compare = self.dag.get_setcc(vt, l, r, inverse);
-            return Some(self.get_logical_not(compare));
+            let (value, out) = compare(self, l, r, inverse);
+            let negated = self.get_logical_not(value);
+            return results(negated, out);
         }
         if !float {
             // An integer code with no swap or inverse the target takes: x86's
@@ -828,7 +864,7 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
                 false,
             )
         };
-        let (cc1, cc2, opcode, invert) = match cc {
+        let (cc1, cc2, join, invert) = match cc {
             CondCode::SetUo if legal(CondCode::SetUNe) => (CondCode::SetUNe, CondCode::SetUNe, ISD::Or, false),
             CondCode::SetUo => (CondCode::SetOEq, CondCode::SetOEq, ISD::And, true),
             CondCode::SetO => (CondCode::SetOEq, CondCode::SetOEq, ISD::And, false),
@@ -840,13 +876,15 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
             }
             _ => generic(cc),
         };
-        let (first, second) = if cc != CondCode::SetO && cc != CondCode::SetUo {
-            (self.dag.get_setcc(vt, lhs, rhs, cc1), self.dag.get_setcc(vt, lhs, rhs, cc2))
+        let ((first, first_out), (second, second_out)) = if cc != CondCode::SetO && cc != CondCode::SetUo {
+            (compare(self, lhs, rhs, cc1), compare(self, lhs, rhs, cc2))
         } else {
-            (self.dag.get_setcc(vt, lhs, lhs, cc1), self.dag.get_setcc(vt, rhs, rhs, cc2))
+            (compare(self, lhs, lhs, cc1), compare(self, rhs, rhs, cc2))
         };
-        let joined = self.dag.get_node(opcode, vt, &[first, second]);
-        Some(if invert { self.get_logical_not(joined) } else { joined })
+        let joined = self.dag.get_node(join, vt, &[first, second]);
+        let value = if invert { self.get_logical_not(joined) } else { joined };
+        let out = first_out.zip(second_out).map(|(a, b)| self.dag.get_token_factor(&[a, b]));
+        results(value, out)
     }
 
     /// `ExpandBitCast` of a float to or from an integer of its size, with no
@@ -1452,7 +1490,7 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
                 // `ExpandNode`: zero of the type.
                 Some(vec![if vt.is_integer() { self.dag.get_constant(0, vt) } else { self.dag.get_constant_fp(0, vt) }])
             }
-            ISD::SetCC => self.expand_setcc_code(node).map(|result| vec![result]),
+            ISD::SetCC | ISD::StrictFSetCC | ISD::StrictFSetCCS => self.expand_setcc_code(node),
             ISD::SMax | ISD::SMin | ISD::UMax | ISD::UMin => Some(vec![self.expand_min_max(node)]),
             ISD::SAddSat | ISD::UAddSat | ISD::SSubSat | ISD::USubSat => {
                 Some(vec![super::expand_sat::expand_add_sub_sat(self.dag, self.tli, node)])

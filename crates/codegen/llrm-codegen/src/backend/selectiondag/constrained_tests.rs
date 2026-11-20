@@ -154,3 +154,36 @@ fn constrained_arithmetic_and_float_conversions_select_to_the_x87_instructions()
     );
     assert_eq!(truncated[0], "fld", "{truncated:?}");
 }
+
+/// A constrained compare is chained and picks its x87 compare by what it
+/// promises: `fcmps` signals on a quiet NaN so it is `fcom`, `fcmp` is the
+/// quiet `fucom`. `une` is two conditions (`setp` or `setne`) of one compare.
+/// Before, the type legalizer stopped at "promote result" on the i1 result.
+#[test]
+fn constrained_compares_select_fcom_for_signaling_and_fucom_for_quiet() {
+    use super::dag_function::selected;
+    let select = |call: &str, decl: &str| {
+        let text = format!(
+            "{HEAD}define i1 @f(x86_fp80 %a, x86_fp80 %b) strictfp {{\n  %s = call i1 @llvm.experimental.constrained.{call} strictfp\n  ret i1 %s\n}}\ndeclare {decl}\n"
+        );
+        let module = llrm_mir::parse::module(&text).expect("parses");
+        let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+            .unwrap_or_else(|why| panic!("{call}: {}", why.0));
+        done.body
+            .insns()
+            .iter()
+            .filter_map(|insn| insn.what.as_ref())
+            .map(|what| what.name.as_deref().unwrap_or("").to_owned())
+            .collect::<Vec<_>>()
+    };
+    let signaling = select(
+        "fcmps.f80(x86_fp80 %a, x86_fp80 %b, metadata !\"olt\", metadata !\"fpexcept.strict\")",
+        "i1 @llvm.experimental.constrained.fcmps.f80(x86_fp80, x86_fp80, metadata, metadata)",
+    );
+    assert_eq!(signaling[..4].to_vec(), ["fld", "fld", "fcom", "seta"], "{signaling:?}");
+    let quiet = select(
+        "fcmp.f80(x86_fp80 %a, x86_fp80 %b, metadata !\"une\", metadata !\"fpexcept.strict\")",
+        "i1 @llvm.experimental.constrained.fcmp.f80(x86_fp80, x86_fp80, metadata, metadata)",
+    );
+    assert_eq!(quiet[..6].to_vec(), ["fld", "fld", "fucom", "setp", "setne", "or"], "{quiet:?}");
+}

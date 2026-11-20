@@ -93,7 +93,7 @@ pub fn select_node<D: AddrDag>(
                 return Outcome::Selected;
             }
         }
-        x86isd::FCMP => {
+        x86isd::FCMP | x86isd::STRICT_FCMP | x86isd::STRICT_FCMPS => {
             // `Subtarget->canUseCMOV()` ends the case ([L6391]): the table's
             // `UCOMIS*rr` and `UCOM_FpIr*` patterns select the compare. Every
             // x86-64 CPU has CMOV; the 32-bit ones in the tables do not.

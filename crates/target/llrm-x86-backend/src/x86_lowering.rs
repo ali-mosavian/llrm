@@ -144,6 +144,10 @@ pub mod x86isd {
     /// `X86ISD::FCMP`: the flags of an x87 compare (`fucom`, `fnstsw`,
     /// `sahf` on a 486).
     pub const FCMP: ISD = ISD::Target(576);
+    /// `X86ISD::STRICT_FCMP`: (chain, lhs, rhs) to (flags, chain), a quiet compare.
+    pub const STRICT_FCMP: ISD = ISD::Target(753);
+    /// `X86ISD::STRICT_FCMPS`: the signaling compare.
+    pub const STRICT_FCMPS: ISD = ISD::Target(754);
     /// `X86ISD::FSETCC`: `cmpss`/`cmpsd` with an immediate predicate, all
     /// ones or all zeros in the scalar.
     pub const FSETCC: ISD = ISD::Target(622);
@@ -835,6 +839,7 @@ impl Hooks for X86Lowering<'_> {
         match dag.opcode(node) {
             ISD::SetCC if dag.value_type(node).is_vector() => lower_vector_setcc(dag, node),
             ISD::SetCC => lower_setcc(dag, node, self.min_size, self.status_word_tests),
+            ISD::StrictFSetCC | ISD::StrictFSetCCS => lower_strict_fsetcc(dag, node),
             ISD::Select => lower_select(dag, node, self.cmov, self.min_size, self.status_word_tests),
             ISD::BrCond => lower_brcond(dag, node, self.min_size, self.status_word_tests),
             ISD::UAddO | ISD::USubO | ISD::SAddO | ISD::SSubO | ISD::UMulO | ISD::SMulO => Some(lower_xalu(dag, node)),
@@ -1440,6 +1445,28 @@ fn lower_setcc(
     }
     let (flags, code) = emit_flags_for_setcc(dag, op0, op1, cc, min_size);
     Some(dag.get_node(x86isd::SETCC, EVT::I8, &[code, flags]))
+}
+
+/// `LowerSETCC` of `STRICT_FSETCC(S)`: the compare is a chained
+/// `STRICT_FCMP(S)` whose out chain is the node's, then the same `SETCC` of
+/// its flags as a plain compare. The chain is what keeps the compare, which
+/// may raise an exception, in order with the other constrained operations.
+/// DEVIATE CFP2: the flags are read by `sahf` (the pin's), never by the
+/// status word of DEVIATE X87-STATUS. Exit: that deviation's. Owner w9-tests.
+/// Review 2026-11-27.
+fn lower_strict_fsetcc(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let chain = dag.operand(node, 0);
+    let (mut lhs, mut rhs) = (dag.operand(node, 1), dag.operand(node, 2));
+    let cc = cond_of(dag, dag.operand(node, 3));
+    let code = translate_fp_cc(dag, cc, &mut lhs, &mut rhs)?;
+    let opcode = if dag.opcode(node) == ISD::StrictFSetCCS { x86isd::STRICT_FCMPS } else { x86isd::STRICT_FCMP };
+    let flags = dag.get_node_multi(opcode, &[EVT::I32, EVT::OTHER], &[chain, lhs, rhs]);
+    let code = cond_code(dag, code);
+    let result = dag.get_node(x86isd::SETCC, EVT::I8, &[code, SDValue { node: flags.node, res: 0 }]);
+    Some(dag.get_node_multi(ISD::MergeValues, &[EVT::I8, EVT::OTHER], &[result, SDValue { node: flags.node, res: 1 }]))
 }
 
 /// `isX86LogicalCmp`: flags a `CMOV` can read directly.
