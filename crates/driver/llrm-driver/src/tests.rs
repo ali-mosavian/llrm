@@ -6532,3 +6532,31 @@ define i32 @f(x86_fp80 %a, x86_fp80 %b) strictfp {{\n  %c = call i1 @llvm.experi
         }
     }
 }
+
+/// A constrained compare put `fcom` ahead of an `add` the scheduler placed
+/// before `sahf`, so the listing read `fnstsw; sahf; add; jbe`: the `add`
+/// rewrote the flags the branch tests (QB `pfpu.c`, 105 of 327 programs wrong).
+#[test]
+fn a_constrained_compare_keeps_its_flags_until_the_branch() {
+    let text = "target datalayout = \"@m32-datalayout@\"\n\
+define i32 @f(x86_fp80 %x, x86_fp80 %y, i32 %p) strictfp {\n\
+entry:\n  %c = call i1 @llvm.experimental.constrained.fcmp.f80(x86_fp80 %x, x86_fp80 %y, metadata !\"ogt\", metadata !\"fpexcept.strict\") strictfp\n  %q = add i32 %p, 12\n  br i1 %c, label %a, label %b\n\
+a:\n  %r = call i32 @g(i32 %q)\n  ret i32 %r\nb:\n  ret i32 %p\n}\n\
+declare i32 @g(i32)\n\
+declare i1 @llvm.experimental.constrained.fcmp.f80(x86_fp80, x86_fp80, metadata, metadata)\n";
+    for level in ["-O0", "-O1", "-O2", "-Os"] {
+        let (built, _) = compiled(&flags(&["-m32", level, "--isel=dag"]), text, "f").unwrap();
+        let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+        let after: Vec<&str> = listing.lines().skip_while(|line| line.trim() != "sahf").skip(1).map(str::trim).collect();
+        let between: Vec<&str> = after.iter().copied().take_while(|line| !line.starts_with('j')).collect();
+        assert!(after.iter().any(|line| line.starts_with('j')), "{level}: no branch after sahf\n{listing}");
+        assert!(
+            !between.iter().any(|line| {
+                let mnemonic = line.split_whitespace().next().unwrap_or("");
+                ["add", "sub", "and", "or", "xor", "neg", "inc", "dec", "shl", "shr", "sar", "imul", "cmp", "test", "adc", "sbb"]
+                    .contains(&mnemonic)
+            }),
+            "{level}: a flag writer sits between sahf and the branch: {between:?}\n{listing}"
+        );
+    }
+}
