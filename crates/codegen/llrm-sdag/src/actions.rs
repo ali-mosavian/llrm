@@ -101,6 +101,22 @@ pub enum LoadExt {
 
 const INTS: [MVT; 6] = [MVT::I1, MVT::I8, MVT::I16, MVT::I32, MVT::I64, MVT::I128];
 const FLOATS: [MVT; 3] = [MVT::F32, MVT::F64, MVT::F80];
+
+/// The constrained nodes whose result is a float.
+const STRICT_FP: [ISD; 9] = [
+    ISD::StrictFAdd,
+    ISD::StrictFSub,
+    ISD::StrictFMul,
+    ISD::StrictFDiv,
+    ISD::StrictFRem,
+    ISD::StrictFMA,
+    ISD::StrictFSqrt,
+    ISD::StrictFpExtend,
+    ISD::StrictFpRound,
+];
+/// The constrained conversions whose other side is an integer.
+const STRICT_FP_CONVERT: [ISD; 4] =
+    [ISD::StrictFpToSInt, ISD::StrictFpToUInt, ISD::StrictSIntToFp, ISD::StrictUIntToFp];
 const ALL: [MVT; 10] =
     [MVT::I1, MVT::I8, MVT::I16, MVT::I32, MVT::I64, MVT::I128, MVT::F32, MVT::F64, MVT::F80, MVT::Other];
 
@@ -892,6 +908,12 @@ impl TargetLowering {
         // pseudo min/max node, so `combineSelectToPseudoMinMax`
         // (legal-or-custom only) leaves the select alone.
         self.set_ops(&[PseudoFMin, PseudoFMax], &FLOATS, Action::Expand);
+        // TargetLoweringBase.cpp#L930: constrained operations default to
+        // expand (ConstrainedOps.def's DAG_INSTRUCTION list).
+        // The default covers every type (a conversion is keyed by either side).
+        self.set_ops(&STRICT_FP, &FLOATS, Action::Expand);
+        self.set_ops(&STRICT_FP_CONVERT, &FLOATS, Action::Expand);
+        self.set_ops(&STRICT_FP_CONVERT, &[MVT::I8, MVT::I16, MVT::I32, MVT::I64], Action::Expand);
     }
 
     /// m32 for i486/P5 with the x87 and no SSE: `initActions`, then the
@@ -1470,6 +1492,22 @@ mod tests {
 
     fn a64() -> TargetLowering {
         TargetLowering::aarch64(Aarch64Features::default())
+    }
+
+    /// `initActions` expands every constrained node: a selector that finds a
+    /// `STRICT_FADD` legal by default would emit it unchained. Before the
+    /// default, an x87 `strict_fadd` on f64 read `Legal`.
+    #[test]
+    fn a_constrained_node_is_expanded_until_a_target_makes_it_legal() {
+        let t = TargetLowering::x86_32(Features::default(), MVT::I32);
+        for op in [ISD::StrictFAdd, ISD::StrictFSqrt, ISD::StrictFpRound, ISD::StrictFMA] {
+            for vt in [MVT::F32, MVT::F64, MVT::F80] {
+                assert_eq!(t.operation_action(op, EVT::Simple(vt)), Action::Expand, "{op:?} {vt:?}");
+            }
+        }
+        for op in [ISD::StrictFpToSInt, ISD::StrictUIntToFp] {
+            assert_eq!(t.operation_action(op, EVT::Simple(MVT::I32)), Action::Expand);
+        }
     }
 
     /// A function tuned for size called the speed routine of a divide: a
