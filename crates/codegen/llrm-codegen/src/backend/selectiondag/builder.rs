@@ -13,7 +13,7 @@ use llrm_support::hash::HashMap;
 mod aggregates;
 mod asmcall;
 mod codecall;
-mod constrained;
+mod strictfp;
 mod mathops;
 mod memops;
 mod mergedcond;

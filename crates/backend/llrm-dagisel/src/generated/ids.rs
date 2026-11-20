@@ -170,6 +170,7 @@ pub mod isd {
     pub const STRICT_FP_ROUND: u16 = 150;
     pub const STRICT_FP_TO_SINT: u16 = 146;
     pub const STRICT_FP_TO_UINT: u16 = 147;
+    pub const STRICT_FRINT: u16 = 129;
     pub const STRICT_FSQRT: u16 = 110;
     pub const STRICT_FSUB: u16 = 105;
     pub const STRICT_PSEUDO_FMAX: u16 = 134;

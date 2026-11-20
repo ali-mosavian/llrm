@@ -852,6 +852,8 @@ impl Hooks for X86Lowering<'_> {
             ISD::FpToSInt | ISD::FpToUInt => lower_fp_to_int(dag, node, self.sse2),
             ISD::LRint | ISD::LLRint => lower_lrint(dag, node),
             ISD::SIntToFp | ISD::UIntToFp => lower_int_to_fp(dag, node, self.sse2),
+            ISD::StrictSIntToFp if !self.sse2 => lower_strict_sint_to_fp(dag, node),
+            ISD::StrictFpToSInt if !self.sse2 => lower_strict_fp_to_sint(dag, node),
             ISD::ConstantPool => lower_constant_pool(dag, node),
             ISD::JumpTable => lower_jump_table(dag, node),
             ISD::ShlParts | ISD::SraParts | ISD::SrlParts => Some(lower_shift_parts(dag, node)),
@@ -1467,6 +1469,70 @@ fn lower_strict_fsetcc(
     let code = cond_code(dag, code);
     let result = dag.get_node(x86isd::SETCC, EVT::I8, &[code, SDValue { node: flags.node, res: 0 }]);
     Some(dag.get_node_multi(ISD::MergeValues, &[EVT::I8, EVT::OTHER], &[result, SDValue { node: flags.node, res: 1 }]))
+}
+
+/// `LowerSINT_TO_FP` of `STRICT_SINT_TO_FP` on the x87: the integer stored to
+/// a stack slot on the node's chain and `fild`ed from it, whose out chain is
+/// the node's. The `i64` source and the unsigned and SSE forms are not
+/// translated: the legalizer refuses them.
+fn lower_strict_sint_to_fp(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let (chain, src) = (dag.operand(node, 0), dag.operand(node, 1));
+    let (dst, src_vt) = (dag.value_type(node), dag.value_type(src));
+    if !matches!(dst, EVT::Simple(MVT::F32 | MVT::F64 | MVT::F80)) || !matches!(src_vt, EVT::I16 | EVT::I32) {
+        return None;
+    }
+    let size = src_vt.size_in_bits() / 8;
+    let index = dag.create_stack_temporary(size, size);
+    let slot = dag.get_frame_index(dag.config().pointer, index);
+    let info = MemInfo {
+        mem_vt: src_vt,
+        align: size,
+        volatile: false,
+        base: MemBase::Stack(index),
+        ext: None,
+        space: 0,
+        ordering: None,
+    };
+    let stored = dag.get_store(chain, src, slot, info);
+    Some(build_fild(dag, dst, src_vt, stored, slot, info))
+}
+
+/// `LowerFP_TO_INT` of `STRICT_FP_TO_SINT` on the x87: `fist` to a stack slot
+/// on the node's chain, then a load whose out chain is the node's.
+fn lower_strict_fp_to_sint(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let (chain, value) = (dag.operand(node, 0), dag.operand(node, 1));
+    let result_vt = dag.value_type(node);
+    if !matches!(dag.value_type(value), EVT::Simple(MVT::F32 | MVT::F64 | MVT::F80))
+        || !matches!(result_vt, EVT::I16 | EVT::I32)
+    {
+        return None;
+    }
+    let size = result_vt.size_in_bits() / 8;
+    let index = dag.create_stack_temporary(size, size);
+    let slot = dag.get_frame_index(dag.config().pointer, index);
+    let info = MemInfo {
+        mem_vt: result_vt,
+        align: size,
+        volatile: false,
+        base: MemBase::Stack(index),
+        ext: None,
+        space: 0,
+        ordering: None,
+    };
+    let fist = dag.intern(
+        x86isd::FP_TO_INT_IN_MEM,
+        &[EVT::OTHER],
+        &[chain, value, slot],
+        SDNodeFlags::default(),
+        NodeData::Mem(info),
+    );
+    Some(dag.get_load(result_vt, fist, slot, info))
 }
 
 /// `isX86LogicalCmp`: flags a `CMOV` can read directly.

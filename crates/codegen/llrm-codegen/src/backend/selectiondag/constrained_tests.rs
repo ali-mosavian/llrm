@@ -187,3 +187,45 @@ fn constrained_compares_select_fcom_for_signaling_and_fucom_for_quiet() {
     );
     assert_eq!(quiet[..6].to_vec(), ["fld", "fld", "fucom", "setp", "setne", "or"], "{quiet:?}");
 }
+
+/// The integer conversions and `rint` are chained too: `fild` and `fisttp`
+/// through a stack slot on the node's chain, `frndint` for `rint`. Before,
+/// each stopped the legalizer ("convert node to libcall"), so a
+/// QuickrBasic `CINT` or `INT` under `FENV_ACCESS` never selected.
+#[test]
+fn constrained_integer_conversions_and_rint_select_to_fild_fisttp_and_frndint() {
+    use super::dag_function::selected;
+    let select = |ty: &str, call: &str, decl: &str| {
+        let text = format!(
+            "{HEAD}define {ty} @f(x86_fp80 %a, i32 %i) strictfp {{\n  %s = call {ty} @llvm.experimental.constrained.{call} strictfp\n  ret {ty} %s\n}}\ndeclare {decl}\n"
+        );
+        let module = llrm_mir::parse::module(&text).expect("parses");
+        let done = selected(&module, "f", &llrm_x86_m32::M32, crate::backend::cpu::profile("486").expect("a cpu"), &[])
+            .unwrap_or_else(|why| panic!("{call}: {}", why.0));
+        done.body
+            .insns()
+            .iter()
+            .filter_map(|insn| insn.what.as_ref())
+            .map(|what| what.name.as_deref().unwrap_or("").to_owned())
+            .collect::<Vec<_>>()
+    };
+    let e = "metadata !\"round.dynamic\", metadata !\"fpexcept.strict\"";
+    let to_float = select(
+        "x86_fp80",
+        &format!("sitofp.f80.i32(i32 %i, {e})"),
+        "x86_fp80 @llvm.experimental.constrained.sitofp.f80.i32(i32, metadata, metadata)",
+    );
+    assert!(to_float.contains(&"fild".into()), "{to_float:?}");
+    let to_int = select(
+        "i32",
+        "fptosi.i32.f80(x86_fp80 %a, metadata !\"fpexcept.strict\")",
+        "i32 @llvm.experimental.constrained.fptosi.i32.f80(x86_fp80, metadata)",
+    );
+    assert_eq!(to_int[..2].to_vec(), ["fld", "fisttp"], "{to_int:?}");
+    let rint = select(
+        "x86_fp80",
+        &format!("rint.f80(x86_fp80 %a, {e})"),
+        "x86_fp80 @llvm.experimental.constrained.rint.f80(x86_fp80, metadata, metadata)",
+    );
+    assert_eq!(rint[..2].to_vec(), ["fld", "frndint"], "{rint:?}");
+}

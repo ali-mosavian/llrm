@@ -1373,6 +1373,10 @@ impl TargetLowering {
         // conversions the x87 does itself.
         t.set_ops(&[StrictFpExtend], &[MVT::F64, MVT::F80], Legal);
         t.set_ops(&[StrictFAdd, StrictFSub, StrictFMul, StrictFDiv, StrictFpRound, StrictFSqrt], &FLOATS, Legal);
+        // DEVIATE CFP3: `rint` is `frndint`, as the plain one is (SD214); the
+        // pin expands both to `rint`. Exit: none. Owner w9-tests. Review
+        // 2026-11-27.
+        t.set_ops(&[StrictFRint], &FLOATS, Legal);
         // L300-L303, L850: `lrint` of an x87 value is `fist`
         t.set_ops(&[LRint, LLRint], &[MVT::F32, MVT::F64, MVT::F80], Custom);
         // an i64 result at 32 bits is expanded after the same `fist`, as

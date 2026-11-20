@@ -149,6 +149,7 @@ pub fn pin_opcode(opcode: ISD) -> u16 {
         StrictFDiv => pin::STRICT_FDIV,
         StrictFMA => pin::STRICT_FMA,
         StrictFSqrt => pin::STRICT_FSQRT,
+        StrictFRint => pin::STRICT_FRINT,
         StrictFpExtend => pin::STRICT_FP_EXTEND,
         StrictFpRound => pin::STRICT_FP_ROUND,
         StrictFpToSInt => pin::STRICT_FP_TO_SINT,
@@ -156,7 +157,7 @@ pub fn pin_opcode(opcode: ISD) -> u16 {
         StrictSIntToFp => pin::STRICT_SINT_TO_FP,
         StrictUIntToFp => pin::STRICT_UINT_TO_FP,
         // No pattern of the pin's tables names these.
-        StrictFRem | StrictFRint | StrictFSetCC | StrictFSetCCS => u16::MAX,
+        StrictFRem | StrictFSetCC | StrictFSetCCS => u16::MAX,
         PseudoFMin => pin::PSEUDO_FMIN,
         PseudoFMax => pin::PSEUDO_FMAX,
         Freeze => pin::FREEZE,
