@@ -1,15 +1,16 @@
-//! `x86_64-linux`: every call finds rsp a multiple of 16 (System V), also a call
-//! with one argument on the stack. `call_depths` reads the depth at each call
-//! from the listing; `an_m64_call_passes_the_sysv_registers_and_one_stack_slot`
-//! once held the area to 16 bytes, which `perf(m32): the aligned frame takes the
-//! call phase that pads least` made the frame's job, leaving that test failing
+//! `x86_64-linux`: every call finds rsp a multiple of 16 (System V), also a
+//! call with one argument on the stack. `call_depths` reads the depth at each
+//! call from the listing;
+//! `an_m64_call_passes_the_sysv_registers_and_one_stack_slot` once held the
+//! area to 16 bytes, which `perf(m32): the aligned frame takes the call phase
+//! that pads least` made the frame's job, leaving that test failing
 //! on a tip that was correct. Needs `LLRM_LLC`.
 
 use std::path::Path;
 use std::process::Command;
 
-/// The stack depth at each `call` of the straight-line function `name`, from the
-/// entry (the return address is 8).
+/// The stack depth at each `call` of the straight-line function `name`, from
+/// the entry (the return address is 8).
 fn call_depths(
     listing: &str,
     name: &str,
