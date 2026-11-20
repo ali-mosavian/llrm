@@ -88,7 +88,7 @@ entry:
 fn a_wide_atomic_is_a_libcall_not_a_refusal_or_a_split() {
     let mut module = parse::module(WIDE).unwrap();
     hidden(&mut module).unwrap();
-    lowered(&mut module, 32, true, false).unwrap();
+    lowered(&mut module, 32, true, false, false).unwrap();
     assert_eq!(crate::verify::verify(&module), Vec::<String>::new());
     let called: Vec<&str> = module
         .globals
