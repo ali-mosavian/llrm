@@ -288,7 +288,7 @@ pub fn with_fast_division<R>(
 
 /// `f` with the shared callee-save helpers allowed or not. A function that
 /// keeps `n >= 3` callee-saved cells saves `6n - 9` bytes with them , but the
-/// runtime that holds them is [`SAVE_HELPERS_BYTES`] a module: only a module
+/// runtime that holds them is [`save_helpers_bytes`] a module: only a module
 /// whose users together save more than that should link it
 /// (`select::module_text`).
 pub fn with_shared_saves<R>(
@@ -301,8 +301,16 @@ pub fn with_shared_saves<R>(
     result
 }
 
-/// The bytes `__csave` and `__crest` take once linked.
-pub const SAVE_HELPERS_BYTES: i64 = 34;
+/// The bytes the callee-save helpers the `texts` call take once linked: each
+/// routine of `runtime/mos_rt.s` they reach, once.
+pub fn save_helpers_bytes<'a>(texts: impl IntoIterator<Item = &'a str>) -> i64 {
+    let texts: Vec<&str> = texts.into_iter().collect();
+    ["jsr __csave", "jsr __csave_ax", "jmp __crest", "jmp __crest_ax"]
+        .into_iter()
+        .filter(|call| texts.iter().any(|text| text.lines().any(|line| line.trim() == *call)))
+        .map(|call| crate::opcosts::member_bytes(call.split_once(' ').map_or(call, |(_, name)| name)))
+        .sum()
+}
 
 /// What a function that keeps `n` callee-saved cells and returns from one place
 /// saves by calling the helpers: six bytes a cell inline, and two for the
@@ -3993,6 +4001,25 @@ pub fn emit(
 /// The most zero-page bytes the register file names (`rc0`..`rc25`).
 pub const MOST_CELLS: u8 = 26;
 
+/// The text of a function as the allocator finished it, and the same text
+/// finished without the transfer of known constants where that differs.
+type Finished = (String, Option<String>);
+
+thread_local! {
+    static LAST_PLAIN: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+}
+
+/// The kept text of `finished`; its plain twin waits for [`take_plain`].
+fn stash_plain((kept, plain): Finished) -> String {
+    LAST_PLAIN.with(|last| *last.borrow_mut() = plain);
+    kept
+}
+
+/// The plain twin of the text [`emit`] returned last, if it differs.
+pub fn take_plain() -> Option<String> {
+    LAST_PLAIN.with(|last| last.borrow_mut().take())
+}
+
 fn emit_on(
     function: MFunction<Class>,
     labels: &[Vec<String>],
@@ -4023,7 +4050,7 @@ fn emit_on(
     };
     if let Some((sink, share, place)) = FIXED_VARIANT.with(std::cell::Cell::get) {
         let (_, _, slots, _, _, _, finished) = run(function, sink, share, place)?;
-        return Ok((finished, slots));
+        return Ok((stash_plain(finished), slots));
     }
     let (mut code, mut priced, mut slots, sunk, shared, moved, mut finished) = run(function.clone(), true, true, true)?;
     // a layout that rotates a loop is kept only where it is no larger and no
@@ -4038,7 +4065,7 @@ fn emit_on(
     }
     KEPT_VARIANT.with(|a| a.set((true, true, place)));
     if !sunk && !shared {
-        return Ok((finished, slots));
+        return Ok((stash_plain(finished), slots));
     }
     // each change is kept only where it is no larger and no slower than the
     // function without it
@@ -4057,7 +4084,7 @@ fn emit_on(
             KEPT_VARIANT.with(|a| a.set((sink, share, place)));
         }
     }
-    Ok((best.3, best.2))
+    Ok((stash_plain(best.3), best.2))
 }
 
 /// `rs0 += n` (the frame, `n` as a signed 16-bit amount).
@@ -4257,7 +4284,7 @@ fn emit_with<const STACK: bool>(
     share: bool,
     place: bool,
     source: Option<(&str, Option<u32>)>,
-) -> Result<(String, String, Vec<(String, usize)>, bool, bool, bool, String), String> {
+) -> Result<(String, String, Vec<(String, usize)>, bool, bool, bool, Finished), String> {
     EMITS.with(|runs| runs.set(runs.get() + 1));
     // an instruction goes to the one path that reads it; a bump of a pointer is
     // then done in place, and the read of the old pointer that follows it
@@ -4885,8 +4912,8 @@ fn emit_with<const STACK: bool>(
                     }
                 }
                 (Kind::Op("CSAVE"), _) => {
-                    if after[b][i].contains(&reg::Y) || after[b][i].contains(&reg::X) || a_live {
-                        // `__csave` changes a, x and y: the same bytes pushed
+                    if after[b][i].contains(&reg::Y) {
+                        // `y` is the count the helper takes: the same bytes pushed
                         // one at a time, the argument
                         // in `a` waiting in an index register nothing holds,
                         // with all three live in a cell nothing holds
@@ -4912,6 +4939,9 @@ fn emit_with<const STACK: bool>(
                                 (None, None) => {}
                             }
                         }
+                    } else if after[b][i].contains(&reg::X) || a_live {
+                        // a value in `a` or `x` (a word argument): the helper that keeps them
+                        writeln!(out, "  ldy #{}\n  jsr __csave_ax", regs.len()).unwrap();
                     } else {
                         writeln!(out, "  ldy #{}\n  jsr __csave", regs.len()).unwrap();
                     }
@@ -4924,6 +4954,11 @@ fn emit_with<const STACK: bool>(
                         out.push_str("  tay\n");
                     }
                     writeln!(out, "  ldx #{}\n  jmp __crest", regs.len()).unwrap();
+                    repeated = 1;
+                }
+                // a word result in `a` and `x`, `y` free: the helper that keeps them
+                (Kind::Op("CREST"), _) if !after[b][i].contains(&reg::Y) => {
+                    writeln!(out, "  ldy #{}\n  jmp __crest_ax", regs.len()).unwrap();
                     repeated = 1;
                 }
                 (Kind::Op("CREST"), _) => {
@@ -5139,7 +5174,8 @@ fn emit_with<const STACK: bool>(
     let tails = ((!returns_a, a_callees), (!returns_x, x_callees), (!returns_y, y_callees), result_cells, cell_callees);
     let (priced, text, finished) = finish_pair(out, lines_of, tails);
     let named = |text: &str| own_labels(text, &function.name);
-    Ok((named(&text), named(&priced), slots, sunk, shared, moved, named(&finished)))
+    let finished = (named(&finished.0), finished.1.map(|plain| named(&plain)));
+    Ok((named(&text), named(&priced), slots, sunk, shared, moved, finished))
 }
 
 /// The labels the emitter numbers from 1 in every function (`_pa1`, `_cmt1`,
@@ -5191,7 +5227,7 @@ fn finish_pair(
         std::collections::BTreeSet<String>,
         std::sync::Arc<std::collections::BTreeMap<String, std::collections::BTreeSet<u8>>>,
     ),
-) -> (String, String, String) {
+) -> (String, String, Finished) {
     code.no_a_result = no_a_result;
     code.a_callees = a_callees;
     code.no_x_result = no_x_result;
@@ -5204,13 +5240,24 @@ fn finish_pair(
     crate::relax::relax(&mut priced);
     crate::relax::relax(&mut kept);
     let kept_text = kept.text();
+    // the same function without the transfer of known constants, finished as
+    // the kept text is: the module's outliner may find its repeats equal where
+    // that pass made them differ (`outline::run_priced` on both, the smaller
+    // kept)
+    let mut plain = (priced != kept).then(|| priced.clone());
     // after the layout choice, on the relaxed text: the passes only shrink it
     let changed = crate::peephole::after_layout(&mut kept);
+    if let Some(plain) = plain.as_mut() {
+        crate::peephole::after_layout(plain);
+    }
     if let Some((file, scope, places)) = lines_of {
         kept.lines = with_lines(kept.lines, file, scope, places);
+        if let Some(plain) = plain.as_mut() {
+            plain.lines = with_lines(std::mem::take(&mut plain.lines), file, scope, places);
+        }
     }
     let finished = if changed || lines_of.is_some() { kept.text() } else { kept_text.clone() };
-    (priced.text(), kept_text, finished)
+    (priced.text(), kept_text, (finished, plain.map(|plain| plain.text())))
 }
 
 /// `.dbg line` ahead of each instruction whose line is not the one before it
@@ -5373,6 +5420,6 @@ fn allocate_greedy<T: Target<Class = Class>>(
 }
 
 /// `code` without its `.dbg line` directives, which cost nothing.
-fn without_lines(code: &str) -> String {
+pub(crate) fn without_lines(code: &str) -> String {
     code.lines().filter(|line| !line.trim_start().starts_with(".dbg")).map(|line| format!("{line}\n")).collect()
 }
