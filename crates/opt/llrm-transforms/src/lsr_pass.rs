@@ -546,6 +546,17 @@ pub fn reduced(
     reduced_with(context, layout, function, declared, outer, tti, false)
 }
 
+thread_local! {
+    /// The functions `LoopStrengthReduce` has been run over on this thread (M68K-LSR-TWICE: the m68k mid-end runs it
+    /// again after the shared pipeline, which the pin does not).
+    static RUNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times LSR has run over a function on this thread.
+pub fn runs_taken() -> usize {
+    RUNS.with(std::cell::Cell::get)
+}
+
 /// [`reduced`], with every IV chain made if `stress_chains`
 /// (`-lsr-stress-ivchain`): for tests of the chains' generation.
 pub fn reduced_with(
@@ -578,7 +589,9 @@ pub fn reduced_held(
     // The pass requires `LoopSimplify` (`getAnalysisUsage`): an outer loop
     // entered by a conditional branch gets the preheader its invariants'
     // induction variables are made in.
+    RUNS.with(|runs| runs.set(runs.get() + 1));
     let mut changed = crate::loopsimplify::simplified(function);
+    llrm_support::debug!("lsr-split", "loopsimplify before LSR: changed {changed}, {} blocks", function.layout().len());
     // The held expressions are read in the CFG they were made in.
     let mut stable = !changed;
     // The dominator tree, loops and assumptions of the function are made once:
