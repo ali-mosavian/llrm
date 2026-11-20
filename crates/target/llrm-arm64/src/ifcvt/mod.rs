@@ -579,6 +579,12 @@ impl IfConv {
         if tail != s1 && (cfg.pred[s1].len() != 1 || cfg.succ[s1].len() != 1 || cfg.succ[s1][0] != tail) {
             return None;
         }
+        // The blocks that vanish into the head must not be ones whose address
+        // is taken (`hasAddressTaken`): an `indirectbr` reaches them by it.
+        let taken = |at: usize| function.block_symbols.iter().any(|(label, _)| *label == cfg.labels[at]);
+        if taken(s0) || (s1 != tail && taken(s1)) {
+            return None;
+        }
         let tail_ops = &function.blocks[tail].ops;
         if !matches!(tail_ops.first(), Some(Op::Phi { .. })) {
             return None;

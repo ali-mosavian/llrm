@@ -1765,6 +1765,10 @@ impl Emitter<'_> {
         addend: i64,
     ) -> Result<(Target, bool), String> {
         let global = self.globals.get(id).ok_or("a global the module does not have")?;
+        if let Some(block) = self.globals.block_at(id, addend) {
+            let name = super::globals::block_symbol(self.globals.local_prefix(), id, block);
+            return Ok((Target::Symbol { name, addend: 0 }, false));
+        }
         Ok((Target::Symbol { name: global.name.clone(), addend }, global.got))
     }
 
@@ -2920,6 +2924,10 @@ pub fn emit(
         emitter.mf.slot(size, align);
     }
     emitter.mf.declared.clone_from(&first.declared);
+    for (block, symbol) in &first.address_taken {
+        let Target::Label(label) = emitter.label(*block)? else { return Err("a block without a label".into()) };
+        emitter.mf.block_symbols.push((label, symbol.clone()));
+    }
     // The blocks `F128CSEL` splits make, after the selector's; and where each
     // split block now ends.
     let mut joined: Vec<MBlock> = Vec::new();

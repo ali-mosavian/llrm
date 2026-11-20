@@ -426,6 +426,9 @@ pub struct MFunc {
     /// The frame object each source variable lives in (`llvm.dbg.declare` of
     /// an `alloca`), by the variable's metadata node.
     pub declared: Vec<(llrm_mir::MetadataId, u32)>,
+    /// The label of each block whose address is taken, with the symbol that
+    /// names it.
+    pub block_symbols: Vec<(String, String)>,
     /// The constants the function loads from memory (`MachineConstantPool`),
     /// each under the label its address is taken from.
     pub pool: Vec<PoolEntry>,
@@ -459,6 +462,20 @@ pub struct PoolEntry {
 }
 
 impl MFunc {
+    /// The blocks that end in an `indirectbr`, each with the labels it may
+    /// reach.
+    pub fn indirect_jumps(&self) -> Vec<(String, Vec<String>)> {
+        self.blocks
+            .iter()
+            .filter_map(|block| {
+                block.ops.iter().find_map(|op| match op {
+                    Op::IndirectJump { targets, .. } => Some((block.label.clone(), targets.clone())),
+                    _ => None,
+                })
+            })
+            .collect()
+    }
+
     pub fn new(name: &str) -> Self {
         Self { name: name.to_owned(), next_register: Gpr::FIRST_VIRTUAL, ..Self::default() }
     }
