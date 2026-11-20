@@ -170,6 +170,7 @@ pub mod isd {
     pub const STRICT_FP_ROUND: u16 = 150;
     pub const STRICT_FP_TO_SINT: u16 = 146;
     pub const STRICT_FP_TO_UINT: u16 = 147;
+    pub const STRICT_FRINT: u16 = 129;
     pub const STRICT_FSQRT: u16 = 110;
     pub const STRICT_FSUB: u16 = 105;
     pub const STRICT_PSEUDO_FMAX: u16 = 134;
@@ -752,12 +753,14 @@ pub mod x86 {
     pub const AND16rr: u16 = 834;
     pub const AND32mi: u16 = 845;
     pub const AND32mr: u16 = 855;
+    pub const AND32ri: u16 = 860;
     pub const AND32rm: u16 = 870;
     pub const AND32rr: u16 = 875;
     pub const AND64rm: u16 = 911;
     pub const AND64rr: u16 = 916;
     pub const AND8mi: u16 = 927;
     pub const AND8mr: u16 = 933;
+    pub const AND8ri: u16 = 938;
     pub const AND8rm: u16 = 944;
     pub const AND8rr: u16 = 949;
     pub const ANDPSrm: u16 = 977;
@@ -769,6 +772,11 @@ pub mod x86 {
     pub const CDQ: u16 = 1202;
     pub const CH: u16 = 10;
     pub const CL: u16 = 11;
+    pub const CMP32ri: u16 = 1324;
+    pub const CMP8ri: u16 = 1342;
+    pub const COM_Fpr32: u16 = 1392;
+    pub const COM_Fpr64: u16 = 1393;
+    pub const COM_Fpr80: u16 = 1394;
     pub const CQO: u16 = 1396;
     pub const CS: u16 = 12;
     pub const CWD: u16 = 1506;
@@ -933,10 +941,6 @@ pub mod x86 {
     pub const TEST64rr: u16 = 5020;
     pub const TEST8mi: u16 = 5022;
     pub const TEST8mr: u16 = 5023;
-    pub const AND32ri: u16 = 860;
-    pub const AND8ri: u16 = 938;
-    pub const CMP32ri: u16 = 1324;
-    pub const CMP8ri: u16 = 1342;
     pub const TEST8ri: u16 = 5024;
     pub const TEST8rr: u16 = 5025;
     pub const UCOM_Fpr32: u16 = 5096;
@@ -1006,6 +1010,9 @@ pub mod x86 {
         (1202, "CDQ"),
         (1324, "CMP32ri"),
         (1342, "CMP8ri"),
+        (1392, "COM_Fpr32"),
+        (1393, "COM_Fpr64"),
+        (1394, "COM_Fpr80"),
         (1396, "CQO"),
         (1506, "CWD"),
         (1511, "DEC16m"),
