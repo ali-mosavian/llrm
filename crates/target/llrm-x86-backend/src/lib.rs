@@ -24,6 +24,7 @@ pub mod select;
 pub mod unfold;
 pub mod x86_carry;
 pub mod x86_lowering;
+pub mod x86_vshift;
 pub mod x86isd;
 
 struct X86;

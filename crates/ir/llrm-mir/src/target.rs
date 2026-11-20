@@ -566,6 +566,10 @@ pub struct Tuning {
     /// site too (otherwise only two or more: the pin's single-site inline
     /// stands). A callee that stays and is copied once only grows the code.
     pub inline_size_guard_single_site: bool,
+    /// With `inline_size_guard_at_size`, the bound stands down for an
+    /// `inlinehint` callee (C's `inline`) the pin's raised threshold (325)
+    /// passes: its cost under that is the verdict.
+    pub inline_size_guard_yields_to_inlinehint: bool,
     /// DEVIATE MEMSET-GAP (owner llrm-target-x86-m16-b, exit 2026-11-27): at
     /// size, `MemCpyOpt` joins two memsets of one byte whose gap later stores
     /// of another value overwrite whole, into one memset placed before the
@@ -950,6 +954,7 @@ impl Tuning {
         inline_size_guard_at_size: false,
         inline_size_guard_at_o1: false,
         inline_size_guard_single_site: false,
+        inline_size_guard_yields_to_inlinehint: false,
         memset_gap_merge_at_size: false,
         inline_chain_trial: false,
         lftr_size_budget: 4,

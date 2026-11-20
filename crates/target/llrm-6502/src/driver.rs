@@ -707,6 +707,7 @@ fn tail(
     }
     let parts: Vec<(&str, &_)> = names.iter().map(String::as_str).zip(&selections).collect();
     let pieces = module_text(module, &parts)?;
+    let plain_pieces = crate::select::plain_pieces(&pieces);
     let functions = if audit {
         names
             .iter()
@@ -744,8 +745,35 @@ fn tail(
     // outline`)
     let share = matches!(request.level, Level::O1 | Level::O2 | Level::O3)
         .then(|| crate::routines::speed_share_percent("outline"));
-    let text = if outlined { crate::outline::run_priced(&text, rate, share) } else { text };
-    let text = if request.level != Level::O0 { crate::peephole::after_outlining(&text) } else { text };
+    // The outliner is also tried on the module as the allocator wrote it
+    // before the transfer of known constants, which that pass makes differ
+    // between copies of one run; it then runs on the outlined text, and the
+    // smaller module is kept.
+    // `LLRM_6502_OUTLINE_PLAIN=0` is the kill switch, for an A/B of one binary
+    let plain = (outlined
+        && crate::copyprop::enabled(std::env::var_os("LLRM_6502_OUTLINE_PLAIN").as_deref())
+        && plain_pieces.iter().zip(&pieces).any(|(plain, piece)| plain != piece)).then(|| {
+        let mut plain = plain_pieces.concat();
+        for (name, label) in &data.1 {
+            plain = plain.replace(name.as_str(), label);
+        }
+        plain
+    });
+    let after = |text: String| if request.level != Level::O0 { crate::peephole::after_outlining(&text) } else { text };
+    let kept = after(if outlined { crate::outline::run_priced(&text, rate, share) } else { text });
+    let text = match plain {
+        Some(plain) => {
+            let mut outlined = crate::asm::Asm::parse(&crate::outline::run_priced(&plain, rate, share));
+            crate::peephole::drop_known_loads(&mut outlined);
+            let plain = after(outlined.text());
+            let bytes = |text: &str| crate::timing::estimate(request.cpu, &crate::alloc::without_lines(text)).map(|priced| priced.bytes);
+            match (bytes(&kept), bytes(&plain)) {
+                (Ok(kept_bytes), Ok(plain_bytes)) if plain_bytes < kept_bytes => plain,
+                _ => kept,
+            }
+        }
+        None => kept,
+    };
     let text = match request.platform.static_zero_page {
         0 => text,
         // `LLRM_6502_STATIC_ZP=0` is the kill switch, for an A/B of one binary
