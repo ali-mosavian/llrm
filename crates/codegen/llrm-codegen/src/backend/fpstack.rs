@@ -539,8 +539,8 @@ impl Fps<'_> {
             }
             self.values.push(results[0]);
             self.vacate();
-        } else if what.op == Operation::FloatStore && unnamed(&what) && what.dests.is_empty() && operands.len() == 1 {
-            self.handle_return(operands[0])?;
+        } else if what.op == Operation::FloatStore && unnamed(&what) && what.dests.is_empty() && !operands.is_empty() {
+            self.handle_stack_values(&operands)?;
         } else if what.op == Operation::Compare && operands.len() == 2 && results.is_empty() {
             self.handle_compare_fp(step, operands[0], operands[1])?;
         } else if what.op == Operation::Compare
@@ -596,16 +596,28 @@ impl Fps<'_> {
         Ok(())
     }
 
-    /// `handleReturn`: the returned value is st(0) and the stack is otherwise
-    /// empty.
-    fn handle_return(
+    /// `handleReturn` (one value) and the fixed stack operands of
+    /// `handleSpecialFP`'s inline asm (`shuffleStackTop`): `values` are the
+    /// stack's entries, `st(0)` first, and nothing else is on it. One value
+    /// named twice is copied.
+    fn handle_stack_values(
         &mut self,
-        value: u32,
+        values: &[u32],
     ) -> Result<(), Raised> {
-        self.adjust_live_regs(&BTreeSet::from([value]))?;
-        if self.values != [value] {
-            return Err(unlowered("a returned float leaves other values on the stack"));
+        let distinct: BTreeSet<u32> = values.iter().copied().collect();
+        self.adjust_live_regs(&distinct)?;
+        let mut wanted = values.to_vec();
+        for at in (1..wanted.len()).rev() {
+            if wanted[..at].contains(&wanted[at]) {
+                let copy = self.take_fresh();
+                self.duplicate_to_top(wanted[at], copy)?;
+                wanted[at] = copy;
+            }
         }
+        if self.values.len() != wanted.len() {
+            return Err(unlowered("a float stack operand leaves other values on the stack"));
+        }
+        self.shuffle_stack_top(&wanted)?;
         self.values.clear();
         self.vacate();
         Ok(())

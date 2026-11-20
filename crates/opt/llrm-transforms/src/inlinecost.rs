@@ -1429,6 +1429,17 @@ impl<'a> Analyzer<'a> {
         {
             return false;
         }
+        // The copy folds only where the loop unrolls whole: a bound over the
+        // pin's full-unroll threshold (`pin_full_unroll_threshold`, an
+        // unrolled body of at least one instruction a trip) leaves the copy
+        // as big as the callee (switch -O2: `bench_switch(2000)` kept beside
+        // its call, +402 B for the same clocks).
+        let bound = if from_arguments(lhs) { lhs } else { rhs };
+        if let Some(Simple::Int(_, trips)) = self.constant(bound) {
+            if trips > u128::from(crate::loopunrollpass::pin_full_unroll_threshold(3)) {
+                return false;
+            }
+        }
         let Some(block) = self.callee.parent(inst) else { return false };
         let headers = loop_headers(self.callee);
         // the loop the compare ends: its own header, or the header it branches
