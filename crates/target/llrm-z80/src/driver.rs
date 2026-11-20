@@ -428,8 +428,10 @@ pub fn selections_with_alternatives(
         crate::dagisel::function::FLAT_LOOP_TRIPS.with(|one| one.set(request.flat_loop_trips));
         crate::dagisel::pipeline::STRICT_LEVEL
             .with(|one| one.set(matches!(request.level, Level::O1 | Level::Os | Level::Oz)));
+        crate::dagisel::pipeline::O1_LEVEL.with(|one| one.set(request.level == Level::O1));
         let one = select_function_with(module, name, request.cpu, request.level != Level::O0);
         crate::dagisel::pipeline::STRICT_LEVEL.with(|one| one.set(false));
+        crate::dagisel::pipeline::O1_LEVEL.with(|one| one.set(false));
         one
     };
     // A form whose long adds became carry ops is also selected with them left

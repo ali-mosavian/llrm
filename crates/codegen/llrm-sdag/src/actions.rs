@@ -1000,11 +1000,10 @@ impl TargetLowering {
         // `LowerMUL`: `v4i32` without `pmulld` is `pmuludq` on the even and the
         // odd lanes.
         t.set_ops(&[ISD::Mul], &[MVT::V4I32, MVT::V16I8], Action::Custom);
-        // `LowerShift`: a shift by a constant splat is `VSHLI`/`VSRLI`/`VSRAI`;
-        // `psraq` is AVX-512, so a 64-bit arithmetic shift is left to the
-        // expansion.
-        t.set_ops(&[ISD::Shl, ISD::Srl], &[MVT::V8I16, MVT::V4I32, MVT::V2I64], Action::Custom);
-        t.set_ops(&[ISD::Sra], &[MVT::V8I16, MVT::V4I32], Action::Custom);
+        // `LowerShift`: every 128-bit integer shift (`psllw`... by a constant
+        // or a register, and the sequences for the rest; the 64-bit arithmetic
+        // shift, `psraq` being AVX-512, is `srl`/`xor`/`sub`).
+        t.set_ops(&[ISD::Shl, ISD::Srl, ISD::Sra], &[MVT::V16I8, MVT::V8I16, MVT::V4I32, MVT::V2I64], Action::Custom);
         // `ExpandReductions` (`getShuffleReduction`) makes a sum, `and`, `or`
         // or `xor` a shuffle and an operation a step, then
         // `extractelement`.
