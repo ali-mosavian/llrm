@@ -24,7 +24,7 @@ const UNARY: [(FpUnary, &str); 11] = [
     (FpUnary::Rint(Rounding::Exact), "FRINTX"),
     (FpUnary::Rint(Rounding::Current), "FRINTI"),
 ];
-const BINARY: [(FpBinary, &str); 9] = [
+const BINARY: [(FpBinary, &str); 10] = [
     (FpBinary::Mul, "FMUL"),
     (FpBinary::Div, "FDIV"),
     (FpBinary::Add, "FADD"),
@@ -34,6 +34,7 @@ const BINARY: [(FpBinary, &str); 9] = [
     (FpBinary::MaxNm, "FMAXNM"),
     (FpBinary::MinNm, "FMINNM"),
     (FpBinary::Nmul, "FNMUL"),
+    (FpBinary::Abd, "FABD"),
 ];
 const FUSED: [(FpFused, &str); 4] =
     [(FpFused::Madd, "FMADD"), (FpFused::Msub, "FMSUB"), (FpFused::Nmadd, "FNMADD"), (FpFused::Nmsub, "FNMSUB")];

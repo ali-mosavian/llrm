@@ -110,6 +110,15 @@ fn is_float(
     dag.value_type(value).is_floating_point()
 }
 
+/// A float compare `LowerBR_CC` branches on directly; an `f128` one is a
+/// routine call first.
+fn is_fcmp_branchable(
+    dag: &SelectionDAG,
+    value: SDValue,
+) -> bool {
+    is_float(dag, value) && dag.value_type(value) != EVT::Simple(MVT::F128)
+}
+
 /// `LowerSETCC` for floats: one `CSEL` on the inverted condition, or two on the
 /// pair that `changeFPCCToAArch64CC` returns.
 fn lower_fp_setcc(
@@ -451,15 +460,14 @@ pub fn lower_setcc(
 ) -> Option<SDValue> {
     let (mut lhs, mut rhs) = (dag.operand(node, 0), dag.operand(node, 1));
     let mut code = cond_of(dag, dag.operand(node, 2));
-    if is_float(dag, lhs) {
-        return Some(lower_fp_setcc(dag, node, code));
-    }
-    if !dag.value_type(lhs).is_integer() {
+    let float = is_float(dag, lhs);
+    if !float && !dag.value_type(lhs).is_integer() {
         return None;
     }
     // `visitBRCOND` has made a `BR_CC` of a compare only a branch reads, before
     // this runs; here `lower_brcond` reads the `SETCC` itself, and a
-    // flags-setting `and` would not be undone.
+    // flags-setting `and` would not be undone. A float compare is `fcmp` and
+    // `b.cc` the same way (`LowerBR_CC`).
     let users: Vec<u32> = dag.users(node).collect();
     let only_branched_on = users
         .iter()
@@ -469,8 +477,11 @@ pub fn lower_setcc(
                 dag.opcode(user) == ISD::BrCond && dag.operand(user, 1) == node
             },
         );
-    if !users.is_empty() && only_branched_on {
+    if !users.is_empty() && only_branched_on && (!float || is_fcmp_branchable(dag, lhs)) {
         return Some(node);
+    }
+    if float {
+        return Some(lower_fp_setcc(dag, node, code));
     }
     let vt = dag.value_type(node);
     let (one, zero) = (dag.get_constant(1, vt), dag.get_constant(0, vt));
@@ -702,7 +713,9 @@ pub fn lower_brcond(
         let ccode = cond_const(dag, out);
         return Some(dag.get_node(ISD::Target(a64::BRCOND), EVT::OTHER, &[chain, dest, ccode, flags]));
     }
-    if dag.opcode(cond) == ISD::SetCC && dag.value_type(dag.operand(cond, 0)).is_integer() {
+    if dag.opcode(cond) == ISD::SetCC
+        && (dag.value_type(dag.operand(cond, 0)).is_integer() || is_fcmp_branchable(dag, dag.operand(cond, 0)))
+    {
         let (lhs, rhs, code) = (dag.operand(cond, 0), dag.operand(cond, 1), cond_of(dag, dag.operand(cond, 2)));
         return lower_br_cc(dag, chain, code, lhs, rhs, dest);
     }

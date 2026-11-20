@@ -203,6 +203,7 @@ fn _restore(
         indirect: false,
         table: Vec::new(),
         repeat: false,
+        lock: false,
         table_id: None,
         pops: None,
         tied: None,

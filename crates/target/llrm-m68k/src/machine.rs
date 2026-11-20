@@ -421,6 +421,18 @@ impl Tti for M68k {
         (Some(32), Some(400))
     }
 
+    /// DEVIATE UNROLL-BAR-68000 (owner wasm-3, exit 2026-11-26): the 68000 at
+    /// -O2/-O3 takes 400, over the pin's -O3 bar (300). It has no cache and
+    /// bytes are free at speed (ruling 2026-11-14). Over the 68 programs whose
+    /// code moves between 32 and 600 (68000 -O2/-O3 clocks): 400 runs 37 cells
+    /// faster and none slower (+118 KB of code; 500 and 600 slow shellsort
+    /// 8% and 4%); the card's at-or-below 55 -> 56. The 68020 keeps 32: its
+    /// 256 B cache holds the rolled loop (word_compares 49581 -> 61030 clk
+    /// unrolled). -O1 and -Os do not read it.
+    fn unroll_threshold_at_speed(&self) -> Option<u32> {
+        (self.cpu == crate::dagisel::hooks::Cpu::M68000).then_some(400)
+    }
+
     /// -O1, -O2 and -O3 are judged by clocks (user ruling 2026-11-14): a byte
     /// of growth costs nothing there, so an inline into a speed caller stops
     /// at the pin's threshold (225) alone. The rate that held a growing inline
@@ -681,6 +693,10 @@ impl Tti for M68k {
     /// when LSR rates the indexed formula beside the walk (M68K-COPY-OS).
     fn preferred_addressing_mode(&self) -> AddressingMode {
         AddressingMode::PostIndexed
+    }
+
+    fn lsr_free_walk_beats_end_biased(&self) -> bool {
+        true
     }
 
     fn is_post_inc_load_legal(

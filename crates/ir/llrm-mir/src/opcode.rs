@@ -702,7 +702,7 @@ impl Attribute {
     }
 }
 
-pub const FLAG_ATTRIBUTES: [&str; 57] = [
+pub const FLAG_ATTRIBUTES: [&str; 58] = [
     "alwaysinline",
     "builtin",
     "cold",
@@ -716,6 +716,7 @@ pub const FLAG_ATTRIBUTES: [&str; 57] = [
     "inreg",
     "llrm-end-biased",
     "llrm-fill",
+    "llrm-lshift",
     "llrm-mulhi3-chains",
     "llrm-mulsi3",
     "llrm-no-end-biased",
@@ -765,16 +766,38 @@ pub const FLAG_ATTRIBUTES: [&str; 57] = [
 /// Attributes the pin's clang states that no pass here reads (stack protection,
 /// unwind tables, `dead_on_return`...), kept as flags; `uwtable` may carry its
 /// kind in parentheses (`uwtable(sync)`).
-pub const TARGET_FLAG_ATTRIBUTES: [&str; 10] = [
+pub const TARGET_FLAG_ATTRIBUTES: [&str; 32] = [
     "allockind",
     "allocsize",
     "dead_on_return",
+    "disable_sanitizer_instrumentation",
+    "fn_ret_thunk_extern",
+    "jumptable",
+    "nocf_check",
     "nocreateundeforpoison",
+    "noduplicate",
     "nofreeobj",
     "noimplicitfloat",
+    "nonlazybind",
+    "noprofile",
+    "nosanitize_bounds",
+    "nosanitize_coverage",
+    "optforfuzzing",
+    "presplitcoroutine",
+    "safestack",
+    "sanitize_address",
+    "sanitize_hwaddress",
+    "sanitize_memory",
+    "sanitize_memtag",
+    "sanitize_thread",
+    "shadowcallstack",
+    "skipprofile",
+    "speculative_load_hardening",
     "ssp",
     "sspreq",
     "sspstrong",
+    "strictfp",
+    "swiftself",
     "uwtable",
 ];
 

@@ -117,6 +117,7 @@ fsub    binary              r/r,r       32,64  fp_arith   -  -    -    -/-
 fmul    binary              r/r,r       32,64  fp_arith   -  -    -    -/-
 fdiv    binary              r/r,r       32,64  fp_arith   -  -    -    -/-
 fnmul   binary              r/r,r       32,64  fp_arith   -  -    -    -/-
+fabd    binary              r/r,r       32,64  fp_arith   -  -    -    -/-
 fneg    unary               r/r         32,64  fp_arith   -  -    -    -/-
 fabs    unary               r/r         32,64  fp_arith   -  -    -    -/-
 fsqrt   unary               r/r         32,64  fp_arith   -  -    -    -/-

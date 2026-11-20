@@ -601,6 +601,16 @@ impl<'m> Machine<'m> {
                 }
                 _ => Val::Poison,
             },
+            // The class of the bits; an x87 or fp128 value is not held in 64
+            // bits, so it is poison here.
+            Intrinsic::IsFpClass => match (argument(0), argument(1)) {
+                (Val::Float(kind @ (FloatKind::Float | FloatKind::Double), bits), Val::Int { bits: test, .. }) => {
+                    let class =
+                        crate::apfloat::ApFloat::from_bits(crate::apfloat::semantics_of(kind), u128::from(bits));
+                    Val::Int { bits: u128::from(class.classify().0 & test as u32 != 0), width: 1 }
+                }
+                _ => Val::Poison,
+            },
             Intrinsic::FMulAdd => {
                 let product = binary(BinaryOp::FMul, Flags::default(), argument(0), argument(1))?;
                 binary(BinaryOp::FAdd, Flags::default(), product, argument(2))?

@@ -1614,6 +1614,10 @@ impl PartialEq for SymbolIndex {
 #[derive(Clone, Debug, Default)]
 pub struct Module {
     pub context: Context,
+    /// `llc -relocation-model`: `Some(false)` static, `Some(true)` pic. clang
+    /// writes no module flag for `-fno-pic -fno-asynchronous-unwind-tables`, which
+    /// reads as a module that is not clang's; the driver says it.
+    pub relocation_pic: Option<bool>,
     pub datalayout: Option<String>,
     /// Variables and functions, in definition order.
     pub globals: Vec<GlobalValue>,
@@ -1891,9 +1895,13 @@ impl Module {
         }
     }
 
-    /// Whether the code is position independent: clang's "PIC Level" module
-    /// flag is set. A module that carries no flags at all (not clang's) is.
+    /// Whether the code is position independent: the driver's relocation model
+    /// where it gave one (`llc -relocation-model`), else clang's "PIC Level"
+    /// module flag. A module that carries no flags at all (not clang's) is.
     pub fn position_independent(&self) -> bool {
+        if let Some(pic) = self.relocation_pic {
+            return pic;
+        }
         let Some((_, flags)) = self.named_metadata.iter().find(|(name, _)| name == "llvm.module.flags") else {
             return true;
         };

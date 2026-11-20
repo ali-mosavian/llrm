@@ -353,13 +353,32 @@ impl Parser {
                 Token::Word(word) if word == "declare" || word == "define" => self.function(word == "define")?,
                 // The use list of a global or a constant: those lists are not
                 // kept here (DEVIATE), so the directive is read and dropped.
-                Token::Word(word) if word == "uselistorder" || word == "uselistorder_bb" => {
-                    while !matches!(self.next(), Token::Punct('}') | Token::Eof) {}
-                }
+                Token::Word(word) if word == "uselistorder" || word == "uselistorder_bb" => self.skip_use_list_order(),
                 Token::MetadataName(name) => self.named_metadata(name)?,
                 Token::MetadataId(number) => self.metadata_definition(number)?,
                 Token::Comdat(name) => self.comdat_definition(name)?,
                 _ => return self.fail(format!("unexpected {} at the top level", self.describe())),
+            }
+        }
+    }
+
+    /// The rest of a module-level `uselistorder` directive, read and dropped:
+    /// its value may be a constant with braces of its own (`uselistorder
+    /// %struct.S { i32 0, i16 1 }, { 1, 0 }`), so the directive ends at the
+    /// close of the last brace group, not the first.
+    fn skip_use_list_order(&mut self) {
+        let mut depth = 0_u32;
+        loop {
+            match self.next() {
+                Token::Punct('{') => depth += 1,
+                Token::Punct('}') => {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 && !matches!(self.peek(), Token::Punct(',')) {
+                        return;
+                    }
+                }
+                Token::Eof => return,
+                _ => {}
             }
         }
     }

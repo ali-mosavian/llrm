@@ -126,6 +126,11 @@ pub struct Target {
     /// clang does not: the driver gives the flag to the backend alone.
     #[serde(default)]
     pub llc_mcmodel: bool,
+    /// The backend takes `-relocation-model=` (as the pin's llc does): the
+    /// driver states what clang's flags chose, since clang's IR carries it
+    /// only as a module flag it may leave out.
+    #[serde(default)]
+    pub llc_reloc: bool,
     /// DEVIATE UNROLL-O1 (owner x86-m32, exit 2026-11-27): `-funroll-loops` is
     /// the default at `-O1`. clang's `UnrollLoops` is off there, so it marks
     /// every loop `llvm.loop.unroll.disable` (CGLoopInfo.cpp#L820) and the
@@ -478,8 +483,15 @@ const LLC_FLAGS: &[&str] = &[
     "-fwhole-program",
     "-fno-whole-program",
 ];
-const LLC_PREFIXES: &[&str] =
-    &["--isel=", "-fobject-format=", "-mcode-segment=", "-fno-inline=", "-Wstack-usage=", "-fexcess-precision="];
+const LLC_PREFIXES: &[&str] = &[
+    "--isel=",
+    "-fobject-format=",
+    "-mcode-segment=",
+    "-fno-inline=",
+    "-Wstack-usage=",
+    "-fexcess-precision=",
+    "-mstack-alignment=",
+];
 /// The passes `-f[no-]PASS` switches in the backend's pipeline.
 const BACKEND_PASSES: &[&str] = &[
     "allocation-search",
@@ -819,6 +831,21 @@ pub fn dropped_pass_switches<'a>(
     build.llc.iter().map(String::as_str).filter(|flag| is_pass_switch(flag)).collect()
 }
 
+/// What the last of clang's `-f[no-]pic`/`-f[no-]pie` family chose: whether
+/// the code is position independent; `None` where none is given.
+fn relocation_pic(clang: &[String]) -> Option<bool> {
+    clang
+        .iter()
+        .rev()
+        .find_map(
+            |flag| match flag.as_str() {
+                "-fpic" | "-fPIC" | "-fpie" | "-fPIE" => Some(true),
+                "-fno-pic" | "-fno-PIC" | "-fno-pie" | "-fno-PIE" => Some(false),
+                _ => None,
+            },
+        )
+}
+
 pub fn llc_args(
     target: &Target,
     build: &Build,
@@ -852,6 +879,11 @@ pub fn llc_args(
     }
     if target.llc_mcmodel {
         args.extend(build.clang.iter().filter(|flag| flag.starts_with("-mcmodel=")).cloned());
+    }
+    if target.llc_reloc
+        && let Some(pic) = relocation_pic(&build.clang)
+    {
+        args.push(format!("-relocation-model={}", if pic { "pic" } else { "static" }));
     }
     if build.stop == Stop::Assembly {
         args.push("-S".into());
@@ -1135,9 +1167,17 @@ fn build(
                     let fixed = text.replacen(&line, &format!("target datalayout = \"{}\"", target.datalayout), 1);
                     std::fs::write(&ir, fixed).map_err(|error| fail(format!("{}: {error}", ir.display())))?;
                 }
-                let flat = target.triple.starts_with("i486")
-                    || target.triple.starts_with("i386") && !target.triple.contains("code16");
-                if text.contains(" asm ") && flat || text.contains(" asm sideeffect ") {
+                // flat x86 code: the mode the block is assembled and named in
+                let flat: Option<u8> = if target.triple.starts_with("x86_64") {
+                    Some(64)
+                } else if target.triple.starts_with("i486")
+                    || target.triple.starts_with("i386") && !target.triple.contains("code16")
+                {
+                    Some(32)
+                } else {
+                    None
+                };
+                if text.contains(" asm ") && flat.is_some() || text.contains(" asm sideeffect ") {
                     let mut scratch_number = 0;
                     let mut assemble = |source: &str| -> Result<Vec<u8>, String> {
                         scratch_number += 1;
@@ -1151,7 +1191,8 @@ fn build(
                             Command::new(program).args(args).status().map(|one| one.success()).unwrap_or(false)
                         };
                         let (sp, op, bp) = (s.display().to_string(), o.display().to_string(), b.display().to_string());
-                        if !ran(&clang, &["-target", "i386-unknown-none", "-x", "assembler", "-c", &sp, "-o", &op])
+                        let assembler = if flat == Some(64) { "x86_64-unknown-none" } else { "i386-unknown-none" };
+                        if !ran(&clang, &["-target", assembler, "-x", "assembler", "-c", &sp, "-o", &op])
                             || !ran(Path::new("objcopy"), &["-O", "binary", "--only-section=.text", &op, &bp])
                         {
                             return Err(format!("asm: could not assemble\n{source}"));
@@ -1159,10 +1200,9 @@ fn build(
                         std::fs::read(&b).map_err(|error| error.to_string())
                     };
                     let source = std::fs::read_to_string(&ir).map_err(|e| fail(e.to_string()))?;
-                    let translated = if flat {
-                        inline_asm::translate_flat(&source, &mut assemble)
-                    } else {
-                        inline_asm::translate(&source, &mut assemble)
+                    let translated = match flat {
+                        Some(bits) => inline_asm::translate_flat(&source, bits, &mut assemble),
+                        None => inline_asm::translate(&source, &mut assemble),
                     }
                     .map_err(|why| fail(format!("{path}: {why}")))?;
                     std::fs::write(&ir, translated).map_err(|error| fail(format!("{}: {error}", ir.display())))?;

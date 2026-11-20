@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/narrowrange.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/narrowrange.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/narrowrange.rs sha256:40e5791b3b3c30a9b26e08b077b14dfdb25ee29def38f5ad1341bd7a62c05553 -->
+<!-- src: crates/opt/llrm-transforms/src/narrowrange.rs sha256:2de1af8b6a4c9052b54b24d0eccbece6130fcb626324c499e26cb4b719db4afb -->
 
 # narrowrange
 
@@ -30,3 +30,15 @@ After `remidiom`, in the strength slot ([`crate::pipeline::strength_slot`](pipel
 where the target gives a width, at -O2 and -O3: at -O1 and -Os the libcall's
 pushes are fewer bytes than the extensions the narrow divide needs (div8_os
 68000: +20 B at both, -14% and -38% clocks).
+
+## Example
+A divide whose operands ScalarEvolution proves to be 0..255 is done in 8 bits.
+
+```text
+%q = udiv i32 %a, %b        ; %a, %b in 0..255
+=>
+%x = trunc i32 %a to i8
+%y = trunc i32 %b to i8
+%d = udiv i8 %x, %y
+%q = zext i8 %d to i32
+```

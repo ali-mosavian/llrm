@@ -140,6 +140,7 @@ pub fn sink_region(
                 && can_sink(ctx, inst)
             {
                 if foldable {
+                    ctx.state.cloned.borrow_mut().insert(inst);
                     found.push((inst, Sinking::Cloned));
                     continue;
                 }

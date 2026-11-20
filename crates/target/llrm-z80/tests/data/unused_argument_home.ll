@@ -1,6 +1,6 @@
 target datalayout = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8"
-; ModuleID = '/home/alim/work/personal/llrm/.claude/worktrees/elated-mclaren-9dfa1f/tests/run/c/i64_param_home.c'
-source_filename = "/home/alim/work/personal/llrm/.claude/worktrees/elated-mclaren-9dfa1f/tests/run/c/i64_param_home.c"
+; ModuleID = 'i64_param_home.c'
+source_filename = "i64_param_home.c"
 target triple = "msp430"
 
 %union.U = type { i64 }

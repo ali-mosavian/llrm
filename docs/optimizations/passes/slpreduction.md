@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/slpreduction.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/slpreduction.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/slpreduction.rs sha256:33cb65b70c259020f863f608e4568cdad86aeac11765e7d1068fbdb3c8bbe1c5 -->
+<!-- src: crates/opt/llrm-transforms/src/slpreduction.rs sha256:fe030ba78b8d2ebb5cce8ddb94dcc4c7672e502113670d9504c5e3aa3f395de8 -->
 
 # slpreduction
 
@@ -42,3 +42,13 @@ With the store chains, at the pin's `slp-vectorizer` slot.
 
 ## Used by
 `slpvectorize`.
+
+## Example
+Forty `sext i16` loads of consecutive cells, summed by a chain of `add i64`, become two vector loads and one reduction (the tile test).
+
+```text
+%x0 = sext i16 (load [i]) to i64 ; ... x39, summed by add i64
+        =>
+load <32 x i16>, load <8 x i16>; the narrower is added into the low
+lanes of the wider; one @llvm.vector.reduce.add.v32i64 of the result
+```

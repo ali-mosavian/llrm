@@ -308,6 +308,8 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
             setup: [11, 12],
             fst: [4, 6],
         }),
+        // DEVIATE LASTCALL-COLD (owner x86-m32-b, exit 2026-12-05): see `Tuning`.
+        inline_last_call_in_cold_site: true,
         // DEVIATE SZ1 (owner x86-m32, exit 2026-11-20): D11 holds at -Os, so a
         // callee whose copies grow the code stays a call (called_once_os:
         // gcc -Os does; the pin inlines it).

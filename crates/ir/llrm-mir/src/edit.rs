@@ -1385,6 +1385,27 @@ impl Function {
         value
     }
 
+    /// The call `inst`, whose result `value` is read as `ty` now, returns `ty`
+    /// under `function_type`, with `return_attrs`: the callee returns the wider
+    /// value itself. The users of `value` read it as they did; the caller gives
+    /// them the wider type's operands.
+    pub fn retype_call_result(
+        &mut self,
+        inst: InstId,
+        ty: TypeId,
+        function_type: TypeId,
+        return_attrs: Vec<crate::opcode::Attribute>,
+    ) {
+        let value = self.instructions[inst.0 as usize].result.expect("a call with a result");
+        self.values[value.0 as usize].ty = ty;
+        let instruction = &mut self.instructions[inst.0 as usize];
+        instruction.ty = ty;
+        let Opcode::Call(info) = &mut instruction.opcode else { panic!("a call") };
+        info.function_type = function_type;
+        info.return_attrs = return_attrs;
+        self.log(Change::Rewritten(inst));
+    }
+
     /// From the first change of the parameters on, each one's origin is kept.
     fn track_parameters(&mut self) {
         if self.parameter_origins.is_empty() {
