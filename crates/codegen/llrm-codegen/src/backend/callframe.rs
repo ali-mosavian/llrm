@@ -23,12 +23,12 @@
 //! `ADJCALLSTACKUP`. `emit.rs` turns the pair into `call_frame_setup` /
 //! `call_frame_destroy` at every call at m32 and m64 (DEVIATE CF4), also the
 //! zero-byte ones, as the pin's; the pass is in the flow at every x86 width. At
-//! m16 (`Real16`) `emit.rs` makes `sub sp, N` / `add sp, N - M` itself (none for
-//! a call of no bytes), so the pass finds no setup and changes nothing there. A
-//! zero-byte pair at m16 moved no cell of the cause-A list (0 B on 14 cells,
-//! jpeg_fixed -Os +4 B). The m16 steps left: emit the pseudos for `Real16`
-//! (`slot` 2, 16-bit `Held` cells), let `ReserveCallFrame` lay the reserved
-//! area out in the m16 prologue, and re-check the readers of the old
+//! m16 (`Real16`) `emit.rs` makes `sub sp, N` / `add sp, N - M` itself (none
+//! for a call of no bytes), so the pass finds no setup and changes nothing
+//! there. A zero-byte pair at m16 moved no cell of the cause-A list (0 B on 14
+//! cells, jpeg_fixed -Os +4 B). The m16 steps left: emit the pseudos for
+//! `Real16` (`slot` 2, 16-bit `Held` cells), let `ReserveCallFrame` lay the
+//! reserved area out in the m16 prologue, and re-check the readers of the old
 //! `sub`/`add` (`cfi.rs`, `framefree`, `call_pops`) and the m16 byte and clock
 //! rows. Pushes made at m32 selection time (DEVIATE CG6 of row 50,
 //! `pushfold.rs`) are not this pass's input.
@@ -378,8 +378,8 @@ impl CallFrameOpt {
             .iter()
             .flat_map(|block| block.insns.iter())
             .filter_map(|one| one.what.as_ref())
-            .any(|what| {
-                (matches!(what.name.as_deref(), Some("add" | "sub"))
+            .any(
+                |what| (matches!(what.name.as_deref(), Some("add" | "sub"))
                     && matches!(
                         (&what.dests[..], &what.sources[..]),
                         ([Loc::Reg(dest)], [Loc::Reg(source), Loc::Reg(_)])
@@ -389,8 +389,8 @@ impl CallFrameOpt {
                         && matches!(
                             (&what.dests[..], &what.sources[..]),
                             ([Loc::Reg(dest)], [Loc::Reg(_) | Loc::Mem(_)]) if dest.register == self.stack
-                        ))
-            })
+                        )),
+            )
     }
 
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86CallFrameOptimization.cpp#L205
@@ -889,7 +889,9 @@ mod tests {
     #[test]
     fn a_volatile_access_is_not_moved_into_a_push() {
         let cell = Mem { through: RegId::DI, offset: 0, ..Mem::new(None, 4) };
-        let plain = || (*insn(0, Operation::Move, "mov", vec![held(1)], vec![Loc::Mem(cell.clone())], vec![1], vec![8])).clone();
+        let plain = || {
+            (*insn(0, Operation::Move, "mov", vec![held(1)], vec![Loc::Mem(cell.clone())], vec![1], vec![8])).clone()
+        };
         let frame = |first: Arc<Insn>, between: Option<Arc<Insn>>| {
             let mut insns = vec![first];
             insns.extend(between);
@@ -900,9 +902,13 @@ mod tests {
         let mut volatile_load = plain();
         volatile_load.volatile = true;
         assert_eq!(frame(Arc::new(volatile_load), None), kept);
-        let mut volatile_between = (*insn(5, Operation::Move, "mov", vec![held(2)], vec![Loc::Mem(cell.clone())], vec![2], vec![8])).clone();
+        let mut volatile_between =
+            (*insn(5, Operation::Move, "mov", vec![held(2)], vec![Loc::Mem(cell.clone())], vec![2], vec![8])).clone();
         volatile_between.volatile = true;
-        assert_eq!(frame(Arc::new(plain()), Some(Arc::new(volatile_between))), ["mov", "mov", "call_frame_setup", "push", "push", "call", "call_frame_destroy"]);
+        assert_eq!(
+            frame(Arc::new(plain()), Some(Arc::new(volatile_between))),
+            ["mov", "mov", "call_frame_setup", "push", "push", "call", "call_frame_destroy"]
+        );
     }
 
     /// A gap in the slots (slot 1 stored, slot 0 not) is left as stores.
@@ -990,8 +996,9 @@ mod tests {
         assert_eq!(area, 0);
     }
 
-    /// An alloca kept to a 16-byte call alignment is `mov r, sp; sub r, n; and r, -16; mov sp, r`, no
-    /// `sub sp, reg`: the frame was reserved, and a call's `mov [esp], arg` then overwrote the array it
+    /// An alloca kept to a 16-byte call alignment is `mov r, sp; sub r, n; and
+    /// r, -16; mov sp, r`, no `sub sp, reg`: the frame was reserved, and a
+    /// call's `mov [esp], arg` then overwrote the array it
     /// sat on (vla_loop_stack_restored m32 reported 90, not 93).
     #[test]
     fn an_alloca_that_copies_the_stack_pointer_back_reserves_no_frame() {
