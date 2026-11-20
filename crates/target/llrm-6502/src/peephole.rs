@@ -1266,11 +1266,21 @@ fn walk<'a>(
     let mut carried: HashMap<&str, Known> = HashMap::default();
     let mut stores: Vec<(usize, Inst, usize)> = Vec::new();
     let mut skip = 0;
+    // The cells known to hold an immediate (what a store left there while a
+    // register held it), inside one run of text: forgotten at a label other
+    // than one only control falling in reaches.
+    let mut cell_imm: Vec<(&str, &str)> = Vec::new();
     for (at, line) in lines.iter().enumerate() {
         if at < skip {
             continue;
         }
         let Line::Inst(Inst { op, operand, .. }) = line else {
+            if !matches!(
+                line,
+                Line::Label(name) if quiet.contains(&name.as_str()) && !targets.contains(&name.as_str())
+            ) {
+                cell_imm.clear();
+            }
             known = Some(match line {
                 Line::Label(name) if targets.contains(&name.as_str()) => {
                     // fallen into, and branched to
@@ -1301,8 +1311,11 @@ fn walk<'a>(
             stores.push((at, Inst { op: by.1, operand: store.operand.clone(), place: store.place }, 3));
             // the shortcut writes the cell the skipped `sta` wrote
             match &store.operand {
-                Operand::Direct(name) => forget_cell(&mut state, Some(name)),
-                _ => forget_cell(&mut state, None),
+                Operand::Direct(name) => {
+                    forget_cell(&mut state, Some(name));
+                    cell_imm.retain(|(cell, _)| *cell != name.as_str());
+                }
+                _ => cell_imm.clear(),
             }
             skip = at + 4;
             known = Some(state);
@@ -1332,8 +1345,21 @@ fn walk<'a>(
         ) && !on_a
         {
             match operand {
-                Operand::Direct(name) => forget_cell(&mut state, Some(name)),
-                _ => forget_cell(&mut state, None),
+                Operand::Direct(name) => {
+                    forget_cell(&mut state, Some(name));
+                    cell_imm.retain(|(cell, _)| *cell != name.as_str());
+                }
+                // a pointer reaches memory, never a register cell (`rcN` is no
+                // address of the program), but may reach a static local's cell
+                Operand::IndirectY(_) | Operand::IndirectX(_) | Operand::Indirect(_) => {
+                    forget_cell(&mut state, None);
+                    cell_imm.retain(|(cell, _)| cell.starts_with("rc"));
+                }
+                // `rc2,x` is a cell when the index is the right one
+                _ => {
+                    forget_cell(&mut state, None);
+                    cell_imm.clear();
+                }
             }
         }
         match (op, register, operand) {
@@ -1370,6 +1396,15 @@ fn walk<'a>(
                     known = Some(state);
                     continue;
                 }
+                // the cell holds the immediate the register holds
+                if let Some(Value::Imm(value)) = state[register]
+                    && cell_imm.contains(&(name.as_str(), value))
+                    && flags_unread_after(lines, at + 1)
+                {
+                    keep[at] = false;
+                    known = Some(state);
+                    continue;
+                }
                 state[register] = held;
             }
             // a store leaves the register holding the cell it wrote (unless
@@ -1382,8 +1417,9 @@ fn walk<'a>(
                 };
                 // a register holds one fact: an immediate outranks the cell
                 // (the load of a constant is the one that is dropped)
-                if !matches!(state[from], Some(Value::Imm(_))) {
-                    state[from] = Some(Value::Cell(name.as_str()));
+                match state[from] {
+                    Some(Value::Imm(value)) => cell_imm.push((name.as_str(), value)),
+                    _ => state[from] = Some(Value::Cell(name.as_str())),
                 }
             }
             // `or` and `xor` of a zero are the load of the operand (the same
@@ -1433,7 +1469,10 @@ fn walk<'a>(
             }
             _ if line.inst().is_some_and(|i| i.flags() == Flags::Keeps) => {}
             _ if op.is_branch() => {}
-            _ => state = [None; 3],
+            _ => {
+                state = [None; 3];
+                cell_imm.clear();
+            }
         }
         known = (!ends).then_some(state);
     }
