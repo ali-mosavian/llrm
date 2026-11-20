@@ -561,11 +561,14 @@ pub fn select_block(
     }
     // the product of two zero-extended words is a call in a block that runs
     // once (`block_frequencies` at most 1): 15 B against 216 B of partial
-    // products for a few hundred T-states more; in a loop the products stay
-    // inline (DEVIATE Z80-COLD-LIBCALL: the pin sizes per function only). Above
-    // -O1, where the module links `__mulsi3` for its long products, the
-    // call is `__umulhisi3` for two words too: the same call, half the steps.
-    if (cold || (long_multiply && !STRICT_LEVEL.with(std::cell::Cell::get))) && !sized {
+    // products for a few hundred T-states more; at -O1, strict on both axes,
+    // in a loop too: shellsort's checksum loop was 560 B / 448K T with the
+    // products inline, 407 B / 392K T with the call (fixed_point -5850 B,
+    // overflow_builtins -3396 B). Above -O1, where the module links `__mulsi3`
+    // for its long products, the call is `__umulhisi3` for two words too: the
+    // same call, half the steps. At -O2 and -O3 a loop's products stay
+    // inline (DEVIATE Z80-COLD-LIBCALL: the pin sizes per function only).
+    if (cold || STRICT_LEVEL.with(std::cell::Cell::get) || long_multiply) && !sized {
         tli.set_libcall_name(ISD::UMulLoHi, MVT::I16, "__umulhisi3");
     }
     let mut lowering = Z80Lowering { sized: sized && !speed_routines };
