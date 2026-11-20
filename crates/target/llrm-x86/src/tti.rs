@@ -1617,8 +1617,8 @@ impl Tti for X86 {
     /// `X86TTIImpl::getArithmeticInstrCost`, the SSE2 rows of the integer ops
     /// isel selects for every operand, `LT.first` registers times the row of
     /// the legalized type (`SSE2CostTable`): `pand`, `por`, `pxor` cost one;
-    /// `paddq`/`psubq` {1, 2, 1, 2}; the multiplies of 8-, 16-, 32- and
-    /// 64-bit lanes are the pin's rows. A vector of 8-bit lanes within 64 bits
+    /// `paddq`/`psubq` {1, 2, 1, 2}; the multiplies of 8-, 16- and 32-bit lanes
+    /// are the pin's rows (the 64-bit lane's comes with its lowering). A vector of 8-bit lanes within 64 bits
     /// is multiplied as 16-bit lanes (extend, `pmullw`, truncate). Other adds
     /// and subtracts have no row: the base model, one per register for the
     /// throughput and one for the other kinds (`TCK_RecipThroughput` only
@@ -1663,13 +1663,12 @@ impl Tti for X86 {
             // size, size and latency}.
             // `v16i8`: 2*unpack/2*pmullw/2*and/pack. `v8i16`: `pmullw`, the one
             // multiply that keeps its lane.
-            // `v4i32`: 3*pmuludq/4*shuffle. `v2i64`: 3*pmuludq/3*shift/2*add.
+            // `v4i32`: 3*pmuludq/4*shuffle.
             ArithOp::Mul => {
                 let row = match ty.lane {
                     Ty::Int(8) => [6, 18, 12, 12],
                     Ty::Int(16) => [1, 5, 1, 1],
                     Ty::Int(32) => [6, 8, 7, 7],
-                    Ty::Int(64) => [7, 10, 10, 10],
                     _ => return None,
                 };
                 xmm_pieces(ty).map(|pieces| Cost::of(row[kind.index()] * pieces))
