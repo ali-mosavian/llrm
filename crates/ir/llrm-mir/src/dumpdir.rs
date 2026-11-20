@@ -84,7 +84,7 @@ mod tests {
     #[test]
     fn a_disk_under_tmpfs_and_the_root_are_fine() {
         assert_eq!(memory_filesystem(MOUNTS, Path::new("/tmp/disk/dump")), None);
-        assert_eq!(memory_filesystem(MOUNTS, Path::new("/home/alim/dump")), None);
+        assert_eq!(memory_filesystem(MOUNTS, Path::new("/home/someone/dump")), None);
     }
 
     /// Both ways to ask for a dump are read: the option and the environment.

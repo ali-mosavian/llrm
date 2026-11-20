@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 311 documented, 5 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 312 documented, 5 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -68,6 +68,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | combine_gep_merge | `visitGEPOfGEP`: a `getelementptr` of a `getelementptr` as one. | [`combine_gep`](combine_gep.md), which calls `visit_gep_of_gep` when a | [combine_gep_merge](combine_gep_merge.md) |
 | combine_gep_phi | `foldGEPOfPhi`: a `getelementptr` of a phi of `getelementptr`s as a `getelementptr` of a phi of the one index they differ in. | The `getelementptr` visit of [`combine_gep`](combine_gep.md), which | [combine_gep_phi](combine_gep_phi.md) |
 | combine_icmp_binop | InstCombine's `foldICmpBinOp`, the add and subtract arms ([`InstCombineCompares.cpp:5301`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCompares.cpp#L5301) at d1106deb71cc). | Named by `combine_compares`. | [combine_icmp_binop](combine_icmp_binop.md) |
+| combine_icmp_bitcast | InstCombine's `foldICmpBitCast`, the `sitofp` and `uitofp` arms ([`InstCombineCompares.cpp:3491`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCompares.cpp#L3491)) at d1106deb71cc. | `combine_compares::visit_icmp`. | [combine_icmp_bitcast](combine_icmp_bitcast.md) |
 | combine_icmp_const | `icmp (binop ...), C`: the folds of a compare of a binary operator with a constant, so far the `and` family. | `combine_compares::visit_icmp`. | [combine_icmp_const](combine_icmp_const.md) |
 | combine_icmp_equality | InstCombine's `foldICmpEquality` ([`InstCombineCompares.cpp:6222`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineCompares.cpp#L6222)) at d1106deb71cc, up to the `ashr`/`trunc` range check. | Named by `combine_compares`. | [combine_icmp_equality](combine_icmp_equality.md) |
 | combine_icmp_intrinsic | `icmp` of an intrinsic and a constant. | `fold_icmp_inst_with_constant`. | [combine_icmp_intrinsic](combine_icmp_intrinsic.md) |
@@ -83,7 +84,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | combine_muldivrem | InstCombine's `visitMul`, `visitUDiv`, `visitSDiv`, `visitURem`, `visitSRem` and the helpers they call, from [`InstCombineMulDivRem.cpp`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineMulDivRem.cpp) at d1106deb71cc. | `combine::visit`, once the mul, div and rem slots are flipped. | [combine_muldivrem](combine_muldivrem.md) |
 | combine_narrow | `narrowMathIfNoOverflow`: `bo (ext X), (ext Y)` or `bo (ext X), C` as `ext (bo X, Y)` when the math cannot overflow in the narrow width. | `visitAdd`, `visitSub` (`TryToNarrowDeduceFlags`) and `visitMul`. | [combine_narrow](combine_narrow.md) |
 | combine_negator | `Negator`: sinks a negation into an expression tree when that does not add an instruction. | `combine_addsub::visit_sub`, `combine_muldivrem`. | [combine_negator](combine_negator.md) |
-| combine_not | `InstCombinerImpl::foldNot`: a `not` (`xor X, -1`) pushed into its operand. | Named by `combine_xor`. | [combine_not](combine_not.md) |
+| combine_not | `InstCombinerImpl::foldNot`: a `not` (`xor X, -1`) pushed into its operand. | Named by `combine_and`, `combine_or`, `combine_visit_select`, `combine_xor`. | [combine_not](combine_not.md) |
 | combine_or | `InstCombinerImpl::visitOr`: the integer `or` folds. | Named by `combine`, `combine_casted_logic`. | [combine_or](combine_or.md) |
 | combine_pass | The pass: InstCombine as a function pass of the pipeline. | `pipeline` (`combine@N`, in front of the old `fold@N` of each InstCombine | [combine_pass](combine_pass.md) |
 | combine_phi | `foldOpIntoPhi`: an instruction that reads a phi becomes a phi of the instruction applied to each incoming value. | The `visit*` of the families that fold an operation into a phi | [combine_phi](combine_phi.md) |
