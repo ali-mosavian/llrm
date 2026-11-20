@@ -96,6 +96,12 @@ impl Target for M68k {
         |row| row == "SWAP"
     }
 
+    /// The pin hoists the `lea` of a symbol out of a loop: `word_array_abs_x` -O2 ran two a trip
+    /// (+12% clocks at 68020 against gcc).
+    fn hoists_register_free_ops(&self) -> bool {
+        true
+    }
+
     fn objects(&self) -> &'static dyn llrm_debug::DebugObjectTarget {
         &M68kObjects
     }
