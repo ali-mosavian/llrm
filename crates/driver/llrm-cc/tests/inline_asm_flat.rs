@@ -142,3 +142,40 @@ fn test_x86_64_register_class_constraints_take_registers_of_the_pool() {
         assert!(body.iter().any(|line| line.starts_with("db 00fh,0c")), "{level}:\n{}", body.join("\n"));
     }
 }
+
+/// The pool registers are fixed places, so the allocator keeps what is live
+/// out of them: values live across a block, a clobber naming a register the
+/// pool would take, two blocks in a function and in a loop, doubles live in
+/// the vector registers an `x` operand takes. Compiled at each level, linked
+/// and run on the host: the results are the C ones.
+#[test]
+fn test_x86_64_register_class_blocks_run_with_their_values_live_across() {
+    if !cfg!(target_arch = "x86_64") {
+        return;
+    }
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/c/m64_inline_asm_run.c");
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("flatasm-run-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    for level in ["-O1", "-O2", "-Os"] {
+        let object = dir.join(format!("run{level}.o"));
+        let built = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
+            .env("LLRM_CC_TARGET", "x86_64-linux")
+            .env(
+                "LLRM_LLC",
+                std::env::var_os("LLRM_LLC").unwrap_or_else(|| target_dir::of(&root).join("release/llrm-llc").into()),
+            )
+            .args([level, "-w", "-c", "-o"])
+            .arg(&object)
+            .arg(&source)
+            .output()
+            .unwrap();
+        assert!(built.status.success(), "{level}: {}", String::from_utf8_lossy(&built.stderr));
+        let exe = dir.join(format!("a{level}.out"));
+        let linked = Command::new("gcc").args(["-static", "-no-pie", "-o"]).arg(&exe).arg(&object).output().unwrap();
+        assert!(linked.status.success(), "{level}: {}", String::from_utf8_lossy(&linked.stderr));
+        let ran = Command::new(&exe).output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&ran.stdout).trim(), "bad 0", "{level}");
+    }
+}
