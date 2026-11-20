@@ -1220,6 +1220,21 @@ fn a_module_level_uselistorder_directive_is_read_and_dropped() {
     assert_eq!(users_of(function(&mut module), "next"), ["c", "sum", "i", "j"]);
 }
 
+/// Clang writes the use list of an aggregate constant too (`uselistorder
+/// %struct.DevVoice { i32 0, i16 2048 }, { 1, 0 }`). The reader stopped at the
+/// close of the constant's braces and refused the `, { 1, 0 }` that follows
+/// ("unexpected `,` at the top level"): QuickrBasic `qb/play.c` did not
+/// compile on arm64.
+#[test]
+fn a_module_level_uselistorder_of_an_aggregate_constant_is_read_and_dropped() {
+    let text = format!(
+        "{LOOP}\n%struct.S = type {{ i32, i16 }}\n@g = global %struct.S {{ i32 0, i16 1 }}\n\
+         uselistorder %struct.S {{ i32 0, i16 1 }}, {{ 1, 0 }}\nuselistorder ptr @g, {{ 1, 0 }}\n"
+    );
+    let mut module = module(&text);
+    assert_eq!(users_of(function(&mut module), "next"), ["c", "sum", "i", "j"]);
+}
+
 /// What a reader would build prints no directive; a reordered list prints the
 /// shuffle that `opt -preserve-ll-uselistorder` prints for it (checked against
 /// the pin on this loop: `{ 1, 2, 3, 0 }`, and none without the directive).

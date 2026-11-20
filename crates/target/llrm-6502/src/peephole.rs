@@ -175,19 +175,30 @@ pub fn run_pair(asm: &Asm) -> (Asm, Asm) {
     if tail_copied {
         run_prefix(&mut copied);
     }
-    let finish = |known_loads: bool| {
-        let mut plain = base.clone();
-        run_suffix(&mut plain, known_loads);
-        if tail_copied {
-            let mut with_copy = copied.clone();
-            run_suffix(&mut with_copy, known_loads);
-            if code_bytes(&with_copy) < code_bytes(&plain) {
-                return with_copy;
-            }
+    // The two texts differ only by `drop_known_loads`, in the head of the
+    // suffix: where it changes nothing the heads are equal and the rest of the
+    // passes, a function of the text alone, runs once for both.
+    let heads = |from: &Asm| {
+        let (mut without, mut with) = (from.clone(), from.clone());
+        known_head(&mut without, false);
+        known_head(&mut with, true);
+        if with == without {
+            let mut rest = without;
+            run_rest(&mut rest);
+            (rest.clone(), rest)
+        } else {
+            run_rest(&mut without);
+            run_rest(&mut with);
+            (without, with)
         }
-        plain
     };
-    (finish(false), finish(true))
+    let (plain_false, plain_true) = heads(&base);
+    if !tail_copied {
+        return (plain_false, plain_true);
+    }
+    let (copy_false, copy_true) = heads(&copied);
+    let pick = |plain: Asm, with_copy: Asm| if code_bytes(&with_copy) < code_bytes(&plain) { with_copy } else { plain };
+    (pick(plain_false, copy_false), pick(plain_true, copy_true))
 }
 
 fn code_bytes(asm: &Asm) -> usize {
@@ -266,6 +277,25 @@ fn run_suffix(
     asm: &mut Asm,
     known_loads: bool,
 ) {
+    known_head(asm, known_loads);
+    run_rest(asm);
+}
+
+thread_local! {
+    static REST_RUNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread ran the passes after `drop_known_loads` (what a
+/// test counts to see they ran once for a pair whose texts are equal there).
+pub fn rest_runs() -> usize {
+    REST_RUNS.with(std::cell::Cell::get)
+}
+
+/// The only passes that read `known_loads`.
+fn known_head(
+    asm: &mut Asm,
+    known_loads: bool,
+) {
     if known_loads {
         drop_known_loads(asm);
     }
@@ -275,6 +305,10 @@ fn run_suffix(
     if known_loads {
         drop_known_loads(asm);
     }
+}
+
+fn run_rest(asm: &mut Asm) {
+    REST_RUNS.with(|runs| runs.set(runs.get() + 1));
     hoist_loop_constant(asm);
     sink_step_to_compare(asm);
     drop_zero_compares(asm);
@@ -2827,22 +2861,39 @@ pub(crate) fn carry_dead_from(
 
 /// 65C02: `lda #0; sta m` (and further `[lda #0;] sta n` after it) with `a`
 /// dead after the last store: `stz m`, `stz n`. The zero reaches the cell
-/// without `a`: 2 bytes and 2 clocks fewer, and `a` is not clobbered.
+/// without `a`: 2 bytes and 2 clocks fewer, and `a` is not clobbered. The same
+/// through `x` and `y` (`ldy #0; sty rc2; sty rc3`, the high word of a long
+/// made from a short: 6 B, 4 as `stz`).
 pub fn zero_cells_with_stz(asm: &mut Asm) {
     if !asm.cmos {
         return;
     }
+    for (load, store, register) in [
+        (Op::Lda, Op::Sta, Registers::A),
+        (Op::Ldx, Op::Stx, Registers::X),
+        (Op::Ldy, Op::Sty, Registers::Y),
+    ] {
+        zero_run_with_stz(asm, load, store, register);
+    }
+}
+
+fn zero_run_with_stz(
+    asm: &mut Asm,
+    load: Op,
+    store: Op,
+    register: Registers,
+) {
     let runs = {
         let exits = Exits::of(asm);
         let lines = &asm.lines;
         let zero = |n: usize| {
-            lines.get(n).and_then(Line::inst).is_some_and(|i| i.op == Op::Lda && i.operand == Operand::Imm("0".into()))
+            lines.get(n).and_then(Line::inst).is_some_and(|i| i.op == load && i.operand == Operand::Imm("0".into()))
         };
         let cell = |n: usize| {
             lines
                 .get(n)
                 .and_then(Line::inst)
-                .is_some_and(|i| i.op == Op::Sta && matches!(i.operand, Operand::Direct(_)))
+                .is_some_and(|i| i.op == store && matches!(i.operand, Operand::Direct(_)))
         };
         let mut runs = Vec::new();
         let mut at = 0;
@@ -2851,8 +2902,8 @@ pub fn zero_cells_with_stz(asm: &mut Asm) {
                 at += 1;
                 continue;
             }
-            // the run: stores, each after a `lda #0` or straight after the last
-            // store
+            // the run: stores, each after a load of zero or straight after the
+            // last store
             let mut end = at + 2;
             loop {
                 if cell(end) {
@@ -2863,7 +2914,7 @@ pub fn zero_cells_with_stz(asm: &mut Asm) {
                     break;
                 }
             }
-            if flags_unread_after(lines, end) && dead_from(lines, end, Registers::A, &mut HashSet::default(), exits) {
+            if flags_unread_after(lines, end) && dead_from(lines, end, register, &mut HashSet::default(), exits) {
                 runs.push((at, end));
             }
             at = end;
@@ -2874,7 +2925,7 @@ pub fn zero_cells_with_stz(asm: &mut Asm) {
         let stores: Vec<Line> = asm.lines[at..end]
             .iter()
             .filter_map(Line::inst)
-            .filter(|i| i.op == Op::Sta)
+            .filter(|i| i.op == store)
             .map(|i| Line::Inst(Inst { op: Op::Stz, operand: i.operand.clone(), place: i.place }))
             .collect();
         asm.lines.splice(at..end, stores);

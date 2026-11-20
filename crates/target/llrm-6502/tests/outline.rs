@@ -6,7 +6,7 @@ mod common;
 use common::pipeline::datalayout;
 use llrm_6502::dagisel::hooks::Cpu;
 use llrm_6502::driver::{Level, Request, assembly};
-use llrm_6502::outline::{run, run_at};
+use llrm_6502::outline::{run, run_at, run_priced};
 
 fn bytes(text: &str) -> u32 {
     llrm_6502::timing::estimate(Cpu::Mos6502, text).expect("prices").bytes
@@ -228,4 +228,38 @@ fn a_place_outside_every_loop_is_never_priced() {
     let outlined = run(&text);
     assert!(outlined.contains("jsr __outl_0"), "{outlined}");
     assert!(bytes(&outlined) < bytes(&text), "{} -> {} B", bytes(&text), bytes(&outlined));
+}
+
+/// Five reports of constants, each with `ldx #0; stx rc2; stx rc3` made first,
+/// were five calls of one body at -O2: +12 clocks a run for 5 bytes a place, in
+/// a module of 72 bytes and 100 clocks (double_against_int: 439 clocks against
+/// llvm-mos's 417, 51 bytes against 72). Priced by the share of the module's
+/// clocks the calls add against the share of its bytes they save, they stay
+/// inline; the same text at -Os (no share) is outlined.
+#[test]
+fn a_run_outside_a_loop_is_outlined_where_its_bytes_are_a_larger_share_than_its_clocks() {
+    let report = "  lda #5
+  ldx #0
+  stx rc2
+  stx rc3
+  jsr report
+";
+    let text = probe(&report.repeat(5));
+    assert!(run_priced(&text, None, None).contains("jsr __outl_0"), "bytes alone outline them");
+    assert!(!run_priced(&text, None, Some(1)).contains("__outl_"), "{}", run_priced(&text, None, Some(1)));
+}
+
+/// `word_compares` at -O2 on the 65C02 ran 97,736 clocks against 93,233: a
+/// 3-instruction run in a 14x14 loop was outlined for 4 bytes and added 12
+/// clocks a run. With a share a place in a loop is given up where its runs add
+/// a larger share of the module's clocks than its bytes save of the module's;
+/// without one (-Os) it is outlined.
+#[test]
+fn a_run_in_a_loop_is_given_up_where_its_clocks_are_a_larger_share_than_its_bytes() {
+    let copy = "  lda rc16\n  sta rc17\n";
+    // the moves run in the inner of two loops: each call is 12 clocks of a hot
+    // loop
+    let looped = probe(&format!("again:\nspin:\n{}  dec rc30\n  bne spin\n  dec rc31\n  bne again\n", copy.repeat(6)));
+    assert!(run_priced(&looped, None, None).contains("jsr __outl_0"), "bytes alone outline them");
+    assert!(!run_priced(&looped, None, Some(1)).contains("__outl_"), "{}", run_priced(&looped, None, Some(1)));
 }

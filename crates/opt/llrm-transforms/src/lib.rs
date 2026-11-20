@@ -76,6 +76,7 @@
 pub mod adce;
 pub mod aggressive_instcombine;
 pub mod algebraic;
+pub mod alwaysinline;
 pub mod alwaysundef;
 pub mod argpromotion;
 #[cfg(test)]
@@ -153,6 +154,7 @@ pub mod combine_gep_index;
 pub mod combine_gep_merge;
 pub mod combine_gep_phi;
 pub mod combine_icmp_binop;
+pub mod combine_icmp_bitcast;
 pub mod combine_icmp_const;
 pub mod combine_icmp_equality;
 pub mod combine_icmp_intrinsic;
@@ -444,6 +446,7 @@ pub mod slpschedule;
 pub mod slpreduction;
 pub mod slptree;
 pub mod slpvectorize;
+pub mod vectorlower;
 pub mod spares;
 pub mod speculate;
 pub mod spill;
@@ -485,6 +488,9 @@ pub mod vncoercion;
 mod vncoercion_tests;
 pub mod walk;
 pub mod widen;
+pub mod widenreturns;
+#[cfg(test)]
+mod widenreturns_tests;
 pub mod window;
 pub mod zeromerge;
 // Not ported, meaning nothing where a value is whole: `wholephis` and

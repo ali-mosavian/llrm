@@ -18,6 +18,15 @@
 //!
 //! # Runs
 //! In `cgpaddr`'s run, before `SinkCast`.
+//!
+//! # Example
+//! An operand the target folds into its user, made in another block, is made again
+//! beside the user.
+//!
+//! ```text
+//! b1: %e = sext <8 x i16> %a to <8 x i64>     b2: %e = sext <8 x i16> %a to <8 x i64>
+//! b2: %m = mul <8 x i64> %e, %s            =>     %m = mul <8 x i64> %e, %s
+//! ```
 
 use llrm_mir::context::Context;
 use llrm_mir::dense::IdMap;

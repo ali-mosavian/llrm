@@ -599,6 +599,12 @@ impl Tti for AArch64 {
         true
     }
 
+    /// `Tti::opt_size_inline_guard_yields_to_inlinehint`: the pin's hint
+    /// threshold stands for a callee declared `inline`.
+    fn opt_size_inline_guard_yields_to_inlinehint(&self) -> bool {
+        true
+    }
+
     /// SZ1: at -Os an inline that stays must not grow the code, as gcc's `-Os`
     /// inlines only where the module shrinks. The pin's `OptSizeThreshold` 50
     /// inlines jpeg_fixed's `put32` (a 4-trip store loop) into eight sites

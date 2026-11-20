@@ -129,10 +129,27 @@ pub fn edge_odds(
             .filter_map(|(at, block)| machine.block_ids.get(&block.label).map(|&id| (id, at as u32)))
             .collect()
     };
+    // The blocks early if-conversion joined: the tail's edges are the head's
+    // (the later join first, so a head that was a tail resolves), and the
+    // edge between the two is gone.
+    let mut gone: HashSet<(u32, u32)> = HashSet::default();
+    let mut position = position;
+    if machine.block_ids.len() > 0 {
+        for (head, tail) in machine.joined.iter().rev() {
+            let (Some(&h), Some(&t)) = (machine.block_ids.get(head), machine.block_ids.get(tail)) else { continue };
+            gone.insert((h, t));
+            if let Some(&at) = position.get(&h) {
+                position.insert(t, at);
+            }
+        }
+    }
     let mut odds = Odds::default();
     for &block in function.layout() {
         let Some(&from) = position.get(&block.0) else { continue };
         for (index, to) in llrm_mir::loopinfo::children(function, block).enumerate() {
+            if gone.contains(&(block.0, to.0)) {
+                continue;
+            }
             let Some(&to) = position.get(&to.0) else { continue };
             let probability = bpi.get_edge_probability(function, block, index);
             let entry = odds.entry((from, to)).or_insert((BranchProbability::get_zero(), index));
@@ -142,6 +159,9 @@ pub fn edge_odds(
     let mut rank: HashMap<u32, usize> = HashMap::default();
     let mut kept: HashSet<(u32, u32)> = HashSet::default();
     for &(from, to, numerator) in &machine.edge_probs {
+        if gone.contains(&(from, to)) {
+            continue;
+        }
         let (Some(&from), Some(&to)) = (position.get(&from), position.get(&to)) else { continue };
         let index = rank.entry(from).or_insert(0);
         let probability = BranchProbability::new(numerator, 1 << 31);
@@ -153,6 +173,14 @@ pub fn edge_odds(
             entry.0 = entry.0 + probability;
         }
         *index += 1;
+    }
+    // A head early if-conversion left with a jump to the tail has that edge
+    // only.
+    let place_label = |label: &str| machine.blocks.iter().position(|block| block.label == label).map(|at| at as u32);
+    for (head, tail) in &machine.branched {
+        let (Some(from), Some(to)) = (place_label(head), place_label(tail)) else { continue };
+        odds.retain(|&(f, _), _| f != from);
+        odds.insert((from, to), (BranchProbability::get_one(), 0));
     }
     // The odds of an edge `lower_phis` split are the new block's: the
     // source's edge to it has the probability of the edge it replaced, and its
@@ -646,7 +674,7 @@ pub fn fold(
     optsize: bool,
     exits: &[crate::mc::visit::Reg],
 ) -> Vec<Lowered> {
-    fold_with_odds(blocks, tables, odds, optsize, exits).0
+    fold_with_odds(blocks, tables, odds, optsize, exits, &[]).0
 }
 
 /// The odds of the edges between blocks by label, as placement read them.
@@ -660,6 +688,7 @@ pub fn fold_with_odds(
     odds: &Odds,
     optsize: bool,
     exits: &[crate::mc::visit::Reg],
+    dead_ends: &[String],
 ) -> (Vec<Lowered>, Likelihood) {
     if blocks.is_empty() {
         return (blocks, Likelihood::default());
@@ -675,7 +704,8 @@ pub fn fold_with_odds(
                     | Inst::Brk { .. }
             )
         );
-        if !ends {
+        // A block that ends in a call that never returns falls into nothing.
+        if !ends && !dead_ends.contains(&blocks[at].label) {
             let next = blocks[at + 1].label.clone();
             blocks[at].insts.push(Inst::Branch { link: false, target: Target::Label(next) });
             blocks[at].locs.push(None);

@@ -432,6 +432,12 @@ pub struct MFunc {
     /// The critical edges `lower_phis` split: `(from, to, the block made)`, by
     /// label. The block odds of the edge it replaced are the new block's.
     pub split_edges: Vec<(String, String, String)>,
+    /// The joins early if-conversion made, `(head, tail)` by label in the
+    /// order made: the tail's operations and edges are the head's.
+    pub joined: Vec<(String, String)>,
+    /// The tails early if-conversion left behind a jump: the head's one edge
+    /// is to the tail, certain.
+    pub branched: Vec<(String, String)>,
     /// The IR's edge odds the allocator reads (`MachineBranchProbabilityInfo`);
     /// set just before allocation.
     pub alloc_odds: Option<llrm_spike_mf::placement::Odds>,
@@ -880,6 +886,17 @@ mod verify_tests {
         function.blocks[0].ops.insert(0, Op::Copy { dst: Reg::Gpr(b), src: Reg::Gpr(Gpr(1)) });
         assert_eq!(undefined_reads(&function), vec![]);
     }
+}
+
+/// The labels of the blocks that end in a call that never returns: they run
+/// into no block, though their last instruction is no jump.
+pub fn dead_end_labels(function: &MFunc) -> Vec<String> {
+    function
+        .blocks
+        .iter()
+        .filter(|block| block.ops.iter().any(|op| matches!(op, Op::Unreachable)))
+        .map(|block| block.label.clone())
+        .collect()
 }
 
 /// The registers `function` leaves live: those it returns and passes to a tail

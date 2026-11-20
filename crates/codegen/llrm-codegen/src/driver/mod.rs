@@ -72,6 +72,9 @@ pub struct Options {
     /// `-fexcess-precision=standard` or `-ffloat-store`: a float conversion
     /// rounds to its type.
     pub float_store: bool,
+    /// `-mstack-alignment=N`: the bytes the stack is a multiple of at every
+    /// call.
+    pub stack_alignment: Option<i64>,
     /// Whether a spill of a float rounds to the float's type (`Profile`'s
     /// `rounds_float_spills`): set by llrm-cc, which follows the pin.
     pub rounds_float_spills: bool,
@@ -126,6 +129,7 @@ impl Options {
             debug_format: Default::default(),
             abi: None,
             float_store: false,
+            stack_alignment: None,
             rounds_float_spills: false,
             spills_extended: false,
             code_segment: None,
@@ -184,7 +188,7 @@ impl Options {
     }
 
     pub fn cpu(&self) -> Result<&'static Profile, String> {
-        cpu::tuned_optimizing(
+        let profile = cpu::tuned_optimizing(
             &*self.arch,
             &self.machine.cpu,
             self.pipeline.prefers_size(),
@@ -199,7 +203,8 @@ impl Options {
             self.pipeline.has_min_size,
             self.pipeline.prices_bytes(),
             self.pipeline.pre,
-        )
+        )?;
+        Ok(self.stack_alignment.map_or(profile, |bytes| cpu::with_aligned_calls(profile, bytes)))
     }
 }
 

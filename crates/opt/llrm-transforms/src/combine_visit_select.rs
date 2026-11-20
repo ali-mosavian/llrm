@@ -95,9 +95,20 @@ const FOLDS: &[Fold] = &[
     select_to_phi,
     select_of_symmetric_select,
     nested_selects,
+    sink_not_into_other_hand,
     select_to_cmp,
     select_with_and_or_cond,
 ];
+
+/// `sinkNotIntoOtherHandOfLogicalOp` of a logical `and`/`or` written as a
+/// select.
+fn sink_not_into_other_hand(
+    c: &mut Combiner,
+    inst: InstId,
+    _sel: &Sel,
+) -> Option<Visit> {
+    crate::combine_not::sink_not_into_other_hand_of_logical_op(c, inst).then_some(Visit::Changed)
+}
 
 impl Combiner<'_> {
     fn sel_of(

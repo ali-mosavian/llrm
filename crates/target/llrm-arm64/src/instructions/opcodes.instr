@@ -110,6 +110,7 @@ FMUL{f}rr                binary   x/x,x         f16,f32,f64              fp_arit
 FDIV{f}rr                binary   x/x,x         f16,f32,f64              fp_div     - - - -/-                FDIV{f}rr
 FNMUL{f}rr               binary   x/x,x         f16,f32,f64              fp_arith   - - - -/-                FNMUL{f}rr
 FMAX{f}rr                binary   x/x,x         f16,f32,f64              fp_arith   - - - -/-                FMAX{f}rr
+FABD{H|S|D}rr            binary   x/x,x         -                        fp_arith   - - - -/-                FABD{16|32|64}
 FMAXNM{f}rr              binary   x/x,x         f16,f32,f64              fp_arith   - - - -/-                FMAXNM{f}rr
 FMIN{f}rr                binary   x/x,x         f16,f32,f64              fp_arith   - - - -/-                FMIN{f}rr
 FMINNM{f}rr              binary   x/x,x         f16,f32,f64              fp_arith   - - - -/-                FMINNM{f}rr
@@ -126,6 +127,7 @@ FCMP{f}rr                cmp      -/x,x         f16,f32,f64              fp_arit
 FCMP{f}rz                cmp      -/x           f16,f32,f64              fp_arith   - - - -/N,Z,C,V          FCMP{f}ri
 FCMPE{f}rr               cmp      -/x,x         f16,f32,f64              fp_arith   - - - -/N,Z,C,V          FCMPE{f}rr
 FCMPE{f}rz               cmp      -/x           f16,f32,f64              fp_arith   - - - -/N,Z,C,V          FCMPE{f}ri
+FCCMP{f}rr               cmp      -/x,x,i,i     f16,f32,f64              fp_arith   - - - N,Z,C,V/N,Z,C,V    FCCMP{f}rr
 FCVT{D|D|S|S|H|H}{S|H|D|H|D|S}r unary    x/x           -                        fp_cvt     - - - -/-                FCVT{D|D|S|S|H|H}{S|H|D|H|D|S}r
 SCVTFv1i32               unary    x/x           -                        fp_cvt     - - - -/-                SCVTFv1i32
 SCVTFv1i64               unary    x/x           -                        fp_cvt     - - - -/-                SCVTFv1i64

@@ -75,9 +75,14 @@ fn apply(
     }
 }
 
-/// Whether control goes on to the next block after `block`.
-fn falls_through(block: &Lowered) -> bool {
-    !matches!(
+/// Whether control goes on to the next block after `block`: not from a block
+/// that ends in a call that never returns (`dead_ends`).
+fn falls_through(
+    block: &Lowered,
+    dead_ends: &[String],
+) -> bool {
+    !dead_ends.contains(&block.label)
+        && !matches!(
         block.insts.iter().rev().find(|inst| !inst.is_directive()),
         Some(Inst::Ret { .. } | Inst::Branch { link: false, .. } | Inst::BranchReg { link: false, .. })
     )
@@ -85,7 +90,10 @@ fn falls_through(block: &Lowered) -> bool {
 
 /// The rows of the function made of `blocks`, as byte offsets from its start;
 /// empty where it declares no frame.
-pub fn rows(blocks: &[Lowered]) -> Vec<FrameRow> {
+pub fn rows(
+    blocks: &[Lowered],
+    dead_ends: &[String],
+) -> Vec<FrameRow> {
     if !blocks.iter().flat_map(|block| &block.insts).any(|inst| matches!(inst, Inst::Cfi(_))) {
         return Vec::new();
     }
@@ -102,7 +110,7 @@ pub fn rows(blocks: &[Lowered]) -> Vec<FrameRow> {
             }
         }
         let leaves = blocks[at].insts.iter().filter_map(label_of).filter_map(|label| index.get(label).copied());
-        let next = (falls_through(&blocks[at]) && at + 1 < blocks.len()).then_some(at + 1);
+        let next = (falls_through(&blocks[at], dead_ends) && at + 1 < blocks.len()).then_some(at + 1);
         for to in leaves.chain(next) {
             if starts[to].is_none() {
                 starts[to] = Some(state.clone());
