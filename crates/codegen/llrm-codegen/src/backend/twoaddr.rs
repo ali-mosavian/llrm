@@ -743,12 +743,23 @@ fn tied_pairs(
     what: &Semantics,
 ) -> Vec<(usize, usize)> {
     let Some(regs) = regs.filter(|regs| regs.ties_by_row) else {
+        // An instruction that states its own ties (x86's `xadd` and `cmpxchg`,
+        // whose tied register is not the first destination) has them
+        // honoured; any other is tied by its operation.
+        if let Some(pairs) = &what.tied {
+            return pairs.clone();
+        }
         return if ties(what) { vec![(0, 0)] } else { Vec::new() };
     };
     let name = what.name.as_deref().unwrap_or("");
-    let mut pairs = what.tied.clone().unwrap_or_else(|| {
-        (regs.effects)(name, what.dests.len(), what.sources.len()).first().map_or_else(Vec::new, |row| row.ties.to_vec())
-    });
+    let mut pairs = what
+        .tied
+        .clone()
+        .unwrap_or_else(
+            || (regs.effects)(name, what.dests.len(), what.sources.len())
+                .first()
+                .map_or_else(Vec::new, |row| row.ties.to_vec()),
+        );
     // the first pair first: it is the one the commuter and the three-address
     // forms know
     pairs.sort_by_key(|&(source, dest)| (source, dest) != (0, 0));
@@ -1589,7 +1600,11 @@ mod tests {
         };
         assert_eq!(copied_from(&tied_with(&loop_body(), Off, false, false, false)), Some(8), "off is the pin's order");
         assert_eq!(copied_from(&tied(&loop_body(), Off)), Some(8), "the default is off");
-        assert_eq!(copied_from(&tied_with(&loop_body(), Off, true, false, false)), Some(7), "on ties the loop-carried source");
+        assert_eq!(
+            copied_from(&tied_with(&loop_body(), Off, true, false, false)),
+            Some(7),
+            "on ties the loop-carried source"
+        );
     }
 
     /// x_adler's `a += (i * 31 + 7) & 255` (m32 -O2, 53,972 clk against gcc's
@@ -1643,7 +1658,11 @@ mod tests {
             Some(7),
             "TA-LC alone does not follow copies into other blocks (-O1)"
         );
-        assert_eq!(copied_from(&tied_with(&loop_body(), Off, true, true, false)), Some(8), "on ties the loop-carried source");
+        assert_eq!(
+            copied_from(&tied_with(&loop_body(), Off, true, true, false)),
+            Some(8),
+            "on ties the loop-carried source"
+        );
     }
 
     /// `v8 := add v7, k` with `v7` read again by the `and` that follows (so the
