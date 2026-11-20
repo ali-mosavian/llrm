@@ -1146,6 +1146,7 @@ fn selected_in(
     // The vector types are legal exactly where the table gave them a register
     // class.
     builder_target.legal_vectors = tli.types.legal_vectors().to_vec();
+    builder_target.vector_registers = tli.types.vector_registers();
     builder_target.dag.vectors = !builder_target.legal_vectors.is_empty();
     builder_target.dag.add_to_or_disjoint = machine.tti().is_some_and(|tti| tti.add_to_or_disjoint());
     let builder_target = builder_target
