@@ -200,11 +200,9 @@ pub(crate) fn split_edge(
     block: usize,
 ) {
     let new = pred + 1;
-    // `pred` may fall into the block laid out after it: the new block now
-    // stands there, so the fall-through needs its own jump (the block moves
-    // up by one).
-    let falls_into =
-        f.blocks[pred].last().is_some_and(|last| !last.is_barrier()) && pred + 1 < f.blocks.len() && pred + 1 != block;
+    // `SplitCriticalEdge`: what followed `pred` before the new block stands
+    // there, or the new block if that was the split edge's target.
+    let previous = (pred + 1 < f.blocks.len()).then(|| if pred + 1 == block { new } else { pred + 2 });
     let shift = |b: &mut u32| {
         if *b as usize >= new {
             *b += 1;
@@ -245,12 +243,9 @@ pub(crate) fn split_edge(
             *to = new;
         }
     }
-    if falls_into {
-        f.blocks[pred as usize]
-            .push(Inst::new(crate::dagisel::generated::ids::opcode::BR, &[Operand::Block(new_id + 1)]));
-    }
     f.blocks.insert(new, vec![Inst::new(crate::dagisel::generated::ids::opcode::BR, &[Operand::Block(target)])]);
     f.succs.insert(new, vec![block]);
+    crate::branch_fold::update_terminator(f, pred as usize, previous);
     if !f.edge_probs.is_empty() {
         f.edge_probs.insert(new, vec![1 << 31]);
     }
@@ -298,7 +293,9 @@ mod tests {
         assert_eq!(f.blocks[1], vec![Inst::new(op::BR, &[Operand::Block(3)])]);
         assert_eq!(f.succs[0], vec![1, 2]);
         assert!(f.blocks[3][0].operands.contains(&Operand::Block(1)), "{:?}", f.blocks[3][0]);
-        assert_eq!(f.blocks[0][2].operands[0], Operand::Block(1));
+        // `updateTerminator`: the new block is bb0's layout successor, so the
+        // branch to it is reversed and falls into it.
+        assert_eq!(f.blocks[0][2..], [Inst::new(op::BR_UNLESS, &[Operand::Block(2), Operand::Use(1)])]);
     }
 
     /// bb0 ends in `BR_IF bb2` and falls into bb1: splitting the edge to bb2
@@ -310,8 +307,9 @@ mod tests {
         let mut f = function();
         f.blocks[0].pop();
         assert!(split_phi_edges(&mut f));
-        assert_eq!(f.blocks[0].last(), Some(&Inst::new(op::BR, &[Operand::Block(2)])), "{:?}", f.blocks[0]);
-        assert_eq!(f.blocks[0][2].operands[0], Operand::Block(1));
+        // The block that fell into bb1 now has the new block after it:
+        // `updateTerminator` reverses the branch so it still reaches bb1.
+        assert_eq!(f.blocks[0][2..], [Inst::new(op::BR_UNLESS, &[Operand::Block(2), Operand::Use(1)])]);
     }
 
     /// bb0 ends in a `BR_TABLE`, which `analyzeBranch` cannot read, so the pin

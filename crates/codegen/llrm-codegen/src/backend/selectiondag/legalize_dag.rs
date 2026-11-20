@@ -1355,8 +1355,21 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         let ready = |legalizer: &Self, op: ISD| legalizer.tli.is_operation_legal_or_custom(op, vt);
         match op {
             // `VectorLegalizer::Expand`: a lane-wise operation the target has
-            // not is done a lane at a time.
-            ISD::Add | ISD::Sub | ISD::Mul | ISD::And | ISD::Or | ISD::Xor if vt.is_vector() => {
+            // not is done a lane at a time (`UnrollVectorOp`, whose scalar
+            // shifts take the target's amount type when they are legalized).
+            ISD::Add
+            | ISD::Sub
+            | ISD::Mul
+            | ISD::And
+            | ISD::Or
+            | ISD::Xor
+            | ISD::Shl
+            | ISD::Srl
+            | ISD::Sra
+            | ISD::Rotl
+            | ISD::Rotr
+                if vt.is_vector() =>
+            {
                 Some(vec![self.unroll_vector_op(node)])
             }
             ISD::VSelect => self.expand_vselect(node).map(|selected| vec![selected]),
