@@ -6,7 +6,7 @@ SEG 4 attr=0x6 name="_DATA" align=4
 START
 TYPE T25 size=8 align=4
 TYPE T26 size=28 align=1
-f1 DBSrcFile "/home/alim/scratch/scaling/tests/fixtures/c32/sumthree.c" main=1
+f1 DBSrcFile "tests/fixtures/c32/sumthree.c" main=1
 - DBSrcCue f1 9 1
 SYM y1 name="sum_three" base="sum_three" pattern="*_" attr=0x7 seg=1
 CALLCONV y1 class=0x0 target=0x0 parms=[f0000ff:0] ret=0:0

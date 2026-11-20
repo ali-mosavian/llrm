@@ -2168,6 +2168,9 @@ impl<'a> Analyzer<'a> {
         inst: InstId,
     ) -> i64 {
         let Some(tti) = self.site.tti else { return 0 };
+        if let Some(size) = self.body_call_size(inst) {
+            return size;
+        }
         let view = self.size_view();
         llrm_mir::instructioncost::instruction_cost_known(
             view.as_deref().unwrap_or(tti),
@@ -2279,34 +2282,11 @@ impl<'a> Analyzer<'a> {
 
     /// The call site as the target's call sequence sees it.
     fn call_shape(&self) -> Option<llrm_mir::tti::CallShape> {
-        use llrm_mir::tti::{CallArgument, CallShape, Ty};
-        let call = self.site.caller.instruction(self.site.call);
-        let info = call_info(self.site.caller, self.site.call)?;
-        let arguments = call.operands.len().saturating_sub(1);
+        use llrm_mir::tti::CallShape;
         // an argument for a parameter nothing reads is gone once `deadargelim`
         // runs after the walk
         let unread = self.unread_parameters();
-        let arguments = (0..arguments)
-            .filter(|&index| !unread.get(index).copied().unwrap_or(false))
-            .map(|index| {
-                let byval = info
-                    .argument_attrs
-                    .get(index)
-                    .and_then(
-                        |attrs| attrs
-                            .iter()
-                            .find_map(
-                                |one| match one {
-                                    Attribute::Type(name, ty) if name == "byval" => Some(*ty),
-                                    _ => None,
-                                },
-                            ),
-                    );
-                let ty = llrm_mir::instructioncost::operand_type(self.context, self.site.caller, call.operands[index])
-                    .and_then(|ty| Ty::of(&self.context.types, ty));
-                CallArgument { ty, byval_bytes: byval.map(|ty| self.site.layout.alloc_size(&self.context.types, ty)) }
-            })
-            .collect();
+        let arguments = self.call_arguments(self.site.caller, self.site.call, &unread)?;
         let caller = self.site.caller;
         let caller_frame_bytes = caller
             .layout()
@@ -2324,6 +2304,56 @@ impl<'a> Analyzer<'a> {
             })
             .unwrap_or(0);
         Some(CallShape { arguments, callee_frame_bytes: self.allocated_size, caller_frame_bytes })
+    }
+
+    /// The arguments of `call` in `function`, but those `unread` says nothing reads.
+    fn call_arguments(
+        &self,
+        function: &Function,
+        call: InstId,
+        unread: &[bool],
+    ) -> Option<Vec<llrm_mir::tti::CallArgument>> {
+        use llrm_mir::tti::{CallArgument, Ty};
+        let operands = &function.instruction(call).operands;
+        let info = call_info(function, call)?;
+        Some(
+            (0..operands.len().saturating_sub(1))
+                .filter(|&index| !unread.get(index).copied().unwrap_or(false))
+                .map(|index| {
+                    let byval = info.argument_attrs.get(index).and_then(|attrs| {
+                        attrs.iter().find_map(|one| match one {
+                            Attribute::Type(name, ty) if name == "byval" => Some(*ty),
+                            _ => None,
+                        })
+                    });
+                    let ty = llrm_mir::instructioncost::operand_type(self.context, function, operands[index])
+                        .and_then(|ty| Ty::of(&self.context.types, ty));
+                    CallArgument { ty, byval_bytes: byval.map(|ty| self.site.layout.alloc_size(&self.context.types, ty)) }
+                })
+                .collect(),
+        )
+    }
+
+    /// What a direct call in the callee's body adds to the caller once the
+    /// body is copied there (`Tti::body_call_cost`), where the target states
+    /// it: the flat price of one unit and one per argument stands for a site
+    /// that `call_sequence` prices as bytes, and a body that calls then
+    /// looked smaller than the call it replaced.
+    fn body_call_size(
+        &self,
+        inst: InstId,
+    ) -> Option<i64> {
+        let tti = self.site.tti?;
+        let target = llrm_mir::memory::callee(self.context, self.callee, inst)?;
+        if !lowered_to_call(self.site.module, target) || self.site.module.global(target).name.as_deref()?.starts_with("llvm.") {
+            return None;
+        }
+        let shape = llrm_mir::tti::CallShape {
+            arguments: self.call_arguments(self.callee, inst, &[])?,
+            callee_frame_bytes: 0,
+            caller_frame_bytes: 0,
+        };
+        tti.body_call_cost(&shape, llrm_mir::tti::CostKind::CodeSize).map(|cost| cost.value)
     }
 
     /// The target's price of the call and its argument setup
@@ -2401,10 +2431,13 @@ impl<'a> Analyzer<'a> {
         // (`inline_dying_credit_at_os`), -Os takes no credit for the
         // callee that goes (a 9-argument float callee, 21 units against
         // ~70 B a copy, inlined three times was +193 B at x86-m16).
+        let hot = self.site.relative_frequency.is_some_and(|ratio| ratio >= HOT_CALLSITE_REL_FREQ)
+            && self.site.tti.is_some_and(|tti| tti.inline_hot_dying_credit_at_os());
         let credit = self.site.callee_dies
             && k >= 2
             && (self.site.caller_size == CallerSize::Speed
-                || self.site.tti.is_none_or(|tti| tti.inline_dying_credit_at_os()));
+                || self.site.tti.is_none_or(|tti| tti.inline_dying_credit_at_os())
+                || hot);
         if credit {
             (k - 1) * size > k * call + frame
         } else {
