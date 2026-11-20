@@ -1708,9 +1708,10 @@ impl Tti for X86 {
     /// (the `pcmpgt` ladders, a shift a lane and a blend). The other kinds of
     /// amount, and every other operation, are `vector_arithmetic_cost`. A
     /// splat of a variable has its own, cheaper rows (`SSE2UniformCostTable`),
-    /// which the operand information cannot tell from any other variable, so
-    /// it is priced as the dearer (DEVIATE X86V5, owner llrm-target-x86-m64-b,
-    /// exit 2026-11-27).
+    /// and constants that differ by lane dearer ones (`SSE2ConstCostTable`);
+    /// the operand information has no uniform flag, so the first is priced as
+    /// the dearer variable and the second as a uniform constant (DEVIATE
+    /// X86V5, owner llrm-target-x86-m64-b, exit 2026-11-27).
     fn vector_arithmetic_cost_op2(
         &self,
         op: ArithOp,

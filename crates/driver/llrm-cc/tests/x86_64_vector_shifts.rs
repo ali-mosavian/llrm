@@ -39,7 +39,7 @@ fn body<'a>(
 #[test]
 fn a_vector_shift_is_vector_instructions_and_no_scalar_ones() {
     let text = assembly();
-    let expected: [(&str, &[&str]); 14] = [
+    let expected: [(&str, &[&str]); 15] = [
         ("words_by_vector", &["psllw", "psraw", "pand", "pandn", "por"]),
         ("dwords_by_vector", &["pshuflw", "psrld", "punpckldq", "punpckhdq"]),
         ("bytes_by_vector", &["pcmpgtb", "psrlw", "pandn"]),
@@ -54,6 +54,7 @@ fn a_vector_shift_is_vector_instructions_and_no_scalar_ones() {
         ("words_by_splat", &["movd", "psllw"]),
         ("bytes_by_splat", &["movd", "psllw", "pmullw"]),
         ("bytes_by_splat", &["pand"]),
+        ("dwords_by_undef_splat", &["psrld"]),
     ];
     for (name, instructions) in expected {
         let text = body(&text, name);
@@ -64,4 +65,8 @@ fn a_vector_shift_is_vector_instructions_and_no_scalar_ones() {
     }
     // The splat of a variable is one `psllw` by a register, not the ladder.
     assert!(!body(&text, "words_by_splat").contains("pcmpgt"), "{text}");
+    // A constant splat with an undef lane is still one immediate shift: it was
+    // four shifts and four shuffles.
+    let undef = body(&text, "dwords_by_undef_splat");
+    assert!(!undef.contains("pshufd") && !undef.contains("punpck"), "{undef}");
 }

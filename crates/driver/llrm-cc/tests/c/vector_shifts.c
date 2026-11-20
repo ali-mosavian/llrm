@@ -28,3 +28,10 @@ void bytes_by_splat(v16i8 *r, v16i8 *a, int n) {
     v16i8 s = {m, m, m, m, m, m, m, m, m, m, m, m, m, m, m, m};
     *r = *a << s;
 }
+void dwords_by_undef_splat(u4i32 *r, u4i32 *a) {
+    u4i32 s;
+    s[0] = 3;
+    s[2] = 3;
+    s[3] = 3;
+    *r = *a >> s;
+}

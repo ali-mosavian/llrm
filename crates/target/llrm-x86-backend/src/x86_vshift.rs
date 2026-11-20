@@ -213,8 +213,9 @@ impl Amount {
     /// The one constant every lane is.
     fn splat_constant(&self) -> Option<u128> {
         let Amount::Constant(lanes) = self else { return None };
-        let first = (*lanes.first()?)?;
-        lanes.iter().all(|lane| *lane == Some(first)).then_some(first)
+        // `X86::isConstantSplat`: an undef lane agrees with any amount.
+        let first = lanes.iter().flatten().next().copied()?;
+        lanes.iter().all(|lane| lane.is_none_or(|lane| lane == first)).then_some(first)
     }
 
     fn constants(&self) -> Option<&[Option<u128>]> {
