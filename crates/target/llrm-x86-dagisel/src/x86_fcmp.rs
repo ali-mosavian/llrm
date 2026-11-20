@@ -8,8 +8,10 @@
 //! early exit never applies and the table's `UCOM_FpIr*` patterns (which
 //! require `HasCMOV`) never do.
 //!
-//! The strict forms are not translated: the builder makes no strict
-//! floating-point nodes.
+//! `STRICT_FCMP` and `STRICT_FCMPS` are the same selection with a chain: the
+//! compare hangs on the node's chain (`fcom` for the signaling one, which
+//! raises on a quiet NaN), and the `sahf` is chained after it; the node's out
+//! chain is the compare's.
 //!
 //! # Used by
 //! [`crate::x86_select::select_node`].
@@ -19,27 +21,43 @@
 
 use llrm_dagisel::addr::AddrDag;
 use llrm_dagisel::dag::SDValue;
-use llrm_dagisel::generated::ids::{mvt, target_opcode, x86};
+use llrm_dagisel::generated::ids::{mvt, target_opcode, x86, x86isd};
 
-/// Selects `node`; false for a compare type with no x87 form.
+/// Selects `node` (`FCMP`, `STRICT_FCMP` or `STRICT_FCMPS`); false for a
+/// compare type with no x87 form.
 pub fn select_fcmp<D: AddrDag>(
     dag: &mut D,
     node: u32,
 ) -> bool {
-    let (n0, n1) = (dag.operand(node, 0), dag.operand(node, 1));
-    let cmp = match dag.value_type(n0) {
-        mvt::f32 => x86::UCOM_Fpr32,
-        mvt::f64 => x86::UCOM_Fpr64,
-        mvt::f80 => x86::UCOM_Fpr80,
+    let opcode = dag.opcode(node);
+    let strict = opcode == x86isd::STRICT_FCMP || opcode == x86isd::STRICT_FCMPS;
+    let signaling = opcode == x86isd::STRICT_FCMPS;
+    let (n0, n1) = (dag.operand(node, usize::from(strict)), dag.operand(node, usize::from(strict) + 1));
+    let cmp = match (dag.value_type(n0), signaling) {
+        (mvt::f32, false) => x86::UCOM_Fpr32,
+        (mvt::f64, false) => x86::UCOM_Fpr64,
+        (mvt::f80, false) => x86::UCOM_Fpr80,
+        (mvt::f32, true) => x86::COM_Fpr32,
+        (mvt::f64, true) => x86::COM_Fpr64,
+        (mvt::f80, true) => x86::COM_Fpr80,
         _ => return false,
     };
-    let glue = SDValue::new(dag.machine_node(cmp, &[mvt::Glue], &[n0, n1]), 0);
+    let (mut chain, glue) = if strict {
+        let compare = dag.machine_node(cmp, &[mvt::Other, mvt::Glue], &[n0, n1, dag.operand(node, 0)]);
+        (SDValue::new(compare, 0), SDValue::new(compare, 1))
+    } else {
+        (dag.entry_node(), SDValue::new(dag.machine_node(cmp, &[mvt::Glue], &[n0, n1]), 0))
+    };
     let status = SDValue::new(dag.machine_node(x86::FNSTSW16r, &[mvt::i16], &[glue]), 0);
     let high = dag.target_constant(i64::from(x86::sub_8bit_hi), mvt::i32);
     let ah = SDValue::new(dag.machine_node(target_opcode::EXTRACT_SUBREG, &[mvt::i8], &[status, high]), 0);
-    let entry = dag.entry_node();
-    let copy = dag.copy_to_reg(entry, x86::AH, ah, None);
+    let copy = dag.copy_to_reg(chain, x86::AH, ah, None);
     let sahf = SDValue::new(dag.machine_node(x86::SAHF, &[mvt::i32], &[SDValue::new(copy, 1)]), 0);
+    if strict {
+        // the pin's `Chain = AH`: what followed the compare follows the copy
+        chain = SDValue::new(copy, 0);
+        dag.replace_uses(SDValue::new(node, 1), chain);
+    }
     dag.replace_uses(SDValue::new(node, 0), sahf);
     dag.remove_dead_node(node);
     true

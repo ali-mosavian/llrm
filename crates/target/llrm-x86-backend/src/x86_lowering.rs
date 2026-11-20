@@ -144,6 +144,10 @@ pub mod x86isd {
     /// `X86ISD::FCMP`: the flags of an x87 compare (`fucom`, `fnstsw`,
     /// `sahf` on a 486).
     pub const FCMP: ISD = ISD::Target(576);
+    /// `X86ISD::STRICT_FCMP`: (chain, lhs, rhs) to (flags, chain), a quiet compare.
+    pub const STRICT_FCMP: ISD = ISD::Target(753);
+    /// `X86ISD::STRICT_FCMPS`: the signaling compare.
+    pub const STRICT_FCMPS: ISD = ISD::Target(754);
     /// `X86ISD::FSETCC`: `cmpss`/`cmpsd` with an immediate predicate, all
     /// ones or all zeros in the scalar.
     pub const FSETCC: ISD = ISD::Target(622);
@@ -835,6 +839,7 @@ impl Hooks for X86Lowering<'_> {
         match dag.opcode(node) {
             ISD::SetCC if dag.value_type(node).is_vector() => lower_vector_setcc(dag, node),
             ISD::SetCC => lower_setcc(dag, node, self.min_size, self.status_word_tests),
+            ISD::StrictFSetCC | ISD::StrictFSetCCS => lower_strict_fsetcc(dag, node),
             ISD::Select => lower_select(dag, node, self.cmov, self.min_size, self.status_word_tests),
             ISD::BrCond => lower_brcond(dag, node, self.min_size, self.status_word_tests),
             ISD::UAddO | ISD::USubO | ISD::SAddO | ISD::SSubO | ISD::UMulO | ISD::SMulO => Some(lower_xalu(dag, node)),
@@ -847,6 +852,8 @@ impl Hooks for X86Lowering<'_> {
             ISD::FpToSInt | ISD::FpToUInt => lower_fp_to_int(dag, node, self.sse2),
             ISD::LRint | ISD::LLRint => lower_lrint(dag, node),
             ISD::SIntToFp | ISD::UIntToFp => lower_int_to_fp(dag, node, self.sse2),
+            ISD::StrictSIntToFp if !self.sse2 => lower_strict_sint_to_fp(dag, node),
+            ISD::StrictFpToSInt if !self.sse2 => lower_strict_fp_to_sint(dag, node),
             ISD::ConstantPool => lower_constant_pool(dag, node),
             ISD::JumpTable => lower_jump_table(dag, node),
             ISD::ShlParts | ISD::SraParts | ISD::SrlParts => Some(lower_shift_parts(dag, node)),
@@ -1440,6 +1447,92 @@ fn lower_setcc(
     }
     let (flags, code) = emit_flags_for_setcc(dag, op0, op1, cc, min_size);
     Some(dag.get_node(x86isd::SETCC, EVT::I8, &[code, flags]))
+}
+
+/// `LowerSETCC` of `STRICT_FSETCC(S)`: the compare is a chained
+/// `STRICT_FCMP(S)` whose out chain is the node's, then the same `SETCC` of
+/// its flags as a plain compare. The chain is what keeps the compare, which
+/// may raise an exception, in order with the other constrained operations.
+/// DEVIATE CFP2: the flags are read by `sahf` (the pin's), never by the
+/// status word of DEVIATE X87-STATUS. Exit: that deviation's. Owner w9-tests.
+/// Review 2026-11-27.
+fn lower_strict_fsetcc(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let chain = dag.operand(node, 0);
+    let (mut lhs, mut rhs) = (dag.operand(node, 1), dag.operand(node, 2));
+    let cc = cond_of(dag, dag.operand(node, 3));
+    let code = translate_fp_cc(dag, cc, &mut lhs, &mut rhs)?;
+    let opcode = if dag.opcode(node) == ISD::StrictFSetCCS { x86isd::STRICT_FCMPS } else { x86isd::STRICT_FCMP };
+    let flags = dag.get_node_multi(opcode, &[EVT::I32, EVT::OTHER], &[chain, lhs, rhs]);
+    let code = cond_code(dag, code);
+    let result = dag.get_node(x86isd::SETCC, EVT::I8, &[code, SDValue { node: flags.node, res: 0 }]);
+    Some(dag.get_node_multi(ISD::MergeValues, &[EVT::I8, EVT::OTHER], &[result, SDValue { node: flags.node, res: 1 }]))
+}
+
+/// `LowerSINT_TO_FP` of `STRICT_SINT_TO_FP` on the x87: the integer stored to
+/// a stack slot on the node's chain and `fild`ed from it, whose out chain is
+/// the node's. The `i64` source and the unsigned and SSE forms are not
+/// translated: the legalizer refuses them.
+fn lower_strict_sint_to_fp(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let (chain, src) = (dag.operand(node, 0), dag.operand(node, 1));
+    let (dst, src_vt) = (dag.value_type(node), dag.value_type(src));
+    if !matches!(dst, EVT::Simple(MVT::F32 | MVT::F64 | MVT::F80)) || !matches!(src_vt, EVT::I16 | EVT::I32) {
+        return None;
+    }
+    let size = src_vt.size_in_bits() / 8;
+    let index = dag.create_stack_temporary(size, size);
+    let slot = dag.get_frame_index(dag.config().pointer, index);
+    let info = MemInfo {
+        mem_vt: src_vt,
+        align: size,
+        volatile: false,
+        base: MemBase::Stack(index),
+        ext: None,
+        space: 0,
+        ordering: None,
+    };
+    let stored = dag.get_store(chain, src, slot, info);
+    Some(build_fild(dag, dst, src_vt, stored, slot, info))
+}
+
+/// `LowerFP_TO_INT` of `STRICT_FP_TO_SINT` on the x87: `fist` to a stack slot
+/// on the node's chain, then a load whose out chain is the node's.
+fn lower_strict_fp_to_sint(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let (chain, value) = (dag.operand(node, 0), dag.operand(node, 1));
+    let result_vt = dag.value_type(node);
+    if !matches!(dag.value_type(value), EVT::Simple(MVT::F32 | MVT::F64 | MVT::F80))
+        || !matches!(result_vt, EVT::I16 | EVT::I32)
+    {
+        return None;
+    }
+    let size = result_vt.size_in_bits() / 8;
+    let index = dag.create_stack_temporary(size, size);
+    let slot = dag.get_frame_index(dag.config().pointer, index);
+    let info = MemInfo {
+        mem_vt: result_vt,
+        align: size,
+        volatile: false,
+        base: MemBase::Stack(index),
+        ext: None,
+        space: 0,
+        ordering: None,
+    };
+    let fist = dag.intern(
+        x86isd::FP_TO_INT_IN_MEM,
+        &[EVT::OTHER],
+        &[chain, value, slot],
+        SDNodeFlags::default(),
+        NodeData::Mem(info),
+    );
+    Some(dag.get_load(result_vt, fist, slot, info))
 }
 
 /// `isX86LogicalCmp`: flags a `CMOV` can read directly.

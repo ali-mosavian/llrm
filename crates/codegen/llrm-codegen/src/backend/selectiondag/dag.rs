@@ -38,6 +38,9 @@ impl SDNodeFlags {
     /// DEVIATE PAIR1: a `BUILD_PAIR` of the two words of a value the calling
     /// convention returns or passes in two registers (`dx:ax`).
     pub const PAIR_LONG: SDNodeFlags = SDNodeFlags(16384);
+    /// `NoFPExcept`: `fpexcept.ignore`; the operation's exceptions are not
+    /// observed.
+    pub const NO_FP_EXCEPT: SDNodeFlags = SDNodeFlags(32768);
 
     pub fn union(
         self,
