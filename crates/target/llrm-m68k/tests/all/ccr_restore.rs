@@ -5,7 +5,7 @@
 
 use llrm_m68k::driver::{Level, assembly, cpu_of};
 
-const BRANCHES: &str = include_str!("data/ccr_restore_branches.ll");
+const BRANCHES: &str = include_str!("../data/ccr_restore_branches.ll");
 
 #[test]
 fn the_codes_are_not_restored_straight_after_a_set_on_condition() {

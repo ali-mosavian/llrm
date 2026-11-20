@@ -6,7 +6,7 @@
 
 use llrm_m68k::driver::{Level, assembly, cpu_of};
 
-const COUNTDOWN: &str = include_str!("data/countdown_scaled_sum.ll");
+const COUNTDOWN: &str = include_str!("../data/countdown_scaled_sum.ll");
 
 #[test]
 fn a_count_down_loop_exits_on_the_borrow_of_its_subq() {

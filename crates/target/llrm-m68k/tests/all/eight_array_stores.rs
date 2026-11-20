@@ -7,7 +7,7 @@
 
 use llrm_m68k::driver::{Level, assembly, cpu_of};
 
-const EIGHT: &str = include_str!("data/eight_array_stores.ll");
+const EIGHT: &str = include_str!("../data/eight_array_stores.ll");
 
 #[test]
 fn a_loop_over_eight_arrays_keeps_no_pointer_in_a_stack_slot() {
