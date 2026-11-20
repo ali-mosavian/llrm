@@ -106,6 +106,7 @@
 //! | `loopidioms` | `loopidioms`, `merge`, `memcpyopt` |
 //! | `sibcalls` | `tailrec` |
 //! | `unswitch`, `interchange`, `unroll_and_jam` | the passes of that name (`unswitch` and `unroll_and_jam` on at -O3 and -Omax; `interchange` on at every level but -O0) |
+//! | `split_loops` | `loop-split` (gcc's `-fsplit-loops`, on at -O3 and -Omax; runs only where the target's `Tti::loop_split` says so) |
 //! | `copy_headers` | the header copy in E (off by default; `-ftree-ch`) |
 //!
 //! `pre` makes `gvn` insert on the path that lacks a value; `for_size` prices
@@ -282,6 +283,9 @@ pub struct Options {
     pub loopidioms: bool,
     pub sibcalls: bool,
     pub unswitch: bool,
+    /// `-fsplit-loops`: GCC's loop splitting ([`crate::loopsplit`]), on at -O3
+    /// and -Omax.
+    pub split_loops: bool,
     /// `-floop-interchange`: LLVM's `LoopInterchange.cpp`, in the pin's
     /// default pipelines (`enable-loopinterchange`) at every level but -O0.
     pub interchange: bool,
@@ -379,6 +383,7 @@ impl Default for Options {
             loopidioms: true,
             sibcalls: true,
             unswitch: false,
+            split_loops: false,
             interchange: true,
             unroll_and_jam: false,
             vectorize: true,
@@ -428,6 +433,7 @@ impl Options {
             backward_threading: true,
             loop_unrolling: false,
             unswitch: false,
+            split_loops: false,
             switch_conversion: false,
             speed_rate: false,
             ..Self::default()
@@ -450,6 +456,7 @@ impl Options {
         Self {
             inline: inline::Threshold::new(250),
             unswitch: true,
+            split_loops: true,
             unroll_and_jam: true,
             limits: Limits { target_percent: 200, ..Limits::default() },
             ..Self::default()
@@ -463,6 +470,7 @@ impl Options {
             limits: Limits { target_percent: 200, ..Limits::default() },
             inline: inline::Threshold { cp_clone: Some(true), ..inline::Threshold::new(250) },
             unswitch: true,
+            split_loops: true,
             unroll_and_jam: true,
             search: true,
             exhaustive: true,
@@ -551,6 +559,7 @@ impl Options {
             "tailrec" => self.sibcalls,
             "loop-interchange" => self.interchange,
             "loop-unroll-and-jam" => self.unroll_and_jam,
+            "loop-split" => self.split_loops,
             "loop-vectorize" => self.vectorize,
             _ => true,
         }
@@ -1136,6 +1145,10 @@ pub(crate) fn llvm_order(
             // LoopInterchangePass (l.1631), in the loop pass manager after
             // LoopRotate (l.1621) and LoopDeletion (l.1628).
             slot("loop-interchange@1631", Box::new(loopinterchange::Interchange::default())),
+            // DEVIATE LSPLIT (owner arm64, exit 2026-11-24): GCC's
+            // `-fsplit-loops` runs after loop-invariant motion and before the
+            // vectorizer; the pin has no such pass.
+            slot("loop-split@gcc", Box::new(crate::loopsplit::LoopSplit)),
             // DEVIATE UJ-EARLY (owner arm64-vec, exit 2026-12-01): GCC's
             // `pass_unroll_jam` runs before its vectorizer, where a nest is
             // one inner loop; after the vectorizer (l.1474) the inner loop is

@@ -1157,3 +1157,51 @@ fn test_linear_recursive_holds_the_functions_with_one_self_call() {
     let found = linear_recursive(&module, &recursive(&module));
     assert_eq!(found, [id(&module, "line")].into_iter().collect());
 }
+
+const NEVER_RETURNS: &str = "
+declare void @trap() noreturn
+
+define internal i16 @die(i16 %x) noreturn {
+b1:
+  call void @trap()
+  unreachable
+}
+
+define i16 @main(i16 %a) {
+b1:
+  %c = icmp eq i16 %a, 0
+  br i1 %c, label %bad, label %ok
+
+bad:
+  %r = call i16 @die(i16 %a)
+  %s = add i16 %r, 1
+  ret i16 %s
+
+ok:
+  ret i16 %a
+}
+";
+
+/// A callee with no `ret` was refused as not `copyable`, so every `noreturn`
+/// helper stayed a call and QuickBASIC's `fault_error` kept 40 bytes of
+/// argument copy at -Os.
+#[test]
+fn a_callee_that_never_returns_is_copyable() {
+    let module = parsed(NEVER_RETURNS);
+    let die = module.named("die").map(|id| module.global(id).function().expect("@die").clone());
+    assert!(copyable(&module, &die.expect("@die")));
+}
+
+/// The call is replaced by the callee's body; its value is poison, so what
+/// followed the call is dead and the module stays valid.
+#[test]
+fn a_call_to_a_callee_that_never_returns_is_inlined() {
+    let mut module = parsed(NEVER_RETURNS);
+    assert!(inline_into(&mut module, "main", 1), "{}", printed(&module));
+    let text = printed(&module);
+    assert!(!text.contains("call i16 @die"), "{text}");
+    assert!(text.contains("call void @trap()"), "{text}");
+    assert!(text.contains("add i16 poison, 1") && !text.contains("phi"), "{text}");
+    assert_eq!(llrm_mir::verify::verify(&module), Vec::<String>::new(), "{text}");
+    assert_eq!(run(&module, "main", &[5]), Val::Int { bits: 5, width: 16 });
+}
