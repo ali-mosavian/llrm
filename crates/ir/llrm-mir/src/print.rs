@@ -52,10 +52,7 @@ pub fn module(module: &Module) -> String {
                 },
             ),
     );
-    section(
-        &mut out,
-        module.comdats.iter().map(|(name, kind)| format!("${} = comdat {kind}\n", quoted(name))),
-    );
+    section(&mut out, module.comdats.iter().map(|(name, kind)| format!("${} = comdat {kind}\n", quoted(name))));
     section(
         &mut out,
         module
@@ -431,7 +428,7 @@ struct Printer<'a> {
     /// What a `blockaddress` outside its function names a label of, read
     /// from the function's own numbering.
     module: Option<&'a Module>,
-    labels: std::cell::RefCell<HashMap<GlobalId, HashMap<BlockId, String>>>,
+    labels: std::cell::RefCell<HashMap<GlobalId, crate::dense::IdMap<BlockId, String>>>,
     comdats: Vec<Option<String>>,
 }
 
@@ -860,8 +857,10 @@ impl Printer<'_> {
                 format!("{} {}", inst.opcode.mnemonic(), values.join(", "))
             }
             Opcode::ShuffleVector(mask) => {
-                let lanes: Vec<String> =
-                    mask.iter().map(|&lane| if lane < 0 { "i32 poison".to_owned() } else { format!("i32 {lane}") }).collect();
+                let lanes: Vec<String> = mask
+                    .iter()
+                    .map(|&lane| if lane < 0 { "i32 poison".to_owned() } else { format!("i32 {lane}") })
+                    .collect();
                 format!("shufflevector {}, {}, <{} x i32> <{}>", typed(0), typed(1), mask.len(), lanes.join(", "))
             }
             Opcode::Alloca { allocated, align, address_space } => {
@@ -1065,8 +1064,8 @@ impl Printer<'_> {
                 let label = labels
                     .entry(*function)
                     .or_insert_with(|| match self.module.map(|module| &module.global(*function).kind) {
-                        Some(GlobalKind::Function(body)) => Slots::new(body).blocks,
-                        _ => HashMap::default(),
+                        Some(GlobalKind::Function(body)) => Slots::new(body).blocks.into_iter().collect(),
+                        _ => crate::dense::IdMap::new(),
                     })
                     .get(block)
                     .cloned();
