@@ -352,7 +352,13 @@ pub fn items_with(
         } else {
             NarrowMultiplies::Off
         };
-        optimized = mid_end_narrowing(module, &M68k::for_cpu(cpu), Some(Rc::new(M68kMachine { cpu })), narrow)?;
+        optimized = mid_end_narrowing(
+            module,
+            &M68k::for_cpu(cpu),
+            Some(Rc::new(M68kMachine { cpu })),
+            narrow,
+            narrow == NarrowMultiplies::Speed,
+        )?;
         &optimized
     } else {
         module
@@ -1422,8 +1428,9 @@ pub fn mid_end_for_narrowing(
     module: &Module,
     cpu: Cpu,
     narrow_multiplies: NarrowMultiplies,
+    narrow_divides: bool,
 ) -> Result<Module, String> {
-    mid_end_narrowing(module, &M68k::for_cpu(cpu), Some(Rc::new(M68kMachine { cpu })), narrow_multiplies)
+    mid_end_narrowing(module, &M68k::for_cpu(cpu), Some(Rc::new(M68kMachine { cpu })), narrow_multiplies, narrow_divides)
 }
 
 /// [`mid_end`] with another target description: what a test compares the
@@ -1433,16 +1440,17 @@ pub fn mid_end_described_by(
     tti: &dyn llrm_mir::tti::Tti,
     machine: Option<Rc<dyn llrm_mir::target::Machine>>,
 ) -> Result<Module, String> {
-    mid_end_narrowing(module, tti, machine, NarrowMultiplies::Off)
+    mid_end_narrowing(module, tti, machine, NarrowMultiplies::Off, false)
 }
 
 /// [`mid_end_described_by`], narrowing the multiplies the range proves narrow
-/// (`narrow_multiplies`).
+/// (`narrow_multiplies`) and, at speed (`narrow_divides`), the divides.
 pub fn mid_end_narrowing(
     module: &Module,
     tti: &dyn llrm_mir::tti::Tti,
     machine: Option<Rc<dyn llrm_mir::target::Machine>>,
     narrow_multiplies: NarrowMultiplies,
+    narrow_divides: bool,
 ) -> Result<Module, String> {
     MID_ENDS.with(|runs| runs.set(runs.get() + 1));
     use llrm_mir::datalayout::DataLayout;
@@ -1474,6 +1482,11 @@ pub fn mid_end_narrowing(
         };
         if let (true, Some(limit)) = (wanted, tti.range_narrowing_width()) {
             llrm_transforms::narrowrange::multiplies_narrowed(context, &layout, function, &outer, limit);
+        }
+        // at speed only: at -Os the libcall's pushes are fewer bytes than the
+        // extensions (narrowrange.rs)
+        if let (true, false, Some(limit)) = (narrow_divides, for_size, tti.range_narrowing_width()) {
+            llrm_transforms::narrowrange::divides_narrowed(context, &layout, function, &outer, limit);
         }
         // the ids the pass handed out for declarations name nothing until they
         // are placed
