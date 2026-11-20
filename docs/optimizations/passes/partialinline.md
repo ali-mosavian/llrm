@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/partialinline.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/partialinline.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/partialinline.rs sha256:f41c3f6eb7e75929ab5038c7038aae593bb899d77bdaed9f089d5d871d80a6e7 -->
+<!-- src: crates/opt/llrm-transforms/src/partialinline.rs sha256:0639c3367bf129c775a8df55aa2479ee928f84a0999e72b971f5733b178784db -->
 
 # partialinline
 
@@ -36,12 +36,19 @@ skipped. The pin splits there too, which grows -Os code by a compare, a
 branch and a copy of the call, and -Os is strict bytes. Owner: alim; exit
 2026-11-27, revisit when the -Os rows allow.
 
-DEVIATE PI2: MIR's text has no `strictfp`; the check reads the attribute
-where a front end states it, and no test can state it.
-
 DEVIATE PI1: the likely-branch weight the pin adds when the function has an
 entry count is not added: MIR has no profile counts.
 
 ## Runs
 After the strength slot (the pin: `addIRPasses`, after LSR), before the
 code-generation-prepare passes.
+
+## Example
+A `sqrt` call that may set `errno` becomes a `memory(none)` call that the target turns into an instruction, with the real call kept for the NaN or negative case.
+
+```text
+%r = call double @sqrt(double %x) memory(none)
+%c = fcmp ord double %r, %r
+br i1 %c, label %b.split, label %call.sqrt
+call.sqrt: %l = call double @sqrt(double %x)   ; joined by a phi in %b.split
+```

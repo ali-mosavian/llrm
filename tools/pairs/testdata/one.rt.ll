@@ -1,6 +1,6 @@
 ; target: triple=i486-unknown-linux-gnu cpu=i486 features=-sse,-sse2,-mmx datalayout=e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32 optsize=false
 ; ModuleID = '<stdin>'
-source_filename = "/tmp/claude-1000/rp/one.c"
+source_filename = "one.c"
 target datalayout = "e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32"
 target triple = "i486-unknown-linux-gnu"
 

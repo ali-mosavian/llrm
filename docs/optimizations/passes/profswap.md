@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/profswap.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/profswap.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/profswap.rs sha256:8bfe9a5ff6ccda78eb9391b7e9dc1244453356688e9fd8efc4bc042ecd383fb7 -->
+<!-- src: crates/opt/llrm-transforms/src/profswap.rs sha256:2954fbf50db7871715c17cf017860c9e12f8602d872228619977b2397af52d6f -->
 
 # profswap
 
@@ -14,3 +14,12 @@ one per arm stay.
 
 ## Used by
 Every site that swaps the two arms of a `br` or `select` in place.
+
+## Example
+When the two arms of a conditional branch change places, its weights change places too.
+
+```text
+br i1 %c, label %a, label %b, !prof !{"branch_weights", i32 90, i32 10}
+=> swapSuccessors
+br i1 %c, label %b, label %a, !prof !{"branch_weights", i32 10, i32 90}
+```

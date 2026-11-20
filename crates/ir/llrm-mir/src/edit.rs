@@ -1236,6 +1236,21 @@ impl Function {
         self.log(Change::Rewritten(inst));
     }
 
+    /// The call `inst` loses the flag attribute `name` on every argument.
+    pub fn drop_call_argument_flag(
+        &mut self,
+        inst: InstId,
+        name: &str,
+    ) {
+        let (Opcode::Call(info) | Opcode::Invoke(info)) = &mut self.instructions[inst.0 as usize].opcode else {
+            panic!("a call")
+        };
+        for attrs in &mut info.argument_attrs {
+            attrs.retain(|one| !matches!(one, crate::Attribute::Flag(flag) if flag == name));
+        }
+        self.log(Change::Rewritten(inst));
+    }
+
     /// New parameters of `types` stand before parameter `at`, bare of
     /// attributes; the function's type follows.
     pub fn insert_parameters(
@@ -1362,6 +1377,27 @@ impl Function {
         info.function_type = function_type;
         self.log(Change::Rewritten(inst));
         value
+    }
+
+    /// The call `inst`, whose result `value` is read as `ty` now, returns `ty`
+    /// under `function_type`, with `return_attrs`: the callee returns the wider
+    /// value itself. The users of `value` read it as they did; the caller gives
+    /// them the wider type's operands.
+    pub fn retype_call_result(
+        &mut self,
+        inst: InstId,
+        ty: TypeId,
+        function_type: TypeId,
+        return_attrs: Vec<crate::opcode::Attribute>,
+    ) {
+        let value = self.instructions[inst.0 as usize].result.expect("a call with a result");
+        self.values[value.0 as usize].ty = ty;
+        let instruction = &mut self.instructions[inst.0 as usize];
+        instruction.ty = ty;
+        let Opcode::Call(info) = &mut instruction.opcode else { panic!("a call") };
+        info.function_type = function_type;
+        info.return_attrs = return_attrs;
+        self.log(Change::Rewritten(inst));
     }
 
     /// From the first change of the parameters on, each one's origin is kept.

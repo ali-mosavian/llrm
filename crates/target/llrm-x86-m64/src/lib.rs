@@ -598,6 +598,8 @@ impl llrm_target::Target for M64 {
                             unroll_threshold_at_o3: Some(400),
                             // DEVIATE DIVCONST-SIZE (owner llrm-target-x86-m64-b, exit 2026-11-30): see Tuning.
                             div_by_constant_size_cost: Some(4),
+                            // DEVIATE DIVVAR-SIZE (owner x87-cordic-2, exit 2026-11-30): see Tuning.
+                            div_by_variable_size_cost: Some(4),
                             // DEVIATE SP-O3 (owner llrm-target-x86-m64-b, exit 2026-11-30): see Tuning.
                             split_paths_at_o3: true,
                             ..llrm_mir::target::Tuning::PIN

@@ -1,5 +1,5 @@
-; ModuleID = '/home/alim/scratch/x87b/board-11-18/work/b/x_ld_matmul.c'
-source_filename = "/home/alim/scratch/x87b/board-11-18/work/b/x_ld_matmul.c"
+; ModuleID = 'x_ld_matmul.c'
+source_filename = "x_ld_matmul.c"
 target datalayout = "@m32-datalayout@"
 
 @bench_x_ld_matmul_via = dso_local global ptr @bench_x_ld_matmul, align 4

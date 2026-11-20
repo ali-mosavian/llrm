@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/libcall_choice.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/libcall_choice.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/libcall_choice.rs sha256:ddf0c18108c51f3385cc0177d66af54e7f6cce7762fda85deb61b45297dcf7ba -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/libcall_choice.rs sha256:a3bbe038d1ef77b5e1934f35b3a58c6a33679cc9dac2c6472793081a392d06a8 -->
 
 # libcall_choice
 
@@ -24,3 +24,13 @@ is the goal at `-Os`, and the bytes of a call are the bytes of the routine
 too. A member is charged in full to this translation unit's sites: a unit
 cannot know the uses of another (conservative). Sizes come from the target
 description. Owner m68k. Review: 2026-12-20.
+
+## Example
+Each candidate carries what calling it saves; `choose` calls the set whose
+savings, less the routines it links once, are the greatest and positive
+(the byte sizes are illustrative).
+
+```text
+mul: saves 40 bytes, calls __mulsi3 (20 bytes)  -> 40 - 20 > 0  call
+div: saves 30 bytes, calls __divsi3 (50 bytes)  -> 30 - 50 < 0  inline
+```

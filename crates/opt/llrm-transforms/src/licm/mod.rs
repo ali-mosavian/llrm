@@ -112,6 +112,10 @@ pub struct State {
     /// Those of `gone` that were sunk, not erased: a clone of each stands in an
     /// exit block, so what it reads has a user outside the loop.
     pub sunk: std::cell::RefCell<llrm_mir::dense::IdSet<InstId>>,
+    /// Those `sinkRegion` clones into the exit blocks and keeps in the loop
+    /// (`isFoldableInLoop`): the clone reads each operand through an LCSSA phi,
+    /// a user the later `hasOneUse` tests of `hoistRegion` count.
+    pub cloned: std::cell::RefCell<llrm_mir::dense::IdSet<InstId>>,
     /// `hoistMulAddAssociation` replaces the product it reassociates by its
     /// variant: the product's result, and what now stands for it.
     pub forwarded: std::cell::RefCell<IdMap<llrm_mir::module::ValueId, Operand>>,
@@ -142,6 +146,21 @@ pub struct LoopCtx<'a> {
 }
 
 impl LoopCtx<'_> {
+    /// `Value::hasOneUse` as `hoistRegion` finds it after `sinkRegion`: the one
+    /// user, and no clone in an exit block reading `value`.
+    pub fn has_one_use(
+        &self,
+        value: llrm_mir::module::ValueId,
+    ) -> bool {
+        self.function.users(value).has_one_use()
+            && !self
+                .state
+                .cloned
+                .borrow()
+                .iter()
+                .any(|clone| self.function.instruction(clone).operands.contains(&Operand::Value(value)))
+    }
+
     /// `Loop::contains(BB)`.
     pub fn contains_block(
         &self,
