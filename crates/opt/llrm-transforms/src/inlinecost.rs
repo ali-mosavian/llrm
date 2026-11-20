@@ -431,6 +431,14 @@ pub fn inline_viable(
 ) -> Result<(), String> {
     let returns_twice = has_flag(&callee.attrs, "returns_twice");
     for &block in callee.layout() {
+        // Disallow inlining of functions which contain indirect branches and
+        // of blockaddresses (InlineCost.cpp:3328).
+        if callee.ends_in_indirect_branch(block) {
+            return Err("contains indirect branches".into());
+        }
+        if callee.has_address_taken(block) {
+            return Err("blockaddress used".into());
+        }
         for inst in callee.iter_block(block) {
             let opcode = &callee.instruction(inst).opcode;
             if !matches!(opcode, Opcode::Call(_) | Opcode::Invoke(_)) {
@@ -1086,6 +1094,12 @@ impl<'a> Analyzer<'a> {
             }
             Opcode::Select => self.visit_select(inst),
             Opcode::Switch => self.visit_switch(inst),
+            // `visitIndirectBrInst`: costs like any instruction, and the
+            // callee is noted as holding one.
+            Opcode::IndirectBr => {
+                self.has_indirect_br = true;
+                false
+            }
             Opcode::Resume => false,
             Opcode::Unreachable => true,
             // CallAnalyzer has no visitor for the lane
@@ -2046,6 +2060,11 @@ impl<'a> Analyzer<'a> {
             at += 1;
             if self.callee.block(block).is_empty() {
                 continue;
+            }
+            // The blockaddress may escape the function, and inlining then makes
+            // an invalid cross-function reference (InlineCost.cpp:3001).
+            if self.callee.has_address_taken(block) {
+                return Err("blockaddress used".into());
             }
             // onBlockStart: CostAtBBStart unused without cost-benefit (D4).
             self.analyze_block(block)?;

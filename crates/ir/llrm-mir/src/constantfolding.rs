@@ -1771,6 +1771,8 @@ fn constant_fold_constant_impl(
         ConstantExpr::Cast { value, .. } => vec![*value],
         ConstantExpr::Binary { lhs, rhs, .. } => vec![*lhs, *rhs],
         ConstantExpr::GetElementPtr { operands, .. } => operands.clone(),
+        // A block's address is a leaf: nothing under it to fold.
+        ConstantExpr::BlockAddress { .. } => return c,
     };
     let mut ops = Vec::new();
     for old in operands {
@@ -1804,6 +1806,7 @@ fn constant_fold_constant_impl(
             }
             (Opcode::GetElementPtr { source }, flags)
         }
+        ConstantExpr::BlockAddress { .. } => return c,
     };
     constant_fold_inst_operands_impl(context, env, None, dest, &opcode, flags, &ops).unwrap_or(c)
 }

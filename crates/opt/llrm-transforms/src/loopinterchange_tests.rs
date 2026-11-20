@@ -303,3 +303,48 @@ exit:
     let found = super::populate_dependency_matrix(&mut matrix, 2, outermost, &mut info, &mut se, &cx, &options);
     assert!(!found, "{matrix:?}");
 }
+
+/// Before: a nest whose outer loop an `indirectbr` enters was interchanged, so
+/// the preheader it needs was made on an edge that cannot be split
+/// (LoopInterchange.cpp:1507).
+#[test]
+fn a_nest_entered_by_an_indirectbr_is_not_interchanged() {
+    let nest = |entry: &str| {
+        format!(
+            "@A = global [1024 x [1024 x i32]] zeroinitializer
+@t = internal constant [1 x ptr] [ptr blockaddress(@f, %outer.header)]
+
+define void @f(ptr %p) {{
+entry:
+  {entry}
+
+outer.header:
+  %i = phi i64 [ 0, %entry ], [ %i.next, %inner.header ]
+  br label %inner.body
+
+inner.header:
+  %i.next = add nuw nsw i64 %i, 1
+  %exitcond20.not = icmp eq i64 %i.next, 1024
+  br i1 %exitcond20.not, label %exit, label %outer.header
+
+inner.body:
+  %j = phi i64 [ 0, %outer.header ], [ %j.next, %inner.body ]
+  %arrayidx6 = getelementptr inbounds nuw [1024 x [1024 x i32]], ptr @A, i64 0, i64 %i, i64 %j
+  store i32 42, ptr %arrayidx6, align 4
+  %j.next = add nuw nsw i64 %j, 1
+  %exitcond.not = icmp eq i64 %j.next, 1024
+  br i1 %exitcond.not, label %inner.header, label %inner.body
+
+exit:
+  ret void
+}}
+"
+        )
+    };
+    let flags = "-loop-interchange-profitabilities=ignore";
+    let plain = nest("br label %outer.header");
+    assert_ne!(interchanged(&plain, flags), llrm_mir::print::module(&llrm_mir::parse::module(&plain).unwrap()));
+    let computed = nest("indirectbr ptr %p, [label %outer.header]");
+    let kept = llrm_mir::print::module(&llrm_mir::parse::module(&computed).unwrap());
+    assert_eq!(interchanged(&computed, flags), kept);
+}

@@ -358,8 +358,8 @@ fn plan_loop(
             }
         };
         if lsr.amk.has_post_indexed()
-            && tti.lsr_post_indexed_amortized()
-            && (size || !post_indexed_repays(se, &cx, header))
+            && ((tti.lsr_post_indexed_amortized() && (size || !post_indexed_repays(se, &cx, header)))
+                || tti.lsr_post_indexed_walk_limit().is_some_and(|limit| walked_bases(&cx, header) > limit))
         {
             lsr.amk = AddressingMode::None;
         }
@@ -855,6 +855,53 @@ fn remainders_kept_as_divides(
         })
         .filter_map(|one| one.result)
         .collect()
+}
+
+/// DEVIATE LSR-POSTINC-WALKS: how many objects the loop's loads and stores
+/// reach through an address computed in the loop (a GEP off a base, or a
+/// pointer phi already walked): the pointer walks a post-indexed preference
+/// would keep, one register each.
+fn walked_bases(
+    cx: &llrm_analysis::scev::Cx,
+    header: BlockId,
+) -> u32 {
+    use llrm_mir::module::{Operand, ValueDef};
+    use llrm_mir::opcode::{CastOp, Opcode};
+    let Some(lp) = cx.loops.get_loop_for(header) else { return 0 };
+    let mut bases: Vec<Operand> = Vec::new();
+    for &block in lp.get_blocks() {
+        for inst in cx.function.iter_block(block) {
+            let instruction = cx.function.instruction(inst);
+            let pointer = match instruction.opcode {
+                Opcode::Load { .. } => instruction.operands.first().copied(),
+                Opcode::Store { .. } => instruction.operands.get(1).copied(),
+                _ => None,
+            };
+            let Some(mut at) = pointer else { continue };
+            let mut stepped = false;
+            while let Operand::Value(v) = at {
+                let ValueDef::Instruction(def) = cx.function.value(v).def else { break };
+                let one = cx.function.instruction(def);
+                match one.opcode {
+                    Opcode::GetElementPtr { .. } => stepped = true,
+                    Opcode::Cast(CastOp::BitCast) => {}
+                    _ => break,
+                }
+                at = one.operands[0];
+            }
+            // A pointer already walked is a phi of the loop.
+            if let Operand::Value(v) = at
+                && let ValueDef::Instruction(def) = cx.function.value(v).def
+                && cx.function.instruction(def).opcode == Opcode::Phi
+            {
+                stepped = true;
+            }
+            if stepped && !bases.contains(&at) {
+                bases.push(at);
+            }
+        }
+    }
+    bases.len() as u32
 }
 
 /// DEVIATE LSR-POSTINC-TRIPS: whether the loop makes more trips than twice the

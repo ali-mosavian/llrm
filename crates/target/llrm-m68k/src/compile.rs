@@ -124,7 +124,8 @@ pub struct Options {
     /// M68K-WORD-TABLE, [`crate::wordtable`]).
     pub word_jump_tables: bool,
     /// A `tst` of the register an `add` of it to itself just doubled reads the
-    /// carry the `add` left instead ([`crate::cmpcarry`]).
+    /// carry the `add` left instead, and a `cmpi.l #-1` of a `subq.l #1`
+    /// result reads its borrow ([`crate::cmpcarry`]).
     pub reuse_shift_out_flags: bool,
     /// A load and the step of its pointer in another block are one `(An)+`
     /// ([`crate::loopinc`]).
@@ -1024,6 +1025,7 @@ fn items_once(
             machine_sink(&mut function);
             if options.short && options.reuse_shift_out_flags {
                 crate::cmpcarry::reuse_shift_out_flags(&mut function);
+                crate::cmpcarry::reuse_borrow_flags(&mut function);
             }
             crate::regalloc::split_flag_edges(&mut function);
             if !options.shared_prelude {
@@ -1117,6 +1119,7 @@ fn items_once(
     }
     preserve_flags(&mut function, &assignment)?;
     restore_remade_flags(&mut function);
+    crate::ccrcopy::drop_redundant_restores(&mut function, &assignment);
     branch_fold(&mut function, &assignment);
     if !wants_size {
         if options.tail_duplicate {

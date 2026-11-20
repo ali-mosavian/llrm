@@ -21,6 +21,12 @@
 //! consumed it. Reason: best of gcc and clang is the goal; crc16's bit loop
 //! tests the bit it then shifts away. Off for `Options::PINNED`.
 //!
+//! `subq.l #1, %d1; cmpi.l #-1, %d1; bne` is `subq.l #1, %d1; bcc`: a
+//! subtract of one borrows only from zero, and only zero steps to -1, so the
+//! compare of the result with -1 reads the C the `subq` left
+//! ([`reuse_borrow_flags`]; `bne` becomes `bcc`, `beq` `bcs`). gcc's
+//! count-down loop ends in the same `subq; jcc`.
+//!
 //! # See also
 //! `X86InstrInfo::optimizeCompareInstr` (X86InstrInfo.cpp L5473, pin
 //! d1106deb71cc). [`crate::cmpshift`], the same step for `lsr` and a bound.
@@ -90,6 +96,71 @@ fn reusable(
             match after.kind {
                 Kind::Op("Bpl8" | "Bge8") => readers.push((index, "Bcc8")),
                 Kind::Op("Bmi8" | "Blt8") => readers.push((index, "Bcs8")),
+                _ => return None,
+            }
+        }
+        if after.sets_flags() || after.call {
+            break;
+        }
+    }
+    if readers.is_empty() { None } else { Some(readers) }
+}
+
+/// The `cmpi.l #-1` of a register, as its register.
+fn compared_with_minus_one(inst: &Inst) -> Option<u32> {
+    match (inst.kind, &inst.operands[..]) {
+        (Kind::Op("CMP32di"), [Operand::Imm(-1), Operand::Use(Reg::Virt(v))]) => Some(*v),
+        _ => None,
+    }
+}
+
+/// Drops each `cmpi.l #-1, v` of the result of `subq.l #1` when only `beq` and
+/// `bne` read the codes after it: they read the borrow instead.
+pub fn reuse_borrow_flags(function: &mut MFunction) {
+    for block in &mut function.blocks {
+        let mut at = 0;
+        while at < block.insts.len() {
+            if let Some(readers) = borrowed(&block.insts, at) {
+                for (reader, renamed) in readers {
+                    block.insts[reader].kind = Kind::Op(renamed);
+                }
+                block.insts.remove(at);
+            } else {
+                at += 1;
+            }
+        }
+    }
+}
+
+/// The readers to rename, with their new rows, when the compare at `at` is
+/// redundant.
+fn borrowed(
+    insts: &[Inst],
+    at: usize,
+) -> Option<Vec<(usize, &'static str)>> {
+    let v = compared_with_minus_one(&insts[at])?;
+    let defined = insts[..at]
+        .iter()
+        .rev()
+        .find(
+            |before| before.operands.iter().any(|one| matches!(one, Operand::Def(Reg::Virt(d)) if *d == v))
+                || before.sets_flags()
+                || before.reads_flags()
+                || before.call,
+        )?;
+    let steps_by_one = matches!(
+        (defined.kind, &defined.operands[..]),
+        (Kind::Op("SUBQ32di"), [Operand::Def(Reg::Virt(d)), _, Operand::Imm(1)]) if *d == v
+    );
+    if !steps_by_one {
+        return None;
+    }
+    let mut readers = Vec::new();
+    for (index, after) in insts.iter().enumerate().skip(at + 1) {
+        if after.reads_flags() && !after.call {
+            match after.kind {
+                Kind::Op("Bne8") => readers.push((index, "Bcc8")),
+                Kind::Op("Beq8") => readers.push((index, "Bcs8")),
                 _ => return None,
             }
         }

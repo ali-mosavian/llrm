@@ -230,6 +230,38 @@ fn test_a_value_only_read_after_the_loop_is_sunk() {
     assert_eq!(sunk_and_erased(&used).0, Vec::<String>::new());
 }
 
+/// Before: a value read by an exit phi with another incoming value was sunk
+/// into a block an `indirectbr` also reaches, whose edge cannot be split
+/// (LICM.cpp:1275).
+#[test]
+fn test_a_value_is_not_sunk_to_an_exit_an_indirectbr_reaches() {
+    let text = "@t = internal constant [2 x ptr] [ptr blockaddress(@f, %b1), ptr blockaddress(@f, %b3)]
+
+define i16 @f(i16 %n, ptr %p, i1 %k) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %b2 ]
+  %v = mul i16 %i, 3
+  %c = icmp slt i16 %i, %n
+  br i1 %c, label %b2, label %b3
+
+b2:
+  %i1 = add i16 %i, 1
+  indirectbr ptr %p, [label %b1, label %b3]
+
+b3:
+  %r = phi i16 [ %v, %b1 ], [ 0, %b2 ]
+  ret i16 %r
+}
+";
+    assert_eq!(sunk_and_erased(text).0, Vec::<String>::new());
+    // The same loop with a plain branch to the exit sinks it.
+    let plain = text.replace("indirectbr ptr %p, [label %b1, label %b3]", "br i1 %k, label %b1, label %b3");
+    assert_eq!(sunk_and_erased(&plain).0, vec!["v".to_owned()]);
+}
+
 /// A value nothing reads is erased, not sunk.
 #[test]
 fn test_a_value_nothing_reads_is_erased() {

@@ -62,7 +62,8 @@ pub(super) fn is_safe(
     lp: Loop,
 ) -> bool {
     let rpo = crate::loopdeletion::loop_blocks_rpo(run.function, lp);
-    !crate::loopdeletion::contains_irreducible_cfg(run.function, &analyzed.loops, &rpo)
+    lp.is_safe_to_clone(run.function)
+        && !crate::loopdeletion::contains_irreducible_cfg(run.function, &analyzed.loops, &rpo)
         && !lp.get_blocks().iter().any(|&block| {
             run.function
                 .iter_block(block)
