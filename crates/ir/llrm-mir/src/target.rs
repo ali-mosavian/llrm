@@ -1443,6 +1443,12 @@ pub struct OperationCosts {
     /// What one argument word costs around a call: pushed by the caller, read
     /// by the callee.
     pub argument: i64,
+    /// Where the target passes the first words of the arguments in registers:
+    /// how many, and what a word past them costs (a push the caller builds
+    /// and the callee reads), where it is not `argument`. 0: every word is
+    /// `argument`.
+    pub argument_registers: i64,
+    pub argument_stacked: i64,
     /// What a caller pays to take `n` words of arguments off the stack: the
     /// cheaper of `n` pops (`pop` each) and one `adjust` of the stack
     /// pointer.
@@ -1538,6 +1544,20 @@ pub struct OperationCosts {
     /// (an `i32` add on an 8-bit machine is four byte adds). False: one
     /// price per operation, the table the other byte decisions read.
     pub width_scaled: bool,
+    /// Whether `function_bytes` prices a call's arguments (every operand but
+    /// the callee, which is last). False: all but the first operand, which
+    /// leaves the first argument out and counts the callee as a word, as the
+    /// 6502 and m68k tables were fit.
+    ///
+    /// DEVIATE (CALL-ARGS-SKIP, owners 6502 and m68k, exit 2026-11-26): their
+    /// `function_bytes` and `operation_counts` have read the call this way
+    /// since SZ2; their tables were fit with it. Exit: refit with the flag on.
+    pub exact_call_arguments: bool,
+    /// Whether `function_bytes` prices a shift by a constant of whole native
+    /// words as the moves of the words that stay (an `i64` shifted by 32 on a
+    /// 16-bit machine is two register pairs renamed), and the rest of the
+    /// amount as `shift` on them. Needs `width_scaled`.
+    pub constant_word_shifts: bool,
     /// Whether a GEP with only constant indices costs nothing: the displacement
     /// is part of the load or store that reads the address (`ldy #offset`,
     /// an absolute address plus a constant). False: priced as `address`.
@@ -1702,6 +1722,8 @@ impl Default for OperationCosts {
             call: 1,
             return_: 1,
             argument: 2,
+            argument_registers: 0,
+            argument_stacked: 0,
             pop: 1,
             adjust: 1,
             return_pops: 0,
@@ -1737,6 +1759,8 @@ impl Default for OperationCosts {
             jump_table: 0,
             function: 0,
             function_scale: 100,
+            exact_call_arguments: false,
+            constant_word_shifts: false,
             width_scaled: false,
             constant_offsets_fold: false,
             branch_in_compare: false,

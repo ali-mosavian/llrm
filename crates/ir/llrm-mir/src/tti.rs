@@ -1230,6 +1230,19 @@ pub trait Tti {
         None
     }
 
+    /// What a direct call inside a callee's body adds to the caller once the
+    /// body is inlined, in `kind`: the call and the arguments' setup, not the
+    /// return or the frame, which belong to the function called. None: the
+    /// call's flat price.
+    fn body_call_cost(
+        &self,
+        shape: &CallShape,
+        kind: CostKind,
+    ) -> Option<Cost> {
+        let _ = (shape, kind);
+        None
+    }
+
     /// DEVIATE INLINE-FRAME: the code-size guard counts the frame a caller
     /// with none builds for the callee's static allocas where the callee
     /// stays (the pin's cost has no frame term). False: the frame is taken to
