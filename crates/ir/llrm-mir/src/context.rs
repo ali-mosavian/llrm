@@ -208,8 +208,19 @@ impl Context {
         renumbered: &dyn Fn(GlobalId) -> Option<GlobalId>,
     ) {
         for constant in self.constants.iter_mut() {
-            if let ConstantKind::Global(global) = constant.kind {
-                constant.kind = renumbered(global).map_or(ConstantKind::Poison, ConstantKind::Global);
+            match constant.kind {
+                ConstantKind::Global(global) => {
+                    constant.kind = renumbered(global).map_or(ConstantKind::Poison, ConstantKind::Global);
+                }
+                // The address of a block names its function by id, as an
+                // operand of the constant: LLVM's RAUW of the function
+                // reaches it too.
+                ConstantKind::Expr(ConstantExpr::BlockAddress { function, block }) => {
+                    constant.kind = renumbered(function).map_or(ConstantKind::Poison, |function| {
+                        ConstantKind::Expr(ConstantExpr::BlockAddress { function, block })
+                    });
+                }
+                _ => {}
             }
         }
         let interned =
