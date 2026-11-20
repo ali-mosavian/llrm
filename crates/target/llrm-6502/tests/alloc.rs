@@ -1913,6 +1913,44 @@ done:
     }
 }
 
+/// call_keeps -Os (1,466 B against cc65 1,134): `churn` and `hold` take their
+/// words in `a` and `x` and return one, and saved `rc8`..`rc15` inline, 51 B
+/// each, because `__csave` changes `a` and `x`. `__csave_ax` and `__crest_ax`
+/// keep them (RISC-V's save-restore libcalls keep the argument registers). The
+/// argument arrives whole, the result leaves whole, the cells come back.
+#[test]
+fn a_word_in_a_and_x_goes_through_the_shared_save_helpers() {
+    let ir = "@g = external global i16
+define i16 @digits(i16 %v) {
+entry:
+  %c = icmp ugt i16 %v, 9
+  br i1 %c, label %loop, label %done
+loop:
+  %n = phi i16 [ 1, %entry ], [ %n2, %loop ]
+  %x = phi i16 [ %v, %entry ], [ %q, %loop ]
+  %q = udiv i16 %x, 10
+  %n2 = add i16 %n, 256
+  %g = icmp ugt i16 %x, 99
+  br i1 %g, label %loop, label %out
+out:
+  ret i16 %n2
+done:
+  ret i16 1
+}";
+    let text = compile_at(ir, "digits", 16, Tuning::SIZE);
+    assert!(text.contains("jsr __csave_ax") && text.contains("jmp __crest_ax") && !text.contains("pha"), "{text}");
+    // the result's high byte is the count of the loop times 256: the word
+    // leaves in `a` and `x`, whatever the helper did with them
+    for (v, hi) in [(5u16, 0i32), (10, 1), (99, 1), (100, 2), (65535, 4)] {
+        let setup = set("rc8", 0xA1) + &set("rc9", 0xB2) + &set("rc10", 0xC3) + &format!("  ldx #{}\n  lda #{}\n", v >> 8, v & 0xFF);
+        let after = format!(
+            "  stx rc2\n  lda rc8\n  cmp #$A1\n  bne bad\n  lda rc9\n  cmp #$B2\n  bne bad\n  lda rc10\n  cmp #$C3\n  bne bad\n  lda rc2\n  rts\nbad:\n  lda #99\n  rts\n"
+        );
+        let program = format!("{setup}  jsr digits\n{after}");
+        assert_eq!(common::run_with(&format!("alloc-digits-ax-{v}"), &program, &text), hi, "digits({v})");
+    }
+}
+
 /// `__csave` and `__crest` link as 34 bytes, so a module takes them only where
 /// its users together save more than that, as the users are written: digits
 /// (two returns) is 87 bytes inline and 71 with the helpers, 16 a user. The

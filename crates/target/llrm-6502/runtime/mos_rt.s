@@ -49,6 +49,47 @@ __crest:
   tya
   rts
 
+; __csave_ax and __crest_ax: the same for a function that has a value in A and X (a word argument at
+; entry, a word result at return), the way RISC-V's save-restore libcalls leave the argument registers
+; alone. Y = n and is changed; A and X come back as they went in.
+.export __csave_ax
+__csave_ax:
+  sta __sa
+  stx __sa+1
+  pla
+  sta __ra
+  pla
+  sta __ra+1
+  ldx #1
+@next:
+  lda rc7,x                     ; [rc8..rc15]
+  pha
+  inx
+  dey
+  bne @next
+  lda __ra+1
+  pha
+  lda __ra
+  pha
+  lda __sa
+  ldx __sa+1
+  rts
+
+.export __crest_ax
+__crest_ax:
+  sta __sa
+  stx __sa+1
+  tya
+  tax
+@next:
+  pla
+  sta rc7,x                     ; [rc8..rc15]
+  dex
+  bne @next
+  lda __sa
+  ldx __sa+1
+  rts
+
 ; ---- multiply: the low half of the product -------------------------------------------------------
 
 .export __mulqi3
