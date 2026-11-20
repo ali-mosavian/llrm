@@ -6,7 +6,7 @@ extern void report(long value);
 
 typedef long double X;
 
-static X __attribute__((noinline)) rnd(X x)
+static X rnd(X x)
 {
     __asm__ volatile("frndint" : "+t"(x));
     return x;
