@@ -731,13 +731,8 @@ fn test_a_site_llvms_frequencies_keep_warm_is_not_held_to_the_cold_threshold() {
     assert_eq!(threshold, 337);
 }
 
-/// Two successive nests of six loops, each with a bounds check in the
-/// innermost (`!prof {1048575, 1}` to a `noreturn` sink): the failure edges
-/// leak mass in every pass, so the call after them read 0.0011 of the entry
-/// (1.0 with no checks), cold, and a sole call to a local function was held to
-/// threshold 45 and not inlined (Nib `jpeg_single` -O1: 342 B).
-#[test]
-fn test_a_site_after_a_checked_loop_nest_is_not_cold_for_the_checks_sake() {
+/// `@main`, whose only call (of an internal leaf) follows two checked loop nests of depth 6: the pin reads it as cold.
+fn after_a_checked_loop_nest() -> Module {
     let depth = 6;
     let nests = 2;
     let mut text = String::from(
@@ -773,7 +768,17 @@ fn test_a_site_after_a_checked_loop_nest_is_not_cold_for_the_checks_sake() {
         );
     }
     text += "call:\n  %v = call i16 @leaf(i16 %x)\n  ret i16 %v\n}\n\n!0 = !{!\"branch_weights\", i32 1048575, i32 1}\n";
-    let module = parsed(&text);
+    parsed(&text)
+}
+
+/// Two successive nests of six loops, each with a bounds check in the
+/// innermost (`!prof {1048575, 1}` to a `noreturn` sink): the failure edges
+/// leak mass in every pass, so the call after them read 0.0011 of the entry
+/// (1.0 with no checks), cold, and a sole call to a local function was held to
+/// threshold 45 and not inlined (Nib `jpeg_single` -O1: 342 B).
+#[test]
+fn test_a_site_after_a_checked_loop_nest_is_not_cold_for_the_checks_sake() {
+    let module = after_a_checked_loop_nest();
     let main = module.globals.iter().position(|one| one.name.as_deref() == Some("main")).unwrap();
     let mut decided = Vec::new();
     crate::inlinecost::sites(
@@ -809,6 +814,39 @@ fn test_a_site_after_a_checked_loop_nest_is_not_cold_for_the_checks_sake() {
     );
     let [(_, _, InlineCost::Cost { threshold, .. })] = lifted[..] else { panic!("one priced site: {lifted:?}") };
     assert!(threshold > 45, "held to the cold threshold: {threshold}");
+}
+
+/// suggest.c -Os (x86-64): a function called once, from a site the pin reads as cold, stayed out of line (threshold
+/// 45, no last-call bonus) where gcc's called-once inlining removes it. With the bonus kept at cold sites of an -Os
+/// caller the site is taken; at -O2 and off, the pin's verdict.
+#[test]
+fn test_the_last_call_bonus_stays_at_a_cold_site_of_an_os_caller_where_the_target_says_so() {
+    let module = after_a_checked_loop_nest();
+    let main = module.globals.iter().position(|one| one.name.as_deref() == Some("main")).unwrap();
+    let cost_of = |params: InlineParams, size: CallerSize| {
+        let mut decided = Vec::new();
+        crate::inlinecost::sites(
+            &module,
+            &DataLayout::default(),
+            llrm_mir::context::GlobalId(main as u32),
+            &crate::inline::call_counts(&module),
+            &Default::default(),
+            &Default::default(),
+            &Default::default(),
+            params,
+            size,
+            false,
+            None,
+            Some(&mut decided),
+        );
+        let [(_, _, InlineCost::Cost { cost, .. })] = decided[..] else { panic!("one priced site: {decided:?}") };
+        cost
+    };
+    let on = InlineParams { last_call_in_cold_site: true, ..InlineParams::from_level(1) };
+    let pin = cost_of(InlineParams::from_level(1), CallerSize::OptSize);
+    assert_eq!(cost_of(on, CallerSize::OptSize), pin - 15_000, "the bonus stays for an -Os caller");
+    let speed = cost_of(InlineParams::from_level(1), CallerSize::Speed);
+    assert_eq!(cost_of(on, CallerSize::Speed), speed, "-O2: the pin's");
 }
 
 /// `decide`, the walk's question of one site, is the verdict `sites` gives it,
@@ -1208,7 +1246,7 @@ fn a_target_stating_only_a_rate_leaves_o1_to_the_pin() {
 #[test]
 fn the_size_rule_holds_a_growing_inline_in_a_speed_caller_at_o1() {
     use llrm_mir::tti::{InlinePolicy, SizeRule};
-    let policy = InlinePolicy { by_size: Some(SizeRule { min_sites: 2, yields_to_negative_cost: false }), by_rate: 0 };
+    let policy = InlinePolicy { by_size: Some(SizeRule { min_sites: 2, yields_to_negative_cost: false, yields_to_inlinehint: false }), by_rate: 0 };
     let tti = PolicyOnly(policy, Some(false), false);
     let params = InlineParams { compute_full_inline_cost: true, o1_bound: true, ..InlineParams::from_level(2) };
     let (cost, threshold) = priced_params(COMPARE_LOOP, 0, false, CallerSize::Speed, Some(&tti), params, (2, false));
@@ -1277,6 +1315,7 @@ fn the_default_inline_policy_is_made_from_the_hooks_a_target_states() {
     let by_size = SizeRule {
         min_sites: arm.opt_size_inline_guard_min_sites(),
         yields_to_negative_cost: arm.opt_size_inline_guard_yields_to_negative_cost(),
+        yields_to_inlinehint: arm.opt_size_inline_guard_yields_to_inlinehint(),
     };
     assert!(arm.opt_size_inline_by_code_size());
     assert_eq!(
@@ -1331,7 +1370,7 @@ b0:
 #[test]
 fn the_size_rule_prices_a_callee_with_the_constants_of_the_site() {
     use llrm_mir::tti::{InlinePolicy, SizeRule};
-    let policy = InlinePolicy { by_size: Some(SizeRule { min_sites: 2, yields_to_negative_cost: false }), by_rate: 0 };
+    let policy = InlinePolicy { by_size: Some(SizeRule { min_sites: 2, yields_to_negative_cost: false, yields_to_inlinehint: false }), by_rate: 0 };
     let tti = PolicyOnly(policy, None, false);
     let inlined = |at| {
         let (cost, threshold) = priced_with(ROTATE, at, false, CallerSize::OptSize, Some(&tti));
@@ -1470,7 +1509,7 @@ impl llrm_mir::tti::Tti for Sequenced {
 #[test]
 fn test_the_size_guard_prices_a_call_sequence_without_the_arguments_nothing_reads() {
     use llrm_mir::tti::{InlinePolicy, SizeRule};
-    let policy = InlinePolicy { by_size: Some(SizeRule { min_sites: 1, yields_to_negative_cost: false }), by_rate: 0 };
+    let policy = InlinePolicy { by_size: Some(SizeRule { min_sites: 1, yields_to_negative_cost: false, yields_to_inlinehint: false }), by_rate: 0 };
     let tti = Sequenced(PolicyOnly(policy, None, false));
     let params = InlineParams { compute_full_inline_cost: true, opt_size_threshold: 100_000, ..InlineParams::from_level(2) };
     let held = |text: &str| {

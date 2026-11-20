@@ -36,9 +36,9 @@
 //! is kept (`AAMDNodes::merge` and the access-group intersection are not
 //! translated). Exit 2026-11-20.
 //!
-//! DEVIATE 1: `combineStoreToValueType`, `unpackStoreToAggregate` and
-//! `replaceGEPIdxWithZero` are the next slices of this file, not yet
-//! translated.
+//! DEVIATE 1: `unpackStoreToAggregate` and `replaceGEPIdxWithZero` are the
+//! next slices of this file, not yet translated; `combineStoreToValueType`
+//! has its `bitcast` case only (`likeBitCastFromVector` is not translated).
 //!
 //! DEVIATE 2: a store to constant memory (`!isModSet(AA->getModRefInfoMask)`)
 //! is not erased: the combine holds no alias analysis.
@@ -109,6 +109,21 @@ const MAX_ALLOC_SITE_REMOVABLE_USERS: usize = 128;
 /// How many instructions before a store the scan for an overwritten store
 /// looks at.
 const SCAN_INSTS: u32 = 6;
+
+/// The kinds `combineStoreToNewValue` keeps: every kind that does not describe
+/// the stored type (`invariant.load`, `nonnull`, `noundef`, `range`, `align`
+/// and `dereferenceable` are dropped).
+const COPIED_STORE_METADATA: &[&str] = &[
+    "tbaa",
+    "prof",
+    "fpmath",
+    "tbaa_struct",
+    "alias.scope",
+    "noalias",
+    "nontemporal",
+    "llvm.mem.parallel_loop_access",
+    "llvm.access.group",
+];
 
 /// The kinds `copyMetadataForLoad` copies as they are (`dbg` is the builder's).
 const COPIED_LOAD_METADATA: &[&str] = &[
@@ -278,6 +293,39 @@ impl Combiner<'_> {
         )
     }
 
+    /// `combineStoreToValueType` (:1301): a store of a `bitcast` stores the
+    /// cast's operand instead, keeping the metadata that holds for any type
+    /// (`combineStoreToNewValue`). A pointer cast to or from an integer is
+    /// punning and stays, as in `combine_load_to_operation_type`.
+    fn combine_store_to_value_type(
+        &mut self,
+        inst: InstId,
+    ) -> Visit {
+        let Opcode::Store { align, volatile: false } = self.function.instruction(inst).opcode else {
+            return Visit::None;
+        };
+        let [val, ptr] = self.function.instruction(inst).operands[..] else { return Visit::None };
+        let Some(cast) = self.instruction_of(val) else { return Visit::None };
+        let Opcode::Cast(CastOp::BitCast) = self.function.instruction(cast).opcode else { return Visit::None };
+        let source = self.function.instruction(cast).operands[0];
+        let is_pointer = |c: &Self, ty| matches!(c.context.types.get(ty), Type::Pointer(_));
+        let from = self.type_of(source);
+        if is_pointer(self, from) != is_pointer(self, self.type_of(val)) {
+            return Visit::None;
+        }
+        let metadata = self.function.instruction(inst).metadata.clone();
+        let ty = self.function.instruction(inst).ty;
+        let new =
+            self.insert_before(inst, Opcode::Store { align, volatile: false }, ty, vec![source, ptr], Flags::default());
+        for (kind, node) in metadata {
+            if COPIED_STORE_METADATA.contains(&kind.as_str()) {
+                self.function.annotate(new, &kind, node);
+            }
+        }
+        self.erase(inst);
+        Visit::Erased
+    }
+
     /// `InstCombinerImpl::visitStoreInst`.
     pub fn visit_store(
         &mut self,
@@ -289,6 +337,12 @@ impl Combiner<'_> {
         // Don't hack volatile/ordered stores.
         if volatile {
             return Visit::None;
+        }
+
+        // Try to canonicalize the stored type.
+        match self.combine_store_to_value_type(inst) {
+            Visit::None => {}
+            done => return done,
         }
 
         // If the RHS is an alloca with a single use, zapify the store, making

@@ -20,6 +20,16 @@
 //!   attributes at hand).
 //! - A copy is never simplified while it is made (`isSimplified`): the
 //!   check is always false.
+//!
+//! # Example
+//! A call in the inlined body that passes on one of the callee's parameters gets
+//! the attributes the call site states for that argument.
+//!
+//! ```text
+//! call site:  call void @f(ptr nonnull dereferenceable(8) %p)
+//! callee:     define void @f(ptr %a) { call void @g(ptr %a) }
+//! copy:       call void @g(ptr nonnull dereferenceable(8) %p)
+//! ```
 
 use llrm_mir::module::{Function, InstId, Operand, ValueDef};
 use llrm_mir::opcode::{Attribute, CastOp, Opcode};

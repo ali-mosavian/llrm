@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/sinkcommon.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/sinkcommon.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/sinkcommon.rs sha256:ee56ba45388f4ad21b330ab6c5ce625a13a27176d8ab445c04480e88e0dd5597 -->
+<!-- src: crates/opt/llrm-transforms/src/sinkcommon.rs sha256:917498bd70cb22df3e4bbbd17fed5c43fa526edc7554db3309f20430251dabd4 -->
 
 # sinkcommon
 
@@ -49,6 +49,9 @@ The add both arms end with runs once in the join:
   attribute; the intrinsic cases for variadic parameters, `gcroot` and
   `threadlocal_address` are not in the MIR.
 - D4. No `llvm.experimental.deoptimize`.
+- D5. Priced (M16-KEEPDISP-1, closed): on a target whose accesses fold a constant offset
+  (`constant_offset_phi_is_cheap` false) a phi of such offsets is priced
+  (`displacement_sink_pays`), not sunk always as the pin does.
 
 ## Used by
 Named by `constanthoisting`, `simplifycfg`, `switcharms`.

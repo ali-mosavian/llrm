@@ -200,6 +200,7 @@ pub(super) fn instructions() -> Vec<Inst> {
             FpBinary::MaxNm,
             FpBinary::MinNm,
             FpBinary::Nmul,
+            FpBinary::Abd,
         ] {
             out.push(Inst::FpBinary { op, size, rd: v(0), rn: v(1), rm: v(2) });
         }
@@ -210,6 +211,7 @@ pub(super) fn instructions() -> Vec<Inst> {
             out.push(Inst::FpCompare { signalling, size, rn: v(1), rm: Some(v(2)) });
             out.push(Inst::FpCompare { signalling, size, rn: v(1), rm: None });
         }
+        out.push(Inst::FpCondCompare { size, rn: v(1), rm: v(2), nzcv: 4, cond: Cond::Le });
         out.push(Inst::FpSelect { size, rd: v(0), rn: v(1), rm: v(2), cond: Cond::Lt });
         out.push(Inst::FpMoveImm { size, rd: v(0), imm8: 0x70 });
         for from in SIZES {
@@ -423,6 +425,7 @@ fn variant(inst: &Inst) -> &'static str {
         Inst::FpBinary { .. } => "FpBinary",
         Inst::FpFused { .. } => "FpFused",
         Inst::FpCompare { .. } => "FpCompare",
+        Inst::FpCondCompare { .. } => "FpCondCompare",
         Inst::FpSelect { .. } => "FpSelect",
         Inst::FpMoveImm { .. } => "FpMoveImm",
         Inst::FpToFp { .. } => "FpToFp",
@@ -474,7 +477,7 @@ fn variant(inst: &Inst) -> &'static str {
 /// The variants after frame lowering, which the body is never made from.
 const AFTER_FRAME: [&str; 3] = ["Mark", "Label", "Cfi"];
 
-const ALL: [&str; 79] = [
+const ALL: [&str; 80] = [
     "Mark",
     "Label",
     "Cfi",
@@ -509,6 +512,7 @@ const ALL: [&str; 79] = [
     "FpBinary",
     "FpFused",
     "FpCompare",
+    "FpCondCompare",
     "FpSelect",
     "FpMoveImm",
     "FpToFp",

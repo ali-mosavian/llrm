@@ -293,6 +293,9 @@ pub struct Options {
     /// `-ftree-loop-vectorize`: LLVM's `LoopVectorizePass`, which clang runs at
     /// -O2 and up.
     pub vectorize: bool,
+    /// gcc's `--param vect-cost-model=very-cheap`: `LoopVectorizePass` plans no
+    /// loop that would end in a scalar epilogue (DEVIATE VP9 of the planner).
+    pub vect_very_cheap: bool,
     /// LPM1's `loop-rotate` between the two LICM runs
     /// (PassBuilderPipelines.cpp L728), the first LICM not speculating; on, as
     /// in the pin.
@@ -379,6 +382,7 @@ impl Default for Options {
             interchange: true,
             unroll_and_jam: false,
             vectorize: true,
+            vect_very_cheap: false,
             mem2reg: experiment_mem2reg(),
             sroa: !llrm_support::env_flag!("LLRM_NO_SROA"),
             combine: !llrm_support::env_flag!("LLRM_NO_COMBINE"),
@@ -511,9 +515,9 @@ impl Options {
         self.limits.target_percent >= 200
     }
 
-    /// -Oz: no loop is copied.
+    /// -Oz: -Os without header copies.
     pub fn min_size() -> Self {
-        Self { unroll: false, has_min_size: true, inline: inline::Threshold::default().for_min_size(), ..Self::size() }
+        Self { has_min_size: true, inline: inline::Threshold::default().for_min_size(), ..Self::size() }
     }
 
     /// Whether pass `name` is on. Every pass can be turned off, which is
@@ -878,7 +882,10 @@ impl FunctionPass for LoopPassManager {
             if !unit.function.is_placed(header) || !found.is_loop_header(header) {
                 continue;
             }
-            {
+            // LLVM's loop pass manager holds the `Loop`, which keeps its identity
+            // when `LoopRotate` moves its header; the scope follows the header, so
+            // the loop to run again is read from it.
+            let header = {
                 let _scope = crate::loopfilter::only(&[header]);
                 for part in self.passes.iter_mut() {
                     let name = part.name();
@@ -890,7 +897,8 @@ impl FunctionPass for LoopPassManager {
                         analyses.invalidate(unit.function, &preserved);
                     }
                 }
-            }
+                crate::loopfilter::current().first().copied().unwrap_or(header)
+            };
             // The loop itself is popped first, then its siblings in order.
             let (revisit, mut siblings) = crate::loopfilter::take_unswitched();
             siblings.reverse();
@@ -1154,6 +1162,7 @@ pub(crate) fn llvm_order(
                     // clang vectorizes loops at -O2 and up
                     // (`PTO.LoopVectorization`).
                     only_when_forced: !applied.options.pre,
+                    very_cheap: applied.options.vect_very_cheap,
                     ..Default::default()
                 }),
             ),
@@ -1757,6 +1766,8 @@ pub fn recorded(
         // LLVM's CGSCC walk: each body inlined into, then simplified, callees
         // first. `Phase::Simplify` runs there and not module-wide.
         if at == 1 {
+            // `AlwaysInlinerPass`, ahead of the CGSCC inliner (PassBuilderPipelines.cpp:1326).
+            manager.add_program(crate::alwaysinline::AlwaysInline);
             // What each body does to memory is stated here, as the pin's
             // PostOrderFunctionAttrs inside the CGSCC walk: the early
             // simplification (SROA, EarlyCSE, PromotePass, InstCombine,

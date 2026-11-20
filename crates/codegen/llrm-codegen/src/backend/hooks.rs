@@ -3,6 +3,15 @@
 //! A target whose code sits above this crate (`llrm-x86-backend`) installs
 //! itself once; the shared passes reach it here, as LLVM's passes reach a
 //! target through `TargetRegistry` and not by name.
+//!
+//! # Example
+//! The x86 backend installs its hooks once, and a shared pass then reaches it
+//! through [`installed`] without naming the target.
+//!
+//! ```text
+//! llrm_x86_backend:  hooks::install(&X86_HOOKS)
+//! shared pass:       hooks::installed()?.select_function(module, name, ...)
+//! ```
 
 use std::sync::OnceLock;
 

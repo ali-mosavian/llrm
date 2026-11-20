@@ -15,6 +15,16 @@
 //! # Deviations
 //! - A node made here is not uniqued against the module's: two equal lists may
 //!   have two ids. Nothing compares ids of non-distinct lists.
+//!
+//! # Example
+//! A call site's `!alias.scope` and `!noalias` go to the memory accesses of the
+//! inlined copy.
+//!
+//! ```text
+//! call site:  call void @f(ptr %p), !alias.scope !1
+//! callee:     %v = load i32, ptr %a
+//! copy:       %v = load i32, ptr %p, !alias.scope !1
+//! ```
 
 use std::collections::BTreeMap;
 

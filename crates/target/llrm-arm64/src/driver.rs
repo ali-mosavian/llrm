@@ -256,6 +256,13 @@ fn lower_function(
         dag_select(module, &name, &program.layout, platform, lines).map_err(|why| format!("@{name}: {why}"))?;
     dump("Select", &machine);
     crate::mfunc::remove_unreachable_blocks(&mut machine);
+    // `EarlyIfConverter` skips an `optnone` function (`skipFunction`).
+    if !flagged(function, &["optnone"])
+        && let Some(mode) = crate::ifcvt::mode_from_env()
+    {
+        crate::ifcvt::run(&mut machine, mode);
+        dump("EarlyIfConversion", &machine);
+    }
     // The shared phases that need SSA see the body as selection made it,
     // phis and all; the private phases below see it after phi elimination.
     if llrm_support::env_flag!("LLRM_ARM64_STAGES") {
@@ -351,6 +358,7 @@ fn lower_function(
         .map_err(|why| format!("@{name}: {why}"))?;
     let blocks = crate::expand_pseudo::run(blocks);
     let mut tables = crate::jumptable::tables_of(&machine);
+    let dead_ends = crate::mfunc::dead_end_labels(&machine);
     let (blocks, likelihood) = crate::layout::fold_with_odds(
         blocks,
         &mut tables,
@@ -360,6 +368,7 @@ fn lower_function(
         ),
         optsize,
         &crate::mfunc::returned_registers(&machine),
+        &dead_ends,
     );
     let blocks = crate::pairs::fold(blocks);
     let mut blocks = crate::ldst_update::fold(blocks, &crate::mfunc::returned_registers(&machine));
@@ -375,6 +384,7 @@ fn lower_function(
             variables,
             pool: machine.pool.clone(),
             unwind: machine.unwind != crate::cfi::Unwind::None,
+            dead_ends,
         },
         written,
     ))

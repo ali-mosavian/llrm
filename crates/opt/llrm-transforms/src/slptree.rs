@@ -41,6 +41,16 @@
 //!
 //! # Used by
 //! `slpvectorize`.
+//!
+//! # Example
+//! Four `fmuladd`s of one scalar and four consecutive loads, plus a constant, stored to four consecutive floats, become one vector chain.
+//!
+//! ```text
+//! 4 x (load c[i]; fmuladd a, c[i], 1.0; fadd 128.5; store out[i])
+//!         =>
+//! load <4 x float>; fmuladd.v4f32 (splat a, v, splat 1.0)
+//! fadd <4 x float>; store <4 x float>
+//! ```
 
 use std::collections::HashMap;
 

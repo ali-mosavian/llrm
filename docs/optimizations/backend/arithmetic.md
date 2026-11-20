@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/arithmetic.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/arithmetic.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/arithmetic.rs sha256:7aa9a755ba28cdaed020f54c4518796e31931f2e9137ff402020d2677b7ef92d -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/arithmetic.rs sha256:1607fb7d41df65c3f11904eb18940554bc7392e8f764d7cb5b97f6292c35a422 -->
 
 # arithmetic
 
@@ -34,7 +34,7 @@ a dword.
 Results are kept in the profile, as a multiply is asked about again and
 again.
 
-DEVIATE M1 (owner w6/w10, exit 2026-12-01; AM-M1, priced): the pin's X86 does a scalar constant multiply
+DEVIATE M1 (owner anyisa/w10, exit 2026-12-01; AM-M1, priced): the pin's X86 does a scalar constant multiply
 by `combineMul`
 ([X86ISelLowering.cpp#L51191](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L51191))
 and `decomposeMulByConstant` (#L3636): a `lea` for 3, 5 and 9 (times a power

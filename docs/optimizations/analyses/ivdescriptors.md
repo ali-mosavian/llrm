@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/ivdescriptors.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/ivdescriptors.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/ivdescriptors.rs sha256:a1b5c98349593cf1cbd3d61a5bbf04b659a34bd3d30a049cfb2b6c292b4eb803 -->
+<!-- src: crates/opt/llrm-analysis/src/ivdescriptors.rs sha256:d6714e91cdd477a692fec0da1f1cf963427e0d3a101ecad45a3b597150b47343 -->
 
 # ivdescriptors
 
@@ -21,10 +21,11 @@ step; a floating-point phi is an induction by its `fadd`/`fsub` of an
 invariant.
 
 ## Deviations from LLVM
-- D1: `DemandedBits`, `AssumptionCache` and `DominatorTree` are not
-  parameters: with none of them `computeRecurrenceType` is the type's width
-  rounded up to a power of two, and that is all this port computes. The only
-  caller (`LoopInterchange`) passes none of them.
+- D1: `DemandedBits`, `AssumptionCache` and `DominatorTree` are optional, as
+  in the pin (`isReductionPHI`'s defaults are null): `Analyses` holds the
+  demanded bits and says whether the cache and tree (always in `Cx`) are
+  given. `Analyses::NONE` is `LoopInterchange`'s call, where
+  `computeRecurrenceType` is the type's width rounded up to a power of two.
 - D2: `PredicatedScalarEvolution`: `is_induction_phi` takes the
   `ScalarEvolution` overload only; the phi's SCEV is not forced into an add
   recurrence under predicates.
@@ -40,4 +41,4 @@ use of `%s.next` after the loop is an `Add` reduction starting at 0;
 integer induction of step 1.
 
 ## Used by
-Named by `canonfreeze`, `exitvalues`, `loopinterchange`.
+Named by `canonfreeze`, `exitvalues`, `loopinterchange`, `loopvectorize`, `loopvectorizeearlyexit`, `loopvectorizeinterleave`, `loopvectorizelegality`, `narrowcycle`.

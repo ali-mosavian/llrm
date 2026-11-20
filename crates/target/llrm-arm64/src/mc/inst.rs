@@ -1248,6 +1248,8 @@ pub enum FpBinary {
     MaxNm,
     MinNm,
     Nmul,
+    /// `fabd`: the absolute difference, `fabs (fsub a, b)`.
+    Abd,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -1501,6 +1503,15 @@ pub enum Inst {
         size: FpSize,
         rn: Vreg,
         rm: Option<Vreg>,
+    },
+    /// `fccmp`: compares when `cond` holds of the flags, else sets them to
+    /// `nzcv`.
+    FpCondCompare {
+        size: FpSize,
+        rn: Vreg,
+        rm: Vreg,
+        nzcv: u8,
+        cond: Cond,
     },
     FpSelect {
         size: FpSize,

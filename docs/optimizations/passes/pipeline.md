@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/pipeline.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/pipeline.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/pipeline.rs sha256:cf36ea25ceccbd49d7e61883558c26f52e30ddeab0b1016ccb34029eac63dac4 -->
+<!-- src: crates/opt/llrm-transforms/src/pipeline.rs sha256:822f2c48747e48c45b41d39d4d793c0c7e2a3f1deb6b360bd9d0092bbfbaf28e -->
 
 # pipeline
 
@@ -83,7 +83,7 @@ loop; `cgpaddr` follows the last `gvn`, which makes the phis it sinks;
 
 ## Example
 No honest example: the pipeline is the order of the passes, not one rewrite,
-and no one function shows it. `llrm-c --dump DIR` writes the module after
+and no one function shows it. `llrm-cc --dump DIR` writes the module after
 each stage (`NN-stage.ll`) and, for each body, each changed step of the
 fixed point (`N/NNN-rRR-pass.ll`); the pass examples come from those.
 

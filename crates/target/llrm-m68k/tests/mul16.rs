@@ -73,6 +73,28 @@ fn extended_halfwords_take_the_word_multiply_on_every_cpu() {
     }
 }
 
+/// `(long)a * b` of two shorts kept the extension of the tied operand: `move.w
+/// b,%d0; ext.l %d0; muls %d1,%d0` (parity's second loop, 68020 -Os, 2 B and a
+/// register over gcc's `muls.w mem,%d0`). `muls.w` reads the low word of both
+/// operands, so the extension is dead.
+#[test]
+fn the_tied_operand_of_a_word_multiply_is_not_extended() {
+    for cpu in CPUS {
+        for (how, mnemonic) in [("sext", "muls\t"), ("zext", "mulu\t")] {
+            for level in [Level::O1, Level::Os] {
+                let out = asm(&product(how, how), cpu, level);
+                assert!(out.contains(mnemonic), "{cpu} {how} {level:?}:\n{out}");
+                let extended =
+                    out.lines().any(|line| line.trim_start().starts_with("ext.") || line.contains("moveq\t#0"));
+                assert!(
+                    !extended,
+                    "{cpu} {how} {level:?}: the operand is extended for a multiply that reads one word:\n{out}"
+                );
+            }
+        }
+    }
+}
+
 /// Operands that are already full-width values known to fit 16 bits take
 /// the word multiply on every CPU: no extension, no copy, and 2 B shorter.
 #[test]
@@ -152,4 +174,35 @@ fn a_live_operand_costs_the_half_multiply_a_copy() {
 fn at_o1_a_chain_the_half_multiply_does_not_beat_on_both_axes_stays() {
     let out = asm(NINE_LAST, "68000", Level::O1);
     assert!(!out.contains("muls"), "{out}");
+}
+
+/// `sum += cells[i] * (i + 1)` over a `short i` kept the `ext.l` of `i + 1` (`move.l %d1,%d4; ext.l %d4; muls
+/// %d3,%d4`, 4 clocks an iteration in loop_versioning -O3 68000, +5.7% against gcc): `muls.w` reads the low word of
+/// its destination only.
+#[test]
+fn a_halfword_multiplicand_is_not_extended_first() {
+    let ir = "target datalayout = \"E-m:e-p:32:16:32-i8:8:8-i16:16:16-i32:16:32-n8:16:32-a:0:16-S16\"
+define i32 @f(ptr %cells, i16 %n) {
+  br label %l
+l:
+  %i = phi i16 [ 0, %0 ], [ %j, %l ]
+  %s = phi i32 [ 0, %0 ], [ %t, %l ]
+  %ie = sext i16 %i to i32
+  %p = getelementptr inbounds i16, ptr %cells, i32 %ie
+  %v = load i16, ptr %p
+  %ve = sext i16 %v to i32
+  %j = add i16 %i, 1
+  %je = sext i16 %j to i32
+  %m = mul i32 %ve, %je
+  %t = add i32 %s, %m
+  %c = icmp slt i16 %j, %n
+  br i1 %c, label %l, label %x
+x:
+  ret i32 %t
+}";
+    for cpu in NO_LONG_MULTIPLY {
+        let out = asm(ir, cpu, Level::O2);
+        let body = out.split(".LBB0_1:").nth(1).and_then(|rest| rest.split("\tb").next()).unwrap_or("");
+        assert!(body.contains("muls\t") && !body.contains("ext.l"), "{cpu}:\n{out}");
+    }
 }

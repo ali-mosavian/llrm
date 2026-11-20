@@ -223,8 +223,11 @@ pub fn cloned(
     for &id in procedures {
         let Some(caller) = module.global(id).function() else { continue };
         let constants = facts::current_call_constants(&module.context, caller);
+        // How often a call of itself runs is gcc's estimate (`sreal_frequency`,
+        // `freq_sum` in its dump).
+        let origin_of = |one: GlobalId| state.origin.get(&one).copied().unwrap_or(one);
         let frequency =
-            profit::_frequencies(&module.context, &module.metadata, &module.globals, caller, None).unwrap_or_default();
+            frequencies_with_recursion(module, layout, caller, &|callee| origin_of(callee) == origin_of(id));
         for (block, at) in caller.walk() {
             let Some(name) = llrm_mir::memory::callee(&module.context, caller, at) else { continue };
             let known = constants.get(&at).map_or(&[][..], Vec::as_slice);
@@ -542,6 +545,88 @@ fn chain_benefit(
     (benefit, chain_size)
 }
 
+/// `PRED_LOOP_EXIT_WITH_RECURSION` (predict.def): the share of a loop's trips
+/// that leave it, `1 - HITRATE (78)`, where `PRED_LOOP_EXIT` has `1 - HITRATE
+/// (89)`.
+const RECURSIVE_LOOP_EXIT: f64 = 0.22;
+/// `predict_loops`' floor on an exit's probability, `HITRATE (2)`.
+const MIN_LOOP_EXIT: f64 = 0.02;
+
+/// `body`'s block frequencies (`profit::_frequencies`' per entry, in `UNIT`ths)
+/// with gcc's `predict_loops` rule for a loop that calls `name`, itself, or
+/// holds a loop that does (`with_recursion`): each exit edge of the loop is
+/// taken `0.22 / n` of the trips, `n` the exits not leading to an unreachable
+/// block, so a loop whose body recurses runs about twice, not the ten trips of
+/// an ordinary loop (QuickrBasic `read_file`: gcc's 1.945 against 10, which
+/// carried eight chained clones where gcc stops at four).
+fn frequencies_with_recursion(
+    module: &Module,
+    layout: &DataLayout,
+    body: &Function,
+    itself: &dyn Fn(GlobalId) -> bool,
+) -> BTreeMap<i64, i64> {
+    let loops = cfg::loops_of(body);
+    let calls_itself = |at: i64| {
+        body.iter_block(cfg::block(at))
+            .any(|inst| llrm_mir::memory::callee(&module.context, body, inst).is_some_and(itself))
+    };
+    let recursive: Vec<&llrm_analysis::graph::loops::Loop> =
+        loops.iter().filter(|one| one.body.iter().any(|&at| calls_itself(at))).collect();
+    // A recursive loop of a known trip count exits by it
+    // (`PRED_LOOP_ITERATIONS`, taken before the recursion rule); the other
+    // loops stay as they were.
+    let shape = cfg::Shape::of(body);
+    let proven = profit::proven_trips(&Unit::of(module, layout, body).with_shape(&shape));
+    let Some(mut counted) = profit::counted_by_header(&loops, Some(&proven)) else { return BTreeMap::new() };
+    counted.retain(|header, _| recursive.iter().any(|one| one.header == *header));
+    let mut taken = profit::_edge_odds(&module.context, &module.metadata, &module.globals, body, &loops, &counted);
+    let unlikely = |to: i64| {
+        body.terminator(cfg::block(to)).is_some_and(|end| body.instruction(end).opcode == Opcode::Unreachable)
+    };
+    // The loops come innermost first; a block an inner loop predicted keeps it.
+    let mut predicted: BTreeSet<i64> = BTreeSet::new();
+    for one in recursive.iter().filter(|one| !counted.contains_key(&one.header)) {
+        let exits: Vec<(i64, i64)> = one
+            .body
+            .iter()
+            .flat_map(|&at| body.successors(cfg::block(at)).into_iter().map(move |to| (at, cfg::id(to))))
+            .filter(|(_, to)| !one.body.contains(to))
+            .collect();
+        let n = exits.iter().filter(|(_, to)| !unlikely(*to)).count();
+        if n == 0 {
+            continue;
+        }
+        let chance = (RECURSIVE_LOOP_EXIT / n as f64).max(MIN_LOOP_EXIT);
+        let sources: BTreeSet<i64> =
+            exits.iter().map(|(from, _)| *from).filter(|from| !predicted.contains(from)).collect();
+        for &from in &sources {
+            let out: Vec<i64> = exits.iter().filter(|(source, _)| *source == from).map(|(_, to)| *to).collect();
+            let leaving = out.len() as f64 * chance;
+            let stays: Vec<i64> =
+                body.successors(cfg::block(from)).into_iter().map(cfg::id).filter(|to| !out.contains(to)).collect();
+            if stays.is_empty() || leaving >= 1.0 {
+                continue;
+            }
+            let old: f64 = stays.iter().map(|to| taken.get(&(from, *to)).copied().unwrap_or(0.0)).sum();
+            for to in &out {
+                taken.insert((from, *to), chance);
+            }
+            for to in &stays {
+                let share = if old > 0.0 { taken[&(from, *to)] / old } else { 1.0 / stays.len() as f64 };
+                taken.insert((from, *to), (1.0 - leaving) * share);
+            }
+        }
+        predicted.extend(sources);
+    }
+    let frequencies = llrm_analysis::blockfreq::BlockFrequencies::of_probabilities(body, &taken);
+    body.layout()
+        .iter()
+        .map(|&block| {
+            (cfg::id(block), ((frequencies.relative_to_entry(block) * profit::UNIT as f64).round() as i64).max(1))
+        })
+        .collect()
+}
+
 /// GCC's `time_benefit`: the clocks a call no longer spends in `body` given its
 /// known actuals: what they fold, and what only a branch they decide reaches,
 /// each at its block's frequency (a loop that does not run saves its trips).
@@ -659,6 +744,10 @@ fn time_saved(
     }
     let frequency =
         profit::_frequencies(&module.context, &module.metadata, &module.globals, body, None).unwrap_or_default();
+    // The hop to the context a recursive call passes on is weighed by how often
+    // gcc's estimate has the call run; the time the known actuals save keeps
+    // the clamp it was fitted with (TIME_SCALE).
+    let hops = frequencies_with_recursion(module, layout, body, &|callee| callee == name);
     // A block runs about as often as GCC guesses a loop does (its time
     // estimates stop at ten trips), not as often as the nest multiplies
     // out.
@@ -795,7 +884,8 @@ fn time_saved(
             })
             .collect();
         if context.iter().any(Option::is_some) {
-            next.push((context, weight(block)));
+            let hop = hops.get(&cfg::id(block)).copied().unwrap_or(profit::UNIT).min(MAX_FREQUENCY * profit::UNIT);
+            next.push((context, hop));
         }
     }
     ((unknown - kept) / profit::UNIT, hint, next)
@@ -896,5 +986,115 @@ fn redirect(
         if !same_said && !changed.unsound.contains(&caller) {
             changed.unsound.push(caller);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testing::parsed;
+
+    /// A loop that runs the function again on a branch: `read_file`'s shape.
+    const LOOPED: &str = "declare i32 @more()
+declare i32 @flag()
+declare void @other(i32)
+
+define void @f(i32 %n) {
+entry:
+  br label %loop
+
+loop:
+  %i = phi i32 [ 0, %entry ], [ %next, %latch ]
+  %c = call i32 @more()
+  %stop = icmp slt i32 %c, 0
+  br i1 %stop, label %out, label %body
+
+body:
+  %d = call i32 @flag()
+  %t = icmp ne i32 %d, 0
+  br i1 %t, label %again, label %latch
+
+again:
+  %m = sub i32 %n, 1
+  call void @CALLED(i32 %m)
+  br label %latch
+
+latch:
+  %next = add i32 %i, 1
+  br label %loop
+
+out:
+  ret void
+}
+";
+
+    /// The same, with the loop leaving after eight trips.
+    const COUNTED: &str = "declare i32 @flag()
+
+define void @f(i32 %n) {
+entry:
+  br label %loop
+
+loop:
+  %i = phi i32 [ 0, %entry ], [ %next, %latch ]
+  %d = call i32 @flag()
+  %t = icmp ne i32 %d, 0
+  br i1 %t, label %again, label %latch
+
+again:
+  %m = sub i32 %n, 1
+  call void @f(i32 %m)
+  br label %latch
+
+latch:
+  %next = add i32 %i, 1
+  %more = icmp slt i32 %next, 8
+  br i1 %more, label %loop, label %out
+
+out:
+  ret void
+}
+";
+
+    /// The frequency of the block `again`, per entry of `f`, in `UNIT`ths.
+    fn again(callee: &str) -> i64 {
+        frequency_of_again(&LOOPED.replace("CALLED", callee))
+    }
+
+    fn frequency_of_again(text: &str) -> i64 {
+        let module = parsed(text);
+        let id = module.named("f").expect("f");
+        let body = module.global(id).function().expect("a body");
+        let layout = DataLayout::default();
+        let frequency = frequencies_with_recursion(&module, &layout, body, &|callee| callee == id);
+        let block = body.layout().iter().copied().find(|&block| {
+            body.iter_block(block).any(|inst| {
+                matches!(body.instruction(inst).opcode, Opcode::Binary(llrm_mir::opcode::BinaryOp::Sub))
+            })
+        });
+        frequency[&cfg::id(block.expect("the block of the call"))]
+    }
+
+    /// `read_file` -O3 m32 chained eight clones where gcc 15 makes four: its
+    /// loop around the call of itself ran ten trips (the clamp) where gcc's
+    /// `PRED_LOOP_EXIT_WITH_RECURSION` makes it 1.945, so each hop of the
+    /// chain was worth ten times what gcc's is and the first clone 3.4e12 where
+    /// gcc has 25,605.
+    #[test]
+    fn a_loop_that_calls_its_function_runs_about_twice_not_ten_trips() {
+        let recursive = again("f");
+        assert!(recursive <= 3 * profit::UNIT, "{recursive} UNITths per entry; gcc estimates 1.9 trips");
+        // The same loop around another function keeps the ordinary estimate.
+        assert!(again("other") > 3 * profit::UNIT);
+    }
+
+    /// `queens`' column loop runs eight trips and its `place` takes the
+    /// recursion rule's 22% exit with it: the clones of `place` fell from 8 to
+    /// 1 and -O3 went from 79,866 to 145,621 clocks (gcc 94,851). gcc exits a
+    /// loop of a known count by the count.
+    #[test]
+    fn a_counted_loop_that_calls_its_function_keeps_its_trips() {
+        let counted = frequency_of_again(COUNTED);
+        assert!((3 * profit::UNIT..=5 * profit::UNIT).contains(&counted), "{counted} UNITths per entry; 8 trips, half taken");
     }
 }

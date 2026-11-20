@@ -23,6 +23,7 @@ xchg_rr = 1
 alu_ri = 1
 alu_rm = 1
 alu_mr = 2
+cmpxchg_mr = 2  # WriteCMPXCHGRMW, 2 cycles on SBPort5 and SBPort23: X86SchedSandyBridge.td:152
 mov_rr = 1
 mov_rm = 1
 mov_mr = 1
@@ -102,6 +103,7 @@ xchg_rr = 1
 alu_ri = 1
 alu_rm = 6
 alu_mr = 2
+cmpxchg_mr = 8  # WriteCMPXCHGRMW latency, :152
 mov_rr = 1
 mov_rm = 5
 mov_mr = 1
@@ -185,6 +187,7 @@ alu_rr = { uops = 1, p015 = 1 }  # WriteALU [SBPort015] :127
 alu_ri = { uops = 1, p015 = 1 }  # WriteALU :127
 alu_rm = { uops = 2, p015 = 1, p23 = 1 }  # WriteALU folded, +SBPort23 :127
 alu_mr = { uops = 4, p015 = 1, p23 = 2, p4 = 1 }  # WriteALU + WriteRMW [SBPort23,SBPort4] :108,:127
+cmpxchg_mr = { uops = 6, p015 = 1, p5 = 2, p23 = 2, p4 = 1 }  # WriteCMPXCHGRMW [SBPort015,SBPort5,SBPort23,SBPort4] [1,2,2,1] :152
 cmov = { uops = 2, p05 = 1, p015 = 1 }  # WriteCMOV [SBPort05,SBPort015] :177
 xchg_rr = { uops = 3, p015 = 3 }  # WriteXCHG [SBPort015] x3 :148
 mov_rr = { uops = 1, p015 = 1 }  # WriteMove [SBPort015] :113

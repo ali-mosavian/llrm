@@ -199,6 +199,10 @@ impl CombineHooks for Aarch64Lowering {
         false
     }
 
+    fn sext_setcc_as_select(&self) -> bool {
+        true
+    }
+
     fn reduce_load_width_through_freeze(&self) -> bool {
         true
     }
