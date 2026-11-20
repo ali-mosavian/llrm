@@ -5,33 +5,42 @@
 
 use llrm_m68k::driver::{Level, assembly, cpu_of, object};
 
+/// Each call's arguments are read, then a volatile store sits before the call: #10057 fuses volatile loads into
+/// the pushes when nothing is between, which made the call build 8 B and 16 clk cheaper and the inline (+32 % bytes
+/// for about -10 % real clocks, 8590 against 7704) no longer pay: `trial::pays_tests` records that pair. The store
+/// keeps the loads unfused, the shape this trial was made for.
 const PICK: &str = "target datalayout = \"E-m:e-p:32:16:32-i8:8:8-i16:16:16-i32:16:32-n8:16:32-a:0:16-S16\"
 declare void @report(i32)
 define dso_local i32 @main() nounwind optsize {
   %a = alloca i32, align 2
   %e = alloca i32, align 2
+  %s = alloca i32, align 2
   store volatile i32 1081081856, ptr %a, align 2
   store volatile i32 1, ptr %e, align 2
   %a0 = load volatile i32, ptr %a, align 2
   %e0 = load volatile i32, ptr %e, align 2
+  store volatile i32 0, ptr %s, align 2
   %p0 = call i64 @pick(i32 %a0, i32 %e0)
   %t0 = trunc i64 %p0 to i32
   call void @report(i32 %t0)
   store volatile i32 23, ptr %e, align 2
   %a1 = load volatile i32, ptr %a, align 2
   %e1 = load volatile i32, ptr %e, align 2
+  store volatile i32 0, ptr %s, align 2
   %p1 = call i64 @pick(i32 %a1, i32 %e1)
   %t1 = trunc i64 %p1 to i32
   call void @report(i32 %t1)
   store volatile i32 24, ptr %e, align 2
   %a2 = load volatile i32, ptr %a, align 2
   %e2 = load volatile i32, ptr %e, align 2
+  store volatile i32 0, ptr %s, align 2
   %p2 = call i64 @pick(i32 %a2, i32 %e2)
   %t2 = trunc i64 %p2 to i32
   call void @report(i32 %t2)
   store volatile i32 0, ptr %e, align 2
   %a3 = load volatile i32, ptr %a, align 2
   %e3 = load volatile i32, ptr %e, align 2
+  store volatile i32 0, ptr %s, align 2
   %p3 = call i64 @pick(i32 %a3, i32 %e3)
   %t3 = trunc i64 %p3 to i32
   call void @report(i32 %t3)
