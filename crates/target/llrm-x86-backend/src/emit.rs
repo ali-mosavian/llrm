@@ -912,30 +912,70 @@ impl Emitter<'_, '_> {
     /// A load of a GOT entry reads `[rip + sym]`; the encoder relocates an
     /// External symbol's immediate as the entry's offset, so the load is that
     /// immediate (`mov r, offset sym`, as `isel.rs` makes the legacy GOT load).
+    /// A load folded into another operation (`add r, [sym]`) has no such
+    /// form: the encoder would read the symbol's contents (`R_X86_64_PC32`),
+    /// not its address, so the load comes out again as the `mov` and the
+    /// operation reads its register.
     fn make_got_loads(
         &mut self,
         before: usize,
     ) {
         let Some(block) = self.blocks.last_mut() else { return };
-        for one in block.insns.iter_mut().skip(before) {
-            let Some(what) = one.what.as_ref() else { continue };
-            let ([Loc::Held(dest)], [Loc::Mem(mem)]) = (what.dests.as_slice(), what.sources.as_slice()) else {
-                continue;
-            };
-            let Some(address) = mem.addr else { continue };
-            if what.op != Operation::Move
-                || mem.base.is_some()
-                || mem.index.is_some()
-                || address.space != llrm_codegen::model::ir::Space::External
-            {
-                continue;
+        let tail: Vec<Arc<Insn>> = block.insns.drain(before..).collect();
+        for one in tail {
+            let moved = self.got_load(&one);
+            if let Some(block) = self.blocks.last_mut() {
+                block.insns.push(moved.unwrap_or(one));
             }
+        }
+    }
+
+    /// `one` with its GOT load made the symbol's immediate, if it has one.
+    fn got_load(
+        &mut self,
+        one: &Arc<Insn>,
+    ) -> Option<Arc<Insn>> {
+        let what = one.what.as_ref()?;
+        let external = |source: &Loc| match source {
+            Loc::Mem(mem) if mem.base.is_none() && mem.index.is_none() => {
+                mem.addr.filter(|address| address.space == llrm_codegen::model::ir::Space::External)
+            }
+            _ => None,
+        };
+        if let ([Loc::Held(dest)], [source]) = (what.dests.as_slice(), what.sources.as_slice())
+            && what.op == Operation::Move
+            && let Some(address) = external(source)
+        {
             let mut moved = (**one).clone();
             if let Some(what) = moved.what.as_mut() {
                 what.sources = vec![Loc::Imm(Imm { value: 0, width: dest.width, address: Some(address) })];
             }
-            *one = Arc::new(moved);
+            return Some(Arc::new(moved));
         }
+        let [(at, address)] = what
+            .sources
+            .iter()
+            .enumerate()
+            .filter(|(_, source)| matches!(source, Loc::Mem(_)))
+            .map(|(at, source)| external(source).map(|address| (at, address)))
+            .collect::<Option<Vec<_>>>()?[..]
+        else {
+            return None;
+        };
+        if what.dests.iter().any(|dest| matches!(dest, Loc::Mem(_))) {
+            return None;
+        }
+        let entry = self.fresh(8);
+        self.push(
+            Operation::Move,
+            "mov",
+            vec![Loc::Held(entry)],
+            vec![Loc::Imm(Imm { value: 0, width: 8, address: Some(address) })],
+        );
+        let mut what = what.clone();
+        what.sources[at] = Loc::Held(entry);
+        let uses = _read(&what);
+        Some(Arc::new(Insn { uses, ..one.with_what(Some(what)) }))
     }
 
     fn mark_invariant_loads(
