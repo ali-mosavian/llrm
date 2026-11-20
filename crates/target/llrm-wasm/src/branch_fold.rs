@@ -20,7 +20,7 @@
 //! DEVIATE 1: tail merging is `tail_merge`'s, no `OptimizeBranches` outside
 //! these cases, and not in a function with a personality (try scopes name their
 //! blocks). Exit: the shared branch folder over the neutral machine function
-//! (S4), no later than 2026-11-20; deleting this file is part of that PR.
+//! (S4), no later than 2026-11-27; deleting this file is part of that PR.
 //!
 //! # See also
 //! `BranchFolding.cpp`, pin d1106deb71cc: `OptimizeBlock`, `IsBranchOnlyBlock`.
