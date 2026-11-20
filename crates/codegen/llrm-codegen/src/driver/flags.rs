@@ -121,6 +121,7 @@ const PASSES: &[(&str, fn(&mut pipeline::Options, bool))] = &[
     ("strength-reduce", |options, on| options.strength = on),
     ("lsr", |options, on| options.lsr = on),
     ("unswitch-loops", |options, on| options.unswitch = on),
+    ("split-loops", |options, on| options.split_loops = on),
     ("loop-interchange", |options, on| options.interchange = on),
     ("loop-unroll-and-jam", |options, on| options.unroll_and_jam = on),
     ("tree-loop-vectorize", |options, on| options.vectorize = on),
