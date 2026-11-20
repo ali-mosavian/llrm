@@ -705,6 +705,10 @@ impl Tti for M68k {
     /// by the access size for free (descriptors in `indexed.rs`), so LSR keeps
     /// a pointer walk rather than an index beside a counter. Exit: 2026-11-20,
     /// when LSR rates the indexed formula beside the walk (M68K-COPY-OS).
+    fn lsr_post_indexed_walk_limit(&self) -> Option<u32> {
+        Some(5)
+    }
+
     fn preferred_addressing_mode(&self) -> AddressingMode {
         AddressingMode::PostIndexed
     }
@@ -840,6 +844,21 @@ impl Tti for M68k {
     }
 
     fn sizes_exit_values(&self) -> bool {
+        true
+    }
+
+    /// The pin's odd-factor `GenerateICmpZeroScales`: an exit compare is scaled
+    /// by an odd factor only where `getExactSDiv` proves the product does not
+    /// wrap. With LG1 the exit test of a loop that also steps `3n` moved to
+    /// that counter and kept both live (loop_countdown_sum 68020 -O2: `moveq;
+    /// cmp; bne` and a fourth data register where the pin tests `n`). LG2
+    /// (even factors) stays: a byte-indexed copy loop counts by 2 on one
+    /// register (loop_copy_directions -Os +40 B without it).
+    fn lsr_scales_zero_compare_past_overflow(&self) -> bool {
+        false
+    }
+
+    fn lsr_scales_even_zero_compare(&self) -> bool {
         true
     }
 
