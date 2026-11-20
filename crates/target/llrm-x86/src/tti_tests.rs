@@ -570,3 +570,26 @@ fn the_vector_costs_equal_the_pinned_opt_on_x86_64() {
     assert!(rows.len() > 600, "{} rows", rows.len());
     assert!(wrong.is_empty(), "{} of {} differ:\n{}", wrong.len(), rows.len(), wrong[..wrong.len().min(40)].join("\n"));
 }
+
+/// A shift by an amount that is no constant was priced as the immediate form
+/// (1 for `<4 x i32>`, nothing for `<16 x i8>`): a loop of them was widened
+/// into the ladder it lowers to. The pin's `SSE2CostTable` rows, and the
+/// `SSE2UniformConstCostTable` bytes.
+#[test]
+fn a_variable_vector_shift_is_priced_as_the_pins_sse2_rows() {
+    let x86 = X86::of_cpu("x86-64").unwrap();
+    let cost = |op, lane, count, second: OperandInfo| {
+        x86.vector_arithmetic_cost_op2(op, VectorTy { lane: Ty::Int(lane), count }, second, CostKind::RecipThroughput)
+            .map(|cost| cost.value)
+    };
+    let variable = OperandInfo::ANY;
+    let constant = OperandInfo::constant(3, 8);
+    assert_eq!(cost(ArithOp::Shl, 16, 8, variable), Some(24));
+    assert_eq!(cost(ArithOp::LShr, 32, 4, variable), Some(12));
+    assert_eq!(cost(ArithOp::AShr, 8, 16, variable), Some(27));
+    assert_eq!(cost(ArithOp::AShr, 64, 2, variable), Some(8));
+    assert_eq!(cost(ArithOp::Shl, 32, 8, variable), Some(34), "two registers");
+    assert_eq!(cost(ArithOp::Shl, 32, 4, constant), Some(1));
+    assert_eq!(cost(ArithOp::Shl, 8, 16, constant), Some(1));
+    assert_eq!(cost(ArithOp::AShr, 8, 16, constant), Some(3));
+}
