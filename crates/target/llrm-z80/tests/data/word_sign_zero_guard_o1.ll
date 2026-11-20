@@ -1,6 +1,6 @@
 target datalayout = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8"
-; ModuleID = '/home/alim/work/personal/llrm/.claude/worktrees/cool-bhabha-492e61/tests/run/c/word_sign_zero_guard.c'
-source_filename = "/home/alim/work/personal/llrm/.claude/worktrees/cool-bhabha-492e61/tests/run/c/word_sign_zero_guard.c"
+; ModuleID = 'word_sign_zero_guard.c'
+source_filename = "word_sign_zero_guard.c"
 target triple = "msp430"
 
 @taken = internal global i16 0, align 2
