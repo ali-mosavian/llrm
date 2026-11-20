@@ -1519,8 +1519,9 @@ impl Tti for X86 {
         self.word_vectors
     }
 
-    /// A word vector has no horizontal step: `vectorlower` takes no `llvm.vector.reduce.*`,
-    /// so a loop with a reduction stays scalar (the pin's `ExpandReductions` has no word-mode form).
+    /// A word vector has no horizontal step: `vectorlower` takes no
+    /// `llvm.vector.reduce.*`, so a loop with a reduction stays scalar (the
+    /// pin's `ExpandReductions` has no word-mode form).
     fn lowers_vector_reductions(&self) -> bool {
         self.vector_values() || !self.word_vectors
     }
@@ -1618,13 +1619,14 @@ impl Tti for X86 {
     /// isel selects for every operand, `LT.first` registers times the row of
     /// the legalized type (`SSE2CostTable`): `pand`, `por`, `pxor` cost one;
     /// `paddq`/`psubq` {1, 2, 1, 2}; the multiplies of 8-, 16- and 32-bit lanes
-    /// are the pin's rows (the 64-bit lane's comes with its lowering). A vector of 8-bit lanes within 64 bits
-    /// is multiplied as 16-bit lanes (extend, `pmullw`, truncate). Other adds
-    /// and subtracts have no row: the base model, one per register for the
-    /// throughput and one for the other kinds (`TCK_RecipThroughput` only
-    /// scales). Byte shifts, a variable shift count and the divisions are
-    /// not priced, so a loop holding one stays scalar (DEVIATE X86V2, owner
-    /// llrm-target-x86-m64-b, exit 2026-11-24).
+    /// are the pin's rows (the 64-bit lane's comes with its lowering). A vector
+    /// of 8-bit lanes within 64 bits is multiplied as 16-bit lanes (extend,
+    /// `pmullw`, truncate). Other adds and subtracts have no row: the base
+    /// model, one per register for the throughput and one for the other
+    /// kinds (`TCK_RecipThroughput` only scales). Byte shifts, a variable
+    /// shift count and the divisions are not priced, so a loop holding one
+    /// stays scalar (DEVIATE X86V2, owner llrm-target-x86-m64-b, exit
+    /// 2026-11-24).
     fn vector_arithmetic_cost(
         &self,
         op: ArithOp,
@@ -1633,8 +1635,10 @@ impl Tti for X86 {
     ) -> Option<Cost> {
         if !self.vector_values() {
             // only the bitwise operations act lane by lane on a word
-            return (self.word_vectors && is_word_vector(ty) && matches!(op, ArithOp::And | ArithOp::Or | ArithOp::Xor))
-                .then(|| Cost::of(1));
+            return (self.word_vectors
+                && is_word_vector(ty)
+                && matches!(op, ArithOp::And | ArithOp::Or | ArithOp::Xor))
+            .then(|| Cost::of(1));
         }
         let throughput = kind == CostKind::RecipThroughput;
         match op {
