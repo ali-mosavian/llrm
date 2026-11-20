@@ -170,6 +170,8 @@ pub struct Tuned {
     pub no_global_base: bool,
     /// `Tti::prefers_exit_ne`.
     pub exit_ne: bool,
+    /// `Tti::loop_split`.
+    pub loop_split: bool,
     /// `Tti::narrows_counters`.
     pub narrows_counters: bool,
     /// `Tti::narrows_counters_at_speed` answers no.
@@ -207,6 +209,7 @@ use llrm_mir::tti;
 #[derive(Default)]
 pub struct Flagged {
     pub exit_ne: bool,
+    pub loop_split: bool,
     pub narrows_counters: bool,
     pub narrows_counters_for_size_only: bool,
     pub unswitch_threshold: Option<i64>,
@@ -286,6 +289,10 @@ impl llrm_mir::tti::Tti for Flagged {
 
     fn prefers_exit_ne(&self) -> bool {
         self.exit_ne
+    }
+
+    fn loop_split(&self) -> bool {
+        self.loop_split
     }
 
     fn narrows_counters(&self) -> bool {
@@ -463,6 +470,7 @@ impl llrm_mir::target::Machine for Tuned {
 
     fn tti(&self) -> Option<std::rc::Rc<dyn llrm_mir::tti::Tti>> {
         (self.exit_ne
+            || self.loop_split
             || self.narrows_counters
             || self.sinks_invariants
             || self.no_global_base
@@ -480,6 +488,7 @@ impl llrm_mir::target::Machine for Tuned {
             .then(|| {
                 std::rc::Rc::new(Flagged {
                     exit_ne: self.exit_ne,
+                    loop_split: self.loop_split,
                     narrows_counters: self.narrows_counters,
                     narrows_counters_for_size_only: self.narrows_counters_for_size_only,
                     unswitch_threshold: self.unswitch_threshold,

@@ -335,6 +335,13 @@ pub(crate) const REGISTRY: &[Entry] = &[
         "slp-vectorizer",
         "slpvectorize.rs makes vector stores of runs of constant stores (arm64 only: cost-priced, VF down from the register width, DEVIATE SLP1: constants only), slpcompares.rs makes the wide compare the pin's SLP, VectorCombine and InstCombine leave of an and-chain of equalities of adjacent bytes; no vectors; criterion: the chain of eight bytes is one ldr and one cmp as the pin's (tests/slp_compares.rs); exit: vector types in the backend",
     ),
+    // Before the vectorizer, after loop-invariant motion, as gcc's order.
+    partial(
+        "loop-split@gcc",
+        Late,
+        "none (DEVIATE LSPLIT, no pin pass)",
+        "translation of gcc tree-ssa-loop-split `split_loop` (loopsplit.rs; -O3 and -Omax, `Tti::loop_split`, arm64 only); untranslated: split_loop_on_cond, guards that are not a header phi, equality against a range bound, bounds computed in the loop, <= and >= exits, strides but one on a != exit; criterion: the sieve loop splits in two and the interpreter agrees on every input (loopsplit_tests.rs); exit: arm64 sieve -O3 clocks drop or the pass is deleted (2026-11-24)",
+    ),
     entry(
         "loop-unroll-and-jam@early",
         Late,
