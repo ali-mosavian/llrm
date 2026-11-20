@@ -74,7 +74,14 @@
 //!   `div_constants_long` +989, `idioms` +507, `rep_tails` +485); the one gain
 //!   is `byvalue_struct_address` 147 -> 16. The guard stays. The last call of a
 //!   local callee, which goes with it, is the pin's. No shape of callee but the
-//!   loop and the one smaller than its call is tested.
+//!   loop and the one smaller than its call is tested. A target may say the
+//!   guard stands down for an `inlinehint` callee at an `optsize` caller
+//!   (`Tti::opt_size_inline_guard_yields_to_inlinehint`, arm64: yes): the
+//!   pin's `updateThreshold` raises the threshold to `InlineHintThreshold`
+//!   (325) there, and its cost under that is the verdict (QuickrBasic
+//!   operands.c -Os `hot_operand` into `hot_int`, 26 units against two 3-unit
+//!   calls: 15,344 -> 10,400 B, the pin's 9,464). The guard still holds for a
+//!   callee with no hint.
 //! - SZ1-SITE (owner m68k-b, exit 2026-11-24): the size rule (D11) prices a
 //!   callee's instruction with the call site's constant arguments, not only a
 //!   GEP as `isGEPFree` does (z80 `rotate_small` -O1 922 -> 576 B).
@@ -544,6 +551,8 @@ struct Analyzer<'a> {
     single_bb_bonus: i64,
     threshold: i64,
     static_bonus_applied: i64,
+    /// `updateThreshold` raised the threshold for `inlinehint` at an `optsize` caller.
+    hint_applied: bool,
     cost: i64,
     single_bb: bool,
     decided_by_threshold: bool,
@@ -590,6 +599,7 @@ impl<'a> Analyzer<'a> {
             single_bb_bonus: 0,
             threshold: params.default_threshold,
             static_bonus_applied: 0,
+            hint_applied: false,
             cost: 0,
             single_bb: true,
             decided_by_threshold: false,
@@ -1899,6 +1909,7 @@ impl<'a> Analyzer<'a> {
                     self.params.hint_threshold
                 };
                 if has_flag(&self.callee.attrs, "inlinehint") {
+                    self.hint_applied = caller_size == CallerSize::OptSize && hint > self.threshold;
                     self.threshold = self.threshold.max(hint);
                 }
                 let frequency = self.site.relative_frequency;
@@ -2371,15 +2382,42 @@ impl<'a> Analyzer<'a> {
         // (`inline_dying_credit_at_os`), -Os takes no credit for the
         // callee that goes (a 9-argument float callee, 21 units against
         // ~70 B a copy, inlined three times was +193 B at x86-m16).
+        let hot = self.site.relative_frequency.is_some_and(|ratio| ratio >= HOT_CALLSITE_REL_FREQ)
+            && self.site.tti.is_some_and(|tti| tti.inline_hot_dying_credit_at_os());
         let credit = self.site.callee_dies
             && k >= 2
             && (self.site.caller_size == CallerSize::Speed
-                || self.site.tti.is_none_or(|tti| tti.inline_dying_credit_at_os()));
+                || self.site.tti.is_none_or(|tti| tti.inline_dying_credit_at_os())
+                || hot);
         if credit {
             (k - 1) * size > k * call + frame
         } else {
             size + self.frame_built_in_caller(llrm_mir::tti::CostKind::CodeSize) > call
         }
+    }
+
+    /// DEVIATE OS-OUTLINE-TRIAL (`Tti::opt_size_inline_outline_trial`): a cold site the size bound accepts, of a callee
+    /// that goes with its calls, is noted for a second compile that keeps the call, and kept there when the finished
+    /// code is smaller. The units count a copy the lowering makes bigger (constants folded into a loop of byte
+    /// stores). True in that second compile for the sites it outlines.
+    fn outlined_by_trial(&self) -> bool {
+        let Some(tti) = self.site.tti else { return false };
+        // a site in a loop is the speed side's (`inline_hot_dying_credit_at_os`)
+        if !tti.opt_size_inline_outline_trial()
+            || self.site.caller_size == CallerSize::Speed
+            || !self.site.callee_dies
+            || self.site.callee_calls < 2
+            || self.site.relative_frequency.is_some_and(|ratio| ratio > 1.0)
+        {
+            return false;
+        }
+        let name = |id: GlobalId| self.site.module.global(id).name.as_deref().unwrap_or_default().to_owned();
+        let site = crate::trial::Site { caller: name(self.site.caller_id), callees: vec![name(self.site.callee_id)] };
+        if crate::trial::outlines(&site.caller, &site.callees) {
+            return true;
+        }
+        crate::trial::note_accepted(site);
+        false
     }
 
     /// Bytes of the caller's stores into a local that the callee reads only
@@ -2652,6 +2690,7 @@ impl<'a> Analyzer<'a> {
         // -O1 keeps the pin's threshold alone where the target's rate binds at
         // -O2 and -O3 only.
         let rate_off = at_o1 && self.site.tti.is_some_and(|tti| !tti.speed_inline_rate_at_o1());
+        let mut outlined = false;
         let grows = if self.site.caller_size == CallerSize::Speed && !unpriced && !rate_off {
             self.grows_more_than_it_saves()
                 && !(self.loop_bound_known && self.site.tti.is_some_and(|tti| tti.inline_hints_known_loop_bound()))
@@ -2669,22 +2708,25 @@ impl<'a> Analyzer<'a> {
                         self.site.tti.is_some_and(|tti| tti.inline_o1_weighs_entry()),
                     ))
         } else {
-            !self.site.sole_call_to_local
+            let bound = !self.site.sole_call_to_local
                 && self.site.tti.is_some_and(|tti| {
                     tti.inline_policy().by_size.is_some_and(|rule| {
-                        self.site.callee_calls >= rule.min_sites && !(rule.yields_to_negative_cost && self.cost < 0)
+                        self.site.callee_calls >= rule.min_sites
+                            && !(rule.yields_to_negative_cost && self.cost < 0)
+                            && !(rule.yields_to_inlinehint && self.hint_applied)
                     })
-                })
-                && self.grows_the_code()
-                && !(at_o1 && self.hot_site_within_growth_budget())
+                });
+            let grows = bound && self.grows_the_code() && !(at_o1 && self.hot_site_within_growth_budget());
+            outlined = bound && !grows && self.outlined_by_trial();
+            grows
         };
         self.blocked_by_bound = grows && self.cost < pin;
-        if grows {
+        if grows || outlined {
             // The verdict is `cost < threshold`: the call stays.
             self.threshold = self.threshold.min(self.cost);
         }
         self.decided_by_threshold = true;
-        if self.cost < self.threshold.max(1) && !grows { Ok(()) } else { Err("Cost over threshold.".into()) }
+        if self.cost < self.threshold.max(1) && !grows && !outlined { Ok(()) } else { Err("Cost over threshold.".into()) }
     }
 }
 

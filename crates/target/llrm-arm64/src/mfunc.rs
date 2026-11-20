@@ -888,6 +888,17 @@ mod verify_tests {
     }
 }
 
+/// The labels of the blocks that end in a call that never returns: they run
+/// into no block, though their last instruction is no jump.
+pub fn dead_end_labels(function: &MFunc) -> Vec<String> {
+    function
+        .blocks
+        .iter()
+        .filter(|block| block.ops.iter().any(|op| matches!(op, Op::Unreachable)))
+        .map(|block| block.label.clone())
+        .collect()
+}
+
 /// The registers `function` leaves live: those it returns and passes to a tail
 /// call.
 pub fn returned_registers(function: &MFunc) -> Vec<Reg> {

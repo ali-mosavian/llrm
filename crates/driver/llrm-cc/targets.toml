@@ -7,6 +7,7 @@
 # `llc_program` (default llrm-llc) and `llc_level` (default true: it takes -O<n>) say how the backend is run; a row without a level must give `llc_level_reason`.
 # `llc_passes` (default true) says the backend takes the `-f[no-]PASS` switches; a row that does not gives `llc_passes_reason`, and the driver leaves them out with a warning (clang has written `noinline` and the loop hints into the IR).
 # `llc_mcmodel` (default false) says the backend takes `-mcmodel=` and clang does not (the pin's clang refuses it for m68k): the flag goes to the backend alone.
+# `llc_reloc` (default false) says the backend takes `-relocation-model=`: the driver gives it what clang's `-f[no-]pic` chose.
 # `unroll_at_o1` (default false) makes `-funroll-loops` the default at -O1 (DEVIATE UNROLL-O1: clang marks every loop unroll-disable there, so the pin's -O1 never unrolls).
 # `thread_jumps_at_o1` (default false) makes `-fthread-jumps` the default at -O1 for the backend (DEVIATE JUMPTHREAD-O1: the pin's -O1 pipeline has no JumpThreadingPass).
 # `speed_rate_at_o1` (default false) makes `-fllrm-speed-rate` the default at -O1 for the backend (DEVIATE SPEED-O1: the byte price at speed counts at -O1 as at -O2; user ruling 2026-11-14, O1-O3 by clocks).
@@ -23,6 +24,7 @@ clang = ["-target", "x86_64-unknown-linux-gnu"]
 llc = []
 object = "elf"
 link = ["cc", "{objects}", "{flags}", "-o", "{output}"]
+llc_reloc = true
 unroll_at_o1 = true
 thread_jumps_at_o1 = true
 
@@ -194,7 +196,7 @@ description = "x86-m32"
 triple = "i486-unknown-linux-gnu"
 datalayout = "{datalayout:x86-m32}"
 clang = ["-target", "i486-unknown-linux-gnu", "-fno-pic", "-fno-stack-protector", "-fno-asynchronous-unwind-tables"]
-llc = ["-fobject-format=elf", "-mabi=sysv"]
+llc = ["-fobject-format=elf", "-mabi=sysv", "-mstack-alignment=16"]
 object = "elf"
 link = ["clang", "-m32", "-no-pie", "-o", "{output}", "{objects}", "-lm"]
 run = []

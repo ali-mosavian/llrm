@@ -1,6 +1,6 @@
 target datalayout = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8"
-; ModuleID = '/home/alim/scratch/wt-z80rot/tests/run/c/struct_odd_sizes.c'
-source_filename = "/home/alim/scratch/wt-z80rot/tests/run/c/struct_odd_sizes.c"
+; ModuleID = 'struct_odd_sizes.c'
+source_filename = "struct_odd_sizes.c"
 target triple = "msp430"
 
 %struct.tiny = type { i8, i8, i8 }

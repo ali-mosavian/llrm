@@ -89,6 +89,10 @@ use crate::support::hash::IndexMap;
 #[derive(Clone, Debug)]
 pub struct Profile {
     pub name: String,
+    /// `-mstack-alignment=N`: every call finds the stack a multiple of this
+    /// many bytes, whatever the callee holds; None where the target or the
+    /// callee's convention says (`aligned_calls`).
+    pub aligned_calls: Option<i64>,
     pub issue_width: i64,
     pub in_order: bool,
     pub prefix_cost: i64,
@@ -435,6 +439,7 @@ impl Profile {
             rounds_float_spills: false,
             stable_loads: true,
             min_size: false,
+            aligned_calls: None,
             speed_rate: true,
             speed_level: true,
             post_ra_tail_duplicate: false,
@@ -908,6 +913,23 @@ pub fn tuned_optimizing(
     }));
     made.insert(key, one);
     Ok(one)
+}
+
+/// `profile` with every call aligned to `bytes` (`-mstack-alignment=`): one
+/// copy per profile and alignment.
+pub fn with_aligned_calls(
+    profile: &'static Profile,
+    bytes: i64,
+) -> &'static Profile {
+    static MADE: std::sync::Mutex<Vec<(usize, i64, &'static Profile)>> = std::sync::Mutex::new(Vec::new());
+    let mut made = MADE.lock().expect("the aligned profiles are not poisoned");
+    let key = profile as *const Profile as usize;
+    if let Some(&(_, _, one)) = made.iter().find(|(at, n, _)| *at == key && *n == bytes) {
+        return one;
+    }
+    let one: &'static Profile = Box::leak(Box::new(Profile { aligned_calls: Some(bytes), ..profile.clone() }));
+    made.push((key, bytes, one));
+    one
 }
 
 /// The registers a value may be placed in: the description's `gpr` class.

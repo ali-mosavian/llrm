@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/inlineattrs.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/inlineattrs.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/inlineattrs.rs sha256:5fcd31d62eacc0b88611b9c9a5e7b83dfd94950be1d4d902c074c3bce3acdd4e -->
+<!-- src: crates/opt/llrm-transforms/src/inlineattrs.rs sha256:e92c757f2c2b399f46aace5b6904f186f1ca2a5cc17063aef5405d56f1b0cca3 -->
 
 # inlineattrs
 
@@ -25,6 +25,16 @@ nothing that may leave between, gets the return attributes the site states.
   attributes at hand).
 - A copy is never simplified while it is made (`isSimplified`): the
   check is always false.
+
+## Example
+A call in the inlined body that passes on one of the callee's parameters gets
+the attributes the call site states for that argument.
+
+```text
+call site:  call void @f(ptr nonnull dereferenceable(8) %p)
+callee:     define void @f(ptr %a) { call void @g(ptr %a) }
+copy:       call void @g(ptr nonnull dereferenceable(8) %p)
+```
 
 ## Used by
 Named by `inline`.

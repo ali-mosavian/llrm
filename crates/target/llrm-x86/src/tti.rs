@@ -2577,6 +2577,12 @@ impl Tti for X86 {
             return Cost::of(count * cost);
         }
         if !second.constant {
+            if kind == CostKind::CodeSize
+                && let Some(cost) = self.tuning.div_by_variable_size_cost
+                && scalar_variable_divide(op, legal).is_some()
+            {
+                return Cost::of(count * i64::from(cost));
+            }
             if let Some(row) = scalar_variable_divide(op, legal) {
                 if let Some(each) = row[kind.index()] {
                     return Cost::of(count * each);

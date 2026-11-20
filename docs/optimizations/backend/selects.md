@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/selects.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/selects.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/selects.rs sha256:778fd75af7a4733fde7530c6a79b5d248328844efa8a1f34736e85fe55215e4a -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/selects.rs sha256:86883299e87f9a33fe7ab813b0f80648a6d07db9bbdbd5ba11eb5f0a5b9513b1 -->
 
 # selects
 
@@ -81,7 +81,7 @@ bytes before -> after, release/next only):
   `x*257` as `imul` on a tie, so the ADC takes `2*setbe` as an `add`
   before it, the flags are clobbered, the `cmp` is repeated with its load
   unfolded and one more value is live (R15D). Without the multiply the pin
-  emits our shape. Evidence: ~/scratch/handoff/m64-mul257-adc-flags-2026-11-09.md.
+  emits our shape. Evidence: the m64-mul257-adc-flags handoff note (2026-11-09).
 - I64SEL-3, exit 2026-11-10 18:00Z: m64 `sfm16_float*` -O1 +8 B, -Os +10 B
   (only `__divsf3`: 493 -> 503 B, pin 560 B; register naming and one
   `mov`). Native instructions equal within 1 at O1 and Os (sfm16_float_add
@@ -100,7 +100,7 @@ bytes before -> after, release/next only):
   clang 28 / 28, gcc 32 / 27: over the best external by +2 (O1) and +5
   (O2). Head emits `setl al; and eax,255; shl eax,31`: the CMOV diamond
   comes before the SETCC, FixupSetCC does not fire, MaskByAnd masks. Card:
-  ~/scratch/handoff/f409-cmov-before-setcc-2026-11-09.md. Its growth is part
+  the f409-cmov-before-setcc handoff note (2026-11-09). Its growth is part
   of I64SEL-1's .text total.
 
 The loop is repeated until no select is left in any function, so two selects
