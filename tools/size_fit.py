@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Fit the 6502 byte table (crates/target/llrm-6502/src/opcosts.rs `calibrate`) to the bytes the backend writes.
+"""Fit a byte table (6502: crates/target/llrm-6502/src/opcosts.rs `calibrate`; z80: crates/target/llrm-z80/src/clocks.rs `calibrate`) to the bytes the backend writes.
 
-usage: LLRM_SIZE_FIT=1 cargo test -p llrm-6502 --test size_calibration -- --nocapture | tools/6502/size_fit.py
+usage: LLRM_SIZE_FIT=1 cargo test -p llrm-6502 --test size_calibration -- --nocapture | tools/size_fit.py
+       LLRM_SIZE_FIT=1 cargo test --release -p llrm-z80 --test size_calibration -- --nocapture | tools/size_fit.py
 
 Each `row PROGRAM FUNCTION MODEL WRITTEN class=count,...` is one function: the operations it has by class
 (width-weighted) and the bytes it is written as. The fit is non-negative least squares on the relative error
