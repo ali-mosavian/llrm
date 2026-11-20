@@ -79,6 +79,7 @@ xchg_rr      =   =
 alu_ri       =   =
 alu_rm       =   =
 alu_mr       =   =
+cmpxchg_mr   =   =
 mov_rr       =   =
 mov_rm       =   =
 mov_mr       =   =
@@ -164,6 +165,7 @@ xchg_rr      =   =
 alu_ri       =   =
 alu_rm       =   =
 alu_mr       =   =
+cmpxchg_mr   =   =
 mov_rr       =   =
 mov_rm       =   =
 mov_mr       =   =

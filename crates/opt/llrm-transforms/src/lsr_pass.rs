@@ -448,15 +448,32 @@ fn plan_loop(
         let bytes_outweigh_saving = bytes_strict
             && tti.lsr_size_model().is_some_and(|m| size || !m.size_only)
             && cost.size_bytes > pin_cost.size_bytes;
+        let saves_nothing = !(cost.c.add_rec_cost < pin_cost.c.add_rec_cost || cost.c.num_regs < pin_cost.c.num_regs);
+        // DEVIATE LG4 (owner w8, exit 2026-11-26; no pin line: the pin has no end-biased formulae): where the
+        // target favors post-indexed addressing, the pin's pointer walk is free (`RateRegister`, loop cost 0),
+        // so, where the target says so and every address of the pin's solution steps by what `(An)+` takes (`lsr_free_walk_beats_end_biased`; arm64 grew 21 cells of 181 at -O1/-O2 with it), the end-biased form must save a recurrence or a register to replace it: its saved compare is
+        // not a saving where the counter stays live for the loop's other readers.
+        let walk_is_free = tti.preferred_addressing_mode().has_post_indexed()
+            && tti.lsr_free_walk_beats_end_biased()
+            && {
+                let mut walks = pin.uses.iter().zip(&pin_solution).filter(|(lu, _)| lu.kind == crate::lsr_use::Kind::Address).peekable();
+                walks.peek().is_some()
+                    && walks.all(|(lu, &chosen)| {
+                        let f = &lu.formulae[chosen];
+                        // a pointer alone: a base with an index beside it is not a walk
+                        f.scaled_reg.is_none()
+                            && f.base_regs.len() == 1
+                            && crate::lsr_use::may_use_post_inc_mode(tti, se, &cx, lu, f.base_regs[0], header)
+                    })
+            };
         let kept = !pin_solution.is_empty()
             && (solution.is_empty()
                 || symbols_outweigh_saving
                 || bytes_outweigh_saving
                 || pin_cost.is_less(tti, &cost)
+                || (walk_is_free && saves_nothing)
                 || (!folds_base_and_counter
-                    && (cost.c.num_base_adds > pin_cost.c.num_base_adds
-                        || spent > saved
-                        || !(cost.c.add_rec_cost < pin_cost.c.add_rec_cost || cost.c.num_regs < pin_cost.c.num_regs))));
+                    && (cost.c.num_base_adds > pin_cost.c.num_base_adds || spent > saved || saves_nothing)));
         llrm_support::debug!(
             "lsr",
             "  pin's space solved: kept {kept} (bytes {} against the pin's {}; size_bytes {} against {}; insns {} against {})",

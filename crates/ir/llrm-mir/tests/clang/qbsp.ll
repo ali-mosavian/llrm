@@ -1,5 +1,5 @@
-; ModuleID = '/home/alim/work/personal/llrm-zed/bench/parity/qbsp.c'
-source_filename = "/home/alim/work/personal/llrm-zed/bench/parity/qbsp.c"
+; ModuleID = 'qbsp.c'
+source_filename = "qbsp.c"
 target datalayout = "e-m:e-p:16:16-i32:16-i64:16-f32:16-f64:16-a:8-n8:16-S16"
 
 %struct.Node = type { i16, i16, i16 }

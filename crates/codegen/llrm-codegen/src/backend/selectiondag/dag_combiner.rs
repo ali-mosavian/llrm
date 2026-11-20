@@ -1079,6 +1079,34 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         result
     }
 
+    /// `llvm.is.fpclass` where the target has no node for it: the class test
+    /// as compares and integer operations. DEVIATE: the pin expands in
+    /// `SelectionDAGBuilder` (`TLI.expandIS_FPCLASS`); the builder here has
+    /// no target actions, and this first combine runs before anything else
+    /// reads the node.
+    fn visit_is_fp_class(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let tli = self.tli?;
+        let op = self.dag.operand(node, 0);
+        if matches!(
+            tli.operation_action(ISD::IsFpClass, self.dag.value_type(op)),
+            Action::Legal | Action::Custom
+        ) {
+            return None;
+        }
+        let test = self.dag.constant(self.dag.operand(node, 1))?;
+        let result_vt = self.dag.value_type(node);
+        Some(super::expand_is_fpclass::expand_is_fp_class(
+            self.dag,
+            tli,
+            result_vt,
+            op,
+            llrm_mir::fpclass::FpClassTest(test as u32),
+        ))
+    }
+
     fn visit(
         &mut self,
         node: SDValue,
@@ -1197,6 +1225,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             ISD::FSub => self.visit_fsub(node),
             ISD::FMul => self.visit_fmul(node),
             ISD::FNeg => self.visit_fneg(node),
+            ISD::IsFpClass => self.visit_is_fp_class(node),
             ISD::FpRound => self.visit_fp_round(node),
             ISD::FpExtend => self.visit_fp_extend(node),
             ISD::SIntToFp | ISD::FpToSInt => self.visit_fp_int_convert(node),
@@ -5171,8 +5200,15 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             }
             _ => x,
         };
+        // The tied operand is `x`'s low half widened with undefined high bits (a copy of the truncate below), so no
+        // extension of it is made either (the pin's own patterns do the same, `MOVXd32d16`).
         let low = self.dag.get_node(ISD::Truncate, half.half, &[y]);
-        Some(self.dag.get_node(ISD::Machine(opcode), vt, &[x, low]))
+        let tied_low = self.dag.get_node(ISD::Truncate, half.half, &[x]);
+        // `TargetOpcode::COPY` (no name in the pin's tables): a node the combiner
+        // leaves alone, where an `any_extend` of a load would be formed into an
+        // extending load again.
+        let tied = self.dag.get_node(ISD::Machine(TARGET_OPCODE_COPY), vt, &[tied_low]);
+        Some(self.dag.get_node(ISD::Machine(opcode), vt, &[tied, low]))
     }
 
     /// The shifts and the add or subtract of `x * c` for `c = +-(2^n +- 1) <<
@@ -5439,6 +5475,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
 
 /// How many times the nodes a run started with it may make before it is
 /// stopped, and the least it may make (see [`DagCombiner::run_bounded`]).
+/// `TargetOpcode::COPY`, which has no name in the target tables.
+const TARGET_OPCODE_COPY: u32 = 20;
+
 const RUNAWAY_GROWTH: usize = 64;
 const RUNAWAY_FLOOR: usize = 1 << 17;
 
