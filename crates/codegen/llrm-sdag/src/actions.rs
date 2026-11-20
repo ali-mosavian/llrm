@@ -101,6 +101,23 @@ pub enum LoadExt {
 
 const INTS: [MVT; 6] = [MVT::I1, MVT::I8, MVT::I16, MVT::I32, MVT::I64, MVT::I128];
 const FLOATS: [MVT; 3] = [MVT::F32, MVT::F64, MVT::F80];
+
+/// The constrained nodes whose result is a float.
+const STRICT_FP: [ISD; 10] = [
+    ISD::StrictFAdd,
+    ISD::StrictFSub,
+    ISD::StrictFMul,
+    ISD::StrictFDiv,
+    ISD::StrictFRem,
+    ISD::StrictFMA,
+    ISD::StrictFSqrt,
+    ISD::StrictFRint,
+    ISD::StrictFpExtend,
+    ISD::StrictFpRound,
+];
+/// The constrained conversions whose other side is an integer.
+const STRICT_FP_CONVERT: [ISD; 4] =
+    [ISD::StrictFpToSInt, ISD::StrictFpToUInt, ISD::StrictSIntToFp, ISD::StrictUIntToFp];
 const ALL: [MVT; 10] =
     [MVT::I1, MVT::I8, MVT::I16, MVT::I32, MVT::I64, MVT::I128, MVT::F32, MVT::F64, MVT::F80, MVT::Other];
 
@@ -892,6 +909,12 @@ impl TargetLowering {
         // pseudo min/max node, so `combineSelectToPseudoMinMax`
         // (legal-or-custom only) leaves the select alone.
         self.set_ops(&[PseudoFMin, PseudoFMax], &FLOATS, Action::Expand);
+        // TargetLoweringBase.cpp#L930: constrained operations default to
+        // expand (ConstrainedOps.def's DAG_INSTRUCTION list).
+        // The default covers every type (a conversion is keyed by either side).
+        self.set_ops(&STRICT_FP, &FLOATS, Action::Expand);
+        self.set_ops(&STRICT_FP_CONVERT, &FLOATS, Action::Expand);
+        self.set_ops(&STRICT_FP_CONVERT, &[MVT::I8, MVT::I16, MVT::I32, MVT::I64], Action::Expand);
     }
 
     /// m32 for i486/P5 with the x87 and no SSE: `initActions`, then the
@@ -1335,6 +1358,25 @@ impl TargetLowering {
         t.set_ops(&[FpToSInt], &[MVT::I16, MVT::I32, MVT::I64], Custom);
         t.set_ops(&[FpToUInt], &[MVT::I8, MVT::I16], Promote);
         t.set_ops(&[FpToUInt], &[MVT::I32, MVT::I64], Custom);
+        // The same arms for the constrained forms (L254..L299).
+        t.set_ops(&[StrictUIntToFp], &[MVT::I8, MVT::I16], Promote);
+        t.set_ops(&[StrictUIntToFp], &[MVT::I32, MVT::I64], Custom);
+        t.set_ops(&[StrictSIntToFp], &[MVT::I8], Promote);
+        t.set_ops(&[StrictSIntToFp], &[MVT::I16, MVT::I32, MVT::I64], Custom);
+        t.set_ops(&[StrictFpToSInt], &[MVT::I8], Promote);
+        t.set_ops(&[StrictFpToSInt], &[MVT::I16, MVT::I32, MVT::I64], Custom);
+        t.set_ops(&[StrictFpToUInt], &[MVT::I8, MVT::I16], Promote);
+        t.set_ops(&[StrictFpToUInt], &[MVT::I32, MVT::I64], Custom);
+        // L473: a constrained compare is lowered by the target.
+        t.set_ops(&[StrictFSetCC, StrictFSetCCS], &FLOATS, Custom);
+        // L575, L789..L798, L854..L868: the constrained arithmetic and
+        // conversions the x87 does itself.
+        t.set_ops(&[StrictFpExtend], &[MVT::F64, MVT::F80], Legal);
+        t.set_ops(&[StrictFAdd, StrictFSub, StrictFMul, StrictFDiv, StrictFpRound, StrictFSqrt], &FLOATS, Legal);
+        // DEVIATE CFP3: `rint` is `frndint`, as the plain one is (SD214); the
+        // pin expands both to `rint`. Exit: none. Owner w9-tests. Review
+        // 2026-11-27.
+        t.set_ops(&[StrictFRint], &FLOATS, Legal);
         // L300-L303, L850: `lrint` of an x87 value is `fist`
         t.set_ops(&[LRint, LLRint], &[MVT::F32, MVT::F64, MVT::F80], Custom);
         // an i64 result at 32 bits is expanded after the same `fist`, as
@@ -1472,8 +1514,44 @@ mod tests {
         TargetLowering::aarch64(Aarch64Features::default())
     }
 
-    /// A function tuned for size called the speed routine of a divide: a
-    /// target's smaller one was never asked for.
+    /// `initActions` expands every constrained node: a selector that finds a
+    /// `STRICT_FADD` legal by default would emit it unchained. Before the
+    /// default, a target that sets nothing read `Legal`.
+    #[test]
+    fn a_constrained_node_is_expanded_until_a_target_makes_it_legal() {
+        let t = a64();
+        for op in [ISD::StrictFAdd, ISD::StrictFSqrt, ISD::StrictFpRound, ISD::StrictFMA] {
+            for vt in [MVT::F32, MVT::F64, MVT::F80] {
+                assert_eq!(t.operation_action(op, EVT::Simple(vt)), Action::Expand, "{op:?} {vt:?}");
+            }
+        }
+        for op in [ISD::StrictFpToSInt, ISD::StrictUIntToFp] {
+            assert_eq!(t.operation_action(op, EVT::Simple(MVT::I32)), Action::Expand);
+        }
+    }
+
+    /// The x87 does constrained arithmetic and the widening itself; the
+    /// integer conversions and the compares are the target's own code, and a
+    /// remainder or a fused multiply-add stays expanded (`X86ISelLowering.cpp`
+    /// L254..L299, L473, L789..L868).
+    #[test]
+    fn the_x87_target_legalizes_constrained_arithmetic_and_customizes_the_rest() {
+        let t = TargetLowering::x86_32(Features::default(), MVT::I32);
+        let at = |op, vt| t.operation_action(op, EVT::Simple(vt));
+        for vt in [MVT::F32, MVT::F64, MVT::F80] {
+            assert_eq!(at(ISD::StrictFAdd, vt), Action::Legal, "{vt:?}");
+            assert_eq!(at(ISD::StrictFDiv, vt), Action::Legal, "{vt:?}");
+            assert_eq!(at(ISD::StrictFpRound, vt), Action::Legal, "{vt:?}");
+            assert_eq!(at(ISD::StrictFSetCCS, vt), Action::Custom, "{vt:?}");
+            assert_eq!(at(ISD::StrictFRem, vt), Action::Expand, "{vt:?}");
+            assert_eq!(at(ISD::StrictFMA, vt), Action::Expand, "{vt:?}");
+        }
+        assert_eq!(at(ISD::StrictFpExtend, MVT::F80), Action::Legal);
+        assert_eq!(at(ISD::StrictSIntToFp, MVT::I32), Action::Custom);
+        assert_eq!(at(ISD::StrictSIntToFp, MVT::I8), Action::Promote);
+        assert_eq!(at(ISD::StrictFpToSInt, MVT::I16), Action::Custom);
+    }
+
     #[test]
     fn a_function_tuned_for_size_calls_the_size_routine() {
         let mut t = TargetLowering::empty(TargetLoweringInfo::aarch64());
