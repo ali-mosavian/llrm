@@ -2564,8 +2564,9 @@ fn scalar_sse(
             let code = code_of!(upper, "_XMM_XMMM", bits(second))?;
             _assemble(&raised(create_reg_reg(code, into.register, outof.register)), at, true)
         }
-        // `pshufd xmm, xmm/m128, imm8`: the destination is not the first source.
-        (Loc::Reg(into), Loc::Imm(order)) if name == "pshufd" && sources.len() == 2 => {
+        // `pshufd`/`pshuflw xmm, xmm/m128, imm8`: the destination is not the
+        // first source.
+        (Loc::Reg(into), Loc::Imm(order)) if matches!(name, "pshufd" | "pshuflw") && sources.len() == 2 => {
             let code = code_of!(upper, "_XMM_XMMM128_IMM8")?;
             match &sources[0] {
                 Loc::Reg(outof) => _assemble(

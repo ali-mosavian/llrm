@@ -86,7 +86,13 @@ thread_local! {
     pub static INLINE_FILLS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// Set while a function is selected at a level that allows no trade between
     /// bytes and clocks (-O1, -Os, -Oz).
+    /// Select every product of two zero-extended words as the routine's call
+    /// (`prepare::WORD_PRODUCT`), where the form is partial products.
+    pub static CALL_PRODUCTS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     pub static STRICT_LEVEL: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// The level is -O1: strict about bytes, but judged by clocks too, so a
+    /// byte is paid at 40 T where -Os and -Oz pay none.
+    pub static O1_LEVEL: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// Set while a function with a variable 64-bit shift is selected the second
     /// time, each such shift an in-place loop over eight bytes of the frame
     /// (`Z80Lowering::lower_wide_shift`) where the first selection calls the
@@ -200,6 +206,8 @@ struct Z80Combines {
     /// Selected at a level that allows no trade between bytes and clocks
     /// (`STRICT_LEVEL`).
     strict: bool,
+    /// At -O1 (`O1_LEVEL`).
+    o1: bool,
     /// The module's word multiplies are all constants that chain
     /// (`prepare::mark_word_chains`): the routine goes.
     chain_credit: bool,
@@ -232,8 +240,9 @@ fn word_chain_price(chain: &[(&'static str, i64)]) -> (i64, i64) {
 /// A word multiplied by a constant as the shifts and adds of `chain_search`
 /// (Bernstein 1986), where the pin leaves every constant but `2^k +- 1` to the
 /// `__mulhi3` call: `ld de, #c; call` is 6 B and a loop of about 65 T a bit of
-/// the constant. Taken where the chain is no larger and no slower (a strict
-/// level), or by the rate 1 B = 3 T.
+/// the constant. Taken where the chain is no larger and no slower (-Os, -Oz),
+/// or by the rate 1 B = 3 T (1 B = 40 T at -O1: word_sign_zero_guard's
+/// `* 1000` is 12 B for 43% of the clocks).
 ///
 /// DEVIATE Z80-MUL-CHAIN (owner z80, exit 2026-11-24): the pin has no such
 /// search; AArch64's `performMulCombine` and X86's `combineMul` are the
@@ -244,6 +253,7 @@ fn word_chain_price(chain: &[(&'static str, i64)]) -> (i64, i64) {
 pub(crate) fn word_chain(
     c: i64,
     strict: bool,
+    o1: bool,
     forced: bool,
 ) -> Option<(Vec<(&'static str, i64)>, (i64, i64), (i64, i64))> {
     if c < 3 {
@@ -262,7 +272,7 @@ pub(crate) fn word_chain(
     let price = word_chain_price(&chain);
     let wins = if forced {
         price.1 <= call.1
-    } else if strict {
+    } else if strict && !o1 {
         price.0 <= call.0 && price.1 <= call.1
     } else {
         weight * price.0 + price.1 < limit
@@ -281,13 +291,14 @@ fn word_product_chain(
     dag: &mut SelectionDAG,
     node: SDValue,
     strict: bool,
+    o1: bool,
     credit: bool,
 ) -> Option<SDValue> {
     let (x, bits) = (dag.operand(node, 0), dag.constant(dag.operand(node, 1))?);
     if dag.constant(x).is_some() {
         return None;
     }
-    let (chain, _, _) = word_chain(i64::from(bits as u16), strict, credit)?;
+    let (chain, _, _) = word_chain(i64::from(bits as u16), strict, o1, credit)?;
     let shift = |dag: &mut SelectionDAG, value: SDValue, by: i64| {
         let by = dag.get_constant(by as u128, EVT::I8);
         dag.get_node(ISD::Shl, EVT::I16, &[value, by])
@@ -432,7 +443,7 @@ impl CombineHooks for Z80Combines {
         if dag.opcode(node) == ISD::Mul {
             let word = dag.value_type(node) == EVT::I16;
             return (word && level == CombineLevel::BeforeLegalizeTypes)
-                .then(|| word_product_chain(dag, node, self.strict, self.chain_credit))
+                .then(|| word_product_chain(dag, node, self.strict, self.o1, self.chain_credit))
                 .flatten();
         }
         if dag.opcode(node) == ISD::And {
@@ -568,13 +579,16 @@ pub fn select_block(
     // for its long products, the call is `__umulhisi3` for two words too: the
     // same call, half the steps. At -O2 and -O3 a loop's products stay
     // inline (DEVIATE Z80-COLD-LIBCALL: the pin sizes per function only).
-    if (cold || STRICT_LEVEL.with(std::cell::Cell::get) || long_multiply) && !sized {
+    if (cold || STRICT_LEVEL.with(std::cell::Cell::get) || long_multiply || CALL_PRODUCTS.with(std::cell::Cell::get))
+        && !sized
+    {
         tli.set_libcall_name(ISD::UMulLoHi, MVT::I16, "__umulhisi3");
     }
     let mut lowering = Z80Lowering { sized: sized && !speed_routines };
     let mut combines = Z80Combines {
         long_multiply: (sized || all_calls) && long_multiply,
         strict: STRICT_LEVEL.with(std::cell::Cell::get),
+        o1: O1_LEVEL.with(std::cell::Cell::get),
         chain_credit,
     };
     let arch = Z80;

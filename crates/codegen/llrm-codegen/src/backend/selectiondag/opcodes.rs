@@ -264,11 +264,12 @@ fn gpr_xmm_move(name: &str) -> Option<&'static str> {
 /// is `movsd_x`. `SQRTSDr` names its tied source too. A pin name that is none
 /// of these is `None`.
 fn sse(name: &str) -> Option<(String, Option<u32>, Option<u32>, Vec<char>)> {
-    const ARITHMETIC: [&str; 67] = [
+    const ARITHMETIC: [&str; 70] = [
         "ADDSS", "ADDSD", "SUBSS", "SUBSD", "MULSS", "MULSD", "DIVSS", "DIVSD", "MINSS", "MINSD", "MAXSS", "MAXSD",
         "SQRTSS", "SQRTSD", "MOVSS", "MOVSD", "UCOMISS", "UCOMISD", "XORPS", "ANDPS", "ANDNPS", "ORPS", "CMPSS",
         "CMPSD", "PADDB", "PADDW", "PADDD", "PADDQ", "PSUBB", "PSUBW", "PSUBD", "PSUBQ", "PAND", "PANDN", "POR",
         "PXOR", "PMULLW", "PSLLW", "PSLLD", "PSLLQ", "PSRLW", "PSRLD", "PSRLQ", "PSRAW", "PSRAD", "PSHUFD", "PUNPCKLQDQ", "PMULUDQ", "PUNPCKLDQ",
+        "PSHUFLW", "PMULHW", "PMULHUW",
         "PUNPCKLBW", "PUNPCKHBW", "PACKUSWB", "PACKSSWB", "PUNPCKLWD", "PUNPCKHWD", "PUNPCKHDQ", "PUNPCKHQDQ", "PACKSSDW",
         "PCMPEQB", "PCMPEQW", "PCMPEQD", "PCMPGTB", "PCMPGTW", "PCMPGTD", "PMOVMSKB", "MOVMSKPS", "MOVMSKPD",
     ];
@@ -320,7 +321,8 @@ fn sse(name: &str) -> Option<(String, Option<u32>, Option<u32>, Vec<char>)> {
     found.map(|(mnemonic, width, result, letters)| {
         let letters = if mnemonic.starts_with("sqrt") && letters.len() == 1 { vec!['r', 'r'] } else { letters };
         // `PSHUFDri` names its source and the immediate; the destination is not tied to the source.
-        let letters = if mnemonic == "pshufd" { std::iter::once('r').chain(letters).collect() } else { letters };
+        let untied = matches!(mnemonic.as_str(), "pshufd" | "pshuflw");
+        let letters = if untied { std::iter::once('r').chain(letters).collect() } else { letters };
         (mnemonic, width, result, letters)
     })
 }

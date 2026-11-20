@@ -108,7 +108,12 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // is 4.
         fills_pattern_at_speed: true,
         libc_memcpy: true,
-        pops_arguments_at_size: false,
+        // DEVIATE PO1 (owner llrm-target-x86-m16-b, exit 2026-11-20): -Os pops
+        // a call's one or two argument words, as gcc does: `add esp,4` is
+        // 3 bytes, `pop ecx` 1 (QB m32 Os control.c, 108 sites). Not in a loop:
+        // a pop is 4 clocks, the add 1 (select_of_constants +10% clocks).
+        pops_arguments_at_size: true,
+        pops_arguments_cold_only_at_size: true,
         // DEVIATE X87-FCMP-AH at -O1 (owner x87-c, exit 2026-11-24): `sahf`,
         // not `test ah`, where bytes are held: x_ld_cmp3 O1 184 -> 180 B. m16
         // O1 keeps the test until its counted cells are judged.
@@ -248,6 +253,7 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // O3 clocks bar (gcc 61,005) is kept at 5 (61,150) and lost at 6
         // (64,485): the machine count and the measured flip agree.
         licm_float_register_limit: Some(5),
+        inline_trial_credit_gate: true,
         loop_idiom_copy_trial_at_size: true,
         // DEVIATE BACKTHREAD-M32 (owner x87-b, exit 2026-12-15): no backward
         // threading. A/B over the 121 m32 programs at -O1..-Os (2026-11-18):
@@ -317,6 +323,10 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // DEVIATE SZ2 (owner x86-m32, exit 2026-11-20): -Os keeps a once-called
         // callee whose copy grows the code (gcc does; the pin copies it).
         inline_size_guard_single_site: true,
+        // The SZ1 guard yields where the pin's `updateThreshold` raises an
+        // `inlinehint` callee to 325 at an `optsize` caller (QuickrBasic
+        // operands.c: `hot_int` into its wrappers).
+        inline_size_guard_yields_to_inlinehint: true,
         // DEVIATE MEMSET-GAP (owner llrm-target-x86-m16-b, exit 2026-11-27): see `Tuning`.
         memset_gap_merge_at_size: true,
         // DEVIATE SZ3 (owner x86-m32, exit 2026-11-20): an -Os SZ2 trial also

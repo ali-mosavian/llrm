@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/inlinecost.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/inlinecost.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/inlinecost.rs sha256:f28ddf13d774f9d0348c13b528daa3cdbc999101f2dba012adf63107d8dc8de1 -->
+<!-- src: crates/opt/llrm-transforms/src/inlinecost.rs sha256:8f9209c5637ba77dbcc8a7d4eda77fc88a78ab3d1ee398cc899f02abe1952b33 -->
 
 # inlinecost
 
@@ -81,7 +81,7 @@ each site's cost and threshold beside the existing decision; with
   local callee, which goes with it, is the pin's. No shape of callee but the
   loop and the one smaller than its call is tested. A target may say the
   guard stands down for an `inlinehint` callee at an `optsize` caller
-  (`Tti::opt_size_inline_guard_yields_to_inlinehint`, arm64: yes): the
+  (`Tti::opt_size_inline_guard_yields_to_inlinehint`, arm64 and x86-m32: yes): the
   pin's `updateThreshold` raises the threshold to `InlineHintThreshold`
   (325) there, and its cost under that is the verdict (QuickrBasic
   operands.c -Os `hot_operand` into `hot_int`, 26 units against two 3-unit

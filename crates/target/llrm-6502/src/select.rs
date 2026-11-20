@@ -176,6 +176,9 @@ impl TextKey {
 
 thread_local! {
     static TEXTS: std::cell::RefCell<Option<HashMap<TextKey, String>>> = const { std::cell::RefCell::new(None) };
+    /// The text of a function, and what it was before the transfer of known
+    /// constants; where those differ.
+    static PLAINS: std::cell::RefCell<HashMap<String, String>> = std::cell::RefCell::new(HashMap::default());
     static TEXT_HITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static TEXT_COMPILES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
@@ -189,6 +192,7 @@ pub struct TextCache(alloc::AllocationCache);
 impl TextCache {
     pub fn new() -> TextCache {
         TEXTS.with(|texts| *texts.borrow_mut() = Some(HashMap::default()));
+        PLAINS.with(|plains| plains.borrow_mut().clear());
         TextCache(alloc::AllocationCache::new())
     }
 }
@@ -202,6 +206,7 @@ impl Default for TextCache {
 impl Drop for TextCache {
     fn drop(&mut self) {
         TEXTS.with(|texts| *texts.borrow_mut() = None);
+        PLAINS.with(|plains| plains.borrow_mut().clear());
     }
 }
 
@@ -274,18 +279,36 @@ fn function_text_once(
         selection.tuning,
         selection.source.as_ref().map(|(file, line)| (file.as_str(), *line)),
     )?;
+    let plain = alloc::take_plain();
     let export = module.named(name).is_none_or(|id| exported(module.global(id).linkage));
-    let mut body = format!("{}{code}", if export { format!(".export {name}\n") } else { String::new() });
-    body.push_str(".segment \"BSS\"\n");
-    for (slot, size) in slots {
-        writeln!(body, "{slot}: .res {size}").unwrap();
+    let wrap = |code: &str| {
+        let mut body = format!("{}{code}", if export { format!(".export {name}\n") } else { String::new() });
+        body.push_str(".segment \"BSS\"\n");
+        for (slot, size) in &slots {
+            writeln!(body, "{slot}: .res {size}").unwrap();
+        }
+        body.push_str(".segment \"CODE\"\n");
+        body
+    };
+    let body = wrap(&code);
+    if let Some(plain) = plain {
+        PLAINS.with(|plains| plains.borrow_mut().insert(body.clone(), wrap(&plain)));
     }
-    body.push_str(".segment \"CODE\"\n");
     Ok(body)
 }
 
+/// Each of `pieces` as the allocator wrote it without the transfer of known
+/// constants (`drop_known_loads`), or itself where that pass changed nothing:
+/// the text the module's outliner is also tried on.
+pub fn plain_pieces(pieces: &[String]) -> Vec<String> {
+    PLAINS.with(|plains| {
+        let plains = plains.borrow();
+        pieces.iter().map(|piece| plains.get(piece).cloned().unwrap_or_else(|| piece.clone())).collect()
+    })
+}
+
 /// The functions `parts` of `module` as ca65 text, in order. The callee-save
-/// helpers are linked once and cost [`alloc::SAVE_HELPERS_BYTES`], so the
+/// helpers are linked once and cost [`alloc::save_helpers_bytes`], so the
 /// functions that would use them keep them only where together they save more
 /// than that; otherwise each saves its cells inline. Break-even: `k` users of
 /// `n = 3` cells (9 bytes each) pay from 4 users; one user of 8 cells (39
@@ -315,7 +338,7 @@ pub fn module_text(
             gain += bytes(&text)? - bytes(&texts[at])?;
             inline.push(text);
         }
-        if gain <= alloc::SAVE_HELPERS_BYTES {
+        if gain <= alloc::save_helpers_bytes(users.iter().map(|&at| texts[at].as_str())) {
             for (at, text) in users.into_iter().zip(inline) {
                 alloc::keep_saves_inline(parts[at].0);
                 texts[at] = text;
