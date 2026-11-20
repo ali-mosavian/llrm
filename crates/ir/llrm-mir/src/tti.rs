@@ -1598,6 +1598,13 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE LSPLIT (owner arm64, exit 2026-11-24): `loopsplit`, GCC's
+    /// `-fsplit-loops` (`tree-ssa-loop-split.cc`), a pass the pin does not
+    /// have. False: the loop is left whole.
+    fn loop_split(&self) -> bool {
+        false
+    }
+
     /// DEVIATE LM2 (target opt-in, owner w11, exit 2026-11-24): LICM may hoist
     /// a load behind a loop guard when SCEV bounds the offset of its pointer
     /// inside the object it is based on (`licm::range_deref`), not only where

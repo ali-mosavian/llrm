@@ -1359,6 +1359,13 @@ impl Tti for X86 {
         self.tuning.ipa_cp_clones_at_speed
     }
 
+    /// gcc and the pin make no clone at -O2 (`-fipa-cp-clone` is on at -O3
+    /// only; the pin has none): QuickrBasic `repl.c` -O2 m32 16,336 -> 10,738 B
+    /// (gcc 6,025), `read_file` cloned eight times for 40 clocks a call.
+    fn ipa_cp_clones_at_o2(&self) -> bool {
+        false
+    }
+
     fn ipa_cp_max_clones(&self) -> usize {
         self.tuning.ipa_cp_max_clones
     }
