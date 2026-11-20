@@ -82,8 +82,9 @@ pub fn translate(
 // the constraints name (`{eax}`, `{st}`, an address register for a memory
 // operand) becomes a call of `llrm.ia32.asm.*` (`ia64` on x86-64), its bytes
 // assembled here. A constraint that leaves the register to the allocator (`r`,
-// `q`, `g`, a constant) is refused with its name: S2 (`ISD::INLINEASM`) takes
-// those.
+// `q`, `x`) takes the next register of the pool at the site, as `={..}` and
+// `{..}` name one (DEVIATE: S2, the pin's `ISD::INLINEASM`, leaves the choice
+// to the allocator); `g` and a constant are refused with their name.
 
 /// The register file a flat block's mode names: the registers its target's
 /// `@asm` line lists, with the family each belongs to.
@@ -161,6 +162,15 @@ impl Flat {
             .find(|one| one.root == root && one.bits == width && self.asm.contains(&one.name))
             .map_or(name, |one| one.name.as_str())
             .to_owned()
+    }
+
+    /// The vector registers an `x` operand may take, in the allocation order.
+    fn vector_pool(&self) -> Vec<&str> {
+        self.registers
+            .iter()
+            .filter(|one| one.name.starts_with("xmm") && self.asm.contains(&one.name))
+            .map(|one| one.name.as_str())
+            .collect()
     }
 
     /// The registers a pointer may be passed in: address width, in the
@@ -353,6 +363,32 @@ fn flat_block(
             operands.push((item.to_owned(), Some(Place::Register(register.clone(), view))));
             inputs.push(register);
             input_values.push(argument.clone());
+        } else if matches!(item, "r" | "q" | "x" | "=r" | "=q" | "=x") {
+            let output = item.starts_with('=');
+            let register = if item.ends_with('x') {
+                let mut vectors = flat.vector_pool();
+                vectors.retain(|one| !named.contains(&flat.root(one)));
+                vectors.retain(|one| !operands.iter().any(|(_, place)| matches!(place, Some(Place::Register(taken, _)) if taken == one)));
+                vectors.first().map(|one| (*one).to_owned())
+            } else if pool.is_empty() {
+                None
+            } else {
+                Some(pool.remove(0).to_owned())
+            }
+            .ok_or("asm: no register left for an operand")?;
+            if output {
+                let view = flat.view(&register, &output_types.next().unwrap_or_default());
+                operands.push((item.to_owned(), Some(Place::Register(register.clone(), view))));
+                outputs.push(register.clone());
+                direct_outputs.push(register);
+            } else {
+                let argument = arguments.get(next_argument).ok_or("asm: an operand without an argument")?;
+                next_argument += 1;
+                let view = flat.view(&register, &argument.0);
+                operands.push((item.to_owned(), Some(Place::Register(register.clone(), view))));
+                inputs.push(register);
+                input_values.push(argument.clone());
+            }
         } else if !item.is_empty() && item.bytes().all(|one| one.is_ascii_digit()) {
             let tied: usize = item.parse().map_err(|_| "asm: a tie")?;
             let register = match operands.get(tied) {

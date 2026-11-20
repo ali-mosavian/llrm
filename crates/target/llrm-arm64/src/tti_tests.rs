@@ -454,6 +454,14 @@ fn lftr_counts_any_constant_stride() {
     assert!(AArch64::of_cpu("generic").unwrap().lftr_any_stride());
 }
 
+/// DEVIATE LSPLIT: `loopsplit` runs on arm64 only; the default is off.
+#[test]
+fn arm64_splits_loops_and_the_default_does_not() {
+    use llrm_mir::tti::Tti;
+    assert!(AArch64::of_cpu("generic").unwrap().loop_split());
+    assert!(!llrm_mir::tti::Basic.loop_split());
+}
+
 /// AArch64 has no `isSExtCheaperThanZExt` override at the pin (the base class
 /// says no, TargetLowering.h#L3329); the hook said yes for 32 -> 64 and cited a
 /// pin line that does not exist.

@@ -678,6 +678,11 @@ impl Tti for AArch64 {
         true
     }
 
+    /// DEVIATE LSPLIT (owner arm64, exit 2026-11-24): see `Tti::loop_split`.
+    fn loop_split(&self) -> bool {
+        true
+    }
+
     /// DEVIATE LM2 (owner w11, exit 2026-11-24): nbody_fixed -O3 723,134
     /// instructions against 645,136; the pos[body] loads of the unrolled pair
     /// loop were redone in every copy.
