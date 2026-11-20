@@ -49,6 +49,20 @@ class Rulings(unittest.TestCase):
         self.assertEqual(rows, [("68020", "shift64_variable", "Os", 416, 310265, 546, 319063)])
         self.assertEqual(judge("Os", *rows[0][3:]), "at_or_below")
 
+    def test_a_side_whose_library_link_failed_is_unmeasured_not_small(self):
+        """widening_multiply -Os 68000: ours linked 1366 B of library, gcc's link failed (empty cell) and its 339 B code alone read as the whole program: ours +368% worse."""
+        import os
+        import tempfile
+
+        with tempfile.NamedTemporaryFile("w", suffix=".tsv", delete=False) as out:
+            out.write("68000\twidening_multiply\tOs\t301\t\t339\t\t1366\t\n")
+        try:
+            rows = read([out.name])
+        finally:
+            os.unlink(out.name)
+        self.assertEqual(rows[0][3:], (1667, None, None, None))
+        self.assertEqual(judge("Os", *rows[0][3:]), "unmeasured")
+
 
 if __name__ == "__main__":
     unittest.main()

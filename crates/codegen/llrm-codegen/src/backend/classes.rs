@@ -99,6 +99,8 @@ pub struct RegisterClasses {
     pub uncheap_move_immediate_at_size: fn(u8, i64) -> bool,
     /// `Target::hoist_by_pressure`.
     pub hoist_by_pressure: bool,
+    /// `Target::hoists_register_free_ops`.
+    pub hoists_register_free_ops: bool,
 }
 
 impl RegisterClasses {
@@ -199,6 +201,7 @@ impl RegisterClasses {
             cheap_move_row: arch.cheap_move_row(),
             uncheap_move_immediate_at_size: arch.uncheap_move_immediate_at_size(),
             hoist_by_pressure: arch.hoist_by_pressure(),
+            hoists_register_free_ops: arch.hoists_register_free_ops(),
         };
         classes.status_word = classes.found_status_word();
         classes

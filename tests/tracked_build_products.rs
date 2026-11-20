@@ -5,7 +5,7 @@
 use std::process::Command;
 
 const PRODUCTS: &[&str] = &["obj", "exe", "o", "map", "lst"];
-const FIXTURES: &[&str] = &["tests/inputs/", "tests/fixtures/"];
+const FIXTURES: &[&str] = &["tests/inputs/", "tests/fixtures/", "tools/testdata/"];
 
 #[test]
 fn test_no_tracked_file_is_a_build_product_outside_the_fixtures() {

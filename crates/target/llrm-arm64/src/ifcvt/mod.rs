@@ -267,10 +267,14 @@ pub fn can_insert_select(
             }
             Some(cycles)
         }
-        // Scalar floats are `fcsel`. A 128-bit vector has no single select;
-        // the width of a float register is not kept here, so vectors stay
-        // with the branch (IC4).
-        Reg::Fpr(_) => Some((5 + extra, 2, 2)),
+        // Scalar floats are `fcsel`; the pin reads FPR16/32/64 off the
+        // destination's class and refuses the rest (`fp128`, vectors). The
+        // class is not kept here, so a width the defs cannot tell stays with
+        // the branch (IC4): `select_ops` needs it too.
+        Reg::Fpr(_) => {
+            value_fp_size(defs, t).or_else(|| value_fp_size(defs, f))?;
+            Some((5 + extra, 2, 2))
+        }
     }
 }
 
@@ -316,6 +320,20 @@ fn fold_into_select(
         }) if zero(*rn) => Some((Select::Csinv, Some(Reg::Gpr(*rm)))),
         _ => None,
     }
+}
+
+/// `value` is a virtual register whose unique definition is the constant 0 or
+/// a copy of the zero register.
+fn is_zero(
+    defs: &Defs,
+    value: Reg,
+) -> bool {
+    let value = remove_copies(defs, value);
+    value.is_virtual()
+        && matches!(
+            defs.get(&value),
+            Some(Op::Imm { value: 0, .. }) | Some(Op::Copy { src: Reg::Gpr(Gpr(31)), .. })
+        )
 }
 
 fn remove_copies(
@@ -704,6 +722,14 @@ fn select_ops(
         (Reg::Gpr(rd), Reg::Gpr(mut rn), Reg::Gpr(mut rm)) => {
             let width = value_width(defs, t).or_else(|| value_width(defs, f)).unwrap_or(Width::X);
             let (mut op, mut cond) = (Select::Csel, cc);
+            // A zero operand reads the zero register, as the pin's coalescer
+            // leaves `csel w0, w8, wzr, gt`.
+            if is_zero(defs, t) {
+                rn = Gpr(31);
+            }
+            if is_zero(defs, f) {
+                rm = Gpr(31);
+            }
             if let Some((kind, src)) = fold_into_select(defs, t) {
                 cond = cc.inverted();
                 rn = rm;
