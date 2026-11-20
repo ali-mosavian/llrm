@@ -305,6 +305,9 @@ impl Machine for Dos {
             // field offset in the displacement (`[bx+4]`) over a biased base (`_V+4`)
             // saved 3 to 6 B in 11 -Os objects, none larger.
             lsr_size_order: true,
+            // DEVIATE IU1 (owner w9, exit 2026-12-01): descending program order, not use-list
+            // order: +812 B over 26 cells with the default on; to be judged against the pin.
+            lsr_users_in_use_list_order: false,
             // DEVIATE SD446 (owner m16, exit 2026-12-01): a divide by a constant weighs
             // its bytes at the rate against the multiply-high sequence; the pin's
             // `isIntDivCheap` is `minsize` alone

@@ -177,6 +177,12 @@ impl Default for Z80Tti {
 pub const SPEED_MILLICLOCKS_PER_BYTE: i64 = 3000;
 
 impl Tti for Z80Tti {
+    // DEVIATE IU1 (owner w9, exit 2026-12-01): descending program order, not use-list
+    // order: net bytes grew with the default on at z80 (+827 B over 70 cells); to be judged against the pin.
+    fn lsr_users_in_use_list_order(&self) -> bool {
+        false
+    }
+
     /// DEVIATE VASTART-PROMOTE (owner x86-m32, exit 2026-11-27; z80 joins it):
     /// `va_list` is `char *`, so `va_start` is a store of the first
     /// variadic argument's address and the list lives in a register, as SDCC

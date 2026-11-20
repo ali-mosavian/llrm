@@ -441,9 +441,6 @@ impl llrm_target::Target for M64 {
                             rep_movs_at_size: true,
                             rep_movs_at_size_max: u64::MAX,
                             // DEVIATE IU1 (owner llrm-target-x86-m64, exit 2026-11-24): see
-                            // `Tti::lsr_users_in_use_list_order`.
-                            lsr_users_in_use_list_order: true,
-                            // DEVIATE IU1 (owner llrm-target-x86-m64, exit 2026-11-24): see
                             // `Tti::lsr_phi_users_first`.
                             lsr_phi_users_first: true,
                             lsr_size_order: true,

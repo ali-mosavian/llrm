@@ -258,6 +258,12 @@ fn size_letter(bits: u32) -> Option<char> {
 }
 
 impl Tti for M68k {
+    // DEVIATE IU1 (owner w9, exit 2026-12-01): descending program order, not use-list
+    // order: net bytes grew with the default on at m68k (+544 B over 68 cells); to be judged against the pin.
+    fn lsr_users_in_use_list_order(&self) -> bool {
+        false
+    }
+
     /// The pin's M68k has no FP register class: `FADD` is not legal on `float`
     /// or `double`, so `getFPOpCost` is `TCC_Expensive` (every float
     /// operation is a soft-float call).

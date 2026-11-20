@@ -130,6 +130,12 @@ impl Default for Mos6502 {
 }
 
 impl Tti for Mos6502 {
+    // DEVIATE IU1 (owner w9, exit 2026-12-01): descending program order, not use-list
+    // order: net bytes grew with the default on at 6502 (+4241 B over 73 cells); to be judged against the pin.
+    fn lsr_users_in_use_list_order(&self) -> bool {
+        false
+    }
+
     fn name(&self) -> &'static str {
         "mos6502"
     }
