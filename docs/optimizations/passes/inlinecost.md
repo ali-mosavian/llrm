@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/inlinecost.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/inlinecost.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/inlinecost.rs sha256:f28ddf13d774f9d0348c13b528daa3cdbc999101f2dba012adf63107d8dc8de1 -->
+<!-- src: crates/opt/llrm-transforms/src/inlinecost.rs sha256:d8d9824661a9c0f94a6ba44a881e7aeede69a6b4910d5ef6156ef95c93fab34d -->
 
 # inlinecost
 
@@ -81,12 +81,12 @@ each site's cost and threshold beside the existing decision; with
   local callee, which goes with it, is the pin's. No shape of callee but the
   loop and the one smaller than its call is tested. A target may say the
   guard stands down for an `inlinehint` callee at an `optsize` caller
-  (`Tti::opt_size_inline_guard_yields_to_inlinehint`, arm64: yes): the
-  pin's `updateThreshold` raises the threshold to `InlineHintThreshold`
-  (325) there, and its cost under that is the verdict (QuickrBasic
-  operands.c -Os `hot_operand` into `hot_int`, 26 units against two 3-unit
-  calls: 15,344 -> 10,400 B, the pin's 9,464). The guard still holds for a
-  callee with no hint.
+  (`Tti::opt_size_inline_guard_yields_to_inlinehint`, arm64: yes): the pin's
+  `updateThreshold` raises the threshold to `InlineHintThreshold` (325)
+  there, and its cost under that is the verdict (QuickrBasic operands.c -Os
+  `hot_operand` into `hot_int`, 26 units against two 3-unit calls: 15,344 ->
+  10,400 B, the pin's 9,464). The guard still holds for a callee with no
+  hint.
 - SZ1-SITE (owner m68k-b, exit 2026-11-24): the size rule (D11) prices a
   callee's instruction with the call site's constant arguments, not only a
   GEP as `isGEPFree` does (z80 `rotate_small` -O1 922 -> 576 B).
