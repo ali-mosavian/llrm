@@ -271,6 +271,7 @@ mod softfloat_run;
 mod spill_fold;
 mod spill_hoist;
 mod spill_moves;
+mod sp_adjust_fold;
 mod ssa_round_trip;
 mod stack_cleanup_order;
 mod startup_tables;
