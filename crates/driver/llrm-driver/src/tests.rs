@@ -5537,6 +5537,22 @@ fn an_extern_global_read_at_m64_pie_is_loaded_through_the_got() {
     assert!(listing.lines().any(|line| line.trim().starts_with("mov eax, dword ptr [")), "{listing}");
 }
 
+/// An extern table's address added to an index was folded into the add as
+/// `add rdi, qword ptr x` and relocated `R_X86_64_PC32`: it read the table's
+/// first eight bytes as the base, not the GOT entry (QB `pslook` -O1 segfaulted
+/// in every program, 324 of 327). The GOT load is the symbol's `mov` again.
+#[test]
+fn an_extern_table_address_added_to_an_index_at_m64_pie_is_a_got_load_first() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                @x = external constant [122 x i32]\n\
+                define ptr @f(i64 %n) {\n  %b = shl nuw nsw i64 %n, 2\n\
+                \x20 %p = getelementptr i8, ptr @x, i64 %b\n  ret ptr %p\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O1", "--isel=dag"]), text, "f").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(!listing.contains("ptr x"), "{listing}");
+}
+
 /// A call to a function defined elsewhere stays a direct `call` (the linker
 /// makes the PLT entry), and a global defined in the module is read directly:
 /// only an undefined data symbol goes through the GOT.
