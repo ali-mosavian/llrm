@@ -243,9 +243,16 @@ impl CalleeFacts {
         arch: &dyn llrm_target::Target,
         name: &str,
     ) -> i64 {
-        if let Some(bytes) = self.forced_alignment {
-            bytes
-        } else if self.aligned.contains(name) || arch.aligned_calls() {
+        self.forced_alignment.unwrap_or_else(|| self.convention_alignment(arch, name))
+    }
+
+    /// `stack_alignment` before `-mstack-alignment=` widens it.
+    fn convention_alignment(
+        &self,
+        arch: &dyn llrm_target::Target,
+        name: &str,
+    ) -> i64 {
+        if self.aligned.contains(name) || arch.aligned_calls() {
             self.convention
                 .get(name)
                 .and_then(|&number| arch.calling().by_number(number)?.stack_alignment)
@@ -264,7 +271,7 @@ impl CalleeFacts {
         arch: &dyn llrm_target::Target,
         name: &str,
     ) -> i64 {
-        self.stack_alignment(arch, name).min(arch.stack_alignment().max(arch.stack_slot_bytes()))
+        self.convention_alignment(arch, name).min(arch.stack_alignment().max(arch.stack_slot_bytes()))
     }
 
     /// What each function of the module does to memory, where the facts were
@@ -471,6 +478,17 @@ mod tests {
             [8, 8, 8, 8],
             "a convention's wider stack pads the call, not each object"
         );
+    }
+
+    /// `-mstack-alignment=16` pads each call, not each object: a function with
+    /// no double kept 4-byte objects (the flag made every one 8-aligned, and
+    /// widened every frame's locals).
+    #[test]
+    fn a_forced_stack_alignment_pads_calls_and_leaves_objects_alone() {
+        let module = parsed("define i32 @plain(i32 %x) {\nb0:\n  ret i32 %x\n}\n");
+        let facts = CalleeFacts::of(&module).0.aligning_every_call(Some(16));
+        assert_eq!(facts.stack_alignment(&llrm_x86_m32::M32, "plain"), 16);
+        assert_eq!(facts.object_alignment(&llrm_x86_m32::M32, "plain"), 4);
     }
 
     /// Callees come before their callers, which is when a caller finds the fact
