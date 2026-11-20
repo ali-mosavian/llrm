@@ -93,6 +93,20 @@ pub fn step_by_small_constants(function: &mut MFunction) -> bool {
             };
             let Some(&(b, n, value)) = made.get(&by) else { continue };
             let Some(name) = step_name(value) else { continue };
+            // The operand is moved into `hl` and stepped there: right where
+            // nothing reads it after (the copy joins the register `hl` holds
+            // it in). One read after the add (a store through it, a compare)
+            // keeps it in its own pair, and the printer steps the sum's pair
+            // where it is, one `inc` a step (loop_fusion -O1 `same`, +3 B).
+            // The operand is moved into `hl` and stepped there: right where the
+            // sum is read in the block (a call's argument). A sum only
+            // copied on, out of the block, is a pair stepped (an induction
+            // variable): the printer steps that pair where it is, one `inc`
+            // a step, where this is two exchanges or a copy back
+            // (loop_fusion -O1 `same`, +3 B).
+            if copied.is_some() && sum_leaves_the_block(&block.insts[at + 1..]) {
+                continue;
+            }
             // the carry is dead where the block sets the flags again before any
             // reader; a block that ends first leaves it to the printer's check
             let dead = block.insts[at + 1..]
@@ -121,4 +135,29 @@ pub fn step_by_small_constants(function: &mut MFunction) -> bool {
         function.blocks[b].insts.remove(n);
     }
     changed
+}
+
+/// Whether the register `hl`'s sum is copied into (the first copy of `after`)
+/// is only copied on, no instruction of the block reads it.
+fn sum_leaves_the_block(after: &[Inst]) -> bool {
+    let Some(first) = after.first() else { return false };
+    let (Kind::Copy, [Operand::Def(Reg::Virt(sum)), Operand::Use(Reg::Phys(from))]) = (first.kind, &first.operands[..])
+    else {
+        return false;
+    };
+    if *from != reg::HL {
+        return false;
+    }
+    let mut sum = *sum;
+    for inst in &after[1..] {
+        let reads = inst.operands.iter().any(|operand| matches!(operand, Operand::Use(Reg::Virt(one)) if *one == sum));
+        if !reads {
+            continue;
+        }
+        match (inst.kind, &inst.operands[..]) {
+            (Kind::Copy, [Operand::Def(Reg::Virt(next)), Operand::Use(Reg::Virt(_))]) => sum = *next,
+            _ => return false,
+        }
+    }
+    true
 }
