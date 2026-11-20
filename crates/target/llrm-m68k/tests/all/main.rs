@@ -162,6 +162,7 @@ mod lftr_budget;
 mod lftr_cpu;
 mod lftr_one_op;
 mod library_compare;
+mod licm_address_pressure;
 mod llc_flags;
 mod llc_stdout;
 mod llc_uses_the_slab;
