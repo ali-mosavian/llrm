@@ -2143,7 +2143,7 @@ impl Emitter<'_, '_> {
         n: u32,
     ) -> Option<u32> {
         let users = |value: SDValue| self.glue_users.get(&value).into_iter().flatten().copied();
-        let status = users(SDValue { node: n, res: 0 })
+        let status = users(self.compare_glue(n))
             .find(|&user| self.is_machine_named(SDValue { node: user, res: 0 }, "FNSTSW16r"))?;
         users(SDValue { node: status, res: 0 })
             .flat_map(|byte| users(SDValue { node: byte, res: 0 }))
@@ -2156,11 +2156,22 @@ impl Emitter<'_, '_> {
         n: u32,
     ) -> Option<u32> {
         self.glue_users
-            .get(&SDValue { node: n, res: 0 })
+            .get(&self.compare_glue(n))
             .into_iter()
             .flatten()
             .copied()
             .find(|&user| self.is_machine_named(SDValue { node: user, res: 0 }, "FNSTSW16r"))
+    }
+
+    /// The glue result of the compare `n`: its last value. A constrained
+    /// compare has its chain first, so the glue is result 1, not 0; reading
+    /// result 0 found no `sahf` and emitted the `fcom` ahead of whatever the
+    /// scheduler put between `fnstsw` and `sahf`.
+    fn compare_glue(
+        &self,
+        n: u32,
+    ) -> SDValue {
+        SDValue { node: n, res: (self.dag.node(SDValue { node: n, res: 0 }).values.len() - 1) as u8 }
     }
 
     /// What the instruction at the end of the glue chain from the `CopyToReg`

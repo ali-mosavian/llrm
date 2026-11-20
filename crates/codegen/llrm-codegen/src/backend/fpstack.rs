@@ -228,6 +228,8 @@ fn popping(what: &Semantics) -> Option<Semantics> {
         (Operation::FloatStore, "fistt") => Some(renamed("fisttp")),
         (Operation::Compare, "fcom") => Some(renamed("fcomp")),
         (Operation::Compare, "fcomp") if what.sources == [st(0), st(1)] => Some(renamed("fcompp")),
+        (Operation::Compare, "fucom") => Some(renamed("fucomp")),
+        (Operation::Compare, "fucomp") if what.sources == [st(0), st(1)] => Some(renamed("fucompp")),
         (Operation::Compare, "ficom") => Some(renamed("ficomp")),
         // `ST(i) = ST(i) op ST(0)` pops as `op p`.
         (Operation::FloatArith, _)
@@ -967,7 +969,14 @@ impl Fps<'_> {
         self.slot(right)?;
         self.move_to_top(left)?;
         let slot = self.slot(right)?;
-        self.emit(semantics(Operation::Compare, "fcom", Vec::new(), vec![st(0), st(slot)]));
+        // The quiet compare of a constrained `fcmp` stays `fucom`: `fcom`
+        // would signal on a quiet NaN.
+        let name = if self.one().what.as_ref().is_some_and(|what| what.name.as_deref() == Some("fucom")) {
+            "fucom"
+        } else {
+            "fcom"
+        };
+        self.emit(semantics(Operation::Compare, name, Vec::new(), vec![st(0), st(slot)]));
         self.deferred = Some(Vec::new());
         let (kills_left, kills_right) = (step.kills(left), step.kills(right));
         let result: Result<(), Raised> = (|| {
