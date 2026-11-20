@@ -237,6 +237,9 @@ pub fn drop_unreferenced(
         let mut referenced: std::collections::HashSet<&str> = std::collections::HashSet::new();
         for (at, block) in blocks.iter().enumerate() {
             referenced.extend(block.insts.iter().filter_map(label_of));
+            if crate::layout::address_taken(block) {
+                referenced.insert(block.label.as_str());
+            }
             referenced.extend(tables.iter().flat_map(|table| table.entries.iter().map(String::as_str)));
             let ends = matches!(
                 block.insts.last(),

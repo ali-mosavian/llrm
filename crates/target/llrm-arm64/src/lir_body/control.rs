@@ -121,6 +121,14 @@ pub(super) fn to_op(
                 targets.iter().map(|label| cx.block(&Target::Label(label.clone()))).collect::<Result<_, _>>()?;
             what
         }
+        Op::IndirectBr { target, targets } => {
+            let mut what = semantics(Operation::Jump, "IndirectBr", vec![], vec![gpr_loc(*target, Width::X)], None);
+            what.indirect = true;
+            what.computed = true;
+            what.table =
+                targets.iter().map(|label| cx.block(&Target::Label(label.clone()))).collect::<Result<_, _>>()?;
+            what
+        }
         Op::DbgValue { .. } => semantics(Operation::Nothing, "DBG_VALUE", vec![], vec![], None),
         _ => return Ok(None),
     }))
@@ -154,6 +162,10 @@ pub(super) fn back(
             table: gpr_of(&s[0]),
             index: gpr_of(&s[1]),
             id: what.table_id? as u32,
+            targets: what.table.iter().map(|&at| cx.template.blocks[at as usize].label.clone()).collect(),
+        },
+        "IndirectBr" => Op::IndirectBr {
+            target: gpr_of(&s[0]),
             targets: what.table.iter().map(|&at| cx.template.blocks[at as usize].label.clone()).collect(),
         },
         "RET" => Op::I(Inst::Ret { rn: gpr_of(&s[0]) }),

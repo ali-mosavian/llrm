@@ -1350,6 +1350,9 @@ struct Emitter<'a> {
     layout: &'a [u32],
     /// The blocks each jump table goes to, by table number.
     tables: &'a [Vec<u32>],
+    /// The blocks the block being emitted may go to: what an `indirectbr`
+    /// names.
+    successors: Vec<u32>,
     mf: MFunc,
     /// The virtual register each value is in.
     values: HashMap<(u32, u8), Gpr>,
@@ -1543,6 +1546,33 @@ impl Emitter<'_> {
                 .or_else(|| self.fvalues.get(&(value.node, value.res)).map(|&f| Operand::Fpr(f)))
                 .ok_or_else(|| format!("operand {:?} has no register", node.opcode)),
         }
+    }
+
+    /// `BR reg` of an `indirectbr`: the block's successors are the labels it
+    /// may reach.
+    fn indirect_branch(
+        &mut self,
+        id: u32,
+    ) -> Result<(), String> {
+        let node = self.dag.node(SDValue { node: id, res: 0 });
+        let target = node
+            .ops
+            .iter()
+            .find_map(|&op| match self.operand(op) {
+                Ok(Operand::Reg(register)) => Some(register),
+                _ => None,
+            })
+            .ok_or("BR: the address is in no register")?;
+        let targets = self
+            .successors
+            .iter()
+            .map(|&block| match self.label(block)? {
+                Target::Label(label) => Ok(label),
+                _ => Err("a block without a label".to_owned()),
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        self.ops.push(Op::IndirectBr { target, targets });
+        Ok(())
     }
 
     /// `BL symbol` or `BLR reg`: the registers it reads are the `Register`
@@ -1762,6 +1792,14 @@ impl Emitter<'_> {
         addend: i64,
     ) -> Result<(Target, bool), String> {
         let global = self.globals.get(id).ok_or("a global the module does not have")?;
+        // The address of a block is the offset of its function's symbol that
+        // `blockaddress` reserves: the block's own symbol.
+        if global.size.is_none()
+            && let Some(block) = llrm_codegen::backend::blockaddress::decode(addend)
+        {
+            let name = llrm_codegen::backend::blockaddress::symbol(llrm_mir::context::GlobalId(id), block);
+            return Ok((Target::Symbol { name, addend: 0 }, false));
+        }
         Ok((Target::Symbol { name: global.name.clone(), addend }, global.got))
     }
 
@@ -2395,6 +2433,7 @@ impl Emitter<'_> {
                     {
                         return Ok(());
                     }
+                    "BR" => return self.indirect_branch(id),
                     "BL" | "BLR" => return self.call(id, name),
                     "TCRETURNdi" | "TCRETURNri" | "TCRETURNriBTI" => return self.tail_call(id, name),
                     _ => {}
@@ -2883,6 +2922,7 @@ pub fn emit(
         function: name,
         layout: &first.layout,
         tables: &first.tables,
+        successors: Vec::new(),
         mf: MFunc::new(name),
         values: HashMap::default(),
         vregs: HashMap::default(),
@@ -2901,6 +2941,14 @@ pub fn emit(
         emitter.mf.slot(size, align);
     }
     emitter.mf.declared.clone_from(&first.declared);
+    emitter.mf.address_taken = first
+        .address_taken
+        .iter()
+        .filter_map(|(block, symbol)| {
+            let at = first.layout.iter().position(|one| one == block)?;
+            Some((block_label(name, at), symbol.clone()))
+        })
+        .collect();
     // The blocks `F128CSEL` splits make, after the selector's; and where each
     // split block now ends.
     let mut joined: Vec<MBlock> = Vec::new();
@@ -2908,6 +2956,7 @@ pub fn emit(
     let mut phi_counts: Vec<usize> = Vec::new();
     for (at, block) in blocks.iter().enumerate() {
         emitter.dag = &block.dag;
+        emitter.successors.clone_from(&block.successors);
         emitter.values.clear();
         emitter.fvalues.clear();
         emitter.segment = block_label(name, at);
@@ -3000,6 +3049,7 @@ pub fn emit(
                     Some(
                         Op::Return { .. }
                             | Op::JumpTable { .. }
+                            | Op::IndirectBr { .. }
                             | Op::Unreachable
                             | Op::I(Inst::Branch { link: false, .. } | Inst::Brk { .. })
                     )

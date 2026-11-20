@@ -64,6 +64,12 @@ pub enum Op {
         /// The labels of the blocks the entries go to; the table's successors.
         targets: Vec<String>,
     },
+    /// `BR target` of an `indirectbr`: the jump to the address in `target`, to
+    /// one of the blocks whose labels `targets` names (its successors).
+    IndirectBr {
+        target: Gpr,
+        targets: Vec<String>,
+    },
     /// The end of a block the IR ends in `unreachable`: no code (the pin traps
     /// only for MachO and Windows CFI) and no successor, not even the block
     /// after it. Selection puts it last in the block.
@@ -111,6 +117,7 @@ impl Op {
                 f(RegRef::Gpr(dst), Role::Def);
                 f(RegRef::Gpr(scratch), Role::Def);
             }
+            Op::IndirectBr { target, .. } => f(RegRef::Gpr(target), Role::Use),
             Op::Call { callee, uses, defs, .. } => {
                 if let Callee::Register(register) = callee {
                     f(RegRef::Gpr(register), Role::Use);
@@ -441,6 +448,9 @@ pub struct MFunc {
     /// The IR's edge odds the allocator reads (`MachineBranchProbabilityInfo`);
     /// set just before allocation.
     pub alloc_odds: Option<llrm_spike_mf::placement::Odds>,
+    /// The blocks whose address is taken (`blockaddress`), `(label, symbol)`:
+    /// nothing else may drop or merge one, and the symbol is defined at it.
+    pub address_taken: Vec<(String, String)>,
 }
 
 /// A constant pool entry: `bytes` at `align`, under `label`.
@@ -506,10 +516,31 @@ pub fn falls_through(block: &MBlock) -> bool {
                 Op::I(Inst::Branch { link: false, target: Target::Label(_) })
                     | Op::Return { .. }
                     | Op::JumpTable { .. }
+                    | Op::IndirectBr { .. }
                     | Op::Unreachable
                     | Op::I(Inst::Brk { .. })
             ),
         )
+}
+
+/// The labels each block that ends in an `indirectbr` may jump to, by the
+/// block's label.
+pub fn indirect_targets(function: &MFunc) -> llrm_support::hash::HashMap<String, Vec<String>> {
+    function
+        .blocks
+        .iter()
+        .filter_map(|block| {
+            block
+                .ops
+                .iter()
+                .find_map(
+                    |op| match op {
+                        Op::IndirectBr { targets, .. } => Some((block.label.clone(), targets.clone())),
+                        _ => None,
+                    },
+                )
+        })
+        .collect()
 }
 
 /// The blocks `block` (the `at`th of `count`) can go to, from the labels its
@@ -531,7 +562,7 @@ pub fn successors_of(
             | Op::I(Inst::TestBranch { target: Target::Label(label), .. }) => {
                 out.extend(labels.get(label.as_str()).copied());
             }
-            Op::JumpTable { targets, .. } => {
+            Op::JumpTable { targets, .. } | Op::IndirectBr { targets, .. } => {
                 out.extend(targets.iter().filter_map(|label| labels.get(label.as_str()).copied()));
             }
             _ => {}
@@ -583,7 +614,10 @@ pub fn remove_unreachable_blocks(function: &mut MFunc) {
     let labels: HashMap<&str, usize> =
         function.blocks.iter().enumerate().map(|(at, block)| (block.label.as_str(), at)).collect();
     let mut reached = vec![false; count];
-    let mut pending = vec![0usize];
+    // A block whose address is taken is reached by a jump nothing here sees.
+    let mut pending: Vec<usize> = std::iter::once(0)
+        .chain(function.address_taken.iter().filter_map(|(label, _)| labels.get(label.as_str()).copied()))
+        .collect();
     while let Some(at) = pending.pop() {
         if at >= count || std::mem::replace(&mut reached[at], true) {
             continue;
@@ -736,7 +770,7 @@ pub fn lower_phis(function: &mut MFunc) -> Result<(), String> {
                         *target = Target::Label(edge.clone());
                         retargeted = true;
                     }
-                    Op::JumpTable { targets, .. } => {
+                    Op::JumpTable { targets, .. } | Op::IndirectBr { targets, .. } => {
                         for entry in targets.iter_mut().filter(|entry| **entry == label) {
                             *entry = edge.clone();
                             retargeted = true;

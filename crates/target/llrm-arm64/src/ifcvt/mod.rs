@@ -138,6 +138,7 @@ fn is_terminator(op: &Op) -> bool {
                 | Inst::Brk { .. }
         ) | Op::Return { .. }
             | Op::JumpTable { .. }
+            | Op::IndirectBr { .. }
     )
 }
 
@@ -435,7 +436,10 @@ impl Speculation {
             if facts.may_load || facts.may_store || facts.call || facts.side_effects {
                 return false;
             }
-            if matches!(op, Op::Call { .. } | Op::Return { .. } | Op::JumpTable { .. }) {
+            if matches!(
+                op,
+                Op::Call { .. } | Op::Return { .. } | Op::JumpTable { .. } | Op::IndirectBr { .. }
+            ) {
                 return false;
             }
             if facts.sets_flags {

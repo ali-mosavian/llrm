@@ -369,6 +369,7 @@ fn lower_function(
         optsize,
         &crate::mfunc::returned_registers(&machine),
         &dead_ends,
+        &crate::mfunc::indirect_targets(&machine),
     );
     let blocks = crate::pairs::fold(blocks);
     let mut blocks = crate::ldst_update::fold(blocks, &crate::mfunc::returned_registers(&machine), &tables);

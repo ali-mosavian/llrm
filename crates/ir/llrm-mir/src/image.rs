@@ -4,8 +4,10 @@
 //! layout is the module's data layout (sizes, struct offsets, byte order); what
 //! a symbol is called in the object is the caller's.
 
+use crate::context::GlobalId;
 use crate::context::signed;
 use crate::datalayout::DataLayout;
+use crate::module::BlockId;
 use crate::{ConstantExpr, ConstantId, ConstantKind, FloatKind, GlobalKind, Linkage, Module, Type, TypeId};
 
 /// A pointer in a constant's bytes: where, to what, and the addend.
@@ -23,6 +25,9 @@ pub struct Writer<'a> {
     pub module: &'a Module,
     pub layout: &'a DataLayout,
     pub symbol_of: &'a dyn Fn(&str) -> String,
+    /// What the function calls the symbol at a block `blockaddress` names; a
+    /// target without one refuses the constant.
+    pub block_symbol: Option<&'a dyn Fn(GlobalId, BlockId) -> String>,
 }
 
 impl Writer<'_> {
@@ -107,6 +112,22 @@ impl Writer<'_> {
                 relocs.push(Reloc { at, symbol: (self.symbol_of)(&name), addend: offset as i64 });
                 Ok(())
             }
+            // The symbol the function defines at the block (LLVM's
+            // `lowerConstant` of a `BlockAddress`); a block that is gone is 1.
+            (ConstantKind::Expr(ConstantExpr::BlockAddress { function, block }), Type::Pointer(space)) => {
+                let symbol = self.block_symbol.ok_or("a blockaddress in a global")?;
+                let GlobalKind::Function(target) = &self.module.global(*function).kind else {
+                    return Err("a blockaddress of a non-function".into());
+                };
+                match target.resolve_block_address(*block) {
+                    Some(block) => relocs.push(Reloc { at, symbol: symbol(*function, block), addend: 0 }),
+                    None => {
+                        let bytes = (self.layout.pointer(*space).bits / 8) as usize;
+                        self.put(out, at, &1u64.to_le_bytes()[..bytes]);
+                    }
+                }
+                Ok(())
+            }
             (kind, ty) => Err(format!("the global initializer {kind:?} of type {ty:?}")),
         }
     }
@@ -174,6 +195,17 @@ pub fn variables(
     layout: &DataLayout,
     symbol_of: &dyn Fn(&str) -> String,
 ) -> Result<Vec<Variable>, String> {
+    variables_with_blocks(module, layout, symbol_of, None)
+}
+
+/// [`variables`] for a target that defines a symbol at each address-taken
+/// block.
+pub fn variables_with_blocks(
+    module: &Module,
+    layout: &DataLayout,
+    symbol_of: &dyn Fn(&str) -> String,
+    block_symbol: Option<&dyn Fn(GlobalId, BlockId) -> String>,
+) -> Result<Vec<Variable>, String> {
     let types = &module.context.types;
     let mut out = Vec::new();
     for global in &module.globals {
@@ -186,7 +218,13 @@ pub fn variables(
         let size = layout.alloc_size(types, variable.ty) as usize;
         let mut bytes = vec![0u8; size];
         let mut relocs = Vec::new();
-        Writer { module, layout, symbol_of }.write(initializer, variable.ty, &mut bytes, 0, &mut relocs)?;
+        Writer { module, layout, symbol_of, block_symbol }.write(
+            initializer,
+            variable.ty,
+            &mut bytes,
+            0,
+            &mut relocs,
+        )?;
         let align = layout.global_align(types, variable.ty, variable.align, false, true, true) as usize;
         let zero = relocs.is_empty() && bytes.iter().all(|byte| *byte == 0);
         out.push(Variable {
@@ -252,7 +290,7 @@ mod tests {
         let mut relocs = Vec::new();
         let ok = module.context.constant(crate::Constant { ty: narrow, kind: ConstantKind::Bytes(vec![1, 2]) });
         let bad = module.context.constant(crate::Constant { ty: wide, kind: ConstantKind::Bytes(vec![1, 2, 3, 4]) });
-        let writer = Writer { module: &module, layout: &layout, symbol_of: &symbol_of };
+        let writer = Writer { module: &module, layout: &layout, symbol_of: &symbol_of, block_symbol: None };
         assert!(writer.write(ok, narrow, &mut out, 0, &mut relocs).is_ok());
         assert_eq!(out[..2], [1, 2]);
         assert!(writer.write(bad, wide, &mut out, 0, &mut relocs).is_err(), "copied unswapped");
