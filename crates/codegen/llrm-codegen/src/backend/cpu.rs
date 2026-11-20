@@ -692,6 +692,20 @@ impl Profile {
                 || words * self.cost("pop_r")? <= self.cost("alu_rr")?))
     }
 
+    /// [`Self::pops_arguments`] for a block that runs `runs` times a call of
+    /// its function (None: unknown): where the size choice is the target's
+    /// and it keeps the add in a loop, the add stays there.
+    pub fn pops_arguments_in_block(
+        &self,
+        words: i64,
+        runs: Option<f64>,
+    ) -> Result<bool, String> {
+        let hot = runs.is_some_and(|runs| runs > 1.0)
+            && self.size
+            && self.target().tti().is_some_and(|tti| tti.pops_arguments_cold_only_at_size());
+        Ok(!hot && self.pops_arguments(words)?)
+    }
+
     /// Whether a one-slot frame is `push`/`pop` of a scratch register in place
     /// of `sub`/`add` on the stack pointer: shorter, and where size is not
     /// wanted, only if no slower.
