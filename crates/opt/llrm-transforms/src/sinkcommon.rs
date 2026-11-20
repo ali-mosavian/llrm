@@ -600,7 +600,9 @@ pub(crate) fn can_be_merged(
     block: BlockId,
 ) -> bool {
     let mut body = function.iter_block(block);
+    // A block whose address is taken is no candidate (SimplifyCFG.cpp:8388).
     function.entry() != Some(block)
+        && !function.has_address_taken(block)
         && !function.predecessors(block).is_empty()
         && body.next().is_some_and(|first| {
             function.instruction(first).opcode == Opcode::Br

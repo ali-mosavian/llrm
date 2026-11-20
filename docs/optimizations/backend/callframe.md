@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/callframe.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/callframe.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/callframe.rs sha256:03bf836d53e9055d42b65424657b7ad2ea4899b113481a5542893c35f46811b7 -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/callframe.rs sha256:b17e71350f17331571b23ecd045aee6254f3eea17c5e86e9b77177bcc2ff7891 -->
 
 # callframe
 
@@ -28,12 +28,12 @@ stores the arguments to `[sp+k]` between `ADJCALLSTACKDOWN` and
 `ADJCALLSTACKUP`. `emit.rs` turns the pair into `call_frame_setup` /
 `call_frame_destroy` at every call at m32 and m64 (DEVIATE CF4), also the
 zero-byte ones, as the pin's; the pass is in the flow at every x86 width. At
-m16 (`Real16`) `emit.rs` makes `sub sp, N` / `add sp, N - M` itself (none for
-a call of no bytes), so the pass finds no setup and changes nothing there. A
-zero-byte pair at m16 moved no cell of the cause-A list (0 B on 14 cells,
-jpeg_fixed -Os +4 B). The m16 steps left: emit the pseudos for `Real16`
-(`slot` 2, 16-bit `Held` cells), let `ReserveCallFrame` lay the reserved
-area out in the m16 prologue, and re-check the readers of the old
+m16 (`Real16`) `emit.rs` makes `sub sp, N` / `add sp, N - M` itself (none
+for a call of no bytes), so the pass finds no setup and changes nothing
+there. A zero-byte pair at m16 moved no cell of the cause-A list (0 B on 14
+cells, jpeg_fixed -Os +4 B). The m16 steps left: emit the pseudos for
+`Real16` (`slot` 2, 16-bit `Held` cells), let `ReserveCallFrame` lay the
+reserved area out in the m16 prologue, and re-check the readers of the old
 `sub`/`add` (`cfi.rs`, `framefree`, `call_pops`) and the m16 byte and clock
 rows. Pushes made at m32 selection time (DEVIATE CG6 of row 50,
 `pushfold.rs`) are not this pass's input.

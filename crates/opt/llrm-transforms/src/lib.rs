@@ -74,6 +74,8 @@
 //! module's own header.
 
 pub mod adce;
+#[cfg(test)]
+mod addresstaken_tests;
 pub mod aggressive_instcombine;
 pub mod algebraic;
 pub mod alwaysinline;

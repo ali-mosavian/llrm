@@ -199,8 +199,12 @@ pub fn run_sccp(
         changed.anything |= cut;
         changed.control_flow |= cut;
     }
+    // A dead block whose address is taken stays, holding an `unreachable`
+    // (SCCP.cpp:118).
     for &dead in &blocks_to_erase {
-        rewrite.delete_block(function, dead);
+        if !function.has_address_taken(dead) {
+            rewrite.delete_block(function, dead);
+        }
     }
     changed.control_flow |= !blocks_to_erase.is_empty();
     remove_ssa_copies(function, &predicates);
