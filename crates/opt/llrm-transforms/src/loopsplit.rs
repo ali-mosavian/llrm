@@ -34,6 +34,7 @@ use llrm_mir::context::{ConstantKind, Context, mask};
 use llrm_mir::domtree::DomTree;
 use llrm_mir::edit::{Position, ValueMap};
 use llrm_mir::loopinfo::LoopInfo;
+use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::memory::Callees;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{Attribute, BinaryOp, Flags, IntPredicate, Opcode};
@@ -236,7 +237,7 @@ fn forced(
     cond: Operand,
     leaf: ValueId,
     holds: bool,
-    memo: &mut llrm_support::hash::HashMap<ValueId, Operand>,
+    memo: &mut IdMap<ValueId, Operand>,
 ) -> Operand {
     let Operand::Value(value) = cond else { return cond };
     if value == leaf {
@@ -811,7 +812,7 @@ pub fn split_loops(
     let mut session = ScevSession::within(context, &outer.globals, &outer.metadata, function);
     let headers: Vec<BlockId> =
         session.loops().get_loops_in_reverse_sibling_preorder().iter().rev().map(|one| one.get_header()).collect();
-    let mut skip = llrm_support::hash::HashSet::default();
+    let mut skip: IdSet<BlockId> = IdSet::new();
     let mut split = false;
     for header in headers {
         if skip.contains(&header) || !function.is_placed(header) || !session.loops().is_loop_header(header) {
