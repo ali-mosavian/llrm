@@ -369,6 +369,7 @@ fn lowered_once(
             level != Level::O0,
             matches!(level, Level::O2 | Level::O3 | Level::Omax),
         ),
+        matches!(level, Level::O2 | Level::O3 | Level::Omax),
     )?;
     // The target's LSR (with the m68k TTI), exit-test and multiply narrowing edit the IR after the shared pipeline's
     // last stage: the dump ends with what selection reads.
