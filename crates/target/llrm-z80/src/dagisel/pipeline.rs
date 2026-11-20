@@ -86,6 +86,9 @@ thread_local! {
     pub static INLINE_FILLS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// Set while a function is selected at a level that allows no trade between
     /// bytes and clocks (-O1, -Os, -Oz).
+    /// Select every product of two zero-extended words as the routine's call
+    /// (`prepare::WORD_PRODUCT`), where the form is partial products.
+    pub static CALL_PRODUCTS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     pub static STRICT_LEVEL: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// Set while a function with a variable 64-bit shift is selected the second
     /// time, each such shift an in-place loop over eight bytes of the frame
@@ -568,7 +571,9 @@ pub fn select_block(
     // for its long products, the call is `__umulhisi3` for two words too: the
     // same call, half the steps. At -O2 and -O3 a loop's products stay
     // inline (DEVIATE Z80-COLD-LIBCALL: the pin sizes per function only).
-    if (cold || STRICT_LEVEL.with(std::cell::Cell::get) || long_multiply) && !sized {
+    if (cold || STRICT_LEVEL.with(std::cell::Cell::get) || long_multiply || CALL_PRODUCTS.with(std::cell::Cell::get))
+        && !sized
+    {
         tli.set_libcall_name(ISD::UMulLoHi, MVT::I16, "__umulhisi3");
     }
     let mut lowering = Z80Lowering { sized: sized && !speed_routines };
