@@ -513,3 +513,40 @@ fn slp_runs_on_x86_64_alone() {
         }
     }
 }
+
+const VECTOR_ORACLE: &str = include_str!("tti_oracle_vector.txt");
+
+fn vector_ty_of(word: &str) -> VectorTy {
+    let (count, bits) = word[1..].split_once('i').expect(word);
+    VectorTy { lane: Ty::Int(bits.parse().expect(word)), count: count.parse().expect(word) }
+}
+
+/// What the cost model says of each vector row of `tti_oracle_vector.txt`: `Ok` where it prices it as the pin,
+/// `Err(ours)` where it prices it differently (`None`: not priced).
+fn vector_rows() -> Vec<(String, Result<(), Option<i64>>)> {
+    let x86 = X86::of_cpu("x86-64").unwrap();
+    let mut rows = Vec::new();
+    for line in VECTOR_ORACLE.lines().filter(|line| !line.starts_with('#')) {
+        let [_cpu, kind, name, cost] = line.split(' ').collect::<Vec<_>>()[..] else { panic!("{line}") };
+        let parts: Vec<&str> = name.split('.').collect();
+        let want = cost.parse::<i64>().unwrap();
+        let got = if let Some(op) = arith_of(parts[0]) {
+            x86.vector_arithmetic_cost(op, vector_ty_of(parts[1]), kind_of(kind))
+        } else {
+            x86.vector_cast_cost(cast_of(parts[0]).unwrap(), vector_ty_of(parts[2]), vector_ty_of(parts[1]), kind_of(kind))
+        };
+        rows.push((format!("{kind} {name}"), if got == Some(Cost::of(want)) { Ok(()) } else { Err(got.map(|c| c.value)) }));
+    }
+    rows
+}
+
+/// Every integer vector row of `tti_oracle_vector.txt`. Before: `mul <N x i64>` was unpriced (a loop with one stayed scalar,
+/// where the pin prices it 7 a register), `mul <N x i8>` within 64 bits took the 128-bit row (6, not 4), and a
+/// wide add or sub cost its registers in the latency and size kinds, the pin's base model one.
+#[test]
+fn the_vector_costs_equal_the_pinned_opt_on_x86_64() {
+    let rows = vector_rows();
+    let wrong: Vec<_> = rows.iter().filter_map(|(name, row)| row.as_ref().err().map(|got| format!("{name}: {got:?}"))).collect();
+    assert!(rows.len() > 600, "{} rows", rows.len());
+    assert!(wrong.is_empty(), "{} of {} differ:\n{}", wrong.len(), rows.len(), wrong[..wrong.len().min(40)].join("\n"));
+}

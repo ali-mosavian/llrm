@@ -1615,11 +1615,16 @@ impl Tti for X86 {
     }
 
     /// `X86TTIImpl::getArithmeticInstrCost`, the SSE2 rows of the integer ops
-    /// isel selects for every operand: `paddX`, `psubX`, `pand`, `por`, `pxor`
-    /// cost one per register; the multiplies of 8-, 16- and 32-bit lanes are
-    /// the pin's rows. Byte shifts, a variable shift count, the 64-bit
-    /// multiply and the divisions are not priced, so a loop holding one stays
-    /// scalar (DEVIATE X86V2, owner llrm-target-x86-m64-b, exit 2026-11-24).
+    /// isel selects for every operand, `LT.first` registers times the row of
+    /// the legalized type (`SSE2CostTable`): `pand`, `por`, `pxor` cost one;
+    /// `paddq`/`psubq` {1, 2, 1, 2}; the multiplies of 8-, 16-, 32- and
+    /// 64-bit lanes are the pin's rows. A vector of 8-bit lanes within 64 bits
+    /// is multiplied as 16-bit lanes (extend, `pmullw`, truncate). Other adds
+    /// and subtracts have no row: the base model, one per register for the
+    /// throughput and one for the other kinds (`TCK_RecipThroughput` only
+    /// scales). Byte shifts, a variable shift count and the divisions are
+    /// not priced, so a loop holding one stays scalar (DEVIATE X86V2, owner
+    /// llrm-target-x86-m64-b, exit 2026-11-24).
     fn vector_arithmetic_cost(
         &self,
         op: ArithOp,
@@ -1631,23 +1636,40 @@ impl Tti for X86 {
             return (self.word_vectors && is_word_vector(ty) && matches!(op, ArithOp::And | ArithOp::Or | ArithOp::Xor))
                 .then(|| Cost::of(1));
         }
+        let throughput = kind == CostKind::RecipThroughput;
         match op {
-            ArithOp::Add | ArithOp::Sub | ArithOp::And | ArithOp::Or | ArithOp::Xor => xmm_pieces(ty).map(Cost::of),
+            ArithOp::And | ArithOp::Or | ArithOp::Xor => xmm_pieces(ty).map(Cost::of),
+            // `paddq`, `psubq`: {1, 2, 1, 2}.
+            ArithOp::Add | ArithOp::Sub if ty.lane == Ty::Int(64) => {
+                xmm_pieces(ty).map(|pieces| Cost::of(pieces * [1, 2, 1, 2][kind.index()]))
+            }
+            ArithOp::Add | ArithOp::Sub => xmm_pieces(ty).map(|pieces| Cost::of(if throughput { pieces } else { 1 })),
             // `psllX`/`psrlX`/`psraX` by an immediate (a constant splat amount,
             // the only one the lowering takes); there is no 64-bit arithmetic
             // shift before AVX-512.
             ArithOp::Shl | ArithOp::LShr if matches!(ty.lane, Ty::Int(16 | 32 | 64)) => xmm_pieces(ty).map(Cost::of),
             ArithOp::AShr if matches!(ty.lane, Ty::Int(16 | 32)) => xmm_pieces(ty).map(Cost::of),
+            // `vXi8` multiplications are promoted to `vXi16`; a type of 64
+            // bits or less is extended and packed more cheaply.
+            ArithOp::Mul if ty.lane == Ty::Int(8) && ty.count <= 8 => {
+                let wide = VectorTy { lane: Ty::Int(16), count: ty.count };
+                Some(Cost::of(
+                    self.vector_cast_cost(CastKind::ZExt, wide, ty, kind)?.value
+                        + self.vector_cast_cost(CastKind::Trunc, ty, wide, kind)?.value
+                        + self.vector_arithmetic_cost(ArithOp::Mul, wide, kind)?.value,
+                ))
+            }
             // The pin's SSE2 rows, a register each: {throughput, latency, code
             // size, size and latency}.
             // `v16i8`: 2*unpack/2*pmullw/2*and/pack. `v8i16`: `pmullw`, the one
             // multiply that keeps its lane.
-            // `v4i32`: 3*pmuludq/4*shuffle.
+            // `v4i32`: 3*pmuludq/4*shuffle. `v2i64`: 3*pmuludq/3*shift/2*add.
             ArithOp::Mul => {
                 let row = match ty.lane {
                     Ty::Int(8) => [6, 18, 12, 12],
                     Ty::Int(16) => [1, 5, 1, 1],
                     Ty::Int(32) => [6, 8, 7, 7],
+                    Ty::Int(64) => [7, 10, 10, 10],
                     _ => return None,
                 };
                 xmm_pieces(ty).map(|pieces| Cost::of(row[kind.index()] * pieces))
