@@ -13,6 +13,7 @@ use llrm_support::hash::HashMap;
 mod aggregates;
 mod asmcall;
 mod codecall;
+mod constrained;
 mod mathops;
 mod memops;
 mod mergedcond;
@@ -820,6 +821,8 @@ impl<'a> Builder<'a> {
             node_map: IdMap::new(),
             pending_loads: Vec::new(),
             pending_exports: Vec::new(),
+            pending_constrained_fp: Vec::new(),
+            pending_constrained_fp_strict: Vec::new(),
             constants_out: HashMap::default(),
             phi_updates: Vec::new(),
             tail_calls: Vec::new(),
@@ -866,6 +869,11 @@ struct Builder<'a> {
     node_map: IdMap<ValueId, SDValue>,
     pending_loads: Vec<SDValue>,
     pending_exports: Vec<SDValue>,
+    /// `PendingConstrainedFP`: the out chains of `fpexcept.ignore` and
+    /// `maytrap` constrained operations, not yet joined to the root.
+    pending_constrained_fp: Vec<SDValue>,
+    /// `PendingConstrainedFPStrict`: the same for `fpexcept.strict`.
+    pending_constrained_fp_strict: Vec<SDValue>,
     constants_out: HashMap<ConstantId, u32>,
     phi_updates: Vec<(ValueId, u32)>,
     tail_calls: Vec<InstId>,
@@ -1274,12 +1282,21 @@ impl Builder<'_> {
         self.update_root(pending)
     }
 
-    /// `getRoot`.
+    /// `getRoot`: the pending constrained operations are chained with the
+    /// pending loads.
     fn root(&mut self) -> SDValue {
+        let constrained = std::mem::take(&mut self.pending_constrained_fp);
+        let strict = std::mem::take(&mut self.pending_constrained_fp_strict);
+        self.pending_loads.extend(constrained);
+        self.pending_loads.extend(strict);
         self.memory_root()
     }
 
+    /// `getControlRoot`: an `fpexcept.strict` operation is exported with the
+    /// block's values.
     fn control_root(&mut self) -> SDValue {
+        let strict = std::mem::take(&mut self.pending_constrained_fp_strict);
+        self.pending_exports.extend(strict);
         let pending = std::mem::take(&mut self.pending_exports);
         self.update_root(pending)
     }

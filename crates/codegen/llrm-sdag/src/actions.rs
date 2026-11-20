@@ -103,7 +103,7 @@ const INTS: [MVT; 6] = [MVT::I1, MVT::I8, MVT::I16, MVT::I32, MVT::I64, MVT::I12
 const FLOATS: [MVT; 3] = [MVT::F32, MVT::F64, MVT::F80];
 
 /// The constrained nodes whose result is a float.
-const STRICT_FP: [ISD; 9] = [
+const STRICT_FP: [ISD; 10] = [
     ISD::StrictFAdd,
     ISD::StrictFSub,
     ISD::StrictFMul,
@@ -111,6 +111,7 @@ const STRICT_FP: [ISD; 9] = [
     ISD::StrictFRem,
     ISD::StrictFMA,
     ISD::StrictFSqrt,
+    ISD::StrictFRint,
     ISD::StrictFpExtend,
     ISD::StrictFpRound,
 ];

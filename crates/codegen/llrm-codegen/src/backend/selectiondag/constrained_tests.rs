@@ -1,0 +1,108 @@
+//! `llvm.experimental.constrained.*` (`visitConstrainedFPIntrinsic`): each
+//! call is one `STRICT_*` node on the root's chain. Before, the builder
+//! refused them all ("intrinsic call llvm.experimental.constrained.fadd.f80"),
+//! so QuickrBasic's `pfpu.c` (`#pragma STDC FENV_ACCESS ON`) never selected.
+
+use llrm_mir::datalayout::DataLayout;
+
+use super::builder::{BuilderTarget, build_block};
+use super::dag::{SDNodeFlags, SelectionDAG};
+use super::function_lowering::FunctionLoweringInfo;
+use super::isd::ISD;
+
+const HEAD: &str = "target datalayout = \"e-p:32:32-i64:32-n8:16:32\"\n";
+const DECLARES: &str = "
+declare x86_fp80 @llvm.experimental.constrained.fadd.f80(x86_fp80, x86_fp80, metadata, metadata)
+declare x86_fp80 @llvm.experimental.constrained.fmul.f80(x86_fp80, x86_fp80, metadata, metadata)
+declare x86_fp80 @llvm.experimental.constrained.fpext.f80.f64(double, metadata)
+declare double @llvm.experimental.constrained.fptrunc.f64.f80(x86_fp80, metadata, metadata)
+declare i1 @llvm.experimental.constrained.fcmps.f80(x86_fp80, x86_fp80, metadata, metadata)
+";
+
+fn built(body: &str) -> Result<SelectionDAG, &'static str> {
+    let module = llrm_mir::parse::module(&format!("{HEAD}{body}{DECLARES}")).unwrap_or_else(|error| panic!("{error}"));
+    let layout = DataLayout::parse(module.datalayout.as_deref().unwrap()).unwrap();
+    let (id, _, function) = module
+        .functions()
+        .find(|(_, global, function)| !function.is_declaration() && global.name.as_deref() == Some("f"))
+        .expect("f");
+    let convention = crate::backend::isel::convention(&module, &layout, id, &llrm_x86_m32::M32).expect("a convention");
+    let mut info = FunctionLoweringInfo::new(function);
+    build_block(
+        &module,
+        function,
+        &layout,
+        &BuilderTarget::for_pointer_bits(32),
+        &llrm_x86_m32::M32,
+        &convention,
+        &mut info,
+        function.entry().unwrap(),
+    )
+    .map(|built| built.dag)
+    .map_err(|why| why.0)
+}
+
+fn nodes(
+    dag: &SelectionDAG,
+    opcode: ISD,
+) -> Vec<usize> {
+    (0..dag.nodes().len()).filter(|&at| dag.nodes()[at].opcode == opcode).collect()
+}
+
+/// The add is a `STRICT_FADD` of (chain, a, b) giving (value, chain); the
+/// exception behavior `strict` leaves `NoFPExcept` off.
+#[test]
+fn a_strict_add_is_one_chained_node_with_a_value_and_an_out_chain() {
+    let dag = built(
+        "define x86_fp80 @f(x86_fp80 %a, x86_fp80 %b) strictfp {\n  %s = call x86_fp80 @llvm.experimental.constrained.fadd.f80(x86_fp80 %a, x86_fp80 %b, metadata !\"round.dynamic\", metadata !\"fpexcept.strict\") strictfp\n  ret x86_fp80 %s\n}\n",
+    )
+    .expect("builds");
+    let adds = nodes(&dag, ISD::StrictFAdd);
+    assert_eq!(adds.len(), 1, "one STRICT_FADD");
+    let node = &dag.nodes()[adds[0]];
+    assert_eq!(node.values.len(), 2, "value and chain");
+    assert_eq!(node.ops.len(), 3, "chain, a, b");
+    assert_eq!(node.flags.0 & SDNodeFlags::NO_FP_EXCEPT.0, 0);
+    assert!(nodes(&dag, ISD::FAdd).is_empty(), "never the plain node: it carries no chain");
+}
+
+/// `fpexcept.ignore` sets `NoFPExcept`; an ignored operation after a strict
+/// one waits for it (`getFPOperationRoot`), or it could move across a read of
+/// the exception flags.
+#[test]
+fn an_ignored_operation_after_a_strict_one_is_chained_behind_it() {
+    let dag = built(
+        "define x86_fp80 @f(x86_fp80 %a, x86_fp80 %b) strictfp {\n  %s = call x86_fp80 @llvm.experimental.constrained.fadd.f80(x86_fp80 %a, x86_fp80 %b, metadata !\"round.dynamic\", metadata !\"fpexcept.strict\") strictfp\n  %m = call x86_fp80 @llvm.experimental.constrained.fmul.f80(x86_fp80 %s, x86_fp80 %b, metadata !\"round.dynamic\", metadata !\"fpexcept.ignore\") strictfp\n  ret x86_fp80 %m\n}\n",
+    )
+    .expect("builds");
+    let (add, mul) = (nodes(&dag, ISD::StrictFAdd)[0], nodes(&dag, ISD::StrictFMul)[0]);
+    assert_ne!(dag.nodes()[mul].flags.0 & SDNodeFlags::NO_FP_EXCEPT.0, 0);
+    let chain = dag.nodes()[mul].ops[0];
+    assert_eq!((chain.node as usize, chain.res), (add, 1), "the multiply hangs on the add's out chain");
+}
+
+/// Conversions and the compare carry what the pin gives them: `FP_ROUND` a
+/// second operand, the compares a condition code and an i1 result.
+#[test]
+fn conversions_and_compares_carry_their_extra_operands() {
+    let dag = built(
+        "define i1 @f(x86_fp80 %a, double %d) strictfp {\n  %t = call double @llvm.experimental.constrained.fptrunc.f64.f80(x86_fp80 %a, metadata !\"round.dynamic\", metadata !\"fpexcept.strict\") strictfp\n  %e = call x86_fp80 @llvm.experimental.constrained.fpext.f80.f64(double %t, metadata !\"fpexcept.strict\") strictfp\n  %c = call i1 @llvm.experimental.constrained.fcmps.f80(x86_fp80 %a, x86_fp80 %e, metadata !\"olt\", metadata !\"fpexcept.strict\") strictfp\n  ret i1 %c\n}\n",
+    )
+    .expect("builds");
+    let round = nodes(&dag, ISD::StrictFpRound)[0];
+    assert_eq!(dag.nodes()[round].ops.len(), 3, "chain, value, the pin's second operand");
+    let compare = nodes(&dag, ISD::StrictFSetCCS)[0];
+    assert_eq!(dag.nodes()[compare].ops.len(), 4, "chain, lhs, rhs, condition code");
+    assert_eq!(nodes(&dag, ISD::StrictFpExtend).len(), 1);
+}
+
+/// A word that is not an exception behavior is refused, not guessed.
+#[test]
+fn an_unknown_exception_behavior_is_refused() {
+    let why = built(
+        "define x86_fp80 @f(x86_fp80 %a, x86_fp80 %b) strictfp {\n  %s = call x86_fp80 @llvm.experimental.constrained.fadd.f80(x86_fp80 %a, x86_fp80 %b, metadata !\"round.dynamic\", metadata !\"fpexcept.sometimes\") strictfp\n  ret x86_fp80 %s\n}\n",
+    )
+    .err()
+    .expect("refused");
+    assert!(why.contains("exception behavior"), "{why}");
+}

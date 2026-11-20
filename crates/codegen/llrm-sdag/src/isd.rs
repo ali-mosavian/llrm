@@ -138,10 +138,10 @@ pub enum ISD {
     FNeg,
     FAbs,
     FSqrt,
-    /// The constrained forms (`STRICT_*`): operands (chain, value...) and results
-    /// (value, chain) -- `STRICT_FSETCC(S)` (chain, lhs, rhs, cc). The chain
-    /// keeps them in program order and ahead of anything that reads or writes
-    /// the floating-point environment.
+    /// The constrained forms (`STRICT_*`): operands (chain, value...) and
+    /// results (value, chain) -- `STRICT_FSETCC(S)` (chain, lhs, rhs, cc).
+    /// The chain keeps them in program order and ahead of anything that
+    /// reads or writes the floating-point environment.
     StrictFAdd,
     StrictFSub,
     StrictFMul,
@@ -149,6 +149,7 @@ pub enum ISD {
     StrictFRem,
     StrictFMA,
     StrictFSqrt,
+    StrictFRint,
     StrictFpExtend,
     StrictFpRound,
     StrictFpToSInt,
@@ -432,6 +433,7 @@ impl ISD {
             StrictFRem => "strict_frem",
             StrictFMA => "strict_fma",
             StrictFSqrt => "strict_fsqrt",
+            StrictFRint => "strict_frint",
             StrictFpExtend => "strict_fp_extend",
             StrictFpRound => "strict_fp_round",
             StrictFpToSInt => "strict_fp_to_sint",
@@ -520,9 +522,10 @@ impl ISD {
         name.to_string()
     }
 
-    /// `ConstrainedOps.def`'s `DAGN` column read backwards: the non-strict opcode a `STRICT_*` node is the constrained
-    /// form of, `None` for any other node. `STRICT_FSETCC(S)` have no single
-    /// non-strict opcode but `SetCC`.
+    /// `ConstrainedOps.def`'s `DAGN` column read backwards: the non-strict
+    /// opcode a `STRICT_*` node is the constrained form of, `None` for any
+    /// other node. `STRICT_FSETCC(S)` have no single non-strict opcode but
+    /// `SetCC`.
     pub fn non_strict(self) -> Option<ISD> {
         use ISD::*;
         Some(match self {
@@ -533,6 +536,7 @@ impl ISD {
             StrictFRem => FRem,
             StrictFMA => FMA,
             StrictFSqrt => FSqrt,
+            StrictFRint => FRint,
             StrictFpExtend => FpExtend,
             StrictFpRound => FpRound,
             StrictFpToSInt => FpToSInt,
@@ -556,6 +560,7 @@ impl ISD {
             FRem => StrictFRem,
             FMA => StrictFMA,
             FSqrt => StrictFSqrt,
+            FRint => StrictFRint,
             FpExtend => StrictFpExtend,
             FpRound => StrictFpRound,
             FpToSInt => StrictFpToSInt,
