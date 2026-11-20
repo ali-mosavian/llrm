@@ -76,3 +76,25 @@ fn x86_add_sub_or_and_cmpxchg_are_the_locked_instructions() {
         }
     }
 }
+
+/// `-S` prints `xchg` without encoding it; `-c` hit the encoder, which refused
+/// a 64-bit exchange (`swap64`, `take`: an indexed cell, pmou_press) with
+/// "llrm-llc: swap64: Semantics(op=EXCHANGE ...".
+#[test]
+fn a_64_bit_exchange_encodes_to_an_object() {
+    let llc = std::env::var_os("LLRM_LLC").expect("LLRM_LLC is not set: this test needs it and does not skip");
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("x86-xchg64-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    for level in ["-O1", "-Os"] {
+        let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
+            .env("LLRM_CC_TARGET", "x86_64-linux")
+            .env("LLRM_LLC", &llc)
+            .args([level, "-w", "-c", "-o"])
+            .arg(dir.join("a.o"))
+            .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/c/x86_atomic_rmw.c"))
+            .output()
+            .unwrap();
+        assert!(run.status.success(), "{level}: {}", String::from_utf8_lossy(&run.stderr));
+    }
+}

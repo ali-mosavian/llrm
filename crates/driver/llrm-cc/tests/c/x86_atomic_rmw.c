@@ -8,3 +8,5 @@ int cas(int expected, int desired) {
 }
 long long wq;
 long long swap64(long long v) { return __atomic_exchange_n(&wq, v, __ATOMIC_SEQ_CST); }
+unsigned long long presses[2];
+unsigned long long take(unsigned char b) { return __atomic_exchange_n(&presses[b], 0, __ATOMIC_RELAXED); }
