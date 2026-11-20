@@ -214,7 +214,10 @@ impl llrm_codegen::backend::selectiondag::emit_api::GlobalMap for Globals<'_> {
         symbol: u32,
         offset: i64,
     ) -> Addr {
-        if let Some(block) = llrm_codegen::backend::blockaddress::decode(offset) {
+        // The address of a block is an offset of a function's own symbol.
+        if let Some(block) = llrm_codegen::backend::blockaddress::decode(offset)
+            && self.0.global(llrm_mir::context::GlobalId(symbol)).function().is_some()
+        {
             let key = llrm_codegen::backend::blockaddress::key(llrm_mir::context::GlobalId(symbol), block);
             return Addr { index: key, ..Addr::new(Space::Segment, 0) };
         }

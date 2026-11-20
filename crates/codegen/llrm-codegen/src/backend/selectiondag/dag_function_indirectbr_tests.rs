@@ -35,9 +35,8 @@ fn done(name: &str) -> crate::backend::isel::Selected {
 #[test]
 fn an_indirectbr_is_a_jump_naming_its_blocks() {
     let done = done("f");
-    let jump = done
-        .body
-        .insns()
+    let insns = done.body.insns();
+    let jump = insns
         .iter()
         .filter_map(|one| one.what.as_ref())
         .find(|what| what.op == Operation::Jump && what.indirect && what.computed)
@@ -65,9 +64,8 @@ fn an_address_taken_block_is_defined_as_a_symbol() {
 #[test]
 fn a_block_address_in_another_function_is_the_symbol() {
     let done = done("g");
-    let symbol = done
-        .body
-        .insns()
+    let insns = done.body.insns();
+    let symbol = insns
         .iter()
         .filter_map(|one| one.what.as_ref())
         .flat_map(|what| what.sources.iter())
