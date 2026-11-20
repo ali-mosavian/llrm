@@ -1230,6 +1230,19 @@ pub trait Tti {
         None
     }
 
+    /// What a direct call inside a callee's body adds to the caller once the
+    /// body is inlined, in `kind`: the call and the arguments' setup, not the
+    /// return or the frame, which belong to the function called. None: the
+    /// call's flat price.
+    fn body_call_cost(
+        &self,
+        shape: &CallShape,
+        kind: CostKind,
+    ) -> Option<Cost> {
+        let _ = (shape, kind);
+        None
+    }
+
     /// DEVIATE INLINE-FRAME: the code-size guard counts the frame a caller
     /// with none builds for the callee's static allocas where the callee
     /// stays (the pin's cost has no frame term). False: the frame is taken to
@@ -1585,6 +1598,13 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE LSPLIT (owner arm64, exit 2026-11-24): `loopsplit`, GCC's
+    /// `-fsplit-loops` (`tree-ssa-loop-split.cc`), a pass the pin does not
+    /// have. False: the loop is left whole.
+    fn loop_split(&self) -> bool {
+        false
+    }
+
     /// DEVIATE LM2 (target opt-in, owner w11, exit 2026-11-24): LICM may hoist
     /// a load behind a loop guard when SCEV bounds the offset of its pointer
     /// inside the object it is based on (`licm::range_deref`), not only where
@@ -1928,6 +1948,12 @@ pub trait Tti {
     /// `Tuning::inline_dying_credit_at_os` (D13).
     fn inline_dying_credit_at_os(&self) -> bool {
         true
+    }
+
+    /// D13 keeps the credit at -Os for a hot call site (the pin's `HotCallSiteRelFreq`): a copy in a loop saves the
+    /// call's clocks every trip, which the byte trial does not price. Off by default (x86-m16 is strict bytes).
+    fn inline_hot_dying_credit_at_os(&self) -> bool {
+        false
     }
 
     /// `Tuning::unroll_never_grows_at_o1`.

@@ -15,7 +15,7 @@
 //! each named where it stood: `foldXorToXor`, `visitMaskedMerge`, the
 //! `ctlz`/`cttz` and `fneg` bitcast folds, the `i1` select form of `(A & B) ^
 //! (A | C)`, `foldXorOfICmps`, `canonicalizeAbs`,
-//! `reassociateForUses`, `canonicalizeLogicFirst`, `foldLogicOfIsFPClass`,
+//! `canonicalizeLogicFirst`, `foldLogicOfIsFPClass`,
 //! `canonicalizeConditionalNegationViaMathToSelect`,
 //! `foldBinOpOfDisplacedShifts`, `foldBitwiseLogicWithIntrinsics` and
 //! `foldMaskedAddXorPattern`.
@@ -668,7 +668,10 @@ pub fn visit_xor(
         return r;
     }
     let (op0, op1, _) = parts(c, inst);
-    FOLDS.iter().find_map(|fold| fold(c, inst, op0, op1)).unwrap_or(Visit::None)
+    if let Some(found) = FOLDS.iter().find_map(|fold| fold(c, inst, op0, op1)) {
+        return found;
+    }
+    crate::combine_reassociate_for_uses::reassociate_for_uses(c, inst).unwrap_or(Visit::None)
 }
 
 #[cfg(test)]

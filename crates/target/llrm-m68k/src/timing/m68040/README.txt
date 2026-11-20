@@ -1,5 +1,5 @@
 MC68040 USER'S MANUAL, SECTION 10 INSTRUCTION TIMING TABLES
-Source: /home/alim/scratch/fetch-m68000prm/MC68040UM.pdf, printed pages 10-1 to 10-37.
+Source: MC68040UM.pdf (the M68040 User's Manual), printed pages 10-1 to 10-37.
 
 FILES (title, printed page, data rows)
 t10-2.csv: Table 10-2. Number of Memory Accesses | page 10-3 | rows 17

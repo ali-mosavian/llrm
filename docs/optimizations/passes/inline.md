@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/inline.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/inline.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/inline.rs sha256:e892da0de3096d09383ef6859b0fd95412e9eeb6ca70b98e14701681ce5c5879 -->
+<!-- src: crates/opt/llrm-transforms/src/inline.rs sha256:0f975869d65f0f11aa6913c1da884d432d304747fc62b304441fff90f251f59b -->
 
 # inline
 
@@ -45,7 +45,7 @@ flowchart TB
 *Inlining a call to g*
 
 A callee can be cloned (`cloneable`: defined, `splice` carries it, it
-returns, it is not recursive, not `noinline`, and does not call
+is not recursive, not `noinline`, and does not call
 `setjmp`-like functions); whether it is copied at a site is
 `inlinecost::decide`'s, the walk's ([`crate::walk`](walk.md)).
 
