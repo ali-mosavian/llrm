@@ -1087,12 +1087,14 @@ impl<'a> TypeLegalizer<'a> {
                 let wide = self.dag.value_type(promoted);
                 self.dag.get_node(ISD::Freeze, wide, &[promoted])
             }
-            ISD::SetCC => {
+            op @ (ISD::SetCC | ISD::StrictFSetCC | ISD::StrictFSetCCS) => {
                 // `PromoteIntRes_SETCC`: compare into the canonical result
                 // type of the operands, then sign extend or truncate to the
-                // promoted type.
+                // promoted type. A constrained one has the chain first and
+                // gives one back.
+                let strict = op != ISD::SetCC;
                 let ops = self.dag.node(value).ops.clone();
-                let mut in_vt = self.dag.value_type(ops[0]);
+                let mut in_vt = self.dag.value_type(ops[usize::from(strict)]);
                 let mut wide = self.tli.types.set_cc_result_type(in_vt);
                 // A result type that itself needs promotion means the input
                 // does too: ask again of its promoted type; where the input
@@ -1106,7 +1108,14 @@ impl<'a> TypeLegalizer<'a> {
                     }
                 }
                 let flags = self.dag.node(value).flags;
-                let setcc = self.dag.get_node_flags(ISD::SetCC, wide, &ops, flags);
+                let setcc = if strict {
+                    let setcc = self.dag.intern(op, &[wide, EVT::OTHER], &ops, flags, NodeData::None);
+                    // anything on the old chain moves to the new one
+                    self.replace_value_with(SDValue { node: value.node, res: 1 }, SDValue { node: setcc.node, res: 1 });
+                    SDValue { node: setcc.node, res: 0 }
+                } else {
+                    self.dag.get_node_flags(ISD::SetCC, wide, &ops, flags)
+                };
                 self.dag.get_sext_or_trunc(setcc, to)
             }
             ISD::Truncate => {
