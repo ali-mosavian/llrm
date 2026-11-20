@@ -81,6 +81,12 @@ pub enum ConstantExpr {
         lhs: ConstantId,
         rhs: ConstantId,
     },
+    /// `blockaddress(@function, %block)`: the address of a block, which keeps
+    /// the block alive and unmerged for as long as the constant is used.
+    BlockAddress {
+        function: GlobalId,
+        block: crate::module::BlockId,
+    },
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]

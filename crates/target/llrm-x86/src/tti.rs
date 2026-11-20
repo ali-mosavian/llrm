@@ -1519,8 +1519,9 @@ impl Tti for X86 {
         self.word_vectors
     }
 
-    /// A word vector has no horizontal step: `vectorlower` takes no `llvm.vector.reduce.*`,
-    /// so a loop with a reduction stays scalar (the pin's `ExpandReductions` has no word-mode form).
+    /// A word vector has no horizontal step: `vectorlower` takes no
+    /// `llvm.vector.reduce.*`, so a loop with a reduction stays scalar (the
+    /// pin's `ExpandReductions` has no word-mode form).
     fn lowers_vector_reductions(&self) -> bool {
         self.vector_values() || !self.word_vectors
     }
@@ -1615,11 +1616,17 @@ impl Tti for X86 {
     }
 
     /// `X86TTIImpl::getArithmeticInstrCost`, the SSE2 rows of the integer ops
-    /// isel selects for every operand: `paddX`, `psubX`, `pand`, `por`, `pxor`
-    /// cost one per register; the multiplies of 8-, 16- and 32-bit lanes are
-    /// the pin's rows. Byte shifts, a variable shift count, the 64-bit
-    /// multiply and the divisions are not priced, so a loop holding one stays
-    /// scalar (DEVIATE X86V2, owner llrm-target-x86-m64-b, exit 2026-11-24).
+    /// isel selects for every operand, `LT.first` registers times the row of
+    /// the legalized type (`SSE2CostTable`): `pand`, `por`, `pxor` cost one;
+    /// `paddq`/`psubq` {1, 2, 1, 2}; the multiplies of 8-, 16- and 32-bit lanes
+    /// are the pin's rows (the 64-bit lane's comes with its lowering). A vector
+    /// of 8-bit lanes within 64 bits is multiplied as 16-bit lanes (extend,
+    /// `pmullw`, truncate). Other adds and subtracts have no row: the base
+    /// model, one per register for the throughput and one for the other
+    /// kinds (`TCK_RecipThroughput` only scales). Byte shifts, a variable
+    /// shift count and the divisions are not priced, so a loop holding one
+    /// stays scalar (DEVIATE X86V2, owner llrm-target-x86-m64-b, exit
+    /// 2026-11-24).
     fn vector_arithmetic_cost(
         &self,
         op: ArithOp,
@@ -1628,16 +1635,34 @@ impl Tti for X86 {
     ) -> Option<Cost> {
         if !self.vector_values() {
             // only the bitwise operations act lane by lane on a word
-            return (self.word_vectors && is_word_vector(ty) && matches!(op, ArithOp::And | ArithOp::Or | ArithOp::Xor))
-                .then(|| Cost::of(1));
+            return (self.word_vectors
+                && is_word_vector(ty)
+                && matches!(op, ArithOp::And | ArithOp::Or | ArithOp::Xor))
+            .then(|| Cost::of(1));
         }
+        let throughput = kind == CostKind::RecipThroughput;
         match op {
-            ArithOp::Add | ArithOp::Sub | ArithOp::And | ArithOp::Or | ArithOp::Xor => xmm_pieces(ty).map(Cost::of),
+            ArithOp::And | ArithOp::Or | ArithOp::Xor => xmm_pieces(ty).map(Cost::of),
+            // `paddq`, `psubq`: {1, 2, 1, 2}.
+            ArithOp::Add | ArithOp::Sub if ty.lane == Ty::Int(64) => {
+                xmm_pieces(ty).map(|pieces| Cost::of(pieces * [1, 2, 1, 2][kind.index()]))
+            }
+            ArithOp::Add | ArithOp::Sub => xmm_pieces(ty).map(|pieces| Cost::of(if throughput { pieces } else { 1 })),
             // `psllX`/`psrlX`/`psraX` by an immediate (a constant splat amount,
             // the only one the lowering takes); there is no 64-bit arithmetic
             // shift before AVX-512.
             ArithOp::Shl | ArithOp::LShr if matches!(ty.lane, Ty::Int(16 | 32 | 64)) => xmm_pieces(ty).map(Cost::of),
             ArithOp::AShr if matches!(ty.lane, Ty::Int(16 | 32)) => xmm_pieces(ty).map(Cost::of),
+            // `vXi8` multiplications are promoted to `vXi16`; a type of 64
+            // bits or less is extended and packed more cheaply.
+            ArithOp::Mul if ty.lane == Ty::Int(8) && ty.count <= 8 => {
+                let wide = VectorTy { lane: Ty::Int(16), count: ty.count };
+                Some(Cost::of(
+                    self.vector_cast_cost(CastKind::ZExt, wide, ty, kind)?.value
+                        + self.vector_cast_cost(CastKind::Trunc, ty, wide, kind)?.value
+                        + self.vector_arithmetic_cost(ArithOp::Mul, wide, kind)?.value,
+                ))
+            }
             // The pin's SSE2 rows, a register each: {throughput, latency, code
             // size, size and latency}.
             // `v16i8`: 2*unpack/2*pmullw/2*and/pack. `v8i16`: `pmullw`, the one
