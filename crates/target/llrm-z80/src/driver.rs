@@ -566,9 +566,10 @@ pub fn selections_with_alternatives(
             crate::dagisel::pipeline::CALL_SHIFTS.with(|one| one.set(call_shifts));
             crate::dagisel::pipeline::CALL_PRODUCTS.with(|one| one.set(products));
             // the alternative is one switch for every reason a function has
-            // one: the speed routines ride along only where nothing
-            // else is switched, or the form that decomposes a multiply would
-            // also carry the divide's price
+            // one: the speed routines ride along with the shifts (data_int64
+            // -Os: a divide beside constant shifts was never priced with the
+            // speed routine), not with a multiply's form, which would also
+            // carry the divide's price
             crate::dagisel::pipeline::SPEED_ROUTINES
                 .with(|one| one.set(divides && muls.is_none() && !fills && !products));
             let (source, ilp) = select(module, name);
