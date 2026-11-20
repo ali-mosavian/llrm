@@ -4560,6 +4560,65 @@ fn a_flagless_module_built_static_takes_the_dword_move_for_a_global_address() {
     assert!(encoded(&[]).windows(3).any(|code| code == [0x48, 0x8D, 0x3D]));
 }
 
+/// `first = c ? i : first` in a loop (sfm16_dbg's `if (!bad) first = i`): TA-LC2
+/// commuted the `cmov` because its result reaches the other operand's web, a phi
+/// register with no one copy source to ask, so the loop-carried value was
+/// copied back every iteration (`cmove r8, rdi` ... `mov rdi, r8`; the pin
+/// ties the carried value, `cmovne rcx, r8`): 23 instructions an iteration
+/// against 21.
+#[test]
+fn a_loop_carried_select_is_not_commuted_into_a_copy_at_m64() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                @V = global [400 x [11 x i32]] zeroinitializer, align 16\n\
+                define i64 @bench_sfm16_dbg(i32 noundef %0) {\n\
+                  %2 = icmp sgt i32 %0, 0\n\
+                  br i1 %2, label %3, label %31\n\
+                3:                                                ; preds = %1\n\
+                  %wide.trip.count = zext nneg i32 %0 to i64\n\
+                  %4 = getelementptr i8, ptr @V, i64 8\n\
+                  br label %5\n\
+                5:                                                ; preds = %5, %3\n\
+                  %6 = phi ptr [ %27, %5 ], [ %4, %3 ]\n\
+                  %7 = phi i64 [ 0, %3 ], [ %26, %5 ]\n\
+                  %8 = phi i64 [ %25, %5 ], [ -1, %3 ]\n\
+                  %9 = phi i64 [ %23, %5 ], [ 0, %3 ]\n\
+                  %10 = getelementptr i8, ptr %6, i64 -8\n\
+                  %11 = load i32, ptr %10, align 4\n\
+                  %12 = getelementptr i8, ptr %6, i64 -4\n\
+                  %13 = load i32, ptr %12, align 4\n\
+                  %14 = add i32 %11, %13\n\
+                  %15 = add i32 %14, 0\n\
+                  %16 = load i32, ptr %6, align 4\n\
+                  %17 = and i32 %16, 2139095040\n\
+                  %18 = icmp ne i32 %17, 2139095040\n\
+                  %19 = icmp ne i32 %16, %15\n\
+                  %20 = select i1 %18, i1 %19, i1 false\n\
+                  %21 = icmp eq i64 %9, 0\n\
+                  %22 = zext i1 %20 to i64\n\
+                  %23 = add nuw nsw i64 %9, %22\n\
+                  %24 = select i1 %20, i1 %21, i1 false\n\
+                  %25 = select i1 %24, i64 %7, i64 %8\n\
+                  %26 = add nuw nsw i64 %7, 1\n\
+                  %27 = getelementptr i8, ptr %6, i64 44\n\
+                  %exitcond = icmp eq i64 %wide.trip.count, %26\n\
+                  br i1 %exitcond, label %28, label %5\n\
+                28:                                               ; preds = %5\n\
+                  %29 = mul nuw nsw i64 %23, 1000\n\
+                  %30 = add nsw i64 %29, %25\n\
+                  br label %31\n\
+                31:                                               ; preds = %28, %1\n\
+                  %32 = phi i64 [ %30, %28 ], [ -1, %1 ]\n\
+                  ret i64 %32\n\
+                }\n";
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "bench_sfm16_dbg").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let lines: Vec<&str> = listing.lines().map(str::trim).collect();
+    let cmov = lines.iter().position(|line| line.starts_with("cmov")).expect(&listing);
+    let tail = &lines[cmov + 1..(cmov + 6).min(lines.len())];
+    assert!(!tail.iter().any(|line| line.starts_with("mov ")), "a copy after the cmov: {listing}");
+}
+
 /// A local declared `align 16` sat at `[rsp+4]`: the frame clamped every
 /// alignment to 4 (bintree's array; a 16-byte `movaps` clear of it would
 /// fault).
