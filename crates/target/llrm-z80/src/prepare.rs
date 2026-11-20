@@ -195,11 +195,24 @@ pub fn mark_word_products(module: &mut Module) {
                 })
                 .filter_map(|one| one.result)
                 .collect();
-            instructions.iter().any(|one| {
-                matches!(one.opcode, Opcode::Binary(BinaryOp::Mul))
-                    && module.context.types.int_bits(one.ty) == Some(32)
-                    && one.operands.iter().all(|&operand| matches!(operand, Operand::Value(value) if widened.contains(&value)))
-            })
+            // a fixed-point multiply of 32 bits or more is expanded to the
+            // same word products at selection
+            let fixed = function.walk().any(|(_, call)| {
+                let Some(callee) = llrm_mir::memory::callee(&module.context, function, call) else { return false };
+                matches!(
+                    module.globals.get(callee.0 as usize).and_then(GlobalValue::intrinsic),
+                    Some(Intrinsic::FixedMul { .. } | Intrinsic::Fixed { divide: false })
+                ) && module.context.types.int_bits(function.instruction(call).ty).is_some_and(|bits| bits >= 32)
+            });
+            fixed
+                || instructions.iter().any(|one| {
+                    matches!(one.opcode, Opcode::Binary(BinaryOp::Mul))
+                        && module.context.types.int_bits(one.ty) == Some(32)
+                        && one
+                            .operands
+                            .iter()
+                            .all(|&operand| matches!(operand, Operand::Value(value) if widened.contains(&value)))
+                })
         })
         .filter_map(|(_, global, _)| global.name.owned())
         .collect();
