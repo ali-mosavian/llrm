@@ -265,6 +265,11 @@ fn is_eligible_loop_form(
         if !l.is_loop_simplify_form(cx.function) {
             return false;
         }
+        // The loop is cloned, and a header whose address is taken cannot be
+        // (LoopUnrollAndJam.cpp:820).
+        if !l.is_safe_to_clone(cx.function) || cx.function.has_address_taken(l.get_header()) {
+            return false;
+        }
         // `isRotatedForm`: a latch that exits.
         if !l.get_loop_latch(cx.function).is_some_and(|latch| l.is_loop_exiting(cx.function, latch)) {
             return false;
