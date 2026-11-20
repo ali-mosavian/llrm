@@ -1566,7 +1566,7 @@ impl Builder<'_> {
                     Some(bytes) => self.inline_memset(root, dst, other, bytes, limit, dst_align)?,
                     None => None,
                 };
-                match inline.or_else(|| calling.emit_memset(&mut self.dag, root, dst, other, size)) {
+                match inline.or_else(|| calling.emit_memset_sized(&mut self.dag, root, dst, other, size, opt_size)) {
                     Some(chain) => chain,
                     None => self.hooked_mem_libcall("memset", root, [dst, other, size])?,
                 }
@@ -1588,7 +1588,7 @@ impl Builder<'_> {
                     if copy {
                         calling.emit_memcpy_sized(dag, root, dst, other, size, opt_size)
                     } else {
-                        calling.emit_memmove(dag, root, dst, other, size)
+                        calling.emit_memmove_sized(dag, root, dst, other, size, opt_size)
                     }
                 };
                 match inline.or_else(|| hooked(&mut self.dag)) {

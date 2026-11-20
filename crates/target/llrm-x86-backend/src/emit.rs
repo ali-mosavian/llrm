@@ -2812,18 +2812,23 @@ impl Emitter<'_, '_> {
                 if !block.fixups.is_empty() {
                     return Err(EmitError::Unsupported("inline assembly naming symbols".to_owned()));
                 }
-                // The value an `st0` input takes is the stack's top and the
-                // only thing on it: the unnamed store the
-                // stackifier reads as `handleReturn`, which
-                // consumes it, so the block sees it in
-                // st(0) with the stack otherwise empty.
+                // The values the `st0` and `st1` inputs take are the stack's
+                // two top entries and the only ones on it: the unnamed store
+                // the stackifier reads as `handleReturn`, which
+                // consumes them, so the block sees them in
+                // st(0), st(1) with the stack otherwise empty.
                 let registers = block.inputs.iter().filter(|one| !one.starts_with("st")).count();
                 let first = 2 + block.fixups.len() + registers;
-                for &op in node.ops.iter().skip(first).take(block.inputs.iter().filter(|one| *one == "st0").count()) {
+                let count = block.inputs.iter().filter(|one| one.starts_with("st")).count();
+                let mut stack = Vec::new();
+                for &op in node.ops.iter().skip(first).take(count) {
                     match self.operand(op)? {
-                        Loc::Held(value) => self.push(Operation::FloatStore, "", Vec::new(), vec![Loc::Held(value)]),
-                        _ => return Err(EmitError::Unsupported("an st0 input that is no x87 value".to_owned())),
+                        Loc::Held(value) => stack.push(Loc::Held(value)),
+                        _ => return Err(EmitError::Unsupported("an st input that is no x87 value".to_owned())),
                     }
+                }
+                if !stack.is_empty() {
+                    self.push(Operation::FloatStore, "", Vec::new(), stack);
                 }
                 let callee = Callee::Named(name);
                 let at = self.push_call(

@@ -1713,6 +1713,14 @@ pub trait Tti {
         false
     }
 
+    /// `Tuning::inline_trial_credit_gate`: at a size caller, a trial the
+    /// instruction count accepts only through the dying callee's credit must
+    /// leave the bytes no larger (the byte gate's rule, where the estimate is
+    /// calibrated but not exact enough for the -O1 eighth).
+    fn opt_size_inline_credit_gate(&self) -> bool {
+        false
+    }
+
     /// DEVIATE OS-INLINE-TRIAL (speed): whether a copy the -O2/-O3 byte rate
     /// refused within the trial's band is built inlined as well, the driver
     /// keeping the finished code that is smaller. The rate prices the copy
@@ -2071,6 +2079,11 @@ pub trait Tti {
     /// `Tuning::pops_arguments_at_size`.
     fn pops_arguments_at_size(&self) -> bool {
         true
+    }
+
+    /// `Tuning::pops_arguments_cold_only_at_size`.
+    fn pops_arguments_cold_only_at_size(&self) -> bool {
+        false
     }
 
     /// `Tuning::libc_memcpy`.
