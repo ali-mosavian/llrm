@@ -598,7 +598,9 @@ pub fn jump_tables(
     for (number, procedure) in procedures.iter().enumerate() {
         let jumps =
             procedure.body.blocks.iter().flat_map(|block| block.insns.iter()).filter_map(|one| one.what.as_ref());
-        for what in jumps.filter(|what| what.op == Operation::Jump && what.indirect && !what.table.is_empty()) {
+        for what in jumps
+            .filter(|what| what.op == Operation::Jump && what.indirect && !what.computed && !what.table.is_empty())
+        {
             let index = match (what.sources.first(), what.table_id) {
                 (Some(Loc::Mem(ir::Mem { addr: Some(addr), .. })), _) => addr.index,
                 (_, Some(id)) => id,
@@ -2493,6 +2495,7 @@ fn built(
             out.push(Item::Align(CodeAlign { log2: block.align, max_skip: block.max_skip }));
         }
         out.push(Item::Label(Label { name: label(number, block.at) }));
+        out.extend(procedure.body.address_symbols.get(&block.at).map(|name| Item::Label(Label { name: name.clone() })));
         if let Some(pieces) = wrap.as_ref().and_then(|wrap| wrap.opens.get(&block.at)) {
             out.extend(pieces.iter().flat_map(|piece| item(piece).0).map(Item::owned));
             out.extend(wrapped_frame.then_some(Item::Mark(Mark::Opened)));

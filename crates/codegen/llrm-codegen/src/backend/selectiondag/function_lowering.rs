@@ -72,6 +72,8 @@ pub struct FunctionLoweringInfo {
     second: std::collections::BTreeMap<u32, u32>,
     /// The blocks each jump table's entries go to, by the table's index.
     pub jump_tables: Vec<Vec<u32>>,
+    /// The blocks each `indirectbr` may reach, by the block it ends.
+    pub indirect_targets: Vec<(BlockId, Vec<BlockId>)>,
     /// The first block id a switch lowering has not made one of: ids are
     /// the function's, so two switches never name the same block.
     pub next_block: u32,
@@ -197,6 +199,7 @@ impl FunctionLoweringInfo {
             live_out: Default::default(),
             second: Default::default(),
             jump_tables: Vec::new(),
+            indirect_targets: Vec::new(),
             next_block: 0,
             objects: Vec::new(),
             next_frame_index: 0,

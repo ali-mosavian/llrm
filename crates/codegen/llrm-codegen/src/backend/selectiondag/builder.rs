@@ -3602,6 +3602,20 @@ impl Builder<'_> {
                 let (lhs, rhs) = (self.constant_value(*lhs)?, self.constant_value(*rhs)?);
                 Ok(self.dag.get_node(opcode, vt, &[lhs, rhs]))
             }
+            // `getValueImpl` of a `BlockAddress`: the address of the block's
+            // symbol, or `inttoptr 1` where the block is gone (the printer's).
+            ConstantKind::Expr(llrm_mir::context::ConstantExpr::BlockAddress { function, block }) => {
+                let target = match &self.module.global(*function).kind {
+                    llrm_mir::module::GlobalKind::Function(target) => target.resolve_block_address(*block),
+                    _ => None,
+                };
+                match target {
+                    Some(block) => {
+                        Ok(self.dag.get_global_address(vt, function.0, crate::backend::blockaddress::offset(block)))
+                    }
+                    None => Ok(self.dag.get_constant(1, vt)),
+                }
+            }
             _ => Err(Refused("aggregate constant")),
         }
     }
@@ -3840,6 +3854,7 @@ impl Builder<'_> {
             Opcode::Unreachable => self.visit_unreachable(),
             Opcode::Ret => self.visit_ret(&instruction)?,
             Opcode::Switch => self.visit_switch(&instruction)?,
+            Opcode::IndirectBr => self.visit_indirect_br(&instruction)?,
             Opcode::Call(info) => {
                 self.tail_candidate = self.in_tail_position(inst).then_some(inst);
                 self.visit_call(&instruction, info)?;
@@ -4847,6 +4862,31 @@ impl Builder<'_> {
         let brcond = self.dag.get_node(ISD::BrCond, EVT::OTHER, &[root, cond, dest]);
         let fall = self.dag.get_basic_block(on_false.0);
         let node = self.dag.get_node(ISD::Br, EVT::OTHER, &[brcond, fall]);
+        self.dag.set_root(node);
+        Ok(())
+    }
+
+    /// `visitIndirectBr`: `BRIND` of the address, the listed blocks being
+    /// the successors.
+    fn visit_indirect_br(
+        &mut self,
+        instruction: &llrm_mir::module::Instruction,
+    ) -> Result<(), Refused> {
+        let address = self.get_value(instruction.operands[0])?;
+        let targets: Vec<BlockId> = instruction.operands[1..]
+            .iter()
+            .map(|operand| match operand {
+                Operand::Block(block) => *block,
+                _ => unreachable!("an indirectbr destination is a block"),
+            })
+            .collect();
+        for &target in &targets {
+            let probability = self.edge_probability(self.block, target);
+            self.add_successor_with_prob(self.block, target, probability);
+        }
+        self.info.indirect_targets.push((self.block, targets));
+        let root = self.control_root();
+        let node = self.dag.get_node(ISD::BrInd, EVT::OTHER, &[root, address]);
         self.dag.set_root(node);
         Ok(())
     }
