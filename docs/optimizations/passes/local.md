@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/local.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/local.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/local.rs sha256:be7ed8271375a345bbf7aa590e3bf46285e5410c7a6128d897e53eaa4f48fa67 -->
+<!-- src: crates/opt/llrm-transforms/src/local.rs sha256:1ffe7fb0aefe50208300adf852a820bc23926401eae72b1fd4df595839d98aa5 -->
 
 # local
 
@@ -56,13 +56,12 @@ DEVIATE, each with the fact MIR lacks:
     `LoopInfo`, `MemorySSAUpdater` and `MemoryDependenceResults`: MIR passes
     hold none of them, the caller rebuilds. The debug-only `IncomingValues`
     goes with them.
-16. `MergeBlockIntoPredecessor`'s `hasAddressTaken` (MIR has no
-    `blockaddress`), `HasLoopOrEntryConvergenceToken` (no convergence
-    tokens), `PTI->mayHaveSideEffects` (after `isSpecialTerminator` a
-    terminator is a `ret`, `br`, `switch` or `unreachable`, which never
-    writes, throws or fails to return), `takeName` (a `Function` has no
-    block-name setter), and the `unreachable` left in the merged block (the
-    block is erased at once).
+16. `MergeBlockIntoPredecessor`'s `HasLoopOrEntryConvergenceToken` (no
+    convergence tokens), `PTI->mayHaveSideEffects` (after
+    `isSpecialTerminator` a terminator is a `ret`, `br`, `switch` or
+    `unreachable`, which never writes, throws or fails to return),
+    `takeName` (a `Function` has no block-name setter), and the
+    `unreachable` left in the merged block (the block is erased at once).
 17. `PtrToAddrInst`: MIR has no `ptrtoaddr`. `getUnderlyingObjectAggressive`
     is `valuetracking::underlying`, which does not look through a `select`,
     a `phi` or a call that returns an argument: two pointers that differ
