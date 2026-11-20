@@ -200,6 +200,36 @@ pub fn program(
     made
 }
 
+pub use llrm_transforms::walk::SizeRow;
+
+/// The size audit of one program: per function, the bytes `function_bytes`
+/// says it will be against the bytes it is written as
+/// (`tests/size_calibration.rs`).
+pub fn size_audit(
+    text: &str,
+    request: &Request,
+) -> Result<Vec<SizeRow>, String> {
+    let built = program(text, request)?;
+    let costs = built.target.trial_costs();
+    let module = &built.modules[0];
+    let mut rows: Vec<SizeRow> = module
+        .functions()
+        .filter(|(_, _, function)| !function.is_declaration())
+        .map(|(_, global, function)| SizeRow {
+            name: global.name.as_deref().unwrap_or("?").to_owned(),
+            model: llrm_transforms::walk::function_bytes(module, &built.layout, &costs, function),
+            written: 0,
+            counts: llrm_transforms::walk::operation_counts(module, &built.layout, function, &costs),
+        })
+        .collect();
+    for (name, bytes) in crate::compile::function_sizes(text, request)? {
+        if let Some(row) = rows.iter_mut().find(|row| row.name == name) {
+            row.written = i64::from(bytes);
+        }
+    }
+    Ok(rows)
+}
+
 /// What a mid-end module is, for comparing a variant's to the base compile's:
 /// its text hashed, and its instructions.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -615,6 +645,11 @@ impl llrm_mir::target::Machine for Z80Machine {
     /// bytes).
     fn size_costs(&self) -> llrm_mir::target::OperationCosts {
         llrm_mir::target::OperationCosts { jump_table: 4, ..llrm_mir::target::Neutral.costs() }
+    }
+
+    /// The prices of the Os inline trial's byte estimate (`function_bytes`).
+    fn trial_costs(&self) -> llrm_mir::target::OperationCosts {
+        crate::clocks::trial_bytes()
     }
 
     /// Real code bytes for the decisions weighed at a rate (`opcosts.txt`).

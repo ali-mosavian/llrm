@@ -1230,6 +1230,19 @@ pub trait Tti {
         None
     }
 
+    /// What a direct call inside a callee's body adds to the caller once the
+    /// body is inlined, in `kind`: the call and the arguments' setup, not the
+    /// return or the frame, which belong to the function called. None: the
+    /// call's flat price.
+    fn body_call_cost(
+        &self,
+        shape: &CallShape,
+        kind: CostKind,
+    ) -> Option<Cost> {
+        let _ = (shape, kind);
+        None
+    }
+
     /// DEVIATE INLINE-FRAME: the code-size guard counts the frame a caller
     /// with none builds for the callee's static allocas where the callee
     /// stays (the pin's cost has no frame term). False: the frame is taken to
@@ -1930,6 +1943,12 @@ pub trait Tti {
         true
     }
 
+    /// D13 keeps the credit at -Os for a hot call site (the pin's `HotCallSiteRelFreq`): a copy in a loop saves the
+    /// call's clocks every trip, which the byte trial does not price. Off by default (x86-m16 is strict bytes).
+    fn inline_hot_dying_credit_at_os(&self) -> bool {
+        false
+    }
+
     /// `Tuning::unroll_never_grows_at_o1`.
     fn unroll_never_grows_at_o1(&self) -> bool {
         false
@@ -2359,6 +2378,13 @@ pub trait Tti {
     /// (`Tuning::split_paths_at_o3`).
     fn split_paths_at_o3(&self) -> bool {
         false
+    }
+
+    /// The target's full-unroll `Threshold` at `-O2` and `-O3`, where bytes are
+    /// free (ruling 2026-11-14); `-O1` and `-Os` do not read it. None: the
+    /// target's `unroll_threshold_overrides`, else the pass's own.
+    fn unroll_threshold_at_speed(&self) -> Option<u32> {
+        None
     }
 
     /// The target's full-unroll `Threshold` at `-O3` alone; none: the pass's
@@ -2794,6 +2820,13 @@ pub trait Tti {
             (c.num_regs, c.add_rec_cost, c.num_iv_muls, c.num_base_adds, c.scale_cost, c.imm_cost, c.setup_cost)
         };
         key(a) < key(b)
+    }
+
+    /// DEVIATE LG4 (owner w8, exit 2026-11-26): where post-indexed addressing is favored, a pointer walk
+    /// the end-biased formula would replace stays unless that formula saves a recurrence or a register
+    /// (m68k `(An)+`). `false`: the end-biased formula wins on its saved compare.
+    fn lsr_free_walk_beats_end_biased(&self) -> bool {
+        false
     }
 
     /// DEVIATE LSR-TIE: a loop with an address that LSR rates no better than

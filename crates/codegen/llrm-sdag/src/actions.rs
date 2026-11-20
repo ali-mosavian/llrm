@@ -886,6 +886,8 @@ impl TargetLowering {
         self.set_operation_action(Trap, MVT::Other, Action::Expand);
         self.set_operation_action(DebugTrap, MVT::Other, Action::Expand);
         self.set_ops(&[ConstantFP], &FLOATS, Action::Expand);
+        // TargetLoweringBase.cpp#L851: a class test of a float is expanded.
+        self.set_ops(&[IsFpClass], &FLOATS, Action::Expand);
         // TargetLoweringBase.cpp#L864: a target without minss/maxss has no
         // pseudo min/max node, so `combineSelectToPseudoMinMax`
         // (legal-or-custom only) leaves the select alone.

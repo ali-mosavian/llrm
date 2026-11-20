@@ -1,5 +1,5 @@
-; ModuleID = '/home/alim/work/personal/llrm/.claude/worktrees/funny-chatelet-66ad45/tests/run/c/wide_shift_by_one.c'
-source_filename = "/home/alim/work/personal/llrm/.claude/worktrees/funny-chatelet-66ad45/tests/run/c/wide_shift_by_one.c"
+; ModuleID = 'wide_shift_by_one.c'
+source_filename = "wide_shift_by_one.c"
 target datalayout = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8"
 
 @v = internal global [14 x i32] [i32 0, i32 1, i32 32767, i32 32768, i32 32769, i32 65535, i32 65536, i32 2147483647, i32 -2147483648, i32 -2147483647, i32 -65536, i32 -1, i32 305419896, i32 -1698898192], align 2

@@ -1484,6 +1484,19 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
             ISD::FNeg => Some(vec![self.expand_fneg(node)]),
             ISD::FAbs => Some(vec![self.expand_fabs(node)]),
             ISD::FCopySign => Some(vec![self.expand_fcopysign(node)]),
+            // `LegalizeDAG.cpp#L3881`.
+            ISD::IsFpClass => {
+                let op = self.dag.operand(node, 0);
+                let test = self.dag.constant(self.dag.operand(node, 1)).unwrap_or(0);
+                let result_vt = self.dag.value_type(node);
+                Some(vec![super::expand_is_fpclass::expand_is_fp_class(
+                    self.dag,
+                    self.tli,
+                    result_vt,
+                    op,
+                    llrm_mir::fpclass::FpClassTest(test as u32),
+                )])
+            }
             ISD::ExtractElement => {
                 // 0 is the low half, 1 the high: a truncate, of a shift for the
                 // high.

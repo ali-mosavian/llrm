@@ -167,6 +167,8 @@ pub enum ISD {
     LRint,
     LLRint,
     FCopySign,
+    /// `IS_FPCLASS`: whether a float is of the classes a constant mask names.
+    IsFpClass,
 
     SetCC,
     Select,
@@ -429,6 +431,7 @@ impl ISD {
             LRint => "lrint",
             LLRint => "llrint",
             FCopySign => "fcopysign",
+            IsFpClass => "is_fpclass",
             SetCC => "setcc",
             Select => "select",
             VSelect => "vselect",
