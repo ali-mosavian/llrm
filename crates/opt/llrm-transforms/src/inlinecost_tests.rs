@@ -291,6 +291,28 @@ fn test_an_optsize_caller_keeps_a_compare_loop_with_many_sites_when_the_target_g
     assert!(cost >= threshold, "{cost} against {threshold}");
 }
 
+/// The -Os size guard leaked into -O1 at m64: a callee of two sites whose
+/// copy grows the code stayed a call (QB strings.bas -O1: `exec_popi`, 22
+/// sites, 354M instructions against clang's 262M). -O1 keeps the pin's
+/// threshold unless the target says the guard binds there.
+#[test]
+fn test_an_o1_speed_caller_inlines_a_growing_callee_though_the_target_guards_size_at_os() {
+    let tti = |at_o1: bool| {
+        x86_64_non_pie().with_tuning(llrm_mir::target::Tuning {
+            inline_size_guard_at_size: true,
+            inline_size_guard_at_o1: at_o1,
+            ..llrm_mir::target::Tuning::PIN
+        })
+    };
+    let params = InlineParams { compute_full_inline_cost: true, o1_bound: true, ..InlineParams::from_level(2) };
+    let price =
+        |at_o1: bool| priced_params(COMPARE_LOOP, 0, false, CallerSize::Speed, Some(&tti(at_o1)), params, (2, false));
+    let (cost, threshold) = price(true);
+    assert!(cost >= threshold, "the premise: the guard holds it when asked ({cost} against {threshold})");
+    let (cost, threshold) = price(false);
+    assert!(cost < threshold, "-O1 took the guard of -Os ({cost} against {threshold})");
+}
+
 /// SZ2 at the 64-bit target: an external callee with ONE site is not copied
 /// into an `optsize` caller when the copy grows the code (cost 45 against 50
 /// inlined it; crc -Os m64: 139 B against gcc 96, which keeps the call).

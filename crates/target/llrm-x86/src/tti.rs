@@ -1435,6 +1435,12 @@ impl Tti for X86 {
         self.real_mode.as_ref().is_some_and(|real| real.inline_size_guard) || self.tuning.inline_size_guard_at_size
     }
 
+    /// The size guard binds -Os; -O1 keeps it only where the target says
+    /// so (real mode).
+    fn opt_size_inline_rule_at_o1(&self) -> bool {
+        self.real_mode.is_some() || self.tuning.inline_size_guard_at_o1
+    }
+
     /// The pin's rule (`TotalAllocaSizeRecursiveCaller`) outside real mode,
     /// where the stack is not 64 KiB shared with the data.
     fn inline_frames_into_recursive_callers(&self) -> bool {

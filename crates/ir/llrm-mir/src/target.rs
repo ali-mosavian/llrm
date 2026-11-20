@@ -558,6 +558,10 @@ pub struct Tuning {
     /// code, summed over its sites. false: the pin's `OptSizeThreshold` 50
     /// alone decides, which allows the growth.
     pub inline_size_guard_at_size: bool,
+    /// With `inline_size_guard_at_size`, the bound also holds an -O1 caller.
+    /// false: -O1 keeps the pin's threshold alone, where clang inlines a small
+    /// callee that grows the code and clocks are the bar.
+    pub inline_size_guard_at_o1: bool,
     /// With `inline_size_guard_at_size`, the bound holds a callee with one
     /// site too (otherwise only two or more: the pin's single-site inline
     /// stands). A callee that stays and is copied once only grows the code.
@@ -937,6 +941,7 @@ impl Tuning {
         ext_load_extra_clocks: 0,
         immediate_forms_at_size: false,
         inline_size_guard_at_size: false,
+        inline_size_guard_at_o1: false,
         inline_size_guard_single_site: false,
         inline_chain_trial: false,
         lftr_size_budget: 4,

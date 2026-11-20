@@ -2715,7 +2715,7 @@ impl<'a> Analyzer<'a> {
         } else {
             !self.site.sole_call_to_local
                 && self.site.tti.is_some_and(|tti| {
-                    tti.inline_policy().by_size.is_some_and(|rule| {
+                    (!at_o1 || tti.opt_size_inline_rule_at_o1()) && tti.inline_policy().by_size.is_some_and(|rule| {
                         self.site.callee_calls >= rule.min_sites
                             && !(rule.yields_to_negative_cost && self.cost < 0)
                             && !(rule.yields_to_inlinehint && self.hint_applied)

@@ -1130,6 +1130,14 @@ pub trait Tti {
         false
     }
 
+    /// Whether the `opt_size_inline_by_code_size` rule also holds a speed
+    /// caller at -O1. true: it does (wasm SZ1, the small targets). false: -O1
+    /// keeps the pin's threshold, which inlines a small callee that grows the
+    /// code (clang -O1, the bar where clocks are judged).
+    fn opt_size_inline_rule_at_o1(&self) -> bool {
+        true
+    }
+
     /// The cost model the inliner counts a callee's size with, where the
     /// target's `CodeSize` is not bytes: the same model with `CodeSize` in
     /// bytes of code. None: `CodeSize` as it is. The other passes keep
