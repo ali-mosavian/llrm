@@ -947,6 +947,10 @@ impl Tti for X86 {
         self.tuning.pops_arguments_at_size
     }
 
+    fn pops_arguments_cold_only_at_size(&self) -> bool {
+        self.tuning.pops_arguments_cold_only_at_size
+    }
+
     fn libc_memcpy(&self) -> bool {
         self.tuning.libc_memcpy
     }
@@ -1078,6 +1082,10 @@ impl Tti for X86 {
 
     fn switch_lookup_trial_at_size(&self) -> bool {
         self.tuning.switch_lookup_trial_at_size
+    }
+
+    fn opt_size_inline_credit_gate(&self) -> bool {
+        self.tuning.inline_trial_credit_gate
     }
 
     fn loop_idiom_copy_trial_at_size(&self) -> bool {
@@ -1702,6 +1710,18 @@ impl Tti for X86 {
             // shift before AVX-512.
             ArithOp::Shl | ArithOp::LShr if matches!(ty.lane, Ty::Int(16 | 32 | 64)) => xmm_pieces(ty).map(Cost::of),
             ArithOp::AShr if matches!(ty.lane, Ty::Int(16 | 32)) => xmm_pieces(ty).map(Cost::of),
+            // `SSE2UniformConstCostTable`: `v16i8` is `psllw` + `pand` (an
+            // arithmetic shift also `pxor`, `psubb`), `v2i64` `psrad` and
+            // shuffles.
+            ArithOp::Shl | ArithOp::LShr if ty.lane == Ty::Int(8) => {
+                xmm_pieces(ty).map(|pieces| Cost::of(pieces * [1, 7, 2, 3][kind.index()]))
+            }
+            ArithOp::AShr if ty.lane == Ty::Int(8) => {
+                xmm_pieces(ty).map(|pieces| Cost::of(pieces * [3, 9, 5, 6][kind.index()]))
+            }
+            ArithOp::AShr if ty.lane == Ty::Int(64) => {
+                xmm_pieces(ty).map(|pieces| Cost::of(pieces * [3, 5, 6, 6][kind.index()]))
+            }
             // `vXi8` multiplications are promoted to `vXi16`; a type of 64
             // bits or less is extended and packed more cheaply.
             ArithOp::Mul if ty.lane == Ty::Int(8) && ty.count <= 8 => {
@@ -1728,6 +1748,44 @@ impl Tti for X86 {
             }
             _ => None,
         }
+    }
+
+    /// `getArithmeticInstrCost` of a vector shift by an amount that is not a
+    /// constant: the `SSE2CostTable` rows of what `LowerShift` makes of it
+    /// (the `pcmpgt` ladders, a shift a lane and a blend). The other kinds of
+    /// amount, and every other operation, are `vector_arithmetic_cost`. A
+    /// splat of a variable has its own, cheaper rows (`SSE2UniformCostTable`),
+    /// and constants that differ by lane dearer ones (`SSE2ConstCostTable`);
+    /// the operand information has no uniform flag, so the first is priced as
+    /// the dearer variable and the second as a uniform constant (DEVIATE
+    /// X86V5, owner llrm-target-x86-m64-b, exit 2026-11-27).
+    fn vector_arithmetic_cost_op2(
+        &self,
+        op: ArithOp,
+        ty: VectorTy,
+        second: OperandInfo,
+        kind: CostKind,
+    ) -> Option<Cost> {
+        if !self.vector_values() || second.constant || !matches!(op, ArithOp::Shl | ArithOp::LShr | ArithOp::AShr) {
+            return self.vector_arithmetic_cost(op, ty, kind);
+        }
+        let bits = match ty.lane {
+            Ty::Int(bits @ (8 | 16 | 32 | 64)) => bits,
+            _ => return None,
+        };
+        let row: [i64; 4] = match (op, bits) {
+            (ArithOp::Shl, 8) => [13, 21, 26, 28],
+            (ArithOp::Shl, 16) => [24, 27, 16, 20],
+            (ArithOp::Shl, 32) => [17, 19, 10, 12],
+            (ArithOp::LShr, 8) => [14, 28, 27, 30],
+            (ArithOp::LShr, 16) => [16, 19, 31, 31],
+            (ArithOp::LShr | ArithOp::AShr, 32) => [12, 12, 15, 19],
+            (ArithOp::Shl | ArithOp::LShr, _) => [4, 6, 5, 7],
+            (ArithOp::AShr, 8) => [27, 30, 54, 54],
+            (ArithOp::AShr, 16) => [16, 19, 31, 31],
+            _ => [8, 11, 12, 16],
+        };
+        xmm_pieces(ty).map(|pieces| Cost::of(pieces * row[kind.index()]))
     }
 
     /// `X86TTIImpl::getCastInstrCost` for the integer extends and truncates
@@ -1774,6 +1832,10 @@ impl Tti for X86 {
         } else {
             2
         }
+    }
+
+    fn opt_size_inline_guard_yields_to_inlinehint(&self) -> bool {
+        self.tuning.inline_size_guard_yields_to_inlinehint
     }
 
     fn unroll_promotion_fits_registers(&self) -> bool {

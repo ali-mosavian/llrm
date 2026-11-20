@@ -933,10 +933,15 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         let flags = self.dag.node(node).flags;
         let EVT::Simple(op_vt) = self.dag.value_type(lhs) else { return None };
         let tli = self.tli;
-        let legal_or_custom = |cc: CondCode| matches!(
-            tli.cond_code_action(cc, op_vt),
-            Action::Legal | Action::Custom
-        );
+        // A code the target lowers by hand (`oeq` and `une` where it reads the
+        // status word) is not one a constrained compare can use: the
+        // target's lowering of that code is the plain compare's (DEVIATE
+        // CFP2), and taking it here would swap an `oeq` for itself without end.
+        let legal_or_custom = |cc: CondCode| match tli.cond_code_action(cc, op_vt) {
+            Action::Legal => true,
+            Action::Custom => !strict,
+            _ => false,
+        };
         let legal = |cc: CondCode| tli.cond_code_action(cc, op_vt) == Action::Legal;
         let float = self.dag.value_type(lhs).is_floating_point();
         // One compare of the node's kind: the value, and for a constrained

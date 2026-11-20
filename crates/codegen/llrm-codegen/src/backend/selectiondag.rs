@@ -197,6 +197,9 @@ pub mod x86_carry;
 #[path = "../../../../target/llrm-x86-backend/src/x86_lowering.rs"]
 pub mod x86_lowering;
 #[cfg(test)]
+#[path = "../../../../target/llrm-x86-backend/src/x86_vshift.rs"]
+pub mod x86_vshift;
+#[cfg(test)]
 #[path = "../../../../target/llrm-x86-backend/src/nodes.rs"]
 pub mod x86_nodes;
 #[cfg(test)]

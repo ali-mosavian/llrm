@@ -100,10 +100,12 @@ sqrtss	unary	x/xm	32	sse_sqrt	-	-	-	-/-	Sqrtss_xmm_xmmm32
 movss	move	x/xm	32	sse_move	-	self,same	-	-/-	Movss_xmm_xmmm32
 movss	move	m/x	32	sse_move	-	-	-	-/-	Movss_xmmm32_xmm
 ucomiss	cmp	-/x,xm	32	sse_compare	-	-	-	-/OF,SF,ZF,AF,CF,PF	Ucomiss_xmm_xmmm32
+comiss	cmp	-/x,xm	32	sse_compare	-	-	-	-/OF,SF,ZF,AF,CF,PF	Comiss_xmm_xmmm32
 sqrtsd	unary	x/xm	64	sse_sqrt	-	-	-	-/-	Sqrtsd_xmm_xmmm64
 movsd_x	move	x/xm	64	sse_move	-	self,same	-	-/-	Movsd_xmm_xmmm64
 movsd_x	move	m/x	64	sse_move	-	-	-	-/-	Movsd_xmmm64_xmm
 ucomisd	cmp	-/x,xm	64	sse_compare	-	-	-	-/OF,SF,ZF,AF,CF,PF	Ucomisd_xmm_xmmm64
+comisd	cmp	-/x,xm	64	sse_compare	-	-	-	-/OF,SF,ZF,AF,CF,PF	Comisd_xmm_xmmm64
 cmpss	binary	x/^0,xm,i	32	sse_arith	-	-	-	-/-	Cmpss_xmm_xmmm32_imm8
 cmpsd_x	binary	x/^0,xm,i	64	sse_arith	-	-	-	-/-	Cmpsd_xmm_xmmm64_imm8
 xorps	binary	x/^0,xm	128	sse_logic	-	idiom,same	-	-/-	Xorps_xmm_xmmm128
@@ -119,6 +121,8 @@ psubw	binary	x/^0,xm	128	sse_logic	-	idiom,same	-	-/-	Psubw_xmm_xmmm128
 psubd	binary	x/^0,xm	128	sse_logic	-	idiom,same	-	-/-	Psubd_xmm_xmmm128
 psubq	binary	x/^0,xm	128	sse_logic	-	idiom,same	-	-/-	Psubq_xmm_xmmm128
 pmullw	binary	x/^0,xm	128	sse_arith	-	same	-	-/-	Pmullw_xmm_xmmm128
+pmulhw	binary	x/^0,xm	128	sse_arith	-	same	-	-/-	Pmulhw_xmm_xmmm128
+pmulhuw	binary	x/^0,xm	128	sse_arith	-	same	-	-/-	Pmulhuw_xmm_xmmm128
 psllw	binary	x/^0,i	128	sse_arith	-	-	-	-/-	Psllw_xmm_imm8
 pslld	binary	x/^0,i	128	sse_arith	-	-	-	-/-	Pslld_xmm_imm8
 psllq	binary	x/^0,i	128	sse_arith	-	-	-	-/-	Psllq_xmm_imm8
@@ -127,8 +131,17 @@ psrld	binary	x/^0,i	128	sse_arith	-	-	-	-/-	Psrld_xmm_imm8
 psrlq	binary	x/^0,i	128	sse_arith	-	-	-	-/-	Psrlq_xmm_imm8
 psraw	binary	x/^0,i	128	sse_arith	-	-	-	-/-	Psraw_xmm_imm8
 psrad	binary	x/^0,i	128	sse_arith	-	-	-	-/-	Psrad_xmm_imm8
+psllw	binary	x/^0,xm	128	sse_arith	-	-	-	-/-	Psllw_xmm_xmmm128
+pslld	binary	x/^0,xm	128	sse_arith	-	-	-	-/-	Pslld_xmm_xmmm128
+psllq	binary	x/^0,xm	128	sse_arith	-	-	-	-/-	Psllq_xmm_xmmm128
+psrlw	binary	x/^0,xm	128	sse_arith	-	-	-	-/-	Psrlw_xmm_xmmm128
+psrld	binary	x/^0,xm	128	sse_arith	-	-	-	-/-	Psrld_xmm_xmmm128
+psrlq	binary	x/^0,xm	128	sse_arith	-	-	-	-/-	Psrlq_xmm_xmmm128
+psraw	binary	x/^0,xm	128	sse_arith	-	-	-	-/-	Psraw_xmm_xmmm128
+psrad	binary	x/^0,xm	128	sse_arith	-	-	-	-/-	Psrad_xmm_xmmm128
 # Untied: the result is a fresh register (`pshufd xmm1, xmm0, 0EEh`); `extend` is the untied operation.
 pshufd	extend	x/xm,i	128	sse_arith	-	-	-	-/-	Pshufd_xmm_xmmm128_imm8
+pshuflw	extend	x/xm,i	128	sse_arith	-	-	-	-/-	Pshuflw_xmm_xmmm128_imm8
 punpcklqdq	binary	x/^0,xm	128	sse_arith	-	-	-	-/-	Punpcklqdq_xmm_xmmm128
 pmuludq	binary	x/^0,xm	128	sse_arith	-	same	-	-/-	Pmuludq_xmm_xmmm128
 punpckldq	binary	x/^0,xm	128	sse_arith	-	-	-	-/-	Punpckldq_xmm_xmmm128

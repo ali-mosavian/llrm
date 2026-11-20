@@ -1447,6 +1447,7 @@ pub static BARE: LazyLock<IndexMap<&'static str, &'static str>> = LazyLock::new(
         ("fld1", "FLD1"),
         ("fldz", "FLDZ"),
         ("fcompp", "FCOMPP"),
+        ("fucompp", "FUCOMPP"),
         ("sahf", "SAHF"),
     ])
 });
@@ -2099,14 +2100,20 @@ pub fn float_stack(
     if let Some(index) = fxch {
         return _assemble(&raised(create_reg_reg(Code::Fxch_st0_sti, RegId::ST0, stack_register(index))), at, true);
     }
-    // COMPARE, "fcom" or "fcomp", (), (St(0), St(index)): st(0) against any
-    // slot, popped or not
+    // COMPARE, "fcom", "fcomp", "fucom" or "fucomp", (), (St(0), St(index)):
+    // st(0) against any slot, popped or not; the `u` forms do not signal on a
+    // quiet NaN
     let compare =
         (what.op == Operation::Compare && dests.is_empty() && sources.len() == 2 && st_index(&sources[0]) == Some(0))
             .then(|| st_index(&sources[1]))
             .flatten();
-    if let (Some(index), Some(name @ ("fcom" | "fcomp"))) = (compare, name) {
-        let code = if name == "fcom" { Code::Fcom_st0_sti } else { Code::Fcomp_st0_sti };
+    if let (Some(index), Some(name @ ("fcom" | "fcomp" | "fucom" | "fucomp"))) = (compare, name) {
+        let code = match name {
+            "fcom" => Code::Fcom_st0_sti,
+            "fcomp" => Code::Fcomp_st0_sti,
+            "fucom" => Code::Fucom_st0_sti,
+            _ => Code::Fucomp_st0_sti,
+        };
         return _assemble(&raised(create_reg_reg(code, RegId::ST0, stack_register(index))), at, true);
     }
     // FLOAT_ARITH, name, (St(dest),), (left, St(source)) if left == dests[0]
@@ -2557,8 +2564,9 @@ fn scalar_sse(
             let code = code_of!(upper, "_XMM_XMMM", bits(second))?;
             _assemble(&raised(create_reg_reg(code, into.register, outof.register)), at, true)
         }
-        // `pshufd xmm, xmm/m128, imm8`: the destination is not the first source.
-        (Loc::Reg(into), Loc::Imm(order)) if name == "pshufd" && sources.len() == 2 => {
+        // `pshufd`/`pshuflw xmm, xmm/m128, imm8`: the destination is not the
+        // first source.
+        (Loc::Reg(into), Loc::Imm(order)) if matches!(name, "pshufd" | "pshuflw") && sources.len() == 2 => {
             let code = code_of!(upper, "_XMM_XMMM128_IMM8")?;
             match &sources[0] {
                 Loc::Reg(outof) => _assemble(
@@ -3095,7 +3103,7 @@ pub fn emit_in(
     if op == Operation::Compare && name.starts_with('f') {
         // st(0) is implicit; what is encoded is the memory operand, if any.
         let memory: Vec<&ir::Mem> = sources.iter().filter_map(mem_of).collect();
-        if memory.is_empty() && matches!(name, "fcom" | "fcomp") {
+        if memory.is_empty() && matches!(name, "fcom" | "fcomp" | "fucom" | "fucomp") {
             return float_stack(what, at);
         }
         return if memory.is_empty() { bare(name, at) } else { float_memory(name, memory[0], at) };

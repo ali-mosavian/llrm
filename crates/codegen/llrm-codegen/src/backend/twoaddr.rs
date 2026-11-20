@@ -606,6 +606,8 @@ pub fn commutative(what: &Semantics) -> bool {
                     | "por"
                     | "pxor"
                     | "pmullw"
+                    | "pmulhw"
+                    | "pmulhuw"
                     | "pmuludq"
             )
         ))

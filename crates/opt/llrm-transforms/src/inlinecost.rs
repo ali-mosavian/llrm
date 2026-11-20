@@ -76,12 +76,12 @@
 //!   local callee, which goes with it, is the pin's. No shape of callee but the
 //!   loop and the one smaller than its call is tested. A target may say the
 //!   guard stands down for an `inlinehint` callee at an `optsize` caller
-//!   (`Tti::opt_size_inline_guard_yields_to_inlinehint`, arm64: yes): the pin's
-//!   `updateThreshold` raises the threshold to `InlineHintThreshold` (325)
-//!   there, and its cost under that is the verdict (QuickrBasic operands.c -Os
-//!   `hot_operand` into `hot_int`, 26 units against two 3-unit calls: 15,344 ->
-//!   10,400 B, the pin's 9,464). The guard still holds for a callee with no
-//!   hint.
+//!   (`Tti::opt_size_inline_guard_yields_to_inlinehint`, arm64 and x86-m32: yes): the
+//!   pin's `updateThreshold` raises the threshold to `InlineHintThreshold`
+//!   (325) there, and its cost under that is the verdict (QuickrBasic
+//!   operands.c -Os `hot_operand` into `hot_int`, 26 units against two 3-unit
+//!   calls: 15,344 -> 10,400 B, the pin's 9,464). The guard still holds for a
+//!   callee with no hint.
 //! - SZ1-SITE (owner m68k-b, exit 2026-11-24): the size rule (D11) prices a
 //!   callee's instruction with the call site's constant arguments, not only a
 //!   GEP as `isGEPFree` does (z80 `rotate_small` -O1 922 -> 576 B).
@@ -1429,6 +1429,17 @@ impl<'a> Analyzer<'a> {
         {
             return false;
         }
+        // The copy folds only where the loop unrolls whole: a bound over the
+        // pin's full-unroll threshold (`pin_full_unroll_threshold`, an
+        // unrolled body of at least one instruction a trip) leaves the copy
+        // as big as the callee (switch -O2: `bench_switch(2000)` kept beside
+        // its call, +402 B for the same clocks).
+        let bound = if from_arguments(lhs) { lhs } else { rhs };
+        if let Some(Simple::Int(_, trips)) = self.constant(bound) {
+            if trips > u128::from(crate::loopunrollpass::pin_full_unroll_threshold(3)) {
+                return false;
+            }
+        }
         let Some(block) = self.callee.parent(inst) else { return false };
         let headers = loop_headers(self.callee);
         // the loop the compare ends: its own header, or the header it branches
@@ -2749,11 +2760,20 @@ impl<'a> Analyzer<'a> {
             && !self.params.o1_bound
             && trial::speed_unroll().is_none()
             && tti.unroll_speed_trial()
-            && self.adds_bytes_to_price()
+            && self.may_add_bytes_to_price()
         {
             trial::note_speed_inline();
         }
         grows
+    }
+
+    /// Whether the inline may add bytes the estimate cannot see: it prices the
+    /// operations alone, a floor (fib -O2: `bench_fib` inlined into `main` is
+    /// 2 B estimated, 8 B built: the call's argument stays for the call the
+    /// body makes, and the sign extension has its register moves), so a growth
+    /// under the call's size is still tried and the module price decides.
+    fn may_add_bytes_to_price(&self) -> bool {
+        self.growth_per_site() > 0 && !self.site.sole_call_to_local && !self.peels_linear_recursion()
     }
 
     /// Whether the inline's growth is one the byte rate prices: over the call
@@ -2775,7 +2795,10 @@ impl<'a> Analyzer<'a> {
         let growth = self.growth_per_site();
         // Growth under one call's size is inside the estimate's resolution: the
         // sites of a dying callee fold differently and must not split.
-        if rate == 0 || !self.adds_bytes_to_price() {
+        // the variant that takes no growth refuses what the estimate may have
+        // under-counted, as the trial noted it
+        let adds = if rate == trial::NO_GROW_RATE { self.may_add_bytes_to_price() } else { self.adds_bytes_to_price() };
+        if rate == 0 || !adds {
             return false;
         }
         let saved = self
