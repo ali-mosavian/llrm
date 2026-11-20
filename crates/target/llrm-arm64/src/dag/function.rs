@@ -115,9 +115,6 @@ impl BuilderArch for Aarch64Arch {
 
 /// One block, selected and scheduled.
 pub struct Selected {
-    /// The blocks whose address is taken, by block id, and the symbol each is
-    /// known by.
-    pub address_taken: Vec<(u32, String)>,
     pub dag: SelectionDAG,
     pub units: Vec<Unit>,
     /// The argument registers copied to virtual registers on entry.
@@ -134,6 +131,8 @@ pub struct Selected {
     pub phis: Vec<PhiCopy>,
     /// The ids of the blocks each of the function's jump tables goes to.
     pub tables: Vec<Vec<u32>>,
+    /// The blocks whose address is taken, each with the symbol that names it.
+    pub address_taken: Vec<(u32, String)>,
     /// The frame object each source variable lives in (`llvm.dbg.declare` of a
     /// static `alloca`), by the variable's metadata node.
     pub declared: Vec<(llrm_mir::MetadataId, u32)>,
@@ -176,6 +175,7 @@ pub fn select_function_in(
 ) -> Result<Vec<Selected>, String> {
     let globals = Globals::of(module, layout, platform);
     let id = module.named(name).ok_or_else(|| format!("no function @{name}"))?;
+    let function_id = id.0;
     let function = module
         .global(id)
         .function()
@@ -222,12 +222,6 @@ pub fn select_function_in(
         .with_tail_calls(llrm_support::env_var("LLRM_TAIL_CALLS").is_none_or(|value| value != "0"))
         .with_zext_free(is_zext_free);
     let mut info = FunctionLoweringInfo::new(function);
-    let address_taken: Vec<(u32, String)> = function
-        .address_taken_blocks()
-        .map(|block| (block.0, llrm_codegen::backend::blockaddress::symbol(id, block)))
-        .collect::<std::collections::BTreeSet<_>>()
-        .into_iter()
-        .collect();
     let mut frame = static_frame(module, function, layout, &info)?;
     let mut selected = Vec::new();
     let declared: Vec<(llrm_mir::MetadataId, u32)> = function
@@ -323,7 +317,6 @@ pub fn select_function_in(
             })
             .collect();
         selected.push(Selected {
-            address_taken: address_taken.clone(),
             dag: built.dag,
             units,
             live_ins: built.live_ins,
@@ -333,6 +326,14 @@ pub fn select_function_in(
             successors,
             phis,
             tables: info.jump_tables.clone(),
+            // A block that replaced another answers to both addresses: one
+            // symbol.
+            address_taken: function
+                .address_taken_blocks()
+                .collect::<std::collections::BTreeSet<_>>()
+                .into_iter()
+                .map(|block| (block.0, super::globals::block_symbol(globals.local_prefix(), function_id, block.0)))
+                .collect(),
             declared: declared.clone(),
             dbg_values,
             edge_probs: info.edge_probs.iter().map(|(from, to, p)| (from.0, to.0, *p)).collect(),
@@ -387,7 +388,7 @@ fn branch_targets(
 /// Whether the last thing a built block does is an unconditional branch or a
 /// table jump (else it falls through).
 fn ends_in_jump(dag: &SelectionDAG) -> bool {
-    matches!(dag.opcode(dag.get_root()), ISD::Br | ISD::BrJT | ISD::BrInd)
+    matches!(dag.opcode(dag.get_root()), ISD::Br | ISD::BrJT)
 }
 
 /// The (size, alignment) of each static alloca, by the frame index

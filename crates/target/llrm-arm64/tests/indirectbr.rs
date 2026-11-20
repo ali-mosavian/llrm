@@ -17,7 +17,7 @@ fn block_symbols(body: &str) -> Result<Vec<usize>, String> {
     let mut at: Vec<usize> = image
         .symbols
         .iter()
-        .filter(|symbol| symbol.name.starts_with("$BA"))
+        .filter(|symbol| symbol.name.starts_with(".LBA"))
         .map(|symbol| match symbol.definition {
             Definition::Defined { offset, .. } => offset,
             _ => panic!("{} is undefined", symbol.name),
@@ -102,7 +102,7 @@ two:
         true,
     )
     .expect("an object");
-    let named: Vec<_> = image.symbols.iter().filter(|symbol| symbol.name.starts_with("$BA")).collect();
+    let named: Vec<_> = image.symbols.iter().filter(|symbol| symbol.name.starts_with(".LBA")).collect();
     assert!(named.iter().all(|symbol| matches!(symbol.definition, Definition::Defined { .. })), "{named:?}");
     let mut names: Vec<_> = named.iter().map(|symbol| symbol.name.clone()).collect();
     names.sort();

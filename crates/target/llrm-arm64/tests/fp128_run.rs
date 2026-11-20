@@ -26,3 +26,14 @@ fn integers_converted_to_long_double_keep_their_value() {
         assert_eq!(said, "111\n");
     }
 }
+
+/// A call's `f128` result that the allocator spilled from `v0` was stored with
+/// `str d0`, 64 of its 128 bits (the width came from the register, and a
+/// physical one is never wide). QuickrBasic's `pfpu.c` computed 2^3 as 4, and
+/// `power(2, n)` was 1 for every `n`.
+#[test]
+fn a_spilled_long_double_call_result_keeps_all_its_bits() {
+    if let Some(said) = output("long_double_spill") {
+        assert_eq!(said, "1 2 4 8 16 32 64 128 256 \n");
+    }
+}

@@ -138,7 +138,7 @@ fn is_terminator(op: &Op) -> bool {
                 | Inst::Brk { .. }
         ) | Op::Return { .. }
             | Op::JumpTable { .. }
-            | Op::IndirectBr { .. }
+            | Op::IndirectJump { .. }
     )
 }
 
@@ -436,10 +436,7 @@ impl Speculation {
             if facts.may_load || facts.may_store || facts.call || facts.side_effects {
                 return false;
             }
-            if matches!(
-                op,
-                Op::Call { .. } | Op::Return { .. } | Op::JumpTable { .. } | Op::IndirectBr { .. }
-            ) {
+            if matches!(op, Op::Call { .. } | Op::Return { .. } | Op::JumpTable { .. } | Op::IndirectJump { .. }) {
                 return false;
             }
             if facts.sets_flags {
@@ -582,6 +579,12 @@ impl IfConv {
         if tail != s1 && (cfg.pred[s1].len() != 1 || cfg.succ[s1].len() != 1 || cfg.succ[s1][0] != tail) {
             return None;
         }
+        // The blocks that vanish into the head must not be ones whose address
+        // is taken (`hasAddressTaken`): an `indirectbr` reaches them by it.
+        let taken = |at: usize| function.block_symbols.iter().any(|(label, _)| *label == cfg.labels[at]);
+        if taken(s0) || (s1 != tail && taken(s1)) {
+            return None;
+        }
         let tail_ops = &function.blocks[tail].ops;
         if !matches!(tail_ops.first(), Some(Op::Phi { .. })) {
             return None;
@@ -596,12 +599,6 @@ impl IfConv {
         let head_ops = &function.blocks[head].ops;
         let (cond, tbb, _, _) = analyze_branch(head_ops, &labels)?;
         let fbb = if tbb == s0 { s1 } else { s0 };
-        // An arm whose address is taken stays a block: the conversion deletes
-        // it.
-        let taken = |arm: usize| function.address_taken.iter().any(|(label, _)| *label == cfg.labels[arm]);
-        if [tbb, fbb].into_iter().any(|arm| arm != tail && taken(arm)) {
-            return None;
-        }
         let mut conv =
             IfConv { head, tail, tbb, fbb, cond, phis: Vec::new(), insertion: 0, forward: HashMap::default() };
         let (t_pred, f_pred) = (conv.t_pred(), conv.f_pred());

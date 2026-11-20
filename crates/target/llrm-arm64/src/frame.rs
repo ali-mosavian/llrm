@@ -669,7 +669,7 @@ pub fn lower(
                         Some(Callee::Register(register)) => Inst::BranchReg { link: false, rn: *register },
                     });
                 }
-                Op::IndirectBr { target, .. } => emitter.insts.push(Inst::BranchReg { link: false, rn: *target }),
+                Op::IndirectJump { rn, .. } => emitter.insts.push(Inst::BranchReg { link: false, rn: *rn }),
                 Op::JumpTable { dst, scratch, table, index, id, .. } => {
                     emitter.insts.extend(crate::jumptable::dest32(&function.name, *id, *dst, *scratch, *table, *index));
                 }
@@ -701,11 +701,6 @@ pub fn lower(
             emitter.insts.splice(at..at, tail.insts);
         }
         emitter.from_place(None);
-        // The symbol of a block whose address is taken stands at its start.
-        if let Some((_, symbol)) = function.address_taken.iter().find(|(label, _)| *label == block.label) {
-            emitter.insts.insert(0, Inst::Label(symbol.clone()));
-            emitter.locs.insert(0, None);
-        }
         out.push(Lowered { label: block.label.clone(), insts: emitter.insts, locs: emitter.locs });
     }
     if let Some(one) = wrapped.as_ref().filter(|one| !one.edges.is_empty()) {

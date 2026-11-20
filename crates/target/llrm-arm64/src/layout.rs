@@ -13,18 +13,6 @@ use crate::frame::Lowered;
 use crate::jumptable::Table;
 use crate::mc::inst::{Inst, Target};
 
-/// Whether `label` names a block whose address is taken
-/// (`llrm_codegen::backend::blockaddress::symbol`).
-pub(crate) fn is_address_symbol(label: &str) -> bool {
-    label.starts_with("$BA")
-}
-
-/// Whether the address of `block` is taken: code or data may jump to it from
-/// anywhere.
-pub(crate) fn address_taken(block: &Lowered) -> bool {
-    block.insts.iter().any(|inst| matches!(inst, Inst::Label(name) if is_address_symbol(name)))
-}
-
 pub(crate) fn label_of(inst: &Inst) -> Option<&str> {
     match inst {
         Inst::Branch { link: false, target: Target::Label(label) }
@@ -686,7 +674,7 @@ pub fn fold(
     optsize: bool,
     exits: &[crate::mc::visit::Reg],
 ) -> Vec<Lowered> {
-    fold_with_odds(blocks, tables, odds, optsize, exits, &[], &HashMap::default()).0
+    fold_with_odds(blocks, tables, odds, optsize, exits, &[], &[], &[]).0
 }
 
 /// The odds of the edges between blocks by label, as placement read them.
@@ -701,7 +689,8 @@ pub fn fold_with_odds(
     optsize: bool,
     exits: &[crate::mc::visit::Reg],
     dead_ends: &[String],
-    indirect: &HashMap<String, Vec<String>>,
+    kept: &[String],
+    indirect: &[(String, Vec<String>)],
 ) -> (Vec<Lowered>, Likelihood) {
     if blocks.is_empty() {
         return (blocks, Likelihood::default());
@@ -756,8 +745,13 @@ pub fn fold_with_odds(
     let table_of: HashMap<&str, &Table> = tables.iter().map(|table| (table.base.as_str(), table)).collect();
     // Reachable blocks, in `MachineBlockPlacement`'s order.
     let index: HashMap<&str, usize> = blocks.iter().enumerate().map(|(at, block)| (block.label.as_str(), at)).collect();
+    // The blocks an `indirectbr` may reach, by the block it ends.
+    let indirect: HashMap<&str, &Vec<String>> = indirect.iter().map(|(from, to)| (from.as_str(), to)).collect();
     let successors = |at: usize| -> Vec<usize> {
         let mut out: Vec<usize> = Vec::new();
+        if let Some(targets) = indirect.get(blocks[at].label.as_str()) {
+            out.extend(targets.iter().filter_map(|label| index.get(label.as_str()).copied()));
+        }
         for inst in &blocks[at].insts {
             match inst {
                 // The jump through a table goes to every entry.
@@ -769,22 +763,12 @@ pub fn fold_with_odds(
                 _ => out.extend(label_of(inst).and_then(|label| index.get(label).copied())),
             }
         }
-        // An `indirectbr` goes to the blocks it lists.
-        if let Some(targets) = indirect.get(&blocks[at].label) {
-            out.extend(targets.iter().filter_map(|label| index.get(label.as_str()).copied()));
-        }
         out
     };
     let mut reachable: Vec<usize> = Vec::new();
     let mut seen: HashSet<usize> = HashSet::default();
     let mut pending: Vec<usize> = vec![0];
     seen.insert(0);
-    // A block whose address is taken is a jump target nothing here sees.
-    for (at, block) in blocks.iter().enumerate() {
-        if address_taken(block) && seen.insert(at) {
-            pending.push(at);
-        }
-    }
     while let Some(at) = pending.pop() {
         reachable.push(at);
         for next in successors(at) {
@@ -973,7 +957,7 @@ pub fn fold_with_odds(
             likelihood.entry((jumper.clone(), to)).or_insert(odds);
         }
     }
-    crate::taildup::drop_unreferenced(&mut ordered, tables);
+    crate::taildup::drop_unreferenced(&mut ordered, tables, kept);
     crate::taildup::propagate_backward(&mut ordered, exits);
     // A branch to the next block falls through; a conditional branch over an
     // unconditional one is the inverse conditional (`cbz`/`tbz` too).

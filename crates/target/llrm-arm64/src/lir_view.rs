@@ -294,7 +294,7 @@ fn view_with(
                 ),
                 Op::FrameAddress { .. } => (Kind::Op("FrameAddress"), false, false, false),
                 Op::JumpTable { .. } => (Kind::Op("JumpTable"), true, true, false),
-                Op::IndirectBr { .. } => (Kind::Op("IndirectBr"), true, true, false),
+                Op::IndirectJump { .. } => (Kind::Op("IndirectJump"), true, true, false),
                 Op::Call { .. } => (Kind::Op("Call"), false, false, true),
                 Op::Return { .. } => (Kind::Op("Return"), true, true, false),
                 Op::Unreachable => (Kind::Op("Unreachable"), true, true, false),
@@ -352,7 +352,7 @@ fn view_with(
             {
                 operands.push(Operand::Block(*target));
             }
-            if let Op::JumpTable { targets, .. } | Op::IndirectBr { targets, .. } = &op {
+            if let Op::JumpTable { targets, .. } | Op::IndirectJump { targets, .. } = &op {
                 operands
                     .extend(targets.iter().filter_map(|label| labels.get(label.as_str())).map(|&b| Operand::Block(b)));
             }
@@ -517,6 +517,9 @@ fn rebuild_with(
     // argument or result, copied between `v0`..`v7`) included.
     let wide = crate::regalloc::wide_registers(function);
     let mut slots: HashMap<i32, u32> = HashMap::default();
+    // A spill's width is its slot's: the register it moves may be physical (a
+    // result left in `v0`), and a physical one has no class.
+    let slot_class: HashMap<i32, Class> = spill_slots.iter().copied().collect();
     for (slot, class) in spill_slots {
         let (size, align) = if *class == Class::Quad { (16, 16) } else { (8, 8) };
         slots.insert(*slot, function.slot(size, align));
@@ -589,8 +592,8 @@ fn rebuild_with(
                 }
                 Kind::Op(name @ ("SpillStore" | "SpillLoad")) => {
                     let Some(Operand::Frame(slot)) = inst.operands.last() else { panic!("a spill names no slot") };
+                    let quad = slot_class[slot] == Class::Quad;
                     let slot = slots[slot];
-                    let quad = registers[0].1 == Class::Quad;
                     ops.push(spill_access(reg_at(0), slot, name == "SpillLoad", quad));
                 }
                 Kind::Op(_)

@@ -4,10 +4,8 @@
 //! layout is the module's data layout (sizes, struct offsets, byte order); what
 //! a symbol is called in the object is the caller's.
 
-use crate::context::GlobalId;
 use crate::context::signed;
 use crate::datalayout::DataLayout;
-use crate::module::BlockId;
 use crate::{ConstantExpr, ConstantId, ConstantKind, FloatKind, GlobalKind, Linkage, Module, Type, TypeId};
 
 /// A pointer in a constant's bytes: where, to what, and the addend.
@@ -25,9 +23,9 @@ pub struct Writer<'a> {
     pub module: &'a Module,
     pub layout: &'a DataLayout,
     pub symbol_of: &'a dyn Fn(&str) -> String,
-    /// What the function calls the symbol at a block `blockaddress` names; a
-    /// target without one refuses the constant.
-    pub block_symbol: Option<&'a dyn Fn(GlobalId, BlockId) -> String>,
+    /// What the address of a block is called, for a target that can name one
+    /// (`GetBlockAddressSymbol`); none refuses a `blockaddress`.
+    pub block_symbol: Option<&'a dyn Fn(crate::context::GlobalId, crate::module::BlockId) -> String>,
 }
 
 impl Writer<'_> {
@@ -85,6 +83,25 @@ impl Writer<'_> {
                 }
                 Ok(())
             }
+            (ConstantKind::Expr(ConstantExpr::BlockAddress { function, block }), Type::Pointer(_)) => {
+                let Some(symbol_of) = self.block_symbol else {
+                    return Err("a blockaddress in a constant: this target has no symbol for a block".into());
+                };
+                // The block the address follows to, or LLVM's `inttoptr 1` where
+                // it is gone.
+                let target = match &self.module.global(*function).kind {
+                    GlobalKind::Function(target) => target.resolve_block_address(*block),
+                    _ => None,
+                };
+                match target {
+                    Some(block) => relocs.push(Reloc { at, symbol: symbol_of(*function, block), addend: 0 }),
+                    None => {
+                        let bytes = self.layout.pointer(0).bits as usize / 8;
+                        out[at..at + bytes].copy_from_slice(&1u64.to_le_bytes()[..bytes]);
+                    }
+                }
+                Ok(())
+            }
             (ConstantKind::Global(global), Type::Pointer(_)) => {
                 let name = self.module.global(*global).name.owned().ok_or("an unnamed global")?;
                 relocs.push(Reloc { at, symbol: (self.symbol_of)(&name), addend: 0 });
@@ -110,22 +127,6 @@ impl Writer<'_> {
                 }
                 let name = self.module.global(global).name.owned().ok_or("an unnamed global")?;
                 relocs.push(Reloc { at, symbol: (self.symbol_of)(&name), addend: offset as i64 });
-                Ok(())
-            }
-            // The symbol the function defines at the block (LLVM's
-            // `lowerConstant` of a `BlockAddress`); a block that is gone is 1.
-            (ConstantKind::Expr(ConstantExpr::BlockAddress { function, block }), Type::Pointer(space)) => {
-                let symbol = self.block_symbol.ok_or("a blockaddress in a global")?;
-                let GlobalKind::Function(target) = &self.module.global(*function).kind else {
-                    return Err("a blockaddress of a non-function".into());
-                };
-                match target.resolve_block_address(*block) {
-                    Some(block) => relocs.push(Reloc { at, symbol: symbol(*function, block), addend: 0 }),
-                    None => {
-                        let bytes = (self.layout.pointer(*space).bits / 8) as usize;
-                        self.put(out, at, &1u64.to_le_bytes()[..bytes]);
-                    }
-                }
                 Ok(())
             }
             (kind, ty) => Err(format!("the global initializer {kind:?} of type {ty:?}")),
@@ -198,13 +199,12 @@ pub fn variables(
     variables_with_blocks(module, layout, symbol_of, None)
 }
 
-/// [`variables`] for a target that defines a symbol at each address-taken
-/// block.
+/// [`variables`] for a target that names the address of a block.
 pub fn variables_with_blocks(
     module: &Module,
     layout: &DataLayout,
     symbol_of: &dyn Fn(&str) -> String,
-    block_symbol: Option<&dyn Fn(GlobalId, BlockId) -> String>,
+    block_symbol: Option<&dyn Fn(crate::context::GlobalId, crate::module::BlockId) -> String>,
 ) -> Result<Vec<Variable>, String> {
     let types = &module.context.types;
     let mut out = Vec::new();
@@ -218,13 +218,7 @@ pub fn variables_with_blocks(
         let size = layout.alloc_size(types, variable.ty) as usize;
         let mut bytes = vec![0u8; size];
         let mut relocs = Vec::new();
-        Writer { module, layout, symbol_of, block_symbol }.write(
-            initializer,
-            variable.ty,
-            &mut bytes,
-            0,
-            &mut relocs,
-        )?;
+        Writer { module, layout, symbol_of, block_symbol }.write(initializer, variable.ty, &mut bytes, 0, &mut relocs)?;
         let align = layout.global_align(types, variable.ty, variable.align, false, true, true) as usize;
         let zero = relocs.is_empty() && bytes.iter().all(|byte| *byte == 0);
         out.push(Variable {
