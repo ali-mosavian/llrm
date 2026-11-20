@@ -36,3 +36,4 @@ pub mod scaled;
 pub mod short;
 pub mod switchprice;
 pub mod widemul;
+pub mod zextmask;
