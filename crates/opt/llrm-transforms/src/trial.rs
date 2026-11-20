@@ -502,6 +502,79 @@ pub fn with_pin_inlines<T>(body: impl FnOnce() -> T) -> T {
     value
 }
 
+thread_local! {
+    /// The sites the second compile keeps as calls, while it runs.
+    static OUTLINED: RefCell<Vec<Site>> = const { RefCell::new(Vec::new()) };
+    /// The sites a compile accepted within the byte model's error, at -Os.
+    static ACCEPTED: RefCell<Vec<Site>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Runs `body` with `sites` kept as calls whenever the pass reaches them.
+pub fn with_outlined<T>(
+    sites: &[Site],
+    body: impl FnOnce() -> T,
+) -> T {
+    let before = OUTLINED.with(|cell| cell.replace(sites.to_vec()));
+    let value = body();
+    OUTLINED.with(|cell| *cell.borrow_mut() = before);
+    value
+}
+
+/// Whether the trial compile in force keeps this site a call.
+pub(crate) fn outlines(
+    caller: &str,
+    callees: &[String],
+) -> bool {
+    OUTLINED.with(|list| list.borrow().iter().any(|one| one.caller == caller && one.callees == callees))
+}
+
+/// Notes a site accepted at -Os, a candidate for [`with_outlined`].
+pub(crate) fn note_accepted(site: Site) {
+    ACCEPTED.with(|list| {
+        let mut list = list.borrow_mut();
+        if !list.contains(&site) {
+            list.push(site);
+        }
+    });
+}
+
+/// The accepted sites noted since the last call.
+pub fn take_accepted() -> Vec<Site> {
+    ACCEPTED.with(|list| std::mem::take(&mut *list.borrow_mut()))
+}
+
+/// Sites that share a function (a caller or a callee) are decided together: the functions they name, and which of
+/// the refused and the accepted sites (by index) they hold.
+#[derive(Clone, Debug, Default)]
+pub struct Group {
+    pub names: std::collections::BTreeSet<String>,
+    pub refused: Vec<usize>,
+    pub accepted: Vec<usize>,
+}
+
+/// The groups of `refused` and `accepted` sites, sites linked by a shared function name in one group.
+pub fn groups(
+    refused: &[Site],
+    accepted: &[Site],
+) -> Vec<Group> {
+    let mut found: Vec<Group> = Vec::new();
+    for (index, site, is_refused) in refused.iter().enumerate().map(|(i, s)| (i, s, true)).chain(accepted.iter().enumerate().map(|(i, s)| (i, s, false))) {
+        let names: Vec<&String> = std::iter::once(&site.caller).chain(&site.callees).collect();
+        let (hit, rest): (Vec<Group>, Vec<Group>) = found.into_iter().partition(|group| names.iter().any(|name| group.names.contains(*name)));
+        found = rest;
+        let mut merged = Group::default();
+        for group in hit {
+            merged.names.extend(group.names);
+            merged.refused.extend(group.refused);
+            merged.accepted.extend(group.accepted);
+        }
+        merged.names.extend(names.into_iter().cloned());
+        if is_refused { merged.refused.push(index) } else { merged.accepted.push(index) }
+        found.push(merged);
+    }
+    found
+}
+
 /// Whether a trial compile is running.
 pub(crate) fn inlining() -> bool {
     INLINED.with(|list| !list.borrow().is_empty())
@@ -797,4 +870,27 @@ pub(crate) fn note_speed_unroll(made: bool) {
 /// The decisions [`note_speed_unroll`] saw since the last call.
 pub fn take_speed_unrolls() -> UnrollDecisions {
     SPEED_UNROLLS.with(Cell::take)
+}
+
+#[cfg(test)]
+mod group_tests {
+    use super::*;
+
+    fn site(caller: &str, callee: &str) -> Site {
+        Site { caller: caller.to_owned(), callees: vec![callee.to_owned()] }
+    }
+
+    /// Two sites with one caller were two verdicts on the caller's bytes, so a trial built both and kept the one
+    /// that paid for the other. Sites that share a function, a refused and an accepted one included, are one group.
+    #[test]
+    fn sites_that_share_a_function_are_one_group() {
+        let refused = [site("main", "a"), site("other", "b")];
+        let accepted = [site("main", "put32"), site("lone", "c")];
+        let mut found = groups(&refused, &accepted);
+        found.sort_by_key(|group| group.names.len());
+        assert_eq!(found.len(), 3);
+        let joined = found.iter().find(|group| group.names.contains("main")).unwrap();
+        assert_eq!((joined.refused.clone(), joined.accepted.clone()), (vec![0], vec![0]));
+        assert!(joined.names.contains("a") && joined.names.contains("put32") && !joined.names.contains("other"));
+    }
 }
