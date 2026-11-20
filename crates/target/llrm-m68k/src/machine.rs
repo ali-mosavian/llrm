@@ -481,6 +481,20 @@ impl Tti for M68k {
         true
     }
 
+    /// D13 (owner llrm-target-m68k, exit 2026-12-20; the m16 rule): at -Os a callee that goes with its last call takes
+    /// no credit in instruction units. A copy carries its argument setup and the call's result moves that the units
+    /// leave out: jpeg_fixed's `message`, 10 sites of a loop and a call, was copied ten times (+198 B against gcc).
+    /// The sites are tried in bytes instead (SZ2).
+    fn inline_dying_credit_at_os(&self) -> bool {
+        false
+    }
+
+    /// D13 keeps the credit for a hot site: shift_int64_masked_amount's `mix`, called three times per trip of a nested
+    /// loop, stayed a call at -Os (188,470 -> 276,962 clocks, -6 B).
+    fn inline_hot_dying_credit_at_os(&self) -> bool {
+        true
+    }
+
     /// DEVIATE MERGEFUNC-OS (owner m68k, exit 2026-11-24; z80 and x86 m32 have it): `MergeFunctions` is off in the
     /// pin's pipeline; at -Os two functions of one body are one, the other a `bra` to it. gcc's `-fipa-icf` folds
     /// them (shift_int32_variable: `shl`/`shl2`, `shr`/`shr2`, `sar`/`sar2`).
