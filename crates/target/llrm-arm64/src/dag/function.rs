@@ -225,6 +225,8 @@ pub fn select_function_in(
     let address_taken: Vec<(u32, String)> = function
         .address_taken_blocks()
         .map(|block| (block.0, llrm_codegen::backend::blockaddress::symbol(id, block)))
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
         .collect();
     let mut frame = static_frame(module, function, layout, &info)?;
     let mut selected = Vec::new();

@@ -596,6 +596,12 @@ impl IfConv {
         let head_ops = &function.blocks[head].ops;
         let (cond, tbb, _, _) = analyze_branch(head_ops, &labels)?;
         let fbb = if tbb == s0 { s1 } else { s0 };
+        // An arm whose address is taken stays a block: the conversion deletes
+        // it.
+        let taken = |arm: usize| function.address_taken.iter().any(|(label, _)| *label == cfg.labels[arm]);
+        if [tbb, fbb].into_iter().any(|arm| arm != tail && taken(arm)) {
+            return None;
+        }
         let mut conv =
             IfConv { head, tail, tbb, fbb, cond, phis: Vec::new(), insertion: 0, forward: HashMap::default() };
         let (t_pred, f_pred) = (conv.t_pred(), conv.f_pred());

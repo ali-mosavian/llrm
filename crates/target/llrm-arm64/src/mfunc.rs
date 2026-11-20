@@ -742,11 +742,20 @@ pub fn lower_phis(function: &mut MFunc) -> Result<(), String> {
         let copies = |to: usize| -> Vec<Op> {
             edge_copies[&(from, to)].iter().map(|&(via, value)| Op::Copy { dst: via, src: value }).collect()
         };
-        if targets.len() == 1 {
+        // An `indirectbr` edge is never split (`canSplitCriticalEdge`): the
+        // blocks its address table names are the ones the symbols name, and
+        // the copies, each into its own phi's register, are harmless on the
+        // other paths.
+        let indirect = function.blocks[from].ops.iter().position(|op| matches!(op, Op::IndirectBr { .. }));
+        if targets.len() == 1 || indirect.is_some() {
             let ops = &mut function.blocks[from].ops;
-            let first_branch = ops.iter().rposition(|op| !is_branch(op)).map_or(0, |last| last + 1);
-            for (offset, copy) in copies(carrying[0]).into_iter().enumerate() {
-                ops.insert(first_branch + offset, copy);
+            let mut at =
+                indirect.unwrap_or_else(|| ops.iter().rposition(|op| !is_branch(op)).map_or(0, |last| last + 1));
+            for to in carrying {
+                for copy in copies(to) {
+                    ops.insert(at, copy);
+                    at += 1;
+                }
             }
             continue;
         }
