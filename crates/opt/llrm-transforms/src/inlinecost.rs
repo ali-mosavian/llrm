@@ -76,12 +76,12 @@
 //!   local callee, which goes with it, is the pin's. No shape of callee but the
 //!   loop and the one smaller than its call is tested. A target may say the
 //!   guard stands down for an `inlinehint` callee at an `optsize` caller
-//!   (`Tti::opt_size_inline_guard_yields_to_inlinehint`, arm64: yes): the
-//!   pin's `updateThreshold` raises the threshold to `InlineHintThreshold`
-//!   (325) there, and its cost under that is the verdict (QuickrBasic
-//!   operands.c -Os `hot_operand` into `hot_int`, 26 units against two 3-unit
-//!   calls: 15,344 -> 10,400 B, the pin's 9,464). The guard still holds for a
-//!   callee with no hint.
+//!   (`Tti::opt_size_inline_guard_yields_to_inlinehint`, arm64: yes): the pin's
+//!   `updateThreshold` raises the threshold to `InlineHintThreshold` (325)
+//!   there, and its cost under that is the verdict (QuickrBasic operands.c -Os
+//!   `hot_operand` into `hot_int`, 26 units against two 3-unit calls: 15,344 ->
+//!   10,400 B, the pin's 9,464). The guard still holds for a callee with no
+//!   hint.
 //! - SZ1-SITE (owner m68k-b, exit 2026-11-24): the size rule (D11) prices a
 //!   callee's instruction with the call site's constant arguments, not only a
 //!   GEP as `isGEPFree` does (z80 `rotate_small` -O1 922 -> 576 B).
@@ -559,7 +559,8 @@ struct Analyzer<'a> {
     single_bb_bonus: i64,
     threshold: i64,
     static_bonus_applied: i64,
-    /// `updateThreshold` raised the threshold for `inlinehint` at an `optsize` caller.
+    /// `updateThreshold` raised the threshold for `inlinehint` at an `optsize`
+    /// caller.
     hint_applied: bool,
     cost: i64,
     single_bb: bool,
@@ -2246,6 +2247,24 @@ impl<'a> Analyzer<'a> {
             return size;
         }
         let view = self.size_view();
+        if view.is_none()
+            && self.site.caller_size != CallerSize::Speed
+            && let Some(units) = memory_expansion_units(
+                self.context,
+                &self.site.module.globals,
+                self.callee,
+                inst,
+                tti,
+                self.site.layout,
+                &|length| match self.constant(length)? {
+                    Simple::Int(_, bits) => u64::try_from(bits).ok(),
+                    _ => None,
+                },
+                true,
+            )
+        {
+            return units;
+        }
         llrm_mir::instructioncost::instruction_cost_known(
             view.as_deref().unwrap_or(tti),
             self.context,
@@ -2380,7 +2399,8 @@ impl<'a> Analyzer<'a> {
         Some(CallShape { arguments, callee_frame_bytes: self.allocated_size, caller_frame_bytes })
     }
 
-    /// The arguments of `call` in `function`, but those `unread` says nothing reads.
+    /// The arguments of `call` in `function`, but those `unread` says nothing
+    /// reads.
     fn call_arguments(
         &self,
         function: &Function,
@@ -2394,15 +2414,25 @@ impl<'a> Analyzer<'a> {
             (0..operands.len().saturating_sub(1))
                 .filter(|&index| !unread.get(index).copied().unwrap_or(false))
                 .map(|index| {
-                    let byval = info.argument_attrs.get(index).and_then(|attrs| {
-                        attrs.iter().find_map(|one| match one {
-                            Attribute::Type(name, ty) if name == "byval" => Some(*ty),
-                            _ => None,
-                        })
-                    });
+                    let byval = info
+                        .argument_attrs
+                        .get(index)
+                        .and_then(
+                            |attrs| attrs
+                                .iter()
+                                .find_map(
+                                    |one| match one {
+                                        Attribute::Type(name, ty) if name == "byval" => Some(*ty),
+                                        _ => None,
+                                    },
+                                ),
+                        );
                     let ty = llrm_mir::instructioncost::operand_type(self.context, function, operands[index])
                         .and_then(|ty| Ty::of(&self.context.types, ty));
-                    CallArgument { ty, byval_bytes: byval.map(|ty| self.site.layout.alloc_size(&self.context.types, ty)) }
+                    CallArgument {
+                        ty,
+                        byval_bytes: byval.map(|ty| self.site.layout.alloc_size(&self.context.types, ty)),
+                    }
                 })
                 .collect(),
         )
@@ -2419,7 +2449,9 @@ impl<'a> Analyzer<'a> {
     ) -> Option<i64> {
         let tti = self.site.tti?;
         let target = llrm_mir::memory::callee(self.context, self.callee, inst)?;
-        if !lowered_to_call(self.site.module, target) || self.site.module.global(target).name.as_deref()?.starts_with("llvm.") {
+        if !lowered_to_call(self.site.module, target)
+            || self.site.module.global(target).name.as_deref()?.starts_with("llvm.")
+        {
             return None;
         }
         let shape = llrm_mir::tti::CallShape {
@@ -2853,6 +2885,58 @@ impl<'a> Analyzer<'a> {
         self.decided_by_threshold = true;
         if self.cost < self.threshold.max(1) && !grows && !outlined { Ok(()) } else { Err("Cost over threshold.".into()) }
     }
+}
+
+/// D11-MEM: the loads and stores a constant-length `memcpy`, `memmove` or
+/// `memset` at `inst` becomes (`length_at`: its length, constant at the call
+/// site where the arguments fix it), or the call it stays, in the units of the
+/// call the size guard holds the inline against
+/// (`Tti::size_caller_memory_units`). The pin counts the intrinsic as one
+/// instruction, so `them_dark` (`them_set(n)`: a store and a 48-byte copy, 2
+/// units against a call of 3) inlined its copy of 37 bytes for a 10-byte call.
+/// For a size-optimized caller only.
+pub(crate) fn memory_expansion_units(
+    context: &llrm_mir::context::Context,
+    globals: &[llrm_mir::module::GlobalValue],
+    function: &Function,
+    inst: InstId,
+    tti: &dyn llrm_mir::tti::Tti,
+    layout: &llrm_mir::datalayout::DataLayout,
+    length_at: &dyn Fn(Operand) -> Option<u64>,
+    unknown_length: bool,
+) -> Option<i64> {
+    let operation = function.instruction(inst);
+    if !matches!(operation.opcode, Opcode::Call(_)) {
+        return None;
+    }
+    let callee = llrm_mir::memory::callee(context, function, inst)?;
+    let family = globals.get(callee.0 as usize)?.name.as_deref()?.strip_prefix("llvm.")?.split('.').next()?;
+    if !matches!(family, "memcpy" | "memmove" | "memset") {
+        return None;
+    }
+    let length = length_at(*operation.operands.get(2)?);
+    let expanded = length.and_then(|length| tti.size_caller_memory_units(family, length));
+    expanded.or_else(|| {
+        // A copy or fill only between the callee's own stack objects is what
+        // SROA and `memcpyopt` delete once the site's constants reach it
+        // (`stack_arrays_copy`: `bench(63)` folds to a constant), so it stays
+        // the pin's one instruction.
+        let query = llrm_mir::valuetracking::Query::bare(context, function, layout);
+        let local = operation
+            .operands[..if family == "memset" { 1 } else { 2 }]
+            .iter()
+            .all(
+                |&pointer| matches!(
+                    llrm_mir::valuetracking::underlying::get_underlying_object(&query, pointer, 0),
+                    Operand::Value(root) if matches!(
+                        function.value(root).def,
+                        llrm_mir::module::ValueDef::Instruction(def)
+                            if matches!(function.instruction(def).opcode, Opcode::Alloca { .. })
+                    )
+                ),
+            );
+        if unknown_length && !local { tti.size_caller_memory_call_units() } else { None }
+    })
 }
 
 /// Per parameter of `callee`: nothing reads it and `deadargelim` will drop it
