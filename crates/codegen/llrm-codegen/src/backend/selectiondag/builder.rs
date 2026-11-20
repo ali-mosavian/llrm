@@ -108,6 +108,10 @@ pub struct BuilderTarget {
     /// is carried across blocks in several of them
     /// (`getVectorTypeBreakdown`).
     pub legal_vectors: Vec<MVT>,
+    /// A vector type with no register class and the legal one a register
+    /// carries it as (`getVectorTypeBreakdown`: `TypeWidenVector` and
+    /// `TypePromoteInteger` come before the halving).
+    pub vector_registers: Vec<(MVT, MVT)>,
     /// The narrowest integer an argument register carries: a narrower one is
     /// promoted to it (`CCPromoteToType`).
     pub min_argument_bits: u32,
@@ -551,6 +555,7 @@ impl BuilderTarget {
                 .take_while(|width| *width <= bits.max(32))
                 .collect(),
             legal_vectors: Vec::new(),
+            vector_registers: Vec::new(),
             min_argument_bits: 32,
             soft_float: false,
             libcalls: None,
@@ -1058,6 +1063,9 @@ impl Builder<'_> {
         let (EVT::Simple(mvt), true) = (vt, vt.is_vector()) else {
             return Err(Refused("vector with no register class"));
         };
+        if let Some(&(_, register)) = self.target.vector_registers.iter().find(|&&(from, _)| from == mvt) {
+            return Ok((EVT::Simple(register), 1));
+        }
         let element = mvt.element().ok_or(Refused("vector with no register class"))?;
         let (mut lanes, mut count) = (mvt.lanes().ok_or(Refused("vector with no register class"))?, 1usize);
         loop {

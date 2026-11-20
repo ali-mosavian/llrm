@@ -1654,3 +1654,30 @@ define void @sext_v3(ptr %p, ptr %q) {
         assert!(done.is_ok(), "{name}: {:?}", done.err());
     }
 }
+
+/// A `<2 x i8>` phi (SLP's, QB `them_set`) had no register type: `getVectorTypeBreakdown` was only the halving, missing the
+/// pin's first step (`TypeWidenVector` to the legal `<16 x i8>`), so every
+/// narrow vector live across a block was refused "vector with no register
+/// class".
+#[test]
+fn an_m64_narrow_vector_live_across_blocks_is_carried_in_a_register() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"
+define void @phi_v2(ptr %p, ptr %q, i1 %c) {
+entry:
+  %a = load <2 x i8>, ptr %q, align 1
+  br i1 %c, label %yes, label %join
+yes:
+  br label %join
+join:
+  %v = phi <2 x i8> [ %a, %entry ], [ <i8 15, i8 10>, %yes ]
+  store <2 x i8> %v, ptr %p, align 1
+  ret void
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    for name in ["phi_v2"] {
+        let done = selected(&module, name, &llrm_x86_m64::M64, cpu, &[]);
+        assert!(done.is_ok(), "{name}: {:?}", done.err());
+    }
+}
