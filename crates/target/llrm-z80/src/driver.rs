@@ -570,7 +570,7 @@ pub fn selections_with_alternatives(
             // else is switched, or the form that decomposes a multiply would
             // also carry the divide's price
             crate::dagisel::pipeline::SPEED_ROUTINES
-                .with(|one| one.set(divides && muls.is_none() && !fills && !shifts && !call_shifts && !products));
+                .with(|one| one.set(divides && muls.is_none() && !fills && !products));
             let (source, ilp) = select(module, name);
             let selected = (name.clone(), source, ilp);
             crate::dagisel::pipeline::INLINE_FILLS.with(|one| one.set(false));
