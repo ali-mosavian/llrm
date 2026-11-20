@@ -558,10 +558,22 @@ pub struct Tuning {
     /// code, summed over its sites. false: the pin's `OptSizeThreshold` 50
     /// alone decides, which allows the growth.
     pub inline_size_guard_at_size: bool,
+    /// With `inline_size_guard_at_size`, the bound also holds an -O1 caller.
+    /// false: -O1 keeps the pin's threshold alone, where clang inlines a small
+    /// callee that grows the code and clocks are the bar.
+    pub inline_size_guard_at_o1: bool,
     /// With `inline_size_guard_at_size`, the bound holds a callee with one
     /// site too (otherwise only two or more: the pin's single-site inline
     /// stands). A callee that stays and is copied once only grows the code.
     pub inline_size_guard_single_site: bool,
+    /// DEVIATE MEMSET-GAP (owner llrm-target-x86-m16-b, exit 2026-11-27): at
+    /// size, `MemCpyOpt` joins two memsets of one byte whose gap later stores
+    /// of another value overwrite whole, into one memset placed before the
+    /// first of them. SROA splits a zeroed aggregate's memset where a field is
+    /// then set, and each piece is a `rep stos` of its own (QB `forloop`: two
+    /// of 73 and 23 bytes; gcc clears the 104 once and stores the fields).
+    /// false: the pin's ranges, which end at a store of another value.
+    pub memset_gap_merge_at_size: bool,
     /// An -Os caller's SZ2 trial also inlines the sites its splice brings,
     /// priced by the ordinary rules, before it measures: `foo` into `main`
     /// and then `bar` into that copy meet the constants together, as the
@@ -936,7 +948,9 @@ impl Tuning {
         ext_load_extra_clocks: 0,
         immediate_forms_at_size: false,
         inline_size_guard_at_size: false,
+        inline_size_guard_at_o1: false,
         inline_size_guard_single_site: false,
+        memset_gap_merge_at_size: false,
         inline_chain_trial: false,
         lftr_size_budget: 4,
         inline_trial_defers_to_shared_growth: false,

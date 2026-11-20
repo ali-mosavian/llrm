@@ -291,6 +291,28 @@ fn test_an_optsize_caller_keeps_a_compare_loop_with_many_sites_when_the_target_g
     assert!(cost >= threshold, "{cost} against {threshold}");
 }
 
+/// The -Os size guard leaked into -O1 at m64: a callee of two sites whose
+/// copy grows the code stayed a call (QB strings.bas -O1: `exec_popi`, 22
+/// sites, 354M instructions against clang's 262M). -O1 keeps the pin's
+/// threshold unless the target says the guard binds there.
+#[test]
+fn test_an_o1_speed_caller_inlines_a_growing_callee_though_the_target_guards_size_at_os() {
+    let tti = |at_o1: bool| {
+        x86_64_non_pie().with_tuning(llrm_mir::target::Tuning {
+            inline_size_guard_at_size: true,
+            inline_size_guard_at_o1: at_o1,
+            ..llrm_mir::target::Tuning::PIN
+        })
+    };
+    let params = InlineParams { compute_full_inline_cost: true, o1_bound: true, ..InlineParams::from_level(2) };
+    let price =
+        |at_o1: bool| priced_params(COMPARE_LOOP, 0, false, CallerSize::Speed, Some(&tti(at_o1)), params, (2, false));
+    let (cost, threshold) = price(true);
+    assert!(cost >= threshold, "the premise: the guard holds it when asked ({cost} against {threshold})");
+    let (cost, threshold) = price(false);
+    assert!(cost < threshold, "-O1 took the guard of -Os ({cost} against {threshold})");
+}
+
 /// SZ2 at the 64-bit target: an external callee with ONE site is not copied
 /// into an `optsize` caller when the copy grows the code (cost 45 against 50
 /// inlined it; crc -Os m64: 139 B against gcc 96, which keeps the call).
@@ -1605,4 +1627,48 @@ b0:
     let (soft_cost, _) = priced_with(&text, 0, false, CallerSize::Speed, Some(&soft));
     // the fadd, the fmul (the constant sitofp folds)
     assert_eq!(soft_cost - hard_cost, 2 * crate::inlinecost::CALL_PENALTY, "hard {hard_cost}, soft {soft_cost}");
+}
+
+/// An indirect call through an argument the site makes a function is priced
+/// as the pin's `onLoweredCall` does: the target pretend-inlined at
+/// `IndirectCallThreshold`, what that leaves of 100 comes off the cost. We took
+/// the unknown call's 25 (QB `arry_each_slot` into `arry_free`: cost 290
+/// against the pin's 170, so the walk over each array slot stayed a call and
+/// ownf_free ran +5.6% instructions over clang -O2). `opt`: cost=-190,
+/// threshold=225.
+#[test]
+fn test_an_indirect_call_of_a_known_function_is_priced_as_the_pin_does() {
+    let text = format!(
+        "{GLOBAL}define internal void @target(ptr %p) {{
+b0:
+  %v = load i32, ptr %p
+  %w = add i32 %v, 1
+  store i32 %w, ptr %p
+  ret void
+}}
+
+define void @callee(ptr %p, ptr %fn, i32 %n) {{
+b0:
+  br label %loop
+
+loop:
+  %i = phi i32 [ 0, %b0 ], [ %j, %loop ]
+  call void %fn(ptr %p)
+  %j = add i32 %i, 1
+  %c = icmp ult i32 %j, %n
+  br i1 %c, label %loop, label %done
+
+done:
+  ret void
+}}
+
+define void @f(ptr %p, i32 %n) {{
+b0:
+  call void @callee(ptr %p, ptr @target, i32 %n)
+  call void @callee(ptr %p, ptr @target, i32 %n)
+  ret void
+}}
+"
+    );
+    assert_eq!(priced(&text, 0, false, CallerSize::Speed), (-190, 225));
 }
