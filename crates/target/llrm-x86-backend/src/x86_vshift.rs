@@ -20,7 +20,7 @@ use llrm_codegen::backend::selectiondag::isd::ISD;
 use llrm_codegen::backend::selectiondag::known_bits::{known_bits, masked_value_is_zero};
 use llrm_codegen::backend::selectiondag::mvt::{EVT, MVT};
 
-use crate::x86_lowering::{reinterpreted, scalar_in_lane0, v128, x86isd};
+use super::x86_lowering::{reinterpreted, scalar_in_lane0, v128, x86isd};
 
 fn lane_bits(vt: EVT) -> u128 {
     u128::from(vt.element().size_in_bits())

@@ -868,7 +868,7 @@ impl Hooks for X86Lowering<'_> {
             ISD::ShlParts | ISD::SraParts | ISD::SrlParts => Some(lower_shift_parts(dag, node)),
             ISD::Abs => Some(lower_abs(dag, node)),
             ISD::Shl | ISD::Srl | ISD::Sra if dag.value_type(node).is_vector() => {
-                crate::x86_vshift::lower_vector_shift(dag, node)
+                super::x86_vshift::lower_vector_shift(dag, node)
             }
             ISD::BuildVector => lower_build_vector_splat(dag, node),
             ISD::Mul if dag.value_type(node) == EVT::Simple(MVT::V4I32) => Some(lower_mul_v4i32(dag, node)),
