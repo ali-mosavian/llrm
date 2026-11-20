@@ -243,9 +243,16 @@ impl CalleeFacts {
         arch: &dyn llrm_target::Target,
         name: &str,
     ) -> i64 {
-        if let Some(bytes) = self.forced_alignment {
-            bytes
-        } else if self.aligned.contains(name) || arch.aligned_calls() {
+        self.forced_alignment.unwrap_or_else(|| self.convention_alignment(arch, name))
+    }
+
+    /// `stack_alignment` before `-mstack-alignment=` widens it.
+    fn convention_alignment(
+        &self,
+        arch: &dyn llrm_target::Target,
+        name: &str,
+    ) -> i64 {
+        if self.aligned.contains(name) || arch.aligned_calls() {
             self.convention
                 .get(name)
                 .and_then(|&number| arch.calling().by_number(number)?.stack_alignment)
@@ -264,7 +271,7 @@ impl CalleeFacts {
         arch: &dyn llrm_target::Target,
         name: &str,
     ) -> i64 {
-        self.stack_alignment(arch, name).min(arch.stack_alignment().max(arch.stack_slot_bytes()))
+        self.convention_alignment(arch, name).min(arch.stack_alignment().max(arch.stack_slot_bytes()))
     }
 
     /// What each function of the module does to memory, where the facts were
@@ -317,6 +324,12 @@ impl CalleeFacts {
                     whole.extend(callee.whole);
                     tail_high.extend(callee.high);
                 }
+            }
+            // A one-slot frame is `push rax` / `pop rcx`: the epilogue writes
+            // the dead register. Masm sizes the frame after this, so a function
+            // that may have one is taken to write it.
+            if let Some((_, pop)) = frame.slot_scratch {
+                whole.insert(regs.root(pop));
             }
             // The frame's own registers are its prologue's and epilogue's.
             for own in [frame.pointer, frame.stack] {
@@ -467,6 +480,17 @@ mod tests {
         );
     }
 
+    /// `-mstack-alignment=16` pads each call, not each object: a function with
+    /// no double kept 4-byte objects (the flag made every one 8-aligned, and
+    /// widened every frame's locals).
+    #[test]
+    fn a_forced_stack_alignment_pads_calls_and_leaves_objects_alone() {
+        let module = parsed("define i32 @plain(i32 %x) {\nb0:\n  ret i32 %x\n}\n");
+        let facts = CalleeFacts::of(&module).0.aligning_every_call(Some(16));
+        assert_eq!(facts.stack_alignment(&llrm_x86_m32::M32, "plain"), 16);
+        assert_eq!(facts.object_alignment(&llrm_x86_m32::M32, "plain"), 4);
+    }
+
     /// Callees come before their callers, which is when a caller finds the fact
     /// of what it calls.
     #[test]
@@ -534,6 +558,50 @@ mod tests {
         assert_eq!(facts.written("leaf").unwrap().high, BTreeSet::from([RegId::EDI]), "saved by the word");
         facts.record("leaf", &body, &frame(vec![(RegId::EDI, RegId::EDI)]), &IndexMap::default());
         assert!(facts.written("leaf").unwrap().high.is_empty(), "saved whole");
+    }
+
+    /// A function with a one-slot frame ends `pop rcx`; its fact said it wrote
+    /// no `rcx`, so a caller kept a partial sum there across it
+    /// (word_sign_zero_guard m64: `gt0() * 1000 + le0() * 100` read garbage).
+    #[test]
+    fn a_one_slot_frames_pop_register_is_written() {
+        use crate::model::lir::{Insn, LirBlock};
+
+        let ret = Arc::new(Insn::new(
+            1,
+            Some((1, 1)),
+            Some(crate::model::ir::Semantics::new(crate::model::ir::Operation::Return)),
+            vec![],
+            vec![],
+        ));
+        let body =
+            LirBody::new("leaf", 1, vec![LirBlock::new(1, vec![ret]).into()], IndexMap::default(), IndexMap::default());
+        let frame = |slot_scratch| llrm_target::FrameRegisters {
+            vector_saved: Vec::new(),
+            pointer: RegId::BP,
+            stack: RegId::SP,
+            saved: vec![],
+            slot: 2,
+            align: 2,
+            object_align: 2,
+            optional: false,
+            enter: false,
+            wrap_split_size: false,
+            object_aligned: false,
+            red_zone: 0,
+            slot_scratch,
+            slot_dead_checked: false,
+            slot_add_with_saved: false,
+            free: false,
+            kept: false,
+            exit_cfi: true,
+            saved_first: false,
+        };
+        let facts = CalleeFacts::of(&parsed(LEAF)).0;
+        facts.record("leaf", &body, &frame(Some((RegId::EAX, RegId::ECX))), &IndexMap::default());
+        assert!(facts.written("leaf").unwrap().whole.contains(&RegId::ECX), "the pop writes ecx");
+        facts.record("leaf", &body, &frame(None), &IndexMap::default());
+        assert!(!facts.written("leaf").unwrap().whole.contains(&RegId::ECX), "no slot, no pop");
     }
 
     /// `heap.trim` ended in a sibling `jmp` to `heap.release`, which writes

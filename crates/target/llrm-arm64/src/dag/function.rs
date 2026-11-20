@@ -47,6 +47,7 @@ pub fn builder_target(platform: Platform) -> BuilderTarget {
         shift_amount: EVT::I64,
         legal_ints: vec![32, 64],
         legal_vectors: llrm_sdag::lowering::TargetLoweringInfo::aarch64().legal_vectors().to_vec(),
+        vector_registers: llrm_sdag::lowering::TargetLoweringInfo::aarch64().vector_registers(),
         soft_float: false,
         stack_align: Some(16),
         max_alloca_align: Some(16),
@@ -240,7 +241,7 @@ pub fn select_function_in(
         let made = !extras.is_empty();
         let parent_updates = built.phi_updates.clone();
         // The branches are read before selection turns them into machine nodes.
-        let exits = (branch_targets(&built.dag), ends_in_jump(&built.dag));
+        let exits = (branch_targets(&built.dag, &info.jump_tables), ends_in_jump(&built.dag));
         let units = select_block(&mut built.dag, &globals, &mut info, opt_for_size, platform == Platform::Linux)
             .map_err(|why| format!("{why:?}"))?;
         work.push((block.0, made, built, units, exits));
@@ -249,7 +250,7 @@ pub fn select_function_in(
             // of the successors too, so each takes the phi values the block
             // that made it does.
             extra.phi_updates = parent_updates.clone();
-            let exits = (branch_targets(&extra.dag), ends_in_jump(&extra.dag));
+            let exits = (branch_targets(&extra.dag, &info.jump_tables), ends_in_jump(&extra.dag));
             let units = select_block(&mut extra.dag, &globals, &mut info, opt_for_size, platform == Platform::Linux)
                 .map_err(|why| format!("{why:?}"))?;
             work.push((id.0, true, extra, units, exits));
@@ -336,8 +337,12 @@ pub fn select_function_in(
 
 /// The blocks the branches of a built block name, in the order they execute.
 /// The chain from the root passes the nodes between the branches (the copies
-/// that export a value to another block).
-fn branch_targets(dag: &SelectionDAG) -> Vec<u32> {
+/// that export a value to another block). A table jump goes to each entry of
+/// its table.
+fn branch_targets(
+    dag: &SelectionDAG,
+    tables: &[Vec<u32>],
+) -> Vec<u32> {
     let mut targets = Vec::new();
     let mut at = dag.get_root();
     loop {
@@ -351,6 +356,15 @@ fn branch_targets(dag: &SelectionDAG) -> Vec<u32> {
         {
             targets.push(block);
         }
+        if dag.opcode(at) == ISD::BrJT
+            && let NodeData::JumpTable(table) = dag.node(dag.operand(at, 1)).data
+        {
+            for block in tables.get(table as usize).into_iter().flatten().rev() {
+                if !targets.contains(block) {
+                    targets.push(*block);
+                }
+            }
+        }
         match dag.node(at).ops.first() {
             Some(&chain) if dag.value_type(chain) == EVT::OTHER => at = chain,
             _ => break,
@@ -360,10 +374,10 @@ fn branch_targets(dag: &SelectionDAG) -> Vec<u32> {
     targets
 }
 
-/// Whether the last thing a built block does is an unconditional branch (else
-/// it falls through).
+/// Whether the last thing a built block does is an unconditional branch or a
+/// table jump (else it falls through).
 fn ends_in_jump(dag: &SelectionDAG) -> bool {
-    dag.opcode(dag.get_root()) == ISD::Br
+    matches!(dag.opcode(dag.get_root()), ISD::Br | ISD::BrJT)
 }
 
 /// The (size, alignment) of each static alloca, by the frame index

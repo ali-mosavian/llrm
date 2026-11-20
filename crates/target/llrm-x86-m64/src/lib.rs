@@ -416,6 +416,8 @@ impl llrm_target::Target for M64 {
                     .map(|one| {
                         one.with_tuning(llrm_mir::target::Tuning {
                             inline_size_guard_at_size: true,
+                            // DEVIATE MEMSET-GAP (owner llrm-target-x86-m16-b, exit 2026-11-27): see Tuning.
+                            memset_gap_merge_at_size: true,
                             // DEVIATE LFTR-SIZE (owner llrm-target-x86-m64, exit 2026-11-24; gcc-bar only): see
                             // Tuning. m64 -Os 22 files smaller (-189 B), sieve +1 cell, spill_store_order +16 B.
                             lftr_size_budget: 1,
@@ -588,7 +590,7 @@ impl llrm_target::Target for M64 {
                             size_copy_price: Some(llrm_mir::target::CopyPrice { call: 14, wide_piece: 8, narrow_piece: 6 }),
                             // DEVIATE IMM-1 (owner greedy-os-causes, exit 2026-11-20): see Tuning.
                             immediate_forms_at_size: true,
-                            // DEVIATE IPACP-O2 (owner w10, exit 2026-11-24): see Tuning.
+                            // DEVIATE IPACP-O3 (owner x86-m32-c, exit 2026-12-20): see Tuning; none at -O2.
                             ipa_cp_clones_at_speed: true,
                             // DEVIATE IPACP-O3-M64 (owner x87-cordic-2, exit 2026-12-20): gcc clones `place`
                             // for each row of queens; 4 left rows 4.. generic (+4.3% clk). 8 clones grow

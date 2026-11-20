@@ -74,6 +74,8 @@
 //! module's own header.
 
 pub mod adce;
+#[cfg(test)]
+mod addresstaken_tests;
 pub mod aggressive_instcombine;
 pub mod algebraic;
 pub mod alwaysinline;
@@ -198,6 +200,7 @@ pub mod combine_select_op_op;
 pub mod combine_select_spf;
 pub mod combine_select_tail;
 pub mod combine_select_to_cmp;
+pub mod combine_select_to_phi;
 #[cfg(test)]
 mod combine_semantics_tests;
 pub mod combine_shared;
@@ -332,6 +335,7 @@ pub mod looppeel;
 pub mod looprotate;
 pub mod loopsimplify;
 pub mod loopsimplifycfg;
+pub mod loopsplit;
 pub mod looptermfold;
 pub mod loopunroll;
 pub mod loopunrollandjam;

@@ -891,13 +891,29 @@ impl ProgramPass for Walk {
                                         costs.function_scale = costs.function_scale * costs.size_caller_scale / 100;
                                     }
                                     let now = module.global(id).function().expect("a body");
-                                    // A dying callee is credited once.
-                                    let gone: i64 = if credit > 0 {
+                                    // DEVIATE (owner softfloat, exit
+                                    // 2026-11-20): the callee's bytes are
+                                    // summed per
+                                    // site off the byte gate's targets, as the
+                                    // x86 model was fit with. The credit gate
+                                    // (x86-m32) credits a dying callee once.
+                                    let gone: i64 = if credit > 0
+                                        && (tti.opt_size_inline_byte_gate()
+                                            || tti.opt_size_inline_trial_by_bytes()
+                                            || tti.opt_size_inline_credit_gate())
+                                    {
                                         let sites: Vec<GlobalId> =
                                             calls.iter().filter_map(|one| trials[one].callee).collect();
                                         dying_callees_bytes(module, &sites, |body| {
                                             function_bytes(module, &program.layout, &costs, body)
                                         })
+                                    } else if credit > 0 {
+                                        calls
+                                            .iter()
+                                            .filter_map(|one| trials[one].callee)
+                                            .filter_map(|callee| module.global(callee).function())
+                                            .map(|body| function_bytes(module, &program.layout, &costs, body))
+                                            .sum()
                                     } else {
                                         0
                                     };
@@ -2262,6 +2278,14 @@ fn sized(
                     function,
                     inst,
                     tti,
+                    layout,
+                    &|length| match length {
+                        llrm_mir::module::Operand::Constant(id) => match module.context.get(id).kind {
+                            llrm_mir::context::ConstantKind::Int(bits) => u64::try_from(bits).ok(),
+                            _ => None,
+                        },
+                        _ => None,
+                    },
                     false,
                 )
             {

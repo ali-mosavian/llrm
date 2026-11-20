@@ -318,6 +318,12 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // DEVIATE SZ2 (owner x86-m32, exit 2026-11-20): -Os keeps a once-called
         // callee whose copy grows the code (gcc does; the pin copies it).
         inline_size_guard_single_site: true,
+        // The SZ1 guard yields where the pin's `updateThreshold` raises an
+        // `inlinehint` callee to 325 at an `optsize` caller (QuickrBasic
+        // operands.c: `hot_int` into its wrappers).
+        inline_size_guard_yields_to_inlinehint: true,
+        // DEVIATE MEMSET-GAP (owner llrm-target-x86-m16-b, exit 2026-11-27): see `Tuning`.
+        memset_gap_merge_at_size: true,
         // DEVIATE SZ3 (owner x86-m32, exit 2026-11-20): an -Os SZ2 trial also
         // inlines the sites its splice brings. The pin inlines callee-first
         // (`bar` into `foo`, cost 15 < 75, then `foo` into
@@ -891,6 +897,19 @@ mod tests {
     fn test_the_o1_unroll_trial_takes_nests_only() {
         let tuning = super::tuning(&llrm_mir::target::OperationCosts::default());
         assert!(tuning.unroll_trial_at_o1.is_some() && tuning.unroll_trial_nests_only);
+    }
+
+    /// QuickrBasic `repl.c` -O2: ipa-cp cloned `read_file` eight times (a
+    /// recursion whose chain benefit compounds, 3e12 for 40 clocks a call):
+    /// 16,336 B against 10,738 B with `-fno-ipa-cp-clone`, gcc 6,025. gcc and the
+    /// pin make no clone at -O2; -O3 clones as gcc does.
+    #[test]
+    fn test_m32_makes_no_ipa_cp_clones_at_o2() {
+        use llrm_mir::tti::Tti;
+        let tuning = super::tuning(&llrm_mir::target::OperationCosts::default());
+        let tti = llrm_x86::tti::X86::of_cpu("i486").unwrap().with_tuning(tuning);
+        assert!(tti.ipa_cp_clones_at_speed(), "-O3 clones");
+        assert!(!tti.ipa_cp_clones_at_o2(), "-O2 does not");
     }
 
     /// -O3 copied a recursion to depth 8 with the loop first, gcc's setting,

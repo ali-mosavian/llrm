@@ -1130,6 +1130,14 @@ pub trait Tti {
         false
     }
 
+    /// Whether the `opt_size_inline_by_code_size` rule also holds a speed
+    /// caller at -O1. true: it does (wasm SZ1, the small targets). false: -O1
+    /// keeps the pin's threshold, which inlines a small callee that grows the
+    /// code (clang -O1, the bar where clocks are judged).
+    fn opt_size_inline_rule_at_o1(&self) -> bool {
+        true
+    }
+
     /// The cost model the inliner counts a callee's size with, where the
     /// target's `CodeSize` is not bytes: the same model with `CodeSize` in
     /// bytes of code. None: `CodeSize` as it is. The other passes keep
@@ -1418,6 +1426,14 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE OS-OUTLINE-TRIAL (owner llrm-target-m68k, exit 2026-12-20): whether a cold -Os site the size bound
+    /// accepts, of a callee that goes with its calls, is also built as a call in a second compile, the driver keeping
+    /// the finished code with fewer bytes. The units price a copy under the bytes the backend writes for it (jpeg_fixed
+    /// `put32`: 15 units a copy, a call 18; -20 B outlined). False: the bound's verdict stands.
+    fn opt_size_inline_outline_trial(&self) -> bool {
+        false
+    }
+
     /// Whether a callee the -O1 size bound refused is tried inline as at -Os
     /// (SZ2: the copy stays if the caller comes out smaller), where -O1
     /// prices no byte in clocks. False: the bound's verdict stands.
@@ -1615,6 +1631,13 @@ pub trait Tti {
     /// and the frame could no longer start after the guard (shrink wrapping).
     /// False: the pin's rule.
     fn licm_speculation_keeps_frame_late(&self) -> bool {
+        false
+    }
+
+    /// DEVIATE LSPLIT (owner arm64, exit 2026-11-24): `loopsplit`, GCC's
+    /// `-fsplit-loops` (`tree-ssa-loop-split.cc`), a pass the pin does not
+    /// have. False: the loop is left whole.
+    fn loop_split(&self) -> bool {
         false
     }
 
@@ -1921,6 +1944,17 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE UNROLL-PRICED-OS (owner 6502, exit 2026-11-24): whether a full
+    /// unroll that `-Os` admits by the pin's size estimate (`LoopSize + 1`,
+    /// counted in IR instructions) is priced on the backend's bytes as at
+    /// -O2, so one that adds a byte stays a loop. The estimate counts the
+    /// loop's counter and exit test as code the copies lose; a target whose
+    /// loop control is cheaper than the copies it replaces writes the
+    /// unrolled code larger.
+    fn unroll_priced_at_size(&self) -> bool {
+        false
+    }
+
     /// DEVIATE UNROLL-OS-TRIAL: see `Tuning::unroll_trial_at_size`.
     fn unroll_trial_at_size(&self) -> Option<u32> {
         None
@@ -1932,6 +1966,16 @@ pub trait Tti {
     /// by its unrolled size alone, so that a loop the pin unrolls under its own
     /// threshold is tried where this target's units count it larger.
     fn unroll_trial_analyzed_at_speed(&self) -> bool {
+        false
+    }
+
+    /// DEVIATE UNROLL-TRIAL-NEST-OS (owner 6502, exit 2026-11-24): the same
+    /// at -Os: an innermost loop the pin refuses by `LoopSize + 1` is tried
+    /// at the cost the analysis finds once the trips' constants fold, scaled by
+    /// the boost the pin gives at -O2 (its -Os boost is 100), and kept only if
+    /// the module is smaller (`trial_pays`). A nest the pin unrolls whole at
+    /// -O2 folds to 62 B (int64_division); at -Os it stayed 3,336 B.
+    fn unroll_trial_analyzed_at_size(&self) -> bool {
         false
     }
 
@@ -1963,6 +2007,11 @@ pub trait Tti {
     /// savings (`analyzeLoopUnrollCost` skips a loop with a subloop), only
     /// by size.
     fn unroll_trial_nests_at_speed(&self) -> bool {
+        false
+    }
+
+    /// `Tuning::memset_gap_merge_at_size` (MEMSET-GAP).
+    fn memset_gap_merge_at_size(&self) -> bool {
         false
     }
 
@@ -2277,6 +2326,13 @@ pub trait Tti {
     /// the pin has it (wasm). owner: wasm, exit: 2026-12-04.
     fn lsr_scales_zero_compare_past_overflow(&self) -> bool {
         true
+    }
+
+    /// DEVIATE LG2 alone: the even-factor half of
+    /// [`Tti::lsr_scales_zero_compare_past_overflow`], which a target can keep
+    /// where it turns the odd half (LG1) off. Follows it by default.
+    fn lsr_scales_even_zero_compare(&self) -> bool {
+        self.lsr_scales_zero_compare_past_overflow()
     }
 
     /// `Tuning::ipsccp_widen_keeps_sign`.
@@ -2926,6 +2982,16 @@ pub trait Tti {
     /// pin's.
     fn lsr_post_indexed_amortized(&self) -> bool {
         false
+    }
+
+    /// DEVIATE LSR-POSTINC-WALKS (owner m68k, exit 2026-12-17; gcc's ivopts
+    /// counts registers against the loop's pointers): a loop that indexes more
+    /// objects than this keeps no post-indexed preference, since each walk holds
+    /// an address register and the ones past the class are spilled and
+    /// reloaded every trip (early_exit_widths `reset`: eight walks, six address
+    /// registers). None: the preference holds at any count, as the pin's.
+    fn lsr_post_indexed_walk_limit(&self) -> Option<u32> {
+        None
     }
 
     /// DEVIATE LSR-POSTINC-PAIR (target flag): the pair form of a load or
