@@ -955,6 +955,23 @@ fn compare(
             return (if cc == SetEq { cond::Z } else { cond::NZ }, flags);
         }
     }
+    // `a == b` beside a computed `a - b` (or `b - a`) is the zero test of that
+    // difference: the words are not compared a second time (6 B). The
+    // reverse of InstCombine's `(a - b) == 0` -> `a == b`, which the pin's X86
+    // undoes by sharing the SUB's EFLAGS with the CMP (`combineX86AddSub`,
+    // `matchGenericOp`).
+    if vt == EVT::I16 && matches!(cc, SetEq | SetNe) && dag.constant(op0).is_none() && dag.constant(op1).is_none() {
+        for (x, y) in [(op0, op1), (op1, op0)] {
+            if let Some(node) = dag.get_node_if_exists(ISD::Sub, &[vt], &[x, y]) {
+                if dag.use_count(node) > 0 {
+                    let difference = SDValue { node, res: 0 };
+                    let zero = dag.get_constant(0, vt);
+                    let (code, a, b) = translate_cc(dag, cc, difference, zero);
+                    return (code, dag.get_node(z80isd::CMP, EVT::I8, &[a, b]));
+                }
+            }
+        }
+    }
     // `cp (hl)` takes the memory operand second: a loaded byte compared with a
     // register is compared the other way round, with the order of the
     // condition reversed

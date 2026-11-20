@@ -237,7 +237,8 @@ pub fn routine_procedure(
     routine_of_parts(name, vec![InlinePart::Bytes(code)], registers, regs)
 }
 
-/// `routine_procedure` of parts, which may name a symbol: an offset the linker fills.
+/// `routine_procedure` of parts, which may name a symbol: an offset the linker
+/// fills.
 pub fn routine_of_parts(
     name: &str,
     code: Vec<InlinePart>,
@@ -264,10 +265,7 @@ pub fn routine_of_parts(
         far: false,
         body,
         reserve: 0,
-        callees: IndexMap::from_iter([(
-            1,
-            Callee { name: name.into(), far: false, pops: 0, code, tail: false },
-        )]),
+        callees: IndexMap::from_iter([(1, Callee { name: name.into(), far: false, pops: 0, code, tail: false })]),
         interrupt: None,
         size: false,
         entry: 0,
@@ -1216,12 +1214,12 @@ fn realign_of(body: &lir::LirBody) -> i64 {
 /// Why `procedure` cannot have its stack pointer realigned, if it cannot: it
 /// is refused rather than compiled with a local off its alignment.
 ///
-/// DEVIATE RA1 (owner object-refactor, 2026-10-28): a dynamic `alloca` beside an
-/// over-aligned local is refused; the pin addresses the locals through a base
-/// pointer (`X86RegisterInfo::hasBasePointer`). DEVIATE RA2 (owner object-refactor,
-/// 2026-10-28): `-g` variables are refused; their locations need the canonical
-/// frame address, which a realigned frame moves. Exit for both: the pin's
-/// base pointer and CFA locations in `lowered`.
+/// DEVIATE RA1 (owner object-refactor, 2026-10-28): a dynamic `alloca` beside
+/// an over-aligned local is refused; the pin addresses the locals through a
+/// base pointer (`X86RegisterInfo::hasBasePointer`). DEVIATE RA2 (owner
+/// object-refactor, 2026-10-28): `-g` variables are refused; their locations
+/// need the canonical frame address, which a realigned frame moves. Exit for
+/// both: the pin's base pointer and CFA locations in `lowered`.
 pub fn realign_refusal(procedure: &Procedure) -> Option<String> {
     if realign_of(&procedure.body) == 0 {
         return None;
@@ -1344,7 +1342,8 @@ pub fn saved_first(procedure: Procedure) -> Procedure {
     // Where the frame register is omitted and that is settled without a size
     // comparison (`frame_omitted`), its cell is not reserved: the return
     // address and the registers are what the locals are aligned below. The
-    // 32-bit frames keep it unless the frame register is free (Watcom's layout, not the pin's).
+    // 32-bit frames keep it unless the frame register is free (Watcom's layout,
+    // not the pin's).
     let mut checked = None;
     let dropped = (matches!(procedure.body.bits, 64) || (procedure.body.bits == 32 && procedure.registers.free)) && {
         let held = frame_held(&procedure);
@@ -1365,11 +1364,12 @@ pub fn saved_first(procedure: Procedure) -> Procedure {
     }
     // A 32-bit leaf with no frame register rounds its locals to the widest
     // object only, as the pin does (`calculateFrameObjectOffsets`).
-    let align = if dropped && procedure.body.bits == 32 && !aligns_for_calls(&procedure) && procedure.body.object_align > 0 {
-        procedure.body.object_align.max(slot).min(align)
-    } else {
-        align
-    };
+    let align =
+        if dropped && procedure.body.bits == 32 && !aligns_for_calls(&procedure) && procedure.body.object_align > 0 {
+            procedure.body.object_align.max(slot).min(align)
+        } else {
+            align
+        };
     let above = if dropped { slot } else { 0 };
     // Nothing is aligned where there are no locals: a leaf with two pushed
     // registers had a `push rax` slot, and a caller with one had `sub rsp, 16`
@@ -1381,7 +1381,8 @@ pub fn saved_first(procedure: Procedure) -> Procedure {
     // `[rsp+pad]`, a disp8 more than ours. Where the frame register is
     // omitted the pad goes above the locals instead, as the base layout had it,
     // unless that moves them off the widest object's alignment (below).
-    let pad = if procedure.registers.object_aligned && dropped && procedure.reserve != 0 && aligns_for_calls(&procedure) {
+    let pad = if procedure.registers.object_aligned && dropped && procedure.reserve != 0 && aligns_for_calls(&procedure)
+    {
         let call = procedure.registers.align;
         let rounded = (procedure.reserve + slot - 1) / slot * slot;
         (call - (slot + pushed + gap + rounded) % call) % call
@@ -1506,9 +1507,9 @@ fn stack_check(
 /// A `saved_first` frame's entry and return sequences, the pin's
 /// (`framelowering`): `push bp; mov bp, sp`, the registers, `sub sp, N`; and
 /// `add sp, N` (`lea sp, [bp - registers]` after an `alloca`), the pops, `pop
-/// bp`. DEVIATE PE1 (owner object-refactor, 2026-11-27): a one-slot adjustment stays a
-/// `sub`/`add`, not the pin's `push eax`/`pop`: the register the push may
-/// clobber is not asked of the entry's live-ins here.
+/// bp`. DEVIATE PE1 (owner object-refactor, 2026-11-27): a one-slot adjustment
+/// stays a `sub`/`add`, not the pin's `push eax`/`pop`: the register the push
+/// may clobber is not asked of the entry's live-ins here.
 fn lowered(
     procedure: &Procedure,
     saved: &[RegId],
@@ -1538,9 +1539,12 @@ fn lowered(
     // `findDeadCallerSavedReg`), after the saved registers as before them; at a
     // sibling call only where the register was chosen dead there
     // (`Registers::slot_dead_checked`).
-    let scratch = procedure.registers.slot_scratch.filter(|_| {
-        omit && reserve == slot && (procedure.registers.slot_dead_checked || !sibling_calls(&procedure.body))
-    });
+    let scratch = procedure
+        .registers
+        .slot_scratch
+        .filter(
+            |_| omit && reserve == slot && (procedure.registers.slot_dead_checked || !sibling_calls(&procedure.body)),
+        );
     let register = |reg_number: u32| match reg_number {
         FP => reg(FRAME),
         DEAD => reg(scratch.expect("a dead register is popped for a scratch frame").1),
@@ -1604,8 +1608,9 @@ fn lowered(
         }
     }
     enter.extend(procedure.body.vector_saves.iter().map(|(register, cell)| vector(true, *register, cell, false)));
-    // `emitEpilogue` releases the slot where the first callee-saved `pop` stands, not at the `ret`:
-    // `findDeadCallerSavedReg` answers 0 for a `pop`, so with registers to restore the slot is an `add`.
+    // `emitEpilogue` releases the slot where the first callee-saved `pop`
+    // stands, not at the `ret`: `findDeadCallerSavedReg` answers 0 for a
+    // `pop`, so with registers to restore the slot is an `add`.
     let dead = scratch.filter(|_| saved.is_empty() || !procedure.registers.slot_add_with_saved).map(|_| DEAD);
     let mut leave: Vec<Semantics> = Vec::new();
     for op in emit_epilogue(&info, dead) {
@@ -1721,7 +1726,8 @@ fn parts(
     if calls {
         let below =
             |reserve: i64| slot + slot * saved.len() as i64 + if framed_by(reserve) { slot } else { 0 } + held(reserve);
-        while below(reserve) % align != 0 {
+        let phase = procedure.body.call_phase;
+        while below(reserve) % align != phase {
             reserve += slot;
         }
     }
@@ -1739,9 +1745,12 @@ fn parts(
     // X86FrameLowering's emitSPUpdate, with the register findDeadCallerSavedReg
     // gives a `ret` or, where the register was chosen dead
     // (`Registers::slot_dead_checked`), a sibling call.
-    let scratch = procedure.registers.slot_scratch.filter(|_| {
-        omit && reserve == slot && (procedure.registers.slot_dead_checked || !sibling_calls(&procedure.body))
-    });
+    let scratch = procedure
+        .registers
+        .slot_scratch
+        .filter(
+            |_| omit && reserve == slot && (procedure.registers.slot_dead_checked || !sibling_calls(&procedure.body)),
+        );
     let one_slot = scratch.is_some();
     let (accumulator, dead_at_return) = scratch.map_or((STACK, None), |(push, pop)| (push, Some(pop)));
     let mut leave: Vec<Semantics> = Vec::new();
@@ -1833,7 +1842,8 @@ fn red_zone(
     let total = if procedure.body.slot_dropped || !omit { rounded } else { rounded + slot };
     let zone = procedure.registers.red_zone.min(total);
     if !omit {
-        // frame cells are addressed from the frame register: no displacement moves
+        // frame cells are addressed from the frame register: no displacement
+        // moves
         return zone;
     }
     // The zone must pay in bytes: it moves every local's displacement down by
@@ -1910,7 +1920,9 @@ impl Interrupt {
         let named = |names: &[String]| -> Vec<RegId> {
             names
                 .iter()
-                .map(|name| registers.by_name(name).unwrap_or_else(|| panic!("calling.toml names {name}, not a register")))
+                .map(|name| {
+                    registers.by_name(name).unwrap_or_else(|| panic!("calling.toml names {name}, not a register"))
+                })
                 .collect()
         };
         Self { group, saves: named(&convention.interrupt_saves), data: named(&convention.interrupt_data) }
@@ -3917,7 +3929,8 @@ fn _instruction_unprefixed(
             }
         }
         Operation::Multiply | Operation::Divide => vec![format!("{name} {}", last(&sources))],
-        // `pshufd xmm0, xmm1, 0EEh`: a source of its own and the order as the third operand.
+        // `pshufd xmm0, xmm1, 0EEh`: a source of its own and the order as the
+        // third operand.
         Operation::Extend if sources.len() == 2 && matches!(what.sources[1], Loc::Imm(_)) => {
             vec![format!("{name} {}, {}, {}", dests[0], sources[0], sources[1])]
         }
@@ -3926,7 +3939,10 @@ fn _instruction_unprefixed(
             // name their operands; `cwd` and `cdq` name theirs in the opcode.
             if matches!(name, "movsx" | "movzx")
                 || name.starts_with("cvt")
-                || matches!(name, "movq" | "movd" | "movq_x" | "movd_x" | "pmovmskb" | "movmskps")
+                || matches!(
+                    name,
+                    "movq" | "movd" | "movq_x" | "movd_x" | "pmovmskb" | "movmskps"
+                )
             {
                 vec![format!("{} {}, {}", name.trim_end_matches("_x"), dests[0], sources[0])]
             } else {
@@ -4085,7 +4101,10 @@ pub fn _memory(
     let disp = _signed(address.disp);
     match address.space {
         Space::Frame => {
-            return Ok(format!("{size}[{}{disp}]", if registers.is_empty() { target::name_of(regs, regs.frame) } else { registers }));
+            return Ok(format!(
+                "{size}[{}{disp}]",
+                if registers.is_empty() { target::name_of(regs, regs.frame) } else { registers }
+            ));
         }
         Space::Segment | Space::External => {
             let symbol = named(names, address);
@@ -4110,7 +4129,8 @@ pub fn _memory(
         // A direct address, as `[disp16]` (`[disp32]` where the cell says its
         // displacement is a dword): the offset is unsigned.
         Space::Literal if registers.is_empty() && address.segment == (RegId::None).iced() => {
-            // A direct address is at least a word, the cell's displacement width otherwise.
+            // A direct address is at least a word, the cell's displacement
+            // width otherwise.
             let bits = 8 * cell.disp_width.max(2);
             return Ok(format!("{size}[{}]", address.disp & ((1i64 << bits) - 1)));
         }
@@ -4261,8 +4281,9 @@ mod tests {
         assert_eq!(_instruction(regs, &copy, &no_names(), 0).unwrap(), ["movaps xmm0, xmm2"]);
     }
 
-    /// `pshufd` printed `pshufd xmm1, 238`, the source and the destination one register (tied): the result is a fresh
-    /// register, `pshufd xmm1, xmm0, 238`.
+    /// `pshufd` printed `pshufd xmm1, 238`, the source and the destination one
+    /// register (tied): the result is a fresh register, `pshufd xmm1, xmm0,
+    /// 238`.
     #[test]
     fn test_a_shuffle_prints_its_source_and_order() {
         let regs = crate::backend::registerinfo::test_regs();
@@ -4730,7 +4751,12 @@ mod tests {
         let items = built(&procedure, 0, false).unwrap();
         let moved = items
             .iter()
-            .find(|item| matches!(item, Item::Semantics(what) if what.name.as_deref() == Some("mov")))
+            .find(|item| {
+                matches!(
+                    item,
+                    Item::Semantics(what) if what.name.as_deref() == Some("mov")
+                )
+            })
             .expect("premise: the move is an item");
         assert!(matches!(moved, Item::Semantics(std::borrow::Cow::Borrowed(_))), "the move was copied into its item");
     }
@@ -5114,11 +5140,12 @@ mod tests {
     }
 
     /// A one-slot frame is undone by `pop <dead>` at a return, where
-    /// `findDeadCallerSavedReg` finds a register nothing reads. Where the pieces
-    /// are taken back at a point that is not a return (a shrink-wrapped restore
-    /// before a loop) any caller-saved register may be live: the `pop ecx` landed
-    /// after `xor ecx, ecx` and cleared the loop counter (scroll at -O1 m64,
-    /// exit 139). There the slot is an `add`.
+    /// `findDeadCallerSavedReg` finds a register nothing reads. Where the
+    /// pieces are taken back at a point that is not a return (a
+    /// shrink-wrapped restore before a loop) any caller-saved register may
+    /// be live: the `pop ecx` landed after `xor ecx, ecx` and cleared the
+    /// loop counter (scroll at -O1 m64, exit 139). There the slot is an
+    /// `add`.
     #[test]
     fn test_a_one_slot_frame_is_not_popped_into_a_register_off_a_return() {
         let ret = insn(0, semantics(Operation::Return, "ret", vec![], vec![]));

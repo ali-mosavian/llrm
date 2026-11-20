@@ -236,8 +236,8 @@ pub fn machine_with<'a>(
         // Where the block runs often enough, `and d,s,mask` for `movzx d,s.low`
         // (DEVIATE MA1).
         Box::new(crate::backend::maskbyand::MaskByAnd {
-            // A profile that states neither clock (the target prices through its cost
-            // model) gets no pass, not a free one.
+            // A profile that states neither clock (the target prices through
+            // its cost model) gets no pass, not a free one.
             clocks_saved: target.cost("movzx").ok().zip(target.cost("alu_ri").ok()).map(|(movzx, and)| movzx - and),
             milliclocks_per_byte: target.speed_milliclocks_per_byte(),
             copy_clocks: target.cost("mov_rr").ok(),
@@ -278,6 +278,8 @@ pub fn machine_with<'a>(
             // pushes every area (`CallFrameOpt::allocates_dynamically`).
             has_var_sized: false,
             slow_two_mem_ops: false,
+            call_alignment: target.call_alignment(),
+            phase_step: registers.object_align.max(registers.slot),
         }),
         // On SSA, right after the pushes are made: a pushed value a load made,
         // read nowhere else, is pushed from the load's cell (the pin:
@@ -291,10 +293,16 @@ pub fn machine_with<'a>(
         // from a copy made where the calls begin (gcc: IRA's
         // `split_live_ranges_for_shrink_wrap`).
         Box::new(crate::backend::splitparams::SplitParamRanges),
-        Box::new(phielim::PhiElimination { unoptimized: !target.optimized, share_congruent: target.share_congruent_phis }),
+        Box::new(phielim::PhiElimination {
+            unoptimized: !target.optimized,
+            share_congruent: target.share_congruent_phis,
+        }),
         // After the shrinking of live ranges: a `setcc` zero-extended is a
         // zero made before the compare (the pin: X86FixupSetCC).
-        Box::new(crate::backend::fixupsetcc::FixupSetCc { strict: !target.speed_rate, status_word: classes.status_word() }),
+        Box::new(crate::backend::fixupsetcc::FixupSetCc {
+            strict: !target.speed_rate,
+            status_word: classes.status_word(),
+        }),
         // A float load a loop only reads is made again where it is read (so
         // the next step can fold it).
         Box::new(crate::backend::floatunhoist::FloatUnhoist { cpu: target, basic_semantics }),
@@ -323,13 +331,15 @@ pub fn machine_with<'a>(
             unoptimized: !target.optimized,
             classes: Some(Rc::clone(classes)),
         }),
-        // `joinReservedPhysReg`: a copy of the stack pointer nothing moves it from.
+        // `joinReservedPhysReg`: a copy of the stack pointer nothing moves it
+        // from.
         Box::new(crate::backend::joinsp::JoinStackPointer { stack: registers.stack }),
         Box::new(Coalescer {
             size: target.size,
             moves: target.move_bytes,
             keeps_split_params: classes.splits_params_for_shrink_wrap,
-            ..Coalescer::new(None, segments, classes) }),
+            ..Coalescer::new(None, segments, classes)
+        }),
         // After TwoAddress and the coalescer, before any value is placed: the
         // pin's pre-RA scheduler, bottom-up by pressure.
         Box::new(crate::backend::machinesched::MachineScheduler {
@@ -359,6 +369,9 @@ pub fn machine_with<'a>(
         }),
         // The pin's PEI: the call frame is reserved, or each call adjusts.
         Box::new(crate::backend::callframe::ReserveCallFrame {
+            call_alignment: target.call_alignment(),
+            phase_step: registers.object_align.max(registers.slot),
+            saved: registers.saved.iter().map(|(whole, _)| *whole).collect(),
             stack: registers.stack,
             width: registers.slot as u32,
             frame: frame.clone(),
@@ -415,7 +428,8 @@ pub fn machine_with<'a>(
         }),
         // The pin runs MachineCopyPropagation again after tail duplication.
         Box::new(crate::backend::machinecp::CopyPropagation),
-        // Beyond the pin (GCC's postreload-cse): a move of a zero the register holds.
+        // Beyond the pin (GCC's postreload-cse): a move of a zero the register
+        // holds.
         Box::new(crate::backend::knownzero::KnownZero),
         // The pin's pre-emit pass: the distances are those of the final order.
         Box::new(crate::backend::breakfalsedeps::BreakFalseDeps),

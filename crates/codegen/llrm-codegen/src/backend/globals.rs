@@ -428,6 +428,7 @@ impl Initializer<'_> {
                     }
                 }
             },
+            ConstantKind::MetadataString(_) => return Err("a metadata string is not initializer data".to_owned()),
             ConstantKind::Global(_) | ConstantKind::Expr(_) => self.address(id)?,
         }
         Ok(())

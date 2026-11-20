@@ -46,6 +46,10 @@ pub enum ConstantKind {
     Bytes(Vec<u8>),
     Global(GlobalId),
     Expr(ConstantExpr),
+    /// `metadata !"text"`: a `metadata`-typed argument of a call, as
+    /// `llvm.experimental.constrained.*` takes its rounding mode, exception
+    /// behaviour and predicate.
+    MetadataString(String),
 }
 
 impl ConstantKind {

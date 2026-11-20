@@ -895,9 +895,10 @@ impl Insn {
         self.volatile
     }
 
-    /// `MachineInstr::mayAlias` of two memory accesses (MachineInstr.cpp#L1558):
-    /// a call may; two loads do not; an access whose object a target did not say
-    /// may reach the other's. Ask it of accesses only.
+    /// `MachineInstr::mayAlias` of two memory accesses
+    /// (MachineInstr.cpp#L1558): a call may; two loads do not; an access
+    /// whose object a target did not say may reach the other's. Ask it of
+    /// accesses only.
     #[must_use]
     pub fn may_alias(
         &self,
@@ -1532,6 +1533,12 @@ pub struct LirBody {
     /// aligns the locals' base to, not the stack's (the pin aligns each
     /// object to its own and only the total to the stack).
     pub object_align: i64,
+    /// Where the call sequences find the stack after the prologue, in bytes
+    /// past a multiple of the stack alignment (the return address counted): 0
+    /// where every call starts aligned. A frame whose calls push the same
+    /// bytes takes the phase that leaves them aligned, one pad for all
+    /// (`ReserveCallFrame`).
+    pub call_phase: i64,
     /// The locals wanting more than the stack's alignment, as (displacement
     /// below BP, alignment): the frame realigns the stack pointer for them
     /// and they lie that far below the aligned top, not below BP.
@@ -1758,6 +1765,7 @@ impl LirBody {
             slot_dropped: false,
             unwrapped: false,
             object_align: 0,
+            call_phase: 0,
             over_aligned: Vec::new(),
             frame_exit: None,
             stack_checked: None,
@@ -1836,6 +1844,7 @@ impl LirBody {
             slot_dropped: self.slot_dropped,
             unwrapped: self.unwrapped,
             object_align: self.object_align,
+            call_phase: self.call_phase,
             over_aligned: self.over_aligned.clone(),
             frame_exit: self.frame_exit,
             stack_checked: self.stack_checked,
@@ -2417,8 +2426,8 @@ mod tests {
         assert!(access(false, 1).may_alias(&call), "a call");
     }
 
-    /// A copy made to say something else (`with_what`) was built field by field:
-    /// the memory operand must come with it.
+    /// A copy made to say something else (`with_what`) was built field by
+    /// field: the memory operand must come with it.
     #[test]
     fn test_a_copy_with_other_semantics_keeps_its_memory_operand() {
         let one = access(true, 3);

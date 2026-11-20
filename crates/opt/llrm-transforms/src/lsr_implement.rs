@@ -125,6 +125,7 @@ pub fn split_phi_edges(
                         let _ = function.move_block_after(bridge, before);
                     }
                 }
+                llrm_support::debug!("lsr-split", "critical edge {from:?} -> {parent:?} split for phi {phi:?} (bridge {bridge:?})");
                 split = true;
             }
         }

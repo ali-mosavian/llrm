@@ -1130,6 +1130,14 @@ pub trait Tti {
         false
     }
 
+    /// Whether the `opt_size_inline_by_code_size` rule also holds a speed
+    /// caller at -O1. true: it does (wasm SZ1, the small targets). false: -O1
+    /// keeps the pin's threshold, which inlines a small callee that grows the
+    /// code (clang -O1, the bar where clocks are judged).
+    fn opt_size_inline_rule_at_o1(&self) -> bool {
+        true
+    }
+
     /// The cost model the inliner counts a callee's size with, where the
     /// target's `CodeSize` is not bytes: the same model with `CodeSize` in
     /// bytes of code. None: `CodeSize` as it is. The other passes keep
@@ -1171,6 +1179,26 @@ pub trait Tti {
         kind: CostKind,
     ) -> Option<Cost> {
         let _ = (family, length, kind);
+        None
+    }
+
+    /// Units a size-optimized caller's inline guard (D11) counts for a
+    /// `memcpy`, `memmove` or `memset` of constant `length` bytes that the
+    /// target expands inline, as the loads and stores it becomes; the pin
+    /// counts one instruction. None: the call-shaped count stands.
+    fn size_caller_memory_units(
+        &self,
+        family: &str,
+        length: u64,
+    ) -> Option<i64> {
+        let _ = (family, length);
+        None
+    }
+
+    /// Units the inline guard counts for such an intrinsic that stays a call
+    /// (an unknown length, or one past the inline limit): its call with
+    /// three arguments. None: the pin's count stands.
+    fn size_caller_memory_call_units(&self) -> Option<i64> {
         None
     }
 
@@ -1395,6 +1423,14 @@ pub trait Tti {
     /// pin's MemCpyOpt forms it, and the size gate is this target's to lift.
     /// False: only when tuned for size.
     fn string_runs_at_speed(&self) -> bool {
+        false
+    }
+
+    /// DEVIATE OS-OUTLINE-TRIAL (owner llrm-target-m68k, exit 2026-12-20): whether a cold -Os site the size bound
+    /// accepts, of a callee that goes with its calls, is also built as a call in a second compile, the driver keeping
+    /// the finished code with fewer bytes. The units price a copy under the bytes the backend writes for it (jpeg_fixed
+    /// `put32`: 15 units a copy, a call 18; -20 B outlined). False: the bound's verdict stands.
+    fn opt_size_inline_outline_trial(&self) -> bool {
         false
     }
 
@@ -1966,6 +2002,11 @@ pub trait Tti {
         false
     }
 
+    /// `Tuning::memset_gap_merge_at_size` (MEMSET-GAP).
+    fn memset_gap_merge_at_size(&self) -> bool {
+        false
+    }
+
     /// `Tuning::inline_dying_credit_at_os` (D13).
     fn inline_dying_credit_at_os(&self) -> bool {
         true
@@ -2277,6 +2318,13 @@ pub trait Tti {
     /// the pin has it (wasm). owner: wasm, exit: 2026-12-04.
     fn lsr_scales_zero_compare_past_overflow(&self) -> bool {
         true
+    }
+
+    /// DEVIATE LG2 alone: the even-factor half of
+    /// [`Tti::lsr_scales_zero_compare_past_overflow`], which a target can keep
+    /// where it turns the odd half (LG1) off. Follows it by default.
+    fn lsr_scales_even_zero_compare(&self) -> bool {
+        self.lsr_scales_zero_compare_past_overflow()
     }
 
     /// `Tuning::ipsccp_widen_keeps_sign`.
@@ -2926,6 +2974,16 @@ pub trait Tti {
     /// pin's.
     fn lsr_post_indexed_amortized(&self) -> bool {
         false
+    }
+
+    /// DEVIATE LSR-POSTINC-WALKS (owner m68k, exit 2026-12-17; gcc's ivopts
+    /// counts registers against the loop's pointers): a loop that indexes more
+    /// objects than this keeps no post-indexed preference, since each walk holds
+    /// an address register and the ones past the class are spilled and
+    /// reloaded every trip (early_exit_widths `reset`: eight walks, six address
+    /// registers). None: the preference holds at any count, as the pin's.
+    fn lsr_post_indexed_walk_limit(&self) -> Option<u32> {
+        None
     }
 
     /// DEVIATE LSR-POSTINC-PAIR (target flag): the pair form of a load or
