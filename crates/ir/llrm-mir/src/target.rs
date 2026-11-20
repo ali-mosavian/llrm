@@ -732,9 +732,8 @@ pub struct Tuning {
     pub recursive_tre_first: (bool, bool),
     /// DEVIATE IPACP-O3 (owner x86-m32-c, exit 2026-12-20): ipa-cp clones at
     /// -O3, as gcc's `-fipa-cp-clone` is on there; the pin makes none
-    /// (`Tti::ipa_cp_clones_at_speed`). DEVIATE IPACP-O2 (owner w10, exit
-    /// 2026-11-24): and at -O2, where gcc has none: queens m32 151807 ->
-    /// 139804 clk for +293 B, m64 -9.4% instructions for +830 B.
+    /// (`Tti::ipa_cp_clones_at_speed`). At -O2 neither gcc nor the pin clones
+    /// (`Tti::ipa_cp_clones_at_o2`; IPACP-O2 ended 2026-11-18).
     pub ipa_cp_clones_at_speed: bool,
     /// DEVIATE IPACP-DEPTH: the most clones ipa-cp makes of one function.
     pub ipa_cp_max_clones: usize,

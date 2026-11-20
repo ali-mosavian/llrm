@@ -715,6 +715,14 @@ impl Tti for M68k {
         AddressingMode::PostIndexed
     }
 
+    /// DEVIATE LSPLIT (owner wasm-3, exit 2026-12-17): see `Tti::loop_split`.
+    /// A test of the counter against an invariant leaves the loop for a
+    /// second one (`split_loops` -O3 68000: gcc's four instructions a trip
+    /// against six).
+    fn loop_split(&self) -> bool {
+        true
+    }
+
     fn lsr_free_walk_beats_end_biased(&self) -> bool {
         true
     }
