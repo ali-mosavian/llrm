@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/slptree.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/slptree.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/slptree.rs sha256:0405627a10fb074a1745bf4e332d7618e8ddf82162b9949d515ad9684a388508 -->
+<!-- src: crates/opt/llrm-transforms/src/slptree.rs sha256:16e6626bb6c6c47d52c6dbf0846702369f41369342069a2677c6a77a9b31451c -->
 
 # slptree
 
@@ -46,3 +46,13 @@ constants.
 
 ## Used by
 `slpvectorize`.
+
+## Example
+Four `fmuladd`s of one scalar and four consecutive loads, plus a constant, stored to four consecutive floats, become one vector chain.
+
+```text
+4 x (load c[i]; fmuladd a, c[i], 1.0; fadd 128.5; store out[i])
+        =>
+load <4 x float>; fmuladd.v4f32 (splat a, v, splat 1.0)
+fadd <4 x float>; store <4 x float>
+```

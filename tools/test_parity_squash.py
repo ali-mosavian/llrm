@@ -691,6 +691,17 @@ def test_a_pr_that_names_the_assistant_is_refused_wherever_it_does(tmp_path):
     assert any("added line" in w for w in ps.refusals(head3, "", base="main", cwd=repo3))
 
 
+def test_static_refusals_stops_a_fixture_that_names_the_assistant_on_a_path_with_no_precheck(tmp_path, capsys):
+    """#10303 and #10320 landed through lane scripts that never ran `precheck`: two .ll fixtures carried the assistant's directory in their ModuleID and the tip went red.
+    `static-refusals` is the check those paths call: a clean head exits 0 and prints nothing, a fixture line naming the assistant exits 1 and names its file."""
+    repo, head = pr_over_main(tmp_path, file_text="; ModuleID = '/tmp/" + "clau" + "de-1000/pl.c'\n")
+    assert ps.static_refusals([head, "--base", "main"], cwd=repo) == 1
+    assert "a.rs" in capsys.readouterr().out
+    repo2, head2 = pr_over_main(sub(tmp_path, "c"), file_text="; ModuleID = 'pl.c'\n")
+    assert ps.static_refusals([head2, "--base", "main"], cwd=repo2) == 0
+    assert capsys.readouterr().out == ""
+
+
 def test_the_word_clause_does_not_name_the_assistant(tmp_path):
     """A loose pattern would refuse every PR with a where clause or an if clause."""
     repo, head = pr_over_main(tmp_path, file_text="// the where clause and the if clause\nfn a() {}\n", message="docs: a clause")

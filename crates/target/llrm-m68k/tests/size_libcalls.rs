@@ -13,10 +13,21 @@ const HEAD: &str = "target datalayout = \"E-m:e-p:32:16:32-i8:8:8-i16:16:16-i32:
 
 /// `uses` functions each counting trailing zeros of an i64.
 fn ctz64(uses: usize) -> String {
+    ctz64_with(uses, false)
+}
+
+/// [`ctz64`]; `distinct` adds a different constant in each function, as -Os
+/// folds functions of one body (#9984) and one body is one site.
+fn ctz64_with(
+    uses: usize,
+    distinct: bool,
+) -> String {
     let mut ir = format!("{HEAD}declare i64 @llvm.cttz.i64(i64, i1)\n");
     for n in 0..uses {
+        let add = if distinct { format!("%u = add i32 %t, {} ", n + 1) } else { String::new() };
+        let result = if distinct { "%u" } else { "%t" };
         ir.push_str(&format!(
-            "define i32 @f{n}(i64 %x) optsize {{ %r = call i64 @llvm.cttz.i64(i64 %x, i1 true) %t = trunc i64 %r to i32 ret i32 %t }}\n"
+            "define i32 @f{n}(i64 %x) optsize {{ %r = call i64 @llvm.cttz.i64(i64 %x, i1 true) %t = trunc i64 %r to i32 {add}ret i32 {result} }}\n"
         ));
     }
     ir
@@ -296,7 +307,7 @@ mod driver {
     #[test]
     fn the_driver_chooses_at_os_and_never_at_o2() {
         let one = ctz64(1).replace(" optsize", "");
-        let three = ctz64(3).replace(" optsize", "");
+        let three = ctz64_with(3, true).replace(" optsize", "");
         assert!(!text(&one, Level::Os).contains("__ctzdi2"));
         assert!(text(&three, Level::Os).contains("__ctzdi2"));
         assert!(!text(&three, Level::O2).contains("__ctzdi2"));
@@ -441,18 +452,15 @@ fn the_three_shifts_are_one_build() {
 /// Pricing the choice rebuilt the function with every optional-rewrite trial
 /// (shift_int64_masked_amount Os: `main` 12 builds, 36 with the three shifts
 /// priced, x2.65 compile time). A build for the price is trial-free: the
-/// choice costs two plain builds (a build is 3 runs here), not two trial sets
-/// (18 builds against 4 inline before).
+/// choice costs two plain builds, not two trial sets (18 builds against 4
+/// inline before). Counted on the choice itself, so a trial added to the
+/// function's own builds does not move it.
 #[test]
 fn pricing_the_libcall_choice_builds_the_function_without_trials() {
-    let builds = |mode| {
-        let module = llrm_mir::parse::module(&all_three_shifts(8)).expect("parses");
-        let before = llrm_m68k::compile::runs().builds;
-        text_with(&module, "f", Cpu::M68000, Options { size_libcalls: mode, mid_end: false, ..Options::default() })
-            .expect("compiles");
-        llrm_m68k::compile::runs().builds - before
-    };
-    let inline = builds(Mode::Inline);
-    let auto = builds(Mode::Auto);
-    assert!(auto <= inline + 6, "auto {auto} builds, inline {inline}");
+    let module = llrm_mir::parse::module(&all_three_shifts(8)).expect("parses");
+    let options = Options { size_libcalls: Mode::Auto, mid_end: false, ..Options::default() };
+    let before = llrm_m68k::compile::runs().builds;
+    llrm_m68k::compile::libcalls_for(&module, Cpu::M68000, options);
+    let priced = llrm_m68k::compile::runs().builds - before;
+    assert!(priced <= 4, "the choice took {priced} builds: two plain builds, not two trial sets");
 }

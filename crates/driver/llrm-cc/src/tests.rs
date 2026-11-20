@@ -336,6 +336,22 @@ fn the_6502_rows_select_their_own_backend_and_cpu() {
     assert_eq!(table["x86_64-linux"].llc_program, "llrm-llc");
 }
 
+/// clang's IR carries `-fno-pic` only as a module flag it may leave out, so
+/// QuickrBasic's m64 objects read as position independent (-4,295 B at -Os):
+/// the driver states the model to the backend, the last of the `-f[no-]pic`
+/// family, and nothing where none is given.
+#[test]
+fn the_last_pic_flag_reaches_the_backend_as_the_relocation_model() {
+    let table = targets(TARGETS).unwrap();
+    let args = |line: &str| llc_args(&table["x86_64-linux"], &built(line), Path::new("x.ll"), Path::new("x.o"));
+    assert!(args("-Os -fno-pic -c x.c").contains(&"-relocation-model=static".to_owned()));
+    assert!(args("-Os -fno-pic -fPIC -c x.c").contains(&"-relocation-model=pic".to_owned()));
+    assert!(!args("-Os -c x.c").iter().any(|one| one.starts_with("-relocation-model")));
+    assert!(!llc_args(&table["6502-sim65"], &built("-Os -fno-pic -c x.c"), Path::new("x.ll"), Path::new("x.o"))
+        .iter()
+        .any(|one| one.starts_with("-relocation-model")));
+}
+
 /// A C global `sp` collided with cc65's own `sp` at link. The cc65 rows name
 /// the platform whose C symbols take cc65's `_`; the sim65 rows keep bare
 /// names.

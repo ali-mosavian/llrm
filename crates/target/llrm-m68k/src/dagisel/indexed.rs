@@ -95,6 +95,8 @@ const MOVES: &[Writeback] = writeback![
     "MOV8od" false false, "MOV16od" false false, "MOV32od" false false, "MOV32oa" false false,
     "MOV8ed" false true, "MOV16ed" false true, "MOV32ed" false true, "MOV32ea" false true,
     "MOV32ro" true false,
+    "CLR8o" false false, "CLR16o" false false, "CLR32o" false false,
+    "CLR8e" false true, "CLR16e" false true, "CLR32e" false true,
 ];
 
 /// Every writeback: the moves, and one for each pin instruction that reads its
@@ -541,10 +543,11 @@ fn code(
     load: bool,
     pre: bool,
     address_register: bool,
+    clear: bool,
 ) -> Option<u16> {
     let wanted = |one: &&Writeback| {
-        let long = one.prints_as.starts_with("MOV32");
-        let word = one.prints_as.starts_with("MOV16");
+        let long = one.prints_as.starts_with("MOV32") || one.prints_as.starts_with("CLR32");
+        let word = one.prints_as.starts_with("MOV16") || one.prints_as.starts_with("CLR16");
         let narrow = match bytes {
             1 => !long && !word,
             2 => word,
@@ -552,7 +555,13 @@ fn code(
         };
         let letters = &one.prints_as[one.prints_as.len() - 2..];
         let to_address = letters.starts_with('a') || letters.ends_with('a');
-        !one.source && !one.slot && one.load == load && one.pre == pre && narrow && to_address == address_register
+        one.prints_as.starts_with("CLR") == clear
+            && !one.source
+            && !one.slot
+            && one.load == load
+            && one.pre == pre
+            && narrow
+            && to_address == address_register
     };
     WRITEBACKS.iter().position(|one| wanted(&one)).map(|at| FIRST + at as u16)
 }
@@ -586,14 +595,22 @@ pub fn select(
                 Some(row) => row,
                 // a long may land in either kind of register
                 None if bytes == 4 && !pre => code_of("MOV32ro_WB")?,
-                None => code(bytes, true, pre, false)?,
+                None => code(bytes, true, pre, false, false)?,
             },
             vec![adapter.value_type(at(0)), adapter.value_type(at(1)), adapter.value_type(at(2))],
             vec![base, chain],
         )
+    } else if adapter.dag.constant(adapter.dag.operand(here, 1)) == Some(0) && !info.volatile {
+        // `clr.b (%a1)+`: the zero is not held in a register for the store
+        // (DEVIATE M68K-CLR-WB)
+        (
+            code(bytes, false, pre, false, true)?,
+            vec![adapter.value_type(at(0)), adapter.value_type(at(1))],
+            vec![base, chain],
+        )
     } else {
         (
-            code(bytes, false, pre, false)?,
+            code(bytes, false, pre, false, false)?,
             vec![adapter.value_type(at(0)), adapter.value_type(at(1))],
             vec![base, operand(1), chain],
         )

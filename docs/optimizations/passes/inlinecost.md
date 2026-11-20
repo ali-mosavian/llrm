@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/inlinecost.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/inlinecost.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/inlinecost.rs sha256:5bc6c95ed6931c449bfd85d78f898cdba8a82f59f3afea2ad58c193811655a0a -->
+<!-- src: crates/opt/llrm-transforms/src/inlinecost.rs sha256:f28ddf13d774f9d0348c13b528daa3cdbc999101f2dba012adf63107d8dc8de1 -->
 
 # inlinecost
 
@@ -79,7 +79,14 @@ each site's cost and threshold beside the existing decision; with
   `div_constants_long` +989, `idioms` +507, `rep_tails` +485); the one gain
   is `byvalue_struct_address` 147 -> 16. The guard stays. The last call of a
   local callee, which goes with it, is the pin's. No shape of callee but the
-  loop and the one smaller than its call is tested.
+  loop and the one smaller than its call is tested. A target may say the
+  guard stands down for an `inlinehint` callee at an `optsize` caller
+  (`Tti::opt_size_inline_guard_yields_to_inlinehint`, arm64: yes): the
+  pin's `updateThreshold` raises the threshold to `InlineHintThreshold`
+  (325) there, and its cost under that is the verdict (QuickrBasic
+  operands.c -Os `hot_operand` into `hot_int`, 26 units against two 3-unit
+  calls: 15,344 -> 10,400 B, the pin's 9,464). The guard still holds for a
+  callee with no hint.
 - SZ1-SITE (owner m68k-b, exit 2026-11-24): the size rule (D11) prices a
   callee's instruction with the call site's constant arguments, not only a
   GEP as `isGEPFree` does (z80 `rotate_small` -O1 922 -> 576 B).

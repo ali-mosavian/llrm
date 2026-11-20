@@ -292,7 +292,7 @@ impl Default for Options {
             spill_fold: !llrm_support::env_flag!("LLRM_NO_SPILL_FOLD"),
             shared_cse: true,
             direct_copies: false,
-            shared_licm: false,
+            shared_licm: true,
             shared_prelude: false,
             tail_duplicate: true,
             rematerialize_arguments: true,
@@ -686,6 +686,19 @@ fn size_build(
             .is_some_and(|one| has(&one.attrs, "optsize") || has(&one.attrs, "minsize"))
 }
 
+/// Whether the shared `MachineLICM` runs on a function.
+///
+/// DEVIATE M68K-LICM-SPEED (owner wasm-3, exit 2026-12-10, when `m68k/shared-licm-direct-copies`
+/// lands): speed builds only. A hoisted address holds a register for the loop; at -Os and -O1 the
+/// private passes lose bytes and clocks to the spills it causes (-Os +1.5 KB over 186 programs).
+/// The trial's variants read this too: a stage that does not run must not change the emission.
+fn licm_runs(
+    options: Options,
+    wants_size: bool,
+) -> bool {
+    options.shared_licm && !wants_size && !options.strict
+}
+
 fn same_instructions(
     a: &crate::mfunc::MFunction,
     b: &crate::mfunc::MFunction,
@@ -844,7 +857,14 @@ fn before_late_stage(options: Options) -> Options {
 
 /// The options that only allocation and the stages after it read.
 fn before_allocation(options: Options) -> Options {
-    Options { global_copies: false, tail_duplicate: false, return_dup: false, slot_registers: false, ..options }
+    Options {
+        global_copies: false,
+        tail_duplicate: false,
+        return_dup: false,
+        slot_registers: false,
+        spill_fold: false,
+        ..options
+    }
 }
 
 /// One build of the function, and the optional rewrites that changed it.
@@ -890,7 +910,7 @@ fn items_once(
         direct_copies: options.direct_copies,
         // what the hosted stages read: a result is defined in its copy's
         // register
-        copy_destinations: options.direct_copies || options.shared_cse || options.shared_licm,
+        copy_destinations: options.direct_copies || options.shared_cse || licm_runs(options, wants_size),
     };
     let (emitted, mul_used, mul_synthesized) = prefixes
         .emitted
@@ -981,7 +1001,7 @@ fn items_once(
             }
             function.odds = Some(edge_odds(module, name)?);
             expand_cmov(&mut function)?;
-            if options.shared_licm {
+            if licm_runs(options, wants_size) {
                 function = crate::regalloc::shared_licm(&function, wants_size)?;
             }
             if options.shared_cse {

@@ -885,6 +885,14 @@ impl Tti for X86 {
         self.tuning.unroll_never_grows_at_o1
     }
 
+    /// DEVIATE UNROLL-THROUGH-CALLS: x86-64 (switch_jump_table O2: gcc unrolls
+    /// the 10-trip `byte()` loop and folds its switch, 228 instructions).
+    /// owner: llrm-target-x86-m16-b, exit: 2026-11-30, or when the pin's
+    /// analysis prices calls.
+    fn unroll_prices_calls(&self) -> bool {
+        self.quad
+    }
+
     fn unroll_trial_threshold(&self) -> Option<u32> {
         self.tuning.unroll_trial_at_o1
     }
@@ -1043,6 +1051,10 @@ impl Tti for X86 {
 
     fn cold_site_ignores_sinks(&self) -> bool {
         self.tuning.cold_site_ignores_sinks
+    }
+
+    fn inline_last_call_in_cold_site(&self) -> bool {
+        self.tuning.inline_last_call_in_cold_site
     }
 
     fn unroll_object_bound(&self) -> Option<u32> {
@@ -2572,6 +2584,12 @@ impl Tti for X86 {
             return Cost::of(count * cost);
         }
         if !second.constant {
+            if kind == CostKind::CodeSize
+                && let Some(cost) = self.tuning.div_by_variable_size_cost
+                && scalar_variable_divide(op, legal).is_some()
+            {
+                return Cost::of(count * i64::from(cost));
+            }
             if let Some(row) = scalar_variable_divide(op, legal) {
                 if let Some(each) = row[kind.index()] {
                     return Cost::of(count * each);

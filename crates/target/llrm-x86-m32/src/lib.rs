@@ -180,8 +180,8 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // over a constant table folds to nothing and stayed rolled: 64 -> 158
         // B).
         unroll_o1_analyzed_trips: Some(16),
-        // DEVIATE SD443 (owner w9, exit: a constant-argument pass after
-        // inlining, as gcc's IPA-CP): a function called directly only after
+        // DEVIATE SD443 (owner w9, exit 2026-11-24: a constant-argument pass
+        // after inlining, as gcc's IPA-CP): a function called directly only after
         // inlining keeps its address-taken parameters through the pin's one
         // IPSCCP; a second one after promotion folds them. m32
         // memory_expansion -1332 B (-O2/-O3), second_ipsccp.c -368 B.
@@ -308,6 +308,8 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
             setup: [11, 12],
             fst: [4, 6],
         }),
+        // DEVIATE LASTCALL-COLD (owner x86-m32-b, exit 2026-12-05): see `Tuning`.
+        inline_last_call_in_cold_site: true,
         // DEVIATE SZ1 (owner x86-m32, exit 2026-11-20): D11 holds at -Os, so a
         // callee whose copies grow the code stays a call (called_once_os:
         // gcc -Os does; the pin inlines it).
@@ -323,7 +325,8 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // -Os 147 -> 39 B (clang 23), 176 m32 programs, no other cell moves.
         inline_chain_trial: true,
         // DEVIATE REC-2: gcc 15.2's `max-inline-recursive-depth` 8 and
-        // `max-inline-insns-recursive` 450, at -O2/-O3 (never -Os). Owner w10.
+        // `max-inline-insns-recursive` 450, at -O2/-O3 (never -Os). Owner w9, exit
+        // 2026-11-24.
         recursive_inlining: Some((8, 450)),
         // DEVIATE REC-2/REC-10 bar: 22 `gcc_insns` at -O2 and -O3, fitted to
         // the corpus (gcc's own is 15 at -O2, 30 at -O3, in its size units).

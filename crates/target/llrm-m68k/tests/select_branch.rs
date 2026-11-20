@@ -19,7 +19,10 @@ fn gcds_branches_stay_at_every_level() {
     for cpu in ["68000", "68020"] {
         for level in [Level::O2, Level::Os] {
             let out = assembly(GCD, cpu_of(cpu).unwrap(), level).expect("compiles");
-            assert!(instructions(&out) <= 14, "{cpu}: the selects came back ({} insns):\n{out}", instructions(&out));
+            // -O2 builds once and prices clocks: the latch is copied into both
+            // arms, one `bra` fewer per round for three instructions more.
+            let limit = if level == Level::O2 { 15 } else { 14 };
+            assert!(instructions(&out) <= limit, "{cpu}: the selects came back ({} insns):\n{out}", instructions(&out));
         }
     }
 }
