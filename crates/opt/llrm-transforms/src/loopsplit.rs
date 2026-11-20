@@ -380,17 +380,34 @@ fn plan_for(
         return None;
     }
 
-    // A split point: the first guard `split_at_bb_p` takes.
+    // A split point: the first guard `split_at_bb_p` takes. A guard is a
+    // branch on the compare, or a `select` of values on it (the mid-end folds
+    // `i < k ? a : b` into one): each loop decides it the same way.
+    let mut sites: Vec<(BlockId, InstId, ValueId)> = Vec::new();
     for &block in l.get_blocks() {
-        if block == exiting {
-            continue;
+        // The exiting block's branch is the exit, not a guard.
+        if let Some(term) = f.terminator(block).filter(|_| block != exiting) {
+            let guard = f.instruction(term);
+            if let [Operand::Value(c), Operand::Block(t), Operand::Block(e)] = guard.operands[..]
+                && guard.opcode == Opcode::Br
+                && t != e
+                && l.contains(t)
+                && l.contains(e)
+            {
+                sites.push((block, term, c));
+            }
         }
-        let Some(term) = f.terminator(block) else { continue };
-        let guard = f.instruction(term);
-        let [Operand::Value(c), Operand::Block(t), Operand::Block(e)] = guard.operands[..] else { continue };
-        if guard.opcode != Opcode::Br || t == e || !l.contains(t) || !l.contains(e) {
-            continue;
+        for inst in f.iter_block(block) {
+            let one = f.instruction(inst);
+            if one.opcode == Opcode::Select
+                && logical(f, cx.context, inst).is_none()
+                && let Operand::Value(c) = one.operands[0]
+            {
+                sites.push((block, inst, c));
+            }
         }
+    }
+    for (block, term, c) in sites {
         for guard_cmp in logical_leaves(cx, c) {
             let Opcode::ICmp(gpred) = f.instruction(guard_cmp).opcode else { continue };
             let [a, b] = f.instruction(guard_cmp).operands[..] else { continue };
@@ -727,7 +744,17 @@ fn apply(
 
     // The guard is decided in each loop.
     let guard_copy = vmap.blocks.get(&plan.guard_block).copied().expect("a copied guard");
-    let guard2 = function.terminator(guard_copy).expect("a branch");
+    let guard2 = if function.instruction(plan.guard_branch).opcode == Opcode::Select {
+        let Some(&Operand::Value(copy)) =
+            vmap.values.get(&function.instruction(plan.guard_branch).result.expect("a value"))
+        else {
+            unreachable!("a copied select")
+        };
+        let ValueDef::Instruction(copy) = function.value(copy).def else { unreachable!("a select") };
+        copy
+    } else {
+        function.terminator(guard_copy).expect("a branch")
+    };
     let leaf2 = match vmap.values.get(&plan.guard_leaf) {
         Some(&Operand::Value(copy)) => copy,
         _ => unreachable!("a copied compare"),

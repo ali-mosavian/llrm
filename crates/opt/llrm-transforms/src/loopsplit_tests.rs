@@ -362,3 +362,41 @@ fn test_a_border_test_folded_into_a_select_splits_the_sieve() {
     let at_100 = results(&module, &[&[100]]);
     assert_eq!(at_100, [llrm_mir::interpret::Val::Int { bits: (25 << 16) ^ 1060, width: 64 }], "{after}");
 }
+
+/// `sum += i < k ? i * 3 : i + 7`, as the mid-end leaves it: one block, the
+/// guard a `select` of values (`split_loops` 68000 -O3 ran 6 instructions a
+/// trip where gcc's two loops run 4: +13.6% clocks).
+const SELECT_OF_VALUES: &str = "define i32 @f(i32 %n) {
+entry:
+  %g = icmp sgt i32 %n, 0
+  br i1 %g, label %loop, label %out
+loop:
+  %i = phi i32 [ %i.next, %loop ], [ 0, %entry ]
+  %sum = phi i32 [ %sum.next, %loop ], [ 0, %entry ]
+  %c = icmp slt i32 %i, 11
+  %a = mul nuw nsw i32 %i, 3
+  %b = add nuw nsw i32 %i, 7
+  %v = select i1 %c, i32 %a, i32 %b
+  %sum.next = add nuw nsw i32 %v, %sum
+  %i.next = add nuw nsw i32 %i, 1
+  %go = icmp eq i32 %i.next, %n
+  br i1 %go, label %done, label %loop
+done:
+  br label %out
+out:
+  %res = phi i32 [ 0, %entry ], [ %sum.next, %done ]
+  ret i32 %res
+}
+";
+
+#[test]
+fn test_a_select_of_values_on_the_counter_splits_into_two_loops() {
+    let (module, after) = split(SELECT_OF_VALUES, on());
+    assert_eq!(loops(&parsed(SELECT_OF_VALUES)), (1, 1));
+    assert_eq!(loops(&module), (2, 2), "{after}");
+    // each loop decides the select; the next combine folds it
+    assert!(
+        after.contains("select i1 true") && after.contains("select i1 false"),
+        "the guard is not decided:\n{after}"
+    );
+}
