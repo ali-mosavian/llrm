@@ -364,3 +364,26 @@ fn a_count_marked_libcall_is_a_call_to_its_routine_and_the_default_is_no_call() 
         }
     }
 }
+
+/// A vector shift by a different amount in each lane, which the target has no
+/// instruction for, was refused ("convert node to libcall"; QuickrBasic
+/// `synth.c` -O2 m64, a vectorized `shl <8 x i16>`). `VectorLegalizer::Expand`
+/// does it a lane at a time: a `BUILD_VECTOR` of scalar shifts.
+#[test]
+fn a_vector_shift_the_target_lacks_is_one_scalar_shift_per_lane() {
+    let v8i16 = EVT::Simple(MVT::V8I16);
+    let mut tli = TargetLowering::empty(TargetLoweringInfo::x86_32());
+    for op in [ISD::Shl, ISD::Srl, ISD::Sra] {
+        tli.set_operation_action(op, MVT::V8I16, Action::Expand);
+        let mut dag = dag();
+        let (a, b) = (dag.get_register(v8i16, 1), dag.get_register(v8i16, 2));
+        let shifted = dag.get_node(op, v8i16, &[a, b]);
+        dag.set_root(shifted);
+        DagLegalizer::new(&mut dag, &tli, &mut NoHooks).run().unwrap();
+        let root = dag.get_root();
+        assert_eq!(dag.opcode(root), ISD::BuildVector, "{op:?}");
+        let lanes = dag.node(root).ops.clone();
+        assert_eq!(lanes.len(), 8);
+        assert!(lanes.iter().all(|&lane| dag.opcode(lane) == op && !dag.value_type(lane).is_vector()), "{op:?}");
+    }
+}

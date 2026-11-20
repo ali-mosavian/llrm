@@ -6,6 +6,10 @@
 //! 68000: 248818 clk against clang's 162092, rotate_small +29% over gcc). A
 //! trial compile with the nest unrolled is kept where the code is no larger and
 //! no slower.
+//!
+//! The inner loop has 100 trips: the 68000's bar of 400 (#10343) unrolls a
+//! 64-trip one in the default pipeline, the nest is gone without a trial and
+//! the test then counted one lowering, not two.
 
 use llrm_m68k::driver::{Level, assembly, cpu_of};
 
@@ -27,7 +31,7 @@ inner:
   %m = mul i32 %a, 31
   %a1 = add i32 %m, %s
   %c1 = add i32 %c, 1
-  %e = icmp eq i32 %c1, 64
+  %e = icmp eq i32 %c1, 100
   br i1 %e, label %inner.done, label %inner
 inner.done:
   %acc2 = phi i32 [ %a1, %inner ]
