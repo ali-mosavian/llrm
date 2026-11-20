@@ -6504,3 +6504,31 @@ fn a_zeroext_i1_call_result_widened_needs_no_mask_at_m16() {
         assert!(!listing.contains(", 1\n"), "{level}: {listing}");
     }
 }
+
+/// `a == b` and `a != b` on a long double under `FENV_ACCESS ON`: the target
+/// reads those two from the status word, which a constrained compare does not
+/// (DEVIATE CFP2), so the legalizer swapped `oeq` for itself without end and
+/// `llrm-llc` hung (QuickrBasic `pfpu.c`). Each now compiles to one `fucom`
+/// and the two flag tests the pin's expansion makes; a thread and a timeout
+/// make the hang a failure.
+#[test]
+fn a_constrained_long_double_equality_compiles_instead_of_looping() {
+    for (level, predicate, flags_read) in [("-O0", "oeq", ["setnp", "sete"]), ("-O0", "une", ["setp", "setne"]), ("-O1", "oeq", ["setnp", "sete"]), ("-O2", "une", ["setp", "setne"])] {
+        let text = format!(
+            "target datalayout = \"@m32-datalayout@\"\n\
+define i32 @f(x86_fp80 %a, x86_fp80 %b) strictfp {{\n  %c = call i1 @llvm.experimental.constrained.fcmp.f80(x86_fp80 %a, x86_fp80 %b, metadata !\"{predicate}\", metadata !\"fpexcept.strict\") strictfp\n  %z = zext i1 %c to i32\n  ret i32 %z\n}}\ndeclare i1 @llvm.experimental.constrained.fcmp.f80(x86_fp80, x86_fp80, metadata, metadata)\n"
+        );
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let (built, _) = compiled(&flags(&["-m32", level, "--isel=dag"]), &text, "f").unwrap();
+            let _ = sender.send(llrm_codegen::backend::masm::text(&built).unwrap());
+        });
+        let listing = receiver
+            .recv_timeout(std::time::Duration::from_secs(60))
+            .unwrap_or_else(|_| panic!("{predicate}: the compile did not finish in 60 s"));
+        assert!(listing.contains("fucom"), "{predicate}: {listing}");
+        for read in flags_read {
+            assert!(listing.contains(read), "{predicate}: {read}\n{listing}");
+        }
+    }
+}
