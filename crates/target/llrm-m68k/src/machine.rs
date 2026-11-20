@@ -502,6 +502,12 @@ impl Tti for M68k {
         true
     }
 
+    /// DEVIATE OS-OUTLINE-TRIAL (owner llrm-target-m68k, exit 2026-12-20): a cold -Os site the units accept is also
+    /// built as a call, kept where the finished code has fewer bytes (jpeg_fixed `put32`, `next16`, `tmul`: -54 B).
+    fn opt_size_inline_outline_trial(&self) -> bool {
+        true
+    }
+
     /// -Os counts bytes and clocks against the best compiler's (user ruling
     /// 2026-11-14): a call the size bound refused is built inlined too, and
     /// kept where the finished code is faster within the bytes ceiling.
