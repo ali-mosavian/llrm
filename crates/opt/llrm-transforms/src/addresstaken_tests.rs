@@ -165,3 +165,77 @@ m:
     assert!(!crate::sinkcommon::can_be_merged(function, a));
     assert!(crate::sinkcommon::can_be_merged(function, b));
 }
+
+/// `@f` after GVN; whether it changed. No interpreter: it runs no `indirectbr`.
+fn after_gvn(
+    text: &str,
+    pre: bool,
+) -> (String, bool) {
+    let mut module = parsed(text);
+    let layout = llrm_analysis::testing::layout(&module);
+    let outer = llrm_mir::passes::Outer::of(&module, None);
+    let (context, function) = module.function_mut("f").expect("@f");
+    let changed = crate::gvn::pass::run_impl_cfg(context, &layout, function, &outer, pre, None).0;
+    (crate::testing::printed(&module), changed)
+}
+
+/// Before: GVN hoisted an expression into the arm that ends in an `indirectbr`
+/// (GVN.cpp:3737 forbids it).
+#[test]
+fn test_an_expression_is_not_made_available_across_an_indirectbr() {
+    let (text, changed) = after_gvn(
+        "@t = internal constant [1 x ptr] [ptr blockaddress(@f, %a)]
+
+define i16 @f(i16 %x, i16 %y, i1 %c, ptr %p) {
+entry:
+  br i1 %c, label %s1, label %s2
+
+s1:
+  indirectbr ptr %p, [label %a]
+
+s2:
+  %t = add i16 %x, %y
+  br label %a
+
+a:
+  %u = add i16 %x, %y
+  %v = mul i16 %u, 3
+  ret i16 %v
+}
+",
+        true,
+    );
+    assert!(!changed && !text.contains(".pre"), "{text}");
+}
+
+/// Before: load PRE put the load into the arm that ends in an `indirectbr`
+/// (GVN.cpp:1803).
+#[test]
+fn test_a_load_is_not_made_available_across_an_indirectbr() {
+    let (text, changed) = after_gvn(
+        "@g = global i16 zeroinitializer
+@t = internal constant [2 x ptr] [ptr blockaddress(@f, %b3), ptr blockaddress(@f, %b4)]
+
+define i16 @f(i16 %x, i1 %c, ptr %p) {
+b0:
+  br i1 %c, label %b1, label %b2
+
+b1:
+  store i16 %x, ptr @g
+  br label %b3
+
+b2:
+  indirectbr ptr %p, [label %b3, label %b4]
+
+b3:
+  %r = load i16, ptr @g
+  ret i16 %r
+
+b4:
+  ret i16 0
+}
+",
+        true,
+    );
+    assert!(!text.contains(".pre"), "{text} {changed}");
+}
