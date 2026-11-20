@@ -669,6 +669,30 @@ b0:
     assert!(lattice_of(&module, &results, "f", "y").is_unknown());
 }
 
+/// Before: a block SCCP found dead was erased though a `blockaddress` names it,
+/// and the table's label named nothing (SCCP.cpp:118 keeps it, holding an
+/// `unreachable`).
+#[test]
+fn test_a_dead_block_whose_address_is_taken_stays_holding_an_unreachable() {
+    let text = "@t = internal constant [1 x ptr] [ptr blockaddress(@f, %dead)]
+
+define i32 @f() {
+entry:
+  br i1 false, label %dead, label %live
+
+dead:
+  ret i32 1
+
+live:
+  ret i32 2
+}
+";
+    let mut module = parsed(text);
+    assert!(sccped(&mut module));
+    let out = printed(&module);
+    assert!(out.contains("\ndead:\n  unreachable"), "{out}");
+}
+
 /// recpow -O2 (REC-5): `power(i % 97 + 2, ...)` is called from a loop whose
 /// counter grows by one each solver step. Ten extensions and the pin's
 /// `mergeIn` makes it overdefined, so `i % 97` spans both signs and the

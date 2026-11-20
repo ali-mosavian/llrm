@@ -1032,6 +1032,12 @@ impl Function {
         with: BlockId,
     ) {
         if with != block {
+            // `BasicBlock::replaceAllUsesWith` rewrites a `blockaddress` of the
+            // block to one of `with`.
+            if self.has_address_taken(block) {
+                self.address_forward.push((block, with));
+                self.mark_address_taken(with);
+            }
             for held in [Held::Block(block.0), Held::PhiBlock(block.0)] {
                 while let Some(one) = self.uses.head(held) {
                     self.set_operand(one.user, one.index as usize, Operand::Block(with));

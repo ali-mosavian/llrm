@@ -396,7 +396,10 @@ end:
 fn test_loops_are_visited_in_program_order_inner_first() {
     let mut text = String::from("define i32 @g(i32 %n) {\nentry:\n  br label %h0\n");
     for i in 0..4 {
-        let (from, next) = (if i == 0 { "entry".to_string() } else { format!("m{}", i - 1) }, if i == 3 { "x".to_string() } else { format!("h{}", i + 1) });
+        let (from, next) = (
+            if i == 0 { "entry".to_string() } else { format!("m{}", i - 1) },
+            if i == 3 { "x".to_string() } else { format!("h{}", i + 1) },
+        );
         text += &format!(
             "h{i}:\n  %i{i} = phi i32 [ 0, %{from} ], [ %j{i}, %h{i} ]\n  %j{i} = add nsw i32 %i{i}, 1\n  %c{i} = icmp slt i32 %j{i}, %n\n  br i1 %c{i}, label %h{i}, label %m{i}\nm{i}:\n  br label %{next}\n"
         );
@@ -412,4 +415,41 @@ fn test_loops_are_visited_in_program_order_inner_first() {
         .map(|one| function.block(one.get_header()).name.clone().expect("named"))
         .collect();
     assert_eq!(order, ["h0", "h1", "h2", "h3"]);
+}
+
+/// Before: no check kept the loop passes from cloning a loop an `indirectbr`
+/// ends a block of, whose copy's edges would go by the original's address
+/// (`Loop::isSafeToClone`).
+#[test]
+fn test_a_loop_with_an_indirectbr_is_not_safe_to_clone() {
+    let module = parse::module(
+        "@t = internal constant [1 x ptr] [ptr blockaddress(@f, %h)]
+
+define void @f(ptr %p, i1 %c) {
+entry:
+  br label %h
+
+h:
+  br i1 %c, label %l, label %x
+
+l:
+  indirectbr ptr %p, [label %h]
+
+x:
+  ret void
+}
+",
+    )
+    .expect("parses");
+    let (_, _, function) = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("f")).expect("@f");
+    let info = LoopInfo::analyze(function, || DomTree::of(function));
+    let one = info.get_loop_for(block(function, "h")).expect("a loop");
+    assert!(!one.is_safe_to_clone(function));
+    let plain = parse::module(
+        "define void @f(i1 %c) {\nentry:\n  br label %h\n\nh:\n  br i1 %c, label %h, label %x\n\nx:\n  ret void\n}\n",
+    )
+    .expect("parses");
+    let (_, _, function) = plain.functions().find(|(_, global, _)| global.name.as_deref() == Some("f")).expect("@f");
+    let info = LoopInfo::analyze(function, || DomTree::of(function));
+    assert!(info.get_loop_for(block(function, "h")).expect("a loop").is_safe_to_clone(function));
 }

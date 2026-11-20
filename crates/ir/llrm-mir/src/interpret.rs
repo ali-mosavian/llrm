@@ -257,6 +257,7 @@ impl<'m> Machine<'m> {
                 Val::Aggregate(bytes.iter().map(|&b| Val::Int { bits: u128::from(b), width: 8 }).collect())
             }
             ConstantKind::Global(global) => Val::Ptr(self.addresses[global]),
+            ConstantKind::Expr(ConstantExpr::BlockAddress { .. }) => return unsupported("a block's address"),
             ConstantKind::Expr(ConstantExpr::Cast { op, value }) => {
                 let from = self.module.context.get(*value).ty;
                 cast(self.types(), &self.layout, *op, self.constant(*value)?, from, constant.ty, Flags::default())?
@@ -1001,6 +1002,7 @@ impl<'m> Machine<'m> {
                         next = Some(chosen);
                         break;
                     }
+                    Opcode::IndirectBr => return unsupported("an indirect branch"),
                     Opcode::Unreachable => return undefined("unreachable was reached"),
                     Opcode::Resume | Opcode::LandingPad { .. } => return unsupported("unwinding"),
                     Opcode::VaArg => return unsupported("va_arg"),
