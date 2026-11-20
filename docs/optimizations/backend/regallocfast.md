@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/regallocfast.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/regallocfast.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/regallocfast.rs sha256:902536a23b6adbd18cc0ade52106aaf54164c4c267369460cd28e46e823c9b47 -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/regallocfast.rs sha256:f0390dfe03bc61708899e7063b95c68fa5d9f7ecc56bbbc4e4b19a3f05038cc2 -->
 
 # regallocfast
 
@@ -38,3 +38,13 @@ instruction they were on.
 
 ## Used by
 `allocate::RegAlloc` at -O0.
+
+## Example
+At -O0 a value that may live out of its block is stored to its slot after its
+def and reloaded where the next block uses it.
+
+```text
+bb0:  %0 = mov 1            bb0:  eax = mov 1 ; store [slot0], eax
+      jmp bb1         ->    bb1:  eax = load [slot0]
+bb1:  use %0                      use eax
+```

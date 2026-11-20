@@ -75,64 +75,121 @@ pub fn translate(
     Ok(joined)
 }
 
-// ---- Flat 32-bit code -------------------------------------------------------
+// ---- Flat 32- and 64-bit code
+// -------------------------------------------------------
 //
 // The same mechanism for flat code: an asm call whose operands sit at places
 // the constraints name (`{eax}`, `{st}`, an address register for a memory
-// operand) becomes a call of `llrm.ia32.asm.*`, its bytes assembled here. A
-// constraint that leaves the register to the allocator (`r`, `q`, `g`, a
-// constant) is refused with its name: S2 (`ISD::INLINEASM`) takes those.
+// operand) becomes a call of `llrm.ia32.asm.*` (`ia64` on x86-64), its bytes
+// assembled here. A constraint that leaves the register to the allocator (`r`,
+// `q`, `g`, a constant) is refused with its name: S2 (`ISD::INLINEASM`) takes
+// those.
 
-/// The registers a flat block may name, from the 32-bit target's `@asm` line.
-fn flat_registers() -> &'static [String] {
-    static NAMES: std::sync::LazyLock<Vec<String>> = std::sync::LazyLock::new(|| {
-        llrm_target::registers::asm_names(&llrm_target::Target::registers_text(&llrm_x86_m32::M32))
-    });
-    &NAMES
+/// The register file a flat block's mode names: the registers its target's
+/// `@asm` line lists, with the family each belongs to.
+struct Flat {
+    /// 32 or 64: the mode, the width of an address register, the prefix of the
+    /// block's name.
+    bits: u8,
+    asm: Vec<String>,
+    registers: Vec<llrm_target::registers::Register>,
 }
 
-/// A constraint's register as the block's name carries it: `st` is `st0`,
-/// `st(1)` is `st1`.
-fn flat_register(name: &str) -> Result<String, String> {
-    let name = match name {
-        "st" | "st(0)" => "st0",
-        "st(1)" => "st1",
-        other => other,
-    };
-    if flat_registers().iter().any(|one| one == name) {
-        Ok(name.to_owned())
-    } else {
-        Err(format!("asm: register {name} is not carried"))
+impl Flat {
+    fn of(bits: u8) -> &'static Flat {
+        static FLAT32: std::sync::LazyLock<Flat> =
+            std::sync::LazyLock::new(|| Flat::parse(32, &llrm_target::Target::registers_text(&llrm_x86_m32::M32)));
+        static FLAT64: std::sync::LazyLock<Flat> =
+            std::sync::LazyLock::new(|| Flat::parse(64, &llrm_target::Target::registers_text(&llrm_x86_m64::M64)));
+        if bits == 64 { &FLAT64 } else { &FLAT32 }
     }
-}
 
-/// The register a name is a view of, to keep an address register off the ones
-/// the block names.
-fn flat_root(name: &str) -> &str {
-    match name {
-        "al" | "ax" | "eax" => "eax",
-        "bl" | "bx" | "ebx" => "ebx",
-        "cl" | "cx" | "ecx" => "ecx",
-        "dl" | "dx" | "edx" => "edx",
-        "si" | "esi" => "esi",
-        "di" | "edi" => "edi",
-        other => other,
+    fn parse(
+        bits: u8,
+        text: &str,
+    ) -> Flat {
+        Flat {
+            bits,
+            asm: llrm_target::registers::asm_names(text),
+            registers: llrm_target::registers::parse(text).expect("a target's register file parses"),
+        }
+    }
+
+    /// A constraint's register as the block's name carries it: `st` is `st0`,
+    /// `st(1)` is `st1`.
+    fn register(
+        &self,
+        name: &str,
+    ) -> Result<String, String> {
+        let name = match name {
+            "st" | "st(0)" => "st0",
+            "st(1)" => "st1",
+            other => other,
+        };
+        if self.asm.iter().any(|one| one == name) {
+            Ok(name.to_owned())
+        } else {
+            Err(format!("asm: register {name} is not carried"))
+        }
+    }
+
+    /// The register a name is a view of, to keep an address register off the
+    /// ones the block names.
+    fn root(
+        &self,
+        name: &str,
+    ) -> String {
+        self.registers.iter().find(|one| one.name == name).map_or(name, |one| one.root.as_str()).to_owned()
+    }
+
+    /// The view of `name`'s register an operand of the type `ty` takes in the
+    /// block's text: `{cx}` holding an `i64` is `rcx`, an `i32` `ecx`. A
+    /// register of no width (x87) and a type of none keep the name.
+    fn view(
+        &self,
+        name: &str,
+        ty: &str,
+    ) -> String {
+        let width = match ty.strip_prefix('i').and_then(|bits| bits.parse::<u32>().ok()) {
+            Some(bits) => bits,
+            None if ty == "ptr" => u32::from(self.bits),
+            None => return name.to_owned(),
+        };
+        let root = self.root(name);
+        self.registers
+            .iter()
+            .find(|one| one.root == root && one.bits == width && self.asm.contains(&one.name))
+            .map_or(name, |one| one.name.as_str())
+            .to_owned()
+    }
+
+    /// The registers a pointer may be passed in: address width, in the
+    /// allocation order.
+    fn pool(&self) -> Vec<&str> {
+        self.registers
+            .iter()
+            .filter(|one| u8::try_from(one.bits) == Ok(self.bits) && self.asm.contains(&one.name))
+            .map(|one| one.name.as_str())
+            .collect()
     }
 }
 
 /// What an operand is in a flat block's text.
 enum Place {
-    Register(String),
+    /// A register and the view of it the operand's type takes.
+    Register(String, String),
     /// An address register the pointer argument is passed in.
     Memory(String),
 }
 
 /// `text` with every asm call of flat code replaced by a call of its
-/// `llrm.ia32.asm.*` block.
+/// `llrm.ia32.asm.*` (`bits` 32) or `llrm.ia64.asm.*` (64) block.
 pub fn translate_flat(
     text: &str,
+    bits: u8,
     assemble: &mut dyn FnMut(&str) -> Result<Vec<u8>, String>,
 ) -> Result<String, String> {
+    let flat = Flat::of(bits);
     let mut out: Vec<String> = Vec::new();
     let mut declares: Vec<String> = Vec::new();
     for line in text.lines() {
@@ -141,7 +198,7 @@ pub fn translate_flat(
             out.push(line.to_owned());
             continue;
         }
-        let (call, declare) = flat_block(line, assemble)?;
+        let (call, declare) = flat_block(line, flat, assemble)?;
         out.push(call);
         if !declares.contains(&declare) {
             declares.push(declare);
@@ -180,6 +237,7 @@ fn split_top(text: &str) -> Vec<&str> {
 
 fn flat_block(
     line: &str,
+    flat: &Flat,
     assemble: &mut dyn FnMut(&str) -> Result<Vec<u8>, String>,
 ) -> Result<(String, String), String> {
     let line = line.trim();
@@ -238,24 +296,31 @@ fn flat_block(
     for item in constraints.split(',') {
         let inner = item.trim_start_matches(['=', '+', '&']);
         if let Some(name) = inner.strip_prefix('{').and_then(|one| one.strip_suffix('}')) {
-            named.push(flat_root(&flat_register(name)?).to_owned());
+            named.push(flat.root(&flat.register(name)?));
         } else if let Some(name) = item.strip_prefix("~{").and_then(|one| one.strip_suffix('}')) {
             if !["memory", "dirflag", "fpsr", "flags", "cc"].contains(&name) {
-                named.push(flat_root(&flat_register(name)?).to_owned());
+                named.push(flat.root(&flat.register(name)?));
             }
         }
     }
-    let mut pool: Vec<&str> = ["eax", "ecx", "edx", "ebx", "esi", "edi"]
-        .into_iter()
-        .filter(|one| !named.iter().any(|used| used == one))
-        .collect();
+    let mut pool: Vec<&str> = flat.pool().into_iter().filter(|one| !named.contains(&flat.root(one))).collect();
     let mut direct_outputs: Vec<String> = Vec::new();
+    // The types the outputs come back as, in order: the result, or its fields.
+    let mut output_types = match ret {
+        "void" => Vec::new(),
+        aggregate if aggregate.starts_with('{') => split_top(aggregate.trim_start_matches('{').trim_end_matches('}'))
+            .into_iter()
+            .map(|one| one.trim().to_owned())
+            .collect(),
+        one => vec![one.to_owned()],
+    }
+    .into_iter();
     for item in constraints.split(',') {
         if let Some(name) = item.strip_prefix("~{").and_then(|one| one.strip_suffix('}')) {
             match name {
                 "memory" => memory = true,
                 "dirflag" | "fpsr" | "flags" | "cc" => {}
-                other => clobbers.push(flat_register(other)?),
+                other => clobbers.push(flat.register(other)?),
             }
             continue;
         }
@@ -275,26 +340,29 @@ fn flat_block(
             inputs.push(register);
             input_values.push(argument.clone());
         } else if let Some(name) = item.strip_prefix("={").and_then(|one| one.strip_suffix('}')) {
-            let register = flat_register(name)?;
-            operands.push((item.to_owned(), Some(Place::Register(register.clone()))));
+            let register = flat.register(name)?;
+            let view = flat.view(&register, &output_types.next().unwrap_or_default());
+            operands.push((item.to_owned(), Some(Place::Register(register.clone(), view))));
             outputs.push(register.clone());
             direct_outputs.push(register);
         } else if let Some(name) = item.strip_prefix('{').and_then(|one| one.strip_suffix('}')) {
-            let register = flat_register(name)?;
+            let register = flat.register(name)?;
             let argument = arguments.get(next_argument).ok_or("asm: an operand without an argument")?;
             next_argument += 1;
-            operands.push((item.to_owned(), Some(Place::Register(register.clone()))));
+            let view = flat.view(&register, &argument.0);
+            operands.push((item.to_owned(), Some(Place::Register(register.clone(), view))));
             inputs.push(register);
             input_values.push(argument.clone());
         } else if !item.is_empty() && item.bytes().all(|one| one.is_ascii_digit()) {
             let tied: usize = item.parse().map_err(|_| "asm: a tie")?;
             let register = match operands.get(tied) {
-                Some((_, Some(Place::Register(register)))) if direct_outputs.contains(register) => register.clone(),
+                Some((_, Some(Place::Register(register, _)))) if direct_outputs.contains(register) => register.clone(),
                 _ => return Err(format!("asm: constraint {item} ties to an operand that is not a fixed output")),
             };
             let argument = arguments.get(next_argument).ok_or("asm: an operand without an argument")?;
             next_argument += 1;
-            operands.push((item.to_owned(), Some(Place::Register(register.clone()))));
+            let view = flat.view(&register, &argument.0);
+            operands.push((item.to_owned(), Some(Place::Register(register.clone(), view))));
             inputs.push(register);
             input_values.push(argument.clone());
         } else {
@@ -304,7 +372,9 @@ fn flat_block(
     if next_argument != arguments.iter().filter(|one| !one.0.is_empty()).count() {
         return Err("asm: the arguments do not match the constraints".into());
     }
-    let mut source = String::from(if intel { ".intel_syntax noprefix\n.code32\n" } else { ".code32\n" });
+    let mode = if flat.bits == 64 { ".code64\n" } else { ".code32\n" };
+    let mut source = String::from(if intel { ".intel_syntax noprefix\n" } else { "" });
+    source.push_str(mode);
     let chars: Vec<char> = text.chars().collect();
     let mut at = 0;
     while at < chars.len() {
@@ -324,8 +394,8 @@ fn flat_block(
             source.push_str(&match (place, intel) {
                 (Place::Memory(register), false) => format!("(%{register})"),
                 (Place::Memory(register), true) => format!("[{register}]"),
-                (Place::Register(register), false) => format!("%{register}"),
-                (Place::Register(register), true) => register.clone(),
+                (Place::Register(_, view), false) => format!("%{view}"),
+                (Place::Register(_, view), true) => view.clone(),
             });
             at = end;
         } else {
@@ -336,7 +406,7 @@ fn flat_block(
     source.push('\n');
     let bytes = assemble(&source)?;
     let name = llrm_mir::intrinsics::asm_name(&llrm_mir::intrinsics::AsmBlock {
-        bits: 32,
+        bits: flat.bits,
         code: bytes,
         inputs,
         outputs,

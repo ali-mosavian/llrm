@@ -112,6 +112,7 @@ pub mod address_analysis;
 pub mod bitcast_combine;
 pub mod bitreverse_combine;
 pub mod bswap_combine;
+pub mod expand_is_fpclass;
 pub mod builder;
 pub mod chain_combine;
 pub mod combine_andnot;

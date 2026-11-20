@@ -112,6 +112,9 @@ pub enum Intrinsic {
     VectorReduce(ReduceKind),
     /// `llvm.copysign`: the first argument with the second's sign.
     CopySign,
+    /// `llvm.is.fpclass`: whether the float is of one of the classes the
+    /// constant second argument (an `FPClassTest` mask) names.
+    IsFpClass,
     /// `llvm.fabs`, `llvm.sqrt` and their kin: a function of one float.
     Unary(FloatFunction),
     /// Rounds to an integer as the rounding mode says: by default, to
@@ -308,6 +311,13 @@ const ASM: &str = "llrm.ia16.asm.";
 /// top and its next). One mechanism, the bitness the prefix.
 const ASM32: &str = "llrm.ia32.asm.";
 
+/// The same for flat 64-bit code: `llrm.ia64.asm.`, the registers the 64-bit
+/// target names (`rax`, `r8`..`r15`, `eax`, `st0`...).
+const ASM64: &str = "llrm.ia64.asm.";
+
+/// The prefix of a block's name at `bits`, and the bitness a prefix states.
+const ASM_PREFIXES: [(u8, &str); 3] = [(16, ASM), (32, ASM32), (64, ASM64)];
+
 /// A word of an inline block that names a symbol: where, as what (`offset`,
 /// `segment`, `reloff`), and plus what.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -317,7 +327,7 @@ pub struct AsmFixup {
     pub addend: i64,
 }
 
-/// An inline assembly block: registers by their names at `bits` (16 or 32).
+/// An inline assembly block: registers by their names at `bits` (16, 32 or 64).
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AsmBlock {
     pub bits: u8,
@@ -335,7 +345,7 @@ pub fn asm_name(block: &AsmBlock) -> String {
     let fixups: String = block.fixups.iter().map(|one| format!(".f{}_{}_{}", one.at, one.kind, one.addend)).collect();
     format!(
         "{}{hex}.{}.{}.{}.{}{fixups}",
-        if block.bits == 32 { ASM32 } else { ASM },
+        ASM_PREFIXES.iter().find(|(bits, _)| *bits == block.bits).map_or(ASM, |(_, prefix)| *prefix),
         list(&block.inputs),
         list(&block.outputs),
         list(&block.clobbers),
@@ -344,10 +354,7 @@ pub fn asm_name(block: &AsmBlock) -> String {
 }
 
 pub fn asm(name: &str) -> Option<AsmBlock> {
-    let (bits, rest) = match name.strip_prefix(ASM) {
-        Some(rest) => (16, rest),
-        None => (32, name.strip_prefix(ASM32)?),
-    };
+    let (bits, rest) = ASM_PREFIXES.iter().find_map(|(bits, prefix)| Some((*bits, name.strip_prefix(prefix)?)))?;
     let parts = rest.split('.').collect::<Vec<_>>();
     let [hex, inputs, outputs, clobbers, memory, fixups @ ..] = &parts[..] else {
         return None;
@@ -649,7 +656,7 @@ thread_local! {
     static PROBES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-const TABLE: [Spec; 99] = [
+const TABLE: [Spec; 100] = [
     overflow("llvm.sadd.with.overflow", BinaryOp::Add, true),
     overflow("llvm.uadd.with.overflow", BinaryOp::Add, false),
     overflow("llvm.ssub.with.overflow", BinaryOp::Sub, true),
@@ -715,6 +722,14 @@ const TABLE: [Spec; 99] = [
     reduce("llvm.vector.reduce.fadd", ReduceKind::FAdd),
     reduce("llvm.vector.reduce.fmul", ReduceKind::FMul),
     arithmetic("llvm.copysign", Intrinsic::CopySign, Slot::Any(0), &[Slot::Any(0), Slot::Any(0)], Kind::Float),
+    Spec {
+        name: "llvm.is.fpclass",
+        intrinsic: Intrinsic::IsFpClass,
+        overloads: &[Kind::Float],
+        returns: Slot::Int(1),
+        parameters: &[Slot::Any(0), Slot::Int(32)],
+        own: None,
+    },
     unary("llvm.fabs", FloatFunction::Fabs),
     unary("llvm.sqrt", FloatFunction::Sqrt),
     unary("llvm.sin", FloatFunction::Sin),
@@ -1161,7 +1176,8 @@ pub fn is_target_intrinsic(name: &str) -> bool {
 pub fn is_reserved(name: &str) -> bool {
     name.starts_with("llvm.")
         || name.starts_with("llrm.ia16.")
-        || name.starts_with("llrm.ia32.asm.")
+        || name.starts_with(ASM32)
+        || name.starts_with(ASM64)
         || name.starts_with("llrm.noalias")
         || name.starts_with("llrm.vararg.")
 }
@@ -1212,7 +1228,7 @@ impl Intrinsic {
         if name.starts_with(CODE) {
             return Some(Intrinsic::Code);
         }
-        if name.starts_with(ASM) || name.starts_with(ASM32) {
+        if ASM_PREFIXES.iter().any(|(_, prefix)| name.starts_with(prefix)) {
             return Some(Intrinsic::Asm);
         }
         // The longest table name that is `name` or a `.`-cut prefix of it.
@@ -1258,11 +1274,12 @@ impl Intrinsic {
             let block = asm(name).ok_or("Inline assembly's name does not parse!")?;
             // Flat code also passes bytes, and the x87 stack's values (`st0`,
             // `st1`).
-            let flat = block.bits == 32;
+            let flat = block.bits >= 32;
             let word = |ty: &TypeId| {
                 matches!(types.int_bits(*ty), Some(16 | 32))
                     || matches!(types.get(*ty), Type::Pointer(0))
                     || flat && (types.int_bits(*ty) == Some(8) || matches!(types.get(*ty), Type::Float(_)))
+                    || block.bits == 64 && types.int_bits(*ty) == Some(64)
             };
             let answers = match &block.outputs[..] {
                 [] => types.is_void(*returns),

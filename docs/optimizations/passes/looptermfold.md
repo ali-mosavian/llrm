@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/looptermfold.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/looptermfold.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/looptermfold.rs sha256:89c3cc3a8b5872ffc21c3a1f2223293a0d0dafb8d577b0ec57ea99625ac2f1c2 -->
+<!-- src: crates/opt/llrm-transforms/src/looptermfold.rs sha256:890ed0a87af6c1c5cc675f0f1e8173259cd96a68f5417ee27078b24b379b1e0a -->
 
 # looptermfold
 
@@ -36,3 +36,16 @@ pass here writes it. Owner m68k. Exit: when a pass writes the attribute.
 
 ## See also
 `canFoldTermCondOfLoop`, `RunTermFold`, `isAlmostDeadIV`.
+
+## Example
+The exit compare of a loop moves from a counter to another induction variable,
+and the counter dies.
+
+```text
+ loop:  %i = phi [0, pre], [%i.next, loop]        loop:  %p = phi [%a, pre], [%p.next, loop]
+        %p = phi [%a, pre], [%p.next, loop]  ==>         %p.next = getelementptr i8, ptr %p, 4
+        %p.next = getelementptr i8, ptr %p, 4            %done = icmp eq ptr %p.next, %end
+        %i.next = add nuw i32 %i, 1                      br i1 %done, label %exit, label %loop
+        %c = icmp ne i32 %i.next, %n
+        br i1 %c, label %loop, label %exit      pre:   %end = (value of %p after the last trip)
+```

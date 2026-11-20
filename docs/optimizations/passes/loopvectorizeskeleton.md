@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/loopvectorizeskeleton.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/loopvectorizeskeleton.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/loopvectorizeskeleton.rs sha256:71329043383f641c6a298d9d35933b8168089ec9d315be728bd7c50b1823b394 -->
+<!-- src: crates/opt/llrm-transforms/src/loopvectorizeskeleton.rs sha256:c3bfd789b2957b3dbcfe740e43f80e0d454555eb62065355b26e7e1597368031 -->
 
 # loopvectorizeskeleton
 
@@ -46,6 +46,16 @@ the preheader falls into the vector loop, which leaves into the remainder.
   of a reduction (the interleaved loops' `bin.rdx`, LVI2), which the middle
   block computes; any other loop-defined value used outside is refused by
   the recipe extraction, LVP2.
+
+## Example
+A loop gets a trip-count check, a vector trip count `n.vec` and a scalar remainder loop around it.
+
+```text
+%n = sub %bound, %start
+%min.iters.check = icmp ult %n, VF*IC   ; br to scalar.ph or vector.ph
+%n.vec = sub %n, (and %n, VF*IC-1)      ; vector loop runs to %ind.end
+middle.block: br (%n == %n.vec), exit, scalar.ph
+```
 
 ## Used by
 Named by `loopunrollpass`, `loopvectorize`, `loopvectorizeearlyexit`, `loopvectorizeinterleave`.
