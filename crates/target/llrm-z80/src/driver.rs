@@ -551,10 +551,14 @@ pub fn selections_with_alternatives(
             // -O1 only: at 1 B = 3 T the static loop weights, about
             // 5x under the measured ones, made -368 B for +5970 T look like a
             // gain on call_keeps).
-            let muls = calls_the_routine(name).filter(|(sized, _)| *sized || request.level != Level::O0);
             let fills = has_fills(name);
             let shifts = has_shifts(name);
             let divides = has_divides(name);
+            // a function has one alternative: the lone multiply's call does not take it from the speed
+            // routines of a long divide (copy_runs -Os: size routine, 953 -> 767 B, 204k -> 729k T)
+            let muls = calls_the_routine(name)
+                .filter(|(sized, _)| *sized || request.level != Level::O0)
+                .filter(|(sized, inline)| !(*sized && !inline && divides));
             let call_shifts = has_long_shifts(name);
             let products = has_products(name);
             if muls.is_none() && !fills && !shifts && !divides && !call_shifts && !products {

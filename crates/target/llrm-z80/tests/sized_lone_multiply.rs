@@ -18,3 +18,14 @@ fn dot_at_os_calls_the_multiply_routine() {
     let os = priced(ir, Level::Os);
     assert!(os.0 <= 400, "-Os {os:?}: the product is partial products again");
 }
+
+/// A function with a long divide has the speed routines as its one alternative. Giving it the lone multiply's call
+/// instead took them away: copy_runs -Os went from 953 B / 204,454 T to 767 B / 729,429 T.
+#[test]
+fn copy_runs_at_os_keeps_the_speed_routine_of_its_divide() {
+    let ir = include_str!("data/copy_runs_divide_os.ll");
+    let os = priced(ir, Level::Os);
+    // the speed routine is the larger one: 953 B against the size routine's 767 B (the model reads the size
+    // routine as the faster, 250,034 clocks against 328,067; ucsim says 3.6x slower, see z80-module-clock-estimate.md)
+    assert!(os.0 >= 940, "-Os {os:?}: the divide lost its speed routine");
+}
