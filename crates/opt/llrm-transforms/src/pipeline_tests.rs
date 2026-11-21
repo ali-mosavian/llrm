@@ -546,8 +546,10 @@ b0:
 /// nbody_fixed read 3,457,356 instructions against 3,116,356).
 #[test]
 fn a_loop_calling_a_pure_function_is_judged_on_what_the_function_does() {
+    // `noinline`: an internal function with one use is an inline candidate, which
+    // the pin's unroll leaves its loop rolled for, and this pipeline has no inliner.
     let mut module = llrm_analysis::testing::parsed(
-        "define internal i16 @g(i16 %x) {
+        "define internal i16 @g(i16 %x) noinline {
 b0:
   %y = mul i16 %x, 7
   ret i16 %y
