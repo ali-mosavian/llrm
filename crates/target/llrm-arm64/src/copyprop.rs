@@ -138,8 +138,12 @@ fn propagate_block(
             }
         }
         if calls {
-            // The call's mask is not tracked: nothing is known after it.
-            copies.clear();
+            // The call's mask is not tracked, so no source stands after it; a
+            // destination the call keeps (what IPRA lets a caller rely on)
+            // is still read later, and that read still keeps its copy.
+            for held in copies.values_mut() {
+                held.available = false;
+            }
         }
         if let Op::Copy { dst, src } = block.ops[at]
             && tracked(dst, src)

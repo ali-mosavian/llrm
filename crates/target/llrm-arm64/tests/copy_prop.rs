@@ -80,3 +80,26 @@ fn a_register_read_after_its_copy_is_read_from_the_copy_source() {
     let copied = format!("orr x{}, xzr, ", &divisor[1..]);
     assert!(!lines[..divide].iter().any(|line| line.starts_with(&copied)), "the divisor {divisor} is a copy: {asm}");
 }
+
+/// Two calls and a third that reads what the first returned: the copy of the
+/// first result into a register the second callee leaves alone (IPRA) was
+/// dropped as dead, because the call between forgot the copy and the read
+/// after it found none. computed_goto printed a stale `x1`.
+#[test]
+fn a_copy_read_after_a_call_is_kept() {
+    let ir = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128-Fn32\"\n\
+              target triple = \"aarch64-unknown-linux-gnu\"\n\
+              define internal i64 @leaf(i64 %x) noinline nounwind {\n  %r = add i64 %x, 1\n  ret i64 %r\n}\n\
+              declare void @use(i64, i64)\n\
+              define i32 @f() {\n  %a = call i64 @leaf(i64 1)\n  %b = call i64 @leaf(i64 2)\n  \
+              call void @use(i64 %a, i64 %b)\n  ret i32 0\n}\n";
+    let asm = driver::assembly(ir, Platform::Linux, Level::O2).expect("lowers");
+    let lines: Vec<&str> = asm.lines().map(str::trim).collect();
+    let calls: Vec<usize> =
+        lines.iter().enumerate().filter(|(_, line)| line.starts_with("bl ")).map(|(at, _)| at).collect();
+    assert_eq!(calls.len(), 3, "{asm}");
+    assert!(
+        lines[calls[0]..calls[1]].iter().any(|line| line.starts_with("orr x") && line.ends_with(", xzr, x0, lsl #0")),
+        "{asm}"
+    );
+}
