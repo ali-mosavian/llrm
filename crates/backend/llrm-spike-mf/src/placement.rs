@@ -879,6 +879,35 @@ pub fn place<L: Layout>(layout: &L) -> Vec<usize> {
 /// position of `to` among `from`'s successors.
 pub type Odds = HashMap<(u32, u32), (BranchProbability, usize)>;
 
+/// The odds of a branch out of a loop, as `BranchProbabilityInfo`'s loop
+/// heuristic gives them with no profile: the edge that stays in the innermost
+/// loop of its block takes 124 of 128, the edge that leaves it the rest.
+pub fn loop_odds<C>(function: &MFunction<C>) -> Odds {
+    use llrm_mir::blockfrequency::BranchProbability;
+    let cfg = crate::cfg::Cfg::new(function);
+    let mut odds = Odds::default();
+    for (from, succs) in cfg.succs.iter().enumerate() {
+        if succs.len() != 2 {
+            continue;
+        }
+        let innermost = cfg
+            .loops()
+            .iter()
+            .filter(|(_, body)| body[from])
+            .min_by_key(|(_, body)| body.iter().filter(|b| **b).count());
+        let Some((_, body)) = innermost else { continue };
+        let leaves: Vec<bool> = succs.iter().map(|&to| !body[to]).collect();
+        if leaves[0] == leaves[1] {
+            continue;
+        }
+        for (rank, &to) in succs.iter().enumerate() {
+            let share = if leaves[rank] { 4 } else { 124 };
+            odds.insert((function.blocks[from].id, function.blocks[to].id), (BranchProbability::new(share, 128), rank));
+        }
+    }
+    odds
+}
+
 /// A function's blocks as [`Layout`] asks for them.
 pub struct Graph {
     counts_jumps: bool,
