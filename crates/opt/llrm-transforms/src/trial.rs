@@ -296,7 +296,19 @@ pub fn keeps_at_o1(
 
 #[cfg(test)]
 mod tests {
-    use super::keeps_at_o1;
+    use super::{keeps_at_o1, keeps_smaller_at_size};
+
+    /// x_transpose -Os (m32): the copy loop saved 20 B and added 178,500 of
+    /// about 1.1M work (+16%); x_switch_ranges: 35 B for +11%.
+    #[test]
+    fn a_smaller_shape_is_kept_only_within_the_clock_cap() {
+        assert!(!keeps_smaller_at_size(-20, -178_500, 1_100_000, Some(2)));
+        assert!(keeps_smaller_at_size(-20, -178_500, 1_100_000, None), "no cap: bytes alone");
+        assert!(keeps_smaller_at_size(-23, -1_000, 1_100_000, Some(2)));
+        assert!(keeps_smaller_at_size(-4, 15, 1_100_000, Some(2)), "it runs less");
+        assert!(!keeps_smaller_at_size(0, 100, 1_100_000, Some(2)), "no byte saved");
+        assert!(keeps_smaller_at_size(-4, -50, 0, Some(2)), "no work known: bytes alone");
+    }
 
     /// x_life -O1 (m32): the 3x3 nest unrolled ran half the work (212,914
     /// against 425,704) for 32 B more once the outer loops' counters
@@ -421,6 +433,26 @@ pub const ROTATION_TRIAL_MAX_INSTRUCTIONS: usize = 4096;
 /// axis: it is smaller. A tie keeps the pass's own result.
 pub fn keeps_at_size(added: i64) -> bool {
     added < 0
+}
+
+/// DEVIATE OS-TRIAL-CLOCK-CAP: whether a trial that keeps a smaller shape at -Os
+/// is kept. The object is smaller (`added` < 0) and, where the target caps the
+/// clocks a trial may cost (`cap`, percent of the code's work without it, `base`),
+/// the work it adds (`-saved`) stays within the cap. Where the model has no
+/// work for either shape (`base` 0) bytes alone decide, as without a cap.
+pub fn keeps_smaller_at_size(
+    added: i64,
+    saved: i64,
+    base: i64,
+    cap: Option<i64>,
+) -> bool {
+    if added >= 0 {
+        return false;
+    }
+    match cap {
+        Some(cap) if base > 0 && saved < 0 => -saved * 100 <= cap * base,
+        _ => true,
+    }
 }
 
 /// DEVIATE UNROLL-OS-TRIAL: whether the -Os unroll trial is kept: the object is

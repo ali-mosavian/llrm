@@ -180,6 +180,7 @@ impl Dimension {
         noted: &Noted,
         (kept_sizes, kept_work): (Sizes, Option<f64>),
         (other_sizes, other_work): (Sizes, Option<f64>),
+        cap: Option<i64>,
     ) -> bool {
         // A bytes-strict unroll trial compares the code alone: the constants a
         // loop's removal frees are data, which a code-size column does
@@ -190,6 +191,7 @@ impl Dimension {
         let added = other_bytes - kept_bytes;
         let work = |one: Option<f64>| one.unwrap_or(0.0);
         let saved = (work(kept_work) - work(other_work)).round() as i64;
+        let base_work = work(kept_work).round() as i64;
         let measured = kept_work.is_some() && other_work.is_some();
         let (what, pays) = match self {
             // The unrotated object is smaller; the rotated one stays if it
@@ -203,10 +205,10 @@ impl Dimension {
                 ("rotation-hot", measured && trial::keeps_rotation_hot(saved, added, noted.left.1, bytes))
             }
             // The object without the latch copies is smaller.
-            Dimension::KeepLatch => ("keep-latch", trial::keeps_at_size(added)),
-            Dimension::KeepSwitch => ("keep-switch", trial::keeps_at_size(added)),
-            Dimension::KeepCopyLoop => ("keep-copy-loop", trial::keeps_at_size(added)),
-            Dimension::KeepHintedCalls => ("keep-hinted-calls", trial::keeps_at_size(added)),
+            Dimension::KeepLatch => ("keep-latch", trial::keeps_smaller_at_size(added, saved, base_work, cap)),
+            Dimension::KeepSwitch => ("keep-switch", trial::keeps_smaller_at_size(added, saved, base_work, cap)),
+            Dimension::KeepCopyLoop => ("keep-copy-loop", trial::keeps_smaller_at_size(added, saved, base_work, cap)),
+            Dimension::KeepHintedCalls => ("keep-hinted-calls", trial::keeps_smaller_at_size(added, saved, base_work, cap)),
             Dimension::Unroll { bytes_strict, .. } => {
                 ("unroll-os", measured && trial::keeps_unroll_at_size(saved, added, noted.unroll.0.len(), bytes_strict))
             }
@@ -411,6 +413,7 @@ fn compiled_module_at_size(
     if active.is_empty() {
         return with_leaf_trial(base, name, options, unpadded);
     }
+    let cap = options.cpu().ok().and_then(|cpu| cpu.target().tti()).and_then(|tti| tti.os_trial_clock_cap_percent());
     let mut again = options.clone();
     again.dump = None;
     // A dimension that stays, with its variant assembled whole or the program
@@ -446,7 +449,7 @@ fn compiled_module_at_size(
             let variant = built(program, name, &again)?;
             let pays = matches!(
                 (price(&base.built), price(&variant.built)),
-                (Some(a), Some(b)) if dimension.keeps(&noted, a, b)
+                (Some(a), Some(b)) if dimension.keeps(&noted, a, b, cap)
             );
             if pays {
                 kept.push((dimension, Ok(variant)));
@@ -457,7 +460,7 @@ fn compiled_module_at_size(
         let (Some(first), Some(second)) = (each(&base.program), each(&program)) else { continue };
         let pays = matches!(
             (price(&first), price(&second)),
-            (Some(a), Some(b)) if dimension.keeps(&noted, a, b)
+            (Some(a), Some(b)) if dimension.keeps(&noted, a, b, cap)
         );
         if pays {
             kept.push((dimension, Err(program)));
@@ -484,7 +487,7 @@ fn compiled_module_at_size(
             |one: &masm::Module| Some((unpadded(one)?, rotation_work(one, options, dimension.prices_proven_trips())));
         let pays = matches!(
             (price(&chosen.built), price(&together.built)),
-            (Some(a), Some(b)) if dimension.keeps(&noted, a, b)
+            (Some(a), Some(b)) if dimension.keeps(&noted, a, b, cap)
         );
         if pays {
             chosen = together;

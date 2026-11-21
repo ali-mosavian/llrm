@@ -1147,6 +1147,10 @@ impl Tti for X86 {
         self.tuning.jump_threading_latch_trial_at_size
     }
 
+    fn os_trial_clock_cap_percent(&self) -> Option<i64> {
+        self.tuning.os_trial_clock_cap_percent
+    }
+
     fn cold_site_ignores_sinks(&self) -> bool {
         self.tuning.cold_site_ignores_sinks
     }
