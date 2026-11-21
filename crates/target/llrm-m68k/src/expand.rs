@@ -367,15 +367,7 @@ impl FrameInputs {
             .collect();
         // the pin sets it where a dynamic alloca is built (`visitAlloca`); here
         // the live body shows it
-        let has_var_sized = insts
-            .iter()
-            .any(
-                |inst| inst.kind == Kind::Copy
-                    && matches!(
-                        inst.operands.first(),
-                        Some(Operand::Def(r)) if physical(*r, assignment) == reg::SP
-                    ),
-            );
+        let has_var_sized = writes_stack_pointer(insts.iter().copied(), |r| physical(r, assignment));
         FrameInputs { fixed, objects, used, has_calls, short, has_var_sized, frame_indices }
     }
 
@@ -395,6 +387,44 @@ impl FrameInputs {
             ..Function::default()
         })
     }
+}
+
+/// `MachineFrameInfo::hasVarSizedObjects`: the pin sets it where a dynamic
+/// `alloca` is built (`visitAlloca`); here a copy into the stack pointer
+/// shows it. `physical` names the register an operand is in.
+fn writes_stack_pointer<'a>(
+    mut insts: impl Iterator<Item = &'a crate::mfunc::Inst>,
+    physical: impl Fn(Reg) -> RegId,
+) -> bool {
+    insts.any(|inst| {
+        inst.kind == Kind::Copy
+            && matches!(
+                inst.operands.first(),
+                Some(Operand::Def(r)) if physical(*r) == reg::SP
+            )
+    })
+}
+
+/// Whether the frame of `function` needs `%a6` (`hasFPImpl`), known before
+/// allocation: a dynamic `alloca` writes the stack pointer, and the
+/// alignment of a local decides the realignment. Where it is false `%a6` is
+/// a general register ([`crate::regalloc`],
+/// `M68kRegisterInfo::getReservedRegs`).
+pub(crate) fn needs_frame_pointer(function: &MFunction) -> bool {
+    let has_var_sized =
+        writes_stack_pointer(function.blocks.iter().flat_map(|block| &block.insts), |register| match register {
+            Reg::Phys(register) => REGISTER_INFO.root(register),
+            Reg::Virt(_) => reg::D0,
+        });
+    frame::needs_frame_pointer(&Function {
+        objects: function
+            .locals
+            .iter()
+            .map(|&(_, size, align)| Object { size, align, offset: 0, callee_saved: false, dead: false })
+            .collect(),
+        has_var_sized,
+        ..Function::default()
+    })
 }
 
 /// The largest `ADJCALLSTACKDOWN` among `insts` whose sequence `kept` keeps.
