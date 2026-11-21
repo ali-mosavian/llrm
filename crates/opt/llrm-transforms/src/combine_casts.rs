@@ -1570,6 +1570,25 @@ fn transform_zext_icmp(
             }
         }
     }
+    // DEVIATE X64-TRUTH-XOR: zext (X != Y) --> X ^ Y where X and Y are each 0 or
+    // 1 (GCC `simplify_truth_ops_using_ranges`, `vr-values.cc`).
+    if c.env.hooks.truth_compare_xor
+        && pred == IntPredicate::Ne
+        && op1_const.is_none()
+        && c.context.types.int_bits(c.type_of(op0)).is_some_and(|bits| bits > 1)
+        && shared::has_one_use(c, c.function.instruction(inst).operands[0])
+    {
+        let bits = width(c, op0);
+        let only_low_bit = {
+            let q = query(c, Some(inst));
+            let low = |v| !known::compute_known_bits(&q, v, 0).zero & mask(bits) <= 1;
+            low(op0) && low(op1)
+        };
+        if only_low_bit {
+            let xor = c.create_binop(inst, BinaryOp::Xor, op0, op1, Flags::default());
+            return Some(Visit::Replace(create_int_cast(c, inst, xor, zext_ty, false)));
+        }
+    }
     if matches!(pred, IntPredicate::Eq | IntPredicate::Ne) {
         // Test if a bit is clear/set using a shifted-one mask:
         // zext (icmp eq (and X, (1 << ShAmt)), 0) --> and (lshr (not X),
