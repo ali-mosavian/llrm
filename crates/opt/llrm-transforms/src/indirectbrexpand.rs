@@ -14,7 +14,8 @@
 //! `Tti::expands_indirect_br` (LLVM's `enableIndirectBrExpand`).
 //!
 //! # See also
-//! `simplifycfg` (folds a known address to `br`), `llrm_mir::Context::replace_block_addresses`.
+//! `simplifycfg` (folds a known address to `br`),
+//! `llrm_mir::Context::replace_block_addresses`.
 
 use std::collections::BTreeMap;
 
@@ -36,8 +37,11 @@ impl ModulePass for IndirectBrExpand {
         module: &mut Module,
         _: &mut ModuleAnalyses,
     ) -> Vec<GlobalId> {
-        let Some(bits) =
-            module.datalayout.as_deref().and_then(|text| DataLayout::parse(text).ok()).map(|layout| layout.pointer(0).bits)
+        let Some(bits) = module
+            .datalayout
+            .as_deref()
+            .and_then(|text| DataLayout::parse(text).ok())
+            .map(|layout| layout.pointer(0).bits)
         else {
             return Vec::new();
         };
@@ -88,10 +92,8 @@ fn expand(
         .collect();
     let number: BTreeMap<BlockId, u64> =
         numbered.iter().enumerate().map(|(at, &block)| (block, at as u64 + 1)).collect();
-    let addresses: Vec<(BlockId, Operand)> = jumps
-        .iter()
-        .map(|jump| (jump.block, function.instruction(jump.inst).operands[0]))
-        .collect();
+    let addresses: Vec<(BlockId, Operand)> =
+        jumps.iter().map(|jump| (jump.block, function.instruction(jump.inst).operands[0])).collect();
     let resolved: Vec<(BlockId, BlockId)> = function
         .layout()
         .iter()
@@ -102,14 +104,16 @@ fn expand(
 
     let int_ty = module.context.types.int(bits);
     if !numbered.is_empty() {
-        module.context.replace_block_addresses(
-            id,
-            &|block| {
-                let now = resolved.iter().find(|(old, _)| *old == block).map(|(_, now)| *now)?;
-                number.get(&now).copied()
-            },
-            int_ty,
-        );
+        module
+            .context
+            .replace_block_addresses(
+                id,
+                &|block| {
+                    let now = resolved.iter().find(|(old, _)| *old == block).map(|(_, now)| *now)?;
+                    number.get(&now).copied()
+                },
+                int_ty,
+            );
     }
     let mut builder = module.builder(id);
     // Each jump, and the phi values of the blocks it left: what the jump
@@ -167,10 +171,10 @@ fn clear(builder: &mut llrm_mir::build::Builder<'_>) {
     builder.function.clear_address_taken();
 }
 
-/// A block of `numbered` is now reached from the switch: from the `indirectbr`'s
-/// own block when there was one, else from `hub`. Its phis take `undef` from a
-/// jump that did not list it; a block a jump listed and the switch does not
-/// reach loses its edge.
+/// A block of `numbered` is now reached from the switch: from the
+/// `indirectbr`'s own block when there was one, else from `hub`. Its phis take
+/// `undef` from a jump that did not list it; a block a jump listed and the
+/// switch does not reach loses its edge.
 fn fix_phis(
     builder: &mut llrm_mir::build::Builder<'_>,
     cut: &[(BlockId, Vec<BlockId>)],
@@ -205,7 +209,9 @@ fn fix_phis(
                 })
                 .collect();
             // What each jump gave this block before it was cut.
-            let gave = |pairs: &[(Operand, BlockId)], from: BlockId| pairs.iter().find(|(_, one)| *one == from).map(|(v, _)| *v);
+            let gave = |pairs: &[(Operand, BlockId)], from: BlockId| {
+                pairs.iter().find(|(_, one)| *one == from).map(|(v, _)| *v)
+            };
             let undef = Operand::Constant(builder.context.constant(Constant { ty, kind: ConstantKind::Undef }));
             let values: Vec<(BlockId, Operand)> = cut
                 .iter()
@@ -223,7 +229,8 @@ fn fix_phis(
                             values[0].1
                         } else {
                             builder.position(hub);
-                            let incoming: Vec<(Operand, BlockId)> = values.iter().map(|&(from, value)| (value, from)).collect();
+                            let incoming: Vec<(Operand, BlockId)> =
+                                values.iter().map(|&(from, value)| (value, from)).collect();
                             builder.phi(ty, &incoming, "")
                         };
                         pairs.push((merged, hub));
