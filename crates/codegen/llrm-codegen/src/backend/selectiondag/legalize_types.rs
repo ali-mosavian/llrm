@@ -350,15 +350,10 @@ impl<'a> TypeLegalizer<'a> {
         &mut self,
         n: u32,
     ) {
-        let results = self.dag.node(SDValue { node: n, res: 0 }).values.len();
-        let mut users = Vec::new();
-        for res in 0..results as u8 {
-            users.extend(self.dag.users(SDValue { node: n, res }));
-        }
-        users.sort_unstable();
-        users.dedup();
-        for user in users {
-            // One operand slot per read of `n`, whichever of its results.
+        // `N->users()`: newest use first. The worklist is a stack, so the
+        // oldest user is legalized first. A user waits for one operand per
+        // slot that reads `n`, whichever of its results.
+        for user in self.dag.users_of_node_newest_first(n) {
             let slots =
                 self.dag.node(SDValue { node: user, res: 0 }).ops.iter().filter(|op| op.node == n).count() as u32;
             match self.id(user) {
