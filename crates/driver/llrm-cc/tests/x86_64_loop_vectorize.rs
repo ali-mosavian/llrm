@@ -476,16 +476,23 @@ fn an_early_exit_that_returns_the_cast_index_is_a_vector_loop() {
     }
 }
 
-/// `(long)a[i] * ((i & 15) + 1)` over an `i64` counter was a `<8 x i64>` chain (`pand`, `paddq` x4 and a
-/// `pshufd`/`packssdw` ladder down to the `i16` multiply): 51 instructions per 8 elements, scroll +3.8k against gcc.
-/// The chain fits 16 bits, so the counter is a `<8 x i16>` `paddw` and the multiply `pmullw`/`pmulhw`.
+/// `(long)a[i] * ((i & 15) + 1)` over an `i64` counter was a `<8 x i64>` chain
+/// (`pand`, `paddq` x4 and a `pshufd`/`packssdw` ladder down to the `i16`
+/// multiply): 51 instructions per 8 elements, scroll +3.8k against gcc.
+/// The chain fits 16 bits, so the counter is a `<8 x i16>` `paddw` and the
+/// multiply `pmullw`/`pmulhw`.
 #[test]
 fn a_masked_counter_weight_is_computed_in_sixteen_bit_lanes() {
     let text = assembly("x86_64-linux", "-O2");
     let sum = body(&text, "weighted_sum");
     assert!(sum.contains("paddw") && sum.contains("pmullw") && sum.contains("pmulhw"), "{sum}");
-    // One `pshufd` ends the reduction; the wide chain had six and a `packssdw` ladder.
-    assert!(!sum.contains("packssdw") && sum.matches("pshufd").count() <= 1, "the counter is narrowed by shuffles: {sum}");
+    // One `pshufd` ends the reduction; the wide chain had six and a `packssdw`
+    // ladder.
+    assert!(
+        !sum.contains("packssdw") && sum.matches("pshufd").count() <= 1,
+        "the counter is narrowed by shuffles: {sum}"
+    );
+}
 
 /// tile -O2 (14,774 instructions against clang's 7,727): the vector `trunc` of
 /// `splat + <0, 3, ..>` stayed `<8 x i64>` (the combiner skipped vector casts),

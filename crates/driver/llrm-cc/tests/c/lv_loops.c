@@ -98,6 +98,7 @@ long weighted_sum(const short *a)
     long total = 0;
     for (long i = 0; i < 2000; ++i) total += (long)a[i] * ((i & 15) + 1);
     return total;
+}
 
 /* tile's init: `(x * 3 + y * 5) & 255` of an `i64` counter stored as `short`: the trunc of the splat add is `<8 x i16>`. */
 void init_tile(short t[64][64])
