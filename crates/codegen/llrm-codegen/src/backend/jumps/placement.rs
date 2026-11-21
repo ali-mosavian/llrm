@@ -186,13 +186,13 @@ pub(super) fn order(
     hot: Option<HotTailDup>,
     top: Option<TopClocks>,
     epilogue: usize,
-    ext_tsp: bool,
+    ext_tsp: Option<bool>,
 ) -> (Vec<Block>, BlockOdds) {
     let index: IndexMap<i64, usize> = blocks.iter().enumerate().map(|(place, block)| (block.at, place)).collect();
     let entry = index.get(&entry).copied().unwrap_or(0);
     // `-apply-ext-tsp-for-size` skips `buildCFGChains` altogether.
-    if ext_tsp && size {
-        if let Some(order) = ext_tsp::apply_for_size(blocks, &index, entry) {
+    if let Some(by_frequency) = ext_tsp.filter(|_| size) {
+        if let Some(order) = ext_tsp::apply_for_size(blocks, &index, entry, by_frequency.then_some(busy)) {
             return (order.into_iter().map(|one| blocks[one].clone()).collect(), odds.clone());
         }
     }
