@@ -56,11 +56,6 @@ pub fn pressure_limits() -> Vec<u32> {
         .collect()
 }
 
-/// The pin's pressure sets.
-pub fn pressure_sets() -> &'static llrm_target::pressure::PressureSets {
-    &PRESSURE
-}
-
 /// The pin's `MCInstrDesc` of the opcode `name`.
 fn described(name: &str) -> Option<&'static llrm_dagisel::instr::InstrDesc> {
     crate::dagisel::local::code_of(name).and_then(crate::dagisel::local::desc)

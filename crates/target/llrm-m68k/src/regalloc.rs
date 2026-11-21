@@ -382,21 +382,6 @@ const CONDITIONAL: [(&str, &str); 7] = [
     ("Bgt8", "Ble8"),
 ];
 
-/// The shared passes' register classes for a function: `%a6` is one more
-/// address register, and the pressure sets' limits count it, where the function
-/// has no frame pointer (`getReservedRegs`).
-fn shared_classes(frame_free: bool) -> std::rc::Rc<llrm_codegen::backend::classes::RegisterClasses> {
-    thread_local! {
-        static CLASSES: [std::rc::Rc<llrm_codegen::backend::classes::RegisterClasses>; 2] = {
-            let reserved = llrm_codegen::backend::classes::RegisterClasses::of(&crate::target::M68k);
-            let mut free = reserved.with_frame_free();
-            free.pressure = Some((crate::target::pressure_sets(), crate::target::pressure_limits()));
-            [std::rc::Rc::new(reserved), std::rc::Rc::new(free)]
-        };
-    }
-    CLASSES.with(|classes| std::rc::Rc::clone(&classes[usize::from(frame_free)]))
-}
-
 /// A shared machine stage over the m68k function, still in SSA form (before phi
 /// elimination): the function through `to_ssa_lir`, the stage and `from_ssa`.
 /// `stage` is made with the register-class oracle (`constrainRegClass`).
@@ -409,7 +394,11 @@ pub fn shared_stage(
 ) -> Result<MFunction, String> {
     // the classes read the target's description: once per thread, not per
     // function
-    let classes = shared_classes(!crate::expand::needs_frame_pointer(function));
+    thread_local! {
+        static CLASSES: std::rc::Rc<llrm_codegen::backend::classes::RegisterClasses> =
+            std::rc::Rc::new(llrm_codegen::backend::classes::RegisterClasses::of(&crate::target::M68k));
+    }
+    let classes = CLASSES.with(std::rc::Rc::clone);
     llrm_spike_mf::tolir::host_ssa::<M68kRegisters>(function, llrm_lir::registers::Regs(&REGISTER_INFO), |constrain| {
         stage(classes, constrain)
     })
