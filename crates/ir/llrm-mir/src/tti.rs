@@ -1451,6 +1451,16 @@ pub trait Tti {
         false
     }
 
+    /// `MaxStoresPer{Memset,Memcpy,Memmove}` and their `...OptSize` (in that
+    /// order, as [`Tuning`](crate::target::Tuning) has them) where this target
+    /// states them: the DAG builder's limits for a constant fill or copy by
+    /// pieces. A `Described` machine's `tuning()` was the pin's, so a limit set
+    /// only in the target's own table reached the TTI and never the selector
+    /// (an -Os experiment changed nothing until traced). None: the pin's.
+    fn memory_limits(&self) -> Option<[usize; 6]> {
+        None
+    }
+
     /// DEVIATE OS-OUTLINE-TRIAL (owner llrm-target-m68k, exit 2026-12-20):
     /// whether a cold -Os site the size bound accepts, of a callee that
     /// goes with its calls, is also built as a call in a second compile, the

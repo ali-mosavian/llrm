@@ -262,6 +262,21 @@ struct Described {
 }
 
 impl llrm_mir::target::Machine for Described {
+    fn tuning(&self) -> llrm_mir::target::Tuning {
+        let mut tuning = llrm_mir::target::Tuning::PIN;
+        if let Some([set, set_size, copy, copy_size, mov, mov_size]) =
+            self.tti.as_ref().and_then(|tti| tti.memory_limits())
+        {
+            tuning.max_stores_per_memset = set;
+            tuning.max_stores_per_memset_opt_size = set_size;
+            tuning.max_stores_per_memcpy = copy;
+            tuning.max_stores_per_memcpy_opt_size = copy_size;
+            tuning.max_stores_per_memmove = mov;
+            tuning.max_stores_per_memmove_opt_size = mov_size;
+        }
+        tuning
+    }
+
     fn has_vector_mir(&self) -> bool {
         self.tti.as_ref().is_some_and(|tti| tti.vector_values())
     }

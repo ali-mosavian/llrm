@@ -218,6 +218,13 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         counter_exit_compare_clocks: costs.add,
         rep_stos_at_size: true,
         rep_movs_at_size: true,
+        // DEVIATE MOVE-RATIO-OS (owner x86-m32-b, exit 2026-11-30): gcc moves a
+        // constant block by pieces only while their count is under MOVE_RATIO,
+        // 3 when optimising for size (i386.h:1866; `set_ratio_size` above is
+        // the memset side), else `rep movs`; the pin's four pairs
+        // (`MaxStoresPerMemcpyOptSize`) copied a 13-byte name as 8 moves
+        // (QB dialog.c `find`: 38 B against 7).
+        max_stores_per_memcpy_opt_size: 2,
         sdiv_pow2_stays_at_size: false,
         // DEVIATE MERGEFUNC-OS (owner x86-m32, exit 2026-11-30):
         // see `Tuning::merge_functions_at_size`.
