@@ -477,6 +477,26 @@ fn test_threading_preserves_an_exact_empty_loop_header() {
     assert_eq!(headers, [8, 10].into());
 }
 
+/// A block merged into its only predecessor took its `blockaddress` label
+/// with it: the symbol was defined nowhere and `indirectbr` jumped to it
+/// undefined (the LIR verifier named `jumps` as the first phase to break it).
+#[test]
+fn test_threading_keeps_an_address_taken_block() {
+    let mut source = body(
+        "f",
+        1,
+        vec![
+            block(1, vec![_compare(1), _jump(2, 5)], vec![5]).into(),
+            block(5, vec![_compare(5), _return(6)], vec![]).into(),
+        ],
+    );
+    source.address_symbols = Arc::new([(5, "$BA0_1".to_string())].into());
+
+    let result = threaded(&source);
+
+    assert!(result.blocks.iter().any(|block| block.at == 5));
+}
+
 /// `for (;;);` -- following jumps must not go round forever.
 #[test]
 fn test_a_block_that_jumps_to_itself_stays() {

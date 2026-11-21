@@ -768,12 +768,16 @@ impl Printer<'_> {
         match operand {
             Operand::Value(id) => format!("%{}", slots.values[&id]),
             Operand::Constant(id) => match &self.context.get(id).kind {
-                ConstantKind::Expr(ConstantExpr::BlockAddress { function, block }) => match slots.blocks.get(block) {
-                    Some(label) => format!("blockaddress({}, %{label})", self.global_name(*function)),
-                    // Erased with nothing to take its address: LLVM's own
-                    // stand-in, a pointer no `indirectbr` lists.
-                    None => "inttoptr (i32 1 to ptr)".to_owned(),
-                },
+                // The block is a label of the function it names, which may not
+                // be the one printed: `constant` asks the module.
+                ConstantKind::Expr(ConstantExpr::BlockAddress { function, block }) if self.module.is_none() => {
+                    match slots.blocks.get(block) {
+                        Some(label) => format!("blockaddress({}, %{label})", self.global_name(*function)),
+                        // Erased with nothing to take its address: LLVM's own
+                        // stand-in, a pointer no `indirectbr` lists.
+                        None => "inttoptr (i32 1 to ptr)".to_owned(),
+                    }
+                }
                 _ => self.constant(id),
             },
             Operand::Block(id) => format!("%{}", slots.blocks[&id]),
