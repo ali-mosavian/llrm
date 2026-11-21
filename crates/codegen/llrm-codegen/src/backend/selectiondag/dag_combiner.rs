@@ -3699,7 +3699,11 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         //
         // [pin]:
         // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L10870
+        // "Do not turn a 'not' into a regular xor": `srl (xor x, -1), 31` kept
+        // its `x` and its `~x`; the xor moved out and took the shift of `x`
+        // with it, past a `sra` that a `sign_extend_inreg` replaced later.
         if self.dag.constant(n1).is_some()
+            && !self.is_bitwise_not(n0)
             && self.dag.has_one_use(n0.node)
             && self.hooks.is_desirable_to_commute_with_shift(self.dag, node, self.level)
             && match self.dag.opcode(n0) {
@@ -3760,6 +3764,18 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         Some(self.dag.get_constant(0, vt))
     }
 
+    /// `isBitwiseNot`: `xor x, -1`.
+    fn is_bitwise_not(
+        &self,
+        v: SDValue,
+    ) -> bool {
+        self.dag.opcode(v) == ISD::Xor
+            && self
+                .dag
+                .constant(self.dag.operand(v, 1))
+                .is_some_and(|c| c == super::fold::mask(self.dag.value_type(v).size_in_bits()))
+    }
+
     /// `combineShiftOfShiftedLogic` (reached from `visitShiftByConstant`):
     /// `shift (logic (shift X, c0), Y), c1` is `logic (shift X, c0 + c1),
     /// (shift Y, c1)`, for a one-use logic op and a one-use inner shift of the
@@ -3781,12 +3797,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             return None;
         }
         // "Do not turn a 'not' into a regular xor."
-        if logic_op == ISD::Xor
-            && self
-                .dag
-                .constant(self.dag.operand(logic, 1))
-                .is_some_and(|c| c == super::fold::mask(self.dag.value_type(logic).size_in_bits()))
-        {
+        if self.is_bitwise_not(logic) {
             return None;
         }
         let vt = self.dag.value_type(node);
