@@ -11,7 +11,7 @@
 //! and recomputing every analysis a pass claims to have preserved.
 
 use std::any::{Any, TypeId};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use crate::context::{Context, GlobalId};
@@ -990,6 +990,122 @@ impl ModuleAnalysis for GlobalSizes {
     }
 }
 
+/// How many instruction operands name each global: what
+/// `Function::hasOneLiveUse` counts of a function (`FunctionUses`).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Uses {
+    /// What each body names: caller, then callee and how often.
+    by_body: BTreeMap<GlobalId, BTreeMap<GlobalId, u32>>,
+    total: BTreeMap<GlobalId, u32>,
+}
+
+impl Uses {
+    /// How often `id` is named by a body.
+    pub fn of(
+        &self,
+        id: GlobalId,
+    ) -> u32 {
+        self.total.get(&id).copied().unwrap_or(0)
+    }
+
+    /// Body `id` as `module` holds it now: its names replace the ones kept.
+    fn replace_body(
+        &mut self,
+        module: &Module,
+        id: GlobalId,
+    ) {
+        if let Some(old) = self.by_body.remove(&id) {
+            for (named, count) in old {
+                if let Some(total) = self.total.get_mut(&named) {
+                    *total -= count;
+                }
+            }
+        }
+        let GlobalKind::Function(function) = &module.global(id).kind else { return };
+        let mut names: BTreeMap<GlobalId, u32> = BTreeMap::new();
+        for (_, inst) in function.walk() {
+            for operand in &function.instruction(inst).operands {
+                if let crate::module::Operand::Constant(constant) = operand
+                    && let crate::context::ConstantKind::Global(named) = module.context.get(*constant).kind
+                {
+                    *names.entry(named).or_default() += 1;
+                }
+            }
+        }
+        for (&named, &count) in &names {
+            *self.total.entry(named).or_default() += count;
+        }
+        self.by_body.insert(id, names);
+    }
+
+    /// How often `id` is named by the body of `body` held here.
+    pub fn named_by(
+        &self,
+        body: GlobalId,
+        id: GlobalId,
+    ) -> u32 {
+        self.by_body.get(&body).and_then(|names| names.get(&id)).copied().unwrap_or(0)
+    }
+}
+
+/// Where the log of edits stood when `FunctionUses` last ran.
+#[derive(Default)]
+struct UsesMade {
+    made: Option<(u64, usize, u64, usize)>,
+}
+
+/// The names of every global in every body, kept by the bodies edited since
+/// the last run: the use list `Function::hasOneLiveUse` reads, which a function
+/// pass cannot see in the declarations it holds of the other functions.
+pub struct FunctionUses;
+
+impl FunctionUses {
+    fn position(
+        module: &Module,
+        analyses: &ModuleAnalyses,
+    ) -> (u64, usize, u64, usize) {
+        (analyses.log_epoch(), analyses.edit_log().len(), analyses.resets(), module.globals.len())
+    }
+}
+
+impl ModuleAnalysis for FunctionUses {
+    type Result = Uses;
+    const NAME: &'static str = "function-uses";
+    fn run(
+        module: &Module,
+        analyses: &mut ModuleAnalyses,
+    ) -> Self::Result {
+        let now = Self::position(module, analyses);
+        let then = analyses.memo::<UsesMade>().made.replace(now);
+        let before = analyses.take_dropped::<Self>().and_then(|held| Rc::try_unwrap(held).ok());
+        if let (Some(then), Some(mut uses)) = (then, before)
+            && then.0 == now.0
+            && then.2 == now.2
+            && then.3 == now.3
+        {
+            let edited: BTreeSet<GlobalId> = analyses.edit_log()[then.1..].iter().copied().collect();
+            for id in edited {
+                uses.replace_body(module, id);
+            }
+            return uses;
+        }
+        let mut uses = Uses::default();
+        for (id, _, _) in module.functions() {
+            uses.replace_body(module, id);
+        }
+        uses
+    }
+
+    fn unchanged(
+        module: &Module,
+        analyses: &mut ModuleAnalyses,
+        _: &Self::Result,
+    ) -> bool {
+        let now = Self::position(module, analyses);
+        analyses.memo::<UsesMade>().made == Some(now)
+    }
+}
+
 /// The metadata the type tree was last made from.
 #[derive(Default)]
 struct TbaaSeen(Option<Vec<MetadataNode>>);
@@ -1502,6 +1618,12 @@ impl Outer {
     /// What each function does to memory: `CalleeEffects`.
     pub fn callees(&self) -> &crate::memory::Callees {
         self.cached_ref::<CalleeEffects>().expect("every outer proxy holds the callees' effects")
+    }
+
+    /// What the bodies name, if `FunctionUses` was required:
+    /// `Function::hasOneLiveUse`.
+    pub fn uses(&self) -> Option<&Uses> {
+        self.cached_ref::<FunctionUses>()
     }
 
     /// Each global variable's size: `GlobalSizes`.

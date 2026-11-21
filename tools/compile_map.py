@@ -50,7 +50,7 @@ ROWS = [
     (r"^(frontend|hir|data layout|global names|debug info|data placement|mir (verify|link|runtime|markers|window))", "frontend", None),
     (r"^(analysis (points-to|pointer-values|call-effects|writes|exposed-frames|through-memory|float-facts|annotated|published|terminal-sites|callbacks)|ssa |summaries (points-to|values|visit|callbacks|topology))", "analysis: pointers", "points-to"),
     (r"^(analysis accesses|mir dse|mir memcpyopt|mir loopmotion)", "analysis: memory", "alias-queries"),
-    (r"^(analysis (globals-aa|summaries|call-graph|callee-effects|call-registers|global-sizes|declarations|type-ancestry)|summaries direct|mir (stamp|interprocedural|outer analyses|spares|homes))", "analysis: module", "analyses-carry"),
+    (r"^(analysis (globals-aa|summaries|call-graph|callee-effects|function-uses|call-registers|global-sizes|declarations|type-ancestry)|summaries direct|mir (stamp|interprocedural|outer analyses|spares|homes))", "analysis: module", "analyses-carry"),
     (r"^analysis (bounded|dominated-edges|registers|counted|followers|demanded)", "analysis: ranges", "ranger"),
     (r"^analysis ", "analysis: other", None),
     (r"^mir ", "mir passes", None),
