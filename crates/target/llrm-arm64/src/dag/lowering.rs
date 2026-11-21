@@ -1270,13 +1270,11 @@ pub fn lower_br_jt(
     Some(dag.get_node(ISD::BrInd, EVT::OTHER, &[info, SDValue { node: destination.node, res: 0 }]))
 }
 
-/// `LowerBRIND`: the `BRIND` of a jump table (`lower_br_jt`) is left as it is;
-/// the other forms (`indirectbr`, pointer authentication) are not ported.
+/// `LowerBRIND`: the `BRIND` of a jump table (`lower_br_jt`) and of an
+/// `indirectbr` are selected as they are; pointer authentication is not ported.
 pub fn lower_br_ind(
-    dag: &mut SelectionDAG,
+    _dag: &mut SelectionDAG,
     node: SDValue,
 ) -> Option<SDValue> {
-    let destination = dag.operand(node, 1);
-    let table = ISD::Machine(u32::from(llrm_dagisel::generated::aarch64::ids::opcode::JumpTableDest32));
-    (dag.opcode(destination) == table).then_some(node)
+    Some(node)
 }

@@ -292,7 +292,7 @@ thread_local! {
     static UNROLL_BASE: std::cell::Cell<Option<Fingerprint>> = const { std::cell::Cell::new(None) };
     static LOOP_COPIES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static SPEED_UNROLLS: std::cell::Cell<llrm_transforms::trial::UnrollDecisions> =
-        const { std::cell::Cell::new(llrm_transforms::trial::UnrollDecisions { made: 0, refused: 0, inlined: 0 }) };
+        const { std::cell::Cell::new(llrm_transforms::trial::UnrollDecisions { made: 0, refused: 0, inlined: 0, unswitched: 0, trial_inlined: 0 }) };
 }
 
 /// The full-unroll decisions the last [`program`] made at -O2 and up: what an
@@ -475,8 +475,10 @@ pub fn selections_with_alternatives(
             .find_map(
                 |global| {
                     let one = global.function().filter(|_| global.name.as_deref() == Some(name))?;
-                    llrm_mir::memory::has(&one.attrs, crate::prepare::LONG_MULTIPLY)
-                        .then(|| ["optsize", "minsize"].into_iter().any(|attr| llrm_mir::memory::has(&one.attrs, attr)))
+                    let sized = ["optsize", "minsize"].into_iter().any(|attr| llrm_mir::memory::has(&one.attrs, attr));
+                    (llrm_mir::memory::has(&one.attrs, crate::prepare::LONG_MULTIPLY)
+                        || (!sized && llrm_mir::memory::has(&one.attrs, crate::prepare::LONE_MULTIPLY)))
+                    .then_some(sized)
                 },
             )
     };
@@ -672,6 +674,14 @@ impl llrm_mir::target::Machine for Z80Machine {
     /// Real code bytes for the decisions weighed at a rate (`opcosts.txt`).
     fn byte_costs(&self) -> llrm_mir::target::OperationCosts {
         DESCRIPTION.size_costs()
+    }
+
+    /// The speed trial's growth is priced in the bytes the backend writes
+    /// (`clocks::calibrate`), the table the size trial uses: the forms' own
+    /// bytes are 0.54 of them, so a copy of `sum` that grew the code by
+    /// 98 B read as growing it by 4.
+    fn speed_trial_costs(&self) -> llrm_mir::target::OperationCosts {
+        crate::clocks::trial_bytes()
     }
 
     fn registers(&self) -> i64 {

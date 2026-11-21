@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/cgpswitch.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/cgpswitch.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/cgpswitch.rs sha256:cfe0b35721ac401dbc7e75a186c61e1e548c8fc5cdef4ed011cffeaa6982d558 -->
+<!-- src: crates/opt/llrm-transforms/src/cgpswitch.rs sha256:b4db997f568999bfbcd74b87627bf45d4e0a835599819a2d4f608c978ea19d40 -->
 
 # cgpswitch
 
@@ -15,6 +15,9 @@ beside an extension of the index. The extension is `zext`, `sext` when the
 condition is a `signext` argument; a `zeroext` argument is `zext`.
 
 MIRROR: the whole function.
+
+DEVIATE SW3: a function built for size keeps a switch on a byte narrow where
+the target says so. Owner x86-m32-b, exit: none (gcc's output).
 
 DEVIATE SW1: the target's preferred width is
 `Lowering::preferred_switch_condition_bits`. Exit: none.

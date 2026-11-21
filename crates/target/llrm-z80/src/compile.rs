@@ -279,7 +279,7 @@ pub fn effective(
         KEPT_LINES.with(|lines| lines.borrow_mut().retain(|(at, ..), _| kept.as_ref().is_ok_and(|kept| kept == at)));
         chosen
     };
-    let chosen = if (decisions.made > 0 || decisions.refused > 0 || decisions.inlined > 0)
+    let chosen = if (decisions.made > 0 || decisions.refused > 0 || decisions.inlined > 0 || decisions.unswitched > 0)
         && matches!(chosen.level, Level::O2 | Level::O3)
     {
         unroll_choice(ir, chosen, decisions, fingerprint)?
@@ -298,7 +298,9 @@ pub fn effective(
 /// (`fill` unrolled and then inlined, 740 B larger). Variants: no unroll that
 /// adds bytes, at -O2 the -O3 threshold, no inline that adds bytes, and both
 /// (switch_table_in_code -O2: `step` inlined into a loop of 9 trips, 138 B
-/// larger). A tie keeps the request.
+/// larger), and no non-trivial unswitch, taken only where the module is smaller
+/// and no slower (queens -O3: `place` copied for one branch a trip, 93 B and
+/// 108745 T over -O2). A tie keeps the request.
 fn unroll_choice(
     ir: &str,
     request: Request,
@@ -306,7 +308,7 @@ fn unroll_choice(
     fingerprint: Option<crate::driver::Fingerprint>,
 ) -> Result<Request, String> {
     use llrm_transforms::trial::SpeedUnroll;
-    let mut variants = Vec::new();
+    let mut variants: Vec<SpeedUnroll> = Vec::new();
     if decisions.made > 0 {
         variants.push(SpeedUnroll::NoGrow);
     }
@@ -319,8 +321,13 @@ fn unroll_choice(
     if decisions.inlined > 0 {
         variants.push(SpeedUnroll::NoGrowBoth);
     }
+    if decisions.unswitched > 0 {
+        variants.push(SpeedUnroll::NoUnswitch);
+    }
     let mut best = (module_priced(ir, &request)?, request);
-    for variant in variants {
+    let mut next = 0;
+    while let Some(&variant) = variants.get(next) {
+        next += 1;
         // the two refusals together are tried only where one of them made the
         // module smaller: a compile of its own that, in the corpus, no
         // module wanted without one of the two (switch_table_in_code -O2 is the
@@ -335,11 +342,25 @@ fn unroll_choice(
         if std::env::var_os("LLRM_DEBUG_UNROLL").is_some() && price.is_err() {
             eprintln!("unroll {variant:?}: {price:?}");
         }
+        // the policy's refusal alone leaks where the SZ2 trial inlined growth
+        // in its place: the variant that binds the trial too is worth a compile
+        // only then, which bounds its cost to the modules that need it
+        if variant == SpeedUnroll::NoInlineGrowth && crate::driver::speed_unrolls_made().trial_inlined > 0 {
+            variants.push(SpeedUnroll::NoInlineGrowthAll);
+        }
         let Ok(price) = price else { continue };
         if std::env::var_os("LLRM_DEBUG_UNROLL").is_some() {
             eprintln!("unroll {variant:?}: {price:?}, held {:?}", best.0);
         }
-        if price < best.0 {
+        // an unswitch that buys clocks is kept even where the module is
+        // bigger: -O3 is judged on clocks as well (loop_versioning: 308 B
+        // smaller without it, 69% slower)
+        let better = if variant == SpeedUnroll::NoUnswitch {
+            price.0 < best.0.0 && price.1 <= best.0.1
+        } else {
+            price < best.0
+        };
+        if better {
             best = (price, other);
         }
     }
@@ -366,7 +387,7 @@ pub fn refuses_loop_copies(
 /// each run as often as the calls to it say (a function nothing in the module
 /// calls runs once; a call runs its callee as many times as the block it
 /// is in runs), and the runtime routines they reach, each once.
-fn module_priced(
+pub fn module_priced(
     ir: &str,
     request: &Request,
 ) -> Result<(u32, u64), String> {
@@ -4064,6 +4085,18 @@ fn decomposed_functions(
                 )
         })
         .collect();
+    // a function whose alternative is the call for its module's one long
+    // multiply: taken only where it gives up neither axis (loop_versioning:
+    // 323 B / 1.04M T against 447 B / 1.75M T; word_compares -12 B for 35%
+    // more clocks stays as it was)
+    let lone: Vec<bool> = either
+        .iter()
+        .map(|(name, ..)| {
+            alternatives.iter().any(|(one, source, scheduled)| {
+                one == name && [source, scheduled].into_iter().any(|form| form.as_ref().is_ok_and(|s| s.lone_alternative))
+            })
+        })
+        .collect();
     let with_alternative = || (0..either.len()).filter(|at| either[*at].2.is_some());
     let all_sized = with_alternative().all(|at| size_first[at] && !regret[at]);
     let regretful = with_alternative().all(|at| size_first[at] && regret[at]);
@@ -4081,7 +4114,9 @@ fn decomposed_functions(
                     other.insert(at);
                 }
                 let price = total(&other);
-                let better = if size_first[at] && regret[at] {
+                let better = if lone[at] {
+                    dominates(price, best)
+                } else if size_first[at] && regret[at] {
                     prefers_by_regret(price, best)
                 } else if size_first[at] {
                     prefers(Level::Os, price, best)
@@ -4108,8 +4143,14 @@ fn decomposed_functions(
     } else {
         (descend(HashSet::new()), descend(every))
     };
-    let second_wins =
-        if regretful { prefers_by_regret(second.0, first.0) } else { prefers(module_level, second.0, first.0) };
+    let every_lone = with_alternative().all(|at| lone[at]);
+    let second_wins = if regretful {
+        prefers_by_regret(second.0, first.0)
+    } else if every_lone {
+        dominates(second.0, first.0)
+    } else {
+        prefers(module_level, second.0, first.0)
+    };
     let chosen = if second_wins { second.1 } else { first.1 };
     either
         .iter()
@@ -4133,6 +4174,14 @@ fn prefers(
     old: (u32, u64),
 ) -> bool {
     cheaper(level, new, old)
+}
+
+/// Whether the price `new` (bytes, clocks) is no bigger and no slower than `old`, and not the same.
+fn dominates(
+    new: (u32, u64),
+    old: (u32, u64),
+) -> bool {
+    new != old && new.0 <= old.0 && new.1 <= old.1
 }
 
 /// The smaller relative regret (a form's worse axis against the best of the two
