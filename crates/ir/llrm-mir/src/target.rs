@@ -1181,6 +1181,13 @@ pub trait Machine {
         self.size_costs()
     }
 
+    /// The prices of the speed inline trial's growth (`function_bytes` of the
+    /// copy against the call it replaces, weighed against the clocks it saves
+    /// at a rate). By default `byte_costs`.
+    fn speed_trial_costs(&self) -> OperationCosts {
+        self.byte_costs()
+    }
+
     /// The prices of the Os inline trial's byte estimate (`function_bytes`),
     /// which may be calibrated against the bytes written where `size_costs`
     /// is not. By default `size_costs`.
