@@ -1066,6 +1066,13 @@ impl Cost {
         {
             return;
         }
+        // DEVIATE LU33: a global's address under an address is an immediate
+        // loaded where it is used (`ld hl,#sym`), so as a base it holds no
+        // register through the loop; the pin counts it one (x86 folds the
+        // symbol into the access, so there it is no base register).
+        if lu.kind == Kind::Address && r.tti.lsr_global_address_is_free() && is_global_address(r, reg) {
+            return;
+        }
         self.c.num_regs += 1;
         // DEVIATE LU13: kept across a call, a recurrence is reloaded and
         // stored every trip, an invariant reloaded.
@@ -1332,6 +1339,18 @@ fn holds_no_offset(
         }
         _ => false,
     }
+}
+
+/// Whether `s` is the address of a global.
+fn is_global_address(
+    r: &mut Rating,
+    s: Scev,
+) -> bool {
+    let Some(Operand::Constant(id)) = r.se.unknown_value(s) else { return false };
+    matches!(
+        r.cx.context.get(id).kind,
+        llrm_mir::context::ConstantKind::Global(_)
+    )
 }
 
 /// Whether `s` is the address of a stack slot: an `alloca`.
