@@ -1375,10 +1375,6 @@ impl Tti for X86 {
         self.tuning.unswitch_threshold
     }
 
-    fn branch_fold_threshold_override(&self) -> Option<i64> {
-        self.tuning.branch_fold_threshold
-    }
-
     fn phiopt_one_feeding_statement(&self) -> bool {
         self.tuning.phiopt_one_feeding_statement
     }

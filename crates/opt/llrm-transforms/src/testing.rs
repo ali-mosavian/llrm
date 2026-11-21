@@ -213,8 +213,6 @@ pub struct Flagged {
     pub narrows_counters: bool,
     pub narrows_counters_for_size_only: bool,
     pub unswitch_threshold: Option<i64>,
-    /// `Tti::branch_fold_threshold_override`.
-    pub branch_fold_threshold: Option<i64>,
     /// `Tti::phiopt_one_feeding_statement`.
     pub phiopt_one_statement: bool,
     pub sinks_invariants: bool,
@@ -309,10 +307,6 @@ impl llrm_mir::tti::Tti for Flagged {
 
     fn unswitch_threshold_override(&self) -> Option<i64> {
         self.unswitch_threshold
-    }
-
-    fn branch_fold_threshold_override(&self) -> Option<i64> {
-        self.branch_fold_threshold
     }
 
     fn phiopt_one_feeding_statement(&self) -> bool {
@@ -504,7 +498,6 @@ impl llrm_mir::target::Machine for Tuned {
                     narrows_counters: self.narrows_counters,
                     narrows_counters_for_size_only: self.narrows_counters_for_size_only,
                     unswitch_threshold: self.unswitch_threshold,
-                    branch_fold_threshold: None,
                     phiopt_one_statement: false,
                     sinks_invariants: self.sinks_invariants,
                     no_cmov: false,

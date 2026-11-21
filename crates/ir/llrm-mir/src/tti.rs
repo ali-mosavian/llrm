@@ -2557,12 +2557,6 @@ pub trait Tti {
         None
     }
 
-    /// The target's `-simplifycfg-branch-fold-threshold` (its tuning table);
-    /// none: the pin's 2.
-    fn branch_fold_threshold_override(&self) -> Option<i64> {
-        None
-    }
-
     /// `Tuning::phiopt_one_feeding_statement`: gcc's phiopt arm rule in
     /// `foldTwoEntryPHINode`; off: the pin's cost bar alone.
     fn phiopt_one_feeding_statement(&self) -> bool {

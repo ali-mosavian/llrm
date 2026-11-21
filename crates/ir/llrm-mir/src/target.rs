@@ -483,11 +483,6 @@ pub struct Tuning {
     /// `-unswitch-threshold` of the non-trivial loop unswitch (-O3): the cost
     /// (loop size times copies) a candidate must stay under; none: 50.
     pub unswitch_threshold: Option<i64>,
-    /// `-simplifycfg-branch-fold-threshold` of `foldBranchToCommonDest`: the
-    /// cost the joining `and`/`or` may have for a branch pair to become one
-    /// branch on a select; none: 2. Lower keeps the branches (a branch the
-    /// target predicts beats the select's latency in a loop-carried chain).
-    pub branch_fold_threshold: Option<i64>,
     /// gcc's `empty_bb_or_one_feeding_into_p` (`tree-ssa-phiopt.cc`): a
     /// two-entry phi folds to a select only when each arm is empty or one
     /// statement that feeds the phi alone, so a nested diamond stays branches.
@@ -957,7 +952,6 @@ impl Tuning {
         backward_threading: true,
         spill_fold: None,
         unswitch_threshold: None,
-        branch_fold_threshold: None,
         phiopt_one_feeding_statement: false,
         inline_threshold: None,
         cold_site_ignores_sinks: false,
