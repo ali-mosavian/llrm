@@ -350,34 +350,26 @@ impl<'a> TypeLegalizer<'a> {
         &mut self,
         n: u32,
     ) {
-        let results = self.dag.node(SDValue { node: n, res: 0 }).values.len();
-        let mut users = Vec::new();
-        for res in 0..results as u8 {
-            users.extend(self.dag.users(SDValue { node: n, res }));
-        }
-        users.sort_unstable();
-        users.dedup();
-        for user in users {
-            // One operand slot per read of `n`, whichever of its results.
-            let slots =
-                self.dag.node(SDValue { node: user, res: 0 }).ops.iter().filter(|op| op.node == n).count() as u32;
+        // `N->users()`: newest use first, one visit per operand slot. The
+        // worklist is a stack, so the oldest user is legalized first.
+        for user in self.dag.uses_newest_first(n) {
             match self.id(user) {
                 NodeId::Pending(count) => {
-                    if count <= slots {
+                    if count <= 1 {
                         self.set_id(user, NodeId::Ready);
                         self.worklist.push(user);
                     } else {
-                        self.set_id(user, NodeId::Pending(count - slots));
+                        self.set_id(user, NodeId::Pending(count - 1));
                     }
                 }
                 NodeId::New => {}
                 NodeId::Unanalyzed => {
                     let operands = self.dag.node(SDValue { node: user, res: 0 }).ops.len() as u32;
-                    if operands <= slots {
+                    if operands <= 1 {
                         self.set_id(user, NodeId::Ready);
                         self.worklist.push(user);
                     } else {
-                        self.set_id(user, NodeId::Pending(operands - slots));
+                        self.set_id(user, NodeId::Pending(operands - 1));
                     }
                 }
                 NodeId::Ready | NodeId::Processed => {}
