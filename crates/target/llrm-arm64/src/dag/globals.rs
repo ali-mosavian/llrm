@@ -20,6 +20,19 @@ pub struct Global {
     /// The allocation size of the variable's type; `None` for a function (not
     /// sized).
     pub size: Option<u64>,
+    /// Whether it is a function: its symbol's offset may name a block.
+    pub function: bool,
+}
+
+/// The symbol that names block `block` of function `function` where its
+/// address is taken (`AsmPrinter::GetBlockAddressSymbol`): local, as the pin's
+/// `.Ltmp` is.
+pub fn block_symbol(
+    prefix: &str,
+    function: u32,
+    block: u32,
+) -> String {
+    format!("{prefix}BA{function}_{block}")
 }
 
 #[derive(Clone, Default)]
@@ -52,6 +65,7 @@ impl Globals {
                     got: global_needs_got(module, platform, id),
                     align,
                     size,
+                    function: matches!(global.kind, GlobalKind::Function(_)),
                 },
             );
         }
@@ -72,6 +86,15 @@ impl Globals {
             Some(Platform::Linux) => ".L",
             _ => "l",
         }
+    }
+
+    /// The block an offset of function `id`'s symbol names, if it names one.
+    pub fn block_at(
+        &self,
+        id: u32,
+        offset: i64,
+    ) -> Option<u32> {
+        self.get(id)?.function.then(|| llrm_codegen::backend::blockaddress::decode(offset).map(|block| block.0))?
     }
 
     pub fn get(
