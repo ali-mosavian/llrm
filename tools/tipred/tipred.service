@@ -1,0 +1,9 @@
+[Unit]
+Description=release/next tip-red monitor (one tick)
+
+[Service]
+Type=oneshot
+Nice=19
+IOSchedulingClass=idle
+ExecStart=/usr/bin/python3 %h/work/personal/llrm/tools/tipred.py --repo %h/scratch/w9/tipred/repo
+TimeoutStartSec=3h
