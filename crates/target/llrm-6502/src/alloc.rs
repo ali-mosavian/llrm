@@ -17,6 +17,7 @@ use llrm_codegen::model::ir::Loc;
 use llrm_codegen::model::lir::Insn;
 use llrm_lir::registers::RegId;
 use llrm_spike_mf::commute_accumulator;
+use llrm_spike_mf::mfunc::{FLAG_C, FLAG_N, FLAG_V, FLAG_Z};
 use llrm_spike_mf::regalloc::{successors, two_address};
 use llrm_spike_mf::spill::allocate_spilling;
 use llrm_spike_mf::{
@@ -433,6 +434,12 @@ fn is_cell(register: RegId) -> bool {
 pub struct Mos<const STACK: bool>;
 
 impl<const STACK: bool> Target for Mos<STACK> {
+    /// `inc`/`dec` keep carry in `x`, `y` and a cell; in `a` they are `clc;
+    /// adc #1`.
+    fn keeping_flags(class: &Class) -> Option<Class> {
+        Some(Class(class.0 & !Class::A)).filter(|narrowed| narrowed.0 != 0 && narrowed.0 != class.0)
+    }
+
     /// A shift by one steps a zero-page cell as it is (`asl rc2; rol rc3`).
     fn writes_memory_in_place(name: &str) -> bool {
         matches!(name, "SHL1" | "SRL1")
@@ -1447,6 +1454,11 @@ impl Builder {
         if matches!(inst.kind, Kind::Op("LDI" | "LDS")) {
             inst.sets_flags = true;
         }
+        // `inc` and `dec` set N and Z and keep carry
+        if matches!(inst.kind, Kind::Op("INC" | "DEC")) {
+            inst.sets_flags = true;
+            inst.flags_kept = FLAG_C | FLAG_V;
+        }
         if inst.origin == 0 {
             inst.origin = self.origin;
         }
@@ -2435,8 +2447,9 @@ pub fn build_with_places(
                 b.define(name(&o[0])?);
                 let (d, a) = (b.byte(name(&o[0])?)?, b.byte(name(&o[1])?)?);
                 let step = if inst.opcode == op::INC8 { "INC" } else { "DEC" };
-                b.copy(d, a);
-                b.push(Inst::new(Kind::Op(step), vec![Operand::Def(d), Operand::Use(d)]));
+                let mut bump = Inst::new(Kind::Op(step), vec![Operand::Def(d), Operand::Use(a)]);
+                bump.ties = vec![(0, 1)];
+                b.push(bump);
             }
             op::AND8 => b.alu("AND", None, name(&o[0])?, name(&o[1])?, name(&o[2])?)?,
             op::OR8 => b.alu("ORA", None, name(&o[0])?, name(&o[1])?, name(&o[2])?)?,
@@ -2991,6 +3004,11 @@ pub fn build_with_places(
                 let mut branch = Inst::new(Kind::Op(mnemonic), vec![target, Operand::Use(Reg::Phys(reg::FLAGS))]);
                 branch.terminator = true;
                 branch.reads_flags = true;
+                branch.flags_read = match code {
+                    op::BEQ | op::BNE => FLAG_Z,
+                    op::BCC | op::BCS => FLAG_C,
+                    _ => FLAG_N,
+                };
                 b.push(branch);
             }
             op::JMP | op::BRA => {

@@ -3087,3 +3087,29 @@ b2:
     let held = hoisted(Some(5));
     assert!(held < 5, "{held} of 12 loads hoisted with five float values allowed across the loop");
 }
+
+/// `file.c`'s `file_files_entry` at -O1 (arm64): LICM cloned a GEP into an exit
+/// that a two-case `switch` reaches twice, and its LCSSA phi had one input
+/// for the two edges ("1 inputs from block 1 for 2 edges").
+#[test]
+fn test_an_lcssa_phi_for_a_cloned_exit_gep_has_an_input_per_edge() {
+    let text = "@buf = global [8 x i8] c\"\\00\\00\\00\\00\\00\\00\\00\\00\"
+
+define i32 @f(i32 %i) {
+b0:
+  br label %b1
+
+b1:
+  %z = zext i32 %i to i64
+  %g = getelementptr i8, ptr @buf, i64 %z
+  %x = load i8, ptr %g
+  switch i8 %x, label %b1 [ i8 0, label %b2  i8 46, label %b2 ]
+
+b2:
+  %e = phi ptr [ %g, %b1 ], [ %g, %b1 ]
+  %r = ptrtoint ptr %e to i32
+  ret i32 %r
+}
+";
+    applied_on(text, Addressing(llrm_mir::target::Neutral), &[vec![1]], true);
+}

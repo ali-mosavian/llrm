@@ -2291,6 +2291,11 @@ pub trait Tti {
         128
     }
 
+    /// `Tuning::rep_movs_at_speed_max`.
+    fn rep_movs_at_speed_max(&self) -> u64 {
+        0
+    }
+
     /// `Tuning::rep_stos_at_size_max`.
     fn rep_stos_at_size_max(&self) -> u64 {
         128

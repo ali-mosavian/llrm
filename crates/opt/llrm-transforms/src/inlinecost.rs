@@ -82,6 +82,15 @@
 //!   (QuickrBasic operands.c -Os `hot_operand` into `hot_int`, 26 units against
 //!   two 3-unit calls: 15,344 -> 10,400 B, the pin's 9,464). The guard still
 //!   holds for a callee with no hint.
+//! - INLINEHINT-GROWTH-TRIAL (beyond the pin; gcc's `-Os` inliner takes a
+//!   callee only while the unit does not grow, `ipa-inline.cc`
+//!   `want_inline_small_function_p` over `estimate_edge_growth`; owner
+//!   x86-m32-b, exit 2026-11-30): where that yield passes a callee the size
+//!   guard (D11) would refuse, the caller is noted and the module compiled
+//!   again with the guard binding the hinted callee too
+//!   (`trial::with_kept_hinted_calls`, `driver/trial.rs`); the finished object
+//!   decides, because the units cannot see what the copies fold to (QB
+//!   `sfm16_dbg` -Os: `sf_clz32` inlined at six calls, +388 B).
 //! - SZ1-SITE (owner m68k-b, exit 2026-11-24): the size rule (D11) prices a
 //!   callee's instruction with the call site's constant arguments, not only a
 //!   GEP as `isGEPFree` does (z80 `rotate_small` -O1 922 -> 576 B).
@@ -2946,16 +2955,28 @@ impl<'a> Analyzer<'a> {
                         self.site.tti.is_some_and(|tti| tti.inline_o1_weighs_entry()),
                     ))
         } else {
-            let bound = !self.site.sole_call_to_local
-                && self.site.tti.is_some_and(|tti| {
-                    (!at_o1 || tti.opt_size_inline_rule_at_o1())
-                        && tti.inline_policy().by_size.is_some_and(|rule| {
-                            self.site.callee_calls >= rule.min_sites
-                                && !(rule.yields_to_negative_cost && self.cost < 0)
-                                && !(rule.yields_to_inlinehint && self.hint_applied)
-                        })
-                });
+            // `yields`: whether the hint's yield stands at this site; the trial
+            // compile that keeps the calls of a hinted callee does not take it.
+            let bound_with = |yields: bool| {
+                !self.site.sole_call_to_local
+                    && self.site.tti.is_some_and(|tti| {
+                        (!at_o1 || tti.opt_size_inline_rule_at_o1())
+                            && tti.inline_policy().by_size.is_some_and(|rule| {
+                                self.site.callee_calls >= rule.min_sites
+                                    && !(rule.yields_to_negative_cost && self.cost < 0)
+                                    && !(yields && rule.yields_to_inlinehint && self.hint_applied)
+                            })
+                    })
+            };
+            let bound = bound_with(!crate::trial::keeping_hinted_calls());
             let grows = bound && self.grows_the_code() && !(at_o1 && self.hot_site_within_growth_budget());
+            // INLINEHINT-GROWTH-TRIAL: noted where only the yield let a growing
+            // call through at -Os.
+            if !bound && !at_o1 && self.hint_applied && bound_with(false) && self.grows_the_code() {
+                crate::trial::note_hint_yield(
+                    self.site.module.global(self.site.caller_id).name.as_deref().unwrap_or_default(),
+                );
+            }
             outlined = bound && !grows && self.outlined_by_trial();
             grows
         };
