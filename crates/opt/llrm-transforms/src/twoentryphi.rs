@@ -62,7 +62,7 @@
 use llrm_analysis::occurrence::arms;
 use llrm_mir::context::{ConstantKind, Context};
 use llrm_mir::datalayout::DataLayout;
-use llrm_mir::dense::IdSet;
+use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::edit::Position;
 use llrm_mir::instructioncost::{instruction_cost, select_cost, select_logic};
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
@@ -70,7 +70,6 @@ use llrm_mir::opcode::{FloatPredicate, IntPredicate, Opcode};
 use llrm_mir::passes::Outer;
 use llrm_mir::tti::{Cost, CostKind, Tti};
 
-use llrm_support::hash::HashMap;
 
 use crate::edges;
 
@@ -194,7 +193,7 @@ fn condition_is_later(
     block: BlockId,
     condition: Operand,
 ) -> bool {
-    let mut memo = HashMap::default();
+    let mut memo = IdMap::new();
     let later = depth(context, spec, function, condition, 0, &mut memo);
     let values = edges::phis(function, block)
         .iter()
@@ -213,7 +212,7 @@ fn depth(
     function: &Function,
     value: Operand,
     level: usize,
-    memo: &mut HashMap<InstId, i64>,
+    memo: &mut IdMap<InstId, i64>,
 ) -> i64 {
     let Operand::Value(id) = value else { return 0 };
     let ValueDef::Instruction(inst) = function.value(id).def else { return 0 };
