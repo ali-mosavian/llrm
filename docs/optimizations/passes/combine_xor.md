@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_xor.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_xor.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_xor.rs sha256:4ee27aef6b1dbf0340ef96863e0dc503a55a9ea95339b54fbee5a0eb68fd31ea -->
+<!-- src: crates/opt/llrm-transforms/src/combine_xor.rs sha256:5efb4672bcfd5a3f626b56a10c080bfe90cf1d9d6a9e126be9b4f30ca9a66636 -->
 
 # combine_xor
 
@@ -19,7 +19,7 @@ DEVIATE 1: no vectors, and only integer constants (`ConstantExpr` and
 DEVIATE 2: the folds that call a helper not yet translated are left out,
 each named where it stood: `foldXorToXor`, `visitMaskedMerge`, the
 `ctlz`/`cttz` and `fneg` bitcast folds, the `i1` select form of `(A & B) ^
-(A | C)`, `foldXorOfICmps`, `canonicalizeAbs`,
+(A | C)`, `canonicalizeAbs`,
 `canonicalizeLogicFirst`, `foldLogicOfIsFPClass`,
 `canonicalizeConditionalNegationViaMathToSelect`,
 `foldBinOpOfDisplacedShifts`, `foldBitwiseLogicWithIntrinsics` and
