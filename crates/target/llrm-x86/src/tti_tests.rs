@@ -593,3 +593,12 @@ fn a_variable_vector_shift_is_priced_as_the_pins_sse2_rows() {
     assert_eq!(cost(ArithOp::Shl, 8, 16, constant), Some(1));
     assert_eq!(cost(ArithOp::AShr, 8, 16, constant), Some(3));
 }
+
+/// `getMemoryInstructionCost` at VF 1 adds `getAddressComputationCost` of the value type, which x86 leaves at the
+/// base model's 0. It was 1: dot's scalar loop cost 9 (the pin's 7), so a VF 8 loop at 60 was taken and ran twice
+/// as many instructions.
+#[test]
+fn a_scalar_access_adds_no_address_cost_on_x86_64() {
+    let x86 = X86::of_cpu("x86-64").unwrap();
+    assert_eq!(x86.scalar_access_address_cost(CostKind::RecipThroughput), Cost::FREE);
+}

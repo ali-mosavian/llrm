@@ -1069,6 +1069,17 @@ impl Tti for X86 {
         Cost::BASIC
     }
 
+    /// `X86TTIImpl::getAddressComputationCost` of a scalar type: `BasicTTIImpl`'s 0.
+    fn scalar_access_address_cost(
+        &self,
+        kind: CostKind,
+    ) -> Cost {
+        if self.size_bytes && kind == CostKind::CodeSize {
+            return Cost::of(3);
+        }
+        Cost::FREE
+    }
+
     fn direct_call_cost(
         &self,
         arguments: i64,
