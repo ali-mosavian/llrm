@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_phi_args.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_phi_args.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_phi_args.rs sha256:595d9e621ad1589359b413efeeeeb7f143658621cda458548c251e0c6d65b608 -->
+<!-- src: crates/opt/llrm-transforms/src/combine_phi_args.rs sha256:5305a97d584113c17fbcb17ffc23c21425cea1fb07bef3320a7235b387233b7d -->
 
 # combine_phi_args
 
@@ -28,8 +28,8 @@ at d1106deb71cc.
   and operand count, each with one user, whose operands agree but for one
   that is no constant and has one type in all of them, become one
   `getelementptr` of a phi of that operand (`foldPHIArgGEPIntoPHI`), at the
-  flags all of them have. Not where every other base is a frame slot
-  indexed by constants.
+  flags all of them have. Not where every other base is a frame slot indexed
+  by constants.
 - `foldDeadPhiWeb`
   ([:59](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombinePHI.cpp#L59)):
   phis used only by other phis, fewer than 16 of them, are deleted.
