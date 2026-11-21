@@ -239,3 +239,21 @@ define <2 x double> @f(ptr %a, ptr %b) {\n\
     assert!(!text.contains("insertelement"), "{text}");
     assert!(!text.contains("fdiv double"), "{text}");
 }
+
+const FIELD_COPIES: &str = include_str!("../tests/slp/interleaved_field_copies.ll");
+
+/// `y->a = x->a; y->b = x->b; ...` of one struct: each load stands after the
+/// store before it, and the pin (`opt -passes=slp-vectorizer`) makes two
+/// `<2 x i64>` copies, TBAA saying the fields are apart. arm64 kept 4 scalar
+/// `ldr`/`str` pairs, where the pin has `ldr q`/`str q` (QuickrBasic
+/// `dbug_eval` -Os: +100 B). A copy under one tag may read what it stored, and
+/// stays.
+#[test]
+fn field_copies_one_load_after_each_store_become_vector_copies_where_tbaa_separates_them() {
+    let text = run(FIELD_COPIES);
+    let save = text.split("define void @save_same_tag").next().unwrap();
+    assert_eq!(save.matches("load <2 x i64>").count(), 2, "{text}");
+    assert_eq!(save.matches("load i64").count(), 0, "{text}");
+    let same = text.split("define void @save_same_tag").nth(1).unwrap();
+    assert_eq!(same.matches("load i64").count(), 2, "{same}");
+}
