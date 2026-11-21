@@ -156,8 +156,9 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         &self,
         value: SDValue,
     ) -> bool {
-        let bits = self.dag.value_type(value).size_in_bits();
-        super::known_bits::known_bits(self.dag, value).zero >> (bits - 1) & 1 == 1
+        // A vector's known bits are of a lane: its sign bit is the lane's.
+        let known = super::known_bits::known_bits(self.dag, value);
+        known.zero >> (known.width - 1) & 1 == 1
     }
 
     /// `isIntDivCheap(VT)`: the configured flag, for every type (`i8` selects
@@ -369,7 +370,17 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
                 // `buildSDIVPow2WithCMov` (TargetLowering.cpp#L6710): a
                 // divisor of 2, -2, 1 or -1 keeps the default expansion.
                 let log = c.trailing_zeros();
-                if self.tli.is_some_and(|tli| tli.sdiv_pow2_with_cmov(vt)) && c != 1 && negated != 1 && log > 1 {
+                // After legalization the `select` must be one the target
+                // selects as it is (`LegalOperations`): a lane of an unrolled
+                // vector divide meets this combine with `Select` Custom.
+                let select_ok = self.level < CombineLevel::AfterLegalizeVectorOps
+                    || self.tli.is_some_and(|tli| tli.is_operation_legal(ISD::Select, vt));
+                if select_ok
+                    && self.tli.is_some_and(|tli| tli.sdiv_pow2_with_cmov(vt))
+                    && c != 1
+                    && negated != 1
+                    && log > 1
+                {
                     // `(x < 0 ? x + (2^log - 1) : x) >> log`, negated for a
                     // negative divisor.
                     let zero = self.dag.get_constant(0, vt);

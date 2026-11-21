@@ -26,7 +26,8 @@
 //! `slptree`.
 //!
 //! # Example
-//! A bundle whose lanes repeat is packed once with its distinct lanes and read back through a shuffle mask.
+//! A bundle whose lanes repeat is packed once with its distinct lanes and read
+//! back through a shuffle mask.
 //!
 //! ```text
 //! bundle lanes: (%a, %b, %a, %b)
@@ -156,21 +157,11 @@ fn inserts_cost(
     vector: VectorTy,
     scalars: impl Iterator<Item = (usize, bool)>,
 ) -> Option<i64> {
-    let mut total = 0;
-    for (index, insert) in scalars {
-        if insert {
-            let cost = tti.vector_instr_cost(
-                LaneOp::Insert,
-                vector,
-                Some(index as u32),
-                index == 0,
-                VectorInstrContext::None,
-                CostKind::RecipThroughput,
-            )?;
-            total += valid(cost)?;
-        }
+    let lanes: Vec<u32> = scalars.filter(|(_, insert)| *insert).map(|(index, _)| index as u32).collect();
+    if lanes.is_empty() {
+        return Some(0);
     }
-    Some(total)
+    valid(tti.demanded_insert_overhead(vector, &lanes, CostKind::RecipThroughput)?)
 }
 
 /// The cost of a single-source shuffle by `mask` of `vector` (identity is
@@ -207,7 +198,18 @@ pub(crate) fn gather_cost(
     if same && !constant_of(present[0].1) {
         // `isSplat`: one insert, and the broadcast where the value repeats.
         let (at, _) = present[0];
-        total += inserts_cost(tti, vector, std::iter::once((at, true)))?;
+        // `ShuffleCostEstimator::gather`'s splat: one `getVectorInstrCost`
+        // insert into poison, free at lane 0 (not the bulk
+        // `getScalarizationOverhead` the other gathers pay).
+        let insert = tti.vector_instr_cost(
+            LaneOp::Insert,
+            vector,
+            Some(at as u32),
+            at == 0,
+            VectorInstrContext::None,
+            CostKind::RecipThroughput,
+        )?;
+        total += valid(insert)?;
         if present.len() > 1 {
             total += shuffle_cost(tti, vector, &vec![0; width])?;
         }

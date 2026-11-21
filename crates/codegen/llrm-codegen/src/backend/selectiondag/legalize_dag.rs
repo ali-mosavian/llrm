@@ -1665,6 +1665,12 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
             | ISD::Sra
             | ISD::Rotl
             | ISD::Rotr
+            // `ExpandREM` finds no vector divide to make a remainder of, so it
+            // unrolls too.
+            | ISD::SDiv
+            | ISD::UDiv
+            | ISD::SRem
+            | ISD::URem
                 if vt.is_vector() =>
             {
                 Some(vec![self.unroll_vector_op(node)])
