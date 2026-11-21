@@ -324,10 +324,10 @@ pub fn module_text(
     // choice keeps them (a call of `__mulsi3` made the speed multiply and lost
     // the module's cold-division choice, +230 B in compound_assignment_types)
     let mut variants = vec![Variants::default(); texts.len()];
-    // the byte multiply entries are bodies of their own (60-70 B each): a module that
-    // also calls the general multiply links that body, and sets the multiplier's upper
-    // bytes at its byte sites too. Before the save helpers are priced: the cells a
-    // function keeps depend on it
+    // the byte multiply entries are bodies of their own (60-70 B each): a
+    // module that also calls the general multiply links that body, and sets
+    // the multiplier's upper bytes at its byte sites too. Before the save
+    // helpers are priced: the cells a function keeps depend on it
     let general = |text: &str| text.contains(" __mulsi3\n");
     let byte = |text: &str| text.contains(" __mulsi3_byte\n");
     if texts.iter().any(|text| general(text)) && texts.iter().any(|text| byte(text)) {
@@ -353,7 +353,9 @@ pub fn module_text(
         let mut gain = 0;
         for &at in &users {
             let text = alloc::with_shared_saves(false, || {
-                alloc::with_byte_multiply(variants[at].byte_multiply, || function_text(module, parts[at].0, parts[at].1))
+                alloc::with_byte_multiply(variants[at].byte_multiply, || {
+                    function_text(module, parts[at].0, parts[at].1)
+                })
             })?;
             gain += bytes(&text)? - bytes(&texts[at])?;
             inline.push(text);
