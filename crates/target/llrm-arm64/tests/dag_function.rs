@@ -1044,6 +1044,17 @@ fn a_signed_divide_by_two_keeps_the_shift_sequence() {
     assert!(!selected(ir).unwrap()[0].contains(&"CSELWr"));
 }
 
+/// A byte shifted left by 3 and read as a shift amount selected `UBFMWri` (the
+/// shift) and `ANDXri` (`and (any_extend (shl ..))`): the pin matches the pair
+/// as one `UBFIZ` of the widened source, one instruction less per use (ttyin's
+/// `switch.downshift`).
+#[test]
+fn an_extended_shifted_byte_is_one_ubfiz() {
+    let ir = "define i8 @f(i8 %x) {\n  %s = shl nuw nsw i8 %x, 3\n  %z = zext nneg i8 %s to i32\n  %d = lshr i32 1061027900, %z\n  %t = trunc i32 %d to i8\n  ret i8 %t\n}";
+    let ops = &selected(ir).unwrap()[0];
+    assert!(ops.contains(&"UBFMXri") && !ops.contains(&"ANDXri"), "{ops:?}");
+}
+
 /// `isNarrowingProfitable` is false for a scalar on AArch64: the index
 /// `zext i8` scaled by 4 stayed one `shl` on 64 bits and folded into the
 /// store as `[x1, x8, lsl #2]`. We narrowed it to a 32-bit `lsl` first, which
