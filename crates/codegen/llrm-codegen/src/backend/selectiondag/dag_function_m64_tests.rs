@@ -1710,3 +1710,28 @@ fn an_m64_v2i64_multiply_is_pmuludq() {
     );
     assert_eq!(pmuludq(&by_small), 2);
 }
+
+/// A product of two `i16` values widened to `i64` (`(long)a[i] * b[i]`, dot's loop) took eight `pmuludq`
+/// ladders for `<8 x i64>`; gcc's `vect_recog_widen_mult_pattern` and the pin's `reduceVMULWidth` (for `i32`) do
+/// it with `pmullw` and `pmulhw` and unpack the halves.
+#[test]
+fn an_m64_vector_multiply_of_shorts_is_pmullw_and_pmulhw() {
+    let layout = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n";
+    let count = |wide: &str, store: &str| -> (usize, usize, usize) {
+        let text = format!(
+            "{layout}define void @f(ptr %p, ptr %q, ptr %r) {{\n  %a = load <8 x i16>, ptr %p, align 16\n  \
+             %b = load <8 x i16>, ptr %q, align 16\n  %x = sext <8 x i16> %a to <8 x {wide}>\n  \
+             %y = sext <8 x i16> %b to <8 x {wide}>\n  %m = mul <8 x {wide}> %x, %y\n  \
+             store <8 x {wide}> %m, ptr %r, align {store}\n  ret void\n}}\n"
+        );
+        let module = llrm_mir::parse::module(&text).expect("parses");
+        let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+        let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+        let named = |name: &str| {
+            done.body.insns().iter().filter(|i| i.what.as_ref().is_some_and(|w| w.name.as_deref() == Some(name))).count()
+        };
+        (named("pmuludq"), named("pmullw"), named("pmulhw"))
+    };
+    assert_eq!(count("i64", "16"), (0, 1, 1), "i64");
+    assert_eq!(count("i32", "16"), (0, 1, 1), "i32");
+}

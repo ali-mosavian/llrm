@@ -664,6 +664,9 @@ impl CombineHooks for X86Lowering<'_> {
                     chain_bytes(dag, body, dag.operand(node, 0)) <= imul
                 })
             }
+            ISD::Mul if dag.value_type(node).is_vector() => {
+                if self.sse2 { combine_vector_mul_width(dag, node) } else { None }
+            }
             ISD::Mul => {
                 combine_mul(dag, node, level, self.min_size && !self.hot_chains, self.i16_mul_chains, self.profile)
             }
@@ -3459,6 +3462,70 @@ fn mul_imm_node(
     }
     let by = dag.get_constant(by, vt);
     dag.get_node(x86isd::MUL_IMM, vt, &[x, by])
+}
+
+/// `reduceVMULWidth` ([L50582][pin]) for `<8 x i32>`: operands that are 16 bits at most are multiplied by
+/// `pmullw` and `pmulhw` (`pmulhuw` when both are non-negative and 16 bits wide) and the halves are
+/// interleaved back to 32-bit lanes. The SSE4.1 `pmulld` shortcut does not apply here: this target has none.
+///
+/// DEVIATE WIDEN-MULT (owner llrm-target-x86-m64-b, exit 2026-11-30): the same for an `<8 x i64>` multiply
+/// whose operands have 16 significant bits each (`(long)a[i] * b[i]`): the product fits 32 bits, so it is an
+/// `i32` multiply and a sign extension, as gcc's `vect_recog_widen_mult_pattern` does; the pin keeps the `i64`
+/// multiply (three `pmuludq` a pair of lanes).
+///
+/// [pin]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L50582
+fn combine_vector_mul_width(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    use llrm_codegen::backend::selectiondag::known_bits::{known_bits, num_sign_bits};
+    let vt = dag.value_type(node);
+    if vt.lanes() != 8 {
+        return None;
+    }
+    let (a, b) = (dag.operand(node, 0), dag.operand(node, 1));
+    let bits = vt.element().size_in_bits();
+    if bits == 64 {
+        let significant = |dag: &SelectionDAG, value: SDValue| 65 - num_sign_bits(dag, value);
+        if significant(dag, a) + significant(dag, b) > 32 {
+            return None;
+        }
+        let narrow = EVT::vector(MVT::I32, 8);
+        let (a, b) = (dag.get_node(ISD::Truncate, narrow, &[a]), dag.get_node(ISD::Truncate, narrow, &[b]));
+        let product = dag.get_node(ISD::Mul, narrow, &[a, b]);
+        return Some(dag.get_node(ISD::SignExtend, vt, &[product]));
+    }
+    if bits != 32 {
+        return None;
+    }
+    let sign_bits = [num_sign_bits(dag, a), num_sign_bits(dag, b)];
+    let positive = |dag: &SelectionDAG, value: SDValue| known_bits(dag, value).zero >> 31 & 1 == 1;
+    let all_positive = positive(dag, a) && positive(dag, b);
+    let min_sign_bits = sign_bits[0].min(sign_bits[1]);
+    // MULS8, MULU8, MULS16, MULU16.
+    let (high_needed, signed, extend) = if min_sign_bits >= 25 {
+        (false, true, ISD::SignExtend)
+    } else if all_positive && min_sign_bits >= 24 {
+        (false, false, ISD::ZeroExtend)
+    } else if min_sign_bits >= 17 {
+        (true, true, ISD::SignExtend)
+    } else if all_positive && min_sign_bits >= 16 {
+        (true, false, ISD::ZeroExtend)
+    } else {
+        return None;
+    };
+    let reduced = EVT::Simple(MVT::V8I16);
+    let (a, b) = (dag.get_node(ISD::Truncate, reduced, &[a]), dag.get_node(ISD::Truncate, reduced, &[b]));
+    let low = dag.get_node(ISD::Mul, reduced, &[a, b]);
+    if !high_needed {
+        return Some(dag.get_node(extend, vt, &[low]));
+    }
+    let high = dag.get_node(if signed { ISD::MulHS } else { ISD::MulHU }, reduced, &[a, b]);
+    let halves = EVT::Simple(MVT::V4I32);
+    let lower = dag.get_node(x86isd::UNPCKL, reduced, &[low, high]);
+    let upper = dag.get_node(x86isd::UNPCKH, reduced, &[low, high]);
+    let (lower, upper) = (dag.get_node(ISD::BitCast, halves, &[lower]), dag.get_node(ISD::BitCast, halves, &[upper]));
+    Some(dag.get_node(ISD::ConcatVectors, vt, &[lower, upper]))
 }
 
 /// `combineMulSpecial`: `x * c` for the constants that are a `lea` and a
