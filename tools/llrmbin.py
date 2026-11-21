@@ -41,6 +41,8 @@ def ow_present() -> bool:
 def cc_environment() -> dict[str, str]:
     """The variables llrm-cc needs, from the caller's (the Open Watcom tree is `ow_tree()`, no variable)."""
     env = {name: os.environ[name] for name in CC_ENV if name in os.environ}
+    # A caller without HOME still names the cache dir its own ow_tree() resolved, or llrm-cc cannot find the tree.
+    env.setdefault("XDG_CACHE_HOME", str(ow_tree().parent.parent))
     pin = REPO / "toolchain/clang/pin"
     lines = pin.read_text().splitlines() if pin.exists() else []
     if len(lines) > 1 and "LLRM_CLANG_M16" not in env and (m16 := Path.home() / "scratch/clang-by-sha" / lines[1].split()[0] / "bin/clang").exists():
