@@ -640,6 +640,19 @@ pub trait CombineHooks {
         false
     }
 
+    /// `visitSUB`'s hoists of a one-use constant out of an operand
+    /// (`(x + C) - y` is `(x - y) + C`, `y - (x + C)` is `(y - x) - C`, and
+    /// the two for `x - C` and `C - x`), so the constant meets the final add
+    /// or a displacement. DEVIATE SUBC1 (owner x86-m32-b, 2026-11-21): off
+    /// by default, on at x86 but m16 (16-bit pointers, rows unjudged);
+    /// `pointer` is the DAG's pointer type. Exit: 2026-12-05, every target on.
+    fn sub_constant_hoists(
+        &self,
+        _pointer: EVT,
+    ) -> bool {
+        false
+    }
+
     /// `add x, (zext i1 y)` is `sub x, (sext i1 y)` where booleans are 0/-1:
     /// the sign extension of a compare is the cheaper one (`slt; extb.l` 4 B
     /// against `slt; and.l #1` 8 B on the 68020), and the pin's `sub x, (zext
@@ -4221,9 +4234,61 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 return Some(self.dag.get_node(ISD::Xor, vt, &[n1, n0]));
             }
         }
-        let c = self.dag.constant(n1).filter(|_| !self.dag.is_opaque(n1))?;
+        let Some(c) = self.dag.constant(n1).filter(|_| !self.dag.is_opaque(n1)) else {
+            return if self.hooks.sub_constant_hoists(self.dag.config().pointer) {
+                self.hoist_sub_constant(node, vt, n0, n1)
+            } else {
+                None
+            };
+        };
         let negated = self.dag.get_constant(c.wrapping_neg() & super::fold::mask(vt.size_in_bits()), vt);
         Some(self.dag.get_node(ISD::Add, vt, &[n0, negated]))
+    }
+
+    /// The hoists of `visitSUB`
+    /// ([L4522](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L4522)
+    /// to L4548): a one-use `add` or `sub` of a constant under the
+    /// subtraction hands the constant to its result. `y` is no constant here:
+    /// `sub x, C` is already `add x, -C`.
+    fn hoist_sub_constant(
+        &mut self,
+        node: SDValue,
+        vt: EVT,
+        n0: SDValue,
+        n1: SDValue,
+    ) -> Option<SDValue> {
+        let konst = |this: &Self, v: SDValue| this.dag.constant(v).is_some() && !this.dag.is_opaque(v);
+        let (op0, op1) = (self.dag.opcode(n0), self.dag.opcode(n1));
+        // (x + C) - y -> (x - y) + C
+        if op0 == ISD::Add
+            && self.dag.has_one_use(n0.node)
+            && konst(self, self.dag.operand(n0, 1))
+            && !self.reassociation_can_break_addressing_mode_pattern(node, n0, n1)
+        {
+            let (x, c) = (self.dag.operand(n0, 0), self.dag.operand(n0, 1));
+            let sub = self.dag.get_node(ISD::Sub, vt, &[x, n1]);
+            return Some(self.dag.get_node(ISD::Add, vt, &[sub, c]));
+        }
+        // y - (x + C) -> (y - x) - C
+        if op1 == ISD::Add && self.dag.has_one_use(n1.node) && konst(self, self.dag.operand(n1, 1)) {
+            let (x, c) = (self.dag.operand(n1, 0), self.dag.operand(n1, 1));
+            let sub = self.dag.get_node(ISD::Sub, vt, &[n0, x]);
+            return Some(self.dag.get_node(ISD::Sub, vt, &[sub, c]));
+        }
+        if op0 == ISD::Sub && self.dag.has_one_use(n0.node) {
+            let (first, second) = (self.dag.operand(n0, 0), self.dag.operand(n0, 1));
+            // (x - C) - y -> (x - y) - C
+            if konst(self, second) {
+                let sub = self.dag.get_node(ISD::Sub, vt, &[first, n1]);
+                return Some(self.dag.get_node(ISD::Sub, vt, &[sub, second]));
+            }
+            // (C - x) - y -> C - (x + y)
+            if konst(self, first) {
+                let add = self.dag.get_node(ISD::Add, vt, &[second, n1]);
+                return Some(self.dag.get_node(ISD::Sub, vt, &[first, add]));
+            }
+        }
+        None
     }
 
     /// `visitADDO` for `uaddo`
