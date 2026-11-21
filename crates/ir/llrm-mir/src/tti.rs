@@ -192,6 +192,9 @@ pub struct OperandInfo {
     pub constant: bool,
     pub power_of_two: bool,
     pub negated_power_of_two: bool,
+    /// A vector constant whose lanes differ (`OP_NonUniformConstant`); a
+    /// scalar, or a splat, is uniform.
+    pub non_uniform: bool,
     /// The constant, sign-extended from its width, where a target prices the
     /// size of an immediate by it; the pin's `OperandValueInfo` has none, and
     /// no target but the m68k reads it.
@@ -199,8 +202,13 @@ pub struct OperandInfo {
 }
 
 impl OperandInfo {
-    pub const ANY: OperandInfo =
-        OperandInfo { constant: false, power_of_two: false, negated_power_of_two: false, value: None };
+    pub const ANY: OperandInfo = OperandInfo {
+        constant: false,
+        power_of_two: false,
+        negated_power_of_two: false,
+        non_uniform: false,
+        value: None,
+    };
 
     /// A constant operand of this value at `width` bits.
     pub fn constant(
@@ -217,6 +225,7 @@ impl OperandInfo {
             constant: true,
             power_of_two: bits != 0 && bits & (bits - 1) == 0,
             negated_power_of_two: negated != 0 && negated & (negated - 1) == 0,
+            non_uniform: false,
             value: Some(if width >= 128 || width == 0 {
                 value
             } else {
@@ -1212,9 +1221,9 @@ pub trait Tti {
         Cost::BASIC
     }
 
-    /// `getAddressComputationCost` of a scalar access's value type, which is what
-    /// `getMemoryInstructionCost` adds to a load or store at VF 1: the base model
-    /// answers 0 (AArch64's 1 is the default here).
+    /// `getAddressComputationCost` of a scalar access's value type, which is
+    /// what `getMemoryInstructionCost` adds to a load or store at VF 1: the
+    /// base model answers 0 (AArch64's 1 is the default here).
     fn scalar_access_address_cost(
         &self,
         kind: CostKind,

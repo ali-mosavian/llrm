@@ -530,9 +530,8 @@ fn vector_memory_and_arithmetic_costs_are_the_pins() {
         assert_eq!(alu(And, v(8, 16)), Some(1), "{cpu}");
         assert_eq!(alu(Shl, v(32, 4)), Some(1), "{cpu}");
         assert_eq!(alu(Sub, v(64, 2)), Some(1), "{cpu}");
-        // The pin prices `mul <2 x i64>` 14; this port does not price it
-        // (DEVIATE VT3).
-        assert_eq!(alu(Mul, v(64, 2)), None, "{cpu}");
+        // `mul <2 x i64>` is scalarized: 2 x (mul + 2 extracts + insert) = 14.
+        assert_eq!(alu(Mul, v(64, 2)), Some(14), "{cpu}");
     }
 }
 
@@ -844,8 +843,13 @@ fn interleaved_memory_costs_are_one_ldn_per_member_per_register() {
     use llrm_mir::tti::MemoryOp::*;
     let tti = AArch64::of_cpu("generic").unwrap();
     let cost = |lane, count, factor| {
-        tti.interleaved_memory_op_cost(Store, VectorTy { lane: Ty::Int(lane), count }, factor, CostKind::RecipThroughput)
-            .map(|c| c.value)
+        tti.interleaved_memory_op_cost(
+            Store,
+            VectorTy { lane: Ty::Int(lane), count },
+            factor,
+            CostKind::RecipThroughput,
+        )
+        .map(|c| c.value)
     };
     assert_eq!(cost(8, 16, 2), Some(2));
     assert_eq!(cost(16, 8, 4), Some(4));
@@ -861,9 +865,9 @@ fn slp_runs_on_arm64() {
 }
 
 /// `zext`/`sext` of a vector of `i1` (BasicTTI's split, `<N x i1>` promoted to
-/// bytes), the pin's `print<cost-model>`: 3, 15, 1, 3 (sext), 1, 1, 1, 7. Before
-/// the mask source was priced the loop vectorizer left a loop that counts a
-/// compare (`n += x == 0`) scalar.
+/// bytes), the pin's `print<cost-model>`: 3, 15, 1, 3 (sext), 1, 1, 1, 7.
+/// Before the mask source was priced the loop vectorizer left a loop that
+/// counts a compare (`n += x == 0`) scalar.
 #[test]
 fn extensions_of_a_mask_cost_what_the_pin_says() {
     let tti = AArch64::of_cpu("generic").unwrap();
