@@ -4251,6 +4251,25 @@ fn save_preserved<const STACK: bool>(
     true
 }
 
+/// The frame is opened before an instruction addresses a slot: a slot is
+/// addressed from the adjusted stack pointer (`slot_offset`), and the
+/// arguments that arrive in `a` are copied out first, so the prologue's
+/// `ADJSP` can come after the copies and under a register save or a spill of
+/// one (arg_registers_abi, hand-sunk `deep`: a save written above the frame
+/// into the caller's slot, and the run HALTs). `ADJSP` keeps an argument still
+/// in `a` on the stack around itself.
+fn open_frame_before_slots(function: &mut MFunction<Class>) {
+    let entry = &mut function.blocks[0].insts;
+    let Some(open) = entry.iter().position(|inst| inst.kind == Kind::Op("ADJSP")) else { return };
+    let addresses_slot = |inst: &Inst| {
+        matches!(inst.kind, Kind::Op("SPILL" | "RELOAD")) || inst.operands.iter().any(|o| matches!(o, Operand::Frame(_)))
+    };
+    if let Some(first) = entry[..open].iter().position(addresses_slot) {
+        let adjust = entry.remove(open);
+        entry.insert(first, adjust);
+    }
+}
+
 /// Whether `inst` tests only the zero or sign flag: `beq`, `bne`, `bmi`, `bpl`,
 /// or a select or set whose condition code (the last immediate, before the
 /// flags it reads) is one of those.
@@ -4325,6 +4344,9 @@ fn emit_with<const STACK: bool>(
     two_address(&mut function);
     let (assignment, mut slots) = allocate::<STACK>(&mut function)?;
     save_preserved::<STACK>(&mut function, &assignment, &mut slots);
+    if STACK {
+        open_frame_before_slots(&mut function);
+    }
     let size_of = |class: &Class| if class.0 & Class::P != 0 { 2 } else { 1 };
     // On the stack, spills sit above the locals, in the frame: the bytes of
     // the slots (`spilled`) are added to the frame, and a frame object beyond
