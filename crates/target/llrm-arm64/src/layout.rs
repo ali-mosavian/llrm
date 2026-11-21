@@ -315,6 +315,16 @@ fn merge_return_tails(blocks: &mut Vec<Lowered>) {
         }
     };
     loop {
+        // A block merged whole is only a jump now: the branches to it go on
+        // to its target, so that the blocks that led to it end alike
+        // (`BranchFolder` runs `OptimizeBranches` between rounds).
+        let mut forward = forwards(blocks);
+        forward.remove(&blocks[0].label);
+        for block in blocks.iter_mut() {
+            for inst in &mut block.insts {
+                retarget(inst, &forward);
+            }
+        }
         let bare_block = bare(blocks);
         let ending: Vec<(usize, Vec<Inst>)> =
             (0..blocks.len()).filter_map(|at| ends_alike(blocks, at, &bare_block).map(|insts| (at, insts))).collect();
