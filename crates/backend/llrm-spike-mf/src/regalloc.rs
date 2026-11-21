@@ -266,6 +266,14 @@ pub trait Target {
         false
     }
 
+    /// The class an instruction must run in to keep the flag lanes it says it
+    /// keeps ([`crate::mfunc::Inst::flags_kept`]), given the class of its
+    /// operands: `inc` of `a` is `clc; adc #1` on the 6502, which writes carry.
+    /// `None`: every class keeps them.
+    fn keeping_flags(_class: &Self::Class) -> Option<Self::Class> {
+        None
+    }
+
     /// Whether the row `name` loads a frame object a call filled (see
     /// `frame_address`): made again where it is read.
     fn is_buffer_load(_name: &str) -> bool {

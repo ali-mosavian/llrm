@@ -179,7 +179,10 @@ const INTERNAL: [&str; 9] =
 /// `every_runtime_routine_is_priced_internal_or_named`. The soft-float library
 /// (`__addsf3`, `__muldf3`, ...) comes from the C library, outside `z80_rt.s`,
 /// and is not priced either: owner z80, exit 2026-11-30.
-pub const UNPRICED: [(&str, &str); 1] = [("__umulhisi3", "16 x 16 -> 32 multiply: z80, 2026-11-30")];
+pub const UNPRICED: [(&str, &str); 2] = [
+    ("__umulhisi3", "16 x 16 -> 32 multiply: z80, 2026-11-30"),
+    ("__mulhisi3", "signed 16 x 16 -> 32 multiply, 8 or 16 steps: z80, 2026-11-30"),
+];
 
 /// The dividend and divisor bit lengths assumed for a long divide whose operand is not a constant in sight.
 const TYPICAL_DIVIDEND_BITS: u32 = 24;

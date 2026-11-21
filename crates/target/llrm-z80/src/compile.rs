@@ -1846,6 +1846,8 @@ fn hash_inst(
         sets_flags,
         remade_sets_flags,
         reads_flags,
+        flags_kept,
+        flags_read,
         may_load,
         may_store,
         side_effects,
@@ -1866,6 +1868,7 @@ fn hash_inst(
     operands.len().hash(into);
     operands.iter().for_each(|operand| hash_operand(operand, into));
     (call, ties, terminator, barrier, sets_flags, remade_sets_flags, reads_flags).hash(into);
+    (flags_kept, flags_read).hash(into);
     (may_load, may_store, side_effects, cheap_as_move, invariant_load, rematerializable).hash(into);
     (early_clobber, commutable, origin).hash(into);
     match call_clobbers {
