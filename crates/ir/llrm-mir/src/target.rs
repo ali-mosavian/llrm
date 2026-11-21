@@ -488,6 +488,11 @@ pub struct Tuning {
     /// branch on a select; none: 2. Lower keeps the branches (a branch the
     /// target predicts beats the select's latency in a loop-carried chain).
     pub branch_fold_threshold: Option<i64>,
+    /// gcc's `empty_bb_or_one_feeding_into_p` (`tree-ssa-phiopt.cc`): a
+    /// two-entry phi folds to a select only when each arm is empty or one
+    /// statement that feeds the phi alone, so a nested diamond stays branches.
+    /// The pin's `foldTwoEntryPHINode` speculates up to its cost bar.
+    pub phiopt_one_feeding_statement: bool,
     /// `InlineParams::DefaultThreshold`, the inliner's bar for a caller not
     /// optimized for size; none: 225, or 250 at -O3.
     pub inline_threshold: Option<i64>,
@@ -953,6 +958,7 @@ impl Tuning {
         spill_fold: None,
         unswitch_threshold: None,
         branch_fold_threshold: None,
+        phiopt_one_feeding_statement: false,
         inline_threshold: None,
         cold_site_ignores_sinks: false,
         inline_last_call_in_cold_site: false,

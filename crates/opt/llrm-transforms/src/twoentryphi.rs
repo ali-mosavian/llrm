@@ -38,6 +38,9 @@
 //!   `and`/`or` select (`select x, y, false`) is no branch and is not counted:
 //!   the 6502's `isdigit` range test stayed two compares (28 -> 50 B).
 //!
+//! - D6. (Tti-gated, off in the pin) gcc's `empty_bb_or_one_feeding_into_p`
+//!   (`tree-ssa-phiopt.cc`) bounds an arm to one statement that feeds the phi.
+//!
 //! # Example
 //! The phi that a branch chooses between becomes a select in the branch's
 //! block:
@@ -150,6 +153,55 @@ fn if_condition(
         }
         Ending::Other => None,
     }
+}
+
+/// gcc's `empty_bb_or_one_feeding_into_p`: `arm` is empty, or has no phi, one
+/// predecessor and one statement whose only use is a phi of `join`.
+fn empty_or_one_feeding_into(
+    function: &Function,
+    arm: BlockId,
+    join: BlockId,
+) -> bool {
+    let body: Vec<InstId> = function.iter_block(arm).take(function.block(arm).len() - 1).collect();
+    let Some((&only, rest)) = body.split_first() else { return true };
+    if single_predecessor(function, arm).is_none() || !rest.is_empty() {
+        return false;
+    }
+    let instruction = function.instruction(only);
+    let Some(result) = instruction.result.filter(|_| instruction.opcode != Opcode::Phi) else { return false };
+    function.users(result).only().is_some_and(|one| {
+        function.instruction(one.user).opcode == Opcode::Phi && function.parent(one.user) == Some(join)
+    })
+}
+
+/// Whether `phi`'s value feeds itself through other instructions: the cycle a
+/// loop-carried value makes through its header phi. Bounded, as the pin bounds
+/// its own use walks.
+fn on_recurrence(
+    function: &Function,
+    phi: InstId,
+) -> bool {
+    const LIMIT: usize = 64;
+    let Some(start) = function.instruction(phi).result else { return false };
+    let mut seen = IdSet::new();
+    let mut work = vec![start];
+    while let Some(value) = work.pop() {
+        for one in function.users(value).iter() {
+            if one.user == phi {
+                return true;
+            }
+            if !seen.insert(one.user) {
+                continue;
+            }
+            if seen.len() > LIMIT {
+                return false;
+            }
+            if let Some(next) = function.instruction(one.user).result {
+                work.push(next);
+            }
+        }
+    }
+    false
 }
 
 fn single_predecessor(
@@ -306,6 +358,20 @@ pub fn folded(
         && let ValueDef::Instruction(inst) = function.value(id).def
         && function.instruction(inst).opcode == Opcode::Phi
         && function.parent(inst) == Some(block)
+    {
+        return false;
+    }
+    // D6. gcc's phiopt (`match_simplify_replacement`) folds only a middle block
+    // that is empty or one statement feeding the phi (`empty_bb_or_one_feeding_into_p`):
+    // a nested diamond keeps its branches, which a loop-carried chain then does not
+    // wait on.
+    // Only where the select would join a loop-carried recurrence: its latency
+    // is then on the critical path of every iteration (`X86CmovConversion`'s
+    // `checkForProfitableCmovCandidates` prices exactly that, `LoopDepth`), and a
+    // branch the predictor takes costs nothing.
+    if spec.tti.phiopt_one_feeding_statement()
+        && edges::phis(function, block).iter().any(|&phi| on_recurrence(function, phi))
+        && !if_blocks.iter().all(|&arm| empty_or_one_feeding_into(function, arm, block))
     {
         return false;
     }

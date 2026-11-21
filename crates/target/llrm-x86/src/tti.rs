@@ -1379,6 +1379,10 @@ impl Tti for X86 {
         self.tuning.branch_fold_threshold
     }
 
+    fn phiopt_one_feeding_statement(&self) -> bool {
+        self.tuning.phiopt_one_feeding_statement
+    }
+
     fn licm_float_register_limit(&self) -> Option<u32> {
         self.tuning.licm_float_register_limit
     }

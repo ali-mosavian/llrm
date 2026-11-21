@@ -215,6 +215,8 @@ pub struct Flagged {
     pub unswitch_threshold: Option<i64>,
     /// `Tti::branch_fold_threshold_override`.
     pub branch_fold_threshold: Option<i64>,
+    /// `Tti::phiopt_one_feeding_statement`.
+    pub phiopt_one_statement: bool,
     pub sinks_invariants: bool,
     /// `ctlz` costs one unit, as on a target with a count-leading-zeros
     /// instruction.
@@ -311,6 +313,10 @@ impl llrm_mir::tti::Tti for Flagged {
 
     fn branch_fold_threshold_override(&self) -> Option<i64> {
         self.branch_fold_threshold
+    }
+
+    fn phiopt_one_feeding_statement(&self) -> bool {
+        self.phiopt_one_statement
     }
 
     fn sinks_unused_invariants(&self) -> bool {
@@ -499,6 +505,7 @@ impl llrm_mir::target::Machine for Tuned {
                     narrows_counters_for_size_only: self.narrows_counters_for_size_only,
                     unswitch_threshold: self.unswitch_threshold,
                     branch_fold_threshold: None,
+                    phiopt_one_statement: false,
                     sinks_invariants: self.sinks_invariants,
                     no_cmov: false,
                     no_global_base: self.no_global_base,
