@@ -866,6 +866,47 @@ pub fn common_cast_transforms(
     None
 }
 
+/// The math and bitwise logic cases of `narrowBinOp` (:927), for a scalar or
+/// a vector `trunc`: `op` of `op0` and `op1`, the one-use source of `inst`.
+fn narrow_math(
+    c: &mut Combiner,
+    inst: InstId,
+    op: BinaryOp,
+    op0: Operand,
+    op1: Operand,
+) -> Option<Visit> {
+    let dest_ty = c.function.instruction(inst).ty;
+    // trunc (binop C, X) --> binop (trunc C', X)
+    if matches!(op0, Operand::Constant(_))
+        && let Some(narrow_c) = fold_trunc(c, op0, dest_ty)
+    {
+        let trunc_x = c.create_cast(inst, CastOp::Trunc, op1, dest_ty, Flags::default());
+        return Some(c.replace_with_binop(inst, op, narrow_c, trunc_x, Flags::default()));
+    }
+    // trunc (binop X, C) --> binop (trunc X, C')
+    if matches!(op1, Operand::Constant(_))
+        && let Some(narrow_c) = fold_trunc(c, op1, dest_ty)
+    {
+        let trunc_x = c.create_cast(inst, CastOp::Trunc, op0, dest_ty, Flags::default());
+        return Some(c.replace_with_binop(inst, op, trunc_x, narrow_c, Flags::default()));
+    }
+    let (x0, x1) = {
+        let q = query(c, Some(inst));
+        (ext_from(c, &q, op0, dest_ty), ext_from(c, &q, op1, dest_ty))
+    };
+    // trunc (binop (ext X), Y) --> binop X, (trunc Y)
+    if let Some(x) = x0 {
+        let narrow = c.create_cast(inst, CastOp::Trunc, op1, dest_ty, Flags::default());
+        return Some(c.replace_with_binop(inst, op, x, narrow, Flags::default()));
+    }
+    // trunc (binop Y, (ext X)) --> binop (trunc Y), X
+    if let Some(x) = x1 {
+        let narrow = c.create_cast(inst, CastOp::Trunc, op0, dest_ty, Flags::default());
+        return Some(c.replace_with_binop(inst, op, narrow, x, Flags::default()));
+    }
+    None
+}
+
 /// `narrowBinOp` (:914): pull a truncate ahead of a math or bitwise logic
 /// instruction.
 fn narrow_bin_op(
@@ -889,33 +930,8 @@ fn narrow_bin_op(
     };
     match op {
         BinaryOp::And | BinaryOp::Or | BinaryOp::Xor | BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul => {
-            // trunc (binop C, X) --> binop (trunc C', X)
-            if matches!(op0, Operand::Constant(_))
-                && let Some(narrow_c) = fold_trunc(c, op0, dest_ty)
-            {
-                let trunc_x = c.create_cast(inst, CastOp::Trunc, op1, dest_ty, Flags::default());
-                return Some(c.replace_with_binop(inst, op, narrow_c, trunc_x, Flags::default()));
-            }
-            // trunc (binop X, C) --> binop (trunc X, C')
-            if matches!(op1, Operand::Constant(_))
-                && let Some(narrow_c) = fold_trunc(c, op1, dest_ty)
-            {
-                let trunc_x = c.create_cast(inst, CastOp::Trunc, op0, dest_ty, Flags::default());
-                return Some(c.replace_with_binop(inst, op, trunc_x, narrow_c, Flags::default()));
-            }
-            let (x0, x1) = {
-                let q = query(c, Some(inst));
-                (ext_from(c, &q, op0, dest_ty), ext_from(c, &q, op1, dest_ty))
-            };
-            // trunc (binop (ext X), Y) --> binop X, (trunc Y)
-            if let Some(x) = x0 {
-                let narrow = c.create_cast(inst, CastOp::Trunc, op1, dest_ty, Flags::default());
-                return Some(c.replace_with_binop(inst, op, x, narrow, Flags::default()));
-            }
-            // trunc (binop Y, (ext X)) --> binop (trunc Y), X
-            if let Some(x) = x1 {
-                let narrow = c.create_cast(inst, CastOp::Trunc, op0, dest_ty, Flags::default());
-                return Some(c.replace_with_binop(inst, op, narrow, x, Flags::default()));
+            if let Some(r) = narrow_math(c, inst, op, op0, op1) {
+                return Some(r);
             }
         }
         BinaryOp::LShr | BinaryOp::AShr => {
@@ -1175,11 +1191,77 @@ fn trunc_to_bool(
     None
 }
 
+/// The element type and count of the integer vector `ty`.
+fn int_vector_of(
+    c: &Combiner,
+    ty: TypeId,
+) -> Option<(TypeId, u32)> {
+    let Type::Vector { element, count } = *c.context.types.get(ty) else { return None };
+    c.context.types.int_bits(element).map(|_| (element, count))
+}
+
+/// `visitTrunc` of integer vectors: `narrowBinOp` (:914, the math and bitwise
+/// logic cases), `shrinkSplatShuffle` (:1000) and `shrinkInsertElt` (:1025).
+/// DEVIATE 1: `commonCastTransforms`, `canEvaluateTruncated`, demanded bits
+/// and the shift cases of `narrowBinOp` are not applied to vectors.
+fn visit_vector_trunc(
+    c: &mut Combiner,
+    inst: InstId,
+) -> Option<Visit> {
+    let src = c.function.instruction(inst).operands[0];
+    let dest_ty = c.function.instruction(inst).ty;
+    let (_, src_count) = int_vector_of(c, c.type_of(src))?;
+    let (dest_element, dest_count) = int_vector_of(c, dest_ty)?;
+    if src_count != dest_count || !shared::has_one_use(c, src) {
+        return None;
+    }
+    let (opcode, operands) = {
+        let (_, one) = query(c, Some(inst)).instruction_of(src)?;
+        (one.opcode.clone(), one.operands.clone())
+    };
+    match (opcode, &operands[..]) {
+        // `narrowBinOp`: no `shouldChangeType` test for vectors.
+        (
+            Opcode::Binary(
+                op @ (BinaryOp::And | BinaryOp::Or | BinaryOp::Xor | BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul),
+            ),
+            &[a, b],
+        ) => narrow_math(c, inst, op, a, b),
+        // trunc (shuf X, poison, SplatMask) --> shuf (trunc X), poison, SplatMask
+        (Opcode::ShuffleVector(mask), &[vector, second]) if c.is_poison_value(second) => {
+            let mut lanes = mask.iter().filter(|&&lane| lane >= 0);
+            let first = lanes.next()?;
+            if !lanes.all(|lane| lane == first) {
+                return None;
+            }
+            let (_, vector_count) = int_vector_of(c, c.type_of(vector))?;
+            if dest_count < vector_count {
+                return None;
+            }
+            let narrow_ty = c.context.types.intern(Type::Vector { element: dest_element, count: vector_count });
+            let narrow = c.create_cast(inst, CastOp::Trunc, vector, narrow_ty, Flags::default());
+            let poison = c.poison(narrow_ty);
+            Some(c.replace_with_new(inst, Opcode::ShuffleVector(mask), dest_ty, vec![narrow, poison], Flags::default()))
+        }
+        // trunc (inselt poison, X, Index) --> inselt poison, (trunc X), Index
+        (Opcode::InsertElement, &[vector, element, index]) if c.is_poison_value(vector) => {
+            let narrow = c.create_cast(inst, CastOp::Trunc, element, dest_element, Flags::default());
+            let poison = c.poison(dest_ty);
+            let operands = vec![poison, narrow, index];
+            Some(c.replace_with_new(inst, Opcode::InsertElement, dest_ty, operands, Flags::default()))
+        }
+        _ => None,
+    }
+}
+
 /// `InstCombinerImpl::visitTrunc` (:1045).
 pub fn visit_trunc(
     c: &mut Combiner,
     inst: InstId,
 ) -> Visit {
+    if let Some(r) = visit_vector_trunc(c, inst) {
+        return r;
+    }
     if too_wide(c, inst) {
         return Visit::None;
     }
@@ -1291,8 +1373,6 @@ pub fn visit_trunc(
     if let Some(r) = narrow_bin_op(c, inst) {
         return r;
     }
-
-    // DEVIATE 1: shrinkSplatShuffle, shrinkInsertElt.
 
     if shared::has_one_use(c, src) && should_change_type(c, src_w, dest_w) {
         // Transform "trunc (shl X, cst)" -> "shl (trunc X), cst" so long as the

@@ -534,12 +534,6 @@ fn vector_rows() -> Vec<(String, Result<(), Option<i64>>)> {
         let [_cpu, kind, name, cost] = line.split(' ').collect::<Vec<_>>()[..] else { panic!("{line}") };
         let parts: Vec<&str> = name.split('.').collect();
         let want = cost.parse::<i64>().unwrap();
-        // `mul <N x i64>` is priced where it is selected (it has no lowering
-        // here: pricing it alone vectorizes a loop that then fails
-        // `CannotSelect(Mul)`).
-        if parts[0] == "mul" && parts[1].ends_with("i64") {
-            continue;
-        }
         let got = if let Some(op) = arith_of(parts[0]) {
             x86.vector_arithmetic_cost(op, vector_ty_of(parts[1]), kind_of(kind))
         } else {
@@ -558,7 +552,8 @@ fn vector_rows() -> Vec<(String, Result<(), Option<i64>>)> {
     rows
 }
 
-/// Every integer vector row of `tti_oracle_vector.txt` but the 64-bit multiply.
+/// Every integer vector row of `tti_oracle_vector.txt`. `mul <N x i64>` was unpriced, so a loop of
+/// them (tile's init) stayed scalar: clocks +153%.
 /// Before: `mul <N x i8>` within 64 bits took the 128-bit row (6, not 4), and a
 /// wide add or sub cost its registers in the latency and size kinds, the pin's
 /// base model one.
@@ -592,4 +587,13 @@ fn a_variable_vector_shift_is_priced_as_the_pins_sse2_rows() {
     assert_eq!(cost(ArithOp::Shl, 32, 4, constant), Some(1));
     assert_eq!(cost(ArithOp::Shl, 8, 16, constant), Some(1));
     assert_eq!(cost(ArithOp::AShr, 8, 16, constant), Some(3));
+}
+
+/// `getMemoryInstructionCost` at VF 1 adds `getAddressComputationCost` of the value type, which x86 leaves at the
+/// base model's 0. It was 1: dot's scalar loop cost 9 (the pin's 7), so a VF 8 loop at 60 was taken and ran twice
+/// as many instructions.
+#[test]
+fn a_scalar_access_adds_no_address_cost_on_x86_64() {
+    let x86 = X86::of_cpu("x86-64").unwrap();
+    assert_eq!(x86.scalar_access_address_cost(CostKind::RecipThroughput), Cost::FREE);
 }

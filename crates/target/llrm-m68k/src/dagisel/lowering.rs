@@ -559,7 +559,13 @@ impl Hooks for M68kLowering {
         }
         let callee = dag.get_target_external_symbol(EVT::I32, name);
         let root = dag.entry_node();
-        let (_chain, values) = super::call::M68kCalling::default().lower_call(dag, root, callee, &outs, &ins);
+        let calling = super::call::M68kCalling::default();
+        // an `f80` routine result has no register: the pin rejects it too ("do
+        // not know how to soften")
+        if !calling.returns_in_registers(dag, &ins) {
+            return None;
+        }
+        let (_chain, values) = calling.lower_call(dag, root, callee, &outs, &ins);
         if values.len() != ins.len() {
             return None;
         }

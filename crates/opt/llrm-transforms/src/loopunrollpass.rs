@@ -1748,12 +1748,16 @@ pub(crate) fn compute_unroll_count(
     if count < 2 { 0 } else { count }
 }
 
-/// `Function::hasOneLiveUse` of `callee`, by scanning the module for its uses
-/// (U5).
+/// `Function::hasOneLiveUse` of `callee`: the bodies' names of it that
+/// `FunctionUses` kept (as the pass began), or where it was not required (a
+/// pass run alone) a scan of the module's bodies for its uses (U5).
 fn has_one_live_use(
     run: &Run,
     callee: GlobalId,
 ) -> bool {
+    if let Some(uses) = run.outer.uses() {
+        return uses.of(callee) == 1;
+    }
     let mut uses = 0usize;
     let mentions = |function: &Function, context: &Context| {
         function

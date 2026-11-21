@@ -319,6 +319,29 @@ impl TargetLowering {
         }
     }
 
+    /// `RTLIB::RINT_F32` and the other libm routines of `RuntimeLibcalls.def`:
+    /// the C library's names, `f` for `float`, none for `double`, `l` for
+    /// the 80-bit `long double`.
+    pub fn set_libm_libcall_names(&mut self) {
+        const LIBM: [(ISD, [&str; 3]); 10] = [
+            (ISD::FRem, ["fmodf", "fmod", "fmodl"]),
+            (ISD::FRint, ["rintf", "rint", "rintl"]),
+            (ISD::FSqrt, ["sqrtf", "sqrt", "sqrtl"]),
+            (ISD::FMA, ["fmaf", "fma", "fmal"]),
+            (ISD::FSin, ["sinf", "sin", "sinl"]),
+            (ISD::FCos, ["cosf", "cos", "cosl"]),
+            (ISD::FExp, ["expf", "exp", "expl"]),
+            (ISD::FExp2, ["exp2f", "exp2", "exp2l"]),
+            (ISD::FLog, ["logf", "log", "logl"]),
+            (ISD::FLog2, ["log2f", "log2", "log2l"]),
+        ];
+        for (op, names) in LIBM {
+            for (vt, name) in [MVT::F32, MVT::F64, MVT::F80].into_iter().zip(names) {
+                self.set_libcall_name(op, vt, name);
+            }
+        }
+    }
+
     /// `setLibcallName` for the integer operation `op` of `vt`.
     pub fn set_libcall_name(
         &mut self,
@@ -1001,8 +1024,8 @@ impl TargetLowering {
         // `movd`.
         t.set_ops(&[ISD::ScalarToVector], &[MVT::V16I8, MVT::V8I16], Action::Custom);
         // `LowerMUL`: `v4i32` without `pmulld` is `pmuludq` on the even and the
-        // odd lanes.
-        t.set_ops(&[ISD::Mul], &[MVT::V4I32, MVT::V16I8], Action::Custom);
+        // odd lanes; `v2i64` without `pmullq` is three `pmuludq`.
+        t.set_ops(&[ISD::Mul], &[MVT::V4I32, MVT::V16I8, MVT::V2I64], Action::Custom);
         // `LowerShift`: every 128-bit integer shift (`psllw`... by a constant
         // or a register, and the sequences for the rest; the 64-bit arithmetic
         // shift, `psraq` being AVX-512, is `srl`/`xor`/`sub`).
@@ -1115,6 +1138,10 @@ impl TargetLowering {
         // no multiply of its own.
         t.set_ops(&[Mul], &[MVT::V8I16, MVT::V4I32, MVT::V2I64, MVT::V4I16, MVT::V2I32], Custom);
         t.set_ops(&[FpToSInt, FpToUInt, SIntToFp, UIntToFp], &words, Custom);
+        // L673..L687: the constrained forms of the scalar conversions are
+        // `Custom` too, and so are `STRICT_FP_ROUND` (L704) and the `f64`
+        // `STRICT_FP_EXTEND` (L876); the `f32` one is `Legal` (L872).
+        t.set_ops(&[StrictFpToSInt, StrictFpToUInt, StrictSIntToFp, StrictUIntToFp], &words, Custom);
         // `AArch64TargetLowering` (L1637): no vector has an extending load or a
         // truncating store of another vector's memory type.
         for vt in MVT::vectors() {
@@ -1255,6 +1282,9 @@ impl TargetLowering {
         t.set_ops(&[FpExtend], &[MVT::F32], Legal);
         t.set_ops(&[FpExtend], &[MVT::F64], Custom);
         t.set_ops(&[FpRound], &floats, Custom);
+        t.set_ops(&[StrictFpExtend], &[MVT::F32], Legal);
+        t.set_ops(&[StrictFpExtend], &[MVT::F64], Custom);
+        t.set_ops(&[StrictFpRound], &floats, Custom);
         t.set_ops(&[FRint, LRint], &floats, Legal);
         t.set_ops(&[BitCast], &[MVT::I16], Custom);
         for vt in floats {
@@ -1475,6 +1505,11 @@ impl TargetLowering {
                 t.set_ops(&[PseudoFMin, PseudoFMax], &[vt], Legal);
                 // (no FSINCOS node here: nothing builds one)
                 t.set_ops(&[FSin, FCos], &[vt], Expand);
+                // The pin's strict `rint` of an SSE value is the routine
+                // `rint`/`rintf` (`roundsd` needs
+                // SSE4.1); `frndint` is the x87's, and this type is not in an
+                // x87 register.
+                t.set_ops(&[StrictFRint], &[vt], Expand);
             }
             t.set_ops(&[FpExtend], &[MVT::F32, MVT::F64], Custom);
         } else {
@@ -1488,6 +1523,7 @@ impl TargetLowering {
         t.set_ops(&[Undef, Poison], &[MVT::F80], Expand);
         t.set_operation_action(FCopySign, MVT::F80, Expand);
         t.keeps_f64_constants = features.sse2;
+        t.set_libm_libcall_names();
         // L764..L860: the x87 loads of 0.0 and 1.0 (`fldz`, `fld1`, and `fchs`)
         // L690..L706: SSE has only +0.0 (`xorps`, `xorpd`)
         for (vt, one, sign) in [
@@ -1524,17 +1560,24 @@ mod tests {
 
     /// `initActions` expands every constrained node: a selector that finds a
     /// `STRICT_FADD` legal by default would emit it unchained. Before the
-    /// default, a target that sets nothing read `Legal`.
+    /// default, a target that sets nothing read `Legal`. arm64 customizes the
+    /// scalar conversions and `STRICT_FP_ROUND` and leaves the rest expanded
+    /// (`AArch64ISelLowering.cpp` L673..L705).
     #[test]
     fn a_constrained_node_is_expanded_until_a_target_makes_it_legal() {
         let t = a64();
-        for op in [ISD::StrictFAdd, ISD::StrictFSqrt, ISD::StrictFpRound, ISD::StrictFMA] {
+        for op in [ISD::StrictFAdd, ISD::StrictFSqrt, ISD::StrictFMA] {
             for vt in [MVT::F32, MVT::F64, MVT::F80] {
                 assert_eq!(t.operation_action(op, EVT::Simple(vt)), Action::Expand, "{op:?} {vt:?}");
             }
         }
+        assert_eq!(t.operation_action(ISD::StrictFpRound, EVT::Simple(MVT::F80)), Action::Expand);
         for op in [ISD::StrictFpToSInt, ISD::StrictUIntToFp] {
-            assert_eq!(t.operation_action(op, EVT::Simple(MVT::I32)), Action::Expand);
+            assert_eq!(t.operation_action(op, EVT::Simple(MVT::I32)), Action::Custom, "{op:?}");
+            assert_eq!(t.operation_action(op, EVT::Simple(MVT::I8)), Action::Expand, "{op:?}");
+        }
+        for vt in [MVT::F32, MVT::F64] {
+            assert_eq!(t.operation_action(ISD::StrictFpRound, EVT::Simple(vt)), Action::Custom, "{vt:?}");
         }
     }
 

@@ -23,7 +23,9 @@
 //! A computed goto (an indirect jump whose every successor has its address
 //! taken) is copied up to ten instructions whatever the size
 //! (`terminatorIsComputedGotoWithSuccessors`): it undoes the factoring of the
-//! `goto *` of an interpreter's dispatch into one block.
+//! `goto *` of an interpreter's dispatch into one block. DEVIATE TL4 (owner
+//! x86-m32-b, exit 2026-11-27): a target may keep it factored at `-Os`, where
+//! bytes come first (m32: QuickrBasic's `exec_loop` +5.1 KB for 138 copies).
 //!
 //! DEVIATE TL1 (owner greedy-subreg, exit 2026-11-27): a tail with a call, a
 //! call's record, a group, a symbol, bytes spread over others, an indirect jump
@@ -84,6 +86,7 @@ fn copied(
     body: &LirBody,
     tail: &Block,
     size: bool,
+    computed_at_size: bool,
     epilogue: usize,
 ) -> Option<Vec<Arc<Insn>>> {
     if can_fall_through(tail) || tail.succ.contains(&tail.at) || !tail.phis.is_empty() {
@@ -98,7 +101,7 @@ fn copied(
     }
     let computed = computed_goto(body, tail);
     let most = if size { 1 } else { SIZE };
-    let most = if computed { most.max(COMPUTED_GOTO_SIZE) } else { most };
+    let most = if computed && (computed_at_size || !size) { most.max(COMPUTED_GOTO_SIZE) } else { most };
     let work = super::jumps::_real(tail);
     let plain = work
         .iter()
@@ -129,10 +132,11 @@ fn tail_duplicate(
     body: &LirBody,
     at: usize,
     size: bool,
+    computed_at_size: bool,
     epilogue: usize,
 ) -> Option<LirBody> {
     let tail = &body.blocks[at];
-    let work = copied(body, tail, size, epilogue)?;
+    let work = copied(body, tail, size, computed_at_size, epilogue)?;
     if is_simple_in(graph, tail) {
         return duplicate_simple(body, at);
     }
@@ -221,8 +225,21 @@ fn tail_duplicate(
 
 /// `tailDuplicateBlocks`: every block but the entry, once, in order.
 pub fn duplicated(
+    body: LirBody,
+    size: bool,
+    saved: &[RegId],
+    free: bool,
+    pointer: RegId,
+) -> LirBody {
+    duplicated_with(body, size, true, saved, free, pointer)
+}
+
+/// [`duplicated`], where `computed_at_size` says a computed goto is copied at
+/// `-Os` too (the pin) or only where bytes do not come first (TL4).
+pub fn duplicated_with(
     mut body: LirBody,
     size: bool,
+    computed_at_size: bool,
     saved: &[RegId],
     free: bool,
     pointer: RegId,
@@ -233,8 +250,8 @@ pub fn duplicated(
     while place < body.blocks.len() {
         let at = body.blocks[place].at;
         // Most blocks fail the cheap tests: no scan of the body for them.
-        if copied(&body, &body.blocks[place], size, epilogue).is_some()
-            && let Some(made) = tail_duplicate(&graph, &body, place, size, epilogue)
+        if copied(&body, &body.blocks[place], size, computed_at_size, epilogue).is_some()
+            && let Some(made) = tail_duplicate(&graph, &body, place, size, computed_at_size, epilogue)
         {
             body = made;
             graph = Preds::of(&body);
@@ -268,6 +285,9 @@ pub(crate) fn saved_count(
 /// The phase: tail duplication after allocation.
 pub struct TailDuplicate {
     pub size: bool,
+    /// A computed goto is copied at `-Os` too (the pin); off where bytes come
+    /// first (DEVIATE TL4, `CpuTable::skip_computed_goto_copies_at_size`).
+    pub computed_at_size: bool,
     /// The callee-saved registers (whole), whether the frame register is free,
     /// and the frame pointer: what `masm::saved_of` reads.
     pub saved: Vec<RegId>,
@@ -288,7 +308,7 @@ impl crate::model::passes::LIRTransform for TailDuplicate {
         &mut self,
         body: LirBody,
     ) -> Result<LirBody, String> {
-        Ok(duplicated(body, self.size, &self.saved, self.free, self.pointer))
+        Ok(duplicated_with(body, self.size, self.computed_at_size, &self.saved, self.free, self.pointer))
     }
 }
 
@@ -514,5 +534,19 @@ mod tests {
     #[test]
     fn test_a_computed_goto_is_copied_at_os() {
         assert!(dup(dispatch(20, 4, true), true).blocks.iter().all(|block| block.at != 99));
+    }
+
+    /// TL4: a target that keeps bytes first (m32: `exec_loop`'s 138 copies are
+    /// +5.1 KB at `-Os`) leaves the dispatch one block at `-Os` only.
+    #[test]
+    fn test_a_target_can_keep_a_computed_goto_factored_at_os() {
+        let kept = |size| {
+            duplicated_with(dispatch(20, 4, true), size, false, &[], false, RegId::default())
+                .blocks
+                .iter()
+                .any(|block| block.at == 99)
+        };
+        assert!(kept(true), "at -Os the dispatch stays one block");
+        assert!(!kept(false), "at -O2 it is copied");
     }
 }

@@ -509,7 +509,7 @@ impl LegalizeHooks for Aarch64Lowering {
         {
             // A constrained compare's calls are ordered on its chain, each
             // after the last; the node's value and that chain are its results.
-            let strict = matches!(dag.opcode(node), ISD::StrictFSetCC | ISD::StrictFSetCCS);
+            let strict = dag.opcode(node).non_strict().is_some();
             let mut chain = if strict { dag.operand(node, 0) } else { dag.entry_node() };
             let mut call = |dag: &mut SelectionDAG, name: &'static str, args: &[SDValue], ret: EVT| {
                 let (value, out) = self.make_lib_call_chained(dag, name, args, ret, false, chain)?;
@@ -606,10 +606,14 @@ impl LegalizeHooks for Aarch64Lowering {
             ISD::FpToSInt | ISD::FpToUInt if dag.value_type(node).is_vector() => {
                 super::vector::lower_vector_fp_to_int(dag, node)
             }
-            ISD::SIntToFp | ISD::UIntToFp => super::lowering::lower_int_to_fp(dag, node),
-            ISD::FpToSInt | ISD::FpToUInt => super::lowering::lower_fp_to_int(dag, node),
-            ISD::FpExtend => super::lowering::lower_fp_extend(dag, node),
-            ISD::FpRound => super::lowering::lower_fp_round(dag, node),
+            ISD::SIntToFp | ISD::UIntToFp | ISD::StrictSIntToFp | ISD::StrictUIntToFp => {
+                super::lowering::lower_int_to_fp(dag, node)
+            }
+            ISD::FpToSInt | ISD::FpToUInt | ISD::StrictFpToSInt | ISD::StrictFpToUInt => {
+                super::lowering::lower_fp_to_int(dag, node)
+            }
+            ISD::FpExtend | ISD::StrictFpExtend => super::lowering::lower_fp_extend(dag, node),
+            ISD::FpRound | ISD::StrictFpRound => super::lowering::lower_fp_round(dag, node),
             ISD::AtomicLoadAnd => super::lowering::lower_atomic_load_and(dag, node),
             // `LowerDYNAMIC_STACKALLOC` answers none off Windows without an
             // inline probe: the legalizer expands it, with the others.
