@@ -1968,6 +1968,14 @@ pub fn recorded(
     if applied.options.atomic_cfg_tidy && applied.options.simplifycfg {
         manager.add(simplifycfg::SimplifyCfg { options: simplifycfg::Options::ATOMIC_TIDY });
     }
+    // DEVIATE LATE-MEMCPYOPT-SIZE (owner x86-m32-b, exit 2026-12-12): the pin
+    // runs MemCpyOpt once, before the sink and the phi folds that leave a
+    // compound literal as `memset(tmp); ...; memcpy(dst, tmp)`; run again, the
+    // copy is a memset of `dst` and `tmp` is dead.
+    if applied.options.prefers_size() && program.target.tti().is_some_and(|tti| tti.late_memcpyopt_at_size()) {
+        manager.add(memcpyopt::MemCpyOpt);
+        manager.add(deadstore::DeadStoreElimination);
+    }
     // Before LSR: a factor of two or a scale the product carries still shows as
     // a shift.
     if applied.options.wanted("fixednarrow") {
