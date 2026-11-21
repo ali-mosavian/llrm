@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/sinkcommon.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/sinkcommon.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/sinkcommon.rs sha256:b8d541c7b608a0558bf79b0b815469b5758b6c0b3b84d959f6600cbcb0c8b67a -->
+<!-- src: crates/opt/llrm-transforms/src/sinkcommon.rs sha256:7e69c4fa4cf2017850a953b1dc80a6c939603c0970f4473e525cf5b96f0d2156 -->
 
 # sinkcommon
 
@@ -54,6 +54,11 @@ The add both arms end with runs once in the join:
 - D5. Priced (M16-KEEPDISP-1, closed): on a target whose accesses fold a constant offset
   (`constant_offset_phi_is_cheap` false) a phi of such offsets is priced
   (`displacement_sink_pays`), not sunk always as the pin does.
+- D6. The pin sinks only after SROA. Where the target sinks at size in the
+  early slots too (`Tuning::sink_common_at_size`), a load or store whose
+  pointer needs a phi and is an alloca's is left (`points_into_alloca`):
+  SROA cannot speculate through a select of allocas (older LLVM kept this
+  guard in `canSinkInstructions`; the pin has dropped it).
 
 ## Used by
 Named by `constanthoisting`, `simplifycfg`, `switcharms`.

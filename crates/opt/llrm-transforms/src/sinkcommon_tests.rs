@@ -488,3 +488,38 @@ e:
     let (changed, after) = sinked(text, 1);
     assert!(!changed, "two saved stores do not pay for a phi of three moves:\n{after}");
 }
+
+/// SROA cannot speculate a store through a select of allocas: sinking the
+/// two arms' stores of `a[i++]` / `a[j++]` (counters still on the stack) made
+/// a select of the counters' addresses that SROA turned into a select of
+/// indices and a reload. QuickrBasic-style `x_mergesort` -Os: +22.6% clocks,
+/// 324 -> 352 B. The same arms through plain pointers are still sunk.
+#[test]
+fn test_a_store_through_a_phi_of_allocas_is_not_sunk() {
+    let arms = |i: &str, j: &str| {
+        format!(
+            "define void @f(i32 %p, ptr %u, ptr %v, i1 %c) {{
+b0:
+  %i = alloca i32
+  %j = alloca i32
+  br i1 %c, label %b1, label %b2
+
+b1:
+  store i32 %p, ptr {i}
+  br label %e
+
+b2:
+  store i32 %p, ptr {j}
+  br label %e
+
+e:
+  ret void
+}}
+"
+        )
+    };
+    let (changed, after) = sinked(&arms("%i", "%j"), 0);
+    assert!(!changed, "the alloca pointers get no phi:\n{after}");
+    let (changed, _) = sinked(&arms("%u", "%v"), 0);
+    assert!(changed, "the same arms through plain pointers are sunk");
+}
