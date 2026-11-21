@@ -1761,6 +1761,8 @@ impl Tti for X86 {
                     Ty::Int(8) => [6, 18, 12, 12],
                     Ty::Int(16) => [1, 5, 1, 1],
                     Ty::Int(32) => [6, 8, 7, 7],
+                    // `v2i64`: 3*pmuludq/2*shift/add and the shuffles.
+                    Ty::Int(64) => [7, 10, 10, 10],
                     _ => return None,
                 };
                 xmm_pieces(ty).map(|pieces| Cost::of(row[kind.index()] * pieces))

@@ -534,12 +534,6 @@ fn vector_rows() -> Vec<(String, Result<(), Option<i64>>)> {
         let [_cpu, kind, name, cost] = line.split(' ').collect::<Vec<_>>()[..] else { panic!("{line}") };
         let parts: Vec<&str> = name.split('.').collect();
         let want = cost.parse::<i64>().unwrap();
-        // `mul <N x i64>` is priced where it is selected (it has no lowering
-        // here: pricing it alone vectorizes a loop that then fails
-        // `CannotSelect(Mul)`).
-        if parts[0] == "mul" && parts[1].ends_with("i64") {
-            continue;
-        }
         let got = if let Some(op) = arith_of(parts[0]) {
             x86.vector_arithmetic_cost(op, vector_ty_of(parts[1]), kind_of(kind))
         } else {
@@ -558,7 +552,8 @@ fn vector_rows() -> Vec<(String, Result<(), Option<i64>>)> {
     rows
 }
 
-/// Every integer vector row of `tti_oracle_vector.txt` but the 64-bit multiply.
+/// Every integer vector row of `tti_oracle_vector.txt`. `mul <N x i64>` was unpriced, so a loop of
+/// them (tile's init) stayed scalar: clocks +153%.
 /// Before: `mul <N x i8>` within 64 bits took the 128-bit row (6, not 4), and a
 /// wide add or sub cost its registers in the latency and size kinds, the pin's
 /// base model one.
