@@ -420,6 +420,10 @@ impl CombineHooks for X86Lowering<'_> {
         true
     }
 
+    fn sub_constant_hoists(&self) -> bool {
+        true
+    }
+
     /// `BuildSDIV`/`BuildUDIV` widen to a legal `i64` multiply for an `i32`
     /// divisor too (`imul rax, rcx, 0xCCCCCCCD; shr rax, 35`), where ours kept
     /// the `div` (an `i32` has no `MULHS` here). Where `i64` is not legal
