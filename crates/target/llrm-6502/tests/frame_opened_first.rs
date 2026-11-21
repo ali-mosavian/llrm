@@ -10,8 +10,11 @@ use std::process::Command;
 mod common;
 use common::pipeline::llrm_cc;
 
-fn assembly(level: &str) -> String {
-    let dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("frame-opened-first");
+fn assembly(
+    level: &str,
+    test: &str,
+) -> String {
+    let dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("frame-opened-first-{test}"));
     std::fs::create_dir_all(&dir).unwrap();
     let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/recursive_stack_args.c");
     let out = dir.join(format!("recursive_stack_args.{level}.s"));
@@ -29,7 +32,7 @@ fn assembly(level: &str) -> String {
 #[test]
 fn nothing_is_stored_through_the_stack_pointer_before_the_frame_is_opened() {
     for level in ["-O1", "-O2", "-Os"] {
-        let text = assembly(level);
+        let text = assembly(level, "stores");
         let body = &text[text.find("\ndeep:").expect("deep")..];
         let body = body.split("\ndeep_b1:").next().unwrap();
         let opened =
@@ -46,7 +49,7 @@ fn nothing_is_stored_through_the_stack_pointer_before_the_frame_is_opened() {
 #[test]
 fn an_argument_on_the_stack_is_read_above_the_saves_and_spills() {
     for level in ["-O1", "-O2", "-Os"] {
-        let text = assembly(level);
+        let text = assembly(level, "reads");
         let body = &text[text.find("\ndeep:").expect("deep")..];
         let body = body.split("\ndeep_b1:").next().unwrap();
         let (_, after) = body.split_once("adc #").expect("no frame adjust (premise)");
