@@ -201,9 +201,10 @@ pub struct TargetLowering {
     /// `isSExtCheaperThanZExt`: `i32` to `i64` where the target extends signed
     /// for free (AArch64's `sxtw` in an addressing mode); no x86 override.
     sext_cheaper_i32_i64: bool,
-    /// `X86TargetLowering::BuildSDIVPow2` builds the `cmov` form of a signed
-    /// divide by a power of two: `Some(is64)`, `i64` too where `is64`.
-    sdiv_pow2_cmov: Option<bool>,
+    /// The types whose signed divide by a power of two `BuildSDIVPow2` builds
+    /// as `buildSDIVPow2WithCMov` (x86: `i16`, `i32`, and `i64` on 64 bits;
+    /// AArch64: `i32`, `i64`).
+    sdiv_pow2_cmov: Vec<MVT>,
     /// DEVIATE WIDE-EQ-BYTES (owner z80, exit 2026-11-30): equality of a wide
     /// integer with a constant is the or of its bytes' xors, not of its
     /// halves' xors. The pin (`IntegerExpandSetCCOperands`) xors the halves;
@@ -247,7 +248,7 @@ impl TargetLowering {
             size_only: false,
             libcall_symbols: HashMap::default(),
             sext_cheaper_i32_i64: false,
-            sdiv_pow2_cmov: None,
+            sdiv_pow2_cmov: Vec::new(),
             byte_equality: false,
             assert_sext_keeps_high: false,
             min_stack_argument_alignment: 1,
@@ -815,21 +816,14 @@ impl TargetLowering {
         self.cmov
     }
 
-    /// Whether `X86TargetLowering::BuildSDIVPow2` makes the `cmov` form for
-    /// `vt`: `canUseCMOV`, and `i16`, `i32` or (`is64Bit`) `i64` (no `i8`).
+    /// Whether the target's `BuildSDIVPow2` makes the `cmov` form for `vt`.
     /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L24348>
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L21097>
     pub fn sdiv_pow2_with_cmov(
         &self,
         vt: EVT,
     ) -> bool {
-        let Some(is64) = self.sdiv_pow2_cmov else {
-            return false;
-        };
-        match vt {
-            EVT::Simple(MVT::I16 | MVT::I32) => true,
-            EVT::Simple(MVT::I64) => is64,
-            _ => false,
-        }
+        matches!(vt, EVT::Simple(mvt) if self.sdiv_pow2_cmov.contains(&mvt))
     }
 
     /// `isOperationLegal`.
@@ -1105,6 +1099,7 @@ impl TargetLowering {
         use ISD::*;
         let mut t = TargetLowering::empty(TargetLoweringInfo::aarch64());
         t.sext_cheaper_i32_i64 = true;
+        t.sdiv_pow2_cmov = vec![MVT::I32, MVT::I64];
         t.init_actions();
         let words = [MVT::I32, MVT::I64];
         // Custom lowerings (`LowerOperation`).
@@ -1343,7 +1338,9 @@ impl TargetLowering {
         use ISD::*;
         let mut t = TargetLowering::empty(types);
         t.cmov = features.cmov;
-        t.sdiv_pow2_cmov = features.cmov.then_some(is64);
+        if features.cmov {
+            t.sdiv_pow2_cmov = if is64 { vec![MVT::I16, MVT::I32, MVT::I64] } else { vec![MVT::I16, MVT::I32] };
+        }
         t.init_actions();
         let ints = [MVT::I8, MVT::I16, MVT::I32];
         // `if (VT == MVT::i64 && !Subtarget.is64Bit()) continue;`
