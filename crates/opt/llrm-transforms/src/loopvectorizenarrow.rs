@@ -15,6 +15,11 @@
 //! depend only on the low bits of their operands, and the result's upper bits
 //! are zero. The `trunc` of the counter is what the vectorizer already widens
 //! to a narrow `vec.ind`.
+//!
+//! # Example
+//! `(i & 15) + 1` with `i: i64` feeding a 16-bit multiply becomes
+//! `sext ((trunc i to i16) & 15) + 1)`: one `<8 x i16>` chain, not a
+//! `<8 x i64>` chain shuffled down to the multiply.
 
 use std::collections::HashMap;
 
