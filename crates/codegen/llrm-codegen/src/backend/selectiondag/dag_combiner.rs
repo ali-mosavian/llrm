@@ -736,10 +736,11 @@ pub trait CombineHooks {
     }
 
     /// `SimplifySetCC`'s `(setcc X, 0|1, eq|ne)` of a boolean known to be 0 or
-    /// 1 ([TargetLowering.cpp#L5185](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/TargetLowering.cpp#L5185)):
+    /// 1
+    /// ([TargetLowering.cpp#L5185](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/TargetLowering.cpp#L5185)):
     /// the boolean itself or, of a compare, its inverse, at any type. The pin
-    /// does it everywhere; DEVIATE (owner m16-b, exit 2026-12-11): only where
-    /// a target says so, until each target's cells are judged with it.
+    /// does it everywhere; DEVIATE (owner m16-b, exit 2026-12-11): only where a
+    /// target says so, until each target's cells are judged with it.
     fn simplify_boolean_compare(&self) -> bool {
         false
     }
@@ -1429,11 +1430,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             && vt.size_in_bits() <= op_type.size_in_bits()
             && (op_type == EVT::I1
                 || self.dag.config().boolean_contents_of(op_type) == super::dag::BooleanContents::ZeroOrOne)
-            && super::known_bits::masked_value_is_zero(
-                self.dag,
-                n0,
-                super::fold::mask(op_type.size_in_bits()) & !1,
-            )
+            && super::known_bits::masked_value_is_zero(self.dag, n0, super::fold::mask(op_type.size_in_bits()) & !1)
         {
             let true_when_true = (cond == CondCode::SetEq) ^ (c1 != 1);
             if true_when_true {

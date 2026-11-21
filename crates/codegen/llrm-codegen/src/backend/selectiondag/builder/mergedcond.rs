@@ -223,7 +223,8 @@ impl Builder<'_> {
         if self.has_opt_size() && tti.splits_merged_conditions_at_optsize() {
             return false;
         }
-        // The target's TTI asks the same at every level (m32; m16 has its table).
+        // The target's TTI asks the same at every level (m32; m16 has its
+        // table).
         if tti.splits_merged_conditions() {
             return false;
         }

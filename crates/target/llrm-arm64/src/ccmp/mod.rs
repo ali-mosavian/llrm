@@ -157,17 +157,15 @@ impl CmpConv {
                         rm_or_imm: CcOperand::Imm5(*imm12 as u8),
                     });
                 }
-                Op::I(
-                    Inst::AddSubShifted {
-                        op: AddSub { subtract, set_flags: true },
-                        width,
-                        rd,
-                        rn,
-                        rm,
-                        shift: crate::mc::inst::Shift::Lsl,
-                        amount: 0,
-                    },
-                ) => {
+                Op::I(Inst::AddSubShifted {
+                    op: AddSub { subtract, set_flags: true },
+                    width,
+                    rd,
+                    rn,
+                    rm,
+                    shift: crate::mc::inst::Shift::Lsl,
+                    amount: 0,
+                }) => {
                     if !is_dead_def(*rd, used) {
                         return None;
                     }
@@ -207,8 +205,10 @@ impl CmpConv {
             if count > BLOCK_INSTR_LIMIT {
                 return false;
             }
-            if matches!(op, Op::Phi { .. } | Op::Call { .. } | Op::Return { .. } | Op::JumpTable { .. } | Op::IndirectJump { .. })
-            {
+            if matches!(
+                op,
+                Op::Phi { .. } | Op::Call { .. } | Op::Return { .. } | Op::JumpTable { .. } | Op::IndirectJump { .. }
+            ) {
                 return false;
             }
             let facts = facts::of(op);
@@ -342,7 +342,8 @@ impl CmpConv {
     ) -> usize {
         let (head, cmp_bb, tail) = (self.head, self.cmp_bb, self.tail);
         let (head_label, cmp_label) = (cfg.labels[head].clone(), cfg.labels[cmp_bb].clone());
-        // `updateTailPHIs`: the cmp block's entries go; the head's are the same.
+        // `updateTailPHIs`: the cmp block's entries go; the head's are the
+        // same.
         for op in &mut function.blocks[tail].ops {
             let Op::Phi { incoming, .. } = op else { break };
             incoming.retain(|(_, from)| *from != cmp_label);
@@ -392,10 +393,9 @@ impl CmpConv {
             let (branch, loc) = terminators.next().expect("the cmp block ends in its cbz");
             let Op::I(Inst::CompareBranch { nonzero, target, .. }) = branch else { unreachable!("a cbz") };
             function.blocks[head].ops.push_at(ccmp(false, width, rt, CcOperand::Imm5(0)), loc);
-            function.blocks[head].ops.push_at(
-                Op::I(Inst::BranchCond { cond: if nonzero { Cond::Ne } else { Cond::Eq }, target }),
-                loc,
-            );
+            function.blocks[head]
+                .ops
+                .push_at(Op::I(Inst::BranchCond { cond: if nonzero { Cond::Ne } else { Cond::Eq }, target }), loc);
         } else {
             let (branch, loc) = terminators.next().expect("the cmp block ends in a branch");
             function.blocks[head].ops.push_at(branch, loc);
@@ -403,10 +403,9 @@ impl CmpConv {
         // The other way out is named: the cmp block may have fallen into it.
         match terminators.next() {
             Some((jump, loc)) => function.blocks[head].ops.push_at(jump, loc),
-            None => function.blocks[head].ops.push(Op::I(Inst::Branch {
-                link: false,
-                target: Target::Label(cfg.labels[self.cmp_falls].clone()),
-            })),
+            None => function.blocks[head]
+                .ops
+                .push(Op::I(Inst::Branch { link: false, target: Target::Label(cfg.labels[self.cmp_falls].clone()) })),
         }
         // The edges: the head goes where the cmp block went.
         cfg.pred[tail].retain(|&p| p != cmp_bb);
