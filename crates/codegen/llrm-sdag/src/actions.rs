@@ -1003,12 +1003,14 @@ impl TargetLowering {
         // No shuffle is selected by pattern: `LegalizeDAG` builds the vector of
         // the lanes the mask picks.
         t.set_ops(&[ISD::VectorShuffle], &[MVT::V16I8, MVT::V8I16, MVT::V4I32, MVT::V2I64], Action::Expand);
+        // `LowerEXTRACT_VECTOR_ELT` of the float lanes (a lane other than 0 is a `pshufd` first).
+        t.set_ops(&[ISD::ExtractElement], &[MVT::V4F32, MVT::V2F64], Action::Custom);
         // The SSE2 float vectors (`v4f32`, `v2f64`): `addps`..`divpd` are patterns; builds, shuffles, lane inserts and
         // extracts take the expansions (a constant is a pool load, the rest goes through the stack). DEVIATE X86V3
         // (owner llrm-target-x86-m64-b, exit 2026-11-24): the pin shuffles (`shufps`, `unpcklpd`, `movss`).
         let float_vectors = [MVT::V4F32, MVT::V2F64];
         t.set_ops(
-            &[ISD::BuildVector, ISD::VectorShuffle, ISD::InsertVectorElt, ISD::ExtractElement, ISD::ScalarToVector],
+            &[ISD::BuildVector, ISD::VectorShuffle, ISD::InsertVectorElt, ISD::ScalarToVector],
             &float_vectors,
             Action::Expand,
         );

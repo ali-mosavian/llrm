@@ -4128,6 +4128,21 @@ fn lower_extract_vector_elt(
 ) -> Option<SDValue> {
     let (vector, index) = (dag.operand(node, 0), dag.operand(node, 1));
     let vt = dag.value_type(vector);
+    // `LowerEXTRACT_VECTOR_ELT` of float lanes: lane 0 is the register's low part (selected as it is); another lane
+    // is brought down by `pshufd` (the pin's `shufps`/`unpckhpd`/`movshdup` pick the same lane).
+    if matches!(vt, EVT::Simple(MVT::V4F32 | MVT::V2F64)) {
+        let lane = u32::try_from(dag.constant(index)?).ok().filter(|&lane| lane < vt.lanes())?;
+        if lane == 0 {
+            return Some(node);
+        }
+        let four = EVT::Simple(MVT::V4I32);
+        let by = dag.get_constant_with(if vt.lanes() == 2 { 0xEE } else { u128::from(0x55 * lane) }, EVT::I8, true, false);
+        let whole = dag.get_node(ISD::BitCast, four, &[vector]);
+        let shuffled = dag.get_node(x86isd::PSHUFD, four, &[whole, by]);
+        let moved = dag.get_node(ISD::BitCast, vt, &[shuffled]);
+        let zero = dag.get_constant(0, EVT::I64);
+        return Some(dag.get_node(ISD::ExtractElement, dag.value_type(node), &[moved, zero]));
+    }
     let lane_vt = integer_lane_of_v128(vt)?;
     let lane = u32::try_from(dag.constant(index)?).ok().filter(|&lane| lane < vt.lanes())?;
     let bits = lane_vt.size_in_bits();

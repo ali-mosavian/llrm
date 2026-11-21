@@ -62,3 +62,36 @@ fn a_vector_float_compare_makes_the_mask_gcc_makes() {
     let text = String::from_utf8_lossy(&asm.stdout);
     assert!(text.contains("cmpps") && text.contains("cmppd"), "no packed compare:\n{text}");
 }
+
+/// sfm16_float_cmp at -O2 stayed scalar on x86-64 (12,036 executed instructions a call against clang's 3,848): the
+/// vector plan needed a priced float compare, mask extension, lane insert and pointer extract, and the pin's rows
+/// were not there. Now the kernel is `cmpps` over four lanes. Needs `LLRM_LLC`.
+#[test]
+fn the_sfm16_float_cmp_kernel_is_cmpps_at_o2() {
+    let llc = std::env::var_os("LLRM_LLC").expect("LLRM_LLC is not set: this test needs it and does not skip");
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("sfm16-cmp-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let asm = dir.join("a.s");
+    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
+        .env("LLRM_CC_TARGET", "x86_64-linux")
+        .env("LLRM_LLC", llc)
+        .args(["-m64", "-fno-pic", "-O2", "-w", "-S", "-Dmain=bench_main_", "-I"])
+        .arg(root.join("bench"))
+        .arg("-I")
+        .arg(root.join("runtime/shared/posix"))
+        .arg("-o")
+        .arg(&asm)
+        .arg(root.join("bench/sfm16_float_cmp/sfm16_float_cmp.c"))
+        .output()
+        .unwrap();
+    assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
+    let text = std::fs::read_to_string(&asm).unwrap();
+    let body = text
+        .split("bench_sfm16_float_cmp proc near")
+        .nth(1)
+        .and_then(|rest| rest.split("bench_sfm16_float_cmp endp").next())
+        .expect("the kernel");
+    assert!(body.contains("cmpps"), "the compare loop stayed scalar:\n{body}");
+}

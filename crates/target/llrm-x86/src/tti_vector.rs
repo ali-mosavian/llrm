@@ -56,6 +56,10 @@ fn kind_name(kind: CostKind) -> &'static str {
 fn type_name(ty: VectorTy) -> Option<String> {
     let lane = match ty.lane {
         Ty::Int(bits @ (1 | 8 | 16 | 32 | 64)) => format!("i{bits}"),
+        // DEVIATE X86V4 (owner x87-cordic-2, exit 2026-12-05): a float vector of half a register (`<2 x float>`) has
+        // no selection (its lane extract, conversions and arithmetic widen to `v4f32` in the pin), so it is not
+        // priced and no planner forms it.
+        Ty::Float if ty.count < 4 => return None,
         Ty::Float => "float".to_owned(),
         Ty::Pointer => "ptr".to_owned(),
         Ty::Double => "double".to_owned(),
@@ -75,6 +79,18 @@ pub(crate) fn cast_cost(
     src: VectorTy,
     cost_kind: CostKind,
 ) -> Option<Cost> {
+    // Only the conversions the selector has (`cvtdq2ps`, `cvtdq2pd`, `cvtpd2ps`): a loop the planner widens must
+    // compile, so a cast it cannot select is not priced.
+    let selected = match (kind, dst.lane, src.lane) {
+        (CastKind::SIToFP, Ty::Float, Ty::Int(32)) => dst.count == 4,
+        (CastKind::SIToFP, Ty::Double, Ty::Int(32)) => matches!(dst.count, 2 | 4),
+        (CastKind::FPTrunc, Ty::Float, Ty::Double) => dst.count == 4,
+        (CastKind::Trunc | CastKind::ZExt | CastKind::SExt, _, _) => true,
+        _ => false,
+    };
+    if !selected {
+        return None;
+    }
     let op = match kind {
         CastKind::Trunc => "trunc",
         CastKind::ZExt => "zext",
@@ -101,7 +117,6 @@ pub(crate) fn float_arithmetic_cost(
         ArithOp::FSub => "fsub",
         ArithOp::FMul => "fmul",
         ArithOp::FDiv => "fdiv",
-        ArithOp::FNeg => "fneg",
         _ => return None,
     };
     lookup(format!("{} {op} {}", kind_name(cost_kind), type_name(ty)?))
