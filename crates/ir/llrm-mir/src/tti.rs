@@ -2212,6 +2212,11 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE OS-TRIAL-CLOCK-CAP: `Tuning::os_trial_clock_cap_percent`.
+    fn os_trial_clock_cap_percent(&self) -> Option<i64> {
+        None
+    }
+
     /// DEVIATE BFS-1: `Tuning::cold_site_ignores_sinks`.
     fn cold_site_ignores_sinks(&self) -> bool {
         false
