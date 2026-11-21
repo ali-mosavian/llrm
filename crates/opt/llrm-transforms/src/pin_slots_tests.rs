@@ -489,6 +489,10 @@ const OURS_ONLY: &[(&str, &str)] = &[
         "early: loop-unroll-and-jam@early",
         "-O3, DEVIATE UJ-EARLY (owner arm64-vec, exit 2026-12-01): gcc's `pass_unroll_jam` runs before its vectorizer; the pin's is after the vectorizer (l.1474)",
     ),
+    (
+        "gcc: loop-split@gcc",
+        "-O3, DEVIATE LSPLIT (owner arm64, exit 2026-11-24): gcc's `split_loop` (loopsplit.rs, #10391); the pin has no such pass",
+    ),
     ("1474: loop-unroll-and-jam@1474", "-O3: the pin's printed list has no unroll-and-jam in this fixture; unverified"),
     (
         "764: loopsimplify@764 + lcssa@764",
