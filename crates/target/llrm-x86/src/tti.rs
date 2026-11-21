@@ -881,6 +881,12 @@ impl Tti for X86 {
         self.vector_values()
     }
 
+    /// With the bandwidth deviation: it widens a chain to a lane count its
+    /// model prices as `<8 x i64>`.
+    fn narrows_induction_chains(&self) -> bool {
+        self.tuning.maximize_vector_bandwidth
+    }
+
     fn inline_threshold_override(&self) -> Option<i64> {
         self.tuning.inline_threshold
     }

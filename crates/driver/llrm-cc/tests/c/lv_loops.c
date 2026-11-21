@@ -91,3 +91,11 @@ long table_fold(const short *table)
         sum = (sum * 31 + table[i]) % 100003;
     return sum;
 }
+
+/* The weight `(i & 15) + 1` of an `i64` counter fits 16 bits: gcc and the narrowed chain keep it in `<8 x i16>`. */
+long weighted_sum(const short *a)
+{
+    long total = 0;
+    for (long i = 0; i < 2000; ++i) total += (long)a[i] * ((i & 15) + 1);
+    return total;
+}
