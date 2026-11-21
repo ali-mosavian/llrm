@@ -435,7 +435,7 @@ impl Peephole {
         } else {
             body
         };
-        let body = popped_arguments(&machinedce::eliminated(body), &self.cpu)?;
+        let body = pushed_pads(&popped_arguments(&machinedce::eliminated(body), &self.cpu)?, &self.cpu);
         let body = pushed_immediates(&body, &self.cpu);
         let body = crate::backend::repbsf::marked(&body, &self.cpu);
         // Last: EBP zeroed above for each cell reading it 32 bits wide, where a
@@ -634,6 +634,71 @@ pub fn popped_arguments(
         blocks.push(block.with_insns(insns));
     }
     Ok(LirBody { blocks, ..body.clone() })
+}
+
+/// A `sub sp,unit`, not the frame's, as a push of a dead scratch register
+/// (`Profile::pushes_pad`): a call's alignment pad before the pushes of its
+/// arguments. The `sub`'s flags must be dead: a push sets none.
+pub fn pushed_pads(
+    body: &LirBody,
+    cpu: &Profile,
+) -> LirBody {
+    let regs = body.regs();
+    let unit = i64::from(body.bits / 8);
+    let arithmetic =
+        RflagsBits::OF | RflagsBits::SF | RflagsBits::ZF | RflagsBits::AF | RflagsBits::CF | RflagsBits::PF;
+    let sp = Loc::Reg(reg(regs.named(regs.stack, unit), unit as u32));
+    let words_of = |one: &Insn| match &one.what {
+        Some(what)
+            if what.op == Operation::Binary
+                && what.name.as_deref() == Some("sub")
+                && what.dests == [sp.clone()]
+                && !one.frame_adjust =>
+        {
+            match what.sources.as_slice() {
+                [first, Loc::Imm(Imm { value, address: None, .. })] if *first == sp && value % unit == 0 => {
+                    value / unit
+                }
+                _ => 0,
+            }
+        }
+        _ => 0,
+    };
+    let mut exits = None;
+    let mut blocks = Vec::new();
+    for block in &body.blocks {
+        if block.insns.iter().all(|one| words_of(one) != 1) {
+            blocks.push(block.clone());
+            continue;
+        }
+        let exits = exits.get_or_insert_with(|| liveness::dead_at_exit(body));
+        let dead_after = regthrash::_dead_after(regs, body.bits, block, exits[&block.at].clone());
+        let mut insns = Vec::with_capacity(block.insns.len());
+        for one in &block.insns {
+            let words = words_of(one);
+            let dead = &dead_after[&id(one)];
+            let scratch = regs.scratch.iter().copied().find(|register| _lanes(regs, *register).is_subset(dead));
+            match scratch {
+                Some(register) if cpu.pushes_pad(words) && Lanes::flags(arithmetic).is_subset(dead) => {
+                    let push = || {
+                        Arc::new(with_what(
+                            one,
+                            semantics(
+                                Operation::Push,
+                                "push",
+                                vec![],
+                                vec![Loc::Reg(reg(regs.named(register, unit), unit as u32))],
+                            ),
+                        ))
+                    };
+                    insns.extend((0..words).map(|_| push()));
+                }
+                _ => insns.push(Arc::clone(one)),
+            }
+        }
+        blocks.push(block.with_insns(insns));
+    }
+    LirBody { blocks, ..body.clone() }
 }
 
 /// Fold a load or transitive extension into one widening instruction
