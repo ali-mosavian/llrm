@@ -101,6 +101,25 @@ class Harness(unittest.TestCase):
 
             self.assertEqual(matrix_kb.kernel_bytes(obj), 8 + 12)
 
+    def test_kernel_bytes_counts_a_jump_table_in_rodata(self):
+        # The table read only .rodata.cst*: a switch that one column keeps as code and the other turns into a
+        # lookup table in .rodata (114 B in the x87 table) made the cell read +75% B on the smaller side.
+        if not shutil.which("aarch64-linux-gnu-as") or not shutil.which("aarch64-linux-gnu-nm"):
+            self.skipTest("aarch64 binutils missing")
+        asm = (
+            ".text\n.globl bench_x\n.type bench_x,%function\nbench_x:\n  mov x0, #1\n  ret\n.size bench_x, .-bench_x\n"
+            ".section .rodata\n.byte 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16\n"
+            ".data\n.word 1\n"
+        )
+        with tempfile.TemporaryDirectory() as out:
+            src, obj = os.path.join(out, "k.s"), os.path.join(out, "k.o")
+            open(src, "w").write(asm)
+            subprocess.run(["aarch64-linux-gnu-as", src, "-o", obj], check=True)
+            sys.path.insert(0, HERE)
+            import matrix_kb
+
+            self.assertEqual(matrix_kb.kernel_bytes(obj), 8 + 16 + 4)
+
     def test_a_source_reads_bench_io_h_from_the_repo_not_from_a_shared_copy(self):
         # Parallel A/B jobs rewrote one copy of bench_io.h beside the output while others compiled: 2 builds
         # in 40 failed with "call to undeclared function 'bench_read'" (stft_fixed O1, jpeg_fixed O3).

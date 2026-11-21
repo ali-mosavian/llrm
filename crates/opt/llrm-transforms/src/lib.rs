@@ -355,6 +355,7 @@ pub mod loopvectorizeaccumulator;
 pub mod loopvectorizeearlyexit;
 pub mod loopvectorizeinterleave;
 pub mod loopvectorizelegality;
+pub mod loopvectorizenarrow;
 pub mod loopvectorizeplan;
 pub mod loopvectorizeskeleton;
 pub mod loopversioning;

@@ -17,6 +17,7 @@ pub use llrm_target::instr as parse;
 pub mod select;
 pub mod sizes;
 pub mod tti;
+mod tti_vector;
 #[cfg(test)]
 mod tti_tests;
 
