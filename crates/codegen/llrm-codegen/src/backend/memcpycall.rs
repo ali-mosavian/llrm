@@ -92,6 +92,7 @@ pub fn expanded(
     symbol: &str,
     inline_variable: bool,
     rep_movsb: bool,
+    rep_movs_speed_max: u64,
 ) -> Result<(), String> {
     let needs = |intrinsic: Intrinsic| matches!(intrinsic, Intrinsic::MemCpy).then_some(());
     // SSE2 is x86-64's baseline, so its pieces are 16 bytes
@@ -107,7 +108,7 @@ pub fn expanded(
         .map_or(4, |layout| if layout.pointer(0).bits == 64 { 16 } else { 4 });
     let mut any = false;
     expansion::expand_calls(module, needs, |context, function, call, ()| {
-        any |= calls(context, function, call, widest, inline_variable, rep_movsb);
+        any |= calls(context, function, call, widest, inline_variable, rep_movsb, rep_movs_speed_max);
         Ok(())
     })?;
     if !any {
@@ -135,7 +136,7 @@ pub fn expanded(
     };
     let reference = module.reference(id);
     expansion::expand_calls(module, needs, |context, function, call, ()| {
-        if !calls(context, function, call, widest, inline_variable, rep_movsb) {
+        if !calls(context, function, call, widest, inline_variable, rep_movsb, rep_movs_speed_max) {
             return Ok(());
         }
         let instruction = function.instruction(call).clone();
@@ -186,6 +187,7 @@ fn calls(
     widest: u64,
     inline_variable: bool,
     rep_movsb: bool,
+    rep_movs_speed_max: u64,
 ) -> bool {
     let instruction = function.instruction(call);
     let Opcode::Call(info) = &instruction.opcode else { return false };
@@ -216,13 +218,15 @@ fn calls(
         if rep_movsb || llrm_mir::memory::has(&function.attrs, "minsize") {
             return false;
         }
-        let limit =
-            if llrm_mir::memory::has(&function.attrs, "optsize") || llrm_mir::memory::has(&function.attrs, "minsize") {
-                4
-            } else {
-                8
-            };
+        let at_size =
+            llrm_mir::memory::has(&function.attrs, "optsize") || llrm_mir::memory::has(&function.attrs, "minsize");
+        let limit = if at_size { 4 } else { 8 };
         if u64::try_from(bytes).is_ok_and(|bytes| inline_widths(bytes, widest, limit, volatile).is_some()) {
+            return false;
+        }
+        // DEVIATE REP-MOVS-SPEED (`Tuning::rep_movs_at_speed_max`): at speed, aligned blocks up to the target's limit
+        // are `rep movs`, as gcc's generic strategy has them.
+        if !at_size && align(0) >= 4 && align(1) >= 4 && bytes <= u128::from(rep_movs_speed_max) {
             return false;
         }
     }

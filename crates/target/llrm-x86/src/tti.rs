@@ -764,6 +764,30 @@ fn intrinsic_price(
 }
 
 impl X86 {
+    /// The cost of an `<8 x i64>` multiply of two sign extensions from 16 bits or fewer, lowered by
+    /// `combine_vector_mul_width` as `pmullw`, `pmulhw`, `punpcklwd`, `punpckhwd` and the extension of the
+    /// 32-bit products.
+    fn widening_multiply_cost(
+        &self,
+        op: ArithOp,
+        ty: VectorTy,
+        args: [Option<ExtOperand>; 2],
+        kind: CostKind,
+    ) -> Option<Cost> {
+        let narrow = |arg: Option<ExtOperand>| {
+            arg.is_some_and(|ext| ext.kind == CastKind::SExt && matches!(ext.src, Ty::Int(bits) if bits <= 16))
+        };
+        if op != ArithOp::Mul || ty.lane != Ty::Int(64) || ty.count != 8 || !self.vector_values() {
+            return None;
+        }
+        if !narrow(args[0]) || !narrow(args[1]) {
+            return None;
+        }
+        let products = VectorTy { lane: Ty::Int(32), count: 8 };
+        let extend = self.vector_cast_cost(CastKind::SExt, ty, products, kind)?;
+        Some(Cost::of(4 + extend.value))
+    }
+
     /// The intrinsic's row of `tti_intrinsics.txt` for this profile: long mode
     /// has its own (`x64`), as the pin's `X64CostTbl` and 64-bit
     /// legalization differ from the 32-bit ones. A `ctlz` or `cttz` called with
@@ -1267,6 +1291,10 @@ impl Tti for X86 {
 
     fn rep_movs_at_size_max(&self) -> u64 {
         self.tuning.rep_movs_at_size_max
+    }
+
+    fn rep_movs_at_speed_max(&self) -> u64 {
+        self.tuning.rep_movs_at_speed_max
     }
 
     fn rep_stos_at_size(&self) -> bool {
@@ -1780,6 +1808,43 @@ impl Tti for X86 {
     /// the operand information has no uniform flag, so the first is priced as
     /// the dearer variable and the second as a uniform constant (DEVIATE
     /// X86V5, owner llrm-target-x86-m64-b, exit 2026-11-27).
+    /// DEVIATE WIDEN-MULT (owner llrm-target-x86-m64-b, exit 2026-11-30): a multiply of two lanes that
+    /// are signed extensions of 16 bits or fewer is lowered as `pmullw`, `pmulhw`, the two unpacks and a
+    /// sign extension of the 32-bit products (gcc's `vect_recog_widen_mult_pattern`); the pin prices the
+    /// `i64` multiply as it is, which `X86TTIImpl` has no row for.
+    fn vector_arithmetic_cost_ext(
+        &self,
+        op: ArithOp,
+        ty: VectorTy,
+        args: [Option<ExtOperand>; 2],
+        kind: CostKind,
+    ) -> Result<Option<Cost>, ()> {
+        if let Some(cost) = self.widening_multiply_cost(op, ty, args, kind) {
+            return Ok(Some(cost));
+        }
+        Ok(self.vector_arithmetic_cost(op, ty, kind))
+    }
+
+    /// The multiplies `widening_multiply_cost` prices: the extensions their operands are leave no
+    /// instruction (the 16-bit lanes are what `pmullw` takes).
+    fn vector_ext_cost(
+        &self,
+        kind: CastKind,
+        dst: VectorTy,
+        src: VectorTy,
+        users: &[ExtUser],
+        cost_kind: CostKind,
+    ) -> Option<Cost> {
+        let widened = |user: &ExtUser| {
+            user.op == Some(ArithOp::Mul)
+                && self.widening_multiply_cost(ArithOp::Mul, dst, user.operands, cost_kind).is_some()
+        };
+        if kind == CastKind::SExt && !users.is_empty() && users.iter().all(widened) {
+            return Some(Cost::FREE);
+        }
+        self.vector_cast_cost(kind, dst, src, cost_kind)
+    }
+
     fn vector_arithmetic_cost_op2(
         &self,
         op: ArithOp,

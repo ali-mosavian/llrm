@@ -1710,3 +1710,74 @@ fn an_m64_v2i64_multiply_is_pmuludq() {
     );
     assert_eq!(pmuludq(&by_small), 2);
 }
+
+/// A product of two `i16` values widened to `i64` (`(long)a[i] * b[i]`, dot's loop) took eight `pmuludq`
+/// ladders for `<8 x i64>`; gcc's `vect_recog_widen_mult_pattern` and the pin's `reduceVMULWidth` (for `i32`) do
+/// it with `pmullw` and `pmulhw` and unpack the halves.
+#[test]
+fn an_m64_vector_multiply_of_shorts_is_pmullw_and_pmulhw() {
+    let layout = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n";
+    let count = |wide: &str, store: &str| -> (usize, usize, usize) {
+        let text = format!(
+            "{layout}define void @f(ptr %p, ptr %q, ptr %r) {{\n  %a = load <8 x i16>, ptr %p, align 16\n  \
+             %b = load <8 x i16>, ptr %q, align 16\n  %x = sext <8 x i16> %a to <8 x {wide}>\n  \
+             %y = sext <8 x i16> %b to <8 x {wide}>\n  %m = mul <8 x {wide}> %x, %y\n  \
+             store <8 x {wide}> %m, ptr %r, align {store}\n  ret void\n}}\n"
+        );
+        let module = llrm_mir::parse::module(&text).expect("parses");
+        let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+        let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+        let named = |name: &str| {
+            let insns = done.body.insns();
+            insns.iter().filter(|i| i.what.as_ref().is_some_and(|w| w.name.as_deref() == Some(name))).count()
+        };
+        (named("pmuludq"), named("pmullw"), named("pmulhw"))
+    };
+    assert_eq!(count("i64", "16"), (0, 1, 1), "i64");
+    assert_eq!(count("i32", "16"), (0, 1, 1), "i32");
+}
+
+/// A splat of a scalar `i16` into `<8 x i16>` (`insertelement` and a zero-mask shuffle, matmul's `a[i][k]`) was
+/// eight word stores and a reload; `LowerBUILD_VECTOR` makes it `movd`, `pshuflw` and `pshufd`.
+#[test]
+fn an_m64_v8i16_splat_is_pshuflw_and_pshufd() {
+    let layout = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n";
+    let text = format!(
+        "{layout}define void @f(ptr %p, i16 %x) {{\n  %i = insertelement <8 x i16> poison, i16 %x, i64 0\n  \
+         %s = shufflevector <8 x i16> %i, <8 x i16> poison, <8 x i32> zeroinitializer\n  \
+         store <8 x i16> %s, ptr %p, align 16\n  ret void\n}}\n"
+    );
+    let module = llrm_mir::parse::module(&text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+    let named = |name: &str| {
+        done.body.insns().iter().filter(|i| i.what.as_ref().is_some_and(|w| w.name.as_deref() == Some(name))).count()
+    };
+    assert_eq!((named("pshuflw"), named("pshufd")), (1, 1));
+    assert!(named("mov") <= 1, "word stores of the splat: {}", named("mov"));
+}
+
+/// A constant 4000-byte `memcpy` at -O2 was a call (gcc's table: 257..8192 bytes is `rep movsq`, and `perf`
+/// counts it as one instruction against the library's 190: scroll O2 +163 instructions a round).
+#[test]
+fn an_m64_constant_memcpy_up_to_8192_bytes_is_rep_movsq_at_o2() {
+    let layout = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n";
+    let names = |bytes: u32| -> Vec<String> {
+        let text = format!(
+            "{layout}declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1)\n\
+             define void @f(ptr align 16 %d, ptr align 16 %s) {{\n  \
+             call void @llvm.memcpy.p0.p0.i64(ptr align 16 %d, ptr align 16 %s, i64 {bytes}, i1 false)\n  ret void\n}}\n"
+        );
+        let module = llrm_mir::parse::module(&text).expect("parses");
+        let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+        let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[("memcpy".to_string(), 0, "memcpy".to_string())]).expect("selected");
+        let insns = done.body.insns();
+        insns.iter().filter_map(|i| i.what.as_ref().and_then(|w| w.name.as_deref()).map(str::to_string)).collect()
+    };
+    let small = names(4000);
+    assert!(small.iter().any(|n| n.starts_with("movs")), "{small:?}");
+    assert!(!small.iter().any(|n| n == "call"), "{small:?}");
+    // Past 8192 bytes gcc calls `memcpy` too.
+    let large = names(9000);
+    assert!(large.iter().any(|n| n == "call"), "{large:?}");
+}
