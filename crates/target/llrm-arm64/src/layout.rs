@@ -674,7 +674,7 @@ pub fn fold(
     optsize: bool,
     exits: &[crate::mc::visit::Reg],
 ) -> Vec<Lowered> {
-    fold_with_odds(blocks, tables, odds, optsize, exits, &[]).0
+    fold_with_odds(blocks, tables, odds, optsize, exits, &[], &[], &[]).0
 }
 
 /// The odds of the edges between blocks by label, as placement read them.
@@ -689,6 +689,8 @@ pub fn fold_with_odds(
     optsize: bool,
     exits: &[crate::mc::visit::Reg],
     dead_ends: &[String],
+    kept: &[String],
+    indirect: &[(String, Vec<String>)],
 ) -> (Vec<Lowered>, Likelihood) {
     if blocks.is_empty() {
         return (blocks, Likelihood::default());
@@ -743,8 +745,13 @@ pub fn fold_with_odds(
     let table_of: HashMap<&str, &Table> = tables.iter().map(|table| (table.base.as_str(), table)).collect();
     // Reachable blocks, in `MachineBlockPlacement`'s order.
     let index: HashMap<&str, usize> = blocks.iter().enumerate().map(|(at, block)| (block.label.as_str(), at)).collect();
+    // The blocks an `indirectbr` may reach, by the block it ends.
+    let indirect: HashMap<&str, &Vec<String>> = indirect.iter().map(|(from, to)| (from.as_str(), to)).collect();
     let successors = |at: usize| -> Vec<usize> {
         let mut out: Vec<usize> = Vec::new();
+        if let Some(targets) = indirect.get(blocks[at].label.as_str()) {
+            out.extend(targets.iter().filter_map(|label| index.get(label.as_str()).copied()));
+        }
         for inst in &blocks[at].insts {
             match inst {
                 // The jump through a table goes to every entry.
@@ -950,7 +957,7 @@ pub fn fold_with_odds(
             likelihood.entry((jumper.clone(), to)).or_insert(odds);
         }
     }
-    crate::taildup::drop_unreferenced(&mut ordered, tables);
+    crate::taildup::drop_unreferenced(&mut ordered, tables, kept);
     crate::taildup::propagate_backward(&mut ordered, exits);
     // A branch to the next block falls through; a conditional branch over an
     // unconditional one is the inverse conditional (`cbz`/`tbz` too).

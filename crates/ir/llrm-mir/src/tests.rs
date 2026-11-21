@@ -142,6 +142,20 @@ fn a_block_address_follows_the_block_that_replaced_it() {
     assert_eq!(function.resolve_block_address(e), Some(s));
 }
 
+/// The -Os trial prices a module whose other functions are cut to their
+/// declarations (`trial::only`); a table naming a block of one of them read
+/// `blocks[0]` of an empty function and panicked ("index out of bounds: the len
+/// is 0", QB's exec.c at -Os). The block is no longer anywhere: LLVM's `1`.
+#[test]
+fn a_block_address_of_a_function_cut_to_its_declaration_names_nothing() {
+    let text = "@t = internal constant [1 x ptr] [ptr blockaddress(@f, %e)]\n\ndefine void @f(ptr %0) {\n  indirectbr ptr %0, [label %e]\n\ne:\n  ret void\n}\n";
+    let mut module = parse::module(text).expect("parses");
+    let (_, function) = module.function_mut("f").expect("@f");
+    let block = function.layout()[1];
+    let cut = function.declaration();
+    assert_eq!(cut.resolve_block_address(block), None);
+}
+
 #[test]
 fn attribute_groups_may_follow_their_use() {
     let text = "declare void @stop(i16) #0\n\nattributes #0 = { noreturn memory(argmem: read) \"kind\"=\"error\" }\n";

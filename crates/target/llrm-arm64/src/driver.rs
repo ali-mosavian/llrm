@@ -369,6 +369,8 @@ fn lower_function(
         optsize,
         &crate::mfunc::returned_registers(&machine),
         &dead_ends,
+        &machine.block_symbols.iter().map(|(label, _)| label.clone()).collect::<Vec<_>>(),
+        &machine.indirect_jumps(),
     );
     let blocks = crate::pairs::fold(blocks);
     let mut blocks = crate::ldst_update::fold(blocks, &crate::mfunc::returned_registers(&machine), &tables);
@@ -385,6 +387,7 @@ fn lower_function(
             pool: machine.pool.clone(),
             unwind: machine.unwind != crate::cfi::Unwind::None,
             dead_ends,
+            block_symbols: machine.block_symbols.clone(),
         },
         written,
     ))
