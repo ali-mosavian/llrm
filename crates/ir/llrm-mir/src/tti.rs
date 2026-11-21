@@ -2569,6 +2569,12 @@ pub trait Tti {
         None
     }
 
+    /// `Tuning::phiopt_one_feeding_statement`: gcc's phiopt arm rule in
+    /// `foldTwoEntryPHINode`; off: the pin's cost bar alone.
+    fn phiopt_one_feeding_statement(&self) -> bool {
+        false
+    }
+
     /// `isHardwareLoopProfitable`: whether the target counts loops in hardware
     /// (`djnz`, `dbra`, `loop`), and how, in `info`. The hook sees no loop
     /// yet: no target reads one (DEVIATE 3 of `hardwareloops`). Off by
