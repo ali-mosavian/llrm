@@ -273,7 +273,7 @@ fn flush(
         while let Some((_, place)) = marks.next_if(|(at, _)| *at <= index) {
             lines.push(Line::Loc(place));
         }
-        lines.push(Line::Inst(inst));
+        lines.push(Line::Inst(crate::ariform::shorten(inst)));
     }
     lines.extend(marks.map(|(_, place)| Line::Loc(place)));
 }

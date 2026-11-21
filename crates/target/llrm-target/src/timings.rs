@@ -94,6 +94,10 @@ pub struct CpuTable {
     /// greedy-subreg, exit 2026-11-12): on at m64 only; m32/m16 stay off until
     /// their sfm16 rows (+16/+4 B) are explained; the pin runs it everywhere.
     pub post_ra_tail_duplicate: bool,
+    /// DEVIATE TL4 (owner x86-m32-b, exit 2026-11-27): the stand-alone tail
+    /// duplication leaves a computed goto's dispatch factored at `-Os`, where
+    /// the pin copies it (up to ten instructions) and bytes come first here.
+    pub skip_computed_goto_copies_at_size: bool,
     /// `BranchFolder::TailMergeBlocks` as the pin runs it: no hot-cycle guard and no three-block minimum
     /// (T14 and D1 of jumps-tailmerge-check.md lifted). Off: the guards stand.
     pub tail_merge_pin_faithful: bool,
@@ -275,6 +279,9 @@ impl Timings {
                     ("scalars", "three_address_to_known_register") => table.three_address_to_known_register = number()? != 0,
                     ("scalars", "share_congruent_phis") => table.share_congruent_phis = number()? != 0,
                     ("scalars", "post_ra_tail_duplicate") => table.post_ra_tail_duplicate = number()? != 0,
+                    ("scalars", "skip_computed_goto_copies_at_size") => {
+                        table.skip_computed_goto_copies_at_size = number()? != 0
+                    }
                     ("scalars", "tail_merge_pin_faithful") => table.tail_merge_pin_faithful = number()? != 0,
                     ("scalars", "unordered_branch_odds") => table.unordered_branch_odds = number()? != 0,
                     ("scalars", "share_literal_stores") => table.share_literal_stores = number()? != 0,

@@ -3419,13 +3419,18 @@ impl Emitter<'_, '_> {
                 let group = node.ops.get(..5).ok_or_else(|| EmitError::Unsupported("a short jump".to_owned()))?;
                 // The table is the displacement, or the base is its address.
                 let base = self.dag.node(group[0]).ops.first().map(|op| self.dag.node(*op).data.clone());
+                // The entry's size: the jump's own, 2, 4 or 8.
+                let entry = match name {
+                    "JMP16m" => 2,
+                    "JMP64m" => 8,
+                    _ => 4,
+                };
                 let table = match (self.dag.node(group[3]).data.clone(), base) {
                     (NodeData::JumpTable(table), _) | (_, Some(NodeData::JumpTable(table))) => table,
                     // Not a switch's table: an `indirectbr` through memory
                     // (`goto *table[i]`), which names the blocks it may reach.
                     _ => {
-                        let width = if name == "JMP64m" { 8 } else { 4 };
-                        let cell = self.cell(group, width)?;
+                        let cell = self.cell(group, entry)?;
                         self.indirect_jump(Loc::Mem(cell));
                         return Ok(Some(()));
                     }
@@ -3437,11 +3442,6 @@ impl Emitter<'_, '_> {
                 let scale = self.constant(group[1])?;
                 let mut address = Addr::new(llrm_codegen::model::ir::Space::Segment, 0);
                 address.index = jump.id;
-                let entry = match name {
-                    "JMP16m" => 2,
-                    "JMP64m" => 8,
-                    _ => 4,
-                };
                 // At real mode a lone register is the address's base, as the
                 // old selector makes it (16-bit addressing has no scale).
                 let (base, index) =
