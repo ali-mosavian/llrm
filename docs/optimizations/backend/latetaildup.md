@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/latetaildup.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/latetaildup.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/latetaildup.rs sha256:9d8f82a4c2c1fbc1487671c073b586ff5435fe0bcb8e497c32bb6cf5a4772de8 -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/latetaildup.rs sha256:2c4d1766e56b793e42082221529d882cd9e05163880018def55e6b776ac2584c -->
 
 # latetaildup
 
@@ -28,7 +28,9 @@ the tail goes when nothing reaches it. A block of one jump is bypassed
 A computed goto (an indirect jump whose every successor has its address
 taken) is copied up to ten instructions whatever the size
 (`terminatorIsComputedGotoWithSuccessors`): it undoes the factoring of the
-`goto *` of an interpreter's dispatch into one block.
+`goto *` of an interpreter's dispatch into one block. DEVIATE TL4 (owner
+x86-m32-b, exit 2026-11-27): a target may keep it factored at `-Os`, where
+bytes come first (m32: QuickrBasic's `exec_loop` +5.1 KB for 138 copies).
 
 DEVIATE TL1 (owner greedy-subreg, exit 2026-11-27): a tail with a call, a
 call's record, a group, a symbol, bytes spread over others, an indirect jump

@@ -150,7 +150,7 @@ So the win for `through-memory` is not caching but asking less or computing less
 | memory-ssa (`accesses`) | a memory-operation edit the pass did not apply through the updater | `preserve_updated` (earlycse) | annotated, call-effects |
 | scev | a changed loop or CFG, or an assumption | loop passes that keep `Loops` (pin: `getLoopPassPreservedAnalyses`) | dominators, loops, assumptions |
 | globals-aa, summaries (module) | a module pass that adds or removes a call or a global store | every function pass | declarations, call-graph |
-| callee-effects, call-registers, global-sizes, type-ancestry, declarations | a module pass | every function pass | module |
+| callee-effects, function-uses, call-registers, global-sizes, type-ancestry, declarations | a module pass | every function pass | module |
 
 The "invalidated by" and "preserved by" cells of the middle rows are read from the `analyses.get::<..>` calls in `manager.rs`, `memoryssa.rs` and `cfg.rs`, not measured.
 

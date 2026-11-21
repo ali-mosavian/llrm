@@ -5,6 +5,7 @@ pub mod abi;
 pub mod addrarith;
 pub mod addrcmp;
 pub mod addrroles;
+pub mod ariform;
 pub mod amiga;
 pub mod atari;
 pub mod callpush;

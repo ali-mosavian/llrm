@@ -112,6 +112,122 @@ pub fn x87_registers_only(bytes: &[u8]) -> bool {
     bytes.len() % 2 == 0 && bytes.chunks(2).all(|pair| (0xd8..=0xdf).contains(&pair[0]) && pair[1] >= 0xc0)
 }
 
+/// Whether `bytes` are x87 instructions (`D8`..`DF`) whose memory operands, if
+/// any, are `[reg]`, `[reg+disp8]` or `[reg+disp32]` through a general register
+/// other than `esp` and `ebp` (ModRM `rm` 4 is a SIB byte, 5 the frame
+/// register), or an absolute `disp32`: QB's `fistpl %0` with `%0` the address
+/// of a local the selector put in a register. Such code names no stack or frame
+/// cell by itself; where the address came from is the selector's business.
+pub fn x87_through_registers_only(bytes: &[u8]) -> bool {
+    let mut at = 0;
+    while at < bytes.len() {
+        let (Some(&op), Some(&modrm)) = (bytes.get(at), bytes.get(at + 1)) else {
+            return false;
+        };
+        if !(0xd8..=0xdf).contains(&op) {
+            return false;
+        }
+        let (mode, rm) = (modrm >> 6, modrm & 7);
+        let extra = match (mode, rm) {
+            (3, _) => 0,
+            (0, 5) => 4,
+            (_, 4 | 5) => return false,
+            (0, _) => 0,
+            (1, _) => 1,
+            _ => 4,
+        };
+        at += 2 + extra;
+    }
+    at == bytes.len() && !bytes.is_empty()
+}
+
+/// Which ModRM field of a two-byte SSE opcode names a general register.
+#[derive(Clone, Copy)]
+enum Gpr {
+    None,
+    Reg,
+    Rm,
+}
+
+/// The `0F xx` opcodes of SSE register-to-register arithmetic, moves, compares
+/// and conversions, with the field that is a general register.
+const SSE_FORMS: [(u8, Gpr); 31] = [
+    (0x10, Gpr::None),
+    (0x11, Gpr::None),
+    (0x14, Gpr::None),
+    (0x15, Gpr::None),
+    (0x28, Gpr::None),
+    (0x29, Gpr::None),
+    (0x2a, Gpr::Rm),
+    (0x2c, Gpr::Reg),
+    (0x2d, Gpr::Reg),
+    (0x2e, Gpr::None),
+    (0x2f, Gpr::None),
+    (0x51, Gpr::None),
+    (0x52, Gpr::None),
+    (0x53, Gpr::None),
+    (0x54, Gpr::None),
+    (0x55, Gpr::None),
+    (0x56, Gpr::None),
+    (0x57, Gpr::None),
+    (0x58, Gpr::None),
+    (0x59, Gpr::None),
+    (0x5a, Gpr::None),
+    (0x5b, Gpr::None),
+    (0x5c, Gpr::None),
+    (0x5d, Gpr::None),
+    (0x5e, Gpr::None),
+    (0x5f, Gpr::None),
+    (0x6e, Gpr::Rm),
+    (0x7e, Gpr::Rm),
+    (0xd6, Gpr::None),
+    (0xef, Gpr::None),
+    (0xeb, Gpr::None),
+];
+
+/// Whether `bytes` are SSE register operations only: `[66|F2|F3] [REX] 0F op
+/// ModRM` with ModRM `C0` and up (no memory operand, no immediate), as an
+/// inline `cvtss2si` is. Such code names no stack or frame cell. It also
+/// leaves the stack and frame registers alone: none of its general-register
+/// fields is `rsp` or `rbp` (a register read or written as a value is what
+/// pins the frame register).
+pub fn sse_registers_only(bytes: &[u8]) -> bool {
+    let mut at = 0;
+    while at < bytes.len() {
+        while matches!(bytes.get(at), Some(0x66 | 0xf2 | 0xf3)) {
+            at += 1;
+        }
+        let rex = bytes.get(at).copied().filter(|byte| (0x40..=0x4f).contains(byte));
+        at += usize::from(rex.is_some());
+        let (Some(0x0f), Some(&op), Some(&modrm)) = (bytes.get(at), bytes.get(at + 1), bytes.get(at + 2)) else {
+            return false;
+        };
+        let Some(&(_, gpr)) = SSE_FORMS.iter().find(|(known, _)| *known == op) else { return false };
+        if modrm < 0xc0 {
+            return false;
+        }
+        let rex = rex.unwrap_or(0x40);
+        let (reg, rm) = ((modrm >> 3) & 7, modrm & 7);
+        let names_stack_or_frame = |field: u8, extended: bool| !extended && matches!(field, 4 | 5);
+        let pinned = match gpr {
+            Gpr::None => false,
+            Gpr::Reg => names_stack_or_frame(reg, rex & 4 != 0),
+            Gpr::Rm => names_stack_or_frame(rm, rex & 1 != 0),
+        };
+        if pinned {
+            return false;
+        }
+        at += 3;
+    }
+    !bytes.is_empty()
+}
+
+/// Whether inline code `bytes` are register operations only, x87 or SSE: it
+/// reads and writes no memory, so it cannot name the stack or the frame.
+pub fn register_operations_only(bytes: &[u8]) -> bool {
+    x87_registers_only(bytes) || x87_through_registers_only(bytes) || sse_registers_only(bytes)
+}
+
 thread_local! {
     /// Blocks `without_frame_register` has looked over to find the blocks it
     /// follows, for a test of its slope.
@@ -376,7 +492,7 @@ pub fn pinned_by(
 
 #[cfg(test)]
 mod tests {
-    use super::x87_registers_only;
+    use super::{sse_registers_only, x87_registers_only, x87_through_registers_only};
 
     /// QB's `fsin`, `fatan` and `fexp2` are bytes the assembler has no
     /// mnemonic for. Any inline code kept the frame register, and a function
@@ -392,5 +508,46 @@ mod tests {
         assert!(!x87_registers_only(&[0xd9, 0x44, 0x24, 0x04]), "fld dword ptr [esp+4]");
         assert!(!x87_registers_only(&[0x90, 0x90]), "nops are not x87");
         assert!(!x87_registers_only(&[0xd9]), "half an instruction");
+    }
+
+    /// QB's `pfpu_rint32` is `__asm__("fistpl %0" : "=m"(v) : "t"(x))`: the
+    /// bytes `fistpl (%eax)`, the local's address in a register. Any inline
+    /// code with a memory operand kept the frame register, so `exec_loop`
+    /// (three of them) had `push ebp; mov ebp, esp` and one general register
+    /// less than the pin's (its state pointer reloaded from the frame at each
+    /// of 6,000 dispatches). Through `esp` or `ebp` it may still name the
+    /// frame.
+    #[test]
+    fn test_x87_through_a_general_register_touches_no_stack_cell() {
+        assert!(x87_through_registers_only(&[0xdb, 0x18]), "fistpl (%eax)");
+        assert!(x87_through_registers_only(&[0xdb, 0x59, 0x08]), "fistpl 8(%ecx)");
+        assert!(x87_through_registers_only(&[0xd9, 0xc9]), "fxch");
+        assert!(x87_through_registers_only(&[0xdb, 0x1d, 1, 0, 0, 0]), "fistpl absolute");
+        assert!(!x87_through_registers_only(&[0xdb, 0x1c, 0x24]), "fistpl (%esp)");
+        assert!(!x87_through_registers_only(&[0xdb, 0x5d, 0xfc]), "fistpl -4(%ebp)");
+        assert!(!x87_through_registers_only(&[0x8b, 0x18]), "not x87");
+        assert!(!x87_through_registers_only(&[0xdb]), "half an instruction");
+        assert!(!x87_through_registers_only(&[0xdb, 0x59]), "a displacement short");
+    }
+
+    /// QB's `pfpu_rint32` is `__asm__("cvtss2si %1, %0")`: bytes of an SSE
+    /// register operation. Any inline code kept the frame register, so
+    /// `exec_loop` (three of them) had `push rbp; mov rbp, rsp` and one general
+    /// register less than the pin's, 450 register copies in the dispatch where
+    /// the pin leaves 68. A byte string of SSE register operations touches no
+    /// stack cell; a memory operand (ModRM below C0), another opcode or `rsp`
+    /// or `rbp` as the general register may.
+    #[test]
+    fn test_sse_register_operations_touch_no_stack_cell() {
+        assert!(sse_registers_only(&[0xf3, 0x0f, 0x2d, 0xc0]), "cvtss2si eax, xmm0");
+        assert!(sse_registers_only(&[0xf2, 0x48, 0x0f, 0x2d, 0xc1]), "cvtsd2si rax, xmm1");
+        assert!(sse_registers_only(&[0xf3, 0x0f, 0x2d, 0xc0, 0xf3, 0x0f, 0x2d, 0xc8]), "two");
+        assert!(!sse_registers_only(&[0xf3, 0x0f, 0x2d, 0x04, 0x24]), "cvtss2si eax, [rsp]");
+        assert!(!sse_registers_only(&[0xf3, 0x0f, 0x2d, 0xe0]), "cvtss2si esp, xmm0");
+        assert!(!sse_registers_only(&[0xf3, 0x0f, 0x2d, 0xe8]), "cvtss2si ebp, xmm0");
+        assert!(sse_registers_only(&[0xf3, 0x44, 0x0f, 0x2d, 0xe0]), "cvtss2si r12d, xmm0");
+        assert!(!sse_registers_only(&[0x0f, 0x01, 0xc0]), "not an SSE opcode of the list");
+        assert!(!sse_registers_only(&[0xf3, 0x0f, 0x2d]), "half an instruction");
+        assert!(!sse_registers_only(&[]));
     }
 }

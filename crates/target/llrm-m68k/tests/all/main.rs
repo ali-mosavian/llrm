@@ -3,6 +3,7 @@
 
 #[path = "../support/mod.rs"]
 mod support;
+mod stacksave_vla_loop;
 
 mod a6_free_without_frame_pointer;
 mod abi_parse_once;
@@ -17,6 +18,7 @@ mod and_mask_movzx;
 mod anyext_copy;
 mod arg_remat;
 mod arg_store;
+mod ari_form;
 mod bfextu_extracts_a_field;
 mod bfffo;
 mod bitcount_libcall;

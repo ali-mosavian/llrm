@@ -68,6 +68,7 @@
 //! LLVM `AsmPrinter::emitGlobalVariable`.
 
 use llrm_mir::datalayout::DataLayout;
+use llrm_mir::module::BlockId;
 use llrm_mir::{CastOp, ConstantExpr, ConstantId, ConstantKind, FloatKind, GlobalId, GlobalKind, Module, Type, TypeId};
 
 use crate::backend::masm::{Datum, Label, Pointer};
@@ -434,6 +435,32 @@ impl Initializer<'_> {
         Ok(())
     }
 
+    /// The near pointer to `block`'s symbol, or, for a block that is gone, its
+    /// image (1) written at once and `None`.
+    fn block_address(
+        &mut self,
+        function: GlobalId,
+        block: BlockId,
+    ) -> Option<Datum> {
+        let bytes = self.layout.pointer(0).bits / 8;
+        let target = match &self.module.global(function).kind {
+            GlobalKind::Function(target) => target.resolve_block_address(block),
+            _ => None,
+        };
+        match target {
+            Some(block) => Some(Datum::Pointer(Pointer {
+                name: crate::backend::blockaddress::symbol(function, block),
+                offset: 0,
+                far: false,
+                bytes,
+            })),
+            None => {
+                self.bytes(&1u64.to_le_bytes()[..bytes as usize]);
+                None
+            }
+        }
+    }
+
     /// A relocated address: a near or far pointer, a segment, or a far
     /// pointer's offset word.
     fn address(
@@ -454,23 +481,19 @@ impl Initializer<'_> {
             // The symbol the function defines at the block (LLVM's
             // `lowerConstant` of a `BlockAddress`); a block that is gone is 1.
             (ConstantKind::Expr(ConstantExpr::BlockAddress { function, block }), Type::Pointer(0)) => {
-                let bytes = self.layout.pointer(0).bits / 8;
-                let target = match &self.module.global(*function).kind {
-                    GlobalKind::Function(target) => target.resolve_block_address(*block),
-                    _ => None,
+                let Some(datum) = self.block_address(*function, *block) else { return Ok(()) };
+                datum
+            }
+            // The same through the cast from the code address space that a
+            // segmented target's label value is: its offset in the segment.
+            (ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::AddrSpaceCast, value }), Type::Pointer(0))
+                if matches!(context.get(*value).kind, ConstantKind::Expr(ConstantExpr::BlockAddress { .. })) =>
+            {
+                let ConstantKind::Expr(ConstantExpr::BlockAddress { function, block }) = &context.get(*value).kind else {
+                    unreachable!("guarded")
                 };
-                match target {
-                    Some(block) => Datum::Pointer(Pointer {
-                        name: crate::backend::blockaddress::symbol(*function, block),
-                        offset: 0,
-                        far: false,
-                        bytes,
-                    }),
-                    None => {
-                        self.bytes(&1u64.to_le_bytes()[..bytes as usize]);
-                        return Ok(());
-                    }
-                }
+                let Some(datum) = self.block_address(*function, *block) else { return Ok(()) };
+                datum
             }
             (_, Type::Pointer(0)) => {
                 let (global, offset) = target(self.module, self.layout, id)?;
