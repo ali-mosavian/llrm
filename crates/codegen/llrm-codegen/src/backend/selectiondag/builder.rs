@@ -13,10 +13,10 @@ use llrm_support::hash::HashMap;
 mod aggregates;
 mod asmcall;
 mod codecall;
-mod strictfp;
 mod mathops;
 mod memops;
 mod mergedcond;
+mod strictfp;
 mod switch;
 mod tailcall;
 use llrm_lir::registers::RegId;
@@ -1883,9 +1883,10 @@ impl Builder<'_> {
     /// What `llrm_mir::atomic::lowered` left for x86: `atomicrmw xchg`, or a
     /// store that must be ordered, is `ATOMIC_SWAP` (the machine locks `xchg`
     /// without asking, so every ordering is met); `add`, `sub`, `and`, `or` and
-    /// `xor` are `ATOMIC_LOAD_*` and a `cmpxchg` is `ATOMIC_CMP_SWAP_WITH_SUCCESS`
-    /// (`visitAtomicRMW`, `visitAtomicCmpXchg`), which the target's tables
-    /// select as `lock xadd`, `lock add` and `lock cmpxchg`.
+    /// `xor` are `ATOMIC_LOAD_*` and a `cmpxchg` is
+    /// `ATOMIC_CMP_SWAP_WITH_SUCCESS` (`visitAtomicRMW`,
+    /// `visitAtomicCmpXchg`), which the target's tables select as `lock
+    /// xadd`, `lock add` and `lock cmpxchg`.
     fn visit_atomic(
         &mut self,
         instruction: &llrm_mir::module::Instruction,
@@ -2215,9 +2216,52 @@ impl Builder<'_> {
             )
             .map_err(|_| Refused("call the convention does not describe"))?
         };
+        // The callee's result as the caller's convention places it, and
+        // whether it is an x87 result nobody reads
+        // (`isEligibleForSiblingCallOpt` asks the pop of such a result
+        // of the call that follows).
+        let as_caller = if hooked || info.calling_convention == self.function.calling_convention {
+            plan.clone()
+        } else {
+            crate::backend::isel::convention_for_abi(
+                self.module,
+                self.layout,
+                self.full_arch()?,
+                first,
+                self.function.calling_convention,
+                result_type,
+                variadic,
+                &arg_types,
+                &info.argument_attrs,
+                self.soft_float(),
+            )
+            .unwrap_or_else(|_| plan.clone())
+        };
+        let unused_x87_result = !hooked
+            && !self.module.context.types.is_void(result_type)
+            && plan.returns.is_empty()
+            && plan.float_result.is_none()
+            && !self.soft_float()
+            && matches!(
+                self.module.context.types.get(result_type),
+                llrm_mir::types::Type::Float(_)
+            )
+            && self
+                .current
+                .and_then(|inst| self.function.instruction(inst).result)
+                .is_none_or(|value| self.function.users(value).is_empty());
         if !hooked
             && let Some(tail) = self.tail_candidate.take()
-            && self.eligible_for_sibling_call(info, &plan, variadic, direct, first, arguments)
+            && self.eligible_for_sibling_call(
+                info,
+                &plan,
+                variadic,
+                direct,
+                first,
+                arguments,
+                &as_caller,
+                unused_x87_result,
+            )
         {
             self.tail_calls.push(tail);
             self.sibcall = self.target.tail_calls;

@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 316 documented, 5 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 318 documented, 5 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -32,6 +32,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | cgpretdup | CodeGenPrepare's `dupRetToEnableTailCallOpts`: a return block that only returns what a tail call produced is copied into the predecessors that end in that call ([CodeGenPrepare.cpp#L3014](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/CodeGenPrepare.cpp#L3014)). | In `cgpaddr`'s run, after the empty blocks go. | [cgpretdup](cgpretdup.md) |
 | cgpselect | A float-to-integer conversion, or a float compare, that only one arm of a select with a constant arm needs, made on that arm's path only. | Named by `cgpaddr`, `pipeline`. | [cgpselect](cgpselect.md) |
 | cgpsinkops | CodeGenPrepare's `tryToSinkFreeOperands`: operands the target folds into an instruction are made again beside it ([CodeGenPrepare.cpp#L7994](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/CodeGenPrepare.cpp#L7994)). | In `cgpaddr`'s run, before `SinkCast`. | [cgpsinkops](cgpsinkops.md) |
+| cgpsplitgep | CodeGenPrepare's `splitLargeGEPOffsets`: the constant-offset GEPs of one base that the target cannot fold into an address are made from one new base. | In `cgpaddr`, for a target whose `shouldConsiderGEPOffsetSplit` is true | [cgpsplitgep](cgpsplitgep.md) |
 | cgpswitch | CodeGenPrepare's `optimizeSwitchType`: a switch on an integer narrower than the target's preferred width is a switch on the extended condition ([CodeGenPrepare.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/CodeGenPrepare.cpp)). | In `cgpaddr`'s run. | [cgpswitch](cgpswitch.md) |
 | cmpopt | CodeGenPrepare's `optimizeCmp` steps after the overflow combines: the power-of-two test of `ctpop` unfolded, an equality made the opposite of the signed compare that dominates it, and compare operands swapped to match a subtract ([CodeGenPrepare.cpp#L8805](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/CodeGenPrepare.cpp#L8805)). | In `cgpaddr`'s run, after the compare sinks. | [cmpopt](cmpopt.md) |
 | cold_chrec | DEVIATE COLD-CHREC: a chained recurrence of an enclosing loop that an inner loop's entry skips on some trips is not expanded for the inner loop. | Named by `lsr_use`, `widen`. | [cold_chrec](cold_chrec.md) |
@@ -167,6 +168,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | hoistcommon | The code that opens the arms of a branch in the same way runs before the branch once: `hoistCommonCodeFromSuccessors` of SimplifyCFG. | Named by `simplifycfg`, `sinkcommon`. | [hoistcommon](hoistcommon.md) |
 | homes | Marks each phi whose value also sits in a memory cell with `!llrm.home`, naming a store of that cell, so a spill of the phi reads the cell instead of paying for a slot. | Last in the module pipeline, after `spares`, so the instruction ids it names | [homes](homes.md) |
 | icmpchain | A branch on an or/and chain of compares of one value with constants, turned into a switch (or a range check): LLVM's [`SimplifyCFGOpt::simplifyBranchOnICmpChain`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L5469) with `ConstantComparesGatherer` ([L580](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L580)). | Named by `simplifycfg`. | [icmpchain](icmpchain.md) |
+| indirectbrexpand | Replace `indirectbr` by a `switch` over block numbers, for a target that has no jump through a register. | Named by `pipeline`. | [indirectbrexpand](indirectbrexpand.md) |
 | indvars | Settles what a loop's counters are worth: a counter's value after its loop becomes a number, and a narrow counter read as a wider index becomes a counter of that width. | In the body pipeline after `promote`. With `-ftree-ch` (not at -Os) it runs | [indvars](indvars.md) |
 | inferalignment | Loads, stores and memory intrinsics get the alignment their pointer is known to have, as LLVM's `InferAlignment`. | Named by `assume_declared_is_scanned_once_per_module`, `pipeline`. | [inferalignment](inferalignment.md) |
 | inferfunctionattrs | A library function the module only declares (`sin`, `strlen`, `memcmp`) gets the attributes the C library promises of it, as LLVM's `InferFunctionAttrsPass`. | Once, at the start of the module pipeline | [inferfunctionattrs](inferfunctionattrs.md) |

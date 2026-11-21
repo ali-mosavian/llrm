@@ -236,6 +236,20 @@ pub trait CombineHooks {
         false
     }
 
+    /// `TargetLowering::isLegalAddressingMode` of a base register and `offset`
+    /// for an access of `bytes`: what
+    /// `reassociationCanBreakAddressingModePattern` asks. DEVIATE SD210:
+    /// the default is x86's, a signed 32-bit displacement; a target with
+    /// another reach states it. Exit 2026-12-10.
+    fn is_legal_address_offset(
+        &self,
+        offset: i128,
+        bytes: u64,
+    ) -> bool {
+        let _ = bytes;
+        i128::from(i32::MIN) <= offset && offset <= i128::from(i32::MAX)
+    }
+
     /// `DataLayout::isLittleEndian`: whether the first of several merged
     /// stores is the least significant part of the joined value.
     fn little_endian(&self) -> bool {
@@ -623,6 +637,19 @@ pub trait CombineHooks {
     /// through a different spill. Exit: 2026-11-20, the x86_16 spill is fixed
     /// (or the fold is judged with it) and this default turns on.
     fn sub_algebra_folds(&self) -> bool {
+        false
+    }
+
+    /// `visitSUB`'s hoists of a one-use constant out of an operand
+    /// (`(x + C) - y` is `(x - y) + C`, `y - (x + C)` is `(y - x) - C`, and
+    /// the two for `x - C` and `C - x`), so the constant meets the final add
+    /// or a displacement. DEVIATE SUBC1 (owner x86-m32-b, 2026-11-21): off
+    /// by default, on at x86 but m16 (16-bit pointers, rows unjudged);
+    /// `pointer` is the DAG's pointer type. Exit: 2026-12-05, every target on.
+    fn sub_constant_hoists(
+        &self,
+        _pointer: EVT,
+    ) -> bool {
         false
     }
 
@@ -4207,9 +4234,61 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
                 return Some(self.dag.get_node(ISD::Xor, vt, &[n1, n0]));
             }
         }
-        let c = self.dag.constant(n1).filter(|_| !self.dag.is_opaque(n1))?;
+        let Some(c) = self.dag.constant(n1).filter(|_| !self.dag.is_opaque(n1)) else {
+            return if self.hooks.sub_constant_hoists(self.dag.config().pointer) {
+                self.hoist_sub_constant(node, vt, n0, n1)
+            } else {
+                None
+            };
+        };
         let negated = self.dag.get_constant(c.wrapping_neg() & super::fold::mask(vt.size_in_bits()), vt);
         Some(self.dag.get_node(ISD::Add, vt, &[n0, negated]))
+    }
+
+    /// The hoists of `visitSUB`
+    /// ([L4522](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L4522)
+    /// to L4548): a one-use `add` or `sub` of a constant under the
+    /// subtraction hands the constant to its result. `y` is no constant here:
+    /// `sub x, C` is already `add x, -C`.
+    fn hoist_sub_constant(
+        &mut self,
+        node: SDValue,
+        vt: EVT,
+        n0: SDValue,
+        n1: SDValue,
+    ) -> Option<SDValue> {
+        let konst = |this: &Self, v: SDValue| this.dag.constant(v).is_some() && !this.dag.is_opaque(v);
+        let (op0, op1) = (self.dag.opcode(n0), self.dag.opcode(n1));
+        // (x + C) - y -> (x - y) + C
+        if op0 == ISD::Add
+            && self.dag.has_one_use(n0.node)
+            && konst(self, self.dag.operand(n0, 1))
+            && !self.reassociation_can_break_addressing_mode_pattern(node, n0, n1)
+        {
+            let (x, c) = (self.dag.operand(n0, 0), self.dag.operand(n0, 1));
+            let sub = self.dag.get_node(ISD::Sub, vt, &[x, n1]);
+            return Some(self.dag.get_node(ISD::Add, vt, &[sub, c]));
+        }
+        // y - (x + C) -> (y - x) - C
+        if op1 == ISD::Add && self.dag.has_one_use(n1.node) && konst(self, self.dag.operand(n1, 1)) {
+            let (x, c) = (self.dag.operand(n1, 0), self.dag.operand(n1, 1));
+            let sub = self.dag.get_node(ISD::Sub, vt, &[n0, x]);
+            return Some(self.dag.get_node(ISD::Sub, vt, &[sub, c]));
+        }
+        if op0 == ISD::Sub && self.dag.has_one_use(n0.node) {
+            let (first, second) = (self.dag.operand(n0, 0), self.dag.operand(n0, 1));
+            // (x - C) - y -> (x - y) - C
+            if konst(self, second) {
+                let sub = self.dag.get_node(ISD::Sub, vt, &[first, n1]);
+                return Some(self.dag.get_node(ISD::Sub, vt, &[sub, second]));
+            }
+            // (C - x) - y -> C - (x + y)
+            if konst(self, first) {
+                let add = self.dag.get_node(ISD::Add, vt, &[second, n1]);
+                return Some(self.dag.get_node(ISD::Sub, vt, &[first, add]));
+            }
+        }
+        None
     }
 
     /// `visitADDO` for `uaddo`
@@ -5223,8 +5302,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         } else {
             return None;
         };
-        // the half multiply reads the low half of `x`: what extends it is dead, unless another user keeps it
-        // (divs of the same `x` then needs the extension and the copy of `x` it leaves is a live range more)
+        // the half multiply reads the low half of `x`: what extends it is dead,
+        // unless another user keeps it (divs of the same `x` then needs
+        // the extension and the copy of `x` it leaves is a live range more)
         let sole_user = self.dag.has_one_use(x.node);
         let x = match self.dag.opcode(x) {
             ISD::SignExtendInReg if sole_user => {
@@ -5233,8 +5313,10 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             }
             ISD::SignExtend if sole_user => {
                 let src = self.dag.operand(x, 0);
-                // a load keeps its own extension: `any_extend (load)` is the zero-extending load (`moveq #0` and
-                // a `move.w` with no post-increment), where `sext (load)` post-increments and `ext.l`s
+                // a load keeps its own extension: `any_extend (load)` is the
+                // zero-extending load (`moveq #0` and
+                // a `move.w` with no post-increment), where `sext (load)`
+                // post-increments and `ext.l`s
                 if self.dag.value_type(src).size_in_bits() >= narrow && self.dag.opcode(src) != ISD::Load {
                     self.dag.get_node(ISD::AnyExtend, vt, &[src])
                 } else {
@@ -5243,13 +5325,14 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             }
             _ => x,
         };
-        // The tied operand is `x`'s low half widened with undefined high bits (a copy of the truncate below), so no
-        // extension of it is made either (the pin's own patterns do the same, `MOVXd32d16`).
+        // The tied operand is `x`'s low half widened with undefined high bits
+        // (a copy of the truncate below), so no extension of it is made
+        // either (the pin's own patterns do the same, `MOVXd32d16`).
         let low = self.dag.get_node(ISD::Truncate, half.half, &[y]);
         let tied_low = self.dag.get_node(ISD::Truncate, half.half, &[x]);
-        // `TargetOpcode::COPY` (no name in the pin's tables): a node the combiner
-        // leaves alone, where an `any_extend` of a load would be formed into an
-        // extending load again.
+        // `TargetOpcode::COPY` (no name in the pin's tables): a node the
+        // combiner leaves alone, where an `any_extend` of a load would
+        // be formed into an extending load again.
         let tied = self.dag.get_node(ISD::Machine(TARGET_OPCODE_COPY), vt, &[tied_low]);
         Some(self.dag.get_node(ISD::Machine(opcode), vt, &[tied, low]))
     }

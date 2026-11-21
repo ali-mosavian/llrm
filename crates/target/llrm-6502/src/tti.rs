@@ -130,6 +130,12 @@ impl Default for Mos6502 {
 }
 
 impl Tti for Mos6502 {
+    /// No jump through a register: `indirectbr` is a `switch` over block
+    /// numbers (`IndirectBrExpandPass`).
+    fn expands_indirect_br(&self) -> bool {
+        true
+    }
+
     fn name(&self) -> &'static str {
         "mos6502"
     }

@@ -106,6 +106,9 @@ mod cgpmemalign_tests;
 pub mod cgpretdup;
 pub mod cgpselect;
 pub mod cgpsinkops;
+pub mod cgpsplitgep;
+#[cfg(test)]
+mod cgpsplitgep_tests;
 pub mod cgpswitch;
 pub mod cmpopt;
 #[cfg(test)]
@@ -277,6 +280,9 @@ pub mod globalmerge;
 pub mod globalopt;
 pub mod globalsra;
 pub mod gvn;
+pub mod indirectbrexpand;
+#[cfg(test)]
+mod indirectbrexpand_tests;
 #[cfg(test)]
 mod gvn_load_tests;
 #[cfg(test)]
