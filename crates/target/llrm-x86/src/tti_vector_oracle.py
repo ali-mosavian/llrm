@@ -42,6 +42,23 @@ for n in LANES:
         others.append((f"fneg {ty} %a{{i}}", ty, ("fneg", f"{n}x{tn}"), ty))
         others.append((f"load {ty}, ptr %p, align {tb // 8}", ty, ("load", f"{n}x{tn}"), ty))
         others.append((f"store {ty} %a{{i}}, ptr %p, align {tb // 8}", ty, ("store", f"{n}x{tn}"), ty))
+# A mask extended to integer lanes (`zext <4 x i1>` of a float compare).
+for n in LANES:
+    for dn, db in INTS.items():
+        if db * n > MAX_BITS:
+            continue
+        for o in ("zext", "sext"):
+            casts.append((o, n, dn, "i1"))
+# The lanes: an `insertelement` into a vector or into poison, an `extractelement`, at each constant index.
+for n in LANES:
+    for tn, tb in FLTS.items():
+        if tb * n > MAX_BITS:
+            continue
+        ty = f"<{n} x {tn}>"
+        for idx in range(n):
+            others.append((f"insertelement {ty} %a{{i}}, {tn} 1.0, i64 {idx}", ty, ("insert", f"{n}x{tn} {idx} vector"), ty))
+            others.append((f"insertelement {ty} poison, {tn} 1.0, i64 {idx}", ty, ("insert", f"{n}x{tn} {idx} poison"), ty))
+            others.append((f"extractelement {ty} %a{{i}}, i64 {idx}", ty, ("extract", f"{n}x{tn} {idx}"), ty))
 lines, names = [], []
 for i, (o, n, dn, sn) in enumerate(casts):
     lines.append(f"  %c{i} = {o} <{n} x {sn}> %a{i} to <{n} x {dn}>")

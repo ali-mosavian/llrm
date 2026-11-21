@@ -375,14 +375,24 @@ fn iteration_cost(
         [register_bits, 2 * register_bits].contains(&bits)
             || (matches!(lane, Ty::Int(_)) && [register_bits / 2, 4 * register_bits, 8 * register_bits].contains(&bits))
     };
-    if backend_limits && vf > 1 && !recipes.iter().flat_map(recipe_lanes).all(taken) {
-        return Err(NotTaken);
+    if backend_limits && vf > 1 {
+        if let Some(lane) = recipes.iter().flat_map(recipe_lanes).find(|&lane| !taken(lane)) {
+            if llrm_support::debug::enabled("loop-vectorize-recipes") {
+                eprintln!("VF {vf} not taken: a vector of {lane:?} lanes is not one or two registers");
+            }
+            return Err(NotTaken);
+        }
     }
     let vector = |ty: Ty| VectorTy { lane: ty, count: vf };
     let address = tti.address_computation_cost(kind).value;
     // A vector price this port lacks: nothing in a lower bound, else the factor
     // has no price.
-    let unknown = |priced: Option<Cost>| priced.or(optimistic.then_some(Cost::FREE)).ok_or(NotTaken);
+    let unknown = |priced: Option<Cost>| {
+        if priced.is_none() && !optimistic && llrm_support::debug::enabled("loop-vectorize-recipes") {
+            eprintln!("VF {vf}: a recipe has no vector price");
+        }
+        priced.or(optimistic.then_some(Cost::FREE)).ok_or(NotTaken)
+    };
     for recipe in recipes {
         let cost = match *recipe {
             Recipe::Load { lane, align } | Recipe::Store { lane, align } => {

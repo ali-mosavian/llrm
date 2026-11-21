@@ -25,7 +25,7 @@
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
-use llrm_mir::tti::{ArithOp, CastKind, Cost, CostKind, MemoryOp, Ty, VectorTy};
+use llrm_mir::tti::{ArithOp, CastKind, Cost, CostKind, LaneOp, MemoryOp, Ty, VectorTy};
 
 const ORACLE: &str = include_str!("tti_vector_oracle.txt");
 
@@ -55,7 +55,7 @@ fn kind_name(kind: CostKind) -> &'static str {
 
 fn type_name(ty: VectorTy) -> Option<String> {
     let lane = match ty.lane {
-        Ty::Int(bits @ (8 | 16 | 32 | 64)) => format!("i{bits}"),
+        Ty::Int(bits @ (1 | 8 | 16 | 32 | 64)) => format!("i{bits}"),
         Ty::Float => "float".to_owned(),
         Ty::Double => "double".to_owned(),
         _ => return None,
@@ -104,6 +104,45 @@ pub(crate) fn float_arithmetic_cost(
         _ => return None,
     };
     lookup(format!("{} {op} {}", kind_name(cost_kind), type_name(ty)?))
+}
+
+/// `getVectorInstrCost` of one `insertelement` or `extractelement` of float lanes at a constant index.
+pub(crate) fn float_lane_cost(
+    op: LaneOp,
+    ty: VectorTy,
+    index: u32,
+    into_poison: bool,
+    cost_kind: CostKind,
+) -> Option<Cost> {
+    if !matches!(ty.lane, Ty::Float | Ty::Double) {
+        return None;
+    }
+    let kind = kind_name(cost_kind);
+    let ty = type_name(ty)?;
+    match op {
+        LaneOp::Insert => lookup(format!("{kind} insert {ty} {index} {}", if into_poison { "poison" } else { "vector" })),
+        LaneOp::Extract => lookup(format!("{kind} extract {ty} {index}")),
+    }
+}
+
+/// `getScalarizationOverhead` of every lane of a float vector (`ForPoisonSrc`: the inserts start from poison, so
+/// lane 0 is free): the lanes' inserts that build it, the extracts that take it apart.
+pub(crate) fn float_scalarization_overhead(
+    ty: VectorTy,
+    insert: bool,
+    extract: bool,
+    cost_kind: CostKind,
+) -> Option<Cost> {
+    let mut total = 0;
+    for index in 0..ty.count {
+        if insert {
+            total += float_lane_cost(LaneOp::Insert, ty, index, true, cost_kind)?.value;
+        }
+        if extract {
+            total += float_lane_cost(LaneOp::Extract, ty, index, false, cost_kind)?.value;
+        }
+    }
+    Some(Cost::of(total))
 }
 
 /// `getMemoryOpCost` of a contiguous vector of float lanes.

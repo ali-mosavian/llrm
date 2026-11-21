@@ -1528,6 +1528,38 @@ impl Tti for X86 {
         self.tuning.add_to_or_disjoint
     }
 
+    /// `getVectorInstrCost` of a float lane at a constant index: the pin's SSE2 row (`tti_vector_oracle.txt`).
+    /// A gather of float lanes is priced by it; integer lanes and a variable index are not priced.
+    fn vector_instr_cost(
+        &self,
+        op: LaneOp,
+        ty: VectorTy,
+        index: Option<u32>,
+        into_poison: bool,
+        _context: VectorInstrContext,
+        cost_kind: CostKind,
+    ) -> Option<Cost> {
+        if !self.vector_values() || !self.tuning.vector_float_costs {
+            return None;
+        }
+        crate::tti_vector::float_lane_cost(op, ty, index?, into_poison, cost_kind)
+    }
+
+    /// `getScalarizationOverhead` of float lanes: the pin's lane rows summed. A gather of a strided load is
+    /// priced by it; other lanes are not priced.
+    fn scalarization_overhead(
+        &self,
+        ty: VectorTy,
+        insert: bool,
+        extract: bool,
+        cost_kind: CostKind,
+    ) -> Option<Cost> {
+        if !self.vector_values() || !self.tuning.vector_float_costs {
+            return None;
+        }
+        crate::tti_vector::float_scalarization_overhead(ty, insert, extract, cost_kind)
+    }
+
     /// The vectors of a compare are selected where the target has vector values
     /// and says so (`Tuning::vector_compares`).
     fn selects_vector_compares(&self) -> bool {
@@ -1842,8 +1874,12 @@ impl Tti for X86 {
         src: VectorTy,
         cost_kind: CostKind,
     ) -> Option<Cost> {
-        // DEVIATE X86V3: a cast to or from float lanes is the pin's row (`tti_vector_oracle.txt`).
-        if matches!(dst.lane, Ty::Float | Ty::Double) || matches!(src.lane, Ty::Float | Ty::Double) {
+        // DEVIATE X86V3: a cast to or from float lanes, and the extension of a mask, are the pin's row
+        // (`tti_vector_oracle.txt`).
+        if matches!(dst.lane, Ty::Float | Ty::Double)
+            || matches!(src.lane, Ty::Float | Ty::Double)
+            || src.lane == Ty::Int(1)
+        {
             if !self.vector_values() || !self.tuning.vector_float_costs {
                 return None;
             }

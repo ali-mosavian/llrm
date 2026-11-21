@@ -228,6 +228,44 @@ throughput sitofp 32xfloat 32xi16 24
 throughput uitofp 32xfloat 32xi16 32
 throughput sitofp 32xfloat 32xi32 24
 throughput uitofp 32xfloat 32xi32 40
+throughput zext 2xi8 2xi1 1
+throughput sext 2xi8 2xi1 2
+throughput zext 2xi16 2xi1 1
+throughput sext 2xi16 2xi1 2
+throughput zext 2xi32 2xi1 1
+throughput sext 2xi32 2xi1 2
+throughput zext 2xi64 2xi1 1
+throughput sext 2xi64 2xi1 2
+throughput zext 4xi8 4xi1 1
+throughput sext 4xi8 4xi1 2
+throughput zext 4xi16 4xi1 1
+throughput sext 4xi16 4xi1 2
+throughput zext 4xi32 4xi1 1
+throughput sext 4xi32 4xi1 2
+throughput zext 4xi64 4xi1 2
+throughput sext 4xi64 4xi1 4
+throughput zext 8xi8 8xi1 1
+throughput sext 8xi8 8xi1 2
+throughput zext 8xi16 8xi1 1
+throughput sext 8xi16 8xi1 2
+throughput zext 8xi32 8xi1 2
+throughput sext 8xi32 8xi1 4
+throughput zext 8xi64 8xi1 8
+throughput sext 8xi64 8xi1 12
+throughput zext 16xi8 16xi1 1
+throughput sext 16xi8 16xi1 2
+throughput zext 16xi16 16xi1 2
+throughput sext 16xi16 16xi1 4
+throughput zext 16xi32 16xi1 8
+throughput sext 16xi32 16xi1 12
+throughput zext 16xi64 16xi1 32
+throughput sext 16xi64 16xi1 32
+throughput zext 32xi8 32xi1 2
+throughput sext 32xi8 32xi1 4
+throughput zext 32xi16 32xi1 4
+throughput sext 32xi16 32xi1 8
+throughput zext 32xi32 32xi1 16
+throughput sext 32xi32 32xi1 24
 throughput fadd 2xfloat 2
 throughput fsub 2xfloat 2
 throughput fmul 2xfloat 2
@@ -291,6 +329,282 @@ throughput fdiv 32xfloat 312
 throughput fneg 32xfloat 8
 throughput load 32xfloat 8
 throughput store 32xfloat 8
+throughput insert 2xfloat 0 vector 1
+throughput insert 2xfloat 0 poison 0
+throughput extract 2xfloat 0 0
+throughput insert 2xfloat 1 vector 2
+throughput insert 2xfloat 1 poison 2
+throughput extract 2xfloat 1 1
+throughput insert 2xdouble 0 vector 1
+throughput insert 2xdouble 0 poison 0
+throughput extract 2xdouble 0 0
+throughput insert 2xdouble 1 vector 1
+throughput insert 2xdouble 1 poison 1
+throughput extract 2xdouble 1 1
+throughput insert 4xfloat 0 vector 1
+throughput insert 4xfloat 0 poison 0
+throughput extract 4xfloat 0 0
+throughput insert 4xfloat 1 vector 2
+throughput insert 4xfloat 1 poison 2
+throughput extract 4xfloat 1 1
+throughput insert 4xfloat 2 vector 2
+throughput insert 4xfloat 2 poison 2
+throughput extract 4xfloat 2 1
+throughput insert 4xfloat 3 vector 2
+throughput insert 4xfloat 3 poison 2
+throughput extract 4xfloat 3 1
+throughput insert 4xdouble 0 vector 1
+throughput insert 4xdouble 0 poison 0
+throughput extract 4xdouble 0 0
+throughput insert 4xdouble 1 vector 1
+throughput insert 4xdouble 1 poison 1
+throughput extract 4xdouble 1 1
+throughput insert 4xdouble 2 vector 1
+throughput insert 4xdouble 2 poison 0
+throughput extract 4xdouble 2 0
+throughput insert 4xdouble 3 vector 1
+throughput insert 4xdouble 3 poison 1
+throughput extract 4xdouble 3 1
+throughput insert 8xfloat 0 vector 1
+throughput insert 8xfloat 0 poison 0
+throughput extract 8xfloat 0 0
+throughput insert 8xfloat 1 vector 2
+throughput insert 8xfloat 1 poison 2
+throughput extract 8xfloat 1 1
+throughput insert 8xfloat 2 vector 2
+throughput insert 8xfloat 2 poison 2
+throughput extract 8xfloat 2 1
+throughput insert 8xfloat 3 vector 2
+throughput insert 8xfloat 3 poison 2
+throughput extract 8xfloat 3 1
+throughput insert 8xfloat 4 vector 1
+throughput insert 8xfloat 4 poison 0
+throughput extract 8xfloat 4 0
+throughput insert 8xfloat 5 vector 2
+throughput insert 8xfloat 5 poison 2
+throughput extract 8xfloat 5 1
+throughput insert 8xfloat 6 vector 2
+throughput insert 8xfloat 6 poison 2
+throughput extract 8xfloat 6 1
+throughput insert 8xfloat 7 vector 2
+throughput insert 8xfloat 7 poison 2
+throughput extract 8xfloat 7 1
+throughput insert 8xdouble 0 vector 1
+throughput insert 8xdouble 0 poison 0
+throughput extract 8xdouble 0 0
+throughput insert 8xdouble 1 vector 1
+throughput insert 8xdouble 1 poison 1
+throughput extract 8xdouble 1 1
+throughput insert 8xdouble 2 vector 1
+throughput insert 8xdouble 2 poison 0
+throughput extract 8xdouble 2 0
+throughput insert 8xdouble 3 vector 1
+throughput insert 8xdouble 3 poison 1
+throughput extract 8xdouble 3 1
+throughput insert 8xdouble 4 vector 1
+throughput insert 8xdouble 4 poison 0
+throughput extract 8xdouble 4 0
+throughput insert 8xdouble 5 vector 1
+throughput insert 8xdouble 5 poison 1
+throughput extract 8xdouble 5 1
+throughput insert 8xdouble 6 vector 1
+throughput insert 8xdouble 6 poison 0
+throughput extract 8xdouble 6 0
+throughput insert 8xdouble 7 vector 1
+throughput insert 8xdouble 7 poison 1
+throughput extract 8xdouble 7 1
+throughput insert 16xfloat 0 vector 1
+throughput insert 16xfloat 0 poison 0
+throughput extract 16xfloat 0 0
+throughput insert 16xfloat 1 vector 2
+throughput insert 16xfloat 1 poison 2
+throughput extract 16xfloat 1 1
+throughput insert 16xfloat 2 vector 2
+throughput insert 16xfloat 2 poison 2
+throughput extract 16xfloat 2 1
+throughput insert 16xfloat 3 vector 2
+throughput insert 16xfloat 3 poison 2
+throughput extract 16xfloat 3 1
+throughput insert 16xfloat 4 vector 1
+throughput insert 16xfloat 4 poison 0
+throughput extract 16xfloat 4 0
+throughput insert 16xfloat 5 vector 2
+throughput insert 16xfloat 5 poison 2
+throughput extract 16xfloat 5 1
+throughput insert 16xfloat 6 vector 2
+throughput insert 16xfloat 6 poison 2
+throughput extract 16xfloat 6 1
+throughput insert 16xfloat 7 vector 2
+throughput insert 16xfloat 7 poison 2
+throughput extract 16xfloat 7 1
+throughput insert 16xfloat 8 vector 1
+throughput insert 16xfloat 8 poison 0
+throughput extract 16xfloat 8 0
+throughput insert 16xfloat 9 vector 2
+throughput insert 16xfloat 9 poison 2
+throughput extract 16xfloat 9 1
+throughput insert 16xfloat 10 vector 2
+throughput insert 16xfloat 10 poison 2
+throughput extract 16xfloat 10 1
+throughput insert 16xfloat 11 vector 2
+throughput insert 16xfloat 11 poison 2
+throughput extract 16xfloat 11 1
+throughput insert 16xfloat 12 vector 1
+throughput insert 16xfloat 12 poison 0
+throughput extract 16xfloat 12 0
+throughput insert 16xfloat 13 vector 2
+throughput insert 16xfloat 13 poison 2
+throughput extract 16xfloat 13 1
+throughput insert 16xfloat 14 vector 2
+throughput insert 16xfloat 14 poison 2
+throughput extract 16xfloat 14 1
+throughput insert 16xfloat 15 vector 2
+throughput insert 16xfloat 15 poison 2
+throughput extract 16xfloat 15 1
+throughput insert 16xdouble 0 vector 1
+throughput insert 16xdouble 0 poison 0
+throughput extract 16xdouble 0 0
+throughput insert 16xdouble 1 vector 1
+throughput insert 16xdouble 1 poison 1
+throughput extract 16xdouble 1 1
+throughput insert 16xdouble 2 vector 1
+throughput insert 16xdouble 2 poison 0
+throughput extract 16xdouble 2 0
+throughput insert 16xdouble 3 vector 1
+throughput insert 16xdouble 3 poison 1
+throughput extract 16xdouble 3 1
+throughput insert 16xdouble 4 vector 1
+throughput insert 16xdouble 4 poison 0
+throughput extract 16xdouble 4 0
+throughput insert 16xdouble 5 vector 1
+throughput insert 16xdouble 5 poison 1
+throughput extract 16xdouble 5 1
+throughput insert 16xdouble 6 vector 1
+throughput insert 16xdouble 6 poison 0
+throughput extract 16xdouble 6 0
+throughput insert 16xdouble 7 vector 1
+throughput insert 16xdouble 7 poison 1
+throughput extract 16xdouble 7 1
+throughput insert 16xdouble 8 vector 1
+throughput insert 16xdouble 8 poison 0
+throughput extract 16xdouble 8 0
+throughput insert 16xdouble 9 vector 1
+throughput insert 16xdouble 9 poison 1
+throughput extract 16xdouble 9 1
+throughput insert 16xdouble 10 vector 1
+throughput insert 16xdouble 10 poison 0
+throughput extract 16xdouble 10 0
+throughput insert 16xdouble 11 vector 1
+throughput insert 16xdouble 11 poison 1
+throughput extract 16xdouble 11 1
+throughput insert 16xdouble 12 vector 1
+throughput insert 16xdouble 12 poison 0
+throughput extract 16xdouble 12 0
+throughput insert 16xdouble 13 vector 1
+throughput insert 16xdouble 13 poison 1
+throughput extract 16xdouble 13 1
+throughput insert 16xdouble 14 vector 1
+throughput insert 16xdouble 14 poison 0
+throughput extract 16xdouble 14 0
+throughput insert 16xdouble 15 vector 1
+throughput insert 16xdouble 15 poison 1
+throughput extract 16xdouble 15 1
+throughput insert 32xfloat 0 vector 1
+throughput insert 32xfloat 0 poison 0
+throughput extract 32xfloat 0 0
+throughput insert 32xfloat 1 vector 2
+throughput insert 32xfloat 1 poison 2
+throughput extract 32xfloat 1 1
+throughput insert 32xfloat 2 vector 2
+throughput insert 32xfloat 2 poison 2
+throughput extract 32xfloat 2 1
+throughput insert 32xfloat 3 vector 2
+throughput insert 32xfloat 3 poison 2
+throughput extract 32xfloat 3 1
+throughput insert 32xfloat 4 vector 1
+throughput insert 32xfloat 4 poison 0
+throughput extract 32xfloat 4 0
+throughput insert 32xfloat 5 vector 2
+throughput insert 32xfloat 5 poison 2
+throughput extract 32xfloat 5 1
+throughput insert 32xfloat 6 vector 2
+throughput insert 32xfloat 6 poison 2
+throughput extract 32xfloat 6 1
+throughput insert 32xfloat 7 vector 2
+throughput insert 32xfloat 7 poison 2
+throughput extract 32xfloat 7 1
+throughput insert 32xfloat 8 vector 1
+throughput insert 32xfloat 8 poison 0
+throughput extract 32xfloat 8 0
+throughput insert 32xfloat 9 vector 2
+throughput insert 32xfloat 9 poison 2
+throughput extract 32xfloat 9 1
+throughput insert 32xfloat 10 vector 2
+throughput insert 32xfloat 10 poison 2
+throughput extract 32xfloat 10 1
+throughput insert 32xfloat 11 vector 2
+throughput insert 32xfloat 11 poison 2
+throughput extract 32xfloat 11 1
+throughput insert 32xfloat 12 vector 1
+throughput insert 32xfloat 12 poison 0
+throughput extract 32xfloat 12 0
+throughput insert 32xfloat 13 vector 2
+throughput insert 32xfloat 13 poison 2
+throughput extract 32xfloat 13 1
+throughput insert 32xfloat 14 vector 2
+throughput insert 32xfloat 14 poison 2
+throughput extract 32xfloat 14 1
+throughput insert 32xfloat 15 vector 2
+throughput insert 32xfloat 15 poison 2
+throughput extract 32xfloat 15 1
+throughput insert 32xfloat 16 vector 1
+throughput insert 32xfloat 16 poison 0
+throughput extract 32xfloat 16 0
+throughput insert 32xfloat 17 vector 2
+throughput insert 32xfloat 17 poison 2
+throughput extract 32xfloat 17 1
+throughput insert 32xfloat 18 vector 2
+throughput insert 32xfloat 18 poison 2
+throughput extract 32xfloat 18 1
+throughput insert 32xfloat 19 vector 2
+throughput insert 32xfloat 19 poison 2
+throughput extract 32xfloat 19 1
+throughput insert 32xfloat 20 vector 1
+throughput insert 32xfloat 20 poison 0
+throughput extract 32xfloat 20 0
+throughput insert 32xfloat 21 vector 2
+throughput insert 32xfloat 21 poison 2
+throughput extract 32xfloat 21 1
+throughput insert 32xfloat 22 vector 2
+throughput insert 32xfloat 22 poison 2
+throughput extract 32xfloat 22 1
+throughput insert 32xfloat 23 vector 2
+throughput insert 32xfloat 23 poison 2
+throughput extract 32xfloat 23 1
+throughput insert 32xfloat 24 vector 1
+throughput insert 32xfloat 24 poison 0
+throughput extract 32xfloat 24 0
+throughput insert 32xfloat 25 vector 2
+throughput insert 32xfloat 25 poison 2
+throughput extract 32xfloat 25 1
+throughput insert 32xfloat 26 vector 2
+throughput insert 32xfloat 26 poison 2
+throughput extract 32xfloat 26 1
+throughput insert 32xfloat 27 vector 2
+throughput insert 32xfloat 27 poison 2
+throughput extract 32xfloat 27 1
+throughput insert 32xfloat 28 vector 1
+throughput insert 32xfloat 28 poison 0
+throughput extract 32xfloat 28 0
+throughput insert 32xfloat 29 vector 2
+throughput insert 32xfloat 29 poison 2
+throughput extract 32xfloat 29 1
+throughput insert 32xfloat 30 vector 2
+throughput insert 32xfloat 30 poison 2
+throughput extract 32xfloat 30 1
+throughput insert 32xfloat 31 vector 2
+throughput insert 32xfloat 31 poison 2
+throughput extract 32xfloat 31 1
 latency trunc 2xi8 2xi16 1
 latency trunc 2xi8 2xi32 1
 latency trunc 2xi8 2xi64 1
@@ -520,6 +834,44 @@ latency sitofp 32xfloat 32xi16 8
 latency uitofp 32xfloat 32xi16 8
 latency sitofp 32xfloat 32xi32 8
 latency uitofp 32xfloat 32xi32 8
+latency zext 2xi8 2xi1 1
+latency sext 2xi8 2xi1 1
+latency zext 2xi16 2xi1 1
+latency sext 2xi16 2xi1 1
+latency zext 2xi32 2xi1 1
+latency sext 2xi32 2xi1 1
+latency zext 2xi64 2xi1 1
+latency sext 2xi64 2xi1 1
+latency zext 4xi8 4xi1 1
+latency sext 4xi8 4xi1 1
+latency zext 4xi16 4xi1 1
+latency sext 4xi16 4xi1 1
+latency zext 4xi32 4xi1 1
+latency sext 4xi32 4xi1 1
+latency zext 4xi64 4xi1 2
+latency sext 4xi64 4xi1 2
+latency zext 8xi8 8xi1 1
+latency sext 8xi8 8xi1 1
+latency zext 8xi16 8xi1 1
+latency sext 8xi16 8xi1 1
+latency zext 8xi32 8xi1 2
+latency sext 8xi32 8xi1 2
+latency zext 8xi64 8xi1 4
+latency sext 8xi64 8xi1 4
+latency zext 16xi8 16xi1 1
+latency sext 16xi8 16xi1 1
+latency zext 16xi16 16xi1 2
+latency sext 16xi16 16xi1 2
+latency zext 16xi32 16xi1 4
+latency sext 16xi32 16xi1 4
+latency zext 16xi64 16xi1 8
+latency sext 16xi64 16xi1 8
+latency zext 32xi8 32xi1 1
+latency sext 32xi8 32xi1 1
+latency zext 32xi16 32xi1 4
+latency sext 32xi16 32xi1 4
+latency zext 32xi32 32xi1 8
+latency sext 32xi32 32xi1 8
 latency fadd 2xfloat 3
 latency fsub 2xfloat 3
 latency fmul 2xfloat 5
@@ -583,6 +935,282 @@ latency fdiv 32xfloat 312
 latency fneg 32xfloat 8
 latency load 32xfloat 4
 latency store 32xfloat 1
+latency insert 2xfloat 0 vector 1
+latency insert 2xfloat 0 poison 0
+latency extract 2xfloat 0 0
+latency insert 2xfloat 1 vector 2
+latency insert 2xfloat 1 poison 2
+latency extract 2xfloat 1 1
+latency insert 2xdouble 0 vector 1
+latency insert 2xdouble 0 poison 0
+latency extract 2xdouble 0 0
+latency insert 2xdouble 1 vector 1
+latency insert 2xdouble 1 poison 1
+latency extract 2xdouble 1 1
+latency insert 4xfloat 0 vector 1
+latency insert 4xfloat 0 poison 0
+latency extract 4xfloat 0 0
+latency insert 4xfloat 1 vector 2
+latency insert 4xfloat 1 poison 2
+latency extract 4xfloat 1 1
+latency insert 4xfloat 2 vector 2
+latency insert 4xfloat 2 poison 2
+latency extract 4xfloat 2 1
+latency insert 4xfloat 3 vector 2
+latency insert 4xfloat 3 poison 2
+latency extract 4xfloat 3 1
+latency insert 4xdouble 0 vector 1
+latency insert 4xdouble 0 poison 0
+latency extract 4xdouble 0 0
+latency insert 4xdouble 1 vector 1
+latency insert 4xdouble 1 poison 1
+latency extract 4xdouble 1 1
+latency insert 4xdouble 2 vector 1
+latency insert 4xdouble 2 poison 0
+latency extract 4xdouble 2 0
+latency insert 4xdouble 3 vector 1
+latency insert 4xdouble 3 poison 1
+latency extract 4xdouble 3 1
+latency insert 8xfloat 0 vector 1
+latency insert 8xfloat 0 poison 0
+latency extract 8xfloat 0 0
+latency insert 8xfloat 1 vector 2
+latency insert 8xfloat 1 poison 2
+latency extract 8xfloat 1 1
+latency insert 8xfloat 2 vector 2
+latency insert 8xfloat 2 poison 2
+latency extract 8xfloat 2 1
+latency insert 8xfloat 3 vector 2
+latency insert 8xfloat 3 poison 2
+latency extract 8xfloat 3 1
+latency insert 8xfloat 4 vector 1
+latency insert 8xfloat 4 poison 0
+latency extract 8xfloat 4 0
+latency insert 8xfloat 5 vector 2
+latency insert 8xfloat 5 poison 2
+latency extract 8xfloat 5 1
+latency insert 8xfloat 6 vector 2
+latency insert 8xfloat 6 poison 2
+latency extract 8xfloat 6 1
+latency insert 8xfloat 7 vector 2
+latency insert 8xfloat 7 poison 2
+latency extract 8xfloat 7 1
+latency insert 8xdouble 0 vector 1
+latency insert 8xdouble 0 poison 0
+latency extract 8xdouble 0 0
+latency insert 8xdouble 1 vector 1
+latency insert 8xdouble 1 poison 1
+latency extract 8xdouble 1 1
+latency insert 8xdouble 2 vector 1
+latency insert 8xdouble 2 poison 0
+latency extract 8xdouble 2 0
+latency insert 8xdouble 3 vector 1
+latency insert 8xdouble 3 poison 1
+latency extract 8xdouble 3 1
+latency insert 8xdouble 4 vector 1
+latency insert 8xdouble 4 poison 0
+latency extract 8xdouble 4 0
+latency insert 8xdouble 5 vector 1
+latency insert 8xdouble 5 poison 1
+latency extract 8xdouble 5 1
+latency insert 8xdouble 6 vector 1
+latency insert 8xdouble 6 poison 0
+latency extract 8xdouble 6 0
+latency insert 8xdouble 7 vector 1
+latency insert 8xdouble 7 poison 1
+latency extract 8xdouble 7 1
+latency insert 16xfloat 0 vector 1
+latency insert 16xfloat 0 poison 0
+latency extract 16xfloat 0 0
+latency insert 16xfloat 1 vector 2
+latency insert 16xfloat 1 poison 2
+latency extract 16xfloat 1 1
+latency insert 16xfloat 2 vector 2
+latency insert 16xfloat 2 poison 2
+latency extract 16xfloat 2 1
+latency insert 16xfloat 3 vector 2
+latency insert 16xfloat 3 poison 2
+latency extract 16xfloat 3 1
+latency insert 16xfloat 4 vector 1
+latency insert 16xfloat 4 poison 0
+latency extract 16xfloat 4 0
+latency insert 16xfloat 5 vector 2
+latency insert 16xfloat 5 poison 2
+latency extract 16xfloat 5 1
+latency insert 16xfloat 6 vector 2
+latency insert 16xfloat 6 poison 2
+latency extract 16xfloat 6 1
+latency insert 16xfloat 7 vector 2
+latency insert 16xfloat 7 poison 2
+latency extract 16xfloat 7 1
+latency insert 16xfloat 8 vector 1
+latency insert 16xfloat 8 poison 0
+latency extract 16xfloat 8 0
+latency insert 16xfloat 9 vector 2
+latency insert 16xfloat 9 poison 2
+latency extract 16xfloat 9 1
+latency insert 16xfloat 10 vector 2
+latency insert 16xfloat 10 poison 2
+latency extract 16xfloat 10 1
+latency insert 16xfloat 11 vector 2
+latency insert 16xfloat 11 poison 2
+latency extract 16xfloat 11 1
+latency insert 16xfloat 12 vector 1
+latency insert 16xfloat 12 poison 0
+latency extract 16xfloat 12 0
+latency insert 16xfloat 13 vector 2
+latency insert 16xfloat 13 poison 2
+latency extract 16xfloat 13 1
+latency insert 16xfloat 14 vector 2
+latency insert 16xfloat 14 poison 2
+latency extract 16xfloat 14 1
+latency insert 16xfloat 15 vector 2
+latency insert 16xfloat 15 poison 2
+latency extract 16xfloat 15 1
+latency insert 16xdouble 0 vector 1
+latency insert 16xdouble 0 poison 0
+latency extract 16xdouble 0 0
+latency insert 16xdouble 1 vector 1
+latency insert 16xdouble 1 poison 1
+latency extract 16xdouble 1 1
+latency insert 16xdouble 2 vector 1
+latency insert 16xdouble 2 poison 0
+latency extract 16xdouble 2 0
+latency insert 16xdouble 3 vector 1
+latency insert 16xdouble 3 poison 1
+latency extract 16xdouble 3 1
+latency insert 16xdouble 4 vector 1
+latency insert 16xdouble 4 poison 0
+latency extract 16xdouble 4 0
+latency insert 16xdouble 5 vector 1
+latency insert 16xdouble 5 poison 1
+latency extract 16xdouble 5 1
+latency insert 16xdouble 6 vector 1
+latency insert 16xdouble 6 poison 0
+latency extract 16xdouble 6 0
+latency insert 16xdouble 7 vector 1
+latency insert 16xdouble 7 poison 1
+latency extract 16xdouble 7 1
+latency insert 16xdouble 8 vector 1
+latency insert 16xdouble 8 poison 0
+latency extract 16xdouble 8 0
+latency insert 16xdouble 9 vector 1
+latency insert 16xdouble 9 poison 1
+latency extract 16xdouble 9 1
+latency insert 16xdouble 10 vector 1
+latency insert 16xdouble 10 poison 0
+latency extract 16xdouble 10 0
+latency insert 16xdouble 11 vector 1
+latency insert 16xdouble 11 poison 1
+latency extract 16xdouble 11 1
+latency insert 16xdouble 12 vector 1
+latency insert 16xdouble 12 poison 0
+latency extract 16xdouble 12 0
+latency insert 16xdouble 13 vector 1
+latency insert 16xdouble 13 poison 1
+latency extract 16xdouble 13 1
+latency insert 16xdouble 14 vector 1
+latency insert 16xdouble 14 poison 0
+latency extract 16xdouble 14 0
+latency insert 16xdouble 15 vector 1
+latency insert 16xdouble 15 poison 1
+latency extract 16xdouble 15 1
+latency insert 32xfloat 0 vector 1
+latency insert 32xfloat 0 poison 0
+latency extract 32xfloat 0 0
+latency insert 32xfloat 1 vector 2
+latency insert 32xfloat 1 poison 2
+latency extract 32xfloat 1 1
+latency insert 32xfloat 2 vector 2
+latency insert 32xfloat 2 poison 2
+latency extract 32xfloat 2 1
+latency insert 32xfloat 3 vector 2
+latency insert 32xfloat 3 poison 2
+latency extract 32xfloat 3 1
+latency insert 32xfloat 4 vector 1
+latency insert 32xfloat 4 poison 0
+latency extract 32xfloat 4 0
+latency insert 32xfloat 5 vector 2
+latency insert 32xfloat 5 poison 2
+latency extract 32xfloat 5 1
+latency insert 32xfloat 6 vector 2
+latency insert 32xfloat 6 poison 2
+latency extract 32xfloat 6 1
+latency insert 32xfloat 7 vector 2
+latency insert 32xfloat 7 poison 2
+latency extract 32xfloat 7 1
+latency insert 32xfloat 8 vector 1
+latency insert 32xfloat 8 poison 0
+latency extract 32xfloat 8 0
+latency insert 32xfloat 9 vector 2
+latency insert 32xfloat 9 poison 2
+latency extract 32xfloat 9 1
+latency insert 32xfloat 10 vector 2
+latency insert 32xfloat 10 poison 2
+latency extract 32xfloat 10 1
+latency insert 32xfloat 11 vector 2
+latency insert 32xfloat 11 poison 2
+latency extract 32xfloat 11 1
+latency insert 32xfloat 12 vector 1
+latency insert 32xfloat 12 poison 0
+latency extract 32xfloat 12 0
+latency insert 32xfloat 13 vector 2
+latency insert 32xfloat 13 poison 2
+latency extract 32xfloat 13 1
+latency insert 32xfloat 14 vector 2
+latency insert 32xfloat 14 poison 2
+latency extract 32xfloat 14 1
+latency insert 32xfloat 15 vector 2
+latency insert 32xfloat 15 poison 2
+latency extract 32xfloat 15 1
+latency insert 32xfloat 16 vector 1
+latency insert 32xfloat 16 poison 0
+latency extract 32xfloat 16 0
+latency insert 32xfloat 17 vector 2
+latency insert 32xfloat 17 poison 2
+latency extract 32xfloat 17 1
+latency insert 32xfloat 18 vector 2
+latency insert 32xfloat 18 poison 2
+latency extract 32xfloat 18 1
+latency insert 32xfloat 19 vector 2
+latency insert 32xfloat 19 poison 2
+latency extract 32xfloat 19 1
+latency insert 32xfloat 20 vector 1
+latency insert 32xfloat 20 poison 0
+latency extract 32xfloat 20 0
+latency insert 32xfloat 21 vector 2
+latency insert 32xfloat 21 poison 2
+latency extract 32xfloat 21 1
+latency insert 32xfloat 22 vector 2
+latency insert 32xfloat 22 poison 2
+latency extract 32xfloat 22 1
+latency insert 32xfloat 23 vector 2
+latency insert 32xfloat 23 poison 2
+latency extract 32xfloat 23 1
+latency insert 32xfloat 24 vector 1
+latency insert 32xfloat 24 poison 0
+latency extract 32xfloat 24 0
+latency insert 32xfloat 25 vector 2
+latency insert 32xfloat 25 poison 2
+latency extract 32xfloat 25 1
+latency insert 32xfloat 26 vector 2
+latency insert 32xfloat 26 poison 2
+latency extract 32xfloat 26 1
+latency insert 32xfloat 27 vector 2
+latency insert 32xfloat 27 poison 2
+latency extract 32xfloat 27 1
+latency insert 32xfloat 28 vector 1
+latency insert 32xfloat 28 poison 0
+latency extract 32xfloat 28 0
+latency insert 32xfloat 29 vector 2
+latency insert 32xfloat 29 poison 2
+latency extract 32xfloat 29 1
+latency insert 32xfloat 30 vector 2
+latency insert 32xfloat 30 poison 2
+latency extract 32xfloat 30 1
+latency insert 32xfloat 31 vector 2
+latency insert 32xfloat 31 poison 2
+latency extract 32xfloat 31 1
 code-size trunc 2xi8 2xi16 1
 code-size trunc 2xi8 2xi32 1
 code-size trunc 2xi8 2xi64 1
@@ -812,6 +1440,44 @@ code-size sitofp 32xfloat 32xi16 8
 code-size uitofp 32xfloat 32xi16 8
 code-size sitofp 32xfloat 32xi32 8
 code-size uitofp 32xfloat 32xi32 8
+code-size zext 2xi8 2xi1 1
+code-size sext 2xi8 2xi1 1
+code-size zext 2xi16 2xi1 1
+code-size sext 2xi16 2xi1 1
+code-size zext 2xi32 2xi1 1
+code-size sext 2xi32 2xi1 1
+code-size zext 2xi64 2xi1 1
+code-size sext 2xi64 2xi1 1
+code-size zext 4xi8 4xi1 1
+code-size sext 4xi8 4xi1 1
+code-size zext 4xi16 4xi1 1
+code-size sext 4xi16 4xi1 1
+code-size zext 4xi32 4xi1 1
+code-size sext 4xi32 4xi1 1
+code-size zext 4xi64 4xi1 2
+code-size sext 4xi64 4xi1 2
+code-size zext 8xi8 8xi1 1
+code-size sext 8xi8 8xi1 1
+code-size zext 8xi16 8xi1 1
+code-size sext 8xi16 8xi1 1
+code-size zext 8xi32 8xi1 2
+code-size sext 8xi32 8xi1 2
+code-size zext 8xi64 8xi1 4
+code-size sext 8xi64 8xi1 4
+code-size zext 16xi8 16xi1 1
+code-size sext 16xi8 16xi1 1
+code-size zext 16xi16 16xi1 2
+code-size sext 16xi16 16xi1 2
+code-size zext 16xi32 16xi1 4
+code-size sext 16xi32 16xi1 4
+code-size zext 16xi64 16xi1 8
+code-size sext 16xi64 16xi1 8
+code-size zext 32xi8 32xi1 1
+code-size sext 32xi8 32xi1 1
+code-size zext 32xi16 32xi1 4
+code-size sext 32xi16 32xi1 4
+code-size zext 32xi32 32xi1 8
+code-size sext 32xi32 32xi1 8
 code-size fadd 2xfloat 1
 code-size fsub 2xfloat 1
 code-size fmul 2xfloat 1
@@ -875,6 +1541,282 @@ code-size fdiv 32xfloat 8
 code-size fneg 32xfloat 8
 code-size load 32xfloat 1
 code-size store 32xfloat 1
+code-size insert 2xfloat 0 vector 1
+code-size insert 2xfloat 0 poison 0
+code-size extract 2xfloat 0 0
+code-size insert 2xfloat 1 vector 2
+code-size insert 2xfloat 1 poison 2
+code-size extract 2xfloat 1 1
+code-size insert 2xdouble 0 vector 1
+code-size insert 2xdouble 0 poison 0
+code-size extract 2xdouble 0 0
+code-size insert 2xdouble 1 vector 1
+code-size insert 2xdouble 1 poison 1
+code-size extract 2xdouble 1 1
+code-size insert 4xfloat 0 vector 1
+code-size insert 4xfloat 0 poison 0
+code-size extract 4xfloat 0 0
+code-size insert 4xfloat 1 vector 2
+code-size insert 4xfloat 1 poison 2
+code-size extract 4xfloat 1 1
+code-size insert 4xfloat 2 vector 2
+code-size insert 4xfloat 2 poison 2
+code-size extract 4xfloat 2 1
+code-size insert 4xfloat 3 vector 2
+code-size insert 4xfloat 3 poison 2
+code-size extract 4xfloat 3 1
+code-size insert 4xdouble 0 vector 1
+code-size insert 4xdouble 0 poison 0
+code-size extract 4xdouble 0 0
+code-size insert 4xdouble 1 vector 1
+code-size insert 4xdouble 1 poison 1
+code-size extract 4xdouble 1 1
+code-size insert 4xdouble 2 vector 1
+code-size insert 4xdouble 2 poison 0
+code-size extract 4xdouble 2 0
+code-size insert 4xdouble 3 vector 1
+code-size insert 4xdouble 3 poison 1
+code-size extract 4xdouble 3 1
+code-size insert 8xfloat 0 vector 1
+code-size insert 8xfloat 0 poison 0
+code-size extract 8xfloat 0 0
+code-size insert 8xfloat 1 vector 2
+code-size insert 8xfloat 1 poison 2
+code-size extract 8xfloat 1 1
+code-size insert 8xfloat 2 vector 2
+code-size insert 8xfloat 2 poison 2
+code-size extract 8xfloat 2 1
+code-size insert 8xfloat 3 vector 2
+code-size insert 8xfloat 3 poison 2
+code-size extract 8xfloat 3 1
+code-size insert 8xfloat 4 vector 1
+code-size insert 8xfloat 4 poison 0
+code-size extract 8xfloat 4 0
+code-size insert 8xfloat 5 vector 2
+code-size insert 8xfloat 5 poison 2
+code-size extract 8xfloat 5 1
+code-size insert 8xfloat 6 vector 2
+code-size insert 8xfloat 6 poison 2
+code-size extract 8xfloat 6 1
+code-size insert 8xfloat 7 vector 2
+code-size insert 8xfloat 7 poison 2
+code-size extract 8xfloat 7 1
+code-size insert 8xdouble 0 vector 1
+code-size insert 8xdouble 0 poison 0
+code-size extract 8xdouble 0 0
+code-size insert 8xdouble 1 vector 1
+code-size insert 8xdouble 1 poison 1
+code-size extract 8xdouble 1 1
+code-size insert 8xdouble 2 vector 1
+code-size insert 8xdouble 2 poison 0
+code-size extract 8xdouble 2 0
+code-size insert 8xdouble 3 vector 1
+code-size insert 8xdouble 3 poison 1
+code-size extract 8xdouble 3 1
+code-size insert 8xdouble 4 vector 1
+code-size insert 8xdouble 4 poison 0
+code-size extract 8xdouble 4 0
+code-size insert 8xdouble 5 vector 1
+code-size insert 8xdouble 5 poison 1
+code-size extract 8xdouble 5 1
+code-size insert 8xdouble 6 vector 1
+code-size insert 8xdouble 6 poison 0
+code-size extract 8xdouble 6 0
+code-size insert 8xdouble 7 vector 1
+code-size insert 8xdouble 7 poison 1
+code-size extract 8xdouble 7 1
+code-size insert 16xfloat 0 vector 1
+code-size insert 16xfloat 0 poison 0
+code-size extract 16xfloat 0 0
+code-size insert 16xfloat 1 vector 2
+code-size insert 16xfloat 1 poison 2
+code-size extract 16xfloat 1 1
+code-size insert 16xfloat 2 vector 2
+code-size insert 16xfloat 2 poison 2
+code-size extract 16xfloat 2 1
+code-size insert 16xfloat 3 vector 2
+code-size insert 16xfloat 3 poison 2
+code-size extract 16xfloat 3 1
+code-size insert 16xfloat 4 vector 1
+code-size insert 16xfloat 4 poison 0
+code-size extract 16xfloat 4 0
+code-size insert 16xfloat 5 vector 2
+code-size insert 16xfloat 5 poison 2
+code-size extract 16xfloat 5 1
+code-size insert 16xfloat 6 vector 2
+code-size insert 16xfloat 6 poison 2
+code-size extract 16xfloat 6 1
+code-size insert 16xfloat 7 vector 2
+code-size insert 16xfloat 7 poison 2
+code-size extract 16xfloat 7 1
+code-size insert 16xfloat 8 vector 1
+code-size insert 16xfloat 8 poison 0
+code-size extract 16xfloat 8 0
+code-size insert 16xfloat 9 vector 2
+code-size insert 16xfloat 9 poison 2
+code-size extract 16xfloat 9 1
+code-size insert 16xfloat 10 vector 2
+code-size insert 16xfloat 10 poison 2
+code-size extract 16xfloat 10 1
+code-size insert 16xfloat 11 vector 2
+code-size insert 16xfloat 11 poison 2
+code-size extract 16xfloat 11 1
+code-size insert 16xfloat 12 vector 1
+code-size insert 16xfloat 12 poison 0
+code-size extract 16xfloat 12 0
+code-size insert 16xfloat 13 vector 2
+code-size insert 16xfloat 13 poison 2
+code-size extract 16xfloat 13 1
+code-size insert 16xfloat 14 vector 2
+code-size insert 16xfloat 14 poison 2
+code-size extract 16xfloat 14 1
+code-size insert 16xfloat 15 vector 2
+code-size insert 16xfloat 15 poison 2
+code-size extract 16xfloat 15 1
+code-size insert 16xdouble 0 vector 1
+code-size insert 16xdouble 0 poison 0
+code-size extract 16xdouble 0 0
+code-size insert 16xdouble 1 vector 1
+code-size insert 16xdouble 1 poison 1
+code-size extract 16xdouble 1 1
+code-size insert 16xdouble 2 vector 1
+code-size insert 16xdouble 2 poison 0
+code-size extract 16xdouble 2 0
+code-size insert 16xdouble 3 vector 1
+code-size insert 16xdouble 3 poison 1
+code-size extract 16xdouble 3 1
+code-size insert 16xdouble 4 vector 1
+code-size insert 16xdouble 4 poison 0
+code-size extract 16xdouble 4 0
+code-size insert 16xdouble 5 vector 1
+code-size insert 16xdouble 5 poison 1
+code-size extract 16xdouble 5 1
+code-size insert 16xdouble 6 vector 1
+code-size insert 16xdouble 6 poison 0
+code-size extract 16xdouble 6 0
+code-size insert 16xdouble 7 vector 1
+code-size insert 16xdouble 7 poison 1
+code-size extract 16xdouble 7 1
+code-size insert 16xdouble 8 vector 1
+code-size insert 16xdouble 8 poison 0
+code-size extract 16xdouble 8 0
+code-size insert 16xdouble 9 vector 1
+code-size insert 16xdouble 9 poison 1
+code-size extract 16xdouble 9 1
+code-size insert 16xdouble 10 vector 1
+code-size insert 16xdouble 10 poison 0
+code-size extract 16xdouble 10 0
+code-size insert 16xdouble 11 vector 1
+code-size insert 16xdouble 11 poison 1
+code-size extract 16xdouble 11 1
+code-size insert 16xdouble 12 vector 1
+code-size insert 16xdouble 12 poison 0
+code-size extract 16xdouble 12 0
+code-size insert 16xdouble 13 vector 1
+code-size insert 16xdouble 13 poison 1
+code-size extract 16xdouble 13 1
+code-size insert 16xdouble 14 vector 1
+code-size insert 16xdouble 14 poison 0
+code-size extract 16xdouble 14 0
+code-size insert 16xdouble 15 vector 1
+code-size insert 16xdouble 15 poison 1
+code-size extract 16xdouble 15 1
+code-size insert 32xfloat 0 vector 1
+code-size insert 32xfloat 0 poison 0
+code-size extract 32xfloat 0 0
+code-size insert 32xfloat 1 vector 2
+code-size insert 32xfloat 1 poison 2
+code-size extract 32xfloat 1 1
+code-size insert 32xfloat 2 vector 2
+code-size insert 32xfloat 2 poison 2
+code-size extract 32xfloat 2 1
+code-size insert 32xfloat 3 vector 2
+code-size insert 32xfloat 3 poison 2
+code-size extract 32xfloat 3 1
+code-size insert 32xfloat 4 vector 1
+code-size insert 32xfloat 4 poison 0
+code-size extract 32xfloat 4 0
+code-size insert 32xfloat 5 vector 2
+code-size insert 32xfloat 5 poison 2
+code-size extract 32xfloat 5 1
+code-size insert 32xfloat 6 vector 2
+code-size insert 32xfloat 6 poison 2
+code-size extract 32xfloat 6 1
+code-size insert 32xfloat 7 vector 2
+code-size insert 32xfloat 7 poison 2
+code-size extract 32xfloat 7 1
+code-size insert 32xfloat 8 vector 1
+code-size insert 32xfloat 8 poison 0
+code-size extract 32xfloat 8 0
+code-size insert 32xfloat 9 vector 2
+code-size insert 32xfloat 9 poison 2
+code-size extract 32xfloat 9 1
+code-size insert 32xfloat 10 vector 2
+code-size insert 32xfloat 10 poison 2
+code-size extract 32xfloat 10 1
+code-size insert 32xfloat 11 vector 2
+code-size insert 32xfloat 11 poison 2
+code-size extract 32xfloat 11 1
+code-size insert 32xfloat 12 vector 1
+code-size insert 32xfloat 12 poison 0
+code-size extract 32xfloat 12 0
+code-size insert 32xfloat 13 vector 2
+code-size insert 32xfloat 13 poison 2
+code-size extract 32xfloat 13 1
+code-size insert 32xfloat 14 vector 2
+code-size insert 32xfloat 14 poison 2
+code-size extract 32xfloat 14 1
+code-size insert 32xfloat 15 vector 2
+code-size insert 32xfloat 15 poison 2
+code-size extract 32xfloat 15 1
+code-size insert 32xfloat 16 vector 1
+code-size insert 32xfloat 16 poison 0
+code-size extract 32xfloat 16 0
+code-size insert 32xfloat 17 vector 2
+code-size insert 32xfloat 17 poison 2
+code-size extract 32xfloat 17 1
+code-size insert 32xfloat 18 vector 2
+code-size insert 32xfloat 18 poison 2
+code-size extract 32xfloat 18 1
+code-size insert 32xfloat 19 vector 2
+code-size insert 32xfloat 19 poison 2
+code-size extract 32xfloat 19 1
+code-size insert 32xfloat 20 vector 1
+code-size insert 32xfloat 20 poison 0
+code-size extract 32xfloat 20 0
+code-size insert 32xfloat 21 vector 2
+code-size insert 32xfloat 21 poison 2
+code-size extract 32xfloat 21 1
+code-size insert 32xfloat 22 vector 2
+code-size insert 32xfloat 22 poison 2
+code-size extract 32xfloat 22 1
+code-size insert 32xfloat 23 vector 2
+code-size insert 32xfloat 23 poison 2
+code-size extract 32xfloat 23 1
+code-size insert 32xfloat 24 vector 1
+code-size insert 32xfloat 24 poison 0
+code-size extract 32xfloat 24 0
+code-size insert 32xfloat 25 vector 2
+code-size insert 32xfloat 25 poison 2
+code-size extract 32xfloat 25 1
+code-size insert 32xfloat 26 vector 2
+code-size insert 32xfloat 26 poison 2
+code-size extract 32xfloat 26 1
+code-size insert 32xfloat 27 vector 2
+code-size insert 32xfloat 27 poison 2
+code-size extract 32xfloat 27 1
+code-size insert 32xfloat 28 vector 1
+code-size insert 32xfloat 28 poison 0
+code-size extract 32xfloat 28 0
+code-size insert 32xfloat 29 vector 2
+code-size insert 32xfloat 29 poison 2
+code-size extract 32xfloat 29 1
+code-size insert 32xfloat 30 vector 2
+code-size insert 32xfloat 30 poison 2
+code-size extract 32xfloat 30 1
+code-size insert 32xfloat 31 vector 2
+code-size insert 32xfloat 31 poison 2
+code-size extract 32xfloat 31 1
 size-latency trunc 2xi8 2xi16 1
 size-latency trunc 2xi8 2xi32 1
 size-latency trunc 2xi8 2xi64 1
@@ -1104,6 +2046,44 @@ size-latency sitofp 32xfloat 32xi16 8
 size-latency uitofp 32xfloat 32xi16 8
 size-latency sitofp 32xfloat 32xi32 8
 size-latency uitofp 32xfloat 32xi32 8
+size-latency zext 2xi8 2xi1 1
+size-latency sext 2xi8 2xi1 1
+size-latency zext 2xi16 2xi1 1
+size-latency sext 2xi16 2xi1 1
+size-latency zext 2xi32 2xi1 1
+size-latency sext 2xi32 2xi1 1
+size-latency zext 2xi64 2xi1 1
+size-latency sext 2xi64 2xi1 1
+size-latency zext 4xi8 4xi1 1
+size-latency sext 4xi8 4xi1 1
+size-latency zext 4xi16 4xi1 1
+size-latency sext 4xi16 4xi1 1
+size-latency zext 4xi32 4xi1 1
+size-latency sext 4xi32 4xi1 1
+size-latency zext 4xi64 4xi1 2
+size-latency sext 4xi64 4xi1 2
+size-latency zext 8xi8 8xi1 1
+size-latency sext 8xi8 8xi1 1
+size-latency zext 8xi16 8xi1 1
+size-latency sext 8xi16 8xi1 1
+size-latency zext 8xi32 8xi1 2
+size-latency sext 8xi32 8xi1 2
+size-latency zext 8xi64 8xi1 4
+size-latency sext 8xi64 8xi1 4
+size-latency zext 16xi8 16xi1 1
+size-latency sext 16xi8 16xi1 1
+size-latency zext 16xi16 16xi1 2
+size-latency sext 16xi16 16xi1 2
+size-latency zext 16xi32 16xi1 4
+size-latency sext 16xi32 16xi1 4
+size-latency zext 16xi64 16xi1 8
+size-latency sext 16xi64 16xi1 8
+size-latency zext 32xi8 32xi1 1
+size-latency sext 32xi8 32xi1 1
+size-latency zext 32xi16 32xi1 4
+size-latency sext 32xi16 32xi1 4
+size-latency zext 32xi32 32xi1 8
+size-latency sext 32xi32 32xi1 8
 size-latency fadd 2xfloat 1
 size-latency fsub 2xfloat 1
 size-latency fmul 2xfloat 1
@@ -1167,3 +2147,279 @@ size-latency fdiv 32xfloat 8
 size-latency fneg 32xfloat 8
 size-latency load 32xfloat 1
 size-latency store 32xfloat 1
+size-latency insert 2xfloat 0 vector 1
+size-latency insert 2xfloat 0 poison 0
+size-latency extract 2xfloat 0 0
+size-latency insert 2xfloat 1 vector 2
+size-latency insert 2xfloat 1 poison 2
+size-latency extract 2xfloat 1 1
+size-latency insert 2xdouble 0 vector 1
+size-latency insert 2xdouble 0 poison 0
+size-latency extract 2xdouble 0 0
+size-latency insert 2xdouble 1 vector 1
+size-latency insert 2xdouble 1 poison 1
+size-latency extract 2xdouble 1 1
+size-latency insert 4xfloat 0 vector 1
+size-latency insert 4xfloat 0 poison 0
+size-latency extract 4xfloat 0 0
+size-latency insert 4xfloat 1 vector 2
+size-latency insert 4xfloat 1 poison 2
+size-latency extract 4xfloat 1 1
+size-latency insert 4xfloat 2 vector 2
+size-latency insert 4xfloat 2 poison 2
+size-latency extract 4xfloat 2 1
+size-latency insert 4xfloat 3 vector 2
+size-latency insert 4xfloat 3 poison 2
+size-latency extract 4xfloat 3 1
+size-latency insert 4xdouble 0 vector 1
+size-latency insert 4xdouble 0 poison 0
+size-latency extract 4xdouble 0 0
+size-latency insert 4xdouble 1 vector 1
+size-latency insert 4xdouble 1 poison 1
+size-latency extract 4xdouble 1 1
+size-latency insert 4xdouble 2 vector 1
+size-latency insert 4xdouble 2 poison 0
+size-latency extract 4xdouble 2 0
+size-latency insert 4xdouble 3 vector 1
+size-latency insert 4xdouble 3 poison 1
+size-latency extract 4xdouble 3 1
+size-latency insert 8xfloat 0 vector 1
+size-latency insert 8xfloat 0 poison 0
+size-latency extract 8xfloat 0 0
+size-latency insert 8xfloat 1 vector 2
+size-latency insert 8xfloat 1 poison 2
+size-latency extract 8xfloat 1 1
+size-latency insert 8xfloat 2 vector 2
+size-latency insert 8xfloat 2 poison 2
+size-latency extract 8xfloat 2 1
+size-latency insert 8xfloat 3 vector 2
+size-latency insert 8xfloat 3 poison 2
+size-latency extract 8xfloat 3 1
+size-latency insert 8xfloat 4 vector 1
+size-latency insert 8xfloat 4 poison 0
+size-latency extract 8xfloat 4 0
+size-latency insert 8xfloat 5 vector 2
+size-latency insert 8xfloat 5 poison 2
+size-latency extract 8xfloat 5 1
+size-latency insert 8xfloat 6 vector 2
+size-latency insert 8xfloat 6 poison 2
+size-latency extract 8xfloat 6 1
+size-latency insert 8xfloat 7 vector 2
+size-latency insert 8xfloat 7 poison 2
+size-latency extract 8xfloat 7 1
+size-latency insert 8xdouble 0 vector 1
+size-latency insert 8xdouble 0 poison 0
+size-latency extract 8xdouble 0 0
+size-latency insert 8xdouble 1 vector 1
+size-latency insert 8xdouble 1 poison 1
+size-latency extract 8xdouble 1 1
+size-latency insert 8xdouble 2 vector 1
+size-latency insert 8xdouble 2 poison 0
+size-latency extract 8xdouble 2 0
+size-latency insert 8xdouble 3 vector 1
+size-latency insert 8xdouble 3 poison 1
+size-latency extract 8xdouble 3 1
+size-latency insert 8xdouble 4 vector 1
+size-latency insert 8xdouble 4 poison 0
+size-latency extract 8xdouble 4 0
+size-latency insert 8xdouble 5 vector 1
+size-latency insert 8xdouble 5 poison 1
+size-latency extract 8xdouble 5 1
+size-latency insert 8xdouble 6 vector 1
+size-latency insert 8xdouble 6 poison 0
+size-latency extract 8xdouble 6 0
+size-latency insert 8xdouble 7 vector 1
+size-latency insert 8xdouble 7 poison 1
+size-latency extract 8xdouble 7 1
+size-latency insert 16xfloat 0 vector 1
+size-latency insert 16xfloat 0 poison 0
+size-latency extract 16xfloat 0 0
+size-latency insert 16xfloat 1 vector 2
+size-latency insert 16xfloat 1 poison 2
+size-latency extract 16xfloat 1 1
+size-latency insert 16xfloat 2 vector 2
+size-latency insert 16xfloat 2 poison 2
+size-latency extract 16xfloat 2 1
+size-latency insert 16xfloat 3 vector 2
+size-latency insert 16xfloat 3 poison 2
+size-latency extract 16xfloat 3 1
+size-latency insert 16xfloat 4 vector 1
+size-latency insert 16xfloat 4 poison 0
+size-latency extract 16xfloat 4 0
+size-latency insert 16xfloat 5 vector 2
+size-latency insert 16xfloat 5 poison 2
+size-latency extract 16xfloat 5 1
+size-latency insert 16xfloat 6 vector 2
+size-latency insert 16xfloat 6 poison 2
+size-latency extract 16xfloat 6 1
+size-latency insert 16xfloat 7 vector 2
+size-latency insert 16xfloat 7 poison 2
+size-latency extract 16xfloat 7 1
+size-latency insert 16xfloat 8 vector 1
+size-latency insert 16xfloat 8 poison 0
+size-latency extract 16xfloat 8 0
+size-latency insert 16xfloat 9 vector 2
+size-latency insert 16xfloat 9 poison 2
+size-latency extract 16xfloat 9 1
+size-latency insert 16xfloat 10 vector 2
+size-latency insert 16xfloat 10 poison 2
+size-latency extract 16xfloat 10 1
+size-latency insert 16xfloat 11 vector 2
+size-latency insert 16xfloat 11 poison 2
+size-latency extract 16xfloat 11 1
+size-latency insert 16xfloat 12 vector 1
+size-latency insert 16xfloat 12 poison 0
+size-latency extract 16xfloat 12 0
+size-latency insert 16xfloat 13 vector 2
+size-latency insert 16xfloat 13 poison 2
+size-latency extract 16xfloat 13 1
+size-latency insert 16xfloat 14 vector 2
+size-latency insert 16xfloat 14 poison 2
+size-latency extract 16xfloat 14 1
+size-latency insert 16xfloat 15 vector 2
+size-latency insert 16xfloat 15 poison 2
+size-latency extract 16xfloat 15 1
+size-latency insert 16xdouble 0 vector 1
+size-latency insert 16xdouble 0 poison 0
+size-latency extract 16xdouble 0 0
+size-latency insert 16xdouble 1 vector 1
+size-latency insert 16xdouble 1 poison 1
+size-latency extract 16xdouble 1 1
+size-latency insert 16xdouble 2 vector 1
+size-latency insert 16xdouble 2 poison 0
+size-latency extract 16xdouble 2 0
+size-latency insert 16xdouble 3 vector 1
+size-latency insert 16xdouble 3 poison 1
+size-latency extract 16xdouble 3 1
+size-latency insert 16xdouble 4 vector 1
+size-latency insert 16xdouble 4 poison 0
+size-latency extract 16xdouble 4 0
+size-latency insert 16xdouble 5 vector 1
+size-latency insert 16xdouble 5 poison 1
+size-latency extract 16xdouble 5 1
+size-latency insert 16xdouble 6 vector 1
+size-latency insert 16xdouble 6 poison 0
+size-latency extract 16xdouble 6 0
+size-latency insert 16xdouble 7 vector 1
+size-latency insert 16xdouble 7 poison 1
+size-latency extract 16xdouble 7 1
+size-latency insert 16xdouble 8 vector 1
+size-latency insert 16xdouble 8 poison 0
+size-latency extract 16xdouble 8 0
+size-latency insert 16xdouble 9 vector 1
+size-latency insert 16xdouble 9 poison 1
+size-latency extract 16xdouble 9 1
+size-latency insert 16xdouble 10 vector 1
+size-latency insert 16xdouble 10 poison 0
+size-latency extract 16xdouble 10 0
+size-latency insert 16xdouble 11 vector 1
+size-latency insert 16xdouble 11 poison 1
+size-latency extract 16xdouble 11 1
+size-latency insert 16xdouble 12 vector 1
+size-latency insert 16xdouble 12 poison 0
+size-latency extract 16xdouble 12 0
+size-latency insert 16xdouble 13 vector 1
+size-latency insert 16xdouble 13 poison 1
+size-latency extract 16xdouble 13 1
+size-latency insert 16xdouble 14 vector 1
+size-latency insert 16xdouble 14 poison 0
+size-latency extract 16xdouble 14 0
+size-latency insert 16xdouble 15 vector 1
+size-latency insert 16xdouble 15 poison 1
+size-latency extract 16xdouble 15 1
+size-latency insert 32xfloat 0 vector 1
+size-latency insert 32xfloat 0 poison 0
+size-latency extract 32xfloat 0 0
+size-latency insert 32xfloat 1 vector 2
+size-latency insert 32xfloat 1 poison 2
+size-latency extract 32xfloat 1 1
+size-latency insert 32xfloat 2 vector 2
+size-latency insert 32xfloat 2 poison 2
+size-latency extract 32xfloat 2 1
+size-latency insert 32xfloat 3 vector 2
+size-latency insert 32xfloat 3 poison 2
+size-latency extract 32xfloat 3 1
+size-latency insert 32xfloat 4 vector 1
+size-latency insert 32xfloat 4 poison 0
+size-latency extract 32xfloat 4 0
+size-latency insert 32xfloat 5 vector 2
+size-latency insert 32xfloat 5 poison 2
+size-latency extract 32xfloat 5 1
+size-latency insert 32xfloat 6 vector 2
+size-latency insert 32xfloat 6 poison 2
+size-latency extract 32xfloat 6 1
+size-latency insert 32xfloat 7 vector 2
+size-latency insert 32xfloat 7 poison 2
+size-latency extract 32xfloat 7 1
+size-latency insert 32xfloat 8 vector 1
+size-latency insert 32xfloat 8 poison 0
+size-latency extract 32xfloat 8 0
+size-latency insert 32xfloat 9 vector 2
+size-latency insert 32xfloat 9 poison 2
+size-latency extract 32xfloat 9 1
+size-latency insert 32xfloat 10 vector 2
+size-latency insert 32xfloat 10 poison 2
+size-latency extract 32xfloat 10 1
+size-latency insert 32xfloat 11 vector 2
+size-latency insert 32xfloat 11 poison 2
+size-latency extract 32xfloat 11 1
+size-latency insert 32xfloat 12 vector 1
+size-latency insert 32xfloat 12 poison 0
+size-latency extract 32xfloat 12 0
+size-latency insert 32xfloat 13 vector 2
+size-latency insert 32xfloat 13 poison 2
+size-latency extract 32xfloat 13 1
+size-latency insert 32xfloat 14 vector 2
+size-latency insert 32xfloat 14 poison 2
+size-latency extract 32xfloat 14 1
+size-latency insert 32xfloat 15 vector 2
+size-latency insert 32xfloat 15 poison 2
+size-latency extract 32xfloat 15 1
+size-latency insert 32xfloat 16 vector 1
+size-latency insert 32xfloat 16 poison 0
+size-latency extract 32xfloat 16 0
+size-latency insert 32xfloat 17 vector 2
+size-latency insert 32xfloat 17 poison 2
+size-latency extract 32xfloat 17 1
+size-latency insert 32xfloat 18 vector 2
+size-latency insert 32xfloat 18 poison 2
+size-latency extract 32xfloat 18 1
+size-latency insert 32xfloat 19 vector 2
+size-latency insert 32xfloat 19 poison 2
+size-latency extract 32xfloat 19 1
+size-latency insert 32xfloat 20 vector 1
+size-latency insert 32xfloat 20 poison 0
+size-latency extract 32xfloat 20 0
+size-latency insert 32xfloat 21 vector 2
+size-latency insert 32xfloat 21 poison 2
+size-latency extract 32xfloat 21 1
+size-latency insert 32xfloat 22 vector 2
+size-latency insert 32xfloat 22 poison 2
+size-latency extract 32xfloat 22 1
+size-latency insert 32xfloat 23 vector 2
+size-latency insert 32xfloat 23 poison 2
+size-latency extract 32xfloat 23 1
+size-latency insert 32xfloat 24 vector 1
+size-latency insert 32xfloat 24 poison 0
+size-latency extract 32xfloat 24 0
+size-latency insert 32xfloat 25 vector 2
+size-latency insert 32xfloat 25 poison 2
+size-latency extract 32xfloat 25 1
+size-latency insert 32xfloat 26 vector 2
+size-latency insert 32xfloat 26 poison 2
+size-latency extract 32xfloat 26 1
+size-latency insert 32xfloat 27 vector 2
+size-latency insert 32xfloat 27 poison 2
+size-latency extract 32xfloat 27 1
+size-latency insert 32xfloat 28 vector 1
+size-latency insert 32xfloat 28 poison 0
+size-latency extract 32xfloat 28 0
+size-latency insert 32xfloat 29 vector 2
+size-latency insert 32xfloat 29 poison 2
+size-latency extract 32xfloat 29 1
+size-latency insert 32xfloat 30 vector 2
+size-latency insert 32xfloat 30 poison 2
+size-latency extract 32xfloat 30 1
+size-latency insert 32xfloat 31 vector 2
+size-latency insert 32xfloat 31 poison 2
+size-latency extract 32xfloat 31 1
