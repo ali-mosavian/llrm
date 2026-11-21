@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/hoistcommon.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/hoistcommon.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/hoistcommon.rs sha256:ddc105aa71c9af50f68a31fc3588a45c73df6ee3e74f4af8d46a1894c8471ae1 -->
+<!-- src: crates/opt/llrm-transforms/src/hoistcommon.rs sha256:5c6c3bf680403d7943c4efdfd538fb5cb089edc865a226705bf0a4c2c4f5f0e1 -->
 
 # hoistcommon
 
@@ -62,4 +62,4 @@ The instructions both arms open with run once, before the branch:
   `llvm.experimental.deoptimize`.
 
 ## Used by
-Named by `simplifycfg`.
+Named by `simplifycfg`, `sinkcommon`.
