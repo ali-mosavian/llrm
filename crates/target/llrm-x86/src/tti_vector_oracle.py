@@ -2,10 +2,12 @@
 """The pinned opt's cost of the vector instructions a float loop is made of at x86-64 (`-mcpu=x86-64`: SSE2), per cost kind:
 `python3 tti_vector_oracle.py` writes tti_vector_oracle.txt beside it, lines `kind op type cost` (a cast: `kind op dst src cost`),
 after a header naming the opt. tti_vector.rs includes the file: the rows are the pin's `X86TTIImpl::getCastInstrCost`,
-`getArithmeticInstrCost` and `getMemoryOpCost`, read off. LLVM_BIN (default ~/scratch/llvm-build/bin) holds the opt."""
+`getArithmeticInstrCost` and `getMemoryOpCost`, read off. LLVM_BIN (required) is the directory of the pinned opt."""
 import os, re, subprocess, tempfile
 HERE = os.path.dirname(os.path.abspath(__file__))
-OPT = os.path.join(os.path.expanduser(os.environ.get("LLVM_BIN", "~/scratch/llvm-build/bin")), "opt")
+if "LLVM_BIN" not in os.environ:
+    raise SystemExit("LLVM_BIN is not set: it names the directory of the pinned opt (a build of the pin)")
+OPT = os.path.join(os.path.expanduser(os.environ["LLVM_BIN"]), "opt")
 INTS = {"i8": 8, "i16": 16, "i32": 32, "i64": 64}
 FLTS = {"float": 32, "double": 64}
 LANES = [2, 4, 8, 16, 32]
