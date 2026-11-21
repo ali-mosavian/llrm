@@ -1392,6 +1392,13 @@ pub trait Tti {
         false
     }
 
+    /// Whether `indirectbr` is expanded to a `switch` over block numbers
+    /// before selection (`TargetSubtargetInfo::enableIndirectBrExpand`): the
+    /// target has no jump through a register to a block's address.
+    fn expands_indirect_br(&self) -> bool {
+        false
+    }
+
     /// Whether the -O1 pipeline walks the call graph a second time after the
     /// dead globals and loops are gone, repricing a callee the folds emptied
     /// (`Options::second_inline`, which a driver may turn on at every level).
@@ -1426,10 +1433,13 @@ pub trait Tti {
         false
     }
 
-    /// DEVIATE OS-OUTLINE-TRIAL (owner llrm-target-m68k, exit 2026-12-20): whether a cold -Os site the size bound
-    /// accepts, of a callee that goes with its calls, is also built as a call in a second compile, the driver keeping
-    /// the finished code with fewer bytes. The units price a copy under the bytes the backend writes for it (jpeg_fixed
-    /// `put32`: 15 units a copy, a call 18; -20 B outlined). False: the bound's verdict stands.
+    /// DEVIATE OS-OUTLINE-TRIAL (owner llrm-target-m68k, exit 2026-12-20):
+    /// whether a cold -Os site the size bound accepts, of a callee that
+    /// goes with its calls, is also built as a call in a second compile, the
+    /// driver keeping the finished code with fewer bytes. The units price a
+    /// copy under the bytes the backend writes for it (jpeg_fixed
+    /// `put32`: 15 units a copy, a call 18; -20 B outlined). False: the bound's
+    /// verdict stands.
     fn opt_size_inline_outline_trial(&self) -> bool {
         false
     }
@@ -2027,8 +2037,10 @@ pub trait Tti {
         true
     }
 
-    /// D13 keeps the credit at -Os for a hot call site (the pin's `HotCallSiteRelFreq`): a copy in a loop saves the
-    /// call's clocks every trip, which the byte trial does not price. Off by default (x86-m16 is strict bytes).
+    /// D13 keeps the credit at -Os for a hot call site (the pin's
+    /// `HotCallSiteRelFreq`): a copy in a loop saves the call's clocks
+    /// every trip, which the byte trial does not price. Off by default (x86-m16
+    /// is strict bytes).
     fn inline_hot_dying_credit_at_os(&self) -> bool {
         false
     }
@@ -2569,6 +2581,12 @@ pub trait Tti {
         None
     }
 
+    /// `Tuning::phiopt_one_feeding_statement`: gcc's phiopt arm rule in
+    /// `foldTwoEntryPHINode`; off: the pin's cost bar alone.
+    fn phiopt_one_feeding_statement(&self) -> bool {
+        false
+    }
+
     /// `isHardwareLoopProfitable`: whether the target counts loops in hardware
     /// (`djnz`, `dbra`, `loop`), and how, in `info`. The hook sees no loop
     /// yet: no target reads one (DEVIATE 3 of `hardwareloops`). Off by
@@ -2876,6 +2894,24 @@ pub trait Tti {
         false
     }
 
+    /// `TargetLowering::shouldConsiderGEPOffsetSplit`: whether
+    /// `splitLargeGEPOffsets` runs. Default no.
+    fn should_consider_gep_offset_split(&self) -> bool {
+        false
+    }
+
+    /// `TargetLowering::getPreferredLargeGEPBaseOffset`: the base the `gep`s
+    /// at offsets `min..=max` of one object share, or 0 for the smallest
+    /// offset.
+    fn preferred_large_gep_base_offset(
+        &self,
+        min: i64,
+        max: i64,
+    ) -> i64 {
+        let _ = (min, max);
+        0
+    }
+
     /// `TargetTransformInfoImplBase::isLegalAddImmediate`: none.
     fn is_legal_add_immediate(
         &self,
@@ -2923,9 +2959,11 @@ pub trait Tti {
         key(a) < key(b)
     }
 
-    /// DEVIATE LG4 (owner w8, exit 2026-11-26): where post-indexed addressing is favored, a pointer walk
-    /// the end-biased formula would replace stays unless that formula saves a recurrence or a register
-    /// (m68k `(An)+`). `false`: the end-biased formula wins on its saved compare.
+    /// DEVIATE LG4 (owner w8, exit 2026-11-26): where post-indexed addressing
+    /// is favored, a pointer walk the end-biased formula would replace
+    /// stays unless that formula saves a recurrence or a register
+    /// (m68k `(An)+`). `false`: the end-biased formula wins on its saved
+    /// compare.
     fn lsr_free_walk_beats_end_biased(&self) -> bool {
         false
     }
@@ -3003,10 +3041,11 @@ pub trait Tti {
 
     /// DEVIATE LSR-POSTINC-WALKS (owner m68k, exit 2026-12-17; gcc's ivopts
     /// counts registers against the loop's pointers): a loop that indexes more
-    /// objects than this keeps no post-indexed preference, since each walk holds
-    /// an address register and the ones past the class are spilled and
-    /// reloaded every trip (early_exit_widths `reset`: eight walks, six address
-    /// registers). None: the preference holds at any count, as the pin's.
+    /// objects than this keeps no post-indexed preference, since each walk
+    /// holds an address register and the ones past the class are spilled
+    /// and reloaded every trip (early_exit_widths `reset`: eight walks, six
+    /// address registers). None: the preference holds at any count, as the
+    /// pin's.
     fn lsr_post_indexed_walk_limit(&self) -> Option<u32> {
         None
     }

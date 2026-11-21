@@ -1266,7 +1266,8 @@ fn write_constant(
     at: usize,
     words: &mut Vec<(usize, String, i64)>,
 ) -> Result<(), String> {
-    use llrm_mir::{ConstantKind, Type};
+    use llrm_mir::opcode::CastOp;
+    use llrm_mir::{ConstantExpr, ConstantKind, Type};
     let context = &module.context;
     let types = &context.types;
     if let Some((symbol, addend)) = address_of(module, layout, id)? {
@@ -1289,6 +1290,11 @@ fn write_constant(
             out[at..at + bytes].copy_from_slice(&bits.to_le_bytes()[..bytes]);
             Ok(())
         }
+        // `inttoptr (i16 n)`: the number itself (an expanded block address).
+        (
+            ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::PtrToInt | CastOp::IntToPtr | CastOp::BitCast, value }),
+            _,
+        ) => write_constant(module, layout, *value, context.get(*value).ty, out, at, words),
         (ConstantKind::Bytes(data), _) => {
             out[at..at + data.len()].copy_from_slice(data);
             Ok(())

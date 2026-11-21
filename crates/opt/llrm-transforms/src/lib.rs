@@ -106,6 +106,9 @@ mod cgpmemalign_tests;
 pub mod cgpretdup;
 pub mod cgpselect;
 pub mod cgpsinkops;
+pub mod cgpsplitgep;
+#[cfg(test)]
+mod cgpsplitgep_tests;
 pub mod cgpswitch;
 pub mod cmpopt;
 #[cfg(test)]
@@ -168,7 +171,6 @@ pub mod combine_icmp_table;
 #[cfg(test)]
 mod combine_icmp_table_tests;
 pub mod combine_invert;
-pub mod combine_reassociate_for_uses;
 pub mod combine_loadstore;
 pub mod combine_memintrinsics;
 pub mod combine_minmax;
@@ -183,6 +185,7 @@ pub mod combine_pass;
 pub mod combine_phi;
 pub mod combine_phi_args;
 pub mod combine_ptrcast;
+pub mod combine_reassociate_for_uses;
 pub mod combine_replace_in;
 pub mod combine_returned_arg;
 pub mod combine_select;
@@ -214,6 +217,7 @@ pub mod combine_sub;
 pub mod combine_switch;
 pub mod combine_visit_select;
 pub mod combine_xor;
+pub mod combine_xor_icmps;
 pub mod condstores;
 pub mod condtocond;
 pub mod congruentiv;
@@ -276,6 +280,9 @@ pub mod globalmerge;
 pub mod globalopt;
 pub mod globalsra;
 pub mod gvn;
+pub mod indirectbrexpand;
+#[cfg(test)]
+mod indirectbrexpand_tests;
 #[cfg(test)]
 mod gvn_load_tests;
 #[cfg(test)]
@@ -301,6 +308,7 @@ pub mod instsimplify;
 pub mod instworklist;
 #[cfg(test)]
 mod instworklist_tests;
+pub mod interleavedaccess_pass;
 pub mod internalize;
 #[cfg(test)]
 mod internalize_tests;
@@ -430,10 +438,8 @@ pub mod ree;
 pub mod remidiom;
 pub mod rpoattrs;
 pub mod runtimechecks;
-pub mod splitpaths;
 pub mod sccp;
 pub mod sccpsolver;
-pub mod interleavedaccess_pass;
 pub mod selectoptimize;
 pub mod settled;
 pub mod simpleloopunswitch;
@@ -446,15 +452,15 @@ pub mod slpcompares;
 pub mod slpgather;
 pub mod slpinsert;
 pub mod slpphi;
-pub mod slpschedule;
 pub mod slpreduction;
+pub mod slpschedule;
 pub mod slptree;
 pub mod slpvectorize;
-pub mod vectorlower;
 pub mod spares;
 pub mod speculate;
 pub mod spill;
 pub mod splitcopy;
+pub mod splitpaths;
 pub mod splitstore;
 pub mod sroa;
 pub mod switcharms;
@@ -487,6 +493,7 @@ pub mod undefpred;
 pub mod unrollbound;
 pub mod uremloop;
 pub mod vastart;
+pub mod vectorlower;
 pub mod vncoercion;
 #[cfg(test)]
 mod vncoercion_tests;
