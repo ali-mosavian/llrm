@@ -323,6 +323,18 @@ fn long(
     common::long_call(name, routine, a, b, common::Result32::Value)
 }
 
+/// A multiply by a byte reads rc4 and nothing of rc5..rc7 (`long_args` leaves
+/// 0xA5 there): the product is the general one.
+#[test]
+fn the_byte_multiplies_give_the_general_products_and_read_only_rc4() {
+    let a = 0x1234_5678u32;
+    for routine in ["__mulsi3_byte", "__mulsi3_fast_byte"] {
+        for b in [0u32, 11, 255] {
+            assert_eq!(long(&format!("{routine}-{b}"), routine, a, b), a.wrapping_mul(b), "{routine} {a} * {b}");
+        }
+    }
+}
+
 /// Low 32 bits of the product: 70000 * 3 = 0x33450; 65535 * 65537 = 0xFFFFFFFF;
 /// 100000 * 100000 = 10^10 = 0x2_540BE400, so 0x540BE400.
 #[test]

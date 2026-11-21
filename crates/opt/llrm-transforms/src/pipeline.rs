@@ -2106,6 +2106,10 @@ pub fn recorded(
     if applied.options.stored_homes {
         manager.add_module(crate::homes::Homes);
     }
+    // `addIRPasses`: the last IR pass, as the pin's `IndirectBrExpandPass`.
+    if program.target.tti().is_some_and(|tti| tti.expands_indirect_br()) {
+        manager.add_module(crate::indirectbrexpand::IndirectBrExpand);
+    }
     let done = manager.run(program);
     if llrm_support::env_flag!("LLRM_CHECK_CAPTURES_MODULE") {
         for module in &program.modules {

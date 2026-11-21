@@ -3097,7 +3097,7 @@ fn inert(callee: &Callee) -> bool {
         .all(
             |part| matches!(
                 part,
-                InlinePart::Bytes(bytes) if crate::backend::framefree::x87_registers_only(bytes)
+                InlinePart::Bytes(bytes) if crate::backend::framefree::register_operations_only(bytes)
             ),
         )
 }

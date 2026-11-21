@@ -426,6 +426,9 @@ impl llrm_target::Target for M64 {
                             inline_trial_defers_to_shared_growth: true,
                             // DEVIATE IPRA-DSO-LOCAL (owner llrm-target-x86-m64, exit 2026-11-24): see Tuning.
                             ipra_binds_local: true,
+                            // DEVIATE PHIOPT-ARM (owner x87-cordic-2, exit 2026-11-28): see
+                            // `Tuning::phiopt_one_feeding_statement`; gcc's phiopt keeps a nested diamond.
+                            phiopt_one_feeding_statement: true,
                             // DEVIATE SD443 (owner w9, exit 2026-11-24: a constant-argument pass
                             // after inlining, as gcc's IPA-CP): see the m32 entry; m64 -O2
                             // memory_expansion.c text -3281 B.
@@ -493,6 +496,10 @@ impl llrm_target::Target for M64 {
                             // callee with one site too; the pin copies it (crc, floats,
                             // tile -Os: gcc keeps the call, +40 B each).
                             inline_size_guard_single_site: true,
+                            // The SZ1 guard yields where the pin's `updateThreshold` raises an `inlinehint`
+                            // callee to 325 at an `optsize` caller, as at m32 (QB operands.c `hot_operand`
+                            // into `hot_int`: 16,542 -> 11,101 B).
+                            inline_size_guard_yields_to_inlinehint: true,
                             // DEVIATE UP1-REG at m64 (owner m64, exit 2026-11-20): promoted
                             // arrays that exceed the registers are not free (fpbench -O2
                             // +815 B for -75 clocks). The byte rate follows the clock pricing.

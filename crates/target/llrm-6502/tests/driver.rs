@@ -146,6 +146,34 @@ fn a_pointer_a_call_returns_is_loaded_through() {
     assert_eq!(exit_code_of(&text, "g"), 42, "{text}");
 }
 
+/// A table of `inttoptr (i16 n)` (the numbers an expanded `indirectbr` gives
+/// block addresses) was refused: "a global initializer that is not an integer,
+/// pointer, array or struct", so computed goto did not compile.
+#[test]
+fn a_table_of_inttoptr_numbers_is_emitted_as_the_numbers() {
+    let ir = module(
+        "@t = constant [2 x ptr] [ptr inttoptr (i16 7 to ptr), ptr inttoptr (i16 9 to ptr)]\n\
+         define i8 @g() {\n  %p = getelementptr ptr, ptr @t, i16 1\n  %v = load ptr, ptr %p\n  \
+         %n = ptrtoint ptr %v to i16\n  %b = trunc i16 %n to i8\n  ret i8 %b\n}",
+    );
+    let text = assembly(&ir, &Request::new(Level::O1)).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(exit_code_of(&text, "g"), 9, "{text}");
+}
+
+/// A computed goto through a table of block addresses was refused on the
+/// 6502 (no jump through a register). `IndirectBrExpand` turns it into a
+/// switch, so the program jumps where the table says.
+#[test]
+fn an_indirectbr_through_a_table_of_block_addresses_jumps_where_the_table_says() {
+    let ir = module(
+        "@t = constant [2 x ptr] [ptr blockaddress(@g, %a), ptr blockaddress(@g, %b)]\n\
+         define i8 @g() {\nentry:\n  %p = getelementptr ptr, ptr @t, i16 1\n  %v = load ptr, ptr %p\n  \
+         indirectbr ptr %v, [label %a, label %b]\na:\n  ret i8 1\nb:\n  ret i8 2\n}",
+    );
+    let text = assembly(&ir, &Request::new(Level::O1)).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(exit_code_of(&text, "g"), 2, "{text}");
+}
+
 /// `LLRM_6502_ZERO_PAGE` sets the platform's zero page, whichever way the
 /// platform is named. It was read before the row's own `--platform=sim65`,
 /// which put the 26 back: a sweep of 16..26 read flat, 4362 bytes at every
@@ -2702,12 +2730,13 @@ fn indirect_call_return_labels_are_unique_across_functions() {
     assert_ne!(labels[0], labels[1], "{text}");
 }
 
-/// LSR left every 16- and 32-bit induction variable of the 6502 alone (its
-/// datalayout is `n8`, so the pin's `IVUsers` found none): `x[i] = n * i`
-/// called `__mulsi3` on every trip, 56k of shrink_wrapped_frame's 64k clocks.
-/// At speed the 32-bit product is a running sum.
+/// A 32-bit product of the counter is not called per trip at speed. #7343 meant a
+/// running sum (LSR on the addrec `{0,+,n}`); measured on release/next
+/// 03aa3b55d3, a loop that keeps the products still calls `__mulsi3_fast` per
+/// trip, so that premise was already dead (row 6502-LSR-IV-PRODUCT). This
+/// fixture folds to `n * 120`, which passes by expansion or by one tail `jmp`.
 #[test]
-fn a_32_bit_product_of_the_counter_is_a_running_sum_at_speed() {
+fn a_32_bit_product_of_the_counter_makes_no_call_per_trip_at_speed() {
     let ir = module(
         "define i32 @f(i32 %n) {
 entry:
@@ -2737,7 +2766,10 @@ exit:
 }",
     );
     let fast = assembly(&ir, &Request::new(Level::O2)).unwrap();
-    assert!(!fast.contains("__mulsi3"), "{fast}");
+    // The two loops fold to `n * 120`: expanded inline, or one tail `jmp` of the
+    // byte entry where its bytes are fewer. Either way no call of the multiply
+    // is made per trip (`jsr`).
+    assert!(!fast.contains("jsr __mulsi3"), "{fast}");
 }
 
 /// A `byval` argument of 40 bytes is copied by a call of `memcpy` the builder
