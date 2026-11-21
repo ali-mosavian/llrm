@@ -20,7 +20,24 @@ impl Builder<'_> {
         &self,
         inst: InstId,
     ) -> bool {
-        tail_position(self.function, inst)
+        tail_position_with(self.function, inst, self.is_mem_intrinsic_call(inst))
+    }
+
+    /// A call of `llvm.memcpy`, `llvm.memmove` or `llvm.memset`: its library
+    /// routine returns the destination, so a `ret` of the first argument takes
+    /// the tail call (`isInTailCallPositionWrapper`'s `ReturnsFirstArg`).
+    fn is_mem_intrinsic_call(
+        &self,
+        inst: InstId,
+    ) -> bool {
+        use llrm_mir::context::ConstantKind;
+        use llrm_mir::intrinsics::Intrinsic;
+        let Some(Operand::Constant(callee)) = self.function.instruction(inst).operands.last() else { return false };
+        let ConstantKind::Global(global) = self.module.context.get(*callee).kind else { return false };
+        matches!(
+            self.module.global(global).intrinsic(),
+            Some(Intrinsic::MemCpy | Intrinsic::MemMove | Intrinsic::MemSet)
+        )
     }
 }
 
@@ -209,6 +226,16 @@ pub fn tail_position(
     function: &Function,
     inst: InstId,
 ) -> bool {
+    tail_position_with(function, inst, false)
+}
+
+/// `isInTailCallPosition` with `ReturnsFirstArg` allowed: a `ret` of the
+/// call's first argument counts as returning its value.
+fn tail_position_with(
+    function: &Function,
+    inst: InstId,
+    first_argument_returned: bool,
+) -> bool {
     let call = function.instruction(inst);
     let Opcode::Call(info) = &call.opcode else { return false };
     if !matches!(info.tail, Tail::Tail | Tail::MustTail) {
@@ -263,8 +290,8 @@ pub fn tail_position(
     match (call.result, returned) {
         // a `ret void` ignores what the call returns
         (_, None) => true,
-        (Some(value), Some(Operand::Value(one))) => value == *one,
-        _ => false,
+        (Some(value), Some(Operand::Value(one))) if value == *one => true,
+        (_, Some(one)) => first_argument_returned && call.operands.first() == Some(one),
     }
 }
 
