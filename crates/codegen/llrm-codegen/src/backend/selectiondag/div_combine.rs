@@ -156,8 +156,9 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         &self,
         value: SDValue,
     ) -> bool {
-        let bits = self.dag.value_type(value).size_in_bits();
-        super::known_bits::known_bits(self.dag, value).zero >> (bits - 1) & 1 == 1
+        // A vector's known bits are of a lane: its sign bit is the lane's.
+        let known = super::known_bits::known_bits(self.dag, value);
+        known.zero >> (known.width - 1) & 1 == 1
     }
 
     /// `isIntDivCheap(VT)`: the configured flag, for every type (`i8` selects

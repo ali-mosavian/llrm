@@ -1210,6 +1210,8 @@ impl TargetLowering {
             MVT::V2I32,
         ];
         t.set_ops(&[SetCC], &neon, Custom);
+        // `addTypeForNEON` (L2458): NEON has no divide or remainder.
+        t.set_ops(&[UDiv, SDiv, URem, SRem], &neon, Expand);
         // `addTypeForNEON`'s `v1i64`/`v2i64`: "SMAX, SMIN, UMAX, UMIN" are
         // `LowerMinMax`.
         t.set_ops(&[SMax, SMin, UMax, UMin], &[MVT::V2I64], Custom);
