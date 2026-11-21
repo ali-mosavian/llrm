@@ -854,6 +854,14 @@ pub trait Tti {
         true
     }
 
+    /// DEVIATE LV-NARROW-IV (owner llrm-target-x86-m64-b, exit 2026-11-30): a
+    /// loop chosen for widening has its integer chains of the counter
+    /// narrowed first (`loopvectorizenarrow`), as gcc's over-widening pattern
+    /// does.
+    fn narrows_induction_chains(&self) -> bool {
+        false
+    }
+
     /// The backend selects a vector under a register (`<8 x i8>`): the pin's
     /// `TypeWidenVector` makes it one register, as the x86 targets do. A port
     /// whose backend takes none keeps the loop scalar.
@@ -1037,6 +1045,14 @@ pub trait Tti {
     /// false: the pin's cost rule decides.
     fn splits_merged_conditions(&self) -> bool {
         false
+    }
+
+    /// DEVIATE SD103: at optsize two compares joined by `and`/`or` stay two
+    /// branches. The pin has no such rule (x86 and the 16-bit table need it
+    /// for their registers); false: the target's cost rule decides at optsize
+    /// as at any level.
+    fn splits_merged_conditions_at_optsize(&self) -> bool {
+        true
     }
 
     /// DEVIATE LSR-OUTER: whether an outer loop's address stepped by `size`
@@ -1922,6 +1938,11 @@ pub trait Tti {
     /// `Tuning::backward_threading`.
     fn backward_threading(&self) -> bool {
         true
+    }
+
+    /// `Tuning::sink_common_at_size`.
+    fn sink_common_at_size(&self) -> bool {
+        false
     }
 
     /// What a byte of code is worth in thousandths of a clock at speed, where
