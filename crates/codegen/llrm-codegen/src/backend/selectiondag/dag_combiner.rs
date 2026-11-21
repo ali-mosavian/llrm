@@ -753,7 +753,10 @@ pub trait CombineHooks {
     /// ([TargetLowering.cpp#L5185](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/TargetLowering.cpp#L5185)):
     /// the boolean itself or, of a compare, its inverse, at any type. The pin
     /// does it everywhere; DEVIATE (owner m16-b, exit 2026-12-11): only where a
-    /// target says so, until each target's cells are judged with it.
+    /// target says so, until each target's cells are judged with it, and only
+    /// of a compare (`N0` a `setcc`): the pin's other `N0` (an `and` with 1)
+    /// reaches a conjunction as a `truncate`, which the `ccmp` chain does not
+    /// take as a leaf (`a_pointer_compare_is_a_ccmp_leaf`).
     fn simplify_boolean_compare(&self) -> bool {
         false
     }
@@ -1438,7 +1441,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         if self.hooks.simplify_boolean_compare()
             && matches!(cond, CondCode::SetEq | CondCode::SetNe)
             && matches!(c1, 0 | 1)
-            && (self.dag.opcode(n0) == ISD::SetCC || vt != EVT::I1)
+            && self.dag.opcode(n0) == ISD::SetCC
             && self.tli.is_some_and(|tli| tli.types.is_type_legal(vt))
             && vt.size_in_bits() <= op_type.size_in_bits()
             && (op_type == EVT::I1
