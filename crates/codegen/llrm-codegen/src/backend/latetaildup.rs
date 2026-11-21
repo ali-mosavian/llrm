@@ -20,12 +20,17 @@
 //!   b3: x; jmp b4         (b3 goes when nothing else reaches it)
 //! ```
 //!
+//! A computed goto (an indirect jump whose every successor has its address
+//! taken) is copied up to ten instructions whatever the size
+//! (`terminatorIsComputedGotoWithSuccessors`): it undoes the factoring of the
+//! `goto *` of an interpreter's dispatch into one block.
+//!
 //! DEVIATE TL1 (owner greedy-subreg, exit 2026-11-27): a tail with a call, a
 //! call's record, a group, a symbol, bytes spread over others, an indirect jump
-//! or a sibling call is not copied. The pin copies a call or a return after
-//! allocation; here a copy keeps no callee (the callee is named by the
-//! instruction's id) and claims no source bytes of its own (placement's
-//! `copied` refuses the same).
+//! that is no computed goto or a sibling call is not copied. The pin copies a
+//! call or a return after allocation; here a copy keeps no callee (the callee
+//! is named by the instruction's id) and claims no source bytes of its own
+//! (placement's `copied` refuses the same).
 //!
 //! DEVIATE TL3 (owner greedy-subreg, exit 2026-11-20): the pin's return block
 //! already holds the frame's teardown, so a framed function's is longer than
@@ -57,11 +62,26 @@ use crate::model::lir::{self, Block, Insn, LirBlock, LirBody};
 
 /// `TailDuplicateSize`.
 const SIZE: usize = 2;
+/// What a computed goto may hold after allocation.
+const COMPUTED_GOTO_SIZE: usize = 10;
+
+/// `terminatorIsComputedGotoWithSuccessors`: the block ends in an indirect jump
+/// and every successor is a block whose address is taken (a `goto *`, not a
+/// jump table).
+fn computed_goto(
+    body: &LirBody,
+    tail: &Block,
+) -> bool {
+    super::earlytaildup::indirect_end(tail)
+        && !tail.succ.is_empty()
+        && tail.succ.iter().all(|to| body.address_symbols.contains_key(to))
+}
 
 /// The tail's instructions as they would be copied, or none where it may not
 /// be: [`shouldTailDuplicate`] after allocation, with this crate's refusals
 /// (TL1).
 fn copied(
+    body: &LirBody,
     tail: &Block,
     size: bool,
     epilogue: usize,
@@ -76,7 +96,9 @@ fn copied(
     {
         return None;
     }
+    let computed = computed_goto(body, tail);
     let most = if size { 1 } else { SIZE };
+    let most = if computed { most.max(COMPUTED_GOTO_SIZE) } else { most };
     let work = super::jumps::_real(tail);
     let plain = work
         .iter()
@@ -89,7 +111,7 @@ fn copied(
                         Operation::Barrier | Operation::Data | Operation::Call
                     )
                         && !what.is_sibling_call()
-                        && !(matches!(what.op, Operation::Jump | Operation::Branch) && what.indirect),
+                        && (computed || !(matches!(what.op, Operation::Jump | Operation::Branch) && what.indirect)),
                 ),
         );
     // TL3: the pin's return block holds the frame's teardown (PEI ran before
@@ -110,7 +132,7 @@ fn tail_duplicate(
     epilogue: usize,
 ) -> Option<LirBody> {
     let tail = &body.blocks[at];
-    let work = copied(tail, size, epilogue)?;
+    let work = copied(body, tail, size, epilogue)?;
     if is_simple_in(graph, tail) {
         return duplicate_simple(body, at);
     }
@@ -146,8 +168,9 @@ fn tail_duplicate(
             continue;
         }
         if chosen.contains(&place) {
-            // A predecessor with no instruction at all (it only falls into the tail) is
-            // given a stand-in at its own place to anchor the copy's addresses.
+            // A predecessor with no instruction at all (it only falls into the
+            // tail) is given a stand-in at its own place to anchor
+            // the copy's addresses.
             let jump = old
                 .insns
                 .iter()
@@ -159,8 +182,9 @@ fn tail_duplicate(
                 .cloned()
                 .or_else(|| old.insns.last().cloned())
                 .unwrap_or_else(|| Arc::new(Insn::new(old.at, Some((old.at, old.at)), None, Vec::new(), Vec::new())));
-            // A predecessor that falls into the tail has no jump to drop: its last
-            // instruction stays (it was lost, `add eax, 32` of __clzdi2).
+            // A predecessor that falls into the tail has no jump to drop: its
+            // last instruction stays (it was lost, `add eax, 32` of
+            // __clzdi2).
             let jumps = operation(&jump) == Some(Operation::Jump)
                 && jump.what.as_ref().is_some_and(|what| what.target == Some(tail.at));
             let mut insns: Vec<Arc<Insn>> = old
@@ -209,7 +233,7 @@ pub fn duplicated(
     while place < body.blocks.len() {
         let at = body.blocks[place].at;
         // Most blocks fail the cheap tests: no scan of the body for them.
-        if copied(&body.blocks[place], size, epilogue).is_some()
+        if copied(&body, &body.blocks[place], size, epilogue).is_some()
             && let Some(made) = tail_duplicate(&graph, &body, place, size, epilogue)
         {
             body = made;
@@ -416,9 +440,10 @@ mod tests {
         assert_eq!(names(at(&done, 1)), ["mov", "mov", "jmp"]);
         assert!(done.blocks.iter().any(|block| block.at == 3), "block 0 still reaches the tail");
     }
-    /// sfm16_float_i2f `-m64 -O1` (any of six softfloat helpers together): a predecessor with no
-    /// instruction that only falls into the tail was chosen to take the copy and the compile
-    /// panicked with "a block with an instruction". It takes the copy like the other arm.
+    /// sfm16_float_i2f `-m64 -O1` (any of six softfloat helpers together): a
+    /// predecessor with no instruction that only falls into the tail was
+    /// chosen to take the copy and the compile panicked with "a block with
+    /// an instruction". It takes the copy like the other arm.
     #[test]
     fn test_an_empty_predecessor_that_falls_into_the_tail_takes_the_copy() {
         let shape = body(vec![
@@ -431,5 +456,63 @@ mod tests {
         let done = dup(shape, false);
         assert_eq!(names(at(&done, 1)), ["mov", "jmp"]);
         assert_eq!(names(at(&done, 2)), ["mov", "mov", "jmp"]);
+    }
+
+    fn indirect_jump() -> Arc<Insn> {
+        let what = Semantics { name: Some("jmp".into()), indirect: true, ..Semantics::new(Operation::Jump) };
+        Arc::new(Insn::new(0, Some((0, 0)), Some(what), vec![], vec![]))
+    }
+
+    /// An interpreter's dispatch: `handlers` blocks (1..) each jump to block
+    /// 9, which holds `work` moves and an indirect jump back to them.
+    /// `taken`: the handlers' addresses are taken (`goto *`), not a jump table.
+    fn dispatch(
+        handlers: i64,
+        work_in_dispatch: usize,
+        taken: bool,
+    ) -> LirBody {
+        let ids: Vec<i64> = (1..=handlers).collect();
+        let mut blocks = vec![block(0, vec![jump(99)], &[99])];
+        for id in &ids {
+            blocks.push(block(*id, vec![work(*id as u32), jump(99)], &[99]));
+        }
+        let mut dispatch = (0..work_in_dispatch).map(|one| work(100 + one as u32)).collect::<Vec<_>>();
+        dispatch.push(indirect_jump());
+        blocks.push(block(99, dispatch, &ids));
+        let mut body = body(blocks);
+        if taken {
+            body.address_symbols = Arc::new(ids.iter().map(|id| (*id, format!("$BA{id}"))).collect());
+        }
+        body
+    }
+
+    /// dbl_fn m64 -O2 (+15% over gcc, 182M against 158M instructions): the
+    /// dispatch of the QB interpreter's `exec_loop` stayed one block that its
+    /// 100 handlers jumped to, 5 instructions a dispatch; the pin copies a
+    /// computed goto into each handler after allocation (gcc and clang: 3).
+    #[test]
+    fn test_a_computed_goto_dispatch_is_copied_into_every_handler() {
+        let done = dup(dispatch(20, 4, true), false);
+        assert!(done.blocks.iter().all(|block| block.at != 99), "the dispatch is gone");
+        for handler in 1..=20 {
+            assert_eq!(names(at(&done, handler)), ["mov", "mov", "mov", "mov", "mov", "jmp"], "handler {handler}");
+        }
+    }
+
+    /// The copy is for a `goto *`: the jump of a jump table (its successors'
+    /// addresses are not taken) and a dispatch past ten instructions stay one
+    /// block.
+    #[test]
+    fn test_a_jump_table_or_a_long_dispatch_is_kept() {
+        assert!(dup(dispatch(20, 4, false), false).blocks.iter().any(|block| block.at == 99));
+        assert!(dup(dispatch(20, 10, true), false).blocks.iter().any(|block| block.at == 99));
+        assert!(dup(dispatch(20, 9, true), false).blocks.iter().all(|block| block.at != 99));
+    }
+
+    /// At `-Os` a computed goto is still copied (the pin raises the bound to
+    /// ten after the size cap).
+    #[test]
+    fn test_a_computed_goto_is_copied_at_os() {
+        assert!(dup(dispatch(20, 4, true), true).blocks.iter().all(|block| block.at != 99));
     }
 }
