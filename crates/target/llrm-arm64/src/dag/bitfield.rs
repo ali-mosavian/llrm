@@ -1,9 +1,6 @@
 //! `AArch64DAGToDAGISel::tryBitfieldInsertInZeroOp`: `(and (shl x, n), mask)`
 //! of one contiguous run of bits is `UBFM` (`UBFIZ`).
 //!
-//! DEVIATE SD529: the `and (any_extend (shl ..))` form of an `i64` is not
-//! matched. Exit: the `Widen` helper.
-//!
 //! # See also
 //! `isBitfieldPositioningOp`, `AArch64ISelDAGToDAG.cpp`, pin d1106deb71cc.
 
@@ -18,6 +15,17 @@ fn is_shifted_mask(x: u64) -> bool {
         let filled = x | (x - 1);
         filled.wrapping_add(1) & filled == 0
     }
+}
+
+/// `Widen`: the 32-bit `value` in the low half of an undefined 64-bit register.
+fn widened(
+    dag: &mut impl AddrDag,
+    value: PinValue,
+) -> PinValue {
+    let wide = mvt::i64;
+    let undef = dag.machine_node(target_opcode::IMPLICIT_DEF, &[wide], &[]);
+    let index = dag.target_constant(i64::from(sub_32), mvt::i32);
+    PinValue::new(dag.machine_node(target_opcode::INSERT_SUBREG, &[wide], &[PinValue::new(undef, 0), value, index]), 0)
 }
 
 /// `tryBitfieldInsertInZeroOp`. `None` for any node it does not match.
@@ -43,13 +51,21 @@ pub fn select_bitfield_insert_in_zero(
     }
     // `isBitfieldPositioningOpFromAnd`, for UBFIZ (`BiggerPattern` false).
     dag.constant(dag.operand(node, 1))?;
-    let shl = dag.operand(node, 0);
-    if dag.opcode(shl.node) != isd::SHL {
+    let and0 = dag.operand(node, 0);
+    let (shl_imm, shl_source, widen) = if dag.opcode(and0.node) == isd::SHL {
+        (u64::try_from(dag.constant(dag.operand(and0.node, 1))?).ok()?, dag.operand(and0.node, 0), false)
+    } else if vt == mvt::i64 && dag.opcode(and0.node) == isd::ANY_EXTEND {
+        // `and (any_extend (shl val, N)), mask`: `val` is widened as the
+        // source.
+        let shl = dag.operand(and0.node, 0);
+        if dag.opcode(shl.node) != isd::SHL {
+            return None;
+        }
+        (u64::try_from(dag.constant(dag.operand(shl.node, 1))?).ok()?, dag.operand(shl.node, 0), true)
+    } else {
         return None;
-    }
-    let shl_imm = u64::try_from(dag.constant(dag.operand(shl.node, 1))?).ok()?;
-    let source = dag.operand(shl.node, 0);
-    if !dag.has_one_use(shl) {
+    };
+    if !dag.has_one_use(and0) {
         return None;
     }
     let dst_lsb = non_zero.trailing_zeros();
@@ -59,6 +75,7 @@ pub fn select_bitfield_insert_in_zero(
     }
     let immr = (bits - dst_lsb) % bits;
     let imms = width - 1;
+    let source = if widen { widened(dag, shl_source) } else { shl_source };
     let (immr, imms) = (dag.target_constant(i64::from(immr), vt), dag.target_constant(i64::from(imms), vt));
     dag.morph_node_to(node, opcode, &[vt], &[source, immr, imms]);
     Some(Outcome::Selected)
