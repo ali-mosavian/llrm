@@ -847,7 +847,7 @@ impl llrm_target::Target for M32 {
         price: &dyn Fn(&str) -> i64,
         prefix: i64,
     ) -> OperationCosts {
-        OPCOSTS.operations(price, prefix)
+        OperationCosts { ext_tsp_for_size: true, ext_tsp_by_frequency: true, ..OPCOSTS.operations(price, prefix) }
     }
 
     fn register_capacity(&self) -> i64 {

@@ -117,6 +117,7 @@ pub const AT_DEFAULT: &[(&str, &str)] = &[
     ("direct_load", "0: an absolute load is priced as any load (unmeasured, open)"),
     ("direct_store", "0: an absolute store is priced as any store (unmeasured, open)"),
     ("ext_tsp_for_size", "false: the pin ships -apply-ext-tsp-for-size off"),
+    ("ext_tsp_by_frequency", "false: no Ext-TSP at -Os here"),
     ("native_bits", "0: a price is for the operation as the type has it, as on every target but the 6502"),
     ("address_dword", "m68k states no address-size prefix; the price is `address` alone"),
     ("address_third", "same"),

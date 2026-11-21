@@ -87,12 +87,13 @@ pub fn trial_bytes() -> OperationCosts {
     BYTES.clone()
 }
 
-/// What the forms alone do not say, fit to the bytes the backend writes: a
-/// non-negative least squares of each function's operation counts
-/// (word-weighted) against its written size, over the 89 programs of the 6502's
-/// `tests/data_size` at -Os (`tools/size_fit.py`, 178 functions). The forms
-/// priced a function at 0.54 of its bytes: every word is held in a register
-/// pair that the allocator shuffles (`ld a,l; add a,c; ld l,a`).
+/// The bytes of each operation, fit to what the backend writes: `size_fit.txt`,
+/// written by `tools/z80_size_fit.py` (a non-negative least squares of each
+/// function's operation counts, word-weighted, against its written size, over
+/// the `tests/run/c` programs at -O1, -O2, -O3 and -Os; the forms priced a
+/// function at 0.54 of its bytes: every word is held in a register pair that
+/// the allocator shuffles, `ld a,l; add a,c; ld l,a`). What the fit does not
+/// price stays structural here.
 ///
 /// DEVIATE (Z80-TRIAL-BYTES, owner z80, exit 2026-11-26): measured here, the
 /// pin has no byte model for the Z80. Exit: the generated scheduling
@@ -102,23 +103,30 @@ fn calibrate(costs: &mut OperationCosts) {
     costs.width_scaled = true;
     costs.constant_word_shifts = true;
     costs.exact_call_arguments = true;
-    costs.add = 9;
-    costs.address = 6;
-    costs.load = 5;
-    costs.direct_load = 5;
-    costs.store = 5;
-    costs.direct_store = 5;
-    costs.shift = 7;
-    costs.extend = 2;
-    costs.call = 3;
-    // a word is two loads from its slot (`ld e,d(ix); ld d,d(ix+1)`), the ones
-    // past the third also a `push` and a `pop`
-    costs.argument = 6;
     costs.argument_registers = 3;
     costs.argument_stacked = 8;
-    costs.multiply = 12;
-    costs.multiply_long = 12;
-    costs.divide = 23;
-    costs.divide_long = 23;
     costs.free_intrinsics = true;
+    for line in include_str!("size_fit.txt").lines().filter(|line| !line.starts_with('#') && !line.trim().is_empty()) {
+        let (field, value) = line.split_once('=').unwrap_or_else(|| panic!("size_fit.txt: `{line}`"));
+        let value: i64 = value.trim().parse().unwrap_or_else(|_| panic!("size_fit.txt: `{line}`"));
+        match field.trim() {
+            "function" => costs.function = value,
+            "add" => costs.add = value,
+            "address" => costs.address = value,
+            "load" => costs.load = value,
+            "direct_load" => costs.direct_load = value,
+            "store" => costs.store = value,
+            "direct_store" => costs.direct_store = value,
+            "shift" => costs.shift = value,
+            "extend" => costs.extend = value,
+            "call" => costs.call = value,
+            "argument" => costs.argument = value,
+            "multiply" => (costs.multiply, costs.multiply_long) = (value, value),
+            "divide" => (costs.divide, costs.divide_long) = (value, value),
+            "branch" => costs.branch = value,
+            "move" => costs.r#move = value,
+            "return_" => costs.return_ = value,
+            other => panic!("size_fit.txt: no field `{other}`"),
+        }
+    }
 }

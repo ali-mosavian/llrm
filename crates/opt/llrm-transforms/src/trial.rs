@@ -783,15 +783,31 @@ pub enum SpeedUnroll {
     /// smaller with one and not the other (idioms -O3: 1856 B with the
     /// unrolls refused, 3229 B with the inlines refused too).
     NoInlineGrowth,
+    /// [`Self::NoInlineGrowth`], and the SZ2 trial (`walk.rs`) refuses a copy
+    /// that adds bytes too, which it otherwise takes by the byte rate: the
+    /// module with the calls where the trial inlines what the policy refused
+    /// (shift_int64_masked_amount -O2: `mix` inlined at three hot sites,
+    /// +81 B and +20% T; shrink_wrapped_frame -O3 is 374 B only through that
+    /// inline, which `NoInlineGrowth` keeps).
+    NoInlineGrowthAll,
     /// Both of the above: switch_table_in_code -O2 is 138 B smaller with both,
     /// 78 B with the inline alone.
     NoGrowBoth,
     /// The full unroll's threshold is this one, where the pin's -O2 is 150 and
     /// its -O3 300.
     Wide(u32),
+    /// No non-trivial unswitch (-O3): the loop is not copied for a condition
+    /// that does not change in it. queens -O3: `place` +93 B and +108745 T
+    /// over -O2, 90 B over the SDCC bar, for one branch a trip.
+    NoUnswitch,
 }
 
 impl SpeedUnroll {
+    /// Whether the variant makes no non-trivial unswitch.
+    pub fn refuses_unswitch(self) -> bool {
+        matches!(self, Self::NoUnswitch)
+    }
+
     /// Whether the variant makes only the full unrolls that add no bytes.
     pub fn refuses_unroll_growth(self) -> bool {
         matches!(self, Self::NoGrow | Self::NoGrowBoth)
@@ -799,7 +815,12 @@ impl SpeedUnroll {
 
     /// Whether the variant makes only the inlines that add no bytes.
     pub fn refuses_inline_growth(self) -> bool {
-        matches!(self, Self::NoInlineGrowth | Self::NoGrowBoth)
+        matches!(self, Self::NoInlineGrowth | Self::NoInlineGrowthAll | Self::NoGrowBoth)
+    }
+
+    /// Whether the SZ2 inline trial also refuses a copy that adds bytes.
+    pub fn refuses_trial_growth(self) -> bool {
+        self == Self::NoInlineGrowthAll
     }
 }
 
@@ -820,13 +841,19 @@ pub struct UnrollDecisions {
     pub made: usize,
     pub refused: usize,
     pub inlined: usize,
+    /// The non-trivial unswitches that `NoUnswitch` would not make.
+    pub unswitched: usize,
+    /// The inlines the SZ2 trial took that add bytes, which only
+    /// `NoInlineGrowthAll` refuses: a driver tries that variant after a
+    /// `NoInlineGrowth` compile with a count over 0.
+    pub trial_inlined: usize,
 }
 
 thread_local! {
     /// The variant of UNROLL-SPEED-TRIAL running, if any.
     static SPEED_UNROLL: Cell<Option<SpeedUnroll>> = const { Cell::new(None) };
     /// The decisions since [`take_speed_unrolls`].
-    static SPEED_UNROLLS: Cell<UnrollDecisions> = const { Cell::new(UnrollDecisions { made: 0, refused: 0, inlined: 0 }) };
+    static SPEED_UNROLLS: Cell<UnrollDecisions> = const { Cell::new(UnrollDecisions { made: 0, refused: 0, inlined: 0, unswitched: 0, trial_inlined: 0 }) };
 }
 
 /// The UNROLL-SPEED-TRIAL variant in force, if a trial compile is running.
@@ -850,6 +877,24 @@ pub(crate) fn note_speed_inline() {
     SPEED_UNROLLS.with(|cell| {
         let mut seen = cell.get();
         seen.inlined += 1;
+        cell.set(seen);
+    });
+}
+
+/// Notes an SZ2 trial inline that adds bytes.
+pub(crate) fn note_speed_trial_inline() {
+    SPEED_UNROLLS.with(|cell| {
+        let mut seen = cell.get();
+        seen.trial_inlined += 1;
+        cell.set(seen);
+    });
+}
+
+/// Notes a non-trivial unswitch made.
+pub(crate) fn note_speed_unswitch() {
+    SPEED_UNROLLS.with(|cell| {
+        let mut seen = cell.get();
+        seen.unswitched += 1;
         cell.set(seen);
     });
 }
