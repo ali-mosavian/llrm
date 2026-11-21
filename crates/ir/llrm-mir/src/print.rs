@@ -21,6 +21,28 @@ use crate::opcode::{
 };
 use crate::types::{FloatKind, Type, TypeId, struct_text};
 
+/// Each function with a body, by name, as [`module`] prints it.
+pub fn functions(module: &Module) -> Vec<(String, String)> {
+    let printer = Printer {
+        context: &module.context,
+        globals: global_names(module),
+        comdats: comdat_markers(module),
+        module: Some(module),
+        labels: Default::default(),
+    };
+    module
+        .globals
+        .iter()
+        .enumerate()
+        .filter_map(|(at, global)| match &global.kind {
+            GlobalKind::Function(function) if !function.is_declaration() => {
+                Some((global.name.as_deref().unwrap_or_default().to_owned(), printer.function(at, global, function)))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
 pub fn module(module: &Module) -> String {
     let mut out = String::new();
     let printer = Printer {

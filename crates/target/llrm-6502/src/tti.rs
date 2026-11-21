@@ -140,6 +140,12 @@ impl Tti for Mos6502 {
         "mos6502"
     }
 
+    /// Bytes first at -Os: SimplifyCFG sinks common code in every slot
+    /// (`Tuning::sink_common_at_size`, gcc's -fcrossjumping).
+    fn sink_common_at_size(&self) -> bool {
+        true
+    }
+
     /// Bytes first at every level (6502-UNROLL-RATE): a run of copies is a
     /// `memcpy` where the call and its routine are fewer bytes.
     fn string_runs_at_speed(&self) -> bool {

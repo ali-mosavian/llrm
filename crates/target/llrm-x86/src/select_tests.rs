@@ -1214,3 +1214,20 @@ fn test_a_funnel_shift_of_a_cell_encodes() {
     assert_eq!(hex(&made(emitted(&by("shrd", cl))).code), "0fad56fc");
     assert_eq!(hex(&made(emitted(&by("shld", imm))).code), "0fa456fc03");
 }
+
+/// early_exit_widths -Os: `[r13+rdx*1]` was `[r13+rdx*1+0x0]`, a byte a use, because a base of `r13` (or
+/// `rbp`) has no displacement-free encoding and the index does.
+#[test]
+fn a_scale_one_address_with_an_rbp_or_r13_base_puts_the_other_register_in_the_base() {
+    for (base, index) in [(RegId::RBP, RegId::RAX), (RegId::R13, RegId::RDX)] {
+        let m = memory_operand(base, index, 1, 0, 0, RegId::None);
+        assert_eq!((m.base, m.index), (index.iced(), base.iced()), "{base:?}+{index:?}");
+    }
+    // Scaled, displaced, or with an index of the same trouble: unchanged.
+    for (base, index, scale, displ) in
+        [(RegId::RBP, RegId::RAX, 4, 0), (RegId::R13, RegId::RAX, 1, 8), (RegId::RBP, RegId::R13, 1, 0)]
+    {
+        let m = memory_operand(base, index, scale, displ, 0, RegId::None);
+        assert_eq!((m.base, m.index), (base.iced(), index.iced()), "{base:?}+{index:?}*{scale}+{displ}");
+    }
+}

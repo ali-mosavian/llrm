@@ -150,8 +150,9 @@ pub struct Selection {
     /// function tuned for size chooses between its two by the
     /// smaller relative regret, not by bytes first.
     pub wide_alternative: bool,
-    /// Selected the second time with the routine's call for the one long multiply of its module
-    /// (`prepare::LONE_MULTIPLY`): taken only where it is no bigger and no slower.
+    /// Selected the second time with the routine's call for the one long
+    /// multiply of its module (`prepare::LONE_MULTIPLY`): taken only where
+    /// it is no bigger and no slower.
     pub lone_alternative: bool,
     /// The same function selected with its long adds as the generic expansion,
     /// not carry ops (`pipeline::GENERIC_CARRY`); none where it has no
@@ -168,6 +169,10 @@ pub struct Selection {
     pub frequencies: Vec<(u32, f64)>,
     /// The jump tables: the block of each entry, by table.
     pub tables: Vec<Vec<u32>>,
+    /// What the mid-end made of the function, hashed
+    /// (`driver::selections_reusing`), with the form it was selected as:
+    /// the key of its finished lines (`compile::lines_of`). 0: not set.
+    pub digest: u64,
 }
 
 impl Selection {
@@ -315,6 +320,7 @@ pub fn select_function_with(
         unreachable,
         frequencies,
         tables,
+        digest: 0,
     })
 }
 
