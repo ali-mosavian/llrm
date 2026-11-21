@@ -12,9 +12,11 @@ class ParseClocks(unittest.TestCase):
     def test_the_clocks_cell_of_the_program_row(self):
         self.assertEqual(parse_clocks(TABLE), "43404")
 
-    def test_a_bound_is_unmeasured_not_exact(self):
-        # `cycles` prints N* for a lower bound; read as exact it made fake gcc cells
-        self.assertIsNone(parse_clocks("| a.exe | 9 | 24634* | 1.0 |\n"))
+    def test_a_bound_is_kept_as_a_bound_not_exact(self):
+        # `cycles` prints N* for a lower bound; read as exact it made fake gcc cells, dropped it hid pattern_fill 68000 O1 (93048* against gcc 86440)
+        self.assertEqual(parse_clocks("| a.exe | 9 | 24634* | 1.0 |\n"), ">=24634")
+
+    def test_uncovered_code_is_unmeasured(self):
         self.assertIsNone(parse_clocks("| a.exe | 9 | 24634? | 1.0 |\n"))
 
     def test_a_published_maximum_bound_is_kept_as_an_upper_bound(self):
