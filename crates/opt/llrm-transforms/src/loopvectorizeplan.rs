@@ -537,6 +537,25 @@ pub fn describe_costs(
     text
 }
 
+/// The price of one iteration at the chosen factor, with that factor: what two
+/// plans of one loop are compared by.
+pub(crate) fn chosen_price(
+    tti: &dyn Tti,
+    facts: &LoopFacts,
+    chosen: Plan,
+) -> Option<(i64, u32)> {
+    iteration_cost(tti, &facts.recipes, chosen.vf, false, true).ok().map(|cost| (cost, chosen.vf))
+}
+
+/// Whether the plan priced `new` costs less per lane than the one priced `old`
+/// (a tie is not less).
+pub(crate) fn cheaper_per_lane(
+    new: (i64, u32),
+    old: (i64, u32),
+) -> bool {
+    new.0 * i64::from(old.1) < old.0 * i64::from(new.1)
+}
+
 /// `expectedCost(VF=1)`: the scalar loop's price.
 pub(crate) fn scalar_loop_cost(
     tti: &dyn Tti,
