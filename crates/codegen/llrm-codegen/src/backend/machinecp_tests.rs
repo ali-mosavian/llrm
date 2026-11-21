@@ -509,3 +509,51 @@ fn test_a_dword_copy_does_not_make_the_quadword_reverse_a_no_op() {
     ));
     assert_eq!(lines(&got), ["mov R14D,R12D", "mov R12,R14"]);
 }
+
+/// The dispatch a tail duplication copies into a handler of an interpreter's
+/// `exec_loop` (m32 -O3): the handler's `ecx = edi; esi = ebx`, then the
+/// dispatch's `ebx = esi; edi = ecx; esi = reload`, then `jmp *table(,eax,4)`
+/// (an effect nobody knows, so it may read any register). The last two copies
+/// are redundant and `esi = ebx` is overwritten by the reload: it is dead, but
+/// the jump kept it, and it cost one instruction per interpreted operation.
+#[test]
+fn test_an_unknown_instruction_does_not_revive_a_copy_already_overwritten() {
+    use crate::model::ir::Mem;
+    let nothing = Arc::new(Insn::new(
+        9,
+        Some((9, 9)),
+        Some(Semantics { name: Some("".into()), ..Semantics::new(Operation::Nothing) }),
+        vec![],
+        vec![],
+    ));
+    let table = Arc::new(Insn::new(
+        10,
+        Some((10, 10)),
+        Some(Semantics {
+            name: Some("jmp".into()),
+            sources: vec![Loc::Mem(Mem::new(None, 0))],
+            ..Semantics::new(Operation::Jump)
+        }),
+        vec![],
+        vec![],
+    ));
+    let got = propagated(&body(
+        vec![
+            mov(0, rl(RegId::ECX, 4), rl(RegId::EDI, 4)),
+            mov(1, rl(RegId::ESI, 4), rl(RegId::EBX, 4)),
+            nothing,
+            mov(2, rl(RegId::EBX, 4), rl(RegId::ESI, 4)),
+            mov(3, rl(RegId::EDI, 4), rl(RegId::ECX, 4)),
+            mov(4, rl(RegId::ESI, 4), imm(7, 4)),
+            add(5, rl(RegId::EAX, 4), rl(RegId::ESI, 4)),
+            table,
+        ],
+        &[],
+    ));
+    assert_eq!(
+        lines(&got)[..7],
+        ["mov ECX,EDI", "-", "-", "-", "-", "mov ESI,imm", "add EAX,EAX,ESI"],
+        "{:?}",
+        lines(&got)
+    );
+}
