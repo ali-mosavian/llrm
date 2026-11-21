@@ -2100,6 +2100,11 @@ pub trait Tti {
         false
     }
 
+    /// `Tuning::pushes_pad_at_size`.
+    fn pushes_pad_at_size(&self) -> bool {
+        false
+    }
+
     /// `Tuning::libc_memcpy`.
     fn libc_memcpy(&self) -> bool {
         false

@@ -2730,12 +2730,13 @@ fn indirect_call_return_labels_are_unique_across_functions() {
     assert_ne!(labels[0], labels[1], "{text}");
 }
 
-/// LSR left every 16- and 32-bit induction variable of the 6502 alone (its
-/// datalayout is `n8`, so the pin's `IVUsers` found none): `x[i] = n * i`
-/// called `__mulsi3` on every trip, 56k of shrink_wrapped_frame's 64k clocks.
-/// At speed the 32-bit product is a running sum.
+/// A 32-bit product of the counter is not called per trip at speed. #7343 meant a
+/// running sum (LSR on the addrec `{0,+,n}`); measured on release/next
+/// 03aa3b55d3, a loop that keeps the products still calls `__mulsi3_fast` per
+/// trip, so that premise was already dead (row 6502-LSR-IV-PRODUCT). This
+/// fixture folds to `n * 120`, which passes by expansion or by one tail `jmp`.
 #[test]
-fn a_32_bit_product_of_the_counter_is_a_running_sum_at_speed() {
+fn a_32_bit_product_of_the_counter_makes_no_call_per_trip_at_speed() {
     let ir = module(
         "define i32 @f(i32 %n) {
 entry:
@@ -2765,7 +2766,10 @@ exit:
 }",
     );
     let fast = assembly(&ir, &Request::new(Level::O2)).unwrap();
-    assert!(!fast.contains("__mulsi3"), "{fast}");
+    // The two loops fold to `n * 120`: expanded inline, or one tail `jmp` of the
+    // byte entry where its bytes are fewer. Either way no call of the multiply
+    // is made per trip (`jsr`).
+    assert!(!fast.contains("jsr __mulsi3"), "{fast}");
 }
 
 /// A `byval` argument of 40 bytes is copied by a call of `memcpy` the builder

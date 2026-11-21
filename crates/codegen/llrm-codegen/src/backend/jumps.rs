@@ -217,7 +217,7 @@ pub fn optimized_with(
         cpu.tail_dup_hot(),
         cpu.loop_top_clocks(),
         epilogue,
-        cpu.operations.ext_tsp_for_size,
+        cpu.operations.ext_tsp_for_size.then_some(cpu.operations.ext_tsp_by_frequency),
     )?);
     // Tail duplication before the merge, as LLVM places with it: after, the
     // merge would give back what the copy gained.
@@ -238,7 +238,7 @@ pub fn optimized_with(
             cpu.tail_dup_hot(),
             cpu.loop_top_clocks(),
             epilogue,
-            cpu.operations.ext_tsp_for_size,
+            cpu.operations.ext_tsp_for_size.then_some(cpu.operations.ext_tsp_by_frequency),
         )?);
     }
     let done = aligned(&inverted(&placed, size), cpu);
@@ -523,11 +523,11 @@ fn _placed(
     hot: Option<placement::HotTailDup>,
     epilogue: usize,
 ) -> Result<LirBody, masm::Unprintable> {
-    _placed_ext(body, size, aggressive, tail_dup, hot, None, epilogue, false)
+    _placed_ext(body, size, aggressive, tail_dup, hot, None, epilogue, None)
 }
 
 /// `_placed`, with the size order of `-apply-ext-tsp-for-size` where
-/// `ext_tsp` and `size`.
+/// `ext_tsp` and `size`; `Some(true)` weighs it by static frequency.
 fn _placed_ext(
     body: &LirBody,
     size: bool,
@@ -536,7 +536,7 @@ fn _placed_ext(
     hot: Option<placement::HotTailDup>,
     top: Option<placement::TopClocks>,
     epilogue: usize,
-    ext_tsp: bool,
+    ext_tsp: Option<bool>,
 ) -> Result<LirBody, masm::Unprintable> {
     let explicit = _explicit(body)?;
     if body.source_order {
@@ -557,7 +557,7 @@ pub fn placed_explicit(
     hot: Option<placement::HotTailDup>,
     top: Option<placement::TopClocks>,
     epilogue: usize,
-    ext_tsp: bool,
+    ext_tsp: Option<bool>,
 ) -> LirBody {
     let natural = loopy::loops(&explicit, Some(body.entry));
     let busy = Frequency::of(body);
