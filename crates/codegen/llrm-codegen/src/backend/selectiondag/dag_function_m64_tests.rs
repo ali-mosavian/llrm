@@ -1702,4 +1702,11 @@ fn an_m64_v2i64_multiply_is_pmuludq() {
     assert_eq!(pmuludq(&format!("{load}  %r = mul <2 x i64> %a, %b\n")), 3);
     let by_constant = "  %a = load <2 x i64>, ptr %p, align 16\n  %r = mul <2 x i64> %a, <i64 1000003, i64 1000003>\n";
     assert_eq!(pmuludq(by_constant), 2);
+    // A factor of `(y & 15) + 1` has no high half either: `computeKnownBits` of a vector `add` (scroll's
+    // weighted sum kept all three, 10 instructions a lane).
+    let by_small = format!(
+        "{load}  %m = and <2 x i64> %b, <i64 15, i64 15>\n  %s = add <2 x i64> %m, <i64 1, i64 1>\n  \
+         %r = mul <2 x i64> %a, %s\n"
+    );
+    assert_eq!(pmuludq(&by_small), 2);
 }
