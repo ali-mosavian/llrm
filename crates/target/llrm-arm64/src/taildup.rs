@@ -228,13 +228,15 @@ fn is_64(inst: &Inst) -> bool {
 }
 
 /// Drops the blocks nothing branches to or falls into (the short block, once
-/// every jumper has its own copy).
+/// every jumper has its own copy). A block of `kept` has its address taken: an
+/// `indirectbr` reaches it, whatever its labels' users say.
 pub fn drop_unreferenced(
     blocks: &mut Vec<Lowered>,
     tables: &[crate::jumptable::Table],
+    kept: &[String],
 ) {
     loop {
-        let mut referenced: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        let mut referenced: std::collections::HashSet<&str> = kept.iter().map(String::as_str).collect();
         for (at, block) in blocks.iter().enumerate() {
             referenced.extend(block.insts.iter().filter_map(label_of));
             referenced.extend(tables.iter().flat_map(|table| table.entries.iter().map(String::as_str)));

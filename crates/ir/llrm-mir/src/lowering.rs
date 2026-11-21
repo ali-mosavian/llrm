@@ -284,6 +284,19 @@ pub trait Lowering {
         bits
     }
 
+    /// DEVIATE SW3: whether a switch on an integer of `bits` in a function
+    /// built for size keeps its type where `preferred_switch_condition_bits`
+    /// would widen it. The pin does not: a byte switch compares a `movzx`ed
+    /// register, `cmp eax, imm32` for a case of 128 or more, where gcc compares
+    /// the byte, `cmp al, imm8`. The base class widens as the pin does.
+    fn keeps_narrow_switch_at_size(
+        &self,
+        bits: u32,
+    ) -> bool {
+        let _ = bits;
+        false
+    }
+
     /// `isMultiStoresCheaperThanBitsMerge(EVT, EVT)` (TargetLowering.h):
     /// whether a store of two values merged into one wider integer is
     /// better made two stores. The base class says no; x86 says yes for a

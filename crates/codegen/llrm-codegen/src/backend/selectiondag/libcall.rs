@@ -33,7 +33,7 @@ use llrm_lir::registers::RegId;
 
 use super::dag::{MemBase, MemInfo, SDValue, SelectionDAG};
 use super::isd::ISD;
-use super::mvt::EVT;
+use super::mvt::{EVT, MVT};
 
 /// Where an argument goes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -166,16 +166,45 @@ pub fn c_lib_call_parts(
     args: &[SDValue],
     ret: EVT,
 ) -> Option<Vec<SDValue>> {
+    let root = dag.entry_node();
+    c_lib_call_on(dag, env, root, name, convention, args, ret).map(|(values, _)| values)
+}
+
+/// `c_lib_call_parts` ordered after `chain`: the result parts and the call's
+/// out chain (`makeLibCall` of a constrained node's routine). A scalar float
+/// argument or result goes where the convention puts a float, in a vector
+/// register; `None` where it has none (the x87 stack).
+pub fn c_lib_call_on(
+    dag: &mut SelectionDAG,
+    env: &CallEnv<'_>,
+    root: SDValue,
+    name: &str,
+    convention: Option<u32>,
+    args: &[SDValue],
+    ret: EVT,
+) -> Option<(Vec<SDValue>, SDValue)> {
     use llrm_target::calling::Place as Where;
     let calling = env.arch.calling();
     let native = convention.and_then(|number| calling.by_number(number)).unwrap_or_else(|| calling.native());
     let slot = env.arch.stack_slot_bytes();
+    let is_float = |vt: EVT| matches!(vt, EVT::Simple(MVT::F32 | MVT::F64));
+    // x87 and wider floats travel on the x87 stack or in memory: not here.
+    if args.iter().map(|&arg| dag.value_type(arg)).chain([ret]).any(|vt| vt.is_floating_point() && !is_float(vt)) {
+        return None;
+    }
     let kinds: Vec<_> = args
         .iter()
         .map(|&arg| {
-            let bytes = i64::from(dag.value_type(arg).size_in_bits() / 8);
+            let vt = dag.value_type(arg);
+            let bytes = i64::from(vt.size_in_bits() / 8);
             native.kind(
-                llrm_mir::target::Argument { bytes, integer: true, pointer: false, floating: false, memory: false },
+                llrm_mir::target::Argument {
+                    bytes,
+                    integer: !is_float(vt),
+                    pointer: false,
+                    floating: is_float(vt),
+                    memory: false,
+                },
                 slot,
             )
         })
@@ -203,7 +232,11 @@ pub fn c_lib_call_parts(
         }
     }
     let result_bytes = i64::from(ret.size_in_bits() / 8);
-    let result = native.result_registers(result_bytes)?;
+    let result = if is_float(ret) {
+        vec![native.float_result_register()?.to_owned()]
+    } else {
+        native.result_registers(result_bytes)?.to_vec()
+    };
     let part = match result.len() {
         1 => ret,
         2 => EVT::integer(ret.size_in_bits() / 2),
@@ -212,9 +245,8 @@ pub fn c_lib_call_parts(
     let returns: Vec<Returned> =
         result.iter().map(|register| Returned { reg: env.arch.register_named(register), vt: part }).collect();
     let callee = dag.get_target_external_symbol(env.pointer, name);
-    let root = dag.entry_node();
     let stack = placement.stack_bytes as u64;
     let clobbers = super::dagisel_adapter::clobbered_by(env.arch, Some(native));
-    let (_chain, values) = lib_call(dag, env, root, callee, &places, stack, 0, &returns, &clobbers);
-    Some(values)
+    let (chain, values) = lib_call(dag, env, root, callee, &places, stack, 0, &returns, &clobbers);
+    Some((values, chain))
 }
