@@ -99,6 +99,9 @@ thread_local! {
     /// Whether a long multiply calls `__mulsi3_fast` (see
     /// [`with_fast_multiply`]).
     static FAST_MULTIPLY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Whether a long multiply by a byte calls the byte entry (see
+    /// [`with_byte_multiply`]).
+    static BYTE_MULTIPLY: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
     /// Whether a long division calls the speed routine at size too (see
     /// [`with_size_fast_division`]).
     static SIZE_FAST_DIVISION: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
@@ -193,8 +196,9 @@ pub fn forget_inline_saves() {
 /// Every choice outside a selection that the text of a function depends on
 /// (see [`with_shared_saves`], [`with_fast_division`] and the others): two
 /// compiles of one selection under equal flags write the same text.
-pub fn text_flags(name: &str) -> (bool, bool, bool, bool, bool, bool, bool, bool) {
+pub fn text_flags(name: &str) -> (bool, bool, bool, bool, bool, bool, bool, bool, bool) {
     (
+        BYTE_MULTIPLY.with(|a| a.get()),
         SPIKE.with(|a| a.get()),
         SHARED_SAVES.with(|a| a.get()),
         FAST_DIVISION.with(|a| a.get()),
@@ -270,6 +274,19 @@ pub fn with_fast_multiply<R>(
     let before = FAST_MULTIPLY.with(|a| a.replace(allowed));
     let result = f();
     FAST_MULTIPLY.with(|a| a.set(before));
+    result
+}
+
+/// `f` with the byte multiply entries (`__mulsi3_byte`, `__mulsi3_fast_byte`)
+/// called or not: each is a routine body of its own, so a module that also
+/// calls the general multiply keeps the one body (`select::module_text`).
+pub fn with_byte_multiply<R>(
+    allowed: bool,
+    f: impl FnOnce() -> R,
+) -> R {
+    let before = BYTE_MULTIPLY.with(|a| a.replace(allowed));
+    let result = f();
+    BYTE_MULTIPLY.with(|a| a.set(before));
     result
 }
 
@@ -2835,7 +2852,7 @@ pub fn build_with_places(
                         .all(|cell| b.constants.get(cell) == Some(&0))
                 };
                 // a multiplier of one byte: the entries read rc4 only
-                let byte_multiplier = code == op::MUL32 && {
+                let byte_multiplier = code == op::MUL32 && BYTE_MULTIPLY.with(|f| f.get()) && {
                     let (low, high) = (name(&o[4])?, name(&o[5])?);
                     [format!("{low}+1"), high.to_owned(), format!("{high}+1")]
                         .iter()

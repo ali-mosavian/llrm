@@ -153,7 +153,7 @@ struct TextKey {
     zero_page: u8,
     tuning: (u32, bool),
     source: Option<(String, Option<u32>)>,
-    flags: (bool, bool, bool, bool, bool, bool, bool, bool),
+    flags: (bool, bool, bool, bool, bool, bool, bool, bool, bool),
 }
 
 impl TextKey {
@@ -320,6 +320,24 @@ pub fn module_text(
     alloc::forget_inline_saves();
     let mut texts =
         parts.iter().map(|(name, selection)| function_text(module, name, selection)).collect::<Result<Vec<_>, _>>()?;
+    // the choices of each function so far: a text written again for another
+    // choice keeps them (a call of `__mulsi3` made the speed multiply and lost
+    // the module's cold-division choice, +230 B in compound_assignment_types)
+    let mut variants = vec![Variants::default(); texts.len()];
+    // the byte multiply entries are bodies of their own (60-70 B each): a module that
+    // also calls the general multiply links that body, and sets the multiplier's upper
+    // bytes at its byte sites too. Before the save helpers are priced: the cells a
+    // function keeps depend on it
+    let general = |text: &str| text.contains(" __mulsi3\n");
+    let byte = |text: &str| text.contains(" __mulsi3_byte\n");
+    if texts.iter().any(|text| general(text)) && texts.iter().any(|text| byte(text)) {
+        for at in 0..texts.len() {
+            if byte(&texts[at]) {
+                variants[at].byte_multiply = false;
+                texts[at] = variants[at].text(module, parts[at])?;
+            }
+        }
+    }
     let cells = |text: &str| -> Option<u32> {
         let (before, _) = text.split_once("\n  jsr __csave")?;
         before.rsplit_once("ldy #")?.1.trim().parse().ok()
@@ -334,7 +352,9 @@ pub fn module_text(
         let mut inline = Vec::new();
         let mut gain = 0;
         for &at in &users {
-            let text = alloc::with_shared_saves(false, || function_text(module, parts[at].0, parts[at].1))?;
+            let text = alloc::with_shared_saves(false, || {
+                alloc::with_byte_multiply(variants[at].byte_multiply, || function_text(module, parts[at].0, parts[at].1))
+            })?;
             gain += bytes(&text)? - bytes(&texts[at])?;
             inline.push(text);
         }
@@ -353,10 +373,6 @@ pub fn module_text(
             .iter()
             .any(|name| text.contains(&format!(" {name}_fast\n")))
     };
-    // the choices of this function so far: a text written again for another
-    // choice keeps them (a call of `__mulsi3` made the speed multiply and lost
-    // the module's cold-division choice, +230 B in compound_assignment_types)
-    let mut variants = vec![Variants::default(); texts.len()];
     if texts.iter().any(|text| wide(text)) && !crate::hotdivision::hot(module) {
         for at in 0..texts.len() {
             if wide(&texts[at]) {
@@ -441,11 +457,19 @@ struct Variants {
     compact_division16: bool,
     /// The long multiply calls `__mulsi3_fast`.
     fast_multiply: bool,
+    /// A multiply by a byte calls the byte entry, a routine body of its own.
+    byte_multiply: bool,
 }
 
 impl Default for Variants {
     fn default() -> Self {
-        Variants { wide_division: true, size_fast_division: false, compact_division16: false, fast_multiply: false }
+        Variants {
+            wide_division: true,
+            size_fast_division: false,
+            compact_division16: false,
+            fast_multiply: false,
+            byte_multiply: true,
+        }
     }
 }
 
@@ -459,7 +483,9 @@ impl Variants {
         alloc::with_fast_division(self.wide_division, || {
             alloc::with_size_fast_division(self.size_fast_division, || {
                 alloc::with_compact_division16(self.compact_division16, || {
-                    alloc::with_fast_multiply(self.fast_multiply, || function_text(module, name, selection))
+                    alloc::with_fast_multiply(self.fast_multiply, || {
+                        alloc::with_byte_multiply(self.byte_multiply, || function_text(module, name, selection))
+                    })
                 })
             })
         })

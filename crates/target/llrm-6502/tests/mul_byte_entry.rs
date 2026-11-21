@@ -26,3 +26,17 @@ fn a_long_multiply_by_a_byte_calls_the_byte_entry_and_clears_no_upper_bytes() {
         }
     }
 }
+
+/// A module that also multiplies by a wider constant calls `__mulsi3`: the byte
+/// entry would link a second 60-70 B body for it (`mul_constants` -O1 +65 B), so
+/// its byte sites call the one body.
+#[test]
+fn a_module_with_a_general_multiply_keeps_one_multiply_body() {
+    let ir = format!(
+        "target datalayout = \"{}\"\ndefine i32 @f(i32 %x, i32 %y) {{\n  %a = mul i32 %x, 11\n  %b = mul i32 %y, 1000003\n  %c = xor i32 %a, %b\n  ret i32 %c\n}}\n",
+        datalayout()
+    );
+    let text = assembly(&ir, &Request::new(Level::Os)).unwrap_or_else(|e| panic!("{e}"));
+    assert!(text.contains("__mulsi3\n"), "{text}");
+    assert!(!text.contains("__mulsi3_byte") && !text.contains("__mulsi3_fast_byte"), "{text}");
+}
