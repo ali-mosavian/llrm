@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 316 documented, 5 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 318 documented, 5 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -32,6 +32,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | cgpretdup | CodeGenPrepare's `dupRetToEnableTailCallOpts`: a return block that only returns what a tail call produced is copied into the predecessors that end in that call ([CodeGenPrepare.cpp#L3014](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/CodeGenPrepare.cpp#L3014)). | In `cgpaddr`'s run, after the empty blocks go. | [cgpretdup](cgpretdup.md) |
 | cgpselect | A float-to-integer conversion, or a float compare, that only one arm of a select with a constant arm needs, made on that arm's path only. | Named by `cgpaddr`, `pipeline`. | [cgpselect](cgpselect.md) |
 | cgpsinkops | CodeGenPrepare's `tryToSinkFreeOperands`: operands the target folds into an instruction are made again beside it ([CodeGenPrepare.cpp#L7994](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/CodeGenPrepare.cpp#L7994)). | In `cgpaddr`'s run, before `SinkCast`. | [cgpsinkops](cgpsinkops.md) |
+| cgpsplitgep | CodeGenPrepare's `splitLargeGEPOffsets`: the constant-offset GEPs of one base that the target cannot fold into an address are made from one new base. | In `cgpaddr`, for a target whose `shouldConsiderGEPOffsetSplit` is true | [cgpsplitgep](cgpsplitgep.md) |
 | cgpswitch | CodeGenPrepare's `optimizeSwitchType`: a switch on an integer narrower than the target's preferred width is a switch on the extended condition ([CodeGenPrepare.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/CodeGenPrepare.cpp)). | In `cgpaddr`'s run. | [cgpswitch](cgpswitch.md) |
 | cmpopt | CodeGenPrepare's `optimizeCmp` steps after the overflow combines: the power-of-two test of `ctpop` unfolded, an equality made the opposite of the signed compare that dominates it, and compare operands swapped to match a subtract ([CodeGenPrepare.cpp#L8805](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/CodeGenPrepare.cpp#L8805)). | In `cgpaddr`'s run, after the compare sinks. | [cmpopt](cmpopt.md) |
 | cold_chrec | DEVIATE COLD-CHREC: a chained recurrence of an enclosing loop that an inner loop's entry skips on some trips is not expanded for the inner loop. | Named by `lsr_use`, `widen`. | [cold_chrec](cold_chrec.md) |
@@ -118,6 +119,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | combine_switch | InstCombine's `switch`: `InstCombinerImpl::visitSwitchInst` ([InstructionCombining.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstructionCombining.cpp#L4470)). | `combine` (its dispatch on `Opcode::Switch`). | [combine_switch](combine_switch.md) |
 | combine_visit_select | `visitSelectInst`: the canonical forms of a `select`. | Named by `combine_select_andor`, `combine_select_bit_test`, `combine_select_bools`, `combine_select_cttz_ctlz`, `combine_select_equivalence`, `combine_select_ext_const`, `combine_select_fabs`, `combine_select_fcmp_swap`, `combine_select_into_op`, `combine_select_minmax_cast`, `combine_select_op_op`, `combine_select_spf`, `combine_select_tail`, `combine_select_to_cmp`, `combine_select_to_phi`. | [combine_visit_select](combine_visit_select.md) |
 | combine_xor | `InstCombinerImpl::visitXor`: the integer `xor` folds. | Named by `combine`, `combine_casted_logic`. | [combine_xor](combine_xor.md) |
+| combine_xor_icmps | `foldXorOfICmps`: an `xor` of two `i1` compares, folded to one compare. | `visit_xor`. | [combine_xor_icmps](combine_xor_icmps.md) |
 | condstores | Two conditional stores to one address, one in each of two if-then-else diamonds or triangles in a row, are one store after them, predicated on either condition: SimplifyCFG's `mergeConditionalStores`. | Named by `condtocond`, `simplifycfg`. | [condstores](condstores.md) |
 | condtocond | A conditional branch in an empty block that a conditional branch predecessor shares a destination with, folded into the predecessor: LLVM's [`SimplifyCondBranchToCondBranch`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L4773). | Named by `simplifycfg`. | [condtocond](condtocond.md) |
 | congruentiv | Phis of a loop header that ScalarEvolution proves equal are one phi. | [`crate::indvars`](indvars.md), which leaves the phis it replaced to `dead`. | [congruentiv](congruentiv.md) |

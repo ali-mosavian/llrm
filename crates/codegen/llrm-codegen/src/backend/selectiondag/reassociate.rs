@@ -20,7 +20,7 @@
 //! LLVM's `DAGCombiner::reassociateOps`
 //! ([L1336](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L1336)).
 
-use super::dag::{SDNodeFlags, SDValue};
+use super::dag::{NodeData, SDNodeFlags, SDValue};
 use super::dag_combiner::{CombineHooks, DagCombiner};
 use super::isd::ISD;
 use super::mvt::EVT;
@@ -74,7 +74,11 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         if self.dag.opcode(n0) != ISD::Add {
             return false;
         }
-        let legal = |offset: i128| i128::from(i32::MIN) <= offset && offset <= i128::from(i32::MAX);
+        let bytes_of = |user: u32| match self.dag.node(SDValue { node: user, res: 0 }).data {
+            NodeData::Mem(info) => u64::from(info.mem_vt.size_in_bits() / 8),
+            _ => 0,
+        };
+        let legal = |offset: i128, user: u32| self.hooks.is_legal_address_offset(offset, bytes_of(user));
         let signed = |value: u128, vt: EVT| {
             let bits = vt.size_in_bits();
             let shift = 128 - bits;
@@ -93,7 +97,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
             for user in self.dag.users(node) {
                 // x[offset2] already not legal: nothing to break; else would
                 // x[offset1 + offset2] still be?
-                if is_memory(user) && legal(c2) && !legal(c1 + c2) {
+                if is_memory(user) && legal(c2, user) && !legal(c1 + c2, user) {
                     return true;
                 }
             }
@@ -110,7 +114,7 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
             return false;
         }
         // `(add (add x, y), c2)` only used by accesses with `x[c2]` legal.
-        self.dag.users(node).all(|user| is_memory(user) && legal(c2))
+        self.dag.users(node).all(|user| is_memory(user) && legal(c2, user))
     }
 
     fn reassociate_ops_commutative(
