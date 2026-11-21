@@ -80,6 +80,11 @@ Compile the one module with every stage dumped:
 - `NN/MMM-<stage>.ll`: inside the module pass `pipeline`, the module after each step of the per-function pipeline, numbered by run (`01/003-r01-gvn.ll`: run 1, round 1, gvn), with `pipeline.body` the function in question;
 - `listing.asm` and `cost`: the final listing and the per-procedure executed estimate.
 
+Two traps when the dump feeds an oracle:
+
+- At `-Os` the arm64 driver compiles a module again for each trial (unrotated, unmerged, divides) and a dump directory holds the **last** build, not the chosen one. Run with `LLRM_ARM64_NO_TRIAL=1`, or read the trial's verdict (`LLRM_DEBUG=trial`), before handing the dumped IR to the pin's `llc`: fib -Os was compared against a shape our output did not have.
+- `llrm-cc` runs the sibling `llrm-arm64-llc` of its own directory, so a changed backend needs a directory holding both binaries; `llrm-cc` alone is byte-identical before and after an arm64 change.
+
 Diff two adjacent dumps. The first one that differs from what the source means is the pass:
 
     diff dump/01/003-r01-gvn.ll dump/01/004-r01-promote.ll
