@@ -34,6 +34,14 @@ pub enum Kind {
     Copy,
 }
 
+/// The status-flag lanes ([`Inst::written_lanes`]): negative, zero, carry,
+/// overflow.
+pub const FLAG_N: u8 = 1;
+pub const FLAG_Z: u8 = 2;
+pub const FLAG_C: u8 = 4;
+pub const FLAG_V: u8 = 8;
+pub const FLAG_ALL: u8 = FLAG_N | FLAG_Z | FLAG_C | FLAG_V;
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Inst {
     pub kind: Kind,
@@ -61,6 +69,12 @@ pub struct Inst {
     pub remade_sets_flags: bool,
     /// It reads the status flags. Read it through [`Inst::reads_flags`].
     pub reads_flags: bool,
+    /// The lanes (`FLAG_*`) a flag setter leaves as they were (`inc` keeps
+    /// carry). Read through [`Inst::written_lanes`].
+    pub flags_kept: u8,
+    /// The lanes a flag reader reads; none named, all of them. Read through
+    /// [`Inst::read_lanes`].
+    pub flags_read: u8,
     /// `mayLoad`, `mayStore`, `hasUnmodeledSideEffects`, `isAsCheapAsAMove`.
     pub may_load: bool,
     pub may_store: bool,
@@ -112,6 +126,22 @@ impl Inst {
         self.reads_flags
     }
 
+    /// The flag lanes it overwrites: every one but those it keeps. A pass
+    /// that reorders flag accesses lane by lane reads this and
+    /// [`Inst::read_lanes`]; the rest still go by `sets_flags`/`reads_flags`.
+    pub fn written_lanes(&self) -> u8 {
+        if self.sets_flags { FLAG_ALL & !self.flags_kept } else { 0 }
+    }
+
+    /// The flag lanes it reads.
+    pub fn read_lanes(&self) -> u8 {
+        match (self.reads_flags, self.flags_read) {
+            (false, _) => 0,
+            (true, 0) => FLAG_ALL,
+            (true, lanes) => lanes,
+        }
+    }
+
     pub fn new(
         kind: Kind,
         operands: Vec<Operand>,
@@ -127,6 +157,8 @@ impl Inst {
             sets_flags: false,
             remade_sets_flags: false,
             reads_flags: false,
+            flags_kept: 0,
+            flags_read: 0,
             may_load: false,
             may_store: false,
             side_effects: false,
