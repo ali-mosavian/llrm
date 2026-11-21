@@ -783,6 +783,13 @@ pub enum SpeedUnroll {
     /// smaller with one and not the other (idioms -O3: 1856 B with the
     /// unrolls refused, 3229 B with the inlines refused too).
     NoInlineGrowth,
+    /// [`Self::NoInlineGrowth`], and the SZ2 trial (`walk.rs`) refuses a copy
+    /// that adds bytes too, which it otherwise takes by the byte rate: the
+    /// module with the calls where the trial inlines what the policy refused
+    /// (shift_int64_masked_amount -O2: `mix` inlined at three hot sites,
+    /// +81 B and +20% T; shrink_wrapped_frame -O3 is 374 B only through that
+    /// inline, which `NoInlineGrowth` keeps).
+    NoInlineGrowthAll,
     /// Both of the above: switch_table_in_code -O2 is 138 B smaller with both,
     /// 78 B with the inline alone.
     NoGrowBoth,
@@ -799,7 +806,12 @@ impl SpeedUnroll {
 
     /// Whether the variant makes only the inlines that add no bytes.
     pub fn refuses_inline_growth(self) -> bool {
-        matches!(self, Self::NoInlineGrowth | Self::NoGrowBoth)
+        matches!(self, Self::NoInlineGrowth | Self::NoInlineGrowthAll | Self::NoGrowBoth)
+    }
+
+    /// Whether the SZ2 inline trial also refuses a copy that adds bytes.
+    pub fn refuses_trial_growth(self) -> bool {
+        self == Self::NoInlineGrowthAll
     }
 }
 

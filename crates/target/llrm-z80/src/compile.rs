@@ -317,6 +317,9 @@ fn unroll_choice(
         variants.push(SpeedUnroll::NoInlineGrowth);
     }
     if decisions.inlined > 0 {
+        variants.push(SpeedUnroll::NoInlineGrowthAll);
+    }
+    if decisions.inlined > 0 {
         variants.push(SpeedUnroll::NoGrowBoth);
     }
     let mut best = (module_priced(ir, &request)?, request);
