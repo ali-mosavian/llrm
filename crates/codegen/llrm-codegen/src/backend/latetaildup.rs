@@ -38,8 +38,8 @@
 //! already holds the frame's teardown, so a framed function's is longer than
 //! the bound and is never copied; here the teardown is emitted after this pass,
 //! so a tail that returns counts the callee-saved registers the body writes,
-//! and the frame's own `pop` or `leave` where the function keeps its frame
-//! register (`frame_kept`).
+//! and the frame's own `pop` or `leave` where the function has a frame
+//! register (kept, or addressed by the body).
 //! Without it queens m64 -O2 was +24 B (copies the tail merge joined again).
 //!
 //! DEVIATE TL2 (no number): `Preds` is rebuilt after each tail copied, so a
@@ -247,7 +247,7 @@ pub fn duplicated_with(
     pointer: RegId,
     frame_kept: bool,
 ) -> LirBody {
-    let epilogue = saved_count(&body, saved, free, pointer) + usize::from(frame_kept);
+    let epilogue = saved_count(&body, saved, free, pointer) + usize::from(framed(&body, frame_kept, free, pointer));
     let mut place = 1;
     let mut graph = Preds::of(&body);
     while place < body.blocks.len() {
@@ -266,6 +266,20 @@ pub fn duplicated_with(
         place += 1;
     }
     body
+}
+
+/// Whether the function will have a frame register to restore: `masm`'s
+/// `framed_by` less the reserve, which is not known until after this pass (a
+/// local or a spill is addressed through the frame register, so it shows in
+/// the roots).
+fn framed(
+    body: &LirBody,
+    kept: bool,
+    free: bool,
+    pointer: RegId,
+) -> bool {
+    let found = body.facts.0.get::<super::masm::BodyRoots>(body);
+    kept || found.moves_stack || (!free && found.plain.contains(&body.regs().root(pointer)))
 }
 
 /// How many callee-saved registers the body writes: the pops its returns will
@@ -296,9 +310,8 @@ pub struct TailDuplicate {
     pub saved: Vec<RegId>,
     pub free: bool,
     pub pointer: RegId,
-    /// The function keeps its frame register whatever it holds
-    /// (`CpuTable`'s `kept`): its return takes the frame's `pop` or `leave`
-    /// too, which TL3 counts.
+    /// The function keeps its frame register whatever it holds (`kept`); a
+    /// body that addresses it has one too (TL3 counts the frame's `pop`).
     pub frame_kept: bool,
 }
 
