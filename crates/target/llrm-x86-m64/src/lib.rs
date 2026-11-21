@@ -493,6 +493,10 @@ impl llrm_target::Target for M64 {
                             // callee with one site too; the pin copies it (crc, floats,
                             // tile -Os: gcc keeps the call, +40 B each).
                             inline_size_guard_single_site: true,
+                            // The SZ1 guard yields where the pin's `updateThreshold` raises an `inlinehint`
+                            // callee to 325 at an `optsize` caller, as at m32 (QB operands.c `hot_operand`
+                            // into `hot_int`: 16,542 -> 11,101 B).
+                            inline_size_guard_yields_to_inlinehint: true,
                             // DEVIATE UP1-REG at m64 (owner m64, exit 2026-11-20): promoted
                             // arrays that exceed the registers are not free (fpbench -O2
                             // +815 B for -75 clocks). The byte rate follows the clock pricing.

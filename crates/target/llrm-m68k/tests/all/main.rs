@@ -4,6 +4,7 @@
 #[path = "../support/mod.rs"]
 mod support;
 
+mod a6_free_without_frame_pointer;
 mod abi_parse_once;
 mod abs_select;
 mod accumulate_commute;

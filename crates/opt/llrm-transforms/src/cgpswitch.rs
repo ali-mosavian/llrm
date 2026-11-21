@@ -11,6 +11,9 @@
 //!
 //! MIRROR: the whole function.
 //!
+//! DEVIATE SW3: a function built for size keeps a switch on a byte narrow where
+//! the target says so. Owner x86-m32-b, exit: none (gcc's output).
+//!
 //! DEVIATE SW1: the target's preferred width is
 //! `Lowering::preferred_switch_condition_bits`. Exit: none.
 //!
@@ -47,6 +50,10 @@ fn widened(
     let Some(old_ty) = function.operand_type(context, condition) else { return false };
     let Some(old_bits) = context.types.int_bits(old_ty) else { return false };
     let wide_bits = lowering.preferred_switch_condition_bits(old_bits);
+    // DEVIATE SW3 (`Lowering::keeps_narrow_switch_at_size`).
+    if function.optimizes_for_size() && lowering.keeps_narrow_switch_at_size(old_bits) {
+        return false;
+    }
     // DEVIATE SW2: a switch is not widened past the pointer: the 16-bit target
     // keeps its switch narrow (a 32-bit compare there costs an operand-size
     // prefix per case), as `is_desirable_to_promote_op` reads it. Exit: none.

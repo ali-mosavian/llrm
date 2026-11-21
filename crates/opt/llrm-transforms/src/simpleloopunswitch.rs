@@ -1075,11 +1075,17 @@ fn unswitch_loop(
             ),
         );
     let lp = analyzed.loops.get_loop_for(header).expect("a loop headed by this block");
-    if !non_trivial || optsize || !nontrivial::is_safe(run, analyzed, lp) {
+    // DEVIATE UNROLL-SPEED-TRIAL: the compile that copies no loop for a
+    // condition (`SpeedUnroll::NoUnswitch`) is priced against the one that does.
+    let refused = crate::trial::speed_unroll().is_some_and(crate::trial::SpeedUnroll::refuses_unswitch);
+    if !non_trivial || optsize || refused || !nontrivial::is_safe(run, analyzed, lp) {
         return Unswitched::default();
     }
     match unswitch_best_condition(run, analyzed, header) {
-        Some((siblings, partial)) => Unswitched { changed: true, siblings, revisit: !partial, non_trivial: true },
+        Some((siblings, partial)) => {
+            crate::trial::note_speed_unswitch();
+            Unswitched { changed: true, siblings, revisit: !partial, non_trivial: true }
+        }
         None => Unswitched::default(),
     }
 }

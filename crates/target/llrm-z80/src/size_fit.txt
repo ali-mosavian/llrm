@@ -1,0 +1,18 @@
+# Bytes a z80 operation is written as, by `OperationCosts` field: `tools/z80_size_fit.py --write` fits them to
+# the bytes the backend writes (`tests/size_calibration.rs`). Generated; do not edit by hand.
+function = 0
+add = 6
+address = 0
+load = 31
+direct_load = 3
+store = 3
+direct_store = 4
+shift = 9
+extend = 4
+call = 4
+argument = 2
+multiply = 15
+divide = 19
+branch = 1
+move = 1
+return_ = 0
