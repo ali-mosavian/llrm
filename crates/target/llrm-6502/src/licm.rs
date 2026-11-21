@@ -134,7 +134,14 @@ impl Mos {
         &self,
         mut value: u32,
     ) -> u32 {
+        // copies can form a cycle (a loop-carried swap): the walk ends where it
+        // would revisit, on the least value of the walk, the same for every start
+        let mut seen = vec![value];
         while let Some(&next) = self.alias.get(&value) {
+            if seen.contains(&next) {
+                return *seen.iter().min().unwrap();
+            }
+            seen.push(next);
             value = next;
         }
         value
