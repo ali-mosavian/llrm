@@ -195,6 +195,9 @@ pub fn target_lowering_with(
     set(&[ConstantPool, JumpTable, GlobalAddress, ExternalSymbol], &[MVT::I32], Action::Custom);
     set(&[VAStart], &[MVT::Other], Action::Custom);
     set(&[VAEnd, VACopy, StackSave, StackRestore], &[MVT::Other], Action::Expand);
+    // The pin asks for `STACKSAVE` at `MVT::Other`; here the node's value type
+    // is asked.
+    set(&[StackSave], &[MVT::I32], Action::Expand);
     set(&[DynamicStackAlloc], &[MVT::I32], Action::Custom);
     // `RTLIB::MUL_I32` and the others: libgcc's names, the pin's defaults
     // (`RuntimeLibcalls.def`)
