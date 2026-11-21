@@ -49,6 +49,11 @@
 //! - D5. Priced (M16-KEEPDISP-1, closed): on a target whose accesses fold a constant offset
 //!   (`constant_offset_phi_is_cheap` false) a phi of such offsets is priced
 //!   (`displacement_sink_pays`), not sunk always as the pin does.
+//! - D6. The pin sinks only after SROA. Where the target sinks at size in the
+//!   early slots too (`Tuning::sink_common_at_size`), a load or store whose
+//!   pointer needs a phi and is an alloca's is left (`points_into_alloca`):
+//!   SROA cannot speculate through a select of allocas (older LLVM kept this
+//!   guard in `canSinkInstructions`; the pin has dropped it).
 
 use llrm_mir::context::{ConstantKind, Context};
 use llrm_mir::dense::{IdMap, IdSet};
@@ -219,7 +224,7 @@ pub(crate) fn can_replace_operand_with_variable(
     }
 }
 
-/// `isa<AllocaInst>(Op->stripPointerCasts())`.
+/// Whether `operand` is an alloca, through casts and all-zero GEPs (D6).
 fn points_into_alloca(context: &Context, function: &Function, mut operand: Operand) -> bool {
     loop {
         let Operand::Value(value) = operand else { return false };
@@ -315,8 +320,7 @@ fn can_sink(
         if insts.iter().all(|&inst| function.instruction(inst).operands[index] == operand) {
             continue;
         }
-        // SROA cannot speculate a store through a select of allocas, so a
-        // load or store that would need a phi for its alloca is left.
+        // D6: SROA cannot speculate through a select of allocas.
         if matches!(function.instruction(first).opcode, Opcode::Load { .. } | Opcode::Store { .. })
             && insts
                 .iter()
