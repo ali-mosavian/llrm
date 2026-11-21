@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/hoistcommon.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/hoistcommon.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/hoistcommon.rs sha256:ad2bd90576afa7740693cd91e226694a36b325133b90567107f8f89e162fc238 -->
+<!-- src: crates/opt/llrm-transforms/src/hoistcommon.rs sha256:5c6c3bf680403d7943c4efdfd538fb5cb089edc865a226705bf0a4c2c4f5f0e1 -->
 
 # hoistcommon
 
@@ -51,9 +51,9 @@ The instructions both arms open with run once, before the branch:
 - D1. No block has its address taken in the MIR, no pseudo probes, no
   debug-record lists to hoist in step (the debug records of a hoisted
   instruction move with it); `!mmra` tags are compared as written.
-- D2. `TargetTransformInfo::isProfitableToHoist` is `Tti::is_profitable_to_hoist`
-  (the base implementation is true; the pin's AArch64 and PowerPC override it,
-  x86 here does, FOLD-HOIST); `nomerge` and
+- D2. `TargetTransformInfo::isProfitableToHoist` is
+  `Tti::is_profitable_to_hoist` (the base implementation is true; the pin's
+  AArch64 and PowerPC override it, x86 here does, FOLD-HOIST); `nomerge` and
   `convergent` are not attributes of the MIR.
 - D3. Instructions are compared by operation, type and operands (a call by
   its type, convention and tail kind, its attributes only intersecting); the

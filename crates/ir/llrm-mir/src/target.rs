@@ -489,6 +489,11 @@ pub struct Tuning {
     /// 0.2% in clocks, while its copies of a peeled ladder cost x_ld_matmul
     /// -O3 +8.1% clocks and 1,615 B, queens -O3 +8.3% and 3,706 B.
     pub backward_threading: bool,
+    /// `sinkCommonInsts` in every `SimplifyCFG` of a function that is
+    /// optimized for size, as the pin's `-sink-common-insts` (its default is the
+    /// late slot only). Where a function is inlined many times, the copies'
+    /// identical write-backs are one (gcc `-fcrossjumping`, on at size).
+    pub sink_common_at_size: bool,
     /// DEVIATE SPILL-FOLD (owner x86-m16, exit 2026-11-29): the clocks a
     /// spilled value costs where its references fold into memory operands,
     /// which `tryRegionSplit` weighs against the split's copies. The pin
@@ -978,6 +983,7 @@ impl Tuning {
         unroll_recurrence_veto: false,
         threads_by_relation: false,
         backward_threading: true,
+        sink_common_at_size: false,
         spill_fold: None,
         unswitch_threshold: None,
         phiopt_one_feeding_statement: false,
