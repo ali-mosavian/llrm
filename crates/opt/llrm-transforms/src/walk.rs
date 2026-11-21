@@ -821,7 +821,7 @@ impl ProgramPass for Walk {
                                     0
                                 };
                                 let (saved, growth) = if size == crate::inlinecost::CallerSize::Speed && rate > 0 {
-                                    let costs = program.target.byte_costs();
+                                    let costs = program.target.speed_trial_costs();
                                     let now = module.global(id).function().expect("a body");
                                     let callees: Vec<&llrm_mir::module::Function> = calls
                                         .iter()
