@@ -49,10 +49,10 @@ const BLOCK_INSTR_LIMIT: usize = 30;
 /// A register unit the speculation can clobber and a reader can need: the
 /// flags, or a machine register by class and number. The zero register is
 /// not one.
-type Unit = u32;
-const FLAGS: Unit = 1 << 20;
+pub(crate) type Unit = u32;
+pub(crate) const FLAGS: Unit = 1 << 20;
 
-fn unit_of(reg: Reg) -> Option<Unit> {
+pub(crate) fn unit_of(reg: Reg) -> Option<Unit> {
     match reg {
         Reg::Gpr(r) if !r.is_virtual() && r.0 != 31 => Some(r.0),
         Reg::Fpr(r) if !r.is_virtual() => Some(64 + r.0),
@@ -82,16 +82,16 @@ impl Test {
 /// The blocks and edges of the function as the pass changes them: a block's
 /// number is its place when the pass began, so a number survives the removal
 /// of the blocks around it.
-struct Cfg {
-    succ: Vec<Vec<usize>>,
-    pred: Vec<Vec<usize>>,
+pub(crate) struct Cfg {
+    pub(crate) succ: Vec<Vec<usize>>,
+    pub(crate) pred: Vec<Vec<usize>>,
     /// The blocks in layout order, removed ones out.
-    order: Vec<usize>,
-    labels: Vec<String>,
+    pub(crate) order: Vec<usize>,
+    pub(crate) labels: Vec<String>,
 }
 
 impl Cfg {
-    fn of(function: &MFunc) -> Cfg {
+    pub(crate) fn of(function: &MFunc) -> Cfg {
         let count = function.blocks.len();
         let by_label: HashMap<&str, usize> =
             function.blocks.iter().enumerate().map(|(at, block)| (block.label.as_str(), at)).collect();
@@ -116,7 +116,7 @@ impl Cfg {
         }
     }
 
-    fn layout_successor(
+    pub(crate) fn layout_successor(
         &self,
         block: usize,
     ) -> Option<usize> {
@@ -125,7 +125,7 @@ impl Cfg {
     }
 }
 
-fn is_terminator(op: &Op) -> bool {
+pub(crate) fn is_terminator(op: &Op) -> bool {
     matches!(
         op,
         Op::I(
@@ -143,7 +143,7 @@ fn is_terminator(op: &Op) -> bool {
 }
 
 /// `getFirstTerminator`: where the block's trailing branches begin.
-fn first_terminator(ops: &[Op]) -> usize {
+pub(crate) fn first_terminator(ops: &[Op]) -> usize {
     let mut at = ops.len();
     while at > 0 && is_terminator(&ops[at - 1]) {
         at -= 1;
@@ -154,7 +154,7 @@ fn first_terminator(ops: &[Op]) -> usize {
 /// `analyzeBranch`: the head's conditional branch, the block it goes to when
 /// the condition holds, and the other block if the head names it. `None`: not
 /// a block that ends in one conditional branch (and at most one jump).
-fn analyze_branch(
+pub(crate) fn analyze_branch(
     ops: &[Op],
     labels: &HashMap<&str, usize>,
 ) -> Option<(Test, usize, Option<usize>, usize)> {
@@ -233,7 +233,7 @@ impl IfConv {
 }
 
 /// The values a phi takes: its block `label` named in its `incoming` list.
-fn incoming_from(
+pub(crate) fn incoming_from(
     incoming: &[(Reg, String)],
     label: &str,
 ) -> Option<Reg> {
@@ -337,7 +337,7 @@ fn is_zero(
         )
 }
 
-fn remove_copies(
+pub(crate) fn remove_copies(
     defs: &Defs,
     mut value: Reg,
 ) -> Reg {
@@ -522,11 +522,11 @@ fn find_insertion_point(
 #[derive(Default)]
 pub struct Defs {
     op: HashMap<Reg, Op>,
-    block: HashMap<Reg, usize>,
+    pub(crate) block: HashMap<Reg, usize>,
 }
 
 impl Defs {
-    fn of(function: &MFunc) -> Defs {
+    pub(crate) fn of(function: &MFunc) -> Defs {
         let mut out = Defs::default();
         for (b, block) in function.blocks.iter().enumerate() {
             for op in block.ops.iter() {
@@ -536,7 +536,7 @@ impl Defs {
         out
     }
 
-    fn add(
+    pub(crate) fn add(
         &mut self,
         op: &Op,
         block: usize,
@@ -549,7 +549,7 @@ impl Defs {
         }
     }
 
-    fn get(
+    pub(crate) fn get(
         &self,
         reg: &Reg,
     ) -> Option<&Op> {
@@ -758,7 +758,7 @@ fn select_ops(
 }
 
 /// Replaces the incoming block named `from` by `to` in every phi.
-fn rename_incoming(
+pub(crate) fn rename_incoming(
     function: &mut MFunc,
     from: &str,
     to: &str,
@@ -923,7 +923,7 @@ impl IfConv {
 }
 
 /// The body as the trace metrics read it.
-fn build_func(
+pub(crate) fn build_func(
     function: &MFunc,
     cfg: &Cfg,
     model: &crate::schedmodel::Arm64Model,
@@ -1144,8 +1144,8 @@ pub fn mode_from_env() -> Option<Mode> {
     }
 }
 
-/// The dominator tree's post order (`post_order(DomTree)`).
-fn dominator_post_order(cfg: &Cfg) -> Vec<usize> {
+/// The children of each block in the dominator tree, by number.
+pub(crate) fn dominator_children(cfg: &Cfg) -> Vec<Vec<usize>> {
     struct N<'a> {
         at: i64,
         succ: &'a [i64],
@@ -1172,6 +1172,12 @@ fn dominator_post_order(cfg: &Cfg) -> Vec<usize> {
     for list in &mut children {
         list.sort_unstable();
     }
+    children
+}
+
+/// The dominator tree's post order (`post_order(DomTree)`).
+fn dominator_post_order(cfg: &Cfg) -> Vec<usize> {
+    let children = dominator_children(cfg);
     let mut out = Vec::new();
     let mut stack = vec![(0usize, 0usize)];
     while let Some((node, child)) = stack.pop() {

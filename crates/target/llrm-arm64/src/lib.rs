@@ -18,6 +18,7 @@ pub mod expand_imm;
 pub mod facts;
 pub mod flagcse;
 pub mod frame;
+pub mod ccmp;
 pub mod ifcvt;
 pub mod ipra;
 pub mod jumptable;
