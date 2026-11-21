@@ -997,14 +997,20 @@ impl SelectionDAG {
         out
     }
 
-    /// `N->users()`: one entry per operand slot that reads any result of
-    /// `node`, the pin's use-list order (newest use first).
-    pub fn uses_newest_first(
+    /// `N->users()` without repeats: the users that read any result of
+    /// `node`, in the pin's use-list order (newest use first).
+    pub fn users_of_node_newest_first(
         &self,
         node: u32,
     ) -> Vec<u32> {
-        let list = self.uses.get(node as usize).map_or(&[][..], Vec::as_slice);
-        list.iter().rev().copied().filter(|&user| !self.is_deleted(user)).collect()
+        let mut out: Vec<u32> = Vec::new();
+        for &user in self.uses.get(node as usize).into_iter().flatten().rev() {
+            if !self.is_deleted(user) && self.nodes[user as usize].ops.iter().any(|op| op.node == node) && !out.contains(&user)
+            {
+                out.push(user);
+            }
+        }
+        out
     }
 
     /// Whether anything reads `value`: `users(value).next().is_some()`

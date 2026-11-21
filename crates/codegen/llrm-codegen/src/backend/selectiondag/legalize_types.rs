@@ -350,26 +350,29 @@ impl<'a> TypeLegalizer<'a> {
         &mut self,
         n: u32,
     ) {
-        // `N->users()`: newest use first, one visit per operand slot. The
-        // worklist is a stack, so the oldest user is legalized first.
-        for user in self.dag.uses_newest_first(n) {
+        // `N->users()`: newest use first. The worklist is a stack, so the
+        // oldest user is legalized first. A user waits for one operand per
+        // slot that reads `n`, whichever of its results.
+        for user in self.dag.users_of_node_newest_first(n) {
+            let slots =
+                self.dag.node(SDValue { node: user, res: 0 }).ops.iter().filter(|op| op.node == n).count() as u32;
             match self.id(user) {
                 NodeId::Pending(count) => {
-                    if count <= 1 {
+                    if count <= slots {
                         self.set_id(user, NodeId::Ready);
                         self.worklist.push(user);
                     } else {
-                        self.set_id(user, NodeId::Pending(count - 1));
+                        self.set_id(user, NodeId::Pending(count - slots));
                     }
                 }
                 NodeId::New => {}
                 NodeId::Unanalyzed => {
                     let operands = self.dag.node(SDValue { node: user, res: 0 }).ops.len() as u32;
-                    if operands <= 1 {
+                    if operands <= slots {
                         self.set_id(user, NodeId::Ready);
                         self.worklist.push(user);
                     } else {
-                        self.set_id(user, NodeId::Pending(operands - 1));
+                        self.set_id(user, NodeId::Pending(operands - slots));
                     }
                 }
                 NodeId::Ready | NodeId::Processed => {}
