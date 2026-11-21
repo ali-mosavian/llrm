@@ -1387,7 +1387,7 @@ impl LoopUnrollAndJam {
         let Some(l) = analyzed.loops.get_loop_for(header) else { return Jammed::Unmodified };
         let pragma = LoopOptions::of(run, l);
         let has_calls = loop_has_calls(run, l);
-        let mut up = gather_unrolling_preferences_of_target(run, has_calls);
+        let mut up = gather_unrolling_preferences_of_target(run, has_calls, true);
         // D1, then the `cl::opt`s that set the preferences.
         if self.options.on {
             up.unroll_and_jam = true;
