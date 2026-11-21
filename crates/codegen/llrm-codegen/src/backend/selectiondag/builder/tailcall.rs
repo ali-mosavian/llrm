@@ -28,6 +28,9 @@ impl Builder<'_> {
     /// `X86TargetLowering::isEligibleForSiblingCallOpt` for the 32-bit flat
     /// target: whether the call, in tail position, can reuse the caller's
     /// frame. `plan` is the callee's convention, `variadic` its type's.
+    /// `as_caller` is the callee's result placed by the caller's convention
+    /// (`CCInfo2` of `isEligibleForSiblingCallOpt`), `unused_x87_result` that
+    /// the callee leaves one on the x87 stack and nobody uses it.
     ///
     /// DEVIATE: a caller that returns through a hidden pointer (`sret`) is
     /// refused where the pin asks `mayBeSRetTailCallCompatible`; PIC
@@ -40,6 +43,8 @@ impl Builder<'_> {
         callee: Option<llrm_mir::GlobalId>,
         plan_first: i64,
         arguments: &[Operand],
+        as_caller: &Convention,
+        unused_x87_result: bool,
     ) -> bool {
         let caller = &self.convention;
         let direct = callee.is_some();
@@ -94,8 +99,16 @@ impl Builder<'_> {
         if variadic && (win64(info.calling_convention) || win64(self.function.calling_convention)) {
             return false;
         }
-        // results leave the same way
-        if plan.returns != caller.returns {
+        // an unused result on the x87 stack needs its pop after the call
+        if unused_x87_result {
+            return false;
+        }
+        // where the calling conventions differ, the callee's result leaves
+        // where the caller's convention would put it (the result itself is
+        // the caller's own, or dropped)
+        if info.calling_convention != self.function.calling_convention
+            && (plan.returns != as_caller.returns || plan.float_result != as_caller.float_result)
+        {
             return false;
         }
         // the callee keeps every register the caller must
