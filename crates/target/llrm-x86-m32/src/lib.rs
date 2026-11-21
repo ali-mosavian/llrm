@@ -263,6 +263,11 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // queens -O3 87,134 -> 79,866 clk and 12,765 -> 9,059 B, x_matmul_f
         // -O3 -1.3% and -535 B, x_ld_dot/fma_chain/sum/max -O2 -91..-154 B.
         backward_threading: false,
+        // DEVIATE SINK-COMMON-SIZE (owner x86-m32-b, exit 2026-12-05): the pin
+        // sinks common code in the late `SimplifyCFG` only; gcc's crossjumping
+        // merges the tails of copies at size. QB synth.c m32 Os 35,527 ->
+        // 11,814 B, identical output (row M32-SINK-COMMON-SIZE).
+        sink_common_at_size: true,
         // DEVIATE OB1 (owner w12, exit 2026-11-27, `unrollbound.rs`; -O3 only,
         // as gcc grows code only there): gcc
         // completely peels a loop whose trips the object it indexes bounds

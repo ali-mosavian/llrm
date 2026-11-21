@@ -1914,6 +1914,11 @@ pub trait Tti {
         true
     }
 
+    /// `Tuning::sink_common_at_size`.
+    fn sink_common_at_size(&self) -> bool {
+        false
+    }
+
     /// What a byte of code is worth in thousandths of a clock at speed, where
     /// the target trades bytes for clocks; 0: it does not.
     fn speed_milliclocks_per_byte(&self) -> i64 {
