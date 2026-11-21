@@ -608,7 +608,8 @@ fn a_multiply_of_two_shorts_widened_to_i64_is_priced_as_pmullw_and_pmulhw() {
     let shorts = VectorTy { lane: Ty::Int(16), count: 8 };
     let short = Some(ExtOperand { kind: CastKind::SExt, src: Ty::Int(16) });
     let multiply = x86.vector_arithmetic_cost_ext(ArithOp::Mul, wide, [short, short], CostKind::RecipThroughput);
-    let extension = x86.vector_cast_cost(CastKind::SExt, wide, VectorTy { lane: Ty::Int(32), count: 8 }, CostKind::RecipThroughput);
+    let products = VectorTy { lane: Ty::Int(32), count: 8 };
+    let extension = x86.vector_cast_cost(CastKind::SExt, wide, products, CostKind::RecipThroughput);
     assert_eq!(multiply, Ok(extension.map(|extend| Cost::of(4 + extend.value))));
     let user = ExtUser { op: Some(ArithOp::Mul), operands: [short, short], index: 0 };
     assert_eq!(x86.vector_ext_cost(CastKind::SExt, wide, shorts, &[user], CostKind::RecipThroughput), Some(Cost::FREE));

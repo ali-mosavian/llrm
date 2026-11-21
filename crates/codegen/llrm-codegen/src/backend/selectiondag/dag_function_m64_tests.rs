@@ -1710,6 +1710,7 @@ fn an_m64_v2i64_multiply_is_pmuludq() {
     );
     assert_eq!(pmuludq(&by_small), 2);
 }
+<<<<<<< HEAD
 
 /// A product of two `i16` values widened to `i64` (`(long)a[i] * b[i]`, dot's loop) took eight `pmuludq`
 /// ladders for `<8 x i64>`; gcc's `vect_recog_widen_mult_pattern` and the pin's `reduceVMULWidth` (for `i32`) do
@@ -1755,3 +1756,5 @@ fn an_m64_v8i16_splat_is_pshuflw_and_pshufd() {
     assert_eq!((named("pshuflw"), named("pshufd")), (1, 1));
     assert!(named("mov") <= 1, "word stores of the splat: {}", named("mov"));
 }
+=======
+>>>>>>> origin/release/next
