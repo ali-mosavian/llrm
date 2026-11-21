@@ -343,7 +343,7 @@ fn runtime_clobbers(callee: &str) -> Option<std::sync::Arc<std::collections::BTr
 /// allocation, and the registers the call reads are the same in each.
 fn entries_of(callee: &str) -> Vec<String> {
     let base = callee.strip_suffix("_byte").unwrap_or(callee);
-    ["_fast", "_fast_byte", "_fast_small", "_fast_lean", ""].iter().map(|entry| format!("{base}{entry}")).collect()
+    ["_fast", "_fast_byte", "_fast_small", "_fast_lean", "_byte", ""].iter().map(|entry| format!("{base}{entry}")).collect()
 }
 
 fn imaginary() -> u8 {
@@ -2834,11 +2834,20 @@ pub fn build_with_places(
                         .iter()
                         .all(|cell| b.constants.get(cell) == Some(&0))
                 };
-                let called = if byte_divisor { format!("{routine}_byte") } else { routine.to_owned() };
+                // a multiplier of one byte: the entries read rc4 only
+                let byte_multiplier = code == op::MUL32 && {
+                    let (low, high) = (name(&o[4])?, name(&o[5])?);
+                    [format!("{low}+1"), high.to_owned(), format!("{high}+1")]
+                        .iter()
+                        .all(|cell| b.constants.get(cell) == Some(&0))
+                };
+                let called = if byte_divisor || byte_multiplier { format!("{routine}_byte") } else { routine.to_owned() };
                 let mut arguments = Vec::new();
                 let (first, second) = (b.read_word(name(&o[2])?)?, b.read_word(name(&o[3])?)?);
                 if matches!(code, op::SHL32 | op::SRL32 | op::SRA32) {
                     arguments.push((rc(4), b.byte(name(&o[4])?)?));
+                } else if byte_multiplier {
+                    arguments.push((rc(4), b.read_word(name(&o[4])?)?.0));
                 } else {
                     let (low, high) = (b.read_word(name(&o[4])?)?, b.read_word(name(&o[5])?)?);
                     for (n, value) in [low.0, low.1, high.0, high.1].into_iter().enumerate() {
@@ -4599,7 +4608,7 @@ fn emit_with<const STACK: bool>(
                     let (callee, byte) = match callee.strip_suffix("_byte") {
                         Some(
                             base @ ("__udivsi3" | "__divsi3" | "__umodsi3" | "__modsi3" | "__divmodsi4"
-                            | "__udivmodsi4"),
+                            | "__udivmodsi4" | "__mulsi3"),
                         ) => (base, true),
                         _ => (callee.as_str(), false),
                     };
@@ -4608,7 +4617,9 @@ fn emit_with<const STACK: bool>(
                         callee,
                         "__udivsi3" | "__divsi3" | "__umodsi3" | "__modsi3" | "__divmodsi4" | "__udivmodsi4"
                     );
-                    let entry = if !speed
+                    let entry = if callee == "__mulsi3" && byte {
+                        if FAST_MULTIPLY.with(|f| f.get()) { "_fast_byte" } else { "_byte" }
+                    } else if !speed
                         && !(callee == "__mulsi3" && FAST_MULTIPLY.with(|f| f.get()))
                         && !(division && SIZE_FAST_DIVISION.with(|f| f.get()))
                     {

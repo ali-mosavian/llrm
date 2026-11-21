@@ -413,7 +413,7 @@ pub fn module_text(
     }
     // the speed multiply is 19 bytes linked once: a module whose multiplies
     // are cold keeps the compact routine
-    let calls_multiply = |text: &str| text.contains(" __mulsi3\n");
+    let calls_multiply = |text: &str| text.contains(" __mulsi3\n") || text.contains(" __mulsi3_byte\n");
     if texts.iter().any(|text| calls_multiply(text))
         && crate::hotmultiply::hot(module)
         && (parts.first().is_none_or(|(_, selection)| selection.tuning != alloc::Tuning::SIZE)
