@@ -489,10 +489,15 @@ pub struct Tuning {
     /// identical write-backs are one (gcc `-fcrossjumping`, on at size).
     pub sink_common_at_size: bool,
     /// DEVIATE LATE-MEMCPYOPT-SIZE (owner x86-m32-b, exit 2026-12-12): at
-    /// size, `MemCpyOpt`, `DSE` and `InstCombine` run once more after the
-    /// simplification pipeline (the pin: one `MemCpyOpt`, before the sink
-    /// and phi folds shape a compound literal's `memset` and `memcpy`).
+    /// size, `MemCpyOpt` and `DSE` run once more after the simplification
+    /// pipeline (the pin: one `MemCpyOpt`, before the sink and phi folds
+    /// shape a compound literal's `memset` and `memcpy`).
     pub late_memcpyopt_at_size: bool,
+    /// What each phi a size-optimized sink creates costs, in instructions per
+    /// arm (`sink_common_at_size`): the sink pays where the instructions it
+    /// saves (`arms - 1` per column) outnumber the moves of its phis (one per
+    /// arm each). 0: any sink (the pin).
+    pub sink_common_phi_cost: usize,
     /// DEVIATE SPILL-FOLD (owner x86-m16, exit 2026-11-29): the clocks a
     /// spilled value costs where its references fold into memory operands,
     /// which `tryRegionSplit` weighs against the split's copies. The pin
@@ -983,6 +988,7 @@ impl Tuning {
         backward_threading: true,
         sink_common_at_size: false,
         late_memcpyopt_at_size: false,
+        sink_common_phi_cost: 0,
         spill_fold: None,
         unswitch_threshold: None,
         phiopt_one_feeding_statement: false,

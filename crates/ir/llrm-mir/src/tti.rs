@@ -1950,6 +1950,11 @@ pub trait Tti {
         false
     }
 
+    /// `Tuning::sink_common_phi_cost`.
+    fn sink_common_phi_cost(&self) -> usize {
+        0
+    }
+
     /// What a byte of code is worth in thousandths of a clock at speed, where
     /// the target trades bytes for clocks; 0: it does not.
     fn speed_milliclocks_per_byte(&self) -> i64 {

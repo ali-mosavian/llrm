@@ -1395,6 +1395,10 @@ impl Tti for X86 {
         self.tuning.late_memcpyopt_at_size
     }
 
+    fn sink_common_phi_cost(&self) -> usize {
+        self.tuning.sink_common_phi_cost
+    }
+
     fn x87_stack_slots(&self) -> Option<u32> {
         self.tuning.x87_stack_slots.filter(|_| !self.sse2)
     }
