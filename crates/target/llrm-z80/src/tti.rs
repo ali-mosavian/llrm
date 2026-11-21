@@ -177,6 +177,12 @@ impl Default for Z80Tti {
 pub const SPEED_MILLICLOCKS_PER_BYTE: i64 = 3000;
 
 impl Tti for Z80Tti {
+    /// No jump through a register: `indirectbr` is a `switch` over block
+    /// numbers (`IndirectBrExpandPass`).
+    fn expands_indirect_br(&self) -> bool {
+        true
+    }
+
     /// DEVIATE VASTART-PROMOTE (owner x86-m32, exit 2026-11-27; z80 joins it):
     /// `va_list` is `char *`, so `va_start` is a store of the first
     /// variadic argument's address and the list lives in a register, as SDCC

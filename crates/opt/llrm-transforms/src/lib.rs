@@ -276,6 +276,9 @@ pub mod globalmerge;
 pub mod globalopt;
 pub mod globalsra;
 pub mod gvn;
+pub mod indirectbrexpand;
+#[cfg(test)]
+mod indirectbrexpand_tests;
 #[cfg(test)]
 mod gvn_load_tests;
 #[cfg(test)]

@@ -1392,6 +1392,13 @@ pub trait Tti {
         false
     }
 
+    /// Whether `indirectbr` is expanded to a `switch` over block numbers
+    /// before selection (`TargetSubtargetInfo::enableIndirectBrExpand`): the
+    /// target has no jump through a register to a block's address.
+    fn expands_indirect_br(&self) -> bool {
+        false
+    }
+
     /// Whether the -O1 pipeline walks the call graph a second time after the
     /// dead globals and loops are gone, repricing a callee the folds emptied
     /// (`Options::second_inline`, which a driver may turn on at every level).
