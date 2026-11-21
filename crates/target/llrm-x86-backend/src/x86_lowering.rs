@@ -3464,6 +3464,29 @@ fn mul_imm_node(
     dag.get_node(x86isd::MUL_IMM, vt, &[x, by])
 }
 
+/// `trunc v` to `narrow`, a vector built from scalars truncated lane by lane: `trunc (build_vector (sext x),
+/// ..)` is `build_vector x, ..` rather than the shuffles and packs of a truncate of a register (the pin's
+/// "pre-truncate BUILD_VECTOR sources", [L17916][pin], which takes the lanes the target truncates free).
+///
+/// [pin]: https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L17916
+fn truncate_vector(
+    dag: &mut SelectionDAG,
+    value: SDValue,
+    narrow: EVT,
+) -> SDValue {
+    if dag.opcode(value) == ISD::BuildVector && dag.has_one_use(value.node) {
+        let lane = narrow.element();
+        let lanes: Vec<SDValue> = (0..narrow.lanes() as usize)
+            .map(|at| {
+                let scalar = dag.operand(value, at);
+                dag.get_node(ISD::Truncate, lane, &[scalar])
+            })
+            .collect();
+        return dag.get_node(ISD::BuildVector, narrow, &lanes);
+    }
+    dag.get_node(ISD::Truncate, narrow, &[value])
+}
+
 /// `reduceVMULWidth` ([L50582][pin]) for `<8 x i32>`: operands that are 16 bits at most are multiplied by
 /// `pmullw` and `pmulhw` (`pmulhuw` when both are non-negative and 16 bits wide) and the halves are
 /// interleaved back to 32-bit lanes. The SSE4.1 `pmulld` shortcut does not apply here: this target has none.
@@ -3491,7 +3514,7 @@ fn combine_vector_mul_width(
             return None;
         }
         let narrow = EVT::vector(MVT::I32, 8);
-        let (a, b) = (dag.get_node(ISD::Truncate, narrow, &[a]), dag.get_node(ISD::Truncate, narrow, &[b]));
+        let (a, b) = (truncate_vector(dag, a, narrow), truncate_vector(dag, b, narrow));
         let product = dag.get_node(ISD::Mul, narrow, &[a, b]);
         return Some(dag.get_node(ISD::SignExtend, vt, &[product]));
     }
@@ -3515,7 +3538,7 @@ fn combine_vector_mul_width(
         return None;
     };
     let reduced = EVT::Simple(MVT::V8I16);
-    let (a, b) = (dag.get_node(ISD::Truncate, reduced, &[a]), dag.get_node(ISD::Truncate, reduced, &[b]));
+    let (a, b) = (truncate_vector(dag, a, reduced), truncate_vector(dag, b, reduced));
     let low = dag.get_node(ISD::Mul, reduced, &[a, b]);
     if !high_needed {
         return Some(dag.get_node(extend, vt, &[low]));
@@ -4051,6 +4074,18 @@ fn lower_build_vector_splat(
     }
     if lanes.iter().any(|lane| *lane != first) || dag.constant(first).is_some() || dag.is_undef(first) {
         return None;
+    }
+    // Words: `movd`, `pshuflw` then `pshufd` of the low word's dword (`LowerBUILD_VECTOR`'s splat of a 16-bit lane).
+    if vt == EVT::Simple(MVT::V8I16) && dag.value_type(first) == EVT::I16 {
+        let (four, eight) = (EVT::Simple(MVT::V4I32), EVT::Simple(MVT::V8I16));
+        let wide = dag.get_node(ISD::AnyExtend, EVT::I32, &[first]);
+        let low = dag.get_node(ISD::ScalarToVector, four, &[wide]);
+        let by = dag.get_constant_with(0, EVT::I8, true, false);
+        let words = dag.get_node(ISD::BitCast, eight, &[low]);
+        let words = dag.get_node(x86isd::PSHUFLW, eight, &[words, by]);
+        let dwords = dag.get_node(ISD::BitCast, four, &[words]);
+        let dwords = dag.get_node(x86isd::PSHUFD, four, &[dwords, by]);
+        return Some(dag.get_node(ISD::BitCast, eight, &[dwords]));
     }
     let lane_vt = match vt {
         EVT::Simple(MVT::V4I32) => EVT::I32,

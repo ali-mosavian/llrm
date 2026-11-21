@@ -1735,3 +1735,23 @@ fn an_m64_vector_multiply_of_shorts_is_pmullw_and_pmulhw() {
     assert_eq!(count("i64", "16"), (0, 1, 1), "i64");
     assert_eq!(count("i32", "16"), (0, 1, 1), "i32");
 }
+
+/// A splat of a scalar `i16` into `<8 x i16>` (`insertelement` and a zero-mask shuffle, matmul's `a[i][k]`) was
+/// eight word stores and a reload; `LowerBUILD_VECTOR` makes it `movd`, `pshuflw` and `pshufd`.
+#[test]
+fn an_m64_v8i16_splat_is_pshuflw_and_pshufd() {
+    let layout = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n";
+    let text = format!(
+        "{layout}define void @f(ptr %p, i16 %x) {{\n  %i = insertelement <8 x i16> poison, i16 %x, i64 0\n  \
+         %s = shufflevector <8 x i16> %i, <8 x i16> poison, <8 x i32> zeroinitializer\n  \
+         store <8 x i16> %s, ptr %p, align 16\n  ret void\n}}\n"
+    );
+    let module = llrm_mir::parse::module(&text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+    let named = |name: &str| {
+        done.body.insns().iter().filter(|i| i.what.as_ref().is_some_and(|w| w.name.as_deref() == Some(name))).count()
+    };
+    assert_eq!((named("pshuflw"), named("pshufd")), (1, 1));
+    assert!(named("mov") <= 1, "word stores of the splat: {}", named("mov"));
+}
