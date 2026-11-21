@@ -1986,6 +1986,14 @@ fn settle(
             frequencies = Some(moved);
         }
     }
+    // `MachineBlockPlacement` after the last branch fold, as the pin orders
+    // them. DEVIATE Z80-PLACE-OS (owner w8, exit 2026-11-28): not at -Os/-Oz,
+    // where the whole-corpus A/B grew bytes (+124 B over 138 programs: a
+    // rotated loop pushes a `jr` out of range and it becomes a `jp`).
+    if !bytes_first {
+        let odds = llrm_spike_mf::placement::loop_odds(&function);
+        llrm_spike_mf::placement::place_blocks_priced::<_, Z80Registers>(&mut function, &odds, false, false, true);
+    }
     place_copies_where_needed(&mut function, &assignment);
     read_copies_at_their_source(&mut function, &assignment);
     if std::env::var("LLRM_NO_Z80_UPDATE").is_err() {

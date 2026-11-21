@@ -4247,35 +4247,6 @@ fn reads_zero_or_sign_only(inst: &Inst) -> bool {
     }
 }
 
-/// The odds of a branch out of a loop, as `BranchProbabilityInfo`'s loop
-/// heuristic gives them with no profile: the edge that stays in the innermost
-/// loop of its block takes 124 of 128, the edge that leaves it the rest.
-fn loop_odds(function: &MFunction<Class>) -> llrm_spike_mf::placement::Odds {
-    use llrm_mir::blockfrequency::BranchProbability;
-    let cfg = llrm_spike_mf::cfg::Cfg::new(function);
-    let mut odds = llrm_spike_mf::placement::Odds::default();
-    for (from, succs) in cfg.succs.iter().enumerate() {
-        if succs.len() != 2 {
-            continue;
-        }
-        let innermost = cfg
-            .loops()
-            .iter()
-            .filter(|(_, body)| body[from])
-            .min_by_key(|(_, body)| body.iter().filter(|b| **b).count());
-        let Some((_, body)) = innermost else { continue };
-        let leaves: Vec<bool> = succs.iter().map(|&to| !body[to]).collect();
-        if leaves[0] == leaves[1] {
-            continue;
-        }
-        for (rank, &to) in succs.iter().enumerate() {
-            let share = if leaves[rank] { 4 } else { 124 };
-            odds.insert((function.blocks[from].id, function.blocks[to].id), (BranchProbability::new(share, 128), rank));
-        }
-    }
-    odds
-}
-
 /// `labels` with a label for each block the folding added, numbered past the
 /// source's.
 pub fn labels_with_new_blocks(
@@ -4375,7 +4346,7 @@ fn emit_with<const STACK: bool>(
     // tail merging splits blocks: a block it makes has no label of the source's
     let labels = &labels_with_new_blocks(labels, &function);
     let moved = place && {
-        let odds = loop_odds(&function);
+        let odds = llrm_spike_mf::placement::loop_odds(&function);
         llrm_spike_mf::placement::place_blocks_counting::<Class, Mos<STACK>>(&mut function, &odds, false, true)
     };
     let after = live_after(&function, &at);
