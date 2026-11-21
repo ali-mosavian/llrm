@@ -1639,6 +1639,10 @@ pub struct OperationCosts {
     /// `-apply-ext-tsp-for-size` (Ext-TSP over unit counts), which the pin
     /// ships off.
     pub ext_tsp_for_size: bool,
+    /// With `ext_tsp_for_size`: weigh blocks and jumps by their static
+    /// frequency (the profile path of `applyExtTsp`) instead of unit counts,
+    /// so a hot loop keeps its fall-throughs and only cold code packs for size.
+    pub ext_tsp_by_frequency: bool,
 }
 
 impl OperationCosts {
@@ -1820,6 +1824,7 @@ impl Default for OperationCosts {
             cache_line: 0,
             line_fill_clocks: 0,
             ext_tsp_for_size: false,
+            ext_tsp_by_frequency: false,
         }
     }
 }
