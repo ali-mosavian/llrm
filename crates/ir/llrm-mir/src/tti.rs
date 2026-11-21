@@ -3343,6 +3343,14 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE X64-TRUTH-XOR (owner llrm-target-x86-m64-b, exit 2026-12-12):
+    /// `zext (icmp ne x, y)` of two values that are each 0 or 1 is `xor x, y`
+    /// (GCC `simplify_truth_ops_using_ranges`). The pin keeps the compare: a
+    /// `cmp`, `setne` and the clearing `xor` for one `xor`.
+    fn xors_truth_value_compare(&self) -> bool {
+        false
+    }
+
     /// Whether InstCombine leaves `icmp (udiv X, C), K` alone while the
     /// quotient has another use. The pin folds it into a range test of `X`
     /// on every target (`foldICmpDivConstant`). DEVIATE ICMPDIV-1 (owner

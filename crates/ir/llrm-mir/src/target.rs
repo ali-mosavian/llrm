@@ -713,6 +713,8 @@ pub struct Tuning {
     /// `isLegalAddressingMode` refuses a scale above 1 beside a symbol, so
     /// every array of a stride past 1 gets its own counter; gcc keeps one.
     pub pie_scaled_symbol: bool,
+    /// DEVIATE X64-TRUTH-XOR: see `Tti::xors_truth_value_compare`.
+    pub truth_compare_xor: bool,
     /// DEVIATE IU1 (owner llrm-target-x86-m64, exit 2026-11-24): see
     /// `Tti::lsr_users_in_use_list_order`.
     pub lsr_users_in_use_list_order: bool,
@@ -1042,6 +1044,7 @@ impl Tuning {
         lsr_derived_setup_free: false,
         lsr_size_x86_64: false,
         pie_scaled_symbol: false,
+        truth_compare_xor: false,
         lsr_users_in_use_list_order: false,
         lsr_phi_operand_uses: false,
         lsr_both_use_orders: false,

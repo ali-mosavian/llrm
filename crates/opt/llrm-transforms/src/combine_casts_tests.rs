@@ -688,3 +688,85 @@ fn a_vector_trunc_of_a_shared_splat_stays() {
                 %t = trunc <4 x i64> %s to <4 x i16>\n  store <4 x i64> %s, ptr %p\n  ret <4 x i16> %t\n";
     check("<4 x i16>", "i64 %n, ptr %p", body, body);
 }
+
+/// `@f` after the casts' `visit*` on a target that does (`on`) or does not
+/// xor a compare of two truth values.
+fn combined_truth(
+    text: &str,
+    on: bool,
+) -> String {
+    let mut module = parsed(text);
+    let globals = module.globals.clone();
+    let metadata = module.metadata.clone();
+    let mut declared = llrm_mir::passes::Declared::of(&module);
+    let (context, function) = module.function_mut("f").expect("@f");
+    let hooks = crate::combine::TargetHooks { truth_compare_xor: on, ..Default::default() };
+    crate::combine::combine_for(
+        context,
+        &globals,
+        &Default::default(),
+        &metadata,
+        &DataLayout::default(),
+        function,
+        visit,
+        false,
+        &mut declared,
+        hooks,
+    );
+    declared.place(&mut module).unwrap();
+    printed(&module)
+}
+
+const TRUTH_COMPARE: &str = "define i32 @f(i1 %c, i1 %d) {
+b0:
+  br i1 %c, label %t, label %e
+t:
+  br label %j
+e:
+  br label %j
+j:
+  %p = phi i32 [ 1, %t ], [ 0, %e ]
+  %w = zext i1 %d to i32
+  %n = icmp ne i32 %p, %w
+  %r = zext i1 %n to i32
+  ret i32 %r
+}
+";
+
+/// early_exit_widths -Os, x86-64: `(early_exit() != want)` of a phi of 0 and 1
+/// and a `zext i1` stayed `cmp; setne; xor` (11 B) where gcc's `xor` is 3: +20 B
+/// in four tests.
+#[test]
+fn a_not_equal_of_two_truth_values_is_an_xor() {
+    let out = combined_truth(TRUTH_COMPARE, true);
+    assert!(out.contains("%0 = xor i32 %p, %w\n  ret i32 %0"), "{out}");
+    assert!(!out.contains("icmp"), "{out}");
+}
+
+/// The pin keeps the compare; a target that does not opt in keeps it too.
+#[test]
+fn a_target_that_declines_keeps_the_compare_of_two_truth_values() {
+    let out = combined_truth(TRUTH_COMPARE, false);
+    assert!(out.contains("icmp ne i32 %p, %w"), "{out}");
+    assert!(!out.contains("xor"), "{out}");
+}
+
+/// A value with more than the low bit possible is not a truth value.
+#[test]
+fn a_not_equal_of_a_wider_value_is_kept() {
+    let text = TRUTH_COMPARE.replace("define i32 @f(i1 %c, i1 %d)", "define i32 @f(i1 %c, i1 %d, i32 %x)").replace(
+        "%w = zext i1 %d to i32",
+        "%w = and i32 %x, 3",
+    );
+    let out = combined_truth(&text, true);
+    assert!(out.contains("icmp ne i32 %p, %w"), "{out}");
+}
+
+/// memcpy_runtime and os_more -Os crashed the compile ("an integer"): the fold
+/// read the width of a pointer compare.
+#[test]
+fn a_not_equal_of_pointers_is_left_alone() {
+    let text = "define i32 @f(ptr %a, ptr %b) {\nb0:\n  %n = icmp ne ptr %a, %b\n  %r = zext i1 %n to i32\n  ret i32 %r\n}\n";
+    let out = combined_truth(text, true);
+    assert!(out.contains("icmp ne ptr %a, %b"), "{out}");
+}
