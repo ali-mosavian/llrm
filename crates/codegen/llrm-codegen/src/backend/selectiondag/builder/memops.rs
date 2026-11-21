@@ -459,6 +459,16 @@ impl Builder<'_> {
             || (self.has_opt_size() && self.target.tti.as_ref().is_some_and(|tti| tti.0.rep_movs_at_size()))
     }
 
+    /// The largest constant copy done with `rep movs` where the blocks are aligned: the pin's 128 bytes
+    /// (`emitConstantSizeRepmov`), or the target's DEVIATE REP-MOVS-SPEED limit at -O2 and -O3.
+    fn rep_movs_inline_limit(
+        &self,
+        opt_size: bool,
+    ) -> u64 {
+        let speed = if opt_size { 0 } else { self.target.tti.as_ref().map_or(0, |tti| tti.0.rep_movs_at_speed_max()) };
+        MAX_INLINE_SIZE.max(speed)
+    }
+
     /// `-Oz` is `rep movsb` whatever the size; REP-MOVS-OS keeps a block
     /// narrower than a dword to the target's limit (the pin's 128 bytes on
     /// m32), past which the call copies by dwords.
@@ -1383,7 +1393,7 @@ impl Builder<'_> {
                         self.rep_movs(root, dst, other, bytes, dst_align.min(src_align), dst_align, src_align)?
                     }
                     (None, Intrinsic::MemCpy, Some(bytes))
-                        if strings_exist && bytes <= MAX_INLINE_SIZE && alignment >= 4 =>
+                        if strings_exist && bytes <= self.rep_movs_inline_limit(opt_size) && alignment >= 4 =>
                     {
                         self.rep_movs(
                             root,

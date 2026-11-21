@@ -151,6 +151,7 @@ pub fn target_lowering(speed_routines: bool) -> TargetLowering {
     // for the product against 216 B of partial products. At -O2 the partial
     // products ran faster in div_constants_short and compare_to_int64.
     tl.set_size_libcall_name(UMulLoHi, MVT::I16, "__umulhisi3");
+    tl.set_size_libcall_name(SMulLoHi, MVT::I16, "__mulhisi3");
     // the longs are expanded to words; a divide or a variable shift of one is
     // the call, not a word-wise expansion
     for (vt, names) in [

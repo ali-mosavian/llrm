@@ -162,6 +162,47 @@ class Imports(unittest.TestCase):
         self.assertTrue(callable(module.runtime_bytes))
 
 
+
+class SdccBarFix(unittest.TestCase):
+    """bintree, histo, quicksort and scroll read `WRONG value` on SDCC and had no bar: SDCC 4.5.0's `___mulsint2slong` tests the
+    signs on the low bytes (`bit #7, l`), so 6 * 1000 was -387216. `sdcc_fixed/__mulsint2slong.s` tests h and d."""
+
+    SDCC_SOURCE = Path("/usr/share/sdcc/lib/src/z80/__mulsint2slong.s")
+    FIXED = Path(__file__).resolve().parent / "sdcc_fixed" / "__mulsint2slong.s"
+
+    def product(self, routine, a, b):
+        import re
+        import shutil
+        import subprocess
+        work = tempfile.mkdtemp(prefix="mulsint-")
+        (Path(work) / "t.s").write_text(
+            f"\t.area _CODE\nstart::\n\tld sp,#0\n\tld hl,#{a & 0xFFFF}\n\tld de,#{b & 0xFFFF}\n\tcall ___mulsint2slong\n"
+            "\tld (0x8000),de\n\tld (0x8002),hl\n\thalt\n\t.globl ___mulsint2slong\n")
+        for name, source in (("t", Path(work) / "t.s"), ("r", routine)):
+            subprocess.run(["sdasz80", "-g", "-o", f"{work}/{name}.rel", str(source)], check=True, capture_output=True)
+        subprocess.run(["sdldz80", "-i", "-b", "_CODE=0x0", "-k", "/usr/share/sdcc/lib/z80", "-l", "z80", f"{work}/t.ihx", f"{work}/t.rel", f"{work}/r.rel"], check=True, capture_output=True)
+        done = subprocess.run(["ucsim_z80", "-t", "Z80", "-q", "-w", f"{work}/t.ihx", "-c", "-"], input="run\ndump rom 0x8000 0x8003\nquit\n",
+                              capture_output=True, text=True, timeout=60)
+        shutil.rmtree(work, True)
+        line = next(l for l in done.stdout.splitlines() if re.match(r"0x8000\s", l))
+        value = int.from_bytes(bytes(int(t, 16) for t in line.split()[1:5]), "little")
+        return value - (1 << 32) if value >> 31 else value
+
+    @unittest.skipUnless(SDCC_SOURCE.exists(), "SDCC's library sources are not installed")
+    def test_the_fixed_routine_differs_from_sdccs_in_the_two_sign_tests_only(self):
+        import difflib
+        before, after = self.SDCC_SOURCE.read_text().splitlines(), [l for l in self.FIXED.read_text().splitlines() if not l.startswith(";  Bar fix") and not l.startswith(";  Tested here")]
+        changed = [l for l in difflib.unified_diff(before, after, lineterm="", n=0) if l[:1] in "+-" and l[:3] not in ("+++", "---")]
+        self.assertEqual(changed, ["-\tbit\t#7, l", "+\tbit\t#7, h", "-\tbit\t#7, e", "+\tbit\t#7, d"])
+
+    def test_six_times_a_thousand_is_six_thousand(self):
+        for a, b in ((6, 1000), (1000, 6), (-6, 1000), (6, -1000), (-6, -1000), (300, 300), (-32768, 2), (32767, 32767)):
+            self.assertEqual(self.product(self.FIXED, a, b), a * b, (a, b))
+
+    @unittest.skipUnless(SDCC_SOURCE.exists(), "SDCC's library sources are not installed")
+    def test_sdccs_own_routine_is_wrong_on_the_same_operands(self):
+        self.assertNotEqual(self.product(self.SDCC_SOURCE, 6, 1000), 6000)
+
 if __name__ == "__main__":
     unittest.main()
 
