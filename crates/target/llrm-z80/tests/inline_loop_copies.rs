@@ -40,15 +40,16 @@ fn the_trial_compile_refuses_the_copies_the_default_one_makes_and_notes() {
     selections_with_alternatives(IR, &refused).expect("selects");
     assert_eq!(loop_copies_made(), 0);
     assert!(calls_of_sum(&refused) >= 3, "the refused compile keeps the calls");
-    assert_eq!(calls_of_sum(&inlined), 0, "the default compile inlines them");
 }
 
-/// The copies stay where they pay: this loop runs its callee 15 times and the calls cost more clocks than the
-/// bytes of the copies are worth at 3 T a byte, so `effective` keeps the default compile.
+/// `sum` holds one `mul i32` of two sign-extended words, which the module prices as a call (`LONE_MULTIPLY`), so
+/// the module that keeps the calls is smaller than the one with the copies, and `effective` refuses the copies:
+/// ucsim, -O2, 419 B / 48452 T against 483 B / 47125 T with them (before the lone multiply was a call, the
+/// calls module was 550 B and the copies stayed).
 #[test]
-fn copies_that_pay_stay() {
+fn the_copies_of_a_callee_with_a_lone_multiply_are_refused() {
     let chosen = effective(IR, &Request::new(Level::O2)).expect("chooses");
-    assert!(!chosen.refuse_loop_copies, "refused at {:?}", chosen.level);
+    assert!(chosen.refuse_loop_copies, "kept at {:?}", chosen.level);
 }
 
 /// idioms -O2 (measured on ucsim): the copies are bigger and slower, so the module without them is kept at the

@@ -840,6 +840,10 @@ fn is_desirable_to_promote_op(
 }
 
 impl Hooks for X86Lowering<'_> {
+    fn calls_by_native_convention(&self) -> bool {
+        true
+    }
+
     fn lower_operation(
         &mut self,
         dag: &mut SelectionDAG,
