@@ -2780,6 +2780,10 @@ impl Tti for X86 {
         self.real_mode.as_ref().map_or(0, |real| real.scaled_index_insns)
     }
 
+    fn xors_truth_value_compare(&self) -> bool {
+        self.tuning.truth_compare_xor
+    }
+
     /// i8 and i16 extending loads are legal, and free when the result
     /// legalizes to as many registers as the loaded type does.
     fn ext_load_free(
