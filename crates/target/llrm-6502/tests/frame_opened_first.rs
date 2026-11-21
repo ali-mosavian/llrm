@@ -32,7 +32,8 @@ fn nothing_is_stored_through_the_stack_pointer_before_the_frame_is_opened() {
         let text = assembly(level);
         let body = &text[text.find("\ndeep:").expect("deep")..];
         let body = body.split("\ndeep_b1:").next().unwrap();
-        let opened = body.find("  sta rc0\n").or_else(|| body.find("  jsr __outl_")).expect("no frame adjust (premise)");
+        let opened =
+            body.find("  sta rc0\n").or_else(|| body.find("  jsr __outl_")).expect("no frame adjust (premise)");
         let first = body.find("(rc0),y").expect("no frame access (premise)");
         assert!(opened < first, "{level}: the frame is accessed before it is opened:\n{body}");
     }

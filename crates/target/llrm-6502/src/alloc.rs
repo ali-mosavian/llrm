@@ -4262,7 +4262,8 @@ fn open_frame_before_slots(function: &mut MFunction<Class>) {
     let entry = &mut function.blocks[0].insts;
     let Some(open) = entry.iter().position(|inst| inst.kind == Kind::Op("ADJSP")) else { return };
     let addresses_slot = |inst: &Inst| {
-        matches!(inst.kind, Kind::Op("SPILL" | "RELOAD")) || inst.operands.iter().any(|o| matches!(o, Operand::Frame(_)))
+        matches!(inst.kind, Kind::Op("SPILL" | "RELOAD"))
+            || inst.operands.iter().any(|o| matches!(o, Operand::Frame(_)))
     };
     if let Some(first) = entry[..open].iter().position(addresses_slot) {
         let adjust = entry.remove(open);
