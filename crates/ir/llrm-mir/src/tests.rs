@@ -103,6 +103,14 @@ fn a_computed_goto_round_trips_through_text() {
     assert_eq!(round(text), text);
 }
 
+/// Before: a `blockaddress` in a function read after the one it names printed
+/// as `inttoptr 1` (a gone block): the dump of a computed goto lost its targets.
+#[test]
+fn a_block_address_in_a_later_function_keeps_its_block() {
+    let text = "define i16 @f(ptr %0) {\n  indirectbr ptr %0, [label %one, label %two]\n\none:\n  ret i16 1\n\ntwo:\n  ret i16 2\n}\n\ndefine ptr @g(i1 %0) {\n  %2 = select i1 %0, ptr blockaddress(@f, %one), ptr blockaddress(@f, %two)\n  ret ptr %2\n}\n";
+    assert_eq!(round(text), text);
+}
+
 /// A dispatch table of label addresses (`static void *t[] = {&&a, &&b}`) names
 /// a function read after it: the labels' ids must survive until the body.
 #[test]

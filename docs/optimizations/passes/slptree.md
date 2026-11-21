@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/slptree.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/slptree.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/slptree.rs sha256:16e6626bb6c6c47d52c6dbf0846702369f41369342069a2677c6a77a9b31451c -->
+<!-- src: crates/opt/llrm-transforms/src/slptree.rs sha256:495b33b9e1ad0c298b4be498be61e83bdcef1d826cd77078cf5f716bb7fb2b51 -->
 
 # slptree
 
@@ -34,11 +34,12 @@ as a gather lane, or an external user placed before its bundle's last
 scalar, makes the tree not form (the pin's scheduler may order it).
 
 DEVIATE SLP3 (owner arm64, exit 2026-11-24): `BlockScheduling`'s dependency
-graph is not built: the loads must all stand before the first store, and
-nothing else between the first load and the last store may write memory, nor
-read it after the first store. A load or store between the window's stores
-that `BasicAA`, scoped-noalias and TBAA say cannot touch their bytes may
-stay (`StoreSeparation`); a call may not.
+graph is not built: a load that stands after one of the window's stores must
+be one that `BasicAA`, scoped-noalias and TBAA say cannot read its bytes,
+and nothing else between the first load and the last store may write memory,
+nor read it after the first store. A load or store between the window's
+stores that `BasicAA`, scoped-noalias and TBAA say cannot touch their bytes
+may stay (`StoreSeparation`); a call may not.
 
 ## Runs
 Under `slpvectorize`, on a window of stores whose values are not all
@@ -48,7 +49,8 @@ constants.
 `slpvectorize`.
 
 ## Example
-Four `fmuladd`s of one scalar and four consecutive loads, plus a constant, stored to four consecutive floats, become one vector chain.
+Four `fmuladd`s of one scalar and four consecutive loads, plus a constant,
+stored to four consecutive floats, become one vector chain.
 
 ```text
 4 x (load c[i]; fmuladd a, c[i], 1.0; fadd 128.5; store out[i])
