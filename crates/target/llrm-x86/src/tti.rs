@@ -951,6 +951,10 @@ impl Tti for X86 {
         self.tuning.pops_arguments_cold_only_at_size
     }
 
+    fn pushes_pad_at_size(&self) -> bool {
+        self.tuning.pushes_pad_at_size
+    }
+
     fn libc_memcpy(&self) -> bool {
         self.tuning.libc_memcpy
     }
