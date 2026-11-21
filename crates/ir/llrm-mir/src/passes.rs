@@ -990,8 +990,8 @@ impl ModuleAnalysis for GlobalSizes {
     }
 }
 
-/// How many instruction operands name each global: what `Function::hasOneLiveUse`
-/// counts of a function (`FunctionUses`).
+/// How many instruction operands name each global: what
+/// `Function::hasOneLiveUse` counts of a function (`FunctionUses`).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Uses {
     /// What each body names: caller, then callee and how often.
@@ -1620,7 +1620,8 @@ impl Outer {
         self.cached_ref::<CalleeEffects>().expect("every outer proxy holds the callees' effects")
     }
 
-    /// What the bodies name, if `FunctionUses` was required: `Function::hasOneLiveUse`.
+    /// What the bodies name, if `FunctionUses` was required:
+    /// `Function::hasOneLiveUse`.
     pub fn uses(&self) -> Option<&Uses> {
         self.cached_ref::<FunctionUses>()
     }

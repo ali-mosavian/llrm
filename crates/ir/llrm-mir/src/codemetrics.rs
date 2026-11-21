@@ -190,7 +190,8 @@ impl CodeMetrics {
                         Some(GlobalKind::Function(function)) => &function.attrs,
                         _ => &[],
                     };
-                // `CallBase::isNoInline`: the call or the function it calls says so.
+                // `CallBase::isNoInline`: the call or the function it calls
+                // says so.
                 let no_inline = flag(&call.attrs, "noinline") || flag(callee_attrs, "noinline");
                 // A callee a pass has declared and the module's globals do not
                 // hold yet is an external call.
