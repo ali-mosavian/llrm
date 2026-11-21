@@ -483,6 +483,11 @@ pub struct Tuning {
     /// `-unswitch-threshold` of the non-trivial loop unswitch (-O3): the cost
     /// (loop size times copies) a candidate must stay under; none: 50.
     pub unswitch_threshold: Option<i64>,
+    /// `-simplifycfg-branch-fold-threshold` of `foldBranchToCommonDest`: the
+    /// cost the joining `and`/`or` may have for a branch pair to become one
+    /// branch on a select; none: 2. Lower keeps the branches (a branch the
+    /// target predicts beats the select's latency in a loop-carried chain).
+    pub branch_fold_threshold: Option<i64>,
     /// `InlineParams::DefaultThreshold`, the inliner's bar for a caller not
     /// optimized for size; none: 225, or 250 at -O3.
     pub inline_threshold: Option<i64>,
@@ -947,6 +952,7 @@ impl Tuning {
         backward_threading: true,
         spill_fold: None,
         unswitch_threshold: None,
+        branch_fold_threshold: None,
         inline_threshold: None,
         cold_site_ignores_sinks: false,
         inline_last_call_in_cold_site: false,

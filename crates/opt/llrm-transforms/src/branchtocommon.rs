@@ -51,7 +51,8 @@ use llrm_support::hash::HashMap;
 
 use crate::twoentryphi::Speculation;
 
-/// `simplifycfg-branch-fold-threshold`.
+/// `simplifycfg-branch-fold-threshold`; `Tti::branch_fold_threshold_override`
+/// replaces it where a target states one.
 const FOLD_THRESHOLD: i64 = 2;
 /// `simplifycfg-bonus-inst-threshold`.
 const BONUS_THRESHOLD: usize = 1;
@@ -248,7 +249,7 @@ pub fn folded(
                         OperandInfo::ANY,
                     );
             }
-            if !cost.valid || cost.value > FOLD_THRESHOLD {
+            if !cost.valid || cost.value > spec.tti.branch_fold_threshold_override().unwrap_or(FOLD_THRESHOLD) {
                 continue;
             }
         }

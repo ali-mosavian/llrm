@@ -9,10 +9,14 @@ use crate::testing::{parsed, printed};
 use crate::twoentryphi::Speculation;
 
 fn simplify(text: &str) -> String {
+    simplify_with(&llrm_mir::tti::Basic, text)
+}
+
+fn simplify_with(tti: &dyn llrm_mir::tti::Tti, text: &str) -> String {
     let mut module = parsed(text);
     let outer = Outer::of(&module, None);
     let layout = DataLayout::default();
-    let spec = Speculation { tti: &llrm_mir::tti::Basic, layout: &layout, outer: &outer };
+    let spec = Speculation { tti, layout: &layout, outer: &outer };
     let mut declared = Declared::of(&module);
     let (context, function) = module.function_mut("f").expect("@f");
     simplified(context, &spec, &mut declared, function);
@@ -302,4 +306,36 @@ e:
     // Inverted: (9, 1) for `br !a, bb, e`; BI unweighted (1, 1): (9 * 1, 1 * 2
     // + 9 * 1).
     assert!(out.contains("branch_weights\", i32 9, i32 11"), "{out}");
+}
+
+/// A target that states `-simplifycfg-branch-fold-threshold` 0 keeps the two
+/// branches (`foldBranchToCommonDest` prices the joining `or` at 1): the
+/// loop-carried `first = c && d ? i : first` of `sfm16_dbg` became selects
+/// and ran +64.8% at m64 against gcc, which keeps the branches.
+#[test]
+fn test_a_target_branch_fold_threshold_of_zero_keeps_the_branches() {
+    let text = "declare void @g1()
+
+declare void @g2()
+
+define void @f(i1 %a, i16 %x) {
+p:
+  br i1 %a, label %t, label %bb
+
+bb:
+  %b = icmp eq i16 %x, 0
+  br i1 %b, label %t, label %e
+
+t:
+  call void @g1()
+  ret void
+
+e:
+  call void @g2()
+  ret void
+}
+";
+    let keeps = crate::testing::Flagged { branch_fold_threshold: Some(0), ..Default::default() };
+    assert_eq!(simplify_with(&keeps, text).matches("br i1").count(), 2, "{}", simplify_with(&keeps, text));
+    assert_eq!(simplify(text).matches("br i1").count(), 1, "the pin's threshold still folds");
 }

@@ -2557,6 +2557,12 @@ pub trait Tti {
         None
     }
 
+    /// The target's `-simplifycfg-branch-fold-threshold` (its tuning table);
+    /// none: the pin's 2.
+    fn branch_fold_threshold_override(&self) -> Option<i64> {
+        None
+    }
+
     /// `isHardwareLoopProfitable`: whether the target counts loops in hardware
     /// (`djnz`, `dbra`, `loop`), and how, in `info`. The hook sees no loop
     /// yet: no target reads one (DEVIATE 3 of `hardwareloops`). Off by

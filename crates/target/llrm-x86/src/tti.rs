@@ -1375,6 +1375,10 @@ impl Tti for X86 {
         self.tuning.unswitch_threshold
     }
 
+    fn branch_fold_threshold_override(&self) -> Option<i64> {
+        self.tuning.branch_fold_threshold
+    }
+
     fn licm_float_register_limit(&self) -> Option<u32> {
         self.tuning.licm_float_register_limit
     }
