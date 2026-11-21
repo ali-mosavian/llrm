@@ -11,6 +11,7 @@ Silence is never green: a refused tick, a build failure and a dead allow-list na
 from __future__ import annotations
 
 import argparse
+import datetime
 import fcntl
 import json
 import os
@@ -131,10 +132,16 @@ def red_at(repo: str, commit: str, command: list[str], env=None) -> bool:
             run(["git", "worktree", "remove", "--force", str(tree)], cwd=repo)
 
 
+OUTBOX = Path.home() / "scratch/w9/tipred/outbox"
+
+
 def send(to: str, text: str) -> bool:
-    env = {**os.environ, "SESSIONBUS_NAME": os.environ.get("SESSIONBUS_NAME", "llrm-w9-tipred")}
-    sent = run(["sessionbus", "send", to, text], env=env)
-    return sent.returncode == 0
+    """Files only (no bus a script can reach): one file per message in the outbox, which a session
+    forwards; the name carries the recipient so each one is told."""
+    OUTBOX.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%S%f")
+    (OUTBOX / f"{stamp}.{to.split('@')[0]}.txt").write_text(f"to: {to}\n{text}\n")
+    return True
 
 
 class Reporter:

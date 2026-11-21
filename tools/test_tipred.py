@@ -110,3 +110,12 @@ def test_a_failed_send_is_retried_next_tick():
     tipred.Reporter(state, lambda to, text: False).report("k", "t")
     assert state["sent"] == []
     assert state["unsent"] == {"k": "t"}
+
+
+def test_a_report_with_no_bus_is_a_file_per_recipient(tmp_path, monkeypatch):
+    """No bus a script can reach: each recipient gets a file a session forwards, naming who it is for."""
+    monkeypatch.setattr(tipred, "OUTBOX", tmp_path)
+    assert tipred.Reporter({}).report("k", "x is red") is None
+    files = sorted(tmp_path.iterdir())
+    assert len(files) == len(tipred.RECIPIENTS)
+    assert {f.read_text().splitlines()[0] for f in files} == {f"to: {to}" for to in tipred.RECIPIENTS}
