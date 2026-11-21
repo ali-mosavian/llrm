@@ -694,6 +694,12 @@ pub const ANALYSES: &[AnalysisEntry] = &[
     old_analysis("summaries updated", "counted(\"summaries updated\")", "none", "with summaries: funcattrs-port"),
     old_analysis("callee-effects", "CalleeEffects", "none", "none: DEVIATE or delete candidate (passes.rs)"),
     old_analysis(
+        "function-uses",
+        "FunctionUses",
+        "none",
+        "none: the pin keeps a use list on every Value (`Function::hasOneLiveUse`); a function pass here sees no other body",
+    ),
+    old_analysis(
         "call-graph",
         "CallGraphAnalysis",
         "CallGraphAnalysis",
