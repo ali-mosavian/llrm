@@ -556,6 +556,24 @@ fn instruction(
                 }
             }
         }
+        // `rep movsd` (flat code): the count, the source and the destination
+        // arrive in cx, si and di, and all three leave.
+        ("movsd", Some(Loc::Mem(_)), [Loc::Held(_), Loc::Held(_), Loc::Held(_)]) if what.dests.len() == 4 => {
+            let width = if LONG.with(std::cell::Cell::get) { 8 } else { 4 };
+            let r = |register| copy_register(register, width);
+            let (cx, si, di) = (r(RegId::ECX), r(RegId::ESI), r(RegId::EDI));
+            writeln!(
+                out,
+                "    REP_MOVSD_{} implicit-def ${cx}, implicit-def ${di}, implicit-def ${si}, implicit ${cx}, implicit ${di}, implicit ${si}",
+                width * 8
+            )
+            .unwrap();
+            for (held, register) in [(what.dests.get(1), &si), (what.dests.get(2), &di), (what.dests.get(3), &cx)] {
+                if let Some(Loc::Held(held)) = held {
+                    writeln!(out, "    {} = COPY ${register}", vreg(held)?).unwrap();
+                }
+            }
+        }
         // A segment register read (`mov ax, ss`).
         ("mov", Some(Loc::Held(d)), [Loc::Reg(r)]) if r.width == 2 => {
             writeln!(out, "    {} = COPY ${}", vreg(d)?, format!("{:?}", r.register).to_lowercase()).unwrap()
@@ -1686,6 +1704,32 @@ mod tests {
             "{text}"
         );
         assert!(text.contains("%3 = COPY $ecx\n    %4 = COPY $edi"), "{text}");
+    }
+
+    /// `rep movsd` (a struct copy) was refused ("`movsd` (Copy) with 4
+    /// destinations and 3 sources"), so QB `exec_loop` at m64 never reached
+    /// `LLRM_MIR_PRINT` or `LLRM_PLACED_DEBUG`.
+    #[test]
+    fn test_a_dword_copy_prints_as_rep_movsd() {
+        use llrm_lir::Mem;
+        let wide = |value| Loc::Held(Held { value, width: 8, offset: 0 });
+        let copy = insn(
+            "movsd",
+            Operation::Copy,
+            vec![Loc::Mem(Mem::new(None, 0)), wide(4), wide(5), wide(6)],
+            vec![wide(1), wide(2), wide(3)],
+        );
+        let ret = insn("", Operation::Return, vec![], vec![]);
+        let blocks = vec![Block::from(LirBlock::new(0, vec![copy, ret]))];
+        let body = LirBody::new("copy", 0, blocks, IndexMap::default(), IndexMap::default());
+        let text = mir(&body, &IndexMap::default()).expect("prints");
+        assert!(
+            text.contains(
+                "REP_MOVSD_64 implicit-def $rcx, implicit-def $rdi, implicit-def $rsi, implicit $rcx, implicit $rdi, implicit $rsi"
+            ),
+            "{text}"
+        );
+        assert!(text.contains("%4 = COPY $rsi\n    %5 = COPY $rdi\n    %6 = COPY $rcx"), "{text}");
     }
 
     /// `shld` (a double-register shift, the carry of a multi-word shift) was
