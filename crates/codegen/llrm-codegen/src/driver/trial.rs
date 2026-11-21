@@ -66,6 +66,9 @@ enum Dimension {
     KeepSwitch,
     /// DEVIATE LIR-COPY-TRIAL: a copy loop of an unknown count stays a loop.
     KeepCopyLoop,
+    /// DEVIATE INLINEHINT-GROWTH-TRIAL: the -Os size guard binds an
+    /// `inlinehint` callee too.
+    KeepHintedCalls,
 }
 
 /// What the base compile noted for each dimension.
@@ -77,6 +80,7 @@ struct Noted {
     latched: Vec<String>,
     lookups: usize,
     copied: Vec<String>,
+    hinted: Vec<String>,
 }
 
 impl Noted {
@@ -90,6 +94,7 @@ impl Noted {
             latched: trial::take_latch_copies(),
             lookups: trial::take_lookup_tables(),
             copied: trial::take_copy_calls(),
+            hinted: trial::take_hint_yields(),
         };
         trial::clear_rotated_loops();
         noted
@@ -106,6 +111,7 @@ impl Noted {
             Dimension::KeepLatch => !self.latched.is_empty(),
             Dimension::KeepSwitch => self.lookups > 0,
             Dimension::KeepCopyLoop => !self.copied.is_empty(),
+            Dimension::KeepHintedCalls => !self.hinted.is_empty(),
         }
     }
 }
@@ -133,6 +139,9 @@ impl Dimension {
         if tti.jump_threading_latch_trial_at_size() && !llrm_support::env_flag!("LLRM_NO_JT_LATCH_TRIAL") {
             all.push(Dimension::KeepLatch);
         }
+        if tti.opt_size_inline_guard_yields_to_inlinehint() && !llrm_support::env_flag!("LLRM_NO_INLINEHINT_TRIAL") {
+            all.push(Dimension::KeepHintedCalls);
+        }
         if let Some(limit) = tti.unroll_trial_at_size().filter(|_| !NO_SIZE_UNROLL.with(|one| one.get())) {
             all.push(Dimension::Unroll { limit, bytes_strict: tti.unroll_trial_bytes_strict() });
         }
@@ -151,6 +160,7 @@ impl Dimension {
             Dimension::KeepLatch => trial::with_kept_latches(body),
             Dimension::KeepSwitch => trial::with_refused_lookup_tables(body),
             Dimension::KeepCopyLoop => trial::with_kept_copy_loops(body),
+            Dimension::KeepHintedCalls => trial::with_kept_hinted_calls(body),
         }
     }
 
@@ -196,6 +206,7 @@ impl Dimension {
             Dimension::KeepLatch => ("keep-latch", trial::keeps_at_size(added)),
             Dimension::KeepSwitch => ("keep-switch", trial::keeps_at_size(added)),
             Dimension::KeepCopyLoop => ("keep-copy-loop", trial::keeps_at_size(added)),
+            Dimension::KeepHintedCalls => ("keep-hinted-calls", trial::keeps_at_size(added)),
             Dimension::Unroll { bytes_strict, .. } => {
                 ("unroll-os", measured && trial::keeps_unroll_at_size(saved, added, noted.unroll.0.len(), bytes_strict))
             }
