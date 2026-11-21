@@ -190,7 +190,7 @@ use llrm_mir::facts::{Fact, Facts};
 use llrm_mir::footprint::Footprint;
 use llrm_mir::memory::Callees;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
-use llrm_mir::opcode::{Flags, IntPredicate, Opcode, Tail};
+use llrm_mir::opcode::{Attribute, Flags, IntPredicate, Opcode, Tail};
 use llrm_mir::passes::{Analyses, Declared, FunctionPass, PreservedAnalyses, Unit};
 
 use crate::twoentryphi::{self, Speculation};
@@ -232,7 +232,22 @@ impl FunctionPass for SimplifyCfg {
             info: analyses.get::<llrm_mir::passes::Loops>(&*unit.context, unit.layout, &*unit.function),
             cfg_epoch: unit.function.epochs().cfg,
         };
-        if simplified_with_known(&self.options, unit.context, &spec, unit.declared, unit.function, Some(&known)) {
+        // DEVIATE SINK-COMMON-SIZE: where the target asks, a function optimized
+        // for size sinks in every slot (the pin's `-sink-common-insts`), not
+        // the late one only.
+        let mut options = self.options;
+        let for_size = unit
+            .function
+            .attrs
+            .iter()
+            .any(
+                |attr| matches!(
+                    attr,
+                    Attribute::Flag(flag) if flag == "optsize" || flag == "minsize"
+                ),
+            );
+        options.sink_common_insts |= for_size && tti.sink_common_at_size();
+        if simplified_with_known(&options, unit.context, &spec, unit.declared, unit.function, Some(&known)) {
             PreservedAnalyses::none()
         } else {
             PreservedAnalyses::all()

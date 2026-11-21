@@ -643,6 +643,34 @@ fn a_vector_trunc_of_a_splat_add_narrows_to_the_splat() {
     check("<4 x i16>", "i64 %n", body, after);
 }
 
+/// `tile` (`main`'s init loop): the whole combiner left `and (trunc nuw nsw
+/// (add nuw nsw splat, <0, 3, ..>)), 255` at `<8 x i64>`: about 20 instructions
+/// per vector, not `paddw`.
+#[test]
+fn the_full_combiner_narrows_a_masked_vector_trunc_of_a_splat_add() {
+    let text = "define void @f(i64 %n, ptr %p) {\nb0:\n  \
+                %si = insertelement <8 x i64> poison, i64 %n, i64 0\n  \
+                %s = shufflevector <8 x i64> %si, <8 x i64> poison, <8 x i32> zeroinitializer\n  \
+                %a = add nuw nsw <8 x i64> %s, <i64 0, i64 3, i64 6, i64 9, i64 12, i64 15, i64 18, i64 21>\n  \
+                %t = trunc nuw nsw <8 x i64> %a to <8 x i16>\n  \
+                %m = and <8 x i16> %t, <i16 255, i16 255, i16 255, i16 255, i16 255, i16 255, i16 255, i16 255>\n  \
+                store <8 x i16> %m, ptr %p, align 16\n  \
+                %a2 = add nuw nsw <8 x i64> %s, <i64 24, i64 27, i64 30, i64 33, i64 36, i64 39, i64 42, i64 45>\n  \
+                %t2 = trunc nuw nsw <8 x i64> %a2 to <8 x i16>\n  \
+                %m2 = and <8 x i16> %t2, <i16 255, i16 255, i16 255, i16 255, i16 255, i16 255, i16 255, i16 255>\n  \
+                %q = getelementptr i8, ptr %p, i64 16\n  store <8 x i16> %m2, ptr %q, align 16\n  ret void\n}\n";
+    let mut module = parsed(text);
+    let globals = module.globals.clone();
+    let metadata = module.metadata.clone();
+    let layout = DataLayout::parse("n8:16:32:64").expect("a datalayout");
+    let (context, function) = module.function_mut("f").expect("@f");
+    let mut declared = llrm_mir::passes::Declared::over(std::rc::Rc::new(globals.clone()), metadata.len());
+    crate::combine::combine(context, &globals, &Default::default(), &metadata, &layout, function, &mut declared);
+    let out = printed(&module);
+    assert!(!out.contains("<8 x i64>, <8 x i64> poison, <8 x i32> zeroinitializer\n  %a"), "{out}");
+    assert!(!out.contains("add nuw nsw <8 x i64>"), "still wide:\n{out}");
+}
+
 /// `narrowBinOp` on vectors: `trunc (xor (zext y), x)` --> `xor y, (trunc x)`.
 #[test]
 fn a_vector_trunc_of_a_logic_op_with_an_extended_operand_narrows() {

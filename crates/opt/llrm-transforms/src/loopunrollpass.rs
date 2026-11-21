@@ -465,8 +465,9 @@ impl Analyzed {
 pub(crate) fn gather_unrolling_preferences(
     run: &Run,
     has_calls: bool,
+    raised_threshold: bool,
 ) -> UnrollingPreferences {
-    let mut up = gather_unrolling_preferences_of_target(run, has_calls);
+    let mut up = gather_unrolling_preferences_of_target(run, has_calls, raised_threshold);
     // Apply the values provided by the full unroll pass.
     if !run.options.target_unrolling {
         up.partial = false;
@@ -484,6 +485,7 @@ pub(crate) fn gather_unrolling_preferences(
 pub(crate) fn gather_unrolling_preferences_of_target(
     run: &Run,
     has_calls: bool,
+    raised_threshold: bool,
 ) -> UnrollingPreferences {
     let mut up = UnrollingPreferences {
         threshold: if run.options.opt_level > 2 { UNROLL_THRESHOLD_AGGRESSIVE } else { UNROLL_THRESHOLD_DEFAULT },
@@ -517,7 +519,7 @@ pub(crate) fn gather_unrolling_preferences_of_target(
     if run.options.opt_level >= 2 && !run.options.opt_size {
         up.threshold = run.tti.unroll_threshold_at_speed().unwrap_or(up.threshold);
     }
-    if run.options.opt_level > 2 {
+    if run.options.opt_level > 2 && raised_threshold {
         up.threshold = run.tti.unroll_threshold_at_o3().unwrap_or(up.threshold);
     }
     // DEVIATE UNROLL-SPEED-TRIAL: the trial compile's own threshold.
@@ -1878,7 +1880,13 @@ fn try_to_unroll_loop(
 
     let opt_for_size = run.options.opt_size;
     let has_calls = loop_has_calls(run, lp);
-    let mut up = gather_unrolling_preferences(run, has_calls);
+    // DEVIATE UNROLL-O3: the target's raised -O3 threshold is not for an innermost loop the early
+    // `LoopFullUnrollPass` meets: the vectorizer widens only those, and gcc completely unrolls after
+    // `pass_vectorize` (tile -O3: a 64-trip init loop unrolled to 16,147 instructions against
+    // clang's 6,130). A loop with an inner loop keeps it: its copies expose the inner trip counts
+    // (object_extent_loop).
+    let raised_threshold = run.options.target_unrolling || !lp.is_innermost();
+    let mut up = gather_unrolling_preferences(run, has_calls, raised_threshold);
 
     // Exit early if unrolling is disabled. For size, the loop size is the
     // threshold later.
