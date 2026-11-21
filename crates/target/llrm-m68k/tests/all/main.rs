@@ -3,6 +3,7 @@
 
 #[path = "../support/mod.rs"]
 mod support;
+mod computed_goto;
 
 mod a6_free_without_frame_pointer;
 mod abi_parse_once;

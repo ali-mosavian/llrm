@@ -6,6 +6,7 @@
 
 use crate::context::signed;
 use crate::datalayout::DataLayout;
+use crate::opcode::CastOp;
 use crate::{ConstantExpr, ConstantId, ConstantKind, FloatKind, GlobalKind, Linkage, Module, Type, TypeId};
 
 /// A pointer in a constant's bytes: where, to what, and the addend.
@@ -100,6 +101,16 @@ impl Writer<'_> {
                         out[at..at + bytes].copy_from_slice(&1u64.to_le_bytes()[..bytes]);
                     }
                 }
+                Ok(())
+            }
+            // `inttoptr (iN n)`: the number itself, as an expanded block
+            // address is (`IndirectBrExpandPass`).
+            (ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::IntToPtr, value }), Type::Pointer(_))
+                if matches!(context.get(*value).kind, ConstantKind::Int(_)) =>
+            {
+                let ConstantKind::Int(number) = context.get(*value).kind else { unreachable!() };
+                let bytes = self.layout.pointer(0).bits as usize / 8;
+                self.put(out, at, &number.to_le_bytes()[..bytes]);
                 Ok(())
             }
             (ConstantKind::Global(global), Type::Pointer(_)) => {
