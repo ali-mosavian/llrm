@@ -376,16 +376,18 @@ pub fn keeps_unrotated(
     other: Price,
     hot: bool,
     loops: usize,
+    cap: Option<i64>,
 ) -> bool {
     if kept.laid_out.is_nan() || other.laid_out.is_nan() || kept.work.is_nan() || other.work.is_nan() {
         return false;
     }
     let added = other.bytes - kept.bytes;
-    let slower = (kept.laid_out - other.laid_out).round() < 0.0;
+    let laid_saved = (kept.laid_out - other.laid_out).round() as i64;
     let saved = (kept.work - other.work).round() as i64;
-    // Strict at -Os on both axes: smaller, and not slower.
-    trial::keeps_at_size(added)
-        && !slower
+    // Smaller, and costing at most the target's cap (DEVIATE
+    // OS-TRIAL-CLOCK-CAP) of the laid-out work: a 0.3% model difference
+    // does not outweigh a 10% smaller object (fib -Os, 124 -> 112 B).
+    trial::keeps_smaller_at_size(added, laid_saved, kept.laid_out.round() as i64, cap)
         && !(hot && trial::keeps_rotation_hot(-saved, -added, loops, trial::ROTATION_HOT_BYTES_PER_LOOP))
 }
 

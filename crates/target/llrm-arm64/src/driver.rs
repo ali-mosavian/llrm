@@ -585,6 +585,8 @@ fn compiled(
         return Ok((program, lowered));
     }
     let hot = asked.unwrap_or(false);
+    let rotation_cap = crate::tti::AArch64::of_cpu(platform.cpu())
+        .and_then(|tti| llrm_mir::tti::Tti::os_trial_clock_cap_percent(&tti));
     use llrm_transforms::trial;
     let _ = (trial::take_left(), trial::take_rotated(), crate::trial::take_merged());
     trial::clear_rotated_loops();
@@ -610,7 +612,7 @@ fn compiled(
     };
     if !notes.rotated.is_empty()
         && try_one(&mut best, (true, false, false, false), "unrotated", &|kept, now| {
-            crate::trial::keeps_unrotated(kept, now, hot, notes.loops)
+            crate::trial::keeps_unrotated(kept, now, hot, notes.loops, rotation_cap)
         })?
     {
         state.0 = true;
