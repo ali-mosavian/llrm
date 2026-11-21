@@ -29,7 +29,7 @@ fn listing(level: &str) -> String {
 
 #[test]
 fn inline_x87_code_through_a_register_does_not_keep_the_frame_register() {
-    for level in ["-O2", "-O3"] {
+    for level in ["-O2", "-O3", "-Os"] {
         let text = listing(level);
         assert!(text.contains("fistp"), "{level}: the inline code is there\n{text}");
         assert!(
