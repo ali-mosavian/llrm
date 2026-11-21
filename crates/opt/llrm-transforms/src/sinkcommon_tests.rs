@@ -381,9 +381,14 @@ e:
     assert_eq!(sunk.matches("= load i16").count(), 1, "{sunk}");
 }
 
-/// `sinked(text, phi_cost)`: whether a size-optimized sink changed `@f`, and `@f` after.
+/// Whether a size-optimized sink at `phi_cost` changed `@f`, and `@f` after.
 fn sinked(text: &str, phi_cost: usize) -> (bool, String) {
-    let options = Options { speculate_blocks: false, sink_common_insts: true, sink_common_phi_cost: phi_cost, ..Default::default() };
+    let options = Options {
+        speculate_blocks: false,
+        sink_common_insts: true,
+        sink_common_phi_cost: phi_cost,
+        ..Default::default()
+    };
     let mut module = parsed(text);
     let outer = Outer::of(&module, None);
     let layout = DataLayout::default();

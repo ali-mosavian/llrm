@@ -275,8 +275,8 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // merges the tails of copies at size. QB synth.c m32 Os 35,527 ->
         // 11,814 B, identical output (row M32-SINK-COMMON-SIZE).
         sink_common_at_size: true,
-        // Not priced: `sink_common_phi_cost: 1` takes exec.o at Os 1.7-3.1% fewer
-        // instructions but +614 B and two counted cells (row M32-SINK-COMMON-PHI).
+        // Not priced: cost 1 takes exec.o at Os 1.7-3.1% fewer instructions
+        // for +614 B and two counted cells (row M32-SINK-COMMON-PHI).
         sink_common_phi_cost: 0,
         // DEVIATE OB1 (owner w12, exit 2026-11-27, `unrollbound.rs`; -O3 only,
         // as gcc grows code only there): gcc
