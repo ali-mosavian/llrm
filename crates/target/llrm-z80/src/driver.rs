@@ -475,8 +475,10 @@ pub fn selections_with_alternatives(
             .find_map(
                 |global| {
                     let one = global.function().filter(|_| global.name.as_deref() == Some(name))?;
-                    llrm_mir::memory::has(&one.attrs, crate::prepare::LONG_MULTIPLY)
-                        .then(|| ["optsize", "minsize"].into_iter().any(|attr| llrm_mir::memory::has(&one.attrs, attr)))
+                    let sized = ["optsize", "minsize"].into_iter().any(|attr| llrm_mir::memory::has(&one.attrs, attr));
+                    (llrm_mir::memory::has(&one.attrs, crate::prepare::LONG_MULTIPLY)
+                        || (!sized && llrm_mir::memory::has(&one.attrs, crate::prepare::LONE_MULTIPLY)))
+                    .then_some(sized)
                 },
             )
     };

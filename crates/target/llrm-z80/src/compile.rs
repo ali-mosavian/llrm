@@ -4077,6 +4077,18 @@ fn decomposed_functions(
                 )
         })
         .collect();
+    // a function whose alternative is the call for its module's one long
+    // multiply: taken only where it gives up neither axis (loop_versioning:
+    // 323 B / 1.04M T against 447 B / 1.75M T; word_compares -12 B for 35%
+    // more clocks stays as it was)
+    let lone: Vec<bool> = either
+        .iter()
+        .map(|(name, ..)| {
+            alternatives.iter().any(|(one, source, scheduled)| {
+                one == name && [source, scheduled].into_iter().any(|form| form.as_ref().is_ok_and(|s| s.lone_alternative))
+            })
+        })
+        .collect();
     let with_alternative = || (0..either.len()).filter(|at| either[*at].2.is_some());
     let all_sized = with_alternative().all(|at| size_first[at] && !regret[at]);
     let regretful = with_alternative().all(|at| size_first[at] && regret[at]);
@@ -4094,7 +4106,9 @@ fn decomposed_functions(
                     other.insert(at);
                 }
                 let price = total(&other);
-                let better = if size_first[at] && regret[at] {
+                let better = if lone[at] {
+                    dominates(price, best)
+                } else if size_first[at] && regret[at] {
                     prefers_by_regret(price, best)
                 } else if size_first[at] {
                     prefers(Level::Os, price, best)
@@ -4121,8 +4135,14 @@ fn decomposed_functions(
     } else {
         (descend(HashSet::new()), descend(every))
     };
-    let second_wins =
-        if regretful { prefers_by_regret(second.0, first.0) } else { prefers(module_level, second.0, first.0) };
+    let every_lone = with_alternative().all(|at| lone[at]);
+    let second_wins = if regretful {
+        prefers_by_regret(second.0, first.0)
+    } else if every_lone {
+        dominates(second.0, first.0)
+    } else {
+        prefers(module_level, second.0, first.0)
+    };
     let chosen = if second_wins { second.1 } else { first.1 };
     either
         .iter()
@@ -4146,6 +4166,14 @@ fn prefers(
     old: (u32, u64),
 ) -> bool {
     cheaper(level, new, old)
+}
+
+/// Whether the price `new` (bytes, clocks) is no bigger and no slower than `old`, and not the same.
+fn dominates(
+    new: (u32, u64),
+    old: (u32, u64),
+) -> bool {
+    new != old && new.0 <= old.0 && new.1 <= old.1
 }
 
 /// The smaller relative regret (a form's worse axis against the best of the two
