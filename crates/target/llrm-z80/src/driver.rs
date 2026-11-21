@@ -676,6 +676,14 @@ impl llrm_mir::target::Machine for Z80Machine {
         DESCRIPTION.size_costs()
     }
 
+    /// The speed trial's growth is priced in the bytes the backend writes
+    /// (`clocks::calibrate`), the table the size trial uses: the forms' own
+    /// bytes are 0.54 of them, so a copy of `sum` that grew the code by
+    /// 98 B read as growing it by 4.
+    fn speed_trial_costs(&self) -> llrm_mir::target::OperationCosts {
+        crate::clocks::trial_bytes()
+    }
+
     fn registers(&self) -> i64 {
         llrm_mir::target::Neutral.registers()
     }
