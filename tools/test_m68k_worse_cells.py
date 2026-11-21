@@ -227,3 +227,21 @@ def test_an_upper_bound_above_a_reference_stays_unmeasured():
     sides = {"ours": (100, "<=9000"), "gcc": (100, 8548)}
     w.settle_bounds(sides)
     assert sides["ours"][1] is None
+
+
+def test_a_lower_bound_over_a_reference_is_a_counted_loss():
+    """pattern_fill 68000 O1 ran `93048*` (shift counts at their lower bound) against gcc's 86440 and the cell was blank: the true count is at least 93048, a loss."""
+    import m68k_worse_cells as w
+
+    sides = {"ours": (264, ">=93048"), "gcc": (232, 86440)}
+    w.settle_bounds(sides)
+    assert sides == {"ours": (264, 93048), "gcc": (232, 86440)}
+
+
+def test_a_lower_bound_under_a_reference_straddles():
+    """`>=80000` against gcc's 86440 may still win or lose: unmeasured."""
+    import m68k_worse_cells as w
+
+    sides = {"ours": (264, ">=80000"), "gcc": (232, 86440)}
+    w.settle_bounds(sides)
+    assert sides["ours"][1] is None

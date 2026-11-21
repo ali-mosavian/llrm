@@ -113,7 +113,7 @@ def _seen(lines):
         try:
             if len(row) > 7 and row[7].startswith(UNRESOLVED):
                 continue  # a helper the archive lacks: the linked size is unknown, not small
-            clocks = (row[5] if row[5].startswith("<=") else int(row[5])) if row[5] != "" else None
+            clocks = (row[5] if row[5][:2] in ("<=", ">=") else int(row[5])) if row[5] != "" else None
             library = int(row[8]) if len(row) > 8 and row[8] != "" else 0
             seen.setdefault(key, {})[row[3]] = (int(row[4]) + library, clocks)
         except (ValueError, IndexError):
@@ -123,13 +123,35 @@ def _seen(lines):
     return rates(header), seen, keys
 
 
+def interval(clocks):
+    """(low, high) of a clocks cell: exact `N`, `<=N` (a multiply or divide at its published maximum) or `>=N` (a count at its lower bound)."""
+    if isinstance(clocks, int):
+        return clocks, clocks
+    return (0, int(clocks[2:])) if clocks.startswith("<=") else (int(clocks[2:]), float("inf"))
+
+
 def settle_bounds(sides):
-    """Resolve `<=N` clock cells (an upper bound: the program's multiplies and divides are priced at their published maximum, the true clocks are at most N). Ours `<=N` with N at or under every exact reference is a win and is judged at N (the true gap is no larger); otherwise the interval straddles a reference and the clocks are unmeasured. A reference that is itself a bound is unmeasured: a blank here hid muls.l cells (memmove_overlap 68020 O2: `4668` bound against gcc 8548)."""
-    exact = [c for side, (_, c) in sides.items() if side != "ours" and isinstance(c, int)]
-    for side, (size, clocks) in list(sides.items()):
-        if isinstance(clocks, str):
-            bound = int(clocks[2:])
-            sides[side] = (size, bound if side == "ours" and exact and bound <= min(exact) else None)
+    """Resolve bound clock cells against the references. Ours wins when its high end is at or under every reference's low end (judged at those numbers: the true gap is no smaller than shown); it loses when its low end is over a reference's high end (judged at those: the true gap is no smaller). Anything else straddles and is unmeasured, not blank by accident: memmove_overlap 68020 O2 (`<=4668` against gcc 8548) and pattern_fill 68000 O1 (`>=93048` against gcc 86440, a counted loss) both printed blank."""
+    if not any(isinstance(c, str) for _, c in sides.values()):
+        return
+    refs = {side: v for side, v in sides.items() if side != "ours"}
+    if "ours" not in sides or sides["ours"][1] is None or any(c is None for _, c in refs.values()):
+        for side, (size, clocks) in list(sides.items()):
+            if isinstance(clocks, str):
+                sides[side] = (size, None)
+        return
+    size, ours = sides["ours"]
+    low, high = interval(ours)
+    ref_bounds = {side: interval(c) for side, (_, c) in refs.items()}
+    if all(low_ref >= high for low_ref, _ in ref_bounds.values()):
+        sides["ours"] = (size, high)
+        sides.update({side: (refs[side][0], ref_bounds[side][0]) for side in refs})
+    elif any(high_ref < low for _, high_ref in ref_bounds.values()):
+        sides["ours"] = (size, low)
+        sides.update({side: (refs[side][0], ref_bounds[side][1] if ref_bounds[side][1] < low else None) for side in refs})
+    else:
+        sides["ours"] = (size, None)
+        sides.update({side: (refs[side][0], None if isinstance(refs[side][1], str) else refs[side][1]) for side in refs})
 
 
 def cells(lines):
