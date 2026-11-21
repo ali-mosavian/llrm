@@ -756,10 +756,11 @@ pub fn fold_with_odds(
     // Reachable blocks, in `MachineBlockPlacement`'s order.
     let index: HashMap<&str, usize> = blocks.iter().enumerate().map(|(at, block)| (block.label.as_str(), at)).collect();
     // The blocks an `indirectbr` may reach, by the block it ends.
-    let indirect: HashMap<&str, &Vec<String>> = indirect.iter().map(|(from, to)| (from.as_str(), to)).collect();
+    let indirect_by_block: HashMap<&str, &Vec<String>> =
+        indirect.iter().map(|(from, to)| (from.as_str(), to)).collect();
     let successors = |at: usize| -> Vec<usize> {
         let mut out: Vec<usize> = Vec::new();
-        if let Some(targets) = indirect.get(blocks[at].label.as_str()) {
+        if let Some(targets) = indirect_by_block.get(blocks[at].label.as_str()) {
             out.extend(targets.iter().filter_map(|label| index.get(label.as_str()).copied()));
         }
         for inst in &blocks[at].insts {
@@ -955,7 +956,9 @@ pub fn fold_with_odds(
     // The pin copies in layout order (`TailDuplicator`, then
     // `MachineCopyPropagation`): a jump to the block next to it stays a
     // fall-through.
-    for (jumper, original) in crate::taildup::tail_duplicate(&mut ordered, optsize) {
+    for (jumper, original) in
+        crate::taildup::tail_duplicate(&mut ordered, optsize, &crate::taildup::computed_gotos(indirect, kept), indirect)
+    {
         // The copy keeps the original's edge odds (`addSuccessor` with the
         // original's probabilities), which `optimizeBranches` reads below.
         let edges: Vec<(String, u32)> = likelihood
