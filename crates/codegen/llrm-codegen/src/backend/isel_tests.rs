@@ -6218,6 +6218,28 @@ fn test_a_poison_hole_in_a_lookup_table_is_a_zero_byte() {
     assert_eq!(datums, [Datum::Label(Label { name: "t".to_owned() }), Datum::Bytes(vec![1, 0, 0, 4])]);
 }
 
+/// Old: a table of label addresses on the segmented target was refused as
+/// "an address of no global": clang writes each as `addrspacecast (ptr
+/// addrspace(1) blockaddress(..) to ptr)`, and only the bare block address was
+/// known. It is the near pointer to the block's symbol.
+#[test]
+fn test_a_table_of_block_addresses_is_near_pointers_to_the_block_symbols() {
+    use crate::backend::masm::Datum;
+    let text = "@t = private constant [1 x ptr] [ptr addrspacecast (ptr addrspace(1) blockaddress(@f, %b1) to ptr)]
+define void @f() addrspace(1) {
+b0:
+  br label %b1
+b1:
+  ret void
+}
+";
+    let module = llrm_mir::parse::module(&format!("{LAYOUT}{text}")).expect("parses");
+    let names =
+        crate::backend::globals::names(&module, &llrm_x86_m16::spaces(), &|name| qb().linked(name)).expect("names");
+    let datums = crate::backend::globals::datums(&module, module.named("t").expect("a global"), &names).expect("data");
+    assert!(matches!(&datums[..], [_, Datum::Pointer(pointer)] if pointer.name.contains("BA") && !pointer.far), "{datums:?}");
+}
+
 /// A load only an add reads is the add's memory operand, as `ADD32rm` is
 /// X86DAGToDAGISel's: `add ax, [g]`, no register made to hold the load.
 #[test]
