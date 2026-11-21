@@ -347,16 +347,20 @@ fn _needs_grouping(
     if loop_.latches.len() != 1 {
         return _has_outside(function, loop_);
     }
-    let mut outside = function.predecessors(cfg::block(loop_.header)).into_iter().filter(|at| !loop_.body.contains(&cfg::id(*at)));
+    let mut outside =
+        function.predecessors(cfg::block(loop_.header)).into_iter().filter(|at| !loop_.body.contains(&cfg::id(*at)));
     let Some(parent) = outside.next() else { return false };
     if outside.next().is_some() || function.successors(parent) != [cfg::block(loop_.header)] {
         return true;
     }
-    loop_.body.iter().any(|&at| {
-        function.successors(cfg::block(at)).into_iter().any(|target| {
-            !loop_.body.contains(&cfg::id(target)) && !_reached_only_from(function, cfg::id(target), &loop_.body)
-        })
-    })
+    loop_
+        .body
+        .iter()
+        .any(
+            |&at| function.successors(cfg::block(at)).into_iter().any(|target| {
+                !loop_.body.contains(&cfg::id(target)) && !_reached_only_from(function, cfg::id(target), &loop_.body)
+            }),
+        )
 }
 
 /// Whether the header has a predecessor outside the loop.

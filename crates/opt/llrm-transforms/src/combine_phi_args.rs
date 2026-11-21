@@ -23,8 +23,8 @@
 //!   and operand count, each with one user, whose operands agree but for one
 //!   that is no constant and has one type in all of them, become one
 //!   `getelementptr` of a phi of that operand (`foldPHIArgGEPIntoPHI`), at the
-//!   flags all of them have. Not where every other base is a frame slot
-//!   indexed by constants.
+//!   flags all of them have. Not where every other base is a frame slot indexed
+//!   by constants.
 //! - `foldDeadPhiWeb`
 //!   ([:59](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombinePHI.cpp#L59)):
 //!   phis used only by other phis, fewer than 16 of them, are deleted.
@@ -421,9 +421,9 @@ impl Combiner<'_> {
             }
             flags = flags.intersect(inst.flags);
             // The pin looks at the other GEPs only, not the first.
-            let on_slot = self.definition_of(inst.operands[0]).is_some_and(|base| {
-                matches!(self.function.instruction(base).opcode, Opcode::Alloca { .. })
-            });
+            let on_slot = self
+                .definition_of(inst.operands[0])
+                .is_some_and(|base| matches!(self.function.instruction(base).opcode, Opcode::Alloca { .. }));
             if !(on_slot && inst.operands[1..].iter().all(|one| matches!(one, Operand::Constant(_)))) {
                 all_slots = false;
             }

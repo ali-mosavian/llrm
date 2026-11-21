@@ -947,7 +947,8 @@ out:
 ",
     );
     let count = |module: &Module| {
-        let (_, _, function) = module.functions().find(|(_, global, _)| global.name.as_deref() == Some("f")).expect("@f");
+        let (_, _, function) =
+            module.functions().find(|(_, global, _)| global.name.as_deref() == Some("f")).expect("@f");
         let graph = cfg::graph(function);
         loops::loops(&graph, function.entry().map(cfg::id)).len()
     };
