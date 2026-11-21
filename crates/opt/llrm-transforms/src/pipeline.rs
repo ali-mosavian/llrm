@@ -1756,6 +1756,8 @@ pub fn recorded(
     manager.require_cached::<GlobalsAA>();
     manager.require_cached::<GlobalsModRefAnalysis>();
     manager.require::<Summaries>();
+    // `Function::hasOneLiveUse`, which loop unrolling reads of an internal callee.
+    manager.require::<llrm_mir::passes::FunctionUses>();
     manager.require_program::<ProgramSummaries>();
     // As LLVM's module pipeline starts with InferFunctionAttrs
     // (PassBuilderPipelines.cpp#L1169), then GlobalOpt.
