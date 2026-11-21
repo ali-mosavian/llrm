@@ -735,6 +735,15 @@ pub trait CombineHooks {
         false
     }
 
+    /// `SimplifySetCC`'s `(setcc X, 0|1, eq|ne)` of a boolean known to be 0 or
+    /// 1 ([TargetLowering.cpp#L5185](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/TargetLowering.cpp#L5185)):
+    /// the boolean itself or, of a compare, its inverse, at any type. The pin
+    /// does it everywhere; DEVIATE (owner m16-b, exit 2026-12-11): only where
+    /// a target says so, until each target's cells are judged with it.
+    fn simplify_boolean_compare(&self) -> bool {
+        false
+    }
+
     fn has_target_combine(
         &self,
         _op: ISD,
@@ -1408,6 +1417,51 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         //
         // [pin]:
         // https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/CodeGen/SelectionDAG/TargetLowering.cpp#L5185
+        // `SimplifySetCC`'s "SETCC (X), [0|1], [EQ|NE] -> X if X is known 0/1"
+        // ([L5185][pin]), whatever the boolean's type: after the types are
+        // legalized a compare of a compare is `i32` over `i32`, and the inner
+        // one or its inverse is the answer.
+        if self.hooks.simplify_boolean_compare()
+            && matches!(cond, CondCode::SetEq | CondCode::SetNe)
+            && matches!(c1, 0 | 1)
+            && (self.dag.opcode(n0) == ISD::SetCC || vt != EVT::I1)
+            && self.tli.is_some_and(|tli| tli.types.is_type_legal(vt))
+            && vt.size_in_bits() <= op_type.size_in_bits()
+            && (op_type == EVT::I1
+                || self.dag.config().boolean_contents_of(op_type) == super::dag::BooleanContents::ZeroOrOne)
+            && super::known_bits::masked_value_is_zero(
+                self.dag,
+                n0,
+                super::fold::mask(op_type.size_in_bits()) & !1,
+            )
+        {
+            let true_when_true = (cond == CondCode::SetEq) ^ (c1 != 1);
+            if true_when_true {
+                if vt == op_type {
+                    return Some(n0);
+                }
+                return Some(self.dag.get_node(ISD::Truncate, vt, &[n0]));
+            }
+            if self.dag.opcode(n0) == ISD::SetCC
+                && let NodeData::CondCode(inner) = self.dag.node(self.dag.operand(n0, 2)).data
+            {
+                let lhs = self.dag.operand(n0, 0);
+                let inverse = if self.dag.value_type(lhs).is_floating_point() {
+                    inner.inverse_float()
+                } else {
+                    inner.inverse_integer()
+                };
+                let legal = match (self.tli, self.dag.value_type(lhs)) {
+                    (Some(tli), EVT::Simple(operand)) => {
+                        tli.cond_code_action(inverse, operand) == super::actions::Action::Legal
+                    }
+                    _ => false,
+                };
+                if self.level < CombineLevel::AfterLegalizeVectorOps || legal {
+                    return Some(self.dag.get_setcc(vt, lhs, self.dag.operand(n0, 1), inverse));
+                }
+            }
+        }
         if self.hooks.rebuild_brcond_condition()
             && matches!(cond, CondCode::SetEq | CondCode::SetNe)
             && matches!(c1, 0 | 1)
