@@ -211,6 +211,12 @@ pub struct Tuning {
     /// JumpThreading made (gcc's backward threader refuses a path through the
     /// latch) and the smaller object kept. false: the pin's.
     pub jump_threading_latch_trial_at_size: bool,
+    /// DEVIATE OS-TRIAL-CLOCK-CAP: the most clocks, in percent of the pin-shaped
+    /// code's, the -Os trials that keep a smaller shape (`KeepSwitch`,
+    /// `KeepCopyLoop`, `KeepLatch`, `KeepHintedCalls`) may cost. The ruling of
+    /// 2026-11-14 counts an -Os cell on bytes and clocks both. None: bytes alone
+    /// decide.
+    pub os_trial_clock_cap_percent: Option<i64>,
     /// DEVIATE OB1: see `Tti::unroll_object_bound`.
     pub unroll_object_bound: Option<u32>,
     /// With `inline_never_grows_without_rate`: what a byte of growth costs an
@@ -935,6 +941,7 @@ impl Tuning {
         rotate_exiting_latch_when_guard_folds: false,
         inline_never_grows_without_rate: false,
         jump_threading_latch_trial_at_size: false,
+        os_trial_clock_cap_percent: None,
         switch_lookup_trial_at_size: false,
         inline_trial_credit_gate: false,
         loop_idiom_copy_trial_at_size: false,
