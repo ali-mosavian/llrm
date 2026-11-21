@@ -738,18 +738,13 @@ fn tail(
     // A place in a loop is given up for its clocks at -O1 only: at -O2 and -O3
     // that takes div_constants_long and div_constants_ulong out of the bytes
     // that beat the other compilers', and bytes come first (row
-    // 6502-OUTLINE-CLOCKS). At -Os the pass is the pin's for the places outside
-    // every loop (bytes alone) and prices those in a loop by the share below.
+    // 6502-OUTLINE-CLOCKS). At -Os the pass is the pin's, bytes alone.
     let rate = (request.level == Level::O1).then(|| request.level.tuning().clocks_per_byte);
     // at -O1 to -O3 a place is given up by the share of the module's clocks its
     // calls add against the share of its bytes they save (`[share.speed]
     // outline`)
     let share = matches!(request.level, Level::O1 | Level::O2 | Level::O3)
         .then(|| crate::routines::speed_share_percent("outline"));
-    // at -Os a place in a loop is given up by the same share: the bytes are
-    // still first (a place outside every loop stays), and a hot loop does not
-    // pay a call for a few bytes (word_compares)
-    let in_loops = (request.level == Level::Os).then(|| crate::routines::speed_share_percent("outline"));
     // The outliner is also tried on the module as the allocator wrote it
     // before the transfer of known constants, which that pass makes differ
     // between copies of one run; it then runs on the outlined text, and the
@@ -765,14 +760,10 @@ fn tail(
         plain
     });
     let after = |text: String| if request.level != Level::O0 { crate::peephole::after_outlining(&text) } else { text };
-    let outline = |text: &str| match (share, in_loops) {
-        (_, Some(percent)) => crate::outline::run_priced_in_loops(text, Some(percent)),
-        _ => crate::outline::run_priced(text, rate, share),
-    };
-    let kept = after(if outlined { outline(&text) } else { text });
+    let kept = after(if outlined { crate::outline::run_priced(&text, rate, share) } else { text });
     let text = match plain {
         Some(plain) => {
-            let mut outlined = crate::asm::Asm::parse(&outline(&plain));
+            let mut outlined = crate::asm::Asm::parse(&crate::outline::run_priced(&plain, rate, share));
             crate::peephole::drop_known_loads(&mut outlined);
             let plain = after(outlined.text());
             let bytes = |text: &str| crate::timing::estimate(request.cpu, &crate::alloc::without_lines(text)).map(|priced| priced.bytes);

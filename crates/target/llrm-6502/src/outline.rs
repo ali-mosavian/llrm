@@ -21,9 +21,7 @@
 //!    outlined is dropped, and a function that is left without a benefit is not
 //!    made.
 //!
-//! The pin outlines for bytes alone, and so does this pass at `-Os` for a place
-//! outside every loop; a place in a loop is priced there by the share rule
-//! (`[share.speed] outline`), as at the speed levels. At the
+//! The pin outlines for bytes alone, and so does this pass at `-Os`. At the
 //! speed levels a place inside a loop may be given up: a call costs 12 clocks
 //! (`jsr` and `rts`, a `jmp` 3) a run, a loop runs its body [`LOOP_TRIPS`]
 //! times for each entry (the pin's `BranchProbabilityInfo` loop scale, which
@@ -87,25 +85,6 @@ pub fn run_priced(
     clocks_per_byte: Option<u32>,
     share: Option<u64>,
 ) -> String {
-    run_shared(text, clocks_per_byte, share, true)
-}
-
-/// [`run_priced`] where the share prices the places in a loop only: a place
-/// outside every loop stays for its bytes, as at `-Os`, where bytes come
-/// first and a loop's clocks are the second goal.
-pub fn run_priced_in_loops(
-    text: &str,
-    share: Option<u64>,
-) -> String {
-    run_shared(text, None, share, false)
-}
-
-fn run_shared(
-    text: &str,
-    clocks_per_byte: Option<u32>,
-    share: Option<u64>,
-    outside: bool,
-) -> String {
     let lines: Vec<Line> = text.lines().map(Line::parse).collect();
     if lines.iter().filter(|line| matches!(line, Line::Inst(_))).count() < 2 * (CALL + FRAME) {
         return text.to_owned();
@@ -125,7 +104,7 @@ fn run_shared(
             .sum();
         (percent, bytes_of(&lines) as u64, clocks)
     });
-    let chosen = select(&lines, &mapped, &weights, clocks_per_byte.map(u64::from), share, outside);
+    let chosen = select(&lines, &mapped, &weights, clocks_per_byte.map(u64::from), share);
     if chosen.is_empty() {
         return text.to_owned();
     }
@@ -421,7 +400,6 @@ fn select(
     weights: &[u64],
     clocks_per_byte: Option<u64>,
     share: Option<(u64, u64, u64)>,
-    price_outside: bool,
 ) -> Vec<Chosen> {
     let tree = SuffixTree::new(&mapped.ids);
     // lines that end a body: an `rts`, and only when nothing follows it in the
@@ -506,9 +484,8 @@ fn select(
             let per_run = if candidate.tail { JUMP_CLOCKS } else { CALL_CLOCKS };
             let outside = places.iter().filter(|&&place| weights[place] == 1).count() as u64;
             let saved = benefit(candidate.bytes, places.len(), candidate.tail).max(0) as u64;
-            if price_outside
-                && u128::from(outside * per_run) * u128::from(module_bytes)
-                    > u128::from(percent) * u128::from(saved) * u128::from(module_clocks)
+            if u128::from(outside * per_run) * u128::from(module_bytes)
+                > u128::from(percent) * u128::from(saved) * u128::from(module_clocks)
             {
                 places.retain(|&place| weights[place] != 1);
             }
