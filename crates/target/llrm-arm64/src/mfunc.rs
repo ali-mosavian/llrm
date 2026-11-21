@@ -696,7 +696,9 @@ pub fn lower_phis(function: &mut MFunc) -> Result<(), String> {
         }
         let skip = phis[at].len();
         let rest = std::mem::take(&mut block.ops).into_iter().skip(skip);
-        block.ops = heads[at].iter().map(|&(dst, via)| (Op::Copy { dst, src: via }, None)).chain(rest).collect();
+        // `LowerPHINode` lowers the first phi first and inserts its copy after
+        // the phis that remain, so the copies stand in reverse phi order.
+        block.ops = heads[at].iter().rev().map(|&(dst, via)| (Op::Copy { dst, src: via }, None)).chain(rest).collect();
     }
     if edge_copies.is_empty() {
         return Ok(());
