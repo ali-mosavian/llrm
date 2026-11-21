@@ -135,7 +135,8 @@ impl Mos {
         mut value: u32,
     ) -> u32 {
         // copies can form a cycle (a loop-carried swap): the walk ends where it
-        // would revisit, on the least value of the walk, the same for every start
+        // would revisit, on the least value of the walk, the same for every
+        // start
         let mut seen = vec![value];
         while let Some(&next) = self.alias.get(&value) {
             if seen.contains(&next) {
@@ -196,16 +197,6 @@ impl Policy<Wrapped> for Mos {
             && !(inst.call || inst.terminator || inst.barrier || inst.may_store || inst.side_effects);
         // a constant a phi takes would need a copy; one in a block that does
         // not run on every trip is not made speculatively
-        if std::env::var_os("LLRM_6502_LICM_DEBUG").is_some() && inst.rematerializable {
-            eprintln!(
-                "licm: {:?} constant={constant} calls={} every_trip={} peak={} hoisted={}",
-                inst.operands,
-                self.calls,
-                (facts.every_trip)(at),
-                self.peak,
-                self.hoisted
-            );
-        }
         if !constant || self.calls || !(facts.every_trip)(at) {
             return false;
         }
