@@ -1945,6 +1945,11 @@ pub trait Tti {
         false
     }
 
+    /// `Tuning::late_memcpyopt_at_size`.
+    fn late_memcpyopt_at_size(&self) -> bool {
+        false
+    }
+
     /// `Tuning::sink_common_phi_cost`.
     fn sink_common_phi_cost(&self) -> usize {
         0
