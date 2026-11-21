@@ -191,3 +191,12 @@ def test_a_borland_job_that_built_nothing_says_why(tmp_path):
     assert "exited 1" in bench.borland_job_failure(silent, tmp_path, ["R000"]) and "no display" in bench.borland_job_failure(silent, tmp_path, ["R000"])
     (tmp_path / "R000.OBJ").write_bytes(b"x")
     assert bench.borland_job_failure(silent, tmp_path, ["R000", "R001"]) is None
+
+
+def test_a_big_zero_array_stored_by_a_reference_and_held_in_bss_by_ours_is_a_convention_cell_not_a_win():
+    """`huge`: bcc, tcpp and ow store 80,400 B of zeros as data, ours holds them in bss; the Os byte gap is the object format, not code quality."""
+    measured = {"huge/c/Os": cell(253, 5000, data=12, bss=80400), "huge/ow/Os": cell(511, 6000, data=80400), "huge/bcc/Os": cell(338, 6100, data=80400)}
+    row = by_row(measured)[("huge", "c", "Os")]
+    assert row[10] == "CONVENTION" and "object-format convention" in row[11], row
+    small = {"z/c/Os": cell(50, 100, data=0, bss=100), "z/ow/Os": cell(60, 100, data=100)}
+    assert by_row(small)[("z", "c", "Os")][10] == "OK"

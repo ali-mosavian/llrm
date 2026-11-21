@@ -211,6 +211,12 @@ pub struct Tuning {
     /// JumpThreading made (gcc's backward threader refuses a path through the
     /// latch) and the smaller object kept. false: the pin's.
     pub jump_threading_latch_trial_at_size: bool,
+    /// DEVIATE OS-TRIAL-CLOCK-CAP: the most clocks, in percent of the pin-shaped
+    /// code's, the -Os trials that keep a smaller shape (`KeepSwitch`,
+    /// `KeepCopyLoop`, `KeepLatch`, `KeepHintedCalls`) may cost. The ruling of
+    /// 2026-11-14 counts an -Os cell on bytes and clocks both. None: bytes alone
+    /// decide.
+    pub os_trial_clock_cap_percent: Option<i64>,
     /// DEVIATE OB1: see `Tti::unroll_object_bound`.
     pub unroll_object_bound: Option<u32>,
     /// With `inline_never_grows_without_rate`: what a byte of growth costs an
@@ -701,6 +707,12 @@ pub struct Tuning {
     /// With `lsr_size_order`: price the code in x86-64's encodings (REX.W,
     /// `llrm_x86::encoding`) and the exit test's compare.
     pub lsr_size_x86_64: bool,
+    /// DEVIATE X64-PIE-SCALE (owner llrm-target-x86-m64-b, exit 2026-12-12):
+    /// at x86-64 position independent, a symbol takes a scaled index (`[sym +
+    /// i*4]`, the symbol formed by a `lea` the loop shares). The pin's
+    /// `isLegalAddressingMode` refuses a scale above 1 beside a symbol, so
+    /// every array of a stride past 1 gets its own counter; gcc keeps one.
+    pub pie_scaled_symbol: bool,
     /// DEVIATE IU1 (owner llrm-target-x86-m64, exit 2026-11-24): see
     /// `Tti::lsr_users_in_use_list_order`.
     pub lsr_users_in_use_list_order: bool,
@@ -935,6 +947,7 @@ impl Tuning {
         rotate_exiting_latch_when_guard_folds: false,
         inline_never_grows_without_rate: false,
         jump_threading_latch_trial_at_size: false,
+        os_trial_clock_cap_percent: None,
         switch_lookup_trial_at_size: false,
         inline_trial_credit_gate: false,
         loop_idiom_copy_trial_at_size: false,
@@ -1028,6 +1041,7 @@ impl Tuning {
         shift_loop_counts: false,
         lsr_derived_setup_free: false,
         lsr_size_x86_64: false,
+        pie_scaled_symbol: false,
         lsr_users_in_use_list_order: false,
         lsr_phi_operand_uses: false,
         lsr_both_use_orders: false,

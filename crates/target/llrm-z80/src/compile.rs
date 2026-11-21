@@ -312,8 +312,7 @@ fn lsr_choice(
         return Ok(request);
     }
     let other = Request { lsr_alternate: true, ..request.clone() };
-    let (held, twin) = (module_priced(ir, &request), module_priced(ir, &other));
-    let prices = (held, twin);
+    let prices = (module_priced(ir, &request), module_priced(ir, &other));
     if std::env::var_os("LLRM_DEBUG_LSR_KEY").is_some() {
         eprintln!("lsr key: {} loops differ, held {:?}, alternate {:?}", decisions.lsr_orders, prices.0, prices.1);
     }
