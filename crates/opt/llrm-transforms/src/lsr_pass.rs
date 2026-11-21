@@ -400,7 +400,16 @@ fn plan_loop(
     let beyond = counts(&lsr) != pin_counts;
     let mut differs = false;
     narrowed(se, &mut lsr);
+    // DEVIATE LSR-KEY-TRIAL: the same space solved by the target's alternate
+    // order; a driver compiles the module under it where the two differ.
+    let mut alternate = (tti.lsr_alternate_order() && !crate::trial::lsr_alternate_order()).then(|| lsr.fork());
     let (mut solution, cost) = lsr.solve_with_cost(se);
+    if let Some(mut other) = alternate.take() {
+        let (other_solution, _) = crate::trial::with_lsr_alternate_order(|| other.solve_with_cost(se));
+        if other_solution != solution {
+            crate::trial::note_lsr_order();
+        }
+    }
     if beyond {
         // The registers of those formulae can cut the pin's solution out of
         // the search (a use must reuse the registers already chosen), as they
@@ -449,18 +458,28 @@ fn plan_loop(
             && tti.lsr_size_model().is_some_and(|m| size || !m.size_only)
             && cost.size_bytes > pin_cost.size_bytes;
         let saves_nothing = !(cost.c.add_rec_cost < pin_cost.c.add_rec_cost || cost.c.num_regs < pin_cost.c.num_regs);
-        // DEVIATE LG4 (owner w8, exit 2026-11-26; no pin line: the pin has no end-biased formulae): where the
-        // target favors post-indexed addressing, the pin's pointer walk is free (`RateRegister`, loop cost 0),
-        // so, where the target says so and every address of the pin's solution steps by what `(An)+` takes (`lsr_free_walk_beats_end_biased`; arm64 grew 21 cells of 181 at -O1/-O2 with it), the end-biased form must save a recurrence or a register to replace it: its saved compare is
-        // not a saving where the counter stays live for the loop's other readers.
-        let walk_is_free = tti.preferred_addressing_mode().has_post_indexed()
-            && tti.lsr_free_walk_beats_end_biased()
-            && {
-                let mut walks = pin.uses.iter().zip(&pin_solution).filter(|(lu, _)| lu.kind == crate::lsr_use::Kind::Address).peekable();
+        // DEVIATE LG4 (owner w8, exit 2026-11-26; no pin line: the pin has no
+        // end-biased formulae): where the target favors post-indexed
+        // addressing, the pin's pointer walk is free (`RateRegister`, loop cost
+        // 0), so, where the target says so and every address of the
+        // pin's solution steps by what `(An)+` takes
+        // (`lsr_free_walk_beats_end_biased`; arm64 grew 21 cells of 181 at
+        // -O1/-O2 with it), the end-biased form must save a recurrence or a
+        // register to replace it: its saved compare is not a saving
+        // where the counter stays live for the loop's other readers.
+        let walk_is_free =
+            tti.preferred_addressing_mode().has_post_indexed() && tti.lsr_free_walk_beats_end_biased() && {
+                let mut walks = pin
+                    .uses
+                    .iter()
+                    .zip(&pin_solution)
+                    .filter(|(lu, _)| lu.kind == crate::lsr_use::Kind::Address)
+                    .peekable();
                 walks.peek().is_some()
                     && walks.all(|(lu, &chosen)| {
                         let f = &lu.formulae[chosen];
-                        // a pointer alone: a base with an index beside it is not a walk
+                        // a pointer alone: a base with an index beside it is
+                        // not a walk
                         f.scaled_reg.is_none()
                             && f.base_regs.len() == 1
                             && crate::lsr_use::may_use_post_inc_mode(tti, se, &cx, lu, f.base_regs[0], header)
@@ -547,8 +566,9 @@ pub fn reduced(
 }
 
 thread_local! {
-    /// The functions `LoopStrengthReduce` has been run over on this thread (M68K-LSR-TWICE: the m68k mid-end runs it
-    /// again after the shared pipeline, which the pin does not).
+    /// The functions `LoopStrengthReduce` has been run over on this thread
+    /// (M68K-LSR-TWICE: the m68k mid-end runs it again after the shared
+    /// pipeline, which the pin does not).
     static RUNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 

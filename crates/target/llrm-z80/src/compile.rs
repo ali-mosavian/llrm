@@ -181,7 +181,8 @@ fn selection_key(request: &Request) -> SelectionKey {
                 request.oz_best_of,
                 request.optsize_only,
                 request.refuse_loop_copies,
-                request.unroll_variant
+                request.unroll_variant,
+                request.lsr_alternate
             )
         ),
         environment,
@@ -286,7 +287,42 @@ pub fn effective(
     } else {
         chosen
     };
+    let chosen = lsr_choice(ir, chosen)?;
     COPY_CHOICE.with(|held| *held.borrow_mut() = Some((ir.to_owned(), key, chosen.clone())));
+    Ok(chosen)
+}
+
+/// `request`, or its twin that rates LSR's solutions by the target's alternate
+/// order (`Request::lsr_alternate`) where the module comes out no bigger and no
+/// slower after allocation (z80 counts both axes: lz4 -O2 is 1 B smaller and
+/// 23% slower, its second `ldir` lost): the pin's order took histo -O1 from 348
+/// B to 291 B and cost sum4 its `djnz`, and the cost vectors of the two loops
+/// are the same. The second compile is made only where a loop's solution
+/// differs under the other order (`UnrollDecisions::lsr_orders`). DEVIATE
+/// LSR-KEY-TRIAL (owner z80, exit 2026-12-15).
+fn lsr_choice(
+    ir: &str,
+    request: Request,
+) -> Result<Request, String> {
+    if request.lsr_alternate {
+        return Ok(request);
+    }
+    let (_, _, (_, decisions, _)) = cached_with_copies(ir, &request)?;
+    if decisions.lsr_orders == 0 {
+        return Ok(request);
+    }
+    let other = Request { lsr_alternate: true, ..request.clone() };
+    let prices = (module_priced(ir, &request), module_priced(ir, &other));
+    if std::env::var_os("LLRM_DEBUG_LSR_KEY").is_some() {
+        eprintln!("lsr key: {} loops differ, held {:?}, alternate {:?}", decisions.lsr_orders, prices.0, prices.1);
+    }
+    let chosen = match prices {
+        (Ok(held), Ok(alternate)) if dominates(alternate, held) => other,
+        _ => request,
+    };
+    // keep only the lines of the module that stays
+    let kept = cached_both(ir, &chosen).map(|(selected, _)| std::rc::Rc::as_ptr(&selected) as usize);
+    KEPT_LINES.with(|lines| lines.borrow_mut().retain(|(at, ..), _| kept.as_ref().is_ok_and(|kept| kept == at)));
     Ok(chosen)
 }
 
@@ -355,11 +391,8 @@ fn unroll_choice(
         // an unswitch that buys clocks is kept even where the module is
         // bigger: -O3 is judged on clocks as well (loop_versioning: 308 B
         // smaller without it, 69% slower)
-        let better = if variant == SpeedUnroll::NoUnswitch {
-            price.0 < best.0.0 && price.1 <= best.0.1
-        } else {
-            price < best.0
-        };
+        let better =
+            if variant == SpeedUnroll::NoUnswitch { price.0 < best.0.0 && price.1 <= best.0.1 } else { price < best.0 };
         if better {
             best = (price, other);
         }
@@ -4103,9 +4136,12 @@ fn decomposed_functions(
     let lone: Vec<bool> = either
         .iter()
         .map(|(name, ..)| {
-            alternatives.iter().any(|(one, source, scheduled)| {
-                one == name && [source, scheduled].into_iter().any(|form| form.as_ref().is_ok_and(|s| s.lone_alternative))
-            })
+            alternatives
+                .iter()
+                .any(
+                    |(one, source, scheduled)| one == name
+                        && [source, scheduled].into_iter().any(|form| form.as_ref().is_ok_and(|s| s.lone_alternative)),
+                )
         })
         .collect();
     let with_alternative = || (0..either.len()).filter(|at| either[*at].2.is_some());
@@ -4187,7 +4223,8 @@ fn prefers(
     cheaper(level, new, old)
 }
 
-/// Whether the price `new` (bytes, clocks) is no bigger and no slower than `old`, and not the same.
+/// Whether the price `new` (bytes, clocks) is no bigger and no slower than
+/// `old`, and not the same.
 fn dominates(
     new: (u32, u64),
     old: (u32, u64),
