@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/twoentryphi.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/twoentryphi.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/twoentryphi.rs sha256:688826814a99435fbe8d1eaee7c1ca2a5aa6cc9fdd3e93b865fa24097252e82b -->
+<!-- src: crates/opt/llrm-transforms/src/twoentryphi.rs sha256:28fb7c9756efe8d3225cdf87bb55eeee1af44ed6d3749d5ff43f879b9129a793 -->
 
 # twoentryphi
 
@@ -42,6 +42,9 @@ a block whose first instruction is a phi of two entries.
   select where the clocks pay). Owner llrm-target-x86-m32. A boolean
   `and`/`or` select (`select x, y, false`) is no branch and is not counted:
   the 6502's `isdigit` range test stayed two compares (28 -> 50 B).
+
+- D6. (Tti-gated, off in the pin) gcc's `empty_bb_or_one_feeding_into_p`
+  (`tree-ssa-phiopt.cc`) bounds an arm to one statement that feeds the phi.
 
 ## Example
 The phi that a branch chooses between becomes a select in the branch's
