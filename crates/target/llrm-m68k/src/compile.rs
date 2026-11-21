@@ -1055,6 +1055,7 @@ fn items_once(
     let first_slot = function.locals.iter().map(|local| local.0 + 1).max().unwrap_or(0);
     crate::mirdump::dump("before allocation", &function, None);
     let allocating = llrm_support::debug::span("m68k allocate");
+    let a6_for_calls = options.short && options.call_targets && crate::calltarget::pays(&function, cpu);
     let (assignment, slots) = if std::env::var_os("LLRM_M68K_SPIKE").is_some() {
         crate::regalloc::allocate_spilling_by_frequency(&mut function, first_slot)?
     } else {
@@ -1066,6 +1067,7 @@ fn items_once(
                 options.rematerialize_arguments,
                 options.global_copies,
                 options.loop_carried_first,
+                a6_for_calls,
                 options.shared_prelude.then_some(&crate::regalloc::shared_prelude as llrm_spike_mf::tolir::Prelude),
             )
         })?
