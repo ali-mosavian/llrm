@@ -113,6 +113,10 @@ pub struct Request {
     /// `compile::effective` keeps the variant whose module is smaller in
     /// bytes, then in clocks.
     pub unroll_variant: Option<llrm_transforms::trial::SpeedUnroll>,
+    /// DEVIATE LSR-KEY-TRIAL (owner z80, exit 2026-12-15): LSR rates by the
+    /// alternate order (`Tti::lsr_alternate_order`); `compile::effective`
+    /// keeps it where the module is cheaper.
+    pub lsr_alternate: bool,
 }
 
 impl Request {
@@ -129,6 +133,7 @@ impl Request {
             optsize_only: false,
             refuse_loop_copies: false,
             unroll_variant: None,
+            lsr_alternate: false,
         }
     }
 }
@@ -149,7 +154,10 @@ pub fn program(
     request: &Request,
 ) -> Result<Program, String> {
     MID_END_RUNS.with(|runs| runs.set(runs.get() + 1));
-    let unrolled = || llrm_transforms::trial::with_speed_unroll(request.unroll_variant, || program_of(text, request));
+    let unrolled = || {
+        let made = || llrm_transforms::trial::with_speed_unroll(request.unroll_variant, || program_of(text, request));
+        if request.lsr_alternate { llrm_transforms::trial::with_lsr_alternate_order(made) } else { made() }
+    };
     let made = if request.refuse_loop_copies {
         llrm_transforms::trial::with_refused_loop_copies(unrolled)
     } else {
@@ -292,7 +300,7 @@ thread_local! {
     static UNROLL_BASE: std::cell::Cell<Option<Fingerprint>> = const { std::cell::Cell::new(None) };
     static LOOP_COPIES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static SPEED_UNROLLS: std::cell::Cell<llrm_transforms::trial::UnrollDecisions> =
-        const { std::cell::Cell::new(llrm_transforms::trial::UnrollDecisions { made: 0, refused: 0, inlined: 0, unswitched: 0, trial_inlined: 0 }) };
+        const { std::cell::Cell::new(llrm_transforms::trial::UnrollDecisions { made: 0, refused: 0, inlined: 0, unswitched: 0, trial_inlined: 0, lsr_orders: 0 }) };
 }
 
 /// The full-unroll decisions the last [`program`] made at -O2 and up: what an
@@ -470,7 +478,8 @@ pub fn selections_with_alternatives(
     // is inline in a sized function and its call is the other form, the
     // widening product of two shorts being 163 B of partial products against
     // the call (`dot` -Os 504 B, -O1 341 B); the caller prices the two
-    // (`compile::decomposed_functions`). Returns (sized, the other form is inline).
+    // (`compile::decomposed_functions`). Returns (sized, the other form is
+    // inline).
     let calls_the_routine = |name: &str| -> Option<(bool, bool)> {
         module
             .globals
@@ -554,8 +563,9 @@ pub fn selections_with_alternatives(
             let fills = has_fills(name);
             let shifts = has_shifts(name);
             let divides = has_divides(name);
-            // a function has one alternative: the lone multiply's call does not take it from the speed
-            // routines of a long divide (copy_runs -Os: size routine, 953 -> 767 B, 204k -> 729k T)
+            // a function has one alternative: the lone multiply's call does not
+            // take it from the speed routines of a long divide
+            // (copy_runs -Os: size routine, 953 -> 767 B, 204k -> 729k T)
             let muls = calls_the_routine(name)
                 .filter(|(sized, _)| *sized || request.level != Level::O0)
                 .filter(|(sized, inline)| !(*sized && !inline && divides));

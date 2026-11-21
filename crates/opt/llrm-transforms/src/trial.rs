@@ -16,7 +16,8 @@
 //! assembly it prices cheaper.
 //!
 //! # Example
-//! A loop the pass refused to unroll is noted; the driver compiles again with it unrolled and keeps the cheaper assembly.
+//! A loop the pass refused to unroll is noted; the driver compiles again with
+//! it unrolled and keeps the cheaper assembly.
 //!
 //! ```text
 //! pass:   loop refused by the threshold -> noted (ELIGIBLE)
@@ -584,8 +585,9 @@ pub fn take_accepted() -> Vec<Site> {
     ACCEPTED.with(|list| std::mem::take(&mut *list.borrow_mut()))
 }
 
-/// Sites that share a function (a caller or a callee) are decided together: the functions they name, and which of
-/// the refused and the accepted sites (by index) they hold.
+/// Sites that share a function (a caller or a callee) are decided together: the
+/// functions they name, and which of the refused and the accepted sites (by
+/// index) they hold.
 #[derive(Clone, Debug, Default)]
 pub struct Group {
     pub names: std::collections::BTreeSet<String>,
@@ -593,15 +595,22 @@ pub struct Group {
     pub accepted: Vec<usize>,
 }
 
-/// The groups of `refused` and `accepted` sites, sites linked by a shared function name in one group.
+/// The groups of `refused` and `accepted` sites, sites linked by a shared
+/// function name in one group.
 pub fn groups(
     refused: &[Site],
     accepted: &[Site],
 ) -> Vec<Group> {
     let mut found: Vec<Group> = Vec::new();
-    for (index, site, is_refused) in refused.iter().enumerate().map(|(i, s)| (i, s, true)).chain(accepted.iter().enumerate().map(|(i, s)| (i, s, false))) {
+    for (index, site, is_refused) in refused
+        .iter()
+        .enumerate()
+        .map(|(i, s)| (i, s, true))
+        .chain(accepted.iter().enumerate().map(|(i, s)| (i, s, false)))
+    {
         let names: Vec<&String> = std::iter::once(&site.caller).chain(&site.callees).collect();
-        let (hit, rest): (Vec<Group>, Vec<Group>) = found.into_iter().partition(|group| names.iter().any(|name| group.names.contains(*name)));
+        let (hit, rest): (Vec<Group>, Vec<Group>) =
+            found.into_iter().partition(|group| names.iter().any(|name| group.names.contains(*name)));
         found = rest;
         let mut merged = Group::default();
         for group in hit {
@@ -610,7 +619,11 @@ pub fn groups(
             merged.accepted.extend(group.accepted);
         }
         merged.names.extend(names.into_iter().cloned());
-        if is_refused { merged.refused.push(index) } else { merged.accepted.push(index) }
+        if is_refused {
+            merged.refused.push(index)
+        } else {
+            merged.accepted.push(index)
+        }
         found.push(merged);
     }
     found
@@ -856,7 +869,10 @@ impl SpeedUnroll {
 
     /// Whether the variant makes only the inlines that add no bytes.
     pub fn refuses_inline_growth(self) -> bool {
-        matches!(self, Self::NoInlineGrowth | Self::NoInlineGrowthAll | Self::NoGrowBoth)
+        matches!(
+            self,
+            Self::NoInlineGrowth | Self::NoInlineGrowthAll | Self::NoGrowBoth
+        )
     }
 
     /// Whether the SZ2 inline trial also refuses a copy that adds bytes.
@@ -888,13 +904,50 @@ pub struct UnrollDecisions {
     /// `NoInlineGrowthAll` refuses: a driver tries that variant after a
     /// `NoInlineGrowth` compile with a count over 0.
     pub trial_inlined: usize,
+    /// The loops in which the target's alternate LSR order (LSR-KEY-TRIAL)
+    /// picks another solution than its own: a driver compiles the module
+    /// again under that order only where this is not 0.
+    pub lsr_orders: usize,
 }
 
 thread_local! {
     /// The variant of UNROLL-SPEED-TRIAL running, if any.
     static SPEED_UNROLL: Cell<Option<SpeedUnroll>> = const { Cell::new(None) };
     /// The decisions since [`take_speed_unrolls`].
-    static SPEED_UNROLLS: Cell<UnrollDecisions> = const { Cell::new(UnrollDecisions { made: 0, refused: 0, inlined: 0, unswitched: 0, trial_inlined: 0 }) };
+    static SPEED_UNROLLS: Cell<UnrollDecisions> = const { Cell::new(UnrollDecisions { made: 0, refused: 0, inlined: 0, unswitched: 0, trial_inlined: 0, lsr_orders: 0 }) };
+}
+
+thread_local! {
+    /// Set while LSR rates solutions by the target's alternate order.
+    static LSR_ALTERNATE: Cell<bool> = const { Cell::new(false) };
+}
+
+/// DEVIATE LSR-KEY-TRIAL (beyond the pin; gcc's ivopts totals its costs where
+/// LSR ranks `LsrCost` fields in order, `tree-ssa-loop-ivopts.cc`
+/// `iv_ca_cost`; owner z80, exit 2026-12-15): whether LSR rates solutions by
+/// the target's alternate order (`Tti::lsr_alternate_order`). No order of the
+/// fields tells histo's loop (a count-down plus a base add, 291 B) from
+/// sum4's (the same deltas, 8 B worse): what differs is what the allocator
+/// does with the registers, so the finished module decides.
+pub fn lsr_alternate_order() -> bool {
+    LSR_ALTERNATE.with(Cell::get)
+}
+
+/// Runs `body` with LSR rating by the target's alternate order.
+pub fn with_lsr_alternate_order<T>(body: impl FnOnce() -> T) -> T {
+    let held = LSR_ALTERNATE.with(|flag| flag.replace(true));
+    let made = body();
+    LSR_ALTERNATE.with(|flag| flag.set(held));
+    made
+}
+
+/// A loop whose solution differs under the alternate order.
+pub(crate) fn note_lsr_order() {
+    SPEED_UNROLLS.with(|held| {
+        let mut now = held.get();
+        now.lsr_orders += 1;
+        held.set(now);
+    });
 }
 
 /// The UNROLL-SPEED-TRIAL variant in force, if a trial compile is running.
@@ -962,12 +1015,17 @@ pub fn take_speed_unrolls() -> UnrollDecisions {
 mod group_tests {
     use super::*;
 
-    fn site(caller: &str, callee: &str) -> Site {
+    fn site(
+        caller: &str,
+        callee: &str,
+    ) -> Site {
         Site { caller: caller.to_owned(), callees: vec![callee.to_owned()] }
     }
 
-    /// Two sites with one caller were two verdicts on the caller's bytes, so a trial built both and kept the one
-    /// that paid for the other. Sites that share a function, a refused and an accepted one included, are one group.
+    /// Two sites with one caller were two verdicts on the caller's bytes, so a
+    /// trial built both and kept the one that paid for the other. Sites
+    /// that share a function, a refused and an accepted one included, are one
+    /// group.
     #[test]
     fn sites_that_share_a_function_are_one_group() {
         let refused = [site("main", "a"), site("other", "b")];
