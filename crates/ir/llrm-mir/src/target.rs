@@ -646,6 +646,9 @@ pub struct Tuning {
     /// llrm-target-x86-m64, exit 2026-11-24), the loop stays scalar: m64 -Os
     /// bytes +5..+50% on 15 corpus files.
     pub vectorize_at_size: bool,
+    /// The backend selects a vector `icmp`, `fcmp` and `select` (`Tti::selects_vector_compares`): the loop
+    /// vectorizer widens the compares of a loop. false where the selector lacks them.
+    pub vector_compares: bool,
     /// `shouldMaximizeVectorBandwidth(RGK_FixedWidthVector)`: `LoopVectorize`
     /// sizes the widest VF by the smallest type of the loop. false: the pin's
     /// x86 (the widest type, so a byte sum into an `i64` stays at VF 2).
@@ -993,6 +996,7 @@ impl Tuning {
         lsr_drop_worse_at_size: false,
         add_to_or_disjoint: false,
         vectorize_at_size: true,
+        vector_compares: false,
         maximize_vector_bandwidth: false,
         narrow_reduction_accumulators: false,
         bandwidth_vf_without_epilogue: false,

@@ -1528,6 +1528,12 @@ impl Tti for X86 {
         self.tuning.add_to_or_disjoint
     }
 
+    /// The vectors of a compare are selected where the target has vector values
+    /// and says so (`Tuning::vector_compares`).
+    fn selects_vector_compares(&self) -> bool {
+        self.tuning.vector_compares && self.vector_values()
+    }
+
     /// A word vector is a speed trade of a few bytes (the vector body, its
     /// remainder and the splat); at -Os the bytes rank first, as in gcc, which
     /// does not vectorize there.
@@ -1659,9 +1665,28 @@ impl Tti for X86 {
         predicate: Option<Predicate>,
         kind: CostKind,
     ) -> Option<Cost> {
-        use llrm_mir::opcode::IntPredicate;
+        use llrm_mir::opcode::{FloatPredicate, IntPredicate};
         if !self.vector_values() {
             return None;
+        }
+        // The float lanes of `cmpps`/`cmppd` and the mask select over them: the pin's SSE2 rows, read off
+        // `opt -passes='print<cost-model>' -mcpu=x86-64` (`SETCC` {2, 5, 1, 1} a register, `one` and `ueq` two
+        // compares and a combine {5, 11, 3, 3}; the select as the integer lanes').
+        if let Ty::Float | Ty::Double = ty.lane {
+            if !self.tuning.vector_float_costs {
+                return None;
+            }
+            let bits = if ty.lane == Ty::Float { 32 } else { 64 };
+            let pieces = xmm_pieces(VectorTy { lane: Ty::Int(bits), ..ty })?;
+            let row = match (op, predicate) {
+                (CmpSel::FCmp, Some(Predicate::Float(FloatPredicate::One | FloatPredicate::Ueq))) => {
+                    all(5, 11, 3, 3)
+                }
+                (CmpSel::FCmp, _) => all(2, 5, 1, 1),
+                (CmpSel::Select, _) => all(2, 2, 3, 3),
+                _ => return None,
+            };
+            return row[kind.index()].map(|each| Cost::of(pieces * each));
         }
         let Ty::Int(bits @ (8 | 16 | 32)) = ty.lane else { return None };
         let pieces = xmm_pieces(ty)?;
