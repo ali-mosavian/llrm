@@ -4310,6 +4310,10 @@ fn emit_with<const STACK: bool>(
         call_compact_routines(&mut function);
     }
     keep_carry_in_c(&mut function);
+    // `LLRM_6502_NO_LICM` is the kill switch, for an A/B of one binary
+    if std::env::var_os("LLRM_6502_NO_LICM").is_none() {
+        crate::licm::hoist(&mut function);
+    }
     let sunk = sink && machine_sink_in_place::<Mos<STACK>>(&mut function);
     let shared = share && crate::sharecmp::share_compares(&mut function);
     if crate::cmpzero::drop_zero_compares(&mut function) {
