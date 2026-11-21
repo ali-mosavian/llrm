@@ -402,6 +402,7 @@ fn shared_classes(frame_free: bool) -> std::rc::Rc<llrm_codegen::backend::classe
 /// `stage` is made with the register-class oracle (`constrainRegClass`).
 pub fn shared_stage(
     function: &MFunction,
+    a6_free: bool,
     stage: impl FnOnce(
         std::rc::Rc<llrm_codegen::backend::classes::RegisterClasses>,
         llrm_codegen::backend::precse::Constrain,
@@ -409,7 +410,7 @@ pub fn shared_stage(
 ) -> Result<MFunction, String> {
     // the classes read the target's description: once per thread, not per
     // function
-    let classes = shared_classes(!crate::expand::needs_frame_pointer(function));
+    let classes = shared_classes(a6_free);
     llrm_spike_mf::tolir::host_ssa::<M68kRegisters>(function, llrm_lir::registers::Regs(&REGISTER_INFO), |constrain| {
         stage(classes, constrain)
     })
@@ -456,8 +457,11 @@ pub fn shared_prelude(body: llrm_codegen::model::lir::LirBody) -> Result<llrm_co
 }
 
 /// The shared flow's `MachineCSE` over the m68k function.
-pub fn shared_cse(function: &MFunction) -> Result<MFunction, String> {
-    shared_stage(function, |classes, constrain| {
+pub fn shared_cse(
+    function: &MFunction,
+    a6_free: bool,
+) -> Result<MFunction, String> {
+    shared_stage(function, a6_free, |classes, constrain| {
         Box::new(llrm_codegen::backend::precse::MachineCse { classes, keep_compare: false, constrain: Some(constrain) })
     })
 }
@@ -466,6 +470,7 @@ pub fn shared_cse(function: &MFunction) -> Result<MFunction, String> {
 /// size build.
 pub fn shared_licm(
     function: &MFunction,
+    a6_free: bool,
     size: bool,
 ) -> Result<MFunction, String> {
     use llrm_target::Target as _;
@@ -475,7 +480,7 @@ pub fn shared_licm(
         llrm_lir::registers::Regs(arch.registers()),
         arch.operand_bytes(),
     );
-    shared_stage(function, |classes, _| {
+    shared_stage(function, a6_free, |classes, _| {
         Box::new(llrm_codegen::backend::machinelicm::MachineLicm { classes, segments, size })
     })
 }

@@ -96,3 +96,12 @@ fn a6_stays_with_the_call_target_when_a_callee_is_called_often() {
     let direct = out.lines().filter(|l| l.trim() == "jsr\tuse").count();
     assert_eq!(direct, 0, "{direct} calls of `use` left direct:\n{out}");
 }
+
+#[test]
+fn hoisting_counts_a6_only_while_the_call_target_pass_leaves_it_free() {
+    let calls: String = (0..6).map(|n| format!("  call void @use(ptr @g{n})\n")).collect();
+    let ir = stores_in_a_loop(&calls, "");
+    let out = assembly(&ir, cpu_of("68000").unwrap(), Level::O2).expect("compiles");
+    let spilled = out.lines().filter(|l| l.contains("move.l") && l.contains("%a") && l.contains(",%sp)")).count();
+    assert!(spilled <= 4, "{spilled} stores and reloads of an address through the frame:\n{out}");
+}
