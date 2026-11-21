@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/sinkcommon.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/sinkcommon.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/sinkcommon.rs sha256:917498bd70cb22df3e4bbbd17fed5c43fa526edc7554db3309f20430251dabd4 -->
+<!-- src: crates/opt/llrm-transforms/src/sinkcommon.rs sha256:b8d541c7b608a0558bf79b0b815469b5758b6c0b3b84d959f6600cbcb0c8b67a -->
 
 # sinkcommon
 
@@ -12,7 +12,9 @@ scans their instructions from the end in step, as far as each column
 (one instruction of each predecessor) is the same operation with operands
 that are the same, or that a phi can merge (`can_sink`). Of those the
 columns whose sinking would need more than one new phi stay, from the first
-that does. If some predecessor does not end in a jump the predecessors that
+that does. Where the target prices a phi (`Tuning::sink_common_phi_cost`,
+`sink_pays`) the sink is made only if the instructions it drops outnumber
+the moves of its phis, one per predecessor each. If some predecessor does not end in a jump the predecessors that
 do are first given a block of their own to sink into (`.sink.split`), and
 that only when a column holds something that cannot be run speculatively.
 Each column is then one instruction at the start of the block, its

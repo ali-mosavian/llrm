@@ -30,6 +30,17 @@ static CALLING: LazyLock<M68kCalling> = LazyLock::new(M68kCalling::default);
 /// is off wherever this is on.
 pub const SWITCHES_IN_DAG: bool = true;
 
+/// The pin's M68k sets no `MaxStoresPer*`: `TargetLoweringBase` gives 8 stores
+/// to a constant memset, memcpy and memmove, 4 for size; the shared table is
+/// x86's (memset 16 and 8).
+pub fn tuning() -> llrm_mir::target::Tuning {
+    llrm_mir::target::Tuning {
+        max_stores_per_memset: 8,
+        max_stores_per_memset_opt_size: 4,
+        ..llrm_mir::target::Tuning::PIN
+    }
+}
+
 /// The builder's view of m68k: 32-bit pointers, `i8` to `i32` in registers,
 /// and the `CALL`/`RET` nodes of the pin.
 pub fn builder_target() -> BuilderTarget {
@@ -68,6 +79,7 @@ pub fn builder_target() -> BuilderTarget {
         max_alloca_align: None,
         ..BuilderTarget::for_pointer_bits(32)
     }
+    .with_tuning(tuning())
 }
 
 /// A phi input this block exports: `incoming` is the register its value was

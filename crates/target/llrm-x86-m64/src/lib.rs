@@ -416,6 +416,9 @@ impl llrm_target::Target for M64 {
                     .map(|one| {
                         one.with_tuning(llrm_mir::target::Tuning {
                             inline_size_guard_at_size: true,
+                            // DEVIATE LATE-MEMCPYOPT-SIZE (owner x86-m32-b, exit 2026-12-12): see
+                            // Tuning. QB m64 Os -119 B (synth -63, dialog -56), no file worse.
+                            late_memcpyopt_at_size: true,
                             // DEVIATE MEMSET-GAP (owner llrm-target-x86-m16-b, exit 2026-11-27): see Tuning.
                             memset_gap_merge_at_size: true,
                             // DEVIATE LFTR-SIZE (owner llrm-target-x86-m64, exit 2026-11-24; gcc-bar only): see
@@ -471,6 +474,8 @@ impl llrm_target::Target for M64 {
                             // LI-18 (owner llrm-target-x86-m64-b): `bsr`/`bsf` are one instruction.
                             shift_loop_counts: true,
                             lsr_size_x86_64: true,
+                            // DEVIATE X64-PIE-SCALE (owner llrm-target-x86-m64-b, exit 2026-12-12): see Tuning.
+                            pie_scaled_symbol: true,
                             // DEVIATE MUL-OS64 (owner w9, exit 2026-11-20): the m32 MUL-OS entry
                             // at m64; gcc keeps the 3-byte `imul` at -Os where the pin makes
                             // `mov; shl; sub` (x * 31). select_of_constants -Os was +1519 B
