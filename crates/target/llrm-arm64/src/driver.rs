@@ -256,6 +256,13 @@ fn lower_function(
         dag_select(module, &name, &program.layout, platform, lines).map_err(|why| format!("@{name}: {why}"))?;
     dump("Select", &machine);
     crate::mfunc::remove_unreachable_blocks(&mut machine);
+    // `AArch64ConditionalCompares` runs just before early if-conversion and
+    // skips an `optnone` function too; `LLRM_ARM64_CCMP=off` is
+    // `-aarch64-enable-ccmp=false`.
+    if !flagged(function, &["optnone"]) && std::env::var("LLRM_ARM64_CCMP").as_deref() != Ok("off") {
+        crate::ccmp::run(&mut machine, flagged(function, &["minsize"]));
+        dump("ConditionalCompares", &machine);
+    }
     // `EarlyIfConverter` skips an `optnone` function (`skipFunction`).
     if !flagged(function, &["optnone"])
         && let Some(mode) = crate::ifcvt::mode_from_env()
