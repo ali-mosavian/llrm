@@ -553,6 +553,13 @@ pub(crate) fn vector_divide_by_constant_cost(
 }
 
 impl Tti for AArch64 {
+    /// DEVIATE LATE-MEMCPYOPT-SIZE (owner x86-m32-b, exit 2026-12-12): see
+    /// `Tuning::late_memcpyopt_at_size`. QB arm64 Os -116 B (dialog -92), no
+    /// file worse.
+    fn late_memcpyopt_at_size(&self) -> bool {
+        true
+    }
+
     /// `isProfitableToSinkOperands`: see [`crate::tti_sink`].
     fn is_profitable_to_sink_operands(
         &self,

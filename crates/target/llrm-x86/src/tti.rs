@@ -1153,6 +1153,10 @@ impl Tti for X86 {
         self.tuning.jump_threading_latch_trial_at_size
     }
 
+    fn os_trial_clock_cap_percent(&self) -> Option<i64> {
+        self.tuning.os_trial_clock_cap_percent
+    }
+
     fn cold_site_ignores_sinks(&self) -> bool {
         self.tuning.cold_site_ignores_sinks
     }
@@ -1389,6 +1393,14 @@ impl Tti for X86 {
 
     fn sink_common_at_size(&self) -> bool {
         self.tuning.sink_common_at_size
+    }
+
+    fn late_memcpyopt_at_size(&self) -> bool {
+        self.tuning.late_memcpyopt_at_size
+    }
+
+    fn sink_common_phi_cost(&self) -> usize {
+        self.tuning.sink_common_phi_cost
     }
 
     fn x87_stack_slots(&self) -> Option<u32> {

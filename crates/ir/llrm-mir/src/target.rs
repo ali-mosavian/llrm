@@ -211,6 +211,12 @@ pub struct Tuning {
     /// JumpThreading made (gcc's backward threader refuses a path through the
     /// latch) and the smaller object kept. false: the pin's.
     pub jump_threading_latch_trial_at_size: bool,
+    /// DEVIATE OS-TRIAL-CLOCK-CAP: the most clocks, in percent of the pin-shaped
+    /// code's, the -Os trials that keep a smaller shape (`KeepSwitch`,
+    /// `KeepCopyLoop`, `KeepLatch`, `KeepHintedCalls`) may cost. The ruling of
+    /// 2026-11-14 counts an -Os cell on bytes and clocks both. None: bytes alone
+    /// decide.
+    pub os_trial_clock_cap_percent: Option<i64>,
     /// DEVIATE OB1: see `Tti::unroll_object_bound`.
     pub unroll_object_bound: Option<u32>,
     /// With `inline_never_grows_without_rate`: what a byte of growth costs an
@@ -488,6 +494,16 @@ pub struct Tuning {
     /// late slot only). Where a function is inlined many times, the copies'
     /// identical write-backs are one (gcc `-fcrossjumping`, on at size).
     pub sink_common_at_size: bool,
+    /// DEVIATE LATE-MEMCPYOPT-SIZE (owner x86-m32-b, exit 2026-12-12): at
+    /// size, `MemCpyOpt` and `DSE` run once more after the simplification
+    /// pipeline (the pin: one `MemCpyOpt`, before the sink and phi folds
+    /// shape a compound literal's `memset` and `memcpy`).
+    pub late_memcpyopt_at_size: bool,
+    /// What each phi a size-optimized sink creates costs, in instructions per
+    /// arm (`sink_common_at_size`): the sink pays where the instructions it
+    /// saves (`arms - 1` per column) outnumber the moves of its phis (one per
+    /// arm each). 0: any sink (the pin).
+    pub sink_common_phi_cost: usize,
     /// DEVIATE SPILL-FOLD (owner x86-m16, exit 2026-11-29): the clocks a
     /// spilled value costs where its references fold into memory operands,
     /// which `tryRegionSplit` weighs against the split's copies. The pin
@@ -925,6 +941,7 @@ impl Tuning {
         rotate_exiting_latch_when_guard_folds: false,
         inline_never_grows_without_rate: false,
         jump_threading_latch_trial_at_size: false,
+        os_trial_clock_cap_percent: None,
         switch_lookup_trial_at_size: false,
         inline_trial_credit_gate: false,
         loop_idiom_copy_trial_at_size: false,
@@ -977,6 +994,8 @@ impl Tuning {
         threads_by_relation: false,
         backward_threading: true,
         sink_common_at_size: false,
+        late_memcpyopt_at_size: false,
+        sink_common_phi_cost: 0,
         spill_fold: None,
         unswitch_threshold: None,
         phiopt_one_feeding_statement: false,

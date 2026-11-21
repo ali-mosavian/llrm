@@ -158,3 +158,45 @@ def test_at_os_a_basic_cell_is_code_plus_static_so_a_table_that_replaces_code_is
     measured = {"switch/bas/Os": cell(396, 604295, 27), "switch/bc/O2": cell(1128, 4221878, 19), "switch/pds71/O2": cell(1070, 4060681, 19), "switch/vbdos/O2": cell(1080, 4164707, 19)}
     row = by_row(measured)[("switch", "bas", "Os")]
     assert row[10] == "OK", row
+
+
+def test_the_header_counts_the_reference_cells_measured_of_those_asked(tmp_path):
+    """The 18de C table had `ow` bars only (bcc, tc, tcpp: "no object" in every cell) and nothing in it said so."""
+    for name in ("llrm-llc", "llrm-cc", "llrm-nib"):
+        (tmp_path / name).write_bytes(name.encode())
+    measured = {"sieve/c/Os": cell(110, 4900), "sieve/ow/Os": cell(111, 4800), "sieve/bcc/Os": {"error": "bcc: no object"}}
+    text = table.render(measured, tmp_path, "abc123", datetime.datetime(2026, 11, 10, 9, 30, tzinfo=datetime.UTC))
+    line = next(row for row in text.splitlines() if row.startswith("# reference cells"))
+    assert "ow=1/1" in line and "bcc=0/1" in line and "tc=0/1" in line, line
+
+
+def test_a_table_is_refused_when_a_reference_measured_no_cell_at_all(tmp_path):
+    import json
+
+    run = tmp_path / "run.json"
+    run.write_text(json.dumps({"sieve/c/Os": cell(110, 4900), "sieve/ow/Os": cell(111, 4800), "sieve/bcc/Os": {"error": "bcc: no object"}}))
+    out = tmp_path / "out.tsv"
+    assert table.main([str(run), str(tmp_path), str(out), "abc123"]) == 3
+    assert not out.exists()
+
+
+def test_a_borland_job_that_built_nothing_says_why(tmp_path):
+    """A timed-out or silent job wrote "bcc: no object" for every program; now the cell and stderr carry the job's own reason."""
+    import subprocess
+
+    import bench
+
+    assert bench.borland_job_failure("timed out after 1800 s: bcc.sh", tmp_path, ["R000"]) == "timed out after 1800 s: bcc.sh"
+    silent = subprocess.CompletedProcess(["bcc.sh"], 1, "", "dosbox: no display")
+    assert "exited 1" in bench.borland_job_failure(silent, tmp_path, ["R000"]) and "no display" in bench.borland_job_failure(silent, tmp_path, ["R000"])
+    (tmp_path / "R000.OBJ").write_bytes(b"x")
+    assert bench.borland_job_failure(silent, tmp_path, ["R000", "R001"]) is None
+
+
+def test_a_big_zero_array_stored_by_a_reference_and_held_in_bss_by_ours_is_a_convention_cell_not_a_win():
+    """`huge`: bcc, tcpp and ow store 80,400 B of zeros as data, ours holds them in bss; the Os byte gap is the object format, not code quality."""
+    measured = {"huge/c/Os": cell(253, 5000, data=12, bss=80400), "huge/ow/Os": cell(511, 6000, data=80400), "huge/bcc/Os": cell(338, 6100, data=80400)}
+    row = by_row(measured)[("huge", "c", "Os")]
+    assert row[10] == "CONVENTION" and "object-format convention" in row[11], row
+    small = {"z/c/Os": cell(50, 100, data=0, bss=100), "z/ow/Os": cell(60, 100, data=100)}
+    assert by_row(small)[("z", "c", "Os")][10] == "OK"

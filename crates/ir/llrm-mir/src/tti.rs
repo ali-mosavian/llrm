@@ -1988,6 +1988,16 @@ pub trait Tti {
         false
     }
 
+    /// `Tuning::late_memcpyopt_at_size`.
+    fn late_memcpyopt_at_size(&self) -> bool {
+        false
+    }
+
+    /// `Tuning::sink_common_phi_cost`.
+    fn sink_common_phi_cost(&self) -> usize {
+        0
+    }
+
     /// What a byte of code is worth in thousandths of a clock at speed, where
     /// the target trades bytes for clocks; 0: it does not.
     fn speed_milliclocks_per_byte(&self) -> i64 {
@@ -2243,6 +2253,11 @@ pub trait Tti {
     /// DEVIATE JT-LATCH-TRIAL: `Tuning::jump_threading_latch_trial_at_size`.
     fn jump_threading_latch_trial_at_size(&self) -> bool {
         false
+    }
+
+    /// DEVIATE OS-TRIAL-CLOCK-CAP: `Tuning::os_trial_clock_cap_percent`.
+    fn os_trial_clock_cap_percent(&self) -> Option<i64> {
+        None
     }
 
     /// DEVIATE BFS-1: `Tuning::cold_site_ignores_sinks`.
@@ -3097,6 +3112,21 @@ pub trait Tti {
     /// `isLSRCostLess` at L1663 and `isNumRegsMajorCostOfLSR` at L6385 only).
     /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopStrengthReduce.cpp#L1613
     fn lsr_call_clobbers_registers(&self) -> bool {
+        false
+    }
+
+    /// DEVIATE LSR-KEY-TRIAL (owner z80, exit 2026-12-15): the target rates
+    /// solutions by a second order (`is_lsr_cost_less` under
+    /// `trial::lsr_alternate_order`) and its driver keeps the module that
+    /// comes out cheaper where the two orders choose differently.
+    fn lsr_alternate_order(&self) -> bool {
+        false
+    }
+
+    /// Whether a global's address as the base of an address is an immediate
+    /// loaded at the access, so it costs no register of its own (DEVIATE
+    /// LU33). Off: it is a base register, as in the pin.
+    fn lsr_global_address_is_free(&self) -> bool {
         false
     }
 

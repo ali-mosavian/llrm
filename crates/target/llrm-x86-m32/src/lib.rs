@@ -253,6 +253,9 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         branch_compare_trees_at_size: true,
         inline_never_grows_without_rate: true,
         jump_threading_latch_trial_at_size: true,
+        // DEVIATE OS-TRIAL-CLOCK-CAP (owner x87, exit 2026-12-05): x_switch_ranges
+        // Os refused its table for 35 B at +11% clk; the cell counts on both.
+        os_trial_clock_cap_percent: Some(2),
         switch_lookup_trial_at_size: true,
         jump_table_size_growth_ratio: Some(300),
         // The x87 stack has eight slots; an operation in a loop needs three of
@@ -275,6 +278,13 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // merges the tails of copies at size. QB synth.c m32 Os 35,527 ->
         // 11,814 B, identical output (row M32-SINK-COMMON-SIZE).
         sink_common_at_size: true,
+        // DEVIATE LATE-MEMCPYOPT-SIZE (owner x86-m32-b, exit 2026-12-12): see
+        // `Tuning::late_memcpyopt_at_size`. QB m32 Os dialog.c `bind` 391 ->
+        // 337 B (gcc 309), no file worse.
+        late_memcpyopt_at_size: true,
+        // Not priced: cost 1 takes exec.o at Os 1.7-3.1% fewer instructions
+        // for +614 B and two counted cells (row M32-SINK-COMMON-PHI).
+        sink_common_phi_cost: 0,
         // DEVIATE OB1 (owner w12, exit 2026-11-27, `unrollbound.rs`; -O3 only,
         // as gcc grows code only there): gcc
         // completely peels a loop whose trips the object it indexes bounds
