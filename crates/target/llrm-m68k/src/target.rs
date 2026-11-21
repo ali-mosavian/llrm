@@ -28,16 +28,31 @@ static PRESSURE: LazyLock<llrm_target::pressure::PressureSets> =
 static REGISTERS: LazyLock<Vec<llrm_target::registers::Register>> =
     LazyLock::new(|| llrm_target::registers::parse(include_str!("registers.regs")).expect("registers.regs parses"));
 
-/// The limit of pressure set `set` here (`computePSetLimit`): a register may
-/// be allocated if its root is a `gpr` (a6 and sp are not).
-fn pressure_limit(set: usize) -> u32 {
-    PRESSURE.limit(set, |name| {
-        REGISTERS
-            .iter()
-            .find(|one| one.name == name)
-            .and_then(|one| REGISTERS.iter().find(|root| root.name == one.root))
-            .is_some_and(|root| root.is("gpr"))
-    })
+/// The limit of every pressure set here (`computePSetLimit`): a register may
+/// be allocated if its root is a `gpr`, or is `a6` in a function with no frame
+/// pointer (`getReservedRegs`); `sp` never.
+pub fn pressure_limits(a6_free: bool) -> Vec<u32> {
+    (0..PRESSURE.sets.len())
+        // A set whose largest class the table leaves out holds no value
+        // here: its raw limit stands.
+        .map(|set| {
+            if PRESSURE.class(&PRESSURE.sets[set].largest).is_none() {
+                return PRESSURE.sets[set].limit;
+            }
+            PRESSURE.limit(set, |name| {
+                REGISTERS
+                    .iter()
+                    .find(|one| one.name == name)
+                    .and_then(|one| REGISTERS.iter().find(|root| root.name == one.root))
+                    .is_some_and(|root| root.is("gpr") || a6_free && root.name == "a6")
+            })
+        })
+        .collect()
+}
+
+/// The pin's pressure sets.
+pub fn pressure_sets() -> &'static llrm_target::pressure::PressureSets {
+    &PRESSURE
 }
 
 /// The pin's `MCInstrDesc` of the opcode `name`.
@@ -319,20 +334,7 @@ impl Target for M68k {
     }
 
     fn pressure(&self) -> Option<(&'static llrm_target::pressure::PressureSets, Vec<u32>)> {
-        Some((
-            &PRESSURE,
-            (0..PRESSURE.sets.len())
-                // A set whose largest class the table leaves out holds no value
-                // here: its raw limit stands.
-                .map(|set| {
-                    if PRESSURE.class(&PRESSURE.sets[set].largest).is_some() {
-                        pressure_limit(set)
-                    } else {
-                        PRESSURE.sets[set].limit
-                    }
-                })
-                .collect(),
-        ))
+        Some((&PRESSURE, pressure_limits(false)))
     }
 
     /// An opcode this target adds above the pin's table is not described: it
