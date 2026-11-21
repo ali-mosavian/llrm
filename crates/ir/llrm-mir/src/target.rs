@@ -327,6 +327,12 @@ pub struct Tuning {
     /// REP-MOVS-OS bounds itself to the pin's limit (owner x86-m32, exit
     /// 2026-11-30).
     pub rep_movs_at_size_max: u64,
+    /// The largest constant copy (bytes) a `-O2`/`-O3` build does with `rep movs` of the pointer's width
+    /// when the blocks are aligned, past the pin's 128-byte limit (`emitConstantSizeRepmov`), instead of the
+    /// `memcpy` call. 0: the pin's. DEVIATE REP-MOVS-SPEED (owner llrm-target-x86-m64-b, exit 2026-11-30):
+    /// gcc's generic `memcpy` strategy is `rep movsq` up to 8192 bytes, which `perf` counts as one
+    /// instruction against the library's ~190 for 4000 bytes (scroll O2).
+    pub rep_movs_at_speed_max: u64,
     /// A signed divide by a power of two stays an `idiv` at `-Os` (and `-Oz`,
     /// or a `minsize` function, always). The pin expands at `-Os`
     /// (`isIntDivCheap`, [X86ISelLowering.cpp#L65389]: x86 answers yes at
@@ -934,6 +940,7 @@ impl Tuning {
         rep_stos_priced_unit: false,
         rep_movs_at_size: false,
         rep_movs_at_size_max: 128,
+        rep_movs_at_speed_max: 0,
         sdiv_pow2_stays_at_size: false,
         merge_functions_at_size: false,
         unroll_threshold: None,

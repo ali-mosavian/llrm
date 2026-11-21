@@ -204,6 +204,10 @@ def main():
     w = [(rnd.choice(edges16) if rnd.random() < .3 else rnd.getrandbits(rnd.choice([4, 8, 12, 16])), rnd.choice(edges16) if rnd.random() < .3 else rnd.getrandbits(rnd.choice([4, 8, 12, 16]))) for _ in range(6000)] + [(a, b) for a in edges16 for b in edges16]
     allok &= check("__mulhi3", "HL,DE>DE", lambda a, b: a * b & 0xFFFF, w)
     allok &= check("__umulhisi3", "HL,DE>L", lambda a, b: a * b, w)
+    signed = lambda v: v - 65536 if v > 32767 else v
+    signed_edges = (0, 1, 2, 100, 255, 256, 257, 0x7FFF, 0x8000, 0x8001, 0xFF00, 0xFFFF, 0xFF9C, 0xFFFE)
+    sw = [(a, b) for a in signed_edges for b in signed_edges] + [(rnd.getrandbits(16), rnd.getrandbits(rnd.choice([4, 8, 9, 16]))) for _ in range(300)]
+    allok &= check("__mulhisi3", "HL,DE>L", lambda a, b: signed(a) * signed(b) & 0xFFFFFFFF, sw)
     wd = [p for p in w if p[1]]
     allok &= check("__udivhi3", "HL,DE>DE", lambda a, b: a // b, wd)
     allok &= check("__umodhi3", "HL,DE>DE", lambda a, b: a % b, wd)

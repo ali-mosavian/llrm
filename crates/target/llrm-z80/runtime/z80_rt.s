@@ -342,6 +342,82 @@ __umulhisi3:
 	jr	nz,1$
 	ret
 
+; hl * de -> hl:de, the full product of two signed words (hl low, de high, as a long result): the magnitudes multiplied
+; as `__umulhisi3` does, the product negated when the signs differ. A magnitude under 256 is the multiplier and takes 8
+; steps, not 16 (AVR libgcc's `__mulhisi3`).
+	.globl __mulhisi3
+__mulhisi3:
+	ld	a,h
+	xor	d
+	push	af
+	bit	7,h
+	jr	z,1$
+	xor	a
+	sub	l
+	ld	l,a
+	sbc	a,a
+	sub	h
+	ld	h,a
+1$:	bit	7,d
+	jr	z,2$
+	xor	a
+	sub	e
+	ld	e,a
+	sbc	a,a
+	sub	d
+	ld	d,a
+2$:	ld	a,d
+	or	a
+	jr	z,3$
+	ld	a,h
+	or	a
+	jr	nz,6$
+	ex	de,hl
+3$:	ld	b,h
+	ld	c,l
+	ld	hl,#0
+	ld	a,#8
+4$:	add	hl,hl
+	rl	d
+	rl	e
+	jr	nc,5$
+	add	hl,bc
+	jr	nc,5$
+	inc	d
+5$:	dec	a
+	jr	nz,4$
+	ld	e,d
+	ld	d,#0
+	jr	9$
+6$:	ld	b,h
+	ld	c,l
+	ld	hl,#0
+	ld	a,#16
+7$:	add	hl,hl
+	rl	e
+	rl	d
+	jr	nc,8$
+	add	hl,bc
+	jr	nc,8$
+	inc	de
+8$:	dec	a
+	jr	nz,7$
+9$:	pop	af
+	ret	p
+	xor	a
+	sub	l
+	ld	l,a
+	ld	a,#0
+	sbc	a,h
+	ld	h,a
+	ld	a,#0
+	sbc	a,e
+	ld	e,a
+	ld	a,#0
+	sbc	a,d
+	ld	d,a
+	ret
+
 ; ---- long multiply -------------------------------------------------------------------------------
 
 ; The product of two longs, low 32 bits: a is hl (low) and de (high), b bc (low) and the word the caller stored on the

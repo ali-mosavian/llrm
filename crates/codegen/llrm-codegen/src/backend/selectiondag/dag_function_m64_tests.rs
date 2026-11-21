@@ -1756,3 +1756,28 @@ fn an_m64_v8i16_splat_is_pshuflw_and_pshufd() {
     assert_eq!((named("pshuflw"), named("pshufd")), (1, 1));
     assert!(named("mov") <= 1, "word stores of the splat: {}", named("mov"));
 }
+
+/// A constant 4000-byte `memcpy` at -O2 was a call (gcc's table: 257..8192 bytes is `rep movsq`, and `perf`
+/// counts it as one instruction against the library's 190: scroll O2 +163 instructions a round).
+#[test]
+fn an_m64_constant_memcpy_up_to_8192_bytes_is_rep_movsq_at_o2() {
+    let layout = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n";
+    let names = |bytes: u32| -> Vec<String> {
+        let text = format!(
+            "{layout}declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1)\n\
+             define void @f(ptr align 16 %d, ptr align 16 %s) {{\n  \
+             call void @llvm.memcpy.p0.p0.i64(ptr align 16 %d, ptr align 16 %s, i64 {bytes}, i1 false)\n  ret void\n}}\n"
+        );
+        let module = llrm_mir::parse::module(&text).expect("parses");
+        let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+        let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[("memcpy".to_string(), 0, "memcpy".to_string())]).expect("selected");
+        let insns = done.body.insns();
+        insns.iter().filter_map(|i| i.what.as_ref().and_then(|w| w.name.as_deref()).map(str::to_string)).collect()
+    };
+    let small = names(4000);
+    assert!(small.iter().any(|n| n.starts_with("movs")), "{small:?}");
+    assert!(!small.iter().any(|n| n == "call"), "{small:?}");
+    // Past 8192 bytes gcc calls `memcpy` too.
+    let large = names(9000);
+    assert!(large.iter().any(|n| n == "call"), "{large:?}");
+}
