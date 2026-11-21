@@ -792,7 +792,24 @@ pub fn finish_with(
                     operands: vec![mc::Operand::Reg(reg::CCR), mc::Operand::Reg(word)],
                 });
             }
-            Kind::Op("ADJCALLSTACKDOWN" | "ADJCALLSTACKUP") => {}
+            // `eliminateCallFramePseudoInstr`: with a variable-sized object
+            // the call frame is not reserved, so a call that keeps its
+            // arguments as stores lowers `%sp` first, below the alloca, and
+            // raises it after.
+            Kind::Op(name @ ("ADJCALLSTACKDOWN" | "ADJCALLSTACKUP")) => {
+                if inputs.has_var_sized {
+                    let align = if short { frame::SHIPPED_STACK_ALIGN } else { frame::STACK_ALIGN };
+                    let bytes = match operands.first() {
+                        Some(mc::Operand::Imm(bytes)) => (*bytes + align - 1) / align * align,
+                        _ => 0,
+                    };
+                    if bytes > 0 {
+                        let down = name == "ADJCALLSTACKDOWN";
+                        frame_op(&if down { FrameOp::SubSp(bytes) } else { FrameOp::AddSp(bytes) }, &mut out, short);
+                        pushed += if down { bytes } else { -bytes };
+                    }
+                }
+            }
             Kind::Op("UNREACHABLE") => {}
             Kind::Op("RET") => {
                 closing.iter().for_each(|op| frame_op(op, &mut out, short));
