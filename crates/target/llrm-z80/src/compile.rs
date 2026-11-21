@@ -308,7 +308,7 @@ fn unroll_choice(
     fingerprint: Option<crate::driver::Fingerprint>,
 ) -> Result<Request, String> {
     use llrm_transforms::trial::SpeedUnroll;
-    let mut variants = Vec::new();
+    let mut variants: Vec<SpeedUnroll> = Vec::new();
     if decisions.made > 0 {
         variants.push(SpeedUnroll::NoGrow);
     }
@@ -325,7 +325,9 @@ fn unroll_choice(
         variants.push(SpeedUnroll::NoUnswitch);
     }
     let mut best = (module_priced(ir, &request)?, request);
-    for variant in variants {
+    let mut next = 0;
+    while let Some(&variant) = variants.get(next) {
+        next += 1;
         // the two refusals together are tried only where one of them made the
         // module smaller: a compile of its own that, in the corpus, no
         // module wanted without one of the two (switch_table_in_code -O2 is the
@@ -339,6 +341,12 @@ fn unroll_choice(
         let price = crate::driver::with_unroll_base(fingerprint, || module_priced(ir, &other));
         if std::env::var_os("LLRM_DEBUG_UNROLL").is_some() && price.is_err() {
             eprintln!("unroll {variant:?}: {price:?}");
+        }
+        // the policy's refusal alone leaks where the SZ2 trial inlined growth
+        // in its place: the variant that binds the trial too is worth a compile
+        // only then, which bounds its cost to the modules that need it
+        if variant == SpeedUnroll::NoInlineGrowth && crate::driver::speed_unrolls_made().trial_inlined > 0 {
+            variants.push(SpeedUnroll::NoInlineGrowthAll);
         }
         let Ok(price) = price else { continue };
         if std::env::var_os("LLRM_DEBUG_UNROLL").is_some() {
