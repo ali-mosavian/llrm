@@ -881,6 +881,12 @@ impl Tti for X86 {
         self.vector_values()
     }
 
+    /// With the bandwidth deviation: it widens a chain to a lane count its
+    /// model prices as `<8 x i64>`.
+    fn narrows_induction_chains(&self) -> bool {
+        self.tuning.maximize_vector_bandwidth
+    }
+
     fn inline_threshold_override(&self) -> Option<i64> {
         self.tuning.inline_threshold
     }
@@ -1033,6 +1039,18 @@ impl Tti for X86 {
             return crate::sizes::address(form, self.quad);
         }
         Cost::FREE
+    }
+
+    fn memory_limits(&self) -> Option<[usize; 6]> {
+        let tuning = &self.tuning;
+        Some([
+            tuning.max_stores_per_memset,
+            tuning.max_stores_per_memset_opt_size,
+            tuning.max_stores_per_memcpy,
+            tuning.max_stores_per_memcpy_opt_size,
+            tuning.max_stores_per_memmove,
+            tuning.max_stores_per_memmove_opt_size,
+        ])
     }
 
     fn memory_intrinsic_cost(
@@ -1567,6 +1585,44 @@ impl Tti for X86 {
         self.tuning.add_to_or_disjoint
     }
 
+    /// `getVectorInstrCost` of a float lane at a constant index: the pin's SSE2 row (`tti_vector_oracle.txt`).
+    /// A gather of float lanes is priced by it; integer lanes and a variable index are not priced.
+    fn vector_instr_cost(
+        &self,
+        op: LaneOp,
+        ty: VectorTy,
+        index: Option<u32>,
+        into_poison: bool,
+        _context: VectorInstrContext,
+        cost_kind: CostKind,
+    ) -> Option<Cost> {
+        if !self.vector_values() || !self.tuning.vector_float_costs {
+            return None;
+        }
+        crate::tti_vector::float_lane_cost(op, ty, index?, into_poison, cost_kind)
+    }
+
+    /// `getScalarizationOverhead` of float lanes: the pin's lane rows summed. A gather of a strided load is
+    /// priced by it; other lanes are not priced.
+    fn scalarization_overhead(
+        &self,
+        ty: VectorTy,
+        insert: bool,
+        extract: bool,
+        cost_kind: CostKind,
+    ) -> Option<Cost> {
+        if !self.vector_values() || !self.tuning.vector_float_costs {
+            return None;
+        }
+        crate::tti_vector::float_scalarization_overhead(ty, insert, extract, cost_kind)
+    }
+
+    /// The vectors of a compare are selected where the target has vector values
+    /// and says so (`Tuning::vector_compares`).
+    fn selects_vector_compares(&self) -> bool {
+        self.tuning.vector_compares && self.vector_values()
+    }
+
     /// A word vector is a speed trade of a few bytes (the vector body, its
     /// remainder and the splat); at -Os the bytes rank first, as in gcc, which
     /// does not vectorize there.
@@ -1671,6 +1727,9 @@ impl Tti for X86 {
             // a word vector is one `mov` of a dword, the scalar load's price
             return (self.word_vectors && is_word_vector(ty)).then(|| Cost::of(1));
         }
+        if self.tuning.vector_float_costs && matches!(ty.lane, Ty::Float | Ty::Double) {
+            return crate::tti_vector::float_memory_op_cost(op, ty, kind);
+        }
         let pieces = xmm_pieces(ty)?;
         // Every other kind is `TCC_Basic` ("TODO: Handle other cost kinds"), a
         // load's latency the base's 4.
@@ -1695,9 +1754,28 @@ impl Tti for X86 {
         predicate: Option<Predicate>,
         kind: CostKind,
     ) -> Option<Cost> {
-        use llrm_mir::opcode::IntPredicate;
+        use llrm_mir::opcode::{FloatPredicate, IntPredicate};
         if !self.vector_values() {
             return None;
+        }
+        // The float lanes of `cmpps`/`cmppd` and the mask select over them: the pin's SSE2 rows, read off
+        // `opt -passes='print<cost-model>' -mcpu=x86-64` (`SETCC` {2, 5, 1, 1} a register, `one` and `ueq` two
+        // compares and a combine {5, 11, 3, 3}; the select as the integer lanes').
+        if let Ty::Float | Ty::Double = ty.lane {
+            if !self.tuning.vector_float_costs {
+                return None;
+            }
+            let bits = if ty.lane == Ty::Float { 32 } else { 64 };
+            let pieces = xmm_pieces(VectorTy { lane: Ty::Int(bits), ..ty })?;
+            let row = match (op, predicate) {
+                (CmpSel::FCmp, Some(Predicate::Float(FloatPredicate::One | FloatPredicate::Ueq))) => {
+                    all(5, 11, 3, 3)
+                }
+                (CmpSel::FCmp, _) => all(2, 5, 1, 1),
+                (CmpSel::Select, _) => all(2, 2, 3, 3),
+                _ => return None,
+            };
+            return row[kind.index()].map(|each| Cost::of(pieces * each));
         }
         let Ty::Int(bits @ (8 | 16 | 32)) = ty.lane else { return None };
         let pieces = xmm_pieces(ty)?;
@@ -1745,6 +1823,9 @@ impl Tti for X86 {
             .then(|| Cost::of(1));
         }
         let throughput = kind == CostKind::RecipThroughput;
+        if self.tuning.vector_float_costs && matches!(ty.lane, Ty::Float | Ty::Double) {
+            return crate::tti_vector::float_arithmetic_cost(op, ty, kind);
+        }
         match op {
             ArithOp::And | ArithOp::Or | ArithOp::Xor => xmm_pieces(ty).map(Cost::of),
             // `paddq`, `psubq`: {1, 2, 1, 2}.
@@ -1879,6 +1960,9 @@ impl Tti for X86 {
     /// ones times the larger register count; a truncate to the type it already
     /// is, once legalized, is free. Anything else (a float, a mask, a
     /// scalarized cast) is not priced.
+    /// `X86TTIImpl::getCastInstrCost` for the integer extends and truncates (the SSE2 rows): the row of the exact
+    /// types, else of the legalized ones times the larger register count; a truncate to the type it already is, once
+    /// legalized, is free. Anything else (a mask, a scalarized cast) is not priced; a float is `tti_vector`'s.
     fn vector_cast_cost(
         &self,
         kind: CastKind,
@@ -1886,6 +1970,17 @@ impl Tti for X86 {
         src: VectorTy,
         cost_kind: CostKind,
     ) -> Option<Cost> {
+        // DEVIATE X86V3: a cast to or from float lanes, and the extension of a mask, are the pin's row
+        // (`tti_vector_oracle.txt`).
+        if matches!(dst.lane, Ty::Float | Ty::Double)
+            || matches!(src.lane, Ty::Float | Ty::Double)
+            || src.lane == Ty::Int(1)
+        {
+            if !self.vector_values() || !self.tuning.vector_float_costs {
+                return None;
+            }
+            return crate::tti_vector::cast_cost(kind, dst, src, cost_kind);
+        }
         if !self.vector_values() || !matches!(kind, CastKind::ZExt | CastKind::SExt | CastKind::Trunc) {
             return None;
         }
