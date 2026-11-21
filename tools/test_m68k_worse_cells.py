@@ -209,3 +209,21 @@ class Verdicts(unittest.TestCase):
         rows = cell("m68k-68000", "virt", "O1", (100, 100), (80, 200), (120, 100))
         self.assertEqual(count(tsv(*rows)), (0, 1))
         self.assertEqual([v for *_, v, _ in verdicts(tsv(*rows))], ["VIRTUAL-OK"])
+
+
+def test_an_upper_bound_under_every_reference_is_judged_at_the_bound():
+    """memmove_overlap 68020 O2 printed `4668*` for two `muls.l` at their published maximum and the cell was blank, hiding a win over gcc's 8548."""
+    import m68k_worse_cells as w
+
+    sides = {"ours": (100, "<=4668"), "gcc": (100, 8548)}
+    w.settle_bounds(sides)
+    assert sides["ours"] == (100, 4668)
+
+
+def test_an_upper_bound_above_a_reference_stays_unmeasured():
+    """`<=9000` against gcc's 8548 straddles it: neither a win nor a loss."""
+    import m68k_worse_cells as w
+
+    sides = {"ours": (100, "<=9000"), "gcc": (100, 8548)}
+    w.settle_bounds(sides)
+    assert sides["ours"][1] is None
