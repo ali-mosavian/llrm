@@ -584,7 +584,7 @@ d: ret i32 0
     let insns = done.body.insns();
     let jumps: Vec<_> = insns.iter().filter_map(|i| i.what.as_ref()).filter(|w| w.indirect).collect();
     assert_eq!(jumps.len(), 1);
-    assert!(jumps[0].table.len() >= 6 && jumps[0].table_id.is_some(), "{:?}", jumps[0]);
+    assert!(jumps[0].table.len() >= 6 && jumps[0].table_id.is_some() && !jumps[0].computed, "{:?}", jumps[0]);
 }
 
 /// A block fill or copy at m64 reached `REP_STOSB_64` / `REP_MOVSB_64` with the

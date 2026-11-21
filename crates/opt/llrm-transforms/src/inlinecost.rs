@@ -3044,11 +3044,20 @@ pub fn inline_cost(
             blocked: analyzer.blocked_by_bound,
             hot: !analyzer.blocked_by_bound
                 && analyzer.verdict_is_over_threshold()
-                && site.caller_size == CallerSize::Speed
-                && !params.o1_bound
+                && (!params.o1_bound || site.caller_size != CallerSize::Speed)
                 && site
                     .tti
-                    .and_then(|tti| tti.inline_hot_trial_frequency())
+                    .and_then(|tti| {
+                        // a speed caller's INL-HOT trial, or at a size build the
+                        // hot loop INL-SPEED-OS keeps (switch_peeled_table -Os:
+                        // `pick` over the -Os threshold, 29429 T inlined at -O1
+                        // against 88421 T called)
+                        if site.caller_size == CallerSize::Speed {
+                            tti.inline_hot_trial_frequency()
+                        } else {
+                            tti.inline_hot_trial_at_size().then(|| tti.inline_trial_speed_at_size()).flatten()
+                        }
+                    })
                     .is_some_and(|least| site.relative_frequency.is_some_and(|ratio| ratio >= least as f64)),
         };
     }

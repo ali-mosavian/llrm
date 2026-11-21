@@ -1486,8 +1486,8 @@ fn lower_strict_fsetcc(
 
 /// `LowerSINT_TO_FP` of `STRICT_SINT_TO_FP` on the x87: the integer stored to
 /// a stack slot on the node's chain and `fild`ed from it, whose out chain is
-/// the node's. The `i64` source and the unsigned and SSE forms are not
-/// translated: the legalizer refuses them.
+/// the node's. The unsigned and SSE forms are not translated: the legalizer
+/// refuses them.
 fn lower_strict_sint_to_fp(
     dag: &mut SelectionDAG,
     node: SDValue,
@@ -1508,7 +1508,8 @@ fn lower_strict_sint_to_fp(
             _ => None,
         };
     }
-    if !matches!(dst, EVT::Simple(MVT::F32 | MVT::F64 | MVT::F80)) || !(matches!(src_vt, EVT::I16 | EVT::I32) || (src_vt == EVT::I64 && dag.config().pointer == EVT::I64)) {
+    if !matches!(dst, EVT::Simple(MVT::F32 | MVT::F64 | MVT::F80)) || !matches!(src_vt, EVT::I16 | EVT::I32 | EVT::I64)
+    {
         return None;
     }
     let size = src_vt.size_in_bits() / 8;
@@ -1589,7 +1590,7 @@ fn lower_strict_fp_to_sint(
         };
     }
     if !matches!(dag.value_type(value), EVT::Simple(MVT::F32 | MVT::F64 | MVT::F80))
-        || !(matches!(result_vt, EVT::I16 | EVT::I32) || (result_vt == EVT::I64 && dag.config().pointer == EVT::I64))
+        || !matches!(result_vt, EVT::I16 | EVT::I32 | EVT::I64)
     {
         return None;
     }

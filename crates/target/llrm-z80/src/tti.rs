@@ -538,6 +538,19 @@ impl Tti for Z80Tti {
         SPEED_MILLICLOCKS_PER_BYTE
     }
 
+    /// DEVIATE INL-SPEED-OS (owner z80, exit 2026-12-05): see
+    /// `Tti::inline_trial_speed_at_size`. A call in a loop of 16 trips or
+    /// more is tried inlined at -Os and -Oz and kept where the module shrinks
+    /// or the copy saves clocks for a few bytes.
+    fn inline_trial_speed_at_size(&self) -> Option<i64> {
+        Some(16)
+    }
+
+    /// `Tti::inline_hot_trial_at_size`.
+    fn inline_hot_trial_at_size(&self) -> bool {
+        true
+    }
+
     /// A loop whose bound the call's constants fix unrolls and folds in the
     /// copy, which the call's latency does not show (loop_fusion -O3 39,020
     /// T became 299,430 T without it). DEVIATE Z80-RATE (owner z80, exit

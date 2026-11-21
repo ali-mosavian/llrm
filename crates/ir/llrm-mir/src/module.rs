@@ -658,6 +658,12 @@ impl Function {
         self.terminator(block).is_some_and(|last| self.instruction(last).opcode == Opcode::IndirectBr)
     }
 
+    /// The blocks whose address is taken and that are still in the function:
+    /// each is where a `blockaddress` of it, or of a block it replaced, lands.
+    pub fn address_taken_blocks(&self) -> impl Iterator<Item = BlockId> + '_ {
+        self.address_taken.iter().filter_map(|&block| self.resolve_block_address(block)).collect::<Vec<_>>().into_iter()
+    }
+
     /// Whether any block has its address taken.
     #[inline]
     pub fn has_any_address_taken(&self) -> bool {
