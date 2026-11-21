@@ -951,6 +951,10 @@ impl Tti for X86 {
         self.tuning.pops_arguments_cold_only_at_size
     }
 
+    fn pushes_pad_at_size(&self) -> bool {
+        self.tuning.pushes_pad_at_size
+    }
+
     fn libc_memcpy(&self) -> bool {
         self.tuning.libc_memcpy
     }
@@ -1373,6 +1377,10 @@ impl Tti for X86 {
 
     fn unswitch_threshold_override(&self) -> Option<i64> {
         self.tuning.unswitch_threshold
+    }
+
+    fn phiopt_one_feeding_statement(&self) -> bool {
+        self.tuning.phiopt_one_feeding_statement
     }
 
     fn licm_float_register_limit(&self) -> Option<u32> {

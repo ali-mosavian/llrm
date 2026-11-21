@@ -1,0 +1,2 @@
+# Tests that fail on a clean checkout for a host reason: `crate test_name  # why`. Each name must be a test
+# the crate lists (tipred reports a name that matches none). Empty while the host has what the tests need.

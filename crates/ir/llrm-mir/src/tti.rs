@@ -2093,6 +2093,11 @@ pub trait Tti {
         false
     }
 
+    /// `Tuning::pushes_pad_at_size`.
+    fn pushes_pad_at_size(&self) -> bool {
+        false
+    }
+
     /// `Tuning::libc_memcpy`.
     fn libc_memcpy(&self) -> bool {
         false
@@ -2562,6 +2567,12 @@ pub trait Tti {
     /// 50.
     fn unswitch_threshold_override(&self) -> Option<i64> {
         None
+    }
+
+    /// `Tuning::phiopt_one_feeding_statement`: gcc's phiopt arm rule in
+    /// `foldTwoEntryPHINode`; off: the pin's cost bar alone.
+    fn phiopt_one_feeding_statement(&self) -> bool {
+        false
     }
 
     /// `isHardwareLoopProfitable`: whether the target counts loops in hardware
