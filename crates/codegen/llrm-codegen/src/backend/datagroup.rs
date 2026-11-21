@@ -205,6 +205,7 @@ fn _restore(
         repeat: false,
         lock: false,
         table_id: None,
+        computed: false,
         pops: None,
         tied: None,
     };
