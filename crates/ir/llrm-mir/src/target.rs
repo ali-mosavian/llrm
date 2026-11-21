@@ -76,6 +76,11 @@ pub struct Tuning {
     /// call of the function. A pop is 4 clocks on the 486, the add 1: in a
     /// loop the pops cost more than the bytes they save.
     pub pops_arguments_cold_only_at_size: bool,
+    /// DEVIATE PAD1 (owner x86-m32-b, exit 2026-11-27): at -Os a `sub sp,4`
+    /// that is not the frame's is a push of a dead register (gcc's `i386.md`
+    /// peephole2: `sub esp,4` is 3 bytes, `push eax` 1; a clock each). false:
+    /// the pin keeps the `sub` (clang -Oz too).
+    pub pushes_pad_at_size: bool,
     /// An x87 compare keeps `sahf` where bytes are held (-O1, size): `test ah,
     /// mask` is 2 bytes longer. DEVIATE X87-FCMP-AH names the target's own
     /// choice; the pin keeps `sahf` everywhere, so it is false there.
@@ -878,6 +883,7 @@ impl Tuning {
         libc_memcpy: false,
         pops_arguments_at_size: true,
         pops_arguments_cold_only_at_size: false,
+        pushes_pad_at_size: false,
         keeps_sahf_where_bytes_are_held: false,
         divide_by_bytes: false,
         narrow_divide_live_limit: 0,
