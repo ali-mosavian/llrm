@@ -106,6 +106,9 @@ mod cgpmemalign_tests;
 pub mod cgpretdup;
 pub mod cgpselect;
 pub mod cgpsinkops;
+pub mod cgpsplitgep;
+#[cfg(test)]
+mod cgpsplitgep_tests;
 pub mod cgpswitch;
 pub mod cmpopt;
 #[cfg(test)]
