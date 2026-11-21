@@ -236,6 +236,20 @@ pub trait CombineHooks {
         false
     }
 
+    /// `TargetLowering::isLegalAddressingMode` of a base register and `offset`
+    /// for an access of `bytes`: what
+    /// `reassociationCanBreakAddressingModePattern` asks. DEVIATE SD210:
+    /// the default is x86's, a signed 32-bit displacement; a target with
+    /// another reach states it. Exit 2026-12-10.
+    fn is_legal_address_offset(
+        &self,
+        offset: i128,
+        bytes: u64,
+    ) -> bool {
+        let _ = bytes;
+        i128::from(i32::MIN) <= offset && offset <= i128::from(i32::MAX)
+    }
+
     /// `DataLayout::isLittleEndian`: whether the first of several merged
     /// stores is the least significant part of the joined value.
     fn little_endian(&self) -> bool {
