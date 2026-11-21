@@ -6646,6 +6646,23 @@ fn constrained_narrow_and_unsigned_conversions_select_to_sse_at_m64() {
     }
 }
 
+/// A constrained `rint` of a `float` or `double` at m64 was refused ("floating instruction has no
+/// conversion rule: frndint"): the x87's instruction was chosen for a value in an SSE register. The
+/// pin calls `rintf`/`rint` (no SSE4.1), on the node's chain.
+#[test]
+fn a_constrained_rint_at_m64_calls_the_routine() {
+    for (ty, short, routine) in [("double", "f64", "rint"), ("float", "f32", "rintf")] {
+        let text = format!(
+            "target datalayout = \"@m64-datalayout@\"\ndefine {ty} @f({ty} %x) strictfp {{\n  %r = call {ty} @llvm.experimental.constrained.rint.{short}({ty} %x, metadata !\"round.dynamic\", metadata !\"fpexcept.strict\") strictfp\n  ret {ty} %r\n}}\ndeclare {ty} @llvm.experimental.constrained.rint.{short}({ty}, metadata, metadata)\n"
+        );
+        let (built, _) = compiled(&flags(&["-m64", "-O1", "--isel=dag"]), &text, "f")
+            .unwrap_or_else(|error| panic!("rint {ty}: {error:?}"));
+        let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+        assert!(listing.contains(&format!("call {routine}")), "rint {ty}: no call {routine}\n{listing}");
+        assert!(!listing.contains("frndint"), "rint {ty}: x87 instruction\n{listing}");
+    }
+}
+
 /// A constrained unsigned `i64` conversion at m64 selected a compiler-rt routine
 /// (`__floatundidf`, `__fixunssfdi`) where the pin's llc emits straight code:
 /// `ExpandLegalINT_TO_FP`'s halve-convert-double with one `cvtsi2sd` and a
