@@ -1174,6 +1174,12 @@ impl Tti for AArch64 {
         crate::tti_vector::vector_instr_cost(op, ty, index, into_poison, context, cost_kind, fast_ld1_single)
     }
 
+    /// The pin has no optsize rule for merged conditions: its cost rule
+    /// decides at `-Os` as at `-O2`.
+    fn splits_merged_conditions_at_optsize(&self) -> bool {
+        false
+    }
+
     /// `AArch64TargetLowering::getJumpConditionMergingParams`: a base of
     /// `aarch64-br-merging-base-cost` 2 plus the `ccmp` bias 6, less the
     /// cbz/tbnz bias 6 where one side is already a single compare-and-branch
