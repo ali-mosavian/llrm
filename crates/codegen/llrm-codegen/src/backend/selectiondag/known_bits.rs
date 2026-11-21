@@ -222,6 +222,14 @@ fn walk(
                 dag.config().boolean_contents_of(dag.value_type(value)) == BooleanContents::ZeroOrOne && width > 1;
             KnownBits { zero: if zero_or_one { all & !1 } else { 0 }, one: 0, width }
         }
+        // `computeKnownBits` of `STRICT_FSETCC` and `STRICT_FSETCCS`: the
+        // compare's operands are 1 and 2 (0 is the chain).
+        ISD::StrictFSetCC | ISD::StrictFSetCCS if value.res == 0 => {
+            let zero_or_one = dag.config().boolean_contents_of(dag.value_type(dag.operand(value, 1)))
+                == BooleanContents::ZeroOrOne
+                && width > 1;
+            KnownBits { zero: if zero_or_one { all & !1 } else { 0 }, one: 0, width }
+        }
         // `X86TargetLowering::computeKnownBitsForTargetNode`:
         // `Known.Zero.setBitsFrom(1)`.
         op if Some(op) == dag.config().nodes.flag_boolean && value.res == 0 => {
@@ -421,6 +429,13 @@ fn num_sign_bits_at(
     if dag.opcode(value) == ISD::SetCC
         && value.res == 0
         && dag.config().boolean_contents_of(dag.value_type(value)) == BooleanContents::ZeroOrNegativeOne
+    {
+        return width;
+    }
+    // The same for the constrained compares, asked of the operand's type.
+    if matches!(dag.opcode(value), ISD::StrictFSetCC | ISD::StrictFSetCCS)
+        && value.res == 0
+        && dag.config().boolean_contents_of(dag.value_type(dag.operand(value, 1))) == BooleanContents::ZeroOrNegativeOne
     {
         return width;
     }

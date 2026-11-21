@@ -694,6 +694,13 @@ impl Function {
         None
     }
 
+    /// No block's address is taken: every `blockaddress` of this function was
+    /// replaced (`IndirectBrExpandPass` makes them integers).
+    pub fn clear_address_taken(&mut self) {
+        self.address_taken.clear();
+        self.address_forward.clear();
+    }
+
     /// Records that a `blockaddress` names `block`.
     pub fn mark_address_taken(
         &mut self,

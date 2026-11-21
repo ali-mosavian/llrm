@@ -228,6 +228,40 @@ impl Context {
         self.interned = Box::new(RefCell::new(interned));
     }
 
+    /// Replaces each `blockaddress(function, block)` that `index` numbers by
+    /// `inttoptr (int_ty index)` (`IndirectBrExpandPass`'s
+    /// `replaceAllUsesWith` of the block address): code and data that held the
+    /// address hold the number.
+    pub fn replace_block_addresses(
+        &mut self,
+        function: GlobalId,
+        index: &dyn Fn(crate::module::BlockId) -> Option<u64>,
+        int_ty: TypeId,
+    ) {
+        let numbered: crate::hash::HashMap<usize, ConstantId> = self
+            .constants
+            .iter()
+            .enumerate()
+            .filter_map(|(at, one)| match one.kind {
+                ConstantKind::Expr(ConstantExpr::BlockAddress { function: named, block }) if named == function => {
+                    Some((at, self.int(int_ty, i128::from(index(block)?))))
+                }
+                _ => None,
+            })
+            .collect();
+        if numbered.is_empty() {
+            return;
+        }
+        for (at, constant) in self.constants.iter_mut().enumerate() {
+            if let Some(&value) = numbered.get(&at) {
+                constant.kind = ConstantKind::Expr(ConstantExpr::Cast { op: crate::opcode::CastOp::IntToPtr, value });
+            }
+        }
+        let interned =
+            self.constants.iter().enumerate().rev().map(|(at, one)| (one.clone(), ConstantId(at as u32))).collect();
+        self.interned = Box::new(RefCell::new(interned));
+    }
+
     /// `ConstantInt::get(Type *, ..)`: `value` as an integer of `ty`, or in
     /// every lane of a vector `ty`.
     pub fn int_splat(

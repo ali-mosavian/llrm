@@ -159,6 +159,12 @@ fn legalized(ty: Ty) -> (u32, u32) {
 }
 
 impl Tti for Wasm {
+    /// No jump through a register: `indirectbr` is a `switch` over block
+    /// numbers (`IndirectBrExpandPass`).
+    fn expands_indirect_br(&self) -> bool {
+        true
+    }
+
     fn lsr_users_in_use_list_order(&self) -> bool {
         true
     }

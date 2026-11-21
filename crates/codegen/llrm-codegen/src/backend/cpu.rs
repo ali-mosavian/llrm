@@ -215,6 +215,8 @@ pub struct Profile {
     /// allocation (`TailDuplicator`, `PreRegAlloc` clear); on only where its
     /// A/B has been made (`TailDuplicate` slot).
     pub post_ra_tail_duplicate: bool,
+    /// `TimingTable::skip_computed_goto_copies_at_size`.
+    pub skip_computed_goto_copies_at_size: bool,
     /// `TimingTable::tail_merge_pin_faithful`.
     pub tail_merge_pin_faithful: bool,
     /// Equal literal stores share a register where bytes are strict
@@ -454,6 +456,7 @@ impl Profile {
             speed_rate: true,
             speed_level: true,
             post_ra_tail_duplicate: false,
+            skip_computed_goto_copies_at_size: false,
             tail_merge_pin_faithful: false,
             share_literal_stores: false,
             share_literal_stores_at_speed: false,
@@ -706,6 +709,22 @@ impl Profile {
         Ok(!hot && self.pops_arguments(words)?)
     }
 
+    /// Whether a `sub sp,unit` (one word) is a push of a dead register:
+    /// 1 byte against 3, and as quick (both a clock on the 486). Two words are
+    /// two pushes, a clock more than the `sub`: QB m32 Os -710 B but +0.14%
+    /// executed instructions (`29_craps` +5.1%), so not taken.
+    ///
+    /// DEVIATE PAD1 (owner x86-m32-b, exit 2026-11-27,
+    /// `Tuning::pushes_pad_at_size`): gcc's `i386.md` peephole2 at -Os; the
+    /// pin keeps the `sub` (clang -Oz pads a call's three words with `subl
+    /// $4,%esp`).
+    pub fn pushes_pad(
+        &self,
+        words: i64,
+    ) -> bool {
+        self.size && words == 1 && self.target().tti().is_some_and(|tti| tti.pushes_pad_at_size())
+    }
+
     /// Whether a one-slot frame is `push`/`pop` of a scratch register in place
     /// of `sub`/`add` on the stack pointer: shorter, and where size is not
     /// wanted, only if no slower.
@@ -819,6 +838,7 @@ fn _profile(
         share_congruent_phis: table.share_congruent_phis,
         unordered_branch_odds: table.unordered_branch_odds,
         post_ra_tail_duplicate: table.post_ra_tail_duplicate,
+        skip_computed_goto_copies_at_size: table.skip_computed_goto_copies_at_size,
         tail_merge_pin_faithful: table.tail_merge_pin_faithful,
         share_literal_stores: table.share_literal_stores,
         share_literal_stores_at_speed: table.share_literal_stores_at_speed,
