@@ -580,6 +580,7 @@ pub fn select_block(
         && !sized
     {
         tli.set_libcall_name(ISD::UMulLoHi, MVT::I16, "__umulhisi3");
+        tli.set_libcall_name(ISD::SMulLoHi, MVT::I16, "__mulhisi3");
     }
     let mut lowering = Z80Lowering { sized: sized && !speed_routines };
     let mut combines = Z80Combines {

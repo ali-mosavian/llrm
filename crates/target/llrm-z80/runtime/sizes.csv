@@ -28,6 +28,7 @@ __modhi3,13,__divhi3;__umodhi3
 __modqi3,13,__umodqi3
 __modsi3,2,__udivmodsi4
 __mulhi3,24,
+__mulhisi3,97,
 __mulqi3,14,
 __mulsi3,58,
 __rt_end,0,
