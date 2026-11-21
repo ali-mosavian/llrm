@@ -37,3 +37,22 @@ fn nothing_is_stored_through_the_stack_pointer_before_the_frame_is_opened() {
         assert!(opened < first, "{level}: the frame is accessed before it is opened:\n{body}");
     }
 }
+
+/// The two argument bytes that arrive on the stack are read above the whole
+/// frame (the 14 bytes `adc #242` opens): the load used the frame size before
+/// the register saves and spills were added, `ldy #2` read a spill slot, and
+/// the result's upper three bytes were garbage (101056552 for 40).
+#[test]
+fn an_argument_on_the_stack_is_read_above_the_saves_and_spills() {
+    for level in ["-O1", "-O2", "-Os"] {
+        let text = assembly(level);
+        let body = &text[text.find("\ndeep:").expect("deep")..];
+        let body = body.split("\ndeep_b1:").next().unwrap();
+        let (_, after) = body.split_once("adc #").expect("no frame adjust (premise)");
+        let opened: u32 = 256 - after.split('\n').next().unwrap().parse::<u32>().expect("an adjust of the frame");
+        assert!(
+            body.contains(&format!("  ldy #{opened}\n  lda (rc0),y\n")),
+            "{level}: the stack argument is not read at offset {opened}:\n{body}"
+        );
+    }
+}

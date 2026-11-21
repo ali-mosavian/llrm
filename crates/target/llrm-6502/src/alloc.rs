@@ -4364,6 +4364,11 @@ fn emit_with<const STACK: bool>(
     let slot_offset = |slot: i32| -> i64 {
         old + slots.iter().take_while(|(s, _)| *s != slot).map(|(_, class)| size_of(class) as i64).sum::<i64>()
     };
+    // an incoming argument is read through the stack pointer at its offset from
+    // the entry; the slots added to the frame sit below it
+    let rebase = |pointer: RegId, off: i64| {
+        if STACK && register_name(lane(pointer, 0)) == "rc0" && off >= old { off + spilled } else { off }
+    };
     let at = |r: Reg| match r {
         Reg::Virt(v) => assignment.0[v as usize],
         Reg::Phys(p) => p,
@@ -4575,7 +4580,8 @@ fn emit_with<const STACK: bool>(
                     [_, _, _, Operand::Imm(off), _],
                 ) => {
                     let (op, p) = (step[..3].to_lowercase(), register_name(lane(regs[2], 0)));
-                    if cmos && *off == 0 {
+                    let off = rebase(regs[2], *off);
+                    if cmos && off == 0 {
                         writeln!(out, "  {op} ({p})").unwrap()
                     } else {
                         writeln!(out, "  ldy #{off}\n  {op} ({p}),y").unwrap()
@@ -4588,16 +4594,19 @@ fn emit_with<const STACK: bool>(
                 (Kind::Op("STPX"), _) => writeln!(out, "  sta ({}),y", register_name(lane(regs[1], 0))).unwrap(),
                 (Kind::Op("LDPYZ"), [_, _, Operand::Imm(off), _]) => {
                     let p = register_name(lane(regs[1], 0));
-                    if cmos && *off == 0 {
+                    let off = rebase(regs[1], *off);
+                    if cmos && off == 0 {
                         writeln!(out, "  lda ({p})").unwrap()
                     } else {
                         writeln!(out, "  ldy #{off}\n  lda ({p}),y").unwrap()
                     }
                 }
                 (Kind::Op("LDPY"), [_, _, Operand::Imm(off), _]) => {
+                    let off = rebase(regs[1], *off);
                     writeln!(out, "  ldy #{off}\n  lda ({}),y", register_name(lane(regs[1], 0))).unwrap()
                 }
                 (Kind::Op("STPY"), [_, _, Operand::Imm(off), _]) => {
+                    let off = rebase(regs[1], *off);
                     writeln!(out, "  ldy #{off}\n  sta ({}),y", register_name(lane(regs[1], 0))).unwrap()
                 }
                 (Kind::Op("LDP0"), _) => writeln!(out, "  lda ({})", register_name(lane(regs[1], 0))).unwrap(),
