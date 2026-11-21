@@ -643,8 +643,9 @@ fn a_vector_trunc_of_a_splat_add_narrows_to_the_splat() {
     check("<4 x i16>", "i64 %n", body, after);
 }
 
-/// `tile` (`main`'s init loop): the whole combiner left `and (trunc nuw nsw (add nuw nsw
-/// splat, <0, 3, ..>)), 255` at `<8 x i64>`: about 20 instructions per vector, not `paddw`.
+/// `tile` (`main`'s init loop): the whole combiner left `and (trunc nuw nsw
+/// (add nuw nsw splat, <0, 3, ..>)), 255` at `<8 x i64>`: about 20 instructions
+/// per vector, not `paddw`.
 #[test]
 fn the_full_combiner_narrows_a_masked_vector_trunc_of_a_splat_add() {
     let text = "define void @f(i64 %n, ptr %p) {\nb0:\n  \
