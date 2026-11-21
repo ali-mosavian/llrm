@@ -394,6 +394,9 @@ fn iteration_cost(
         priced.or(optimistic.then_some(Cost::FREE)).ok_or(NotTaken)
     };
     for recipe in recipes {
+        if vf > 1 && !optimistic && llrm_support::debug::enabled("loop-vectorize-recipes") {
+            eprintln!("VF {vf}: pricing {recipe:?}");
+        }
         let cost = match *recipe {
             Recipe::Load { lane, align } | Recipe::Store { lane, align } => {
                 let op = if matches!(recipe, Recipe::Load { .. }) { MemoryOp::Load } else { MemoryOp::Store };

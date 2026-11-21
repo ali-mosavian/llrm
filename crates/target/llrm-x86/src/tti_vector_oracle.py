@@ -59,6 +59,13 @@ for n in LANES:
             others.append((f"insertelement {ty} %a{{i}}, {tn} 1.0, i64 {idx}", ty, ("insert", f"{n}x{tn} {idx} vector"), ty))
             others.append((f"insertelement {ty} poison, {tn} 1.0, i64 {idx}", ty, ("insert", f"{n}x{tn} {idx} poison"), ty))
             others.append((f"extractelement {ty} %a{{i}}, i64 {idx}", ty, ("extract", f"{n}x{tn} {idx}"), ty))
+# A vector of pointers taken apart (the addresses of a scalarized access).
+for n in LANES:
+    if 64 * n > MAX_BITS:
+        continue
+    ty = f"<{n} x ptr>"
+    for idx in range(n):
+        others.append((f"extractelement {ty} %a{{i}}, i64 {idx}", ty, ("extract", f"{n}xptr {idx}"), ty))
 lines, names = [], []
 for i, (o, n, dn, sn) in enumerate(casts):
     lines.append(f"  %c{i} = {o} <{n} x {sn}> %a{i} to <{n} x {dn}>")

@@ -57,6 +57,7 @@ fn type_name(ty: VectorTy) -> Option<String> {
     let lane = match ty.lane {
         Ty::Int(bits @ (1 | 8 | 16 | 32 | 64)) => format!("i{bits}"),
         Ty::Float => "float".to_owned(),
+        Ty::Pointer => "ptr".to_owned(),
         Ty::Double => "double".to_owned(),
         _ => return None,
     };
@@ -125,6 +126,18 @@ pub(crate) fn float_lane_cost(
     }
 }
 
+/// `getVectorInstrCost` of an `extractelement` of a float or pointer lane at a constant index.
+fn lane_extract_cost(
+    ty: VectorTy,
+    index: u32,
+    cost_kind: CostKind,
+) -> Option<Cost> {
+    if ty.lane == Ty::Pointer {
+        return lookup(format!("{} extract {} {index}", kind_name(cost_kind), type_name(ty)?));
+    }
+    float_lane_cost(LaneOp::Extract, ty, index, false, cost_kind)
+}
+
 /// `getScalarizationOverhead` of every lane of a float vector (`ForPoisonSrc`: the inserts start from poison, so
 /// lane 0 is free): the lanes' inserts that build it, the extracts that take it apart.
 pub(crate) fn float_scalarization_overhead(
@@ -139,7 +152,7 @@ pub(crate) fn float_scalarization_overhead(
             total += float_lane_cost(LaneOp::Insert, ty, index, true, cost_kind)?.value;
         }
         if extract {
-            total += float_lane_cost(LaneOp::Extract, ty, index, false, cost_kind)?.value;
+            total += lane_extract_cost(ty, index, cost_kind)?.value;
         }
     }
     Some(Cost::of(total))
