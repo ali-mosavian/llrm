@@ -55,3 +55,44 @@ fn a_function_with_a_dynamic_alloca_keeps_a6_as_its_frame_pointer() {
         assert_eq!(other, 0, "{level:?}: %a6 is the frame pointer but was allocated:\n{out}");
     }
 }
+
+/// Six pointers live across six calls of one routine: the allocator took `%a6`
+/// for one of them and the six `jsr (%a6)` (2 B) became `jsr use` (6 B).
+/// copy_runs -O2 has 91 such calls: +350 B.
+const CALLS: &str = "target datalayout = \"E-m:e-p:32:16:32-i8:8:8-i16:16:16-i32:16:32-n8:16:32-a:0:16-S16\"
+@t0 = global ptr null
+@t1 = global ptr null
+@t2 = global ptr null
+@t3 = global ptr null
+@t4 = global ptr null
+@t5 = global ptr null
+declare void @use(i32)
+define void @f() {
+  %p0 = load ptr, ptr @t0
+  %p1 = load ptr, ptr @t1
+  %p2 = load ptr, ptr @t2
+  %p3 = load ptr, ptr @t3
+  %p4 = load ptr, ptr @t4
+  %p5 = load ptr, ptr @t5
+  call void @use(i32 0)
+  call void @use(i32 1)
+  call void @use(i32 2)
+  call void @use(i32 3)
+  call void @use(i32 4)
+  call void @use(i32 5)
+  store volatile i32 0, ptr %p0
+  store volatile i32 1, ptr %p1
+  store volatile i32 2, ptr %p2
+  store volatile i32 3, ptr %p3
+  store volatile i32 4, ptr %p4
+  store volatile i32 5, ptr %p5
+  ret void
+}
+";
+
+#[test]
+fn a6_stays_with_the_call_target_when_a_callee_is_called_often() {
+    let out = assembly(CALLS, cpu_of("68000").unwrap(), Level::Os).expect("compiles");
+    let direct = out.lines().filter(|l| l.trim() == "jsr\tuse").count();
+    assert_eq!(direct, 0, "{direct} calls of `use` left direct:\n{out}");
+}

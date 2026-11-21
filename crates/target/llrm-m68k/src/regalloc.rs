@@ -304,6 +304,7 @@ pub fn allocate_greedy(
         rematerialize_arguments,
         global_copies,
         loop_carried_first,
+        false,
         None,
     )
 }
@@ -317,6 +318,7 @@ pub fn allocate_greedy_after(
     rematerialize_arguments: bool,
     global_copies: bool,
     loop_carried_first: bool,
+    a6_for_calls: bool,
     prelude: Option<llrm_spike_mf::tolir::Prelude>,
 ) -> Result<(Assignment, Vec<(i32, Class)>), String> {
     // each option is a type parameter: the allocator reads them as constants
@@ -329,7 +331,7 @@ pub fn allocate_greedy_after(
         llrm_spike_mf::tolir::allocate_greedy_after::<Registers<A, R, G, L>>(function, regs, size, prelude)
     }
     let regs = llrm_lir::registers::Regs(&REGISTER_INFO);
-    let a6_free = !crate::expand::needs_frame_pointer(function);
+    let a6_free = !a6_for_calls && !crate::expand::needs_frame_pointer(function);
     let allocated =
         a6_free_scoped(a6_free, || match (address_first, rematerialize_arguments, global_copies, loop_carried_first) {
             (true, true, true, true) => run::<true, true, true, true>(function, regs, size, prelude),
