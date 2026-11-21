@@ -59,6 +59,16 @@ impl Lowering for X86 {
         bits.max(32)
     }
 
+    // A byte compare is 2 B, `cmp al, imm8`, against 3 to 6 B of `cmp eax, imm`
+    // beside a `movzx`; a word compare costs the operand-size prefix, so it
+    // stays widened.
+    fn keeps_narrow_switch_at_size(
+        &self,
+        bits: u32,
+    ) -> bool {
+        bits == 8
+    }
+
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L3721
     // Both nodes, used or not, on a scalar of a simple type. DEVIATE OV1: an
     // integer that is not a simple type is `!isOperationExpand`, a per-type

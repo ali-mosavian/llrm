@@ -1406,6 +1406,58 @@ pub(super) fn converted(
     converted_with(body, classes, cpu, &HashMap::default())
 }
 
+/// The stack inputs of a block call are unnamed stores that consume what they
+/// read (`handleReturn`: the stack holds them and nothing else). A spill of a
+/// value they read, which the allocator placed at the call, would find it
+/// gone: it is made ahead of them, where the value is on the stack. None where
+/// no spill is behind its inputs.
+fn spills_before_stack_inputs(body: &LirBody) -> Option<LirBody> {
+    let inputs = |one: &Insn| {
+        one.what.as_ref().is_some_and(|what| {
+            what.op == Operation::FloatStore && unnamed(what) && what.dests.is_empty() && !what.sources.is_empty()
+        })
+    };
+    let spill_of = |one: &Insn| -> Option<u32> {
+        let what = one.what.as_ref()?;
+        match (one.spill_store && what.op == Operation::FloatStore, what.sources.as_slice()) {
+            (true, [Loc::Held(held)]) if held.width == 10 => Some(held.value),
+            _ => None,
+        }
+    };
+    let mut blocks: Vec<Block> = Vec::new();
+    let mut changed = false;
+    for block in body.blocks.iter() {
+        let mut out: Vec<Arc<Insn>> = Vec::with_capacity(block.insns.len());
+        // Where the run of stack inputs began, and the values it reads.
+        let mut run: Option<(usize, Vec<u32>)> = None;
+        for one in block.insns.iter() {
+            if inputs(one) {
+                let read = one.what.iter().flat_map(|what| &what.sources).filter_map(|source| match source {
+                    Loc::Held(held) => Some(held.value),
+                    _ => None,
+                });
+                let (_, values) = run.get_or_insert((out.len(), Vec::new()));
+                values.extend(read);
+                out.push(Arc::clone(one));
+            } else if let Some(value) = spill_of(one)
+                && let Some((start, values)) = run.as_mut()
+                && values.contains(&value)
+            {
+                out.insert(*start, Arc::clone(one));
+                *start += 1;
+                changed = true;
+            } else {
+                if !one.what.as_ref().is_some_and(|what| what.op == Operation::Nothing) {
+                    run = None;
+                }
+                out.push(Arc::clone(one));
+            }
+        }
+        blocks.push(block.with_insns(out));
+    }
+    changed.then(|| body.with_blocks(blocks))
+}
+
 /// [`converted`], knowing which pool cells hold +0.0 and +1.0.
 pub(super) fn converted_with(
     body: &LirBody,
@@ -1415,6 +1467,8 @@ pub(super) fn converted_with(
 ) -> Result<LirBody, Raised> {
     let valued = crate::backend::fpregs::valued(body);
     let body = valued.as_ref().unwrap_or(body);
+    let spilled_first = spills_before_stack_inputs(body);
+    let body = spilled_first.as_ref().unwrap_or(body);
     let no_orders = HashMap::default();
     let mut best = converted_valued(body, classes, cpu, constants, &no_orders)?;
     let floating = floatassign::_floating_values(body);
