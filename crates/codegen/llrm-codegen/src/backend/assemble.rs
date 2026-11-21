@@ -1421,7 +1421,7 @@ fn staged(
             if target.cpu.size {
                 !inline.is_empty()
             } else {
-                inline.values().any(|bytes| !crate::backend::framefree::x87_registers_only(bytes))
+                inline.values().any(|bytes| !crate::backend::framefree::register_operations_only(bytes))
             },
             false,
             landing.is_some(),

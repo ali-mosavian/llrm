@@ -319,6 +319,29 @@ impl TargetLowering {
         }
     }
 
+    /// `RTLIB::RINT_F32` and the other libm routines of `RuntimeLibcalls.def`:
+    /// the C library's names, `f` for `float`, none for `double`, `l` for
+    /// the 80-bit `long double`.
+    pub fn set_libm_libcall_names(&mut self) {
+        const LIBM: [(ISD, [&str; 3]); 10] = [
+            (ISD::FRem, ["fmodf", "fmod", "fmodl"]),
+            (ISD::FRint, ["rintf", "rint", "rintl"]),
+            (ISD::FSqrt, ["sqrtf", "sqrt", "sqrtl"]),
+            (ISD::FMA, ["fmaf", "fma", "fmal"]),
+            (ISD::FSin, ["sinf", "sin", "sinl"]),
+            (ISD::FCos, ["cosf", "cos", "cosl"]),
+            (ISD::FExp, ["expf", "exp", "expl"]),
+            (ISD::FExp2, ["exp2f", "exp2", "exp2l"]),
+            (ISD::FLog, ["logf", "log", "logl"]),
+            (ISD::FLog2, ["log2f", "log2", "log2l"]),
+        ];
+        for (op, names) in LIBM {
+            for (vt, name) in [MVT::F32, MVT::F64, MVT::F80].into_iter().zip(names) {
+                self.set_libcall_name(op, vt, name);
+            }
+        }
+    }
+
     /// `setLibcallName` for the integer operation `op` of `vt`.
     pub fn set_libcall_name(
         &mut self,
@@ -1475,6 +1498,11 @@ impl TargetLowering {
                 t.set_ops(&[PseudoFMin, PseudoFMax], &[vt], Legal);
                 // (no FSINCOS node here: nothing builds one)
                 t.set_ops(&[FSin, FCos], &[vt], Expand);
+                // The pin's strict `rint` of an SSE value is the routine
+                // `rint`/`rintf` (`roundsd` needs
+                // SSE4.1); `frndint` is the x87's, and this type is not in an
+                // x87 register.
+                t.set_ops(&[StrictFRint], &[vt], Expand);
             }
             t.set_ops(&[FpExtend], &[MVT::F32, MVT::F64], Custom);
         } else {
@@ -1488,6 +1516,7 @@ impl TargetLowering {
         t.set_ops(&[Undef, Poison], &[MVT::F80], Expand);
         t.set_operation_action(FCopySign, MVT::F80, Expand);
         t.keeps_f64_constants = features.sse2;
+        t.set_libm_libcall_names();
         // L764..L860: the x87 loads of 0.0 and 1.0 (`fldz`, `fld1`, and `fchs`)
         // L690..L706: SSE has only +0.0 (`xorps`, `xorpd`)
         for (vt, one, sign) in [
