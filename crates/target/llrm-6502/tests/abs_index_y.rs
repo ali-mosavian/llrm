@@ -1,10 +1,11 @@
-//! A table access takes its index in `x` or in `y` (`abs,x`, `abs,y`), as llvm-mos'
-//! `LDAAbsIdx`/`STAbsIdx` (index class `XY`) do. The index was always copied to
-//! `x`, so a loop that kept the high byte of its 16-bit counter in `x` parked it in
-//! a cell around the table access (`stx rc3` ... `lda rc3`) and counted the high
-//! byte of the element in `y`: split_loops -2 B, memmove_overlap -11 B (6502)
-//! with the index in `y`. The assertion is on the index register of the loop's
-//! table accesses. Needs `llrm-cc` built (`LLRM_CC`).
+//! A table access takes its index in `x` or in `y` (`abs,x`, `abs,y`), as
+//! llvm-mos' `LDAAbsIdx`/`STAbsIdx` (index class `XY`) do. The index was always
+//! copied to `x`, so a loop that kept the high byte of its 16-bit counter in
+//! `x` parked it in a cell around the table access (`stx rc3` ... `lda rc3`)
+//! and counted the high byte of the element in `y`: split_loops -2 B,
+//! memmove_overlap -11 B (6502) with the index in `y`. The assertion is on the
+//! index register of the loop's table accesses. Needs `llrm-cc` built
+//! (`LLRM_CC`).
 
 use std::process::Command;
 
