@@ -1041,6 +1041,18 @@ impl Tti for X86 {
         Cost::FREE
     }
 
+    fn memory_limits(&self) -> Option<[usize; 6]> {
+        let tuning = &self.tuning;
+        Some([
+            tuning.max_stores_per_memset,
+            tuning.max_stores_per_memset_opt_size,
+            tuning.max_stores_per_memcpy,
+            tuning.max_stores_per_memcpy_opt_size,
+            tuning.max_stores_per_memmove,
+            tuning.max_stores_per_memmove_opt_size,
+        ])
+    }
+
     fn memory_intrinsic_cost(
         &self,
         family: &str,
