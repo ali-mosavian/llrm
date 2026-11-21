@@ -21,4 +21,8 @@ printf '#!/bin/sh\n[ -n "${LLRM_CLANG_M16:-}" ] || exit 1\nwhile [ $# -gt 1 ]; d
 chmod +x "$t/needs_fork"
 fork=$t/home/scratch/clang-by-sha/$(sed -n 2p "$root/toolchain/clang/pin" | cut -d' ' -f1)/bin; mkdir -p "$fork"; printf '#!/bin/sh\n' > "$fork/clang"; chmod +x "$fork/clang"
 (unset LLRM_CLANG_M16; HOME=$t/home; export HOME; run "$t/needs_fork" "$t/needs_fork" x86_16-dos O2 "$t/p.c") || { echo "FAIL: the pinned fork clang was not found"; exit 1; }
+# A compile that never ended ran the identity for hours (z80 -O3, 2.5 h) and read as neither a pass nor a refusal: it is counted as hung.
+printf '#!/bin/sh\nexec sleep 300\n' > "$t/hang"; chmod +x "$t/hang"
+out=$(IDENTITY_TIMEOUT=1 timeout 60 "$root/tools/identity_targets.sh" "$t/ok" "$t/hang" m68k-68000 O2 "$t/p.c" 2>&1) && { echo "FAIL: a hung compile passed"; exit 1; }
+case $out in *"HUNG "*"hung=1"*) ;; *) echo "FAIL: a hung compile is not named: $out"; exit 1;; esac
 echo ok
