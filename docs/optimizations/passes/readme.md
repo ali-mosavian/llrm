@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 315 documented, 5 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 316 documented, 5 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -166,6 +166,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | hoistcommon | The code that opens the arms of a branch in the same way runs before the branch once: `hoistCommonCodeFromSuccessors` of SimplifyCFG. | Named by `simplifycfg`, `sinkcommon`. | [hoistcommon](hoistcommon.md) |
 | homes | Marks each phi whose value also sits in a memory cell with `!llrm.home`, naming a store of that cell, so a spill of the phi reads the cell instead of paying for a slot. | Last in the module pipeline, after `spares`, so the instruction ids it names | [homes](homes.md) |
 | icmpchain | A branch on an or/and chain of compares of one value with constants, turned into a switch (or a range check): LLVM's [`SimplifyCFGOpt::simplifyBranchOnICmpChain`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L5469) with `ConstantComparesGatherer` ([L580](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/SimplifyCFG.cpp#L580)). | Named by `simplifycfg`. | [icmpchain](icmpchain.md) |
+| indirectbrexpand | Replace `indirectbr` by a `switch` over block numbers, for a target that has no jump through a register. | Named by `pipeline`. | [indirectbrexpand](indirectbrexpand.md) |
 | indvars | Settles what a loop's counters are worth: a counter's value after its loop becomes a number, and a narrow counter read as a wider index becomes a counter of that width. | In the body pipeline after `promote`. With `-ftree-ch` (not at -Os) it runs | [indvars](indvars.md) |
 | inferalignment | Loads, stores and memory intrinsics get the alignment their pointer is known to have, as LLVM's `InferAlignment`. | Named by `assume_declared_is_scanned_once_per_module`, `pipeline`. | [inferalignment](inferalignment.md) |
 | inferfunctionattrs | A library function the module only declares (`sin`, `strlen`, `memcmp`) gets the attributes the C library promises of it, as LLVM's `InferFunctionAttrsPass`. | Once, at the start of the module pipeline | [inferfunctionattrs](inferfunctionattrs.md) |

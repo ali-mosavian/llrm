@@ -13,6 +13,14 @@
 //! whose backend does not select `BRIND`; the target asks for it with
 //! `Tti::expands_indirect_br` (LLVM's `enableIndirectBrExpand`).
 //!
+//! # Example
+//! ```text
+//! indirectbr ptr %a, [label %one, label %two]
+//!   ==>  %n = ptrtoint ptr %a to i16
+//!        switch i16 %n, label %one [ i16 2, label %two ]
+//! blockaddress(@f, %one) ==> inttoptr (i16 1 to ptr)
+//! ```
+//!
 //! # See also
 //! `simplifycfg` (folds a known address to `br`),
 //! `llrm_mir::Context::replace_block_addresses`.
