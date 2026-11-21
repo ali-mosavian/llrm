@@ -1427,6 +1427,11 @@ fn made_of(tree: &Tree) -> IdMap<InstId, usize> {
 /// tree is kept when it costs less than the restored one, or the same when a
 /// subtree cost as much as its gather. The tree and its cost, the reduction's
 /// included.
+///
+/// DEVIATE SLP-TRIM (owner w11, exit 2026-11-29): only reduction trees are
+/// trimmed; the pin's `getTreeCost` trims every tree, so store, phi and insert
+/// trees whose subtree costs more than its gather stay whole here
+/// (object_extent_loop arm64 -O2: pin -12 on two trees, ours +23).
 fn trim_non_profitable(
     unit: &MemUnit,
     function: &Function,
