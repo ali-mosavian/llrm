@@ -318,7 +318,9 @@ fn can_sink(
         // SROA cannot speculate a store through a select of allocas, so a
         // load or store that would need a phi for its alloca is left.
         if matches!(function.instruction(first).opcode, Opcode::Load { .. } | Opcode::Store { .. })
-            && insts.iter().any(|&inst| points_into_alloca(context, function, function.instruction(inst).operands[index]))
+            && insts
+                .iter()
+                .any(|&inst| points_into_alloca(context, function, function.instruction(inst).operands[index]))
         {
             return false;
         }
