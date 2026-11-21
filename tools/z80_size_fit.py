@@ -19,7 +19,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 PROGRAMS = ROOT / "crates/target/llrm-z80/tests/programs"
 FIT = ROOT / "crates/target/llrm-z80/src/size_fit.txt"
-CLANG = os.environ.get("LLRM_PIN_CLANG", os.path.expanduser("~/scratch/llvm-build/bin/clang"))
 # a compile that does not finish at -O3 (known_loads_walks: a compile-time fault, rows Z80-COMPILE-TIME) has no row
 SKIP = {("3", "known_loads_walks")}
 
@@ -56,6 +55,9 @@ def load_run():
 
 
 def make_ir(run, level, out):
+    import pin_clang
+
+    clang = pin_clang.path()  # LLRM_PIN_CLANG, checked to be the pin's build
     out.mkdir(parents=True, exist_ok=True)
     flag = {"s": "-Os", "z": "-Oz"}.get(level, f"-O{level}")
 
@@ -65,7 +67,7 @@ def make_ir(run, level, out):
             return
         target = out / f"{name}.ll"
         done = subprocess.run(
-            [CLANG, flag, *run.CLANG_FLAGS, *run.program_flags(path)[0], str(path), "-o", str(target)],
+            [clang, flag, *run.CLANG_FLAGS, *run.program_flags(path)[0], str(path), "-o", str(target)],
             capture_output=True, text=True, cwd=ROOT,
         )
         if done.returncode:
