@@ -28,16 +28,32 @@ static PRESSURE: LazyLock<llrm_target::pressure::PressureSets> =
 static REGISTERS: LazyLock<Vec<llrm_target::registers::Register>> =
     LazyLock::new(|| llrm_target::registers::parse(include_str!("registers.regs")).expect("registers.regs parses"));
 
-/// The limit of pressure set `set` here (`computePSetLimit`): a register may
-/// be allocated if its root is a `gpr` (a6 and sp are not).
-fn pressure_limit(set: usize) -> u32 {
-    PRESSURE.limit(set, |name| {
-        REGISTERS
-            .iter()
-            .find(|one| one.name == name)
-            .and_then(|one| REGISTERS.iter().find(|root| root.name == one.root))
-            .is_some_and(|root| root.is("gpr"))
-    })
+/// The limit of every pressure set here (`computePSetLimit`): a register
+/// counts if its root is a `gpr`; `a6` and `sp` never.
+///
+/// DEVIATE M68K-LICM-LIMIT (owner wasm-3, exit 2026-12-10, when the allocator
+/// rematerialises a hoisted constant instead of spilling it): the pin counts
+/// `a6` in a function with no frame pointer (`getReservedRegs`, AR16 limit 9).
+/// With 9 the shared `MachineLICM` hoists one more value than ours keeps in a
+/// register: known_loads_walks -O3 68000 +210 B, early_exit_widths +10 B,
+/// early_exit_index +4 B against 8, with `%a6` allocatable either way.
+pub fn pressure_limits() -> Vec<u32> {
+    (0..PRESSURE.sets.len())
+        // A set whose largest class the table leaves out holds no value
+        // here: its raw limit stands.
+        .map(|set| {
+            if PRESSURE.class(&PRESSURE.sets[set].largest).is_none() {
+                return PRESSURE.sets[set].limit;
+            }
+            PRESSURE.limit(set, |name| {
+                REGISTERS
+                    .iter()
+                    .find(|one| one.name == name)
+                    .and_then(|one| REGISTERS.iter().find(|root| root.name == one.root))
+                    .is_some_and(|root| root.is("gpr"))
+            })
+        })
+        .collect()
 }
 
 /// The pin's `MCInstrDesc` of the opcode `name`.
@@ -319,20 +335,7 @@ impl Target for M68k {
     }
 
     fn pressure(&self) -> Option<(&'static llrm_target::pressure::PressureSets, Vec<u32>)> {
-        Some((
-            &PRESSURE,
-            (0..PRESSURE.sets.len())
-                // A set whose largest class the table leaves out holds no value
-                // here: its raw limit stands.
-                .map(|set| {
-                    if PRESSURE.class(&PRESSURE.sets[set].largest).is_some() {
-                        pressure_limit(set)
-                    } else {
-                        PRESSURE.sets[set].limit
-                    }
-                })
-                .collect(),
-        ))
+        Some((&PRESSURE, pressure_limits()))
     }
 
     /// An opcode this target adds above the pin's table is not described: it
