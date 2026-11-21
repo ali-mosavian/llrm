@@ -1068,10 +1068,13 @@ impl ProgramPass for Walk {
                                 if ruled
                                     && priced
                                     && growth > 0
-                                    && crate::trial::speed_unroll().is_none()
+                                    && matches!(
+                                        crate::trial::speed_unroll(),
+                                        None | Some(crate::trial::SpeedUnroll::NoInlineGrowth)
+                                    )
                                     && tti.unroll_speed_trial()
                                 {
-                                    crate::trial::note_speed_inline();
+                                    crate::trial::note_speed_trial_inline();
                                 }
                                 let forced = !ruled
                                     && site

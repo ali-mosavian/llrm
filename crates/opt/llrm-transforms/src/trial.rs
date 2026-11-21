@@ -843,13 +843,17 @@ pub struct UnrollDecisions {
     pub inlined: usize,
     /// The non-trivial unswitches that `NoUnswitch` would not make.
     pub unswitched: usize,
+    /// The inlines the SZ2 trial took that add bytes, which only
+    /// `NoInlineGrowthAll` refuses: a driver tries that variant after a
+    /// `NoInlineGrowth` compile with a count over 0.
+    pub trial_inlined: usize,
 }
 
 thread_local! {
     /// The variant of UNROLL-SPEED-TRIAL running, if any.
     static SPEED_UNROLL: Cell<Option<SpeedUnroll>> = const { Cell::new(None) };
     /// The decisions since [`take_speed_unrolls`].
-    static SPEED_UNROLLS: Cell<UnrollDecisions> = const { Cell::new(UnrollDecisions { made: 0, refused: 0, inlined: 0, unswitched: 0 }) };
+    static SPEED_UNROLLS: Cell<UnrollDecisions> = const { Cell::new(UnrollDecisions { made: 0, refused: 0, inlined: 0, unswitched: 0, trial_inlined: 0 }) };
 }
 
 /// The UNROLL-SPEED-TRIAL variant in force, if a trial compile is running.
@@ -873,6 +877,15 @@ pub(crate) fn note_speed_inline() {
     SPEED_UNROLLS.with(|cell| {
         let mut seen = cell.get();
         seen.inlined += 1;
+        cell.set(seen);
+    });
+}
+
+/// Notes an SZ2 trial inline that adds bytes.
+pub(crate) fn note_speed_trial_inline() {
+    SPEED_UNROLLS.with(|cell| {
+        let mut seen = cell.get();
+        seen.trial_inlined += 1;
         cell.set(seen);
     });
 }
