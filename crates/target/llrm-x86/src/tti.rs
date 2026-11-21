@@ -1293,6 +1293,10 @@ impl Tti for X86 {
         self.tuning.rep_movs_at_size_max
     }
 
+    fn rep_movs_at_speed_max(&self) -> u64 {
+        self.tuning.rep_movs_at_speed_max
+    }
+
     fn rep_stos_at_size(&self) -> bool {
         self.tuning.rep_stos_at_size
     }
