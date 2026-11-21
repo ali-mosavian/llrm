@@ -413,6 +413,7 @@ pub fn machine_with<'a>(
         // The pin's TailDuplicatePass: after allocation, before placement.
         Box::new(crate::backend::latetaildup::TailDuplicate {
             size: target.size || target.min_size,
+            computed_at_size: !target.skip_computed_goto_copies_at_size,
             saved: registers.saved.iter().map(|(whole, _)| *whole).collect(),
             free: registers.free,
             pointer: registers.pointer,
