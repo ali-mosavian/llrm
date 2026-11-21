@@ -370,7 +370,17 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
                 // `buildSDIVPow2WithCMov` (TargetLowering.cpp#L6710): a
                 // divisor of 2, -2, 1 or -1 keeps the default expansion.
                 let log = c.trailing_zeros();
-                if self.tli.is_some_and(|tli| tli.sdiv_pow2_with_cmov(vt)) && c != 1 && negated != 1 && log > 1 {
+                // After legalization the `select` must be one the target
+                // selects as it is (`LegalOperations`): a lane of an unrolled
+                // vector divide meets this combine with `Select` Custom.
+                let select_ok = self.level < CombineLevel::AfterLegalizeVectorOps
+                    || self.tli.is_some_and(|tli| tli.is_operation_legal(ISD::Select, vt));
+                if select_ok
+                    && self.tli.is_some_and(|tli| tli.sdiv_pow2_with_cmov(vt))
+                    && c != 1
+                    && negated != 1
+                    && log > 1
+                {
                     // `(x < 0 ? x + (2^log - 1) : x) >> log`, negated for a
                     // negative divisor.
                     let zero = self.dag.get_constant(0, vt);

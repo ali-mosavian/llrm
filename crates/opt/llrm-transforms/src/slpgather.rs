@@ -198,7 +198,18 @@ pub(crate) fn gather_cost(
     if same && !constant_of(present[0].1) {
         // `isSplat`: one insert, and the broadcast where the value repeats.
         let (at, _) = present[0];
-        total += inserts_cost(tti, vector, std::iter::once((at, true)))?;
+        // `ShuffleCostEstimator::gather`'s splat: one `getVectorInstrCost`
+        // insert into poison, free at lane 0 (not the bulk
+        // `getScalarizationOverhead` the other gathers pay).
+        let insert = tti.vector_instr_cost(
+            LaneOp::Insert,
+            vector,
+            Some(at as u32),
+            at == 0,
+            VectorInstrContext::None,
+            CostKind::RecipThroughput,
+        )?;
+        total += valid(insert)?;
         if present.len() > 1 {
             total += shuffle_cost(tti, vector, &vec![0; width])?;
         }

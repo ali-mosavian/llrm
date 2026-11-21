@@ -275,3 +275,19 @@ fn a_reduction_of_sdivs_over_gathered_muls_becomes_a_vector_sdiv_and_one_reducti
     assert_eq!(text.matches("sdiv i64").count(), 1, "only the divide after the sum stays: {text}");
     assert_eq!(text.matches("load i64").count(), 8, "the loads stay scalar: {text}");
 }
+
+/// loop_interchange (arm64 -O2): a `trunc` of one value over four lanes was
+/// priced 3, as four bulk inserts of `getScalarizationOverhead`; the pin
+/// prices a splat one `getVectorInstrCost` insert into poison (free at lane
+/// 0) and a broadcast: 1. The loop's x32 scale turned 2 extra into the
+/// tree not made (+16 B). Four distinct values do pay every lane: 4 x 2.
+#[test]
+fn a_splat_gather_is_a_free_insert_and_a_broadcast_and_distinct_values_pay_each_lane() {
+    use llrm_mir::module::{Operand, ValueId};
+    use llrm_mir::tti::Ty;
+    let tti = llrm_arm64::tti::AArch64::of_cpu("generic").unwrap();
+    let value = |id| Operand::Value(ValueId(id));
+    let cost = |lanes: &[Operand]| crate::slpgather::gather_cost(&tti, Ty::Int(16), lanes, &[]);
+    assert_eq!(cost(&[value(1), value(1), value(1), value(1)]), Some(1));
+    assert_eq!(cost(&[value(1), value(2), value(3), value(4)]), Some(8));
+}

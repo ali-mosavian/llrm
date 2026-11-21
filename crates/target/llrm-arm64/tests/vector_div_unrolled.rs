@@ -54,3 +54,18 @@ fn a_vector_remainder_is_four_scalar_remainders() {
     let divides = text.lines().filter(|line| line.trim().starts_with("sdiv ")).count();
     assert_eq!(divides, 4, "{text}");
 }
+
+/// jpeg_fixed at O2: `sdiv <8 x i64>` by a power of two per lane (512, 1024)
+/// was `CannotSelect("Select Simple(I64)")`. Each lane met the compare-and-
+/// select form of `sdiv x, 2^k` after legalization, where `Select` is Custom.
+#[test]
+fn a_vector_divide_by_different_powers_of_two_is_compiled() {
+    let text = assembly(
+        "define void @f(ptr %a, ptr %c) {\n\
+         \x20 %x = load <2 x i64>, ptr %a, align 8\n\
+         \x20 %z = sdiv <2 x i64> %x, <i64 512, i64 1024>\n\
+         \x20 store <2 x i64> %z, ptr %c, align 8\n\
+         \x20 ret void\n}\n",
+    );
+    assert!(!text.contains("sdiv "), "{text}");
+}
