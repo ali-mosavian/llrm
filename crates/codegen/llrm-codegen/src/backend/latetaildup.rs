@@ -23,9 +23,8 @@
 //! A computed goto (an indirect jump whose every successor has its address
 //! taken) is copied up to ten instructions whatever the size
 //! (`terminatorIsComputedGotoWithSuccessors`): it undoes the factoring of the
-//! `goto *` of an interpreter's dispatch into one block. DEVIATE TL4 (owner
-//! x86-m32-b, exit 2026-11-27): a target may keep it factored at `-Os`, where
-//! bytes come first (m32: QuickrBasic's `exec_loop` +5.1 KB for 138 copies).
+//! `goto *` of an interpreter's dispatch into one block. DEVIATE TL4 (no target
+//! states it since m32 dropped it): a target may keep it factored at `-Os`.
 //!
 //! DEVIATE TL1 (owner greedy-subreg, exit 2026-11-27): a tail with a call, a
 //! call's record, a group, a symbol, bytes spread over others, an indirect jump
@@ -536,8 +535,8 @@ mod tests {
         assert!(dup(dispatch(20, 4, true), true).blocks.iter().all(|block| block.at != 99));
     }
 
-    /// TL4: a target that keeps bytes first (m32: `exec_loop`'s 138 copies are
-    /// +5.1 KB at `-Os`) leaves the dispatch one block at `-Os` only.
+    /// TL4: a target that keeps bytes first leaves the dispatch one block at
+    /// `-Os` only.
     #[test]
     fn test_a_target_can_keep_a_computed_goto_factored_at_os() {
         let kept = |size| {
