@@ -131,15 +131,22 @@ fn has_fp(function: &Function) -> bool {
     function.frame_pointer_all || function.has_var_sized || function.frame_address_taken
 }
 
+/// `hasFPImpl` with `hasStackRealignment`: a realigned stack needs the frame
+/// pointer; the locals are addressed from the stack pointer and the arguments
+/// from the frame pointer. The objects it reads are the ones a function has
+/// before allocation (the spill slots align at 4), so allocation asks it too:
+/// `%a6` is a general register where this is false.
+pub fn needs_frame_pointer(function: &Function) -> bool {
+    let max_align = function.objects.iter().map(|one| one.align).max().unwrap_or(1);
+    let stack_align = if function.stack_align == 0 { STACK_ALIGN } else { function.stack_align };
+    has_fp(function) || max_align > stack_align.max(REALIGN_ABOVE)
+}
+
 /// Lays the frame out as `PEIImpl::calculateFrameObjectOffsets` does with
 /// M68k's hooks: with a frame pointer the saved `%a6` is a fixed object just
 /// below the return address (`assignCalleeSavedSpillSlots`).
 pub fn layout(function: &Function) -> Layout {
-    let max_align = function.objects.iter().map(|one| one.align).max().unwrap_or(1);
-    let stack_align = if function.stack_align == 0 { STACK_ALIGN } else { function.stack_align };
-    // `hasFPImpl`: a realigned stack needs the frame pointer; the locals are
-    // addressed from the stack pointer and the arguments from the frame pointer
-    let has_fp = has_fp(function) || max_align > stack_align.max(REALIGN_ABOVE);
+    let has_fp = needs_frame_pointer(function);
     let mut objects = function.objects.clone();
     let mut fixed = function.fixed;
     if has_fp {

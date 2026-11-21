@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/machinecp.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/machinecp.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/machinecp.rs sha256:16a63202954d3f2353f6ce4073e24007e69b8dd0796b4bfb26b7fde9f83eaf32 -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/machinecp.rs sha256:7e5348393b94f69572077ddc4afbbd3a34df5c15dec15326e9712ee7dfa6c622 -->
 
 # machinecp
 
@@ -9,10 +9,11 @@ removal: LLVM's `MachineCopyPropagation`.
 ## How it works
 Registers are chosen. Each block is walked twice and alone, backward then
 forward, with a tracker keyed by the byte lanes of the general registers
-(28 of them, LLVM's register units). The tracker knows, per lane, the copy
-that last defined it, whether that copy is still available (neither side
-written since), the lanes it defines, and the instructions that read a
-copy's source (`src_users`).
+(87 of them with the segment registers, LLVM's register units: a root's four
+bytes and, for a 64-bit view, the upper half as one lane). The tracker
+knows, per lane, the copy that last defined it, whether that copy is still
+available (neither side written since), the lanes it defines, and the
+instructions that read a copy's source (`src_users`).
 
 Forward (`forwardCopyPropagateBlock`): a copy that repeats an available one
 (`ax = bx ... bx = ax` too) is dropped; a read of a copy's destination
