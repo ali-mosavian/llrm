@@ -854,6 +854,14 @@ pub trait Tti {
         true
     }
 
+    /// DEVIATE LV-NARROW-IV (owner llrm-target-x86-m64-b, exit 2026-11-30): a
+    /// loop chosen for widening has its integer chains of the counter
+    /// narrowed first (`loopvectorizenarrow`), as gcc's over-widening pattern
+    /// does.
+    fn narrows_induction_chains(&self) -> bool {
+        false
+    }
+
     /// The backend selects a vector under a register (`<8 x i8>`): the pin's
     /// `TypeWidenVector` makes it one register, as the x86 targets do. A port
     /// whose backend takes none keeps the loop scalar.
@@ -1441,6 +1449,16 @@ pub trait Tti {
     /// False: only when tuned for size.
     fn string_runs_at_speed(&self) -> bool {
         false
+    }
+
+    /// `MaxStoresPer{Memset,Memcpy,Memmove}` and their `...OptSize` (in that
+    /// order, as [`Tuning`](crate::target::Tuning) has them) where this target
+    /// states them: the DAG builder's limits for a constant fill or copy by
+    /// pieces. A `Described` machine's `tuning()` was the pin's, so a limit set
+    /// only in the target's own table reached the TTI and never the selector
+    /// (an -Os experiment changed nothing until traced). None: the pin's.
+    fn memory_limits(&self) -> Option<[usize; 6]> {
+        None
     }
 
     /// DEVIATE OS-OUTLINE-TRIAL (owner llrm-target-m68k, exit 2026-12-20):

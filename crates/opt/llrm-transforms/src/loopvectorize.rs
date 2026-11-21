@@ -68,6 +68,7 @@ use llrm_analysis::scev::analysis::ScevSession;
 use llrm_analysis::scev::{Cx, ScalarEvolution};
 use llrm_analysis::typebasedaa::TypeBasedAA;
 use llrm_mir::context::{Constant, ConstantKind};
+use llrm_mir::dense::IdMap;
 use llrm_mir::edit::Position;
 use llrm_mir::intrinsics::Intrinsic;
 use llrm_mir::loopinfo::Loop;
@@ -82,6 +83,8 @@ use crate::loopvectorizeaccumulator as accumulator;
 use crate::loopvectorizeearlyexit as early_exit;
 use crate::loopvectorizeinterleave::{self as interleave, Extracted};
 use crate::loopvectorizelegality::{Legality, can_vectorize, const_int_step, widened_intrinsic};
+use crate::loopvectorizenarrow as narrow;
+use crate::loopvectorizeplan::cheaper_per_lane;
 use crate::loopvectorizeplan::{
     Live, LoopFacts, Plan, Pressure, Recipe, ScalarFacts, choose_interleave, epilogue_vf, pin_may_vectorize, plan,
 };
@@ -2348,8 +2351,15 @@ impl FunctionPass for LoopVectorize {
                 .collect()
         };
         let mut next = 0;
+        // Loops whose chains were narrowed: the function before, and the price
+        // of the plan before; `None` once settled.
+        let mut narrowing: IdMap<BlockId, Option<(Function, Option<(i64, u32)>)>> = IdMap::new();
         'worklist: while let Some(&(header, forced)) = worklist.get(next) {
             next += 1;
+            if restore_unplanned(&mut narrowing, Some(header), unit.function) {
+                session = ScevSession::of(unit.context, unit.function, &outer);
+            }
+            let mut price: Option<(i64, u32)> = None;
             let planned = 'plan: {
                 let (se, env) = session.split(unit.layout, &outer.globals, &outer.metadata);
                 let cx = env.cx(&*unit.context, &*unit.function);
@@ -2499,6 +2509,7 @@ impl FunctionPass for LoopVectorize {
                                 None
                             }
                             Ok(chosen) => {
+                                price = crate::loopvectorizeplan::chosen_price(&*tti, &facts, chosen);
                                 // `selectBestEpiloguePlan`: not where a memory
                                 // check guards the main loop (the epilogue
                                 // would make its own).
@@ -2607,6 +2618,46 @@ impl FunctionPass for LoopVectorize {
                 }
                 other => other,
             };
+            // DEVIATE LV-NARROW-IV: the narrowed loop is planned again and kept
+            // where it is cheaper per lane.
+            if let Planned::Vector(chosen, widening, _) = &planned
+                && forced.is_none()
+                && tti.narrows_induction_chains()
+            {
+                match narrowing.remove(&header) {
+                    None => {
+                        let backup = unit.function.clone();
+                        if narrow::narrow_induction_chains(unit.context, unit.function, header, widening.primary_phi) {
+                            why(unit, &outer, header, "chains of the counter narrowed");
+                            narrowing.insert(header, Some((backup, price)));
+                            session = ScevSession::of(unit.context, unit.function, &outer);
+                            worklist.insert(next, (header, None));
+                            continue;
+                        }
+                        narrowing.insert(header, None);
+                    }
+                    Some(Some((backup, before))) => {
+                        let better = matches!(
+                            (price, before),
+                            (Some(new), Some(old)) if cheaper_per_lane(new, old)
+                        );
+                        if !better {
+                            why(unit, &outer, header, "chains of the counter kept wide: not cheaper per lane");
+                            *unit.function = backup;
+                            narrowing.insert(header, None);
+                            session = ScevSession::of(unit.context, unit.function, &outer);
+                            worklist.insert(next, (header, None));
+                            continue;
+                        }
+                        changed = true;
+                        narrowing.insert(header, None);
+                        let _ = chosen;
+                    }
+                    Some(None) => {
+                        narrowing.insert(header, None);
+                    }
+                }
+            }
             let (vf, ic, shape, reduced) = match &planned {
                 Planned::Vector(chosen, widening, _) => {
                     (chosen.vf, chosen.ic, widening.shape, widening.reductions.iter().map(|one| one.latch).collect())
@@ -2714,11 +2765,34 @@ impl FunctionPass for LoopVectorize {
             // The loop's body is new: the expressions are stale.
             session = ScevSession::of(unit.context, unit.function, &outer);
         }
+        restore_unplanned(&mut narrowing, None, unit.function);
         if changed && llrm_support::debug::enabled("loop-vectorize-ir-after") {
             eprintln!("{}", llrm_mir::print::body(unit.context, unit.function));
         }
         if changed { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
     }
+}
+
+/// A narrowed loop whose plan came to nothing (the next loop is being planned,
+/// or the pass ends) goes back to its wide chains; whether any did.
+fn restore_unplanned(
+    narrowing: &mut IdMap<BlockId, Option<(Function, Option<(i64, u32)>)>>,
+    planning: Option<BlockId>,
+    function: &mut Function,
+) -> bool {
+    let stale: Vec<BlockId> = narrowing
+        .iter()
+        .filter(|(header, state)| state.is_some() && Some(*header) != planning)
+        .map(|(header, _)| header)
+        .collect();
+    let mut restored = false;
+    for header in stale {
+        if let Some(Some((backup, _))) = narrowing.insert(header, None) {
+            *function = backup;
+            restored = true;
+        }
+    }
+    restored
 }
 
 /// `VectorizeMemoryCheckThreshold`: the most runtime memory checks a loop may
