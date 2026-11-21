@@ -1710,7 +1710,6 @@ fn an_m64_v2i64_multiply_is_pmuludq() {
     );
     assert_eq!(pmuludq(&by_small), 2);
 }
-<<<<<<< HEAD
 
 /// A product of two `i16` values widened to `i64` (`(long)a[i] * b[i]`, dot's loop) took eight `pmuludq`
 /// ladders for `<8 x i64>`; gcc's `vect_recog_widen_mult_pattern` and the pin's `reduceVMULWidth` (for `i32`) do
@@ -1729,7 +1728,8 @@ fn an_m64_vector_multiply_of_shorts_is_pmullw_and_pmulhw() {
         let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
         let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
         let named = |name: &str| {
-            done.body.insns().iter().filter(|i| i.what.as_ref().is_some_and(|w| w.name.as_deref() == Some(name))).count()
+            let insns = done.body.insns();
+            insns.iter().filter(|i| i.what.as_ref().is_some_and(|w| w.name.as_deref() == Some(name))).count()
         };
         (named("pmuludq"), named("pmullw"), named("pmulhw"))
     };
@@ -1756,5 +1756,3 @@ fn an_m64_v8i16_splat_is_pshuflw_and_pshufd() {
     assert_eq!((named("pshuflw"), named("pshufd")), (1, 1));
     assert!(named("mov") <= 1, "word stores of the splat: {}", named("mov"));
 }
-=======
->>>>>>> origin/release/next
