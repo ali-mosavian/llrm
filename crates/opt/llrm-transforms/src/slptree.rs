@@ -29,11 +29,12 @@
 //! scalar, makes the tree not form (the pin's scheduler may order it).
 //!
 //! DEVIATE SLP3 (owner arm64, exit 2026-11-24): `BlockScheduling`'s dependency
-//! graph is not built: the loads must all stand before the first store, and
-//! nothing else between the first load and the last store may write memory, nor
-//! read it after the first store. A load or store between the window's stores
-//! that `BasicAA`, scoped-noalias and TBAA say cannot touch their bytes may
-//! stay (`StoreSeparation`); a call may not.
+//! graph is not built: a load that stands after one of the window's stores must
+//! be one that `BasicAA`, scoped-noalias and TBAA say cannot read its bytes,
+//! and nothing else between the first load and the last store may write memory,
+//! nor read it after the first store. A load or store between the window's
+//! stores that `BasicAA`, scoped-noalias and TBAA say cannot touch their bytes
+//! may stay (`StoreSeparation`); a call may not.
 //!
 //! # Runs
 //! Under `slpvectorize`, on a window of stores whose values are not all
@@ -43,7 +44,8 @@
 //! `slpvectorize`.
 //!
 //! # Example
-//! Four `fmuladd`s of one scalar and four consecutive loads, plus a constant, stored to four consecutive floats, become one vector chain.
+//! Four `fmuladd`s of one scalar and four consecutive loads, plus a constant,
+//! stored to four consecutive floats, become one vector chain.
 //!
 //! ```text
 //! 4 x (load c[i]; fmuladd a, c[i], 1.0; fadd 128.5; store out[i])
@@ -1437,11 +1439,19 @@ fn schedulable(
         let (first, last) =
             (entry.insts.iter().map(at).min().expect("a bundle"), entry.insts.iter().map(at).max().expect("a bundle"));
         if entry.kind == Kind::Load {
-            // Loads of the seed block stand before its first store; the loads
-            // move down to the last, past nothing that writes.
+            // The loads move to the first, before every store of the window: a
+            // load that stands after a store it may read the bytes of would
+            // read the old ones (`BlockScheduling`'s memory dependence,
+            // `BatchAA`).
             if block == seed && last > first_store {
-                llrm_support::debug!("slp", "tree: a load stands after the first store");
-                return false;
+                for load in entry.insts.iter().filter(|load| at(load) > first_store) {
+                    let mut earlier =
+                        StoreSeparation::new(unit, root.insts.iter().copied().filter(|store| at(store) < at(load)));
+                    if !earlier.clear(function, *load) {
+                        llrm_support::debug!("slp", "tree: a load stands after a store it may read");
+                        return false;
+                    }
+                }
             }
             for (order, inst) in function.iter_block(block).enumerate() {
                 let writes = match function.instruction(inst).opcode {

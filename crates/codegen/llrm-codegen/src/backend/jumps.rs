@@ -567,11 +567,22 @@ pub fn placed_explicit(
     _reachable(&LirBody { odds, ..body.clone() }, blocks)
 }
 
+/// The blocks the branch folding must keep as they are: a loop's header, and a
+/// block whose address is taken, which a `blockaddress` names and an
+/// `indirectbr` reaches by it (`MachineBasicBlock::hasAddressTaken`, which
+/// `BranchFolding` checks before it removes or merges a block).
+fn _protected(body: &LirBody) -> BTreeSet<i64> {
+    body.loop_trip_counts
+        .iter()
+        .map(|(header, _count)| *header)
+        .chain(body.address_symbols.keys().copied())
+        .collect()
+}
+
 pub fn threaded(body: &LirBody) -> LirBody {
     let body = _hoisted(body);
     let body = _reachable(&body, body.blocks.clone());
-    let protected: BTreeSet<i64> = body.loop_trip_counts.iter().map(|(header, _count)| *header).collect();
-    branchfold::folded(&body, &protected)
+    branchfold::folded(&body, &_protected(&body))
 }
 
 /// The value `one` is renamed to, through every rename after it.
@@ -1126,8 +1137,7 @@ pub fn _passage_late(block: &LirBlock) -> Option<i64> {
 /// the last reader of values. Exit: delete identity copies at the end of
 /// allocation and drop the anchors' value uses in `machinecp`.
 pub fn threaded_late(body: &LirBody) -> LirBody {
-    let protected: BTreeSet<i64> = body.loop_trip_counts.iter().map(|(header, _count)| *header).collect();
-    branchfold::folded_late(body, &protected)
+    branchfold::folded_late(body, &_protected(body))
 }
 
 pub fn _predecessors(blocks: &[Block]) -> IndexMap<i64, BTreeSet<i64>> {
