@@ -597,3 +597,23 @@ fn a_scalar_access_adds_no_address_cost_on_x86_64() {
     let x86 = X86::of_cpu("x86-64").unwrap();
     assert_eq!(x86.scalar_access_address_cost(CostKind::RecipThroughput), Cost::FREE);
 }
+
+/// `(long)a[i] * b[i]` of `i16` values priced as `<8 x i64>` ladders (28 for the multiply, 24 for the two
+/// extensions) kept dot's loop scalar, 39% behind gcc. Lowered by `pmullw`/`pmulhw` it is 4 plus the extension of
+/// the products, and the operand extensions leave no instruction.
+#[test]
+fn a_multiply_of_two_shorts_widened_to_i64_is_priced_as_pmullw_and_pmulhw() {
+    let x86 = X86::of_cpu("x86-64").unwrap();
+    let wide = VectorTy { lane: Ty::Int(64), count: 8 };
+    let shorts = VectorTy { lane: Ty::Int(16), count: 8 };
+    let short = Some(ExtOperand { kind: CastKind::SExt, src: Ty::Int(16) });
+    let multiply = x86.vector_arithmetic_cost_ext(ArithOp::Mul, wide, [short, short], CostKind::RecipThroughput);
+    let products = VectorTy { lane: Ty::Int(32), count: 8 };
+    let extension = x86.vector_cast_cost(CastKind::SExt, wide, products, CostKind::RecipThroughput);
+    assert_eq!(multiply, Ok(extension.map(|extend| Cost::of(4 + extend.value))));
+    let user = ExtUser { op: Some(ArithOp::Mul), operands: [short, short], index: 0 };
+    assert_eq!(x86.vector_ext_cost(CastKind::SExt, wide, shorts, &[user], CostKind::RecipThroughput), Some(Cost::FREE));
+    // One operand not extended: the multiply is the pin's `<8 x i64>` one, not the widening.
+    let other = x86.vector_arithmetic_cost_ext(ArithOp::Mul, wide, [short, None], CostKind::RecipThroughput);
+    assert_ne!(other, multiply);
+}

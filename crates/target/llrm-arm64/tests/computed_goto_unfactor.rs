@@ -42,16 +42,14 @@ done:
 /// dispatch and the one indirect branch predicted badly.
 #[test]
 fn a_factored_computed_goto_is_copied_into_each_handler() {
-    let asm = driver::assembly(THREADED, Platform::Linux, Level::O2).expect("lowers");
-    assert!(jumps(&asm) >= 4, "{} indirect jumps, want one per handler and the entry:\n{asm}", jumps(&asm));
-}
-
-/// DEVIATE ARM64-CGOTO-OS: at -Os the dispatch stays shared (QB `exec.o` 16,460
-/// B against 22,116 B copied; the pin's 17,952 B needs its handler tail merge).
-#[test]
-fn at_os_the_dispatch_stays_one_shared_block() {
-    let asm = driver::assembly(THREADED, Platform::Linux, Level::Os).expect("lowers");
-    assert_eq!(jumps(&asm), 1, "{asm}");
+    for level in [Level::O2, Level::Os] {
+        let asm = driver::assembly(THREADED, Platform::Linux, level).expect("lowers");
+        assert!(
+            jumps(&asm) >= 4,
+            "{level:?}: {} indirect jumps, want one per handler and the entry:\n{asm}",
+            jumps(&asm)
+        );
+    }
 }
 
 fn jumps(asm: &str) -> usize {

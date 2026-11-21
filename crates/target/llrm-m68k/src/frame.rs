@@ -38,7 +38,7 @@ use crate::reg;
 /// `M68kSubtarget::getSlotSize`, and `getOffsetOfLocalArea`'s magnitude.
 const SLOT: i64 = 4;
 /// `M68kSubtarget::stackAlignment`.
-const STACK_ALIGN: i64 = 8;
+pub const STACK_ALIGN: i64 = 8;
 
 /// The shipped build's stack alignment: m68k Linux, AmigaOS and TOS ask for
 /// no more than 4.
