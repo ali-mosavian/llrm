@@ -1966,18 +1966,9 @@ pub fn recorded(
     // runs MemCpyOpt once, before the sink and the phi folds that leave a
     // compound literal as `memset(tmp); ...; memcpy(dst, tmp)`; run again, the
     // copy is a memset of `dst` and `tmp` is dead.
-    if applied.options.prefers_size()
-        && (std::env::var_os("LLRM_LATE_MEMCPYOPT").is_some()
-            || program.target.tti().is_some_and(|tti| tti.late_memcpyopt_at_size()))
-    {
+    if applied.options.prefers_size() && program.target.tti().is_some_and(|tti| tti.late_memcpyopt_at_size()) {
         manager.add(memcpyopt::MemCpyOpt);
         manager.add(deadstore::DeadStoreElimination);
-        if std::env::var("LLRM_LATE_MEMCPYOPT").is_ok_and(|v| v == "2") {
-            manager.add(crate::combine_pass::Combine {
-                enabled: applied.options.combine,
-                phi_constant_users: applied.options.prices_bytes(),
-            });
-        }
     }
     // Before LSR: a factor of two or a scale the product carries still shows as
     // a shift.
