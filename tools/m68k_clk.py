@@ -40,6 +40,13 @@ def library_bytes(cc, gcc_root, cpu, level, obj):
     return sum(program_size.members_of(program_size.text_bytes(mapfile.read_text())).values())
 
 
+def loaded_bytes(size_output):
+    """The loaded footprint of `size`'s Berkeley row: text (code and read-only data) plus data. The text column alone left out `.data`, so a static table
+    that is not const (word_compare_branches, 56 B) was in neither side's bytes."""
+    columns = size_output.split("\n")[1].split()
+    return str(int(columns[0]) + int(columns[1]))
+
+
 def parse_clocks(stdout):
     """The clocks cell of the first `| NAME.exe | insns | clk | clk/call |` row. `None` (unmeasured) when there is no such row, the cell is empty, or it is a bound (`N*`: unknown loop count) or uncovered (`?`): a bound is not a count."""
     for line in stdout.splitlines():
@@ -140,7 +147,7 @@ def main():
                         if args.libs_only:
                             library = library_bytes(args.cc, gcc_root, cpu, level, obj)
                             libs[side] = "" if library is None else str(library)
-                            cells[side] = (subprocess.run([size, str(obj)], capture_output=True, text=True, env=sweep.tool_env(gcc_root)).stdout.split("\n")[1].split()[0], "")
+                            cells[side] = (loaded_bytes(subprocess.run([size, str(obj)], capture_output=True, text=True, env=sweep.tool_env(gcc_root)).stdout), "")
                             continue
                         link = subprocess.run([gcc, f"-m{cpu}", "-msoft-float", "-nostdlib", "-static", "-ffreestanding", "-o", str(exe), str(obj), *support],
                                               capture_output=True, text=True, env=sweep.tool_env(gcc_root))
@@ -151,7 +158,7 @@ def main():
                         runs[side] = run_once(exe, cpu)
                         library = library_bytes(args.cc, gcc_root, cpu, level, obj)
                         libs[side] = "" if library is None else str(library)
-                        cells[side] = (text.split("\n")[1].split()[0], price(cycles, exe, cpu, gcc_root) or "")
+                        cells[side] = (loaded_bytes(text), price(cycles, exe, cpu, gcc_root) or "")
                     if not args.libs_only and not same_output([runs.get("ours"), runs.get("gcc")]):
                         cells = {side: (cell[0], "") for side, cell in cells.items()}  # bytes stay, clocks of unequal runs do not
                 print("\t".join([cpu, path.stem, level, *cells.get("ours", ("", "")), *cells.get("gcc", ("", "")), libs.get("ours", ""), libs.get("gcc", "")]), flush=True)
