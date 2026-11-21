@@ -278,7 +278,8 @@ fn common_tail(
 /// (`ProfitableToMerge`'s layout-successor and `OptForSize` rules).
 ///
 /// DEVIATE: the pin takes the pairs by the hash of their ends, not by the last
-/// instruction. Exit: 2026-12-11.
+/// instruction, and the first `TAIL_MERGE_THRESHOLD` predecessors of a block
+/// at a time, not chunks of a group. Exit: 2026-12-11.
 fn merge_return_tails(
     blocks: &mut Vec<Lowered>,
     optsize: bool,
@@ -340,7 +341,10 @@ fn merge_return_tails(
             }
         }
         let mut best: Option<(usize, usize, usize)> = None;
-        for group in groups.values().filter(|group| group.len() > 1 && group.len() <= TAIL_MERGE_THRESHOLD) {
+        // `-tail-merge-threshold`: no more than that many blocks are compared
+        // together; the pin takes the first ones, then the rest in a later
+        // round (here: in chunks, in block order).
+        for group in groups.values().flat_map(|group| group.chunks(TAIL_MERGE_THRESHOLD)).filter(|group| group.len() > 1) {
             for (a, &x) in group.iter().enumerate() {
                 for &y in &group[a + 1..] {
                     let ((one, one_insts), (other, other_insts)) = (&ending[x], &ending[y]);
@@ -1123,6 +1127,34 @@ mod tests {
         };
         assert_eq!(zeroings(true), 1);
         assert_eq!(zeroings(false), 2);
+    }
+
+    /// `-tail-merge-threshold` bounds the blocks compared at once, not the
+    /// blocks merged: 160 handlers ending in the same store and jump were left
+    /// as 160 copies (QB `exec.o`: 203 handlers, 43 of them `str; mov; b`).
+    #[test]
+    fn more_blocks_than_the_threshold_with_one_tail_still_merge() {
+        use crate::mc::inst::{Logic, Shift};
+        let jump = |to: &str| Inst::Branch { link: false, target: Target::Label(to.into()) };
+        let zero = || Inst::LogicShifted {
+            op: Logic::Orr,
+            invert: false,
+            width: Width::X,
+            rd: Gpr(0),
+            rn: Gpr(31),
+            rm: Gpr(31),
+            shift: Shift::Lsl,
+            amount: 0,
+        };
+        let many = TAIL_MERGE_THRESHOLD + 10;
+        let mut blocks = vec![block(".Lf.0", (0..many).map(|n| cbz(1, &format!(".Lf.{}", n + 1))).collect())];
+        for n in 0..many {
+            blocks.push(block(&format!(".Lf.{}", n + 1), vec![Inst::Nop, zero(), zero(), jump(".Lf.x")]));
+        }
+        blocks.push(block(".Lf.x", vec![Inst::Ret { rn: Gpr(30) }]));
+        let out = fold(blocks, &mut [], &Odds::default(), false, &[]);
+        let zeroings = out.iter().flat_map(|block| &block.insts).filter(|inst| **inst == zero()).count();
+        assert_eq!(zeroings, 2, "the tail is written once: two zeroing instructions");
     }
 
     /// The loop's header test was copied into its latch, and the copy lost the
