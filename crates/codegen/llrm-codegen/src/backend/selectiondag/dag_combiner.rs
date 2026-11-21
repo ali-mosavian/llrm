@@ -4225,7 +4225,7 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
     }
 
     /// The hoists of `visitSUB`
-    /// ([L4530](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L4522)
+    /// ([L4522](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L4522)
     /// to L4548): a one-use `add` or `sub` of a constant under the
     /// subtraction hands the constant to its result. `y` is no constant here:
     /// `sub x, C` is already `add x, -C`.
