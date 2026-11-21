@@ -114,6 +114,7 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // a pop is 4 clocks, the add 1 (select_of_constants +10% clocks).
         pops_arguments_at_size: true,
         pops_arguments_cold_only_at_size: true,
+        pushes_pad_at_size: true,
         // DEVIATE X87-FCMP-AH at -O1 (owner x87-c, exit 2026-11-24): `sahf`,
         // not `test ah`, where bytes are held: x_ld_cmp3 O1 184 -> 180 B. m16
         // O1 keeps the test until its counted cells are judged.
