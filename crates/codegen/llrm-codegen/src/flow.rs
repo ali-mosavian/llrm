@@ -417,6 +417,7 @@ pub fn machine_with<'a>(
             saved: registers.saved.iter().map(|(whole, _)| *whole).collect(),
             free: registers.free,
             pointer: registers.pointer,
+            frame_kept: registers.kept,
         }),
         // Last: this physical order decides which explicit edge is now
         // fall-through.
