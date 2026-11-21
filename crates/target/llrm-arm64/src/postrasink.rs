@@ -39,7 +39,7 @@ use crate::mfunc::{MFunc, Op, successors_of};
 
 /// Registers as bits: the 31 general ones, then the 32 vector ones. `sp`/`zr`
 /// (31) is nothing that moves or is live.
-fn bit(register: Reg) -> Option<u64> {
+pub(crate) fn bit(register: Reg) -> Option<u64> {
     match register {
         Reg::Gpr(Gpr(number)) if number < 31 => Some(1 << number),
         Reg::Fpr(vreg) if vreg.0 < 32 => Some(1 << (32 + vreg.0)),
@@ -52,7 +52,7 @@ fn mask(registers: &[Reg]) -> u64 {
 }
 
 /// The registers live into each block.
-fn live_in(function: &MFunc, successors: &[Vec<usize>]) -> Vec<u64> {
+pub(crate) fn live_in(function: &MFunc, successors: &[Vec<usize>]) -> Vec<u64> {
     let count = function.blocks.len();
     let mut live = vec![0u64; count];
     let mut changed = true;
