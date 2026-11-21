@@ -17,6 +17,10 @@ class ParseClocks(unittest.TestCase):
         self.assertIsNone(parse_clocks("| a.exe | 9 | 24634* | 1.0 |\n"))
         self.assertIsNone(parse_clocks("| a.exe | 9 | 24634? | 1.0 |\n"))
 
+    def test_a_published_maximum_bound_is_kept_as_an_upper_bound(self):
+        # memmove_overlap 68020 O2 held two `muls.l` at their maximum: `<=4668` against gcc's 8548 was a blank cell
+        self.assertEqual(parse_clocks("| a.exe | 9 | <=4668 | 1.0 |\n"), "<=4668")
+
     def test_no_program_row_is_none_not_zero(self):
         self.assertIsNone(parse_clocks("| exe | insns | 68000 clk |\n"))
         self.assertIsNone(parse_clocks(""))
@@ -79,3 +83,10 @@ def test_gcc_builds_the_clang_branch_of_a_program_that_tests_it(tmp_path):
     plain = tmp_path / "q.c"
     plain.write_text("int a;\n")
     assert "-D__clang__" not in m68k_clk.gcc_command("gcc", "/", "68020", "Os", plain, "p.o", False, [])
+
+
+def test_the_bytes_of_a_cell_are_text_plus_data():
+    """A static table that is not const sits in `.data`; the text column alone gave word_compare_branches 208 B on both sides, 264 B loaded."""
+    from m68k_clk import loaded_bytes
+
+    assert loaded_bytes("   text\t   data\t    bss\t    dec\t    hex\tfilename\n    208\t     56\t      0\t    264\t    108\to.o\n") == "264"
