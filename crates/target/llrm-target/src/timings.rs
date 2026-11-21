@@ -98,6 +98,11 @@ pub struct CpuTable {
     /// duplication leaves a computed goto's dispatch factored at `-Os`, where
     /// the pin copies it (up to ten instructions) and bytes come first here.
     pub skip_computed_goto_copies_at_size: bool,
+    /// DEVIATE INLINE-FRAME-SIZE (owner x86-m32-b, exit 2026-12-05): inline
+    /// code that is only x87 register operations or x87 through a register
+    /// leaves the frame register free at `-Os` too, as at speed. Off: any
+    /// inline code keeps it until `masm` has compared the two forms (m16).
+    pub register_inline_frees_frame_at_size: bool,
     /// `BranchFolder::TailMergeBlocks` as the pin runs it: no hot-cycle guard and no three-block minimum
     /// (T14 and D1 of jumps-tailmerge-check.md lifted). Off: the guards stand.
     pub tail_merge_pin_faithful: bool,
@@ -281,6 +286,9 @@ impl Timings {
                     ("scalars", "post_ra_tail_duplicate") => table.post_ra_tail_duplicate = number()? != 0,
                     ("scalars", "skip_computed_goto_copies_at_size") => {
                         table.skip_computed_goto_copies_at_size = number()? != 0
+                    }
+                    ("scalars", "register_inline_frees_frame_at_size") => {
+                        table.register_inline_frees_frame_at_size = number()? != 0
                     }
                     ("scalars", "tail_merge_pin_faithful") => table.tail_merge_pin_faithful = number()? != 0,
                     ("scalars", "unordered_branch_odds") => table.unordered_branch_odds = number()? != 0,

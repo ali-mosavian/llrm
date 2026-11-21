@@ -54,8 +54,8 @@ use llrm_mir::module::{InstId, Operand, ValueDef};
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
 use llrm_mir::simplify::simplify_instruction_in;
 use llrm_mir::types::{Type, TypeId};
-use llrm_mir::valuetracking::pattern::{self, IntrinsicId};
 use llrm_mir::valuetracking::guarantee::SmallSet;
+use llrm_mir::valuetracking::pattern::{self, IntrinsicId};
 use llrm_mir::valuetracking::signbits::{compute_max_significant_bits, compute_num_sign_bits};
 use llrm_mir::valuetracking::{Query, known, nonzero};
 
@@ -524,7 +524,8 @@ fn can_evaluate_truncated(
     ty: TypeId,
     cxt: InstId,
 ) -> bool {
-    let mut evaluator = Evaluator { c, cxt, visited: SmallSet::default(), evaluable: SmallSet::default(), pending: Vec::new() };
+    let mut evaluator =
+        Evaluator { c, cxt, visited: SmallSet::default(), evaluable: SmallSet::default(), pending: Vec::new() };
     // Whether all users of the many-use values were visited is asked last,
     // outside the recursion.
     evaluator.can_evaluate(v, ty, Pred::Truncated) && evaluator.all_pending_visited()
@@ -539,7 +540,8 @@ fn can_evaluate_sextd(
 ) -> bool {
     // The context instruction is read by the truncating predicates only.
     let Some(cxt) = def_of(c, v) else { return can_always_evaluate_in_type(c, v, ty) };
-    let mut evaluator = Evaluator { c, cxt, visited: SmallSet::default(), evaluable: SmallSet::default(), pending: Vec::new() };
+    let mut evaluator =
+        Evaluator { c, cxt, visited: SmallSet::default(), evaluable: SmallSet::default(), pending: Vec::new() };
     evaluator.can_evaluate(v, ty, Pred::SExtd) && evaluator.all_pending_visited()
 }
 
@@ -1204,7 +1206,7 @@ fn int_vector_of(
 /// logic cases), `shrinkSplatShuffle` (:1000) and `shrinkInsertElt` (:1025).
 /// DEVIATE 1: `commonCastTransforms`, `canEvaluateTruncated`, demanded bits
 /// and the shift cases of `narrowBinOp` are not applied to vectors.
-fn visit_vector_trunc(
+pub(crate) fn visit_vector_trunc(
     c: &mut Combiner,
     inst: InstId,
 ) -> Option<Visit> {
@@ -1227,7 +1229,8 @@ fn visit_vector_trunc(
             ),
             &[a, b],
         ) => narrow_math(c, inst, op, a, b),
-        // trunc (shuf X, poison, SplatMask) --> shuf (trunc X), poison, SplatMask
+        // trunc (shuf X, poison, SplatMask) --> shuf (trunc X), poison,
+        // SplatMask
         (Opcode::ShuffleVector(mask), &[vector, second]) if c.is_poison_value(second) => {
             let mut lanes = mask.iter().filter(|&&lane| lane >= 0);
             let first = lanes.next()?;
