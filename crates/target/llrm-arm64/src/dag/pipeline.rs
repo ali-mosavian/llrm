@@ -623,7 +623,8 @@ impl Aarch64Lowering {
         let data = dag.node(node);
         let (ISD::GlobalAddress, NodeData::Global { symbol, offset }) = (data.opcode, data.data) else { return None };
         let vt = dag.value_type(node);
-        if self.globals.get(symbol)?.got {
+        // A block's address is a label of this object, never loaded from the GOT.
+        if self.globals.get(symbol)?.got && self.globals.block_at(symbol, offset).is_none() {
             let target = dag.get_target_global_address(vt, symbol, 0);
             let loaded = dag.get_node(ISD::Target(aarch64_isd::LOADgot), vt, &[target]);
             return Some(if offset == 0 {
