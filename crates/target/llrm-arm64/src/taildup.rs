@@ -89,11 +89,6 @@ pub fn tail_duplicate(
     indirect: &[(String, Vec<String>)],
 ) -> Vec<(String, String)> {
     let size = if optsize { 1 } else { 2 };
-    // DEVIATE ARM64-CGOTO-OS (owner m16-b, exit 2026-12-11): the pin copies a
-    // computed goto at optsize too; here one shared dispatch stays at Os until
-    // handler tails merge as the pin's `BranchFolder` does (QB exec.o Os:
-    // 16,460 B shared, 22,116 B copied, pin 17,952 B).
-    let computed = if optsize { &HashSet::new() } else { computed };
     let short: HashMap<String, (Vec<Inst>, Vec<Option<(u32, u32)>>)> = blocks
         .iter()
         .enumerate()
