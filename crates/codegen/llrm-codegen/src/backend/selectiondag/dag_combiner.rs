@@ -644,9 +644,8 @@ pub trait CombineHooks {
     /// (`(x + C) - y` is `(x - y) + C`, `y - (x + C)` is `(y - x) - C`, and
     /// the two for `x - C` and `C - x`), so the constant meets the final add
     /// or a displacement. DEVIATE SUBC1 (owner x86-m32-b, 2026-11-21): off
-    /// by default, on at x86 with 32-bit pointers; the other targets' rows
-    /// are unjudged (x86_64 `div_constants_long` -Os +49 B). `pointer` is the
-    /// DAG's pointer type. Exit: 2026-12-05, every target on.
+    /// by default, on at x86 but m16 (16-bit pointers, rows unjudged);
+    /// `pointer` is the DAG's pointer type. Exit: 2026-12-05, every target on.
     fn sub_constant_hoists(
         &self,
         _pointer: EVT,

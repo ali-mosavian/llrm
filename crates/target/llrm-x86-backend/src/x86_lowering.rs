@@ -424,7 +424,7 @@ impl CombineHooks for X86Lowering<'_> {
         &self,
         pointer: EVT,
     ) -> bool {
-        pointer == EVT::I32
+        pointer != EVT::I16
     }
 
     /// `BuildSDIV`/`BuildUDIV` widen to a legal `i64` multiply for an `i32`
