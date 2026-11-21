@@ -28,7 +28,9 @@ fn assembly(target: &str) -> String {
 #[test]
 fn a_zero_stored_with_stz_is_not_reloaded_while_a_holds_zero() {
     let text = assembly("65c02");
-    assert!(text.contains("  lda #0\n"), "premise: `a` holds 0 in the loop:\n{text}");
-    let reloads = text.lines().filter(|line| matches!(line.trim(), "lda rc2" | "lda rc3")).count();
-    assert_eq!(reloads, 0, "a zero cell is reloaded:\n{text}");
+    let at = text.find("\nmain_b3:").expect("the zeroing loop (premise)");
+    let body = text[at..].split("\nmain_b12:").next().unwrap();
+    assert!(body.contains("  lda #0\n"), "premise: `a` holds 0 in the loop:\n{body}");
+    let reloads = body.lines().filter(|line| matches!(line.trim(), "lda rc2" | "lda rc3")).count();
+    assert_eq!(reloads, 0, "a zero cell is reloaded:\n{body}");
 }
