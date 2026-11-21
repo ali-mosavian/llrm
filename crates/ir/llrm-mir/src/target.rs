@@ -488,6 +488,11 @@ pub struct Tuning {
     /// late slot only). Where a function is inlined many times, the copies'
     /// identical write-backs are one (gcc `-fcrossjumping`, on at size).
     pub sink_common_at_size: bool,
+    /// DEVIATE LATE-MEMCPYOPT-SIZE (owner x86-m32-b, exit 2026-12-12): at
+    /// size, `MemCpyOpt`, `DSE` and `InstCombine` run once more after the
+    /// simplification pipeline (the pin: one `MemCpyOpt`, before the sink
+    /// and phi folds shape a compound literal's `memset` and `memcpy`).
+    pub late_memcpyopt_at_size: bool,
     /// DEVIATE SPILL-FOLD (owner x86-m16, exit 2026-11-29): the clocks a
     /// spilled value costs where its references fold into memory operands,
     /// which `tryRegionSplit` weighs against the split's copies. The pin
@@ -977,6 +982,7 @@ impl Tuning {
         threads_by_relation: false,
         backward_threading: true,
         sink_common_at_size: false,
+        late_memcpyopt_at_size: false,
         spill_fold: None,
         unswitch_threshold: None,
         phiopt_one_feeding_statement: false,

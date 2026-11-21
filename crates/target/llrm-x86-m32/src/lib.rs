@@ -275,6 +275,10 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // merges the tails of copies at size. QB synth.c m32 Os 35,527 ->
         // 11,814 B, identical output (row M32-SINK-COMMON-SIZE).
         sink_common_at_size: true,
+        // DEVIATE LATE-MEMCPYOPT-SIZE (owner x86-m32-b, exit 2026-12-12): see
+        // `Tuning::late_memcpyopt_at_size`. QB dialog.c `bind` 355 -> 308 B
+        // on the pin's llc (gcc 309).
+        late_memcpyopt_at_size: true,
         // DEVIATE OB1 (owner w12, exit 2026-11-27, `unrollbound.rs`; -O3 only,
         // as gcc grows code only there): gcc
         // completely peels a loop whose trips the object it indexes bounds
