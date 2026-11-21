@@ -6,7 +6,7 @@ mod common;
 use common::pipeline::datalayout;
 use llrm_6502::dagisel::hooks::Cpu;
 use llrm_6502::driver::{Level, Request, assembly};
-use llrm_6502::outline::{run, run_at, run_priced};
+use llrm_6502::outline::{run, run_at, run_priced, run_priced_in_loops};
 
 fn bytes(text: &str) -> u32 {
     llrm_6502::timing::estimate(Cpu::Mos6502, text).expect("prices").bytes
@@ -282,4 +282,32 @@ fn five_calls_with_one_constant_are_inline_at_every_speed_level() {
     }
     let text = assembly(&ir, &Request::new(Level::Os)).unwrap_or_else(|e| panic!("{e}"));
     assert!(text.contains("__outl_"), "-Os outlines them for bytes\n{text}");
+}
+
+/// `word_compares` at -Os on the 6502 ran 99,006 clocks against 91,948: two
+/// runs of one body became `jsr __outl_0` in a hot loop for 3 bytes. At -Os a
+/// place in a loop is priced by the share rule too, and a place outside every
+/// loop is still outlined for its bytes.
+#[test]
+fn at_os_a_run_in_a_loop_is_given_up_and_a_run_outside_stays() {
+    let copy = "  lda rc16\n  sta rc17\n";
+    let looped = probe(&format!("again:\nspin:\n{}  dec rc30\n  bne spin\n  dec rc31\n  bne again\n", copy.repeat(6)));
+    assert!(!run_priced_in_loops(&looped, Some(1)).contains("__outl_"), "{}", run_priced_in_loops(&looped, Some(1)));
+    let straight = probe(&"  lda rc16\n  sta rc17\n".repeat(6));
+    assert!(run_priced_in_loops(&straight, Some(1)).contains("jsr __outl_0"));
+}
+
+/// The same through the driver: five calls with one constant in a loop body
+/// are five calls inline at -Os, and outside a loop they are outlined for
+/// bytes (`five_calls_with_one_constant_are_inline_at_every_speed_level`).
+#[test]
+fn five_calls_in_a_loop_are_inline_at_os() {
+    let call = "  call void @report(i32 5)\n";
+    let ir = format!(
+        "target datalayout = \"{}\"\ndeclare void @report(i32)\ndefine void @main() {{\nentry:\n  br label %loop\nloop:\n  %i = phi i32 [ 0, %entry ], [ %n, %loop ]\n{}  %n = add i32 %i, 1\n  %c = icmp ult i32 %n, 20\n  br i1 %c, label %loop, label %exit\nexit:\n  ret void\n}}\n",
+        datalayout(),
+        call.repeat(5)
+    );
+    let text = assembly(&ir, &Request::new(Level::Os)).unwrap_or_else(|e| panic!("{e}"));
+    assert!(!text.contains("__outl_"), "{text}");
 }
