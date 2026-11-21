@@ -44,6 +44,10 @@ fn phys_defs(inst: &Inst) -> impl Iterator<Item = RegId> + '_ {
     inst.operands.iter().filter_map(|o| if let Operand::Def(Reg::Phys(r)) = o { Some(*r) } else { None })
 }
 
+fn touches_flags(inst: &Inst) -> bool {
+    inst.written_lanes() | inst.read_lanes() != 0
+}
+
 /// Whether two flag accesses may swap. Whole-flag accesses never do. Where a
 /// side names lanes (`inc` keeps carry, a branch reads one lane), they swap
 /// when neither reads what the other writes and the lanes both write are read
@@ -54,8 +58,7 @@ fn flags_commute(
     other: &Inst,
     read_after: u8,
 ) -> bool {
-    let touches = |inst: &Inst| inst.sets_flags() || inst.reads_flags();
-    if !(touches(kill) && touches(other)) {
+    if !(touches_flags(kill) && touches_flags(other)) {
         return true;
     }
     let by_lane = [kill, other].iter().any(|inst| inst.flags_kept | inst.flags_read != 0);
@@ -195,7 +198,20 @@ pub fn reschedule_kills<T: Target>(function: &mut MFunction<T::Class>) {
                 {
                     continue;
                 }
+                // what the move relies on an instruction to keep, it keeps in
+                // the classes that keep it
+                let relied: Vec<u32> = insts[at..start]
+                    .iter()
+                    .filter(|other| other.flags_kept != 0)
+                    .flat_map(|other| virt_uses(other).chain(virt_defs(other)))
+                    .collect();
+                let relied = if moving.iter().any(touches_flags) { relied } else { Vec::new() };
                 let bundle: Vec<Inst> = function.blocks[b].insts.drain(start..=end).collect();
+                for v in relied {
+                    if let Some(narrowed) = T::keeping_flags(&function.classes[v as usize]) {
+                        function.classes[v as usize] = narrowed;
+                    }
+                }
                 let count = bundle.len();
                 function.blocks[b].insts.splice(at..at, bundle);
                 at += count;
@@ -223,7 +239,7 @@ mod tests {
     /// (`inc` rewrites zero).
     #[test]
     fn a_compare_passes_an_increment_only_where_the_branch_reads_carry() {
-        let (compare, increment) = (setter(FLAG_V), setter(FLAG_C | FLAG_V));
+        let (compare, increment) = (setter(0), setter(FLAG_C | FLAG_V));
         assert!(flags_commute(&compare, &increment, FLAG_C));
         assert!(!flags_commute(&compare, &increment, FLAG_Z));
         assert!(!flags_commute(&compare, &increment, FLAG_N));

@@ -11,10 +11,17 @@ mod common;
 use common::pipeline::llrm_cc;
 
 fn assembly(level: &str) -> String {
+    assembly_of("tests/data/fill_counter.c", level)
+}
+
+fn assembly_of(
+    source: &str,
+    level: &str,
+) -> String {
     let dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("counter-one-register");
     std::fs::create_dir_all(&dir).unwrap();
-    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/fill_counter.c");
-    let out = dir.join(format!("fill.{level}.s"));
+    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(source);
+    let out = dir.join(format!("{}.{level}.s", src.file_stem().unwrap().to_string_lossy()));
     let made = Command::new(llrm_cc())
         .current_dir(&dir)
         .args(["--target=6502-sim65", level, "-fno-inline-functions", "-S", "-w", "-o"])
@@ -39,5 +46,16 @@ fn a_counter_compared_before_its_increment_moves_between_no_registers() {
                 "{level}: the counter is copied to a second register:\n{body}"
             );
         }
+    }
+}
+
+/// `inc` of `a` is `clc; adc #1` on the 6502 and writes carry: the compare
+/// moved above that step lost its flags and `bcs` read the step's carry, 256
+/// trips (`counter_compare_after_step`, first version of the move).
+#[test]
+fn a_compare_is_not_moved_above_a_step_that_writes_carry() {
+    for level in ["-O2", "-Os"] {
+        let text = assembly_of("../../../tests/run/c/counter_compare_after_step.c", level);
+        assert!(text.contains("  cmp #11\n  bcs"), "{level}: the loop's compare is gone:\n{text}");
     }
 }

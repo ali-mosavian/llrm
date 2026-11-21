@@ -434,6 +434,12 @@ fn is_cell(register: RegId) -> bool {
 pub struct Mos<const STACK: bool>;
 
 impl<const STACK: bool> Target for Mos<STACK> {
+    /// `inc`/`dec` keep carry in `x`, `y` and a cell; in `a` they are `clc;
+    /// adc #1`.
+    fn keeping_flags(class: &Class) -> Option<Class> {
+        Some(Class(class.0 & !Class::A)).filter(|narrowed| narrowed.0 != 0 && narrowed.0 != class.0)
+    }
+
     /// A shift by one steps a zero-page cell as it is (`asl rc2; rol rc3`).
     fn writes_memory_in_place(name: &str) -> bool {
         matches!(name, "SHL1" | "SRL1")
@@ -1452,9 +1458,6 @@ impl Builder {
         if matches!(inst.kind, Kind::Op("INC" | "DEC")) {
             inst.sets_flags = true;
             inst.flags_kept = FLAG_C | FLAG_V;
-        }
-        if inst.sets_flags && matches!(inst.kind, Kind::Op("CMP" | "CMPZ")) {
-            inst.flags_kept = FLAG_V;
         }
         if inst.origin == 0 {
             inst.origin = self.origin;

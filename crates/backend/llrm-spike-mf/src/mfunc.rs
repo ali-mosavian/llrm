@@ -116,8 +116,13 @@ impl Inst {
     /// accessor, before a pass may rely on the lane surviving it: the pin's
     /// `optimizeCompareInstr` stops at the first EFLAGS modifier for the same
     /// reason (#9532).
+    ///
+    /// A setter that keeps lanes ([`Inst::flags_kept`]) is not one: a pass
+    /// that looks for the instruction whose flags a branch reads steps over
+    /// it, and only the lane-wise reordering in `reschedule` sees what it
+    /// writes ([`Inst::written_lanes`]).
     pub fn sets_flags(&self) -> bool {
-        self.sets_flags
+        self.sets_flags && self.flags_kept == 0
     }
 
     /// It reads the flags as a whole: any lane may be the one it needs, so no
