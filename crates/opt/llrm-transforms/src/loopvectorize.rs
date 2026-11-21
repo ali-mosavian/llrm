@@ -68,6 +68,7 @@ use llrm_analysis::scev::analysis::ScevSession;
 use llrm_analysis::scev::{Cx, ScalarEvolution};
 use llrm_analysis::typebasedaa::TypeBasedAA;
 use llrm_mir::context::{Constant, ConstantKind};
+use llrm_mir::dense::IdMap;
 use llrm_mir::edit::Position;
 use llrm_mir::intrinsics::Intrinsic;
 use llrm_mir::loopinfo::Loop;
@@ -2352,8 +2353,7 @@ impl FunctionPass for LoopVectorize {
         let mut next = 0;
         // Loops whose chains were narrowed: the function before, and the price
         // of the plan before; `None` once settled.
-        let mut narrowing: std::collections::HashMap<BlockId, Option<(Function, Option<(i64, u32)>)>> =
-            std::collections::HashMap::new();
+        let mut narrowing: IdMap<BlockId, Option<(Function, Option<(i64, u32)>)>> = IdMap::new();
         'worklist: while let Some(&(header, forced)) = worklist.get(next) {
             next += 1;
             if restore_unplanned(&mut narrowing, Some(header), unit.function) {
@@ -2776,14 +2776,14 @@ impl FunctionPass for LoopVectorize {
 /// A narrowed loop whose plan came to nothing (the next loop is being planned,
 /// or the pass ends) goes back to its wide chains; whether any did.
 fn restore_unplanned(
-    narrowing: &mut std::collections::HashMap<BlockId, Option<(Function, Option<(i64, u32)>)>>,
+    narrowing: &mut IdMap<BlockId, Option<(Function, Option<(i64, u32)>)>>,
     planning: Option<BlockId>,
     function: &mut Function,
 ) -> bool {
     let stale: Vec<BlockId> = narrowing
         .iter()
-        .filter(|(header, state)| state.is_some() && Some(**header) != planning)
-        .map(|(h, _)| *h)
+        .filter(|(header, state)| state.is_some() && Some(*header) != planning)
+        .map(|(header, _)| header)
         .collect();
     let mut restored = false;
     for header in stale {

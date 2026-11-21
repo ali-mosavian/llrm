@@ -21,9 +21,8 @@
 //! `sext ((trunc i to i16) & 15) + 1)`: one `<8 x i16>` chain, not a
 //! `<8 x i64>` chain shuffled down to the multiply.
 
-use std::collections::HashMap;
-
 use llrm_mir::context::{ConstantKind, Context};
+use llrm_mir::dense::IdMap;
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueId};
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, Opcode};
@@ -74,7 +73,7 @@ struct Member {
 fn used_bits(
     context: &Context,
     function: &Function,
-    members: &HashMap<ValueId, u32>,
+    members: &IdMap<ValueId, u32>,
     operand: Operand,
 ) -> u32 {
     match operand {
@@ -99,8 +98,8 @@ pub(crate) fn narrow_induction_chains(
 ) -> bool {
     let Operand::Value(phi_value) = primary_phi else { return false };
     let floor = narrowest_access(context, function, header);
-    let mut bits_of: HashMap<ValueId, u32> = HashMap::new();
-    let mut rooted: HashMap<ValueId, bool> = HashMap::new();
+    let mut bits_of: IdMap<ValueId, u32> = IdMap::new();
+    let mut rooted: IdMap<ValueId, bool> = IdMap::new();
     let mut members: Vec<Member> = Vec::new();
     for inst in function.iter_block(header).collect::<Vec<_>>() {
         let data = function.instruction(inst);
@@ -158,8 +157,8 @@ pub(crate) fn narrow_induction_chains(
 
     let first =
         function.iter_block(header).find(|&inst| function.instruction(inst).opcode != Opcode::Phi).expect("a body");
-    let mut counters: HashMap<u32, Operand> = HashMap::new();
-    let mut narrowed: HashMap<ValueId, (Operand, u32)> = HashMap::new();
+    let mut counters: Vec<(u32, Operand)> = Vec::new();
+    let mut narrowed: IdMap<ValueId, (Operand, u32)> = IdMap::new();
     let mut zexts: Vec<InstId> = Vec::new();
     for member in &members {
         let width = lane_width(member.bits, floor);
@@ -175,19 +174,24 @@ pub(crate) fn narrow_induction_chains(
                     ConstantKind::Int(value) => Operand::Constant(context.int(narrow_ty, value as i128)),
                     _ => unreachable!("a member's constant is an integer"),
                 },
-                Operand::Value(value) if value == phi_value => *counters.entry(width).or_insert_with(|| {
-                    let cut = function.create_instruction(
-                        Opcode::Cast(CastOp::Trunc),
-                        narrow_ty,
-                        vec![primary_phi],
-                        Flags::default(),
-                        Some("counter.narrow"),
-                    );
-                    function.insert(cut, Position::Before(first)).expect("the body");
-                    Operand::Value(function.instruction(cut).result.expect("a trunc"))
-                }),
+                Operand::Value(value) if value == phi_value => match counters.iter().find(|(w, _)| *w == width) {
+                    Some(&(_, cut)) => cut,
+                    None => {
+                        let cut = function.create_instruction(
+                            Opcode::Cast(CastOp::Trunc),
+                            narrow_ty,
+                            vec![primary_phi],
+                            Flags::default(),
+                            Some("counter.narrow"),
+                        );
+                        function.insert(cut, Position::Before(first)).expect("the body");
+                        let cut = Operand::Value(function.instruction(cut).result.expect("a trunc"));
+                        counters.push((width, cut));
+                        cut
+                    }
+                },
                 Operand::Value(value) => {
-                    let (inner, have) = narrowed[&value];
+                    let (inner, have) = *narrowed.get(&value).expect("an earlier member");
                     if have == width {
                         inner
                     } else {
