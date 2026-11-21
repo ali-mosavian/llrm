@@ -618,6 +618,11 @@ pub fn visit(
         {
             return Visit::Replace(found);
         }
+        // `visitTrunc` of integer vectors, audited lane by lane
+        // (`narrowBinOp`, `shrinkSplatShuffle`, `shrinkInsertElt`).
+        if operation == Opcode::Cast(CastOp::Trunc) {
+            return crate::combine_casts::visit_vector_trunc(c, inst).unwrap_or(Visit::None);
+        }
         return Visit::None;
     }
     // The table is 'static: the opcode (a clone per visit, a Box for calls) is
