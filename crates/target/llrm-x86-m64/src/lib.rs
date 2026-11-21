@@ -476,6 +476,8 @@ impl llrm_target::Target for M64 {
                             lsr_size_x86_64: true,
                             // DEVIATE X64-PIE-SCALE (owner llrm-target-x86-m64-b, exit 2026-12-12): see Tuning.
                             pie_scaled_symbol: true,
+                            // DEVIATE X64-TRUTH-XOR (owner llrm-target-x86-m64-b, exit 2026-12-12): see Tuning.
+                            truth_compare_xor: true,
                             // DEVIATE MUL-OS64 (owner w9, exit 2026-11-20): the m32 MUL-OS entry
                             // at m64; gcc keeps the 3-byte `imul` at -Os where the pin makes
                             // `mov; shl; sub` (x * 31). select_of_constants -Os was +1519 B
