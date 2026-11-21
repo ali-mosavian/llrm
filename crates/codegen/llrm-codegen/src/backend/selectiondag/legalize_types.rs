@@ -3181,6 +3181,31 @@ impl<'a> TypeLegalizer<'a> {
         {
             return Ok(pair);
         }
+        // DEVIATE: the same call for two sign-extended operands, the signed product from the unsigned one as
+        // `expandMUL_LOHI` does when only `UMUL_LOHI` exists: the high half less each operand where the other is
+        // negative. The pin has no routine to call; without this the product is the 32 x 32 `__mulsi3`
+        // (bench dot: 7.3M T against SDCC's 3.3M). Exit: none.
+        if super::known_bits::max_significant_bits(self.dag, lhs) <= bits
+            && super::known_bits::max_significant_bits(self.dag, rhs) <= bits
+            && !self.product_fits(lhs, rhs, bits)
+            && ![lhs, rhs].into_iter().filter_map(|one| self.dag.constant(one)).any(|c| self.tli.multiply_by_constant_stays_inline(c))
+            && let Some(name) = self.tli.libcall_name(ISD::UMulLoHi, half)
+        {
+            let vt = self.dag.value_type(value);
+            if let Some(hooks) = self.hooks.as_mut()
+                && let Some(result) = hooks.make_lib_call(self.dag, name, &[ll, rl], vt, false)
+            {
+                let (lo, hi) = self.split_integer(result, half);
+                let sign = self.shift_const(u128::from(bits - 1), half);
+                let negative_l = self.dag.get_node(ISD::Sra, half, &[ll, sign]);
+                let negative_r = self.dag.get_node(ISD::Sra, half, &[rl, sign]);
+                let left_in_right = self.dag.get_node(ISD::And, half, &[negative_l, rl]);
+                let right_in_left = self.dag.get_node(ISD::And, half, &[negative_r, ll]);
+                let hi = self.dag.get_node(ISD::Sub, half, &[hi, left_in_right]);
+                let hi = self.dag.get_node(ISD::Sub, half, &[hi, right_in_left]);
+                return Ok((lo, hi));
+            }
+        }
         let (lo, hi) = if self.tli.is_operation_legal_or_custom(ISD::UMulLoHi, half) {
             let both = self.dag.get_node_multi(ISD::UMulLoHi, &[half, half], &[ll, rl]);
             (both, SDValue { node: both.node, res: 1 })
