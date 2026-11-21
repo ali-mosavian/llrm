@@ -1453,7 +1453,21 @@ impl<'a> Analyzer<'a> {
         // takes a loop with no inner loop): the constant bound of an
         // outer loop leaves its copy as big as the callee (idiv_loop_os -O2:
         // `total(300)` kept beside the call, +128 B).
-        header.is_some_and(|header| is_innermost(self.callee, header, &headers))
+        let Some(body) = header.and_then(|header| innermost_body(self.callee, header, &headers)) else { return false };
+        // The copy folds only where the loop's unrolled size is under the
+        // threshold too: the units of one trip's body, as many times as the
+        // bound (copy_runs -O2: `sum` inlined at two sites beside the calls).
+        if let Some(Simple::Int(_, trips)) = self.constant(bound) {
+            let trip: i64 = body
+                .iter()
+                .flat_map(|&block| self.callee.iter_block(BlockId(block)))
+                .map(|inst| self.code_size_of(inst).max(0))
+                .sum();
+            if trips.saturating_mul(trip.max(1) as u128) > u128::from(crate::loopunrollpass::pin_full_unroll_threshold(3)) {
+                return false;
+            }
+        }
+        true
     }
 
     /// `isKnownNonNullInCallee` (:1974).
@@ -3232,6 +3246,15 @@ fn is_innermost(
     header: BlockId,
     headers: &IdSet<BlockId>,
 ) -> bool {
+    innermost_body(function, header, headers).is_some()
+}
+
+/// The blocks of the natural loop of `header` where it holds no other loop.
+fn innermost_body(
+    function: &Function,
+    header: BlockId,
+    headers: &IdSet<BlockId>,
+) -> Option<std::collections::HashSet<u32>> {
     let blocks: Vec<BlockId> = function.layout().to_vec();
     let mut predecessors: HashMap<u32, Vec<BlockId>> = HashMap::default();
     for &block in &blocks {
@@ -3256,7 +3279,7 @@ fn is_innermost(
             );
         }
     }
-    body.iter().all(|&block| block == header.0 || !headers.contains(&BlockId(block)))
+    body.iter().all(|&block| block == header.0 || !headers.contains(&BlockId(block))).then_some(body)
 }
 
 /// The headers of the callee's loops: targets of a retreating edge (D7).

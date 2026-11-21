@@ -108,6 +108,13 @@ pub trait Hooks {
     /// and its out chain is returned with the result (a constrained FP node's
     /// routine must not move across a rounding-mode change). `None` where the
     /// target cannot make one.
+    /// Whether a routine `make_lib_call_chained` has no answer for is called
+    /// by the target's native C convention (integer and scalar float
+    /// arguments in the registers it names).
+    fn calls_by_native_convention(&self) -> bool {
+        false
+    }
+
     fn make_lib_call_chained(
         &mut self,
         _dag: &mut SelectionDAG,
@@ -159,6 +166,9 @@ pub struct DagLegalizer<'a, H: Hooks> {
     dag: &'a mut SelectionDAG,
     tli: &'a TargetLowering,
     hooks: &'a mut H,
+    /// The target whose C convention a routine is called by, where its hooks
+    /// say so ([`Hooks::calls_by_native_convention`]).
+    target: Option<&'a dyn llrm_target::Target>,
     legalized: HashSet<u32>,
     /// The topological sweeps `run` made.
     pub sweeps: u32,
@@ -171,7 +181,41 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         hooks: &'a mut H,
     ) -> DagLegalizer<'a, H> {
         let legalized = HashSet::with_capacity_and_hasher(dag.nodes().len(), Default::default());
-        DagLegalizer { dag, tli, hooks, legalized, sweeps: 0 }
+        DagLegalizer { dag, tli, hooks, target: None, legalized, sweeps: 0 }
+    }
+
+    /// The target a library routine is called through.
+    pub fn with_target(
+        mut self,
+        target: &'a dyn llrm_target::Target,
+    ) -> Self {
+        self.target = Some(target);
+        self
+    }
+
+    /// `makeLibCall` on `chain`: the hooks' call, else (where they ask for it)
+    /// the routine called by the target's native C convention.
+    fn lib_call_chained(
+        &mut self,
+        name: &'static str,
+        args: &[SDValue],
+        ret: EVT,
+        signed: bool,
+        chain: SDValue,
+    ) -> Option<(SDValue, SDValue)> {
+        if let Some(call) = self.hooks.make_lib_call_chained(self.dag, name, args, ret, signed, chain) {
+            return Some(call);
+        }
+        if !self.hooks.calls_by_native_convention() {
+            return None;
+        }
+        let env = super::libcall::CallEnv {
+            arch: self.target?,
+            pointer: self.dag.config().pointer,
+            call: super::builder::LoweringNodes::installed().call?,
+        };
+        let (values, out) = super::libcall::c_lib_call_on(self.dag, &env, chain, name, None, args, ret)?;
+        Some((*values.first()?, out))
     }
 
     /// `SelectionDAG::Legalize`.
@@ -734,11 +778,11 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
                 let name = self.tli.libcall_name(op.non_strict()?, ret)?;
                 let args: Vec<SDValue> =
                     (1..self.dag.node(node).ops.len()).map(|at| self.dag.operand(node, at)).collect();
-                self.hooks.make_lib_call_chained(self.dag, name, &args, ret, false, chain)?
+                self.lib_call_chained(name, &args, ret, false, chain)?
             }
             ISD::StrictFpExtend => {
                 let name = libcalls::name(Libcall::FpExt(from, to))?;
-                self.hooks.make_lib_call_chained(self.dag, name, &[source], ret, false, chain)?
+                self.lib_call_chained(name, &[source], ret, false, chain)?
             }
             ISD::StrictFpRound => {
                 // A rounding known not to change the value has no routine.
@@ -746,7 +790,7 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
                     return None;
                 }
                 let name = libcalls::name(Libcall::FpRound(from, to))?;
-                self.hooks.make_lib_call_chained(self.dag, name, &[source], ret, false, chain)?
+                self.lib_call_chained(name, &[source], ret, false, chain)?
             }
             ISD::StrictFpToSInt | ISD::StrictFpToUInt => {
                 let signed = op == ISD::StrictFpToSInt;
@@ -754,7 +798,7 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
                     if signed { Libcall::FpToSInt(from, int) } else { Libcall::FpToUInt(from, int) }
                 })?;
                 let (value, out) =
-                    self.hooks.make_lib_call_chained(self.dag, name, &[source], EVT::Simple(int), signed, chain)?;
+                    self.lib_call_chained(name, &[source], EVT::Simple(int), signed, chain)?;
                 let value =
                     if EVT::Simple(int) == ret { value } else { self.dag.get_node(ISD::Truncate, ret, &[value]) };
                 (value, out)
@@ -770,7 +814,7 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
                 } else {
                     self.dag.get_node(if signed { ISD::SignExtend } else { ISD::ZeroExtend }, wide, &[source])
                 };
-                self.hooks.make_lib_call_chained(self.dag, name, &[source], ret, signed, chain)?
+                self.lib_call_chained(name, &[source], ret, signed, chain)?
             }
         };
         self.replace_node(SDValue { node: node.node, res: 0 }, value);
@@ -1285,6 +1329,53 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         Some(self.dag.get_select(dst, sign_bit_test, slow, fast))
     }
 
+    /// `TargetLowering::expandFP_TO_UINT` of `STRICT_FP_TO_UINT`: the value
+    /// less 2^(n-1) where it reaches it, converted as signed on the chain,
+    /// with that bit set again:
+    /// `Sel = Src < 2^(n-1); r = fp_to_sint(Src - (Sel ? 0 : 2^(n-1))) ^ (Sel ? 0 : 2^(n-1))`.
+    /// The compare is signaling and the subtract and conversion follow it on
+    /// the node's chain. `None` where the target has no strict `fsub` or
+    /// signed conversion for the types.
+    fn expand_strict_fp_to_uint(
+        &mut self,
+        node: SDValue,
+    ) -> Option<Vec<SDValue>> {
+        let (chain, src) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+        let (src_vt, dst) = (self.dag.value_type(src), self.dag.value_type(node));
+        let EVT::Simple(float) = src_vt else { return None };
+        let bits = dst.size_in_bits();
+        // 2^(bits-1) in the float's own format.
+        let power = u128::from(bits - 1);
+        let pattern = match float {
+            MVT::F32 if bits <= 32 + 1 => (127 + power) << 23,
+            MVT::F64 if bits <= 64 => (1023 + power) << 52,
+            MVT::F80 => ((16383 + power) << 64) | (1 << 63),
+            _ => return None,
+        };
+        let ready = |legalizer: &Self, op: ISD, vt: EVT| legalizer.tli.is_operation_legal_or_custom(op, vt);
+        if !ready(self, ISD::StrictFSub, src_vt) || !ready(self, ISD::StrictFpToSInt, dst) {
+            return None;
+        }
+        let limit = self.dag.get_constant_fp(pattern, src_vt);
+        let bool_vt = self.tli.types.set_cc_result_type(src_vt);
+        let cc = self.dag.get_cond_code(CondCode::SetLt);
+        let below = self.dag.get_node_multi(ISD::StrictFSetCCS, &[bool_vt, EVT::OTHER], &[chain, src, limit, cc]);
+        let (below, chain) = (SDValue { node: below.node, res: 0 }, SDValue { node: below.node, res: 1 });
+        let zero = self.dag.get_constant_fp(0, src_vt);
+        let offset = self.dag.get_select(src_vt, below, zero, limit);
+        let int_zero = self.dag.get_constant(0, dst);
+        let sign = self.dag.get_constant(1u128 << (bits - 1), dst);
+        let int_offset = self.dag.get_select(dst, below, int_zero, sign);
+        let moved = self.dag.get_node_multi(ISD::StrictFSub, &[src_vt, EVT::OTHER], &[chain, src, offset]);
+        let signed = self.dag.get_node_multi(
+            ISD::StrictFpToSInt,
+            &[dst, EVT::OTHER],
+            &[SDValue { node: moved.node, res: 1 }, SDValue { node: moved.node, res: 0 }],
+        );
+        let result = self.dag.get_node(ISD::Xor, dst, &[SDValue { node: signed.node, res: 0 }, int_offset]);
+        Some(vec![result, SDValue { node: signed.node, res: 1 }])
+    }
+
     /// `ExpandVectorBuildThroughStack`: each defined lane stored to its place
     /// in a 16-byte stack slot, the slot loaded as the vector. The pin's
     /// `LowerBUILD_VECTOR` of an x86 splat is a `movd` and a `pshufd`; this is
@@ -1625,6 +1716,7 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
                 Some(vec![SDValue { node: both.node, res: 1 }])
             }
             ISD::UIntToFp => self.expand_uint_to_fp(node).map(|result| vec![result]),
+            ISD::StrictFpToUInt => self.expand_strict_fp_to_uint(node),
             ISD::BrJT => Some(vec![self.expand_br_jt(node)]),
             ISD::Undef | ISD::Poison => {
                 // `ExpandNode`: zero of the type.
