@@ -1204,7 +1204,7 @@ fn int_vector_of(
 /// logic cases), `shrinkSplatShuffle` (:1000) and `shrinkInsertElt` (:1025).
 /// DEVIATE 1: `commonCastTransforms`, `canEvaluateTruncated`, demanded bits
 /// and the shift cases of `narrowBinOp` are not applied to vectors.
-fn visit_vector_trunc(
+pub(crate) fn visit_vector_trunc(
     c: &mut Combiner,
     inst: InstId,
 ) -> Option<Visit> {
