@@ -292,7 +292,7 @@ thread_local! {
     static UNROLL_BASE: std::cell::Cell<Option<Fingerprint>> = const { std::cell::Cell::new(None) };
     static LOOP_COPIES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static SPEED_UNROLLS: std::cell::Cell<llrm_transforms::trial::UnrollDecisions> =
-        const { std::cell::Cell::new(llrm_transforms::trial::UnrollDecisions { made: 0, refused: 0, inlined: 0 }) };
+        const { std::cell::Cell::new(llrm_transforms::trial::UnrollDecisions { made: 0, refused: 0, inlined: 0, unswitched: 0 }) };
 }
 
 /// The full-unroll decisions the last [`program`] made at -O2 and up: what an

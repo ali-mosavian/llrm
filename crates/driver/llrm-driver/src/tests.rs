@@ -6647,13 +6647,14 @@ fn constrained_narrow_and_unsigned_conversions_select_to_sse_at_m64() {
 }
 
 /// A constrained unsigned `i64` conversion at m64 stopped the legalizer
-/// ("convert node to libcall"): x86 had no chained library call. The pin
-/// calls `__floatundidf` for `uitofp`; `fptoui` is DEVIATE CFP4.
+/// ("convert node to libcall"): x86 had no chained library call. The pin calls
+/// `__floatundidf` for `uitofp` and expands `fptoui` inline (`expandFP_TO_UINT`:
+/// a signaling compare, a subtract, two `cvttsd2si`s and an xor).
 #[test]
-fn constrained_unsigned_i64_conversions_call_their_routines_at_m64() {
-    for (arg, ret, op, callee) in [
-        ("i64", "double", "uitofp", "call __floatundidf"),
-        ("double", "i64", "fptoui", "call __fixunsdfdi"),
+fn constrained_unsigned_i64_conversions_select_as_the_pin_does_at_m64() {
+    for (arg, ret, op, wanted, unwanted) in [
+        ("i64", "double", "uitofp", "call __floatundidf", "cvt"),
+        ("double", "i64", "fptoui", "comisd", "call "),
     ] {
         let rounding = if op == "uitofp" { ", metadata !\"round.dynamic\"" } else { "" };
         let tail = if op == "uitofp" { "metadata, metadata" } else { "metadata" };
@@ -6664,6 +6665,10 @@ fn constrained_unsigned_i64_conversions_call_their_routines_at_m64() {
         let (built, _) = compiled(&flags(&["-m64", "-O1", "--isel=dag"]), &text, "f")
             .unwrap_or_else(|error| panic!("{op}: {error:?}"));
         let listing = llrm_codegen::backend::masm::text(&built).unwrap();
-        assert!(listing.contains(callee), "{op}: no {callee}\n{listing}");
+        assert!(listing.contains(wanted), "{op}: no {wanted}\n{listing}");
+        assert!(!listing.contains(unwanted), "{op}: has {unwanted}\n{listing}");
+        if op == "fptoui" {
+            assert_eq!(listing.matches("cvttsd2si").count(), 1, "{op}: one signed convert\n{listing}");
+        }
     }
 }
