@@ -31,12 +31,12 @@ static REGISTERS: LazyLock<Vec<llrm_target::registers::Register>> =
 /// The limit of every pressure set here (`computePSetLimit`): a register
 /// counts if its root is a `gpr`; `a6` and `sp` never.
 ///
-/// DEVIATE M68K-LICM-LIMIT (owner wasm-3, exit 2026-12-10, when the allocator
-/// rematerialises a hoisted constant instead of spilling it): the pin counts
+/// DEVIATE M68K-LICM-LIMIT (owner wasm-3, exit 2026-12-10, when early_exit_index
+/// 68000 -O2/-O3 is under gcc with the limit at 9): the pin counts
 /// `a6` in a function with no frame pointer (`getReservedRegs`, AR16 limit 9).
 /// With 9 the shared `MachineLICM` hoists one more value than ours keeps in a
-/// register: known_loads_walks -O3 68000 +210 B, early_exit_widths +10 B,
-/// early_exit_index +4 B against 8, with `%a6` allocatable either way.
+/// register: early_exit_index 68000 -O2/-O3 +4 B (over gcc), early_exit_widths
+/// +18 B, with `%a6` allocatable either way.
 pub fn pressure_limits() -> Vec<u32> {
     (0..PRESSURE.sets.len())
         // A set whose largest class the table leaves out holds no value
