@@ -35,9 +35,11 @@ fn a_loop_whose_copied_exit_test_does_not_fold_is_not_rotated_by_the_pass_at_os(
 /// DEVIATE ROTATION-HOT: the same loop rotated runs 6.8% fewer instructions
 /// (19087 -> 17788, the harness count) for those 4 B, and the trial keeps it.
 /// Before, sieve -Os was 200 B and 19087 instructions against clang's 17944.
+/// The rotated loop's two compares are a `cmp` and a `ccmp` since the pass
+/// of that name: 51.
 #[test]
 fn the_trial_keeps_the_rotation_that_executes_less_for_four_bytes_at_os() {
-    assert_eq!(sieve_instructions(true), 52);
+    assert_eq!(sieve_instructions(true), 51);
 }
 
 /// rectwo -Os: `n - 1`, invariant in the loop that calls `paths` again, was

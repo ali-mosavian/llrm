@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 318 documented, 5 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 319 documented, 5 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -217,6 +217,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | loopvectorizeearlyexit | Early-exit loops: the plan of several blocks and the control flow around it (`handleUncountableEarlyExits`, `createVectorLoopSkeleton`). |  | [loopvectorizeearlyexit](loopvectorizeearlyexit.md) |
 | loopvectorizeinterleave | Interleaving without vectorizing: `LoopVectorizePass` with VF 1 and IC > 1. | After the vector plan of [`crate::loopvectorize`](loopvectorize.md) did not widen the loop. | [loopvectorizeinterleave](loopvectorizeinterleave.md) |
 | loopvectorizelegality | `LoopVectorizationLegality`: whether an innermost loop may be vectorized. | Named by `loopvectorize`, `loopvectorizeearlyexit`, `loopvectorizeinterleave`. | [loopvectorizelegality](loopvectorizelegality.md) |
+| loopvectorizenarrow | Narrow the integer chains a loop computes from its induction. |  | [loopvectorizenarrow](loopvectorizenarrow.md) |
 | loopvectorizeplan | The loop vectorizer's planner: which vectorization factor (VF) and interleave count (IC) a legal loop gets, and the plan the transform runs. | Named by `loopvectorize`, `loopvectorizeearlyexit`, `loopvectorizeinterleave`. | [loopvectorizeplan](loopvectorizeplan.md) |
 | loopvectorizeskeleton | The control flow around a widened loop: the scalar remainder (`InnerLoopVectorizer::createVectorLoopSkeleton`). | Named by `loopunrollpass`, `loopvectorize`, `loopvectorizeearlyexit`, `loopvectorizeinterleave`. | [loopvectorizeskeleton](loopvectorizeskeleton.md) |
 | loopversioning | `LoopVersioning`: a loop copied, the copy kept for when run-time checks find that pointers may overlap, and the original told that they do not. | Called by the loop vectorizer and loop distribution once they are | [loopversioning](loopversioning.md) |

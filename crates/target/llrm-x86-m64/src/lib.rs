@@ -452,12 +452,16 @@ impl llrm_target::Target for M64 {
                             // `Tti::lsr_phi_users_first`.
                             lsr_phi_users_first: true,
                             lsr_size_order: true,
+                            // DEVIATE X86V3 (owner llrm-target-x86-m64-b, exit 2026-11-30): see Tuning.
+                            vector_float_costs: true,
                             // DEVIATE LSR-DROP-AT-SIZE (owner llrm-target-x86-m64-b, exit 2026-11-30): see Tuning.
                             lsr_drop_worse_at_size: true,
                             // Pin order: visitADD's or-disjoint, then pushAddIntoCmovOfConsts; see Tuning.
                             add_to_or_disjoint: true,
                             // DEVIATE LV-OS (owner llrm-target-x86-m64, exit 2026-11-24): see Tuning.
                             vectorize_at_size: false,
+                            // The selector has `pcmp*`, `cmpps`, `cmppd` and the mask select.
+                            vector_compares: true,
                             // DEVIATE LV-BW (owner llrm-target-x86-m64-b, exit 2026-11-24): see Tuning.
                             maximize_vector_bandwidth: true,
                             // DEVIATE LV-ACC (owner llrm-target-x86-m64-b, exit 2026-11-30): see Tuning.

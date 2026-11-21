@@ -483,6 +483,11 @@ pub struct Tuning {
     /// 0.2% in clocks, while its copies of a peeled ladder cost x_ld_matmul
     /// -O3 +8.1% clocks and 1,615 B, queens -O3 +8.3% and 3,706 B.
     pub backward_threading: bool,
+    /// `sinkCommonInsts` in every `SimplifyCFG` of a function that is
+    /// optimized for size, as the pin's `-sink-common-insts` (its default is the
+    /// late slot only). Where a function is inlined many times, the copies'
+    /// identical write-backs are one (gcc `-fcrossjumping`, on at size).
+    pub sink_common_at_size: bool,
     /// DEVIATE SPILL-FOLD (owner x86-m16, exit 2026-11-29): the clocks a
     /// spilled value costs where its references fold into memory operands,
     /// which `tryRegionSplit` weighs against the split's copies. The pin
@@ -633,6 +638,11 @@ pub struct Tuning {
     /// DEVIATE LSR-SIZE (owner x86-m32, exit 2026-11-24): see
     /// `Tti::lsr_size_model` (`LsrSizeModel::X86`).
     pub lsr_size_order: bool,
+    /// DEVIATE X86V3 (owner llrm-target-x86-m64-b, exit 2026-11-30): price
+    /// vectors of float lanes (memory, `fadd`..`fneg`, the casts to and from
+    /// integer lanes) with the pin's x86-64 rows (`tti_vector_oracle.txt`),
+    /// so the loop vectorizer forms them. Off: such a loop stays scalar.
+    pub vector_float_costs: bool,
     /// DEVIATE LSR-DROP-AT-SIZE (owner llrm-target-x86-m64-b, exit 2026-11-30):
     /// see `Tti::lsr_drops_worse_solution_at_size`.
     pub lsr_drop_worse_at_size: bool,
@@ -647,6 +657,9 @@ pub struct Tuning {
     /// llrm-target-x86-m64, exit 2026-11-24), the loop stays scalar: m64 -Os
     /// bytes +5..+50% on 15 corpus files.
     pub vectorize_at_size: bool,
+    /// The backend selects a vector `icmp`, `fcmp` and `select` (`Tti::selects_vector_compares`): the loop
+    /// vectorizer widens the compares of a loop. false where the selector lacks them.
+    pub vector_compares: bool,
     /// `shouldMaximizeVectorBandwidth(RGK_FixedWidthVector)`: `LoopVectorize`
     /// sizes the widest VF by the smallest type of the loop. false: the pin's
     /// x86 (the widest type, so a byte sum into an `i64` stays at VF 2).
@@ -963,6 +976,7 @@ impl Tuning {
         unroll_recurrence_veto: false,
         threads_by_relation: false,
         backward_threading: true,
+        sink_common_at_size: false,
         spill_fold: None,
         unswitch_threshold: None,
         phiopt_one_feeding_statement: false,
@@ -991,9 +1005,11 @@ impl Tuning {
         unroll_promotion_fits_registers: false,
         unroll_store_immediate_bits: 0,
         lsr_size_order: false,
+        vector_float_costs: false,
         lsr_drop_worse_at_size: false,
         add_to_or_disjoint: false,
         vectorize_at_size: true,
+        vector_compares: false,
         maximize_vector_bandwidth: false,
         narrow_reduction_accumulators: false,
         bandwidth_vf_without_epilogue: false,

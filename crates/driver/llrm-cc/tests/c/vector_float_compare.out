@@ -1,0 +1,22 @@
+lt 1 0 0 0
+dlt 1 0
+elt 1 0
+le 1 1 0 0
+dle 1 0
+ele 1 0
+gt 0 0 0 0
+dgt 0 0
+egt 0 0
+ge 0 1 0 0
+dge 0 0
+ege 0 0
+eq 0 1 0 0
+deq 0 0
+eeq 0 0
+ne 1 0 1 1
+dne 1 1
+ene 1 1
+sel 10 -2 -3 -4
+uno 0 0 1 1
+one 1 0 0 0
+ueq 0 1 1 1
