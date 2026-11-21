@@ -1027,6 +1027,23 @@ fn a_shifted_and_masked_field_is_one_ubfiz() {
     assert_eq!(selected(ir).unwrap(), [["UBFMWri", "RET_ReallyLR"]]);
 }
 
+/// `sdiv i64 %x, 512` selected the shift sequence (`asr`, `add .., lsr`,
+/// `asr`); the pin's `AArch64TargetLowering::BuildSDIVPow2` is the `cmp`/`csel`
+/// form (`buildSDIVPow2WithCMov`), a shorter dependency chain: jpeg_fixed -O2
+/// ran 8% more modelled clocks than the pin on the same IR.
+#[test]
+fn a_signed_divide_by_a_power_of_two_is_add_cmp_csel_asr() {
+    let ir = "define i64 @f(i64 %x) {\n  %d = sdiv i64 %x, 512\n  ret i64 %d\n}";
+    assert_eq!(selected(ir).unwrap(), [["ADDXri", "SUBSXri", "CSELXr", "SBFMXri", "RET_ReallyLR"]]);
+}
+
+/// A divisor of 2 keeps the default expansion (`BuildSDIVPow2`).
+#[test]
+fn a_signed_divide_by_two_keeps_the_shift_sequence() {
+    let ir = "define i32 @f(i32 %x) {\n  %d = sdiv i32 %x, 2\n  ret i32 %d\n}";
+    assert!(!selected(ir).unwrap()[0].contains(&"CSELWr"));
+}
+
 /// `isNarrowingProfitable` is false for a scalar on AArch64: the index
 /// `zext i8` scaled by 4 stayed one `shl` on 64 bits and folded into the
 /// store as `[x1, x8, lsl #2]`. We narrowed it to a 32-bit `lsl` first, which
