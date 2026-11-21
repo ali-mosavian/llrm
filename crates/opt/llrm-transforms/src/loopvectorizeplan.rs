@@ -384,7 +384,7 @@ fn iteration_cost(
         }
     }
     let vector = |ty: Ty| VectorTy { lane: ty, count: vf };
-    let address = tti.address_computation_cost(kind).value;
+    let address = tti.scalar_access_address_cost(kind).value;
     // A vector price this port lacks: nothing in a lower bound, else the factor
     // has no price.
     let unknown = |priced: Option<Cost>| {

@@ -1042,8 +1042,8 @@ impl TargetLowering {
         // `LowerSCALAR_TO_VECTOR`: a byte or a word is widened to a dword for `movd`.
         t.set_ops(&[ISD::ScalarToVector], &[MVT::V16I8, MVT::V8I16], Action::Custom);
         // `LowerMUL`: `v4i32` without `pmulld` is `pmuludq` on the even and the
-        // odd lanes.
-        t.set_ops(&[ISD::Mul], &[MVT::V4I32, MVT::V16I8], Action::Custom);
+        // odd lanes; `v2i64` without `pmullq` is three `pmuludq`.
+        t.set_ops(&[ISD::Mul], &[MVT::V4I32, MVT::V16I8, MVT::V2I64], Action::Custom);
         // `LowerShift`: every 128-bit integer shift (`psllw`... by a constant
         // or a register, and the sequences for the rest; the 64-bit arithmetic
         // shift, `psraq` being AVX-512, is `srl`/`xor`/`sub`).
