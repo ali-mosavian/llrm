@@ -25,10 +25,9 @@
 //! `simplifycfg` (folds a known address to `br`),
 //! `llrm_mir::Context::replace_block_addresses`.
 
-use std::collections::BTreeMap;
-
 use llrm_mir::context::{Constant, ConstantKind, GlobalId};
 use llrm_mir::datalayout::DataLayout;
+use llrm_mir::dense::IdMap;
 use llrm_mir::module::{BlockId, GlobalKind, InstId, Module, Operand};
 use llrm_mir::opcode::{CastOp, Opcode};
 use llrm_mir::passes::{ModuleAnalyses, ModulePass};
@@ -112,11 +111,13 @@ fn expand(
 
     // The listed blocks first, then any other block whose address is taken
     // (nothing jumps to it, but it compares unequal); a block gone is LLVM's 1.
-    let mut number: BTreeMap<BlockId, u64> =
+    let mut number: IdMap<BlockId, u64> =
         numbered.iter().enumerate().map(|(at, &block)| (block, at as u64 + 1)).collect();
     for &(_, now) in &resolved {
         let next = number.len() as u64 + 1;
-        number.entry(now).or_insert(next);
+        if !number.contains_key(&now) {
+            number.insert(now, next);
+        }
     }
     let int_ty = module.context.types.int(bits);
     module
