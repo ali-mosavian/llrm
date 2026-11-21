@@ -13,6 +13,7 @@ mod add_immediate;
 mod addr_roles;
 mod addrarith;
 mod aliases;
+mod alloca_call_area;
 mod alloca_kept_alignment;
 mod and_mask_movzx;
 mod anyext_copy;
