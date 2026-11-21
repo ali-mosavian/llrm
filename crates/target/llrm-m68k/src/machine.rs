@@ -43,6 +43,10 @@ impl Machine for M68kMachine {
         Some(Rc::new(M68k::for_cpu(self.cpu)))
     }
 
+    fn tuning(&self) -> llrm_mir::target::Tuning {
+        crate::dagisel::function::tuning()
+    }
+
     /// Frames keep what the shipped targets ask for (m68k Linux, AmigaOS and
     /// TOS: 4) and nothing realigns them (`frame.rs`): an object asking more
     /// is clamped to it, so the optimizer never folds `ptr & 7` to 0 on a
