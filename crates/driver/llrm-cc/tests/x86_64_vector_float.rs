@@ -25,3 +25,40 @@ fn a_loop_filling_doubles_from_an_int_counter_is_vector_code_at_x86_64() {
     assert!(text.contains("cvtdq2pd"), "no packed conversion:\n{text}");
     assert!(text.contains("mulpd"), "no packed multiply:\n{text}");
 }
+
+/// A vector `fcmp` was `CannotSelect("SetCC")` (and a `<4 x float>` value had no register class): `cmpps`/`cmppd`
+/// now make the mask of all six orders over NaN lanes, and the mask select is `pand`/`por`. The program runs and prints
+/// what gcc -O0 prints (`vector_float_compare.out`). Needs `LLRM_LLC` and a host `cc` for the link.
+#[test]
+fn a_vector_float_compare_makes_the_mask_gcc_makes() {
+    let llc = std::env::var_os("LLRM_LLC").expect("LLRM_LLC is not set: this test needs it and does not skip");
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("vector-compare-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let tests = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/c");
+    let object = dir.join("a.o");
+    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
+        .env("LLRM_CC_TARGET", "x86_64-linux")
+        .env("LLRM_LLC", llc)
+        .args(["-m64", "-fno-pic", "-O2", "-w", "-c", "-o"])
+        .arg(&object)
+        .arg(tests.join("vector_float_compare.c"))
+        .output()
+        .unwrap();
+    assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
+    let exe = dir.join("a.out");
+    let link = Command::new("cc").args(["-static", "-no-pie", "-o"]).arg(&exe).arg(&object).arg("-lm").output().unwrap();
+    assert!(link.status.success(), "{}", String::from_utf8_lossy(&link.stderr));
+    let out = Command::new(&exe).output().unwrap();
+    let expected = std::fs::read_to_string(tests.join("vector_float_compare.out")).unwrap();
+    assert_eq!(String::from_utf8_lossy(&out.stdout), expected);
+    let asm = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
+        .env("LLRM_CC_TARGET", "x86_64-linux")
+        .env("LLRM_LLC", std::env::var_os("LLRM_LLC").unwrap())
+        .args(["-O2", "-w", "-S", "-o", "-"])
+        .arg(tests.join("vector_float_compare.c"))
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&asm.stdout);
+    assert!(text.contains("cmpps") && text.contains("cmppd"), "no packed compare:\n{text}");
+}

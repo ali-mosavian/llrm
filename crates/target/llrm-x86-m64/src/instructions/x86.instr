@@ -222,6 +222,8 @@ unpckhpd	binary	x/^0,xm	128	sse_arith	-	-	-	-/-	Unpckhpd_xmm_xmmm128
 unpcklps	binary	x/^0,xm	128	sse_arith	-	-	-	-/-	Unpcklps_xmm_xmmm128
 unpckhps	binary	x/^0,xm	128	sse_arith	-	-	-	-/-	Unpckhps_xmm_xmmm128
 shufps	binary	x/^0,xm,i	128	sse_arith	-	-	-	-/-	Shufps_xmm_xmmm128_imm8
+cmpps	binary	x/^0,xm,i	128	sse_arith	-	-	-	-/-	Cmpps_xmm_xmmm128_imm8
+cmppd	binary	x/^0,xm,i	128	sse_arith	-	-	-	-/-	Cmppd_xmm_xmmm128_imm8
 shufpd	binary	x/^0,xm,i	128	sse_arith	-	-	-	-/-	Shufpd_xmm_xmmm128_imm8
 cvtdq2ps	extend	x/xm	128	sse_move	-	-	-	-/-	Cvtdq2ps_xmm_xmmm128
 cvtdq2pd	extend	x/xm	128	sse_move	-	-	-	-/-	Cvtdq2pd_xmm_xmmm64
