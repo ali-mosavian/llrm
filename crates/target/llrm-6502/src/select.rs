@@ -390,6 +390,11 @@ pub fn module_text(
             .iter()
             .any(|name| text.contains(&format!(" {name}\n")))
     };
+    let small_wide = |text: &str| {
+        ["__udivsi3", "__divsi3", "__umodsi3", "__modsi3", "__divmodsi4", "__udivmodsi4"]
+            .iter()
+            .any(|name| text.contains(&format!(" {name}_fast_small\n")))
+    };
     if size && texts.iter().any(|text| compact_division(text)) {
         let mut faster = texts.clone();
         let mut chosen = variants.clone();
@@ -400,9 +405,26 @@ pub fn module_text(
                 faster[at] = chosen[at].text(module, parts[at])?;
             }
         }
-        if fast_division_pays_at_size(module, parts, &texts, &faster)? {
+        if fast_division_pays_at_size(module, parts, &texts, &faster, crate::hotdivision::SAVED_AT_SIZE)? {
             texts = faster;
             variants = chosen;
+            // the wide path too, where the divisions run often enough that its
+            // clocks pay its bytes by the same share rule: copy_runs -Os ran
+            // 123,790 clocks (small path) against 60,901 at -O2 (wide)
+            let mut wide_chosen = variants.clone();
+            let mut wide = texts.clone();
+            for at in 0..wide.len() {
+                if small_wide(&wide[at]) {
+                    wide_chosen[at].wide_division = true;
+                    wide[at] = wide_chosen[at].text(module, parts[at])?;
+                }
+            }
+            if crate::hotdivision::hot(module)
+                && fast_division_pays_at_size(module, parts, &texts, &wide, crate::hotdivision::SAVED_CLOCKS)?
+            {
+                texts = wide;
+                variants = wide_chosen;
+            }
         }
     }
     // at speed the 16-bit divisions are the speed routine (39 bytes over the
@@ -1319,6 +1341,7 @@ fn fast_division_pays_at_size(
     parts: &[(&str, &Selection)],
     compact: &[String],
     faster: &[String],
+    saved_per_run: f64,
 ) -> Result<bool, String> {
     let names: Vec<String> = parts.iter().map(|(name, _)| (*name).to_owned()).collect();
     let growth = crate::mulimage::image_bytes(&crate::mulimage::image_of_texts(&names, faster))
@@ -1337,6 +1360,6 @@ fn fast_division_pays_at_size(
             _ => None,
         })
         .collect();
-    let saved = (crate::hotdivision::runs_priced(module, &weights) * crate::hotdivision::SAVED_AT_SIZE) as u64;
+    let saved = (crate::hotdivision::runs_priced(module, &weights) * saved_per_run) as u64;
     Ok(crate::mulimage::pays_by_share((saved, growth), clocks, bytes))
 }
