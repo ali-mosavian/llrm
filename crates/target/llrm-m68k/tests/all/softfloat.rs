@@ -91,9 +91,10 @@ done:
     }
 }
 
-/// A `float` extended to `x86_fp80` (plain, and the constrained form) panicked the compiler
-/// (`RetCC_M68k_C has a register for every result`, call.rs): the routine's 10-byte result has
-/// no register. The pin rejects it too; the compile is now an error, not a crash.
+/// A `float` extended to `x86_fp80` (plain, and the constrained form) panicked
+/// the compiler (`RetCC_M68k_C has a register for every result`, call.rs): the
+/// routine's 10-byte result has no register. The pin rejects it too; the
+/// compile is now an error, not a crash.
 #[test]
 fn a_long_double_result_is_refused_not_a_panic() {
     for ir in [

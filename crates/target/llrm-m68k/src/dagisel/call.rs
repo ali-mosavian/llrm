@@ -165,23 +165,29 @@ impl M68kCalling {
             .collect()
     }
 
-    /// Whether `RetCC_M68k_C` has a register for every one of `parts` (type, pointer), in order:
-    /// a result of a size it names none for (an `f80`: 10 bytes) or a third word has none, and
-    /// `result_register` would panic on it.
+    /// Whether `RetCC_M68k_C` has a register for every one of `parts` (type,
+    /// pointer), in order: a result of a size it names none for (an `f80`:
+    /// 10 bytes) or a third word has none, and `result_register` would
+    /// panic on it.
     pub fn results_have_registers(
         &self,
         dag: &SelectionDAG,
         parts: &[(EVT, bool)],
     ) -> bool {
-        parts.iter().enumerate().all(|(at, &(vt, pointer))| {
-            let before = Self::results_before(dag, parts[..at].iter().copied(), vt, pointer);
-            let names = if pointer {
-                self.convention.results.get("address")
-            } else {
-                self.convention.results.get(&(vt.size_in_bits() / 8).max(1).to_string())
-            };
-            names.is_some_and(|names| before < names.len())
-        })
+        parts
+            .iter()
+            .enumerate()
+            .all(
+                |(at, &(vt, pointer))| {
+                    let before = Self::results_before(dag, parts[..at].iter().copied(), vt, pointer);
+                    let names = if pointer {
+                        self.convention.results.get("address")
+                    } else {
+                        self.convention.results.get(&(vt.size_in_bits() / 8).max(1).to_string())
+                    };
+                    names.is_some_and(|names| before < names.len())
+                },
+            )
     }
 
     pub fn returns_in_registers(
@@ -446,8 +452,9 @@ impl TargetCalling for M68kCalling {
         M68kCalling::lower_return(self, dag, chain, outs)
     }
 
-    /// A result with no register in `RetCC_M68k_C` (an `f80`) is refused where the builder
-    /// asks, a function's return and a call's results, as the pin does not lower it either.
+    /// A result with no register in `RetCC_M68k_C` (an `f80`) is refused where
+    /// the builder asks, a function's return and a call's results, as the
+    /// pin does not lower it either.
     fn accepts(
         &self,
         dag: &SelectionDAG,
@@ -500,7 +507,10 @@ impl TargetCalling for M68kCalling {
             if dag.fixed_objects.get(&slot) != Some(&(4, true)) {
                 return None;
             }
-            let own = matches!(dag.node(out.value).data, NodeData::Mem(info) if info.base == MemBase::Stack(slot));
+            let own = matches!(
+                dag.node(out.value).data,
+                NodeData::Mem(info) if info.base == MemBase::Stack(slot)
+            );
             if own && dag.opcode(out.value) == ISD::Load && dag.value_type(out.value) == EVT::I32 {
                 continue;
             }
@@ -517,8 +527,10 @@ impl TargetCalling for M68kCalling {
                 .filter(|&user| {
                     let load = SDValue { node: user, res: 0 };
                     dag.opcode(load) == ISD::Load
-                        && matches!(dag.node(load).data,
-                            NodeData::Mem(info) if matches!(info.base, MemBase::Stack(index) if index < 0))
+                        && matches!(
+                            dag.node(load).data,
+                            NodeData::Mem(info) if matches!(info.base, MemBase::Stack(index) if index < 0)
+                        )
                 })
                 .collect();
             for load in loads {
@@ -530,7 +542,8 @@ impl TargetCalling for M68kCalling {
         let mut done = Vec::new();
         for (slot, value, ext) in stores {
             // `CCPromoteToType<i32>`
-            let value = if dag.value_type(value) == EVT::I32 { value } else { dag.get_node(ext.node(), EVT::I32, &[value]) };
+            let value =
+                if dag.value_type(value) == EVT::I32 { value } else { dag.get_node(ext.node(), EVT::I32, &[value]) };
             let address = dag.get_frame_index(EVT::I32, slot);
             let info = MemInfo {
                 mem_vt: EVT::I32,
@@ -543,11 +556,7 @@ impl TargetCalling for M68kCalling {
             };
             done.push(dag.get_store(ordered, value, address, info));
         }
-        let chain = if done.is_empty() {
-            chain
-        } else {
-            dag.get_token_factor(&done)
-        };
+        let chain = if done.is_empty() { chain } else { dag.get_token_factor(&done) };
         let fpdiff = dag.get_constant(0, EVT::I32);
         Some(dag.get_node(m68kisd::TC_RETURN, EVT::OTHER, &[chain, target, fpdiff]))
     }

@@ -319,9 +319,9 @@ impl TargetLowering {
         }
     }
 
-    /// `RTLIB::RINT_F32` and the other libm routines of `RuntimeLibcalls.def`: the
-    /// C library's names, `f` for `float`, none for `double`, `l` for the
-    /// 80-bit `long double`.
+    /// `RTLIB::RINT_F32` and the other libm routines of `RuntimeLibcalls.def`:
+    /// the C library's names, `f` for `float`, none for `double`, `l` for
+    /// the 80-bit `long double`.
     pub fn set_libm_libcall_names(&mut self) {
         const LIBM: [(ISD, [&str; 3]); 10] = [
             (ISD::FRem, ["fmodf", "fmod", "fmodl"]),
@@ -1498,8 +1498,10 @@ impl TargetLowering {
                 t.set_ops(&[PseudoFMin, PseudoFMax], &[vt], Legal);
                 // (no FSINCOS node here: nothing builds one)
                 t.set_ops(&[FSin, FCos], &[vt], Expand);
-                // The pin's strict `rint` of an SSE value is the routine `rint`/`rintf` (`roundsd` needs
-                // SSE4.1); `frndint` is the x87's, and this type is not in an x87 register.
+                // The pin's strict `rint` of an SSE value is the routine
+                // `rint`/`rintf` (`roundsd` needs
+                // SSE4.1); `frndint` is the x87's, and this type is not in an
+                // x87 register.
                 t.set_ops(&[StrictFRint], &[vt], Expand);
             }
             t.set_ops(&[FpExtend], &[MVT::F32, MVT::F64], Custom);
