@@ -279,7 +279,7 @@ pub fn effective(
         KEPT_LINES.with(|lines| lines.borrow_mut().retain(|(at, ..), _| kept.as_ref().is_ok_and(|kept| kept == at)));
         chosen
     };
-    let chosen = if (decisions.made > 0 || decisions.refused > 0 || decisions.inlined > 0)
+    let chosen = if (decisions.made > 0 || decisions.refused > 0 || decisions.inlined > 0 || decisions.unswitched > 0)
         && matches!(chosen.level, Level::O2 | Level::O3)
     {
         unroll_choice(ir, chosen, decisions, fingerprint)?
@@ -298,7 +298,9 @@ pub fn effective(
 /// (`fill` unrolled and then inlined, 740 B larger). Variants: no unroll that
 /// adds bytes, at -O2 the -O3 threshold, no inline that adds bytes, and both
 /// (switch_table_in_code -O2: `step` inlined into a loop of 9 trips, 138 B
-/// larger). A tie keeps the request.
+/// larger), and no non-trivial unswitch, taken only where the module is smaller
+/// and no slower (queens -O3: `place` copied for one branch a trip, 93 B and
+/// 108745 T over -O2). A tie keeps the request.
 fn unroll_choice(
     ir: &str,
     request: Request,
@@ -322,6 +324,9 @@ fn unroll_choice(
     if decisions.inlined > 0 {
         variants.push(SpeedUnroll::NoGrowBoth);
     }
+    if decisions.unswitched > 0 {
+        variants.push(SpeedUnroll::NoUnswitch);
+    }
     let mut best = (module_priced(ir, &request)?, request);
     for variant in variants {
         // the two refusals together are tried only where one of them made the
@@ -342,7 +347,15 @@ fn unroll_choice(
         if std::env::var_os("LLRM_DEBUG_UNROLL").is_some() {
             eprintln!("unroll {variant:?}: {price:?}, held {:?}", best.0);
         }
-        if price < best.0 {
+        // an unswitch that buys clocks is kept even where the module is
+        // bigger: -O3 is judged on clocks as well (loop_versioning: 308 B
+        // smaller without it, 69% slower)
+        let better = if variant == SpeedUnroll::NoUnswitch {
+            price.0 < best.0.0 && price.1 <= best.0.1
+        } else {
+            price < best.0
+        };
+        if better {
             best = (price, other);
         }
     }
