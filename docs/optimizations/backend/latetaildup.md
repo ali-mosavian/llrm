@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/latetaildup.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/latetaildup.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/latetaildup.rs sha256:64d7428280a55af7dd29e2656537dd43e638f2467db3e4a3966eeacb484382a9 -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/latetaildup.rs sha256:9d8f82a4c2c1fbc1487671c073b586ff5435fe0bcb8e497c32bb6cf5a4772de8 -->
 
 # latetaildup
 
@@ -32,10 +32,10 @@ taken) is copied up to ten instructions whatever the size
 
 DEVIATE TL1 (owner greedy-subreg, exit 2026-11-27): a tail with a call, a
 call's record, a group, a symbol, bytes spread over others, an indirect jump
-that is no computed goto or a sibling call is not copied. The pin copies a call or a return after
-allocation; here a copy keeps no callee (the callee is named by the
-instruction's id) and claims no source bytes of its own (placement's
-`copied` refuses the same).
+that is no computed goto or a sibling call is not copied. The pin copies a
+call or a return after allocation; here a copy keeps no callee (the callee
+is named by the instruction's id) and claims no source bytes of its own
+(placement's `copied` refuses the same).
 
 DEVIATE TL3 (owner greedy-subreg, exit 2026-11-20): the pin's return block
 already holds the frame's teardown, so a framed function's is longer than

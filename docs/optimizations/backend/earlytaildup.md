@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/earlytaildup.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/earlytaildup.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/earlytaildup.rs sha256:4566b25fb8b3d1d2956ff466f25452a94b8b83601bc7a86d0a434a713816f98f -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/earlytaildup.rs sha256:b772663c46541e8033b7e90e650fc500abf599fd1b5af40cf1a971f0129f454a -->
 
 # earlytaildup
 
@@ -26,15 +26,16 @@ predecessor goes to it alone, by a jump with no condition
 ```
 
 `tail_duplicate` is `tailDuplicate` and `tailDuplicateAndUpdate`: each
-predecessor that goes to the tail alone loses its jump to it and takes a copy
-of its instructions (values the tail defines are new in each copy; a phi of
-the tail is what it reads from that predecessor), the successors' phis read
-from the predecessor what they read from the tail (`updateSuccessorsPHIs`),
-a value the tail defined and others read is defined again in each copy (the
-SSA update), the tail's edge odds move to the predecessor, and the tail goes
-when nothing reaches it. A block with more than 16 predecessors and more
-than 16 successors that has a phi, or whose successor has one, stays: an
-interpreter's dispatch is copied after allocation (`latetaildup`).
+predecessor that goes to the tail alone loses its jump to it and takes a
+copy of its instructions (values the tail defines are new in each copy; a
+phi of the tail is what it reads from that predecessor), the successors'
+phis read from the predecessor what they read from the tail
+(`updateSuccessorsPHIs`), a value the tail defined and others read is
+defined again in each copy (the SSA update), the tail's edge odds move to
+the predecessor, and the tail goes when nothing reaches it. A block with
+more than 16 predecessors and more than 16 successors that has a phi, or
+whose successor has one, stays: an interpreter's dispatch is copied after
+allocation (`latetaildup`).
 
 DEVIATE ET3 (no number): LIR blocks end in explicit jumps, so the pin's
 predecessor that falls through into the tail is the one that jumps to it
