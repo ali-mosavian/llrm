@@ -1488,6 +1488,10 @@ pub struct LirBody {
     /// (load, write) by `at`: the optimizer proved the write leaves the load's
     /// cell as it was (`!llrm.spares`).
     pub spares: Arc<BTreeSet<(i64, i64)>>,
+    /// The symbol each block whose address is taken is known by, by `at`: a
+    /// `blockaddress` in code or data names it, so the block keeps its place
+    /// and its label.
+    pub address_symbols: Arc<std::collections::BTreeMap<i64, String>>,
     /// How many floating values the target holds on its register stack at once.
     pub float_stack: usize,
     /// A phi's value, by number, and the fixed cell the program also holds it
@@ -1749,6 +1753,7 @@ impl LirBody {
             returns_twice: false,
             min_size: false,
             spares: Arc::default(),
+            address_symbols: Arc::default(),
             float_stack: 0,
             homes: Arc::default(),
             float_bytes: Arc::default(),
@@ -1827,6 +1832,7 @@ impl LirBody {
             returns_twice: self.returns_twice,
             min_size: self.min_size,
             spares: Arc::clone(&self.spares),
+            address_symbols: Arc::clone(&self.address_symbols),
             float_stack: self.float_stack,
             homes: Arc::clone(&self.homes),
             float_bytes: Arc::clone(&self.float_bytes),

@@ -214,6 +214,13 @@ impl llrm_codegen::backend::selectiondag::emit_api::GlobalMap for Globals<'_> {
         symbol: u32,
         offset: i64,
     ) -> Addr {
+        // The address of a block is an offset of a function's own symbol.
+        if let Some(block) = llrm_codegen::backend::blockaddress::decode(offset)
+            && self.0.global(llrm_mir::context::GlobalId(symbol)).function().is_some()
+        {
+            let key = llrm_codegen::backend::blockaddress::key(llrm_mir::context::GlobalId(symbol), block);
+            return Addr { index: key, ..Addr::new(Space::Segment, 0) };
+        }
         let space = llrm_codegen::backend::globals::space(self.0, llrm_mir::context::GlobalId(symbol));
         Addr { index: i64::from(symbol), ..Addr::new(space, offset) }
     }
@@ -1431,7 +1438,13 @@ fn selected_in(
             })
         })
         .flatten();
+    let indirect: HashMap<i64, Vec<i64>> = info
+        .indirect_targets
+        .iter()
+        .map(|(block, targets)| (block_at[&block.0], targets.iter().map(|target| block_at[&target.0]).collect()))
+        .collect();
     let ctx = EmitContext {
+        indirect: &indirect,
         x87_prices,
         tables: &tables_of_function,
         caller_saved: &caller_saved,
@@ -1896,6 +1909,14 @@ fn selected_in(
     let entry = root_at.unwrap_or(emitted[0].at);
     let mut body = LirBody::new(name, entry, blocks, IndexMap::default(), IndexMap::default());
     body.bits = arch.object().bitness;
+    body.address_symbols = std::sync::Arc::new(
+        function
+            .address_taken_blocks()
+            .filter_map(|block| {
+                Some((*block_at.get(&block.0)?, llrm_codegen::backend::blockaddress::symbol(id, block)))
+            })
+            .collect(),
+    );
     body.registers = Some(llrm_lir::registers::Regs(arch.registers()));
     body.float_stack = arch.float_stack();
     // The old route's table of each float value's type: a spill rounds to it

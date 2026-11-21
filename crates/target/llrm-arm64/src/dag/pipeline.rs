@@ -392,6 +392,20 @@ impl LegalizeHooks for Aarch64Lowering {
         ret: EVT,
         signed: bool,
     ) -> Option<SDValue> {
+        let root = dag.entry_node();
+        self.make_lib_call_chained(dag, name, args, ret, signed, root).map(|(value, _)| value)
+    }
+
+    /// `makeLibCall` on `chain`, the out chain with the result.
+    fn make_lib_call_chained(
+        &mut self,
+        dag: &mut SelectionDAG,
+        name: &'static str,
+        args: &[SDValue],
+        ret: EVT,
+        signed: bool,
+        chain: SDValue,
+    ) -> Option<(SDValue, SDValue)> {
         use llrm_codegen::backend::selectiondag::target_calling::{Ext, In, Out, TargetCalling};
         let ext = if signed { Ext::Sign } else { Ext::Zero };
         // `getCopyToParts` of an `i128`: its two halves, which AAPCS64 passes
@@ -432,13 +446,12 @@ impl LegalizeHooks for Aarch64Lowering {
         let calling = super::call::Aarch64Calling { linux: self.linux };
         calling.accepts(dag, llrm_codegen::backend::selectiondag::target_calling::Site::Call, &outs, &ins).ok()?;
         let callee = dag.get_external_symbol(EVT::I64, name);
-        let root = dag.entry_node();
-        let (_chain, values) = calling.lower_call(dag, root, callee, &outs, &ins);
+        let (out_chain, values) = calling.lower_call(dag, chain, callee, &outs, &ins);
         if ret == quad {
             // `getCopyFromParts`: the halves joined.
-            return Some(dag.get_node(ISD::BuildPair, quad, &[*values.first()?, *values.get(1)?]));
+            return Some((dag.get_node(ISD::BuildPair, quad, &[*values.first()?, *values.get(1)?]), out_chain));
         }
-        values.first().copied()
+        Some((values.first().copied()?, out_chain))
     }
 
     fn lower_operation(
@@ -448,14 +461,25 @@ impl LegalizeHooks for Aarch64Lowering {
     ) -> Option<SDValue> {
         // `f128`: the routine of its conversion or compare (`LowerF128Call`)
         {
+            // A constrained compare's calls are ordered on its chain, each
+            // after the last; the node's value and that chain are its results.
+            let strict = matches!(dag.opcode(node), ISD::StrictFSetCC | ISD::StrictFSetCCS);
+            let mut chain = if strict { dag.operand(node, 0) } else { dag.entry_node() };
             let mut call = |dag: &mut SelectionDAG, name: &'static str, args: &[SDValue], ret: EVT| {
-                self.make_lib_call(dag, name, args, ret, false)
+                let (value, out) = self.make_lib_call_chained(dag, name, args, ret, false, chain)?;
+                chain = out;
+                Some(value)
             };
             let handled =
                 super::f128::convert(dag, node, &mut call).or_else(|| super::f128::compare(dag, node, &mut call));
             if let Some(result) = handled {
                 if result.is_none() {
                     self.custom.get_or_insert_with(|| format!("custom lowering of f128 {:?}", dag.node(node).opcode));
+                }
+                if strict {
+                    let value = result?;
+                    let vt = dag.value_type(value);
+                    return Some(dag.get_node_multi(ISD::MergeValues, &[vt, EVT::OTHER], &[value, chain]));
                 }
                 return result;
             }

@@ -66,6 +66,8 @@ use llrm_x86_dagisel::x86_classes::{Role, class_tag};
 struct Emitter<'a, 'd> {
     dag: &'d SelectionDAG,
     ctx: &'a EmitContext<'a>,
+    /// Where the MIR block being emitted starts.
+    entry_at: i64,
     /// `VRBaseMap`: the value each emitted result is.
     values: HashMap<SDValue, u32>,
     /// The LIR value a virtual register number of the DAG is.
@@ -178,6 +180,7 @@ pub fn emit_in(
     let mut emitter = Emitter {
         dag,
         ctx,
+        entry_at: first_at,
         values: HashMap::default(),
         es_copies: HashMap::default(),
         state,
@@ -2143,7 +2146,7 @@ impl Emitter<'_, '_> {
         n: u32,
     ) -> Option<u32> {
         let users = |value: SDValue| self.glue_users.get(&value).into_iter().flatten().copied();
-        let status = users(SDValue { node: n, res: 0 })
+        let status = users(self.compare_glue(n))
             .find(|&user| self.is_machine_named(SDValue { node: user, res: 0 }, "FNSTSW16r"))?;
         users(SDValue { node: status, res: 0 })
             .flat_map(|byte| users(SDValue { node: byte, res: 0 }))
@@ -2156,11 +2159,22 @@ impl Emitter<'_, '_> {
         n: u32,
     ) -> Option<u32> {
         self.glue_users
-            .get(&SDValue { node: n, res: 0 })
+            .get(&self.compare_glue(n))
             .into_iter()
             .flatten()
             .copied()
             .find(|&user| self.is_machine_named(SDValue { node: user, res: 0 }, "FNSTSW16r"))
+    }
+
+    /// The glue result of the compare `n`: its last value. A constrained
+    /// compare has its chain first, so the glue is result 1, not 0; reading
+    /// result 0 found no `sahf` and emitted the `fcom` ahead of whatever the
+    /// scheduler put between `fnstsw` and `sahf`.
+    fn compare_glue(
+        &self,
+        n: u32,
+    ) -> SDValue {
+        SDValue { node: n, res: (self.dag.node(SDValue { node: n, res: 0 }).values.len() - 1) as u8 }
     }
 
     /// What the instruction at the end of the glue chain from the `CopyToReg`
@@ -3402,7 +3416,14 @@ impl Emitter<'_, '_> {
                 let base = self.dag.node(group[0]).ops.first().map(|op| self.dag.node(*op).data.clone());
                 let table = match (self.dag.node(group[3]).data.clone(), base) {
                     (NodeData::JumpTable(table), _) | (_, Some(NodeData::JumpTable(table))) => table,
-                    _ => return Err(EmitError::Unsupported("an indirect jump through memory".to_owned())),
+                    // Not a switch's table: an `indirectbr` through memory
+                    // (`goto *table[i]`), which names the blocks it may reach.
+                    _ => {
+                        let width = if name == "JMP64m" { 8 } else { 4 };
+                        let cell = self.cell(group, width)?;
+                        self.indirect_jump(Loc::Mem(cell));
+                        return Ok(Some(()));
+                    }
                 };
                 let jump = self.jump_table(table)?;
                 // The cell is `$J + index * entry` whichever way the table's
@@ -3430,11 +3451,13 @@ impl Emitter<'_, '_> {
             // (the position-independent table of 64-bit code): the table is
             // the one the register's sum was made from.
             "JMP16r" | "JMP32r" | "JMP64r" => {
-                let table = self
-                    .jump_table_behind(node.ops[0], 8)
-                    .ok_or_else(|| EmitError::Unsupported("an indirect jump through a register".to_owned()))?;
                 let Loc::Held(target) = self.operand(node.ops[0])? else {
                     return Err(EmitError::Unsupported("a jump through a non-register".to_owned()));
+                };
+                // Not a switch's table: an `indirectbr` through a register.
+                let Some(table) = self.jump_table_behind(node.ops[0], 8) else {
+                    self.indirect_jump(Loc::Held(target));
+                    return Ok(Some(()));
                 };
                 let jump = self.jump_table(table)?;
                 // The table is relative only where the DAG made it so (64-bit
@@ -4168,6 +4191,16 @@ impl Emitter<'_, '_> {
             return None;
         }
         self.dag.node(value).ops.iter().find_map(|&op| self.jump_table_behind(op, depth - 1))
+    }
+
+    /// An `indirectbr`'s jump: through `source`, to the blocks it names.
+    fn indirect_jump(
+        &mut self,
+        source: Loc,
+    ) {
+        let targets = self.ctx.indirect.get(&self.entry_at).cloned().unwrap_or_default();
+        let what = Semantics { indirect: true, computed: true, table: targets, ..Semantics::new(Operation::Jump) };
+        self.push_semantics(Semantics { name: Some("jmp".into()), sources: vec![source], ..what });
     }
 
     fn jump_table(

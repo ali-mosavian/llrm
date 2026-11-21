@@ -5928,6 +5928,9 @@ fn sweep_14() {
     check(sem(Op::Compare, Some("fcomp"), vec![], vec![st(0), m(Some(a(Space::Frame, -8, 0, R::None, R::None)), 4, R::None, 0, 0, None, None, 1, R::None)], None, false), 0, false, false, None, None, Some(("d85ef8", Some(2), None, vec![], false)));
     check(sem(Op::Compare, Some("fcomp"), vec![], vec![st(0), m(Some(a(Space::Frame, -8, 0, R::None, R::None)), 8, R::None, 0, 0, None, None, 1, R::None)], None, false), 0, false, false, None, None, Some(("dc5ef8", Some(2), None, vec![], false)));
     check(sem(Op::Compare, Some("fcompp"), vec![], vec![st(0), st(1)], None, false), 0, false, false, None, None, Some(("ded9", None, None, vec![], true)));
+    check(sem(Op::Compare, Some("fucom"), vec![], vec![st(0), st(1)], None, false), 0, false, false, None, None, Some(("dde1", None, None, vec![], true)));
+    check(sem(Op::Compare, Some("fucomp"), vec![], vec![st(0), st(1)], None, false), 0, false, false, None, None, Some(("dde9", None, None, vec![], true)));
+    check(sem(Op::Compare, Some("fucompp"), vec![], vec![st(0), st(1)], None, false), 0, false, false, None, None, Some(("dae9", None, None, vec![], true)));
     check(sem(Op::Compare, Some("fcompp"), vec![], vec![st(0), m(Some(a(Space::Frame, -8, 0, R::None, R::None)), 2, R::None, 0, 0, None, None, 1, R::None)], None, false), 0, false, false, None, None, None);
     check(sem(Op::Compare, Some("fcompp"), vec![], vec![st(0), m(Some(a(Space::Frame, -8, 0, R::None, R::None)), 4, R::None, 0, 0, None, None, 1, R::None)], None, false), 0, false, false, None, None, None);
     check(sem(Op::Compare, Some("fcompp"), vec![], vec![st(0), m(Some(a(Space::Frame, -8, 0, R::None, R::None)), 8, R::None, 0, 0, None, None, 1, R::None)], None, false), 0, false, false, None, None, None);
