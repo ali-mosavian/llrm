@@ -886,6 +886,7 @@ impl Hooks for X86Lowering<'_> {
             ISD::BuildVector => lower_build_vector_splat(dag, node),
             ISD::Mul if dag.value_type(node) == EVT::Simple(MVT::V4I32) => Some(lower_mul_v4i32(dag, node)),
             ISD::Mul if dag.value_type(node) == EVT::Simple(MVT::V16I8) => Some(lower_mul_v16i8(dag, node)),
+            ISD::Mul if dag.value_type(node) == EVT::Simple(MVT::V2I64) => Some(lower_mul_v2i64(dag, node)),
             ISD::VecReduceAdd | ISD::VecReduceAnd | ISD::VecReduceOr | ISD::VecReduceXor => {
                 lower_shuffle_reduction(dag, node)
             }
@@ -4359,6 +4360,50 @@ fn lower_mul_v4i32(
     // the odds' first two lanes interleaved.
     let (evens, odds) = (shuffle(dag, evens, 0xE8), shuffle(dag, odds, 0xE8));
     dag.get_node(x86isd::UNPCKL, four, &[evens, odds])
+}
+
+/// `LowerMUL` for `v2i64` without `pmullq` ([L30470][pin]): the 64-bit product
+/// is `AloBlo + ((AloBhi + AhiBlo) << 32)`, each partial a `pmuludq`; a half
+/// known to be zero drops its partial (a multiply by a constant that fits 32
+/// bits has no `AloBhi`).
+///
+/// [pin]:
+/// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L30470
+fn lower_mul_v2i64(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> SDValue {
+    let vt = EVT::Simple(MVT::V2I64);
+    let (a, b) = (dag.operand(node, 0), dag.operand(node, 1));
+    let zeros = |dag: &SelectionDAG, value: SDValue| {
+        llrm_codegen::backend::selectiondag::known_bits::known_bits(dag, value).zero as u64
+    };
+    let (low, high) = (0xFFFF_FFFFu64, !0xFFFF_FFFFu64);
+    let (a_zero, b_zero) = (zeros(dag, a), zeros(dag, b));
+    let (a_lo_zero, b_lo_zero) = (a_zero & low == low, b_zero & low == low);
+    let (a_hi_zero, b_hi_zero) = (a_zero & high == high, b_zero & high == high);
+    let by = dag.get_constant_with(32, EVT::I8, true, false);
+    let (mut lo_lo, mut lo_hi, mut hi_lo) = (None, None, None);
+    if !a_lo_zero && !b_lo_zero {
+        lo_lo = Some(dag.get_node(x86isd::PMULUDQ, vt, &[a, b]));
+    }
+    if !a_lo_zero && !b_hi_zero {
+        let b_high = dag.get_node(x86isd::VSRLI, vt, &[b, by]);
+        lo_hi = Some(dag.get_node(x86isd::PMULUDQ, vt, &[a, b_high]));
+    }
+    if !a_hi_zero && !b_lo_zero {
+        let a_high = dag.get_node(x86isd::VSRLI, vt, &[a, by]);
+        hi_lo = Some(dag.get_node(x86isd::PMULUDQ, vt, &[a_high, b]));
+    }
+    let high_half = match (lo_hi, hi_lo) {
+        (Some(x), Some(y)) => Some(dag.get_node(ISD::Add, vt, &[x, y])),
+        (x, y) => x.or(y),
+    }
+    .map(|sum| dag.get_node(x86isd::VSHLI, vt, &[sum, by]));
+    match (lo_lo, high_half) {
+        (Some(x), Some(y)) => dag.get_node(ISD::Add, vt, &[x, y]),
+        (x, y) => x.or(y).unwrap_or_else(|| dag.get_constant_with(0, vt, false, false)),
+    }
 }
 
 /// `LowerMUL` for `v16i8` without SSSE3 ([L30470][pin]): each half is unpacked

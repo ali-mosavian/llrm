@@ -1069,6 +1069,17 @@ impl Tti for X86 {
         Cost::BASIC
     }
 
+    /// `X86TTIImpl::getAddressComputationCost` of a scalar type: `BasicTTIImpl`'s 0.
+    fn scalar_access_address_cost(
+        &self,
+        kind: CostKind,
+    ) -> Cost {
+        if self.size_bytes && kind == CostKind::CodeSize {
+            return Cost::of(3);
+        }
+        Cost::FREE
+    }
+
     fn direct_call_cost(
         &self,
         arguments: i64,
@@ -1750,6 +1761,8 @@ impl Tti for X86 {
                     Ty::Int(8) => [6, 18, 12, 12],
                     Ty::Int(16) => [1, 5, 1, 1],
                     Ty::Int(32) => [6, 8, 7, 7],
+                    // `v2i64`: 3*pmuludq/2*shift/add and the shuffles.
+                    Ty::Int(64) => [7, 10, 10, 10],
                     _ => return None,
                 };
                 xmm_pieces(ty).map(|pieces| Cost::of(row[kind.index()] * pieces))
