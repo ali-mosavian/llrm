@@ -56,6 +56,8 @@ fn a_counter_compared_before_its_increment_moves_between_no_registers() {
 fn a_compare_is_not_moved_above_a_step_that_writes_carry() {
     for level in ["-O2", "-Os"] {
         let text = assembly_of("../../../tests/run/c/counter_compare_after_step.c", level);
-        assert!(text.contains("  cmp #11\n  bcs"), "{level}: the loop's compare is gone:\n{text}");
+        // the counter in `a` is compared with `cmp`; in `x` or `y` (`inx`/`iny` keep carry) with `cpx`/`cpy`
+        let compared = ["cmp", "cpx", "cpy"].iter().any(|op| text.contains(&format!("  {op} #11\n  bcs")));
+        assert!(compared, "{level}: the loop's compare is gone:\n{text}");
     }
 }
