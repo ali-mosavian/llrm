@@ -1,0 +1,9 @@
+[Unit]
+Description=hourly tip-red tick; the full run is the 03:30 one
+
+[Timer]
+OnCalendar=hourly
+Persistent=false
+
+[Install]
+WantedBy=timers.target
