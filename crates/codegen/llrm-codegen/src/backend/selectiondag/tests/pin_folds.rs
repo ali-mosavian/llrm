@@ -64,7 +64,10 @@ impl CombineHooks for Asks {
     fn sub_algebra_folds(&self) -> bool {
         true
     }
-    fn sub_constant_hoists(&self) -> bool {
+    fn sub_constant_hoists(
+        &self,
+        _pointer: EVT,
+    ) -> bool {
         true
     }
     fn rebuild_brcond_condition(&self) -> bool {

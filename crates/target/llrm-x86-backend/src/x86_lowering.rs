@@ -420,8 +420,11 @@ impl CombineHooks for X86Lowering<'_> {
         true
     }
 
-    fn sub_constant_hoists(&self) -> bool {
-        true
+    fn sub_constant_hoists(
+        &self,
+        pointer: EVT,
+    ) -> bool {
+        pointer == EVT::I32
     }
 
     /// `BuildSDIV`/`BuildUDIV` widen to a legal `i64` multiply for an `i32`

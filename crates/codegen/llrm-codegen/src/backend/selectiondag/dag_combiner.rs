@@ -630,9 +630,13 @@ pub trait CombineHooks {
     /// (`(x + C) - y` is `(x - y) + C`, `y - (x + C)` is `(y - x) - C`, and
     /// the two for `x - C` and `C - x`), so the constant meets the final add
     /// or a displacement. DEVIATE SUBC1 (owner x86-m32-b, 2026-11-21): off
-    /// by default, on at x86 only; the other targets' rows are unjudged.
-    /// Exit: 2026-12-05, every target on.
-    fn sub_constant_hoists(&self) -> bool {
+    /// by default, on at x86 with 32-bit pointers; the other targets' rows
+    /// are unjudged (x86_64 `div_constants_long` -Os +49 B). `pointer` is the
+    /// DAG's pointer type. Exit: 2026-12-05, every target on.
+    fn sub_constant_hoists(
+        &self,
+        _pointer: EVT,
+    ) -> bool {
         false
     }
 
@@ -4218,7 +4222,11 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             }
         }
         let Some(c) = self.dag.constant(n1).filter(|_| !self.dag.is_opaque(n1)) else {
-            return if self.hooks.sub_constant_hoists() { self.hoist_sub_constant(node, vt, n0, n1) } else { None };
+            return if self.hooks.sub_constant_hoists(self.dag.config().pointer) {
+                self.hoist_sub_constant(node, vt, n0, n1)
+            } else {
+                None
+            };
         };
         let negated = self.dag.get_constant(c.wrapping_neg() & super::fold::mask(vt.size_in_bits()), vt);
         Some(self.dag.get_node(ISD::Add, vt, &[n0, negated]))
