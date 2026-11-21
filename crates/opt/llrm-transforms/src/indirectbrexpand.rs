@@ -79,19 +79,19 @@ fn expand(
             })
         })
         .collect();
-    if jumps.is_empty() {
-        return false;
-    }
     // The blocks a jump can reach by an address: those whose address is taken.
     let taken: Vec<BlockId> = function.address_taken_blocks().collect();
+    if jumps.is_empty() && taken.is_empty() {
+        return false;
+    }
     let numbered: Vec<BlockId> = function
         .layout()
         .iter()
         .copied()
-        .filter(|block| taken.contains(block) && jumps.iter().any(|jump| jump.targets.contains(block)))
+        .filter(|block| {
+            taken.contains(block) && (jumps.is_empty() || jumps.iter().any(|jump| jump.targets.contains(block)))
+        })
         .collect();
-    let number: BTreeMap<BlockId, u64> =
-        numbered.iter().enumerate().map(|(at, &block)| (block, at as u64 + 1)).collect();
     let addresses: Vec<(BlockId, Operand)> =
         jumps.iter().map(|jump| (jump.block, function.instruction(jump.inst).operands[0])).collect();
     let resolved: Vec<(BlockId, BlockId)> = function
@@ -102,20 +102,31 @@ fn expand(
         .filter_map(|block| function.resolve_block_address(block).map(|now| (block, now)))
         .collect();
 
-    let int_ty = module.context.types.int(bits);
-    if !numbered.is_empty() {
-        module
-            .context
-            .replace_block_addresses(
-                id,
-                &|block| {
-                    let now = resolved.iter().find(|(old, _)| *old == block).map(|(_, now)| *now)?;
-                    number.get(&now).copied()
-                },
-                int_ty,
-            );
+    // The listed blocks first, then any other block whose address is taken
+    // (nothing jumps to it, but it compares unequal); a block gone is LLVM's 1.
+    let mut number: BTreeMap<BlockId, u64> =
+        numbered.iter().enumerate().map(|(at, &block)| (block, at as u64 + 1)).collect();
+    for &(_, now) in &resolved {
+        let next = number.len() as u64 + 1;
+        number.entry(now).or_insert(next);
     }
+    let int_ty = module.context.types.int(bits);
+    module
+        .context
+        .replace_block_addresses(
+            id,
+            &|block| match resolved.iter().find(|(old, _)| *old == block) {
+                Some((_, now)) => number.get(now).copied(),
+                None => Some(1),
+            },
+            int_ty,
+        );
     let mut builder = module.builder(id);
+    if jumps.is_empty() {
+        // An address nothing jumps to (its `indirectbr` folded away): a number.
+        clear(&mut builder);
+        return true;
+    }
     // Each jump, and the phi values of the blocks it left: what the jump
     // gave, by block it reached.
     let mut cut: Vec<(BlockId, Vec<BlockId>)> = Vec::new();

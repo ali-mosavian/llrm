@@ -100,3 +100,24 @@ other:
     assert!(text.contains("unreachable") && !text.contains("indirectbr"), "{text}");
     assert!(!text.contains("[ 1, %entry ]"), "{text}");
 }
+
+/// A table whose `indirectbr` folded away still named blocks by address; a
+/// target with no label to take (the 6502's data writer) refused the table.
+/// The addresses become numbers.
+#[test]
+fn a_block_address_nothing_jumps_to_is_a_number() {
+    let text = expanded(
+        "@t = internal constant [1 x ptr] [ptr blockaddress(@f, %one)]
+
+define i16 @f(i16 %x) {
+entry:
+  br label %one
+
+one:
+  ret i16 1
+}
+",
+    );
+    assert!(!text.contains("blockaddress"), "{text}");
+    assert!(text.contains("inttoptr (i16 1 to ptr)"), "{text}");
+}

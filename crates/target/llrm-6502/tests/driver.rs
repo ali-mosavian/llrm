@@ -160,6 +160,20 @@ fn a_table_of_inttoptr_numbers_is_emitted_as_the_numbers() {
     assert_eq!(exit_code_of(&text, "g"), 9, "{text}");
 }
 
+/// A computed goto through a table of block addresses was refused on the
+/// 6502 (no jump through a register). `IndirectBrExpand` turns it into a
+/// switch, so the program jumps where the table says.
+#[test]
+fn an_indirectbr_through_a_table_of_block_addresses_jumps_where_the_table_says() {
+    let ir = module(
+        "@t = constant [2 x ptr] [ptr blockaddress(@g, %a), ptr blockaddress(@g, %b)]\n\
+         define i8 @g() {\nentry:\n  %p = getelementptr ptr, ptr @t, i16 1\n  %v = load ptr, ptr %p\n  \
+         indirectbr ptr %v, [label %a, label %b]\na:\n  ret i8 1\nb:\n  ret i8 2\n}",
+    );
+    let text = assembly(&ir, &Request::new(Level::O1)).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(exit_code_of(&text, "g"), 2, "{text}");
+}
+
 /// `LLRM_6502_ZERO_PAGE` sets the platform's zero page, whichever way the
 /// platform is named. It was read before the row's own `--platform=sim65`,
 /// which put the 26 back: a sweep of 16..26 read flat, 4362 bytes at every
