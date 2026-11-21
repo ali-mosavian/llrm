@@ -1657,7 +1657,12 @@ impl Emitter<'_, '_> {
             };
             // a shift by `cl` has the amount as the value the `CopyToReg` glued
             // to it wrote to `CL`; the form pins that source to `cx`
+            // and one by one (`ROR32r1`, `SHL8m1`) has the amount 1 in the name
             let implicit = || {
+                if name.ends_with("r1") || name.ends_with("m1") {
+                    return matches!(form.name.as_str(), "shl" | "shr" | "sar" | "sal" | "rol" | "ror" | "rcl" | "rcr")
+                        .then(|| Loc::Imm(Imm { value: 1, width: 8, address: None }));
+                }
                 (name.ends_with("rCL") || name.ends_with("mCL"))
                     .then(|| self.accumulator.get(&llrm_lir::registers::RegId::CL).map(|held| Loc::Held(*held)))
                     .flatten()
