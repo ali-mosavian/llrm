@@ -61,6 +61,16 @@ def bytes_over(level: str, ours: dict, refs: dict) -> str:
     return f"bytes +{over} (reported)" if over > 0 else ""
 
 
+CONVENTION_BYTES = 4096  # a zero array this big is a layout choice (stored in the image, or zeroed at start-up), not code quality
+
+
+def convention(ours: dict, refs: dict) -> bool:
+    """Ours keeps a big zero array in bss and a reference stores the same zeros as data: the bytes differ by the object format (`huge`: 80,400 B stored by
+    bcc, tcpp and ow, none by ours), so the cell is shown and counted as neither a win nor a loss."""
+    held = ours["static"] - ours["data"]
+    return held >= CONVENTION_BYTES and any(r["data"] >= held for r in refs.values())
+
+
 def net_code(ours: dict | None, language: str, program: str, level: str) -> int | str:
     """A Nib cell that does file I/O: its code less the std.io skeleton's fixed bytes (bench.net_code), the measure the plain-C bar is read against; "" for any other cell."""
     if not ours or language != "nib" or program not in bench.io_programs([]) or level not in bench.fixed_io_skeleton():
@@ -95,6 +105,9 @@ def rows(table: dict) -> tuple[list[tuple], collections.Counter]:
             row = (program, language, level, ours["code"], ours["data"], ours["static"], ours["clocks"], "", "", "", "NO_TWIN", f"twin of {program} not measured")
         elif not have:
             row = (program, language, level, ours["code"], ours["data"], ours["static"], ours["clocks"], "", "", "", "NO_BAR", "")
+        elif convention(ours, have):
+            row = (program, language, level, ours["code"], ours["data"], ours["static"], ours["clocks"], min(r["code"] for r in have.values()), min(r["clocks"] for r in have.values()), len(names) - len(have), "CONVENTION",
+                   "a reference stores the zeros ours holds in bss: an object-format convention, neither a win nor a loss")
         else:
             found = findings(level, ours, have)
             verdict = "OK" if not found else ("WORSE_LB" if len(names) - len(have) else "WORSE")
@@ -140,7 +153,7 @@ def render(table: dict, dist: Path, harness: str, now: datetime.datetime) -> str
         "# net_code: a Nib cell with file I/O less the std.io skeleton's fixed bytes (io_skeleton/fixed.toml, not this build's measure); net_vs_plain_code: net_code less plain_ext_code (strict at O1/Os, priced at O2)",
         "# bytes: code (CODE), data (initialised), static (data+bss); judged (ruling 2026-11-14): Os on total bytes (code+data; BASIC code+static) and clocks; O1/O2/O3 on clocks only, bytes reported in findings;"
         " best external per language: C = ow/bcc/tc/tcpp, Nib = the C compilers on the C twin with the Nib semantics (NAME~init, NAME~bounds; the plain source's best in plain_ext_*), BASIC = bc/pds71/vbdos (O2 key)",
-        "# verdicts: OK, WORSE, WORSE_LB (a reference lacks a cell: lower bound), NO_BAR (no reference), NO_TWIN (a Nib program whose twin is not measured: unproven, never OK), TWIN (a reference twin, not judged), UNMEASURED/REFUSED (counted, never OK)",
+        "# verdicts: OK, WORSE, CONVENTION (a reference stores the zeros ours holds in bss: shown, not counted a win or a loss), WORSE_LB (a reference lacks a cell: lower bound), NO_BAR (no reference), NO_TWIN (a Nib program whose twin is not measured: unproven, never OK), TWIN (a reference twin, not judged), UNMEASURED/REFUSED (counted, never OK)",
         "# reference cells measured/asked: " + " ".join(f"{name}={got}/{asked}" for name, (got, asked) in reference_coverage(table).items()) + "; a cell without a bar reads NO_BAR or WORSE_LB",
         "# counts: " + ", ".join(f"{level}:{verdict}={n}" for (level, verdict), n in sorted(tally.items())),
     ]

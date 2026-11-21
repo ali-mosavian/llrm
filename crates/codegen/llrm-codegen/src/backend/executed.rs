@@ -104,6 +104,9 @@ pub struct Executed {
     /// x87 `fxch`es executed: one instruction here, `x87_exchange` clocks on
     /// the CPU.
     pub exchanges: f64,
+    /// Each call instruction (its `at`, the key of `Procedure::callees`) with
+    /// how often per call it runs: what weights the callee's own work.
+    pub calls: Vec<(i64, f64)>,
 }
 
 impl Executed {
@@ -311,6 +314,7 @@ fn executed_over(
                         (out.branches + reaching, out.taken + taken, reaching - taken);
                 }
                 Some((Operation::Jump, _)) => out.jumps += reaching,
+                Some((Operation::Call, _)) => out.calls.push((one.at, reaching)),
                 Some((Operation::Exchange, _)) if is_fxch(one) => out.exchanges += reaching,
                 _ => {}
             }
