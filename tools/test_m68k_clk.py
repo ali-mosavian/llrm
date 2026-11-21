@@ -79,3 +79,10 @@ def test_gcc_builds_the_clang_branch_of_a_program_that_tests_it(tmp_path):
     plain = tmp_path / "q.c"
     plain.write_text("int a;\n")
     assert "-D__clang__" not in m68k_clk.gcc_command("gcc", "/", "68020", "Os", plain, "p.o", False, [])
+
+
+def test_the_bytes_of_a_cell_are_text_plus_data():
+    """A static table that is not const sits in `.data`; the text column alone gave word_compare_branches 208 B on both sides, 264 B loaded."""
+    from m68k_clk import loaded_bytes
+
+    assert loaded_bytes("   text\t   data\t    bss\t    dec\t    hex\tfilename\n    208\t     56\t      0\t    264\t    108\to.o\n") == "264"

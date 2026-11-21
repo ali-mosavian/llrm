@@ -1153,6 +1153,10 @@ impl Tti for X86 {
         self.tuning.jump_threading_latch_trial_at_size
     }
 
+    fn os_trial_clock_cap_percent(&self) -> Option<i64> {
+        self.tuning.os_trial_clock_cap_percent
+    }
+
     fn cold_site_ignores_sinks(&self) -> bool {
         self.tuning.cold_site_ignores_sinks
     }
@@ -1389,6 +1393,14 @@ impl Tti for X86 {
 
     fn sink_common_at_size(&self) -> bool {
         self.tuning.sink_common_at_size
+    }
+
+    fn late_memcpyopt_at_size(&self) -> bool {
+        self.tuning.late_memcpyopt_at_size
+    }
+
+    fn sink_common_phi_cost(&self) -> usize {
+        self.tuning.sink_common_phi_cost
     }
 
     fn x87_stack_slots(&self) -> Option<u32> {
@@ -2586,7 +2598,11 @@ impl Tti for X86 {
         // index beside it; a base register is fine (`@sym + reg`, the symbol
         // formed by a `lea`). The pin refuses only an offset or a scale above 1
         // (`isPositionIndependent() && is64Bit()`).
-        if self.quad && self.position_independent.get() && base_gv && (base_offset != 0 || scale > 1) {
+        // DEVIATE X64-PIE-SCALE: a scale of 2, 4 or 8 is a `lea`'d symbol with a
+        // scaled index, as it is without PIE.
+        let scaled_symbol = self.tuning.pie_scaled_symbol && matches!(scale, 2 | 4 | 8);
+        let refused_beside_symbol = base_offset != 0 || (scale > 1 && !scaled_symbol);
+        if self.quad && self.position_independent.get() && base_gv && refused_beside_symbol {
             return false;
         }
         match scale {
