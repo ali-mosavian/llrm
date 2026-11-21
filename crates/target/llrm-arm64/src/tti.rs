@@ -1518,6 +1518,25 @@ impl Tti for AArch64 {
         imm != i64::MIN && is_legal_arith_immediate(imm.unsigned_abs())
     }
 
+    /// Consider splitting the large offset of a struct or an array:
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L20344
+    fn should_consider_gep_offset_split(&self) -> bool {
+        true
+    }
+
+    /// `getPreferredLargeGEPBaseOffset`: the offsets that share their bits
+    /// above 12 rebase to a multiple of 4096 (one `add`), else the smallest
+    /// offset:
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L20333
+    fn preferred_large_gep_base_offset(
+        &self,
+        min: i64,
+        max: i64,
+    ) -> i64 {
+        let high = min & !0xfff;
+        if min >> 12 == max >> 12 && self.is_legal_add_immediate(high) { high } else { 0 }
+    }
+
     /// Integer comparisons are implemented with ADDS/SUBS:
     /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L20248
     fn is_legal_icmp_immediate(

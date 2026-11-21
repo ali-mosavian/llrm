@@ -2358,3 +2358,74 @@ s32_modsi3_fast_lean:                  ; __sa % __sb -> __sa (signed, the sign o
 s32_divmodsi4_fast_lean:         ; __sa / __sb -> __sa, __sa % __sb -> __sr (signed)
   jsr divmod32s_fast_lean
   jmp divmod32s_signs
+
+; ---- the multiply by a byte (last in the file: no routine above moves): A:X:rc2:rc3 * rc4, rc5..rc7 not read
+; (the caller does not set them). The compact walk is 8 trips; the speed walk stops at the multiplier's last set bit ----
+.export __mulsi3_byte
+__mulsi3_byte:
+  sta __sa
+  stx __sa+1
+  lda #0
+  sta __st
+  sta __st+1
+  sta __st+2
+  sta __st+3
+  ldx #8
+@next:
+  lsr rc4
+  bcc @skip
+  clc
+  lda __st
+  adc __sa
+  sta __st
+  lda __st+1
+  adc __sa+1
+  sta __st+1
+  lda __st+2
+  adc rc2
+  sta __st+2
+  lda __st+3
+  adc rc3
+  sta __st+3
+@skip:
+  asl __sa
+  rol __sa+1
+  rol rc2
+  rol rc3
+  dex
+  bne @next
+  jmp out32_st
+
+.export __mulsi3_fast_byte
+__mulsi3_fast_byte:
+  sta __sa
+  stx __sa+1
+  lda #0
+  sta __st
+  sta __st+1
+  sta __st+2
+  sta __st+3
+@next:
+  lsr rc4
+  bcc @skip
+  clc
+  lda __st
+  adc __sa
+  sta __st
+  lda __st+1
+  adc __sa+1
+  sta __st+1
+  lda __st+2
+  adc rc2
+  sta __st+2
+  lda __st+3
+  adc rc3
+  sta __st+3
+@skip:
+  asl __sa
+  rol __sa+1
+  rol rc2
+  rol rc3
+  lda rc4
+  bne @next
+  jmp out32_st

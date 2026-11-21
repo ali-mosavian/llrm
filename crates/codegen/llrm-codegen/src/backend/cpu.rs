@@ -706,6 +706,22 @@ impl Profile {
         Ok(!hot && self.pops_arguments(words)?)
     }
 
+    /// Whether a `sub sp,unit` (one word) is a push of a dead register:
+    /// 1 byte against 3, and as quick (both a clock on the 486). Two words are
+    /// two pushes, a clock more than the `sub`: QB m32 Os -710 B but +0.14%
+    /// executed instructions (`29_craps` +5.1%), so not taken.
+    ///
+    /// DEVIATE PAD1 (owner x86-m32-b, exit 2026-11-27,
+    /// `Tuning::pushes_pad_at_size`): gcc's `i386.md` peephole2 at -Os; the
+    /// pin keeps the `sub` (clang -Oz pads a call's three words with `subl
+    /// $4,%esp`).
+    pub fn pushes_pad(
+        &self,
+        words: i64,
+    ) -> bool {
+        self.size && words == 1 && self.target().tti().is_some_and(|tti| tti.pushes_pad_at_size())
+    }
+
     /// Whether a one-slot frame is `push`/`pop` of a scratch register in place
     /// of `sub`/`add` on the stack pointer: shorter, and where size is not
     /// wanted, only if no slower.

@@ -215,6 +215,17 @@ impl CombineHooks for Aarch64Lowering {
         true
     }
 
+    /// `AArch64TargetLowering::isLegalAddressingMode`: a base register and an
+    /// offset that `ldr` takes scaled by the access, or `ldur` unscaled.
+    fn is_legal_address_offset(
+        &self,
+        offset: i128,
+        bytes: u64,
+    ) -> bool {
+        i64::try_from(offset)
+            .is_ok_and(|offset| crate::tti::AArch64::is_legal_addressing_mode_for(bytes, false, offset, true, 0))
+    }
+
     fn fold_or_absorption(&self) -> bool {
         true
     }
@@ -448,6 +459,48 @@ impl LegalizeHooks for Aarch64Lowering {
         dag: &mut SelectionDAG,
         node: SDValue,
     ) -> Option<SDValue> {
+        // A branch on a constrained `f128` compare: the legalizer meets the
+        // branch before the compare (users first), so the compare is softened
+        // here and the branch reads the routine's result against zero as flags,
+        // as the pin's `BR_CC` of the softened `SETCC` does. The branch may
+        // read the compare through the `xor c, 1` that inverts it. What read
+        // the compare's chain reads the routines' now.
+        if dag.opcode(node) == ISD::BrCond {
+            let cond = dag.operand(node, 1);
+            let inverted = dag.opcode(cond) == ISD::Xor && dag.constant(dag.operand(cond, 1)) == Some(1);
+            let compare = if inverted { dag.operand(cond, 0) } else { cond };
+            let sole_reader = |dag: &SelectionDAG, value: SDValue, reader: u32| dag.users(value).all(|u| u == reader);
+            if matches!(dag.opcode(compare), ISD::StrictFSetCC | ISD::StrictFSetCCS)
+                && compare.res == 0
+                && sole_reader(dag, compare, if inverted { cond.node } else { node.node })
+                && (!inverted || sole_reader(dag, cond, node.node))
+            {
+                let mut chain = dag.operand(compare, 0);
+                let mut call = |dag: &mut SelectionDAG, name: &'static str, args: &[SDValue], ret: EVT| {
+                    let (value, out) = self.make_lib_call_chained(dag, name, args, ret, false, chain)?;
+                    chain = out;
+                    Some(value)
+                };
+                if let Some(Some(value)) = super::f128::compare(dag, compare, &mut call) {
+                    dag.replace_all_uses_with(SDValue { node: compare.node, res: 1 }, chain);
+                    let value = if inverted && dag.opcode(value) == ISD::SetCC {
+                        // `xor (setcc c), 1` is the compare of the inverse
+                        // code.
+                        let (lhs, rhs) = (dag.operand(value, 0), dag.operand(value, 1));
+                        let code = super::lowering::cond_of(dag, dag.operand(value, 2)).inverse_integer();
+                        dag.get_setcc(dag.value_type(value), lhs, rhs, code)
+                    } else if inverted {
+                        let (vt, one) = (dag.value_type(cond), dag.operand(cond, 1));
+                        dag.get_node(ISD::Xor, vt, &[value, one])
+                    } else {
+                        value
+                    };
+                    let (before, dest) = (dag.operand(node, 0), dag.operand(node, 2));
+                    let rebuilt = dag.get_node(ISD::BrCond, EVT::OTHER, &[before, value, dest]);
+                    return super::lowering::lower_brcond(dag, rebuilt).or(Some(rebuilt));
+                }
+            }
+        }
         // `f128`: the routine of its conversion or compare (`LowerF128Call`)
         {
             // A constrained compare's calls are ordered on its chain, each
@@ -612,7 +665,8 @@ impl Aarch64Lowering {
         let data = dag.node(node);
         let (ISD::GlobalAddress, NodeData::Global { symbol, offset }) = (data.opcode, data.data) else { return None };
         let vt = dag.value_type(node);
-        // A block's address is a label of this object, never loaded from the GOT.
+        // A block's address is a label of this object, never loaded from the
+        // GOT.
         if self.globals.get(symbol)?.got && self.globals.block_at(symbol, offset).is_none() {
             let target = dag.get_target_global_address(vt, symbol, 0);
             let loaded = dag.get_node(ISD::Target(aarch64_isd::LOADgot), vt, &[target]);
