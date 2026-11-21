@@ -76,6 +76,11 @@ pub struct Tuning {
     /// call of the function. A pop is 4 clocks on the 486, the add 1: in a
     /// loop the pops cost more than the bytes they save.
     pub pops_arguments_cold_only_at_size: bool,
+    /// DEVIATE PAD1 (owner x86-m32-b, exit 2026-11-27): at -Os a `sub sp,4`
+    /// that is not the frame's is a push of a dead register (gcc's `i386.md`
+    /// peephole2: `sub esp,4` is 3 bytes, `push eax` 1; a clock each). false:
+    /// the pin keeps the `sub` (clang -Oz too).
+    pub pushes_pad_at_size: bool,
     /// An x87 compare keeps `sahf` where bytes are held (-O1, size): `test ah,
     /// mask` is 2 bytes longer. DEVIATE X87-FCMP-AH names the target's own
     /// choice; the pin keeps `sahf` everywhere, so it is false there.
@@ -483,6 +488,11 @@ pub struct Tuning {
     /// `-unswitch-threshold` of the non-trivial loop unswitch (-O3): the cost
     /// (loop size times copies) a candidate must stay under; none: 50.
     pub unswitch_threshold: Option<i64>,
+    /// gcc's `empty_bb_or_one_feeding_into_p` (`tree-ssa-phiopt.cc`): a
+    /// two-entry phi folds to a select only when each arm is empty or one
+    /// statement that feeds the phi alone, so a nested diamond stays branches.
+    /// The pin's `foldTwoEntryPHINode` speculates up to its cost bar.
+    pub phiopt_one_feeding_statement: bool,
     /// `InlineParams::DefaultThreshold`, the inliner's bar for a caller not
     /// optimized for size; none: 225, or 250 at -O3.
     pub inline_threshold: Option<i64>,
@@ -873,6 +883,7 @@ impl Tuning {
         libc_memcpy: false,
         pops_arguments_at_size: true,
         pops_arguments_cold_only_at_size: false,
+        pushes_pad_at_size: false,
         keeps_sahf_where_bytes_are_held: false,
         divide_by_bytes: false,
         narrow_divide_live_limit: 0,
@@ -947,6 +958,7 @@ impl Tuning {
         backward_threading: true,
         spill_fold: None,
         unswitch_threshold: None,
+        phiopt_one_feeding_statement: false,
         inline_threshold: None,
         cold_site_ignores_sinks: false,
         inline_last_call_in_cold_site: false,

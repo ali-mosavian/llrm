@@ -217,6 +217,7 @@ pub mod combine_sub;
 pub mod combine_switch;
 pub mod combine_visit_select;
 pub mod combine_xor;
+pub mod combine_xor_icmps;
 pub mod condstores;
 pub mod condtocond;
 pub mod congruentiv;

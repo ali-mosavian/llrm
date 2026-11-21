@@ -1908,3 +1908,37 @@ b0:
     );
     assert_eq!(priced(&text, 0, false, CallerSize::Speed), (-190, 225));
 }
+
+/// pfpu.c `control(cw)` (`fesetround(modes[cw >> 10 & 3])`) was kept out of
+/// line at -Os on arm64 for six constant-argument sites: the guard counted the
+/// table load (3 units against a call's 2), though the load folds once the
+/// argument is a constant. The pin inlines it at cost 5 against 75; pfpu.o was
+/// +124 B over it.
+#[test]
+fn an_optsize_caller_inlines_a_callee_whose_table_load_folds_on_arm64() {
+    let text = "@modes = internal constant [4 x i32] [i32 0, i32 4194304, i32 8388608, i32 12582912]
+declare i32 @fesetround(i32)
+
+define internal void @callee(i16 %cw) {
+b0:
+  %s = lshr i16 %cw, 10
+  %z = zext i16 %s to i64
+  %p = getelementptr inbounds i32, ptr @modes, i64 %z
+  %m = load i32, ptr %p
+  %r = call i32 @fesetround(i32 %m)
+  ret void
+}
+
+define void @f() {
+b0:
+  call void @callee(i16 0)
+  call void @callee(i16 1024)
+  call void @callee(i16 2048)
+  ret void
+}
+";
+    let arm = llrm_arm64::tti::AArch64::of_cpu("generic").unwrap();
+    let params = InlineParams { compute_full_inline_cost: true, ..InlineParams::from_level(2) };
+    let (cost, threshold) = priced_params(text, 0, false, CallerSize::OptSize, Some(&arm), params, (6, true));
+    assert!(cost < threshold, "{cost} against {threshold}");
+}
