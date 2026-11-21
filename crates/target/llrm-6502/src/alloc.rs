@@ -339,11 +339,11 @@ fn runtime_clobbers(callee: &str) -> Option<std::sync::Arc<std::collections::BTr
 }
 
 /// The names a `jsr callee` may be written as: `emit_with` resolves the entry
-/// of a long operation (`_fast`, `_fast_byte`, `_fast_small`) after the
+/// of a long operation (`_fast`, `_fast_byte`, `_fast_small`, `_fast_lean`) after the
 /// allocation, and the registers the call reads are the same in each.
 fn entries_of(callee: &str) -> Vec<String> {
     let base = callee.strip_suffix("_byte").unwrap_or(callee);
-    ["_fast", "_fast_byte", "_fast_small", ""].iter().map(|entry| format!("{base}{entry}")).collect()
+    ["_fast", "_fast_byte", "_fast_small", "_fast_lean", ""].iter().map(|entry| format!("{base}{entry}")).collect()
 }
 
 fn imaginary() -> u8 {
@@ -4616,7 +4616,9 @@ fn emit_with<const STACK: bool>(
                     } else if division && byte {
                         "_fast_byte"
                     } else if division && !FAST_DIVISION.with(|f| f.get()) {
-                        "_fast_small"
+                        // the cold division of a speed level links the smallest wide path;
+                        // the size levels' divisions that pay run the faster unrolled one
+                        if speed { "_fast_lean" } else { "_fast_small" }
                     } else if division
                         || matches!(callee, "__ashlsi3" | "__lshrsi3" | "__ashrsi3")
                         || (callee == "__mulsi3" && FAST_MULTIPLY.with(|f| f.get()))

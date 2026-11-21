@@ -96,12 +96,16 @@ pub fn preprocess(
         if folded.contains(&node) {
             continue;
         }
-        let round = match dag.opcode(value) {
-            ISD::FpRound if dag.node(value).ops.len() == 2 => true,
-            ISD::FpExtend => false,
+        // The constrained forms carry their chain first, which the store
+        // continues instead of the entry node.
+        let (round, strict) = match dag.opcode(value) {
+            ISD::FpRound if dag.node(value).ops.len() == 2 => (true, false),
+            ISD::FpExtend => (false, false),
+            ISD::StrictFpRound => (true, true),
+            ISD::StrictFpExtend => (false, true),
             _ => continue,
         };
-        let source = dag.operand(value, 0);
+        let source = dag.operand(value, usize::from(strict));
         let (from, to) = (dag.value_type(source), dag.value_type(value));
         if !is_x87(from) && !in_sse(from, sse2) || !is_x87(to) && !in_sse(to, sse2) {
             continue;
@@ -110,7 +114,8 @@ pub fn preprocess(
         // Both in xmm registers: a legal conversion. Neither: an extension is a
         // no-op, and so is `fp_round x, 1` (the value is exact in the narrower
         // type).
-        if from_sse && to_sse || !from_sse && !to_sse && (!round || dag.constant(dag.operand(value, 1)) != Some(0)) {
+        let exact = round && dag.constant(dag.operand(value, 1 + usize::from(strict))) != Some(0);
+        if from_sse && to_sse || !from_sse && !to_sse && (!round || exact) {
             continue;
         }
         let mem = if round { to } else { from };
@@ -126,7 +131,7 @@ pub fn preprocess(
             space: 0,
             ordering: None,
         };
-        let chain = dag.entry_node();
+        let chain = if strict { dag.operand(value, 0) } else { dag.entry_node() };
         let store = dag.get_store(chain, source, slot, info);
         let reloaded = if mem == to {
             dag.get_load(to, store, slot, info)
@@ -134,6 +139,11 @@ pub fn preprocess(
             dag.get_ext_load(llrm_codegen::backend::selectiondag::actions::LoadExt::ExtLoad, to, store, slot, info)
         };
         dag.replace_all_uses_with(value, reloaded);
+        if strict {
+            // The chain result: the later nodes of the constrained region
+            // follow the reload.
+            dag.replace_all_uses_with(SDValue { node, res: 1 }, SDValue { node: reloaded.node, res: 1 });
+        }
         rewritten += 1;
     }
     rewritten
