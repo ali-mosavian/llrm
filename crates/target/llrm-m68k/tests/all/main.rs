@@ -3,6 +3,7 @@
 
 #[path = "../support/mod.rs"]
 mod support;
+mod alloca_call_area;
 mod stacksave_vla_loop;
 
 mod a6_free_without_frame_pointer;
