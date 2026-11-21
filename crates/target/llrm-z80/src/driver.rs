@@ -420,6 +420,43 @@ pub fn selections_with_alternatives(
     text: &str,
     request: &Request,
 ) -> Result<(Vec<Selected>, Vec<Selected>), String> {
+    selections_reusing(text, request, None).map(|(main, alternatives, _)| (main, alternatives))
+}
+
+/// What the mid-end made of each function of a module, hashed by its text.
+thread_local! {
+    /// The functions [`selections_reusing`] selected (not took from `reuse`),
+    /// in order.
+    static SELECTED_NAMES: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// The functions selected since the last call: one run of the selection for
+/// each.
+pub fn take_selected_names() -> Vec<String> {
+    SELECTED_NAMES.with(|held| std::mem::take(&mut *held.borrow_mut()))
+}
+
+pub type Digests = std::rc::Rc<std::collections::HashMap<String, u64>>;
+
+/// The selections of an earlier compile of the module. DEVIATE LSR-KEY-TRIAL
+/// (owner z80, exit 2026-12-01): the twin compile of a module differs from the
+/// base in the functions whose loops LSR rated by the other order; the
+/// others come out of the mid-end as they were, so what was selected for them
+/// is kept (the selection is the bulk of a compile).
+pub struct Reuse<'a> {
+    pub main: &'a [Selected],
+    pub alternatives: &'a [Selected],
+    pub digests: &'a Digests,
+}
+
+/// [`selections_with_alternatives`], taking from `reuse` the selections of the
+/// functions the mid-end left as it left them there, and the digests of this
+/// compile's functions.
+pub fn selections_reusing(
+    text: &str,
+    request: &Request,
+    reuse: Option<Reuse>,
+) -> Result<(Vec<Selected>, Vec<Selected>, Digests), String> {
     let mut program = program(text, request)?;
     // the module's data text, from the mid-end this compile ran:
     // `compile::kept_data_text` is not made to run it again
@@ -432,6 +469,22 @@ pub fn selections_with_alternatives(
         .filter(|global| global.function().is_some_and(|one| !one.is_declaration()))
         .filter_map(|global| global.name.as_deref().map(str::to_owned))
         .collect();
+    let digests: Digests = std::rc::Rc::new(
+        llrm_mir::print::functions(module)
+            .into_iter()
+            .map(|(name, body)| {
+                use std::hash::{Hash, Hasher};
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                body.hash(&mut hasher);
+                (name, hasher.finish())
+            })
+            .collect(),
+    );
+    let kept = |name: &str| {
+        reuse
+            .as_ref()
+            .filter(|before| before.digests.get(name).is_some() && before.digests.get(name) == digests.get(name))
+    };
     let select_form = |module: &llrm_mir::module::Module, name: &str| {
         crate::dagisel::function::FLAT_LOOP_TRIPS.with(|one| one.set(request.flat_loop_trips));
         crate::dagisel::pipeline::STRICT_LEVEL
@@ -453,6 +506,7 @@ pub fn selections_with_alternatives(
     // The selection is scheduled by `Source` and by `ILP` from one DAG.
     let select =
         |module: &llrm_mir::module::Module, name: &str| -> (Result<Selection, String>, Result<Selection, String>) {
+            SELECTED_NAMES.with(|held| held.borrow_mut().push(name.to_owned()));
             crate::dagisel::pipeline::CARRY_OPS.with(|count| count.set(0));
             let mut one = select_form(module, name);
             if crate::dagisel::pipeline::CARRY_OPS.with(std::cell::Cell::get) > 0 {
@@ -549,6 +603,11 @@ pub fn selections_with_alternatives(
     let main: Vec<Selected> = names
         .iter()
         .map(|name| {
+            if let Some(before) = kept(name)
+                && let Some(held) = before.main.iter().find(|(one, ..)| one == name)
+            {
+                return held.clone();
+            }
             let (source, ilp) = select(module, name);
             (name.clone(), source, ilp)
         })
@@ -556,6 +615,9 @@ pub fn selections_with_alternatives(
     let mut alternatives: Vec<Selected> = names
         .iter()
         .filter_map(|name| {
+            if let Some(before) = kept(name) {
+                return before.alternatives.iter().find(|(one, ..)| one == name).cloned();
+            }
             // The all-calls form is priced bytes first at every level (it was
             // -O1 only: at 1 B = 3 T the static loop weights, about
             // 5x under the measured ones, made -368 B for +5970 T look like a
@@ -634,7 +696,7 @@ pub fn selections_with_alternatives(
         }
         MULTI_RECURSIVE.with(|held| held.borrow_mut().clear());
     }
-    Ok((main, alternatives))
+    Ok((main, alternatives, digests))
 }
 
 /// The cost model the mid-end reads: the pin's `opt` with no target, whose

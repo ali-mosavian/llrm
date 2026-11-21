@@ -104,7 +104,7 @@ thread_local! {
     /// compiles a module three ways, as
     /// -Oz and as -Os twice, and each may be compiled again with its loop
     /// copies refused), most recent first, with what each was run for.
-    static SELECTED: std::cell::RefCell<Vec<(String, SelectionKey, Selections, Selections, (usize, UnrollDecisions, Option<crate::driver::Fingerprint>))>> =
+    static SELECTED: std::cell::RefCell<Vec<(String, SelectionKey, Selections, Selections, (usize, UnrollDecisions, Option<crate::driver::Fingerprint>), crate::driver::Digests)>> =
         const { std::cell::RefCell::new(Vec::new()) };
     /// The lines `module_bytes` allocated, kept for the module it chose:
     /// (selection, function, number) -> lines. The choice allocates every
@@ -558,13 +558,41 @@ fn cached_with_copies(
         held.borrow()
             .iter()
             .find(|(text, was, ..)| text == ir && *was == key)
-            .map(|(_, _, one, other, copies)| (one.clone(), other.clone(), *copies))
+            .map(|(_, _, one, other, copies, _)| (one.clone(), other.clone(), *copies))
     });
     if let Some(one) = held {
         return Ok(one);
     }
     SELECTION_RUNS.with(|runs| runs.set(runs.get() + 1));
-    let (main, alternatives) = selections_with_alternatives(ir, request)?;
+    // the twin of a compile held (`Request::lsr_alternate`) keeps what that
+    // compile selected for the functions the mid-end left alone
+    let before = request
+        .lsr_alternate
+        .then(
+            || {
+                let base = selection_key(&Request { lsr_alternate: false, ..request.clone() });
+                SELECTED.with(|held| {
+                    held.borrow()
+                        .iter()
+                        .find(|(text, was, ..)| text == ir && *was == base)
+                        .map(|(_, _, one, other, _, digests)| (one.clone(), other.clone(), digests.clone()))
+                })
+            },
+        );
+    let reuse = before.flatten();
+    let (main, alternatives, digests) = crate::driver::selections_reusing(
+        ir,
+        request,
+        reuse
+            .as_ref()
+            .map(
+                |(one, other, digests)| crate::driver::Reuse {
+                    main: one.as_slice(),
+                    alternatives: other.as_slice(),
+                    digests,
+                },
+            ),
+    )?;
     if let Some(data) = crate::driver::data_of_last_selection() {
         keep_data_text(ir, request, data);
     }
@@ -573,7 +601,7 @@ fn cached_with_copies(
     let (one, other) = (Selections::new(main), Selections::new(alternatives));
     SELECTED.with(|held| {
         let mut held = held.borrow_mut();
-        held.insert(0, (ir.to_owned(), key, one.clone(), other.clone(), copies));
+        held.insert(0, (ir.to_owned(), key, one.clone(), other.clone(), copies, digests));
         held.truncate(6);
     });
     Ok((one, other, copies))
