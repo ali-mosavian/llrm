@@ -441,7 +441,9 @@ pub enum ConstrainedOp {
     FpExt,
     FpTrunc,
     SiToFp,
+    UiToFp,
     FpToSi,
+    FpToUi,
     Rint,
     /// `fcmp`: quiet.
     FCmp,
@@ -750,7 +752,7 @@ thread_local! {
     static PROBES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-const TABLE: [Spec; 111] = [
+const TABLE: [Spec; 113] = [
     overflow("llvm.sadd.with.overflow", BinaryOp::Add, true),
     overflow("llvm.uadd.with.overflow", BinaryOp::Add, false),
     overflow("llvm.ssub.with.overflow", BinaryOp::Sub, true),
@@ -1158,7 +1160,9 @@ const TABLE: [Spec; 111] = [
     conversion("llvm.experimental.constrained.fpext", ConstrainedOp::FpExt, [Kind::Float, Kind::Float], FPEXT),
     conversion("llvm.experimental.constrained.fptrunc", ConstrainedOp::FpTrunc, [Kind::Float, Kind::Float], FPTRUNC),
     conversion("llvm.experimental.constrained.sitofp", ConstrainedOp::SiToFp, [Kind::Float, Kind::Int], SITOFP),
+    conversion("llvm.experimental.constrained.uitofp", ConstrainedOp::UiToFp, [Kind::Float, Kind::Int], SITOFP),
     conversion("llvm.experimental.constrained.fptosi", ConstrainedOp::FpToSi, [Kind::Int, Kind::Float], FPTOSI),
+    conversion("llvm.experimental.constrained.fptoui", ConstrainedOp::FpToUi, [Kind::Int, Kind::Float], FPTOSI),
 ];
 
 /// Gives a function named `name` its intrinsic's attributes, if it names
