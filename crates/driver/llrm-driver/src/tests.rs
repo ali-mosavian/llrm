@@ -6646,29 +6646,33 @@ fn constrained_narrow_and_unsigned_conversions_select_to_sse_at_m64() {
     }
 }
 
-/// A constrained unsigned `i64` conversion at m64 stopped the legalizer
-/// ("convert node to libcall"): x86 had no chained library call. The pin calls
-/// `__floatundidf` for `uitofp` and expands `fptoui` inline (`expandFP_TO_UINT`:
-/// a signaling compare, a subtract, two `cvttsd2si`s and an xor).
+/// A constrained unsigned `i64` conversion at m64 selected a compiler-rt routine
+/// (`__floatundidf`, `__fixunssfdi`) where the pin's llc emits straight code:
+/// `ExpandLegalINT_TO_FP`'s halve-convert-double with one `cvtsi2sd` and a
+/// strict `addsd` for `uitofp`, and `expandFP_TO_UINT`'s signaling compare,
+/// subtract, `cvtt` and xor for `fptoui`, `f32` sources included.
 #[test]
 fn constrained_unsigned_i64_conversions_select_as_the_pin_does_at_m64() {
-    for (arg, ret, op, wanted, unwanted) in [
-        ("i64", "double", "uitofp", "call __floatundidf", "cvt"),
-        ("double", "i64", "fptoui", "comisd", "call "),
+    for (arg, ret, op, wanted) in [
+        ("i64", "double", "uitofp", "addsd"),
+        ("i64", "float", "uitofp", "addss"),
+        ("double", "i64", "fptoui", "comisd"),
+        ("float", "i64", "fptoui", "comiss"),
     ] {
         let rounding = if op == "uitofp" { ", metadata !\"round.dynamic\"" } else { "" };
         let tail = if op == "uitofp" { "metadata, metadata" } else { "metadata" };
-        let (r, a) = (ret.replace("double", "f64"), arg.replace("double", "f64"));
+        let short = |t: &str| t.replace("double", "f64").replace("float", "f32");
+        let (r, a) = (short(ret), short(arg));
         let text = format!(
             "target datalayout = \"@m64-datalayout@\"\ndefine {ret} @f({arg} %x) strictfp {{\n  %r = call {ret} @llvm.experimental.constrained.{op}.{r}.{a}({arg} %x{rounding}, metadata !\"fpexcept.strict\") strictfp\n  ret {ret} %r\n}}\ndeclare {ret} @llvm.experimental.constrained.{op}.{r}.{a}({arg}, {tail})\n"
         );
         let (built, _) = compiled(&flags(&["-m64", "-O1", "--isel=dag"]), &text, "f")
-            .unwrap_or_else(|error| panic!("{op}: {error:?}"));
+            .unwrap_or_else(|error| panic!("{op} {arg}: {error:?}"));
         let listing = llrm_codegen::backend::masm::text(&built).unwrap();
-        assert!(listing.contains(wanted), "{op}: no {wanted}\n{listing}");
-        assert!(!listing.contains(unwanted), "{op}: has {unwanted}\n{listing}");
-        if op == "fptoui" {
-            assert_eq!(listing.matches("cvttsd2si").count(), 1, "{op}: one signed convert\n{listing}");
-        }
+        assert!(listing.contains(wanted), "{op} {arg}: no {wanted}\n{listing}");
+        assert!(!listing.contains("call "), "{op} {arg}: a routine is called\n{listing}");
+        let converts = if op == "uitofp" { "cvtsi2s" } else { "cvtts" };
+        let count = 1;
+        assert_eq!(listing.matches(converts).count(), count, "{op} {arg}: {converts} count\n{listing}");
     }
 }
