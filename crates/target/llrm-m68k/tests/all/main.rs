@@ -8,6 +8,7 @@ mod stacksave_vla_loop;
 mod a6_free_without_frame_pointer;
 mod abi_parse_once;
 mod abs_select;
+mod memset_stores_limit;
 mod accumulate_commute;
 mod add_immediate;
 mod addr_roles;
