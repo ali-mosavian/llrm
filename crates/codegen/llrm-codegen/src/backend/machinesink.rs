@@ -718,7 +718,23 @@ impl Sinker {
                     && !(frame_cell && self.regs.is_stack(register))
                     && !(default_segment && self.regs.is_data_segment(register)),
             );
-        if physical_reads || physical(&effect.writes) || flags(&reads) {
+        // `FindSuccToSinkTo`: a read of a physical register that is not
+        // constant stays. The lanes of an effect leave the stack
+        // pointer out, so `v = mov sp` (a `stacksave`) reads nothing there.
+        let reads_stack_pointer = one
+            .what
+            .as_ref()
+            .is_some_and(
+                |what| what.sources
+                    .iter()
+                    .any(
+                        |place| matches!(
+                            place,
+                            Loc::Reg(register) if self.regs.is_stack(register.register)
+                        ),
+                    ),
+            );
+        if physical_reads || reads_stack_pointer || physical(&effect.writes) || flags(&reads) {
             return true;
         }
         if !flags(&effect.writes) {
@@ -1971,6 +1987,49 @@ mod tests {
         let moved = sunk(&body, false);
         assert_eq!(names(&moved, 0), ["cmp", "jbe"], "the lea left the block");
         assert_eq!(names(&moved, 1), ["lea", "mov"], "and went into the arm");
+    }
+
+    /// `v = mov sp` (an `llvm.stacksave`) sank past the alloca's write of `sp`
+    /// into the arm that restores it, so the restore freed nothing and each
+    /// trip's array sat lower (tests/run/c/vla_loop_stack_restored.c x86_64
+    /// -O2 printed `0 0 0 1 1 1 93`).
+    #[test]
+    fn test_a_read_of_the_stack_pointer_stays_above_its_write() {
+        use llrm_lir::registers::RegId;
+
+        use crate::model::ir::Reg;
+        let sp = || Loc::Reg(Reg { register: RegId::SP, width: 2 });
+        let imm = |value: i64| Loc::Imm(crate::model::ir::Imm { value, width: 2, address: None });
+        let entry = LirBlock {
+            succ: vec![1, 2].into(),
+            ..LirBlock::new(
+                0,
+                vec![
+                    insn(0, Operation::Move, "mov", vec![held(3)], vec![sp()], vec![3], vec![]),
+                    insn(1, Operation::Binary, "sub", vec![sp()], vec![sp(), imm(16)], vec![], vec![]),
+                    insn(2, Operation::Compare, "cmp", vec![], vec![held(2), imm(5)], vec![], vec![2]),
+                    insn(3, Operation::Branch, "jbe", vec![], vec![], vec![], vec![]),
+                ],
+            )
+        };
+        let arm = LirBlock {
+            succ: vec![2].into(),
+            ..LirBlock::new(1, vec![insn(4, Operation::Move, "mov", vec![sp()], vec![held(3)], vec![], vec![3])])
+        };
+        let join = LirBlock::new(2, vec![insn(5, Operation::Return, "ret", vec![], vec![], vec![], vec![])]);
+        let mut body = LirBody::new(
+            "vla",
+            0,
+            vec![entry.into(), arm.into(), join.into()],
+            IndexMap::default(),
+            IndexMap::default(),
+        );
+        body.inputs = [2].into_iter().collect();
+        body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+        let moved = sunk(&body, false);
+        let first = |block: usize| moved.blocks[block].insns.first().and_then(|one| one.what.as_ref()?.name.clone());
+        assert_eq!(first(0).as_deref(), Some("mov"), "the save stays above the `sub sp`");
+        assert_eq!(moved.blocks[1].insns.len(), 1, "and the arm holds only the restore");
     }
 
     /// The same, with the operand read again in the arm: the `add` then needs
