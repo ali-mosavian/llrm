@@ -28,10 +28,16 @@ static PRESSURE: LazyLock<llrm_target::pressure::PressureSets> =
 static REGISTERS: LazyLock<Vec<llrm_target::registers::Register>> =
     LazyLock::new(|| llrm_target::registers::parse(include_str!("registers.regs")).expect("registers.regs parses"));
 
-/// The limit of every pressure set here (`computePSetLimit`): a register may
-/// be allocated if its root is a `gpr`, or is `a6` in a function with no frame
-/// pointer (`getReservedRegs`); `sp` never.
-pub fn pressure_limits(a6_free: bool) -> Vec<u32> {
+/// The limit of every pressure set here (`computePSetLimit`): a register
+/// counts if its root is a `gpr`; `a6` and `sp` never.
+///
+/// DEVIATE M68K-LICM-LIMIT (owner wasm-3, exit 2026-12-10, when the allocator
+/// rematerialises a hoisted constant instead of spilling it): the pin counts
+/// `a6` in a function with no frame pointer (`getReservedRegs`, AR16 limit 9).
+/// With 9 the shared `MachineLICM` hoists one more value than ours keeps in a
+/// register: known_loads_walks -O3 68000 +210 B, early_exit_widths +10 B,
+/// early_exit_index +4 B against 8, with `%a6` allocatable either way.
+pub fn pressure_limits() -> Vec<u32> {
     (0..PRESSURE.sets.len())
         // A set whose largest class the table leaves out holds no value
         // here: its raw limit stands.
@@ -44,7 +50,7 @@ pub fn pressure_limits(a6_free: bool) -> Vec<u32> {
                     .iter()
                     .find(|one| one.name == name)
                     .and_then(|one| REGISTERS.iter().find(|root| root.name == one.root))
-                    .is_some_and(|root| root.is("gpr") || a6_free && root.name == "a6")
+                    .is_some_and(|root| root.is("gpr"))
             })
         })
         .collect()
@@ -334,7 +340,7 @@ impl Target for M68k {
     }
 
     fn pressure(&self) -> Option<(&'static llrm_target::pressure::PressureSets, Vec<u32>)> {
-        Some((&PRESSURE, pressure_limits(false)))
+        Some((&PRESSURE, pressure_limits()))
     }
 
     /// An opcode this target adds above the pin's table is not described: it

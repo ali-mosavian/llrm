@@ -97,11 +97,12 @@ fn a6_stays_with_the_call_target_when_a_callee_is_called_often() {
     assert_eq!(direct, 0, "{direct} calls of `use` left direct:\n{out}");
 }
 
+/// DEVIATE M68K-LICM-LIMIT: counting `%a6` in the hoist limit (the pin's 9)
+/// held `move.l #65535, %a5` across the loops of early_exit_index -O2 and saved
+/// one more register: +4 B (known_loads_walks -O3: +210 B).
 #[test]
-fn hoisting_counts_a6_only_while_the_call_target_pass_leaves_it_free() {
-    let calls: String = (0..6).map(|n| format!("  call void @use(ptr @g{n})\n")).collect();
-    let ir = stores_in_a_loop(&calls, "");
-    let out = assembly(&ir, cpu_of("68000").unwrap(), Level::O2).expect("compiles");
-    let spilled = out.lines().filter(|l| l.contains("move.l") && l.contains("%a") && l.contains(",%sp)")).count();
-    assert!(spilled <= 4, "{spilled} stores and reloads of an address through the frame:\n{out}");
+fn the_hoist_limit_does_not_count_a6_so_a_constant_is_not_held_in_a_saved_register() {
+    let out =
+        assembly(include_str!("../data/early_exit_index.ll"), cpu_of("68000").unwrap(), Level::O2).expect("compiles");
+    assert!(!out.contains("#65535, %a"), "a constant is held in an address register:\n{out}");
 }

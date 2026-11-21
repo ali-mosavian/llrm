@@ -693,26 +693,6 @@ fn size_build(
             .is_some_and(|one| has(&one.attrs, "optsize") || has(&one.attrs, "minsize"))
 }
 
-/// Whether the call-target pass is to have `%a6` ([`crate::calltarget::pays`]).
-fn a6_goes_to_calls(
-    function: &crate::mfunc::MFunction,
-    options: Options,
-    cpu: Cpu,
-) -> bool {
-    options.short && options.call_targets && crate::calltarget::pays(function, cpu)
-}
-
-/// Whether the allocator may use `%a6`: the pin reserves it only with a frame
-/// pointer (`M68kRegisterInfo::getReservedRegs`). The shared stages price
-/// register pressure by the same answer.
-fn a6_is_free(
-    function: &crate::mfunc::MFunction,
-    options: Options,
-    cpu: Cpu,
-) -> bool {
-    !crate::expand::needs_frame_pointer(function) && !a6_goes_to_calls(function, options, cpu)
-}
-
 /// Whether the shared `MachineLICM` runs on a function.
 ///
 /// DEVIATE M68K-LICM-SPEED (owner wasm-3, exit 2026-12-10, when `m68k/shared-licm-direct-copies`
@@ -1028,12 +1008,11 @@ fn items_once(
             }
             function.odds = Some(edge_odds(module, name)?);
             expand_cmov(&mut function)?;
-            let a6_free = a6_is_free(&function, options, cpu);
             if licm_runs(options, wants_size) {
-                function = crate::regalloc::shared_licm(&function, a6_free, wants_size)?;
+                function = crate::regalloc::shared_licm(&function, wants_size)?;
             }
             if options.shared_cse {
-                let shared = crate::regalloc::shared_cse(&function, a6_free)?;
+                let shared = crate::regalloc::shared_cse(&function)?;
                 touched.shared_cse = !same_instructions(&function, &shared);
                 function = shared;
             }
@@ -1076,7 +1055,7 @@ fn items_once(
     let first_slot = function.locals.iter().map(|local| local.0 + 1).max().unwrap_or(0);
     crate::mirdump::dump("before allocation", &function, None);
     let allocating = llrm_support::debug::span("m68k allocate");
-    let a6_for_calls = a6_goes_to_calls(&function, options, cpu);
+    let a6_for_calls = options.short && options.call_targets && crate::calltarget::pays(&function, cpu);
     let (assignment, slots) = if std::env::var_os("LLRM_M68K_SPIKE").is_some() {
         crate::regalloc::allocate_spilling_by_frequency(&mut function, first_slot)?
     } else {
