@@ -215,6 +215,17 @@ impl CombineHooks for Aarch64Lowering {
         true
     }
 
+    /// `AArch64TargetLowering::isLegalAddressingMode`: a base register and an
+    /// offset that `ldr` takes scaled by the access, or `ldur` unscaled.
+    fn is_legal_address_offset(
+        &self,
+        offset: i128,
+        bytes: u64,
+    ) -> bool {
+        i64::try_from(offset)
+            .is_ok_and(|offset| crate::tti::AArch64::is_legal_addressing_mode_for(bytes, false, offset, true, 0))
+    }
+
     fn fold_or_absorption(&self) -> bool {
         true
     }
