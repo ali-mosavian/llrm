@@ -2568,9 +2568,11 @@ pub fn build_with_places(
             // one `x`
             op::LDAX | op::STAX | op::LDAX16 | op::STAX16 => {
                 indexed_address(&o[1], &o[2]).map_err(Unsupported)?;
-                let (acc, x) = (Reg::Phys(reg::A), Reg::Phys(reg::X));
+                let acc = Reg::Phys(reg::A);
                 let index = b.byte(name(&o[3])?)?;
-                b.copy(x, index);
+                // `abs,x` and `abs,y` both exist: the index lives in either
+                // (llvm-mos `LDAAbsIdx`/`STAbsIdx`, index class `XY`)
+                let x = b.copy_to_class(index, Class(Class::X | Class::Y));
                 let wide = matches!(inst.opcode, op::LDAX16 | op::STAX16);
                 let load = matches!(inst.opcode, op::LDAX | op::LDAX16);
                 let halves = if load {
@@ -4666,8 +4668,12 @@ fn emit_with<const STACK: bool>(
                 // `x >> 7` and `x << 7` of a byte: four bytes, not seven shifts
                 (Kind::Op("TOPBIT"), _) => out.push_str("  asl a\n  lda #0\n  rol a\n"),
                 (Kind::Op("LOWBIT"), _) => out.push_str("  lsr a\n  lda #0\n  ror a\n"),
-                (Kind::Op("LDAX"), [_, Operand::Symbol(symbol, _), _]) => writeln!(out, "  lda {symbol},x").unwrap(),
-                (Kind::Op("STAX"), [_, Operand::Symbol(symbol, _), _]) => writeln!(out, "  sta {symbol},x").unwrap(),
+                (Kind::Op("LDAX"), [_, Operand::Symbol(symbol, _), _]) => {
+                    writeln!(out, "  lda {symbol},{}", register_name(regs[1])).unwrap()
+                }
+                (Kind::Op("STAX"), [_, Operand::Symbol(symbol, _), _]) => {
+                    writeln!(out, "  sta {symbol},{}", register_name(regs[1])).unwrap()
+                }
                 (Kind::Op("SAVEC"), _) => out.push_str("  lda #0\n  rol a\n"),
                 (Kind::Op("LOADC"), _) => out.push_str("  lsr a\n"),
                 (Kind::Op(step @ ("SHL1" | "SRL1")), _) => {

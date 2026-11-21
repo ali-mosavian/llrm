@@ -1212,6 +1212,16 @@ pub trait Tti {
         Cost::BASIC
     }
 
+    /// `getAddressComputationCost` of a scalar access's value type, which is what
+    /// `getMemoryInstructionCost` adds to a load or store at VF 1: the base model
+    /// answers 0 (AArch64's 1 is the default here).
+    fn scalar_access_address_cost(
+        &self,
+        kind: CostKind,
+    ) -> Cost {
+        self.address_computation_cost(kind)
+    }
+
     /// `getAddressComputationCost` of one lane of a scalarized access
     /// (`getMemInstScalarizationCost`, which passes a vector of pointers and
     /// the pointer's SCEV): `stride_bytes` is the constant step of the
@@ -2269,6 +2279,11 @@ pub trait Tti {
     /// `Tuning::rep_movs_at_size_max`.
     fn rep_movs_at_size_max(&self) -> u64 {
         128
+    }
+
+    /// `Tuning::rep_movs_at_speed_max`.
+    fn rep_movs_at_speed_max(&self) -> u64 {
+        0
     }
 
     /// `Tuning::rep_stos_at_size_max`.
