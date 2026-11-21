@@ -941,7 +941,7 @@ impl Function {
         &self,
         block: BlockId,
     ) -> bool {
-        self.blocks[block.0 as usize].placed
+        self.blocks.get(block.0 as usize).is_some_and(|one| one.placed)
     }
 
     pub fn entry(&self) -> Option<BlockId> {

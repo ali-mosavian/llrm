@@ -2928,7 +2928,7 @@ fn a_long_remainder_calls_the_fast_routine_only_where_it_is_hot() {
          %c = icmp ult i32 %j, %n\n  br i1 %c, label %l, label %x\nx:\n  ret i32 %r\n}",
     );
     let text = assembly(&cold, &Request::new(Level::O2)).unwrap();
-    assert!(text.contains("__modsi3_fast_small\n") && !text.contains("__modsi3_fast\n"), "a cold site:\n{text}");
+    assert!(text.contains("__modsi3_fast_lean\n") && !text.contains("__modsi3_fast\n"), "a cold site:\n{text}");
     for (ir, what) in [(&looped, "a loop"), (&from_a_loop, "a function called from a loop")] {
         let text = assembly(ir, &Request::new(Level::O2)).unwrap();
         assert!(text.contains("__modsi3_fast\n") && !text.contains("_small"), "{what}:\n{text}");
