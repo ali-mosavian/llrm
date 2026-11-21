@@ -30,7 +30,7 @@
 
 use llrm_codegen::backend::selectiondag::isd::ISD;
 use llrm_codegen::backend::selectiondag::mvt::EVT;
-use llrm_codegen::backend::selectiondag::target_calling::{ByVal, LiveIn, TargetCalling};
+use llrm_codegen::backend::selectiondag::target_calling::{ByVal, LiveIn, Site, TargetCalling};
 pub use llrm_codegen::backend::selectiondag::target_calling::{Ext, FixedObject, In, Out};
 use llrm_codegen::backend::selectiondag::{MemBase, MemInfo, NodeData, SDValue, SelectionDAG};
 use llrm_target::calling::{Convention, Kind, Place};
@@ -163,6 +163,34 @@ impl M68kCalling {
                 dag.get_store(after, load, to, info)
             })
             .collect()
+    }
+
+    /// Whether `RetCC_M68k_C` has a register for every one of `parts` (type, pointer), in order:
+    /// a result of a size it names none for (an `f80`: 10 bytes) or a third word has none, and
+    /// `result_register` would panic on it.
+    pub fn results_have_registers(
+        &self,
+        dag: &SelectionDAG,
+        parts: &[(EVT, bool)],
+    ) -> bool {
+        parts.iter().enumerate().all(|(at, &(vt, pointer))| {
+            let before = Self::results_before(dag, parts[..at].iter().copied(), vt, pointer);
+            let names = if pointer {
+                self.convention.results.get("address")
+            } else {
+                self.convention.results.get(&(vt.size_in_bits() / 8).max(1).to_string())
+            };
+            names.is_some_and(|names| before < names.len())
+        })
+    }
+
+    pub fn returns_in_registers(
+        &self,
+        dag: &SelectionDAG,
+        ins: &[In],
+    ) -> bool {
+        let parts: Vec<(EVT, bool)> = ins.iter().map(|one| (one.vt, one.pointer)).collect();
+        self.results_have_registers(dag, &parts)
     }
 
     /// The register `RetCC_M68k_C` puts a result of `vt` in.
@@ -416,6 +444,26 @@ impl TargetCalling for M68kCalling {
         outs: &[Out],
     ) -> SDValue {
         M68kCalling::lower_return(self, dag, chain, outs)
+    }
+
+    /// A result with no register in `RetCC_M68k_C` (an `f80`) is refused where the builder
+    /// asks, a function's return and a call's results, as the pin does not lower it either.
+    fn accepts(
+        &self,
+        dag: &SelectionDAG,
+        site: Site,
+        outs: &[Out],
+        ins: &[In],
+    ) -> Result<(), &'static str> {
+        let placed = match site {
+            Site::Return => {
+                let parts: Vec<(EVT, bool)> = outs.iter().map(|one| (dag.value_type(one.value), one.pointer)).collect();
+                self.results_have_registers(dag, &parts)
+            }
+            Site::Call => self.returns_in_registers(dag, ins),
+            Site::Arguments => true,
+        };
+        if placed { Ok(()) } else { Err("an m68k result no register of RetCC_M68k_C holds") }
     }
 
     /// `LowerCall`'s sibcall: `TC_RETURN chain, callee, fpdiff`, for a direct
