@@ -492,6 +492,17 @@ fn memory_operand(
     };
     // iced spells a 32-bit displacement of a 64-bit address as size 8.
     let displ_size = if displ_size == 4 && (base.is_gpr64() || index.is_gpr64()) { 8 } else { displ_size };
+    // `[rbp + i]` and `[r13 + i]` carry a zero byte of displacement (a base of
+    // those registers has no displacement-free form); at scale 1 the index and
+    // the base are the same address summed either way, so the register that has
+    // the form is the base.
+    let swap = scale == 1
+        && displ == 0
+        && displ_size == 0
+        && matches!(base, RegId::RBP | RegId::R13)
+        && index.is_gpr64()
+        && !matches!(index, RegId::RBP | RegId::R13 | RegId::RSP);
+    let (base, index) = if swap { (index, base) } else { (base, index) };
     MemoryOperand::new(base.iced(), index.iced(), scale as u32, displ, displ_size, false, overriding(base, seg).iced())
 }
 

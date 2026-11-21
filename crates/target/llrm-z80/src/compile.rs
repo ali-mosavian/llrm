@@ -104,7 +104,7 @@ thread_local! {
     /// compiles a module three ways, as
     /// -Oz and as -Os twice, and each may be compiled again with its loop
     /// copies refused), most recent first, with what each was run for.
-    static SELECTED: std::cell::RefCell<Vec<(String, SelectionKey, Selections, Selections, (usize, UnrollDecisions, Option<crate::driver::Fingerprint>))>> =
+    static SELECTED: std::cell::RefCell<Vec<(String, SelectionKey, Selections, Selections, (usize, UnrollDecisions, Option<crate::driver::Fingerprint>), crate::driver::Digests)>> =
         const { std::cell::RefCell::new(Vec::new()) };
     /// The lines `module_bytes` allocated, kept for the module it chose:
     /// (selection, function, number) -> lines. The choice allocates every
@@ -558,13 +558,41 @@ fn cached_with_copies(
         held.borrow()
             .iter()
             .find(|(text, was, ..)| text == ir && *was == key)
-            .map(|(_, _, one, other, copies)| (one.clone(), other.clone(), *copies))
+            .map(|(_, _, one, other, copies, _)| (one.clone(), other.clone(), *copies))
     });
     if let Some(one) = held {
         return Ok(one);
     }
     SELECTION_RUNS.with(|runs| runs.set(runs.get() + 1));
-    let (main, alternatives) = selections_with_alternatives(ir, request)?;
+    // the twin of a compile held (`Request::lsr_alternate`) keeps what that
+    // compile selected for the functions the mid-end left alone
+    let before = request
+        .lsr_alternate
+        .then(
+            || {
+                let base = selection_key(&Request { lsr_alternate: false, ..request.clone() });
+                SELECTED.with(|held| {
+                    held.borrow()
+                        .iter()
+                        .find(|(text, was, ..)| text == ir && *was == base)
+                        .map(|(_, _, one, other, _, digests)| (one.clone(), other.clone(), digests.clone()))
+                })
+            },
+        );
+    let reuse = before.flatten();
+    let (main, alternatives, digests) = crate::driver::selections_reusing(
+        ir,
+        request,
+        reuse
+            .as_ref()
+            .map(
+                |(one, other, digests)| crate::driver::Reuse {
+                    main: one.as_slice(),
+                    alternatives: other.as_slice(),
+                    digests,
+                },
+            ),
+    )?;
     if let Some(data) = crate::driver::data_of_last_selection() {
         keep_data_text(ir, request, data);
     }
@@ -573,7 +601,7 @@ fn cached_with_copies(
     let (one, other) = (Selections::new(main), Selections::new(alternatives));
     SELECTED.with(|held| {
         let mut held = held.borrow_mut();
-        held.insert(0, (ir.to_owned(), key, one.clone(), other.clone(), copies));
+        held.insert(0, (ir.to_owned(), key, one.clone(), other.clone(), copies, digests));
         held.truncate(6);
     });
     Ok((one, other, copies))
@@ -4254,6 +4282,69 @@ fn prefers_by_regret(
 /// strict on both axes (O1, Os, Oz) take the generic add only where it is no
 /// worse on either, the others the cheaper at 1 B = 3 T.
 fn lines_of(
+    selected: &Selections,
+    name: &str,
+    number: usize,
+    request: &Request,
+) -> Result<Vec<Line>, String> {
+    // DEVIATE LSR-KEY-TRIAL (owner z80, exit 2026-12-01): a function the
+    // mid-end made as an earlier compile of the module did has its lines
+    // already: a call clobbers every register, so they depend on its own
+    // selection and on nothing of its callees.
+    let digest = selected
+        .iter()
+        .find(|(one, ..)| one == name)
+        .and_then(|(_, source, _)| source.as_ref().ok())
+        .map(|one| one.digest)
+        .filter(|&digest| digest != 0);
+    let key = digest.map(|digest| {
+        let mut both = Both::new();
+        let _ = std::fmt::Write::write_fmt(
+            &mut both,
+            format_args!(
+                "{name}|{digest}|{number}|{}|{:?}",
+                request.sp_frame,
+                selection_key(&Request { lsr_alternate: false, ..request.clone() })
+            ),
+        );
+        both.finish_pair()
+    });
+    if let Some((held, frequencies)) = key.and_then(|key| LINES_MEMO.with(|memo| memo.borrow().get(&key).cloned())) {
+        // what the prices after these lines weigh by (`allocated_with`)
+        expand::replace_frequencies(frequencies);
+        return held;
+    }
+    LINES_MADE.with(|made| made.borrow_mut().push(name.to_owned()));
+    let made = lines_made(selected, name, number, request);
+    if let Some(key) = key {
+        LINES_MEMO.with(|memo| {
+            let mut memo = memo.borrow_mut();
+            if memo.len() >= 4096 {
+                memo.clear();
+            }
+            memo.insert(key, (made.clone(), expand::frequencies()));
+        });
+    }
+    made
+}
+
+thread_local! {
+    /// The finished lines of functions, by what the mid-end made of them and
+    /// the request (`lines_of`), with the block frequencies their prices weigh
+    /// by.
+    static LINES_MEMO: std::cell::RefCell<std::collections::HashMap<(u64, u64), (Result<Vec<Line>, String>, llrm_support::hash::HashMap<u32, f64>)>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+    /// The functions whose lines were made, not found.
+    static LINES_MADE: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// The functions whose lines were made (not taken from an earlier compile of
+/// the module) since the last call.
+pub fn take_lines_made() -> Vec<String> {
+    LINES_MADE.with(|made| std::mem::take(&mut *made.borrow_mut()))
+}
+
+fn lines_made(
     selected: &Selections,
     name: &str,
     number: usize,

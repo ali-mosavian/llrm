@@ -2598,7 +2598,11 @@ impl Tti for X86 {
         // index beside it; a base register is fine (`@sym + reg`, the symbol
         // formed by a `lea`). The pin refuses only an offset or a scale above 1
         // (`isPositionIndependent() && is64Bit()`).
-        if self.quad && self.position_independent.get() && base_gv && (base_offset != 0 || scale > 1) {
+        // DEVIATE X64-PIE-SCALE: a scale of 2, 4 or 8 is a `lea`'d symbol with a
+        // scaled index, as it is without PIE.
+        let scaled_symbol = self.tuning.pie_scaled_symbol && matches!(scale, 2 | 4 | 8);
+        let refused_beside_symbol = base_offset != 0 || (scale > 1 && !scaled_symbol);
+        if self.quad && self.position_independent.get() && base_gv && refused_beside_symbol {
             return false;
         }
         match scale {
@@ -2774,6 +2778,10 @@ impl Tti for X86 {
 
     fn scaled_index_insns(&self) -> u32 {
         self.real_mode.as_ref().map_or(0, |real| real.scaled_index_insns)
+    }
+
+    fn xors_truth_value_compare(&self) -> bool {
+        self.tuning.truth_compare_xor
     }
 
     /// i8 and i16 extending loads are legal, and free when the result
