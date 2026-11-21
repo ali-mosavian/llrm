@@ -234,6 +234,18 @@ impl Tti for Z80Tti {
         true
     }
 
+    fn lsr_alternate_order(&self) -> bool {
+        true
+    }
+
+    /// DEVIATE LU33 (owner z80, exit 2026-12-15): `ld hl,#sym` is an
+    /// immediate, not a register the loop keeps. Part of the alternate order
+    /// (LSR-KEY-TRIAL): under Z80L3's order it moved lz4's match copy to a
+    /// base add (the second `ldir` lost).
+    fn lsr_global_address_is_free(&self) -> bool {
+        llrm_transforms::trial::lsr_alternate_order()
+    }
+
     fn lsr_dropped_solution_spares_addresses(&self) -> bool {
         true
     }
@@ -381,6 +393,16 @@ impl Tti for Z80Tti {
         a: &LsrCost,
         b: &LsrCost,
     ) -> bool {
+        // DEVIATE LSR-KEY-TRIAL (owner z80, exit 2026-12-15): the pin's order,
+        // registers first, which the driver tries against the one below
+        // (`compile::effective`): histo -O1 348 -> 291 B, and sum4 -O2 loses
+        // its `djnz` (lz4's second `ldir`) where the registers tie.
+        if llrm_transforms::trial::lsr_alternate_order() {
+            let key = |c: &LsrCost| {
+                (c.num_regs, c.add_rec_cost, c.num_iv_muls, c.num_base_adds, c.scale_cost, c.imm_cost, c.setup_cost)
+            };
+            return key(a) < key(b);
+        }
         let key = |c: &LsrCost| {
             (
                 c.spills.saturating_add(c.num_base_adds),
