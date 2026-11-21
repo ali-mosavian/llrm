@@ -1152,6 +1152,23 @@ impl Tti for AArch64 {
         false
     }
 
+    /// `AArch64TTIImpl::getScalarizationOverhead`: an integer vector pays
+    /// `popcount(lanes) * base` whatever the lane (the lane 0 insert into
+    /// poison is free only through `getVectorInstrCost`, and a float vector
+    /// goes to the base class's per-lane price).
+    fn demanded_insert_overhead(
+        &self,
+        ty: VectorTy,
+        lanes: &[u32],
+        cost_kind: CostKind,
+    ) -> Option<Cost> {
+        if ty.lane.is_float() {
+            return llrm_mir::tti::per_lane_insert_overhead(self, ty, lanes, cost_kind);
+        }
+        crate::tti_vector::scalarization_overhead(ty, true, false, cost_kind)
+            .map(|_| Cost::of(lanes.len() as i64 * crate::tti_vector::INSERT_EXTRACT_BASE_COST))
+    }
+
     fn scalarization_overhead(
         &self,
         ty: VectorTy,

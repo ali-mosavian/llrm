@@ -560,6 +560,13 @@ fn vector_float_compare_select_cast_and_scalarization_costs_are_the_pins() {
         let cmp = |op, ty, predicate| tti.vector_cmp_sel_cost(op, ty, predicate, k).map(|c| c.value);
         let cast = |kind, to, from| tti.vector_cast_cost(kind, to, from, k).map(|c| c.value);
         let overhead = |ty, insert, extract| tti.scalarization_overhead(ty, insert, extract, k).map(|c| c.value);
+        // Gathering 8 `i64`s costs 8 x 2: the pin's integer hook prices lane 0
+        // too (a 14 here left jpeg_fixed's reduction at -6 for the pin's -4); a
+        // float lane 0 is free.
+        let packed = |ty, lanes: &[u32]| tti.demanded_insert_overhead(ty, lanes, k).map(|c| c.value);
+        assert_eq!(packed(i(64, 8), &[0, 1, 2, 3, 4, 5, 6, 7]), Some(16), "{cpu}");
+        assert_eq!(packed(i(64, 8), &[1, 2, 3]), Some(6), "{cpu}");
+        assert_eq!(packed(f(4), &[0, 1, 2, 3]), Some(6), "{cpu}");
         for ty in [f(2), f(4), d(2)] {
             assert_eq!((alu(FAdd, ty), alu(FSub, ty), alu(FNeg, ty)), (Some(1), Some(1), Some(1)), "{cpu} {ty:?}");
             assert_eq!((alu(FMul, ty), alu(FDiv, ty)), (Some(2), Some(2)), "{cpu} {ty:?}");

@@ -19,6 +19,26 @@ pub struct Cost {
     pub valid: bool,
 }
 
+/// The inserts of `lanes` priced one by one (`BasicTTIImplBase::
+/// getScalarizationOverhead`).
+pub fn per_lane_insert_overhead<T: Tti + ?Sized>(
+    tti: &T,
+    ty: VectorTy,
+    lanes: &[u32],
+    cost_kind: CostKind,
+) -> Option<Cost> {
+    let mut total = 0;
+    for &index in lanes {
+        let cost =
+            tti.vector_instr_cost(LaneOp::Insert, ty, Some(index), index == 0, VectorInstrContext::None, cost_kind)?;
+        if !cost.valid {
+            return None;
+        }
+        total += cost.value;
+    }
+    Some(Cost::of(total))
+}
+
 impl Cost {
     pub const FREE: Cost = Cost { value: 0, valid: true };
     pub const BASIC: Cost = Cost { value: 1, valid: true };
@@ -983,6 +1003,20 @@ pub trait Tti {
         _cost_kind: CostKind,
     ) -> Option<Cost> {
         None
+    }
+
+    /// `getScalarizationOverhead` of the `lanes` of `ty` alone, as
+    /// `BoUpSLP::getGatherCost` asks it: the inserts of the scalars a gather
+    /// packs. The default prices each lane (`getVectorInstrCost`, a lane 0
+    /// insert into poison free); a target whose hook does not (AArch64's
+    /// integer vectors: every lane the same) overrides it.
+    fn demanded_insert_overhead(
+        &self,
+        ty: VectorTy,
+        lanes: &[u32],
+        cost_kind: CostKind,
+    ) -> Option<Cost> {
+        per_lane_insert_overhead(self, ty, lanes, cost_kind)
     }
 
     /// Whether the SLP vectorizer's tree and store chains run: only where the
