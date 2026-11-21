@@ -627,3 +627,36 @@ fn a_vector_cast_is_left_alone() {
                 ret <8 x i16> %u\n";
     check("<8 x i16>", "<8 x i16> %x", body, body);
 }
+
+/// `trunc (add (splat n), C)` on <4 x i64> stayed wide, so the i64 vector math
+/// of a tile loop was priced and lowered as i64 (clocks +153% on x86-64):
+/// `narrowBinOp`, `shrinkSplatShuffle` and `shrinkInsertElt` narrow it.
+#[test]
+fn a_vector_trunc_of_a_splat_add_narrows_to_the_splat() {
+    let body = "  %i = insertelement <4 x i64> poison, i64 %n, i64 0\n  \
+                %s = shufflevector <4 x i64> %i, <4 x i64> poison, <4 x i32> zeroinitializer\n  \
+                %a = add <4 x i64> %s, <i64 0, i64 1, i64 2, i64 3>\n  \
+                %t = trunc <4 x i64> %a to <4 x i16>\n  ret <4 x i16> %t\n";
+    let after = "  %0 = trunc i64 %n to i16\n  %1 = insertelement <4 x i16> poison, i16 %0, i64 0\n  \
+                 %2 = shufflevector <4 x i16> %1, <4 x i16> poison, <4 x i32> <i32 0, i32 0, i32 0, i32 0>\n  \
+                 %3 = add <4 x i16> %2, <i16 0, i16 1, i16 2, i16 3>\n  ret <4 x i16> %3\n";
+    check("<4 x i16>", "i64 %n", body, after);
+}
+
+/// `narrowBinOp` on vectors: `trunc (xor (zext y), x)` --> `xor y, (trunc x)`.
+#[test]
+fn a_vector_trunc_of_a_logic_op_with_an_extended_operand_narrows() {
+    let body = "  %e = zext <4 x i16> %y to <4 x i64>\n  %a = xor <4 x i64> %e, %x\n  \
+                %t = trunc <4 x i64> %a to <4 x i16>\n  ret <4 x i16> %t\n";
+    let after = "  %0 = trunc <4 x i64> %x to <4 x i16>\n  %1 = xor <4 x i16> %y, %0\n  ret <4 x i16> %1\n";
+    check("<4 x i16>", "<4 x i64> %x, <4 x i16> %y", body, after);
+}
+
+/// `shrinkSplatShuffle` needs a one-use shuffle: a shared one stays wide.
+#[test]
+fn a_vector_trunc_of_a_shared_splat_stays() {
+    let body = "  %i = insertelement <4 x i64> poison, i64 %n, i64 0\n  \
+                %s = shufflevector <4 x i64> %i, <4 x i64> poison, <4 x i32> <i32 0, i32 0, i32 0, i32 0>\n  \
+                %t = trunc <4 x i64> %s to <4 x i16>\n  store <4 x i64> %s, ptr %p\n  ret <4 x i16> %t\n";
+    check("<4 x i16>", "i64 %n, ptr %p", body, body);
+}
