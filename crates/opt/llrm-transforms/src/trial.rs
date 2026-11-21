@@ -62,6 +62,47 @@ thread_local! {
     static COPY_LOOPS_KEPT: Cell<bool> = const { Cell::new(false) };
     /// The functions in which LoopIdiom turned such a loop into a `memcpy`.
     static COPY_CALLS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    /// Set while the trial compile of INLINEHINT-GROWTH-TRIAL runs: the -Os
+    /// size guard binds an `inlinehint` callee as it does any other.
+    static HINTED_CALLS_KEPT: Cell<bool> = const { Cell::new(false) };
+    /// The callers with a call of an `inlinehint` callee that only the hint's
+    /// yield let the size guard pass.
+    static HINT_YIELDS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+}
+
+/// DEVIATE INLINEHINT-GROWTH-TRIAL (beyond the pin; gcc's `-Os` inliner takes
+/// a callee only while the unit does not grow, `ipa-inline.cc`
+/// `want_inline_small_function_p` over `estimate_edge_growth`; owner x86-m32,
+/// exit 2026-11-30): whether the trial compile that keeps the call of an
+/// `inlinehint` callee the size guard would refuse is running. The pin's hint
+/// threshold (325) lets the callee in whatever it costs in bytes; the units
+/// cannot say what the copies fold to, so the finished object decides.
+pub fn keeping_hinted_calls() -> bool {
+    HINTED_CALLS_KEPT.with(Cell::get)
+}
+
+/// Runs `body` with those calls kept.
+pub fn with_kept_hinted_calls<T>(body: impl FnOnce() -> T) -> T {
+    let before = HINTED_CALLS_KEPT.with(|cell| cell.replace(true));
+    let value = body();
+    HINTED_CALLS_KEPT.with(|cell| cell.set(before));
+    value
+}
+
+/// Notes that the hint's yield let a call in `function` through the size
+/// guard, which a trial may refuse.
+pub(crate) fn note_hint_yield(function: &str) {
+    HINT_YIELDS.with(|list| {
+        let mut list = list.borrow_mut();
+        if !list.iter().any(|one| one == function) {
+            list.push(function.to_owned());
+        }
+    });
+}
+
+/// The callers [`note_hint_yield`] saw since the last call.
+pub fn take_hint_yields() -> Vec<String> {
+    HINT_YIELDS.with(|list| std::mem::take(&mut *list.borrow_mut()))
 }
 
 /// DEVIATE SWITCH-LOOKUP-TRIAL (beyond the pin; gcc's `-Os` keeps the compares

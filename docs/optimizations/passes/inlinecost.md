@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/inlinecost.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/inlinecost.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/inlinecost.rs sha256:4222969f162b63af8b0af01ea71fcbdfe3ba1b57ddf83982e91479c2b4379b02 -->
+<!-- src: crates/opt/llrm-transforms/src/inlinecost.rs sha256:8b4ea4bfdedf7d66f305938cf36379f3985c304c3198693e58dfd5db84d1b248 -->
 
 # inlinecost
 
@@ -87,6 +87,15 @@ each site's cost and threshold beside the existing decision; with
   (QuickrBasic operands.c -Os `hot_operand` into `hot_int`, 26 units against
   two 3-unit calls: 15,344 -> 10,400 B, the pin's 9,464). The guard still
   holds for a callee with no hint.
+- INLINEHINT-GROWTH-TRIAL (beyond the pin; gcc's `-Os` inliner takes a
+  callee only while the unit does not grow, `ipa-inline.cc`
+  `want_inline_small_function_p` over `estimate_edge_growth`; owner
+  x86-m32-b, exit 2026-11-30): where that yield passes a callee the size
+  guard (D11) would refuse, the caller is noted and the module compiled
+  again with the guard binding the hinted callee too
+  (`trial::with_kept_hinted_calls`, `driver/trial.rs`); the finished object
+  decides, because the units cannot see what the copies fold to (QB
+  `sfm16_dbg` -Os: `sf_clz32` inlined at six calls, +388 B).
 - SZ1-SITE (owner m68k-b, exit 2026-11-24): the size rule (D11) prices a
   callee's instruction with the call site's constant arguments, not only a
   GEP as `isGEPFree` does (z80 `rotate_small` -O1 922 -> 576 B).

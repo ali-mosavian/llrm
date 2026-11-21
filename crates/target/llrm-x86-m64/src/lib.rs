@@ -443,6 +443,8 @@ impl llrm_target::Target for M64 {
                             merge_functions_at_size: true,
                             rep_movs_at_size: true,
                             rep_movs_at_size_max: u64::MAX,
+                            // DEVIATE REP-MOVS-SPEED (owner llrm-target-x86-m64-b, exit 2026-11-30): see Tuning.
+                            rep_movs_at_speed_max: 8192,
                             // DEVIATE IU1 (owner llrm-target-x86-m64, exit 2026-11-24): see
                             // `Tti::lsr_users_in_use_list_order`.
                             lsr_users_in_use_list_order: true,
