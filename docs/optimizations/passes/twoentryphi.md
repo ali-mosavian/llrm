@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/twoentryphi.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/twoentryphi.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/twoentryphi.rs sha256:28fb7c9756efe8d3225cdf87bb55eeee1af44ed6d3749d5ff43f879b9129a793 -->
+<!-- src: crates/opt/llrm-transforms/src/twoentryphi.rs sha256:3afe7ee94d649da2ffcfff24ced2ba8f714fb36d3f38cb2aef4a852fc951d4b1 -->
 
 # twoentryphi
 
@@ -43,8 +43,15 @@ a block whose first instruction is a phi of two entries.
   `and`/`or` select (`select x, y, false`) is no branch and is not counted:
   the 6502's `isdigit` range test stayed two compares (28 -> 50 B).
 
-- D6. (Tti-gated, off in the pin) gcc's `empty_bb_or_one_feeding_into_p`
-  (`tree-ssa-phiopt.cc`) bounds an arm to one statement that feeds the phi.
+- D6. (Tti-gated, off in the pin: `phiopt_one_feeding_statement`) gcc's
+  `empty_bb_or_one_feeding_into_p` (`tree-ssa-phiopt.cc`) bounds an arm to
+  one statement that feeds the phi. It applies only where the phi is on a
+  loop-carried recurrence (`on_recurrence`, a DEVIATE damage limiter, not a
+  priced criterion) and the branch condition is later than the phi's values
+  (`condition_is_later`: `X86CmovConversion::checkForProfitableCmovCandidates`'
+  test that a cmov waits longer for its condition than for its value, on
+  TTI latencies). sfm16_dbg m64 -37..-40% executed instructions; every other
+  bench cell unchanged.
 
 ## Example
 The phi that a branch chooses between becomes a select in the branch's

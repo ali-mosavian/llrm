@@ -1763,7 +1763,10 @@ b1:
   %i = phi i64 [ 0, %b0 ], [ %i2, %b4 ]
   %acc = phi i64 [ 0, %b0 ], [ %p, %b4 ]
   %m = and i64 %i, 1
-  %c = icmp eq i64 %m, 0
+  %m1 = xor i64 %m, %n
+  %m2 = add i64 %m1, 3
+  %m3 = mul i64 %m2, 5
+  %c = icmp eq i64 %m3, 0
   br i1 %c, label %b2, label %b3
 
 b2:
@@ -1787,6 +1790,12 @@ b5:
     assert!(folded_with_phiopt_rule(looped, false).contains("select i1 %c"), "the pin folds it");
     let kept = folded_with_phiopt_rule(looped, true);
     assert!(!kept.contains("select i1 %c"), "{kept}");
+    let shallow = looped
+        .replace("  %m1 = xor i64 %m, %n\n  %m2 = add i64 %m1, 3\n  %m3 = mul i64 %m2, 5\n  %c = icmp eq i64 %m3, 0\n", "  %c = icmp eq i64 %m, 0\n");
+    assert!(
+        folded_with_phiopt_rule(&shallow, true).contains("select i1 %c"),
+        "a condition no later than the values keeps the select (sfm16_float_f2i: the convert is the later)"
+    );
     let one = looped.replace("  %y = add i64 %a, 1\n", "").replace("[ %y, %b2 ]", "[ %a, %b2 ]");
     assert!(folded_with_phiopt_rule(&one, true).contains("select i1 %c"), "one statement feeding the phi folds");
     let straight = "define i64 @f(i64 %x, i1 %c) {

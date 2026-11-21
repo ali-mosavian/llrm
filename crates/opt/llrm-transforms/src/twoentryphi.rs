@@ -38,8 +38,15 @@
 //!   `and`/`or` select (`select x, y, false`) is no branch and is not counted:
 //!   the 6502's `isdigit` range test stayed two compares (28 -> 50 B).
 //!
-//! - D6. (Tti-gated, off in the pin) gcc's `empty_bb_or_one_feeding_into_p`
-//!   (`tree-ssa-phiopt.cc`) bounds an arm to one statement that feeds the phi.
+//! - D6. (Tti-gated, off in the pin: `phiopt_one_feeding_statement`) gcc's
+//!   `empty_bb_or_one_feeding_into_p` (`tree-ssa-phiopt.cc`) bounds an arm to
+//!   one statement that feeds the phi. It applies only where the phi is on a
+//!   loop-carried recurrence (`on_recurrence`, a DEVIATE damage limiter, not a
+//!   priced criterion) and the branch condition is later than the phi's values
+//!   (`condition_is_later`: `X86CmovConversion::checkForProfitableCmovCandidates`'
+//!   test that a cmov waits longer for its condition than for its value, on
+//!   TTI latencies). sfm16_dbg m64 -37..-40% executed instructions; every other
+//!   bench cell unchanged.
 //!
 //! # Example
 //! The phi that a branch chooses between becomes a select in the branch's
@@ -62,6 +69,8 @@ use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
 use llrm_mir::opcode::{FloatPredicate, IntPredicate, Opcode};
 use llrm_mir::passes::Outer;
 use llrm_mir::tti::{Cost, CostKind, Tti};
+
+use llrm_support::hash::HashMap;
 
 use crate::edges;
 
@@ -172,6 +181,62 @@ fn empty_or_one_feeding_into(
     function.users(result).only().is_some_and(|one| {
         function.instruction(one.user).opcode == Opcode::Phi && function.parent(one.user) == Some(join)
     })
+}
+
+/// `X86CmovConversion`'s `LoopDepth` test, on the IR: whether the condition
+/// of the branch is later (a longer chain of `Latency` costs from the phis and
+/// constants) than the values of the block's phis, so that a branch predicted
+/// ahead beats a select that waits for it.
+fn condition_is_later(
+    context: &Context,
+    spec: &Speculation,
+    function: &Function,
+    block: BlockId,
+    condition: Operand,
+) -> bool {
+    let mut memo = HashMap::default();
+    let later = depth(context, spec, function, condition, 0, &mut memo);
+    let values = edges::phis(function, block)
+        .iter()
+        .flat_map(|&phi| arms(function, phi).into_iter().map(|(value, _)| value))
+        .map(|value| depth(context, spec, function, value, 0, &mut memo))
+        .max()
+        .unwrap_or(0);
+    later > values
+}
+
+/// The `Latency` cost of the chain that computes `value`, from phis, constants
+/// and what is outside the function; bounded as the pin bounds `MaxDepth`.
+fn depth(
+    context: &Context,
+    spec: &Speculation,
+    function: &Function,
+    value: Operand,
+    level: usize,
+    memo: &mut HashMap<InstId, i64>,
+) -> i64 {
+    let Operand::Value(id) = value else { return 0 };
+    let ValueDef::Instruction(inst) = function.value(id).def else { return 0 };
+    if function.instruction(inst).opcode == Opcode::Phi || level > MAX_DEPTH {
+        return 0;
+    }
+    if let Some(&known) = memo.get(&inst) {
+        return known;
+    }
+    let own = instruction_cost(
+        spec.tti,
+        context,
+        spec.layout,
+        &spec.outer.globals,
+        function,
+        inst,
+        CostKind::Latency,
+    );
+    let own = if own.valid { own.value } else { 0 };
+    let operands = function.instruction(inst).operands.clone();
+    let below = operands.iter().map(|&one| depth(context, spec, function, one, level + 1, memo)).max().unwrap_or(0);
+    memo.insert(inst, own + below);
+    own + below
 }
 
 /// Whether `phi`'s value feeds itself through other instructions: the cycle a
@@ -369,9 +434,13 @@ pub fn folded(
     // is then on the critical path of every iteration (`X86CmovConversion`'s
     // `checkForProfitableCmovCandidates` prices exactly that, `LoopDepth`), and a
     // branch the predictor takes costs nothing.
+    // `X86CmovConversion`'s test as well (`checkForProfitableCmovCandidates`):
+    // the branch only runs ahead of a condition that is later than the values
+    // it chooses between (D6).
     if spec.tti.phiopt_one_feeding_statement()
         && edges::phis(function, block).iter().any(|&phi| on_recurrence(function, phi))
         && !if_blocks.iter().all(|&arm| empty_or_one_feeding_into(function, arm, block))
+        && condition_is_later(context, spec, function, block, if_cond)
     {
         return false;
     }
