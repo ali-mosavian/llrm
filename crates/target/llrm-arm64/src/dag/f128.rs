@@ -55,14 +55,23 @@ pub fn convert(
     call: &mut dyn FnMut(&mut SelectionDAG, &'static str, &[SDValue], EVT) -> Option<SDValue>,
 ) -> Option<Option<SDValue>> {
     let quad = EVT::Simple(MVT::F128);
-    let op = dag.opcode(node);
+    // A constrained node reads its value behind the chain, and
+    // `StrictFSetCC(S)` is not a conversion.
+    let written = dag.opcode(node);
+    let op = if matches!(written, ISD::StrictFSetCC | ISD::StrictFSetCCS) {
+        written
+    } else {
+        written.non_strict().unwrap_or(written)
+    };
+    let skip = usize::from(op != written);
     if !matches!(
         op,
         ISD::SIntToFp | ISD::UIntToFp | ISD::FpToSInt | ISD::FpToUInt | ISD::FpExtend | ISD::FpRound
     ) {
         return None;
     }
-    let (to, from) = (dag.value_type(node), dag.value_type(dag.operand(node, 0)));
+    let value = dag.operand(node, skip);
+    let (to, from) = (dag.value_type(node), dag.value_type(value));
     let name = match op {
         ISD::SIntToFp | ISD::UIntToFp if to == quad => {
             let from = scalar(from)?;
@@ -71,7 +80,7 @@ pub fn convert(
             } else {
                 Libcall::UIntToFp(from, MVT::F128)
             };
-            return Some(libcalls::name(kind).and_then(|name| call(dag, name, &[dag.operand(node, 0)], quad)));
+            return Some(libcalls::name(kind).and_then(|name| call(dag, name, &[value], quad)));
         }
         ISD::FpToSInt | ISD::FpToUInt if from == quad => {
             // a result narrower than a word is the word's low bits
@@ -82,7 +91,7 @@ pub fn convert(
                 Libcall::FpToUInt(MVT::F128, word)
             };
             let Some(name) = libcalls::name(kind) else { return Some(None) };
-            let Some(result) = call(dag, name, &[dag.operand(node, 0)], EVT::Simple(word)) else { return Some(None) };
+            let Some(result) = call(dag, name, &[value], EVT::Simple(word)) else { return Some(None) };
             return Some(Some(if EVT::Simple(word) == to {
                 result
             } else {
@@ -93,7 +102,7 @@ pub fn convert(
         ISD::FpRound if from == quad => Libcall::FpRound(MVT::F128, scalar(to)?),
         _ => return None,
     };
-    Some(libcalls::name(name).and_then(|name| call(dag, name, &[dag.operand(node, 0)], to)))
+    Some(libcalls::name(name).and_then(|name| call(dag, name, &[value], to)))
 }
 
 /// What `softenSetCCOperands` makes of an `f128` compare: an integer compare
