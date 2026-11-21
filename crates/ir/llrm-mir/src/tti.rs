@@ -1047,6 +1047,14 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE SD103: at optsize two compares joined by `and`/`or` stay two
+    /// branches. The pin has no such rule (x86 and the 16-bit table need it
+    /// for their registers); false: the target's cost rule decides at optsize
+    /// as at any level.
+    fn splits_merged_conditions_at_optsize(&self) -> bool {
+        true
+    }
+
     /// DEVIATE LSR-OUTER: whether an outer loop's address stepped by `size`
     /// bytes an iteration (`g[i]` over elements of `size`) is reduced to a
     /// counter: what the addressing mode's scale does not absorb is computed
