@@ -832,6 +832,35 @@ impl Trace {
         instrs.max(max)
     }
 
+    /// `getResourceDepth(Bottom)`: the cycles the trace's resources need above
+    /// the center block, with the block's own when `bottom`.
+    pub fn resource_depth(
+        &self,
+        t: &mut Traces,
+        bottom: bool,
+    ) -> u32 {
+        let kinds = t.kinds();
+        let release = if bottom { t.release(self.block) } else { Vec::new() };
+        let mut max = 0;
+        for k in 0..kinds {
+            let mut cycles = t.depths[self.block][k];
+            if bottom {
+                cycles += release[k];
+            }
+            max = max.max(cycles);
+        }
+        let max = t.get_cycles(max);
+        let mut instrs = t.tb[self.block].instr_depth;
+        if bottom {
+            instrs += t.resources(self.block);
+        }
+        let width = t.f.model.issue_width;
+        if width != 0 {
+            instrs /= width;
+        }
+        instrs.max(max)
+    }
+
     /// The trace's instruction depth of the center block's first instruction
     /// is not needed; the block's own number is.
     pub fn block(&self) -> usize {

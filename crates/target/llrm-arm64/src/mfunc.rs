@@ -445,6 +445,10 @@ pub struct MFunc {
     /// The joins early if-conversion made, `(head, tail)` by label in the
     /// order made: the tail's operations and edges are the head's.
     pub joined: Vec<(String, String)>,
+    /// The blocks conditional-compare formation merged, `(head, cmp block)` by
+    /// label in the order made: the head took the block's operations and
+    /// edges, each edge's odds scaled by the odds of the head's edge to it.
+    pub cmp_merged: Vec<(String, String)>,
     /// The tails early if-conversion left behind a jump: the head's one edge
     /// is to the tail, certain.
     pub branched: Vec<(String, String)>,

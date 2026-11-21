@@ -263,6 +263,10 @@ impl CombineHooks for Aarch64Lowering {
         true
     }
 
+    fn simplify_boolean_compare(&self) -> bool {
+        true
+    }
+
     /// `AArch64TargetLowering::isNarrowingProfitable`: `isTypeLegal(DestVT) &&
     /// DestVT.isVector()`. Vectors are deferred, so no scalar narrows.
     fn narrowing_profitable(
