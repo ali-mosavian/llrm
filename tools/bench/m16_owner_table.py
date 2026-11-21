@@ -107,6 +107,26 @@ def rows(table: dict) -> tuple[list[tuple], collections.Counter]:
     return out, tally
 
 
+def reference_coverage(table: dict) -> dict[str, tuple[int, int]]:
+    """Per reference compiler, (cells measured, cells the table's own rows asked of it): a reference with none measured is a broken job, not a program
+    it cannot build (the 18de C table had `ow` only: every bcc, tc and tcpp cell read "no object")."""
+    present = {key.rsplit("/", 2)[0] for key in table}
+    asked: collections.Counter = collections.Counter()
+    got: collections.Counter = collections.Counter()
+    for key in table:
+        program, language, level = key.rsplit("/", 2)
+        if language in C_REFS + BAS_REFS or language not in OURS or bench.is_twin_name(program):
+            continue
+        if language in ("c", "nib"):
+            bar, names, at = bench.bar_program(program, language, present), C_REFS, level
+        else:
+            bar, names, at = program, BAS_REFS, "O2"
+        for name in names:
+            asked[name] += 1
+            got[name] += bool(counts(table.get(f"{bar}/{name}/{at}"), bar, name))
+    return {name: (got[name], asked[name]) for name in asked}
+
+
 def md5_lines(dist: Path) -> str:
     return " ".join(f"{hashlib.md5((dist / name).read_bytes()).hexdigest()}  {dist / name}" for name in ("llrm-llc", "llrm-cc", "llrm-nib") if (dist / name).is_file())
 
@@ -121,6 +141,7 @@ def render(table: dict, dist: Path, harness: str, now: datetime.datetime) -> str
         "# bytes: code (CODE), data (initialised), static (data+bss); judged (ruling 2026-11-14): Os on total bytes (code+data; BASIC code+static) and clocks; O1/O2/O3 on clocks only, bytes reported in findings;"
         " best external per language: C = ow/bcc/tc/tcpp, Nib = the C compilers on the C twin with the Nib semantics (NAME~init, NAME~bounds; the plain source's best in plain_ext_*), BASIC = bc/pds71/vbdos (O2 key)",
         "# verdicts: OK, WORSE, WORSE_LB (a reference lacks a cell: lower bound), NO_BAR (no reference), NO_TWIN (a Nib program whose twin is not measured: unproven, never OK), TWIN (a reference twin, not judged), UNMEASURED/REFUSED (counted, never OK)",
+        "# reference cells measured/asked: " + " ".join(f"{name}={got}/{asked}" for name, (got, asked) in reference_coverage(table).items()) + "; a cell without a bar reads NO_BAR or WORSE_LB",
         "# counts: " + ", ".join(f"{level}:{verdict}={n}" for (level, verdict), n in sorted(tally.items())),
     ]
     columns = "prog\tlang\tlevel\tcode_B\tdata_B\tstatic_B\tclk\tbest_ext_code\tbest_ext_clk\trefs_missing\tverdict\tfindings\tplain_ext_code\tplain_ext_clk\tnet_code\tnet_vs_plain_code\tours_isa\trefs_isa"
@@ -133,6 +154,10 @@ def main(argv: list[str]) -> int:
         print(__doc__)
         return 2
     table = json.loads(Path(argv[0]).read_text())
+    empty = [name for name, (got, asked) in reference_coverage(table).items() if asked and not got]
+    if empty:
+        print(f"refused: no cell measured for {', '.join(empty)}: a broken reference job, not a table", file=sys.stderr)
+        return 3
     harness = argv[3] if len(argv) == 4 else subprocess.run(["git", "-C", str(bench.ROOT), "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
     Path(argv[2]).write_text(render(table, Path(argv[1]), harness, datetime.datetime.now(datetime.UTC)))
     print(f"{len(rows(table)[0])} rows")
