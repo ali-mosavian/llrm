@@ -11,7 +11,7 @@
 //! words from their stack slots, calls, takes the arguments off and stores the
 //! result words, priced once here as that expansion.
 //!
-//! Clocks are not here yet: `costs()` still prices an operation at one.
+//! Clocks: [`clock_costs`] prices the same forms by the manuals' tables (`timing.rs`).
 //!
 //! # See also
 //! MC68000UM chapter 8 (effective-address extension words); `sizes.rs`, the
@@ -230,6 +230,103 @@ pub fn size_costs(cpu: Cpu) -> Result<OperationCosts, String> {
             other => return Err(format!("no field for {other}")),
         }
     }
+    Ok(costs)
+}
+
+/// The clocks of a routine body the forms only call, by class and CPU: a model, not a measurement (the 68000 has no
+/// 32-bit multiply or divide, the library does it with word multiplies and divides; soft float is the library). The
+/// 68020 and later states `muls.l`/`divs.l` in the form itself.
+fn library_clocks(
+    cpu: Cpu,
+    class: &str,
+) -> i64 {
+    let (without, with) = match class {
+        "multiply" => (150, 0),
+        "divide" => (450, 0),
+        "float_add" | "float_to_int" => (350, 350),
+        "float_multiply" | "float_compare" => (500, 500),
+        "float_divide" => (1000, 1000),
+        _ => (0, 0),
+    };
+    if cpu.at_least(Cpu::M68020) { with } else { without }
+}
+
+/// The clocks of `text` at `bytes`, `taken` for a branch.
+fn text_clocks(
+    cpu: Cpu,
+    text: &str,
+    bytes: u32,
+    taken: bool,
+) -> Result<i64, String> {
+    Ok(i64::from(crate::timing::cost(cpu, text, bytes, taken)?.clocks))
+}
+
+/// The clocks of `form` on `cpu`.
+fn form_clocks(
+    cpu: Cpu,
+    form: &[Inst],
+) -> Result<i64, String> {
+    form.iter().try_fold(0, |sum, one| Ok(sum + i64::from(crate::instprice::price_of(cpu, one)?.1)))
+}
+
+/// A libc `memset` or `memcpy` call and what it does per longword, the platform libc's assumed shape (DEVIATE-free
+/// model: the harness stubs `tools/m68k_exec/mem.c` are not the reference, a platform libc is unknown): three pushed
+/// arguments, `jsr`, the cleanup, the routine's argument loads, a size test and `rts`; a longword is a post-increment
+/// move and a `dbf`.
+fn libc_call(
+    cpu: Cpu,
+    cell: &str,
+) -> Result<(i64, i64), String> {
+    let push = form_clocks(cpu, &[crate::callpush::push_of(&r(reg::D0))])?;
+    let call = form_clocks(cpu, &[inst("CALLb", vec![Operand::Symbol("f".to_owned(), 0)])])?;
+    let cleanup = form_clocks(cpu, &[crate::expand::sp_adjust(12, true)])?;
+    let load = form_clocks(cpu, &[inst("MOV32dp", vec![r(reg::D0), Operand::Imm(4), r(reg::A0)])])?;
+    let size_test = text_clocks(cpu, "cmp.l #8, %d0", 6, false)? + text_clocks(cpu, "bcs .L1", 2, false)?;
+    let ret = form_clocks(cpu, &[inst("RTS", vec![])])?;
+    let each = text_clocks(cpu, cell, 2, false)? + text_clocks(cpu, "dbf %d1, .L1", 4, true)?;
+    Ok((3 * push + call + cleanup + 3 * load + size_test + ret, each))
+}
+
+/// The operations in clocks at `cpu`: the forms of [`forms`], each priced by the manuals' tables
+/// ([`crate::timing`]) and a library routine's body by [`library_clocks`]. A memset or memcpy is the platform libc's
+/// call ([`libc_call`]): the target states no string instruction.
+pub fn clock_costs(cpu: Cpu) -> Result<OperationCosts, String> {
+    let mut costs = OperationCosts::default();
+    for (class, form) in forms(cpu) {
+        let clocks = form_clocks(cpu, &form)? + library_clocks(cpu, class);
+        match class {
+            "add" => costs.add = clocks,
+            "shift" => costs.shift = clocks,
+            "multiply" => (costs.multiply, costs.multiply_long) = (clocks, clocks),
+            "divide" => (costs.divide, costs.divide_long) = (clocks, clocks),
+            "address" => costs.address = clocks,
+            "load" => costs.load = clocks,
+            "store" => costs.store = clocks,
+            "store_immediate" => costs.store_immediate = clocks,
+            "memory_update" => costs.memory_update = clocks,
+            "move" => costs.r#move = clocks,
+            "call" => costs.call = clocks,
+            "return_" => costs.return_ = clocks,
+            "adjust" => costs.adjust = clocks,
+            "extend" => costs.extend = clocks,
+            "set" => costs.set = clocks,
+            "branch" => costs.branch = clocks,
+            "argument" => costs.argument = clocks,
+            "pop" => costs.pop = clocks,
+            "float_add" => costs.float_add = clocks,
+            "float_multiply" => costs.float_multiply = clocks,
+            "float_divide" => costs.float_divide = clocks,
+            "float_compare" => costs.float_compare = clocks,
+            "float_to_int" => costs.float_to_int = clocks,
+            "float_load" => costs.float_load = clocks,
+            "float_store" => costs.float_store = clocks,
+            // a function's save and restore is the caller's call and the callee's return, priced there
+            "function" => {}
+            other => return Err(format!("no field for {other}")),
+        }
+    }
+    (costs.fill, costs.fill_cell) = libc_call(cpu, "move.l %d0, (%a0)+")?;
+    (costs.copy, costs.copy_cell) = libc_call(cpu, "move.l (%a0)+, (%a1)+")?;
     Ok(costs)
 }
 

@@ -86,12 +86,17 @@ impl Machine for M68kMachine {
         Spaces::FLAT
     }
 
+    /// Clocks per operation at this CPU ([`crate::opcosts::clock_costs`]).
     fn costs(&self) -> OperationCosts {
-        OperationCosts::default()
+        static BY_CPU: [OnceLock<OperationCosts>; 6] = [const { OnceLock::new() }; 6];
+        BY_CPU[self.cpu as usize]
+            .get_or_init(|| {
+                crate::opcosts::clock_costs(self.cpu).unwrap_or_else(|why| panic!("m68k operation clocks: {why}"))
+            })
+            .clone()
     }
 
-    /// Code bytes per operation at this CPU ([`crate::opcosts`]); clocks are
-    /// still one per operation.
+    /// Code bytes per operation at this CPU ([`crate::opcosts`]).
     fn size_costs(&self) -> OperationCosts {
         // A function of the CPU alone, asked once per instruction costed by the
         // unroller: encode the forms once.
