@@ -2108,7 +2108,11 @@ impl Builder<'_> {
         // `isTailCall`: the intrinsic is marked `tail` and ends the function,
         // and the target takes the sibling call.
         let tail = match self.tail_candidate.take() {
-            Some(tail) if self.eligible_for_sibling_call(info, &tail_plan, false, None, first, &[]) => Some(tail),
+            Some(tail)
+                if self.eligible_for_sibling_call(info, &tail_plan, false, None, first, &[], &tail_plan, false) =>
+            {
+                Some(tail)
+            }
             _ => None,
         };
         if let Some(tail) = tail {
