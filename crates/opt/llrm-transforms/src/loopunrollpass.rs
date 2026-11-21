@@ -517,7 +517,13 @@ pub(crate) fn gather_unrolling_preferences_of_target(
     if run.options.opt_level >= 2 && !run.options.opt_size {
         up.threshold = run.tti.unroll_threshold_at_speed().unwrap_or(up.threshold);
     }
-    if run.options.opt_level > 2 {
+    // DEVIATE UNROLL-O3: only the unroll after the vectorizer
+    // (`LoopUnrollPass`) takes the target's threshold: gcc completely
+    // unrolls after `pass_vectorize`, while the pin's early
+    // `LoopFullUnrollPass` ran first and unrolled a 64-trip loop the vectorizer
+    // would have widened (tile -O3: 16,147 instructions against clang's
+    // 6,130).
+    if run.options.opt_level > 2 && run.options.target_unrolling {
         up.threshold = run.tti.unroll_threshold_at_o3().unwrap_or(up.threshold);
     }
     // DEVIATE UNROLL-SPEED-TRIAL: the trial compile's own threshold.
