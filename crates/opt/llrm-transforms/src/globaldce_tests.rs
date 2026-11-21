@@ -63,3 +63,26 @@ fn test_roots_and_declarations_stay() {
         assert!(text.contains(one), "{one}\n{text}");
     }
 }
+
+/// Before: sweeping dead globals renumbered the functions that stay, and the
+/// address of a block still named its function by the old number: every
+/// `blockaddress` printed as `inttoptr 1` and lowered to a jump nowhere (QB's
+/// `exec.c`, whose label table sits after dead globals).
+#[test]
+fn a_block_address_follows_its_function_through_the_sweep() {
+    let text = swept(
+        "@gone = internal global i16 7
+@t = internal constant [1 x ptr] [ptr blockaddress(@f, %e)]
+
+define i16 @f(ptr %p) {
+b:
+  %q = load ptr, ptr @t
+  indirectbr ptr %q, [label %e]
+
+e:
+  ret i16 3
+}
+",
+    );
+    assert!(text.contains("blockaddress(@f, %e)") && !text.contains("inttoptr"), "{text}");
+}

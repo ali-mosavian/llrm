@@ -592,6 +592,11 @@ impl PartialEq for NameIndex {
 }
 
 impl Function {
+    /// The function is built for size (`optsize` or `minsize`).
+    pub fn optimizes_for_size(&self) -> bool {
+        self.attrs.iter().any(|attr| matches!(attr, Attribute::Flag(name) if name == "optsize" || name == "minsize"))
+    }
+
     /// Whether `inst` is a `llvm.experimental.noalias.scope.decl` call, which
     /// MIR spells as a `!noalias.scope.decl` attachment.
     pub fn is_noalias_scope_decl(
@@ -656,6 +661,12 @@ impl Function {
         block: BlockId,
     ) -> bool {
         self.terminator(block).is_some_and(|last| self.instruction(last).opcode == Opcode::IndirectBr)
+    }
+
+    /// The blocks whose address is taken and that are still in the function:
+    /// each is where a `blockaddress` of it, or of a block it replaced, lands.
+    pub fn address_taken_blocks(&self) -> impl Iterator<Item = BlockId> + '_ {
+        self.address_taken.iter().filter_map(|&block| self.resolve_block_address(block)).collect::<Vec<_>>().into_iter()
     }
 
     /// Whether any block has its address taken.
@@ -935,7 +946,7 @@ impl Function {
         &self,
         block: BlockId,
     ) -> bool {
-        self.blocks[block.0 as usize].placed
+        self.blocks.get(block.0 as usize).is_some_and(|one| one.placed)
     }
 
     pub fn entry(&self) -> Option<BlockId> {

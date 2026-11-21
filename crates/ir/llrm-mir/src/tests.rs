@@ -103,6 +103,14 @@ fn a_computed_goto_round_trips_through_text() {
     assert_eq!(round(text), text);
 }
 
+/// Before: a `blockaddress` in a function read after the one it names printed
+/// as `inttoptr 1` (a gone block): the dump of a computed goto lost its targets.
+#[test]
+fn a_block_address_in_a_later_function_keeps_its_block() {
+    let text = "define i16 @f(ptr %0) {\n  indirectbr ptr %0, [label %one, label %two]\n\none:\n  ret i16 1\n\ntwo:\n  ret i16 2\n}\n\ndefine ptr @g(i1 %0) {\n  %2 = select i1 %0, ptr blockaddress(@f, %one), ptr blockaddress(@f, %two)\n  ret ptr %2\n}\n";
+    assert_eq!(round(text), text);
+}
+
 /// A dispatch table of label addresses (`static void *t[] = {&&a, &&b}`) names
 /// a function read after it: the labels' ids must survive until the body.
 #[test]
@@ -132,6 +140,20 @@ fn a_block_address_follows_the_block_that_replaced_it() {
     function.erase(jump).expect("a jump");
     function.erase_block(e).expect("an emptied block");
     assert_eq!(function.resolve_block_address(e), Some(s));
+}
+
+/// The -Os trial prices a module whose other functions are cut to their
+/// declarations (`trial::only`); a table naming a block of one of them read
+/// `blocks[0]` of an empty function and panicked ("index out of bounds: the len
+/// is 0", QB's exec.c at -Os). The block is no longer anywhere: LLVM's `1`.
+#[test]
+fn a_block_address_of_a_function_cut_to_its_declaration_names_nothing() {
+    let text = "@t = internal constant [1 x ptr] [ptr blockaddress(@f, %e)]\n\ndefine void @f(ptr %0) {\n  indirectbr ptr %0, [label %e]\n\ne:\n  ret void\n}\n";
+    let mut module = parse::module(text).expect("parses");
+    let (_, function) = module.function_mut("f").expect("@f");
+    let block = function.layout()[1];
+    let cut = function.declaration();
+    assert_eq!(cut.resolve_block_address(block), None);
 }
 
 #[test]

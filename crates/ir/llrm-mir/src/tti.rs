@@ -1493,6 +1493,13 @@ pub trait Tti {
         None
     }
 
+    /// Whether a call over the pin's threshold, in a loop that
+    /// `inline_trial_speed_at_size` keeps, is also tried inlined at a size
+    /// build (the sites the by-size bound refused are always tried).
+    fn inline_hot_trial_at_size(&self) -> bool {
+        false
+    }
+
     /// Whether INL-HOT's trials run at -O3 too (false: -O2 only).
     fn inline_hot_trial_at_o3(&self) -> bool {
         false
