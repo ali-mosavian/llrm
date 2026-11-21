@@ -553,6 +553,13 @@ pub(crate) fn vector_divide_by_constant_cost(
 }
 
 impl Tti for AArch64 {
+    /// DEVIATE OS-TRIAL-CLOCK-CAP (owner arm64, exit 2026-12-21): the -Os
+    /// unrotated trial keeps a smaller object that costs at most 1% of the
+    /// laid-out work (the strict rule put back fib's 12 B for 0.3%).
+    fn os_trial_clock_cap_percent(&self) -> Option<i64> {
+        Some(1)
+    }
+
     /// DEVIATE LATE-MEMCPYOPT-SIZE (owner x86-m32-b, exit 2026-12-12): see
     /// `Tuning::late_memcpyopt_at_size`. QB arm64 Os -116 B (dialog -92), no
     /// file worse.
