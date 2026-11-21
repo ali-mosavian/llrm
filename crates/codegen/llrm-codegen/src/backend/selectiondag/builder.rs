@@ -1080,29 +1080,9 @@ impl Builder<'_> {
             match MVT::vector(element, lanes) {
                 Some(half) if self.target.legal_vectors.contains(&half) => return Ok((EVT::Simple(half), count)),
                 _ if lanes > 1 => (lanes, count) = (lanes / 2, count * 2),
-                // `TypeWidenVector`: a narrow vector (`v2i32`) lives in the legal vector of the same lanes, more of
-                // them (`v4i32`); `getCopyToPartsVector` concatenates it with undef, `getCopyFromPartsVector`
-                // extracts the low lanes.
-                _ => {
-                    return self
-                        .widened_register_vector(mvt)
-                        .map(|wider| (EVT::Simple(wider), 1))
-                        .ok_or(Refused("vector with no register class"));
-                }
+                _ => return Err(Refused("vector with no register class")),
             }
         }
-    }
-
-    /// The narrowest legal vector of `vt`'s lane type with more lanes.
-    fn widened_register_vector(
-        &self,
-        vt: MVT,
-    ) -> Option<MVT> {
-        let (element, lanes) = (vt.element()?, vt.lanes()?);
-        (lanes * 2..=64)
-            .step_by(lanes as usize)
-            .filter_map(|wider| MVT::vector(element, wider))
-            .find(|wider| self.target.legal_vectors.contains(wider))
     }
 
     /// How a value of `vt` is carried across blocks and calls: the type of
@@ -1115,7 +1095,7 @@ impl Builder<'_> {
         if vt.is_vector() {
             // Arguments, results and calls carry one register.
             return match self.vector_breakdown(vt)? {
-                (register, 1) if register == vt => Ok((register, 1)),
+                (register, 1) => Ok((register, 1)),
                 _ => Err(Refused("vector wider than a register")),
             };
         }
@@ -3793,10 +3773,6 @@ impl Builder<'_> {
             return Ok(self.join_parts(vt, &pieces, pointer));
         }
         let copy = self.dag.get_copy_from_reg(entry, reg, reg_vt);
-        if vt.is_vector() && reg_vt != vt {
-            let low = self.dag.get_constant(0, EVT::I64);
-            return Ok(self.dag.get_node(ISD::ExtractSubvector, vt, &[copy, low]));
-        }
         Ok(if reg_vt == vt { copy } else { self.dag.get_node(ISD::Truncate, vt, &[copy]) })
     }
 
@@ -3891,16 +3867,7 @@ impl Builder<'_> {
         } else {
             extend
         };
-        let value = if reg_vt == vt {
-            value
-        } else if vt.is_vector() {
-            let pad = self.dag.get_undef(vt);
-            let mut pieces = vec![value];
-            pieces.resize((reg_vt.lanes() / vt.lanes()) as usize, pad);
-            self.dag.get_node(ISD::ConcatVectors, reg_vt, &pieces)
-        } else {
-            self.dag.get_node(extend, reg_vt, &[value])
-        };
+        let value = if reg_vt == vt { value } else { self.dag.get_node(extend, reg_vt, &[value]) };
         let chain = self.dag.get_copy_to_reg(entry, reg, value);
         self.pending_exports.push(chain);
         Ok(())
