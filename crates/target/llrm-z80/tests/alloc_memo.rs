@@ -18,5 +18,7 @@ fn an_allocation_the_variants_repeat_runs_once() {
         text_in(&prepared, name, number, &request).expect("compiles");
     }
     let runs = take_allocations();
-    assert!(runs <= 70, "{runs} allocations for {} functions (64 distinct inputs)", names.len());
+    // 64 distinct inputs, and 8 more for the module the alternate LSR order
+    // makes (LSR-KEY-TRIAL)
+    assert!(runs <= 78, "{runs} allocations for {} functions (72 distinct inputs)", names.len());
 }
