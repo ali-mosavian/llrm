@@ -1898,6 +1898,16 @@ fn unrolls_table_fold(
     tuning: llrm_mir::target::Tuning,
     opt_level: u32,
 ) -> bool {
+    unrolls_table_fold_in(tuning, opt_level, true)
+}
+
+/// `unrolls_table_fold` in the early `LoopFullUnrollPass` (`target_unrolling` false) or the
+/// `LoopUnrollPass` after the vectorizer.
+fn unrolls_table_fold_in(
+    tuning: llrm_mir::target::Tuning,
+    opt_level: u32,
+    target_unrolling: bool,
+) -> bool {
     let mut module = parsed(TABLE_FOLD);
     let function = module.function_mut("f").expect("@f").1;
     crate::loopsimplify::simplified(function);
@@ -1909,7 +1919,7 @@ fn unrolls_table_fold(
         min_size: false,
         only_when_forced: false,
         prepare_for_lto: false,
-        target_unrolling: true,
+        target_unrolling,
         inliner_follows: true,
         speed_rate: false,
     };
@@ -1940,6 +1950,15 @@ fn a_target_with_a_higher_o3_threshold_unrolls_a_32_trip_fold_the_pin_keeps() {
     assert!(!unrolls_table_fold(pin, 3), "the pin's 300 keeps the loop");
     assert!(unrolls_table_fold(raised, 3));
     assert!(!unrolls_table_fold(raised, 2), "-O2 keeps its 150");
+}
+
+/// tile -O3 (16,147 instructions against clang's 6,130): the early full unroll took the raised
+/// threshold and unrolled main's 64-trip init loop before the vectorizer; gcc unrolls after it.
+#[test]
+fn the_early_full_unroll_keeps_the_pins_threshold_where_the_target_raises_it() {
+    let raised = llrm_mir::target::Tuning { unroll_threshold_at_o3: Some(400), ..llrm_mir::target::Tuning::PIN };
+    assert!(!unrolls_table_fold_in(raised, 3, false), "the early unroll keeps the loop for the vectorizer");
+    assert!(unrolls_table_fold_in(raised, 3, true), "the unroll after it takes the raised threshold");
 }
 
 /// switch_jump_table x86-64 -O2: a 10-trip loop reports a value its `switch` on
