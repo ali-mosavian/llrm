@@ -861,8 +861,8 @@ impl Hooks for X86Lowering<'_> {
             ISD::FpToSInt | ISD::FpToUInt => lower_fp_to_int(dag, node, self.sse2),
             ISD::LRint | ISD::LLRint => lower_lrint(dag, node),
             ISD::SIntToFp | ISD::UIntToFp => lower_int_to_fp(dag, node, self.sse2),
-            ISD::StrictSIntToFp if !self.sse2 => lower_strict_sint_to_fp(dag, node),
-            ISD::StrictFpToSInt if !self.sse2 => lower_strict_fp_to_sint(dag, node),
+            ISD::StrictSIntToFp => lower_strict_sint_to_fp(dag, node, self.sse2),
+            ISD::StrictFpToSInt => lower_strict_fp_to_sint(dag, node, self.sse2),
             ISD::ConstantPool => lower_constant_pool(dag, node),
             ISD::JumpTable => lower_jump_table(dag, node),
             ISD::ShlParts | ISD::SraParts | ISD::SrlParts => Some(lower_shift_parts(dag, node)),
@@ -1484,15 +1484,30 @@ fn lower_strict_fsetcc(
 
 /// `LowerSINT_TO_FP` of `STRICT_SINT_TO_FP` on the x87: the integer stored to
 /// a stack slot on the node's chain and `fild`ed from it, whose out chain is
-/// the node's. The `i64` source and the unsigned and SSE forms are not
-/// translated: the legalizer refuses them.
+/// the node's. The unsigned and SSE forms are not translated: the legalizer
+/// refuses them.
 fn lower_strict_sint_to_fp(
     dag: &mut SelectionDAG,
     node: SDValue,
+    sse2: bool,
 ) -> Option<SDValue> {
     let (chain, src) = (dag.operand(node, 0), dag.operand(node, 1));
     let (dst, src_vt) = (dag.value_type(node), dag.value_type(src));
-    if !matches!(dst, EVT::Simple(MVT::F32 | MVT::F64 | MVT::F80)) || !matches!(src_vt, EVT::I16 | EVT::I32) {
+    if sse2 && matches!(dst, EVT::Simple(MVT::F32 | MVT::F64)) {
+        // `cvtsi2ss/sd` take an `i32` (and an `i64` at m64): they are legal as
+        // they are; SSE has no `i16` form, so it is widened first.
+        return match src_vt {
+            EVT::I32 => Some(node),
+            EVT::I64 if dag.config().pointer == EVT::I64 => Some(node),
+            EVT::I16 => {
+                let wide = dag.get_node(ISD::SignExtend, EVT::I32, &[src]);
+                Some(dag.intern(ISD::StrictSIntToFp, &[dst, EVT::OTHER], &[chain, wide], SDNodeFlags::default(), NodeData::None))
+            }
+            _ => None,
+        };
+    }
+    if !matches!(dst, EVT::Simple(MVT::F32 | MVT::F64 | MVT::F80)) || !matches!(src_vt, EVT::I16 | EVT::I32 | EVT::I64)
+    {
         return None;
     }
     let size = src_vt.size_in_bits() / 8;
@@ -1516,11 +1531,32 @@ fn lower_strict_sint_to_fp(
 fn lower_strict_fp_to_sint(
     dag: &mut SelectionDAG,
     node: SDValue,
+    sse2: bool,
 ) -> Option<SDValue> {
     let (chain, value) = (dag.operand(node, 0), dag.operand(node, 1));
     let result_vt = dag.value_type(node);
+    if sse2 && matches!(dag.value_type(value), EVT::Simple(MVT::F32 | MVT::F64)) {
+        // `cvttss2si/cvttsd2si`: an `i32` (and an `i64` at m64) as it is, an
+        // `i16` through the `i32`.
+        return match result_vt {
+            EVT::I32 => Some(node),
+            EVT::I64 if dag.config().pointer == EVT::I64 => Some(node),
+            EVT::I16 => {
+                let wide = dag.intern(
+                    ISD::StrictFpToSInt,
+                    &[EVT::I32, EVT::OTHER],
+                    &[chain, value],
+                    SDNodeFlags::default(),
+                    NodeData::None,
+                );
+                let narrow = dag.get_node(ISD::Truncate, EVT::I16, &[SDValue { node: wide.node, res: 0 }]);
+                Some(dag.get_node_multi(ISD::MergeValues, &[EVT::I16, EVT::OTHER], &[narrow, SDValue { node: wide.node, res: 1 }]))
+            }
+            _ => None,
+        };
+    }
     if !matches!(dag.value_type(value), EVT::Simple(MVT::F32 | MVT::F64 | MVT::F80))
-        || !matches!(result_vt, EVT::I16 | EVT::I32)
+        || !matches!(result_vt, EVT::I16 | EVT::I32 | EVT::I64)
     {
         return None;
     }

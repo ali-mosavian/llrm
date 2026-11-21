@@ -132,6 +132,8 @@ pub const AT_DEFAULT: &[(&str, &str)] = &[
     ("float_load_folded", "soft float folds no load into an operation (folds_loads is false: unread)"),
     ("folds_loads", "same"),
     ("float_release", "no floating register stack"),
+    ("size_caller_function", "0: the size-caller byte correction is x86-m32's fit (18 B); m68k has none measured"),
+    ("size_caller_scale", "same: unscaled, the estimate is the function's"),
     ("fill", "no string instruction: a memset is stores or a library call (loop idioms, own row)"),
     ("fill_cell", "same"),
     ("fill_segment", "no segment registers"),

@@ -699,6 +699,22 @@ pub trait Target {
         false
     }
 
+    /// Whether the opcode `name` is flagged `isReMaterializable` in the
+    /// target's description: `IsProfitableToHoist` hoists such an
+    /// instruction whatever the pressure. The pin's M68k flags none
+    /// (`LEA32*`, `MOVE32ri`), so there the pressure check decides.
+    fn rematerializable_opcode(&self) -> fn(&str) -> bool {
+        |_| true
+    }
+
+    /// The register class (a name in `pressure.sets`) the opcode `name`
+    /// constrains its result to, where the target's selected opcodes carry
+    /// one (`MCOperandInfo::RegClass`): a vreg takes the class of its
+    /// definition (M68k's `LEA32*` define `AR32`).
+    fn def_register_class(&self) -> fn(&str) -> Option<&'static str> {
+        |_| None
+    }
+
     /// The pressure sets of the register classes and each set's limit, for a
     /// target that has them (the pre-RA scheduler tracks pressure per set).
     fn pressure(&self) -> Option<(&'static pressure::PressureSets, Vec<u32>)> {

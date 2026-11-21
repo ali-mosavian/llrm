@@ -885,15 +885,22 @@ impl ProgramPass for Walk {
                                     // kernel's copy
                                     // 19 B under its 180 (+5 B built; qmove
                                     // -Os).
-                                    let costs = program.target.trial_costs();
+                                    let mut costs = program.target.trial_costs();
+                                    if size != crate::inlinecost::CallerSize::Speed {
+                                        costs.function += costs.size_caller_function;
+                                        costs.function_scale = costs.function_scale * costs.size_caller_scale / 100;
+                                    }
                                     let now = module.global(id).function().expect("a body");
                                     // DEVIATE (owner softfloat, exit
                                     // 2026-11-20): the callee's bytes are
                                     // summed per
                                     // site off the byte gate's targets, as the
-                                    // x86 model was fit with.
+                                    // x86 model was fit with. The credit gate
+                                    // (x86-m32) credits a dying callee once.
                                     let gone: i64 = if credit > 0
-                                        && (tti.opt_size_inline_byte_gate() || tti.opt_size_inline_trial_by_bytes())
+                                        && (tti.opt_size_inline_byte_gate()
+                                            || tti.opt_size_inline_trial_by_bytes()
+                                            || tti.opt_size_inline_credit_gate())
                                     {
                                         let sites: Vec<GlobalId> =
                                             calls.iter().filter_map(|one| trials[one].callee).collect();
@@ -1038,6 +1045,7 @@ impl ProgramPass for Walk {
                                 let ruled = speed_at_size
                                     || trial_accepted(
                                         tti.opt_size_inline_byte_gate(),
+                                        tti.opt_size_inline_credit_gate(),
                                         tti.opt_size_inline_trial_by_bytes(),
                                         tti.inline_trial_keeps_shrinking_copy(),
                                         priced,
@@ -2052,6 +2060,7 @@ fn speed_keeps_at_size(
 
 fn trial_accepted(
     byte_gate: bool,
+    credit_gate: bool,
     by_bytes: bool,
     keeps_shrinking: bool,
     priced: bool,
@@ -2081,7 +2090,7 @@ fn trial_accepted(
     // built +18).
     let counted = if byte_gate && strict {
         -growth * 8 >= kept_bytes
-    } else if byte_gate {
+    } else if byte_gate || (credit_gate && !strict) {
         tried <= best || (tried <= best + credit && growth <= 0)
     } else {
         tried <= best + credit

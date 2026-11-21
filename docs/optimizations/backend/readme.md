@@ -2,7 +2,7 @@
 
 # Backend phases
 
-From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 160 documented, 1 undocumented.
+From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 161 documented, 1 undocumented.
 
 | Name | Summary | Runs | Page |
 |---|---|---|---|
@@ -18,6 +18,7 @@ From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 160 documen
 | assemble | Takes a MIR module to masm, as `llc` takes a module to an object: each defined function selected and put through the machine phases, each defined variable's data, and the symbols both name. | Once per module. Per-function candidates are described above; the gating | [assemble](assemble.md) |
 | assignment_tracking | `AssignmentTrackingAnalysis`: where each variable of a function lives, from its `#dbg_assign` records and the stores they name, as a table of locations the code generator emits. |  | [assignment_tracking](assignment_tracking.md) |
 | bitcounts | Expands `llvm.ctpop`, `llvm.ctlz` and `llvm.cttz` into shifts, masks and adds in MIR before instruction selection, for the targets whose description lists them under `expand`. | Once per module in `driver::optimized`, before the odd widths are promoted, | [bitcounts](bitcounts.md) |
+| blockaddress | The address of a block (`blockaddress`) as a symbol: one per address-taken block, named by its function and its MIR block, so code and data in any module order can name it before the function that holds it is lowered. | Named by `builder`, `globals`. | [blockaddress](blockaddress.md) |
 | bodyfacts | Facts about the definitions of a body's values that the passes around the allocator ask: which values are literals, addresses or copies, which loads of a cell hold until their last use, and what may write a cell. | `spiller`, `ssaspill`, `constrain`, `floatassign`, `peep`, `greedy::remat`. | [bodyfacts](bodyfacts.md) |
 | booleans | Setcc chains the target's cost table prices above a branch, made selects for `selects::lowered` to branch. | Inside `selects::priced`, after the selects of the module were folded and | [booleans](booleans.md) |
 | breakfalsedeps | A scalar SSE instruction that writes only the low lane of its destination waits for the last write of the whole register, unless the register was last written long enough ago: `BreakFalseDeps`. | Last, optimizing levels only: the pin runs it before emission, after block | [breakfalsedeps](breakfalsedeps.md) |

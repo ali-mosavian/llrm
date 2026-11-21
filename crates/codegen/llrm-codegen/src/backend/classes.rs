@@ -101,6 +101,10 @@ pub struct RegisterClasses {
     pub hoist_by_pressure: bool,
     /// `Target::hoists_register_free_ops`.
     pub hoists_register_free_ops: bool,
+    /// `Target::rematerializable_opcode`.
+    pub rematerializable_opcode: fn(&str) -> bool,
+    /// `Target::def_register_class`.
+    pub def_register_class: fn(&str) -> Option<&'static str>,
 }
 
 impl RegisterClasses {
@@ -202,6 +206,8 @@ impl RegisterClasses {
             uncheap_move_immediate_at_size: arch.uncheap_move_immediate_at_size(),
             hoist_by_pressure: arch.hoist_by_pressure(),
             hoists_register_free_ops: arch.hoists_register_free_ops(),
+            rematerializable_opcode: arch.rematerializable_opcode(),
+            def_register_class: arch.def_register_class(),
         };
         classes.status_word = classes.found_status_word();
         classes

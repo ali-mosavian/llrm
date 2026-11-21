@@ -2146,7 +2146,7 @@ impl Emitter<'_, '_> {
         n: u32,
     ) -> Option<u32> {
         let users = |value: SDValue| self.glue_users.get(&value).into_iter().flatten().copied();
-        let status = users(SDValue { node: n, res: 0 })
+        let status = users(self.compare_glue(n))
             .find(|&user| self.is_machine_named(SDValue { node: user, res: 0 }, "FNSTSW16r"))?;
         users(SDValue { node: status, res: 0 })
             .flat_map(|byte| users(SDValue { node: byte, res: 0 }))
@@ -2159,11 +2159,22 @@ impl Emitter<'_, '_> {
         n: u32,
     ) -> Option<u32> {
         self.glue_users
-            .get(&SDValue { node: n, res: 0 })
+            .get(&self.compare_glue(n))
             .into_iter()
             .flatten()
             .copied()
             .find(|&user| self.is_machine_named(SDValue { node: user, res: 0 }, "FNSTSW16r"))
+    }
+
+    /// The glue result of the compare `n`: its last value. A constrained
+    /// compare has its chain first, so the glue is result 1, not 0; reading
+    /// result 0 found no `sahf` and emitted the `fcom` ahead of whatever the
+    /// scheduler put between `fnstsw` and `sahf`.
+    fn compare_glue(
+        &self,
+        n: u32,
+    ) -> SDValue {
+        SDValue { node: n, res: (self.dag.node(SDValue { node: n, res: 0 }).values.len() - 1) as u8 }
     }
 
     /// What the instruction at the end of the glue chain from the `CopyToReg`
@@ -2804,18 +2815,23 @@ impl Emitter<'_, '_> {
                 if !block.fixups.is_empty() {
                     return Err(EmitError::Unsupported("inline assembly naming symbols".to_owned()));
                 }
-                // The value an `st0` input takes is the stack's top and the
-                // only thing on it: the unnamed store the
-                // stackifier reads as `handleReturn`, which
-                // consumes it, so the block sees it in
-                // st(0) with the stack otherwise empty.
+                // The values the `st0` and `st1` inputs take are the stack's
+                // two top entries and the only ones on it: the unnamed store
+                // the stackifier reads as `handleReturn`, which
+                // consumes them, so the block sees them in
+                // st(0), st(1) with the stack otherwise empty.
                 let registers = block.inputs.iter().filter(|one| !one.starts_with("st")).count();
                 let first = 2 + block.fixups.len() + registers;
-                for &op in node.ops.iter().skip(first).take(block.inputs.iter().filter(|one| *one == "st0").count()) {
+                let count = block.inputs.iter().filter(|one| one.starts_with("st")).count();
+                let mut stack = Vec::new();
+                for &op in node.ops.iter().skip(first).take(count) {
                     match self.operand(op)? {
-                        Loc::Held(value) => self.push(Operation::FloatStore, "", Vec::new(), vec![Loc::Held(value)]),
-                        _ => return Err(EmitError::Unsupported("an st0 input that is no x87 value".to_owned())),
+                        Loc::Held(value) => stack.push(Loc::Held(value)),
+                        _ => return Err(EmitError::Unsupported("an st input that is no x87 value".to_owned())),
                     }
+                }
+                if !stack.is_empty() {
+                    self.push(Operation::FloatStore, "", Vec::new(), stack);
                 }
                 let callee = Callee::Named(name);
                 let at = self.push_call(

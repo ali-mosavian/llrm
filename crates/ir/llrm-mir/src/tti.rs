@@ -1493,6 +1493,13 @@ pub trait Tti {
         None
     }
 
+    /// Whether a call over the pin's threshold, in a loop that
+    /// `inline_trial_speed_at_size` keeps, is also tried inlined at a size
+    /// build (the sites the by-size bound refused are always tried).
+    fn inline_hot_trial_at_size(&self) -> bool {
+        false
+    }
+
     /// Whether INL-HOT's trials run at -O3 too (false: -O2 only).
     fn inline_hot_trial_at_o3(&self) -> bool {
         false
@@ -1710,6 +1717,14 @@ pub trait Tti {
     /// against objects (m68k, `size_calibration.rs`); the x86 model is not, and
     /// a truthful credit refuses trials that shrink the build there.
     fn opt_size_inline_byte_gate(&self) -> bool {
+        false
+    }
+
+    /// `Tuning::inline_trial_credit_gate`: at a size caller, a trial the
+    /// instruction count accepts only through the dying callee's credit must
+    /// leave the bytes no larger (the byte gate's rule, where the estimate is
+    /// calibrated but not exact enough for the -O1 eighth).
+    fn opt_size_inline_credit_gate(&self) -> bool {
         false
     }
 
@@ -2071,6 +2086,11 @@ pub trait Tti {
     /// `Tuning::pops_arguments_at_size`.
     fn pops_arguments_at_size(&self) -> bool {
         true
+    }
+
+    /// `Tuning::pops_arguments_cold_only_at_size`.
+    fn pops_arguments_cold_only_at_size(&self) -> bool {
+        false
     }
 
     /// `Tuning::libc_memcpy`.

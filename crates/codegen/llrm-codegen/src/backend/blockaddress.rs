@@ -10,6 +10,12 @@
 //! `globals::names` names the key and the lowered function defines the name at
 //! the block's label.
 //!
+//! # Example
+//! ```text
+//! blockaddress(@f, %b)  ==>  the symbol `$BA<f>_<b>`, defined at %b's label
+//! indirectbr ptr %p, [%b, %c]  ==>  jmp *%p, successors %b and %c
+//! ```
+//!
 //! # See also
 //! LLVM `AsmPrinter::GetBlockAddressSymbol`, X86 `LowerBlockAddress`.
 
