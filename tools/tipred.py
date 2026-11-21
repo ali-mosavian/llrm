@@ -132,15 +132,25 @@ def red_at(repo: str, commit: str, command: list[str], env=None) -> bool:
             run(["git", "worktree", "remove", "--force", str(tree)], cwd=repo)
 
 
-OUTBOX = Path.home() / "scratch/w9/tipred/outbox"
+def required_env(name: str) -> str:
+    """A setting the unit file provides; unset is an error that says which, never a guess."""
+    value = os.environ.get(name)
+    if not value:
+        sys.exit(f"tipred: {name} is not set (the systemd unit sets it; see tools/tipred/tipred.service)")
+    return value
+
+
+def outbox() -> Path:
+    return Path(required_env("TIPRED_OUTBOX"))
 
 
 def send(to: str, text: str) -> bool:
     """Files only (no bus a script can reach): one file per message in the outbox, which a session
     forwards; the name carries the recipient so each one is told."""
-    OUTBOX.mkdir(parents=True, exist_ok=True)
+    box = outbox()
+    box.mkdir(parents=True, exist_ok=True)
     stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%S%f")
-    (OUTBOX / f"{stamp}.{to.split('@')[0]}.txt").write_text(f"to: {to}\n{text}\n")
+    (box / f"{stamp}.{to.split('@')[0]}.txt").write_text(f"to: {to}\n{text}\n")
     return True
 
 
@@ -189,9 +199,7 @@ def tick(repo: str, state_path: Path, everything: bool, reporter_for=Reporter) -
     packages = [{**p, "root": repo} for p in meta.get("packages", [])]
     crates = affected_crates(changed, packages, everything or not last)
     env = {**os.environ, "CARGO_INCREMENTAL": "0", "CARGO_BUILD_JOBS": "1", "CARGO_TARGET_DIR": str(state_path.parent / "target")}
-    gcc = Path.home() / "scratch/gcc-m68k/root"
-    if gcc.exists():
-        env.setdefault("GCC_M68K", str(gcc))
+    env["GCC_M68K"] = required_env("GCC_M68K")  # without it the m68k tests fail on every tick
     entries = read_env_list()
     tree = Path(state_path.parent / "tree")
     if not tree.exists():
@@ -225,7 +233,7 @@ def tick(repo: str, state_path: Path, everything: bool, reporter_for=Reporter) -
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", default=str(Path(__file__).resolve().parent.parent))
-    parser.add_argument("--state", default=str(Path.home() / "scratch/w9/tipred/state.json"))
+    parser.add_argument("--state", default=os.environ.get("TIPRED_STATE"), required="TIPRED_STATE" not in os.environ)
     parser.add_argument("--full", action="store_true")
     args = parser.parse_args()
     return tick(args.repo, Path(args.state), args.full)

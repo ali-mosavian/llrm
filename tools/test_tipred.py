@@ -114,8 +114,23 @@ def test_a_failed_send_is_retried_next_tick():
 
 def test_a_report_with_no_bus_is_a_file_per_recipient(tmp_path, monkeypatch):
     """No bus a script can reach: each recipient gets a file a session forwards, naming who it is for."""
-    monkeypatch.setattr(tipred, "OUTBOX", tmp_path)
+    monkeypatch.setenv("TIPRED_OUTBOX", str(tmp_path))
     assert tipred.Reporter({}).report("k", "x is red") is None
     files = sorted(tmp_path.iterdir())
     assert len(files) == len(tipred.RECIPIENTS)
     assert {f.read_text().splitlines()[0] for f in files} == {f"to: {to}" for to in tipred.RECIPIENTS}
+
+
+def test_no_personal_path_is_written_into_the_script():
+    """tipred.py once carried `Path.home() / "scratch/w9/..."` and a gcc-m68k path: one person's
+    machine in the repo, which the path scan refused. Every such setting comes from the unit's env."""
+    source = (Path(__file__).resolve().parent / "tipred.py").read_text()
+    assert "Path.home()" not in source and "scratch/" not in source
+
+
+def test_an_unset_setting_is_a_named_error(monkeypatch):
+    """With TIPRED_OUTBOX unset a report was written under a guessed path; it now stops and says which variable."""
+    monkeypatch.delenv("TIPRED_OUTBOX", raising=False)
+    with pytest.raises(SystemExit) as stop:
+        tipred.send("a@b", "text")
+    assert "TIPRED_OUTBOX" in str(stop.value)
