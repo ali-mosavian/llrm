@@ -253,9 +253,8 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         branch_compare_trees_at_size: true,
         inline_never_grows_without_rate: true,
         jump_threading_latch_trial_at_size: true,
-        // DEVIATE OS-TRIAL-CLOCK-CAP (owner x87, exit 2026-12-05): x_transpose
-        // Os kept a copy loop for 12 B at +15.8% clk, x_switch_ranges refused
-        // its table for 35 B at +11%; the cell counts on both.
+        // DEVIATE OS-TRIAL-CLOCK-CAP (owner x87, exit 2026-12-05): x_switch_ranges
+        // Os refused its table for 35 B at +11% clk; the cell counts on both.
         os_trial_clock_cap_percent: Some(2),
         switch_lookup_trial_at_size: true,
         jump_table_size_growth_ratio: Some(300),

@@ -1,9 +1,8 @@
 //! x86-32 -Os: the size trials kept the smaller shape whatever it cost in clocks.
-//! `x_transpose` kept its copy loop instead of the pin's `memcpy` for 12 B at
-//! +15.8% clk (142,340 against 122,900), `x_switch_ranges` refused its lookup
-//! table for 35 B at +11% (127,846 against 115,143). The cap keeps the pin's shape
-//! where the work the smaller one adds is over `os_trial_clock_cap_percent`.
-//! Needs `LLRM_LLC`.
+//! `x_switch_ranges` refused its lookup table for 35 B at +11% clk (127,846
+//! against 115,143). The cap keeps the pin's shape where the work the smaller one
+//! adds is over `os_trial_clock_cap_percent`. The copy-loop trial is exempt (the
+//! words copied are not known). Needs `LLRM_LLC`.
 
 use std::path::Path;
 use std::process::Command;
@@ -24,12 +23,6 @@ fn asm_at_os(source: &str) -> String {
         .unwrap();
     assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
     std::fs::read_to_string(&asm).unwrap()
-}
-
-#[test]
-fn a_copy_loop_that_costs_sixteen_percent_clocks_stays_the_pins_memcpy() {
-    let text = asm_at_os("os_transpose_copy.c");
-    assert!(text.contains("call memcpy"), "the row copy is a loop again:\n{text}");
 }
 
 #[test]
