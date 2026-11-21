@@ -1,5 +1,5 @@
-; ModuleID = '/home/alim/scratch/handoff/matrix/benchsrc/histo.c'
-source_filename = "/home/alim/scratch/handoff/matrix/benchsrc/histo.c"
+; ModuleID = 'histo.c'
+source_filename = "histo.c"
 target datalayout = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8"
 
 @data = internal global [4096 x i8] zeroinitializer, align 1
