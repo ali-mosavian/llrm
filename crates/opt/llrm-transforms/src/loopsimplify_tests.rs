@@ -866,3 +866,46 @@ out:
     manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
     assert_eq!(super::SHAPE_COPIES.with(std::cell::Cell::get), 0, "the shape was copied");
 }
+
+/// A header phi that only keeps its value (`%sp`: the start, or itself) is
+/// "a degenerate PHI already" (`findPHIToPartitionLoops`: `simplifyInstruction`
+/// replaces it first). Not folded, the partition found it again after each
+/// split and made a new empty outer block every round, as many as the function
+/// had blocks: `computed_goto` on wasm had eleven in front of the dispatch loop
+/// and 14 more blocks than the pin's.
+#[test]
+fn test_a_phi_that_only_keeps_its_value_does_not_split_the_loop_over_and_over() {
+    let text = "define i32 @f(i32 %n, i32 %s) {
+b0:
+  br label %b1
+
+b1:
+  %sp = phi i32 [ %s, %b0 ], [ %sp, %b2 ], [ %sp, %b3 ]
+  %i = phi i32 [ 0, %b0 ], [ %i2, %b2 ], [ %i3, %b3 ]
+  %c = icmp ult i32 %i, %n
+  br i1 %c, label %b4, label %b5
+
+b4:
+  %odd = and i32 %i, 1
+  %t = icmp eq i32 %odd, 0
+  br i1 %t, label %b2, label %b3
+
+b2:
+  %i2 = add i32 %i, 1
+  br label %b1
+
+b3:
+  %i3 = add i32 %i, 2
+  br label %b1
+
+b5:
+  ret i32 %sp
+}
+";
+    let mut module = parsed(text);
+    let (_, function) = module.function_mut("f").expect("@f");
+    let before = function.layout().len();
+    simplified(function);
+    let after = function.layout().len();
+    assert!(after <= before + 1, "{before} blocks became {after}: the unique back edge is one block");
+}
