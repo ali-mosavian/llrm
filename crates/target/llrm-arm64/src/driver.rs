@@ -259,8 +259,10 @@ fn lower_function(
     // `AArch64ConditionalCompares` runs just before early if-conversion and
     // skips an `optnone` function too; `LLRM_ARM64_CCMP=off` is
     // `-aarch64-enable-ccmp=false`.
-    if !flagged(function, &["optnone"]) && std::env::var("LLRM_ARM64_CCMP").as_deref() != Ok("off") {
-        crate::ccmp::run(&mut machine, flagged(function, &["minsize"]));
+    let ccmp = std::env::var("LLRM_ARM64_CCMP");
+    if !flagged(function, &["optnone"]) && ccmp.as_deref() != Ok("off") {
+        // `stress` is `-aarch64-stress-ccmp`: every candidate converts.
+        crate::ccmp::run(&mut machine, flagged(function, &["minsize"]), ccmp.as_deref() == Ok("stress"));
         dump("ConditionalCompares", &machine);
     }
     // `EarlyIfConverter` skips an `optnone` function (`skipFunction`).

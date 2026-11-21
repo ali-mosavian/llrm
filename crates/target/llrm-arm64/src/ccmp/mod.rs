@@ -444,7 +444,10 @@ fn should_convert(
     }
     // The compare delays the branch: it waits for the second compare's inputs.
     let delay_limit = penalty * 3 / 4;
-    let head_depth = trace.instr_depth(traces, first_terminator(&function.blocks[conv.head].ops));
+    // The head's own trace: the depths of its instructions are those of any
+    // trace through it.
+    let head_trace = traces.trace(conv.head);
+    let head_depth = head_trace.instr_depth(traces, first_terminator(&function.blocks[conv.head].ops));
     let cmp_depth = trace.instr_depth(traces, first_terminator(&function.blocks[conv.cmp_bb].ops));
     if cmp_depth > head_depth + delay_limit {
         return false;
@@ -458,6 +461,7 @@ fn should_convert(
 pub fn run(
     function: &mut MFunc,
     min_size: bool,
+    stress: bool,
 ) -> usize {
     if function.blocks.len() < 3 {
         return 0;
@@ -490,7 +494,7 @@ pub fn run(
                 position += 1;
                 continue;
             };
-            if !should_convert(&candidate, &mut traces, function, min_size, penalty) {
+            if !stress && !should_convert(&candidate, &mut traces, function, min_size, penalty) {
                 position += 1;
                 continue;
             }
@@ -515,3 +519,6 @@ pub fn run(
     }
     converted
 }
+
+#[cfg(test)]
+mod tests;
