@@ -1895,6 +1895,12 @@ pub fn recorded(
     // What only fed those stores (their loads, arithmetic) is dead with them;
     // LLVM's GlobalOpt runs before the late function passes that sweep it.
     manager.add(dead::Dead);
+    // A callee those stores were all that it did is empty now: its stamped
+    // `llrm.reads` are stale and the calls of it stay. Stated again, it is
+    // `memory(none)` and the next sweep takes the calls (`foo` of
+    // byvalue_struct_address, -Os: 56 B against clang's 17).
+    manager.add_program(crate::interprocedural::Stamp);
+    manager.add(dead::Dead);
     // A loop whose only effect was those stores is dead now: LLVM's second
     // function round (LoopDeletion, PassBuilderPipelines.cpp:1628) follows its
     // GlobalOpt.

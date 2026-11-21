@@ -3422,3 +3422,35 @@ b4:
     assert_eq!(log[2].1, log[3].1, "{log:?}");
     assert_ne!(log[0].1, log[2].1, "{log:?}");
 }
+
+/// byvalue_struct_address -Os (56 B against clang's 17): `@bar` read through its pointer until
+/// the write-only `@sum` lost its store; the emptied callee kept `llrm.reads` from before and
+/// `foo`'s call to it stayed. The call is dead once the callee is stamped again.
+#[test]
+fn a_callee_emptied_by_write_only_removal_loses_its_call() {
+    let text = "@sum = internal global i32 0
+
+define void @bar(ptr %x, i32 %f) noinline nounwind {
+entry:
+  %v = load i32, ptr %x
+  %s = add i32 %v, %f
+  store i32 %s, ptr @sum
+  ret void
+}
+
+define void @foo(ptr %x) nounwind {
+entry:
+  call void @bar(ptr %x, i32 6)
+  ret void
+}
+
+define void @main(ptr %p) {
+entry:
+  call void @foo(ptr %p)
+  ret void
+}
+";
+    let (module, _) = pipelined(text, pipeline::Options::size());
+    let printed = crate::testing::printed(&module);
+    assert!(!printed.contains("call void @bar"), "the call of the emptied callee stays:\n{printed}");
+}
