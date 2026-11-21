@@ -1064,6 +1064,55 @@ fn test_a_reload_before_the_pseudo_that_takes_a_calls_result_leaves_the_result_b
     assert!(names.contains(&"faddp"), "{names:?}");
 }
 
+/// A value that is both the stack input of a block call (an unnamed store, which
+/// consumes it) and live after the call: the allocator put its spill at the
+/// call, behind that store, where the value is gone ("floating stack input is
+/// unavailable": `if (t >= 100) return 0; return frndint(t) + t` at m64, QB
+/// pfpu.c's `fx_exp`). The spill is made ahead of the store.
+#[test]
+fn test_a_spill_of_a_block_calls_stack_input_is_made_before_the_input_consumes_it() {
+    let cells = _cells([-4, -8, -12], 8);
+    let (spill, out) = (&cells[0], &cells[1]);
+    let body = _body(vec![
+        _load(1, &cells[2]),
+        sem(Operation::FloatStore, "", vec![], vec![fl(1)]),
+        sem(Operation::FloatStore, "fstp", vec![m(spill)], vec![fl(1)]),
+        sem(Operation::Call, "call", vec![], vec![]),
+        sem(Operation::FloatLoad, "", vec![fl(2)], vec![]),
+        _load(3, spill),
+        _arithmetic("fadd", 4, fl(2), fl(3)),
+        _store(out, 4),
+    ]);
+    let blocks: Vec<Block> = body
+        .blocks
+        .iter()
+        .map(|block| {
+            let insns = block
+                .insns
+                .iter()
+                .enumerate()
+                .map(|(at, one)| {
+                    let mut made = (**one).clone();
+                    made.spill_store = at == 2;
+                    Arc::new(made)
+                })
+                .collect();
+            block.with_insns(insns)
+        })
+        .collect();
+    let body = body.with_blocks(blocks);
+    let converted = crate::backend::fpstack::converted(
+        &body,
+        &crate::backend::classes::RegisterClasses::of(&llrm_x86_m16::M16),
+        None,
+    )
+    .expect("the spill is made while the value is on the stack");
+    let insns = converted.insns();
+    let names: Vec<&str> = insns.iter().map(|one| name(one)).filter(|name| !name.is_empty()).collect();
+    let (spilled, called) = (names.iter().position(|n| n.starts_with("fst")), names.iter().position(|n| *n == "call"));
+    assert!(spilled < called, "{names:?}");
+}
+
 /// The stackifier worked liveness out a second time over the body it had split:
 /// a block made on an edge holds nothing, so its rows are those of the block it
 /// leads to, and no other row moves (d_faces: two calls of 0.8 M each).
