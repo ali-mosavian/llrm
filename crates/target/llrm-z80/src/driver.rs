@@ -696,6 +696,23 @@ pub fn selections_reusing(
         }
         MULTI_RECURSIVE.with(|held| held.borrow_mut().clear());
     }
+    // the key of each form's finished lines: the function's text, and for an
+    // alternative form another one
+    let stamp = |forms: &mut Vec<Selected>, salt: u64| {
+        for (name, source, ilp) in forms.iter_mut() {
+            let Some(&digest) = digests.get(name.as_str()) else { continue };
+            for form in [source, ilp].into_iter().filter_map(|form| form.as_mut().ok()) {
+                let mut at = Some(form);
+                while let Some(one) = at {
+                    one.digest = digest ^ salt;
+                    at = one.generic.as_deref_mut();
+                }
+            }
+        }
+    };
+    let (mut main, mut alternatives) = (main, alternatives);
+    stamp(&mut main, 0);
+    stamp(&mut alternatives, 0x9e37_79b9_7f4a_7c15);
     Ok((main, alternatives, digests))
 }
 
