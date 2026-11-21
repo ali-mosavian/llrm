@@ -200,7 +200,7 @@ impl FunctionPass for LoopSimplify {
         #[cfg(test)]
         SHAPE_COPIES.with(|count| count.set(count.get() + 1));
         let shape = (*held).clone();
-        if _simplified(unit.function, shape) { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
+        if simplified_given(unit.function, Some(shape)) { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
     }
 }
 
