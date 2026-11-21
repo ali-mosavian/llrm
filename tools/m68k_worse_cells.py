@@ -113,12 +113,23 @@ def _seen(lines):
         try:
             if len(row) > 7 and row[7].startswith(UNRESOLVED):
                 continue  # a helper the archive lacks: the linked size is unknown, not small
-            clocks = int(row[5]) if row[5] != "" else None
+            clocks = (row[5] if row[5].startswith("<=") else int(row[5])) if row[5] != "" else None
             library = int(row[8]) if len(row) > 8 and row[8] != "" else 0
             seen.setdefault(key, {})[row[3]] = (int(row[4]) + library, clocks)
         except (ValueError, IndexError):
             continue
+    for sides in seen.values():
+        settle_bounds(sides)
     return rates(header), seen, keys
+
+
+def settle_bounds(sides):
+    """Resolve `<=N` clock cells (an upper bound: the program's multiplies and divides are priced at their published maximum, the true clocks are at most N). Ours `<=N` with N at or under every exact reference is a win and is judged at N (the true gap is no larger); otherwise the interval straddles a reference and the clocks are unmeasured. A reference that is itself a bound is unmeasured: a blank here hid muls.l cells (memmove_overlap 68020 O2: `4668` bound against gcc 8548)."""
+    exact = [c for side, (_, c) in sides.items() if side != "ours" and isinstance(c, int)]
+    for side, (size, clocks) in list(sides.items()):
+        if isinstance(clocks, str):
+            bound = int(clocks[2:])
+            sides[side] = (size, bound if side == "ours" and exact and bound <= min(exact) else None)
 
 
 def cells(lines):

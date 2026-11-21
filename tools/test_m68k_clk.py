@@ -17,6 +17,10 @@ class ParseClocks(unittest.TestCase):
         self.assertIsNone(parse_clocks("| a.exe | 9 | 24634* | 1.0 |\n"))
         self.assertIsNone(parse_clocks("| a.exe | 9 | 24634? | 1.0 |\n"))
 
+    def test_a_published_maximum_bound_is_kept_as_an_upper_bound(self):
+        # memmove_overlap 68020 O2 held two `muls.l` at their maximum: `<=4668` against gcc's 8548 was a blank cell
+        self.assertEqual(parse_clocks("| a.exe | 9 | <=4668 | 1.0 |\n"), "<=4668")
+
     def test_no_program_row_is_none_not_zero(self):
         self.assertIsNone(parse_clocks("| exe | insns | 68000 clk |\n"))
         self.assertIsNone(parse_clocks(""))
