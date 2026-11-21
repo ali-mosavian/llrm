@@ -1682,3 +1682,24 @@ join:
         assert!(done.is_ok(), "{name}: {:?}", done.err());
     }
 }
+
+/// `mul <2 x i64>` was refused ("CannotSelect(Mul)": SSE2 has no `pmullq`), so
+/// no loop of 64-bit products could be vectorized (bench tile, scroll, dot at
+/// O2 and O3). The pin's `LowerMUL` is `pmuludq` of the low halves and of each
+/// low half by the other's high half; a splat that fits 32 bits has no high
+/// half to multiply.
+#[test]
+fn an_m64_v2i64_multiply_is_pmuludq() {
+    let layout = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n";
+    let pmuludq = |body: &str| -> usize {
+        let text = format!("{layout}define void @f(ptr %p, ptr %q) {{\n{body}  store <2 x i64> %r, ptr %p, align 16\n  ret void\n}}\n");
+        let module = llrm_mir::parse::module(&text).expect("parses");
+        let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+        let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+        done.body.insns().iter().filter(|i| i.what.as_ref().is_some_and(|w| w.name.as_deref() == Some("pmuludq"))).count()
+    };
+    let load = "  %a = load <2 x i64>, ptr %p, align 16\n  %b = load <2 x i64>, ptr %q, align 16\n";
+    assert_eq!(pmuludq(&format!("{load}  %r = mul <2 x i64> %a, %b\n")), 3);
+    let by_constant = "  %a = load <2 x i64>, ptr %p, align 16\n  %r = mul <2 x i64> %a, <i64 1000003, i64 1000003>\n";
+    assert_eq!(pmuludq(by_constant), 2);
+}
