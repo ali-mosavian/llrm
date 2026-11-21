@@ -854,6 +854,14 @@ pub trait Tti {
         true
     }
 
+    /// DEVIATE LV-NARROW-IV (owner llrm-target-x86-m64-b, exit 2026-11-30): a
+    /// loop chosen for widening has its integer chains of the counter
+    /// narrowed first (`loopvectorizenarrow`), as gcc's over-widening pattern
+    /// does.
+    fn narrows_induction_chains(&self) -> bool {
+        false
+    }
+
     /// The backend selects a vector under a register (`<8 x i8>`): the pin's
     /// `TypeWidenVector` makes it one register, as the x86 targets do. A port
     /// whose backend takes none keeps the loop scalar.
