@@ -954,8 +954,16 @@ impl<'a> Walk<'a> {
             match self.effects[at].clone() {
                 // Unknown: it may read any register and write any.
                 None => {
-                    for copy in self.maybe_dead.drain(..) {
-                        self.dead[copy] = false;
+                    // It may read any register: a copy whose destination still
+                    // holds it is read. One already overwritten is dead: the
+                    // value it made is gone (an indirect `jmp`, whose effect
+                    // is unknown, kept `esi = ebx` before the reload of `esi`).
+                    for copy in std::mem::take(&mut self.maybe_dead) {
+                        if self.holds(copy) {
+                            self.dead[copy] = false;
+                        } else {
+                            self.maybe_dead.push(copy);
+                        }
                     }
                     self.tracker.clear();
                     self.writer = [Some(usize::MAX); UNITS];
@@ -992,6 +1000,18 @@ impl<'a> Walk<'a> {
             }
         }
         self.tracker.clear();
+    }
+
+    /// Whether the tracker still has `copy` defining one of its destination
+    /// lanes (nothing has overwritten them all since).
+    fn holds(
+        &self,
+        copy: usize,
+    ) -> bool {
+        let Some(rec) = &self.copies[copy] else {
+            return false;
+        };
+        units_of(rec.dst).any(|unit| self.tracker.copy_for(unit, false) == Some(copy))
     }
 
     /// What is live after each instruction, given what is live out.
