@@ -51,6 +51,8 @@ line_fill_clocks             =    =
 post_ra_tail_duplicate  1    1
 # DEVIATE TL4 (owner x86-m32-b, exit 2026-11-27): see TimingTable::skip_computed_goto_copies_at_size.
 skip_computed_goto_copies_at_size 1 1
+# DEVIATE INLINE-FRAME-SIZE (owner x86-m32-b, exit 2026-12-05): see TimingTable::register_inline_frees_frame_at_size.
+register_inline_frees_frame_at_size 1 1
 # DEVIATE TAILDUP-HOT (owner x86-m32): gcc copies up to 8 instructions where it optimises for speed. Stated cost:
 # x_jpeg_fixed/x_jpeg_single -O2 +32 B at 0 clk (a cold error tail in a loop; static frequency cannot tell). Exit: profile-fed frequencies (program PGO).
 tail_dup_hot_threshold  8    8
