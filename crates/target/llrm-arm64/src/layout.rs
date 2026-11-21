@@ -344,7 +344,9 @@ fn merge_return_tails(
         // `-tail-merge-threshold`: no more than that many blocks are compared
         // together; the pin takes the first ones, then the rest in a later
         // round (here: in chunks, in block order).
-        for group in groups.values().flat_map(|group| group.chunks(TAIL_MERGE_THRESHOLD)).filter(|group| group.len() > 1) {
+        for group in
+            groups.values().flat_map(|group| group.chunks(TAIL_MERGE_THRESHOLD)).filter(|group| group.len() > 1)
+        {
             for (a, &x) in group.iter().enumerate() {
                 for &y in &group[a + 1..] {
                     let ((one, one_insts), (other, other_insts)) = (&ending[x], &ending[y]);
