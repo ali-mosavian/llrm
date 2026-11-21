@@ -789,9 +789,18 @@ pub enum SpeedUnroll {
     /// The full unroll's threshold is this one, where the pin's -O2 is 150 and
     /// its -O3 300.
     Wide(u32),
+    /// No non-trivial unswitch (-O3): the loop is not copied for a condition
+    /// that does not change in it. queens -O3: `place` +93 B and +108745 T
+    /// over -O2, 90 B over the SDCC bar, for one branch a trip.
+    NoUnswitch,
 }
 
 impl SpeedUnroll {
+    /// Whether the variant makes no non-trivial unswitch.
+    pub fn refuses_unswitch(self) -> bool {
+        matches!(self, Self::NoUnswitch)
+    }
+
     /// Whether the variant makes only the full unrolls that add no bytes.
     pub fn refuses_unroll_growth(self) -> bool {
         matches!(self, Self::NoGrow | Self::NoGrowBoth)
@@ -820,13 +829,15 @@ pub struct UnrollDecisions {
     pub made: usize,
     pub refused: usize,
     pub inlined: usize,
+    /// The non-trivial unswitches that `NoUnswitch` would not make.
+    pub unswitched: usize,
 }
 
 thread_local! {
     /// The variant of UNROLL-SPEED-TRIAL running, if any.
     static SPEED_UNROLL: Cell<Option<SpeedUnroll>> = const { Cell::new(None) };
     /// The decisions since [`take_speed_unrolls`].
-    static SPEED_UNROLLS: Cell<UnrollDecisions> = const { Cell::new(UnrollDecisions { made: 0, refused: 0, inlined: 0 }) };
+    static SPEED_UNROLLS: Cell<UnrollDecisions> = const { Cell::new(UnrollDecisions { made: 0, refused: 0, inlined: 0, unswitched: 0 }) };
 }
 
 /// The UNROLL-SPEED-TRIAL variant in force, if a trial compile is running.
@@ -850,6 +861,15 @@ pub(crate) fn note_speed_inline() {
     SPEED_UNROLLS.with(|cell| {
         let mut seen = cell.get();
         seen.inlined += 1;
+        cell.set(seen);
+    });
+}
+
+/// Notes a non-trivial unswitch made.
+pub(crate) fn note_speed_unswitch() {
+    SPEED_UNROLLS.with(|cell| {
+        let mut seen = cell.get();
+        seen.unswitched += 1;
         cell.set(seen);
     });
 }

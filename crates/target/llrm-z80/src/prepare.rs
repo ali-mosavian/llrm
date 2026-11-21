@@ -50,10 +50,17 @@ pub fn split_phi_edges(module: &mut Module) {
 /// The attribute that lets a function tuned for size call `__mulsi3`.
 pub const LONG_MULTIPLY: &str = "llrm-mulsi3";
 
+/// The attribute of a module with one long multiply: it keeps the word products, and a function not tuned
+/// for size is also selected with the routine's call (`pipeline::CALL_MULS`), the module price choosing.
+pub const LONE_MULTIPLY: &str = "llrm-mulsi3-lone";
+
 /// Marks every function with a body when the module multiplies longs often
 /// enough to pay for `__mulsi3` (58 B): a long multiply counts one, a long
 /// long three (its cross products). A lone small multiply is cheaper inline
-/// (copy_runs, switch_jump_table: +10 and +31 B at -Os with the call).
+/// at a size level (copy_runs, switch_jump_table: +10 and +31 B at -Os with the
+/// call), and its call is priced against the word products at the others
+/// (loop_versioning -O2: the products were four `__mulhi3` calls, 69% slower
+/// than the one `__mulsi3`).
 pub fn mark_long_multiplies(module: &mut Module) {
     let bits = |ty| module.context.types.int_bits(ty);
     let sites: u32 = module
@@ -73,7 +80,7 @@ pub fn mark_long_multiplies(module: &mut Module) {
                 .sum::<u32>()
         })
         .sum();
-    if sites < 2 {
+    if sites < 1 {
         return;
     }
     let names: Vec<String> = module
@@ -81,9 +88,10 @@ pub fn mark_long_multiplies(module: &mut Module) {
         .filter(|(_, _, function)| !function.is_declaration())
         .filter_map(|(_, global, _)| global.name.owned())
         .collect();
+    let mark = if sites < 2 { LONE_MULTIPLY } else { LONG_MULTIPLY };
     for name in names {
         if let Some((_, function)) = module.function_mut(&name) {
-            function.attrs.push(Attribute::Flag(LONG_MULTIPLY.into()));
+            function.attrs.push(Attribute::Flag(mark.into()));
         }
     }
 }

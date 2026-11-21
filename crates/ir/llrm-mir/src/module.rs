@@ -592,6 +592,11 @@ impl PartialEq for NameIndex {
 }
 
 impl Function {
+    /// The function is built for size (`optsize` or `minsize`).
+    pub fn optimizes_for_size(&self) -> bool {
+        self.attrs.iter().any(|attr| matches!(attr, Attribute::Flag(name) if name == "optsize" || name == "minsize"))
+    }
+
     /// Whether `inst` is a `llvm.experimental.noalias.scope.decl` call, which
     /// MIR spells as a `!noalias.scope.decl` attachment.
     pub fn is_noalias_scope_decl(

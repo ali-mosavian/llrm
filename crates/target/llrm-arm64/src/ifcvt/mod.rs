@@ -138,6 +138,7 @@ fn is_terminator(op: &Op) -> bool {
                 | Inst::Brk { .. }
         ) | Op::Return { .. }
             | Op::JumpTable { .. }
+            | Op::IndirectJump { .. }
     )
 }
 
@@ -435,7 +436,7 @@ impl Speculation {
             if facts.may_load || facts.may_store || facts.call || facts.side_effects {
                 return false;
             }
-            if matches!(op, Op::Call { .. } | Op::Return { .. } | Op::JumpTable { .. }) {
+            if matches!(op, Op::Call { .. } | Op::Return { .. } | Op::JumpTable { .. } | Op::IndirectJump { .. }) {
                 return false;
             }
             if facts.sets_flags {
@@ -576,6 +577,12 @@ impl IfConv {
         }
         let tail = cfg.succ[s0][0];
         if tail != s1 && (cfg.pred[s1].len() != 1 || cfg.succ[s1].len() != 1 || cfg.succ[s1][0] != tail) {
+            return None;
+        }
+        // The blocks that vanish into the head must not be ones whose address
+        // is taken (`hasAddressTaken`): an `indirectbr` reaches them by it.
+        let taken = |at: usize| function.block_symbols.iter().any(|(label, _)| *label == cfg.labels[at]);
+        if taken(s0) || (s1 != tail && taken(s1)) {
             return None;
         }
         let tail_ops = &function.blocks[tail].ops;

@@ -43,6 +43,9 @@ pub struct Function {
     pub unwind: bool,
     /// The labels of the blocks that end in a call that never returns.
     pub dead_ends: Vec<String>,
+    /// The label of each block whose address is taken, with the symbol that
+    /// names it.
+    pub block_symbols: Vec<(String, String)>,
 }
 
 /// A function's pieces for the layout: a block's label, then its words.
@@ -96,15 +99,24 @@ impl Symbols {
         offset: usize,
         size: usize,
     ) {
-        self.index.insert(name.to_owned(), self.list.len());
-        self.list.push(Symbol {
+        let defined = Symbol {
             name: name.to_owned(),
             binding,
             definition: Definition::Defined { section, offset },
             size,
             group: None,
             visibility: Default::default(),
-        });
+        };
+        // A name something already refers to keeps its place: the references
+        // made before the definition (a block's address read by a function
+        // that comes first) hold its number.
+        match self.index.get(name).copied().filter(|&at| matches!(self.list[at].definition, Definition::Undefined)) {
+            Some(at) => self.list[at] = defined,
+            None => {
+                self.index.insert(name.to_owned(), self.list.len());
+                self.list.push(defined);
+            }
+        }
     }
 
     /// The symbol `name`, undefined if nothing defined it.
@@ -303,6 +315,10 @@ pub fn object(
         let placed = place(&mut fragments, &()).map_err(|error| format!("{}: {}", function.symbol, error.0))?;
         let labels: HashMap<String, usize> =
             placed.into_iter().map(|(name, at)| (name, function_offset + at as usize)).collect();
+        for (label, symbol) in &function.block_symbols {
+            let at = labels.get(label.as_str()).ok_or_else(|| format!("{}: no block {label}", function.symbol))?;
+            symbols.defined(symbol, Binding::Local, text_index, *at, 0);
+        }
         for (f, t, offset) in table_places.iter().filter(|(f, ..)| std::ptr::eq(&functions[*f], function)) {
             let table = &functions[*f].tables[*t];
             let bytes = llrm_object::table::differences(table.entry, &table.base, &table.entries, &|name| {
