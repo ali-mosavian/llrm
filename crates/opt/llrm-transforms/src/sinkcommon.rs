@@ -401,6 +401,40 @@ fn followed_by_unreachable(
     }
 }
 
+/// How many phis sinking `column` creates, `to_sink` being the instructions
+/// sunk with it, and whether one of them replaces the address of a memory
+/// operand that a GEP computes in every arm.
+fn column_phis(
+    function: &Function,
+    phi_operands: &PhiOperands,
+    column: &[InstId],
+    to_sink: &IdSet<InstId>,
+) -> (usize, bool) {
+    let mut phis = 0;
+    for (index, _) in function.instruction(column[0]).operands.iter().enumerate() {
+        let Some(operands) = phi_operands.get(&(column[0], index)) else { continue };
+        let all_sunk = operands.iter().all(|&operand| defined_by(function, operand).is_some_and(|def| to_sink.contains(&def)));
+        if all_sunk {
+            continue;
+        }
+        phis += 1;
+        let memory_operand = match &function.instruction(column[0]).opcode {
+            Opcode::Load { .. } => index == 0,
+            Opcode::Store { .. } => index == 1,
+            _ => false,
+        };
+        if memory_operand
+            && operands.iter().any(|&operand| {
+                defined_by(function, operand)
+                    .is_some_and(|def| matches!(function.instruction(def).opcode, Opcode::GetElementPtr { .. }))
+            })
+        {
+            return (phis, true);
+        }
+    }
+    (phis, false)
+}
+
 /// How many of `columns` (from the end) stay once those whose sinking would
 /// need more than one new phi are left out, from the first that does. The
 /// operands of a column that another column sinks do not count.
@@ -416,30 +450,8 @@ fn profitable_prefix(
         }
     }
     let profitable = |column: &[InstId], to_sink: &IdSet<InstId>| {
-        let mut phis = 0;
-        for (index, _) in function.instruction(column[0]).operands.iter().enumerate() {
-            let Some(operands) = phi_operands.get(&(column[0], index)) else { continue };
-            let all_sunk =
-                operands.iter().all(|&operand| defined_by(function, operand).is_some_and(|def| to_sink.contains(&def)));
-            if all_sunk {
-                continue;
-            }
-            phis += 1;
-            let memory_operand = match &function.instruction(column[0]).opcode {
-                Opcode::Load { .. } => index == 0,
-                Opcode::Store { .. } => index == 1,
-                _ => false,
-            };
-            if memory_operand
-                && operands.iter().any(|&operand| {
-                    defined_by(function, operand)
-                        .is_some_and(|def| matches!(function.instruction(def).opcode, Opcode::GetElementPtr { .. }))
-                })
-            {
-                return false;
-            }
-        }
-        phis <= 1
+        let (phis, unfolds_address) = column_phis(function, phi_operands, column, to_sink);
+        !unfolds_address && phis <= 1
     };
     let mut scan = columns.len();
     let mut kept: IdSet<InstId> = IdSet::new();
@@ -475,6 +487,31 @@ fn profitable_prefix(
     scan
 }
 
+/// Whether sinking `columns` (instructions per predecessor, `arms`
+/// predecessors) pays at a target that prices each phi it creates at `phi_cost`
+/// instructions (`Tuning::sink_common_phi_cost`; 0: any sink pays). Counted in
+/// instructions: the sink drops `arms - 1` copies of every column and puts a
+/// move on every arm for each phi (`phi_cost` apiece). gcc `-fcrossjumping` keeps the same account:
+/// a tail behind a differing value is merged only where it is longer than the
+/// jump that joins it.
+fn sink_pays(
+    function: &Function,
+    phi_operands: &PhiOperands,
+    columns: &[Vec<InstId>],
+    arms: usize,
+    phi_cost: usize,
+) -> bool {
+    if phi_cost == 0 {
+        return true;
+    }
+    let mut to_sink: IdSet<InstId> = IdSet::new();
+    for column in columns {
+        to_sink.extend(column.iter().copied());
+    }
+    let phis: usize = columns.iter().map(|column| column_phis(function, phi_operands, column, &to_sink).0).sum();
+    (arms - 1) * columns.len() > phi_cost * arms * phis
+}
+
 /// The code that ends every unconditional predecessor of `block` the same way
 /// runs in `block`. Whether it did.
 pub fn sunk(
@@ -482,6 +519,7 @@ pub fn sunk(
     spec: &Speculation,
     function: &mut Function,
     block: BlockId,
+    phi_cost: usize,
 ) -> bool {
     let mut jumps = Vec::new();
     let mut listed: IdSet<BlockId> = IdSet::new();
@@ -560,7 +598,7 @@ pub fn sunk(
             break 0;
         }
     };
-    if scan == 0 {
+    if scan == 0 || !sink_pays(function, &phi_operands, &columns[..scan], jumps.len(), phi_cost) {
         return false;
     }
 
