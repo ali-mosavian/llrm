@@ -821,7 +821,7 @@ impl ProgramPass for Walk {
                                     0
                                 };
                                 let (saved, growth) = if size == crate::inlinecost::CallerSize::Speed && rate > 0 {
-                                    let costs = program.target.byte_costs();
+                                    let costs = program.target.speed_trial_costs();
                                     let now = module.global(id).function().expect("a body");
                                     let callees: Vec<&llrm_mir::module::Function> = calls
                                         .iter()
@@ -1042,7 +1042,13 @@ impl ProgramPass for Walk {
                                 } else {
                                     0
                                 };
-                                let ruled = speed_at_size
+                                // DEVIATE UNROLL-SPEED-TRIAL: the variant that takes no growth
+                                // refuses this trial's too, and a base compile notes the growth
+                                // it takes, for the driver to try that variant.
+                                let refuses_growth = priced
+                                    && growth > 0
+                                    && crate::trial::speed_unroll().is_some_and(crate::trial::SpeedUnroll::refuses_trial_growth);
+                                let ruled = !refuses_growth && (speed_at_size
                                     || trial_accepted(
                                         tti.opt_size_inline_byte_gate(),
                                         tti.opt_size_inline_credit_gate(),
@@ -1058,7 +1064,18 @@ impl ProgramPass for Walk {
                                         rate,
                                         kept_bytes,
                                         size == crate::inlinecost::CallerSize::Speed,
-                                    );
+                                    ));
+                                if ruled
+                                    && priced
+                                    && growth > 0
+                                    && matches!(
+                                        crate::trial::speed_unroll(),
+                                        None | Some(crate::trial::SpeedUnroll::NoInlineGrowth)
+                                    )
+                                    && tti.unroll_speed_trial()
+                                {
+                                    crate::trial::note_speed_trial_inline();
+                                }
                                 let forced = !ruled
                                     && site
                                         .as_ref()
