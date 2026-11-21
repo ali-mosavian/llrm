@@ -37,7 +37,9 @@
 //! DEVIATE TL3 (owner greedy-subreg, exit 2026-11-20): the pin's return block
 //! already holds the frame's teardown, so a framed function's is longer than
 //! the bound and is never copied; here the teardown is emitted after this pass,
-//! so a tail that returns counts the callee-saved registers the body writes.
+//! so a tail that returns counts the callee-saved registers the body writes,
+//! and the frame's own `pop` or `leave` where the function keeps its frame
+//! register (`frame_kept`).
 //! Without it queens m64 -O2 was +24 B (copies the tail merge joined again).
 //!
 //! DEVIATE TL2 (no number): `Preds` is rebuilt after each tail copied, so a
@@ -231,7 +233,7 @@ pub fn duplicated(
     free: bool,
     pointer: RegId,
 ) -> LirBody {
-    duplicated_with(body, size, true, saved, free, pointer)
+    duplicated_with(body, size, true, saved, free, pointer, false)
 }
 
 /// [`duplicated`], where `computed_at_size` says a computed goto is copied at
@@ -243,8 +245,9 @@ pub fn duplicated_with(
     saved: &[RegId],
     free: bool,
     pointer: RegId,
+    frame_kept: bool,
 ) -> LirBody {
-    let epilogue = saved_count(&body, saved, free, pointer);
+    let epilogue = saved_count(&body, saved, free, pointer) + usize::from(frame_kept);
     let mut place = 1;
     let mut graph = Preds::of(&body);
     while place < body.blocks.len() {
@@ -293,6 +296,10 @@ pub struct TailDuplicate {
     pub saved: Vec<RegId>,
     pub free: bool,
     pub pointer: RegId,
+    /// The function keeps its frame register whatever it holds
+    /// (`CpuTable`'s `kept`): its return takes the frame's `pop` or `leave`
+    /// too, which TL3 counts.
+    pub frame_kept: bool,
 }
 
 impl crate::model::passes::LIRTransform for TailDuplicate {
@@ -308,7 +315,15 @@ impl crate::model::passes::LIRTransform for TailDuplicate {
         &mut self,
         body: LirBody,
     ) -> Result<LirBody, String> {
-        Ok(duplicated_with(body, self.size, self.computed_at_size, &self.saved, self.free, self.pointer))
+        Ok(duplicated_with(
+            body,
+            self.size,
+            self.computed_at_size,
+            &self.saved,
+            self.free,
+            self.pointer,
+            self.frame_kept,
+        ))
     }
 }
 
@@ -438,6 +453,26 @@ mod tests {
         assert!(duplicated(framed, false, &[], false, RegId::default()).blocks.iter().any(|block| block.at == 3));
     }
 
+    /// `double_across_a_call_result` m16 -Os (+2 B): the pin's return block
+    /// holds the frame's `pop bp` as well as the `ret`, two instructions, so
+    /// one at `-Os` is too long to copy; the `ret` alone was copied here.
+    #[test]
+    fn test_a_tail_that_returns_counts_the_frame_pop_where_the_frame_is_kept() {
+        let shape = || {
+            body(vec![
+                block(0, vec![of("jne", Operation::Branch, Some(2)), jump(1)], &[1, 2]),
+                block(1, vec![work(1), jump(3)], &[3]),
+                block(2, vec![work(2), jump(3)], &[3]),
+                block(3, vec![of("ret", Operation::Return, None)], &[]),
+            ])
+        };
+        let copied = |frame_kept| {
+            duplicated_with(shape(), true, true, &[], false, RegId::default(), frame_kept).blocks.len() == 3
+        };
+        assert!(copied(false), "no frame: the lone ret is copied at -Os");
+        assert!(!copied(true), "a kept frame's pop is in the return block: two instructions, kept at -Os");
+    }
+
     /// A call is not copied (TL1): a copy keeps no callee.
     #[test]
     fn test_a_tail_with_a_call_is_kept() {
@@ -541,7 +576,7 @@ mod tests {
     #[test]
     fn test_a_target_can_keep_a_computed_goto_factored_at_os() {
         let kept = |size| {
-            duplicated_with(dispatch(20, 4, true), size, false, &[], false, RegId::default())
+            duplicated_with(dispatch(20, 4, true), size, false, &[], false, RegId::default(), false)
                 .blocks
                 .iter()
                 .any(|block| block.at == 99)
