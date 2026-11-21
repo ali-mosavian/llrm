@@ -257,3 +257,20 @@ fn field_copies_one_load_after_each_store_become_vector_copies_where_tbaa_separa
     let same = text.split("define void @save_same_tag").nth(1).unwrap();
     assert_eq!(same.matches("load i64").count(), 2, "{same}");
 }
+
+const RDX_TREE: &str = include_str!("../tests/slp/rdx_tree_sdiv.ll");
+
+/// jpeg_fixed (arm64): `s = 131584 + p[0]*181/512 + p[8]*c1/1024 + ...` stayed a
+/// scalar chain of eight `sdiv`s; the pin's `tryToReduce` builds a tree over
+/// the reduced values (`buildTree(VL, IgnoreList)`): the eight `sdiv`s become
+/// one `sdiv <8 x i64>` by the non-uniform power-of-two divisors, their dividends
+/// gathered from the scalar `mul`s, and one `llvm.vector.reduce.add.v8i64`
+/// ("Vectorized horizontal reduction with cost -4 and with tree size 5").
+#[test]
+fn a_reduction_of_sdivs_over_gathered_muls_becomes_a_vector_sdiv_and_one_reduction() {
+    let text = run(RDX_TREE);
+    assert!(text.contains("sdiv <8 x i64>"), "{text}");
+    assert!(text.contains("@llvm.vector.reduce.add.v8i64"), "{text}");
+    assert_eq!(text.matches("sdiv i64").count(), 0, "{text}");
+    assert_eq!(text.matches("load i64").count(), 8, "the loads stay scalar: {text}");
+}
