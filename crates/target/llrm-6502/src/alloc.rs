@@ -109,6 +109,9 @@ thread_local! {
     /// Whether a 16-bit division calls its compact routine at speed too (see
     /// [`with_compact_division16`]).
     static COMPACT_DIVISION16: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Whether a 16-bit division calls its speed routine at size too (see
+    /// [`with_size_fast_division16`]).
+    static SIZE_FAST_DIVISION16: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// The functions of the module in hand that save their cells inline (see
     /// [`keep_saves_inline`]).
     static INLINE_SAVES: std::cell::RefCell<std::collections::HashSet<String>> = std::cell::RefCell::new(Default::default());
@@ -197,7 +200,7 @@ pub fn forget_inline_saves() {
 /// Every choice outside a selection that the text of a function depends on
 /// (see [`with_shared_saves`], [`with_fast_division`] and the others): two
 /// compiles of one selection under equal flags write the same text.
-pub fn text_flags(name: &str) -> (bool, bool, bool, bool, bool, bool, bool, bool, bool) {
+pub fn text_flags(name: &str) -> (bool, bool, bool, bool, bool, bool, bool, bool, bool, bool) {
     (
         BYTE_MULTIPLY.with(|a| a.get()),
         SPIKE.with(|a| a.get()),
@@ -206,6 +209,7 @@ pub fn text_flags(name: &str) -> (bool, bool, bool, bool, bool, bool, bool, bool
         FAST_MULTIPLY.with(|a| a.get()),
         SIZE_FAST_DIVISION.with(|a| a.get()),
         COMPACT_DIVISION16.with(|a| a.get()),
+        SIZE_FAST_DIVISION16.with(|a| a.get()),
         WIDE_COMMUTE.with(|a| a.get()),
         INLINE_SAVES.with(|set| set.borrow().contains(name)),
     )
@@ -249,6 +253,19 @@ pub fn with_compact_division16<R>(
     let before = COMPACT_DIVISION16.with(|a| a.replace(allowed));
     let result = f();
     COMPACT_DIVISION16.with(|a| a.set(before));
+    result
+}
+
+/// `f` with the 16-bit divisions calling the speed routines at size: a module
+/// asks for them where the clocks they save are worth the bytes
+/// (`select::module_text`).
+pub fn with_size_fast_division16<R>(
+    allowed: bool,
+    f: impl FnOnce() -> R,
+) -> R {
+    let before = SIZE_FAST_DIVISION16.with(|a| a.replace(allowed));
+    let result = f();
+    SIZE_FAST_DIVISION16.with(|a| a.set(before));
     result
 }
 
@@ -1820,6 +1837,34 @@ impl Builder {
         Ok(())
     }
 
+    /// `d := a op g[x]` on a word: `ldx i; op g,x; op g+1,x`, the carry running
+    /// from the low byte to the high.
+    fn alu16_indexed(
+        &mut self,
+        mnemonic: &'static str,
+        carry: Option<&'static str>,
+        d: &str,
+        a: &str,
+        symbol: String,
+        index: &str,
+    ) -> Result<(), Unsupported> {
+        let (al, ah) = self.read_word(a)?;
+        let (dl, dh) = self.write_word(d)?;
+        let (acc, x) = (Reg::Phys(reg::A), Reg::Phys(reg::X));
+        let index = self.byte(index)?;
+        self.copy(x, index);
+        if let Some(carry) = carry {
+            self.push(Inst::new(Kind::Op(carry), vec![]));
+        }
+        for ((d, a), second) in [(dl, al), (dh, ah)].into_iter().zip([format!("{symbol},x"), format!("{symbol}+1,x")]) {
+            self.copy(acc, a);
+            let second = Operand::Symbol(second, 0);
+            self.push(Inst::new(Kind::Op(mnemonic), vec![Operand::Def(acc), Operand::Use(acc), second, Operand::Use(x)]));
+            self.copy(d, acc);
+        }
+        Ok(())
+    }
+
     /// The same on a pair, the carry running from the low byte to the high.
     fn alu16(
         &mut self,
@@ -2440,6 +2485,48 @@ pub fn build_with_places(
                 };
                 let symbol = indexed_address(&o[2], &o[3]).map_err(Unsupported)?;
                 b.alu_indexed(mnemonic, carry, name(&o[0])?, name(&o[1])?, symbol, name(&o[4])?)?
+            }
+            // the bytes of a wide add or subtract read where they lie: the carry
+            // out is C, and the carry in is the C the previous byte left
+            op::ADDO8M | op::SUBO8M | op::ADDOC8M | op::SUBOC8M => {
+                let (mnemonic, carry, at) = match inst.opcode {
+                    op::ADDO8M => ("ADC", Some("CLC"), 3),
+                    op::SUBO8M => ("SBC", Some("SEC"), 3),
+                    op::ADDOC8M => ("ADC", None, 4),
+                    _ => ("SBC", None, 4),
+                };
+                let symbol = address(&o[at], &o[at + 1]).map_err(Unsupported)?;
+                b.alu_with(mnemonic, carry, name(&o[0])?, name(&o[2])?, Operand::Symbol(symbol, 0))?
+            }
+            op::ADDO8MX | op::SUBO8MX | op::ADDOC8MX | op::SUBOC8MX => {
+                let (mnemonic, carry, at) = match inst.opcode {
+                    op::ADDO8MX => ("ADC", Some("CLC"), 3),
+                    op::SUBO8MX => ("SBC", Some("SEC"), 3),
+                    op::ADDOC8MX => ("ADC", None, 4),
+                    _ => ("SBC", None, 4),
+                };
+                let symbol = indexed_address(&o[at], &o[at + 1]).map_err(Unsupported)?;
+                b.alu_indexed(mnemonic, carry, name(&o[0])?, name(&o[2])?, symbol, name(&o[at + 2])?)?
+            }
+            op::ADDO16M | op::SUBO16M | op::ADDOC16M | op::SUBOC16M => {
+                let (mnemonic, carry, at) = match inst.opcode {
+                    op::ADDO16M => ("ADC", Some("CLC"), 3),
+                    op::SUBO16M => ("SBC", Some("SEC"), 3),
+                    op::ADDOC16M => ("ADC", None, 4),
+                    _ => ("SBC", None, 4),
+                };
+                let symbol = address(&o[at], &o[at + 1]).map_err(Unsupported)?;
+                b.alu16_mem(mnemonic, carry, name(&o[0])?, name(&o[2])?, symbol)?
+            }
+            op::ADDO16MX | op::SUBO16MX | op::ADDOC16MX | op::SUBOC16MX => {
+                let (mnemonic, carry, at) = match inst.opcode {
+                    op::ADDO16MX => ("ADC", Some("CLC"), 3),
+                    op::SUBO16MX => ("SBC", Some("SEC"), 3),
+                    op::ADDOC16MX => ("ADC", None, 4),
+                    _ => ("SBC", None, 4),
+                };
+                let symbol = indexed_address(&o[at], &o[at + 1]).map_err(Unsupported)?;
+                b.alu16_indexed(mnemonic, carry, name(&o[0])?, name(&o[2])?, symbol, name(&o[at + 2])?)?
             }
             op::SUB8 => b.alu("SBC", Some("SEC"), name(&o[0])?, name(&o[1])?, name(&o[2])?)?,
             // one register read and written: `d := a`, then `d` in place
@@ -4326,7 +4413,9 @@ fn emit_with<const STACK: bool>(
     // an instruction goes to the one path that reads it; a bump of a pointer is
     // then done in place, and the read of the old pointer that follows it
     // goes first
-    if TUNING.with(|t| t.get()) == Tuning::SIZE || COMPACT_DIVISION16.with(|c| c.get()) {
+    if (TUNING.with(|t| t.get()) == Tuning::SIZE && !SIZE_FAST_DIVISION16.with(|c| c.get()))
+        || COMPACT_DIVISION16.with(|c| c.get())
+    {
         call_compact_routines(&mut function);
     }
     keep_carry_in_c(&mut function);

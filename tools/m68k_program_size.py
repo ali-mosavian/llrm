@@ -37,8 +37,10 @@ def text_bytes(map_text: str) -> dict[str, int]:
 
 
 def members_of(sizes: dict[str, int]) -> dict[str, int]:
-    """The archive members of a link, by member name."""
-    return {re.search(r"\(([^)]+)\)", path).group(1): size for path, size in sizes.items() if "(" in path}
+    """The compiler-rt members of a link, by member name. The harness stubs (`stubs_<cpu>.a`: memset, memcpy, memmove, memcmp, the crt) stand in for the platform's libc, which is not
+    program bytes on any target but DOS: counted, a program that called memset carried the stub's 454 B (mem_length_boundaries_m32 -Os 68000: gcc 152 + 454 against ours 142, the call's
+    bytes against a byte loop's)."""
+    return {re.search(r"\(([^)]+)\)", path).group(1): size for path, size in sizes.items() if "(" in path and not Path(path.split("(")[0]).name.startswith("stubs_")}
 
 
 def pinned_tool(name: str) -> str:

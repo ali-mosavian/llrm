@@ -262,7 +262,7 @@ fn rotation_work(
         let done = if proven { executed::executed(&one.body)? } else { executed::executed_unproven(&one.body)? };
         let jumps = done.jump_cycles(cpu).ok()?;
         let exchanges = done.exchange_cycles(cpu).ok()?;
-        let work = done.instructions - done.branches - done.jumps + done.memory + jumps + exchanges;
+        let work = done.instructions - done.branches - done.jumps + done.memory + jumps + exchanges + done.call_cycles(cpu);
         let calls = done
             .calls
             .iter()
