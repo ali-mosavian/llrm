@@ -3,18 +3,17 @@
 use llrm_arm64::driver::{self, Level};
 use llrm_arm64::machine::Platform;
 
-/// jpeg_fixed -Os: `put32`, a 4-trip store loop, is copied into each of its six
-/// sites here because the pin's own inline cost is -10 (below zero, so the
-/// pin counts it as shrinking the caller): `opt -O2` on this IR inlines all
-/// six too. #9598 lets a negative cost pass the byte rule; before it the rule
-/// kept `put32` a function (+176 B over gcc in the full program, which is now
-/// 3,996 B against gcc's 4,178).
+/// jpeg_fixed -Os: `put32`, a 4-trip store loop, is priced -10 by the pin
+/// (below zero, so it counts as shrinking the caller) and `opt -O2` copies it
+/// into all six sites. The size guard gave way to that (#9598); the -Os trial
+/// (INLINEHINT-GROWTH-TRIAL) now compiles the module with the calls kept and
+/// keeps that object where it is smaller: jpeg_fixed 4,020 -> 3,956 B and 0.5%
+/// fewer instructions executed (gcc keeps `put32` a function too).
 #[test]
-fn a_store_loop_the_pin_prices_below_zero_is_copied_into_each_site_at_os() {
+fn a_store_loop_the_pin_prices_below_zero_stays_a_call_where_the_object_is_smaller() {
     let asm = driver::assembly(include_str!("data/store_loop_sites.ll"), Platform::Linux, Level::Os).expect("lowers");
     let calls = asm.lines().filter(|line| line.trim().starts_with("bl ") && line.contains("put32")).count();
-    let copies = asm.lines().filter(|line| line.trim().starts_with("strb ")).count();
-    assert!(calls == 0 && copies >= 6, "{calls} calls, {copies} copies of the loop: {asm}");
+    assert!(calls >= 5 && asm.lines().any(|line| line == "put32:"), "{calls} calls: {asm}");
 }
 
 /// jpeg_fixed -Os: `tmul`, a multiply-divide the unit model refuses at each
@@ -24,7 +23,8 @@ fn a_store_loop_the_pin_prices_below_zero_is_copied_into_each_site_at_os() {
 #[test]
 fn small_helpers_of_a_large_caller_are_tried_inline_at_os() {
     let asm = driver::assembly(include_str!("data/jpeg_fixed_os.ll"), Platform::Linux, Level::Os).expect("lowers");
-    let kept: Vec<&str> = ["tmul"].into_iter().filter(|name| asm.lines().any(|line| *line == format!("{name}:"))).collect();
+    let kept: Vec<&str> =
+        ["tmul"].into_iter().filter(|name| asm.lines().any(|line| *line == format!("{name}:"))).collect();
     assert!(kept.is_empty(), "left as functions: {kept:?}");
 }
 
@@ -58,15 +58,19 @@ fn a_callee_the_trial_rejected_is_not_tried_again_in_the_same_caller() {
         } else if let Some((_, callee)) = rest.rsplit_once("call(s) to '").filter(|_| line.contains("SZ2 trial of")) {
             trials += 1;
             let callee = callee.split('\'').next().unwrap();
-            assert!(!rejected.contains(&(caller.to_owned(), callee.to_owned())), "{caller} tried {callee} again:\n{log}");
+            assert!(
+                !rejected.contains(&(caller.to_owned(), callee.to_owned())),
+                "{caller} tried {callee} again:\n{log}"
+            );
         }
     }
     assert!(trials > 0, "premise: trials run\n{log}");
 }
 
-/// jpeg_fixed -Os: every SZ2 trial ran the whole simplifier list over a 600-instruction caller,
-/// 2.95 G instructions to compile it against 1.38 G before the trial existed. The trial's copy
-/// goes through the cleanup list (1.39 G); `tmul` is still inlined.
+/// jpeg_fixed -Os: every SZ2 trial ran the whole simplifier list over a
+/// 600-instruction caller, 2.95 G instructions to compile it against 1.38 G
+/// before the trial existed. The trial's copy goes through the cleanup list
+/// (1.39 G); `tmul` is still inlined.
 #[test]
 fn the_byte_trial_simplifies_its_copy_with_the_cleanup_list() {
     let dir = tempfile::tempdir().unwrap();
