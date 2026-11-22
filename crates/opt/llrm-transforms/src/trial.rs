@@ -77,6 +77,36 @@ thread_local! {
     /// The callers with a call that only the hot-site yield let the size bound
     /// pass.
     static HOT_YIELDS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    /// Set while the trial compile of IPRA-OS-TRIAL runs: a function that
+    /// binds locally takes part in the callee-written-register facts.
+    static IPRA_BINDS_LOCAL: Cell<bool> = const { Cell::new(false) };
+    /// Whether a module compiled since the last take had a locally binding
+    /// function a caller in it calls.
+    static IPRA_MATTERS: Cell<bool> = const { Cell::new(false) };
+}
+
+/// DEVIATE IPRA-OS-TRIAL: whether the trial compile that lets locally binding
+/// functions take part in the callee-written-register facts is running.
+pub fn ipra_binds_local() -> bool {
+    IPRA_BINDS_LOCAL.with(Cell::get)
+}
+
+/// Runs `body` with those functions taking part.
+pub fn with_ipra_binds_local<T>(body: impl FnOnce() -> T) -> T {
+    let before = IPRA_BINDS_LOCAL.with(|cell| cell.replace(true));
+    let value = body();
+    IPRA_BINDS_LOCAL.with(|cell| cell.set(before));
+    value
+}
+
+/// Notes that the facts would differ for the module being compiled.
+pub fn note_ipra_matters() {
+    IPRA_MATTERS.with(|cell| cell.set(true));
+}
+
+/// Whether [`note_ipra_matters`] was called since the last call.
+pub fn take_ipra_matters() -> bool {
+    IPRA_MATTERS.with(|cell| cell.replace(false))
 }
 
 /// DEVIATE HOT-INLINE-TRIAL (beyond the pin; owner x86-m32-b, exit

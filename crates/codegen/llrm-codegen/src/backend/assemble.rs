@@ -253,11 +253,19 @@ pub fn assembled_by(
     let mut comdats: std::collections::BTreeMap<String, masm::Comdat> = Default::default();
     let pool = Rc::new(RefCell::new(Pool::new(module.globals.len() as i64)));
     let classes = Rc::new(RegisterClasses::of(arch));
-    let (facts, order) = calleefacts::CalleeFacts::of_binding(
-        module,
-        cpu.target().tti().is_some_and(|tti| tti.ipra_binds_local())
-            || llrm_support::env_flag!("LLRM_IPRA_BINDS_LOCAL"),
-    );
+    let tti = cpu.target().tti();
+    let binds_local = tti.as_ref().is_some_and(|tti| tti.ipra_binds_local())
+        || llrm_support::env_flag!("LLRM_IPRA_BINDS_LOCAL")
+        || llrm_transforms::trial::ipra_binds_local();
+    // DEVIATE IPRA-OS-TRIAL: noted for the driver, which compiles again with
+    // the facts on.
+    if !binds_local
+        && tti.as_ref().is_some_and(|tti| tti.ipra_trial_at_size())
+        && calleefacts::CalleeFacts::local_binding_matters(module)
+    {
+        llrm_transforms::trial::note_ipra_matters();
+    }
+    let (facts, order) = calleefacts::CalleeFacts::of_binding(module, binds_local);
     let facts = facts.aligning_every_call(cpu.aligned_calls);
     let target = Target {
         facts: &facts,

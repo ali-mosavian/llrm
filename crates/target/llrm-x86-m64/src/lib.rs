@@ -427,6 +427,8 @@ impl llrm_target::Target for M64 {
                             // DEVIATE OS-INLINE-GROWTH (owner llrm-target-x86-m64, exit 2026-11-24; gcc-bar only): see
                             // Tuning. m64 -Os sfm16_float_* -39 B each, vla_callee_constant +8 B.
                             inline_trial_defers_to_shared_growth: true,
+                            // DEVIATE IPRA-OS-TRIAL (owner x87-cordic-2, exit 2026-12-05): see Tuning.
+                            ipra_trial_at_size: true,
                             // DEVIATE PHIOPT-ARM (owner x87-cordic-2, exit 2026-11-28): see
                             // `Tuning::phiopt_one_feeding_statement`; gcc's phiopt keeps a nested diamond.
                             phiopt_one_feeding_statement: true,
