@@ -677,7 +677,12 @@ fn model_of(
     }
     let layout =
         llrm_mir::datalayout::DataLayout::parse(module.datalayout.as_deref().ok_or("a module with no datalayout")?)?;
-    let variables = llrm_mir::image::variables(module, &layout, &|name| crate::data::symbol(name))?;
+    let variables = llrm_mir::image::variables_with_blocks(
+        module,
+        &layout,
+        &|name| crate::data::symbol(name),
+        Some(&llrm_codegen::backend::blockaddress::symbol),
+    )?;
     Ok(model.resolved(variables.iter().map(|one| one.bytes.len()).sum()))
 }
 
@@ -737,7 +742,12 @@ pub fn object_flagged(
     }
     let layout =
         llrm_mir::datalayout::DataLayout::parse(module.datalayout.as_deref().ok_or("a module with no datalayout")?)?;
-    let variables = crate::data::with_constructors(llrm_mir::image::variables(&module, &layout, &|name| crate::data::symbol(name))?)?;
+    let variables = crate::data::with_constructors(llrm_mir::image::variables_with_blocks(
+        &module,
+        &layout,
+        &|name| crate::data::symbol(name),
+        Some(&llrm_codegen::backend::blockaddress::symbol),
+    )?)?;
     crate::elf::relocatable_with(name, &items, &exports, &variables)
 }
 

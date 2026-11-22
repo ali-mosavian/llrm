@@ -62,6 +62,7 @@ pub fn machine<'a>(
 const UNOPTIMIZED: &[&str] = &[
     "EarlyTailDuplicate",
     "LoopSlots",
+    "PostRaLicm",
     "Scheduler",
     "Coalescer",
     "JoinStackPointer",
@@ -157,6 +158,7 @@ const SLOTS: &[(&str, &str)] = &[
     ("FixupBW", "fixupbw@14"),
     ("FixupLEAs", "fixupleas@14"),
     ("LoopSlots", "loopslots@15"),
+    ("PostRaLicm", "postralicm@15"),
     ("Scheduler", "schedule@16"),
     ("BranchFolder", "jumps@17"),
     ("TailDuplicate", "jumps@17"),
@@ -411,6 +413,8 @@ pub fn machine_with<'a>(
         }),
         // Once spill traffic is final: which slots a loop still reaches.
         Box::new(loopslots::LoopSlots::new(frame.clone(), target, registers.slot as u32, classes)?),
+        // The pin's post-allocation MachineLICM.
+        Box::new(crate::backend::postralicm::PostRaLicm { classes: Rc::clone(classes) }),
         // Scheduling may only move fully allocated machine occurrences.
         Box::new(schedule::Scheduler::new(target)?),
         // The pin's BranchFolderPass, which runs before TailDuplicatePass.

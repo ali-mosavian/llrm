@@ -921,7 +921,9 @@ impl<'a, T: Target + Jump> Sink<'a, T> {
 
 /// `MachineBasicBlock::SplitCriticalEdge`: a block of its own on the edge
 /// `from` -> `to`, laid out right after `from`. Returns its index, or `None`
-/// where a conditional branch names `to` twice.
+/// where a conditional branch names `to` twice, or `to` has its address taken:
+/// an indirect jump reaches it by its label, past a block made on the edge
+/// (`MachineBasicBlock::canSplitCriticalEdge`).
 pub fn split_critical_edge<C>(
     function: &mut MFunction<C>,
     from: usize,
@@ -929,6 +931,9 @@ pub fn split_critical_edge<C>(
     jump: &dyn Fn(u32) -> Inst,
 ) -> Option<usize> {
     let to_id = function.blocks[to].id;
+    if function.address_symbols.iter().any(|(block, _)| *block == to_id) {
+        return None;
+    }
     let falls = !function.blocks[from].insts.last().is_some_and(|last| last.barrier) && from + 1 == to;
     let mut named = 0;
     for inst in function.blocks[from].insts.iter().rev().take_while(|inst| inst.terminator) {

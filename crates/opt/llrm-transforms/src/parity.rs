@@ -494,6 +494,12 @@ pub(crate) const REGISTRY: &[Entry] = &[
     entry("fixupbw@14", Backend, "x86-fixup-bw-insts (X86FixupBWInsts.cpp)", Translated, ""),
     entry("fixupleas@14", Backend, "x86-fixup-leas (X86FixupLEAs.cpp)", Translated, ""),
     entry("loopslots@15", Backend, "greedy region splitting (SplitKit)", Old, "regalloc-core-poc"),
+    partial(
+        "postralicm@15",
+        Backend,
+        "machinelicm (post-RA: HoistRegionPostRA)",
+        "criterion: queens -O1 `safe` makes its `return 0` once, before the loop; exit: preheader splitting for a loop with several entries (none is hoisted from now), 2026-12-20; stack reloads stay with loopslots",
+    ),
     entry("schedule@16", Backend, "post-RA scheduler", Old, ""),
     partial(
         "jumps@17",

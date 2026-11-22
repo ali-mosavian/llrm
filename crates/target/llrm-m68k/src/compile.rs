@@ -1192,6 +1192,10 @@ fn items_once(
     crate::ccrcopy::drop_redundant_restores(&mut function, &assignment);
     branch_fold(&mut function, &assignment);
     if !wants_size {
+        // gcc's `duplicate_computed_gotos` is off when optimizing for size
+        llrm_spike_mf::taildup::duplicate_indirect_jumps(&mut function, 20, &|inst| {
+            inst.kind == crate::mfunc::Kind::Op("JMP32j")
+        });
         if options.tail_duplicate {
             touched.tail_dup =
                 llrm_spike_mf::taildup::tail_duplicate::<_, crate::regalloc::M68kRegisters>(&mut function, 2);
@@ -1243,6 +1247,7 @@ fn items_once(
     }
     let word_tables = word_table_labels(&function, number);
     for line in expand(&function)? {
+        let at_label = if let Line::Label(at) = &line { Some(*at) } else { None };
         let table = match &line {
             Line::Inst(inst) if inst.opcode == crate::dagisel::wordjump::NAME => match inst.operands.first() {
                 Some(mc::Operand::Symbol(table, _)) => Some(table.clone()),
@@ -1255,6 +1260,13 @@ fn items_once(
             Line::Inst(inst) => Item::Inst(inst),
             Line::Loc(place) => Item::Loc(place),
         });
+        // `AsmPrinter::GetBlockAddressSymbol`: a block whose address is taken
+        // is also named by its symbol
+        if let Some(at) = at_label {
+            let id = function.blocks[at].id;
+            let names = function.address_symbols.iter().filter(|(block, _)| *block == id);
+            out.extend(names.map(|(_, name)| Item::Label(name.clone())));
+        }
         // the table starts where the `jmp` through it ends
         if let Some(table) = table {
             let labels = word_tables.get(&table).ok_or("a word jump of no table")?.clone();

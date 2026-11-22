@@ -191,6 +191,8 @@ struct Emitter<'a> {
     /// ends the block goes through it (`BR_JT` expands to a load from the
     /// table, then `BRIND`).
     table_taken: Option<u32>,
+    /// The blocks the indirect jump that ends the block may go to.
+    indirect: &'a [u32],
 }
 
 impl Emitter<'_> {
@@ -303,6 +305,11 @@ impl Emitter<'_> {
             }
             (ISD::FrameIndex | ISD::TargetFrameIndex, NodeData::FrameIndex(index)) => Operand::Frame(index),
             (ISD::TargetGlobalAddress | ISD::GlobalAddress, NodeData::Global { symbol, offset }) => {
+                // `blockaddress`: the symbol at the block's label
+                if let Some(block) = llrm_codegen::backend::blockaddress::decode(offset) {
+                    let function = llrm_mir::context::GlobalId(symbol);
+                    return Ok(Some(Operand::Symbol(llrm_codegen::backend::blockaddress::symbol(function, block), 0)));
+                }
                 let name = self.dag.global_names.get(symbol as usize).ok_or("a global with no name")?;
                 Operand::Symbol(name.clone(), offset)
             }
@@ -641,11 +648,17 @@ impl Emitter<'_> {
                 }
                 // The jump through a table names every block of it, so the
                 // passes see the successors (`MachineJumpTableInfo`).
+                // and `indirectbr` the blocks it lists (`visitIndirectBr`)
                 if name == "JMP32j" {
-                    let table = self.table_taken.take().ok_or("an indirect jump of no jump table")?;
-                    let blocks = self.tables.get(table as usize).ok_or("a jump table the builder did not make")?;
-                    operands.push(Operand::Symbol(table_symbol(&self.function.name, table), 0));
-                    operands.extend(blocks.iter().map(|&block| Operand::Block(block)));
+                    match self.table_taken.take() {
+                        Some(table) => {
+                            let blocks =
+                                self.tables.get(table as usize).ok_or("a jump table the builder did not make")?;
+                            operands.push(Operand::Symbol(table_symbol(&self.function.name, table), 0));
+                            operands.extend(blocks.iter().map(|&block| Operand::Block(block)));
+                        }
+                        None => operands.extend(self.indirect.iter().map(|&block| Operand::Block(block))),
+                    }
                 }
                 let mut inst = op_inst(name, desc, operands);
                 // a volatile access keeps its place among the others
@@ -725,14 +738,17 @@ pub fn emit_with(
         shape,
         tables: &first.tables,
         table_taken: None,
+        indirect: &[],
     };
     emitter.function.locals.extend(first.locals.iter().copied());
+    emitter.function.address_symbols.clone_from(&first.address_symbols);
     let mut place_numbers: HashMap<llrm_codegen::model::lir::SrcLoc, usize> = HashMap::default();
     for one in blocks {
         emitter.dag = &one.dag;
         emitter.values.clear();
         emitter.flags_from = None;
         emitter.table_taken = None;
+        emitter.indirect = &one.indirect;
         emitter.saved.clear();
         emitter.save = emitter.nodes_to_save(one);
         let mut insts = Vec::new();
