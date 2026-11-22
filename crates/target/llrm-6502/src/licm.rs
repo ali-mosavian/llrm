@@ -161,8 +161,9 @@ struct Mos {
     peak: usize,
     hoisted: usize,
     pairs: usize,
-    /// The loop reads `a` by name: what the preheader leaves in it may be wanted,
-    /// and the hoisted `LEA` would end the preheader with `a` clobbered.
+    /// The loop reads `a` by name: what the preheader leaves in it may be
+    /// wanted, and the hoisted `LEA` would end the preheader with `a`
+    /// clobbered.
     reads_a: bool,
     /// The loop moves `rs0`: no address made from it is the same on every trip.
     moves_sp: bool,
@@ -209,14 +210,23 @@ impl Policy<Wrapped> for Mos {
         // `a` read before any write of it in its block comes from before the
         // block: from the preheader or an earlier trip, which the hoisted
         // `LEA` would overwrite.
-        self.reads_a = facts.inside_blocks().any(|block| {
-            let mut written = false;
-            block.insns.iter().any(|one| {
-                let exposed = one.reads_a && !written;
-                written |= one.writes_a;
-                exposed
-            })
-        });
+        self.reads_a = facts
+            .inside_blocks()
+            .any(
+                |block| {
+                    let mut written = false;
+                    block
+                        .insns
+                        .iter()
+                        .any(
+                            |one| {
+                                let exposed = one.reads_a && !written;
+                                written |= one.writes_a;
+                                exposed
+                            },
+                        )
+                },
+            );
         self.hoisted = 0;
         self.pairs = 0;
         self.peak = 0;
@@ -250,10 +260,10 @@ impl Policy<Wrapped> for Mos {
             && !facts.copied.contains(&one.defs[0])
             && inst.ties.is_empty()
             && !(inst.call || inst.terminator || inst.barrier || inst.may_store || inst.side_effects);
-        // `rs0` plus a distance (not zero: that is a copy of `rs0`, free where it is, a pair held
-        // for the loop once moved): nothing is read but `rs0`, which the loop does
-        // not move (`moves_sp`), and `a` is the only register it
-        // clobbers
+        // `rs0` plus a distance (not zero: that is a copy of `rs0`, free where
+        // it is, a pair held for the loop once moved): nothing is read
+        // but `rs0`, which the loop does not move (`moves_sp`), and `a`
+        // is the only register it clobbers
         let frame_address = matches!(inst.kind, Kind::Op("LEA"))
             && one.defs.len() == 2
             && one.uses.is_empty()
@@ -264,8 +274,14 @@ impl Policy<Wrapped> for Mos {
             && inst.ties.is_empty()
             && !(inst.call || inst.terminator || inst.barrier || inst.may_store || inst.side_effects);
         if frame_address {
-            // `CanCauseHighRegPressure`: the peak and the pairs moved, the one more
-            if self.calls || self.moves_sp || self.reads_a || !(facts.every_trip)(at) || self.peak + self.pairs + 1 >= SLOTS {
+            // `CanCauseHighRegPressure`: the peak and the pairs moved, the one
+            // more
+            if self.calls
+                || self.moves_sp
+                || self.reads_a
+                || !(facts.every_trip)(at)
+                || self.peak + self.pairs + 1 >= SLOTS
+            {
                 return false;
             }
             self.pairs += 1;
@@ -364,7 +380,16 @@ pub fn hoist(function: &mut MFunction<Class>) -> bool {
     let Some(moved) = licm_core::hoist(
         &blocks,
         first.id as i64,
-        &mut Mos { live: live_out(&blocks), alias: copies(&blocks), peak: 0, hoisted: 0, pairs: 0, reads_a: false, moves_sp: false, calls: false },
+        &mut Mos {
+            live: live_out(&blocks),
+            alias: copies(&blocks),
+            peak: 0,
+            hoisted: 0,
+            pairs: 0,
+            reads_a: false,
+            moves_sp: false,
+            calls: false,
+        },
     ) else {
         return false;
     };
