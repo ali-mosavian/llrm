@@ -1969,3 +1969,70 @@ fn a_hinted_call_in_a_loop_is_inlined_in_the_keep_calls_trial() {
     assert!(!inlined(Some(0.5), true), "a site colder than its entry is not a loop's");
     assert!(inlined(Some(4.0), true), "in a loop the call is inlined in the trial too");
 }
+
+/// The -Os size bound held a call in a pixel loop: QuickrBasic `pixmem.c`
+/// `blend` (52 units, 12 sites) stayed a call at `pm_box`'s inner loop,
+/// frequency 961 times the entry, where the pin's `optsize` threshold takes it
+/// (`q45d25` -Os 2,335,641 instructions against clang's 1,443,306). A locally
+/// hot site now passes the bound where its growth is within the target's share
+/// of the call it removes; a cold site and a site over the share keep it.
+#[test]
+fn a_hot_site_passes_the_size_bound_within_the_growth_budget() {
+    use llrm_mir::target::Tuning;
+    let text = "define internal void @callee(ptr %p, i32 %c, i32 %m) {
+b0:
+  %a = load i32, ptr %p
+  %b = and i32 %a, %m
+  %d = or i32 %b, %c
+  %e = xor i32 %d, %m
+  %g0 = add i32 %e, %m
+  %g1 = xor i32 %g0, %c
+  %g2 = or i32 %g1, %m
+  %g3 = and i32 %g2, %c
+  %g4 = sub i32 %g3, %m
+  %g5 = add i32 %g4, %c
+  %g6 = xor i32 %g5, %m
+  %g7 = or i32 %g6, %c
+  %g8 = and i32 %g7, %m
+  %g9 = sub i32 %g8, %c
+  %g10 = add i32 %g9, %m
+  %g11 = xor i32 %g10, %c
+  %g12 = or i32 %g11, %m
+  %g13 = and i32 %g12, %c
+  store i32 %g13, ptr %p
+  ret void
+}
+
+define void @f(ptr %p, i32 %c, i32 %m) {
+b0:
+  call void @callee(ptr %p, i32 %c, i32 %m)
+  call void @callee(ptr %p, i32 %m, i32 %c)
+  ret void
+}
+";
+    let tti = |percent: Option<i64>| {
+        llrm_x86::tti::X86::of_cpu("i486").unwrap().with_tuning(Tuning {
+            inline_size_guard_at_size: true,
+            inline_size_hot_growth_percent: percent,
+            ..Tuning::PIN
+        })
+    };
+    let inlined = |percent: Option<i64>, frequency: f64| {
+        let params = InlineParams { compute_full_inline_cost: true, ..InlineParams::from_level(2) };
+        let (cost, threshold) = priced_hot(
+            text,
+            0,
+            false,
+            CallerSize::OptSize,
+            Some(&tti(percent)),
+            params,
+            (2, true),
+            Some(frequency),
+        );
+        cost < threshold
+    };
+    assert!(!inlined(None, 961.0), "premise: the bound holds a hot site where the target states no share");
+    assert!(inlined(Some(1000), 961.0), "a hot site within the share passes the bound");
+    assert!(!inlined(Some(1000), 1.0), "a site below the pin's hot frequency keeps the bound");
+    assert!(!inlined(Some(0), 961.0), "growth over the share keeps the bound");
+}
