@@ -1,5 +1,6 @@
 //! arm64's side of `MachineCombiner`: `mul` + `add`/`sub` become `madd` and
-//! `msub`. The pass is `llrm_codegen::combine`; this file is
+//! `msub`, and a chain of one integer operation is rebuilt so the operand that
+//! arrives last joins last. The pass is `llrm_codegen::combine`; this file is
 //! `AArch64InstrInfo`'s `getMachineCombinerPatterns` (`getMaddPatterns`,
 //! [L7801](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Target/AArch64/AArch64InstrInfo.cpp#L7801)),
 //! `genAlternativeCodeSequence` and `genFusedMultiply`/`genMaddR`
@@ -22,6 +23,24 @@
 //!   MULSUBv_OP1        t = mul.v a, b ; r = sub.v t, c  =>  r = neg c ; mla r, a, b
 //! ```
 //!
+//! Where no such pattern starts, the generic ones of
+//! `TargetInstrInfo::getMachineCombinerPatterns` do
+//! (`isReassociationCandidate`, `reassociateOps`): the root is `add`, `and`,
+//! `orr`, `eor` or `eon` of two registers
+//! (`AArch64InstrInfo::isAssociativeAndCommutative`, no flags, no shift), one
+//! operand is the result of the same operation that nothing else reads
+//! (`prev`), and the pair is rebuilt:
+//!
+//! ```text
+//!   REASSOC_AX_BY etc.   b = a op x ; c = b op y   =>   n = x op y ; c = a op n
+//! ```
+//!
+//! Of `prev`'s two operands either may be `a`, and either may be the root's
+//! `b` side: four patterns, tried in the pin's order. They must make the new
+//! root shallower (`MustReduceDepth`); a chain of equal depths is rebuilt from
+//! the third link on, a sum of six terms into an accumulator becomes a tree 4
+//! deep rather than a chain of 6.
+//!
 //! The shared pass takes a replacement only when it does not lengthen the
 //! block's critical path with the latencies below.
 //!
@@ -35,6 +54,18 @@
 //! the `mul` and the `add`. The body here still has the several-definition
 //! registers phis become; a pattern is not made when either operand of the
 //! product, or the other operand of the sum, is defined between them.
+//!
+//! DEVIATE MC-A (owner w15, exit: the pass moves before phi elimination, on
+//! SSA): `hasReassociableOperands` asks a unique definition for each operand;
+//! here a register with several is a phi's result and counts as made in the
+//! block. The instructions the pair becomes stand where the root does, so a
+//! pattern is not made when either operand of `prev` is defined between the
+//! two.
+//!
+//! DEVIATE MC-F (owner w15, exit: flags as a register of the trace): the trace
+//! does not follow `NZCV`, as the pin's `MachineTraceMetrics` does, so a value
+//! that waits for a compare (`csel`, `cset`) is as deep as one that does not;
+//! the tree can differ from the pin's where depths there differ.
 //!
 //! DEVIATE MC-R (owner w15, exit: `preservesResourceLen` over the A510 unit
 //! tables): the resources test accepts every replacement; each fusion removes
@@ -50,7 +81,7 @@
 //! After `prepass` (which sinks and drops dead flag settings) and before the
 //! copies are ordered, at every -O level but -O0.
 
-use llrm_codegen::combine::{self, CombinerIsa, Node, Replacement, Setting, Use};
+use llrm_codegen::combine::{self, CombinerIsa, Node, Objective, Replacement, Setting, Use};
 use rustc_hash::FxHashMap as HashMap;
 
 use crate::expand_imm;
@@ -81,6 +112,127 @@ enum Pattern {
         other: Vreg,
         lanes: Arrangement,
     },
+    /// `REASSOC_*`: `prev` is the instruction before `root` whose result the
+    /// root reads.
+    Reassoc {
+        shape: Reassoc,
+        prev: usize,
+    },
+}
+
+/// The four `MachineCombinerPattern::REASSOC_*`: which operand of `prev` is `A`
+/// and which operand of the root `prev` is.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Reassoc {
+    AxBy,
+    XaBy,
+    AxYb,
+    XaYb,
+}
+
+impl Reassoc {
+    /// Whether `prev` is the root's second operand.
+    fn commuted(self) -> bool {
+        matches!(self, Reassoc::AxYb | Reassoc::XaYb)
+    }
+
+    /// Whether `A` is `prev`'s second operand.
+    fn a_second(self) -> bool {
+        matches!(self, Reassoc::XaBy | Reassoc::XaYb)
+    }
+
+    /// `mustSwapOperands`: the root's and the new inner instruction's operand
+    /// orders.
+    fn swaps(self) -> (bool, bool) {
+        match self {
+            Reassoc::AxBy => (false, false),
+            Reassoc::XaBy => (true, false),
+            Reassoc::AxYb | Reassoc::XaYb => (true, true),
+        }
+    }
+}
+
+/// `AArch64InstrInfo::isAssociativeAndCommutative` for the scalar integer
+/// forms: `ADDrr`, `ANDrr`, `ORRrr`, `EORrr` and `EONrr`, never the
+/// flag-setting ones.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Assoc {
+    Add,
+    And,
+    Orr,
+    Eor,
+    Eon,
+}
+
+/// A reassociable instruction: `rd = rn op rm` with no shift.
+#[derive(Clone, Copy, Debug)]
+struct Associative {
+    op: Assoc,
+    width: Width,
+    rd: Gpr,
+    rn: Gpr,
+    rm: Gpr,
+}
+
+impl Associative {
+    fn of(op: &Op) -> Option<Self> {
+        let Op::I(inst) = op else { return None };
+        match *inst {
+            Inst::AddSubShifted {
+                op: AddSub { subtract: false, set_flags: false },
+                width,
+                rd,
+                rn,
+                rm,
+                shift: Shift::Lsl,
+                amount: 0,
+            } => Some(Self { op: Assoc::Add, width, rd, rn, rm }),
+            Inst::LogicShifted { op: logic, invert, width, rd, rn, rm, shift: Shift::Lsl, amount: 0 } => {
+                let op = match (logic, invert) {
+                    (Logic::And, false) => Assoc::And,
+                    (Logic::Orr, false) => Assoc::Orr,
+                    (Logic::Eor, false) => Assoc::Eor,
+                    (Logic::Eor, true) => Assoc::Eon,
+                    _ => return None,
+                };
+                Some(Self { op, width, rd, rn, rm })
+            }
+            _ => None,
+        }
+    }
+
+    /// The same operation with other registers.
+    fn with(
+        self,
+        rd: Gpr,
+        rn: Gpr,
+        rm: Gpr,
+    ) -> Op {
+        let (shift, amount) = (Shift::Lsl, 0);
+        let logic = |op, invert| Inst::LogicShifted { op, invert, width: self.width, rd, rn, rm, shift, amount };
+        Op::I(match self.op {
+            Assoc::Add => Inst::AddSubShifted {
+                op: AddSub { subtract: false, set_flags: false },
+                width: self.width,
+                rd,
+                rn,
+                rm,
+                shift,
+                amount,
+            },
+            Assoc::And => logic(Logic::And, false),
+            Assoc::Orr => logic(Logic::Orr, false),
+            Assoc::Eor => logic(Logic::Eor, false),
+            Assoc::Eon => logic(Logic::Eor, true),
+        })
+    }
+
+    fn same_operation(
+        self,
+        other: Self,
+    ) -> bool {
+        self.op == other.op && self.width == other.width
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -94,10 +246,13 @@ enum VectorKind {
 }
 
 impl Pattern {
-    fn mul(self) -> usize {
+    /// The instruction before the root that the replacement takes away: the
+    /// `mul`, or `prev`.
+    fn earlier(self) -> usize {
         match self {
             Pattern::Scalar(pattern) => pattern.mul,
             Pattern::Vector { mul, .. } => mul,
+            Pattern::Reassoc { prev, .. } => prev,
         }
     }
 }
@@ -337,15 +492,90 @@ impl Block<'_> {
     }
 }
 
-impl CombinerIsa for Block<'_> {
-    type Pattern = Pattern;
-
-    fn nodes(&self) -> Vec<Node> {
-        self.ops.iter().map(node_of).collect()
+impl Block<'_> {
+    /// The index of the last instruction before `at` that defines `reg`.
+    fn definition_before(
+        &self,
+        at: usize,
+        reg: Gpr,
+    ) -> Option<usize> {
+        self.ops[..at].iter().rposition(|op| op.defs_and_uses().0.contains(&Reg::Gpr(reg)))
     }
 
+    /// `hasReassociableOperands`: both operands virtual, at least one made in
+    /// the block. The pin asks for a unique definition; a register with
+    /// several is the result of a phi (the pin's `PHI` of the block), whose
+    /// value is the one at the block's entry, and the rule below keeps
+    /// either operand from changing between the two instructions.
+    fn reassociable_operands(
+        &self,
+        at: usize,
+        rn: Gpr,
+        rm: Gpr,
+    ) -> bool {
+        let phi = |reg: Gpr| self.counts.defs.get(&Reg::Gpr(reg)).is_some_and(|defs| *defs > 1);
+        rn.is_virtual()
+            && rm.is_virtual()
+            && rn != rm
+            && [rn, rm].iter().any(|reg| self.definition_before(at, *reg).is_some() || phi(*reg))
+    }
+
+    /// `getMachineCombinerPatterns` through `isReassociationCandidate`: the
+    /// root is associative, its operands are reassociable, and one of them
+    /// is the result of an instruction of the same operation (`prev`) that
+    /// nothing else reads and whose own operands are reassociable.
+    fn reassoc_patterns(
+        &self,
+        root: usize,
+    ) -> Vec<Pattern> {
+        let Some(this) = Associative::of(&self.ops[root]) else { return vec![] };
+        if !self.reassociable_operands(root, this.rn, this.rm) {
+            return vec![];
+        }
+        let sibling = |reg: Gpr| {
+            let at = self.definition_before(root, reg)?;
+            Associative::of(&self.ops[at]).filter(|found| found.same_operation(this)).map(|found| (at, found))
+        };
+        let (first, second) = (sibling(this.rn), sibling(this.rm));
+        let commuted = first.is_none() && second.is_some();
+        let Some((prev, found)) = (if commuted { second } else { first }) else { return vec![] };
+        if !self.counts.single(found.rd) || !self.reassociable_operands(prev, found.rn, found.rm) {
+            return vec![];
+        }
+        // The new instructions stand where the root does: neither `A` nor `X`
+        // may change in between.
+        if [found.rn, found.rm].iter().any(|reg| self.defined_between(prev, root, *reg)) {
+            return vec![];
+        }
+        let shapes = if commuted { [Reassoc::AxYb, Reassoc::XaYb] } else { [Reassoc::AxBy, Reassoc::XaBy] };
+        shapes.into_iter().map(|shape| Pattern::Reassoc { shape, prev }).collect()
+    }
+
+    /// `reassociateOps`: `B = A op X; C = B op Y` becomes `N = X op Y; C = A op
+    /// N`.
+    fn generate_reassoc(
+        &mut self,
+        root: usize,
+        shape: Reassoc,
+        prev: usize,
+    ) -> Option<Replacement> {
+        let (root_op, prev_op) = (Associative::of(&self.ops[root])?, Associative::of(&self.ops[prev])?);
+        let (a, x) = if shape.a_second() { (prev_op.rm, prev_op.rn) } else { (prev_op.rn, prev_op.rm) };
+        let y = if shape.commuted() { root_op.rn } else { root_op.rm };
+        let (swap_root, swap_prev) = shape.swaps();
+        let new = self.fresh();
+        let (first, second) = if swap_prev { (y, x) } else { (x, y) };
+        let (left, right) = if swap_root { (new, a) } else { (a, new) };
+        let made = vec![prev_op.with(new, first, second), root_op.with(root_op.rd, left, right)];
+        let inserted = made.iter().map(node_of).collect();
+        self.pending = made;
+        Some(Replacement { inserted, deleted: vec![prev, root] })
+    }
+}
+
+impl Block<'_> {
     /// `getMaddPatterns`: ADDWrr/ADDXrr, SUBWrr/SUBXrr.
-    fn patterns(
+    fn madd_patterns(
         &self,
         root: usize,
     ) -> Vec<Pattern> {
@@ -391,6 +621,36 @@ impl CombinerIsa for Block<'_> {
         }
         found
     }
+}
+
+impl CombinerIsa for Block<'_> {
+    type Pattern = Pattern;
+
+    fn nodes(&self) -> Vec<Node> {
+        self.ops.iter().map(node_of).collect()
+    }
+
+    /// `AArch64InstrInfo::getMachineCombinerPatterns`: the madd patterns, and
+    /// where there are none the generic reassociation ones.
+    fn patterns(
+        &self,
+        root: usize,
+    ) -> Vec<Pattern> {
+        let found = self.madd_patterns(root);
+        if found.is_empty() { self.reassoc_patterns(root) } else { found }
+    }
+
+    /// `MachineCombinerImpl::getCombinerObjective`: a reassociation must make
+    /// the root shallower.
+    fn objective(
+        &self,
+        pattern: Pattern,
+    ) -> Objective {
+        match pattern {
+            Pattern::Reassoc { .. } => Objective::MustReduceDepth,
+            _ => Objective::Default,
+        }
+    }
 
     /// `genAlternativeCodeSequence`.
     fn generate(
@@ -398,7 +658,11 @@ impl CombinerIsa for Block<'_> {
         root: usize,
         pattern: Pattern,
     ) -> Option<Replacement> {
-        let Pattern::Scalar(pattern) = pattern else { return self.generate_vector(root, pattern) };
+        let pattern = match pattern {
+            Pattern::Scalar(pattern) => pattern,
+            Pattern::Reassoc { shape, prev } => return self.generate_reassoc(root, shape, prev),
+            Pattern::Vector { .. } => return self.generate_vector(root, pattern),
+        };
         let (Op::I(Inst::AddSubShifted { rd, .. }) | Op::I(Inst::AddSubImm { rd, .. })) = self.ops[root] else {
             return None;
         };
@@ -440,7 +704,7 @@ impl CombinerIsa for Block<'_> {
         _replacement: &Replacement,
     ) {
         let (_, loc) = self.ops.remove(root);
-        self.ops.remove(pattern.mul());
+        self.ops.remove(pattern.earlier());
         for (index, op) in std::mem::take(&mut self.pending).into_iter().enumerate() {
             self.ops.insert_at(root - 1 + index, op, loc);
         }
