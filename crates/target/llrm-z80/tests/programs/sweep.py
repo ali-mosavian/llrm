@@ -323,7 +323,7 @@ def main():
     with open(ctx.out + ".nobar", "w") as f:
         for name in guard.unmeasured(results, reasons):
             f.write(f"{name}\t" + "; ".join(f"{c}: {r}" for c, r in sorted(reasons[name].items())) + "\n")
-    line, ok = guard.summary(expected, results, {n: why(n) for n in lost}, required, excused)
+    line, ok = guard.summary(expected, results, {n: why(n) for n in {*lost, *excused}}, required, excused)
     print(line)
     sys.exit(0 if ok else 1)
 
