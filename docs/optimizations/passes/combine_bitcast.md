@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_bitcast.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_bitcast.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_bitcast.rs sha256:8a8ca7c1986b8baf050ce865ddfc49e2abef47c22797c58719cc438d0c756f0c -->
+<!-- src: crates/opt/llrm-transforms/src/combine_bitcast.rs sha256:cae8e8c713a2438bafbd8acf65566d283fc79dd841bd4c0d96a8d8e704bce48c -->
 
 # combine_bitcast
 
@@ -16,12 +16,15 @@ MIRROR: the order of the steps.
 
 DEVIATE 1: the rest of `visitBitCast` is not translated: the vector steps
 (MIR has no vectors), `optimizeBitCastFromPhi`, `canonicalizeBitCastExtElt`,
-`foldBitCastBitwiseLogic`, `foldBitCastSelect` and the closing
-`commonCastTransforms`. Exit: 2026-11-20.
+`foldBitCastBitwiseLogic` and `foldBitCastSelect`. Exit: 2026-12-06. The
+closing `commonCastTransforms` is: `bitcast (bitcast x)` was kept, 24 extra
+`float`/`i32` round trips in QB `exec_loop`.
 
 ## Example
 ```text
 %r = bitcast float %x to float           ; %r is %x
+%i = bitcast float %x to i32
+%f = bitcast i32 %i to float              ; %f is %x
 ```
 
 ## Used by
