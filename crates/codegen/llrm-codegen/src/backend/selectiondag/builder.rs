@@ -19,6 +19,7 @@ mod mergedcond;
 mod strictfp;
 mod switch;
 mod tailcall;
+mod vaarg;
 use llrm_lir::registers::RegId;
 pub use tailcall::tail_position;
 
@@ -1777,7 +1778,8 @@ impl Builder<'_> {
                 _ => 0,
             })
             .sum::<usize>();
-        if vector_registers > named_vectors {
+        let vector_unread = vaarg::leaves_vector_save_unread(self.module, self.layout, self.function);
+        if vector_registers > named_vectors && !vector_unread {
             let vreg = self.info.new_reg();
             let count = found.variadic_vector_register.as_deref().expect("a save area with a vector count register");
             self.live_ins.push((self.byte_view(self.arch.register_named(count)), vreg));
@@ -1804,6 +1806,7 @@ impl Builder<'_> {
         }
         let fp_offset = (found.argument_registers.len() * 8 + named_vectors * 16) as u32;
         self.dag.var_args_save = Some((save, named as u32 * 8, fp_offset));
+        self.dag.var_args_fp_unread = vector_unread;
         Ok(())
     }
 

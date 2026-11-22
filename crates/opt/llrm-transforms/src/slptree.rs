@@ -1054,7 +1054,7 @@ pub(crate) fn try_window(
         llrm_support::debug!("slp", "tree: not schedulable");
         return None;
     }
-    let cost = cost_of(unit, function, &tree, &made, align, tti, scaler)?;
+    let (tree, cost) = trim_non_profitable(unit, function, tree, align, tti, scaler)?;
     llrm_support::debug!("slp", "tree of {} entries x{}: cost {cost}", tree.entries.len(), stores.len());
     (cost < -COST_THRESHOLD).then_some(tree)
 }
@@ -1203,7 +1203,7 @@ pub(crate) fn try_inserts(
         llrm_support::debug!("slp", "insert tree x{}: not schedulable", inserts.len());
         return None;
     }
-    let cost = cost_of(unit, function, &tree, &made, 0, tti, scaler)?;
+    let (tree, cost) = trim_non_profitable(unit, function, tree, 0, tti, scaler)?;
     llrm_support::debug!("slp", "insert tree of {} entries x{}: cost {cost}", tree.entries.len(), inserts.len());
     (cost < -COST_THRESHOLD).then_some(tree)
 }
@@ -1387,7 +1387,7 @@ pub(crate) fn try_reduction(
         pure_calls: crate::slpschedule::safe_divides(unit.context, function, block),
         reduction: Some(info.clone()),
     };
-    let (tree, total) = trim_non_profitable(unit, function, tree, tti, scaler)?;
+    let (tree, total) = trim_non_profitable(unit, function, tree, 0, tti, scaler)?;
     // Scheduling is of the tree that stays: the trimmed subtrees are scalars.
     if !schedulable_phis(function, &tree) {
         llrm_support::debug!("slp", "reduction tree x{}: not schedulable", values.len());
@@ -1428,19 +1428,21 @@ fn made_of(tree: &Tree) -> IdMap<InstId, usize> {
 /// subtree cost as much as its gather. The tree and its cost, the reduction's
 /// included.
 ///
-/// DEVIATE SLP-TRIM (owner w11, exit 2026-11-29): only reduction trees are
-/// trimmed; the pin's `getTreeCost` trims every tree, so store, phi and insert
-/// trees whose subtree costs more than its gather stay whole here
-/// (object_extent_loop arm64 -O2: pin -12 on two trees, ours +23).
+/// DEVIATE SLP-TRIM-PHI (owner w11, exit 2026-11-29): the pin trims every
+/// tree; phi trees are not trimmed here. Ours are 39 entries where the pin's
+/// nbody trees are ~90 (a deeper tree, DEVIATE SLP-RDX2 and the gathers it
+/// leaves), and trimming the smaller tree vectorizes a different first group:
+/// nbody_phis gives 1 vector phi pair, the pin's 4.
 fn trim_non_profitable(
     unit: &MemUnit,
     function: &Function,
     tree: Tree,
+    store_align: u64,
     tti: &dyn Tti,
     scaler: &Scaler,
 ) -> Option<(Tree, i64)> {
     let made = made_of(&tree);
-    let costs = entry_costs(unit, function, &tree, &made, 0, tti, scaler)?;
+    let costs = entry_costs(unit, function, &tree, &made, store_align, tti, scaler)?;
     let n = tree.entries.len();
     // The entries under each entry, itself not counted.
     let under = |at: usize| -> Vec<usize> {
@@ -1471,11 +1473,11 @@ fn trim_non_profitable(
             break;
         }
         let entry = &tree.entries[at];
-        // The root of the pin's tree is the bundle of the reduced values (its
-        // entry 0): never trimmed.
+        // The root of the pin's tree (its entry 0) is never trimmed: for a
+        // reduction it is the bundle of the reduced values, here under ours.
         if entry.kind == Kind::Gather
             || at == 0
-            || at == tree.entries[0].operands[0]
+            || (tree.reduction.is_some() && at == tree.entries[0].operands[0])
             || deleted[at]
             || gather_of[at].is_some()
         {
@@ -1557,7 +1559,7 @@ fn trim_non_profitable(
     }
     let tree = Tree { entries, block: tree.block, pure_calls: tree.pure_calls, reduction: tree.reduction };
     let made = made_of(&tree);
-    let total = cost_of(unit, function, &tree, &made, 0, tti, scaler)?;
+    let total = cost_of(unit, function, &tree, &made, store_align, tti, scaler)?;
     Some((tree, total))
 }
 
