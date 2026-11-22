@@ -61,12 +61,14 @@ struct Wrapped {
     reads_a: bool,
     /// It defines `a` by name.
     writes_a: bool,
+    /// Its immediate is zero: a frame address at distance 0 is `rs0` itself.
+    zero_distance: bool,
 }
 
 impl Wrapped {
     fn new(inst: Inst) -> Wrapped {
-        let (mut defs, mut uses, mut physical, mut clobbers_only_a, mut reads_a, mut writes_a) =
-            (Vec::new(), Vec::new(), false, true, false, false);
+        let (mut defs, mut uses, mut physical, mut clobbers_only_a, mut reads_a, mut writes_a, mut zero_distance) =
+            (Vec::new(), Vec::new(), false, true, false, false, false);
         for operand in &inst.operands {
             match operand {
                 Operand::Def(Reg::Virt(n)) => defs.push(*n),
@@ -81,10 +83,11 @@ impl Wrapped {
                     clobbers_only_a = false;
                     reads_a |= *r == crate::reg::A;
                 }
+                Operand::Imm(0) => zero_distance = true,
                 _ => {}
             }
         }
-        Wrapped { inst, defs, uses, physical, clobbers_only_a, reads_a, writes_a }
+        Wrapped { inst, defs, uses, physical, clobbers_only_a, reads_a, writes_a, zero_distance }
     }
 }
 
@@ -247,7 +250,8 @@ impl Policy<Wrapped> for Mos {
             && !facts.copied.contains(&one.defs[0])
             && inst.ties.is_empty()
             && !(inst.call || inst.terminator || inst.barrier || inst.may_store || inst.side_effects);
-        // `rs0` plus a distance: nothing is read but `rs0`, which the loop does
+        // `rs0` plus a distance (not zero: that is a copy of `rs0`, free where it is, a pair held
+        // for the loop once moved): nothing is read but `rs0`, which the loop does
         // not move (`moves_sp`), and `a` is the only register it
         // clobbers
         let frame_address = matches!(inst.kind, Kind::Op("LEA"))
@@ -255,6 +259,7 @@ impl Policy<Wrapped> for Mos {
             && one.uses.is_empty()
             && one.physical
             && one.clobbers_only_a
+            && !one.zero_distance
             && one.defs.iter().all(|value| facts.defs.get(value) == Some(&1) && !facts.copied.contains(value))
             && inst.ties.is_empty()
             && !(inst.call || inst.terminator || inst.barrier || inst.may_store || inst.side_effects);
