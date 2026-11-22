@@ -264,6 +264,7 @@ mod shared_cse;
 mod shared_cse_trial;
 mod frame_beyond_16_bits;
 mod licm_constant_class;
+mod o1_licm_constants;
 mod shared_licm;
 mod shared_prefix;
 mod shared_prelude;
