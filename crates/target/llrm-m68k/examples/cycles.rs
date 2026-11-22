@@ -10,7 +10,8 @@
 //! `CYCLES_CPUS`, and per call (`CYCLES_CALLS`, default 3000). qemu runs
 //! `CYCLES_QEMU_CPU` (default `m68020` for a path containing `68020`, else
 //! `m68000`). The clocks are the tables' instruction clocks, not bus cycles.
-//! A `*` marks a total that holds a data-dependent term at its bound; `?`
+//! A `*` marks a total that holds a data-dependent term at its lower bound; `<=` one whose
+//! only such terms are published maxima (multiply, divide): the true total is at most it; `?`
 //! counts executed instructions the tables do not cover.
 
 use std::collections::HashMap;
@@ -317,6 +318,9 @@ pub(crate) struct Total {
     pub(crate) insns: usize,
     pub(crate) clocks: Vec<u64>,
     pub(crate) partial: bool,
+    /// A partial term that is not a published maximum (a shift count at its
+    /// lower bound...): the total is no upper bound.
+    pub(crate) open_above: bool,
     /// Executed instructions with no disassembly: unpriced on every model.
     pub(crate) unknown: usize,
     /// Executed instructions one model has no row for (a 68020 `extb.l` on the
@@ -332,6 +336,7 @@ impl Total {
             insns: 0,
             clocks: vec![0; models.len()],
             partial: false,
+            open_above: false,
             unknown: 0,
             unpriced: vec![0; models.len()],
             truncated: false,
@@ -354,6 +359,7 @@ impl Total {
                 Ok(one) => {
                     self.clocks[slot] += u64::from(one.clocks);
                     self.partial |= one.partial;
+                    self.open_above |= one.partial && !one.maximum;
                 }
                 Err(why) => {
                     assert!(!why.starts_with(llrm_m68k::timing::UNPARSEABLE), "{why}");
@@ -393,9 +399,13 @@ impl Total {
         if self.truncated {
             return format!("cut@{}", self.insns);
         }
-        let mark = if self.partial { "*" } else { "" };
+        let (before, after) = match (self.partial, self.open_above) {
+            (false, _) => ("", ""),
+            (true, true) => ("", "*"),
+            (true, false) => ("<=", ""),
+        };
         let unknown = if self.unknown_of(slot) > 0 { format!(" ?{}", self.unknown_of(slot)) } else { String::new() };
-        format!("{}{mark}{unknown}", self.clocks[slot])
+        format!("{before}{}{after}{unknown}", self.clocks[slot])
     }
 
     /// The unpriced instructions of the model in `slot`.
@@ -474,6 +484,24 @@ mod tests {
         assert_eq!(total.unknown_of(0), 16, "68000 lacks extb.l");
         assert_eq!(total.unknown_of(1), 0, "68020 prices extb.l");
         assert!(total.clocks[1] > total.clocks[0]);
+    }
+
+    /// memmove_overlap 68020 O2: two `muls.l` at their maximum read `4668*`,
+    /// a lower-bound mark on an upper bound, and the cell went blank.
+    #[test]
+    fn a_total_of_only_maxima_is_marked_as_an_upper_bound() {
+        let models = [Model::M68020];
+        let run = |trace: &[&str]| {
+            let mut total = Total::new(&models);
+            let mut registers = DataRegisters::new();
+            let mut seen = std::collections::HashSet::new();
+            for text in trace {
+                total.charge_executed(&models, &mut registers, text, 4, false, None, &mut seen);
+            }
+            total
+        };
+        assert!(run(&["moveq #27, %d1", "muls.l %d1, %d0"]).cell(0).starts_with("<="));
+        assert!(run(&["muls.l %d1, %d0", "bfextu (%a0){0:8}, %d1"]).cell(0).ends_with('*'), "a bit-field bound is no upper bound");
     }
 
     /// bitcount_idioms 68000 O1 priced `lsr.l %d2,%d0` (`d2` = 16, run 8 times)
