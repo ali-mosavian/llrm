@@ -571,7 +571,14 @@ impl Printer<'_> {
             quoted(&alias.name),
             words.iter().map(|one| format!("{one} ")).collect::<String>(),
             self.ty(alias.ty),
-            self.globals[alias.aliasee.0 as usize],
+            if alias.offset == 0 {
+                self.globals[alias.aliasee.0 as usize].to_string()
+            } else {
+                format!(
+                    "getelementptr inbounds (i8, ptr {}, i64 {})",
+                    self.globals[alias.aliasee.0 as usize], alias.offset
+                )
+            },
         )
     }
 

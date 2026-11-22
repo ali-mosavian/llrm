@@ -45,6 +45,14 @@
 //!     alignment: no "a load of it dominates" proof.
 //! 28. `isAssociative` is the integer operations only (`combine_shared`'s
 //!     DEVIATE 2), so a float accumulator is not recognized.
+//! 29. TCE-ACC-PHI (owner w9, exit 2026-12-31; the pin has no such case, GCC's
+//!     `pass_tail_recursion` does, `tree-tailcall.cc` `find_tail_calls`): a
+//!     `br` to a block of phis, one associative integer operation and the `ret`
+//!     also gets that operation copied into the predecessor that holds the
+//!     call, its phis replaced by their arms: the call's result then feeds the
+//!     operation, an accumulator. `t = c ? a : f(..); s = c ? d : n; return t +
+//!     s` is a loop; the pin keeps the recursion. Only where the copied
+//!     operation reads the call's result and has no other use.
 //!
 //! # Example
 //! `sumto(n, x) = n == 0 ? x : sumto(n - 1, x + n)` becomes a loop that
@@ -1337,6 +1345,32 @@ impl<'a> TailRecursionEliminator<'a> {
 
     /// `processBlock`
     /// ([TailRecursionElimination.cpp:1048](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/TailRecursionElimination.cpp#L1048)).
+    /// What the `br` to `successor` may copy into its predecessor: a block that
+    /// is one `ret` (`FoldReturnAndProcessPred`), or (TCE-ACC-PHI) one
+    /// associative integer operation, used only by the `ret`, which the call's
+    /// result reaches through a phi.
+    fn joined_return(
+        &self,
+        successor: BlockId,
+    ) -> Option<(Option<InstId>, InstId)> {
+        let function = &*self.function;
+        let first = first_non_phi_or_dbg(function, successor)?;
+        if function.instruction(first).opcode == Opcode::Ret {
+            return Some((None, first));
+        }
+        let Opcode::Binary(op) = function.instruction(first).opcode else { return None };
+        if !is_associative_and_commutative(op) {
+            return None;
+        }
+        let body: Vec<InstId> =
+            function.iter_block(successor).filter(|&one| function.instruction(one).opcode != Opcode::Phi).collect();
+        let [one, ret] = body[..] else { return None };
+        let result = function.instruction(one).result?;
+        let returns_it = function.instruction(ret).opcode == Opcode::Ret
+            && function.instruction(ret).operands.first() == Some(&Operand::Value(result));
+        (one == first && returns_it && function.users(result).only().is_some()).then_some((Some(one), ret))
+    }
+
     fn process_block(
         &mut self,
         block: BlockId,
@@ -1345,13 +1379,41 @@ impl<'a> TailRecursionEliminator<'a> {
         let instruction = self.function.instruction(terminator);
         if instruction.opcode == Opcode::Br && instruction.operands.len() == 1 {
             let Operand::Block(successor) = instruction.operands[0] else { return false };
-            let Some(ret) = first_non_phi_or_dbg(self.function, successor)
-                .filter(|&one| self.function.instruction(one).opcode == Opcode::Ret)
-            else {
-                return false;
-            };
+            let Some((joined, ret)) = self.joined_return(successor) else { return false };
             let Some(call) = self.find_tre_candidate(block) else { return false };
-            fold_return_into_uncond_branch(self.function, ret, successor, block);
+            // The copied operation is worth it only where it takes the call's
+            // result (else the elimination finds no accumulator).
+            if let Some(op) = joined {
+                let result = self.function.instruction(call).result.map(Operand::Value);
+                let reads_call = self
+                    .function
+                    .instruction(op)
+                    .operands
+                    .iter()
+                    .any(
+                        |&value| {
+                            let arm = defining(self.function, value)
+                                .filter(|&one| {
+                                    self.function.instruction(one).opcode == Opcode::Phi
+                                        && self.function.parent(one) == Some(successor)
+                                })
+                                .and_then(|phi| {
+                                    arms(self.function, phi)
+                                        .into_iter()
+                                        .find(|&(_, from)| from == block)
+                                        .map(|(value, _)| value)
+                                });
+                            arm.or(Some(value)) == result
+                        },
+                    );
+                if !reads_call {
+                    return false;
+                }
+            }
+            match joined {
+                Some(op) => fold_op_and_return_into_uncond_branch(self.function, op, ret, successor, block),
+                None => fold_return_into_uncond_branch(self.function, ret, successor, block),
+            };
             // If all predecessors of the successor have been eliminated by
             // `fold_return_into_uncond_branch`, delete it. It is important to
             // empty it, because the ret instruction in there is still using a
@@ -1516,6 +1578,49 @@ pub(crate) fn fold_return_into_uncond_branch(
     }
     // Update any PHI nodes in the returning block to realize that we no longer
     // branch to them.
+    for phi in crate::edges::phis(function, block) {
+        let kept: Vec<_> = arms(function, phi).into_iter().filter(|&(_, from)| from != pred).collect();
+        function.set_operands(phi, from_arms(&kept));
+    }
+    function.erase(branch).expect("a branch defines nothing");
+    new_ret
+}
+
+/// TCE-ACC-PHI (DEVIATE, owner w9, exit 2026-12-31: the pin lacks it):
+/// `FoldReturnIntoUncondBranch` for a join of one associative operation and the
+/// `ret`: both copied to the end of `pred`, the join's phis replaced by their
+/// arms from `pred`, so the call's result feeds the operation directly and the
+/// accumulator elimination sees it. GCC `tree-tailcall.cc` (`find_tail_calls`,
+/// `process_assignment`) does the same across a phi.
+fn fold_op_and_return_into_uncond_branch(
+    function: &mut Function,
+    op: InstId,
+    ret: InstId,
+    block: BlockId,
+    pred: BlockId,
+) -> InstId {
+    let branch = function.terminator(pred).expect("a terminator");
+    let from_pred = |function: &Function, value: Operand| -> Operand {
+        match defining(function, value)
+            .filter(|&one| function.instruction(one).opcode == Opcode::Phi && function.parent(one) == Some(block))
+        {
+            Some(phi) => arms(function, phi)
+                .into_iter()
+                .find(|&(_, from)| from == pred)
+                .map(|(value, _)| value)
+                .expect("an arm for the predecessor"),
+            None => value,
+        }
+    };
+    let new_op = function.clone_instruction(op);
+    function.insert(new_op, Position::End(pred)).expect("a placed block");
+    for slot in 0..function.instruction(new_op).operands.len() {
+        let value = from_pred(function, function.instruction(new_op).operands[slot]);
+        function.set_operand(new_op, slot, value);
+    }
+    let new_ret = function.clone_instruction(ret);
+    function.insert(new_ret, Position::End(pred)).expect("a placed block");
+    function.set_operand(new_ret, 0, Operand::Value(function.instruction(new_op).result.expect("a value")));
     for phi in crate::edges::phis(function, block) {
         let kept: Vec<_> = arms(function, phi).into_iter().filter(|&(_, from)| from != pred).collect();
         function.set_operands(phi, from_arms(&kept));

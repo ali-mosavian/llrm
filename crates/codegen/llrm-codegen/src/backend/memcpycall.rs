@@ -28,7 +28,7 @@ use llrm_mir::context::ConstantKind;
 use llrm_mir::edit::Position;
 use llrm_mir::intrinsics::Intrinsic;
 use llrm_mir::module::{Linkage, Module, Operand};
-use llrm_mir::opcode::{Attribute, CallInfo, CastOp, Flags, Opcode};
+use llrm_mir::opcode::{AttrName, Attribute, CallInfo, CastOp, Flags, Opcode};
 
 use super::expansion;
 
@@ -93,6 +93,7 @@ pub fn expanded(
     inline_variable: bool,
     rep_movsb: bool,
     rep_movs_speed_max: u64,
+    inline_variable_unlooped: bool,
 ) -> Result<(), String> {
     let needs = |intrinsic: Intrinsic| matches!(intrinsic, Intrinsic::MemCpy).then_some(());
     // SSE2 is x86-64's baseline, so its pieces are 16 bytes
@@ -106,9 +107,39 @@ pub fn expanded(
         .as_deref()
         .and_then(|text| llrm_mir::datalayout::DataLayout::parse(text).ok())
         .map_or(4, |layout| if layout.pointer(0).bits == 64 { 16 } else { 4 });
+    // DEVIATE MEM-OS-REP: a variable fill in a loop keeps the call; the selector
+    // makes the others `rep stosb`.
+    if inline_variable_unlooped {
+        let fills = |intrinsic: Intrinsic| matches!(intrinsic, Intrinsic::MemSet).then_some(());
+        expansion::expand_calls(module, fills, |_, function, call, ()| {
+            let at_size = llrm_mir::memory::has(&function.attrs, "optsize")
+                || llrm_mir::memory::has(&function.attrs, "minsize");
+            let instruction = function.instruction(call);
+            if !at_size
+                || matches!(instruction.operands[2], Operand::Constant(_))
+                || !in_loop(function, call)
+            {
+                return Ok(());
+            }
+            let Opcode::Call(info) = &instruction.opcode else { return Ok(()) };
+            let mut info = info.clone();
+            info.attrs.push(Attribute::Flag(AttrName::new(FILL_CALL)));
+            function.set_opcode(call, Opcode::Call(info));
+            Ok(())
+        })?;
+    }
     let mut any = false;
     expansion::expand_calls(module, needs, |context, function, call, ()| {
-        any |= calls(context, function, call, widest, inline_variable, rep_movsb, rep_movs_speed_max);
+        any |= calls(
+            context,
+            function,
+            call,
+            widest,
+            inline_variable,
+            rep_movsb,
+            rep_movs_speed_max,
+            inline_variable_unlooped,
+        );
         Ok(())
     })?;
     if !any {
@@ -136,7 +167,16 @@ pub fn expanded(
     };
     let reference = module.reference(id);
     expansion::expand_calls(module, needs, |context, function, call, ()| {
-        if !calls(context, function, call, widest, inline_variable, rep_movsb, rep_movs_speed_max) {
+        if !calls(
+            context,
+            function,
+            call,
+            widest,
+            inline_variable,
+            rep_movsb,
+            rep_movs_speed_max,
+            inline_variable_unlooped,
+        ) {
             return Ok(());
         }
         let instruction = function.instruction(call).clone();
@@ -188,6 +228,7 @@ fn calls(
     inline_variable: bool,
     rep_movsb: bool,
     rep_movs_speed_max: u64,
+    inline_variable_unlooped: bool,
 ) -> bool {
     let instruction = function.instruction(call);
     let Opcode::Call(info) = &instruction.opcode else { return false };
@@ -237,6 +278,17 @@ fn calls(
     if inline_variable && !sized && !matches!(instruction.operands[2], Operand::Constant(_)) {
         return false;
     }
+    // DEVIATE MEM-OS-REP (`Tuning::inline_variable_memcpy_at_size`, exit
+    // 2026-12-06): tuned for size, a variable length outside every loop is
+    // `rep movsb` (gcc's `decide_alg`: `optimize_insn_for_size_p` takes
+    // `rep_prefix_1_byte` for an unknown size), the pin's call otherwise.
+    if inline_variable_unlooped
+        && sized
+        && !matches!(instruction.operands[2], Operand::Constant(_))
+        && !in_loop(function, call)
+    {
+        return false;
+    }
     if align(0) < 4 || align(1) < 4 {
         return true;
     }
@@ -248,4 +300,17 @@ fn calls(
         },
         _ => true,
     }
+}
+
+/// The call attribute marking a fill the target keeps a call.
+pub const FILL_CALL: &str = "llrm-fill-call";
+
+/// Whether `call` is in a natural loop: a copy in one keeps the call (glibc's is faster than the `rep` startup).
+fn in_loop(
+    function: &llrm_mir::module::Function,
+    call: llrm_mir::module::InstId,
+) -> bool {
+    let Some(block) = function.parent(call) else { return false };
+    let shape = llrm_analysis::cfg::Shape::of(function);
+    shape.loops.iter().any(|one| one.body.contains(&llrm_analysis::cfg::id(block)))
 }

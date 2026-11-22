@@ -231,6 +231,7 @@ impl Machine for Arm64Machine {
             optsize_counts: true,
             keep_data_indexed: true,
             mach_o: self.platform == Platform::Darwin,
+            external: self.platform != Platform::Darwin,
         })
     }
 }

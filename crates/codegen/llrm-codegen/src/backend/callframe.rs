@@ -198,7 +198,8 @@ impl LIRTransform for ReserveCallFrame {
             .filter_map(|one| imm_of(one, 0))
             .max()
             .unwrap_or(0);
-        let area = padded(area, 0, self.call_alignment);
+        // The area is not padded: the frame's own size is aligned to the call alignment past the return address (a
+        // 40-byte Win64 area is `sub rsp, 40`, not 48 + 8).
         // The destroys that re-reserve what a callee popped become `sub`.
         let mut out = body.clone();
         for block in &mut out.blocks {

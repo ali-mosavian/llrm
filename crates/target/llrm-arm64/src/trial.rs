@@ -169,15 +169,21 @@ const MIN_GAIN: f64 = 0.001;
 /// less, for no more than the `adrp`+`add` each global needs of its own. A
 /// merged base reaches its members by offset, so a loop that indexes them pays
 /// an `add` a trip (particle -Os: 6.5% more instructions than gcc and clang, 36
-/// B smaller).
+/// B smaller). Or it is the smaller object and runs no more (a merged base
+/// held across a call took a callee-saved register and a frame: QuickrBasic
+/// prnval.c -Os +12 B, nhstutil.c +20 B): -Os is bytes first.
 pub fn keeps_unmerged(
     kept: Price,
     other: Price,
     merged: usize,
 ) -> bool {
-    !(kept.work.is_nan() || other.work.is_nan())
-        && kept.work - other.work >= MIN_GAIN * kept.work
-        && other.bytes - kept.bytes <= BYTES_PER_UNMERGED_GLOBAL * merged as i64
+    if kept.work.is_nan() || other.work.is_nan() {
+        return false;
+    }
+    let runs_less = kept.work - other.work >= MIN_GAIN * kept.work;
+    let runs_no_more = other.work - kept.work <= MIN_GAIN * kept.work;
+    (runs_less && other.bytes - kept.bytes <= BYTES_PER_UNMERGED_GLOBAL * merged as i64)
+        || (other.bytes < kept.bytes && runs_no_more)
 }
 
 /// Starts summing the work of the functions lowered on this thread.
