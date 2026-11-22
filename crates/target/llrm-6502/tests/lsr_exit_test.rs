@@ -76,3 +76,20 @@ fn arithmetic_on_some_trips_does_not_get_a_counter() {
     let pushes = text.matches("\n  pha").count();
     assert!(pushes <= 5, "{pushes} cells are saved and the loop's counters live in them:\n{text}");
 }
+
+/// `buf[i] = (long)(i + 1) * 3 - 7 + n` over 64 trips stored through a pointer
+/// that steps by 4 with a carry into its high byte, and `ldy #k` before each
+/// of the four stores: llvm-mos stores `sta buf,y` on one byte index
+/// (ring loop 1, 2026-11-22). UNVERIFIED: written before the build (disk
+/// freeze); not yet seen to fail.
+#[test]
+fn a_store_through_a_stepping_array_index_uses_a_byte_index() {
+    let text = assembly_of(
+        "ring_a",
+        "long buf[64];\nvoid fill(long n)\n{\n    int i;\n    for (i = 0; i < 64; ++i) buf[i] = (long)(i + 1) * 3 - 7 + n;\n}\n",
+        &["-fno-inline-functions"],
+    );
+    let body = text.split("fill:").nth(1).unwrap_or_else(|| panic!("{text}"));
+    let body = body.split(".segment").next().unwrap();
+    assert_eq!(body.matches(",y").count() >= 4 && body.contains("buf,y"), true, "the stores are not on a byte index:\n{body}");
+}
