@@ -67,7 +67,13 @@ pub struct Function {
     pub frame_pointer_all: bool,
     pub has_var_sized: bool,
     pub frame_address_taken: bool,
+    /// The frame operands that name each of `objects`, for [`layout`]'s reordering of a frame
+    /// past what a 16-bit displacement reaches; empty keeps the order they were made in.
+    pub uses: Vec<u64>,
 }
+
+/// The farthest an object may lie for `(d16,%sp)` and `(d16,%a6)` to name it.
+const DISPLACEMENT_REACH: i64 = 32767;
 
 /// The register an object is addressed through.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -139,7 +145,16 @@ fn has_fp(function: &Function) -> bool {
 pub fn needs_frame_pointer(function: &Function) -> bool {
     let max_align = function.objects.iter().map(|one| one.align).max().unwrap_or(1);
     let stack_align = if function.stack_align == 0 { STACK_ALIGN } else { function.stack_align };
-    has_fp(function) || max_align > stack_align.max(REALIGN_ABOVE)
+    has_fp(function) || max_align > stack_align.max(REALIGN_ABOVE) || locals_past_reach(function)
+}
+
+/// DEVIATE (the pin has no such rule): locals together larger than a 16-bit displacement reaches
+/// leave the incoming arguments out of `(d16,%sp)`'s reach, so the frame takes `%a6` (QuickrBasic
+/// `indent.c`: a 65 KB buffer put an argument at `(65048,%sp)`). Spill slots (one long) are not
+/// counted, so the answer is the same before and after allocation. Exit: when the pin has a rule.
+fn locals_past_reach(function: &Function) -> bool {
+    function.objects.iter().skip(function.fixed).filter(|one| one.size > SLOT).map(|one| one.size).sum::<i64>()
+        > DISPLACEMENT_REACH
 }
 
 /// Lays the frame out as `PEIImpl::calculateFrameObjectOffsets` does with
@@ -175,7 +190,44 @@ pub fn layout(function: &Function) -> Layout {
         reserved_call_frame: !function.has_var_sized,
         max_call_frame_size: function.max_call_frame,
     };
-    let stack_size = calculate_frame_object_offsets(&mut objects, fixed, frame);
+    let mut stack_size = calculate_frame_object_offsets(&mut objects, fixed, frame);
+    // DEVIATE (the pin lays objects in the order they were made): a frame past what a 16-bit
+    // displacement reaches puts its objects in use-density order (the pin's X86
+    // `orderFrameObjects`, `order_frame_objects`), the densest nearest the register that
+    // addresses them, so the few hot slots stay reachable beside a large buffer (QuickrBasic
+    // `indent.c`: a 65 KB buffer made `(65362,%sp)`). Exit: when the pin orders M68k objects.
+    if stack_size > DISPLACEMENT_REACH && function.uses.len() == function.objects.len() {
+        let mut uses = function.uses.clone();
+        if has_fp {
+            uses.insert(function.fixed, 0);
+        }
+        uses.resize(objects.len(), 0);
+        let locals = fixed..first_save;
+        let sorting: Vec<_> = locals
+            .clone()
+            .map(|at| llrm_codegen::backend::frameobjects::Sorting {
+                size: objects[at].size as u64,
+                align: objects[at].align,
+                uses: uses[at],
+            })
+            .collect();
+        let placed: Vec<usize> = (0..fixed)
+            .chain(
+                llrm_codegen::backend::frameobjects::order_frame_objects(&sorting, has_fp)
+                    .into_iter()
+                    .map(|at| fixed + at),
+            )
+            .chain(first_save..objects.len())
+            .collect();
+        let mut laid: Vec<Object> = placed.iter().map(|&at| objects[at].clone()).collect();
+        let reordered = calculate_frame_object_offsets(&mut laid, fixed, frame);
+        if reordered <= stack_size {
+            for (slot, &at) in placed.iter().enumerate() {
+                objects[at].offset = laid[slot].offset;
+            }
+            stack_size = reordered;
+        }
+    }
     let lowest_save = (first_save..objects.len()).min_by_key(|&index| objects[index].offset);
     Layout { stack_size, has_fp, objects, saved, lowest_save, realigned, max_align, first_local: fixed, first_save }
 }
