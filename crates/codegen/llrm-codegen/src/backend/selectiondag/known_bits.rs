@@ -362,6 +362,11 @@ fn walk(
             super::dag::NodeData::Mem(info) if info.ext == Some(super::actions::LoadExt::ZExtLoad) => {
                 KnownBits { zero: all & !mask(info.mem_vt.size_in_bits()), one: 0, width }
             }
+            // `computeKnownBits` of a plain `LOAD` with `!range`
+            super::dag::NodeData::Mem(info) if info.ext.is_none() => match dag.load_ranges.get(&value.node) {
+                Some(&(zero, one)) => KnownBits { zero: zero & all, one: one & all, width },
+                None => KnownBits::unknown(width),
+            },
             _ => KnownBits::unknown(width),
         },
         ISD::AnyExtend => {

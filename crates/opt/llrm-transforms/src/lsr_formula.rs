@@ -277,12 +277,22 @@ pub enum Symbol {
     Frame(ValueId),
 }
 
+/// The integer widths of a formula's base and scaled registers (llvm-mos's
+/// `AddrMode::BaseType` and `ScaleType`); 0 where the register is absent, a
+/// pointer, or not asked. The pin's `AddrMode` carries no types.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct RegBits {
+    pub base: u32,
+    pub scaled: u32,
+}
+
 /// The arguments `Tti::is_legal_addressing_mode` takes for a formula.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Mode {
     pub global: bool,
     pub has_base_reg: bool,
     pub scale: i64,
+    pub bits: RegBits,
 }
 
 /// One way to compute a use: `symbol + base_offset + base_regs + scale *
@@ -400,15 +410,34 @@ impl Formula {
     /// the formula is the index (scale 1); the frame beside both a base and a
     /// scaled register is three registers.
     pub fn mode(&self) -> Option<Mode> {
+        let bits = RegBits::default();
         let global = self.has_global();
         if !matches!(self.symbol, Some(Symbol::Frame(_))) {
-            return Some(Mode { global, has_base_reg: self.has_base_reg, scale: self.scale });
+            return Some(Mode { global, has_base_reg: self.has_base_reg, scale: self.scale, bits });
         }
         match (self.has_base_reg, self.scale) {
-            (true, 0) => Some(Mode { global, has_base_reg: true, scale: 1 }),
+            (true, 0) => Some(Mode { global, has_base_reg: true, scale: 1, bits }),
             (true, _) => None,
-            (false, scale) => Some(Mode { global, has_base_reg: true, scale }),
+            (false, scale) => Some(Mode { global, has_base_reg: true, scale, bits }),
         }
+    }
+
+    /// [`Self::mode`] with the widths of the registers, for a target whose
+    /// addressing depends on them (`Tti::is_legal_addressing_mode_typed`).
+    pub fn mode_in(
+        &self,
+        se: &ScalarEvolution,
+    ) -> Option<Mode> {
+        let width = |reg: Scev| match se.type_of(reg) {
+            Ty::Int(bits) => bits,
+            Ty::Ptr(_) => 0,
+        };
+        let mut mode = self.mode()?;
+        mode.bits = RegBits {
+            base: self.base_regs.first().map_or(0, |&reg| width(reg)),
+            scaled: self.scaled_reg.map_or(0, width),
+        };
+        Some(mode)
     }
 
     /// `Formula::initialMatch`: incorporate loop-variant parts of `s` into

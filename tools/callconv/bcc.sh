@@ -7,6 +7,11 @@ set -euo pipefail
 OUT="$1"; shift
 TOOLCHAINS="${TOOLCHAINS:-$HOME/work/other/d32x/toolchains}"
 DOSRUN="${DOSRUN:-$HOME/scratch/pr-dosbox/src/dosbox-x}"
+# the dist's own DOSBox when that scratch build is gone (c.sh does the same); none at all is said, not an exit 127 with stderr dropped
+if [[ ! -x "$DOSRUN" ]]; then
+    DOSRUN="$(python3 "$(dirname "$0")/../llrmbin.py" bin)/dosbox-x"
+    [[ -x "$DOSRUN" ]] || { echo "bcc.sh: no DOSBox: DOSRUN and the dist's dosbox-x are not executable ($DOSRUN)" >&2; exit 2; }
+fi
 CCDIR="${CCDIR:-bcpp31}"  # tc201 and tcpp30 have a TCC.EXE with BCC's switches; their jobs pass every switch themselves
 CCEXE="${CCEXE:-bcc}"
 CCROOT="${CCROOT:-$TOOLCHAINS}"
