@@ -1395,6 +1395,9 @@ pub struct Alias {
     /// The value type, as written before the comma.
     pub ty: TypeId,
     pub aliasee: GlobalId,
+    /// Bytes from the start of the aliasee: `getelementptr (i8, @aliasee, offset)`.
+    /// Only `GlobalMerge` makes one that is not 0 (the name of a merged external).
+    pub offset: i64,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
