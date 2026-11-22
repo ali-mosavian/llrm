@@ -2037,6 +2037,16 @@ pub trait Tti {
         0
     }
 
+    /// DEVIATE UP1-O3 (owner arm64, exit 2026-12-21): the rate at `opt_level`.
+    /// -O3 is judged by clocks, not bytes, so a target may take the pin's
+    /// threshold alone there (0). Default: the rate of every level.
+    fn unroll_milliclocks_per_byte_at(
+        &self,
+        _opt_level: u32,
+    ) -> i64 {
+        self.unroll_milliclocks_per_byte()
+    }
+
     /// DEVIATE UNROLL-TRIAL (beyond the pin; owner 6502, exit 2026-12-05): the
     /// unrolled size, in the unroll units, up to which a loop the threshold
     /// refused is unrolled on trial: the function is simplified and priced
@@ -2355,6 +2365,34 @@ pub trait Tti {
 
     /// `Tuning::lftr_any_stride` (DEVIATE LFTR1).
     fn lftr_any_stride(&self) -> bool {
+        false
+    }
+
+    /// DEVIATE LSR-COND-STEP: extra `add_rec_cost` of an addrec register rated
+    /// for an address use that does not run every trip. The pin charges a register one
+    /// step however often its uses run; here the step is paid each trip, and a
+    /// use that runs on a few (a switch's table lookup, 28 of 256 trips) saves
+    /// its computation only then (switch_peeled_table: four counters stepped
+    /// 256 times for a lookup run 28 times).
+    fn lsr_conditional_use_step_cost(&self) -> u32 {
+        0
+    }
+
+    /// DEVIATE LSR-CMP-IMM: the exit test's immediate is not rated by its bit
+    /// width in `RateFormula`'s `ImmCost` (the pin counts the bits of every
+    /// non-zero offset, a compare's too). A compare against a constant is one
+    /// `cmp` per byte where a zero test is an `ora`: the exit test's own cost,
+    /// priced by the target, not an immediate a formula adds.
+    fn lsr_exit_compare_immediate_is_free(&self) -> bool {
+        false
+    }
+
+    /// llvm-mos's `TargetTransformInfo::allowIllegalIntegerIV` (not in the pin):
+    /// a loop counter of a width the datalayout does not hold is still a counter
+    /// `IndVarSimplify` may rewrite the exit test on (`findLoopCounter`'s
+    /// `isLegalInteger` check is skipped).
+    /// [llvm-mos](https://github.com/llvm-mos/llvm-mos/blob/a40207a371b6/llvm/lib/Target/MOS/MOSTargetTransformInfo.h#L47)
+    fn allow_illegal_integer_iv(&self) -> bool {
         false
     }
 

@@ -377,6 +377,24 @@ impl Tti for Mos6502 {
         key(a) < key(b)
     }
 
+    /// A 16-bit counter step is three instructions: a register stepped each
+    /// trip for a use that runs on a few pays that many more.
+    fn lsr_conditional_use_step_cost(&self) -> u32 {
+        3
+    }
+
+    /// A 16-bit compare of the exit test costs two `cmp`s against zero's `ora`:
+    /// the bits of its constant do not make a formula worse (the countdown
+    /// counter that avoids it costs a second counter).
+    fn lsr_exit_compare_immediate_is_free(&self) -> bool {
+        true
+    }
+
+    /// llvm-mos: `n8` makes a 16-bit counter illegal, and LFTR still tests the exit on it.
+    fn allow_illegal_integer_iv(&self) -> bool {
+        true
+    }
+
     fn address_index_max(&self) -> Option<u64> {
         Some(u64::from(u8::MAX))
     }
