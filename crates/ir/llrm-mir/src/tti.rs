@@ -1983,6 +1983,13 @@ pub trait Tti {
         true
     }
 
+    /// DEVIATE COMMON-INSTS-O1: the SimplifyCFG that ends the -O2 function
+    /// pipeline (L832) hoists and sinks common code at -O1 too, where the
+    /// pin's `default<O1>` ends with a plain one (L621). Off: the pin.
+    fn common_insts_at_o1(&self) -> bool {
+        false
+    }
+
     /// `Tuning::sink_common_at_size`.
     fn sink_common_at_size(&self) -> bool {
         false
