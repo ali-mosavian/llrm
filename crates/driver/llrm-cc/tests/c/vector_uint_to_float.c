@@ -16,10 +16,12 @@ int main(void)
     for (i = 0; i < 3; i++) {
         u4 in = {v[i][0], v[i][1], v[i][2], v[i][3]};
         f4 out;
+        float lane[4];
 
         convert(&in, &out);
+        __builtin_memcpy(lane, &out, sizeof lane);
         for (k = 0; k < 4; k++)
-            printf("%u %.1f\n", v[i][k], (double)out[k]);
+            printf("%u %.1f\n", v[i][k], (double)lane[k]);
     }
     return 0;
 }

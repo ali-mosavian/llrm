@@ -132,7 +132,8 @@ pub(crate) fn float_lane_cost(
     into_poison: bool,
     cost_kind: CostKind,
 ) -> Option<Cost> {
-    if !matches!(ty.lane, Ty::Float | Ty::Double) {
+    // `<4 x i32>` rows only (the SSE2 gather of an integer counter that feeds a convert); other integer lanes stay unpriced.
+    if !matches!(ty.lane, Ty::Float | Ty::Double | Ty::Int(32)) {
         return None;
     }
     let kind = kind_name(cost_kind);

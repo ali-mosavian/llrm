@@ -2700,7 +2700,8 @@ fn combine_uint_to_fp(
 ) -> Option<SDValue> {
     let value = dag.operand(node, 0);
     let vt = dag.value_type(node);
-    let bits = dag.value_type(value).element().size_in_bits();
+    let source = dag.value_type(value);
+    let bits = if source.is_vector() { source.element() } else { source }.size_in_bits();
     let non_neg = dag.node(node).flags.has(SDNodeFlags::NON_NEG)
         || llrm_codegen::backend::selectiondag::known_bits::known_bits(dag, value).zero >> (bits - 1) & 1 == 1;
     non_neg.then(|| dag.get_node(ISD::SIntToFp, vt, &[value]))
