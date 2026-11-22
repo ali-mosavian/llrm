@@ -2035,6 +2035,10 @@ impl Tti for X86 {
         self.tuning.inline_size_guard_yields_to_inlinehint
     }
 
+    fn opt_size_inline_hot_growth_percent(&self) -> Option<i64> {
+        self.tuning.inline_size_hot_growth_percent
+    }
+
     fn unroll_promotion_fits_registers(&self) -> bool {
         self.tuning.unroll_promotion_fits_registers
     }

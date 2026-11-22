@@ -58,7 +58,6 @@
 //! target takes vector values (`Machine::has_vector_mir`).
 
 use llrm_analysis::aggregate::AggregateAA;
-use llrm_analysis::basicaa::BasicAA;
 use llrm_analysis::interleavedaccess::InterleavedAccessInfo;
 use llrm_analysis::ivdescriptors::{InductionKind, RecurKind};
 use llrm_analysis::loopaccess::{SymbolicStrideMap, get_ptr_stride};
@@ -66,7 +65,6 @@ use llrm_analysis::loopaccessinfo::LoopAccessInfo;
 use llrm_analysis::memory;
 use llrm_analysis::scev::analysis::ScevSession;
 use llrm_analysis::scev::{Cx, ScalarEvolution};
-use llrm_analysis::typebasedaa::TypeBasedAA;
 use llrm_mir::context::{Constant, ConstantKind};
 use llrm_mir::dense::IdMap;
 use llrm_mir::edit::Position;
@@ -2375,10 +2373,7 @@ impl FunctionPass for LoopVectorize {
                     continue 'worklist;
                 }
                 let memory_unit = memory::Unit::within(&*unit.context, unit.layout, &*unit.function, &outer);
-                let mut aa = AggregateAA::new();
-                aa.add_aa_result(BasicAA::new(&memory_unit));
-                aa.add_aa_result(llrm_analysis::scopednoaliasaa::ScopedNoAliasAA::new(&memory_unit));
-                aa.add_aa_result(TypeBasedAA::new(&memory_unit));
+                let mut aa = AggregateAA::default_pipeline(&memory_unit);
                 let max_width = tti.vector_register_bits() * 2;
                 let lai = LoopAccessInfo::new(se, &cx, header, &mut aa, false, max_width);
                 let legality = match can_vectorize(&cx, se, &lai, found) {
