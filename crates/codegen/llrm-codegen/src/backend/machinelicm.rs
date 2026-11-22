@@ -22,9 +22,12 @@
 //!   them (below);
 //! - every value it reads is defined outside the loop or was hoisted
 //!   (`IsLoopInvariantInst`);
-//! - it is not as cheap as a move (`IsProfitableToHoist`: a cheap instruction
-//!   is hoisted only if it does not raise the pressure, and a constant cannot
-//!   be made again where the allocator wants it, DEVIATE E3 of `precse`);
+//! - it is not as cheap as a move, unless it is a register copy that is the
+//!   only reader of its source (`calcRegisterCost` is nil: bintree -O1
+//!   `insert`'s zero-extended `lea` index, then the load it feeds)
+//!   (`IsProfitableToHoist`: a cheap instruction is hoisted only if it does not
+//!   raise the pressure, and a constant cannot be made again where the
+//!   allocator wants it, DEVIATE E3 of `precse`);
 //! - it sets no flags a later instruction of its block reads;
 //! - the loop does not already use as many values of its register class as the
 //!   target has registers (`CanCauseHighRegPressure`, with the values named in
@@ -271,12 +274,41 @@ fn read_by_arithmetic(
     })
 }
 
+/// A register-to-register move whose source nothing else in the function
+/// reads (`isOperandKill`: one use): hoisted, it holds one register in place of
+/// the one it frees, so `calcRegisterCost` is nil and the pin hoists it.
+fn copy_freeing_its_source(
+    facts: &licm::Facts<'_, Wrapped>,
+    one: &Insn,
+) -> bool {
+    let Some(what) = &one.what else { return false };
+    let (Operation::Move, [Loc::Held(_)], [Loc::Held(from)]) =
+        (what.op, what.dests.as_slice(), what.sources.as_slice())
+    else {
+        return false;
+    };
+    let readers = facts
+        .blocks
+        .iter()
+        .map(|block| {
+            block.insns.iter().filter(|other| other.0.uses.contains(&from.value)).count()
+                + block.phis.iter().filter(|phi| phi.incoming.contains(&from.value)).count()
+        })
+        .scan(0, |seen, here| {
+            *seen += here;
+            Some(*seen)
+        })
+        .find(|seen| *seen > 1);
+    readers.is_none()
+}
+
 /// `IsLICMCandidate` for what this pass moves. `loads`: the loop has nothing
 /// that keeps a load in it, and the load's block runs on every trip.
 fn candidate(
     one: &Insn,
     classes: &RegisterClasses,
     loads: bool,
+    frees_its_source: bool,
 ) -> bool {
     let Some(what) = &one.what else { return false };
     if !classes.requirements(what).is_empty() {
@@ -284,6 +316,7 @@ fn candidate(
     }
     let load = (loads || one.invariant()) && loaded(one).is_some();
     let pure = load
+        || frees_its_source
         || matches!(
             what.op,
             Operation::Address
@@ -300,9 +333,10 @@ fn candidate(
         Loc::Mem(one) => cell(one),
         _ => false,
     };
-    // The pin hoists an instruction that reads no register (an address of a symbol) like any
-    // other (`IsLoopInvariantInst` L1133, `IsProfitableToHoist` L1273), by pressure; where a
-    // target has not measured that, only a load or an instruction with a use is a candidate.
+    // The pin hoists an instruction that reads no register (an address of a
+    // symbol) like any other (`IsLoopInvariantInst` L1133,
+    // `IsProfitableToHoist` L1273), by pressure; where a target has not
+    // measured that, only a load or an instruction with a use is a candidate.
     pure && what.target.is_none()
         && !what.indirect
         && (classes.hoists_register_free_ops || !one.uses.is_empty() || load && one.invariant())
@@ -319,11 +353,12 @@ fn candidate(
         && one.requires.is_empty()
         && one.delivers.is_empty()
         && one.spread.is_empty()
-        && !crate::backend::machinesink::as_cheap_as_a_move_named(
-            one,
-            classes.cheap_move_immediate,
-            classes.cheap_move_row,
-        )
+        && (frees_its_source
+            || !crate::backend::machinesink::as_cheap_as_a_move_named(
+                one,
+                classes.cheap_move_immediate,
+                classes.cheap_move_row,
+            ))
 }
 
 /// An x86 instruction as the shared pass reads it.
@@ -945,10 +980,16 @@ impl licm::Policy<Wrapped> for X86<'_> {
         let invariant_load = loaded(one).is_some() && one.invariant();
         let limit = self.classes.available.len();
         let facts_every_trip = (facts.every_trip)(at);
+        // `CanCauseHighRegPressure` counts a cheap instruction's cost as the
+        // registers it makes live less the ones it frees: a register copy
+        // (`SUBREG_TO_REG`, the zero-extension of a 32-bit `lea` into the
+        // 64-bit index of a load) that is the loop's only reader of its source
+        // costs nothing, and the pin hoists it, then the load it feeds.
+        let frees_its_source = copy_freeing_its_source(facts, one);
         // An invariant load into an xmm register is hoisted like any other: the
         // stack the `floating` values wait on is the x87's, and the
         // allocator can load the constant again where it wants it.
-        let mut movable = candidate(one, self.classes, loads_here)
+        let mut movable = candidate(one, self.classes, loads_here, frees_its_source)
             && value
                 .is_some_and(|value| !self.floating.contains(&value) || (invariant_load && self.xmm.contains(&value)))
             && (if self.classes.hoist_by_pressure { !self.pressure.high(facts, at, one) } else { self.named < limit }
@@ -1211,8 +1252,10 @@ mod tests {
                 .filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned))
                 .collect()
         };
-        assert_eq!(names(0), ["add", "jmp"]);
-        assert_eq!(names(1), ["mov", "jcxz"]);
+        // The copy reads a value nothing else reads: `calcRegisterCost` is
+        // nil and the pin hoists it with the sum.
+        assert_eq!(names(0), ["add", "mov", "jmp"]);
+        assert_eq!(names(1), ["jcxz"]);
     }
 
     /// `IsProfitableToHoist`: a sum made in a branch of a loop whose header
@@ -1562,6 +1605,72 @@ mod tests {
             run(true),
             (vec!["lea".to_owned(), "jmp".into()], vec!["mov".to_owned(), "mov".into(), "jcxz".into()])
         );
+    }
+
+    /// bintree's `insert` at -O1: the zero-extension of a hoisted 32-bit `lea`
+    /// (a register copy, `SUBREG_TO_REG`) stayed in the loop, and the load it
+    /// indexes with it after it. A copy costs the pin no register where it is
+    /// the loop's last reader of its source, so it moves, and the load; a copy
+    /// of a value the loop reads again holds a second register, and stays.
+    #[test]
+    fn test_a_copy_that_frees_its_source_is_made_before_the_loop_with_the_load_it_feeds() {
+        let block =
+            |at: i64, succ: Vec<i64>, insns: Vec<Arc<Insn>>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
+        let jump = |at: i64| insn(at, Operation::Jump, "jmp", vec![], vec![], vec![], vec![]);
+        let branch = |at: i64| insn(at, Operation::Branch, "jcxz", vec![], vec![], vec![], vec![]);
+        let cell = |base: u32, index: u32, scale: i64| {
+            Loc::Mem(Mem {
+                base: Some(Held { value: base, width: 4, offset: 0 }),
+                index: Some(Held { value: index, width: 4, offset: 0 }),
+                scale,
+                ..Mem::new(None, 4)
+            })
+        };
+        let run = |read_again: bool| {
+            let lea = insn(10, Operation::Address, "lea", vec![held(10)], vec![cell(2, 2, 2)], vec![10], vec![2, 2]);
+            let copy = insn(11, Operation::Move, "mov", vec![held(11)], vec![held(10)], vec![11], vec![10]);
+            let load = insn(12, Operation::Move, "mov", vec![held(12)], vec![cell(1, 11, 4)], vec![12], vec![1, 11]);
+            let mut inside = vec![lea, copy, load];
+            if read_again {
+                inside.push(insn(
+                    13,
+                    Operation::Move,
+                    "mov",
+                    vec![cell(1, 3, 4)],
+                    vec![held(10)],
+                    vec![],
+                    vec![1, 3, 10],
+                ));
+            }
+            inside.push(branch(14));
+            let mut body = LirBody::new(
+                "loop",
+                0,
+                vec![
+                    block(0, vec![1], vec![jump(0)]).into(),
+                    block(1, vec![1, 2], inside).into(),
+                    block(2, vec![], vec![insn(15, Operation::Return, "ret", vec![], vec![], vec![], vec![])]).into(),
+                ],
+                IndexMap::default(),
+                IndexMap::default(),
+            );
+            body.inputs = [1, 2, 3].into_iter().collect();
+            body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
+            let done = hoisted(&body, &RegisterClasses::m16());
+            let names = |at: usize| -> Vec<String> {
+                done.blocks[at]
+                    .insns
+                    .iter()
+                    .filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned))
+                    .collect()
+            };
+            (names(0), names(1))
+        };
+        let words = |names: &[&str]| names.iter().map(|one| (*one).to_owned()).collect::<Vec<_>>();
+        assert_eq!(run(false), (words(&["lea", "mov", "mov", "jmp"]), words(&["jcxz"])));
+        let (before, inside) = run(true);
+        assert_eq!(before, words(&["lea", "jmp"]), "a copy of a value read again stays");
+        assert!(inside.iter().filter(|one| *one == "mov").count() >= 2, "{inside:?}");
     }
 
     /// recfloat's `decay` at -O1: `fld1` was made on every trip of the loop
