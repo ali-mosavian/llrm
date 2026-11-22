@@ -1942,3 +1942,30 @@ b0:
     let (cost, threshold) = priced_params(text, 0, false, CallerSize::OptSize, Some(&arm), params, (6, true));
     assert!(cost < threshold, "{cost} against {threshold}");
 }
+
+/// KEEP-HINTED-CALLS prices bytes alone, so the trial that puts back the
+/// calls an `inlinehint` let in kept them in a computed-goto dispatch loop too:
+/// QuickrBasic `exec.c` -Os, `sng_math` 528.8M instructions against 288.7M with
+/// the calls inlined. A site hotter than its entry is the speed side's: the
+/// hint's yield stands there in the trial, and is not noted for it.
+#[test]
+fn a_hinted_call_in_a_loop_is_inlined_in_the_keep_calls_trial() {
+    use llrm_mir::tti::{InlinePolicy, SizeRule};
+    let policy = InlinePolicy {
+        by_size: Some(SizeRule { min_sites: 2, yields_to_negative_cost: false, yields_to_inlinehint: true }),
+        by_rate: 0,
+    };
+    let tti = PolicyOnly(policy, None, false);
+    let text = ROTATE.replace("@callee(i16 %x, i16 %n) nounwind", "@callee(i16 %x, i16 %n) nounwind inlinehint");
+    let inlined = |frequency, trial: bool| {
+        let params = InlineParams { compute_full_inline_cost: true, ..InlineParams::from_level(2) };
+        let price =
+            || priced_hot(&text, 1, false, CallerSize::OptSize, Some(&tti), params.clone(), (2, false), frequency);
+        let (cost, threshold) = if trial { crate::trial::with_kept_hinted_calls(price) } else { price() };
+        cost < threshold
+    };
+    assert!(inlined(None, false), "premise: the hint's yield lets the growing call in");
+    assert!(!inlined(None, true), "outside a loop the trial puts the call back");
+    assert!(!inlined(Some(0.5), true), "a site colder than its entry is not a loop's");
+    assert!(inlined(Some(4.0), true), "in a loop the call is inlined in the trial too");
+}

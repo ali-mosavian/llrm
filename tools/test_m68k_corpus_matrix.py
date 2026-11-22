@@ -20,6 +20,16 @@ Idx Name          Size      VMA       LMA       File off  Algn
 """
 
 
+class GccHosted(unittest.TestCase):
+    def test_gcc_and_clang_are_hosted_like_ours(self):
+        """m32_word_vectors -O1: ours (hosted since #10561) called the stub memset, the references built `-ffreestanding` inlined their fills."""
+        names = ("GCC_M68K", "LLRM_CC", "LLRM_PIN_CLANG", "LLVM_M68K")
+        with mock.patch.dict("os.environ", {name: "/x/" + name for name in names}):
+            for compiler in ("gcc", "clang"):
+                for command in mx.Tools().commands(compiler, "68000", "O2", "p.c", [], "out"):
+                    self.assertNotIn("-ffreestanding", command, compiler)
+
+
 class CorpusMatrix(unittest.TestCase):
     def setUp(self):
         # Several tests set LLRM_PIN_CLANG=/x/c and friends; left in os.environ they broke test_m68k_program_size run after them.
