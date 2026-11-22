@@ -1150,6 +1150,25 @@ impl TargetLowering {
             &[MVT::V8I8, MVT::V4I16, MVT::V2I32],
             Custom,
         );
+        // `addTypeForNEON`: `EXTRACT_VECTOR_ELT` is `Custom` for every NEON
+        // vector (`LowerEXTRACT_VECTOR_ELT`: the 128-bit types as they are, a
+        // 64-bit one widened first).
+        t.set_ops(
+            &[ExtractElement],
+            &[
+                MVT::V16I8,
+                MVT::V8I16,
+                MVT::V4I32,
+                MVT::V2I64,
+                MVT::V4F32,
+                MVT::V2F64,
+                MVT::V8I8,
+                MVT::V4I16,
+                MVT::V2I32,
+                MVT::V2F32,
+            ],
+            Custom,
+        );
         // `LowerMUL`: the widening multiplies (`SMULL`, `UMULL`); `v2i64` has
         // no multiply of its own.
         t.set_ops(&[Mul], &[MVT::V8I16, MVT::V4I32, MVT::V2I64, MVT::V4I16, MVT::V2I32], Custom);

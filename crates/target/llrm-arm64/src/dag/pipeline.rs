@@ -585,6 +585,7 @@ impl LegalizeHooks for Aarch64Lowering {
                 let lanes = u128::from(dag.value_type(node).lanes());
                 dag.constant(dag.operand(node, 2)).filter(|&lane| lane < lanes).map(|_| node)
             }
+            ISD::ExtractElement => super::vector::lower_extract_vector_elt(dag, node),
             ISD::BuildVector => match super::vector::lower_build_vector(dag, node) {
                 Some(done) => Some(done),
                 // The pin's `SDValue()` for a constant that is no splat: the
