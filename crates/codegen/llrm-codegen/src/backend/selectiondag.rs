@@ -185,6 +185,7 @@ pub mod schedule;
 pub mod select;
 pub mod select_api;
 pub mod setcc_extreme;
+pub mod setcc_shift;
 pub mod switchcg;
 pub mod target_calling;
 #[cfg(test)]

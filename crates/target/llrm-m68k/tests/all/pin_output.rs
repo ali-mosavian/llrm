@@ -73,6 +73,7 @@ const SOURCE_ORDER: Options = Options {
     shared_cse: false,
     direct_copies: false,
     shared_licm: false,
+    licm_trial: false,
     shared_prelude: false,
     tail_duplicate: false,
     rematerialize_arguments: false,
@@ -723,14 +724,41 @@ fn run_reading_zero(ir: &str) -> Option<i32> {
     code
 }
 
+/// A compare with a folded volatile load cannot run again, and its second
+/// reader takes the value of a later `scc`: the reader must follow the second
+/// compare, so the first compare's codes are saved across it (`move %sr`, `move
+/// %ccr`), whatever order the scheduler gives the independent instructions.
+/// Returns 13 with `zero` 0.
+#[test]
+fn the_codes_of_a_volatile_compare_are_saved_across_a_later_compare_it_depends_on() {
+    let ir = r#"@zero = external constant i8, align 1
+define i16 @f() {
+  %1 = load volatile i8, ptr @zero, align 1
+  %c1 = icmp eq i8 %1, 5
+  %2 = load volatile i8, ptr @zero, align 1
+  %c2 = icmp eq i8 %2, 7
+  %s2 = select i1 %c2, i8 3, i8 4
+  %s1 = select i1 %c1, i8 %s2, i8 9
+  %t = add i8 %s1, %s2
+  %r = zext i8 %t to i16
+  ret i16 %r
+}
+"#;
+    let text = compiled(ir, Options::default());
+    assert!(text.contains("move.w\t%sr, %d") && text.contains(", %ccr"), "{text}");
+    assert_eq!(run_reading_zero(ir).expect("qemu"), 13);
+}
+
 /// Two compares, each read by two `scc`, with the second compare between them:
 /// the codes of the first were gone when its second reader came (the compare
 /// has a folded volatile load, so it cannot run again), and the function was
 /// rejected ("the condition codes of an arithmetic result are read past an
 /// instruction that sets them"). The pin saves the codes as `copyPhysReg` does.
-/// Seeds 23, 30, 41, 57, 62, 66 of the differential driver.
+/// Seeds 23, 30, 41, 57, 62, 66 of the differential driver. Since #10588's
+/// schedule keeps each compare's readers beside it, no save is needed: the run
+/// (143) is the check, and the save is pinned by the test above.
 #[test]
-fn the_codes_of_a_compare_that_cannot_run_again_are_saved_across_the_next_one() {
+fn two_compares_each_read_by_two_scc_return_143() {
     let ir = r#"@zero = external constant i8, align 1
 define i16 @f() {
   %1 = load volatile i8, ptr @zero, align 1
@@ -773,8 +801,7 @@ define i16 @f() {
   ret i16 %33
 }
 "#;
-    let text = compiled(ir, Options::default());
-    assert!(text.contains("move.w\t%sr, %d") && text.contains("move.w\t%d") && text.contains(", %ccr"), "{text}");
+    compiled(ir, Options::default());
     // the same function built for x86 by the pin's clang returns 143
     if let Some(got) = run_reading_zero(ir) {
         assert_eq!(got, 143);

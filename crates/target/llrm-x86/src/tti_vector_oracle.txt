@@ -2543,3 +2543,51 @@ size-latency extract 16xptr 12 2
 size-latency extract 16xptr 13 2
 size-latency extract 16xptr 14 2
 size-latency extract 16xptr 15 2
+throughput insert 4xi32 0 vector 3
+throughput insert 4xi32 0 poison 1
+throughput extract 4xi32 0 1
+throughput insert 4xi32 1 vector 3
+throughput insert 4xi32 1 poison 3
+throughput extract 4xi32 1 2
+throughput insert 4xi32 2 vector 3
+throughput insert 4xi32 2 poison 3
+throughput extract 4xi32 2 2
+throughput insert 4xi32 3 vector 3
+throughput insert 4xi32 3 poison 3
+throughput extract 4xi32 3 2
+latency insert 4xi32 0 vector 3
+latency insert 4xi32 0 poison 1
+latency extract 4xi32 0 1
+latency insert 4xi32 1 vector 3
+latency insert 4xi32 1 poison 3
+latency extract 4xi32 1 2
+latency insert 4xi32 2 vector 3
+latency insert 4xi32 2 poison 3
+latency extract 4xi32 2 2
+latency insert 4xi32 3 vector 3
+latency insert 4xi32 3 poison 3
+latency extract 4xi32 3 2
+code-size insert 4xi32 0 vector 3
+code-size insert 4xi32 0 poison 1
+code-size extract 4xi32 0 1
+code-size insert 4xi32 1 vector 3
+code-size insert 4xi32 1 poison 3
+code-size extract 4xi32 1 2
+code-size insert 4xi32 2 vector 3
+code-size insert 4xi32 2 poison 3
+code-size extract 4xi32 2 2
+code-size insert 4xi32 3 vector 3
+code-size insert 4xi32 3 poison 3
+code-size extract 4xi32 3 2
+size-latency insert 4xi32 0 vector 3
+size-latency insert 4xi32 0 poison 1
+size-latency extract 4xi32 0 1
+size-latency insert 4xi32 1 vector 3
+size-latency insert 4xi32 1 poison 3
+size-latency extract 4xi32 1 2
+size-latency insert 4xi32 2 vector 3
+size-latency insert 4xi32 2 poison 3
+size-latency extract 4xi32 2 2
+size-latency insert 4xi32 3 vector 3
+size-latency insert 4xi32 3 poison 3
+size-latency extract 4xi32 3 2

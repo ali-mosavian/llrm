@@ -25,7 +25,7 @@ fn run() -> i32 {
     let mut output = None;
     let mut input = None;
     let mut dump = None;
-    let mut model = CodeModel::Small;
+    let mut model = CodeModel::Auto;
     let mut policy = Policy::default();
     let mut estimates = None;
     let mut arguments = std::env::args().skip(1);

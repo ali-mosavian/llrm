@@ -1676,3 +1676,19 @@ def test_a_cargo_lock_missing_a_declared_dependency_fails_the_static_check(tmp_p
     assert gate.products_main(tmp_path) == 0, "the premise: a current lock passes"
     (tmp_path / "Cargo.lock").write_text(current.replace('dependencies = [\n "b",\n]\n', ""))
     assert gate.products_main(tmp_path) == 1
+
+
+def test_a_change_to_a_shared_codegen_crate_runs_the_m68k_pinned_output_suite():
+    """#10588 changed a shared crate, merged green, and turned m68k's `pin_output` red: `crate_tests` globbed `tests/*.rs` and
+    never named m68k's `tests/all/main.rs` target, so no gate ran it."""
+    cfg, pkgs = gate.load(), gate.packages()
+    for changed in ("crates/codegen/llrm-codegen/src/x.rs", "crates/opt/llrm-transforms/src/x.rs", "crates/ir/llrm-mir/src/x.rs"):
+        p = gate.plan([changed])
+        command = gate.commands(p, cfg, pkgs)["crate-tests"]
+        assert "-p llrm-m68k --test all" in command and "pin_output::" in command, (changed, command)
+
+
+def test_a_change_to_a_crate_m68k_does_not_build_on_does_not_run_its_pinned_output_suite():
+    cfg, pkgs = gate.load(), gate.packages()
+    p = gate.plan(["crates/target/llrm-z80/src/x.rs"])
+    assert "llrm-m68k" not in gate.commands(p, cfg, pkgs)["crate-tests"]

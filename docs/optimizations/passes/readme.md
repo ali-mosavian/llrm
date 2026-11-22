@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 319 documented, 5 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 321 documented, 5 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -244,6 +244,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | mergestores | Adjacent stores become wider ones: LLVM's `DAGCombiner::mergeConsecutiveStores` for stores of constants (`tryStoreMergeOfConstants`, `merged_constants`) and of loaded values (`tryStoreMergeOfLoads`, `merged_copies`). | In `loopidioms::Merge`, after the scalar passes have settled. | [mergestores](mergestores.md) |
 | mirror | Turns an index that only some trips step into a pointer that steps with it, so a target whose addresses take no scale `k` does not shift the index on every access of `base + k * i`. | Not a pass: `crate::lsr` calls `found` and `applied` on each loop before | [mirror](mirror.md) |
 | mldstmotion | Stores to one address on both arms of a diamond become one store below it, as LLVM's `MergedLoadStoreMotion` (`mldst-motion<no-split-footer-bb>`). | Named by `pipeline`. | [mldstmotion](mldstmotion.md) |
+| mosindexiv | A pointer recurrence whose step and offset fit a byte becomes a base plus a byte counter. | [`crate::pipeline`](pipeline.md) runs it before the late `indvars`, where | [mosindexiv](mosindexiv.md) |
 | narrowcycle | A cycle of integer operations through a phi whose values only matter at a narrower native width is carried at that width. | Named by `indvars`. | [narrowcycle](narrowcycle.md) |
 | narrowiv | A loop counter whose range provably fits a native integer width becomes a counter of that width. | [`crate::indvars`](indvars.md) runs `narrowed_in` after LFTR where | [narrowiv](narrowiv.md) |
 | narrowrange | An unsigned divide or remainder whose operands ScalarEvolution proves narrow is done in the narrow type. | After `remidiom`, in the strength slot ([`crate::pipeline::strength_slot`](pipeline.md)), | [narrowrange](narrowrange.md) |
@@ -290,6 +291,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | slpphi | `SLPVectorizer`'s phi seeds: the phis of a block that take alike values are one vector phi when the tree of the values they take pays. | In `slpvectorize`, before the store chains (`vectorizeChainsInBlock` | [slpphi](slpphi.md) |
 | slpreduction | `SLPVectorizer`'s horizontal reductions: a chain of one associative integer operation over loads (or extensions of loads) of consecutive cells becomes vector loads and one `llvm.vector.reduce.*`. | With the store chains, at the pin's `slp-vectorizer` slot. | [slpreduction](slpreduction.md) |
 | slpschedule | `BlockScheduling` for a tree of registers: the order the instructions of the block stand in once a bundle is one instruction. | Under `slptree` (`schedulable_phis`, `emit`). | [slpschedule](slpschedule.md) |
+| slpseeds | `SLPVectorizer`'s roots that are no chain, phi or reduction: the operands of the stores of a block, and the instructions read once. | In `slpvectorize`, after the store chains, the reductions and the compares: | [slpseeds](slpseeds.md) |
 | slptree | `SLPVectorizer`'s tree: a window of consecutive stores, and the loads, arithmetic, casts, compares, selects and `llvm.fmuladd` calls that make their values, become vector code when the cost model says the vectors are cheaper. | Under `slpvectorize`, on a window of stores whose values are not all | [slptree](slptree.md) |
 | slpvectorize | `SLPVectorizer`'s store chains: consecutive stores of one scalar type become vector stores when the cost model says the vector is cheaper. | At the pin's `slp-vectorizer` slot (`PassBuilderPipelines.cpp` l.1455). | [slpvectorize](slpvectorize.md) |
 | spares | Keeps what the optimizer proved of a fixed-cell load for instruction selection: each write that leaves the load's bytes as they were, as `!llrm.spares` on the load, so the spiller can rematerialize the load past those writes. | Once, last in [`crate::pipeline`](pipeline.md) with `homes`, so the instruction ids it | [spares](spares.md) |

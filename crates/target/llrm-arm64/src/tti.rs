@@ -524,7 +524,11 @@ pub(crate) fn vector_divide_by_constant_cost(
         return None;
     }
     let (_, lane) = vector_pieces(ty)?;
-    if lane == 64 || u64::from(lane) * u64::from(ty.count) < 64 {
+    // A power of two needs no multiply-high: a 64-bit lane is priced there
+    // (`usra` and one `sshr` for a quotient, `LT.second.getScalarType() ==
+    // i64`).
+    let signed_power_of_two = signed && (second.power_of_two || second.negated_power_of_two);
+    if (lane == 64 && !signed_power_of_two) || u64::from(lane) * u64::from(ty.count) < 64 {
         return None;
     }
     let price = |op| vector_arithmetic_cost(op, ty, kind).map(|cost| cost.value);
@@ -533,13 +537,14 @@ pub(crate) fn vector_divide_by_constant_cost(
         // and `usra` (two shifts), the remainder's multiply and subtract not
         // priced; a power of two is `cmlt`, `usra` and `sshr` (a remainder:
         // `usra`, `and`, `sub`).
-        let (mul, add, shr) = (price(ArithOp::Mul)?, price(ArithOp::Add)?, price(ArithOp::AShr)?);
+        let (add, shr) = (price(ArithOp::Add)?, price(ArithOp::AShr)?);
         let usra = 2 * shr;
-        if second.power_of_two || second.negated_power_of_two {
+        if signed_power_of_two {
             let negate = if second.negated_power_of_two && op == ArithOp::SDiv { shr } else { 0 };
-            return Some(Cost::of(negate + usra + if op == ArithOp::SDiv { 2 * shr } else { 2 * add }));
+            let quotient = if lane == 64 { shr } else { 2 * shr };
+            return Some(Cost::of(negate + usra + if op == ArithOp::SDiv { quotient } else { 2 * add }));
         }
-        return Some(Cost::of(2 * mul + add + shr + usra));
+        return Some(Cost::of(2 * price(ArithOp::Mul)? + add + shr + usra));
     }
     if second.power_of_two {
         return price(if op == ArithOp::UDiv { ArithOp::LShr } else { ArithOp::And }).map(Cost::of);
@@ -808,6 +813,17 @@ impl Tti for AArch64 {
     /// per-target clock model (2026-11-20).
     fn unroll_milliclocks_per_byte(&self) -> i64 {
         self.unroll_rate
+    }
+
+    /// DEVIATE UP1-O3 (owner arm64, exit 2026-12-21): at -O3 the pin's
+    /// threshold alone decides a full unroll. matmul -O3: the outer loop of
+    /// the checksum nest saves 157 clk for 370 B, under the 500 mclk/B rate,
+    /// was kept rolled where the pin unrolls all six loops (+9.8% clocks).
+    fn unroll_milliclocks_per_byte_at(
+        &self,
+        opt_level: u32,
+    ) -> i64 {
+        if opt_level >= 3 { 0 } else { self.unroll_rate }
     }
 
     /// DEVIATE IND-MASK (arm64, owner w15, exit 2026-11-30): see the trait.
@@ -1179,8 +1195,12 @@ impl Tti for AArch64 {
         if ty.lane.is_float() {
             return llrm_mir::tti::per_lane_insert_overhead(self, ty, lanes, cost_kind);
         }
-        crate::tti_vector::scalarization_overhead(ty, true, false, cost_kind)
-            .map(|_| Cost::of(lanes.len() as i64 * crate::tti_vector::INSERT_EXTRACT_BASE_COST))
+        crate::tti_vector::scalarization_overhead(ty, true, false, cost_kind).map(|_| {
+            Cost::of(
+                lanes.len() as i64
+                    * if cost_kind == CostKind::CodeSize { 1 } else { crate::tti_vector::INSERT_EXTRACT_BASE_COST },
+            )
+        })
     }
 
     fn scalarization_overhead(
@@ -1602,6 +1622,22 @@ impl Tti for AArch64 {
     ) -> i64 {
         let high = min & !0xfff;
         if min >> 12 == max >> 12 && self.is_legal_add_immediate(high) { high } else { 0 }
+    }
+
+    /// GCC's backward threader grows a path a block at a time and asks ranger
+    /// what every way into a block knows: queens -O2's column loop skips its
+    /// guard on the path that ran the inner loop (`max-fsm-thread-length` is
+    /// 10; 3 here).
+    fn backward_threading_chain(&self) -> usize {
+        3
+    }
+
+    /// DEVIATE LASTCALL-COLD (gcc `-finline-functions-called-once`): a static
+    /// function with one caller is inlined at -Os wherever its call sits, as
+    /// gcc does; the pin drops the bonus at a cold site (`ColdCallSiteRelFreq`
+    /// 2%), so the cases of a large switch each keep their callee out.
+    fn inline_last_call_in_cold_site(&self) -> bool {
+        true
     }
 
     /// Integer comparisons are implemented with ADDS/SUBS:

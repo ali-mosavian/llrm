@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/slpvectorize.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/slpvectorize.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/slpvectorize.rs sha256:85a73224e6bd16c41cf76fc2a1206ec303f168f062d132e9269524c3555cb434 -->
+<!-- src: crates/opt/llrm-transforms/src/slpvectorize.rs sha256:d6254cfe6e3f45a75002989108a0e9312290152dfd5db365c2358f4da9710dec -->
 
 # slpvectorize
 
@@ -35,7 +35,8 @@ At the pin's `slp-vectorizer` slot (`PassBuilderPipelines.cpp` l.1455).
 `pipeline` (Late).
 
 ## Example
-Eighty adjacent `store i16 1824` become ten `store <8 x i16>` of the constant (the const_stores test).
+Eighty adjacent `store i16 1824` become ten `store <8 x i16>` of the
+constant (the const_stores test).
 
 ```text
 store i16 1824, ptr %p0 ... store i16 1824, ptr %p79

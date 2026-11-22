@@ -377,6 +377,24 @@ impl Tti for Mos6502 {
         key(a) < key(b)
     }
 
+    /// A 16-bit counter step is three instructions: a register stepped each
+    /// trip for a use that runs on a few pays that many more.
+    fn lsr_conditional_use_step_cost(&self) -> u32 {
+        3
+    }
+
+    /// A 16-bit compare of the exit test costs two `cmp`s against zero's `ora`:
+    /// the bits of its constant do not make a formula worse (the countdown
+    /// counter that avoids it costs a second counter).
+    fn lsr_exit_compare_immediate_is_free(&self) -> bool {
+        true
+    }
+
+    /// llvm-mos: `n8` makes a 16-bit counter illegal, and LFTR still tests the exit on it.
+    fn allow_illegal_integer_iv(&self) -> bool {
+        true
+    }
+
     fn address_index_max(&self) -> Option<u64> {
         Some(u64::from(u8::MAX))
     }
@@ -385,6 +403,12 @@ impl Tti for Mos6502 {
     /// only) whose range fits a byte is a byte counter.
     fn narrows_counters(&self) -> bool {
         true
+    }
+
+    /// `MOSIndexIV`: a pointer recurrence with a byte step and offset is a
+    /// base plus a byte counter, as llvm-mos does before its late IndVars.
+    fn index_iv_width(&self) -> Option<u32> {
+        Some(8)
     }
 
     /// `shouldDropLSRSolutionIfLessProfitable`: a loop keeps its code where
@@ -587,6 +611,34 @@ impl Tti for Mos6502 {
             (false, true) => (0..=255).contains(&offset),
             (true, true) => false,
             _ => (0..=0xFFFF).contains(&offset),
+        }
+    }
+
+    // llvm-mos's `isLegalAddressingMode`, which reads the widths of the base and
+    // the scaled register: a byte register is the `x` or `y` of an absolute
+    // indexed (`lda g,x`) or indirect indexed (`lda (zp),y`) address, so a
+    // 16-bit base and a byte index fold. Widths not known (0) answer as the
+    // untyped hook does.
+    fn is_legal_addressing_mode_typed(
+        &self,
+        _addr_space: u32,
+        _access_bytes: u64,
+        gv: bool,
+        offset: i64,
+        base: bool,
+        scale: i64,
+        base_bits: u32,
+        scale_bits: u32,
+    ) -> bool {
+        let byte = |bits: u32| bits == 8;
+        match scale {
+            // Absolute indexed: a global and a byte register.
+            0 if base && byte(base_bits) => true,
+            // Absolute indexed on the scaled register, or indirect indexed: a
+            // pointer cell and a byte index, whichever register is the byte.
+            1 if !base && byte(scale_bits) => true,
+            1 if base && !gv && offset == 0 && (byte(base_bits) || byte(scale_bits)) => true,
+            _ => self.is_legal_addressing_mode(gv, offset, base, scale),
         }
     }
 

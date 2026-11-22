@@ -1,6 +1,7 @@
-//! `tst.l (%a0)` tests the long at the address, not `%a0`: a `tst` whose operand is an address register
-//! indirect was dropped after `move.l (4,%sp),%a0` (which sets no codes), so `seq` read stale codes.
-//! `if (*p == 0)` returned the wrong value on every CPU and level.
+//! `tst.l (%a0)` tests the long at the address, not `%a0`: a `tst` whose
+//! operand is an address register indirect was dropped after `move.l
+//! (4,%sp),%a0` (which sets no codes), so `seq` read stale codes. `if (*p ==
+//! 0)` returned the wrong value on every CPU and level.
 
 use llrm_m68k::driver::{Level, assembly, cpu_of};
 

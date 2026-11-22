@@ -593,6 +593,27 @@ pub fn dup_combine(
     Some(dag.get_node(ISD::ExtractSubvector, vt, &[wide, zero]))
 }
 
+/// `LowerEXTRACT_VECTOR_ELT`: a constant lane in range of a 128-bit vector is
+/// as it is (`UMOV`, `DUP`); a 64-bit vector is widened to 128 bits first
+/// (`WidenVector`) and the lane taken from that, in the same lane. Any other
+/// index is declined: the legalizer goes through the stack.
+pub fn lower_extract_vector_elt(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let vector = dag.operand(node, 0);
+    let vt = dag.value_type(vector);
+    dag.constant(dag.operand(node, 1)).filter(|&lane| lane < u128::from(vt.lanes()))?;
+    if vt.size_in_bits() == 128 {
+        return Some(node);
+    }
+    let wide_vt = double_lanes(vt)?;
+    let undef = dag.get_poison(vt.element());
+    let rest = dag.get_node(ISD::BuildVector, vt, &vec![undef; vt.lanes() as usize]);
+    let wide = dag.get_node(ISD::ConcatVectors, wide_vt, &[vector, rest]);
+    Some(dag.get_node(ISD::ExtractElement, dag.value_type(node), &[wide, dag.operand(node, 1)]))
+}
+
 /// `getDoubleNumVectorElementsVT`: the 128-bit vector of a 64-bit one's lanes.
 fn double_lanes(vt: EVT) -> Option<EVT> {
     Some(EVT::Simple(match vt {

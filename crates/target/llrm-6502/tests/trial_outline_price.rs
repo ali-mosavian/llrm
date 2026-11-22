@@ -1,6 +1,7 @@
 //! The unroll trial prices the finished text, outliner included.
-//! Ten trips: with the table index in `x` or `y` the seven-trip loop is 2 B
-//! smaller rolled and is rightly put back.
+//! Stride 2, ten trips: a loop with a byte table index (`lda table,x`; unit stride, or any stride once
+//! MosIndexIv gives it a byte index) is smaller rolled beyond about ten trips, rightly put back (2026-11-22:
+//! twelve stride-2 trips went from kept to +11 B put back). At ten the finished text is -5 B, the model +16 B.
 //! static_pointers at -Os (seven trips): the unrolled loop was 174 modelled
 //! bytes against 181 rolled (kept), and 165 rolled once `lda table,x` replaced
 //! the pointer sequence (put back); the finished images are 148 B unrolled
@@ -21,20 +22,21 @@ mod common;
 use common::pipeline::datalayout;
 use llrm_6502::driver::{Level, Request, assembly};
 
-/// `for (i = 0; i < 10; i++) report(table[i])`: ten calls of the same shape.
-const REPORTS: &str = "@table = internal constant [10 x i8] c\"\\0B\\0C\\1E\\06\\28\\0D\\FF\\05\\09\\21\"
+/// `for (i = 0; i < 10; i++) report(table[2 * i])`: ten calls of the same shape.
+const REPORTS: &str = "@table = internal constant [49 x i8] c\"\\0B\\0C\\1E\\06\\28\\0D\\FF\\05\\09\\21\\02\\03\\04\\07\\08\\0A\\0E\\0F\\10\\11\\12\\13\\14\\16\\17\\18\\19\\1A\\1B\\1C\\1D\\1E\\1F\\20\\21\\22\\23\\24\\25\\26\\27\\29\\2A\\2B\\2C\\2D\\2E\\2F\\30\"
 declare void @report(i32)
 define i16 @main() {
 entry:
   br label %loop
 loop:
   %i = phi i16 [ 0, %entry ], [ %next, %loop ]
-  %p = getelementptr [10 x i8], ptr @table, i16 0, i16 %i
+  %m = mul i16 %i, 2
+  %p = getelementptr [49 x i8], ptr @table, i16 0, i16 %m
   %v = load i8, ptr %p
   %w = sext i8 %v to i32
   call void @report(i32 %w)
   %next = add i16 %i, 1
-  %done = icmp eq i16 %next, 7
+  %done = icmp eq i16 %next, 10
   br i1 %done, label %exit, label %loop
 exit:
   ret i16 0
