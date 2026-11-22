@@ -10,7 +10,9 @@ use llrm_6502::driver::{Level, Request, assembly};
 use llrm_6502::select::text_compiles;
 
 /// `x * 11` has two selections, the call of `__mulsi3` and the shifts and
-/// adds; the second is kept. Writing each once is 2 texts (3 before the cache).
+/// adds; the second is kept. Writing each once is 2 texts (3 before the cache);
+/// its two dead carry saves compile it again with them dropped after allocation
+/// (`save_drop_trial`), 4.
 #[test]
 fn the_kept_selection_of_a_multiply_trial_is_written_once() {
     let ir = format!(
@@ -20,5 +22,5 @@ fn the_kept_selection_of_a_multiply_trial_is_written_once() {
     let before = text_compiles();
     let text = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
     assert!(!text.contains("__mulsi3"), "the shifts were not kept:\n{text}");
-    assert_eq!(text_compiles() - before, 2, "texts written for one function");
+    assert_eq!(text_compiles() - before, 4, "texts written for one function");
 }
