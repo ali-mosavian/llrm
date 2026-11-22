@@ -200,13 +200,12 @@ const REFUSED: &[(&str, &str)] = &[
     ("lshr", "custom lowering of Srl"),
     ("ashr", "custom lowering of Sra"),
     // `CLZ`, `RBIT` and the saturating arithmetic have no instruction; `CNT`
-    // is bytes only, so `ctpop`, `cttz` and `bitreverse` of wider lanes have no pattern; the
-    // `REV16/32/64` of `bswap` have no instruction.
+    // is bytes only, so `ctpop`, `cttz` and `bitreverse` of wider lanes have no pattern.
     ("ctlz", "CannotSelect(\"CtLz\")"),
     ("cttz", "CannotSelect(\"CtTz\")"),
     ("ctpop", "CannotSelect(\"CtPop\")"),
     ("bitreverse", "CannotSelect(\"BitReverse\")"),
-    ("bswap", "machine opcode REV"),
+    ("bswap", "bswap must be an even number of bytes"),
     // The conversions of 16-bit lanes.
     ("uitofp_fptoui", "CannotSelect(\"FpToUInt\")"),
     ("sitofp_fptosi", "CannotSelect(\"FpToSInt\")"),
