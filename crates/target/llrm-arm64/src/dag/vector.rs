@@ -843,6 +843,14 @@ fn reduction_node(
 ) -> SDValue {
     let vector = dag.operand(node, 0);
     let reduced = dag.get_node(ISD::Target(opcode), dag.value_type(vector), &[vector]);
+    // DEVIATE VEC9 (owner llrm-arm64-vec, exit 2026-11-24): the pin takes lane 0
+    // of a 64-bit result by `EXTRACT_VECTOR_ELT` of the widened vector; no 64-bit
+    // vector is extracted from here, so the register is read whole (`fmov`), the
+    // same instruction the pin ends on.
+    if dag.value_type(vector).size_in_bits() == 64 {
+        let whole = dag.get_node(ISD::BitCast, EVT::I64, &[reduced]);
+        return dag.get_any_ext_or_trunc(whole, dag.value_type(node));
+    }
     let lane = dag.get_constant(0, EVT::I64);
     dag.get_node(ISD::ExtractElement, dag.value_type(node), &[reduced, lane])
 }
@@ -865,16 +873,20 @@ fn bitwise_reduce(
     let vector_vt = dag.value_type(vector);
     let element = vector_vt.element();
     let lanes = vector_vt.lanes();
-    let wide = EVT::Simple(MVT::V2I64);
-    let quad = if vector_vt == wide { vector } else { dag.get_node(ISD::BitCast, wide, &[vector]) };
-    let lane = |dag: &mut SelectionDAG, at: u128| {
-        let index = dag.get_constant(at, EVT::I64);
-        dag.get_node(ISD::ExtractElement, EVT::I64, &[quad, index])
+    // A 64-bit vector is the one `i64` already; a 128-bit one is two, combined.
+    let (mut scalar, mut shift) = if vector_vt.size_in_bits() == 64 {
+        (dag.get_node(ISD::BitCast, EVT::I64, &[vector]), lanes / 2)
+    } else {
+        let wide = EVT::Simple(MVT::V2I64);
+        let quad = if vector_vt == wide { vector } else { dag.get_node(ISD::BitCast, wide, &[vector]) };
+        let lane = |dag: &mut SelectionDAG, at: u128| {
+            let index = dag.get_constant(at, EVT::I64);
+            dag.get_node(ISD::ExtractElement, EVT::I64, &[quad, index])
+        };
+        let (low, high) = (lane(dag, 0), lane(dag, 1));
+        // `NumElems / 2` of the 64-bit half.
+        (dag.get_node(base, EVT::I64, &[low, high]), lanes / 4)
     };
-    let (low, high) = (lane(dag, 0), lane(dag, 1));
-    let mut scalar = dag.get_node(base, EVT::I64, &[low, high]);
-    // `NumElems / 2` of the 64-bit half.
-    let mut shift = lanes / 4;
     while shift > 0 {
         let amount = dag.get_constant(u128::from(shift * element.size_in_bits()), EVT::I64);
         let shifted = dag.get_node(ISD::Srl, EVT::I64, &[scalar, amount]);
