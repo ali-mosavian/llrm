@@ -615,6 +615,14 @@ pub struct Tuning {
     /// `inlinehint` callee (C's `inline`) the pin's raised threshold (325)
     /// passes: its cost under that is the verdict.
     pub inline_size_guard_yields_to_inlinehint: bool,
+    /// DEVIATE SZ1-HOT (owner x86-m32-b, exit 2026-12-05): with
+    /// `inline_size_guard_at_size`, the bound stands down at a site the pin
+    /// calls locally hot (`HotCallSiteRelFreq`: 60 times the caller's entry,
+    /// where `updateThreshold` raises an `optsize` caller's threshold) when the
+    /// inline adds at most this percent of the call sequence it removes
+    /// (QuickrBasic `pixmem.c` `blend` in `pm_box`'s pixel loop: `q45d25` +62%
+    /// clocks). None: the bound holds there too.
+    pub inline_size_hot_growth_percent: Option<i64>,
     /// DEVIATE MEMSET-GAP (owner llrm-target-x86-m16-b, exit 2026-11-27): at
     /// size, `MemCpyOpt` joins two memsets of one byte whose gap later stores
     /// of another value overwrite whole, into one memset placed before the
@@ -1025,6 +1033,7 @@ impl Tuning {
         inline_size_guard_at_o1: false,
         inline_size_guard_single_site: false,
         inline_size_guard_yields_to_inlinehint: false,
+        inline_size_hot_growth_percent: None,
         memset_gap_merge_at_size: false,
         inline_chain_trial: false,
         lftr_size_budget: 4,
