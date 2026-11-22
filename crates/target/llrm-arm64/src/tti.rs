@@ -1624,6 +1624,14 @@ impl Tti for AArch64 {
         if min >> 12 == max >> 12 && self.is_legal_add_immediate(high) { high } else { 0 }
     }
 
+    /// GCC's backward threader grows a path a block at a time and asks ranger
+    /// what every way into a block knows: queens -O2's column loop skips its
+    /// guard on the path that ran the inner loop (`max-fsm-thread-length` is
+    /// 10; 3 here).
+    fn backward_threading_chain(&self) -> usize {
+        3
+    }
+
     /// DEVIATE LASTCALL-COLD (gcc `-finline-functions-called-once`): a static
     /// function with one caller is inlined at -Os wherever its call sits, as
     /// gcc does; the pin drops the bonus at a cold site (`ColdCallSiteRelFreq`
