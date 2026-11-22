@@ -2,6 +2,7 @@
 
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import time
@@ -281,3 +282,16 @@ class LlrmBinIsReadOnce(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_a_compile_by_llrm_cc_gets_the_pinned_m16_clang_when_the_environment_names_none(monkeypatch):
+    """8 tests of test_bench.py failed with "regparm (an `inreg` parameter) is not translated yet": LLRM_CLANG_M16 was unset, so llrm-cc ran the pin's clang on a real-mode compile."""
+    seen = {}
+    monkeypatch.delenv("LLRM_CLANG_M16", raising=False)
+    monkeypatch.setattr(dosbatch.llrmbin, "cc_environment", lambda: {"LLRM_CLANG_M16": "/pinned/clang"})
+    monkeypatch.setattr(dosbatch.cpulimit, "run", lambda command, limit, **kwargs: seen.update(env=kwargs.get("env")) or subprocess.CompletedProcess(command, 0, "", ""))
+    dosbatch._host(["/x/llrm-cc", "a.c"])
+    assert seen["env"]["LLRM_CLANG_M16"] == "/pinned/clang"
+    monkeypatch.setenv("LLRM_CLANG_M16", "/mine/clang")
+    dosbatch._host(["/x/llrm-cc", "a.c"])
+    assert seen["env"]["LLRM_CLANG_M16"] == "/mine/clang"
