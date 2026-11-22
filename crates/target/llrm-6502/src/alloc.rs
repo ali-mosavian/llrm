@@ -1279,6 +1279,10 @@ impl Builder {
             for r in &lanes {
                 self.require(*r, Class(Class::X | Class::Y | Class::M))?;
             }
+            // only the test against zero is selected (`lower_long_equality`)
+            if !rhs.iter().all(|operand| matches!(operand, Operand::Imm(0))) {
+                return Err(Unsupported("a long equality against a value that is not zero".into()));
+            }
             let mut operands = vec![Operand::Def(Reg::Phys(reg::FLAGS)), Operand::Def(acc)];
             operands.extend(lanes.iter().map(|r| Operand::Use(*r)));
             operands.extend(rhs);
@@ -5074,11 +5078,10 @@ fn emit_with<const STACK: bool>(
                         }
                     }
                 }
-                // Z only when all four bytes are equal: against zero `lda; ora;
-                // ora; ora` (the bytes in x and y last, behind a `bne`,
-                // as `ora` has no register form), else one `lda; cmp; bne` per
-                // byte
-                (Kind::Op("CMPZ32"), operands) => {
+                // Z only when all four bytes are zero: `lda; ora; ora; ora`,
+                // the bytes in x and y last, behind a
+                // `bne` (`ora` has no register form)
+                (Kind::Op("CMPZ32"), _) => {
                     made += 1;
                     let load = |out: &mut Asm, r: RegId| match r {
                         r if r == reg::X => out.push_str("  txa\n"),
@@ -5087,27 +5090,14 @@ fn emit_with<const STACK: bool>(
                     };
                     let index = |r: RegId| r == reg::X || r == reg::Y;
                     let lanes = [regs[2], regs[3], regs[4], regs[5]];
-                    if operands[6..].iter().all(|operand| matches!(operand, Operand::Imm(0))) {
-                        let cells: Vec<RegId> = lanes.iter().copied().filter(|r| !index(*r)).collect();
-                        load(&mut out, cells[0]);
-                        for r in &cells[1..] {
-                            writeln!(out, "  ora {}", register_name(*r)).unwrap();
-                        }
-                        for r in lanes.iter().copied().filter(|r| index(*r)) {
-                            writeln!(out, "  bne _cz{made}").unwrap();
-                            load(&mut out, r);
-                        }
-                    } else {
-                        for (at, lane) in lanes.iter().enumerate() {
-                            load(&mut out, *lane);
-                            match &operands[6 + at] {
-                                Operand::Imm(value) => writeln!(out, "  cmp #{value}").unwrap(),
-                                _ => writeln!(out, "  cmp {}", register_name(regs[6 + at])).unwrap(),
-                            }
-                            if at < 3 {
-                                writeln!(out, "  bne _cz{made}").unwrap();
-                            }
-                        }
+                    let cells: Vec<RegId> = lanes.iter().copied().filter(|r| !index(*r)).collect();
+                    load(&mut out, cells[0]);
+                    for r in &cells[1..] {
+                        writeln!(out, "  ora {}", register_name(*r)).unwrap();
+                    }
+                    for r in lanes.iter().copied().filter(|r| index(*r)) {
+                        writeln!(out, "  bne _cz{made}").unwrap();
+                        load(&mut out, r);
                     }
                     writeln!(out, "_cz{made}:").unwrap();
                 }

@@ -881,6 +881,7 @@ fn lower_setcc(
     }
     if dag.value_type(op0) == EVT::I32
         && matches!(cc, CondCode::SetEq | CondCode::SetNe)
+        && dag.constant(op1) == Some(0)
         && super::function::long_steps()
     {
         let flags = lower_long_equality(dag, cc, op0, op1);
@@ -905,15 +906,14 @@ fn lower_setcc(
     Some(dag.get_node(mosisd::SETCC, EVT::I8, &[code, flags]))
 }
 
-/// Equality of two longs: `CMPZ32` of the halves, whose Z is set only when
-/// every byte is equal. Against zero that is `lda; ora; ora; ora`, where the
-/// halves were or'd into two words and the word tested; against another
-/// value it is one `lda; cmp; bne` per byte.
+/// A long equal to zero: `CMPZ32` of the halves, whose Z is set only when all
+/// four bytes are zero, `lda; ora; ora; ora` where the halves were or'd into
+/// two words and the word tested. Another constant is the word compare (a `lda;
+/// cmp #; bne` per byte is more bytes than the words' compare, and has branches
+/// the outliner cannot share).
 ///
 /// Pass: llvm-mos `MOSLegalizerInfo::legalizeICmp`: a multi-byte `G_ICMP eq`
-/// against zero is one `G_CMPZ` over the bytes; any other equality is the high
-/// byte's compare, deferring to the rest when it is equal (the same
-/// chain, bytes in the other order).
+/// against zero is one `G_CMPZ` over the bytes.
 fn lower_long_equality(
     dag: &mut SelectionDAG,
     cc: CondCode,
