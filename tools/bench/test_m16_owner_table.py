@@ -229,3 +229,11 @@ def test_the_header_names_the_levels_the_table_holds_not_a_fixed_list(tmp_path):
     text = table.render(matmul("O1") | matmul("Os"), tmp_path, "abc123", datetime.datetime(2026, 11, 10, tzinfo=datetime.UTC))
     harness = text.splitlines()[2]
     assert "--opt O1 Os " in harness and "O3" not in harness and "O2" not in harness, harness
+
+
+def test_a_program_marked_references_false_is_no_bar_by_construction_not_a_missing_bar():
+    """sfm16_float_add (bench.toml: `references = false`: the soft-float library is ours, no reference compiler builds it) read NO_BAR like a cell whose
+    references failed to measure: 27 of the table's NO_BAR rows were this. A program with no reference by design is listed, never counted."""
+    only = {"sfm16_float_add/c/Os": cell(700, 9000)}
+    assert by_row(only)[("sfm16_float_add", "c", "Os")][10] == "NO_BAR_BY_CONSTRUCTION"
+    assert by_row({"sieve/c/Os": cell(100, 900)})[("sieve", "c", "Os")][10] == "NO_BAR", "a program that should have references and has none stays NO_BAR"

@@ -13,6 +13,7 @@ import json
 import re
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -50,6 +51,12 @@ def has_twin_source(program: str) -> bool:
     """A Nib program with a C twin on disk (`bench/NAME/twin/SEMANTIC.c`): its bar is that twin, whose object holds the same I/O functions
     (BENCH_IO_FUNCTIONS) and bounds checks as the Nib program's. The plain source has neither."""
     return any((bench.BENCH / program / "twin" / f"{semantic}.c").exists() for semantic in bench.TWINS)
+
+
+def no_references(program: str) -> bool:
+    """A program whose bench.toml says `references = false` (a source or library no reference compiler builds): no bar by design."""
+    manifest = bench.BENCH / program / "bench.toml"
+    return manifest.exists() and tomllib.loads(manifest.read_text()).get("references") is False
 
 
 def findings(level: str, ours: dict, refs: dict) -> list[str]:
@@ -117,7 +124,8 @@ def rows(table: dict) -> tuple[list[tuple], collections.Counter]:
             # The twin was not measured: the plain source's bar lacks the Nib semantics and the I/O, so it is no bar (2026-11-13: six Nib cells read WORSE so).
             row = (program, language, level, ours["code"], ours["data"], ours["static"], ours["clocks"], "", "", "", "NO_TWIN", f"twin of {program} not measured")
         elif not have:
-            row = (program, language, level, ours["code"], ours["data"], ours["static"], ours["clocks"], "", "", "", "NO_BAR", "")
+            verdict = "NO_BAR_BY_CONSTRUCTION" if no_references(program) else "NO_BAR"
+            row = (program, language, level, ours["code"], ours["data"], ours["static"], ours["clocks"], "", "", "", verdict, "")
         elif convention(ours, have):
             row = (program, language, level, ours["code"], ours["data"], ours["static"], ours["clocks"], min(r["code"] for r in have.values()), min(r["clocks"] for r in have.values()), len(names) - len(have), "CONVENTION",
                    "a reference stores the zeros ours holds in bss: an object-format convention, neither a win nor a loss")
@@ -171,7 +179,7 @@ def render(table: dict, dist: Path, harness: str, now: datetime.datetime) -> str
         "# net_code: a Nib cell with file I/O less the std.io skeleton's fixed bytes (io_skeleton/fixed.toml, not this build's measure); net_vs_plain_code: net_code less plain_ext_code (strict at O1/Os, priced at O2)",
         "# bytes: code (CODE), data (initialised), static (data+bss); judged (ruling 2026-11-14): Os on total bytes (code+data; BASIC code+static) and clocks; O1/O2/O3 on clocks only, bytes reported in findings;"
         " best external per language: C = ow/bcc/tc/tcpp, Nib = the C compilers on the C twin with the Nib semantics (NAME~init, NAME~bounds; the plain source's best in plain_ext_*), BASIC = bc/pds71/vbdos (O2 key)",
-        "# verdicts: OK, WORSE, CONVENTION (a reference stores the zeros ours holds in bss: shown, not counted a win or a loss), WORSE_LB (a reference lacks a cell: lower bound), NO_BAR (no reference), NO_TWIN (a Nib program whose twin is not measured: unproven, never OK), TWIN (a reference twin, not judged), UNMEASURED/REFUSED (counted, never OK)",
+        "# verdicts: OK, WORSE, CONVENTION (a reference stores the zeros ours holds in bss: shown, not counted a win or a loss), WORSE_LB (a reference lacks a cell: lower bound), NO_BAR (no reference), NO_BAR_BY_CONSTRUCTION (bench.toml `references = false`: listed for regression tracking, never counted in the bar), NO_TWIN (a Nib program whose twin is not measured: unproven, never OK), TWIN (a reference twin, not judged), UNMEASURED/REFUSED (counted, never OK)",
         "# reference cells measured/asked: " + " ".join(f"{name}={got}/{asked}" for name, (got, asked) in reference_coverage(table).items()) + "; a cell without a bar reads NO_BAR or WORSE_LB",
         "# counts: " + ", ".join(f"{level}:{verdict}={n}" for (level, verdict), n in sorted(tally.items())),
     ]
