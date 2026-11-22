@@ -1076,7 +1076,7 @@ impl<'a> Graph<'a> {
                 }
             }
             let Some(bt) = bt else { continue };
-            if self.reaches(try_su, bt) {
+            if self.will_create_cycle(try_su, bt) {
                 continue;
             }
             self.backtrack_bottom_up(try_su, bt, queue);
@@ -1329,6 +1329,18 @@ impl<'a> Graph<'a> {
         queue.calc_sethi_ullman(&self.sus, su);
         queue.calc_sethi_ullman(&self.sus, new);
         Some(new)
+    }
+
+    /// `ScheduleDAGTopologicalSort::WillCreateCycle`: whether making `bt` a
+    /// predecessor of `target` makes a cycle, through `target` itself or
+    /// through the producer of a register it reads.
+    fn will_create_cycle(
+        &self,
+        target: usize,
+        bt: usize,
+    ) -> bool {
+        self.reaches(target, bt)
+            || self.sus[target].preds.iter().any(|pred| pred.is_assigned_reg() && self.reaches(pred.su, bt))
     }
 
     /// Whether `to` is reached from `from` through successors.
