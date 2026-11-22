@@ -557,3 +557,42 @@ fn test_an_unknown_instruction_does_not_revive_a_copy_already_overwritten() {
         lines(&got)
     );
 }
+
+/// QB `exec_loop` m64 -O2: each handler ends with the dispatch tail duplication
+/// copied into it, `rdi = r13; rbp = rsi; rsi = rbp; r13 = rdi` and `jmp
+/// [rax*8 + table]`. The jump reads `rax` alone, so with no successor reading
+/// `rdi` or `rbp` the first two copies are dead. The jump was an effect
+/// nobody knows, read every register, and both stayed: two instructions per
+/// interpreted operation, +5.5% executed against the pin's llc on the same IR.
+#[test]
+fn test_a_jump_through_a_table_reads_only_its_index_and_the_copies_before_it_die() {
+    use crate::model::ir::{Addr, Held, Mem, Space};
+    let mut cell = Mem::new(Some(Addr::new(Space::Segment, 0)), 8);
+    cell.index = Some(Held { value: 1, width: 8, offset: 0 });
+    cell.index_through = RegId::RAX;
+    cell.scale = 8;
+    let table = Arc::new(Insn::new(
+        10,
+        Some((10, 10)),
+        Some(Semantics {
+            name: Some("jmp".into()),
+            sources: vec![Loc::Mem(cell)],
+            indirect: true,
+            table: vec![1],
+            ..Semantics::new(Operation::Jump)
+        }),
+        vec![],
+        vec![],
+    ));
+    let got = propagated(&long_mode(
+        vec![
+            mov(0, rl(RegId::RDI, 8), rl(RegId::R13, 8)),
+            mov(1, rl(RegId::RBP, 8), rl(RegId::RSI, 8)),
+            mov(2, rl(RegId::RSI, 8), rl(RegId::RBP, 8)),
+            mov(3, rl(RegId::R13, 8), rl(RegId::RDI, 8)),
+            table,
+        ],
+        &[RegId::RDI, RegId::RBP],
+    ));
+    assert_eq!(lines(&got)[..4], ["-", "-", "-", "-"], "{:?}", lines(&got));
+}
