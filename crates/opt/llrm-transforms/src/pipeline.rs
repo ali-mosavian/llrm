@@ -1148,7 +1148,7 @@ pub(crate) fn llvm_order(
             // DEVIATE LSPLIT (owner arm64, exit 2026-11-24): GCC's
             // `-fsplit-loops` runs after loop-invariant motion and before the
             // vectorizer; the pin has no such pass.
-            slot("loop-split@gcc", Box::new(crate::loopsplit::LoopSplit)),
+            slot("loop-split@gcc", Box::new(crate::loopsplit::LoopSplit { cleanup: true })),
             // DEVIATE UJ-EARLY (owner arm64-vec, exit 2026-12-01): GCC's
             // `pass_unroll_jam` runs before its vectorizer, where a nest is
             // one inner loop; after the vectorizer (l.1474) the inner loop is
