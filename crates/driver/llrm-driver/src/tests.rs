@@ -4533,15 +4533,21 @@ fn a_nest_with_loads_invariant_in_the_outer_loop_is_jammed_at_o3_m64() {
                     .and_then(|rest| rest.split_once(", "))
                     .is_some_and(|(a, b)| a == b && !a.starts_with("word"))
                     || line.strip_prefix("shl ").is_some_and(|rest| !rest.starts_with("word"))
+                    // The scale is a `lea r, [r*4]` or `[r+r*4]` where the symbol takes a scaled index (X64-PIE-SCALE).
+                    || line.strip_prefix("lea ").is_some_and(|rest| rest.contains("[r") && rest.contains('*'))
             })
             .count();
-        let loads = lines.filter(|line| line.starts_with("movzx") && line.contains("ptr [")).count();
-        (doubled, loads, listing)
+        let loads = lines.clone().filter(|line| line.starts_with("movzx") && line.contains("ptr [")).count();
+        let loops = lines.filter(|line| line.starts_with("jne L0_")).count();
+        (doubled, loads, loops, listing)
     };
-    let (doubled, loads, listing) = shape("-O3");
-    assert!(doubled >= 2 && loads == 2, "{listing}");
+    // The jammed outer loop may be unrolled whole (X64-PIE-SCALE makes the symbol addressing free, so the unroll
+    // fits): a loop per outer step, each loading `vx` and `vy` once. Measured (perf, 20,000 calls, -O3): before #10552
+    // 457 M instructions in 144 B; now 344 M (-25%) in 899 B; the pin's unjammed nest 1,222 M in 99 B.
+    let (doubled, loads, loops, listing) = shape("-O3");
+    assert!(loops >= 1 && doubled >= 2 * loops && loads == 2 * loops, "doubled {doubled}, loads {loads}, loops {loops}\n{listing}");
     // Control: without the jam (-O2) nothing is doubled.
-    let (doubled, _, listing) = shape("-O2");
+    let (doubled, _, _, listing) = shape("-O2");
     assert_eq!(doubled, 0, "{listing}");
 }
 
@@ -6214,11 +6220,11 @@ fn the_os_trials_compile_each_dimension_against_the_base_once() {
     assert!(selections <= 6, "{selections} selections of two functions: more than three compiles");
 }
 
-/// x86-m32 x_bubble -Os: the unrotated trial module was 16 B shorter as an object file and 2 B
-/// longer in code (the padding between functions moved). The trial compares the bytes without
-/// padding, so the rotated loops stay.
+/// x86-m32 x_bubble -Os: the unrotated trial module was 16 B shorter as an object file and 2 B longer in code (the padding
+/// between functions moved), so the trial compares the bytes without padding. Since #10479 (Ext-TSP placement) the rotated
+/// module is 166 B and the unrotated 162 B, but it runs 10,992 more work (`LLRM_DEBUG=trial`): the rotated loops stay.
 #[test]
-fn the_rotation_trial_compares_code_without_the_padding_between_functions() {
+fn the_rotation_trial_keeps_the_rotated_loops_that_run_less_though_the_unrotated_module_is_smaller() {
     let text = include_str!("tests_data/bubble_sort.ll");
     let (built, format) = compiled(&flags(&["-m32", "-Os", "-march=i486"]), text, "bench_x_bubble").unwrap();
     let bytes = llrm_codegen::backend::objbuild::unpadded_bytes(
@@ -6229,7 +6235,7 @@ fn the_rotation_trial_compares_code_without_the_padding_between_functions() {
         llrm_target::Target::objects(&llrm_x86_m32::M32),
     )
     .unwrap();
-    assert!(bytes <= 156, "{bytes} bytes: the unrotated module was kept");
+    assert_eq!(bytes, 166, "{bytes} bytes: 162 is the unrotated module kept, 166 the rotated one");
 }
 
 /// COMPILE-OSROT: the rotation trial assembled the functions that differ twice and the module once
