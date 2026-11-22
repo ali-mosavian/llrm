@@ -2121,6 +2121,16 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE UNROLL-NEST-O1: the nest trial of `unroll_trial_nests_at_speed`
+    /// also at -O1, where clang marks each loop `unroll.disable` and the pin
+    /// never unrolls it: a loop with a subloop that the pin's threshold
+    /// (150) admits is noted, and the driver keeps the unrolled module where
+    /// the finished code prices better. -O1 is judged by clocks, so an outer
+    /// loop over a constant table that folds away is gcc's result.
+    fn unroll_trial_nests_at_o1(&self) -> bool {
+        false
+    }
+
     /// `Tuning::memset_gap_merge_at_size` (MEMSET-GAP).
     fn memset_gap_merge_at_size(&self) -> bool {
         false

@@ -140,3 +140,9 @@ def test_ours_is_llrm_ccs_own_object_not_gnu_as_on_its_text():
     """Reading ours through GNU as made fcmp_all 68020 Os 544 B too large (5338 against 4794 as an object), loop_copy_directions 622 B: every `lea (sym,%pc)` was an 8 B full-format word where the object has the pin's 4 B `R_68K_PC16`, so most of the 68020 cells 'over gcc' were the assembler."""
     command = size.ours_command("llrm-cc", "Os", [], Path("o.o"), Path("p.c"))
     assert "-c" in command and "-S" not in command and command[command.index("-o") + 1] == "o.o", command
+
+
+def test_gcc_is_hosted_like_ours_so_both_link_the_same_stub_calls():
+    """m32_word_vectors -O1: ours (hosted since #10561) called the stub memset, gcc built `-ffreestanding` inlined its fills: the stub's bytes and clocks counted on one side only."""
+    command = size.gcc_command("", "68000", "O2", Path("p.s"), Path(__file__), [])
+    assert "-ffreestanding" not in command, command
