@@ -1820,6 +1820,34 @@ impl Builder {
         Ok(())
     }
 
+    /// `d := a op g[x]` on a word: `ldx i; op g,x; op g+1,x`, the carry running
+    /// from the low byte to the high.
+    fn alu16_indexed(
+        &mut self,
+        mnemonic: &'static str,
+        carry: Option<&'static str>,
+        d: &str,
+        a: &str,
+        symbol: String,
+        index: &str,
+    ) -> Result<(), Unsupported> {
+        let (al, ah) = self.read_word(a)?;
+        let (dl, dh) = self.write_word(d)?;
+        let (acc, x) = (Reg::Phys(reg::A), Reg::Phys(reg::X));
+        let index = self.byte(index)?;
+        self.copy(x, index);
+        if let Some(carry) = carry {
+            self.push(Inst::new(Kind::Op(carry), vec![]));
+        }
+        for ((d, a), second) in [(dl, al), (dh, ah)].into_iter().zip([format!("{symbol},x"), format!("{symbol}+1,x")]) {
+            self.copy(acc, a);
+            let second = Operand::Symbol(second, 0);
+            self.push(Inst::new(Kind::Op(mnemonic), vec![Operand::Def(acc), Operand::Use(acc), second, Operand::Use(x)]));
+            self.copy(d, acc);
+        }
+        Ok(())
+    }
+
     /// The same on a pair, the carry running from the low byte to the high.
     fn alu16(
         &mut self,
@@ -2440,6 +2468,48 @@ pub fn build_with_places(
                 };
                 let symbol = indexed_address(&o[2], &o[3]).map_err(Unsupported)?;
                 b.alu_indexed(mnemonic, carry, name(&o[0])?, name(&o[1])?, symbol, name(&o[4])?)?
+            }
+            // the bytes of a wide add or subtract read where they lie: the carry
+            // out is C, and the carry in is the C the previous byte left
+            op::ADDO8M | op::SUBO8M | op::ADDOC8M | op::SUBOC8M => {
+                let (mnemonic, carry, at) = match inst.opcode {
+                    op::ADDO8M => ("ADC", Some("CLC"), 3),
+                    op::SUBO8M => ("SBC", Some("SEC"), 3),
+                    op::ADDOC8M => ("ADC", None, 4),
+                    _ => ("SBC", None, 4),
+                };
+                let symbol = address(&o[at], &o[at + 1]).map_err(Unsupported)?;
+                b.alu_with(mnemonic, carry, name(&o[0])?, name(&o[2])?, Operand::Symbol(symbol, 0))?
+            }
+            op::ADDO8MX | op::SUBO8MX | op::ADDOC8MX | op::SUBOC8MX => {
+                let (mnemonic, carry, at) = match inst.opcode {
+                    op::ADDO8MX => ("ADC", Some("CLC"), 3),
+                    op::SUBO8MX => ("SBC", Some("SEC"), 3),
+                    op::ADDOC8MX => ("ADC", None, 4),
+                    _ => ("SBC", None, 4),
+                };
+                let symbol = indexed_address(&o[at], &o[at + 1]).map_err(Unsupported)?;
+                b.alu_indexed(mnemonic, carry, name(&o[0])?, name(&o[2])?, symbol, name(&o[at + 2])?)?
+            }
+            op::ADDO16M | op::SUBO16M | op::ADDOC16M | op::SUBOC16M => {
+                let (mnemonic, carry, at) = match inst.opcode {
+                    op::ADDO16M => ("ADC", Some("CLC"), 3),
+                    op::SUBO16M => ("SBC", Some("SEC"), 3),
+                    op::ADDOC16M => ("ADC", None, 4),
+                    _ => ("SBC", None, 4),
+                };
+                let symbol = address(&o[at], &o[at + 1]).map_err(Unsupported)?;
+                b.alu16_mem(mnemonic, carry, name(&o[0])?, name(&o[2])?, symbol)?
+            }
+            op::ADDO16MX | op::SUBO16MX | op::ADDOC16MX | op::SUBOC16MX => {
+                let (mnemonic, carry, at) = match inst.opcode {
+                    op::ADDO16MX => ("ADC", Some("CLC"), 3),
+                    op::SUBO16MX => ("SBC", Some("SEC"), 3),
+                    op::ADDOC16MX => ("ADC", None, 4),
+                    _ => ("SBC", None, 4),
+                };
+                let symbol = indexed_address(&o[at], &o[at + 1]).map_err(Unsupported)?;
+                b.alu16_indexed(mnemonic, carry, name(&o[0])?, name(&o[2])?, symbol, name(&o[at + 2])?)?
             }
             op::SUB8 => b.alu("SBC", Some("SEC"), name(&o[0])?, name(&o[1])?, name(&o[2])?)?,
             // one register read and written: `d := a`, then `d` in place
