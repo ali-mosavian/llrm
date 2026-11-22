@@ -359,17 +359,19 @@ impl Tti for Mos6502 {
     ) -> bool {
         let key = |c: &LsrCost| {
             // u64: a rejected formula carries `u32::MAX` terms.
-            let w = |name: &str, default: u64| -> u64 {
-                std::env::var(name).ok().and_then(|v| v.parse().ok()).unwrap_or(default)
-            };
             let work = 3 * u64::from(c.add_rec_cost)
-                + w("LLRM_EXP_W_WIDE", 0) * u64::from(c.wide_steps)
                 + 7 * u64::from(c.num_base_adds)
                 + 40 * u64::from(c.num_iv_muls)
-                + w("LLRM_EXP_W_IMM", 4) * u64::from(c.imm_cost);
+                + 4 * u64::from(c.imm_cost);
             (work, c.num_regs, c.scale_cost, c.setup_cost)
         };
         key(a) < key(b)
+    }
+
+    /// A 16-bit counter step is three instructions: a register stepped each
+    /// trip for a use that runs on a few pays that many more.
+    fn lsr_conditional_use_step_cost(&self) -> u32 {
+        if std::env::var_os("LLRM_EXP_NO_CONDSTEP").is_some() { 0 } else { 3 }
     }
 
     /// A 16-bit compare of the exit test costs two `cmp`s against zero's `ora`:

@@ -489,10 +489,6 @@ pub struct LsrCost {
     pub insns: u32,
     pub num_regs: u32,
     pub add_rec_cost: u32,
-    /// Of `add_rec_cost`, the addrecs stepped by a constant other than one or
-    /// minus one: an add of an immediate, not an increment (the pin's TODO on
-    /// `RateRegister`: "AddRecCost should be a function of the stride").
-    pub wide_steps: u32,
     pub num_iv_muls: u32,
     pub num_base_adds: u32,
     pub imm_cost: u32,
@@ -2353,6 +2349,16 @@ pub trait Tti {
     /// `Tuning::lftr_any_stride` (DEVIATE LFTR1).
     fn lftr_any_stride(&self) -> bool {
         false
+    }
+
+    /// DEVIATE LSR-COND-STEP: extra `add_rec_cost` of an addrec register rated
+    /// for a use that does not run every trip. The pin charges a register one
+    /// step however often its uses run; here the step is paid each trip, and a
+    /// use that runs on a few (a switch's table lookup, 28 of 256 trips) saves
+    /// its computation only then (switch_peeled_table: four counters stepped
+    /// 256 times for a lookup run 28 times).
+    fn lsr_conditional_use_step_cost(&self) -> u32 {
+        0
     }
 
     /// DEVIATE LSR-CMP-IMM: the exit test's immediate is not rated by its bit
