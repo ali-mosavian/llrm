@@ -3613,6 +3613,13 @@ pub trait Tti {
         Some(self.number_of_gpr_registers())
     }
 
+    /// DEVIATE LP2 (`licm/pressure.rs`): at a size build, the values LICM may
+    /// hold across a loop that calls out, where only the callee-saved
+    /// registers keep one; `None`: the register count alone.
+    fn licm_call_crossing_limit(&self) -> Option<u32> {
+        None
+    }
+
     /// DEVIATE LICM-SPEC: whether LICM prices the hoisting of an integer or
     /// pointer value the loop computes on some trips only, as it does a
     /// promotion (`licm_register_limit`). False: the pin's, which hoists it.

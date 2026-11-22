@@ -8,6 +8,11 @@
 //! allocator wants it. A location the loop only stores to takes no room: its
 //! value crosses no back edge, so the second pass that sinks the stores of
 //! locations the first pass loaded is not charged for them again.
+//! DEVIATE LP2 (owner w11, exit 2026-12-12): at a size build a loop that calls
+//! out holds no more than the target's callee-saved registers
+//! (`Tti::licm_call_crossing_limit`); gcc's store motion in `tree-ssa-loop-im`
+//! weighs the registers a location would hold across the loop. The
+//! over_aligned_local main kept eight promoted words across calls.
 //! A target with no registers to spill into (wasm) states no limit
 //! (`Tti::licm_register_limit`).
 //!
@@ -32,7 +37,7 @@
 
 use llrm_mir::dense::IdSet;
 use llrm_mir::module::{InstId, Operand, ValueId};
-use llrm_mir::opcode::Opcode;
+use llrm_mir::opcode::{Attribute, Opcode};
 use llrm_mir::passes::{self, Outer};
 use llrm_mir::types::Type;
 
@@ -82,10 +87,18 @@ impl Pressure {
         #[cfg(test)]
         COUNTED.with(|count| count.set(count.get() + 1));
         let tti = outer.target().tti()?;
-        let limit = match class {
+        let mut limit = match class {
             Class::General => tti.licm_register_limit()?,
             Class::Float => tti.licm_float_register_limit()?,
-        } as usize;
+        };
+        if class == Class::General
+            && let Some(kept) = tti.licm_call_crossing_limit()
+            && is_size_build(unit)
+            && calls_out(unit, outer, ctx)
+        {
+            limit = limit.min(kept);
+        }
+        let limit = limit as usize;
         if limit == 0 {
             return None;
         }
@@ -137,6 +150,30 @@ impl Pressure {
     pub fn room(&self) -> usize {
         self.limit.saturating_sub(self.held.len() + self.phis + self.work)
     }
+}
+
+/// Whether the function is built for size.
+fn is_size_build(unit: &passes::Unit) -> bool {
+    unit.function
+        .attrs
+        .iter()
+        .any(|attr| matches!(attr, Attribute::Flag(flag) if flag == "optsize" || flag == "minsize"))
+}
+
+/// Whether the loop calls a function that is not an intrinsic.
+fn calls_out(
+    unit: &passes::Unit,
+    outer: &Outer,
+    ctx: &LoopCtx,
+) -> bool {
+    ctx.loop_.body.iter().any(|&at| {
+        unit.function.iter_block(llrm_analysis::cfg::block(at)).any(|inst| {
+            matches!(unit.function.instruction(inst).opcode, Opcode::Call(_) | Opcode::Invoke(_))
+                && !llrm_mir::memory::callee(&unit.context, &unit.function, inst)
+                    .and_then(|one| outer.globals.get(one.0 as usize))
+                    .is_some_and(|one| one.name.as_deref().is_some_and(|name| name.starts_with("llvm.")))
+        })
+    })
 }
 
 /// Whether a value of type `ty` takes a general register.

@@ -2686,6 +2686,11 @@ impl Tti for X86 {
         self.real_mode.as_ref().map_or(self.registers.unwrap_or(if self.quad { 16 } else { 8 }), |real| real.registers)
     }
 
+    /// rbx, rbp and r12-r15 keep a value across a call in long mode.
+    fn licm_call_crossing_limit(&self) -> Option<u32> {
+        (self.quad && self.real_mode.is_none()).then_some(6)
+    }
+
     /// Real mode declares the registers the allocator has, and the live count
     /// LSR keeps is exact there: the six fill (PLASMA's loop, 4 + 2 live).
     fn lsr_reserved_registers(&self) -> u32 {

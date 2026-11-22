@@ -2024,6 +2024,91 @@ fn test_a_promotion_past_the_target_register_count_is_refused() {
     assert_eq!(counters_promoted(I486(llrm_mir::target::Neutral)), 5);
 }
 
+/// Ten counters a loop adds the index to beside a call that cannot touch them.
+fn ten_counters_beside_a_call(attrs: &str) -> String {
+    let globals: String = (1..=10).map(|k| format!("@g{k} = global i64 0\n")).collect();
+    let body: String = (1..=10)
+        .map(|k| format!("  %x{k} = load i64, ptr @g{k}\n  %y{k} = add i64 %x{k}, %i\n  store i64 %y{k}, ptr @g{k}\n"))
+        .collect();
+    format!(
+        "{globals}
+declare void @ext() memory(inaccessiblemem: readwrite) nounwind
+
+define i64 @f(i64 %n) {attrs} {{
+b0:
+  br label %b1
+
+b1:
+  %i = phi i64 [ 0, %b0 ], [ %i1, %b1 ]
+  call void @ext()
+{body}  %i1 = add i64 %i, 1
+  %c = icmp eq i64 %i1, %n
+  br i1 %c, label %b2, label %b1
+
+b2:
+  ret i64 0
+}}
+"
+    )
+}
+
+fn promoted_on_x86_64(text: &str) -> usize {
+    DECIDED.with(|all| *all.borrow_mut() = Decisions::default());
+    let mut module = parsed(text);
+    let mut passes = llrm_mir::passes::PassManager::default();
+    passes.add(Licm { apply: false, speculate: true });
+    let machine = X86_64(llrm_mir::target::Neutral);
+    passes.run_module(&mut module, std::rc::Rc::new(machine)).expect("runs");
+    DECIDED.with(|all| all.borrow().promoted.len())
+}
+
+struct X86_64(llrm_mir::target::Neutral);
+
+impl llrm_mir::target::Machine for X86_64 {
+    fn tti(&self) -> Option<std::rc::Rc<dyn llrm_mir::tti::Tti>> {
+        Some(std::rc::Rc::new(llrm_x86::tti::X86::of_cpu("x86-64").unwrap()))
+    }
+
+    fn foreign_span(
+        &self,
+        selectors: (i64, i64),
+        offsets: (i64, i64),
+        width: i64,
+    ) -> Option<(i64, i64)> {
+        self.0.foreign_span(selectors, offsets, width)
+    }
+
+    fn spaces(&self) -> llrm_mir::spaces::Spaces {
+        self.0.spaces()
+    }
+
+    fn costs(&self) -> llrm_mir::target::OperationCosts {
+        self.0.costs()
+    }
+
+    fn registers(&self) -> i64 {
+        self.0.registers()
+    }
+
+    fn call_registers(&self) -> i64 {
+        self.0.call_registers()
+    }
+
+    fn address_forms(&self) -> Vec<llrm_mir::target::AddressForm> {
+        self.0.address_forms()
+    }
+}
+
+/// over_aligned_local main -Os (x86-64): eight counters promoted across the
+/// calls of its loop sat in the six callee-saved registers and spilled, 505 B
+/// against gcc's 429 B. At a size build a loop with a call keeps no more than
+/// the callee-saved registers' room; a speed build keeps all ten.
+#[test]
+fn test_a_size_loop_with_a_call_promotes_no_more_than_the_callee_saved_room() {
+    assert_eq!(promoted_on_x86_64(&ten_counters_beside_a_call("")), 10);
+    assert!(promoted_on_x86_64(&ten_counters_beside_a_call("optsize")) < 6);
+}
+
 /// Ten globals the loop only stores to, each a promotion candidate.
 fn ten_stored() -> String {
     let globals: String = (1..=10).map(|k| format!("@g{k} = global i16 0\n")).collect();
