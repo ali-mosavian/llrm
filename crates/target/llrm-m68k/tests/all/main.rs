@@ -23,6 +23,7 @@ mod arg_store;
 mod ari_form;
 mod bfextu_extracts_a_field;
 mod bfffo;
+mod big_frame_offsets;
 mod bitcount_libcall;
 mod bitreverse_promote;
 mod bool_condition;
