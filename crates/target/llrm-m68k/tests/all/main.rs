@@ -217,6 +217,7 @@ mod odd_width_memory;
 mod omax_level;
 mod opcode_lookup;
 mod opcosts;
+mod pre_cse_hoist;
 mod oracle_env;
 mod os_inline;
 mod os_inline_clocks;
