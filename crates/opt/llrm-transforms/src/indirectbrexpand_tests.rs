@@ -121,3 +121,73 @@ one:
     assert!(!text.contains("blockaddress"), "{text}");
     assert!(text.contains("inttoptr (i16 1 to ptr)"), "{text}");
 }
+
+/// A function with no `indirectbr` is not touched: no switch, no numbers.
+#[test]
+fn a_function_without_an_indirectbr_is_left_as_it_is() {
+    let body = "define i16 @f(i16 %x) {
+entry:
+  %c = icmp eq i16 %x, 0
+  br i1 %c, label %one, label %two
+
+one:
+  ret i16 1
+
+two:
+  ret i16 2
+}
+";
+    let before = printed(&parsed(&format!("{LAYOUT}{body}")));
+    assert_eq!(expanded(body), before);
+}
+
+/// Block numbers start at one in each function: the pass numbers the blocks
+/// of a function, not of the module.
+#[test]
+fn block_numbers_start_at_one_in_each_function() {
+    let text = expanded(
+        "@t = internal constant [2 x ptr] [ptr blockaddress(@f, %a), ptr blockaddress(@g, %b)]
+
+define i16 @f(ptr %p) {
+entry:
+  indirectbr ptr %p, [label %a]
+
+a:
+  ret i16 1
+}
+
+define i16 @g(ptr %p) {
+entry:
+  indirectbr ptr %p, [label %b]
+
+b:
+  ret i16 2
+}
+",
+    );
+    assert!(!text.contains("blockaddress"), "{text}");
+    assert_eq!(text.matches("inttoptr (i16 1 to ptr)").count(), 2, "{text}");
+}
+
+/// A block listed twice is one case, not two (a switch with a repeated value
+/// does not verify).
+#[test]
+fn a_block_listed_twice_is_one_case() {
+    let text = expanded(
+        "@t = internal constant [2 x ptr] [ptr blockaddress(@f, %one), ptr blockaddress(@f, %two)]
+
+define i16 @f(ptr %p) {
+entry:
+  indirectbr ptr %p, [label %one, label %two, label %one]
+
+one:
+  ret i16 1
+
+two:
+  ret i16 2
+}
+",
+    );
+    assert!(!text.contains("indirectbr"), "{text}");
+    assert_eq!(text.matches("i16 1, label %one").count() + text.matches("i16 2, label %two").count(), 1, "{text}");
+}
