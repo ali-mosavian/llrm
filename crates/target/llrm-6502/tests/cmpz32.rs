@@ -43,3 +43,17 @@ fn the_unread_carry_of_a_long_sum_is_not_saved_before_the_counter_step() {
     let text = assembly(include_str!("data/long_counter_sum.ll"), &Request::new(Level::O2)).unwrap();
     assert!(!text.contains("rol a"), "{text}");
 }
+
+/// An equality of two longs used as a value, not a branch: the custom lowering
+/// returned a byte where the type legalizer expected the bit it replaced, and
+/// `zext i1` of it was `CannotSelect("ZeroExtend")` (8 tests of `call_glue`,
+/// `divrem_pair` and `outline`).
+#[test]
+fn an_equality_of_longs_is_a_value_too() {
+    let ir = format!(
+        "target datalayout = \"{}\"\ndefine i8 @f(i32 %a, i32 %b) {{\n  %c = icmp ne i32 %a, %b\n  %d = icmp ne i32 %a, 7\n  %e = or i1 %c, %d\n  %r = zext i1 %e to i8\n  ret i8 %r\n}}\n",
+        datalayout()
+    );
+    let text = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
+    assert!(text.contains("rts"), "{text}");
+}

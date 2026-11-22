@@ -880,7 +880,15 @@ fn lower_setcc(
         };
     }
     if dag.value_type(op0) == EVT::I32 && matches!(cc, CondCode::SetEq | CondCode::SetNe) {
-        return Some(lower_long_equality(dag, cc, op0, op1));
+        let flags = lower_long_equality(dag, cc, op0, op1);
+        // the type legalizer expects a value of the type it replaces: a bit is
+        // the byte truncated (a branch or a select reads the flags
+        // through it, `condition`)
+        return Some(if dag.value_type(node) == EVT::I1 {
+            dag.get_node(ISD::Truncate, EVT::I1, &[flags])
+        } else {
+            flags
+        });
     }
     if !matches!(dag.value_type(op0), EVT::I8 | EVT::I16) {
         return None;
@@ -1054,6 +1062,11 @@ fn condition(
         && let Some(flags) = lower_setcc_carry_flags(dag, value)
     {
         return flags;
+    }
+    // a long's equality, made a bit by `lower_setcc`: its flags
+    if dag.opcode(value) == ISD::Truncate && dag.opcode(dag.operand(value, 0)) == mosisd::SETCC {
+        let lowered = dag.operand(value, 0);
+        return (dag.operand(lowered, 0), dag.operand(lowered, 1));
     }
     let value = match dag.opcode(value) {
         ISD::SetCC => lower_setcc(dag, value).unwrap_or(value),
