@@ -16,3 +16,15 @@ fn a_ladder_of_compares_of_one_pair_is_threaded_by_relation() {
     let lines = out.lines().count();
     assert!(lines <= 110, "{lines} lines, the compares were not threaded:\n{out}");
 }
+
+/// The 68000 is not threaded: its full-unroll bar of 400 would unroll the
+/// smaller loop 14 times (276 -> 2,224 B at -O2 for clocks the harness can only
+/// bound).
+#[test]
+fn the_68000_keeps_the_loop_rolled() {
+    let module = include_str!("../fixtures/word_compare_branches_o2.ll");
+    let out = assembly(module, cpu_of("68000").unwrap(), Level::O2).expect("compiles");
+    let lines = out.lines().count();
+    // 115 lines rolled; threaded, the loop is unrolled to over 800.
+    assert!(lines <= 200, "{lines} lines, the 68000 loop was unrolled:\n{out}");
+}

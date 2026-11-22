@@ -610,9 +610,13 @@ impl Tti for M68k {
 
     /// DEVIATE BACKTHREAD-REL (owner wasm-3, exit 2026-12-15; row
     /// M68K-WORDCMP-O3): the compares of one pair of values decide each other
-    /// along a path, as gcc's `threadfull1` and `vrp1` do.
+    /// along a path, as gcc's `threadfull1` and `vrp1` do. Not on the 68000:
+    /// the threaded `word_compare_branches` loop falls under its full-unroll
+    /// bar of 400 (`unroll_threshold_at_speed`) and grows 276 -> 2,224 B for
+    /// clocks the harness can only bound; the bar's pricing is the finder item
+    /// (`m68k/unroll-bar-68000`).
     fn threads_by_relation(&self) -> bool {
-        true
+        self.cpu.at_least(crate::dagisel::hooks::Cpu::M68020)
     }
 
     /// DEVIATE UNROLL-NEST-O1 (owner wasm-3, exit 2026-12-12; row
