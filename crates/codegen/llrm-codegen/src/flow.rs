@@ -227,6 +227,7 @@ pub fn machine_with<'a>(
             classes: Rc::clone(classes),
             segments: segments.clone(),
             size: target.size || target.min_size,
+            constrain: None,
         }),
         // After the loop-invariant values are in the preheader: streams that
         // share one index share one pointer (DEVIATE LSR2).
