@@ -321,9 +321,14 @@ fn delete_dead_loop_blocks(
 ) {
     let mut insts = Vec::new();
     for &bb in dead {
-        // Every successor learns that one of its predecessors goes.
+        // Every successor learns that one of its predecessors goes, once for
+        // each edge: LLVM's `successors(BB)` repeats a block a terminator names
+        // more than once, and its phis hold one input per edge.
         for succ in successor_list(function, bb) {
-            function.predecessor_removed(context, succ, bb, true);
+            let edges = function.edge_predecessors(succ).iter().filter(|&&pred| pred == bb).count();
+            for _ in 0..edges {
+                function.predecessor_removed(context, succ, bb, true);
+            }
         }
         // Zap the instructions; what reads one is replaced by poison, control
         // flow cannot get here.

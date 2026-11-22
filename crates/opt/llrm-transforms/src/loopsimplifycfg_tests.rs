@@ -148,3 +148,36 @@ fn the_analyses_are_made_once_where_no_loop_changes() {
     assert!(!changed);
     assert_eq!(built, 1, "one tree for three loops that do not change");
 }
+
+/// queens -O3 (arm64, after backward threading stopped re-threading its own
+/// copies): a dead block ended in a `switch` naming one exit three times, and
+/// the exit's phis kept two inputs from it (one removed, the pass is "once
+/// each" over successors): "block 125 still has 2 users", a panic.
+#[test]
+fn a_dead_block_naming_an_exit_three_times_takes_every_input_with_it() {
+    let (text, changed) = simplified(
+        "define i16 @f(i16 %n, i16 %k) {
+b0:
+  br label %h
+h:
+  %i = phi i16 [ 0, %b0 ], [ %i1, %latch ]
+  br i1 true, label %live, label %dead
+live:
+  br label %latch
+dead:
+  switch i16 %k, label %exit [ i16 1, label %exit i16 2, label %exit i16 3, label %latch ]
+latch:
+  %i1 = add i16 %i, 1
+  %c = icmp slt i16 %i1, %n
+  br i1 %c, label %h, label %x
+x:
+  br label %exit
+exit:
+  %p = phi i16 [ %i, %dead ], [ %i, %dead ], [ %i, %dead ], [ 7, %x ]
+  ret i16 %p
+}
+",
+    );
+    assert!(changed, "{text}");
+    assert!(!text.contains("%dead"), "{text}");
+}
