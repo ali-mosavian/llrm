@@ -59,8 +59,10 @@ fn threaded(text: &str) -> (String, bool) {
 fn a_join_of_a_known_and_an_unknown_path_is_threaded_for_the_known_one() {
     let (text, changed) = threaded(COLUMNS);
     assert!(changed, "the guard is tested again after the path that passed it:\n{text}");
-    // The copy of `head` that the path through `loop` takes jumps to `enter`.
-    assert_eq!(text.matches("br label %enter").count(), 1, "{text}");
+    // The copy of `head` that each path through `loop` takes jumps to `enter`:
+    // the one that hit (`latch` from `loop`) and the one that did not (`latch`
+    // from `hit`, a chain of two blocks).
+    assert_eq!(text.matches("br label %enter").count(), 2, "{text}");
 }
 
 /// The path through `loop` is taken several trips running (`col > 1`): each
@@ -297,4 +299,61 @@ out:
 ";
     let (out, changed) = related(text, true);
     assert!(!changed, "a range of `x` decides it, not a relation:\n{out}");
+}
+
+/// queens' `place` at -O2 (arm64), the rotated shape: `%g`, the entry guard of
+/// the inner loop, is hoisted out of the column loop, and `head` branches on it
+/// every trip. The path that hit (`inner` -> `latch`) is a path of one block;
+/// the one that ran the whole inner loop (`step` -> `call` -> `latch` ->
+/// `head`) is a chain of two, and the facts at `step` cross the join `pre` the
+/// first thread made.
+const ROTATED: &str = "define i32 @f(i32 %row, i32 %n) {
+entry:
+  %g = icmp sgt i32 %row, 0
+  br label %head
+
+head:
+  %col = phi i32 [ 0, %entry ], [ %next, %latch ]
+  %found = phi i32 [ 0, %entry ], [ %found2, %latch ]
+  br i1 %g, label %pre, label %call
+
+pre:
+  br label %inner
+
+inner:
+  %i = phi i32 [ 0, %pre ], [ %i1, %step ]
+  %hit = icmp eq i32 %i, %col
+  br i1 %hit, label %latch, label %step
+
+step:
+  %i1 = add i32 %i, 1
+  %end = icmp eq i32 %i1, %row
+  br i1 %end, label %call, label %inner
+
+call:
+  %x = add i32 %found, 7
+  br label %latch
+
+latch:
+  %found2 = phi i32 [ %x, %call ], [ %found, %inner ]
+  %next = add i32 %col, 1
+  %done = icmp eq i32 %next, %n
+  br i1 %done, label %exit, label %head
+
+exit:
+  ret i32 %found2
+}
+";
+
+/// Both ways round the column loop skip the guard: the path that ran the whole
+/// inner loop (`step`) no longer goes through `call` and `latch` to `head`.
+/// queens at arm64 -O2 kept the guard on the path that ran the whole
+/// inner loop (`cmp row, #1; b.lt` each column trip: +4.2% executed
+/// instructions against gcc).
+#[test]
+fn a_loop_guard_every_path_passed_is_skipped_on_each_back_edge() {
+    let (text, changed) = threaded(ROTATED);
+    assert!(changed, "{text}");
+    assert!(!text.contains("br i1 %end, label %call"), "`step` still reaches the guard:\n{text}");
+    assert_eq!(text.matches("br i1 %g,").count(), 1, "{text}");
 }
