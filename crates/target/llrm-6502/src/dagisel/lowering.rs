@@ -49,6 +49,7 @@ pub mod mosisd {
     pub const SRL1C: ISD = ISD::Target(ids::SRL1C);
     pub const CMPZ: ISD = ISD::Target(ids::CMPZ);
     pub const CMP32: ISD = ISD::Target(ids::CMP32);
+    pub const CMPZ32: ISD = ISD::Target(ids::CMPZ32);
     pub const INC32: ISD = ISD::Target(ids::INC32);
     pub const DEC32: ISD = ISD::Target(ids::DEC32);
     pub const BRCOND: ISD = ISD::Target(ids::BRCOND);
@@ -181,6 +182,8 @@ pub fn target_lowering() -> TargetLowering {
             tl.set_operation_action(op, vt, Action::Custom);
         }
     }
+    // equality of two longs is one four-byte test (`lower_long_equality`)
+    tl.set_operation_action(SetCC, MVT::I32, Action::Custom);
     // a compare of two words is the borrow of the low words into the high
     // words' subtract (`IntegerExpandSetCCOperands`)
     for vt in [MVT::I1, MVT::I8, MVT::I16] {
@@ -876,6 +879,9 @@ fn lower_setcc(
             other => other,
         };
     }
+    if dag.value_type(op0) == EVT::I32 && matches!(cc, CondCode::SetEq | CondCode::SetNe) {
+        return Some(lower_long_equality(dag, cc, op0, op1));
+    }
     if !matches!(dag.value_type(op0), EVT::I8 | EVT::I16) {
         return None;
     }
@@ -886,6 +892,32 @@ fn lower_setcc(
     let flags = dag.get_node(compare, EVT::I8, &[a, b]);
     let code = cc_operand(dag, code);
     Some(dag.get_node(mosisd::SETCC, EVT::I8, &[code, flags]))
+}
+
+/// Equality of two longs: `CMPZ32` of the halves, whose Z is set only when
+/// every byte is equal. Against zero that is `lda; ora; ora; ora`, where the
+/// halves were or'd into two words and the word tested; against another
+/// value it is one `lda; cmp; bne` per byte.
+///
+/// Pass: llvm-mos `MOSLegalizerInfo::legalizeICmp`: a multi-byte `G_ICMP eq`
+/// against zero is one `G_CMPZ` over the bytes; any other equality is the high
+/// byte's compare, deferring to the rest when it is equal (the same
+/// chain, bytes in the other order).
+fn lower_long_equality(
+    dag: &mut SelectionDAG,
+    cc: CondCode,
+    a: SDValue,
+    b: SDValue,
+) -> SDValue {
+    let sixteen = dag.get_constant(16, EVT::I8);
+    let mut halves = Vec::new();
+    for value in [a, b] {
+        let high = dag.get_node(ISD::Srl, EVT::I32, &[value, sixteen]);
+        halves.push((dag.get_node(ISD::Truncate, EVT::I16, &[value]), dag.get_node(ISD::Truncate, EVT::I16, &[high])));
+    }
+    let flags = dag.get_node(mosisd::CMPZ32, EVT::I8, &[halves[0].0, halves[1].0, halves[0].1, halves[1].1]);
+    let code = cc_operand(dag, if cc == CondCode::SetEq { cond::EQ } else { cond::NE });
+    dag.get_node(mosisd::SETCC, EVT::I8, &[code, flags])
 }
 
 /// `x >= 0`, `x < 0` and `-1 >= x` (`x <= -1`) of a long are the sign of its

@@ -1257,6 +1257,36 @@ impl Builder {
             return Err(Unsupported("a compare's operand changed before its branch".into()));
         }
         let acc = Reg::Phys(reg::A);
+        if let (true, Some((a1, b1))) = (zero, wide.clone()) {
+            if self.version(&a1.0) != a1.1 || self.version(&b1.0) != b1.1 {
+                return Err(Unsupported("a compare's operand changed before its branch".into()));
+            }
+            let (mut lanes, mut rhs) = (Vec::new(), Vec::new());
+            for (x, y) in [(&a, &b), (&a1, &b1)] {
+                let (low, high) = self.read_word(&x.0)?;
+                lanes.extend([low, high]);
+                match self.word_constant(&y.0) {
+                    Some(bytes) => rhs.extend(bytes.map(Operand::Imm)),
+                    None => {
+                        let (low, high) = self.read_word(&y.0)?;
+                        for r in [low, high] {
+                            self.require(r, Class::MEM)?;
+                        }
+                        rhs.extend([Operand::Use(low), Operand::Use(high)]);
+                    }
+                }
+            }
+            for r in &lanes {
+                self.require(*r, Class(Class::X | Class::Y | Class::M))?;
+            }
+            let mut operands = vec![Operand::Def(Reg::Phys(reg::FLAGS)), Operand::Def(acc)];
+            operands.extend(lanes.iter().map(|r| Operand::Use(*r)));
+            operands.extend(rhs);
+            let mut cmp = Inst::new(Kind::Op("CMPZ32"), operands);
+            cmp.sets_flags = true;
+            self.push(cmp);
+            return Ok(());
+        }
         if zero {
             let (al, ah) = self.read_word(&a.0)?;
             // a constant right side is two immediates, not two cells loaded
@@ -2761,6 +2791,20 @@ pub fn build_with_places(
                     b.load_compared_global(at)?;
                 }
             }
+            // all four bytes equal: the low pair a, b, then the high pair a, b
+            op::CMPZ32 => {
+                let (a, c) = (name(&o[1])?, name(&o[2])?);
+                let (a1, c1) = (name(&o[3])?, name(&o[4])?);
+                b.pending = Some(Compare {
+                    a: (a.to_owned(), b.version(a)),
+                    b: (c.to_owned(), b.version(c)),
+                    word: true,
+                    zero: true,
+                    memory: None,
+                    index: None,
+                    wide: Some(((a1.to_owned(), b.version(a1)), (c1.to_owned(), b.version(c1)))),
+                });
+            }
             op::CMPZ16 => {
                 let (a, c) = (name(&o[1])?, name(&o[2])?);
                 b.pending = Some(Compare {
@@ -3514,20 +3558,33 @@ fn keep_carry_in_c(function: &mut MFunction<Class>) {
         _ => None,
     };
     let moves = |inst: &Inst| matches!(inst.kind, Kind::Copy | Kind::Op("LDM" | "LDI" | "STM"));
+    let in_a: HashSet<u32> =
+        (0..function.classes.len() as u32).filter(|v| function.classes[*v as usize] == Class(Class::A)).collect();
+    let is_a = |r: &Reg| *r == acc || matches!(r, Reg::Virt(v) if in_a.contains(v));
     for block in &mut function.blocks {
         let mut at = 0;
         while at < block.insts.len() {
             let Some(cell) = saved(&block.insts, at) else {
                 // the byte was dropped as unread: the save is a write of A that
-                // the next load overwrites
+                // the next write of A overwrites unread (a load, or the scratch
+                // of a step that tests through A)
                 let overwritten = block
                     .insts
-                    .get(at + 1)
+                    .get(at + 1..)
                     .is_some_and(
-                        |next| matches!(
-                            (next.kind, &next.operands[..]),
-                            (Kind::Copy, [Operand::Def(to), Operand::Use(from)]) if *to == acc && *from != acc
-                        ),
+                        |rest| {
+                            for next in rest {
+                                let reads = next.operands.iter().any(|o| matches!(o, Operand::Use(r) if is_a(r)));
+                                let writes = next.operands.iter().any(|o| matches!(o, Operand::Def(r) if is_a(r)));
+                                if reads || next.call || next.terminator || next.barrier {
+                                    return false;
+                                }
+                                if writes {
+                                    return true;
+                                }
+                            }
+                            false
+                        },
                     );
                 if block.insts[at].kind == Kind::Op("SAVEC") && overwritten {
                     block.insts.remove(at);
@@ -5016,6 +5073,43 @@ fn emit_with<const STACK: bool>(
                             writeln!(out, "  cmp {}\n_cz{made}:", register_name(regs[5])).unwrap();
                         }
                     }
+                }
+                // Z only when all four bytes are equal: against zero `lda; ora;
+                // ora; ora` (the bytes in x and y last, behind a `bne`,
+                // as `ora` has no register form), else one `lda; cmp; bne` per
+                // byte
+                (Kind::Op("CMPZ32"), operands) => {
+                    made += 1;
+                    let load = |out: &mut Asm, r: RegId| match r {
+                        r if r == reg::X => out.push_str("  txa\n"),
+                        r if r == reg::Y => out.push_str("  tya\n"),
+                        r => writeln!(out, "  lda {}", register_name(r)).unwrap(),
+                    };
+                    let index = |r: RegId| r == reg::X || r == reg::Y;
+                    let lanes = [regs[2], regs[3], regs[4], regs[5]];
+                    if operands[6..].iter().all(|operand| matches!(operand, Operand::Imm(0))) {
+                        let cells: Vec<RegId> = lanes.iter().copied().filter(|r| !index(*r)).collect();
+                        load(&mut out, cells[0]);
+                        for r in &cells[1..] {
+                            writeln!(out, "  ora {}", register_name(*r)).unwrap();
+                        }
+                        for r in lanes.iter().copied().filter(|r| index(*r)) {
+                            writeln!(out, "  bne _cz{made}").unwrap();
+                            load(&mut out, r);
+                        }
+                    } else {
+                        for (at, lane) in lanes.iter().enumerate() {
+                            load(&mut out, *lane);
+                            match &operands[6 + at] {
+                                Operand::Imm(value) => writeln!(out, "  cmp #{value}").unwrap(),
+                                _ => writeln!(out, "  cmp {}", register_name(regs[6 + at])).unwrap(),
+                            }
+                            if at < 3 {
+                                writeln!(out, "  bne _cz{made}").unwrap();
+                            }
+                        }
+                    }
+                    writeln!(out, "_cz{made}:").unwrap();
                 }
                 (Kind::Op("INC" | "DEC"), _) => {
                     out.push_str(&form_text(inst.kind, &inst.operands, &regs, cmos, &slot_name).unwrap())
