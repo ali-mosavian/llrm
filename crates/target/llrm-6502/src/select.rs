@@ -1334,6 +1334,15 @@ fn speed_division16_pays(
     // the rate every size-reducing choice of the target is made at, and
     // then the share rule holds the growth to the module
     let repays = saved >= growth.max(0) as u64 * u64::from(crate::alloc::Tuning::SPEED.clocks_per_byte);
+    if std::env::var_os("LLRM_DEBUG_TRIAL").is_some() {
+        eprintln!(
+            "division16 at speed: saved {saved} clk, growth {growth} B, module {clocks} clk {bytes} B, repays {repays}, share {}",
+            crate::routines::speed_share_percent("division16")
+        );
+    }
+    if std::env::var_os("LLRM_6502_DIV16_NOSHARE").is_some() {
+        return Ok(repays);
+    }
     Ok(repays
         && crate::mulimage::pays_by_share_at(
             crate::routines::speed_share_percent("division16"),
