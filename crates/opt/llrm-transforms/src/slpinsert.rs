@@ -23,7 +23,8 @@
 //! `slpvectorize`, `slptree`.
 //!
 //! # Example
-//! A chain of `insertelement`s of scalars whose tree of operations pays becomes one vector operation.
+//! A chain of `insertelement`s of scalars whose tree of operations pays becomes
+//! one vector operation.
 //!
 //! ```text
 //! %x0 = add i32 %a0, %b0
@@ -383,7 +384,7 @@ pub(crate) fn cost(
             ShuffleKind::PermuteSingleSrc,
             insert_ty,
             &shape.mask,
-            CostKind::RecipThroughput,
+            crate::slptree::cost_kind(function),
         )?)?;
     }
     let in_mask = is_undef_vector(context, function, info.base, &use_mask(elts, &shape.insert_mask), false);
@@ -395,7 +396,7 @@ pub(crate) fn cost(
             Some(*index),
             false,
             VectorInstrContext::None,
-            CostKind::RecipThroughput,
+            crate::slptree::cost_kind(function),
         )?)?;
     }
     if !in_mask.iter().all(|one| *one) && info.indices.len() != elts && !shape.whole_subvector {
@@ -415,7 +416,12 @@ pub(crate) fn cost(
         for at in shape.offset_end + 1 - shape.offset..shape.vec_sz {
             mask[at] = if at >= in_mask.len() || in_mask[at] { crate::slpgather::POISON } else { at as i32 };
         }
-        total += valid(tti.shuffle_cost(ShuffleKind::PermuteTwoSrc, insert_ty, &mask, CostKind::RecipThroughput)?)?;
+        total += valid(tti.shuffle_cost(
+            ShuffleKind::PermuteTwoSrc,
+            insert_ty,
+            &mask,
+            crate::slptree::cost_kind(function),
+        )?)?;
     }
     Some(total)
 }
