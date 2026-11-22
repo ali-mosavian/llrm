@@ -446,6 +446,8 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // (`bytes_strict`: no byte rate pays for the ~17 B; x_jpeg_single -O1
         // inlined it twice). Owner w2. Exit 2026-11-20.
         inline_variable_memcpy: true,
+        // DEVIATE MEM-OS-REP (owner x87, exit 2026-12-06): see `Tuning`.
+        inline_variable_memcpy_at_size: true,
         // DEVIATE REC5-1 (owner w2, exit 2026-11-20), not at -Os:
         // see `Tuning::ipsccp_widen_keeps_sign`.
         ipsccp_widen_keeps_sign: true,
