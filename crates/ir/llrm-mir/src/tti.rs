@@ -1866,6 +1866,14 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE SZ1-HOT (`Tuning::inline_size_hot_growth_percent`): at a
+    /// locally hot site (`HotCallSiteRelFreq`) the -Os bound lets through a
+    /// growth of at most this percent of the call sequence removed. None: the
+    /// bound holds there.
+    fn opt_size_inline_hot_growth_percent(&self) -> Option<i64> {
+        None
+    }
+
     /// Whether a constant address offset may become a phi: false where the
     /// access folds it as a displacement and the target says to keep it. A
     /// boolean as the pin's `replacingOperandWithVariableIsCheap` is: a
@@ -1983,6 +1991,13 @@ pub trait Tti {
         true
     }
 
+    /// DEVIATE COMMON-INSTS-O1: the SimplifyCFG that ends the -O2 function
+    /// pipeline (L832) hoists and sinks common code at -O1 too, where the
+    /// pin's `default<O1>` ends with a plain one (L621). Off: the pin.
+    fn common_insts_at_o1(&self) -> bool {
+        false
+    }
+
     /// `Tuning::sink_common_at_size`.
     fn sink_common_at_size(&self) -> bool {
         false
@@ -2020,6 +2035,16 @@ pub trait Tti {
     /// clocks to be made (`loopunrollprice`); 0: the pin's threshold alone.
     fn unroll_milliclocks_per_byte(&self) -> i64 {
         0
+    }
+
+    /// DEVIATE UP1-O3 (owner arm64, exit 2026-12-21): the rate at `opt_level`.
+    /// -O3 is judged by clocks, not bytes, so a target may take the pin's
+    /// threshold alone there (0). Default: the rate of every level.
+    fn unroll_milliclocks_per_byte_at(
+        &self,
+        _opt_level: u32,
+    ) -> i64 {
+        self.unroll_milliclocks_per_byte()
     }
 
     /// DEVIATE UNROLL-TRIAL (beyond the pin; owner 6502, exit 2026-12-05): the

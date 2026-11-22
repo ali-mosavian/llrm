@@ -101,7 +101,7 @@ fn split(
 ) -> (Module, String) {
     let mut module = parsed(text);
     let before = results(&module, INPUTS);
-    let after = managed_on(&mut module, LoopSplit, machine);
+    let after = managed_on(&mut module, LoopSplit { cleanup: false }, machine);
     assert_eq!(results(&module, INPUTS), before, "{after}");
     (module, after)
 }
@@ -217,7 +217,7 @@ fn test_a_target_that_does_not_split_loops_leaves_the_loop_whole() {
     let text = up("icmp sle i32 %i, 31", "icmp slt i32 %i.next, %n");
     let mut module = parsed(&text);
     let before = llrm_mir::print::module(&module);
-    managed_on(&mut module, LoopSplit, Tuned::default());
+    managed_on(&mut module, LoopSplit { cleanup: false }, Tuned::default());
     assert_eq!(llrm_mir::print::module(&module), before);
 }
 
@@ -278,7 +278,7 @@ fn test_the_sieve_splits_into_a_marking_loop_and_a_counting_loop() {
     let mut module = parsed(SIEVE);
     let before = results(&module, INPUTS);
     assert_eq!(loops(&module), (2, 1));
-    let after = managed_on(&mut module, LoopSplit, on());
+    let after = managed_on(&mut module, LoopSplit { cleanup: false }, on());
     assert_eq!(results(&module, INPUTS), before, "{after}");
     assert_eq!(loops(&module), (3, 2), "{after}");
     assert_eq!(counting_loop_blocks(&module), 3, "the latch is not a block of its own\n{after}");
@@ -287,6 +287,18 @@ fn test_the_sieve_splits_into_a_marking_loop_and_a_counting_loop() {
     let primes_below_100 = (25 << 16) ^ 1060;
     let at_100 = results(&module, &[&[100]]);
     assert_eq!(at_100, [llrm_mir::interpret::Val::Int { bits: primes_below_100, width: 32 }], "{after}");
+}
+
+/// The cleanup after the split folded the counting loop's arm into selects, so
+/// the loop was two blocks with a branch the vectorizer refuses: arm64 sieve
+/// -O3 ran 17098 instructions, 2126 more than -O2.
+#[test]
+fn test_the_counting_loop_after_the_cleanup_is_one_block() {
+    let mut module = parsed(SIEVE);
+    let before = results(&module, INPUTS);
+    let after = managed_on(&mut module, LoopSplit { cleanup: true }, on());
+    assert_eq!(results(&module, INPUTS), before, "{after}");
+    assert_eq!(counting_loop_blocks(&module), 1, "{after}");
 }
 
 /// The sieve as the mid-end leaves it: SimplifyCFG folded `i < 32` and the
@@ -355,7 +367,7 @@ out:
 fn test_a_border_test_folded_into_a_select_splits_the_sieve() {
     let mut module = parsed(SIEVE_FOLDED);
     let before = results(&module, INPUTS);
-    let after = managed_on(&mut module, LoopSplit, on());
+    let after = managed_on(&mut module, LoopSplit { cleanup: false }, on());
     assert_eq!(results(&module, INPUTS), before, "{after}");
     assert_eq!(loops(&module), (3, 2), "{after}");
     assert_eq!(counting_loop_blocks(&module), 3, "{after}");

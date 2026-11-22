@@ -1033,6 +1033,9 @@ impl TargetLowering {
         );
         // `LowerSINT_TO_FP`: `v2i32` to `v2f64`; `v4i32` to `v4f32` is a pattern.
         t.set_ops(&[ISD::SIntToFp], &[MVT::V2I32], Action::Custom);
+        // `LowerUINT_TO_FP`: `v4i32` to `v4f32` is `cvtdq2ps` when the sign bit is clear, else the
+        // mantissa-halves sequence.
+        t.set_ops(&[ISD::UIntToFp], &[MVT::V4I32], Action::Custom);
         // `LowerSCALAR_TO_VECTOR`: a byte or a word is widened to a dword for `movd`.
         t.set_ops(&[ISD::ScalarToVector], &[MVT::V16I8, MVT::V8I16], Action::Custom);
         // `LowerMUL`: `v4i32` without `pmulld` is `pmuludq` on the even and the
@@ -1202,6 +1205,16 @@ impl TargetLowering {
         // has no min or max across lanes.
         t.set_ops(&[VecReduceAdd, VecReduceAnd, VecReduceOr, VecReduceXor], &vectors, Custom);
         t.set_ops(&[VecReduceSMax, VecReduceSMin, VecReduceUMax, VecReduceUMin], &vectors[..3], Custom);
+        // `addDRType`'s `addTypeForNEON`: the 64-bit types reduce by `addv`,
+        // `smaxv`... as well (`v2i32` has no across-lanes form).
+        t.set_ops(
+            &[VecReduceAdd, VecReduceSMax, VecReduceSMin, VecReduceUMax, VecReduceUMin],
+            &[MVT::V8I8, MVT::V4I16],
+            Custom,
+        );
+        // `v2i32` has no across-lanes form: `pair_reduce` (DEVIATE VEC10).
+        t.set_ops(&[VecReduceAdd, VecReduceSMax, VecReduceSMin, VecReduceUMax, VecReduceUMin], &[MVT::V2I32], Custom);
+        t.set_ops(&[VecReduceAnd, VecReduceOr, VecReduceXor], &[MVT::V8I8, MVT::V4I16, MVT::V2I32], Custom);
         // `addTypeForNEON`: the conversions of a vector are
         // `LowerVectorINT_TO_FP` and `LowerVectorFP_TO_INT`, by the
         // operand's type.
