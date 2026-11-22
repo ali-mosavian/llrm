@@ -648,6 +648,8 @@ fn reduction(name: &str) -> Option<(VectorReduce, Arrangement)> {
         "16i8" => Some(Arrangement::B16),
         "8i16" => Some(Arrangement::H8),
         "4i32" => Some(Arrangement::S4),
+        "8i8" => Some(Arrangement::B8),
+        "4i16" => Some(Arrangement::H4),
         _ => None,
     };
     [

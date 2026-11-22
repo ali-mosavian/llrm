@@ -350,6 +350,8 @@ fn tuning(costs: &llrm_mir::target::OperationCosts) -> llrm_mir::target::Tuning 
         // `inlinehint` callee to 325 at an `optsize` caller (QuickrBasic
         // operands.c: `hot_int` into its wrappers).
         inline_size_guard_yields_to_inlinehint: true,
+        // DEVIATE SZ1-HOT (owner x86-m32-b, exit 2026-12-05): see `Tuning`.
+        inline_size_hot_growth_percent: Some(100),
         // DEVIATE MEMSET-GAP (owner llrm-target-x86-m16-b, exit 2026-11-27): see `Tuning`.
         memset_gap_merge_at_size: true,
         // DEVIATE SZ3 (owner x86-m32, exit 2026-11-20): an -Os SZ2 trial also
