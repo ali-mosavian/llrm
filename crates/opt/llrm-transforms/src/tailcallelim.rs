@@ -178,13 +178,7 @@ pub fn eliminated_self_calls(
     name: GlobalId,
 ) -> IdSet<InstId> {
     let Some(body) = module.global(name).function() else { return Default::default() };
-    let own = |context: &Context, function: &Function| -> IdSet<InstId> {
-        function
-            .walk()
-            .map(|(_, inst)| inst)
-            .filter(|&inst| memory::callee(context, function, inst) == Some(name))
-            .collect()
-    };
+    let own = |context: &Context, function: &Function| self_calls(context, function, name);
     let before = own(&module.context, body);
     if before.is_empty() {
         return Default::default();
@@ -196,6 +190,49 @@ pub fn eliminated_self_calls(
     let after = own(&module.context, &copy);
     // The calls left read their arguments from the loop's phis.
     if after.len() < before.len() { before } else { Default::default() }
+}
+
+/// The direct calls of `name` in `function`.
+fn self_calls(
+    context: &Context,
+    function: &Function,
+    name: GlobalId,
+) -> IdSet<InstId> {
+    function
+        .walk()
+        .map(|(_, inst)| inst)
+        .filter(|&inst| memory::callee(context, function, inst) == Some(name))
+        .collect()
+}
+
+/// Makes `name` a loop when every call it makes to itself is a tail call the
+/// pass eliminates; whether it did. A call the pass leaves stays a recursion
+/// (a tree recursion is the walk's: `DEFERRED`, `SelfInline`).
+///
+/// DEVIATE TRE-IPA (owner x86-m64, exit 2026-12-12): the pin runs
+/// `TailCallElimPass` after IPSCCP, so `deep(n - 1, b, a + n) + n` called once
+/// with constants keeps the self-call's varying arguments and is never folded.
+/// GCC runs `pass_tail_recursion` among the early optimizations, before
+/// ipa-cp: the loop's parameters have the one caller's constants.
+pub fn eliminate_linear_recursion(
+    module: &mut llrm_mir::module::Module,
+    layout: &DataLayout,
+    name: GlobalId,
+) -> bool {
+    let Some(body) = module.global(name).function() else { return false };
+    if self_calls(&module.context, body, name).is_empty() {
+        return false;
+    }
+    let mut copy = body.clone();
+    let outer = Outer::of(module, None);
+    let mut declared = Declared::of(module);
+    if eliminate(&mut module.context, layout, &mut copy, &mut declared, &outer, Some(name)) != Outcome::Looped
+        || !self_calls(&module.context, &copy, name).is_empty()
+    {
+        return false;
+    }
+    *crate::interprocedural::function_mut(module, name).1 = copy;
+    true
 }
 
 /// `canTRE`

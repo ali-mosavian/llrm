@@ -1824,6 +1824,8 @@ pub fn recorded(
                 cloning: cloning.clone(),
                 speed_rate: applied.options.prices_bytes(),
                 for_size: applied.options.prefers_size(),
+                tail_recursion: applied.options.sibcalls
+                    && (applied.options.pre || applied.options.tail_recursion_early),
             });
         }
     }
