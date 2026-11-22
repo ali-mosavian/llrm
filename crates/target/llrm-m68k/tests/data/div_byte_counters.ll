@@ -1,5 +1,5 @@
-; ModuleID = '/tmp/claude-1000/-home-alim-work-personal-llrm--claude-worktrees-jolly-rubin-cc7730/10f7b61f-7486-46fe-b0bd-31e18feff05b/scratchpad/u8b.c'
-source_filename = "/tmp/claude-1000/-home-alim-work-personal-llrm--claude-worktrees-jolly-rubin-cc7730/10f7b61f-7486-46fe-b0bd-31e18feff05b/scratchpad/u8b.c"
+; ModuleID = 'u8b.c'
+source_filename = "u8b.c"
 target datalayout = "E-m:e-p:32:16:32-i8:8:8-i16:16:16-i32:16:32-n8:16:32-a:0:16-S16"
 target triple = "m68k-unknown-linux-gnu"
 

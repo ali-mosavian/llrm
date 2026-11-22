@@ -31,6 +31,21 @@ fn a_zero_stored_and_not_read_again_is_stz() {
     );
 }
 
+/// The zero comes through `y` or `x` (bit_setclear: the high word of a `long`
+/// made from a short before `jsr report`, `ldy #0; sty rc2; sty rc3` four times, 6
+/// B each, 151 B against a bar of 147 on the 65C02): `stz` each, 4 B.
+#[test]
+fn a_zero_made_in_y_or_x_and_stored_is_stz() {
+    assert_eq!(stz("  ldy #0\n  sty rc2\n  sty rc3\n  jsr report\n", true), "  stz rc2\n  stz rc3\n  jsr report\n");
+    assert_eq!(stz("  ldx #0\n  stx rc2\n  ldx rc7\n  rts\n", true), "  stz rc2\n  ldx rc7\n  rts\n");
+    // read again after: stays
+    let text = "  ldy #0\n  sty rc2\n  tya\n  rts\n";
+    assert_eq!(stz(text, true), text);
+    // no `stz` on the 6502
+    let text = "  ldy #0\n  sty rc2\n  sty rc3\n  jsr report\n";
+    assert_eq!(stz(text, false), text);
+}
+
 /// A `bra` leaves the block as a `jmp` does: the flags `lda #0` set are not
 /// read after it (`fletcher`'s empty-input path kept `lda #0; sta rc6; bra`).
 #[test]

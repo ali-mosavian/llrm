@@ -41,6 +41,11 @@ pub struct Function {
     pub tables: Vec<crate::jumptable::Table>,
     /// Whether it has an entry in the unwind tables.
     pub unwind: bool,
+    /// The labels of the blocks that end in a call that never returns.
+    pub dead_ends: Vec<String>,
+    /// The label of each block whose address is taken, with the symbol that
+    /// names it.
+    pub block_symbols: Vec<(String, String)>,
 }
 
 /// A function's pieces for the layout: a block's label, then its words.
@@ -94,15 +99,24 @@ impl Symbols {
         offset: usize,
         size: usize,
     ) {
-        self.index.insert(name.to_owned(), self.list.len());
-        self.list.push(Symbol {
+        let defined = Symbol {
             name: name.to_owned(),
             binding,
             definition: Definition::Defined { section, offset },
             size,
             group: None,
             visibility: Default::default(),
-        });
+        };
+        // A name something already refers to keeps its place: the references
+        // made before the definition (a block's address read by a function
+        // that comes first) hold its number.
+        match self.index.get(name).copied().filter(|&at| matches!(self.list[at].definition, Definition::Undefined)) {
+            Some(at) => self.list[at] = defined,
+            None => {
+                self.index.insert(name.to_owned(), self.list.len());
+                self.list.push(defined);
+            }
+        }
     }
 
     /// The symbol `name`, undefined if nothing defined it.
@@ -266,12 +280,21 @@ pub fn object(
         let Definition::Defined { section, offset } = symbols.list[found].definition else {
             return Err(format!("@{} aliases @{}, which this object does not define", alias.name, target));
         };
-        let size = symbols.list[found].size;
+        // The name of a merged global is a place inside its struct, as large as
+        // the global it replaced.
+        let size = if matches!(
+            module.global(alias.aliasee).kind,
+            llrm_mir::module::GlobalKind::Variable(_)
+        ) {
+            layout.alloc_size(&module.context.types, alias.ty) as usize
+        } else {
+            symbols.list[found].size
+        };
         symbols.defined(
             &data::symbol_name(platform, &alias.name),
             data::binding_of(alias.linkage),
             section,
-            offset,
+            offset + alias.offset as usize,
             size,
         );
     }
@@ -301,6 +324,10 @@ pub fn object(
         let placed = place(&mut fragments, &()).map_err(|error| format!("{}: {}", function.symbol, error.0))?;
         let labels: HashMap<String, usize> =
             placed.into_iter().map(|(name, at)| (name, function_offset + at as usize)).collect();
+        for (label, symbol) in &function.block_symbols {
+            let at = labels.get(label.as_str()).ok_or_else(|| format!("{}: no block {label}", function.symbol))?;
+            symbols.defined(symbol, Binding::Local, text_index, *at, 0);
+        }
         for (f, t, offset) in table_places.iter().filter(|(f, ..)| std::ptr::eq(&functions[*f], function)) {
             let table = &functions[*f].tables[*t];
             let bytes = llrm_object::table::differences(table.entry, &table.base, &table.entries, &|name| {
@@ -356,7 +383,7 @@ pub fn object(
             section: text_index,
             offset,
             length: function.blocks.iter().map(|block| words(block) * 4).sum(),
-            rows: crate::cfi::rows(&function.blocks),
+            rows: crate::cfi::rows(&function.blocks, &function.dead_ends),
             cfi: function.blocks.iter().flat_map(|block| &block.insts).filter_map(directive).collect(),
             seh: Vec::new(),
         })

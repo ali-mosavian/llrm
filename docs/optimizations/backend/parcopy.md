@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/parcopy.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/parcopy.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/parcopy.rs sha256:a9147035ff11d709893452d3c78bb94d2c37546a8d8f0d9c6696d33b535ea8b0 -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/parcopy.rs sha256:84c22094098838670a90da46c17d38a4317b1e8355d55788164e1f51e56907ae -->
 
 # parcopy
 
@@ -73,7 +73,7 @@ The ready copy is written first, the cycle becomes one `xchg`, and an anchor
 keeps the virtual definition the dropped copies stood for.
 
 From `ISEL_DUMP=1` of a C function whose loop does `t = a; a = b; b = t;`,
-compiled with `llrm-c -O2 -m16`: the `RegAlloc` and `ParallelCopy` stages.
+compiled with `llrm-cc -O2 -m16`: the `RegAlloc` and `ParallelCopy` stages.
 
 ## Runs
 After `regalloc`, before `prologue` and the peephole, once per body, at

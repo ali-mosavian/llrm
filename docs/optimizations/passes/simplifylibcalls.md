@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/simplifylibcalls.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/simplifylibcalls.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/simplifylibcalls.rs sha256:ab5dba9491083c62e085022a683054390d1bc636b593c64e2555d043755cce7a -->
+<!-- src: crates/opt/llrm-transforms/src/simplifylibcalls.rs sha256:b91239aeb096a0fccd92176f696b369e834369c8a843f77ffddb1f1a996ff808 -->
 
 # simplifylibcalls
 
@@ -31,23 +31,42 @@ result is only compared with zero, and `memcmp(p, q, n) == 0` is `bcmp`
 (`compare.rs`). `strchr` of a constant string and character, `strpbrk`,
 `strspn`, `strcspn` and `strstr` over constant strings fold to an address
 into the first string, null or a length, and `memchr` of a constant array
-or size folds to compares and a select (`search.rs`).
+or size folds to compares and a select (`search.rs`). `strcpy`, `stpcpy`,
+`strcat`, `strncat` and `strncpy` of a string of known length are an
+`llvm.memcpy` of it with its NUL (`copy.rs`), `strlen` finding the end where
+the compile states it. `strlen` of a constant string is its length, of a
+`select` of two the `select` of their lengths, and `strlen(x) == 0` is
+`*x == 0` (`length.rs`).
 
 ## Deviations
 - D1: `puts`, `putchar`, `fwrite`, `fputc`, `fputs`, `memcmp` and `bcmp` are
   formed only where the compile states them in `Options::library`, as
   `strlen` is (loopidiom D11); the pin reads the triple. Exit:
   `Target::library` naming them.
-- D2: the other arms (`sprintf`, `snprintf`, the other `str*`, `memchr`, math)
-  are untranslated, and so are `iprintf`/`__small_printf`,
-  `optimizeErrorReporting` and the argument annotations. The `memcpy`
-  family is `memops.rs`.
+- D2: the other arms (`sprintf`, `snprintf`, the other `str*`, `memchr`,
+  math) are untranslated, and so are `iprintf`/`__small_printf`,
+  `optimizeErrorReporting` and the argument annotations. The `memcpy` family
+  is `memops.rs`.
 - D4: the arms of `strchr`, `strpbrk`, `strcspn` and `strstr` that call a
   routine (`memchr`, `strlen`, `strncmp`, `strchr`) are untranslated, as is
   the character compare the pin makes of a `strchr` or `strstr` tested
   against its own string: such a call is left as it is.
 - D5: `memchr` of a constant array and size tested against null (the pin's
   bit-field and OR-chain rewrite) is not translated.
+- D6: `stpcpy` with an unused result (the pin's `strcpy` call) and
+  `stpcpy(x, x)` (its `strlen` call) are untranslated.
+- D7: `strncpy` of an empty source (the pin's `memset`) and of a bound past
+  the source and its NUL (a NUL-padded copy) are untranslated, as is
+  `stpncpy`.
+- D8 (FREESTANDING-MEM, owner w11, exit 2026-12-20): a `no-builtins`
+  function or a `nobuiltin` call still folds `memcpy`, `memmove`, `memset` and
+  `memcmp`; every other library function stays a call, as the pin has it. GCC
+  keeps those four builtin under `-ffreestanding` ("GCC requires the
+  freestanding environment provide `memcpy`, `memmove`, `memset` and
+  `memcmp`", gcc.gnu.org, Standards: Freestanding), clang's `no-builtins`
+  turns them off. QuickrBasic's bar is the better of the two (os.c
+  `llrm_os_find_next`: 12 B in GCC, 60 B with the call). Exit: `Target::library`
+  stating which functions the platform guarantees.
 - D3: `strcmp` of two strings whose lengths are known but whose contents are
   not (a PHI or select of literals) is not rewritten: `GetStringLength` here
   reads a constant global only.
@@ -62,4 +81,4 @@ call i32 (ptr, ...) @printf(ptr @.str)   ; @.str = c"hi\0A\00", unused
 becomes `call i32 @puts(ptr @str.0)` with `@str.0 = c"hi\00"`.
 
 ## Used by
-Named by `aggressive_instcombine`, `pipeline`, `simplifylibcalls_compare`, `simplifylibcalls_search`, `simplifylibcalls_slope`.
+Named by `aggressive_instcombine`, `mergeicmps`, `partialinline`, `pipeline`, `simplifylibcalls_compare`, `simplifylibcalls_copy`, `simplifylibcalls_search`, `simplifylibcalls_slope`.

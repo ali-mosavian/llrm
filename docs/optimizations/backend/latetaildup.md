@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/latetaildup.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/latetaildup.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/latetaildup.rs sha256:1ac3cb3b474c3856e48cf56497386006a00fc4ebb53e90aa19a89eda0f01470c -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/latetaildup.rs sha256:94acf98688eb6942a1d4934efd0c29b490679e26d22055d52b2e22347b19b45a -->
 
 # latetaildup
 
@@ -25,17 +25,25 @@ the tail goes when nothing reaches it. A block of one jump is bypassed
   b3: x; jmp b4         (b3 goes when nothing else reaches it)
 ```
 
+A computed goto (an indirect jump whose every successor has its address
+taken) is copied up to ten instructions whatever the size
+(`terminatorIsComputedGotoWithSuccessors`): it undoes the factoring of the
+`goto *` of an interpreter's dispatch into one block. DEVIATE TL4 (no target
+states it since m32 dropped it): a target may keep it factored at `-Os`.
+
 DEVIATE TL1 (owner greedy-subreg, exit 2026-11-27): a tail with a call, a
 call's record, a group, a symbol, bytes spread over others, an indirect jump
-or a sibling call is not copied. The pin copies a call or a return after
-allocation; here a copy keeps no callee (the callee is named by the
-instruction's id) and claims no source bytes of its own (placement's
-`copied` refuses the same).
+that is no computed goto or a sibling call is not copied. The pin copies a
+call or a return after allocation; here a copy keeps no callee (the callee
+is named by the instruction's id) and claims no source bytes of its own
+(placement's `copied` refuses the same).
 
 DEVIATE TL3 (owner greedy-subreg, exit 2026-11-20): the pin's return block
 already holds the frame's teardown, so a framed function's is longer than
 the bound and is never copied; here the teardown is emitted after this pass,
-so a tail that returns counts the callee-saved registers the body writes.
+so a tail that returns counts the callee-saved registers the body writes,
+and the frame's own `pop` or `leave` where the function has a frame
+register (kept, or addressed by the body).
 Without it queens m64 -O2 was +24 B (copies the tail merge joined again).
 
 DEVIATE TL2 (no number): `Preds` is rebuilt after each tail copied, so a

@@ -76,3 +76,12 @@ row=$("$corpus" O1 "$root/tests/run/c/licm_graph_callee_footprint.c" | tail -1)
 read -r _ _ _ llrm_instr clang_instr _ _ result <<< "$row"
 [ "$llrm_instr" -gt 0 ] && [ "$clang_instr" -gt 0 ] && [ "$result" = same ] || { echo "FAIL: a program with its own run did not run: $row"; exit 1; }
 echo "ok: $row"
+
+# parity, scalar (`keep`), os_exit (`llrm_os_exit`) and the long_double programs (`__multf3`, `__addtf3`) hit an import the stub lacked: the
+# run had no result and 6 cells of the Os board were never compared, whatever their bytes. Each must run and agree.
+for f in tests/run/c/os_exit.c bench/parity/parity/parity.c bench/parity/scalar/scalar.c tests/run/c/long_double_arguments.c; do
+    row=$("$root/tools/wasm_corpus.sh" Os "$root/$f" | tail -1)
+    read -r _ _ _ llrm_instr clang_instr _ _ result <<< "$row"
+    [ "$llrm_instr" -gt 0 ] && [ "$clang_instr" -gt 0 ] && [ "$result" = same ] || { echo "FAIL: $f has no result: $row"; exit 1; }
+    echo "ok: $row"
+done

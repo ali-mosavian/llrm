@@ -290,6 +290,10 @@ impl Inst {
                     f(Fpr(rm), Role::Use);
                 }
             }
+            Inst::FpCondCompare { rn, rm, .. } => {
+                f(Fpr(rn), Role::Use);
+                f(Fpr(rm), Role::Use);
+            }
             Inst::FpMoveImm { rd, .. } => f(Fpr(rd), Role::Def),
             Inst::VectorBinary { rd, rn, rm, .. } => {
                 f(Fpr(rd), Role::Def);

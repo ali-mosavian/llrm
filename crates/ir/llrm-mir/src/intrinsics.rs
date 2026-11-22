@@ -112,15 +112,19 @@ pub enum Intrinsic {
     VectorReduce(ReduceKind),
     /// `llvm.copysign`: the first argument with the second's sign.
     CopySign,
+    /// `llvm.is.fpclass`: whether the float is of one of the classes the
+    /// constant second argument (an `FPClassTest` mask) names.
+    IsFpClass,
     /// `llvm.fabs`, `llvm.sqrt` and their kin: a function of one float.
     Unary(FloatFunction),
     /// Rounds to an integer as the rounding mode says: by default, to
     /// nearest, ties to even.
     LRint,
-    /// `llvm.experimental.fp{to}{s,u}i.checked` (no LLVM counterpart; DEVIATE FPTOINT-CHECKED):
-    /// the float toward zero as an integer of the result's width, and whether
-    /// it fits that integer (NaN and a float past the range do not). The value
-    /// is unspecified where it does not fit, and no instruction faults.
+    /// `llvm.experimental.fp{to}{s,u}i.checked` (no LLVM counterpart; DEVIATE
+    /// FPTOINT-CHECKED): the float toward zero as an integer of the
+    /// result's width, and whether it fits that integer (NaN and a float
+    /// past the range do not). The value is unspecified where it does not
+    /// fit, and no instruction faults.
     FpToIntChecked {
         signed: bool,
     },
@@ -169,8 +173,9 @@ pub enum Intrinsic {
     Trap,
     /// `llvm.debugtrap`: a breakpoint (`int3` on x86).
     DebugTrap,
-    /// `llvm.ubsantrap`: stops with the sanitizer's check kind (`ud1 kind(%eax), %eax`
-    /// on x86, `X86MCInstLower.cpp` `UBSAN_UD1`); not translated.
+    /// `llvm.ubsantrap`: stops with the sanitizer's check kind (`ud1
+    /// kind(%eax), %eax` on x86, `X86MCInstLower.cpp` `UBSAN_UD1`); not
+    /// translated.
     UbsanTrap,
     /// `llvm.fake.use`: keeps its operands live for a debugger at `-Og`; no
     /// code runs it.
@@ -181,6 +186,12 @@ pub enum Intrinsic {
     /// call operand, so the call has none and its scope list is the
     /// `!noalias.scope.decl` attachment. No code runs it.
     NoAliasScopeDecl,
+    /// `llvm.experimental.constrained.*` (`ConstrainedFPIntrinsic`): the
+    /// operation under the rounding mode and exception behaviour its
+    /// `metadata` arguments name. Ordered with every other call that touches
+    /// the floating-point environment (`memory(inaccessiblemem: readwrite)`);
+    /// never folded, merged or moved by a pass.
+    Constrained(ConstrainedOp),
     /// `llvm.expect`: its first argument, which the second says it is expected
     /// to be: a hint `lower-expect` turns into branch weights and removes
     /// (LowerExpectIntrinsic.cpp); no code runs it.
@@ -301,6 +312,18 @@ pub fn code(name: &str) -> Option<(Vec<u8>, Vec<(usize, i64)>)> {
 /// call's first arguments, in order, before the registers'.
 const ASM: &str = "llrm.ia16.asm.";
 
+/// The same block for flat 32-bit code: `llrm.ia32.asm.`, the grammar above,
+/// the registers the 32-bit target names (`eax`, `st0`, `st1`: the x87 stack's
+/// top and its next). One mechanism, the bitness the prefix.
+const ASM32: &str = "llrm.ia32.asm.";
+
+/// The same for flat 64-bit code: `llrm.ia64.asm.`, the registers the 64-bit
+/// target names (`rax`, `r8`..`r15`, `eax`, `st0`...).
+const ASM64: &str = "llrm.ia64.asm.";
+
+/// The prefix of a block's name at `bits`, and the bitness a prefix states.
+const ASM_PREFIXES: [(u8, &str); 3] = [(16, ASM), (32, ASM32), (64, ASM64)];
+
 /// A word of an inline block that names a symbol: where, as what (`offset`,
 /// `segment`, `reloff`), and plus what.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -310,9 +333,10 @@ pub struct AsmFixup {
     pub addend: i64,
 }
 
-/// An inline assembly block: registers by their 16-bit names.
+/// An inline assembly block: registers by their names at `bits` (16, 32 or 64).
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AsmBlock {
+    pub bits: u8,
     pub code: Vec<u8>,
     pub inputs: Vec<String>,
     pub outputs: Vec<String>,
@@ -326,7 +350,8 @@ pub fn asm_name(block: &AsmBlock) -> String {
     let list = |names: &[String]| if names.is_empty() { "-".to_owned() } else { names.join("_") };
     let fixups: String = block.fixups.iter().map(|one| format!(".f{}_{}_{}", one.at, one.kind, one.addend)).collect();
     format!(
-        "{ASM}{hex}.{}.{}.{}.{}{fixups}",
+        "{}{hex}.{}.{}.{}.{}{fixups}",
+        ASM_PREFIXES.iter().find(|(bits, _)| *bits == block.bits).map_or(ASM, |(_, prefix)| *prefix),
         list(&block.inputs),
         list(&block.outputs),
         list(&block.clobbers),
@@ -335,7 +360,8 @@ pub fn asm_name(block: &AsmBlock) -> String {
 }
 
 pub fn asm(name: &str) -> Option<AsmBlock> {
-    let parts = name.strip_prefix(ASM)?.split('.').collect::<Vec<_>>();
+    let (bits, rest) = ASM_PREFIXES.iter().find_map(|(bits, prefix)| Some((*bits, name.strip_prefix(prefix)?)))?;
+    let parts = rest.split('.').collect::<Vec<_>>();
     let [hex, inputs, outputs, clobbers, memory, fixups @ ..] = &parts[..] else {
         return None;
     };
@@ -364,7 +390,15 @@ pub fn asm(name: &str) -> Option<AsmBlock> {
             })
         })
         .collect::<Option<Vec<_>>>()?;
-    Some(AsmBlock { code, inputs: list(inputs), outputs: list(outputs), clobbers: list(clobbers), memory, fixups })
+    Some(AsmBlock {
+        bits,
+        code,
+        inputs: list(inputs),
+        outputs: list(outputs),
+        clobbers: list(clobbers),
+        memory,
+        fixups,
+    })
 }
 
 /// What `llvm.ctlz`, `llvm.cttz` and `llvm.ctpop` count.
@@ -394,6 +428,27 @@ impl BitCount {
     pub fn has_zero_poison_flag(self) -> bool {
         self != Self::Population
     }
+}
+
+/// The operation of an `llvm.experimental.constrained.*`: the ones
+/// QuickrBasic's `pfpu.c` needs; the others are refused by name.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum ConstrainedOp {
+    FAdd,
+    FSub,
+    FMul,
+    FDiv,
+    FpExt,
+    FpTrunc,
+    SiToFp,
+    UiToFp,
+    FpToSi,
+    FpToUi,
+    Rint,
+    /// `fcmp`: quiet.
+    FCmp,
+    /// `fcmps`: signaling.
+    FCmps,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -465,6 +520,8 @@ enum Slot {
     Int(u32),
     /// A pointer in address space 0, whatever the overload is.
     Ptr,
+    /// `metadata`.
+    Metadata,
     Void,
 }
 
@@ -609,6 +666,73 @@ const LIFETIME: &[Slot] = &[Slot::Int(64), Slot::Any(0)];
 const LIFETIME_PARAMETERS: &[&[&str]] = &[&["immarg"], &["nocapture"]];
 const LIFETIME_ATTRS: &[&str] = &["nocallback", "nofree", "nosync", "nounwind", "willreturn"];
 
+/// `Intrinsics.td`'s constrained family: `DefaultAttrsIntrinsic` plus
+/// `IntrInaccessibleMemOnly`, `IntrWillReturn` and `IntrStrictFP`.
+const CONSTRAINED_ATTRS: &[&str] = &["nocallback", "nofree", "nosync", "nounwind", "strictfp", "willreturn"];
+const FP_ENVIRONMENT: &[(Option<&str>, &str)] = &[(Some("inaccessiblemem"), "readwrite")];
+const CONSTRAINED_OWN: Option<Own> = Some(Own { attrs: CONSTRAINED_ATTRS, memory: FP_ENVIRONMENT, parameters: &[] });
+
+/// Rounding mode and exception behaviour.
+const BINARY_ROUNDED: &[Slot] = &[Slot::Any(0), Slot::Any(0), Slot::Metadata, Slot::Metadata];
+const UNARY_ROUNDED: &[Slot] = &[Slot::Any(0), Slot::Metadata, Slot::Metadata];
+/// Predicate and exception behaviour.
+const COMPARED: &[Slot] = &[Slot::Any(0), Slot::Any(0), Slot::Metadata, Slot::Metadata];
+const FPEXT: &[Slot] = &[Slot::Any(1), Slot::Metadata];
+const FPTRUNC: &[Slot] = &[Slot::Any(1), Slot::Metadata, Slot::Metadata];
+const SITOFP: &[Slot] = &[Slot::Any(1), Slot::Metadata, Slot::Metadata];
+const FPTOSI: &[Slot] = &[Slot::Any(1), Slot::Metadata];
+
+const fn constrained(
+    name: &'static str,
+    op: ConstrainedOp,
+    parameters: &'static [Slot],
+) -> Spec {
+    Spec {
+        name,
+        intrinsic: Intrinsic::Constrained(op),
+        overloads: &[Kind::Float],
+        returns: Slot::Any(0),
+        parameters,
+        own: CONSTRAINED_OWN,
+    }
+}
+
+const fn compare_constrained(
+    name: &'static str,
+    op: ConstrainedOp,
+) -> Spec {
+    Spec {
+        name,
+        intrinsic: Intrinsic::Constrained(op),
+        overloads: &[Kind::Float],
+        returns: Slot::Int(1),
+        parameters: COMPARED,
+        own: CONSTRAINED_OWN,
+    }
+}
+
+/// A conversion: the result type is the first overload, the operand's the
+/// second (`fpext.f80.f64`, `fptosi.i32.f80`).
+const fn conversion(
+    name: &'static str,
+    op: ConstrainedOp,
+    overloads: [Kind; 2],
+    parameters: &'static [Slot],
+) -> Spec {
+    Spec {
+        name,
+        intrinsic: Intrinsic::Constrained(op),
+        overloads: match overloads {
+            [Kind::Float, Kind::Float] => &[Kind::Float, Kind::Float],
+            [Kind::Float, Kind::Int] => &[Kind::Float, Kind::Int],
+            _ => &[Kind::Int, Kind::Float],
+        },
+        returns: Slot::Any(0),
+        parameters,
+        own: CONSTRAINED_OWN,
+    }
+}
+
 static NAMES: std::sync::OnceLock<crate::hash::HashMap<&'static str, Intrinsic>> = std::sync::OnceLock::new();
 
 thread_local! {
@@ -628,7 +752,7 @@ thread_local! {
     static PROBES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-const TABLE: [Spec; 99] = [
+const TABLE: [Spec; 113] = [
     overflow("llvm.sadd.with.overflow", BinaryOp::Add, true),
     overflow("llvm.uadd.with.overflow", BinaryOp::Add, false),
     overflow("llvm.ssub.with.overflow", BinaryOp::Sub, true),
@@ -694,6 +818,14 @@ const TABLE: [Spec; 99] = [
     reduce("llvm.vector.reduce.fadd", ReduceKind::FAdd),
     reduce("llvm.vector.reduce.fmul", ReduceKind::FMul),
     arithmetic("llvm.copysign", Intrinsic::CopySign, Slot::Any(0), &[Slot::Any(0), Slot::Any(0)], Kind::Float),
+    Spec {
+        name: "llvm.is.fpclass",
+        intrinsic: Intrinsic::IsFpClass,
+        overloads: &[Kind::Float],
+        returns: Slot::Int(1),
+        parameters: &[Slot::Any(0), Slot::Int(32)],
+        own: None,
+    },
     unary("llvm.fabs", FloatFunction::Fabs),
     unary("llvm.sqrt", FloatFunction::Sqrt),
     unary("llvm.sin", FloatFunction::Sin),
@@ -1018,6 +1150,19 @@ const TABLE: [Spec; 99] = [
         parameters: &[Slot::Int(16), Slot::Any(0)],
         own: Some(Own { attrs: PORT_ATTRS, memory: PORT_MEMORY, parameters: &[] }),
     },
+    constrained("llvm.experimental.constrained.fadd", ConstrainedOp::FAdd, BINARY_ROUNDED),
+    constrained("llvm.experimental.constrained.fsub", ConstrainedOp::FSub, BINARY_ROUNDED),
+    constrained("llvm.experimental.constrained.fmul", ConstrainedOp::FMul, BINARY_ROUNDED),
+    constrained("llvm.experimental.constrained.fdiv", ConstrainedOp::FDiv, BINARY_ROUNDED),
+    constrained("llvm.experimental.constrained.rint", ConstrainedOp::Rint, UNARY_ROUNDED),
+    compare_constrained("llvm.experimental.constrained.fcmp", ConstrainedOp::FCmp),
+    compare_constrained("llvm.experimental.constrained.fcmps", ConstrainedOp::FCmps),
+    conversion("llvm.experimental.constrained.fpext", ConstrainedOp::FpExt, [Kind::Float, Kind::Float], FPEXT),
+    conversion("llvm.experimental.constrained.fptrunc", ConstrainedOp::FpTrunc, [Kind::Float, Kind::Float], FPTRUNC),
+    conversion("llvm.experimental.constrained.sitofp", ConstrainedOp::SiToFp, [Kind::Float, Kind::Int], SITOFP),
+    conversion("llvm.experimental.constrained.uitofp", ConstrainedOp::UiToFp, [Kind::Float, Kind::Int], SITOFP),
+    conversion("llvm.experimental.constrained.fptosi", ConstrainedOp::FpToSi, [Kind::Int, Kind::Float], FPTOSI),
+    conversion("llvm.experimental.constrained.fptoui", ConstrainedOp::FpToUi, [Kind::Int, Kind::Float], FPTOSI),
 ];
 
 /// Gives a function named `name` its intrinsic's attributes, if it names
@@ -1138,7 +1283,12 @@ pub fn is_target_intrinsic(name: &str) -> bool {
 }
 
 pub fn is_reserved(name: &str) -> bool {
-    name.starts_with("llvm.") || name.starts_with("llrm.ia16.") || name.starts_with("llrm.noalias") || name.starts_with("llrm.vararg.")
+    name.starts_with("llvm.")
+        || name.starts_with("llrm.ia16.")
+        || name.starts_with(ASM32)
+        || name.starts_with(ASM64)
+        || name.starts_with("llrm.noalias")
+        || name.starts_with("llrm.vararg.")
 }
 
 /// The type suffix LLVM mangles an overloaded type into.
@@ -1187,7 +1337,7 @@ impl Intrinsic {
         if name.starts_with(CODE) {
             return Some(Intrinsic::Code);
         }
-        if name.starts_with(ASM) {
+        if ASM_PREFIXES.iter().any(|(_, prefix)| name.starts_with(prefix)) {
             return Some(Intrinsic::Asm);
         }
         // The longest table name that is `name` or a `.`-cut prefix of it.
@@ -1231,8 +1381,14 @@ impl Intrinsic {
         };
         if self == Intrinsic::Asm {
             let block = asm(name).ok_or("Inline assembly's name does not parse!")?;
+            // Flat code also passes bytes, and the x87 stack's values (`st0`,
+            // `st1`).
+            let flat = block.bits >= 32;
             let word = |ty: &TypeId| {
-                matches!(types.int_bits(*ty), Some(16 | 32)) || matches!(types.get(*ty), Type::Pointer(0))
+                matches!(types.int_bits(*ty), Some(16 | 32))
+                    || matches!(types.get(*ty), Type::Pointer(0))
+                    || flat && (types.int_bits(*ty) == Some(8) || matches!(types.get(*ty), Type::Float(_)))
+                    || block.bits == 64 && types.int_bits(*ty) == Some(64)
             };
             let answers = match &block.outputs[..] {
                 [] => types.is_void(*returns),
@@ -1320,6 +1476,7 @@ impl Intrinsic {
                 },
                 Slot::Int(bits) => types.int_bits(ty) == Some(bits),
                 Slot::Ptr => matches!(types.get(ty), Type::Pointer(0)),
+                Slot::Metadata => matches!(types.get(ty), Type::Metadata),
                 Slot::Void => types.is_void(ty),
             }
         };
@@ -1344,12 +1501,7 @@ impl Intrinsic {
         if lane(&spec.returns) && !returns_ok(&mut matches) {
             return Err("Intrinsic has incorrect return type!".to_owned());
         }
-        if !spec
-            .parameters
-            .iter()
-            .zip(parameters)
-            .filter(|(slot, _)| lane(slot))
-            .all(|(slot, ty)| matches(*slot, *ty))
+        if !spec.parameters.iter().zip(parameters).filter(|(slot, _)| lane(slot)).all(|(slot, ty)| matches(*slot, *ty))
         {
             return Err("Intrinsic has incorrect argument type!".to_owned());
         }

@@ -106,6 +106,7 @@
 //! | `loopidioms` | `loopidioms`, `merge`, `memcpyopt` |
 //! | `sibcalls` | `tailrec` |
 //! | `unswitch`, `interchange`, `unroll_and_jam` | the passes of that name (`unswitch` and `unroll_and_jam` on at -O3 and -Omax; `interchange` on at every level but -O0) |
+//! | `split_loops` | `loop-split` (gcc's `-fsplit-loops`, on at -O3 and -Omax; runs only where the target's `Tti::loop_split` says so) |
 //! | `copy_headers` | the header copy in E (off by default; `-ftree-ch`) |
 //!
 //! `pre` makes `gvn` insert on the path that lacks a value; `for_size` prices
@@ -142,7 +143,7 @@ use crate::settled::{self, Settled};
 use crate::{
     adce, algebraic, availableexternally, bdce, calleepop, cgpaddr, constmerge, dead, deadstore, decide, extload,
     fixednarrow, floatloop, fold, gepbyteindex, gepoffset, globaldce, globalopt, gvn, indvars, inferfunctionattrs,
-    inferspace, inline, lcssa, loopdeletion, loopidioms, loopinterchange, looprotate, loopsimplify, loopunrollandjam,
+    inferspace, inline, lcssa, loopdeletion, loopidioms, loopinterchange, looprotate, loopsimplify, loopunrollandjam, mosindexiv,
     loopunrollpass, mem2reg, memcpyopt, mldstmotion, partialinline, ports, promote, ree, sccp, simpleloopunswitch,
     simplifycfg, splitpaths, switchlower, tailcallelim, trivialunswitch, typepromotion_pass, window, zeromerge,
 };
@@ -282,6 +283,9 @@ pub struct Options {
     pub loopidioms: bool,
     pub sibcalls: bool,
     pub unswitch: bool,
+    /// `-fsplit-loops`: GCC's loop splitting ([`crate::loopsplit`]), on at -O3
+    /// and -Omax.
+    pub split_loops: bool,
     /// `-floop-interchange`: LLVM's `LoopInterchange.cpp`, in the pin's
     /// default pipelines (`enable-loopinterchange`) at every level but -O0.
     pub interchange: bool,
@@ -293,6 +297,9 @@ pub struct Options {
     /// `-ftree-loop-vectorize`: LLVM's `LoopVectorizePass`, which clang runs at
     /// -O2 and up.
     pub vectorize: bool,
+    /// gcc's `--param vect-cost-model=very-cheap`: `LoopVectorizePass` plans no
+    /// loop that would end in a scalar epilogue (DEVIATE VP9 of the planner).
+    pub vect_very_cheap: bool,
     /// LPM1's `loop-rotate` between the two LICM runs
     /// (PassBuilderPipelines.cpp L728), the first LICM not speculating; on, as
     /// in the pin.
@@ -376,9 +383,11 @@ impl Default for Options {
             loopidioms: true,
             sibcalls: true,
             unswitch: false,
+            split_loops: false,
             interchange: true,
             unroll_and_jam: false,
             vectorize: true,
+            vect_very_cheap: false,
             mem2reg: experiment_mem2reg(),
             sroa: !llrm_support::env_flag!("LLRM_NO_SROA"),
             combine: !llrm_support::env_flag!("LLRM_NO_COMBINE"),
@@ -424,6 +433,7 @@ impl Options {
             backward_threading: true,
             loop_unrolling: false,
             unswitch: false,
+            split_loops: false,
             switch_conversion: false,
             speed_rate: false,
             ..Self::default()
@@ -446,6 +456,7 @@ impl Options {
         Self {
             inline: inline::Threshold::new(250),
             unswitch: true,
+            split_loops: true,
             unroll_and_jam: true,
             limits: Limits { target_percent: 200, ..Limits::default() },
             ..Self::default()
@@ -459,6 +470,7 @@ impl Options {
             limits: Limits { target_percent: 200, ..Limits::default() },
             inline: inline::Threshold { cp_clone: Some(true), ..inline::Threshold::new(250) },
             unswitch: true,
+            split_loops: true,
             unroll_and_jam: true,
             search: true,
             exhaustive: true,
@@ -511,9 +523,9 @@ impl Options {
         self.limits.target_percent >= 200
     }
 
-    /// -Oz: no loop is copied.
+    /// -Oz: -Os without header copies.
     pub fn min_size() -> Self {
-        Self { unroll: false, has_min_size: true, inline: inline::Threshold::default().for_min_size(), ..Self::size() }
+        Self { has_min_size: true, inline: inline::Threshold::default().for_min_size(), ..Self::size() }
     }
 
     /// Whether pass `name` is on. Every pass can be turned off, which is
@@ -547,6 +559,7 @@ impl Options {
             "tailrec" => self.sibcalls,
             "loop-interchange" => self.interchange,
             "loop-unroll-and-jam" => self.unroll_and_jam,
+            "loop-split" => self.split_loops,
             "loop-vectorize" => self.vectorize,
             _ => true,
         }
@@ -878,7 +891,10 @@ impl FunctionPass for LoopPassManager {
             if !unit.function.is_placed(header) || !found.is_loop_header(header) {
                 continue;
             }
-            {
+            // LLVM's loop pass manager holds the `Loop`, which keeps its identity
+            // when `LoopRotate` moves its header; the scope follows the header, so
+            // the loop to run again is read from it.
+            let header = {
                 let _scope = crate::loopfilter::only(&[header]);
                 for part in self.passes.iter_mut() {
                     let name = part.name();
@@ -890,7 +906,8 @@ impl FunctionPass for LoopPassManager {
                         analyses.invalidate(unit.function, &preserved);
                     }
                 }
-            }
+                crate::loopfilter::current().first().copied().unwrap_or(header)
+            };
             // The loop itself is popped first, then its siblings in order.
             let (revisit, mut siblings) = crate::loopfilter::take_unswitched();
             siblings.reverse();
@@ -1128,6 +1145,10 @@ pub(crate) fn llvm_order(
             // LoopInterchangePass (l.1631), in the loop pass manager after
             // LoopRotate (l.1621) and LoopDeletion (l.1628).
             slot("loop-interchange@1631", Box::new(loopinterchange::Interchange::default())),
+            // DEVIATE LSPLIT (owner arm64, exit 2026-11-24): GCC's
+            // `-fsplit-loops` runs after loop-invariant motion and before the
+            // vectorizer; the pin has no such pass.
+            slot("loop-split@gcc", Box::new(crate::loopsplit::LoopSplit { cleanup: true })),
             // DEVIATE UJ-EARLY (owner arm64-vec, exit 2026-12-01): GCC's
             // `pass_unroll_jam` runs before its vectorizer, where a nest is
             // one inner loop; after the vectorizer (l.1474) the inner loop is
@@ -1154,6 +1175,7 @@ pub(crate) fn llvm_order(
                     // clang vectorizes loops at -O2 and up
                     // (`PTO.LoopVectorization`).
                     only_when_forced: !applied.options.pre,
+                    very_cheap: applied.options.vect_very_cheap,
                     ..Default::default()
                 }),
             ),
@@ -1429,13 +1451,18 @@ pub(crate) fn llvm_order(
             list.extend([
                 licm("licm@823", true),
                 // L832: hoistCommonInsts and sinkCommonInsts on, besides
-                // convertSwitchRangeToICmp and convertSwitchToArithmetic.
+                // convertSwitchRangeToICmp and convertSwitchToArithmetic. The
+                // pin's `default<O1>` ends its function pipeline with a plain
+                // `SimplifyCFGPass(convertSwitchRangeToICmp)` (L621): at -O1 the
+                // pass drops the three unless the target asks
+                // (`Tti::common_insts_at_o1`).
                 simplify_cfg_with(
                     "decide@832",
                     simplifycfg::Options {
                         hoist_common_insts: true,
                         sink_common_insts: true,
                         convert_switch_to_arithmetic: true,
+                        plain_at_o1: !applied.options.pre,
                         ..Default::default()
                     },
                 ),
@@ -1734,6 +1761,9 @@ pub fn recorded(
     manager.require_cached::<GlobalsAA>();
     manager.require_cached::<GlobalsModRefAnalysis>();
     manager.require::<Summaries>();
+    // `Function::hasOneLiveUse`, which loop unrolling reads of an internal
+    // callee.
+    manager.require::<llrm_mir::passes::FunctionUses>();
     manager.require_program::<ProgramSummaries>();
     // As LLVM's module pipeline starts with InferFunctionAttrs
     // (PassBuilderPipelines.cpp#L1169), then GlobalOpt.
@@ -1757,6 +1787,8 @@ pub fn recorded(
         // LLVM's CGSCC walk: each body inlined into, then simplified, callees
         // first. `Phase::Simplify` runs there and not module-wide.
         if at == 1 {
+            // `AlwaysInlinerPass`, ahead of the CGSCC inliner (PassBuilderPipelines.cpp:1326).
+            manager.add_program(crate::alwaysinline::AlwaysInline);
             // What each body does to memory is stated here, as the pin's
             // PostOrderFunctionAttrs inside the CGSCC walk: the early
             // simplification (SROA, EarlyCSE, PromotePass, InstCombine,
@@ -1797,6 +1829,8 @@ pub fn recorded(
                 cloning: cloning.clone(),
                 speed_rate: applied.options.prices_bytes(),
                 for_size: applied.options.prefers_size(),
+                tail_recursion: applied.options.sibcalls
+                    && (applied.options.pre || applied.options.tail_recursion_early),
             });
         }
     }
@@ -1868,6 +1902,12 @@ pub fn recorded(
     // What only fed those stores (their loads, arithmetic) is dead with them;
     // LLVM's GlobalOpt runs before the late function passes that sweep it.
     manager.add(dead::Dead);
+    // A callee those stores were all that it did is empty now: its stamped
+    // `llrm.reads` are stale and the calls of it stay. Stated again, it is
+    // `memory(none)` and the next sweep takes the calls (`foo` of
+    // byvalue_struct_address, -Os: 56 B against clang's 17).
+    manager.add_program(crate::interprocedural::Stamp);
+    manager.add(dead::Dead);
     // A loop whose only effect was those stores is dead now: LLVM's second
     // function round (LoopDeletion, PassBuilderPipelines.cpp:1628) follows its
     // GlobalOpt.
@@ -1935,10 +1975,37 @@ pub fn recorded(
     if applied.options.atomic_cfg_tidy && applied.options.simplifycfg {
         manager.add(simplifycfg::SimplifyCfg { options: simplifycfg::Options::ATOMIC_TIDY });
     }
+    // DEVIATE LATE-MEMCPYOPT-SIZE (owner x86-m32-b, exit 2026-12-12): the pin
+    // runs MemCpyOpt once, before the sink and the phi folds that leave a
+    // compound literal as `memset(tmp); ...; memcpy(dst, tmp)`; run again, the
+    // copy is a memset of `dst` and `tmp` is dead.
+    if applied.options.prefers_size() && program.target.tti().is_some_and(|tti| tti.late_memcpyopt_at_size()) {
+        manager.add(memcpyopt::MemCpyOpt);
+        manager.add(deadstore::DeadStoreElimination);
+    }
     // Before LSR: a factor of two or a scale the product carries still shows as
     // a shift.
     if applied.options.wanted("fixednarrow") {
         manager.add(fixednarrow::FixedNarrow);
+    }
+    // llvm-mos's late loop optimizations: MOSIndexIV, then IndVarSimplify
+    // (MOSTargetMachine.cpp), before LSR, for a target with an index width.
+    // IndVarSimplify requires LoopSimplify and LCSSA (`predicateLoopExits`
+    // reads an exit value through its phi: without one a loop's only exit was
+    // made `br i1 false`).
+    if applied.options.wanted("lsr")
+        && !llrm_support::env_flag!("LLRM_NO_LATE_INDEX_IV")
+        && program.target.tti().is_some_and(|tti| tti.index_iv_width().is_some())
+    {
+        manager.add(loopsimplify::LoopSimplify);
+        manager.add(lcssa::LoopClosedSSA);
+        manager.add(mosindexiv::MosIndexIv);
+        manager.add(loopsimplify::LoopSimplify);
+        manager.add(lcssa::LoopClosedSSA);
+        if !llrm_support::env_flag!("LLRM_EXP_NO_LATE_INDVARS") {
+            manager.add(indvars::IndVars { lftr: indvars::lftr_default(), size: applied.options.prefers_size() });
+        }
+        manager.add(dead::Dead);
     }
     // Each loop's counters chosen once, on the loop the passes above leave.
     for pass in strength_slot(applied) {
@@ -1984,7 +2051,7 @@ pub fn recorded(
     // The pin's `addIRPasses` slot for SelectOptimize, before CodeGenPrepare;
     // DEVIATE SELOPT-C at the speed rate.
     if applied.options.prices_bytes() && applied.options.wanted("selectoptimize") {
-        manager.add(crate::selectoptimize::SelectOptimizePass);
+        manager.add(crate::selectoptimize::SelectOptimizePass { late: false });
     }
     // The pin's `addIRPasses` slot for InterleavedAccess, after SelectOptimize.
     if applied.options.wanted("interleavedaccess") {
@@ -2003,9 +2070,19 @@ pub fn recorded(
     if !applied.options.prefers_size() && applied.options.wanted("cgpcondsplit") {
         manager.add(crate::cgpcondsplit::CondSplit);
     }
+    // DEVIATE SELOPT-MINMAX (owner x86-m32-b, exit 2026-12-20): before the arms
+    // are sunk.
+    if applied.options.prices_bytes() && applied.options.wanted("selectoptimize") {
+        manager.add(crate::selectoptimize::MinMaxToSelects);
+    }
     // DEVIATE CS2 (owner m32, exit 2026-11-20), at the speed rate.
     if (applied.options.prices_bytes() || applied.options.for_size) && applied.options.wanted("cgpselectarms") {
         manager.add(crate::cgpselect::SelectArms { size: applied.options.for_size });
+    }
+    // DEVIATE SELECT-OPT-I486 (owner x86-m32-b, exit 2026-12-20): after the
+    // arms are sunk, for a target without a conditional move.
+    if applied.options.prices_bytes() && applied.options.wanted("selectoptimize") {
+        manager.add(crate::selectoptimize::SelectOptimizePass { late: true });
     }
     // After cgpaddr, with the other passes that make the forms isel sees:
     // the pin's DAGCombiner makes one extending load for a load and its
@@ -2071,6 +2148,10 @@ pub fn recorded(
     }
     if applied.options.stored_homes {
         manager.add_module(crate::homes::Homes);
+    }
+    // `addIRPasses`: the last IR pass, as the pin's `IndirectBrExpandPass`.
+    if program.target.tti().is_some_and(|tti| tti.expands_indirect_br()) {
+        manager.add_module(crate::indirectbrexpand::IndirectBrExpand);
     }
     let done = manager.run(program);
     if llrm_support::env_flag!("LLRM_CHECK_CAPTURES_MODULE") {

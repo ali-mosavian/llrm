@@ -203,6 +203,10 @@ impl GvnPass<'_> {
                 }
             }
 
+            // Don't do PRE across indirect branch (GVN.cpp:3737).
+            if self.function.ends_in_indirect_branch(pre_pred) {
+                return false;
+            }
             // We can't do PRE safely on a critical edge, so instead we
             // schedule the edge to be split and perform the PRE the next time
             // we iterate on the function.

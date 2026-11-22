@@ -73,12 +73,38 @@ pub fn run_at(
     text: &str,
     clocks_per_byte: Option<u32>,
 ) -> String {
+    run_priced(text, clocks_per_byte, None)
+}
+
+/// [`run_at`], and with a `share` (percent) a place is given
+/// up where the share of the module's clocks its calls add is more than
+/// `share` times the share of the module's bytes it saves (a call and its
+/// return add 12 clocks a run).
+pub fn run_priced(
+    text: &str,
+    clocks_per_byte: Option<u32>,
+    share: Option<u64>,
+) -> String {
     let lines: Vec<Line> = text.lines().map(Line::parse).collect();
     if lines.iter().filter(|line| matches!(line, Line::Inst(_))).count() < 2 * (CALL + FRAME) {
         return text.to_owned();
     }
     let mapped = Mapper::new(&lines);
-    let chosen = select(&lines, &mapped, &weights(&lines), clocks_per_byte.map(u64::from));
+    let weights = weights(&lines);
+    let share = share.map(|percent| {
+        let clocks: u64 = lines
+            .iter()
+            .zip(&weights)
+            .filter_map(|(line, weight)| {
+                let inst = line.inst()?;
+                let cycles = crate::timing::of(crate::dagisel::hooks::Cpu::Mos6502, inst)
+                    .map_or(3, |cost| u64::from(cost.cycles));
+                Some(weight * cycles)
+            })
+            .sum();
+        (percent, bytes_of(&lines) as u64, clocks)
+    });
+    let chosen = select(&lines, &mapped, &weights, clocks_per_byte.map(u64::from), share);
     if chosen.is_empty() {
         return text.to_owned();
     }
@@ -373,6 +399,7 @@ fn select(
     mapped: &Mapper,
     weights: &[u64],
     clocks_per_byte: Option<u64>,
+    share: Option<(u64, u64, u64)>,
 ) -> Vec<Chosen> {
     let tree = SuffixTree::new(&mapped.ids);
     // lines that end a body: an `rts`, and only when nothing follows it in the
@@ -449,6 +476,27 @@ fn select(
             let per_run = if candidate.tail { JUMP_CLOCKS } else { CALL_CLOCKS };
             let saved = candidate.bytes.saturating_sub(CALL) as u64;
             places.retain(|&place| weights[place] == 1 || weights[place] * per_run <= rate * saved);
+        }
+        // a place outside every loop is given up where the clocks its calls add
+        // are a larger share of the module's clocks than the bytes it
+        // saves are of the module's bytes
+        if let Some((percent, module_bytes, module_clocks)) = share {
+            let per_run = if candidate.tail { JUMP_CLOCKS } else { CALL_CLOCKS };
+            let outside = places.iter().filter(|&&place| weights[place] == 1).count() as u64;
+            let saved = benefit(candidate.bytes, places.len(), candidate.tail).max(0) as u64;
+            if u128::from(outside * per_run) * u128::from(module_bytes)
+                > u128::from(percent) * u128::from(saved) * u128::from(module_clocks)
+            {
+                places.retain(|&place| weights[place] != 1);
+            }
+            // and a place in a loop where its own runs add a larger share of
+            // the clocks than its bytes are of the module
+            let saved = candidate.bytes.saturating_sub(CALL) as u64;
+            places.retain(|&place| {
+                weights[place] == 1
+                    || u128::from(weights[place] * per_run) * u128::from(module_bytes)
+                        <= u128::from(percent) * u128::from(saved) * u128::from(module_clocks)
+            });
         }
         if places.len() < 2 || benefit(candidate.bytes, places.len(), candidate.tail) <= 0 {
             continue;

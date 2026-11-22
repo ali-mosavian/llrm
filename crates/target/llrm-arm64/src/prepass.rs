@@ -406,14 +406,20 @@ fn narrow_extension_uses(function: &mut MFunc) {
 }
 
 /// A flag-setting instruction whose register nothing reads defines the zero
-/// register (`AArch64DeadRegisterDefinitions`): that is a compare.
+/// register (`AArch64DeadRegisterDefinitions`): that is a compare (`cmp`,
+/// `tst`, `bics`).
 fn dead_definitions(function: &mut MFunc) {
     let read: HashSet<Reg> =
         function.blocks.iter().flat_map(|block| &block.ops).flat_map(|op| op.defs_and_uses().1).collect();
     for block in &mut function.blocks {
         for op in &mut block.ops {
-            if let Op::I(Inst::AddSubImm { rd, .. } | Inst::AddSubShifted { rd, .. } | Inst::AddSubExtended { rd, .. }) =
-                op
+            if let Op::I(
+                Inst::AddSubImm { rd, .. }
+                | Inst::AddSubShifted { rd, .. }
+                | Inst::AddSubExtended { rd, .. }
+                | Inst::LogicImm { op: Logic::Ands, rd, .. }
+                | Inst::LogicShifted { op: Logic::Ands, rd, .. },
+            ) = op
                 && rd.is_virtual()
                 && !read.contains(&Reg::Gpr(*rd))
             {
@@ -624,7 +630,12 @@ fn flags_dead(
     for op in &ops[at + 1..] {
         if matches!(
             op,
-            Op::I(Inst::BranchCond { .. } | Inst::CondSelect { .. } | Inst::CondCompare { .. })
+            Op::I(
+                Inst::BranchCond { .. }
+                    | Inst::CondSelect { .. }
+                    | Inst::CondCompare { .. }
+                    | Inst::FpCondCompare { .. }
+            )
         ) {
             return false;
         }
@@ -2035,7 +2046,8 @@ pub fn unsplit_edges(function: &mut MFunc) {
 /// (<https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64MIPeepholeOpt.cpp#L290>):
 /// `orr w, wzr, w` is how `zext i32 to i64` is made, and a 32-bit instruction
 /// already clears the upper half of its result, so the copy goes where the
-/// register it copies is the single result of such an instruction. Not
+/// register it copies is the single result of such an instruction (a load into
+/// a 32-bit register included: `ldrb`, `ldrh`, `ldr w`, `ldrsb w`). Not
 /// translated: a source that is a copy of a float register (made an `fmov`).
 fn redundant_zero_extends(function: &mut MFunc) {
     let definitions = definitions(function);
@@ -2165,7 +2177,8 @@ fn clears_upper_half(op: &Op) -> bool {
             | Inst::Divide { width: Width::W, .. }
             | Inst::OneSource { width: Width::W, .. }
             | Inst::ThreeSource { width: Width::W, .. }
-            | Inst::CondSelect { width: Width::W, .. },
+            | Inst::CondSelect { width: Width::W, .. }
+            | Inst::Load { mem: Memory::Int { width: Width::W, .. }, .. },
         ) => true,
         _ => false,
     }

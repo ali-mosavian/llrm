@@ -108,6 +108,15 @@ impl OpcodeMap {
         &self.forms
     }
 
+    /// Whether the machine instruction `name` runs under the `lock` prefix: the
+    /// atomic pseudos, which are the form of [`Self::form`] plus the prefix.
+    pub fn locked(
+        &self,
+        name: &str,
+    ) -> bool {
+        atomic(name).is_some()
+    }
+
     /// The index of the one form `name` is, or why it is none.
     pub fn form(
         &self,
@@ -185,7 +194,10 @@ impl OpcodeMap {
         {
             return Err(Unmapped::Vector);
         }
-        let Some((mnemonic, width, letters)) = split(name) else { return Err(Unmapped::Name) };
+        // `LOCK_ADD32mr`, `LXADD32`, `LCMPXCHG32`: the instruction on a cell,
+        // `lock`ed.
+        let atomic_name = atomic(name);
+        let Some((mnemonic, width, letters)) = atomic_name.or_else(|| split(name)) else { return Err(Unmapped::Name) };
         if matches!(mnemonic.as_str(), "cmov" | "set" | "j") || name.contains("CC") {
             return Err(Unmapped::Condition);
         }
@@ -252,16 +264,21 @@ fn gpr_xmm_move(name: &str) -> Option<&'static str> {
 /// is `movsd_x`. `SQRTSDr` names its tied source too. A pin name that is none
 /// of these is `None`.
 fn sse(name: &str) -> Option<(String, Option<u32>, Option<u32>, Vec<char>)> {
-    const ARITHMETIC: [&str; 67] = [
+    const ARITHMETIC: [&str; 96] = [
         "ADDSS", "ADDSD", "SUBSS", "SUBSD", "MULSS", "MULSD", "DIVSS", "DIVSD", "MINSS", "MINSD", "MAXSS", "MAXSD",
         "SQRTSS", "SQRTSD", "MOVSS", "MOVSD", "UCOMISS", "UCOMISD", "XORPS", "ANDPS", "ANDNPS", "ORPS", "CMPSS",
         "CMPSD", "PADDB", "PADDW", "PADDD", "PADDQ", "PSUBB", "PSUBW", "PSUBD", "PSUBQ", "PAND", "PANDN", "POR",
         "PXOR", "PMULLW", "PSLLW", "PSLLD", "PSLLQ", "PSRLW", "PSRLD", "PSRLQ", "PSRAW", "PSRAD", "PSHUFD", "PUNPCKLQDQ", "PMULUDQ", "PUNPCKLDQ",
+        "PSHUFLW", "PMULHW", "PMULHUW",
         "PUNPCKLBW", "PUNPCKHBW", "PACKUSWB", "PACKSSWB", "PUNPCKLWD", "PUNPCKHWD", "PUNPCKHDQ", "PUNPCKHQDQ", "PACKSSDW",
         "PCMPEQB", "PCMPEQW", "PCMPEQD", "PCMPGTB", "PCMPGTW", "PCMPGTD", "PMOVMSKB", "MOVMSKPS", "MOVMSKPD",
+        // The packed float forms of the float vectors.
+        "ADDPS", "ADDPD", "SUBPS", "SUBPD", "MULPS", "MULPD", "DIVPS", "DIVPD", "MINPS", "MINPD", "MAXPS", "MAXPD",
+        "SQRTPS", "SQRTPD", "ANDPD", "ANDNPD", "ORPD", "XORPD", "UNPCKLPD", "UNPCKHPD", "UNPCKLPS", "UNPCKHPS", "SHUFPS",
+        "SHUFPD", "CMPPS", "CMPPD",
     ];
-    const MOVES: [&str; 2] = ["MOVAPS", "MOVUPS"];
-    const CONVERTS: [(&str, &str, Option<u32>); 8] = [
+    const MOVES: [&str; 4] = ["MOVAPS", "MOVUPS", "MOVAPD", "MOVUPD"];
+    const CONVERTS: [(&str, &str, Option<u32>); 14] = [
         ("CVTSS2SD", "cvtss2sd", None),
         ("CVTSD2SS", "cvtsd2ss", None),
         ("CVTSI2SS", "cvtsi2ss", Some(32)),
@@ -270,6 +287,12 @@ fn sse(name: &str) -> Option<(String, Option<u32>, Option<u32>, Vec<char>)> {
         ("CVTSI642SD", "cvtsi2sd", Some(64)),
         ("CVTSD2SS", "cvtsd2ss", None),
         ("CVTSS2SD", "cvtss2sd", None),
+        ("CVTDQ2PS", "cvtdq2ps", None),
+        ("CVTDQ2PD", "cvtdq2pd", None),
+        ("CVTPS2PD", "cvtps2pd", None),
+        ("CVTPD2PS", "cvtpd2ps", None),
+        ("CVTTPS2DQ", "cvttps2dq", None),
+        ("CVTTPD2DQ", "cvttpd2dq", None),
     ];
     // The result's width is in the name: `CVTTSD2SIrr` 32 bits, `CVTTSD2SI64rr`
     // 64.
@@ -308,7 +331,8 @@ fn sse(name: &str) -> Option<(String, Option<u32>, Option<u32>, Vec<char>)> {
     found.map(|(mnemonic, width, result, letters)| {
         let letters = if mnemonic.starts_with("sqrt") && letters.len() == 1 { vec!['r', 'r'] } else { letters };
         // `PSHUFDri` names its source and the immediate; the destination is not tied to the source.
-        let letters = if mnemonic == "pshufd" { std::iter::once('r').chain(letters).collect() } else { letters };
+        let untied = matches!(mnemonic.as_str(), "pshufd" | "pshuflw");
+        let letters = if untied { std::iter::once('r').chain(letters).collect() } else { letters };
         (mnemonic, width, result, letters)
     })
 }
@@ -331,7 +355,17 @@ pub fn memory_bytes(name: &str) -> Option<u32> {
         // A conversion reads its source's size: the float named first, or the
         // integer.
         for (prefix, bytes) in
-            [("CVTTSD2SI", 8), ("CVTTSS2SI", 4), ("CVTSD2SS", 8), ("CVTSS2SD", 4), ("CVTSI642", 8), ("CVTSI2", 4)]
+            [
+                ("CVTTSD2SI", 8),
+                ("CVTTSS2SI", 4),
+                ("CVTSD2SS", 8),
+                ("CVTSS2SD", 4),
+                ("CVTSI642", 8),
+                ("CVTSI2", 4),
+                // The two lanes of a packed conversion read 8 bytes.
+                ("CVTDQ2PD", 8),
+                ("CVTPS2PD", 8),
+            ]
         {
             if name.starts_with(prefix) {
                 return Some(bytes);
@@ -347,7 +381,7 @@ pub fn memory_bytes(name: &str) -> Option<u32> {
             Some(16)
         };
     }
-    let (mnemonic, width, _) = split(name)?;
+    let (mnemonic, width, _) = atomic(name).or_else(|| split(name))?;
     let bits = if matches!(mnemonic.as_str(), "movzx" | "movsx") {
         let rest = name.trim_start_matches(|c: char| c.is_ascii_uppercase());
         let rest = rest.trim_start_matches(|c: char| c.is_ascii_digit());
@@ -358,6 +392,29 @@ pub fn memory_bytes(name: &str) -> Option<u32> {
         width?
     };
     Some(bits.div_ceil(8))
+}
+
+/// The pin's atomic pseudos (X86InstrCompiler.td) as the form they are under
+/// `lock`: `LOCK_ADD32mr` -> (`add`, 32, `mr`), `LOCK_INC8m` -> (`inc`, 8,
+/// `m`), `LXADD32` -> (`xadd`, 32, `mr`: the sum's cell and the register),
+/// `LCMPXCHG32` -> (`cmpxchg`, 32, `mrr`: the cell, the new value, the
+/// accumulator). `LOCK_BTS` and the double-width `LCMPXCHG8B` are not these.
+fn atomic(name: &str) -> Option<(String, Option<u32>, Vec<char>)> {
+    if let Some(rest) = name.strip_prefix("LOCK_") {
+        let (mnemonic, width, letters) = split(rest)?;
+        let plain = matches!(
+            mnemonic.as_str(),
+            "add" | "sub" | "and" | "or" | "xor" | "inc" | "dec"
+        );
+        return (plain && letters.first() == Some(&'m')).then_some((mnemonic, width, letters));
+    }
+    let (mnemonic, letters) = match name.strip_prefix("LXADD") {
+        Some(_) => ("xadd", vec!['m', 'r']),
+        None => (name.strip_prefix("LCMPXCHG").map(|_| "cmpxchg")?, vec!['m', 'r', 'r']),
+    };
+    let digits = name.trim_start_matches(|c: char| c.is_ascii_uppercase());
+    let width: u32 = digits.parse().ok()?;
+    Some((mnemonic.to_owned(), Some(width), letters))
 }
 
 /// `ADD32ri8` -> (`add`, 32, `ri`); `SHL32rCL` -> (`shl`, 32, `rr`);

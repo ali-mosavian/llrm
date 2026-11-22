@@ -55,6 +55,10 @@ def SDTZ80Cmpc : SDTypeProfile<1, 4, [SDTCisVT<0, i8>, SDTCisSameAs<1, 2>, SDTCi
 def Z80cmpc : SDNode<"Z80ISD::CMPC", SDTZ80Cmpc>;
 // The signed order of two words: the carry holds the sign of a - b corrected for overflow.
 def Z80cmps : SDNode<"Z80ISD::CMPS", SDTZ80Cmp>;
+// A word against 0 and 1, signed: the carry is set when it is at most zero (so `x > 0` is NC, `x <= 0` is C). No flag
+// of a compare answers it alone (0x8000 breaks each one); the zero test and the sign are joined in the expansion.
+def SDTZ80Tstp : SDTypeProfile<1, 1, [SDTCisVT<0, i8>, SDTCisVT<1, i16>]>;
+def Z80tstp : SDNode<"Z80ISD::TSTP", SDTZ80Tstp>;
 
 // A word op with its carry out in the flags: (sum, flags), and with the carry in (the flags before it).
 def SDTZ80Alf : SDTypeProfile<2, 2, [SDTCisVT<0, i16>, SDTCisVT<1, i8>, SDTCisVT<2, i16>, SDTCisVT<3, i16>]>;
@@ -284,6 +288,8 @@ let Defs = [A] in {
 }
 def BIT7_8 : Z80Inst<(outs Flags:$f), (ins GR8:$a), "bit 7, $a", [(set i8:$f, (Z80tsts i8:$a))]>;
 def BIT8 : Z80Inst<(outs Flags:$f), (ins GR8:$a, i8imm:$n), "bit $n, $a", [(set i8:$f, (Z80bit i8:$a, (i8 imm:$n)))]>;
+let Defs = [A] in
+  def TSTP16 : Z80Inst<(outs Flags:$f), (ins GR16:$a), "tstp $a", [(set i8:$f, (Z80tstp i16:$a))]>;
 def BIT7_16 : Z80Inst<(outs Flags:$f), (ins GR16:$a), "bit7 $a", [(set i8:$f, (Z80tsts i16:$a))]>;
 let isBranch = 1, isTerminator = 1 in {
   def JPNZ : Z80Inst<(outs), (ins brtarget:$t, Flags:$f), "jp nz, $t", [(Z80brcond bb:$t, (i8 0), i8:$f)]>;

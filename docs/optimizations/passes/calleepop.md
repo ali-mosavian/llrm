@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/calleepop.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/calleepop.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/calleepop.rs sha256:afe26aa27b752798bd311493ccb0c7b36a5d6465db7dfd21329b7cc794efc7c1 -->
+<!-- src: crates/opt/llrm-transforms/src/calleepop.rs sha256:bf85177e11408964e554c6db38fcfa91d28dff625b24383d6056c8ae9ae927c7 -->
 
 # calleepop
 
@@ -47,11 +47,14 @@ its convention.
 | [`useFastCCForInternalCall`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86TargetTransformInfo.cpp#L8196): always true here | none | MATCH |
 | what `fastcc` is: two integer arguments in ECX, EDX, the rest on the stack, the caller pops | `fastcc32` at m32 (the pin's); the callee-pop twin at m16 | MATCH |
 
-CC1 is closed: the private m32 convention is the pin's `fastcc`
-(`fastcc32`). `LLRM_PRIVATE_WATCALL=1` gives `watcall32` back, to compare;
-it is no switch for production. Priced on the 71 m32 rows (486 model) and
-QCport (62 modules, `qcport.py`), dda83cd1c5, the same binary on both arms;
-new against the old `watcall32` default:
+CC-LOCAL (owner x86-m32, exit 2026-11-24) replaced CC1: the private m32
+convention is gcc's local `regparm(3)` (`localregparm32`: EAX, EDX, ECX; an
+i64 in EAX:EDX or EDX:ECX), not the pin's `fastcc32` below. All three words
+in registers make a call in tail position a `jmp`. The CC1 numbers below are
+of `fastcc32` against `watcall32`; `LLRM_PRIVATE_WATCALL=1` gives
+`watcall32` back, to compare; it is no switch for production. Priced on the
+71 m32 rows (486 model) and QCport (62 modules, `qcport.py`), dda83cd1c5,
+the same binary on both arms; new against the old `watcall32` default:
 
 | level | clocks | code bytes | QCport bytes |
 |---|---|---|---|

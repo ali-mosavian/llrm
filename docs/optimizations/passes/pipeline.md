@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/pipeline.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/pipeline.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/pipeline.rs sha256:cf36ea25ceccbd49d7e61883558c26f52e30ddeab0b1016ccb34029eac63dac4 -->
+<!-- src: crates/opt/llrm-transforms/src/pipeline.rs sha256:5ebbf37090e09d3972f3a2afd8225a3e16f64741e9c87b0087c19cb7e01ff705 -->
 
 # pipeline
 
@@ -83,7 +83,7 @@ loop; `cgpaddr` follows the last `gvn`, which makes the phis it sinks;
 
 ## Example
 No honest example: the pipeline is the order of the passes, not one rewrite,
-and no one function shows it. `llrm-c --dump DIR` writes the module after
+and no one function shows it. `llrm-cc --dump DIR` writes the module after
 each stage (`NN-stage.ll`) and, for each body, each changed step of the
 fixed point (`N/NNN-rRR-pass.ll`); the pass examples come from those.
 
@@ -111,6 +111,7 @@ LLVM counterpart of each limit, is
 | `loopidioms` | `loopidioms`, `merge`, `memcpyopt` |
 | `sibcalls` | `tailrec` |
 | `unswitch`, `interchange`, `unroll_and_jam` | the passes of that name (`unswitch` and `unroll_and_jam` on at -O3 and -Omax; `interchange` on at every level but -O0) |
+| `split_loops` | `loop-split` (gcc's `-fsplit-loops`, on at -O3 and -Omax; runs only where the target's `Tti::loop_split` says so) |
 | `copy_headers` | the header copy in E (off by default; `-ftree-ch`) |
 
 `pre` makes `gvn` insert on the path that lacks a value; `for_size` prices

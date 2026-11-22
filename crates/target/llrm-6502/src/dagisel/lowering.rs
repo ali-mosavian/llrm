@@ -49,6 +49,9 @@ pub mod mosisd {
     pub const SRL1C: ISD = ISD::Target(ids::SRL1C);
     pub const CMPZ: ISD = ISD::Target(ids::CMPZ);
     pub const CMP32: ISD = ISD::Target(ids::CMP32);
+    pub const CMPZ32: ISD = ISD::Target(ids::CMPZ32);
+    pub const INC32: ISD = ISD::Target(ids::INC32);
+    pub const DEC32: ISD = ISD::Target(ids::DEC32);
     pub const BRCOND: ISD = ISD::Target(ids::BRCOND);
     pub const SETCC: ISD = ISD::Target(ids::SETCC);
     pub const CMOV: ISD = ISD::Target(ids::CMOV);
@@ -161,6 +164,11 @@ pub fn target_lowering() -> TargetLowering {
     for op in [Mul, SDiv, UDiv, SRem, URem, Shl, Srl, Sra, Rotl, Rotr] {
         tl.set_operation_action(op, MVT::I32, Action::Custom);
     }
+    // a long plus or minus one steps the bytes with an early exit
+    // (`lower_long_step`); any other add is the carry chain over the halves
+    for op in [Add, Sub] {
+        tl.set_operation_action(op, MVT::I32, Action::Custom);
+    }
     // i1 is a register type here, but its memory is a byte (`lower_bit_load`)
     for op in [Load, Store] {
         tl.set_operation_action(op, MVT::I1, Action::Custom);
@@ -174,6 +182,8 @@ pub fn target_lowering() -> TargetLowering {
             tl.set_operation_action(op, vt, Action::Custom);
         }
     }
+    // equality of two longs is one four-byte test (`lower_long_equality`)
+    tl.set_operation_action(SetCC, MVT::I32, Action::Custom);
     // a compare of two words is the borrow of the low words into the high
     // words' subtract (`IntegerExpandSetCCOperands`)
     for vt in [MVT::I1, MVT::I8, MVT::I16] {
@@ -195,6 +205,9 @@ pub struct MosLowering {
     /// The function is tuned for size: a long shift by a constant that
     /// takes more bytes in line than as a call goes to the routine.
     pub sized: bool,
+    /// A long plus or minus one is `INC32`/`DEC32`, not the carry chain
+    /// (`lower_long_step`).
+    pub long_steps: bool,
 }
 
 impl Hooks for MosLowering {
@@ -217,6 +230,13 @@ impl Hooks for MosLowering {
             ISD::Store if dag.value_type(dag.operand(node, 1)) == EVT::I1 => lower_bit_store(dag, node),
             ISD::Store if dag.value_type(dag.operand(node, 1)) == EVT::I16 => Some(lower_word_copy(dag, node)),
             ISD::ZeroExtend | ISD::AnyExtend | ISD::SignExtend => Some(lower_extend(dag, node)),
+            ISD::Add | ISD::Sub if dag.value_type(node) == EVT::I32 => {
+                if self.long_steps {
+                    lower_long_step(dag, node)
+                } else {
+                    None
+                }
+            }
             ISD::Mul | ISD::SDiv | ISD::UDiv | ISD::SRem | ISD::URem | ISD::Shl | ISD::Srl | ISD::Sra
                 if dag.value_type(node) == EVT::I32 =>
             {
@@ -431,6 +451,43 @@ fn lower_long(
         operands.push(dag.get_node(ISD::Truncate, EVT::I16, &[high]));
     }
     let pair = dag.get_node_multi(opcode, &[EVT::I16, EVT::I16], &operands);
+    Some(dag.get_node(
+        ISD::BuildPair,
+        EVT::I32,
+        &[SDValue { node: pair.node, res: 0 }, SDValue { node: pair.node, res: 1 }],
+    ))
+}
+
+/// A long plus or minus one: `MOSISD::INC32`/`DEC32` of the operand's halves,
+/// which step the low byte and carry up a byte only when it wrapped.
+///
+/// Pass: llvm-mos `MOSLegalizerInfo::legalizeAddSub`, which turns a multi-byte
+/// add or subtract of +-1 into `G_INC`/`G_DEC`. Any other constant is the carry
+/// chain over the halves.
+fn lower_long_step(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    const ALL: u128 = 0xFFFF_FFFF;
+    let (a, b) = (dag.operand(node, 0), dag.operand(node, 1));
+    // `1 + x` is `x + 1`; `1 - x` is not a step
+    let (value, step) = match (dag.constant(b), dag.constant(a)) {
+        (Some(k), _) => (a, k & ALL),
+        (None, Some(k)) if dag.opcode(node) == ISD::Add => (b, k & ALL),
+        _ => return None,
+    };
+    let sub = dag.opcode(node) == ISD::Sub;
+    let opcode = match (step, sub) {
+        (1, false) | (ALL, true) => mosisd::INC32,
+        (ALL, false) | (1, true) => mosisd::DEC32,
+        _ => return None,
+    };
+    super::function::note_step_site();
+    let sixteen = dag.get_constant(16, EVT::I8);
+    let high = dag.get_node(ISD::Srl, EVT::I32, &[value, sixteen]);
+    let low = dag.get_node(ISD::Truncate, EVT::I16, &[value]);
+    let high = dag.get_node(ISD::Truncate, EVT::I16, &[high]);
+    let pair = dag.get_node_multi(opcode, &[EVT::I16, EVT::I16], &[low, high]);
     Some(dag.get_node(
         ISD::BuildPair,
         EVT::I32,
@@ -822,6 +879,21 @@ fn lower_setcc(
             other => other,
         };
     }
+    if dag.value_type(op0) == EVT::I32
+        && matches!(cc, CondCode::SetEq | CondCode::SetNe)
+        && dag.constant(op1) == Some(0)
+        && super::function::long_steps()
+    {
+        let flags = lower_long_equality(dag, cc, op0, op1);
+        // the type legalizer expects a value of the type it replaces: a bit is
+        // the byte truncated (a branch or a select reads the flags
+        // through it, `condition`)
+        return Some(if dag.value_type(node) == EVT::I1 {
+            dag.get_node(ISD::Truncate, EVT::I1, &[flags])
+        } else {
+            flags
+        });
+    }
     if !matches!(dag.value_type(op0), EVT::I8 | EVT::I16) {
         return None;
     }
@@ -832,6 +904,32 @@ fn lower_setcc(
     let flags = dag.get_node(compare, EVT::I8, &[a, b]);
     let code = cc_operand(dag, code);
     Some(dag.get_node(mosisd::SETCC, EVT::I8, &[code, flags]))
+}
+
+/// A long equal to zero: `CMPZ32` of the halves, whose Z is set only when all
+/// four bytes are zero, `lda; ora; ora; ora` where the halves were or'd into
+/// two words and the word tested. Another constant is the word compare (a `lda;
+/// cmp #; bne` per byte is more bytes than the words' compare, and has branches
+/// the outliner cannot share).
+///
+/// Pass: llvm-mos `MOSLegalizerInfo::legalizeICmp`: a multi-byte `G_ICMP eq`
+/// against zero is one `G_CMPZ` over the bytes.
+fn lower_long_equality(
+    dag: &mut SelectionDAG,
+    cc: CondCode,
+    a: SDValue,
+    b: SDValue,
+) -> SDValue {
+    super::function::note_step_site();
+    let sixteen = dag.get_constant(16, EVT::I8);
+    let mut halves = Vec::new();
+    for value in [a, b] {
+        let high = dag.get_node(ISD::Srl, EVT::I32, &[value, sixteen]);
+        halves.push((dag.get_node(ISD::Truncate, EVT::I16, &[value]), dag.get_node(ISD::Truncate, EVT::I16, &[high])));
+    }
+    let flags = dag.get_node(mosisd::CMPZ32, EVT::I8, &[halves[0].0, halves[1].0, halves[0].1, halves[1].1]);
+    let code = cc_operand(dag, if cc == CondCode::SetEq { cond::EQ } else { cond::NE });
+    dag.get_node(mosisd::SETCC, EVT::I8, &[code, flags])
 }
 
 /// `x >= 0`, `x < 0` and `-1 >= x` (`x <= -1`) of a long are the sign of its
@@ -968,6 +1066,11 @@ fn condition(
         && let Some(flags) = lower_setcc_carry_flags(dag, value)
     {
         return flags;
+    }
+    // a long's equality, made a bit by `lower_setcc`: its flags
+    if dag.opcode(value) == ISD::Truncate && dag.opcode(dag.operand(value, 0)) == mosisd::SETCC {
+        let lowered = dag.operand(value, 0);
+        return (dag.operand(lowered, 0), dag.operand(lowered, 1));
     }
     let value = match dag.opcode(value) {
         ISD::SetCC => lower_setcc(dag, value).unwrap_or(value),

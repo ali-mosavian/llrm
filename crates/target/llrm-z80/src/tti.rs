@@ -106,6 +106,48 @@ impl Z80Tti {
         matches!(ty, Ty::Int(bits) if bits <= self.byte_bits.min(8))
     }
 
+    /// The forms of one call: `call nn`, the arguments' setup, and the `ret`
+    /// unless `in_body`, the call a callee's body makes (see `body_call_cost`).
+    fn call_forms(
+        &self,
+        shape: &CallShape,
+        kind: CostKind,
+        in_body: bool,
+    ) -> Cost {
+        let (mut bytes, mut clocks) = sum(if in_body { &["call nn"][..] } else { &["call nn", "ret"][..] });
+        let mut registers = 0;
+        for argument in &shape.arguments {
+            let words = match argument.ty {
+                Some(Ty::Int(bits)) if bits <= 8 => 0,
+                Some(Ty::Int(bits)) => i64::from(bits.div_ceil(16)),
+                Some(ty) => self.parts(ty),
+                None => 1,
+            };
+            if let Some(copied) = argument.byval_bytes {
+                // `ld hl,src; ld de,dst; ld bc,n; ldir`: 21 T a byte
+                let (b, c) = sum(&["ld hl;nn", "ld hl;nn", "ld bc;nn", "ldir"]);
+                bytes += b;
+                clocks += c + 21 * (copied as i64 - 1);
+            } else if words == 0 {
+                let (b, c) = sum(&["ld b;n"]);
+                bytes += b;
+                clocks += c;
+            } else {
+                for _ in 0..words {
+                    let form = if registers < 3 { &["ld bc;nn"][..] } else { &["push bc", "pop bc"][..] };
+                    registers += 1;
+                    let (b, c) = sum(form);
+                    bytes += b;
+                    clocks += c;
+                }
+            }
+        }
+        Cost::of(match kind {
+            CostKind::CodeSize => bytes,
+            _ => (clocks + 3) / 4,
+        })
+    }
+
     /// A call of a runtime loop of `bits` passes, each the forms `body`, plus
     /// the call and the return.
     fn call(
@@ -135,6 +177,21 @@ impl Default for Z80Tti {
 pub const SPEED_MILLICLOCKS_PER_BYTE: i64 = 3000;
 
 impl Tti for Z80Tti {
+    /// DEVIATE COMMON-INSTS-O1 (owner wasm-3, exit 2026-12-12, row
+    /// COMMON-INSTS-O1): the -O2 function pipeline's hoisting and sinking
+    /// SimplifyCFG (L832) also runs at -O1, as before the pin's plain one (L621)
+    /// was mirrored; the flip is not measured here (computed_goto -O1 +369 B,
+    /// word_compare_branches +265 B on 6502 without it).
+    fn common_insts_at_o1(&self) -> bool {
+        true
+    }
+
+    /// No jump through a register: `indirectbr` is a `switch` over block
+    /// numbers (`IndirectBrExpandPass`).
+    fn expands_indirect_br(&self) -> bool {
+        true
+    }
+
     /// DEVIATE VASTART-PROMOTE (owner x86-m32, exit 2026-11-27; z80 joins it):
     /// `va_list` is `char *`, so `va_start` is a store of the first
     /// variadic argument's address and the list lives in a register, as SDCC
@@ -186,8 +243,35 @@ impl Tti for Z80Tti {
         true
     }
 
+    fn lsr_alternate_order(&self) -> bool {
+        true
+    }
+
+    /// DEVIATE LU33 (owner z80, exit 2026-12-15): `ld hl,#sym` is an
+    /// immediate, not a register the loop keeps. Part of the alternate order
+    /// (LSR-KEY-TRIAL): under Z80L3's order it moved lz4's match copy to a
+    /// base add (the second `ldir` lost).
+    fn lsr_global_address_is_free(&self) -> bool {
+        llrm_transforms::trial::lsr_alternate_order()
+    }
+
     fn lsr_dropped_solution_spares_addresses(&self) -> bool {
         true
+    }
+
+    /// DEVIATE LICM-SPEC (owner z80, exit 2026-12-15): `bc`, `de`, `hl`, `ix`
+    /// and `iy` are the values a loop keeps; past them an invariant word the
+    /// loop computes on some trips only is a frame slot stored once and
+    /// reloaded each trip it is read, where the computation is an `inc` or an
+    /// `add`. GCC's `loop-invariant.cc` with `-fira-loop-pressure` moves an
+    /// invariant only while its class has registers left. queens -Os: `&q[row]`
+    /// and `row + 1` hoisted out of the column loop, 379 B against 360 B.
+    fn licm_prices_speculated_values(&self) -> bool {
+        true
+    }
+
+    fn licm_register_limit(&self) -> Option<u32> {
+        Some(5)
     }
 
     /// DEVIATE LSR-TIE (owner z80, exit 2026-12-15): a recurrence stepped by
@@ -318,6 +402,16 @@ impl Tti for Z80Tti {
         a: &LsrCost,
         b: &LsrCost,
     ) -> bool {
+        // DEVIATE LSR-KEY-TRIAL (owner z80, exit 2026-12-15): the pin's order,
+        // registers first, which the driver tries against the one below
+        // (`compile::effective`): histo -O1 348 -> 291 B, and sum4 -O2 loses
+        // its `djnz` (lz4's second `ldir`) where the registers tie.
+        if llrm_transforms::trial::lsr_alternate_order() {
+            let key = |c: &LsrCost| {
+                (c.num_regs, c.add_rec_cost, c.num_iv_muls, c.num_base_adds, c.scale_cost, c.imm_cost, c.setup_cost)
+            };
+            return key(a) < key(b);
+        }
         let key = |c: &LsrCost| {
             (
                 c.spills.saturating_add(c.num_base_adds),
@@ -481,6 +575,19 @@ impl Tti for Z80Tti {
         SPEED_MILLICLOCKS_PER_BYTE
     }
 
+    /// DEVIATE INL-SPEED-OS (owner z80, exit 2026-12-05): see
+    /// `Tti::inline_trial_speed_at_size`. A call in a loop of 16 trips or
+    /// more is tried inlined at -Os and -Oz and kept where the module shrinks
+    /// or the copy saves clocks for a few bytes.
+    fn inline_trial_speed_at_size(&self) -> Option<i64> {
+        Some(16)
+    }
+
+    /// `Tti::inline_hot_trial_at_size`.
+    fn inline_hot_trial_at_size(&self) -> bool {
+        true
+    }
+
     /// A loop whose bound the call's constants fix unrolls and folds in the
     /// copy, which the call's latency does not show (loop_fusion -O3 39,020
     /// T became 299,430 T without it). DEVIATE Z80-RATE (owner z80, exit
@@ -517,6 +624,11 @@ impl Tti for Z80Tti {
     /// that folds (struct_odd_sizes: `fives` -40, refused, 131 B over SDCC)
     /// leaves the caller smaller and faster.
     fn inline_trials_at_o1(&self) -> bool {
+        true
+    }
+
+    /// `function_bytes` prices the trial in the bytes the table says.
+    fn opt_size_inline_trial_by_bytes(&self) -> bool {
         true
     }
 
@@ -559,38 +671,17 @@ impl Tti for Z80Tti {
         shape: &CallShape,
         kind: CostKind,
     ) -> Option<Cost> {
-        let (mut bytes, mut clocks) = sum(&["call nn", "ret"]);
-        let mut registers = 0;
-        for argument in &shape.arguments {
-            let words = match argument.ty {
-                Some(Ty::Int(bits)) if bits <= 8 => 0,
-                Some(Ty::Int(bits)) => i64::from(bits.div_ceil(16)),
-                Some(ty) => self.parts(ty),
-                None => 1,
-            };
-            if let Some(copied) = argument.byval_bytes {
-                // `ld hl,src; ld de,dst; ld bc,n; ldir`: 21 T a byte
-                let (b, c) = sum(&["ld hl;nn", "ld hl;nn", "ld bc;nn", "ldir"]);
-                bytes += b;
-                clocks += c + 21 * (copied as i64 - 1);
-            } else if words == 0 {
-                let (b, c) = sum(&["ld b;n"]);
-                bytes += b;
-                clocks += c;
-            } else {
-                for _ in 0..words {
-                    let form = if registers < 3 { &["ld bc;nn"][..] } else { &["push bc", "pop bc"][..] };
-                    registers += 1;
-                    let (b, c) = sum(form);
-                    bytes += b;
-                    clocks += c;
-                }
-            }
-        }
-        Some(Cost::of(match kind {
-            CostKind::CodeSize => bytes,
-            _ => (clocks + 3) / 4,
-        }))
+        Some(self.call_forms(shape, kind, false))
+    }
+
+    /// The call and its arguments without the `ret`: a call inside an inlined
+    /// body adds `call nn` and the setup; the callee's `ret` is not copied.
+    fn body_call_cost(
+        &self,
+        shape: &CallShape,
+        kind: CostKind,
+    ) -> Option<Cost> {
+        Some(self.call_forms(shape, kind, true))
     }
 
     /// DEVIATE INLINE-FRAME (owner z80, exit 2026-12-15): queens -Os inlined

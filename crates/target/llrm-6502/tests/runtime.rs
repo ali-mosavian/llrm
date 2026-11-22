@@ -323,6 +323,18 @@ fn long(
     common::long_call(name, routine, a, b, common::Result32::Value)
 }
 
+/// A multiply by a byte reads rc4 and nothing of rc5..rc7 (`long_args` leaves
+/// 0xA5 there): the product is the general one.
+#[test]
+fn the_byte_multiplies_give_the_general_products_and_read_only_rc4() {
+    let a = 0x1234_5678u32;
+    for routine in ["__mulsi3_byte", "__mulsi3_fast_byte"] {
+        for b in [0u32, 11, 255] {
+            assert_eq!(long(&format!("{routine}-{b}"), routine, a, b), a.wrapping_mul(b), "{routine} {a} * {b}");
+        }
+    }
+}
+
 /// Low 32 bits of the product: 70000 * 3 = 0x33450; 65535 * 65537 = 0xFFFFFFFF;
 /// 100000 * 100000 = 10^10 = 0x2_540BE400, so 0x540BE400.
 #[test]
@@ -815,9 +827,14 @@ fn the_small_speed_division_links_no_wide_path_and_divides_like_the_hot_one() {
         ("__umodsi3_fast_small", "__umodsi3_fast"),
         ("__divsi3_fast_small", "__divsi3_fast"),
         ("__modsi3_fast_small", "__modsi3_fast"),
+        ("__udivsi3_fast_lean", "__udivsi3_fast"),
+        ("__umodsi3_fast_lean", "__umodsi3_fast"),
+        ("__divsi3_fast_lean", "__divsi3_fast"),
+        ("__modsi3_fast_lean", "__modsi3_fast"),
     ] {
         let text = common::pipeline::reachable_runtime(&format!("  jsr {routine}\n"));
-        assert!(text.contains("udivmod32_fast_small:") && !text.contains("udivmod32_wide:"), "{routine}: {text}");
+        let body = if routine.ends_with("_lean") { "udivmod32_fast_lean:" } else { "udivmod32_fast_small:" };
+        assert!(text.contains(body) && !text.contains("udivmod32_wide:"), "{routine}: {text}");
         let hot_text = common::pipeline::reachable_runtime(&format!("  jsr {hot}\n"));
         let wide = if routine.contains("mod") { "umod32_wide:" } else { "udivmod32_wide:" };
         assert!(hot_text.contains(wide) && !hot_text.contains("_small"), "{hot}: {hot_text}");
@@ -826,6 +843,36 @@ fn the_small_speed_division_links_no_wide_path_and_divides_like_the_hot_one() {
             assert_eq!(long(&name, routine, a, b), long(&format!("h{name}"), hot, a, b), "{routine} {a} {b}");
         }
     }
+}
+
+/// The wide path of the small speed division moved the dividend one byte up
+/// with seven load/store pairs; every cold program at -O1..-O3 that divides a
+/// signed long linked them (`compound_assignment_types`: +15 B over sdcc). The
+/// lean variant, which those programs call, moves it in an indexed loop over
+/// the eight-byte chain in 15 B; the small one, which -Os chooses, is unchanged.
+#[test]
+fn the_lean_speed_signed_division_links_in_few_bytes() {
+    let linked = |name: &str, call: &str| {
+        let platform = llrm_6502::platform::Platform::parse(llrm_6502::platform::SIM65).expect("sim65 row");
+        let dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("rt-size-{name}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        let text = format!("{}.export _main\n_main:\n{call}  rts\n", llrm_6502::emit::equates(&platform));
+        let source = format!("{text}{}", common::pipeline::reachable_runtime(call));
+        std::fs::write(dir.join("p.s"), source).unwrap();
+        let built = std::process::Command::new("cl65")
+            .args(["-t", "sim6502", "-o"])
+            .arg(dir.join("p.bin"))
+            .arg(dir.join("p.s"))
+            .output()
+            .expect("cl65");
+        assert!(built.status.success(), "cl65: {}", String::from_utf8_lossy(&built.stderr));
+        std::fs::metadata(dir.join("p.bin")).unwrap().len()
+    };
+    let floor = linked("floor", "");
+    let lean = linked("divsi3-lean", "  jsr __divsi3_fast_lean\n") - floor;
+    let small = linked("divsi3-small", "  jsr __divsi3_fast_small\n") - floor;
+    assert!(lean <= 370, "__divsi3_fast_lean links {lean} B");
+    assert!(lean + 25 <= small, "the lean division links {lean} B, the small one {small} B");
 }
 
 /// The hot threshold is derived from what the pin-structure wide path saves a
@@ -875,4 +922,107 @@ fn the_fast_multiply_saves_what_hotmultiply_prices() {
     // runtime lies (615 and 586 over the same routines): a price within 10%
     let priced = llrm_6502::hotmultiply::SAVED_CLOCKS;
     assert!((mean - priced).abs() <= priced / 10.0, "the fast multiply saves {mean} clocks a call, priced at {priced}");
+}
+
+/// `__shl1hi3` makes `1 << n` for every count of 0 to 15: low byte for 0 to 7,
+/// high byte for 8 to 15.
+#[test]
+fn one_shifted_by_a_count_is_the_bit_for_every_count() {
+    let table: String = (0..16u32).map(|n| format!("  .word {}\n", 1u32 << n)).collect();
+    let main = "  ldy #0\n@next:\n  sty rc8\n  tya\n  jsr __shl1hi3\n  sta rc10\n  stx rc11\n  lda rc8\n  asl a\n  tay\n  lda want,y\n  cmp rc10\n  bne @bad\n  lda want+1,y\n  cmp rc11\n  bne @bad\n  ldy rc8\n  iny\n  cpy #16\n  bne @next\n  lda #0\n  rts\n@bad:\n  lda rc8\n  clc\n  adc #1\n";
+    let extra = format!(".segment \"RODATA\"\nwant:\n{table}.segment \"CODE\"\n");
+    assert_eq!(common::run_with("shl1-all", main, &extra), 0, "a count whose bit is wrong (the count plus 1)");
+}
+
+/// The speed word divide shifts the divisor up to the dividend (a quotient of
+/// a few bits takes a few steps) and hands a wide quotient to the bit loops: it
+/// agrees with the compact bit loop over pairs of every quotient width, a
+/// divisor under the dividend's top bit, at it, and over it, and a byte divisor
+/// under a dividend of 1024 or more.
+#[test]
+fn the_aligned_word_division_agrees_with_the_bit_loop() {
+    let mut pairs = vec![];
+    for a in [1, 7, 255, 256, 300, 1023, 1024, 4000, 32767, 32768, 40000, 65535] {
+        for b in [1, 2, 3, 10, 37, 100, 255, 256, 257, 300, 1500, 8191, 8192, 32767, 32768, 40000, 65535] {
+            pairs.push((a, b));
+        }
+    }
+    let table: String = pairs.iter().map(|(a, b)| format!("  .word {a}, {b}\n")).collect();
+    let main = format!(
+        "  lda #<pairs\n  sta rc8\n  lda #>pairs\n  sta rc9\n  lda #{}\n  sta rc10\n\
+@next:\n  ldy #0\n@copy:\n  lda (rc8),y\n  sta rc2,y\n  sta rc16,y\n  iny\n  cpy #4\n  bne @copy\n\
+  jsr __udivhi3\n  sta rc12\n  stx rc13\n  lda rc6\n  sta rc14\n  lda rc7\n  sta rc15\n\
+  ldy #3\n@back:\n  lda rc16,y\n  sta rc2,y\n  dey\n  bpl @back\n\
+  jsr __udivhi3c\n  cmp rc12\n  bne @bad\n  cpx rc13\n  bne @bad\n  lda rc6\n  cmp rc14\n  bne @bad\n  lda rc7\n  cmp rc15\n  bne @bad\n\
+  clc\n  lda rc8\n  adc #4\n  sta rc8\n  bcc @c\n  inc rc9\n@c:\n  dec rc10\n  bne @next\n  lda #0\n  rts\n@bad:\n  lda #1\n",
+        pairs.len()
+    );
+    let status = common::run_with(
+        "udivhi-aligned-all",
+        &main,
+        &format!(".segment \"RODATA\"\npairs:\n{table}.segment \"CODE\"\n"),
+    );
+    assert_eq!(status, 0, "the speed and compact divides differ on one of {} pairs", pairs.len());
+}
+
+/// The signed speed divides take two non-negative words as unsigned ones (no
+/// signs to take and give back) and agree with the compact signed ones on every
+/// sign pair.
+#[test]
+fn the_signed_speed_divides_agree_with_the_compact_ones_on_every_sign_pair() {
+    let mut pairs = vec![];
+    for a in [0i32, 1, 7, 300, 1500, 32767, -1, -7, -300, -32768, -32767] {
+        for b in [1i32, 2, 3, 10, 37, 300, 1500, 32767, -1, -2, -37, -1500, -32768] {
+            pairs.push((a as u16, b as u16));
+        }
+    }
+    let table: String = pairs.iter().map(|(a, b)| format!("  .word {a}, {b}\n")).collect();
+    for (name, fast, compact) in [
+        ("divhi", "__divhi3", "__divhi3c"),
+        ("modhi", "__modhi3", "__modhi3c"),
+        ("divmodhi", "__divmodhi4", "__divmodhi4c"),
+    ] {
+        let main = format!(
+            "  lda #<pairs\n  sta rc8\n  lda #>pairs\n  sta rc9\n  lda #{}\n  sta rc10\n\
+@next:\n  ldy #0\n@copy:\n  lda (rc8),y\n  sta rc2,y\n  sta rc16,y\n  iny\n  cpy #4\n  bne @copy\n\
+  jsr {fast}\n  sta rc12\n  stx rc13\n  lda rc6\n  sta rc14\n  lda rc7\n  sta rc15\n\
+  ldy #3\n@back:\n  lda rc16,y\n  sta rc2,y\n  dey\n  bpl @back\n\
+  jsr {compact}\n  cmp rc12\n  bne @bad\n  cpx rc13\n  bne @bad\n\
+  clc\n  lda rc8\n  adc #4\n  sta rc8\n  bcc @c\n  inc rc9\n@c:\n  dec rc10\n  bne @next\n  lda #0\n  rts\n@bad:\n  lda #1\n",
+            pairs.len()
+        );
+        let extra = format!(".segment \"RODATA\"\npairs:\n{table}.segment \"CODE\"\n");
+        assert_eq!(common::run_with(&format!("signed-{name}-all"), &main, &extra), 0, "{fast} differs from {compact}");
+    }
+}
+
+/// A remainder of two non-negative words took the sign handling anyway: 36
+/// clocks of `abs16_pair`, a `php` and a `plp` over the divide, on every call
+/// of a loop of gcd steps.
+#[test]
+fn a_remainder_of_two_non_negative_words_takes_no_sign_handling() {
+    let plain = divide_clocks("signed-fast-mod", "__umodhi3", 2100, 1500);
+    let signed = divide_clocks("signed-fast-mod-s", "__modhi3", 2100, 1500);
+    assert!(signed <= plain + 15, "__modhi3 took {signed} clocks, __umodhi3 {plain}");
+}
+
+fn divide_clocks(
+    name: &str,
+    routine: &str,
+    a: u16,
+    b: u16,
+) -> i64 {
+    let setup = two_words(a, b);
+    common::cycles_with(name, &format!("{setup}  jsr {routine}\n"), "")
+        - common::cycles_with(&format!("{name}-s"), &setup, "")
+}
+
+/// Euclid's steps divide a number by one a little smaller: the quotient is a
+/// bit or two. 2100 / 1500 took 700 clocks (the bit loop), 1500 / 360 600.
+#[test]
+fn a_divide_with_a_quotient_of_a_few_bits_takes_a_few_steps() {
+    for (a, b, limit) in [(2100, 1500, 260), (1500, 360, 400), (300, 60, 400), (9999, 5000, 260)] {
+        let spent = divide_clocks(&format!("udivhi-few-{a}-{b}"), "__udivhi3", a, b);
+        assert!(spent <= limit, "{a} / {b} took {spent} clocks");
+    }
 }

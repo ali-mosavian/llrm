@@ -19,10 +19,14 @@ fn two_loops_with_one_count_do_not_mask_it_to_16_bits() {
     assert!(!asm.contains("65535"), "{asm}");
 }
 
+/// Backward threading (`-fbackward-threading`, on since #10129) removes the loop
+/// this reduction needs the unroller to find (-O2: 43 instructions, 101 with it
+/// off), so the count read off it was 0 and four gates went red. The test is
+/// about the unroller's worklist, so the pass is off.
 fn runtime_unrolls(ir: &str) -> usize {
     let ir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/ir").join(ir);
     let out = Command::new(env!("CARGO_BIN_EXE_llrm-wasm-llc"))
-        .args(["-S", "-O2", "-o", "-"])
+        .args(["-S", "-O2", "-fno-backward-threading", "-o", "-"])
         .arg(ir)
         .env("LLRM_DEBUG", "unroll")
         .output()

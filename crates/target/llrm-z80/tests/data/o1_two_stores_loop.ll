@@ -1,6 +1,6 @@
 target datalayout = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8"
-; ModuleID = '/home/alim/scratch/z80w/red/u_clear.c'
-source_filename = "/home/alim/scratch/z80w/red/u_clear.c"
+; ModuleID = 'u_clear.c'
+source_filename = "u_clear.c"
 target triple = "msp430"
 
 @a = dso_local global [64 x i16] zeroinitializer, align 2

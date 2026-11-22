@@ -1,3 +1,7 @@
+---
+architecture-index: MS6 gap 3, the memory operand on the Insn (arm64)
+architecture-order: 9
+---
 # MS6 gap 3: the memory operand on the `Insn`
 
 Status 2026-11-09, owner arm64-phi. Closes spike rows 5 and 7 (DEVIATE M7).

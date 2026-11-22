@@ -1,6 +1,6 @@
 target datalayout = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8"
-; ModuleID = '/home/alim/work/personal/llrm/.claude/worktrees/zealous-wilbur-e4e7b9/bench/sieve/sieve.c'
-source_filename = "/home/alim/work/personal/llrm/.claude/worktrees/zealous-wilbur-e4e7b9/bench/sieve/sieve.c"
+; ModuleID = 'sieve.c'
+source_filename = "sieve.c"
 target triple = "msp430"
 
 ; Function Attrs: nounwind optsize

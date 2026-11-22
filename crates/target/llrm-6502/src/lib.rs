@@ -14,6 +14,7 @@ pub mod frame;
 pub mod hotdivision;
 pub mod hotmultiply;
 pub mod ir_lowering;
+pub mod licm;
 pub mod mulimage;
 pub mod opcosts;
 pub mod outline;
@@ -38,6 +39,7 @@ pub mod target;
 pub mod timing;
 pub mod tti;
 pub mod weights;
+pub mod zerospill;
 
 use llrm_lir::registers::{RegId, Row};
 

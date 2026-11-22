@@ -68,7 +68,7 @@ use llrm_mir::valuetracking::pattern::{phi_incoming, result_of};
 use llrm_support::hash::{HashSet, IndexSet};
 
 use crate::cold_chrec::expands_cold_outer_chrec;
-use crate::lsr_formula::{Formula, Immediate, MemAccessTy, RegUseTracker, Symbol};
+use crate::lsr_formula::{Formula, Immediate, MemAccessTy, RegBits, RegUseTracker, Symbol};
 
 /// `SetupCostDepthLimit`.
 const SETUP_COST_DEPTH_LIMIT: u32 = 7;
@@ -277,15 +277,18 @@ pub fn is_am_completely_folded_at(
     base_offset: Immediate,
     has_base_reg: bool,
     scale: i64,
+    bits: RegBits,
 ) -> bool {
     match kind {
-        Kind::Address => tti.is_legal_addressing_mode_at(
+        Kind::Address => tti.is_legal_addressing_mode_typed(
             access.addr_space,
             access.bytes,
             base_gv,
             base_offset.0,
             has_base_reg,
             scale,
+            bits.base,
+            bits.scaled,
         ),
         Kind::ICmpZero => {
             // There is no hook for folding a global into a compare.
@@ -327,6 +330,7 @@ pub fn is_am_completely_folded_between(
     base_offset: Immediate,
     has_base_reg: bool,
     scale: i64,
+    bits: RegBits,
 ) -> bool {
     // Check for overflow.
     let (base, min, max) = (base_offset.0, min_offset.0, max_offset.0);
@@ -338,8 +342,8 @@ pub fn is_am_completely_folded_between(
     if (high > base) != (max > 0) {
         return false;
     }
-    is_am_completely_folded_at(tti, kind, access, base_gv, Immediate(low), has_base_reg, scale)
-        && is_am_completely_folded_at(tti, kind, access, base_gv, Immediate(high), has_base_reg, scale)
+    is_am_completely_folded_at(tti, kind, access, base_gv, Immediate(low), has_base_reg, scale, bits)
+        && is_am_completely_folded_at(tti, kind, access, base_gv, Immediate(high), has_base_reg, scale, bits)
 }
 
 /// `isAMCompletelyFolded(TTI, MinOffset, MaxOffset, Kind, AccessTy, F, L)`.
@@ -356,7 +360,7 @@ pub fn is_am_completely_folded_formula(
     // Either a canonical formula or a scale is right; a non-canonical one with
     // no scale is not.
     debug_assert!(f.is_canonical(se, l) || f.scale != 0);
-    let Some(mode) = f.mode() else { return false };
+    let Some(mode) = f.mode_in(se) else { return false };
     is_am_completely_folded_between(
         tti,
         min_offset,
@@ -367,6 +371,7 @@ pub fn is_am_completely_folded_formula(
         f.base_offset,
         mode.has_base_reg,
         mode.scale,
+        mode.bits,
     )
 }
 
@@ -375,10 +380,11 @@ pub fn is_am_completely_folded_formula(
 /// more base registers or an unfolded offset still costs more than this says.
 pub fn is_am_completely_folded(
     tti: &dyn Tti,
+    se: &ScalarEvolution,
     lu: &Use,
     f: &Formula,
 ) -> bool {
-    let Some(mode) = f.mode() else { return false };
+    let Some(mode) = f.mode_in(se) else { return false };
     is_am_completely_folded_between(
         tti,
         lu.min_offset,
@@ -389,6 +395,7 @@ pub fn is_am_completely_folded(
         f.base_offset,
         mode.has_base_reg,
         mode.scale,
+        mode.bits,
     )
 }
 
@@ -405,6 +412,7 @@ pub fn is_legal_use(
     base_offset: Immediate,
     has_base_reg: bool,
     scale: i64,
+    bits: RegBits,
 ) -> bool {
     is_am_completely_folded_between(
         tti,
@@ -416,21 +424,45 @@ pub fn is_legal_use(
         base_offset,
         has_base_reg,
         scale,
+        bits,
     ) || (scale == 1
-        && is_am_completely_folded_between(tti, min_offset, max_offset, kind, access, base_gv, base_offset, true, 0))
+        && is_am_completely_folded_between(
+            tti,
+            min_offset,
+            max_offset,
+            kind,
+            access,
+            base_gv,
+            base_offset,
+            true,
+            0,
+            RegBits::default(),
+        ))
 }
 
 /// `isLegalUse(TTI, MinOffset, MaxOffset, Kind, AccessTy, F)`.
 pub fn is_legal_use_formula(
     tti: &dyn Tti,
+    se: &ScalarEvolution,
     min_offset: Immediate,
     max_offset: Immediate,
     kind: Kind,
     access: MemAccessTy,
     f: &Formula,
 ) -> bool {
-    let Some(mode) = f.mode() else { return false };
-    is_legal_use(tti, min_offset, max_offset, kind, access, mode.global, f.base_offset, mode.has_base_reg, mode.scale)
+    let Some(mode) = f.mode_in(se) else { return false };
+    is_legal_use(
+        tti,
+        min_offset,
+        max_offset,
+        kind,
+        access,
+        mode.global,
+        f.base_offset,
+        mode.has_base_reg,
+        mode.scale,
+        mode.bits,
+    )
 }
 
 /// `isLegalAddImmediate`.
@@ -696,7 +728,7 @@ impl Cost {
         if parts > 1 && inside {
             // Not the base and a possible second register, if the target folds
             // two.
-            let folded = f.scale != 0 && is_am_completely_folded(r.tti, lu, f);
+            let folded = f.scale != 0 && is_am_completely_folded(r.tti, r.se, lu, f);
             self.c.num_base_adds += (parts - (1 + usize::from(folded))) as u32;
         }
         // DEVIATE LU2: the offset beside two registers is the displacement of
@@ -779,7 +811,7 @@ impl Cost {
             if f.has_global() {
                 // Symbolic values are rated conservatively.
                 self.c.imm_cost += 64;
-            } else if offset.is_non_zero() {
+            } else if offset.is_non_zero() && !(lu.kind == Kind::ICmpZero && r.tti.lsr_exit_compare_immediate_is_free()) {
                 let bits = 65 - (offset.0 ^ (offset.0 >> 63)).leading_zeros();
                 self.c.imm_cost += bits;
             }
@@ -810,7 +842,7 @@ impl Cost {
             if lu.kind == Kind::Address
                 && inside
                 && offset.is_non_zero()
-                && !f.mode().is_some_and(|mode| {
+                && !f.mode_in(r.se).is_some_and(|mode| {
                     is_am_completely_folded_at(
                         r.tti,
                         Kind::Address,
@@ -819,6 +851,7 @@ impl Cost {
                         offset,
                         mode.has_base_reg,
                         mode.scale,
+                        mode.bits,
                     )
                 })
             {
@@ -954,6 +987,12 @@ impl Cost {
             }
             self.c.add_rec_cost += loop_cost;
             if loop_cost > 0
+                && !lu.all_fixups_unconditional
+                && lu.kind == Kind::Address
+            {
+                self.c.add_rec_cost += r.tti.lsr_conditional_use_step_cost();
+            }
+            if loop_cost > 0
                 && r.se.match_affine_add_rec(reg).is_some_and(|(_, step, _)| r.se.as_constant(step).is_none())
             {
                 self.variable_steps += 1;
@@ -1064,6 +1103,13 @@ impl Cost {
         // it (x86 `isLegalAddressingMode` sees an alloca as a base register).
         if lu.kind == Kind::Address && f.base_regs.len() == 1 && r.tti.frame_address_is_free() && is_stack_slot(r, reg)
         {
+            return;
+        }
+        // DEVIATE LU33: a global's address under an address is an immediate
+        // loaded where it is used (`ld hl,#sym`), so as a base it holds no
+        // register through the loop; the pin counts it one (x86 folds the
+        // symbol into the access, so there it is no base register).
+        if lu.kind == Kind::Address && r.tti.lsr_global_address_is_free() && is_global_address(r, reg) {
             return;
         }
         self.c.num_regs += 1;
@@ -1332,6 +1378,18 @@ fn holds_no_offset(
         }
         _ => false,
     }
+}
+
+/// Whether `s` is the address of a global.
+fn is_global_address(
+    r: &mut Rating,
+    s: Scev,
+) -> bool {
+    let Some(Operand::Constant(id)) = r.se.unknown_value(s) else { return false };
+    matches!(
+        r.cx.context.get(id).kind,
+        llrm_mir::context::ConstantKind::Global(_)
+    )
 }
 
 /// Whether `s` is the address of a stack slot: an `alloca`.

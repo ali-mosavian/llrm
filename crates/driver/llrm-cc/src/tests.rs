@@ -336,6 +336,24 @@ fn the_6502_rows_select_their_own_backend_and_cpu() {
     assert_eq!(table["x86_64-linux"].llc_program, "llrm-llc");
 }
 
+/// clang's IR carries `-fno-pic` only as a module flag it may leave out, so
+/// QuickrBasic's m64 objects read as position independent (-4,295 B at -Os):
+/// the driver states the model to the backend, the last of the `-f[no-]pic`
+/// family, and nothing where none is given.
+#[test]
+fn the_last_pic_flag_reaches_the_backend_as_the_relocation_model() {
+    let table = targets(TARGETS).unwrap();
+    let args = |line: &str| llc_args(&table["x86_64-linux"], &built(line), Path::new("x.ll"), Path::new("x.o"));
+    assert!(args("-Os -fno-pic -c x.c").contains(&"-relocation-model=static".to_owned()));
+    assert!(args("-Os -fno-pic -fPIC -c x.c").contains(&"-relocation-model=pic".to_owned()));
+    assert!(!args("-Os -c x.c").iter().any(|one| one.starts_with("-relocation-model")));
+    assert!(
+        !llc_args(&table["6502-sim65"], &built("-Os -fno-pic -c x.c"), Path::new("x.ll"), Path::new("x.o"))
+            .iter()
+            .any(|one| one.starts_with("-relocation-model"))
+    );
+}
+
 /// A C global `sp` collided with cc65's own `sp` at link. The cc65 rows name
 /// the platform whose C symbols take cc65's `_`; the sim65 rows keep bare
 /// names.
@@ -492,20 +510,21 @@ fn the_6502_rows_unroll_at_o1_unless_told_otherwise() {
 /// IR keeps a latch branch on a compare tested one block up (bsearch -O1: 668
 /// clk against gcc's 614; shift_int32_variable m32 -O1: 8942 clk against gcc's
 /// 7784; arm64 mandel -O1: 153,637 instructions against gcc's 139,398, the
-/// second `b.hi` on one compare; m64 mandel -O1: 192,827 instructions against
+/// second `b.hi` on one compare, which `EarlyIfConverter` removes where the
+/// diamond is not threaded away first: the arm64 rows do not thread at -O1, as
+/// the pin does not; m64 mandel -O1: 192,827 instructions against
 /// gcc's 176,067, the same; 6502 k_strnicmp -O1: 197 B against 129, the loop
-/// exit left as a `switch` on a phi of constants). The m68k, m32, m64, arm64
+/// exit left as a `switch` on a phi of constants). The m68k, m32, m64
 /// and 6502 rows give their backend `-fthread-jumps` at -O1, unless the
 /// command line states either spelling; no other row, and no other level,
 /// does.
 #[test]
-fn m68k_x86_arm64_and_6502_rows_thread_jumps_at_o1_unless_told_otherwise() {
+fn m68k_x86_and_6502_rows_thread_jumps_at_o1_unless_told_otherwise() {
     let table = targets(TARGETS).unwrap();
     let llc = |row: &str, line: &str| llc_args(&table[row], &built(line), Path::new("x.ll"), Path::new("x.o"));
     let has = |args: &[String]| args.iter().any(|f| f == "-fthread-jumps");
-    let threads = |row: &str| {
-        ["m68k-", "x86_32-", "x86_64-", "arm64-", "6502-", "65c02-"].iter().any(|prefix| row.starts_with(prefix))
-    };
+    let threads =
+        |row: &str| ["m68k-", "x86_32-", "x86_64-", "6502-", "65c02-"].iter().any(|prefix| row.starts_with(prefix));
     for row in table.keys().filter(|row| threads(row)) {
         assert!(has(&llc(row, "-O1 -c x.c")), "{row}");
         for line in ["-O2 -c x.c", "-Os -c x.c", "-O1 -fno-thread-jumps -c x.c"] {
@@ -679,4 +698,30 @@ fn one_source_linked_for_the_6502_sweeps_what_main_does_not_reach() {
         assert!(!row.whole_program, "{name}");
         assert!(!args(name, on).contains(&"-fwhole-program".to_owned()), "{name}");
     }
+}
+
+/// DEVIATE VP9 is opt-in: no row defaults `-fllrm-vect-very-cheap`, and the
+/// command line's spelling reaches the backend.
+#[test]
+fn very_cheap_vectorizing_is_opt_in() {
+    let table = targets(TARGETS).unwrap();
+    let llc = |row: &str, line: &str| llc_args(&table[row], &built(line), Path::new("x.ll"), Path::new("x.o"));
+    let has = |args: &[String]| args.iter().any(|f| f == "-fllrm-vect-very-cheap");
+    for row in table.keys() {
+        assert!(!has(&llc(row, "-O2 -c x.c")), "{row}");
+    }
+    assert!(has(&llc("arm64-linux", "-O2 -fllrm-vect-very-cheap -c x.c")));
+}
+
+/// The runtime of QuickBASIC at `x86_32-wat` (every function regcall, so every
+/// parameter `inreg`) was refused by #10316 ("regparm (an `inreg` parameter) is
+/// not translated yet") though `watcall32` places those in EAX, EDX, EBX, ECX:
+/// the four flat QB tests of test_bench.py failed. `-mregparm=3` under
+/// `-mabi=watcom` alone stays refused (`tests/m32_regparm_refused.rs`).
+#[test]
+fn the_watcom_regcall_row_places_inreg_and_a_regparm_build_under_watcom_does_not() {
+    let table = targets(TARGETS).unwrap();
+    assert!(places_inreg(&table["x86_32-wat"], &built("-c x.c")));
+    assert!(!places_inreg(&table["x86_32-linux"], &built("-mabi=watcom -mregparm=3 -c x.c")));
+    assert!(places_inreg(&table["x86_32-linux"], &built("-mabi=sysv -c x.c")));
 }

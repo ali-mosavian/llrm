@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/earlycse.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/earlycse.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/earlycse.rs sha256:2d83fa4d05554a24c060dc48df59162d77ae19f0330745ad15ed7b37c9b676a0 -->
+<!-- src: crates/opt/llrm-transforms/src/earlycse.rs sha256:fce8036d3dfe172ca875137e0f87ac755d6bfc7220d3c05b790a830283100d33 -->
 
 # earlycse
 
@@ -14,8 +14,6 @@ translated is marked DEVIATE with its reason:
 - DEVIATE no `guard`, `sideeffect`, `pseudoprobe`, masked or target memory
   intrinsics, memset forwarding, fences or atomics: MIR has none (or `fill`
   makes them later). `llvm.assume` is handled.
-- DEVIATE flags are intersected whenever a value is reused (`combineIRFlags`
-  does it only when poison-generating flags remain).
 - DEVIATE a call's attributes are not intersected; a call that only reads or
   only writes memory (`memory::of`, which counts every location including
   `inaccessiblemem`) is numbered unless it is an `llrm.` marker.

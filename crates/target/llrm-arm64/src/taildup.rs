@@ -6,7 +6,10 @@
 //! # How it works
 //! A block of at most 2 instructions (1 at optsize) that cannot fall through
 //! is copied over the `b` of every block whose only exit is that `b`. A block
-//! left with no jumper is dropped later as unreachable.
+//! left with no jumper is dropped later as unreachable. A block that ends in a
+//! computed goto may have up to 10 (`HasComputedGoto && !PreRegAlloc`): the
+//! front end's one shared `goto *table[*pc++]` of an interpreter is copied
+//! back into every handler, each with its own indirect branch.
 //!
 //! Then, in a block that returns, `mov d, s` with `s` a caller-saved register
 //! that nothing reads afterwards, whose last write is an earlier plain
@@ -33,40 +36,70 @@
 //! that return, where the source is dead if it is caller-saved and not
 //! returned (the pin reads kill flags). Exit: 11-12.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::frame::Lowered;
 use crate::layout::label_of;
 use crate::mc::inst::{Gpr, Inst, Logic, Shift, Target, Width};
 use crate::mc::visit::{Reg, RegRef, Role};
 
-/// `TailDuplicator::shouldTailDuplicate` for `block`.
+/// What the pin allows a post-RA copy of a block that ends in a computed goto
+/// (`TailDuplicator::shouldTailDuplicate`: `HasComputedGoto && !PreRegAlloc`).
+const COMPUTED_GOTO_SIZE: usize = 10;
+
+/// `TailDuplicator::shouldTailDuplicate` for `block`; `computed` is whether it
+/// ends in a computed goto (`terminatorIsComputedGotoWithSuccessors`).
 fn copyable(
     block: &Lowered,
     own: &str,
     size: usize,
+    computed: bool,
 ) -> bool {
     let ends = matches!(
         block.insts.last(),
         Some(Inst::Branch { link: false, .. } | Inst::Ret { .. })
-    );
+    )
+        || computed && matches!(block.insts.last(), Some(Inst::BranchReg { link: false, .. }));
+    let size = if computed { size.max(COMPUTED_GOTO_SIZE) } else { size };
     ends && block.insts.len() <= size
         && !block.insts.iter().any(|inst| matches!(inst, Inst::Cfi(_) | Inst::Label(_)))
         && !block.insts.iter().filter_map(label_of).any(|label| label == own)
 }
 
+/// The blocks that end in a computed goto: an `indirectbr` with successors,
+/// all of them address-taken (`terminatorIsComputedGotoWithSuccessors`).
+pub fn computed_gotos<'a>(
+    indirect: &'a [(String, Vec<String>)],
+    kept: &[String],
+) -> HashSet<&'a str> {
+    indirect
+        .iter()
+        .filter(|(_, targets)| !targets.is_empty() && targets.iter().all(|target| kept.contains(target)))
+        .map(|(label, _)| label.as_str())
+        .collect()
+}
+
 /// Copies the short blocks into their sole-exit jumpers; returns each
 /// (jumper, copied block) pair, as the copy keeps the original's edge odds.
+/// `indirect` is each computed goto's block and its targets.
 pub fn tail_duplicate(
     blocks: &mut [Lowered],
     optsize: bool,
+    computed: &HashSet<&str>,
+    indirect: &[(String, Vec<String>)],
 ) -> Vec<(String, String)> {
     let size = if optsize { 1 } else { 2 };
     let short: HashMap<String, (Vec<Inst>, Vec<Option<(u32, u32)>>)> = blocks
         .iter()
         .enumerate()
         .skip(1)
-        .filter(|(_, block)| copyable(block, &block.label, size))
+        .filter(|(_, block)| {
+            let goto = computed.contains(block.label.as_str());
+            // "Don't try to tail-duplicate single-block loops": a dispatch that
+            // can reach itself stays.
+            let loops = indirect.iter().any(|(label, targets)| *label == block.label && targets.contains(label));
+            copyable(block, &block.label, size, goto) && !loops
+        })
         .map(|(_, block)| (block.label.clone(), (block.insts.clone(), block.locs.clone())))
         .collect();
     let mut copies = Vec::new();
@@ -228,13 +261,15 @@ fn is_64(inst: &Inst) -> bool {
 }
 
 /// Drops the blocks nothing branches to or falls into (the short block, once
-/// every jumper has its own copy).
+/// every jumper has its own copy). A block of `kept` has its address taken: an
+/// `indirectbr` reaches it, whatever its labels' users say.
 pub fn drop_unreferenced(
     blocks: &mut Vec<Lowered>,
     tables: &[crate::jumptable::Table],
+    kept: &[String],
 ) {
     loop {
-        let mut referenced: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        let mut referenced: std::collections::HashSet<&str> = kept.iter().map(String::as_str).collect();
         for (at, block) in blocks.iter().enumerate() {
             referenced.extend(block.insts.iter().filter_map(label_of));
             referenced.extend(tables.iter().flat_map(|table| table.entries.iter().map(String::as_str)));

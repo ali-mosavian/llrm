@@ -89,6 +89,7 @@ e:\n  %r = phi i32 [ 0, %0 ], [ %m, %t ]\n  ret i32 %r\n}\n";
     let asm = std::fs::read_to_string(&output).unwrap();
     let entry = asm.split(".Lf.1:").next().unwrap();
     assert!(!entry.contains("xzr, xzr"), "the zero is made before the branch that skips its use:\n{asm}");
+    assert!(asm.contains("csel w0, wzr, "), "the select reads the zero register:\n{asm}");
 }
 
 /// The pin's MachineCSE merges the dominated `SUBSWri a, 1` with the compare's,

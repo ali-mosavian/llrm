@@ -669,6 +669,55 @@ b0:
     assert!(lattice_of(&module, &results, "f", "y").is_unknown());
 }
 
+/// Before: a block SCCP found dead was erased though a `blockaddress` names it,
+/// and the table's label named nothing (SCCP.cpp:118 keeps it, holding an
+/// `unreachable`).
+#[test]
+fn test_a_dead_block_whose_address_is_taken_stays_holding_an_unreachable() {
+    let text = "@t = internal constant [1 x ptr] [ptr blockaddress(@f, %dead)]
+
+define i32 @f() {
+entry:
+  br i1 false, label %dead, label %live
+
+dead:
+  ret i32 1
+
+live:
+  ret i32 2
+}
+";
+    let mut module = parsed(text);
+    assert!(sccped(&mut module));
+    let out = printed(&module);
+    assert!(out.contains("\ndead:\n  unreachable"), "{out}");
+}
+
+/// Before: SCCP's `removeNonFeasibleEdges` asserted "Terminator must be a br or
+/// switch" on an `indirectbr` whose address is a known block (the pin's assert
+/// names `indirectbr` too): a debug build aborted on any computed goto the
+/// solver could fold. The jump becomes a `br` to its one feasible block.
+#[test]
+fn test_an_indirectbr_of_a_known_block_address_becomes_a_branch() {
+    let text = "@t = internal constant [2 x ptr] [ptr blockaddress(@f, %one), ptr blockaddress(@f, %two)]
+
+define i32 @f() {
+entry:
+  indirectbr ptr blockaddress(@f, %two), [label %one, label %two]
+
+one:
+  ret i32 1
+
+two:
+  ret i32 2
+}
+";
+    let mut module = parsed(text);
+    assert!(sccped(&mut module));
+    let out = printed(&module);
+    assert!(!out.contains("indirectbr") && out.contains("br label %two"), "{out}");
+}
+
 /// recpow -O2 (REC-5): `power(i % 97 + 2, ...)` is called from a loop whose
 /// counter grows by one each solver step. Ten extensions and the pin's
 /// `mergeIn` makes it overdefined, so `i % 97` spans both signs and the

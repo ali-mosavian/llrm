@@ -561,6 +561,12 @@ pub struct Function {
     pub(crate) lineage: Lineage,
     /// The names of the live values and blocks, for `unique_name`.
     pub(crate) names: NameIndex,
+    /// The blocks some `blockaddress` names (`BasicBlock::hasAddressTaken`):
+    /// an `indirectbr` or a table may reach one by an address no edge shows.
+    pub(crate) address_taken: Vec<BlockId>,
+    /// Where the address of a block that was replaced by another now points
+    /// (`BlockAddress::handleOperandChange`): (old, new).
+    pub(crate) address_forward: Vec<(BlockId, BlockId)>,
 }
 
 /// A count per name held by a live value or block, made at the first new name
@@ -586,6 +592,11 @@ impl PartialEq for NameIndex {
 }
 
 impl Function {
+    /// The function is built for size (`optsize` or `minsize`).
+    pub fn optimizes_for_size(&self) -> bool {
+        self.attrs.iter().any(|attr| matches!(attr, Attribute::Flag(name) if name == "optsize" || name == "minsize"))
+    }
+
     /// Whether `inst` is a `llvm.experimental.noalias.scope.decl` call, which
     /// MIR spells as a `!noalias.scope.decl` attachment.
     pub fn is_noalias_scope_decl(
@@ -627,6 +638,76 @@ impl Function {
             parameter_origins: Vec::new(),
             lineage: Lineage::default(),
             names: NameIndex::default(),
+            address_taken: Vec::new(),
+            address_forward: Vec::new(),
+        }
+    }
+
+    /// `BasicBlock::hasAddressTaken`: a `blockaddress` names `block`, so it
+    /// may be reached from anywhere and its label must stay.
+    #[inline]
+    pub fn has_address_taken(
+        &self,
+        block: BlockId,
+    ) -> bool {
+        !self.address_taken.is_empty() && self.address_taken.contains(&block)
+    }
+
+    /// `isa<IndirectBrInst>(block->getTerminator())`: the edges out of the
+    /// block go by an address, so none of them can be split.
+    #[inline]
+    pub fn ends_in_indirect_branch(
+        &self,
+        block: BlockId,
+    ) -> bool {
+        self.terminator(block).is_some_and(|last| self.instruction(last).opcode == Opcode::IndirectBr)
+    }
+
+    /// The blocks whose address is taken and that are still in the function:
+    /// each is where a `blockaddress` of it, or of a block it replaced, lands.
+    pub fn address_taken_blocks(&self) -> impl Iterator<Item = BlockId> + '_ {
+        self.address_taken.iter().filter_map(|&block| self.resolve_block_address(block)).collect::<Vec<_>>().into_iter()
+    }
+
+    /// Whether any block has its address taken.
+    #[inline]
+    pub fn has_any_address_taken(&self) -> bool {
+        !self.address_taken.is_empty()
+    }
+
+    /// The block `blockaddress(block)` is the address of now: `block` after the
+    /// blocks it was replaced by, or `None` where it was erased with nothing
+    /// to replace it (LLVM's `inttoptr 1`: an address no `indirectbr` lists).
+    pub fn resolve_block_address(
+        &self,
+        block: BlockId,
+    ) -> Option<BlockId> {
+        let mut at = block;
+        // Each forward is recorded once, so a chain is as short as the
+        // forwards.
+        for _ in 0..=self.address_forward.len() {
+            match self.address_forward.iter().find(|(old, _)| *old == at) {
+                Some(&(_, new)) => at = new,
+                None => return self.is_placed(at).then_some(at),
+            }
+        }
+        None
+    }
+
+    /// No block's address is taken: every `blockaddress` of this function was
+    /// replaced (`IndirectBrExpandPass` makes them integers).
+    pub fn clear_address_taken(&mut self) {
+        self.address_taken.clear();
+        self.address_forward.clear();
+    }
+
+    /// Records that a `blockaddress` names `block`.
+    pub fn mark_address_taken(
+        &mut self,
+        block: BlockId,
+    ) {
+        if !self.address_taken.contains(&block) {
+            self.address_taken.push(block);
         }
     }
 
@@ -872,7 +953,7 @@ impl Function {
         &self,
         block: BlockId,
     ) -> bool {
-        self.blocks[block.0 as usize].placed
+        self.blocks.get(block.0 as usize).is_some_and(|one| one.placed)
     }
 
     pub fn entry(&self) -> Option<BlockId> {
@@ -1314,6 +1395,9 @@ pub struct Alias {
     /// The value type, as written before the comma.
     pub ty: TypeId,
     pub aliasee: GlobalId,
+    /// Bytes from the start of the aliasee: `getelementptr (i8, @aliasee, offset)`.
+    /// Only `GlobalMerge` makes one that is not 0 (the name of a merged external).
+    pub offset: i64,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
@@ -1551,6 +1635,10 @@ impl PartialEq for SymbolIndex {
 #[derive(Clone, Debug, Default)]
 pub struct Module {
     pub context: Context,
+    /// `llc -relocation-model`: `Some(false)` static, `Some(true)` pic. clang
+    /// writes no module flag for `-fno-pic -fno-asynchronous-unwind-tables`, which
+    /// reads as a module that is not clang's; the driver says it.
+    pub relocation_pic: Option<bool>,
     pub datalayout: Option<String>,
     /// Variables and functions, in definition order.
     pub globals: Vec<GlobalValue>,
@@ -1828,9 +1916,13 @@ impl Module {
         }
     }
 
-    /// Whether the code is position independent: clang's "PIC Level" module
-    /// flag is set. A module that carries no flags at all (not clang's) is.
+    /// Whether the code is position independent: the driver's relocation model
+    /// where it gave one (`llc -relocation-model`), else clang's "PIC Level"
+    /// module flag. A module that carries no flags at all (not clang's) is.
     pub fn position_independent(&self) -> bool {
+        if let Some(pic) = self.relocation_pic {
+            return pic;
+        }
         let Some((_, flags)) = self.named_metadata.iter().find(|(name, _)| name == "llvm.module.flags") else {
             return true;
         };

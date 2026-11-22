@@ -43,6 +43,9 @@ pub struct Cost {
     /// A data-dependent term is at its lower bound (shift by register) or its
     /// published maximum (multiply, divide).
     pub partial: bool,
+    /// `partial` and the omitted term only lowers the clocks: they are a
+    /// published maximum (multiply, divide), the true count is at most this.
+    pub maximum: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -159,7 +162,8 @@ fn list_size(text: &str) -> Option<u32> {
     Some(count)
 }
 
-/// An error that is a parser fault, not a missing table row: the cycles tool stops on it.
+/// An error that is a parser fault, not a missing table row: the cycles tool
+/// stops on it.
 pub const UNPARSEABLE: &str = "unparseable displacement";
 
 fn operand(text: &str) -> Result<Operand, String> {
@@ -208,17 +212,21 @@ fn operand(text: &str) -> Result<Operand, String> {
             [_, "%pc"] => Ok(Operand::Mode(Mode::PcDisp, 0)),
             // a displacement that does not fit the brief format's 8 bits is
             // the full format's base displacement (68020 and up)
-            // an empty base is the full format's suppressed one: `@(ffffffff800020a0,%d0:l)`
-            [disp, base, _] if is_address(base) || *base == "%pc" || base.is_empty() => match (displacement(disp), *base == "%pc") {
-                (Some(d), _) if (-128..=127).contains(&d) && !base.is_empty() => {
-                    Ok(Operand::Mode(if *base == "%pc" { Mode::PcIndex } else { Mode::Index }, 0))
+            // an empty base is the full format's suppressed
+            // one: `@(ffffffff800020a0,%d0:l)`
+            [disp, base, _] if is_address(base) || *base == "%pc" || base.is_empty() => {
+                match (displacement(disp), *base == "%pc") {
+                    (Some(d), _) if (-128..=127).contains(&d) && !base.is_empty() => {
+                        Ok(Operand::Mode(if *base == "%pc" { Mode::PcIndex } else { Mode::Index }, 0))
+                    }
+                    (Some(d), _) if (-32768..=32767).contains(&d) => Ok(Operand::Mode(Mode::IndexW, 0)),
+                    (Some(_), _) => Ok(Operand::Mode(Mode::IndexL, 0)),
+                    // a label in the brief form's 8 bits: the table `jmp` and
+                    // its `move.w` (M68K-WORD-TABLE)
+                    (None, true) if disp.starts_with('.') => Ok(Operand::Mode(Mode::PcIndex, 0)),
+                    (None, _) => Err(format!("{UNPARSEABLE} `{disp}` in `{text}`")),
                 }
-                (Some(d), _) if (-32768..=32767).contains(&d) => Ok(Operand::Mode(Mode::IndexW, 0)),
-                (Some(_), _) => Ok(Operand::Mode(Mode::IndexL, 0)),
-                // a label in the brief form's 8 bits: the table `jmp` and its `move.w` (M68K-WORD-TABLE)
-                (None, true) if disp.starts_with('.') => Ok(Operand::Mode(Mode::PcIndex, 0)),
-                (None, _) => Err(format!("{UNPARSEABLE} `{disp}` in `{text}`")),
-            },
+            }
             [base, index] if (is_address(base) || *base == "%pc") && is_index(index) => {
                 Ok(Operand::Mode(Mode::IndexB, 0))
             }
@@ -268,6 +276,35 @@ fn places(operands: &[Operand]) -> Option<u32> {
         [Operand::Mode(Mode::Imm, count), _] => Some(if *count == 0 { 8 } else { *count as u32 }),
         _ => None,
     }
+}
+
+/// The `n` of a 68000/68010 `mulu.w`/`muls.w`: the 1 bits of a `mulu` source,
+/// the 01/10 transitions of a `muls` source with a 0 appended. Known from an
+/// immediate source, else from the `count` the trace fixed ([`word_ones`] of
+/// the source it observed).
+fn product_ones(
+    cpu: Cpu,
+    base: &str,
+    suffix: Option<&str>,
+    operands: &[Operand],
+    count: Option<u32>,
+) -> Option<u32> {
+    let [source, Operand::Mode(Mode::Dn, _)] = operands else { return None };
+    if !matches!(cpu, Cpu::M68000 | Cpu::M68010) || suffix != Some("w") || !matches!(base, "mulu" | "muls") {
+        return None;
+    }
+    match source {
+        Operand::Mode(Mode::Imm, value) => Some(word_ones(base == "muls", (*value & 0xffff) as u32)),
+        _ => count,
+    }
+}
+
+/// The `n` of a 16-bit multiply by `word`.
+pub fn word_ones(
+    signed: bool,
+    word: u32,
+) -> u32 {
+    if signed { (((word << 1) ^ word) & 0xffff).count_ones() } else { word.count_ones() }
 }
 
 fn is_shift(base: &str) -> bool {
@@ -508,7 +545,14 @@ fn priced(
         && operands.len() == 2;
     let counted = by_register && count.is_some();
     let clocks = clocks + 2 * count.filter(|_| by_register).unwrap_or(0);
-    let partial = if cpu == Cpu::M68060 {
+    // The 68000's 16-bit multiply takes 38 + 2n clocks, n the ones of the
+    // source (`mulu`) or its 01/10 transitions (`muls`); the table holds
+    // the n = 16 bound. An immediate source is known, so its count is exact.
+    let product = product_ones(cpu, base, suffix, &operands, count);
+    let clocks = product.map_or(clocks, |ones| clocks - 32 + 2 * ones);
+    let partial = if product.is_some() {
+        false
+    } else if cpu == Cpu::M68060 {
         m68060::partial(base, suffix)
     } else if matches!(cpu, Cpu::M68020 | Cpu::M68030 | Cpu::M68040) {
         // bit fields and `cas` are a bound on the 68020 and 68030 (the "< 5
@@ -520,7 +564,8 @@ fn priced(
             || (by_register && !counted)
             || (set_on_condition(base) && cpu == Cpu::M68000)
     };
-    Ok(Cost { clocks, partial })
+    let maximum = partial && matches!(base, "mulu" | "muls" | "divu" | "divs") && cpu != Cpu::M68060;
+    Ok(Cost { clocks, partial, maximum })
 }
 
 const BASES: [&str; 63] = [
@@ -577,8 +622,10 @@ fn gnu_operand(text: &str) -> String {
             match parts.next() {
                 None => format!("({displacement},{base})"),
                 Some(index) => {
-                    // binutils prints an index displacement as bare hex, sign-extended to 64 bits
-                    let decimal = u64::from_str_radix(&displacement, 16).map_or(displacement, |bits| (bits as i64).to_string());
+                    // binutils prints an index displacement as bare hex,
+                    // sign-extended to 64 bits
+                    let decimal =
+                        u64::from_str_radix(&displacement, 16).map_or(displacement, |bits| (bits as i64).to_string());
                     format!("({decimal},{base},{})", index.split(':').next().unwrap_or(index))
                 }
             }

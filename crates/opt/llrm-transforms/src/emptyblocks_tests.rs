@@ -120,3 +120,38 @@ b4:
     );
     assert!(!text.contains("b1:"), "the empty case block goes: {text}");
 }
+
+/// A computed-goto dispatch (`indirectbr`) is a jump table as a `switch` is: its
+/// empty target blocks stay, and the copy for the join's phi goes in them. They
+/// were merged into the join, which gave the QB interpreter's `exec_loop` a
+/// dispatch block of 118 predecessors for the pin's 2; the pin's llc then
+/// made 65 threaded dispatches for its 123, and the bench ran 3.6% more
+/// instructions (m64 -O2).
+#[test]
+fn test_an_empty_target_of_an_indirectbr_stays_when_the_dispatch_is_hotter() {
+    let text = after(
+        "declare void @g()
+
+define i16 @f(ptr %a) {
+b0:
+  indirectbr ptr %a, [label %b1, label %b2, label %b3]
+
+b1:
+  br label %b4
+
+b2:
+  call void @g()
+  br label %b4
+
+b3:
+  call void @g()
+  br label %b4
+
+b4:
+  %p = phi i16 [ 1, %b1 ], [ 2, %b2 ], [ 3, %b3 ]
+  ret i16 %p
+}
+",
+    );
+    assert!(text.contains("b1:"), "the empty target stays: {text}");
+}

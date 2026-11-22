@@ -118,3 +118,31 @@ fn an_or_of_a_known_zero_is_the_load_of_its_operand() {
     // the `sta rc4` that fed the `ora` is dead once the `ora` is gone: copy propagation (default on) drops it, the pass off keeps it
     assert!(out.contains("cmp #5\n"), "{out}");
 }
+
+/// rep_count -O1 (304 B against llvm-mos 294): the 16 byte stores of an
+/// unrolled zero fill reloaded the zero from `rc2` and `rc3` before each (`lda
+/// rc2` after `sta (rc8),y`, 2 B each) though `a` still held the zero both
+/// cells were stored from. A store through a pointer writes no register cell.
+#[test]
+fn a_cell_stored_from_an_immediate_is_not_reloaded_into_a_register_holding_it() {
+    let text = "f:\n  lda #0\n  sta rc2\n  sta rc3\n  ldy #3\n  sta (rc8),y\n  lda rc3\n  ldy #4\n  sta (rc8),y\n  lda rc2\n  rts\n";
+    assert_eq!(
+        known(text),
+        "f:\n  lda #0\n  sta rc2\n  sta rc3\n  ldy #3\n  sta (rc8),y\n  ldy #4\n  sta (rc8),y\n  rts\n"
+    );
+}
+
+/// What a write can reach stays forgotten: the cell itself, an indexed store
+/// (`rc2,x` is a cell for some `x`), a static local's cell through a pointer, a
+/// call, another immediate in the register.
+#[test]
+fn a_cell_that_may_have_been_written_is_reloaded() {
+    for between in ["  inc rc2\n", "  sta rc2,x\n", "  jsr f\n", "  stx rc2\n"] {
+        let text = format!("f:\n  lda #0\n  sta rc2\n{between}  lda rc2\n  rts\n");
+        assert_eq!(known(&text), text, "{between:?}");
+    }
+    let text = "f:\n  lda #0\n  sta s_f_0\n  sta (rc8),y\n  lda s_f_0\n  rts\n";
+    assert_eq!(known(text), text);
+    let text = "f:\n  lda #0\n  sta rc2\n  lda #1\n  lda rc2\n  rts\n";
+    assert_eq!(known(text), text);
+}

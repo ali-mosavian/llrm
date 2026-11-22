@@ -209,3 +209,39 @@ class Verdicts(unittest.TestCase):
         rows = cell("m68k-68000", "virt", "O1", (100, 100), (80, 200), (120, 100))
         self.assertEqual(count(tsv(*rows)), (0, 1))
         self.assertEqual([v for *_, v, _ in verdicts(tsv(*rows))], ["VIRTUAL-OK"])
+
+
+def test_an_upper_bound_under_every_reference_is_judged_at_the_bound():
+    """memmove_overlap 68020 O2 printed `4668*` for two `muls.l` at their published maximum and the cell was blank, hiding a win over gcc's 8548."""
+    import m68k_worse_cells as w
+
+    sides = {"ours": (100, "<=4668"), "gcc": (100, 8548)}
+    w.settle_bounds(sides)
+    assert sides["ours"] == (100, 4668)
+
+
+def test_an_upper_bound_above_a_reference_stays_unmeasured():
+    """`<=9000` against gcc's 8548 straddles it: neither a win nor a loss."""
+    import m68k_worse_cells as w
+
+    sides = {"ours": (100, "<=9000"), "gcc": (100, 8548)}
+    w.settle_bounds(sides)
+    assert sides["ours"][1] is None
+
+
+def test_a_lower_bound_over_a_reference_is_a_counted_loss():
+    """pattern_fill 68000 O1 ran `93048*` (shift counts at their lower bound) against gcc's 86440 and the cell was blank: the true count is at least 93048, a loss."""
+    import m68k_worse_cells as w
+
+    sides = {"ours": (264, ">=93048"), "gcc": (232, 86440)}
+    w.settle_bounds(sides)
+    assert sides == {"ours": (264, 93048), "gcc": (232, 86440)}
+
+
+def test_a_lower_bound_under_a_reference_straddles():
+    """`>=80000` against gcc's 86440 may still win or lose: unmeasured."""
+    import m68k_worse_cells as w
+
+    sides = {"ours": (264, ">=80000"), "gcc": (232, 86440)}
+    w.settle_bounds(sides)
+    assert sides["ours"][1] is None

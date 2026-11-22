@@ -99,6 +99,12 @@ pub struct RegisterClasses {
     pub uncheap_move_immediate_at_size: fn(u8, i64) -> bool,
     /// `Target::hoist_by_pressure`.
     pub hoist_by_pressure: bool,
+    /// `Target::hoists_register_free_ops`.
+    pub hoists_register_free_ops: bool,
+    /// `Target::rematerializable_opcode`.
+    pub rematerializable_opcode: fn(&str) -> bool,
+    /// `Target::def_register_class`.
+    pub def_register_class: fn(&str) -> Option<&'static str>,
 }
 
 impl RegisterClasses {
@@ -199,6 +205,9 @@ impl RegisterClasses {
             cheap_move_row: arch.cheap_move_row(),
             uncheap_move_immediate_at_size: arch.uncheap_move_immediate_at_size(),
             hoist_by_pressure: arch.hoist_by_pressure(),
+            hoists_register_free_ops: arch.hoists_register_free_ops(),
+            rematerializable_opcode: arch.rematerializable_opcode(),
+            def_register_class: arch.def_register_class(),
         };
         classes.status_word = classes.found_status_word();
         classes
@@ -221,6 +230,24 @@ impl RegisterClasses {
                 .position(|one| Some(*one) == self.frame_after)
                 .map_or(free.available.len(), |kept| kept + 1);
             free.available.insert(at, whole);
+        }
+        // `computePSetLimit` without the frame pointer's reserved registers: a
+        // class the frame register is in has it allocatable, and the pin's
+        // registers of that class the file does not describe (`RBP`).
+        if let Some((sets, limits)) = free.pressure.as_mut() {
+            let allocatable =
+                |name: &str| RegId::named(name).is_some_and(|reg| free.available.contains(&self.registers.root(reg)));
+            for (set, limit) in limits.iter_mut().enumerate() {
+                // A file that does not say what a frame pointer reserves
+                // (m16's) keeps its limits.
+                let Some(class) = sets.class(&sets.sets[set].largest).filter(|class| class.frame > 0) else { continue };
+                let described = class
+                    .visible
+                    .iter()
+                    .filter(|name| RegId::named(name).is_some_and(|reg| self.registers.root(reg) == whole))
+                    .count() as u32;
+                *limit = sets.limit_with(set, allocatable, class.frame.saturating_sub(described));
+            }
         }
         let key = self.registers.view(whole, 16).unwrap_or(whole);
         free.word_bases.insert(key);
@@ -393,6 +420,33 @@ mod tests {
             indexes.insert(word);
             assert_eq!((free.word_bases, free.word_indexes), (bases, indexes), "{}", arch.name());
         }
+    }
+
+    /// A function with no frame pointer has `EBP` and `RBP` unreserved in the
+    /// pin's `computePSetLimit`: the GR16 set (limit 66, less the class's
+    /// reserved registers) is 10 with one and 14 without (the pin's
+    /// `-debug-only=machine-scheduler`: `GR16 Limit 14`, and 10 with
+    /// `-frame-pointer=all`). The limits stayed a frame pointer's, so the
+    /// pre-RA scheduler saw excess pressure the pin does not and reordered
+    /// the handlers of QuickrBasic's `exec_loop`.
+    #[test]
+    fn test_m32_without_a_frame_pointer_has_the_pins_pressure_limits() {
+        let classes = RegisterClasses::of(&llrm_x86_m32::M32);
+        let limit = |classes: &RegisterClasses, name: &str| {
+            let (sets, limits) = classes.pressure.as_ref().expect("m32 has pressure sets");
+            limits[sets.sets.iter().position(|set| set.name == name).expect("the set")]
+        };
+        let free = classes.with_frame_free();
+        assert_eq!(limit(&classes, "GR16"), 10);
+        assert_eq!(limit(&free, "GR16"), 14);
+        // The 8-bit sets: `BPL` is reserved in 32-bit mode with or without a
+        // frame pointer.
+        assert_eq!(limit(&classes, "GR8"), limit(&free, "GR8"));
+        // `computePSetLimit` of a class with no allocatable register is its raw
+        // limit; with `EBP` it is the raw limit less the weight of
+        // `ESP`.
+        assert_eq!(limit(&classes, "GR32_BPSP"), 6);
+        assert_eq!(limit(&free, "GR32_BPSP"), 4);
     }
 
     /// `is_encodable` puts a spill cell through the target's own frame register

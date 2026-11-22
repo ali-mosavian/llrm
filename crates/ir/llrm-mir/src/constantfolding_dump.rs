@@ -66,6 +66,7 @@ fn show(
             _ => format!("{t} fp"),
         },
         ConstantKind::Float80(bits) => format!("{t} 0xK{bits:020X}"),
+        ConstantKind::MetadataString(text) => format!("{t} !{text:?}"),
         ConstantKind::Float128(bits) => format!("{t} 0xL{:016X}{:016X}", *bits as u64, (*bits >> 64) as u64),
         ConstantKind::Null if context.types.int_bits(constant.ty).is_some() => format!("{t} 0"),
         ConstantKind::Null => format!("{t} null"),
@@ -102,6 +103,9 @@ fn show(
             let flags = crate::print::gep_flag_words(*inbounds, *nusw, *nuw);
             let flags = flags.trim_end().replace(' ', ",");
             format!("{t} gep[{flags}] {} ({})", context.types.display(*source), members(operands).join(", "))
+        }
+        ConstantKind::Expr(ConstantExpr::BlockAddress { function, block }) => {
+            format!("{t} blockaddress({}, {})", globals[function.0 as usize].name.owned().unwrap_or_default(), block.0)
         }
         ConstantKind::Expr(ConstantExpr::Cast { op, value }) => {
             format!("{t} {} ({})", spelling(&CAST, *op), show(context, globals, *value))

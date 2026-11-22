@@ -46,6 +46,14 @@
 //!   divisibility test against the largest VF before any smaller one are not
 //!   translated: the divisibility is tested on the chosen VF x IC. Exit: VEC3
 //!   (LV-X3, 2026-11-20).
+//! - VP9 DEVIATE (owner arm64-vec, exit: the pin's -O2 cost model gains it, or
+//!   2026-12-31): a target's driver row may turn on gcc's
+//!   `vect-cost-model=very-cheap` at -O2 (`-fllrm-vect-very-cheap`): a loop of
+//!   an unknown trip count is planned only if VF x IC divides it, which nothing
+//!   says, so none is: no scalar epilogue, as for `optsize` (VP6), where the
+//!   pin's -O2 leaves one. A known trip count keeps the pin's plan: gcc
+//!   vectorizes those (particle -O2: 9,311 clocks vectorized, 73,733 with the
+//!   101 trips left scalar).
 //! - VP8 closed: the loop-control prices are the pin's. The scalar loop pays
 //!   its `add` and exit `icmp` (the phis, the branch and the address
 //!   computations are free at throughput), the vector loop its
@@ -163,6 +171,10 @@ pub struct LoopFacts {
     pub widest_induction_bits: u32,
     /// The function is `optsize` or `minsize` (VP6).
     pub opt_size: bool,
+    /// gcc's `--param vect-cost-model=very-cheap`: a loop of an unknown trip
+    /// count gets no scalar epilogue, as at `optsize`, but is priced for speed
+    /// (VP9).
+    pub very_cheap: bool,
     /// `optsize` and the target prices a vector loop by size, outside work
     /// included (`Tti::vectorizes_size_priced`).
     pub size_priced: bool,
@@ -363,15 +375,28 @@ fn iteration_cost(
         [register_bits, 2 * register_bits].contains(&bits)
             || (matches!(lane, Ty::Int(_)) && [register_bits / 2, 4 * register_bits, 8 * register_bits].contains(&bits))
     };
-    if backend_limits && vf > 1 && !recipes.iter().flat_map(recipe_lanes).all(taken) {
-        return Err(NotTaken);
+    if backend_limits && vf > 1 {
+        if let Some(lane) = recipes.iter().flat_map(recipe_lanes).find(|&lane| !taken(lane)) {
+            if llrm_support::debug::enabled("loop-vectorize-recipes") {
+                eprintln!("VF {vf} not taken: a vector of {lane:?} lanes is not one or two registers");
+            }
+            return Err(NotTaken);
+        }
     }
     let vector = |ty: Ty| VectorTy { lane: ty, count: vf };
-    let address = tti.address_computation_cost(kind).value;
+    let address = tti.scalar_access_address_cost(kind).value;
     // A vector price this port lacks: nothing in a lower bound, else the factor
     // has no price.
-    let unknown = |priced: Option<Cost>| priced.or(optimistic.then_some(Cost::FREE)).ok_or(NotTaken);
+    let unknown = |priced: Option<Cost>| {
+        if priced.is_none() && !optimistic && llrm_support::debug::enabled("loop-vectorize-recipes") {
+            eprintln!("VF {vf}: a recipe has no vector price");
+        }
+        priced.or(optimistic.then_some(Cost::FREE)).ok_or(NotTaken)
+    };
     for recipe in recipes {
+        if vf > 1 && !optimistic && llrm_support::debug::enabled("loop-vectorize-recipes") {
+            eprintln!("VF {vf}: pricing {recipe:?}");
+        }
         let cost = match *recipe {
             Recipe::Load { lane, align } | Recipe::Store { lane, align } => {
                 let op = if matches!(recipe, Recipe::Load { .. }) { MemoryOp::Load } else { MemoryOp::Store };
@@ -416,8 +441,8 @@ fn iteration_cost(
                     tti.vector_arithmetic_cost_op2(op, vector(lane), second, kind).ok_or(NotTaken)?
                 }
             }
-            // `getInterleaveGroupCost`: the target's price of the group; at VF 1
-            // a group is its scalar accesses (the members' recipes are one).
+            // `getInterleaveGroupCost`: the target's price of the group; at VF
+            // 1 a group is its scalar accesses (the members' recipes are one).
             Recipe::Interleave { op, lane, factor } => {
                 if vf == 1 {
                     let access = tti.memory_op_cost(op, lane, kind, false);
@@ -523,6 +548,25 @@ pub fn describe_costs(
         vf *= 2;
     }
     text
+}
+
+/// The price of one iteration at the chosen factor, with that factor: what two
+/// plans of one loop are compared by.
+pub(crate) fn chosen_price(
+    tti: &dyn Tti,
+    facts: &LoopFacts,
+    chosen: Plan,
+) -> Option<(i64, u32)> {
+    iteration_cost(tti, &facts.recipes, chosen.vf, false, true).ok().map(|cost| (cost, chosen.vf))
+}
+
+/// Whether the plan priced `new` costs less per lane than the one priced `old`
+/// (a tie is not less).
+pub(crate) fn cheaper_per_lane(
+    new: (i64, u32),
+    old: (i64, u32),
+) -> bool {
+    new.0 * i64::from(old.1) < old.0 * i64::from(new.1)
 }
 
 /// `expectedCost(VF=1)`: the scalar loop's price.
@@ -1046,7 +1090,9 @@ const TINY_TRIP_COUNT: u64 = 16;
 /// `CM_EpilogueNotAllowedOptSize` (L7076) and
 /// `CM_EpilogueNotAllowedLowTripLoop` (L7809).
 fn epilogue_allowed(facts: &LoopFacts) -> bool {
-    !facts.opt_size && !(facts.trip_count != 0 && facts.trip_count < TINY_TRIP_COUNT)
+    !facts.opt_size
+        && !(facts.very_cheap && facts.trip_count == 0)
+        && !(facts.trip_count != 0 && facts.trip_count < TINY_TRIP_COUNT)
 }
 
 /// [`choose`], then the epilogue policy: where none is allowed the plan must

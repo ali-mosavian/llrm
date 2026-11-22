@@ -112,6 +112,7 @@ pub mod address_analysis;
 pub mod bitcast_combine;
 pub mod bitreverse_combine;
 pub mod bswap_combine;
+pub mod expand_is_fpclass;
 pub mod builder;
 pub mod chain_combine;
 pub mod combine_andnot;
@@ -184,6 +185,7 @@ pub mod schedule;
 pub mod select;
 pub mod select_api;
 pub mod setcc_extreme;
+pub mod setcc_shift;
 pub mod switchcg;
 pub mod target_calling;
 #[cfg(test)]
@@ -195,6 +197,9 @@ pub mod x86_carry;
 #[cfg(test)]
 #[path = "../../../../target/llrm-x86-backend/src/x86_lowering.rs"]
 pub mod x86_lowering;
+#[cfg(test)]
+#[path = "../../../../target/llrm-x86-backend/src/x86_vshift.rs"]
+pub mod x86_vshift;
 #[cfg(test)]
 #[path = "../../../../target/llrm-x86-backend/src/nodes.rs"]
 pub mod x86_nodes;
@@ -244,6 +249,8 @@ mod dag_function_soft_float_tests;
 #[cfg(test)]
 mod dag_function_switch_tests;
 #[cfg(test)]
+mod dag_function_indirectbr_tests;
+#[cfg(test)]
 mod dag_function_tail_tests;
 #[cfg(test)]
 mod dag_function_tests;
@@ -262,6 +269,8 @@ mod extload_tests;
 mod fallthrough_tests;
 #[cfg(test)]
 mod farptr_tests;
+#[cfg(test)]
+mod constrained_tests;
 #[cfg(test)]
 mod fpret_tests;
 #[cfg(test)]

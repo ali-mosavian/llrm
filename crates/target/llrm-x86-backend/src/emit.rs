@@ -66,6 +66,8 @@ use llrm_x86_dagisel::x86_classes::{Role, class_tag};
 struct Emitter<'a, 'd> {
     dag: &'d SelectionDAG,
     ctx: &'a EmitContext<'a>,
+    /// Where the MIR block being emitted starts.
+    entry_at: i64,
     /// `VRBaseMap`: the value each emitted result is.
     values: HashMap<SDValue, u32>,
     /// The LIR value a virtual register number of the DAG is.
@@ -100,7 +102,7 @@ struct Emitter<'a, 'd> {
     glue_users: HashMap<SDValue, Vec<u32>>,
     /// The `fcom` operands of each float compare, by the `SAHF` that reads its
     /// status word: the `fcom` is pushed there, next to the flag reader.
-    pending_fcom: HashMap<u32, (Held, Held)>,
+    pending_fcom: HashMap<u32, (Held, Held, &'static str)>,
     first_at: HashMap<u32, i64>,
     /// The floating constants loaded where they are read: (mnemonic, cell).
     lazy: HashMap<SDValue, (&'static str, Option<Mem>)>,
@@ -178,6 +180,7 @@ pub fn emit_in(
     let mut emitter = Emitter {
         dag,
         ctx,
+        entry_at: first_at,
         values: HashMap::default(),
         es_copies: HashMap::default(),
         state,
@@ -912,30 +915,70 @@ impl Emitter<'_, '_> {
     /// A load of a GOT entry reads `[rip + sym]`; the encoder relocates an
     /// External symbol's immediate as the entry's offset, so the load is that
     /// immediate (`mov r, offset sym`, as `isel.rs` makes the legacy GOT load).
+    /// A load folded into another operation (`add r, [sym]`) has no such
+    /// form: the encoder would read the symbol's contents (`R_X86_64_PC32`),
+    /// not its address, so the load comes out again as the `mov` and the
+    /// operation reads its register.
     fn make_got_loads(
         &mut self,
         before: usize,
     ) {
         let Some(block) = self.blocks.last_mut() else { return };
-        for one in block.insns.iter_mut().skip(before) {
-            let Some(what) = one.what.as_ref() else { continue };
-            let ([Loc::Held(dest)], [Loc::Mem(mem)]) = (what.dests.as_slice(), what.sources.as_slice()) else {
-                continue;
-            };
-            let Some(address) = mem.addr else { continue };
-            if what.op != Operation::Move
-                || mem.base.is_some()
-                || mem.index.is_some()
-                || address.space != llrm_codegen::model::ir::Space::External
-            {
-                continue;
+        let tail: Vec<Arc<Insn>> = block.insns.drain(before..).collect();
+        for one in tail {
+            let moved = self.got_load(&one);
+            if let Some(block) = self.blocks.last_mut() {
+                block.insns.push(moved.unwrap_or(one));
             }
+        }
+    }
+
+    /// `one` with its GOT load made the symbol's immediate, if it has one.
+    fn got_load(
+        &mut self,
+        one: &Arc<Insn>,
+    ) -> Option<Arc<Insn>> {
+        let what = one.what.as_ref()?;
+        let external = |source: &Loc| match source {
+            Loc::Mem(mem) if mem.base.is_none() && mem.index.is_none() => {
+                mem.addr.filter(|address| address.space == llrm_codegen::model::ir::Space::External)
+            }
+            _ => None,
+        };
+        if let ([Loc::Held(dest)], [source]) = (what.dests.as_slice(), what.sources.as_slice())
+            && what.op == Operation::Move
+            && let Some(address) = external(source)
+        {
             let mut moved = (**one).clone();
             if let Some(what) = moved.what.as_mut() {
                 what.sources = vec![Loc::Imm(Imm { value: 0, width: dest.width, address: Some(address) })];
             }
-            *one = Arc::new(moved);
+            return Some(Arc::new(moved));
         }
+        let [(at, address)] = what
+            .sources
+            .iter()
+            .enumerate()
+            .filter(|(_, source)| matches!(source, Loc::Mem(_)))
+            .map(|(at, source)| external(source).map(|address| (at, address)))
+            .collect::<Option<Vec<_>>>()?[..]
+        else {
+            return None;
+        };
+        if what.dests.iter().any(|dest| matches!(dest, Loc::Mem(_))) {
+            return None;
+        }
+        let entry = self.fresh(8);
+        self.push(
+            Operation::Move,
+            "mov",
+            vec![Loc::Held(entry)],
+            vec![Loc::Imm(Imm { value: 0, width: 8, address: Some(address) })],
+        );
+        let mut what = what.clone();
+        what.sources[at] = Loc::Held(entry);
+        let uses = _read(&what);
+        Some(Arc::new(Insn { uses, ..one.with_what(Some(what)) }))
     }
 
     fn mark_invariant_loads(
@@ -1530,7 +1573,7 @@ impl Emitter<'_, '_> {
         }
         // `ATOMIC_SWAP`: the register takes the old value and the cell the new,
         // both ways at once as the `xchg` the machine locks.
-        if matches!(name, "XCHG8rm" | "XCHG16rm" | "XCHG32rm") {
+        if matches!(name, "XCHG8rm" | "XCHG16rm" | "XCHG32rm" | "XCHG64rm") {
             let node = self.dag.node(SDValue { node: n, res: 0 });
             let cell_width = self
                 .ctx
@@ -1553,6 +1596,14 @@ impl Emitter<'_, '_> {
                 *last = Arc::new(Insn { volatile: true, ..(**last).clone() });
             }
             return Ok(());
+        }
+        // `LXADD`, `LCMPXCHG`: an exchange-add and a compare-exchange on a
+        // cell, under `lock` (X86InstrCompiler.td). The register the
+        // sum or the old value comes back in is a result of
+        // the form, the accumulator of the compare-exchange the glued
+        // `CopyToReg`'s value.
+        if name.starts_with("LXADD") || name.starts_with("LCMPXCHG") {
+            return self.lowered_atomic(n, name, desc);
         }
         // `MOVZX32rr8_NOREX` is `movzx` of a byte register that needs no REX
         // prefix to name (AH): the same form at this target.
@@ -1606,7 +1657,12 @@ impl Emitter<'_, '_> {
             };
             // a shift by `cl` has the amount as the value the `CopyToReg` glued
             // to it wrote to `CL`; the form pins that source to `cx`
+            // and one by one (`ROR32r1`, `SHL8m1`) has the amount 1 in the name
             let implicit = || {
+                if name.ends_with("r1") || name.ends_with("m1") {
+                    return matches!(form.name.as_str(), "shl" | "shr" | "sar" | "sal" | "rol" | "ror" | "rcl" | "rcr")
+                        .then(|| Loc::Imm(Imm { value: 1, width: 8, address: None }));
+                }
                 (name.ends_with("rCL") || name.ends_with("mCL"))
                     .then(|| self.accumulator.get(&llrm_lir::registers::RegId::CL).map(|held| Loc::Held(*held)))
                     .flatten()
@@ -1621,11 +1677,86 @@ impl Emitter<'_, '_> {
         let op = Operation::named(&form.operation)
             .ok_or_else(|| EmitError::Unsupported(format!("{name}: operation {}", form.operation)))?;
         self.push(op, &form.name, dests, sources);
+        if self.ctx.map.locked(name) {
+            self.lock_last(None);
+        }
         if name.split('|').next().is_some_and(|pin| pin.ends_with("_DB"))
             && let Some(last) = self.blocks.last_mut().and_then(|block| block.insns.last_mut())
         {
             *last = Arc::new(Insn { disjoint: true, ..(**last).clone() });
         }
+        Ok(())
+    }
+
+    /// The last instruction runs under `lock`, and is not moved or dropped for
+    /// what reads it.
+    fn lock_last(
+        &mut self,
+        tied: Option<(usize, usize)>,
+    ) {
+        if let Some(last) = self.blocks.last_mut().and_then(|block| block.insns.last_mut()) {
+            let what = last
+                .what
+                .clone()
+                .map(
+                    |what| Semantics {
+                        lock: true,
+                        tied: tied.map(|pair| vec![pair]).or(what.tied.clone()),
+                        ..what
+                    },
+                );
+            *last = Arc::new(Insn { volatile: true, what, ..(**last).clone() });
+        }
+    }
+
+    /// `LXADD8..64` (`xadd`: the cell takes the sum, the register the old
+    /// value) and `LCMPXCHG8..64` (`cmpxchg`: the cell takes the new value
+    /// where it holds the accumulator, else the accumulator takes the cell'
+    /// s), each `lock`ed.
+    fn lowered_atomic(
+        &mut self,
+        n: u32,
+        name: &str,
+        desc: &InstrDesc,
+    ) -> Result<(), EmitError> {
+        let node = self.dag.node(SDValue { node: n, res: 0 });
+        let cell_width =
+            self.ctx.map.memory_bytes(name).unwrap_or_else(|| width_of_node(self.ctx.map.scalar_sse(), self.dag, n));
+        let operands = self.operands(node.ops.as_slice(), desc, cell_width)?;
+        let (Some(Loc::Held(value)), Some(cell)) = (
+            operands.iter().find(|o| matches!(o, Loc::Held(_))).cloned(),
+            operands.iter().find(|o| matches!(o, Loc::Mem(_))).cloned(),
+        ) else {
+            return Err(EmitError::Unsupported(format!("{name}: operands")));
+        };
+        // The tied register takes the old value where it held the addend
+        // (`xadd`'s `^1`) or the expected value (`cmpxchg`'s `^1`).
+        let tied = if name.starts_with("LXADD") {
+            let old = self
+                .exported_register(SDValue { node: n, res: 0 })
+                .unwrap_or_else(|| self.fresh(width(self.ctx.map.scalar_sse(), node.values[0])));
+            self.values.insert(SDValue { node: n, res: 0 }, old.value);
+            self.push(Operation::Binary, "xadd", vec![cell.clone(), Loc::Held(old)], vec![cell, Loc::Held(value)]);
+            (1, 1)
+        } else {
+            let accumulator = match cell_width {
+                8 => RegId::RAX,
+                4 => RegId::EAX,
+                2 => RegId::AX,
+                _ => RegId::AL,
+            };
+            let expected = self.accumulated(accumulator)?;
+            let old = self.fresh(cell_width);
+            self.push(
+                Operation::Binary,
+                "cmpxchg",
+                vec![cell.clone(), Loc::Held(old)],
+                vec![cell, Loc::Held(value), Loc::Held(expected)],
+            );
+            self.accumulator.insert(accumulator, old);
+            (2, 1)
+        };
+        self.lock_last(Some(tied));
         Ok(())
     }
 
@@ -1978,7 +2109,7 @@ impl Emitter<'_, '_> {
             // vector constant): the bitwise SSE instruction reads all of it.
             EVT::Simple(MVT::I128) => 16,
             // A vector constant `ExpandBUILD_VECTOR` loads whole (`movups`).
-            EVT::Simple(MVT::V16I8 | MVT::V8I16 | MVT::V4I32 | MVT::V2I64) => 16,
+            EVT::Simple(MVT::V16I8 | MVT::V8I16 | MVT::V4I32 | MVT::V2I64 | MVT::V4F32 | MVT::V2F64) => 16,
             _ => return Err(EmitError::Unsupported(format!("a constant pool entry of {vt:?}"))),
         };
         Ok(self.ctx.constants.cell(bits.to_le_bytes()[..size].to_vec()))
@@ -2020,7 +2151,7 @@ impl Emitter<'_, '_> {
         n: u32,
     ) -> Option<u32> {
         let users = |value: SDValue| self.glue_users.get(&value).into_iter().flatten().copied();
-        let status = users(SDValue { node: n, res: 0 })
+        let status = users(self.compare_glue(n))
             .find(|&user| self.is_machine_named(SDValue { node: user, res: 0 }, "FNSTSW16r"))?;
         users(SDValue { node: status, res: 0 })
             .flat_map(|byte| users(SDValue { node: byte, res: 0 }))
@@ -2033,11 +2164,22 @@ impl Emitter<'_, '_> {
         n: u32,
     ) -> Option<u32> {
         self.glue_users
-            .get(&SDValue { node: n, res: 0 })
+            .get(&self.compare_glue(n))
             .into_iter()
             .flatten()
             .copied()
             .find(|&user| self.is_machine_named(SDValue { node: user, res: 0 }, "FNSTSW16r"))
+    }
+
+    /// The glue result of the compare `n`: its last value. A constrained
+    /// compare has its chain first, so the glue is result 1, not 0; reading
+    /// result 0 found no `sahf` and emitted the `fcom` ahead of whatever the
+    /// scheduler put between `fnstsw` and `sahf`.
+    fn compare_glue(
+        &self,
+        n: u32,
+    ) -> SDValue {
+        SDValue { node: n, res: (self.dag.node(SDValue { node: n, res: 0 }).values.len() - 1) as u8 }
     }
 
     /// What the instruction at the end of the glue chain from the `CopyToReg`
@@ -2091,6 +2233,7 @@ impl Emitter<'_, '_> {
                 || name.starts_with("REP_")
                 || name.ends_with("rCL")
                 || name.ends_with("mCL")
+                || name.starts_with("LCMPXCHG")
         })
     }
 
@@ -2156,7 +2299,7 @@ impl Emitter<'_, '_> {
         }
         let ISD::Machine(op) = self.dag.opcode(glue) else { return false };
         let name = self.ctx.names.get(&(op as u16)).map_or("", |name| name.split('|').next().unwrap_or(name));
-        matches!(name, "CDQ" | "CWD" | "CQO") || is_div_or_mul(name)
+        matches!(name, "CDQ" | "CWD" | "CQO") || is_div_or_mul(name) || name.starts_with("LCMPXCHG")
     }
 
     /// (low, high, bytes): AX and DX, EAX and EDX, or RAX and RDX.
@@ -2473,7 +2616,9 @@ impl Emitter<'_, '_> {
                 }
                 // The area is a multiple of the call alignment; the callee pops
                 // `popped` of it, the caller the rest.
-                let bytes = if self.ctx.reserved_calls {
+                // The flat frames pad the area where the frame is laid out
+                // (`ReserveCallFrame`).
+                let bytes = if self.ctx.reserved_calls || self.ctx.address_mode != AddrMode::Real16 {
                     bytes
                 } else {
                     (bytes + self.ctx.call_alignment - 1) / self.ctx.call_alignment * self.ctx.call_alignment
@@ -2674,6 +2819,24 @@ impl Emitter<'_, '_> {
                     .ok_or_else(|| EmitError::Unsupported("inline assembly that does not parse".to_owned()))?;
                 if !block.fixups.is_empty() {
                     return Err(EmitError::Unsupported("inline assembly naming symbols".to_owned()));
+                }
+                // The values the `st0` and `st1` inputs take are the stack's
+                // two top entries and the only ones on it: the unnamed store
+                // the stackifier reads as `handleReturn`, which
+                // consumes them, so the block sees them in
+                // st(0), st(1) with the stack otherwise empty.
+                let registers = block.inputs.iter().filter(|one| !one.starts_with("st")).count();
+                let first = 2 + block.fixups.len() + registers;
+                let count = block.inputs.iter().filter(|one| one.starts_with("st")).count();
+                let mut stack = Vec::new();
+                for &op in node.ops.iter().skip(first).take(count) {
+                    match self.operand(op)? {
+                        Loc::Held(value) => stack.push(Loc::Held(value)),
+                        _ => return Err(EmitError::Unsupported("an st input that is no x87 value".to_owned())),
+                    }
+                }
+                if !stack.is_empty() {
+                    self.push(Operation::FloatStore, "", Vec::new(), stack);
                 }
                 let callee = Callee::Named(name);
                 let at = self.push_call(
@@ -2918,9 +3081,13 @@ impl Emitter<'_, '_> {
                 else {
                     return Err(EmitError::Unsupported(format!("{name}: an operand that is no register")));
                 };
+                // A chained compare is a constrained one: the quiet one is
+                // `fucom`, which does not raise invalid on a quiet NaN, and the
+                // signaling one `fcom`. The plain compare is `fcom` as before.
+                let mnemonic = if name.starts_with("UCOM") && node.ops.len() > 2 { "fucom" } else { "fcom" };
                 match self.status_reader(n) {
                     Some(sahf) => {
-                        self.pending_fcom.insert(sahf, (left, right));
+                        self.pending_fcom.insert(sahf, (left, right, mnemonic));
                     }
                     // DEVIATE X87-STATUS: no `sahf` follows; the compare
                     // defines the status word as a value its readers test.
@@ -2932,13 +3099,13 @@ impl Emitter<'_, '_> {
                             self.values.insert(SDValue { node: word, res: 0 }, held.value);
                             self.push(
                                 Operation::Compare,
-                                "fcom",
+                                mnemonic,
                                 vec![Loc::Held(held)],
                                 vec![Loc::Held(left), Loc::Held(right)],
                             );
                         }
                         None => {
-                            self.push(Operation::Compare, "fcom", Vec::new(), vec![Loc::Held(left), Loc::Held(right)])
+                            self.push(Operation::Compare, mnemonic, Vec::new(), vec![Loc::Held(left), Loc::Held(right)])
                         }
                     },
                 }
@@ -2962,8 +3129,8 @@ impl Emitter<'_, '_> {
                 return Ok(Some(()));
             }
             "SAHF" => {
-                if let Some((left, right)) = self.pending_fcom.remove(&n) {
-                    self.push(Operation::Compare, "fcom", Vec::new(), vec![Loc::Held(left), Loc::Held(right)]);
+                if let Some((left, right, mnemonic)) = self.pending_fcom.remove(&n) {
+                    self.push(Operation::Compare, mnemonic, Vec::new(), vec![Loc::Held(left), Loc::Held(right)]);
                 }
                 return Ok(Some(()));
             }
@@ -3252,9 +3419,21 @@ impl Emitter<'_, '_> {
                 let group = node.ops.get(..5).ok_or_else(|| EmitError::Unsupported("a short jump".to_owned()))?;
                 // The table is the displacement, or the base is its address.
                 let base = self.dag.node(group[0]).ops.first().map(|op| self.dag.node(*op).data.clone());
+                // The entry's size: the jump's own, 2, 4 or 8.
+                let entry = match name {
+                    "JMP16m" => 2,
+                    "JMP64m" => 8,
+                    _ => 4,
+                };
                 let table = match (self.dag.node(group[3]).data.clone(), base) {
                     (NodeData::JumpTable(table), _) | (_, Some(NodeData::JumpTable(table))) => table,
-                    _ => return Err(EmitError::Unsupported("an indirect jump through memory".to_owned())),
+                    // Not a switch's table: an `indirectbr` through memory
+                    // (`goto *table[i]`), which names the blocks it may reach.
+                    _ => {
+                        let cell = self.cell(group, entry)?;
+                        self.indirect_jump(Loc::Mem(cell));
+                        return Ok(Some(()));
+                    }
                 };
                 let jump = self.jump_table(table)?;
                 // The cell is `$J + index * entry` whichever way the table's
@@ -3263,11 +3442,6 @@ impl Emitter<'_, '_> {
                 let scale = self.constant(group[1])?;
                 let mut address = Addr::new(llrm_codegen::model::ir::Space::Segment, 0);
                 address.index = jump.id;
-                let entry = match name {
-                    "JMP16m" => 2,
-                    "JMP64m" => 8,
-                    _ => 4,
-                };
                 // At real mode a lone register is the address's base, as the
                 // old selector makes it (16-bit addressing has no scale).
                 let (base, index) =
@@ -3282,11 +3456,13 @@ impl Emitter<'_, '_> {
             // (the position-independent table of 64-bit code): the table is
             // the one the register's sum was made from.
             "JMP16r" | "JMP32r" | "JMP64r" => {
-                let table = self
-                    .jump_table_behind(node.ops[0], 8)
-                    .ok_or_else(|| EmitError::Unsupported("an indirect jump through a register".to_owned()))?;
                 let Loc::Held(target) = self.operand(node.ops[0])? else {
                     return Err(EmitError::Unsupported("a jump through a non-register".to_owned()));
+                };
+                // Not a switch's table: an `indirectbr` through a register.
+                let Some(table) = self.jump_table_behind(node.ops[0], 8) else {
+                    self.indirect_jump(Loc::Held(target));
+                    return Ok(Some(()));
                 };
                 let jump = self.jump_table(table)?;
                 // The table is relative only where the DAG made it so (64-bit
@@ -4020,6 +4196,16 @@ impl Emitter<'_, '_> {
             return None;
         }
         self.dag.node(value).ops.iter().find_map(|&op| self.jump_table_behind(op, depth - 1))
+    }
+
+    /// An `indirectbr`'s jump: through `source`, to the blocks it names.
+    fn indirect_jump(
+        &mut self,
+        source: Loc,
+    ) {
+        let targets = self.ctx.indirect.get(&self.entry_at).cloned().unwrap_or_default();
+        let what = Semantics { indirect: true, computed: true, table: targets, ..Semantics::new(Operation::Jump) };
+        self.push_semantics(Semantics { name: Some("jmp".into()), sources: vec![source], ..what });
     }
 
     fn jump_table(

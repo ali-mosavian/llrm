@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/manager.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/manager.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/manager.rs sha256:3d55a65f12b45c1c428da4261854c3839e861f760a2bb9cd0748367a0809616d -->
+<!-- src: crates/opt/llrm-analysis/src/manager.rs sha256:9b5fdda39f99d82e8090ab6ac9d7a78594f59393bcf1e5c0c44bf26ae91fdb24 -->
 
 # manager
 
@@ -126,7 +126,7 @@ and when an analysis starts to be kept:
 
 ```text
 for s in 1 2 3 4 5 6 7 8; do
-  LLRM_CHECK_ORDER=$s tools/identical.py target/release/llrm-c target/release/llrm-c
+  LLRM_CHECK_ORDER=$s tools/identical.py target/release/llrm-cc target/release/llrm-cc
 done
 ```
 

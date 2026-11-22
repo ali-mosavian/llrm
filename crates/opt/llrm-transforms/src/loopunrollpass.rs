@@ -465,8 +465,9 @@ impl Analyzed {
 pub(crate) fn gather_unrolling_preferences(
     run: &Run,
     has_calls: bool,
+    raised_threshold: bool,
 ) -> UnrollingPreferences {
-    let mut up = gather_unrolling_preferences_of_target(run, has_calls);
+    let mut up = gather_unrolling_preferences_of_target(run, has_calls, raised_threshold);
     // Apply the values provided by the full unroll pass.
     if !run.options.target_unrolling {
         up.partial = false;
@@ -484,6 +485,7 @@ pub(crate) fn gather_unrolling_preferences(
 pub(crate) fn gather_unrolling_preferences_of_target(
     run: &Run,
     has_calls: bool,
+    raised_threshold: bool,
 ) -> UnrollingPreferences {
     let mut up = UnrollingPreferences {
         threshold: if run.options.opt_level > 2 { UNROLL_THRESHOLD_AGGRESSIVE } else { UNROLL_THRESHOLD_DEFAULT },
@@ -514,7 +516,10 @@ pub(crate) fn gather_unrolling_preferences_of_target(
     up.threshold = threshold.unwrap_or(up.threshold);
     up.max_percent_threshold_boost = boost.unwrap_or(up.max_percent_threshold_boost);
     up.partial_threshold = run.tti.unroll_partial_threshold_override().unwrap_or(up.partial_threshold);
-    if run.options.opt_level > 2 {
+    if run.options.opt_level >= 2 && !run.options.opt_size {
+        up.threshold = run.tti.unroll_threshold_at_speed().unwrap_or(up.threshold);
+    }
+    if run.options.opt_level > 2 && raised_threshold {
         up.threshold = run.tti.unroll_threshold_at_o3().unwrap_or(up.threshold);
     }
     // DEVIATE UNROLL-SPEED-TRIAL: the trial compile's own threshold.
@@ -1234,7 +1239,8 @@ fn should_full_unroll(
         max_unrolled_loop_size,
         trips_to_analyze,
         None,
-        false,
+        // DEVIATE UNROLL-THROUGH-CALLS (`Tti::unroll_prices_calls`).
+        run.tti.unroll_prices_calls(),
     ) {
         let boost = full_unroll_boosting_factor(&cost, up.max_percent_threshold_boost);
         let boosted_threshold = (u64::from(up.threshold) * u64::from(boost) / 100) as u32;
@@ -1251,6 +1257,15 @@ fn should_full_unroll(
 /// Whether this is a speed build of a target that runs UNROLL-NEST-TRIAL.
 fn nest_trial(run: &Run) -> bool {
     run.options.opt_level >= 2 && !run.options.opt_size && run.tti.unroll_trial_nests_at_speed()
+}
+
+/// Whether `lp` is a loop with a subloop at -O1 of a target that runs
+/// UNROLL-NEST-O1.
+fn nest_at_o1(
+    run: &Run,
+    lp: Loop,
+) -> bool {
+    run.options.opt_level == 1 && !run.options.opt_size && !lp.is_innermost() && run.tti.unroll_trial_nests_at_o1()
 }
 
 /// DEVIATE UNROLL-SPEED-TRIAL (owner x87-b, exit 2026-11-24): an innermost loop
@@ -1308,7 +1323,12 @@ fn analyzed_at_speed(
     run: &Run,
     lp: Loop,
 ) -> bool {
-    run.options.opt_level >= 2 && !run.options.opt_size && lp.is_innermost() && run.tti.unroll_trial_analyzed_at_speed()
+    lp.is_innermost()
+        && if run.options.opt_size {
+            run.tti.unroll_trial_analyzed_at_size()
+        } else {
+            run.options.opt_level >= 2 && run.tti.unroll_trial_analyzed_at_speed()
+        }
 }
 
 /// DEVIATE UNROLL-TRIAL-NEST (owner 6502): `shouldFullUnroll`'s second test at
@@ -1336,13 +1356,16 @@ fn analyzed_trial_size(
     if unrolled_size < u64::from(limit) {
         return unrolled_size;
     }
-    let bound = (u64::from(limit) * u64::from(up.max_percent_threshold_boost) / 100).min(u64::from(u32::MAX)) as u32;
+    // -Os clamps the pin's boost to 100; the trial is priced by bytes after,
+    // so it is tried at the boost -O2 has
+    let cap = if run.options.opt_size { UNROLL_MAX_PERCENT_THRESHOLD_BOOST } else { up.max_percent_threshold_boost };
+    let bound = (u64::from(limit) * u64::from(cap) / 100).min(u64::from(u32::MAX)) as u32;
     // the pin's own reach: no loop of more trips than
     // `MaxIterationsCountToAnalyze`
     let reach = up.max_iterations_count_to_analyze;
     match analyze_loop_unroll_cost(run, se, analyzed, lp, trips, eph, bound, reach, None, false) {
         Some(cost) => {
-            let boost = full_unroll_boosting_factor(&cost, up.max_percent_threshold_boost).max(100);
+            let boost = full_unroll_boosting_factor(&cost, cap).max(100);
             unrolled_size.min(u64::from(cost.unrolled_cost) * 100 / u64::from(boost))
         }
         None => unrolled_size,
@@ -1365,6 +1388,9 @@ fn note_for_trial(
         } else {
             Some(pin_full_unroll_threshold(run.options.opt_level))
         }
+    } else if nest_at_o1(run, lp) {
+        // DEVIATE UNROLL-NEST-O1: a loop with a subloop, the pin's threshold.
+        Some(pin_full_unroll_threshold(run.options.opt_level))
     } else if run.options.opt_size {
         run.tti.unroll_trial_at_size().or_else(|| run.tti.unroll_trial_threshold())
     } else {
@@ -1736,12 +1762,16 @@ pub(crate) fn compute_unroll_count(
     if count < 2 { 0 } else { count }
 }
 
-/// `Function::hasOneLiveUse` of `callee`, by scanning the module for its uses
-/// (U5).
+/// `Function::hasOneLiveUse` of `callee`: the bodies' names of it that
+/// `FunctionUses` kept (as the pass began), or where it was not required (a
+/// pass run alone) a scan of the module's bodies for its uses (U5).
 fn has_one_live_use(
     run: &Run,
     callee: GlobalId,
 ) -> bool {
+    if let Some(uses) = run.outer.uses() {
+        return uses.of(callee) == 1;
+    }
     let mut uses = 0usize;
     let mentions = |function: &Function, context: &Context| {
         function
@@ -1862,7 +1892,13 @@ fn try_to_unroll_loop(
 
     let opt_for_size = run.options.opt_size;
     let has_calls = loop_has_calls(run, lp);
-    let mut up = gather_unrolling_preferences(run, has_calls);
+    // DEVIATE UNROLL-O3: the target's raised -O3 threshold is not for an innermost loop the early
+    // `LoopFullUnrollPass` meets: the vectorizer widens only those, and gcc completely unrolls after
+    // `pass_vectorize` (tile -O3: a 64-trip init loop unrolled to 16,147 instructions against
+    // clang's 6,130). A loop with an inner loop keeps it: its copies expose the inner trip counts
+    // (object_extent_loop).
+    let raised_threshold = run.options.target_unrolling || !lp.is_innermost();
+    let mut up = gather_unrolling_preferences(run, has_calls, raised_threshold);
 
     // Exit early if unrolling is disabled. For size, the loop size is the
     // threshold later.
@@ -1957,10 +1993,13 @@ fn try_to_unroll_loop(
         max_or_zero = se.is_backedge_taken_count_max_or_zero(&cx, header);
         // DEVIATE OB1: where the pin's bound is none or too large to unroll by,
         // the object the loop's accesses run through gives one (its
-        // range-derived 2^31-1 for `i < n`).
+        // range-derived 2^31-1 for `i < n`). Only at -O3: gcc completely peels
+        // a loop that way where it may grow the code (`may_increase_size`),
+        // not at -O2 (x_ld_matmul -O2 peeled 16 times: 2,071 B and 8.9%
+        // slower than the rolled loop).
         if let Some(cap) = run.tti.unroll_object_bound()
             && !opt_for_size
-            && run.options.opt_level >= 2
+            && run.options.opt_level >= 3
             && let Some(bound) = crate::unrollbound::object_max_trip_count(&mut se, &cx, header)
             && bound <= cap
             // The pin's bound is none, or too large to unroll by.

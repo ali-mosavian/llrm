@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/sroa.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/sroa.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/sroa.rs sha256:7069f62e9e3565d351ec4726e1d175c5cdf5cdc4bf3e26573c747280e9b8e8f2 -->
+<!-- src: crates/opt/llrm-transforms/src/sroa.rs sha256:284fb74d2dbaed20ca0cf2e076da52691cbcfb7a56f7752328c310fc39a4bdfe -->
 
 # sroa
 
@@ -12,22 +12,22 @@ d1106deb71cc (loads, stores, aggregate loads and stores, memset, memcpy and
 lifetime intrinsics, phis and selects of pointers, pre-splitting).
 
 DEVIATE, each with its reason (line numbers are SROA.cpp's):
-- Two modes, as the pin's slots: `Sroa` is `sroa<preserve-cfg>` (`PreserveCFG`,
-  L174: the late slot), where a select whose load is not speculatable, a
-  store through a select and a store through a phi on a critical edge are
-  not rewritten and the alloca is left; `SroaModifyCfg` is the early slots'
-  `ModifyCFG`, which makes the blocks (`SplitBlockAndInsertIfThen(Else)`,
-  `SplitBlockPredecessors`). No `DomTreeUpdater` either way: the analyses are
-  dropped.
-- Vectors (`isVectorPromotionViable` L2374, `rewriteVectorized*`
-  L3451-L3637, `rewriteTreeStructuredMerge` L3002,
-  `tryCanonicalizeStructToVector` L5460): the targets have no vector
-  registers, and `AggregateToVector` is off at -O2.
+- Two modes, as the pin's slots: `Sroa` is `sroa<preserve-cfg>`
+  (`PreserveCFG`, L174: the late slot), where a select whose load is not
+  speculatable, a store through a select and a store through a phi on a
+  critical edge are not rewritten and the alloca is left; `SroaModifyCfg` is
+  the early slots' `ModifyCFG`, which makes the blocks
+  (`SplitBlockAndInsertIfThen(Else)`, `SplitBlockPredecessors`). No
+  `DomTreeUpdater` either way: the analyses are dropped.
+- Vector promotion (`isVectorPromotionViable` L2374, `rewriteVectorized*`
+  L3451-L3637) is translated; `rewriteTreeStructuredMerge` L3002 and
+  `tryCanonicalizeStructToVector` L5460 are not (`AggregateToVector` is off
+  at -O2), and a vector of pointers is no candidate (`is_vector_element`).
 - Calls and invokes escape a pointer whatever their attributes
   (`visitCallBase` L1402 looks at read-only, nocapture operands). Owner
-  softfloat, kept because: 542 call escapes in tests/run/c + bench, none with a
-  call-site nocapture, and `strlen(b)+b[0]` forwards the same as the pin at
-  -Os; exit when a cell shows a missed forward, review 2026-12-10.
+  softfloat, kept because: 542 call escapes in tests/run/c + bench, none
+  with a call-site nocapture, and `strlen(b)+b[0]` forwards the same as the
+  pin at -Os; exit when a cell shows a missed forward, review 2026-12-10.
 - Address-space casts abort; pointers in a space that is a selector and an
   offset are not converted to integers (`canConvertValue` L2057).
 - Debug records (`migrateDebugInfo` L348, the migration in `splitAlloca`
@@ -38,7 +38,6 @@ DEVIATE, each with its reason (line numbers are SROA.cpp's):
   lose their location at -O1 (190 -> 188 of 437 at -O2, 205 -> 203 of 461 at
   -Os; scope bytes covered unchanged, `tools/dwarf-coverage.sh`). Exit: a
   `Declare` that carries a fragment; owner anyisa; review 2026-11-14.
-- `unfoldGEPSelect`, `unfoldGEPPhi` (L4578, L4673): gep over select or phi.
 - `isSafeToLoadUnconditionally` (L1655, L1840) is `dereferenceable` alone:
   an alloca or a sized argument, no alignment, no global, no "a load of it
   already dominates" proof. `mayWriteToMemory` (L1613) counts any call as a
@@ -72,4 +71,4 @@ store i32 1, ptr %s          ; field 0
 ```
 
 ## Used by
-Named by `main`, `pipeline`.
+Named by `main`, `pipeline`, `pipeline_text`.

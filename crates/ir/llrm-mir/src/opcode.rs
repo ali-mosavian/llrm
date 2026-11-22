@@ -702,7 +702,7 @@ impl Attribute {
     }
 }
 
-pub const FLAG_ATTRIBUTES: [&str; 57] = [
+pub const FLAG_ATTRIBUTES: [&str; 59] = [
     "alwaysinline",
     "builtin",
     "cold",
@@ -716,12 +716,14 @@ pub const FLAG_ATTRIBUTES: [&str; 57] = [
     "inreg",
     "llrm-end-biased",
     "llrm-fill",
+    "llrm-lshift",
     "llrm-mulhi3-chains",
     "llrm-mulsi3",
     "llrm-no-end-biased",
     "llrm-promoted-in-walk",
     "llrm-self-copied",
     "llrm-wdiv",
+    "llrm-word-product",
     "llrm-wshift",
     "minsize",
     "mustprogress",
@@ -765,16 +767,38 @@ pub const FLAG_ATTRIBUTES: [&str; 57] = [
 /// Attributes the pin's clang states that no pass here reads (stack protection,
 /// unwind tables, `dead_on_return`...), kept as flags; `uwtable` may carry its
 /// kind in parentheses (`uwtable(sync)`).
-pub const TARGET_FLAG_ATTRIBUTES: [&str; 10] = [
+pub const TARGET_FLAG_ATTRIBUTES: [&str; 32] = [
     "allockind",
     "allocsize",
     "dead_on_return",
+    "disable_sanitizer_instrumentation",
+    "fn_ret_thunk_extern",
+    "jumptable",
+    "nocf_check",
     "nocreateundeforpoison",
+    "noduplicate",
     "nofreeobj",
     "noimplicitfloat",
+    "nonlazybind",
+    "noprofile",
+    "nosanitize_bounds",
+    "nosanitize_coverage",
+    "optforfuzzing",
+    "presplitcoroutine",
+    "safestack",
+    "sanitize_address",
+    "sanitize_hwaddress",
+    "sanitize_memory",
+    "sanitize_memtag",
+    "sanitize_thread",
+    "shadowcallstack",
+    "skipprofile",
+    "speculative_load_hardening",
     "ssp",
     "sspreq",
     "sspstrong",
+    "strictfp",
+    "swiftself",
     "uwtable",
 ];
 
@@ -906,7 +930,8 @@ pub enum Clause {
 }
 
 /// Operands, in order: `ret [v]`; `br dest` or `br cond, true, false`;
-/// `switch v, default, (case, dest)*`; `invoke args.., normal, unwind,
+/// `switch v, default, (case, dest)*`; `indirectbr addr, dest*` (the blocks
+/// it may reach, each once); `invoke args.., normal, unwind,
 /// callee` and `call args.., callee`, as LLVM's CallBase keeps them;
 /// `phi (v, block)*`; `alloca [count]`; `store value, ptr`; `gep ptr,
 /// indices..`; `landingpad clauses..`.
@@ -915,6 +940,7 @@ pub enum Opcode {
     Ret,
     Br,
     Switch,
+    IndirectBr,
     Invoke(Box<CallInfo>),
     Resume,
     Unreachable,
@@ -1049,7 +1075,13 @@ impl Opcode {
     pub fn is_terminator(&self) -> bool {
         matches!(
             self,
-            Self::Ret | Self::Br | Self::Switch | Self::Invoke(_) | Self::Resume | Self::Unreachable
+            Self::Ret
+                | Self::Br
+                | Self::Switch
+                | Self::IndirectBr
+                | Self::Invoke(_)
+                | Self::Resume
+                | Self::Unreachable
         )
     }
 
@@ -1058,6 +1090,7 @@ impl Opcode {
             Self::Ret => "ret",
             Self::Br => "br",
             Self::Switch => "switch",
+            Self::IndirectBr => "indirectbr",
             Self::Invoke(_) => "invoke",
             Self::Resume => "resume",
             Self::Unreachable => "unreachable",

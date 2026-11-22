@@ -309,7 +309,9 @@ fn test_a_value_stays_on_the_stack_across_a_port_write() {
         indirect: false,
         table: vec![],
         repeat: false,
+        lock: false,
         table_id: None,
+        computed: false,
         pops: None,
         tied: None,
     };
@@ -523,4 +525,42 @@ fn test_a_memory_form_whose_result_is_read_first_keeps_its_exchange() {
     assert!(stack.is_empty());
     assert_eq!(stores.iter().map(|(_, value)| *value).collect::<Vec<_>>(), vec![100.0, 100.0, -90.0, 3.0]);
     assert_eq!(count(&result, "fld"), 3, "{:?}", names(&result));
+}
+
+/// `for (...) if (a > m) m = a` over `long double`, as the register allocator
+/// leaves it: the arm that keeps `m` copies it into `a`'s register, the join
+/// copies that register into `m`'s. The order a bundle took through the copy
+/// named one value twice, so the two edges popped each other's value:
+/// x_ld_max -O2 returned the minimum (56 against gcc's 4032).
+#[test]
+fn test_an_order_through_a_copy_into_a_live_register_is_not_taken() {
+    let cells = [frame_cell(-8, 8), frame_cell(-16, 8), frame_cell(-24, 8)];
+    let copy = |result, source| sem(Operation::Move, "mov", vec![fl(result)], vec![fl(source)]);
+    let mut body = _body(vec![
+        _load(1, &cells[0]),
+        _load(2, &cells[1]),
+        Semantics { target: Some(64), ..sem_branch() },
+        copy(2, 1),
+        copy(1, 2),
+        Semantics { target: Some(16), ..sem_branch() },
+        // The exit reads the result in `a`'s register, the loop in `m`'s.
+        _store(&cells[2], 2),
+    ]);
+    let insns = body.insns();
+    body.blocks = vec![
+        block(0, insns[..1].to_vec(), vec![16]).into(),
+        block(16, insns[1..3].to_vec(), vec![64, 48]).into(),
+        block(48, insns[3..4].to_vec(), vec![64]).into(),
+        block(64, insns[4..6].to_vec(), vec![16, 80]).into(),
+        block(80, insns[6..].to_vec(), vec![]).into(),
+    ];
+    let result = fps(&body);
+    let memory = [(&cells[0], 1.0), (&cells[1], 2.0)];
+    let stored = |path: &[i64]| {
+        let (_, stack, stores) = _x87_traced(&_along(&result, path), &memory);
+        assert!(stack.is_empty(), "{path:?} leaves {stack:?}");
+        stores.iter().map(|(_, value)| *value).collect::<Vec<_>>()
+    };
+    assert_eq!(stored(&[0, 16, 64, 80]), vec![2.0], "the edge that takes a");
+    assert_eq!(stored(&[0, 16, 48, 64, 80]), vec![1.0], "the edge through the copy keeps m");
 }

@@ -104,6 +104,13 @@ pub struct Executed {
     /// x87 `fxch`es executed: one instruction here, `x87_exchange` clocks on
     /// the CPU.
     pub exchanges: f64,
+    /// Calls and returns executed (a sibling call's `jmp` is neither).
+    pub near_calls: f64,
+    pub near_returns: f64,
+    /// Each call and jump instruction (its `at`, the key of
+    /// `Procedure::callees`) with how often per call it runs: what weights a
+    /// callee's own work (a tail call is a jump).
+    pub calls: Vec<(i64, f64)>,
 }
 
 impl Executed {
@@ -131,6 +138,17 @@ impl Executed {
             return Ok(0.0);
         }
         Ok(self.exchanges * (cpu.cost("x87_exchange")? as f64 - 1.0))
+    }
+
+    /// What the calls and returns cost over the one unit an instruction
+    /// counts: a 486 `call` is 3 clocks and a `ret` 5. A CPU with no price for
+    /// them states none (the work alone stands).
+    pub fn call_cycles(
+        &self,
+        cpu: &Profile,
+    ) -> f64 {
+        let over = |form: &str| cpu.cost(form).map_or(0.0, |one| one as f64 - 1.0);
+        self.near_calls * over("call_near") + self.near_returns * over("ret_near")
     }
 }
 
@@ -213,6 +231,28 @@ pub fn executed(body: &LirBody) -> Option<Executed> {
     executed_over(body, true)
 }
 
+/// How often per call the printed instructions `is` picks run, by the block
+/// frequencies [`executed`] uses: a target prices the instructions it holds
+/// slow (a divide) apart from the one unit an instruction counts.
+pub fn count_where(
+    body: &LirBody,
+    is: &dyn Fn(&Insn) -> bool,
+) -> Option<f64> {
+    if !loops::irreducible(&body.blocks, Some(body.entry)).is_empty() {
+        return None;
+    }
+    let frequency = Frequency::counted(body);
+    Some(
+        body.blocks
+            .iter()
+            .map(|block| {
+                frequency.block(block.at)
+                    * block.insns.iter().filter(|one| crate::backend::masm::prints(one) && is(one)).count() as f64
+            })
+            .sum(),
+    )
+}
+
 /// [`executed`] with every loop at the heuristic's trips, proven or not
 /// (`MachineBlockFrequencyInfo` knows no trip count): the estimate that prices
 /// two shapes of one loop alike, where a rotation or an unrotation leaves a
@@ -231,6 +271,7 @@ fn executed_over(
     }
     let frequency = if proven { Frequency::counted(body) } else { Frequency::over(body, &body.blocks) };
     let x87 = |one: &Insn| one.what.as_ref().is_some_and(|what| what.op.is_x87());
+    let is_jmp = |one: &Insn| one.what.as_ref().is_some_and(|what| what.name.as_deref() == Some("jmp"));
     let is_fxch = |one: &Insn| one.what.as_ref().is_some_and(|what| what.name.as_deref() == Some("fxch"));
     let slots: IndexSet<Addr> = body
         .blocks
@@ -289,6 +330,19 @@ fn executed_over(
                         (out.branches + reaching, out.taken + taken, reaching - taken);
                 }
                 Some((Operation::Jump, _)) => out.jumps += reaching,
+                // A sibling call leaves by a `jmp` the body holds as a return:
+                // listed with the calls (`Procedure::callees` tells which
+                // returns those are).
+                Some((Operation::Return, _)) => {
+                    out.calls.push((one.at, reaching));
+                    if !is_jmp(one) {
+                        out.near_returns += reaching;
+                    }
+                }
+                Some((Operation::Call, _)) => {
+                    out.calls.push((one.at, reaching));
+                    out.near_calls += reaching;
+                }
                 Some((Operation::Exchange, _)) if is_fxch(one) => out.exchanges += reaching,
                 _ => {}
             }
@@ -318,7 +372,7 @@ mod tests {
 
     use llrm_lir::registers::RegId;
 
-    use super::{executed, executed_unproven};
+    use super::{count_where, executed, executed_unproven};
     use crate::backend::cpu;
     use crate::model::ir::{Addr, Loc, Mem, Operation, Reg, Semantics, Space};
     use crate::model::lir::{Block, BlockOdds, Insn, LirBlock, LirBody};
@@ -470,6 +524,35 @@ mod tests {
         // The entry's jump, the header's six tests, five trips of two, the
         // return.
         assert_eq!(executed(&body).expect("a counted loop").instructions.round(), 1.0 + 6.0 + 10.0 + 1.0);
+    }
+
+    /// The slow instructions of a loop count once a trip, not once: the
+    /// divide-by-constant trial priced a loop's `sdiv` as one run.
+    #[test]
+    fn test_a_slow_instruction_in_a_loop_counts_its_trips() {
+        let ax = Loc::Reg(Reg { register: RegId::AX, width: 2 });
+        let block =
+            |at, insns: Vec<Arc<Insn>>, succ: Vec<i64>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
+        let blocks = vec![
+            block(1, vec![insn(1, Operation::Jump, "jmp", vec![], vec![])], vec![2]),
+            block(2, vec![insn(2, Operation::Branch, "jne", vec![], vec![])], vec![3, 4]),
+            block(
+                3,
+                vec![
+                    insn(3, Operation::Move, "SDIVWr", vec![ax.clone()], vec![ax]),
+                    insn(4, Operation::Jump, "jmp", vec![], vec![]),
+                ],
+                vec![2],
+            ),
+            block(4, vec![insn(5, Operation::Return, "ret", vec![], vec![])], vec![]),
+        ];
+        let mut body =
+            LirBody::new("slow", 1, crate::model::lir::shared(blocks), IndexMap::default(), IndexMap::default());
+        body.loop_trip_counts = vec![(2, 5)];
+        let slow = |one: &Insn| {
+            one.what.as_ref().and_then(|what| what.name.as_deref()).is_some_and(|name| name.starts_with("SDIV"))
+        };
+        assert_eq!(count_where(&body, &slow).expect("a counted loop").round(), 5.0);
     }
 
     /// ROTATION-TRIAL priced a rotated nest 3.9x heavier than its unrotated

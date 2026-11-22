@@ -190,7 +190,19 @@ pub fn select_block(
     dag: &mut SelectionDAG,
     cpu: Cpu,
 ) -> Result<Vec<Unit>, Refusal> {
-    select_block_with(dag, cpu, false, false, false, false, true, Default::default(), Default::default(), &[], &mut Temporaries::new(0))
+    select_block_with(
+        dag,
+        cpu,
+        false,
+        false,
+        false,
+        false,
+        true,
+        Default::default(),
+        Default::default(),
+        &[],
+        &mut Temporaries::new(0),
+    )
 }
 
 static LOWERINGS_BUILT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -253,7 +265,15 @@ pub fn select_block_with(
     frame: &mut Temporaries,
 ) -> Result<Vec<Unit>, Refusal> {
     let tli = lowering_for(cpu, carry_chain, libcalls, price == crate::timing::Price::Size);
-    let mut lowering = M68kLowering { indexed, short, absolute_data, half_mul: short && super::lowering::prefers_word_multiply(cpu), cpu, price, mul };
+    let mut lowering = M68kLowering {
+        indexed,
+        short,
+        absolute_data,
+        half_mul: short && super::lowering::prefers_word_multiply(cpu),
+        cpu,
+        price,
+        mul,
+    };
     let selector = Selector::new(match cpu {
         Cpu::M68000 | Cpu::M68010 => m68k_m68000::TABLE,
         Cpu::M68020 | Cpu::M68030 | Cpu::M68040 | Cpu::M68060 => m68k_m68020::TABLE,
@@ -294,6 +314,7 @@ impl Select for M68kChooser<'_> {
             .or_else(|| super::bfffo::select(adapter, node))
             .or_else(|| if self.hooks.folds_memory() { super::rmw::select(adapter, node) } else { None })
             .or_else(|| if self.hooks.has_bit_field_extract() { super::bfextu::select(adapter, node) } else { None })
+            .or_else(|| if self.free_any_extend { super::zextmask::select(adapter, node) } else { None })
             .or_else(|| if self.free_any_extend { super::anyext::select(adapter, node) } else { None })
             .unwrap_or_else(|| self.selector.select(adapter, &mut self.hooks, node))
     }

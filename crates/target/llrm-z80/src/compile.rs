@@ -104,7 +104,7 @@ thread_local! {
     /// compiles a module three ways, as
     /// -Oz and as -Os twice, and each may be compiled again with its loop
     /// copies refused), most recent first, with what each was run for.
-    static SELECTED: std::cell::RefCell<Vec<(String, SelectionKey, Selections, Selections, (usize, UnrollDecisions, Option<crate::driver::Fingerprint>))>> =
+    static SELECTED: std::cell::RefCell<Vec<(String, SelectionKey, Selections, Selections, (usize, UnrollDecisions, Option<crate::driver::Fingerprint>), crate::driver::Digests)>> =
         const { std::cell::RefCell::new(Vec::new()) };
     /// The lines `module_bytes` allocated, kept for the module it chose:
     /// (selection, function, number) -> lines. The choice allocates every
@@ -181,7 +181,8 @@ fn selection_key(request: &Request) -> SelectionKey {
                 request.oz_best_of,
                 request.optsize_only,
                 request.refuse_loop_copies,
-                request.unroll_variant
+                request.unroll_variant,
+                request.lsr_alternate
             )
         ),
         environment,
@@ -279,14 +280,49 @@ pub fn effective(
         KEPT_LINES.with(|lines| lines.borrow_mut().retain(|(at, ..), _| kept.as_ref().is_ok_and(|kept| kept == at)));
         chosen
     };
-    let chosen = if (decisions.made > 0 || decisions.refused > 0 || decisions.inlined > 0)
+    let chosen = if (decisions.made > 0 || decisions.refused > 0 || decisions.inlined > 0 || decisions.unswitched > 0)
         && matches!(chosen.level, Level::O2 | Level::O3)
     {
         unroll_choice(ir, chosen, decisions, fingerprint)?
     } else {
         chosen
     };
+    let chosen = lsr_choice(ir, chosen)?;
     COPY_CHOICE.with(|held| *held.borrow_mut() = Some((ir.to_owned(), key, chosen.clone())));
+    Ok(chosen)
+}
+
+/// `request`, or its twin that rates LSR's solutions by the target's alternate
+/// order (`Request::lsr_alternate`) where the module comes out no bigger and no
+/// slower after allocation (z80 counts both axes: lz4 -O2 is 1 B smaller and
+/// 23% slower, its second `ldir` lost): the pin's order took histo -O1 from 348
+/// B to 291 B and cost sum4 its `djnz`, and the cost vectors of the two loops
+/// are the same. The second compile is made only where a loop's solution
+/// differs under the other order (`UnrollDecisions::lsr_orders`). DEVIATE
+/// LSR-KEY-TRIAL (owner z80, exit 2026-12-15).
+fn lsr_choice(
+    ir: &str,
+    request: Request,
+) -> Result<Request, String> {
+    if request.lsr_alternate {
+        return Ok(request);
+    }
+    let (_, _, (_, decisions, _)) = cached_with_copies(ir, &request)?;
+    if decisions.lsr_orders == 0 {
+        return Ok(request);
+    }
+    let other = Request { lsr_alternate: true, ..request.clone() };
+    let prices = (module_priced(ir, &request), module_priced(ir, &other));
+    if std::env::var_os("LLRM_DEBUG_LSR_KEY").is_some() {
+        eprintln!("lsr key: {} loops differ, held {:?}, alternate {:?}", decisions.lsr_orders, prices.0, prices.1);
+    }
+    let chosen = match prices {
+        (Ok(held), Ok(alternate)) if dominates(alternate, held) => other,
+        _ => request,
+    };
+    // keep only the lines of the module that stays
+    let kept = cached_both(ir, &chosen).map(|(selected, _)| std::rc::Rc::as_ptr(&selected) as usize);
+    KEPT_LINES.with(|lines| lines.borrow_mut().retain(|(at, ..), _| kept.as_ref().is_ok_and(|kept| kept == at)));
     Ok(chosen)
 }
 
@@ -298,7 +334,9 @@ pub fn effective(
 /// (`fill` unrolled and then inlined, 740 B larger). Variants: no unroll that
 /// adds bytes, at -O2 the -O3 threshold, no inline that adds bytes, and both
 /// (switch_table_in_code -O2: `step` inlined into a loop of 9 trips, 138 B
-/// larger). A tie keeps the request.
+/// larger), and no non-trivial unswitch, taken only where the module is smaller
+/// and no slower (queens -O3: `place` copied for one branch a trip, 93 B and
+/// 108745 T over -O2). A tie keeps the request.
 fn unroll_choice(
     ir: &str,
     request: Request,
@@ -306,7 +344,7 @@ fn unroll_choice(
     fingerprint: Option<crate::driver::Fingerprint>,
 ) -> Result<Request, String> {
     use llrm_transforms::trial::SpeedUnroll;
-    let mut variants = Vec::new();
+    let mut variants: Vec<SpeedUnroll> = Vec::new();
     if decisions.made > 0 {
         variants.push(SpeedUnroll::NoGrow);
     }
@@ -319,8 +357,13 @@ fn unroll_choice(
     if decisions.inlined > 0 {
         variants.push(SpeedUnroll::NoGrowBoth);
     }
+    if decisions.unswitched > 0 {
+        variants.push(SpeedUnroll::NoUnswitch);
+    }
     let mut best = (module_priced(ir, &request)?, request);
-    for variant in variants {
+    let mut next = 0;
+    while let Some(&variant) = variants.get(next) {
+        next += 1;
         // the two refusals together are tried only where one of them made the
         // module smaller: a compile of its own that, in the corpus, no
         // module wanted without one of the two (switch_table_in_code -O2 is the
@@ -335,11 +378,22 @@ fn unroll_choice(
         if std::env::var_os("LLRM_DEBUG_UNROLL").is_some() && price.is_err() {
             eprintln!("unroll {variant:?}: {price:?}");
         }
+        // the policy's refusal alone leaks where the SZ2 trial inlined growth
+        // in its place: the variant that binds the trial too is worth a compile
+        // only then, which bounds its cost to the modules that need it
+        if variant == SpeedUnroll::NoInlineGrowth && crate::driver::speed_unrolls_made().trial_inlined > 0 {
+            variants.push(SpeedUnroll::NoInlineGrowthAll);
+        }
         let Ok(price) = price else { continue };
         if std::env::var_os("LLRM_DEBUG_UNROLL").is_some() {
             eprintln!("unroll {variant:?}: {price:?}, held {:?}", best.0);
         }
-        if price < best.0 {
+        // an unswitch that buys clocks is kept even where the module is
+        // bigger: -O3 is judged on clocks as well (loop_versioning: 308 B
+        // smaller without it, 69% slower)
+        let better =
+            if variant == SpeedUnroll::NoUnswitch { price.0 < best.0.0 && price.1 <= best.0.1 } else { price < best.0 };
+        if better {
             best = (price, other);
         }
     }
@@ -366,7 +420,7 @@ pub fn refuses_loop_copies(
 /// each run as often as the calls to it say (a function nothing in the module
 /// calls runs once; a call runs its callee as many times as the block it
 /// is in runs), and the runtime routines they reach, each once.
-fn module_priced(
+pub fn module_priced(
     ir: &str,
     request: &Request,
 ) -> Result<(u32, u64), String> {
@@ -452,6 +506,23 @@ fn module_bytes(
     Ok(bytes + crate::runtime_size::reached(&reached) + crate::data::image_bytes(&crate::data::text_at(ir, request)?))
 }
 
+/// Each function's emitted bytes at `request.level`, runtime routines left out:
+/// what `driver::size_audit` sets the trial's estimate against.
+pub fn function_sizes(
+    ir: &str,
+    request: &Request,
+) -> Result<Vec<(String, u32)>, String> {
+    let (selected, alternatives) = cached_both(ir, request)?;
+    selected
+        .iter()
+        .enumerate()
+        .map(|(number, (name, ..))| {
+            let lines = lines_in(&selected, &alternatives, name, number, request)?;
+            Ok((name.clone(), expand::price_emitted(&lines, false).0))
+        })
+        .collect()
+}
+
 /// [`selections`] of `ir`, kept for the next function of the same module:
 /// every function was run through the whole mid-end and the selection of every
 /// function once for each time it was built (twice, with the return block
@@ -487,13 +558,41 @@ fn cached_with_copies(
         held.borrow()
             .iter()
             .find(|(text, was, ..)| text == ir && *was == key)
-            .map(|(_, _, one, other, copies)| (one.clone(), other.clone(), *copies))
+            .map(|(_, _, one, other, copies, _)| (one.clone(), other.clone(), *copies))
     });
     if let Some(one) = held {
         return Ok(one);
     }
     SELECTION_RUNS.with(|runs| runs.set(runs.get() + 1));
-    let (main, alternatives) = selections_with_alternatives(ir, request)?;
+    // the twin of a compile held (`Request::lsr_alternate`) keeps what that
+    // compile selected for the functions the mid-end left alone
+    let before = request
+        .lsr_alternate
+        .then(
+            || {
+                let base = selection_key(&Request { lsr_alternate: false, ..request.clone() });
+                SELECTED.with(|held| {
+                    held.borrow()
+                        .iter()
+                        .find(|(text, was, ..)| text == ir && *was == base)
+                        .map(|(_, _, one, other, _, digests)| (one.clone(), other.clone(), digests.clone()))
+                })
+            },
+        );
+    let reuse = before.flatten();
+    let (main, alternatives, digests) = crate::driver::selections_reusing(
+        ir,
+        request,
+        reuse
+            .as_ref()
+            .map(
+                |(one, other, digests)| crate::driver::Reuse {
+                    main: one.as_slice(),
+                    alternatives: other.as_slice(),
+                    digests,
+                },
+            ),
+    )?;
     if let Some(data) = crate::driver::data_of_last_selection() {
         keep_data_text(ir, request, data);
     }
@@ -502,7 +601,7 @@ fn cached_with_copies(
     let (one, other) = (Selections::new(main), Selections::new(alternatives));
     SELECTED.with(|held| {
         let mut held = held.borrow_mut();
-        held.insert(0, (ir.to_owned(), key, one.clone(), other.clone(), copies));
+        held.insert(0, (ir.to_owned(), key, one.clone(), other.clone(), copies, digests));
         held.truncate(6);
     });
     Ok((one, other, copies))
@@ -1014,9 +1113,24 @@ mod tests {
             ("call", Box::new(move |f| f.blocks[at].insts[inst].call ^= true)),
             ("terminator", Box::new(move |f| f.blocks[at].insts[inst].terminator ^= true)),
             ("barrier", Box::new(move |f| f.blocks[at].insts[inst].barrier ^= true)),
-            ("sets_flags", Box::new(move |f| f.blocks[at].insts[inst].sets_flags ^= true)),
+            // the field itself, not the accessor, is what the key hashes: a
+            // destructured toggle is no read of it (`flag_accessors.rs` scans
+            // for `.sets_flags` as a read)
+            (
+                "sets_flags",
+                Box::new(move |f| {
+                    let Inst { sets_flags, .. } = &mut f.blocks[at].insts[inst];
+                    *sets_flags ^= true;
+                }),
+            ),
             ("remade_sets_flags", Box::new(move |f| f.blocks[at].insts[inst].remade_sets_flags ^= true)),
-            ("reads_flags", Box::new(move |f| f.blocks[at].insts[inst].reads_flags ^= true)),
+            (
+                "reads_flags",
+                Box::new(move |f| {
+                    let Inst { reads_flags, .. } = &mut f.blocks[at].insts[inst];
+                    *reads_flags ^= true;
+                }),
+            ),
             ("may_load", Box::new(move |f| f.blocks[at].insts[inst].may_load ^= true)),
             ("may_store", Box::new(move |f| f.blocks[at].insts[inst].may_store ^= true)),
             ("side_effects", Box::new(move |f| f.blocks[at].insts[inst].side_effects ^= true)),
@@ -1808,6 +1922,8 @@ fn hash_inst(
         sets_flags,
         remade_sets_flags,
         reads_flags,
+        flags_kept,
+        flags_read,
         may_load,
         may_store,
         side_effects,
@@ -1828,6 +1944,7 @@ fn hash_inst(
     operands.len().hash(into);
     operands.iter().for_each(|operand| hash_operand(operand, into));
     (call, ties, terminator, barrier, sets_flags, remade_sets_flags, reads_flags).hash(into);
+    (flags_kept, flags_read).hash(into);
     (may_load, may_store, side_effects, cheap_as_move, invariant_load, rematerializable).hash(into);
     (early_clobber, commutable, origin).hash(into);
     match call_clobbers {
@@ -1947,6 +2064,14 @@ fn settle(
             LOOPS_FOLDED.with(|one| one.set(true));
             frequencies = Some(moved);
         }
+    }
+    // `MachineBlockPlacement` after the last branch fold, as the pin orders
+    // them. DEVIATE Z80-PLACE-OS (owner w8, exit 2026-11-28): not at -Os/-Oz,
+    // where the whole-corpus A/B grew bytes (+124 B over 138 programs: a
+    // rotated loop pushes a `jr` out of range and it becomes a `jp`).
+    if !bytes_first {
+        let odds = llrm_spike_mf::placement::loop_odds(&function);
+        llrm_spike_mf::placement::place_blocks_priced::<_, Z80Registers>(&mut function, &odds, false, false, true);
     }
     place_copies_where_needed(&mut function, &assignment);
     read_copies_at_their_source(&mut function, &assignment);
@@ -4047,6 +4172,21 @@ fn decomposed_functions(
                 )
         })
         .collect();
+    // a function whose alternative is the call for its module's one long
+    // multiply: taken only where it gives up neither axis (loop_versioning:
+    // 323 B / 1.04M T against 447 B / 1.75M T; word_compares -12 B for 35%
+    // more clocks stays as it was)
+    let lone: Vec<bool> = either
+        .iter()
+        .map(|(name, ..)| {
+            alternatives
+                .iter()
+                .any(
+                    |(one, source, scheduled)| one == name
+                        && [source, scheduled].into_iter().any(|form| form.as_ref().is_ok_and(|s| s.lone_alternative)),
+                )
+        })
+        .collect();
     let with_alternative = || (0..either.len()).filter(|at| either[*at].2.is_some());
     let all_sized = with_alternative().all(|at| size_first[at] && !regret[at]);
     let regretful = with_alternative().all(|at| size_first[at] && regret[at]);
@@ -4064,7 +4204,9 @@ fn decomposed_functions(
                     other.insert(at);
                 }
                 let price = total(&other);
-                let better = if size_first[at] && regret[at] {
+                let better = if lone[at] {
+                    dominates(price, best)
+                } else if size_first[at] && regret[at] {
                     prefers_by_regret(price, best)
                 } else if size_first[at] {
                     prefers(Level::Os, price, best)
@@ -4091,8 +4233,14 @@ fn decomposed_functions(
     } else {
         (descend(HashSet::new()), descend(every))
     };
-    let second_wins =
-        if regretful { prefers_by_regret(second.0, first.0) } else { prefers(module_level, second.0, first.0) };
+    let every_lone = with_alternative().all(|at| lone[at]);
+    let second_wins = if regretful {
+        prefers_by_regret(second.0, first.0)
+    } else if every_lone {
+        dominates(second.0, first.0)
+    } else {
+        prefers(module_level, second.0, first.0)
+    };
     let chosen = if second_wins { second.1 } else { first.1 };
     either
         .iter()
@@ -4118,6 +4266,15 @@ fn prefers(
     cheaper(level, new, old)
 }
 
+/// Whether the price `new` (bytes, clocks) is no bigger and no slower than
+/// `old`, and not the same.
+fn dominates(
+    new: (u32, u64),
+    old: (u32, u64),
+) -> bool {
+    new != old && new.0 <= old.0 && new.1 <= old.1
+}
+
 /// The smaller relative regret (a form's worse axis against the best of the two
 /// on that axis), so a form that gives up a few percent of one axis for a large
 /// part of the other wins, and the reverse does not: for the functions whose
@@ -4140,6 +4297,69 @@ fn prefers_by_regret(
 /// strict on both axes (O1, Os, Oz) take the generic add only where it is no
 /// worse on either, the others the cheaper at 1 B = 3 T.
 fn lines_of(
+    selected: &Selections,
+    name: &str,
+    number: usize,
+    request: &Request,
+) -> Result<Vec<Line>, String> {
+    // DEVIATE LSR-KEY-TRIAL (owner z80, exit 2026-12-01): a function the
+    // mid-end made as an earlier compile of the module did has its lines
+    // already: a call clobbers every register, so they depend on its own
+    // selection and on nothing of its callees.
+    let digest = selected
+        .iter()
+        .find(|(one, ..)| one == name)
+        .and_then(|(_, source, _)| source.as_ref().ok())
+        .map(|one| one.digest)
+        .filter(|&digest| digest != 0);
+    let key = digest.map(|digest| {
+        let mut both = Both::new();
+        let _ = std::fmt::Write::write_fmt(
+            &mut both,
+            format_args!(
+                "{name}|{digest}|{number}|{}|{:?}",
+                request.sp_frame,
+                selection_key(&Request { lsr_alternate: false, ..request.clone() })
+            ),
+        );
+        both.finish_pair()
+    });
+    if let Some((held, frequencies)) = key.and_then(|key| LINES_MEMO.with(|memo| memo.borrow().get(&key).cloned())) {
+        // what the prices after these lines weigh by (`allocated_with`)
+        expand::replace_frequencies(frequencies);
+        return held;
+    }
+    LINES_MADE.with(|made| made.borrow_mut().push(name.to_owned()));
+    let made = lines_made(selected, name, number, request);
+    if let Some(key) = key {
+        LINES_MEMO.with(|memo| {
+            let mut memo = memo.borrow_mut();
+            if memo.len() >= 4096 {
+                memo.clear();
+            }
+            memo.insert(key, (made.clone(), expand::frequencies()));
+        });
+    }
+    made
+}
+
+thread_local! {
+    /// The finished lines of functions, by what the mid-end made of them and
+    /// the request (`lines_of`), with the block frequencies their prices weigh
+    /// by.
+    static LINES_MEMO: std::cell::RefCell<std::collections::HashMap<(u64, u64), (Result<Vec<Line>, String>, llrm_support::hash::HashMap<u32, f64>)>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+    /// The functions whose lines were made, not found.
+    static LINES_MADE: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// The functions whose lines were made (not taken from an earlier compile of
+/// the module) since the last call.
+pub fn take_lines_made() -> Vec<String> {
+    LINES_MADE.with(|made| std::mem::take(&mut *made.borrow_mut()))
+}
+
+fn lines_made(
     selected: &Selections,
     name: &str,
     number: usize,

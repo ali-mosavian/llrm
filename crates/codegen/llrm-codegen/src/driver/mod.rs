@@ -72,6 +72,9 @@ pub struct Options {
     /// `-fexcess-precision=standard` or `-ffloat-store`: a float conversion
     /// rounds to its type.
     pub float_store: bool,
+    /// `-mstack-alignment=N`: the bytes the stack is a multiple of at every
+    /// call.
+    pub stack_alignment: Option<i64>,
     /// Whether a spill of a float rounds to the float's type (`Profile`'s
     /// `rounds_float_spills`): set by llrm-cc, which follows the pin.
     pub rounds_float_spills: bool,
@@ -126,6 +129,7 @@ impl Options {
             debug_format: Default::default(),
             abi: None,
             float_store: false,
+            stack_alignment: None,
             rounds_float_spills: false,
             spills_extended: false,
             code_segment: None,
@@ -184,7 +188,7 @@ impl Options {
     }
 
     pub fn cpu(&self) -> Result<&'static Profile, String> {
-        cpu::tuned_optimizing(
+        let profile = cpu::tuned_optimizing(
             &*self.arch,
             &self.machine.cpu,
             self.pipeline.prefers_size(),
@@ -199,7 +203,8 @@ impl Options {
             self.pipeline.has_min_size,
             self.pipeline.prices_bytes(),
             self.pipeline.pre,
-        )
+        )?;
+        Ok(self.stack_alignment.map_or(profile, |bytes| cpu::with_aligned_calls(profile, bytes)))
     }
 }
 
@@ -592,7 +597,9 @@ pub fn optimized(
     // The widest atomic access: a 64-bit one needs `cmpxchg8b` below 64 bits.
     let native = if llrm_target::Target::layout(&*options.arch).mode == 64 { 64 } else { 32 };
     let tso = options.arch.name().starts_with("x86");
-    program.modules.iter_mut().try_for_each(|module| llrm_mir::atomic::lowered(module, native, tso, tso))?;
+    // `lock xadd`, `lock cmpxchg` and `lock add` come with a 486: not in 16-bit code.
+    let rmw = tso && llrm_target::Target::layout(&*options.arch).mode >= 32;
+    program.modules.iter_mut().try_for_each(|module| llrm_mir::atomic::lowered(module, native, tso, tso, rmw))?;
     timed("mir markers", || program.modules.iter_mut().for_each(llrm_transforms::dead::markers_dropped));
     timed("mir ehprepare", || {
         program
@@ -618,9 +625,20 @@ pub fn optimized(
             && options.cpu()?.target().tti().is_some_and(|tti| tti.inlines_variable_memcpy());
         let rep_movsb = options.cpu()?.min_size
             || (options.cpu()?.size && options.cpu()?.target().tti().is_some_and(|tti| tti.rep_movs_at_size()));
+        let rep_movs_speed_max = options.cpu()?.target().tti().map_or(0, |tti| tti.rep_movs_at_speed_max());
+        let inline_variable_unlooped = options.cpu()?.size
+            && options.cpu()?.target().tti().is_some_and(|tti| tti.inlines_variable_memcpy_at_size());
         timed("mir memcpy calls", || {
             program.modules.iter_mut().try_for_each(|module| {
-                crate::backend::memcpycall::expanded(module, *convention, symbol, inline_variable, rep_movsb)
+                crate::backend::memcpycall::expanded(
+                    module,
+                    *convention,
+                    symbol,
+                    inline_variable,
+                    rep_movsb,
+                    rep_movs_speed_max,
+                    inline_variable_unlooped,
+                )
             })
         })?;
     }

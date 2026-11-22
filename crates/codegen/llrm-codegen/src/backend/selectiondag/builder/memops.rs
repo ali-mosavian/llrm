@@ -176,6 +176,7 @@ impl Builder<'_> {
             Intrinsic::Compare { .. }
             | Intrinsic::FMulAdd
             | Intrinsic::CopySign
+            | Intrinsic::IsFpClass
             | Intrinsic::Fixed { .. }
             | Intrinsic::FixedMul { .. }
             | Intrinsic::ShiftSat { .. } => self.visit_math(instruction, intrinsic),
@@ -199,6 +200,7 @@ impl Builder<'_> {
                 self.set_value(instruction.result.ok_or(Refused("a decrement without a result"))?, node);
                 Ok(())
             }
+            Intrinsic::Constrained(op) => self.visit_constrained_fp(instruction, *op),
             _ => Err(Refused("intrinsic call")),
         }
     }
@@ -455,6 +457,16 @@ impl Builder<'_> {
     pub(super) fn rep_movsb_copy(&self) -> bool {
         self.has_min_size()
             || (self.has_opt_size() && self.target.tti.as_ref().is_some_and(|tti| tti.0.rep_movs_at_size()))
+    }
+
+    /// The largest constant copy done with `rep movs` where the blocks are aligned: the pin's 128 bytes
+    /// (`emitConstantSizeRepmov`), or the target's DEVIATE REP-MOVS-SPEED limit at -O2 and -O3.
+    fn rep_movs_inline_limit(
+        &self,
+        opt_size: bool,
+    ) -> u64 {
+        let speed = if opt_size { 0 } else { self.target.tti.as_ref().map_or(0, |tti| tti.0.rep_movs_at_speed_max()) };
+        MAX_INLINE_SIZE.max(speed)
     }
 
     /// `-Oz` is `rep movsb` whatever the size; REP-MOVS-OS keeps a block
@@ -1381,7 +1393,7 @@ impl Builder<'_> {
                         self.rep_movs(root, dst, other, bytes, dst_align.min(src_align), dst_align, src_align)?
                     }
                     (None, Intrinsic::MemCpy, Some(bytes))
-                        if strings_exist && bytes <= MAX_INLINE_SIZE && alignment >= 4 =>
+                        if strings_exist && bytes <= self.rep_movs_inline_limit(opt_size) && alignment >= 4 =>
                     {
                         self.rep_movs(
                             root,
@@ -1413,6 +1425,17 @@ impl Builder<'_> {
                         && self.target.tti.as_ref().is_some_and(|tti| tti.0.inlines_variable_memcpy()) =>
                     {
                         self.rep_movs_dwords(root, dst, other, size)
+                    }
+                    // DEVIATE MEM-OS-REP: tuned for size, a length known at run
+                    // time that `memcpycall` left (outside every loop) is one
+                    // `rep movsb`, as gcc's `rep_prefix_1_byte`.
+                    _ if strings_exist
+                        && matches!(which, Intrinsic::MemCpy)
+                        && constant.is_none()
+                        && opt_size
+                        && self.target.tti.as_ref().is_some_and(|tti| tti.0.inlines_variable_memcpy_at_size()) =>
+                    {
+                        self.rep_movsb(root, dst, other, size)
                     }
                     // a move a pass proved forward, past the inline limit: `rep
                     // movs` ascends, as the move needs (DEVIATE: the pin calls
@@ -1533,6 +1556,16 @@ impl Builder<'_> {
                     {
                         self.rep_stos(root, dst, other, bytes, self.pointer_bytes())?
                     }
+                    // DEVIATE MEM-OS-REP: gcc's `rep_prefix_1_byte` for a fill of unknown size;
+                    // `memcpycall` marked the ones in loops.
+                    (None, None)
+                        if strings_exist
+                            && opt_size
+                            && !llrm_mir::memory::has(&info.attrs, crate::backend::memcpycall::FILL_CALL)
+                            && self.target.tti.as_ref().is_some_and(|tti| tti.0.inlines_variable_memcpy_at_size()) =>
+                    {
+                        self.rep_stosb(root, dst, other, size)
+                    }
                     _ if strings_exist && !self.runtime_has("memset") => self.rep_stosb(root, dst, other, size),
                     _ => self.mem_libcall(info, operands[0], "memset", root, &[dst, other], size)?,
                 }
@@ -1564,7 +1597,7 @@ impl Builder<'_> {
                     Some(bytes) => self.inline_memset(root, dst, other, bytes, limit, dst_align)?,
                     None => None,
                 };
-                match inline.or_else(|| calling.emit_memset(&mut self.dag, root, dst, other, size)) {
+                match inline.or_else(|| calling.emit_memset_sized(&mut self.dag, root, dst, other, size, opt_size)) {
                     Some(chain) => chain,
                     None => self.hooked_mem_libcall("memset", root, [dst, other, size])?,
                 }
@@ -1586,7 +1619,7 @@ impl Builder<'_> {
                     if copy {
                         calling.emit_memcpy_sized(dag, root, dst, other, size, opt_size)
                     } else {
-                        calling.emit_memmove(dag, root, dst, other, size)
+                        calling.emit_memmove_sized(dag, root, dst, other, size, opt_size)
                     }
                 };
                 match inline.or_else(|| hooked(&mut self.dag)) {
@@ -1817,6 +1850,7 @@ impl Builder<'_> {
             values.push(selector);
         }
         let block = llrm_mir::intrinsics::AsmBlock {
+            bits: 16,
             code,
             inputs: names.iter().map(|name| (*name).into()).collect(),
             outputs: Vec::new(),
@@ -1842,6 +1876,7 @@ impl Builder<'_> {
             &name,
             &[],
             &registers,
+            &[],
             &[],
         );
         chain
@@ -1882,6 +1917,7 @@ impl Builder<'_> {
             }
         };
         let block = llrm_mir::intrinsics::AsmBlock {
+            bits: 16,
             code: vec![0xFD, 0xF3, 0xA4, 0xFC],
             inputs: operands.iter().map(|(name, _)| *name).chain(segment.map(|(es, _)| es)).map(Into::into).collect(),
             outputs: Vec::new(),
@@ -1902,6 +1938,7 @@ impl Builder<'_> {
             &name,
             &[],
             &registers,
+            &[],
             &[],
         );
         chain
@@ -2102,7 +2139,11 @@ impl Builder<'_> {
         // `isTailCall`: the intrinsic is marked `tail` and ends the function,
         // and the target takes the sibling call.
         let tail = match self.tail_candidate.take() {
-            Some(tail) if self.eligible_for_sibling_call(info, &tail_plan, false, None, first, &[]) => Some(tail),
+            Some(tail)
+                if self.eligible_for_sibling_call(info, &tail_plan, false, None, first, &[], &tail_plan, false) =>
+            {
+                Some(tail)
+            }
             _ => None,
         };
         if let Some(tail) = tail {

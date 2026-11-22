@@ -90,17 +90,26 @@ pub(crate) struct Interleaving {
     pub reductions: Vec<Reduction>,
 }
 
-/// `Op2Info` of an unsigned divide or remainder: a constant divisor is a few
-/// multiplies on a target that says so, not a division. Other operations
-/// carry none.
+/// `Op2Info` of a divide, remainder or shift: a constant divisor is a few
+/// multiplies on a target that says so, not a division, and a constant
+/// shift amount is an immediate shift. Other operations carry none.
 pub(crate) fn divisor_info(
     context: &Context,
     op: BinaryOp,
     divisor: Operand,
     ty: Ty,
 ) -> llrm_mir::tti::OperandInfo {
-    let (Operand::Constant(id), Ty::Int(width), BinaryOp::UDiv | BinaryOp::URem | BinaryOp::SDiv | BinaryOp::SRem) =
-        (divisor, ty, op)
+    let (
+        Operand::Constant(id),
+        Ty::Int(width),
+        BinaryOp::UDiv
+        | BinaryOp::URem
+        | BinaryOp::SDiv
+        | BinaryOp::SRem
+        | BinaryOp::Shl
+        | BinaryOp::LShr
+        | BinaryOp::AShr,
+    ) = (divisor, ty, op)
     else {
         return Default::default();
     };
@@ -367,7 +376,7 @@ pub(crate) fn extract(
                 if !price.valid {
                     return Err(Skipped("An access the target does not price"));
                 }
-                let scalar = price.value + tti.address_computation_cost(kind).value;
+                let scalar = price.value + tti.scalar_access_address_cost(kind).value;
                 cost += scalar;
                 let align = match data.opcode {
                     Opcode::Load { align, .. } | Opcode::Store { align, .. } => align,

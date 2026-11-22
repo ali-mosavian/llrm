@@ -1,6 +1,6 @@
 # arm64-darwin: Mac, kernel-only bytes (codebytes.kernel), us/run median of 11 with spread and load per row; head a924b93b6dda (llrm-cc md5 9ee9e0c8), default build (no gcc-gpl); never mix with qemu rows
 # clang = pin c0ff2112, gcc13 = gcc-13 fb695479, ours-cc = llrm-cc 9ee9e0c8; instrs empty (executed counts come from w15's harness)
-# shim flags: -include /Users/alim/work/personal/llrm-tools-rerun/tools/hostshim/host_shim.h -Dfar= -Dnear= -Dhuge= -D__huge= -D__386__=1 -DPHYSICAL_TEXT_SCREEN=((unsigned long)host_text_screen); far/huge programs are flat reading
+# shim flags: -include tools/hostshim/host_shim.h -Dfar= -Dnear= -Dhuge= -D__huge= -D__386__=1 -DPHYSICAL_TEXT_SCREEN=((unsigned long)host_text_screen); far/huge programs are flat reading
 target	prog	level	compiler	code_bytes	clocks	instrs	note
 arm64-darwin	bintree	O2	clang	344	2.72		darwin us, load 5.0, spread 12%, noisy
 arm64-darwin	bintree	O2	gcc13	320	3.67		darwin us, load 5.0, spread 4%

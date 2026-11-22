@@ -64,6 +64,12 @@ impl CombineHooks for Asks {
     fn sub_algebra_folds(&self) -> bool {
         true
     }
+    fn sub_constant_hoists(
+        &self,
+        _pointer: EVT,
+    ) -> bool {
+        true
+    }
     fn rebuild_brcond_condition(&self) -> bool {
         true
     }
@@ -877,6 +883,39 @@ fn a_target_that_does_not_ask_keeps_the_value_minus_a_difference() {
     assert_eq!(dag.opcode(dag.get_root()), ISD::Sub);
 }
 
+fn sub_of_a_sum_with_a_constant(dag: &mut SelectionDAG) {
+    let (y, x) = (dag.get_register(EVT::I32, 5), dag.get_register(EVT::I32, 6));
+    let four = dag.get_constant(4, EVT::I32);
+    let sum = dag.get_node(ISD::Add, EVT::I32, &[x, four]);
+    let root = dag.get_node(ISD::Sub, EVT::I32, &[y, sum]);
+    dag.set_root(root);
+}
+
+/// `y - (x + 4)` kept its `add` (`add ecx,4; sub eax,ecx; shl eax,7`, QB's
+/// file_fielditem +1 B over the pin, 3 over gcc); the pin hoists the
+/// constant, `(y - x) - 4`, which then meets the shift and the final address.
+#[test]
+fn a_value_minus_a_sum_with_a_constant_takes_the_constant_out() {
+    let mut dag = dag();
+    sub_of_a_sum_with_a_constant(&mut dag);
+    DagCombiner::new(&mut dag, &mut Asks, CombineLevel::BeforeLegalizeTypes).run();
+    let root = dag.get_root();
+    assert_eq!(dag.opcode(root), ISD::Add);
+    assert_eq!(dag.opcode(dag.operand(root, 0)), ISD::Sub);
+    assert_eq!(dag.constant(dag.operand(root, 1)), Some(0xffff_fffc));
+}
+
+/// Off where a target does not ask: the other targets' rows are unjudged.
+#[test]
+fn a_target_that_does_not_ask_keeps_the_sum_with_a_constant_under_the_subtraction() {
+    let mut dag = dag();
+    sub_of_a_sum_with_a_constant(&mut dag);
+    DagCombiner::new(&mut dag, &mut NoCombines, CombineLevel::BeforeLegalizeTypes).run();
+    let root = dag.get_root();
+    assert_eq!(dag.opcode(root), ISD::Sub);
+    assert_eq!(dag.opcode(dag.operand(root, 1)), ISD::Add);
+}
+
 fn branch_on_not_of_asserted_boolean(dag: &mut SelectionDAG) {
     let x = dag.get_register(EVT::I32, 5);
     let one_bit = dag.get_value_type_node(EVT::I1);
@@ -1137,9 +1176,11 @@ fn an_and_with_a_sum_of_a_not_stays_where_the_target_has_no_and_not() {
     assert_eq!(dag.opcode(dag.operand(dag.get_root(), 1)), ISD::Add);
 }
 
-/// `select_cc` on a compare of two constants made `get_setcc` fold the compare to a constant, and `visit_setcc` read
-/// the operands of that constant: `tests/fixtures/c/bitfield` panicked (`index out of bounds`, `dag.rs:1202`) at O1 on
-/// arm64. The pin's `SimplifySelectCC` takes the arm the constant compare names.
+/// `select_cc` on a compare of two constants made `get_setcc` fold the compare
+/// to a constant, and `visit_setcc` read the operands of that constant:
+/// `tests/fixtures/c/bitfield` panicked (`index out of bounds`, `dag.rs:1202`)
+/// at O1 on arm64. The pin's `SimplifySelectCC` takes the arm the constant
+/// compare names.
 #[test]
 fn a_select_cc_on_a_constant_compare_is_the_arm_it_names() {
     let mut dag = dag();

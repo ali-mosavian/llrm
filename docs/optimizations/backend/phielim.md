@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/phielim.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/phielim.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/phielim.rs sha256:e15d89397bea5856f2fdb0c1bf305207d03f5e7fa36bc4da342203ab38f61aea -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/phielim.rs sha256:c10d5dfe363a09abc589a807956af73b81742bb0055a67d29d2ab13edcb07745 -->
 
 # phielim
 
@@ -12,12 +12,6 @@ of `p1` and `r := v2` at the end of `p2`, before the terminator. The copies
 of one edge carry one group number, so [`crate::backend::parcopy`](parcopy.md) later
 orders them as a single simultaneous assignment. A phi with an incoming edge
 from outside the body is left alone.
-
-A copy on a branch's edge instead of in its predecessor is made only when
-it costs the target at least a tenth less (`EdgePrices::cheaper_on_edge`:
-the edge's chance times its copies and the `jmp`, against the copies every
-time), and never in a build for size: the odds are a guess, and an edge
-that wins by less costs a block and a jump the clocks do not show.
 
 Before copying, three shortcuts avoid a copy altogether. A one-input phi
 renames its result to its input. A loop-exit one-input phi is the exception:
@@ -33,11 +27,9 @@ Otherwise a predecessor with several successors makes the edge critical. A
 copy there may run in the predecessor only if no other path reads either end
 of it (`_observed`: whether a block that reads it is reachable from the
 predecessor's other successors without entering the successor, searched
-from both ends so that the smaller region is walked) and, where block odds
-are known, the edge is not cheaper
-(`EdgePrices::cheaper_on_edge`: the edge's chance times copies plus a `jmp`
-against the copies run every time). Otherwise the copy goes in a new block
-on the edge, which holds its copies and a jump to the successor:
+from both ends so that the smaller region is walked). Otherwise the copy
+goes in a new block on the edge, which holds its copies and a jump to the
+successor:
 
 ```mermaid
 %%{init: {'theme':'base','themeVariables':{'fontFamily':'Segoe UI, Helvetica Neue, Arial, DejaVu Sans, sans-serif','fontSize':'15px','primaryColor':'#475569','primaryTextColor':'#ffffff','primaryBorderColor':'#334155','lineColor':'#64748b','secondaryColor':'#475569','tertiaryColor':'transparent','clusterBkg':'transparent','clusterBorder':'#64748b','edgeLabelBackground':'#334155','textColor':'#64748b','titleColor':'#64748b'},'flowchart':{'curve':'basis','nodeSpacing':38,'rankSpacing':52,'padding':16,'wrappingWidth':360,'htmlLabels':true,'useMaxWidth':true}}}%%
@@ -130,13 +122,12 @@ The copies of group 2 read values (`v5`) that others write, which
 [`crate::backend::parcopy`](parcopy.md) orders after allocation.
 
 From `ISEL_DUMP=1` of a C Fibonacci loop (`t = a + b; a = b; b = t;`)
-compiled with `llrm-c -O2 -m16`: the stage before `PhiElimination`, and
+compiled with `llrm-cc -O2 -m16`: the stage before `PhiElimination`, and
 `PhiElimination`.
 
 ## Runs
 A machine phase after `ssaspill` (spiller route only) and before
-`machinesched`, in every machine (`flow::machine_with`); `EdgePrices` come
-from the CPU profile, and with none a copy stays in its predecessor. Also
+`machinesched`, in every machine (`flow::machine_with`). Also
 `placed_on_edges`, which [`crate::backend::floatalloc`](floatalloc.md) uses to put its
 selected transfers on exact edges.
 

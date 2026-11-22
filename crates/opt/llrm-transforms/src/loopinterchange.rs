@@ -75,7 +75,6 @@
 //! `LoopInterchangeTransform::transform` (L2237), `adjustLoopBranches` (L2560).
 
 use llrm_analysis::aggregate::AggregateAA;
-use llrm_analysis::basicaa::BasicAA;
 use llrm_analysis::depanalysis::{DependenceInfo, Options as DaOptions, dir};
 use llrm_analysis::ivdescriptors::{self, InductionStep, RecurKind};
 use llrm_analysis::memory;
@@ -83,7 +82,6 @@ use llrm_analysis::scev::analysis::ScevSession;
 use llrm_analysis::scev::backedge::ExitCountKind;
 use llrm_analysis::scev::expr::{Kind, Scev};
 use llrm_analysis::scev::{Cx, ScalarEvolution};
-use llrm_analysis::typebasedaa::TypeBasedAA;
 use llrm_mir::loopinfo::Loop;
 use llrm_mir::module::{BlockId, Function, InstId, Operand};
 use llrm_mir::opcode::{BinaryOp, Flags, IntPredicate, Opcode};
@@ -1515,6 +1513,25 @@ impl Run<'_, '_> {
         let depth = list.len();
         let mut matrix: CharMatrix = Vec::new();
 
+        // A loop entered by an `indirectbr` cannot have a preheader made for it
+        // (LoopInterchange.cpp:1507).
+        {
+            let (se, env) = self.session.split(self.unit.layout, &self.outer.globals, &self.outer.metadata);
+            let _ = se;
+            let cx = env.cx(&*self.unit.context, &*self.unit.function);
+            for &header in list.iter() {
+                let lp = cx.loops.get_loop_for(header).expect("a loop");
+                if cx
+                    .function
+                    .predecessors(header)
+                    .iter()
+                    .any(|&pred| !lp.contains(pred) && cx.function.ends_in_indirect_branch(pred))
+                {
+                    return false;
+                }
+            }
+        }
+
         // The dependence matrix of the whole nest.
         {
             let (se, env) = self.session.split(self.unit.layout, &self.outer.globals, &self.outer.metadata);
@@ -1522,10 +1539,7 @@ impl Run<'_, '_> {
             let outermost = cx.loops.get_loop_for(list[0]).expect("a loop");
             let memory_unit =
                 memory::Unit::within(&*self.unit.context, self.unit.layout, &*self.unit.function, &self.outer);
-            let mut aa = AggregateAA::new();
-            aa.add_aa_result(BasicAA::new(&memory_unit));
-            aa.add_aa_result(llrm_analysis::scopednoaliasaa::ScopedNoAliasAA::new(&memory_unit));
-            aa.add_aa_result(TypeBasedAA::new(&memory_unit));
+            let mut aa = AggregateAA::default_pipeline(&memory_unit);
             let mut info = DependenceInfo::new(&mut aa, &memory_unit, &cx, self.options.da);
             if !populate_dependency_matrix(&mut matrix, depth, outermost, &mut info, se, &cx, self.options) {
                 llrm_support::debug!("interchange", "populating the dependency matrix failed");

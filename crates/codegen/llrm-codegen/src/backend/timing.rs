@@ -198,7 +198,7 @@ mod tests {
     /// it); the P5's multiply has no early-out and states none.
     #[test]
     fn test_the_486_states_which_operand_its_multiply_reads() {
-        assert_eq!(multiplier_operand("486"), Ok(Some(MultiplierOperand::Source)));
+        assert_eq!(multiplier_operand("486"), Ok(Some(MultiplierOperand::Cheaper)));
         assert_eq!(multiplier_operand("P5"), Ok(None));
     }
 

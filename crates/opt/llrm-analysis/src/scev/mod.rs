@@ -762,6 +762,9 @@ pub fn value_id(
                 _ => 17,
             },
             K::Expr(_) => 19,
+            // `MetadataAsValue`: an argument of a constrained call, never an
+            // operand an order is asked of.
+            K::MetadataString(_) => 4,
         },
         Operand::Value(id) => match cx.function.value(id).def {
             ValueDef::Argument(_) => 30,
@@ -791,6 +794,7 @@ fn llvm_opcode(
             }
         }
         O::Switch => 4,
+        O::IndirectBr => 5,
         O::Invoke(_) => 6,
         O::Resume => 7,
         O::Unreachable => 8,

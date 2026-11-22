@@ -75,6 +75,394 @@ pub fn translate(
     Ok(joined)
 }
 
+// ---- Flat 32- and 64-bit code
+// -------------------------------------------------------
+//
+// The same mechanism for flat code: an asm call whose operands sit at places
+// the constraints name (`{eax}`, `{st}`, an address register for a memory
+// operand) becomes a call of `llrm.ia32.asm.*` (`ia64` on x86-64), its bytes
+// assembled here. A constraint that leaves the register to the allocator (`r`,
+// `q`, `x`) takes the next register of the pool at the site, as `={..}` and
+// `{..}` name one (DEVIATE: S2, the pin's `ISD::INLINEASM`, leaves the choice
+// to the allocator); `g` and a constant are refused with their name.
+
+/// The register file a flat block's mode names: the registers its target's
+/// `@asm` line lists, with the family each belongs to.
+struct Flat {
+    /// 32 or 64: the mode, the width of an address register, the prefix of the
+    /// block's name.
+    bits: u8,
+    asm: Vec<String>,
+    registers: Vec<llrm_target::registers::Register>,
+}
+
+impl Flat {
+    fn of(bits: u8) -> &'static Flat {
+        static FLAT32: std::sync::LazyLock<Flat> =
+            std::sync::LazyLock::new(|| Flat::parse(32, &llrm_target::Target::registers_text(&llrm_x86_m32::M32)));
+        static FLAT64: std::sync::LazyLock<Flat> =
+            std::sync::LazyLock::new(|| Flat::parse(64, &llrm_target::Target::registers_text(&llrm_x86_m64::M64)));
+        if bits == 64 { &FLAT64 } else { &FLAT32 }
+    }
+
+    fn parse(
+        bits: u8,
+        text: &str,
+    ) -> Flat {
+        Flat {
+            bits,
+            asm: llrm_target::registers::asm_names(text),
+            registers: llrm_target::registers::parse(text).expect("a target's register file parses"),
+        }
+    }
+
+    /// A constraint's register as the block's name carries it: `st` is `st0`,
+    /// `st(1)` is `st1`.
+    fn register(
+        &self,
+        name: &str,
+    ) -> Result<String, String> {
+        let name = match name {
+            "st" | "st(0)" => "st0",
+            "st(1)" => "st1",
+            other => other,
+        };
+        if self.asm.iter().any(|one| one == name) {
+            Ok(name.to_owned())
+        } else {
+            Err(format!("asm: register {name} is not carried"))
+        }
+    }
+
+    /// The register a name is a view of, to keep an address register off the
+    /// ones the block names.
+    fn root(
+        &self,
+        name: &str,
+    ) -> String {
+        self.registers.iter().find(|one| one.name == name).map_or(name, |one| one.root.as_str()).to_owned()
+    }
+
+    /// The view of `name`'s register an operand of the type `ty` takes in the
+    /// block's text: `{cx}` holding an `i64` is `rcx`, an `i32` `ecx`. A
+    /// register of no width (x87) and a type of none keep the name.
+    fn view(
+        &self,
+        name: &str,
+        ty: &str,
+    ) -> String {
+        let width = match ty.strip_prefix('i').and_then(|bits| bits.parse::<u32>().ok()) {
+            Some(bits) => bits,
+            None if ty == "ptr" => u32::from(self.bits),
+            None => return name.to_owned(),
+        };
+        let root = self.root(name);
+        self.registers
+            .iter()
+            .find(|one| one.root == root && one.bits == width && self.asm.contains(&one.name))
+            .map_or(name, |one| one.name.as_str())
+            .to_owned()
+    }
+
+    /// The vector registers an `x` operand may take, in the allocation order.
+    fn vector_pool(&self) -> Vec<&str> {
+        self.registers
+            .iter()
+            .filter(|one| one.name.starts_with("xmm") && self.asm.contains(&one.name))
+            .map(|one| one.name.as_str())
+            .collect()
+    }
+
+    /// The registers a pointer may be passed in: address width, in the
+    /// allocation order.
+    fn pool(&self) -> Vec<&str> {
+        self.registers
+            .iter()
+            .filter(|one| u8::try_from(one.bits) == Ok(self.bits) && self.asm.contains(&one.name))
+            .map(|one| one.name.as_str())
+            .collect()
+    }
+}
+
+/// What an operand is in a flat block's text.
+enum Place {
+    /// A register and the view of it the operand's type takes.
+    Register(String, String),
+    /// An address register the pointer argument is passed in.
+    Memory(String),
+}
+
+/// `text` with every asm call of flat code replaced by a call of its
+/// `llrm.ia32.asm.*` (`bits` 32) or `llrm.ia64.asm.*` (64) block.
+pub fn translate_flat(
+    text: &str,
+    bits: u8,
+    assemble: &mut dyn FnMut(&str) -> Result<Vec<u8>, String>,
+) -> Result<String, String> {
+    let flat = Flat::of(bits);
+    let mut out: Vec<String> = Vec::new();
+    let mut declares: Vec<String> = Vec::new();
+    for line in text.lines() {
+        let trimmed = line.trim_start();
+        if !(trimmed.starts_with("call ") || trimmed.contains(" = call ")) || !trimmed.contains(" asm ") {
+            out.push(line.to_owned());
+            continue;
+        }
+        let (call, declare) = flat_block(line, flat, assemble)?;
+        out.push(call);
+        if !declares.contains(&declare) {
+            declares.push(declare);
+        }
+    }
+    let mut joined = out.join("\n");
+    joined.push('\n');
+    for declare in declares {
+        joined.push_str(&declare);
+        joined.push('\n');
+    }
+    Ok(joined)
+}
+
+/// The top-level `, `-separated items of `text` (not inside parentheses or
+/// braces).
+fn split_top(text: &str) -> Vec<&str> {
+    let (mut depth, mut start, mut items) = (0_i32, 0, Vec::new());
+    let bytes = text.as_bytes();
+    for (at, &byte) in bytes.iter().enumerate() {
+        match byte {
+            b'(' | b'{' | b'[' => depth += 1,
+            b')' | b'}' | b']' => depth -= 1,
+            b',' if depth == 0 => {
+                items.push(text[start..at].trim());
+                start = at + 1;
+            }
+            _ => {}
+        }
+    }
+    if !text[start..].trim().is_empty() {
+        items.push(text[start..].trim());
+    }
+    items
+}
+
+fn flat_block(
+    line: &str,
+    flat: &Flat,
+    assemble: &mut dyn FnMut(&str) -> Result<Vec<u8>, String>,
+) -> Result<(String, String), String> {
+    let line = line.trim();
+    let (destination, call) = match line.split_once(" = call ") {
+        Some((destination, rest)) => (Some(destination), rest),
+        None => (None, line.strip_prefix("call ").ok_or("asm: not a call")?),
+    };
+    let (ret, rest) = call.split_once(" asm ").ok_or("asm: no asm")?;
+    let ret = ret.trim_start_matches("addrspace(0) ").trim();
+    let mut rest = rest;
+    let (mut intel, mut volatile) = (false, false);
+    loop {
+        let Some(word) =
+            ["sideeffect ", "inteldialect ", "alignstack ", "unwind "].iter().find(|w| rest.starts_with(**w))
+        else {
+            break;
+        };
+        intel |= *word == "inteldialect ";
+        volatile |= *word == "sideeffect ";
+        rest = &rest[word.len()..];
+    }
+    let (text, next) = quoted(rest, 0)?;
+    let (constraints, next) = quoted(rest, next + 2)?;
+    let arguments = rest[next..].strip_prefix('(').ok_or("asm: no arguments")?;
+    let mut depth = 0;
+    let end = arguments
+        .char_indices()
+        .find(|&(_, one)| {
+            depth += i32::from(one == '(') - i32::from(one == ')');
+            depth < 0
+        })
+        .map(|(at, _)| at)
+        .ok_or("asm: unclosed arguments")?;
+    // Each argument: its type and its value, without attributes.
+    let arguments: Vec<(String, String)> = split_top(&arguments[..end])
+        .into_iter()
+        .map(|one| {
+            let ty = one.split_whitespace().next().unwrap_or("").to_owned();
+            let value = one.split_whitespace().last().unwrap_or("").to_owned();
+            (ty, value)
+        })
+        .collect();
+    let text = unescape(text)?;
+    if text.contains('{') || text.contains("${") {
+        return Err("asm: dialect alternatives and operand modifiers are not carried".into());
+    }
+    // Operands in LLVM's order: the constraints that are not clobbers.
+    let mut operands: Vec<(String, Option<Place>)> = Vec::new();
+    let (mut inputs, mut outputs, mut clobbers) = (Vec::<String>::new(), Vec::<String>::new(), Vec::<String>::new());
+    let mut memory = volatile;
+    let mut next_argument = 0;
+    let mut input_values: Vec<(String, String)> = Vec::new();
+    let mut named: Vec<String> = Vec::new();
+    // First pass: the registers the block names, so an address register avoids
+    // them.
+    for item in constraints.split(',') {
+        let inner = item.trim_start_matches(['=', '+', '&']);
+        if let Some(name) = inner.strip_prefix('{').and_then(|one| one.strip_suffix('}')) {
+            named.push(flat.root(&flat.register(name)?));
+        } else if let Some(name) = item.strip_prefix("~{").and_then(|one| one.strip_suffix('}')) {
+            if !["memory", "dirflag", "fpsr", "flags", "cc"].contains(&name) {
+                named.push(flat.root(&flat.register(name)?));
+            }
+        }
+    }
+    let mut pool: Vec<&str> = flat.pool().into_iter().filter(|one| !named.contains(&flat.root(one))).collect();
+    let mut direct_outputs: Vec<String> = Vec::new();
+    // The types the outputs come back as, in order: the result, or its fields.
+    let mut output_types = match ret {
+        "void" => Vec::new(),
+        aggregate if aggregate.starts_with('{') => split_top(aggregate.trim_start_matches('{').trim_end_matches('}'))
+            .into_iter()
+            .map(|one| one.trim().to_owned())
+            .collect(),
+        one => vec![one.to_owned()],
+    }
+    .into_iter();
+    for item in constraints.split(',') {
+        if let Some(name) = item.strip_prefix("~{").and_then(|one| one.strip_suffix('}')) {
+            match name {
+                "memory" => memory = true,
+                "dirflag" | "fpsr" | "flags" | "cc" => {}
+                other => clobbers.push(flat.register(other)?),
+            }
+            continue;
+        }
+        if item.contains('&') || item.starts_with('+') {
+            return Err(format!("asm: constraint {item} is not carried"));
+        }
+        if item == "=*m" || item == "*m" {
+            let argument = arguments.get(next_argument).ok_or("asm: an operand without an argument")?;
+            next_argument += 1;
+            let register = if pool.is_empty() {
+                return Err("asm: no register left for a memory operand".into());
+            } else {
+                pool.remove(0).to_owned()
+            };
+            memory = true;
+            operands.push((item.to_owned(), Some(Place::Memory(register.clone()))));
+            inputs.push(register);
+            input_values.push(argument.clone());
+        } else if let Some(name) = item.strip_prefix("={").and_then(|one| one.strip_suffix('}')) {
+            let register = flat.register(name)?;
+            let view = flat.view(&register, &output_types.next().unwrap_or_default());
+            operands.push((item.to_owned(), Some(Place::Register(register.clone(), view))));
+            outputs.push(register.clone());
+            direct_outputs.push(register);
+        } else if let Some(name) = item.strip_prefix('{').and_then(|one| one.strip_suffix('}')) {
+            let register = flat.register(name)?;
+            let argument = arguments.get(next_argument).ok_or("asm: an operand without an argument")?;
+            next_argument += 1;
+            let view = flat.view(&register, &argument.0);
+            operands.push((item.to_owned(), Some(Place::Register(register.clone(), view))));
+            inputs.push(register);
+            input_values.push(argument.clone());
+        } else if matches!(item, "r" | "q" | "x" | "=r" | "=q" | "=x") {
+            let output = item.starts_with('=');
+            let register = if item.ends_with('x') {
+                let mut vectors = flat.vector_pool();
+                vectors.retain(|one| !named.contains(&flat.root(one)));
+                vectors.retain(|one| !operands.iter().any(|(_, place)| matches!(place, Some(Place::Register(taken, _)) if taken == one)));
+                vectors.first().map(|one| (*one).to_owned())
+            } else if pool.is_empty() {
+                None
+            } else {
+                Some(pool.remove(0).to_owned())
+            }
+            .ok_or("asm: no register left for an operand")?;
+            if output {
+                let view = flat.view(&register, &output_types.next().unwrap_or_default());
+                operands.push((item.to_owned(), Some(Place::Register(register.clone(), view))));
+                outputs.push(register.clone());
+                direct_outputs.push(register);
+            } else {
+                let argument = arguments.get(next_argument).ok_or("asm: an operand without an argument")?;
+                next_argument += 1;
+                let view = flat.view(&register, &argument.0);
+                operands.push((item.to_owned(), Some(Place::Register(register.clone(), view))));
+                inputs.push(register);
+                input_values.push(argument.clone());
+            }
+        } else if !item.is_empty() && item.bytes().all(|one| one.is_ascii_digit()) {
+            let tied: usize = item.parse().map_err(|_| "asm: a tie")?;
+            let register = match operands.get(tied) {
+                Some((_, Some(Place::Register(register, _)))) if direct_outputs.contains(register) => register.clone(),
+                _ => return Err(format!("asm: constraint {item} ties to an operand that is not a fixed output")),
+            };
+            let argument = arguments.get(next_argument).ok_or("asm: an operand without an argument")?;
+            next_argument += 1;
+            let view = flat.view(&register, &argument.0);
+            operands.push((item.to_owned(), Some(Place::Register(register.clone(), view))));
+            inputs.push(register);
+            input_values.push(argument.clone());
+        } else {
+            return Err(format!("asm: constraint {item} is not carried"));
+        }
+    }
+    if next_argument != arguments.iter().filter(|one| !one.0.is_empty()).count() {
+        return Err("asm: the arguments do not match the constraints".into());
+    }
+    let mode = if flat.bits == 64 { ".code64\n" } else { ".code32\n" };
+    let mut source = String::from(if intel { ".intel_syntax noprefix\n" } else { "" });
+    source.push_str(mode);
+    let chars: Vec<char> = text.chars().collect();
+    let mut at = 0;
+    while at < chars.len() {
+        if chars[at] == '$' && chars.get(at + 1) == Some(&'$') {
+            source.push('$');
+            at += 2;
+        } else if chars[at] == '$' && chars.get(at + 1).is_some_and(char::is_ascii_digit) {
+            let mut end = at + 1;
+            while chars.get(end).is_some_and(char::is_ascii_digit) {
+                end += 1;
+            }
+            let n: usize = chars[at + 1..end].iter().collect::<String>().parse().unwrap_or(usize::MAX);
+            let place = operands
+                .get(n)
+                .and_then(|(_, place)| place.as_ref())
+                .ok_or("asm: an operand number past the constraints")?;
+            source.push_str(&match (place, intel) {
+                (Place::Memory(register), false) => format!("(%{register})"),
+                (Place::Memory(register), true) => format!("[{register}]"),
+                (Place::Register(_, view), false) => format!("%{view}"),
+                (Place::Register(_, view), true) => view.clone(),
+            });
+            at = end;
+        } else {
+            source.push(chars[at]);
+            at += 1;
+        }
+    }
+    source.push('\n');
+    // An x87 input in st(1) that the block neither clobbers nor returns stays
+    // on the stack after it (`fscale` leaves it): `fstp st(1)` pops it, as
+    // `reg-stack` pops a dead stack input.
+    if inputs.iter().any(|one| one == "st1") && !clobbers.iter().chain(&outputs).any(|one| one == "st1") {
+        source.push_str(if intel { "fstp st(1)\n" } else { "fstp %st(1)\n" });
+    }
+    let bytes = assemble(&source)?;
+    let name = llrm_mir::intrinsics::asm_name(&llrm_mir::intrinsics::AsmBlock {
+        bits: flat.bits,
+        code: bytes,
+        inputs,
+        outputs,
+        clobbers,
+        memory,
+        fixups: Vec::new(),
+    });
+    let types = input_values.iter().map(|(ty, _)| ty.as_str()).collect::<Vec<_>>().join(", ");
+    let values = input_values.iter().map(|(ty, value)| format!("{ty} {value}")).collect::<Vec<_>>().join(", ");
+    let call =
+        format!("  {}call {ret} @\"{name}\"({values})", destination.map_or(String::new(), |one| format!("{one} = ")));
+    Ok((call, format!("declare {ret} @\"{name}\"({types})")))
+}
+
 /// An asm call that names registers: `%r = call { i16, i16 } asm sideeffect
 /// "..", "={dx},={ax},{ax}"(i16 %x)`, which `#pragma aux` code comes out as.
 fn is_register_asm(line: &str) -> bool {
@@ -162,6 +550,7 @@ fn register_block(
     }
     let bytes = assemble(&format!(".intel_syntax noprefix\n.code16\n{}\n", unescape(text)?))?;
     let name = llrm_mir::intrinsics::asm_name(&llrm_mir::intrinsics::AsmBlock {
+        bits: 16,
         code: bytes,
         inputs,
         outputs,

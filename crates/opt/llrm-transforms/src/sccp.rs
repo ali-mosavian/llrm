@@ -199,8 +199,12 @@ pub fn run_sccp(
         changed.anything |= cut;
         changed.control_flow |= cut;
     }
+    // A dead block whose address is taken stays, holding an `unreachable`
+    // (SCCP.cpp:118).
     for &dead in &blocks_to_erase {
-        rewrite.delete_block(function, dead);
+        if !function.has_address_taken(dead) {
+            rewrite.delete_block(function, dead);
+        }
     }
     changed.control_flow |= !blocks_to_erase.is_empty();
     remove_ssa_copies(function, &predicates);
@@ -727,10 +731,10 @@ impl<'a> Rewrite<'a> {
         if !has_non_feasible_edges {
             return false;
         }
-        // SCCP can only determine non-feasible edges for br and switch.
+        // SCCP can only determine non-feasible edges for br, switch and indirectbr.
         debug_assert!(
-            matches!(function.instruction(term).opcode, Opcode::Br | Opcode::Switch),
-            "Terminator must be a br or switch"
+            matches!(function.instruction(term).opcode, Opcode::Br | Opcode::Switch | Opcode::IndirectBr),
+            "Terminator must be a br, switch or indirectbr"
         );
         let void = function.instruction(term).ty;
         match feasible_successors.len() {

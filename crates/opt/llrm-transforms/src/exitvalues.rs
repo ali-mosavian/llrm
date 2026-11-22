@@ -193,7 +193,9 @@ fn rewrite_loop_exit_values(
     header: BlockId,
     replace: Replace,
 ) -> usize {
-    // DEVIATE 15 is a 16-bit row: the pin's `rewriteLoopExitValues` reads no
+    // DEVIATE 15 is a 16-bit row (a pointer narrower than the widest legal
+    // integer, and no legal `i64`; wasm32 and x86-64 follow the pin): the pin's
+    // `rewriteLoopExitValues` reads no
     // optsize (IndVarSimplify.cpp, LoopUtils.cpp:1876), and the byte sweep
     // that motivated it is QCport m16 -Os. A target whose wide multiplies are
     // library calls takes it too (`Tti::sizes_exit_values`).
@@ -207,7 +209,15 @@ fn rewrite_loop_exit_values(
     // count SCEV can compute never reaches here; one it cannot is taken to run
     // 31 times, the pin's static back-edge weight (124:4), so the loop stays.
     let wide_mul_calls = outer.target().tti().is_some_and(|tti| tti.sizes_exit_values());
-    let size = if size { layout.pointer(0).bits < layout.largest_legal_integer() || wide_mul_calls } else { wide_mul_calls };
+    // The closed form widens to `i64`: where that is a legal integer (wasm32,
+    // x86-64) its multiplies are one instruction and the pin's rewrite stands
+    // (parity/loop -Os: 235 instructions run where clang's 105, for 6 B).
+    let wide_legal = layout.largest_legal_integer() >= 64;
+    let size = if size {
+        (layout.pointer(0).bits < layout.largest_legal_integer() && !wide_legal) || wide_mul_calls
+    } else {
+        wide_mul_calls
+    };
     let (se, env) = session.split(layout, &outer.globals, &outer.metadata);
     let declarations: &Declarations = &outer.globals;
     let mut rewrite_phi_set: Vec<RewritePhi> = Vec::new();

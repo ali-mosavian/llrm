@@ -609,17 +609,18 @@ fn a_switch_to_a_block_with_phis_is_refused() {
 const TABLE: &str = "@t = global [4 x i8] [i8 10, i8 20, i8 30, i8 40]\n";
 const T_DATA: &str = ".segment \"DATA\"\nt: .byte 10, 20, 30, 40\n.segment \"CODE\"\n";
 
-/// `t[i]` and `t[i] = v` with a byte index are `lda t,x` and `sta t,x`, not a
-/// 16-bit address built in a pointer pair: `pick(2)` reads 30, and `put(3, 99)`
-/// then `pick(3)` reads 99.
+/// `t[i]` and `t[i] = v` with a byte index are `lda t,x|y` and `sta t,x|y`, not
+/// a 16-bit address built in a pointer pair: `pick(2)` reads 30, and `put(3,
+/// 99)` then `pick(3)` reads 99.
 #[test]
-fn a_global_indexed_by_a_byte_is_absolute_x() {
+fn a_global_indexed_by_a_byte_is_absolute_indexed() {
     let ir = format!(
         "{TABLE}define i8 @pick(i8 %i) {{\n  %z = zext i8 %i to i16\n  %p = getelementptr [4 x i8], ptr @t, i16 0, i16 %z\n  %v = load i8, ptr %p\n  ret i8 %v\n}}\n\
 define void @put(i8 %i, i8 %v) {{\n  %z = zext i8 %i to i16\n  %p = getelementptr [4 x i8], ptr @t, i16 0, i16 %z\n  store i8 %v, ptr %p\n  ret void\n}}"
     );
     let text = compile(&ir, &["pick", "put"]);
-    assert!(text.contains("lda t,x") && text.contains("sta t,x"), "{text}");
+    let indexed = |op: &str| text.contains(&format!("{op} t,x")) || text.contains(&format!("{op} t,y"));
+    assert!(indexed("lda") && indexed("sta"), "{text}");
     assert_eq!(common::run_with("tx-pick", &format!("{}  jsr pick\n", bytes(&[2])), &format!("{text}{T_DATA}")), 30);
     let after = format!("{}  jsr put\n{}  jsr pick\n", bytes(&[3, 99]), bytes(&[3]));
     assert_eq!(common::run_with("tx-put", &after, &format!("{text}{T_DATA}")), 99);

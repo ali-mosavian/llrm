@@ -30,7 +30,7 @@ def test_the_link_names_the_objects_beside_it_and_puts_the_libraries_in_the_orde
 
 
 def test_the_toolchain_files_are_found_where_the_toolchain_is_here_not_where_the_listing_was_made():
-    """CI's qcport step stopped at `cannot open /home/alim/scratch/qctc/bcpp31/LIB/C0M.OBJ`: the Borland build's listing names the
+    """CI's qcport step stopped at `cannot open LIB/C0M.OBJ`: the Borland build's listing names the
     start-up and libraries by the development host's path."""
     lines = qcport_run.linked(LISTING, Path("/work/side"), [], Path("/runner/bcpp31/lib")).splitlines()
     assert "file '/runner/bcpp31/lib/C0M.OBJ'" in lines

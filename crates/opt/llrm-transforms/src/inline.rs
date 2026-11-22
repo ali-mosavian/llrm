@@ -40,7 +40,7 @@
 //! *Inlining a call to g*
 //!
 //! A callee can be cloned (`cloneable`: defined, `splice` carries it, it
-//! returns, it is not recursive, not `noinline`, and does not call
+//! is not recursive, not `noinline`, and does not call
 //! `setjmp`-like functions); whether it is copied at a site is
 //! `inlinecost::decide`'s, the walk's ([`crate::walk`]).
 //!
@@ -613,8 +613,9 @@ pub fn linear_recursive(
 }
 
 /// Whether `body` may be copied as a function of its own (a recursive one
-/// included): it returns, `splice` carries it, and it is not to be inlined or
-/// `setjmp`-like.
+/// included): `splice` carries it, and it is not to be inlined or
+/// `setjmp`-like. A body that never returns is copied too, as `InlineFunction`
+/// does: the code after the call goes dead.
 pub(crate) fn copyable(
     module: &Module,
     body: &Function,
@@ -623,7 +624,6 @@ pub(crate) fn copyable(
         && !llrm_mir::facts::opaque(body)
         && carries(body)
         && stated(body) != Some(Inlining::Never)
-        && body.walk().any(|(_, inst)| body.instruction(inst).opcode == Opcode::Ret)
         && !llrm_mir::memory::calls_returns_twice(module, body)
 }
 
@@ -1405,7 +1405,7 @@ pub fn expanded_all(
     Ok(sites.len())
 }
 
-/// Whether the call fits its callee, which returns, and in a recursive
+/// Whether the call fits its callee, and in a recursive
 /// function no body that allocates is copied unless it is the callee's last
 /// call; the call is told what it is by `owned_at`.
 fn fits_with(

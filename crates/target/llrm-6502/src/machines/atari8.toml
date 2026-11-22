@@ -7,4 +7,7 @@ status = "built"
 load_address = 0x2000
 imag_base = 0x82
 zero_page = 26
+# The runtime's 15 scratch bytes sit at $9C..$AA, after the registers ($82..$9B): cc65's ZP segment here is $0082 size $007E, so they
+# fit; the cfg of this row has no ZEROPAGE segment, the cells are equates.
+scratch_zero_page = 15
 soft_stack = 0x8000

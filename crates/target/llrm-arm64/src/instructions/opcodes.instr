@@ -110,6 +110,7 @@ FMUL{f}rr                binary   x/x,x         f16,f32,f64              fp_arit
 FDIV{f}rr                binary   x/x,x         f16,f32,f64              fp_div     - - - -/-                FDIV{f}rr
 FNMUL{f}rr               binary   x/x,x         f16,f32,f64              fp_arith   - - - -/-                FNMUL{f}rr
 FMAX{f}rr                binary   x/x,x         f16,f32,f64              fp_arith   - - - -/-                FMAX{f}rr
+FABD{H|S|D}rr            binary   x/x,x         -                        fp_arith   - - - -/-                FABD{16|32|64}
 FMAXNM{f}rr              binary   x/x,x         f16,f32,f64              fp_arith   - - - -/-                FMAXNM{f}rr
 FMIN{f}rr                binary   x/x,x         f16,f32,f64              fp_arith   - - - -/-                FMIN{f}rr
 FMINNM{f}rr              binary   x/x,x         f16,f32,f64              fp_arith   - - - -/-                FMINNM{f}rr
@@ -126,6 +127,7 @@ FCMP{f}rr                cmp      -/x,x         f16,f32,f64              fp_arit
 FCMP{f}rz                cmp      -/x           f16,f32,f64              fp_arith   - - - -/N,Z,C,V          FCMP{f}ri
 FCMPE{f}rr               cmp      -/x,x         f16,f32,f64              fp_arith   - - - -/N,Z,C,V          FCMPE{f}rr
 FCMPE{f}rz               cmp      -/x           f16,f32,f64              fp_arith   - - - -/N,Z,C,V          FCMPE{f}ri
+FCCMP{f}rr               cmp      -/x,x,i,i     f16,f32,f64              fp_arith   - - - N,Z,C,V/N,Z,C,V    FCCMP{f}rr
 FCVT{D|D|S|S|H|H}{S|H|D|H|D|S}r unary    x/x           -                        fp_cvt     - - - -/-                FCVT{D|D|S|S|H|H}{S|H|D|H|D|S}r
 SCVTFv1i32               unary    x/x           -                        fp_cvt     - - - -/-                SCVTFv1i32
 SCVTFv1i64               unary    x/x           -                        fp_cvt     - - - -/-                SCVTFv1i64
@@ -441,6 +443,16 @@ UMAXVv4i32v              unary    x/x           -                        fp_arit
 UMINVv16i8v              unary    x/x           -                        fp_arith   - - - -/-                UMINVv16i8v
 UMINVv8i16v              unary    x/x           -                        fp_arith   - - - -/-                UMINVv8i16v
 UMINVv4i32v              unary    x/x           -                        fp_arith   - - - -/-                UMINVv4i32v
+ADDVv8i8v               unary    x/x           -                        fp_arith   - - - -/-                ADDVv8i8v
+ADDVv4i16v               unary    x/x           -                        fp_arith   - - - -/-                ADDVv4i16v
+SMAXVv8i8v               unary    x/x           -                        fp_arith   - - - -/-                SMAXVv8i8v
+SMAXVv4i16v               unary    x/x           -                        fp_arith   - - - -/-                SMAXVv4i16v
+SMINVv8i8v               unary    x/x           -                        fp_arith   - - - -/-                SMINVv8i8v
+SMINVv4i16v               unary    x/x           -                        fp_arith   - - - -/-                SMINVv4i16v
+UMAXVv8i8v               unary    x/x           -                        fp_arith   - - - -/-                UMAXVv8i8v
+UMAXVv4i16v               unary    x/x           -                        fp_arith   - - - -/-                UMAXVv4i16v
+UMINVv8i8v               unary    x/x           -                        fp_arith   - - - -/-                UMINVv8i8v
+UMINVv4i16v               unary    x/x           -                        fp_arith   - - - -/-                UMINVv4i16v
 ADDPv2i64p               unary    x/x           -                        fp_arith   - - - -/-                ADDPv2i64p
 # ---- vector float arithmetic
 FMLAv4f32                fmuladd x/x,x,x       -                        fp_arith   - - - -/-                FMLAv4f32

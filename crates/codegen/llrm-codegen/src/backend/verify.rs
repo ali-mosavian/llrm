@@ -82,6 +82,14 @@ pub fn verify_for(
     spaces: &llrm_mir::spaces::Spaces,
 ) -> Vec<String> {
     let mut out = verify(body, in_ssa);
+    // A block whose address is taken keeps its place: the symbol that names
+    // it is defined there.
+    out.extend(
+        body.address_symbols
+            .iter()
+            .filter(|(at, _)| !body.blocks.iter().any(|block| block.at == **at))
+            .map(|(at, name)| format!("the block of {name} (at {at}) is gone")),
+    );
     if spaces.far_is_near() && spaces.segment_bytes.is_none() {
         out.extend(_flat(body));
         out.extend(_wide_addresses(body));

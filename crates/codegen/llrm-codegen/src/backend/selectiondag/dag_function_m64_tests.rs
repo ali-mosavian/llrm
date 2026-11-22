@@ -70,14 +70,15 @@ entry:
     let registers: Vec<_> = call.requires.iter().map(|(held, reg)| (held.width, *reg)).collect();
     let expected = [RegId::RDI, RegId::RSI, RegId::RDX, RegId::RCX, RegId::R8, RegId::R9].map(|r| (8, r));
     assert_eq!(registers, expected);
-    // The argument area is a multiple of 16: a call finds the stack aligned
-    // (printf crashed in `movaps` with the 8-byte area).
+    // The area is the one stack argument: the padding that aligns the call is
+    // the frame's (`call_phase`), checked at the call by
+    // `x86_64_sysv_aligned_calls`.
     let setup = insns
         .iter()
         .filter_map(|i| i.what.as_ref())
         .find(|w| w.name.as_deref() == Some("call_frame_setup"))
         .expect("the area reserved");
-    assert!(matches!(setup.sources[0], crate::model::ir::Loc::Imm(ref i) if i.value == 16), "{setup:?}");
+    assert!(matches!(setup.sources[0], crate::model::ir::Loc::Imm(ref i) if i.value == 8), "{setup:?}");
     let store = insns
         .iter()
         .filter_map(|i| i.what.as_ref())
@@ -492,7 +493,8 @@ entry:
 /// other half of the register save area when `al` says a caller used any
 /// (`VASTART_SAVE_XMM_REGS`): `test al, al; je`, then eight `movaps` of
 /// xmm0-7 at offsets 48..176. They were left unwritten, so a `double` read
-/// back by `va_arg` was whatever the area held.
+/// back by `va_arg` was whatever the area held. The function reads the list
+/// (`builder::vaarg`): an unread list gets no save.
 #[test]
 fn a_variadic_function_saves_xmm0_to_xmm7_when_al_is_not_zero() {
     use crate::model::ir::{Loc, Operation};
@@ -502,7 +504,9 @@ declare void @llvm.va_start.p0(ptr)
 define i32 @f(i32 %n, ...) {
   %ap = alloca [24 x i8], align 8
   call void @llvm.va_start.p0(ptr %ap)
-  ret i32 %n
+  %fpo = getelementptr i8, ptr %ap, i64 4
+  %fpv = load i32, ptr %fpo
+  ret i32 %fpv
 }
 ",
     )
@@ -583,7 +587,7 @@ d: ret i32 0
     let insns = done.body.insns();
     let jumps: Vec<_> = insns.iter().filter_map(|i| i.what.as_ref()).filter(|w| w.indirect).collect();
     assert_eq!(jumps.len(), 1);
-    assert!(jumps[0].table.len() >= 6 && jumps[0].table_id.is_some(), "{:?}", jumps[0]);
+    assert!(jumps[0].table.len() >= 6 && jumps[0].table_id.is_some() && !jumps[0].computed, "{:?}", jumps[0]);
 }
 
 /// A block fill or copy at m64 reached `REP_STOSB_64` / `REP_MOVSB_64` with the
@@ -1240,7 +1244,8 @@ entry:
 /// -16 and -18 (named doubles past xmm7, or mixed with integers) the same.
 /// The list starts at the first unnamed register of each kind: `gp_offset`
 /// counts the named integers, `fp_offset` is 48 plus 16 per named vector
-/// register, at most 176.
+/// register, at most 176. The function reads `fp_offset`: a list no code
+/// reads leaves it unwritten (`builder::vaarg`).
 #[test]
 fn va_start_counts_named_integer_and_vector_registers_apart() {
     use crate::model::ir::{Loc, Operation};
@@ -1251,7 +1256,9 @@ declare void @llvm.va_start.p0(ptr)
 define i32 @f({params}, ...) {{
   %ap = alloca [24 x i8], align 8
   call void @llvm.va_start.p0(ptr %ap)
-  ret i32 0
+  %fpo = getelementptr i8, ptr %ap, i64 4
+  %fpv = load i32, ptr %fpo
+  ret i32 %fpv
 }}
 "
         );
@@ -1608,4 +1615,175 @@ define zeroext i1 @same(ptr %0, ptr %1) {
         })
         .collect();
     assert!(widths.contains(&4), "one xor is a word: {widths:?}");
+}
+
+/// QB `core/vm/system.c` at -O2 and -O3 stopped with `Legalize(Unsupported {
+/// op: Truncate, ty: V2I8, what: "widen result" })`: a vector conversion whose
+/// result type widens had no `WidenVecRes_Convert`, so SLP's `<2 x i16>` to
+/// `<2 x i8>` store was refused. One function stands for each way the pin
+/// widens a conversion (and a `select` of the same lanes); the lanes one by one
+/// (`trunc`, `zext`, `sext`) is the one an SSE2 target reaches, the wider input
+/// types being illegal.
+#[test]
+fn an_m64_vector_conversion_whose_result_widens_is_selected() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"
+define void @trunc_v2(ptr %p, ptr %q) {
+  %a = load <2 x i16>, ptr %q, align 2
+  %t = trunc <2 x i16> %a to <2 x i8>
+  store <2 x i8> %t, ptr %p, align 1
+  ret void
+}
+define void @zext_v3(ptr %p, ptr %q) {
+  %a = load <3 x i16>, ptr %q, align 2
+  %t = zext <3 x i16> %a to <3 x i32>
+  store <3 x i32> %t, ptr %p, align 4
+  ret void
+}
+define void @select_v2(ptr %p, ptr %q, ptr %r) {
+  %x = load <2 x i8>, ptr %q, align 1
+  %y = load <2 x i8>, ptr %r, align 1
+  %c = icmp eq <2 x i8> %x, %y
+  %s = select <2 x i1> %c, <2 x i8> %x, <2 x i8> %y
+  store <2 x i8> %s, ptr %p, align 1
+  ret void
+}
+define void @sext_v3(ptr %p, ptr %q) {
+  %a = load <3 x i8>, ptr %q, align 1
+  %t = sext <3 x i8> %a to <3 x i16>
+  store <3 x i16> %t, ptr %p, align 2
+  ret void
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    for name in ["trunc_v2", "zext_v3", "sext_v3", "select_v2"] {
+        let done = selected(&module, name, &llrm_x86_m64::M64, cpu, &[]);
+        assert!(done.is_ok(), "{name}: {:?}", done.err());
+    }
+}
+
+/// A `<2 x i8>` phi (SLP's, QB `them_set`) had no register type: `getVectorTypeBreakdown` was only the halving, missing the
+/// pin's first step (`TypeWidenVector` to the legal `<16 x i8>`), so every
+/// narrow vector live across a block was refused "vector with no register
+/// class".
+#[test]
+fn an_m64_narrow_vector_live_across_blocks_is_carried_in_a_register() {
+    let text = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"
+define void @phi_v2(ptr %p, ptr %q, i1 %c) {
+entry:
+  %a = load <2 x i8>, ptr %q, align 1
+  br i1 %c, label %yes, label %join
+yes:
+  br label %join
+join:
+  %v = phi <2 x i8> [ %a, %entry ], [ <i8 15, i8 10>, %yes ]
+  store <2 x i8> %v, ptr %p, align 1
+  ret void
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    for name in ["phi_v2"] {
+        let done = selected(&module, name, &llrm_x86_m64::M64, cpu, &[]);
+        assert!(done.is_ok(), "{name}: {:?}", done.err());
+    }
+}
+
+/// `mul <2 x i64>` was refused ("CannotSelect(Mul)": SSE2 has no `pmullq`), so
+/// no loop of 64-bit products could be vectorized (bench tile, scroll, dot at
+/// O2 and O3). The pin's `LowerMUL` is `pmuludq` of the low halves and of each
+/// low half by the other's high half; a splat that fits 32 bits has no high
+/// half to multiply.
+#[test]
+fn an_m64_v2i64_multiply_is_pmuludq() {
+    let layout = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n";
+    let pmuludq = |body: &str| -> usize {
+        let text = format!("{layout}define void @f(ptr %p, ptr %q) {{\n{body}  store <2 x i64> %r, ptr %p, align 16\n  ret void\n}}\n");
+        let module = llrm_mir::parse::module(&text).expect("parses");
+        let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+        let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+        done.body.insns().iter().filter(|i| i.what.as_ref().is_some_and(|w| w.name.as_deref() == Some("pmuludq"))).count()
+    };
+    let load = "  %a = load <2 x i64>, ptr %p, align 16\n  %b = load <2 x i64>, ptr %q, align 16\n";
+    assert_eq!(pmuludq(&format!("{load}  %r = mul <2 x i64> %a, %b\n")), 3);
+    let by_constant = "  %a = load <2 x i64>, ptr %p, align 16\n  %r = mul <2 x i64> %a, <i64 1000003, i64 1000003>\n";
+    assert_eq!(pmuludq(by_constant), 2);
+    // A factor of `(y & 15) + 1` has no high half either: `computeKnownBits` of a vector `add` (scroll's
+    // weighted sum kept all three, 10 instructions a lane).
+    let by_small = format!(
+        "{load}  %m = and <2 x i64> %b, <i64 15, i64 15>\n  %s = add <2 x i64> %m, <i64 1, i64 1>\n  \
+         %r = mul <2 x i64> %a, %s\n"
+    );
+    assert_eq!(pmuludq(&by_small), 2);
+}
+
+/// A product of two `i16` values widened to `i64` (`(long)a[i] * b[i]`, dot's loop) took eight `pmuludq`
+/// ladders for `<8 x i64>`; gcc's `vect_recog_widen_mult_pattern` and the pin's `reduceVMULWidth` (for `i32`) do
+/// it with `pmullw` and `pmulhw` and unpack the halves.
+#[test]
+fn an_m64_vector_multiply_of_shorts_is_pmullw_and_pmulhw() {
+    let layout = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n";
+    let count = |wide: &str, store: &str| -> (usize, usize, usize) {
+        let text = format!(
+            "{layout}define void @f(ptr %p, ptr %q, ptr %r) {{\n  %a = load <8 x i16>, ptr %p, align 16\n  \
+             %b = load <8 x i16>, ptr %q, align 16\n  %x = sext <8 x i16> %a to <8 x {wide}>\n  \
+             %y = sext <8 x i16> %b to <8 x {wide}>\n  %m = mul <8 x {wide}> %x, %y\n  \
+             store <8 x {wide}> %m, ptr %r, align {store}\n  ret void\n}}\n"
+        );
+        let module = llrm_mir::parse::module(&text).expect("parses");
+        let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+        let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+        let named = |name: &str| {
+            let insns = done.body.insns();
+            insns.iter().filter(|i| i.what.as_ref().is_some_and(|w| w.name.as_deref() == Some(name))).count()
+        };
+        (named("pmuludq"), named("pmullw"), named("pmulhw"))
+    };
+    assert_eq!(count("i64", "16"), (0, 1, 1), "i64");
+    assert_eq!(count("i32", "16"), (0, 1, 1), "i32");
+}
+
+/// A splat of a scalar `i16` into `<8 x i16>` (`insertelement` and a zero-mask shuffle, matmul's `a[i][k]`) was
+/// eight word stores and a reload; `LowerBUILD_VECTOR` makes it `movd`, `pshuflw` and `pshufd`.
+#[test]
+fn an_m64_v8i16_splat_is_pshuflw_and_pshufd() {
+    let layout = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n";
+    let text = format!(
+        "{layout}define void @f(ptr %p, i16 %x) {{\n  %i = insertelement <8 x i16> poison, i16 %x, i64 0\n  \
+         %s = shufflevector <8 x i16> %i, <8 x i16> poison, <8 x i32> zeroinitializer\n  \
+         store <8 x i16> %s, ptr %p, align 16\n  ret void\n}}\n"
+    );
+    let module = llrm_mir::parse::module(&text).expect("parses");
+    let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+    let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[]).expect("selected");
+    let named = |name: &str| {
+        done.body.insns().iter().filter(|i| i.what.as_ref().is_some_and(|w| w.name.as_deref() == Some(name))).count()
+    };
+    assert_eq!((named("pshuflw"), named("pshufd")), (1, 1));
+    assert!(named("mov") <= 1, "word stores of the splat: {}", named("mov"));
+}
+
+/// A constant 4000-byte `memcpy` at -O2 was a call (gcc's table: 257..8192 bytes is `rep movsq`, and `perf`
+/// counts it as one instruction against the library's 190: scroll O2 +163 instructions a round).
+#[test]
+fn an_m64_constant_memcpy_up_to_8192_bytes_is_rep_movsq_at_o2() {
+    let layout = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128\"\n";
+    let names = |bytes: u32| -> Vec<String> {
+        let text = format!(
+            "{layout}declare void @llvm.memcpy.p0.p0.i64(ptr, ptr, i64, i1)\n\
+             define void @f(ptr align 16 %d, ptr align 16 %s) {{\n  \
+             call void @llvm.memcpy.p0.p0.i64(ptr align 16 %d, ptr align 16 %s, i64 {bytes}, i1 false)\n  ret void\n}}\n"
+        );
+        let module = llrm_mir::parse::module(&text).expect("parses");
+        let cpu = crate::backend::cpu::tuned_for(&llrm_x86_m64::M64, llrm_x86_m64::CPUS[0], false).expect("a cpu");
+        let done = selected(&module, "f", &llrm_x86_m64::M64, cpu, &[("memcpy".to_string(), 0, "memcpy".to_string())]).expect("selected");
+        let insns = done.body.insns();
+        insns.iter().filter_map(|i| i.what.as_ref().and_then(|w| w.name.as_deref()).map(str::to_string)).collect()
+    };
+    let small = names(4000);
+    assert!(small.iter().any(|n| n.starts_with("movs")), "{small:?}");
+    assert!(!small.iter().any(|n| n == "call"), "{small:?}");
+    // Past 8192 bytes gcc calls `memcpy` too.
+    let large = names(9000);
+    assert!(large.iter().any(|n| n == "call"), "{large:?}");
 }

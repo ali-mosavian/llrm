@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_shifts.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_shifts.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_shifts.rs sha256:a168f5e8b419daa9121af53303e9f6a84445e14cc19161962f774667cef5fd1b -->
+<!-- src: crates/opt/llrm-transforms/src/combine_shifts.rs sha256:a5f04dc0c6c836df4bc38e6b2d97f7e3d2f3ddf1f8a9becb1eb7153da1d9a578 -->
 
 # combine_shifts
 
@@ -27,6 +27,10 @@ constant amount is no constant sum, where LLVM replaces the undefs.
 
 DEVIATE 5: the folds that match `scmp` and `ucmp` are translated, but MIR
 has neither intrinsic yet, so no test reaches them.
+
+DEVIATE 6 (gcc `match.pd`, owner w11, exit 2026-12-05): `lshr (X nuw+ C), s` is `(X >>u s) nuw+ (C >> s)` and
+`ashr (X nsw+ C), s` is `(X >>s s) nsw+ (C >> s)` where `C` is a multiple of `2^s` (`fold_shift_of_add_constant`).
+The pin has neither; gcc's VRP-fed folds give nbody_fixed -Os `asr`, `add` where the pin has `add`, `lsr`, `add`.
 
 ## Used by
 `combine::visit`, once the shift family's slot is flipped.

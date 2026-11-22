@@ -1,5 +1,5 @@
 target datalayout = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8"
-; ModuleID = '/home/alim/work/personal/llrm/.claude/worktrees/reverent-lamport-d3fa81/tests/run/c/phi_slot_unknown_arm.c'
+; ModuleID = 'phi_slot_unknown_arm.c'
 target triple = "msp430"
 
 @table = internal global ptr @store, align 2

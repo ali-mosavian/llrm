@@ -1,5 +1,5 @@
-; ModuleID = '/home/alim/scratch/wt-m64-tip/bench/shellsort/shellsort.c'
-source_filename = "/home/alim/scratch/wt-m64-tip/bench/shellsort/shellsort.c"
+; ModuleID = 'shellsort.c'
+source_filename = "shellsort.c"
 target datalayout = "@m64-datalayout@"
 
 ; Function Attrs: nounwind optsize uwtable

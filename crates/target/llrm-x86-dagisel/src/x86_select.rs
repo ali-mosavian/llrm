@@ -23,6 +23,7 @@
 //! https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelDAGToDAG.cpp#L5513
 
 use llrm_dagisel::addr::AddrDag;
+use llrm_dagisel::dag::SDValue;
 use llrm_dagisel::generated::ids::{isd, x86isd};
 use llrm_dagisel::interp::{Outcome, Selector};
 
@@ -79,6 +80,15 @@ pub fn select_node<D: AddrDag>(
             select_llrm_node(dag, node, opcode);
             return Outcome::Selected;
         }
+        // The constrained `rint`: the same `frndint`, with the chain after the
+        // value so the machine node keeps its place among the other constrained
+        // operations (DEVIATE CFP3).
+        isd::STRICT_FRINT => {
+            let vts: Vec<_> = (0..dag.num_values(node)).map(|i| dag.value_type(SDValue::new(node, i as u8))).collect();
+            let (chain, value) = (dag.operand(node, 0), dag.operand(node, 1));
+            dag.morph_node_to(node, FRINT_OPCODE, &vts, &[value, chain]);
+            return Outcome::Selected;
+        }
         x86isd::POP_FROM_X87_REG => {
             select_pop_from_x87(dag, node);
             return Outcome::Selected;
@@ -93,7 +103,7 @@ pub fn select_node<D: AddrDag>(
                 return Outcome::Selected;
             }
         }
-        x86isd::FCMP => {
+        x86isd::FCMP | x86isd::STRICT_FCMP | x86isd::STRICT_FCMPS => {
             // `Subtarget->canUseCMOV()` ends the case ([L6391]): the table's
             // `UCOMIS*rr` and `UCOM_FpIr*` patterns select the compare. Every
             // x86-64 CPU has CMOV; the 32-bit ones in the tables do not.

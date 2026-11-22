@@ -7,12 +7,12 @@
 //! L486](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/MCTargetDesc/AArch64AddressingModes.h#L486)).
 //!
 //! DEVIATE VEC1: a `BUILD_VECTOR` that is a splat of a constant, the all-zeros
-//! and all-ones vectors, a splat of one value, or a value in lane 0 alone is
-//! lowered; a constant that is no splat is declined to the legalizer's pool
-//! load; any other (the pin builds it with `INSERT_VECTOR_ELT`) is declined
-//! and the block refused. A constant
-//! with undefined lanes is tried only as the splat of its defined lanes
-//! (`UndefBits` of `ConstantBuildVector` is not tried), and `FMOV`, the
+//! and all-ones vectors, a splat of one value, a value in lane 0 alone, or one
+//! constant in several lanes with the others inserted is lowered; a constant
+//! that is no splat is declined to the legalizer's pool load; any other (the
+//! pin builds it with `INSERT_VECTOR_ELT`) is declined and the block refused. A
+//! constant with undefined lanes is tried only as the splat of its defined
+//! lanes (`UndefBits` of `ConstantBuildVector` is not tried), and `FMOV`, the
 //! `FNEG` forms and SVE are not made. A shuffle is lowered where it is a
 //! splat of a scalar (`DUP`); `DUPLANE` and the other masks are declined.
 //! Exit: the rest of both lowerings, with reverse (`REV64`) first.
@@ -212,6 +212,36 @@ pub fn lower_build_vector(
     if one_value {
         // "Use DUP for non-constant splats."
         return Some(dag.get_node(ISD::Target(aarch64_isd::DUP), vt, &[first]));
+    }
+    // "If there was only one constant value used and for more than one lane,
+    // start by splatting that value, then replace the non-constant lanes."
+    // Skipped where the pin prefers a `DUP` of the common value and inserts
+    // (`PreferDUPAndInsert`), a branch not translated (VEC6).
+    let constant_lanes: Vec<SDValue> =
+        defined.iter().copied().filter(|&lane| lane_constant(dag, lane, lane_bits).is_some()).collect();
+    let different = defined.iter().filter(|&&lane| lane != first).count();
+    let prefer_dup_and_insert = different >= 1 && different < defined.len() / 2 && different >= constant_lanes.len();
+    if !prefer_dup_and_insert
+        && let Some(&constant) = constant_lanes.first()
+        && constant_lanes.iter().all(|&lane| lane == constant)
+    {
+        let value = lane_constant(dag, constant, lane_bits).expect("a constant lane");
+        let mask = (u128::MAX >> (128 - lane_bits)) as u64;
+        let mut vec = dag.get_splat_build_vector(vt, constant);
+        if value != 0 && value != mask {
+            let unit = (0..64 / lane_bits).fold(0u64, |all, at| all | value << (lane_bits * at));
+            vec = constant_build_vector(dag, vt, unit)
+                .unwrap_or_else(|| dag.get_node(ISD::Target(aarch64_isd::DUP), vt, &[constant]));
+        }
+        for lane in 0..ops.len() {
+            if let Some(lane_value) = lanes[lane]
+                && lane_constant(dag, lane_value, lane_bits).is_none()
+            {
+                let index = dag.get_constant(lane as u128, EVT::I64);
+                vec = dag.get_node(ISD::InsertVectorElt, vt, &[vec, lane_value, index]);
+            }
+        }
+        return Some(vec);
     }
     // "If all else fails, just use a sequence of INSERT_VECTOR_ELT": lane 0 by
     // `SCALAR_TO_VECTOR`, the others inserted. DEVIATE VEC6 (owner
@@ -563,6 +593,27 @@ pub fn dup_combine(
     Some(dag.get_node(ISD::ExtractSubvector, vt, &[wide, zero]))
 }
 
+/// `LowerEXTRACT_VECTOR_ELT`: a constant lane in range of a 128-bit vector is
+/// as it is (`UMOV`, `DUP`); a 64-bit vector is widened to 128 bits first
+/// (`WidenVector`) and the lane taken from that, in the same lane. Any other
+/// index is declined: the legalizer goes through the stack.
+pub fn lower_extract_vector_elt(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let vector = dag.operand(node, 0);
+    let vt = dag.value_type(vector);
+    dag.constant(dag.operand(node, 1)).filter(|&lane| lane < u128::from(vt.lanes()))?;
+    if vt.size_in_bits() == 128 {
+        return Some(node);
+    }
+    let wide_vt = double_lanes(vt)?;
+    let undef = dag.get_poison(vt.element());
+    let rest = dag.get_node(ISD::BuildVector, vt, &vec![undef; vt.lanes() as usize]);
+    let wide = dag.get_node(ISD::ConcatVectors, wide_vt, &[vector, rest]);
+    Some(dag.get_node(ISD::ExtractElement, dag.value_type(node), &[wide, dag.operand(node, 1)]))
+}
+
 /// `getDoubleNumVectorElementsVT`: the 128-bit vector of a 64-bit one's lanes.
 fn double_lanes(vt: EVT) -> Option<EVT> {
     Some(EVT::Simple(match vt {
@@ -813,6 +864,14 @@ fn reduction_node(
 ) -> SDValue {
     let vector = dag.operand(node, 0);
     let reduced = dag.get_node(ISD::Target(opcode), dag.value_type(vector), &[vector]);
+    // DEVIATE VEC9 (owner llrm-arm64-vec, exit 2026-11-24): the pin takes lane 0
+    // of a 64-bit result by `EXTRACT_VECTOR_ELT` of the widened vector; no 64-bit
+    // vector is extracted from here, so the register is read whole (`fmov`), the
+    // same instruction the pin ends on.
+    if dag.value_type(vector).size_in_bits() == 64 {
+        let whole = dag.get_node(ISD::BitCast, EVT::I64, &[reduced]);
+        return dag.get_any_ext_or_trunc(whole, dag.value_type(node));
+    }
     let lane = dag.get_constant(0, EVT::I64);
     dag.get_node(ISD::ExtractElement, dag.value_type(node), &[reduced, lane])
 }
@@ -835,16 +894,20 @@ fn bitwise_reduce(
     let vector_vt = dag.value_type(vector);
     let element = vector_vt.element();
     let lanes = vector_vt.lanes();
-    let wide = EVT::Simple(MVT::V2I64);
-    let quad = if vector_vt == wide { vector } else { dag.get_node(ISD::BitCast, wide, &[vector]) };
-    let lane = |dag: &mut SelectionDAG, at: u128| {
-        let index = dag.get_constant(at, EVT::I64);
-        dag.get_node(ISD::ExtractElement, EVT::I64, &[quad, index])
+    // A 64-bit vector is the one `i64` already; a 128-bit one is two, combined.
+    let (mut scalar, mut shift) = if vector_vt.size_in_bits() == 64 {
+        (dag.get_node(ISD::BitCast, EVT::I64, &[vector]), lanes / 2)
+    } else {
+        let wide = EVT::Simple(MVT::V2I64);
+        let quad = if vector_vt == wide { vector } else { dag.get_node(ISD::BitCast, wide, &[vector]) };
+        let lane = |dag: &mut SelectionDAG, at: u128| {
+            let index = dag.get_constant(at, EVT::I64);
+            dag.get_node(ISD::ExtractElement, EVT::I64, &[quad, index])
+        };
+        let (low, high) = (lane(dag, 0), lane(dag, 1));
+        // `NumElems / 2` of the 64-bit half.
+        (dag.get_node(base, EVT::I64, &[low, high]), lanes / 4)
     };
-    let (low, high) = (lane(dag, 0), lane(dag, 1));
-    let mut scalar = dag.get_node(base, EVT::I64, &[low, high]);
-    // `NumElems / 2` of the 64-bit half.
-    let mut shift = lanes / 4;
     while shift > 0 {
         let amount = dag.get_constant(u128::from(shift * element.size_in_bits()), EVT::I64);
         let shifted = dag.get_node(ISD::Srl, EVT::I64, &[scalar, amount]);
@@ -853,6 +916,27 @@ fn bitwise_reduce(
     }
     let result = dag.get_any_ext_or_trunc(scalar, element);
     Some(dag.get_any_ext_or_trunc(result, dag.value_type(node)))
+}
+
+/// A `v2i32` reduction: the register read whole, its two lanes combined as
+/// scalars.
+///
+/// DEVIATE VEC10 (owner llrm-arm64-vec, exit 2026-11-24): the pin selects
+/// `ADDPv2i32`/`SMAXPv2i32` and reads lane 0; the pairwise forms of a
+/// 64-bit vector are not here, so `fmov`, `lsr` and the scalar operation take
+/// their place (the same result, more instructions).
+fn pair_reduce(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> SDValue {
+    let base = dag.opcode(node).vec_reduce_base_opcode().expect("a reduction");
+    let whole = dag.get_node(ISD::BitCast, EVT::I64, &[dag.operand(node, 0)]);
+    let low = dag.get_node(ISD::Truncate, EVT::I32, &[whole]);
+    let amount = dag.get_constant(32, EVT::I64);
+    let shifted = dag.get_node(ISD::Srl, EVT::I64, &[whole, amount]);
+    let high = dag.get_node(ISD::Truncate, EVT::I32, &[shifted]);
+    let both = dag.get_node(base, EVT::I32, &[low, high]);
+    dag.get_any_ext_or_trunc(both, dag.value_type(node))
 }
 
 /// `AArch64TargetLowering::LowerVECREDUCE`
@@ -865,6 +949,7 @@ pub fn lower_vec_reduce(
 ) -> Option<SDValue> {
     let across_lanes = match dag.opcode(node) {
         ISD::VecReduceAnd | ISD::VecReduceOr | ISD::VecReduceXor => return bitwise_reduce(dag, node),
+        _ if dag.value_type(dag.operand(node, 0)) == EVT::Simple(MVT::V2I32) => return Some(pair_reduce(dag, node)),
         ISD::VecReduceAdd => aarch64_isd::UADDV,
         ISD::VecReduceSMax => aarch64_isd::SMAXV,
         ISD::VecReduceSMin => aarch64_isd::SMINV,
@@ -1014,11 +1099,12 @@ pub fn lower_small_vector_ext_load(
     let _ = ext;
     let (chain, ptr) = (dag.operand(node, 0), dag.operand(node, 1));
     let f32_vt = EVT::Simple(MVT::F32);
-    let scalar = dag.get_load(f32_vt, chain, ptr, llrm_codegen::backend::selectiondag::dag::MemInfo {
-        mem_vt: f32_vt,
-        ext: None,
-        ..info
-    });
+    let scalar = dag.get_load(
+        f32_vt,
+        chain,
+        ptr,
+        llrm_codegen::backend::selectiondag::dag::MemInfo { mem_vt: f32_vt, ext: None, ..info },
+    );
     let to_vector = dag.get_node(ISD::ScalarToVector, EVT::Simple(MVT::V4F32), &[scalar]);
     let source_bits = mem.element().size_in_bits();
     let mut current_bits = source_bits;
@@ -1067,5 +1153,10 @@ pub fn lower_truncate_vector_store(
     let words = dag.get_node(ISD::BitCast, EVT::Simple(MVT::V2I32), &[narrow]);
     let zero = dag.get_constant(0, EVT::I64);
     let word = dag.get_node(ISD::ExtractElement, EVT::I32, &[words, zero]);
-    Some(dag.get_store(chain, word, ptr, llrm_codegen::backend::selectiondag::dag::MemInfo { mem_vt: EVT::I32, ..info }))
+    Some(dag.get_store(
+        chain,
+        word,
+        ptr,
+        llrm_codegen::backend::selectiondag::dag::MemInfo { mem_vt: EVT::I32, ..info },
+    ))
 }

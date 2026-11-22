@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/loopunrollpass.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/loopunrollpass.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/loopunrollpass.rs sha256:51b1a23e2343d98c160998e4580cd67365df9e907478ec203ea07575cb7a1a3e -->
+<!-- src: crates/opt/llrm-transforms/src/loopunrollpass.rs sha256:abf645309079b5f7ab35d8778fdcb14f3e31d26a07d65753e61b35ecec75174a -->
 
 # loopunrollpass
 
@@ -67,4 +67,4 @@ with no `phi`, no `icmp` and no backedge.
 [`LoopFullUnrollPass::run`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Scalar/LoopUnrollPass.cpp#L1640).
 
 ## Used by
-Named by `assume_declared_is_scanned_once_per_module`, `loopunrollandjam`, `loopunrollloadcse`, `pipeline`, `x86_partial_unroll`.
+Named by `arm64_unroll_rate`, `assume_declared_is_scanned_once_per_module`, `inlinecost`, `loopunrollandjam`, `loopunrollloadcse`, `pipeline`, `target`, `unroll_analysis_prices_once`, `x86_partial_unroll`.

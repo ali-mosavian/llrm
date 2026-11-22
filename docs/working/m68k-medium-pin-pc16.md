@@ -2,7 +2,7 @@
 
 TL;DR: the pin emits `lea (d16,%pc)` with an `R_68K_PC16` relocation for data at the 68020 in the medium model; two 70016-byte arrays fail to link.
 
-Pin: LLVM 24.0.0git, `llc` of the m68k build (~/scratch/llvm-build-m68k), source d1106deb71cc.
+Pin: LLVM 24.0.0git, `llc` of the m68k build (llvm-build-m68k), source d1106deb71cc.
 
 ```
 clang --target=m68k-linux-gnu -mcpu=68020 -O0 -S -emit-llvm tests/run/c/memcpy_runtime.c -o pin.ll

@@ -60,7 +60,7 @@ class DumpPlaceTests(unittest.TestCase):
         self.assertTrue(run.on_tmpfs(Path("/tmp"), self.MOUNTS))
 
     def test_a_dump_elsewhere_is_not(self):
-        self.assertFalse(run.on_tmpfs(Path("/home/alim/loops"), self.MOUNTS))
+        self.assertFalse(run.on_tmpfs(Path("/home/someone/loops"), self.MOUNTS))
         self.assertFalse(run.on_tmpfs(Path("/tmp/disk/loops"), self.MOUNTS))
         self.assertFalse(run.on_tmpfs(Path("/tmpfoo/loops"), self.MOUNTS))
 

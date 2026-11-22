@@ -68,6 +68,7 @@
 //! LLVM `AsmPrinter::emitGlobalVariable`.
 
 use llrm_mir::datalayout::DataLayout;
+use llrm_mir::module::BlockId;
 use llrm_mir::{CastOp, ConstantExpr, ConstantId, ConstantKind, FloatKind, GlobalId, GlobalKind, Module, Type, TypeId};
 
 use crate::backend::masm::{Datum, Label, Pointer};
@@ -124,6 +125,11 @@ pub fn names(
             private_name(at, &name)
         };
         out.extend(segment_name(module, id, &symbol, spaces));
+        if let GlobalKind::Function(function) = &global.kind {
+            for block in function.address_taken_blocks() {
+                out.insert((Space::Segment, crate::backend::blockaddress::key(id, block)), crate::backend::blockaddress::symbol(id, block));
+            }
+        }
         out.insert((space(module, id), i64::from(id.0)), symbol);
     }
     Ok(out)
@@ -423,9 +429,36 @@ impl Initializer<'_> {
                     }
                 }
             },
+            ConstantKind::MetadataString(_) => return Err("a metadata string is not initializer data".to_owned()),
             ConstantKind::Global(_) | ConstantKind::Expr(_) => self.address(id)?,
         }
         Ok(())
+    }
+
+    /// The near pointer to `block`'s symbol, or, for a block that is gone, its
+    /// image (1) written at once and `None`.
+    fn block_address(
+        &mut self,
+        function: GlobalId,
+        block: BlockId,
+    ) -> Option<Datum> {
+        let bytes = self.layout.pointer(0).bits / 8;
+        let target = match &self.module.global(function).kind {
+            GlobalKind::Function(target) => target.resolve_block_address(block),
+            _ => None,
+        };
+        match target {
+            Some(block) => Some(Datum::Pointer(Pointer {
+                name: crate::backend::blockaddress::symbol(function, block),
+                offset: 0,
+                far: false,
+                bytes,
+            })),
+            None => {
+                self.bytes(&1u64.to_le_bytes()[..bytes as usize]);
+                None
+            }
+        }
     }
 
     /// A relocated address: a near or far pointer, a segment, or a far
@@ -444,6 +477,23 @@ impl Initializer<'_> {
                 let size = self.layout.store_size(&context.types, constant.ty) as usize;
                 self.bytes(&at.to_le_bytes()[..size]);
                 return Ok(());
+            }
+            // The symbol the function defines at the block (LLVM's
+            // `lowerConstant` of a `BlockAddress`); a block that is gone is 1.
+            (ConstantKind::Expr(ConstantExpr::BlockAddress { function, block }), Type::Pointer(0)) => {
+                let Some(datum) = self.block_address(*function, *block) else { return Ok(()) };
+                datum
+            }
+            // The same through the cast from the code address space that a
+            // segmented target's label value is: its offset in the segment.
+            (ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::AddrSpaceCast, value }), Type::Pointer(0))
+                if matches!(context.get(*value).kind, ConstantKind::Expr(ConstantExpr::BlockAddress { .. })) =>
+            {
+                let ConstantKind::Expr(ConstantExpr::BlockAddress { function, block }) = &context.get(*value).kind else {
+                    unreachable!("guarded")
+                };
+                let Some(datum) = self.block_address(*function, *block) else { return Ok(()) };
+                datum
             }
             (_, Type::Pointer(0)) => {
                 let (global, offset) = target(self.module, self.layout, id)?;

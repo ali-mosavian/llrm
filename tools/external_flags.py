@@ -42,6 +42,14 @@ GCC_PROGRAM_FLAGS = {"-fno-inline-functions": "-fno-inline"}
 # gcc 15 defaults to C23, clang and ours to gnu17: a program with an old-style call ("none(1, 2)" to `int none()`) is an error to gcc
 # alone (old_style_extra_args had no gcc cell). The dialect every gcc column builds the corpus in.
 GCC_DIALECT = ("-std=gnu17",)
+
+
+def gcc_source_defines(source):
+    """`-D__clang__` for a program that tests it: one branch is for clang and one for the rest, and every column must build the clang one
+    (variadic.c: gcc built the macro walk, 168 B at 68020 -Os, against the 230 B of the stdarg branch ours and clang build)."""
+    return ("-D__clang__",) if "__clang__" in source else ()
+
+
 CLANG_ONLY = ("-fno-inline=", "-fsanitize=stack", "-ffixed-point")
 
 

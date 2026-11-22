@@ -32,6 +32,7 @@ pub fn of(op: &Op) -> Facts {
                 Inst::BranchCond { .. }
                     | Inst::CondSelect { .. }
                     | Inst::CondCompare { .. }
+                    | Inst::FpCondCompare { .. }
                     | Inst::FpSelect { .. }
                     | Inst::AddCarry { .. }
             )

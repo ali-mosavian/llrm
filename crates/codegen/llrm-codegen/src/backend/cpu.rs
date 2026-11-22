@@ -89,6 +89,13 @@ use crate::support::hash::IndexMap;
 #[derive(Clone, Debug)]
 pub struct Profile {
     pub name: String,
+    /// `-mstack-alignment=N`: every call finds the stack a multiple of this
+    /// many bytes, whatever the callee holds; None where the target or the
+    /// callee's convention says (`aligned_calls`).
+    pub aligned_calls: Option<i64>,
+    /// What the target's own convention keeps at every call
+    /// (`Target::aligned_calls`); 1 where it keeps none.
+    pub arch_call_alignment: i64,
     pub issue_width: i64,
     pub in_order: bool,
     pub prefix_cost: i64,
@@ -208,6 +215,10 @@ pub struct Profile {
     /// allocation (`TailDuplicator`, `PreRegAlloc` clear); on only where its
     /// A/B has been made (`TailDuplicate` slot).
     pub post_ra_tail_duplicate: bool,
+    /// `TimingTable::skip_computed_goto_copies_at_size`.
+    pub skip_computed_goto_copies_at_size: bool,
+    /// `TimingTable::register_inline_frees_frame_at_size`.
+    pub register_inline_frees_frame_at_size: bool,
     /// `TimingTable::tail_merge_pin_faithful`.
     pub tail_merge_pin_faithful: bool,
     /// Equal literal stores share a register where bytes are strict
@@ -304,6 +315,13 @@ impl std::hash::Hash for MultiplyChains {
 }
 
 impl Profile {
+    /// The bytes every call finds the stack a multiple of:
+    /// `-mstack-alignment=`, else the target's; 1 where none.
+    #[must_use]
+    pub fn call_alignment(&self) -> i64 {
+        self.aligned_calls.unwrap_or(self.arch_call_alignment)
+    }
+
     /// What the CPU prices, as a target builds its cost model from.
     pub fn cpu_prices(&self) -> llrm_target::CpuPrices {
         llrm_target::CpuPrices {
@@ -435,9 +453,13 @@ impl Profile {
             rounds_float_spills: false,
             stable_loads: true,
             min_size: false,
+            aligned_calls: None,
+            arch_call_alignment: 1,
             speed_rate: true,
             speed_level: true,
             post_ra_tail_duplicate: false,
+            skip_computed_goto_copies_at_size: false,
+            register_inline_frees_frame_at_size: false,
             tail_merge_pin_faithful: false,
             share_literal_stores: false,
             share_literal_stores_at_speed: false,
@@ -676,6 +698,36 @@ impl Profile {
                 || words * self.cost("pop_r")? <= self.cost("alu_rr")?))
     }
 
+    /// [`Self::pops_arguments`] for a block that runs `runs` times a call of
+    /// its function (None: unknown): where the size choice is the target's
+    /// and it keeps the add in a loop, the add stays there.
+    pub fn pops_arguments_in_block(
+        &self,
+        words: i64,
+        runs: Option<f64>,
+    ) -> Result<bool, String> {
+        let hot = runs.is_some_and(|runs| runs > 1.0)
+            && self.size
+            && self.target().tti().is_some_and(|tti| tti.pops_arguments_cold_only_at_size());
+        Ok(!hot && self.pops_arguments(words)?)
+    }
+
+    /// Whether a `sub sp,unit` (one word) is a push of a dead register:
+    /// 1 byte against 3, and as quick (both a clock on the 486). Two words are
+    /// two pushes, a clock more than the `sub`: QB m32 Os -710 B but +0.14%
+    /// executed instructions (`29_craps` +5.1%), so not taken.
+    ///
+    /// DEVIATE PAD1 (owner x86-m32-b, exit 2026-11-27,
+    /// `Tuning::pushes_pad_at_size`): gcc's `i386.md` peephole2 at -Os; the
+    /// pin keeps the `sub` (clang -Oz pads a call's three words with `subl
+    /// $4,%esp`).
+    pub fn pushes_pad(
+        &self,
+        words: i64,
+    ) -> bool {
+        self.size && words == 1 && self.target().tti().is_some_and(|tti| tti.pushes_pad_at_size())
+    }
+
     /// Whether a one-slot frame is `push`/`pop` of a scratch register in place
     /// of `sub`/`add` on the stack pointer: shorter, and where size is not
     /// wanted, only if no slower.
@@ -773,6 +825,7 @@ fn _profile(
     operations.cache_line = table.cache_line.unwrap_or(0);
     operations.line_fill_clocks = table.line_fill_clocks.unwrap_or(0);
     Ok(Profile {
+        arch_call_alignment: if arch.aligned_calls() { arch.stack_alignment().max(1) } else { 1 },
         pentium_pairing: table.pairing,
         address_forms: _address_forms(arch, &operations, table.prefix, table.lcp_stall),
         operations,
@@ -788,6 +841,8 @@ fn _profile(
         share_congruent_phis: table.share_congruent_phis,
         unordered_branch_odds: table.unordered_branch_odds,
         post_ra_tail_duplicate: table.post_ra_tail_duplicate,
+        skip_computed_goto_copies_at_size: table.skip_computed_goto_copies_at_size,
+        register_inline_frees_frame_at_size: table.register_inline_frees_frame_at_size,
         tail_merge_pin_faithful: table.tail_merge_pin_faithful,
         share_literal_stores: table.share_literal_stores,
         share_literal_stores_at_speed: table.share_literal_stores_at_speed,
@@ -908,6 +963,23 @@ pub fn tuned_optimizing(
     }));
     made.insert(key, one);
     Ok(one)
+}
+
+/// `profile` with every call aligned to `bytes` (`-mstack-alignment=`): one
+/// copy per profile and alignment.
+pub fn with_aligned_calls(
+    profile: &'static Profile,
+    bytes: i64,
+) -> &'static Profile {
+    static MADE: std::sync::Mutex<Vec<(usize, i64, &'static Profile)>> = std::sync::Mutex::new(Vec::new());
+    let mut made = MADE.lock().expect("the aligned profiles are not poisoned");
+    let key = profile as *const Profile as usize;
+    if let Some(&(_, _, one)) = made.iter().find(|(at, n, _)| *at == key && *n == bytes) {
+        return one;
+    }
+    let one: &'static Profile = Box::leak(Box::new(Profile { aligned_calls: Some(bytes), ..profile.clone() }));
+    made.push((key, bytes, one));
+    one
 }
 
 /// The registers a value may be placed in: the description's `gpr` class.

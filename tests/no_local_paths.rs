@@ -58,6 +58,49 @@ fn local_paths(dir: &Path) -> Vec<String> {
     found
 }
 
+/// `file:line` of each tracked `.ll` whose `ModuleID` or `source_filename` names a path of
+/// one machine: clang writes the path it was given, and a fixture kept it (73 did, 193 lines
+/// with a home directory).
+fn local_module_names(dir: &Path) -> Vec<String> {
+    let mut found = Vec::new();
+    for file in git(dir, &["ls-files", "-z", "*.ll"]).split('\0').filter(|name| !name.is_empty()) {
+        let Ok(text) = fs::read_to_string(dir.join(file)) else { continue };
+        for (at, line) in text.lines().enumerate() {
+            if (line.starts_with("; ModuleID") || line.starts_with("source_filename")) && local_path(line).is_some() {
+                found.push(format!("{file}:{}", at + 1));
+            }
+        }
+    }
+    found
+}
+
+/// Home directories of stand-ins and CI: not a developer's own.
+const SYNTHETIC_HOMES: [&str; 3] = ["runner", "someone", "scratch"];
+
+/// `file:line` of each tracked text file, other than a markdown or `.ll` file (read above), whose
+/// line names a developer's home directory (`/home/<name>`, `/Users/<name>`).
+fn home_directories(dir: &Path) -> Vec<String> {
+    let mut found = Vec::new();
+    for file in git(dir, &["ls-files", "-z"]).split('\0').filter(|name| !name.is_empty()) {
+        if file.ends_with(".md") || file.ends_with(".ll") || file == "tests/no_local_paths.rs" {
+            continue;
+        }
+        let Ok(text) = fs::read_to_string(dir.join(file)) else { continue };
+        for (at, line) in text.lines().enumerate() {
+            for root in ["/home/", "/Users/"] {
+                let named = line.match_indices(root).any(|(start, _)| {
+                    let name: String = line[start + root.len()..].chars().take_while(|c| c.is_alphanumeric() || "_-.".contains(*c)).collect();
+                    !name.is_empty() && !SYNTHETIC_HOMES.contains(&name.as_str())
+                });
+                if named {
+                    found.push(format!("{file}:{}", at + 1));
+                }
+            }
+        }
+    }
+    found
+}
+
 /// The tracked files whose text names the assistant.
 fn assistant_files(dir: &Path) -> Vec<String> {
     git(dir, &["ls-files", "-z"])
@@ -87,6 +130,18 @@ fn assistant_commits(
 fn test_no_tracked_markdown_names_a_path_of_one_machine() {
     let found = local_paths(Path::new(ROOT));
     assert!(found.is_empty(), "link the source, or describe it without the path:\n{}", found.join("\n"));
+}
+
+#[test]
+fn test_no_ir_fixture_names_a_path_of_one_machine_as_its_module() {
+    let found = local_module_names(Path::new(ROOT));
+    assert!(found.is_empty(), "cut the ModuleID and source_filename to the file name:\n{}", found.join("\n"));
+}
+
+#[test]
+fn test_no_tracked_text_file_names_a_developers_home_directory() {
+    let found = home_directories(Path::new(ROOT));
+    assert!(found.is_empty(), "name the file, not the home directory it sat in:\n{}", found.join("\n"));
 }
 
 #[test]

@@ -57,6 +57,11 @@ pub fn moved(
     });
 }
 
+/// The headers of the scope now, after any [`moved`]; empty without one.
+pub fn current() -> Vec<BlockId> {
+    ONLY.with(|only| only.borrow().clone().unwrap_or_default())
+}
+
 /// Whether a scope narrows the loops now: a run for one loop of a loop pass
 /// manager, not for the function.
 pub fn scoped() -> bool {

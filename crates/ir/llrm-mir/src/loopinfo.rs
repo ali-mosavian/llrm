@@ -907,6 +907,16 @@ fn single<B: Copy + Eq>(
 }
 
 impl Loop<'_, BlockId> {
+    // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Analysis/LoopInfo.cpp#L416
+    /// `isSafeToClone`: no block of the loop ends in an `indirectbr`, whose
+    /// edges go by an address and are not the loop's copy's.
+    pub fn is_safe_to_clone(
+        &self,
+        function: &Function,
+    ) -> bool {
+        !self.get_blocks().iter().any(|&block| function.ends_in_indirect_branch(block))
+    }
+
     /// `contains(const InstT *)`.
     pub fn contains_instruction(
         &self,

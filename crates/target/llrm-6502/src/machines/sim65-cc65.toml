@@ -5,5 +5,11 @@ name = "sim65-cc65"
 load_address = 0x0200
 imag_base = 0x80
 zero_page = 26
+# The runtime's 15 scratch bytes (`__sa`, `__ra`, `__st`, `__sr`, `__sg`) sit in zero page at $9A..$A8, after the 26
+# registers ($80..$99); cc65's own bytes are $00..$19 and the cfg's ZEROPAGE is $0000 size $0100. Two-byte addresses where BSS takes three.
+scratch_zero_page = 15
+# 87 bytes from $A9 to $FF (after the registers and the scratch's 15) are the whole program's `s_` cells that the loops touch most
+# (`zerospill`); the rest stay BSS.
+static_zero_page = 87
 soft_stack = 0x8000
 c_symbol_prefix = "_"

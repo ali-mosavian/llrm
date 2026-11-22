@@ -291,7 +291,8 @@ fn block_duplicated(
         fold_return_into_uncond_branch(function, ret, block, pred);
         changed = true;
     }
-    if changed && function.predecessors(block).is_empty() {
+    // A block whose address is taken stays (CodeGenPrepare.cpp:3175).
+    if changed && !function.has_address_taken(block) && function.predecessors(block).is_empty() {
         for inst in function.iter_block_rev(block).collect::<Vec<_>>() {
             function.erase(inst).expect("only the block's own instructions use them");
         }

@@ -28,6 +28,16 @@
 //!
 //! # Runs
 //! Phase 1 of the machine phases, after `SharedConstants`, before `SsaSpill`.
+//!
+//! # Example
+//! At -Os on a target that enables it, a leaf block holding only a constant and a
+//! jump is removed and the constant is made in the block that branched to it.
+//!
+//! ```text
+//! p:  cmp x, 7 ; je l    l: v := mov 3 ; jmp j   j: r = phi [l: v]
+//!   becomes
+//! p:  v := mov 3 ; cmp x, 7 ; je j               j: r = phi [p: v]
+//! ```
 
 use std::sync::Arc;
 

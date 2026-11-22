@@ -2891,6 +2891,18 @@ def preload_tools(names: tuple[str, ...] = TOOL_MODULES) -> None:
         importlib.import_module(name)
 
 
+def static_refusals(argv: list[str], cwd: Path = ROOT) -> int:
+    """`static-refusals HEAD [--base B] [--title T] [--body-file F]`: what `refusals` says of a head, printed one per line; 1 if any. The landing paths that do not run `precheck`
+    (the lane scripts landed #10303 and #10320 with fixtures naming the assistant) call this one: no gh, no build, seconds."""
+    head, opts = argv[0], argv[1:]
+    value = lambda flag, default="": opts[opts.index(flag) + 1] if flag in opts else default  # noqa: E731
+    body = Path(value("--body-file")).read_text() if "--body-file" in opts else ""
+    why = refusals(head, body, base=value("--base", BASE), cwd=cwd, title=value("--title"))
+    for line in why:
+        print(f"REFUSED: {line}")
+    return 1 if why else 0
+
+
 def main() -> int:
     """The landing commands run at the landing's build priority (`buildslot.landing`); the others (audit, unlogged) start no cargo."""
     preload_tools()
@@ -2923,6 +2935,8 @@ def dispatch() -> int:
         for sha in missing:
             print(f"UNLOGGED {sha} {git('log', '-1', '--format=%an: %s', sha).strip()[:90]}")
         return 1 if missing else 0
+    if len(sys.argv) >= 3 and sys.argv[1] == "static-refusals":
+        return static_refusals(sys.argv[2:])
     if len(sys.argv) >= 3 and sys.argv[1] == "precheck":
         line = precheck(sys.argv[2], head_failed=head_failures_cached())
         print(line)

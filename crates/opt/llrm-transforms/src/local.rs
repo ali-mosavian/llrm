@@ -51,13 +51,12 @@
 //!     `LoopInfo`, `MemorySSAUpdater` and `MemoryDependenceResults`: MIR passes
 //!     hold none of them, the caller rebuilds. The debug-only `IncomingValues`
 //!     goes with them.
-//! 16. `MergeBlockIntoPredecessor`'s `hasAddressTaken` (MIR has no
-//!     `blockaddress`), `HasLoopOrEntryConvergenceToken` (no convergence
-//!     tokens), `PTI->mayHaveSideEffects` (after `isSpecialTerminator` a
-//!     terminator is a `ret`, `br`, `switch` or `unreachable`, which never
-//!     writes, throws or fails to return), `takeName` (a `Function` has no
-//!     block-name setter), and the `unreachable` left in the merged block (the
-//!     block is erased at once).
+//! 16. `MergeBlockIntoPredecessor`'s `HasLoopOrEntryConvergenceToken` (no
+//!     convergence tokens), `PTI->mayHaveSideEffects` (after
+//!     `isSpecialTerminator` a terminator is a `ret`, `br`, `switch` or
+//!     `unreachable`, which never writes, throws or fails to return),
+//!     `takeName` (a `Function` has no block-name setter), and the
+//!     `unreachable` left in the merged block (the block is erased at once).
 //! 17. `PtrToAddrInst`: MIR has no `ptrtoaddr`. `getUnderlyingObjectAggressive`
 //!     is `valuetracking::underlying`, which does not look through a `select`,
 //!     a `phi` or a call that returns an argument: two pointers that differ
@@ -808,6 +807,10 @@ pub fn merge_block_into_predecessor(
     bb: BlockId,
     predecessor_with_two_successors: bool,
 ) -> bool {
+    // An address-taken block keeps its label (BasicBlockUtils.cpp:242).
+    if function.has_address_taken(bb) {
+        return false;
+    }
     // Can't merge if there are multiple predecessors, or no predecessors.
     let predecessors = function.predecessors(bb);
     if predecessors.len() != 1 {

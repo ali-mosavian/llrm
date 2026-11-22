@@ -1,10 +1,11 @@
 //! A pair stepped by two or three: `inc rr` / `dec rr` that many times.
 //!
 //! # How it works
-//! `ld rr, #k` and `add hl, rr` with k in 2..=3 or -3..=-2 become one
-//! instruction on `hl` alone, `INC16xN` / `DEC16xN`, when nothing reads the
-//! carry the add set. The printer made the same chain from the pair (the
-//! `add_small_constant` of [`crate::expand`]) but the allocator had been
+//! `ld rr, #k` and `add hl, rr` with k in 2..=3 or -3..=-2 (the constant in
+//! `hl` and the other operand in the register, as the add is commutative)
+//! become one instruction on `hl` alone, `INC16xN` / `DEC16xN`, when nothing
+//! reads the carry the add set. The printer made the same chain from the pair
+//! (the `add_small_constant` of [`crate::expand`]) but the allocator had been
 //! charged a pair for the constant: fill_nest's loop constant was made again
 //! on every trip because that pair took its register.
 //!
@@ -61,7 +62,10 @@ pub fn step_by_small_constants(function: &mut MFunction) -> bool {
     }
     let mut changed = false;
     let mut gone: Vec<(usize, usize)> = Vec::new();
-    for block in &mut function.blocks {
+    // a constant made once and read once
+    let constant = |v: &u32| defs.get(v) == Some(&1) && uses.get(v) == Some(&1);
+    for block_at in 0..function.blocks.len() {
+        let block = &mut function.blocks[block_at];
         for at in 0..block.insts.len() {
             let inst = &block.insts[at];
             let [Operand::Def(Reg::Phys(d)), Operand::Use(Reg::Phys(a)), Operand::Use(Reg::Virt(v))] =
@@ -69,16 +73,40 @@ pub fn step_by_small_constants(function: &mut MFunction) -> bool {
             else {
                 continue;
             };
-            if inst.kind != Kind::Op("ADD16")
-                || *d != reg::HL
-                || *a != reg::HL
-                || defs.get(v) != Some(&1)
-                || uses.get(v) != Some(&1)
-            {
+            if inst.kind != Kind::Op("ADD16") || *d != reg::HL || *a != reg::HL {
                 continue;
             }
-            let Some(&(b, n, value)) = made.get(v) else { continue };
+            // the constant is the added register, or (the add is commutative)
+            // the one copied into hl just before it
+            let (by, copied) = if constant(v) && made.contains_key(v) {
+                (*v, None)
+            } else if at > 0
+                && let (Kind::Copy, [Operand::Def(Reg::Phys(to)), Operand::Use(Reg::Virt(c))]) =
+                    (block.insts[at - 1].kind, &block.insts[at - 1].operands[..])
+                && *to == reg::HL
+                && constant(c)
+                && made.contains_key(c)
+            {
+                (*c, Some(*v))
+            } else {
+                continue;
+            };
+            let Some(&(b, n, value)) = made.get(&by) else { continue };
             let Some(name) = step_name(value) else { continue };
+            // The operand is moved into `hl` and stepped there: right where
+            // nothing reads it after (the copy joins the register `hl` holds
+            // it in). One read after the add (a store through it, a compare)
+            // keeps it in its own pair, and the printer steps the sum's pair
+            // where it is, one `inc` a step (loop_fusion -O1 `same`, +3 B).
+            // The operand is moved into `hl` and stepped there: right where the
+            // sum is read in the block (a call's argument). A sum only
+            // copied on, out of the block, is a pair stepped (an induction
+            // variable): the printer steps that pair where it is, one `inc`
+            // a step, where this is two exchanges or a copy back
+            // (loop_fusion -O1 `same`, +3 B).
+            if copied.is_some() && sum_leaves_the_block(&block.insts[at + 1..]) {
+                continue;
+            }
             // the carry is dead where the block sets the flags again before any
             // reader; a block that ends first leaves it to the printer's check
             let dead = block.insts[at + 1..]
@@ -94,6 +122,10 @@ pub fn step_by_small_constants(function: &mut MFunction) -> bool {
             step.sets_flags = false;
             step.commutable = false;
             block.insts[at] = step;
+            // the other operand goes into hl in place of the constant
+            if let Some(other) = copied {
+                block.insts[at - 1].operands[1] = Operand::Use(Reg::Virt(other));
+            }
             gone.push((b, n));
             changed = true;
         }
@@ -103,4 +135,29 @@ pub fn step_by_small_constants(function: &mut MFunction) -> bool {
         function.blocks[b].insts.remove(n);
     }
     changed
+}
+
+/// Whether the register `hl`'s sum is copied into (the first copy of `after`)
+/// is only copied on, no instruction of the block reads it.
+fn sum_leaves_the_block(after: &[Inst]) -> bool {
+    let Some(first) = after.first() else { return false };
+    let (Kind::Copy, [Operand::Def(Reg::Virt(sum)), Operand::Use(Reg::Phys(from))]) = (first.kind, &first.operands[..])
+    else {
+        return false;
+    };
+    if *from != reg::HL {
+        return false;
+    }
+    let mut sum = *sum;
+    for inst in &after[1..] {
+        let reads = inst.operands.iter().any(|operand| matches!(operand, Operand::Use(Reg::Virt(one)) if *one == sum));
+        if !reads {
+            continue;
+        }
+        match (inst.kind, &inst.operands[..]) {
+            (Kind::Copy, [Operand::Def(Reg::Virt(next)), Operand::Use(Reg::Virt(_))]) => sum = *next,
+            _ => return false,
+        }
+    }
+    true
 }

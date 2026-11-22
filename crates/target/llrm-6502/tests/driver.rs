@@ -146,6 +146,34 @@ fn a_pointer_a_call_returns_is_loaded_through() {
     assert_eq!(exit_code_of(&text, "g"), 42, "{text}");
 }
 
+/// A table of `inttoptr (i16 n)` (the numbers an expanded `indirectbr` gives
+/// block addresses) was refused: "a global initializer that is not an integer,
+/// pointer, array or struct", so computed goto did not compile.
+#[test]
+fn a_table_of_inttoptr_numbers_is_emitted_as_the_numbers() {
+    let ir = module(
+        "@t = constant [2 x ptr] [ptr inttoptr (i16 7 to ptr), ptr inttoptr (i16 9 to ptr)]\n\
+         define i8 @g() {\n  %p = getelementptr ptr, ptr @t, i16 1\n  %v = load ptr, ptr %p\n  \
+         %n = ptrtoint ptr %v to i16\n  %b = trunc i16 %n to i8\n  ret i8 %b\n}",
+    );
+    let text = assembly(&ir, &Request::new(Level::O1)).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(exit_code_of(&text, "g"), 9, "{text}");
+}
+
+/// A computed goto through a table of block addresses was refused on the
+/// 6502 (no jump through a register). `IndirectBrExpand` turns it into a
+/// switch, so the program jumps where the table says.
+#[test]
+fn an_indirectbr_through_a_table_of_block_addresses_jumps_where_the_table_says() {
+    let ir = module(
+        "@t = constant [2 x ptr] [ptr blockaddress(@g, %a), ptr blockaddress(@g, %b)]\n\
+         define i8 @g() {\nentry:\n  %p = getelementptr ptr, ptr @t, i16 1\n  %v = load ptr, ptr %p\n  \
+         indirectbr ptr %v, [label %a, label %b]\na:\n  ret i8 1\nb:\n  ret i8 2\n}",
+    );
+    let text = assembly(&ir, &Request::new(Level::O1)).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(exit_code_of(&text, "g"), 2, "{text}");
+}
+
 /// `LLRM_6502_ZERO_PAGE` sets the platform's zero page, whichever way the
 /// platform is named. It was read before the row's own `--platform=sim65`,
 /// which put the 26 back: a sweep of 16..26 read flat, 4362 bytes at every
@@ -2489,9 +2517,29 @@ fn a_callee_emptied_by_a_fold_in_its_caller_is_inlined_by_the_second_walk() {
     request.passes.push("-fno-second-inline".to_owned());
     let once = assembly(ir, &request).unwrap();
     let twice = assembly(ir, &Request::new(Level::Os)).unwrap();
-    assert!(once.contains("jsr bar"), "the first walk alone no longer leaves the call:\n{once}");
+    // -Os sinks common code (`sink_common_at_size`): `bar` is smaller before the
+    // fold, and the first walk may already take it; the second walk never leaves it
     assert!(!twice.contains("jsr bar"), "the callee is still called:\n{twice}");
     let size = |text: &str| text.lines().filter(|line| line.starts_with("  ")).count();
+    assert!(size(&twice) <= size(&once), "{} instructions against {}", size(&twice), size(&once));
+}
+
+/// second_walk_calls.ll: `main` calls `foo` twice and reads `sum` after each;
+/// at -Os the first walk leaves a `jsr bar` at every site (343 instructions),
+/// and the folds that follow leave nothing for the second walk's sites to do
+/// but go (80). With `-fno-second-inline` they stay: the byvalue_struct_address
+/// test above lost its premise when -Os began to sink common code.
+#[test]
+fn the_second_walk_drops_the_calls_the_first_walk_left() {
+    let ir = include_str!("data/second_walk_calls.ll");
+    let mut request = Request::new(Level::Os);
+    request.passes.push("-fno-second-inline".to_owned());
+    let once = assembly(ir, &request).unwrap();
+    let twice = assembly(ir, &Request::new(Level::Os)).unwrap();
+    let calls = |text: &str| text.lines().filter(|line| line.trim() == "jsr bar").count();
+    let size = |text: &str| text.lines().filter(|line| line.starts_with("  ")).count();
+    assert!(calls(&once) >= 3, "premise: the first walk leaves the calls:\n{once}");
+    assert!(calls(&twice) <= 1, "{} calls of bar remain:\n{twice}", calls(&twice));
     assert!(size(&twice) * 2 < size(&once), "{} instructions against {}", size(&twice), size(&once));
 }
 
@@ -2702,12 +2750,13 @@ fn indirect_call_return_labels_are_unique_across_functions() {
     assert_ne!(labels[0], labels[1], "{text}");
 }
 
-/// LSR left every 16- and 32-bit induction variable of the 6502 alone (its
-/// datalayout is `n8`, so the pin's `IVUsers` found none): `x[i] = n * i`
-/// called `__mulsi3` on every trip, 56k of shrink_wrapped_frame's 64k clocks.
-/// At speed the 32-bit product is a running sum.
+/// A 32-bit product of the counter is not called per trip at speed. #7343 meant a
+/// running sum (LSR on the addrec `{0,+,n}`); measured on release/next
+/// 03aa3b55d3, a loop that keeps the products still calls `__mulsi3_fast` per
+/// trip, so that premise was already dead (row 6502-LSR-IV-PRODUCT). This
+/// fixture folds to `n * 120`, which passes by expansion or by one tail `jmp`.
 #[test]
-fn a_32_bit_product_of_the_counter_is_a_running_sum_at_speed() {
+fn a_32_bit_product_of_the_counter_makes_no_call_per_trip_at_speed() {
     let ir = module(
         "define i32 @f(i32 %n) {
 entry:
@@ -2737,7 +2786,10 @@ exit:
 }",
     );
     let fast = assembly(&ir, &Request::new(Level::O2)).unwrap();
-    assert!(!fast.contains("__mulsi3"), "{fast}");
+    // The two loops fold to `n * 120`: expanded inline, or one tail `jmp` of the
+    // byte entry where its bytes are fewer. Either way no call of the multiply
+    // is made per trip (`jsr`).
+    assert!(!fast.contains("jsr __mulsi3"), "{fast}");
 }
 
 /// A `byval` argument of 40 bytes is copied by a call of `memcpy` the builder
@@ -2910,9 +2962,10 @@ fn a_local_past_255_bytes_from_rc0_is_still_reached() {
 /// module links it only where its division sites run 3 times (`hotdivision`):
 /// in a loop, or in a function called from one. Elsewhere the routine with the
 /// small wide path (the compact one is 3195 clocks slower on one call); -Os
-/// never has the wide one, and the small one where the module's share of clocks
-/// pays for its bytes (`a_module_takes_the_speed_divide_...`) or where
-/// it is smaller than the compact routine, as the signed pair is.
+/// has the wide one too where the divisions run often and the module's share of
+/// clocks pays for its bytes (`a_module_takes_the_speed_divide_...`), the small
+/// one where it pays less, or where it is smaller than the compact routine, as
+/// the signed pair is.
 #[test]
 fn a_long_remainder_calls_the_fast_routine_only_where_it_is_hot() {
     let cold = module("define i32 @f(i32 %a, i32 %b) {\n  %r = srem i32 %a, %b\n  ret i32 %r\n}");
@@ -2928,12 +2981,12 @@ fn a_long_remainder_calls_the_fast_routine_only_where_it_is_hot() {
          %c = icmp ult i32 %j, %n\n  br i1 %c, label %l, label %x\nx:\n  ret i32 %r\n}",
     );
     let text = assembly(&cold, &Request::new(Level::O2)).unwrap();
-    assert!(text.contains("__modsi3_fast_small\n") && !text.contains("__modsi3_fast\n"), "a cold site:\n{text}");
+    assert!(text.contains("__modsi3_fast_lean\n") && !text.contains("__modsi3_fast\n"), "a cold site:\n{text}");
     for (ir, what) in [(&looped, "a loop"), (&from_a_loop, "a function called from a loop")] {
         let text = assembly(ir, &Request::new(Level::O2)).unwrap();
         assert!(text.contains("__modsi3_fast\n") && !text.contains("_small"), "{what}:\n{text}");
         let small = assembly(ir, &Request::new(Level::Os)).unwrap();
-        assert!(small.contains("__modsi3_fast_small\n"), "{what} at -Os:\n{small}");
+        assert!(small.contains("__modsi3_fast\n") && !small.contains("_small"), "{what} at -Os:\n{small}");
     }
 }
 
@@ -2989,10 +3042,17 @@ fn a_carry_branch_on_the_old_counter_is_compared_before_the_step() {
     let ir = counter_loop("samesign ult i16 %i, 63");
     for level in [Level::Os, Level::O2] {
         let text = assembly(&ir, &Request::new(level)).unwrap();
-        // `txa; cmp #63` is `cpx #63` where `a` is dead after it
-        let (compare, step) = (text.find("cmp #63").or(text.find("cpx #63")), text.find("inx"));
-        assert!(compare.is_some() && step.is_some(), "no compare or no step:\n{text}");
-        assert!(compare < step, "the compare comes after the step:\n{text}");
+        // `txa; cmp #63` is `cpx #63` where `a` is dead after it. The exit may instead test the new
+        // counter for equality after the step (`iny; cpy #64; bne`, LFTR): `inx`/`iny` keep carry and
+        // no carry branch is left to read it.
+        let compare = text.find("cmp #63").or(text.find("cpx #63")).or(text.find("cpy #63"));
+        let step = text.find("inx").or(text.find("iny"));
+        assert!(step.is_some(), "no step:\n{text}");
+        let equality = ["cmp #64\n  bne", "cpx #64\n  bne", "cpy #64\n  bne"].iter().any(|form| text.contains(form));
+        assert!(compare.is_some() || equality, "no compare:\n{text}");
+        if let Some(compare) = compare {
+            assert!(Some(compare) < step, "the compare comes after the step:\n{text}");
+        }
         assert!(!text.contains("stx rc") && !text.contains("sty rc"), "a copy of the counter:\n{text}");
         assert_eq!(exit_code_of(&text, "t"), 63, "{text}");
     }
@@ -3210,8 +3270,10 @@ fn a_product_by_a_byte_calls_the_byte_entry() {
     }
 }
 
-/// -Os is strict bytes: a word divide links the compact routine in every
-/// module. The aligned one (16 B larger, quicker for a small quotient) made
+/// -Os is strict bytes: a word divide links the compact routine in a module
+/// whose divides do not save twice their byte share (`[share.size]
+/// division16`; at 1 compound_assignment_types went 892 -> 1,044 B, over its
+/// bar). The aligned one (16 B larger, quicker for a small quotient) made
 /// k_tosudivax 82 B, a bare `jmp`, against sdcc's 64 and the compact build's
 /// 58, and digits 151 B against 129.
 #[test]
@@ -3290,7 +3352,7 @@ fn a_module_takes_the_speed_divide_where_the_clocks_it_saves_are_its_own() {
     };
     let in_loop = divides("%r1 = urem i32 %x, %b\n  %r2 = urem i32 %r1, %a", "%r3 = add i32 %t3, 1");
     let text = assembly(&in_loop, &Request::new(Level::Os)).unwrap();
-    assert!(text.contains("__umodsi3_fast_small"), "{text}");
+    assert!(text.contains("__umodsi3_fast\n") && !text.contains("_small"), "{text}");
     let work = "store volatile i32 %x, ptr @g0\n  ".repeat(12);
     let beside = divides(
         &format!("{work}%r2 = shl i32 %x, 3"),
@@ -3298,4 +3360,40 @@ fn a_module_takes_the_speed_divide_where_the_clocks_it_saves_are_its_own() {
     );
     let text = assembly(&beside, &Request::new(Level::Os)).unwrap();
     assert!(text.contains("__umodsi3\n") && !text.contains("_fast"), "{text}");
+}
+
+/// Bytes first at -Os: the pin admits the full unroll of a four-trip loop where
+/// the unrolled cost after folding (7) is under the loop's size plus one (10),
+/// a count of IR instructions that gives the loop's counter and exit test to
+/// the copies. `sum4` unrolled is 20 B and the loop 18 B, so `-Os` was 2 B
+/// larger than `-O2`, which keeps the loop (#9928). The unroll is priced on the
+/// backend's bytes at -Os as at -O2.
+#[test]
+fn a_four_trip_loop_is_no_larger_at_os_than_at_o2() {
+    let ir = module(
+        r#"@buf = global [4 x i8] [i8 1, i8 2, i8 3, i8 4]
+define i8 @sum4() {
+entry:
+  br label %loop
+loop:
+  %i = phi i16 [ 0, %entry ], [ %next, %loop ]
+  %s = phi i8 [ 0, %entry ], [ %sum, %loop ]
+  %p = getelementptr inbounds i8, ptr @buf, i16 %i
+  %v = load volatile i8, ptr %p
+  %sum = add i8 %s, %v
+  %next = add nuw nsw i16 %i, 1
+  %done = icmp eq i16 %next, 4
+  br i1 %done, label %out, label %loop
+out:
+  ret i8 %sum
+}"#,
+    );
+    let bytes = |level| {
+        let request = Request::new(level);
+        let text = assembly(&ir, &request).unwrap_or_else(|e| panic!("{e}"));
+        (llrm_6502::timing::estimate(request.cpu, &text).unwrap().bytes, text)
+    };
+    let ((o2, _), (os, text)) = (bytes(Level::O2), bytes(Level::Os));
+    assert!(os <= o2, "-Os is {os} B, -O2 {o2} B:\n{text}");
+    assert_eq!(exit_code_of(&text, "sum4"), 10, "{text}");
 }

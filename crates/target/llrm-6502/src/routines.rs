@@ -44,13 +44,39 @@ pub fn compact_variant(name: &str) -> Option<&'static str> {
 /// The share of its clocks a module must save, in percent, for each percent of
 /// its bytes a speed routine adds at size (`[share] percent_per_percent`).
 pub fn share_percent() -> u64 {
-    let doc: toml::Table = ROUTINES.parse().expect("routines.toml is well formed");
-    let table = doc.get("share").and_then(|t| t.as_table()).expect("a [share] table");
-    table
+    share_table()
         .get("percent_per_percent")
         .and_then(|v| v.as_integer())
         .and_then(|v| u64::try_from(v).ok())
         .expect("share.percent_per_percent is a count")
+}
+
+/// The same for `routine` at the size levels (`[share.size]`), where a routine
+/// has a rate of its own; the general one otherwise.
+pub fn size_share_percent(routine: &str) -> u64 {
+    share_table()
+        .get("size")
+        .and_then(|t| t.as_table())
+        .and_then(|t| t.get(routine))
+        .and_then(|v| v.as_integer())
+        .and_then(|v| u64::try_from(v).ok())
+        .unwrap_or_else(share_percent)
+}
+
+/// The same for `routine` at the speed levels (`[share.speed]`).
+pub fn speed_share_percent(routine: &str) -> u64 {
+    share_table()
+        .get("speed")
+        .and_then(|t| t.as_table())
+        .and_then(|t| t.get(routine))
+        .and_then(|v| v.as_integer())
+        .and_then(|v| u64::try_from(v).ok())
+        .unwrap_or_else(share_percent)
+}
+
+fn share_table() -> toml::Table {
+    let doc: toml::Table = ROUTINES.parse().expect("routines.toml is well formed");
+    doc.get("share").and_then(|t| t.as_table()).cloned().expect("a [share] table")
 }
 
 /// Whether a call of the runtime routine `name` reads and writes none of the

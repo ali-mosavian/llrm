@@ -42,13 +42,24 @@ const NAMED: &[(&str, &str)] = &[
     // A dialect's flags are a table the instruction reader and the rule
     // generator map over by the names rows and rules give.
     ("dialect.toml", "flags.*"),
+    // A dialect's letters are a table keyed by the placeholder an opcode file
+    // writes (`{g}`, `{zn}`): the reader looks each up by that name.
+    ("dialect.toml", "letters.*"),
     // An instruction-set catalog is a table keyed by feature name.
     ("features.toml", "*"),
+    // A marker only the data-layout tests read: a target with it states no
+    // `S` (`tools/test_datalayout_stack.py`, which `readers` leaves out).
+    ("datalayout.toml", "stack_alignment_unstated"),
 ];
 
 /// A tune file names its instruction forms: `Timings::parse_tuned` looks each
 /// one up by the form a target's `timings.times` row names.
-const TUNE_NAMED: &[&str] = &["clocks.*", "latency.*"];
+///
+/// A tune file's `[schedule.resources]` are keyed by the resource, its
+/// `[schedule.forms.*]` rows by the form, and a row's keys are a resource name
+/// or `uops`: `Schedule::parse` takes each by the name the file gives.
+const TUNE_NAMED: &[&str] =
+    &["clocks.*", "latency.*", "schedule.resources.*", "schedule.forms.*", "schedule.forms.*.*"];
 
 /// The files git tracks under `directories` of `root`: what the repository
 /// holds, not what a build, a virtualenv or an editor left beside it (a

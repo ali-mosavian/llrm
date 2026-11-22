@@ -23,6 +23,15 @@
 //!
 //! # Used by
 //! [`crate::loopunrollpass::unroll_loops`], where the loop is still a loop.
+//!
+//! # Example
+//! After a partial unroll, a load of an address already loaded, with no write
+//! between, takes the earlier load's value.
+//!
+//! ```text
+//! %a = load i32, ptr %p
+//! %b = load i32, ptr %p      ; uses of %b become uses of %a, the load is deleted
+//! ```
 
 use llrm_analysis::memoryssa::Accesses;
 use llrm_analysis::mssa::view::Translated;

@@ -27,9 +27,11 @@
 //! ```
 //!
 //! DEVIATE (J1..J15):
-//! - J1. No `indirectbr` or `blockaddress` in MIR: `processBlock`'s
-//!   `IndirectBrInst` arm, `hasAddressTakenAndUsed` and the block-address
-//!   preference of `getKnownConstant` are absent.
+//! - J1. `processBlock`'s `IndirectBrInst` arm and the block-address preference
+//!   of `getKnownConstant` are absent: no thread goes through an `indirectbr`
+//!   (`SimplifyCFG` folds one on a known address). A predecessor that ends in
+//!   one is skipped where LLVM skips it, and `hasAddressTakenAndUsed` is
+//!   `has_address_taken` (it keeps a block whose constant is dead).
 //! - J2. No guards: `processGuards` and `threadGuard` are skipped. A guard call
 //!   needs exactly one `"deopt"` operand bundle (`opt`'s verifier rejects it
 //!   without), MIR has no operand bundles, and no front end emits the
@@ -1645,6 +1647,11 @@ impl State<'_, '_> {
                     multiple_val = true;
                 }
             }
+            // If the predecessor ends with an indirect goto, we can't change
+            // its destination.
+            if self.function().ends_in_indirect_branch(pred) {
+                continue;
+            }
             pred_to_dest.push((pred, dest_bb));
         }
 
@@ -2165,7 +2172,12 @@ impl State<'_, '_> {
         let Some(single_pred) = self.single_predecessor(bb) else { return false };
         let term = self.function().terminator(single_pred).expect("a terminator");
         let special = matches!(*self.opcode(term), Opcode::Invoke(_) | Opcode::Resume);
-        if special || self.successor_edges(single_pred).len() != 1 || single_pred == bb {
+        // `hasAddressTakenAndUsed`: a `blockaddress` of `bb` keeps its label.
+        if special
+            || self.successor_edges(single_pred).len() != 1
+            || single_pred == bb
+            || self.function().has_address_taken(bb)
+        {
             return false;
         }
         // MergeBasicBlockIntoOnlyPred may delete SinglePred, we need to avoid
@@ -2451,6 +2463,10 @@ impl State<'_, '_> {
         let (mut zero_count, mut one_count) = (0, 0);
         let (mut zero_pred, mut one_pred) = (None, None);
         for pred in self.pred_edges(pred_bb) {
+            // If PredPred ends with IndirectBrInst, we can't handle it.
+            if self.function().ends_in_indirect_branch(pred) {
+                continue;
+            }
             let mut visited = HashSet::default();
             let Some(known) = self.evaluate_on_predecessor_edge(bb, pred, cond, &mut visited) else { continue };
             match self.int_bits(known) {
@@ -2691,6 +2707,11 @@ impl State<'_, '_> {
         }
 
         // Try to duplicate BB into PredBB.
+        // If any of predecessors end with an indirect goto, we can't change
+        // its destination.
+        if blocks_to_fold_into.iter().any(|&pred| self.function().ends_in_indirect_branch(pred)) {
+            return false;
+        }
         self.duplicate_cond_branch_on_phi_into_pred(bb, &blocks_to_fold_into)
     }
 

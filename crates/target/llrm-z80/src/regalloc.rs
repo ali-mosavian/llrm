@@ -134,6 +134,13 @@ impl Target for Z80Registers {
         matches!(inst.kind, Kind::Op("PACK")).then(|| (0, vec![(1, 0, 1), (2, 1, 1)]))
     }
 
+    /// DEVIATE HC1 (owner z80, exit 2026-12-15, as m68k's): the pin hoists a successor's identical head only. A
+    /// constant both successors of a guard load, one behind a spill, stays twice: queens `place` -Os 362 B against
+    /// 354 B with the guard's word test, its exit block losing the shared epilogue.
+    fn hoist_window() -> usize {
+        4
+    }
+
     // DEVIATE 3b-1 (owner greedy-subreg, exit 2026-11-12): both off until the
     // split editor copies by lane. Lowering alone: +505 lines at -O2; with
     // joins `mul_constants` -O2 summed a stale byte.

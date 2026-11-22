@@ -1,8 +1,11 @@
-"""kernel_bytes: text of the kernel's functions plus its literal pools.
+"""kernel_bytes: text of the kernel's functions plus the data it loads.
 
 Since 2026-11-05 the .rodata.cst* sections count too (an fp constant loaded
 with adrp+ldr costs its 8 pool bytes); before, only text symbols counted and
-a pool-using column read smaller than it is.
+a pool-using column read smaller than it is. Every loaded .rodata* and .data*
+section counts (jump tables, switch lookup tables, string literals, tables a
+pass moved from code to data): a column that turns a switch into a table read
+smaller than it is, and one that does not read larger.
 
 Code that no symbol covers counts too (a static helper whose object carries no symbol of its own: release
 main's queens read 44 B, the helper's 220 B uncovered); nops and zero words between functions are padding.
@@ -11,10 +14,11 @@ import subprocess
 
 
 def pool_bytes(obj):
+    """Bytes of every loaded data section of `obj` (not .bss, which is not in the image)."""
     t = 0
     for line in subprocess.run(['aarch64-linux-gnu-size', '-A', obj], capture_output=True, text=True).stdout.splitlines():
         f = line.split()
-        if len(f) >= 2 and f[0].startswith('.rodata.cst'):
+        if len(f) >= 2 and (f[0].startswith('.rodata') or f[0].startswith('.data')):
             t += int(f[1])
     return t
 

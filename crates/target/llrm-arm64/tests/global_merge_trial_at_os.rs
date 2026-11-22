@@ -72,3 +72,15 @@ fn a_modelled_gain_under_the_noise_margin_does_not_unmerge() {
     );
     assert!(keeps_unmerged(nbody.0, nbody.1, 4));
 }
+
+/// QuickrBasic prnval.c -Os: the merged base was held across a call (a
+/// callee-saved register and a frame), 12 B larger and not faster; the compile
+/// without the merge is the smaller object and runs no more.
+#[test]
+fn the_smaller_unmerged_object_is_kept_where_it_runs_no_more() {
+    use llrm_arm64::trial::{Price, keeps_unmerged};
+    let price = |bytes, work| Price { bytes, work, laid_out: work, divides: 0.0 };
+    assert!(keeps_unmerged(price(968, 1000.0), price(956, 1000.0), 2), "smaller, as fast");
+    assert!(!keeps_unmerged(price(956, 1000.0), price(968, 1000.0), 2), "larger, as fast: merged stays");
+    assert!(!keeps_unmerged(price(968, 1000.0), price(956, 1100.0), 2), "smaller but slower: merged stays");
+}

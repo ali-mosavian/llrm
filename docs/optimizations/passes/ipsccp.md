@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/ipsccp.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/ipsccp.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/ipsccp.rs sha256:28f8d1415aad71ff0a02fe60d056c2d20c4bc48ee7e965fa0c7f7b94f05acda9 -->
+<!-- src: crates/opt/llrm-transforms/src/ipsccp.rs sha256:2b08e55b838b3fd9e57279a4b71267df301834211947f46d993f30c10dc7b7bb -->
 
 # ipsccp
 
@@ -67,10 +67,9 @@ left.
    other memory with `memory::unsplit`
    ([L195](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/IPO/SCCP.cpp#L195));
    MIR has no errno location.
-6. A dead block is deleted even when its address is taken (`hasAddressTaken`
-   at
-   [L256](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/IPO/SCCP.cpp#L256)):
-   MIR has no `blockaddress`.
+6. A dead block whose address is taken stays, holding an `unreachable`
+   (`hasAddressTaken` at
+   [L256](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/IPO/SCCP.cpp#L256)).
 7. `getMRVFunctionsTracked` is visited in module order (a `SmallPtrSet` in
    the pin); which returns are zapped does not depend on it.
 8. What `run_ipsccp` returns is every body it edited; the pin's

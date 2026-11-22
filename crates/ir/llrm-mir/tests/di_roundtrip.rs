@@ -148,3 +148,29 @@ fn test_dbg_assign_records_parse_print_and_parse_again() {
     let again = parse::module(&text).expect("the printed form parses");
     assert_eq!(print::module(&again), text);
 }
+
+/// clang writes a bit-field member's storage unit as `extraData: i64 928`.
+/// The parser took `i64` for a flag word and stopped at `928` (`expected
+/// ,`), so `llrm-arm64-llc` refused every `-g` file that declares a
+/// bit-field struct (basic32.c, dump.c of QuickrBasic).
+#[test]
+fn a_bit_field_members_typed_extra_data_parses_and_reads_back() {
+    let text = "!1 = !DIDerivedType(tag: DW_TAG_member, name: \"f\", size: 24, offset: 928, flags: DIFlagBitField, extraData: i64 928)\n";
+    let module = parse::module(text).expect("a typed extraData parses");
+    let once = print::module(&module);
+    assert_eq!(print::module(&parse::module(&once).expect("what is printed parses")), once);
+    assert!(once.contains("928"), "{once}");
+}
+
+/// clang -g -O1 writes `#dbg_label(!label, !loc)` for a C label; the parser
+/// refused it (`#dbg_label is not a debug record`), so `exec.c` of
+/// QuickrBasic (computed-goto labels) was refused at every level with `-g`.
+#[test]
+fn a_debug_label_record_parses() {
+    let text = "define void @f() !dbg !4 {\nentry:\n  #dbg_label(!2, !3)\n  ret void\n}\n\
+        !2 = !DILabel(scope: !4, name: \"again\", line: 3)\n!3 = !DILocation(line: 3, scope: !4)\n\
+        !4 = distinct !DISubprogram(name: \"f\")\n";
+    let module = parse::module(text).expect("a label record parses");
+    let once = print::module(&module);
+    parse::module(&once).expect("what is printed parses");
+}

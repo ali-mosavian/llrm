@@ -112,8 +112,8 @@
 //!   (`FoldInstsToUnreachable`): the `noreturn` call is ported
 //!   (`insts_folded_to_unreachable`); `assume(false)` and the store to null are
 //!   not. Exit 2026-12-01. The store reads the target's `NullPointerIsDefined`,
-//!   which the MIR has no flag for. `invoke`, `catchswitch` and `indirectbr` do
-//!   not exist in the MIR.
+//!   which the MIR has no flag for. `invoke`, `catchswitch` does not
+//!   exist in the MIR.
 //! - D4. No branch weights: the MIR has none, so the case weights
 //!   `ConstantFoldTerminator` merges and the `!prof` it sets are not kept.
 //!   `!make.implicit` is not a MIR kind. There is no `DomTreeUpdater`; as at
@@ -183,14 +183,14 @@
 //! [`crate::cfg`], [`crate::decide`].
 
 use llrm_analysis::occurrence::arms;
-use llrm_mir::context::{Constant, ConstantKind, Context};
+use llrm_mir::context::{Constant, ConstantExpr, ConstantKind, Context};
 use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::edit::Position;
 use llrm_mir::facts::{Fact, Facts};
 use llrm_mir::footprint::Footprint;
 use llrm_mir::memory::Callees;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
-use llrm_mir::opcode::{Flags, IntPredicate, Opcode, Tail};
+use llrm_mir::opcode::{Attribute, Flags, IntPredicate, Opcode, Tail};
 use llrm_mir::passes::{Analyses, Declared, FunctionPass, PreservedAnalyses, Unit};
 
 use crate::twoentryphi::{self, Speculation};
@@ -232,7 +232,30 @@ impl FunctionPass for SimplifyCfg {
             info: analyses.get::<llrm_mir::passes::Loops>(&*unit.context, unit.layout, &*unit.function),
             cfg_epoch: unit.function.epochs().cfg,
         };
-        if simplified_with_known(&self.options, unit.context, &spec, unit.declared, unit.function, Some(&known)) {
+        // DEVIATE SINK-COMMON-SIZE: where the target asks, a function optimized
+        // for size sinks in every slot (the pin's `-sink-common-insts`), not
+        // the late one only.
+        let mut options = self.options;
+        if options.plain_at_o1 && !tti.common_insts_at_o1() {
+            options.hoist_common_insts = false;
+            options.sink_common_insts = false;
+            options.convert_switch_to_arithmetic = false;
+        }
+        let for_size = unit
+            .function
+            .attrs
+            .iter()
+            .any(
+                |attr| matches!(
+                    attr,
+                    Attribute::Flag(flag) if flag == "optsize" || flag == "minsize"
+                ),
+            );
+        options.sink_common_insts |= for_size && tti.sink_common_at_size();
+        if for_size {
+            options.sink_common_phi_cost = tti.sink_common_phi_cost();
+        }
+        if simplified_with_known(&options, unit.context, &spec, unit.declared, unit.function, Some(&known)) {
             PreservedAnalyses::none()
         } else {
             PreservedAnalyses::all()
@@ -243,6 +266,11 @@ impl FunctionPass for SimplifyCfg {
 /// The options of one slot: LLVM's `SimplifyCFGOptions`, as far as ported.
 #[derive(Clone, Copy, Debug)]
 pub struct Options {
+    /// The slot is the -O2 pipeline's (L832), run at -O1 where the pin's
+    /// pipeline has a plain `SimplifyCFGPass`: it hoists, sinks and converts a
+    /// switch to arithmetic only where the target asks
+    /// (`Tti::common_insts_at_o1`).
+    pub plain_at_o1: bool,
     /// `needCanonicalLoops`: true by default and at the early slot, false at
     /// the one after vectorization.
     pub need_canonical_loop: bool,
@@ -259,6 +287,9 @@ pub struct Options {
     pub hoist_common_insts: bool,
     /// `SinkCommonInsts`: sink the code every jump into a block shares.
     pub sink_common_insts: bool,
+    /// The cost of each phi a sink creates (the pin: none;
+    /// `Tuning::sink_common_phi_cost`).
+    pub sink_common_phi_cost: usize,
     /// `ForwardSwitchCondToPhi`.
     pub forward_switch_cond_to_phi: bool,
     /// `ConvertSwitchRangeToICmp`.
@@ -278,11 +309,13 @@ impl Options {
     /// the extra sinking can create larger blocks, so loops need not stay
     /// canonical.
     pub const L1438: Options = Options {
+        plain_at_o1: false,
         need_canonical_loop: false,
         loop_form_kept: true,
         speculate_blocks: true,
         hoist_common_insts: true,
         sink_common_insts: true,
+        sink_common_phi_cost: 0,
         forward_switch_cond_to_phi: true,
         convert_switch_range_to_icmp: true,
         convert_switch_to_arithmetic: true,
@@ -301,11 +334,13 @@ impl Options {
     /// `speculateUnpredictables` and `hoistLoadsStoresWithCondFaulting`; the
     /// last two are not translated.
     pub const L1682: Options = Options {
+        plain_at_o1: false,
         need_canonical_loop: true,
         loop_form_kept: true,
         speculate_blocks: true,
         hoist_common_insts: false,
         sink_common_insts: false,
+        sink_common_phi_cost: 0,
         forward_switch_cond_to_phi: false,
         convert_switch_range_to_icmp: true,
         convert_switch_to_arithmetic: true,
@@ -317,11 +352,13 @@ impl Options {
 impl Default for Options {
     fn default() -> Self {
         Options {
+            plain_at_o1: false,
             need_canonical_loop: true,
             loop_form_kept: true,
             speculate_blocks: true,
             hoist_common_insts: false,
             sink_common_insts: false,
+            sink_common_phi_cost: 0,
             forward_switch_cond_to_phi: false,
             convert_switch_range_to_icmp: true,
             convert_switch_to_arithmetic: false,
@@ -507,7 +544,7 @@ fn block_simplified(
     }
     changed |= cfg::merged_into_predecessor(function, block);
     if options.sink_common_insts && function.is_placed(block) {
-        if sinkcommon::sunk(context, spec, function, block) {
+        if sinkcommon::sunk(context, spec, function, block, options.sink_common_phi_cost) {
             return true;
         }
         if !(options.need_canonical_loop && headers.contains(&block))
@@ -543,6 +580,12 @@ fn block_simplified(
                     && jump_simplified(context, function, block, headers))
                     || (function.is_placed(block) && uncondicmp::folded(context, spec.layout, function, block)))
         }
+        // `simplifyIndirectBr`.
+        Terminator::Indirect => {
+            let acted = indirect_br_simplified(context, function, block);
+            *resimplify |= acted;
+            acted
+        }
         Terminator::Other => false,
     };
     changed | acted
@@ -564,6 +607,7 @@ enum Terminator {
     Conditional,
     Switch,
     Jump,
+    Indirect,
     Other,
 }
 
@@ -577,6 +621,7 @@ fn terminator_kind(
         (Opcode::Br, 3) => Terminator::Conditional,
         (Opcode::Br, 1) => Terminator::Jump,
         (Opcode::Switch, _) => Terminator::Switch,
+        (Opcode::IndirectBr, _) => Terminator::Indirect,
         _ => Terminator::Other,
     }
 }
@@ -1069,6 +1114,10 @@ fn redirectable(
     {
         return false;
     }
+    // An edge by address cannot be sent elsewhere (Local.cpp:1027).
+    if predecessors.iter().any(|one| function.ends_in_indirect_branch(one)) {
+        return false;
+    }
     for one in function.predecessors(successor) {
         if predecessors.contains(&one) {
             if common.is_some() {
@@ -1382,8 +1431,107 @@ pub fn terminator_folded(
         (Opcode::Switch, &[condition, Operand::Block(default), ..]) => {
             switch_folded(context, callees, function, block, last, condition, default, delete_dead_conditions)
         }
+        // `indirectbr blockaddress(@F, %BB)` is `br label %BB`: a destination
+        // the branch does not list is undefined behaviour, `unreachable`.
+        (Opcode::IndirectBr, &[Operand::Constant(address), ..]) => {
+            let Some(target) = block_address_of(context, function, address) else { return false };
+            let listed = operands[1..].iter().any(|one| *one == Operand::Block(target));
+            let mut kept = !listed;
+            for destination in edges_out_of(&operands[1..]) {
+                if destination == target && !kept {
+                    kept = true;
+                } else {
+                    function.predecessor_removed(context, destination, block, false);
+                }
+            }
+            if listed {
+                terminator_replaced(function, last, Opcode::Br, vec![Operand::Block(target)]);
+            } else {
+                terminator_replaced(function, last, Opcode::Unreachable, Vec::new());
+            }
+            function.erase(last).expect("a terminator defines nothing");
+            true
+        }
         _ => false,
     }
+}
+
+/// The block the constant `address` is the address of, if it is one and the
+/// block is still in `function`.
+fn block_address_of(
+    context: &Context,
+    function: &Function,
+    address: llrm_mir::context::ConstantId,
+) -> Option<BlockId> {
+    match context.get(address).kind {
+        ConstantKind::Expr(ConstantExpr::BlockAddress { block, .. }) => function.resolve_block_address(block),
+        _ => None,
+    }
+}
+
+/// `simplifyIndirectBr`: a destination no `blockaddress` names, or one listed
+/// before, is dropped; an `indirectbr` of none is `unreachable`, of one a `br`;
+/// of a `select` of two block addresses, a conditional `br`.
+fn indirect_br_simplified(
+    context: &Context,
+    function: &mut Function,
+    block: BlockId,
+) -> bool {
+    let Some(last) = function.terminator(block) else { return false };
+    let operands = function.instruction(last).operands.clone();
+    let mut kept = vec![operands[0]];
+    let mut changed = false;
+    let mut seen = IdSet::new();
+    for &destination in &operands[1..] {
+        let Operand::Block(target) = destination else { continue };
+        if !function.has_address_taken(target) || !seen.insert(target) {
+            function.predecessor_removed(context, target, block, false);
+            changed = true;
+        } else {
+            kept.push(destination);
+        }
+    }
+    match kept[1..] {
+        [] => {
+            terminator_replaced(function, last, Opcode::Unreachable, Vec::new());
+            function.erase(last).expect("a terminator defines nothing");
+            return true;
+        }
+        [only] => {
+            terminator_replaced(function, last, Opcode::Br, vec![only]);
+            function.erase(last).expect("a terminator defines nothing");
+            return true;
+        }
+        _ => {}
+    }
+    if changed {
+        function.set_operands(last, kept.clone());
+    }
+    // `simplifyIndirectBrOnSelect`: `indirectbr (select %c, BA(t), BA(f))`.
+    if let Operand::Value(address) = kept[0]
+        && let ValueDef::Instruction(def) = function.value(address).def
+        && function.instruction(def).opcode == Opcode::Select
+        && let [condition, Operand::Constant(on_true), Operand::Constant(on_false)] =
+            function.instruction(def).operands[..]
+        && let (Some(yes), Some(no)) =
+            (block_address_of(context, function, on_true), block_address_of(context, function, on_false))
+        && yes != no
+        && kept[1..].contains(&Operand::Block(yes))
+        && kept[1..].contains(&Operand::Block(no))
+    {
+        for destination in edges_out_of(&kept[1..]) {
+            if destination != yes && destination != no {
+                function.predecessor_removed(context, destination, block, false);
+            }
+        }
+        terminator_replaced(function, last, Opcode::Br, vec![condition, Operand::Block(yes), Operand::Block(no)]);
+        function.erase(last).expect("a terminator defines nothing");
+        if function.users(address).is_empty() {
+            function.erase(def).expect("a select nothing reads");
+        }
+        return true;
+    }
+    changed
 }
 
 /// `condition`, nothing reading it any more, deleted with what only it read.

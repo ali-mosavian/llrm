@@ -623,3 +623,20 @@ fn a_vector_sub_and_mul_fold_as_the_scalar_ones_do() {
         assert_eq!(as_scalar(&printed(&other)), printed(&one), "{template}");
     }
 }
+
+/// `sinkNotIntoOtherHandOfLogicalOp`: `(x == 0) | ~(a & b)` is `~((x != 0) & (a
+/// & b))` and the select on it swaps its arms. The `or`, the `not` and the
+/// inverted compare stayed (the `round_whole` of QuickrBasic `double.c`: six
+/// more arm64 instructions than the pin's `ands`, `ccmp`, `cset`).
+#[test]
+fn a_not_beside_a_free_to_invert_compare_sinks_into_the_logic_and_swaps_the_select() {
+    let mut module = parsed(
+        "define i64 @f(i64 %x, i1 %a, i64 %y) {\nb0:\n  %b = icmp ne i64 %y, 0\n  %c = and i1 %a, %b\n  %n = xor i1 %c, true\n  %m = and i64 %x, 9223372036854775807\n  %z = icmp eq i64 %m, 0\n  %o = or i1 %z, %n\n  %r = select i1 %o, i64 %y, i64 -4616189618054758400\n  ret i64 %r\n}\n",
+    );
+    combined(&mut module);
+    let text = printed(&module);
+    assert!(!text.contains(" or i1") && !text.contains("xor i1"), "{text}");
+    assert!(text.contains("%z = icmp ne i64 %m, 0"), "{text}");
+    assert!(text.contains("%0 = and i1 %z, %c"), "{text}");
+    assert!(text.contains("select i1 %0, i64 -4616189618054758400, i64 %y"), "{text}");
+}

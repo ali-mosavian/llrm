@@ -129,6 +129,7 @@ pub fn select_block(
     let tli = target_lowering();
     let mut lowering = MosLowering {
         sized,
+        long_steps: super::function::long_steps(),
         widen_products: match super::function::widen_products() {
             super::function::Widen::Off => false,
             super::function::Widen::Unsized => !sized,
@@ -136,9 +137,13 @@ pub fn select_block(
         },
     };
     let arch = Mos;
-    DagCombiner::new(dag, &mut MosCombines { sized, synthesize }, CombineLevel::BeforeLegalizeTypes)
-        .with_tli(&tli)
-        .run();
+    DagCombiner::new(
+        dag,
+        &mut MosCombines { sized, synthesize, call_multiply: super::function::call_multiply_here() },
+        CombineLevel::BeforeLegalizeTypes,
+    )
+    .with_tli(&tli)
+    .run();
     TypeLegalizer::new(dag, &tli)
         .with_target(&arch)
         .with_hooks(&mut lowering)
@@ -151,6 +156,7 @@ pub fn select_block(
     // narrowing of a loaded boolean (`lda g`), leaving `lda (zp),y`.
     drop_assertions_read_as_bytes(dag);
     DagCombiner::new(dag, &mut MosLateCombines, CombineLevel::AfterLegalizeDag).with_tli(&tli).run();
+    super::combine::reload_into_memory_operands(dag);
 
     let selector = Selector::new(match cpu {
         Cpu::Mos6502 => mos_mos6502::TABLE,

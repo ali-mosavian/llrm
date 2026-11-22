@@ -257,6 +257,8 @@ impl<'m> Machine<'m> {
                 Val::Aggregate(bytes.iter().map(|&b| Val::Int { bits: u128::from(b), width: 8 }).collect())
             }
             ConstantKind::Global(global) => Val::Ptr(self.addresses[global]),
+            ConstantKind::Expr(ConstantExpr::BlockAddress { .. }) => return unsupported("a block's address"),
+            ConstantKind::MetadataString(_) => return unsupported("a metadata string"),
             ConstantKind::Expr(ConstantExpr::Cast { op, value }) => {
                 let from = self.module.context.get(*value).ty;
                 cast(self.types(), &self.layout, *op, self.constant(*value)?, from, constant.ty, Flags::default())?
@@ -600,6 +602,16 @@ impl<'m> Machine<'m> {
                 }
                 _ => Val::Poison,
             },
+            // The class of the bits; an x87 or fp128 value is not held in 64
+            // bits, so it is poison here.
+            Intrinsic::IsFpClass => match (argument(0), argument(1)) {
+                (Val::Float(kind @ (FloatKind::Float | FloatKind::Double), bits), Val::Int { bits: test, .. }) => {
+                    let class =
+                        crate::apfloat::ApFloat::from_bits(crate::apfloat::semantics_of(kind), u128::from(bits));
+                    Val::Int { bits: u128::from(class.classify().0 & test as u32 != 0), width: 1 }
+                }
+                _ => Val::Poison,
+            },
             Intrinsic::FMulAdd => {
                 let product = binary(BinaryOp::FMul, Flags::default(), argument(0), argument(1))?;
                 binary(BinaryOp::FAdd, Flags::default(), product, argument(2))?
@@ -715,6 +727,7 @@ impl<'m> Machine<'m> {
             | Intrinsic::FakeUse
             | Intrinsic::NoAliasScopeDecl
             | Intrinsic::SetLoopIterations => void,
+            Intrinsic::Constrained(_) => return unsupported("a constrained floating-point operation"),
             Intrinsic::Expect => argument(0),
             Intrinsic::TestSetLoopIterations => match argument(0) {
                 Val::Int { bits, .. } => Val::Int { bits: u128::from(bits != 0), width: 1 },
@@ -991,6 +1004,7 @@ impl<'m> Machine<'m> {
                         next = Some(chosen);
                         break;
                     }
+                    Opcode::IndirectBr => return unsupported("an indirect branch"),
                     Opcode::Unreachable => return undefined("unreachable was reached"),
                     Opcode::Resume | Opcode::LandingPad { .. } => return unsupported("unwinding"),
                     Opcode::VaArg => return unsupported("va_arg"),

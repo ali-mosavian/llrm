@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/memcpyoptimizer.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/memcpyoptimizer.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/memcpyoptimizer.rs sha256:90aaea15569a4f6673a8c62f4b816ac2025acef67b90fc4e075de26a47a55167 -->
+<!-- src: crates/opt/llrm-transforms/src/memcpyoptimizer.rs sha256:bdbf01cd26b0883ddd0bcc39174cb9ae1ba03e6a06419cd569ec0bab1b67c39a -->
 
 # memcpyoptimizer
 
@@ -33,8 +33,9 @@ MIRROR: `MemsetRanges::addRange`, `isProfitableToUseMemset`,
 `tryMergingIntoMemset`, `processStore`, `processMemSet`,
 `iterateOnFunction`, `runImpl`.
 
-DEVIATE 1: `getPointerOffsetFrom` is `MemRef`'s root and displacement: two
-pointers of one root with no variable index, no segment. Exit: none needed.
+DEVIATE 1: `getPointerOffsetFrom` is `MemRef`'s root, variable index and
+displacement: two pointers of one root and the same variable index (the
+pin: one value and a constant offset), no segment. Exit: none needed.
 DEVIATE 2: a call that only accesses inaccessible memory ends the scan
 (LLVM steps over it); `memory::of` has no such effect. Exit: model the
 effect.
@@ -42,6 +43,13 @@ DEVIATE 3: only integer stores are bytewise (LLVM's `isBytewiseValue` also
 reads floats, null and aggregates), and `processStore`'s promotion of an
 aggregate store to a memset is absent. Exit: S2, with the float constants.
 DEVIATE 4: unreachable blocks are walked. Exit: none needed.
+DEVIATE 5 (MEMSET-GAP, owner llrm-target-x86-m16-b, exit 2026-11-27;
+`Tuning::memset_gap_merge_at_size`, optsize functions): a store of another
+value to the same object does not end the scan. Two memsets, and what lies
+between them, are one memset placed before the first such store when those
+stores fill the gap whole and lie outside every range. SROA splits a zeroed
+aggregate's memset where a field is then set, and each piece was a string
+clear (QB `forloop`: 73 and 23 bytes; gcc clears the 104 once).
 DEVIATE 5: `processStoreOfLoad`, `processMemCpy` and the rest are stages 2
 and 3.
 

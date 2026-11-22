@@ -96,7 +96,7 @@ enum Folded {
 impl Combiner<'_> {
     /// `Value::DoPHITranslation(block, pred)`: the incoming value from `pred`
     /// if `op` is a phi of `block`, else `op`.
-    fn do_phi_translation(
+    pub(crate) fn do_phi_translation(
         &self,
         op: Operand,
         block: BlockId,

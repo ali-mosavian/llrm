@@ -44,6 +44,21 @@ impl DataRegisters {
         data_register(operands[0])
     }
 
+    /// The destination data register and signedness of the 16-bit multiply
+    /// `text` whose source is not an immediate: the 68000 prices it by
+    /// the source's value, which only the cpu state before and after can show.
+    pub fn multiply_destination(text: &str) -> Option<(usize, bool)> {
+        let (base, suffix, operands) = parts(text);
+        if !matches!(base, "mulu" | "muls")
+            || suffix != Some("w")
+            || operands.len() != 2
+            || operands[0].starts_with('#')
+        {
+            return None;
+        }
+        Some((data_register(operands[1])?, base == "muls"))
+    }
+
     /// The places the shift `text` moves, if it shifts by a register whose
     /// value is known.
     pub fn places_of(

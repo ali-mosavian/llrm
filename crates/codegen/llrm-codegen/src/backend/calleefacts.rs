@@ -103,11 +103,15 @@ pub struct CalleeFacts {
     /// The functions no function of the module calls (itself included) and
     /// whose address is not taken.
     uncalled: BTreeSet<String>,
+    /// `-mstack-alignment=`: the alignment every call keeps, whatever the
+    /// callee holds.
+    forced_alignment: Option<i64>,
 }
 
-/// The functions of `module` no other definition can replace and that are not otherwise
-/// opaque: defined with external linkage, hidden or protected (or default visibility where
-/// the module is not shared-library code: `shouldAssumeDSOLocal`), and not named but as a callee.
+/// The functions of `module` no other definition can replace and that are not
+/// otherwise opaque: defined with external linkage, hidden or protected (or
+/// default visibility where the module is not shared-library code:
+/// `shouldAssumeDSOLocal`), and not named but as a callee.
 fn local_definitions(module: &Module) -> BTreeSet<GlobalId> {
     use llrm_mir::module::{Linkage, Visibility};
     let named = llrm_mir::callgraph::addressed(module);
@@ -156,9 +160,10 @@ impl CalleeFacts {
         Self::of_binding(module, false)
     }
 
-    /// [`CalleeFacts::of`], where `binds_local` lets a function that binds locally
-    /// (`binds_local`) take part too: its callers in the module may rely on what it
-    /// writes though others call it by its convention, which it keeps.
+    /// [`CalleeFacts::of`], where `binds_local` lets a function that binds
+    /// locally (`binds_local`) take part too: its callers in the module may
+    /// rely on what it writes though others call it by its convention,
+    /// which it keeps.
     pub fn of_binding(
         module: &Module,
         binds_local: bool,
@@ -204,9 +209,19 @@ impl CalleeFacts {
                 eligible,
                 written: RefCell::default(),
                 aligned: aligned.iter().filter_map(|&id| module.global(id).name.owned()).collect(),
+                forced_alignment: None,
             },
             graph.bottom_up(),
         )
+    }
+
+    /// These facts with every call aligned to `bytes` (`-mstack-alignment=`).
+    pub fn aligning_every_call(
+        mut self,
+        bytes: Option<i64>,
+    ) -> Self {
+        self.forced_alignment = bytes;
+        self
     }
 
     /// Whether nothing in the module calls `name` or takes its address.
@@ -224,6 +239,15 @@ impl CalleeFacts {
     /// data sheet 240440-002, section 10.1 and Table 2.1), else a slot, so code
     /// that holds no double pays nothing for it.
     pub fn stack_alignment(
+        &self,
+        arch: &dyn llrm_target::Target,
+        name: &str,
+    ) -> i64 {
+        self.forced_alignment.unwrap_or_else(|| self.convention_alignment(arch, name))
+    }
+
+    /// `stack_alignment` before `-mstack-alignment=` widens it.
+    fn convention_alignment(
         &self,
         arch: &dyn llrm_target::Target,
         name: &str,
@@ -247,7 +271,7 @@ impl CalleeFacts {
         arch: &dyn llrm_target::Target,
         name: &str,
     ) -> i64 {
-        self.stack_alignment(arch, name).min(arch.stack_alignment().max(arch.stack_slot_bytes()))
+        self.convention_alignment(arch, name).min(arch.stack_alignment().max(arch.stack_slot_bytes()))
     }
 
     /// What each function of the module does to memory, where the facts were
@@ -301,6 +325,12 @@ impl CalleeFacts {
                     tail_high.extend(callee.high);
                 }
             }
+            // A one-slot frame is `push rax` / `pop rcx`: the epilogue writes
+            // the dead register. Masm sizes the frame after this, so a function
+            // that may have one is taken to write it.
+            if let Some((_, pop)) = frame.slot_scratch {
+                whole.insert(regs.root(pop));
+            }
             // The frame's own registers are its prologue's and epilogue's.
             for own in [frame.pointer, frame.stack] {
                 whole.remove(&regs.root(own));
@@ -339,8 +369,9 @@ pub fn written_by(body: &LirBody) -> BTreeSet<RegId> {
     let root = |register: RegId| regs.root(register);
     let mut found = BTreeSet::new();
     for (at, one) in body.insns().into_iter().enumerate() {
-        // The entry's `delivers` is where the arguments arrive, not a write of them: the pin's
-        // `RegUsageInfoCollector` takes the registers the body modifies (IPRA-ARGHINT).
+        // The entry's `delivers` is where the arguments arrive, not a write of
+        // them: the pin's `RegUsageInfoCollector` takes the registers
+        // the body modifies (IPRA-ARGHINT).
         let arrival = at == 0 && one.call.is_none() && one.requires.is_empty();
         if let Some(what) = &one.what {
             for place in &what.dests {
@@ -358,7 +389,8 @@ pub fn written_by(body: &LirBody) -> BTreeSet<RegId> {
             None => found.extend(one.clobbers.iter().copied().map(root)),
         }
         let delivered: &[_] = if arrival { &[] } else { &one.delivers };
-        // A sibling call is a `jmp` that reads the registers it passes; what its callee writes is added by `record`.
+        // A sibling call is a `jmp` that reads the registers it passes; what
+        // its callee writes is added by `record`.
         let sibling = one.what.as_ref().is_some_and(|what| what.is_sibling_call());
         let required: &[_] = if sibling { &[] } else { &one.requires };
         found.extend(required.iter().chain(delivered).map(|(_, register)| root(*register)));
@@ -418,10 +450,11 @@ mod tests {
         assert!(!takes_part(cycle, "ping") && !takes_part(cycle, "pong"), "a cycle of calls");
     }
 
-    /// Every m32 function was entered at 8 whatever its convention: `-mabi=sysv`
-    /// code, whose System V convention keeps the stack 16-aligned at a call
-    /// (`calling.toml`), padded its calls to the default family's 8, and a
-    /// sysv `h` holding a double was framed for 8.
+    /// Every m32 function was entered at 8 whatever its convention:
+    /// `-mabi=sysv` code, whose System V convention keeps the stack
+    /// 16-aligned at a call (`calling.toml`), padded its calls to the
+    /// default family's 8, and a sysv `h` holding a double was framed for
+    /// 8.
     #[test]
     fn a_function_is_entered_at_its_conventions_stack_alignment() {
         let double = |cc: &str, name: &str| {
@@ -445,6 +478,17 @@ mod tests {
             [8, 8, 8, 8],
             "a convention's wider stack pads the call, not each object"
         );
+    }
+
+    /// `-mstack-alignment=16` pads each call, not each object: a function with
+    /// no double kept 4-byte objects (the flag made every one 8-aligned, and
+    /// widened every frame's locals).
+    #[test]
+    fn a_forced_stack_alignment_pads_calls_and_leaves_objects_alone() {
+        let module = parsed("define i32 @plain(i32 %x) {\nb0:\n  ret i32 %x\n}\n");
+        let facts = CalleeFacts::of(&module).0.aligning_every_call(Some(16));
+        assert_eq!(facts.stack_alignment(&llrm_x86_m32::M32, "plain"), 16);
+        assert_eq!(facts.object_alignment(&llrm_x86_m32::M32, "plain"), 4);
     }
 
     /// Callees come before their callers, which is when a caller finds the fact
@@ -514,6 +558,50 @@ mod tests {
         assert_eq!(facts.written("leaf").unwrap().high, BTreeSet::from([RegId::EDI]), "saved by the word");
         facts.record("leaf", &body, &frame(vec![(RegId::EDI, RegId::EDI)]), &IndexMap::default());
         assert!(facts.written("leaf").unwrap().high.is_empty(), "saved whole");
+    }
+
+    /// A function with a one-slot frame ends `pop rcx`; its fact said it wrote
+    /// no `rcx`, so a caller kept a partial sum there across it
+    /// (word_sign_zero_guard m64: `gt0() * 1000 + le0() * 100` read garbage).
+    #[test]
+    fn a_one_slot_frames_pop_register_is_written() {
+        use crate::model::lir::{Insn, LirBlock};
+
+        let ret = Arc::new(Insn::new(
+            1,
+            Some((1, 1)),
+            Some(crate::model::ir::Semantics::new(crate::model::ir::Operation::Return)),
+            vec![],
+            vec![],
+        ));
+        let body =
+            LirBody::new("leaf", 1, vec![LirBlock::new(1, vec![ret]).into()], IndexMap::default(), IndexMap::default());
+        let frame = |slot_scratch| llrm_target::FrameRegisters {
+            vector_saved: Vec::new(),
+            pointer: RegId::BP,
+            stack: RegId::SP,
+            saved: vec![],
+            slot: 2,
+            align: 2,
+            object_align: 2,
+            optional: false,
+            enter: false,
+            wrap_split_size: false,
+            object_aligned: false,
+            red_zone: 0,
+            slot_scratch,
+            slot_dead_checked: false,
+            slot_add_with_saved: false,
+            free: false,
+            kept: false,
+            exit_cfi: true,
+            saved_first: false,
+        };
+        let facts = CalleeFacts::of(&parsed(LEAF)).0;
+        facts.record("leaf", &body, &frame(Some((RegId::EAX, RegId::ECX))), &IndexMap::default());
+        assert!(facts.written("leaf").unwrap().whole.contains(&RegId::ECX), "the pop writes ecx");
+        facts.record("leaf", &body, &frame(None), &IndexMap::default());
+        assert!(!facts.written("leaf").unwrap().whole.contains(&RegId::ECX), "no slot, no pop");
     }
 
     /// `heap.trim` ended in a sibling `jmp` to `heap.release`, which writes

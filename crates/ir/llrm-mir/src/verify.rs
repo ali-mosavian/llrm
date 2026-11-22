@@ -518,6 +518,11 @@ impl Checker<'_> {
                     self.fail(format!("{at} switches on {}", self.show(ty(0))));
                 }
             }
+            Opcode::IndirectBr => {
+                if !is_pointer(self, ty(0)) {
+                    self.fail(format!("{at} branches to {}", self.show(ty(0))));
+                }
+            }
             Opcode::Load { .. } => {
                 if !is_pointer(self, ty(0)) {
                     self.fail(format!("{at} loads through {}", self.show(ty(0))));

@@ -1,5 +1,5 @@
-; ModuleID = '/tmp/sc.c'
-source_filename = "/tmp/sc.c"
+; ModuleID = 'sc.c'
+source_filename = "sc.c"
 target datalayout = "e-p:32:32-i8:8-i16:16-i32:32-i64:32-f32:32-f64:32-f80:32-n8:16:32-S32"
 target triple = "i486-unknown-linux-gnu"
 

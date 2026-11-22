@@ -41,6 +41,18 @@
 //! defaults to true, `TargetPassConfig.cpp` L278), so no pipeline slot holds
 //! it. Where the pin runs it, it is after `ExpandReductions` in
 //! `addIRPasses`.
+//!
+//! # Example
+//! A select whose branch form is cheaper becomes a branch and a phi, with a
+//! frozen condition.
+//!
+//! ```text
+//! %s = select i1 %c, %a, %b
+//! =>
+//! %c.frozen = freeze i1 %c
+//! br i1 %c.frozen, label %end, label %select.false
+//! end: %s = phi [%a, %start], [%b, %select.false]
+//! ```
 
 use std::collections::VecDeque;
 
@@ -49,9 +61,9 @@ use llrm_analysis::occurrence::from_arms;
 use llrm_mir::blockfrequency::{BlockFrequency, BranchProbability, Scaled64};
 use llrm_mir::context::{ConstantKind, Context, mask};
 use llrm_mir::datalayout::DataLayout;
+use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::domtree::DomTree;
 use llrm_mir::edit::Position;
-use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::instructioncost::instruction_cost;
 use llrm_mir::loopinfo::{Loop, LoopInfo};
 use llrm_mir::memory::Callees;
@@ -99,6 +111,30 @@ pub struct Target<'a> {
     /// DEVIATE SELOPT-C: a select whose arms are both constants is select-like.
     /// The pin's `shouldTreatInstructionLikeSelect` leaves it a select.
     pub constant_arm_selects: bool,
+    /// DEVIATE SELOPT-MINMAX: an integer min or max that has a compare of its
+    /// operands beside it is a select of that compare, so it joins the
+    /// group of the selects that branch on it.
+    pub min_max_selects: bool,
+    /// DEVIATE SELOPT-X87 (owner x87-b, exit 2026-11-30): a select of an
+    /// `x86_fp80` stays. As branches it is correct (the stack bundle order was
+    /// fixed) but loses at the i486: x_ld_max -O2/-O3 12,818 -> 18,450 clk
+    /// (gcc 13,837), x_ldcmp +5.8%; the backend's own expansion of the select
+    /// is cheaper than the branches' compare, `fnstsw` and `sahf` per element.
+    pub leave_x87_selects: bool,
+}
+
+impl Target<'_> {
+    /// DEVIATE SELECT-OPT-I486: an in-order core with no conditional move; the
+    /// pin's own arms only, an integer min or max joining its compare's
+    /// group, and an `x86_fp80` select left as it is.
+    pub(crate) fn i486(
+        &mut self,
+        penalty: u64,
+    ) {
+        self.misprediction_penalty = penalty;
+        self.min_max_selects = true;
+        self.leave_x87_selects = true;
+    }
 }
 
 impl<'a> Target<'a> {
@@ -115,6 +151,8 @@ impl<'a> Target<'a> {
             predictable_branch_threshold: BranchProbability::new(99, 100),
             misprediction_penalty: 10,
             constant_arm_selects: false,
+            min_max_selects: false,
+            leave_x87_selects: false,
         }
     }
 }
@@ -557,6 +595,14 @@ impl Analysis<'_> {
             if int_bits(context, function, condition) != Some(1) {
                 continue;
             }
+            if self.target.leave_x87_selects
+                && matches!(
+                    context.types.get(function.instruction(inst).ty),
+                    llrm_mir::types::Type::Float(llrm_mir::types::FloatKind::X86Fp80)
+                )
+            {
+                continue;
+            }
             let first = SelectLike { inst, inverted: info.inverted, cond_idx: info.condition_index };
             if !self.is_select_kind_supported(&first) {
                 continue;
@@ -575,11 +621,15 @@ impl Analysis<'_> {
                     break;
                 }
                 if !info.auxiliary {
-                    group.selects.push(SelectLike {
-                        inst: next,
-                        inverted: info.inverted,
-                        cond_idx: info.condition_index,
-                    });
+                    group
+                        .selects
+                        .push(
+                            SelectLike {
+                                inst: next,
+                                inverted: info.inverted,
+                                cond_idx: info.condition_index,
+                            },
+                        );
                 }
                 at += 1;
             }
@@ -593,7 +643,10 @@ impl Analysis<'_> {
         select: &SelectLike,
     ) -> bool {
         let ty = self.function.instruction(select.inst).ty;
-        if matches!(self.env.context.types.get(ty), llrm_mir::types::Type::Vector { .. }) {
+        if matches!(
+            self.env.context.types.get(ty),
+            llrm_mir::types::Type::Vector { .. }
+        ) {
             self.target.scalar_cond_vector_select
         } else {
             self.target.scalar_select
@@ -794,13 +847,21 @@ impl Analysis<'_> {
             _ => ArithOp::Or,
         };
         let cost = Ty::of(&self.env.context.types, instruction.ty).map_or(Cost::INVALID, |ty| {
-            self.target.tti.arithmetic_cost(
-                arith,
-                ty,
-                CostKind::Latency,
-                OperandInfo::ANY,
-                OperandInfo { constant: true, power_of_two: true, negated_power_of_two: false, value: None },
-            )
+            self.target
+                .tti
+                .arithmetic_cost(
+                    arith,
+                    ty,
+                    CostKind::Latency,
+                    OperandInfo::ANY,
+                    OperandInfo {
+                        constant: true,
+                        power_of_two: true,
+                        negated_power_of_two: false,
+                        non_uniform: false,
+                        value: None,
+                    },
+                )
         });
         Scaled64::get(cost.value as u64) + cost_of(instruction.operands[1 - select.cond_idx])
     }
@@ -1168,15 +1229,19 @@ pub fn select_optimize(
         return false;
     }
     // Branches are bigger than selects (DEVIATE SO1).
-    if function
-        .attrs
-        .iter()
-        .any(|attr| matches!(attr, llrm_mir::opcode::Attribute::Flag(name) if name == "optsize" || name == "minsize"))
-    {
+    if function.attrs.iter().any(|attr| {
+        matches!(
+            attr,
+            llrm_mir::opcode::Attribute::Flag(name) if name == "optsize" || name == "minsize"
+        )
+    }) {
         return false;
     }
     // A group needs a `select` (`treated_like_select`): without one the
     // dominators, loops and block frequencies below would be built for nothing.
+    if target.min_max_selects {
+        min_max_to_selects(env, function);
+    }
     let has_select = function
         .layout()
         .iter()
@@ -1206,6 +1271,95 @@ pub fn select_optimize(
     !groups.is_empty()
 }
 
+/// DEVIATE SELOPT-MINMAX (owner x86-m32-b, exit 2026-12-20): `smax(x, y)`
+/// beside `x < y ? p : q` is `x < y ? y : x`, a select of the compare already
+/// there. The pin's group is the selects of one condition, and an intrinsic is
+/// no select, so heapsort's `child = a[c] < a[c+1] ? c+1 : c; v = smax(a[c],
+/// a[c+1])` was two branches (and the second compare again, in a block of its
+/// own): gcc and the one-diamond form are 36.7k and 35.1k clk against 39.9k.
+/// Only for a compare of the operands the block has before the intrinsic, in
+/// either order and any strictness: the operands tie the same value.
+fn min_max_to_selects(
+    env: &Env,
+    function: &mut Function,
+) {
+    let context = env.context;
+    let blocks: Vec<BlockId> = function.layout().to_vec();
+    for block in blocks {
+        let mut compares: Vec<(InstId, IntPredicate, Operand, Operand)> = Vec::new();
+        let instructions: Vec<InstId> = function.iter_block(block).collect();
+        for inst in instructions {
+            let instruction = function.instruction(inst);
+            if let Opcode::ICmp(predicate) = instruction.opcode {
+                compares.push((inst, predicate, instruction.operands[0], instruction.operands[1]));
+                continue;
+            }
+            let Some(global) = llrm_mir::memory::callee(context, function, inst) else { continue };
+            // `a > b ? a : b` for a max, `a < b ? a : b` for a min
+            let Some((is_max, signed)) =
+                env.globals.get(global.0 as usize).and_then(|global| global.name.intrinsic_id()).and_then(|id| {
+                    use llrm_mir::valuetracking::pattern::IntrinsicId as Id;
+                    match id {
+                        Id::Smax => Some((true, true)),
+                        Id::Smin => Some((false, true)),
+                        Id::Umax => Some((true, false)),
+                        Id::Umin => Some((false, false)),
+                        _ => None,
+                    }
+                })
+            else {
+                continue;
+            };
+            let [a, b] = instruction.operands[..2] else { continue };
+            let ty = instruction.ty;
+            if context.types.int_bits(ty).is_none() {
+                continue;
+            }
+            // the compare, as `a PRED b`, that says which operand wins
+            let found = compares
+                .iter()
+                .find_map(
+                    |&(compare, predicate, x, y)| {
+                        let greater_first = match (x == a && y == b, x == b && y == a) {
+                            (true, _) => true,
+                            (_, true) => false,
+                            _ => return None,
+                        };
+                        // `x > y`-like: true where the first operand wins a max
+                        let first_is_greater = match predicate {
+                            IntPredicate::Sgt | IntPredicate::Sge if signed => true,
+                            IntPredicate::Ugt | IntPredicate::Uge if !signed => true,
+                            IntPredicate::Slt | IntPredicate::Sle if signed => false,
+                            IntPredicate::Ult | IntPredicate::Ule if !signed => false,
+                            _ => return None,
+                        };
+                        // `a > b` for `a`, or `b > a` swapped for `b`
+                        let a_greater_when_true = first_is_greater == greater_first;
+                        Some((compare, a_greater_when_true))
+                    },
+                );
+            let Some((compare, a_greater_when_true)) = found else { continue };
+            let Some(result) = function.instruction(compare).result else { continue };
+            // the select that keeps the winner when the compare holds
+            let a_wins_when_true = a_greater_when_true == is_max;
+            let (on_true, on_false) = if a_wins_when_true { (a, b) } else { (b, a) };
+            let select = function.create_instruction(
+                Opcode::Select,
+                ty,
+                vec![Operand::Value(result), on_true, on_false],
+                Flags::default(),
+                None,
+            );
+            function.insert(select, Position::Before(inst)).expect("an unplaced instruction");
+            let new = function.instruction(select).result.expect("a select's value");
+            let old = function.instruction(inst).result.expect("a call's value");
+            function.take_name(old, new);
+            function.replace_all_uses_with(old, Operand::Value(new));
+            function.erase(inst).expect("the call's uses were replaced");
+        }
+    }
+}
+
 /// `SelectOptimize` as a pipeline pass, where the target asks for it
 /// (`Tti::branches_constant_arm_selects`).
 ///
@@ -1216,7 +1370,14 @@ pub fn select_optimize(
 /// load-address chain; the select becomes `setg; sub` on it (19.5k clk, as
 /// clang) where gcc keeps the branch (10.8k). Here the pass's own loop cost
 /// model decides, constant arms included: 9.95k.
-pub struct SelectOptimizePass;
+pub struct SelectOptimizePass {
+    /// The slot after `cgpselectarms`, for a target whose selects are all
+    /// branches (`Tti::select_optimize_penalty`): the arm of a select a
+    /// conversion reads is sunk first, so the pass leaves `fptosi (select
+    /// c, K, x)` its arm (x_fclip -O2: 195.8k clk, 253.4k with the select a phi
+    /// first).
+    pub late: bool,
+}
 
 impl llrm_mir::passes::FunctionPass for SelectOptimizePass {
     fn name(&self) -> &'static str {
@@ -1229,14 +1390,20 @@ impl llrm_mir::passes::FunctionPass for SelectOptimizePass {
         analyses: &mut llrm_mir::passes::Analyses,
     ) -> llrm_mir::passes::PreservedAnalyses {
         use llrm_mir::passes::PreservedAnalyses;
-        let Some(tti) = analyses.outer().target().tti().filter(|tti| tti.branches_constant_arm_selects()) else {
+        let Some(tti) = analyses.outer().target().tti().filter(|tti| {
+            if self.late { tti.select_optimize_penalty().is_some() } else { tti.branches_constant_arm_selects() }
+        }) else {
             return PreservedAnalyses::all();
         };
         let mut target = Target::base(&*tti);
-        // x86: out-of-order cores; the Sandy Bridge model's penalty.
-        target.predictable_select_expensive = true;
-        target.misprediction_penalty = 16;
-        target.constant_arm_selects = true;
+        if !self.late {
+            // x86: out-of-order cores; the Sandy Bridge model's penalty.
+            target.predictable_select_expensive = true;
+            target.misprediction_penalty = 16;
+            target.constant_arm_selects = true;
+        } else if let Some(penalty) = tti.select_optimize_penalty() {
+            target.i486(penalty);
+        }
         let outer = analyses.outer().clone();
         let env = Env {
             context: &*unit.context,
@@ -1246,10 +1413,49 @@ impl llrm_mir::passes::FunctionPass for SelectOptimizePass {
             callees: outer.callees(),
         };
         if select_optimize(&env, &target, unit.declared, unit.function) {
+            // CodeGenPrepare follows the pin's pass and merges the blocks it
+            // leaves to phis and a jump
+            // (`eliminateMostlyEmptyBlocks`); this slot is after ours has run.
+            if self.late {
+                crate::emptyblocks::eliminated(&*unit.context, unit.layout, analyses, unit.function);
+            }
             PreservedAnalyses::none()
         } else {
             PreservedAnalyses::all()
         }
+    }
+}
+
+/// [`min_max_to_selects`] as a pass, before `cgpselectarms` (the pass proper
+/// runs after it): where the target's selects are all branches.
+pub struct MinMaxToSelects;
+
+impl llrm_mir::passes::FunctionPass for MinMaxToSelects {
+    fn name(&self) -> &'static str {
+        "minmaxselects"
+    }
+
+    fn run(
+        &mut self,
+        unit: &mut llrm_mir::passes::Unit,
+        analyses: &mut llrm_mir::passes::Analyses,
+    ) -> llrm_mir::passes::PreservedAnalyses {
+        use llrm_mir::passes::PreservedAnalyses;
+        if analyses.outer().target().tti().is_none_or(|tti| tti.select_optimize_penalty().is_none()) {
+            return PreservedAnalyses::all();
+        }
+        let outer = analyses.outer().clone();
+        let env = Env {
+            context: &*unit.context,
+            globals: &outer.globals,
+            metadata: unit.metadata,
+            layout: unit.layout,
+            callees: outer.callees(),
+        };
+        let before = unit.function.layout().iter().map(|&block| unit.function.iter_block(block).count()).sum::<usize>();
+        min_max_to_selects(&env, unit.function);
+        let after = unit.function.layout().iter().map(|&block| unit.function.iter_block(block).count()).sum::<usize>();
+        if before == after { PreservedAnalyses::all() } else { PreservedAnalyses::none() }
     }
 }
 

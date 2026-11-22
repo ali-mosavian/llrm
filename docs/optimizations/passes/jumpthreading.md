@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/jumpthreading.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/jumpthreading.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/jumpthreading.rs sha256:4f627982a1c3000c27b442482ab0ad4c5554ffec58a7d0db696a5cdc15569243 -->
+<!-- src: crates/opt/llrm-transforms/src/jumpthreading.rs sha256:4c92feb9050c1ca10d93ac31d0422a4d6a6044a79e42f94042c48cc3894262cb -->
 
 # jumpthreading
 
@@ -32,9 +32,11 @@ jumps to that target and the predecessors jump to the copy.
 ```
 
 DEVIATE (J1..J15):
-- J1. No `indirectbr` or `blockaddress` in MIR: `processBlock`'s
-  `IndirectBrInst` arm, `hasAddressTakenAndUsed` and the block-address
-  preference of `getKnownConstant` are absent.
+- J1. `processBlock`'s `IndirectBrInst` arm and the block-address preference
+  of `getKnownConstant` are absent: no thread goes through an `indirectbr`
+  (`SimplifyCFG` folds one on a known address). A predecessor that ends in
+  one is skipped where LLVM skips it, and `hasAddressTakenAndUsed` is
+  `has_address_taken` (it keeps a block whose constant is dead).
 - J2. No guards: `processGuards` and `threadGuard` are skipped. A guard call
   needs exactly one `"deopt"` operand bundle (`opt`'s verifier rejects it
   without), MIR has no operand bundles, and no front end emits the

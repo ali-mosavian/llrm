@@ -186,6 +186,23 @@ def ours_cell(path, w, ctx, want):
     return size, clocks
 
 
+SDCC_FIXED = Path(__file__).resolve().parent / "sdcc_fixed"
+
+
+def sdcc_fix_library(d):
+    """The link arguments of a library of SDCC's routines with the bugs fixed, ahead of libz80 (sdld takes a member only for a symbol
+    still undefined, so a program that does not call one pays nothing). `__mulsint2slong` of SDCC 4.5.0 tests the signs on the low
+    bytes: 6 * 1000 was -387216, bintree, histo, quicksort and scroll read `WRONG value` and had no bar."""
+    lib = d / "fixlib"
+    lib.mkdir()
+    stems = []
+    for source in sorted(SDCC_FIXED.glob("*.s")):
+        run.sh(["sdasz80", "-g", "-o", f"fixlib/{source.stem}.rel", str(source)], d)
+        stems.append(source.stem)
+    (lib / "sdccfix.lib").write_text("\n".join(stems) + "\n")
+    return ["-k", str(lib), "-l", "sdccfix"]
+
+
 def sdcc_cell(path, w, tag, flags, ctx, want):
     d = w / tag
     d.mkdir()
@@ -198,7 +215,7 @@ def sdcc_cell(path, w, tag, flags, ctx, want):
     if s.returncode or not (d / "p.rel").exists():
         err = re.search(r"error \d+: .*", s.stdout + s.stderr)
         raise Void("SDCC " + (err.group(0)[:90] if err else "failed"))
-    size, clocks, got = link_and_run(d, ["p.rel"], ["-k", "/usr/share/sdcc/lib/z80", "-l", "z80"], None, ctx)
+    size, clocks, got = link_and_run(d, ["p.rel"], [*sdcc_fix_library(d), "-k", "/usr/share/sdcc/lib/z80", "-l", "z80"], None, ctx)
     verdict(got, want)
     return size, clocks
 

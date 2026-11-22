@@ -31,6 +31,19 @@
 //!
 //! # See also
 //! `canFoldTermCondOfLoop`, `RunTermFold`, `isAlmostDeadIV`.
+//!
+//! # Example
+//! The exit compare of a loop moves from a counter to another induction variable,
+//! and the counter dies.
+//!
+//! ```text
+//!  loop:  %i = phi [0, pre], [%i.next, loop]        loop:  %p = phi [%a, pre], [%p.next, loop]
+//!         %p = phi [%a, pre], [%p.next, loop]  ==>         %p.next = getelementptr i8, ptr %p, 4
+//!         %p.next = getelementptr i8, ptr %p, 4            %done = icmp eq ptr %p.next, %end
+//!         %i.next = add nuw i32 %i, 1                      br i1 %done, label %exit, label %loop
+//!         %c = icmp ne i32 %i.next, %n
+//!         br i1 %c, label %loop, label %exit      pre:   %end = (value of %p after the last trip)
+//! ```
 
 use llrm_analysis::occurrence::arms;
 use llrm_analysis::scev::ScalarEvolution;

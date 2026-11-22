@@ -121,3 +121,38 @@ b0:
     assert!(found.contains(&id(&module, "only")));
     assert!(!found.contains(&id(&module, "exported")) && !found.contains(&id(&module, "taken")));
 }
+
+/// QuickrBasic operands.c -Os: a copy of `hot_op` made `call %f` a call of
+/// `@leaf`, and the `!callees` list it carried still named `@leaf` and
+/// `@direct`: both stayed address-taken, so `@leaf`'s only call was not its
+/// last (+5,872 B of wrappers kept). A list no indirect call carries is no use.
+#[test]
+fn a_callees_list_only_a_direct_call_carries_takes_no_address() {
+    let module = parse::module(
+        "define void @leaf() {
+b0:
+  ret void
+}
+
+define void @direct() {
+b0:
+  ret void
+}
+
+define void @caller(ptr %p) {
+b0:
+  call void @leaf(), !callees !0
+  ret void
+}
+
+!0 = !{ptr @leaf, ptr @direct}
+",
+    )
+    .expect("parses");
+    assert!(crate::callgraph::addressed_by_uses(&module).is_empty());
+    // Conventions and placement keep asking the conservative question.
+    assert!(crate::callgraph::addressed(&module).contains(&id(&module, "leaf")));
+    let listed = parse::module(&CALLS.to_owned()).expect("parses");
+    let named = crate::callgraph::addressed(&listed);
+    assert!(named.contains(&id(&listed, "leaf")), "an indirect call's list still names its callees");
+}

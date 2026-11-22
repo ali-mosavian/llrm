@@ -469,3 +469,91 @@ fn test_a_compare_of_two_copies_reads_both_sources() {
     let got = propagated(&wide);
     assert_eq!(lines(&got)[2], "cmp ESI,EDX");
 }
+
+/// `head` in long mode, in a block that falls into one that writes every
+/// register in `overwritten` whole and reads none.
+fn long_mode(
+    head: Vec<Arc<Insn>>,
+    overwritten: &[RegId],
+) -> LirBody {
+    let tail =
+        overwritten.iter().enumerate().map(|(n, register)| mov(100 + n as i64, rl(*register, 8), imm(1, 8))).collect();
+    let first = LirBlock { succ: vec![1].into(), ..LirBlock::new(0, head) };
+    let second = LirBlock::new(1, tail);
+    let mut made =
+        LirBody::new("t", 0, vec![Block::from(first), Block::from(second)], IndexMap::default(), IndexMap::default());
+    made.bits = 64;
+    made.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m64::REGISTER_INFO));
+    made
+}
+
+/// dbl_fn m64 -O2 (QB `exec_loop`, 168 dispatches): `mov r12, r14; mov r14,
+/// r12` stayed as it was, because a 64-bit register has five lanes (four bytes
+/// and its upper half) and a copy was only taken for as many lanes as bytes.
+#[test]
+fn test_the_reverse_of_an_available_quadword_copy_is_dropped() {
+    let got = propagated(&long_mode(
+        vec![mov(0, rl(RegId::R12, 8), rl(RegId::R14, 8)), mov(1, rl(RegId::R14, 8), rl(RegId::R12, 8))],
+        &[],
+    ));
+    assert_eq!(lines(&got), ["mov R12,R14", "-"]);
+}
+
+/// `mov r14d, r12d` zeroes r14's upper half, which `r12` keeps: the reverse
+/// quadword copy that follows is not a no-op.
+#[test]
+fn test_a_dword_copy_does_not_make_the_quadword_reverse_a_no_op() {
+    let got = propagated(&long_mode(
+        vec![mov(0, rl(RegId::R14D, 4), rl(RegId::R12D, 4)), mov(1, rl(RegId::R12, 8), rl(RegId::R14, 8))],
+        &[],
+    ));
+    assert_eq!(lines(&got), ["mov R14D,R12D", "mov R12,R14"]);
+}
+
+/// The dispatch a tail duplication copies into a handler of an interpreter's
+/// `exec_loop` (m32 -O3): the handler's `ecx = edi; esi = ebx`, then the
+/// dispatch's `ebx = esi; edi = ecx; esi = reload`, then `jmp *table(,eax,4)`
+/// (an effect nobody knows, so it may read any register). The last two copies
+/// are redundant and `esi = ebx` is overwritten by the reload: it is dead, but
+/// the jump kept it, and it cost one instruction per interpreted operation.
+#[test]
+fn test_an_unknown_instruction_does_not_revive_a_copy_already_overwritten() {
+    use crate::model::ir::Mem;
+    let nothing = Arc::new(Insn::new(
+        9,
+        Some((9, 9)),
+        Some(Semantics { name: Some("".into()), ..Semantics::new(Operation::Nothing) }),
+        vec![],
+        vec![],
+    ));
+    let table = Arc::new(Insn::new(
+        10,
+        Some((10, 10)),
+        Some(Semantics {
+            name: Some("jmp".into()),
+            sources: vec![Loc::Mem(Mem::new(None, 0))],
+            ..Semantics::new(Operation::Jump)
+        }),
+        vec![],
+        vec![],
+    ));
+    let got = propagated(&body(
+        vec![
+            mov(0, rl(RegId::ECX, 4), rl(RegId::EDI, 4)),
+            mov(1, rl(RegId::ESI, 4), rl(RegId::EBX, 4)),
+            nothing,
+            mov(2, rl(RegId::EBX, 4), rl(RegId::ESI, 4)),
+            mov(3, rl(RegId::EDI, 4), rl(RegId::ECX, 4)),
+            mov(4, rl(RegId::ESI, 4), imm(7, 4)),
+            add(5, rl(RegId::EAX, 4), rl(RegId::ESI, 4)),
+            table,
+        ],
+        &[],
+    ));
+    assert_eq!(
+        lines(&got)[..7],
+        ["mov ECX,EDI", "-", "-", "-", "-", "mov ESI,imm", "add EAX,EAX,ESI"],
+        "{:?}",
+        lines(&got)
+    );
+}

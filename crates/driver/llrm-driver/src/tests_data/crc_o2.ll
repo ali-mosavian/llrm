@@ -1,5 +1,5 @@
-; ModuleID = '/home/alim/scratch/wt-m64-tip/bench/crc/crc.c'
-source_filename = "/home/alim/scratch/wt-m64-tip/bench/crc/crc.c"
+; ModuleID = 'crc.c'
+source_filename = "crc.c"
 target datalayout = "@m64-datalayout@"
 
 @bench_crc.data = internal constant [10 x i8] c"123456789\00", align 1

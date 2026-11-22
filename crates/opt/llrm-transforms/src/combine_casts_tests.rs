@@ -627,3 +627,146 @@ fn a_vector_cast_is_left_alone() {
                 ret <8 x i16> %u\n";
     check("<8 x i16>", "<8 x i16> %x", body, body);
 }
+
+/// `trunc (add (splat n), C)` on <4 x i64> stayed wide, so the i64 vector math
+/// of a tile loop was priced and lowered as i64 (clocks +153% on x86-64):
+/// `narrowBinOp`, `shrinkSplatShuffle` and `shrinkInsertElt` narrow it.
+#[test]
+fn a_vector_trunc_of_a_splat_add_narrows_to_the_splat() {
+    let body = "  %i = insertelement <4 x i64> poison, i64 %n, i64 0\n  \
+                %s = shufflevector <4 x i64> %i, <4 x i64> poison, <4 x i32> zeroinitializer\n  \
+                %a = add <4 x i64> %s, <i64 0, i64 1, i64 2, i64 3>\n  \
+                %t = trunc <4 x i64> %a to <4 x i16>\n  ret <4 x i16> %t\n";
+    let after = "  %0 = trunc i64 %n to i16\n  %1 = insertelement <4 x i16> poison, i16 %0, i64 0\n  \
+                 %2 = shufflevector <4 x i16> %1, <4 x i16> poison, <4 x i32> <i32 0, i32 0, i32 0, i32 0>\n  \
+                 %3 = add <4 x i16> %2, <i16 0, i16 1, i16 2, i16 3>\n  ret <4 x i16> %3\n";
+    check("<4 x i16>", "i64 %n", body, after);
+}
+
+/// `tile` (`main`'s init loop): the whole combiner left `and (trunc nuw nsw
+/// (add nuw nsw splat, <0, 3, ..>)), 255` at `<8 x i64>`: about 20 instructions
+/// per vector, not `paddw`.
+#[test]
+fn the_full_combiner_narrows_a_masked_vector_trunc_of_a_splat_add() {
+    let text = "define void @f(i64 %n, ptr %p) {\nb0:\n  \
+                %si = insertelement <8 x i64> poison, i64 %n, i64 0\n  \
+                %s = shufflevector <8 x i64> %si, <8 x i64> poison, <8 x i32> zeroinitializer\n  \
+                %a = add nuw nsw <8 x i64> %s, <i64 0, i64 3, i64 6, i64 9, i64 12, i64 15, i64 18, i64 21>\n  \
+                %t = trunc nuw nsw <8 x i64> %a to <8 x i16>\n  \
+                %m = and <8 x i16> %t, <i16 255, i16 255, i16 255, i16 255, i16 255, i16 255, i16 255, i16 255>\n  \
+                store <8 x i16> %m, ptr %p, align 16\n  \
+                %a2 = add nuw nsw <8 x i64> %s, <i64 24, i64 27, i64 30, i64 33, i64 36, i64 39, i64 42, i64 45>\n  \
+                %t2 = trunc nuw nsw <8 x i64> %a2 to <8 x i16>\n  \
+                %m2 = and <8 x i16> %t2, <i16 255, i16 255, i16 255, i16 255, i16 255, i16 255, i16 255, i16 255>\n  \
+                %q = getelementptr i8, ptr %p, i64 16\n  store <8 x i16> %m2, ptr %q, align 16\n  ret void\n}\n";
+    let mut module = parsed(text);
+    let globals = module.globals.clone();
+    let metadata = module.metadata.clone();
+    let layout = DataLayout::parse("n8:16:32:64").expect("a datalayout");
+    let (context, function) = module.function_mut("f").expect("@f");
+    let mut declared = llrm_mir::passes::Declared::over(std::rc::Rc::new(globals.clone()), metadata.len());
+    crate::combine::combine(context, &globals, &Default::default(), &metadata, &layout, function, &mut declared);
+    let out = printed(&module);
+    assert!(!out.contains("<8 x i64>, <8 x i64> poison, <8 x i32> zeroinitializer\n  %a"), "{out}");
+    assert!(!out.contains("add nuw nsw <8 x i64>"), "still wide:\n{out}");
+}
+
+/// `narrowBinOp` on vectors: `trunc (xor (zext y), x)` --> `xor y, (trunc x)`.
+#[test]
+fn a_vector_trunc_of_a_logic_op_with_an_extended_operand_narrows() {
+    let body = "  %e = zext <4 x i16> %y to <4 x i64>\n  %a = xor <4 x i64> %e, %x\n  \
+                %t = trunc <4 x i64> %a to <4 x i16>\n  ret <4 x i16> %t\n";
+    let after = "  %0 = trunc <4 x i64> %x to <4 x i16>\n  %1 = xor <4 x i16> %y, %0\n  ret <4 x i16> %1\n";
+    check("<4 x i16>", "<4 x i64> %x, <4 x i16> %y", body, after);
+}
+
+/// `shrinkSplatShuffle` needs a one-use shuffle: a shared one stays wide.
+#[test]
+fn a_vector_trunc_of_a_shared_splat_stays() {
+    let body = "  %i = insertelement <4 x i64> poison, i64 %n, i64 0\n  \
+                %s = shufflevector <4 x i64> %i, <4 x i64> poison, <4 x i32> <i32 0, i32 0, i32 0, i32 0>\n  \
+                %t = trunc <4 x i64> %s to <4 x i16>\n  store <4 x i64> %s, ptr %p\n  ret <4 x i16> %t\n";
+    check("<4 x i16>", "i64 %n, ptr %p", body, body);
+}
+
+/// `@f` after the casts' `visit*` on a target that does (`on`) or does not
+/// xor a compare of two truth values.
+fn combined_truth(
+    text: &str,
+    on: bool,
+) -> String {
+    let mut module = parsed(text);
+    let globals = module.globals.clone();
+    let metadata = module.metadata.clone();
+    let mut declared = llrm_mir::passes::Declared::of(&module);
+    let (context, function) = module.function_mut("f").expect("@f");
+    let hooks = crate::combine::TargetHooks { truth_compare_xor: on, ..Default::default() };
+    crate::combine::combine_for(
+        context,
+        &globals,
+        &Default::default(),
+        &metadata,
+        &DataLayout::default(),
+        function,
+        visit,
+        false,
+        &mut declared,
+        hooks,
+    );
+    declared.place(&mut module).unwrap();
+    printed(&module)
+}
+
+const TRUTH_COMPARE: &str = "define i32 @f(i1 %c, i1 %d) {
+b0:
+  br i1 %c, label %t, label %e
+t:
+  br label %j
+e:
+  br label %j
+j:
+  %p = phi i32 [ 1, %t ], [ 0, %e ]
+  %w = zext i1 %d to i32
+  %n = icmp ne i32 %p, %w
+  %r = zext i1 %n to i32
+  ret i32 %r
+}
+";
+
+/// early_exit_widths -Os, x86-64: `(early_exit() != want)` of a phi of 0 and 1
+/// and a `zext i1` stayed `cmp; setne; xor` (11 B) where gcc's `xor` is 3: +20 B
+/// in four tests.
+#[test]
+fn a_not_equal_of_two_truth_values_is_an_xor() {
+    let out = combined_truth(TRUTH_COMPARE, true);
+    assert!(out.contains("%0 = xor i32 %p, %w\n  ret i32 %0"), "{out}");
+    assert!(!out.contains("icmp"), "{out}");
+}
+
+/// The pin keeps the compare; a target that does not opt in keeps it too.
+#[test]
+fn a_target_that_declines_keeps_the_compare_of_two_truth_values() {
+    let out = combined_truth(TRUTH_COMPARE, false);
+    assert!(out.contains("icmp ne i32 %p, %w"), "{out}");
+    assert!(!out.contains("xor"), "{out}");
+}
+
+/// A value with more than the low bit possible is not a truth value.
+#[test]
+fn a_not_equal_of_a_wider_value_is_kept() {
+    let text = TRUTH_COMPARE.replace("define i32 @f(i1 %c, i1 %d)", "define i32 @f(i1 %c, i1 %d, i32 %x)").replace(
+        "%w = zext i1 %d to i32",
+        "%w = and i32 %x, 3",
+    );
+    let out = combined_truth(&text, true);
+    assert!(out.contains("icmp ne i32 %p, %w"), "{out}");
+}
+
+/// memcpy_runtime and os_more -Os crashed the compile ("an integer"): the fold
+/// read the width of a pointer compare.
+#[test]
+fn a_not_equal_of_pointers_is_left_alone() {
+    let text = "define i32 @f(ptr %a, ptr %b) {\nb0:\n  %n = icmp ne ptr %a, %b\n  %r = zext i1 %n to i32\n  ret i32 %r\n}\n";
+    let out = combined_truth(text, true);
+    assert!(out.contains("icmp ne ptr %a, %b"), "{out}");
+}

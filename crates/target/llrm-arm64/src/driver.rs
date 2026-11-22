@@ -166,6 +166,23 @@ pub fn lowered_before_selection(program: &mut Program) -> Result<(), String> {
     program.modules.iter_mut().try_for_each(llrm_transforms::lowerconstantintrinsics::module_lowered)
 }
 
+thread_local! {
+    /// Whether the output carries aliases (an object does; assembly text
+    /// refuses them): GlobalMerge names merged externals by alias.
+    static ALIASES_OK: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+}
+
+/// `body` where the output carries aliases only if `ok`.
+fn with_aliases<T>(
+    ok: bool,
+    body: impl FnOnce() -> T,
+) -> T {
+    let before = ALIASES_OK.with(|cell| cell.replace(ok));
+    let out = body();
+    ALIASES_OK.with(|cell| cell.set(before));
+    out
+}
+
 /// `program` through the shared mid-end at `level`.
 pub fn optimized_at(
     program: &mut Program,
@@ -186,6 +203,7 @@ pub fn optimized_at(
         // DEVIATE GM-TRIAL (`crate::trial`): the trial compile merges as the
         // pin does, nothing at -Os.
         merge.optsize_counts &= !crate::trial::unmerged();
+        merge.external &= ALIASES_OK.with(std::cell::Cell::get);
         for module in &mut program.modules {
             let before = module.globals.len();
             if llrm_transforms::globalmerge::merged(module, &program.layout, &merge)? && merge.optsize_counts {
@@ -256,6 +274,22 @@ fn lower_function(
         dag_select(module, &name, &program.layout, platform, lines).map_err(|why| format!("@{name}: {why}"))?;
     dump("Select", &machine);
     crate::mfunc::remove_unreachable_blocks(&mut machine);
+    // `AArch64ConditionalCompares` runs just before early if-conversion and
+    // skips an `optnone` function too; `LLRM_ARM64_CCMP=off` is
+    // `-aarch64-enable-ccmp=false`.
+    let ccmp = std::env::var("LLRM_ARM64_CCMP");
+    if !flagged(function, &["optnone"]) && ccmp.as_deref() != Ok("off") {
+        // `stress` is `-aarch64-stress-ccmp`: every candidate converts.
+        crate::ccmp::run(&mut machine, flagged(function, &["minsize"]), ccmp.as_deref() == Ok("stress"));
+        dump("ConditionalCompares", &machine);
+    }
+    // `EarlyIfConverter` skips an `optnone` function (`skipFunction`).
+    if !flagged(function, &["optnone"])
+        && let Some(mode) = crate::ifcvt::mode_from_env()
+    {
+        crate::ifcvt::run(&mut machine, mode);
+        dump("EarlyIfConversion", &machine);
+    }
     // The shared phases that need SSA see the body as selection made it,
     // phis and all; the private phases below see it after phi elimination.
     if llrm_support::env_flag!("LLRM_ARM64_STAGES") {
@@ -351,6 +385,7 @@ fn lower_function(
         .map_err(|why| format!("@{name}: {why}"))?;
     let blocks = crate::expand_pseudo::run(blocks);
     let mut tables = crate::jumptable::tables_of(&machine);
+    let dead_ends = crate::mfunc::dead_end_labels(&machine);
     let (blocks, likelihood) = crate::layout::fold_with_odds(
         blocks,
         &mut tables,
@@ -360,9 +395,12 @@ fn lower_function(
         ),
         optsize,
         &crate::mfunc::returned_registers(&machine),
+        &dead_ends,
+        &machine.block_symbols.iter().map(|(label, _)| label.clone()).collect::<Vec<_>>(),
+        &machine.indirect_jumps(),
     );
     let blocks = crate::pairs::fold(blocks);
-    let mut blocks = crate::ldst_update::fold(blocks, &crate::mfunc::returned_registers(&machine));
+    let mut blocks = crate::ldst_update::fold(blocks, &crate::mfunc::returned_registers(&machine), &tables);
     crate::jumptable::compress(&mut blocks, &mut tables).map_err(|why| format!("@{name}: {why}"))?;
     crate::trial::add(&machine, &blocks, &likelihood);
     let written = crate::ipra::written(&machine);
@@ -375,6 +413,8 @@ fn lower_function(
             variables,
             pool: machine.pool.clone(),
             unwind: machine.unwind != crate::cfi::Unwind::None,
+            dead_ends,
+            block_symbols: machine.block_symbols.clone(),
         },
         written,
     ))
@@ -506,11 +546,22 @@ fn compiled(
         rotated: Vec<String>,
         loops: usize,
         merged: usize,
+        hinted: bool,
+        negative: bool,
+        divides: bool,
     }
     type Built = (Program, Vec<crate::emit::Function>, crate::trial::Price, Notes);
     let size = matches!(level, Level::Os | Level::Oz);
     let asked = crate::trial::asked(platform, size);
-    let once = |(unrotated, more, unmerged): (bool, bool, bool)| -> Result<Built, String> {
+    // DEVIATE SD535: -Os only; -Oz is `minsize`, where the pin keeps the
+    // divides.
+    let divide_trial = level == Level::Os && !llrm_support::env_flag!("LLRM_ARM64_NO_TRIAL");
+    // DEVIATE INLINEHINT-GROWTH-TRIAL: -Os, where the target lets the hint
+    // yield (see `crate::trial::keeps_unhinted`).
+    let hint_trial = divide_trial
+        && crate::tti::AArch64::of_cpu(platform.cpu())
+            .is_some_and(|tti| llrm_mir::tti::Tti::opt_size_inline_guard_yields_to_inlinehint(&tti));
+    let once = |(unrotated, more, unmerged, divided, hinted): (bool, bool, bool, bool, u8)| -> Result<Built, String> {
         let mut program = program(text, platform)?;
         if refuse_aliases {
             // The text carries no alias: refuse it rather than drop the symbol.
@@ -520,45 +571,73 @@ fn compiled(
             llrm_mir::dbgimport::types_and_globals(&mut program.modules[0]);
         }
         if level != Level::O0 {
-            let run = |program: &mut Program| optimized_at(program, level);
+            let run = |program: &mut Program| with_aliases(!refuse_aliases, || optimized_at(program, level));
             let go = |program: &mut Program| match (unrotated, more) {
                 (true, _) => llrm_transforms::trial::with_unrotated(|| run(program)),
                 (_, true) => llrm_transforms::trial::with_more_rotation(|| run(program)),
                 _ => run(program),
+            };
+            let go = |program: &mut Program| match hinted {
+                0 => go(program),
+                1 => llrm_transforms::trial::with_kept_hinted_calls(|| go(program)),
+                _ => llrm_transforms::trial::with_kept_hinted_calls(|| {
+                    llrm_transforms::trial::with_kept_negative_calls(|| go(program))
+                }),
             };
             if unmerged { crate::trial::without_merge(|| go(&mut program))? } else { go(&mut program)? }
         } else {
             lowered_before_selection(&mut program)?;
         }
         let mut notes = Notes::default();
-        if asked.is_some() {
+        if divide_trial {
+            notes.divides = crate::trial::divides_by_constant(&program.modules[0]);
+        }
+        if asked.is_some() || notes.divides || hint_trial {
             use llrm_transforms::trial;
             (notes.left, notes.left_loops) = trial::take_left();
             (notes.rotated, notes.loops) = (trial::take_rotated(), trial::rotated_loops());
             notes.merged = crate::trial::take_merged();
+            notes.hinted = !trial::take_hint_yields().is_empty();
+            notes.negative = !trial::take_negative_yields().is_empty();
             // A module nothing was noted in is compiled once, unpriced: the
             // pricing is a second walk of every function.
-            let noted = !(notes.left.is_empty() && notes.rotated.is_empty() && notes.merged == 0);
-            if noted || (unrotated, more, unmerged) != (false, false, false) {
+            let noted = !(notes.left.is_empty() && notes.rotated.is_empty() && notes.merged == 0)
+                || notes.divides
+                || notes.hinted
+                || notes.negative;
+            if noted || (unrotated, more, unmerged, divided, hinted) != (false, false, false, false, 0) {
                 crate::trial::start();
             }
         }
-        let lowered = functions_with(&program, debug)?;
+        let lowered = if divided {
+            crate::trial::keeping_divides(|| functions_with(&program, debug))?
+        } else {
+            functions_with(&program, debug)?
+        };
         let cost = crate::trial::price(&lowered);
         Ok((program, lowered, cost, notes))
     };
-    let Some(hot) = asked else {
-        let (program, lowered, _, _) = once((false, false, false))?;
+    if asked.is_none() && !divide_trial && !hint_trial {
+        let (program, lowered, _, _) = once((false, false, false, false, 0))?;
         return Ok((program, lowered));
-    };
+    }
+    let hot = asked.unwrap_or(false);
+    let rotation_cap = crate::tti::AArch64::of_cpu(platform.cpu())
+        .and_then(|tti| llrm_mir::tti::Tti::os_trial_clock_cap_percent(&tti));
     use llrm_transforms::trial;
-    let _ = (trial::take_left(), trial::take_rotated(), crate::trial::take_merged());
+    let _ = (
+        trial::take_left(),
+        trial::take_rotated(),
+        crate::trial::take_merged(),
+        trial::take_hint_yields(),
+        trial::take_negative_yields(),
+    );
     trial::clear_rotated_loops();
-    let mut best = once((false, false, false))?;
+    let mut best = once((false, false, false, false, 0))?;
     let notes = std::mem::take(&mut best.3);
-    let mut state = (false, false, false);
+    let mut state = (false, false, false, 0u8);
     let mut try_one = |best: &mut Built,
-                       other: (bool, bool, bool),
+                       other: (bool, bool, bool, bool, u8),
                        what: &str,
                        pays: &dyn Fn(crate::trial::Price, crate::trial::Price) -> bool|
      -> Result<bool, String> {
@@ -575,23 +654,44 @@ fn compiled(
         Ok(keeps)
     };
     if !notes.rotated.is_empty()
-        && try_one(&mut best, (true, false, false), "unrotated", &|kept, now| {
-            crate::trial::keeps_unrotated(kept, now, hot, notes.loops)
+        && try_one(&mut best, (true, false, false, false, 0), "unrotated", &|kept, now| {
+            crate::trial::keeps_unrotated(kept, now, hot, notes.loops, rotation_cap)
         })?
     {
         state.0 = true;
     }
     if hot
         && !notes.left.is_empty()
-        && try_one(&mut best, (state.0, true, false), "rotation-hot", &|kept, now| {
+        && try_one(&mut best, (state.0, true, false, false, 0), "rotation-hot", &|kept, now| {
             crate::trial::keeps_rotated(kept, now, notes.left_loops)
         })?
     {
-        state = (false, true, false);
+        state = (false, true, false, 0);
     }
     if notes.merged > 0 {
-        try_one(&mut best, (state.0, state.1, true), "unmerged", &|kept, now| {
+        state.2 = try_one(&mut best, (state.0, state.1, true, false, 0), "unmerged", &|kept, now| {
             crate::trial::keeps_unmerged(kept, now, notes.merged)
+        })?;
+    }
+    if notes.hinted
+        && hint_trial
+        && try_one(&mut best, (state.0, state.1, state.2, false, 1), "keep-hinted-calls", &|kept, now| {
+            crate::trial::keeps_unhinted(kept, now, rotation_cap)
+        })?
+    {
+        state.3 = 1;
+    }
+    if notes.negative
+        && hint_trial
+        && try_one(&mut best, (state.0, state.1, state.2, false, 2), "keep-negative-calls", &|kept, now| {
+            crate::trial::keeps_unhinted(kept, now, rotation_cap)
+        })?
+    {
+        state.3 = 2;
+    }
+    if notes.divides {
+        try_one(&mut best, (state.0, state.1, state.2, true, state.3), "divides", &|kept, now| {
+            !crate::trial::expansion_pays(kept, now)
         })?;
     }
     Ok((best.0, best.1))

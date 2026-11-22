@@ -211,15 +211,20 @@ impl Builder<'_> {
     ) -> bool {
         // DEVIATE SD103: at optsize two compares stay two branches; merged they
         // cost a `setcc` pair and a logic op, and byte registers are scarce;
-        // the target table asks the same at every level (m16).
-        if self.has_opt_size() || self.target.tuning.split_merged_conditions {
+        // the target table asks the same at every level (m16). The pin has no
+        // such rule: a target that follows it says so (arm64).
+        if self.target.tuning.split_merged_conditions {
             return false;
         }
         // `TargetLoweringBase::getJumpConditionMergingParams`: {-1, -1, -1},
         // which always splits.
         let Some(tti) = self.target.tti.clone() else { return false };
         let tti = tti.0;
-        // The target's TTI asks the same at every level (m32; m16 has its table).
+        if self.has_opt_size() && tti.splits_merged_conditions_at_optsize() {
+            return false;
+        }
+        // The target's TTI asks the same at every level (m32; m16 has its
+        // table).
         if tti.splits_merged_conditions() {
             return false;
         }
@@ -526,7 +531,7 @@ fn cond_has_one_use(
 }
 
 /// `getFCmpCodeWithoutNaN`: the code of a compare that cannot see a NaN.
-fn without_nan(cc: CondCode) -> CondCode {
+pub(super) fn without_nan(cc: CondCode) -> CondCode {
     match cc {
         CondCode::SetOEq | CondCode::SetUEq => CondCode::SetEq,
         CondCode::SetOGt | CondCode::SetUGt => CondCode::SetGt,

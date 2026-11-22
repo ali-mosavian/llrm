@@ -81,11 +81,11 @@ def test_a_register_copy_costs_what_the_486_sheet_says_and_the_compilers_table_a
 
 def test_the_multiplier_operand_is_the_target_descriptions_not_an_environment_switch(monkeypatch):
     """quicksort -O2 read +29.4k, +8.0k or +18.7k clocks against the old compiler by which `VSGCC_IMUL_MODEL` the run happened to set: the
-    harness priced a multiplier the compiler's table never stated. The description (`smul_multiplier`) is the one place, and the 486 says
-    its source operand."""
+    harness priced a multiplier the compiler's table never stated. The description (`smul_multiplier`) is the one place: oversight's
+    2026-11-20 ruling is the cheaper operand (the 386 reference's "smaller operand", the only documented reading)."""
     monkeypatch.setenv("VSGCC_IMUL_MODEL", "dest")
-    assert harness.imul_model() == "source"
-    assert clocks.audited("smul_multiplier") == 1
+    assert harness.imul_model() == "min"
+    assert clocks.audited("smul_multiplier") == 2
 
 
 def test_a_multiply_costs_the_data_sheet_note_3_figure_from_the_descriptions_bounds(monkeypatch):

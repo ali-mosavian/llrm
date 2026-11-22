@@ -8,6 +8,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 
 GUARD = os.path.join(os.path.dirname(os.path.abspath(__file__)), "load_guard.sh")
 
@@ -45,6 +46,11 @@ def descendants(root):
                 found.append(pid)
                 frontier.append(pid)
     return found
+
+
+def hermetic():
+    """The environment without any `LG_*`: the runner that runs these tests exports its own (LG_PRIO_FILE, LG_NO_WAIT, LG_QUIET, ...), and a leaked one made 'waiting for slot' read 'admit slot 1' (#10314)."""
+    return {k: v for k, v in os.environ.items() if not k.startswith("LG_")}
 
 
 # The mechanism tests run on the thresholds they were written for; the shipped defaults are asserted once, in Defaults.
@@ -107,7 +113,7 @@ class Env:
     def start(self, *command, **env):
         guard = subprocess.Popen(
             [GUARD, *command],
-            env={**os.environ, "LG_LOAD_FILE": self.load, "LG_POLL": "0.1", "LG_SLOT_DIR": self.slots, "LG_MEMINFO": self.meminfo, **PROFILE, **env},
+            env={**hermetic(), "LG_LOAD_FILE": self.load, "LG_POLL": "0.1", "LG_SLOT_DIR": self.slots, "LG_MEMINFO": self.meminfo, **PROFILE, **env},
             stderr=subprocess.PIPE, text=True,
         )
         self.guards.append(guard)
@@ -388,8 +394,23 @@ class TermInsideTheQueue(Env, unittest.TestCase):
         return True
 
 
+class Hermetic(Env, unittest.TestCase):
+    def test_an_lg_variable_of_the_caller_does_not_reach_the_guard(self):
+        """The runner exports LG_PRIO_FILE and LG_NO_WAIT; a starter here then queued in the runner's file and refused to wait: 'admit slot 1' where 'waiting for slot' was expected (#10314)."""
+        outside = os.path.join(self.dir.name, "outside-prio")
+        with mock.patch.dict(os.environ, {"LG_PRIO_FILE": outside, "LG_NO_WAIT": "1", "LG_QUIET": "1"}):
+            holder = self.start("sleep", "30", LG_SLOTS="1", LG_SLOTS_HIGH="1", LG_SETTLE="0")
+            self.assertTrue(until(lambda: os.path.isdir(self.slots) and os.path.exists(os.path.join(self.slots, "jobs", str(holder.pid)))))
+            waiter = self.start("true", LG_SLOTS="1", LG_SLOTS_HIGH="1", LG_SETTLE="0")
+            self.assertTrue(until(lambda: os.path.exists(os.path.join(self.slots, "prio")), 10), "the waiter did not queue in its own slot dir")
+            holder.terminate()
+            holder.wait(timeout=5)
+            self.assertEqual(waiter.wait(timeout=10), 0)
+        self.assertFalse(os.path.exists(outside), "the caller's LG_PRIO_FILE was used")
+
+
 class Cancel(Env, unittest.TestCase):
-    """--cancel JOBID kills exactly the recorded process group. Pattern kills (pgrep -f / pkill -f) took out three sessions' builds on 2026-11-10."""
+    """--cancel JOBID kills exactly the recorded process group. Kills by process name took out three sessions' builds on 2026-11-10."""
 
     def job(self, *command):
         guard = self.start(*command, LG_SLOTS="5", LG_SLOTS_HIGH="5", LG_SETTLE="0")
@@ -398,7 +419,7 @@ class Cancel(Env, unittest.TestCase):
         return guard
 
     def cancel(self, ident):
-        return subprocess.run([GUARD, "--cancel", str(ident)], env={**os.environ, "LG_SLOT_DIR": self.slots}, capture_output=True, text=True)
+        return subprocess.run([GUARD, "--cancel", str(ident)], env={**hermetic(), "LG_SLOT_DIR": self.slots}, capture_output=True, text=True)
 
     def test_cancel_kills_the_recorded_job_and_leaves_one_with_the_same_command_line(self):
         first, second = self.job("sleep", "300"), self.job("sleep", "300")

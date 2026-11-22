@@ -38,6 +38,13 @@
 //! reads floats, null and aggregates), and `processStore`'s promotion of an
 //! aggregate store to a memset is absent. Exit: S2, with the float constants.
 //! DEVIATE 4: unreachable blocks are walked. Exit: none needed.
+//! DEVIATE 5 (MEMSET-GAP, owner llrm-target-x86-m16-b, exit 2026-11-27;
+//! `Tuning::memset_gap_merge_at_size`, optsize functions): a store of another
+//! value to the same object does not end the scan. Two memsets, and what lies
+//! between them, are one memset placed before the first such store when those
+//! stores fill the gap whole and lie outside every range. SROA splits a zeroed
+//! aggregate's memset where a field is then set, and each piece was a string
+//! clear (QB `forloop`: 73 and 23 bytes; gcc clears the 104 once).
 //! DEVIATE 5: `processStoreOfLoad`, `processMemCpy` and the rest are stages 2
 //! and 3.
 //!
@@ -70,7 +77,7 @@ use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
 use llrm_mir::memory::{self, Effects};
 use llrm_mir::module::{Function, InstId, Operand};
-use llrm_mir::opcode::{CallInfo, Flags, Opcode};
+use llrm_mir::opcode::{Attribute, CallInfo, Flags, Opcode};
 use llrm_mir::passes::{self, Analyses, Declared, FunctionPass, Outer, PreservedAnalyses};
 use llrm_mir::types::{FloatKind, Type};
 
@@ -352,6 +359,7 @@ fn try_merging_into_memset(
     start: InstId,
     start_ptr: Operand,
     byte: Byte,
+    gaps: bool,
 ) -> Option<InstId> {
     let callees = outer.callees();
     let plan = {
@@ -366,49 +374,124 @@ fn try_merging_into_memset(
             None => (constant_memset(&unit, callees, function, start)?.2, (start, false)),
         };
         let base = reference(start_ptr, start_size)?;
-        let mut ranges: Vec<Range> = Vec::new();
-        let mut at = function.next_in_block(start)?;
-        let stopped = loop {
-            STEPS.with(|steps| steps.set(steps.get() + 1));
-            let inst = function.instruction(at);
-            if inst.opcode.is_terminator() {
-                break at;
-            }
-            let found = if let Some((value, pointer)) = simple_store(function, at) {
-                // A store of the same byte at a constant offset from the start.
-                (bytewise(&unit, value) == Some(byte)).then(|| (pointer, stored_bytes(&unit, value).unwrap_or(1), true))
-            } else if let Some((dest, other, length)) = constant_memset(&unit, callees, function, at) {
-                let same = match byte {
-                    Byte::Constant(wanted) => unit.int_constant(other) == Some(wanted),
-                    Byte::Value(value) => other == value,
-                };
-                same.then_some((dest, length, false))
-            } else if memory::of(unit.context, callees, function, at) == Effects::NONE {
-                // Touches no memory: stepped over.
-                at = function.next_in_block(at)?;
-                continue;
-            } else {
-                None
-            };
-            let Some((pointer, size, is_store)) = found else { break at };
-            let Some(next) = reference(pointer, size) else { break at };
-            // `getPointerOffsetFrom`: one value and a constant between them. The variable index
-            // is the same one on both sides, so only the displacements differ.
-            if next.root != base.root
-                || next.base != base.base
-                || next.scale != base.scale
-                || next.base_width != base.base_width
-            {
-                break at;
-            }
-            add_range(&mut ranges, next.disp - base.disp, size, pointer, alignment(&unit, at), (at, is_store));
-            at = function.next_in_block(at)?;
+        let same_base = |next: &MemRef| {
+            next.root == base.root
+                && next.base == base.base
+                && next.scale == base.scale
+                && next.base_width == base.base_width
         };
-        // Only the start: a single store with nothing to merge.
-        if ranges.is_empty() {
-            return None;
+        // DEVIATE MEMSET-GAP (`Tuning::memset_gap_merge_at_size`): with
+        // a gap scan, a store of another value to the same object does not end
+        // the scan; it is a hole the ranges may be joined across.
+        let scan = |holes_allowed: bool| -> Option<(Vec<Range>, InstId, Vec<(i64, i64, InstId)>)> {
+            let mut ranges: Vec<Range> = Vec::new();
+            let mut holes: Vec<(i64, i64, InstId)> = Vec::new();
+            let mut at = function.next_in_block(start)?;
+            let stopped = loop {
+                STEPS.with(|steps| steps.set(steps.get() + 1));
+                let inst = function.instruction(at);
+                if inst.opcode.is_terminator() {
+                    break at;
+                }
+                let found = if let Some((value, pointer)) = simple_store(function, at) {
+                    // A store of the same byte at a constant offset from the
+                    // start.
+                    if bytewise(&unit, value) == Some(byte) {
+                        Some((pointer, stored_bytes(&unit, value).unwrap_or(1), true))
+                    } else if holes_allowed
+                        && let Some(size) = stored_bytes(&unit, value)
+                        && let Some(hole) = reference(pointer, size as i64)
+                        && same_base(&hole)
+                    {
+                        holes.push((hole.disp - base.disp, size as i64, at));
+                        at = function.next_in_block(at)?;
+                        continue;
+                    } else {
+                        None
+                    }
+                } else if let Some((dest, other, length)) = constant_memset(&unit, callees, function, at) {
+                    let same = match byte {
+                        Byte::Constant(wanted) => unit.int_constant(other) == Some(wanted),
+                        Byte::Value(value) => other == value,
+                    };
+                    same.then_some((dest, length, false))
+                } else if memory::of(unit.context, callees, function, at) == Effects::NONE {
+                    // Touches no memory: stepped over.
+                    at = function.next_in_block(at)?;
+                    continue;
+                } else {
+                    None
+                };
+                let Some((pointer, size, is_store)) = found else { break at };
+                let Some(next) = reference(pointer, size) else { break at };
+                // `getPointerOffsetFrom`: one value and a constant between
+                // them. The variable index is the same one on
+                // both sides, so only the displacements differ.
+                if !same_base(&next) {
+                    break at;
+                }
+                add_range(&mut ranges, next.disp - base.disp, size, pointer, alignment(&unit, at), (at, is_store));
+                at = function.next_in_block(at)?;
+            };
+            // Only the start: a single store with nothing to merge.
+            if ranges.is_empty() {
+                return None;
+            }
+            add_range(&mut ranges, 0, start_size, start_ptr, alignment(&unit, start), start_inst);
+            Some((ranges, stopped, holes))
+        };
+        let mut chosen = scan(false);
+        if gaps && let Some((mut joined, after, found)) = scan(true) {
+            // The holes lie outside every range, and the ranges that touch a
+            // gap they fill whole are one.
+            let outside =
+                found.iter().all(|&(at, size, _)| joined.iter().all(|one| at + size <= one.start || at >= one.end));
+            let filled = |from: i64, to: i64| {
+                (from..to).all(|byte| found.iter().any(|&(at, size, _)| at <= byte && byte < at + size))
+            };
+            // Only two memsets are joined, whatever stores lie between them:
+            // that is one memset fewer, where a run of stores a memset
+            // replaces may be larger than they were.
+            let long = |range: &Range| range.stores.iter().any(|(_, store)| !store);
+            let mut one: Vec<Range> = Vec::new();
+            let mut index = 0;
+            while outside && index < joined.len() {
+                let mut last = index;
+                while last + 1 < joined.len() && filled(joined[last].end, joined[last + 1].start) {
+                    last += 1;
+                }
+                if last > index && joined[index..=last].iter().filter(|range| long(range)).count() >= 2 {
+                    let mut range = joined.remove(index);
+                    for _ in index..last {
+                        let next = joined.remove(index);
+                        range.stores.extend(next.stores);
+                        range.end = next.end;
+                    }
+                    one.push(range);
+                } else {
+                    index += 1;
+                }
+            }
+            // The memset goes before the first store of the gap, which then
+            // overwrites what it cleared there: its pointer is made before.
+            let first = found.first().map_or(after, |hole| hole.2);
+            let mut made_after_start = std::collections::BTreeSet::new();
+            let mut cursor = function.next_in_block(start);
+            while let Some(inst) = cursor.filter(|&inst| inst != first) {
+                made_after_start.insert(inst);
+                cursor = function.next_in_block(inst);
+            }
+            let ready = |range: &Range| {
+                !matches!(
+                    range.start_ptr,
+                    Operand::Value(value) if matches!( function.value(value).def, llrm_mir::module::ValueDef::Instruction(def) if made_after_start.contains(&def))
+                )
+            };
+            if !one.is_empty() && one.iter().all(ready) {
+                chosen = Some((one, first, found));
+            }
         }
-        add_range(&mut ranges, 0, start_size, start_ptr, alignment(&unit, start), start_inst);
+        let (ranges, stopped, _) = chosen?;
         let mut plan = Plan { memsets: Vec::new(), stores: Vec::new(), before: stopped };
         for range in &ranges {
             if range.stores.len() == 1 || !profitable(range, widest) {
@@ -439,6 +522,7 @@ fn iterate_on_function(
     function: &mut Function,
     outer: &Outer,
     declared: &mut Declared,
+    gaps: bool,
 ) -> bool {
     let callees = outer.callees();
     let mut changed = false;
@@ -462,7 +546,8 @@ fn iterate_on_function(
                 }
             };
             let Some((pointer, byte)) = candidate else { continue };
-            if let Some(made) = try_merging_into_memset(context, layout, function, outer, declared, inst, pointer, byte)
+            if let Some(made) =
+                try_merging_into_memset(context, layout, function, outer, declared, inst, pointer, byte, gaps)
             {
                 changed = true;
                 // Not invalidated: the walk goes on from the memset.
@@ -481,8 +566,19 @@ pub fn run_impl(
     outer: &Outer,
     declared: &mut Declared,
 ) -> bool {
+    // MEMSET-GAP: where the target joins them, and the function is for size.
+    let size = function
+        .attrs
+        .iter()
+        .any(
+            |attr| matches!(
+                attr,
+                Attribute::Flag(flag) if flag == "optsize" || flag == "minsize"
+            ),
+        );
+    let gaps = size && outer.target().tti().is_some_and(|tti| tti.memset_gap_merge_at_size());
     let mut changed = false;
-    while iterate_on_function(context, layout, function, outer, declared) {
+    while iterate_on_function(context, layout, function, outer, declared, gaps) {
         changed = true;
     }
     changed

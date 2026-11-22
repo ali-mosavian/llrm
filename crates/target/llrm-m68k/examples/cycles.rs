@@ -10,7 +10,8 @@
 //! `CYCLES_CPUS`, and per call (`CYCLES_CALLS`, default 3000). qemu runs
 //! `CYCLES_QEMU_CPU` (default `m68020` for a path containing `68020`, else
 //! `m68000`). The clocks are the tables' instruction clocks, not bus cycles.
-//! A `*` marks a total that holds a data-dependent term at its bound; `?`
+//! A `*` marks a total that holds a data-dependent term at its lower bound; `<=` one whose
+//! only such terms are published maxima (multiply, divide): the true total is at most it; `?`
 //! counts executed instructions the tables do not cover.
 
 use std::collections::HashMap;
@@ -24,7 +25,8 @@ use llrm_m68k::kernels::{data, library_data, library_table, program_with_data, s
 use llrm_m68k::object::{assemble, executable, write_executable};
 use llrm_m68k::timing::{DataRegisters, cost_on, cost_on_counted, from_gnu};
 
-// An explicit path: matrix.rs includes this file as a module, where `mod tempdir;` would look beside it.
+// An explicit path: matrix.rs includes this file as a module, where `mod
+// tempdir;` would look beside it.
 #[path = "tempdir/mod.rs"]
 mod tempdir;
 
@@ -176,6 +178,77 @@ fn read_shift_counts(
     counts
 }
 
+/// A 16-bit multiply by a register or memory source: `(destination data
+/// register, instruction bytes, signed)`.
+type Multiplies = HashMap<u32, (usize, usize, bool)>;
+
+/// `n` of each execution of a 16-bit multiply (`mulu.w`/`muls.w`), in execution
+/// order: `(pc, n)`, `None` where the state could not show it. The 68000 prices
+/// the multiply by its source (38 + 2n clocks), which may sit in memory, so a
+/// second run logs the cpu state at each multiply and at the instruction after
+/// it: the destination's low word before, the product after, give the source.
+fn multiply_counts(
+    exe: &Path,
+    cpu: &str,
+    multiplies: &Multiplies,
+) -> Vec<(u32, Option<u32>)> {
+    if multiplies.is_empty() {
+        return Vec::new();
+    }
+    let ranges: Vec<String> = multiplies
+        .iter()
+        .flat_map(|(pc, (_, len, _))| [format!("0x{pc:x}+2"), format!("0x{:x}+2", pc + *len as u32)])
+        .collect();
+    let mut command = Command::new("qemu-m68k");
+    command
+        .args(["-cpu", cpu, "-one-insn-per-tb", "-d", "exec,cpu", "-dfilter", &ranges.join(","), "-D", "/dev/stderr"])
+        .arg(exe);
+    read_multiply_counts(command, multiplies, time_limit())
+}
+
+fn read_multiply_counts(
+    command: Command,
+    multiplies: &Multiplies,
+    limit: std::time::Duration,
+) -> Vec<(u32, Option<u32>)> {
+    let mut entries: Vec<(u32, [Option<u32>; 8])> = Vec::new();
+    run_logged(command, limit, |line| {
+        if let Some(pc) = trace_pc(line) {
+            entries.push((pc, [None; 8]));
+        } else if let (Some(last), Some((name, value))) = (entries.last_mut(), line.split_once(" = ")) {
+            let register = name.strip_prefix('D').and_then(|n| n.parse::<usize>().ok()).filter(|n| *n < 8);
+            if let Some(register) = register {
+                last.1[register] = value.split_whitespace().next().and_then(|hex| u32::from_str_radix(hex, 16).ok());
+            }
+        }
+        true
+    });
+    let mut counts = Vec::new();
+    for (index, (pc, state)) in entries.iter().enumerate() {
+        let Some(&(register, len, signed)) = multiplies.get(pc) else { continue };
+        let ones = entries
+            .get(index + 1)
+            .filter(|next| next.0 == pc + len as u32)
+            .and_then(
+                |next| {
+                    let before = state[register]? & 0xffff;
+                    let product = next.1[register]?;
+                    if before == 0 {
+                        return None; // the product is 0 whatever the source was
+                    }
+                    let source = if signed {
+                        ((product as i32) / i32::from(before as u16 as i16)) as u32 & 0xffff
+                    } else {
+                        product / before
+                    };
+                    Some(llrm_m68k::timing::word_ones(signed, source))
+                },
+            );
+        counts.push((*pc, ones));
+    }
+    counts
+}
+
 /// `CYCLES_EXE=program CYCLES_FUNCS=a,b,c`: price a whole program (a
 /// difftest seed's `ours`) over those functions instead of the kernel `k`.
 /// The matrix names `k` itself: its tables do not move with the environment.
@@ -245,6 +318,12 @@ pub(crate) struct Total {
     pub(crate) insns: usize,
     pub(crate) clocks: Vec<u64>,
     pub(crate) partial: bool,
+    /// A partial term that is not a published maximum (a shift count at its
+    /// lower bound...): the total is no upper bound.
+    pub(crate) open_above: bool,
+    /// The instructions that made `open_above` (an unnamed lower bound is an instrument gap), by text, with the times
+    /// each ran.
+    pub(crate) open_terms: std::collections::BTreeMap<String, u64>,
     /// Executed instructions with no disassembly: unpriced on every model.
     pub(crate) unknown: usize,
     /// Executed instructions one model has no row for (a 68020 `extb.l` on the
@@ -260,6 +339,8 @@ impl Total {
             insns: 0,
             clocks: vec![0; models.len()],
             partial: false,
+            open_above: false,
+            open_terms: std::collections::BTreeMap::new(),
             unknown: 0,
             unpriced: vec![0; models.len()],
             truncated: false,
@@ -282,6 +363,10 @@ impl Total {
                 Ok(one) => {
                     self.clocks[slot] += u64::from(one.clocks);
                     self.partial |= one.partial;
+                    self.open_above |= one.partial && !one.maximum;
+                    if one.partial && !one.maximum {
+                        *self.open_terms.entry(text.to_owned()).or_default() += 1;
+                    }
                 }
                 Err(why) => {
                     assert!(!why.starts_with(llrm_m68k::timing::UNPARSEABLE), "{why}");
@@ -321,9 +406,21 @@ impl Total {
         if self.truncated {
             return format!("cut@{}", self.insns);
         }
-        let mark = if self.partial { "*" } else { "" };
+        let (before, after) = match (self.partial, self.open_above) {
+            (false, _) => ("", ""),
+            (true, true) => ("", "*"),
+            (true, false) => ("<=", ""),
+        };
         let unknown = if self.unknown_of(slot) > 0 { format!(" ?{}", self.unknown_of(slot)) } else { String::new() };
-        format!("{}{mark}{unknown}", self.clocks[slot])
+        format!("{before}{}{after}{unknown}", self.clocks[slot])
+    }
+
+    /// The instructions behind a `*`, most often run first: `muls.l %d1, %d0 x4; bfextu (%a0){0:8}, %d1 x2`. Empty for a
+    /// total with no open lower bound.
+    pub(crate) fn open_terms_line(&self) -> String {
+        let mut terms: Vec<(&String, &u64)> = self.open_terms.iter().collect();
+        terms.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
+        terms.iter().take(4).map(|(text, times)| format!("{text} x{times}")).collect::<Vec<_>>().join("; ")
     }
 
     /// The unpriced instructions of the model in `slot`.
@@ -404,6 +501,42 @@ mod tests {
         assert!(total.clocks[1] > total.clocks[0]);
     }
 
+    /// memmove_overlap 68020 O2: two `muls.l` at their maximum read `4668*`,
+    /// a lower-bound mark on an upper bound, and the cell went blank.
+    #[test]
+    fn a_total_of_only_maxima_is_marked_as_an_upper_bound() {
+        let models = [Model::M68020];
+        let run = |trace: &[&str]| {
+            let mut total = Total::new(&models);
+            let mut registers = DataRegisters::new();
+            let mut seen = std::collections::HashSet::new();
+            for text in trace {
+                total.charge_executed(&models, &mut registers, text, 4, false, None, &mut seen);
+            }
+            total
+        };
+        assert!(run(&["moveq #27, %d1", "muls.l %d1, %d0"]).cell(0).starts_with("<="));
+        assert!(run(&["muls.l %d1, %d0", "bfextu (%a0){0:8}, %d1"]).cell(0).ends_with('*'), "a bit-field bound is no upper bound");
+    }
+
+    /// A `*` named no instruction, so a `>=` cell could not be told from a cut run (register_upper_half 68020 -Os: ours
+    /// `>=4524`, gcc `>=4137`, undecidable). The open terms are listed by text with their counts.
+    #[test]
+    fn an_open_lower_bound_names_its_instructions() {
+        let models = [Model::M68020];
+        let mut total = Total::new(&models);
+        let mut registers = DataRegisters::new();
+        let mut seen = std::collections::HashSet::new();
+        for text in ["muls.l %d1, %d0", "bfextu (%a0){0:8}, %d1", "bfextu (%a0){0:8}, %d1"] {
+            total.charge_executed(&models, &mut registers, text, 4, false, None, &mut seen);
+        }
+        assert!(total.cell(0).ends_with('*'));
+        assert_eq!(total.open_terms_line(), "bfextu (%a0){0:8}, %d1 x2");
+        let mut closed = Total::new(&models);
+        closed.charge_executed(&models, &mut registers, "moveq #27, %d1", 2, false, None, &mut seen);
+        assert_eq!(closed.open_terms_line(), "");
+    }
+
     /// bitcount_idioms 68000 O1 priced `lsr.l %d2,%d0` (`d2` = 16, run 8 times)
     /// at zero places: 8 clocks where the table says 8 + 2 x 16 = 40, so the
     /// parked parity change read +1504 clocks instead of +1760.
@@ -467,6 +600,25 @@ mod tests {
         assert_eq!(counts, [(0x1000, 0x5f % 64), (0x1000, 0x1a)]);
     }
 
+    /// gcc's `muls.w (%a0)+, %d3` priced at the 74-clock bound, so
+    /// `loop_versioning` -O3 read `126952*` and `m68k_clk.py` left the cell
+    /// empty. The destination's low word before and the product after give
+    /// the source: 6 x -5 = -30.
+    #[test]
+    fn the_state_around_a_multiply_gives_the_ones_of_its_source() {
+        let log = "echo 'Trace 0: 0x7f00 [00000000/00001000/00000000/0]' >&2; echo 'D3 = 00000006   A3 = 0' >&2; \
+            echo 'Trace 0: 0x7f00 [00000000/00001002/00000000/0]' >&2; echo 'D3 = ffffffe2   A3 = 0' >&2; \
+            echo 'Trace 0: 0x7f00 [00000000/00001000/00000000/0]' >&2; echo 'D3 = 00000000   A3 = 0' >&2; \
+            echo 'Trace 0: 0x7f00 [00000000/00001002/00000000/0]' >&2; echo 'D3 = 00000000   A3 = 0' >&2";
+        let mut command = std::process::Command::new("sh");
+        command.args(["-c", log]);
+        let multiplies = std::collections::HashMap::from([(0x1000, (3, 2, true))]);
+        let counts = super::read_multiply_counts(command, &multiplies, std::time::Duration::from_secs(30));
+        // -5 = 0xfffb, a 0 appended: 01/10 transitions at the bottom and at
+        // both ends of the 0 bit: 3
+        assert_eq!(counts, [(0x1000, Some(3)), (0x1000, None)], "a zero destination fixes no source");
+    }
+
     /// jpeg_single's trace (516 M instructions, 200 s) was killed at the 120 s
     /// limit and priced as a result: 224 M to 311 M instructions, by load.
     #[test]
@@ -522,6 +674,17 @@ pub(crate) fn price(
         HashMap::new()
     };
     let mut counted = shift_counts(exe, &cpu, &shifts).into_iter();
+    let multiplies: Multiplies = if models.iter().any(|m| matches!(m, Model::M68000 | Model::M68010)) {
+        at.iter()
+            .filter_map(|(pc, (len, text))| {
+                let (register, signed) = DataRegisters::multiply_destination(text)?;
+                Some((*pc, (register, *len, signed)))
+            })
+            .collect()
+    } else {
+        HashMap::new()
+    };
+    let mut multiplied = multiply_counts(exe, &cpu, &multiplies).into_iter();
     let mut total = Total::new(models);
     total.truncated = !complete;
     let mut seen = std::collections::HashSet::new();
@@ -538,6 +701,15 @@ pub(crate) fn price(
                 Some((at, places)) if at == *pc => Some(places),
                 Some(_) => {
                     counted = Vec::new().into_iter();
+                    None
+                }
+                None => None,
+            }
+        } else if multiplies.contains_key(pc) {
+            match multiplied.next() {
+                Some((at, ones)) if at == *pc => ones,
+                Some(_) => {
+                    multiplied = Vec::new().into_iter();
                     None
                 }
                 None => None,
@@ -656,6 +828,9 @@ fn main() {
                 .collect();
             let name = Path::new(&path).file_name().map_or(path.clone(), |n| n.to_string_lossy().into_owned());
             println!("| {name} | {} | {} |", total.insns, cells.join(" | "));
+            if total.open_above {
+                println!("open: {name}: {}", total.open_terms_line());
+            }
         }
         return;
     }

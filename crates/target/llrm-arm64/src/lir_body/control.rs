@@ -103,6 +103,9 @@ pub(super) fn to_op(
             let form = if matches!(callee, Callee::Symbol(_)) { "di" } else { "ri" };
             semantics(Operation::Return, format!("TCRETURN{form}"), vec![], sources, None)
         }
+        // No instruction: the end of a block that goes nowhere, as the shared
+        // passes see a return that reads nothing.
+        Op::Unreachable => semantics(Operation::Return, "UNREACHABLE", vec![], vec![], None),
         Op::FrameAddress { dst, slot, offset } => super::memory::frame_address(*dst, *slot, *offset),
         Op::JumpTable { dst, scratch, table, index, id, targets } => {
             let mut what = semantics(
@@ -114,6 +117,15 @@ pub(super) fn to_op(
             );
             what.indirect = true;
             what.table_id = Some(i64::from(*id));
+            what.table =
+                targets.iter().map(|label| cx.block(&Target::Label(label.clone()))).collect::<Result<_, _>>()?;
+            what
+        }
+        // Computed: the targets are its successors, and no table is emitted.
+        Op::IndirectJump { rn, targets } => {
+            let mut what = semantics(Operation::Jump, "BR", vec![], vec![gpr_loc(*rn, Width::X)], None);
+            what.indirect = true;
+            what.computed = true;
             what.table =
                 targets.iter().map(|label| cx.block(&Target::Label(label.clone()))).collect::<Result<_, _>>()?;
             what
@@ -143,6 +155,7 @@ pub(super) fn back(
     }
     Some(match name {
         "RET_ReallyLR" => Op::Return { uses: registers(0), tail: None },
+        "UNREACHABLE" => Op::Unreachable,
         "TCRETURNdi" | "TCRETURNri" => Op::Return { uses: registers(1), tail: Some(callee_of(cx, &s[0])) },
         "JumpTableDest32" => Op::JumpTable {
             dst: gpr_of(&what.dests[0]),
@@ -156,6 +169,10 @@ pub(super) fn back(
         "B" => Op::I(Inst::Branch { link: false, target: block()? }),
         "BL" => Op::I(Inst::Branch { link: true, target: cx.target_of(&s[0]) }),
         "Bcc" => Op::I(Inst::BranchCond { cond: member(&CONDS, &s[0]), target: block()? }),
+        "BR" if what.computed => Op::IndirectJump {
+            rn: gpr_of(&s[0]),
+            targets: what.table.iter().map(|&at| cx.template.blocks[at as usize].label.clone()).collect(),
+        },
         "BR" => Op::I(Inst::BranchReg { link: false, rn: gpr_of(&s[0]) }),
         "BLR" => Op::I(Inst::BranchReg { link: true, rn: gpr_of(&s[0]) }),
         "TBZ" | "TBNZ" => Op::I(Inst::TestBranch {

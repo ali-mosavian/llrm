@@ -127,6 +127,12 @@ const OPERATIONS: [&str; 45] = [
     "unroll_budget",
 ];
 
+/// What a function costs beyond its operations, stated in `[size]` only: the
+/// bytes it carries (`function`) and the percent its estimate is scaled by
+/// (`function_scale`), measured against objects.
+const FUNCTION_KEYS: [&str; 4] =
+    ["function", "function_scale", "size_caller_function", "size_caller_scale"];
+
 impl Description {
     pub fn parse(text: &str) -> Result<Self, String> {
         let (mut operations, mut bytes, mut sizes) = (Vec::new(), Vec::new(), Vec::new());
@@ -162,7 +168,7 @@ impl Description {
                 ));
                 continue;
             }
-            if !OPERATIONS.contains(&name.as_str()) {
+            if !OPERATIONS.contains(&name.as_str()) && !(section == "size" && FUNCTION_KEYS.contains(&name.as_str())) {
                 return Err(format!("opcosts.txt:{}: no operation `{name}`", index + 1));
             }
             let cost = cost(value, index + 1)?;
@@ -280,6 +286,14 @@ impl Description {
                 other => unreachable!("`{other}` was checked"),
             }
         }
+        for (name, cost) in replaced.iter().filter(|(name, _)| FUNCTION_KEYS.contains(&name.as_str())) {
+            match name.as_str() {
+                "function" => out.function = value(cost),
+                "function_scale" => out.function_scale = value(cost),
+                "size_caller_function" => out.size_caller_function = value(cost),
+                _ => out.size_caller_scale = value(cost),
+            }
+        }
         out
     }
 }
@@ -327,11 +341,39 @@ mod tests {
         assert_eq!((costs.prefix, costs.argument, costs.add, costs.fill), (1, 2, 4, 4 + 8 + 3));
     }
 
+    /// x86-m32's estimate ran 1.4 times the assembled objects (median error 21
+    /// B) because `[size]` could not state a size caller's residue and scale:
+    /// both stayed 0 and 100.
+    #[test]
+    fn test_a_size_table_states_the_functions_residue_and_scale() {
+        let bytes = [
+            "a", "m", "d", "s", "l", "z", "r", "ld", "st", "u", "j", "c", "t", "p", "i", "rp", "fa", "fm", "fd", "fl",
+            "flf", "fs", "fr", "fi", "fcp", "f", "fc", "cp", "cc", "cv",
+        ]
+        .iter()
+        .map(|one| format!("{one} = 4"))
+        .collect::<Vec<_>>()
+        .join("\n");
+        let text = format!("{ALL}[bytes]\n{bytes}\n[size]\nsize_caller_function = 18\nsize_caller_scale = 59\n");
+        let costs = Description::parse(&text).unwrap().size_costs();
+        assert_eq!((costs.size_caller_function, costs.size_caller_scale, costs.function_scale), (18, 59, 100));
+    }
+
     /// Every `target()` of a profile asked for the byte costs again: 5402
     /// evaluations, 66 M of tiny600's 4 236 M instructions. One per table.
     #[test]
     fn test_the_byte_costs_of_a_table_are_evaluated_once() {
-        let text = format!("{ALL}[bytes]\n{}\n", ["a", "m", "d", "s", "l", "z", "r", "ld", "st", "u", "j", "c", "t", "p", "i", "rp", "fa", "fm", "fd", "fl", "flf", "fs", "fr", "fi", "fcp", "f", "fc", "cp", "cc", "cv"].iter().map(|one| format!("{one} = 4")).collect::<Vec<_>>().join("\n"));
+        let text = format!(
+            "{ALL}[bytes]\n{}\n",
+            [
+                "a", "m", "d", "s", "l", "z", "r", "ld", "st", "u", "j", "c", "t", "p", "i", "rp", "fa", "fm", "fd",
+                "fl", "flf", "fs", "fr", "fi", "fcp", "f", "fc", "cp", "cc", "cv"
+            ]
+            .iter()
+            .map(|one| format!("{one} = 4"))
+            .collect::<Vec<_>>()
+            .join("\n")
+        );
         let description = Description::parse(&text).unwrap();
         let before = EVALUATIONS.with(|count| count.get());
         for _ in 0..50 {

@@ -302,6 +302,56 @@ pub fn expand(
             let symbol = format!("{},x", indexed_address(&o[2], &o[3])?);
             byte3(&mut out, carry, mnemonic, reg(&o[0])?, reg(&o[1])?, &symbol);
         }
+        op::ADDO8M | op::SUBO8M | op::ADDOC8M | op::SUBOC8M => {
+            let (carry, mnemonic, at) = match inst.opcode {
+                op::ADDO8M => ("clc", "adc", 3),
+                op::SUBO8M => ("sec", "sbc", 3),
+                op::ADDOC8M => ("", "adc", 4),
+                _ => ("", "sbc", 4),
+            };
+            byte3(&mut out, carry, mnemonic, reg(&o[0])?, reg(&o[2])?, &address(&o[at], &o[at + 1])?);
+        }
+        op::ADDO8MX | op::SUBO8MX | op::ADDOC8MX | op::SUBOC8MX => {
+            let (carry, mnemonic, at) = match inst.opcode {
+                op::ADDO8MX => ("clc", "adc", 3),
+                op::SUBO8MX => ("sec", "sbc", 3),
+                op::ADDOC8MX => ("", "adc", 4),
+                _ => ("", "sbc", 4),
+            };
+            writeln!(out, "  ldx {}", reg(&o[at + 2])?).unwrap();
+            let symbol = format!("{},x", indexed_address(&o[at], &o[at + 1])?);
+            byte3(&mut out, carry, mnemonic, reg(&o[0])?, reg(&o[2])?, &symbol);
+        }
+        op::ADDO16M
+        | op::SUBO16M
+        | op::ADDOC16M
+        | op::SUBOC16M
+        | op::ADDO16MX
+        | op::SUBO16MX
+        | op::ADDOC16MX
+        | op::SUBOC16MX => {
+            let indexed = matches!(
+                inst.opcode,
+                op::ADDO16MX | op::SUBO16MX | op::ADDOC16MX | op::SUBOC16MX
+            );
+            let (carry, mnemonic, at) = match inst.opcode {
+                op::ADDO16M | op::ADDO16MX => ("clc", "adc", 3),
+                op::SUBO16M | op::SUBO16MX => ("sec", "sbc", 3),
+                op::ADDOC16M | op::ADDOC16MX => ("", "adc", 4),
+                _ => ("", "sbc", 4),
+            };
+            let ((dl, dh), (al, ah)) = (word(&o[0])?, word(&o[2])?);
+            let (low, high) = if indexed {
+                writeln!(out, "  ldx {}", reg(&o[at + 2])?).unwrap();
+                let base = indexed_address(&o[at], &o[at + 1])?;
+                (format!("{base},x"), format!("{base}+1,x"))
+            } else {
+                let base = address(&o[at], &o[at + 1])?;
+                (base.clone(), format!("{base}+1"))
+            };
+            byte3(&mut out, carry, mnemonic, &dl, &al, &low);
+            byte3(&mut out, "", mnemonic, &dh, &ah, &high);
+        }
         op::ADD16 => wide(&mut out, "adc", "adc", &o[0], &o[1], &o[2])?,
         op::SUB16 => wide(&mut out, "sbc", "sbc", &o[0], &o[1], &o[2])?,
         op::ADDO16 => wide(&mut out, "adc", "adc", &o[0], &o[2], &o[3])?,
@@ -585,6 +635,17 @@ pub fn expand(
             writeln!(
                 out,
                 "  lda {al}\n  cmp {bl}\n  lda {ah}\n  sbc {bh}\n  lda {cl}\n  sbc {dl}\n  lda {ch}\n  sbc {dh}"
+            )
+            .unwrap();
+        }
+        // Z only if all four bytes are equal: the first mismatch leaves Z
+        // clear.
+        op::CMPZ32 => {
+            *labels += 1;
+            let ((a0, a1), (b0, b1), (a2, a3), (b2, b3)) = (word(&o[1])?, word(&o[2])?, word(&o[3])?, word(&o[4])?);
+            writeln!(
+                out,
+                "  lda {a0}\n  cmp {b0}\n  bne _z{labels}\n  lda {a1}\n  cmp {b1}\n  bne _z{labels}\n  lda {a2}\n  cmp {b2}\n  bne _z{labels}\n  lda {a3}\n  cmp {b3}\n_z{labels}:"
             )
             .unwrap();
         }

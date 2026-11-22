@@ -49,7 +49,7 @@ use llrm_mir::types::Type as MirType;
 use llrm_support::hash::{HashMap, HashSet, IndexSet};
 
 use crate::ivusers::IvUsers;
-use crate::lsr_formula::{Formula, Immediate, MemAccessTy, RegUseTracker, Symbol};
+use crate::lsr_formula::{Formula, Immediate, MemAccessTy, RegBits, RegUseTracker, Symbol};
 use crate::lsr_use::{
     Cost, Fixup, Kind, Rating, Use, is_am_completely_folded_at, is_am_completely_folded_between, is_legal_use_formula,
 };
@@ -446,7 +446,7 @@ pub fn is_always_foldable(
         scale = 0;
         has_base_reg = true;
     }
-    is_am_completely_folded_at(tti, kind, access, base_gv, base_offset, has_base_reg, scale)
+    is_am_completely_folded_at(tti, kind, access, base_gv, base_offset, has_base_reg, scale, RegBits::default())
 }
 
 /// `isAlwaysFoldable(TTI, SE, MinOffset, MaxOffset, Kind, AccessTy, S,
@@ -486,6 +486,7 @@ pub fn is_always_foldable_scev(
         base_offset,
         has_base_reg,
         scale,
+        RegBits::default(),
     )
 }
 
@@ -839,7 +840,7 @@ impl<'a, 'b> Collection<'a, 'b> {
     ) -> bool {
         self.insert_attempts += 1;
         // A formula that cannot be expanded is not inserted.
-        assert!(self.legal(lu_idx, f), "Formula is illegal");
+        assert!(self.legal(se, lu_idx, f), "Formula is illegal");
         if !self.uses[lu_idx].insert_formula(se, f, self.l) {
             return false;
         }

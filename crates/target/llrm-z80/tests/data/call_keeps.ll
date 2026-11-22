@@ -1,6 +1,6 @@
 target datalayout = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8"
-; ModuleID = '/home/alim/scratch/wt-align/tests/run/c/call_keeps.c'
-source_filename = "/home/alim/scratch/wt-align/tests/run/c/call_keeps.c"
+; ModuleID = 'call_keeps.c'
+source_filename = "call_keeps.c"
 target triple = "msp430"
 
 ; Function Attrs: noinline nounwind

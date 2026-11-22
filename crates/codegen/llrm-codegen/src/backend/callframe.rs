@@ -23,12 +23,12 @@
 //! `ADJCALLSTACKUP`. `emit.rs` turns the pair into `call_frame_setup` /
 //! `call_frame_destroy` at every call at m32 and m64 (DEVIATE CF4), also the
 //! zero-byte ones, as the pin's; the pass is in the flow at every x86 width. At
-//! m16 (`Real16`) `emit.rs` makes `sub sp, N` / `add sp, N - M` itself (none for
-//! a call of no bytes), so the pass finds no setup and changes nothing there. A
-//! zero-byte pair at m16 moved no cell of the cause-A list (0 B on 14 cells,
-//! jpeg_fixed -Os +4 B). The m16 steps left: emit the pseudos for `Real16`
-//! (`slot` 2, 16-bit `Held` cells), let `ReserveCallFrame` lay the reserved
-//! area out in the m16 prologue, and re-check the readers of the old
+//! m16 (`Real16`) `emit.rs` makes `sub sp, N` / `add sp, N - M` itself (none
+//! for a call of no bytes), so the pass finds no setup and changes nothing
+//! there. A zero-byte pair at m16 moved no cell of the cause-A list (0 B on 14
+//! cells, jpeg_fixed -Os +4 B). The m16 steps left: emit the pseudos for
+//! `Real16` (`slot` 2, 16-bit `Held` cells), let `ReserveCallFrame` lay the
+//! reserved area out in the m16 prologue, and re-check the readers of the old
 //! `sub`/`add` (`cfi.rs`, `framefree`, `call_pops`) and the m16 byte and clock
 //! rows. Pushes made at m32 selection time (DEVIATE CG6 of row 50,
 //! `pushfold.rs`) are not this pass's input.
@@ -82,6 +82,7 @@
 //! After `FixupSetCC`, before `FlagsCopy` (the pin's pre-allocation order).
 //! Optimizing levels only, as the pin (`addPreRegAlloc`).
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use llrm_lir::registers::RegId;
@@ -103,6 +104,12 @@ pub struct CallFrameOpt {
     pub has_var_sized: bool,
     /// `STI->slowTwoMemOps()`.
     pub slow_two_mem_ops: bool,
+    /// The bytes every call finds the stack a multiple of
+    /// (`Profile::call_alignment`); 1 where none.
+    pub call_alignment: i64,
+    /// The widest alignment of a frame object: the post-prologue stack keeps
+    /// it.
+    pub phase_step: i64,
 }
 
 impl LIRTransform for CallFrameOpt {
@@ -129,6 +136,12 @@ impl LIRTransform for CallFrameOpt {
 /// popped is reserved again with `sub sp, M`. Any other function adjusts for
 /// every call (`LowerCallFrame`). Runs at every level.
 pub struct ReserveCallFrame {
+    /// The bytes every call finds the stack a multiple of; 1 where none.
+    pub call_alignment: i64,
+    /// The widest alignment of a frame object: the phase is a multiple of it.
+    pub phase_step: i64,
+    /// The callee-saved registers the prologue may push (whole registers).
+    pub saved: Vec<RegId>,
     /// `RegInfo.getStackRegister()`.
     pub stack: RegId,
     /// The width of the stack pointer.
@@ -159,11 +172,23 @@ impl LIRTransform for ReserveCallFrame {
             .iter()
             .flat_map(|block| block.insns.iter())
             .any(|one| one.what.as_ref().is_some_and(|what| what.op == Operation::Push));
-        let probe =
-            CallFrameOpt { slot: 0, align: 0, stack: self.stack, has_var_sized: false, slow_two_mem_ops: false };
-        let mut lowering = LowerCallFrame { stack: self.stack, width: self.width };
-        let Some(frame) = self.frame.as_ref().filter(|_| !pushed && !probe.allocates_dynamically(&body)) else {
-            return lowering.transform(body);
+        let probe = CallFrameOpt {
+            slot: 0,
+            align: 0,
+            stack: self.stack,
+            has_var_sized: false,
+            slow_two_mem_ops: false,
+            call_alignment: 1,
+            phase_step: 1,
+        };
+        let dynamic = probe.allocates_dynamically(&body);
+        let phase = if dynamic { 0 } else { self.call_phase(&body) };
+        let mut lowering =
+            LowerCallFrame { stack: self.stack, width: self.width, call_alignment: self.call_alignment, phase };
+        let Some(frame) = self.frame.as_ref().filter(|_| !pushed && !dynamic) else {
+            let mut out = lowering.transform(body)?;
+            out.call_phase = phase;
+            return Ok(out);
         };
         let area = body
             .blocks
@@ -173,6 +198,8 @@ impl LIRTransform for ReserveCallFrame {
             .filter_map(|one| imm_of(one, 0))
             .max()
             .unwrap_or(0);
+        // The area is not padded: the frame's own size is aligned to the call alignment past the return address (a
+        // 40-byte Win64 area is `sub rsp, 40`, not 48 + 8).
         // The destroys that re-reserve what a callee popped become `sub`.
         let mut out = body.clone();
         for block in &mut out.blocks {
@@ -202,6 +229,87 @@ impl LIRTransform for ReserveCallFrame {
     }
 }
 
+impl ReserveCallFrame {
+    /// Where the frame leaves the stack for the calls that adjust it, in bytes
+    /// past a multiple of `call_alignment` (`LirBody::call_phase`): the one
+    /// whose pads cost the fewest bytes, the frame's own pad (the prologue'
+    /// s `sub`, or a `push`) and each call's. A call of `n` bytes is aligned
+    /// where the frame leaves `-n` past a multiple, so a function whose
+    /// calls all push alike pads neither (GCC's `expand_call` pads the
+    /// argument block against the stack's depth and `ix86_compute_frame_layout`
+    /// the frame to it; the pin pads every block to the alignment, and the
+    /// frame besides). A frame object keeps its alignment, so the phase is
+    /// a multiple of the widest. 0 where the stack moves under the frame or
+    /// no call needs a pad.
+    fn call_phase(
+        &self,
+        body: &LirBody,
+    ) -> i64 {
+        let align = self.call_alignment;
+        let slot = i64::from(self.width);
+        if align <= slot || slot != 4 {
+            return 0;
+        }
+        let sizes: Vec<i64> = body
+            .blocks
+            .iter()
+            .flat_map(|block| block.insns.iter())
+            .filter(|one| name_of(one) == Some("call_frame_setup"))
+            .filter_map(|one| imm_of(one, 0))
+            .collect();
+        if sizes.is_empty() {
+            return 0;
+        }
+        // The stack at the first local: the return address, what the prologue
+        // pushes (estimated from the registers the body writes: the
+        // prologue's own loop keeps the phase whatever this gets wrong).
+        let regs = body.regs();
+        let written: BTreeSet<RegId> = body
+            .blocks
+            .iter()
+            .flat_map(|block| block.insns.iter())
+            .filter_map(|one| one.what.as_ref())
+            .flat_map(|what| what.dests.iter())
+            .filter_map(|dest| match dest {
+                Loc::Reg(reg) => Some(regs.root(reg.register)),
+                _ => None,
+            })
+            .collect();
+        let pushed = self.saved.iter().filter(|whole| written.contains(whole)).count() as i64;
+        let locals = self.frame.as_ref().map_or(0, |frame| frame.borrow().size());
+        let base = (slot + slot * pushed + (locals + slot - 1) / slot * slot) % align;
+        best_phase(&sizes, Some(base), align, self.phase_step.max(slot))
+    }
+}
+
+/// The phase (see `ReserveCallFrame::call_phase`) that pads the fewest bytes of
+/// code: the frame's pad is a `push` (a word) or a `sub` and an `add`; a call's
+/// is a `sub` (its `add` is the one it has), or both for a call of no bytes.
+fn best_phase(
+    sizes: &[i64],
+    base: Option<i64>,
+    align: i64,
+    step: i64,
+) -> i64 {
+    let cost = |phase: i64| -> i64 {
+        let frame = match base.map_or(0, |base| (phase - base).rem_euclid(align)) {
+            0 => 0,
+            4 => 2,
+            _ => 6,
+        };
+        let calls: i64 = sizes
+            .iter()
+            .map(|&bytes| match (padded(bytes, phase, align) != bytes, bytes) {
+                (false, _) => 0,
+                (true, 0) => 6,
+                (true, _) => 3,
+            })
+            .sum();
+        frame + calls
+    };
+    (0..align).step_by(step.max(1) as usize).min_by_key(|&phase| (cost(phase), phase)).unwrap_or(0)
+}
+
 /// What the pin's `eliminateCallFramePseudoInstr` makes of the frame pseudos
 /// where no call frame is reserved: `call_frame_setup N, 0, A` is `sub sp, N -
 /// A` (the pushes made A of it) and `call_frame_destroy N, M` is `add sp, N -
@@ -212,6 +320,10 @@ struct LowerCallFrame {
     pub stack: RegId,
     /// The width of the stack pointer.
     pub width: u32,
+    /// The bytes every call finds the stack a multiple of; 1 where none.
+    pub call_alignment: i64,
+    /// `LirBody::call_phase`.
+    pub phase: i64,
 }
 
 impl LIRTransform for LowerCallFrame {
@@ -246,8 +358,16 @@ impl LIRTransform for LowerCallFrame {
                     Arc::make_mut(&mut out.call_pops).insert(call, imm_of(one, 1).unwrap_or(0));
                 }
                 let (verb, count) = match name_of(one) {
-                    Some("call_frame_setup") => ("sub", imm_of(one, 0).unwrap_or(0) - imm_of(one, 2).unwrap_or(0)),
-                    Some("call_frame_destroy") => ("add", imm_of(one, 0).unwrap_or(0) - imm_of(one, 1).unwrap_or(0)),
+                    Some("call_frame_setup") => (
+                        "sub",
+                        padded(imm_of(one, 0).unwrap_or(0), self.phase, self.call_alignment)
+                            - imm_of(one, 2).unwrap_or(0),
+                    ),
+                    Some("call_frame_destroy") => (
+                        "add",
+                        padded(imm_of(one, 0).unwrap_or(0), self.phase, self.call_alignment)
+                            - imm_of(one, 1).unwrap_or(0),
+                    ),
                     _ => {
                         insns.push(Arc::clone(one));
                         continue;
@@ -269,6 +389,18 @@ impl LIRTransform for LowerCallFrame {
         }
         Ok(out)
     }
+}
+
+/// The call area of `bytes` with the pad that leaves the stack a multiple of
+/// `align` at the call, the frame having left it `phase` past one
+/// (`X86FrameLowering::eliminateCallFramePseudoInstr`'s `alignSPAdjust`, which
+/// pads to a multiple of the stack alignment: here from the frame's phase).
+fn padded(
+    bytes: i64,
+    phase: i64,
+    align: i64,
+) -> i64 {
+    if align <= 1 { bytes } else { bytes + (align - (phase + bytes) % align) % align }
 }
 
 fn name_of(one: &Insn) -> Option<&str> {
@@ -322,7 +454,9 @@ impl CallFrameOpt {
                 }
             }
         }
-        if !self.is_profitable(&contexts, self.has_var_sized || self.allocates_dynamically(body)) {
+        let dynamic = self.has_var_sized || self.allocates_dynamically(body);
+        let phase = self.call_phase(&contexts, dynamic);
+        if !self.is_profitable(&contexts, dynamic, phase) {
             return body.clone();
         }
         let mut out = body.clone();
@@ -332,6 +466,22 @@ impl CallFrameOpt {
             changed = true;
         }
         if changed { out } else { body.clone() }
+    }
+
+    /// The phase `isProfitable` prices the pads at: the calls' alone
+    /// (`ReserveCallFrame::call_phase` adds the frame's own and chooses it
+    /// for good).
+    fn call_phase(
+        &self,
+        contexts: &[CallContext],
+        dynamic: bool,
+    ) -> i64 {
+        let align = self.call_alignment;
+        if align <= self.slot || dynamic || self.slot != 4 {
+            return 0;
+        }
+        let sizes: Vec<i64> = contexts.iter().map(|one| imm_of(&one.setup, 0).unwrap_or(0)).collect();
+        best_phase(&sizes, None, align, self.phase_step.max(self.slot))
     }
 
     // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86CallFrameOptimization.cpp#L147
@@ -366,7 +516,10 @@ impl CallFrameOpt {
         true
     }
 
-    /// `MFI.hasVarSizedObjects()`: a `sub sp, reg`, as `framefree` reads it.
+    /// `MFI.hasVarSizedObjects()`: a `sub sp, reg`, as `framefree` reads it, or
+    /// a `mov sp, reg|mem`: an alloca kept to a 16-byte call alignment computes
+    /// the new `sp` in a register (`sub`, `and`) and copies it back, and a
+    /// `stackrestore` loads it.
     fn allocates_dynamically(
         &self,
         body: &LirBody,
@@ -376,12 +529,17 @@ impl CallFrameOpt {
             .flat_map(|block| block.insns.iter())
             .filter_map(|one| one.what.as_ref())
             .any(
-                |what| matches!(what.name.as_deref(), Some("add" | "sub"))
+                |what| (matches!(what.name.as_deref(), Some("add" | "sub"))
                     && matches!(
                         (&what.dests[..], &what.sources[..]),
                         ([Loc::Reg(dest)], [Loc::Reg(source), Loc::Reg(_)])
                             if dest.register == self.stack && source.register == self.stack
-                    ),
+                    ))
+                    || (what.name.as_deref() == Some("mov")
+                        && matches!(
+                            (&what.dests[..], &what.sources[..]),
+                            ([Loc::Reg(dest)], [Loc::Reg(_) | Loc::Mem(_)]) if dest.register == self.stack
+                        )),
             )
     }
 
@@ -392,6 +550,7 @@ impl CallFrameOpt {
         &self,
         contexts: &[CallContext],
         has_var_sized: bool,
+        phase: i64,
     ) -> bool {
         // Always a win when no call frame can be reserved.
         if has_var_sized {
@@ -411,7 +570,7 @@ impl CallFrameOpt {
                 // The add after the call.
                 advantage -= 3;
                 // A sub before it, if the stack must be realigned.
-                if context.expected_dist % self.align != 0 {
+                if (phase + context.expected_dist) % self.align != 0 {
                     advantage -= 3;
                 }
                 // Each push saves about 3 bytes.
@@ -738,7 +897,15 @@ mod tests {
     use crate::support::hash::IndexMap;
 
     fn pass() -> CallFrameOpt {
-        CallFrameOpt { slot: 4, align: 16, stack: RegId::SP, has_var_sized: false, slow_two_mem_ops: false }
+        CallFrameOpt {
+            slot: 4,
+            align: 16,
+            stack: RegId::SP,
+            has_var_sized: false,
+            slow_two_mem_ops: false,
+            call_alignment: 1,
+            phase_step: 4,
+        }
     }
 
     fn insn(
@@ -881,7 +1048,9 @@ mod tests {
     #[test]
     fn a_volatile_access_is_not_moved_into_a_push() {
         let cell = Mem { through: RegId::DI, offset: 0, ..Mem::new(None, 4) };
-        let plain = || (*insn(0, Operation::Move, "mov", vec![held(1)], vec![Loc::Mem(cell.clone())], vec![1], vec![8])).clone();
+        let plain = || {
+            (*insn(0, Operation::Move, "mov", vec![held(1)], vec![Loc::Mem(cell.clone())], vec![1], vec![8])).clone()
+        };
         let frame = |first: Arc<Insn>, between: Option<Arc<Insn>>| {
             let mut insns = vec![first];
             insns.extend(between);
@@ -892,9 +1061,13 @@ mod tests {
         let mut volatile_load = plain();
         volatile_load.volatile = true;
         assert_eq!(frame(Arc::new(volatile_load), None), kept);
-        let mut volatile_between = (*insn(5, Operation::Move, "mov", vec![held(2)], vec![Loc::Mem(cell.clone())], vec![2], vec![8])).clone();
+        let mut volatile_between =
+            (*insn(5, Operation::Move, "mov", vec![held(2)], vec![Loc::Mem(cell.clone())], vec![2], vec![8])).clone();
         volatile_between.volatile = true;
-        assert_eq!(frame(Arc::new(plain()), Some(Arc::new(volatile_between))), ["mov", "mov", "call_frame_setup", "push", "push", "call", "call_frame_destroy"]);
+        assert_eq!(
+            frame(Arc::new(plain()), Some(Arc::new(volatile_between))),
+            ["mov", "mov", "call_frame_setup", "push", "push", "call", "call_frame_destroy"]
+        );
     }
 
     /// A gap in the slots (slot 1 stored, slot 0 not) is left as stores.
@@ -952,7 +1125,14 @@ mod tests {
 
     fn reserve(insns: Vec<Arc<Insn>>) -> (Vec<String>, i64) {
         let frame = std::rc::Rc::new(std::cell::RefCell::new(crate::backend::frame::Frame::new(0)));
-        let mut pass = ReserveCallFrame { stack: RegId::SP, width: 4, frame: Some(frame.clone()) };
+        let mut pass = ReserveCallFrame {
+            call_alignment: 1,
+            phase_step: 4,
+            saved: Vec::new(),
+            stack: RegId::SP,
+            width: 4,
+            frame: Some(frame.clone()),
+        };
         let after = pass.transform(body(insns)).expect("reserves");
         let area = frame.borrow().call_area;
         (names(&after), area)
@@ -982,10 +1162,76 @@ mod tests {
         assert_eq!(area, 0);
     }
 
+    /// An alloca kept to a 16-byte call alignment is `mov r, sp; sub r, n; and
+    /// r, -16; mov sp, r`, no `sub sp, reg`: the frame was reserved, and a
+    /// call's `mov [esp], arg` then overwrote the array it
+    /// sat on (vla_loop_stack_restored m32 reported 90, not 93).
+    #[test]
+    fn an_alloca_that_copies_the_stack_pointer_back_reserves_no_frame() {
+        let sp = || Loc::Reg(Reg { register: RegId::SP, width: 4 });
+        let cx = || Loc::Reg(Reg { register: RegId::CX, width: 4 });
+        let alloca = insn(0, Operation::Move, "mov", vec![sp()], vec![cx()], vec![], vec![]);
+        let (after, area) = reserve(vec![alloca, setup(4), store(0, held(1), vec![1]), call(), destroy(4)]);
+        assert_eq!(after, ["mov", "sub", "mov", "call", "add"]);
+        assert_eq!(area, 0);
+    }
+
     fn lower(insns: Vec<Arc<Insn>>) -> Vec<String> {
-        let mut lowering = LowerCallFrame { stack: RegId::SP, width: 4 };
+        lower_aligned(insns, 1, 0).iter().map(|(name, _)| name.clone()).collect()
+    }
+
+    /// The lowered instructions, each with its `sub`/`add` amount (0 for any
+    /// other).
+    fn lower_aligned(
+        insns: Vec<Arc<Insn>>,
+        call_alignment: i64,
+        phase: i64,
+    ) -> Vec<(String, i64)> {
+        let mut lowering = LowerCallFrame { stack: RegId::SP, width: 4, call_alignment, phase };
         let after = lowering.transform(body(insns)).expect("lowers");
-        names(&after)
+        after.blocks[0]
+            .insns
+            .iter()
+            .map(|one| (name_of(one).unwrap().to_owned(), imm_of(one, 1).unwrap_or(0)))
+            .collect()
+    }
+
+    /// A 16-aligned call padded an 8-byte push block by 8 whatever the frame
+    /// left (`sub esp, 8` before the pushes, twice in a frame that had
+    /// itself been padded to 16: QuickrBasic m32 -Os +3.04%); a frame that
+    /// leaves the stack 8 past a multiple of 16 needs none.
+    #[test]
+    fn a_pad_is_what_the_frames_phase_leaves_the_call_short_of() {
+        let pushed =
+            |n| insn(0, Operation::Barrier, "call_frame_setup", vec![], vec![imm(n), imm(0), imm(n)], vec![], vec![]);
+        let body = |n| vec![pushed(n), call(), destroy(n)];
+        assert_eq!(lower_aligned(body(8), 16, 0), [("sub".into(), 8), ("call".into(), 0), ("add".into(), 16)]);
+        assert_eq!(lower_aligned(body(8), 16, 8), [("call".into(), 0), ("add".into(), 8)]);
+        let none = vec![setup(0), call(), destroy(0)];
+        assert_eq!(lower_aligned(none.clone(), 16, 8), [("sub".into(), 8), ("call".into(), 0), ("add".into(), 8)]);
+        assert_eq!(lower_aligned(none, 16, 0), [("call".into(), 0)]);
+    }
+
+    /// Three calls push 8 bytes and one pushes none: the frame that leaves the
+    /// stack 8 past a multiple of 16 pads the one, where 0 pads the three;
+    /// and a frame that is itself 8 short pays for its own pad at
+    /// 0 (QuickrBasic's `ast_new`: `sub esp, 8` in the prologue and again at
+    /// its call, +3.04% Os).
+    #[test]
+    fn the_frame_takes_the_phase_that_pads_the_fewest_bytes() {
+        // calls of 8, 8, 8 and 0 bytes
+        assert_eq!(best_phase(&[8, 8, 8, 0], Some(8), 16, 4), 8);
+        // two calls of 0 bytes and one of 8: no pad at 0, and the frame is
+        // aligned already
+        assert_eq!(best_phase(&[8, 0, 0], Some(0), 16, 4), 0);
+        // one call of 8 bytes from a frame whose own pad is 8 at phase 0: phase
+        // 8 pays neither
+        assert_eq!(best_phase(&[8], Some(8), 16, 4), 8);
+        // a frame object 8-aligned keeps the phase a multiple of 8
+        assert_eq!(best_phase(&[4], Some(4), 16, 8) % 8, 0);
+        // `isProfitable` prices the calls alone: a one-argument call is aligned
+        // at phase 12, not 0
+        assert_eq!(best_phase(&[4, 4], None, 16, 4), 12);
     }
 
     /// The frame pseudos that no push replaced were `sub`/`add` in the DAG

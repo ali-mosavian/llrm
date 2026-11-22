@@ -1,5 +1,5 @@
-; ModuleID = '/home/alim/scratch/handoff/greedy-nonempty-interval-seed100.c'
-source_filename = "/home/alim/scratch/handoff/greedy-nonempty-interval-seed100.c"
+; ModuleID = 'greedy-nonempty-interval-seed100.c'
+source_filename = "greedy-nonempty-interval-seed100.c"
 target datalayout = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8-S8"
 target triple = "msp430"
 

@@ -3,6 +3,10 @@
 # Flat code has no far call, no segment to save around a string operation and no
 # 66h on a dword; `prefix` is the CPU's price of the one 16-bit forms carry.
 [operations]
+# DEVIATE X64-BYTES (owner llrm-target-x86-m16-b, exit 2026-11-27): `address`, `load`, `store` and `return` are fitted, not
+# the instruction forms. Least squares of the object bytes of 1228 QB functions (<= 300 B, x86-64 -Os, 75 sources) on the
+# per-class counts of the IR the trial priced (`tools/trial_bytes_fit.py`): load 3.8 B (table 6), store 3.4 (6),
+# address 2.0 (6), ret 9.4 (1: the frame it ends), phi 0 (4: coalesced). Median error 21 B -> 10 B.
 add = alu_rr
 multiply = imul_r32
 divide = idiv_r32
@@ -12,20 +16,20 @@ divide_long = idiv_r32
 # None: the multiply-high is priced at the 486's shortest multiply (`multiply_high`), the dividend being the multiplier.
 divide_margin = 0
 shift = shift_ri
-address = lea
+address = lea - 4
 address_dword = 0
 address_third = 0
 carry = carry(movzx, alu_rr, shift_ri, mov_rr)
 carry_step = step(alu_rr)
-load = mov_rm
-store = mov_mr
+load = mov_rm - 2
+store = mov_mr - 2
 store_immediate = mov_mr
 memory_update = alu_mr
 branch = jcc
 prefix = prefix
 move = mov_rr
 call = call_near
-return = ret_near
+return = ret_near + 8
 argument = mov_mr + mov_rm
 pop = pop_r
 adjust = alu_ri
@@ -75,6 +79,7 @@ mov_rm = 6
 mov_mr = 6
 mov_mi = 10
 alu_mr = 6
+cmpxchg_mr = 7
 jcc = 2
 call_near = 5
 ret_near = 1

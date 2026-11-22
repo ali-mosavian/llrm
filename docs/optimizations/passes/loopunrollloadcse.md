@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/loopunrollloadcse.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/loopunrollloadcse.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/loopunrollloadcse.rs sha256:68815fd1b4cf26cb10adf3da383366c9d2cec7c36cc8a6386ffaa37f6706efff -->
+<!-- src: crates/opt/llrm-transforms/src/loopunrollloadcse.rs sha256:80ba4f90e6eb207b9ee1667a91d9d8716accc590be7afc97ffc6a1ab9aabf43b -->
 
 # loopunrollloadcse
 
@@ -28,3 +28,12 @@ load dominates the access of the available one.
 
 ## Used by
 [`crate::loopunrollpass::unroll_loops`](loopunrollpass.md), where the loop is still a loop.
+
+## Example
+After a partial unroll, a load of an address already loaded, with no write
+between, takes the earlier load's value.
+
+```text
+%a = load i32, ptr %p
+%b = load i32, ptr %p      ; uses of %b become uses of %a, the load is deleted
+```

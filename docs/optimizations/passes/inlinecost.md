@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/inlinecost.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/inlinecost.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/inlinecost.rs sha256:a50f9be81edc554b80ce83f8748684f4adb4747e5f890c2a9d270c1590608c22 -->
+<!-- src: crates/opt/llrm-transforms/src/inlinecost.rs sha256:8b4ea4bfdedf7d66f305938cf36379f3985c304c3198693e58dfd5db84d1b248 -->
 
 # inlinecost
 
@@ -73,13 +73,39 @@ each site's cost and threshold beside the existing decision; with
   `CodeSize` of the callee's instructions that the walk did not fold must
   not exceed the `CodeSize` of the call and the pushes of its arguments.
   LLVM's `OptSizeThreshold` 50 allows growth; a fixed bound (25) copied a
-  14-instruction loop into ten sites (`idioms.bas`, +690 B).
-  Measured 2026-11-07 (m32 -Os, 176 programs, guard off = the pin's rule):
-  47 cells worse, 4 better, +22946 B net (`memory_expansion` 23740 ->
-  40688, `div_constants_long` +989, `idioms` +507, `rep_tails` +485); the
-  one gain is `byvalue_struct_address` 147 -> 16. The guard stays.
-  The last call of a local callee, which goes with it, is the pin's. No shape of callee
-  but the loop and the one smaller than its call is tested.
+  14-instruction loop into ten sites (`idioms.bas`, +690 B). Measured
+  2026-11-07 (m32 -Os, 176 programs, guard off = the pin's rule): 47 cells
+  worse, 4 better, +22946 B net (`memory_expansion` 23740 -> 40688,
+  `div_constants_long` +989, `idioms` +507, `rep_tails` +485); the one gain
+  is `byvalue_struct_address` 147 -> 16. The guard stays. The last call of a
+  local callee, which goes with it, is the pin's. No shape of callee but the
+  loop and the one smaller than its call is tested. A target may say the
+  guard stands down for an `inlinehint` callee at an `optsize` caller
+  (`Tti::opt_size_inline_guard_yields_to_inlinehint`, arm64 and x86-m32:
+  yes): the pin's `updateThreshold` raises the threshold to
+  `InlineHintThreshold` (325) there, and its cost under that is the verdict
+  (QuickrBasic operands.c -Os `hot_operand` into `hot_int`, 26 units against
+  two 3-unit calls: 15,344 -> 10,400 B, the pin's 9,464). The guard still
+  holds for a callee with no hint.
+- INLINEHINT-GROWTH-TRIAL (beyond the pin; gcc's `-Os` inliner takes a
+  callee only while the unit does not grow, `ipa-inline.cc`
+  `want_inline_small_function_p` over `estimate_edge_growth`; owner
+  x86-m32-b, exit 2026-11-30): where that yield passes a callee the size
+  guard (D11) would refuse, the caller is noted and the module compiled
+  again with the guard binding the hinted callee too
+  (`trial::with_kept_hinted_calls`, `driver/trial.rs`); the finished object
+  decides, because the units cannot see what the copies fold to (QB
+  `sfm16_dbg` -Os: `sf_clz32` inlined at six calls, +388 B).
+  arm64 runs the same trial in its own driver (`llrm-arm64/src/driver.rs`,
+  `trial::keeps_unhinted`; owner m16-b, exit 2026-12-20): QB -Os array.c
+  `arry_esize` copied into four callers, 3,264 -> 2,996 B (gcc 3,036).
+  The same trial reverses the negative-cost yield (`yields_to_negative_cost`,
+  `trial::with_kept_negative_calls`, a second stage priced on top of the first):
+  `code_byte` (a bounds check and a store, cost below zero) was copied into
+  every caller; codegen.c 7,008 -> 6,156 B (gcc 6,832), code.c 1,680 -> 1,380.
+- SZ1-SITE (owner m68k-b, exit 2026-11-24): the size rule (D11) prices a
+  callee's instruction with the call site's constant arguments, not only a
+  GEP as `isGEPFree` does (z80 `rotate_small` -O1 922 -> 576 B).
 - D12 (SZ2): a call the -Os bound (D11) alone refuses, that passes the
   address of a stack slot or a global the caller stored a constant to and
   whose callee loads through that parameter, is inlined if the caller,
@@ -94,14 +120,22 @@ each site's cost and threshold beside the existing decision; with
   words it pushes (`sum_three` -Os, +38 B). The pin's cost does not follow a
   load through a pointer argument, so it never sees the loop or the
   arithmetic fold.
+- D13 (SZ5, owner x86-m32, exit 2026-11-24; extends D12): at -Os the credit
+  for the callee that goes with its last call (`(k - 1) * size > k * call +
+  frame`) is not taken in the instruction units; those sites are tried in
+  bytes (SZ2). The units count the callee's own instructions, not what a
+  copy carries at the site: QCport `pl_box_axis` (9 arguments, floats), 21
+  units, ~70 B a copy, inlined three times was +181 B. The pin has no byte
+  trial; its `OptSizeThreshold` alone decides.
 - D9: `noipa` (GCC's; LLVM has no IR form) is `Never` before any other
   attribute decision.
 - D7: the minsize loop penalty counts retreating-edge headers, not
   `LoopInfo`.
-- D10 (`-finline-recursive`, off by default): a callee that calls itself is
-  priced as any (LLVM: "recursive", `IsRecursiveCall`, unless
-  `AllowRecursiveCall`), and `decide` leaves a call of the caller itself to
-  the copies `walk::SelfInline` makes (gcc's `recursive_inlining`,
+- D10 (`-finline-recursive`; on by default at -O2 and -O3 where the target
+  states bounds (x86), `-fno-inline-recursive` turns it off): a callee that
+  calls itself is priced as any (LLVM: "recursive", `IsRecursiveCall`,
+  unless `AllowRecursiveCall`), and `decide` leaves a call of the caller
+  itself to the copies `walk::SelfInline` makes (gcc's `recursive_inlining`,
   ipa-inline.cc:1645: depth `MAX_INLINE_RECURSIVE_DEPTH` 3 against gcc's 8,
   `MAX_INLINE_INSNS_RECURSIVE` 150 against 450, the call's frequency above
   10%; none at -Os; calls of a function that reads and writes nothing with

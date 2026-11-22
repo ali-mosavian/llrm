@@ -521,9 +521,14 @@ pub struct Semantics {
     /// register): the id of the data object that holds the table, which the
     /// jump's cell names when the table is read from memory.
     pub table_id: Option<i64>,
+    /// An `indirectbr`: `table` is the blocks it may reach, and no data object
+    /// holds them.
+    pub computed: bool,
     /// A `rep` prefix on an instruction that is not a string operation
     /// (`IP_HAS_REPEAT`): `bsf` as `tzcnt` on a processor that has it.
     pub repeat: bool,
+    /// A `lock` prefix: the read-modify-write is one atomic step.
+    pub lock: bool,
     /// The bytes of its arguments an indirect call's callee pops, as `masm`
     /// reads them from the body's `call_pops`: the stack depth after the call.
     /// `None` where unknown, which an indirect call keeps the frame register
@@ -547,7 +552,21 @@ impl Semantics {
         dests: Vec<Loc>,
         sources: Vec<Loc>,
     ) -> Semantics {
-        let Semantics { op, name: _, dests: _, sources: _, target, indirect, table, table_id, repeat, pops, tied } = self;
+        let Semantics {
+            op,
+            name: _,
+            dests: _,
+            sources: _,
+            target,
+            indirect,
+            table,
+            table_id,
+            computed,
+            repeat,
+            lock,
+            pops,
+            tied,
+        } = self;
         Semantics {
             op: *op,
             name,
@@ -557,7 +576,9 @@ impl Semantics {
             indirect: *indirect,
             table: table.clone(),
             table_id: *table_id,
+            computed: *computed,
             repeat: *repeat,
+            lock: *lock,
             pops: *pops,
             tied: tied.clone(),
         }
@@ -580,6 +601,7 @@ impl std::hash::Hash for Semantics {
         self.indirect.hash(state);
         self.table.hash(state);
         self.repeat.hash(state);
+        self.lock.hash(state);
         self.pops.hash(state);
     }
 }
@@ -605,7 +627,9 @@ impl Semantics {
             && self.indirect == other.indirect
             && self.table == other.table
             && self.table_id == other.table_id
+            && self.computed == other.computed
             && self.repeat == other.repeat
+            && self.lock == other.lock
             && self.pops == other.pops
             && same(&self.dests, &other.dests)
             && same(&self.sources, &other.sources)
@@ -697,7 +721,9 @@ impl Semantics {
             indirect: false,
             table: Vec::new(),
             table_id: None,
+            computed: false,
             repeat: false,
+            lock: false,
             pops: None,
             tied: None,
         }
@@ -717,7 +743,9 @@ pub static RESTORE_IDIOM: LazyLock<Semantics> = LazyLock::new(|| Semantics {
     indirect: false,
     table: Vec::new(),
     table_id: None,
+    computed: false,
     repeat: false,
+    lock: false,
     pops: None,
     tied: None,
 });
@@ -816,7 +844,9 @@ pub fn restoring(
         indirect: false,
         table: Vec::new(),
         table_id: None,
+        computed: false,
         repeat: false,
+        lock: false,
         pops: None,
         tied: None,
     }

@@ -8,8 +8,10 @@
 //! saves [`SAVED_CLOCKS`] on average over ten wide shapes (measured with
 //! `timeit.py`, new against old: 3000009 / 1000003 saves 609, 70000 / 300 costs
 //! 169, 4000000000 / 65537 saves 0, the ten sum to 1824), so a site repays the
-//! bytes from `423 / 182`, 3 runs. A site counts as `staticlocals` counts: 10
-//! per level of loop depth, times the runs of its function (the call sites in
+//! bytes from `423 / 182`, 3 runs. The cold calls of the speed levels link the
+//! lean body (`udivmod32_fast_lean`, 31 B under the small one): the wide path is
+//! 172 B over it and repays from 3 runs too (`172 x 3 / 182` = 2.8). A site
+//! counts as `staticlocals` counts: 10 per level of loop depth, times the runs of its function (the call sites in
 //! the module, one where it has none). A divisor known to be a byte has its own
 //! entry that never links either wide path, and counts for nothing. The compact
 //! `__divsi3` is no cold choice: it has no byte-divisor path and one
@@ -67,10 +69,13 @@ pub fn runs_priced(
     runs_of_width(module, 32, Some(weights))
 }
 
-/// The four shapes the 16-bit divisions are priced over (dividend, divisor):
-/// a byte divisor of 6 bits and of 2, a wide one (the speed routine runs the
-/// bit loop and gains nothing), a divisor of 1000.
-pub const SHAPES_16: [(u16, u16); 4] = [(60707, 37), (40000, 300), (65535, 2), (9999, 1000)];
+/// The shapes the 16-bit divisions are priced over (dividend, divisor): a
+/// byte divisor of 6 bits and of 2, a wide one of a quotient of 8 bits, a
+/// divisor of 1000, and four of a quotient under 6 bits (a ratio near 1:
+/// Euclid's steps), where the speed routine shifts the divisor up to the
+/// dividend.
+pub const SHAPES_16: [(u16, u16); 8] =
+    [(60707, 37), (40000, 300), (65535, 2), (9999, 1000), (50000, 31000), (2100, 1500), (1500, 360), (300, 60)];
 
 /// The clocks of `routine` (a word divide of `mos_rt.s`) on `shape`, by running
 /// its text (`routine_clocks`).
@@ -104,6 +109,14 @@ pub fn saved_at_speed_16(cpu: crate::dagisel::hooks::Cpu) -> f64 {
 /// [`runs`] of the 16-bit divisions.
 pub fn runs16(module: &Module) -> f64 {
     runs_of_width(module, 16, None)
+}
+
+/// [`runs16`] in the block weights of the module's priced clocks.
+pub fn runs16_priced(
+    module: &Module,
+    weights: &std::collections::HashMap<usize, Vec<u64>>,
+) -> f64 {
+    runs_of_width(module, 16, Some(weights))
 }
 
 fn runs_of_width(

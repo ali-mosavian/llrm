@@ -4,6 +4,7 @@
 use llrm_z80::driver::{Level, Request};
 use llrm_z80::expand::price_emitted;
 
+/// `same` is `noinline`: the size view inlines its three calls, and the form is what is under test.
 /// loop_fusion -O1 `same` kept `n` in a frame slot (`ld c, -2(ix)`, 3 B a
 /// reload) at 124 B, because the push and pop form, 111 B for 4% more weighted
 /// clocks, was judged at 1 B = 3 T. -O1 is strict on both axes, so the smaller

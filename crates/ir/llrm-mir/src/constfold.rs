@@ -895,7 +895,8 @@ fn globals_potentially_equal(
 
 /// `evaluateICmpRelation`
 /// ([ConstantFold.cpp:1026](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/IR/ConstantFold.cpp#L1026)).
-/// DEVIATE: MIR has no `BlockAddress`.
+/// DEVIATE: a `BlockAddress` is not compared (the `GetElementPtr` arms below
+/// find none), so such a compare stays.
 fn evaluate_icmp_relation(
     context: &Context,
     globals: &[GlobalValue],

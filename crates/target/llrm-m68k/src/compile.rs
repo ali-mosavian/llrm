@@ -61,9 +61,30 @@ pub enum CodeModel {
     Small,
     Medium,
     Large,
+    /// No `-mcmodel` given: small, as the pin, unless the module's globals
+    /// together pass what a 16-bit displacement reaches
+    /// ([`CodeModel::SMALL_REACH`]); then medium, as gcc's absolute data.
+    /// Resolved by the driver once the module is known.
+    Auto,
 }
 
 impl CodeModel {
+    /// The bytes of globals past which a `(d16,%pc)` reference cannot be
+    /// assumed to reach.
+    pub const SMALL_REACH: usize = 32768;
+
+    /// `self`, with [`CodeModel::Auto`] settled for globals of `data_bytes`.
+    pub fn resolved(
+        self,
+        data_bytes: usize,
+    ) -> CodeModel {
+        match self {
+            CodeModel::Auto if data_bytes > CodeModel::SMALL_REACH => CodeModel::Medium,
+            CodeModel::Auto => CodeModel::Small,
+            other => other,
+        }
+    }
+
     /// `-mcmodel=NAME`: `small`, `medium` or `large`.
     pub fn parse(name: &str) -> Result<CodeModel, String> {
         match name {
@@ -77,7 +98,7 @@ impl CodeModel {
     /// Whether a global's address is an absolute one.
     pub fn absolute_data(self) -> bool {
         match self {
-            CodeModel::Small => false,
+            CodeModel::Small | CodeModel::Auto => false,
             CodeModel::Medium | CodeModel::Large => true,
         }
     }
@@ -124,7 +145,8 @@ pub struct Options {
     /// M68K-WORD-TABLE, [`crate::wordtable`]).
     pub word_jump_tables: bool,
     /// A `tst` of the register an `add` of it to itself just doubled reads the
-    /// carry the `add` left instead ([`crate::cmpcarry`]).
+    /// carry the `add` left instead, and a `cmpi.l #-1` of a `subq.l #1`
+    /// result reads its borrow ([`crate::cmpcarry`]).
     pub reuse_shift_out_flags: bool,
     /// A load and the step of its pointer in another block are one `(An)+`
     /// ([`crate::loopinc`]).
@@ -152,6 +174,10 @@ pub struct Options {
     /// before `MachineCSE` ([`crate::regalloc::shared_licm`]). It sees a
     /// loop-invariant only where `direct_copies` made no copy of it.
     pub shared_licm: bool,
+    /// The build the -O1 and -Os trial makes with the shared `MachineLICM` on:
+    /// those builds run it only here, and keep it where it pays
+    /// ([`crate::trial::keeps_faster`] at -O1, [`crate::trial::keeps`] at -Os).
+    pub licm_trial: bool,
     /// The shared flow's `PhiElimination` and `TwoAddress` take the function
     /// from SSA to the allocator, in place of the private `eliminate_phis`,
     /// `commute_tied` and `two_address` ([`crate::regalloc::shared_prelude`]).
@@ -248,6 +274,7 @@ impl Options {
         shared_cse: false,
         direct_copies: false,
         shared_licm: false,
+        licm_trial: false,
         shared_prelude: false,
         tail_duplicate: false,
         rematerialize_arguments: false,
@@ -292,7 +319,8 @@ impl Default for Options {
             spill_fold: !llrm_support::env_flag!("LLRM_NO_SPILL_FOLD"),
             shared_cse: true,
             direct_copies: false,
-            shared_licm: false,
+            shared_licm: true,
+            licm_trial: false,
             shared_prelude: false,
             tail_duplicate: true,
             rematerialize_arguments: true,
@@ -352,7 +380,13 @@ pub fn items_with(
         } else {
             NarrowMultiplies::Off
         };
-        optimized = mid_end_narrowing(module, &M68k::for_cpu(cpu), Some(Rc::new(M68kMachine { cpu })), narrow)?;
+        optimized = mid_end_narrowing(
+            module,
+            &M68k::for_cpu(cpu),
+            Some(Rc::new(M68kMachine { cpu })),
+            narrow,
+            narrow == NarrowMultiplies::Speed,
+        )?;
         &optimized
     } else {
         module
@@ -368,7 +402,7 @@ pub fn items_with(
     // the relaxation, the shared `MachineCSE` or the slot registers (-O2 68020
     // over 165 programs: no cell passes a gcc/clang clock bar either way).
     let one_build = !wants_size && !options.strict;
-    let finished = |options: Options| -> Result<(Vec<Item>, bool, Options), String> {
+    let finished = |options: Options| -> Result<(Vec<Item>, (bool, bool), Options), String> {
         let (plain, saved, chosen, shared) =
             items_trials(module, name, cpu, Options { relax_classes: false, ..options }, &prefixes)?;
         if !options.relax_classes || !saved || one_build {
@@ -385,7 +419,7 @@ pub fn items_with(
     // on
     let held = options.data_constants && wants_size;
     let options = Options { slot_registers: false, data_constants: false, ..options };
-    let (mut kept, shared, mut kept_options) = finished(options)?;
+    let (mut kept, (shared, licm_changes), mut kept_options) = finished(options)?;
     // The shared `MachineCSE` lengthens live ranges, and across calls they
     // spill. A function it changed is built through the whole sequence both
     // ways (the other trials' choices depend on the shape), the cheaper kept.
@@ -426,6 +460,21 @@ pub fn items_with(
             kept = items;
         }
     }
+    // The pin runs `MachineLICM` at every level; here -O1 and -Os make it a
+    // build, on the choices the other trials ended on, kept only where it pays:
+    // fewer clocks at -O1, fewer bytes (then clocks) at -Os.
+    if licm_changes {
+        let (hoisted, _) = items_once(module, name, cpu, Options { licm_trial: true, ..kept_options }, &prefixes)?;
+        let better = if wants_size {
+            crate::trial::keeps(&hoisted, &kept, cpu, price)
+        } else {
+            crate::trial::keeps_faster(&hoisted, &kept, cpu)
+        };
+        if better {
+            trial_won(name, "licm", true);
+            kept = hoisted;
+        }
+    }
     Ok(kept)
 }
 
@@ -449,7 +498,7 @@ fn items_trials(
     cpu: Cpu,
     options: Options,
     prefixes: &Prefixes,
-) -> Result<(Vec<Item>, bool, Options, bool), String> {
+) -> Result<(Vec<Item>, bool, Options, (bool, bool)), String> {
     let mut options = options;
     let (mut kept, touched) = items_once(module, name, cpu, options, prefixes)?;
     let saved = touched.global_copies;
@@ -477,7 +526,7 @@ fn items_trials(
     // div_constants_short +232 B. -O2 68020 over 165 programs: -154 B, 10
     // smaller, 6 larger; matmul 4472 M to 2258 M instructions.
     if !touched.any() || (!wants_size && !options.strict) {
-        return Ok((kept, saved, options, touched.shared_cse));
+        return Ok((kept, saved, options, (touched.shared_cse, touched.licm)));
     }
     let price = crate::timing::Price::of(wants_size);
     // first: the multiply decides the shape of the rest, and its price counts
@@ -577,7 +626,7 @@ fn items_trials(
             kept = plain;
         }
     }
-    Ok((kept, saved, options, touched.shared_cse))
+    Ok((kept, saved, options, (touched.shared_cse, touched.licm)))
 }
 
 /// Whether `function` carries through the extend flag: an `addx`, `subx` or
@@ -649,6 +698,9 @@ struct Touched {
     data_constants: bool,
     /// The shared `MachineCSE` changed the function.
     shared_cse: bool,
+    /// The shared `MachineLICM`, which this build left off, would change the
+    /// function.
+    licm: bool,
     /// A spill slot moved into an address register ([`crate::slotreg`]).
     slot_registers: bool,
     /// An instruction reads a spill slot in place ([`crate::spillfold`]).
@@ -684,6 +736,30 @@ fn size_build(
             .named(name)
             .and_then(|id| module.global(id).function())
             .is_some_and(|one| has(&one.attrs, "optsize") || has(&one.attrs, "minsize"))
+}
+
+/// Whether -O1/-Os, which leave the shared `MachineLICM` off, probe it for a
+/// trial build.
+fn licm_trial_wanted(
+    options: Options,
+    wants_size: bool,
+) -> bool {
+    options.shared_licm && !options.licm_trial && (options.strict || wants_size)
+}
+
+/// Whether the shared `MachineLICM` runs on a function.
+///
+/// DEVIATE M68K-LICM-SPEED (owner w9-tests, exit 2026-11-26): the pin runs it
+/// at every level but -O0. -O2/-O3 run it; -O1 and -Os run it in a trial build
+/// (`licm_trial`) kept only where it pays: a hoisted address holds a register
+/// for the loop and the private passes lose bytes to the spills (-Os +1.5 KB
+/// over 186 programs when run unconditionally). The trial's variants read this
+/// too: a stage that does not run must not change the emission.
+fn licm_runs(
+    options: Options,
+    wants_size: bool,
+) -> bool {
+    options.shared_licm && (options.licm_trial || (!wants_size && !options.strict))
 }
 
 fn same_instructions(
@@ -844,7 +920,14 @@ fn before_late_stage(options: Options) -> Options {
 
 /// The options that only allocation and the stages after it read.
 fn before_allocation(options: Options) -> Options {
-    Options { global_copies: false, tail_duplicate: false, return_dup: false, slot_registers: false, ..options }
+    Options {
+        global_copies: false,
+        tail_duplicate: false,
+        return_dup: false,
+        slot_registers: false,
+        spill_fold: false,
+        ..options
+    }
 }
 
 /// One build of the function, and the optional rewrites that changed it.
@@ -890,7 +973,7 @@ fn items_once(
         direct_copies: options.direct_copies,
         // what the hosted stages read: a result is defined in its copy's
         // register
-        copy_destinations: options.direct_copies || options.shared_cse || options.shared_licm,
+        copy_destinations: options.direct_copies || options.shared_cse || licm_runs(options, wants_size),
     };
     let (emitted, mul_used, mul_synthesized) = prefixes
         .emitted
@@ -951,6 +1034,7 @@ fn items_once(
                 }
                 crate::shiftadd::shifts_to_adds(&mut function);
                 crate::negadd::negative_adds_to_subq(&mut function);
+                crate::boolbyte::scc_booleans(&mut function);
                 crate::addrroles::address_roles(&mut function);
                 crate::addrarith::address_adds(&mut function, cpu, wants_size, options.compare_destinations);
                 crate::foldload::fold_loads(&mut function);
@@ -981,8 +1065,11 @@ fn items_once(
             }
             function.odds = Some(edge_odds(module, name)?);
             expand_cmov(&mut function)?;
-            if options.shared_licm {
+            if licm_runs(options, wants_size) {
                 function = crate::regalloc::shared_licm(&function, wants_size)?;
+            } else if licm_trial_wanted(options, wants_size) {
+                let hoisted = crate::regalloc::shared_licm(&function, wants_size)?;
+                touched.licm = !same_instructions(&function, &hoisted);
             }
             if options.shared_cse {
                 let shared = crate::regalloc::shared_cse(&function)?;
@@ -998,6 +1085,7 @@ fn items_once(
             machine_sink(&mut function);
             if options.short && options.reuse_shift_out_flags {
                 crate::cmpcarry::reuse_shift_out_flags(&mut function);
+                crate::cmpcarry::reuse_borrow_flags(&mut function);
             }
             crate::regalloc::split_flag_edges(&mut function);
             if !options.shared_prelude {
@@ -1027,6 +1115,7 @@ fn items_once(
     let first_slot = function.locals.iter().map(|local| local.0 + 1).max().unwrap_or(0);
     crate::mirdump::dump("before allocation", &function, None);
     let allocating = llrm_support::debug::span("m68k allocate");
+    let a6_for_calls = options.short && options.call_targets && crate::calltarget::pays(&function, cpu);
     let (assignment, slots) = if std::env::var_os("LLRM_M68K_SPIKE").is_some() {
         crate::regalloc::allocate_spilling_by_frequency(&mut function, first_slot)?
     } else {
@@ -1038,6 +1127,7 @@ fn items_once(
                 options.rematerialize_arguments,
                 options.global_copies,
                 options.loop_carried_first,
+                a6_for_calls,
                 options.shared_prelude.then_some(&crate::regalloc::shared_prelude as llrm_spike_mf::tolir::Prelude),
             )
         })?
@@ -1091,6 +1181,7 @@ fn items_once(
     }
     preserve_flags(&mut function, &assignment)?;
     restore_remade_flags(&mut function);
+    crate::ccrcopy::drop_redundant_restores(&mut function, &assignment);
     branch_fold(&mut function, &assignment);
     if !wants_size {
         if options.tail_duplicate {
@@ -1102,6 +1193,13 @@ fn items_once(
         }
     }
     crate::regalloc::place_blocks(&mut function, &edge_odds(module, name)?, wants_size, options.loop_top_by_jumps);
+    if options.short {
+        let returns_value = module.global(id).function().is_none_or(|one| {
+            matches!(module.context.types.get(one.ty), llrm_mir::types::Type::Function { returns, .. }
+                if !module.context.types.is_void(*returns))
+        });
+        crate::doloop::doloops(&mut function, &assignment, cpu, returns_value);
+    }
     drop(sp);
     let sp = llrm_support::debug::span("m68k expand");
     let mut out = vec![Item::Label(name.to_owned())];
@@ -1402,8 +1500,15 @@ pub fn mid_end_for_narrowing(
     module: &Module,
     cpu: Cpu,
     narrow_multiplies: NarrowMultiplies,
+    narrow_divides: bool,
 ) -> Result<Module, String> {
-    mid_end_narrowing(module, &M68k::for_cpu(cpu), Some(Rc::new(M68kMachine { cpu })), narrow_multiplies)
+    mid_end_narrowing(
+        module,
+        &M68k::for_cpu(cpu),
+        Some(Rc::new(M68kMachine { cpu })),
+        narrow_multiplies,
+        narrow_divides,
+    )
 }
 
 /// [`mid_end`] with another target description: what a test compares the
@@ -1413,16 +1518,17 @@ pub fn mid_end_described_by(
     tti: &dyn llrm_mir::tti::Tti,
     machine: Option<Rc<dyn llrm_mir::target::Machine>>,
 ) -> Result<Module, String> {
-    mid_end_narrowing(module, tti, machine, NarrowMultiplies::Off)
+    mid_end_narrowing(module, tti, machine, NarrowMultiplies::Off, false)
 }
 
 /// [`mid_end_described_by`], narrowing the multiplies the range proves narrow
-/// (`narrow_multiplies`).
+/// (`narrow_multiplies`) and, at speed (`narrow_divides`), the divides.
 pub fn mid_end_narrowing(
     module: &Module,
     tti: &dyn llrm_mir::tti::Tti,
     machine: Option<Rc<dyn llrm_mir::target::Machine>>,
     narrow_multiplies: NarrowMultiplies,
+    narrow_divides: bool,
 ) -> Result<Module, String> {
     MID_ENDS.with(|runs| runs.set(runs.get() + 1));
     use llrm_mir::datalayout::DataLayout;
@@ -1454,6 +1560,11 @@ pub fn mid_end_narrowing(
         };
         if let (true, Some(limit)) = (wanted, tti.range_narrowing_width()) {
             llrm_transforms::narrowrange::multiplies_narrowed(context, &layout, function, &outer, limit);
+        }
+        // at speed only: at -Os the libcall's pushes are fewer bytes than the
+        // extensions (narrowrange.rs)
+        if let (true, false, Some(limit)) = (narrow_divides, for_size, tti.range_narrowing_width()) {
+            llrm_transforms::narrowrange::divides_narrowed(context, &layout, function, &outer, limit);
         }
         // the ids the pass handed out for declarations name nothing until they
         // are placed

@@ -38,6 +38,16 @@
 //!   `and`/`or` select (`select x, y, false`) is no branch and is not counted:
 //!   the 6502's `isdigit` range test stayed two compares (28 -> 50 B).
 //!
+//! - D6. (Tti-gated, off in the pin: `phiopt_one_feeding_statement`) gcc's
+//!   `empty_bb_or_one_feeding_into_p` (`tree-ssa-phiopt.cc`) bounds an arm to
+//!   one statement that feeds the phi. It applies only where the phi is on a
+//!   loop-carried recurrence (`on_recurrence`, a DEVIATE damage limiter, not a
+//!   priced criterion) and the branch condition is later than the phi's values
+//!   (`condition_is_later`: `X86CmovConversion::checkForProfitableCmovCandidates`'
+//!   test that a cmov waits longer for its condition than for its value, on
+//!   TTI latencies). sfm16_dbg m64 -37..-40% executed instructions; every other
+//!   bench cell unchanged.
+//!
 //! # Example
 //! The phi that a branch chooses between becomes a select in the branch's
 //! block:
@@ -52,13 +62,14 @@
 use llrm_analysis::occurrence::arms;
 use llrm_mir::context::{ConstantKind, Context};
 use llrm_mir::datalayout::DataLayout;
-use llrm_mir::dense::IdSet;
+use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::edit::Position;
 use llrm_mir::instructioncost::{instruction_cost, select_cost, select_logic};
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
 use llrm_mir::opcode::{FloatPredicate, IntPredicate, Opcode};
 use llrm_mir::passes::Outer;
 use llrm_mir::tti::{Cost, CostKind, Tti};
+
 
 use crate::edges;
 
@@ -150,6 +161,111 @@ fn if_condition(
         }
         Ending::Other => None,
     }
+}
+
+/// gcc's `empty_bb_or_one_feeding_into_p`: `arm` is empty, or has no phi, one
+/// predecessor and one statement whose only use is a phi of `join`.
+fn empty_or_one_feeding_into(
+    function: &Function,
+    arm: BlockId,
+    join: BlockId,
+) -> bool {
+    let body: Vec<InstId> = function.iter_block(arm).take(function.block(arm).len() - 1).collect();
+    let Some((&only, rest)) = body.split_first() else { return true };
+    if single_predecessor(function, arm).is_none() || !rest.is_empty() {
+        return false;
+    }
+    let instruction = function.instruction(only);
+    let Some(result) = instruction.result.filter(|_| instruction.opcode != Opcode::Phi) else { return false };
+    function.users(result).only().is_some_and(|one| {
+        function.instruction(one.user).opcode == Opcode::Phi && function.parent(one.user) == Some(join)
+    })
+}
+
+/// `X86CmovConversion`'s `LoopDepth` test, on the IR: whether the condition
+/// of the branch is later (a longer chain of `Latency` costs from the phis and
+/// constants) than the values of the block's phis, so that a branch predicted
+/// ahead beats a select that waits for it.
+fn condition_is_later(
+    context: &Context,
+    spec: &Speculation,
+    function: &Function,
+    block: BlockId,
+    condition: Operand,
+) -> bool {
+    let mut memo = IdMap::new();
+    let later = depth(context, spec, function, condition, 0, &mut memo);
+    let values = edges::phis(function, block)
+        .iter()
+        .flat_map(|&phi| arms(function, phi).into_iter().map(|(value, _)| value))
+        .map(|value| depth(context, spec, function, value, 0, &mut memo))
+        .max()
+        .unwrap_or(0);
+    later > values
+}
+
+/// The `Latency` cost of the chain that computes `value`, from phis, constants
+/// and what is outside the function; bounded as the pin bounds `MaxDepth`.
+fn depth(
+    context: &Context,
+    spec: &Speculation,
+    function: &Function,
+    value: Operand,
+    level: usize,
+    memo: &mut IdMap<InstId, i64>,
+) -> i64 {
+    let Operand::Value(id) = value else { return 0 };
+    let ValueDef::Instruction(inst) = function.value(id).def else { return 0 };
+    if function.instruction(inst).opcode == Opcode::Phi || level > MAX_DEPTH {
+        return 0;
+    }
+    if let Some(&known) = memo.get(&inst) {
+        return known;
+    }
+    let own = instruction_cost(
+        spec.tti,
+        context,
+        spec.layout,
+        &spec.outer.globals,
+        function,
+        inst,
+        CostKind::Latency,
+    );
+    let own = if own.valid { own.value } else { 0 };
+    let operands = function.instruction(inst).operands.clone();
+    let below = operands.iter().map(|&one| depth(context, spec, function, one, level + 1, memo)).max().unwrap_or(0);
+    memo.insert(inst, own + below);
+    own + below
+}
+
+/// Whether `phi`'s value feeds itself through other instructions: the cycle a
+/// loop-carried value makes through its header phi. Bounded, as the pin bounds
+/// its own use walks.
+fn on_recurrence(
+    function: &Function,
+    phi: InstId,
+) -> bool {
+    const LIMIT: usize = 64;
+    let Some(start) = function.instruction(phi).result else { return false };
+    let mut seen = IdSet::new();
+    let mut work = vec![start];
+    while let Some(value) = work.pop() {
+        for one in function.users(value).iter() {
+            if one.user == phi {
+                return true;
+            }
+            if !seen.insert(one.user) {
+                continue;
+            }
+            if seen.len() > LIMIT {
+                return false;
+            }
+            if let Some(next) = function.instruction(one.user).result {
+                work.push(next);
+            }
+        }
+    }
+    false
 }
 
 fn single_predecessor(
@@ -296,11 +412,34 @@ pub fn folded(
         .map(|(_, from)| from)
         .filter(|&from| matches!(ending(function, from), Ending::Jump))
         .collect();
+    // The blocks go, and so does the code run by jumping to one by its
+    // address (SimplifyCFG.cpp:3977).
+    if if_blocks.iter().any(|&one| function.has_address_taken(one)) {
+        return false;
+    }
     // The phi itself cannot be the condition of the select that replaces it.
     if let Operand::Value(id) = if_cond
         && let ValueDef::Instruction(inst) = function.value(id).def
         && function.instruction(inst).opcode == Opcode::Phi
         && function.parent(inst) == Some(block)
+    {
+        return false;
+    }
+    // D6. gcc's phiopt (`match_simplify_replacement`) folds only a middle block
+    // that is empty or one statement feeding the phi (`empty_bb_or_one_feeding_into_p`):
+    // a nested diamond keeps its branches, which a loop-carried chain then does not
+    // wait on.
+    // Only where the select would join a loop-carried recurrence: its latency
+    // is then on the critical path of every iteration (`X86CmovConversion`'s
+    // `checkForProfitableCmovCandidates` prices exactly that, `LoopDepth`), and a
+    // branch the predictor takes costs nothing.
+    // `X86CmovConversion`'s test as well (`checkForProfitableCmovCandidates`):
+    // the branch only runs ahead of a condition that is later than the values
+    // it chooses between (D6).
+    if spec.tti.phiopt_one_feeding_statement()
+        && edges::phis(function, block).iter().any(|&phi| on_recurrence(function, phi))
+        && !if_blocks.iter().all(|&arm| empty_or_one_feeding_into(function, arm, block))
+        && condition_is_later(context, spec, function, block, if_cond)
     {
         return false;
     }

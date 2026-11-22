@@ -16,8 +16,10 @@ mod codecall;
 mod mathops;
 mod memops;
 mod mergedcond;
+mod strictfp;
 mod switch;
 mod tailcall;
+mod vaarg;
 use llrm_lir::registers::RegId;
 pub use tailcall::tail_position;
 
@@ -108,6 +110,10 @@ pub struct BuilderTarget {
     /// is carried across blocks in several of them
     /// (`getVectorTypeBreakdown`).
     pub legal_vectors: Vec<MVT>,
+    /// A vector type with no register class and the legal one a register
+    /// carries it as (`getVectorTypeBreakdown`: `TypeWidenVector` and
+    /// `TypePromoteInteger` come before the halving).
+    pub vector_registers: Vec<(MVT, MVT)>,
     /// The narrowest integer an argument register carries: a narrower one is
     /// promoted to it (`CCPromoteToType`).
     pub min_argument_bits: u32,
@@ -551,6 +557,7 @@ impl BuilderTarget {
                 .take_while(|width| *width <= bits.max(32))
                 .collect(),
             legal_vectors: Vec::new(),
+            vector_registers: Vec::new(),
             min_argument_bits: 32,
             soft_float: false,
             libcalls: None,
@@ -815,6 +822,8 @@ impl<'a> Builder<'a> {
             node_map: IdMap::new(),
             pending_loads: Vec::new(),
             pending_exports: Vec::new(),
+            pending_constrained_fp: Vec::new(),
+            pending_constrained_fp_strict: Vec::new(),
             constants_out: HashMap::default(),
             phi_updates: Vec::new(),
             tail_calls: Vec::new(),
@@ -861,6 +870,11 @@ struct Builder<'a> {
     node_map: IdMap<ValueId, SDValue>,
     pending_loads: Vec<SDValue>,
     pending_exports: Vec<SDValue>,
+    /// `PendingConstrainedFP`: the out chains of `fpexcept.ignore` and
+    /// `maytrap` constrained operations, not yet joined to the root.
+    pending_constrained_fp: Vec<SDValue>,
+    /// `PendingConstrainedFPStrict`: the same for `fpexcept.strict`.
+    pending_constrained_fp_strict: Vec<SDValue>,
     constants_out: HashMap<ConstantId, u32>,
     phi_updates: Vec<(ValueId, u32)>,
     tail_calls: Vec<InstId>,
@@ -1058,6 +1072,9 @@ impl Builder<'_> {
         let (EVT::Simple(mvt), true) = (vt, vt.is_vector()) else {
             return Err(Refused("vector with no register class"));
         };
+        if let Some(&(_, register)) = self.target.vector_registers.iter().find(|&&(from, _)| from == mvt) {
+            return Ok((EVT::Simple(register), 1));
+        }
         let element = mvt.element().ok_or(Refused("vector with no register class"))?;
         let (mut lanes, mut count) = (mvt.lanes().ok_or(Refused("vector with no register class"))?, 1usize);
         loop {
@@ -1266,12 +1283,21 @@ impl Builder<'_> {
         self.update_root(pending)
     }
 
-    /// `getRoot`.
+    /// `getRoot`: the pending constrained operations are chained with the
+    /// pending loads.
     fn root(&mut self) -> SDValue {
+        let constrained = std::mem::take(&mut self.pending_constrained_fp);
+        let strict = std::mem::take(&mut self.pending_constrained_fp_strict);
+        self.pending_loads.extend(constrained);
+        self.pending_loads.extend(strict);
         self.memory_root()
     }
 
+    /// `getControlRoot`: an `fpexcept.strict` operation is exported with the
+    /// block's values.
     fn control_root(&mut self) -> SDValue {
+        let strict = std::mem::take(&mut self.pending_constrained_fp_strict);
+        self.pending_exports.extend(strict);
         let pending = std::mem::take(&mut self.pending_exports);
         self.update_root(pending)
     }
@@ -1752,7 +1778,8 @@ impl Builder<'_> {
                 _ => 0,
             })
             .sum::<usize>();
-        if vector_registers > named_vectors {
+        let vector_unread = vaarg::leaves_vector_save_unread(self.module, self.layout, self.function);
+        if vector_registers > named_vectors && !vector_unread {
             let vreg = self.info.new_reg();
             let count = found.variadic_vector_register.as_deref().expect("a save area with a vector count register");
             self.live_ins.push((self.byte_view(self.arch.register_named(count)), vreg));
@@ -1779,6 +1806,7 @@ impl Builder<'_> {
         }
         let fp_offset = (found.argument_registers.len() * 8 + named_vectors * 16) as u32;
         self.dag.var_args_save = Some((save, named as u32 * 8, fp_offset));
+        self.dag.var_args_fp_unread = vector_unread;
         Ok(())
     }
 
@@ -1855,9 +1883,13 @@ impl Builder<'_> {
     /// `visitCall` through `LowerCallTo` and X86's `LowerCall`, for a direct
     /// call of a function whose arguments and result fit single registers or
     /// the stack: `callseq_start`, the stack stores, the register copies,
-    /// An exchange `llrm_mir::atomic::lowered` left: `atomicrmw xchg`, or a
-    /// store that must be ordered, is `ATOMIC_SWAP`. The machine locks `xchg`
-    /// without asking, so every ordering is met.
+    /// What `llrm_mir::atomic::lowered` left for x86: `atomicrmw xchg`, or a
+    /// store that must be ordered, is `ATOMIC_SWAP` (the machine locks `xchg`
+    /// without asking, so every ordering is met); `add`, `sub`, `and`, `or` and
+    /// `xor` are `ATOMIC_LOAD_*` and a `cmpxchg` is
+    /// `ATOMIC_CMP_SWAP_WITH_SUCCESS` (`visitAtomicRMW`,
+    /// `visitAtomicCmpXchg`), which the target's tables select as `lock
+    /// xadd`, `lock add` and `lock cmpxchg`.
     fn visit_atomic(
         &mut self,
         instruction: &llrm_mir::module::Instruction,
@@ -1869,9 +1901,9 @@ impl Builder<'_> {
             return self.visit_native_atomic(instruction, info);
         }
         let (pointer, value) = match info.kind {
-            AtomicKind::Rmw(RmwOp::Xchg) => (arguments[0], arguments[1]),
+            AtomicKind::Rmw(_) | AtomicKind::CmpXchg { .. } => (arguments[0], arguments[1]),
             AtomicKind::Store => (arguments[1], arguments[0]),
-            _ => return Err(Refused("an atomic other than an exchange")),
+            _ => return Err(Refused("an atomic other than a store or a locked read-modify-write")),
         };
         if self.operand_type(pointer)? == MVT::Far.into() {
             return Err(Refused("an atomic access through a far pointer"));
@@ -1880,10 +1912,28 @@ impl Builder<'_> {
         let (src, ptr) = (self.get_value(value)?, self.get_value(pointer)?);
         let mem = self.mem_info(ty, info.align, true, pointer)?;
         let root = self.root();
-        let swap = self.dag.get_atomic_swap(root, ptr, src, mem);
-        self.dag.set_root(SDValue { node: swap.node, res: 1 });
+        let (node, chain) = match info.kind {
+            AtomicKind::Rmw(RmwOp::Xchg) | AtomicKind::Store => (self.dag.get_atomic_swap(root, ptr, src, mem), 1),
+            AtomicKind::Rmw(op) => {
+                let isd = match op {
+                    RmwOp::Add => ISD::AtomicLoadAdd,
+                    RmwOp::Sub => ISD::AtomicLoadSub,
+                    RmwOp::And => ISD::AtomicLoadAnd,
+                    RmwOp::Or => ISD::AtomicLoadOr,
+                    RmwOp::Xor => ISD::AtomicLoadXor,
+                    _ => return Err(Refused("an atomic read-modify-write that needs a compare-exchange loop")),
+                };
+                (self.dag.get_atomic_rmw(isd, root, ptr, src, mem), 1)
+            }
+            AtomicKind::CmpXchg { .. } => {
+                let new = self.get_value(arguments[2])?;
+                (self.dag.get_atomic_cmp_swap(Some(EVT::I1), root, ptr, src, new, mem), 2)
+            }
+            AtomicKind::Load | AtomicKind::Fence => unreachable!("refused above"),
+        };
+        self.dag.set_root(SDValue { node: node.node, res: chain });
         if let Some(result) = instruction.result {
-            self.set_value(result, swap);
+            self.set_value(result, node);
         }
         Ok(())
     }
@@ -2169,9 +2219,52 @@ impl Builder<'_> {
             )
             .map_err(|_| Refused("call the convention does not describe"))?
         };
+        // The callee's result as the caller's convention places it, and
+        // whether it is an x87 result nobody reads
+        // (`isEligibleForSiblingCallOpt` asks the pop of such a result
+        // of the call that follows).
+        let as_caller = if hooked || info.calling_convention == self.function.calling_convention {
+            plan.clone()
+        } else {
+            crate::backend::isel::convention_for_abi(
+                self.module,
+                self.layout,
+                self.full_arch()?,
+                first,
+                self.function.calling_convention,
+                result_type,
+                variadic,
+                &arg_types,
+                &info.argument_attrs,
+                self.soft_float(),
+            )
+            .unwrap_or_else(|_| plan.clone())
+        };
+        let unused_x87_result = !hooked
+            && !self.module.context.types.is_void(result_type)
+            && plan.returns.is_empty()
+            && plan.float_result.is_none()
+            && !self.soft_float()
+            && matches!(
+                self.module.context.types.get(result_type),
+                llrm_mir::types::Type::Float(_)
+            )
+            && self
+                .current
+                .and_then(|inst| self.function.instruction(inst).result)
+                .is_none_or(|value| self.function.users(value).is_empty());
         if !hooked
             && let Some(tail) = self.tail_candidate.take()
-            && self.eligible_for_sibling_call(info, &plan, variadic, direct, first, arguments)
+            && self.eligible_for_sibling_call(
+                info,
+                &plan,
+                variadic,
+                direct,
+                first,
+                arguments,
+                &as_caller,
+                unused_x87_result,
+            )
         {
             self.tail_calls.push(tail);
             self.sibcall = self.target.tail_calls;
@@ -3602,6 +3695,20 @@ impl Builder<'_> {
                 let (lhs, rhs) = (self.constant_value(*lhs)?, self.constant_value(*rhs)?);
                 Ok(self.dag.get_node(opcode, vt, &[lhs, rhs]))
             }
+            // `getValueImpl` of a `BlockAddress`: the address of the block's
+            // symbol, or `inttoptr 1` where the block is gone (the printer's).
+            ConstantKind::Expr(llrm_mir::context::ConstantExpr::BlockAddress { function, block }) => {
+                let target = match &self.module.global(*function).kind {
+                    llrm_mir::module::GlobalKind::Function(target) => target.resolve_block_address(*block),
+                    _ => None,
+                };
+                match target {
+                    Some(block) => {
+                        Ok(self.dag.get_global_address(vt, function.0, crate::backend::blockaddress::offset(block)))
+                    }
+                    None => Ok(self.dag.get_constant(1, vt)),
+                }
+            }
             _ => Err(Refused("aggregate constant")),
         }
     }
@@ -3840,6 +3947,7 @@ impl Builder<'_> {
             Opcode::Unreachable => self.visit_unreachable(),
             Opcode::Ret => self.visit_ret(&instruction)?,
             Opcode::Switch => self.visit_switch(&instruction)?,
+            Opcode::IndirectBr => self.visit_indirect_br(&instruction)?,
             Opcode::Call(info) => {
                 self.tail_candidate = self.in_tail_position(inst).then_some(inst);
                 self.visit_call(&instruction, info)?;
@@ -4621,6 +4729,18 @@ impl Builder<'_> {
         if crate::backend::isel::reads_invariant_memory(self.module, self.function, self.layout, inst) {
             self.dag.invariant_loads.insert(load.node);
         }
+        // `!range` on an integer load: one range's common high bits
+        // (`computeKnownBitsFromRangeMetadata`)
+        if let Some((_, node)) = instruction.metadata.iter().find(|(kind, _)| kind == "range")
+            && let Some(node) = self.module.metadata.get(node.0 as usize)
+            && node.operands.len() == 2
+            && let llrm_mir::types::Type::Int(width) = self.module.context.types.get(instruction.ty)
+            && let Some(range) =
+                llrm_mir::lazyvalueinfo::constant_range_from_metadata(&self.module.context, node, *width)
+        {
+            let known = range.to_known_bits();
+            self.dag.load_ranges.insert(load.node, (known.zero, known.one));
+        }
         let chain = SDValue { node: load.node, res: 1 };
         let token = self.dag.get_token_factor(&[chain]);
         if volatile {
@@ -4847,6 +4967,31 @@ impl Builder<'_> {
         let brcond = self.dag.get_node(ISD::BrCond, EVT::OTHER, &[root, cond, dest]);
         let fall = self.dag.get_basic_block(on_false.0);
         let node = self.dag.get_node(ISD::Br, EVT::OTHER, &[brcond, fall]);
+        self.dag.set_root(node);
+        Ok(())
+    }
+
+    /// `visitIndirectBr`: `BRIND` of the address, the listed blocks being
+    /// the successors.
+    fn visit_indirect_br(
+        &mut self,
+        instruction: &llrm_mir::module::Instruction,
+    ) -> Result<(), Refused> {
+        let address = self.get_value(instruction.operands[0])?;
+        let targets: Vec<BlockId> = instruction.operands[1..]
+            .iter()
+            .map(|operand| match operand {
+                Operand::Block(block) => *block,
+                _ => unreachable!("an indirectbr destination is a block"),
+            })
+            .collect();
+        for &target in &targets {
+            let probability = self.edge_probability(self.block, target);
+            self.add_successor_with_prob(self.block, target, probability);
+        }
+        self.info.indirect_targets.push((self.block, targets));
+        let root = self.control_root();
+        let node = self.dag.get_node(ISD::BrInd, EVT::OTHER, &[root, address]);
         self.dag.set_root(node);
         Ok(())
     }

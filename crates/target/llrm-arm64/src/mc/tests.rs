@@ -360,7 +360,7 @@ fn branches() {
         }
     }
     for op in [VectorReduce::Addv, VectorReduce::Smaxv, VectorReduce::Sminv, VectorReduce::Umaxv, VectorReduce::Uminv] {
-        for lanes in [Arrangement::B16, Arrangement::H8, Arrangement::S4] {
+        for lanes in [Arrangement::B16, Arrangement::H8, Arrangement::S4, Arrangement::B8, Arrangement::H4] {
             all.push(Inst::VectorReduce { op, lanes, rd: Vreg(3), rn: Vreg(28) });
         }
     }
@@ -627,6 +627,7 @@ fn floating_point() {
             FpBinary::MaxNm,
             FpBinary::MinNm,
             FpBinary::Nmul,
+            FpBinary::Abd,
         ] {
             all.push(Inst::FpBinary { op, size, rd: Vreg(1), rn: Vreg(2), rm: Vreg(3) });
         }
@@ -637,6 +638,7 @@ fn floating_point() {
             all.push(Inst::FpCompare { signalling, size, rn: Vreg(1), rm: Some(Vreg(2)) });
             all.push(Inst::FpCompare { signalling, size, rn: Vreg(1), rm: None });
         }
+        all.push(Inst::FpCondCompare { size, rn: Vreg(1), rm: Vreg(2), nzcv: 8, cond: Cond::Mi });
         all.push(Inst::FpSelect { size, rd: Vreg(1), rn: Vreg(2), rm: Vreg(3), cond: Cond::Mi });
         for fill in [
             Fill::Zero,

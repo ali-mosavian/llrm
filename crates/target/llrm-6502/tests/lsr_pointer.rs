@@ -116,10 +116,10 @@ fn an_outer_loops_row_address_steps_by_the_row_size_and_calls_no_multiply() {
     }
 }
 
-
 /// word_compares at -O2: with a narrowed `i8` counter the loop kept
 /// `gep v, zext(j)` and paid `zext; asl; rol; adc` per trip where a pointer
-/// phi steps by 4 (LU19 kept the extended index out of LSR whatever the element size, 2026-11-12).
+/// phi steps by 4 (LU19 kept the extended index out of LSR whatever the element
+/// size, 2026-11-12).
 const NARROW_INDEX: &str = "@v = global [16 x i32] zeroinitializer\n\
     define i32 @f() {\nentry:\n  br label %l\n\
     l:\n  %s = phi i32 [0, %entry], [%s1, %l]\n  %j = phi i8 [0, %entry], [%j1, %l]\n  \
@@ -153,4 +153,27 @@ fn a_constant_multiple_of_a_narrow_counter_steps_instead_of_being_rebuilt() {
     let text = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
     let body = text.split(".segment").next().unwrap();
     assert!(!body.contains("asl"), "{body}");
+}
+
+/// `for (i..16) for (j..54) s += g[i][j];` at -Os called `__mulhi3` for `i *
+/// 54` on each trip of the outer loop (rep_count -Os: 8 B over the bar), the
+/// outer loop being left alone at size.
+const ROW_NEST: &str = "@g = global [16 x [54 x i8]] zeroinitializer\n\
+    define i8 @f() minsize nounwind {\nentry:\n  br label %outer\n\
+    outer:\n  %i = phi i16 [0, %entry], [%i1, %latch]\n  %s = phi i8 [0, %entry], [%a1, %latch]\n  \
+    %p = getelementptr [54 x i8], ptr @g, i16 %i\n  br label %inner\n\
+    inner:\n  %j = phi i16 [0, %outer], [%j1, %inner]\n  %a = phi i8 [%s, %outer], [%a1, %inner]\n  \
+    %q = getelementptr i8, ptr %p, i16 %j\n  %v = load i8, ptr %q\n  %a1 = add i8 %a, %v\n  \
+    %j1 = add i16 %j, 1\n  %c = icmp ne i16 %j1, 54\n  br i1 %c, label %inner, label %latch\n\
+    latch:\n  %i1 = add i16 %i, 1\n  %c2 = icmp ne i16 %i1, 16\n  br i1 %c2, label %outer, label %out\n\
+    out:\n  ret i8 %a1\n}\n";
+
+#[test]
+fn an_outer_row_address_steps_by_the_row_size_at_size() {
+    let ir = format!("target datalayout = \"{}\"\n{ROW_NEST}", datalayout());
+    for level in [Level::Os, Level::O2] {
+        let text = assembly(&ir, &Request::new(level)).unwrap_or_else(|e| panic!("{e}"));
+        let body = text.split(".segment").next().unwrap();
+        assert!(!body.contains("mulhi"), "{level:?}: {body}");
+    }
 }

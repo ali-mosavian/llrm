@@ -478,6 +478,8 @@ impl DataLayout {
             Type::Float(kind) => u64::from(float_bits(*kind)),
             Type::Pointer(space) => u64::from(self.pointer(*space).bits),
             Type::Vector { element, count } => self.size_bits(types, *element) * u64::from(*count),
+            // No size: `store_size` sends these back here.
+            Type::Void | Type::Label | Type::Metadata | Type::Token | Type::Function { .. } => 0,
             _ => self.store_size(types, ty) * 8,
         }
     }
@@ -518,8 +520,9 @@ impl DataLayout {
         (constant, variable)
     }
 
-    /// `collect_offset` and the type the last index selects (`GTI.getIndexedType()`
-    /// of the last operand; the source type for a lone index).
+    /// `collect_offset` and the type the last index selects
+    /// (`GTI.getIndexedType()` of the last operand; the source type for a
+    /// lone index).
     pub fn collect_offset_typed(
         &self,
         types: &Types,
@@ -612,6 +615,26 @@ pub fn float_bits(kind: FloatKind) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::DataLayout;
+
+    /// `size_bits` and `store_size` called each other for a `metadata` type
+    /// (the operand of a constrained FP intrinsic) until the stack ended:
+    /// `llrm-arm64-llc` aborted on any file that uses one. Types with no size
+    /// have none.
+    #[test]
+    fn a_type_with_no_size_has_size_zero() {
+        use crate::types::Type;
+        let module = crate::parse::module("").unwrap();
+        let types = &module.context.types;
+        let layout = DataLayout::parse("e-p:64:64").unwrap();
+        for ty in [Type::Void, Type::Label, Type::Metadata, Type::Token] {
+            let id = types.intern(ty.clone());
+            assert_eq!(
+                (layout.size_bits(types, id), layout.store_size(types, id), layout.alloc_size(types, id)),
+                (0, 0, 0),
+                "{ty:?}"
+            );
+        }
+    }
 
     /// `offset_bits` was a pair's half for every space: a flat 16-bit space
     /// said 8, so a caller that wrapped a flat offset by it (a frame index

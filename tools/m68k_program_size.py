@@ -37,8 +37,10 @@ def text_bytes(map_text: str) -> dict[str, int]:
 
 
 def members_of(sizes: dict[str, int]) -> dict[str, int]:
-    """The archive members of a link, by member name."""
-    return {re.search(r"\(([^)]+)\)", path).group(1): size for path, size in sizes.items() if "(" in path}
+    """The compiler-rt members of a link, by member name. The harness stubs (`stubs_<cpu>.a`: memset, memcpy, memmove, memcmp, the crt) stand in for the platform's libc, which is not
+    program bytes on any target but DOS: counted, a program that called memset carried the stub's 454 B (mem_length_boundaries_m32 -Os 68000: gcc 152 + 454 against ours 142, the call's
+    bytes against a byte loop's)."""
+    return {re.search(r"\(([^)]+)\)", path).group(1): size for path, size in sizes.items() if "(" in path and not Path(path.split("(")[0]).name.startswith("stubs_")}
 
 
 def pinned_tool(name: str) -> str:
@@ -70,7 +72,7 @@ def ours_command(cc: str, level: str, flags: list[str], obj: Path, source: Path)
 
 def gcc_command(tools: str, cpu: str, level: str, asm: Path, source: Path, flags: list[str], pcrel: bool = False) -> list[str]:
     """gcc's line with the program's own flags in gcc's spelling: `-fno-inline-functions` left out, gcc inlined what ours and the pin keep calls."""
-    return [f"{tools}gcc", f"-m{cpu}", f"-{level}", "-msoft-float", "-ffreestanding", *(["-mpcrel"] if pcrel else []), *external_flags.GCC_DIALECT, "-I", str(ROOT / "runtime/shared/posix"), *[flag for flag in external_flags.gcc_program_flags(flags) if not flag.startswith("-mcmodel")], "-S", "-o", str(asm), str(source)]
+    return [f"{tools}gcc", f"-m{cpu}", f"-{level}", "-msoft-float", *(["-mpcrel"] if pcrel else []), *external_flags.GCC_DIALECT, *external_flags.gcc_source_defines(source.read_text()), "-I", str(ROOT / "runtime/shared/posix"), *[flag for flag in external_flags.gcc_program_flags(flags) if not flag.startswith("-mcmodel")], "-S", "-o", str(asm), str(source)]
 
 
 def measure(source: Path, cpu: str, level: str, compiler: str, cc: str, root: str, cache: Path, work: Path) -> dict[str, object]:

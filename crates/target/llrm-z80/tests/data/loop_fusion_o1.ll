@@ -1,6 +1,6 @@
 target datalayout = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8"
-; ModuleID = '/home/alim/work/personal/llrm/.claude/worktrees/elated-mclaren-9dfa1f/tests/run/c/loop_fusion.c'
-source_filename = "/home/alim/work/personal/llrm/.claude/worktrees/elated-mclaren-9dfa1f/tests/run/c/loop_fusion.c"
+; ModuleID = 'loop_fusion.c'
+source_filename = "loop_fusion.c"
 target triple = "msp430"
 
 @a = internal global [64 x i16] zeroinitializer, align 2
@@ -38,7 +38,7 @@ define dso_local i16 @main() #0 {
 declare dso_local void @report(i32 noundef) #1
 
 ; Function Attrs: nounwind
-define internal i32 @same(i16 noundef signext %0) #0 {
+define internal i32 @same(i16 noundef signext %0) #2 {
   %2 = alloca i16, align 2
   %3 = alloca i16, align 2
   store i16 %0, ptr %2, align 2, !tbaa !7
@@ -477,3 +477,4 @@ attributes #3 = { nounwind }
 !22 = !{!23, !23, i64 0}
 !23 = !{!"long", !5, i64 0}
 !24 = distinct !{!24, !10, !11}
+attributes #2 = { noinline nounwind "no-trapping-math"="true" "stack-protector-buffer-size"="8" }

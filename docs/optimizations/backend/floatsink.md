@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/floatsink.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/floatsink.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/floatsink.rs sha256:34e040734c9d433c65a580ee9c1022c13579fd0adeb16ebe79cfd956a1447d1d -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/floatsink.rs sha256:225486f31b1719c4cd54509f0155644c1c28dc8daff4356cc4dd02152643db92 -->
 
 # floatsink
 
@@ -29,3 +29,12 @@ is the same. Reason: 4 clocks per exchange on the 486 (x_ld_axpy -O3
 
 ## Runs
 After `FloatFold` (so a load that folds has folded), before `FloatAssign`.
+
+## Example
+The load of `b` moves down to the add that reads it, so the multiply needs no `fxch`.
+
+```text
+fld a; fld b; fxch; fmul K; faddp
+        =>
+fld a; fmul K; fld b; faddp
+```

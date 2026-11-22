@@ -6,7 +6,9 @@
 use llrm_mir::module::{Instruction, Operand, ValueDef};
 use llrm_mir::opcode::{CastOp, Opcode};
 
+use super::super::dag::SDValue;
 use super::super::inline_asm::lower_asm;
+use super::super::mvt::{EVT, MVT};
 use super::LoweringNodes;
 use super::{Builder, Refused};
 
@@ -36,11 +38,34 @@ impl Builder<'_> {
             fixups.push(self.dag.get_target_global_address(pointer, global.0, offset + fixup.addend));
         }
         let mut registers = Vec::new();
+        // The x87 stack has no register to copy to: a value of `st0` or `st1`
+        // is an operand of the node, which the emitter pushes before the
+        // block, `st1`'s first (`GetRegistersForValue`'s fixed stack
+        // registers: the stack's entries are the block's operands in place).
+        let mut x87 = Vec::new();
         for (operand, register) in inputs.iter().zip(&block.inputs) {
             let value = self.get_value(*operand)?;
             let vt = self.dag.value_type(value);
-            registers.push((self.sized_register(self.arch.register_named(register), vt), value));
+            match register.as_str() {
+                "st0" => x87.push((0, self.to_x87(value)?)),
+                "st1" => x87.push((1, self.to_x87(value)?)),
+                _ => registers.push((self.sized_register(self.arch.register_named(register), vt), value)),
+            }
         }
+        // Top of the stack first, the order the emitter reads them in.
+        x87.sort_by_key(|(position, _)| *position);
+        let x87: Vec<SDValue> = x87.into_iter().map(|(_, value)| value).collect();
+        // An output in `st0` or `st1`: the top of the x87 stack, read in turn
+        // as a call's float result is (`st1` is what the first read
+        // left under it).
+        let top = self.arch.x87_stack_top();
+        // The stack holds 80-bit values: an output of a narrower float is read
+        // as `x86_fp80` and rounded to its type.
+        let mut declared: Vec<EVT> = Vec::new();
+        let output_register = |this: &Self, register: &str, vt| match register {
+            "st0" | "st1" => top.map(|one| (one, EVT::Simple(MVT::F80))),
+            _ => Some((this.sized_register(this.arch.register_named(register), vt), vt)),
+        };
         let mut outputs = Vec::new();
         if block.outputs.len() > 1 {
             // several outputs come back as the fields of an aggregate
@@ -53,11 +78,14 @@ impl Builder<'_> {
             }
             for (register, field) in block.outputs.iter().zip(fields) {
                 let vt = self.type_of(field)?;
-                outputs.push((self.sized_register(self.arch.register_named(register), vt), vt));
+                declared.push(vt);
+                outputs
+                    .push(output_register(self, register, vt).ok_or(Refused("an x87 output on a target without one"))?);
             }
         } else if let Some(register) = block.outputs.first() {
             let vt = self.type_of(instruction.ty)?;
-            outputs.push((self.sized_register(self.arch.register_named(register), vt), vt));
+            declared.push(vt);
+            outputs.push(output_register(self, register, vt).ok_or(Refused("an x87 output on a target without one"))?);
         }
         let root = self.root();
         let (chain, results) = lower_asm(
@@ -67,9 +95,15 @@ impl Builder<'_> {
             name,
             &fixups,
             &registers,
+            &x87,
             &outputs,
         );
         self.dag.set_root(chain);
+        let results = results
+            .into_iter()
+            .zip(declared)
+            .map(|(value, vt)| self.from_x87(value, vt))
+            .collect::<Result<Vec<_>, _>>()?;
         if let Some(result) = instruction.result {
             if results.len() > 1 {
                 // the aggregate is one node whose results are the fields
@@ -81,5 +115,33 @@ impl Builder<'_> {
             }
         }
         Ok(())
+    }
+
+    /// A float operand for the x87 stack, which holds `x86_fp80`: a narrower
+    /// value is extended first (on an SSE target, through memory).
+    fn to_x87(
+        &mut self,
+        value: SDValue,
+    ) -> Result<SDValue, Refused> {
+        let f80 = EVT::Simple(MVT::F80);
+        match self.dag.value_type(value) {
+            EVT::Simple(MVT::F32 | MVT::F64) => self.cast_value(CastOp::FPExt, value, f80, Default::default()),
+            _ => Ok(value),
+        }
+    }
+
+    /// An output read from the x87 stack as `x86_fp80`, as the type the
+    /// source declared.
+    fn from_x87(
+        &mut self,
+        value: SDValue,
+        declared: EVT,
+    ) -> Result<SDValue, Refused> {
+        match (self.dag.value_type(value), declared) {
+            (EVT::Simple(MVT::F80), EVT::Simple(MVT::F32 | MVT::F64)) => {
+                self.cast_value(CastOp::FPTrunc, value, declared, Default::default())
+            }
+            _ => Ok(value),
+        }
     }
 }

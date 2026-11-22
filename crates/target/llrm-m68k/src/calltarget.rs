@@ -64,6 +64,47 @@ fn repeated_counts(function: &MFunction) -> Vec<(String, usize)> {
     order.into_iter().map(|name| (name.to_owned(), count[name])).collect()
 }
 
+/// What routing `count` calls of `name` through a register adds to a function
+/// (bytes, clocks), the register's save and restore apart: the load is paid,
+/// each call gets cheaper by at most the dearer of its two direct forms less
+/// the call through a register.
+fn routed_delta(
+    name: &str,
+    count: usize,
+    cpu: Cpu,
+) -> Option<(i64, i64)> {
+    let register = mc::Operand::Reg(reg::A2);
+    let through =
+        crate::instprice::price_of(cpu, &mc::Inst { opcode: "CALLj", operands: vec![register.clone()] }).ok()?;
+    let symbol = mc::Operand::Symbol(name.to_owned(), 0);
+    let load =
+        crate::instprice::price_of(cpu, &mc::Inst { opcode: "LEA32b", operands: vec![register, symbol.clone()] })
+            .ok()?;
+    let direct = |opcode| crate::instprice::price_of(cpu, &mc::Inst { opcode, operands: vec![symbol.clone()] }).ok();
+    let (absolute, relative) = (direct("CALLb")?, direct("CALLq")?);
+    let dearest = (absolute.0.max(relative.0), absolute.1.max(relative.1));
+    let calls = count as i64;
+    Some((
+        load.0 as i64 - calls * (dearest.0 as i64 - through.0 as i64),
+        i64::from(load.1) - calls * (i64::from(dearest.1) - i64::from(through.1)),
+    ))
+}
+
+/// Whether some callee of `function` is called often enough that a register
+/// for its address makes the function smaller even with the register's
+/// four-byte `movem` share. The allocator then leaves `%a6` to this pass:
+/// the pin allocates it, and `jsr (%a6)` for 91 calls of `copy_runs` -O2 was
+/// 364 B it did not get back.
+pub fn pays(
+    function: &MFunction,
+    cpu: Cpu,
+) -> bool {
+    const SAVE_AND_RESTORE_BYTES: i64 = 4;
+    repeated_counts(function).iter().any(|(name, count)| {
+        routed_delta(name, *count, cpu).is_some_and(|(bytes, _)| bytes + SAVE_AND_RESTORE_BYTES < 0)
+    })
+}
+
 /// A lower bound on the price of routing `set`'s callees through registers,
 /// from the price `best` of the function as it stands: each callee's load is
 /// paid, each of its `count` calls gets cheaper by at most the dearer of its
@@ -74,24 +115,11 @@ fn lower_bound(
     best: (usize, u32),
     cpu: Cpu,
 ) -> Option<(usize, u32)> {
-    let register = mc::Operand::Reg(reg::A2);
-    let through =
-        crate::instprice::price_of(cpu, &mc::Inst { opcode: "CALLj", operands: vec![register.clone()] }).ok()?;
     let (mut bytes, mut clocks) = (best.0 as i64, i64::from(best.1));
     for (name, count) in set {
-        let symbol = mc::Operand::Symbol(name.clone(), 0);
-        let load = crate::instprice::price_of(
-            cpu,
-            &mc::Inst { opcode: "LEA32b", operands: vec![register.clone(), symbol.clone()] },
-        )
-        .ok()?;
-        let direct =
-            |opcode| crate::instprice::price_of(cpu, &mc::Inst { opcode, operands: vec![symbol.clone()] }).ok();
-        let (absolute, relative) = (direct("CALLb")?, direct("CALLq")?);
-        let dearest = (absolute.0.max(relative.0), absolute.1.max(relative.1));
-        let calls = *count as i64;
-        bytes += load.0 as i64 - calls * (dearest.0 as i64 - through.0 as i64);
-        clocks += i64::from(load.1) - calls * (i64::from(dearest.1) - i64::from(through.1));
+        let (b, c) = routed_delta(name, *count, cpu)?;
+        bytes += b;
+        clocks += c;
     }
     // the register each callee takes is saved and restored by the frame: pushed
     // and popped one by one, or by `movem`, which adds no bytes for another

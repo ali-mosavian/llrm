@@ -90,6 +90,7 @@ fn context_in(
     let names: HashMap<u16, &str> = MACHINE_OPCODES.iter().copied().collect();
     let no_blocks = HashMap::default();
     f(&EmitContext {
+        indirect: &HashMap::default(),
         x87_prices: None,
         tables: &[],
         caller_saved: &Default::default(),
@@ -189,14 +190,14 @@ fn a_copy_to_a_physical_register_is_a_mov() {
     });
 }
 
-/// An opcode with no form (an atomic exchange-add) is refused, not guessed.
+/// An opcode with no form (a locked bit-test-and-set) is refused, not guessed.
 #[test]
 fn an_unmapped_opcode_is_an_error() {
     let mut dag = SelectionDAG::new(DagConfig::default());
     let entry = dag.entry_node();
     let a = copy_from(&mut dag, entry, 10);
     let b = copy_from(&mut dag, entry, 11);
-    let cmov = machine(&mut dag, "LXADD32", &[EVT::I32], &[a, b]);
+    let cmov = machine(&mut dag, "LOCK_BTS32m", &[EVT::I32], &[a, b]);
     let root = copy_to(&mut dag, entry, 12, cmov);
     context(|ctx| {
         let units = schedule(&mut dag, root, &Info);

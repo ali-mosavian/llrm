@@ -193,6 +193,73 @@ fn sink_not_into_logical_op(
     true
 }
 
+/// [`sinkNotIntoOtherHandOfLogicalOp`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombineAndOrXor.cpp#L5196):
+/// `(~x) &/| y` is `~(x |/& (~y))` when `y` is free to invert and every use of
+/// the result can be updated. Called by `visitAnd`, `visitOr` and
+/// `visitSelectInst`.
+pub(crate) fn sink_not_into_other_hand_of_logical_op(
+    c: &mut Combiner,
+    logic: InstId,
+) -> bool {
+    let Some(result) = c.function.instruction(logic).result else { return false };
+    let value = Operand::Value(result);
+    let (is_and, mut op0, mut op1) = {
+        let q = query(c, None);
+        let Some(found) = pattern::logical_and(&q, value)
+            .map(|(a, b)| (true, a, b))
+            .or_else(|| pattern::logical_or(&q, value).map(|(a, b)| (false, a, b)))
+        else {
+            return false;
+        };
+        found
+    };
+    let is_binary = matches!(c.function.instruction(logic).opcode, Opcode::Binary(_));
+    let (not_op0, not_op1) = {
+        let q = query(c, None);
+        (pattern::not(&q, op0), pattern::not(&q, op1))
+    };
+    let invert_op1 = if let Some(x) = not_op0
+        && c.can_freely_invert(op1, logic)
+    {
+        op0 = x;
+        true
+    } else if let Some(y) = not_op1
+        && c.can_freely_invert(op0, logic)
+    {
+        op1 = y;
+        false
+    } else {
+        return false;
+    };
+    // And can our users be adapted?
+    if !c.can_freely_invert_all_users_of(logic, None) {
+        return false;
+    }
+    if invert_op1 {
+        op1 = c.freely_invert(op1, logic);
+    } else {
+        op0 = c.freely_invert(op0, logic);
+    }
+    let ty = c.type_of(value);
+    let new = if is_binary {
+        let op = if is_and { BinaryOp::Or } else { BinaryOp::And };
+        c.insert_after(logic, Opcode::Binary(op), ty, vec![op0, op1])
+    } else if is_and {
+        // select x, true, y
+        let on_true = c.all_ones(ty);
+        c.insert_after(logic, Opcode::Select, ty, vec![op0, on_true, op1])
+    } else {
+        // select x, y, false
+        let on_false = c.int(ty, 0);
+        c.insert_after(logic, Opcode::Select, ty, vec![op0, op1, on_false])
+    };
+    let new_value = c.value_of(new);
+    c.replace_inst_with(logic, new_value);
+    // Not an outer `not`: it would be folded straight back into this pattern.
+    c.freely_invert_all_users_of(new_value, None);
+    true
+}
+
 /// The arms of `foldNot` for a `not` of a binary operator.
 fn fold_not_of_binary(
     c: &mut Combiner,

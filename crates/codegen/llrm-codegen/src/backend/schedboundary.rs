@@ -26,6 +26,16 @@
 //! `ScheduleHazardRecognizer` (the pre-RA AArch64 scheduler has none) and
 //! `ResourceSegments` (`enableIntervals`, off for A510 and Cyclone). DEVIATE
 //! SB1, owner arm64-phi, exit with the first model that turns them on.
+//!
+//! # Example
+//! On an unbuffered machine a node released with a ready cycle after the current
+//! one goes to `Pending`; `bumpNode` and the clock move it to `Available`
+//! (the cycles are illustrative).
+//!
+//! ```text
+//! now = 4, release node ready at cycle 6  -> Pending
+//! bump clock to 6, release pending        -> Available
+//! ```
 
 /// `MCProcResourceDesc`.
 #[derive(Clone, Debug)]

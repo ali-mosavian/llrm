@@ -606,6 +606,8 @@ pub fn commutative(what: &Semantics) -> bool {
                     | "por"
                     | "pxor"
                     | "pmullw"
+                    | "pmulhw"
+                    | "pmulhuw"
                     | "pmuludq"
             )
         ))
@@ -743,12 +745,23 @@ fn tied_pairs(
     what: &Semantics,
 ) -> Vec<(usize, usize)> {
     let Some(regs) = regs.filter(|regs| regs.ties_by_row) else {
+        // An instruction that states its own ties (x86's `xadd` and `cmpxchg`,
+        // whose tied register is not the first destination) has them
+        // honoured; any other is tied by its operation.
+        if let Some(pairs) = &what.tied {
+            return pairs.clone();
+        }
         return if ties(what) { vec![(0, 0)] } else { Vec::new() };
     };
     let name = what.name.as_deref().unwrap_or("");
-    let mut pairs = what.tied.clone().unwrap_or_else(|| {
-        (regs.effects)(name, what.dests.len(), what.sources.len()).first().map_or_else(Vec::new, |row| row.ties.to_vec())
-    });
+    let mut pairs = what
+        .tied
+        .clone()
+        .unwrap_or_else(
+            || (regs.effects)(name, what.dests.len(), what.sources.len())
+                .first()
+                .map_or_else(Vec::new, |row| row.ties.to_vec()),
+        );
     // the first pair first: it is the one the commuter and the three-address
     // forms know
     pairs.sort_by_key(|&(source, dest)| (source, dest) != (0, 0));
@@ -1313,6 +1326,28 @@ mod tests {
         assert_eq!(sources(tied), vec![held(3, 4), held(2, 4), Loc::Imm(Imm { value: 9, width: 1, address: None })]);
     }
 
+    /// `lock xadd [w], v2 := v1` ties its register (source 1) to the second
+    /// destination, not the first: the tie was never made, so x86_64
+    /// returned the old value in eax from `lock xadd w, edi`.
+    #[test]
+    fn test_an_instruction_states_the_tie_of_its_second_destination() {
+        let cell = Loc::Mem(crate::model::ir::Mem::new(None, 4));
+        let what = Semantics {
+            name: Some("xadd".into()),
+            dests: vec![cell.clone(), held(2, 4)],
+            sources: vec![cell, held(1, 4)],
+            tied: Some(vec![(1, 1)]),
+            lock: true,
+            ..Semantics::new(Operation::Binary)
+        };
+        let one = Insn::new(0, Some((0, 0)), Some(what), vec![2], vec![1]);
+        let mut counter = 1000..2000;
+        let fix = _untied(None, &one, &mut || counter.next().unwrap()).expect("untied");
+        let [copy, tied] = fix.as_slice() else { panic!("{} instructions", fix.len()) };
+        assert_eq!(sources(copy), vec![held(1, 4)]);
+        assert_eq!(sources(tied)[1], held(2, 4));
+    }
+
     /// copy1d's huge pointer stepped `c := a + 4` then copied `a := c` back
     /// at the latch; under BASIC's register pressure the allocator kept both
     /// copies, and its loop differed from C's by two moves.
@@ -1589,7 +1624,11 @@ mod tests {
         };
         assert_eq!(copied_from(&tied_with(&loop_body(), Off, false, false, false)), Some(8), "off is the pin's order");
         assert_eq!(copied_from(&tied(&loop_body(), Off)), Some(8), "the default is off");
-        assert_eq!(copied_from(&tied_with(&loop_body(), Off, true, false, false)), Some(7), "on ties the loop-carried source");
+        assert_eq!(
+            copied_from(&tied_with(&loop_body(), Off, true, false, false)),
+            Some(7),
+            "on ties the loop-carried source"
+        );
     }
 
     /// x_adler's `a += (i * 31 + 7) & 255` (m32 -O2, 53,972 clk against gcc's
@@ -1643,7 +1682,11 @@ mod tests {
             Some(7),
             "TA-LC alone does not follow copies into other blocks (-O1)"
         );
-        assert_eq!(copied_from(&tied_with(&loop_body(), Off, true, true, false)), Some(8), "on ties the loop-carried source");
+        assert_eq!(
+            copied_from(&tied_with(&loop_body(), Off, true, true, false)),
+            Some(8),
+            "on ties the loop-carried source"
+        );
     }
 
     /// `v8 := add v7, k` with `v7` read again by the `and` that follows (so the

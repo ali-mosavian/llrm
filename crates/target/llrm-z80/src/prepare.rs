@@ -5,7 +5,7 @@
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::intrinsics::Intrinsic;
 use llrm_mir::module::{GlobalValue, Module, Operand};
-use llrm_mir::opcode::{Attribute, BinaryOp, Opcode};
+use llrm_mir::opcode::{Attribute, BinaryOp, CastOp, Opcode};
 use llrm_mir::valuetracking::Query;
 use llrm_mir::valuetracking::pattern::constant_int_u64;
 use llrm_transforms::edges::split_critical_edge;
@@ -50,10 +50,17 @@ pub fn split_phi_edges(module: &mut Module) {
 /// The attribute that lets a function tuned for size call `__mulsi3`.
 pub const LONG_MULTIPLY: &str = "llrm-mulsi3";
 
+/// The attribute of a module with one long multiply: it keeps the word products, and a function not tuned
+/// for size is also selected with the routine's call (`pipeline::CALL_MULS`), the module price choosing.
+pub const LONE_MULTIPLY: &str = "llrm-mulsi3-lone";
+
 /// Marks every function with a body when the module multiplies longs often
 /// enough to pay for `__mulsi3` (58 B): a long multiply counts one, a long
 /// long three (its cross products). A lone small multiply is cheaper inline
-/// (copy_runs, switch_jump_table: +10 and +31 B at -Os with the call).
+/// at a size level (copy_runs, switch_jump_table: +10 and +31 B at -Os with the
+/// call), and its call is priced against the word products at the others
+/// (loop_versioning -O2: the products were four `__mulhi3` calls, 69% slower
+/// than the one `__mulsi3`).
 pub fn mark_long_multiplies(module: &mut Module) {
     let bits = |ty| module.context.types.int_bits(ty);
     let sites: u32 = module
@@ -73,7 +80,7 @@ pub fn mark_long_multiplies(module: &mut Module) {
                 .sum::<u32>()
         })
         .sum();
-    if sites < 2 {
+    if sites < 1 {
         return;
     }
     let names: Vec<String> = module
@@ -81,9 +88,10 @@ pub fn mark_long_multiplies(module: &mut Module) {
         .filter(|(_, _, function)| !function.is_declaration())
         .filter_map(|(_, global, _)| global.name.owned())
         .collect();
+    let mark = if sites < 2 { LONE_MULTIPLY } else { LONG_MULTIPLY };
     for name in names {
         if let Some((_, function)) = module.function_mut(&name) {
-            function.attrs.push(Attribute::Flag(LONG_MULTIPLY.into()));
+            function.attrs.push(Attribute::Flag(mark.into()));
         }
     }
 }
@@ -121,6 +129,115 @@ pub fn mark_wide_shifts(module: &mut Module) {
     for name in names {
         if let Some((_, function)) = module.function_mut(&name) {
             function.attrs.push(Attribute::Flag(WIDE_SHIFT.into()));
+        }
+    }
+}
+
+/// The attribute that marks a function with a shift of a 32- or 64-bit value
+/// by a constant that is not whole bytes: it is also selected with each such
+/// shift the routine's call (`pipeline::CALL_SHIFTS`), where the inline form
+/// is a step a bit, and the caller prices the two with the routine linked once.
+pub const LONG_SHIFT: &str = "llrm-lshift";
+
+/// Marks every function with a body that shifts an `i32` or `i64` by a
+/// constant that is not a multiple of eight.
+pub fn mark_long_shifts(module: &mut Module) {
+    let Some(Ok(layout)) = module.datalayout.as_deref().map(DataLayout::parse) else { return };
+    let names: Vec<String> = module
+        .functions()
+        .filter(|(_, _, function)| !function.is_declaration())
+        .filter(|(_, _, function)| {
+            let query = Query { globals: &module.globals, ..Query::bare(&module.context, function, &layout) };
+            function
+                .layout()
+                .iter()
+                .flat_map(|&block| function.iter_block(block))
+                .map(|inst| function.instruction(inst))
+                .any(|instruction| {
+                    matches!(
+                        instruction.opcode,
+                        Opcode::Binary(BinaryOp::Shl | BinaryOp::LShr | BinaryOp::AShr)
+                    )
+                        && matches!(module.context.types.int_bits(instruction.ty), Some(32 | 64))
+                        && instruction
+                            .operands
+                            .get(1)
+                            .is_some_and(|&amount| constant_int_u64(&query, amount).is_some_and(|by| by % 8 != 0))
+                })
+        })
+        .filter_map(|(_, global, _)| global.name.owned())
+        .collect();
+    for name in names {
+        if let Some((_, function)) = module.function_mut(&name) {
+            function.attrs.push(Attribute::Flag(LONG_SHIFT.into()));
+        }
+    }
+}
+
+/// The attribute of a function with the product of two zero-extended words
+/// (`mul i32 (zext i16 a), (zext i16 b)`): it is also selected with that
+/// product the routine's call (`pipeline::CALL_PRODUCTS`), where the inline
+/// form is partial products, and the caller prices the two.
+pub const WORD_PRODUCT: &str = "llrm-word-product";
+
+/// Marks every function with a body that multiplies two zero-extended words, or
+/// multiplies 32 bits or more through an intrinsic the selector expands to them.
+pub fn mark_word_products(module: &mut Module) {
+    let names: Vec<String> = module
+        .functions()
+        .filter(|(_, _, function)| !function.is_declaration())
+        .filter(|(_, _, function)| {
+            let instructions: Vec<_> = function
+                .layout()
+                .iter()
+                .flat_map(|&block| function.iter_block(block))
+                .map(|inst| function.instruction(inst))
+                .collect();
+            let widened: Vec<_> = instructions
+                .iter()
+                .filter(|one| {
+                    matches!(one.opcode, Opcode::Cast(CastOp::ZExt))
+                        && module.context.types.int_bits(one.ty) == Some(32)
+                        && function
+                            .operand_type(&module.context, one.operands[0])
+                            .is_some_and(|ty| module.context.types.int_bits(ty) == Some(16))
+                })
+                .filter_map(|one| one.result)
+                .collect();
+            // a fixed-point or overflow-checked multiply of 32 bits or more
+            // is expanded to the same word products at selection
+            let expanded = function.walk().any(|(_, call)| {
+                let Some(callee) = llrm_mir::memory::callee(&module.context, function, call) else { return false };
+                matches!(
+                    module.globals.get(callee.0 as usize).and_then(GlobalValue::intrinsic),
+                    Some(
+                        Intrinsic::FixedMul { .. }
+                            | Intrinsic::Fixed { divide: false }
+                            | Intrinsic::WithOverflow { op: BinaryOp::Mul, .. }
+                    )
+                ) && function
+                    .instruction(call)
+                    .operands
+                    .first()
+                    .and_then(|&operand| function.operand_type(&module.context, operand))
+                    .and_then(|ty| module.context.types.int_bits(ty))
+                    .is_some_and(|bits| bits >= 32)
+            });
+            expanded
+                || instructions.iter().any(|one| {
+                    matches!(one.opcode, Opcode::Binary(BinaryOp::Mul))
+                        && module.context.types.int_bits(one.ty) == Some(32)
+                        && one
+                            .operands
+                            .iter()
+                            .all(|&operand| matches!(operand, Operand::Value(value) if widened.contains(&value)))
+                })
+        })
+        .filter_map(|(_, global, _)| global.name.owned())
+        .collect();
+    for name in names {
+        if let Some((_, function)) = module.function_mut(&name) {
+            function.attrs.push(Attribute::Flag(WORD_PRODUCT.into()));
         }
     }
 }
@@ -165,7 +282,8 @@ pub fn mark_word_chains(module: &mut Module) {
             if crate::dagisel::pipeline::pin_decomposes(c) {
                 continue;
             }
-            let Some((_, (bytes, _), (call, _))) = crate::dagisel::pipeline::word_chain(c as i64, true, true) else {
+            let Some((_, (bytes, _), (call, _))) = crate::dagisel::pipeline::word_chain(c as i64, true, false, true)
+            else {
                 return;
             };
             extra += bytes - call;

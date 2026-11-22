@@ -31,9 +31,9 @@ rm -f "$d/ran"
 tip_verdict "$d/repo" "$d/t" /nonexistent HEAD~1 HEAD >/dev/null || { echo "FAIL: a tooling-only tip was red"; exit 1; }
 ! grep -q -- "--lib" "$d/ran" 2>/dev/null || { echo "FAIL: a tooling-only tip ran lib tests"; exit 1; }  # the root scanners still run
 # the scanners: a stale generated page and a tracked .md naming ~/scratch each stop the runner, named (they were refused as batches, never blamed on the tip)
-mkdir -p "$d/repo/tools/docs/docsbuild"; printf 'print("generated docs are out of date; run it")\nprint("  docs/x.md")\n' > "$d/repo/tools/docs/docsbuild/build.py"
+mkdir -p "$d/repo/tools/docs/docsbuild"; printf 'print("generated docs are out of date; run it")\nprint("  docs/working/readme.md")\n' > "$d/repo/tools/docs/docsbuild/build.py"
 stop=$(tip_verdict "$d/repo" "$d/t" /nonexistent HEAD~1 HEAD) && { echo "FAIL: a tip with a stale page was green"; exit 1; }
-echo "$stop" | grep -q 'docs_in_sync.*docs/x.md' || { echo "FAIL: stale page not named: $stop"; exit 1; }
+echo "$stop" | grep -q 'docs_in_sync.*docs/working/readme.md' || { echo "FAIL: stale page not named: $stop"; exit 1; }
 printf 'pass\n' > "$d/repo/tools/docs/docsbuild/build.py"
 printf 'see ~/scratch/handoff/x.md\n' > "$d/repo/n.md"; git -C "$d/repo" add n.md
 stop=$(tip_verdict "$d/repo" "$d/t" /nonexistent HEAD~1 HEAD) && { echo "FAIL: a tip naming ~/scratch was green"; exit 1; }

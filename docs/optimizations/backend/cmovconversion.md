@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/cmovconversion.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/cmovconversion.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/cmovconversion.rs sha256:796180cc5515dc6956b9f1afd442bf7b69003e72e354a355a7ad2287fb878e02 -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/cmovconversion.rs sha256:4cba1dde7cb535d344cd0e8f3d27d335ae2af0be17740f383524b216fdfad179 -->
 
 # cmovconversion
 
@@ -35,14 +35,16 @@ On SSA, after `combiner` and before `machinelicm` (the pin's `addILPOpts`),
 at every -O level but -O0.
 
 ## Limits
-DEVIATE CMC1 (exit 2026-11-20,
+DEVIATE CMC1 (owner w2, exit 2026-12-05: latencies from a per-target
+scheduling model, else the row stays; audited 2026-11-08,
 [permalink](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86CmovConversion.cpp#L487)):
 the latency of an instruction is the target description's row for its
 form (`form_of`), not the scheduling model's; a copy takes 0, a form with
 no row 1. The misprediction penalty is the target's `mispredict_penalty`;
 with none stated only the load groups convert.
 
-DEVIATE CMC2 (exit 2026-11-20,
+DEVIATE CMC2 (owner w2, exit 2026-12-05: the LIR carries `SUBREG_TO_REG`,
+else the row stays; audited 2026-11-08,
 [permalink](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86CmovConversion.cpp#L342)):
 the `SUBREG_TO_REG` that relies on a 32-bit `cmov` zeroing the upper half
 is a reader of the result at a wider width.

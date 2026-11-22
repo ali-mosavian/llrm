@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/fixednarrow.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/fixednarrow.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/fixednarrow.rs sha256:7aeb1cb1d4081ab444770bbcce05409734d7473a65c9b9263cde99b2c123f774 -->
+<!-- src: crates/opt/llrm-transforms/src/fixednarrow.rs sha256:9aefb8c07c4235f6de0d295f5d72df37c5d2959c678948ad19d5e20935c6e14f -->
 
 # fixednarrow
 
@@ -42,6 +42,13 @@ dropped).
  %p = call smul.fix(%x2, %y, 8)     ==>   %p = ashr %m, 7
  (x and y small enough that x*y fits)
 ```
+
+A constant factor that is a whole `K << scale` needs no range: the product
+`x * K * 2^scale` fits 64 bits and shifts back to `x * K`, which is `mul x, K`
+at 32 bits, wrapping as the wide form's low half does.
+The pin folds only `X * (1 << scale) -> X` (`simplifyIntrinsic`) and a zero or
+undef factor; no InstCombine or DAGCombiner `smul.fix` fold takes a whole
+multiple. `smul.fix.sat` is another intrinsic and keeps its call.
 
 DEVIATE LP-3 (no pin pass: SelectionDAG expands `smul.fix`
 (`TargetLowering::expandFixedPointMul`); exit: isel does it and this is

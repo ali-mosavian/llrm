@@ -224,7 +224,8 @@ def nib_extras(source: Path) -> list[str]:
 
 def c_environment(variant: Variant) -> dict[str, str]:
     """What llrm-cc is told of a C program's target: the Watcom row of the 16-bit target, whose programs enter `main_` as dosbatch links them."""
-    return {**os.environ, "LLRM_CC_TARGET": dosbatch.WATCOM_ROWS[dosbatch.target_bits(dosbatch.REAL_MODE)]} if variant.language == "c" else dict(os.environ)
+    base = {**llrmbin.cc_environment(), **os.environ}  # LLRM_CLANG_M16 from the pin file when the environment names none: without it a real-mode compile ran the pin's clang
+    return {**base, "LLRM_CC_TARGET": dosbatch.WATCOM_ROWS[dosbatch.target_bits(dosbatch.REAL_MODE)]} if variant.language == "c" else base
 
 
 def kept_a_call(variant: Variant, work: Path, stem: str, shim: bool = True) -> tuple[Path, Path] | None:
@@ -567,6 +568,16 @@ def stage_shared_headers(folder: Path, text: bytes) -> bytes:
 BORLAND_DEFINES = {"tcpp": ["-D__huge=huge"]}  # Turbo C++ 3.0 knows `huge`, not `__huge` (BCC 3.1 and Watcom know both); TC 2.01 has no huge arrays at all: its row stays an error
 
 
+def borland_job_failure(ran, folder: Path, stems: list[str]) -> str | None:
+    """Why a Borland job built nothing, None when it built any object: a job that timed out, or exited without one object, says so and is announced on stderr
+    (the 18de C table read "bcc: no object" in every bcc, tc and tcpp cell and nothing said the job had failed)."""
+    if any((folder / f"{stem}.OBJ").exists() for stem in stems):
+        return None
+    if isinstance(ran, str):
+        return ran
+    return f"the job exited {ran.returncode} and built no object: {(ran.stderr or ran.stdout or '').strip()[-160:]}"
+
+
 def build_borland(language: str, variants_: list[tuple[Variant, str]], opt: str, work: Path) -> dict[str, tuple[Path, Path] | str]:
     """A Borland-family reference (BORLAND), every program in one DOSBox boot. Keyed by stem.
     Linked with the toolchain's own start-up (C0M) and libraries: the floating-point programs need its FP87 and MATHM,
@@ -588,12 +599,15 @@ def build_borland(language: str, variants_: list[tuple[Variant, str]], opt: str,
     ran = native.run_limited([str(ROOT / "tools" / "callconv" / "bcc.sh"), str(folder), *[f"{stem}.c {levels[opt]} {" ".join([*physical_defines(), *BORLAND_DEFINES.get(language, [])])}".strip() for _, stem in variants_]],
                    env={**os.environ, "CCROOT": str(home.parent), "CCDIR": home.name, "CCEXE": compiler}, seconds=int(os.environ.get("LLRM_BORLAND_SECONDS", "1800")))
     support = [word for one in dosbatch.c_support(dosbatch.REAL_MODE, folder) for word in ("file", str(one))]
+    failure = borland_job_failure(ran, folder, [stem for _, stem in variants_])
+    if failure:
+        print(f"bench: BORLAND JOB FAILED ({language} {opt}): {failure}", file=sys.stderr, flush=True)
     out: dict[str, tuple[Path, Path] | str] = {}
     for _, stem in variants_:
         obj, exe, listing = folder / f"{stem}.OBJ", folder / f"{stem}.exe", folder / f"{stem}.map"
         if not obj.exists():
             message = folder / f"{stem}.MSG"
-            out[stem] = f"{compiler}: " + (message.read_text(errors="replace").strip()[-200:] if message.exists() else ran if isinstance(ran, str) else "no object")  # a timed-out job said "no object" for all 31 programs of bcc -Os
+            out[stem] = f"{compiler}: " + (message.read_text(errors="replace").strip()[-200:] if message.exists() else failure or "no object")  # a timed-out job said "no object" for all 31 programs of bcc -Os
             continue
         lib = home / "lib"
         try:
@@ -643,6 +657,7 @@ def measure_references(selected: list[str], opts: list[str], work: Path, timing:
             owned.append((key, reference_job(key, stem, built, variant.region if counted else None, want, obj, files, variant.source)))
             needs[key] = timing_input(variant, directory)
     for opt in opts:
+        llrmbin.bin_dir()  # a source touched since the start refuses the run here, not after the hours the references take
         c_todo = [(directory, variant, stem) for (directory, variant), stem in zip(todo, stems) if variant.language == "c"]
         for directory, variant, stem in c_todo:
             if (OW / "bwcc").exists():
@@ -1486,6 +1501,8 @@ def main() -> int:
     stage(f"measuring {len(args.select) or 'every'} benchmarks at {' '.join(args.opt)}, {cores()}")
     measured = measure_all(args.select, args.opt, args.work, args.time)
     stage(f"measured {len(measured)} rows")
+    if args.json and not args.shard:  # kept if the references that follow (hours) fail: the compiler's own rows are not lost with them
+        args.json.with_name(args.json.name + ".partial").write_text(json.dumps({"/".join(key): value for key, value in measured.items()}, indent=1))
     if args.shard:  # a slice only measures: --merge judges every row against the base that `--shard base` measured once
         print(f"shard {args.shard}: {len(measured)} measurements: 0 problems")
         if args.json:

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/local.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/local.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/local.rs sha256:aada91e94acf06850fc46b5b235cf2d80fad9b2d763a73cf06b68da02218d535 -->
+<!-- src: crates/opt/llrm-transforms/src/local.rs sha256:1ffe7fb0aefe50208300adf852a820bc23926401eae72b1fd4df595839d98aa5 -->
 
 # local
 
@@ -40,7 +40,7 @@ DEVIATE, each with the fact MIR lacks:
 8. `isRemovableAlloc`, `getFreedOperand`, `isMathLibCallNoop`: MIR has no
    `allockind` attribute and no `TargetLibraryInfo`, so no call is a known
    allocation, free or libm function.
-9. `experimental_guard`, `wasm_trunc_*`, `ptrauth_*`, `stacksave`,
+9. `experimental_guard`, `wasm_trunc_*`, `ptrauth_*`,
    `launder_invariant_group`, `allow_runtime_check`, `allow_ubsan_check` and
    the constrained FP intrinsics: not in the intrinsic table.
 10. A non-volatile load from a constant global: a load has no atomic
@@ -56,13 +56,12 @@ DEVIATE, each with the fact MIR lacks:
     `LoopInfo`, `MemorySSAUpdater` and `MemoryDependenceResults`: MIR passes
     hold none of them, the caller rebuilds. The debug-only `IncomingValues`
     goes with them.
-16. `MergeBlockIntoPredecessor`'s `hasAddressTaken` (MIR has no
-    `blockaddress`), `HasLoopOrEntryConvergenceToken` (no convergence
-    tokens), `PTI->mayHaveSideEffects` (after `isSpecialTerminator` a
-    terminator is a `ret`, `br`, `switch` or `unreachable`, which never
-    writes, throws or fails to return), `takeName` (a `Function` has no
-    block-name setter), and the `unreachable` left in the merged block (the
-    block is erased at once).
+16. `MergeBlockIntoPredecessor`'s `HasLoopOrEntryConvergenceToken` (no
+    convergence tokens), `PTI->mayHaveSideEffects` (after
+    `isSpecialTerminator` a terminator is a `ret`, `br`, `switch` or
+    `unreachable`, which never writes, throws or fails to return),
+    `takeName` (a `Function` has no block-name setter), and the
+    `unreachable` left in the merged block (the block is erased at once).
 17. `PtrToAddrInst`: MIR has no `ptrtoaddr`. `getUnderlyingObjectAggressive`
     is `valuetracking::underlying`, which does not look through a `select`,
     a `phi` or a call that returns an argument: two pointers that differ

@@ -1415,6 +1415,124 @@ bx:
     assert_eq!(results(&module, inputs), before);
 }
 
+/// Before: `indirectbr` was never folded, so a jump to a known label kept the
+/// branch, the address and the block no one else reached.
+#[test]
+fn test_an_indirectbr_on_a_known_block_address_is_a_jump() {
+    let text = "define i32 @f() {
+entry:
+  indirectbr ptr blockaddress(@f, %b), [label %a, label %b]
+
+a:
+  ret i32 1
+
+b:
+  ret i32 2
+}
+";
+    let mut module = parsed(text);
+    assert!(simplify(&mut module));
+    let out = printed(&module);
+    // The address is gone with the branch, so the block merges up: the
+    // function returns 2 and the other destination is dead.
+    assert!(!out.contains("indirectbr") && !out.contains("ret i32 1") && out.contains("ret i32 2"), "{out}");
+}
+
+/// A destination the address is not among is undefined behaviour:
+/// `unreachable`.
+#[test]
+fn test_an_indirectbr_on_an_unlisted_block_address_is_unreachable() {
+    let text = "define i32 @f() {
+entry:
+  indirectbr ptr blockaddress(@f, %b), [label %a]
+
+a:
+  ret i32 1
+
+b:
+  ret i32 2
+}
+";
+    let mut module = parsed(text);
+    assert!(simplify(&mut module));
+    let out = printed(&module);
+    assert!(out.contains("unreachable") && !out.contains("indirectbr"), "{out}");
+}
+
+#[test]
+fn test_an_indirectbr_on_a_select_of_block_addresses_is_a_conditional_branch() {
+    let text = "define i32 @f(i1 %c) {
+entry:
+  %a = select i1 %c, ptr blockaddress(@f, %t), ptr blockaddress(@f, %e)
+  indirectbr ptr %a, [label %t, label %e]
+
+t:
+  ret i32 1
+
+e:
+  ret i32 2
+}
+";
+    let mut module = parsed(text);
+    assert!(simplify(&mut module));
+    let out = printed(&module);
+    // Folded to a conditional branch, which then becomes a select.
+    assert!(!out.contains("indirectbr") && !out.contains("blockaddress"), "{out}");
+    assert!(out.contains("select i1 %c, i32 1, i32 2"), "{out}");
+}
+
+/// A destination no `blockaddress` names cannot be reached by an address, so
+/// the branch drops it; one listed twice goes once.
+#[test]
+fn test_an_indirectbr_drops_destinations_whose_address_is_not_taken() {
+    let text = "@t = internal constant [2 x ptr] [ptr blockaddress(@f, %a), ptr blockaddress(@f, %b)]
+
+define i32 @f(ptr %p) {
+entry:
+  indirectbr ptr %p, [label %a, label %b, label %c, label %a]
+
+a:
+  ret i32 1
+
+b:
+  ret i32 2
+
+c:
+  ret i32 3
+}
+";
+    let mut module = parsed(text);
+    assert!(simplify(&mut module));
+    let out = printed(&module);
+    assert!(!out.contains("ret i32 3"), "{out}");
+    assert_eq!(out.matches("indirectbr").count(), 1, "{out}");
+    assert_eq!(
+        out.lines().find(|line| line.contains("indirectbr")).expect("an indirectbr").matches("label").count(),
+        2
+    );
+}
+
+/// Before: the block merged into its predecessor, and the table's label named
+/// code in the middle of another block.
+#[test]
+fn test_a_block_whose_address_is_taken_is_not_merged_into_its_predecessor() {
+    let text = "@t = internal constant [1 x ptr] [ptr blockaddress(@f, %b)]
+
+define i32 @f(i32 %x) {
+entry:
+  %y = add i32 %x, 1
+  br label %b
+
+b:
+  ret i32 %y
+}
+";
+    let mut module = parsed(text);
+    simplify(&mut module);
+    let out = printed(&module);
+    assert!(out.contains("\nb:\n"), "{out}");
+}
+
 /// SimplifyCFG prices speculation by `TCK_CodeSize` in a `minsize` function
 /// (`validateAndCostRequiredSelects`, `performBranchToCommonDestFolding`); the
 /// kind was always `SizeAndLatency`. On the i486 only a divide is priced
@@ -1611,4 +1729,91 @@ b0:
     simplify(&mut module);
     let made = llrm_mir::counts::get(llrm_mir::counts::Event::FactSets) - before;
     assert_eq!(made, 0, "{made} fact sets made to ask noreturn");
+}
+
+/// The fold on `Flagged` with gcc's phiopt arm rule (`phiopt_one_statement`).
+fn folded_with_phiopt_rule(
+    text: &str,
+    on: bool,
+) -> String {
+    let flagged = crate::testing::Flagged { phiopt_one_statement: on, ..Default::default() };
+    let mut module = parsed(text);
+    let outer = Outer::of(&module, None);
+    let layout = DataLayout::default();
+    let spec = Speculation { tti: &flagged, layout: &layout, outer: &outer };
+    let mut declared = Declared::of(&module);
+    let (context, function) = module.function_mut("f").expect("@f");
+    super::simplified(context, &spec, &mut declared, function);
+    printed(&module)
+}
+
+/// sfm16_dbg's `if (c) { if (bad == 0) first = i; bad++; }` in a loop: after the
+/// inner diamond became a select the outer arm holds two statements. The pin
+/// folds it (cost 2 of 4) and the loop-carried `bad` waits on a select each
+/// iteration, +64.8% against gcc, whose phiopt
+/// (`empty_bb_or_one_feeding_into_p`) takes only an arm of one statement and
+/// keeps the branch. Off the recurrence, or with one statement, it still folds.
+#[test]
+fn test_gcc_phiopt_arm_rule_keeps_a_two_statement_arm_of_a_recurrence_a_branch() {
+    let looped = "define i64 @f(i64 %n) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i64 [ 0, %b0 ], [ %i2, %b4 ]
+  %acc = phi i64 [ 0, %b0 ], [ %p, %b4 ]
+  %m = and i64 %i, 1
+  %m1 = xor i64 %m, %n
+  %m2 = add i64 %m1, 3
+  %m3 = mul i64 %m2, 5
+  %c = icmp eq i64 %m3, 0
+  br i1 %c, label %b2, label %b3
+
+b2:
+  %a = add i64 %acc, 1
+  %y = add i64 %a, 1
+  br label %b4
+
+b3:
+  br label %b4
+
+b4:
+  %p = phi i64 [ %y, %b2 ], [ %acc, %b3 ]
+  %i2 = add i64 %i, 1
+  %d = icmp eq i64 %i2, %n
+  br i1 %d, label %b5, label %b1
+
+b5:
+  ret i64 %p
+}
+";
+    assert!(folded_with_phiopt_rule(looped, false).contains("select i1 %c"), "the pin folds it");
+    let kept = folded_with_phiopt_rule(looped, true);
+    assert!(!kept.contains("select i1 %c"), "{kept}");
+    let shallow = looped
+        .replace("  %m1 = xor i64 %m, %n\n  %m2 = add i64 %m1, 3\n  %m3 = mul i64 %m2, 5\n  %c = icmp eq i64 %m3, 0\n", "  %c = icmp eq i64 %m, 0\n");
+    assert!(
+        folded_with_phiopt_rule(&shallow, true).contains("select i1 %c"),
+        "a condition no later than the values keeps the select (sfm16_float_f2i: the convert is the later)"
+    );
+    let one = looped.replace("  %y = add i64 %a, 1\n", "").replace("[ %y, %b2 ]", "[ %a, %b2 ]");
+    assert!(folded_with_phiopt_rule(&one, true).contains("select i1 %c"), "one statement feeding the phi folds");
+    let straight = "define i64 @f(i64 %x, i1 %c) {
+b0:
+  br i1 %c, label %b1, label %b2
+
+b1:
+  %a = add i64 %x, 1
+  %y = add i64 %a, 1
+  br label %b3
+
+b2:
+  br label %b3
+
+b3:
+  %p = phi i64 [ %y, %b1 ], [ %x, %b2 ]
+  ret i64 %p
+}
+";
+    assert!(folded_with_phiopt_rule(straight, true).contains("select i1 %c"), "off a recurrence the pin's fold stands");
 }

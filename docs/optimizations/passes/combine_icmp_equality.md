@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_icmp_equality.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_icmp_equality.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_icmp_equality.rs sha256:68017cbdcb7d959d5a1e15a47c775a6aa7ab3a8f37bf9409f82d3f034c646c92 -->
+<!-- src: crates/opt/llrm-transforms/src/combine_icmp_equality.rs sha256:8cb0eef4c772559498a907ec6fee9cf79851182e3f9305adc479c566edbd2b8e -->
 
 # combine_icmp_equality
 
@@ -10,9 +10,9 @@ at d1106deb71cc, up to the `ashr`/`trunc` range check.
 MIRROR: the order of the arms and each condition. Like the pin, the shift
 pair returns `None` for the whole function when its amounts differ.
 
-OWED, in place as `// OWED:` comments: `foldICmpIntrinsicWithIntrinsic`,
-the power-of-two canonicalizations, the `fshr` rotate, the `xor` constant
-move, the add/sub/xor power-of-two mask and `foldICmpEqualityWithOffset`.
+OWED, in place as `// OWED:` comments: the power-of-two canonicalizations,
+the `fshr` rotate, the `xor` constant move, the add/sub/xor power-of-two
+mask and `foldICmpEqualityWithOffset`.
 
 DEVIATE: the constants are integers (MIR has no vectors), and a constant of
 the `or` arm that is a constant expression does not match.

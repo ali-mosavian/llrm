@@ -227,3 +227,20 @@ b0:
     let marked = run(&format!("{}{caller}", CALLEE.replace("%c) {", "%c) noipa {")));
     assert!(!marked.contains("fastcc"), "{marked}");
 }
+
+/// A declaration with a `metadata` parameter (a constrained FP intrinsic)
+/// sent `CalleePop` to size the parameter before it asked whether the
+/// function could pop at all; `DataLayout` has no size for `metadata`, and
+/// `llrm-arm64-llc` died with a stack overflow on every `FENV_ACCESS` file.
+#[test]
+fn a_declaration_with_a_metadata_parameter_is_left_alone() {
+    let text = "declare double @llvm.experimental.constrained.fadd.f64(double, double, metadata, metadata)
+define double @f(double %a, double %b) {
+b0:
+  %r = call double @llvm.experimental.constrained.fadd.f64(double %a, double %b, metadata !\"round.dynamic\", metadata !\"fpexcept.strict\")
+  ret double %r
+}
+";
+    let after = run(text);
+    assert!(after.contains("call double @llvm.experimental.constrained.fadd.f64"), "{after}");
+}

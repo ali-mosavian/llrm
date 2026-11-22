@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/switchlookup.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/switchlookup.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/switchlookup.rs sha256:c148f7ddb20465aad9ba11331451200fc25f9dfd425e4065ce213681d720ff7b -->
+<!-- src: crates/opt/llrm-transforms/src/switchlookup.rs sha256:02674bdfb0b0417e9ec346694c7cb5aa52b5e378abb453cbcf8985527802d655 -->
 
 # switchlookup
 
@@ -41,7 +41,7 @@ that is not a constant, a bit mask.
 
 | # | DEVIATE |
 |---|---|
-| D1 | A table is a private constant from `Declared::table`, named `switch.table.N`, deduplicated, without the function's name or the preferred alignment of its cells; `shouldBuildLookupTablesForConstant` is not asked and a constant MIR cannot hold is not offered. |
+| D1 | A table is a private constant from `Declared::table`, named `switch.table.N`, deduplicated, without the function's name; `shouldBuildLookupTablesForConstant` is not asked and a constant MIR cannot hold is not offered. |
 | D2 | No branch weights on the range check (`setFittedBranchWeights`). |
 | D3 | No `DomTreeUpdater`: callers recompute the tree. |
 | D4 | A hole at index 0 of a table whose holes are poison takes the first result as the linear offset; the pin `cast<ConstantInt>`s the poison. |

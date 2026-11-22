@@ -1332,6 +1332,12 @@ pub fn _encoded(
             Loc::Imm(ir::Imm { address: Some(addr), value, .. }) if model == CodeModel::Flat64 && beside_memory => {
                 (made.immediate_at, near, addr.disp + value, addr)
             }
+            // A pushed symbol is `push imm32`: no `[rip + disp32]` to carry it.
+            Loc::Imm(ir::Imm { address: Some(addr), value, .. })
+                if model == CodeModel::Flat64 && what.op == Operation::Push =>
+            {
+                (made.immediate_at, near, addr.disp + value, addr)
+            }
             Loc::Imm(ir::Imm { address: Some(addr), value, .. }) if model == CodeModel::Flat64 => {
                 (made.displacement_at, near, addr.disp + value, addr)
             }

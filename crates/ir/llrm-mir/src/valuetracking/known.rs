@@ -54,9 +54,11 @@ use super::range::{
     SelectPatternFlavor, get_inverse_min_max_flavor, m_apint, match_select_pattern, match_select_pattern_cast,
 };
 use super::signbits::compute_num_sign_bits;
+use crate::apfloat::semantics_of;
 use crate::apint::{countl_zero, countr_zero, set_high, set_range, sext, sign_bit, signed, umul_ov};
 use crate::constantrange::ConstantRange;
 use crate::context::{ConstantExpr, ConstantKind, mask};
+use crate::fpclass::FC_ALL_FLAGS;
 use crate::knownbits::KnownBits;
 use crate::module::{
     GlobalKind, GlobalValue, InstId, Instruction, Linkage, MetadataNode, MetadataOperand, Operand, ValueDef,
@@ -1559,6 +1561,11 @@ fn compute_known_bits_from_operator(
             };
             if scalar(q.type_of(operand(0))) && !matches!(q.context().types.get(instruction.ty), Type::Vector { .. }) {
                 *known = kb(operand(0));
+            } else if let Some(Type::Float(kind)) = q.type_of(operand(0)).map(|ty| q.context().types.get(ty)) {
+                // Handle bitcast from floating point to integer: what is
+                // known of the value's class is known of its bits.
+                let class = super::fp::compute_known_fp_class(q, operand(0), FC_ALL_FLAGS, depth + 1);
+                *known = class.to_known_bits(&semantics_of(*kind));
             }
         }
         Opcode::Cast(CastOp::SExt) => {
@@ -1674,6 +1681,7 @@ fn constant_expression(
     let constant = q.context().get(id);
     let ConstantKind::Expr(expr) = &constant.kind else { return None };
     let (opcode, operands, flags) = match expr {
+        ConstantExpr::BlockAddress { .. } => return None,
         ConstantExpr::Cast { op, value } => (Opcode::Cast(*op), vec![Operand::Constant(*value)], Flags::default()),
         ConstantExpr::Binary { op, lhs, rhs } => {
             (Opcode::Binary(*op), vec![Operand::Constant(*lhs), Operand::Constant(*rhs)], Flags::default())

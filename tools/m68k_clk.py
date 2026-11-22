@@ -4,7 +4,7 @@
 m68k_clk.py [--cc LLRM_CC] [--cpus 68000,68020] [--levels O1,O2,Os] [--jobs N] FILE.c...
 
 Each program is linked with the support objects of `m68k_exec_sweep`, run under qemu-m68k and priced by the `cycles` example (CYCLES_CPUS).
-An empty clocks cell is unmeasured: no row, a bound (`N*`, unknown loop count) or uncovered code (`?`); never a number.
+An empty clocks cell is unmeasured: no row or uncovered code (`?`); never a number.
 Environment: GCC_M68K (the cross toolchain root), LLRM_CC, CYCLES (the built `cycles` example; default under CARGO_TARGET_DIR).
 """
 import argparse
@@ -19,13 +19,43 @@ ROOT = HERE.parent
 sys.path.insert(0, str(HERE))
 
 
+def gcc_is_comparable(source):
+    """False where gcc's column is not like-for-like: a program naming `long double` (gcc's is 12-byte extended, ours and the pin's 8-byte double; the corpus matrix leaves the column empty). Reading them, long_double_layout -Os was +435% bytes."""
+    import m68k_corpus_matrix
+
+    return not m68k_corpus_matrix.long_double_abi_mismatch(source)
+
+
+def library_bytes(cc, gcc_root, cpu, level, obj):
+    """The .text bytes of the compiler-rt members `obj` pulls (as `m68k_program_size.py`: the program's code alone hides a libcall one side makes and the other inlines, shift64_variable -Os). None when the link fails."""
+    import m68k_exec_sweep as sweep
+    import m68k_program_size as program_size
+
+    crt, archive, stubs = program_size.support(cc, gcc_root, cpu, level, sweep.cache_dir(cc))
+    mapfile = Path(f"{obj}.map")
+    link = subprocess.run(program_size.link_command(f"{gcc_root}/usr/bin/m68k-linux-gnu-", cpu, obj, Path(f"{obj}.lib.exe"), mapfile, crt, archive, stubs),
+                          capture_output=True, text=True, env=sweep.tool_env(gcc_root))
+    if link.returncode:
+        return None
+    return sum(program_size.members_of(program_size.text_bytes(mapfile.read_text())).values())
+
+
+def loaded_bytes(size_output):
+    """The loaded footprint of `size`'s Berkeley row: text (code and read-only data) plus data. The text column alone left out `.data`, so a static table
+    that is not const (word_compare_branches, 56 B) was in neither side's bytes."""
+    columns = size_output.split("\n")[1].split()
+    return str(int(columns[0]) + int(columns[1]))
+
+
 def parse_clocks(stdout):
-    """The clocks cell of the first `| NAME.exe | insns | clk | clk/call |` row. `None` (unmeasured) when there is no such row, the cell is empty, or it is a bound (`N*`: unknown loop count) or uncovered (`?`): a bound is not a count."""
+    """The clocks cell of the first `| NAME.exe | insns | clk | clk/call |` row. `None` (unmeasured) when there is no such row, the cell is empty, or it is uncovered (`?`). A bound is kept as a bound, never as a count: `>=N` (`N*`: a shift count or loop count at its lower bound) and `<=N` (only multiplies and divides at their published maximum)."""
     for line in stdout.splitlines():
         if line.startswith("| ") and ".exe" in line:
             cells = [cell.strip() for cell in line.strip("|").split("|")]
             cell = cells[2] if len(cells) > 2 else ""
-            return cell if cell.isdigit() else None
+            if cell.endswith("*") and cell[:-1].isdigit():
+                return f">={cell[:-1]}"
+            return cell if cell.isdigit() or (cell.startswith("<=") and cell[2:].isdigit()) else None
     return None
 
 
@@ -62,12 +92,13 @@ def run_once(exe, cpu):
 def gcc_command(gcc, gcc_root, cpu, level, path, obj, pcrel, flags=()):
     """gcc's compile line; `pcrel` puts its data on ours's pc-relative model (`-mpcrel`), so the clocks of the two columns share one data model.
     `flags` are the program's own `// flags:` in gcc's spelling (ValueError for one gcc cannot take): ours was built with `-fno-inline-functions`
-    and gcc without, so licm_graph_callee_footprint priced 188244 against 77282 clocks, gcc having inlined the call the program is about."""
+    and gcc without, so licm_graph_callee_footprint priced 188244 against 77282 clocks, gcc having inlined the call the program is about.
+    Hosted, as ours is since #10561: `-ffreestanding` kept gcc from forming memset/memcpy calls, so ours called the harness stub where gcc inlined its fills."""
     import external_flags
 
     return [gcc, f"-B{gcc_root}/usr/lib/gcc-cross/m68k-linux-gnu/15/", f"-B{gcc_root}/usr/m68k-linux-gnu/bin/",
-            "-ffreestanding", "-nostdlib", "-w", "-msoft-float", *(["-mpcrel"] if pcrel else []), f"-mcpu={cpu}", f"-{level}",
-            *external_flags.GCC_DIALECT, *external_flags.gcc_program_flags(flags), "-isystem", str(ROOT / "runtime/shared/posix"), "-c", str(path), "-o", str(obj)]
+            "-nostdlib", "-w", "-msoft-float", *(["-mpcrel"] if pcrel else []), f"-mcpu={cpu}", f"-{level}",
+            *external_flags.GCC_DIALECT, *external_flags.gcc_source_defines(Path(path).read_text() if Path(path).is_file() else ""), *external_flags.gcc_program_flags(flags), *(["-isystem", os.environ["M68K_GCC_HEADERS"]] if os.environ.get("M68K_GCC_HEADERS") else []), "-isystem", str(ROOT / "runtime/shared/posix"), "-c", str(path), "-o", str(obj)]
 
 
 def main():
@@ -81,6 +112,7 @@ def main():
     ap.add_argument("--levels", default="O1,O2,Os")
     ap.add_argument("--jobs", type=int, default=6)
     ap.add_argument("--gcc-pcrel", action="store_true", help="gcc -mpcrel: ours's data model")
+    ap.add_argument("--libs-only", action="store_true", help="bytes and library bytes only: no link, no run, no clocks (a card's lib columns without its hours of qemu)")
     ap.add_argument("files", nargs="+")
     args = ap.parse_args()
     gcc_root = os.environ["GCC_M68K"]
@@ -88,13 +120,13 @@ def main():
     cycles = os.environ.get("CYCLES", f"{target}/release/examples/cycles")
     gcc = f"{gcc_root}/usr/bin/m68k-linux-gnu-gcc"
     size = f"{gcc_root}/usr/bin/m68k-linux-gnu-size"
-    print("cpu\tprogram\tlevel\tours_B\tours_clk\tgcc_B\tgcc_clk")
+    print("cpu\tprogram\tlevel\tours_B\tours_clk\tgcc_B\tgcc_clk\tours_lib\tgcc_lib")
     for cpu in args.cpus.split(","):
         support = sweep.build_support(args.cc, gcc_root, cpu, sweep.cache_dir(args.cc), args.jobs)
         for name in args.files:
             path = Path(name).resolve()
             for level in args.levels.split(","):
-                cells, runs = {}, {}
+                cells, runs, libs = {}, {}, {}
                 with tempfile.TemporaryDirectory() as tmp:
                     for side in ("ours", "gcc"):
                         obj, exe = Path(tmp) / f"{side}.o", Path(tmp) / f"{side}.exe"
@@ -104,6 +136,9 @@ def main():
                                    "-I", str(ROOT / "runtime/shared/posix"), "-o", str(obj), str(path)]
                         else:
                             env = sweep.tool_env(gcc_root)
+                            if not gcc_is_comparable(path.read_text()):
+                                cells[side] = ("", "")
+                                continue
                             try:
                                 cmd = gcc_command(gcc, gcc_root, cpu, level, path, obj, args.gcc_pcrel, o0_sweep.flags_of(path.read_text(), f"m68k-{cpu}"))
                             except ValueError:
@@ -112,6 +147,11 @@ def main():
                         if subprocess.run(cmd, capture_output=True, text=True, env=env).returncode:
                             cells[side] = ("", "")
                             continue
+                        if args.libs_only:
+                            library = library_bytes(args.cc, gcc_root, cpu, level, obj)
+                            libs[side] = "" if library is None else str(library)
+                            cells[side] = (loaded_bytes(subprocess.run([size, str(obj)], capture_output=True, text=True, env=sweep.tool_env(gcc_root)).stdout), "")
+                            continue
                         link = subprocess.run([gcc, f"-m{cpu}", "-msoft-float", "-nostdlib", "-static", "-ffreestanding", "-o", str(exe), str(obj), *support],
                                               capture_output=True, text=True, env=sweep.tool_env(gcc_root))
                         if link.returncode:
@@ -119,10 +159,12 @@ def main():
                             continue
                         text = subprocess.run([size, str(obj)], capture_output=True, text=True, env=sweep.tool_env(gcc_root)).stdout
                         runs[side] = run_once(exe, cpu)
-                        cells[side] = (text.split("\n")[1].split()[0], price(cycles, exe, cpu, gcc_root) or "")
-                    if not same_output([runs.get("ours"), runs.get("gcc")]):
+                        library = library_bytes(args.cc, gcc_root, cpu, level, obj)
+                        libs[side] = "" if library is None else str(library)
+                        cells[side] = (loaded_bytes(text), price(cycles, exe, cpu, gcc_root) or "")
+                    if not args.libs_only and not same_output([runs.get("ours"), runs.get("gcc")]):
                         cells = {side: (cell[0], "") for side, cell in cells.items()}  # bytes stay, clocks of unequal runs do not
-                print("\t".join([cpu, path.stem, level, *cells.get("ours", ("", "")), *cells.get("gcc", ("", ""))]), flush=True)
+                print("\t".join([cpu, path.stem, level, *cells.get("ours", ("", "")), *cells.get("gcc", ("", "")), libs.get("ours", ""), libs.get("gcc", "")]), flush=True)
 
 
 if __name__ == "__main__":

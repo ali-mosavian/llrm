@@ -1178,8 +1178,12 @@ fn a_callee_saved_cell_goes_to_the_loop_values_only() {
               %hot = phi i8 [ 0, %entry ], [ %hot2, %loop ]\n  %r = call i8 @ext(i8 %i)\n  %hot2 = add i8 %hot, %r\n  %i2 = add i8 %i, 1\n  \
               %more = icmp ult i8 %i2, %n\n  br i1 %more, label %loop, label %done\ndone:\n  %out = add i8 %hot2, %cold\n  ret i8 %out\n}";
     let text = compile(ir, "mix");
-    let saved = (8..16).filter(|n| text.contains(&format!("  lda rc{n}\n  pha"))).count();
-    assert_eq!(saved, 3, "{text}");
+    // inline, or `ldy #n` before the helper that saves rc8.. up to n of them
+    let inline = (8..16).filter(|n| text.contains(&format!("  lda rc{n}\n  pha"))).count();
+    let shared = text.split_once("  ldy #").filter(|(_, rest)| rest.contains("jsr __csave")).and_then(|(_, rest)| {
+        rest.split_once('\n').and_then(|(n, _)| n.parse::<usize>().ok())
+    });
+    assert_eq!(shared.unwrap_or(inline), 3, "{text}");
     // cold arrives in a
     assert!(text.contains("  sta s_mix"), "cold is in a slot: {text}");
 }
@@ -1254,7 +1258,10 @@ fn cells_saved_on_the_stack_leave_the_result_and_the_callers_cells_alone() {
         .replacen("  ret i8 %r\n}", "  store i8 %r, ptr %o\n  ret void\n}", 1);
     // the word: 58 in both halves
     let text = compile(&word, "quad");
-    assert!(text.contains("  pla\n") && text.contains("  tay\n"), "pops with a result live:\n{text}");
+    assert!(
+        (text.contains("  pla\n") && text.contains("  tay\n")) || text.contains("jmp __crest_ax"),
+        "pops with a result live:\n{text}"
+    );
     let program = format!("{text}{data}");
     let low = common::run_with("alloc-pushed-lo", &format!("{set}{pushed_args}  jsr quad\n"), &program);
     let high = common::run_with("alloc-pushed-hi", &format!("{set}{pushed_args}  jsr quad\n  txa\n"), &program);
@@ -1910,6 +1917,44 @@ done:
                 "{name} digits({v})"
             );
         }
+    }
+}
+
+/// call_keeps -Os (1,466 B against cc65 1,134): `churn` and `hold` take their
+/// words in `a` and `x` and return one, and saved `rc8`..`rc15` inline, 51 B
+/// each, because `__csave` changes `a` and `x`. `__csave_ax` and `__crest_ax`
+/// keep them (RISC-V's save-restore libcalls keep the argument registers). The
+/// argument arrives whole, the result leaves whole, the cells come back.
+#[test]
+fn a_word_in_a_and_x_goes_through_the_shared_save_helpers() {
+    let ir = "@g = external global i16
+define i16 @digits(i16 %v) {
+entry:
+  %c = icmp ugt i16 %v, 9
+  br i1 %c, label %loop, label %done
+loop:
+  %n = phi i16 [ 1, %entry ], [ %n2, %loop ]
+  %x = phi i16 [ %v, %entry ], [ %q, %loop ]
+  %q = udiv i16 %x, 10
+  %n2 = add i16 %n, 256
+  %g = icmp ugt i16 %x, 99
+  br i1 %g, label %loop, label %out
+out:
+  ret i16 %n2
+done:
+  ret i16 1
+}";
+    let text = compile_at(ir, "digits", 16, Tuning::SIZE);
+    assert!(text.contains("jsr __csave_ax") && text.contains("jmp __crest_ax") && !text.contains("pha"), "{text}");
+    // the result's high byte is the count of the loop times 256: the word
+    // leaves in `a` and `x`, whatever the helper did with them
+    for (v, hi) in [(5u16, 0i32), (10, 1), (99, 1), (100, 2), (65535, 4)] {
+        let setup = set("rc8", 0xA1) + &set("rc9", 0xB2) + &set("rc10", 0xC3) + &format!("  ldx #{}\n  lda #{}\n", v >> 8, v & 0xFF);
+        let after = format!(
+            "  stx rc2\n  lda rc8\n  cmp #$A1\n  bne bad\n  lda rc9\n  cmp #$B2\n  bne bad\n  lda rc10\n  cmp #$C3\n  bne bad\n  lda rc2\n  rts\nbad:\n  lda #99\n  rts\n"
+        );
+        let program = format!("{setup}  jsr digits\n{after}");
+        assert_eq!(common::run_with(&format!("alloc-digits-ax-{v}"), &program, &text), hi, "digits({v})");
     }
 }
 
@@ -2722,13 +2767,13 @@ fn a_bra_out_of_reach_or_to_another_function_is_a_jump() {
 #[test]
 fn spilled_bytes_read_by_alu_ops_keep_their_own_cells() {
     const N: usize = 16;
-    // each byte is stored too, so no load is the memory operand of its one
-    // user and the pressure stays
+    // each byte is stored too and read volatile, so no load is a memory operand
+    // of a user (`shouldFoldMemAccess`) and the pressure stays
     let mut ir =
         String::from("@buf = external global [16 x i8]\n@out = external global [16 x i8]\ndefine i8 @fold() {\n");
     for i in 0..N {
         ir += &format!(
-            "  %p{i} = getelementptr inbounds i8, ptr @buf, i16 {i}\n  %b{i} = load i8, ptr %p{i}, align 1\n  %q{i} = getelementptr inbounds i8, ptr @out, i16 {i}\n  store i8 %b{i}, ptr %q{i}, align 1\n"
+            "  %p{i} = getelementptr inbounds i8, ptr @buf, i16 {i}\n  %b{i} = load volatile i8, ptr %p{i}, align 1\n  %q{i} = getelementptr inbounds i8, ptr @out, i16 {i}\n  store i8 %b{i}, ptr %q{i}, align 1\n"
         );
     }
     for i in 0..N / 2 {

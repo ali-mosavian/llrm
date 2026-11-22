@@ -153,6 +153,11 @@ impl State<'_, '_> {
                 let mut to_split = Vec::new();
                 let mut seen = IdSet::new();
                 for pred in self.pred_edges(load_bb) {
+                    // If the predecessor is an indirect goto, we can't split
+                    // the edge.
+                    if self.function().ends_in_indirect_branch(pred) {
+                        return false;
+                    }
                     if !available_set.contains(&pred) {
                         if !can_speculate_into(self) {
                             return false;

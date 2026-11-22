@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/jumps.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/jumps.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/jumps.rs sha256:bad7966f81d555b13211ccda2c6d027000686abff0387b833a41cefd2383600c -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/jumps.rs sha256:6ada66f93101b02580c067e9526dc4a4c3a4e470e2d321fdae8474af90cbdc0c -->
 
 # jumps
 
@@ -9,7 +9,8 @@ order makes redundant; merges and copies tails.
 ## How it works
 Blocks are first written with every fall-through as an explicit jump
 (`_explicit`), which makes any order correct. `optimized` then runs these
-steps on the body.
+steps on the body. Before them, `tailmerge::merged_in` runs once ahead of
+placement, as `BranchFolder` does as a pass of its own.
 
 1. `_hoisted` moves an edge block's no-byte anchors up before the branch
    into it, so the edge block becomes a bare jump that threading can skip.

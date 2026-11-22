@@ -264,7 +264,8 @@ pub fn can_peel(
     lp: Loop,
 ) -> bool {
     let function = cx.function;
-    lp.get_loop_preheader(function).is_some()
+    lp.is_safe_to_clone(function)
+        && lp.get_loop_preheader(function).is_some()
         && lp.has_dedicated_exits(function)
         && lp.get_loop_latch(function).is_some()
 }

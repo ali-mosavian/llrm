@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_visit_select.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_visit_select.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_visit_select.rs sha256:6ae66af67a679fd27aaba3995f0c748caaa0d5cfb8c3674932e2800f8c2c01fc -->
+<!-- src: crates/opt/llrm-transforms/src/combine_visit_select.rs sha256:6ddf149ff4ab82a7d7cf6997367b92b08b64b1a9ff6aba9f2188960652e6df26 -->
 
 # combine_visit_select
 
@@ -20,21 +20,18 @@ DEVIATE 2 (temporary): the folds that call a helper not yet translated are
 left out, each named where it stood: `foldSelectOfBools`,
 `foldSelectNegNot`, `foldSelectAndOrPowerOfTwo`, the floating-point folds
 (`minnum`, `canonicalize`...: need #2209; `fabs` is `combine_select_fabs`),
-`foldSelectValueEquivalence`, the rest of `foldSelectInstWithICmp`
+the rest of `foldSelectInstWithICmp`
 (its `canonicalizeSPF` step is `combine_select_spf`),
 `foldAddSubSelect`,
 `foldOverflowingAddSubSelect`, `foldSetClearBits`,
 `foldSelectZeroOrFixedOp`, `foldSelectIntrinsic`,
 `foldSelectWithSRem`, the
-`foldSPFofSPF`, and everything after the not-condition
-(`foldSelectCmpBitcasts` ... `FoldSelectWithAndOrCond`).
+`foldSPFofSPF` (the min/max block after it is `combine_select_minmax_cast`),
+and everything after the not-condition but
+`foldSelectToCmp` (`foldSelectCmpBitcasts` ... `foldSelectEqualityTest`);
+`FoldSelectWithAndOrCond` is `combine_select_andor`.
 
-DEVIATE 3: `replaceInInstruction` (the arms' instructions that read the
-condition get its value) is not made:
-`isSafeToSpeculativelyExecuteWithVariableReplaced` is private to
-`lazyvalueinfo.rs`.
-
-DEVIATE 4: when the operands of a select swap, its `prof` branch weights
+DEVIATE 3: when the operands of a select swap, its `prof` branch weights
 are dropped, not swapped.
 
 ## Example
@@ -43,4 +40,4 @@ are dropped, not swapped.
 ```
 
 ## Used by
-Named by `combine_select_bit_test`, `combine_select_bools`, `combine_select_cttz_ctlz`, `combine_select_ext_const`, `combine_select_fabs`, `combine_select_into_op`, `combine_select_op_op`, `combine_select_spf`, `combine_select_tail`, `combine_select_to_cmp`.
+Named by `combine_select_andor`, `combine_select_bit_test`, `combine_select_bools`, `combine_select_cttz_ctlz`, `combine_select_equivalence`, `combine_select_ext_const`, `combine_select_fabs`, `combine_select_fcmp_swap`, `combine_select_into_op`, `combine_select_minmax_cast`, `combine_select_op_op`, `combine_select_spf`, `combine_select_tail`, `combine_select_to_cmp`, `combine_select_to_phi`.

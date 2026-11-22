@@ -289,8 +289,7 @@ impl Peephole {
                 if through.is_some_and(|through| {
                     let root = regs.root(through);
                     root == regs.root(regs.frame) || root == regs.root(regs.stack)
-                })
-                    && address.is_none_or(|address| address.space != Space::Frame)
+                }) && address.is_none_or(|address| address.space != Space::Frame)
                 {
                     return body;
                 }
@@ -327,10 +326,12 @@ impl LIRTransform for Peephole {
         &mut self,
         body: LirBody,
     ) -> Result<LirBody, String> {
-        // The pin's -O0 has no peephole, but `ExpandPostRAPseudos` still turns a zero (`MOV32r0`) into `xor`
-        // where the flags are dead ([X86InstrInfo.cpp:6236]).
+        // The pin's -O0 has no peephole, but `ExpandPostRAPseudos` still turns
+        // a zero (`MOV32r0`) into `xor` where the flags are dead
+        // ([X86InstrInfo.cpp:6236]).
         if !self.cpu.optimized {
-            // the flag liveness costs a dataflow: only a body with a zero to make pays it
+            // the flag liveness costs a dataflow: only a body with a zero to
+            // make pays it
             let has_zero = body.blocks.iter().flat_map(|block| &block.insns).any(|one| {
                 one.what.as_ref().is_some_and(|what| {
                     matches!(
@@ -434,7 +435,7 @@ impl Peephole {
         } else {
             body
         };
-        let body = popped_arguments(&machinedce::eliminated(body), &self.cpu)?;
+        let body = pushed_pads(&popped_arguments(&machinedce::eliminated(body), &self.cpu)?, &self.cpu);
         let body = pushed_immediates(&body, &self.cpu);
         let body = crate::backend::repbsf::marked(&body, &self.cpu);
         // Last: EBP zeroed above for each cell reading it 32 bits wide, where a
@@ -477,7 +478,8 @@ pub fn zero_extended_with_and(body: &LirBody) -> LirBody {
                             && regs.integer(dest.register)
                             && low == Some(source.register)
                         {
-                            let mask = Loc::Imm(Imm { value: low_mask(u32::from(source.width)), width: 4, address: None });
+                            let mask =
+                                Loc::Imm(Imm { value: low_mask(u32::from(source.width)), width: 4, address: None });
                             one = Arc::new(with_what(
                                 &one,
                                 semantics(Operation::Binary, "and", vec![Loc::Reg(*dest)], vec![Loc::Reg(*dest), mask]),
@@ -600,6 +602,7 @@ pub fn popped_arguments(
         }
         let exits = exits.get_or_insert_with(|| liveness::dead_at_exit(body));
         let dead_after = regthrash::_dead_after(regs, body.bits, block, exits[&block.at].clone());
+        let runs = body.frequencies.as_ref().and_then(|kept| kept.0.get(&block.at)).copied();
         let mut insns = Vec::with_capacity(block.insns.len());
         for one in &block.insns {
             let words = words_of(one);
@@ -610,7 +613,7 @@ pub fn popped_arguments(
                     if words > 0
                         && Lanes::flags(arithmetic).is_subset(dead)
                         && !one.frame_adjust
-                        && cpu.pops_arguments(words)? =>
+                        && cpu.pops_arguments_in_block(words, runs)? =>
                 {
                     let pop = || {
                         Arc::new(with_what(
@@ -633,6 +636,71 @@ pub fn popped_arguments(
     Ok(LirBody { blocks, ..body.clone() })
 }
 
+/// A `sub sp,unit`, not the frame's, as a push of a dead scratch register
+/// (`Profile::pushes_pad`): a call's alignment pad before the pushes of its
+/// arguments. The `sub`'s flags must be dead: a push sets none.
+pub fn pushed_pads(
+    body: &LirBody,
+    cpu: &Profile,
+) -> LirBody {
+    let regs = body.regs();
+    let unit = i64::from(body.bits / 8);
+    let arithmetic =
+        RflagsBits::OF | RflagsBits::SF | RflagsBits::ZF | RflagsBits::AF | RflagsBits::CF | RflagsBits::PF;
+    let sp = Loc::Reg(reg(regs.named(regs.stack, unit), unit as u32));
+    let words_of = |one: &Insn| match &one.what {
+        Some(what)
+            if what.op == Operation::Binary
+                && what.name.as_deref() == Some("sub")
+                && what.dests == [sp.clone()]
+                && !one.frame_adjust =>
+        {
+            match what.sources.as_slice() {
+                [first, Loc::Imm(Imm { value, address: None, .. })] if *first == sp && value % unit == 0 => {
+                    value / unit
+                }
+                _ => 0,
+            }
+        }
+        _ => 0,
+    };
+    let mut exits = None;
+    let mut blocks = Vec::new();
+    for block in &body.blocks {
+        if block.insns.iter().all(|one| words_of(one) != 1) {
+            blocks.push(block.clone());
+            continue;
+        }
+        let exits = exits.get_or_insert_with(|| liveness::dead_at_exit(body));
+        let dead_after = regthrash::_dead_after(regs, body.bits, block, exits[&block.at].clone());
+        let mut insns = Vec::with_capacity(block.insns.len());
+        for one in &block.insns {
+            let words = words_of(one);
+            let dead = &dead_after[&id(one)];
+            let scratch = regs.scratch.iter().copied().find(|register| _lanes(regs, *register).is_subset(dead));
+            match scratch {
+                Some(register) if cpu.pushes_pad(words) && Lanes::flags(arithmetic).is_subset(dead) => {
+                    let push = || {
+                        Arc::new(with_what(
+                            one,
+                            semantics(
+                                Operation::Push,
+                                "push",
+                                vec![],
+                                vec![Loc::Reg(reg(regs.named(register, unit), unit as u32))],
+                            ),
+                        ))
+                    };
+                    insns.extend((0..words).map(|_| push()));
+                }
+                _ => insns.push(Arc::clone(one)),
+            }
+        }
+        blocks.push(block.with_insns(insns));
+    }
+    LirBody { blocks, ..body.clone() }
+}
+
 /// Fold a load or transitive extension into one widening instruction
 /// (`peephole.peep`).
 pub fn extensions(
@@ -645,11 +713,11 @@ pub fn extensions(
 /// `movzx r,m8` as the register cleared and its low byte loaded, where the
 /// target prices the pair lower (`peephole.peep`).
 ///
-/// DEVIATE ZL1 (owner anyisa, DAG path w12, w2 for the DAG path; permanent target tuning): the
-/// pin keeps `movzx` on the i486 as on every x86 (X86InstrCompiler.td keeps
-/// `zextloadi8` as `MOVZX32rm8`); this pair is two clocks against three there.
-/// Both selectors run it since 2026-10-31 (textfill c -O2 m16, +4000 clocks
-/// over main with the movzx). Gated on
+/// DEVIATE ZL1 (owner anyisa, DAG path w12, w2 for the DAG path; permanent
+/// target tuning): the pin keeps `movzx` on the i486 as on every x86
+/// (X86InstrCompiler.td keeps `zextloadi8` as `MOVZX32rm8`); this pair is two
+/// clocks against three there. Both selectors run it since 2026-10-31 (textfill
+/// c -O2 m16, +4000 clocks over main with the movzx). Gated on
 /// `Profile::clears_before_byte_load`, so off for size and where the extension
 /// is no slower or the partial register stalls. x_life -O2 m32 has 12 more
 /// `xor` than the pin from it.
@@ -1668,6 +1736,7 @@ fn shape<H: std::hash::Hasher>(
     what.target.is_some().hash(into);
     what.indirect.hash(into);
     what.repeat.hash(into);
+    what.lock.hash(into);
     for list in [&what.dests, &what.sources] {
         list.len().hash(into);
         for place in list {
@@ -1678,6 +1747,7 @@ fn shape<H: std::hash::Hasher>(
                     2u8,
                     one.width,
                     one.value & 31 == 0,
+                    one.value & 63 == 0,
                     one.value == -1 || (one.width < 8 && one.value == (1i64 << (8 * one.width)) - 1),
                 )
                     .hash(into),
@@ -2555,7 +2625,8 @@ pub fn widened_moves(
 }
 
 /// A sign-extending word load as the dword load and the in-place extension
-/// where the pair encodes in fewer bytes (`mov eax,[abs]; cwde`, `peephole.peep`).
+/// where the pair encodes in fewer bytes (`mov eax,[abs]; cwde`,
+/// `peephole.peep`).
 pub fn split_loads(
     rules: &peep::Rules,
     body: &LirBody,

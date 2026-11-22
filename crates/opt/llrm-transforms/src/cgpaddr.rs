@@ -267,6 +267,9 @@ impl CgpAddr {
             let outer = std::rc::Rc::clone(analyses.outer());
             crate::cgpmemalign::raised(unit.context, unit.layout, &outer.globals, unit.function)
         };
+        // the vectors a word holds are that integer (`vectorlower`)
+        let lowered = analyses.outer().target().tti().is_some_and(|tti| tti.word_vectors())
+            && crate::vectorlower::lowered(unit.context, unit.function);
         let sunk_operands = match analyses.outer().target().tti() {
             Some(tti) => crate::cgpsinkops::free_operands_sunk(unit.context, &*tti, unit.function),
             None => false,
@@ -328,15 +331,22 @@ impl CgpAddr {
                 ),
                 None => false,
             };
+        // `splitLargeGEPOffsets`, after the blocks' addresses are as sunk.
+        let split_gep = match analyses.outer().target().tti() {
+            Some(tti) => crate::cgpsplitgep::large_offsets_split(unit.context, unit.layout, &*tti, unit.function),
+            None => false,
+        };
         if merged || converted {
             // A block went or came: the blocks and edges are not as they were.
             PreservedAnalyses::none()
         } else if phis
             || aligned
+            || lowered
             || branched
             || sunk_compares
             || masks
             || addresses
+            || split_gep
             || extended
             || sunk_casts
             || sunk_operands

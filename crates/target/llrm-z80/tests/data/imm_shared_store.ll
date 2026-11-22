@@ -1,6 +1,6 @@
 target datalayout = "e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8:16-S8"
-; ModuleID = '/home/alim/scratch/wt-align/bench/particle/particle.c'
-source_filename = "/home/alim/scratch/wt-align/bench/particle/particle.c"
+; ModuleID = 'particle.c'
+source_filename = "particle.c"
 target triple = "msp430"
 
 @px = internal global [101 x i16] zeroinitializer, align 2

@@ -280,6 +280,14 @@ fn match_address_recursively<D: AddrDag>(
         if dag.constant(n).is_some_and(|value| fold_offset_into_address(value, am)) {
             return true;
         }
+        // DEVIATE from the pin, which makes a constant that does not fit the
+        // displacement the index register (`move.w #248,%a1; move.l %d0,
+        // (0,%a2,%a1)`, an 8-bit displacement). Below the root of the
+        // address the constant stays out of it, so the 16-bit form (`(248,%a2)`)
+        // is matched. Exit: never; a fix the pin lacks.
+        if depth > 0 {
+            return false;
+        }
     } else if opcode == m68k_isd::Wrapper || (opcode == m68k_isd::WrapperPC && !am.pc_as_register) {
         if match_wrapper(dag, n, am) {
             return true;

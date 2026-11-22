@@ -994,6 +994,20 @@ impl Printer<'_> {
                     _ => self.push(format!("jp {}, {target}", op[2..].to_lowercase())),
                 }
             }
+            // The carry is set for a pair at most zero: `scf` stands for the zero (which `or` left clear), the sign
+            // is the carry of doubling the high byte. 7 B where the biased subtract is 13.
+            "TSTP16" => {
+                let (low, high) = lanes(self.register(inst, 1)?)?;
+                let (low, high) = (name(low), name(high));
+                let skip = format!("{}$", self.out.iter().filter(|line| !matches!(line, Line::Loc(_))).count());
+                self.push(format!("ld a, {high}"));
+                self.push(format!("or a, {low}"));
+                self.push("scf");
+                self.push(format!("jr z, {skip}"));
+                self.push(format!("ld a, {high}"));
+                self.push("add a, a");
+                self.out.push(Line::Label(skip));
+            }
             "CALL" => {
                 let Some(Operand::Symbol(symbol, _)) = inst.operands.first() else {
                     return Err("a CALL that names no symbol".to_owned());
@@ -1294,14 +1308,26 @@ impl Printer<'_> {
                 if self.frame.active {
                     return Err("a conditional return in a function with a frame".to_owned());
                 }
+                let live = self
+                    .liveness
+                    .live_before::<Z80Registers>(self.function, self.assignment, &REGISTER_INFO, self.at.0, self.at.1);
+                let bits: String =
+                    BYTES.map(|byte| if live.is_live(&REGISTER_INFO, byte) { '1' } else { '0' }).iter().collect();
+                self.push(format!("{RET_LIVE}{bits}"));
                 self.push(format!("ret {}", op[3..].to_lowercase()));
             }
             "UNREACHABLE" => {}
             "RET" => {
+                let live = self
+                    .liveness
+                    .live_before::<Z80Registers>(self.function, self.assignment, &REGISTER_INFO, self.at.0, self.at.1);
+                let bits: String =
+                    BYTES.map(|byte| if live.is_live(&REGISTER_INFO, byte) { '1' } else { '0' }).iter().collect();
                 if self.frame.active {
                     self.push("ld sp, ix");
                     self.push("pop ix");
                 }
+                self.push(format!("{RET_LIVE}{bits}"));
                 self.push("ret");
             }
             other => return Err(format!("{other} is not expanded yet")),
@@ -2564,6 +2590,12 @@ pub fn finish(
 /// The byte registers the text passes follow, in the order of their flags.
 const BYTES: [RegId; 6] = [reg::B, reg::C, reg::D, reg::E, reg::H, reg::L];
 
+/// The line before a `ret`, carrying which of [`BYTES`] are live before it:
+/// those the return reads and, for a conditional one, those live after it
+/// (`;ret 001100`: `de`): [`drop_dead_byte_loads`] reads and removes it, and
+/// keeps every register live at a `ret` that has none.
+const RET_LIVE: &str = ";ret ";
+
 /// The line that ends a block in the printer's output, carrying which of
 /// [`BYTES`] the allocator's liveness keeps live after the block's last
 /// instruction: `;live 001100`. [`drop_dead_byte_loads`] reads and removes it.
@@ -2620,7 +2652,18 @@ fn drop_dead_byte_loads(lines: Vec<Line>) -> Vec<Line> {
                 Line::Inst(text) => text,
                 _ => continue,
             };
+            if text.starts_with(RET_LIVE) {
+                continue;
+            }
             let mnemonic = text.split(' ').next().unwrap_or("");
+            // a `ret` reads the registers its marker names, not all of them
+            if (text == "ret" || text.starts_with("ret "))
+                && let Some(Line::Inst(marker)) = lines[..index].iter().rev().find(|line| !matches!(line, Line::Loc(_)))
+                && let Some(bits) = marker.strip_prefix(RET_LIVE)
+            {
+                bits.chars().zip(live.iter_mut()).for_each(|(bit, now)| *now = bit == '1');
+                continue;
+            }
             if let Some((to, source)) = text.strip_prefix("ld ").and_then(|rest| rest.split_once(", "))
                 && let Some(to) = at(to)
                 && (at(source).is_some() || source == "a" || source.starts_with('#'))
@@ -2661,7 +2704,12 @@ fn drop_dead_byte_loads(lines: Vec<Line>) -> Vec<Line> {
             read(&mut live, text, mnemonic);
         }
     }
-    lines.into_iter().zip(keep).filter_map(|(line, keep)| keep.then_some(line)).collect()
+    lines
+        .into_iter()
+        .zip(keep)
+        .filter_map(|(line, keep)| keep.then_some(line))
+        .filter(|line| !matches!(line, Line::Inst(text) if text.starts_with(RET_LIVE)))
+        .collect()
 }
 
 /// The post-printer passes. `forward_high_bytes` runs before
@@ -2931,16 +2979,99 @@ fn mentions(
         .any(|word| word == pair || (word.len() == 1 && pair.contains(word)))
 }
 
-/// `ld R, S; ld a, R` reads `S` itself: the copy may then be dead, which
-/// `drop_overwritten_byte_stores` finds (a byte shifted through `a` right after
-/// a copy of its source).
+/// A byte copy `ld R, S` whose copy is read again before either register
+/// changes (`ld c, l; ld a, h; xor a, #128; ld b, a; ld a, c`) is read from `S`
+/// itself: each `ld X, R` in the straight line after it becomes `ld X, S`. The
+/// copy is then often dead, which `drop_dead_byte_loads` and
+/// `drop_overwritten_byte_stores` find (a byte shifted through `a` right after
+/// a copy of its source; the low byte of a signed compare against a constant
+/// whose low byte is 0; a sign byte copied into both bytes of a pair).
+///
+/// Translation: `MachineCopyPropagation::forwardUses`
+/// (MachineCopyPropagation.cpp), on the printed text. DEVIATE: only a
+/// register-to-register `ld`, within a block, over the instructions whose
+/// every operand is named (the scan stops at a label, a jump, a call or an
+/// instruction with an unnamed operand such as `ldir`). Exit: the pass on the
+/// shared flow.
 fn forward_byte_copies(mut lines: Vec<Line>) -> Vec<Line> {
-    let is_byte = |register: &str| is_byte_register(register);
-    for at in 1..lines.len() {
-        let (Line::Inst(copy), Line::Inst(read)) = (&lines[at - 1], &lines[at]) else { continue };
+    // whether `text` writes the byte register `register`: as itself or as part
+    // of the pair it names first (`ld`, the arithmetic of `a` or `hl`,
+    // `inc`, `dec`) or by exchanging it (`ex`)
+    let writes = |text: &str, register: &str| {
+        let pair = match register {
+            "b" | "c" => "bc",
+            "d" | "e" => "de",
+            "h" | "l" => "hl",
+            _ => "",
+        };
+        let hits = |word: &str| word == register || (!pair.is_empty() && word == pair);
+        let (mnemonic, operands) = text.split_once(' ').unwrap_or((text, ""));
+        let mut words = operands.split(", ");
+        match mnemonic {
+            "ex" => operands.split(", ").any(hits),
+            "ld" | "inc" | "dec" | "add" | "adc" | "sub" | "sbc" | "xor" | "and" | "or" => {
+                words.next().is_some_and(hits)
+            }
+            // the accumulator forms with no operand name it
+            "rla" | "rra" | "rlca" | "rrca" | "cpl" | "neg" | "daa" => register == "a",
+            _ => false,
+        }
+    };
+    // an instruction whose every effect `writes` can see
+    let plain = |text: &str| {
+        let mnemonic = text.split(' ').next().unwrap_or("");
+        matches!(
+            mnemonic,
+            "ld" | "xor"
+                | "sub"
+                | "sbc"
+                | "adc"
+                | "add"
+                | "and"
+                | "or"
+                | "cp"
+                | "inc"
+                | "dec"
+                | "ccf"
+                | "scf"
+                | "ex"
+                | "rla"
+                | "rra"
+                | "rlca"
+                | "rrca"
+                | "cpl"
+                | "neg"
+        )
+    };
+    for at in 0..lines.len() {
+        let Line::Inst(copy) = &lines[at] else { continue };
         let Some((to, from)) = copy.strip_prefix("ld ").and_then(|text| text.split_once(", ")) else { continue };
-        if is_byte(to) && is_byte(from) && read == &format!("ld a, {to}") {
-            lines[at] = Line::Inst(format!("ld a, {from}"));
+        let (to, from) = (to.to_owned(), from.to_owned());
+        if !is_byte_register(&to) || !(is_byte_register(&from) || from == "a") || to == from {
+            continue;
+        }
+        for next in at + 1..lines.len() {
+            let text = match &lines[next] {
+                Line::Inst(text) if !text.starts_with(';') => text.clone(),
+                Line::Loc(_) => continue,
+                _ => break,
+            };
+            let reads_copy = text
+                .strip_prefix("ld ")
+                .and_then(|rest| rest.split_once(", "))
+                .filter(|(x, y)| *y == to && (is_byte_register(x) || *x == "a") && *x != from);
+            if let Some((into, _)) = reads_copy {
+                lines[next] = Line::Inst(format!("ld {into}, {from}"));
+                // the load wrote `into`: the copy's source or destination may
+                // be it
+                if into == to || into == from {
+                    break;
+                }
+                continue;
+            }
+            if writes(&text, &to) || writes(&text, &from) || !plain(&text) {
+                break;
+            }
         }
     }
     lines
@@ -4213,6 +4344,62 @@ mod tests {
             inst(&format!("{LIVE_OUT}000000")),
         ];
         assert_eq!(drop_dead_byte_loads(lines).len(), 5, "`ld l, a` feeds the jump");
+    }
+
+    /// `ld c, l ... ld a, c` of a signed compare (the low byte of the constant
+    /// is not flipped, so the copy only passes `l` on): `ld a, l`, and the
+    /// copy is dead.
+    #[test]
+    fn a_byte_copy_read_later_is_read_from_its_source() {
+        let inst = |text: &str| Line::Inst(text.to_owned());
+        let lines = vec![
+            Line::Label("M".to_owned()),
+            inst("ld c, l"),
+            inst("ld a, h"),
+            inst("xor a, #128"),
+            inst("ld b, a"),
+            inst("ld a, c"),
+            inst("sub a, #2"),
+            inst("ld a, b"),
+            inst("sbc a, #128"),
+            inst("jr c, M"),
+            inst(&format!("{LIVE_OUT}000000")),
+        ];
+        let want = ["ld a, h", "xor a, #128", "ld b, a", "ld a, l", "sub a, #2", "ld a, b", "sbc a, #128", "jr c, M"];
+        let mut expected = vec![Line::Label("M".to_owned())];
+        expected.extend(want.map(inst));
+        assert_eq!(tidy(lines), expected);
+    }
+
+    /// The copy is kept where the source is written before the read.
+    #[test]
+    fn a_byte_copy_is_not_forwarded_past_a_write_of_its_source() {
+        let inst = |text: &str| Line::Inst(text.to_owned());
+        let lines = vec![inst("ld c, l"), inst("ld l, #1"), inst("ld a, c"), inst(&format!("{LIVE_OUT}000000"))];
+        assert_eq!(forward_byte_copies(lines.clone()), lines);
+    }
+
+    /// `ld c, a; ld b, a; ex de, hl; ld e, c; ld d, b; ret` returning `de`: the
+    /// sign byte is read from `a`, and the copies nothing reads (the `ret`
+    /// reads `de` alone) are dropped.
+    #[test]
+    fn a_sign_byte_copied_into_a_pair_is_read_from_the_accumulator() {
+        let inst = |text: &str| Line::Inst(text.to_owned());
+        let lines = vec![
+            inst("ld a, d"),
+            inst("add a, a"),
+            inst("sbc a, a"),
+            inst("ld c, a"),
+            inst("ld b, a"),
+            inst("ex de, hl"),
+            inst("ld e, c"),
+            inst("ld d, b"),
+            inst(&format!("{RET_LIVE}001100")),
+            inst("ret"),
+            inst(&format!("{LIVE_OUT}000000")),
+        ];
+        let want = ["ld a, d", "add a, a", "sbc a, a", "ex de, hl", "ld e, a", "ld d, a", "ret"].map(inst).to_vec();
+        assert_eq!(tidy(lines), want);
     }
 
     /// `ld l, c; ld h, b; ld l, h; ld h, #0` fuses to `ld l, b; ld h, #0`.

@@ -74,13 +74,13 @@ pub(super) fn is_elementwise(op: ISD) -> bool {
 }
 
 /// `SplitVecRes_ExtendOp`'s nodes.
-fn is_extend(op: ISD) -> bool {
+pub(super) fn is_extend(op: ISD) -> bool {
     matches!(op, ISD::SignExtend | ISD::ZeroExtend | ISD::AnyExtend)
 }
 
 /// The conversions whose result type differs from the operand's
 /// (`SplitVecRes_UnaryOp`, `SplitVecOp_UnaryOp`).
-fn is_conversion(op: ISD) -> bool {
+pub(super) fn is_conversion(op: ISD) -> bool {
     matches!(
         op,
         ISD::SIntToFp | ISD::UIntToFp | ISD::FpToSInt | ISD::FpToUInt | ISD::FpExtend | ISD::FpRound | ISD::Truncate

@@ -130,8 +130,29 @@ impl Default for Mos6502 {
 }
 
 impl Tti for Mos6502 {
+    /// No jump through a register: `indirectbr` is a `switch` over block
+    /// numbers (`IndirectBrExpandPass`).
+    fn expands_indirect_br(&self) -> bool {
+        true
+    }
+
     fn name(&self) -> &'static str {
         "mos6502"
+    }
+
+    /// DEVIATE COMMON-INSTS-O1 (owner wasm-3, exit 2026-12-12, row
+    /// COMMON-INSTS-O1): the -O2 function pipeline's hoisting and sinking
+    /// SimplifyCFG (L832) also runs at -O1, as before the pin's plain one (L621)
+    /// was mirrored; the flip is not measured here (computed_goto -O1 +369 B,
+    /// word_compare_branches +265 B on 6502 without it).
+    fn common_insts_at_o1(&self) -> bool {
+        true
+    }
+
+    /// Bytes first at -Os: SimplifyCFG sinks common code in every slot
+    /// (`Tuning::sink_common_at_size`, gcc's -fcrossjumping).
+    fn sink_common_at_size(&self) -> bool {
+        true
     }
 
     /// Bytes first at every level (6502-UNROLL-RATE): a run of copies is a
@@ -251,6 +272,13 @@ impl Tti for Mos6502 {
         1 << 40
     }
 
+    /// DEVIATE UNROLL-PRICED-OS: see `Tti::unroll_priced_at_size`. Bytes are
+    /// first at -Os (`sum4`, a four-trip loop over a global: the loop is 18 B,
+    /// the unroll the pin's estimate admits 20 B).
+    fn unroll_priced_at_size(&self) -> bool {
+        true
+    }
+
     /// DEVIATE UNROLL-TRIAL (owner llrm-target-6502, exit 2026-12-05): the
     /// pin's threshold of 300 counts IR instructions, about 4 a trip of a
     /// small loop; this target counts 15 units a trip (`LLRM_DEBUG=unroll`:
@@ -263,8 +291,35 @@ impl Tti for Mos6502 {
         Some(1100)
     }
 
+    /// DEVIATE WIDEN-RETURNS (owner 6502, exit 2026-11-24): a private function
+    /// whose callers all extend its result returns the long (`a`, `x`, `rc2`,
+    /// `rc3`, where the call that takes it reads them) extended once. The
+    /// zero high word of `report(f(x))` was 6 B at every call (bit_setclear
+    /// O2: 151 B against a bar of 147).
+    fn widen_private_returns(&self) -> bool {
+        // `LLRM_6502_WIDEN_RETURNS=0` is the kill switch, for an A/B of one
+        // binary
+        std::env::var_os("LLRM_6502_WIDEN_RETURNS").is_none_or(|value| value != "0")
+    }
+
+    /// DEVIATE UNROLL-SPEED-TRIAL (owner 6502, exit 2026-11-24, the z80's
+    /// translated: `driver::speed_unroll_trial`): the module compiled again at
+    /// -O2 and -O3 with only the unrolls that add no bytes, and kept if it is
+    /// fewer bytes. The pin's early unroll takes a loop of an inlinable callee
+    /// unpriced and the inliner then declines the unrolled body
+    /// (memmove_overlap -O3: `fill`, 32 trips, 14 B rolled, 161 B unrolled,
+    /// inline cost 130 against a threshold of 130).
+    fn unroll_speed_trial(&self) -> bool {
+        true
+    }
+
     /// DEVIATE UNROLL-TRIAL-NEST: see `Tti::unroll_trial_analyzed_at_speed`.
     fn unroll_trial_analyzed_at_speed(&self) -> bool {
+        true
+    }
+
+    /// DEVIATE UNROLL-TRIAL-NEST-OS: see `Tti::unroll_trial_analyzed_at_size`.
+    fn unroll_trial_analyzed_at_size(&self) -> bool {
         true
     }
 
@@ -322,6 +377,24 @@ impl Tti for Mos6502 {
         key(a) < key(b)
     }
 
+    /// A 16-bit counter step is three instructions: a register stepped each
+    /// trip for a use that runs on a few pays that many more.
+    fn lsr_conditional_use_step_cost(&self) -> u32 {
+        3
+    }
+
+    /// A 16-bit compare of the exit test costs two `cmp`s against zero's `ora`:
+    /// the bits of its constant do not make a formula worse (the countdown
+    /// counter that avoids it costs a second counter).
+    fn lsr_exit_compare_immediate_is_free(&self) -> bool {
+        true
+    }
+
+    /// llvm-mos: `n8` makes a 16-bit counter illegal, and LFTR still tests the exit on it.
+    fn allow_illegal_integer_iv(&self) -> bool {
+        true
+    }
+
     fn address_index_max(&self) -> Option<u64> {
         Some(u64::from(u8::MAX))
     }
@@ -330,6 +403,12 @@ impl Tti for Mos6502 {
     /// only) whose range fits a byte is a byte counter.
     fn narrows_counters(&self) -> bool {
         true
+    }
+
+    /// `MOSIndexIV`: a pointer recurrence with a byte step and offset is a
+    /// base plus a byte counter, as llvm-mos does before its late IndVars.
+    fn index_iv_width(&self) -> Option<u32> {
+        Some(8)
     }
 
     /// `shouldDropLSRSolutionIfLessProfitable`: a loop keeps its code where
@@ -361,6 +440,14 @@ impl Tti for Mos6502 {
         multiplier: Option<u128>,
     ) -> bool {
         multiplier.is_none_or(|m| !crate::dagisel::combine::mul_by_constant_stays_in_line(16, m as i128, false))
+    }
+
+    /// DEVIATE LSR-OUTER-SIZE: at -Os the `__mulhi3` call of `i * 54` is a
+    /// dozen bytes of setup and the routine's own bytes per use, against one
+    /// 16-bit add of a counter (rep_count: a call in its third loop nest).
+    /// Owner: llrm-target-6502. Exit: 2026-11-24.
+    fn reduces_outer_multiply_at_size(&self) -> bool {
+        true
     }
 
     /// DEVIATE LU24: a pointer that steps is weighed against `p + n`.
@@ -524,6 +611,34 @@ impl Tti for Mos6502 {
             (false, true) => (0..=255).contains(&offset),
             (true, true) => false,
             _ => (0..=0xFFFF).contains(&offset),
+        }
+    }
+
+    // llvm-mos's `isLegalAddressingMode`, which reads the widths of the base and
+    // the scaled register: a byte register is the `x` or `y` of an absolute
+    // indexed (`lda g,x`) or indirect indexed (`lda (zp),y`) address, so a
+    // 16-bit base and a byte index fold. Widths not known (0) answer as the
+    // untyped hook does.
+    fn is_legal_addressing_mode_typed(
+        &self,
+        _addr_space: u32,
+        _access_bytes: u64,
+        gv: bool,
+        offset: i64,
+        base: bool,
+        scale: i64,
+        base_bits: u32,
+        scale_bits: u32,
+    ) -> bool {
+        let byte = |bits: u32| bits == 8;
+        match scale {
+            // Absolute indexed: a global and a byte register.
+            0 if base && byte(base_bits) => true,
+            // Absolute indexed on the scaled register, or indirect indexed: a
+            // pointer cell and a byte index, whichever register is the byte.
+            1 if !base && byte(scale_bits) => true,
+            1 if base && !gv && offset == 0 && (byte(base_bits) || byte(scale_bits)) => true,
+            _ => self.is_legal_addressing_mode(gv, offset, base, scale),
         }
     }
 

@@ -1898,6 +1898,16 @@ fn unrolls_table_fold(
     tuning: llrm_mir::target::Tuning,
     opt_level: u32,
 ) -> bool {
+    unrolls_table_fold_in(tuning, opt_level, true)
+}
+
+/// `unrolls_table_fold` in the early `LoopFullUnrollPass` (`target_unrolling` false) or the
+/// `LoopUnrollPass` after the vectorizer.
+fn unrolls_table_fold_in(
+    tuning: llrm_mir::target::Tuning,
+    opt_level: u32,
+    target_unrolling: bool,
+) -> bool {
     let mut module = parsed(TABLE_FOLD);
     let function = module.function_mut("f").expect("@f").1;
     crate::loopsimplify::simplified(function);
@@ -1909,7 +1919,7 @@ fn unrolls_table_fold(
         min_size: false,
         only_when_forced: false,
         prepare_for_lto: false,
-        target_unrolling: true,
+        target_unrolling,
         inliner_follows: true,
         speed_rate: false,
     };
@@ -1940,4 +1950,180 @@ fn a_target_with_a_higher_o3_threshold_unrolls_a_32_trip_fold_the_pin_keeps() {
     assert!(!unrolls_table_fold(pin, 3), "the pin's 300 keeps the loop");
     assert!(unrolls_table_fold(raised, 3));
     assert!(!unrolls_table_fold(raised, 2), "-O2 keeps its 150");
+}
+
+/// tile -O3 (16,147 instructions against clang's 6,130): the early full unroll took the raised
+/// threshold and unrolled main's 64-trip init loop before the vectorizer; gcc unrolls after it.
+#[test]
+fn the_early_full_unroll_keeps_the_pins_threshold_where_the_target_raises_it() {
+    let raised = llrm_mir::target::Tuning { unroll_threshold_at_o3: Some(400), ..llrm_mir::target::Tuning::PIN };
+    assert!(!unrolls_table_fold_in(raised, 3, false), "the early unroll keeps the loop for the vectorizer");
+    assert!(unrolls_table_fold_in(raised, 3, true), "the unroll after it takes the raised threshold");
+}
+
+/// switch_jump_table x86-64 -O2: a 10-trip loop reports a value its `switch` on
+/// the counter picks. gcc unrolls it and folds the switch (main ran 373
+/// instructions against its 145); the analysis gave up at the call.
+const SWITCH_AROUND_A_CALL: &str = "declare void @report(i64)
+
+define void @f() {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i32 [ 0, %b0 ], [ %next, %join ]
+  switch i32 %i, label %d [ i32 0, label %a0
+                            i32 1, label %a1
+                            i32 2, label %a2
+                            i32 3, label %a3 ]
+
+a0:
+  %x0 = add i64 1000, 3
+  %y0 = mul i64 %x0, 5
+  %z0 = xor i64 %y0, 85
+  %w0 = add i64 %z0, 9
+  br label %join
+
+a1:
+  %x1 = add i64 2000, 3
+  %y1 = mul i64 %x1, 5
+  %z1 = xor i64 %y1, 85
+  %w1 = add i64 %z1, 9
+  br label %join
+
+a2:
+  %x2 = add i64 3000, 3
+  %y2 = mul i64 %x2, 5
+  %z2 = xor i64 %y2, 85
+  %w2 = add i64 %z2, 9
+  br label %join
+
+a3:
+  %x3 = add i64 4000, 3
+  %y3 = mul i64 %x3, 5
+  %z3 = xor i64 %y3, 85
+  %w3 = add i64 %z3, 9
+  br label %join
+
+d:
+  %x4 = add i64 5000, 3
+  %y4 = mul i64 %x4, 5
+  %z4 = xor i64 %y4, 85
+  %w4 = add i64 %z4, 9
+  br label %join
+
+join:
+  %v = phi i64 [ %w0, %a0 ], [ %w1, %a1 ], [ %w2, %a2 ], [ %w3, %a3 ], [ %w4, %d ]
+  call void @report(i64 %v)
+  %next = add i32 %i, 1
+  %more = icmp ult i32 %next, 10
+  br i1 %more, label %b1, label %exit
+
+exit:
+  ret void
+}
+";
+
+/// `SWITCH_AROUND_A_CALL` through the full unroll at -O2 on `cpu`.
+fn switch_around_a_call(cpu: &str) -> (bool, String) {
+    let mut module = parsed(SWITCH_AROUND_A_CALL);
+    let function = module.function_mut("f").expect("@f").1;
+    crate::loopsimplify::simplified(function);
+    crate::testing::closed(&mut module).expect("closes");
+    let tti = X86::of_cpu(cpu).expect("a cpu");
+    let options = Options {
+        opt_level: 2,
+        opt_size: false,
+        min_size: false,
+        only_when_forced: false,
+        prepare_for_lto: false,
+        target_unrolling: false,
+        inliner_follows: true,
+        speed_rate: false,
+    };
+    let changed = unroll_function(&mut module, "f", &tti, options).expect("unrolls");
+    (changed, printed(&module))
+}
+
+#[test]
+fn test_a_loop_of_a_switch_on_its_counter_around_a_call_is_unrolled_where_the_target_prices_calls() {
+    let (changed, text) = switch_around_a_call("x86-64");
+    assert!(changed, "{text}");
+}
+
+#[test]
+fn test_the_pin_does_not_unroll_a_loop_around_a_call_whose_copies_pass_the_threshold() {
+    let (changed, text) = switch_around_a_call("i486");
+    assert!(!changed, "{text}");
+}
+
+/// div8_os -O3 (x86_64): four byte divides by the loop's own variable, fifteen
+/// trips. Each is 2 units for size in the pin's X86 table (LLVM 20: 4), so the
+/// pin's loop is 302 units where LLVM 20's is 430 against 400: the pin's raised
+/// threshold unrolls it into multiply-high sequences (130,449 executed
+/// instructions against clang's 116,608).
+fn divide_loop(trips: u32) -> String {
+    format!(
+        "define i64 @f(i8 %u, i8 %s) {{
+b0:
+  br label %b1
+
+b1:
+  %i = phi i32 [ 1, %b0 ], [ %next, %b1 ]
+  %sum = phi i64 [ 0, %b0 ], [ %r, %b1 ]
+  %v = trunc i32 %i to i8
+  %q1 = udiv i8 %u, %v
+  %r1 = urem i8 %u, %v
+  %q2 = sdiv i8 %s, %v
+  %r2 = srem i8 %s, %v
+  %m1 = mul i8 %r1, 11
+  %m2 = mul i8 %r2, 13
+  %a1 = add i8 %q1, %m1
+  %a2 = add i8 %q2, %m2
+  %a3 = add i8 %a1, %a2
+  %w = zext i8 %a3 to i64
+  %t = mul i64 %sum, 3
+  %r = add i64 %t, %w
+  %next = add nuw nsw i32 %i, 17
+  %go = icmp ult i32 %next, {limit}
+  br i1 %go, label %b1, label %b2
+
+b2:
+  ret i64 %r
+}}
+",
+        limit = 1 + 17 * trips
+    )
+}
+
+fn unrolls_divide_loop(
+    tuning: llrm_mir::target::Tuning,
+    trips: u32,
+) -> bool {
+    let mut module = parsed(&divide_loop(trips));
+    let function = module.function_mut("f").expect("@f").1;
+    crate::loopsimplify::simplified(function);
+    crate::testing::closed(&mut module).expect("closes");
+    let tti = X86::of_cpu("x86-64").expect("a cpu").with_tuning(tuning);
+    let options = Options {
+        opt_level: 3,
+        opt_size: false,
+        min_size: false,
+        only_when_forced: false,
+        prepare_for_lto: false,
+        target_unrolling: true,
+        inliner_follows: true,
+        speed_rate: false,
+    };
+    unroll_function(&mut module, "f", &tti, options).expect("unrolls");
+    !printed(&module).contains("br i1")
+}
+
+#[test]
+fn a_loop_of_divides_by_its_variable_is_priced_as_llvm_20_does_on_a_target_that_says_so() {
+    let raised = llrm_mir::target::Tuning { unroll_threshold_at_o3: Some(400), ..llrm_mir::target::Tuning::PIN };
+    let priced = llrm_mir::target::Tuning { div_by_variable_size_cost: Some(4), ..raised };
+    let trips = (10..=30).find(|&trips| unrolls_divide_loop(raised, trips) && !unrolls_divide_loop(raised, trips + 1));
+    let trips = trips.expect("a trip count the raised threshold just takes");
+    assert!(!unrolls_divide_loop(priced, trips), "the 4-unit divides put {trips} trips over 400");
 }

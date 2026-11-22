@@ -127,3 +127,94 @@ fn a_nested_select_the_outer_condition_decides_is_its_arm() {
     );
     assert!(out.contains("select i1 %c, i16 %a, i16 7"), "{out}");
 }
+
+/// `visitSelectInst` alone over a whole `@f`.
+fn combined_function(text: &str) -> String {
+    let mut module = parsed(&format!("target datalayout = \"e-p:64:64-i64:64\"\n{text}"));
+    let globals = module.globals.clone();
+    let metadata = module.metadata.clone();
+    let (context, function) = module.function_mut("f").expect("@f");
+    combine_with(context, &globals, &metadata, &DataLayout::default(), function, visit);
+    printed(&module)
+}
+
+/// The loop's early exit and its fall-out reach one block; a select there on
+/// the loop test's own condition kept that condition, and the loaded bytes it
+/// compares, live out of the loop (early_exit_index z80 -O1: 588 B against
+/// 541 B for SDCC, three loops re-testing `a[i] != b[i]` after the exit).
+/// The pin writes a phi of the two arms.
+#[test]
+fn a_select_on_the_condition_of_the_dominating_branch_is_a_phi() {
+    let out = combined_function(
+        "define i16 @f(ptr %p) {
+entry:
+  br label %head
+head:
+  %i = phi i16 [ 0, %entry ], [ %j, %latch ]
+  %c = icmp ult i16 %i, 1200
+  br i1 %c, label %body, label %exit
+body:
+  %v = load i8, ptr %p
+  %e = icmp eq i8 %v, 0
+  br i1 %e, label %latch, label %exit
+latch:
+  %j = add i16 %i, 1
+  br label %head
+exit:
+  %r = select i1 %c, i16 %i, i16 -1
+  ret i16 %r
+}
+",
+    );
+    assert!(
+        out.contains("phi i16 [ %i, %body ], [ -1, %head ]") || out.contains("phi i16 [ -1, %head ], [ %i, %body ]"),
+        "{out}"
+    );
+    assert!(!out.contains("select"), "{out}");
+}
+
+#[test]
+fn a_select_on_the_negated_condition_of_the_dominating_branch_is_a_phi() {
+    let out = combined_function(
+        "define i16 @f(i1 %c, i16 %a, i16 %b) {
+entry:
+  %n = xor i1 %c, true
+  br i1 %n, label %t, label %e
+t:
+  br label %m
+e:
+  br label %m
+m:
+  %r = select i1 %c, i16 %a, i16 %b
+  ret i16 %r
+}
+",
+    );
+    assert!(out.contains("phi i16 [ %b, %t ], [ %a, %e ]") || out.contains("phi i16 [ %a, %e ], [ %b, %t ]"), "{out}");
+    assert!(!out.contains("select"), "{out}");
+}
+
+/// An edge the branch does not decide (`%x` reaches `%m` from outside both
+/// arms) keeps the select.
+#[test]
+fn a_select_reached_by_an_edge_the_branch_does_not_decide_stays() {
+    let out = combined_function(
+        "define i16 @f(i1 %c, i1 %d, i16 %a, i16 %b) {
+entry:
+  br i1 %d, label %x, label %s
+s:
+  br i1 %c, label %t, label %e
+t:
+  br label %m
+e:
+  br label %m
+x:
+  br label %m
+m:
+  %r = select i1 %c, i16 %a, i16 %b
+  ret i16 %r
+}
+",
+    );
+    assert!(out.contains("select i1 %c"), "{out}");
+}

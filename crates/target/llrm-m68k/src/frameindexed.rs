@@ -9,7 +9,8 @@
 //! displacement of an indexed operand is 8 bits, so the fold needs the final
 //! displacement (the object's, the operand's and the bytes pushed ahead of it)
 //! to fit in -128..=127: [`Bounds`] gives the range it can have, from the
-//! frame laid out before the fold with room for the arguments a call pushes.
+//! frame emission will lay out (the call area of the sequences it keeps: pushed
+//! arguments are not in it) with room for the arguments a call pushes.
 //! The depth also grows by cleanups `expand` leaves owed across calls, which
 //! only emission sees: it checks the final displacement ([`OUT_OF_RANGE`]) and
 //! emits the function again without the fold.
@@ -65,11 +66,12 @@ impl Bounds {
         assignment: &Assignment,
         slots: &[i32],
         short: bool,
+        kept_area: i64,
     ) -> Self {
         let insts: Vec<&Inst> = function.blocks.iter().flat_map(|block| block.insts.iter()).collect();
         let inputs = FrameInputs::of(&insts, function, assignment, slots, short);
         let calls = call_area(&insts, &|_| true);
-        let layout = inputs.layout(calls);
+        let layout = inputs.layout(kept_area);
         Bounds { margin: margin(calls), inputs, layout }
     }
 
@@ -101,6 +103,7 @@ pub fn fold(
     assignment: &Assignment,
     slots: &[i32],
     short: bool,
+    kept_area: i64,
 ) -> Option<MFunction> {
     if !function.blocks.iter().flat_map(|block| &block.insts).any(|inst| frame_lea(inst).is_some()) {
         return None;
@@ -142,7 +145,7 @@ pub fn fold(
             }
         }
     }
-    let bounds = Bounds::of(function, assignment, slots, short);
+    let bounds = Bounds::of(function, assignment, slots, short, kept_area);
     let mut folded = function.clone();
     let mut removed = vec![Vec::new(); function.blocks.len()];
     for v in 0..count {

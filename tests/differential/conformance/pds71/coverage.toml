@@ -1,14 +1,14 @@
 schema = 1
 
-# Extracted with /Users/alim/work/personal/qb-qrender/tools/hlpextract.py.
+# Extracted with hlpextract.py of qb-qrender.
 # BAS7ENER's header says 282 topics.  BC.HLP is a concatenation of BC.HLP
 # (20 topics) and PWBBC.HLP (22 topics), so both databases are pinned here.
 help_files = [
-  { path = "/Users/alim/work/other/d32x/toolchains/pds71/HELP/BAS7QCK.HLP", sha256 = "43503f8c91c7eb436de759b1f4ef78951ff06cc43d212feb1eb39a22e11552e3" },
-  { path = "/Users/alim/work/other/d32x/toolchains/pds71/HELP/BAS7ADVR.HLP", sha256 = "5516ba3e2803da084ab9bd6d4c07d5286d3c9927e633fc10ba7ec7c65fde74cd" },
-  { path = "/Users/alim/work/other/d32x/toolchains/pds71/HELP/BAS7ENER.HLP", sha256 = "6a7addb22525b98e115dd0822cc572508bef530739415ff19f27eb444a457767" },
-  { path = "/Users/alim/work/other/d32x/toolchains/pds71/HELP/BAS7EX.HLP", sha256 = "094ee262fd19311036e740045f5a3c051702c09a0afb006c154fed402fc5a7cc" },
-  { path = "/Users/alim/work/other/d32x/toolchains/pds71/HELP/BC.HLP", sha256 = "4bda68d5bc63c51309600892d2464f3abe4e1277ef205efe6e50a412294e6aea" },
+  { path = "BAS7QCK.HLP", sha256 = "43503f8c91c7eb436de759b1f4ef78951ff06cc43d212feb1eb39a22e11552e3" },
+  { path = "BAS7ADVR.HLP", sha256 = "5516ba3e2803da084ab9bd6d4c07d5286d3c9927e633fc10ba7ec7c65fde74cd" },
+  { path = "BAS7ENER.HLP", sha256 = "6a7addb22525b98e115dd0822cc572508bef530739415ff19f27eb444a457767" },
+  { path = "BAS7EX.HLP", sha256 = "094ee262fd19311036e740045f5a3c051702c09a0afb006c154fed402fc5a7cc" },
+  { path = "BC.HLP", sha256 = "4bda68d5bc63c51309600892d2464f3abe4e1277ef205efe6e50a412294e6aea" },
 ]
 help_extracts = [
   { path = "B7QCK.TXT", lines = 9787, sha256 = "dbccbed40c6ade79dad91315254fb0a1357577a51a29e9d86300a8e15158b3c9" },

@@ -64,7 +64,7 @@ def reachable_runtime(text):
     if out and ("__sa" in out or "__ra" in out or "__sa" in text or "__ra" in text): out += bss + ".export __sa, __ra, __st, __sr, __sg\n"
     return macros + out if out else out
 def driver():
-    s = ".export _main\n.import main\n.import _putchar\n.export report\nlp = $A0\nptr = $A2\n" + "".join(f"rc{i} = ${0x80 + i:X}\n" for i in range(6))
+    s = ".export _main\n.import main\n.import _putchar\n.export report\nlp = $70\nptr = $72\n" + "".join(f"rc{i} = ${0x80 + i:X}\n" for i in range(6))
     s += """.segment "CODE"
 _main:
   lda #0
@@ -142,6 +142,34 @@ def bytes_of(mapfile, objs=()):
         elif cur and re.match(r"\s+(CODE|RODATA|DATA)\s", l) and (cur in ("f.o", *objs) or (RTLIB and cur.startswith(RTLIB + "("))):
             tot += int(re.search(r"Size=([0-9A-F]+)", l).group(1), 16)
     return tot
+def bss_bytes(mapfile):
+    """Bytes of the image's BSS, from the map's segment list."""
+    m = re.search(r"^BSS\s+[0-9A-F]+\s+[0-9A-F]+\s+([0-9A-F]+)", open(mapfile).read().split("Segment list:")[1], re.M)
+    return int(m.group(1), 16) if m else 0
+def run_cycles(binary, cwd):
+    return int(re.search(rb"(\d+) cycles", sh(["sim65", "-c", "-x", "4000000000", binary], cwd, timeout=120, text=False).stdout).group(1))
+ZERO_CLOCKS = {}
+def zero_clocks(n, work):
+    """What crt0's zerobss costs for `n` bytes of BSS (12-15 clocks a byte): the empty program with that BSS against the one with none.
+    sim65 starts with unzeroed memory, so the program needs the zeroing; mos-sim, which the llvm-mos bar runs in, starts zeroed and
+    charges nothing. The clocks of a program are net of it (long_double_constant_store O3 read x4.01, ~1,450 of 3,930 clocks were
+    the zeroing; 2026-11-22). OURS_ZEROBSS=1: the raw clocks."""
+    if n == 0 or os.environ.get("OURS_ZEROBSS"):
+        return 0
+    if n not in ZERO_CLOCKS:
+        w = Path(tempfile.mkdtemp(prefix="zero-", dir=work))
+        (w / "d.s").write_text(driver())
+        cycles = []
+        for size in (0, n):
+            (w / "f.s").write_text(".export main\nmain: rts\nrc0=$80\nrc1=$81\nrc2=$82\nrc3=$83\nrc4=$84\nrc5=$85\n" + (f'.segment "BSS"\nb: .res {size}\n' if size else ""))
+            k = sh(["cl65", "-t", SIM, "-o", "x.bin", "d.s", "f.s"], w); assert k.returncode == 0, k.stderr
+            cycles.append(run_cycles("x.bin", w))
+        shutil.rmtree(w, True)
+        ZERO_CLOCKS[n] = cycles[1] - cycles[0]
+    return ZERO_CLOCKS[n]
+def net_cycles(w):
+    """The clocks of the image linked in `w` (x.bin, x.map), net of the zeroing of its BSS."""
+    return run_cycles("x.bin", w) - zero_clocks(bss_bytes(w / "x.map"), w.parent)
 def base_members(work):
     w = Path(tempfile.mkdtemp(prefix="base-", dir=work)); (w / "d.s").write_text(driver()); (w / "f.s").write_text(".export main\nmain: rts\nrc0=$80\nrc1=$81\nrc2=$82\nrc3=$83\nrc4=$84\nrc5=$85\n")
     k = sh(["cl65", "-t", SIM, "--asm-define", "DUMP", "-m", "x.map", "-o", "x.bin", "d.s", "f.s"], w); assert k.returncode == 0, k.stderr
@@ -240,6 +268,8 @@ def one(job):
     (w / "f.s").write_text(".autoimport +\n" + (f'.segment "CODE"\n.res {PADS[0]}\n' if PADS[0] else "") + asm + runtime(asm + modtext))
     sh(["cl65", "-t", SIM, "-m", "x.map", "-o", "x.bin", "d.s", "f.s", *objs], w)
     nb = bytes_of(w / "x.map", objs)
+    zero = zero_clocks(bss_bytes(w / "x.map"), WORK)
+    cycles = [c - zero for c in cycles]
     ins = sh([INSNS, "-c", "-x", "4000000000", "x.bin"], w, timeout=300, text=False)
     m = re.search(rb"(\d+) instructions", ins.stdout + ins.stderr)
     shutil.rmtree(w, True)

@@ -22,6 +22,17 @@
 //!
 //! # Used by
 //! `slptree`.
+//!
+//! # Example
+//! Once a tree is vectorized, the vector of each bundle is placed where the
+//! last scalar of its bundle stood, and what waits on it follows.
+//!
+//! ```text
+//! store float %f0 / %f1 / %f2 / %f3   (four scalar stores, in this order)
+//!         =>
+//! the <4 x float> chain is emitted in the place of the last scalar it
+//! replaces; the one vector store stands at the last scalar store
+//! ```
 
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashMap};
@@ -31,21 +42,53 @@ use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
 use llrm_mir::opcode::Opcode;
 
+/// The divides of `block` that cannot trap: a constant divisor that is not
+/// zero, nor -1 for a signed one (`isSafeToSpeculativelyExecute`). Like a pure
+/// call, they are not barriers to the loads around them.
+pub(crate) fn safe_divides(
+    context: &llrm_mir::context::Context,
+    function: &Function,
+    block: BlockId,
+) -> IdSet<InstId> {
+    use llrm_mir::context::ConstantKind;
+    use llrm_mir::opcode::BinaryOp;
+    function
+        .iter_block(block)
+        .filter(|inst| {
+            let instruction = function.instruction(*inst);
+            let Opcode::Binary(op) = instruction.opcode else { return false };
+            let signed = match op {
+                BinaryOp::SDiv | BinaryOp::SRem => true,
+                BinaryOp::UDiv | BinaryOp::URem => false,
+                _ => return false,
+            };
+            let Some(Operand::Constant(divisor)) = instruction.operands.get(1) else { return false };
+            let constant = context.get(*divisor);
+            let ConstantKind::Int(bits) = constant.kind else { return false };
+            let width = context.types.int_bits(constant.ty).unwrap_or(0);
+            let ones = if width >= 128 { u128::MAX } else { (1u128 << width) - 1 };
+            bits != 0 && !(signed && bits == ones)
+        })
+        .collect()
+}
+
 /// Whether `inst` is a computation of its operands alone, which may stand
-/// anywhere its operands do. `pure_calls` are the calls that are.
+/// anywhere its operands do. `pure_calls` are the calls and divides that are.
 pub(crate) fn is_pure(
     function: &Function,
     inst: InstId,
     pure_calls: &IdSet<InstId>,
 ) -> bool {
     match function.instruction(inst).opcode {
-        Opcode::Binary(op) => !matches!(
-            op,
-            llrm_mir::opcode::BinaryOp::UDiv
-                | llrm_mir::opcode::BinaryOp::SDiv
-                | llrm_mir::opcode::BinaryOp::URem
-                | llrm_mir::opcode::BinaryOp::SRem
-        ),
+        Opcode::Binary(op) => {
+            !matches!(
+                op,
+                llrm_mir::opcode::BinaryOp::UDiv
+                    | llrm_mir::opcode::BinaryOp::SDiv
+                    | llrm_mir::opcode::BinaryOp::URem
+                    | llrm_mir::opcode::BinaryOp::SRem
+            ) || pure_calls.contains(&inst)
+        }
         Opcode::Cast(_)
         | Opcode::ICmp(_)
         | Opcode::FCmp(_)

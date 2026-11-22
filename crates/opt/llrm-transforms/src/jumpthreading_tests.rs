@@ -453,3 +453,21 @@ fn a_value_of_another_type_reaches_the_phi_through_a_bitcast() {
     let after = run(&fixture("load_pre_cast"));
     assert!(after.contains("bitcast float %v to i32"), "{after}");
 }
+
+/// Before: a block whose address is taken merged into its only predecessor
+/// (`hasAddressTakenAndUsed`, JumpThreading.cpp:1926).
+#[test]
+fn test_a_block_whose_address_is_taken_is_not_merged_into_its_predecessor() {
+    let out = run("@t = internal constant [1 x ptr] [ptr blockaddress(@f, %b)]
+
+define i16 @f(i16 %x) {
+entry:
+  %y = add i16 %x, 1
+  br label %b
+
+b:
+  ret i16 %y
+}
+");
+    assert!(out.contains("\nb:\n"), "{out}");
+}

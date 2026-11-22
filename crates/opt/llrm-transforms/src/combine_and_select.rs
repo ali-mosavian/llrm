@@ -13,8 +13,9 @@
 //!
 //! DEVIATE 2: `narrowMaskedBinOp`, `foldAndOrOfSelectUsingImpliedCond`,
 //! `matchDeMorgansLaws`,
-//! `foldBinopOfSextBoolToSelect` and the tail from
-//! `sinkNotIntoOtherHandOfLogicalOp` on are the next strip.
+//! `foldBinopOfSextBoolToSelect` and the tail after
+//! `sinkNotIntoOtherHandOfLogicalOp` (`combine_not`, called by `visit_and`
+//! after these) are the next strip.
 //!
 //! DEVIATE 3: `getFreelyInverted` (the not of a value that is not a one-use
 //! `xor`) is not translated: the two `(A ^ B) & ((B ^ C) ^ A)` folds apply

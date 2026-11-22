@@ -1,8 +1,8 @@
 //! `visitPHINode`'s argument folds: a phi of the same operation applied to
 //! different values is the operation applied to a phi of those values.
 //!
-//! Translation of `foldPHIArgZextsIntoPHI`, `foldPHIArgLoadIntoPHI` and
-//! `foldPHIArgOpIntoPHI`
+//! Translation of `foldPHIArgZextsIntoPHI`, `foldPHIArgLoadIntoPHI`,
+//! `foldPHIArgGEPIntoPHI` and `foldPHIArgOpIntoPHI`
 //! ([InstCombinePHI.cpp](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombinePHI.cpp#L779))
 //! at d1106deb71cc.
 //!
@@ -19,6 +19,12 @@
 //!   no memory write after them in their block
 //!   (`isSafeAndProfitableToSinkLoad`) become one load of a phi of the
 //!   addresses.
+//! - Two or more incoming values that are `getelementptr`s of one source type
+//!   and operand count, each with one user, whose operands agree but for one
+//!   that is no constant and has one type in all of them, become one
+//!   `getelementptr` of a phi of that operand (`foldPHIArgGEPIntoPHI`), at the
+//!   flags all of them have. Not where every other base is a frame slot indexed
+//!   by constants.
 //! - `foldDeadPhiWeb`
 //!   ([:59](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/InstCombine/InstCombinePHI.cpp#L59)):
 //!   phis used only by other phis, fewer than 16 of them, are deleted.
@@ -38,7 +44,7 @@
 //! operand types, predicate), `shouldChangeType` for integer casts, the
 //! constant right operand, the intersection of the binary operators' flags.
 //!
-//! DEVIATE 1: the rest of `visitPHINode` is not translated: the GEP,
+//! DEVIATE 1: the rest of `visitPHINode` is not translated: the
 //! `insertvalue`/`extractvalue` and binary-operator-of-two-variables forms of
 //! `foldPHIArgOpIntoPHI`, `foldPHIArgIntToPtrToPHI`, the pointer-cast phi,
 //! `foldIntegerTypedPHI`, `SliceUpIllegalIntegerPHI`, and
@@ -74,6 +80,7 @@ fn same_opcode(
         (Opcode::Binary(x), Opcode::Binary(y)) => x == y,
         (Opcode::ICmp(_), Opcode::ICmp(_)) => true,
         (Opcode::Load { .. }, Opcode::Load { .. }) => true,
+        (Opcode::GetElementPtr { .. }, Opcode::GetElementPtr { .. }) => true,
         _ => false,
     }
 }
@@ -95,6 +102,7 @@ impl Combiner<'_> {
             && self.has_one_user(value)
             && let Some(folded) = match self.function.instruction(first).opcode {
                 Opcode::Load { .. } => self.fold_phi_arg_load_into_phi(phi, &incoming),
+                Opcode::GetElementPtr { .. } => self.fold_phi_arg_gep_into_phi(phi, &incoming),
                 _ => self.fold_phi_arg_op_into_phi(phi, &incoming, first),
             }
         {
@@ -382,6 +390,75 @@ impl Combiner<'_> {
         for &other in &loads[1..] {
             crate::local::combine_metadata_for_cse(self.env.metadata, self.function, new, other, true);
         }
+        Some(Operand::Value(self.function.instruction(new).result.expect("a value")))
+    }
+
+    /// `foldPHIArgGEPIntoPHI`: a phi of `getelementptr`s that differ in one
+    /// operand is one `getelementptr` of a phi of that operand. A second
+    /// differing operand would add a phi, a constant one would make a
+    /// cheaper index a variable, and bases that are all frame slots indexed by
+    /// constants are cheaper left in the predecessors.
+    fn fold_phi_arg_gep_into_phi(
+        &mut self,
+        phi: InstId,
+        incoming: &[(Operand, BlockId)],
+    ) -> Option<Operand> {
+        let first = self.definition_of(incoming[0].0)?;
+        let first_inst = self.function.instruction(first).clone();
+        let Opcode::GetElementPtr { source } = first_inst.opcode else { return None };
+        // The operand that needs a phi, if any.
+        let mut varying: Option<usize> = None;
+        let mut flags = first_inst.flags;
+        let mut all_slots = true;
+        let mut geps = vec![first];
+        for &(value, _) in &incoming[1..] {
+            let def = self.definition_of(value)?;
+            let Operand::Value(user_of) = value else { return None };
+            let inst = self.function.instruction(def);
+            let Opcode::GetElementPtr { source: other } = inst.opcode else { return None };
+            if !self.has_one_user(user_of) || other != source || inst.operands.len() != first_inst.operands.len() {
+                return None;
+            }
+            flags = flags.intersect(inst.flags);
+            // The pin looks at the other GEPs only, not the first.
+            let on_slot = self
+                .definition_of(inst.operands[0])
+                .is_some_and(|base| matches!(self.function.instruction(base).opcode, Opcode::Alloca { .. }));
+            if !(on_slot && inst.operands[1..].iter().all(|one| matches!(one, Operand::Constant(_)))) {
+                all_slots = false;
+            }
+            for (at, (&one, &other)) in first_inst.operands.iter().zip(&inst.operands).enumerate() {
+                if one == other {
+                    continue;
+                }
+                if matches!(one, Operand::Constant(_))
+                    || matches!(other, Operand::Constant(_))
+                    || self.type_of(one) != self.type_of(other)
+                    || varying.is_some()
+                {
+                    return None;
+                }
+                varying = Some(at);
+            }
+            geps.push(def);
+        }
+        if all_slots {
+            return None;
+        }
+        let mut operands = first_inst.operands.clone();
+        if let Some(at) = varying {
+            let ty = self.type_of(first_inst.operands[at]);
+            let merged: Vec<Operand> = geps
+                .iter()
+                .zip(incoming)
+                .flat_map(|(&gep, &(_, from))| [self.function.instruction(gep).operands[at], Operand::Block(from)])
+                .collect();
+            let new_phi = self.insert_before(phi, Opcode::Phi, ty, merged, Flags::default());
+            operands[at] = Operand::Value(self.function.instruction(new_phi).result.expect("a value"));
+        }
+        let at = self.after_phis(phi);
+        let ty = self.function.instruction(phi).ty;
+        let new = self.insert_before(at, Opcode::GetElementPtr { source }, ty, operands, flags);
         Some(Operand::Value(self.function.instruction(new).result.expect("a value")))
     }
 

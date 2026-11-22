@@ -2,7 +2,7 @@
 //! returns branching to what followed. Where to inline is
 //! `llrm_transforms::inline`'s policy; this is only how.
 
-use crate::context::Context;
+use crate::context::{Constant, ConstantKind, Context};
 use crate::edit::Position;
 use crate::hash::HashMap;
 use crate::module::{BlockId, Function, InstId, Operand, ValueId};
@@ -176,6 +176,12 @@ pub fn spliced(
         let returned: Vec<(Operand, BlockId)> =
             returns.into_iter().map(|(value, from)| (mapped(value.expect("a value returned")), from)).collect();
         let with = match returned[..] {
+            // A callee that never returns: the call's value is poison, as in
+            // `InlineFunction`, and the code after the call is dead.
+            [] => {
+                let ty = function.value(result).ty;
+                Operand::Constant(context.constant(Constant { ty, kind: ConstantKind::Poison }))
+            }
             [(value, _)] => value,
             _ => {
                 let ty = function.value(result).ty;

@@ -2213,7 +2213,9 @@ fn one_long_multiply_in_a_module_stays_inline_at_size() {
 /// (-Os). The bytes still shifted times the bits beyond whole bytes are the
 /// cost: 5 and 13 take the routine; whole bytes, one or two bits and the last
 /// byte (29, 31) stay unrolled, as a 64-bit shift's halves did (data_int64
-/// +199 B when 29 and 31 called); speed levels never take it.
+/// +199 B when 29 and 31 called). Not tuned for size, the call is taken where
+/// the module is smaller for it (bytes first at every level, 2026-11-14
+/// ruling).
 #[test]
 fn a_function_tuned_for_size_shifts_a_long_by_a_constant_in_the_routine() {
     let shifted = |op: &str, count: u32, attr: &str| {
@@ -2226,7 +2228,7 @@ fn a_function_tuned_for_size_shifts_a_long_by_a_constant_in_the_routine() {
         for count in [1, 2, 8, 16, 29, 31] {
             assert!(!shifted(op, count, "optsize").contains("__"), "{op} {count} stays unrolled");
         }
-        assert!(!shifted(op, 5, "").contains("__"), "{op} 5 at speed levels");
+        assert!(shifted(op, 5, "").contains(routine), "{op} 5 not tuned for size");
     }
 }
 

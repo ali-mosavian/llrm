@@ -11,6 +11,9 @@
 @scratch ecx edx eax
 # @lanes: x86's lane table (`llrm_codegen::backend::lanes`).
 @lanes x86
+# @asm: the registers inline asm may name in a constraint (`{rax}`, `={edx}`, `{st}`): whole values only, no rbp, rsp
+# or segment register; `st0` and `st1` are the x87 stack's top and its next (`t` and `u`); `xmm0`..`xmm15` are `x`.
+@asm al ax eax rax bl bx ebx rbx cl cx ecx rcx dl dx edx rdx sil si esi rsi dil di edi rdi r8l r8w r8d r8 r9l r9w r9d r9 r10l r10w r10d r10 r11l r11w r11d r11 r12l r12w r12d r12 r13l r13w r13d r13 r14l r14w r14d r14 r15l r15w r15d r15 st0 st1 xmm0 xmm1 xmm2 xmm3 xmm4 xmm5 xmm6 xmm7 xmm8 xmm9 xmm10 xmm11 xmm12 xmm13 xmm14 xmm15
 #
 # name  bits root lane classes dwarf codeview
 eax   32 eax   0 gpr,byte,base,index,int  0 17

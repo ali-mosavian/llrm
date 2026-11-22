@@ -252,6 +252,13 @@ pub fn place(function: &MFunc) -> Option<Wrapped> {
         // what follows it needs no frame.
         None => (vec![restore], !uses.is_return(placement.restore)),
     };
+    // `PrologEpilogInserter::calculateSaveRestoreBlocks`: a restore block with
+    // no successor that is no return ends in a call that never returns, and
+    // gets no epilogue.
+    let restores: Vec<usize> = restores
+        .into_iter()
+        .filter(|&block| !graph.successors[block].is_empty() || uses.is_return(id(block)))
+        .collect();
     // A block the frame reaches is entered with the frame made only by the
     // Save: any other way in would find the stack as the caller left it.
     let mut dominators = DomTreeBase::<false>::new();

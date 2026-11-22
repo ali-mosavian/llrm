@@ -379,6 +379,11 @@ impl GvnPass<'_> {
                 })
                 .unwrap_or(0);
             if edges != 1 {
+                // COULD NOT PRE LOAD BECAUSE OF INDBR CRITICAL EDGE
+                // (GVN.cpp:1803).
+                if self.function.ends_in_indirect_branch(pred) {
+                    return false;
+                }
                 // A landing pad cannot take a new predecessor.
                 if self
                     .function

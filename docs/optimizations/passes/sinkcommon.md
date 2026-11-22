@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/sinkcommon.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/sinkcommon.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/sinkcommon.rs sha256:ee56ba45388f4ad21b330ab6c5ce625a13a27176d8ab445c04480e88e0dd5597 -->
+<!-- src: crates/opt/llrm-transforms/src/sinkcommon.rs sha256:7e69c4fa4cf2017850a953b1dc80a6c939603c0970f4473e525cf5b96f0d2156 -->
 
 # sinkcommon
 
@@ -12,7 +12,9 @@ scans their instructions from the end in step, as far as each column
 (one instruction of each predecessor) is the same operation with operands
 that are the same, or that a phi can merge (`can_sink`). Of those the
 columns whose sinking would need more than one new phi stay, from the first
-that does. If some predecessor does not end in a jump the predecessors that
+that does. Where the target prices a phi (`Tuning::sink_common_phi_cost`,
+`sink_pays`) the sink is made only if the instructions it drops outnumber
+the moves of its phis, one per predecessor each. If some predecessor does not end in a jump the predecessors that
 do are first given a block of their own to sink into (`.sink.split`), and
 that only when a column holds something that cannot be run speculatively.
 Each column is then one instruction at the start of the block, its
@@ -49,6 +51,14 @@ The add both arms end with runs once in the join:
   attribute; the intrinsic cases for variadic parameters, `gcroot` and
   `threadlocal_address` are not in the MIR.
 - D4. No `llvm.experimental.deoptimize`.
+- D5. Priced (M16-KEEPDISP-1, closed): on a target whose accesses fold a constant offset
+  (`constant_offset_phi_is_cheap` false) a phi of such offsets is priced
+  (`displacement_sink_pays`), not sunk always as the pin does.
+- D6. The pin sinks only after SROA. Where the target sinks at size in the
+  early slots too (`Tuning::sink_common_at_size`), a load or store whose
+  pointer needs a phi and is an alloca's is left (`points_into_alloca`):
+  SROA cannot speculate through a select of allocas (older LLVM kept this
+  guard in `canSinkInstructions`; the pin has dropped it).
 
 ## Used by
 Named by `constanthoisting`, `simplifycfg`, `switcharms`.

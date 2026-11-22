@@ -28,4 +28,13 @@ grep -q '^STOP: release/next red: compile::tests::a debug_tests::b$' $d/o || { e
 printf 'compile::tests::a #6716\ndebug_tests::b #6716\n' > $d/allow
 echo "$q" | red_tip $d/allow 101 >$d/o || { echo "FAIL: excused quiet-format red tests stopped the runner: $(cat $d/o)"; exit 1; }
 tip_test_cmd "-p x" | grep -q -- '--no-fail-fast' || { echo "FAIL: cargo stops at the first red crate, so the stop line misses the others"; exit 1; }
+# tip-static.sh stops on a checkout whose .ll names a home path as its module, or whose file names a home directory (the tip went red on both, 11-19, with no gate in the way)
+w=$(mktemp -d); git -C $w init -q; mkdir -p $w/f; printf "; ModuleID = '/ho""me/x/a.c'\n" > $w/f/a.ll; printf "p = '/Us""ers/bob/x'\n" > $w/b.toml; git -C $w add -A
+"$here/tip-static.sh" $w >$d/o && { echo "FAIL: tip-static passed an .ll with a home path"; exit 1; }
+grep -q 'an .ll names a path' $d/o || { echo "FAIL: .ll stop line: $(cat $d/o)"; exit 1; }
+printf "; ModuleID = 'a.c'\n" > $w/f/a.ll; git -C $w add -A
+"$here/tip-static.sh" $w >$d/o && { echo "FAIL: tip-static passed a file naming /Us""ers/bob"; exit 1; }
+grep -q "developer's home directory" $d/o || { echo "FAIL: home stop line: $(cat $d/o)"; exit 1; }
+printf "p = 'a'\n" > $w/b.toml; git -C $w add -A
+"$here/tip-static.sh" $w >$d/o || { echo "FAIL: tip-static stopped a clean checkout: $(cat $d/o)"; exit 1; }
 echo PASS

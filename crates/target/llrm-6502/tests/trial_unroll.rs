@@ -192,9 +192,11 @@ done:
 /// units but over this target's trial size of 1,100; held to the cost the
 /// analysis finds (1,200, boosted by 1.18 to 1,017) it is tried, and with it
 /// gone the outer loop folds. llvm-mos -O3 and the pin's x86 -O3 do the same.
+/// -Os kept the nest too (3,336 B against 62 B at -O2): the pin's size bar is
+/// the loop's size plus one and its boost is 100, so the trial never saw it.
 #[test]
 fn a_nest_of_constant_divisions_folds_to_its_results() {
-    for level in [Level::O2, Level::O3] {
+    for level in [Level::O2, Level::O3, Level::Os] {
         let text = assembly(include_str!("data/division_nest.ll"), &Request::new(level)).unwrap();
         let divisions = text.lines().filter(|line| line.contains("jsr __") && line.contains("div")).count();
         let reports = text.lines().filter(|line| line.contains("jsr report")).count();
@@ -213,4 +215,15 @@ fn the_pair_of_inlines_and_unrolls_is_priced_at_os() {
         .filter(|name| text.contains(&format!("{name}:")))
         .collect();
     assert!(kept.is_empty(), "{kept:?} stay as functions:\n{text}");
+}
+
+/// loop_fusion at -O2 (2026-11-22): once a byte-index loop is cheaper rolled,
+/// the inline trial kept all three refused sites and the pair of inlines and
+/// unrolls was never priced: 756 B and 74,768 clocks against 131 B and 1,067.
+#[test]
+fn the_pair_of_inlines_and_unrolls_is_priced_after_every_inline_is_kept() {
+    let text = assembly(include_str!("data/loop_fusion_os.ll"), &Request::new(Level::O2)).unwrap();
+    let branch = ["bne", "beq", "bcc", "bcs", "bpl", "bmi", "bvc", "bvs", "bra", "jmp"];
+    let branches = text.lines().filter(|line| branch.iter().any(|op| line.trim().starts_with(&format!("{op} ")))).count();
+    assert_eq!(branches, 0, "a loop is left:\n{text}");
 }

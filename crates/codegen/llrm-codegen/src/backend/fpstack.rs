@@ -228,6 +228,8 @@ fn popping(what: &Semantics) -> Option<Semantics> {
         (Operation::FloatStore, "fistt") => Some(renamed("fisttp")),
         (Operation::Compare, "fcom") => Some(renamed("fcomp")),
         (Operation::Compare, "fcomp") if what.sources == [st(0), st(1)] => Some(renamed("fcompp")),
+        (Operation::Compare, "fucom") => Some(renamed("fucomp")),
+        (Operation::Compare, "fucomp") if what.sources == [st(0), st(1)] => Some(renamed("fucompp")),
         (Operation::Compare, "ficom") => Some(renamed("ficomp")),
         // `ST(i) = ST(i) op ST(0)` pops as `op p`.
         (Operation::FloatArith, _)
@@ -539,8 +541,8 @@ impl Fps<'_> {
             }
             self.values.push(results[0]);
             self.vacate();
-        } else if what.op == Operation::FloatStore && unnamed(&what) && what.dests.is_empty() && operands.len() == 1 {
-            self.handle_return(operands[0])?;
+        } else if what.op == Operation::FloatStore && unnamed(&what) && what.dests.is_empty() && !operands.is_empty() {
+            self.handle_stack_values(&operands)?;
         } else if what.op == Operation::Compare && operands.len() == 2 && results.is_empty() {
             self.handle_compare_fp(step, operands[0], operands[1])?;
         } else if what.op == Operation::Compare
@@ -596,16 +598,28 @@ impl Fps<'_> {
         Ok(())
     }
 
-    /// `handleReturn`: the returned value is st(0) and the stack is otherwise
-    /// empty.
-    fn handle_return(
+    /// `handleReturn` (one value) and the fixed stack operands of
+    /// `handleSpecialFP`'s inline asm (`shuffleStackTop`): `values` are the
+    /// stack's entries, `st(0)` first, and nothing else is on it. One value
+    /// named twice is copied.
+    fn handle_stack_values(
         &mut self,
-        value: u32,
+        values: &[u32],
     ) -> Result<(), Raised> {
-        self.adjust_live_regs(&BTreeSet::from([value]))?;
-        if self.values != [value] {
-            return Err(unlowered("a returned float leaves other values on the stack"));
+        let distinct: BTreeSet<u32> = values.iter().copied().collect();
+        self.adjust_live_regs(&distinct)?;
+        let mut wanted = values.to_vec();
+        for at in (1..wanted.len()).rev() {
+            if wanted[..at].contains(&wanted[at]) {
+                let copy = self.take_fresh();
+                self.duplicate_to_top(wanted[at], copy)?;
+                wanted[at] = copy;
+            }
         }
+        if self.values.len() != wanted.len() {
+            return Err(unlowered("a float stack operand leaves other values on the stack"));
+        }
+        self.shuffle_stack_top(&wanted)?;
         self.values.clear();
         self.vacate();
         Ok(())
@@ -967,7 +981,14 @@ impl Fps<'_> {
         self.slot(right)?;
         self.move_to_top(left)?;
         let slot = self.slot(right)?;
-        self.emit(semantics(Operation::Compare, "fcom", Vec::new(), vec![st(0), st(slot)]));
+        // The quiet compare of a constrained `fcmp` stays `fucom`: `fcom`
+        // would signal on a quiet NaN.
+        let name = if self.one().what.as_ref().is_some_and(|what| what.name.as_deref() == Some("fucom")) {
+            "fucom"
+        } else {
+            "fcom"
+        };
+        self.emit(semantics(Operation::Compare, name, Vec::new(), vec![st(0), st(slot)]));
         self.deferred = Some(Vec::new());
         let (kills_left, kills_right) = (step.kills(left), step.kills(right));
         let result: Result<(), Raised> = (|| {
@@ -1314,12 +1335,14 @@ impl Ahead<'_> {
             None => block.succ.iter().find_map(|next| self.order(*next, seen))?,
         };
         // Back through the copies: a value a copy wrote was the copy's source.
-        Some(
-            after
-                .iter()
-                .map(|value| pairs.iter().find(|(result, _)| result == value).map_or(*value, |(_, source)| *source))
-                .collect(),
-        )
+        let before: Vec<u32> = after
+            .iter()
+            .map(|value| pairs.iter().find(|(result, _)| result == value).map_or(*value, |(_, source)| *source))
+            .collect();
+        // A copy whose source is still in `after` (and a result that is also
+        // a value live into the block) maps two places to one value: no order.
+        let distinct: BTreeSet<u32> = before.iter().copied().collect();
+        (distinct.len() == before.len()).then_some(before)
     }
 }
 
@@ -1383,6 +1406,58 @@ pub(super) fn converted(
     converted_with(body, classes, cpu, &HashMap::default())
 }
 
+/// The stack inputs of a block call are unnamed stores that consume what they
+/// read (`handleReturn`: the stack holds them and nothing else). A spill of a
+/// value they read, which the allocator placed at the call, would find it
+/// gone: it is made ahead of them, where the value is on the stack. None where
+/// no spill is behind its inputs.
+fn spills_before_stack_inputs(body: &LirBody) -> Option<LirBody> {
+    let inputs = |one: &Insn| {
+        one.what.as_ref().is_some_and(|what| {
+            what.op == Operation::FloatStore && unnamed(what) && what.dests.is_empty() && !what.sources.is_empty()
+        })
+    };
+    let spill_of = |one: &Insn| -> Option<u32> {
+        let what = one.what.as_ref()?;
+        match (one.spill_store && what.op == Operation::FloatStore, what.sources.as_slice()) {
+            (true, [Loc::Held(held)]) if held.width == 10 => Some(held.value),
+            _ => None,
+        }
+    };
+    let mut blocks: Vec<Block> = Vec::new();
+    let mut changed = false;
+    for block in body.blocks.iter() {
+        let mut out: Vec<Arc<Insn>> = Vec::with_capacity(block.insns.len());
+        // Where the run of stack inputs began, and the values it reads.
+        let mut run: Option<(usize, Vec<u32>)> = None;
+        for one in block.insns.iter() {
+            if inputs(one) {
+                let read = one.what.iter().flat_map(|what| &what.sources).filter_map(|source| match source {
+                    Loc::Held(held) => Some(held.value),
+                    _ => None,
+                });
+                let (_, values) = run.get_or_insert((out.len(), Vec::new()));
+                values.extend(read);
+                out.push(Arc::clone(one));
+            } else if let Some(value) = spill_of(one)
+                && let Some((start, values)) = run.as_mut()
+                && values.contains(&value)
+            {
+                out.insert(*start, Arc::clone(one));
+                *start += 1;
+                changed = true;
+            } else {
+                if !one.what.as_ref().is_some_and(|what| what.op == Operation::Nothing) {
+                    run = None;
+                }
+                out.push(Arc::clone(one));
+            }
+        }
+        blocks.push(block.with_insns(out));
+    }
+    changed.then(|| body.with_blocks(blocks))
+}
+
 /// [`converted`], knowing which pool cells hold +0.0 and +1.0.
 pub(super) fn converted_with(
     body: &LirBody,
@@ -1392,6 +1467,8 @@ pub(super) fn converted_with(
 ) -> Result<LirBody, Raised> {
     let valued = crate::backend::fpregs::valued(body);
     let body = valued.as_ref().unwrap_or(body);
+    let spilled_first = spills_before_stack_inputs(body);
+    let body = spilled_first.as_ref().unwrap_or(body);
     let no_orders = HashMap::default();
     let mut best = converted_valued(body, classes, cpu, constants, &no_orders)?;
     let floating = floatassign::_floating_values(body);

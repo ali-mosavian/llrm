@@ -58,6 +58,7 @@ pub fn hoist_region(
     let mut reassociated = Vec::new();
     // Taken once for the loop, at its first float load (DEVIATE LP1-FP).
     let mut float_room: Option<Option<usize>> = None;
+    let mut general_room: Option<Option<usize>> = None;
     for block in loop_blocks_rpo(ctx) {
         // Only the contents of a block outside the subloops: those have been
         // processed.
@@ -76,6 +77,7 @@ pub fn hoist_region(
                 && can_sink_or_hoist_inst(unit, outer, ctx, mssa, aa, flags, safety, inst, true)
                 && is_safe_to_execute_unconditionally(unit, outer, ctx, safety, preheader, inst)
                 && float_load_has_room(unit, outer, ctx, inst, &mut float_room)
+                && speculated_value_has_room(unit, outer, ctx, inst, safety, &mut general_room)
             {
                 ctx.state.moved.borrow_mut().insert(inst, preheader);
                 found.push(Hoist { inst, preheader, guaranteed: safety.is_guaranteed_to_execute(inst) });
@@ -117,6 +119,44 @@ fn float_load_has_room(
     }
     let room = room.get_or_insert_with(|| {
         super::pressure::Pressure::of_class(unit, outer, ctx, super::pressure::Class::Float).map(|held| held.room())
+    });
+    match room {
+        None => true,
+        Some(0) => false,
+        Some(left) => {
+            *left -= 1;
+            true
+        }
+    }
+}
+
+/// DEVIATE LICM-SPEC: whether hoisting `inst`, an integer or pointer value
+/// the loop does not compute on every trip, keeps the loop's held values within
+/// the target's registers (`Tti::licm_prices_speculated_values`). It is held
+/// across every trip to save a computation some trips make.
+fn speculated_value_has_room(
+    unit: &passes::Unit,
+    outer: &Outer,
+    ctx: &LoopCtx,
+    inst: InstId,
+    safety: &LoopSafety,
+    room: &mut Option<Option<usize>>,
+) -> bool {
+    let Some(tti) = outer.target().tti() else { return true };
+    if !tti.licm_prices_speculated_values() || safety.is_guaranteed_to_execute(inst) {
+        return true;
+    }
+    let data = unit.function.instruction(inst);
+    let is_value = !matches!(data.opcode, Opcode::Load { .. })
+        && data.result.is_some_and(|result| {
+            super::pressure::is_one_register_value(unit, unit.function.value(result).ty)
+                && unit.function.users(result).iter().count() == 1
+        });
+    if !is_value {
+        return true;
+    }
+    let room = room.get_or_insert_with(|| {
+        super::pressure::Pressure::of_class(unit, outer, ctx, super::pressure::Class::General).map(|held| held.room())
     });
     match room {
         None => true,
@@ -308,7 +348,7 @@ fn against_invariant(
     let ValueDef::Instruction(def) = function.value(value).def else { return None };
     let compare = function.instruction(def);
     let Opcode::ICmp(mut pred) = compare.opcode else { return None };
-    if !function.users(value).has_one_use() || ctx.state.gone.borrow().contains(&def) {
+    if !ctx.has_one_use(value) || ctx.state.gone.borrow().contains(&def) {
         return None;
     }
     let [mut lhs, mut rhs] = compare.operands[..] else { return None };
@@ -443,7 +483,7 @@ fn hoist_gep(
     let ValueDef::Instruction(src_inst) = function.value(base).def else { return None };
     let src = function.instruction(src_inst);
     if !matches!(src.opcode, Opcode::GetElementPtr { .. })
-        || function.users(base).iter().count() != 1
+        || !ctx.has_one_use(base)
         || !ctx.contains(src_inst)
         || ctx.state.gone.borrow().contains(&src_inst)
     {
@@ -590,7 +630,7 @@ fn hoist_add_sub(
     // The initial operation goes after the reassociation: only with no other
     // use.
     let Operand::Value(lhs_value) = lhs else { return None };
-    if ctx.is_loop_invariant(lhs) || !ctx.is_loop_invariant(rhs) || function.users(lhs_value).iter().count() != 1 {
+    if ctx.is_loop_invariant(lhs) || !ctx.is_loop_invariant(rhs) || !ctx.has_one_use(lhs_value) {
         return None;
     }
     let ValueDef::Instruction(dead) = function.value(lhs_value).def else { return None };
@@ -802,10 +842,8 @@ fn hoist_sub_add_association(
         let Operand::Value(value) = operand else { return None };
         let ValueDef::Instruction(def) = function.value(value).def else { return None };
         let Opcode::Binary(bo_op) = function.instruction(def).opcode else { return None };
-        (wanted.contains(&bo_op)
-            && function.users(value).iter().count() == 1
-            && !ctx.state.gone.borrow().contains(&def))
-        .then_some((def, bo_op))
+        (wanted.contains(&bo_op) && ctx.has_one_use(value) && !ctx.state.gone.borrow().contains(&def))
+            .then_some((def, bo_op))
     };
     let (bo, lv, c1, c2, inv_op, result_op);
     match op {

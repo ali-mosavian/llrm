@@ -19,7 +19,7 @@ use crate::mfunc::MFunction;
 use crate::regalloc::Assignment;
 use crate::{REGISTER_INFO, reg};
 
-fn root(
+pub(crate) fn root(
     register: Reg,
     assignment: &Assignment,
 ) -> RegId {
@@ -58,7 +58,7 @@ fn is_remade_moveq(inst: &Inst) -> bool {
 /// codes: a copy from another register, a load of a frame slot (the allocator
 /// makes an argument's load again where it is read, `ARGUMENT_REMAT`), or a
 /// `moveq` made again.
-fn written(
+pub(crate) fn written(
     inst: &Inst,
     assignment: &Assignment,
 ) -> Option<RegId> {

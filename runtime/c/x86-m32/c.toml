@@ -19,15 +19,8 @@ assembler_defines = ["stack_base:STACK_BYTES"]
 
 # How Open Watcom's front end is asked to record a C program for this target (llrm-c).
 [frontend]
-watcom_cpu = "386"
-# What the front end calls `int`, in bytes: the C ABI's, which the data layout does not state.
-int_bytes = 4
-# The routine the start-up calls, and the convention it calls it in: with no arguments, on the stack.
+# The routine the start-up calls.
 entry = "main"
-entry_convention = "cdecl32"
-# What the front end records of a function it passes in its default registers (its own list, which differs by tree).
-default_registers = "[f0000ff:0]"
-# The header it includes first, from the repository root.
 
 # Per ABI (calling.toml's `[abi.*]`): the switches Open Watcom's front end is asked with, the convention a function it records as
 # cdecl has, and one it records in its default registers. `-ecc` makes every function cdecl, as gcc's i386 default is.

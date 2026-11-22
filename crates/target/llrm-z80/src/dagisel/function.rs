@@ -81,6 +81,13 @@ pub fn builder_target() -> BuilderTarget {
         tuning: llrm_mir::target::Machine::tuning(&*crate::driver::machine()),
         ..BuilderTarget::for_pointer_bits(16)
     }
+    // DEVIATE Z80-NARROW-DIV (owner z80, exit 2026-12-15, as the 6502's and
+    // m68k's): the pin's O1 has no correlated-propagation to narrow a divide of
+    // values that fit 16 bits
+    // (`narrowSDivOrSRem`, `narrowUDivOrURem`): `__udivsi3` where -O2
+    // calls `__udivhi3` (nbody_fixed -O1, +375 B linked). `__divremhi4` gives 0
+    // for `INT_MIN % -1`, so the narrow remainder is defined there.
+    .with_narrow_divrem(EVT::I16, true)
 }
 
 thread_local! {
@@ -143,6 +150,10 @@ pub struct Selection {
     /// function tuned for size chooses between its two by the
     /// smaller relative regret, not by bytes first.
     pub wide_alternative: bool,
+    /// Selected the second time with the routine's call for the one long
+    /// multiply of its module (`prepare::LONE_MULTIPLY`): taken only where
+    /// it is no bigger and no slower.
+    pub lone_alternative: bool,
     /// The same function selected with its long adds as the generic expansion,
     /// not carry ops (`pipeline::GENERIC_CARRY`); none where it has no
     /// carry ops.
@@ -158,6 +169,10 @@ pub struct Selection {
     pub frequencies: Vec<(u32, f64)>,
     /// The jump tables: the block of each entry, by table.
     pub tables: Vec<Vec<u32>>,
+    /// What the mid-end made of the function, hashed
+    /// (`driver::selections_reusing`), with the form it was selected as:
+    /// the key of its finished lines (`compile::lines_of`). 0: not set.
+    pub digest: u64,
 }
 
 impl Selection {
@@ -208,8 +223,11 @@ pub fn select_function_with(
     let sized = ["optsize", "minsize"].into_iter().any(|name| llrm_mir::memory::has(&function.attrs, name));
     let tuned_for_size = sized;
     let chain_credit = llrm_mir::memory::has(&function.attrs, crate::prepare::WORD_CHAINS);
-    let long_multiply = llrm_mir::memory::has(&function.attrs, crate::prepare::LONG_MULTIPLY)
-        && !super::pipeline::DECOMPOSE_MULS.with(std::cell::Cell::get);
+    let long_multiply_lone_call = llrm_mir::memory::has(&function.attrs, crate::prepare::LONE_MULTIPLY)
+        && super::pipeline::CALL_MULS.with(std::cell::Cell::get);
+    let long_multiply = (llrm_mir::memory::has(&function.attrs, crate::prepare::LONG_MULTIPLY)
+        && !super::pipeline::DECOMPOSE_MULS.with(std::cell::Cell::get))
+        || long_multiply_lone_call;
     let frequencies =
         crate::frequency::block_frequencies(module, function, &layout, FLAT_LOOP_TRIPS.with(std::cell::Cell::get));
     let mut info = FunctionLoweringInfo::new(function);
@@ -297,10 +315,12 @@ pub fn select_function_with(
         sized: tuned_for_size,
         wide_alternative: super::pipeline::SPEED_ROUTINES.with(std::cell::Cell::get)
             || super::pipeline::INLINE_SHIFTS.with(std::cell::Cell::get),
+        lone_alternative: long_multiply_lone_call,
         generic: None,
         unreachable,
         frequencies,
         tables,
+        digest: 0,
     })
 }
 

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/lsr_solve.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/lsr_solve.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/lsr_solve.rs sha256:dadb5691a1b5f1f135445e61dbffc66af7336d7ccb7ba3ca7f76c53f73e924dc -->
+<!-- src: crates/opt/llrm-transforms/src/lsr_solve.rs sha256:76815ef3950e7b28506f45244f622a63d66e8741a24fa107d5dece237368c01c -->
 
 # lsr_solve
 
@@ -39,13 +39,6 @@ L3988, L4735, L5196, L5609 and `getFixupInsertPos` (L6190,
 `lsr_implement.rs`; a store keeps the default position, as the pin's
 `I->getType()` is `void` for it). DEVIATE LU3: see `solve`, the drop of a
 rewrite that spills (real mode).
-
-DEVIATE LS1: real mode (m16) skips the pin's `VisitedRegs` rule (a
-one-register formula of the first use makes its register a loser for the
-later uses; `Tti::lsr_visited_registers_lose`). With the rule on, m16 is
-+1..+8 B in 41 of 192 bench cells and better in none (histo's sum loop
-keeps a pointer beside the counter and a `cmp`). Every other target runs the
-pin's rule. owner: w12, exit: 2026-11-30.
 
 DEVIATE LU3b: the registers the loop keeps live beside its recurrences (the
 values its body defines that SCEV does not make a recurrence, in registers

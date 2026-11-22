@@ -56,7 +56,7 @@ use llrm_mir::tti::{AddressingMode, Ty as TtiTy};
 use llrm_support::hash::{HashMap, HashSet};
 
 use crate::lsr_collect::{Collection, extract_immediate, extract_symbol, get_exact_sdiv, is_always_foldable_scev};
-use crate::lsr_formula::{Formula, Immediate, Symbol};
+use crate::lsr_formula::{Formula, Immediate, RegBits, Symbol};
 use crate::lsr_use::{Cost, Kind, Rating, is_legal_add_immediate, is_legal_use, may_use_post_inc_mode};
 
 /// Which register of a formula a generator works on.
@@ -173,11 +173,12 @@ impl Collection<'_, '_> {
     /// inserting a variant.
     pub(crate) fn legal(
         &self,
+        se: &ScalarEvolution,
         lu_idx: usize,
         f: &Formula,
     ) -> bool {
         let lu = &self.uses[lu_idx];
-        let Some(mode) = f.mode() else { return false };
+        let Some(mode) = f.mode_in(se) else { return false };
         is_legal_use(
             self.tti,
             lu.min_offset,
@@ -188,6 +189,7 @@ impl Collection<'_, '_> {
             f.base_offset,
             mode.has_base_reg,
             mode.scale,
+            mode.bits,
         ) || self.scales_basic_use(lu.kind, &mode, f.base_offset)
     }
 
@@ -420,7 +422,7 @@ impl Collection<'_, '_> {
                 f.delete_base_reg(at);
                 f.has_base_reg = !f.base_regs.is_empty();
                 f.canonicalize(se, self.l);
-                if self.legal(lu_idx, &f) {
+                if self.legal(se, lu_idx, &f) {
                     let _ = self.insert_formula(se, lu_idx, &f);
                 }
             }
@@ -428,7 +430,7 @@ impl Collection<'_, '_> {
         }
         let mut f = base.clone();
         f.symbol = Some(gv);
-        if !self.legal(lu_idx, &f) {
+        if !self.legal(se, lu_idx, &f) {
             return;
         }
         match slot {
@@ -471,7 +473,7 @@ impl Collection<'_, '_> {
         for &offset in worklist {
             let mut f = base.clone();
             f.base_offset = base.base_offset.sub_unsigned(offset);
-            if !self.legal(lu_idx, &f) {
+            if !self.legal(se, lu_idx, &f) {
                 continue;
             }
             // The offset goes to the base register.
@@ -503,7 +505,7 @@ impl Collection<'_, '_> {
         }
         let mut f = base.clone();
         f.base_offset = f.base_offset.add_unsigned(imm);
-        if !self.legal(lu_idx, &f) {
+        if !self.legal(se, lu_idx, &f) {
             return;
         }
         match slot {
@@ -604,7 +606,7 @@ impl Collection<'_, '_> {
             // This scale must be legal.
             {
                 let lu = &self.uses[lu_idx];
-                let Some(mode) = f.mode() else { continue };
+                let Some(mode) = f.mode_in(se) else { continue };
                 if !is_legal_use(
                     self.tti,
                     offset,
@@ -615,6 +617,7 @@ impl Collection<'_, '_> {
                     f.base_offset,
                     mode.has_base_reg,
                     mode.scale,
+                    mode.bits,
                 ) {
                     continue;
                 }
@@ -633,9 +636,10 @@ impl Collection<'_, '_> {
             // model prices below `dec; je` (x_adler -O2: 47972 -> 50976
             // clocks).
             let counter_alone = base.scaled_reg.is_none() && base.base_regs.len() == 1;
-            let odd = self.tti.lsr_scales_zero_compare_past_overflow()
-                && ((factor & 1 == 1 && counter_alone)
-                    || (!self.size && self.factor_keeps_zero(se, cx, &base, factor, bits)));
+            let odd = (self.tti.lsr_scales_zero_compare_past_overflow() && factor & 1 == 1 && counter_alone)
+                || (self.tti.lsr_scales_even_zero_compare()
+                    && !self.size
+                    && self.factor_keeps_zero(se, cx, &base, factor, bits));
             // No base register may overflow when multiplied.
             for i in 0..f.base_regs.len() {
                 f.base_regs[i] = se
@@ -731,7 +735,7 @@ impl Collection<'_, '_> {
                 (lu.min_offset, lu.max_offset, lu.kind, lu.all_fixups_outside_loop, lu.access_ty)
             };
             let legal = |kind| {
-                base.mode().is_some_and(|mode| {
+                base.mode_in(se).is_some_and(|mode| {
                     is_legal_use(
                         self.tti,
                         min,
@@ -742,6 +746,7 @@ impl Collection<'_, '_> {
                         base.base_offset,
                         mode.has_base_reg,
                         mode.scale,
+                        mode.bits,
                     ) || self.scales_basic_use(kind, &mode, base.base_offset)
                 })
             };
@@ -962,7 +967,7 @@ impl Collection<'_, '_> {
                     }
                     let mut new_f = f.clone();
                     new_f.base_offset = offset;
-                    if !self.legal(lu_idx, &new_f) {
+                    if !self.legal(se, lu_idx, &new_f) {
                         continue;
                     }
                     let scaled = new_f.scaled_reg.expect("a scaled register");
@@ -992,7 +997,7 @@ impl Collection<'_, '_> {
                         }
                         let mut new_f = f.clone();
                         new_f.base_offset = new_f.base_offset.add_unsigned(imm);
-                        if !self.legal(lu_idx, &new_f) {
+                        if !self.legal(se, lu_idx, &new_f) {
                             if self.amk == AddressingMode::PostIndexed
                                 && may_use_post_inc_mode(self.tti, se, cx, &self.uses[lu_idx], orig_reg, self.l)
                             {
@@ -1340,5 +1345,5 @@ fn legal_scale(
 ) -> bool {
     // The end-biased form is not made for a frame slot.
     !matches!(f.symbol, Some(Symbol::Frame(_)))
-        && is_legal_use(tti, min, max, kind, access, f.has_global(), f.base_offset, true, scale)
+        && is_legal_use(tti, min, max, kind, access, f.has_global(), f.base_offset, true, scale, RegBits::default())
 }

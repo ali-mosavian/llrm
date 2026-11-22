@@ -5,9 +5,9 @@ inherits = "../pds71/suite.toml"
 # mechanical exclusion of its non-language databases are documented in
 # evidence.md.  SHA-256 pins the exact installed evidence, not a web copy.
 help_files = [
-  { path = "/Users/alim/work/other/d32x/toolchains/vbdos/HLP/VBDOS.HLP", sha256 = "34d192f06af2d028326ab759e14b84d8f4f390a5da8024aec9a45a79ad5ee795" },
-  { path = "/Users/alim/work/other/d32x/toolchains/vbdos/HLP/VBDPSS.HLP", sha256 = "bf2741caa417376fa0a1d3b4aedec1ec488e61e237e83311e97f9113adfad920" },
-  { path = "/Users/alim/work/other/d32x/toolchains/vbdos/HLP/ADVISOR.HLP", sha256 = "cfbaf4acdc55b274b1e6c55ba5d24a5e9315284cea12c457e3b0835be426eae9" },
+  { path = "VBDOS.HLP", sha256 = "34d192f06af2d028326ab759e14b84d8f4f390a5da8024aec9a45a79ad5ee795" },
+  { path = "VBDPSS.HLP", sha256 = "bf2741caa417376fa0a1d3b4aedec1ec488e61e237e83311e97f9113adfad920" },
+  { path = "ADVISOR.HLP", sha256 = "cfbaf4acdc55b274b1e6c55ba5d24a5e9315284cea12c457e3b0835be426eae9" },
 ]
 help_extracts = [
   { path = "VBDOS.TXT", lines = 48051, sha256 = "38521f0c35b71c6a718aa7beeb013adc11d4613c17f317ddfa4519c6a149566e" },

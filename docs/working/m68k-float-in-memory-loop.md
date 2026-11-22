@@ -16,7 +16,7 @@ Identity for a target that keeps the bar. DEVIATE UNROLL-ANALYZE, owner m68k flo
 
 ## A/B (release/next 7ca36f1e02 vs this commit, tests/run/c, 68000+68020, -O2/-O3/-Os)
 
-md5: base llrm-cc 4a889abc, llrm-llc 593c6eeb, llrm-m68k-llc d902b219; head llrm-cc 32f9e8e8, llrm-llc 0305f632, llrm-m68k-llc dfa12180 (wasm/arm64/6502/z80 llcs in dist md5.txt, kept in ~/scratch/fml).
+md5: base llrm-cc 4a889abc, llrm-llc 593c6eeb, llrm-m68k-llc d902b219; head llrm-cc 32f9e8e8, llrm-llc 0305f632, llrm-m68k-llc dfa12180 (wasm/arm64/6502/z80 llcs in dist md5.txt, kept in fml).
 834 cells compiled on both sides; 792 objects identical (all -Os); 42 differ (21 programs, -O2/-O3). All 84 changed exes run under qemu with the reference stdout.
 A first A/B had a base worktree one merge ahead of the parent and showed 3 false -Os differences; redone.
 

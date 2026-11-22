@@ -94,6 +94,68 @@ fn constructs_outside_the_subset_are_refused() {
     assert_eq!(refusal("target triple = \"i386\"\n"), "line 1: `triple` is outside MIR's subset of LLVM");
 }
 
+/// Before: `blockaddress` and `indirectbr` were refused at the parser
+/// ("`blockaddress` is outside MIR's subset"), so a computed goto compiled on
+/// no target.
+#[test]
+fn a_computed_goto_round_trips_through_text() {
+    let text = "define i16 @f(i16 %0) {\n  %2 = icmp eq i16 %0, 0\n  %3 = select i1 %2, ptr blockaddress(@f, %one), ptr blockaddress(@f, %two)\n  indirectbr ptr %3, [label %one, label %two]\n\none:\n  ret i16 1\n\ntwo:\n  ret i16 2\n}\n";
+    assert_eq!(round(text), text);
+}
+
+/// Before: a `blockaddress` in a function read after the one it names printed
+/// as `inttoptr 1` (a gone block): the dump of a computed goto lost its targets.
+#[test]
+fn a_block_address_in_a_later_function_keeps_its_block() {
+    let text = "define i16 @f(ptr %0) {\n  indirectbr ptr %0, [label %one, label %two]\n\none:\n  ret i16 1\n\ntwo:\n  ret i16 2\n}\n\ndefine ptr @g(i1 %0) {\n  %2 = select i1 %0, ptr blockaddress(@f, %one), ptr blockaddress(@f, %two)\n  ret ptr %2\n}\n";
+    assert_eq!(round(text), text);
+}
+
+/// A dispatch table of label addresses (`static void *t[] = {&&a, &&b}`) names
+/// a function read after it: the labels' ids must survive until the body.
+#[test]
+fn a_block_address_in_a_table_before_its_function_round_trips() {
+    let text = "@t = internal constant [2 x ptr] [ptr blockaddress(@f, %a), ptr blockaddress(@f, %b)]\n\ndefine void @f(i16 %0) {\n  %2 = getelementptr [2 x ptr], ptr @t, i16 0, i16 %0\n  %3 = load ptr, ptr %2\n  indirectbr ptr %3, [label %a, label %b]\n\na:\n  ret void\n\nb:\n  ret void\n}\n";
+    let module = parse::module(text).unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(crate::verify::verify(&module), Vec::<String>::new());
+    assert_eq!(print::module(&module), text);
+}
+
+/// A block replaced by another (`replaceAllUsesWith`) takes its address along;
+/// one erased with nothing to replace it has none (LLVM's `inttoptr 1`).
+#[test]
+fn a_block_address_follows_the_block_that_replaced_it() {
+    let text = "@t = internal constant [1 x ptr] [ptr blockaddress(@f, %e)]\n\ndefine void @f(ptr %0) {\n  indirectbr ptr %0, [label %e]\n\ne:\n  br label %s\n\ns:\n  ret void\n}\n";
+    let mut module = parse::module(text).expect("parses");
+    let (_, function) = module.function_mut("f").expect("@f");
+    let layout = function.layout().to_vec();
+    let (e, s) = (layout[1], layout[2]);
+    assert!(function.has_address_taken(e) && !function.has_address_taken(s));
+    assert_eq!(function.resolve_block_address(e), Some(e));
+    function.replace_block_uses_with(e, s);
+    assert_eq!(function.resolve_block_address(e), Some(s), "the address is now the replacement's");
+    assert!(function.has_address_taken(s));
+    let (_, function) = module.function_mut("f").expect("@f");
+    let jump = function.terminator(e).expect("a terminator");
+    function.erase(jump).expect("a jump");
+    function.erase_block(e).expect("an emptied block");
+    assert_eq!(function.resolve_block_address(e), Some(s));
+}
+
+/// The -Os trial prices a module whose other functions are cut to their
+/// declarations (`trial::only`); a table naming a block of one of them read
+/// `blocks[0]` of an empty function and panicked ("index out of bounds: the len
+/// is 0", QB's exec.c at -Os). The block is no longer anywhere: LLVM's `1`.
+#[test]
+fn a_block_address_of_a_function_cut_to_its_declaration_names_nothing() {
+    let text = "@t = internal constant [1 x ptr] [ptr blockaddress(@f, %e)]\n\ndefine void @f(ptr %0) {\n  indirectbr ptr %0, [label %e]\n\ne:\n  ret void\n}\n";
+    let mut module = parse::module(text).expect("parses");
+    let (_, function) = module.function_mut("f").expect("@f");
+    let block = function.layout()[1];
+    let cut = function.declaration();
+    assert_eq!(cut.resolve_block_address(block), None);
+}
+
 #[test]
 fn attribute_groups_may_follow_their_use() {
     let text = "declare void @stop(i16) #0\n\nattributes #0 = { noreturn memory(argmem: read) \"kind\"=\"error\" }\n";
@@ -432,6 +494,21 @@ fn an_inline_assembly_declaration_is_checked_against_its_name() {
     );
     assert!(problems(&format!("declare i16 @{name}(i16)\n"))[0].contains("incorrect return type"));
     assert!(problems(&format!("declare {{i16, i16}} @{name}(i16, i16)\n"))[0].contains("incorrect argument type"));
+}
+
+/// A flat 64-bit block (`llrm.ia64.asm.`) keeps its bitness through its name
+/// and takes `i64` registers, which a 32-bit block's declaration refuses
+/// ("incorrect return type").
+#[test]
+fn a_64_bit_inline_assembly_block_keeps_its_bits_and_takes_i64_registers() {
+    let name = "llrm.ia64.asm.48f7e1.rax_rcx.rax_rdx.-.n";
+    let block = crate::intrinsics::asm(name).expect("parses");
+    assert_eq!(block.bits, 64);
+    assert_eq!(crate::intrinsics::asm_name(&block), name);
+    let problems = |text: &str| crate::verify::verify(&parse::module(text).unwrap_or_else(|error| panic!("{error}")));
+    assert_eq!(problems(&format!("declare {{i64, i64}} @{name}(i64, i64)\n")), Vec::<String>::new());
+    let narrow = name.replace("ia64", "ia32");
+    assert!(problems(&format!("declare {{i64, i64}} @{narrow}(i64, i64)\n"))[0].contains("incorrect return type"));
 }
 
 /// BCC stores 3.125L as 00 00 00 00 00 00 00 C8 00 40; a long double
@@ -982,6 +1059,23 @@ fn clangs_target_attributes_and_captures_are_read() {
     round(&format!("{DATALAYOUT}\ndeclare i16 @h(ptr nofreeobj dead_on_return %p) nocreateundeforpoison\n"));
     // `allocsize(0, 1)` on a declaration (clang's `malloc`, `calloc`).
     round(&format!("{DATALAYOUT}\ndeclare ptr @calloc(i16, i16) allocsize(0, 1) allockind(\"alloc,zeroed\")\n"));
+}
+
+/// QB's `pfpu.c` was refused at parse ("expected `}`, found `strictfp`"): clang
+/// states `strictfp` on a function and on its calls, and the reader knew only
+/// some of the valueless attributes LLVM has. Each now reads and prints back;
+/// `strictfp` on a call is the flag the folders and `partialinline` look for.
+#[test]
+fn strictfp_and_the_other_valueless_attributes_are_read() {
+    let text = format!(
+        "{DATALAYOUT}\ndeclare double @sqrt(double)\n\ndefine double @f(double %x) strictfp nonlazybind {{\nb0:\n  %r = call double @sqrt(double %x) #0\n  ret double %r\n}}\n\nattributes #0 = {{ strictfp }}\n"
+    );
+    let once = round(&text);
+    assert!(once.contains("strictfp"), "{once}");
+    assert_eq!(round(&once), once);
+    for word in crate::opcode::TARGET_FLAG_ATTRIBUTES.iter().filter(|word| !matches!(**word, "allockind" | "allocsize")) {
+        round(&format!("{DATALAYOUT}\ndeclare void @g() {word}\n"));
+    }
 }
 
 /// Each use asked `instruction_dominates` of its definition, which scanned the

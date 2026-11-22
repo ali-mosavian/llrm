@@ -12,6 +12,8 @@
 //! 2. `TargetExternalSymbol(name)`;
 //! 3. one `TargetGlobalAddress` per fixup, in `fixups` order;
 //! 4. one `Register` per input, in `inputs` order;
+//! 4a. the values the `st0` and `st1` inputs take, `st0`'s first, after them
+//!     (the emitter pushes them on the x87 stack before the block);
 //! 5. the glue of the last input copy, when there is an input.
 //!
 //! Results: the chain and the glue.
@@ -49,6 +51,7 @@ pub fn lower_asm(
     name: &str,
     fixups: &[SDValue],
     inputs: &[(RegId, SDValue)],
+    x87: &[SDValue],
     outputs: &[(RegId, EVT)],
 ) -> (SDValue, Vec<SDValue>) {
     let mut chain = root;
@@ -64,6 +67,8 @@ pub fn lower_asm(
         let vt = dag.value_type(value);
         ops.push(dag.get_phys_register(vt, reg));
     }
+    // 4a. the values the block takes in st(0), after the registers
+    ops.extend_from_slice(x87);
     ops.extend(glue);
     let node = dag.get_node_multi(asm, &[EVT::OTHER, EVT::GLUE], &ops);
     let mut chain = SDValue { node: node.node, res: 0 };
@@ -100,6 +105,7 @@ mod tests {
             "llrm.ia16.asm.90",
             &[fixup],
             &[(ax, value)],
+            &[],
             &[(dx, EVT::I32)],
         );
         assert_eq!(results.len(), 1);

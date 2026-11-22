@@ -546,8 +546,11 @@ b0:
 /// nbody_fixed read 3,457,356 instructions against 3,116,356).
 #[test]
 fn a_loop_calling_a_pure_function_is_judged_on_what_the_function_does() {
+    // `noinline`: an internal function with one use is an inline candidate,
+    // which the pin's unroll leaves its loop rolled for, and this pipeline
+    // has no inliner.
     let mut module = llrm_analysis::testing::parsed(
-        "define internal i16 @g(i16 %x) {
+        "define internal i16 @g(i16 %x) noinline {
 b0:
   %y = mul i16 %x, 7
   ret i16 %y
@@ -2706,6 +2709,68 @@ fn test_the_full_unroll_takes_a_loop_only_below_o2_when_asked() {
     assert!(!four_trips_under(pipeline::Options::standard()), "-O2 unrolls it");
 }
 
+/// shrink_wrapped_saves's loop after inlining (a switch in the body, four trips
+/// from constant starts), through the LLVM order: whether a loop phi is left.
+fn constant_loop_kept_under(options: pipeline::Options) -> bool {
+    let text = "define i32 @f() {
+b0:
+  br label %h
+h:
+  %a = phi i32 [ 151, %b0 ], [ %a2, %l ]
+  %b = phi i32 [ 604, %b0 ], [ %b2, %l ]
+  %c = phi i32 [ 4, %b0 ], [ %c2, %l ]
+  %d = phi i32 [ 88, %b0 ], [ %d2, %l ]
+  %acc = phi i32 [ 0, %b0 ], [ %acc2, %l ]
+  %e = add i32 %c, -4
+  %g = add i32 %c, -2
+  switch i32 %e, label %m [
+    i32 4, label %x
+    i32 0, label %z
+  ]
+z:
+  br label %l
+m:
+  %p = mul i32 %c, %g
+  %q = add i32 %a, -46
+  %r = add i32 %q, %p
+  %s = add i32 %r, %a
+  %t = add i32 %s, %d
+  %u = add i32 %t, %b
+  br label %l
+l:
+  %v = phi i32 [ %u, %m ], [ %g, %z ]
+  %acc2 = add i32 %v, %acc
+  %d2 = add nuw nsw i32 %d, 10
+  %c2 = add nuw nsw i32 %c, 1
+  %b2 = add nuw nsw i32 %b, 12
+  %a2 = add nuw nsw i32 %a, 3
+  br label %h
+x:
+  %res = add i32 %acc, 4
+  ret i32 %res
+}
+";
+    let mut module = llrm_analysis::testing::parsed(text);
+    let applied = Applied { options, ..Applied::default() };
+    Program::lend(&mut module, std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()), |program: &mut Program| {
+        program.exports.entries.insert("f".to_owned());
+        pipeline::applied(program, &applied)
+    })
+    .and_then(|done| done)
+    .unwrap_or_else(|error| panic!("{error}"));
+    llrm_mir::print::module(&module).contains(" = phi ")
+}
+
+/// shrink_wrapped_saves wasm32 -Oz was 160 B against the pin's 41: `-Oz` ran no
+/// unroller, so a loop whose every trip folds to a constant stayed a loop. The
+/// pin's `-Oz` is `-O2` plus `minsize`, and the unroller's size analysis takes
+/// such a loop at every size level.
+#[test]
+fn test_a_loop_that_folds_to_a_constant_is_unrolled_at_oz_as_at_os() {
+    assert!(!constant_loop_kept_under(pipeline::Options::size()), "-Os kept the loop");
+    assert!(!constant_loop_kept_under(pipeline::Options::min_size()), "-Oz kept the loop");
+}
+
 /// A loop of a runtime trip count over a `u16` counter, through the LLVM order:
 /// whether its body is entered by a guard and leaves by its own back edge (a
 /// rotated loop), as opposed to a header that tests first.
@@ -2979,6 +3044,49 @@ b:
     };
     assert!(narrowed(pipeline::Options::standard()), "premise: -O2 narrows it");
     assert!(!narrowed(pipeline::Options::basic()), "-O1 narrowed with CVP, which the pin's O1 lacks");
+}
+
+/// The pin's O1 function pipeline ends in a plain `SimplifyCFGPass`
+/// (PassBuilderPipelines.cpp L621); the hoisting and sinking one (L832) is the
+/// -O2 pipeline's. Ours ran the -O2 one at -O1: computed_goto's `pc` increments
+/// (a GEP of one base, four different constant offsets) were sunk into a phi of
+/// the offsets, +11 B and +62 executed instructions over the pin on wasm -O1.
+#[test]
+fn test_the_o1_final_simplifycfg_does_not_sink_common_instructions() {
+    let text = "define ptr @f(i32 %v, ptr %p) {
+b0:
+  switch i32 %v, label %c [
+    i32 0, label %a
+    i32 1, label %b
+  ]
+a:
+  %x = getelementptr i8, ptr %p, i32 4
+  br label %j
+b:
+  %y = getelementptr i8, ptr %p, i32 8
+  br label %j
+c:
+  %z = getelementptr i8, ptr %p, i32 12
+  br label %j
+j:
+  %r = phi ptr [ %x, %a ], [ %y, %b ], [ %z, %c ]
+  ret ptr %r
+}
+";
+    let run = |options: pipeline::Options| {
+        let mut module = llrm_analysis::testing::parsed(text);
+        let applied = Applied { only: Some("decide@832".to_owned()), options, ..Applied::default() };
+        assert!(pipeline::slot_built(&applied, "decide@832"), "no slot decide@832");
+        let mut manager = llrm_mir::passes::PassManager::default();
+        manager.add(pipeline::Fixed::new(&applied));
+        manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned::default())).expect("the slot runs");
+        llrm_mir::print::module(&module)
+    };
+    let geps = |ir: &str| ir.matches("getelementptr").count();
+    let o2 = run(pipeline::Options::standard());
+    assert_eq!(geps(&o2), 1, "premise: -O2 sinks the three GEPs into one:\n{o2}");
+    let o1 = run(pipeline::Options::basic());
+    assert_eq!(geps(&o1), 3, "-O1 sank what the pin's plain SimplifyCFG leaves:\n{o1}");
 }
 
 /// The pin's early `SimplifyCFGPass()` (L1178) has `ConvertSwitchRangeToICmp`

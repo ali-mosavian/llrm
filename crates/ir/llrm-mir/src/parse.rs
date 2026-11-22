@@ -32,7 +32,7 @@ pub fn module(text: &str) -> Parsed<Module> {
 }
 
 /// Constructs llrm has no producer for, named so the refusal says why.
-const OUTSIDE_SUBSET: [&str; 7] = ["ppc_fp128", "half", "bfloat", "blockaddress", "indirectbr", "dso_local", "triple"];
+const OUTSIDE_SUBSET: [&str; 5] = ["ppc_fp128", "half", "bfloat", "dso_local", "triple"];
 
 struct Parser {
     tokens: Vec<(Token, usize)>,
@@ -54,10 +54,19 @@ struct Parser {
     defined_metadata: HashSet<MetadataId>,
     /// Token ranges of the attribute groups, skipped by the main pass.
     group_spans: Vec<(usize, usize)>,
+    /// The blocks of each function read so far, by label.
+    finished_blocks: HashMap<GlobalId, HashMap<Name, BlockId>>,
+    /// The labels a `blockaddress` named before its function was read, in the
+    /// order of their ids: the function's first blocks.
+    reserved_blocks: HashMap<GlobalId, Vec<(Name, usize)>>,
+    /// The blocks a `blockaddress` named, marked on their functions at the end.
+    address_taken: Vec<(GlobalId, BlockId)>,
 }
 
 /// A function being read: names to arena ids, and uses still undefined.
 struct Local {
+    /// The function being read: what a `blockaddress` of its own blocks names.
+    global: GlobalId,
     function: Function,
     values: HashMap<Name, ValueId>,
     blocks: HashMap<Name, BlockId>,
@@ -85,6 +94,9 @@ impl Parser {
             metadata: HashMap::default(),
             defined_metadata: HashSet::default(),
             group_spans: Vec::new(),
+            finished_blocks: HashMap::default(),
+            reserved_blocks: HashMap::default(),
+            address_taken: Vec::new(),
         }
     }
 
@@ -341,13 +353,32 @@ impl Parser {
                 Token::Word(word) if word == "declare" || word == "define" => self.function(word == "define")?,
                 // The use list of a global or a constant: those lists are not
                 // kept here (DEVIATE), so the directive is read and dropped.
-                Token::Word(word) if word == "uselistorder" || word == "uselistorder_bb" => {
-                    while !matches!(self.next(), Token::Punct('}') | Token::Eof) {}
-                }
+                Token::Word(word) if word == "uselistorder" || word == "uselistorder_bb" => self.skip_use_list_order(),
                 Token::MetadataName(name) => self.named_metadata(name)?,
                 Token::MetadataId(number) => self.metadata_definition(number)?,
                 Token::Comdat(name) => self.comdat_definition(name)?,
                 _ => return self.fail(format!("unexpected {} at the top level", self.describe())),
+            }
+        }
+    }
+
+    /// The rest of a module-level `uselistorder` directive, read and dropped:
+    /// its value may be a constant with braces of its own (`uselistorder
+    /// %struct.S { i32 0, i16 1 }, { 1, 0 }`), so the directive ends at the
+    /// close of the last brace group, not the first.
+    fn skip_use_list_order(&mut self) {
+        let mut depth = 0_u32;
+        loop {
+            match self.next() {
+                Token::Punct('{') => depth += 1,
+                Token::Punct('}') => {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 && !matches!(self.peek(), Token::Punct(',')) {
+                        return;
+                    }
+                }
+                Token::Eof => return,
+                _ => {}
             }
         }
     }
@@ -418,6 +449,11 @@ impl Parser {
         for (number, id) in &self.metadata {
             if !self.defined_metadata.contains(id) {
                 return Err(ParseError { line: 0, message: format!("!{number} is used but never defined") });
+            }
+        }
+        for (function, block) in std::mem::take(&mut self.address_taken) {
+            if let GlobalKind::Function(body) = &mut self.module.globals[function.0 as usize].kind {
+                body.mark_address_taken(block);
             }
         }
         self.renumber_metadata();
@@ -616,7 +652,7 @@ impl Parser {
         let Some(&aliasee) = self.globals.get(&target) else {
             return self.fail(format!("@{} is never defined", display(&target)));
         };
-        self.module.aliases.push(Alias { name: text, linkage, visibility, unnamed_addr, address_space, ty, aliasee });
+        self.module.aliases.push(Alias { name: text, linkage, visibility, unnamed_addr, address_space, ty, aliasee, offset: 0 });
         Ok(())
     }
 
@@ -730,6 +766,7 @@ impl Parser {
         function.return_attrs = return_attrs;
         function.calling_convention = calling_convention;
         let mut local = Local {
+            global: id,
             function,
             values: HashMap::default(),
             blocks: HashMap::default(),
@@ -803,6 +840,7 @@ impl Parser {
             self.body(&mut local)?;
         }
         local.function.index();
+        self.finished_blocks.insert(id, std::mem::take(&mut local.blocks));
         local.function.order_forward_uses();
         for (held, indexes, line) in std::mem::take(&mut local.use_orders) {
             local.function.sort_use_list(held, &indexes).map_err(|message| ParseError { line, message })?;
@@ -1171,10 +1209,16 @@ impl Parser {
                 }
                 ConstantKind::Null
             }
+            Token::Word(word) if word == "blockaddress" => {
+                self.at -= 1;
+                let (function, block) = self.block_address(None)?;
+                ConstantKind::Expr(ConstantExpr::BlockAddress { function, block })
+            }
             Token::Word(word) if word == "poison" => ConstantKind::Poison,
             Token::Word(word) if word == "undef" => ConstantKind::Undef,
             Token::Word(word) if word == "zeroinitializer" => ConstantKind::Zero,
             Token::Global(name) => return self.global_ref(&name, ty, line),
+            Token::Exclaim if matches!(shape, Type::Metadata) => ConstantKind::MetadataString(self.string()?),
             Token::Bytes(bytes) => {
                 let byte = self.module.context.types.int(8);
                 if shape != (Type::Array { element: byte, count: bytes.len() as u64 }) {
@@ -1436,6 +1480,9 @@ impl Parser {
                 let i64 = self.module.context.types.int(64);
                 Ok(MetadataOperand::Constant(self.module.context.int(i64, value)))
             }
+            // A typed constant (`extraData: i64 928`): a word and then an
+            // integer.
+            Token::Word(_) if matches!(self.peek_at(1), Token::Int { .. }) => self.metadata_operand(),
             Token::Word(word) => {
                 self.next();
                 let mut text = word;
@@ -1669,6 +1716,12 @@ impl Parser {
         local: &mut Local,
     ) -> Parsed<()> {
         self.expect_punct('{')?;
+        for (name, line) in self.reserved_blocks.remove(&local.global).unwrap_or_default() {
+            let id = BlockId(local.function.blocks.len() as u32);
+            local.function.blocks.push(Block::default());
+            local.blocks.insert(name, id);
+            local.pending_blocks.insert(id, line);
+        }
         let mut current: Option<BlockId> = None;
         loop {
             match self.peek().clone() {
@@ -1823,8 +1876,67 @@ impl Parser {
                 self.next();
                 self.local_use(local, name, ty, line)
             }
+            Token::Word(word) if word == "blockaddress" => {
+                let (function, block) = self.block_address(Some(local))?;
+                Ok(Operand::Constant(self.module.context.constant(Constant {
+                    ty,
+                    kind: ConstantKind::Expr(ConstantExpr::BlockAddress { function, block }),
+                })))
+            }
             _ => Ok(Operand::Constant(self.constant(ty)?)),
         }
+    }
+
+    /// `blockaddress(@function, %label)`: the function and the block. A block
+    /// of a function not yet read is given the next of its first ids, which
+    /// its body then takes for the label.
+    fn block_address(
+        &mut self,
+        local: Option<&mut Local>,
+    ) -> Parsed<(GlobalId, BlockId)> {
+        self.next();
+        self.expect_punct('(')?;
+        let line = self.line();
+        let Token::Global(name) = self.next() else {
+            self.at -= 1;
+            return self.fail(format!("expected the function's name, found {}", self.describe()));
+        };
+        let Some(&function) = self.globals.get(&name) else {
+            return self.fail_on(line, format!("@{} is not defined", display(&name)));
+        };
+        self.expect_punct(',')?;
+        let line = self.line();
+        let Token::Local(label) = self.next() else {
+            self.at -= 1;
+            return self.fail(format!("expected a block, found {}", self.describe()));
+        };
+        self.expect_punct(')')?;
+        let block = match local {
+            Some(local) if local.global == function => self.block_id(local, label),
+            _ => {
+                if let Some(blocks) = self.finished_blocks.get(&function) {
+                    match blocks.get(&label) {
+                        Some(&block) => block,
+                        None => {
+                            return self
+                                .fail_on(line, format!("block %{} is not in @{}", display(&label), display(&name)));
+                        }
+                    }
+                } else {
+                    let reserved = self.reserved_blocks.entry(function).or_default();
+                    let at = match reserved.iter().position(|(held, _)| *held == label) {
+                        Some(at) => at,
+                        None => {
+                            reserved.push((label, line));
+                            reserved.len() - 1
+                        }
+                    };
+                    BlockId(at as u32)
+                }
+            }
+        };
+        self.address_taken.push((function, block));
+        Ok((function, block))
     }
 
     fn typed_value(
@@ -1930,6 +2042,15 @@ impl Parser {
     ) -> Parsed<()> {
         let Token::Word(word) = self.next() else { unreachable!("a record") };
         self.expect_punct('(')?;
+        if word == "#dbg_label" {
+            // `#dbg_label(!label, !loc)`: no variable, no value; a label's
+            // address is debug info nothing here reads, so the record is
+            // dropped.
+            self.record_node()?;
+            self.expect_punct(',')?;
+            self.record_node()?;
+            return self.expect_punct(')');
+        }
         let what = match word.as_str() {
             "#dbg_value" if matches!(self.peek(), Token::MetadataName(name) if name == "DIArgList") => {
                 // clang's `!DIArgList(i32 %a, i32 %b)`: the values an
@@ -2116,6 +2237,19 @@ impl Parser {
                         operands.push(self.label(local)?);
                     }
                     (Opcode::Switch, void, operands)
+                }
+                "indirectbr" => {
+                    let (_, address) = self.typed_value(local)?;
+                    self.expect_punct(',')?;
+                    self.expect_punct('[')?;
+                    let mut operands = vec![address];
+                    while !self.eat_punct(']') {
+                        if operands.len() > 1 {
+                            self.expect_punct(',')?;
+                        }
+                        operands.push(self.label(local)?);
+                    }
+                    (Opcode::IndirectBr, void, operands)
                 }
                 "unreachable" => (Opcode::Unreachable, void, vec![]),
                 "resume" => {

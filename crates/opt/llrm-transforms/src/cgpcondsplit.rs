@@ -21,6 +21,16 @@
 //! from two branches, and the cone, made before the first branch in the
 //! source, stayed in front of both. gcc's `tree-ssa-sink` moves it behind the
 //! first test (sfm16_dbg -O1: 400 `fadd` against 384, +291 clocks).
+//!
+//! # Example
+//! A branch on `select %a, true, %b` whose `%b` is a dear cone only it reads
+//! becomes two branches, the cone after the first.
+//!
+//! ```text
+//!  %b = <dear cone>                     br %a, %t, %side
+//!  %c = select %a, true, %b       side: %b = <dear cone>
+//!  br %c, %t, %f                        br %b, %t, %f
+//! ```
 
 use llrm_mir::context::{ConstantKind, Context};
 use llrm_mir::edit::Position;

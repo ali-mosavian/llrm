@@ -3,7 +3,7 @@ import sys
 import unittest
 
 sys.path.insert(0, __file__.rsplit("/", 1)[0])
-from m68k_clk import parse_clocks  # noqa: E402
+from m68k_clk import gcc_is_comparable, parse_clocks  # noqa: E402
 
 TABLE = "| exe | insns | 68000 clk | 68000 clk/call |\n608\n| rc.exe | 5035 | 43404 | 14.5 |\n"
 
@@ -12,10 +12,16 @@ class ParseClocks(unittest.TestCase):
     def test_the_clocks_cell_of_the_program_row(self):
         self.assertEqual(parse_clocks(TABLE), "43404")
 
-    def test_a_bound_is_unmeasured_not_exact(self):
-        # `cycles` prints N* for a lower bound; read as exact it made fake gcc cells
-        self.assertIsNone(parse_clocks("| a.exe | 9 | 24634* | 1.0 |\n"))
+    def test_a_bound_is_kept_as_a_bound_not_exact(self):
+        # `cycles` prints N* for a lower bound; read as exact it made fake gcc cells, dropped it hid pattern_fill 68000 O1 (93048* against gcc 86440)
+        self.assertEqual(parse_clocks("| a.exe | 9 | 24634* | 1.0 |\n"), ">=24634")
+
+    def test_uncovered_code_is_unmeasured(self):
         self.assertIsNone(parse_clocks("| a.exe | 9 | 24634? | 1.0 |\n"))
+
+    def test_a_published_maximum_bound_is_kept_as_an_upper_bound(self):
+        # memmove_overlap 68020 O2 held two `muls.l` at their maximum: `<=4668` against gcc's 8548 was a blank cell
+        self.assertEqual(parse_clocks("| a.exe | 9 | <=4668 | 1.0 |\n"), "<=4668")
 
     def test_no_program_row_is_none_not_zero(self):
         self.assertIsNone(parse_clocks("| exe | insns | 68000 clk |\n"))
@@ -61,3 +67,36 @@ def test_cycles_traces_a_68020_program_on_a_68020():
 
     assert m68k_clk.cycles_env("68020", "/")["CYCLES_QEMU_CPU"] == "m68020"
     assert m68k_clk.cycles_env("68000", "/")["CYCLES_QEMU_CPU"] == "m68000"
+
+
+def test_a_program_naming_long_double_has_no_gcc_column():
+    """gcc's m68k long double is 12 bytes, ours 8: long_double_layout -Os read ours 2344 B against gcc's 438 B (+435%), a cell no compiler change can move."""
+    assert not gcc_is_comparable("long double x; int main(void) { return sizeof x; }")
+    assert gcc_is_comparable("// a long double in a comment\nint main(void) { return 0; }")
+
+
+def test_gcc_builds_the_clang_branch_of_a_program_that_tests_it(tmp_path):
+    """variadic.c -Os 68020: gcc built the `#ifndef __clang__` macro walk, 168 B, where ours builds the stdarg branch, 230 B: the card read ours +37% worse; with the same branch gcc is 266 B."""
+    import m68k_clk
+
+    source = tmp_path / "p.c"
+    source.write_text("#ifdef __clang__\nint a;\n#endif\n")
+    assert "-D__clang__" in m68k_clk.gcc_command("gcc", "/", "68020", "Os", source, "p.o", False, [])
+    plain = tmp_path / "q.c"
+    plain.write_text("int a;\n")
+    assert "-D__clang__" not in m68k_clk.gcc_command("gcc", "/", "68020", "Os", plain, "p.o", False, [])
+
+
+def test_the_bytes_of_a_cell_are_text_plus_data():
+    """A static table that is not const sits in `.data`; the text column alone gave word_compare_branches 208 B on both sides, 264 B loaded."""
+    from m68k_clk import loaded_bytes
+
+    assert loaded_bytes("   text\t   data\t    bss\t    dec\t    hex\tfilename\n    208\t     56\t      0\t    264\t    108\to.o\n") == "264"
+
+
+def test_gcc_is_hosted_like_ours():
+    """m32_word_vectors -O1 68000: ours (hosted since #10561) called the stub memset for its fused fill loop while gcc, built `-ffreestanding`, inlined the fills and never referenced the stub: the pair compared a libc call with an inline store."""
+    import m68k_clk
+
+    command = m68k_clk.gcc_command("gcc", "/", "68000", "O1", "p.c", "p.o", True)
+    assert "-ffreestanding" not in command, command

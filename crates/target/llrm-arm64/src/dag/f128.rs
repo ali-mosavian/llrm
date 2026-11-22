@@ -11,11 +11,13 @@
 //! `softenSetCCOperands`: the routine named by `RTLIB`, its result an integer
 //! that a compare reads against zero.
 //!
-//! `SELECT` is the pin's `F128CSEL` block split (`emit.rs`), and `FNEG`, `FABS` and `FCOPYSIGN` its sign-byte rewrite
-//! through a stack slot (`ExpandFNEG`, in the shared legalizer).
+//! `SELECT` is the pin's `F128CSEL` block split (`emit.rs`), and `FNEG`, `FABS`
+//! and `FCOPYSIGN` its sign-byte rewrite through a stack slot (`ExpandFNEG`, in
+//! the shared legalizer).
 //!
-//! DEVIATE SD534: `f128` `FSQRT`, `FMA`, `FRINT`, `FSIN`, `FCOS` and the other libm routines are not translated: the
-//! node is refused as a libcall the table does not name. Exit: B3.
+//! DEVIATE SD534: `f128` `FSQRT`, `FMA`, `FSIN`, `FCOS` and the other libm
+//! routines are not translated: the node is refused as a libcall the table does
+//! not name. Exit: B3.
 //!
 //! # See also
 //! `AArch64ISelLowering.cpp`: `LowerF128Call`, `LowerFP_EXTEND`,
@@ -53,14 +55,23 @@ pub fn convert(
     call: &mut dyn FnMut(&mut SelectionDAG, &'static str, &[SDValue], EVT) -> Option<SDValue>,
 ) -> Option<Option<SDValue>> {
     let quad = EVT::Simple(MVT::F128);
-    let op = dag.opcode(node);
+    // A constrained node reads its value behind the chain, and
+    // `StrictFSetCC(S)` is not a conversion.
+    let written = dag.opcode(node);
+    let op = if matches!(written, ISD::StrictFSetCC | ISD::StrictFSetCCS) {
+        written
+    } else {
+        written.non_strict().unwrap_or(written)
+    };
+    let skip = usize::from(op != written);
     if !matches!(
         op,
         ISD::SIntToFp | ISD::UIntToFp | ISD::FpToSInt | ISD::FpToUInt | ISD::FpExtend | ISD::FpRound
     ) {
         return None;
     }
-    let (to, from) = (dag.value_type(node), dag.value_type(dag.operand(node, 0)));
+    let value = dag.operand(node, skip);
+    let (to, from) = (dag.value_type(node), dag.value_type(value));
     let name = match op {
         ISD::SIntToFp | ISD::UIntToFp if to == quad => {
             let from = scalar(from)?;
@@ -69,7 +80,7 @@ pub fn convert(
             } else {
                 Libcall::UIntToFp(from, MVT::F128)
             };
-            return Some(libcalls::name(kind).and_then(|name| call(dag, name, &[dag.operand(node, 0)], quad)));
+            return Some(libcalls::name(kind).and_then(|name| call(dag, name, &[value], quad)));
         }
         ISD::FpToSInt | ISD::FpToUInt if from == quad => {
             // a result narrower than a word is the word's low bits
@@ -80,7 +91,7 @@ pub fn convert(
                 Libcall::FpToUInt(MVT::F128, word)
             };
             let Some(name) = libcalls::name(kind) else { return Some(None) };
-            let Some(result) = call(dag, name, &[dag.operand(node, 0)], EVT::Simple(word)) else { return Some(None) };
+            let Some(result) = call(dag, name, &[value], EVT::Simple(word)) else { return Some(None) };
             return Some(Some(if EVT::Simple(word) == to {
                 result
             } else {
@@ -91,7 +102,7 @@ pub fn convert(
         ISD::FpRound if from == quad => Libcall::FpRound(MVT::F128, scalar(to)?),
         _ => return None,
     };
-    Some(libcalls::name(name).and_then(|name| call(dag, name, &[dag.operand(node, 0)], to)))
+    Some(libcalls::name(name).and_then(|name| call(dag, name, &[value], to)))
 }
 
 /// What `softenSetCCOperands` makes of an `f128` compare: an integer compare
@@ -162,6 +173,10 @@ pub fn compare(
     let op = dag.opcode(node);
     let (lhs, rhs, code) = match op {
         ISD::SetCC => (dag.operand(node, 0), dag.operand(node, 1), cond_of(dag, dag.operand(node, 2))),
+        // The chain first; the caller joins the value with the calls' chain.
+        ISD::StrictFSetCC | ISD::StrictFSetCCS => {
+            (dag.operand(node, 1), dag.operand(node, 2), cond_of(dag, dag.operand(node, 3)))
+        }
         ISD::BrCC => (dag.operand(node, 2), dag.operand(node, 3), cond_of(dag, dag.operand(node, 1))),
         ISD::SelectCC => (dag.operand(node, 0), dag.operand(node, 1), cond_of(dag, dag.operand(node, 4))),
         _ => return None,
@@ -170,12 +185,13 @@ pub fn compare(
         return None;
     }
     let vt = dag.value_type(node);
-    let result_vt = if op == ISD::SetCC { vt } else { EVT::I32 };
+    let value_only = matches!(op, ISD::SetCC | ISD::StrictFSetCC | ISD::StrictFSetCCS);
+    let result_vt = if value_only { vt } else { EVT::I32 };
     let Some(softened) = soften_compare(dag, lhs, rhs, code, result_vt, call) else { return Some(None) };
     let (new_lhs, new_rhs, new_code) = match softened {
         Softened::Compare { lhs, rhs, code } => (lhs, rhs, code),
         Softened::Boolean(boolean) => {
-            if op == ISD::SetCC {
+            if value_only {
                 return Some(Some(boolean));
             }
             let zero = dag.get_constant(0, dag.value_type(boolean));
@@ -184,7 +200,7 @@ pub fn compare(
     };
     let cc = dag.get_cond_code(new_code);
     Some(Some(match op {
-        ISD::SetCC => dag.get_setcc(vt, new_lhs, new_rhs, new_code),
+        ISD::SetCC | ISD::StrictFSetCC | ISD::StrictFSetCCS => dag.get_setcc(vt, new_lhs, new_rhs, new_code),
         ISD::BrCC => {
             let (chain, dest) = (dag.operand(node, 0), dag.operand(node, 4));
             dag.get_node(ISD::BrCC, EVT::OTHER, &[chain, cc, new_lhs, new_rhs, dest])

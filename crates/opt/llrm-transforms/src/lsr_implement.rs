@@ -125,6 +125,7 @@ pub fn split_phi_edges(
                         let _ = function.move_block_after(bridge, before);
                     }
                 }
+                llrm_support::debug!("lsr-split", "critical edge {from:?} -> {parent:?} split for phi {phi:?} (bridge {bridge:?})");
                 split = true;
             }
         }
@@ -565,7 +566,7 @@ impl Implement<'_, '_> {
                 // part of the address. The operands so far are flushed first to
                 // keep the expander from hoisting address modes, unless the
                 // mode is not folded.
-                if !ops.is_empty() && lu.kind == Kind::Address && is_am_completely_folded(self.tti, lu, f) {
+                if !ops.is_empty() && lu.kind == Kind::Address && is_am_completely_folded(self.tti, self.se, lu, f) {
                     let sum = self.add(&ops);
                     let full = self.expand_code_for(sum, None);
                     let u = self.unknown(full);

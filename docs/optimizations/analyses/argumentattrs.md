@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-analysis/src/argumentattrs.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-analysis/src/argumentattrs.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-analysis/src/argumentattrs.rs sha256:0b8338422968c0aa94e72883587d96c42784d8732c0712d66e77979ba5b7b2d5 -->
+<!-- src: crates/opt/llrm-analysis/src/argumentattrs.rs sha256:b409b06623ac5847730fe931aa0857a14cb35fc5457e6bd3914ed8d24ff0883f -->
 
 # argumentattrs
 
@@ -33,8 +33,8 @@ so only `nonnull` is propagated.
 DEVIATE A1: `nofree_obj` has no MIR spelling, so only `nofree` is looked
 for. DEVIATE A2: only `captures(none)` can be stated (see
 [`crate::capturetracking`](capturetracking.md)), so a parameter that would be
-`captures(ret: ...)` stays unstated. Not translated yet:
-`returned`; `inferInitializes` is
+`captures(ret: ...)` stays unstated. `returned` is
+`add_argument_returned_attrs`; `inferInitializes` is
 [`crate::initializes`](initializes.md).
 
 ## Example

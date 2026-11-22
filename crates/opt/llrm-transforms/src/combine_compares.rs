@@ -250,6 +250,9 @@ pub fn visit_icmp(
     if let Some(r) = fold_sign_bit_test(c, inst, pred, op0, op1) {
         return r;
     }
+    if let Some(r) = crate::combine_icmp_bitcast::fold_icmp_bit_cast(c, inst, pred, op0, op1) {
+        return r;
+    }
     if let Some(r) = fold_icmp_with_ext_of_ext(c, inst, pred, op0, op1) {
         return r;
     }

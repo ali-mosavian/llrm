@@ -172,6 +172,11 @@ pub fn unroll_loop_blocks(
     if options.count == 0 || options.max_trip_count == 0 || options.count > options.max_trip_count {
         return Err("an unroll's count is at most the maximum trip count (D2)".to_owned());
     }
+    // Loops with indirectbr cannot be cloned; and a header whose address is
+    // taken cannot be unrolled (LoopUnroll.cpp:945-955).
+    if body.iter().any(|&at| function.ends_in_indirect_branch(at)) || function.has_address_taken(header) {
+        return Ok(Unrolled::Unmodified);
+    }
     // `CompletelyUnroll`: the copies are all the iterations; else the last
     // latch keeps the back edge and the header's phis stay.
     let complete = options.count == options.max_trip_count;
@@ -268,20 +273,21 @@ pub fn unroll_loop_blocks(
             for (was, now) in map {
                 last_value.insert(was, now);
             }
-            // The exits take what this copy computed.
+            // The exits take what this copy computed: an arm for each edge
+            // the block had to the exit, as a phi has one per edge (a switch
+            // with two cases to the exit has two).
             for to in function.successors(at) {
                 if inside(to) {
                     continue;
                 }
                 for phi in edges::phis(function, to) {
-                    let Some(&(value, _)) = arms(function, phi).iter().find(|&&(_, source)| source == at) else {
-                        continue;
-                    };
-                    let value = match value {
-                        Operand::Value(one) => last_value.get(&one).copied().unwrap_or(value),
-                        other => other,
-                    };
-                    exit_arms.get_or_insert_with(phi, Vec::new).push((value, new));
+                    for (value, _) in arms(function, phi).into_iter().filter(|&(_, source)| source == at) {
+                        let value = match value {
+                            Operand::Value(one) => last_value.get(&one).copied().unwrap_or(value),
+                            other => other,
+                        };
+                        exit_arms.get_or_insert_with(phi, Vec::new).push((value, new));
+                    }
                 }
             }
             if at == header {

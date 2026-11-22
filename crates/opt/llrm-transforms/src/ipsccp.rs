@@ -62,10 +62,9 @@
 //!    other memory with `memory::unsplit`
 //!    ([L195](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/IPO/SCCP.cpp#L195));
 //!    MIR has no errno location.
-//! 6. A dead block is deleted even when its address is taken (`hasAddressTaken`
-//!    at
-//!    [L256](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/IPO/SCCP.cpp#L256)):
-//!    MIR has no `blockaddress`.
+//! 6. A dead block whose address is taken stays, holding an `unreachable`
+//!    (`hasAddressTaken` at
+//!    [L256](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/IPO/SCCP.cpp#L256)).
 //! 7. `getMRVFunctionsTracked` is visited in module order (a `SmallPtrSet` in
 //!    the pin); which returns are zapped does not depend on it.
 //! 8. What [`run_ipsccp`] returns is every body it edited; the pin's
@@ -368,6 +367,9 @@ fn run_on_module(
             made |= rewrite.remove_non_feasible_edges(function, block, &mut new_unreachable);
         }
         for &dead in &blocks_to_erase {
+            if function.has_address_taken(dead) {
+                continue;
+            }
             rewrite.delete_block(function, dead);
         }
         remove_ssa_copies(function, info);

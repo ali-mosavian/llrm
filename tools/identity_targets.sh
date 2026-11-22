@@ -16,16 +16,19 @@ esac
 python3 "$root/tools/llrmbin.py" sides "$base" "$new" $same --target "$target" || exit 2  # prints cc + llc md5 per side; refuses one llc
 [ $# -gt 0 ] || set -- "$root"/tests/run/c/*.c
 out=$(mktemp -d); trap 'rm -rf "$out"' EXIT
-same=0; diff=0; refused=0; status=0
+same=0; diff=0; refused=0; status=0; hung=0
+# A compile that never ends (z80 -O3 known_loads_walks, 2.5 h) is no result: it ends at IDENTITY_TIMEOUT s and is counted apart.
+limit=${IDENTITY_TIMEOUT:-120}
 for f in "$@"; do
     [ -f "$f" ] || continue
-    LLRM_CC_TARGET=$target "$base" -c "-$level" "$f" -o "$out/a" > /dev/null 2>&1; a=$?
-    LLRM_CC_TARGET=$target "$new" -c "-$level" "$f" -o "$out/b" > /dev/null 2>&1; b=$?
-    if [ $a != $b ]; then status=$((status+1)); echo "STATUS $f"
+    LLRM_CC_TARGET=$target timeout "$limit" "$base" -c "-$level" "$f" -o "$out/a" > /dev/null 2>&1; a=$?
+    LLRM_CC_TARGET=$target timeout "$limit" "$new" -c "-$level" "$f" -o "$out/b" > /dev/null 2>&1; b=$?
+    if [ $a = 124 ] || [ $b = 124 ]; then hung=$((hung+1)); echo "HUNG $f (base $a, new $b)"
+    elif [ $a != $b ]; then status=$((status+1)); echo "STATUS $f"
     elif [ $a != 0 ]; then refused=$((refused+1))
     elif cmp -s "$out/a" "$out/b"; then same=$((same+1))
     else diff=$((diff+1)); echo "DIFF $f"; fi
     rm -f "$out/a" "$out/b"
 done
-echo "$target $level same=$same diff=$diff refused=$refused status=$status"
-[ $((same + diff)) -gt 0 ] && [ $diff = 0 ] && [ $status = 0 ]
+echo "$target $level same=$same diff=$diff refused=$refused status=$status hung=$hung"
+[ $((same + diff)) -gt 0 ] && [ $diff = 0 ] && [ $status = 0 ] && [ $hung = 0 ]

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/sccpsolver.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/sccpsolver.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/sccpsolver.rs sha256:2917c3b5bbb0158074ccdb00a28663adc1201412ea2f12649c5140be67ccde5a -->
+<!-- src: crates/opt/llrm-transforms/src/sccpsolver.rs sha256:19b9cf33240e2051932c433a1823128088be9e166df7db922b6d0e31a6724e87 -->
 
 # sccpsolver
 
@@ -67,8 +67,7 @@ turns signed operations that cannot be negative into unsigned ones, adds
    operands are known). Exit: the ConstantFolding translation's FP fold.
 5. No `DomTreeUpdater`: the manager recomputes dominators when the CFG
    changed.
-6. No `!implicit.ref`, `clang.arc.attachedcall` bundles or `indirectbr`: MIR
-   has none.
+6. No `!implicit.ref` or `clang.arc.attachedcall` bundles: MIR has none.
 7. A phi has one input per edge in MIR, so a block reached twice by one
    predecessor is read twice (`removePredecessor` per edge, as ADCE).
 8. `ValueId` and `InstId` are local to a function, so the state keyed by

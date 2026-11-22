@@ -88,3 +88,33 @@ clang = subprocess.run([os.path.join(os.path.dirname(OPT), "clang"), "--version"
 version += " " + (clang.split("llvm-project.git ")[1].rstrip(")")[:12] if "llvm-project.git " in clang else "")
 open(os.path.join(HERE, "tti_oracle.txt"), "w").write(f"# {version}; python3 tti_oracle.py\n" + "\n".join(out) + "\n")
 print(len(out), "rows", version)
+
+# Vector rows (x86-64: SSE2): the integer ops and extends/truncates of 2-16 lanes of 8-64 bits, as
+# `x86-64 kind op.vNiB` and `x86-64 kind cast.vNiB.vNiB`, in tti_oracle_vector.txt (tti_tests.rs reads it).
+VBITS, VCOUNTS = [8, 16, 32, 64], [2, 4, 8, 16]
+VOPS = ["add", "sub", "mul", "and", "or", "xor"]  # the shifts take a constant or uniform count: not priced here
+vtys = [(b, c) for b in VBITS for c in VCOUNTS]
+vlines, vparams = [], []
+for b, c in vtys:
+    t = f"<{c} x i{b}>"
+    for op in VOPS:
+        vlines.append(f"%{op}.v{c}i{b} = {op} {t} %a.v{c}i{b}, %b.v{c}i{b}")
+    vparams += [f"{t} %a.v{c}i{b}", f"{t} %b.v{c}i{b}"]
+for (b1, c1), (b2, c2) in itertools.product(vtys, vtys):
+    if c1 != c2 or b1 == b2:
+        continue
+    for op in (("zext", "sext") if b1 < b2 else ("trunc",)):
+        vlines.append(f"%{op}.v{c1}i{b1}.v{c2}i{b2} = {op} <{c1} x i{b1}> %a.v{c1}i{b1} to <{c2} x i{b2}>")
+triple, datalayout, _ = TARGETS[1]
+vir = f'target datalayout = "{datalayout}"\ntarget triple = "{triple}"\ndefine void @f({", ".join(vparams)}) {{\n' + "\n".join("  " + l for l in vlines) + "\n  ret void\n}\n"
+vfile = os.path.join(tempfile.mkdtemp(), "vector.ll")
+open(vfile, "w").write(vir)
+vout = []
+for kind in KINDS:
+    r = subprocess.run([OPT, "-passes=print<cost-model>", "-disable-output", f"-mtriple={triple}", "-mcpu=x86-64", f"-cost-kind={kind}", vfile], capture_output=True, text=True)
+    for l in r.stderr.splitlines():
+        m = re.match(r"Cost Model: Found an estimated cost of (\d+|Invalid) for instruction:\s+%(\S+) = ", l)
+        if m:
+            vout.append(f"x86-64 {kind} {m.group(2)} {m.group(1)}")
+open(os.path.join(HERE, "tti_oracle_vector.txt"), "w").write(f"# {version}; python3 tti_oracle.py\n" + "\n".join(vout) + "\n")
+print(len(vout), "vector rows")

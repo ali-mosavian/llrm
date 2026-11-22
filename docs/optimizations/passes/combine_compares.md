@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_compares.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_compares.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_compares.rs sha256:88b21a66e032dc5f1e264ec0d1e91e652cb32204723014aa91fd1f6e1970134d -->
+<!-- src: crates/opt/llrm-transforms/src/combine_compares.rs sha256:e95385ec33a9b8c828ceb3954d1855b7989be4e9733dbfc17b61c6161e8a8b3b -->
 
 # combine_compares
 
@@ -22,7 +22,7 @@ stays LLVM's. The owed steps, with their exits:
 `foldICmpWithConstant`, `foldICmpUsingBoolRange`,
 `foldIsMultipleOfAPowerOfTwo`, `foldICmpBinOp`, `foldICmpInstWithConstant`,
 `foldSignBitTest`, `foldICmpInstWithConstantNotInt`,
-`foldICmpCommutative`, `foldCmpSelectOfConstants` and the select pair fold,
+`foldICmpCommutative`, `foldCmpSelectOfConstants`,
 the zero folds `foldIRemByPowerOfTwoToBitTest` and `stripNullTest`, and the
 `dyn_castNegVal` select fold.
 

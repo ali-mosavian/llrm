@@ -22,7 +22,7 @@ features = ["X87", "CX8"]
 [cpu.x64]
 features = ["X87", "CX8", "CMOV", "SSE1", "SSE2"]
 # The 128-bit integer vectors of SSE2: loads, stores and moves (x86 vectors plan, PR-A).
-live_types = ["v16i8", "v8i16", "v4i32", "v2i64"]
+live_types = ["v16i8", "v8i16", "v4i32", "v2i64", "v4f32", "v2f64"]
 
 [cpu.x64.atom]
 "Subtarget->is64Bit()" = true

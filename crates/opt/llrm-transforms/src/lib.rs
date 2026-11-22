@@ -74,8 +74,11 @@
 //! module's own header.
 
 pub mod adce;
+#[cfg(test)]
+mod addresstaken_tests;
 pub mod aggressive_instcombine;
 pub mod algebraic;
+pub mod alwaysinline;
 pub mod alwaysundef;
 pub mod argpromotion;
 #[cfg(test)]
@@ -103,6 +106,9 @@ mod cgpmemalign_tests;
 pub mod cgpretdup;
 pub mod cgpselect;
 pub mod cgpsinkops;
+pub mod cgpsplitgep;
+#[cfg(test)]
+mod cgpsplitgep_tests;
 pub mod cgpswitch;
 pub mod cmpopt;
 #[cfg(test)]
@@ -153,6 +159,7 @@ pub mod combine_gep_index;
 pub mod combine_gep_merge;
 pub mod combine_gep_phi;
 pub mod combine_icmp_binop;
+pub mod combine_icmp_bitcast;
 pub mod combine_icmp_const;
 pub mod combine_icmp_equality;
 pub mod combine_icmp_intrinsic;
@@ -178,6 +185,7 @@ pub mod combine_pass;
 pub mod combine_phi;
 pub mod combine_phi_args;
 pub mod combine_ptrcast;
+pub mod combine_reassociate_for_uses;
 pub mod combine_replace_in;
 pub mod combine_returned_arg;
 pub mod combine_select;
@@ -195,6 +203,7 @@ pub mod combine_select_op_op;
 pub mod combine_select_spf;
 pub mod combine_select_tail;
 pub mod combine_select_to_cmp;
+pub mod combine_select_to_phi;
 #[cfg(test)]
 mod combine_semantics_tests;
 pub mod combine_shared;
@@ -208,6 +217,7 @@ pub mod combine_sub;
 pub mod combine_switch;
 pub mod combine_visit_select;
 pub mod combine_xor;
+pub mod combine_xor_icmps;
 pub mod condstores;
 pub mod condtocond;
 pub mod congruentiv;
@@ -278,6 +288,9 @@ pub mod hardwareloops;
 pub mod hoistcommon;
 pub mod homes;
 pub mod icmpchain;
+pub mod indirectbrexpand;
+#[cfg(test)]
+mod indirectbrexpand_tests;
 pub mod indvars;
 pub mod inferalignment;
 pub mod inferfunctionattrs;
@@ -295,6 +308,7 @@ pub mod instsimplify;
 pub mod instworklist;
 #[cfg(test)]
 mod instworklist_tests;
+pub mod interleavedaccess_pass;
 pub mod internalize;
 #[cfg(test)]
 mod internalize_tests;
@@ -329,6 +343,7 @@ pub mod looppeel;
 pub mod looprotate;
 pub mod loopsimplify;
 pub mod loopsimplifycfg;
+pub mod loopsplit;
 pub mod looptermfold;
 pub mod loopunroll;
 pub mod loopunrollandjam;
@@ -340,6 +355,7 @@ pub mod loopvectorizeaccumulator;
 pub mod loopvectorizeearlyexit;
 pub mod loopvectorizeinterleave;
 pub mod loopvectorizelegality;
+pub mod loopvectorizenarrow;
 pub mod loopvectorizeplan;
 pub mod loopvectorizeskeleton;
 pub mod loopversioning;
@@ -381,6 +397,7 @@ pub mod mergestores;
 mod mirror;
 pub mod mldstmotion;
 pub mod narrowcycle;
+pub mod mosindexiv;
 pub mod narrowiv;
 pub mod narrowrange;
 pub mod narrowspace;
@@ -423,10 +440,8 @@ pub mod ree;
 pub mod remidiom;
 pub mod rpoattrs;
 pub mod runtimechecks;
-pub mod splitpaths;
 pub mod sccp;
 pub mod sccpsolver;
-pub mod interleavedaccess_pass;
 pub mod selectoptimize;
 pub mod settled;
 pub mod simpleloopunswitch;
@@ -439,14 +454,16 @@ pub mod slpcompares;
 pub mod slpgather;
 pub mod slpinsert;
 pub mod slpphi;
-pub mod slpschedule;
 pub mod slpreduction;
+pub mod slpschedule;
+pub mod slpseeds;
 pub mod slptree;
 pub mod slpvectorize;
 pub mod spares;
 pub mod speculate;
 pub mod spill;
 pub mod splitcopy;
+pub mod splitpaths;
 pub mod splitstore;
 pub mod sroa;
 pub mod switcharms;
@@ -479,11 +496,15 @@ pub mod undefpred;
 pub mod unrollbound;
 pub mod uremloop;
 pub mod vastart;
+pub mod vectorlower;
 pub mod vncoercion;
 #[cfg(test)]
 mod vncoercion_tests;
 pub mod walk;
 pub mod widen;
+pub mod widenreturns;
+#[cfg(test)]
+mod widenreturns_tests;
 pub mod window;
 pub mod zeromerge;
 // Not ported, meaning nothing where a value is whole: `wholephis` and

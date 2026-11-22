@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 """Executed sweep of tests/run/c: every program compiled for TARGET, run, its output compared with the expected one.
 
-    runsweep.py --dist DIR --target x86_32-linux [--levels O1,O2] [--jobs N] [--only a,b]
+    runsweep.py --dist DIR --target x86_32-linux [--levels O1,O2] [--jobs N] [--only a,b] [--clocks OUT.json]
+
+`--clocks OUT.json` also counts the instructions each ok cell retires in user mode (`perf stat -e instructions:u`), less those of an
+empty `main` built and linked the same way, and writes `{"empty": N, "n": {"program@level": instructions}}`; `tools/clockpair.py BASE.json NEW.json`
+compares two. Native x86 targets only (the count of an emulated run is the emulator's).
 
 DIR holds `llrm-cc` and the target's `llrm-llc`. A cell is one program at one level. Each is reported as one of:
 ok, WRONG (ran, output differs), TIMEOUT, COMPILE-FAIL, UNLINKED (compiled, the host linker refused it), NA (`corpus_targets.applies`
@@ -16,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import collections
+import json
 import os
 import subprocess
 import sys
@@ -67,6 +72,27 @@ def flags_of(source: str, level: str, family: str) -> list[str]:
     return [level, *kept, *corpus_targets.flags_for(family, source)]
 
 
+CLOCKS: dict[str, int] = {}  # "program@level" -> instructions retired, filled by cell() when --clocks is given
+MEASURE = False
+
+
+def retired(stderr: str) -> int | None:
+    """The `instructions:u` count of a `perf stat -x,` report, None where perf printed none."""
+    for line in stderr.splitlines():
+        fields = line.split(",")
+        if len(fields) > 2 and fields[2].startswith("instructions") and fields[0].isdigit():
+            return int(fields[0])
+    return None
+
+
+def count(launcher: tuple[str, ...], exe: Path, run_dir: Path, stdin: bytes) -> int | None:
+    done = subprocess.run(
+        ["perf", "stat", "-x,", "-e", "instructions:u", "--", *launcher, str(exe)],
+        cwd=run_dir, input=stdin, capture_output=True, timeout=60,
+    )
+    return retired(done.stderr.decode(errors="replace"))
+
+
 def classify(produced: bytes, expected: bytes) -> str:
     """Line ends are compared as LF: the DOS-shaped programs write CRLF, their `.out` files hold LF."""
     return "ok" if produced.replace(b"\r\n", b"\n") == expected.replace(b"\r\n", b"\n") else "WRONG"
@@ -107,7 +133,12 @@ def cell(program: Path, level: str, target: str, dist: Path, shim: Path, posix: 
         done = subprocess.run([*runner.launcher, str(work / "x")], cwd=run_dir, input=stdin, capture_output=True, timeout=10)
     except subprocess.TimeoutExpired:
         return program.name, level, "TIMEOUT"
-    return program.name, level, classify(done.stdout, expected.read_bytes())
+    status = classify(done.stdout, expected.read_bytes())
+    if MEASURE and status == "ok" and not runner.launcher:
+        measured = count(runner.launcher, work / "x", run_dir, stdin)
+        if measured is not None:
+            CLOCKS[f"{program.name}@{level}"] = measured
+    return program.name, level, status
 
 
 def host_objects(target: str) -> tuple[Path, Path | None]:
@@ -120,6 +151,15 @@ def host_objects(target: str) -> tuple[Path, Path | None]:
     posix = work / "os.o"
     built = subprocess.run([*runner.driver[:-1], *runner.host_flags, "-I", str(POSIX), "-c", str(POSIX / "os.c"), "-o", str(posix)], capture_output=True)
     return shim, posix if built.returncode == 0 else None
+
+
+def empty_count(target: str, shim: Path) -> int | None:
+    """Instructions of a `main` that returns 0, linked as the programs are: the runtime's start-up, which every count includes."""
+    runner = RUNNERS[target]
+    work = Path(tempfile.mkdtemp(prefix="runsweep-empty-"))
+    (work / "e.c").write_text("int main(void) { return 0; }\n")
+    built = subprocess.run([*runner.driver, str(work / "e.c"), str(shim), "-o", str(work / "x"), "-lm"], capture_output=True)
+    return None if built.returncode else count((), work / "x", work, b"")
 
 
 def sweep(dist: Path, target: str, levels: list[str], jobs: int, only: set[str]) -> list[tuple[str, str, str]]:
@@ -148,9 +188,17 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--levels", default="O1,O2")
     parser.add_argument("--jobs", type=int, default=8)
     parser.add_argument("--only", default="")
+    parser.add_argument("--clocks", type=Path, help="write the instructions retired per ok cell here")
     args = parser.parse_args(argv)
+    global MEASURE
+    MEASURE = args.clocks is not None
     only = {name for name in args.only.split(",") if name}
-    return report(sweep(args.dist, args.target, [f"-{level.lstrip('-')}" for level in args.levels.split(",")], args.jobs, only))
+    status = report(sweep(args.dist, args.target, [f"-{level.lstrip('-')}" for level in args.levels.split(",")], args.jobs, only))
+    if args.clocks is not None:
+        empty = empty_count(args.target, host_objects(args.target)[0]) or 0
+        args.clocks.write_text(json.dumps({"empty": empty, "n": {k: max(v - empty, 0) for k, v in sorted(CLOCKS.items())}}, indent=0))
+        print(f"{len(CLOCKS)} cells counted, empty main {empty}")
+    return status
 
 
 if __name__ == "__main__":

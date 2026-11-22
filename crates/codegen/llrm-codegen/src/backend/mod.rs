@@ -182,6 +182,7 @@ pub mod frameobjects;
 pub mod funnel;
 pub mod genericdriver;
 pub mod genericsched;
+pub mod blockaddress;
 pub mod globals;
 pub mod isel;
 pub mod liverows;

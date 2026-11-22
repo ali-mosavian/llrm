@@ -399,6 +399,12 @@ pub fn encode(inst: &Inst) -> Result<Encoded, Error> {
             0x1E20_4000 | size.field() << 22 | opcode << 15 | vreg(*rn)? << 5 | vreg(*rd)?
         }
         Inst::VectorMov { rd, rn } => 0x4EA0_1C00 | vreg(*rn)? << 16 | vreg(*rn)? << 5 | vreg(*rd)?,
+        Inst::FpBinary { op: FpBinary::Abd, size, rd, rn, rm } => {
+            // `fabd` is an Advanced SIMD scalar three-same form: its own word
+            // (the half form is the FP16 one).
+            let base = if *size == FpSize::H { 0x7EC0_1400 } else { 0x7EA0_D400 | size.field() << 22 };
+            base | vreg(*rm)? << 16 | vreg(*rn)? << 5 | vreg(*rd)?
+        }
         Inst::FpBinary { op, size, rd, rn, rm } => {
             let opcode = match op {
                 FpBinary::Mul => 0b0000,
@@ -410,6 +416,7 @@ pub fn encode(inst: &Inst) -> Result<Encoded, Error> {
                 FpBinary::MaxNm => 0b0110,
                 FpBinary::MinNm => 0b0111,
                 FpBinary::Nmul => 0b1000,
+                FpBinary::Abd => unreachable!("encoded above"),
             };
             0x1E20_0800 | size.field() << 22 | vreg(*rm)? << 16 | opcode << 12 | vreg(*rn)? << 5 | vreg(*rd)?
         }
@@ -435,6 +442,14 @@ pub fn encode(inst: &Inst) -> Result<Encoded, Error> {
                 None => (0, 0b01000),
             };
             0x1E20_2000 | size.field() << 22 | second << 16 | vreg(*rn)? << 5 | u32::from(*signalling) << 4 | zero
+        }
+        Inst::FpCondCompare { size, rn, rm, nzcv, cond } => {
+            0x1E20_0400
+                | size.field() << 22
+                | vreg(*rm)? << 16
+                | cond.field() << 12
+                | vreg(*rn)? << 5
+                | field("nzcv", i64::from(*nzcv), 4, false)?
         }
         Inst::FpSelect { size, rd, rn, rm, cond } => {
             0x1E20_0C00 | size.field() << 22 | vreg(*rm)? << 16 | cond.field() << 12 | vreg(*rn)? << 5 | vreg(*rd)?
@@ -633,7 +648,7 @@ pub fn encode(inst: &Inst) -> Result<Encoded, Error> {
         // pairwise class: `size` 3 and `Q` clear.
         Inst::VectorReduce { op, lanes, rd, rn } => {
             let (u, opcode) = op.fields();
-            let base = if *op == VectorReduce::Addp { 0x5E30_0800 } else { 0x4E30_0800 };
+            let base = if *op == VectorReduce::Addp { 0x5E30_0800 } else { 0x0E30_0800 | lanes.q() << 30 };
             base | u << 29 | lanes.size() << 22 | opcode << 12 | vreg(*rn)? << 5 | vreg(*rd)?
         }
         Inst::VectorDupLane { lanes, rd, rn, index } => {

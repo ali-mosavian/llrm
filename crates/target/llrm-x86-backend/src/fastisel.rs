@@ -18,7 +18,7 @@
 //!   greedy-anyisa, exit 2026-11-30.
 //!
 //! # See also
-//! `docs`: `/home/alim/scratch/handoff/o0-fastisel-poc-plan-2026-11-06.md`.
+//! The o0-fastisel-poc-plan handoff note (2026-11-06).
 
 use std::cell::Cell;
 

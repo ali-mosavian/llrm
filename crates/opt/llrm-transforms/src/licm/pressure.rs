@@ -151,6 +151,20 @@ pub fn counts_type(
     }
 }
 
+/// Whether a value of type `ty` is one word or less: an integer of 16 bits at
+/// most (and wider than a flag) or a pointer, which the target holds in one
+/// register where a wider one is several and dear to compute.
+pub fn is_one_register_value(
+    unit: &passes::Unit,
+    ty: llrm_mir::types::TypeId,
+) -> bool {
+    match unit.context.types.get(ty) {
+        Type::Int(bits) => (2..=16).contains(bits),
+        Type::Pointer(_) => true,
+        _ => false,
+    }
+}
+
 /// Whether a value of type `ty` takes a register of the float file.
 pub fn counts_float_type(
     unit: &passes::Unit,

@@ -555,6 +555,11 @@ pub fn form_dedicated_exit_blocks(
             let in_loop_predecessors: Vec<BlockId> =
                 preds.iter().copied().filter(|pred| in_loop.contains(pred)).collect();
             assert!(!in_loop_predecessors.is_empty(), "Must have *some* loop predecessor!");
+            // We cannot rewrite exiting edges from an indirectbr
+            // (LoopUtils.cpp:76).
+            if in_loop_predecessors.iter().any(|&pred| function.ends_in_indirect_branch(pred)) {
+                return false;
+            }
             // Nothing to do if this is already a dedicated exit.
             if in_loop_predecessors.len() == preds.len() {
                 continue;

@@ -9,7 +9,7 @@ use std::fmt::Write;
 pub(crate) const SCOPE_DECL_KIND: &str = "noalias.scope.decl";
 pub(crate) const SCOPE_DECL_NAME: &str = "llvm.experimental.noalias.scope.decl";
 
-use crate::context::{Constant, ConstantExpr, ConstantId, ConstantKind, Context, signed};
+use crate::context::{Constant, ConstantExpr, ConstantId, ConstantKind, Context, GlobalId, signed};
 use crate::hash::HashMap;
 use crate::lexer::is_name;
 use crate::module::{
@@ -21,9 +21,37 @@ use crate::opcode::{
 };
 use crate::types::{FloatKind, Type, TypeId, struct_text};
 
+/// Each function with a body, by name, as [`module`] prints it.
+pub fn functions(module: &Module) -> Vec<(String, String)> {
+    let printer = Printer {
+        context: &module.context,
+        globals: global_names(module),
+        comdats: comdat_markers(module),
+        module: Some(module),
+        labels: Default::default(),
+    };
+    module
+        .globals
+        .iter()
+        .enumerate()
+        .filter_map(|(at, global)| match &global.kind {
+            GlobalKind::Function(function) if !function.is_declaration() => {
+                Some((global.name.as_deref().unwrap_or_default().to_owned(), printer.function(at, global, function)))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
 pub fn module(module: &Module) -> String {
     let mut out = String::new();
-    let printer = Printer { context: &module.context, globals: global_names(module), comdats: comdat_markers(module) };
+    let printer = Printer {
+        context: &module.context,
+        globals: global_names(module),
+        comdats: comdat_markers(module),
+        module: Some(module),
+        labels: Default::default(),
+    };
     if let Some(layout) = &module.datalayout {
         let _ = writeln!(out, "target datalayout = {}", string(layout.as_bytes()));
     }
@@ -46,10 +74,7 @@ pub fn module(module: &Module) -> String {
                 },
             ),
     );
-    section(
-        &mut out,
-        module.comdats.iter().map(|(name, kind)| format!("${} = comdat {kind}\n", quoted(name))),
-    );
+    section(&mut out, module.comdats.iter().map(|(name, kind)| format!("${} = comdat {kind}\n", quoted(name))));
     section(
         &mut out,
         module
@@ -117,7 +142,8 @@ pub fn body(
     context: &Context,
     function: &Function,
 ) -> String {
-    Printer { context, globals: Vec::new(), comdats: Vec::new() }.blocks(function, &Slots::new(function))
+    Printer { context, globals: Vec::new(), comdats: Vec::new(), module: None, labels: Default::default() }
+        .blocks(function, &Slots::new(function))
 }
 
 /// A 128-bit digest (not a cryptographic one) of what `body` prints, without
@@ -421,6 +447,10 @@ fn spaced(text: String) -> String {
 struct Printer<'a> {
     context: &'a Context,
     globals: Vec<String>,
+    /// What a `blockaddress` outside its function names a label of, read
+    /// from the function's own numbering.
+    module: Option<&'a Module>,
+    labels: std::cell::RefCell<HashMap<GlobalId, crate::dense::IdMap<BlockId, String>>>,
     comdats: Vec<Option<String>>,
 }
 
@@ -471,6 +501,12 @@ impl Slots {
                 if let Some(result) = function.instruction(inst).result {
                     values.insert(result, name(&function.value(result).name));
                 }
+            }
+        }
+        // A block replaced by another is named by the replacement's label.
+        for &(old, _) in &function.address_forward {
+            if let Some(label) = function.resolve_block_address(old).and_then(|new| blocks.get(&new).cloned()) {
+                blocks.insert(old, label);
             }
         }
         Self { values, blocks }
@@ -535,7 +571,14 @@ impl Printer<'_> {
             quoted(&alias.name),
             words.iter().map(|one| format!("{one} ")).collect::<String>(),
             self.ty(alias.ty),
-            self.globals[alias.aliasee.0 as usize],
+            if alias.offset == 0 {
+                self.globals[alias.aliasee.0 as usize].to_string()
+            } else {
+                format!(
+                    "getelementptr inbounds (i8, ptr {}, i64 {})",
+                    self.globals[alias.aliasee.0 as usize], alias.offset
+                )
+            },
         )
     }
 
@@ -753,7 +796,19 @@ impl Printer<'_> {
     ) -> String {
         match operand {
             Operand::Value(id) => format!("%{}", slots.values[&id]),
-            Operand::Constant(id) => self.constant(id),
+            Operand::Constant(id) => match &self.context.get(id).kind {
+                // The block is a label of the function it names, which may not
+                // be the one printed: `constant` asks the module.
+                ConstantKind::Expr(ConstantExpr::BlockAddress { function, block }) if self.module.is_none() => {
+                    match slots.blocks.get(block) {
+                        Some(label) => format!("blockaddress({}, %{label})", self.global_name(*function)),
+                        // Erased with nothing to take its address: LLVM's own
+                        // stand-in, a pointer no `indirectbr` lists.
+                        None => "inttoptr (i32 1 to ptr)".to_owned(),
+                    }
+                }
+                _ => self.constant(id),
+            },
             Operand::Block(id) => format!("%{}", slots.blocks[&id]),
         }
     }
@@ -803,6 +858,10 @@ impl Printer<'_> {
                     .collect();
                 format!("switch{flags} {}, {} [\n{cases}  ]", typed(0), typed(1))
             }
+            Opcode::IndirectBr => {
+                let targets: Vec<String> = ops[1..].iter().map(|&target| self.typed(function, slots, target)).collect();
+                format!("indirectbr {}, [{}]", typed(0), targets.join(", "))
+            }
             Opcode::Unreachable => "unreachable".to_owned(),
             Opcode::FNeg | Opcode::Freeze => format!("{}{flags} {}", inst.opcode.mnemonic(), typed(0)),
             Opcode::Binary(_) => format!("{}{flags} {}, {}", inst.opcode.mnemonic(), typed(0), bare(1)),
@@ -831,8 +890,10 @@ impl Printer<'_> {
                 format!("{} {}", inst.opcode.mnemonic(), values.join(", "))
             }
             Opcode::ShuffleVector(mask) => {
-                let lanes: Vec<String> =
-                    mask.iter().map(|&lane| if lane < 0 { "i32 poison".to_owned() } else { format!("i32 {lane}") }).collect();
+                let lanes: Vec<String> = mask
+                    .iter()
+                    .map(|&lane| if lane < 0 { "i32 poison".to_owned() } else { format!("i32 {lane}") })
+                    .collect();
                 format!("shufflevector {}, {}, <{} x i32> <{}>", typed(0), typed(1), mask.len(), lanes.join(", "))
             }
             Opcode::Alloca { allocated, align, address_space } => {
@@ -971,6 +1032,13 @@ impl Printer<'_> {
         format!("{} {}", self.ty(self.context.get(id).ty), self.constant(id))
     }
 
+    fn global_name(
+        &self,
+        global: GlobalId,
+    ) -> String {
+        self.globals.get(global.0 as usize).cloned().unwrap_or_else(|| format!("@{}", global.0))
+    }
+
     fn constant(
         &self,
         id: ConstantId,
@@ -995,9 +1063,8 @@ impl Printer<'_> {
             ConstantKind::Undef => "undef".to_owned(),
             ConstantKind::Zero => "zeroinitializer".to_owned(),
             ConstantKind::Bytes(bytes) => format!("c{}", string(bytes)),
-            ConstantKind::Global(global) => {
-                self.globals.get(global.0 as usize).cloned().unwrap_or_else(|| format!("@{}", global.0))
-            }
+            ConstantKind::MetadataString(text) => format!("!{}", string(text.as_bytes())),
+            ConstantKind::Global(global) => self.global_name(*global),
             ConstantKind::Aggregate(ids) => match self.types().get(*ty) {
                 Type::Array { .. } => format!("[{}]", members(ids)),
                 Type::Vector { .. } => format!("<{}>", members(ids)),
@@ -1024,6 +1091,22 @@ impl Printer<'_> {
                     self.typed_constant(*lhs),
                     self.typed_constant(*rhs)
                 )
+            }
+            // A block's label is the function's to say: `operand` prints it.
+            ConstantKind::Expr(ConstantExpr::BlockAddress { function, block }) => {
+                let mut labels = self.labels.borrow_mut();
+                let label = labels
+                    .entry(*function)
+                    .or_insert_with(|| match self.module.map(|module| &module.global(*function).kind) {
+                        Some(GlobalKind::Function(body)) => Slots::new(body).blocks.into_iter().collect(),
+                        _ => crate::dense::IdMap::new(),
+                    })
+                    .get(block)
+                    .cloned();
+                match label {
+                    Some(label) => format!("blockaddress({}, %{label})", self.global_name(*function)),
+                    None => "inttoptr (i32 1 to ptr)".to_owned(),
+                }
             }
             ConstantKind::Expr(ConstantExpr::Cast { op, value }) => {
                 format!("{} ({} to {})", spelling(&CAST, *op), self.typed_constant(*value), self.ty(*ty))

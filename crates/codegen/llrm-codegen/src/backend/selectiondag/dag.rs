@@ -38,6 +38,9 @@ impl SDNodeFlags {
     /// DEVIATE PAIR1: a `BUILD_PAIR` of the two words of a value the calling
     /// convention returns or passes in two registers (`dx:ax`).
     pub const PAIR_LONG: SDNodeFlags = SDNodeFlags(16384);
+    /// `NoFPExcept`: `fpexcept.ignore`; the operation's exceptions are not
+    /// observed.
+    pub const NO_FP_EXCEPT: SDNodeFlags = SDNodeFlags(32768);
 
     pub fn union(
         self,
@@ -567,6 +570,9 @@ pub struct SelectionDAG {
     /// frame index, `gp_offset` (the bytes of it the named integer arguments
     /// took) and `fp_offset` (48 plus 16 a named vector argument).
     pub var_args_save: Option<(i32, u32, u32)>,
+    /// No code reads `fp_offset` or the vector half of the save area
+    /// (`builder::vaarg`): `va_start` does not write the field.
+    pub var_args_fp_unread: bool,
     /// The stack temporaries the legalizer asked for: size and alignment.
     pub temporaries: Vec<(u32, u32)>,
     /// Which globals (by symbol) are local to the object: only those fold a
@@ -577,6 +583,11 @@ pub struct SelectionDAG {
     /// it, so the set follows it into a machine node. A load a combine or the
     /// legalizer remakes is not in it.
     pub invariant_loads: HashSet<u32>,
+    /// What a load's `!range` says of its bits (`MachineMemOperand::getRanges`,
+    /// which `computeKnownBits` of a `LOAD` reads): the node's known-zero
+    /// and known-one bits. A load a combine or the legalizer remakes is not
+    /// in it.
+    pub load_ranges: std::collections::HashMap<u32, (u128, u128)>,
     /// The loads of a GOT entry (`MachinePointerInfo::getGOT`); like
     /// `invariant_loads`, the number follows the node into a machine node. The
     /// emitter makes such a load the symbol's External immediate, which the
@@ -664,9 +675,11 @@ impl SelectionDAG {
             mem_locations: Vec::new(),
             var_args_frame_index: None,
             var_args_save: None,
+            var_args_fp_unread: false,
             temporaries: Vec::new(),
             local_symbols: Default::default(),
             invariant_loads: HashSet::default(),
+            load_ranges: Default::default(),
             got_loads: HashSet::default(),
             fixed_offsets: Default::default(),
             fixed_objects: Default::default(),
@@ -764,6 +777,18 @@ impl SelectionDAG {
         node: u32,
     ) -> bool {
         self.use_count_up_to(node, 2) == 1
+    }
+
+    /// `SDValue::hasOneUse`: one operand of one node reads this result
+    /// (`hasNUsesOfValue(1, ResNo)`); `has_one_use` counts every result.
+    pub fn has_one_use_of_value(
+        &self,
+        value: SDValue,
+    ) -> bool {
+        self.users(value)
+            .map(|user| self.nodes[user as usize].ops.iter().filter(|&&op| op == value).count())
+            .sum::<usize>()
+            == 1
     }
 
     /// The live nodes that read any result of `node`, in creation order, once
@@ -887,9 +912,10 @@ impl SelectionDAG {
         }
     }
 
-    /// A node the legalizer replaced, which nothing reads now, is unfiled from the CSE table: a later
-    /// `getNode` of the same operation must make a node, not return the replaced one, which is not
-    /// legalized again (an `extract_element` made twice, the second one never lowered).
+    /// A node the legalizer replaced, which nothing reads now, is unfiled from
+    /// the CSE table: a later `getNode` of the same operation must make a
+    /// node, not return the replaced one, which is not legalized again (an
+    /// `extract_element` made twice, the second one never lowered).
     pub fn forget_replaced(
         &mut self,
         node: u32,
@@ -978,6 +1004,24 @@ impl SelectionDAG {
         let mut out: Vec<u32> = Vec::new();
         for &user in self.uses.get(value.node as usize).into_iter().flatten().rev() {
             if !self.is_deleted(user) && self.nodes[user as usize].ops.contains(&value) && !out.contains(&user) {
+                out.push(user);
+            }
+        }
+        out
+    }
+
+    /// `N->users()` without repeats: the users that read any result of
+    /// `node`, in the pin's use-list order (newest use first).
+    pub fn users_of_node_newest_first(
+        &self,
+        node: u32,
+    ) -> Vec<u32> {
+        let mut out: Vec<u32> = Vec::new();
+        for &user in self.uses.get(node as usize).into_iter().flatten().rev() {
+            if !self.is_deleted(user)
+                && self.nodes[user as usize].ops.iter().any(|op| op.node == node)
+                && !out.contains(&user)
+            {
                 out.push(user);
             }
         }
@@ -1159,21 +1203,47 @@ impl SelectionDAG {
         from: SDValue,
         to: SDValue,
     ) -> Vec<Rauw> {
+        self.replace_uses(from, to, None)
+    }
+
+    /// `ReplaceAllUsesOfValueWith(From, To)` followed by the undo of the use
+    /// `to` itself made of `from` (`visitFREEZE` mutates the freeze back):
+    /// every operand `from` becomes `to` except those of the node `keep`,
+    /// which still reads `from`. No stale handle to `from` is forwarded:
+    /// `keep` reads it.
+    pub fn replace_uses_except(
+        &mut self,
+        from: SDValue,
+        to: SDValue,
+        keep: u32,
+    ) -> Vec<Rauw> {
+        self.replace_uses(from, to, Some(keep))
+    }
+
+    fn replace_uses(
+        &mut self,
+        from: SDValue,
+        to: SDValue,
+        keep: Option<u32>,
+    ) -> Vec<Rauw> {
         let mut events = Vec::new();
         if from == to {
             return events;
         }
-        let mut work = vec![(from, to)];
-        while let Some((from, to)) = work.pop() {
-            self.forwarded.insert(from, to);
-            if self.root == from {
-                self.root = to;
+        let mut work = vec![(from, to, keep)];
+        while let Some((from, to, keep)) = work.pop() {
+            if keep.is_none() {
+                self.forwarded.insert(from, to);
+                if self.root == from {
+                    self.root = to;
+                }
             }
             // The pin walks the use list newest first and adds each use to `to`
             // as it goes; the users are still updated in creation order, which
             // fixes which of two equal nodes a CSE merge keeps.
-            let use_list_order = self.users_newest_first(from);
-            for user in self.users(from).collect::<Vec<_>>() {
+            let use_list_order: Vec<u32> =
+                self.users_newest_first(from).into_iter().filter(|&user| Some(user) != keep).collect();
+            for user in self.users(from).filter(|&user| Some(user) != keep).collect::<Vec<_>>() {
                 self.cse_forget(user);
                 for op in &mut self.nodes[user as usize].ops {
                     if *op == from {
@@ -1191,7 +1261,7 @@ impl SelectionDAG {
                         self.nodes[existing as usize].flags = flags;
                         let results = self.nodes[user as usize].values.len() as u8;
                         for res in 0..results {
-                            work.push((SDValue { node: user, res }, SDValue { node: existing, res }));
+                            work.push((SDValue { node: user, res }, SDValue { node: existing, res }, None));
                         }
                     }
                     _ => {
@@ -1866,6 +1936,21 @@ impl SelectionDAG {
         let vt = self.value_type(value);
         let node =
             self.intern(op, &[vt, EVT::OTHER], &[chain, ptr, value], SDNodeFlags::default(), NodeData::Mem(info));
+        self.volatile_accesses.insert(node.node);
+        node
+    }
+
+    /// `getMemIntrinsicNode`: a target node that reads and writes the cell
+    /// `info` describes, ordered on the chain like an atomic
+    /// (`X86ISD::LADD`, `LCMPXCHG_DAG`).
+    pub fn get_mem_intrinsic_node(
+        &mut self,
+        op: ISD,
+        values: &[EVT],
+        ops: &[SDValue],
+        info: MemInfo,
+    ) -> SDValue {
+        let node = self.intern(op, values, ops, SDNodeFlags::default(), NodeData::Mem(info));
         self.volatile_accesses.insert(node.node);
         node
     }

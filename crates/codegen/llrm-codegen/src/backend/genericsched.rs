@@ -39,6 +39,17 @@
 //! The ready queues, the clock and the resource counts of a zone
 //! (`SchedBoundary`) and the choice of zone (`pickNodeBidirectional`) are the
 //! callers'; this module is given what they measure.
+//!
+//! # Example
+//! Two ready nodes are compared by the heuristics in order; the first that
+//! differs decides and its reason is recorded on the winner (the values are
+//! illustrative; the `RegExcess` case is the one the unit test below checks).
+//!
+//! ```text
+//! cand X: REG-EXCESS 0, height 3
+//! cand Y: REG-EXCESS 2, height 9
+//! try_candidate(Y, best X)  -> X stays, reason RegExcess  ; height is never looked at
+//! ```
 
 use crate::backend::regpressure::{Delta, Pick, try_pressure};
 

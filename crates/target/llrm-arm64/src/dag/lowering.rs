@@ -95,7 +95,7 @@ pub(super) fn fp_cc(code: CondCode) -> (u128, Option<u128>) {
 }
 
 /// `emitComparison` for floats: `FCMP`, whose result is the flags.
-fn emit_fcmp(
+pub(super) fn emit_fcmp(
     dag: &mut SelectionDAG,
     lhs: SDValue,
     rhs: SDValue,
@@ -108,6 +108,15 @@ fn is_float(
     value: SDValue,
 ) -> bool {
     dag.value_type(value).is_floating_point()
+}
+
+/// A float compare `LowerBR_CC` branches on directly; an `f128` one is a
+/// routine call first.
+fn is_fcmp_branchable(
+    dag: &SelectionDAG,
+    value: SDValue,
+) -> bool {
+    is_float(dag, value) && dag.value_type(value) != EVT::Simple(MVT::F128)
 }
 
 /// `LowerSETCC` for floats: one `CSEL` on the inverted condition, or two on the
@@ -253,6 +262,9 @@ pub(super) fn emit_comparison(
     code: CondCode,
 ) -> SDValue {
     let vt = dag.value_type(lhs);
+    if vt.is_floating_point() {
+        return emit_fcmp(dag, lhs, rhs);
+    }
     let mut opcode = a64::SUBS;
     if is_cmn(dag, rhs, code) {
         opcode = a64::ADDS;
@@ -448,15 +460,14 @@ pub fn lower_setcc(
 ) -> Option<SDValue> {
     let (mut lhs, mut rhs) = (dag.operand(node, 0), dag.operand(node, 1));
     let mut code = cond_of(dag, dag.operand(node, 2));
-    if is_float(dag, lhs) {
-        return Some(lower_fp_setcc(dag, node, code));
-    }
-    if !dag.value_type(lhs).is_integer() {
+    let float = is_float(dag, lhs);
+    if !float && !dag.value_type(lhs).is_integer() {
         return None;
     }
     // `visitBRCOND` has made a `BR_CC` of a compare only a branch reads, before
     // this runs; here `lower_brcond` reads the `SETCC` itself, and a
-    // flags-setting `and` would not be undone.
+    // flags-setting `and` would not be undone. A float compare is `fcmp` and
+    // `b.cc` the same way (`LowerBR_CC`).
     let users: Vec<u32> = dag.users(node).collect();
     let only_branched_on = users
         .iter()
@@ -466,8 +477,11 @@ pub fn lower_setcc(
                 dag.opcode(user) == ISD::BrCond && dag.operand(user, 1) == node
             },
         );
-    if !users.is_empty() && only_branched_on {
+    if !users.is_empty() && only_branched_on && (!float || is_fcmp_branchable(dag, lhs)) {
         return Some(node);
+    }
+    if float {
+        return Some(lower_fp_setcc(dag, node, code));
     }
     let vt = dag.value_type(node);
     let (one, zero) = (dag.get_constant(1, vt), dag.get_constant(0, vt));
@@ -699,7 +713,9 @@ pub fn lower_brcond(
         let ccode = cond_const(dag, out);
         return Some(dag.get_node(ISD::Target(a64::BRCOND), EVT::OTHER, &[chain, dest, ccode, flags]));
     }
-    if dag.opcode(cond) == ISD::SetCC && dag.value_type(dag.operand(cond, 0)).is_integer() {
+    if dag.opcode(cond) == ISD::SetCC
+        && (dag.value_type(dag.operand(cond, 0)).is_integer() || is_fcmp_branchable(dag, dag.operand(cond, 0)))
+    {
         let (lhs, rhs, code) = (dag.operand(cond, 0), dag.operand(cond, 1), cond_of(dag, dag.operand(cond, 2)));
         return lower_br_cc(dag, chain, code, lhs, rhs, dest);
     }
@@ -721,9 +737,9 @@ pub fn lower_brcond(
         } else {
             (cond, CondCode::SetNe)
         };
-    // `LowerBR_CC`'s `setcc([su]{add,sub,mul}o ==|!= 0|1)`: the branch reads the
-    // flags of the arithmetic, on the condition that says overflow (opposite
-    // for the inverted bit).
+    // `LowerBR_CC`'s `setcc([su]{add,sub,mul}o ==|!= 0|1)`: the branch reads
+    // the flags of the arithmetic, on the condition that says overflow
+    // (opposite for the inverted bit).
     let overflow = bit(dag, tested).unwrap_or(tested);
     if is_xalu_overflow(dag, overflow)
         && let Some((_, flags, overflowed)) = xalu_flags(dag, overflow.node)
@@ -849,13 +865,23 @@ fn is_double_or_single(vt: EVT) -> bool {
     vt.is_floating_point() && matches!(vt.size_in_bits(), 32 | 64)
 }
 
+/// The first operand of the value a conversion reads: operand 0, or 1 behind
+/// the chain of a constrained node.
+fn converted(
+    dag: &SelectionDAG,
+    node: SDValue,
+) -> SDValue {
+    let strict = dag.opcode(node).non_strict().is_some();
+    dag.operand(node, usize::from(strict))
+}
+
 /// `LowerINT_TO_FP`: a scalar `f32`/`f64` from an `i32`/`i64` is legal as it
-/// is.
+/// is, constrained or not.
 pub fn lower_int_to_fp(
     dag: &mut SelectionDAG,
     node: SDValue,
 ) -> Option<SDValue> {
-    let (to, from) = (dag.value_type(node), dag.value_type(dag.operand(node, 0)));
+    let (to, from) = (dag.value_type(node), dag.value_type(converted(dag, node)));
     (is_double_or_single(to) && matches!(from.size_in_bits(), 32 | 64)).then_some(node)
 }
 
@@ -864,7 +890,7 @@ pub fn lower_fp_to_int(
     dag: &mut SelectionDAG,
     node: SDValue,
 ) -> Option<SDValue> {
-    let (to, from) = (dag.value_type(node), dag.value_type(dag.operand(node, 0)));
+    let (to, from) = (dag.value_type(node), dag.value_type(converted(dag, node)));
     (is_double_or_single(from) && matches!(to.size_in_bits(), 32 | 64)).then_some(node)
 }
 
@@ -873,7 +899,7 @@ pub fn lower_fp_extend(
     dag: &mut SelectionDAG,
     node: SDValue,
 ) -> Option<SDValue> {
-    let (to, from) = (dag.value_type(node), dag.value_type(dag.operand(node, 0)));
+    let (to, from) = (dag.value_type(node), dag.value_type(converted(dag, node)));
     (to.size_in_bits() == 64 && from.size_in_bits() == 32 && to.is_floating_point()).then_some(node)
 }
 
@@ -882,7 +908,7 @@ pub fn lower_fp_round(
     dag: &mut SelectionDAG,
     node: SDValue,
 ) -> Option<SDValue> {
-    let (to, from) = (dag.value_type(node), dag.value_type(dag.operand(node, 0)));
+    let (to, from) = (dag.value_type(node), dag.value_type(converted(dag, node)));
     (to.size_in_bits() == 32 && from.size_in_bits() == 64 && to.is_floating_point()).then_some(node)
 }
 
@@ -1112,19 +1138,15 @@ pub fn lower_xalu(
 
 /// `valueToCarryFlag`
 /// ([L4796](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L4796)):
-/// the flags with `C` set from a 0/1 value. Not inverted, `C` is the value; inverted, `C`
-/// is set when it is 0 (a borrow is the absence of a carry).
+/// the flags with `C` set from a 0/1 value. Not inverted, `C` is the value;
+/// inverted, `C` is set when it is 0 (a borrow is the absence of a carry).
 fn value_to_carry_flag(
     dag: &mut SelectionDAG,
     value: SDValue,
     invert: bool,
 ) -> SDValue {
     let vt = dag.value_type(value);
-    let (op0, op1) = if invert {
-        (dag.get_constant(0, vt), value)
-    } else {
-        (value, dag.get_constant(1, vt))
-    };
+    let (op0, op1) = if invert { (dag.get_constant(0, vt), value) } else { (value, dag.get_constant(1, vt)) };
     let subs = dag.get_node_multi(ISD::Target(a64::SUBS), &[vt, EVT::I32], &[op0, op1]);
     SDValue { node: subs.node, res: 1 }
 }
@@ -1254,13 +1276,11 @@ pub fn lower_br_jt(
     Some(dag.get_node(ISD::BrInd, EVT::OTHER, &[info, SDValue { node: destination.node, res: 0 }]))
 }
 
-/// `LowerBRIND`: the `BRIND` of a jump table (`lower_br_jt`) is left as it is;
-/// the other forms (`indirectbr`, pointer authentication) are not ported.
+/// `LowerBRIND`: the `BRIND` of a jump table (`lower_br_jt`) and of an
+/// `indirectbr` are selected as they are; pointer authentication is not ported.
 pub fn lower_br_ind(
-    dag: &mut SelectionDAG,
+    _dag: &mut SelectionDAG,
     node: SDValue,
 ) -> Option<SDValue> {
-    let destination = dag.operand(node, 1);
-    let table = ISD::Machine(u32::from(llrm_dagisel::generated::aarch64::ids::opcode::JumpTableDest32));
-    (dag.opcode(destination) == table).then_some(node)
+    Some(node)
 }

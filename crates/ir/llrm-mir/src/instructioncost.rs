@@ -544,7 +544,7 @@ pub fn instruction_cost_known(
             };
             tti.direct_call_cost(parameters, kind)
         }
-        Opcode::Br | Opcode::Ret | Opcode::Switch => tti.cf_instr_cost(false, kind),
+        Opcode::Br | Opcode::Ret | Opcode::Switch | Opcode::IndirectBr => tti.cf_instr_cost(false, kind),
         Opcode::Phi => tti.cf_instr_cost(true, kind),
         Opcode::Freeze => Cost::FREE,
         Opcode::ExtractValue(_) | Opcode::InsertValue(_) => {

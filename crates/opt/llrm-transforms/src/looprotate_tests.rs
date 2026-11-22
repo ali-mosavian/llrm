@@ -68,6 +68,39 @@ fn test_a_counted_loop_is_entered_behind_a_guard_and_computes_the_same() {
     assert_eq!(text.matches("icmp slt").count(), 2, "{text}");
 }
 
+/// Before: rotation merged a latch holding one increment into its exiting
+/// predecessor and erased it, so its `blockaddress` became `inttoptr 1`.
+#[test]
+fn test_a_latch_whose_address_is_taken_is_not_merged_away() {
+    let mut module = parsed(
+        "@t = internal constant [1 x ptr] [ptr blockaddress(@f, %b3)]
+
+define i16 @f(i16 %n) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i16 [ 0, %b0 ], [ %next, %b3 ]
+  br label %b2
+
+b2:
+  %go = icmp slt i16 %i, %n
+  br i1 %go, label %b3, label %b4
+
+b3:
+  %next = add i16 %i, 1
+  br label %b1
+
+b4:
+  ret i16 %i
+}
+",
+    );
+    rotated(&mut module);
+    let text = printed(&module);
+    assert!(text.contains("blockaddress(@f, %b3)") && text.contains("\nb3:"), "{text}");
+}
+
 /// What @f returns for each of `inputs`, or how it fails (a loop that does not
 /// end for some input does not end after).
 fn outcomes(

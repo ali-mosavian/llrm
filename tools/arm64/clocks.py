@@ -14,6 +14,9 @@ LLVM = os.environ.get('LLVM_BIN', os.path.expanduser('~/scratch/llvm-build-aarch
 ENDS_BLOCK = re.compile(r'^(b|bl|br|blr|ret|cbz|cbnz|tbz|tbnz|b\.\w+)\s')
 CALL = re.compile(r'^(bl|blr)\s')
 STEADY_ITERATIONS = 100
+# A store that updates its base register: `str w1, [x0], #2` (post) or `str w1, [x0, #2]!` (pre).
+POST_STORE = re.compile(r'^(st(?:r|rb|rh|p))\s+(.+?),\s*\[(x\d+|sp)\],\s*(#-?(?:0x)?[0-9a-f]+)$')
+PRE_STORE = re.compile(r'^(st(?:r|rb|rh|p))\s+(.+?),\s*\[(x\d+|sp),\s*(#-?(?:0x)?[0-9a-f]+)\]!$')
 
 
 def disassemble(elf):
@@ -51,14 +54,30 @@ def blocks(code, executed):
     return found
 
 
+def split_writeback(line):
+    """The lines for `line`: a store that updates its base becomes the plain store and an `add`.
+
+    llvm-mca makes the updated base wait for the store's data, so a loop that loads through x8 and stores `[x8], #2`
+    carries load latency round the loop; a core updates the address apart from the data."""
+    post, pre = POST_STORE.match(line), PRE_STORE.match(line)
+    if not post and not pre:
+        return [line]
+    op, data, base, step = (post or pre).groups()
+    bump = f'sub {base}, {base}, #{step[2:]}' if step.startswith('#-') else f'add {base}, {base}, {step}'
+    return [f'{op} {data}, [{base}]', bump] if post else [bump, f'{op} {data}, [{base}]']
+
+
 def mca_cycles(lines, iterations):
     """Cycles per iteration of `lines` repeated `iterations` times, from llvm-mca, or None if it did not run."""
     # llvm-mca assumes 100 cycles for any call; a call here is the branch that ends the block, one cycle.
     calls = sum(1 for line in lines if CALL.match(line + ' '))
-    lines = [line for line in lines if not CALL.match(line + ' ')]
+    lines = [part for line in lines if not CALL.match(line + ' ') for part in split_writeback(line)]
     if not lines:
         return float(calls)
-    text = '\n'.join(re.sub(r'\b0x[0-9a-f]+ <[^>]*>', '#4096' if line.startswith('adrp') else '#16', line) for line in lines)
+    # objdump prints a target no symbol covers bare (`adr x0, 0x200158`, as gcc takes a nearby literal): llvm-mca takes an
+    # offset. An immediate (`#0x1`, `#-0x1`) is not a target.
+    target = re.compile(r'(?<![#\w-])0x[0-9a-f]+( <[^>]*>)?$')
+    text = '\n'.join(target.sub('#4096' if line.startswith('adrp') else '#16', line) for line in lines)
     run = subprocess.run([f'{LLVM}/llvm-mca', '-mtriple=aarch64-linux-gnu', '-mcpu=apple-m1', f'-iterations={iterations}', '-'], input=text, capture_output=True, text=True)
     cycles, done = re.search(r'Total Cycles:\s+(\d+)', run.stdout), re.search(r'Iterations:\s+(\d+)', run.stdout)
     return int(cycles.group(1)) / int(done.group(1)) + calls if cycles and done else None

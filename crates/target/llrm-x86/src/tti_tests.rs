@@ -500,10 +500,13 @@ fn a_function_built_for_size_keeps_the_pins_cost_for_a_zero_extended_constant() 
     assert_eq!(cost(true), Cost::of(2));
 }
 
-/// The SLP vectorizer ran on x86 with default (unpriced) vector costs and changed four to six programs of the identity
-/// corpus at O2 and O3 (`bitcount_u64.c`, `double_across_a_call_result.c`). It runs on x86-64 now, where the SSE2 vector
-/// memory costs are priced (fill_nest's 64 constant stores became eight vector stores) and a tree with an operation the
-/// target does not price is not formed; the targets without vector values keep their scalar code.
+/// The SLP vectorizer ran on x86 with default (unpriced) vector costs and
+/// changed four to six programs of the identity corpus at O2 and O3
+/// (`bitcount_u64.c`, `double_across_a_call_result.c`). It runs on x86-64 now,
+/// where the SSE2 vector memory costs are priced (fill_nest's 64 constant
+/// stores became eight vector stores) and a tree with an operation the
+/// target does not price is not formed; the targets without vector values keep
+/// their scalar code.
 #[test]
 fn slp_runs_on_x86_64_alone() {
     assert!(X86::of_cpu("x86-64").expect("a cpu").slp_priced());
@@ -512,4 +515,105 @@ fn slp_runs_on_x86_64_alone() {
             assert!(!tti.slp_priced(), "{cpu}");
         }
     }
+}
+
+const VECTOR_ORACLE: &str = include_str!("tti_oracle_vector.txt");
+
+fn vector_ty_of(word: &str) -> VectorTy {
+    let (count, bits) = word[1..].split_once('i').expect(word);
+    VectorTy { lane: Ty::Int(bits.parse().expect(word)), count: count.parse().expect(word) }
+}
+
+/// What the cost model says of each vector row of `tti_oracle_vector.txt`: `Ok`
+/// where it prices it as the pin, `Err(ours)` where it prices it differently
+/// (`None`: not priced).
+fn vector_rows() -> Vec<(String, Result<(), Option<i64>>)> {
+    let x86 = X86::of_cpu("x86-64").unwrap();
+    let mut rows = Vec::new();
+    for line in VECTOR_ORACLE.lines().filter(|line| !line.starts_with('#')) {
+        let [_cpu, kind, name, cost] = line.split(' ').collect::<Vec<_>>()[..] else { panic!("{line}") };
+        let parts: Vec<&str> = name.split('.').collect();
+        let want = cost.parse::<i64>().unwrap();
+        let got = if let Some(op) = arith_of(parts[0]) {
+            x86.vector_arithmetic_cost(op, vector_ty_of(parts[1]), kind_of(kind))
+        } else {
+            x86.vector_cast_cost(
+                cast_of(parts[0]).unwrap(),
+                vector_ty_of(parts[2]),
+                vector_ty_of(parts[1]),
+                kind_of(kind),
+            )
+        };
+        rows.push((
+            format!("{kind} {name}"),
+            if got == Some(Cost::of(want)) { Ok(()) } else { Err(got.map(|c| c.value)) },
+        ));
+    }
+    rows
+}
+
+/// Every integer vector row of `tti_oracle_vector.txt`. `mul <N x i64>` was unpriced, so a loop of
+/// them (tile's init) stayed scalar: clocks +153%.
+/// Before: `mul <N x i8>` within 64 bits took the 128-bit row (6, not 4), and a
+/// wide add or sub cost its registers in the latency and size kinds, the pin's
+/// base model one.
+#[test]
+fn the_vector_costs_equal_the_pinned_opt_on_x86_64() {
+    let rows = vector_rows();
+    let wrong: Vec<_> =
+        rows.iter().filter_map(|(name, row)| row.as_ref().err().map(|got| format!("{name}: {got:?}"))).collect();
+    assert!(rows.len() > 600, "{} rows", rows.len());
+    assert!(wrong.is_empty(), "{} of {} differ:\n{}", wrong.len(), rows.len(), wrong[..wrong.len().min(40)].join("\n"));
+}
+
+/// A shift by an amount that is no constant was priced as the immediate form
+/// (1 for `<4 x i32>`, nothing for `<16 x i8>`): a loop of them was widened
+/// into the ladder it lowers to. The pin's `SSE2CostTable` rows, and the
+/// `SSE2UniformConstCostTable` bytes.
+#[test]
+fn a_variable_vector_shift_is_priced_as_the_pins_sse2_rows() {
+    let x86 = X86::of_cpu("x86-64").unwrap();
+    let cost = |op, lane, count, second: OperandInfo| {
+        x86.vector_arithmetic_cost_op2(op, VectorTy { lane: Ty::Int(lane), count }, second, CostKind::RecipThroughput)
+            .map(|cost| cost.value)
+    };
+    let variable = OperandInfo::ANY;
+    let constant = OperandInfo::constant(3, 8);
+    assert_eq!(cost(ArithOp::Shl, 16, 8, variable), Some(24));
+    assert_eq!(cost(ArithOp::LShr, 32, 4, variable), Some(12));
+    assert_eq!(cost(ArithOp::AShr, 8, 16, variable), Some(27));
+    assert_eq!(cost(ArithOp::AShr, 64, 2, variable), Some(8));
+    assert_eq!(cost(ArithOp::Shl, 32, 8, variable), Some(34), "two registers");
+    assert_eq!(cost(ArithOp::Shl, 32, 4, constant), Some(1));
+    assert_eq!(cost(ArithOp::Shl, 8, 16, constant), Some(1));
+    assert_eq!(cost(ArithOp::AShr, 8, 16, constant), Some(3));
+}
+
+/// `getMemoryInstructionCost` at VF 1 adds `getAddressComputationCost` of the value type, which x86 leaves at the
+/// base model's 0. It was 1: dot's scalar loop cost 9 (the pin's 7), so a VF 8 loop at 60 was taken and ran twice
+/// as many instructions.
+#[test]
+fn a_scalar_access_adds_no_address_cost_on_x86_64() {
+    let x86 = X86::of_cpu("x86-64").unwrap();
+    assert_eq!(x86.scalar_access_address_cost(CostKind::RecipThroughput), Cost::FREE);
+}
+
+/// `(long)a[i] * b[i]` of `i16` values priced as `<8 x i64>` ladders (28 for the multiply, 24 for the two
+/// extensions) kept dot's loop scalar, 39% behind gcc. Lowered by `pmullw`/`pmulhw` it is 4 plus the extension of
+/// the products, and the operand extensions leave no instruction.
+#[test]
+fn a_multiply_of_two_shorts_widened_to_i64_is_priced_as_pmullw_and_pmulhw() {
+    let x86 = X86::of_cpu("x86-64").unwrap();
+    let wide = VectorTy { lane: Ty::Int(64), count: 8 };
+    let shorts = VectorTy { lane: Ty::Int(16), count: 8 };
+    let short = Some(ExtOperand { kind: CastKind::SExt, src: Ty::Int(16) });
+    let multiply = x86.vector_arithmetic_cost_ext(ArithOp::Mul, wide, [short, short], CostKind::RecipThroughput);
+    let products = VectorTy { lane: Ty::Int(32), count: 8 };
+    let extension = x86.vector_cast_cost(CastKind::SExt, wide, products, CostKind::RecipThroughput);
+    assert_eq!(multiply, Ok(extension.map(|extend| Cost::of(4 + extend.value))));
+    let user = ExtUser { op: Some(ArithOp::Mul), operands: [short, short], index: 0 };
+    assert_eq!(x86.vector_ext_cost(CastKind::SExt, wide, shorts, &[user], CostKind::RecipThroughput), Some(Cost::FREE));
+    // One operand not extended: the multiply is the pin's `<8 x i64>` one, not the widening.
+    let other = x86.vector_arithmetic_cost_ext(ArithOp::Mul, wide, [short, None], CostKind::RecipThroughput);
+    assert_ne!(other, multiply);
 }

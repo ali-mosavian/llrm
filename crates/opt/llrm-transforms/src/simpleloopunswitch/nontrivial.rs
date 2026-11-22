@@ -62,7 +62,8 @@ pub(super) fn is_safe(
     lp: Loop,
 ) -> bool {
     let rpo = crate::loopdeletion::loop_blocks_rpo(run.function, lp);
-    !crate::loopdeletion::contains_irreducible_cfg(run.function, &analyzed.loops, &rpo)
+    lp.is_safe_to_clone(run.function)
+        && !crate::loopdeletion::contains_irreducible_cfg(run.function, &analyzed.loops, &rpo)
         && !lp.get_blocks().iter().any(|&block| {
             run.function
                 .iter_block(block)
@@ -450,7 +451,7 @@ fn build_cloned_loop_blocks(
         if !skip(block) {
             continue;
         }
-        for succ in successors(run, block) {
+        for succ in super::candidates::edges(run, block) {
             if let Some(&cloned_succ) = vmap.blocks.get(&succ) {
                 for phi in phis(run.function, cloned_succ) {
                     run.function.remove_incoming_value(run.context, phi, block, false);
@@ -462,7 +463,7 @@ fn build_cloned_loop_blocks(
     // Remove the cloned parent as a predecessor of any successor we ended up
     // cloning other than the unswitched one.
     let cloned_parent = vmap.blocks[&parent_bb];
-    for succ in successors(run, parent_bb) {
+    for succ in super::candidates::edges(run, parent_bb) {
         if succ == unswitched {
             continue;
         }

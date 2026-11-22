@@ -1,3 +1,7 @@
+---
+architecture-index: arm64 Target description, the 39 methods without a default
+architecture-order: 11
+---
 # arm64 `llrm_target::Target`: the 39 methods without a default (2026-11-08, v0 (unrun))
 
 `llrm-target/src/lib.rs:476`. Read from the signatures and docs, not yet implemented. Owner llrm-arm64-lir. Arm64 data lives in the arm64 crate; nothing arm64-named in `llrm-target`; no edit to `llrm-target` until coordinator and oversight have seen the x86-shaped list (C below).

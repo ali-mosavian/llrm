@@ -104,9 +104,7 @@ def gcc_program_flags(flags: list[str], source: str = "") -> list[str]:
     """The program's flags as gcc reads them (external_flags.GCC_PROGRAM_FLAGS: `-fno-inline-functions` becomes `-fno-inline`, else gcc
     inlines the static helpers: frameless.c 260 B against our 558 B). ValueError for a flag gcc has no meaning for, or any other
     difference from the program's own flags (external_flags.check_gcc_flags): the cell then has no gcc column."""
-    # A source that tests `__clang__` has one branch for clang and another for the rest; all three columns build the clang one
-    # (variadic.c: gcc built the macro walk, 178 B at 68000 -Os, against 276 B with the stdarg one ours and clang build).
-    extra = (*external_flags.GCC_DIALECT, *(("-D__clang__",) if "__clang__" in source else ()))
+    extra = (*external_flags.GCC_DIALECT, *external_flags.gcc_source_defines(source))
     out = [*external_flags.gcc_program_flags(flags), *extra]
     external_flags.check_gcc_flags(flags, out, extra)
     return out
@@ -172,9 +170,9 @@ class Tools:
                     [self.cc, f"-{level}", "-w", "-S", *flags, "-isystem", str(POSIX), path, "-o", out + ".s"],
                     [self.as_, "--fatal-warnings", f"-m{cpu}", "-o", out + ".gas.o", out + ".s"]]
         if compiler == "gcc":
-            return [[self.gcc, f"-B{self.root}/usr/lib/gcc-cross/m68k-linux-gnu/15/", f"-B{self.root}/usr/m68k-linux-gnu/bin/", "-ffreestanding", "-nostdlib", "-w", *GCC_FLOAT,
+            return [[self.gcc, f"-B{self.root}/usr/lib/gcc-cross/m68k-linux-gnu/15/", f"-B{self.root}/usr/m68k-linux-gnu/bin/", "-nostdlib", "-w", *GCC_FLOAT,
                      *(["-isystem", self.headers] if self.headers else []), *self.gcc_flags, f"-mcpu={cpu}", f"-{level}", *gcc_program_flags(flags, Path(path).read_text(errors="replace") if Path(path).is_file() else ""), "-isystem", str(POSIX), "-c", path, "-o", out + ".o"]]
-        return [[self.clang, "--target=m68k-linux-gnu", "-ffreestanding", "-fno-pic", "-w", *self.clang_flags, f"-mcpu={cpu}", f"-{level}", *flags, "-isystem", str(POSIX), "-S", "-emit-llvm", path, "-o", out + ".ll"],
+        return [[self.clang, "--target=m68k-linux-gnu", "-fno-pic", "-w", *self.clang_flags, f"-mcpu={cpu}", f"-{level}", *flags, "-isystem", str(POSIX), "-S", "-emit-llvm", path, "-o", out + ".ll"],
                 [self.llc, "-mtriple=m68k-linux-gnu", "-relocation-model=static", "-O2", "-filetype=obj", f"-mcpu=M{cpu}", out + ".ll", "-o", out + ".o"]]
 
     def stamps(self) -> str:

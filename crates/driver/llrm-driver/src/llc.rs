@@ -349,6 +349,15 @@ fn with_default_convention(
                     is_variadic(function.ty) || entry || library.contains(&llrm_mir::context::GlobalId(at as u32)),
                 ))
         {
+            // `inreg` on a regcall function is that convention's own register
+            // marking: once the function takes the ABI's it asks for nothing
+            // (the System V one places `inreg` for `-mregparm=N` only, which
+            // clang writes on `ccc`).
+            if function.calling_convention == llrm_mir::opcode::REGCALL && !watcom {
+                for attrs in &mut function.parameter_attrs {
+                    attrs.retain(|one| !matches!(one, llrm_mir::Attribute::Flag(flag) if flag == "inreg"));
+                }
+            }
             // clang spells a regcall function `__regcall3__NAME`.
             if function.calling_convention == llrm_mir::opcode::REGCALL {
                 if let Some(plain) = global.name.as_deref().and_then(|name| name.strip_prefix("__regcall3__")) {
@@ -395,13 +404,16 @@ fn with_default_convention(
                                         .is_some_and(|one| library.contains(&one))),
                         ) =>
                 {
-                    Some(inst)
+                    Some((inst, info.calling_convention == llrm_mir::opcode::REGCALL))
                 }
                 _ => None,
             })
             .collect();
-        for inst in calls {
+        for (inst, regcall) in calls {
             function.set_call_convention(inst, number);
+            if regcall {
+                function.drop_call_argument_flag(inst, "inreg");
+            }
         }
     }
 }
@@ -448,6 +460,7 @@ pub fn compiled_dumping(
     }
     let flags = &flags;
     let mut module = llrm_mir::parse::module(&text).map_err(|error| format!("{name}: {error}"))?;
+    module.relocation_pic = flags.relocation_pic();
     if llrm_codegen::support::debug::enabled("mir") {
         // The size of the program as read, before any pass: what the other
         // front ends report as they link their MIR.

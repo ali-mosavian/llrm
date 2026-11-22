@@ -266,9 +266,174 @@ pub fn assembly(
     text: &str,
     request: &Request,
 ) -> Result<String, String> {
+    crate::dagisel::function::take_step_sites();
+    let kept = assembly_flow(text, request)?;
+    let steps = crate::dagisel::function::take_step_sites();
+    long_step_trial(kept, steps, text, request)
+}
+
+fn assembly_flow(
+    text: &str,
+    request: &Request,
+) -> Result<String, String> {
+    crate::alloc::take_save_drops();
+    let kept = flow_once(text, request)?;
+    save_drop_trial(kept, crate::alloc::take_save_drops(), text, request)
+}
+
+/// DEVIATE 6502-SAVE-DROP-TRIAL (owner llrm-target-6502, exit 2026-12-06): a
+/// module whose carry saves were dropped before allocation (`drops`) is
+/// compiled again with them dropped after it, and the text with fewer bytes is
+/// kept (a tie keeps the first). The pin has one form. Reason: the free `a`
+/// helps some modules and defeats the outliner in others, whose sites of one
+/// chain allocate differently (wide_shift_by_one -O2 843 B after, 916 B before;
+/// call_keeps -O2 1,402 B before, 1,409 B after).
+///
+/// Compile time: only a module with two such saves compiles twice.
+fn save_drop_trial(
+    kept: String,
+    drops: usize,
+    text: &str,
+    request: &Request,
+) -> Result<String, String> {
+    // a chain the outliner shares needs two sites
+    if drops < 2 || request.level == Level::O0 || std::env::var_os("LLRM_6502_NO_SAVE_TRIAL").is_some() {
+        return Ok(kept);
+    }
+    let Ok(other) = crate::alloc::with_early_save_drop(false, || flow_once(text, request)) else {
+        return Ok(kept);
+    };
+    crate::alloc::take_save_drops();
+    let (kept_bytes, other_bytes) = (image_bytes_of(&kept, request)?, image_bytes_of(&other, request)?);
+    if std::env::var_os("LLRM_DEBUG_TRIAL").is_some() {
+        eprintln!("trial save drop: {drops} drops; {other_bytes} B after allocation against {kept_bytes} B before");
+    }
+    Ok(if other_bytes < kept_bytes { other } else { kept })
+}
+
+fn flow_once(
+    text: &str,
+    request: &Request,
+) -> Result<String, String> {
+    llrm_transforms::trial::take_speed_unrolls();
     let built = program(text, request)?;
+    let made = llrm_transforms::trial::take_speed_unrolls().made;
+    let size = instructions(&built);
+    let kept = assembly_trials(built, text, request)?;
+    speed_unroll_trial(kept, made, size, text, request)
+}
+
+/// DEVIATE 6502-LONG-STEP-TRIAL (owner llrm-target-6502, exit 2026-12-06): a
+/// module that has a long plus or minus one stepped with an early exit
+/// (`INC32`/`DEC32`, llvm-mos `G_INC`/`G_DEC`) or a long equality tested byte
+/// by byte (`CMPZ32`, llvm-mos `G_CMPZ`) is compiled again with the carry chain
+/// and the word compare, and the text with fewer bytes is kept. The pin has one
+/// form. Reason: those forms have labels and branches, which the outliner (the
+/// pin's `MachineOutliner`) does not share, and the chain of many sites is one
+/// `jsr` each (div_constants_long -O1: 13,520 B with the chains, 14,464
+/// stepped, 15,431 with the byte compares), while one loop counter is 14 B
+/// stepped against 22 B as a chain (licm_graph_callee_footprint: 306 B, 284 B).
+///
+/// Compile time: only a module with such a site compiles twice.
+fn long_step_trial(
+    kept: String,
+    steps: usize,
+    text: &str,
+    request: &Request,
+) -> Result<String, String> {
+    if steps == 0 || request.level == Level::O0 || std::env::var_os("LLRM_6502_NO_STEP_TRIAL").is_some() {
+        return Ok(kept);
+    }
+    let debug = std::env::var_os("LLRM_DEBUG_TRIAL").is_some();
+    let Ok(other) = crate::dagisel::function::with_long_steps(false, || assembly_flow(text, request)) else {
+        return Ok(kept);
+    };
+    crate::dagisel::function::take_step_sites();
+    let (kept_bytes, other_bytes) = (image_bytes_of(&kept, request)?, image_bytes_of(&other, request)?);
+    if debug {
+        eprintln!("trial long step: {steps} steps; {other_bytes} B carry chain against {kept_bytes} B stepped");
+    }
+    Ok(if other_bytes < kept_bytes { other } else { kept })
+}
+
+fn assembly_trials(
+    built: Program,
+    text: &str,
+    request: &Request,
+) -> Result<String, String> {
     let (built, inlined, assembled, joint) = trial_inlined(built, text, request)?;
     llrm_transforms::trial::with_inlined(&inlined, || trial_unrolled(built, assembled, joint, text, request))
+}
+
+/// DEVIATE UNROLL-SPEED-TRIAL (owner 6502, exit 2026-11-24; the z80's
+/// `compile::effective`): at -O2 and -O3 a module whose mid-end made a full
+/// unroll that `NoGrow` would not (`made`) is compiled again with only the
+/// unrolls that add no bytes, and that text is kept if it is fewer bytes. The
+/// pin's early unroll takes a loop of an inlinable callee unpriced, and the
+/// inliner then declines the body it made (memmove_overlap -O3: `fill`, 32
+/// trips, 14 B rolled, 161 B unrolled).
+///
+/// Compile time: only a module with such an unroll runs the second mid-end,
+/// and its backend runs only if that mid-end has fewer instructions than the
+/// kept one (`size`): a variant with as many or more cannot be fewer bytes
+/// (write_through_parameter's folded 43 B against 249 B).
+fn speed_unroll_trial(
+    kept: String,
+    made: usize,
+    size: usize,
+    text: &str,
+    request: &Request,
+) -> Result<String, String> {
+    use llrm_transforms::trial::{SpeedUnroll, with_speed_unroll};
+    let tried = matches!(request.level, Level::O2 | Level::O3)
+        && made > 0
+        && machine().tti().is_some_and(|tti| tti.unroll_speed_trial())
+        && std::env::var_os("LLRM_6502_NO_SPEED_UNROLL_TRIAL").is_none();
+    if !tried {
+        return Ok(kept);
+    }
+    let debug = std::env::var_os("LLRM_DEBUG_TRIAL").is_some();
+    let variant = |text: &str| -> Result<Option<String>, String> {
+        let built = program(text, request)?;
+        if debug {
+            eprintln!("trial speed unroll: {} instructions against {size}", instructions(&built));
+        }
+        if instructions(&built) >= size {
+            if debug {
+                eprintln!(
+                    "trial speed unroll: {made} unrolls; {} instructions against {size}: not tried",
+                    instructions(&built)
+                );
+            }
+            return Ok(None);
+        }
+        tail(built, request, false, false).map(|done| Some(done.text))
+    };
+    let Ok(Some(other)) = with_speed_unroll(Some(SpeedUnroll::NoGrow), || variant(text)) else {
+        return Ok(kept);
+    };
+    let bytes = |assembly: &str| -> Result<i64, String> { image_bytes_of(assembly, request) };
+    let (kept_bytes, other_bytes) = (bytes(&kept)?, bytes(&other)?);
+    if debug {
+        eprintln!("trial speed unroll: {made} unrolls; {other_bytes} B no-growth against {kept_bytes} B kept");
+    }
+    Ok(if other_bytes < kept_bytes { other } else { kept })
+}
+
+/// The bytes of a program's assembly: its code and data, and the runtime
+/// routines it links.
+fn image_bytes_of(
+    assembly: &str,
+    request: &Request,
+) -> Result<i64, String> {
+    let names: Vec<String> = assembly
+        .lines()
+        .filter(|line| line.ends_with(':') && !line.starts_with(|c: char| c.is_whitespace() || c == '.' || c == '@'))
+        .map(|line| line.trim_end_matches(':').to_owned())
+        .collect();
+    let code = i64::from(crate::timing::estimate(request.cpu, assembly)?.bytes);
+    let routines = crate::mulimage::image_of_texts(&names, &[assembly.to_owned()]);
+    Ok(code + data_bytes(assembly) + crate::mulimage::image_bytes(&routines))
 }
 
 /// DEVIATE OS-INLINE-TRIAL (owner 6502-c, exit 2026-12-05): the copies the -Os
@@ -355,9 +520,12 @@ fn trial_inlined(
         trial::restore(kept_unroll);
         return Ok((built, Vec::new(), Some(kept_all), joint));
     }
+    // Every inline kept: the pair (the pin's inlines with the loops they bring
+    // unrolled in one mid-end) is still priced if the unroll trial puts the
+    // unroll back (loop_fusion -O2 with byte-index loops).
     if flags.iter().all(|one| *one) {
         trial::restore(other_unroll);
-        return Ok((other, sites, None, false));
+        return Ok((other, sites, None, joint));
     }
     let chosen: Vec<_> = sites.into_iter().zip(&flags).filter(|(_, kept)| **kept).map(|(site, _)| site).collect();
     let Ok(third) = trial::with_inlined(&chosen, || program(text, request)) else {
@@ -376,17 +544,7 @@ fn trial_inlined(
     }
 }
 
-/// One function of [`size_audit`].
-pub struct SizeRow {
-    pub name: String,
-    /// `function_bytes` of the function the backend gets.
-    pub model: i64,
-    /// The bytes it is written as (`timing::estimate` of its text).
-    pub written: i64,
-    /// Its operations by class (`walk::operation_counts`), for the fit of
-    /// `opcosts::calibrate`.
-    pub counts: String,
-}
+pub use llrm_transforms::walk::SizeRow;
 
 /// The size audit of one program: per function, the bytes `function_bytes` says
 /// it will be against the bytes it is written as. The instrument
@@ -625,6 +783,7 @@ fn tail(
     }
     crate::mulimage::widen_when_it_pays(module, &names, &mut selections, &from_module, request)?;
     crate::mulimage::expand_when_unshared(module, &names, &mut selections, &from_module, request)?;
+    crate::mulimage::call_when_it_pays(module, &names, &mut selections, &from_module, request)?;
     // Set once the selection is final: pricing the alternatives sees none.
     let file = request.debug.then(|| llrm_mir::dbgimport::unit_file(module)).flatten().map(|(name, _)| name);
     for (name, selection) in names.iter().zip(selections.iter_mut()) {
@@ -633,6 +792,7 @@ fn tail(
     }
     let parts: Vec<(&str, &_)> = names.iter().map(String::as_str).zip(&selections).collect();
     let pieces = module_text(module, &parts)?;
+    let plain_pieces = crate::select::plain_pieces(&pieces);
     let functions = if audit {
         names
             .iter()
@@ -665,8 +825,70 @@ fn tail(
     // that beat the other compilers', and bytes come first (row
     // 6502-OUTLINE-CLOCKS). At -Os the pass is the pin's, bytes alone.
     let rate = (request.level == Level::O1).then(|| request.level.tuning().clocks_per_byte);
-    let text = if outlined { crate::outline::run_at(&text, rate) } else { text };
-    let text = if request.level != Level::O0 { crate::peephole::after_outlining(&text) } else { text };
+    // at -O1 to -O3 a place is given up by the share of the module's clocks its
+    // calls add against the share of its bytes they save (`[share.speed]
+    // outline`)
+    let share = matches!(request.level, Level::O1 | Level::O2 | Level::O3)
+        .then(|| crate::routines::speed_share_percent("outline"));
+    // The outliner is also tried on the module as the allocator wrote it
+    // before the transfer of known constants, which that pass makes differ
+    // between copies of one run; it then runs on the outlined text, and the
+    // smaller module is kept.
+    // `LLRM_6502_OUTLINE_PLAIN=0` is the kill switch, for an A/B of one binary
+    let plain = (outlined
+        && crate::copyprop::enabled(std::env::var_os("LLRM_6502_OUTLINE_PLAIN").as_deref())
+        && plain_pieces.iter().zip(&pieces).any(|(plain, piece)| plain != piece))
+    .then(|| {
+        let mut plain = plain_pieces.concat();
+        for (name, label) in &data.1 {
+            plain = plain.replace(name.as_str(), label);
+        }
+        plain
+    });
+    let after = |text: String| if request.level != Level::O0 { crate::peephole::after_outlining(&text) } else { text };
+    let kept = after(if outlined { crate::outline::run_priced(&text, rate, share) } else { text });
+    let text = match plain {
+        Some(plain) => {
+            let mut outlined = crate::asm::Asm::parse(&crate::outline::run_priced(&plain, rate, share));
+            crate::peephole::drop_known_loads(&mut outlined);
+            let plain = after(outlined.text());
+            let bytes = |text: &str| {
+                crate::timing::estimate(request.cpu, &crate::alloc::without_lines(text)).map(|priced| priced.bytes)
+            };
+            match (bytes(&kept), bytes(&plain)) {
+                (Ok(kept_bytes), Ok(plain_bytes)) if plain_bytes < kept_bytes => plain,
+                _ => kept,
+            }
+        }
+        None => kept,
+    };
+    let text = match request.platform.static_zero_page {
+        0 => text,
+        // `LLRM_6502_STATIC_ZP=0` is the kill switch, for an A/B of one binary
+        budget
+            if whole_program(request)
+                && crate::copyprop::enabled(std::env::var_os("LLRM_6502_STATIC_ZP").as_deref()) =>
+        {
+            let first = u16::from(request.platform.imag_base)
+                + u16::from(request.platform.zero_page)
+                + u16::from(request.platform.scratch_zero_page);
+            crate::zerospill::static_cells_to_zero_page(&text, first, u16::from(budget))
+        }
+        _ => text,
+    };
+    // The bytes a trial prices are the finished text's: the outliner shares
+    // the repeated sequences of an unrolled body (static_pointers: 26 B of
+    // 174 modelled bytes, 16 of the rolled loop's 181), which the functions'
+    // own bytes leave out. The runtime routines the text calls are linked
+    // bytes too: a rolled loop's `jsr __mulsi3` costs the routine, the unrolled
+    // constants none (tail_calls `framed`: kept at -6 B, then put back at +10 B
+    // against a rolled copy 89 B larger once linked).
+    // `LLRM_6502_MODEL_BYTES` is the kill switch, for an A/B of one binary
+    if price && std::env::var_os("LLRM_6502_MODEL_BYTES").is_none() {
+        if let Ok(finished) = image_bytes_of(&text, request) {
+            bytes = finished + data_bytes(&data.0);
+        }
+    }
     Ok(Assembled { text: equates(&request.platform) + &files + &text + &data.0, clocks, bytes, functions })
 }
 
@@ -1135,7 +1357,8 @@ fn write_constant(
     at: usize,
     words: &mut Vec<(usize, String, i64)>,
 ) -> Result<(), String> {
-    use llrm_mir::{ConstantKind, Type};
+    use llrm_mir::opcode::CastOp;
+    use llrm_mir::{ConstantExpr, ConstantKind, Type};
     let context = &module.context;
     let types = &context.types;
     if let Some((symbol, addend)) = address_of(module, layout, id)? {
@@ -1158,6 +1381,11 @@ fn write_constant(
             out[at..at + bytes].copy_from_slice(&bits.to_le_bytes()[..bytes]);
             Ok(())
         }
+        // `inttoptr (i16 n)`: the number itself (an expanded block address).
+        (
+            ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::PtrToInt | CastOp::IntToPtr | CastOp::BitCast, value }),
+            _,
+        ) => write_constant(module, layout, *value, context.get(*value).ty, out, at, words),
         (ConstantKind::Bytes(data), _) => {
             out[at..at + data.len()].copy_from_slice(data);
             Ok(())
