@@ -209,6 +209,9 @@ pub struct Options {
     /// A sum in an address register adds a sign-extended word with `adda.w`
     /// ([`crate::sextacc`]).
     pub sext_adds: bool,
+    /// A byte extended to a long and read only as a word is `ext.w`
+    /// ([`crate::narrowext`]).
+    pub narrow_sext: bool,
     /// A block that only returns is copied into the predecessors that go only
     /// there (`TailDuplicator`); kept when the function is cheaper for it.
     pub return_dup: bool,
@@ -282,6 +285,7 @@ impl Options {
         call_targets: false,
         pc_calls: false,
         sext_adds: false,
+        narrow_sext: false,
         return_dup: false,
         class_split: false,
         compare_destinations: false,
@@ -328,6 +332,7 @@ impl Default for Options {
             call_targets: true,
             pc_calls: false,
             sext_adds: true,
+            narrow_sext: true,
             return_dup: true,
             class_split: true,
             compare_destinations: true,
@@ -1049,6 +1054,9 @@ fn items_once(
                 // not built again
                 if options.sext_adds {
                     crate::sextacc::sign_extended_words(&mut function, cpu, crate::timing::Price::of(wants_size));
+                }
+                if options.narrow_sext {
+                    crate::narrowext::narrow_extensions(&mut function, cpu);
                 }
                 if options.class_split {
                     touched.class_split = crate::classsplit::hold_in_data_registers(&mut function) > 0;

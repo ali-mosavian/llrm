@@ -270,6 +270,17 @@ pub fn effects(
     bits: u32,
     what: &Semantics,
 ) -> Option<Served> {
+    // A jump through a table reads the registers its operand is encoded with
+    // and nothing else (`JMP64m`: the pin's operands say so, and the
+    // successors' live-ins say the rest).
+    if what.op == Operation::Jump && what.indirect && !what.table.is_empty() {
+        let mut reads = Vec::new();
+        return Some(if used(&what.sources, bits, &mut reads, None) {
+            Served::Known(Effects { reads, ..Effects::default() })
+        } else {
+            Served::Unknown
+        });
+    }
     if matches!(
         what.op,
         Operation::Branch | Operation::Jump | Operation::Call | Operation::Return | Operation::Escape
