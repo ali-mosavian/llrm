@@ -4,7 +4,7 @@
 use llrm_mir::passes::PassManager;
 use llrm_mir::target::Neutral;
 
-use crate::backwardthreading::{BackwardThreading, MAX_THREADS};
+use crate::backwardthreading::{BackwardThreading, MAX_CHAIN, MAX_THREADS};
 use crate::testing::{parsed, printed, results};
 
 /// `head` tests `row > 0` every trip; `latch` joins the path through `loop`
@@ -47,7 +47,13 @@ fn threaded(text: &str) -> (String, bool) {
     let before = parsed(text);
     let mut module = before.clone();
     let mut manager = PassManager::default();
-    manager.add(BackwardThreading { enabled: true, max_threads: MAX_THREADS, relations: false, early: false });
+    manager.add(BackwardThreading {
+        enabled: true,
+        max_threads: MAX_THREADS,
+        relations: false,
+        early: false,
+        chain: Some(MAX_CHAIN),
+    });
     manager.run_module(&mut module, std::rc::Rc::new(Neutral)).unwrap();
     let text = printed(&module);
     assert_eq!(results(&module, INPUTS), results(&before, INPUTS), "{text}");
@@ -128,7 +134,13 @@ s_in:
     let before = parsed(text);
     let mut module = before.clone();
     let mut manager = PassManager::default();
-    manager.add(BackwardThreading { enabled: true, max_threads: MAX_THREADS, relations: false, early: false });
+    manager.add(BackwardThreading {
+        enabled: true,
+        max_threads: MAX_THREADS,
+        relations: false,
+        early: false,
+        chain: Some(MAX_CHAIN),
+    });
     manager.run_module(&mut module, std::rc::Rc::new(Neutral)).unwrap();
     let out = printed(&module);
     assert_ne!(out, printed(&before), "the guard was not threaded:\n{out}");
@@ -175,7 +187,13 @@ done:
     let before = parsed(text);
     let mut module = before.clone();
     let mut manager = PassManager::default();
-    manager.add(BackwardThreading { enabled: true, max_threads: MAX_THREADS, relations: false, early: false });
+    manager.add(BackwardThreading {
+        enabled: true,
+        max_threads: MAX_THREADS,
+        relations: false,
+        early: false,
+        chain: Some(MAX_CHAIN),
+    });
     manager.run_module(&mut module, std::rc::Rc::new(Neutral)).unwrap();
     let inputs: &[&[i128]] = &[&[4], &[6], &[5], &[3], &[8], &[2], &[1]];
     assert_eq!(results(&module, inputs), results(&before, inputs), "{}", printed(&module));
@@ -226,7 +244,7 @@ fn related(
     let before = parsed(text);
     let mut module = before.clone();
     let mut manager = PassManager::default();
-    manager.add(BackwardThreading { enabled: true, max_threads: MAX_THREADS, relations, early: false });
+    manager.add(BackwardThreading { enabled: true, max_threads: MAX_THREADS, relations, early: false, chain: None });
     manager.run_module(&mut module, std::rc::Rc::new(Neutral)).unwrap();
     let inputs: &[&[i128]] = &[&[1, 2], &[2, 1], &[3, 3], &[0, 0], &[5, 9], &[9, 5], &[0, -1], &[-1, 0]];
     let out = printed(&module);
@@ -404,4 +422,25 @@ exit:
 ";
     let (out, _) = threaded(text);
     assert_eq!(results(&parsed(&out), INPUTS), results(&parsed(text), INPUTS), "{out}");
+}
+
+/// A target that asks for one block between `q` and `bb` (the default) keeps
+/// the path that ran the whole inner loop through the guard: a longer path
+/// moved x86_64 `known_loads_walks` -O2 from 155,300 to 160,530 executed
+/// instructions.
+#[test]
+fn a_target_that_asks_for_one_block_keeps_the_long_path() {
+    let before = parsed(ROTATED);
+    let mut module = before.clone();
+    let mut manager = PassManager::default();
+    manager.add(BackwardThreading {
+        enabled: true,
+        max_threads: MAX_THREADS,
+        relations: false,
+        early: false,
+        chain: Some(1),
+    });
+    manager.run_module(&mut module, std::rc::Rc::new(Neutral)).unwrap();
+    let text = printed(&module);
+    assert!(text.contains("br i1 %end, label %call"), "{text}");
 }

@@ -1991,6 +1991,15 @@ pub trait Tti {
         true
     }
 
+    /// The blocks between `q` and the branch a backward-threaded path copies
+    /// (GCC's `max-fsm-thread-length`), and with more than one, the ranger's
+    /// entry ranges (`BackwardThreading::entered_with`). 1 is the path `q`,
+    /// `p`, `bb`: x86_64 `known_loads_walks` -O2 pays +3.4% executed
+    /// instructions for a longer one until it is judged there.
+    fn backward_threading_chain(&self) -> usize {
+        1
+    }
+
     /// DEVIATE COMMON-INSTS-O1: the SimplifyCFG that ends the -O2 function
     /// pipeline (L832) hoists and sinks common code at -O1 too, where the
     /// pin's `default<O1>` ends with a plain one (L621). Off: the pin.

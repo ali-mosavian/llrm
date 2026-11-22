@@ -1604,6 +1604,14 @@ impl Tti for AArch64 {
         if min >> 12 == max >> 12 && self.is_legal_add_immediate(high) { high } else { 0 }
     }
 
+    /// GCC's backward threader grows a path a block at a time and asks ranger
+    /// what every way into a block knows: queens -O2's column loop skips its
+    /// guard on the path that ran the inner loop (`max-fsm-thread-length` is 10;
+    /// 3 here).
+    fn backward_threading_chain(&self) -> usize {
+        3
+    }
+
     /// Integer comparisons are implemented with ADDS/SUBS:
     /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L20248
     fn is_legal_icmp_immediate(

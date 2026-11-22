@@ -59,7 +59,7 @@ use llrm_mir::types::Type;
 const MAX_PATH_INSNS: usize = 15;
 /// The blocks between `q` and `bb` a path copies, at most (GCC's
 /// `max-fsm-thread-length` is 10).
-const MAX_CHAIN: usize = 3;
+pub const MAX_CHAIN: usize = 3;
 /// Paths threaded in one function: a cap on the code a run can add.
 pub const MAX_THREADS: usize = 16;
 
@@ -75,6 +75,9 @@ pub struct BackwardThreading {
     /// (`backthread@1243`): the pass runs only where the target threads by
     /// relation, since the branches it reads are selects by the slot after.
     pub early: bool,
+    /// Blocks a path copies between `q` and `bb`, where the target's
+    /// `Tti::backward_threading_chain` is not asked (tests).
+    pub chain: Option<usize>,
 }
 
 impl BackwardThreading {
@@ -84,6 +87,7 @@ impl BackwardThreading {
             max_threads: MAX_THREADS,
             relations: false,
             early: false,
+            chain: None,
         }
     }
 
@@ -116,6 +120,11 @@ impl FunctionPass for BackwardThreading {
         unit: &mut Unit,
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
+        let chain = self
+            .chain
+            .or_else(|| analyses.outer().target().tti().map(|tti| tti.backward_threading_chain()))
+            .unwrap_or(1)
+            .clamp(1, MAX_CHAIN);
         let relations = !llrm_support::env_flag!("LLRM_NO_BACKTHREAD_REL")
             && (self.relations || analyses.outer().target().tti().is_some_and(|tti| tti.threads_by_relation()));
         if !self.enabled
@@ -134,7 +143,7 @@ impl FunctionPass for BackwardThreading {
         for _ in 0..self.max_threads {
             let dt = DomTree::of(unit.function);
             let loops = LoopInfo::analyze(unit.function, || DomTree::of(unit.function));
-            let Some(path) = find(unit.context, unit.function, &dt, &loops, relations) else { break };
+            let Some(path) = find(unit.context, unit.function, &dt, &loops, relations, chain) else { break };
             thread(unit.context, unit.function, &path);
             changed = true;
         }
@@ -276,6 +285,7 @@ fn range_at(
     value: Operand,
     block: BlockId,
     edge: Option<(BlockId, BlockId)>,
+    ranger: bool,
 ) -> Option<ConstantRange> {
     let width = width_of(context, function, value)?;
     if let Some(constant) = constant_of(context, value) {
@@ -292,9 +302,11 @@ fn range_at(
     // A block entered by several edges knows what all of them know (GCC's
     // ranger, `range_on_entry`): a threaded copy leaves the guard of a loop
     // with two ways in, each of which passed it.
-    let mut budget = MAX_RANGE_BLOCKS;
-    let entered = entered_with(context, function, dt, value, block, &mut Vec::new(), &mut budget);
-    range = range.intersect_with(&entered, PreferredRangeType::Smallest);
+    if ranger {
+        let mut budget = MAX_RANGE_BLOCKS;
+        let entered = entered_with(context, function, dt, value, block, &mut Vec::new(), &mut budget);
+        range = range.intersect_with(&entered, PreferredRangeType::Smallest);
+    }
     if let Some((from, to)) = edge {
         range = narrowed(context, function, dt, value, range, from, to);
     }
@@ -500,10 +512,11 @@ fn decided(
     block: BlockId,
     edge: Option<(BlockId, BlockId)>,
     relations: bool,
+    ranger: bool,
 ) -> Option<BlockId> {
     let by_range = (|| {
-        let lhs = range_at(context, function, dt, branch.lhs, block, edge)?;
-        let rhs = range_at(context, function, dt, branch.rhs, block, edge)?;
+        let lhs = range_at(context, function, dt, branch.lhs, block, edge, ranger)?;
+        let rhs = range_at(context, function, dt, branch.rhs, block, edge, ranger)?;
         if lhs.icmp(branch.pred, &rhs) {
             Some(branch.if_true)
         } else if lhs.icmp(branch.pred.inverse(), &rhs) {
@@ -554,10 +567,11 @@ fn chains_into(
     function: &Function,
     bb: BlockId,
     inputs_stable: &dyn Fn(BlockId) -> bool,
+    limit: usize,
 ) -> Vec<Vec<BlockId>> {
     let mut found = Vec::new();
     let mut frontier: Vec<Vec<BlockId>> = vec![Vec::new()];
-    for _ in 0..MAX_CHAIN {
+    for _ in 0..limit {
         let mut longer = Vec::new();
         for tail in &frontier {
             let head = tail.first().copied().unwrap_or(bb);
@@ -592,9 +606,10 @@ fn stays_in_loop(
     arm: BlockId,
     q: BlockId,
     mut rest: impl Iterator<Item = BlockId>,
+    back_edge: bool,
 ) -> bool {
     let Some(l) = loops.get_loop_for(arm) else { return true };
-    l.contains(q) && (l.get_header() == arm || rest.all(|block| l.contains(block)))
+    l.contains(q) && ((back_edge && l.get_header() == arm) || rest.all(|block| l.contains(block)))
 }
 
 /// The first path the facts at a predecessor decide and the facts at its
@@ -605,6 +620,7 @@ fn find(
     dt: &DomTree,
     loops: &LoopInfo<BlockId>,
     relations: bool,
+    chain_limit: usize,
 ) -> Option<Path> {
     for &bb in function.layout() {
         let Some(branch) = branch_of(function, bb) else { continue };
@@ -618,11 +634,11 @@ fn find(
                 && !defined_in(function, branch.rhs, bb)
                 && at != bb
         };
-        for chain in chains_into(function, bb, &inputs_stable) {
+        for chain in chains_into(function, bb, &inputs_stable, chain_limit) {
             let first = chain[0];
             let last = *chain.last().expect("a block");
             // What every path into the chain knows leaves nothing to thread.
-            if decided(context, function, dt, &branch, last, None, relations).is_some() {
+            if decided(context, function, dt, &branch, last, None, relations, chain_limit > 1).is_some() {
                 continue;
             }
             let mut size = copyable(function, bb);
@@ -639,19 +655,23 @@ fn find(
                 {
                     continue;
                 }
-                let Some(arm) = decided(context, function, dt, &branch, q, Some((q, first)), relations) else {
+                let Some(arm) =
+                    decided(context, function, dt, &branch, q, Some((q, first)), relations, chain_limit > 1)
+                else {
                     continue;
                 };
                 if arm == bb || chain.contains(&arm) {
                     continue;
                 }
-                if !stays_in_loop(loops, arm, q, chain.iter().copied().chain([bb])) {
+                if !stays_in_loop(loops, arm, q, chain.iter().copied().chain([bb]), chain_limit > 1) {
                     continue;
                 }
                 return Some(Path { q, chain: chain.clone(), bb, arm });
             }
         }
-        if relations && let Some(path) = join_decided(context, function, dt, loops, bb, &branch, &inputs_stable) {
+        if relations
+            && let Some(path) = join_decided(context, function, dt, loops, bb, &branch, &inputs_stable, chain_limit)
+        {
             return Some(path);
         }
     }
@@ -670,13 +690,14 @@ fn join_decided(
     bb: BlockId,
     branch: &Branch,
     inputs_stable: &dyn Fn(BlockId) -> bool,
+    chain_limit: usize,
 ) -> Option<Path> {
     let preds = function.predecessors(bb);
     if preds.len() < 2 || preds.contains(&bb) || starts_with_landing_pad(function, bb) {
         return None;
     }
     // What every path into the join knows leaves nothing to thread.
-    if decided(context, function, dt, branch, bb, None, true).is_some() {
+    if decided(context, function, dt, branch, bb, None, true, chain_limit > 1).is_some() {
         return None;
     }
     let size = copyable(function, bb)?;
@@ -695,7 +716,7 @@ fn join_decided(
         if arm == bb {
             continue;
         }
-        if !stays_in_loop(loops, arm, q, std::iter::once(bb)) {
+        if !stays_in_loop(loops, arm, q, std::iter::once(bb), chain_limit > 1) {
             continue;
         }
         return Some(Path { q, chain: Vec::new(), bb, arm });
