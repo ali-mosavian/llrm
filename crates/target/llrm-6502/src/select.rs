@@ -153,7 +153,7 @@ struct TextKey {
     zero_page: u8,
     tuning: (u32, bool),
     source: Option<(String, Option<u32>)>,
-    flags: (bool, bool, bool, bool, bool, bool, bool, bool, bool),
+    flags: (bool, bool, bool, bool, bool, bool, bool, bool, bool, bool),
 }
 
 impl TextKey {
@@ -429,6 +429,37 @@ pub fn module_text(
             }
         }
     }
+    // at size the 16-bit divisions are the compact bit loop; the speed routine
+    // (a byte divisor takes a short path, a quotient of a few bits stops early)
+    // is the module's choice by the share rule of the long divisions at the
+    // rate of `[share.size] division16`.
+    // DEVIATE 6502-DIV-16-OS (owner llrm-target-6502, exit 2026-12-12): the
+    // pin's `__udivhi3` is one routine.
+    let compact_division16 = |text: &str| {
+        ["__udivhi3c", "__divhi3c", "__umodhi3c", "__modhi3c", "__divmodhi4c"]
+            .iter()
+            .any(|name| text.contains(&format!(" {name}\n")))
+    };
+    if size && texts.iter().any(|text| compact_division16(text)) {
+        let mut faster = texts.clone();
+        let mut chosen = variants.clone();
+        for at in 0..faster.len() {
+            if compact_division16(&faster[at]) {
+                chosen[at].size_fast_division16 = true;
+                faster[at] = chosen[at].text(module, parts[at])?;
+            }
+        }
+        let (saved, growth, clocks, bytes) = division16_terms(module, parts, &faster, &texts)?;
+        if crate::mulimage::pays_by_share_at(
+            crate::routines::size_share_percent("division16"),
+            (saved, growth),
+            clocks,
+            bytes,
+        ) {
+            texts = faster;
+            variants = chosen;
+        }
+    }
     // at speed the 16-bit divisions are the speed routine (39 bytes over the
     // compact one, linked once): a module takes the compact one, bytes first,
     // unless the clocks the speed one saves are worth them
@@ -479,6 +510,8 @@ struct Variants {
     size_fast_division: bool,
     /// The 16-bit divisions call their compact routines at speed.
     compact_division16: bool,
+    /// The 16-bit divisions call the speed routines at size.
+    size_fast_division16: bool,
     /// The long multiply calls `__mulsi3_fast`.
     fast_multiply: bool,
     /// A multiply by a byte calls the byte entry, a routine body of its own.
@@ -491,6 +524,7 @@ impl Default for Variants {
             wide_division: true,
             size_fast_division: false,
             compact_division16: false,
+            size_fast_division16: false,
             fast_multiply: false,
             byte_multiply: true,
         }
@@ -507,8 +541,10 @@ impl Variants {
         alloc::with_fast_division(self.wide_division, || {
             alloc::with_size_fast_division(self.size_fast_division, || {
                 alloc::with_compact_division16(self.compact_division16, || {
-                    alloc::with_fast_multiply(self.fast_multiply, || {
-                        alloc::with_byte_multiply(self.byte_multiply, || function_text(module, name, selection))
+                    alloc::with_size_fast_division16(self.size_fast_division16, || {
+                        alloc::with_fast_multiply(self.fast_multiply, || {
+                            alloc::with_byte_multiply(self.byte_multiply, || function_text(module, name, selection))
+                        })
                     })
                 })
             })
@@ -1293,6 +1329,30 @@ fn speed_division16_pays(
     speed: &[String],
     compact: &[String],
 ) -> Result<bool, String> {
+    let (saved, growth, clocks, bytes) = division16_terms(module, parts, speed, compact)?;
+    // a cold division repays nothing: the clocks saved over the run must reach
+    // the rate every size-reducing choice of the target is made at, and
+    // then the share rule holds the growth to the module
+    let repays = saved >= growth.max(0) as u64 * u64::from(crate::alloc::Tuning::SPEED.clocks_per_byte);
+    Ok(repays
+        && crate::mulimage::pays_by_share_at(
+            crate::routines::speed_share_percent("division16"),
+            (saved, growth),
+            clocks,
+            bytes,
+        ))
+}
+
+/// What taking the speed 16-bit divisions (`speed` texts) instead of the
+/// compact ones (`compact` texts) costs and saves: the clocks saved over the
+/// run, the bytes of image it links, and the module's clocks and bytes with the
+/// compact ones.
+fn division16_terms(
+    module: &Module,
+    parts: &[(&str, &Selection)],
+    speed: &[String],
+    compact: &[String],
+) -> Result<(u64, i64, u64, u64), String> {
     let names: Vec<String> = parts.iter().map(|(name, _)| (*name).to_owned()).collect();
     let compact_image = crate::mulimage::image_bytes(&crate::mulimage::image_of_texts(&names, compact));
     let growth = crate::mulimage::image_bytes(&crate::mulimage::image_of_texts(&names, speed)) - compact_image;
@@ -1318,17 +1378,7 @@ fn speed_division16_pays(
     let cpu = parts.first().map_or(crate::dagisel::hooks::Cpu::Mos6502, |(_, selection)| selection.cpu);
     let clocks = clocks + (runs * crate::hotdivision::clocks_compact_16(cpu)) as u64;
     let saved = (runs * crate::hotdivision::saved_at_speed_16(cpu)) as u64;
-    // a cold division repays nothing: the clocks saved over the run must reach
-    // the rate every size-reducing choice of the target is made at, and
-    // then the share rule holds the growth to the module
-    let repays = saved >= growth.max(0) as u64 * u64::from(crate::alloc::Tuning::SPEED.clocks_per_byte);
-    Ok(repays
-        && crate::mulimage::pays_by_share_at(
-            crate::routines::speed_share_percent("division16"),
-            (saved, growth),
-            clocks,
-            bytes,
-        ))
+    Ok((saved, growth, clocks, bytes))
 }
 
 /// At size the speed long divisions (the small wide path, bytes by the image
