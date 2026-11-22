@@ -190,8 +190,22 @@ fn address_pairs(function: &MFunc) -> Vec<HashMap<usize, usize>> {
         .iter()
         .map(|block| {
             let mut pages: HashMap<Reg, (usize, &Target)> = HashMap::default();
-            let mut pairs = HashMap::default();
+            let mut candidates: Vec<(usize, usize, Reg)> = Vec::new();
+            // Per page register: the reads in this block and the last one's
+            // position.
+            let mut reads: HashMap<Reg, (u32, usize)> = HashMap::default();
+            let mut calls: Vec<usize> = Vec::new();
             for (at, op) in block.ops.iter().enumerate() {
+                if matches!(op, Op::Call { .. }) {
+                    calls.push(at);
+                }
+                let mut visited = op.clone();
+                visited.visit(&mut |register, role| {
+                    if role != Role::Def {
+                        let entry = reads.entry(register.key()).or_default();
+                        *entry = (entry.0 + 1, at);
+                    }
+                });
                 match op {
                     Op::I(Inst::Adr { page: true, rd, target, got: false })
                         if seen.get(&Reg::Gpr(*rd)).is_some_and(|&(defs, uses)| defs == 1 && uses >= 1) =>
@@ -202,13 +216,28 @@ fn address_pairs(function: &MFunc) -> Vec<HashMap<usize, usize>> {
                         if let Some(&(adrp, page_target)) = pages.get(&Reg::Gpr(*rn))
                             && page_target == target
                         {
-                            pairs.insert(at, adrp);
+                            candidates.push((at, adrp, Reg::Gpr(*rn)));
                         }
                     }
                     _ => {}
                 }
             }
-            pairs
+            // The add is the whole address (one rematerializable `MOVaddr`)
+            // where its page has no other reader, or where the page
+            // would live across a call to be shared: a callee-saved
+            // register held for a one-instruction
+            // value (QuickrBasic `uimn_act` -Os, +116 B). A page nothing
+            // crosses a call with stays one shared value, the plain
+            // bases LSR counted (particle -O1: 6 `adrp`).
+            candidates
+                .into_iter()
+                .filter(|&(_, adrp, page)| {
+                    let uses = seen.get(&page).map_or(0, |&(_, uses)| uses);
+                    let (here, last) = reads.get(&page).copied().unwrap_or_default();
+                    uses == 1 || calls.iter().any(|&call| adrp < call && (here < uses || call < last))
+                })
+                .map(|(at, adrp, _)| (at, adrp))
+                .collect()
         })
         .collect()
 }
@@ -1178,14 +1207,10 @@ mod tests {
         assert_eq!(ops[1], Op::I(Inst::AddPageOffset { rd: Gpr(6), rn: Gpr(6), target }), "{ops:?}");
     }
 
-    /// QuickrBasic uimain `uimn_act` -Os (+116 B): one `adrp` page read by an
-    /// `add :lo12:` and by a later page-offset store stayed one value live
-    /// across calls and took a seventh callee-saved register. The pin's
-    /// `MOVaddr` is the whole address, so the store's page is its own
-    /// definition, made again where the store is. The add is fused whatever
-    /// else reads the page, and the page stays for those readers only.
-    #[test]
-    fn an_address_pair_fuses_though_the_page_has_a_later_reader() {
+    /// The page of `adrp`, an `add :lo12:` of it and a page-offset store, with
+    /// a call between the add and the store when `call`; how many of the
+    /// instructions are made from nothing (rematerializable, no register read).
+    fn made_from_nothing(call: bool) -> (usize, usize) {
         let mut function = MFunc::new("f");
         let (page, address) = (function.gpr(), function.gpr());
         let target = Target::Symbol { name: "_g".into(), addend: 0 };
@@ -1194,21 +1219,44 @@ mod tests {
             addr: Addr::PageOffset { base: page, target: target.clone(), got: false },
             mmo: MemOperand::default(),
         };
-        let ops = vec![
+        let mut ops = vec![
             Op::I(Inst::Adr { page: true, rd: page, target: target.clone(), got: false }),
             Op::I(Inst::AddPageOffset { rd: address, rn: page, target: target.clone() }),
-            Op::I(store),
-            Op::Return { uses: vec![Reg::Gpr(address)], tail: None },
         ];
+        if call {
+            ops.push(Op::Call {
+                callee: crate::mfunc::Callee::Symbol("h".into()),
+                uses: vec![],
+                defs: vec![],
+                tail: false,
+            });
+        }
+        ops.extend([Op::I(store), Op::Return { uses: vec![Reg::Gpr(address)], tail: None }]);
         function.blocks.push(MBlock { label: "L0".into(), ops: OpList::from(ops) });
         let lir = view(&function);
         let insts = &lir.blocks[0].insts;
-        assert_eq!(insts.len(), 4, "the page, the fused address, the store, the return: {insts:?}");
         let fused = insts
             .iter()
             .filter(|inst| inst.rematerializable && inst.operands.iter().all(|o| !matches!(o, Operand::Use(_))))
             .count();
-        assert_eq!(fused, 2, "the page and the address are each made from nothing: {insts:?}");
+        (insts.len(), fused)
+    }
+
+    /// QuickrBasic uimain `uimn_act` -Os (+116 B): one `adrp` page read by an
+    /// `add :lo12:` and by a page-offset store after a call stayed one value
+    /// live across the call and took a seventh callee-saved register. The pin's
+    /// `MOVaddr` is the whole address, so the add is fused and the page stays
+    /// for the store, made again where it is.
+    #[test]
+    fn an_address_pair_fuses_where_its_page_would_live_across_a_call() {
+        assert_eq!(made_from_nothing(true), (5, 2), "the page, the fused address, the call, the store, the return");
+    }
+
+    /// Control: with no call between, the page is one shared value (the plain
+    /// symbol bases LSR counted: particle -O1 6 `adrp`, not 12).
+    #[test]
+    fn an_address_pair_stays_shared_where_no_call_separates_the_readers() {
+        assert_eq!(made_from_nothing(false), (4, 1), "the add stays an add of the shared page");
     }
 
     /// `sub sp, sp, #16` defined register 31, the zero register, so the
