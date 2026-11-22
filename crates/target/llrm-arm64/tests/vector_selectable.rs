@@ -200,18 +200,16 @@ const REFUSED: &[(&str, &str)] = &[
     ("lshr", "custom lowering of Srl"),
     ("ashr", "custom lowering of Sra"),
     // `CLZ`, `RBIT` and the saturating arithmetic have no instruction; `CNT`
-    // is bytes only, so `ctpop`, `cttz` and `bitreverse` of wider lanes have no pattern.
+    // is bytes only, so `ctpop`, `cttz` and `bitreverse` of wider lanes have no pattern; the
+    // `REV16/32/64` of `bswap` have no instruction.
     ("ctlz", "CannotSelect(\"CtLz\")"),
     ("cttz", "CannotSelect(\"CtTz\")"),
     ("ctpop", "CannotSelect(\"CtPop\")"),
     ("bitreverse", "CannotSelect(\"BitReverse\")"),
-    ("bswap", "bswap must be an even number of bytes"),
+    ("bswap", "machine opcode REV"),
     // The conversions of 16-bit lanes.
     ("uitofp_fptoui", "CannotSelect(\"FpToUInt\")"),
     ("sitofp_fptosi", "CannotSelect(\"FpToSInt\")"),
-    // The 64-bit reductions.
-    ("reduce_add", "CannotSelect(\"Add\")"),
-    ("reduce_add", "CannotSelect(\"Store\")"),
     // The float operations with no vector form yet.
     ("copysign", "CannotSelect(\"FCopySign\")"),
     ("floor", "a rounding intrinsic without its library call"),
