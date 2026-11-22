@@ -400,7 +400,7 @@ pub fn items_with(
     // the relaxation, the shared `MachineCSE` or the slot registers (-O2 68020
     // over 165 programs: no cell passes a gcc/clang clock bar either way).
     let one_build = !wants_size && !options.strict;
-    let finished = |options: Options| -> Result<(Vec<Item>, bool, Options), String> {
+    let finished = |options: Options| -> Result<(Vec<Item>, (bool, bool), Options), String> {
         let (plain, saved, chosen, shared) =
             items_trials(module, name, cpu, Options { relax_classes: false, ..options }, &prefixes)?;
         if !options.relax_classes || !saved || one_build {
@@ -417,7 +417,7 @@ pub fn items_with(
     // on
     let held = options.data_constants && wants_size;
     let options = Options { slot_registers: false, data_constants: false, ..options };
-    let (mut kept, shared, mut kept_options) = finished(options)?;
+    let (mut kept, (shared, licm_changes), mut kept_options) = finished(options)?;
     // The shared `MachineCSE` lengthens live ranges, and across calls they
     // spill. A function it changed is built through the whole sequence both
     // ways (the other trials' choices depend on the shape), the cheaper kept.
@@ -459,10 +459,10 @@ pub fn items_with(
         }
     }
     // The pin runs `MachineLICM` at every level; here -O1 and -Os make it a
-    // build kept only where it pays: fewer clocks at -O1, fewer
-    // bytes (then clocks) at -Os.
-    if options.shared_licm && (options.strict || wants_size) {
-        let (hoisted, _, _) = finished(Options { licm_trial: true, ..options })?;
+    // build, on the choices the other trials ended on, kept only where it pays:
+    // fewer clocks at -O1, fewer bytes (then clocks) at -Os.
+    if licm_changes {
+        let (hoisted, _) = items_once(module, name, cpu, Options { licm_trial: true, ..kept_options }, &prefixes)?;
         let better = if wants_size {
             crate::trial::keeps(&hoisted, &kept, cpu, price)
         } else {
@@ -496,7 +496,7 @@ fn items_trials(
     cpu: Cpu,
     options: Options,
     prefixes: &Prefixes,
-) -> Result<(Vec<Item>, bool, Options, bool), String> {
+) -> Result<(Vec<Item>, bool, Options, (bool, bool)), String> {
     let mut options = options;
     let (mut kept, touched) = items_once(module, name, cpu, options, prefixes)?;
     let saved = touched.global_copies;
@@ -524,7 +524,7 @@ fn items_trials(
     // div_constants_short +232 B. -O2 68020 over 165 programs: -154 B, 10
     // smaller, 6 larger; matmul 4472 M to 2258 M instructions.
     if !touched.any() || (!wants_size && !options.strict) {
-        return Ok((kept, saved, options, touched.shared_cse));
+        return Ok((kept, saved, options, (touched.shared_cse, touched.licm)));
     }
     let price = crate::timing::Price::of(wants_size);
     // first: the multiply decides the shape of the rest, and its price counts
@@ -624,7 +624,7 @@ fn items_trials(
             kept = plain;
         }
     }
-    Ok((kept, saved, options, touched.shared_cse))
+    Ok((kept, saved, options, (touched.shared_cse, touched.licm)))
 }
 
 /// Whether `function` carries through the extend flag: an `addx`, `subx` or
@@ -696,6 +696,8 @@ struct Touched {
     data_constants: bool,
     /// The shared `MachineCSE` changed the function.
     shared_cse: bool,
+    /// The shared `MachineLICM`, which this build left off, would change the function.
+    licm: bool,
     /// A spill slot moved into an address register ([`crate::slotreg`]).
     slot_registers: bool,
     /// An instruction reads a spill slot in place ([`crate::spillfold`]).
@@ -731,6 +733,14 @@ fn size_build(
             .named(name)
             .and_then(|id| module.global(id).function())
             .is_some_and(|one| has(&one.attrs, "optsize") || has(&one.attrs, "minsize"))
+}
+
+/// Whether -O1/-Os, which leave the shared `MachineLICM` off, probe it for a trial build.
+fn licm_trial_wanted(
+    options: Options,
+    wants_size: bool,
+) -> bool {
+    options.shared_licm && !options.licm_trial && (options.strict || wants_size)
 }
 
 /// Whether the shared `MachineLICM` runs on a function.
@@ -1051,6 +1061,9 @@ fn items_once(
             expand_cmov(&mut function)?;
             if licm_runs(options, wants_size) {
                 function = crate::regalloc::shared_licm(&function, wants_size)?;
+            } else if licm_trial_wanted(options, wants_size) {
+                let hoisted = crate::regalloc::shared_licm(&function, wants_size)?;
+                touched.licm = !same_instructions(&function, &hoisted);
             }
             if options.shared_cse {
                 let shared = crate::regalloc::shared_cse(&function)?;
