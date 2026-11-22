@@ -61,9 +61,28 @@ pub enum CodeModel {
     Small,
     Medium,
     Large,
+    /// No `-mcmodel` given: small, as the pin, unless the module's globals together pass what a
+    /// 16-bit displacement reaches ([`CodeModel::SMALL_REACH`]); then medium, as gcc's absolute data.
+    /// Resolved by the driver once the module is known.
+    Auto,
 }
 
 impl CodeModel {
+    /// The bytes of globals past which a `(d16,%pc)` reference cannot be assumed to reach.
+    pub const SMALL_REACH: usize = 32768;
+
+    /// `self`, with [`CodeModel::Auto`] settled for globals of `data_bytes`.
+    pub fn resolved(
+        self,
+        data_bytes: usize,
+    ) -> CodeModel {
+        match self {
+            CodeModel::Auto if data_bytes > CodeModel::SMALL_REACH => CodeModel::Medium,
+            CodeModel::Auto => CodeModel::Small,
+            other => other,
+        }
+    }
+
     /// `-mcmodel=NAME`: `small`, `medium` or `large`.
     pub fn parse(name: &str) -> Result<CodeModel, String> {
         match name {
@@ -77,7 +96,7 @@ impl CodeModel {
     /// Whether a global's address is an absolute one.
     pub fn absolute_data(self) -> bool {
         match self {
-            CodeModel::Small => false,
+            CodeModel::Small | CodeModel::Auto => false,
             CodeModel::Medium | CodeModel::Large => true,
         }
     }
