@@ -2352,7 +2352,7 @@ pub trait Tti {
     }
 
     /// DEVIATE LSR-COND-STEP: extra `add_rec_cost` of an addrec register rated
-    /// for a use that does not run every trip. The pin charges a register one
+    /// for an address use that does not run every trip. The pin charges a register one
     /// step however often its uses run; here the step is paid each trip, and a
     /// use that runs on a few (a switch's table lookup, 28 of 256 trips) saves
     /// its computation only then (switch_peeled_table: four counters stepped

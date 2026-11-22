@@ -114,19 +114,6 @@ impl Fixup {
 
     /// `LSRFixup::isUseFullyOutsideLoop`: whether the fixup always uses its
     /// value outside the loop of header `l`.
-    /// Whether the user is a phi outside the loop: the value the loop leaves,
-    /// which is needed whether or not it steps for this use.
-    pub fn is_exit_value(
-        &self,
-        cx: &Cx,
-    ) -> bool {
-        let user = cx.function.instruction(self.user);
-        user.opcode == Opcode::Phi
-            && cx.function.parent(self.user).is_some_and(|block| {
-                cx.loops.get_loop_for(block).is_none_or(|lp| !lp.contains(block))
-            })
-    }
-
     pub fn is_use_fully_outside_loop(
         &self,
         cx: &Cx,
@@ -968,8 +955,7 @@ impl Cost {
             self.c.add_rec_cost += loop_cost;
             if loop_cost > 0
                 && !lu.all_fixups_unconditional
-                && lu.kind != Kind::ICmpZero
-                && !lu.fixups.iter().all(|fixup| fixup.is_exit_value(r.cx))
+                && lu.kind == Kind::Address
             {
                 self.c.add_rec_cost += r.tti.lsr_conditional_use_step_cost();
             }
