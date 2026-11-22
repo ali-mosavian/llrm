@@ -233,6 +233,107 @@ impl CombineHooks for MosCombines {
     }
 }
 
+/// A global read by two users, one a memory-operand op, is read again by that
+/// op: `adc state`, not a zero-page copy of every byte the other user also
+/// reads (`state * 3`: `state << 1` and `+ state`). Each such user gets a load
+/// of its own, ordered after the first on the chain.
+///
+/// Pass: llvm-mos `MOSInstructionSelector.cpp` `shouldFoldMemAccess`: an
+/// absolute load folds into each of at most two users (`MaxNumUsers`; a
+/// reference past the first costs 1 byte and 1 clock, the copy it saves 2
+/// bytes and 3 clocks, plus the load). Translation: the shared matcher folds a
+/// load of one use only (`SelectionDAGISel`), so the second read is made
+/// here, as `getLoad` over the first one's chain; the matcher still checks the
+/// fold is legal (a store between them keeps the register). The pass's
+/// volatile and ordered-access refusals are the first test. Run once over the
+/// legal DAG, not as a combine: the combiner's load CSE merges the second read
+/// back into the first, and the two fight (`va_copy` made 131,073 nodes).
+pub fn reload_into_memory_operands(dag: &mut SelectionDAG) {
+    for node in dag.node_ids().collect::<Vec<_>>() {
+        if dag.opcode(SDValue { node, res: 0 }) == ISD::Load && dag.has_users(SDValue { node, res: 0 }) {
+            reload_one(dag, SDValue { node, res: 0 });
+        }
+    }
+}
+
+fn reload_one(
+    dag: &mut SelectionDAG,
+    load: SDValue,
+) {
+    let NodeData::Mem(info) = dag.node(load).data else { return };
+    let vt = dag.value_type(load);
+    if load.res != 0
+        || info.volatile
+        || info.ordering.is_some()
+        || info.ext.is_some()
+        || !matches!(vt, EVT::I8 | EVT::I16)
+        || !is_global_address(dag, dag.operand(load, 1))
+    {
+        return;
+    }
+    let users: Vec<u32> = dag.users(load).collect();
+    // a shift and the funnel shift by one that makes its high half read the
+    // same load: the pin's shift of a byte is one user of it
+    let reads = |op: ISD| users.iter().any(|&u| dag.opcode(SDValue { node: u, res: 0 }) == op);
+    let counted = users.len() - usize::from(reads(ISD::Shl) && reads(mosisd::FSHL1));
+    if counted != 2 {
+        return;
+    }
+    // the operand the op's `.td` pattern takes a load in
+    let takes = |dag: &SelectionDAG, user: u32| -> Option<usize> {
+        let user = SDValue { node: user, res: 0 };
+        let positions: Vec<usize> = (0..dag.node(user).ops.len()).filter(|&i| dag.operand(user, i) == load).collect();
+        let [at] = positions[..] else { return None };
+        let commutes =
+            matches!(
+                dag.opcode(user),
+                ISD::Add | ISD::And | ISD::Or | ISD::Xor | ISD::UAddO | ISD::UAddOCarry
+            );
+        let second = matches!(
+            dag.opcode(user),
+            ISD::Sub | ISD::USubO | ISD::USubOCarry | mosisd::CMP
+        );
+        ((commutes && at < 2) || (second && at == 1)).then_some(at)
+    };
+    let mut takers: Vec<(u32, usize)> = users.iter().filter_map(|&u| takes(dag, u).map(|at| (u, at))).collect();
+    // both counted users take one: the last keeps the first load
+    if takers.len() == counted {
+        takers.pop();
+    }
+    if takers.is_empty() {
+        return;
+    }
+    let mut chain = SDValue { node: load.node, res: 1 };
+    let ptr = dag.operand(load, 1);
+    for (user, at) in takers {
+        let again = dag.get_load(vt, chain, ptr, info);
+        let mut ops = dag.node(SDValue { node: user, res: 0 }).ops.clone();
+        ops[at] = again;
+        // an equal node already reads the new load: it takes the user's place
+        let same = dag.update_node_operands(user, &ops);
+        if same != user {
+            for res in 0..dag.node(SDValue { node: user, res: 0 }).values.len() as u8 {
+                dag.replace_all_uses_with(SDValue { node: user, res }, SDValue { node: same, res });
+            }
+        }
+        // what read the chain after the first read follows the second
+        dag.replace_uses_except(chain, SDValue { node: again.node, res: 1 }, again.node);
+        chain = SDValue { node: again.node, res: 1 };
+    }
+}
+
+/// A global's address, with or without a constant offset: what `MOSAbs` takes.
+fn is_global_address(
+    dag: &SelectionDAG,
+    address: SDValue,
+) -> bool {
+    let wrapper = match (dag.opcode(address) == ISD::Add).then(|| dag.constant(dag.operand(address, 1))) {
+        Some(Some(c)) if c < 65536 => dag.operand(address, 0),
+        _ => address,
+    };
+    dag.opcode(wrapper) == mosisd::WRAPPER && dag.opcode(dag.operand(wrapper, 0)) == ISD::TargetGlobalAddress
+}
+
 /// `(x - c) <u n` of a word, with `0 < c` and `c + n <= 256`: `x` lies in
 /// `[c, c + n)`, below 256, so its high byte is zero and the low byte moves to
 /// `lo - c`. The word is compared as `(lo(x) - c, hi(x)) <u n`: a byte subtract
