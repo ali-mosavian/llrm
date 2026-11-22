@@ -11,12 +11,14 @@ static long descend(long n, long *total)
     *total += cell;
     return n - descend(n - 1, total) + cell;
 }
+/* The depths come from volatile objects: gcc evaluated both recursions at compile time, so a clock census measured no kernel on its side. */
+static volatile long depth_a = 2, depth_b = 10;
 int main(void)
 {
     long total = 0;
-    report(descend(2, &total));
+    report(descend(depth_a, &total));
     report(total);
-    report(descend(10, &total));
+    report(descend(depth_b, &total));
     report(total);
     return 0;
 }
