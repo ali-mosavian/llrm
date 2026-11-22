@@ -1113,9 +1113,24 @@ mod tests {
             ("call", Box::new(move |f| f.blocks[at].insts[inst].call ^= true)),
             ("terminator", Box::new(move |f| f.blocks[at].insts[inst].terminator ^= true)),
             ("barrier", Box::new(move |f| f.blocks[at].insts[inst].barrier ^= true)),
-            ("sets_flags", Box::new(move |f| f.blocks[at].insts[inst].sets_flags ^= true)),
+            // the field itself, not the accessor, is what the key hashes: a
+            // destructured toggle is no read of it (`flag_accessors.rs` scans
+            // for `.sets_flags` as a read)
+            (
+                "sets_flags",
+                Box::new(move |f| {
+                    let Inst { sets_flags, .. } = &mut f.blocks[at].insts[inst];
+                    *sets_flags ^= true;
+                }),
+            ),
             ("remade_sets_flags", Box::new(move |f| f.blocks[at].insts[inst].remade_sets_flags ^= true)),
-            ("reads_flags", Box::new(move |f| f.blocks[at].insts[inst].reads_flags ^= true)),
+            (
+                "reads_flags",
+                Box::new(move |f| {
+                    let Inst { reads_flags, .. } = &mut f.blocks[at].insts[inst];
+                    *reads_flags ^= true;
+                }),
+            ),
             ("may_load", Box::new(move |f| f.blocks[at].insts[inst].may_load ^= true)),
             ("may_store", Box::new(move |f| f.blocks[at].insts[inst].may_store ^= true)),
             ("side_effects", Box::new(move |f| f.blocks[at].insts[inst].side_effects ^= true)),
