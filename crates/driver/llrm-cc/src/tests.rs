@@ -710,3 +710,14 @@ fn very_cheap_vectorizing_is_opt_in() {
     }
     assert!(has(&llc("arm64-linux", "-O2 -fllrm-vect-very-cheap -c x.c")));
 }
+
+/// The runtime of QuickBASIC at `x86_32-wat` (every function regcall, so every parameter `inreg`) was refused by #10316 ("regparm (an `inreg`
+/// parameter) is not translated yet") though `watcall32` places those in EAX, EDX, EBX, ECX: the four flat QB tests of test_bench.py failed.
+/// `-mregparm=3` under `-mabi=watcom` alone stays refused (`tests/m32_regparm_refused.rs`).
+#[test]
+fn the_watcom_regcall_row_places_inreg_and_a_regparm_build_under_watcom_does_not() {
+    let table = targets(TARGETS).unwrap();
+    assert!(places_inreg(&table["x86_32-wat"], &built("-c x.c")));
+    assert!(!places_inreg(&table["x86_32-linux"], &built("-mabi=watcom -mregparm=3 -c x.c")));
+    assert!(places_inreg(&table["x86_32-linux"], &built("-mabi=sysv -c x.c")));
+}
