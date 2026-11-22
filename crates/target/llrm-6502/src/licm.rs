@@ -13,9 +13,11 @@
 //!
 //! A frame address (`LEA`: `rs0` plus a distance, the pointer of an object past
 //! the 255 `(zp),Y` reaches) is hoisted too, as the pin's MachineLICM hoists
-//! the `LEA` of a stack slot: it clobbers only `a` and the pair it makes lives
-//! in zero page, so it is no pressure on `a`, `x` and `y`; a loop keeps at
-//! most [`FRAME_ADDRESSES`] of them.
+//! the `LEA` of a stack slot. It clobbers only `a` and the pair it makes lives
+//! in zero page, so it is no pressure on `a`, `x` and `y`: the pin's
+//! `CanCauseHighRegPressure` is asked of the zero-page pairs, `pressure +
+//! weight >= limit` with the loop's peak as the pressure and the pairs the
+//! smallest zero page leaves ([`PAIR_LIMIT`]) as the limit.
 //!
 //! # Example
 //! ```text
@@ -38,8 +40,9 @@ use crate::alloc::Class;
 /// `a`, `x`, `y`: where a loop can hold a value for an immediate-speed read.
 const REGISTERS: usize = 3;
 
-/// The frame addresses one loop keeps in zero-page pairs.
-const FRAME_ADDRESSES: usize = 2;
+/// The zero-page pairs of the smallest zero page, less `rs0`'s: the limit of
+/// the pin's `RegLimit` for the class a hoisted pointer lives in.
+const PAIR_LIMIT: usize = crate::alloc::BASE_CELLS as usize / 2 - 1;
 
 #[derive(Clone)]
 struct Wrapped {
@@ -143,7 +146,7 @@ struct Mos {
     /// has moved out of it.
     peak: usize,
     hoisted: usize,
-    frame_addresses: usize,
+    pairs: usize,
     /// The loop moves `rs0`: no address made from it is the same on every trip.
     moves_sp: bool,
     /// The loop calls: a call clobbers `a`, `x` and `y`.
@@ -187,7 +190,7 @@ impl Policy<Wrapped> for Mos {
         self.moves_sp =
             facts.inside_blocks().any(|block| block.insns.iter().any(|one| matches!(one.inst.kind, Kind::Op("ADJSP"))));
         self.hoisted = 0;
-        self.frame_addresses = 0;
+        self.pairs = 0;
         self.peak = 0;
         for block in facts.inside_blocks() {
             let mut now: BTreeSet<u32> = self.live.get(&block.at).cloned().unwrap_or_default();
@@ -231,10 +234,11 @@ impl Policy<Wrapped> for Mos {
             && inst.ties.is_empty()
             && !(inst.call || inst.terminator || inst.barrier || inst.may_store || inst.side_effects);
         if frame_address {
-            if self.calls || self.moves_sp || !(facts.every_trip)(at) || self.frame_addresses >= FRAME_ADDRESSES {
+            // `CanCauseHighRegPressure`: the peak and the pairs moved, the one more
+            if self.calls || self.moves_sp || !(facts.every_trip)(at) || self.peak + self.pairs + 1 >= PAIR_LIMIT {
                 return false;
             }
-            self.frame_addresses += 1;
+            self.pairs += 1;
             return true;
         }
         // a constant a phi takes would need a copy; one in a block that does
@@ -330,7 +334,7 @@ pub fn hoist(function: &mut MFunction<Class>) -> bool {
     let Some(moved) = licm_core::hoist(
         &blocks,
         first.id as i64,
-        &mut Mos { live: live_out(&blocks), alias: copies(&blocks), peak: 0, hoisted: 0, frame_addresses: 0, moves_sp: false, calls: false },
+        &mut Mos { live: live_out(&blocks), alias: copies(&blocks), peak: 0, hoisted: 0, pairs: 0, moves_sp: false, calls: false },
     ) else {
         return false;
     };
