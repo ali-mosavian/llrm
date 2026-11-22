@@ -431,7 +431,10 @@ pub fn module_text(
     }
     // at size the 16-bit divisions are the compact bit loop; the speed routine
     // (a byte divisor takes a short path, a quotient of a few bits stops early)
-    // is the module's choice by the same share rule as the long divisions
+    // is the module's choice by the share rule of the long divisions at the
+    // rate of `[share.size] division16`.
+    // DEVIATE 6502-DIV-16-OS (owner llrm-target-6502, exit 2026-12-12): the
+    // pin's `__udivhi3` is one routine.
     let compact_division16 = |text: &str| {
         ["__udivhi3c", "__divhi3c", "__umodhi3c", "__modhi3c", "__divmodhi4c"]
             .iter()
