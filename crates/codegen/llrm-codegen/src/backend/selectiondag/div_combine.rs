@@ -3,13 +3,12 @@
 //! numbers from [`super::div_const`]) and the power-of-two shifts.
 //!
 //! DEVIATE SD206: integer types the target holds in a register only (no
-//! promoted-type multiply, no `BuildExactSDIV`/`BuildExactUDIV` for `exact`
-//! divides), no `DIVREM` merging, and
+//! promoted-type multiply), no `DIVREM` merging, and
 //! `BuildSDIVPow2` is the generic shift sequence except where the target's
 //! `sdiv_pow2_with_cmov` makes the pin's `cmov` form (x86 with `cmov`, divisor
 //! not 2 or -2). `isIntDivCheap` is the
 //! configured `int_div_cheap` (the pin's `minsize`; the `-Os` rule of the
-//! target is not wired). Exit: the promoted and exact forms, the `-Os` rule.
+//! target is not wired). Exit: the promoted form, the `-Os` rule.
 //! Owner sdag-b. Review 2026-11-27.
 //!
 //! # See also
@@ -20,7 +19,11 @@
 //! `TargetLowering::BuildSDIV`
 //! ([L6749](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/TargetLowering.cpp#L6749)),
 //! `BuildUDIV`
-//! ([L6938](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/TargetLowering.cpp#L6938)).
+//! ([L6938](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/TargetLowering.cpp#L6938)),
+//! `BuildExactSDIV`
+//! ([L6563](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/TargetLowering.cpp#L6563))
+//! and `BuildExactUDIV`
+//! ([L6624](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/TargetLowering.cpp#L6624)).
 
 use super::dag::{SDNodeFlags, SDValue};
 use super::dag_combiner::{CombineHooks, CombineLevel, DagCombiner};
@@ -429,6 +432,41 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         None
     }
 
+    /// `BuildExactSDIV` and `BuildExactUDIV` (TargetLowering.cpp#L6563,
+    /// #L6624): an `exact` divide by `d` is a shift out of `d`'s trailing zeros
+    /// (`exact`, so nothing is lost) and a multiply by the inverse of the odd
+    /// rest of `d` modulo `2^bits`.
+    fn build_exact_div(
+        &mut self,
+        signed: bool,
+        n0: SDValue,
+        n1: SDValue,
+        vt: EVT,
+    ) -> Option<SDValue> {
+        let bits = if vt.is_vector() { vt.element().size_in_bits() } else { vt.size_in_bits() };
+        let mask = super::fold::mask(bits);
+        let d = self.dag.const_or_splat(n1)? & mask;
+        if d == 0 {
+            return None;
+        }
+        let shift = d.trailing_zeros();
+        let odd = if signed && d >> (bits - 1) & 1 == 1 {
+            // `ashrInPlace`: the divisor's sign fills the vacated bits.
+            ((d | !mask) >> shift) & mask
+        } else {
+            d >> shift
+        };
+        let factor = self.dag.get_constant(super::combine_urem_eq::inverse(odd, bits), vt);
+        let mut result = n0;
+        if shift != 0 {
+            let by = self.shift_amount(vt, shift);
+            result = self
+                .dag
+                .get_node_flags(if signed { ISD::Sra } else { ISD::Srl }, vt, &[result, by], SDNodeFlags::EXACT);
+        }
+        Some(self.dag.get_node(ISD::Mul, vt, &[result, factor]))
+    }
+
     /// `TargetLowering::BuildSDIV`, for a type the target holds.
     fn build_sdiv(
         &mut self,
@@ -438,7 +476,11 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
     ) -> Option<SDValue> {
         let vt = self.dag.value_type(node);
         let bits = if vt.is_vector() { vt.element().size_in_bits() } else { vt.size_in_bits() };
-        if self.dag.node(node).flags.0 & SDNodeFlags::EXACT.0 != 0 || !self.tli?.types.is_type_legal(vt) {
+        // "If the sdiv has an 'exact' bit we can use a simpler lowering."
+        if self.dag.node(node).flags.0 & SDNodeFlags::EXACT.0 != 0 {
+            return self.build_exact_div(true, n0, n1, vt);
+        }
+        if !self.tli?.types.is_type_legal(vt) {
             return None;
         }
         let mask = super::fold::mask(bits);
@@ -556,7 +598,11 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         let vt = self.dag.value_type(node);
         let lane_ty = if vt.is_vector() { vt.element() } else { vt };
         let bits = lane_ty.size_in_bits();
-        if self.dag.node(node).flags.0 & SDNodeFlags::EXACT.0 != 0 || !self.tli?.types.is_type_legal(vt) {
+        // "If the udiv has an 'exact' bit we can use a simpler lowering."
+        if self.dag.node(node).flags.0 & SDNodeFlags::EXACT.0 != 0 {
+            return self.build_exact_div(false, n0, n1, vt);
+        }
+        if !self.tli?.types.is_type_legal(vt) {
             return None;
         }
         let d = self.dag.const_or_splat(n1)? & super::fold::mask(bits);
