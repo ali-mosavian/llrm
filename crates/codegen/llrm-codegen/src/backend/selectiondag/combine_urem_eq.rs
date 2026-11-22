@@ -20,7 +20,7 @@ use super::isd::{CondCode, ISD};
 use super::mvt::EVT;
 
 /// `p` with `p * d0 = 1 (mod 2^width)`, `d0` odd (Newton's iteration).
-fn inverse(
+pub(super) fn inverse(
     d0: u128,
     width: u32,
 ) -> u128 {

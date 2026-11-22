@@ -1034,7 +1034,10 @@ fn items_once(
                 }
                 crate::shiftadd::shifts_to_adds(&mut function);
                 crate::negadd::negative_adds_to_subq(&mut function);
-                crate::boolbyte::scc_booleans(&mut function);
+                // -O1 judges clocks too and `menu.c` grew there: Os, -O2 and -O3
+                if wants_size || !options.strict {
+                    crate::boolbyte::scc_booleans(&mut function);
+                }
                 crate::addrroles::address_roles(&mut function);
                 crate::addrarith::address_adds(&mut function, cpu, wants_size, options.compare_destinations);
                 crate::foldload::fold_loads(&mut function);
