@@ -490,6 +490,10 @@ pub struct LsrCost {
     pub num_regs: u32,
     pub add_rec_cost: u32,
     pub num_iv_muls: u32,
+    /// DEVIATE LU17: the target's instructions for the in-line multiplies the
+    /// loop as written does to form its induction variables
+    /// (`Tti::lsr_written_step_work`), which the pin's rating leaves at zero.
+    pub written_work: u32,
     pub num_base_adds: u32,
     pub imm_cost: u32,
     pub setup_cost: u32,
@@ -2383,11 +2387,11 @@ pub trait Tti {
     }
 
     /// DEVIATE LSR-COND-STEP: extra `add_rec_cost` of an addrec register rated
-    /// for an address use that does not run every trip. The pin charges a register one
-    /// step however often its uses run; here the step is paid each trip, and a
-    /// use that runs on a few (a switch's table lookup, 28 of 256 trips) saves
-    /// its computation only then (switch_peeled_table: four counters stepped
-    /// 256 times for a lookup run 28 times).
+    /// for an address use that does not run every trip. The pin charges a
+    /// register one step however often its uses run; here the step is paid
+    /// each trip, and a use that runs on a few (a switch's table lookup, 28
+    /// of 256 trips) saves its computation only then (switch_peeled_table:
+    /// four counters stepped 256 times for a lookup run 28 times).
     fn lsr_conditional_use_step_cost(&self) -> u32 {
         0
     }
@@ -2401,10 +2405,10 @@ pub trait Tti {
         false
     }
 
-    /// llvm-mos's `TargetTransformInfo::allowIllegalIntegerIV` (not in the pin):
-    /// a loop counter of a width the datalayout does not hold is still a counter
-    /// `IndVarSimplify` may rewrite the exit test on (`findLoopCounter`'s
-    /// `isLegalInteger` check is skipped).
+    /// llvm-mos's `TargetTransformInfo::allowIllegalIntegerIV` (not in the
+    /// pin): a loop counter of a width the datalayout does not hold is
+    /// still a counter `IndVarSimplify` may rewrite the exit test on
+    /// (`findLoopCounter`'s `isLegalInteger` check is skipped).
     /// [llvm-mos](https://github.com/llvm-mos/llvm-mos/blob/a40207a371b6/llvm/lib/Target/MOS/MOSTargetTransformInfo.h#L47)
     fn allow_illegal_integer_iv(&self) -> bool {
         false
@@ -3888,6 +3892,19 @@ pub trait Tti {
     /// rating of the baseline adds this to `num_iv_muls`. DEVIATE LU17
     /// (`lsr_use.rs`); 0 where multiplying is cheap.
     fn lsr_written_step_multiplies(
+        &self,
+        _step: i64,
+        _bits: u32,
+    ) -> u32 {
+        0
+    }
+
+    /// The instructions of the in-line multiply the loop as written does to
+    /// form an induction variable that steps by `step` (`bits` wide): the
+    /// shifts and the add of `i * 7`. Added to `LsrCost::written_work`;
+    /// 0 where the multiply is a call (`lsr_written_step_multiplies` prices
+    /// that) or free. DEVIATE LU17 (`lsr_use.rs`).
+    fn lsr_written_step_work(
         &self,
         _step: i64,
         _bits: u32,
