@@ -371,6 +371,23 @@ impl Predicate<'_> {
         Operand::Value(self.function.instruction(inst).result.expect("a cast value"))
     }
 
+    /// Whether an instruction of the loop at `header` is read outside it.
+    fn is_live_out(
+        &self,
+        header: BlockId,
+    ) -> bool {
+        let cx = self.env.cx(&*self.context, &*self.function);
+        let l = cx.loops.get_loop_for(header).expect("a loop");
+        l.get_blocks().iter().flat_map(|&block| self.function.iter_block(block)).any(|inst| {
+            self.function.instruction(inst).result.is_some_and(|value| {
+                self.function
+                    .users(value)
+                    .iter()
+                    .any(|one| self.function.parent(one.user).is_some_and(|block| !l.contains(block)))
+            })
+        })
+    }
+
     /// `BadExit`: an exit that can't be predicated.
     fn bad_exit(
         &mut self,
@@ -404,6 +421,13 @@ impl Predicate<'_> {
             .next()
             .is_some_and(|inst| self.function.instruction(inst).opcode == Opcode::Phi)
         {
+            return true;
+        }
+        // In LCSSA form (the pin's precondition) a value read outside the loop
+        // is read through an exit phi, the test above. Not in that form, the
+        // same value is read directly and the exit is as bad: predicated, the
+        // loop would leave on its first trip with the live-out unfinished.
+        if self.is_live_out(header) {
             return true;
         }
         let cx = self.env.cx(&*self.context, &*self.function);
