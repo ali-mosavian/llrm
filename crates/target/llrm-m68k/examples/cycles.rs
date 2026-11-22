@@ -322,6 +322,9 @@ pub(crate) struct Total {
     /// A partial term that is not a published maximum (a shift count at its
     /// lower bound...): the total is no upper bound.
     pub(crate) open_above: bool,
+    /// The instructions that made `open_above` (an unnamed lower bound is an instrument gap), by text, with the times
+    /// each ran.
+    pub(crate) open_terms: std::collections::BTreeMap<String, u64>,
     /// Executed instructions with no disassembly: unpriced on every model.
     pub(crate) unknown: usize,
     /// Executed instructions one model has no row for (a 68020 `extb.l` on the
@@ -338,6 +341,7 @@ impl Total {
             clocks: vec![0; models.len()],
             partial: false,
             open_above: false,
+            open_terms: std::collections::BTreeMap::new(),
             unknown: 0,
             unpriced: vec![0; models.len()],
             truncated: false,
@@ -361,6 +365,9 @@ impl Total {
                     self.clocks[slot] += u64::from(one.clocks);
                     self.partial |= one.partial;
                     self.open_above |= one.partial && !one.maximum;
+                    if one.partial && !one.maximum {
+                        *self.open_terms.entry(text.to_owned()).or_default() += 1;
+                    }
                 }
                 Err(why) => {
                     assert!(!why.starts_with(llrm_m68k::timing::UNPARSEABLE), "{why}");
@@ -407,6 +414,14 @@ impl Total {
         };
         let unknown = if self.unknown_of(slot) > 0 { format!(" ?{}", self.unknown_of(slot)) } else { String::new() };
         format!("{before}{}{after}{unknown}", self.clocks[slot])
+    }
+
+    /// The instructions behind a `*`, most often run first: `muls.l %d1, %d0 x4; bfextu (%a0){0:8}, %d1 x2`. Empty for a
+    /// total with no open lower bound.
+    pub(crate) fn open_terms_line(&self) -> String {
+        let mut terms: Vec<(&String, &u64)> = self.open_terms.iter().collect();
+        terms.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
+        terms.iter().take(4).map(|(text, times)| format!("{text} x{times}")).collect::<Vec<_>>().join("; ")
     }
 
     /// The unpriced instructions of the model in `slot`.
@@ -506,6 +521,24 @@ mod tests {
             run(&["muls.l %d1, %d0", "bfextu (%a0){0:8}, %d1"]).cell(0).ends_with('*'),
             "a bit-field bound is no upper bound"
         );
+    }
+
+    /// A `*` named no instruction, so a `>=` cell could not be told from a cut run (register_upper_half 68020 -Os: ours
+    /// `>=4524`, gcc `>=4137`, undecidable). The open terms are listed by text with their counts.
+    #[test]
+    fn an_open_lower_bound_names_its_instructions() {
+        let models = [Model::M68020];
+        let mut total = Total::new(&models);
+        let mut registers = DataRegisters::new();
+        let mut seen = std::collections::HashSet::new();
+        for text in ["muls.l %d1, %d0", "bfextu (%a0){0:8}, %d1", "bfextu (%a0){0:8}, %d1"] {
+            total.charge_executed(&models, &mut registers, text, 4, false, None, &mut seen);
+        }
+        assert!(total.cell(0).ends_with('*'));
+        assert_eq!(total.open_terms_line(), "bfextu (%a0){0:8}, %d1 x2");
+        let mut closed = Total::new(&models);
+        closed.charge_executed(&models, &mut registers, "moveq #27, %d1", 2, false, None, &mut seen);
+        assert_eq!(closed.open_terms_line(), "");
     }
 
     /// bitcount_idioms 68000 O1 priced `lsr.l %d2,%d0` (`d2` = 16, run 8 times)
@@ -803,6 +836,9 @@ fn main() {
                 .collect();
             let name = Path::new(&path).file_name().map_or(path.clone(), |n| n.to_string_lossy().into_owned());
             println!("| {name} | {} | {} |", total.insns, cells.join(" | "));
+            if total.open_above {
+                println!("open: {name}: {}", total.open_terms_line());
+            }
         }
         return;
     }

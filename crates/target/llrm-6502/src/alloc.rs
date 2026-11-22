@@ -92,6 +92,10 @@ thread_local! {
     static IMAGINARY: std::cell::Cell<u8> = const { std::cell::Cell::new(BASE_CELLS) };
     static TUNING: std::cell::Cell<Tuning> = const { std::cell::Cell::new(Tuning::SPEED) };
     static SPIKE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Whether a dead carry save goes before allocation (see
+    /// [`with_early_save_drop`]), and how many did.
+    static EARLY_SAVE_DROP: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+    static SAVE_DROPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static EMITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     /// Whether a long division by a divisor not known to be a byte calls the
     /// speed routine with the pin-structure wide path, and not the one with
@@ -164,6 +168,23 @@ impl Drop for AllocationCache {
     fn drop(&mut self) {
         ALLOCATED.with(|all| *all.borrow_mut() = None);
     }
+}
+
+/// `run` with the dead carry saves dropped before allocation (`on`) or only
+/// after it ([`drop_overwritten_carry_saves`]).
+pub fn with_early_save_drop<R>(
+    on: bool,
+    run: impl FnOnce() -> R,
+) -> R {
+    let was = EARLY_SAVE_DROP.with(|c| c.replace(on));
+    let result = run();
+    EARLY_SAVE_DROP.with(|c| c.set(was));
+    result
+}
+
+/// The dead carry saves dropped before allocation since the last call.
+pub fn take_save_drops() -> usize {
+    SAVE_DROPS.with(|c| c.replace(0))
 }
 
 /// How many times this thread ran the register allocator (not found in the
@@ -3538,6 +3559,53 @@ fn call_compact_routines(function: &mut MFunction<Class>) {
     }
 }
 
+/// A carry save whose byte nothing read (`lda #0; rol a`) before the next write
+/// of `a` is dead: the 32-bit add paid it before a counter step that writes `a`
+/// first (licm_graph's `run`, 4 clocks and 3 bytes a trip).
+///
+/// Dropped before allocation the free `a` helps some modules (call_keeps -13 B,
+/// mul_constants -62 B) and costs others: the allocator chooses differently at
+/// each site of a repeated chain and the outliner no longer shares them
+/// (`wide_shift_by_one` -O2 843 -> 916 B, `recdeep` -O1 735 -> 788 B). This
+/// runs after allocation always; `keep_carry_in_c` drops before it unless
+/// [`with_early_save_drop`] says not, and `driver::save_drop_trial` keeps the
+/// module with fewer bytes.
+fn drop_overwritten_carry_saves(
+    function: &mut MFunction<Class>,
+    at: &impl Fn(Reg) -> RegId,
+) {
+    let is_a = |r: &Reg| at(*r) == reg::A;
+    for block in &mut function.blocks {
+        let mut i = 0;
+        while i < block.insts.len() {
+            if block.insts[i].kind == Kind::Op("SAVEC") && overwritten_save(&block.insts[i + 1..], &is_a) {
+                block.insts.remove(i);
+            } else {
+                i += 1;
+            }
+        }
+    }
+}
+
+/// Whether the next instruction of `rest` to touch `a` writes it without
+/// reading it, before any call, terminator or barrier.
+fn overwritten_save(
+    rest: &[Inst],
+    is_a: &impl Fn(&Reg) -> bool,
+) -> bool {
+    for next in rest {
+        let reads = next.operands.iter().any(|o| matches!(o, Operand::Use(r) if is_a(r)));
+        let writes = next.operands.iter().any(|o| matches!(o, Operand::Def(r) if is_a(r)));
+        if reads || next.call || next.terminator || next.barrier {
+            return false;
+        }
+        if writes {
+            return true;
+        }
+    }
+    false
+}
+
 /// A carry made into a byte and read back with only moves and loads between
 /// (`SAVEC; copy; ..; copy; LOADC`) stays in C: the 32-bit add paid
 /// `lda #0; rol a; lsr a` between its two halves. A byte nothing reads goes
@@ -3562,6 +3630,7 @@ fn keep_carry_in_c(function: &mut MFunction<Class>) {
         _ => None,
     };
     let moves = |inst: &Inst| matches!(inst.kind, Kind::Copy | Kind::Op("LDM" | "LDI" | "STM"));
+    let early = EARLY_SAVE_DROP.with(std::cell::Cell::get);
     let in_a: HashSet<u32> =
         (0..function.classes.len() as u32).filter(|v| function.classes[*v as usize] == Class(Class::A)).collect();
     let is_a = |r: &Reg| *r == acc || matches!(r, Reg::Virt(v) if in_a.contains(v));
@@ -3570,28 +3639,11 @@ fn keep_carry_in_c(function: &mut MFunction<Class>) {
         while at < block.insts.len() {
             let Some(cell) = saved(&block.insts, at) else {
                 // the byte was dropped as unread: the save is a write of A that
-                // the next write of A overwrites unread (a load, or the scratch
-                // of a step that tests through A)
-                let overwritten = block
-                    .insts
-                    .get(at + 1..)
-                    .is_some_and(
-                        |rest| {
-                            for next in rest {
-                                let reads = next.operands.iter().any(|o| matches!(o, Operand::Use(r) if is_a(r)));
-                                let writes = next.operands.iter().any(|o| matches!(o, Operand::Def(r) if is_a(r)));
-                                if reads || next.call || next.terminator || next.barrier {
-                                    return false;
-                                }
-                                if writes {
-                                    return true;
-                                }
-                            }
-                            false
-                        },
-                    );
-                if block.insts[at].kind == Kind::Op("SAVEC") && overwritten {
+                // the next write of A overwrites unread
+                if early && block.insts[at].kind == Kind::Op("SAVEC") && overwritten_save(&block.insts[at + 1..], &is_a)
+                {
                     block.insts.remove(at);
+                    SAVE_DROPS.with(|c| c.set(c.get() + 1));
                 } else {
                     at += 1;
                 }
@@ -4574,6 +4626,7 @@ fn emit_with<const STACK: bool>(
         |to, from| !matches!((to, from), (reg::X, reg::Y) | (reg::Y, reg::X)),
     );
     remove_redundant_copies_between::<Mos<STACK>>(&mut function, &assignment, |_| true, |_| true);
+    drop_overwritten_carry_saves(&mut function, &at);
     branch_fold::<Mos<STACK>>(&mut function);
     // tail merging splits blocks: a block it makes has no label of the source's
     let labels = &labels_with_new_blocks(labels, &function);

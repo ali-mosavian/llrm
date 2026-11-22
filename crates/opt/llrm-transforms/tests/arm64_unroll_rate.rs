@@ -2,16 +2,18 @@
 
 use llrm_arm64::machine::Platform;
 use llrm_arm64::tti::AArch64;
-use llrm_transforms::loopunrollpass::{unroll_function, Options};
+use llrm_transforms::loopunrollpass::{Options, unroll_function};
 
-/// shellsort -O3 at 20 clocks a byte: the 6-trip gap loop was credited a move
+/// shellsort -O2 at 20 clocks a byte (-O3 takes the pin's threshold alone,
+/// UP1-O3, and ignores the rate): the 6-trip gap loop was credited a move
 /// for each read of `gap` in its inner loop, run 1,000 times each (12,491
 /// clocks "saved" against 416 B). Unrolled it ran 7,090 instructions for
 /// 560 B, rolled 6,177 for 164 B. Where an immediate saves nothing the loop
 /// stays rolled: one loop of the nest is left with a counter phi of 32.
 #[test]
 fn the_gap_loop_of_a_shellsort_stays_rolled_at_a_low_rate() {
-    let mut program = llrm_arm64::driver::program(include_str!("data/shellsort_o1.ll"), Platform::Linux).expect("parses");
+    let mut program =
+        llrm_arm64::driver::program(include_str!("data/shellsort_o1.ll"), Platform::Linux).expect("parses");
     let layout = program.layout.clone();
     let module = &mut program.modules[0];
     let (context, function) = module.function_mut("bench_shellsort").expect("function");
@@ -20,7 +22,7 @@ fn the_gap_loop_of_a_shellsort_stays_rolled_at_a_low_rate() {
     let mut tti = AArch64::of_cpu("generic").expect("a cpu");
     tti.unroll_rate = 20_000;
     let options = Options {
-        opt_level: 3,
+        opt_level: 2,
         opt_size: false,
         min_size: false,
         only_when_forced: false,
