@@ -114,6 +114,10 @@ pub(super) fn full_unroll_pays(
     // 857 at 6) for 700 -> 292 B, and no rate keeps shellsort and jpeg at the
     // pin's bytes: DEVIATE ARM64-NEST-O3 (owner w15, exit 2026-11-30) leaves
     // the rows slower than gcc and clang at the pin's value.
+    // DEVIATE UP1-O3 (owner arm64, exit 2026-12-21): arm64 takes the pin's
+    // threshold alone at -O3, the price off (`unroll_milliclocks_per_byte_at`):
+    // modelled clocks on 12 cells, none worse than the best bar (matmul -6.1%,
+    // shellsort -17.3%, jpeg_single -1.8%, particle -2.9%).
     let prices_nest = prices_nest_here;
     // DEVIATE ARM64-NEST-O3-INNER (owner arm64, exit 2026-11-24): at -O3 the
     // pin decides a loop inside a loop of known trips by its size alone, as it
