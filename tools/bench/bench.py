@@ -28,7 +28,7 @@ import tomllib
 from datetime import date
 from pathlib import Path
 from dataclasses import dataclass
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "dosbatch"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -463,6 +463,17 @@ def links_helpers(reference: str) -> bool:
     return reference in REFERENCES["c"]
 
 
+def count_cells(pool, jobs: list[tuple[tuple[str, ...], tuple]], label: str) -> dict[tuple[str, ...], dict]:
+    """`measure` of each (key, job), in the order given, with a stage line as each cell finishes: a counted run of a heavy program is an hour of
+    emulation, and the one-line-per-level log gave no way to tell a slow run from a stuck one or to read an ETA (2026-11-22: 3 h of "counting")."""
+    futures = {pool.submit(measure, job): key for key, job in jobs}
+    counted: dict[tuple[str, ...], dict] = {}
+    for at, future in enumerate(as_completed(futures), 1):
+        counted[futures[future]] = future.result()
+        stage(f"{label}: counted {at}/{len(jobs)} ({'/'.join(futures[future])})")
+    return {key: counted[key] for key, _ in jobs}
+
+
 def measure(job: tuple[str, Path, Path, str, list[str], Path]) -> dict:
     """Counts of one built variant: the entry address from its map, the emulated run, the output check, and the bytes
     of its own object `obj` (tools/sizes.py): not the image, which holds the start-up and the libraries as well."""
@@ -585,6 +596,8 @@ def build_borland(language: str, variants_: list[tuple[Variant, str]], opt: str,
     Turbo C++ 3.0's CM.LIB (SETUPIO) calls `_isatty`, which jwlink does not find in CM.LIB's dictionary: tcpp links that module as a file.
     (CS.LIB defines it too, but small-model: it linked, and 94 of 116 programs then never entered their kernel.)"""
     home, compiler, levels = BORLAND[language]
+    if not variants_:  # a run of Nib and BASIC alone has no C program to give a Borland job: it printed "BORLAND JOB FAILED ... no object" nine times
+        return {}
     folder = work / f"{language}{opt}"
     folder.mkdir(parents=True)
     for variant, stem in variants_:
@@ -685,8 +698,7 @@ def measure_references(selected: list[str], opts: list[str], work: Path, timing:
                 shutil.copy(folder / reference / source, target)
             own(key, stem, directory, variant, (exe, listing), obj)
     with ProcessPoolExecutor(max_workers=workers()) as pool:
-        for (key, _), counts in zip(owned, pool.map(measure, [job for _, job in owned])):
-            out[key] = counts
+        out |= count_cells(pool, owned, "references")
     if timing:
         exes = {key: job[1] for key, job in owned if "error" not in out[key]} | plain
         for key, timed in time_programs(exes, folder / "time", {key: needs[key] for key in exes if needs.get(key)}).items():
@@ -869,9 +881,7 @@ def measure_opt(selected: list[str], opt: str, work: Path, timing: bool = False)
             jobs.append((key, (stem, exe, listing, variant.region if counted else None, want, folder / f"{stem}.obj", files)))
             needs[key] = timing_input(variant, directory, None if timing else folder / "ci-input" / stem)
     with ProcessPoolExecutor(max_workers=workers()) as pool:
-        counted = [(key, job) for key, job in jobs if job is not None]
-        for (key, _), counts in zip(counted, pool.map(measure, [job for _, job in counted])):
-            out[key] = counts
+        out |= count_cells(pool, [(key, job) for key, job in jobs if job is not None], opt)
     stage(f"{opt}: counted {len(jobs)} programs")
     out |= measure_flat(flat, folder / "flat")
     stage(f"{opt}: flat target done")
