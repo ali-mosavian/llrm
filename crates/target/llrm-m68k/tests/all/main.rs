@@ -216,6 +216,7 @@ mod odd_width_memory;
 mod omax_level;
 mod opcode_lookup;
 mod opcosts;
+mod dbf_counted_loop;
 mod oracle_env;
 mod os_inline;
 mod os_inline_clocks;

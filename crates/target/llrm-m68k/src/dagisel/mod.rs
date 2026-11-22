@@ -10,6 +10,7 @@ pub mod anyext;
 pub mod bfextu;
 pub mod bfffo;
 pub mod wordjump;
+pub mod dbf;
 pub mod btst;
 pub mod call;
 pub mod cmpa;

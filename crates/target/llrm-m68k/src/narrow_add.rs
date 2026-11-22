@@ -58,7 +58,7 @@ impl Site {
     }
 }
 
-fn root(
+pub(crate) fn root(
     assignment: &Assignment,
     reg: &Reg,
 ) -> RegId {
@@ -304,12 +304,25 @@ fn counter_step(inst: &Inst) -> Option<(&'static str, i64)> {
 /// Whether the value `register` holds after `from` is read by an instruction
 /// of the blocks control can reach before one defines it again. The end of the
 /// function reads it (a result register), a call does not.
-fn read_after(
+pub(crate) fn read_after(
     function: &MFunction,
     assignment: &Assignment,
     following: &[Vec<usize>],
     register: RegId,
     start: &[usize],
+) -> bool {
+    read_after_with(function, assignment, following, register, start, true)
+}
+
+/// [`read_after`] where `end_reads` says whether the function's end reads
+/// `register` (false when it is no result register).
+pub(crate) fn read_after_with(
+    function: &MFunction,
+    assignment: &Assignment,
+    following: &[Vec<usize>],
+    register: RegId,
+    start: &[usize],
+    end_reads: bool,
 ) -> bool {
     let mut seen = vec![false; function.blocks.len()];
     let mut pending: Vec<usize> = start.to_vec();
@@ -338,7 +351,10 @@ fn read_after(
             continue;
         }
         if following[block].is_empty() {
-            return true;
+            if end_reads {
+                return true;
+            }
+            continue;
         }
         pending.extend(&following[block]);
     }
