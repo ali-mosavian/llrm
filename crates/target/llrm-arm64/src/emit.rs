@@ -280,12 +280,21 @@ pub fn object(
         let Definition::Defined { section, offset } = symbols.list[found].definition else {
             return Err(format!("@{} aliases @{}, which this object does not define", alias.name, target));
         };
-        let size = symbols.list[found].size;
+        // The name of a merged global is a place inside its struct, as large as
+        // the global it replaced.
+        let size = if matches!(
+            module.global(alias.aliasee).kind,
+            llrm_mir::module::GlobalKind::Variable(_)
+        ) {
+            layout.alloc_size(&module.context.types, alias.ty) as usize
+        } else {
+            symbols.list[found].size
+        };
         symbols.defined(
             &data::symbol_name(platform, &alias.name),
             data::binding_of(alias.linkage),
             section,
-            offset,
+            offset + alias.offset as usize,
             size,
         );
     }

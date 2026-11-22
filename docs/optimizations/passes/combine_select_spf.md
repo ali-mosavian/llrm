@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/combine_select_spf.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/combine_select_spf.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/combine_select_spf.rs sha256:4589511a35934d939bf14bb87302d67dd853b0c70eb3bd2a3c18115c51c4c41c -->
+<!-- src: crates/opt/llrm-transforms/src/combine_select_spf.rs sha256:ad58be50488d870826d12b19d8b4bb4449c20736b5aa62d1b672b7d39eff3ee1 -->
 
 # combine_select_spf
 
@@ -25,11 +25,14 @@ Also the clamp-away-from-an-extreme half of
 overflow flag of the other sign dropped; `(x <= y) ? 0 : x - y` is
 `x - smin(y, x)`), each in the pin's order.
 
+The sign-bit swap (`(X > -1) ? TV : FV` is `(X < 0) ? FV : TV`) is
+translated, in the pin's place before `foldSelectICmpMinMax`.
+
 DEVIATE 1: the other steps of `foldSelectInstWithICmp`
 (the range half of `foldSelectInstWithICmpConst`, `canonicalizeClampLike`,
-`tryToReuseConstantFromSelectInComparison`, `foldSelectICmpEq`, the sign-bit
-swap) are not translated; `foldSelectICmpMinMax` runs here, ahead of them.
-Exit: translated by their own strips, by 2026-11-24 (owner wasm-3).
+`tryToReuseConstantFromSelectInComparison`, `foldSelectICmpEq`) are not
+translated; `foldSelectICmpMinMax` runs here, ahead of them.
+Exit: translated by their own strips, by 2026-12-06 (owner x87, from wasm-3).
 
 ## Used by
 `visitSelectInst`.

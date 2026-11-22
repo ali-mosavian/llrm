@@ -1546,6 +1546,10 @@ impl Tti for X86 {
         self.tuning.inline_variable_memcpy
     }
 
+    fn inlines_variable_memcpy_at_size(&self) -> bool {
+        self.tuning.inline_variable_memcpy_at_size
+    }
+
     fn copy_price_for_size(&self) -> Option<llrm_mir::target::CopyPrice> {
         self.tuning.size_copy_price
     }

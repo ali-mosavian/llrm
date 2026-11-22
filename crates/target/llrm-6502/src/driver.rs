@@ -276,6 +276,45 @@ fn assembly_flow(
     text: &str,
     request: &Request,
 ) -> Result<String, String> {
+    crate::alloc::take_save_drops();
+    let kept = flow_once(text, request)?;
+    save_drop_trial(kept, crate::alloc::take_save_drops(), text, request)
+}
+
+/// DEVIATE 6502-SAVE-DROP-TRIAL (owner llrm-target-6502, exit 2026-12-06): a
+/// module whose carry saves were dropped before allocation (`drops`) is
+/// compiled again with them dropped after it, and the text with fewer bytes is
+/// kept (a tie keeps the first). The pin has one form. Reason: the free `a`
+/// helps some modules and defeats the outliner in others, whose sites of one
+/// chain allocate differently (wide_shift_by_one -O2 843 B after, 916 B before;
+/// call_keeps -O2 1,402 B before, 1,409 B after).
+///
+/// Compile time: only a module with two such saves compiles twice.
+fn save_drop_trial(
+    kept: String,
+    drops: usize,
+    text: &str,
+    request: &Request,
+) -> Result<String, String> {
+    // a chain the outliner shares needs two sites
+    if drops < 2 || request.level == Level::O0 || std::env::var_os("LLRM_6502_NO_SAVE_TRIAL").is_some() {
+        return Ok(kept);
+    }
+    let Ok(other) = crate::alloc::with_early_save_drop(false, || flow_once(text, request)) else {
+        return Ok(kept);
+    };
+    crate::alloc::take_save_drops();
+    let (kept_bytes, other_bytes) = (image_bytes_of(&kept, request)?, image_bytes_of(&other, request)?);
+    if std::env::var_os("LLRM_DEBUG_TRIAL").is_some() {
+        eprintln!("trial save drop: {drops} drops; {other_bytes} B after allocation against {kept_bytes} B before");
+    }
+    Ok(if other_bytes < kept_bytes { other } else { kept })
+}
+
+fn flow_once(
+    text: &str,
+    request: &Request,
+) -> Result<String, String> {
     llrm_transforms::trial::take_speed_unrolls();
     let built = program(text, request)?;
     let made = llrm_transforms::trial::take_speed_unrolls().made;
@@ -286,15 +325,16 @@ fn assembly_flow(
 
 /// DEVIATE 6502-LONG-STEP-TRIAL (owner llrm-target-6502, exit 2026-12-06): a
 /// module that has a long plus or minus one stepped with an early exit
-/// (`INC32`/`DEC32`, llvm-mos `G_INC`/`G_DEC`) is compiled again with the carry
-/// chain, and the text with fewer bytes is kept. The pin has one form. Reason:
-/// the stepping chain has labels and branches, which the outliner (the pin's
-/// `MachineOutliner`) does not share, and the carry chain of many sites is one
-/// `jsr` each (div_constants_long -O1: 13,520 B with the chain, 14,464
-/// stepped), while one loop counter is 14 B stepped against 22 B as a chain
-/// (licm_graph_callee_footprint: 306 B, 290 B).
+/// (`INC32`/`DEC32`, llvm-mos `G_INC`/`G_DEC`) or a long equality tested byte
+/// by byte (`CMPZ32`, llvm-mos `G_CMPZ`) is compiled again with the carry chain
+/// and the word compare, and the text with fewer bytes is kept. The pin has one
+/// form. Reason: those forms have labels and branches, which the outliner (the
+/// pin's `MachineOutliner`) does not share, and the chain of many sites is one
+/// `jsr` each (div_constants_long -O1: 13,520 B with the chains, 14,464
+/// stepped, 15,431 with the byte compares), while one loop counter is 14 B
+/// stepped against 22 B as a chain (licm_graph_callee_footprint: 306 B, 284 B).
 ///
-/// Compile time: only a module with such a step compiles twice.
+/// Compile time: only a module with such a site compiles twice.
 fn long_step_trial(
     kept: String,
     steps: usize,

@@ -265,7 +265,8 @@ impl Tti for M68k {
     /// `indirectbr` is a `switch` over block numbers (`IndirectBrExpandPass`).
     /// DEVIATE M68K-INDIRECTBR: the pin's M68k selects `brind` as `jmp (An)`
     /// of a block's address; this backend has no block-address operand yet.
-    /// Exit 2026-12-21: lower `blockaddress` and `brind` natively.
+    /// Exit 2026-12-21: lower `blockaddress` and `brind` natively; the five pieces
+    /// are in the row M68K-INDIRECTBR (`docs/working/above-main-rows.md`).
     fn expands_indirect_br(&self) -> bool {
         true
     }

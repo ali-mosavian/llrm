@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/tailcallelim.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/tailcallelim.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/tailcallelim.rs sha256:0f253a8db4cf50c691240055aab452ec4407a76fc547bd04a24179df5fd70ff5 -->
+<!-- src: crates/opt/llrm-transforms/src/tailcallelim.rs sha256:9f1ec98352d152147eab9455cee1bba363ccff9a907a5ca94adf42791fac0c20 -->
 
 # tailcallelim
 
@@ -50,6 +50,14 @@ DEVIATE (anything MIR or Rust lacks):
     alignment: no "a load of it dominates" proof.
 28. `isAssociative` is the integer operations only (`combine_shared`'s
     DEVIATE 2), so a float accumulator is not recognized.
+29. TCE-ACC-PHI (owner w9, exit 2026-12-31; the pin has no such case, GCC's
+    `pass_tail_recursion` does, `tree-tailcall.cc` `find_tail_calls`): a
+    `br` to a block of phis, one associative integer operation and the `ret`
+    also gets that operation copied into the predecessor that holds the
+    call, its phis replaced by their arms: the call's result then feeds the
+    operation, an accumulator. `t = c ? a : f(..); s = c ? d : n; return t +
+    s` is a loop; the pin keeps the recursion. Only where the copied
+    operation reads the call's result and has no other use.
 
 ## Example
 `sumto(n, x) = n == 0 ? x : sumto(n - 1, x + n)` becomes a loop that
