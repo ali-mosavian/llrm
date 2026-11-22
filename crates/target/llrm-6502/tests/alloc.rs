@@ -2767,13 +2767,13 @@ fn a_bra_out_of_reach_or_to_another_function_is_a_jump() {
 #[test]
 fn spilled_bytes_read_by_alu_ops_keep_their_own_cells() {
     const N: usize = 16;
-    // each byte is stored too, so no load is the memory operand of its one
-    // user and the pressure stays
+    // each byte is stored too and read volatile, so no load is a memory operand
+    // of a user (`shouldFoldMemAccess`) and the pressure stays
     let mut ir =
         String::from("@buf = external global [16 x i8]\n@out = external global [16 x i8]\ndefine i8 @fold() {\n");
     for i in 0..N {
         ir += &format!(
-            "  %p{i} = getelementptr inbounds i8, ptr @buf, i16 {i}\n  %b{i} = load i8, ptr %p{i}, align 1\n  %q{i} = getelementptr inbounds i8, ptr @out, i16 {i}\n  store i8 %b{i}, ptr %q{i}, align 1\n"
+            "  %p{i} = getelementptr inbounds i8, ptr @buf, i16 {i}\n  %b{i} = load volatile i8, ptr %p{i}, align 1\n  %q{i} = getelementptr inbounds i8, ptr @out, i16 {i}\n  store i8 %b{i}, ptr %q{i}, align 1\n"
         );
     }
     for i in 0..N / 2 {

@@ -286,15 +286,16 @@ fn assembly_flow(
 
 /// DEVIATE 6502-LONG-STEP-TRIAL (owner llrm-target-6502, exit 2026-12-06): a
 /// module that has a long plus or minus one stepped with an early exit
-/// (`INC32`/`DEC32`, llvm-mos `G_INC`/`G_DEC`) is compiled again with the carry
-/// chain, and the text with fewer bytes is kept. The pin has one form. Reason:
-/// the stepping chain has labels and branches, which the outliner (the pin's
-/// `MachineOutliner`) does not share, and the carry chain of many sites is one
-/// `jsr` each (div_constants_long -O1: 13,520 B with the chain, 14,464
-/// stepped), while one loop counter is 14 B stepped against 22 B as a chain
-/// (licm_graph_callee_footprint: 306 B, 290 B).
+/// (`INC32`/`DEC32`, llvm-mos `G_INC`/`G_DEC`) or a long equality tested byte
+/// by byte (`CMPZ32`, llvm-mos `G_CMPZ`) is compiled again with the carry chain
+/// and the word compare, and the text with fewer bytes is kept. The pin has one
+/// form. Reason: those forms have labels and branches, which the outliner (the
+/// pin's `MachineOutliner`) does not share, and the chain of many sites is one
+/// `jsr` each (div_constants_long -O1: 13,520 B with the chains, 14,464
+/// stepped, 15,431 with the byte compares), while one loop counter is 14 B
+/// stepped against 22 B as a chain (licm_graph_callee_footprint: 306 B, 284 B).
 ///
-/// Compile time: only a module with such a step compiles twice.
+/// Compile time: only a module with such a site compiles twice.
 fn long_step_trial(
     kept: String,
     steps: usize,

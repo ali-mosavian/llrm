@@ -11,12 +11,15 @@
 //!
 //! DEVIATE 1: the rest of `visitBitCast` is not translated: the vector steps
 //! (MIR has no vectors), `optimizeBitCastFromPhi`, `canonicalizeBitCastExtElt`,
-//! `foldBitCastBitwiseLogic`, `foldBitCastSelect` and the closing
-//! `commonCastTransforms`. Exit: 2026-11-20.
+//! `foldBitCastBitwiseLogic` and `foldBitCastSelect`. Exit: 2026-12-06. The
+//! closing `commonCastTransforms` is: `bitcast (bitcast x)` was kept, 24 extra
+//! `float`/`i32` round trips in QB `exec_loop`.
 //!
 //! # Example
 //! ```text
 //! %r = bitcast float %x to float           ; %r is %x
+//! %i = bitcast float %x to i32
+//! %f = bitcast i32 %i to float              ; %f is %x
 //! ```
 //!
 //! # Used by
@@ -37,5 +40,6 @@ pub fn visit_bitcast(
     if c.function.instruction(inst).ty == c.type_of(src) {
         return Visit::Replace(src);
     }
-    Visit::None
+    // `return commonCastTransforms(CI)`: a cast of a cast, of a select, of a phi.
+    crate::combine_casts::common_cast_transforms(c, inst).unwrap_or(Visit::None)
 }

@@ -322,9 +322,18 @@ pub fn expand(
             let symbol = format!("{},x", indexed_address(&o[at], &o[at + 1])?);
             byte3(&mut out, carry, mnemonic, reg(&o[0])?, reg(&o[2])?, &symbol);
         }
-        op::ADDO16M | op::SUBO16M | op::ADDOC16M | op::SUBOC16M | op::ADDO16MX | op::SUBO16MX | op::ADDOC16MX
+        op::ADDO16M
+        | op::SUBO16M
+        | op::ADDOC16M
+        | op::SUBOC16M
+        | op::ADDO16MX
+        | op::SUBO16MX
+        | op::ADDOC16MX
         | op::SUBOC16MX => {
-            let indexed = matches!(inst.opcode, op::ADDO16MX | op::SUBO16MX | op::ADDOC16MX | op::SUBOC16MX);
+            let indexed = matches!(
+                inst.opcode,
+                op::ADDO16MX | op::SUBO16MX | op::ADDOC16MX | op::SUBOC16MX
+            );
             let (carry, mnemonic, at) = match inst.opcode {
                 op::ADDO16M | op::ADDO16MX => ("clc", "adc", 3),
                 op::SUBO16M | op::SUBO16MX => ("sec", "sbc", 3),
@@ -626,6 +635,17 @@ pub fn expand(
             writeln!(
                 out,
                 "  lda {al}\n  cmp {bl}\n  lda {ah}\n  sbc {bh}\n  lda {cl}\n  sbc {dl}\n  lda {ch}\n  sbc {dh}"
+            )
+            .unwrap();
+        }
+        // Z only if all four bytes are equal: the first mismatch leaves Z
+        // clear.
+        op::CMPZ32 => {
+            *labels += 1;
+            let ((a0, a1), (b0, b1), (a2, a3), (b2, b3)) = (word(&o[1])?, word(&o[2])?, word(&o[3])?, word(&o[4])?);
+            writeln!(
+                out,
+                "  lda {a0}\n  cmp {b0}\n  bne _z{labels}\n  lda {a1}\n  cmp {b1}\n  bne _z{labels}\n  lda {a2}\n  cmp {b2}\n  bne _z{labels}\n  lda {a3}\n  cmp {b3}\n_z{labels}:"
             )
             .unwrap();
         }

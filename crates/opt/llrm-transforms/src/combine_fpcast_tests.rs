@@ -129,3 +129,23 @@ b0:
     );
     assert!(inexact.contains("fpext"), "{inexact}");
 }
+
+/// `bitcast (bitcast x to i32) to float` stayed a round trip (QB `exec_loop` m64 -O2: 35 `bitcast` pairs against the
+/// pin's 11, `sitofp` then `i32` then `float` before each `fadd`): `visitBitCast` did not reach
+/// `commonCastTransforms`.
+#[test]
+fn test_a_bitcast_of_a_bitcast_back_to_the_type_is_the_value() {
+    let after = combined(
+        "define float @f(i32 %a, float %b) {
+b0:
+  %s = sitofp i32 %a to float
+  %i = bitcast float %s to i32
+  %t = bitcast i32 %i to float
+  %r = fadd float %b, %t
+  ret float %r
+}
+",
+    );
+    assert!(!after.contains("bitcast"), "{after}");
+    assert!(after.contains("fadd float %b, %s"), "{after}");
+}
