@@ -1873,6 +1873,7 @@ fn hash_function(
         places,
         variables,
         odds,
+        address_symbols: _,
     } = function;
     (name, classes.len(), fixed, locals, optimize_for_size, optnone, returns_twice, places).hash(into);
     for class in classes {

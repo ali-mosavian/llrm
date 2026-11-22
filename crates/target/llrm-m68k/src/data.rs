@@ -6,7 +6,7 @@ use std::fmt::Write;
 
 use llrm_mir::Module;
 use llrm_mir::datalayout::DataLayout;
-use llrm_mir::image::{Export, Variable, variables};
+use llrm_mir::image::{Export, Variable, variables_with_blocks};
 
 /// The variables `module` defines, as assembly text. Empty if it defines none.
 pub fn assembly(
@@ -15,7 +15,12 @@ pub fn assembly(
 ) -> Result<String, String> {
     let symbol_of = |name: &str| symbol(name);
     let mut out = String::new();
-    for variable in with_constructors(variables(module, layout, &symbol_of)?)? {
+    for variable in with_constructors(variables_with_blocks(
+        module,
+        layout,
+        &symbol_of,
+        Some(&llrm_codegen::backend::blockaddress::symbol),
+    )?)? {
         object(&mut out, &variable);
     }
     Ok(out)

@@ -289,6 +289,9 @@ pub struct MFunction<C> {
     /// states them; `None` leaves the allocator the loop branch heuristic.
     /// An edge a pass made is absent and takes its share of what is left.
     pub odds: Option<crate::placement::Odds>,
+    /// The symbol of each block whose address is taken, by block id: the
+    /// emitter defines it at the block's label.
+    pub address_symbols: Vec<(u32, String)>,
 }
 
 impl<C> MFunction<C> {
@@ -310,6 +313,7 @@ impl<C> MFunction<C> {
             places: Vec::new(),
             variables: Vec::new(),
             odds: None,
+            address_symbols: Vec::new(),
         }
     }
 
