@@ -61,14 +61,16 @@ pub enum CodeModel {
     Small,
     Medium,
     Large,
-    /// No `-mcmodel` given: small, as the pin, unless the module's globals together pass what a
-    /// 16-bit displacement reaches ([`CodeModel::SMALL_REACH`]); then medium, as gcc's absolute data.
+    /// No `-mcmodel` given: small, as the pin, unless the module's globals
+    /// together pass what a 16-bit displacement reaches
+    /// ([`CodeModel::SMALL_REACH`]); then medium, as gcc's absolute data.
     /// Resolved by the driver once the module is known.
     Auto,
 }
 
 impl CodeModel {
-    /// The bytes of globals past which a `(d16,%pc)` reference cannot be assumed to reach.
+    /// The bytes of globals past which a `(d16,%pc)` reference cannot be
+    /// assumed to reach.
     pub const SMALL_REACH: usize = 32768;
 
     /// `self`, with [`CodeModel::Auto`] settled for globals of `data_bytes`.
@@ -696,7 +698,8 @@ struct Touched {
     data_constants: bool,
     /// The shared `MachineCSE` changed the function.
     shared_cse: bool,
-    /// The shared `MachineLICM`, which this build left off, would change the function.
+    /// The shared `MachineLICM`, which this build left off, would change the
+    /// function.
     licm: bool,
     /// A spill slot moved into an address register ([`crate::slotreg`]).
     slot_registers: bool,
@@ -735,7 +738,8 @@ fn size_build(
             .is_some_and(|one| has(&one.attrs, "optsize") || has(&one.attrs, "minsize"))
 }
 
-/// Whether -O1/-Os, which leave the shared `MachineLICM` off, probe it for a trial build.
+/// Whether -O1/-Os, which leave the shared `MachineLICM` off, probe it for a
+/// trial build.
 fn licm_trial_wanted(
     options: Options,
     wants_size: bool,
@@ -745,11 +749,12 @@ fn licm_trial_wanted(
 
 /// Whether the shared `MachineLICM` runs on a function.
 ///
-/// DEVIATE M68K-LICM-SPEED (owner w9-tests, exit 2026-11-26): the pin runs it at every level but
-/// -O0. -O2/-O3 run it; -O1 and -Os run it in a trial build (`licm_trial`) kept only where it
-/// pays: a hoisted address holds a register for the loop and the private passes lose bytes to the
-/// spills (-Os +1.5 KB over 186 programs when run unconditionally).
-/// The trial's variants read this too: a stage that does not run must not change the emission.
+/// DEVIATE M68K-LICM-SPEED (owner w9-tests, exit 2026-11-26): the pin runs it
+/// at every level but -O0. -O2/-O3 run it; -O1 and -Os run it in a trial build
+/// (`licm_trial`) kept only where it pays: a hoisted address holds a register
+/// for the loop and the private passes lose bytes to the spills (-Os +1.5 KB
+/// over 186 programs when run unconditionally). The trial's variants read this
+/// too: a stage that does not run must not change the emission.
 fn licm_runs(
     options: Options,
     wants_size: bool,
@@ -1489,7 +1494,13 @@ pub fn mid_end_for_narrowing(
     narrow_multiplies: NarrowMultiplies,
     narrow_divides: bool,
 ) -> Result<Module, String> {
-    mid_end_narrowing(module, &M68k::for_cpu(cpu), Some(Rc::new(M68kMachine { cpu })), narrow_multiplies, narrow_divides)
+    mid_end_narrowing(
+        module,
+        &M68k::for_cpu(cpu),
+        Some(Rc::new(M68kMachine { cpu })),
+        narrow_multiplies,
+        narrow_divides,
+    )
 }
 
 /// [`mid_end`] with another target description: what a test compares the
