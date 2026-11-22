@@ -79,11 +79,13 @@ pub(crate) fn cast_cost(
     src: VectorTy,
     cost_kind: CostKind,
 ) -> Option<Cost> {
-    // Only the conversions the selector has (`cvtdq2ps`, `cvtdq2pd`, `cvtpd2ps`): a loop the planner widens must
+    // Only the conversions the selector has (`cvtdq2ps`, `cvtdq2pd`, `cvtpd2ps`, `uitofp` of `v4i32`): a loop the planner widens must
     // compile, so a cast it cannot select is not priced.
     let selected = match (kind, dst.lane, src.lane) {
         (CastKind::SIToFP, Ty::Float, Ty::Int(32)) => dst.count == 4,
         (CastKind::SIToFP, Ty::Double, Ty::Int(32)) => matches!(dst.count, 2 | 4),
+        // `LowerUINT_TO_FP`: `cvtdq2ps` for a clear sign bit, the mantissa-halves sequence otherwise.
+        (CastKind::UIToFP, Ty::Float, Ty::Int(32)) => dst.count == 4,
         (CastKind::FPTrunc, Ty::Float, Ty::Double) => dst.count == 4,
         (CastKind::Trunc | CastKind::ZExt | CastKind::SExt, _, _) => true,
         _ => false,
