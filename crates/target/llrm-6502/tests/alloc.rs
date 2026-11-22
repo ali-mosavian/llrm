@@ -3448,6 +3448,7 @@ mod post_ra {
             places: Vec::new(),
             odds: None,
             variables: Vec::new(),
+            address_symbols: Vec::new(),
         }
     }
     fn copies(function: &MFunction<Class>) -> Vec<(RegId, RegId)> {

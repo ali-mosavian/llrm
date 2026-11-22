@@ -57,12 +57,15 @@ pub fn key(
     KEYS | (i64::from(function.0) << BLOCK_BITS) | i64::from(block.0)
 }
 
+/// What every [`symbol`] starts with.
+pub const PREFIX: &str = "$BA";
+
 /// The assembler name of `block`'s symbol.
 pub fn symbol(
     function: GlobalId,
     block: BlockId,
 ) -> String {
-    format!("$BA{}_{}", function.0, block.0)
+    format!("{PREFIX}{}_{}", function.0, block.0)
 }
 
 #[cfg(test)]
