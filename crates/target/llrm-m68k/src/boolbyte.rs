@@ -21,9 +21,8 @@
 //! GCC's m68k.md `scc` pattern (`STORE_FLAG_VALUE` is -1) uses `neg.b` for a
 //! value and tests the byte for a branch. Reason: best of gcc and clang is the
 //! goal. Owner: w9. Added 2026-11-22; exit 2026-12-20, when the pin gains it.
-//! Runs at -Os, -O2 and -O3 (the rewrite cannot add clocks: `and.b #imm` is 8
-//! clk on a 68000, `neg.b` and `tst.b` 4); -O1 waits for the cause of one grown
-//! file (`menu.c`).
+//! Runs at every level (the rewrite cannot add clocks: `and.b #imm` is 8 clk on
+//! a 68000, `neg.b` and `tst.b` 4).
 //!
 //! # See also
 //! `m68k.md` `scc` and `cbranch`; `M68kISelLowering::LowerSETCC`.
