@@ -67,7 +67,8 @@ use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{BinaryOp, CallInfo, CastOp, Flags, FloatPredicate, IntPredicate, Opcode, Tail};
 use llrm_mir::passes::Declared;
 use llrm_mir::tti::{
-    ArithOp, CastKind, CmpSel, CostKind, LaneOp, MemoryOp, Predicate, Tti, Ty, VectorInstrContext, VectorTy,
+    ArithOp, CastKind, CmpSel, CostKind, LaneOp, MemoryOp, OperandInfo, Predicate, Tti, Ty, VectorInstrContext,
+    VectorTy,
 };
 use llrm_mir::types::{FloatKind, Type, TypeId};
 
@@ -150,6 +151,10 @@ pub(crate) struct Tree {
     block: BlockId,
     /// The calls of the block that are pure computations (`llvm.fmuladd`).
     pure_calls: IdSet<InstId>,
+    /// The vectors stand where the block's order and what they read allow
+    /// (`BlockScheduling`): a root with scalar users that stand before its
+    /// last lane.
+    reschedule: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -170,7 +175,7 @@ struct Builder<'a, 'u, 's> {
     /// The entry that makes each scalar instruction.
     made: IdMap<InstId, usize>,
     /// Where each instruction of the block stands.
-    position: IdMap<InstId, usize>,
+    position: std::borrow::Cow<'a, IdMap<InstId, usize>>,
     failed: bool,
 }
 
@@ -355,6 +360,7 @@ impl Builder<'_, '_, '_> {
         let half_unique_ok = first.is_some_and(|first| matches!(first.opcode, Opcode::Cast(_)));
         let root_operand = !gather_only && self.entries.len() == 1;
         let packing = slpgather::Packing {
+            kind: cost_kind(self.function),
             lanes,
             unique,
             reuse,
@@ -1011,7 +1017,7 @@ pub(crate) fn try_window(
         block,
         entries: Vec::new(),
         made: IdMap::new(),
-        position,
+        position: std::borrow::Cow::Owned(position),
         failed: false,
     };
     // The root: the stores.
@@ -1047,9 +1053,9 @@ pub(crate) fn try_window(
     }
     let mut entries = builder.entries;
     share_gathers(&mut entries);
-    let tree = Tree { entries, block, pure_calls: Default::default(), reduction: None };
+    let tree = Tree { entries, block, pure_calls: Default::default(), reschedule: false, reduction: None };
     let made = builder.made;
-    let position = builder.position;
+    let position = builder.position.into_owned();
     if !schedulable(unit, function, &tree, &made, &position) {
         llrm_support::debug!("slp", "tree: not schedulable");
         return None;
@@ -1079,7 +1085,7 @@ pub(crate) fn try_phis(
         block,
         entries: Vec::new(),
         made: IdMap::new(),
-        position,
+        position: std::borrow::Cow::Owned(position),
         failed: false,
     };
     let root = builder.build(values, 0);
@@ -1105,7 +1111,7 @@ pub(crate) fn try_phis(
     pure_calls.extend(function.iter_block(block).filter(|inst| divides.contains(inst)));
     let mut entries = builder.entries;
     share_gathers(&mut entries);
-    let tree = Tree { entries, block, pure_calls, reduction: None };
+    let tree = Tree { entries, block, pure_calls, reschedule: false, reduction: None };
     let made = builder.made;
     if tiny_and_not_fully_vectorizable(&tree) {
         llrm_support::debug!("slp", "phi tree x{}: tiny", phis.len());
@@ -1117,6 +1123,88 @@ pub(crate) fn try_phis(
     }
     let cost = cost_of(unit, function, &tree, &made, 0, tti, scaler)?;
     llrm_support::debug!("slp", "phi tree of {} entries x{}: cost {cost}", tree.entries.len(), phis.len());
+    (cost < -COST_THRESHOLD).then_some(tree)
+}
+
+/// The instructions of `block` that compute from their operands alone and may
+/// stand anywhere those do: the calls of a trivially vectorizable intrinsic,
+/// and the divisions whose divisor is a constant that cannot trap
+/// (`isSafeToSpeculativelyExecute`).
+fn pure_instructions(
+    unit: &MemUnit,
+    function: &Function,
+    block: BlockId,
+) -> IdSet<InstId> {
+    let context = unit.context;
+    function
+        .iter_block(block)
+        .filter(|inst| {
+            let instruction = function.instruction(*inst);
+            match instruction.opcode {
+                Opcode::Binary(op @ (BinaryOp::UDiv | BinaryOp::URem | BinaryOp::SDiv | BinaryOp::SRem)) => {
+                    let signed = matches!(op, BinaryOp::SDiv | BinaryOp::SRem);
+                    let Operand::Constant(divisor) = instruction.operands[1] else { return false };
+                    let Some(bits) = context.types.int_bits(instruction.ty) else { return false };
+                    match context.get(divisor).kind {
+                        ConstantKind::Int(value) => {
+                            let ones = if bits >= 128 { u128::MAX } else { (1u128 << bits) - 1 };
+                            value & ones != 0 && !(signed && value & ones == ones)
+                        }
+                        _ => false,
+                    }
+                }
+                _ => llrm_mir::memory::callee(unit.context, function, *inst)
+                    .and_then(|callee| unit.globals.get(callee.0 as usize)?.intrinsic())
+                    .is_some_and(llrm_analysis::vectorutils::is_trivially_vectorizable),
+            }
+        })
+        .collect()
+}
+
+/// `tryToVectorizeList` for the standalone seeds of `vectorizeSeeds`: the tree
+/// whose root is the bundle of `seeds` themselves (their users stay scalar and
+/// read the lanes), if it pays.
+pub(crate) fn try_seeds(
+    unit: &MemUnit,
+    function: &Function,
+    block: BlockId,
+    seeds: &[InstId],
+    position: &IdMap<InstId, usize>,
+    tti: &dyn Tti,
+    scaler: &Scaler,
+) -> Option<Tree> {
+    let values: Vec<Operand> = seeds.iter().map(|seed| result_of(function, *seed)).collect();
+    let mut builder = Builder {
+        scaler,
+        tti,
+        unit,
+        function,
+        block,
+        entries: Vec::new(),
+        made: IdMap::new(),
+        position: std::borrow::Cow::Borrowed(position),
+        failed: false,
+    };
+    let root = builder.build(values, 0);
+    if builder.failed || root != 0 || builder.entries[0].kind == Kind::Gather {
+        llrm_support::debug!("slp", "seed tree x{}: no tree", seeds.len());
+        return None;
+    }
+    let pure_calls = pure_instructions(unit, function, block);
+    let mut entries = builder.entries;
+    share_gathers(&mut entries);
+    let tree = Tree { entries, block, pure_calls, reschedule: true, reduction: None };
+    let made = builder.made;
+    if tiny_and_not_fully_vectorizable(&tree) {
+        llrm_support::debug!("slp", "seed tree x{}: tiny", seeds.len());
+        return None;
+    }
+    if !schedulable_phis(function, &tree) {
+        llrm_support::debug!("slp", "seed tree x{}: not schedulable", seeds.len());
+        return None;
+    }
+    let cost = cost_of(unit, function, &tree, &made, 0, tti, scaler)?;
+    llrm_support::debug!("slp", "seed tree of {} entries x{}: cost {cost}", tree.entries.len(), seeds.len());
     (cost < -COST_THRESHOLD).then_some(tree)
 }
 
@@ -1154,7 +1242,7 @@ pub(crate) fn try_inserts(
         block,
         entries: Vec::new(),
         made: IdMap::new(),
-        position,
+        position: std::borrow::Cow::Owned(position),
         failed: false,
     };
     builder
@@ -1193,7 +1281,7 @@ pub(crate) fn try_inserts(
     pure_calls.extend(function.iter_block(block).filter(|inst| divides.contains(inst)));
     let mut entries = builder.entries;
     share_gathers(&mut entries);
-    let tree = Tree { entries, block, pure_calls, reduction: None };
+    let tree = Tree { entries, block, pure_calls, reschedule: false, reduction: None };
     let made = builder.made;
     if tiny_and_not_fully_vectorizable(&tree) {
         llrm_support::debug!("slp", "insert tree x{}: tiny", inserts.len());
@@ -1342,7 +1430,7 @@ pub(crate) fn try_reduction(
         block,
         entries: Vec::new(),
         made: IdMap::new(),
-        position,
+        position: std::borrow::Cow::Owned(position),
         failed: false,
     };
     // The root: the chain, whose uses of the values are not external ones.
@@ -1385,6 +1473,7 @@ pub(crate) fn try_reduction(
         entries,
         block,
         pure_calls: crate::slpschedule::safe_divides(unit.context, function, block),
+        reschedule: false,
         reduction: Some(info.clone()),
     };
     let (tree, total) = trim_non_profitable(unit, function, tree, 0, tti, scaler)?;
@@ -1496,7 +1585,7 @@ fn trim_non_profitable(
             continue;
         }
         let lane = lane_ty_of(context, entry.lane_ty)?;
-        let mut gather = slpgather::gather_cost(tti, lane, &entry.lanes, &entry.reuse)?;
+        let mut gather = slpgather::gather_cost(tti, cost_kind(function), lane, &entry.lanes, &entry.reuse)?;
         let scale = entry_scale(function, &tree, at, scaler) as i64;
         gather *= scale;
         // Non-power-of-2 entries may have inflated costs: a margin of 1.
@@ -1557,7 +1646,13 @@ fn trim_non_profitable(
             *operand = renumber[*operand];
         }
     }
-    let tree = Tree { entries, block: tree.block, pure_calls: tree.pure_calls, reduction: tree.reduction };
+    let tree = Tree {
+        entries,
+        block: tree.block,
+        pure_calls: tree.pure_calls,
+        reschedule: tree.reschedule,
+        reduction: tree.reduction,
+    };
     let made = made_of(&tree);
     let total = cost_of(unit, function, &tree, &made, store_align, tti, scaler)?;
     Some((tree, total))
@@ -1899,6 +1994,11 @@ fn entry_scale(
 
 /// `getTreeCost`: the entries' vector costs less their scalars', and the
 /// extracts of the lanes used outside. `None`: a price the target lacks.
+/// `getSLPCostKind`: code size at `optsize`, else reciprocal throughput.
+pub(crate) fn cost_kind(function: &Function) -> CostKind {
+    if function.optimizes_for_size() { CostKind::CodeSize } else { CostKind::RecipThroughput }
+}
+
 fn cost_of(
     unit: &MemUnit,
     function: &Function,
@@ -1923,7 +2023,7 @@ fn entry_costs(
     tti: &dyn Tti,
     scaler: &Scaler,
 ) -> Option<Vec<(i64, i64)>> {
-    let kind = CostKind::RecipThroughput;
+    let kind = cost_kind(function);
     let context = unit.context;
     let mut costs: Vec<(i64, i64)> = Vec::with_capacity(tree.entries.len());
     for (at, entry) in tree.entries.iter().enumerate() {
@@ -1990,7 +2090,7 @@ fn entry_cost(
     store_align: u64,
     tti: &dyn Tti,
 ) -> Option<i64> {
-    let kind = CostKind::RecipThroughput;
+    let kind = cost_kind(function);
     let context = unit.context;
     {
         let lane = lane_ty_of(context, entry.lane_ty)?;
@@ -2096,19 +2196,23 @@ fn entry_cost(
                 }
                 -extracts
             }
-            Kind::Gather => slpgather::gather_cost(tti, lane, &entry.lanes, &entry.reuse)?,
+            Kind::Gather => slpgather::gather_cost(tti, kind, lane, &entry.lanes, &entry.reuse)?,
             // `getEntryCost`, `Instruction::PHI`: the vector phi costs what the
             // scalar ones did.
             Kind::Phi => 0,
             Kind::Insert => crate::slpinsert::cost(context, function, tti, &entry.insts, entry.insert.as_ref()?)?,
-            Kind::Reduction => {
-                crate::slpreduction::tree_reduction_cost(tti, tree.reduction.as_ref()?.op, lane, entry.lanes.len())?
-            }
+            Kind::Reduction => crate::slpreduction::tree_reduction_cost(
+                tti,
+                kind,
+                tree.reduction.as_ref()?.op,
+                lane,
+                entry.lanes.len(),
+            )?,
         };
         // The lanes that repeat are read through a shuffle of the bundle.
         let reuse_cost = match entry.kind {
             Kind::Gather | Kind::Store | Kind::Insert | Kind::Reduction => 0,
-            _ => slpgather::shuffle_cost(tti, VectorTy { lane, count: entry.width() as u32 }, &entry.reuse)?,
+            _ => slpgather::shuffle_cost(tti, kind, VectorTy { lane, count: entry.width() as u32 }, &entry.reuse)?,
         };
         let entry_cost = entry_cost + reuse_cost;
         llrm_support::debug!("slp", "entry {:?} x{}: {}", entry.kind, count, entry_cost);
@@ -2188,7 +2292,7 @@ fn last_phi(
 }
 
 /// Where each instruction stands in its block.
-fn positions(function: &Function) -> IdMap<InstId, usize> {
+pub(crate) fn positions(function: &Function) -> IdMap<InstId, usize> {
     let mut places = IdMap::new();
     for block in function.layout().to_vec() {
         for (at, inst) in function.iter_block(block).enumerate() {
@@ -2519,7 +2623,7 @@ pub(crate) fn emit(
         }
     }
     // The vectors stand where the block's order and what they read allow.
-    if tree.entries[0].kind == Kind::Insert {
+    if tree.entries[0].kind == Kind::Insert || tree.reschedule {
         reschedule(function, tree, &position);
     }
     let _ = ValueId(0);
@@ -2541,6 +2645,20 @@ fn reschedule(
                 |inst| matches!(function.instruction(*inst).opcode, Opcode::Call(_)) && !position.contains_key(inst),
             ),
     );
+    // A vector division is made only of scalar ones `pure_calls` has: it
+    // cannot trap either, so it is not a write.
+    pure_calls.extend(function.iter_block(home).filter(|inst| {
+        !position.contains_key(inst)
+            && matches!(
+                function.instruction(*inst).opcode,
+                Opcode::Binary(
+                    llrm_mir::opcode::BinaryOp::UDiv
+                        | llrm_mir::opcode::BinaryOp::SDiv
+                        | llrm_mir::opcode::BinaryOp::URem
+                        | llrm_mir::opcode::BinaryOp::SRem
+                )
+            )
+    }));
     let original: IdMap<InstId, usize> =
         function.iter_block(home).filter_map(|inst| position.get(&inst).map(|at| (inst, *at))).collect();
     let scheduled = crate::slpschedule::schedule(function, home, &pure_calls, &original);
