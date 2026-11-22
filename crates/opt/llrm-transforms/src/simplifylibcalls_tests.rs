@@ -249,3 +249,24 @@ fn test_a_decorated_strlen_of_a_literal_is_its_length() {
     let after = printed(&module);
     assert!(after.contains("ret i16 3"), "{after}");
 }
+
+/// QuickrBasic insns.c (arm64 -Os, `-ffreestanding`): `fprintf(stderr, "..\n")`
+/// became `fwrite` (+8 B) where the pin's `no-builtins` function keeps the
+/// library call: its TLI has every library function off, and a call marked
+/// `nobuiltin` is never one.
+#[test]
+fn test_a_no_builtins_function_and_a_nobuiltin_call_keep_their_printf() {
+    let program = |function_attrs: &str, call_attrs: &str| {
+        format!(
+            "@s = private constant [4 x i8] c\"hi\\0A\\00\"\n\
+             declare i16 @printf(ptr, ...)\n\
+             define void @f() {function_attrs} {{\nb0:\n  %r = call i16 (ptr, ...) @printf(ptr @s) {call_attrs}\n  ret void\n}}\n"
+        )
+    };
+    let plain = run(&program("", ""));
+    assert!(plain.contains("@puts"), "{plain}");
+    let function = run(&program("\"no-builtins\"", ""));
+    assert!(function.contains("call i16 (ptr, ...) @printf"), "{function}");
+    let call = run(&program("", "nobuiltin"));
+    assert!(call.contains("call i16 (ptr, ...) @printf"), "{call}");
+}

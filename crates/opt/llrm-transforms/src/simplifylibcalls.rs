@@ -561,6 +561,11 @@ impl FunctionPass for SimplifyLibCalls {
         unit: &mut Unit,
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
+        // `"no-builtins"` turns every library function off in the pin's TLI
+        // (`TargetLibraryAnalysis::run`), as loop idioms read it.
+        if unit.function.attrs.iter().any(|attr| matches!(attr, Attribute::Str(key, _) if key == "no-builtins")) {
+            return PreservedAnalyses::all();
+        }
         let outer = analyses.outer().clone();
         let size_bits = unit.layout.pointer(0).index_bits;
         // One table per module: the target's library, else the pin's defaults
@@ -589,6 +594,15 @@ impl FunctionPass for SimplifyLibCalls {
         let int = unit.context.types.int(info.int_bits());
         let size = unit.context.types.int(size_bits);
         for call in calls {
+            // `getLibFunc(CallBase)`: a call marked `nobuiltin` is no library
+            // call.
+            let marked = matches!(
+                &unit.function.instruction(call).opcode,
+                Opcode::Call(info) if info.attrs.iter().any(|attr| matches!(attr, Attribute::Flag(name) if name == "nobuiltin"))
+            );
+            if marked {
+                continue;
+            }
             let Some(global) = llrm_mir::memory::callee(unit.context, unit.function, call) else { continue };
             let Some(func) = outer.globals.get(global.0 as usize).and_then(|one| {
                 info.get_lib_func_of(&unit.context.types, one).or_else(|| stated(&info, &self.routines, unit, one))
