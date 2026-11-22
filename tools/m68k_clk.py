@@ -37,7 +37,7 @@ def sources_stamp(root):
 
 
 def verify_cycles(cycles, root, target_dir):
-    """Refuse a `cycles` binary that is not this checkout's: outside its target dir (another session's, `~/scratch/w3/target-b133` priced a whole census with a build from before #10557: `>=` where the tip says `<=`), or built from other `llrm-m68k` sources (stale)."""
+    """Refuse a `cycles` binary that is not this checkout's: outside its target dir (another session's build priced a whole census from before #10557: `>=` where the tip says `<=`), or built from other `llrm-m68k` sources (stale)."""
     path = Path(cycles).resolve()
     allowed = [Path(target_dir).resolve(), (Path(root) / "target").resolve()]
     if not any(path.is_relative_to(one) for one in allowed):

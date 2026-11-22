@@ -108,7 +108,7 @@ def _fake_cycles(path, stamp):
 
 
 def test_a_cycles_binary_outside_the_checkouts_target_dir_is_refused(tmp_path):
-    """The census priced 1,374 cells with `~/scratch/w3/target-b133/.../cycles`, another session's build from before #10557: `>=` where the tip says `<=`, so cells read undecidable."""
+    """The census priced 1,374 cells with another session's `cycles` build from before #10557: `>=` where the tip says `<=`, so cells read undecidable."""
     import pytest
     import m68k_clk
 
