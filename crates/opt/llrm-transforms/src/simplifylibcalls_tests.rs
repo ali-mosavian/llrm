@@ -249,3 +249,49 @@ fn test_a_decorated_strlen_of_a_literal_is_its_length() {
     let after = printed(&module);
     assert!(after.contains("ret i16 3"), "{after}");
 }
+
+/// QuickrBasic insns.c (arm64 -Os, `-ffreestanding`): `fprintf(stderr, "..\n")`
+/// became `fwrite` (+8 B) where the pin's `no-builtins` function keeps the
+/// library call: its TLI has every library function off, and a call marked
+/// `nobuiltin` is never one.
+#[test]
+fn test_a_no_builtins_function_and_a_nobuiltin_call_keep_their_printf() {
+    let program = |function_attrs: &str, call_attrs: &str| {
+        format!(
+            "@s = private constant [4 x i8] c\"hi\\0A\\00\"\n\
+             declare i16 @printf(ptr, ...)\n\
+             define void @f() {function_attrs} {{\nb0:\n  %r = call i16 (ptr, ...) @printf(ptr @s) {call_attrs}\n  ret void\n}}\n"
+        )
+    };
+    let plain = run(&program("", ""));
+    assert!(plain.contains("@puts"), "{plain}");
+    let function = run(&program("\"no-builtins\"", ""));
+    assert!(function.contains("call i16 (ptr, ...) @printf"), "{function}");
+    let call = run(&program("", "nobuiltin"));
+    assert!(call.contains("call i16 (ptr, ...) @printf"), "{call}");
+}
+
+/// QuickrBasic os.c (arm64 -Os, `-ffreestanding`): `memcpy(&index, entry, 4)`
+/// stayed `bl memcpy` and a frame (60 B) where GCC's freestanding mode folds
+/// it to `ldr; b` (12 B): GCC requires `memcpy`, `memmove`, `memset` and
+/// `memcmp` of the environment and keeps them builtin. They fold under
+/// `no-builtins` and `nobuiltin`; every other library function stays a call.
+#[test]
+fn test_the_four_freestanding_memory_functions_fold_under_no_builtins() {
+    let program = |function_attrs: &str, call_attrs: &str| {
+        format!(
+            "@s = private constant [4 x i8] c\"hi\\0A\\00\"\n\
+             declare ptr @memcpy(ptr, ptr, i16)\n\
+             declare i16 @printf(ptr, ...)\n\
+             define void @f(ptr %d, ptr %s) {function_attrs} {{\nb0:\n\
+             \x20 %a = call ptr @memcpy(ptr %d, ptr %s, i16 4) {call_attrs}\n\
+             \x20 %r = call i16 (ptr, ...) @printf(ptr @s) {call_attrs}\n  ret void\n}}\n"
+        )
+    };
+    for (function_attrs, call_attrs) in [("\"no-builtins\"", ""), ("", "nobuiltin")] {
+        let after = run(&program(function_attrs, call_attrs));
+        assert!(!after.contains("call ptr @memcpy"), "memcpy stayed a call:\n{after}");
+        assert!(after.contains("llvm.memcpy"), "no intrinsic:\n{after}");
+        assert!(after.contains("call i16 (ptr, ...) @printf"), "printf was rewritten:\n{after}");
+    }
+}
