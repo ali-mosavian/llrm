@@ -44,3 +44,29 @@ class Reach(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ZeroBss(unittest.TestCase):
+    """sim65 starts with unzeroed memory, so cc65's crt0 zeroes the BSS (12-15 clk a byte), and llvm-mos's mos-sim starts zeroed
+    and charges nothing (400 B of BSS: 61 cycles, as 1 B): a program with static storage read worse than the bar by the zeroing
+    alone, long_double_constant_store O3 x4.01 with ~1,450 of 3,930 net clocks (2026-11-22). A program's clocks are net of it."""
+    def net(self, res):
+        code = ("import ours_cr, subprocess, tempfile, pathlib\n"
+                "w = pathlib.Path(tempfile.mkdtemp())\n"
+                "(w / 'd.s').write_text(ours_cr.driver())\n"
+                f"(w / 'f.s').write_text('.export main\\nmain: rts\\nrc0=$80\\nrc1=$81\\nrc2=$82\\nrc3=$83\\nrc4=$84\\nrc5=$85\\n.segment \"BSS\"\\nb: .res {res}\\n')\n"
+                "k = subprocess.run(['cl65', '-t', ours_cr.SIM, '-m', 'x.map', '-o', 'x.bin', 'd.s', 'f.s'], cwd=w, capture_output=True, text=True)\n"
+                "assert k.returncode == 0, k.stderr\n"
+                "print(ours_cr.net_cycles(w))\n")
+        with tempfile.NamedTemporaryFile("w", suffix=".s", delete=False) as f:
+            f.write("")
+        env = dict(os.environ, OURS_RT=f.name)
+        here = os.path.dirname(os.path.abspath(__file__))
+        out = subprocess.run([sys.executable, "-c", code], cwd=here, env=env, capture_output=True, text=True)
+        os.unlink(f.name)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        return int(out.stdout.split()[-1])
+
+    def test_the_clocks_do_not_grow_with_the_bss(self):
+        small, large = self.net(1), self.net(400)
+        self.assertLess(abs(large - small), 12, f"1 B of BSS: {small} clocks, 400 B: {large}")
