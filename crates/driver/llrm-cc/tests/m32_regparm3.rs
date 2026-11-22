@@ -59,9 +59,14 @@ fn test_m32_regparm3_the_caller_passes_three_arguments_in_registers() {
     let text = listing("caller", SOURCE, &["-mregparm=3"]);
     let h = body(&text, "h");
     assert!(h.contains("mov edx, 2") && h.contains("mov ecx, 3"), "the 2nd and 3rd are not in EDX and ECX:\n{h}");
-    // The fourth is the one stack argument. The row keeps the stack 16-aligned (`-mstack-alignment=16`), so the frame is the word and 8 bytes
-    // of padding: clang's own `h` (-m32 -mregparm=3, fork of the pin) reserves 12 and restores with `add esp, 12`.
-    assert!(h.contains("pushd 4") || h.contains("[esp], 4"), "the fourth is not stored as the one stack argument:\n{h}");
+    // The fourth is the one stack argument. The row keeps the stack 16-aligned
+    // (`-mstack-alignment=16`), so the frame is the word and 8 bytes
+    // of padding: clang's own `h` (-m32 -mregparm=3, fork of the pin) reserves
+    // 12 and restores with `add esp, 12`.
+    assert!(
+        h.contains("pushd 4") || h.contains("[esp], 4"),
+        "the fourth is not stored as the one stack argument:\n{h}"
+    );
     assert!(h.contains("add esp, 12"), "the caller restores the word and its padding:\n{h}");
 }
 
