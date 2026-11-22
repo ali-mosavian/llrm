@@ -53,6 +53,7 @@ use llrm_analysis::memory::Unit as MemUnit;
 use llrm_mir::blockorder::reverse_post_order_traversal;
 use llrm_mir::context::{ConstantKind, Context};
 use llrm_mir::datalayout::DataLayout;
+use llrm_mir::dense::IdMap;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
 use llrm_mir::opcode::{BinaryOp, CastOp, Opcode};
 use llrm_mir::passes::{Declared, Outer};
@@ -389,8 +390,7 @@ fn sorted(
     if seeds.len() < 2 {
         return seeds;
     }
-    let place: std::collections::HashMap<InstId, usize> =
-        function.iter_block(block).enumerate().map(|(at, inst)| (inst, at)).collect();
+    let place: IdMap<InstId, usize> = function.iter_block(block).enumerate().map(|(at, inst)| (inst, at)).collect();
     seeds.sort_by_key(|seed| (seed.rank, seed.bits, seed.group, place[&seed.inst]));
     seeds
 }
