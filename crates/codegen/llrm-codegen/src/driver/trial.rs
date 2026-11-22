@@ -133,9 +133,6 @@ impl Dimension {
         let mut all = Vec::new();
         if tti.rotation_guard_must_fold_at_size() && tti.rotation_trial_at_size() {
             all.push(Dimension::Unrotate { hot: tti.rotation_hot_at_size(), bytes: tti.rotation_hot_bytes_per_loop() });
-            if tti.rotation_hot_at_size() {
-                all.push(Dimension::RotateMore { bytes: tti.rotation_hot_bytes_per_loop() });
-            }
         }
         if tti.switch_lookup_trial_at_size() && !llrm_support::env_flag!("LLRM_NO_SWITCH_LOOKUP_TRIAL") {
             all.push(Dimension::KeepSwitch);
@@ -149,13 +146,18 @@ impl Dimension {
         if tti.opt_size_inline_guard_yields_to_inlinehint() && !llrm_support::env_flag!("LLRM_NO_INLINEHINT_TRIAL") {
             all.push(Dimension::KeepHintedCalls);
         }
-        if tti.opt_size_inline_hot_growth_percent().is_some()
-            && !llrm_support::env_flag!("LLRM_NO_HOT_INLINE_TRIAL")
-        {
+        if tti.opt_size_inline_hot_growth_percent().is_some() && !llrm_support::env_flag!("LLRM_NO_HOT_INLINE_TRIAL") {
             all.push(Dimension::KeepHotCalls);
         }
         if let Some(limit) = tti.unroll_trial_at_size().filter(|_| !NO_SIZE_UNROLL.with(|one| one.get())) {
             all.push(Dimension::Unroll { limit, bytes_strict: tti.unroll_trial_bytes_strict() });
+        }
+        // Last: the trials that save bytes are decided first, so the bytes the
+        // hot rotation adds are priced on the smallest code they made and
+        // cannot displace one (QB suggest.c, arm64: +64 B kept first, -52 B put
+        // back).
+        if tti.rotation_guard_must_fold_at_size() && tti.rotation_trial_at_size() && tti.rotation_hot_at_size() {
+            all.push(Dimension::RotateMore { bytes: tti.rotation_hot_bytes_per_loop() });
         }
         all
     }
@@ -231,10 +233,13 @@ impl Dimension {
             // The object without the latch copies is smaller.
             Dimension::KeepLatch => ("keep-latch", trial::keeps_smaller_at_size(added, saved, base_work, cap)),
             Dimension::KeepSwitch => ("keep-switch", trial::keeps_smaller_at_size(added, saved, base_work, cap)),
-            // The loop is the smaller object; it stays where the call's clocks (priced at the loop's own trip weight,
-            // see `library_cycles`) do not beat it past the cap.
+            // The loop is the smaller object; it stays where the call's clocks
+            // (priced at the loop's own trip weight, see `library_cycles`) do
+            // not beat it past the cap.
             Dimension::KeepCopyLoop => ("keep-copy-loop", trial::keeps_smaller_at_size(added, saved, base_work, cap)),
-            Dimension::KeepHintedCalls => ("keep-hinted-calls", trial::keeps_smaller_at_size(added, saved, base_work, cap)),
+            Dimension::KeepHintedCalls => {
+                ("keep-hinted-calls", trial::keeps_smaller_at_size(added, saved, base_work, cap))
+            }
             Dimension::KeepHotCalls => ("keep-hot-calls", trial::keeps_smaller_at_size(added, saved, base_work, cap)),
             Dimension::Unroll { bytes_strict, .. } => {
                 ("unroll-os", measured && trial::keeps_unroll_at_size(saved, added, noted.unroll.0.len(), bytes_strict))
@@ -261,13 +266,15 @@ fn compiled_with<T>(
     }
 }
 
-/// The words a copy of unknown length is priced at: the trips the frequency model gives a loop of unknown count
-/// (a branch to stay of 31 in 32).
+/// The words a copy of unknown length is priced at: the trips the frequency
+/// model gives a loop of unknown count (a branch to stay of 31 in 32).
 const UNKNOWN_COPY_WORDS: f64 = 32.0;
 
-/// The clocks the library's copy routines take that `done` calls, which the module does not define and the work
-/// would otherwise price as a call and return alone: `memcpy` is `rep movsd` (startup, then a cell a word) over
-/// the words a loop of unknown count runs, so a copy loop and the call LoopIdiom made of it are priced alike.
+/// The clocks the library's copy routines take that `done` calls, which the
+/// module does not define and the work would otherwise price as a call and
+/// return alone: `memcpy` is `rep movsd` (startup, then a cell a word) over the
+/// words a loop of unknown count runs, so a copy loop and the call LoopIdiom
+/// made of it are priced alike.
 fn library_cycles(
     one: &masm::Procedure,
     done: &executed::Executed,
@@ -300,7 +307,8 @@ fn rotation_work(
         let done = if proven { executed::executed(&one.body)? } else { executed::executed_unproven(&one.body)? };
         let jumps = done.jump_cycles(cpu).ok()?;
         let exchanges = done.exchange_cycles(cpu).ok()?;
-        let work = done.instructions - done.branches - done.jumps + done.memory + jumps + exchanges + done.call_cycles(cpu);
+        let work =
+            done.instructions - done.branches - done.jumps + done.memory + jumps + exchanges + done.call_cycles(cpu);
         let work = work + library_cycles(one, &done, cpu);
         let calls = done
             .calls
@@ -529,8 +537,12 @@ fn compiled_module_at_size(
                 .map(|(_, function)| function.instruction_count())
                 .sum()
         };
-        let price =
-            |one: &masm::Module| Some((unpadded(one)?, rotation_work(one, options, dimension.prices_proven_trips(), dimension.prices_called_work())));
+        let price = |one: &masm::Module| {
+            Some((
+                unpadded(one)?,
+                rotation_work(one, options, dimension.prices_proven_trips(), dimension.prices_called_work()),
+            ))
+        };
         if 2 * size(&base.program.modules[0], Some(&cut)) >= size(&base.program.modules[0], None) {
             let variant = built(program, name, &again)?;
             let pays = matches!(
@@ -569,8 +581,12 @@ fn compiled_module_at_size(
         let program = compiled_with(&accepted, || optimized_program(module.clone(), &again))?;
         let _ = Noted::take();
         let together = built(program, name, &again)?;
-        let price =
-            |one: &masm::Module| Some((unpadded(one)?, rotation_work(one, options, dimension.prices_proven_trips(), dimension.prices_called_work())));
+        let price = |one: &masm::Module| {
+            Some((
+                unpadded(one)?,
+                rotation_work(one, options, dimension.prices_proven_trips(), dimension.prices_called_work()),
+            ))
+        };
         let pays = matches!(
             (price(&chosen.built), price(&together.built)),
             (Some(a), Some(b)) if dimension.keeps(&noted, a, b, cap)

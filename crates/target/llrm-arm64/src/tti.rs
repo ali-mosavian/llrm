@@ -732,6 +732,13 @@ impl Tti for AArch64 {
         true
     }
 
+    /// Bytes first at -Os: the hot rotation is kept only where the object does
+    /// not grow (the ruling for -Os; x86-m64 the same). It added 4 B a loop:
+    /// QB suggest.c +64 B for -12% modelled work, on a module over gcc's bytes.
+    fn rotation_hot_bytes_per_loop(&self) -> i64 {
+        0
+    }
+
     /// The inliner counts a callee's growth in cost units, one per instruction,
     /// and prices it as `units * inline_o1_unit_bytes_milli / 1000` bytes: an
     /// arm64 instruction is 4 bytes. (Left at 1000, a unit priced as a byte
