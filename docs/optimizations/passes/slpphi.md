@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/slpphi.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/slpphi.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/slpphi.rs sha256:999ea40c9abb62277cb57af13f1e125012f2c7fe4bed6296eac752176ab0c0d0 -->
+<!-- src: crates/opt/llrm-transforms/src/slpphi.rs sha256:349bcb41609abfa2188bd83139a28af4b298ca2c18f490f6bead5d36662382fa -->
 
 # slpphi
 
@@ -30,7 +30,8 @@ looks at the phis first).
 `slpvectorize`.
 
 ## Example
-Sixteen loop-carried doubles in a loop header become `<2 x double>` phis when the trees of their values pay (the nbody test).
+Sixteen loop-carried doubles in a loop header become `<2 x double>` phis
+when the trees of their values pay (the nbody test).
 
 ```text
 %a = phi double [ 0.0, %entry ], [ %a1, %loop ]
