@@ -1,5 +1,6 @@
-//! `MachineCSE`'s partial-redundancy hoist makes a value no instruction defines: QuickrBasic `using.c`
-//! (68020 -O2, `usng_next_field`) panicked in `machine_sink`, index 111 of 100 register classes.
+//! `MachineCSE`'s partial-redundancy hoist makes a value no instruction
+//! defines: QuickrBasic `using.c` (68020 -O2, `usng_next_field`) panicked in
+//! `machine_sink`, index 111 of 100 register classes.
 
 use llrm_m68k::driver::{Level, assembly, cpu_of};
 
