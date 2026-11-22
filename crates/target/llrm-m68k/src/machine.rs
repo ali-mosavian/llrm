@@ -608,6 +608,15 @@ impl Tti for M68k {
         true
     }
 
+    /// DEVIATE COMMON-INSTS-O1 (owner wasm-3, exit 2026-12-12, row
+    /// COMMON-INSTS-O1): the -O2 function pipeline's hoisting and sinking
+    /// SimplifyCFG (L832) also runs at -O1, as before the pin's plain one (L621)
+    /// was mirrored; the flip is not measured here (computed_goto -O1 +369 B,
+    /// word_compare_branches +265 B on 6502 without it).
+    fn common_insts_at_o1(&self) -> bool {
+        true
+    }
+
     /// DEVIATE BACKTHREAD-REL (owner wasm-3, exit 2026-12-15; row
     /// M68K-WORDCMP-O3): the compares of one pair of values decide each other
     /// along a path, as gcc's `threadfull1` and `vrp1` do. Not on the 68000:
