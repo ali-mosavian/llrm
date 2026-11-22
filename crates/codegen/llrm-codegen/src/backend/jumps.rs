@@ -120,6 +120,9 @@ pub struct ControlFlow<'a> {
     pub saved: Vec<llrm_lir::registers::RegId>,
     pub free: bool,
     pub pointer: llrm_lir::registers::RegId,
+    /// `BranchFolder` ran before the tails were copied: the tails are not
+    /// merged again ahead of placement, where the pin merges only after it.
+    pub folded: bool,
 }
 
 impl LIRTransform for ControlFlow<'_> {
@@ -146,6 +149,38 @@ impl LIRTransform for ControlFlow<'_> {
     }
 }
 
+/// `BranchFolderPass` of `addMachineLateOptimization`: the tails merged before
+/// `TailDuplicatePass` copies the dispatch into them, so identical arms that
+/// jump to it are one block when it is copied.
+pub struct BranchFolder<'a> {
+    pub cpu: &'a cpu::Profile,
+    pub calls: Option<IndexMap<i64, String>>,
+}
+
+impl LIRTransform for BranchFolder<'_> {
+    fn class_name(&self) -> &'static str {
+        "BranchFolder"
+    }
+
+    fn name(&self) -> &str {
+        "branchfolder"
+    }
+
+    fn transform(
+        &mut self,
+        body: LirBody,
+    ) -> Result<LirBody, String> {
+        if !self.cpu.optimized {
+            return Ok(body);
+        }
+        let hoisted = _hoisted(&body);
+        let (merged, _) =
+            tails_merged(hoisted, self.cpu.size, self.calls.as_ref(), false, self.cpu.tail_merge_pin_faithful)
+                .map_err(|error| error.0)?;
+        Ok(merged)
+    }
+}
+
 impl ControlFlow<'_> {
     /// `optimized`, its executed work on the `cost` channel.
     fn placed(
@@ -155,11 +190,12 @@ impl ControlFlow<'_> {
         // -O0 keeps the blocks in source order and drops the jumps that order
         // makes redundant: no tails merged, no block copied, no trace chosen.
         let placed = if self.cpu.optimized {
-            optimized_with(
+            optimized_folded(
                 body,
                 self.cpu,
                 self.calls.as_ref(),
                 crate::backend::latetaildup::saved_count(body, &self.saved, self.free, self.pointer),
+                self.folded,
             )?
         } else {
             threaded(&body.with_blocks(_explicit(body)?))
@@ -200,6 +236,17 @@ pub fn optimized_with(
     calls: Option<&IndexMap<i64, String>>,
     epilogue: usize,
 ) -> Result<LirBody, masm::Unprintable> {
+    optimized_folded(body, cpu, calls, epilogue, false)
+}
+
+/// `optimized_with`; `folded`: `BranchFolder` already merged the tails.
+pub fn optimized_folded(
+    body: &LirBody,
+    cpu: &cpu::Profile,
+    calls: Option<&IndexMap<i64, String>>,
+    epilogue: usize,
+    folded: bool,
+) -> Result<LirBody, masm::Unprintable> {
     let size = cpu.size;
     // `BranchFolder` ahead of placement: in the order the blocks were made,
     // where a block falling into the common successor takes any tail.
@@ -207,7 +254,7 @@ pub fn optimized_with(
     // `OptimizeBranches` changes the function whether or not a tail merged: the
     // placement sees a select's empty `copy0MBB` gone, not a block to fall
     // into.
-    let (early, _) = tails_merged(hoisted, size, calls, false, cpu.tail_merge_pin_faithful)?;
+    let early = if folded { hoisted } else { tails_merged(hoisted, size, calls, false, cpu.tail_merge_pin_faithful)?.0 };
     let start = early.with_blocks(_explicit(&early)?);
     let mut placed = threaded(&_placed_ext(
         &start,

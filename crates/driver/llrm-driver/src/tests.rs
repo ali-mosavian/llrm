@@ -397,6 +397,18 @@ fn a_loop_guard_and_its_latch_share_their_call_at_m64() {
     assert_eq!(reads, 1, "{listing}");
 }
 
+/// An interpreter's dispatch (18 handlers, each with the same arm that moves `ip` by a stored offset). The pin
+/// merges those arms (`BranchFolder`) and then copies the dispatch into them (`TailDuplicate`); we copied first, so
+/// the arms were 18 blocks of `movsx; add; <dispatch>` and the function 37 indirect jumps against the pin's 20.
+#[test]
+fn identical_dispatch_arms_are_merged_before_the_dispatch_is_copied_into_them() {
+    let text = include_str!("testdata/dispatch_match_tails.ll");
+    let (built, _) = compiled(&flags(&["-m64", "-O2", "--isel=dag"]), text, "run").unwrap();
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    let arms = listing.lines().filter(|line| line.trim_start().starts_with("movsx")).count();
+    assert_eq!(arms, 1, "{listing}");
+}
+
 /// A symbol's address passed to four calls in one block was made four times
 /// (`mov rdi, offset src` before each): the greedy input held one def per use,
 /// where the pin's DAG selects the `LEA64r` once and its users share it, so the

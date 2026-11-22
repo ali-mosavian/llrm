@@ -954,3 +954,44 @@ out:
     };
     assert_eq!((count(&before), count(&after)), (1, 2), "one loop with two back edges becomes an outer and an inner");
 }
+
+/// A dispatch loop of eight handlers that all jump back to its header was
+/// split into three nested loops (the pin gives it one latch: `separateNestedLoop`
+/// is tried for fewer than eight back edges only), and the interpreter
+/// `exec_loop` ran four more register copies and a shared join per op.
+#[test]
+fn test_a_loop_with_eight_back_edges_is_not_separated_into_nested_loops() {
+    let handlers = 8;
+    let arms: String = (0..handlers).map(|k| format!("i32 {k}, label %a{k} ")).collect();
+    let bodies: String = (0..handlers)
+        .map(|k| {
+            let moved = if k % 2 == 0 { format!("  %sp{k} = add i32 %sp, {k}\n") } else { format!("  %sp{k} = add i32 %sp, 0\n") };
+            format!("a{k}:\n{moved}  br label %h\n\n")
+        })
+        .collect();
+    let sp: String = (0..handlers).map(|k| if k % 3 == 0 { format!(", [ %sp, %a{k} ]") } else { format!(", [ %sp{k}, %a{k} ]") }).collect();
+    let (before, after) = simplify(&format!(
+        "define i32 @f(i32 %n) {{
+b0:
+  br label %h
+
+h:
+  %sp = phi i32 [ 0, %b0 ]{sp}
+  %k = call i32 @next(i32 %sp)
+  switch i32 %k, label %out [ {arms}]
+
+{bodies}out:
+  ret i32 %sp
+}}
+
+declare i32 @next(i32)
+"
+    ));
+    let count = |module: &Module| {
+        let (_, _, function) =
+            module.functions().find(|(_, global, _)| global.name.as_deref() == Some("f")).expect("@f");
+        let graph = cfg::graph(function);
+        loops::loops(&graph, function.entry().map(cfg::id)).len()
+    };
+    assert_eq!((count(&before), count(&after)), (1, 1), "eight back edges are merged into one latch, not nested");
+}

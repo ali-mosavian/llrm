@@ -511,6 +511,11 @@ pub fn simplified_given(
     _simplified(function, shape) | nested
 }
 
+/// `L->getNumBackEdges() < 8` at the call of `separateNestedLoop`: a loop with
+/// more back edges, an interpreter's dispatch where every handler jumps back,
+/// is given one latch instead of being split into nested loops.
+const MAX_BACKEDGES_TO_SEPARATE: usize = 8;
+
 /// [`separateNestedLoop`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/LoopSimplify.cpp#L331)
 /// for each loop with several back edges and a header phi they tell apart
 /// ([`find_phi_to_partition_loops`]): the edges that vary (from outside the
@@ -533,7 +538,7 @@ fn separated_nested_loops(
     for _ in 0..function.layout().len() {
         let shape = first.take().unwrap_or_else(|| cfg::Shape::of(function));
         let separated = shape.loops.iter().any(|loop_| {
-            if loop_.latches.len() < 2 {
+            if !(2..MAX_BACKEDGES_TO_SEPARATE).contains(&loop_.latches.len()) {
                 return false;
             }
             let header = cfg::block(loop_.header);
