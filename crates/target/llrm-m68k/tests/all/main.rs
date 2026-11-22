@@ -35,6 +35,7 @@ mod brind_native;
 mod bswap;
 mod btst_memory_byte;
 mod btst_single_bit;
+mod tce_join_loop;
 mod narrow_sext;
 mod build_counts;
 mod byte_spill_reload;

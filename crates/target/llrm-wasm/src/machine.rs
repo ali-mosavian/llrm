@@ -159,6 +159,13 @@ fn legalized(ty: Ty) -> (u32, u32) {
 }
 
 impl Tti for Wasm {
+    /// The bar is the pin's clang alone, which keeps the recursion: a loop
+    /// the runtime unroll triples is worse (`recursive_stack_args`, O2 388 B
+    /// against 165).
+    fn eliminates_accumulator_through_join(&self) -> bool {
+        false
+    }
+
     /// No jump through a register: `indirectbr` is a `switch` over block
     /// numbers (`IndirectBrExpandPass`).
     fn expands_indirect_br(&self) -> bool {
