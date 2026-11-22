@@ -365,12 +365,26 @@ pub fn keeps_at_o1(
     if added <= 0 {
         return saved >= 0;
     }
-    rate > 0 && saved > 0 && saved * 1000 >= added * rate
+    rate > 0 && saved > 0 && i128::from(saved) * 1000 >= i128::from(added) * i128::from(rate)
 }
 
 #[cfg(test)]
 mod tests {
     use super::{keeps_at_o1, keeps_smaller_at_size};
+
+    /// jpeg_fixed -Os after an address-pair change: the work model priced one
+    /// shape at 2.5e17 against 4e10 for the other, and `-saved * 100`
+    /// overflowed i64 (a debug panic; a release wrap kept or dropped the
+    /// trial at random). The work an astronomically worse shape adds is
+    /// over any cap.
+    #[test]
+    fn extreme_work_does_not_overflow_the_trial_rules() {
+        assert!(!keeps_smaller_at_size(-4, -250_727_428_995_872_928, 39_774_383_718, Some(1)));
+        assert!(!keeps_smaller_at_size(-4, i64::MIN, i64::MAX, Some(1)));
+        assert!(keeps_smaller_at_size(-4, i64::MAX, i64::MAX, Some(1)), "it runs less");
+        assert!(keeps_at_o1(i64::MAX, 4, i64::MAX));
+        assert!(!keeps_at_o1(1, i64::MAX, i64::MAX));
+    }
 
     /// x_transpose -Os (m32): the copy loop saved 20 B and added 178,500 of
     /// about 1.1M work (+16%); x_switch_ranges: 35 B for +11%.
@@ -525,7 +539,7 @@ pub fn keeps_smaller_at_size(
         return false;
     }
     match cap {
-        Some(cap) if base > 0 && saved < 0 => -saved * 100 <= cap * base,
+        Some(cap) if base > 0 && saved < 0 => -i128::from(saved) * 100 <= i128::from(cap) * i128::from(base),
         _ => true,
     }
 }
