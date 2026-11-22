@@ -140,10 +140,19 @@ impl FunctionPass for BackwardThreading {
             return PreservedAnalyses::all();
         }
         let mut changed = false;
+        // GCC visits each block of the function once (`pass_thread_jumps`): with
+        // the long paths (`chain` > 1) a copy a thread made is no block of a
+        // later path, or a loop's guard is peeled once a trip until the cap
+        // (QuickrBasic `B_GGET` -O2: 16 copies of the pixel loop's header,
+        // +576 B). The paths of one block keep the old rule until judged.
+        let originals: Option<std::collections::HashSet<BlockId>> =
+            (chain > 1).then(|| unit.function.layout().iter().copied().collect());
         for _ in 0..self.max_threads {
             let dt = DomTree::of(unit.function);
             let loops = LoopInfo::analyze(unit.function, || DomTree::of(unit.function));
-            let Some(path) = find(unit.context, unit.function, &dt, &loops, relations, chain) else { break };
+            let Some(path) = find(unit.context, unit.function, &dt, &loops, relations, chain, originals.as_ref()) else {
+                break;
+            };
             thread(unit.context, unit.function, &path);
             changed = true;
         }
@@ -621,8 +630,13 @@ fn find(
     loops: &LoopInfo<BlockId>,
     relations: bool,
     chain_limit: usize,
+    originals: Option<&std::collections::HashSet<BlockId>>,
 ) -> Option<Path> {
+    let known = |block: &BlockId| originals.is_none_or(|originals| originals.contains(block));
     for &bb in function.layout() {
+        if !known(&bb) {
+            continue;
+        }
         let Some(branch) = branch_of(function, bb) else { continue };
         // The compare's inputs must read the same wherever the facts hold: a
         // value defined in `bb` itself (a header phi) is the next trip's when
@@ -635,6 +649,9 @@ fn find(
                 && at != bb
         };
         for chain in chains_into(function, bb, &inputs_stable, chain_limit) {
+            if !chain.iter().all(known) {
+                continue;
+            }
             let first = chain[0];
             let last = *chain.last().expect("a block");
             // What every path into the chain knows leaves nothing to thread.
@@ -650,6 +667,7 @@ fn find(
             }
             for &q in &function.predecessors(first) {
                 if q == bb
+                    || !known(&q)
                     || chain.contains(&q)
                     || function.edge_predecessors(first).iter().filter(|&&b| b == q).count() != 1
                 {
@@ -671,6 +689,7 @@ fn find(
         }
         if relations
             && let Some(path) = join_decided(context, function, dt, loops, bb, &branch, &inputs_stable, chain_limit)
+            && known(&path.q)
         {
             return Some(path);
         }
