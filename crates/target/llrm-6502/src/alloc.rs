@@ -60,7 +60,7 @@ fn rc(n: u8) -> RegId {
 /// The zero-page bytes the imaginary registers may use on the platform being
 /// compiled for (`Platform::zero_page`): `rc0`..`rc15` and, above them, as many
 /// scratch cells as it has room for.
-const BASE_CELLS: u8 = 16;
+pub(crate) const BASE_CELLS: u8 = 16;
 
 /// What a byte of code is worth against a clock, per level (the tuning struct
 /// of this target): a size-reducing choice is taken when each byte it saves
