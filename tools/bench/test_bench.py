@@ -1563,6 +1563,15 @@ def test_references_skip_levels_they_are_not_built_at(tmp_path, monkeypatch):
     assert asked == ["O1", "O2", "Os"]
 
 
+def test_bcc_sh_without_any_dosbox_says_so_not_exit_127(tmp_path):
+    """tools/callconv/bcc.sh defaulted DOSRUN to a scratch build that was deleted: exit 127, stderr dropped, and every Borland cell of the 2026-11-22 table read "no object" (c.sh falls back to the dist's dosbox-x; bcc.sh did not)."""
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    done = subprocess.run(["bash", str(bench.ROOT / "tools/callconv/bcc.sh"), str(tmp_path / "out"), "a.c"], capture_output=True, text=True,
+                          env={**os.environ, "HOME": str(tmp_path), "LLRM_BIN": str(dist), "DOSRUN": str(tmp_path / "none")})
+    assert done.returncode == 2 and "no DOSBox" in done.stderr, (done.returncode, done.stderr)
+
+
 def test_a_source_touched_mid_run_refuses_the_next_reference_level_not_the_end(tmp_path, monkeypatch):
     """The m16 C run of 2026-11-22 measured for 3 h, then died at its end ("stale binaries": a checkout in its source tree) and wrote nothing.
     The check now runs before each reference level: a stale tree stops the run at the next one."""
