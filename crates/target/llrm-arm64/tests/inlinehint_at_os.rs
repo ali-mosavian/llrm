@@ -1,11 +1,16 @@
 //! A callee declared `inline` is inlined at -Os where the pin's hint
-//! threshold passes it, though it grows the code.
+//! threshold passes it, though it grows the code. The -Os trial
+//! (INLINEHINT-GROWTH-TRIAL, `hinted_calls_trial.rs`) then keeps the calls
+//! where the object is smaller, so this pins the inliner's yield with the
+//! trial off (`LLRM_ARM64_NO_TRIAL`): the fixture's two copies would grow the
+//! object.
 
 fn calls_leaf(hint: &str) -> bool {
     let dir = tempfile::tempdir().unwrap();
     let (input, output) = (dir.path().join("t.ll"), dir.path().join("t.s"));
     std::fs::write(&input, include_str!("data/inlinehint_at_os.ll").replace("HINT", hint)).unwrap();
     let said = std::process::Command::new(env!("CARGO_BIN_EXE_llrm-arm64-llc"))
+        .env("LLRM_ARM64_NO_TRIAL", "1")
         .args(["-S", "-Os", "-o"])
         .arg(&output)
         .arg(&input)
