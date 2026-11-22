@@ -198,6 +198,44 @@ pub struct Variable {
     pub zero: bool,
 }
 
+/// `llvm.global_ctors` as the object's init-function pointers: the function of
+/// each `{ i32 priority, ptr function, ptr data }` entry (`3 * pointer` bytes),
+/// lowest priority first and in order within one, as
+/// `AsmPrinter::emitXXStructorList` sorts them; an entry without a function is
+/// dropped. The table has no name.
+pub fn constructor_table(
+    variable: &Variable,
+    pointer: usize,
+    big_endian: bool,
+) -> Variable {
+    let size = 3 * pointer;
+    let mut entries: Vec<(u32, &Reloc)> = variable
+        .bytes
+        .chunks(size)
+        .enumerate()
+        .filter_map(|(index, entry)| {
+            let function = variable.relocs.iter().find(|reloc| reloc.at == index * size + pointer)?;
+            let priority: [u8; 4] = entry[..4].try_into().ok()?;
+            Some((if big_endian { u32::from_be_bytes(priority) } else { u32::from_le_bytes(priority) }, function))
+        })
+        .collect();
+    entries.sort_by_key(|(priority, _)| *priority);
+    Variable {
+        name: String::new(),
+        linkage: Linkage::Internal,
+        export: Export::Local,
+        bytes: vec![0; entries.len() * pointer],
+        relocs: entries
+            .iter()
+            .enumerate()
+            .map(|(index, (_, function))| Reloc { at: index * pointer, ..(*function).clone() })
+            .collect(),
+        align: pointer,
+        constant: false,
+        zero: false,
+    }
+}
+
 /// Every global variable `module` defines. `llvm.used` and
 /// `llvm.compiler.used` are for the compiler and the linker only and are left
 /// out; `llvm.global_ctors` and `llvm.global_dtors` are returned as they are,
