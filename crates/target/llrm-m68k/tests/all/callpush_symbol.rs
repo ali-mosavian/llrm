@@ -25,7 +25,7 @@ fn a_symbol_address_argument_is_pushed() {
     ];
     let refs: Vec<&Inst> = insts.iter().collect();
     let blocks = vec![0; insts.len()];
-    let found = plan(&refs, &blocks, &Assignment::default(), Cpu::M68000, Price::Size, true, |area| {
+    let found = plan(&refs, &blocks, &Assignment::default(), Cpu::M68000, Price::Size, true, true, |area| {
         Ok(if area > 0 { (4, 8) } else { (0, 0) })
     })
     .expect("plans");
