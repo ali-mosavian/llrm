@@ -83,6 +83,8 @@ struct Lftr<'a> {
     budget: u32,
     /// `Tuning::lftr_any_stride`: DEVIATE LFTR1.
     any_stride: bool,
+    /// llvm-mos's `allowIllegalIntegerIV`: a counter of an illegal width is one.
+    illegal_iv: bool,
 }
 
 /// `LLRM_NO_SCEV_LFTR`, read once; set, the step is skipped.
@@ -125,11 +127,12 @@ pub fn replaced_in(
     let tti = MachineCosts { tti: outer.target().tti(), minimum_size };
     let budget = outer.target().tti().map_or(4, |tti| tti.lftr_expansion_budget(optsize));
     let any_stride = outer.target().tti().is_some_and(|tti| tti.lftr_any_stride());
+    let illegal_iv = outer.target().tti().is_some_and(|tti| tti.allow_illegal_integer_iv());
     // `Rewriter.disableCanonicalMode()`.
     let mut rewriter = Expander::new("indvars");
     rewriter.set_canonical_mode(false);
     let mut run =
-        Lftr { context, layout, function, declared, outer, se, env, rewriter: &mut rewriter, tti: &tti, budget, any_stride };
+        Lftr { context, layout, function, declared, outer, se, env, rewriter: &mut rewriter, tti: &tti, budget, any_stride, illegal_iv };
     let mut changed = false;
     for header in headers {
         // `IndVarSimplify::run`: stay out of trouble without LoopSimplify
@@ -550,7 +553,7 @@ impl Lftr<'_> {
             // may be wider than BECount. With eq/ne tests overflow is
             // immaterial. AR may not be a narrower type, or we may never exit.
             let _ = ar;
-            if phi_width < bc_width || !self.layout.legal_integer(phi_width) {
+            if phi_width < bc_width || !(self.illegal_iv || self.layout.legal_integer(phi_width)) {
                 continue;
             }
             // DEVIATE LFTR1 reaches only a counter the test needs no
