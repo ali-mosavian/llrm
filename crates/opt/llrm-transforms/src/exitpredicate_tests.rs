@@ -60,3 +60,34 @@ fn test_a_loop_that_writes_memory_is_not_predicated() {
     );
     assert!(!changed, "{after}");
 }
+
+/// Without LCSSA a loop's only exit, read outside through the loop's own value,
+/// was made `br i1 false`: the loop left on its first trip (a 256-trip byte
+/// loop summed one element). The exit stays.
+#[test]
+fn test_a_live_out_read_without_an_exit_phi_keeps_the_exit() {
+    let mut module = parsed(&format!(
+        "{DOS}define i32 @f(i32 %n) {{
+entry:
+  br label %loop
+loop:
+  %i = phi i32 [ 0, %entry ], [ %i.next, %loop ]
+  %s = phi i32 [ 0, %entry ], [ %t, %loop ]
+  %t = add i32 %s, %i
+  %i.next = add nuw i32 %i, 1
+  %c = icmp ne i32 %i.next, %n
+  br i1 %c, label %loop, label %exit
+exit:
+  ret i32 %t
+}}
+"
+    ));
+    let (layout, outer) = (layout(&module), Outer::of(&module, None));
+    let mut declared = llrm_mir::passes::Declared::of(&module);
+    let (context, function) = module.function_mut("f").expect("@f");
+    crate::loopsimplify::simplified(function);
+    let changed = super::predicated(context, &layout, function, &mut declared, &outer);
+    declared.place(&mut module).expect("places");
+    let after = printed(&module);
+    assert!(!changed && after.contains("br i1 %c,"), "{after}");
+}

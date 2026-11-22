@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/twoentryphi.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/twoentryphi.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/twoentryphi.rs sha256:3afe7ee94d649da2ffcfff24ced2ba8f714fb36d3f38cb2aef4a852fc951d4b1 -->
+<!-- src: crates/opt/llrm-transforms/src/twoentryphi.rs sha256:1c0d265e23c159ede643b12d6ecef967a57139a0fbe0653e25e8edda4c3b2139 -->
 
 # twoentryphi
 
@@ -65,4 +65,4 @@ end:   %p = phi i32 [ 1, %then ], [ 2, %entry ]
 ```
 
 ## Used by
-Named by `alwaysundef`, `branchtocommon`, `condstores`, `condtocond`, `constanthoisting`, `hoistcommon`, `icmpchain`, `knownpred`, `loopdeletion`, `simplifycfg`, `sinkcommon`, `speculate`, `switcharms`, `switchdead`, `switchlookup`, `switchopt`, `switchphi`, `switchpow2`, `switchrange`, `switchreduce`, `switchselect`, `switchvalue`, `undefpred`.
+Named by `alwaysundef`, `branchtocommon`, `condstores`, `condtocond`, `constanthoisting`, `hoistcommon`, `icmpchain`, `knownpred`, `loopdeletion`, `loopsplit`, `simplifycfg`, `sinkcommon`, `speculate`, `switcharms`, `switchdead`, `switchlookup`, `switchopt`, `switchphi`, `switchpow2`, `switchrange`, `switchreduce`, `switchselect`, `switchvalue`, `undefpred`.
