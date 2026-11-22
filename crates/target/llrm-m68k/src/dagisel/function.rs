@@ -112,6 +112,11 @@ pub struct Selected {
     /// The blocks each of the function's jump tables goes to, by table number
     /// (`MachineJumpTableInfo`; the same on every block).
     pub tables: Vec<Vec<u32>>,
+    /// The blocks an `indirectbr` that ends this block may go to.
+    pub indirect: Vec<u32>,
+    /// The symbol of each block whose address is taken, defined at its label
+    /// (`AsmPrinter::GetBlockAddressSymbol`; the same on every block).
+    pub address_symbols: Vec<(u32, String)>,
 }
 
 /// Function `name` of `module`, block by block in layout order.
@@ -216,8 +221,9 @@ pub fn select_function_with(
         sizes.push((value, size, align));
     }
     sizes.sort_by_key(|(value, _, _)| info.static_allocas[value]);
-    // DEVIATE SC1: StackColoring over the IR's lifetime markers (`llrm_codegen::backend::stackcoloring`), the
-    // surviving objects in the pin's order: a group sits where its largest member did
+    // DEVIATE SC1: StackColoring over the IR's lifetime markers
+    // (`llrm_codegen::backend::stackcoloring`), the surviving objects in
+    // the pin's order: a group sits where its largest member did
     let coloring = llrm_codegen::backend::stackcoloring::color_frame(module, function, &sizes);
     let count = coloring.objects.len() as i32;
     info.share_allocas(sizes.iter().zip(&coloring.colors).map(|((value, _, _), &group)| (*value, group)), count);
@@ -280,6 +286,13 @@ pub fn select_function_with(
             locals: Vec::new(),
             ends_unreachable,
             tables: Vec::new(),
+            indirect: info
+                .indirect_targets
+                .iter()
+                .filter(|(from, _)| *from == block)
+                .flat_map(|(_, targets)| targets.iter().map(|target| target.0))
+                .collect(),
+            address_symbols: Vec::new(),
         });
         for (id, mut extra) in extras {
             let units = select_block_with(
@@ -306,17 +319,27 @@ pub fn select_function_with(
                 locals: Vec::new(),
                 ends_unreachable: false,
                 tables: Vec::new(),
+                indirect: Vec::new(),
+                address_symbols: Vec::new(),
             });
         }
     }
-    let mut locals: Vec<(i32, i64, i64)> = objects.into_iter().enumerate().map(|(at, (size, align))| (at as i32, size, align)).collect();
+    let mut locals: Vec<(i32, i64, i64)> =
+        objects.into_iter().enumerate().map(|(at, (size, align))| (at as i32, size, align)).collect();
     locals.extend(temporaries.made);
     locals.sort();
     if let Some(entry) = selected.first_mut() {
         entry.locals = locals;
     }
+    let mut address_symbols: Vec<(u32, String)> = function
+        .address_taken_blocks()
+        .map(|block| (block.0, llrm_codegen::backend::blockaddress::symbol(id, block)))
+        .collect();
+    address_symbols.sort();
+    address_symbols.dedup();
     for one in &mut selected {
         one.tables.clone_from(&info.jump_tables);
+        one.address_symbols.clone_from(&address_symbols);
     }
     for (one, pending) in selected.iter_mut().zip(updates) {
         for (at, &(phi, incoming)) in pending.iter().enumerate() {

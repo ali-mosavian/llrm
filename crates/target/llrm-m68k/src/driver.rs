@@ -494,12 +494,14 @@ fn lowered_once(
         std::fs::create_dir_all(dump).map_err(|error| format!("{}: {error}", dump.display()))?;
     }
     let applied = Applied { options, dump: dump.map(Into::into), ..Applied::default() };
-    // The pipeline sees an atomic access as a call it cannot move; then the target's own form: the pin selects a
-    // plain `move` for an atomic load or store of at most 32 bits (M68kInstrAtomics.td).
+    // The pipeline sees an atomic access as a call it cannot move; then the
+    // target's own form: the pin selects a plain `move` for an atomic load
+    // or store of at most 32 bits (M68kInstrAtomics.td).
     program.modules.iter_mut().try_for_each(llrm_mir::atomic::hidden)?;
     llrm_transforms::pipeline::applied(&mut program, &applied)?;
-    // DEVIATE M68K-ATOMIC-SYNC: a 68020 expands a read-modify-write to a `cas` loop (`shouldExpandAtomicRMWInIR`,
-    // AtomicExpandPass, not translated): it calls the `__sync_*` routine as a 68000 does. Exit: 2026-12-15, w8.
+    // DEVIATE M68K-ATOMIC-SYNC: a 68020 expands a read-modify-write to a `cas`
+    // loop (`shouldExpandAtomicRMWInIR`, AtomicExpandPass, not translated):
+    // it calls the `__sync_*` routine as a 68000 does. Exit: 2026-12-15, w8.
     program.modules.iter_mut().try_for_each(|module| llrm_mir::atomic::sync_libcalled(module, 32))?;
     program.modules.iter_mut().try_for_each(|module| llrm_mir::atomic::lowered(module, 32, false, false, false))?;
     program.modules.iter_mut().try_for_each(llrm_transforms::memsetpattern::expanded)?;
@@ -677,7 +679,12 @@ fn model_of(
     }
     let layout =
         llrm_mir::datalayout::DataLayout::parse(module.datalayout.as_deref().ok_or("a module with no datalayout")?)?;
-    let variables = llrm_mir::image::variables(module, &layout, &|name| crate::data::symbol(name))?;
+    let variables = llrm_mir::image::variables_with_blocks(
+        module,
+        &layout,
+        &|name| crate::data::symbol(name),
+        Some(&llrm_codegen::backend::blockaddress::symbol),
+    )?;
     Ok(model.resolved(variables.iter().map(|one| one.bytes.len()).sum()))
 }
 
@@ -737,7 +744,12 @@ pub fn object_flagged(
     }
     let layout =
         llrm_mir::datalayout::DataLayout::parse(module.datalayout.as_deref().ok_or("a module with no datalayout")?)?;
-    let variables = crate::data::with_constructors(llrm_mir::image::variables(&module, &layout, &|name| crate::data::symbol(name))?)?;
+    let variables = crate::data::with_constructors(llrm_mir::image::variables_with_blocks(
+        &module,
+        &layout,
+        &|name| crate::data::symbol(name),
+        Some(&llrm_codegen::backend::blockaddress::symbol),
+    )?)?;
     crate::elf::relocatable_with(name, &items, &exports, &variables)
 }
 

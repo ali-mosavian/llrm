@@ -213,9 +213,11 @@ fn place(
     // Symbols: the labels, then the undefined names the fixups use.
     let mut symbols: Vec<Symbol> = Vec::new();
     let mut index_of: HashMap<String, usize> = HashMap::default();
-    let functions: Vec<&(&str, usize)> = labels.iter().filter(|(label, _)| !label.starts_with('.')).collect();
+    let is_local =
+        |label: &str| label.starts_with('.') || label.starts_with(llrm_codegen::backend::blockaddress::PREFIX);
+    let functions: Vec<&(&str, usize)> = labels.iter().filter(|(label, _)| !is_local(label)).collect();
     for (label, offset) in &labels {
-        let local = label.starts_with('.');
+        let local = is_local(label);
         let size = if local {
             0
         } else {
@@ -235,7 +237,9 @@ fn place(
     // The globals: one section per role, each variable a symbol in it.
     let mut data_sections: Vec<Section> = Vec::new();
     let mut data_relocs: Vec<(usize, usize, usize, i64, String)> = Vec::new();
-    for (role, section_name) in [(Role::ROData, ".rodata"), (Role::Data, ".data"), (Role::Bss, ".bss"), (Role::InitFunctions, ".init_array")] {
+    for (role, section_name) in
+        [(Role::ROData, ".rodata"), (Role::Data, ".data"), (Role::Bss, ".bss"), (Role::InitFunctions, ".init_array")]
+    {
         let members: Vec<&Variable> = variables.iter().filter(|one| role_of(one) == role).collect();
         if members.is_empty() {
             continue;

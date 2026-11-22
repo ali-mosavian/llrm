@@ -30,10 +30,11 @@ const KEYS: i64 = 1 << 48;
 const OFFSET_BITS: u32 = 23;
 const BLOCK_MASK: i64 = (1 << OFFSET_BITS) - 1;
 /// What the offset's other bits are: the one bit above the block, in the 16 MiB
-/// the small code model allows a symbol's offset (`isOffsetSuitableForCodeModel`:
-/// beyond it the DAG adds the offset after the symbol instead of folding it),
-/// and positive, so no negative offset reads as a block. The function's own
-/// symbol has no use for such an offset, so no real address is taken for one.
+/// the small code model allows a symbol's offset
+/// (`isOffsetSuitableForCodeModel`: beyond it the DAG adds the offset after the
+/// symbol instead of folding it), and positive, so no negative offset reads as
+/// a block. The function's own symbol has no use for such an offset, so no real
+/// address is taken for one.
 const TAG: i64 = 1 << OFFSET_BITS;
 
 /// The offset of a `GlobalAddress` of the function that names `block`.
@@ -57,12 +58,15 @@ pub fn key(
     KEYS | (i64::from(function.0) << BLOCK_BITS) | i64::from(block.0)
 }
 
+/// What every [`symbol`] starts with.
+pub const PREFIX: &str = "$BA";
+
 /// The assembler name of `block`'s symbol.
 pub fn symbol(
     function: GlobalId,
     block: BlockId,
 ) -> String {
-    format!("$BA{}_{}", function.0, block.0)
+    format!("{PREFIX}{}_{}", function.0, block.0)
 }
 
 #[cfg(test)]
