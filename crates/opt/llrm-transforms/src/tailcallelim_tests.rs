@@ -497,3 +497,51 @@ done:
     let (n, acc) = (named("n.tr"), named("acc.tr"));
     assert_eq!(function.use_list_orders(), [(n, vec![6, 5, 4, 3, 2, 1, 0]), (acc, vec![1, 0])]);
 }
+
+/// `t = n == 0 ? a : f(n - 1, a + n); s = n == 0 ? d : n; return t + s` joins
+/// the two arms in `phi; phi; add; ret`: the call result reaches the `add`
+/// through a phi, so LLVM's accumulator elimination does not see it and the
+/// recursion stays (the pin's -O2 IR of QB-style `deep`: 3,182 clocks against
+/// gcc's loop, 2,140, on the 68000). TCE-ACC-PHI duplicates the join's
+/// `add` and `ret` into the arm that holds the call.
+const JOINED: &str = "define i16 @f(i16 %n, i16 %a) {
+b0:
+  %z = icmp eq i16 %n, 0
+  br i1 %z, label %b1, label %b2
+
+b1:
+  %base = add i16 %a, 7
+  br label %b3
+
+b2:
+  %m = sub i16 %n, 1
+  %x = add i16 %a, %n
+  %v = call i16 @f(i16 %m, i16 %x)
+  br label %b3
+
+b3:
+  %t = phi i16 [ %base, %b1 ], [ %v, %b2 ]
+  %s = phi i16 [ 3, %b1 ], [ %n, %b2 ]
+  %r = add i16 %t, %s
+  ret i16 %r
+}
+";
+
+const JOINED_INPUTS: &[&[i128]] = &[&[0, 5], &[1, 5], &[4, 9], &[6, -3], &[3, 0]];
+
+#[test]
+fn a_call_result_added_after_a_join_is_a_loop() {
+    let after = eliminated(JOINED, JOINED_INPUTS);
+    assert_eq!(calls(&after), 0, "{after}");
+    assert!(after.contains("tailrecurse"), "{after}");
+}
+
+/// The join stays for the arm that has no call, and is copied only once: a join
+/// of two operations is left alone.
+#[test]
+fn a_join_of_two_operations_keeps_its_call() {
+    let text = JOINED
+        .replace("  %r = add i16 %t, %s\n  ret i16 %r", "  %q = add i16 %t, %s\n  %r = mul i16 %q, 3\n  ret i16 %r");
+    let after = eliminated(&text, JOINED_INPUTS);
+    assert_eq!(calls(&after), 1, "{after}");
+}
