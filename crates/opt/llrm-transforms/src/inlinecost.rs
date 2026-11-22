@@ -2968,11 +2968,14 @@ impl<'a> Analyzer<'a> {
                             })
                     })
             };
-            let bound = bound_with(!crate::trial::keeping_hinted_calls());
+            // A site in a loop is the speed side's: the hint's yield stands
+            // there in the trial too, as `outlined_by_trial` leaves it.
+            let in_loop = self.site.relative_frequency.is_some_and(|ratio| ratio > 1.0);
+            let bound = bound_with(!crate::trial::keeping_hinted_calls() || in_loop);
             let grows = bound && self.grows_the_code() && !(at_o1 && self.hot_site_within_growth_budget());
             // INLINEHINT-GROWTH-TRIAL: noted where only the yield let a growing
-            // call through at -Os.
-            if !bound && !at_o1 && self.hint_applied && bound_with(false) && self.grows_the_code() {
+            // call through at -Os, outside a loop.
+            if !bound && !at_o1 && !in_loop && self.hint_applied && bound_with(false) && self.grows_the_code() {
                 crate::trial::note_hint_yield(
                     self.site.module.global(self.site.caller_id).name.as_deref().unwrap_or_default(),
                 );

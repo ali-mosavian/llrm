@@ -570,6 +570,9 @@ pub struct SelectionDAG {
     /// frame index, `gp_offset` (the bytes of it the named integer arguments
     /// took) and `fp_offset` (48 plus 16 a named vector argument).
     pub var_args_save: Option<(i32, u32, u32)>,
+    /// No code reads `fp_offset` or the vector half of the save area
+    /// (`builder::vaarg`): `va_start` does not write the field.
+    pub var_args_fp_unread: bool,
     /// The stack temporaries the legalizer asked for: size and alignment.
     pub temporaries: Vec<(u32, u32)>,
     /// Which globals (by symbol) are local to the object: only those fold a
@@ -667,6 +670,7 @@ impl SelectionDAG {
             mem_locations: Vec::new(),
             var_args_frame_index: None,
             var_args_save: None,
+            var_args_fp_unread: false,
             temporaries: Vec::new(),
             local_symbols: Default::default(),
             invariant_loads: HashSet::default(),

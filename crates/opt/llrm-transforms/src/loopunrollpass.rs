@@ -1259,6 +1259,15 @@ fn nest_trial(run: &Run) -> bool {
     run.options.opt_level >= 2 && !run.options.opt_size && run.tti.unroll_trial_nests_at_speed()
 }
 
+/// Whether `lp` is a loop with a subloop at -O1 of a target that runs
+/// UNROLL-NEST-O1.
+fn nest_at_o1(
+    run: &Run,
+    lp: Loop,
+) -> bool {
+    run.options.opt_level == 1 && !run.options.opt_size && !lp.is_innermost() && run.tti.unroll_trial_nests_at_o1()
+}
+
 /// DEVIATE UNROLL-SPEED-TRIAL (owner x87-b, exit 2026-11-24): an innermost loop
 /// at -O2/-O3 of a target that runs the nest trial and prices a trial by the
 /// analyzed cost is also taken by it, the finished code priced at the CPU's
@@ -1379,6 +1388,9 @@ fn note_for_trial(
         } else {
             Some(pin_full_unroll_threshold(run.options.opt_level))
         }
+    } else if nest_at_o1(run, lp) {
+        // DEVIATE UNROLL-NEST-O1: a loop with a subloop, the pin's threshold.
+        Some(pin_full_unroll_threshold(run.options.opt_level))
     } else if run.options.opt_size {
         run.tti.unroll_trial_at_size().or_else(|| run.tti.unroll_trial_threshold())
     } else {
