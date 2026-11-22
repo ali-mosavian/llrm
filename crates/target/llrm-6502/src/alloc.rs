@@ -4647,16 +4647,29 @@ fn emit_with<const STACK: bool>(
     // DEVIATE (6502-2): decided at emission, where the pin's `isTailCall` is
     // decided in call lowering (as llvm-mos does). Exit: tail calls in the
     // 6502's call lowering.
-    let tail_call = |block: &Block, i: usize, pending: Option<i64>| {
+    //
+    // The `rts` is the next instruction, or, when the call ends its block, the
+    // whole of the block laid out after it (tail merging leaves one shared
+    // `rts` that the call falls into); that block keeps its other callers.
+    let tail_call = |b: usize, i: usize, pending: Option<i64>| {
+        let block = &function.blocks[b];
         let named = |inst: &Inst| {
             matches!(
                 &inst.operands[..],
                 [Operand::Symbol(callee, _), ..] if !callee.starts_with("__csave")
             )
         };
+        let returns = match block.insts.get(i + 1) {
+            Some(next) => next.kind == Kind::Op("RTS"),
+            None => function
+                .blocks
+                .get(b + 1)
+                .and_then(|after| after.insts.first())
+                .is_some_and(|first| first.kind == Kind::Op("RTS")),
+        };
         block.insts[i].kind == Kind::Op("JSR")
             && named(&block.insts[i])
-            && block.insts.get(i + 1).is_some_and(|next| next.kind == Kind::Op("RTS"))
+            && returns
             && pending.is_none()
             && !(spilled > 0 && !has_frame)
     };
@@ -4909,7 +4922,7 @@ fn emit_with<const STACK: bool>(
                     }
                 }
                 (Kind::Op("JSR"), [Operand::Symbol(callee, _), ..]) => {
-                    let jump = tail_call(block, i, pending);
+                    let jump = tail_call(b, i, pending);
                     // the speed variants of the variable long shifts move whole
                     // bytes first: 45 bytes more each, linked once, for 200
                     // clocks fewer per 8 bits. `__mulsi3_fast` (19 bytes more)
@@ -5166,7 +5179,7 @@ fn emit_with<const STACK: bool>(
                 (Kind::Op("RTS"), _) => {
                     // on the stack the frame is released last: the result
                     // copies after the epilogue may still reload spills
-                    let jumped = i.checked_sub(1).is_some_and(|before| tail_call(block, before, pending));
+                    let jumped = i.checked_sub(1).is_some_and(|before| tail_call(b, before, pending));
                     let release = pending.take().or((spilled > 0 && !has_frame).then_some(spilled));
                     if let Some(n) = release {
                         out.push_str("  pha\n");
