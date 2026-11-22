@@ -151,6 +151,7 @@ fn test_a_translated_backend_slot_that_is_not_run_fails() {
             "jumps@17",
             "copyprop@18",
             "breakfalsedeps@19",
+            "postralicm@15",
             "allocate@11",
             "unknown@1",
         ],

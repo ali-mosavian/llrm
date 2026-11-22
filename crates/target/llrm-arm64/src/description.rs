@@ -458,7 +458,7 @@ mod tests {
         let kept = "EarlyTailDuplicate OptimizePHIs DeadMachineInstructionElim SharedConstants ProcessImplicitDefs MachineCombiner \
             MachineLICM IvShare IvZero MachineCSE MachineSink PeepholeOptimizer LiveRangeShrink PhiElimination TwoAddress \
             JoinStackPointer Coalescer MachineScheduler RegAlloc ParallelCopy ReserveCallFrame Prologue LateCleanup Peephole \
-            LoopSlots Scheduler BranchFolder ControlFlow CopyPropagation";
+            LoopSlots PostRaLicm Scheduler BranchFolder ControlFlow CopyPropagation";
         assert_eq!(names, kept.split_whitespace().collect::<Vec<_>>(), "the phases arm64 runs");
         assert_eq!(names.len(), build(&[]).len() - omitted.len(), "an omitted phase is one the registry has");
         for (name, why) in Arm64.omitted_phases() {
