@@ -117,6 +117,46 @@ mod tests {
         }
     }
 
+    /// A jump through a table reads its index register and the segment, at
+    /// every width (`jmp [bx*2 + table]` in real mode too), and nothing else.
+    #[test]
+    fn a_table_jump_reads_its_index_register_at_every_width() {
+        use llrm_lir::registers::RegId;
+
+        use crate::model::ir::{Addr, Space};
+        for (info, bits, index) in [
+            (&llrm_x86_m16::REGISTER_INFO, 16, RegId::BX),
+            (&llrm_x86_m32::REGISTER_INFO, 32, RegId::EAX),
+            (&llrm_x86_m64::REGISTER_INFO, 64, RegId::RAX),
+        ] {
+            let mut cell = Mem::new(Some(Addr::new(Space::Segment, 0)), 4);
+            if bits == 16 {
+                // Real mode has no scaled index: the index is doubled and the
+                // table is reached through bx
+                // (`Pointer::Global` with scale 1).
+                cell.base = Some(Held { value: 1, width: 2, offset: 0 });
+                cell.through = index;
+            } else {
+                cell.index = Some(Held { value: 1, width: 4, offset: 0 });
+                cell.index_through = index;
+                cell.scale = 4;
+            }
+            let jump = Semantics {
+                name: Some("jmp".into()),
+                sources: vec![Loc::Mem(cell)],
+                indirect: true,
+                table: vec![1],
+                ..Semantics::new(Operation::Jump)
+            };
+            match served(Regs(info), bits, &jump) {
+                Some(llrm_x86::effects::Served::Known(found)) => {
+                    assert!(found.reads.contains(&index) && found.writes.is_empty(), "{bits}: {found:?}");
+                }
+                other => panic!("{bits}: {other:?}"),
+            }
+        }
+    }
+
     /// `or eax, -1` read `eax` as `or eax, 5` does: the verifier called the
     /// -Os `mov eax, -1` it replaced a read of an undefined register.
     #[test]
