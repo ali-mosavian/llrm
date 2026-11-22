@@ -99,6 +99,10 @@ each site's cost and threshold beside the existing decision; with
   arm64 runs the same trial in its own driver (`llrm-arm64/src/driver.rs`,
   `trial::keeps_unhinted`; owner m16-b, exit 2026-12-20): QB -Os array.c
   `arry_esize` copied into four callers, 3,264 -> 2,996 B (gcc 3,036).
+  The same trial reverses the negative-cost yield (`yields_to_negative_cost`,
+  `trial::with_kept_negative_calls`, a second stage priced on top of the first):
+  `code_byte` (a bounds check and a store, cost below zero) was copied into
+  every caller; codegen.c 7,008 -> 6,156 B (gcc 6,832), code.c 1,680 -> 1,380.
 - SZ1-SITE (owner m68k-b, exit 2026-11-24): the size rule (D11) prices a
   callee's instruction with the call site's constant arguments, not only a
   GEP as `isGEPFree` does (z80 `rotate_small` -O1 922 -> 576 B).
