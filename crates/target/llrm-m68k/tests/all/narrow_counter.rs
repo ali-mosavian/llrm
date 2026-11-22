@@ -36,7 +36,10 @@ exit:
 #[test]
 fn a_counter_nothing_else_reads_steps_by_a_word() {
     let text = assembly(&row("%add"), Cpu::M68000, Level::O2).expect("compiles");
-    assert!(text.contains("addq.w\t#1,") || text.contains("subq.w\t#"), "the counter steps by a long:\n{text}");
+    assert!(
+        text.contains("addq.w\t#1,") || text.contains("subq.w\t#") || text.contains("dbf\t"),
+        "the counter steps by a long:\n{text}"
+    );
     assert!(!text.contains("addq.l\t#1,") && !text.contains("subq.l\t#"), "a long step is left:\n{text}");
 }
 
