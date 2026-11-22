@@ -44,6 +44,13 @@ exit:
 const INPUTS: &[&[i128]] = &[&[1, 4], &[0, 3], &[2, 5], &[-1, 6], &[1, 1]];
 
 fn threaded(text: &str) -> (String, bool) {
+    threaded_on(text, INPUTS)
+}
+
+fn threaded_on(
+    text: &str,
+    inputs: &[&[i128]],
+) -> (String, bool) {
     let before = parsed(text);
     let mut module = before.clone();
     let mut manager = PassManager::default();
@@ -56,7 +63,7 @@ fn threaded(text: &str) -> (String, bool) {
     });
     manager.run_module(&mut module, std::rc::Rc::new(Neutral)).unwrap();
     let text = printed(&module);
-    assert_eq!(results(&module, INPUTS), results(&before, INPUTS), "{text}");
+    assert_eq!(results(&module, inputs), results(&before, inputs), "{text}");
     let changed = printed(&before) != text;
     (text, changed)
 }
@@ -443,4 +450,74 @@ fn a_target_that_asks_for_one_block_keeps_the_long_path() {
     manager.run_module(&mut module, std::rc::Rc::new(Neutral)).unwrap();
     let text = printed(&module);
     assert!(text.contains("br i1 %end, label %call"), "{text}");
+}
+
+/// QuickrBasic `B_GGET` -O2: a pixel loop whose body is skipped for a blank
+/// pixel and whose bit-plane loop is guarded by `planes > 1`.
+const PIXELS: &str = "define i16 @f(i16 %w, i16 %c, i16 %planes) {
+entry:
+  br label %outer
+
+outer:
+  %y = phi i16 [ 0, %entry ], [ %y2, %rowend ]
+  %acc = phi i16 [ 0, %entry ], [ %acc3, %rowend ]
+  br label %xhead
+
+xhead:
+  %x = phi i16 [ 0, %outer ], [ %x2, %latch ]
+  %acc1 = phi i16 [ %acc, %outer ], [ %acc2, %latch ]
+  %over = icmp ugt i16 %x, %w
+  br i1 %over, label %rowend, label %body
+
+body:
+  %color = xor i16 %c, %x
+  %blank = icmp slt i16 %color, 1
+  br i1 %blank, label %latch, label %draw
+
+draw:
+  %many = icmp ugt i16 %planes, 1
+  br i1 %many, label %phead, label %single
+
+phead:
+  %p = phi i16 [ 0, %draw ], [ %p2, %pbody ]
+  %acc4 = phi i16 [ %acc1, %draw ], [ %acc5, %pbody ]
+  %pdone = icmp ult i16 %p, %planes
+  br i1 %pdone, label %pbody, label %latch
+
+pbody:
+  %bit = shl i16 1, %p
+  %set = and i16 %color, %bit
+  %acc5 = add i16 %acc4, %set
+  %p2 = add i16 %p, 1
+  br label %phead
+
+single:
+  %acc6 = add i16 %acc1, %color
+  br label %latch
+
+latch:
+  %acc2 = phi i16 [ %acc1, %body ], [ %acc4, %phead ], [ %acc6, %single ]
+  %x2 = add i16 %x, 1
+  br label %xhead
+
+rowend:
+  %acc3 = add i16 %acc1, 1
+  %y2 = add i16 %y, 1
+  %ydone = icmp eq i16 %y2, 3
+  br i1 %ydone, label %exit, label %outer
+
+exit:
+  ret i16 %acc3
+}
+";
+
+/// A copy a thread made is no block of a later path: before, the pixel loop was
+/// peeled a trip at a time until the cap (16 copies of its header, 11 blocks
+/// grown to 75; `B_GGET` -O2 +576 B).
+#[test]
+fn a_block_a_thread_copied_is_not_threaded_again() {
+    let (text, changed) = threaded_on(PIXELS, &[&[2, 5, 1], &[3, 7, 3], &[1, 0, 2], &[0, 9, 1]]);
+    assert!(changed, "{text}");
+    let blocks = text.lines().filter(|line| line.ends_with(':')).count();
+    assert!(blocks <= 24, "{blocks} blocks:\n{text}");
 }
