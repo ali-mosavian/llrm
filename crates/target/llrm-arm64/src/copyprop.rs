@@ -65,8 +65,10 @@ pub fn run(function: &mut MFunc) {
             if op != block.ops[at] {
                 *block.ops.op_mut(at) = op.clone();
             }
+            // A copy of a register onto itself (forwarding made it one) goes,
+            // like the repeat of a copy still in force.
             if let Op::Copy { dst, src } = op
-                && copies.iter().any(|&(d, s)| d == src && s == dst)
+                && (dst == src || copies.iter().any(|&(d, s)| d == src && s == dst))
             {
                 block.ops.remove(at);
                 continue;
@@ -85,5 +87,59 @@ pub fn run(function: &mut MFunc) {
             }
             at += 1;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mc::inst::{AddSub, Gpr, Inst, Shift, Width};
+    use crate::mfunc::MBlock;
+
+    fn compare(
+        rn: u32,
+        rm: u32,
+    ) -> Op {
+        Op::I(Inst::AddSubShifted {
+            op: AddSub { subtract: true, set_flags: true },
+            width: Width::W,
+            rd: Gpr(31),
+            rn: Gpr(rn),
+            rm: Gpr(rm),
+            shift: Shift::Lsl,
+            amount: 0,
+        })
+    }
+
+    fn run_on(ops: Vec<Op>) -> Vec<Op> {
+        let mut function = MFunc::new("f");
+        function.blocks.push(MBlock { label: "entry".into(), ops: ops.into() });
+        run(&mut function);
+        function.blocks[0].ops.iter().cloned().collect()
+    }
+
+    /// `mov x20, x2; cmp w1, w20` read the copy: a callee-saved register made
+    /// before an early exit, which kept the frame before it too (quicksort
+    /// -O2: 119,846 instructions against 117,375).
+    #[test]
+    fn a_read_of_a_copys_destination_reads_its_source() {
+        let copy = Op::Copy { dst: Reg::Gpr(Gpr(20)), src: Reg::Gpr(Gpr(2)) };
+        assert_eq!(run_on(vec![copy.clone(), compare(1, 20)]), vec![copy, compare(1, 2)]);
+    }
+
+    #[test]
+    fn a_read_after_the_source_is_written_keeps_the_destination() {
+        let copy = Op::Copy { dst: Reg::Gpr(Gpr(20)), src: Reg::Gpr(Gpr(2)) };
+        let ops = vec![copy, compare(2, 2), Op::Imm { dst: Gpr(2), bits: 32, value: 7 }, compare(1, 20)];
+        assert_eq!(run_on(ops.clone())[3], compare(1, 20));
+    }
+
+    /// `mov x19, x0; mov x0, x19` forwarded is `mov x0, x0`: a copy onto
+    /// itself, which stayed (recpow -O1: 72,077 instructions against 70,306).
+    #[test]
+    fn a_copy_that_forwarding_made_onto_itself_is_dropped() {
+        let save = Op::Copy { dst: Reg::Gpr(Gpr(19)), src: Reg::Gpr(Gpr(0)) };
+        let back = Op::Copy { dst: Reg::Gpr(Gpr(0)), src: Reg::Gpr(Gpr(19)) };
+        assert_eq!(run_on(vec![save.clone(), back]), vec![save]);
     }
 }
