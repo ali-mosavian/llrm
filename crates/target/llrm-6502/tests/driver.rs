@@ -3264,8 +3264,10 @@ fn a_product_by_a_byte_calls_the_byte_entry() {
     }
 }
 
-/// -Os is strict bytes: a word divide links the compact routine in every
-/// module. The aligned one (16 B larger, quicker for a small quotient) made
+/// -Os is strict bytes: a word divide links the compact routine in a module
+/// whose divides do not save twice their byte share (`[share.size]
+/// division16`; at 1 compound_assignment_types went 892 -> 1,044 B, over its
+/// bar). The aligned one (16 B larger, quicker for a small quotient) made
 /// k_tosudivax 82 B, a bare `jmp`, against sdcc's 64 and the compact build's
 /// 58, and digits 151 B against 129.
 #[test]

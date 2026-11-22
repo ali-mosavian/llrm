@@ -3435,6 +3435,25 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             }
         }
         if plain(self.dag, n1) {
+            // `visitADDLike`: `(add (or x, c0), c1)` is `(add x, c0 + c1)`
+            // where the or is the add of its operands
+            // (`isADDLike`); likewise an xor with the sign bit.
+            let add_like = match self.dag.opcode(n0) {
+                ISD::Or => {
+                    self.dag.node(n0).flags.has(SDNodeFlags::DISJOINT)
+                        || super::dagisel_adapter::no_common_bits(
+                            self.dag,
+                            self.dag.operand(n0, 0),
+                            self.dag.operand(n0, 1),
+                        )
+                }
+                ISD::Xor => self.dag.constant(self.dag.operand(n0, 1)) == Some(1u128 << (vt.size_in_bits() - 1)),
+                _ => false,
+            };
+            if add_like && plain(self.dag, self.dag.operand(n0, 1)) {
+                let sum = self.dag.get_node(ISD::Add, vt, &[n1, self.dag.operand(n0, 1)]);
+                return Some(self.dag.get_node(ISD::Add, vt, &[self.dag.operand(n0, 0), sum]));
+            }
             if self.dag.opcode(n0) == ISD::Sub {
                 let (n00, n01) = (self.dag.operand(n0, 0), self.dag.operand(n0, 1));
                 // `(add (sub x, c0), c1)` is `(add x, c1 - c0)`.

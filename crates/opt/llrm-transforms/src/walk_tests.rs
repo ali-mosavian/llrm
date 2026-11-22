@@ -1643,6 +1643,7 @@ fn test_module_ipo_states_the_argument_ranges_the_pins_ipsccp_does() {
                 cloning: Default::default(),
                 speed_rate: false,
                 for_size: false,
+                tail_recursion: false,
             };
             ipo.run(program, &mut Default::default())
         },
@@ -1657,6 +1658,67 @@ fn test_module_ipo_states_the_argument_ranges_the_pins_ipsccp_does() {
     assert!(header("sink").contains("range(i16 -32768, 6) %x"), "{text}");
     assert!(header("place").contains("range(i16 0, 8) %row"), "{text}");
     assert!(text.contains("icmp eq i16 %row, 7"), "{text}");
+}
+
+/// `deep(n - 1, a + n) + n` called once with constants kept its self-call at
+/// IPSCCP, whose argument join then had the call's varying values: 58 B of a
+/// function in arg_registers_abi `-Os` where gcc has `mov eax, 45`. Tail
+/// recursion made a loop first leaves the one caller's constants as the
+/// loop's initial values.
+#[test]
+fn test_a_linear_recursion_is_a_loop_before_ipsccp_reads_its_callers() {
+    use llrm_mir::program::ProgramPass;
+    let source = "define internal i16 @deep(i16 %n, i16 %a) noinline {
+b0:
+  %z = icmp eq i16 %n, 0
+  br i1 %z, label %done, label %more
+
+done:
+  ret i16 %a
+
+more:
+  %m = sub i16 %n, 1
+  %s = add i16 %a, %n
+  %r = call i16 @deep(i16 %m, i16 %s)
+  %t = add i16 %r, %n
+  ret i16 %t
+}
+
+define i16 @top() {
+b0:
+  %r = call i16 @deep(i16 5, i16 1)
+  ret i16 %r
+}
+";
+    let run = |tail_recursion: bool| {
+        let mut module = parsed(source);
+        llrm_mir::program::Program::lend(
+            &mut module,
+            std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()),
+            |program: &mut llrm_mir::program::Program| {
+                let mut ipo = crate::walk::ModuleIpo {
+                    inline: crate::inline::Threshold::none(),
+                    cloning: Default::default(),
+                    speed_rate: false,
+                    for_size: false,
+                    tail_recursion,
+                };
+                ipo.run(program, &mut Default::default())
+            },
+        )
+        .and_then(|done| done)
+        .expect("ModuleIpo runs");
+        crate::testing::printed(&module)
+    };
+    let deep = |text: &str| {
+        let from = text.find("define internal").expect("deep is defined");
+        text[from..].split("\n}\n").next().unwrap_or_default().to_owned()
+    };
+    let kept = run(false);
+    assert!(deep(&kept).contains("call i16 @deep"), "the base keeps the recursion: {kept}");
+    let looped = run(true);
+    assert!(!deep(&looped).contains("call i16 @deep"), "{looped}");
+    assert!(deep(&looped).contains("[ 5,"), "the loop starts at the caller's constant: {looped}");
 }
 
 /// A float kernel called once on stack slots: the trial's copy adds x87 loads,
@@ -2334,6 +2396,7 @@ b0:
                 cloning: Default::default(),
                 speed_rate: false,
                 for_size: false,
+                tail_recursion: false,
             };
             ipo.run(program, &mut Default::default())
         },
@@ -2380,6 +2443,7 @@ b0:
                 cloning: Default::default(),
                 speed_rate: false,
                 for_size: false,
+                tail_recursion: false,
             };
             ipo.run(program, &mut Default::default())
         },
@@ -2432,6 +2496,7 @@ b0:
                 cloning: Default::default(),
                 speed_rate: false,
                 for_size: false,
+                tail_recursion: false,
             };
             ipo.run(program, &mut Default::default())
         },
@@ -3806,8 +3871,13 @@ b0:
             std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()),
             |program: &mut llrm_mir::program::Program| {
                 let inline = crate::inline::Threshold { recursive: Some(recursive), limit: 100, ..Default::default() };
-                let mut ipo =
-                    crate::walk::ModuleIpo { inline, cloning: Default::default(), speed_rate: true, for_size };
+                let mut ipo = crate::walk::ModuleIpo {
+                    inline,
+                    cloning: Default::default(),
+                    speed_rate: true,
+                    for_size,
+                    tail_recursion: false,
+                };
                 ipo.run(program, &mut Default::default())
             },
         )
@@ -3858,7 +3928,13 @@ b0:
         std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()),
         |program: &mut llrm_mir::program::Program| {
             let inline = crate::inline::Threshold { recursive: Some(false), limit: 100, ..Default::default() };
-            let mut ipo = crate::walk::ModuleIpo { inline, cloning: Default::default(), speed_rate: true, for_size: false };
+            let mut ipo = crate::walk::ModuleIpo {
+                inline,
+                cloning: Default::default(),
+                speed_rate: true,
+                for_size: false,
+                tail_recursion: false,
+            };
             ipo.run(program, &mut Default::default())
         },
     )
