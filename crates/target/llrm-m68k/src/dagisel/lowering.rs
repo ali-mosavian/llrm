@@ -1078,7 +1078,10 @@ fn lower_byte_and_to_btst_memory(
     let (load, mask) = (dag.operand(and, 0), dag.constant(dag.operand(and, 1))?);
     if !mask.is_power_of_two()
         || dag.opcode(load) != ISD::Load
-        || !matches!(&dag.node(load).data, NodeData::Mem(info) if info.ext.is_none() && info.ordering.is_none())
+        || !matches!(
+            &dag.node(load).data,
+            NodeData::Mem(info) if info.ext.is_none() && info.ordering.is_none()
+        )
         || !dag.has_one_use(load.node)
     {
         return None;
