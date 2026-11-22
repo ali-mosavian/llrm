@@ -19,6 +19,8 @@ fn eval(
         ISD::Add => arg(0).wrapping_add(arg(1)),
         ISD::Sub => arg(0).wrapping_sub(arg(1)),
         ISD::Xor => arg(0) ^ arg(1),
+        ISD::And => arg(0) & arg(1),
+        ISD::Or => arg(0) | arg(1),
         other => panic!("unexpected {other:?}"),
     }
 }
@@ -120,4 +122,33 @@ fn a_one_use_constant_minus_y_is_hoisted_out_of_an_add() {
         assert_eq!(dag.opcode(dag.operand(root, 0)), ISD::Sub);
         assert_eq!(dag.constant(dag.operand(root, 1)), Some(1));
     }
+}
+
+/// word_compare_branches -O3 (x86-64): `(add (or x, 0x13000), 0xd00)` with `x &
+/// 0xff` stayed an `or` and an `add` (the pin makes one `add 0x13d00`): the
+/// constant of an add-like `or` folds into the add.
+#[test]
+fn a_constant_folds_through_an_add_like_or_and_a_sign_bit_xor() {
+    let (dag, root) = combined(|dag, x, _| {
+        let (mask, c0, c1) = (k(dag, 0xFF), k(dag, 0x13000), k(dag, 0xD00));
+        let low = dag.get_node(ISD::And, EVT::I32, &[x, mask]);
+        let or = dag.get_node(ISD::Or, EVT::I32, &[low, c0]);
+        dag.get_node(ISD::Add, EVT::I32, &[or, c1])
+    });
+    assert_eq!(dag.opcode(root), ISD::Add);
+    assert_eq!(dag.constant(dag.operand(root, 1)), Some(0x13D00));
+    let (dag, root) = combined(|dag, x, _| {
+        let (sign, c1) = (k(dag, 0x8000_0000), k(dag, 5));
+        let xor = dag.get_node(ISD::Xor, EVT::I32, &[x, sign]);
+        dag.get_node(ISD::Add, EVT::I32, &[xor, c1])
+    });
+    assert_eq!(dag.opcode(root), ISD::Add);
+    assert_eq!(dag.constant(dag.operand(root, 1)), Some(0x8000_0005));
+    // An or whose operands may share bits is not an add.
+    let (dag, root) = combined(|dag, x, _| {
+        let (c0, c1) = (k(dag, 0x13000), k(dag, 0xD00));
+        let or = dag.get_node(ISD::Or, EVT::I32, &[x, c0]);
+        dag.get_node(ISD::Add, EVT::I32, &[or, c1])
+    });
+    assert_eq!(dag.opcode(dag.operand(root, 0)), ISD::Or);
 }

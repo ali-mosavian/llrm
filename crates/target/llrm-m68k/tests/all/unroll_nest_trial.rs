@@ -11,7 +11,8 @@
 //! 64-trip one in the default pipeline, the nest is gone without a trial and
 //! the test then counted one lowering, not two.
 
-use llrm_m68k::driver::{Level, assembly, cpu_of};
+use llrm_m68k::compile::CodeModel;
+use llrm_m68k::driver::{Level, Policy, assembly, assembly_flagged, cpu_of};
 
 const NEST: &str = "target datalayout = \"E-m:e-p:32:16:32-i8:8:8-i16:16:16-i32:16:32-n8:16:32-a:0:16-S16\"
 @tbl = internal constant [4 x i32] [i32 305419896, i32 -1, i32 -2147483647, i32 65537], align 4
@@ -66,4 +67,24 @@ fn the_trials_kept_side_is_lowered_once() {
     let out = assembly(NEST, cpu_of("68000").unwrap(), Level::O2).expect("compiles");
     assert!(!out.contains("tbl"), "premise: the unrolled side is kept:\n{out}");
     assert_eq!(llrm_m68k::driver::lowerings() - before, 2, "one function, lowered with and without the unroll");
+}
+
+/// UNROLL-NEST-O1. clang marks every loop `unroll.disable` at -O1 and the pin
+/// never unrolls it; here the driver turns that off (`unroll_at_o1`) and the
+/// nest over rotate_small's tables still stayed a nest at -O1: 276 B and
+/// 33,282 clk on the 68000, where gcc's complete unroll folds the program to
+/// 72 B. At -O1 the nest trial runs too, and keeps the unrolled side where the
+/// finished code is no larger and no slower. The fixture is the module the
+/// driver hands the mid-end for `rotate_small.c` at -O1.
+#[test]
+fn rotate_smalls_nest_over_its_tables_is_unrolled_at_o1_too() {
+    let module = include_str!("../fixtures/rotate_small_o1.ll");
+    for cpu in ["68000", "68020"] {
+        // `-funroll-loops` is what the m68k rows of `llrm-cc` pass at -O1.
+        let mut policy = Policy::default();
+        assert!(policy.take("-funroll-loops"));
+        let out = assembly_flagged(module, cpu_of(cpu).unwrap(), Level::O1, false, None, CodeModel::Small, &policy)
+            .expect("compiles");
+        assert!(!out.contains("words") && !out.contains("bytes"), "{cpu}: the tables are still read at -O1:\n{out}");
+    }
 }

@@ -109,6 +109,9 @@ thread_local! {
     /// Whether a 16-bit division calls its compact routine at speed too (see
     /// [`with_compact_division16`]).
     static COMPACT_DIVISION16: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Whether a 16-bit division calls its speed routine at size too (see
+    /// [`with_size_fast_division16`]).
+    static SIZE_FAST_DIVISION16: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// The functions of the module in hand that save their cells inline (see
     /// [`keep_saves_inline`]).
     static INLINE_SAVES: std::cell::RefCell<std::collections::HashSet<String>> = std::cell::RefCell::new(Default::default());
@@ -197,7 +200,7 @@ pub fn forget_inline_saves() {
 /// Every choice outside a selection that the text of a function depends on
 /// (see [`with_shared_saves`], [`with_fast_division`] and the others): two
 /// compiles of one selection under equal flags write the same text.
-pub fn text_flags(name: &str) -> (bool, bool, bool, bool, bool, bool, bool, bool, bool) {
+pub fn text_flags(name: &str) -> (bool, bool, bool, bool, bool, bool, bool, bool, bool, bool) {
     (
         BYTE_MULTIPLY.with(|a| a.get()),
         SPIKE.with(|a| a.get()),
@@ -206,6 +209,7 @@ pub fn text_flags(name: &str) -> (bool, bool, bool, bool, bool, bool, bool, bool
         FAST_MULTIPLY.with(|a| a.get()),
         SIZE_FAST_DIVISION.with(|a| a.get()),
         COMPACT_DIVISION16.with(|a| a.get()),
+        SIZE_FAST_DIVISION16.with(|a| a.get()),
         WIDE_COMMUTE.with(|a| a.get()),
         INLINE_SAVES.with(|set| set.borrow().contains(name)),
     )
@@ -249,6 +253,19 @@ pub fn with_compact_division16<R>(
     let before = COMPACT_DIVISION16.with(|a| a.replace(allowed));
     let result = f();
     COMPACT_DIVISION16.with(|a| a.set(before));
+    result
+}
+
+/// `f` with the 16-bit divisions calling the speed routines at size: a module
+/// asks for them where the clocks they save are worth the bytes
+/// (`select::module_text`).
+pub fn with_size_fast_division16<R>(
+    allowed: bool,
+    f: impl FnOnce() -> R,
+) -> R {
+    let before = SIZE_FAST_DIVISION16.with(|a| a.replace(allowed));
+    let result = f();
+    SIZE_FAST_DIVISION16.with(|a| a.set(before));
     result
 }
 
@@ -4326,7 +4343,9 @@ fn emit_with<const STACK: bool>(
     // an instruction goes to the one path that reads it; a bump of a pointer is
     // then done in place, and the read of the old pointer that follows it
     // goes first
-    if TUNING.with(|t| t.get()) == Tuning::SIZE || COMPACT_DIVISION16.with(|c| c.get()) {
+    if (TUNING.with(|t| t.get()) == Tuning::SIZE && !SIZE_FAST_DIVISION16.with(|c| c.get()))
+        || COMPACT_DIVISION16.with(|c| c.get())
+    {
         call_compact_routines(&mut function);
     }
     keep_carry_in_c(&mut function);
