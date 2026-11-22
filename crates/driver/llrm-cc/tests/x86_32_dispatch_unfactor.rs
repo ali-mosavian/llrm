@@ -2,8 +2,10 @@
 //! one block with an indirect jump (2 in the object); the pin's post-allocation
 //! tail duplication copies it into every handler (21). QuickrBasic's
 //! `exec_loop` ran 20-24% more instructions per op on float programs (sng_math:
-//! 282M against 222M) for the dispatch's copies. At -Os bytes come first: its
-//! 138 copies are +5.1 KB, so it stays one block (TL4). Needs `LLRM_LLC`.
+//! 282M against 222M) for the dispatch's copies. The same at -Os, where one
+//! shared dispatch kept the float and loop programs 19-30% over clang's
+//! instructions; its copies are +2.6 KB in `exec.c` (516 B under gcc16).
+//! Needs `LLRM_LLC`.
 
 use std::path::Path;
 use std::process::Command;
@@ -37,7 +39,7 @@ fn a_computed_goto_dispatch_is_copied_into_each_handler() {
 }
 
 #[test]
-fn an_os_dispatch_stays_one_block() {
+fn an_os_dispatch_is_copied_into_each_handler_too() {
     let jumps = indirect_jumps("-Os");
-    assert!(jumps <= 4, "{jumps} indirect jumps at -Os: the dispatch was copied into the handlers (bytes first)");
+    assert!(jumps >= 20, "{jumps} indirect jumps at -Os: the dispatch is still one shared block (the pin: 21)");
 }
