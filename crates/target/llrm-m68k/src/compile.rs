@@ -172,9 +172,9 @@ pub struct Options {
     /// before `MachineCSE` ([`crate::regalloc::shared_licm`]). It sees a
     /// loop-invariant only where `direct_copies` made no copy of it.
     pub shared_licm: bool,
-    /// The build the -O1 trial makes with the shared `MachineLICM` on: a
-    /// `strict` build runs it only here, and keeps it where it is no larger
-    /// and no slower ([`crate::trial::keeps_no_worse`]).
+    /// The build the -O1 and -Os trial makes with the shared `MachineLICM` on:
+    /// those builds run it only here, and keep it where it pays
+    /// ([`crate::trial::keeps_no_worse`] at -O1, [`crate::trial::keeps`] at -Os).
     pub licm_trial: bool,
     /// The shared flow's `PhiElimination` and `TwoAddress` take the function
     /// from SSA to the allocator, in place of the private `eliminate_phis`,
@@ -458,11 +458,17 @@ pub fn items_with(
             kept = items;
         }
     }
-    // The pin runs `MachineLICM` at -O1; here that is a build kept only where
-    // it is no larger and no slower (the -O1 contract).
-    if options.strict && options.shared_licm && !wants_size {
+    // The pin runs `MachineLICM` at every level; here -O1 and -Os make it a
+    // build kept only where it pays: no larger and no slower at -O1, fewer
+    // bytes (then clocks) at -Os.
+    if options.shared_licm && (options.strict || wants_size) {
         let (hoisted, _, _) = finished(Options { licm_trial: true, ..options })?;
-        if crate::trial::keeps_no_worse(&hoisted, &kept, cpu) {
+        let better = if wants_size {
+            crate::trial::keeps(&hoisted, &kept, cpu, price)
+        } else {
+            crate::trial::keeps_no_worse(&hoisted, &kept, cpu)
+        };
+        if better {
             trial_won(name, "licm", true);
             kept = hoisted;
         }
@@ -730,15 +736,15 @@ fn size_build(
 /// Whether the shared `MachineLICM` runs on a function.
 ///
 /// DEVIATE M68K-LICM-SPEED (owner w9-tests, exit 2026-11-26): the pin runs it at every level but
-/// -O0. Speed builds run it; -O1 runs it in a trial build kept only where it is no larger and no
-/// slower; -Os does not: a hoisted address holds a register for the loop and the private passes
-/// lose bytes to the spills (-Os +1.5 KB over 186 programs).
+/// -O0. -O2/-O3 run it; -O1 and -Os run it in a trial build (`licm_trial`) kept only where it
+/// pays: a hoisted address holds a register for the loop and the private passes lose bytes to the
+/// spills (-Os +1.5 KB over 186 programs when run unconditionally).
 /// The trial's variants read this too: a stage that does not run must not change the emission.
 fn licm_runs(
     options: Options,
     wants_size: bool,
 ) -> bool {
-    options.shared_licm && !wants_size && (!options.strict || options.licm_trial)
+    options.shared_licm && (options.licm_trial || (!wants_size && !options.strict))
 }
 
 fn same_instructions(
