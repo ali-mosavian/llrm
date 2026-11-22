@@ -140,17 +140,19 @@ impl FunctionPass for BackwardThreading {
             return PreservedAnalyses::all();
         }
         let mut changed = false;
-        // GCC visits each block of the function once (`pass_thread_jumps`): with
-        // the long paths (`chain` > 1) a copy a thread made is no block of a
-        // later path, or a loop's guard is peeled once a trip until the cap
-        // (QuickrBasic `B_GGET` -O2: 16 copies of the pixel loop's header,
-        // +576 B). The paths of one block keep the old rule until judged.
+        // GCC visits each block of the function once (`pass_thread_jumps`):
+        // with the long paths (`chain` > 1) a copy a thread made is no
+        // block of a later path, or a loop's guard is peeled once a
+        // trip until the cap (QuickrBasic `B_GGET` -O2: 16 copies of
+        // the pixel loop's header, +576 B). The paths of one block keep
+        // the old rule until judged.
         let originals: Option<std::collections::HashSet<BlockId>> =
             (chain > 1).then(|| unit.function.layout().iter().copied().collect());
         for _ in 0..self.max_threads {
             let dt = DomTree::of(unit.function);
             let loops = LoopInfo::analyze(unit.function, || DomTree::of(unit.function));
-            let Some(path) = find(unit.context, unit.function, &dt, &loops, relations, chain, originals.as_ref()) else {
+            let Some(path) = find(unit.context, unit.function, &dt, &loops, relations, chain, originals.as_ref())
+            else {
                 break;
             };
             thread(unit.context, unit.function, &path);
