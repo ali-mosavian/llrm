@@ -72,11 +72,21 @@ fn a_frame_pointer_frame_is_link_and_unlk() {
     assert_eq!(frame.epilogue(), [FrameOp::Unlink]);
 }
 
-/// `@big`: an 80000-byte alloca, `suba.l #80004, %sp`.
+/// `@big`: a 30000-byte alloca, `suba.l #30004, %sp`.
 #[test]
 fn a_large_frame_is_one_adjustment() {
     let function =
+        Function { objects: vec![local(30000)], max_call_frame: 4, adjusts_stack: true, ..Function::default() };
+
+    assert_eq!(layout(&function).prologue(), [FrameOp::SubSp(30004)]);
+}
+
+/// DEVIATE: past what a 16-bit displacement reaches the frame takes `%a6` (the arguments lie
+/// above the whole frame): an 80000-byte alloca is `link` and the rest of the frame.
+#[test]
+fn a_frame_past_the_displacement_reach_takes_the_frame_pointer() {
+    let function =
         Function { objects: vec![local(80000)], max_call_frame: 4, adjusts_stack: true, ..Function::default() };
 
-    assert_eq!(layout(&function).prologue(), [FrameOp::SubSp(80004)]);
+    assert_eq!(layout(&function).prologue(), [FrameOp::Link { bytes: 80008 }]);
 }

@@ -93,6 +93,12 @@ fn frame_op(
             }
             return;
         }
+        // `link.w` takes a 16-bit size: a larger frame links with none and then opens the rest
+        FrameOp::Link { bytes } if *bytes > 32767 => {
+            out.push(mc::Inst { opcode: "LINK16", operands: vec![R(reg::A6), Imm(0)] });
+            out.push(sp_adjust(-bytes, short));
+            return;
+        }
         // `BuildStackAlignAND`: `and` takes no address register, so
         // through `%d0`
         FrameOp::AlignSp(align) => {
@@ -206,6 +212,16 @@ pub fn frame_ops_choosing(
     key: impl Fn(usize, u32) -> (i64, i64),
 ) -> Result<(Vec<FrameOp>, Vec<FrameOp>), String> {
     let (pin_opening, pin_closing) = (layout.prologue(), layout.epilogue());
+    // `movem` takes a 16-bit displacement: a frame larger than that has no pin shape to compare with
+    // (QuickrBasic `indent.c`: a 65 KB buffer, `MOVM32pm` operand 65308), and pushes the registers instead
+    let unencodable = |ops: &[FrameOp]| {
+        ops.iter().any(|op| matches!(op, FrameOp::Save { offset, .. } | FrameOp::Restore { offset, .. } if i16::try_from(*offset).is_err()))
+    };
+    if unencodable(&pin_opening) || unencodable(&pin_closing) {
+        if let Some(frame) = layout.push_prologue().zip(layout.push_epilogue()) {
+            return Ok(frame);
+        }
+    }
     let mut pushed = Vec::new();
     if push_frame {
         pushed.extend(layout.push_prologue().zip(layout.push_epilogue()));
@@ -317,6 +333,8 @@ pub(crate) struct FrameInputs {
     has_var_sized: bool,
     /// The frame indices, in the order of `objects`.
     pub(crate) frame_indices: Vec<i32>,
+    /// The frame operands that name each, in the same order.
+    uses: Vec<u64>,
 }
 
 impl FrameInputs {
@@ -368,7 +386,14 @@ impl FrameInputs {
         // the pin sets it where a dynamic alloca is built (`visitAlloca`); here
         // the live body shows it
         let has_var_sized = writes_stack_pointer(insts.iter().copied(), |r| physical(r, assignment));
-        FrameInputs { fixed, objects, used, has_calls, short, has_var_sized, frame_indices }
+        let uses: Vec<u64> = frame_indices
+            .iter()
+            .map(|index| {
+                insts.iter().flat_map(|inst| &inst.operands).filter(|operand| matches!(operand, Operand::Frame(i) if i == index)).count()
+                    as u64
+            })
+            .collect();
+        FrameInputs { fixed, objects, used, has_calls, short, has_var_sized, frame_indices, uses }
     }
 
     /// The laid-out frame for a call area of `max_call_frame` bytes.
@@ -384,6 +409,7 @@ impl FrameInputs {
             stack_align: if self.short { frame::SHIPPED_STACK_ALIGN } else { 0 },
             adjusts_stack: self.has_calls,
             has_var_sized: self.has_var_sized,
+            uses: self.uses.clone(),
             ..Function::default()
         })
     }
@@ -838,6 +864,22 @@ pub fn finish_with(
                 out.push(mc::Inst {
                     opcode: "MOVM32mp",
                     operands: vec![mc::Operand::Imm(1 << mask), mc::Operand::Imm(disp), base.clone()],
+                });
+            }
+            // `lea (d16,An)` takes a 16-bit displacement: past it the address is the base moved into the
+            // result and the displacement added (a stack buffer past 32 KiB; the 68020's `bd32`
+            // form has no encoding here)
+            Kind::Op("LEA32p") if matches!(operands[..], [_, mc::Operand::Imm(d), _] if i16::try_from(d).is_err()) => {
+                let [mc::Operand::Reg(dst), mc::Operand::Imm(disp), mc::Operand::Reg(base)] = operands[..] else {
+                    return Err("LEA32p operands".to_owned());
+                };
+                if dst != base {
+                    out.push(mc::Inst { opcode: "MOV32aa", operands: vec![mc::Operand::Reg(dst), mc::Operand::Reg(base)] });
+                }
+                let (opcode, bytes) = if disp >= 0 { ("ADD32ai", disp) } else { ("SUB32ai", -disp) };
+                out.push(mc::Inst {
+                    opcode,
+                    operands: vec![mc::Operand::Reg(dst), mc::Operand::Reg(dst), mc::Operand::Imm(bytes)],
                 });
             }
             Kind::Op("MOVI32ri") => {

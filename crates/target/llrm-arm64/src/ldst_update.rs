@@ -264,6 +264,22 @@ fn call_reads(register: Gpr) -> bool {
     register.0 <= 7
 }
 
+/// Whether the call `inst` destroys `register`: where IPRA knows the callee
+/// (`crate::ipra`), what it writes; else the convention's caller-saved
+/// registers. A register the callee leaves is live across the call, as
+/// `RegUsageInfoPropagate` gives the call's register mask.
+fn call_destroys(
+    inst: &Inst,
+    register: Gpr,
+) -> bool {
+    if let Inst::Branch { link: true, target: Target::Symbol { name, .. } } = inst
+        && let Some(written) = crate::ipra::known(name)
+    {
+        return written.contains(&crate::lir_view::id(crate::lir_view::Class::Gpr, register.0));
+    }
+    call_clobbers(register)
+}
+
 fn is_call(inst: &Inst) -> bool {
     matches!(
         inst,
@@ -338,7 +354,7 @@ impl Function<'_> {
                         let (defs, uses) = inst.defs_and_uses();
                         let (def, used) = (defs.contains(&Reg::Gpr(register)), uses.contains(&Reg::Gpr(register)));
                         if is_call(inst) {
-                            now = (now && !call_clobbers(register)) || call_reads(register) || used;
+                            now = (now && !call_destroys(inst, register)) || call_reads(register) || used;
                         } else {
                             now = used || (now && !def);
                         }
@@ -459,7 +475,7 @@ impl Function<'_> {
             let Some(inst) = &self.blocks[block][index] else { continue };
             let (defs, uses) = inst.defs_and_uses();
             if is_call(inst) {
-                return !uses.contains(&key) && !call_reads(register) && call_clobbers(register);
+                return !uses.contains(&key) && !call_reads(register) && call_destroys(inst, register);
             }
             if uses.contains(&key) {
                 return false;
@@ -870,6 +886,35 @@ mod tests {
         let out = fold(blocks, &[], &[]);
         assert!(matches!(&out[0].insts[0], Inst::Load { addr: Addr::Offset { .. }, .. }), "{out:?}");
         assert_eq!(out[1].insts.len(), 2, "{out:?}");
+    }
+
+    /// QB lexer.c -Os (`upcase` kept a function under the -Os trial): the digit
+    /// loop's `ldrb [x13]` took the loop's `add x13, #1` as its post-index
+    /// while the exit read x13 after `bl upcase`, which IPRA says does not
+    /// write it: the exit saw p + 1, and `DIM A(100)` lost its `)`. A call
+    /// destroys what its callee writes, not every caller-saved register.
+    #[test]
+    fn an_update_is_not_moved_above_an_exit_that_reads_the_base_after_a_call_that_keeps_it() {
+        let call = Inst::Branch { link: true, target: Target::Symbol { name: "up_keeps_x9".into(), addend: 0 } };
+        let blocks = || {
+            vec![
+                block("head", vec![at(int(1, 11), true, 9, 0), cond_to("exit"), branch_to("body")]),
+                block("body", vec![step(9, 1), branch_to("head")]),
+                block("exit", vec![call.clone(), at(int(1, 1), true, 9, 0), leave()]),
+            ]
+        };
+        crate::ipra::record(
+            "up_keeps_x9",
+            std::sync::Arc::new([crate::lir_view::id(crate::lir_view::Class::Gpr, 0)].into()),
+        );
+        let out = fold(blocks(), &[], &[]);
+        crate::ipra::clear();
+        assert!(matches!(&out[0].insts[0], Inst::Load { addr: Addr::Offset { .. }, .. }), "{out:?}");
+        assert_eq!(out[1].insts.len(), 2, "{out:?}");
+        // Without what the callee writes, the call destroys x9 and the merge
+        // stands.
+        let out = fold(blocks(), &[], &[]);
+        assert!(matches!(&out[0].insts[0], Inst::Load { addr: Addr::Post { .. }, .. }), "{out:?}");
     }
 
     /// QB `decl_line`: the dispatch `ldrb [x9]` took a sparse arm's `add x9,
