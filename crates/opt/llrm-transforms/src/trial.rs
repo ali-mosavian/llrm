@@ -66,6 +66,8 @@ thread_local! {
     /// Set while the trial compile of INLINEHINT-GROWTH-TRIAL runs: the -Os
     /// size guard binds an `inlinehint` callee as it does any other.
     static HINTED_CALLS_KEPT: Cell<bool> = const { Cell::new(false) };
+    static NEGATIVE_CALLS_KEPT: Cell<bool> = const { Cell::new(false) };
+    static NEGATIVE_YIELDS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
     /// The callers with a call of an `inlinehint` callee that only the hint's
     /// yield let the size guard pass.
     static HINT_YIELDS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
@@ -127,6 +129,38 @@ pub fn with_kept_hinted_calls<T>(body: impl FnOnce() -> T) -> T {
     let value = body();
     HINTED_CALLS_KEPT.with(|cell| cell.set(before));
     value
+}
+
+/// Whether the trial compile that also keeps the calls the size guard's
+/// negative-cost yield lets through is running (see [`keeping_hinted_calls`]):
+/// a one-line accessor the pin's cost calls a shrinking inline (`code_byte`,
+/// `if (c->out >= c->lim) ...`), and gcc's `-Os` outlines.
+pub fn keeping_negative_calls() -> bool {
+    NEGATIVE_CALLS_KEPT.with(Cell::get)
+}
+
+/// Runs `body` with those calls kept.
+pub fn with_kept_negative_calls<T>(body: impl FnOnce() -> T) -> T {
+    let before = NEGATIVE_CALLS_KEPT.with(|cell| cell.replace(true));
+    let value = body();
+    NEGATIVE_CALLS_KEPT.with(|cell| cell.set(before));
+    value
+}
+
+/// Notes that the negative-cost yield let a call in `function` through the
+/// size guard, which a trial may refuse.
+pub(crate) fn note_negative_yield(function: &str) {
+    NEGATIVE_YIELDS.with(|list| {
+        let mut list = list.borrow_mut();
+        if !list.iter().any(|one| one == function) {
+            list.push(function.to_owned());
+        }
+    });
+}
+
+/// The callers [`note_negative_yield`] saw since the last call.
+pub fn take_negative_yields() -> Vec<String> {
+    NEGATIVE_YIELDS.with(|list| std::mem::take(&mut *list.borrow_mut()))
 }
 
 /// Notes that the hint's yield let a call in `function` through the size
@@ -475,11 +509,12 @@ pub fn keeps_at_size(added: i64) -> bool {
     added < 0
 }
 
-/// DEVIATE OS-TRIAL-CLOCK-CAP: whether a trial that keeps a smaller shape at -Os
-/// is kept. The object is smaller (`added` < 0) and, where the target caps the
-/// clocks a trial may cost (`cap`, percent of the code's work without it, `base`),
-/// the work it adds (`-saved`) stays within the cap. Where the model has no
-/// work for either shape (`base` 0) bytes alone decide, as without a cap.
+/// DEVIATE OS-TRIAL-CLOCK-CAP: whether a trial that keeps a smaller shape at
+/// -Os is kept. The object is smaller (`added` < 0) and, where the target caps
+/// the clocks a trial may cost (`cap`, percent of the code's work without it,
+/// `base`), the work it adds (`-saved`) stays within the cap. Where the model
+/// has no work for either shape (`base` 0) bytes alone decide, as without a
+/// cap.
 pub fn keeps_smaller_at_size(
     added: i64,
     saved: i64,
