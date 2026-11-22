@@ -2973,6 +2973,25 @@ pub trait Tti {
         self.is_legal_addressing_mode_in(addr_space, base_gv, base_offset, has_base_reg, scale)
     }
 
+    /// [`Self::is_legal_addressing_mode_at`] where the widths of the base and
+    /// scaled registers are known (llvm-mos's `AddrMode::BaseType` and
+    /// `ScaleType`, which the pin's `AddrMode` lacks): 0 for an absent, pointer
+    /// or unknown register. By default the widths are not asked.
+    fn is_legal_addressing_mode_typed(
+        &self,
+        addr_space: u32,
+        access_bytes: u64,
+        base_gv: bool,
+        base_offset: i64,
+        has_base_reg: bool,
+        scale: i64,
+        base_bits: u32,
+        scale_bits: u32,
+    ) -> bool {
+        let _ = (base_bits, scale_bits);
+        self.is_legal_addressing_mode_at(addr_space, access_bytes, base_gv, base_offset, has_base_reg, scale)
+    }
+
     /// `isLegalAddressingMode` for an access of `access_bytes` (LLVM's
     /// `AccessTy`): an immediate offset's legality depends on the access
     /// size on AArch64 (`ldr x` takes an offset `ldr w` does not). By
@@ -3371,6 +3390,15 @@ pub trait Tti {
     /// says no and narrows at `-Os` only.
     fn narrows_counters_at_speed(&self) -> bool {
         true
+    }
+
+    /// `MOSIndexIV` and the late `IndVarSimplify` that follows it (llvm-mos's
+    /// late loop optimizations): a pointer recurrence whose step and offset
+    /// fit this many bits becomes a base plus a counter of that width, so the
+    /// backend reads the high byte of the index as zero. None (the default)
+    /// runs neither.
+    fn index_iv_width(&self) -> Option<u32> {
+        None
     }
 
     /// Beyond the pin: whether a cycle through a phi whose values only matter

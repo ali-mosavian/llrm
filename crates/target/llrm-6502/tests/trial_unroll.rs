@@ -216,3 +216,14 @@ fn the_pair_of_inlines_and_unrolls_is_priced_at_os() {
         .collect();
     assert!(kept.is_empty(), "{kept:?} stay as functions:\n{text}");
 }
+
+/// loop_fusion at -O2 (2026-11-22): once a byte-index loop is cheaper rolled,
+/// the inline trial kept all three refused sites and the pair of inlines and
+/// unrolls was never priced: 756 B and 74,768 clocks against 131 B and 1,067.
+#[test]
+fn the_pair_of_inlines_and_unrolls_is_priced_after_every_inline_is_kept() {
+    let text = assembly(include_str!("data/loop_fusion_os.ll"), &Request::new(Level::O2)).unwrap();
+    let branch = ["bne", "beq", "bcc", "bcs", "bpl", "bmi", "bvc", "bvs", "bra", "jmp"];
+    let branches = text.lines().filter(|line| branch.iter().any(|op| line.trim().starts_with(&format!("{op} ")))).count();
+    assert_eq!(branches, 0, "a loop is left:\n{text}");
+}

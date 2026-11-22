@@ -543,6 +543,19 @@ fn stated(
     info.get_lib_func(&unit.context.types, routine.standard, global.function()?.ty)
 }
 
+/// What GCC's `-ffreestanding` still treats as builtin: "GCC requires the
+/// freestanding environment provide `memcpy`, `memmove`, `memset` and
+/// `memcmp`", so a call of them is folded with `-fno-builtin` too. Clang's
+/// `no-builtins` turns them off with the rest (DEVIATE FREESTANDING-MEM:
+/// QuickrBasic's bar is the better of the two; os.c `llrm_os_find_next` is
+/// `ldr; b` in GCC, `bl memcpy` and a frame under clang).
+fn freestanding_mem(func: LibFunc) -> bool {
+    matches!(
+        func,
+        LibFunc::Memcpy | LibFunc::Memmove | LibFunc::Memset | LibFunc::Memcmp
+    )
+}
+
 impl FunctionPass for SimplifyLibCalls {
     fn adds_memory_operations(&self) -> bool {
         false
@@ -561,6 +574,12 @@ impl FunctionPass for SimplifyLibCalls {
         unit: &mut Unit,
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
+        // `"no-builtins"` turns every library function off in the pin's TLI
+        // (`TargetLibraryAnalysis::run`), as loop idioms read it. DEVIATE
+        // FREESTANDING-MEM (owner w11, exit 2026-12-20): `freestanding_mem`
+        // functions stay on, as GCC's `-ffreestanding` keeps them.
+        let no_builtins =
+            unit.function.attrs.iter().any(|attr| matches!(attr, Attribute::Str(key, _) if key == "no-builtins"));
         let outer = analyses.outer().clone();
         let size_bits = unit.layout.pointer(0).index_bits;
         // One table per module: the target's library, else the pin's defaults
@@ -589,12 +608,21 @@ impl FunctionPass for SimplifyLibCalls {
         let int = unit.context.types.int(info.int_bits());
         let size = unit.context.types.int(size_bits);
         for call in calls {
+            // `getLibFunc(CallBase)`: a call marked `nobuiltin` is no library
+            // call.
+            let marked = matches!(
+                &unit.function.instruction(call).opcode,
+                Opcode::Call(info) if info.attrs.iter().any(|attr| matches!(attr, Attribute::Flag(name) if name == "nobuiltin"))
+            );
             let Some(global) = llrm_mir::memory::callee(unit.context, unit.function, call) else { continue };
             let Some(func) = outer.globals.get(global.0 as usize).and_then(|one| {
                 info.get_lib_func_of(&unit.context.types, one).or_else(|| stated(&info, &self.routines, unit, one))
             }) else {
                 continue;
             };
+            if (no_builtins || marked) && !freestanding_mem(func) {
+                continue;
+            }
             let site = Site { env, call, int, size, optimize_size };
             let rewrite = match func {
                 LibFunc::Printf => print_f(unit, &site),
