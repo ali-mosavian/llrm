@@ -3042,11 +3042,17 @@ fn a_carry_branch_on_the_old_counter_is_compared_before_the_step() {
     let ir = counter_loop("samesign ult i16 %i, 63");
     for level in [Level::Os, Level::O2] {
         let text = assembly(&ir, &Request::new(level)).unwrap();
-        // `txa; cmp #63` is `cpx #63` where `a` is dead after it
+        // `txa; cmp #63` is `cpx #63` where `a` is dead after it. The exit may instead test the new
+        // counter for equality after the step (`iny; cpy #64; bne`, LFTR): `inx`/`iny` keep carry and
+        // no carry branch is left to read it.
         let compare = text.find("cmp #63").or(text.find("cpx #63")).or(text.find("cpy #63"));
         let step = text.find("inx").or(text.find("iny"));
-        assert!(compare.is_some() && step.is_some(), "no compare or no step:\n{text}");
-        assert!(compare < step, "the compare comes after the step:\n{text}");
+        assert!(step.is_some(), "no step:\n{text}");
+        let equality = ["cmp #64\n  bne", "cpx #64\n  bne", "cpy #64\n  bne"].iter().any(|form| text.contains(form));
+        assert!(compare.is_some() || equality, "no compare:\n{text}");
+        if let Some(compare) = compare {
+            assert!(Some(compare) < step, "the compare comes after the step:\n{text}");
+        }
         assert!(!text.contains("stx rc") && !text.contains("sty rc"), "a copy of the counter:\n{text}");
         assert_eq!(exit_code_of(&text, "t"), 63, "{text}");
     }
