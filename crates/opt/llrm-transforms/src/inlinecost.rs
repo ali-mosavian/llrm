@@ -2795,7 +2795,9 @@ impl<'a> Analyzer<'a> {
     /// hot site the -Os bound would hold, whose growth is within that share of
     /// the call sequence it removes.
     fn hot_site_within_size_growth_budget(&self) -> bool {
-        let Some(percent) = self.site.tti.and_then(|tti| tti.opt_size_inline_hot_growth_percent()) else { return false };
+        let Some(percent) = self.site.tti.and_then(|tti| tti.opt_size_inline_hot_growth_percent()) else {
+            return false;
+        };
         let hot = self.site.relative_frequency.is_some_and(|ratio| ratio >= HOT_CALLSITE_REL_FREQ);
         hot && self.growth_per_site() * 100 <= self.call_size() * percent
     }
