@@ -1563,6 +1563,15 @@ def test_references_skip_levels_they_are_not_built_at(tmp_path, monkeypatch):
     assert asked == ["O1", "O2", "Os"]
 
 
+def test_a_c_build_gets_the_pinned_m16_clang_when_the_environment_names_none(monkeypatch):
+    """test_a_c_bench_row_builds_and_links failed "regparm (an `inreg` parameter) is not translated yet": LLRM_CLANG_M16 unset, llrm-cc ran the pin's clang on a real-mode C bench."""
+    monkeypatch.delenv("LLRM_CLANG_M16", raising=False)
+    monkeypatch.setattr(bench.llrmbin, "cc_environment", lambda: {"LLRM_CLANG_M16": "/pinned/clang"})
+    assert bench.c_environment(types.SimpleNamespace(language="c"))["LLRM_CLANG_M16"] == "/pinned/clang"
+    monkeypatch.setenv("LLRM_CLANG_M16", "/mine/clang")
+    assert bench.c_environment(types.SimpleNamespace(language="c"))["LLRM_CLANG_M16"] == "/mine/clang"
+
+
 def test_bcc_sh_without_any_dosbox_says_so_not_exit_127(tmp_path):
     """tools/callconv/bcc.sh defaulted DOSRUN to a scratch build that was deleted: exit 127, stderr dropped, and every Borland cell of the 2026-11-22 table read "no object" (c.sh falls back to the dist's dosbox-x; bcc.sh did not)."""
     dist = tmp_path / "dist"
