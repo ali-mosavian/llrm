@@ -176,6 +176,8 @@ pub struct Tuned {
     pub narrows_counters: bool,
     /// `Tti::narrows_counters_at_speed` answers no.
     pub narrows_counters_for_size_only: bool,
+    /// `Tti::index_iv_width`.
+    pub index_iv_width: Option<u32>,
     /// `Tti::unswitch_threshold_override`.
     pub unswitch_threshold: Option<i64>,
     /// `Tti::sinks_unused_invariants`.
@@ -212,6 +214,7 @@ pub struct Flagged {
     pub loop_split: bool,
     pub narrows_counters: bool,
     pub narrows_counters_for_size_only: bool,
+    pub index_iv_width: Option<u32>,
     pub unswitch_threshold: Option<i64>,
     /// `Tti::phiopt_one_feeding_statement`.
     pub phiopt_one_statement: bool,
@@ -303,6 +306,10 @@ impl llrm_mir::tti::Tti for Flagged {
 
     fn narrows_counters_at_speed(&self) -> bool {
         !self.narrows_counters_for_size_only
+    }
+
+    fn index_iv_width(&self) -> Option<u32> {
+        self.index_iv_width
     }
 
     fn unswitch_threshold_override(&self) -> Option<i64> {
@@ -478,6 +485,7 @@ impl llrm_mir::target::Machine for Tuned {
         (self.exit_ne
             || self.loop_split
             || self.narrows_counters
+            || self.index_iv_width.is_some()
             || self.sinks_invariants
             || self.no_global_base
             || self.fills_pattern_at_speed
@@ -497,6 +505,7 @@ impl llrm_mir::target::Machine for Tuned {
                     loop_split: self.loop_split,
                     narrows_counters: self.narrows_counters,
                     narrows_counters_for_size_only: self.narrows_counters_for_size_only,
+                    index_iv_width: self.index_iv_width,
                     unswitch_threshold: self.unswitch_threshold,
                     phiopt_one_statement: false,
                     sinks_invariants: self.sinks_invariants,

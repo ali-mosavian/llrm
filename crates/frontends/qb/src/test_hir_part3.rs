@@ -943,17 +943,17 @@ fn test_qb_finalizer_attaches_callee_cleanup_to_far_return() {
     assert_eq!(returned.sources, vec![Loc::Imm(ir::Imm { value: 6, width: 2, address: None })]);
 }
 
-/// RPOINTLEAF treated readonly RPLANEDIST as a write to every descriptor.
+/// RPOINTLEAF treated readonly RPLANEDIST as a write to every descriptor. The callee returns what it reads: a store to a write-only global is removed with its load (#10547), and the callee is then `memory(none)`.
 #[test]
 fn test_qb_module_instantiates_user_callee_modref_on_pointer_actuals() {
     let directory = tempfile::tempdir().expect("a directory");
     let source = written(
         &directory,
         "MODREF.BAS",
-        b"DECLARE SUB rd (p AS INTEGER)\r\nDIM SHARED total AS INTEGER\r\nDIM v AS INTEGER\r\nv = 1\r\nrd v\r\nPRINT v\r\n\
-SUB rd (p AS INTEGER)\r\ntotal = p\r\nEND SUB\r\n",
+        b"DECLARE FUNCTION rd% (p AS INTEGER)\r\nDIM v AS INTEGER\r\nv = 1\r\nPRINT rd%(v)\r\nPRINT v\r\n\
+FUNCTION rd% (p AS INTEGER)\r\nrd% = p\r\nEND FUNCTION\r\n",
     );
-    let read = function_text(&optimized_mir(&parsed(&source)), "RD");
+    let read = function_text(&optimized_mir(&parsed(&source)), "\"RD%\"");
     let header = read.lines().next().unwrap();
 
     assert!(header.contains("readonly") && header.contains("argmem: read"), "{read}");

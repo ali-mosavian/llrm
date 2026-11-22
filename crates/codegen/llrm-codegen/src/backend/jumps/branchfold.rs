@@ -68,11 +68,16 @@ fn direct(
         .and_then(|what| what.target)
 }
 
+/// Whether `analyzeBranch` understands how `block` ends: it gives up on one
+/// that leaves for more than two blocks (a jump table, several conditional
+/// branches).
+pub(in crate::backend::jumps) fn analyzable(block: &LirBlock) -> bool {
+    block.succ.len() <= 2
+}
+
 impl Exit {
-    /// A block that leaves for more than two blocks is not analysed, as LLVM's
-    /// `analyzeBranch` gives up on one with several conditional branches.
     fn of(block: &LirBlock) -> Self {
-        if block.succ.len() > 2 {
+        if !analyzable(block) {
             return Self::default();
         }
         let (last, before) = super::_real_tail(block);

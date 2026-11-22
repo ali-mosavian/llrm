@@ -135,6 +135,7 @@ mod g_lines;
 mod globl;
 mod hex_low_byte_copy;
 mod high_mask_clear_word;
+mod hint_growth_trial;
 mod hoist_arg_load;
 mod hoist_past_independent;
 mod i64_abi;
