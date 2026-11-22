@@ -372,6 +372,8 @@ struct Variant {
     built: masm::Module,
     program: Program,
     folded: bool,
+    /// A function calls a locally binding callee the facts skip.
+    ipra: bool,
 }
 
 /// `program` assembled, noting whether the backend folded a leaf.
@@ -381,8 +383,10 @@ fn built(
     options: &Options,
 ) -> Result<Variant, String> {
     let _ = crate::backend::leaffold::take_folded();
+    let _ = trial::take_ipra_matters();
     let built = assembled(&program, name, options)?;
-    Ok(Variant { built, program, folded: crate::backend::leaffold::take_folded() })
+    let ipra = trial::take_ipra_matters();
+    Ok(Variant { built, program, folded: crate::backend::leaffold::take_folded(), ipra })
 }
 
 /// DEVIATE LEAF-FOLD-TRIAL: where the backend folded a leaf's constant into the
@@ -395,20 +399,53 @@ fn with_leaf_trial(
     options: &Options,
     unpadded: &dyn Fn(&masm::Module) -> Option<Sizes>,
 ) -> Result<masm::Module, String> {
+    let mut variant = variant;
+    let smaller_than = |first: &masm::Module, second: &masm::Module| {
+        matches!(
+            (unpadded(first), unpadded(second)),
+            (Some(a), Some(b)) if b.total() < a.total()
+        )
+    };
+    // DEVIATE IPRA-OS-TRIAL: the module assembled with the locally binding
+    // callees' register facts, kept where the object is smaller.
+    let mut ipra_on = false;
+    if variant.ipra && ipra_trial(options) {
+        let second = trial::with_ipra_binds_local(|| assembled(&variant.program, name, options))?;
+        ipra_on = smaller_than(&variant.built, &second);
+        if llrm_support::debug::enabled("trial") {
+            eprintln!("trial ipra-local: {}", if ipra_on { "kept" } else { "put back" });
+        }
+        if ipra_on {
+            variant.built = second;
+        }
+    }
     if !variant.folded || !leaf_fold_trial(options) {
+        if ipra_on {
+            stage_files(options, "", &variant.built)?;
+        }
         return Ok(variant.built);
     }
-    let second = crate::backend::leaffold::without(|| assembled(&variant.program, name, options))?;
-    let smaller = matches!(
-        (unpadded(&variant.built), unpadded(&second)),
-        (Some(a), Some(b)) if b.total() < a.total()
-    );
+    let second = crate::backend::leaffold::without(|| {
+        if ipra_on {
+            trial::with_ipra_binds_local(|| assembled(&variant.program, name, options))
+        } else {
+            assembled(&variant.program, name, options)
+        }
+    })?;
+    let smaller = smaller_than(&variant.built, &second);
     if llrm_support::debug::enabled("trial") {
         eprintln!("trial leaffold: {}", if smaller { "put back" } else { "kept" });
     }
     let chosen = if smaller { second } else { variant.built };
     stage_files(options, "", &chosen)?;
     Ok(chosen)
+}
+
+/// Whether the module is assembled with and without IPRA-OS-TRIAL: a size
+/// build on a target that has it.
+fn ipra_trial(options: &Options) -> bool {
+    options.cpu().is_ok_and(|cpu| cpu.size && cpu.target().tti().is_some_and(|tti| tti.ipra_trial_at_size()))
+        && !llrm_support::env_flag!("LLRM_NO_IPRA_TRIAL")
 }
 
 /// Whether the module is assembled with and without LEAF-FOLD-OS: a size build
@@ -436,7 +473,7 @@ pub fn compiled_module_trying(
     }
     let dimensions = Dimension::of(options);
     if dimensions.is_empty() {
-        if !leaf_fold_trial(options) {
+        if !leaf_fold_trial(options) && !ipra_trial(options) {
             return compiled_module(module, name, options);
         }
         let variant = built(optimized_program(module, options)?, name, options)?;

@@ -386,7 +386,7 @@ fn lower_function(
     let blocks = crate::expand_pseudo::run(blocks);
     let mut tables = crate::jumptable::tables_of(&machine);
     let dead_ends = crate::mfunc::dead_end_labels(&machine);
-    let (blocks, likelihood) = crate::layout::fold_with_odds(
+    let (blocks, likelihood, dead_ends) = crate::layout::fold_with_odds(
         blocks,
         &mut tables,
         &crate::layout::odds_by_label_number(
