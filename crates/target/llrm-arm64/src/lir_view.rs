@@ -194,7 +194,7 @@ fn address_pairs(function: &MFunc) -> Vec<HashMap<usize, usize>> {
             for (at, op) in block.ops.iter().enumerate() {
                 match op {
                     Op::I(Inst::Adr { page: true, rd, target, got: false })
-                        if seen.get(&Reg::Gpr(*rd)) == Some(&(1, 1)) =>
+                        if seen.get(&Reg::Gpr(*rd)).is_some_and(|&(defs, uses)| defs == 1 && uses >= 1) =>
                     {
                         pages.insert(Reg::Gpr(*rd), (at, target));
                     }
@@ -234,12 +234,32 @@ fn view_with(
     let wide_list: Vec<Reg> = wide.iter().copied().collect();
     let labels: HashMap<&str, u32> =
         function.blocks.iter().enumerate().map(|(at, block)| (block.label.as_str(), at as u32)).collect();
+    let mut page_uses: HashMap<Reg, u32> = HashMap::default();
+    for op in function.blocks.iter().flat_map(|block| &block.ops) {
+        let mut op = op.clone();
+        op.visit(&mut |register, role| {
+            if role != Role::Def {
+                *page_uses.entry(register.key()).or_default() += 1;
+            }
+        });
+    }
     let mut origin = 0u32;
     // The names the memory operands of this function refer to, by index.
     let mut symbols: Vec<String> = Vec::new();
     for (at, block) in function.blocks.iter().enumerate() {
         let mut insts = Vec::new();
-        let first_halves: Vec<usize> = pairs[at].values().copied().collect();
+        // A page stays for the readers that are not a fused add (a folded
+        // page-offset access): the pin's `MOVaddr` is the whole address, so
+        // those readers have a page of their own, made again where they are.
+        let first_halves: Vec<usize> = pairs[at]
+            .values()
+            .copied()
+            .filter(|&adrp| {
+                let Op::I(Inst::Adr { rd, .. }) = &block.ops[adrp] else { return false };
+                let fused = pairs[at].values().filter(|&&one| one == adrp).count() as u32;
+                page_uses.get(&Reg::Gpr(*rd)).copied() == Some(fused)
+            })
+            .collect();
         for (index, op) in block.ops.iter().enumerate() {
             origin += 1;
             // A debug note is no instruction to the allocator (`isDebugInstr`):
@@ -994,7 +1014,7 @@ impl AllocTarget for Arm64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mc::inst::{AddSub, Cond, Wide, Width};
+    use crate::mc::inst::{AddSub, Addr, Cond, MemOperand, Memory, Wide, Width};
     use crate::mfunc::{MBlock, OpList};
 
     fn sample() -> MFunc {
@@ -1156,6 +1176,39 @@ mod tests {
         let ops = &back.blocks[0].ops;
         assert_eq!(ops[0], Op::I(Inst::Adr { page: true, rd: Gpr(6), target: target.clone(), got: false }), "{ops:?}");
         assert_eq!(ops[1], Op::I(Inst::AddPageOffset { rd: Gpr(6), rn: Gpr(6), target }), "{ops:?}");
+    }
+
+    /// QuickrBasic uimain `uimn_act` -Os (+116 B): one `adrp` page read by an
+    /// `add :lo12:` and by a later page-offset store stayed one value live
+    /// across calls and took a seventh callee-saved register. The pin's
+    /// `MOVaddr` is the whole address, so the store's page is its own
+    /// definition, made again where the store is. The add is fused whatever
+    /// else reads the page, and the page stays for those readers only.
+    #[test]
+    fn an_address_pair_fuses_though_the_page_has_a_later_reader() {
+        let mut function = MFunc::new("f");
+        let (page, address) = (function.gpr(), function.gpr());
+        let target = Target::Symbol { name: "_g".into(), addend: 0 };
+        let store = Inst::Store {
+            mem: Memory::Int { width: Width::W, bytes: 4, sign: false, reg: Gpr(1) },
+            addr: Addr::PageOffset { base: page, target: target.clone(), got: false },
+            mmo: MemOperand::default(),
+        };
+        let ops = vec![
+            Op::I(Inst::Adr { page: true, rd: page, target: target.clone(), got: false }),
+            Op::I(Inst::AddPageOffset { rd: address, rn: page, target: target.clone() }),
+            Op::I(store),
+            Op::Return { uses: vec![Reg::Gpr(address)], tail: None },
+        ];
+        function.blocks.push(MBlock { label: "L0".into(), ops: OpList::from(ops) });
+        let lir = view(&function);
+        let insts = &lir.blocks[0].insts;
+        assert_eq!(insts.len(), 4, "the page, the fused address, the store, the return: {insts:?}");
+        let fused = insts
+            .iter()
+            .filter(|inst| inst.rematerializable && inst.operands.iter().all(|o| !matches!(o, Operand::Use(_))))
+            .count();
+        assert_eq!(fused, 2, "the page and the address are each made from nothing: {insts:?}");
     }
 
     /// `sub sp, sp, #16` defined register 31, the zero register, so the
