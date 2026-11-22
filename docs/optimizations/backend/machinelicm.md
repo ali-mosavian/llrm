@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/machinelicm.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/machinelicm.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/machinelicm.rs sha256:74d9ec97b1dfaaf5078b4cbef5fdbf9b2d657fa18279e31fe0627fd7c386308f -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/machinelicm.rs sha256:1556dc8ee472668759f3be2cd6ea20fd33650d8ca8278d901f837ad48c5b30c8 -->
 
 # machinelicm
 
@@ -27,9 +27,12 @@ moves to the end of the preheader, before its jump, when:
   them (below);
 - every value it reads is defined outside the loop or was hoisted
   (`IsLoopInvariantInst`);
-- it is not as cheap as a move (`IsProfitableToHoist`: a cheap instruction
-  is hoisted only if it does not raise the pressure, and a constant cannot
-  be made again where the allocator wants it, DEVIATE E3 of `precse`);
+- it is not as cheap as a move, unless it is a register copy that is the
+  only reader of its source (`calcRegisterCost` is nil: bintree -O1
+  `insert`'s zero-extended `lea` index, then the load it feeds)
+  (`IsProfitableToHoist`: a cheap instruction is hoisted only if it does not
+  raise the pressure, and a constant cannot be made again where the
+  allocator wants it, DEVIATE E3 of `precse`);
 - it sets no flags a later instruction of its block reads;
 - the loop does not already use as many values of its register class as the
   target has registers (`CanCauseHighRegPressure`, with the values named in
