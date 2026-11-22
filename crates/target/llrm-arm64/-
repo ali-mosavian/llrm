@@ -1,0 +1,6 @@
+arms:
+.Larms.0:
+	ands wzr, w0, #0x1
+	csel w9, w1, w2, ne
+	madd w0, w3, w9, wzr
+	b sink_use
