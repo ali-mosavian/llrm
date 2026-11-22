@@ -31,6 +31,7 @@ mod bool_load_range;
 mod scc_bool_byte;
 mod bool_sub;
 mod bswap;
+mod btst_memory_byte;
 mod btst_single_bit;
 mod build_counts;
 mod byte_spill_reload;
