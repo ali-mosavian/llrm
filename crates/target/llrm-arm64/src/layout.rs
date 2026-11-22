@@ -283,6 +283,7 @@ fn common_tail(
 fn merge_return_tails(
     blocks: &mut Vec<Lowered>,
     optsize: bool,
+    dead_ends: &mut Vec<String>,
 ) {
     // The block that is only a return, where there is one: a block that
     // returns, or jumps there, ends the same way.
@@ -296,29 +297,34 @@ fn merge_return_tails(
                 },
             )
     };
-    let ends_alike = |blocks: &[Lowered], at: usize, bare: &Option<(String, Inst)>| -> Option<Vec<Inst>> {
-        let mut insts = blocks[at].insts.clone();
-        match (insts.last(), bare) {
-            (Some(Inst::Ret { .. }), None) => Some(insts),
-            (Some(last), Some((label, ret)))
-                if last == ret
-                    || matches!(
-                        last,
-                        Inst::Branch { link: false, target: Target::Label(to) } if to == label
-                    ) =>
-            {
-                if blocks[at].label == *label || insts.len() < 2 {
-                    return None;
+    let ends_alike =
+        |blocks: &[Lowered], at: usize, bare: &Option<(String, Inst)>, dead_ends: &[String]| -> Option<Vec<Inst>> {
+            let mut insts = blocks[at].insts.clone();
+            match (insts.last(), bare) {
+                (Some(Inst::Ret { .. }), None) => Some(insts),
+                (Some(last), Some((label, ret)))
+                    if last == ret
+                        || matches!(
+                            last,
+                            Inst::Branch { link: false, target: Target::Label(to) } if to == label
+                        ) =>
+                {
+                    if blocks[at].label == *label || insts.len() < 2 {
+                        return None;
+                    }
+                    *insts.last_mut()? = Inst::Branch { link: false, target: Target::Label(label.clone()) };
+                    Some(insts)
                 }
-                *insts.last_mut()? = Inst::Branch { link: false, target: Target::Label(label.clone()) };
-                Some(insts)
+                // A jump (to a block, or a tail call): the blocks that jump to
+                // the same place end alike.
+                (Some(Inst::Branch { link: false, .. }), _) => Some(insts),
+                // A block that ends in a call that never returns has no
+                // successor:
+                // `TailMergeBlocks` takes those first, whatever they end in.
+                (Some(Inst::Branch { link: true, .. }), _) if dead_ends.contains(&blocks[at].label) => Some(insts),
+                _ => None,
             }
-            // A jump (to a block, or a tail call): the blocks that jump to the
-            // same place end alike.
-            (Some(Inst::Branch { link: false, .. }), _) => Some(insts),
-            _ => None,
-        }
-    };
+        };
     loop {
         // A block merged whole is only a jump now: the branches to it go on
         // to its target, so that the blocks that led to it end alike
@@ -331,8 +337,9 @@ fn merge_return_tails(
             }
         }
         let bare_block = bare(blocks);
-        let ending: Vec<(usize, Vec<Inst>)> =
-            (0..blocks.len()).filter_map(|at| ends_alike(blocks, at, &bare_block).map(|insts| (at, insts))).collect();
+        let ending: Vec<(usize, Vec<Inst>)> = (0..blocks.len())
+            .filter_map(|at| ends_alike(blocks, at, &bare_block, dead_ends).map(|insts| (at, insts)))
+            .collect();
         // Blocks are compared with those that end in the same instruction.
         let mut groups: HashMap<String, Vec<usize>> = HashMap::default();
         for (at, (_, insts)) in ending.iter().enumerate() {
@@ -384,7 +391,7 @@ fn merge_return_tails(
         }
         let Some((one, other, length)) = best else { return };
         for at in [one, other] {
-            if let Some(insts) = ends_alike(blocks, at, &bare_block) {
+            if let Some(insts) = ends_alike(blocks, at, &bare_block, dead_ends) {
                 blocks[at].insts = insts;
             }
         }
@@ -409,6 +416,9 @@ fn merge_return_tails(
             let tail =
                 Lowered { label, insts: blocks[other].insts.split_off(at), locs: blocks[other].locs.split_off(at) };
             let label = tail.label.clone();
+            if dead_ends.contains(&blocks[other].label) {
+                dead_ends.push(label.clone());
+            }
             blocks[other].insts.push(Inst::Branch { link: false, target: Target::Label(label) });
             blocks[other].locs.push(None);
             blocks.insert(other + 1, tail);
@@ -721,9 +731,10 @@ pub fn fold_with_odds(
     dead_ends: &[String],
     kept: &[String],
     indirect: &[(String, Vec<String>)],
-) -> (Vec<Lowered>, Likelihood) {
+) -> (Vec<Lowered>, Likelihood, Vec<String>) {
+    let mut dead_ends = dead_ends.to_vec();
     if blocks.is_empty() {
-        return (blocks, Likelihood::default());
+        return (blocks, Likelihood::default(), dead_ends);
     }
     // A fall-through becomes a branch, so that blocks can move.
     for at in 0..blocks.len() - 1 {
@@ -743,7 +754,7 @@ pub fn fold_with_odds(
             blocks[at].locs.push(None);
         }
     }
-    merge_return_tails(&mut blocks, optsize);
+    merge_return_tails(&mut blocks, optsize, &mut dead_ends);
     hoist_common_code(&mut blocks, tables);
     // The entry is never forwarded away.
     let entry = blocks[0].label.clone();
@@ -1038,7 +1049,7 @@ pub fn fold_with_odds(
     for (edge, odds) in copied_tails {
         priced.entry(edge).or_insert(odds);
     }
-    (ordered, priced)
+    (ordered, priced, dead_ends)
 }
 
 #[cfg(test)]
