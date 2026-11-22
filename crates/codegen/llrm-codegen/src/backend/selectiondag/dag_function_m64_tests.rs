@@ -1241,7 +1241,8 @@ entry:
 /// -16 and -18 (named doubles past xmm7, or mixed with integers) the same.
 /// The list starts at the first unnamed register of each kind: `gp_offset`
 /// counts the named integers, `fp_offset` is 48 plus 16 per named vector
-/// register, at most 176.
+/// register, at most 176. The function reads `fp_offset`: a list no code
+/// reads leaves it unwritten (`builder::vaarg`).
 #[test]
 fn va_start_counts_named_integer_and_vector_registers_apart() {
     use crate::model::ir::{Loc, Operation};
@@ -1252,7 +1253,9 @@ declare void @llvm.va_start.p0(ptr)
 define i32 @f({params}, ...) {{
   %ap = alloca [24 x i8], align 8
   call void @llvm.va_start.p0(ptr %ap)
-  ret i32 0
+  %fpo = getelementptr i8, ptr %ap, i64 4
+  %fpv = load i32, ptr %fpo
+  ret i32 %fpv
 }}
 "
         );
