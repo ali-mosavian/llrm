@@ -57,8 +57,9 @@ fn mnemonic(name: &str) -> Option<(&'static str, Option<char>)> {
 pub(crate) fn tested(inst: &Inst) -> Option<(u32, Option<char>)> {
     let Kind::Op(name) = inst.kind else { return None };
     let (mnemonic, size) = mnemonic(name)?;
+    // `tst.l (%a0)` tests the memory `%a0` points at, not `%a0`
     match (mnemonic, &inst.operands[..]) {
-        ("tst", [Operand::Use(Reg::Virt(v))]) => Some((*v, size)),
+        ("tst", [Operand::Use(Reg::Virt(v))]) if !inst.may_load => Some((*v, size)),
         _ => None,
     }
 }
@@ -169,6 +170,9 @@ pub fn eliminate_adjacent_tests(
                 let Kind::Op(name) = block.insts[at].kind else { return false };
                 let (mnemonic, size) = mnemonic(name).unwrap_or(("", None));
                 let [Operand::Use(tested)] = block.insts[at].operands[..] else { return false };
+                if block.insts[at].may_load {
+                    return false;
+                }
                 let before = &block.insts[at - 1];
                 let result = matches!(
                     before.operands.first(),
