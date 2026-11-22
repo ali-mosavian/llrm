@@ -791,11 +791,14 @@ fn tail(
     // The bytes a trial prices are the finished text's: the outliner shares
     // the repeated sequences of an unrolled body (static_pointers: 26 B of
     // 174 modelled bytes, 16 of the rolled loop's 181), which the functions'
-    // own bytes leave out.
+    // own bytes leave out. The runtime routines the text calls are linked
+    // bytes too: a rolled loop's `jsr __mulsi3` costs the routine, the unrolled
+    // constants none (tail_calls `framed`: kept at -6 B, then put back at +10 B
+    // against a rolled copy 89 B larger once linked).
     // `LLRM_6502_MODEL_BYTES` is the kill switch, for an A/B of one binary
     if price && std::env::var_os("LLRM_6502_MODEL_BYTES").is_none() {
-        if let Ok(finished) = crate::timing::estimate(request.cpu, &text) {
-            bytes = i64::from(finished.bytes) + data_bytes(&data.0);
+        if let Ok(finished) = image_bytes_of(&text, request) {
+            bytes = finished + data_bytes(&data.0);
         }
     }
     Ok(Assembled { text: equates(&request.platform) + &files + &text + &data.0, clocks, bytes, functions })

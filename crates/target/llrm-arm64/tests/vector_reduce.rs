@@ -118,6 +118,39 @@ fn add_v8i16_is_addv() {
     assert_eq!(count(&text, "addv", ".8h"), 1, "{text}");
 }
 
+/// A 64-bit vector reduced: `<4 x i16>` and `<8 x i8>` were `CannotSelect("Add")`, so
+/// `if (p[i] > 3) count++` over `unsigned short` at -O3 (an epilogue of four
+/// lanes) failed to compile; the pin selects `addv h, v.4h`.
+#[test]
+fn add_v4i16_is_addv() {
+    let text = matches_the_pin(&ir("add", 4, 16));
+    assert_eq!(count(&text, "addv", ".4h"), 1, "{text}");
+}
+
+#[test]
+fn add_v8i8_is_addv() {
+    let text = matches_the_pin(&ir("add", 8, 8));
+    assert_eq!(count(&text, "addv", ".8b"), 1, "{text}");
+}
+
+/// The two lanes of a `v2i32` are combined as scalars (no pairwise form here).
+#[test]
+fn a_v2i32_reduction_selects() {
+    for op in ["add", "smax", "smin", "umax", "umin", "and", "or", "xor"] {
+        ours(&ir(op, 2, 32)).unwrap_or_else(|why| panic!("{op} v2i32 refused: {why}"));
+    }
+}
+
+#[test]
+fn minmax_of_64_bit_vectors_are_across_lanes() {
+    for (op, mnemonic, lanes, lane, suffix) in
+        [("smax", "smaxv", 4, 16, ".4h"), ("umin", "uminv", 8, 8, ".8b"), ("smin", "sminv", 4, 16, ".4h")]
+    {
+        let text = matches_the_pin(&ir(op, lanes, lane));
+        assert_eq!(count(&text, mnemonic, suffix), 1, "{text}");
+    }
+}
+
 #[test]
 fn add_v16i8_is_addv() {
     let text = matches_the_pin(&ir("add", 16, 8));
@@ -178,6 +211,16 @@ fn add_v32i8_adds_the_halves_then_addv() {
 /// (DEVIATE VEC8: the pin's first split is a 64-bit vector, which has no type
 /// here): one combine per halving, as many as lanes are left to fold.
 #[test]
+fn bitwise_reductions_of_64_bit_vectors_fold_the_one_scalar() {
+    for (op, mnemonic) in [("and", "and"), ("or", "orr"), ("xor", "eor")] {
+        for (lanes, lane, combines) in [(4, 16, 2), (8, 8, 3)] {
+            let text = ours(&ir(op, lanes, lane)).unwrap_or_else(|why| panic!("refused: {why}"));
+            assert_eq!(count(&text, mnemonic, ""), combines, "{op} v{lanes}i{lane}:\n{text}");
+        }
+    }
+}
+
+#[test]
 fn bitwise_reductions_fold_the_halves_with_the_scalar_operation() {
     for (op, mnemonic) in [("and", "and"), ("or", "orr"), ("xor", "eor")] {
         for (lanes, lane, combines) in [(2, 64, 1), (4, 32, 2), (16, 8, 4)] {
@@ -188,7 +231,7 @@ fn bitwise_reductions_fold_the_halves_with_the_scalar_operation() {
 }
 
 /// The kind, lane width and lane count of each reduction run below.
-const CASES: [(&str, u32, u32); 26] = [
+const CASES: [(&str, u32, u32); 40] = [
     ("add", 8, 16),
     ("add", 16, 8),
     ("add", 32, 4),
@@ -215,6 +258,20 @@ const CASES: [(&str, u32, u32); 26] = [
     ("add", 8, 32),
     ("add", 64, 8),
     ("add", 64, 16),
+    ("add", 16, 4),
+    ("add", 8, 8),
+    ("smax", 16, 4),
+    ("umin", 8, 8),
+    ("smin", 16, 4),
+    ("umax", 8, 8),
+    ("and", 16, 4),
+    ("or", 8, 8),
+    ("xor", 16, 4),
+    ("add", 32, 2),
+    ("smax", 32, 2),
+    ("smin", 32, 2),
+    ("umax", 32, 2),
+    ("umin", 32, 2),
 ];
 
 fn run_command(command: &mut Command) -> String {

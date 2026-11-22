@@ -1866,6 +1866,14 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE SZ1-HOT (`Tuning::inline_size_hot_growth_percent`): at a
+    /// locally hot site (`HotCallSiteRelFreq`) the -Os bound lets through a
+    /// growth of at most this percent of the call sequence removed. None: the
+    /// bound holds there.
+    fn opt_size_inline_hot_growth_percent(&self) -> Option<i64> {
+        None
+    }
+
     /// Whether a constant address offset may become a phi: false where the
     /// access folds it as a displacement and the target says to keep it. A
     /// boolean as the pin's `replacingOperandWithVariableIsCheap` is: a
