@@ -2375,10 +2375,7 @@ impl FunctionPass for LoopVectorize {
                     continue 'worklist;
                 }
                 let memory_unit = memory::Unit::within(&*unit.context, unit.layout, &*unit.function, &outer);
-                let mut aa = AggregateAA::new();
-                aa.add_aa_result(BasicAA::new(&memory_unit));
-                aa.add_aa_result(llrm_analysis::scopednoaliasaa::ScopedNoAliasAA::new(&memory_unit));
-                aa.add_aa_result(TypeBasedAA::new(&memory_unit));
+                let mut aa = AggregateAA::default_pipeline(&memory_unit);
                 let max_width = tti.vector_register_bits() * 2;
                 let lai = LoopAccessInfo::new(se, &cx, header, &mut aa, false, max_width);
                 let legality = match can_vectorize(&cx, se, &lai, found) {
