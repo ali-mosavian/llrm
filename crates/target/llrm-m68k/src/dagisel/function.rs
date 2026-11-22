@@ -189,6 +189,35 @@ pub fn select_function_with(
     target.min_jump_table_entries = limits.min_entries;
     target.min_jump_table_density = Some(limits.min_density);
     let mut info = FunctionLoweringInfo::new(function);
+    // `FunctionLoweringInfo`: a static alloca is a frame object of the type's
+    // size (times a constant count) on the larger of the alignment asked for
+    // and the type's preferred one
+    let types = &module.context.types;
+    let mut sizes = Vec::new();
+    for (value, _) in info.static_allocas.iter() {
+        let ValueDef::Instruction(def) = function.value(value).def else {
+            return Err("an alloca that is no instruction".to_owned());
+        };
+        let instruction = function.instruction(def);
+        let llrm_mir::opcode::Opcode::Alloca { allocated, align: wanted, .. } = instruction.opcode else {
+            return Err("an alloca that is not an alloca".to_owned());
+        };
+        let count = match instruction.operands.first() {
+            None => 1,
+            Some(llrm_mir::module::Operand::Constant(id)) => match module.context.get(*id).kind {
+                llrm_mir::context::ConstantKind::Int(count) => i64::try_from(count).map_err(|_| "an alloca count")?,
+                _ => return Err("an alloca whose count is not a number".to_owned()),
+            },
+            Some(_) => return Err("an alloca with a count that is not a constant".to_owned()),
+        };
+        let size = i64::try_from(layout.alloc_size(types, allocated)).map_err(|_| "an alloca too large")? * count;
+        let align =
+            i64::try_from(layout.pref_align(types, allocated)).unwrap_or(1).max(wanted.map_or(1, |one| one as i64));
+        sizes.push((value, size, align));
+    }
+    sizes.sort_by_key(|(value, _, _)| info.static_allocas[value]);
+    // DEVIATE SC1: StackColoring over the IR's lifetime markers (`llrm_codegen::backend::stackcoloring`)
+    let objects = llrm_codegen::backend::stackcoloring::share_frame(module, function, &mut info, &sizes);
     let mut temporaries = Temporaries::new(info.static_allocas.iter().map(|(_, &index)| index + 1).max().unwrap_or(0));
     let mut selected = Vec::new();
     let mut updates = Vec::new();
@@ -276,32 +305,7 @@ pub fn select_function_with(
             });
         }
     }
-    // `FunctionLoweringInfo`: a static alloca is a frame object of the type's
-    // size (times a constant count) on the larger of the alignment asked for
-    // and the type's preferred one
-    let types = &module.context.types;
-    let mut locals = Vec::new();
-    for (value, &index) in info.static_allocas.iter() {
-        let ValueDef::Instruction(def) = function.value(value).def else {
-            return Err("an alloca that is no instruction".to_owned());
-        };
-        let instruction = function.instruction(def);
-        let llrm_mir::opcode::Opcode::Alloca { allocated, align: wanted, .. } = instruction.opcode else {
-            return Err("an alloca that is not an alloca".to_owned());
-        };
-        let count = match instruction.operands.first() {
-            None => 1,
-            Some(llrm_mir::module::Operand::Constant(id)) => match module.context.get(*id).kind {
-                llrm_mir::context::ConstantKind::Int(count) => i64::try_from(count).map_err(|_| "an alloca count")?,
-                _ => return Err("an alloca whose count is not a number".to_owned()),
-            },
-            Some(_) => return Err("an alloca with a count that is not a constant".to_owned()),
-        };
-        let size = i64::try_from(layout.alloc_size(types, allocated)).map_err(|_| "an alloca too large")? * count;
-        let align =
-            i64::try_from(layout.pref_align(types, allocated)).unwrap_or(1).max(wanted.map_or(1, |one| one as i64));
-        locals.push((index, size, align));
-    }
+    let mut locals: Vec<(i32, i64, i64)> = objects.into_iter().enumerate().map(|(at, (size, align))| (at as i32, size, align)).collect();
     locals.extend(temporaries.made);
     locals.sort();
     if let Some(entry) = selected.first_mut() {
