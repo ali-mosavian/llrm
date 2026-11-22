@@ -3753,7 +3753,8 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         //
         // [pin]:
         // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L11886
-        if op == ISD::Srl && self.dag.opcode(n0) == ISD::Sra && self.dag.constant(n1) == Some(width - 1) {
+        let lane_width = if vt.is_vector() { u128::from(vt.element().size_in_bits()) } else { width };
+        if op == ISD::Srl && self.dag.opcode(n0) == ISD::Sra && self.dag.const_or_splat(n1) == Some(lane_width - 1) {
             return Some(self.dag.get_node(ISD::Srl, vt, &[self.dag.operand(n0, 0), n1]));
         }
         if let Some(folded) = self.shift_of_shifted_logic(node) {
