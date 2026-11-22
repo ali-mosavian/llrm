@@ -371,14 +371,14 @@ impl Tti for Mos6502 {
     /// A 16-bit counter step is three instructions: a register stepped each
     /// trip for a use that runs on a few pays that many more.
     fn lsr_conditional_use_step_cost(&self) -> u32 {
-        if std::env::var_os("LLRM_EXP_NO_CONDSTEP").is_some() { 0 } else { 3 }
+        3
     }
 
     /// A 16-bit compare of the exit test costs two `cmp`s against zero's `ora`:
     /// the bits of its constant do not make a formula worse (the countdown
     /// counter that avoids it costs a second counter).
     fn lsr_exit_compare_immediate_is_free(&self) -> bool {
-        std::env::var_os("LLRM_EXP_NO_FREE_CMP").is_none()
+        true
     }
 
     /// llvm-mos: `n8` makes a 16-bit counter illegal, and LFTR still tests the exit on it.

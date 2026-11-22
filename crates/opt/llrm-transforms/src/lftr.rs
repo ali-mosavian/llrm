@@ -127,7 +127,7 @@ pub fn replaced_in(
     let tti = MachineCosts { tti: outer.target().tti(), minimum_size };
     let budget = outer.target().tti().map_or(4, |tti| tti.lftr_expansion_budget(optsize));
     let any_stride = outer.target().tti().is_some_and(|tti| tti.lftr_any_stride());
-    let illegal_iv = outer.target().tti().is_some_and(|tti| tti.allow_illegal_integer_iv()) && std::env::var_os("LLRM_EXP_NO_ILLEGAL_IV").is_none();
+    let illegal_iv = outer.target().tti().is_some_and(|tti| tti.allow_illegal_integer_iv());
     // `Rewriter.disableCanonicalMode()`.
     let mut rewriter = Expander::new("indvars");
     rewriter.set_canonical_mode(false);
