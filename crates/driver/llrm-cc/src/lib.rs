@@ -549,10 +549,10 @@ fn register_parameter(ir: &str) -> Option<&str> {
 /// x86 System V convention does (`inreg_registers`), and so does Open Watcom's
 /// where the row makes every function regcall (`-mregcall-default`: clang marks
 /// each parameter `inreg`, and `watcall32` takes EAX, EDX, EBX, ECX for them as
-/// it does for an unmarked one). Under `-mabi=watcom` alone, `-mregparm=3` makes
-/// `inreg` mean EAX, EDX, ECX, which that convention does not give: refused.
-/// The last `-mabi=` of the target's backend flags and the command line is the
-/// one the backend takes.
+/// it does for an unmarked one). Under `-mabi=watcom` alone, `-mregparm=3`
+/// makes `inreg` mean EAX, EDX, ECX, which that convention does not give:
+/// refused. The last `-mabi=` of the target's backend flags and the command
+/// line is the one the backend takes.
 fn places_inreg(
     target: &Target,
     build: &Build,
