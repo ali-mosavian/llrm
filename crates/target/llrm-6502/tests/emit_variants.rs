@@ -28,6 +28,11 @@ use llrm_6502::driver::{Level, Request, assembly};
 /// and `__crest_ax` (they could not use `__csave`), so they are users of the
 /// helpers too, each written once more with its cells inline: 4 more, 16 in
 /// all.
+///
+/// The file has two long `x - 1` steps, and the module is compiled again with
+/// the carry chain, which the outliner can share (1,254 B against 1,263 B
+/// stepped; `long_step_trial`): the same 16 emissions again, 32 in
+/// all. That one is paid for: it is the text kept.
 #[test]
 fn a_function_with_spills_and_calls_pays_for_no_variant_that_changes_nothing() {
     let before = emit_runs();
@@ -35,5 +40,5 @@ fn a_function_with_spills_and_calls_pays_for_no_variant_that_changes_nothing() {
     assert!(text.contains("bench_recmany:"), "{text}");
     let runs = emit_runs() - before;
     assert!(!text.contains("__csave"), "the variant was run and not kept:\n{text}");
-    assert_eq!(runs, 16, "emissions of the functions of the file");
+    assert_eq!(runs, 32, "emissions of the functions of the file");
 }

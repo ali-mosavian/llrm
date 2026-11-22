@@ -129,6 +129,7 @@ pub fn select_block(
     let tli = target_lowering();
     let mut lowering = MosLowering {
         sized,
+        long_steps: super::function::long_steps(),
         widen_products: match super::function::widen_products() {
             super::function::Widen::Off => false,
             super::function::Widen::Unsized => !sized,
