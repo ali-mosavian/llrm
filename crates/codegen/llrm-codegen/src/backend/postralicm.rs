@@ -222,3 +222,104 @@ fn flags_dead_after(
     }
     blocks[block].succ.iter().all(|to| index.contains_key(to) && live_into[to].is_disjoint(flags))
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use llrm_lir::registers::RegId;
+
+    use crate::model::ir::{Imm, Loc, Operation, Reg, Semantics};
+    use crate::model::lir::{Insn, LirBlock, LirBody};
+    use crate::support::hash::IndexMap;
+
+    fn reg(register: RegId) -> Loc {
+        Loc::Reg(Reg { register, width: 2 })
+    }
+
+    fn made(
+        at: i64,
+        op: Operation,
+        name: &str,
+        dests: Vec<Loc>,
+        sources: Vec<Loc>,
+    ) -> Arc<Insn> {
+        let what = Semantics { name: Some(name.into()), dests, sources, ..Semantics::new(op) };
+        Arc::new(Insn::new(at, Some((at, at)), Some(what), Vec::new(), Vec::new()))
+    }
+
+    fn set(
+        at: i64,
+        register: RegId,
+        value: i64,
+    ) -> Arc<Insn> {
+        made(at, Operation::Move, "mov", vec![reg(register)], vec![Loc::Imm(Imm { value, width: 2, address: None })])
+    }
+
+    /// `entry: jmp loop; loop: <body> jne loop; ret`.
+    fn looping(body: Vec<Arc<Insn>>) -> LirBody {
+        let branch = Arc::new(Insn::new(
+            0x40,
+            Some((0x40, 0x41)),
+            Some(Semantics { name: Some("jne".into()), target: Some(0x10), ..Semantics::new(Operation::Branch) }),
+            vec![],
+            vec![],
+        ));
+        let leave =
+            Arc::new(Insn { reads_complete: true, ..(*made(0x20, Operation::Return, "ret", vec![], vec![])).clone() });
+        let block =
+            |at: i64, insns: Vec<Arc<Insn>>, succ: Vec<i64>| LirBlock { succ: succ.into(), ..LirBlock::new(at, insns) };
+        LirBody::new(
+            "loop",
+            0,
+            vec![
+                block(0, vec![made(0, Operation::Jump, "jmp", vec![], vec![])], vec![0x10]).into(),
+                block(0x10, [body, vec![branch]].concat(), vec![0x10, 0x20]).into(),
+                block(0x20, vec![leave], vec![]).into(),
+            ],
+            IndexMap::default(),
+            IndexMap::default(),
+        )
+    }
+
+    /// The registers the instructions of block `at` set.
+    fn sets(
+        body: &LirBody,
+        at: i64,
+    ) -> Vec<RegId> {
+        let block = body.blocks.iter().find(|one| one.at == at).expect("the block");
+        block
+            .insns
+            .iter()
+            .filter_map(|one| match one.what.as_ref()?.dests.as_slice() {
+                [Loc::Reg(reg)] => Some(reg.register),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn run(body: &LirBody) -> LirBody {
+        super::hoisted(body, &crate::backend::classes::RegisterClasses::m16())
+    }
+
+    /// `HoistRegionPostRA`: a constant made once in the loop into a register
+    /// nothing else in it writes is made ahead of the loop (queens -O1 `safe`
+    /// made `xor eax, eax` on every trip: 5,720 of the 6,232 extra
+    /// instructions against the pin).
+    #[test]
+    fn test_a_constant_made_once_in_a_loop_is_made_before_it() {
+        let out = run(&looping(vec![set(0x11, RegId::BX, 7)]));
+        assert_eq!(sets(&out, 0x10), Vec::<RegId>::new(), "the loop no longer makes it");
+        assert_eq!(sets(&out, 0), [RegId::BX], "the entry block does");
+    }
+
+    /// A register the loop makes twice is not invariant (`RUClobbers`): the
+    /// value the second leaves is read on the next trip after the first
+    /// wrote the other.
+    #[test]
+    fn test_a_register_the_loop_writes_twice_stays_in_it() {
+        let out = run(&looping(vec![set(0x11, RegId::CX, 1), set(0x12, RegId::CX, 2)]));
+        assert_eq!(sets(&out, 0x10), [RegId::CX, RegId::CX]);
+        assert_eq!(sets(&out, 0), Vec::<RegId>::new());
+    }
+}
