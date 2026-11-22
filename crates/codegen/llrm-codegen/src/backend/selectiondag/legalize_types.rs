@@ -536,11 +536,34 @@ impl<'a> TypeLegalizer<'a> {
         let vt = self.dag.value_type(value);
         let (_, int) = self.tli.types.type_conversion(vt);
         let result = match self.dag.opcode(value) {
-            op @ (ISD::FAdd | ISD::FSub | ISD::FMul | ISD::FDiv) => {
+            op @ (ISD::FAdd | ISD::FSub | ISD::FMul | ISD::FDiv | ISD::FRem) => {
                 // `SoftenFloatRes_Binary`: `makeLibCall` of the softened
                 // operands.
                 let args =
                     [self.softened_float(self.dag.operand(value, 0)), self.softened_float(self.dag.operand(value, 1))];
+                let call = self.tli.libcall_name(op, vt).and_then(|name| self.soft_call(name, &args, int));
+                call.ok_or(LegalizeError::Unsupported { op, ty: vt, what: "soften: the target names no routine" })?
+            }
+            op @ (ISD::FRint
+            | ISD::FSqrt
+            | ISD::FSin
+            | ISD::FCos
+            | ISD::FExp
+            | ISD::FExp2
+            | ISD::FLog
+            | ISD::FLog2) => {
+                // `SoftenFloatRes_Unary`: the C library's routine over the softened operand (`rint` for `FRINT`).
+                let args = [self.softened_float(self.dag.operand(value, 0))];
+                let call = self.tli.libcall_name(op, vt).and_then(|name| self.soft_call(name, &args, int));
+                call.ok_or(LegalizeError::Unsupported { op, ty: vt, what: "soften: the target names no routine" })?
+            }
+            op @ ISD::FMA => {
+                // `SoftenFloatRes_FMA`: `fma` over the three softened operands.
+                let args = [
+                    self.softened_float(self.dag.operand(value, 0)),
+                    self.softened_float(self.dag.operand(value, 1)),
+                    self.softened_float(self.dag.operand(value, 2)),
+                ];
                 let call = self.tli.libcall_name(op, vt).and_then(|name| self.soft_call(name, &args, int));
                 call.ok_or(LegalizeError::Unsupported { op, ty: vt, what: "soften: the target names no routine" })?
             }
