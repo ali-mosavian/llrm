@@ -682,6 +682,12 @@ impl Tti for AArch64 {
         "AArch64"
     }
 
+    /// DEVIATE (M32-SINK-COMMON-SIZE, gcc `-fcrossjumping`): at -Os SimplifyCFG
+    /// sinks common code in every slot; the pin does so only in the late one.
+    fn sink_common_at_size(&self) -> bool {
+        true
+    }
+
     /// -Os unrotate: a header no bigger than the branches rotation removes
     /// (w15-unrotate-os-2026-11-03: limit 2 saved 404 B on jpeg_fixed,
     /// jpeg_single, nbody and recchop, none larger).

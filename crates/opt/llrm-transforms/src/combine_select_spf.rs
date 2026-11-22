@@ -20,11 +20,14 @@
 //! overflow flag of the other sign dropped; `(x <= y) ? 0 : x - y` is
 //! `x - smin(y, x)`), each in the pin's order.
 //!
+//! The sign-bit swap (`(X > -1) ? TV : FV` is `(X < 0) ? FV : TV`) is
+//! translated, in the pin's place before `foldSelectICmpMinMax`.
+//!
 //! DEVIATE 1: the other steps of `foldSelectInstWithICmp`
 //! (the range half of `foldSelectInstWithICmpConst`, `canonicalizeClampLike`,
-//! `tryToReuseConstantFromSelectInComparison`, `foldSelectICmpEq`, the sign-bit
-//! swap) are not translated; `foldSelectICmpMinMax` runs here, ahead of them.
-//! Exit: translated by their own strips, by 2026-11-24 (owner wasm-3).
+//! `tryToReuseConstantFromSelectInComparison`, `foldSelectICmpEq`) are not
+//! translated; `foldSelectICmpMinMax` runs here, ahead of them.
+//! Exit: translated by their own strips, by 2026-12-06 (owner x87, from wasm-3).
 //!
 //! # Used by
 //! `visitSelectInst`.
@@ -37,7 +40,7 @@
 
 use llrm_mir::module::InstId;
 use llrm_mir::module::Operand;
-use llrm_mir::opcode::{BinaryOp, Flags, IntPredicate};
+use llrm_mir::opcode::{BinaryOp, Flags, IntPredicate, Opcode};
 use llrm_mir::valuetracking::guarantee::is_guaranteed_not_to_be_undef;
 use llrm_mir::valuetracking::nonzero::is_known_non_zero;
 use llrm_mir::valuetracking::pattern;
@@ -70,6 +73,7 @@ pub(crate) fn select_with_icmp(
     c.context.types.int_bits(sel.ty)?;
     canonicalize_spf(c, inst, sel)
         .or_else(|| clamp_away_from_extreme(c, inst, sel))
+        .or_else(|| signbit_swap(c, inst, sel))
         .or_else(|| select_icmp_min_max(c, inst, sel))
 }
 
@@ -146,6 +150,27 @@ fn clamp_away_from_extreme(
         return None;
     };
     Some(Visit::Replace(c.create_intrinsic(inst, base, sel.ty, &[value, sel.if_true])))
+}
+
+/// A signbit condition uses the zero constant, by swapping the arms:
+/// `(X > -1) ? TV : FV` is `(X < 0) ? FV : TV`. Not with a constant arm, which
+/// other canonicalizations would undo, nor when the compare has other users.
+fn signbit_swap(
+    c: &mut Combiner,
+    inst: InstId,
+    sel: &Sel,
+) -> Option<Visit> {
+    let q = query(c, Some(inst));
+    let (_, _, pred, value, bound) = pattern::icmp(&q, sel.cond)?;
+    if pred.pred != IntPredicate::Sgt || !pattern::all_ones(&q, bound) || !has_one_use(c, sel.cond) {
+        return None;
+    }
+    if matches!(sel.if_true, Operand::Constant(_)) || matches!(sel.if_false, Operand::Constant(_)) {
+        return None;
+    }
+    let zero = c.int(c.type_of(value), 0);
+    let is_neg = c.create_icmp(inst, IntPredicate::Slt, value, zero);
+    Some(c.replace_with_new(inst, Opcode::Select, sel.ty, vec![is_neg, sel.if_false, sel.if_true], Flags::default()))
 }
 
 /// `canoncalizeSelectICmpMinMax`: `(X <= Y) ? 0 : (X - Y)` and its three
