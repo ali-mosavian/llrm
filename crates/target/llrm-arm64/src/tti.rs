@@ -1606,8 +1606,8 @@ impl Tti for AArch64 {
 
     /// GCC's backward threader grows a path a block at a time and asks ranger
     /// what every way into a block knows: queens -O2's column loop skips its
-    /// guard on the path that ran the inner loop (`max-fsm-thread-length` is 10;
-    /// 3 here).
+    /// guard on the path that ran the inner loop (`max-fsm-thread-length` is
+    /// 10; 3 here).
     fn backward_threading_chain(&self) -> usize {
         3
     }
