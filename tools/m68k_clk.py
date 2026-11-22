@@ -19,6 +19,34 @@ ROOT = HERE.parent
 sys.path.insert(0, str(HERE))
 
 
+def sources_stamp(root):
+    """The stamp `crates/target/llrm-m68k/build.rs` bakes into `cycles` (`cycles --stamp`): FNV-1a 64 over the relative path and text of every file under the crate's `src` and `examples`, in path order. A binary whose stamp differs was built from other sources."""
+    crate = Path(root) / "crates/target/llrm-m68k"
+    names = sorted(
+        (str(path.relative_to(crate)).replace(os.sep, "/"), path)
+        for sub in ("src", "examples")
+        for path in (crate / sub).rglob("*")
+        if path.is_file()
+    )
+    value = 0xCBF29CE484222325
+    for name, path in names:
+        for chunk in (name.encode(), b"\0", path.read_bytes(), b"\0"):
+            for byte in chunk:
+                value = ((value ^ byte) * 0x100000001B3) & 0xFFFFFFFFFFFFFFFF
+    return f"{value:016x}"
+
+
+def verify_cycles(cycles, root, target_dir):
+    """Refuse a `cycles` binary that is not this checkout's: outside its target dir (another session's, `~/scratch/w3/target-b133` priced a whole census with a build from before #10557: `>=` where the tip says `<=`), or built from other `llrm-m68k` sources (stale)."""
+    path = Path(cycles).resolve()
+    allowed = [Path(target_dir).resolve(), (Path(root) / "target").resolve()]
+    if not any(path.is_relative_to(one) for one in allowed):
+        raise SystemExit(f"m68k_clk: CYCLES {path} is outside this checkout's target dir ({allowed[0]}): build it here (cargo build -p llrm-m68k --example cycles)")
+    out = subprocess.run([str(path), "--stamp"], capture_output=True, text=True)
+    if out.returncode or out.stdout.strip() != sources_stamp(root):
+        raise SystemExit(f"m68k_clk: CYCLES {path} was built from other llrm-m68k sources (stamp {out.stdout.strip() or 'none'}, this checkout {sources_stamp(root)}): rebuild it")
+
+
 def gcc_is_comparable(source):
     """False where gcc's column is not like-for-like: a program naming `long double` (gcc's is 12-byte extended, ours and the pin's 8-byte double; the corpus matrix leaves the column empty). Reading them, long_double_layout -Os was +435% bytes."""
     import m68k_corpus_matrix
@@ -118,6 +146,8 @@ def main():
     gcc_root = os.environ["GCC_M68K"]
     target = os.environ.get("CARGO_TARGET_DIR", str(ROOT / "target"))
     cycles = os.environ.get("CYCLES", f"{target}/release/examples/cycles")
+    if not args.libs_only:
+        verify_cycles(cycles, ROOT, target)
     gcc = f"{gcc_root}/usr/bin/m68k-linux-gnu-gcc"
     size = f"{gcc_root}/usr/bin/m68k-linux-gnu-size"
     print("cpu\tprogram\tlevel\tours_B\tours_clk\tgcc_B\tgcc_clk\tours_lib\tgcc_lib")

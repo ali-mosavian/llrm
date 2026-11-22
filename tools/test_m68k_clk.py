@@ -100,3 +100,36 @@ def test_gcc_is_hosted_like_ours():
 
     command = m68k_clk.gcc_command("gcc", "/", "68000", "O1", "p.c", "p.o", True)
     assert "-ffreestanding" not in command, command
+
+
+def _fake_cycles(path, stamp):
+    path.write_text(f"#!/bin/sh\necho {stamp}\n")
+    path.chmod(0o755)
+
+
+def test_a_cycles_binary_outside_the_checkouts_target_dir_is_refused(tmp_path):
+    """The census priced 1,374 cells with `~/scratch/w3/target-b133/.../cycles`, another session's build from before #10557: `>=` where the tip says `<=`, so cells read undecidable."""
+    import pytest
+    import m68k_clk
+
+    elsewhere, target = tmp_path / "w3", tmp_path / "mine"
+    elsewhere.mkdir(), target.mkdir()
+    _fake_cycles(elsewhere / "cycles", m68k_clk.sources_stamp(m68k_clk.ROOT))
+    with pytest.raises(SystemExit, match="outside this checkout's target dir"):
+        m68k_clk.verify_cycles(elsewhere / "cycles", m68k_clk.ROOT, target)
+
+
+def test_a_cycles_binary_built_from_other_sources_is_refused(tmp_path):
+    import pytest
+    import m68k_clk
+
+    _fake_cycles(tmp_path / "cycles", "0000000000000000")
+    with pytest.raises(SystemExit, match="other llrm-m68k sources"):
+        m68k_clk.verify_cycles(tmp_path / "cycles", m68k_clk.ROOT, tmp_path)
+
+
+def test_a_cycles_binary_of_this_checkouts_sources_is_accepted(tmp_path):
+    import m68k_clk
+
+    _fake_cycles(tmp_path / "cycles", m68k_clk.sources_stamp(m68k_clk.ROOT))
+    m68k_clk.verify_cycles(tmp_path / "cycles", m68k_clk.ROOT, tmp_path)
