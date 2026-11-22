@@ -357,3 +357,51 @@ fn a_loop_guard_every_path_passed_is_skipped_on_each_back_edge() {
     assert!(!text.contains("br i1 %end, label %call"), "`step` still reaches the guard:\n{text}");
     assert_eq!(text.matches("br i1 %g,").count(), 1, "{text}");
 }
+
+/// The guard reads a value the latch makes each trip (`%next > 2`): what the
+/// edge into `pre` knew about the last trip's value says nothing of this one.
+/// A back edge may be left out of what every way in knows only for a value
+/// defined above the loop; read as such, `head`'s test of the new column
+/// would be skipped, and a run that ends at column 2 would end at 4.
+#[test]
+fn a_guard_on_a_value_the_loop_remakes_is_not_assumed_on_the_back_edge() {
+    let text = "define i32 @f(i32 %row, i32 %n) {
+entry:
+  br label %head
+
+head:
+  %col = phi i32 [ 0, %entry ], [ %next, %latch ]
+  %found = phi i32 [ 0, %entry ], [ %found2, %latch ]
+  %g = icmp sgt i32 %col, 2
+  br i1 %g, label %pre, label %call
+
+pre:
+  br label %inner
+
+inner:
+  %i = phi i32 [ 0, %pre ], [ %i1, %step ]
+  %hit = icmp eq i32 %i, %col
+  br i1 %hit, label %latch, label %step
+
+step:
+  %i1 = add i32 %i, 1
+  %end = icmp eq i32 %i1, %row
+  br i1 %end, label %call, label %inner
+
+call:
+  %x = add i32 %found, 7
+  br label %latch
+
+latch:
+  %found2 = phi i32 [ %x, %call ], [ %found, %inner ]
+  %next = add i32 %col, 1
+  %done = icmp eq i32 %next, %n
+  br i1 %done, label %exit, label %head
+
+exit:
+  ret i32 %found2
+}
+";
+    let (out, _) = threaded(text);
+    assert_eq!(results(&parsed(&out), INPUTS), results(&parsed(text), INPUTS), "{out}");
+}
