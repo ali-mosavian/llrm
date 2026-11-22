@@ -4729,6 +4729,18 @@ impl Builder<'_> {
         if crate::backend::isel::reads_invariant_memory(self.module, self.function, self.layout, inst) {
             self.dag.invariant_loads.insert(load.node);
         }
+        // `!range` on an integer load: one range's common high bits
+        // (`computeKnownBitsFromRangeMetadata`)
+        if let Some((_, node)) = instruction.metadata.iter().find(|(kind, _)| kind == "range")
+            && let Some(node) = self.module.metadata.get(node.0 as usize)
+            && node.operands.len() == 2
+            && let llrm_mir::types::Type::Int(width) = self.module.context.types.get(instruction.ty)
+            && let Some(range) =
+                llrm_mir::lazyvalueinfo::constant_range_from_metadata(&self.module.context, node, *width)
+        {
+            let known = range.to_known_bits();
+            self.dag.load_ranges.insert(load.node, (known.zero, known.one));
+        }
         let chain = SDValue { node: load.node, res: 1 };
         let token = self.dag.get_token_factor(&[chain]);
         if volatile {
