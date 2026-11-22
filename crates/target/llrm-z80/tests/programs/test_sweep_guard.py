@@ -72,7 +72,15 @@ class RowCount(unittest.TestCase):
         results = [("a", []), ("b", [])]
         line, ok = guard.summary(["a", "b"], results, {}, sdcc, excused={"a"})
         self.assertFalse(ok)
-        self.assertEqual(line, "2 programs 1 failed; rows 0 of 2; no row: b(NOROW)")
+        self.assertEqual(line, "2 programs 1 failed; rows 0 of 2; no row: b(NOROW); excused, no row: a(excused)")
+
+    def test_an_excused_program_without_a_row_is_named_with_its_reason(self):
+        """`--same-width` dropped 9 float programs from a run of 142 and the line read `rows 132 of 142; no row: rint_libcall`
+        alone: the nine were excused (a WRONG f32 output) and unnamed, so the table read 9 cells short with no trace."""
+        results = [("a", [("ours", 1, 1)]), ("f", [])]
+        line, ok = guard.summary(["a", "f"], results, {"f": "ours: WRONG value 0"}, excused={"f"})
+        self.assertTrue(ok)
+        self.assertEqual(line, "2 programs 0 failed; rows 1 of 2; excused, no row: f(ours: WRONG value 0)")
 
     def test_the_sweeps_own_reason_replaces_the_default(self):
         line, ok = guard.summary(["a"], [("a", [("FAILED", 0, 0)])], {"a": "LINKFAIL"})
