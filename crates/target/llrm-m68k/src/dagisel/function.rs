@@ -216,8 +216,12 @@ pub fn select_function_with(
         sizes.push((value, size, align));
     }
     sizes.sort_by_key(|(value, _, _)| info.static_allocas[value]);
-    // DEVIATE SC1: StackColoring over the IR's lifetime markers (`llrm_codegen::backend::stackcoloring`)
-    let objects = llrm_codegen::backend::stackcoloring::share_frame(module, function, &mut info, &sizes);
+    // DEVIATE SC1: StackColoring over the IR's lifetime markers (`llrm_codegen::backend::stackcoloring`), the
+    // surviving objects in the pin's order: a group sits where its largest member did
+    let coloring = llrm_codegen::backend::stackcoloring::color_frame(module, function, &sizes);
+    let count = coloring.objects.len() as i32;
+    info.share_allocas(sizes.iter().zip(&coloring.colors).map(|((value, _, _), &group)| (*value, group)), count);
+    let objects = coloring.objects;
     let mut temporaries = Temporaries::new(info.static_allocas.iter().map(|(_, &index)| index + 1).max().unwrap_or(0));
     let mut selected = Vec::new();
     let mut updates = Vec::new();
