@@ -10,8 +10,8 @@
 //! - the unrotated compile is kept if it is smaller (`keeps_at_size`) and
 //!   executes no more, laid out (`Price::laid_out`);
 //! - the compile that also rotates the left loops is kept if it executes less
-//!   for at most `ROTATION_HOT_BYTES_PER_LOOP` bytes a loop
-//!   (`keeps_rotation_hot`).
+//!   for at most `Tti::rotation_hot_bytes_per_loop` bytes a loop (arm64: 0,
+//!   bytes first) (`keeps_rotation_hot`).
 //!
 //! DEVIATE SD535 (owner llrm-arm64-vec, exit 2026-12-05): the pin expands a
 //! divide by a constant at -Os and keeps it at `minsize`. A module with such a
@@ -208,7 +208,15 @@ pub fn add(
     let before = crate::lir_body::to_lir(function).ok().map(|lowered| lowered.body);
     let early = before.as_ref().and_then(work);
     // A function the layout cannot be read for is priced as it was.
-    let placed = finished(function, blocks, likelihood).as_ref().and_then(work).or(early);
+    // Layout moves jumps, it does not make code run a thousand times more: a
+    // laid-out estimate past `LAID_OUT_LIMIT` times the unplaced one is the
+    // model's frequency running away (a recursive `chop` read 5e11 for 10300),
+    // and the function is priced as it was.
+    let placed = finished(function, blocks, likelihood)
+        .as_ref()
+        .and_then(work)
+        .filter(|placed| early.is_none_or(|early| *placed <= LAID_OUT_LIMIT * early.max(1.0)))
+        .or(early);
     let is_divide = |one: &llrm_codegen::model::lir::Insn| {
         one.what
             .as_ref()
@@ -228,6 +236,10 @@ pub fn add(
         }));
     });
 }
+
+/// How many times the unplaced work the laid-out work of a function may be:
+/// the taken branches and jumps layout adds are a few times the instructions.
+const LAID_OUT_LIMIT: f64 = 8.0;
 
 /// The finished `blocks` of `function` as a body: what runs is the placed
 /// code's, a loop's test copied into its latch and a `b` to the next block
@@ -383,6 +395,7 @@ pub fn keeps_unrotated(
     hot: bool,
     loops: usize,
     cap: Option<i64>,
+    bytes_per_loop: i64,
 ) -> bool {
     if kept.laid_out.is_nan() || other.laid_out.is_nan() || kept.work.is_nan() || other.work.is_nan() {
         return false;
@@ -394,7 +407,7 @@ pub fn keeps_unrotated(
     // OS-TRIAL-CLOCK-CAP) of the laid-out work: a 0.3% model difference
     // does not outweigh a 10% smaller object (fib -Os, 124 -> 112 B).
     trial::keeps_smaller_at_size(added, laid_saved, kept.laid_out.round() as i64, cap)
-        && !(hot && trial::keeps_rotation_hot(-saved, -added, loops, trial::ROTATION_HOT_BYTES_PER_LOOP))
+        && !(hot && trial::keeps_rotation_hot(-saved, -added, loops, bytes_per_loop))
 }
 
 /// DEVIATE INLINEHINT-GROWTH-TRIAL (owner m16-b, exit 2026-12-20): whether the
@@ -429,13 +442,14 @@ pub fn keeps_rotated(
     kept: Price,
     other: Price,
     loops: usize,
+    bytes_per_loop: i64,
 ) -> bool {
     !(kept.work.is_nan() || other.work.is_nan())
         && trial::keeps_rotation_hot(
             (kept.work - other.work).round() as i64,
             other.bytes - kept.bytes,
             loops,
-            trial::ROTATION_HOT_BYTES_PER_LOOP,
+            bytes_per_loop,
         )
 }
 

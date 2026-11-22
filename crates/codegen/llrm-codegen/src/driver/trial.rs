@@ -133,9 +133,6 @@ impl Dimension {
         let mut all = Vec::new();
         if tti.rotation_guard_must_fold_at_size() && tti.rotation_trial_at_size() {
             all.push(Dimension::Unrotate { hot: tti.rotation_hot_at_size(), bytes: tti.rotation_hot_bytes_per_loop() });
-            if tti.rotation_hot_at_size() {
-                all.push(Dimension::RotateMore { bytes: tti.rotation_hot_bytes_per_loop() });
-            }
         }
         if tti.switch_lookup_trial_at_size() && !llrm_support::env_flag!("LLRM_NO_SWITCH_LOOKUP_TRIAL") {
             all.push(Dimension::KeepSwitch);
@@ -149,13 +146,18 @@ impl Dimension {
         if tti.opt_size_inline_guard_yields_to_inlinehint() && !llrm_support::env_flag!("LLRM_NO_INLINEHINT_TRIAL") {
             all.push(Dimension::KeepHintedCalls);
         }
-        if tti.opt_size_inline_hot_growth_percent().is_some()
-            && !llrm_support::env_flag!("LLRM_NO_HOT_INLINE_TRIAL")
-        {
+        if tti.opt_size_inline_hot_growth_percent().is_some() && !llrm_support::env_flag!("LLRM_NO_HOT_INLINE_TRIAL") {
             all.push(Dimension::KeepHotCalls);
         }
         if let Some(limit) = tti.unroll_trial_at_size().filter(|_| !NO_SIZE_UNROLL.with(|one| one.get())) {
             all.push(Dimension::Unroll { limit, bytes_strict: tti.unroll_trial_bytes_strict() });
+        }
+        // Last: the trials that save bytes are decided first, so the bytes the
+        // hot rotation adds are priced on the smallest code they made and
+        // cannot displace one (QB suggest.c, arm64: +64 B kept first, -52 B put
+        // back).
+        if tti.rotation_guard_must_fold_at_size() && tti.rotation_trial_at_size() && tti.rotation_hot_at_size() {
+            all.push(Dimension::RotateMore { bytes: tti.rotation_hot_bytes_per_loop() });
         }
         all
     }
@@ -231,10 +233,13 @@ impl Dimension {
             // The object without the latch copies is smaller.
             Dimension::KeepLatch => ("keep-latch", trial::keeps_smaller_at_size(added, saved, base_work, cap)),
             Dimension::KeepSwitch => ("keep-switch", trial::keeps_smaller_at_size(added, saved, base_work, cap)),
-            // The loop is the smaller object; it stays where the call's clocks (priced at the loop's own trip weight,
-            // see `library_cycles`) do not beat it past the cap.
+            // The loop is the smaller object; it stays where the call's clocks
+            // (priced at the loop's own trip weight, see `library_cycles`) do
+            // not beat it past the cap.
             Dimension::KeepCopyLoop => ("keep-copy-loop", trial::keeps_smaller_at_size(added, saved, base_work, cap)),
-            Dimension::KeepHintedCalls => ("keep-hinted-calls", trial::keeps_smaller_at_size(added, saved, base_work, cap)),
+            Dimension::KeepHintedCalls => {
+                ("keep-hinted-calls", trial::keeps_smaller_at_size(added, saved, base_work, cap))
+            }
             Dimension::KeepHotCalls => ("keep-hot-calls", trial::keeps_smaller_at_size(added, saved, base_work, cap)),
             Dimension::Unroll { bytes_strict, .. } => {
                 ("unroll-os", measured && trial::keeps_unroll_at_size(saved, added, noted.unroll.0.len(), bytes_strict))
@@ -261,13 +266,15 @@ fn compiled_with<T>(
     }
 }
 
-/// The words a copy of unknown length is priced at: the trips the frequency model gives a loop of unknown count
-/// (a branch to stay of 31 in 32).
+/// The words a copy of unknown length is priced at: the trips the frequency
+/// model gives a loop of unknown count (a branch to stay of 31 in 32).
 const UNKNOWN_COPY_WORDS: f64 = 32.0;
 
-/// The clocks the library's copy routines take that `done` calls, which the module does not define and the work
-/// would otherwise price as a call and return alone: `memcpy` is `rep movsd` (startup, then a cell a word) over
-/// the words a loop of unknown count runs, so a copy loop and the call LoopIdiom made of it are priced alike.
+/// The clocks the library's copy routines take that `done` calls, which the
+/// module does not define and the work would otherwise price as a call and
+/// return alone: `memcpy` is `rep movsd` (startup, then a cell a word) over the
+/// words a loop of unknown count runs, so a copy loop and the call LoopIdiom
+/// made of it are priced alike.
 fn library_cycles(
     one: &masm::Procedure,
     done: &executed::Executed,
@@ -300,7 +307,8 @@ fn rotation_work(
         let done = if proven { executed::executed(&one.body)? } else { executed::executed_unproven(&one.body)? };
         let jumps = done.jump_cycles(cpu).ok()?;
         let exchanges = done.exchange_cycles(cpu).ok()?;
-        let work = done.instructions - done.branches - done.jumps + done.memory + jumps + exchanges + done.call_cycles(cpu);
+        let work =
+            done.instructions - done.branches - done.jumps + done.memory + jumps + exchanges + done.call_cycles(cpu);
         let work = work + library_cycles(one, &done, cpu);
         let calls = done
             .calls
@@ -364,6 +372,8 @@ struct Variant {
     built: masm::Module,
     program: Program,
     folded: bool,
+    /// A function calls a locally binding callee the facts skip.
+    ipra: bool,
 }
 
 /// `program` assembled, noting whether the backend folded a leaf.
@@ -373,8 +383,10 @@ fn built(
     options: &Options,
 ) -> Result<Variant, String> {
     let _ = crate::backend::leaffold::take_folded();
+    let _ = trial::take_ipra_matters();
     let built = assembled(&program, name, options)?;
-    Ok(Variant { built, program, folded: crate::backend::leaffold::take_folded() })
+    let ipra = trial::take_ipra_matters();
+    Ok(Variant { built, program, folded: crate::backend::leaffold::take_folded(), ipra })
 }
 
 /// DEVIATE LEAF-FOLD-TRIAL: where the backend folded a leaf's constant into the
@@ -387,20 +399,53 @@ fn with_leaf_trial(
     options: &Options,
     unpadded: &dyn Fn(&masm::Module) -> Option<Sizes>,
 ) -> Result<masm::Module, String> {
+    let mut variant = variant;
+    let smaller_than = |first: &masm::Module, second: &masm::Module| {
+        matches!(
+            (unpadded(first), unpadded(second)),
+            (Some(a), Some(b)) if b.total() < a.total()
+        )
+    };
+    // DEVIATE IPRA-OS-TRIAL: the module assembled with the locally binding
+    // callees' register facts, kept where the object is smaller.
+    let mut ipra_on = false;
+    if variant.ipra && ipra_trial(options) {
+        let second = trial::with_ipra_binds_local(|| assembled(&variant.program, name, options))?;
+        ipra_on = smaller_than(&variant.built, &second);
+        if llrm_support::debug::enabled("trial") {
+            eprintln!("trial ipra-local: {}", if ipra_on { "kept" } else { "put back" });
+        }
+        if ipra_on {
+            variant.built = second;
+        }
+    }
     if !variant.folded || !leaf_fold_trial(options) {
+        if ipra_on {
+            stage_files(options, "", &variant.built)?;
+        }
         return Ok(variant.built);
     }
-    let second = crate::backend::leaffold::without(|| assembled(&variant.program, name, options))?;
-    let smaller = matches!(
-        (unpadded(&variant.built), unpadded(&second)),
-        (Some(a), Some(b)) if b.total() < a.total()
-    );
+    let second = crate::backend::leaffold::without(|| {
+        if ipra_on {
+            trial::with_ipra_binds_local(|| assembled(&variant.program, name, options))
+        } else {
+            assembled(&variant.program, name, options)
+        }
+    })?;
+    let smaller = smaller_than(&variant.built, &second);
     if llrm_support::debug::enabled("trial") {
         eprintln!("trial leaffold: {}", if smaller { "put back" } else { "kept" });
     }
     let chosen = if smaller { second } else { variant.built };
     stage_files(options, "", &chosen)?;
     Ok(chosen)
+}
+
+/// Whether the module is assembled with and without IPRA-OS-TRIAL: a size
+/// build on a target that has it.
+fn ipra_trial(options: &Options) -> bool {
+    options.cpu().is_ok_and(|cpu| cpu.size && cpu.target().tti().is_some_and(|tti| tti.ipra_trial_at_size()))
+        && !llrm_support::env_flag!("LLRM_NO_IPRA_TRIAL")
 }
 
 /// Whether the module is assembled with and without LEAF-FOLD-OS: a size build
@@ -428,7 +473,7 @@ pub fn compiled_module_trying(
     }
     let dimensions = Dimension::of(options);
     if dimensions.is_empty() {
-        if !leaf_fold_trial(options) {
+        if !leaf_fold_trial(options) && !ipra_trial(options) {
             return compiled_module(module, name, options);
         }
         let variant = built(optimized_program(module, options)?, name, options)?;
@@ -529,8 +574,12 @@ fn compiled_module_at_size(
                 .map(|(_, function)| function.instruction_count())
                 .sum()
         };
-        let price =
-            |one: &masm::Module| Some((unpadded(one)?, rotation_work(one, options, dimension.prices_proven_trips(), dimension.prices_called_work())));
+        let price = |one: &masm::Module| {
+            Some((
+                unpadded(one)?,
+                rotation_work(one, options, dimension.prices_proven_trips(), dimension.prices_called_work()),
+            ))
+        };
         if 2 * size(&base.program.modules[0], Some(&cut)) >= size(&base.program.modules[0], None) {
             let variant = built(program, name, &again)?;
             let pays = matches!(
@@ -569,8 +618,12 @@ fn compiled_module_at_size(
         let program = compiled_with(&accepted, || optimized_program(module.clone(), &again))?;
         let _ = Noted::take();
         let together = built(program, name, &again)?;
-        let price =
-            |one: &masm::Module| Some((unpadded(one)?, rotation_work(one, options, dimension.prices_proven_trips(), dimension.prices_called_work())));
+        let price = |one: &masm::Module| {
+            Some((
+                unpadded(one)?,
+                rotation_work(one, options, dimension.prices_proven_trips(), dimension.prices_called_work()),
+            ))
+        };
         let pays = matches!(
             (price(&chosen.built), price(&together.built)),
             (Some(a), Some(b)) if dimension.keeps(&noted, a, b, cap)

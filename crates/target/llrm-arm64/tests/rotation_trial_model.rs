@@ -46,3 +46,36 @@ fn a_loop_unrotated_is_kept_for_bytes_when_laid_out_within_the_clock_cap_at_os()
     let unrotated = log.lines().find(|line| line.starts_with("trial unrotated:")).expect("premise: the trial ran");
     assert!(unrotated.ends_with(": kept"), "{log}");
 }
+
+/// A recursive function read 5e11 laid out against 10,300 before layout (the
+/// frequency model ran away), so the unrotated trial of recchop -Os compared
+/// a laid-out price that was not a price: `laid_out` is the work as placed,
+/// layout adds a few taken branches, never orders of magnitude.
+#[test]
+fn the_laid_out_work_of_a_recursive_function_stays_near_its_unplaced_work() {
+    let dir = tempfile::tempdir().unwrap();
+    let (input, output) = (dir.path().join("t.ll"), dir.path().join("t.s"));
+    std::fs::write(&input, include_str!("data/recursive_loop_body.ll")).unwrap();
+    let said = std::process::Command::new(env!("CARGO_BIN_EXE_llrm-arm64-llc"))
+        .args(["-S", "-Os", "-o"])
+        .arg(&output)
+        .arg(&input)
+        .env("LLRM_DEBUG", "trial")
+        .output()
+        .unwrap();
+    assert!(said.status.success(), "{}", String::from_utf8_lossy(&said.stderr));
+    let log = String::from_utf8_lossy(&said.stderr);
+    let line = log.lines().find(|line| line.starts_with("trial unrotated:")).expect("premise: the trial ran");
+    let numbers = |key: &str| -> Vec<f64> {
+        line.match_indices(key)
+            .map(|(at, _)| {
+                let rest = &line[at + key.len()..];
+                rest[..rest.find([',', ' ']).unwrap()].parse().unwrap()
+            })
+            .collect()
+    };
+    let (work, laid_out) = (numbers("work: "), numbers("laid_out: "));
+    for (work, laid_out) in work.into_iter().zip(laid_out) {
+        assert!(laid_out < 100.0 * work, "laid out {laid_out} for {work}: {line}");
+    }
+}

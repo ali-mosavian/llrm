@@ -931,6 +931,10 @@ impl Tti for X86 {
         self.tuning.ipra_binds_local
     }
 
+    fn ipra_trial_at_size(&self) -> bool {
+        self.tuning.ipra_trial_at_size
+    }
+
     fn unroll_trial_at_size(&self) -> Option<u32> {
         self.tuning.unroll_trial_at_size
     }

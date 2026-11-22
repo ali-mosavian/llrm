@@ -88,7 +88,7 @@ impl CombineHooks for MosLateCombines {
         &self,
         op: ISD,
     ) -> bool {
-        matches!(op, ISD::Or | ISD::Add)
+        matches!(op, ISD::Or | ISD::Add | ISD::UAddOCarry)
     }
 
     fn perform_dag_combine(
@@ -97,7 +97,10 @@ impl CombineHooks for MosLateCombines {
         node: SDValue,
         _level: CombineLevel,
     ) -> Option<SDValue> {
-        funnel_by_one(dag, node)
+        match dag.opcode(node) {
+            ISD::UAddOCarry => load_to_the_right(dag, node),
+            _ => funnel_by_one(dag, node),
+        }
     }
 }
 
@@ -231,6 +234,33 @@ impl CombineHooks for MosCombines {
             _ => None,
         }
     }
+}
+
+/// `uaddo_carry (load p), x, c` is `uaddo_carry x, (load p), c`: the load is
+/// the operand the memory forms (`ADDOC8M`, `ADDOC16MX`, `ADDOC8P`...) take.
+/// The matcher commutes the two-operand `uaddo` but not the three-operand carry
+/// form, so a sum whose total is the second operand kept a copy of every loaded
+/// byte (`lda buf+2,x; sta rc7; ..; lda rc7; adc rc2`, ring's `total +=
+/// buf[i]`).
+///
+/// Pass: LLVM `DAGCombiner::visitUADDO_CARRY`: "canonicalize constant to RHS".
+/// Translation: the same swap, for a load (a constant stays last: the generic
+/// fold would swap it back).
+fn load_to_the_right(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    let (a, b, carry) = (dag.operand(node, 0), dag.operand(node, 1), dag.operand(node, 2));
+    let loaded = |dag: &SelectionDAG, v: SDValue| {
+        v.res == 0 && dag.opcode(v) == ISD::Load && dag.has_one_use_of_value(v) && dag.value_type(v) != EVT::OTHER
+    };
+    // the generic combine puts a constant last: swapping it first would be
+    // undone, to no end
+    if !loaded(dag, a) || dag.opcode(b) == ISD::Load || dag.constant(b).is_some() {
+        return None;
+    }
+    let values = dag.node(node).values.clone();
+    Some(dag.get_node_multi(ISD::UAddOCarry, &values, &[b, a, carry]))
 }
 
 /// A global read by two users, one a memory-operand op, is read again by that

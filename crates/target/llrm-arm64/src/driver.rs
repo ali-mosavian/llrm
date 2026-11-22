@@ -386,7 +386,7 @@ fn lower_function(
     let blocks = crate::expand_pseudo::run(blocks);
     let mut tables = crate::jumptable::tables_of(&machine);
     let dead_ends = crate::mfunc::dead_end_labels(&machine);
-    let (blocks, likelihood) = crate::layout::fold_with_odds(
+    let (blocks, likelihood, dead_ends) = crate::layout::fold_with_odds(
         blocks,
         &mut tables,
         &crate::layout::odds_by_label_number(
@@ -624,6 +624,8 @@ fn compiled(
     let hot = asked.unwrap_or(false);
     let rotation_cap = crate::tti::AArch64::of_cpu(platform.cpu())
         .and_then(|tti| llrm_mir::tti::Tti::os_trial_clock_cap_percent(&tti));
+    let rotation_bytes = crate::tti::AArch64::of_cpu(platform.cpu())
+        .map_or(0, |tti| llrm_mir::tti::Tti::rotation_hot_bytes_per_loop(&tti));
     use llrm_transforms::trial;
     let _ = (
         trial::take_left(),
@@ -655,18 +657,10 @@ fn compiled(
     };
     if !notes.rotated.is_empty()
         && try_one(&mut best, (true, false, false, false, 0), "unrotated", &|kept, now| {
-            crate::trial::keeps_unrotated(kept, now, hot, notes.loops, rotation_cap)
+            crate::trial::keeps_unrotated(kept, now, hot, notes.loops, rotation_cap, rotation_bytes)
         })?
     {
         state.0 = true;
-    }
-    if hot
-        && !notes.left.is_empty()
-        && try_one(&mut best, (state.0, true, false, false, 0), "rotation-hot", &|kept, now| {
-            crate::trial::keeps_rotated(kept, now, notes.left_loops)
-        })?
-    {
-        state = (false, true, false, 0);
     }
     if notes.merged > 0 {
         state.2 = try_one(&mut best, (state.0, state.1, true, false, 0), "unmerged", &|kept, now| {
@@ -688,6 +682,18 @@ fn compiled(
         })?
     {
         state.3 = 2;
+    }
+    // Last of the trials that trade bytes: it is priced on the smallest object
+    // the others made, so a few bytes it adds cannot displace a trial that
+    // saves more (QB suggest.c: rotation-hot +64 B, kept first, put
+    // keep-negative-calls -52 B back).
+    if hot
+        && !notes.left.is_empty()
+        && try_one(&mut best, (state.0, true, state.2, false, state.3), "rotation-hot", &|kept, now| {
+            crate::trial::keeps_rotated(kept, now, notes.left_loops, rotation_bytes)
+        })?
+    {
+        state.1 = true;
     }
     if notes.divides {
         try_one(&mut best, (state.0, state.1, state.2, true, state.3), "divides", &|kept, now| {
