@@ -1563,6 +1563,43 @@ def test_references_skip_levels_they_are_not_built_at(tmp_path, monkeypatch):
     assert asked == ["O1", "O2", "Os"]
 
 
+def test_a_source_touched_mid_run_refuses_the_next_reference_level_not_the_end(tmp_path, monkeypatch):
+    """The m16 C run of 2026-11-22 measured for 3 h, then died at its end ("stale binaries": a checkout in its source tree) and wrote nothing.
+    The check now runs before each reference level: a stale tree stops the run at the next one."""
+    (tmp_path / "lib").mkdir()
+    (tmp_path / "lib" / "C0M.OBJ").write_bytes(b"")
+    asked, calls = [], []
+
+    def bin_dir():
+        calls.append(1)
+        if len(calls) > 1:
+            raise SystemExit("stale binaries in /x")
+
+    monkeypatch.setattr(bench.llrmbin, "bin_dir", bin_dir)
+    monkeypatch.setattr(bench, "BORLAND", {"bcc": (tmp_path, "bcc", {"O1": "-O1", "O2": "", "Os": "-O1"})})
+    monkeypatch.setattr(bench, "reference_programs", lambda selected: [])
+    monkeypatch.setattr(bench, "with_startup", lambda selected, timing: selected)
+    monkeypatch.setattr(bench, "build_borland", lambda language, variants, opt, folder: asked.append(opt) or {})
+    monkeypatch.setattr(bench, "BASIC_REFERENCES", {})
+    with pytest.raises(SystemExit):
+        bench.measure_references([], ["O1", "O2", "Os"], tmp_path)
+    assert asked == ["O1"]
+
+
+def test_the_compilers_own_rows_are_kept_when_the_references_fail(tmp_path, monkeypatch, capsys):
+    """The same run lost its 204 measured rows with the references that failed after them: they are written, as `.partial`, before the references start."""
+    out = tmp_path / "c.json"
+    monkeypatch.setattr(sys, "argv", ["bench.py", "--references", "--no-judge", "--json", str(out), "--work", str(tmp_path)])
+    monkeypatch.setattr(bench, "measure_all", lambda *a, **k: {("p", "c", "O1"): {"code_bytes": 9, "clocks": 3}})
+    monkeypatch.setattr(bench, "measure_references", lambda *a, **k: (_ for _ in ()).throw(SystemExit("stale binaries")))
+    monkeypatch.setattr(bench, "benchmarks", lambda selected: [])
+    monkeypatch.setitem(sys.modules, "flag_parity", types.SimpleNamespace(check=lambda: None))
+    with pytest.raises(SystemExit):
+        bench.main()
+    assert json.loads(out.with_name("c.json.partial").read_text()) == {"p/c/O1": {"code_bytes": 9, "clocks": 3}}
+    assert not out.exists()
+
+
 def test_a_timed_out_borland_job_says_so_not_no_object(tmp_path, monkeypatch):
     """bcc -Os read "bcc: no object" for all 31 programs: the one DOSBox job outlived run_limited's wall limit (the guard had stopped it), its "timed out" text was dropped."""
     home = tmp_path / "home"
