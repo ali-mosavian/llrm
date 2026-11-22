@@ -266,12 +266,54 @@ pub fn assembly(
     text: &str,
     request: &Request,
 ) -> Result<String, String> {
+    crate::dagisel::function::take_step_sites();
+    let kept = assembly_flow(text, request)?;
+    let steps = crate::dagisel::function::take_step_sites();
+    long_step_trial(kept, steps, text, request)
+}
+
+fn assembly_flow(
+    text: &str,
+    request: &Request,
+) -> Result<String, String> {
     llrm_transforms::trial::take_speed_unrolls();
     let built = program(text, request)?;
     let made = llrm_transforms::trial::take_speed_unrolls().made;
     let size = instructions(&built);
     let kept = assembly_trials(built, text, request)?;
     speed_unroll_trial(kept, made, size, text, request)
+}
+
+/// DEVIATE 6502-LONG-STEP-TRIAL (owner llrm-target-6502, exit 2026-12-06): a
+/// module that has a long plus or minus one stepped with an early exit
+/// (`INC32`/`DEC32`, llvm-mos `G_INC`/`G_DEC`) is compiled again with the carry
+/// chain, and the text with fewer bytes is kept. The pin has one form. Reason:
+/// the stepping chain has labels and branches, which the outliner (the pin's
+/// `MachineOutliner`) does not share, and the carry chain of many sites is one
+/// `jsr` each (div_constants_long -O1: 13,520 B with the chain, 14,464
+/// stepped), while one loop counter is 14 B stepped against 22 B as a chain
+/// (licm_graph_callee_footprint: 306 B, 290 B).
+///
+/// Compile time: only a module with such a step compiles twice.
+fn long_step_trial(
+    kept: String,
+    steps: usize,
+    text: &str,
+    request: &Request,
+) -> Result<String, String> {
+    if steps == 0 || request.level == Level::O0 || std::env::var_os("LLRM_6502_NO_STEP_TRIAL").is_some() {
+        return Ok(kept);
+    }
+    let debug = std::env::var_os("LLRM_DEBUG_TRIAL").is_some();
+    let Ok(other) = crate::dagisel::function::with_long_steps(false, || assembly_flow(text, request)) else {
+        return Ok(kept);
+    };
+    crate::dagisel::function::take_step_sites();
+    let (kept_bytes, other_bytes) = (image_bytes_of(&kept, request)?, image_bytes_of(&other, request)?);
+    if debug {
+        eprintln!("trial long step: {steps} steps; {other_bytes} B carry chain against {kept_bytes} B stepped");
+    }
+    Ok(if other_bytes < kept_bytes { other } else { kept })
 }
 
 fn assembly_trials(
@@ -438,9 +480,12 @@ fn trial_inlined(
         trial::restore(kept_unroll);
         return Ok((built, Vec::new(), Some(kept_all), joint));
     }
+    // Every inline kept: the pair (the pin's inlines with the loops they bring
+    // unrolled in one mid-end) is still priced if the unroll trial puts the
+    // unroll back (loop_fusion -O2 with byte-index loops).
     if flags.iter().all(|one| *one) {
         trial::restore(other_unroll);
-        return Ok((other, sites, None, false));
+        return Ok((other, sites, None, joint));
     }
     let chosen: Vec<_> = sites.into_iter().zip(&flags).filter(|(_, kept)| **kept).map(|(site, _)| site).collect();
     let Ok(third) = trial::with_inlined(&chosen, || program(text, request)) else {
@@ -752,7 +797,8 @@ fn tail(
     // `LLRM_6502_OUTLINE_PLAIN=0` is the kill switch, for an A/B of one binary
     let plain = (outlined
         && crate::copyprop::enabled(std::env::var_os("LLRM_6502_OUTLINE_PLAIN").as_deref())
-        && plain_pieces.iter().zip(&pieces).any(|(plain, piece)| plain != piece)).then(|| {
+        && plain_pieces.iter().zip(&pieces).any(|(plain, piece)| plain != piece))
+    .then(|| {
         let mut plain = plain_pieces.concat();
         for (name, label) in &data.1 {
             plain = plain.replace(name.as_str(), label);
@@ -766,7 +812,9 @@ fn tail(
             let mut outlined = crate::asm::Asm::parse(&crate::outline::run_priced(&plain, rate, share));
             crate::peephole::drop_known_loads(&mut outlined);
             let plain = after(outlined.text());
-            let bytes = |text: &str| crate::timing::estimate(request.cpu, &crate::alloc::without_lines(text)).map(|priced| priced.bytes);
+            let bytes = |text: &str| {
+                crate::timing::estimate(request.cpu, &crate::alloc::without_lines(text)).map(|priced| priced.bytes)
+            };
             match (bytes(&kept), bytes(&plain)) {
                 (Ok(kept_bytes), Ok(plain_bytes)) if plain_bytes < kept_bytes => plain,
                 _ => kept,

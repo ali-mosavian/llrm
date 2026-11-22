@@ -15,16 +15,23 @@ pub fn assembly(
 ) -> Result<String, String> {
     let symbol_of = |name: &str| symbol(name);
     let mut out = String::new();
-    for variable in variables(module, layout, &symbol_of)? {
-        if matches!(
-            variable.name.as_str(),
-            "llvm.global_ctors" | "llvm.global_dtors"
-        ) {
-            return Err(format!("{}: constructors and destructors are not supported", variable.name));
-        }
+    for variable in with_constructors(variables(module, layout, &symbol_of)?)? {
         object(&mut out, &variable);
     }
     Ok(out)
+}
+
+/// `llvm.global_ctors` as the nameless table of init-function pointers the
+/// loader calls before `main` (`.init_array`); destructors are refused.
+pub fn with_constructors(variables: Vec<Variable>) -> Result<Vec<Variable>, String> {
+    variables
+        .into_iter()
+        .map(|variable| match variable.name.as_str() {
+            "llvm.global_ctors" => Ok(llrm_mir::image::constructor_table(&variable, 4, true)),
+            "llvm.global_dtors" => Err("llvm.global_dtors: destructors are not supported".to_owned()),
+            _ => Ok(variable),
+        })
+        .collect()
 }
 
 /// `\01` marks a name to be used as written.
@@ -33,7 +40,9 @@ pub(crate) fn symbol(name: &str) -> String {
 }
 
 fn section(variable: &Variable) -> &'static str {
-    if variable.zero && !variable.constant {
+    if variable.name.is_empty() {
+        ".init_array,\"aw\""
+    } else if variable.zero && !variable.constant {
         ".bss"
     } else if variable.constant {
         ".rodata"
@@ -58,7 +67,9 @@ fn object(
         }
         Export::Local => {}
     }
-    let _ = writeln!(out, "{name}:");
+    if !name.is_empty() {
+        let _ = writeln!(out, "{name}:");
+    }
     if section(variable) == ".bss" {
         let _ = writeln!(out, "\t.skip\t{}", variable.bytes.len().max(1));
         return;

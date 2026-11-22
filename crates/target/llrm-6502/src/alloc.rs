@@ -60,7 +60,7 @@ fn rc(n: u8) -> RegId {
 /// The zero-page bytes the imaginary registers may use on the platform being
 /// compiled for (`Platform::zero_page`): `rc0`..`rc15` and, above them, as many
 /// scratch cells as it has room for.
-const BASE_CELLS: u8 = 16;
+pub(crate) const BASE_CELLS: u8 = 16;
 
 /// What a byte of code is worth against a clock, per level (the tuning struct
 /// of this target): a size-reducing choice is taken when each byte it saves
@@ -374,11 +374,14 @@ fn runtime_clobbers(callee: &str) -> Option<std::sync::Arc<std::collections::BTr
 }
 
 /// The names a `jsr callee` may be written as: `emit_with` resolves the entry
-/// of a long operation (`_fast`, `_fast_byte`, `_fast_small`, `_fast_lean`) after the
-/// allocation, and the registers the call reads are the same in each.
+/// of a long operation (`_fast`, `_fast_byte`, `_fast_small`, `_fast_lean`)
+/// after the allocation, and the registers the call reads are the same in each.
 fn entries_of(callee: &str) -> Vec<String> {
     let base = callee.strip_suffix("_byte").unwrap_or(callee);
-    ["_fast", "_fast_byte", "_fast_small", "_fast_lean", "_byte", ""].iter().map(|entry| format!("{base}{entry}")).collect()
+    ["_fast", "_fast_byte", "_fast_small", "_fast_lean", "_byte", ""]
+        .iter()
+        .map(|entry| format!("{base}{entry}"))
+        .collect()
 }
 
 fn imaginary() -> u8 {
@@ -1859,7 +1862,10 @@ impl Builder {
         for ((d, a), second) in [(dl, al), (dh, ah)].into_iter().zip([format!("{symbol},x"), format!("{symbol}+1,x")]) {
             self.copy(acc, a);
             let second = Operand::Symbol(second, 0);
-            self.push(Inst::new(Kind::Op(mnemonic), vec![Operand::Def(acc), Operand::Use(acc), second, Operand::Use(x)]));
+            self.push(Inst::new(
+                Kind::Op(mnemonic),
+                vec![Operand::Def(acc), Operand::Use(acc), second, Operand::Use(x)],
+            ));
             self.copy(d, acc);
         }
         Ok(())
@@ -2486,8 +2492,8 @@ pub fn build_with_places(
                 let symbol = indexed_address(&o[2], &o[3]).map_err(Unsupported)?;
                 b.alu_indexed(mnemonic, carry, name(&o[0])?, name(&o[1])?, symbol, name(&o[4])?)?
             }
-            // the bytes of a wide add or subtract read where they lie: the carry
-            // out is C, and the carry in is the C the previous byte left
+            // the bytes of a wide add or subtract read where they lie: the
+            // carry out is C, and the carry in is the C the previous byte left
             op::ADDO8M | op::SUBO8M | op::ADDOC8M | op::SUBOC8M => {
                 let (mnemonic, carry, at) = match inst.opcode {
                     op::ADDO8M => ("ADC", Some("CLC"), 3),
@@ -2887,6 +2893,29 @@ pub fn build_with_places(
                     b.push(step);
                 }
             }
+            // a long plus or minus one: the low byte steps, and each byte above
+            // it only when the byte below wrapped (llvm-mos `G_INC`/`G_DEC`),
+            // as a word does (`word_step`)
+            code @ (op::INC32 | op::DEC32) => {
+                let up = code == op::INC32;
+                let (low, high) = (b.read_word(name(&o[2])?)?, b.read_word(name(&o[3])?)?);
+                let (dl, dh) = (b.write_word(name(&o[0])?)?, b.write_word(name(&o[1])?)?);
+                let lanes = [dl.0, dl.1, dh.0, dh.1];
+                for (r, from) in lanes.into_iter().zip([low.0, low.1, high.0, high.1]) {
+                    b.copy(r, from);
+                    // `inc` has no accumulator form on the NMOS 6502, and the
+                    // borrow test reads through a
+                    b.require(r, Class(Class::X | Class::Y | Class::M))?;
+                }
+                let mut operands: Vec<Operand> = lanes.iter().map(|r| Operand::Def(*r)).collect();
+                operands.extend(lanes.iter().map(|r| Operand::Use(*r)));
+                if !up {
+                    let scratch = b.fresh();
+                    b.require(scratch, Class(Class::A))?;
+                    operands.push(Operand::Def(scratch));
+                }
+                b.push(Inst::new(Kind::Op(if up { "INC32" } else { "DEC32" }), operands));
+            }
             // one bit crosses between two words: the carry of a shift of the
             // word that gives it up, rotated into the word that takes it
             code @ (op::FSHL1 | op::FSHR1) => {
@@ -2960,7 +2989,8 @@ pub fn build_with_places(
                         .iter()
                         .all(|cell| b.constants.get(cell) == Some(&0))
                 };
-                let called = if byte_divisor || byte_multiplier { format!("{routine}_byte") } else { routine.to_owned() };
+                let called =
+                    if byte_divisor || byte_multiplier { format!("{routine}_byte") } else { routine.to_owned() };
                 let mut arguments = Vec::new();
                 let (first, second) = (b.read_word(name(&o[2])?)?, b.read_word(name(&o[3])?)?);
                 if matches!(code, op::SHL32 | op::SRL32 | op::SRA32) {
@@ -4625,6 +4655,45 @@ fn emit_with<const STACK: bool>(
                     let (low, high) = (step(regs[0]), step(regs[1]));
                     writeln!(out, "  {low}\n  bne _pa{made}\n  {high}\n_pa{made}:").unwrap();
                 }
+                // d := d + 1 on four cells: each byte above steps when the one
+                // below wrapped to 0
+                (Kind::Op("INC32"), _) => {
+                    made += 1;
+                    let step = |r| match r {
+                        reg::X => "inx".to_owned(),
+                        reg::Y => "iny".to_owned(),
+                        cell => format!("inc {}", register_name(cell)),
+                    };
+                    write!(out, "  {}\n", step(regs[0])).unwrap();
+                    for r in &regs[1..4] {
+                        writeln!(out, "  bne _pa{made}\n  {}", step(*r)).unwrap();
+                    }
+                    writeln!(out, "_pa{made}:").unwrap();
+                }
+                // d := d - 1 on four cells: each byte above steps when every
+                // byte below was 0; the tests run before the steps, nested
+                // (`lda b0; bne 0; lda b1; bne 1; lda b2; bne 2; dec b3; 2: dec
+                // b2; ..`)
+                (Kind::Op("DEC32"), _) => {
+                    made += 1;
+                    let read = |r| match r {
+                        reg::X => "txa".to_owned(),
+                        reg::Y => "tya".to_owned(),
+                        cell => format!("lda {}", register_name(cell)),
+                    };
+                    let step = |r| match r {
+                        reg::X => "dex".to_owned(),
+                        reg::Y => "dey".to_owned(),
+                        cell => format!("dec {}", register_name(cell)),
+                    };
+                    for (at, r) in regs[..3].iter().enumerate() {
+                        writeln!(out, "  {}\n  bne _pa{made}_{at}", read(*r)).unwrap();
+                    }
+                    writeln!(out, "  {}", step(regs[3])).unwrap();
+                    for at in (0..3).rev() {
+                        writeln!(out, "_pa{made}_{at}:\n  {}", step(regs[at])).unwrap();
+                    }
+                }
                 // d := d - 1 on two cells: the high byte steps when the low was
                 // 0
                 (Kind::Op("DEC16"), _) => {
@@ -4760,8 +4829,9 @@ fn emit_with<const STACK: bool>(
                     } else if division && byte {
                         "_fast_byte"
                     } else if division && !FAST_DIVISION.with(|f| f.get()) {
-                        // the cold division of a speed level links the smallest wide path;
-                        // the size levels' divisions that pay run the faster unrolled one
+                        // the cold division of a speed level links the smallest
+                        // wide path; the size levels'
+                        // divisions that pay run the faster unrolled one
                         if speed { "_fast_lean" } else { "_fast_small" }
                     } else if division
                         || matches!(callee, "__ashlsi3" | "__lshrsi3" | "__ashrsi3")
@@ -5063,9 +5133,10 @@ fn emit_with<const STACK: bool>(
                 }
                 (Kind::Op("CSAVE"), _) => {
                     if after[b][i].contains(&reg::Y) {
-                        // `y` is the count the helper takes: the same bytes pushed
-                        // one at a time, the argument
-                        // in `a` waiting in an index register nothing holds,
+                        // `y` is the count the helper takes: the same bytes
+                        // pushed one at a time, the
+                        // argument in `a` waiting in an
+                        // index register nothing holds,
                         // with all three live in a cell nothing holds
                         let keep = [(reg::Y, "y"), (reg::X, "x")].into_iter().find(|(r, _)| !after[b][i].contains(r));
                         let cell = free_cell.map(register_name);
@@ -5090,7 +5161,8 @@ fn emit_with<const STACK: bool>(
                             }
                         }
                     } else if after[b][i].contains(&reg::X) || a_live {
-                        // a value in `a` or `x` (a word argument): the helper that keeps them
+                        // a value in `a` or `x` (a word argument): the helper
+                        // that keeps them
                         writeln!(out, "  ldy #{}\n  jsr __csave_ax", regs.len()).unwrap();
                     } else {
                         writeln!(out, "  ldy #{}\n  jsr __csave", regs.len()).unwrap();
@@ -5106,7 +5178,8 @@ fn emit_with<const STACK: bool>(
                     writeln!(out, "  ldx #{}\n  jmp __crest", regs.len()).unwrap();
                     repeated = 1;
                 }
-                // a word result in `a` and `x`, `y` free: the helper that keeps them
+                // a word result in `a` and `x`, `y` free: the helper that keeps
+                // them
                 (Kind::Op("CREST"), _) if !after[b][i].contains(&reg::Y) => {
                     writeln!(out, "  ldy #{}\n  jmp __crest_ax", regs.len()).unwrap();
                     repeated = 1;

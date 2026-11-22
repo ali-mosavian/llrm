@@ -139,6 +139,10 @@ def isel_proof(report: Path, mode: str) -> tuple[int, int]:
 
 
 def _host(command: list[str], env: dict[str, str] | None = None) -> None:
+    # llrm-cc finds the m16 fork clang by LLRM_CLANG_M16: unset, a real-mode compile ran the pin's clang and failed ("regparm ... is not
+    # translated yet"), 8 tests of test_bench.py on a machine whose pin file names the fork; the environment's own value wins
+    if Path(command[0]).name == "llrm-cc":
+        env = {**llrmbin.cc_environment(), **os.environ, **(env or {})}
     done = cpulimit.run(with_isel(command), 300, capture_output=True, text=True, **({"env": {**os.environ, **env}} if env else {}))
     if done.returncode != 0:
         raise BuildError(f"{Path(command[0]).name}: {(done.stdout + done.stderr).strip()[:1500]}")

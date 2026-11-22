@@ -224,7 +224,8 @@ def nib_extras(source: Path) -> list[str]:
 
 def c_environment(variant: Variant) -> dict[str, str]:
     """What llrm-cc is told of a C program's target: the Watcom row of the 16-bit target, whose programs enter `main_` as dosbatch links them."""
-    return {**os.environ, "LLRM_CC_TARGET": dosbatch.WATCOM_ROWS[dosbatch.target_bits(dosbatch.REAL_MODE)]} if variant.language == "c" else dict(os.environ)
+    base = {**llrmbin.cc_environment(), **os.environ}  # LLRM_CLANG_M16 from the pin file when the environment names none: without it a real-mode compile ran the pin's clang
+    return {**base, "LLRM_CC_TARGET": dosbatch.WATCOM_ROWS[dosbatch.target_bits(dosbatch.REAL_MODE)]} if variant.language == "c" else base
 
 
 def kept_a_call(variant: Variant, work: Path, stem: str, shim: bool = True) -> tuple[Path, Path] | None:
@@ -656,6 +657,7 @@ def measure_references(selected: list[str], opts: list[str], work: Path, timing:
             owned.append((key, reference_job(key, stem, built, variant.region if counted else None, want, obj, files, variant.source)))
             needs[key] = timing_input(variant, directory)
     for opt in opts:
+        llrmbin.bin_dir()  # a source touched since the start refuses the run here, not after the hours the references take
         c_todo = [(directory, variant, stem) for (directory, variant), stem in zip(todo, stems) if variant.language == "c"]
         for directory, variant, stem in c_todo:
             if (OW / "bwcc").exists():
@@ -1499,6 +1501,8 @@ def main() -> int:
     stage(f"measuring {len(args.select) or 'every'} benchmarks at {' '.join(args.opt)}, {cores()}")
     measured = measure_all(args.select, args.opt, args.work, args.time)
     stage(f"measured {len(measured)} rows")
+    if args.json and not args.shard:  # kept if the references that follow (hours) fail: the compiler's own rows are not lost with them
+        args.json.with_name(args.json.name + ".partial").write_text(json.dumps({"/".join(key): value for key, value in measured.items()}, indent=1))
     if args.shard:  # a slice only measures: --merge judges every row against the base that `--shard base` measured once
         print(f"shard {args.shard}: {len(measured)} measurements: 0 problems")
         if args.json:
