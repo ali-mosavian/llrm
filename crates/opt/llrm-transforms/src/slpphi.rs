@@ -25,7 +25,8 @@
 //! `slpvectorize`.
 //!
 //! # Example
-//! Sixteen loop-carried doubles in a loop header become `<2 x double>` phis when the trees of their values pay (the nbody test).
+//! Sixteen loop-carried doubles in a loop header become `<2 x double>` phis
+//! when the trees of their values pay (the nbody test).
 //!
 //! ```text
 //! %a = phi double [ 0.0, %entry ], [ %a1, %loop ]
@@ -327,6 +328,12 @@ fn bits_of(
 pub(crate) enum Roots {
     Phis,
     Inserts,
+    /// `vectorizeSeeds`: instructions that are not roots of any other kind,
+    /// each read by one user (`StandaloneSeeds`).
+    Seeds,
+    /// `vectorizeNonVectorizableInsts`: the value operands of the stores of a
+    /// block, bundled by opcode and type.
+    Operands,
 }
 
 /// What a run of `try_list` needs: what the function is vectorized with.
@@ -369,7 +376,7 @@ impl<'a> Session<'a> {
         root: InstId,
     ) -> Option<TypeId> {
         match self.roots {
-            Roots::Phis => Some(function.instruction(root).ty),
+            Roots::Phis | Roots::Seeds | Roots::Operands => Some(function.instruction(root).ty),
             Roots::Inserts => function.operand_type(self.context, function.instruction(root).operands[1]),
         }
     }
@@ -379,6 +386,37 @@ impl<'a> Session<'a> {
         inst: InstId,
     ) -> bool {
         function.is_erased(inst) || function.parent(inst).is_none()
+    }
+
+    /// Whether `inst` reads the result of any of `taken`.
+    fn reads_any(
+        function: &Function,
+        inst: InstId,
+        taken: &[InstId],
+    ) -> bool {
+        function
+            .instruction(inst)
+            .operands
+            .iter()
+            .any(
+                |operand| match operand {
+                    Operand::Value(value) => matches!(
+                        function.value(*value).def,
+                        ValueDef::Instruction(def) if taken.contains(&def)
+                    ),
+                    _ => false,
+                },
+            )
+    }
+
+    /// `Instruction::isIdenticalTo`: the same operation on the same operands.
+    fn identical(
+        function: &Function,
+        a: InstId,
+        b: InstId,
+    ) -> bool {
+        let (a, b) = (function.instruction(a), function.instruction(b));
+        a.opcode == b.opcode && a.ty == b.ty && a.operands == b.operands && a.flags == b.flags
     }
 
     /// The tree of `window`, if it pays, made: whether it was.
@@ -402,6 +440,9 @@ impl<'a> Session<'a> {
                         Roots::Phis => crate::slptree::try_phis(&unit, function, self.block, window, self.tti, &scaler),
                         Roots::Inserts => {
                             crate::slptree::try_inserts(&unit, function, self.block, window, self.tti, &scaler)
+                        }
+                        Roots::Seeds | Roots::Operands => {
+                            crate::slptree::try_seeds(&unit, function, self.block, window, self.tti, &scaler)
                         }
                     }
                 },
@@ -433,15 +474,27 @@ impl<'a> Session<'a> {
         }
         let register = self.tti.vector_register_bits() as usize;
         let min_vf = ((self.tti.min_vector_register_bits() as usize) / bits).max(2);
-        let widest = match self
-            .tti
-            .maximum_vf(bits as u32, if self.roots == Roots::Phis { Opcode::Phi } else { Opcode::InsertElement })
-        {
+        let opcode = match self.roots {
+            Roots::Phis => Opcode::Phi,
+            Roots::Inserts => Opcode::InsertElement,
+            Roots::Seeds | Roots::Operands => function.instruction(list[0]).opcode.clone(),
+        };
+        // `getMaximumVF` caps a list at what the target says; where it says
+        // nothing, the list as long as its vectors fill whole registers (a
+        // `<4 x i64>` is two): the phis and inserts keep to one register.
+        let unbounded = self.roots == Roots::Operands;
+        let widest = match self.tti.maximum_vf(bits as u32, opcode) {
+            0 if unbounded => usize::MAX / 2,
             0 => register / bits,
             limit => limit as usize,
         };
         let floor_pow2 = |n: usize| if n == 0 { 0 } else { 1usize << (usize::BITS - 1 - n.leading_zeros()) };
-        let max_vf = floor_pow2(list.len()).max(min_vf).min(widest);
+        let mut max_vf = floor_pow2(list.len()).max(min_vf).min(widest);
+        // Standalone seeds only need one register worth of lanes.
+        let standalone = self.roots == Roots::Seeds;
+        if standalone {
+            max_vf = max_vf.min((register / bits).max(min_vf));
+        }
         if max_vf < 2 {
             return false;
         }
@@ -449,9 +502,11 @@ impl<'a> Session<'a> {
         let (mut next, max_inst) = (0usize, list.len());
         let mut vf = max_vf;
         while next + 1 < max_inst && vf >= min_vf {
-            // The vector fills no register of its own where each lane is a
-            // part.
-            if vf * bits > register {
+            // No actual vectorization where the vector is as many registers
+            // as it has lanes (`getNumberOfParts == VF`); the phis and inserts
+            // also stay within one register.
+            let parts = (vf * bits).div_ceil(register.max(1));
+            if (unbounded && parts == vf) || (!unbounded && vf * bits > register) {
                 vf = floor_pow2(vf - 1);
                 continue;
             }
@@ -468,12 +523,35 @@ impl<'a> Session<'a> {
                 if (vf > min_vf && actual < vf) || (vf == min_vf && actual < 2) {
                     break;
                 }
-                let window: Vec<InstId> =
-                    list[at..].iter().copied().filter(|phi| !Self::deleted(function, *phi)).take(actual).collect();
+                let mut window: Vec<InstId> = Vec::with_capacity(actual);
+                let mut dependent_skipped = false;
+                for root in list[at..].iter().copied().filter(|root| !Self::deleted(function, *root)) {
+                    // The lanes of a standalone seed cannot depend on each
+                    // other: the seed fed by one already taken waits for the
+                    // next window.
+                    if standalone && Self::reads_any(function, root, &window) {
+                        dependent_skipped = true;
+                        continue;
+                    }
+                    window.push(root);
+                    if window.len() == actual {
+                        break;
+                    }
+                }
                 if window.len() != actual {
+                    if dependent_skipped {
+                        at += 1;
+                        continue;
+                    }
                     break;
                 }
-                if self.analyzed.contains(&window) {
+                // Identical lanes compute one value: the vector only copies it.
+                let identical =
+                    standalone && window[1..].iter().all(|lane| Self::identical(function, window[0], *lane));
+                if self.analyzed.contains(&window) || identical {
+                    if standalone {
+                        at += actual - 1;
+                    }
                     at += 1;
                     continue;
                 }
@@ -483,6 +561,9 @@ impl<'a> Session<'a> {
                     changed = true;
                 } else {
                     self.analyzed.insert(window);
+                    if standalone {
+                        at += actual - 1;
+                    }
                 }
                 at += 1;
             }

@@ -24,7 +24,8 @@
 //! `slptree`.
 //!
 //! # Example
-//! Once a tree is vectorized, the vector of each bundle is placed where the last scalar of its bundle stood, and what waits on it follows.
+//! Once a tree is vectorized, the vector of each bundle is placed where the
+//! last scalar of its bundle stood, and what waits on it follows.
 //!
 //! ```text
 //! store float %f0 / %f1 / %f2 / %f3   (four scalar stores, in this order)
@@ -49,13 +50,17 @@ pub(crate) fn is_pure(
     pure_calls: &IdSet<InstId>,
 ) -> bool {
     match function.instruction(inst).opcode {
-        Opcode::Binary(op) => !matches!(
-            op,
-            llrm_mir::opcode::BinaryOp::UDiv
-                | llrm_mir::opcode::BinaryOp::SDiv
-                | llrm_mir::opcode::BinaryOp::URem
-                | llrm_mir::opcode::BinaryOp::SRem
-        ),
+        // A division may trap: it is pure where `pure_calls` (the caller's
+        // set of what cannot) says its divisor is a constant that cannot.
+        Opcode::Binary(op) => {
+            !matches!(
+                op,
+                llrm_mir::opcode::BinaryOp::UDiv
+                    | llrm_mir::opcode::BinaryOp::SDiv
+                    | llrm_mir::opcode::BinaryOp::URem
+                    | llrm_mir::opcode::BinaryOp::SRem
+            ) || pure_calls.contains(&inst)
+        }
         Opcode::Cast(_)
         | Opcode::ICmp(_)
         | Opcode::FCmp(_)

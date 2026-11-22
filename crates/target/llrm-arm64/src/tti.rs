@@ -524,7 +524,11 @@ pub(crate) fn vector_divide_by_constant_cost(
         return None;
     }
     let (_, lane) = vector_pieces(ty)?;
-    if lane == 64 || u64::from(lane) * u64::from(ty.count) < 64 {
+    // A power of two needs no multiply-high: a 64-bit lane is priced there
+    // (`usra` and one `sshr` for a quotient, `LT.second.getScalarType() ==
+    // i64`).
+    let signed_power_of_two = signed && (second.power_of_two || second.negated_power_of_two);
+    if (lane == 64 && !signed_power_of_two) || u64::from(lane) * u64::from(ty.count) < 64 {
         return None;
     }
     let price = |op| vector_arithmetic_cost(op, ty, kind).map(|cost| cost.value);
@@ -533,13 +537,14 @@ pub(crate) fn vector_divide_by_constant_cost(
         // and `usra` (two shifts), the remainder's multiply and subtract not
         // priced; a power of two is `cmlt`, `usra` and `sshr` (a remainder:
         // `usra`, `and`, `sub`).
-        let (mul, add, shr) = (price(ArithOp::Mul)?, price(ArithOp::Add)?, price(ArithOp::AShr)?);
+        let (add, shr) = (price(ArithOp::Add)?, price(ArithOp::AShr)?);
         let usra = 2 * shr;
-        if second.power_of_two || second.negated_power_of_two {
+        if signed_power_of_two {
             let negate = if second.negated_power_of_two && op == ArithOp::SDiv { shr } else { 0 };
-            return Some(Cost::of(negate + usra + if op == ArithOp::SDiv { 2 * shr } else { 2 * add }));
+            let quotient = if lane == 64 { shr } else { 2 * shr };
+            return Some(Cost::of(negate + usra + if op == ArithOp::SDiv { quotient } else { 2 * add }));
         }
-        return Some(Cost::of(2 * mul + add + shr + usra));
+        return Some(Cost::of(2 * price(ArithOp::Mul)? + add + shr + usra));
     }
     if second.power_of_two {
         return price(if op == ArithOp::UDiv { ArithOp::LShr } else { ArithOp::And }).map(Cost::of);

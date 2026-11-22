@@ -39,7 +39,8 @@
 //! `slpvectorize`.
 //!
 //! # Example
-//! Forty `sext i16` loads of consecutive cells, summed by a chain of `add i64`, become two vector loads and one reduction (the tile test).
+//! Forty `sext i16` loads of consecutive cells, summed by a chain of `add i64`,
+//! become two vector loads and one reduction (the tile test).
 //!
 //! ```text
 //! %x0 = sext i16 (load [i]) to i64 ; ... x39, summed by add i64
@@ -237,13 +238,14 @@ fn lane_ty(bits: u32) -> Ty {
 #[allow(clippy::too_many_arguments)]
 fn worthwhile(
     context: &Context,
+    function: &Function,
     tti: &dyn Tti,
     op: BinaryOp,
     reduced_bits: u32,
     window: &[Leaf],
     first_part: bool,
 ) -> bool {
-    let kind = CostKind::RecipThroughput;
+    let kind = crate::slptree::cost_kind(function);
     let width = window.len() as u32;
     let load_bits = int_ty(context, window[0].loaded).expect("an integer load");
     let load_lane = lane_ty(load_bits);
@@ -414,7 +416,7 @@ fn windows(
         let consecutive = window.windows(2).all(|pair| pair[1].disp == pair[0].disp + i64::from(load_bits / 8));
         if consecutive
             && movable(function, block, window)
-            && worthwhile(context, tti, chain.op, reduced_bits, window, parts.is_empty())
+            && worthwhile(context, function, tti, chain.op, reduced_bits, window, parts.is_empty())
         {
             parts.push(Part { start: pos, width });
             pos += width;

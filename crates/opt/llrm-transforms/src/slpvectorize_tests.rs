@@ -257,3 +257,17 @@ fn field_copies_one_load_after_each_store_become_vector_copies_where_tbaa_separa
     let same = text.split("define void @save_same_tag").nth(1).unwrap();
     assert_eq!(same.matches("load i64").count(), 2, "{same}");
 }
+
+const BUTTERFLY: &str = include_str!("../tests/slp/butterfly_seeds.ll");
+
+/// stft_fixed -Os (arm64): four `sdiv x, 2` stored to four different arrays
+/// stayed scalar (+60% modelled clocks against the pin's clang): no store
+/// chain exists, the pin's `vectorizeOnceUsedSeeds` makes one `<4 x i64>`
+/// `sdiv` of the four sums (`-Rpass`: cost -2, tree size 5).
+#[test]
+fn four_halvings_stored_to_four_arrays_are_one_vector_sdiv() {
+    let text = run(BUTTERFLY);
+    assert_eq!(text.matches("sdiv <4 x i64>").count(), 1, "{text}");
+    assert_eq!(text.matches("sdiv i64").count(), 0, "{text}");
+    assert_eq!(text.matches("extractelement <4 x i64>").count(), 4, "{text}");
+}
