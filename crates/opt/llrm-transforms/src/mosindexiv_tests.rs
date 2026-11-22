@@ -72,33 +72,3 @@ fn test_no_index_width_changes_nothing() {
     let after = run(&walk(200), None);
     assert!(!after.contains("phi i8"), "{after}");
 }
-
-#[test]
-fn tmp_lftr_probe() {
-    let text = format!("target datalayout = \"e-p:16:8-i16:8-i32:8-i64:8-f32:8-f64:8-a:8-n8-S8\"\n@buf = global [300 x i8] c\"{}\"
-declare void @report(i32)
-define i16 @f() {{
-entry:
-  br label %loop
-loop:
-  %i = phi i16 [ 0, %entry ], [ %next, %loop ]
-  %s = phi i32 [ -1709351650, %entry ], [ %acc, %loop ]
-  %m = mul nsw i32 %s, 7
-  %p = getelementptr inbounds nuw i8, ptr @buf, i16 %i
-  %b = load i8, ptr %p
-  %w = zext i8 %b to i32
-  %acc = add nsw i32 %m, %w
-  %next = add nuw nsw i16 %i, 1
-  %c = icmp samesign ult i16 %i, 255
-  br i1 %c, label %loop, label %exit
-exit:
-  %r = phi i32 [ %acc, %loop ]
-  call void @report(i32 %r)
-  ret i16 0
-}}
-", "\\01".repeat(300));
-    let mut module = parsed(&text);
-    managed_on(&mut module, crate::indvars::IndVars { lftr: true, size: false }, Tuned::default());
-    println!("{}", printed(&module));
-    panic!();
-}
