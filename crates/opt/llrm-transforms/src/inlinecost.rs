@@ -2983,10 +2983,20 @@ impl<'a> Analyzer<'a> {
             // there in the trial too, as `outlined_by_trial` leaves it.
             let in_loop = self.site.relative_frequency.is_some_and(|ratio| ratio > 1.0);
             let bound = bound_with(!crate::trial::keeping_hinted_calls() || in_loop);
-            let grows = bound
-                && self.grows_the_code()
-                && !(at_o1 && self.hot_site_within_growth_budget())
-                && !(!at_o1 && self.hot_site_within_size_growth_budget());
+            // DEVIATE HOT-INLINE-TRIAL: the hot-site yield stands except in the
+            // trial compile that keeps those calls; each it lets through is
+            // noted for that trial.
+            let mut hot_yield =
+                bound && !at_o1 && self.grows_the_code() && self.hot_site_within_size_growth_budget();
+            if hot_yield && crate::trial::keeping_hot_calls() {
+                hot_yield = false;
+            } else if hot_yield {
+                crate::trial::note_hot_yield(
+                    self.site.module.global(self.site.caller_id).name.as_deref().unwrap_or_default(),
+                );
+            }
+            let grows =
+                bound && self.grows_the_code() && !(at_o1 && self.hot_site_within_growth_budget()) && !hot_yield;
             // INLINEHINT-GROWTH-TRIAL: noted where only the yield let a growing
             // call through at -Os, outside a loop.
             if !bound && !at_o1 && !in_loop && self.hint_applied && bound_with(false) && self.grows_the_code() {
