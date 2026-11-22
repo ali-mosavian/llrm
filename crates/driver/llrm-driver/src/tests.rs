@@ -409,6 +409,26 @@ fn identical_dispatch_arms_are_merged_before_the_dispatch_is_copied_into_them() 
     assert_eq!(arms, 1, "{listing}");
 }
 
+/// `store <2 x i8> zeroinitializer` next to a zero `i16` store (SROA of a
+/// struct init, QB `declare.c` `decl_field`): type legalization casts the
+/// widened zero vector to scalar lanes; without the constant fold of `bitcast
+/// (build_vector constants)` the lane was `xorps; movd; mov` and the zeros
+/// stayed two stores. The four zero bytes are one `dword` store.
+#[test]
+fn a_zero_vector_store_next_to_a_zero_store_is_one_constant_store() {
+    let source = "target datalayout = \"@m64-datalayout@\"\ntarget triple = \"x86_64-unknown-linux-gnu\"\n\
+         define void @f(ptr %p, i16 %a, i16 %b) optsize nounwind {\nentry:\n  store i16 %a, ptr %p, align 1\n  \
+         %q = getelementptr i8, ptr %p, i64 2\n  store <2 x i8> zeroinitializer, ptr %q, align 1\n  \
+         %r = getelementptr i8, ptr %p, i64 4\n  store i16 0, ptr %r, align 1\n  \
+         %s = getelementptr i8, ptr %p, i64 6\n  store i16 %b, ptr %s, align 1\n  ret void\n}\n";
+    let (built, _) = compiled(&flags(&["-m64", "-Os", "--isel=dag"]), source, "f").unwrap();
+    let text = llrm_codegen::backend::masm::text(&built).unwrap();
+    let count = |text: &str, needle: &str| text.lines().filter(|line| line.contains(needle)).count();
+    assert!(!text.contains("xmm"), "the zero is an immediate, not a vector register\n{text}");
+    assert!(text.contains("mov dword ptr [rdi+2],"), "one four-byte zero store\n{text}");
+    assert_eq!(count(&text, "mov "), 3, "three stores: a, the zeros, b\n{text}");
+}
+
 /// gcc -Os copies or fills a length known at run time with one `rep movsb`/`stosb` (`decide_alg`); the pin and clang
 /// call `memcpy`/`memset`. m32 -Os QB had 28 calls of them to gcc's 0, -638 B with them inline. In no loop it is the
 /// `rep`; in a loop and at -O2 it stays a call. m64 stays a call: QB `localarr` ran 51.0M clk against 44.1M (clang

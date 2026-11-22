@@ -1,13 +1,21 @@
 //! `visitBITCAST`'s load fold: `(conv (load x))` is `(load (conv*)x)`, so a
 //! float argument read as its bits is one integer load, not `fld; fstp; mov`.
-//! And `foldBitcastedFPLogic` (a port): a sign-bit `xor`/`and`/`or` of a float's bits,
-//! cast back, is `fneg`/`fabs`/`fneg (fabs)` (`__negdf2` on wasm: `f64.neg`,
-//! 7 B, not reinterpret, const, xor, reinterpret, 20 B).
+//! And `foldBitcastedFPLogic` (a port): a sign-bit `xor`/`and`/`or` of a
+//! float's bits, cast back, is `fneg`/`fabs`/`fneg (fabs)` (`__negdf2` on wasm:
+//! `f64.neg`, 7 B, not reinterpret, const, xor, reinterpret, 20 B).
 //!
 //! DEVIATE SD548: `foldBitcastedFPLogic` takes the operand only when it is a
 //! cast from the result type; the target's `isFNegFree`/`isFAbsFree` second
 //! way (no target here answers true) and vector splat masks are not ported.
 //! Owner softfloat. Exit: when a target answers `isFNegFree`.
+//!
+//! `visitBITCAST`'s constant fold (a port): a cast of a `build_vector` of
+//! constants and undefs to another vector type is the `build_vector` of the
+//! recast bits (`ConstantFoldBITCASTofBUILD_VECTOR`, `getConstantRawBits`,
+//! `recastRawBits`). Type legalization casts the widened zero of a
+//! `<2 x i8>` store to the stored scalar's vector; folded, the lane is a
+//! constant and the stores of zeros merge (`mov dword [rdi+2], 0`, not
+//! `xorps; movd; mov; mov`).
 //!
 //! DEVIATE SD251: only scalar casts of a plain load (no vector, `freeze`,
 //! `AssertNoFPClass` or range metadata; `isLoadBitCastBeneficial` is true for
@@ -29,6 +37,13 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         &mut self,
         node: SDValue,
     ) -> Option<SDValue> {
+        if self.dag.is_undef(self.dag.operand(node, 0)) {
+            let vt = self.dag.value_type(node);
+            return Some(self.dag.get_undef(vt));
+        }
+        if let Some(constant) = self.fold_bitcast_of_constant_build_vector(node) {
+            return Some(constant);
+        }
         if let Some(fp) = self.fold_bitcasted_fp_logic(node) {
             return Some(fp);
         }
@@ -67,6 +82,57 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
             self.replace_value(old_chain, SDValue { node: new.node, res: 1 });
         }
         Some(new)
+    }
+
+    /// "If the input is a BUILD_VECTOR with all constant elements, fold this
+    /// now. Only do this before legalize types, unless both types are integer
+    /// and the scalar type is legal. Only do this before legalize ops."
+    fn fold_bitcast_of_constant_build_vector(
+        &mut self,
+        node: SDValue,
+    ) -> Option<SDValue> {
+        let (vt, source) = (self.dag.value_type(node), self.dag.operand(node, 0));
+        if !vt.is_vector() || self.dag.opcode(source) != ISD::BuildVector || !self.dag.has_one_use(source.node) {
+            return None;
+        }
+        let source_vt = self.dag.value_type(source);
+        let element = vt.element();
+        if self.level >= CombineLevel::AfterLegalizeTypes {
+            let legal_element = self.tli.is_some_and(|tli| tli.types.is_type_legal(element));
+            if self.legal_operations() || !element.is_integer() || !source_vt.element().is_integer() || !legal_element {
+                return None;
+            }
+        }
+        let (source_bits, element_bits) = (source_vt.element().size_in_bits(), element.size_in_bits());
+        if source_bits > 128 || element_bits > 128 || source_bits * source_vt.lanes() != element_bits * vt.lanes() {
+            return None;
+        }
+        // `getConstantRawBits`: "Early-out if this contains anything but
+        // Undef/Constant/ConstantFP".
+        let mut raw = Vec::with_capacity(source_vt.lanes() as usize);
+        for lane in 0..source_vt.lanes() as usize {
+            let op = self.dag.operand(source, lane);
+            raw.push(if self.dag.is_undef(op) {
+                None
+            } else {
+                let bits = self.dag.constant(op).or_else(|| self.dag.fp_constant(op))?;
+                Some(bits & super::fold::mask(source_bits))
+            });
+        }
+        let recast = recast_raw_bits(self.dag.config().big_endian, source_bits, element_bits, &raw);
+        let ops: Vec<SDValue> = recast
+            .into_iter()
+            .map(|bits| match bits {
+                None => self.dag.get_undef(element),
+                Some(bits) if element.is_floating_point() => self.dag.get_constant_fp(bits, element),
+                Some(bits) => self.dag.get_constant(bits, element),
+            })
+            .collect();
+        let folded = self.dag.get_build_vector(vt, &ops);
+        for op in ops {
+            self.add_to_worklist(op.node);
+        }
+        Some(folded)
     }
 
     /// Whether every user of `cast` stores it to a call's argument slot.
@@ -120,5 +186,77 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         }
         let fp = self.dag.get_node(fp_op, vt, &[self.dag.operand(bits, 0)]);
         Some(if self.dag.opcode(logic) == ISD::Or { self.dag.get_node(ISD::FNeg, vt, &[fp]) } else { fp })
+    }
+}
+
+/// `BuildVectorSDNode::recastRawBits`: the lanes of `source_bits` bits
+/// (`None`: undef) as lanes of `element_bits` bits. A lane is undef when all
+/// its bits are; the undef bits of another are zeros.
+fn recast_raw_bits(
+    big_endian: bool,
+    source_bits: u32,
+    element_bits: u32,
+    source: &[Option<u128>],
+) -> Vec<Option<u128>> {
+    let total = source_bits as usize * source.len();
+    let at =
+        |lane: usize, bits: u32| if big_endian { total - (lane + 1) * bits as usize } else { lane * bits as usize };
+    let mut value = vec![false; total];
+    let mut defined = vec![false; total];
+    for (lane, bits) in source.iter().enumerate() {
+        let from = at(lane, source_bits);
+        if let Some(bits) = bits {
+            for bit in 0..source_bits as usize {
+                value[from + bit] = bits >> bit & 1 == 1;
+                defined[from + bit] = true;
+            }
+        }
+    }
+    (0..total / element_bits as usize)
+        .map(|lane| {
+            let from = at(lane, element_bits);
+            let span = from..from + element_bits as usize;
+            span.clone()
+                .any(|bit| defined[bit])
+                .then(|| span.enumerate().fold(0_u128, |sum, (i, bit)| sum | u128::from(value[bit]) << i))
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::recast_raw_bits;
+
+    #[test]
+    fn test_lanes_merge_with_lane_zero_low_on_little_endian_and_high_on_big() {
+        let bytes = [Some(0x11), Some(0x22), Some(0x33), Some(0x44)];
+        assert_eq!(recast_raw_bits(false, 8, 16, &bytes), [Some(0x2211), Some(0x4433)]);
+        assert_eq!(recast_raw_bits(true, 8, 16, &bytes), [Some(0x1122), Some(0x3344)]);
+        assert_eq!(recast_raw_bits(false, 8, 32, &bytes), [Some(0x4433_2211)]);
+        assert_eq!(recast_raw_bits(true, 8, 32, &bytes), [Some(0x1122_3344)]);
+    }
+
+    #[test]
+    fn test_a_lane_splits_low_part_first_on_little_endian_and_high_first_on_big() {
+        let words = [Some(0xAABB_CCDD)];
+        assert_eq!(recast_raw_bits(false, 32, 8, &words), [Some(0xDD), Some(0xCC), Some(0xBB), Some(0xAA)]);
+        assert_eq!(recast_raw_bits(true, 32, 8, &words), [Some(0xAA), Some(0xBB), Some(0xCC), Some(0xDD)]);
+    }
+
+    /// `<2 x i8> zeroinitializer` widened to 16 lanes (the rest undef), read as
+    /// `<8 x i16>`: lane 0 is the zero the store of the pair needs; the
+    /// lanes of undef stay undef.
+    #[test]
+    fn test_an_all_undef_lane_stays_undef_and_a_half_undef_lane_reads_zero_there() {
+        let mut widened = vec![None; 16];
+        widened[0] = Some(0);
+        widened[1] = Some(0);
+        widened[2] = Some(0xFF);
+        let words = recast_raw_bits(false, 8, 16, &widened);
+        assert_eq!(words[0], Some(0));
+        assert_eq!(words[1], Some(0x00FF), "the undef upper byte is zero");
+        assert!(words[2..].iter().all(Option::is_none));
+        let big = recast_raw_bits(true, 8, 16, &widened);
+        assert_eq!((big[0], big[1]), (Some(0), Some(0xFF00)), "big endian: lane 0 is the high byte of word 0");
     }
 }
