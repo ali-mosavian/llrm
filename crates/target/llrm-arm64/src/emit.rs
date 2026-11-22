@@ -282,7 +282,10 @@ pub fn object(
         };
         // The name of a merged global is a place inside its struct, as large as
         // the global it replaced.
-        let size = if matches!(module.global(alias.aliasee).kind, llrm_mir::module::GlobalKind::Variable(_)) {
+        let size = if matches!(
+            module.global(alias.aliasee).kind,
+            llrm_mir::module::GlobalKind::Variable(_)
+        ) {
             layout.alloc_size(&module.context.types, alias.ty) as usize
         } else {
             symbols.list[found].size

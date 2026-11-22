@@ -44,7 +44,9 @@ use llrm_mir::target::GlobalMerge;
 use llrm_mir::types::TypeId;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
-use llrm_mir::module::{Alias, GlobalKind, GlobalName, GlobalValue, GlobalVariable, Linkage, Module, Operand, UnnamedAddr, Visibility};
+use llrm_mir::module::{
+    Alias, GlobalKind, GlobalName, GlobalValue, GlobalVariable, Linkage, Module, Operand, UnnamedAddr, Visibility,
+};
 use llrm_mir::opcode::{Attribute, Flags, Opcode};
 use llrm_mir::types::Type;
 
