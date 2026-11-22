@@ -209,9 +209,6 @@ const REFUSED: &[(&str, &str)] = &[
     // The conversions of 16-bit lanes.
     ("uitofp_fptoui", "CannotSelect(\"FpToUInt\")"),
     ("sitofp_fptosi", "CannotSelect(\"FpToSInt\")"),
-    // The 64-bit reductions.
-    ("reduce_add", "CannotSelect(\"Add\")"),
-    ("reduce_add", "CannotSelect(\"Store\")"),
     // The float operations with no vector form yet.
     ("copysign", "CannotSelect(\"FCopySign\")"),
     ("floor", "a rounding intrinsic without its library call"),

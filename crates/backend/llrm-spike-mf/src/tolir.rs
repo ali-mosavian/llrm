@@ -2556,11 +2556,34 @@ pub fn from_ssa<T: Target>(
         }
     }
     let rename = |value: u32| *renamed.get(&value).unwrap_or(&value);
+    // A value the stage defined (`MachineCSE`'s hoisted copy of a partially
+    // redundant expression) is a new virtual register of its model's class.
+    let mut classes = original.classes.clone();
+    let mut minted: IndexMap<u32, u32> = IndexMap::default();
+    for insn in body.blocks.iter().flat_map(|block| block.insns.iter()) {
+        for &value in &insn.defines {
+            if value <= known || converted.body.pins.contains_key(&value) || minted.contains_key(&value) {
+                continue;
+            }
+            let mut root = value;
+            while root > known {
+                root = *body.class_like.get(&root).ok_or_else(|| format!("{name}: a stage made value {value}"))?;
+            }
+            minted.insert(value, classes.len() as u32);
+            classes.push(original.classes[root as usize - 1]);
+        }
+    }
+    let virtual_of = |value: u32| -> Result<u32, String> {
+        match minted.get(&value) {
+            Some(made) => Ok(*made),
+            None if value >= 1 && value <= known => Ok(value - 1),
+            None => Err(format!("{name}: a stage made value {value}")),
+        }
+    };
     let register = |value: u32| -> Result<Reg, String> {
         match converted.body.pins.get(&value) {
             Some(register) => Ok(Reg::Phys(*register)),
-            None if value >= 1 && value <= known => Ok(Reg::Virt(value - 1)),
-            None => Err(format!("{name}: a stage made value {value}")),
+            None => Ok(Reg::Virt(virtual_of(value)?)),
         }
     };
     let mut blocks = Vec::with_capacity(body.blocks.len());
@@ -2585,7 +2608,19 @@ pub fn from_ssa<T: Target>(
                 let mut inst = original.blocks[b].insts[i].clone();
                 for operand in &mut inst.operands {
                     if let Operand::Use(Reg::Virt(v)) = operand {
-                        *v = rename(*v + 1) - 1;
+                        *v = virtual_of(rename(*v + 1))?;
+                    }
+                }
+                // the hoisted copy defines the new register in place of its model's
+                if let [made] = insn.defines[..] {
+                    if let (Some(&to), Some(&model)) = (minted.get(&made), body.class_like.get(&made)) {
+                        for operand in &mut inst.operands {
+                            if let Operand::Def(Reg::Virt(v)) = operand {
+                                if *v == model - 1 {
+                                    *v = to;
+                                }
+                            }
+                        }
                     }
                 }
                 insts.push(inst);
@@ -2606,6 +2641,7 @@ pub fn from_ssa<T: Target>(
     }
     let mut function = original.clone();
     function.blocks = blocks;
+    function.classes = classes;
     Ok(function)
 }
 
@@ -2651,7 +2687,10 @@ where
     let input = converted.with_effects(function, registers);
     let body = stage.transform(input)?;
     let mut out = from_ssa(function, &converted, &body)?;
-    out.classes = classes.borrow().clone();
+    // the oracle narrowed the classes of the function's own registers; the
+    // registers the stage made keep the class `from_ssa` gave them
+    let narrowed = classes.borrow();
+    out.classes[..narrowed.len()].copy_from_slice(&narrowed);
     Ok(out)
 }
 

@@ -1747,6 +1747,7 @@ fn shape<H: std::hash::Hasher>(
                     2u8,
                     one.width,
                     one.value & 31 == 0,
+                    one.value & 63 == 0,
                     one.value == -1 || (one.width < 8 && one.value == (1i64 << (8 * one.width)) - 1),
                 )
                     .hash(into),

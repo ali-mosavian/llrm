@@ -42,6 +42,17 @@ pub struct Aarch64Lowering {
 }
 
 impl CombineHooks for Aarch64Lowering {
+    /// `AArch64TargetLowering::isLegalICmpImmediate`: compares are `subs`, so
+    /// the add/sub immediate (12 bits, optionally shifted left 12), either
+    /// sign:
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L20248
+    fn legal_icmp_immediate(
+        &self,
+        imm: i64,
+    ) -> bool {
+        imm != i64::MIN && crate::tti::is_legal_arith_immediate(imm.unsigned_abs())
+    }
+
     /// `AArch64TargetLowering::isTruncateFree(EVT, EVT)`
     /// (AArch64ISelLowering.cpp#L18949 at d1106deb71cc): any narrower scalar
     /// integer.

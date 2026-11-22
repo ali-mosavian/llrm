@@ -258,6 +258,20 @@ fn field_copies_one_load_after_each_store_become_vector_copies_where_tbaa_separa
     assert_eq!(same.matches("load i64").count(), 2, "{same}");
 }
 
+const BUTTERFLY: &str = include_str!("../tests/slp/butterfly_seeds.ll");
+
+/// stft_fixed -Os (arm64): four `sdiv x, 2` stored to four different arrays
+/// stayed scalar (+60% modelled clocks against the pin's clang): no store
+/// chain exists, the pin's `vectorizeOnceUsedSeeds` makes one `<4 x i64>`
+/// `sdiv` of the four sums (`-Rpass`: cost -2, tree size 5).
+#[test]
+fn four_halvings_stored_to_four_arrays_are_one_vector_sdiv() {
+    let text = run(BUTTERFLY);
+    assert_eq!(text.matches("sdiv <4 x i64>").count(), 1, "{text}");
+    assert_eq!(text.matches("sdiv i64").count(), 0, "{text}");
+    assert_eq!(text.matches("extractelement <4 x i64>").count(), 4, "{text}");
+}
+
 const RDX_TREE: &str = include_str!("../tests/slp/rdx_tree_sdiv.ll");
 
 /// jpeg_fixed (arm64): `s = 131584 + p[0]*181/512 + p[8]*c1/1024 + ...` stayed
@@ -287,9 +301,36 @@ fn a_splat_gather_is_a_free_insert_and_a_broadcast_and_distinct_values_pay_each_
     use llrm_mir::tti::Ty;
     let tti = llrm_arm64::tti::AArch64::of_cpu("generic").unwrap();
     let value = |id| Operand::Value(ValueId(id));
-    let cost = |lanes: &[Operand]| crate::slpgather::gather_cost(&tti, Ty::Int(16), lanes, &[]);
+    let cost = |lanes: &[Operand]| {
+        crate::slpgather::gather_cost(&tti, llrm_mir::tti::CostKind::RecipThroughput, Ty::Int(16), lanes, &[])
+    };
     assert_eq!(cost(&[value(1), value(1), value(1), value(1)]), Some(1));
     assert_eq!(cost(&[value(1), value(2), value(3), value(4)]), Some(8));
+}
+
+/// stft_fixed -Os (arm64): four distinct i64 lanes gathered at code size were
+/// "not priced" (the target's overhead hook returned none), so no `optsize`
+/// seed tree could be costed; the pin pays 1 a lane (`VecInstCost`).
+#[test]
+fn an_integer_gather_at_code_size_pays_one_a_lane() {
+    use llrm_mir::module::{Operand, ValueId};
+    use llrm_mir::tti::{CostKind, Ty};
+    let tti = llrm_arm64::tti::AArch64::of_cpu("generic").unwrap();
+    let lanes: Vec<_> = (1..=4).map(|id| Operand::Value(ValueId(id))).collect();
+    assert_eq!(crate::slpgather::gather_cost(&tti, CostKind::CodeSize, Ty::Int(64), &lanes, &[]), Some(4));
+}
+
+/// jpeg_fixed -O2 (arm64): every seed attempt made its own scalar-evolution
+/// session (dominators, loops, expressions of the whole function), +22%
+/// compile instructions over 101 attempts. One session serves the attempts
+/// until a tree is emitted: the butterfly's four-seed window and its single
+/// emit take at most two.
+#[test]
+fn seed_attempts_share_one_scalar_evolution_session_until_a_tree_is_emitted() {
+    let before = llrm_analysis::scev::analysis::sessions_made();
+    run(BUTTERFLY);
+    let made = llrm_analysis::scev::analysis::sessions_made() - before;
+    assert!(made <= 3, "{made} sessions");
 }
 
 const TRIM_STORE_TREE: &str = include_str!("../tests/slp/trim_store_tree.ll");

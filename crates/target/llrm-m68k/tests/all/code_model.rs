@@ -161,3 +161,36 @@ fn far_globals_work_in_the_medium_model_at_every_cpu() {
         assert_eq!(code, Some(8), "{cpu}");
     }
 }
+
+/// With no `-mcmodel`, a module whose globals pass 32 KiB mixed `adda.l #pages` and
+/// `lea (pages+40000,%pc)`, and the object writer stopped: ".text: a value of 40000 does not fit its
+/// 2-byte field" (QuickrBasic `pscr.c`, a 64000-byte page buffer). `Auto` is small until the
+/// globals pass what `(d16,%pc)` reaches, then medium.
+#[test]
+fn no_model_given_a_module_past_32_kib_of_globals_is_medium() {
+    for cpu in ["68000", "68020"] {
+        let cpu = cpu_of(cpu).unwrap();
+        let object = object_in(FAR_IR, cpu, Level::O2, "f", CodeModel::Auto);
+        assert!(object.is_ok(), "{:?}", object.map(|bytes| bytes.len()));
+        let asm = llrm_m68k::driver::assembly_flagged(
+            FAR_IR,
+            cpu,
+            Level::O2,
+            false,
+            None,
+            CodeModel::Auto,
+            &Default::default(),
+        )
+        .expect("compiles");
+        assert!(!asm.contains("%pc"), "{asm}");
+    }
+}
+
+#[test]
+fn no_model_given_a_small_module_stays_pc_relative() {
+    let cpu = cpu_of("68020").unwrap();
+    let ir = FAR_IR.replace("70016", "1000").replace("69999", "999");
+    let asm = llrm_m68k::driver::assembly_flagged(&ir, cpu, Level::O2, false, None, CodeModel::Auto, &Default::default())
+        .expect("compiles");
+    assert!(asm.contains("%pc"), "{asm}");
+}

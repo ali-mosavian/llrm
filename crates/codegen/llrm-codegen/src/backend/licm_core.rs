@@ -213,6 +213,17 @@ pub trait Policy<I: Inst> {
     ) -> bool {
         false
     }
+
+    /// `MRI->constrainRegAttrs` of `EliminateCSE`: whether the readers of the
+    /// duplicate's `dups` may read the kept `kept` (same position) in their
+    /// place, the kept values' classes held to what both allow once they do.
+    fn may_stand_for(
+        &mut self,
+        _dups: &[u32],
+        _kept: &[u32],
+    ) -> bool {
+        true
+    }
 }
 
 /// `blocks` with what `policy` moved placed at the end of each loop's
@@ -346,7 +357,8 @@ pub fn hoist<I: Inst, P: Policy<I>>(
                         } else {
                             None
                         };
-                        match there.or_else(|| moved.iter().find(same)) {
+                        let stands = there.or_else(|| moved.iter().find(same));
+                        match stands.filter(|before| policy.may_stand_for(one.defines(), before.defines())) {
                             Some(before) => {
                                 folded = true;
                                 renames.extend(one.defines().iter().copied().zip(before.defines().iter().copied()));
