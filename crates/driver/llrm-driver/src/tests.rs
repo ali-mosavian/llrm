@@ -4704,6 +4704,69 @@ fn a_function_ending_in_an_indirect_sibling_call_is_addressed_through_the_stack_
     assert!(listing.contains("jmp "), "{listing}");
 }
 
+/// A direct sibling call ends its block, but `masm` ran its depth into the next
+/// label: the edge block the frame inserted after it (the shrink-wrapped
+/// pops) read as reached at depth 0 and again at -16, and QuickrBasic's
+/// `core/mem/symbols.c` `symb_size` at m64 -O1 was refused with "the frame
+/// register was given to a value and the frame cannot be addressed through the
+/// stack pointer".
+#[test]
+fn a_direct_sibling_call_does_not_run_its_depth_into_the_next_edge_block() {
+    let text = "target datalayout = \"@m64-datalayout@\"\n\
+                target triple = \"x86_64-unknown-linux-gnu\"\n\
+                @mem_base = external global ptr\n\
+                declare i1 @tabl_room(ptr, i32)\n\
+                define ptr @prog_line(i32 %0) {\n\
+                \x20 %2 = load i32, ptr inttoptr (i64 32 to ptr), align 8\n\
+                \x20 %3 = load ptr, ptr @mem_base, align 8\n\
+                \x20 %4 = or i32 %2, %0\n\
+                \x20 %5 = zext i32 %4 to i64\n\
+                \x20 %6 = getelementptr i8, ptr %3, i64 %5\n\
+                \x20 ret ptr %6\n}\n\
+                define i32 @count_byte(i32 %0) {\n\
+                \x20 br label %2\n\
+                2:\n\
+                \x20 %.06 = phi ptr [ null, %1 ], [ inttoptr (i64 4 to ptr), %2 ]\n\
+                \x20 %.05 = phi i32 [ %0, %1 ], [ 0, %2 ]\n\
+                \x20 %3 = icmp ugt i32 %.05, 1\n\
+                \x20 br i1 %3, label %2, label %4\n\
+                4:\n\
+                \x20 %.1 = phi i32 [ %.05, %2 ], [ %10, %5 ]\n\
+                \x20 %.0 = phi i32 [ 0, %2 ], [ %9, %5 ]\n\
+                \x20 %.not = icmp eq i32 %.1, 0\n\
+                \x20 br i1 %.not, label %11, label %5\n\
+                5:\n\
+                \x20 %6 = load i8, ptr %.06, align 1\n\
+                \x20 %7 = icmp eq i8 %6, 0\n\
+                \x20 %8 = zext i1 %7 to i32\n\
+                \x20 %9 = add i32 %.0, %8\n\
+                \x20 %10 = add i32 %.1, 1\n\
+                \x20 br label %4\n\
+                11:\n\
+                \x20 ret i32 %.0\n}\n\
+                define i1 @symb_size(ptr %0, i32 %1, i32 %.04) {\n\
+                \x20 br label %3\n\
+                3:\n\
+                \x20 %.041 = phi i32 [ 0, %2 ], [ %10, %8 ]\n\
+                \x20 %.0 = phi i32 [ 0, %2 ], [ %11, %8 ]\n\
+                \x20 %4 = call ptr @prog_line(i32 %.0)\n\
+                \x20 %5 = load i32, ptr %4, align 1\n\
+                \x20 %.not = icmp eq i32 %5, 0\n\
+                \x20 br i1 %.not, label %6, label %8\n\
+                6:\n\
+                \x20 %7 = call i1 @tabl_room(ptr %0, i32 %.041)\n\
+                \x20 ret i1 %7\n\
+                8:\n\
+                \x20 %9 = call i32 @count_byte(i32 %1)\n\
+                \x20 %10 = or i32 %.04, %9\n\
+                \x20 %11 = add i32 %.0, 1\n\
+                \x20 br label %3\n}\n";
+    let args = ["-m64", "-O1", "-relocation-model=static"];
+    let (built, _) = compiled(&flags(&args), text, "symb_size").unwrap_or_else(|why| panic!("{why}"));
+    let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+    assert!(listing.contains("jmp tabl_room"), "{listing}");
+}
+
 /// clang writes no module flag for `-fno-pic -fno-asynchronous-unwind-tables`;
 /// the module read as not clang's, so position independent, and QuickrBasic's
 /// 484 global addresses at m64 -Os were `lea reg, [rip+sym]` (7 bytes) for the

@@ -3286,6 +3286,10 @@ fn addressed_pass(
                     known.insert(label.name.clone(), depth.ok_or(Stop::Refused)?);
                 }
             }
+            // A sibling call leaves the procedure as a return does: no code
+            // runs into the next label, whether that is a block of the body or
+            // an edge block the frame inserted after it.
+            Item::Callee(Callee { tail: true, .. }) => depth = None,
             Item::Callee(callee) => {
                 depth = Some(depth.ok_or(Stop::Refused)? - callee.pops);
             }
