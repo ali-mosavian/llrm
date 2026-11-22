@@ -142,7 +142,7 @@ pub fn doloops(
             }
             starts.push((entry, index, k));
         }
-        if starts.len() != entries.len() || read_after_with(function, assignment, &following, register, &leaves, returns_value && is_result(register)) {
+        if starts.len() != entries.len() || read_after_with(function, assignment, &following, register, &leaves, returns_value && is_result(register), true) {
             continue;
         }
         for (entry, index, k) in starts {

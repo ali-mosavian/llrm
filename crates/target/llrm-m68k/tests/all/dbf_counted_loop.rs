@@ -42,3 +42,14 @@ fn a_loop_of_70000_trips_does_not_end_in_dbf() {
         assert!(!text.contains("dbf"), "{cpu}: a word counter would run the loop 4464 times:\n{text}");
     }
 }
+
+/// The counter shares `%d0` with the result of the call after the loop: the call's `%d0` is a new value, not a read
+/// of the counter, so the loop still ends in `dbf` (the unit stayed a `bne` loop once allocation chose `%d0`).
+#[test]
+fn a_counter_in_the_result_register_ends_in_dbf_when_a_call_follows() {
+    let source = include_str!("../data/dbf_fill_then_call.ll");
+    for cpu in ["68000", "68020"] {
+        let text = body(source, cpu, Level::Os);
+        assert!(text.contains("dbf\t"), "{cpu}: no dbf:\n{text}");
+    }
+}

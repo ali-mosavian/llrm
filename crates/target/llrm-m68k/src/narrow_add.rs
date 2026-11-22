@@ -311,11 +311,12 @@ pub(crate) fn read_after(
     register: RegId,
     start: &[usize],
 ) -> bool {
-    read_after_with(function, assignment, following, register, start, true)
+    read_after_with(function, assignment, following, register, start, true, false)
 }
 
 /// [`read_after`] where `end_reads` says whether the function's end reads
-/// `register` (false when it is no result register).
+/// `register` (false when it is no result register) and `calls_clobber` makes
+/// a call define each scratch register (`d0`, `d1`, `a0`, `a1`).
 pub(crate) fn read_after_with(
     function: &MFunction,
     assignment: &Assignment,
@@ -323,6 +324,7 @@ pub(crate) fn read_after_with(
     register: RegId,
     start: &[usize],
     end_reads: bool,
+    calls_clobber: bool,
 ) -> bool {
     let mut seen = vec![false; function.blocks.len()];
     let mut pending: Vec<usize> = start.to_vec();
@@ -342,7 +344,7 @@ pub(crate) fn read_after_with(
             if touches(true) {
                 return true;
             }
-            if touches(false) {
+            if touches(false) || (calls_clobber && inst.call && is_scratch(register)) {
                 defined = true;
                 break;
             }
@@ -439,4 +441,9 @@ pub fn narrow_counters(
         let operands = function.blocks[block].insts[at].operands.clone();
         function.blocks[block].insts[at] = op_inst(row, desc, operands);
     }
+}
+
+/// A register a call leaves undefined: the caller's scratch registers.
+fn is_scratch(register: RegId) -> bool {
+    [crate::reg::D0, crate::reg::D1, crate::reg::A0, crate::reg::A1].iter().any(|scratch| crate::REGISTER_INFO.root(*scratch) == register)
 }
