@@ -58,7 +58,6 @@
 //! target takes vector values (`Machine::has_vector_mir`).
 
 use llrm_analysis::aggregate::AggregateAA;
-use llrm_analysis::basicaa::BasicAA;
 use llrm_analysis::interleavedaccess::InterleavedAccessInfo;
 use llrm_analysis::ivdescriptors::{InductionKind, RecurKind};
 use llrm_analysis::loopaccess::{SymbolicStrideMap, get_ptr_stride};
@@ -66,7 +65,6 @@ use llrm_analysis::loopaccessinfo::LoopAccessInfo;
 use llrm_analysis::memory;
 use llrm_analysis::scev::analysis::ScevSession;
 use llrm_analysis::scev::{Cx, ScalarEvolution};
-use llrm_analysis::typebasedaa::TypeBasedAA;
 use llrm_mir::context::{Constant, ConstantKind};
 use llrm_mir::dense::IdMap;
 use llrm_mir::edit::Position;

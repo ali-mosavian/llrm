@@ -45,6 +45,32 @@ fn run_with_options(
     crate::testing::printed(&module)
 }
 
+/// [`run`] with `GlobalsAA` made first, as the pipeline's
+/// `RequireAnalysisPass`.
+fn run_with_globals(source: &str) -> String {
+    use llrm_analysis::manager::{GlobalsAA, GlobalsModRefAnalysis};
+    let mut module = parsed(source);
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.require_cached::<GlobalsAA>();
+    manager.require_cached::<GlobalsModRefAnalysis>();
+    manager.compute::<GlobalsAA>();
+    manager.compute::<GlobalsModRefAnalysis>();
+    manager.add(LoopVectorize {
+        always: true,
+        only_when_forced: false,
+        compares: false,
+        interleaves: false,
+        very_cheap: false,
+    });
+    manager
+        .run_module(
+            &mut module,
+            std::rc::Rc::new(llrm_arm64::machine::Arm64Machine { platform: llrm_arm64::machine::Platform::Linux }),
+        )
+        .unwrap();
+    crate::testing::printed(&module)
+}
+
 fn count(
     text: &str,
     what: &str,
@@ -1449,7 +1475,7 @@ fn the_widened_early_exit_loop_finds_what_the_scalar_one_finds() {
 /// check is not made.
 #[test]
 fn a_copy_into_an_unescaped_static_needs_no_overlap_check() {
-    let text = run(
+    let text = run_with_globals(
         "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128-Fn32\"\n\
 @trap = internal global [32 x i16] zeroinitializer, align 8\n\
 define void @f(ptr %a) {\n\
