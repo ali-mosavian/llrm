@@ -26,6 +26,9 @@ pub struct PressureClass {
     pub sets: Vec<usize>,
     /// The registers of the class this target describes.
     pub visible: Vec<String>,
+    /// The registers of the class a frame pointer reserves (`EBP` and `RBP`
+    /// of `LOW32_ADDR_ACCESS_RBP`); 0 where the file says nothing.
+    pub frame: u32,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -63,13 +66,21 @@ pub fn parse(text: &str) -> Result<PressureSets, String> {
                     largest: largest.to_owned(),
                 });
             }
-            ["class", name, weight, registers, sets, visible] => out.classes.push(PressureClass {
-                name: name.to_owned(),
-                weight: number(weight, "weight", &at)?,
-                registers: number(registers, "registers", &at)?,
-                sets: list(sets).iter().map(|one| number(one, "set", &at)).collect::<Result<_, _>>()?,
-                visible: list(visible),
-            }),
+            ["class", name, weight, registers, sets, visible, ref frame @ ..] if frame.len() <= 1 => {
+                let frame = match frame {
+                    [] => 0,
+                    [one] => number(one.strip_prefix("frame=").ok_or_else(|| at("`frame=<n>`"))?, "frame", &at)?,
+                    _ => unreachable!(),
+                };
+                out.classes.push(PressureClass {
+                    name: name.to_owned(),
+                    weight: number(weight, "weight", &at)?,
+                    registers: number(registers, "registers", &at)?,
+                    sets: list(sets).iter().map(|one| number(one, "set", &at)).collect::<Result<_, _>>()?,
+                    visible: list(visible),
+                    frame,
+                })
+            }
             _ => return Err(at("a `set` or a `class` line")),
         }
     }
@@ -217,6 +228,7 @@ pub fn derive(
             registers: class.members.len() as u32,
             sets: in_sets,
             visible: class.members.iter().map(|one| (*one).to_owned()).collect(),
+            frame: 0,
         });
     }
     // The largest class of a set: the first with the most units.
@@ -251,9 +263,22 @@ impl PressureSets {
         set: usize,
         allocatable: impl Fn(&str) -> bool,
     ) -> u32 {
+        self.limit_with(set, allocatable, 0)
+    }
+
+    /// [`limit`](Self::limit) with `frame_free` more registers of the largest
+    /// class allocatable that the file does not describe: a function with no
+    /// frame pointer has `RBP` along with `EBP` (the class's `frame`, less
+    /// the ones the target describes).
+    pub fn limit_with(
+        &self,
+        set: usize,
+        allocatable: impl Fn(&str) -> bool,
+        frame_free: u32,
+    ) -> u32 {
         let PressureSet { limit, largest, .. } = &self.sets[set];
         let class = self.class(largest).expect("the largest class of a set is described");
-        let free = class.visible.iter().filter(|one| allocatable(one)).count() as u32;
+        let free = class.visible.iter().filter(|one| allocatable(one)).count() as u32 + frame_free;
         if free == 0 {
             return *limit;
         }
