@@ -81,6 +81,7 @@ const SOURCE_ORDER: Options = Options {
     call_targets: false,
     pc_calls: false,
     sext_adds: false,
+    narrow_sext: false,
     return_dup: false,
     class_split: false,
     compare_destinations: false,

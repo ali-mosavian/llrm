@@ -38,8 +38,12 @@ mul_expand_floor = 60
 
 [share.speed]
 # The same, at the speed levels (O1-O3), per routine: clocks are the second goal there and a module's bytes
-# under the bytes bar are headroom (coordinator ruling 2026-11-18).
-division16 = 1
+# under the bytes bar are headroom (coordinator ruling 2026-11-18). 0 for the 16-bit division: the speed routine is
+# taken wherever its clocks repay its bytes (`select::speed_division16_pays`, 12 clocks a byte; a cold division stays
+# compact). The static run estimate rates a recursion's divisions low (idiv_loop_os -O1: 200 runs of 2,800), so the
+# share test kept the compact routine there: 2.34M clocks against llvm-mos's 1.07M. Corpus A/B of the test off, both
+# CPUs at O1-Os: one cell changes (idiv_loop_os O1 385 -> 519 B, 2.34M -> 1.03M clocks; bytes bar 685).
+division16 = 0
 # The outliner at -O2 and -O3: a place is kept where the share of the module's clocks its calls add is at most
 # this many times the share of the module's bytes it saves.
 outline = 1
