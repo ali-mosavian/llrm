@@ -206,6 +206,16 @@ pub fn frame_ops_choosing(
     key: impl Fn(usize, u32) -> (i64, i64),
 ) -> Result<(Vec<FrameOp>, Vec<FrameOp>), String> {
     let (pin_opening, pin_closing) = (layout.prologue(), layout.epilogue());
+    // `movem` takes a 16-bit displacement: a frame larger than that has no pin shape to compare with
+    // (QuickrBasic `indent.c`: a 65 KB buffer, `MOVM32pm` operand 65308), and pushes the registers instead
+    let unencodable = |ops: &[FrameOp]| {
+        ops.iter().any(|op| matches!(op, FrameOp::Save { offset, .. } | FrameOp::Restore { offset, .. } if i16::try_from(*offset).is_err()))
+    };
+    if unencodable(&pin_opening) || unencodable(&pin_closing) {
+        if let Some(frame) = layout.push_prologue().zip(layout.push_epilogue()) {
+            return Ok(frame);
+        }
+    }
     let mut pushed = Vec::new();
     if push_frame {
         pushed.extend(layout.push_prologue().zip(layout.push_epilogue()));

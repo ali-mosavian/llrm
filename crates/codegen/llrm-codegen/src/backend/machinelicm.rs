@@ -104,6 +104,9 @@ pub struct MachineLicm {
     /// -Os, -Oz: a carried constant costs the `fstp` that ends it (DEVIATE X1
     /// is off).
     pub size: bool,
+    /// `MRI->constrainRegAttrs` for `EliminateCSE`; `None` where one class
+    /// serves every value.
+    pub constrain: Option<crate::backend::precse::Constrain>,
 }
 
 impl LIRTransform for MachineLicm {
@@ -119,7 +122,7 @@ impl LIRTransform for MachineLicm {
         &mut self,
         body: LirBody,
     ) -> Result<LirBody, String> {
-        Ok(hoisted_sized(&body, &self.classes, self.size, &self.segments))
+        Ok(hoisted_constrained(&body, &self.classes, self.size, &self.segments, self.constrain.as_ref()))
     }
 }
 
@@ -699,6 +702,7 @@ fn reverse_post_order(
 }
 
 struct X86<'a> {
+    constrain: Option<&'a crate::backend::precse::Constrain>,
     pressure: Pressure,
     /// The values the loop names (`Target::hoist_by_pressure` false).
     named: usize,
@@ -757,6 +761,15 @@ impl X86<'_> {
 }
 
 impl licm::Policy<Wrapped> for X86<'_> {
+    fn may_stand_for(
+        &mut self,
+        dups: &[u32],
+        kept: &[u32],
+    ) -> bool {
+        let Some(constrain) = self.constrain else { return true };
+        dups.iter().zip(kept).all(|(dup, kept)| constrain(*dup, *kept))
+    }
+
     /// A carried constant is read on every trip, the accumulators beside it as
     /// often: it lies under them on the stack, where `fadd m64` finds the
     /// accumulator on top (to_double: two `fxch` a trip with it above).
@@ -1029,6 +1042,18 @@ pub fn hoisted_sized(
     size: bool,
     segments: &Segments,
 ) -> LirBody {
+    hoisted_constrained(body, classes, size, segments, None)
+}
+
+/// `hoisted_sized`, where a duplicate stands for the kept computation only if
+/// `constrain` allows it.
+pub fn hoisted_constrained(
+    body: &LirBody,
+    classes: &RegisterClasses,
+    size: bool,
+    segments: &Segments,
+    constrain: Option<&crate::backend::precse::Constrain>,
+) -> LirBody {
     let Some(regs) = body.registers else { return body.clone() };
     let control_word_written = body
         .insns()
@@ -1077,6 +1102,7 @@ pub fn hoisted_sized(
         loads: false,
         size,
         fresh: body.next_value(),
+        constrain,
     };
     let Some(moved) = licm::hoist(&blocks, body.entry, &mut policy) else { return body.clone() };
     let blocks: Vec<crate::model::lir::Block> =
