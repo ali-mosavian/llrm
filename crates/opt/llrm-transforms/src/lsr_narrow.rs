@@ -105,7 +105,10 @@ impl Collection<'_, '_> {
 
     /// `NarrowSearchSpaceByCollapsingUnrolledCode`: uses a constant offset
     /// apart use the same registers: the fixups of one move into the other.
-    pub fn narrow_search_space_by_collapsing_unrolled_code(&mut self) {
+    pub fn narrow_search_space_by_collapsing_unrolled_code(
+        &mut self,
+        se: &ScalarEvolution,
+    ) {
         if !self.too_complex() {
             return;
         }
@@ -140,7 +143,7 @@ impl Collection<'_, '_> {
                 let mut i = 0;
                 while i < self.uses[that].formulae.len() {
                     let lu = &self.uses[that];
-                    if lu.formulae[i].mode().is_some_and(|mode| {
+                    if lu.formulae[i].mode_in(se).is_some_and(|mode| {
                         is_legal_use(
                             self.tti,
                             lu.min_offset,
@@ -151,6 +154,7 @@ impl Collection<'_, '_> {
                             lu.formulae[i].base_offset,
                             mode.has_base_reg,
                             mode.scale,
+                            mode.bits,
                         )
                     }) {
                         i += 1;
@@ -240,7 +244,10 @@ impl Collection<'_, '_> {
 
     /// `NarrowSearchSpaceByMergingUsesOutsideLoop`: a use with every fixup
     /// outside the loop joins one inside it that has the same first formula.
-    pub fn narrow_search_space_by_merging_uses_outside_loop(&mut self) {
+    pub fn narrow_search_space_by_merging_uses_outside_loop(
+        &mut self,
+        se: &ScalarEvolution,
+    ) {
         if !self.too_complex() {
             return;
         }
@@ -266,7 +273,7 @@ impl Collection<'_, '_> {
                         // This use's offsets must be legal for all the other's
                         // formulae.
                         if other.formulae.iter().any(|f| {
-                            !f.mode().is_some_and(|mode| {
+                            !f.mode_in(se).is_some_and(|mode| {
                                 is_legal_use(
                                     self.tti,
                                     min,
@@ -277,6 +284,7 @@ impl Collection<'_, '_> {
                                     f.base_offset,
                                     mode.has_base_reg,
                                     mode.scale,
+                                    mode.bits,
                                 )
                             })
                         }) {
@@ -459,7 +467,7 @@ impl Collection<'_, '_> {
             "by_detecting_supersets",
             self.uses.iter().map(|one| one.formulae.len().to_string()).collect::<Vec<_>>().join(" ")
         );
-        self.narrow_search_space_by_collapsing_unrolled_code();
+        self.narrow_search_space_by_collapsing_unrolled_code(se);
         llrm_support::debug!(
             "lsr",
             "  after {}: {}",
@@ -487,7 +495,7 @@ impl Collection<'_, '_> {
             "by_filter_post_inc",
             self.uses.iter().map(|one| one.formulae.len().to_string()).collect::<Vec<_>>().join(" ")
         );
-        self.narrow_search_space_by_merging_uses_outside_loop();
+        self.narrow_search_space_by_merging_uses_outside_loop(se);
         llrm_support::debug!(
             "lsr",
             "  after {}: {}",

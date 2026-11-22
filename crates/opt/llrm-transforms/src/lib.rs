@@ -397,6 +397,7 @@ pub mod mergestores;
 mod mirror;
 pub mod mldstmotion;
 pub mod narrowcycle;
+pub mod mosindexiv;
 pub mod narrowiv;
 pub mod narrowrange;
 pub mod narrowspace;
