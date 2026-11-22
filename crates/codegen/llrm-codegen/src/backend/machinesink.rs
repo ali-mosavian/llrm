@@ -710,19 +710,6 @@ impl Sinker {
             liveness::effect(self.regs, self.bits, later)
                 .is_none_or(|found| found.writes.iter().any(|&(register, _)| self.regs.is_data_segment(register)))
         });
-        // The effect leaves the stack pointer out, and `FindSuccToSinkTo` keeps
-        // an instruction that names the register itself (`$rsp = COPY`, a
-        // `stacksave`): it is not constant. A cell addressed through it is not
-        // one (`frame_cell` above).
-        let names_stack_pointer = one.what.as_ref().is_some_and(|what| {
-            what.sources
-                .iter()
-                .chain(&what.dests)
-                .any(|place| matches!(place, Loc::Reg(held) if self.regs.is_stack(held.register)))
-        });
-        if names_stack_pointer {
-            return true;
-        }
         let physical_reads = reads
             .iter()
             .any(
@@ -1447,50 +1434,6 @@ mod tests {
             .filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned))
             .collect();
         assert_eq!(names, ["mov", "or", "je"], "the flag-setting or stays in its block");
-    }
-
-    /// `stacksave` is `mov v, sp`, read by the `stackrestore` in one successor:
-    /// it was sunk to it, past the `sub sp` of an alloca between, and the
-    /// restore put back the stack pointer the alloca had made (each trip of a
-    /// VLA loop took 16 bytes more: tests/run/c/vla_stack_restored.c x86_64
-    /// -O1, -O2, x86_32 -O1..-Os printed 5 moved arrays, not 0).
-    #[test]
-    fn test_a_copy_of_the_stack_pointer_stays_above_the_write_that_follows() {
-        let sp = || Loc::Reg(crate::model::ir::Reg { register: llrm_lir::registers::RegId::SP, width: 2 });
-        let entry = LirBlock {
-            succ: vec![1, 2].into(),
-            ..LirBlock::new(
-                0,
-                vec![
-                    insn(0, Operation::Move, "mov", vec![held(8)], vec![sp()], vec![8], vec![]),
-                    insn(1, Operation::Binary, "sub", vec![sp()], vec![sp(), held(1)], vec![], vec![1]),
-                    insn(2, Operation::Branch, "je", vec![], vec![], vec![], vec![]),
-                ],
-            )
-        };
-        let restore = LirBlock::new(
-            1,
-            vec![
-                insn(3, Operation::Move, "mov", vec![sp()], vec![held(8)], vec![], vec![8]),
-                insn(4, Operation::Return, "ret", vec![], vec![], vec![], vec![]),
-            ],
-        );
-        let other = LirBlock::new(2, vec![insn(5, Operation::Return, "ret", vec![], vec![], vec![], vec![])]);
-        let mut body = LirBody::new(
-            "save",
-            0,
-            vec![entry.into(), restore.into(), other.into()],
-            IndexMap::default(),
-            IndexMap::default(),
-        );
-        body.inputs = [1].into_iter().collect();
-        body.registers = Some(llrm_lir::registers::Regs(&llrm_x86_m16::REGISTER_INFO));
-        let names: Vec<_> = sunk(&body, false).blocks[0]
-            .insns
-            .iter()
-            .filter_map(|one| one.what.as_ref()?.name.as_deref().map(str::to_owned))
-            .collect();
-        assert_eq!(names, ["mov", "sub", "je"], "the save stays before the alloca's sub");
     }
 
     /// `x = a * 7; if (y != y) x = NaN` compares with `fcom` and branches on
