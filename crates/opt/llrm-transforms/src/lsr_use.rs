@@ -563,6 +563,7 @@ impl Cost {
             insns: u32::MAX,
             num_regs: u32::MAX,
             add_rec_cost: u32::MAX,
+            wide_steps: u32::MAX,
             num_iv_muls: u32::MAX,
             num_base_adds: u32::MAX,
             imm_cost: u32::MAX,
@@ -779,7 +780,7 @@ impl Cost {
             if f.has_global() {
                 // Symbolic values are rated conservatively.
                 self.c.imm_cost += 64;
-            } else if offset.is_non_zero() {
+            } else if offset.is_non_zero() && !(lu.kind == Kind::ICmpZero && r.tti.lsr_exit_compare_immediate_is_free()) {
                 let bits = 65 - (offset.0 ^ (offset.0 >> 63)).leading_zeros();
                 self.c.imm_cost += bits;
             }
@@ -953,6 +954,13 @@ impl Cost {
                 loop_cost = 0;
             }
             self.c.add_rec_cost += loop_cost;
+            if loop_cost > 0
+                && r.se.match_affine_add_rec(reg).is_some_and(|(_, step, _)| {
+                    r.se.as_constant(step).is_some_and(|c| !matches!(c.sext_value() as i64, 1 | -1))
+                })
+            {
+                self.c.wide_steps += 1;
+            }
             if loop_cost > 0
                 && r.se.match_affine_add_rec(reg).is_some_and(|(_, step, _)| r.se.as_constant(step).is_none())
             {

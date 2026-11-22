@@ -489,6 +489,10 @@ pub struct LsrCost {
     pub insns: u32,
     pub num_regs: u32,
     pub add_rec_cost: u32,
+    /// Of `add_rec_cost`, the addrecs stepped by a constant other than one or
+    /// minus one: an add of an immediate, not an increment (the pin's TODO on
+    /// `RateRegister`: "AddRecCost should be a function of the stride").
+    pub wide_steps: u32,
     pub num_iv_muls: u32,
     pub num_base_adds: u32,
     pub imm_cost: u32,
@@ -2348,6 +2352,15 @@ pub trait Tti {
 
     /// `Tuning::lftr_any_stride` (DEVIATE LFTR1).
     fn lftr_any_stride(&self) -> bool {
+        false
+    }
+
+    /// DEVIATE LSR-CMP-IMM: the exit test's immediate is not rated by its bit
+    /// width in `RateFormula`'s `ImmCost` (the pin counts the bits of every
+    /// non-zero offset, a compare's too). A compare against a constant is one
+    /// `cmp` per byte where a zero test is an `ora`: the exit test's own cost,
+    /// priced by the target, not an immediate a formula adds.
+    fn lsr_exit_compare_immediate_is_free(&self) -> bool {
         false
     }
 

@@ -359,13 +359,24 @@ impl Tti for Mos6502 {
     ) -> bool {
         let key = |c: &LsrCost| {
             // u64: a rejected formula carries `u32::MAX` terms.
+            let w = |name: &str, default: u64| -> u64 {
+                std::env::var(name).ok().and_then(|v| v.parse().ok()).unwrap_or(default)
+            };
             let work = 3 * u64::from(c.add_rec_cost)
+                + w("LLRM_EXP_W_WIDE", 0) * u64::from(c.wide_steps)
                 + 7 * u64::from(c.num_base_adds)
                 + 40 * u64::from(c.num_iv_muls)
-                + 4 * u64::from(c.imm_cost);
+                + w("LLRM_EXP_W_IMM", 4) * u64::from(c.imm_cost);
             (work, c.num_regs, c.scale_cost, c.setup_cost)
         };
         key(a) < key(b)
+    }
+
+    /// A 16-bit compare of the exit test costs two `cmp`s against zero's `ora`:
+    /// the bits of its constant do not make a formula worse (the countdown
+    /// counter that avoids it costs a second counter).
+    fn lsr_exit_compare_immediate_is_free(&self) -> bool {
+        std::env::var_os("LLRM_EXP_NO_FREE_CMP").is_none()
     }
 
     /// llvm-mos: `n8` makes a 16-bit counter illegal, and LFTR still tests the exit on it.
