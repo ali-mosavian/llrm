@@ -2,7 +2,8 @@
 //! encode ([L5545 to
 //! L5630](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/TargetLowering.cpp#L5545)):
 //! the compare is made on the shifted value, whose constant is small.
-//! `(x & -256) == 256` is `(x >> 8) == 1`; `x u< 0x4f000000` is `(x >> 24) u< 0x4f`.
+//! `(x & -256) == 256` is `(x >> 8) == 1`; `x u< 0x4f000000` is `(x >> 24) u<
+//! 0x4f`.
 //!
 //! `shouldAvoidTransformToShift` is false on every target here.
 
@@ -35,7 +36,8 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         if !adjust && !matches!(cond, CondCode::SetULt | CondCode::SetUGe) {
             return None;
         }
-        // `x <= 0x0ffffffff` is `(x >> 32) < 1`, `x > 0x0ffffffff` is `(x >> 32) >= 1`.
+        // `x <= 0x0ffffffff` is `(x >> 32) < 1`, `x > 0x0ffffffff` is `(x >>
+        // 32) >= 1`.
         let (shift, range, new_cond) = if adjust {
             let new_cond = if cond == CondCode::SetULe { CondCode::SetULt } else { CondCode::SetUGe };
             (c1.trailing_ones().min(width), c1.wrapping_add(1) & mask, new_cond)
@@ -86,7 +88,8 @@ impl<H: CombineHooks> DagCombiner<'_, H> {
         let width = op_type.size_in_bits();
         let mask = super::fold::mask(width);
         let and_mask = self.dag.constant(self.dag.operand(n0, 1))? & mask;
-        // `isNegatedPowerOf2`: ones from the top bit down to the lowest set bit.
+        // `isNegatedPowerOf2`: ones from the top bit down to the lowest set
+        // bit.
         let negated_power_of_two =
             and_mask != 0 && (and_mask << (128 - width)).leading_ones() + and_mask.trailing_zeros() == width;
         if !negated_power_of_two || c1 & !and_mask != 0 {
