@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/selectoptimize.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/selectoptimize.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/selectoptimize.rs sha256:a9149f1889c653cb2bc41ae6b3c3c6ab3472de76fb372b1ca37177eb783a8979 -->
+<!-- src: crates/opt/llrm-transforms/src/selectoptimize.rs sha256:8b02f27435d9ece56fc2ac8e275e97e245d1440b46f208c8c687bf0bb8dbbb79 -->
 
 # selectoptimize
 
@@ -48,7 +48,8 @@ it. Where the pin runs it, it is after `ExpandReductions` in
 `addIRPasses`.
 
 ## Example
-A select whose branch form is cheaper becomes a branch and a phi, with a frozen condition.
+A select whose branch form is cheaper becomes a branch and a phi, with a
+frozen condition.
 
 ```text
 %s = select i1 %c, %a, %b

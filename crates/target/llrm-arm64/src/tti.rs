@@ -991,6 +991,18 @@ impl Tti for AArch64 {
         ty: VectorTy,
         kind: CostKind,
     ) -> Option<Cost> {
+        // [L4992]: no `mul.2d` without SVE; the multiply of an `i64` vector is
+        // scalarized, each lane two extracts, a multiply and an insert (14 for
+        // a `v2i64`, 28 for a `v4i64`).
+        if op == ArithOp::Mul && kind == CostKind::RecipThroughput && matches!(ty.lane, Ty::Int(64)) {
+            let lane_op = |lane_op| self.vector_instr_cost(lane_op, ty, None, false, VectorInstrContext::None, kind);
+            let (extract, insert) = (lane_op(LaneOp::Extract)?, lane_op(LaneOp::Insert)?);
+            let scalar = self.arithmetic_cost(op, ty.lane, kind, OperandInfo::ANY, OperandInfo::ANY);
+            if !(extract.valid && insert.valid && scalar.valid) {
+                return None;
+            }
+            return Some(Cost::of(i64::from(ty.count) * (scalar.value + 2 * extract.value + insert.value)));
+        }
         vector_arithmetic_cost(op, ty, kind)
     }
 
@@ -1001,7 +1013,25 @@ impl Tti for AArch64 {
         second: OperandInfo,
         kind: CostKind,
     ) -> Option<Cost> {
-        vector_divide_by_constant_cost(op, ty, second, kind).or_else(|| vector_arithmetic_cost(op, ty, kind))
+        // [L5129]: a signed divide by a vector constant whose lanes differ is
+        // priced as scalarized (`FIXME` in the pin): two extracts of the
+        // dividend's lanes, one insert, and a scalar divide for each lane.
+        if second.constant
+            && second.non_uniform
+            && matches!(op, ArithOp::SDiv | ArithOp::SRem)
+            && !ty.lane.is_float()
+            && let Ty::Int(_) = ty.lane
+        {
+            let lane_op = |lane_op| self.vector_instr_cost(lane_op, ty, None, false, VectorInstrContext::None, kind);
+            let (extract, insert) = (lane_op(LaneOp::Extract)?, lane_op(LaneOp::Insert)?);
+            let by = OperandInfo { constant: true, non_uniform: true, ..OperandInfo::ANY };
+            let scalar = self.arithmetic_cost(op, ty.lane, kind, OperandInfo::ANY, by);
+            if !(extract.valid && insert.valid && scalar.valid) {
+                return None;
+            }
+            return Some(Cost::of(2 * extract.value + insert.value + i64::from(ty.count) * scalar.value));
+        }
+        vector_divide_by_constant_cost(op, ty, second, kind).or_else(|| self.vector_arithmetic_cost(op, ty, kind))
     }
 
     fn vectorizes_size_priced(&self) -> bool {
@@ -1139,6 +1169,27 @@ impl Tti for AArch64 {
     /// `AArch64TTIImpl::prefersVectorizedAddressing`: `ST->hasSVE()`.
     fn prefers_vectorized_addressing(&self) -> bool {
         false
+    }
+
+    /// `AArch64TTIImpl::getScalarizationOverhead`: an integer vector pays
+    /// `popcount(lanes) * base` whatever the lane (the lane 0 insert into
+    /// poison is free only through `getVectorInstrCost`, and a float vector
+    /// goes to the base class's per-lane price).
+    fn demanded_insert_overhead(
+        &self,
+        ty: VectorTy,
+        lanes: &[u32],
+        cost_kind: CostKind,
+    ) -> Option<Cost> {
+        if ty.lane.is_float() {
+            return llrm_mir::tti::per_lane_insert_overhead(self, ty, lanes, cost_kind);
+        }
+        crate::tti_vector::scalarization_overhead(ty, true, false, cost_kind).map(|_| {
+            Cost::of(
+                lanes.len() as i64
+                    * if cost_kind == CostKind::CodeSize { 1 } else { crate::tti_vector::INSERT_EXTRACT_BASE_COST },
+            )
+        })
     }
 
     fn scalarization_overhead(
@@ -1716,7 +1767,9 @@ impl Tti for AArch64 {
                 // ~O(Bitwidth^2).
                 if bits_of(ty) > 64 { count * lt.count } else { count }
             }
-            SDiv | SRem if second.constant && matches!(ty, Ty::Int(bits) if bits <= 64) => {
+            // `Op2Info.isUniform()`: a lane of a vector constant whose lanes
+            // differ is not.
+            SDiv | SRem if second.constant && !second.non_uniform && matches!(ty, Ty::Int(bits) if bits <= 64) => {
                 let add = self.arithmetic_cost(Add, ty, kind, none, none);
                 let asr = self.arithmetic_cost(AShr, ty, kind, none, none);
                 let mul = self.arithmetic_cost(Mul, ty, kind, none, none);

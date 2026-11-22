@@ -49,12 +49,17 @@
 //! - D5. Priced (M16-KEEPDISP-1, closed): on a target whose accesses fold a constant offset
 //!   (`constant_offset_phi_is_cheap` false) a phi of such offsets is priced
 //!   (`displacement_sink_pays`), not sunk always as the pin does.
+//! - D6. The pin sinks only after SROA. Where the target sinks at size in the
+//!   early slots too (`Tuning::sink_common_at_size`), a load or store whose
+//!   pointer needs a phi and is an alloca's is left (`points_into_alloca`):
+//!   SROA cannot speculate through a select of allocas (older LLVM kept this
+//!   guard in `canSinkInstructions`; the pin has dropped it).
 
-use llrm_mir::context::Context;
+use llrm_mir::context::{ConstantKind, Context};
 use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
-use llrm_mir::opcode::{Attribute, BinaryOp, Flags, Opcode};
+use llrm_mir::opcode::{Attribute, BinaryOp, CastOp, Flags, Opcode};
 use llrm_mir::types::Type;
 use llrm_support::hash::HashMap;
 
@@ -219,6 +224,27 @@ pub(crate) fn can_replace_operand_with_variable(
     }
 }
 
+/// Whether `operand` is an alloca, through casts and all-zero GEPs (D6).
+fn points_into_alloca(context: &Context, function: &Function, mut operand: Operand) -> bool {
+    loop {
+        let Operand::Value(value) = operand else { return false };
+        let ValueDef::Instruction(def) = function.value(value).def else { return false };
+        let instruction = function.instruction(def);
+        operand = match &instruction.opcode {
+            Opcode::Alloca { .. } => return true,
+            Opcode::Cast(CastOp::BitCast) => instruction.operands[0],
+            Opcode::GetElementPtr { .. }
+                if instruction.operands[1..].iter().all(
+                    |&one| matches!(one, Operand::Constant(id) if matches!(context.get(id).kind, ConstantKind::Int(0))),
+                ) =>
+            {
+                instruction.operands[0]
+            }
+            _ => return false,
+        };
+    }
+}
+
 /// `canSinkInstructions`: the instructions `insts`, one of each predecessor,
 /// can be one instruction with phis for the operands that differ, which are
 /// recorded in `phi_operands`; `unfolds` is set where one of the phis gives up
@@ -293,6 +319,14 @@ fn can_sink(
         let operand = function.instruction(first).operands[index];
         if insts.iter().all(|&inst| function.instruction(inst).operands[index] == operand) {
             continue;
+        }
+        // D6: SROA cannot speculate through a select of allocas.
+        if matches!(function.instruction(first).opcode, Opcode::Load { .. } | Opcode::Store { .. })
+            && insts
+                .iter()
+                .any(|&inst| points_into_alloca(context, function, function.instruction(inst).operands[index]))
+        {
+            return false;
         }
         let replaceable =
             insts.iter().all(|&inst| can_replace_operand_with_variable(context, spec, function, inst, index));

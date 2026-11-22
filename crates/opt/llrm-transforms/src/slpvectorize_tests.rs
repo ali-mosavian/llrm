@@ -271,3 +271,51 @@ fn four_halvings_stored_to_four_arrays_are_one_vector_sdiv() {
     assert_eq!(text.matches("sdiv i64").count(), 0, "{text}");
     assert_eq!(text.matches("extractelement <4 x i64>").count(), 4, "{text}");
 }
+
+const RDX_TREE: &str = include_str!("../tests/slp/rdx_tree_sdiv.ll");
+
+/// jpeg_fixed (arm64): `s = 131584 + p[0]*181/512 + p[8]*c1/1024 + ...` stayed
+/// a scalar chain of eight `sdiv`s; the pin's `tryToReduce` builds a tree over
+/// the reduced values (`buildTree(VL, IgnoreList)`): the eight `sdiv`s become
+/// one `sdiv <8 x i64>` by the non-uniform power-of-two divisors, their
+/// dividends gathered from the scalar `mul`s, and one
+/// `llvm.vector.reduce.add.v8i64` ("Vectorized horizontal reduction with cost
+/// -4 and with tree size 5").
+#[test]
+fn a_reduction_of_sdivs_over_gathered_muls_becomes_a_vector_sdiv_and_one_reduction() {
+    let text = run(RDX_TREE);
+    assert!(text.contains("sdiv <8 x i64>"), "{text}");
+    assert!(text.contains("@llvm.vector.reduce.add.v8i64"), "{text}");
+    assert_eq!(text.matches("sdiv i64").count(), 1, "only the divide after the sum stays: {text}");
+    assert_eq!(text.matches("load i64").count(), 8, "the loads stay scalar: {text}");
+}
+
+/// loop_interchange (arm64 -O2): a `trunc` of one value over four lanes was
+/// priced 3, as four bulk inserts of `getScalarizationOverhead`; the pin
+/// prices a splat one `getVectorInstrCost` insert into poison (free at lane
+/// 0) and a broadcast: 1. The loop's x32 scale turned 2 extra into the
+/// tree not made (+16 B). Four distinct values do pay every lane: 4 x 2.
+#[test]
+fn a_splat_gather_is_a_free_insert_and_a_broadcast_and_distinct_values_pay_each_lane() {
+    use llrm_mir::module::{Operand, ValueId};
+    use llrm_mir::tti::Ty;
+    let tti = llrm_arm64::tti::AArch64::of_cpu("generic").unwrap();
+    let value = |id| Operand::Value(ValueId(id));
+    let cost = |lanes: &[Operand]| {
+        crate::slpgather::gather_cost(&tti, llrm_mir::tti::CostKind::RecipThroughput, Ty::Int(16), lanes, &[])
+    };
+    assert_eq!(cost(&[value(1), value(1), value(1), value(1)]), Some(1));
+    assert_eq!(cost(&[value(1), value(2), value(3), value(4)]), Some(8));
+}
+
+/// stft_fixed -Os (arm64): four distinct i64 lanes gathered at code size were
+/// "not priced" (the target's overhead hook returned none), so no `optsize`
+/// seed tree could be costed; the pin pays 1 a lane (`VecInstCost`).
+#[test]
+fn an_integer_gather_at_code_size_pays_one_a_lane() {
+    use llrm_mir::module::{Operand, ValueId};
+    use llrm_mir::tti::{CostKind, Ty};
+    let tti = llrm_arm64::tti::AArch64::of_cpu("generic").unwrap();
+    let lanes: Vec<_> = (1..=4).map(|id| Operand::Value(ValueId(id))).collect();
+    assert_eq!(crate::slpgather::gather_cost(&tti, CostKind::CodeSize, Ty::Int(64), &lanes, &[]), Some(4));
+}

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/slpreduction.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/slpreduction.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/slpreduction.rs sha256:fe030ba78b8d2ebb5cce8ddb94dcc4c7672e502113670d9504c5e3aa3f395de8 -->
+<!-- src: crates/opt/llrm-transforms/src/slpreduction.rs sha256:dab2c08fa57e7b3c7c2e216901d99a5dff92822f6fe3877481a0809df87fdc1b -->
 
 # slpreduction
 
@@ -27,8 +27,11 @@ the narrower part is added to the low lanes of the wider, and
 `llvm.vector.reduce.*` of the result is combined with the values left over
 as `op.rdx` (flags other than wrap are what `createOp` keeps).
 
-DEVIATE SLP-RDX1 (owner w11, exit 2026-11-24): the windows of loads that
-are already in ascending order and whose scalars have one use; no
+DEVIATE SLP-RDX1 (owner w11, exit 2026-11-24): the old load-slice path
+runs first and the tree path only when it finds nothing; the tree's total
+on jpeg_fixed is -6 where the pin's is -4 (no per-entry oracle yet); the
+windows of loads that are already in ascending order and whose scalars
+have one use; no
 reordered or externally used lanes (`ExternalUses`, the reorder
 shuffle), no scale by the loop's trip count (it multiplies every entry and
 the reduction alike, so the sign of the total is the one used here), no
@@ -44,7 +47,8 @@ With the store chains, at the pin's `slp-vectorizer` slot.
 `slpvectorize`.
 
 ## Example
-Forty `sext i16` loads of consecutive cells, summed by a chain of `add i64`, become two vector loads and one reduction (the tile test).
+Forty `sext i16` loads of consecutive cells, summed by a chain of `add i64`,
+become two vector loads and one reduction (the tile test).
 
 ```text
 %x0 = sext i16 (load [i]) to i64 ; ... x39, summed by add i64

@@ -42,16 +42,44 @@ use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
 use llrm_mir::opcode::Opcode;
 
+/// The divides of `block` that cannot trap: a constant divisor that is not
+/// zero, nor -1 for a signed one (`isSafeToSpeculativelyExecute`). Like a pure
+/// call, they are not barriers to the loads around them.
+pub(crate) fn safe_divides(
+    context: &llrm_mir::context::Context,
+    function: &Function,
+    block: BlockId,
+) -> IdSet<InstId> {
+    use llrm_mir::context::ConstantKind;
+    use llrm_mir::opcode::BinaryOp;
+    function
+        .iter_block(block)
+        .filter(|inst| {
+            let instruction = function.instruction(*inst);
+            let Opcode::Binary(op) = instruction.opcode else { return false };
+            let signed = match op {
+                BinaryOp::SDiv | BinaryOp::SRem => true,
+                BinaryOp::UDiv | BinaryOp::URem => false,
+                _ => return false,
+            };
+            let Some(Operand::Constant(divisor)) = instruction.operands.get(1) else { return false };
+            let constant = context.get(*divisor);
+            let ConstantKind::Int(bits) = constant.kind else { return false };
+            let width = context.types.int_bits(constant.ty).unwrap_or(0);
+            let ones = if width >= 128 { u128::MAX } else { (1u128 << width) - 1 };
+            bits != 0 && !(signed && bits == ones)
+        })
+        .collect()
+}
+
 /// Whether `inst` is a computation of its operands alone, which may stand
-/// anywhere its operands do. `pure_calls` are the calls that are.
+/// anywhere its operands do. `pure_calls` are the calls and divides that are.
 pub(crate) fn is_pure(
     function: &Function,
     inst: InstId,
     pure_calls: &IdSet<InstId>,
 ) -> bool {
     match function.instruction(inst).opcode {
-        // A division may trap: it is pure where `pure_calls` (the caller's
-        // set of what cannot) says its divisor is a constant that cannot.
         Opcode::Binary(op) => {
             !matches!(
                 op,
