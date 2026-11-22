@@ -349,7 +349,8 @@ fn lowered(
     let limit = if matches!(level, Level::O1 | Level::Os | Level::Oz) {
         M68kMachine { cpu }.tti().and_then(|tti| {
             let size = tti.unroll_trial_at_size();
-            // DEVIATE UNROLL-NEST-O1: the pin's threshold for a loop with a subloop.
+            // DEVIATE UNROLL-NEST-O1: the pin's threshold for a loop
+            // with a subloop.
             if level == Level::O1 && tti.unroll_trial_nests_at_o1() {
                 size.max(Some(llrm_transforms::loopunrollpass::pin_full_unroll_threshold(1)))
             } else {
