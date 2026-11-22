@@ -608,6 +608,13 @@ impl Tti for M68k {
         true
     }
 
+    /// DEVIATE UNROLL-NEST-O1 (owner wasm-3, exit 2026-12-12; row
+    /// M68K-ROTATE-O1): rotate_small -O1 276 B against gcc's complete unroll
+    /// and fold, ours 72 B at -O2 (`unroll_trial_nests_at_speed`).
+    fn unroll_trial_nests_at_o1(&self) -> bool {
+        true
+    }
+
     /// DEVIATE PEEL-OS-TRIAL: the same trial peels (`loopunrollpass`).
     fn peels_on_trial_at_size(&self) -> bool {
         true
