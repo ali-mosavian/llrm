@@ -53,11 +53,14 @@ struct Wrapped {
     physical: bool,
     /// The only physical register it names is a defined `a`.
     clobbers_only_a: bool,
+    /// It reads `a` by name (a return, a call's argument), not as a value.
+    reads_a: bool,
 }
 
 impl Wrapped {
     fn new(inst: Inst) -> Wrapped {
-        let (mut defs, mut uses, mut physical, mut clobbers_only_a) = (Vec::new(), Vec::new(), false, true);
+        let (mut defs, mut uses, mut physical, mut clobbers_only_a, mut reads_a) =
+            (Vec::new(), Vec::new(), false, true, false);
         for operand in &inst.operands {
             match operand {
                 Operand::Def(Reg::Virt(n)) => defs.push(*n),
@@ -66,14 +69,15 @@ impl Wrapped {
                     physical = true;
                     clobbers_only_a &= *r == crate::reg::A;
                 }
-                Operand::Use(Reg::Phys(_)) => {
+                Operand::Use(Reg::Phys(r)) => {
                     physical = true;
                     clobbers_only_a = false;
+                    reads_a |= *r == crate::reg::A;
                 }
                 _ => {}
             }
         }
-        Wrapped { inst, defs, uses, physical, clobbers_only_a }
+        Wrapped { inst, defs, uses, physical, clobbers_only_a, reads_a }
     }
 }
 
@@ -147,6 +151,9 @@ struct Mos {
     peak: usize,
     hoisted: usize,
     pairs: usize,
+    /// The loop reads `a` by name: what the preheader leaves in it may be wanted,
+    /// and the hoisted `LEA` would end the preheader with `a` clobbered.
+    reads_a: bool,
     /// The loop moves `rs0`: no address made from it is the same on every trip.
     moves_sp: bool,
     /// The loop calls: a call clobbers `a`, `x` and `y`.
@@ -189,6 +196,7 @@ impl Policy<Wrapped> for Mos {
         self.calls = facts.inside_blocks().any(|block| block.insns.iter().any(|one| one.inst.call));
         self.moves_sp =
             facts.inside_blocks().any(|block| block.insns.iter().any(|one| matches!(one.inst.kind, Kind::Op("ADJSP"))));
+        self.reads_a = facts.inside_blocks().any(|block| block.insns.iter().any(|one| one.reads_a));
         self.hoisted = 0;
         self.pairs = 0;
         self.peak = 0;
@@ -235,7 +243,7 @@ impl Policy<Wrapped> for Mos {
             && !(inst.call || inst.terminator || inst.barrier || inst.may_store || inst.side_effects);
         if frame_address {
             // `CanCauseHighRegPressure`: the peak and the pairs moved, the one more
-            if self.calls || self.moves_sp || !(facts.every_trip)(at) || self.peak + self.pairs + 1 >= PAIR_LIMIT {
+            if self.calls || self.moves_sp || self.reads_a || !(facts.every_trip)(at) || self.peak + self.pairs + 1 >= PAIR_LIMIT {
                 return false;
             }
             self.pairs += 1;
@@ -334,7 +342,7 @@ pub fn hoist(function: &mut MFunction<Class>) -> bool {
     let Some(moved) = licm_core::hoist(
         &blocks,
         first.id as i64,
-        &mut Mos { live: live_out(&blocks), alias: copies(&blocks), peak: 0, hoisted: 0, pairs: 0, moves_sp: false, calls: false },
+        &mut Mos { live: live_out(&blocks), alias: copies(&blocks), peak: 0, hoisted: 0, pairs: 0, reads_a: false, moves_sp: false, calls: false },
     ) else {
         return false;
     };
