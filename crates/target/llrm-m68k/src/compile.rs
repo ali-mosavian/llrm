@@ -1206,15 +1206,10 @@ fn items_once(
     }
     crate::regalloc::place_blocks(&mut function, &edge_odds(module, name)?, wants_size, options.loop_top_by_jumps);
     if options.short {
-        let returns_value = module
-            .global(id)
-            .function()
-            .is_none_or(
-                |one| matches!(
-                    module.context.types.get(one.ty),
-                    llrm_mir::types::Type::Function { returns, .. } if !module.context.types.is_void(*returns)
-                ),
-            );
+        let returns_value = module.global(id).function().is_none_or(|one| {
+            matches!(module.context.types.get(one.ty), llrm_mir::types::Type::Function { returns, .. }
+                if !module.context.types.is_void(*returns))
+        });
         crate::doloop::doloops(&mut function, &assignment, cpu, returns_value);
     }
     drop(sp);

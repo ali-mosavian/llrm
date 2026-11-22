@@ -237,9 +237,7 @@ fn place(
     // The globals: one section per role, each variable a symbol in it.
     let mut data_sections: Vec<Section> = Vec::new();
     let mut data_relocs: Vec<(usize, usize, usize, i64, String)> = Vec::new();
-    for (role, section_name) in
-        [(Role::ROData, ".rodata"), (Role::Data, ".data"), (Role::Bss, ".bss"), (Role::InitFunctions, ".init_array")]
-    {
+    for (role, section_name) in [(Role::ROData, ".rodata"), (Role::Data, ".data"), (Role::Bss, ".bss"), (Role::InitFunctions, ".init_array")] {
         let members: Vec<&Variable> = variables.iter().filter(|one| role_of(one) == role).collect();
         if members.is_empty() {
             continue;

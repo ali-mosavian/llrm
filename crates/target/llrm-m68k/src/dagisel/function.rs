@@ -221,9 +221,8 @@ pub fn select_function_with(
         sizes.push((value, size, align));
     }
     sizes.sort_by_key(|(value, _, _)| info.static_allocas[value]);
-    // DEVIATE SC1: StackColoring over the IR's lifetime markers
-    // (`llrm_codegen::backend::stackcoloring`), the surviving objects in
-    // the pin's order: a group sits where its largest member did
+    // DEVIATE SC1: StackColoring over the IR's lifetime markers (`llrm_codegen::backend::stackcoloring`), the
+    // surviving objects in the pin's order: a group sits where its largest member did
     let coloring = llrm_codegen::backend::stackcoloring::color_frame(module, function, &sizes);
     let count = coloring.objects.len() as i32;
     info.share_allocas(sizes.iter().zip(&coloring.colors).map(|((value, _, _), &group)| (*value, group)), count);
@@ -324,8 +323,7 @@ pub fn select_function_with(
             });
         }
     }
-    let mut locals: Vec<(i32, i64, i64)> =
-        objects.into_iter().enumerate().map(|(at, (size, align))| (at as i32, size, align)).collect();
+    let mut locals: Vec<(i32, i64, i64)> = objects.into_iter().enumerate().map(|(at, (size, align))| (at as i32, size, align)).collect();
     locals.extend(temporaries.made);
     locals.sort();
     if let Some(entry) = selected.first_mut() {
