@@ -583,6 +583,11 @@ pub struct SelectionDAG {
     /// it, so the set follows it into a machine node. A load a combine or the
     /// legalizer remakes is not in it.
     pub invariant_loads: HashSet<u32>,
+    /// What a load's `!range` says of its bits (`MachineMemOperand::getRanges`,
+    /// which `computeKnownBits` of a `LOAD` reads): the node's known-zero
+    /// and known-one bits. A load a combine or the legalizer remakes is not
+    /// in it.
+    pub load_ranges: std::collections::HashMap<u32, (u128, u128)>,
     /// The loads of a GOT entry (`MachinePointerInfo::getGOT`); like
     /// `invariant_loads`, the number follows the node into a machine node. The
     /// emitter makes such a load the symbol's External immediate, which the
@@ -674,6 +679,7 @@ impl SelectionDAG {
             temporaries: Vec::new(),
             local_symbols: Default::default(),
             invariant_loads: HashSet::default(),
+            load_ranges: Default::default(),
             got_loads: HashSet::default(),
             fixed_offsets: Default::default(),
             fixed_objects: Default::default(),
@@ -779,7 +785,10 @@ impl SelectionDAG {
         &self,
         value: SDValue,
     ) -> bool {
-        self.users(value).map(|user| self.nodes[user as usize].ops.iter().filter(|&&op| op == value).count()).sum::<usize>() == 1
+        self.users(value)
+            .map(|user| self.nodes[user as usize].ops.iter().filter(|&&op| op == value).count())
+            .sum::<usize>()
+            == 1
     }
 
     /// The live nodes that read any result of `node`, in creation order, once
@@ -1009,7 +1018,9 @@ impl SelectionDAG {
     ) -> Vec<u32> {
         let mut out: Vec<u32> = Vec::new();
         for &user in self.uses.get(node as usize).into_iter().flatten().rev() {
-            if !self.is_deleted(user) && self.nodes[user as usize].ops.iter().any(|op| op.node == node) && !out.contains(&user)
+            if !self.is_deleted(user)
+                && self.nodes[user as usize].ops.iter().any(|op| op.node == node)
+                && !out.contains(&user)
             {
                 out.push(user);
             }
@@ -1196,9 +1207,10 @@ impl SelectionDAG {
     }
 
     /// `ReplaceAllUsesOfValueWith(From, To)` followed by the undo of the use
-    /// `to` itself made of `from` (`visitFREEZE` mutates the freeze back): every
-    /// operand `from` becomes `to` except those of the node `keep`, which still
-    /// reads `from`. No stale handle to `from` is forwarded: `keep` reads it.
+    /// `to` itself made of `from` (`visitFREEZE` mutates the freeze back):
+    /// every operand `from` becomes `to` except those of the node `keep`,
+    /// which still reads `from`. No stale handle to `from` is forwarded:
+    /// `keep` reads it.
     pub fn replace_uses_except(
         &mut self,
         from: SDValue,
@@ -1229,7 +1241,8 @@ impl SelectionDAG {
             // The pin walks the use list newest first and adds each use to `to`
             // as it goes; the users are still updated in creation order, which
             // fixes which of two equal nodes a CSE merge keeps.
-            let use_list_order: Vec<u32> = self.users_newest_first(from).into_iter().filter(|&user| Some(user) != keep).collect();
+            let use_list_order: Vec<u32> =
+                self.users_newest_first(from).into_iter().filter(|&user| Some(user) != keep).collect();
             for user in self.users(from).filter(|&user| Some(user) != keep).collect::<Vec<_>>() {
                 self.cse_forget(user);
                 for op in &mut self.nodes[user as usize].ops {
