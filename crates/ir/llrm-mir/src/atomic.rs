@@ -463,6 +463,129 @@ fn libcall(
     Ok(())
 }
 
+/// The `__sync_*` function the pin's M68k selects for a read-modify-write or a
+/// compare-exchange of `bytes` below a 68020 (`ATOMIC_LOAD_*`, `ATOMIC_SWAP` and
+/// `ATOMIC_CMP_SWAP` are `LibCall`): `T __sync_fetch_and_OP_N(ptr, T)`, `T
+/// __sync_lock_test_and_set_N(ptr, T)`, `T __sync_val_compare_and_swap_N(ptr,
+/// expected, new)`; each returns the old value.
+fn sync_name(
+    info: AtomicInfo,
+    bytes: u32,
+) -> Option<String> {
+    let op = match info.kind {
+        AtomicKind::CmpXchg { .. } => "val_compare_and_swap".to_owned(),
+        AtomicKind::Rmw(RmwOp::Xchg) => "lock_test_and_set".to_owned(),
+        AtomicKind::Rmw(op @ (RmwOp::Add | RmwOp::Sub | RmwOp::And | RmwOp::Nand | RmwOp::Or | RmwOp::Xor)) => {
+            format!("fetch_and_{}", RMW_OPS.iter().find(|(one, _)| *one == op)?.1)
+        }
+        _ => return None,
+    };
+    Some(format!("__sync_{op}_{bytes}"))
+}
+
+/// Every read-modify-write and compare-exchange of at most `native` bits
+/// `hidden` made calls of, as the `__sync_*` call a target with no such
+/// instruction makes of it; run before [`lowered`]. A compare-exchange's
+/// `{ T, i1 }` is the old value and whether it was the expected one. The
+/// operations the runtime has no `__sync_` function for (`max`, `min`, `umax`,
+/// `umin`) are refused.
+pub fn sync_libcalled(
+    module: &mut Module,
+    native: u32,
+) -> Result<(), String> {
+    let mut found: Vec<(usize, InstId, AtomicInfo)> = Vec::new();
+    for (at, global) in module.globals.iter().enumerate() {
+        let GlobalKind::Function(function) = &global.kind else { continue };
+        for (_, inst) in function.walk() {
+            let Some(callee) = crate::memory::callee(&module.context, function, inst) else { continue };
+            if let Some(info) = module.globals[callee.0 as usize].name.as_deref().and_then(decode)
+                && matches!(info.kind, AtomicKind::Rmw(_) | AtomicKind::CmpXchg { .. })
+            {
+                found.push((at, inst, info));
+            }
+        }
+    }
+    for (at, inst, info) in found {
+        let GlobalKind::Function(function) = &module.globals[at].kind else { continue };
+        let call = function.instruction(inst).clone();
+        let operands = call.operands[..call.operands.len() - 1].to_vec();
+        let value = function.operand_type(&module.context, operands[1]).ok_or("an operand has a type")?;
+        let Some(bits) = module.context.types.int_bits(value).filter(|&bits| bits <= native) else { continue };
+        let name = sync_name(info, bits / 8).ok_or_else(|| {
+            format!("`{}` is not lowered for this target: AtomicExpandPass's compare-exchange loop is not translated", kind_name(info.kind))
+        })?;
+        let pointer = module.context.types.ptr(0);
+        let parameters = if matches!(info.kind, AtomicKind::CmpXchg { .. }) {
+            vec![pointer, value, value]
+        } else {
+            vec![pointer, value]
+        };
+        let signature =
+            module.context.types.intern(Type::Function { returns: value, parameters, variadic: false });
+        let callee = match module.named(&name) {
+            Some(id) => id,
+            None => module.add_function(&name, signature, Linkage::External)?,
+        };
+        let reference = module.reference(callee);
+        let flag = module.context.types.int(1);
+        let poison = Operand::Constant(
+            module.context.constant(crate::context::Constant { ty: call.ty, kind: crate::context::ConstantKind::Poison }),
+        );
+        let GlobalKind::Function(function) = &mut module.globals[at].kind else { continue };
+        let place = crate::edit::Position::Before(inst);
+        let mut arguments = operands.clone();
+        let call_info = CallInfo {
+            function_type: signature,
+            calling_convention: 0,
+            return_attrs: Vec::new(),
+            argument_attrs: vec![Vec::new(); arguments.len()],
+            attrs: Vec::new(),
+            tail: Tail::default(),
+        };
+        arguments.push(Operand::Constant(reference));
+        let made =
+            function.create_instruction(Opcode::Call(Box::new(call_info)), value, arguments, Flags::default(), None);
+        function.insert(made, place).map_err(|why| why.to_string())?;
+        let old = Operand::Value(function.instruction(made).result.ok_or("a call result")?);
+        if let AtomicKind::CmpXchg { .. } = info.kind {
+            let swapped = function.create_instruction(
+                Opcode::ICmp(crate::opcode::IntPredicate::Eq),
+                flag,
+                vec![old, operands[1]],
+                Flags::default(),
+                None,
+            );
+            function.insert(swapped, place).map_err(|why| why.to_string())?;
+            let with_value = function.create_instruction(
+                Opcode::InsertValue(vec![0]),
+                call.ty,
+                vec![poison, old],
+                Flags::default(),
+                None,
+            );
+            function.insert(with_value, place).map_err(|why| why.to_string())?;
+            let both = function.create_instruction(
+                Opcode::InsertValue(vec![1]),
+                call.ty,
+                vec![
+                    Operand::Value(function.instruction(with_value).result.ok_or("an insertvalue result")?),
+                    Operand::Value(function.instruction(swapped).result.ok_or("a compare result")?),
+                ],
+                Flags::default(),
+                None,
+            );
+            function.insert(both, place).map_err(|why| why.to_string())?;
+            if let (Some(was), Some(new)) = (call.result, function.instruction(both).result) {
+                function.replace_all_uses_with(was, Operand::Value(new));
+            }
+        } else if let Some(was) = call.result {
+            function.replace_all_uses_with(was, old);
+        }
+        function.erase(inst).map_err(|why| why.to_string())?;
+    }
+    Ok(())
+}
+
 /// `LowerAtomicPass`, which a target without atomics runs before selection
 /// (wasm without the `atomics` feature): an atomic load or store is a plain
 /// one, a fence is nothing. A read-modify-write and a compare-exchange are

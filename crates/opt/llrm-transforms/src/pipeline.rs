@@ -143,7 +143,7 @@ use crate::settled::{self, Settled};
 use crate::{
     adce, algebraic, availableexternally, bdce, calleepop, cgpaddr, constmerge, dead, deadstore, decide, extload,
     fixednarrow, floatloop, fold, gepbyteindex, gepoffset, globaldce, globalopt, gvn, indvars, inferfunctionattrs,
-    inferspace, inline, lcssa, loopdeletion, loopidioms, loopinterchange, looprotate, loopsimplify, loopunrollandjam,
+    inferspace, inline, lcssa, loopdeletion, loopidioms, loopinterchange, looprotate, loopsimplify, loopunrollandjam, mosindexiv,
     loopunrollpass, mem2reg, memcpyopt, mldstmotion, partialinline, ports, promote, ree, sccp, simpleloopunswitch,
     simplifycfg, splitpaths, switchlower, tailcallelim, trivialunswitch, typepromotion_pass, window, zeromerge,
 };
@@ -1987,6 +1987,25 @@ pub fn recorded(
     // a shift.
     if applied.options.wanted("fixednarrow") {
         manager.add(fixednarrow::FixedNarrow);
+    }
+    // llvm-mos's late loop optimizations: MOSIndexIV, then IndVarSimplify
+    // (MOSTargetMachine.cpp), before LSR, for a target with an index width.
+    // IndVarSimplify requires LoopSimplify and LCSSA (`predicateLoopExits`
+    // reads an exit value through its phi: without one a loop's only exit was
+    // made `br i1 false`).
+    if applied.options.wanted("lsr")
+        && !llrm_support::env_flag!("LLRM_NO_LATE_INDEX_IV")
+        && program.target.tti().is_some_and(|tti| tti.index_iv_width().is_some())
+    {
+        manager.add(loopsimplify::LoopSimplify);
+        manager.add(lcssa::LoopClosedSSA);
+        manager.add(mosindexiv::MosIndexIv);
+        manager.add(loopsimplify::LoopSimplify);
+        manager.add(lcssa::LoopClosedSSA);
+        if !llrm_support::env_flag!("LLRM_EXP_NO_LATE_INDVARS") {
+            manager.add(indvars::IndVars { lftr: indvars::lftr_default(), size: applied.options.prefers_size() });
+        }
+        manager.add(dead::Dead);
     }
     // Each loop's counters chosen once, on the loop the passes above leave.
     for pass in strength_slot(applied) {
