@@ -225,7 +225,7 @@ One list of the `SD` numbers, so no two groups take one. Add a row in the PR tha
 | SD201 | sdag-b | combiner: no `HandleSDNode`/`DAGUpdateListener`; reads RAUW events and the node count | `selectiondag/dag_combiner.rs` |
 | SD202 | sdag-b | combiner: no `computeKnownBits`; folds see constants only | `selectiondag/dag_combiner.rs` |
 | SD203 | sdag-b | `ExpandConstantFP`: no f80 shrinking (no APFloat), alignment by type | `selectiondag/legalize_dag.rs` |
-| SD206 | sdag-b | division by constant: register-held types only, no exact/promoted forms, generic `sdiv` pow2 sequence (no cmov form) | `selectiondag/div_combine.rs` |
+| SD206 | sdag-b | division by constant: register-held types only, no promoted form, generic `sdiv` pow2 sequence (no cmov form); the exact forms landed 11-22 | `selectiondag/div_combine.rs` |
 | SD207 | sdag-b | logic-of-setcc fold: `SETCC` only (no `SELECT_CC`), power-of-two query knows constants and `shl 1, x` | `selectiondag/logic_setcc.rs` |
 | SD208 | sdag-b | far call through a stack cell: `X86ISD::LLRM_FARCALL`, the pin has no far call | `llrm-x86-backend/src/x86isd.rs` |
 | SD209 | sdag-b | far access: `ES` set by a `CopyToReg` ordered by the chain only (no glue binds it to its access) | `selectiondag/legalize_types.rs` |
