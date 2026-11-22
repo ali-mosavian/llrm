@@ -163,8 +163,8 @@ pub fn target_lowering() -> TargetLowering {
     for op in [Mul, SDiv, UDiv, SRem, URem, Shl, Srl, Sra, Rotl, Rotr] {
         tl.set_operation_action(op, MVT::I32, Action::Custom);
     }
-    // a long plus or minus one steps the bytes with an early exit (`lower_long_step`); any other add is
-    // the carry chain over the halves
+    // a long plus or minus one steps the bytes with an early exit
+    // (`lower_long_step`); any other add is the carry chain over the halves
     for op in [Add, Sub] {
         tl.set_operation_action(op, MVT::I32, Action::Custom);
     }
@@ -202,6 +202,9 @@ pub struct MosLowering {
     /// The function is tuned for size: a long shift by a constant that
     /// takes more bytes in line than as a call goes to the routine.
     pub sized: bool,
+    /// A long plus or minus one is `INC32`/`DEC32`, not the carry chain
+    /// (`lower_long_step`).
+    pub long_steps: bool,
 }
 
 impl Hooks for MosLowering {
@@ -224,7 +227,13 @@ impl Hooks for MosLowering {
             ISD::Store if dag.value_type(dag.operand(node, 1)) == EVT::I1 => lower_bit_store(dag, node),
             ISD::Store if dag.value_type(dag.operand(node, 1)) == EVT::I16 => Some(lower_word_copy(dag, node)),
             ISD::ZeroExtend | ISD::AnyExtend | ISD::SignExtend => Some(lower_extend(dag, node)),
-            ISD::Add | ISD::Sub if dag.value_type(node) == EVT::I32 => lower_long_step(dag, node),
+            ISD::Add | ISD::Sub if dag.value_type(node) == EVT::I32 => {
+                if self.long_steps {
+                    lower_long_step(dag, node)
+                } else {
+                    None
+                }
+            }
             ISD::Mul | ISD::SDiv | ISD::UDiv | ISD::SRem | ISD::URem | ISD::Shl | ISD::Srl | ISD::Sra
                 if dag.value_type(node) == EVT::I32 =>
             {
@@ -446,11 +455,12 @@ fn lower_long(
     ))
 }
 
-/// A long plus or minus one: `MOSISD::INC32`/`DEC32` of the operand's halves, which step the low byte and
-/// carry up a byte only when it wrapped.
+/// A long plus or minus one: `MOSISD::INC32`/`DEC32` of the operand's halves,
+/// which step the low byte and carry up a byte only when it wrapped.
 ///
-/// Pass: llvm-mos `MOSLegalizerInfo::legalizeAddSub`, which turns a multi-byte add or subtract of +-1 into
-/// `G_INC`/`G_DEC`. Any other constant is the carry chain over the halves.
+/// Pass: llvm-mos `MOSLegalizerInfo::legalizeAddSub`, which turns a multi-byte
+/// add or subtract of +-1 into `G_INC`/`G_DEC`. Any other constant is the carry
+/// chain over the halves.
 fn lower_long_step(
     dag: &mut SelectionDAG,
     node: SDValue,
@@ -469,6 +479,7 @@ fn lower_long_step(
         (ALL, false) | (1, true) => mosisd::DEC32,
         _ => return None,
     };
+    super::function::note_step_site();
     let sixteen = dag.get_constant(16, EVT::I8);
     let high = dag.get_node(ISD::Srl, EVT::I32, &[value, sixteen]);
     let low = dag.get_node(ISD::Truncate, EVT::I16, &[value]);
