@@ -2046,6 +2046,16 @@ pub trait Tti {
         0
     }
 
+    /// DEVIATE UP1-O3 (owner arm64, exit 2026-12-21): the rate at `opt_level`.
+    /// -O3 is judged by clocks, not bytes, so a target may take the pin's
+    /// threshold alone there (0). Default: the rate of every level.
+    fn unroll_milliclocks_per_byte_at(
+        &self,
+        _opt_level: u32,
+    ) -> i64 {
+        self.unroll_milliclocks_per_byte()
+    }
+
     /// DEVIATE UNROLL-TRIAL (beyond the pin; owner 6502, exit 2026-12-05): the
     /// unrolled size, in the unroll units, up to which a loop the threshold
     /// refused is unrolled on trial: the function is simplified and priced
