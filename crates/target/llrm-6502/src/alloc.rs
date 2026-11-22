@@ -2887,6 +2887,27 @@ pub fn build_with_places(
                     b.push(step);
                 }
             }
+            // a long plus or minus one: the low byte steps, and each byte above it only when the byte below
+            // wrapped (llvm-mos `G_INC`/`G_DEC`), as a word does (`word_step`)
+            code @ (op::INC32 | op::DEC32) => {
+                let up = code == op::INC32;
+                let (low, high) = (b.read_word(name(&o[2])?)?, b.read_word(name(&o[3])?)?);
+                let (dl, dh) = (b.write_word(name(&o[0])?)?, b.write_word(name(&o[1])?)?);
+                let lanes = [dl.0, dl.1, dh.0, dh.1];
+                for (r, from) in lanes.into_iter().zip([low.0, low.1, high.0, high.1]) {
+                    b.copy(r, from);
+                    // `inc` has no accumulator form on the NMOS 6502, and the borrow test reads through a
+                    b.require(r, Class(Class::X | Class::Y | Class::M))?;
+                }
+                let mut operands: Vec<Operand> = lanes.iter().map(|r| Operand::Def(*r)).collect();
+                operands.extend(lanes.iter().map(|r| Operand::Use(*r)));
+                if !up {
+                    let scratch = b.fresh();
+                    b.require(scratch, Class(Class::A))?;
+                    operands.push(Operand::Def(scratch));
+                }
+                b.push(Inst::new(Kind::Op(if up { "INC32" } else { "DEC32" }), operands));
+            }
             // one bit crosses between two words: the carry of a shift of the
             // word that gives it up, rotated into the word that takes it
             code @ (op::FSHL1 | op::FSHR1) => {
@@ -4624,6 +4645,42 @@ fn emit_with<const STACK: bool>(
                     };
                     let (low, high) = (step(regs[0]), step(regs[1]));
                     writeln!(out, "  {low}\n  bne _pa{made}\n  {high}\n_pa{made}:").unwrap();
+                }
+                // d := d + 1 on four cells: each byte above steps when the one below wrapped to 0
+                (Kind::Op("INC32"), _) => {
+                    made += 1;
+                    let step = |r| match r {
+                        reg::X => "inx".to_owned(),
+                        reg::Y => "iny".to_owned(),
+                        cell => format!("inc {}", register_name(cell)),
+                    };
+                    write!(out, "  {}\n", step(regs[0])).unwrap();
+                    for r in &regs[1..4] {
+                        writeln!(out, "  bne _pa{made}\n  {}", step(*r)).unwrap();
+                    }
+                    writeln!(out, "_pa{made}:").unwrap();
+                }
+                // d := d - 1 on four cells: each byte above steps when every byte below was 0; the tests
+                // run before the steps, nested (`lda b0; bne 0; lda b1; bne 1; lda b2; bne 2; dec b3; 2: dec b2; ..`)
+                (Kind::Op("DEC32"), _) => {
+                    made += 1;
+                    let read = |r| match r {
+                        reg::X => "txa".to_owned(),
+                        reg::Y => "tya".to_owned(),
+                        cell => format!("lda {}", register_name(cell)),
+                    };
+                    let step = |r| match r {
+                        reg::X => "dex".to_owned(),
+                        reg::Y => "dey".to_owned(),
+                        cell => format!("dec {}", register_name(cell)),
+                    };
+                    for (at, r) in regs[..3].iter().enumerate() {
+                        writeln!(out, "  {}\n  bne _pa{made}_{at}", read(*r)).unwrap();
+                    }
+                    writeln!(out, "  {}", step(regs[3])).unwrap();
+                    for at in (0..3).rev() {
+                        writeln!(out, "_pa{made}_{at}:\n  {}", step(regs[at])).unwrap();
+                    }
                 }
                 // d := d - 1 on two cells: the high byte steps when the low was
                 // 0

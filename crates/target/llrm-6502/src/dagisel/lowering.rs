@@ -49,6 +49,8 @@ pub mod mosisd {
     pub const SRL1C: ISD = ISD::Target(ids::SRL1C);
     pub const CMPZ: ISD = ISD::Target(ids::CMPZ);
     pub const CMP32: ISD = ISD::Target(ids::CMP32);
+    pub const INC32: ISD = ISD::Target(ids::INC32);
+    pub const DEC32: ISD = ISD::Target(ids::DEC32);
     pub const BRCOND: ISD = ISD::Target(ids::BRCOND);
     pub const SETCC: ISD = ISD::Target(ids::SETCC);
     pub const CMOV: ISD = ISD::Target(ids::CMOV);
@@ -161,6 +163,11 @@ pub fn target_lowering() -> TargetLowering {
     for op in [Mul, SDiv, UDiv, SRem, URem, Shl, Srl, Sra, Rotl, Rotr] {
         tl.set_operation_action(op, MVT::I32, Action::Custom);
     }
+    // a long plus or minus one steps the bytes with an early exit (`lower_long_step`); any other add is
+    // the carry chain over the halves
+    for op in [Add, Sub] {
+        tl.set_operation_action(op, MVT::I32, Action::Custom);
+    }
     // i1 is a register type here, but its memory is a byte (`lower_bit_load`)
     for op in [Load, Store] {
         tl.set_operation_action(op, MVT::I1, Action::Custom);
@@ -217,6 +224,7 @@ impl Hooks for MosLowering {
             ISD::Store if dag.value_type(dag.operand(node, 1)) == EVT::I1 => lower_bit_store(dag, node),
             ISD::Store if dag.value_type(dag.operand(node, 1)) == EVT::I16 => Some(lower_word_copy(dag, node)),
             ISD::ZeroExtend | ISD::AnyExtend | ISD::SignExtend => Some(lower_extend(dag, node)),
+            ISD::Add | ISD::Sub if dag.value_type(node) == EVT::I32 => lower_long_step(dag, node),
             ISD::Mul | ISD::SDiv | ISD::UDiv | ISD::SRem | ISD::URem | ISD::Shl | ISD::Srl | ISD::Sra
                 if dag.value_type(node) == EVT::I32 =>
             {
@@ -431,6 +439,41 @@ fn lower_long(
         operands.push(dag.get_node(ISD::Truncate, EVT::I16, &[high]));
     }
     let pair = dag.get_node_multi(opcode, &[EVT::I16, EVT::I16], &operands);
+    Some(dag.get_node(
+        ISD::BuildPair,
+        EVT::I32,
+        &[SDValue { node: pair.node, res: 0 }, SDValue { node: pair.node, res: 1 }],
+    ))
+}
+
+/// A long plus or minus one: `MOSISD::INC32`/`DEC32` of the operand's halves, which step the low byte and
+/// carry up a byte only when it wrapped.
+///
+/// Pass: llvm-mos `MOSLegalizerInfo::legalizeAddSub`, which turns a multi-byte add or subtract of +-1 into
+/// `G_INC`/`G_DEC`. Any other constant is the carry chain over the halves.
+fn lower_long_step(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> Option<SDValue> {
+    const ALL: u128 = 0xFFFF_FFFF;
+    let (a, b) = (dag.operand(node, 0), dag.operand(node, 1));
+    // `1 + x` is `x + 1`; `1 - x` is not a step
+    let (value, step) = match (dag.constant(b), dag.constant(a)) {
+        (Some(k), _) => (a, k & ALL),
+        (None, Some(k)) if dag.opcode(node) == ISD::Add => (b, k & ALL),
+        _ => return None,
+    };
+    let sub = dag.opcode(node) == ISD::Sub;
+    let opcode = match (step, sub) {
+        (1, false) | (ALL, true) => mosisd::INC32,
+        (ALL, false) | (1, true) => mosisd::DEC32,
+        _ => return None,
+    };
+    let sixteen = dag.get_constant(16, EVT::I8);
+    let high = dag.get_node(ISD::Srl, EVT::I32, &[value, sixteen]);
+    let low = dag.get_node(ISD::Truncate, EVT::I16, &[value]);
+    let high = dag.get_node(ISD::Truncate, EVT::I16, &[high]);
+    let pair = dag.get_node_multi(opcode, &[EVT::I16, EVT::I16], &[low, high]);
     Some(dag.get_node(
         ISD::BuildPair,
         EVT::I32,
