@@ -1034,7 +1034,8 @@ fn items_once(
                 }
                 crate::shiftadd::shifts_to_adds(&mut function);
                 crate::negadd::negative_adds_to_subq(&mut function);
-                if wants_size {
+                // -O1 judges clocks too and `menu.c` grew there: Os, -O2 and -O3
+                if wants_size || !options.strict {
                     crate::boolbyte::scc_booleans(&mut function);
                 }
                 crate::addrroles::address_roles(&mut function);
