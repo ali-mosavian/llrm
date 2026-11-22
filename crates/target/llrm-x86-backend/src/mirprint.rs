@@ -228,6 +228,12 @@ fn cell(
             let a = addr.expect("an address");
             Ok(format!("{base}, {}, {}, {}, $noreg", index.0, index.1, a.disp + mem.offset))
         }
+        // A function's or a datum's address outside the module: named by its
+        // index, for reading; no symbol is declared for it.
+        Some(Space::External) => {
+            let a = addr.expect("an address");
+            Ok(format!("{base}, {}, {}, @ext{} + {}, $noreg", index.0, index.1, a.index, a.disp + mem.offset))
+        }
         Some(other) => Err(format!("an address in {other:?}")),
     }
 }
@@ -249,6 +255,9 @@ fn symbolic(
     imm: &Imm,
     symbols: &mut BTreeSet<i64>,
 ) -> Result<String, String> {
+    if let Some(addr) = imm.address.as_ref().filter(|a| a.space == Space::External) {
+        return Ok(format!("@ext{} + {}", addr.index, addr.disp + imm.value));
+    }
     let Some(addr) = imm.address.as_ref().filter(|a| a.space == Space::Segment) else {
         return Err("an immediate address outside the data segment".to_owned());
     };
@@ -718,11 +727,20 @@ fn instruction(
             let code = condition(&format!("j{}", &set[3..])).unwrap_or(0);
             writeln!(out, "    SETCCm {}, {code}, implicit $eflags", cell(m, symbols)?).unwrap()
         }
-        ("cmp", None, [Loc::Mem(m), Loc::Imm(i)]) => {
-            writeln!(out, "    CMP{}{} {}, {}, implicit-def $eflags", bits(m.width)?, imm("mi", m.width), cell(m, symbols)?, immediate(i, symbols)?).unwrap()
+        (op @ ("cmp" | "test"), None, [Loc::Mem(m), Loc::Imm(i)]) => {
+            writeln!(
+                out,
+                "    {}{}{} {}, {}, implicit-def $eflags",
+                op.to_uppercase(),
+                bits(m.width)?,
+                imm("mi", m.width),
+                cell(m, symbols)?,
+                immediate(i, symbols)?
+            )
+            .unwrap()
         }
-        ("cmp", None, [Loc::Mem(m), Loc::Held(a)]) => {
-            writeln!(out, "    CMP{}mr {}, {}, implicit-def $eflags", bits(a.width)?, cell(m, symbols)?, vreg(a)?).unwrap()
+        (op @ ("cmp" | "test"), None, [Loc::Mem(m), Loc::Held(a)]) => {
+            writeln!(out, "    {}{}mr {}, {}, implicit-def $eflags", op.to_uppercase(), bits(a.width)?, cell(m, symbols)?, vreg(a)?).unwrap()
         }
         ("cmp", None, [Loc::Held(a), Loc::Mem(m)]) => {
             writeln!(out, "    CMP{}rm {}, {}, implicit-def $eflags", bits(a.width)?, vreg(a)?, cell(m, symbols)?).unwrap()
@@ -1480,6 +1498,27 @@ mod tests {
         let text = mir(&body, &IndexMap::default()).expect("prints");
         assert!(text.contains("CMP32rm %1, %fixed-stack.0"), "{text}");
         assert!(text.contains("%2 = SETCCr 13, implicit $eflags"), "{text}");
+    }
+
+    /// `test byte [cell], imm` (a flag bit of a table entry, QB `repl_relink`)
+    /// was refused, so `LLRM_MIR_PRINT=repl_relink` printed nothing, and so
+    /// was a call through or a load from an address outside the module
+    /// (`@ext`).
+    #[test]
+    fn test_a_test_of_a_cell_and_an_external_address_print() {
+        use llrm_lir::{Addr, Mem, Space};
+        let cell = Loc::Mem(Mem::new(Some(Addr::new(Space::External, 3)), 1));
+        let test = insn(
+            "test",
+            Operation::Compare,
+            vec![],
+            vec![cell.clone(), Loc::Imm(Imm { value: 4, width: 1, address: None })],
+        );
+        let ret = insn("", Operation::Return, vec![], vec![]);
+        let blocks = vec![Block::from(LirBlock::new(0, vec![test, ret]))];
+        let body = LirBody::new("t", 0, blocks, IndexMap::default(), IndexMap::default());
+        let text = mir(&body, &IndexMap::default()).expect("prints");
+        assert!(text.contains("TEST8mi $noreg, 1, $noreg, @ext0 + 3, $noreg, 4, implicit-def $eflags"), "{text}");
     }
 
     /// `cmp [cell], reg` was refused ("`cmp` ... 2 sources"), so
