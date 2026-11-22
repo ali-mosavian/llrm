@@ -44,6 +44,8 @@ fn ending(
         ("RTS", _) => Some(Ending::Return),
         (name, Some(to)) if name.starts_with("BRA") => Some(Ending::Jump(to)),
         (name, Some(to)) if name.starts_with('B') && !name.starts_with("BSR") => Some(Ending::Branch(to)),
+        // `dbf` is the loop's back edge: left out, its loop is not weighted by depth and looks ten times cheaper
+        (name, Some(to)) if name.starts_with("DBF") => Some(Ending::Branch(to)),
         _ => None,
     }
 }
@@ -563,5 +565,24 @@ pub fn cheaper(
     match (price_of(&with, cpu, true), price_of(&without, cpu, true)) {
         (Some(with_cost), Some(without_cost)) if price.beats(cpu, with_cost, without_cost) => with,
         _ => without,
+    }
+}
+
+#[cfg(test)]
+mod ending_tests {
+    use super::{Ending, ending};
+    use crate::mc;
+    use std::collections::HashMap;
+
+    /// A counted loop ending in `dbf` was priced as one pass: the unroll trial (loop_interchange 68020 -O1) read
+    /// it ten times cheaper than the `bne` loop it replaced, and kept an unrolled nest 586 B larger and slower.
+    #[test]
+    fn a_dbf_loop_ends_in_a_branch_back_to_its_label() {
+        let labels: HashMap<&str, usize> = [(".L1", 0)].into_iter().collect();
+        let dbf = mc::Inst {
+            opcode: "DBF16dl",
+            operands: vec![mc::Operand::Reg(llrm_lir::registers::RegId::from(crate::reg::D0)), mc::Operand::Symbol(".L1".into(), 0)],
+        };
+        assert!(matches!(ending(&dbf, &labels), Some(Ending::Branch(0))));
     }
 }

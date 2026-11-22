@@ -1034,10 +1034,7 @@ fn items_once(
                 }
                 crate::shiftadd::shifts_to_adds(&mut function);
                 crate::negadd::negative_adds_to_subq(&mut function);
-                // -O1 judges clocks too and `menu.c` grew there: Os, -O2 and -O3
-                if wants_size || !options.strict {
-                    crate::boolbyte::scc_booleans(&mut function);
-                }
+                crate::boolbyte::scc_booleans(&mut function);
                 crate::addrroles::address_roles(&mut function);
                 crate::addrarith::address_adds(&mut function, cpu, wants_size, options.compare_destinations);
                 crate::foldload::fold_loads(&mut function);
@@ -1196,6 +1193,13 @@ fn items_once(
         }
     }
     crate::regalloc::place_blocks(&mut function, &edge_odds(module, name)?, wants_size, options.loop_top_by_jumps);
+    if options.short {
+        let returns_value = module.global(id).function().is_none_or(|one| {
+            matches!(module.context.types.get(one.ty), llrm_mir::types::Type::Function { returns, .. }
+                if !module.context.types.is_void(*returns))
+        });
+        crate::doloop::doloops(&mut function, &assignment, cpu, returns_value);
+    }
     drop(sp);
     let sp = llrm_support::debug::span("m68k expand");
     let mut out = vec![Item::Label(name.to_owned())];

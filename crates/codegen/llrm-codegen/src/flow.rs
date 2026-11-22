@@ -90,6 +90,7 @@ const UNOPTIMIZED: &[&str] = &[
     "CmpAsSub",
     "StatusWordTest",
     "CallFrameOpt",
+    "BranchFolder",
     "TailDuplicate",
     // The pin's -O0 `addMachinePasses` has none of these (TargetPassConfig.cpp
     // d1106deb71cc): `addMachineSSAOptimization` (DeadMachineInstructionElim)
@@ -157,6 +158,7 @@ const SLOTS: &[(&str, &str)] = &[
     ("FixupLEAs", "fixupleas@14"),
     ("LoopSlots", "loopslots@15"),
     ("Scheduler", "schedule@16"),
+    ("BranchFolder", "jumps@17"),
     ("TailDuplicate", "jumps@17"),
     ("ControlFlow", "jumps@17"),
     ("CopyPropagation", "copyprop@18"),
@@ -411,6 +413,8 @@ pub fn machine_with<'a>(
         Box::new(loopslots::LoopSlots::new(frame.clone(), target, registers.slot as u32, classes)?),
         // Scheduling may only move fully allocated machine occurrences.
         Box::new(schedule::Scheduler::new(target)?),
+        // The pin's BranchFolderPass, which runs before TailDuplicatePass.
+        Box::new(jumps::BranchFolder { cpu: target, calls: calls.cloned() }),
         // The pin's TailDuplicatePass: after allocation, before placement.
         Box::new(crate::backend::latetaildup::TailDuplicate {
             size: target.size || target.min_size,
@@ -428,6 +432,7 @@ pub fn machine_with<'a>(
             saved: registers.saved.iter().map(|(whole, _)| *whole).collect(),
             free: registers.free,
             pointer: registers.pointer,
+            folded: true,
         }),
         // The pin runs MachineCopyPropagation again after tail duplication.
         Box::new(crate::backend::machinecp::CopyPropagation),
