@@ -44,6 +44,10 @@ const REGISTERS: usize = 3;
 /// the pin's `RegLimit` for the class a hoisted pointer lives in.
 const PAIR_LIMIT: usize = crate::alloc::BASE_CELLS as usize / 2 - 1;
 
+/// What a loop's values (words in pairs, bytes in `a`, `x`, `y`) are counted
+/// against: one slot each.
+const SLOTS: usize = PAIR_LIMIT + REGISTERS;
+
 #[derive(Clone)]
 struct Wrapped {
     inst: Inst,
@@ -55,12 +59,14 @@ struct Wrapped {
     clobbers_only_a: bool,
     /// It reads `a` by name (a return, a call's argument), not as a value.
     reads_a: bool,
+    /// It defines `a` by name.
+    writes_a: bool,
 }
 
 impl Wrapped {
     fn new(inst: Inst) -> Wrapped {
-        let (mut defs, mut uses, mut physical, mut clobbers_only_a, mut reads_a) =
-            (Vec::new(), Vec::new(), false, true, false);
+        let (mut defs, mut uses, mut physical, mut clobbers_only_a, mut reads_a, mut writes_a) =
+            (Vec::new(), Vec::new(), false, true, false, false);
         for operand in &inst.operands {
             match operand {
                 Operand::Def(Reg::Virt(n)) => defs.push(*n),
@@ -68,6 +74,7 @@ impl Wrapped {
                 Operand::Def(Reg::Phys(r)) => {
                     physical = true;
                     clobbers_only_a &= *r == crate::reg::A;
+                    writes_a |= *r == crate::reg::A;
                 }
                 Operand::Use(Reg::Phys(r)) => {
                     physical = true;
@@ -77,7 +84,7 @@ impl Wrapped {
                 _ => {}
             }
         }
-        Wrapped { inst, defs, uses, physical, clobbers_only_a, reads_a }
+        Wrapped { inst, defs, uses, physical, clobbers_only_a, reads_a, writes_a }
     }
 }
 
@@ -196,7 +203,17 @@ impl Policy<Wrapped> for Mos {
         self.calls = facts.inside_blocks().any(|block| block.insns.iter().any(|one| one.inst.call));
         self.moves_sp =
             facts.inside_blocks().any(|block| block.insns.iter().any(|one| matches!(one.inst.kind, Kind::Op("ADJSP"))));
-        self.reads_a = facts.inside_blocks().any(|block| block.insns.iter().any(|one| one.reads_a));
+        // `a` read before any write of it in its block comes from before the
+        // block: from the preheader or an earlier trip, which the hoisted
+        // `LEA` would overwrite.
+        self.reads_a = facts.inside_blocks().any(|block| {
+            let mut written = false;
+            block.insns.iter().any(|one| {
+                let exposed = one.reads_a && !written;
+                written |= one.writes_a;
+                exposed
+            })
+        });
         self.hoisted = 0;
         self.pairs = 0;
         self.peak = 0;
@@ -243,7 +260,7 @@ impl Policy<Wrapped> for Mos {
             && !(inst.call || inst.terminator || inst.barrier || inst.may_store || inst.side_effects);
         if frame_address {
             // `CanCauseHighRegPressure`: the peak and the pairs moved, the one more
-            if self.calls || self.moves_sp || self.reads_a || !(facts.every_trip)(at) || self.peak + self.pairs + 1 >= PAIR_LIMIT {
+            if self.calls || self.moves_sp || self.reads_a || !(facts.every_trip)(at) || self.peak + self.pairs + 1 >= SLOTS {
                 return false;
             }
             self.pairs += 1;
