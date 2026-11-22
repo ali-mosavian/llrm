@@ -260,6 +260,7 @@ mod sextacc_class;
 mod shared_call_area;
 mod shared_cse;
 mod shared_cse_trial;
+mod licm_constant_class;
 mod shared_licm;
 mod shared_prefix;
 mod shared_prelude;
