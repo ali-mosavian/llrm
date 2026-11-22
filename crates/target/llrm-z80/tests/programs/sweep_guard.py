@@ -66,7 +66,8 @@ def dropped(expected, results, required=lambda tag: tag == "ours", excused=()):
 
 
 def summary(expected, results, reasons=None, required=lambda tag: tag == "ours", excused=()):
-    """`(line, ok)`: the sweep's last line and whether it passed. The line names the dropped programs."""
+    """`(line, ok)`: the sweep's last line and whether it passed. The line names the dropped programs, and the excused ones
+    that have no row (`rows` counts them missing: 9 float programs vanished from a `--same-width` run unnamed, 2026-11-22)."""
     reasons = reasons or {}
     lost = dropped(expected, results, required, excused)
     failed = {name for name, rows in results for tag, _, _ in rows if tag == "FAILED"} | set(lost)
@@ -74,6 +75,9 @@ def summary(expected, results, reasons=None, required=lambda tag: tag == "ours",
     line = f"{len(expected)} programs {len(failed)} failed; rows {len(have & set(expected))} of {len(expected)}"
     if failed:
         line += "; no row: " + " ".join(f"{n}({reasons.get(n, lost.get(n, 'FAILED'))})" for n in sorted(failed))
+    excused_without_row = sorted(n for n in expected if n in excused and n not in have)
+    if excused_without_row:
+        line += "; excused, no row: " + " ".join(f"{n}({reasons.get(n) or 'excused'})" for n in excused_without_row)
     return line, not failed
 
 
