@@ -11,6 +11,12 @@
 //! are fewer than the three. A loop with a call keeps none (the call clobbers
 //! all three).
 //!
+//! A frame address (`LEA`: `rs0` plus a distance, the pointer of an object past
+//! the 255 `(zp),Y` reaches) is hoisted too, as the pin's MachineLICM hoists
+//! the `LEA` of a stack slot: it clobbers only `a` and the pair it makes lives
+//! in zero page, so it is no pressure on `a`, `x` and `y`; a loop keeps at
+//! most [`FRAME_ADDRESSES`] of them.
+//!
 //! # Example
 //! ```text
 //!   pre:  jmp loop                        pre:  v4 := ldi 255 ; jmp loop
@@ -32,6 +38,9 @@ use crate::alloc::Class;
 /// `a`, `x`, `y`: where a loop can hold a value for an immediate-speed read.
 const REGISTERS: usize = 3;
 
+/// The frame addresses one loop keeps in zero-page pairs.
+const FRAME_ADDRESSES: usize = 2;
+
 #[derive(Clone)]
 struct Wrapped {
     inst: Inst,
@@ -39,20 +48,29 @@ struct Wrapped {
     uses: Vec<u32>,
     /// It names a physical register: the allocator's input, not a value.
     physical: bool,
+    /// The only physical register it names is a defined `a`.
+    clobbers_only_a: bool,
 }
 
 impl Wrapped {
     fn new(inst: Inst) -> Wrapped {
-        let (mut defs, mut uses, mut physical) = (Vec::new(), Vec::new(), false);
+        let (mut defs, mut uses, mut physical, mut clobbers_only_a) = (Vec::new(), Vec::new(), false, true);
         for operand in &inst.operands {
             match operand {
                 Operand::Def(Reg::Virt(n)) => defs.push(*n),
                 Operand::Use(Reg::Virt(n)) => uses.push(*n),
-                Operand::Def(Reg::Phys(_)) | Operand::Use(Reg::Phys(_)) => physical = true,
+                Operand::Def(Reg::Phys(r)) => {
+                    physical = true;
+                    clobbers_only_a &= *r == crate::reg::A;
+                }
+                Operand::Use(Reg::Phys(_)) => {
+                    physical = true;
+                    clobbers_only_a = false;
+                }
                 _ => {}
             }
         }
-        Wrapped { inst, defs, uses, physical }
+        Wrapped { inst, defs, uses, physical, clobbers_only_a }
     }
 }
 
@@ -125,6 +143,9 @@ struct Mos {
     /// has moved out of it.
     peak: usize,
     hoisted: usize,
+    frame_addresses: usize,
+    /// The loop moves `rs0`: no address made from it is the same on every trip.
+    moves_sp: bool,
     /// The loop calls: a call clobbers `a`, `x` and `y`.
     calls: bool,
 }
@@ -163,7 +184,10 @@ impl Policy<Wrapped> for Mos {
         facts: &Facts<'_, Wrapped>,
     ) {
         self.calls = facts.inside_blocks().any(|block| block.insns.iter().any(|one| one.inst.call));
+        self.moves_sp =
+            facts.inside_blocks().any(|block| block.insns.iter().any(|one| matches!(one.inst.kind, Kind::Op("ADJSP"))));
         self.hoisted = 0;
+        self.frame_addresses = 0;
         self.peak = 0;
         for block in facts.inside_blocks() {
             let mut now: BTreeSet<u32> = self.live.get(&block.at).cloned().unwrap_or_default();
@@ -195,6 +219,24 @@ impl Policy<Wrapped> for Mos {
             && !facts.copied.contains(&one.defs[0])
             && inst.ties.is_empty()
             && !(inst.call || inst.terminator || inst.barrier || inst.may_store || inst.side_effects);
+        // `rs0` plus a distance: nothing is read but `rs0`, which the loop does
+        // not move (`moves_sp`), and `a` is the only register it
+        // clobbers
+        let frame_address = matches!(inst.kind, Kind::Op("LEA"))
+            && one.defs.len() == 2
+            && one.uses.is_empty()
+            && one.physical
+            && one.clobbers_only_a
+            && one.defs.iter().all(|value| facts.defs.get(value) == Some(&1) && !facts.copied.contains(value))
+            && inst.ties.is_empty()
+            && !(inst.call || inst.terminator || inst.barrier || inst.may_store || inst.side_effects);
+        if frame_address {
+            if self.calls || self.moves_sp || !(facts.every_trip)(at) || self.frame_addresses >= FRAME_ADDRESSES {
+                return false;
+            }
+            self.frame_addresses += 1;
+            return true;
+        }
         // a constant a phi takes would need a copy; one in a block that does
         // not run on every trip is not made speculatively
         if !constant || self.calls || !(facts.every_trip)(at) {
@@ -288,7 +330,7 @@ pub fn hoist(function: &mut MFunction<Class>) -> bool {
     let Some(moved) = licm_core::hoist(
         &blocks,
         first.id as i64,
-        &mut Mos { live: live_out(&blocks), alias: copies(&blocks), peak: 0, hoisted: 0, calls: false },
+        &mut Mos { live: live_out(&blocks), alias: copies(&blocks), peak: 0, hoisted: 0, frame_addresses: 0, moves_sp: false, calls: false },
     ) else {
         return false;
     };
