@@ -287,7 +287,7 @@ fn the_default_order_ranks_registers_before_instructions() {
 fn what_an_address_mode_folds_by_kind() {
     let tti = X86::of_cpu("core2").unwrap();
     let fold = |kind, gv, offset, base, scale| {
-        is_am_completely_folded_at(&tti, kind, MemAccessTy::unknown(0), gv, Immediate(offset), base, scale)
+        is_am_completely_folded_at(&tti, kind, MemAccessTy::unknown(0), gv, Immediate(offset), base, scale, Default::default())
     };
     assert!(fold(Kind::Address, false, 8, true, 4));
     assert!(!fold(Kind::Address, false, 1 << 40, true, 1), "a displacement is 32 bits");
@@ -314,6 +314,7 @@ fn offsets_that_wrap_with_the_base_do_not_fold() {
             Immediate(base),
             true,
             1,
+            Default::default(),
         )
     };
     assert!(range(-8, 8, 100));
@@ -881,13 +882,13 @@ fn a_frame_slot_takes_the_base_register_and_leaves_one_for_an_index() {
     use crate::lsr_formula::{Mode, Symbol};
     let frame = Some(Symbol::Frame(llrm_mir::module::ValueId(0)));
     let alone = Formula { symbol: frame, ..Formula::default() };
-    assert_eq!(alone.mode(), Some(Mode { global: false, has_base_reg: true, scale: 0 }));
+    assert_eq!(alone.mode(), Some(Mode { global: false, has_base_reg: true, scale: 0, bits: Default::default() }));
     let indexed = Formula { symbol: frame, has_base_reg: true, ..Formula::default() };
-    assert_eq!(indexed.mode(), Some(Mode { global: false, has_base_reg: true, scale: 1 }));
+    assert_eq!(indexed.mode(), Some(Mode { global: false, has_base_reg: true, scale: 1, bits: Default::default() }));
     let three = Formula { symbol: frame, has_base_reg: true, scale: 2, ..Formula::default() };
     assert_eq!(three.mode(), None);
     let global = Formula { has_base_reg: true, scale: 2, ..Formula::default() };
-    assert_eq!(global.mode(), Some(Mode { global: false, has_base_reg: true, scale: 2 }));
+    assert_eq!(global.mode(), Some(Mode { global: false, has_base_reg: true, scale: 2, bits: Default::default() }));
 }
 
 /// DEVIATE LSR-SIZE at m16: two solutions of the same instructions and registers, one holding two address registers where the other

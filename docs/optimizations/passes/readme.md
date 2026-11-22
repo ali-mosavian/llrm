@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 320 documented, 5 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 321 documented, 5 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -244,6 +244,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | mergestores | Adjacent stores become wider ones: LLVM's `DAGCombiner::mergeConsecutiveStores` for stores of constants (`tryStoreMergeOfConstants`, `merged_constants`) and of loaded values (`tryStoreMergeOfLoads`, `merged_copies`). | In `loopidioms::Merge`, after the scalar passes have settled. | [mergestores](mergestores.md) |
 | mirror | Turns an index that only some trips step into a pointer that steps with it, so a target whose addresses take no scale `k` does not shift the index on every access of `base + k * i`. | Not a pass: `crate::lsr` calls `found` and `applied` on each loop before | [mirror](mirror.md) |
 | mldstmotion | Stores to one address on both arms of a diamond become one store below it, as LLVM's `MergedLoadStoreMotion` (`mldst-motion<no-split-footer-bb>`). | Named by `pipeline`. | [mldstmotion](mldstmotion.md) |
+| mosindexiv | A pointer recurrence whose step and offset fit a byte becomes a base plus a byte counter. | [`crate::pipeline`](pipeline.md) runs it before the late `indvars`, where | [mosindexiv](mosindexiv.md) |
 | narrowcycle | A cycle of integer operations through a phi whose values only matter at a narrower native width is carried at that width. | Named by `indvars`. | [narrowcycle](narrowcycle.md) |
 | narrowiv | A loop counter whose range provably fits a native integer width becomes a counter of that width. | [`crate::indvars`](indvars.md) runs `narrowed_in` after LFTR where | [narrowiv](narrowiv.md) |
 | narrowrange | An unsigned divide or remainder whose operands ScalarEvolution proves narrow is done in the narrow type. | After `remidiom`, in the strength slot ([`crate::pipeline::strength_slot`](pipeline.md)), | [narrowrange](narrowrange.md) |
