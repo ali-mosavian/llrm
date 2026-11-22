@@ -45,6 +45,32 @@ fn run_with_options(
     crate::testing::printed(&module)
 }
 
+/// [`run`] with `GlobalsAA` made first, as the pipeline's
+/// `RequireAnalysisPass`.
+fn run_with_globals(source: &str) -> String {
+    use llrm_analysis::manager::{GlobalsAA, GlobalsModRefAnalysis};
+    let mut module = parsed(source);
+    let mut manager = llrm_mir::passes::PassManager::default();
+    manager.require_cached::<GlobalsAA>();
+    manager.require_cached::<GlobalsModRefAnalysis>();
+    manager.compute::<GlobalsAA>();
+    manager.compute::<GlobalsModRefAnalysis>();
+    manager.add(LoopVectorize {
+        always: true,
+        only_when_forced: false,
+        compares: false,
+        interleaves: false,
+        very_cheap: false,
+    });
+    manager
+        .run_module(
+            &mut module,
+            std::rc::Rc::new(llrm_arm64::machine::Arm64Machine { platform: llrm_arm64::machine::Platform::Linux }),
+        )
+        .unwrap();
+    crate::testing::printed(&module)
+}
+
 fn count(
     text: &str,
     what: &str,
@@ -1440,4 +1466,38 @@ fn the_widened_early_exit_loop_finds_what_the_scalar_one_finds() {
             .map(|k| llrm_mir::interpret::Val::Int { bits: k as u128, width: 64 }),
         "{text}"
     );
+}
+
+/// QuickrBasic pkey.c (arm64 -Os): `trap.traps[i] = traps[i]` over a static
+/// struct no code leaks the address of was widened behind a runtime overlap
+/// check (+32 B: a scalar copy beside the vector one). The pin's default AA
+/// pipeline includes GlobalsAA: an argument cannot alias such a global, so the
+/// check is not made.
+#[test]
+fn a_copy_into_an_unescaped_static_needs_no_overlap_check() {
+    let text = run_with_globals(
+        "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128-Fn32\"\n\
+@trap = internal global [32 x i16] zeroinitializer, align 8\n\
+define void @f(ptr %a) {\n\
+entry:\n\
+  br label %h\n\
+h:\n\
+  %i = phi i64 [ 0, %entry ], [ %i2, %h ]\n\
+  %p = getelementptr i16, ptr %a, i64 %i\n\
+  %q = getelementptr i16, ptr @trap, i64 %i\n\
+  %v = load i16, ptr %p, align 2\n\
+  store i16 %v, ptr %q, align 2\n\
+  %i2 = add nuw nsw i64 %i, 1\n\
+  %c = icmp eq i64 %i2, 32\n\
+  br i1 %c, label %x, label %h\n\
+x:\n\
+  ret void\n\
+}\n\
+define i16 @g() {\n\
+  %v = load i16, ptr getelementptr (i16, ptr @trap, i64 3), align 2\n\
+  ret i16 %v\n\
+}\n",
+    );
+    assert!(count(&text, "<8 x i16>") > 0, "{text}");
+    assert_eq!(count(&text, "memcheck"), 0, "{text}");
 }

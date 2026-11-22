@@ -69,6 +69,45 @@ thread_local! {
     /// The callers with a call of an `inlinehint` callee that only the hint's
     /// yield let the size guard pass.
     static HINT_YIELDS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    /// Set while the trial compile of HOT-INLINE-TRIAL runs: the -Os size
+    /// bound holds at a locally hot site too.
+    static HOT_CALLS_KEPT: Cell<bool> = const { Cell::new(false) };
+    /// The callers with a call that only the hot-site yield let the size bound
+    /// pass.
+    static HOT_YIELDS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+}
+
+/// DEVIATE HOT-INLINE-TRIAL (beyond the pin; owner x86-m32-b, exit
+/// 2026-12-12): whether the trial compile that keeps the call at a site the
+/// hot-site yield (`Tuning::inline_size_hot_growth_percent`) would inline is
+/// running. The units' growth credits the callee's death over all its sites,
+/// which cold sites that keep it deny, so the finished object decides.
+pub fn keeping_hot_calls() -> bool {
+    HOT_CALLS_KEPT.with(Cell::get)
+}
+
+/// Runs `body` with those calls kept.
+pub fn with_kept_hot_calls<T>(body: impl FnOnce() -> T) -> T {
+    let before = HOT_CALLS_KEPT.with(|cell| cell.replace(true));
+    let value = body();
+    HOT_CALLS_KEPT.with(|cell| cell.set(before));
+    value
+}
+
+/// Notes that the hot-site yield let a call in `function` through the size
+/// bound, which a trial may refuse.
+pub(crate) fn note_hot_yield(function: &str) {
+    HOT_YIELDS.with(|list| {
+        let mut list = list.borrow_mut();
+        if !list.iter().any(|one| one == function) {
+            list.push(function.to_owned());
+        }
+    });
+}
+
+/// The callers [`note_hot_yield`] saw since the last call.
+pub fn take_hot_yields() -> Vec<String> {
+    HOT_YIELDS.with(|list| std::mem::take(&mut *list.borrow_mut()))
 }
 
 /// DEVIATE INLINEHINT-GROWTH-TRIAL (beyond the pin; gcc's `-Os` inliner takes

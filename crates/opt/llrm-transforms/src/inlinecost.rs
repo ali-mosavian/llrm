@@ -2791,6 +2791,17 @@ impl<'a> Analyzer<'a> {
             && self.growth_per_site() * 100 <= self.call_size() * percent
     }
 
+    /// DEVIATE SZ1-HOT (`Tti::opt_size_inline_hot_growth_percent`): a locally
+    /// hot site the -Os bound would hold, whose growth is within that share of
+    /// the call sequence it removes.
+    fn hot_site_within_size_growth_budget(&self) -> bool {
+        let Some(percent) = self.site.tti.and_then(|tti| tti.opt_size_inline_hot_growth_percent()) else {
+            return false;
+        };
+        let hot = self.site.relative_frequency.is_some_and(|ratio| ratio >= HOT_CALLSITE_REL_FREQ);
+        hot && self.growth_per_site() * 100 <= self.call_size() * percent
+    }
+
     /// Bytes one inlined site adds to the module: the callee's unfolded size
     /// less the call, spread over the sites when the callee dies with them.
     fn growth_per_site(&self) -> i64 {
@@ -2972,7 +2983,20 @@ impl<'a> Analyzer<'a> {
             // there in the trial too, as `outlined_by_trial` leaves it.
             let in_loop = self.site.relative_frequency.is_some_and(|ratio| ratio > 1.0);
             let bound = bound_with(!crate::trial::keeping_hinted_calls() || in_loop);
-            let grows = bound && self.grows_the_code() && !(at_o1 && self.hot_site_within_growth_budget());
+            // DEVIATE HOT-INLINE-TRIAL: the hot-site yield stands except in the
+            // trial compile that keeps those calls; each it lets through is
+            // noted for that trial.
+            let mut hot_yield =
+                bound && !at_o1 && self.grows_the_code() && self.hot_site_within_size_growth_budget();
+            if hot_yield && crate::trial::keeping_hot_calls() {
+                hot_yield = false;
+            } else if hot_yield {
+                crate::trial::note_hot_yield(
+                    self.site.module.global(self.site.caller_id).name.as_deref().unwrap_or_default(),
+                );
+            }
+            let grows =
+                bound && self.grows_the_code() && !(at_o1 && self.hot_site_within_growth_budget()) && !hot_yield;
             // INLINEHINT-GROWTH-TRIAL: noted where only the yield let a growing
             // call through at -Os, outside a loop.
             if !bound && !at_o1 && !in_loop && self.hint_applied && bound_with(false) && self.grows_the_code() {
