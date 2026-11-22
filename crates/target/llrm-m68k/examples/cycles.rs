@@ -10,9 +10,10 @@
 //! `CYCLES_CPUS`, and per call (`CYCLES_CALLS`, default 3000). qemu runs
 //! `CYCLES_QEMU_CPU` (default `m68020` for a path containing `68020`, else
 //! `m68000`). The clocks are the tables' instruction clocks, not bus cycles.
-//! A `*` marks a total that holds a data-dependent term at its lower bound; `<=` one whose
-//! only such terms are published maxima (multiply, divide): the true total is at most it; `?`
-//! counts executed instructions the tables do not cover.
+//! A `*` marks a total that holds a data-dependent term at its lower bound;
+//! `<=` one whose only such terms are published maxima (multiply, divide): the
+//! true total is at most it; `?` counts executed instructions the tables do not
+//! cover.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -516,7 +517,10 @@ mod tests {
             total
         };
         assert!(run(&["moveq #27, %d1", "muls.l %d1, %d0"]).cell(0).starts_with("<="));
-        assert!(run(&["muls.l %d1, %d0", "bfextu (%a0){0:8}, %d1"]).cell(0).ends_with('*'), "a bit-field bound is no upper bound");
+        assert!(
+            run(&["muls.l %d1, %d0", "bfextu (%a0){0:8}, %d1"]).cell(0).ends_with('*'),
+            "a bit-field bound is no upper bound"
+        );
     }
 
     /// A `*` named no instruction, so a `>=` cell could not be told from a cut run (register_upper_half 68020 -Os: ours
@@ -801,6 +805,10 @@ fn assembled(
 }
 
 fn main() {
+    if std::env::args().nth(1).as_deref() == Some("--stamp") {
+        println!("{}", env!("LLRM_M68K_STAMP"));
+        return;
+    }
     let gcc = PathBuf::from(std::env::var("GCC_M68K").expect("GCC_M68K: the unpacked m68k binutils root"));
     let dir = tempdir::Scratch::new("cycles");
     let models = models();
