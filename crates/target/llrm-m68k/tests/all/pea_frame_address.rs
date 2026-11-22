@@ -1,5 +1,5 @@
-//! `h(a, b, c)` on three local arrays pushed `lea (36,%sp), %a0; move.l %a0, -(%sp)` for
-//! each address (6 B); `pea (36,%sp)` is 4 B and needs no register.
+//! `h(a, b, c)` on three local arrays pushed `lea (36,%sp), %a0; move.l %a0,
+//! -(%sp)` for each address (6 B); `pea (36,%sp)` is 4 B and needs no register.
 
 use llrm_m68k::compile::{Options, items_with, text_with};
 use llrm_m68k::dagisel::hooks::Cpu;
