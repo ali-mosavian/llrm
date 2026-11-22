@@ -35,7 +35,7 @@ fn pushes_wait_for_the_last_store_not_the_call() {
     ];
     let refs: Vec<&Inst> = insts.iter().collect();
     let blocks = vec![0; insts.len()];
-    let found = plan(&refs, &blocks, &Assignment::default(), Cpu::M68000, Price::Rate, true, |area| {
+    let found = plan(&refs, &blocks, &Assignment::default(), Cpu::M68000, Price::Rate, true, true, |area| {
         Ok(if area > 0 { (8, 16) } else { (0, 0) })
     })
     .expect("plans");
@@ -60,7 +60,7 @@ fn a_register_stored_last_is_pushed_before_the_call() {
     ];
     let refs: Vec<&Inst> = insts.iter().collect();
     let blocks = vec![0; insts.len()];
-    let found = plan(&refs, &blocks, &Assignment::default(), Cpu::M68000, Price::Rate, true, |area| {
+    let found = plan(&refs, &blocks, &Assignment::default(), Cpu::M68000, Price::Rate, true, true, |area| {
         Ok(if area > 0 { (8, 16) } else { (0, 0) })
     })
     .expect("plans");
@@ -86,8 +86,8 @@ fn a_strict_price_does_not_trade_bytes_for_clocks() {
     let refs: Vec<&Inst> = insts.iter().collect();
     let blocks = vec![0; insts.len()];
     let pushed = |price| {
-        let found =
-            plan(&refs, &blocks, &Assignment::default(), Cpu::M68000, price, true, |_| Ok((0, 0))).expect("plans");
+        let found = plan(&refs, &blocks, &Assignment::default(), Cpu::M68000, price, true, true, |_| Ok((0, 0)))
+            .expect("plans");
         found.flushes(4)
     };
     assert!(pushed(Price::Rate), "the rate price takes the faster pushes");

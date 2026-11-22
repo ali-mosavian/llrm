@@ -240,7 +240,10 @@ fn lowered(
     let _ = trial::take();
     let _ = trial::take_refused();
     let mut base = lowered_once(text, cpu, level, dump, policy)?;
+    let backend = Options { code_model: model_of(&base, backend.code_model)?, ..backend };
     let (mut noted, mut units) = trial::take();
+    let mut refused_sites = trial::take_refused();
+    let mut accepted_sites = trial::take_accepted();
     let small = matches!(level, Level::Os | Level::Oz);
     // Each side's differing functions are lowered in the side's own module,
     // the build the output makes of them: what the price sees is what is
@@ -257,30 +260,83 @@ fn lowered(
         Ok(Kept { libcalls, items })
     };
     let flat = |kept: &Kept| -> Vec<Item> { kept.items.iter().flat_map(|(_, items)| items.iter().cloned()).collect() };
-    // DEVIATE OS-INLINE-TRIAL-CLOCKS (`Tti::opt_size_inline_finished_trial`): the calls the -Os size bound alone
-    // refused, inlined in a second compile, kept where the finished code is faster within the bytes ceiling
-    // (`trial::keeps_within_headroom`). A module with no such call is compiled once.
-    let sites = trial::take_refused();
-    // A module with refused sites keeps their trial as it was: the callers they share with the accepted sites would
-    // make the accepted sites' bytes verdict cover them (sfm16_float_cmp: the four refused copies lost).
-    let accepted = trial::take_accepted();
+    // DEVIATE OS-INLINE-TRIAL-CLOCKS (`Tti::opt_size_inline_finished_trial`):
+    // the calls the -Os size bound alone refused, inlined in a second
+    // compile, kept where the finished code is faster within the bytes ceiling
+    // (`trial::keeps_within_headroom`). A module with no such call is compiled
+    // once. DEVIATE INLINEHINT-GROWTH-TRIAL (gcc `ipa-inline.cc`
+    // `want_inline_small_function_p` over `estimate_edge_growth`;
+    // `Tti::opt_size_inline_guard_yields_to_inlinehint` and
+    // `..._negative_cost`): the size bound stood down for the pin's
+    // `inlinehint` threshold and its negative cost, which the units cannot
+    // price. The module compiled again with those calls kept is kept where
+    // its differing functions are fewer bytes.
+    let mut base_kept: Option<Kept> = None;
+    let yielded = !trial::take_hint_yields().is_empty() | !trial::take_negative_yields().is_empty();
+    if small && yielded {
+        let other = trial::with_kept_hinted_calls(|| {
+            trial::with_kept_negative_calls(|| lowered_once(text, cpu, level, None, policy))
+        });
+        if let Ok(other) = other {
+            let other_state = (trial::take(), trial::take_refused(), trial::take_accepted());
+            let _ = (trial::take_hint_yields(), trial::take_negative_yields());
+            let cut = trial::differing(&base, &other);
+            if !cut.is_empty() {
+                let (calls, yields) = (lower(&other, &cut)?, lower(&base, &cut)?);
+                let rest_calls_mulsi3 = || {
+                    let rest: std::collections::BTreeSet<String> = other
+                        .functions()
+                        .filter(|(_, _, function)| !function.is_declaration())
+                        .filter_map(|(_, global, _)| global.name.owned().filter(|name| !cut.contains(name)))
+                        .collect();
+                    lower(&base, &rest).map_or(true, |kept| crate::trial::calls_mulsi3(&kept.items))
+                };
+                let keeps = crate::trial::keeps_fewer_bytes(&calls.items, &yields.items, rest_calls_mulsi3, cpu);
+                if llrm_support::debug::enabled("trial") {
+                    eprintln!(
+                        "trial hint {level:?}: {} functions differ: calls {}",
+                        cut.len(),
+                        if keeps { "kept" } else { "put back" }
+                    );
+                }
+                if keeps {
+                    base = other;
+                    base_kept = Some(calls);
+                    ((noted, units), refused_sites, accepted_sites) = other_state;
+                } else {
+                    base_kept = Some(yields);
+                }
+            }
+        }
+    }
+    let sites = refused_sites;
+    // A module with refused sites keeps their trial as it was: the callers they
+    // share with the accepted sites would make the accepted sites' bytes
+    // verdict cover them (sfm16_float_cmp: the four refused copies lost).
+    let accepted = accepted_sites;
     let outlined = if sites.is_empty() { accepted } else { Vec::new() };
     if llrm_support::debug::enabled("trial") {
         eprintln!("trial inline {level:?}: {} refused site(s), {} accepted site(s)", sites.len(), outlined.len());
     }
     let mut inlined: Vec<trial::Site> = Vec::new();
     let mut kept_outlined: Vec<trial::Site> = Vec::new();
-    let mut base_kept: Option<Kept> = None;
-    // only a program: a library unit has no entry to weigh the clocks against, and its functions run an unknown
-    // number of times (the runtime's -Os objects grew up to 18 % for the same clocks)
-    let is_program = base.functions().any(|(_, global, function)| !function.is_declaration() && global.name.owned().as_deref() == Some("main"));
-    // DEVIATE OS-OUTLINE-TRIAL (`Tti::opt_size_inline_outline_trial`): the cold sites the units accept are built as
-    // calls in the same second compile. Each group of sites that share a function is judged on its own functions: a
-    // refused site by the clocks within the bytes ceiling, a group with an accepted site by the bytes alone. A
-    // mixed verdict takes a third compile of the kept groups.
+    // only a program: a library unit has no entry to weigh the clocks against,
+    // and its functions run an unknown number of times (the runtime's -Os
+    // objects grew up to 18 % for the same clocks)
+    let is_program = base
+        .functions()
+        .any(|(_, global, function)| !function.is_declaration() && global.name.owned().as_deref() == Some("main"));
+    // DEVIATE OS-OUTLINE-TRIAL (`Tti::opt_size_inline_outline_trial`): the cold
+    // sites the units accept are built as calls in the same second compile.
+    // Each group of sites that share a function is judged on its own functions:
+    // a refused site by the clocks within the bytes ceiling, a group with
+    // an accepted site by the bytes alone. A mixed verdict takes a third
+    // compile of the kept groups.
     if small && is_program && (!sites.is_empty() || !outlined.is_empty()) {
         let built = |refused: &[trial::Site], accepted: &[trial::Site]| {
-            let module = trial::with_inlined(refused, || trial::with_outlined(accepted, || lowered_once(text, cpu, level, None, policy)));
+            let module = trial::with_inlined(refused, || {
+                trial::with_outlined(accepted, || lowered_once(text, cpu, level, None, policy))
+            });
             let notes = trial::take();
             let _ = (trial::take_refused(), trial::take_accepted());
             module.map(|module| (module, notes))
@@ -300,13 +356,16 @@ fn lowered(
                         lower(&base, &names).map_or(true, |kept| crate::trial::calls_mulsi3(&kept.items))
                     })
                 };
-                // refused sites alone keep the one verdict over every function that differs
+                // refused sites alone keep the one verdict over every function
+                // that differs
                 let groups = if outlined.is_empty() {
                     vec![trial::Group { names: cut.clone(), refused: (0..sites.len()).collect(), accepted: Vec::new() }]
                 } else {
                     trial::groups(&sites, &outlined)
                 };
-                let only = |items: &[(String, Vec<Item>)], names: &std::collections::BTreeSet<String>| -> Vec<(String, Vec<Item>)> {
+                let only = |items: &[(String, Vec<Item>)],
+                            names: &std::collections::BTreeSet<String>|
+                 -> Vec<(String, Vec<Item>)> {
                     items.iter().filter(|(name, _)| names.contains(name)).cloned().collect()
                 };
                 let verdicts: Vec<bool> = groups
@@ -322,10 +381,19 @@ fn lowered(
                     .collect();
                 let kept_groups = verdicts.iter().filter(|&&one| one).count();
                 if llrm_support::debug::enabled("trial") {
-                    eprintln!("trial inline {level:?}: {} functions differ: {kept_groups} of {} groups kept", cut.len(), groups.len());
+                    eprintln!(
+                        "trial inline {level:?}: {} functions differ: {kept_groups} of {} groups kept",
+                        cut.len(),
+                        groups.len()
+                    );
                 }
                 let pick = |index: fn(&trial::Group) -> &Vec<usize>, all: &[trial::Site]| -> Vec<trial::Site> {
-                    groups.iter().zip(&verdicts).filter(|(_, kept)| **kept).flat_map(|(group, _)| index(group).iter().map(|&at| all[at].clone())).collect()
+                    groups
+                        .iter()
+                        .zip(&verdicts)
+                        .filter(|(_, kept)| **kept)
+                        .flat_map(|(group, _)| index(group).iter().map(|&at| all[at].clone()))
+                        .collect()
                 };
                 if kept_groups == groups.len() {
                     (base, base_kept, inlined, kept_outlined) = (other, Some(with), sites, outlined);
@@ -333,7 +401,8 @@ fn lowered(
                 } else if kept_groups == 0 {
                     base_kept = Some(without);
                 } else {
-                    let (chosen, chosen_outlined) = (pick(|group| &group.refused, &sites), pick(|group| &group.accepted, &outlined));
+                    let (chosen, chosen_outlined) =
+                        (pick(|group| &group.refused, &sites), pick(|group| &group.accepted, &outlined));
                     if let Ok((third, third_notes)) = built(&chosen, &chosen_outlined) {
                         let cut = trial::differing(&base, &third);
                         if !cut.is_empty() {
@@ -347,16 +416,20 @@ fn lowered(
         }
     }
     let limit = if matches!(level, Level::O1 | Level::Os | Level::Oz) {
-        M68kMachine { cpu }.tti().and_then(|tti| {
-            let size = tti.unroll_trial_at_size();
-            // DEVIATE UNROLL-NEST-O1: the pin's threshold for a loop
-            // with a subloop.
-            if level == Level::O1 && tti.unroll_trial_nests_at_o1() {
-                size.max(Some(llrm_transforms::loopunrollpass::pin_full_unroll_threshold(1)))
-            } else {
-                size
-            }
-        })
+        M68kMachine { cpu }
+            .tti()
+            .and_then(
+                |tti| {
+                    let size = tti.unroll_trial_at_size();
+                    // DEVIATE UNROLL-NEST-O1: the pin's threshold for a loop
+                    // with a subloop.
+                    if level == Level::O1 && tti.unroll_trial_nests_at_o1() {
+                        size.max(Some(llrm_transforms::loopunrollpass::pin_full_unroll_threshold(1)))
+                    } else {
+                        size
+                    }
+                },
+            )
     } else {
         // DEVIATE UNROLL-NEST-TRIAL (-O2, -O3): the pin's threshold, for the
         // loops with a subloop
@@ -366,8 +439,14 @@ fn lowered(
             .map(|_| llrm_transforms::loopunrollpass::pin_full_unroll_threshold(if level == Level::O3 { 3 } else { 2 }))
     };
     let plain = |module: Module, kept: Option<Kept>| Lowered { module, kept };
-    let Some(limit) = limit.filter(|_| !noted.is_empty() && units <= TRIAL_MAX_UNITS) else { return Ok(plain(base, base_kept)) };
-    let Ok(other) = trial::with_inlined(&inlined, || trial::with_outlined(&kept_outlined, || trial::with(limit, || lowered_once(text, cpu, level, None, policy)))) else { return Ok(plain(base, base_kept)) };
+    let Some(limit) = limit.filter(|_| !noted.is_empty() && units <= TRIAL_MAX_UNITS) else {
+        return Ok(plain(base, base_kept));
+    };
+    let Ok(other) = trial::with_inlined(&inlined, || {
+        trial::with_outlined(&kept_outlined, || trial::with(limit, || lowered_once(text, cpu, level, None, policy)))
+    }) else {
+        return Ok(plain(base, base_kept));
+    };
     let _ = (trial::take(), trial::take_accepted());
     let cut = trial::differing(&base, &other);
     if cut.is_empty() {
@@ -384,7 +463,13 @@ fn lowered(
             .collect();
         lower(&base, &rest).map_or(true, |kept| crate::trial::calls_mulsi3(&kept.items))
     };
-    let pays = crate::trial::keeps_linking(&with.items, &without.items, rest_calls_mulsi3, cpu, crate::timing::Price::of(small));
+    let pays = crate::trial::keeps_linking(
+        &with.items,
+        &without.items,
+        rest_calls_mulsi3,
+        cpu,
+        crate::timing::Price::of(small),
+    );
     if llrm_support::debug::enabled("trial") {
         eprintln!("trial unroll {level:?}: {} functions differ: {}", cut.len(), if pays { "kept" } else { "put back" });
     }
@@ -429,16 +514,19 @@ fn lowered_once(
         ),
         matches!(level, Level::O2 | Level::O3 | Level::Omax),
     )?;
-    // The target's LSR (with the m68k TTI), exit-test and multiply narrowing edit the IR after the shared pipeline's
-    // last stage: the dump ends with what selection reads.
+    // The target's LSR (with the m68k TTI), exit-test and multiply narrowing
+    // edit the IR after the shared pipeline's last stage: the dump ends
+    // with what selection reads.
     if let Some(dump) = dump {
         let file = dump.join(TARGET_MID_END_STAGE);
-        std::fs::write(&file, llrm_mir::print::module(&module)).map_err(|error| format!("{}: {error}", file.display()))?;
+        std::fs::write(&file, llrm_mir::print::module(&module))
+            .map_err(|error| format!("{}: {error}", file.display()))?;
     }
     Ok(module)
 }
 
-/// The dump's last stage: the IR after the module's own mid-end, as selection reads it.
+/// The dump's last stage: the IR after the module's own mid-end, as selection
+/// reads it.
 pub const TARGET_MID_END_STAGE: &str = "99-target-midend.ll";
 
 /// [`assembly`] with the debug lines and the stage dump chosen.
@@ -507,8 +595,11 @@ fn function_items(
     let calls =
         near.iter().flat_map(|(_, items)| items).any(|item| matches!(item, Item::Inst(inst) if inst.opcode == "CALLq"));
     let bytes: usize = near.iter().map(|(_, items)| crate::compile::items_bytes(items)).sum();
-    let mut functions =
-        if calls && bytes > crate::pccall::REACH { lower_functions(module, &names, cpu, backend, false)? } else { near };
+    let mut functions = if calls && bytes > crate::pccall::REACH {
+        lower_functions(module, &names, cpu, backend, false)?
+    } else {
+        near
+    };
     crate::fallthrough::drop_jumps_to_next(&mut functions);
     Ok(functions)
 }
@@ -551,6 +642,7 @@ pub fn assembly_flagged(
     let backend = Options { debug, code_model: model, ..default_backend(level) };
     let optimized = lowered(text, cpu, level, dump, policy, backend)?;
     let module = &optimized.module;
+    let backend = Options { code_model: model_of(module, model)?, ..backend };
     let mut out = String::new();
     for (name, items) in function_items(module, cpu, backend, optimized.kept.as_ref())? {
         let global = module.global(module.named(&name).ok_or("a function with no global")?);
@@ -565,6 +657,21 @@ pub fn assembly_flagged(
         llrm_mir::datalayout::DataLayout::parse(module.datalayout.as_deref().ok_or("a module with no datalayout")?)?;
     out.push_str(&crate::data::assembly(module, &layout)?);
     Ok(out)
+}
+
+/// `model` with [`CodeModel::Auto`] settled by the bytes of globals `module`
+/// defines.
+fn model_of(
+    module: &llrm_mir::module::Module,
+    model: CodeModel,
+) -> Result<CodeModel, String> {
+    if model != CodeModel::Auto {
+        return Ok(model);
+    }
+    let layout =
+        llrm_mir::datalayout::DataLayout::parse(module.datalayout.as_deref().ok_or("a module with no datalayout")?)?;
+    let variables = llrm_mir::image::variables(module, &layout, &|name| crate::data::symbol(name))?;
+    Ok(model.resolved(variables.iter().map(|one| one.bytes.len()).sum()))
 }
 
 /// `text` as an ELF32 big-endian relocatable object: the functions' code in
@@ -613,6 +720,7 @@ pub fn object_flagged(
     let backend = Options { code_model: model, ..default_backend(level) };
     let lowered = lowered(text, cpu, level, dump, policy, backend)?;
     let module = lowered.module;
+    let backend = Options { code_model: model_of(&module, model)?, ..backend };
     let mut items = Vec::new();
     let mut exports = llrm_support::hash::HashMap::default();
     for (function_name, one) in function_items(&module, cpu, backend, lowered.kept.as_ref())? {

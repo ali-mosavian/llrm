@@ -17,8 +17,8 @@
 //! calls gains.
 //!
 //! A window with another instruction that names the stack pointer (a frame load
-//! between the stores) is not pushed, but its stores still fuse with their loads
-//! (`move.l (20,%sp), (4,%sp)`), which moves no offset.
+//! between the stores) is not pushed, but its stores still fuse with their
+//! loads (`move.l (20,%sp), (4,%sp)`), which moves no offset.
 //!
 //! A pushed register that a scratch-register load in the same block filled,
 //! and nothing else reads, is pushed from the load's memory instead
@@ -62,8 +62,8 @@ pub struct Plan {
     /// Argument stores kept as stores that read memory (`move.l (4,%sp),
     /// (%sp)`), with the load they absorbed.
     fused: HashMap<usize, usize>,
-    /// Argument stores whose push is `pea (k,An)`: the register and `k`.
-    addressed: HashMap<usize, (llrm_lir::registers::RegId, i64)>,
+    /// Argument stores whose push is `pea (k,An)`, or `pea` of a frame object.
+    addressed: HashMap<usize, Address>,
     /// Instructions that vanish into a push: loads, and copies and adds.
     dropped: HashSet<usize>,
     /// `ADJCALLSTACKDOWN`s that vanish.
@@ -117,7 +117,7 @@ impl Plan {
     pub fn address_push(
         &self,
         at: usize,
-    ) -> Option<(llrm_lir::registers::RegId, i64)> {
+    ) -> Option<Address> {
         self.addressed.get(&at).copied()
     }
 
@@ -152,8 +152,19 @@ impl Plan {
     }
 }
 
-/// One call sequence with a plan to make: where it is, how big, and the two prices. A sequence that cannot be pushed
-/// (`pushable` false) is here for its fusions alone.
+/// What a `pea` argument push pushes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Address {
+    /// An address register plus a constant.
+    Register(llrm_lir::registers::RegId, i64),
+    /// The frame object a `LEA32p` (the instruction at this index) addressed:
+    /// the displacement is known only when the push is placed.
+    Frame(usize),
+}
+
+/// One call sequence with a plan to make: where it is, how big, and the two
+/// prices. A sequence that cannot be pushed (`pushable` false) is here for its
+/// fusions alone.
 struct Sequence {
     pushable: bool,
     down: usize,
@@ -172,7 +183,7 @@ struct Sequence {
     fusions: Vec<(usize, usize)>,
     /// Stores that push an address register plus a constant: the instructions
     /// that made the value, the register and the constant.
-    addresses: Vec<(usize, Vec<usize>, llrm_lir::registers::RegId, i64)>,
+    addresses: Vec<(usize, Vec<usize>, Address)>,
     kept: (usize, u32),
     pushed: (usize, u32),
     /// The cleanup `pushed` includes: owed calls merge theirs.
@@ -404,8 +415,9 @@ fn foldable(
     let inst = insts[load];
     let Kind::Op(name) = inst.kind else { return None };
     memory_push(name)?;
-    // a volatile load (the only load with side effects) is read once, in its place among the others, by a push or a
-    // store; a group of pushes would read it again
+    // a volatile load (the only load with side effects) is read once, in its
+    // place among the others, by a push or a store; a group of pushes would
+    // read it again
     if !inst.may_load || inst.may_store || (inst.side_effects && together.len() > 1) {
         return None;
     }
@@ -424,8 +436,9 @@ fn foldable(
             continue;
         }
         let own_store = stores.contains(&i);
-        // beyond the last store that reads it the register may be redefined (a second load into it): the folded
-        // pushes need none of it, and what reads it after is the new value's
+        // beyond the last store that reads it the register may be redefined (a
+        // second load into it): the folded pushes need none of it, and
+        // what reads it after is the new value's
         let names_root = !renamed
             && other.operands.iter().any(|operand| match operand {
                 Operand::Use(r) => REGISTER_INFO.root(physical(*r, assignment)) == root,
@@ -517,7 +530,9 @@ fn address_of(
     let nearest = |before: usize| {
         (0..before)
             .rev()
-            .take_while(|&i| blocks[i] == blocks[store] && !insts[i].call && insts[i].kind != Kind::Op("ADJCALLSTACKUP"))
+            .take_while(|&i| {
+                blocks[i] == blocks[store] && !insts[i].call && insts[i].kind != Kind::Op("ADJCALLSTACKUP")
+            })
             .find(|&i| defines(insts[i], src, assignment))
     };
     let add = nearest(store)?;
@@ -562,10 +577,15 @@ fn address_of(
             return None;
         }
         if i < store {
-            let names_root = other.operands.iter().any(|operand| match operand {
-                Operand::Def(r) | Operand::Use(r) => REGISTER_INFO.root(physical(*r, assignment)) == root,
-                _ => false,
-            });
+            let names_root = other
+                .operands
+                .iter()
+                .any(
+                    |operand| match operand {
+                        Operand::Def(r) | Operand::Use(r) => REGISTER_INFO.root(physical(*r, assignment)) == root,
+                        _ => false,
+                    },
+                );
             if names_root || (other.reads_flags() && !other.call) {
                 return None;
             }
@@ -586,6 +606,48 @@ fn address_of(
         }
     }
     unread_after(insts, assignment, store, root, src).then_some((producers, base, value))
+}
+
+/// The `lea (k,%sp), An` of a frame object that is the value of store `store`
+/// and nothing else reads: `pea` pushes the same address in 4 bytes without
+/// the register (GCC `m68k.md` `pushsi` of a `lea` address). `lea` and `pea`
+/// leave the codes alone. `reach` says every frame displacement fits 16 bits.
+fn frame_address_of(
+    insts: &[&Inst],
+    assignment: &Assignment,
+    blocks: &[usize],
+    store: usize,
+    src: llrm_lir::registers::RegId,
+    reach: bool,
+) -> Option<usize> {
+    let root = REGISTER_INFO.root(src);
+    if !reach || ![reg::D0, reg::D1, reg::A0, reg::A1].iter().any(|scratch| REGISTER_INFO.root(*scratch) == root) {
+        return None;
+    }
+    let lea = (0..store)
+        .rev()
+        .take_while(|&i| blocks[i] == blocks[store] && !insts[i].call && insts[i].kind != Kind::Op("ADJCALLSTACKUP"))
+        .find(|&i| defines(insts[i], src, assignment))?;
+    let (Kind::Op("LEA32p"), [Operand::Def(_), Operand::Imm(_), Operand::Frame(_)]) =
+        (insts[lea].kind, &insts[lea].operands[..])
+    else {
+        return None;
+    };
+    // the push can wait for the call: nothing may touch the register between
+    let touched = insts[lea + 1..store]
+        .iter()
+        .any(
+            |other| other
+                .operands
+                .iter()
+                .any(
+                    |operand| match operand {
+                        Operand::Def(r) | Operand::Use(r) => REGISTER_INFO.root(physical(*r, assignment)) == root,
+                        _ => false,
+                    },
+                ),
+        );
+    (!touched && unread_after(insts, assignment, store, root, src)).then_some(lea)
 }
 
 fn cost(
@@ -620,6 +682,7 @@ fn sequences(
     cpu: Cpu,
     price: Price,
     short: bool,
+    frame_reach: bool,
 ) -> Result<(Vec<Sequence>, Vec<i64>), String> {
     let size = price == Price::Size;
     let mut found = Vec::new();
@@ -696,26 +759,42 @@ fn sequences(
         }
         // stores that push `pea (k,An)`: the value never exists in a register,
         // so the order of the pushes depends on the address register alone
-        let mut addressed: HashMap<usize, (Vec<usize>, llrm_lir::registers::RegId, i64, (usize, u32), (usize, u32))> =
-            HashMap::new();
+        let mut addressed: HashMap<usize, (Vec<usize>, Address, (usize, u32), (usize, u32))> = HashMap::new();
         if convertible {
             for &(store, _, source, _, pushed) in &parts {
                 let Source::Register(src) = source else { continue };
-                let Some((producers, base, offset)) = address_of(insts, assignment, blocks, store, call, src) else {
+                let Some((producers, address)) = address_of(insts, assignment, blocks, store, call, src)
+                    .map(|(producers, base, offset)| (producers, Address::Register(base, offset)))
+                    .or_else(|| {
+                        frame_address_of(insts, assignment, blocks, store, src, frame_reach)
+                            .map(|lea| (vec![lea], Address::Frame(lea)))
+                    })
+                else {
                     continue;
                 };
-                let made = producers.iter().try_fold((0, 0), |sum, &i| {
-                    let operands = priced_operands(insts[i], assignment)?;
-                    let opcode = match insts[i].kind {
-                        Kind::Copy => "MOV32rr",
-                        Kind::Op(name) => name,
-                    };
-                    cost(&mc::Inst { opcode, operands }, cpu).ok().map(|one| add(sum, one))
-                });
+                let made = producers
+                    .iter()
+                    .try_fold(
+                        (0, 0),
+                        |sum, &i| {
+                            let operands = priced_operands(insts[i], assignment)?;
+                            let opcode = match insts[i].kind {
+                                Kind::Copy => "MOV32rr",
+                                Kind::Op(name) => name,
+                            };
+                            cost(&mc::Inst { opcode, operands }, cpu).ok().map(|one| add(sum, one))
+                        },
+                    );
+                // a frame displacement is priced as 16 bits: `frame_reach` says
+                // it is
+                let (base, offset) = match address {
+                    Address::Register(base, offset) => (base, offset),
+                    Address::Frame(_) => (reg::SP, 0),
+                };
                 if let (Some(made), Ok(pea)) = (made, cost(&address_push(base, offset), cpu))
                     && cheaper(pea, add(made, pushed), price, cpu)
                 {
-                    addressed.insert(store, (producers, base, offset, made, pea));
+                    addressed.insert(store, (producers, address, made, pea));
                 }
             }
         }
@@ -726,8 +805,9 @@ fn sequences(
         let mut sorted = offsets.clone();
         sorted.sort_unstable_by(|a, b| b.cmp(a));
         let last_store = stores.iter().copied().max().unwrap_or(call);
-        // Several stores of one scratch register one load filled (`a + a`: both arguments are the load) are
-        // pushed from its memory together, each push reading it again, when that is cheaper than the load
+        // Several stores of one scratch register one load filled (`a + a`: both
+        // arguments are the load) are pushed from its memory together,
+        // each push reading it again, when that is cheaper than the load
         // and the stores: the load goes only if every reader goes.
         let mut group_folds: HashMap<usize, usize> = HashMap::new();
         let mut group_first: HashSet<usize> = HashSet::new();
@@ -754,10 +834,9 @@ fn sequences(
                     continue;
                 };
                 let point = if in_order { *together.last().unwrap_or(&call) } else { call - 1 };
-                if !together
-                    .iter()
-                    .all(|&store| foldable(insts, assignment, blocks, store, point, src, &stores, &together) == Some(load))
-                {
+                if !together.iter().all(|&store| {
+                    foldable(insts, assignment, blocks, store, point, src, &stores, &together) == Some(load)
+                }) {
                     continue;
                 }
                 let Kind::Op(name) = insts[load].kind else { continue };
@@ -814,8 +893,8 @@ fn sequences(
         let mut addresses = Vec::new();
         for &(store, _, source, kept, pushed) in &parts {
             let (mut kept, mut pushed) = (kept, pushed);
-            if let Some((producers, base, offset, made, pea)) = addressed.remove(&store) {
-                addresses.push((store, producers, base, offset));
+            if let Some((producers, address, made, pea)) = addressed.remove(&store) {
+                addresses.push((store, producers, address));
                 kept = add(kept, made);
                 pushed = pea;
             } else if let Some(&load) = group_folds.get(&store) {
@@ -910,7 +989,8 @@ fn sequences(
     // second call's cleanup has no call area of its own to claim it, and its
     // arguments are stored into the area the first call's sequence would have
     // pushed away. That area stays. The call may be laid out before the area's
-    // `ADJCALLSTACKDOWN` (a rotated loop), so the order of the two says nothing.
+    // `ADJCALLSTACKDOWN` (a rotated loop), so the order of the two says
+    // nothing.
     for (up, _) in insts
         .iter()
         .enumerate()
@@ -959,9 +1039,10 @@ pub fn plan(
     cpu: Cpu,
     price: Price,
     short: bool,
+    frame_reach: bool,
     frame_price: impl Fn(i64) -> Result<(usize, u32), String>,
 ) -> Result<Plan, String> {
-    let (found, others) = sequences(insts, blocks, assignment, cpu, price, short)?;
+    let (found, others) = sequences(insts, blocks, assignment, cpu, price, short, frame_reach)?;
     if found.is_empty() {
         return Ok(Plan::default());
     }
@@ -975,14 +1056,18 @@ pub fn plan(
             .max()
             .unwrap_or(0)
     };
-    // Whether the cleanup of pushed sequence `earlier` is still owed when `later` pushes: nothing between them
-    // reads the stack pointer as the frame has it (`expand`'s `owed`), so one `adda` pays for both.
+    // Whether the cleanup of pushed sequence `earlier` is still owed when
+    // `later` pushes: nothing between them reads the stack pointer as the
+    // frame has it (`expand`'s `owed`), so one `adda` pays for both.
     let owed_across = |earlier: &Sequence, later: &Sequence| -> bool {
         blocks[earlier.up] == blocks[later.down]
             && insts[earlier.up + 1..later.down].iter().all(|inst| {
                 !(inst.terminator
                     || inst.barrier
-                    || matches!(inst.kind, Kind::Op("RET" | "TCRETURNq" | "UNREACHABLE" | "ADJCALLSTACKDOWN"))
+                    || matches!(
+                        inst.kind,
+                        Kind::Op("RET" | "TCRETURNq" | "UNREACHABLE" | "ADJCALLSTACKDOWN")
+                    )
                     || names_sp(inst, assignment))
             })
     };
@@ -995,7 +1080,8 @@ pub fn plan(
                 run = None;
                 continue;
             }
-            // a cleanup merged into the run's: the run's one `adda` is of the bytes together
+            // a cleanup merged into the run's: the run's one `adda` is of the
+            // bytes together
             if let Some((last, bytes)) = run.filter(|(last, _)| owed_across(last, one)) {
                 let merged = cost(&crate::expand::sp_adjust(bytes + one.bytes, short), cpu)?;
                 let alone = cost(&crate::expand::sp_adjust(bytes, short), cpu)?;
@@ -1032,8 +1118,8 @@ pub fn plan(
                 plan.folded.insert(store, load);
                 plan.dropped.insert(load);
             }
-            for (store, producers, base, offset) in &one.addresses {
-                plan.addressed.insert(*store, (*base, *offset));
+            for (store, producers, address) in &one.addresses {
+                plan.addressed.insert(*store, *address);
                 plan.dropped.extend(producers.iter().copied());
             }
             if one.deferred {

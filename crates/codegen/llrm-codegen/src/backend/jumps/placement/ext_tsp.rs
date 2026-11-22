@@ -750,11 +750,35 @@ pub(super) fn apply_for_size(
     // call (a loop) is weighed by how often, as the profile path does with
     // `MBFI`, and the rest stays at the unit weights: a hot loop keeps its
     // fall-throughs, everything else packs for size.
-    let times = |per_call: Option<f64>| per_call.map_or(1.0, |count| count.max(1.0));
     let counts: Vec<u64> =
         blocks.iter().map(|block| times(busy.map(|busy| busy.block(block.at))).round() as u64).collect();
+    let edges = size_edges(blocks, index, busy);
+    let order = compute_layout(&sizes, &counts, &edges);
+    let original: Vec<usize> = (0..blocks.len()).collect();
+    if score(&original, &sizes, &edges) > score(&order, &sizes, &edges) {
+        return Some(original);
+    }
+    Some(order)
+}
+
+/// How often a block or jump runs per call, at least once.
+fn times(per_call: Option<f64>) -> f64 {
+    per_call.map_or(1.0, |count| count.max(1.0))
+}
+
+/// The jumps `applyExtTsp` counts at `OptForSize`. A block `analyzeBranch`
+/// gives up on (a jump table: hundreds of successors made the layout
+/// quadratic, minutes on an interpreter's dispatch) has none, as in the pin.
+fn size_edges(
+    blocks: &[crate::model::lir::Block],
+    index: &crate::support::hash::IndexMap<i64, usize>,
+    busy: Option<&crate::analysis::frequency::Frequency>,
+) -> Vec<EdgeCount> {
     let mut edges = Vec::new();
     for (src, block) in blocks.iter().enumerate() {
+        if !super::super::branchfold::analyzable(block) {
+            continue;
+        }
         let mut seen: Vec<usize> = Vec::new();
         for to in block.succ.iter() {
             if let Some(&dst) = index.get(to) {
@@ -769,12 +793,7 @@ pub(super) fn apply_for_size(
             EdgeCount { src, dst, count }
         }));
     }
-    let order = compute_layout(&sizes, &counts, &edges);
-    let original: Vec<usize> = (0..blocks.len()).collect();
-    if score(&original, &sizes, &edges) > score(&order, &sizes, &edges) {
-        return Some(original);
-    }
-    Some(order)
+    edges
 }
 
 #[cfg(test)]
@@ -828,5 +847,25 @@ mod tests {
         let mut order = compute_layout(&sizes, &counts, &edges);
         order.sort_unstable();
         assert_eq!(order, (0..n).collect::<Vec<_>>());
+    }
+
+    /// A jump-table dispatch with 400 successors put 400 jumps in the layout
+    /// graph, where the pin's `analyzeBranch` fails and counts none: Os
+    /// `exec.c` took 350 s of CPU in `score_of`, the pin 0.25 s.
+    #[test]
+    fn test_a_jump_table_block_has_no_jumps_at_size() {
+        use crate::model::lir::{Block, LirBlock};
+        let mut dispatch = LirBlock::new(0, Vec::new());
+        dispatch.succ = (1..=400).collect::<Vec<i64>>().into();
+        let mut blocks = vec![Block::from(dispatch)];
+        for at in 1..=400 {
+            let mut one = LirBlock::new(at, Vec::new());
+            one.succ = vec![0].into();
+            blocks.push(Block::from(one));
+        }
+        let index = (0..blocks.len()).map(|place| (place as i64, place)).collect();
+        let edges = size_edges(&blocks, &index, None);
+        assert!(edges.iter().all(|edge| edge.src != 0), "the dispatch has {} jumps", edges.iter().filter(|edge| edge.src == 0).count());
+        assert_eq!(edges.len(), 400, "each case still jumps back to the dispatch");
     }
 }

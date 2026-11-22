@@ -1991,6 +1991,15 @@ pub trait Tti {
         true
     }
 
+    /// The blocks between `q` and the branch a backward-threaded path copies
+    /// (GCC's `max-fsm-thread-length`), and with more than one, the ranger's
+    /// entry ranges (`BackwardThreading::entered_with`). 1 is the path `q`,
+    /// `p`, `bb`: x86_64 `known_loads_walks` -O2 pays +3.4% executed
+    /// instructions for a longer one until it is judged there.
+    fn backward_threading_chain(&self) -> usize {
+        1
+    }
+
     /// DEVIATE COMMON-INSTS-O1: the SimplifyCFG that ends the -O2 function
     /// pipeline (L832) hoists and sinks common code at -O1 too, where the
     /// pin's `default<O1>` ends with a plain one (L621). Off: the pin.
@@ -2365,6 +2374,34 @@ pub trait Tti {
 
     /// `Tuning::lftr_any_stride` (DEVIATE LFTR1).
     fn lftr_any_stride(&self) -> bool {
+        false
+    }
+
+    /// DEVIATE LSR-COND-STEP: extra `add_rec_cost` of an addrec register rated
+    /// for an address use that does not run every trip. The pin charges a register one
+    /// step however often its uses run; here the step is paid each trip, and a
+    /// use that runs on a few (a switch's table lookup, 28 of 256 trips) saves
+    /// its computation only then (switch_peeled_table: four counters stepped
+    /// 256 times for a lookup run 28 times).
+    fn lsr_conditional_use_step_cost(&self) -> u32 {
+        0
+    }
+
+    /// DEVIATE LSR-CMP-IMM: the exit test's immediate is not rated by its bit
+    /// width in `RateFormula`'s `ImmCost` (the pin counts the bits of every
+    /// non-zero offset, a compare's too). A compare against a constant is one
+    /// `cmp` per byte where a zero test is an `ora`: the exit test's own cost,
+    /// priced by the target, not an immediate a formula adds.
+    fn lsr_exit_compare_immediate_is_free(&self) -> bool {
+        false
+    }
+
+    /// llvm-mos's `TargetTransformInfo::allowIllegalIntegerIV` (not in the pin):
+    /// a loop counter of a width the datalayout does not hold is still a counter
+    /// `IndVarSimplify` may rewrite the exit test on (`findLoopCounter`'s
+    /// `isLegalInteger` check is skipped).
+    /// [llvm-mos](https://github.com/llvm-mos/llvm-mos/blob/a40207a371b6/llvm/lib/Target/MOS/MOSTargetTransformInfo.h#L47)
+    fn allow_illegal_integer_iv(&self) -> bool {
         false
     }
 

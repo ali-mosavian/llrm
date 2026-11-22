@@ -464,8 +464,8 @@ pub fn shared_licm(
         llrm_lir::registers::Regs(arch.registers()),
         arch.operand_bytes(),
     );
-    shared_stage(function, |classes, _| {
-        Box::new(llrm_codegen::backend::machinelicm::MachineLicm { classes, segments, size })
+    shared_stage(function, |classes, constrain| {
+        Box::new(llrm_codegen::backend::machinelicm::MachineLicm { classes, segments, size, constrain: Some(constrain) })
     })
 }
 
