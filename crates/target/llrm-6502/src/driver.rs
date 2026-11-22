@@ -438,9 +438,11 @@ fn trial_inlined(
         trial::restore(kept_unroll);
         return Ok((built, Vec::new(), Some(kept_all), joint));
     }
+    // Every inline kept: the pair (the pin's inlines with the loops they bring unrolled in one mid-end) is
+    // still priced if the unroll trial puts the unroll back (loop_fusion -O2 with byte-index loops).
     if flags.iter().all(|one| *one) {
         trial::restore(other_unroll);
-        return Ok((other, sites, None, false));
+        return Ok((other, sites, None, joint));
     }
     let chosen: Vec<_> = sites.into_iter().zip(&flags).filter(|(_, kept)| **kept).map(|(site, _)| site).collect();
     let Ok(third) = trial::with_inlined(&chosen, || program(text, request)) else {
