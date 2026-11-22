@@ -1033,6 +1033,9 @@ impl TargetLowering {
         );
         // `LowerSINT_TO_FP`: `v2i32` to `v2f64`; `v4i32` to `v4f32` is a pattern.
         t.set_ops(&[ISD::SIntToFp], &[MVT::V2I32], Action::Custom);
+        // `LowerUINT_TO_FP`: `v4i32` to `v4f32` is `cvtdq2ps` when the sign bit is clear, else the
+        // mantissa-halves sequence.
+        t.set_ops(&[ISD::UIntToFp], &[MVT::V4I32], Action::Custom);
         // `LowerSCALAR_TO_VECTOR`: a byte or a word is widened to a dword for `movd`.
         t.set_ops(&[ISD::ScalarToVector], &[MVT::V16I8, MVT::V8I16], Action::Custom);
         // `LowerMUL`: `v4i32` without `pmulld` is `pmuludq` on the even and the
