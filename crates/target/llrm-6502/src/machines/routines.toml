@@ -24,6 +24,11 @@ __divmodhi4 = "__divmodhi4c"
 # module must save for each percent of its bytes the routine adds.
 percent_per_percent = 4
 
+[share.size]
+# The same, per routine, where the general rate is not the routine's. The 16-bit speed division at size: an Euclid loop
+# (a quotient of a few bits) runs 57% faster for 131 bytes of image (idiv_loop_os).
+division16 = 1
+
 [share.speed]
 # The same, at the speed levels (O1-O3), per routine: clocks are the second goal there and a module's bytes
 # under the bytes bar are headroom (coordinator ruling 2026-11-18).

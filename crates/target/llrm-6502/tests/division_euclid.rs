@@ -59,3 +59,25 @@ fn a_hot_remainder_loop_calls_the_speed_routine_at_o2() {
     let text = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
     assert!(text.contains("__modhi3\n") && !text.contains("__modhi3c"), "the speed remainder at -O2:\n{text}");
 }
+
+/// The same program at -Os called the compact `__modhi3c` (idiv_loop_os 2.31M
+/// clocks against llvm-mos's 1.07M): the speed routine is the module's choice
+/// at size by the share of its clocks it saves against the share of its bytes
+/// it adds.
+#[test]
+fn a_hot_remainder_loop_calls_the_speed_routine_at_os() {
+    let ir = format!("target datalayout = \"{}\"\n{GCD_SUM}", datalayout());
+    let text = assembly(&ir, &Request::new(Level::Os)).unwrap_or_else(|e| panic!("{e}"));
+    assert!(text.contains("__modhi3\n") && !text.contains("__modhi3c"), "the speed remainder at -Os:\n{text}");
+}
+
+/// A division that runs once repays no byte: -Os keeps the compact routine.
+#[test]
+fn a_cold_remainder_keeps_the_compact_routine_at_os() {
+    let ir = format!(
+        "target datalayout = \"{}\"\ndefine i16 @once(i16 %a, i16 %b) {{\n  %r = srem i16 %a, %b\n  ret i16 %r\n}}\n",
+        datalayout()
+    );
+    let text = assembly(&ir, &Request::new(Level::Os)).unwrap_or_else(|e| panic!("{e}"));
+    assert!(text.contains("__modhi3c\n"), "the compact remainder at -Os:\n{text}");
+}
