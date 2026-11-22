@@ -46,6 +46,14 @@ paths = ["**/*.rs", "rustfmt.toml", "tools/fmt.sh", "tools/rfmt-post/**"]
 [plain]
 paths = ["rustfmt.toml", "tests/**", "tools/**", "bench/**", "examples/**", "runtime/**", "toolchain/**", "crates/**"]
 
+# Suites that compare a target's output with the pin's. Cargo finds a test directory (tests/all/main.rs) but `crate_tests` lists
+# tests/*.rs, so m68k's `all` target ran in no tier and #10588 turned its `pin_output` red unseen. A run that builds the package
+# runs the filter: the build of the `all` binary is the cost, the 36 tests take 0.1 s.
+[[pinned]]
+package = "llrm-m68k"
+test = "all"
+filter = "pin_output::"
+
 # Crates whose own tests read other crates' sources. A change to what they read runs them, though they depend on none of it.
 [[reads]]
 package = "llrm-mir"

@@ -574,7 +574,11 @@ def commands(p: Plan, cfg: dict, pkgs: dict[str, dict], skip_bins: frozenset[str
         # rustdoc over every crate costs 456 CPU-s to find no test: it runs when a doc comment has a fence to run.
         "doc": f"if python3 tools/gate/doctests.py crates src tests; then {cargo} {libs} --doc; else {SKIPPED_DOC}; fi" if libs else "true",
         "integration": f"{cargo} -p llrm {cheap_bins} -- {skips} --skip test_every_program_under_tests_run_prints_its_out",
-        "crate-tests": f"{cargo} {ct}" if ct else "true",
+        "crate-tests": " && ".join(
+            [f"{cargo} {ct}"] * bool(ct)
+            + [f"{cargo} -p {one['package']} --test {one['test']} -- {one['filter']}" for one in cfg.get("pinned", []) if one["package"] in selected]
+        )
+        or "true",
         # Every scan runs, and any failing fails the step: the first red must not hide the others.
         "scans": "rc=0; "
         + "; ".join(f"{cargo} -p {one['package']} " + (f"--lib -- {one['lib']}" if "lib" in one else f"--test {one['test']}") + " || rc=1" for one in cfg["scan"] if "package" in one)
