@@ -190,11 +190,25 @@ fn address_pairs(function: &MFunc) -> Vec<HashMap<usize, usize>> {
         .iter()
         .map(|block| {
             let mut pages: HashMap<Reg, (usize, &Target)> = HashMap::default();
-            let mut pairs = HashMap::default();
+            let mut candidates: Vec<(usize, usize, Reg)> = Vec::new();
+            // Per page register: the reads in this block and the last one's
+            // position.
+            let mut reads: HashMap<Reg, (u32, usize)> = HashMap::default();
+            let mut calls: Vec<usize> = Vec::new();
             for (at, op) in block.ops.iter().enumerate() {
+                if matches!(op, Op::Call { .. }) {
+                    calls.push(at);
+                }
+                let mut visited = op.clone();
+                visited.visit(&mut |register, role| {
+                    if role != Role::Def {
+                        let entry = reads.entry(register.key()).or_default();
+                        *entry = (entry.0 + 1, at);
+                    }
+                });
                 match op {
                     Op::I(Inst::Adr { page: true, rd, target, got: false })
-                        if seen.get(&Reg::Gpr(*rd)) == Some(&(1, 1)) =>
+                        if seen.get(&Reg::Gpr(*rd)).is_some_and(|&(defs, uses)| defs == 1 && uses >= 1) =>
                     {
                         pages.insert(Reg::Gpr(*rd), (at, target));
                     }
@@ -202,13 +216,28 @@ fn address_pairs(function: &MFunc) -> Vec<HashMap<usize, usize>> {
                         if let Some(&(adrp, page_target)) = pages.get(&Reg::Gpr(*rn))
                             && page_target == target
                         {
-                            pairs.insert(at, adrp);
+                            candidates.push((at, adrp, Reg::Gpr(*rn)));
                         }
                     }
                     _ => {}
                 }
             }
-            pairs
+            // The add is the whole address (one rematerializable `MOVaddr`)
+            // where its page has no other reader, or where the page
+            // would live across a call to be shared: a callee-saved
+            // register held for a one-instruction
+            // value (QuickrBasic `uimn_act` -Os, +116 B). A page nothing
+            // crosses a call with stays one shared value, the plain
+            // bases LSR counted (particle -O1: 6 `adrp`).
+            candidates
+                .into_iter()
+                .filter(|&(_, adrp, page)| {
+                    let uses = seen.get(&page).map_or(0, |&(_, uses)| uses);
+                    let (here, last) = reads.get(&page).copied().unwrap_or_default();
+                    uses == 1 || calls.iter().any(|&call| adrp < call && (here < uses || call < last))
+                })
+                .map(|(at, adrp, _)| (at, adrp))
+                .collect()
         })
         .collect()
 }
@@ -234,12 +263,32 @@ fn view_with(
     let wide_list: Vec<Reg> = wide.iter().copied().collect();
     let labels: HashMap<&str, u32> =
         function.blocks.iter().enumerate().map(|(at, block)| (block.label.as_str(), at as u32)).collect();
+    let mut page_uses: HashMap<Reg, u32> = HashMap::default();
+    for op in function.blocks.iter().flat_map(|block| &block.ops) {
+        let mut op = op.clone();
+        op.visit(&mut |register, role| {
+            if role != Role::Def {
+                *page_uses.entry(register.key()).or_default() += 1;
+            }
+        });
+    }
     let mut origin = 0u32;
     // The names the memory operands of this function refer to, by index.
     let mut symbols: Vec<String> = Vec::new();
     for (at, block) in function.blocks.iter().enumerate() {
         let mut insts = Vec::new();
-        let first_halves: Vec<usize> = pairs[at].values().copied().collect();
+        // A page stays for the readers that are not a fused add (a folded
+        // page-offset access): the pin's `MOVaddr` is the whole address, so
+        // those readers have a page of their own, made again where they are.
+        let first_halves: Vec<usize> = pairs[at]
+            .values()
+            .copied()
+            .filter(|&adrp| {
+                let Op::I(Inst::Adr { rd, .. }) = &block.ops[adrp] else { return false };
+                let fused = pairs[at].values().filter(|&&one| one == adrp).count() as u32;
+                page_uses.get(&Reg::Gpr(*rd)).copied() == Some(fused)
+            })
+            .collect();
         for (index, op) in block.ops.iter().enumerate() {
             origin += 1;
             // A debug note is no instruction to the allocator (`isDebugInstr`):
@@ -994,7 +1043,7 @@ impl AllocTarget for Arm64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mc::inst::{AddSub, Cond, Wide, Width};
+    use crate::mc::inst::{AddSub, Addr, Cond, MemOperand, Memory, Wide, Width};
     use crate::mfunc::{MBlock, OpList};
 
     fn sample() -> MFunc {
@@ -1156,6 +1205,58 @@ mod tests {
         let ops = &back.blocks[0].ops;
         assert_eq!(ops[0], Op::I(Inst::Adr { page: true, rd: Gpr(6), target: target.clone(), got: false }), "{ops:?}");
         assert_eq!(ops[1], Op::I(Inst::AddPageOffset { rd: Gpr(6), rn: Gpr(6), target }), "{ops:?}");
+    }
+
+    /// The page of `adrp`, an `add :lo12:` of it and a page-offset store, with
+    /// a call between the add and the store when `call`; how many of the
+    /// instructions are made from nothing (rematerializable, no register read).
+    fn made_from_nothing(call: bool) -> (usize, usize) {
+        let mut function = MFunc::new("f");
+        let (page, address) = (function.gpr(), function.gpr());
+        let target = Target::Symbol { name: "_g".into(), addend: 0 };
+        let store = Inst::Store {
+            mem: Memory::Int { width: Width::W, bytes: 4, sign: false, reg: Gpr(1) },
+            addr: Addr::PageOffset { base: page, target: target.clone(), got: false },
+            mmo: MemOperand::default(),
+        };
+        let mut ops = vec![
+            Op::I(Inst::Adr { page: true, rd: page, target: target.clone(), got: false }),
+            Op::I(Inst::AddPageOffset { rd: address, rn: page, target: target.clone() }),
+        ];
+        if call {
+            ops.push(Op::Call {
+                callee: crate::mfunc::Callee::Symbol("h".into()),
+                uses: vec![],
+                defs: vec![],
+                tail: false,
+            });
+        }
+        ops.extend([Op::I(store), Op::Return { uses: vec![Reg::Gpr(address)], tail: None }]);
+        function.blocks.push(MBlock { label: "L0".into(), ops: OpList::from(ops) });
+        let lir = view(&function);
+        let insts = &lir.blocks[0].insts;
+        let fused = insts
+            .iter()
+            .filter(|inst| inst.rematerializable && inst.operands.iter().all(|o| !matches!(o, Operand::Use(_))))
+            .count();
+        (insts.len(), fused)
+    }
+
+    /// QuickrBasic uimain `uimn_act` -Os (+116 B): one `adrp` page read by an
+    /// `add :lo12:` and by a page-offset store after a call stayed one value
+    /// live across the call and took a seventh callee-saved register. The pin's
+    /// `MOVaddr` is the whole address, so the add is fused and the page stays
+    /// for the store, made again where it is.
+    #[test]
+    fn an_address_pair_fuses_where_its_page_would_live_across_a_call() {
+        assert_eq!(made_from_nothing(true), (5, 2), "the page, the fused address, the call, the store, the return");
+    }
+
+    /// Control: with no call between, the page is one shared value (the plain
+    /// symbol bases LSR counted: particle -O1 6 `adrp`, not 12).
+    #[test]
+    fn an_address_pair_stays_shared_where_no_call_separates_the_readers() {
+        assert_eq!(made_from_nothing(false), (4, 1), "the add stays an add of the shared page");
     }
 
     /// `sub sp, sp, #16` defined register 31, the zero register, so the
