@@ -79,3 +79,21 @@ fn a_byte_no_scc_made_keeps_its_mask() {
     );
     assert!(text.contains("and.b\t#1"), "{text}");
 }
+
+/// -O2 and -O3 ran no pass on the byte (`optsize` was the only gate): `and.b
+/// #1` is 8 clk on a 68000 where `neg.b` is 4 (QuickrBasic m68k -O2 -310 B).
+#[test]
+fn a_compare_returned_as_a_bool_is_scc_then_neg_at_speed_levels_too() {
+    for level in ["-O2", "-O3"] {
+        let text = assembly(
+            "define zeroext i1 @f(i32 %x, i32 %k) nounwind {
+  %c = icmp eq i32 %x, %k
+  ret i1 %c
+}
+",
+            level,
+        );
+        assert!(text.contains("neg.b"), "{level}: {text}");
+        assert!(!text.contains("and.b\t#1"), "{level}: {text}");
+    }
+}
