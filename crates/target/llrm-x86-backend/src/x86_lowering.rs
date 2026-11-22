@@ -3500,6 +3500,10 @@ fn lower_vastart(
         (16, pointer, dag.get_frame_index(pointer, save)),
     ];
     for (offset, vt, value) in fields {
+        // No reader of `fp_offset`: gcc's `va_list_fpr_size` of 0.
+        if offset == 4 && dag.var_args_fp_unread {
+            continue;
+        }
         let at = dag.get_constant(offset, pointer);
         let address = dag.get_node(ISD::Add, pointer, &[list, at]);
         let info = MemInfo { mem_vt: vt, align: 4, volatile: false, base, ext: None, space: 0, ordering: None };
