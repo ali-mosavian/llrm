@@ -262,6 +262,24 @@ pub fn keeps(
     }
 }
 
+/// Whether `with` is no larger and no slower than `without` and differs from it: the `-O1` contract
+/// (`Options::strict`), where a choice is taken only if nothing it costs shows.
+pub fn keeps_no_worse(
+    with: &[Item],
+    without: &[Item],
+    cpu: Cpu,
+) -> bool {
+    match (price_of(with, cpu, true), price_of(without, cpu, true)) {
+        (Some(with_cost), Some(without_cost)) => {
+            if llrm_support::debug::enabled("trial") {
+                eprintln!("trial no-worse: with {with_cost:?} without {without_cost:?}");
+            }
+            with_cost.0 <= without_cost.0 && with_cost.1 <= without_cost.1 && with_cost != without_cost
+        }
+        _ => false,
+    }
+}
+
 /// [`keeps`] for functions that differ in whether they call `__mulsi3`: the program links the routine once if anything
 /// calls it, so the side that calls it and the other that does not differ by its bytes, unless a function outside
 /// the trial calls it too (`rest_calls_mulsi3`, asked only then); only where bytes decide (`Price::Size`). `switch_empty_cases` -Os 68000: `seen * 3 + i` six

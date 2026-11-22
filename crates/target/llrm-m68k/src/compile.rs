@@ -172,6 +172,10 @@ pub struct Options {
     /// before `MachineCSE` ([`crate::regalloc::shared_licm`]). It sees a
     /// loop-invariant only where `direct_copies` made no copy of it.
     pub shared_licm: bool,
+    /// The build the -O1 trial makes with the shared `MachineLICM` on: a
+    /// `strict` build runs it only here, and keeps it where it is no larger
+    /// and no slower ([`crate::trial::keeps_no_worse`]).
+    pub licm_trial: bool,
     /// The shared flow's `PhiElimination` and `TwoAddress` take the function
     /// from SSA to the allocator, in place of the private `eliminate_phis`,
     /// `commute_tied` and `two_address` ([`crate::regalloc::shared_prelude`]).
@@ -268,6 +272,7 @@ impl Options {
         shared_cse: false,
         direct_copies: false,
         shared_licm: false,
+        licm_trial: false,
         shared_prelude: false,
         tail_duplicate: false,
         rematerialize_arguments: false,
@@ -313,6 +318,7 @@ impl Default for Options {
             shared_cse: true,
             direct_copies: false,
             shared_licm: true,
+            licm_trial: false,
             shared_prelude: false,
             tail_duplicate: true,
             rematerialize_arguments: true,
@@ -450,6 +456,15 @@ pub fn items_with(
         if touched.data_constants && crate::trial::keeps(&items, &kept, cpu, price) {
             trial_won(name, "data_constants", crate::trial::keeps(&items, &kept, cpu, price));
             kept = items;
+        }
+    }
+    // The pin runs `MachineLICM` at -O1; here that is a build kept only where
+    // it is no larger and no slower (the -O1 contract).
+    if options.strict && options.shared_licm && !wants_size {
+        let (hoisted, _, _) = finished(Options { licm_trial: true, ..options })?;
+        if crate::trial::keeps_no_worse(&hoisted, &kept, cpu) {
+            trial_won(name, "licm", true);
+            kept = hoisted;
         }
     }
     Ok(kept)
@@ -714,15 +729,16 @@ fn size_build(
 
 /// Whether the shared `MachineLICM` runs on a function.
 ///
-/// DEVIATE M68K-LICM-SPEED (owner wasm-3, exit 2026-12-10, when `m68k/shared-licm-direct-copies`
-/// lands): speed builds only. A hoisted address holds a register for the loop; at -Os and -O1 the
-/// private passes lose bytes and clocks to the spills it causes (-Os +1.5 KB over 186 programs).
+/// DEVIATE M68K-LICM-SPEED (owner w9-tests, exit 2026-11-26): the pin runs it at every level but
+/// -O0. Speed builds run it; -O1 runs it in a trial build kept only where it is no larger and no
+/// slower; -Os does not: a hoisted address holds a register for the loop and the private passes
+/// lose bytes to the spills (-Os +1.5 KB over 186 programs).
 /// The trial's variants read this too: a stage that does not run must not change the emission.
 fn licm_runs(
     options: Options,
     wants_size: bool,
 ) -> bool {
-    options.shared_licm && !wants_size && !options.strict
+    options.shared_licm && !wants_size && (!options.strict || options.licm_trial)
 }
 
 fn same_instructions(
