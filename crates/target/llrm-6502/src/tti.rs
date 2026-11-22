@@ -368,6 +368,11 @@ impl Tti for Mos6502 {
         key(a) < key(b)
     }
 
+    /// llvm-mos: `n8` makes a 16-bit counter illegal, and LFTR still tests the exit on it.
+    fn allow_illegal_integer_iv(&self) -> bool {
+        true
+    }
+
     fn address_index_max(&self) -> Option<u64> {
         Some(u64::from(u8::MAX))
     }

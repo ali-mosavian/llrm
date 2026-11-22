@@ -2351,6 +2351,15 @@ pub trait Tti {
         false
     }
 
+    /// llvm-mos's `TargetTransformInfo::allowIllegalIntegerIV` (not in the pin):
+    /// a loop counter of a width the datalayout does not hold is still a counter
+    /// `IndVarSimplify` may rewrite the exit test on (`findLoopCounter`'s
+    /// `isLegalInteger` check is skipped).
+    /// [llvm-mos](https://github.com/llvm-mos/llvm-mos/blob/a40207a371b6/llvm/lib/Target/MOS/MOSTargetTransformInfo.h#L47)
+    fn allow_illegal_integer_iv(&self) -> bool {
+        false
+    }
+
     /// DEVIATE MUL-HOT: see `Tuning::mul_chains_hot_at_size`.
     fn mul_chains_hot_at_size(&self) -> bool {
         false
