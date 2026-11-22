@@ -1866,6 +1866,14 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE SZ1-HOT (`Tuning::inline_size_hot_growth_percent`): at a
+    /// locally hot site (`HotCallSiteRelFreq`) the -Os bound lets through a
+    /// growth of at most this percent of the call sequence removed. None: the
+    /// bound holds there.
+    fn opt_size_inline_hot_growth_percent(&self) -> Option<i64> {
+        None
+    }
+
     /// Whether a constant address offset may become a phi: false where the
     /// access folds it as a displacement and the target says to keep it. A
     /// boolean as the pin's `replacingOperandWithVariableIsCheap` is: a
@@ -1981,6 +1989,13 @@ pub trait Tti {
     /// `Tuning::backward_threading`.
     fn backward_threading(&self) -> bool {
         true
+    }
+
+    /// DEVIATE COMMON-INSTS-O1: the SimplifyCFG that ends the -O2 function
+    /// pipeline (L832) hoists and sinks common code at -O1 too, where the
+    /// pin's `default<O1>` ends with a plain one (L621). Off: the pin.
+    fn common_insts_at_o1(&self) -> bool {
+        false
     }
 
     /// `Tuning::sink_common_at_size`.

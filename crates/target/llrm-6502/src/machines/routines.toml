@@ -30,6 +30,11 @@ percent_per_percent = 4
 # compact one): bytes are first on this target at every level (user ruling 2026-11-14), so 2, not the speed table's 1
 # (ruling 2026-11-18): at 1 compound_assignment_types Os went 892 -> 1,044 B, over sdcc's 1,015.
 division16 = 2
+# The multiply by a constant expanded in line instead of called (`mulimage::expand_when_unshared`).
+mul_expand = 2
+# ... and only where the expansion removes at least this percent of the module's estimated clocks: a module whose
+# clocks are elsewhere keeps its bytes (bytes are first at size; call_keeps +190 B for -21% clocks stays a call).
+mul_expand_floor = 60
 
 [share.speed]
 # The same, at the speed levels (O1-O3), per routine: clocks are the second goal there and a module's bytes
