@@ -546,16 +546,22 @@ fn register_parameter(ir: &str) -> Option<&str> {
 }
 
 /// Whether the backend places the `inreg` arguments of this build: the 32-bit
-/// x86 System V convention does (`inreg_registers`), no other does. The last
-/// `-mabi=` of the target's backend flags and the command line is the one the
-/// backend takes.
+/// x86 System V convention does (`inreg_registers`), and so does Open Watcom's
+/// where the row makes every function regcall (`-mregcall-default`: clang marks
+/// each parameter `inreg`, and `watcall32` takes EAX, EDX, EBX, ECX for them as
+/// it does for an unmarked one). Under `-mabi=watcom` alone, `-mregparm=3`
+/// makes `inreg` mean EAX, EDX, ECX, which that convention does not give:
+/// refused. The last `-mabi=` of the target's backend flags and the command
+/// line is the one the backend takes.
 fn places_inreg(
     target: &Target,
     build: &Build,
 ) -> bool {
     let arch = target.triple.split('-').next().unwrap_or_default();
     let abi = target.llc.iter().chain(&build.llc).rev().find(|flag| flag.starts_with("-mabi="));
-    matches!(arch, "i386" | "i486" | "i586" | "i686") && abi.is_some_and(|flag| flag == "-mabi=sysv")
+    let regcall_default = target.llc.iter().chain(&build.llc).any(|flag| flag == "-mregcall-default");
+    matches!(arch, "i386" | "i486" | "i586" | "i686")
+        && abi.is_some_and(|flag| flag == "-mabi=sysv" || (flag == "-mabi=watcom" && regcall_default))
 }
 
 const PASSTHROUGH: &[&str] = &["-E", "-M", "-MM", "-emit-llvm", "-fsyntax-only", "-###", "-dumpmachine"];
