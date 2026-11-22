@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/globalmerge.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/globalmerge.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/globalmerge.rs sha256:a349406b46463c9de42e36a51897abd0ee9c2e06cd0fb2a19aca40f13affb5c2 -->
+<!-- src: crates/opt/llrm-transforms/src/globalmerge.rs sha256:e00bc8cea125b7ee510070dbdedf6ed150459e0c5b8698a9e66d8046ec2a542b -->
 
 # globalmerge
 
@@ -24,11 +24,14 @@ size, into packed structs that stay within the reach. Every use becomes a
 ```
 
 ## Deviations
-GM1 (exit 2026-11-12, owner w15): a global another global's initializer,
-an alias or a landing pad names stays unmerged, and external ones are not
-merged: MIR has no alias to a member of a struct, and the arm64 writer
-emits no alias. GM2 (same exit): a global with metadata stays unmerged.
-The pin copies `!dbg`.
+GM1 (closed): a defined external global merges when the target asks
+(`GlobalMerge::external`, LLVM's `MergeExternalByDefault`) and the module
+is no `-fPIC` shared code that may be interposed; its name becomes an alias
+at its place in the struct (`Alias::offset`), which the object writer emits
+(assembly text carries no alias, so nothing external merges there). A
+global another global's initializer, an alias or a landing pad names stays
+unmerged. GM2 (same exit): a global with metadata stays unmerged. The pin
+copies `!dbg`.
 
 ## Runs
 Once per module after the mid-end, for the targets that ask
