@@ -174,7 +174,7 @@ pub struct Options {
     pub shared_licm: bool,
     /// The build the -O1 and -Os trial makes with the shared `MachineLICM` on:
     /// those builds run it only here, and keep it where it pays
-    /// ([`crate::trial::keeps_no_worse`] at -O1, [`crate::trial::keeps`] at -Os).
+    /// ([`crate::trial::keeps_faster`] at -O1, [`crate::trial::keeps`] at -Os).
     pub licm_trial: bool,
     /// The shared flow's `PhiElimination` and `TwoAddress` take the function
     /// from SSA to the allocator, in place of the private `eliminate_phis`,
@@ -459,14 +459,14 @@ pub fn items_with(
         }
     }
     // The pin runs `MachineLICM` at every level; here -O1 and -Os make it a
-    // build kept only where it pays: no larger and no slower at -O1, fewer
+    // build kept only where it pays: fewer clocks at -O1, fewer
     // bytes (then clocks) at -Os.
     if options.shared_licm && (options.strict || wants_size) {
         let (hoisted, _, _) = finished(Options { licm_trial: true, ..options })?;
         let better = if wants_size {
             crate::trial::keeps(&hoisted, &kept, cpu, price)
         } else {
-            crate::trial::keeps_no_worse(&hoisted, &kept, cpu)
+            crate::trial::keeps_faster(&hoisted, &kept, cpu)
         };
         if better {
             trial_won(name, "licm", true);

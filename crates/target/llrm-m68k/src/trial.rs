@@ -262,9 +262,9 @@ pub fn keeps(
     }
 }
 
-/// Whether `with` is no larger and no slower than `without` and differs from it: the `-O1` contract
-/// (`Options::strict`), where a choice is taken only if nothing it costs shows.
-pub fn keeps_no_worse(
+/// Whether `with` runs in fewer clocks than `without`, whatever its size: the levels ruling for
+/// -O1..-O3 (match by clocks), for a build the pin makes at every level.
+pub fn keeps_faster(
     with: &[Item],
     without: &[Item],
     cpu: Cpu,
@@ -272,9 +272,9 @@ pub fn keeps_no_worse(
     match (price_of(with, cpu, true), price_of(without, cpu, true)) {
         (Some(with_cost), Some(without_cost)) => {
             if llrm_support::debug::enabled("trial") {
-                eprintln!("trial no-worse: with {with_cost:?} without {without_cost:?}");
+                eprintln!("trial faster: with {with_cost:?} without {without_cost:?}");
             }
-            with_cost.0 <= without_cost.0 && with_cost.1 <= without_cost.1 && with_cost != without_cost
+            with_cost.1 < without_cost.1
         }
         _ => false,
     }
