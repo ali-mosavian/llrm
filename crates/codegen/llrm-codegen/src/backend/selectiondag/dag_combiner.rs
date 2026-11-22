@@ -285,6 +285,16 @@ pub trait CombineHooks {
         true
     }
 
+    /// `TargetLowering::isLegalICmpImmediate`: whether a compare takes the
+    /// signed immediate. Default true (the target is not judged); arm64 is
+    /// the add/sub immediate.
+    fn legal_icmp_immediate(
+        &self,
+        _imm: i64,
+    ) -> bool {
+        true
+    }
+
     /// `visitMUL`'s `(mul (add x, c1), c2)` is `(add (mul x, c2), c1*c2)`.
     /// Default false until x86 is judged.
     fn fold_mul_of_add_with_constant(&self) -> bool {
@@ -1579,6 +1589,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             }
         }
         if let Some(folded) = self.narrow_zext_compare(vt, n0, c1, cond) {
+            return Some(folded);
+        }
+        if let Some(folded) = self.fold_illegal_compare_immediate(vt, n0, c1, cond) {
             return Some(folded);
         }
         if !matches!(cond, CondCode::SetEq | CondCode::SetNe)
