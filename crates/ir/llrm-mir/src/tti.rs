@@ -2368,6 +2368,34 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE LSR-COND-STEP: extra `add_rec_cost` of an addrec register rated
+    /// for an address use that does not run every trip. The pin charges a register one
+    /// step however often its uses run; here the step is paid each trip, and a
+    /// use that runs on a few (a switch's table lookup, 28 of 256 trips) saves
+    /// its computation only then (switch_peeled_table: four counters stepped
+    /// 256 times for a lookup run 28 times).
+    fn lsr_conditional_use_step_cost(&self) -> u32 {
+        0
+    }
+
+    /// DEVIATE LSR-CMP-IMM: the exit test's immediate is not rated by its bit
+    /// width in `RateFormula`'s `ImmCost` (the pin counts the bits of every
+    /// non-zero offset, a compare's too). A compare against a constant is one
+    /// `cmp` per byte where a zero test is an `ora`: the exit test's own cost,
+    /// priced by the target, not an immediate a formula adds.
+    fn lsr_exit_compare_immediate_is_free(&self) -> bool {
+        false
+    }
+
+    /// llvm-mos's `TargetTransformInfo::allowIllegalIntegerIV` (not in the pin):
+    /// a loop counter of a width the datalayout does not hold is still a counter
+    /// `IndVarSimplify` may rewrite the exit test on (`findLoopCounter`'s
+    /// `isLegalInteger` check is skipped).
+    /// [llvm-mos](https://github.com/llvm-mos/llvm-mos/blob/a40207a371b6/llvm/lib/Target/MOS/MOSTargetTransformInfo.h#L47)
+    fn allow_illegal_integer_iv(&self) -> bool {
+        false
+    }
+
     /// DEVIATE MUL-HOT: see `Tuning::mul_chains_hot_at_size`.
     fn mul_chains_hot_at_size(&self) -> bool {
         false
