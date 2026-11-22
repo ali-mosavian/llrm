@@ -30,3 +30,26 @@ fn a_hot_rotation_that_does_not_grow_the_object_is_kept_where_it_runs_less() {
     assert!(keeps_rotated(price(124, 648.0), price(116, 560.0), 1, 0));
     assert!(keeps_rotated(price(228, 4445.0), price(228, 2375.0), 1, 0));
 }
+
+/// The trials that save bytes are decided before the hot rotation, which is
+/// priced on the smallest object they made: on `suggest.c` rotation-hot went
+/// first, kept +64 B, and keep-negative-calls (-52 B) was then put back.
+#[test]
+fn the_hot_rotation_is_decided_after_the_trials_that_save_bytes() {
+    let dir = tempfile::tempdir().unwrap();
+    let (input, output) = (dir.path().join("t.ll"), dir.path().join("t.s"));
+    std::fs::write(&input, include_str!("data/jpeg_fixed_os.ll")).unwrap();
+    let said = std::process::Command::new(env!("CARGO_BIN_EXE_llrm-arm64-llc"))
+        .args(["-S", "-Os", "-o"])
+        .arg(&output)
+        .arg(&input)
+        .env("LLRM_DEBUG", "trial")
+        .output()
+        .unwrap();
+    assert!(said.status.success(), "{}", String::from_utf8_lossy(&said.stderr));
+    let log = String::from_utf8_lossy(&said.stderr);
+    let at = |name: &str| log.lines().position(|line| line.starts_with(&format!("trial {name}:")));
+    let (negative, rotation) = (at("keep-negative-calls"), at("rotation-hot"));
+    assert!(negative.is_some() && rotation.is_some(), "premise: both trials ran:\n{log}");
+    assert!(negative < rotation, "{log}");
+}
