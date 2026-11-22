@@ -1451,13 +1451,18 @@ pub(crate) fn llvm_order(
             list.extend([
                 licm("licm@823", true),
                 // L832: hoistCommonInsts and sinkCommonInsts on, besides
-                // convertSwitchRangeToICmp and convertSwitchToArithmetic.
+                // convertSwitchRangeToICmp and convertSwitchToArithmetic. The
+                // pin's `default<O1>` ends its function pipeline with a plain
+                // `SimplifyCFGPass(convertSwitchRangeToICmp)` (L621): at -O1 the
+                // pass drops the three unless the target asks
+                // (`Tti::common_insts_at_o1`).
                 simplify_cfg_with(
                     "decide@832",
                     simplifycfg::Options {
                         hoist_common_insts: true,
                         sink_common_insts: true,
                         convert_switch_to_arithmetic: true,
+                        plain_at_o1: !applied.options.pre,
                         ..Default::default()
                     },
                 ),

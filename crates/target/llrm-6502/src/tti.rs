@@ -140,6 +140,15 @@ impl Tti for Mos6502 {
         "mos6502"
     }
 
+    /// DEVIATE COMMON-INSTS-O1 (owner wasm-3, exit 2026-12-12, row
+    /// COMMON-INSTS-O1): the -O2 function pipeline's hoisting and sinking
+    /// SimplifyCFG (L832) also runs at -O1, as before the pin's plain one (L621)
+    /// was mirrored; the flip is not measured here (computed_goto -O1 +369 B,
+    /// word_compare_branches +265 B on 6502 without it).
+    fn common_insts_at_o1(&self) -> bool {
+        true
+    }
+
     /// Bytes first at -Os: SimplifyCFG sinks common code in every slot
     /// (`Tuning::sink_common_at_size`, gcc's -fcrossjumping).
     fn sink_common_at_size(&self) -> bool {
@@ -366,6 +375,24 @@ impl Tti for Mos6502 {
             (work, c.num_regs, c.scale_cost, c.setup_cost)
         };
         key(a) < key(b)
+    }
+
+    /// A 16-bit counter step is three instructions: a register stepped each
+    /// trip for a use that runs on a few pays that many more.
+    fn lsr_conditional_use_step_cost(&self) -> u32 {
+        3
+    }
+
+    /// A 16-bit compare of the exit test costs two `cmp`s against zero's `ora`:
+    /// the bits of its constant do not make a formula worse (the countdown
+    /// counter that avoids it costs a second counter).
+    fn lsr_exit_compare_immediate_is_free(&self) -> bool {
+        true
+    }
+
+    /// llvm-mos: `n8` makes a 16-bit counter illegal, and LFTR still tests the exit on it.
+    fn allow_illegal_integer_iv(&self) -> bool {
+        true
     }
 
     fn address_index_max(&self) -> Option<u64> {

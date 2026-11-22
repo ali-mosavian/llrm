@@ -500,9 +500,12 @@ pub(crate) fn scalarization_overhead(
     extract: bool,
     cost_kind: CostKind,
 ) -> Option<Cost> {
-    if cost_kind != CostKind::RecipThroughput {
+    // An integer vector at code size costs 1 a lane (`VecInstCost`).
+    let at_size = cost_kind == CostKind::CodeSize && !ty.lane.is_float();
+    if cost_kind != CostKind::RecipThroughput && !at_size {
         return None;
     }
+    let base = if at_size { 1 } else { INSERT_EXTRACT_BASE_COST };
     // A vector of pointers (the address of a scalarized store): every lane is
     // priced, lane 0 too (`getMemInstScalarizationCost` of the pin's opt:
     // 44 for 8 floats, 48 for 8 bytes at stride 8).
@@ -511,7 +514,7 @@ pub(crate) fn scalarization_overhead(
     let moves = i64::from(insert) + i64::from(extract);
     let register_lanes = (128 / lane).min(ty.count);
     let priced = (0..ty.count).filter(|index| !ty.lane.is_float() || index % register_lanes != 0).count() as i64;
-    Some(Cost::of(priced * moves * INSERT_EXTRACT_BASE_COST))
+    Some(Cost::of(priced * moves * base))
 }
 
 /// `CostTblNoPairwise` of `AArch64TTIImpl::getArithmeticReductionCost`

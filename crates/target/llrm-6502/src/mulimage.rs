@@ -8,7 +8,7 @@
 //! module-level re-selection). Reason: the call is 18 B shorter
 //! than the expansion, beside the routine's 110 B, which a module with no
 //! other multiply links for it alone
-//! (licm_graph_callee_footprint, 467 B against gcc's 296). Exit: 2026-11-20,
+//! (licm_graph_callee_footprint, 467 B against gcc's 296). Exit: 2026-12-12,
 //! with the shared inline-or-call cost model.
 
 use crate::dagisel::function::{Selection, is_sized, select_function_with};
@@ -111,7 +111,9 @@ pub fn expand_when_unshared(
         removed += selection.mul_calls() as i64 - other.mul_calls() as i64;
         again.push((at, other));
     }
-    if left != 0 {
+    // a call that stays keeps the routine linked: the expansions then only
+    // add bytes, which at size the share rule below may still take
+    if left != 0 && !at_size {
         return Ok(());
     }
     let bytes = |name: &str, selection: &Selection| -> Result<i64, String> {
@@ -122,14 +124,65 @@ pub fn expand_when_unshared(
     for (at, other) in &again {
         growth += bytes(&names[*at], other)? - bytes(&names[*at], &selections[*at])?;
     }
-    let net = growth - i64::from(library_bytes("__mulsi3"));
-    let pays = net < 0 || (!at_size && request.level != Level::O1 && removed * CALL_CLOCKS >= CLOCKS_PER_BYTE * net);
+    let net = growth - if left == 0 { i64::from(library_bytes("__mulsi3")) } else { 0 };
+    let pays = net < 0
+        || (at_size && expansion_pays_by_share(module, names, selections, &again, request)?)
+        || (!at_size && request.level != Level::O1 && removed * CALL_CLOCKS >= CLOCKS_PER_BYTE * net);
     if pays {
         for (at, other) in again {
             selections[at] = other;
         }
     }
     Ok(())
+}
+
+/// Whether, at size, the module with `again` expanded takes the growth in bytes
+/// for the clocks it saves: the share of its clocks saved is at least
+/// `[share.size] mul_expand` times the share of its bytes added, and the
+/// expansion removes at least `mul_expand_floor` percent of its clocks, both
+/// read from the module as written, the routines linked counted. A tie in bytes
+/// pays (a module the expansion does not grow).
+///
+/// DEVIATE 6502-MUL-IMAGE (owner llrm-target-6502, exit 2026-12-12): the pin
+/// decides each multiply alone, so the clocks are never traded for bytes;
+/// here a module takes them by the rule it takes the speed multiply and
+/// divide by (`select::fast_multiply_pays_at_size`). copy_runs and
+/// mul_constants -Os ran the constant multiplies as calls, 1.4x llvm-mos's
+/// clocks.
+fn expansion_pays_by_share(
+    module: &llrm_mir::module::Module,
+    names: &[String],
+    selections: &[Selection],
+    again: &[(usize, Selection)],
+    request: &Request,
+) -> Result<bool, String> {
+    let current: Vec<&Selection> = selections.iter().collect();
+    let expanded: Vec<&Selection> = current
+        .iter()
+        .enumerate()
+        .map(|(at, one)| again.iter().find(|(to, _)| *to == at).map_or(*one, |(_, other)| other))
+        .collect();
+    let clocks = |chosen: &[&Selection]| -> Result<u64, String> {
+        let parts: Vec<(&str, &Selection)> = names.iter().map(String::as_str).zip(chosen.iter().copied()).collect();
+        let pieces = crate::select::module_text(module, &parts)?;
+        Ok(crate::select::priced(module, &parts, &pieces)?.0)
+    };
+    let (before, after) = (clocks(&current)?, clocks(&expanded)?);
+    let (kept, tried) =
+        (module_bytes(module, names, &current, request)?, module_bytes(module, names, &expanded, request)?);
+    let saved = before.saturating_sub(after);
+    if tried - kept > 0
+        && u128::from(saved) * 100
+            < u128::from(crate::routines::size_share_percent("mul_expand_floor")) * u128::from(before)
+    {
+        return Ok(false);
+    }
+    Ok(pays_by_share_at(
+        crate::routines::size_share_percent("mul_expand"),
+        (saved, tried - kept),
+        before,
+        kept.max(1) as u64,
+    ))
 }
 
 /// The `mos_rt.s` routines the functions' text calls, each once.

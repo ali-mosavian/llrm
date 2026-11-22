@@ -779,7 +779,7 @@ impl Cost {
             if f.has_global() {
                 // Symbolic values are rated conservatively.
                 self.c.imm_cost += 64;
-            } else if offset.is_non_zero() {
+            } else if offset.is_non_zero() && !(lu.kind == Kind::ICmpZero && r.tti.lsr_exit_compare_immediate_is_free()) {
                 let bits = 65 - (offset.0 ^ (offset.0 >> 63)).leading_zeros();
                 self.c.imm_cost += bits;
             }
@@ -953,6 +953,12 @@ impl Cost {
                 loop_cost = 0;
             }
             self.c.add_rec_cost += loop_cost;
+            if loop_cost > 0
+                && !lu.all_fixups_unconditional
+                && lu.kind == Kind::Address
+            {
+                self.c.add_rec_cost += r.tti.lsr_conditional_use_step_cost();
+            }
             if loop_cost > 0
                 && r.se.match_affine_add_rec(reg).is_some_and(|(_, step, _)| r.se.as_constant(step).is_none())
             {

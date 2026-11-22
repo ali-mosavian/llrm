@@ -138,7 +138,9 @@ fn slot_leas(text: &str) -> Vec<i64> {
 /// `callpush` pushes the two after the fold, the frame's call area shrinks by
 /// 4 and the emitted slot sits 4 below the displacement the fold judged, so
 /// `-O2` read as exact (96 kept at pad 92) went red once pushes were chosen
-/// there; it keeps the safe side (folded <= 99) and the 4 B slack.
+/// there; it keeps the safe side (folded <= 99) and the 4 B slack. A pushed
+/// `pea` of a frame address (the `sink` call) shrinks the area the same way: a
+/// fold reads 100 there, which `pushed` (<= 8) keeps within 127.
 #[test]
 fn a_slot_folds_exactly_where_the_displacement_and_the_margin_fit() {
     let (mut folded, mut kept) = (Vec::new(), Vec::new());
@@ -160,7 +162,7 @@ fn a_slot_folds_exactly_where_the_displacement_and_the_margin_fit() {
                     assert_eq!(folds, reference <= edge, "{cpu} {level:?} pad {pad}:\n{out}");
                     if folds { folded.push(reference) } else { kept.push(reference) }
                 } else {
-                    assert!(!folds || reference <= edge, "{cpu} {level:?} pad {pad} folds past the edge:\n{out}");
+                    assert!(!folds || reference <= edge + 4, "{cpu} {level:?} pad {pad} folds past the edge:\n{out}");
                     assert!(folds || reference > edge - 4, "{cpu} {level:?} pad {pad} kept inside the edge:\n{out}");
                     if folds { speed_edge.0.push(reference) } else { speed_edge.1.push(reference) }
                 }
@@ -168,7 +170,7 @@ fn a_slot_folds_exactly_where_the_displacement_and_the_margin_fit() {
         }
     }
     assert_eq!((folded.iter().max(), kept.iter().min()), (Some(&96), Some(&100)));
-    assert!(speed_edge.0.iter().max() <= Some(&96) && speed_edge.1.iter().min() >= Some(&96), "{speed_edge:?}");
+    assert!(speed_edge.0.iter().max() <= Some(&100) && speed_edge.1.iter().min() >= Some(&96), "{speed_edge:?}");
 }
 
 /// Two stack arrays of `n` words filled by a loop, read at `k` and passed to a

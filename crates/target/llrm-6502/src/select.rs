@@ -1295,7 +1295,7 @@ fn fast_multiply_pays_at_size(
 
 /// The module as it stands, in estimated clocks and bytes
 /// (`weights::run_cost`).
-fn priced(
+pub(crate) fn priced(
     module: &Module,
     parts: &[(&str, &Selection)],
     texts: &[String],

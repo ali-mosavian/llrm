@@ -36,6 +36,7 @@ use llrm_mir::program::Program;
 use llrm_transforms::trial::{self, differing, only};
 
 use super::{Options, assembled, assembled_module, compiled_module, optimized_program, stage_files};
+use crate::backend::cpu::Profile;
 use crate::backend::{executed, masm};
 
 /// The -O1 trial's loop-size limit, on a target that states one.
@@ -69,6 +70,9 @@ enum Dimension {
     /// DEVIATE INLINEHINT-GROWTH-TRIAL: the -Os size guard binds an
     /// `inlinehint` callee too.
     KeepHintedCalls,
+    /// DEVIATE HOT-INLINE-TRIAL: the -Os size bound holds at a locally hot
+    /// site too.
+    KeepHotCalls,
 }
 
 /// What the base compile noted for each dimension.
@@ -81,6 +85,7 @@ struct Noted {
     lookups: usize,
     copied: Vec<String>,
     hinted: Vec<String>,
+    hot: Vec<String>,
 }
 
 impl Noted {
@@ -95,6 +100,7 @@ impl Noted {
             lookups: trial::take_lookup_tables(),
             copied: trial::take_copy_calls(),
             hinted: trial::take_hint_yields(),
+            hot: trial::take_hot_yields(),
         };
         trial::clear_rotated_loops();
         noted
@@ -112,6 +118,7 @@ impl Noted {
             Dimension::KeepSwitch => self.lookups > 0,
             Dimension::KeepCopyLoop => !self.copied.is_empty(),
             Dimension::KeepHintedCalls => !self.hinted.is_empty(),
+            Dimension::KeepHotCalls => !self.hot.is_empty(),
         }
     }
 }
@@ -142,6 +149,11 @@ impl Dimension {
         if tti.opt_size_inline_guard_yields_to_inlinehint() && !llrm_support::env_flag!("LLRM_NO_INLINEHINT_TRIAL") {
             all.push(Dimension::KeepHintedCalls);
         }
+        if tti.opt_size_inline_hot_growth_percent().is_some()
+            && !llrm_support::env_flag!("LLRM_NO_HOT_INLINE_TRIAL")
+        {
+            all.push(Dimension::KeepHotCalls);
+        }
         if let Some(limit) = tti.unroll_trial_at_size().filter(|_| !NO_SIZE_UNROLL.with(|one| one.get())) {
             all.push(Dimension::Unroll { limit, bytes_strict: tti.unroll_trial_bytes_strict() });
         }
@@ -161,6 +173,7 @@ impl Dimension {
             Dimension::KeepSwitch => trial::with_refused_lookup_tables(body),
             Dimension::KeepCopyLoop => trial::with_kept_copy_loops(body),
             Dimension::KeepHintedCalls => trial::with_kept_hinted_calls(body),
+            Dimension::KeepHotCalls => trial::with_kept_hot_calls(body),
         }
     }
 
@@ -178,7 +191,10 @@ impl Dimension {
     /// its callees (a hinted callee kept as a call, a table the callee holds)
     /// is not priced by the function alone.
     fn prices_called_work(self) -> bool {
-        matches!(self, Dimension::KeepLatch | Dimension::KeepSwitch | Dimension::KeepHintedCalls)
+        matches!(
+            self,
+            Dimension::KeepLatch | Dimension::KeepSwitch | Dimension::KeepHintedCalls | Dimension::KeepHotCalls
+        )
     }
 
     /// Whether the reversed compile is kept over the base, `bytes` and `work`
@@ -215,12 +231,11 @@ impl Dimension {
             // The object without the latch copies is smaller.
             Dimension::KeepLatch => ("keep-latch", trial::keeps_smaller_at_size(added, saved, base_work, cap)),
             Dimension::KeepSwitch => ("keep-switch", trial::keeps_smaller_at_size(added, saved, base_work, cap)),
-            // The cap does not apply: whether the loop or the call runs less
-            // depends on the words copied, which the compiler does not see
-            // (x_transpose, 32 words a row, runs 14% less as the call;
-            // x_mergesort, a few words, 22% less as the loop).
-            Dimension::KeepCopyLoop => ("keep-copy-loop", trial::keeps_at_size(added)),
+            // The loop is the smaller object; it stays where the call's clocks (priced at the loop's own trip weight,
+            // see `library_cycles`) do not beat it past the cap.
+            Dimension::KeepCopyLoop => ("keep-copy-loop", trial::keeps_smaller_at_size(added, saved, base_work, cap)),
             Dimension::KeepHintedCalls => ("keep-hinted-calls", trial::keeps_smaller_at_size(added, saved, base_work, cap)),
+            Dimension::KeepHotCalls => ("keep-hot-calls", trial::keeps_smaller_at_size(added, saved, base_work, cap)),
             Dimension::Unroll { bytes_strict, .. } => {
                 ("unroll-os", measured && trial::keeps_unroll_at_size(saved, added, noted.unroll.0.len(), bytes_strict))
             }
@@ -246,6 +261,29 @@ fn compiled_with<T>(
     }
 }
 
+/// The words a copy of unknown length is priced at: the trips the frequency model gives a loop of unknown count
+/// (a branch to stay of 31 in 32).
+const UNKNOWN_COPY_WORDS: f64 = 32.0;
+
+/// The clocks the library's copy routines take that `done` calls, which the module does not define and the work
+/// would otherwise price as a call and return alone: `memcpy` is `rep movsd` (startup, then a cell a word) over
+/// the words a loop of unknown count runs, so a copy loop and the call LoopIdiom made of it are priced alike.
+fn library_cycles(
+    one: &masm::Procedure,
+    done: &executed::Executed,
+    cpu: &Profile,
+) -> f64 {
+    let (Ok(startup), Ok(cell)) = (cpu.cost("rep_movs"), cpu.cost("rep_movs_cell")) else { return 0.0 };
+    let runs: f64 = done
+        .calls
+        .iter()
+        .filter_map(|(at, runs)| one.callees.get(at).map(|callee| (callee.name.trim_start_matches('_'), runs)))
+        .filter(|(name, _)| matches!(*name, "memcpy" | "memmove"))
+        .map(|(_, runs)| runs)
+        .sum();
+    runs * (startup as f64 + cell as f64 * UNKNOWN_COPY_WORDS)
+}
+
 /// What a finished module is expected to execute: instructions and memory
 /// operands as `executed::work`, the branches, jumps and x87 exchanges at their
 /// clocks on the CPU (a rotation trades a taken `jmp` for a copied guard, and
@@ -263,6 +301,7 @@ fn rotation_work(
         let jumps = done.jump_cycles(cpu).ok()?;
         let exchanges = done.exchange_cycles(cpu).ok()?;
         let work = done.instructions - done.branches - done.jumps + done.memory + jumps + exchanges + done.call_cycles(cpu);
+        let work = work + library_cycles(one, &done, cpu);
         let calls = done
             .calls
             .iter()

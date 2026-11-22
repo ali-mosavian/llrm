@@ -2693,14 +2693,15 @@ fn combine_x86_add_sub(
 /// `combineUIntToFP`: `UINT_TO_FP` is custom, so the generic combine never
 /// makes it a `SINT_TO_FP` when the sign bit is clear; here a `nneg` flag or a
 /// known clear sign bit does, which is one `fild` of the value itself and not
-/// of a 64-bit buffer holding it. (Vector forms are not translated.)
+/// of a 64-bit buffer holding it. A vector's sign bit is its lanes'.
 fn combine_uint_to_fp(
     dag: &mut SelectionDAG,
     node: SDValue,
 ) -> Option<SDValue> {
     let value = dag.operand(node, 0);
     let vt = dag.value_type(node);
-    let bits = dag.value_type(value).size_in_bits();
+    let source = dag.value_type(value);
+    let bits = if source.is_vector() { source.element() } else { source }.size_in_bits();
     let non_neg = dag.node(node).flags.has(SDNodeFlags::NON_NEG)
         || llrm_codegen::backend::selectiondag::known_bits::known_bits(dag, value).zero >> (bits - 1) & 1 == 1;
     non_neg.then(|| dag.get_node(ISD::SIntToFp, vt, &[value]))
@@ -3355,6 +3356,30 @@ fn lower_int_to_fp(
         let pad = dag.get_undef(src_vt);
         let wide = dag.get_node(ISD::ConcatVectors, EVT::Simple(MVT::V4I32), &[src, pad]);
         return Some(dag.get_node(x86isd::CVTSI2P, dst, &[wide]));
+    }
+    // `LowerUINT_TO_FP` of `v4i32` to `v4f32` (no AVX-512): a clear sign bit is `cvtdq2ps`; otherwise
+    // `lowerUINT_TO_FP_vXi32`: each 16-bit half is the mantissa of a float under a fixed exponent
+    // (0x4b000000 is 2^23, 0x53000000 is 2^39), the high half less 2^39 + 2^23, added to the low.
+    if !signed && dst == EVT::Simple(MVT::V4F32) && src_vt == EVT::Simple(MVT::V4I32) {
+        if combine_uint_to_fp(dag, node).is_some() {
+            return Some(dag.get_node(ISD::SIntToFp, dst, &[src]));
+        }
+        let int = EVT::Simple(MVT::V4I32);
+        let lane = |dag: &mut SelectionDAG, bits: u32| {
+            let one = dag.get_constant(u128::from(bits), EVT::I32);
+            dag.get_splat_build_vector(int, one)
+        };
+        let (low_mask, low_bias, high_bias) = (lane(dag, 0xffff), lane(dag, 0x4b00_0000), lane(dag, 0x5300_0000));
+        let sixteen = lane(dag, 16);
+        let low = dag.get_node(ISD::And, int, &[src, low_mask]);
+        let low = dag.get_node(ISD::Or, int, &[low, low_bias]);
+        let high = dag.get_node(ISD::Srl, int, &[src, sixteen]);
+        let high = dag.get_node(ISD::Or, int, &[high, high_bias]);
+        let fudge = lane(dag, (-(f32::from_bits(0x5300_0000) + f32::from_bits(0x4b00_0000))).to_bits());
+        let (low, high) = (dag.get_node(ISD::BitCast, dst, &[low]), dag.get_node(ISD::BitCast, dst, &[high]));
+        let fudge = dag.get_node(ISD::BitCast, dst, &[fudge]);
+        let high = dag.get_node(ISD::FAdd, dst, &[high, fudge]);
+        return Some(dag.get_node(ISD::FAdd, dst, &[low, high]));
     }
     if !matches!(dst, EVT::Simple(MVT::F32 | MVT::F64 | MVT::F80)) || !src_vt.is_integer() {
         return None;
