@@ -3046,6 +3046,49 @@ b:
     assert!(!narrowed(pipeline::Options::basic()), "-O1 narrowed with CVP, which the pin's O1 lacks");
 }
 
+/// The pin's O1 function pipeline ends in a plain `SimplifyCFGPass`
+/// (PassBuilderPipelines.cpp L621); the hoisting and sinking one (L832) is the
+/// -O2 pipeline's. Ours ran the -O2 one at -O1: computed_goto's `pc` increments
+/// (a GEP of one base, four different constant offsets) were sunk into a phi of
+/// the offsets, +11 B and +62 executed instructions over the pin on wasm -O1.
+#[test]
+fn test_the_o1_final_simplifycfg_does_not_sink_common_instructions() {
+    let text = "define ptr @f(i32 %v, ptr %p) {
+b0:
+  switch i32 %v, label %c [
+    i32 0, label %a
+    i32 1, label %b
+  ]
+a:
+  %x = getelementptr i8, ptr %p, i32 4
+  br label %j
+b:
+  %y = getelementptr i8, ptr %p, i32 8
+  br label %j
+c:
+  %z = getelementptr i8, ptr %p, i32 12
+  br label %j
+j:
+  %r = phi ptr [ %x, %a ], [ %y, %b ], [ %z, %c ]
+  ret ptr %r
+}
+";
+    let run = |options: pipeline::Options| {
+        let mut module = llrm_analysis::testing::parsed(text);
+        let applied = Applied { only: Some("decide@832".to_owned()), options, ..Applied::default() };
+        assert!(pipeline::slot_built(&applied, "decide@832"), "no slot decide@832");
+        let mut manager = llrm_mir::passes::PassManager::default();
+        manager.add(pipeline::Fixed::new(&applied));
+        manager.run_module(&mut module, std::rc::Rc::new(crate::testing::Tuned::default())).expect("the slot runs");
+        llrm_mir::print::module(&module)
+    };
+    let geps = |ir: &str| ir.matches("getelementptr").count();
+    let o2 = run(pipeline::Options::standard());
+    assert_eq!(geps(&o2), 1, "premise: -O2 sinks the three GEPs into one:\n{o2}");
+    let o1 = run(pipeline::Options::basic());
+    assert_eq!(geps(&o1), 3, "-O1 sank what the pin's plain SimplifyCFG leaves:\n{o1}");
+}
+
 /// The pin's early `SimplifyCFGPass()` (L1178) has `ConvertSwitchRangeToICmp`
 /// off (`opt -print-pipeline-passes`:
 /// `simplifycfg<...no-switch-range-to-icmp...>`); ours turned a two-way switch

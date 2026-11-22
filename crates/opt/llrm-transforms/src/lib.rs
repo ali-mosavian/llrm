@@ -280,9 +280,6 @@ pub mod globalmerge;
 pub mod globalopt;
 pub mod globalsra;
 pub mod gvn;
-pub mod indirectbrexpand;
-#[cfg(test)]
-mod indirectbrexpand_tests;
 #[cfg(test)]
 mod gvn_load_tests;
 #[cfg(test)]
@@ -291,6 +288,9 @@ pub mod hardwareloops;
 pub mod hoistcommon;
 pub mod homes;
 pub mod icmpchain;
+pub mod indirectbrexpand;
+#[cfg(test)]
+mod indirectbrexpand_tests;
 pub mod indvars;
 pub mod inferalignment;
 pub mod inferfunctionattrs;
@@ -397,6 +397,7 @@ pub mod mergestores;
 mod mirror;
 pub mod mldstmotion;
 pub mod narrowcycle;
+pub mod mosindexiv;
 pub mod narrowiv;
 pub mod narrowrange;
 pub mod narrowspace;
@@ -455,6 +456,7 @@ pub mod slpinsert;
 pub mod slpphi;
 pub mod slpreduction;
 pub mod slpschedule;
+pub mod slpseeds;
 pub mod slptree;
 pub mod slpvectorize;
 pub mod spares;

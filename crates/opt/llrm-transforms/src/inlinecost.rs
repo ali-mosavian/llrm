@@ -2968,13 +2968,13 @@ impl<'a> Analyzer<'a> {
         } else {
             // `yields`: whether the hint's yield stands at this site; the trial
             // compile that keeps the calls of a hinted callee does not take it.
-            let bound_with = |yields: bool| {
+            let bound_with = |yields: bool, negative: bool| {
                 !self.site.sole_call_to_local
                     && self.site.tti.is_some_and(|tti| {
                         (!at_o1 || tti.opt_size_inline_rule_at_o1())
                             && tti.inline_policy().by_size.is_some_and(|rule| {
                                 self.site.callee_calls >= rule.min_sites
-                                    && !(rule.yields_to_negative_cost && self.cost < 0)
+                                    && !(negative && rule.yields_to_negative_cost && self.cost < 0)
                                     && !(yields && rule.yields_to_inlinehint && self.hint_applied)
                             })
                     })
@@ -2982,19 +2982,36 @@ impl<'a> Analyzer<'a> {
             // A site in a loop is the speed side's: the hint's yield stands
             // there in the trial too, as `outlined_by_trial` leaves it.
             let in_loop = self.site.relative_frequency.is_some_and(|ratio| ratio > 1.0);
-            let bound = bound_with(!crate::trial::keeping_hinted_calls() || in_loop);
-            let grows = bound
-                && self.grows_the_code()
-                && !(at_o1 && self.hot_site_within_growth_budget())
-                && !(!at_o1 && self.hot_site_within_size_growth_budget());
-            // INLINEHINT-GROWTH-TRIAL: noted where only the yield let a growing
-            // call through at -Os, outside a loop.
-            if !bound && !at_o1 && !in_loop && self.hint_applied && bound_with(false) && self.grows_the_code() {
-                crate::trial::note_hint_yield(
+            let bound = bound_with(
+                !crate::trial::keeping_hinted_calls() || in_loop,
+                !crate::trial::keeping_negative_calls() || in_loop,
+            );
+            // DEVIATE HOT-INLINE-TRIAL: the hot-site yield stands except in the
+            // trial compile that keeps those calls; each it lets through is
+            // noted for that trial.
+            let mut hot_yield = bound && !at_o1 && self.grows_the_code() && self.hot_site_within_size_growth_budget();
+            if hot_yield && crate::trial::keeping_hot_calls() {
+                hot_yield = false;
+            } else if hot_yield {
+                crate::trial::note_hot_yield(
                     self.site.module.global(self.site.caller_id).name.as_deref().unwrap_or_default(),
                 );
             }
-            outlined = bound && !grows && self.outlined_by_trial();
+            let grows =
+                bound && self.grows_the_code() && !(at_o1 && self.hot_site_within_growth_budget()) && !hot_yield;
+            // INLINEHINT-GROWTH-TRIAL: noted where only the yield let a growing
+            // call through at -Os, outside a loop.
+            if !bound && !at_o1 && !in_loop && self.grows_the_code() {
+                let name = || self.site.module.global(self.site.caller_id).name.as_deref().unwrap_or_default();
+                if self.hint_applied && bound_with(false, true) {
+                    crate::trial::note_hint_yield(name());
+                } else if self.cost < 0 && bound_with(false, false) {
+                    crate::trial::note_negative_yield(name());
+                }
+            }
+            // The outline trial's cold sites are the size bound's too where
+            // only a yield let them through.
+            outlined = (bound || bound_with(false, false)) && !grows && self.outlined_by_trial();
             grows
         };
         self.blocked_by_bound = grows && self.cost < pin;

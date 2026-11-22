@@ -26,6 +26,20 @@ SDCC_VARIANTS = {
     "sdcc-speed": ["--fsigned-char", "--opt-code-speed"],
     "sdcc-speed-ma": ["--fsigned-char", "--opt-code-speed", "--max-allocs-per-node", "200000"],
 }
+# What clang predefines and the corpus programs read; SDCC defines none of it (a program naming `__INT32_TYPE__` was a syntax error
+# there: the five sfm16_float programs had no bar). The one list the harness scripts read for every SDCC compile line.
+SDCC_DEFINES = [
+    "-D__attribute__(x)=",
+    "-D__INT8_TYPE__=signed char", "-D__UINT8_TYPE__=unsigned char", "-D__INT16_TYPE__=short", "-D__UINT16_TYPE__=unsigned short",
+    "-D__INT32_TYPE__=long", "-D__UINT32_TYPE__=unsigned long", "-D__INT64_TYPE__=long long", "-D__UINT64_TYPE__=unsigned long long",
+]
+
+
+def sdcc_command(variant, source, out):
+    """The SDCC compile line of one cell: the variant's flags, the predefines clang would give, the source."""
+    return ["sdcc", "-mz80", "-c", *variant, *SDCC_DEFINES, str(source), "-o", str(out)]
+
+
 # A SDCC variant is exactly these: a char signedness, one optimisation goal, optionally the allocator budget.
 SDCC_GOALS = {"--opt-code-size", "--opt-code-speed"}
 # gcc-only, no counterpart on ours.

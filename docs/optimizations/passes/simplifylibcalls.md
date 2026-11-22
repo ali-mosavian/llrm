@@ -58,6 +58,15 @@ the compile states it. `strlen` of a constant string is its length, of a
 - D7: `strncpy` of an empty source (the pin's `memset`) and of a bound past
   the source and its NUL (a NUL-padded copy) are untranslated, as is
   `stpncpy`.
+- D8 (FREESTANDING-MEM, owner w11, exit 2026-12-20): a `no-builtins`
+  function or a `nobuiltin` call still folds `memcpy`, `memmove`, `memset` and
+  `memcmp`; every other library function stays a call, as the pin has it. GCC
+  keeps those four builtin under `-ffreestanding` ("GCC requires the
+  freestanding environment provide `memcpy`, `memmove`, `memset` and
+  `memcmp`", gcc.gnu.org, Standards: Freestanding), clang's `no-builtins`
+  turns them off. QuickrBasic's bar is the better of the two (os.c
+  `llrm_os_find_next`: 12 B in GCC, 60 B with the call). Exit: `Target::library`
+  stating which functions the platform guarantees.
 - D3: `strcmp` of two strings whose lengths are known but whose contents are
   not (a PHI or select of literals) is not rewritten: `GetStringLength` here
   reads a constant global only.

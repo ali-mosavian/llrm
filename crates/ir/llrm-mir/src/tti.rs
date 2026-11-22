@@ -1991,6 +1991,22 @@ pub trait Tti {
         true
     }
 
+    /// The blocks between `q` and the branch a backward-threaded path copies
+    /// (GCC's `max-fsm-thread-length`), and with more than one, the ranger's
+    /// entry ranges (`BackwardThreading::entered_with`). 1 is the path `q`,
+    /// `p`, `bb`: x86_64 `known_loads_walks` -O2 pays +3.4% executed
+    /// instructions for a longer one until it is judged there.
+    fn backward_threading_chain(&self) -> usize {
+        1
+    }
+
+    /// DEVIATE COMMON-INSTS-O1: the SimplifyCFG that ends the -O2 function
+    /// pipeline (L832) hoists and sinks common code at -O1 too, where the
+    /// pin's `default<O1>` ends with a plain one (L621). Off: the pin.
+    fn common_insts_at_o1(&self) -> bool {
+        false
+    }
+
     /// `Tuning::sink_common_at_size`.
     fn sink_common_at_size(&self) -> bool {
         false
@@ -2028,6 +2044,16 @@ pub trait Tti {
     /// clocks to be made (`loopunrollprice`); 0: the pin's threshold alone.
     fn unroll_milliclocks_per_byte(&self) -> i64 {
         0
+    }
+
+    /// DEVIATE UP1-O3 (owner arm64, exit 2026-12-21): the rate at `opt_level`.
+    /// -O3 is judged by clocks, not bytes, so a target may take the pin's
+    /// threshold alone there (0). Default: the rate of every level.
+    fn unroll_milliclocks_per_byte_at(
+        &self,
+        _opt_level: u32,
+    ) -> i64 {
+        self.unroll_milliclocks_per_byte()
     }
 
     /// DEVIATE UNROLL-TRIAL (beyond the pin; owner 6502, exit 2026-12-05): the
@@ -2348,6 +2374,34 @@ pub trait Tti {
 
     /// `Tuning::lftr_any_stride` (DEVIATE LFTR1).
     fn lftr_any_stride(&self) -> bool {
+        false
+    }
+
+    /// DEVIATE LSR-COND-STEP: extra `add_rec_cost` of an addrec register rated
+    /// for an address use that does not run every trip. The pin charges a register one
+    /// step however often its uses run; here the step is paid each trip, and a
+    /// use that runs on a few (a switch's table lookup, 28 of 256 trips) saves
+    /// its computation only then (switch_peeled_table: four counters stepped
+    /// 256 times for a lookup run 28 times).
+    fn lsr_conditional_use_step_cost(&self) -> u32 {
+        0
+    }
+
+    /// DEVIATE LSR-CMP-IMM: the exit test's immediate is not rated by its bit
+    /// width in `RateFormula`'s `ImmCost` (the pin counts the bits of every
+    /// non-zero offset, a compare's too). A compare against a constant is one
+    /// `cmp` per byte where a zero test is an `ora`: the exit test's own cost,
+    /// priced by the target, not an immediate a formula adds.
+    fn lsr_exit_compare_immediate_is_free(&self) -> bool {
+        false
+    }
+
+    /// llvm-mos's `TargetTransformInfo::allowIllegalIntegerIV` (not in the pin):
+    /// a loop counter of a width the datalayout does not hold is still a counter
+    /// `IndVarSimplify` may rewrite the exit test on (`findLoopCounter`'s
+    /// `isLegalInteger` check is skipped).
+    /// [llvm-mos](https://github.com/llvm-mos/llvm-mos/blob/a40207a371b6/llvm/lib/Target/MOS/MOSTargetTransformInfo.h#L47)
+    fn allow_illegal_integer_iv(&self) -> bool {
         false
     }
 
@@ -2919,6 +2973,25 @@ pub trait Tti {
         self.is_legal_addressing_mode_in(addr_space, base_gv, base_offset, has_base_reg, scale)
     }
 
+    /// [`Self::is_legal_addressing_mode_at`] where the widths of the base and
+    /// scaled registers are known (llvm-mos's `AddrMode::BaseType` and
+    /// `ScaleType`, which the pin's `AddrMode` lacks): 0 for an absent, pointer
+    /// or unknown register. By default the widths are not asked.
+    fn is_legal_addressing_mode_typed(
+        &self,
+        addr_space: u32,
+        access_bytes: u64,
+        base_gv: bool,
+        base_offset: i64,
+        has_base_reg: bool,
+        scale: i64,
+        base_bits: u32,
+        scale_bits: u32,
+    ) -> bool {
+        let _ = (base_bits, scale_bits);
+        self.is_legal_addressing_mode_at(addr_space, access_bytes, base_gv, base_offset, has_base_reg, scale)
+    }
+
     /// `isLegalAddressingMode` for an access of `access_bytes` (LLVM's
     /// `AccessTy`): an immediate offset's legality depends on the access
     /// size on AArch64 (`ldr x` takes an offset `ldr w` does not). By
@@ -3317,6 +3390,15 @@ pub trait Tti {
     /// says no and narrows at `-Os` only.
     fn narrows_counters_at_speed(&self) -> bool {
         true
+    }
+
+    /// `MOSIndexIV` and the late `IndVarSimplify` that follows it (llvm-mos's
+    /// late loop optimizations): a pointer recurrence whose step and offset
+    /// fit this many bits becomes a base plus a counter of that width, so the
+    /// backend reads the high byte of the index as zero. None (the default)
+    /// runs neither.
+    fn index_iv_width(&self) -> Option<u32> {
+        None
     }
 
     /// Beyond the pin: whether a cycle through a phi whose values only matter

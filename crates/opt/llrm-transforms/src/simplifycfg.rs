@@ -236,6 +236,11 @@ impl FunctionPass for SimplifyCfg {
         // for size sinks in every slot (the pin's `-sink-common-insts`), not
         // the late one only.
         let mut options = self.options;
+        if options.plain_at_o1 && !tti.common_insts_at_o1() {
+            options.hoist_common_insts = false;
+            options.sink_common_insts = false;
+            options.convert_switch_to_arithmetic = false;
+        }
         let for_size = unit
             .function
             .attrs
@@ -261,6 +266,11 @@ impl FunctionPass for SimplifyCfg {
 /// The options of one slot: LLVM's `SimplifyCFGOptions`, as far as ported.
 #[derive(Clone, Copy, Debug)]
 pub struct Options {
+    /// The slot is the -O2 pipeline's (L832), run at -O1 where the pin's
+    /// pipeline has a plain `SimplifyCFGPass`: it hoists, sinks and converts a
+    /// switch to arithmetic only where the target asks
+    /// (`Tti::common_insts_at_o1`).
+    pub plain_at_o1: bool,
     /// `needCanonicalLoops`: true by default and at the early slot, false at
     /// the one after vectorization.
     pub need_canonical_loop: bool,
@@ -299,6 +309,7 @@ impl Options {
     /// the extra sinking can create larger blocks, so loops need not stay
     /// canonical.
     pub const L1438: Options = Options {
+        plain_at_o1: false,
         need_canonical_loop: false,
         loop_form_kept: true,
         speculate_blocks: true,
@@ -323,6 +334,7 @@ impl Options {
     /// `speculateUnpredictables` and `hoistLoadsStoresWithCondFaulting`; the
     /// last two are not translated.
     pub const L1682: Options = Options {
+        plain_at_o1: false,
         need_canonical_loop: true,
         loop_form_kept: true,
         speculate_blocks: true,
@@ -340,6 +352,7 @@ impl Options {
 impl Default for Options {
     fn default() -> Self {
         Options {
+            plain_at_o1: false,
             need_canonical_loop: true,
             loop_form_kept: true,
             speculate_blocks: true,

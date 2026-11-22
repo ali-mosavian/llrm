@@ -1970,16 +1970,7 @@ fn a_hinted_call_in_a_loop_is_inlined_in_the_keep_calls_trial() {
     assert!(inlined(Some(4.0), true), "in a loop the call is inlined in the trial too");
 }
 
-/// The -Os size bound held a call in a pixel loop: QuickrBasic `pixmem.c`
-/// `blend` (52 units, 12 sites) stayed a call at `pm_box`'s inner loop,
-/// frequency 961 times the entry, where the pin's `optsize` threshold takes it
-/// (`q45d25` -Os 2,335,641 instructions against clang's 1,443,306). A locally
-/// hot site now passes the bound where its growth is within the target's share
-/// of the call it removes; a cold site and a site over the share keep it.
-#[test]
-fn a_hot_site_passes_the_size_bound_within_the_growth_budget() {
-    use llrm_mir::target::Tuning;
-    let text = "define internal void @callee(ptr %p, i32 %c, i32 %m) {
+const HOT_CALLEE: &str = "define internal void @callee(ptr %p, i32 %c, i32 %m) {
 b0:
   %a = load i32, ptr %p
   %b = and i32 %a, %m
@@ -2010,6 +2001,43 @@ b0:
   ret void
 }
 ";
+
+/// An x86 -Os target whose size bound yields at a hot site within `percent`.
+fn hot_yield_tti(percent: Option<i64>) -> impl llrm_mir::tti::Tti {
+    use llrm_mir::target::Tuning;
+    llrm_x86::tti::X86::of_cpu("i486").unwrap().with_tuning(Tuning {
+        inline_size_guard_at_size: true,
+        inline_size_hot_growth_percent: percent,
+        ..Tuning::PIN
+    })
+}
+
+/// Whether the first call of `HOT_CALLEE` is inlined at a site `frequency` times its caller's entry.
+fn hot_callee_inlined(percent: Option<i64>, frequency: f64) -> bool {
+    let params = InlineParams { compute_full_inline_cost: true, ..InlineParams::from_level(2) };
+    let (cost, threshold) = priced_hot(
+        HOT_CALLEE,
+        0,
+        false,
+        CallerSize::OptSize,
+        Some(&hot_yield_tti(percent)),
+        params,
+        (2, true),
+        Some(frequency),
+    );
+    cost < threshold
+}
+
+/// The -Os size bound held a call in a pixel loop: QuickrBasic `pixmem.c`
+/// `blend` (52 units, 12 sites) stayed a call at `pm_box`'s inner loop,
+/// frequency 961 times the entry, where the pin's `optsize` threshold takes it
+/// (`q45d25` -Os 2,335,641 instructions against clang's 1,443,306). A locally
+/// hot site now passes the bound where its growth is within the target's share
+/// of the call it removes; a cold site and a site over the share keep it.
+#[test]
+fn a_hot_site_passes_the_size_bound_within_the_growth_budget() {
+    use llrm_mir::target::Tuning;
+    let text = HOT_CALLEE;
     let tti = |percent: Option<i64>| {
         llrm_x86::tti::X86::of_cpu("i486").unwrap().with_tuning(Tuning {
             inline_size_guard_at_size: true,
@@ -2035,4 +2063,23 @@ b0:
     assert!(inlined(Some(1000), 961.0), "a hot site within the share passes the bound");
     assert!(!inlined(Some(1000), 1.0), "a site below the pin's hot frequency keeps the bound");
     assert!(!inlined(Some(0), 961.0), "growth over the share keeps the bound");
+}
+
+/// The hot-site yield trusts the units' growth, which credits the callee's death
+/// over all its sites; cold sites that keep it make the inline cost bytes
+/// (QuickrBasic `suggest.c` +92 B, `comp.c` +49 B, `x_idioms` +143 B). The
+/// trial compile that keeps those calls refuses the yield, and notes each
+/// caller where it stood, so the finished object can decide.
+#[test]
+fn a_hot_yield_is_noted_and_refused_in_the_keep_hot_calls_trial() {
+    let _ = crate::trial::take_hot_yields();
+    assert!(hot_callee_inlined(Some(1000), 961.0), "premise: the yield inlines the hot site");
+    assert_eq!(crate::trial::take_hot_yields(), ["f"], "the caller where the yield stood is noted");
+    assert!(
+        !crate::trial::with_kept_hot_calls(|| hot_callee_inlined(Some(1000), 961.0)),
+        "the trial keeps the call"
+    );
+    assert!(crate::trial::take_hot_yields().is_empty(), "the trial notes nothing");
+    assert!(!hot_callee_inlined(Some(1000), 1.0));
+    assert!(crate::trial::take_hot_yields().is_empty(), "a cold site is not a yield");
 }

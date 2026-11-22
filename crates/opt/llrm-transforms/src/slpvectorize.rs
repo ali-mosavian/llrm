@@ -30,7 +30,8 @@
 //! `pipeline` (Late).
 //!
 //! # Example
-//! Eighty adjacent `store i16 1824` become ten `store <8 x i16>` of the constant (the const_stores test).
+//! Eighty adjacent `store i16 1824` become ten `store <8 x i16>` of the
+//! constant (the const_stores test).
 //!
 //! ```text
 //! store i16 1824, ptr %p0 ... store i16 1824, ptr %p79
@@ -124,6 +125,7 @@ fn chains(
 
 /// A window of `vf` stores is one vector store: its cost below the threshold.
 fn worthwhile(
+    function: &Function,
     tti: &dyn Tti,
     lane: Ty,
     align: u64,
@@ -131,7 +133,7 @@ fn worthwhile(
     context: &Context,
 ) -> bool {
     let vf = window.len() as u32;
-    let kind = CostKind::RecipThroughput;
+    let kind = crate::slptree::cost_kind(function);
     // `getEntryCost` of the store entry (l.17322): the vector store less the
     // scalar ones.
     let Some(vector) = tti.vector_memory_op_cost(MemoryOp::Store, VectorTy { lane, count: vf }, align, kind) else {
@@ -279,7 +281,7 @@ fn run_function(
                         let free = !taken[at..at + vf as usize].iter().any(|&one| one);
                         let align = window[0].align.unwrap_or(bytes);
                         if free
-                            && worthwhile(tti, lane, align, window, unit.context)
+                            && worthwhile(unit.function, tti, lane, align, window, unit.context)
                             && movable(&unit, function, block, window)
                         {
                             taken[at..at + vf as usize].fill(true);
@@ -394,7 +396,15 @@ impl FunctionPass for SlpVectorize {
         // The pin's one pass also makes the wide compare of an `and` chain; it
         // runs wherever it did before this pass held the store chains.
         let compares = crate::slpcompares::SlpCompares.run(unit, analyses);
-        if chains { PreservedAnalyses::none() } else { compares }
+        // `vectorizeOnceUsedSeeds` is the very last attempt, after every other
+        // root of the function.
+        let seeds = outer.target().tti().is_some_and(|tti| {
+            tti.slp_priced()
+                && tti.vector_register_bits() > 0
+                && outer.target().has_vector_mir()
+                && crate::slpseeds::run_function(unit.context, unit.layout, unit.declared, unit.function, &outer, &*tti)
+        });
+        if chains || seeds { PreservedAnalyses::none() } else { compares }
     }
 }
 

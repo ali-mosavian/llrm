@@ -241,13 +241,14 @@ fn lane_ty(bits: u32) -> Ty {
 #[allow(clippy::too_many_arguments)]
 fn worthwhile(
     context: &Context,
+    function: &Function,
     tti: &dyn Tti,
     op: BinaryOp,
     reduced_bits: u32,
     window: &[Leaf],
     first_part: bool,
 ) -> bool {
-    let kind = CostKind::RecipThroughput;
+    let kind = crate::slptree::cost_kind(function);
     let width = window.len() as u32;
     let load_bits = int_ty(context, window[0].loaded).expect("an integer load");
     let load_lane = lane_ty(load_bits);
@@ -418,7 +419,7 @@ fn windows(
         let consecutive = window.windows(2).all(|pair| pair[1].disp == pair[0].disp + i64::from(load_bits / 8));
         if consecutive
             && movable(function, block, window)
-            && worthwhile(context, tti, chain.op, reduced_bits, window, parts.is_empty())
+            && worthwhile(context, function, tti, chain.op, reduced_bits, window, parts.is_empty())
         {
             parts.push(Part { start: pos, width });
             pos += width;
@@ -838,11 +839,11 @@ pub fn run_function(
 /// the vector reduction less the scalar chain it replaces.
 pub(crate) fn tree_reduction_cost(
     tti: &dyn Tti,
+    kind: CostKind,
     op: BinaryOp,
     lane: Ty,
     width: usize,
 ) -> Option<i64> {
-    let kind = CostKind::RecipThroughput;
     let valid = |cost: llrm_mir::tti::Cost| cost.valid.then_some(cost.value);
     let arith = valid(tti.arithmetic_cost(arith_of(op), lane, kind, OperandInfo::default(), OperandInfo::default()))?;
     let reduce =

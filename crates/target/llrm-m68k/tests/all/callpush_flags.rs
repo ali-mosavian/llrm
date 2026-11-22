@@ -32,7 +32,7 @@ fn folded(between: Vec<Inst>) -> Option<usize> {
     insts.push(Inst::new(Kind::Op("ADJCALLSTACKUP"), vec![Operand::Imm(4), Operand::Imm(0)]));
     let refs: Vec<&Inst> = insts.iter().collect();
     let blocks = vec![0; insts.len()];
-    plan(&refs, &blocks, &Assignment::default(), Cpu::M68000, Price::Rate, true, |area| {
+    plan(&refs, &blocks, &Assignment::default(), Cpu::M68000, Price::Rate, true, true, |area| {
         Ok(if area > 0 { (4, 8) } else { (0, 0) })
     })
     .expect("plans")
@@ -77,7 +77,7 @@ fn addx_and_subx_read_and_set_the_codes() {
 /// `f(p + 1)` then an `addx`: the `pea` leaves the codes alone, so dropping
 /// the `addq` that made `p + 1` changes the `X` the `addx` reads. The scan
 /// after the store stopped at the `addx` as at a plain setter.
-fn pea_with(after: Inst) -> Option<(llrm_lir::registers::RegId, i64)> {
+fn pea_with(after: Inst) -> Option<llrm_m68k::callpush::Address> {
     let sp = || Operand::Use(phys(reg::SP));
     let mut call = Inst::new(Kind::Op("JSR32"), vec![]);
     call.call = true;
@@ -96,7 +96,7 @@ fn pea_with(after: Inst) -> Option<(llrm_lir::registers::RegId, i64)> {
     ];
     let refs: Vec<&Inst> = insts.iter().collect();
     let blocks = vec![0; insts.len()];
-    plan(&refs, &blocks, &Assignment::default(), Cpu::M68000, Price::Rate, true, |area| {
+    plan(&refs, &blocks, &Assignment::default(), Cpu::M68000, Price::Rate, true, true, |area| {
         Ok(if area > 0 { (4, 8) } else { (0, 0) })
     })
     .expect("plans")

@@ -95,3 +95,53 @@ fn the_sfm16_float_cmp_kernel_is_cmpps_at_o2() {
         .expect("the kernel");
     assert!(body.contains("cmpps"), "the compare loop stayed scalar:\n{body}");
 }
+
+/// An init loop's `uitofp nneg <4 x i32>` was not selectable and an `i32` lane gather was unpriced, so the SLP planner left
+/// the loop scalar (`cvtsi2ss` a lane, never `cvtdq2ps`). The loop's `i64` index trees stay scalar (their gathers are not
+/// priced: row X64-SLP-I64-GATHER). Needs `LLRM_LLC`.
+#[test]
+fn a_float_init_loop_from_an_int_counter_is_cvtdq2ps_at_o2() {
+    let llc = std::env::var_os("LLRM_LLC").expect("LLRM_LLC is not set: this test needs it and does not skip");
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("vector-float-f32-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let asm = dir.join("a.s");
+    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
+        .env("LLRM_CC_TARGET", "x86_64-linux")
+        .env("LLRM_LLC", llc)
+        .args(["-O2", "-w", "-S", "-o"])
+        .arg(&asm)
+        .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/c/vector_float_init_f32.c"))
+        .output()
+        .unwrap();
+    assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
+    let text = std::fs::read_to_string(&asm).unwrap();
+    assert!(text.contains("cvtdq2ps"), "no packed conversion:\n{text}");
+}
+
+/// A `<4 x i32>` to `<4 x float>` unsigned convert had no selection (`UIntToFp` of a vector with no register class).
+/// Every lane, from 0 to 2^32 - 1, must round as gcc -O0's scalar convert does. Needs `LLRM_LLC` and a host `cc`.
+#[test]
+fn an_unsigned_vector_convert_rounds_as_the_scalar_one_does() {
+    let llc = std::env::var_os("LLRM_LLC").expect("LLRM_LLC is not set: this test needs it and does not skip");
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("vector-uitofp-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let tests = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/c");
+    let object = dir.join("a.o");
+    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
+        .env("LLRM_CC_TARGET", "x86_64-linux")
+        .env("LLRM_LLC", llc)
+        .args(["-m64", "-fno-pic", "-O2", "-w", "-c", "-o"])
+        .arg(&object)
+        .arg(tests.join("vector_uint_to_float.c"))
+        .output()
+        .unwrap();
+    assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
+    let exe = dir.join("a.out");
+    let link = Command::new("cc").args(["-static", "-no-pie", "-o"]).arg(&exe).arg(&object).arg("-lm").output().unwrap();
+    assert!(link.status.success(), "{}", String::from_utf8_lossy(&link.stderr));
+    let out = Command::new(&exe).output().unwrap();
+    let expected = std::fs::read_to_string(tests.join("vector_uint_to_float.out")).unwrap();
+    assert_eq!(String::from_utf8_lossy(&out.stdout), expected);
+}

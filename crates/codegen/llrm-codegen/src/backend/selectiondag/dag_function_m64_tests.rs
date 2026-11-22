@@ -493,7 +493,8 @@ entry:
 /// other half of the register save area when `al` says a caller used any
 /// (`VASTART_SAVE_XMM_REGS`): `test al, al; je`, then eight `movaps` of
 /// xmm0-7 at offsets 48..176. They were left unwritten, so a `double` read
-/// back by `va_arg` was whatever the area held.
+/// back by `va_arg` was whatever the area held. The function reads the list
+/// (`builder::vaarg`): an unread list gets no save.
 #[test]
 fn a_variadic_function_saves_xmm0_to_xmm7_when_al_is_not_zero() {
     use crate::model::ir::{Loc, Operation};
@@ -503,7 +504,9 @@ declare void @llvm.va_start.p0(ptr)
 define i32 @f(i32 %n, ...) {
   %ap = alloca [24 x i8], align 8
   call void @llvm.va_start.p0(ptr %ap)
-  ret i32 %n
+  %fpo = getelementptr i8, ptr %ap, i64 4
+  %fpv = load i32, ptr %fpo
+  ret i32 %fpv
 }
 ",
     )
