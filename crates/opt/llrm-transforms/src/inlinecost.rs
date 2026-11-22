@@ -3009,7 +3009,9 @@ impl<'a> Analyzer<'a> {
                     crate::trial::note_negative_yield(name());
                 }
             }
-            outlined = bound && !grows && self.outlined_by_trial();
+            // The outline trial's cold sites are the size bound's too where
+            // only a yield let them through.
+            outlined = (bound || bound_with(false, false)) && !grows && self.outlined_by_trial();
             grows
         };
         self.blocked_by_bound = grows && self.cost < pin;

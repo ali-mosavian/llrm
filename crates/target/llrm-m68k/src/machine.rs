@@ -500,6 +500,18 @@ impl Tti for M68k {
         true
     }
 
+    /// DEVIATE INLINEHINT-GROWTH-TRIAL: the size bound stands down for the
+    /// pin's `inlinehint` threshold; `driver::lowered` compiles the module
+    /// with those calls kept too and keeps the fewer bytes.
+    fn opt_size_inline_guard_yields_to_inlinehint(&self) -> bool {
+        true
+    }
+
+    /// The same for a call the pin's cost counts as shrinking the caller.
+    fn opt_size_inline_guard_yields_to_negative_cost(&self) -> bool {
+        true
+    }
+
     /// D13 (owner llrm-target-m68k, exit 2026-12-20; the m16 rule): at -Os a
     /// callee that goes with its last call takes no credit in instruction
     /// units. A copy carries its argument setup and the call's result moves
