@@ -1624,6 +1624,14 @@ impl Tti for AArch64 {
         if min >> 12 == max >> 12 && self.is_legal_add_immediate(high) { high } else { 0 }
     }
 
+    /// DEVIATE LASTCALL-COLD (gcc `-finline-functions-called-once`): a static
+    /// function with one caller is inlined at -Os wherever its call sits, as
+    /// gcc does; the pin drops the bonus at a cold site (`ColdCallSiteRelFreq`
+    /// 2%), so the cases of a large switch each keep their callee out.
+    fn inline_last_call_in_cold_site(&self) -> bool {
+        true
+    }
+
     /// Integer comparisons are implemented with ADDS/SUBS:
     /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L20248
     fn is_legal_icmp_immediate(
