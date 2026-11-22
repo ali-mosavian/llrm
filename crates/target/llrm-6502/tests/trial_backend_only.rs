@@ -1,6 +1,8 @@
-//! A trial that only flips a switch of the backend (the carry-save drop, the long step) writes the kept
-//! program again: the mid-end does not run twice. A module with such a site ran its whole flow, mid-end and
-//! trials included, a second time (2026-11-22: 2 mid-end runs for one module, the trials' compile time x2).
+//! A trial that only flips a switch of the backend (the carry-save drop, the
+//! long step) writes the kept program again: the mid-end does not run twice. A
+//! module with such a site ran its whole flow, mid-end and trials included, a
+//! second time (2026-11-22: 2 mid-end runs for one module, the trials' compile
+//! time x2).
 
 mod common;
 
@@ -16,7 +18,10 @@ fn cost(ir: &str) -> (usize, usize) {
 
 #[test]
 fn a_long_step_trial_runs_the_mid_end_once() {
-    let ir = format!("target datalayout = \"{}\"\ndefine i32 @f(i32 %a) {{\n%r = add i32 %a, 1\nret i32 %r\n}}\n", datalayout());
+    let ir = format!(
+        "target datalayout = \"{}\"\ndefine i32 @f(i32 %a) {{\n%r = add i32 %a, 1\nret i32 %r\n}}\n",
+        datalayout()
+    );
     let (mid, selections) = cost(&ir);
     assert_eq!(mid, 1);
     assert!(selections >= 2, "the trial is not run: {selections} selections");

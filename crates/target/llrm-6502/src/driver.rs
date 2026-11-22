@@ -296,10 +296,10 @@ fn backend_flow(
 /// DEVIATE 6502-SAVE-DROP-TRIAL (owner llrm-target-6502, exit 2026-12-06): a
 /// module whose carry saves were dropped before allocation (`drops`) has its
 /// kept program written again with them dropped after it, and the text with
-/// fewer bytes is kept (a tie keeps the first). The pin has one form. Reason: the free `a`
-/// helps some modules and defeats the outliner in others, whose sites of one
-/// chain allocate differently (wide_shift_by_one -O2 843 B after, 916 B before;
-/// call_keeps -O2 1,402 B before, 1,409 B after).
+/// fewer bytes is kept (a tie keeps the first). The pin has one form. Reason:
+/// the free `a` helps some modules and defeats the outliner in others, whose
+/// sites of one chain allocate differently (wide_shift_by_one -O2 843 B after,
+/// 916 B before; call_keeps -O2 1,402 B before, 1,409 B after).
 ///
 /// Compile time: only a module with two such saves runs the backend twice; the
 /// mid-end and its trials run once (`backend_flow`).
