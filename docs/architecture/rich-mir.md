@@ -67,7 +67,7 @@ Instructions
 | Memory | `alloca`, `load`, `store` (both with `volatile`), `getelementptr` |
 | Other | `icmp`, `fcmp`, `phi`, `select`, `freeze`, `call`, `landingpad` |
 
-There are no atomics or `indirectbr`; the parser refuses them. `undef` is an `UndefValue` constant as at the pin, apart from `poison`. Flags
+There are no atomics; the parser refuses them. `indirectbr` and `blockaddress` parse; x86 selects the jump, and z80, 6502, m68k and wasm32 expand it to a `switch` over block numbers (`IndirectBrExpand`). `undef` is an `UndefValue` constant as at the pin, apart from `poison`. Flags
 (`nsw`, `nuw`, `exact`, `inbounds`, fast-math) and attributes, including
 `memory(...)`, `noalias`, `nocapture` and `initializes`, are LLVM's.
 Intrinsics are one table
