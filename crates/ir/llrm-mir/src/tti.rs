@@ -1614,6 +1614,11 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE IPRA-OS-TRIAL: `Tuning::ipra_trial_at_size`.
+    fn ipra_trial_at_size(&self) -> bool {
+        false
+    }
+
     /// Whether one wider store of constants may start off its own size
     /// (`allowsMemoryAccess` calls the unaligned store fast). False: it starts
     /// at a multiple of its size.
