@@ -39,7 +39,6 @@
 //! `PassBuilderPipelines.cpp`, after `infer-alignment`).
 
 use llrm_analysis::aggregate::AggregateAA;
-use llrm_analysis::basicaa::BasicAA;
 use llrm_analysis::loopaccess::{SymbolicStrideMap, get_ptr_stride};
 use llrm_analysis::loopaccessinfo::LoopAccessInfo;
 use llrm_analysis::memdepchecker::DepType;
@@ -49,7 +48,6 @@ use llrm_analysis::scev::analysis::{ScevSession, Scevs};
 use llrm_analysis::scev::expander::Expander;
 use llrm_analysis::scev::expr::{Kind, Ty};
 use llrm_analysis::scev::{Cx, ScalarEvolution};
-use llrm_analysis::typebasedaa::TypeBasedAA;
 use llrm_mir::dense::{IdMap, IdSet};
 use llrm_mir::edit::Position;
 use llrm_mir::module::{BlockId, Function, InstId, Operand};
@@ -718,10 +716,7 @@ impl FunctionPass for LoopLoadElim {
                     continue;
                 }
                 let memory_unit = memory::Unit::within(&*unit.context, unit.layout, &*unit.function, &outer);
-                let mut aa = AggregateAA::new();
-                aa.add_aa_result(BasicAA::new(&memory_unit));
-                aa.add_aa_result(llrm_analysis::scopednoaliasaa::ScopedNoAliasAA::new(&memory_unit));
-                aa.add_aa_result(TypeBasedAA::new(&memory_unit));
+                let mut aa = AggregateAA::default_pipeline(&memory_unit);
                 let lai = LoopAccessInfo::new(se, &cx, header, &mut aa, false, self.max_target_vector_width_in_bits);
                 let mut lel = LoadEliminationForLoop { lp: header, lai: &lai, inst_order: IdMap::new() };
                 lel.plan(se, &cx, has_opt_size(cx.function)).map(|plan| (plan, lai))
