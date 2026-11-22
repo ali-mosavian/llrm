@@ -34,6 +34,7 @@ mod bool_sub;
 mod bswap;
 mod btst_memory_byte;
 mod btst_single_bit;
+mod narrow_sext;
 mod build_counts;
 mod byte_spill_reload;
 mod byval;
