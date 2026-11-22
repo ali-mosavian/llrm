@@ -208,7 +208,15 @@ pub fn add(
     let before = crate::lir_body::to_lir(function).ok().map(|lowered| lowered.body);
     let early = before.as_ref().and_then(work);
     // A function the layout cannot be read for is priced as it was.
-    let placed = finished(function, blocks, likelihood).as_ref().and_then(work).or(early);
+    // Layout moves jumps, it does not make code run a thousand times more: a
+    // laid-out estimate past `LAID_OUT_LIMIT` times the unplaced one is the
+    // model's frequency running away (a recursive `chop` read 5e11 for 10300),
+    // and the function is priced as it was.
+    let placed = finished(function, blocks, likelihood)
+        .as_ref()
+        .and_then(work)
+        .filter(|placed| early.is_none_or(|early| *placed <= LAID_OUT_LIMIT * early.max(1.0)))
+        .or(early);
     let is_divide = |one: &llrm_codegen::model::lir::Insn| {
         one.what
             .as_ref()
@@ -228,6 +236,10 @@ pub fn add(
         }));
     });
 }
+
+/// How many times the unplaced work the laid-out work of a function may be:
+/// the taken branches and jumps layout adds are a few times the instructions.
+const LAID_OUT_LIMIT: f64 = 8.0;
 
 /// The finished `blocks` of `function` as a body: what runs is the placed
 /// code's, a loop's test copied into its latch and a `b` to the next block
