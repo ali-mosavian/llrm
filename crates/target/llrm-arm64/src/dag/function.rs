@@ -222,7 +222,7 @@ pub fn select_function_in(
         .with_tail_calls(llrm_support::env_var("LLRM_TAIL_CALLS").is_none_or(|value| value != "0"))
         .with_zext_free(is_zext_free);
     let mut info = FunctionLoweringInfo::new(function);
-    let mut frame = static_frame(module, function, layout, &info)?;
+    let mut frame = static_frame(module, function, layout, &mut info)?;
     let mut selected = Vec::new();
     let declared: Vec<(llrm_mir::MetadataId, u32)> = function
         .debug_records()
@@ -391,20 +391,22 @@ fn ends_in_jump(dag: &SelectionDAG) -> bool {
     matches!(dag.opcode(dag.get_root()), ISD::Br | ISD::BrJT)
 }
 
-/// The (size, alignment) of each static alloca, by the frame index
-/// `FunctionLoweringInfo` gave it: the type's size times a constant count.
+/// The (size, alignment) of each frame object of the static allocas, by the
+/// index `FunctionLoweringInfo` gave it: the type's size times a constant
+/// count, allocas whose lifetimes never overlap sharing one object
+/// (`StackColoring`, `llrm_codegen::backend::stackcoloring`).
 fn static_frame(
     module: &Module,
     function: &llrm_mir::module::Function,
     layout: &DataLayout,
-    info: &FunctionLoweringInfo,
+    info: &mut FunctionLoweringInfo,
 ) -> Result<Vec<(u64, u64)>, String> {
     use llrm_mir::context::ConstantKind;
     use llrm_mir::module::{Operand, ValueDef};
     use llrm_mir::opcode::Opcode;
 
-    let mut objects = vec![(0, 1); info.static_allocas.iter().map(|(_, &index)| index as usize + 1).max().unwrap_or(0)];
-    for (value, &index) in info.static_allocas.iter() {
+    let mut sizes = Vec::new();
+    for (value, _) in info.static_allocas.iter() {
         let ValueDef::Instruction(def) = function.value(value).def else {
             return Err("an alloca that is no instruction".into());
         };
@@ -423,9 +425,11 @@ fn static_frame(
         let types = &module.context.types;
         let size = layout.alloc_size(types, allocated) * count;
         let align = layout.pref_align(types, allocated).max(u64::from(align.unwrap_or(1)));
-        objects[index as usize] = (size, align);
+        sizes.push((value, size as i64, align as i64));
     }
-    Ok(objects)
+    sizes.sort_by_key(|(value, _, _)| info.static_allocas[value]);
+    let shared = llrm_codegen::backend::stackcoloring::share_frame(module, function, info, &sizes);
+    Ok(shared.into_iter().map(|(size, align)| (size as u64, align as u64)).collect())
 }
 
 /// `AArch64TargetLowering::isZExtFree(SDValue, EVT)`: a 32 to 64 bit extension,
