@@ -7,8 +7,8 @@ use llrm_arm64::machine::Platform;
 const HEADER: &str = "target datalayout = \"e-m:e-p270:32:32-p271:32:32-p272:64:64-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128-Fn32\"\n";
 
 /// matrix `sugg_add` -Os: the `i64` and `i32` zero-extensions of one `ldrh`
-/// left `orr w22, wzr, w19` and a callee-saved register more than the pin (400 B
-/// against 384 B).
+/// left `orr w22, wzr, w19` and a callee-saved register more than the pin (400
+/// B against 384 B).
 #[test]
 fn a_zero_extended_load_used_at_two_widths_has_no_copy() {
     let ir = "declare i32 @g(ptr)\ndeclare void @h(i32)\n\
