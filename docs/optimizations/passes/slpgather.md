@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/slpgather.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/slpgather.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/slpgather.rs sha256:d7db3897213c6270f8d6ca02893d2444ace0e7f7138f8368ee522c0032e57c2e -->
+<!-- src: crates/opt/llrm-transforms/src/slpgather.rs sha256:9ecd468e18e757d63c9e7293f2256b5f76e0ce3e14c8a3780fbe9da521042028 -->
 
 # slpgather
 
@@ -31,7 +31,8 @@ Under `slptree`, for each bundle that repeats a lane and each gather.
 `slptree`.
 
 ## Example
-A bundle whose lanes repeat is packed once with its distinct lanes and read back through a shuffle mask.
+A bundle whose lanes repeat is packed once with its distinct lanes and read
+back through a shuffle mask.
 
 ```text
 bundle lanes: (%a, %b, %a, %b)
