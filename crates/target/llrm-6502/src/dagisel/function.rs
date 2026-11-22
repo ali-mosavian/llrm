@@ -173,6 +173,35 @@ thread_local! {
     static LOOP_CALLED: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
     static CALL_CANDIDATES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static CALL_MULTIPLY_HERE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static LONG_STEPS: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+    static STEP_SITES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// `run` with a long plus or minus one lowered as the carry chain (`false`) or
+/// as the stepping `INC32`/`DEC32` (`true`, the default): the module-level
+/// trial of 6502-LONG-STEP-TRIAL.
+pub fn with_long_steps<R>(
+    on: bool,
+    run: impl FnOnce() -> R,
+) -> R {
+    let before = LONG_STEPS.with(|flag| flag.replace(on));
+    let result = run();
+    LONG_STEPS.with(|flag| flag.set(before));
+    result
+}
+
+pub(super) fn long_steps() -> bool {
+    LONG_STEPS.with(std::cell::Cell::get)
+}
+
+/// A long plus or minus one was lowered as a stepping node.
+pub(super) fn note_step_site() {
+    STEP_SITES.with(|count| count.set(count.get() + 1));
+}
+
+/// The stepping nodes lowered since the last call.
+pub fn take_step_sites() -> usize {
+    STEP_SITES.with(|count| count.replace(0))
 }
 
 /// `run` with the multiplies by a constant of the blocks outside every loop,
