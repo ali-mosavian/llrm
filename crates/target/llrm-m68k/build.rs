@@ -12,6 +12,7 @@ fn main() {
         .unwrap_or_else(|error| panic!("{path}: {error}"));
     std::fs::write(out.join("register_info.rs"), info).unwrap();
     timing_tables();
+    sources_stamp();
 }
 
 #[path = "src/timing/csv.rs"]
@@ -94,4 +95,43 @@ fn timing_tables() {
     }
     let out_dir = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap());
     std::fs::write(out_dir.join("m68020_tables.rs"), out).unwrap();
+}
+
+/// `LLRM_M68K_STAMP`: FNV-1a over the relative path and text of every file
+/// under `src` and `examples`, in path order. The `cycles` example prints it
+/// (`--stamp`) and `tools/m68k_clk.py` hashes the same files of its checkout
+/// the same way, so a binary built from other sources (a stale or another
+/// session's target dir) is refused, not trusted.
+fn sources_stamp() {
+    fn walk(
+        dir: &std::path::Path,
+        out: &mut Vec<std::path::PathBuf>,
+    ) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() { walk(&path, out) } else { out.push(path) }
+        }
+    }
+    let mut files = Vec::new();
+    for dir in ["src", "examples"] {
+        println!("cargo:rerun-if-changed={dir}");
+        walk(std::path::Path::new(dir), &mut files);
+    }
+    let mut named: Vec<(String, std::path::PathBuf)> =
+        files.into_iter().map(|path| (path.to_string_lossy().replace('\\', "/"), path)).collect();
+    named.sort();
+    let mut hash: u64 = 0xcbf29ce484222325;
+    let mut feed = |bytes: &[u8]| {
+        for byte in bytes {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+    };
+    for (name, path) in &named {
+        feed(name.as_bytes());
+        feed(&[0]);
+        feed(&std::fs::read(path).unwrap());
+        feed(&[0]);
+    }
+    println!("cargo:rustc-env=LLRM_M68K_STAMP={hash:016x}");
 }
