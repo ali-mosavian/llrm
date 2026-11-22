@@ -51,6 +51,7 @@ pub mod mirdump;
 pub mod moveqremat;
 pub mod narrow;
 pub mod narrow_add;
+pub mod boolbyte;
 pub mod negadd;
 pub mod object;
 pub mod opcosts;
