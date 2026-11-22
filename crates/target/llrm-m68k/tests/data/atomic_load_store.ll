@@ -10,3 +10,12 @@ define void @clear() {
   store atomic i32 0, ptr @flag monotonic, align 4
   ret void
 }
+define i32 @bump() {
+  %old = atomicrmw add ptr @flag, i32 1 monotonic
+  ret i32 %old
+}
+define i1 @claim() {
+  %r = cmpxchg ptr @flag, i32 0, i32 1 monotonic monotonic
+  %ok = extractvalue { i32, i1 } %r, 1
+  ret i1 %ok
+}

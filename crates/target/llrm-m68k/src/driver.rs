@@ -414,6 +414,9 @@ fn lowered_once(
     // plain `move` for an atomic load or store of at most 32 bits (M68kInstrAtomics.td).
     program.modules.iter_mut().try_for_each(llrm_mir::atomic::hidden)?;
     llrm_transforms::pipeline::applied(&mut program, &applied)?;
+    // DEVIATE M68K-ATOMIC-SYNC: a 68020 expands a read-modify-write to a `cas` loop (`shouldExpandAtomicRMWInIR`,
+    // AtomicExpandPass, not translated): it calls the `__sync_*` routine as a 68000 does. Exit: 2026-12-15, w8.
+    program.modules.iter_mut().try_for_each(|module| llrm_mir::atomic::sync_libcalled(module, 32))?;
     program.modules.iter_mut().try_for_each(|module| llrm_mir::atomic::lowered(module, 32, false, false, false))?;
     program.modules.iter_mut().try_for_each(llrm_transforms::memsetpattern::expanded)?;
     // `llvm.is.constant` and `llvm.objectsize` left by -O0 (the pin runs
