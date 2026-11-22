@@ -50,6 +50,7 @@ pub mod mfunc;
 pub mod mirdump;
 pub mod moveqremat;
 pub mod narrow;
+pub mod doloop;
 pub mod narrow_add;
 pub mod boolbyte;
 pub mod negadd;
