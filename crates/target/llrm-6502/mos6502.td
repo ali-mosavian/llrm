@@ -65,6 +65,8 @@ def MOScmpz : SDNode<"MOSISD::CMPZ", SDTMOSCmp>;
 // a >= b unsigned over all four bytes. Operands: the low pair a, b, then the high pair a, b.
 def SDTMOSCmp32 : SDTypeProfile<1, 4, [SDTCisVT<0, i8>, SDTCisVT<1, i16>, SDTCisVT<2, i16>, SDTCisVT<3, i16>, SDTCisVT<4, i16>]>;
 def MOScmp32 : SDNode<"MOSISD::CMP32", SDTMOSCmp32>;
+// Equality of two longs: Z only when all four bytes are equal (the low pair a, b, then the high pair a, b).
+def MOScmpz32 : SDNode<"MOSISD::CMPZ32", SDTMOSCmp32>;
 def MOSbrcond : SDNode<"MOSISD::BRCOND", SDTMOSBrcond, [SDNPHasChain]>;
 def MOSsetcc : SDNode<"MOSISD::SETCC", SDTMOSSetcc>;
 def MOScmov : SDNode<"MOSISD::CMOV", SDTMOSCmov>;
@@ -342,6 +344,9 @@ def CMP16 : MOSInst<(outs Flags:$f), (ins Imag16:$a, Imag16:$b), "cmp16 $f, $a, 
 // A 32-bit compare: CMP16, then SBC of the high words' bytes with the borrow.
 def CMP32 : MOSInst<(outs Flags:$f), (ins Imag16:$al, Imag16:$bl, Imag16:$ah, Imag16:$bh), "cmp32 $f, $al, $bl, $ah, $bh",
                     [(set i8:$f, (MOScmp32 i16:$al, i16:$bl, i16:$ah, i16:$bh))]>;
+// Z only when all four bytes are equal: against zero `lda; ora; ora; ora`, else `lda; cmp; bne` per byte.
+def CMPZ32 : MOSInst<(outs Flags:$f), (ins Imag16:$al, Imag16:$bl, Imag16:$ah, Imag16:$bh), "cmpz32 $f, $al, $bl, $ah, $bh",
+                     [(set i8:$f, (MOScmpz32 i16:$al, i16:$bl, i16:$ah, i16:$bh))]>;
 // Z only when both bytes are equal.
 def CMPZ16 : MOSInst<(outs Flags:$f), (ins Imag16:$a, Imag16:$b), "cmpz16 $f, $a, $b", [(set i8:$f, (MOScmpz i16:$a, i16:$b))]>;
 let isBranch = 1, isTerminator = 1 in {

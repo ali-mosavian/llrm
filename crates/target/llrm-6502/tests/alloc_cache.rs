@@ -23,5 +23,5 @@ fn a_function_emitted_again_is_allocated_again_only_when_it_changed() {
     // `bench_recmany` and `main` without the wide commute
     // doubled by the second compile (`long_step_trial`), whose selections are
     // new ones
-    assert_eq!(made, 12, "allocations of them");
+    assert_eq!(made, 13, "allocations of them");
 }
