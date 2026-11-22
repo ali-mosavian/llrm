@@ -1120,6 +1120,11 @@ pub struct GlobalMerge {
     /// The object format is Mach-O: the merged struct is `internal`, not
     /// `private`.
     pub mach_o: bool,
+    /// `MergeExternalByDefault` (GlobalMerge.cpp: `!MachO` on arm64): defined
+    /// external globals merge too, each name an alias at its member's offset
+    /// (`Alias::offset`). The writer must emit aliases: false where it cannot
+    /// (assembly text), as the target's own flag.
+    pub external: bool,
 }
 
 /// Where the target keeps no program data, as linear addresses: old

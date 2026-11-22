@@ -19,11 +19,14 @@
 //! ```
 //!
 //! # Deviations
-//! GM1 (exit 2026-11-12, owner w15): a global another global's initializer,
-//! an alias or a landing pad names stays unmerged, and external ones are not
-//! merged: MIR has no alias to a member of a struct, and the arm64 writer
-//! emits no alias. GM2 (same exit): a global with metadata stays unmerged.
-//! The pin copies `!dbg`.
+//! GM1 (closed): a defined external global merges when the target asks
+//! (`GlobalMerge::external`, LLVM's `MergeExternalByDefault`) and the module
+//! is no `-fPIC` shared code that may be interposed; its name becomes an alias
+//! at its place in the struct (`Alias::offset`), which the object writer emits
+//! (assembly text carries no alias, so nothing external merges there). A
+//! global another global's initializer, an alias or a landing pad names stays
+//! unmerged. GM2 (same exit): a global with metadata stays unmerged. The pin
+//! copies `!dbg`.
 //!
 //! # Runs
 //! Once per module after the mid-end, for the targets that ask
@@ -41,7 +44,7 @@ use llrm_mir::target::GlobalMerge;
 use llrm_mir::types::TypeId;
 use llrm_mir::datalayout::DataLayout;
 use llrm_mir::edit::Position;
-use llrm_mir::module::{GlobalKind, GlobalName, GlobalValue, GlobalVariable, Linkage, Module, Operand, UnnamedAddr};
+use llrm_mir::module::{Alias, GlobalKind, GlobalName, GlobalValue, GlobalVariable, Linkage, Module, Operand, UnnamedAddr, Visibility};
 use llrm_mir::opcode::{Attribute, Flags, Opcode};
 use llrm_mir::types::Type;
 
@@ -116,7 +119,7 @@ pub fn merged(
     if plans.is_empty() {
         return Ok(false);
     }
-    apply(module, plans, &sites, options)?;
+    apply(module, layout, plans, &sites, options)?;
     Ok(true)
 }
 
@@ -245,9 +248,15 @@ fn candidates(
         let GlobalKind::Variable(variable) = &global.kind else { continue };
         let Some(init) = variable.initializer else { continue };
         let name = global.name.as_deref().unwrap_or_default().to_owned();
-        // Internal and private only (GM1); the specials and what is named
-        // elsewhere stay.
-        if !matches!(global.linkage, Linkage::Internal | Linkage::Private)
+        // Internal and private, and with `options.external` the defined
+        // external ones too (their names become aliases into the struct); the
+        // specials and what is named elsewhere stay.
+        let local = matches!(global.linkage, Linkage::Internal | Linkage::Private);
+        // An external name another module may interpose (`-fPIC` shared code,
+        // default visibility) must stay its own symbol.
+        let fixed = global.linkage == Linkage::External
+            && !(module.preempts_default_visibility() && global.visibility == Visibility::Default);
+        if !(local || (options.external && fixed))
             || name.starts_with("llvm.")
             || name.starts_with(".llvm.")
             || named.contains(&(at as u32))
@@ -464,6 +473,7 @@ fn merge_set(
 /// Makes the structs, points every use at them and drops the originals.
 fn apply(
     module: &mut Module,
+    layout: &DataLayout,
     plans: Vec<Plan>,
     sites: &HashMap<u32, Vec<Site>>,
     options: &GlobalMerge,
@@ -501,6 +511,26 @@ fn apply(
         for (member, field) in plan.members.iter().zip(&plan.fields) {
             homes.insert(member.0, (id, merged_type, *field));
             remove.insert(member.0);
+            // An external name stays, as an alias at the member's place in the
+            // struct (the fields are packed, the padding among them).
+            let global = &module.globals[member.0 as usize];
+            if global.linkage == Linkage::External {
+                let GlobalKind::Variable(variable) = &global.kind else { continue };
+                let offset: u64 = plan.types[..*field as usize]
+                    .iter()
+                    .map(|&ty| layout.alloc_size(&module.context.types, ty))
+                    .sum();
+                module.aliases.push(Alias {
+                    name: global.name.as_deref().unwrap_or_default().to_owned(),
+                    linkage: global.linkage,
+                    visibility: global.visibility,
+                    unnamed_addr: global.unnamed_addr,
+                    address_space: global.address_space,
+                    ty: variable.ty,
+                    aliasee: id,
+                    offset: offset as i64,
+                });
+            }
         }
     }
 
