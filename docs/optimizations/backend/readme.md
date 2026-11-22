@@ -2,7 +2,7 @@
 
 # Backend phases
 
-From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 161 documented, 1 undocumented.
+From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 162 documented, 1 undocumented.
 
 | Name | Summary | Runs | Page |
 |---|---|---|---|
@@ -124,6 +124,7 @@ From the `//!` headers of `crates/codegen/llrm-codegen/src/backend`: 161 documen
 | phiconst | One value for a constant that several edges of a phi carry. | Phase 1 of the machine phases, before `SsaSpill`, so both allocation routes | [phiconst](phiconst.md) |
 | phielim | Takes LIR out of SSA: each phi becomes parallel copies on its incoming edges. | A machine phase after `ssaspill` (spiller route only) and before | [phielim](phielim.md) |
 | postings | An index of where each value is defined, read and required in a body, kept current as the body is rewritten. | [`crate::backend::allocate`](allocate.md), `crate::coalescer::pass`, | [postings](postings.md) |
+| postralicm | Moves a constant a loop makes on every trip to the loop's entry. | After `loopslots`, before `schedule`, at every -O level but -O0. | [postralicm](postralicm.md) |
 | postrasink | Moves a register copy, or a spill store, into the one successor that needs it. | A sub-pass of [`crate::backend::peephole`](peephole.md), after `copysink`. Once per | [postrasink](postrasink.md) |
 | precse | The same pure computation made twice, made once: `MachineCSE` before PHI elimination, where a value has one definition. | A machine phase before `machinesink` (`flow::machine_with`), at every -O | [precse](precse.md) |
 | prezeroed | The entry block's zero writes to a local nothing has touched yet, for a frame the runtime zero-fills (QB's `B$ENRA`): the frame already holds them. | The DAG path (`selectiondag/builder.rs`) and the old selector (`isel.rs`), | [prezeroed](prezeroed.md) |
