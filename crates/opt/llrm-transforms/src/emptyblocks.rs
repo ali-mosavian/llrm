@@ -24,7 +24,8 @@
 //! MIRROR: the dead-phi sweep, `findDestBlockOfMergeableEmptyBlock`,
 //! `canMergeBlocks`, and the preheader and switch-frequency rules of
 //! `isMergingEmptyBlockProfitable` (`FreqRatioToSkipMerge` 2, frequencies from
-//! before the first merge, as the pin's `BFI`). No `indirectbr` in this IR.
+//! before the first merge, as the pin's `BFI`), for a `switch` or an `indirectbr`: a
+//! threaded interpreter's empty handlers stay, as the pin keeps them.
 //!
 //! DEVIATE ECB2: the merge itself is `simplifycfg::empty_block_removed`
 //! (`TryToSimplifyUncondBranchFromEmptyBlock`), which does the same to the
@@ -137,15 +138,18 @@ fn can_merge(
     true
 }
 
-/// The predecessor whose `switch` the rule weighs `block` against: `block`'s
-/// unique predecessor, if it ends in a `switch` and `dest` starts with a phi.
+/// The predecessor whose `switch` or `indirectbr` the rule weighs `block`
+/// against: `block`'s unique predecessor, if it ends in one of them and `dest`
+/// starts with a phi.
 fn switch_predecessor(
     function: &Function,
     block: BlockId,
     dest: BlockId,
 ) -> Option<BlockId> {
     let pred = function.sole_predecessor(block)?;
-    let ends_in_switch = function.terminator(pred).is_some_and(|last| function.instruction(last).opcode == Opcode::Switch);
+    let ends_in_switch = function
+        .terminator(pred)
+        .is_some_and(|last| matches!(function.instruction(last).opcode, Opcode::Switch | Opcode::IndirectBr));
     (ends_in_switch && !edges::phis(function, dest).is_empty()).then_some(pred)
 }
 
