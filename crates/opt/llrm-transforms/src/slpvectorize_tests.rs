@@ -319,3 +319,16 @@ fn an_integer_gather_at_code_size_pays_one_a_lane() {
     let lanes: Vec<_> = (1..=4).map(|id| Operand::Value(ValueId(id))).collect();
     assert_eq!(crate::slpgather::gather_cost(&tti, CostKind::CodeSize, Ty::Int(64), &lanes, &[]), Some(4));
 }
+
+/// jpeg_fixed -O2 (arm64): every seed attempt made its own scalar-evolution
+/// session (dominators, loops, expressions of the whole function), +22%
+/// compile instructions over 101 attempts. One session serves the attempts
+/// until a tree is emitted: the butterfly's four-seed window and its single
+/// emit take at most two.
+#[test]
+fn seed_attempts_share_one_scalar_evolution_session_until_a_tree_is_emitted() {
+    let before = llrm_analysis::scev::analysis::sessions_made();
+    run(BUTTERFLY);
+    let made = llrm_analysis::scev::analysis::sessions_made() - before;
+    assert!(made <= 3, "{made} sessions");
+}

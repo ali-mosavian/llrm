@@ -175,7 +175,7 @@ struct Builder<'a, 'u, 's> {
     /// The entry that makes each scalar instruction.
     made: IdMap<InstId, usize>,
     /// Where each instruction of the block stands.
-    position: IdMap<InstId, usize>,
+    position: std::borrow::Cow<'a, IdMap<InstId, usize>>,
     failed: bool,
 }
 
@@ -1017,7 +1017,7 @@ pub(crate) fn try_window(
         block,
         entries: Vec::new(),
         made: IdMap::new(),
-        position,
+        position: std::borrow::Cow::Owned(position),
         failed: false,
     };
     // The root: the stores.
@@ -1055,7 +1055,7 @@ pub(crate) fn try_window(
     share_gathers(&mut entries);
     let tree = Tree { entries, block, pure_calls: Default::default(), reschedule: false, reduction: None };
     let made = builder.made;
-    let position = builder.position;
+    let position = builder.position.into_owned();
     if !schedulable(unit, function, &tree, &made, &position) {
         llrm_support::debug!("slp", "tree: not schedulable");
         return None;
@@ -1085,7 +1085,7 @@ pub(crate) fn try_phis(
         block,
         entries: Vec::new(),
         made: IdMap::new(),
-        position,
+        position: std::borrow::Cow::Owned(position),
         failed: false,
     };
     let root = builder.build(values, 0);
@@ -1169,10 +1169,10 @@ pub(crate) fn try_seeds(
     function: &Function,
     block: BlockId,
     seeds: &[InstId],
+    position: &IdMap<InstId, usize>,
     tti: &dyn Tti,
     scaler: &Scaler,
 ) -> Option<Tree> {
-    let position = positions(function);
     let values: Vec<Operand> = seeds.iter().map(|seed| result_of(function, *seed)).collect();
     let mut builder = Builder {
         scaler,
@@ -1182,7 +1182,7 @@ pub(crate) fn try_seeds(
         block,
         entries: Vec::new(),
         made: IdMap::new(),
-        position,
+        position: std::borrow::Cow::Borrowed(position),
         failed: false,
     };
     let root = builder.build(values, 0);
@@ -1242,7 +1242,7 @@ pub(crate) fn try_inserts(
         block,
         entries: Vec::new(),
         made: IdMap::new(),
-        position,
+        position: std::borrow::Cow::Owned(position),
         failed: false,
     };
     builder
@@ -1430,7 +1430,7 @@ pub(crate) fn try_reduction(
         block,
         entries: Vec::new(),
         made: IdMap::new(),
-        position,
+        position: std::borrow::Cow::Owned(position),
         failed: false,
     };
     // The root: the chain, whose uses of the values are not external ones.
@@ -2290,7 +2290,7 @@ fn last_phi(
 }
 
 /// Where each instruction stands in its block.
-fn positions(function: &Function) -> IdMap<InstId, usize> {
+pub(crate) fn positions(function: &Function) -> IdMap<InstId, usize> {
     let mut places = IdMap::new();
     for block in function.layout().to_vec() {
         for (at, inst) in function.iter_block(block).enumerate() {

@@ -379,21 +379,22 @@ fn operands_of(
     seeds
 }
 
-/// Type, size, group, program order (`SeedSorter`, `OperandSorter`).
+/// Type, size, group, program order (`SeedSorter`, `OperandSorter`). Seeds
+/// stand in `block`, so its order is the program order.
 fn sorted(
     function: &Function,
+    block: BlockId,
     mut seeds: Vec<Seed>,
 ) -> Vec<Seed> {
-    let place: std::collections::HashMap<InstId, usize> = function
-        .layout()
-        .iter()
-        .flat_map(|block| function.iter_block(*block))
-        .enumerate()
-        .map(|(at, inst)| (inst, at))
-        .collect();
+    if seeds.len() < 2 {
+        return seeds;
+    }
+    let place: std::collections::HashMap<InstId, usize> =
+        function.iter_block(block).enumerate().map(|(at, inst)| (inst, at)).collect();
     seeds.sort_by_key(|seed| (seed.rank, seed.bits, seed.group, place[&seed.inst]));
     seeds
 }
+
 
 /// The operands of the stores and the once-used seeds of every block of
 /// `function`, as vectors; whether any was made.
@@ -412,7 +413,7 @@ pub(crate) fn run_function(
     let mut blocks = reverse_post_order_traversal(function);
     blocks.reverse();
     for block in &blocks {
-        let operands = sorted(function, operands_of(context, function, *block));
+        let operands = sorted(function, *block, operands_of(context, function, *block));
         if operands.len() > 1 {
             let mut session = Session::new(context, layout, declared, outer, tti, *block, Roots::Operands);
             changed |= sequence(&mut session, function, &operands, true, register_bits);
@@ -420,7 +421,7 @@ pub(crate) fn run_function(
     }
     // `vectorizeOnceUsedSeeds`: the very last attempt, after every block.
     for block in &blocks {
-        let seeds = sorted(function, seeds_of(context, function, *block));
+        let seeds = sorted(function, *block, seeds_of(context, function, *block));
         if seeds.len() > 1 {
             let mut session = Session::new(context, layout, declared, outer, tti, *block, Roots::Seeds);
             changed |= sequence(&mut session, function, &seeds, false, register_bits);
