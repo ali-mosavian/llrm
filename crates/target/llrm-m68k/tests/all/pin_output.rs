@@ -723,9 +723,11 @@ fn run_reading_zero(ir: &str) -> Option<i32> {
     code
 }
 
-/// A compare with a folded volatile load cannot run again, and its second reader takes the value of a later `scc`:
-/// the reader must follow the second compare, so the first compare's codes are saved across it (`move %sr`, `move
-/// %ccr`), whatever order the scheduler gives the independent instructions. Returns 13 with `zero` 0.
+/// A compare with a folded volatile load cannot run again, and its second
+/// reader takes the value of a later `scc`: the reader must follow the second
+/// compare, so the first compare's codes are saved across it (`move %sr`, `move
+/// %ccr`), whatever order the scheduler gives the independent instructions.
+/// Returns 13 with `zero` 0.
 #[test]
 fn the_codes_of_a_volatile_compare_are_saved_across_a_later_compare_it_depends_on() {
     let ir = r#"@zero = external constant i8, align 1
@@ -751,8 +753,9 @@ define i16 @f() {
 /// has a folded volatile load, so it cannot run again), and the function was
 /// rejected ("the condition codes of an arithmetic result are read past an
 /// instruction that sets them"). The pin saves the codes as `copyPhysReg` does.
-/// Seeds 23, 30, 41, 57, 62, 66 of the differential driver. Since #10588's schedule keeps each compare's readers
-/// beside it, no save is needed: the run (143) is the check, and the save is pinned by the test above.
+/// Seeds 23, 30, 41, 57, 62, 66 of the differential driver. Since #10588's
+/// schedule keeps each compare's readers beside it, no save is needed: the run
+/// (143) is the check, and the save is pinned by the test above.
 #[test]
 fn two_compares_each_read_by_two_scc_return_143() {
     let ir = r#"@zero = external constant i8, align 1
