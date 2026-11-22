@@ -96,6 +96,9 @@ each site's cost and threshold beside the existing decision; with
   (`trial::with_kept_hinted_calls`, `driver/trial.rs`); the finished object
   decides, because the units cannot see what the copies fold to (QB
   `sfm16_dbg` -Os: `sf_clz32` inlined at six calls, +388 B).
+  arm64 runs the same trial in its own driver (`llrm-arm64/src/driver.rs`,
+  `trial::keeps_unhinted`; owner m16-b, exit 2026-12-20): QB -Os array.c
+  `arry_esize` copied into four callers, 3,264 -> 2,996 B (gcc 3,036).
 - SZ1-SITE (owner m68k-b, exit 2026-11-24): the size rule (D11) prices a
   callee's instruction with the call site's constant arguments, not only a
   GEP as `isGEPFree` does (z80 `rotate_small` -O1 922 -> 576 B).

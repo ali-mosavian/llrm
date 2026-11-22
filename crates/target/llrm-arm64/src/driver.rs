@@ -528,6 +528,7 @@ fn compiled(
         rotated: Vec<String>,
         loops: usize,
         merged: usize,
+        hinted: bool,
         divides: bool,
     }
     type Built = (Program, Vec<crate::emit::Function>, crate::trial::Price, Notes);
@@ -536,7 +537,12 @@ fn compiled(
     // DEVIATE SD535: -Os only; -Oz is `minsize`, where the pin keeps the
     // divides.
     let divide_trial = level == Level::Os && !llrm_support::env_flag!("LLRM_ARM64_NO_TRIAL");
-    let once = |(unrotated, more, unmerged, divided): (bool, bool, bool, bool)| -> Result<Built, String> {
+    // DEVIATE INLINEHINT-GROWTH-TRIAL: -Os, where the target lets the hint
+    // yield (see `crate::trial::keeps_unhinted`).
+    let hint_trial = divide_trial
+        && crate::tti::AArch64::of_cpu(platform.cpu())
+            .is_some_and(|tti| llrm_mir::tti::Tti::opt_size_inline_guard_yields_to_inlinehint(&tti));
+    let once = |(unrotated, more, unmerged, divided, hinted): (bool, bool, bool, bool, bool)| -> Result<Built, String> {
         let mut program = program(text, platform)?;
         if refuse_aliases {
             // The text carries no alias: refuse it rather than drop the symbol.
@@ -552,6 +558,9 @@ fn compiled(
                 (_, true) => llrm_transforms::trial::with_more_rotation(|| run(program)),
                 _ => run(program),
             };
+            let go = |program: &mut Program| {
+                if hinted { llrm_transforms::trial::with_kept_hinted_calls(|| go(program)) } else { go(program) }
+            };
             if unmerged { crate::trial::without_merge(|| go(&mut program))? } else { go(&mut program)? }
         } else {
             lowered_before_selection(&mut program)?;
@@ -560,15 +569,18 @@ fn compiled(
         if divide_trial {
             notes.divides = crate::trial::divides_by_constant(&program.modules[0]);
         }
-        if asked.is_some() || notes.divides {
+        if asked.is_some() || notes.divides || hint_trial {
             use llrm_transforms::trial;
             (notes.left, notes.left_loops) = trial::take_left();
             (notes.rotated, notes.loops) = (trial::take_rotated(), trial::rotated_loops());
             notes.merged = crate::trial::take_merged();
+            notes.hinted = !trial::take_hint_yields().is_empty();
             // A module nothing was noted in is compiled once, unpriced: the
             // pricing is a second walk of every function.
-            let noted = !(notes.left.is_empty() && notes.rotated.is_empty() && notes.merged == 0) || notes.divides;
-            if noted || (unrotated, more, unmerged, divided) != (false, false, false, false) {
+            let noted = !(notes.left.is_empty() && notes.rotated.is_empty() && notes.merged == 0)
+                || notes.divides
+                || notes.hinted;
+            if noted || (unrotated, more, unmerged, divided, hinted) != (false, false, false, false, false) {
                 crate::trial::start();
             }
         }
@@ -580,21 +592,21 @@ fn compiled(
         let cost = crate::trial::price(&lowered);
         Ok((program, lowered, cost, notes))
     };
-    if asked.is_none() && !divide_trial {
-        let (program, lowered, _, _) = once((false, false, false, false))?;
+    if asked.is_none() && !divide_trial && !hint_trial {
+        let (program, lowered, _, _) = once((false, false, false, false, false))?;
         return Ok((program, lowered));
     }
     let hot = asked.unwrap_or(false);
     let rotation_cap = crate::tti::AArch64::of_cpu(platform.cpu())
         .and_then(|tti| llrm_mir::tti::Tti::os_trial_clock_cap_percent(&tti));
     use llrm_transforms::trial;
-    let _ = (trial::take_left(), trial::take_rotated(), crate::trial::take_merged());
+    let _ = (trial::take_left(), trial::take_rotated(), crate::trial::take_merged(), trial::take_hint_yields());
     trial::clear_rotated_loops();
-    let mut best = once((false, false, false, false))?;
+    let mut best = once((false, false, false, false, false))?;
     let notes = std::mem::take(&mut best.3);
-    let mut state = (false, false, false);
+    let mut state = (false, false, false, false);
     let mut try_one = |best: &mut Built,
-                       other: (bool, bool, bool, bool),
+                       other: (bool, bool, bool, bool, bool),
                        what: &str,
                        pays: &dyn Fn(crate::trial::Price, crate::trial::Price) -> bool|
      -> Result<bool, String> {
@@ -611,7 +623,7 @@ fn compiled(
         Ok(keeps)
     };
     if !notes.rotated.is_empty()
-        && try_one(&mut best, (true, false, false, false), "unrotated", &|kept, now| {
+        && try_one(&mut best, (true, false, false, false, false), "unrotated", &|kept, now| {
             crate::trial::keeps_unrotated(kept, now, hot, notes.loops, rotation_cap)
         })?
     {
@@ -619,19 +631,24 @@ fn compiled(
     }
     if hot
         && !notes.left.is_empty()
-        && try_one(&mut best, (state.0, true, false, false), "rotation-hot", &|kept, now| {
+        && try_one(&mut best, (state.0, true, false, false, false), "rotation-hot", &|kept, now| {
             crate::trial::keeps_rotated(kept, now, notes.left_loops)
         })?
     {
-        state = (false, true, false);
+        state = (false, true, false, false);
     }
     if notes.merged > 0 {
-        state.2 = try_one(&mut best, (state.0, state.1, true, false), "unmerged", &|kept, now| {
+        state.2 = try_one(&mut best, (state.0, state.1, true, false, false), "unmerged", &|kept, now| {
             crate::trial::keeps_unmerged(kept, now, notes.merged)
         })?;
     }
+    if notes.hinted && hint_trial {
+        state.3 = try_one(&mut best, (state.0, state.1, state.2, false, true), "keep-hinted-calls", &|kept, now| {
+            crate::trial::keeps_unhinted(kept, now, rotation_cap)
+        })?;
+    }
     if notes.divides {
-        try_one(&mut best, (state.0, state.1, state.2, true), "divides", &|kept, now| {
+        try_one(&mut best, (state.0, state.1, state.2, true, state.3), "divides", &|kept, now| {
             !crate::trial::expansion_pays(kept, now)
         })?;
     }
