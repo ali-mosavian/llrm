@@ -1,9 +1,10 @@
-//! x86-64: a function that binds locally takes part in the
-//! callee-written-registers facts (DEVIATE IPRA-DSO-LOCAL, gcc `-fipa-ra`),
-//! though it has external linkage. A caller keeps its values across a call of
-//! such a leaf in scratch registers, which cost no push; across a call of one
-//! that calls an unseen routine it still needs the saved registers. Needs
-//! `LLRM_LLC`.
+//! x86-64: with `LLRM_IPRA_BINDS_LOCAL` a function that binds locally takes
+//! part in the callee-written-registers facts (gcc `-fipa-ra`), though it has
+//! external linkage. Off by default, as the pin: QB core IPRA on minus off was
+//! +112 B at Os and +542 B at O2 (row IPRA-DSO-LOCAL). A caller keeps its
+//! values across a call of such a leaf in scratch registers, which cost no
+//! push; across a call of one that calls an unseen routine it still needs the
+//! saved registers. Needs `LLRM_LLC`.
 
 use std::path::Path;
 use std::process::Command;
@@ -18,20 +19,35 @@ fn assembly(source: &str) -> String {
     assembly_with(source, &[])
 }
 
+/// The assembly with the facts of locally binding functions on.
 fn assembly_with(
     source: &str,
     flags: &[&str],
 ) -> String {
+    assembly_env(source, flags, true)
+}
+
+fn assembly_env(
+    source: &str,
+    flags: &[&str],
+    binds_local: bool,
+) -> String {
     let llc = std::env::var_os("LLRM_LLC").expect("LLRM_LLC is not set: this test needs it and does not skip");
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!(
-        "ipra-local-{}-{source}-{}",
+        "ipra-local-{}-{source}-{}-{binds_local}",
         std::process::id(),
         flags.join("_")
     ));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let asm = dir.join("a.s");
-    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"));
+    if binds_local {
+        command.env("LLRM_IPRA_BINDS_LOCAL", "1");
+    } else {
+        command.env_remove("LLRM_IPRA_BINDS_LOCAL");
+    }
+    let run = command
         .env("LLRM_CC_TARGET", "x86_64-linux")
         .env("LLRM_LLC", llc)
         .args(["-Os", "-w"])
@@ -43,6 +59,15 @@ fn assembly_with(
         .unwrap();
     assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
     std::fs::read_to_string(&asm).unwrap()
+}
+
+/// Default (the pin): a caller keeps values across an external leaf in saved
+/// registers, as `RegUsageInfoCollector` takes private functions only. The
+/// default was IPRA on for m64 until 2026-11-22: QB core +112 B at Os.
+#[test]
+fn by_default_a_caller_saves_registers_across_an_external_leaf() {
+    let text = assembly_env("ipra_local_leaf.c", &[], false);
+    assert!(saves_a_register(&text), "the caller relied on an external leaf's registers by default:\n{text}");
 }
 
 /// Five values kept across five calls of an external leaf were pushed to
