@@ -224,7 +224,8 @@ def nib_extras(source: Path) -> list[str]:
 
 def c_environment(variant: Variant) -> dict[str, str]:
     """What llrm-cc is told of a C program's target: the Watcom row of the 16-bit target, whose programs enter `main_` as dosbatch links them."""
-    return {**os.environ, "LLRM_CC_TARGET": dosbatch.WATCOM_ROWS[dosbatch.target_bits(dosbatch.REAL_MODE)]} if variant.language == "c" else dict(os.environ)
+    base = {**llrmbin.cc_environment(), **os.environ}  # LLRM_CLANG_M16 from the pin file when the environment names none: without it a real-mode compile ran the pin's clang
+    return {**base, "LLRM_CC_TARGET": dosbatch.WATCOM_ROWS[dosbatch.target_bits(dosbatch.REAL_MODE)]} if variant.language == "c" else base
 
 
 def kept_a_call(variant: Variant, work: Path, stem: str, shim: bool = True) -> tuple[Path, Path] | None:
