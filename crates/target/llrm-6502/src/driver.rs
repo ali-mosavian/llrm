@@ -294,14 +294,15 @@ fn assembly_flow(
 /// stepped), while one loop counter is 14 B stepped against 22 B as a chain
 /// (licm_graph_callee_footprint: 306 B, 290 B).
 ///
-/// Compile time: only a module with such a step compiles twice.
+/// Compile time: only a module with two such steps compiles twice (the outliner
+/// shares a repeat; one step is 14 B stepped against 22 B as a chain).
 fn long_step_trial(
     kept: String,
     steps: usize,
     text: &str,
     request: &Request,
 ) -> Result<String, String> {
-    if steps == 0 || request.level == Level::O0 || std::env::var_os("LLRM_6502_NO_STEP_TRIAL").is_some() {
+    if steps < 2 || request.level == Level::O0 || std::env::var_os("LLRM_6502_NO_STEP_TRIAL").is_some() {
         return Ok(kept);
     }
     let debug = std::env::var_os("LLRM_DEBUG_TRIAL").is_some();
