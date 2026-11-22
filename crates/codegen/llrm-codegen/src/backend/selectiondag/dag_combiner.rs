@@ -285,6 +285,16 @@ pub trait CombineHooks {
         true
     }
 
+    /// `TargetLowering::isLegalICmpImmediate`: whether a compare takes the
+    /// signed immediate. Default true (the target is not judged); arm64 is
+    /// the add/sub immediate.
+    fn legal_icmp_immediate(
+        &self,
+        _imm: i64,
+    ) -> bool {
+        true
+    }
+
     /// `visitMUL`'s `(mul (add x, c1), c2)` is `(add (mul x, c2), c1*c2)`.
     /// Default false until x86 is judged.
     fn fold_mul_of_add_with_constant(&self) -> bool {
@@ -1579,6 +1589,9 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
             }
         }
         if let Some(folded) = self.narrow_zext_compare(vt, n0, c1, cond) {
+            return Some(folded);
+        }
+        if let Some(folded) = self.fold_illegal_compare_immediate(vt, n0, c1, cond) {
             return Some(folded);
         }
         if !matches!(cond, CondCode::SetEq | CondCode::SetNe)
@@ -3753,7 +3766,8 @@ impl<'a, H: CombineHooks> DagCombiner<'a, H> {
         //
         // [pin]:
         // https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/CodeGen/SelectionDAG/DAGCombiner.cpp#L11886
-        if op == ISD::Srl && self.dag.opcode(n0) == ISD::Sra && self.dag.constant(n1) == Some(width - 1) {
+        let lane_width = if vt.is_vector() { u128::from(vt.element().size_in_bits()) } else { width };
+        if op == ISD::Srl && self.dag.opcode(n0) == ISD::Sra && self.dag.const_or_splat(n1) == Some(lane_width - 1) {
             return Some(self.dag.get_node(ISD::Srl, vt, &[self.dag.operand(n0, 0), n1]));
         }
         if let Some(folded) = self.shift_of_shifted_logic(node) {

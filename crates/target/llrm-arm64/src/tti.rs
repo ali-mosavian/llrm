@@ -815,6 +815,17 @@ impl Tti for AArch64 {
         self.unroll_rate
     }
 
+    /// DEVIATE UP1-O3 (owner arm64, exit 2026-12-21): at -O3 the pin's
+    /// threshold alone decides a full unroll. matmul -O3: the outer loop of
+    /// the checksum nest saves 157 clk for 370 B, under the 500 mclk/B rate,
+    /// was kept rolled where the pin unrolls all six loops (+9.8% clocks).
+    fn unroll_milliclocks_per_byte_at(
+        &self,
+        opt_level: u32,
+    ) -> i64 {
+        if opt_level >= 3 { 0 } else { self.unroll_rate }
+    }
+
     /// DEVIATE IND-MASK (arm64, owner w15, exit 2026-11-30): see the trait.
     fn indvars_widens_narrow_counter_through_masks(&self) -> bool {
         true
@@ -1619,6 +1630,14 @@ impl Tti for AArch64 {
     /// 10; 3 here).
     fn backward_threading_chain(&self) -> usize {
         3
+    }
+
+    /// DEVIATE LASTCALL-COLD (gcc `-finline-functions-called-once`): a static
+    /// function with one caller is inlined at -Os wherever its call sits, as
+    /// gcc does; the pin drops the bonus at a cold site (`ColdCallSiteRelFreq`
+    /// 2%), so the cases of a large switch each keep their callee out.
+    fn inline_last_call_in_cold_site(&self) -> bool {
+        true
     }
 
     /// Integer comparisons are implemented with ADDS/SUBS:
