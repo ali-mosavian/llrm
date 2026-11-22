@@ -46,6 +46,7 @@ use llrm_analysis::occurrence::{arms, from_arms};
 use llrm_analysis::ssaupdaterbulk::SsaUpdaterBulk;
 use llrm_mir::constantrange::{ConstantRange, PreferredRangeType};
 use llrm_mir::context::{ConstantKind, Context};
+use llrm_mir::dense::IdSet;
 use llrm_mir::domtree::DomTree;
 use llrm_mir::edit::{Position, ValueMap};
 use llrm_mir::loopinfo::LoopInfo;
@@ -146,7 +147,7 @@ impl FunctionPass for BackwardThreading {
         // trip until the cap (QuickrBasic `B_GGET` -O2: 16 copies of
         // the pixel loop's header, +576 B). The paths of one block keep
         // the old rule until judged.
-        let originals: Option<std::collections::HashSet<BlockId>> =
+        let originals: Option<IdSet<BlockId>> =
             (chain > 1).then(|| unit.function.layout().iter().copied().collect());
         for _ in 0..self.max_threads {
             let dt = DomTree::of(unit.function);
@@ -632,7 +633,7 @@ fn find(
     loops: &LoopInfo<BlockId>,
     relations: bool,
     chain_limit: usize,
-    originals: Option<&std::collections::HashSet<BlockId>>,
+    originals: Option<&IdSet<BlockId>>,
 ) -> Option<Path> {
     let known = |block: &BlockId| originals.is_none_or(|originals| originals.contains(block));
     for &bb in function.layout() {
