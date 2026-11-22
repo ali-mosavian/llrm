@@ -235,7 +235,7 @@ fn place(
     // The globals: one section per role, each variable a symbol in it.
     let mut data_sections: Vec<Section> = Vec::new();
     let mut data_relocs: Vec<(usize, usize, usize, i64, String)> = Vec::new();
-    for (role, section_name) in [(Role::ROData, ".rodata"), (Role::Data, ".data"), (Role::Bss, ".bss")] {
+    for (role, section_name) in [(Role::ROData, ".rodata"), (Role::Data, ".data"), (Role::Bss, ".bss"), (Role::InitFunctions, ".init_array")] {
         let members: Vec<&Variable> = variables.iter().filter(|one| role_of(one) == role).collect();
         if members.is_empty() {
             continue;
@@ -244,16 +244,19 @@ fn place(
         let section = 1 + data_sections.len();
         for one in members {
             image.resize(image.len().next_multiple_of(one.align), 0);
-            let name = crate::data::symbol(&one.name);
-            index_of.insert(name.clone(), symbols.len());
-            symbols.push(Symbol {
-                name,
-                binding: binding_of(Some(one.export)),
-                definition: Definition::Defined { section, offset: image.len() },
-                size: one.bytes.len(),
-                group: None,
-                visibility: Default::default(),
-            });
+            // the init-function table has no symbol
+            if !one.name.is_empty() {
+                let name = crate::data::symbol(&one.name);
+                index_of.insert(name.clone(), symbols.len());
+                symbols.push(Symbol {
+                    name,
+                    binding: binding_of(Some(one.export)),
+                    definition: Definition::Defined { section, offset: image.len() },
+                    size: one.bytes.len(),
+                    group: None,
+                    visibility: Default::default(),
+                });
+            }
             for reloc in &one.relocs {
                 data_relocs.push((data_sections.len(), image.len() + reloc.at, 0, reloc.addend, reloc.symbol.clone()));
             }
@@ -357,7 +360,9 @@ pub fn relocatable_with(
 }
 
 fn role_of(variable: &Variable) -> Role {
-    if variable.zero && !variable.constant {
+    if variable.name.is_empty() {
+        Role::InitFunctions
+    } else if variable.zero && !variable.constant {
         Role::Bss
     } else if variable.constant {
         Role::ROData
