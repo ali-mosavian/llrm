@@ -493,29 +493,43 @@ impl Tti for M68k {
         true
     }
 
-    /// D13 (owner llrm-target-m68k, exit 2026-12-20; the m16 rule): at -Os a callee that goes with its last call takes
-    /// no credit in instruction units. A copy carries its argument setup and the call's result moves that the units
-    /// leave out: jpeg_fixed's `message`, 10 sites of a loop and a call, was copied ten times (+198 B against gcc).
-    /// The sites are tried in bytes instead (SZ2).
+    /// DEVIATE LASTCALL-COLD (gcc `-finline-functions-called-once`): a static
+    /// function with one caller is inlined at -Os wherever its call sits;
+    /// the pin drops the bonus at a cold site.
+    fn inline_last_call_in_cold_site(&self) -> bool {
+        true
+    }
+
+    /// D13 (owner llrm-target-m68k, exit 2026-12-20; the m16 rule): at -Os a
+    /// callee that goes with its last call takes no credit in instruction
+    /// units. A copy carries its argument setup and the call's result moves
+    /// that the units leave out: jpeg_fixed's `message`, 10 sites of a loop
+    /// and a call, was copied ten times (+198 B against gcc). The sites are
+    /// tried in bytes instead (SZ2).
     fn inline_dying_credit_at_os(&self) -> bool {
         false
     }
 
-    /// D13 keeps the credit for a hot site: shift_int64_masked_amount's `mix`, called three times per trip of a nested
-    /// loop, stayed a call at -Os (188,470 -> 276,962 clocks, -6 B).
+    /// D13 keeps the credit for a hot site: shift_int64_masked_amount's `mix`,
+    /// called three times per trip of a nested loop, stayed a call at -Os
+    /// (188,470 -> 276,962 clocks, -6 B).
     fn inline_hot_dying_credit_at_os(&self) -> bool {
         true
     }
 
-    /// DEVIATE MERGEFUNC-OS (owner m68k, exit 2026-11-24; z80 and x86 m32 have it): `MergeFunctions` is off in the
-    /// pin's pipeline; at -Os two functions of one body are one, the other a `bra` to it. gcc's `-fipa-icf` folds
-    /// them (shift_int32_variable: `shl`/`shl2`, `shr`/`shr2`, `sar`/`sar2`).
+    /// DEVIATE MERGEFUNC-OS (owner m68k, exit 2026-11-24; z80 and x86 m32 have
+    /// it): `MergeFunctions` is off in the pin's pipeline; at -Os two
+    /// functions of one body are one, the other a `bra` to it. gcc's
+    /// `-fipa-icf` folds them (shift_int32_variable: `shl`/`shl2`,
+    /// `shr`/`shr2`, `sar`/`sar2`).
     fn merge_functions_at_size(&self) -> bool {
         true
     }
 
-    /// DEVIATE OS-OUTLINE-TRIAL (owner llrm-target-m68k, exit 2026-12-20): a cold -Os site the units accept is also
-    /// built as a call, kept where the finished code has fewer bytes (jpeg_fixed `put32`, `next16`, `tmul`: -54 B).
+    /// DEVIATE OS-OUTLINE-TRIAL (owner llrm-target-m68k, exit 2026-12-20): a
+    /// cold -Os site the units accept is also built as a call, kept where
+    /// the finished code has fewer bytes (jpeg_fixed `put32`, `next16`, `tmul`:
+    /// -54 B).
     fn opt_size_inline_outline_trial(&self) -> bool {
         true
     }
@@ -610,9 +624,9 @@ impl Tti for M68k {
 
     /// DEVIATE COMMON-INSTS-O1 (owner wasm-3, exit 2026-12-12, row
     /// COMMON-INSTS-O1): the -O2 function pipeline's hoisting and sinking
-    /// SimplifyCFG (L832) also runs at -O1, as before the pin's plain one (L621)
-    /// was mirrored; the flip is not measured here (computed_goto -O1 +369 B,
-    /// word_compare_branches +265 B on 6502 without it).
+    /// SimplifyCFG (L832) also runs at -O1, as before the pin's plain one
+    /// (L621) was mirrored; the flip is not measured here (computed_goto
+    /// -O1 +369 B, word_compare_branches +265 B on 6502 without it).
     fn common_insts_at_o1(&self) -> bool {
         true
     }
