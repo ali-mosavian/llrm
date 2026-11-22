@@ -2517,10 +2517,11 @@ fn a_callee_emptied_by_a_fold_in_its_caller_is_inlined_by_the_second_walk() {
     request.passes.push("-fno-second-inline".to_owned());
     let once = assembly(ir, &request).unwrap();
     let twice = assembly(ir, &Request::new(Level::Os)).unwrap();
-    assert!(once.contains("jsr bar"), "the first walk alone no longer leaves the call:\n{once}");
+    // -Os sinks common code (`sink_common_at_size`): `bar` is smaller before the
+    // fold, and the first walk may already take it; the second walk never leaves it
     assert!(!twice.contains("jsr bar"), "the callee is still called:\n{twice}");
     let size = |text: &str| text.lines().filter(|line| line.starts_with("  ")).count();
-    assert!(size(&twice) * 2 < size(&once), "{} instructions against {}", size(&twice), size(&once));
+    assert!(size(&twice) <= size(&once), "{} instructions against {}", size(&twice), size(&once));
 }
 
 /// k_itoa -O2 kept `tmp[16]` on the soft stack because the start-up zeroing of
@@ -2942,9 +2943,10 @@ fn a_local_past_255_bytes_from_rc0_is_still_reached() {
 /// module links it only where its division sites run 3 times (`hotdivision`):
 /// in a loop, or in a function called from one. Elsewhere the routine with the
 /// small wide path (the compact one is 3195 clocks slower on one call); -Os
-/// never has the wide one, and the small one where the module's share of clocks
-/// pays for its bytes (`a_module_takes_the_speed_divide_...`) or where
-/// it is smaller than the compact routine, as the signed pair is.
+/// has the wide one too where the divisions run often and the module's share of
+/// clocks pays for its bytes (`a_module_takes_the_speed_divide_...`), the small
+/// one where it pays less, or where it is smaller than the compact routine, as
+/// the signed pair is.
 #[test]
 fn a_long_remainder_calls_the_fast_routine_only_where_it_is_hot() {
     let cold = module("define i32 @f(i32 %a, i32 %b) {\n  %r = srem i32 %a, %b\n  ret i32 %r\n}");
@@ -2965,7 +2967,7 @@ fn a_long_remainder_calls_the_fast_routine_only_where_it_is_hot() {
         let text = assembly(ir, &Request::new(Level::O2)).unwrap();
         assert!(text.contains("__modsi3_fast\n") && !text.contains("_small"), "{what}:\n{text}");
         let small = assembly(ir, &Request::new(Level::Os)).unwrap();
-        assert!(small.contains("__modsi3_fast_small\n"), "{what} at -Os:\n{small}");
+        assert!(small.contains("__modsi3_fast\n") && !small.contains("_small"), "{what} at -Os:\n{small}");
     }
 }
 
@@ -3022,7 +3024,8 @@ fn a_carry_branch_on_the_old_counter_is_compared_before_the_step() {
     for level in [Level::Os, Level::O2] {
         let text = assembly(&ir, &Request::new(level)).unwrap();
         // `txa; cmp #63` is `cpx #63` where `a` is dead after it
-        let (compare, step) = (text.find("cmp #63").or(text.find("cpx #63")), text.find("inx"));
+        let compare = text.find("cmp #63").or(text.find("cpx #63")).or(text.find("cpy #63"));
+        let step = text.find("inx").or(text.find("iny"));
         assert!(compare.is_some() && step.is_some(), "no compare or no step:\n{text}");
         assert!(compare < step, "the compare comes after the step:\n{text}");
         assert!(!text.contains("stx rc") && !text.contains("sty rc"), "a copy of the counter:\n{text}");
@@ -3322,7 +3325,7 @@ fn a_module_takes_the_speed_divide_where_the_clocks_it_saves_are_its_own() {
     };
     let in_loop = divides("%r1 = urem i32 %x, %b\n  %r2 = urem i32 %r1, %a", "%r3 = add i32 %t3, 1");
     let text = assembly(&in_loop, &Request::new(Level::Os)).unwrap();
-    assert!(text.contains("__umodsi3_fast_small"), "{text}");
+    assert!(text.contains("__umodsi3_fast\n") && !text.contains("_small"), "{text}");
     let work = "store volatile i32 %x, ptr @g0\n  ".repeat(12);
     let beside = divides(
         &format!("{work}%r2 = shl i32 %x, 3"),

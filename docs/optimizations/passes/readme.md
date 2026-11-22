@@ -2,7 +2,7 @@
 
 # Passes
 
-From the `//!` headers of `crates/opt/llrm-transforms/src`: 318 documented, 5 undocumented.
+From the `//!` headers of `crates/opt/llrm-transforms/src`: 319 documented, 5 undocumented.
 
 The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipeline every driver runs: the order of the passes, the per-body fixed point, and which options switch them off.
 
@@ -217,6 +217,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | loopvectorizeearlyexit | Early-exit loops: the plan of several blocks and the control flow around it (`handleUncountableEarlyExits`, `createVectorLoopSkeleton`). |  | [loopvectorizeearlyexit](loopvectorizeearlyexit.md) |
 | loopvectorizeinterleave | Interleaving without vectorizing: `LoopVectorizePass` with VF 1 and IC > 1. | After the vector plan of [`crate::loopvectorize`](loopvectorize.md) did not widen the loop. | [loopvectorizeinterleave](loopvectorizeinterleave.md) |
 | loopvectorizelegality | `LoopVectorizationLegality`: whether an innermost loop may be vectorized. | Named by `loopvectorize`, `loopvectorizeearlyexit`, `loopvectorizeinterleave`. | [loopvectorizelegality](loopvectorizelegality.md) |
+| loopvectorizenarrow | Narrow the integer chains a loop computes from its induction. |  | [loopvectorizenarrow](loopvectorizenarrow.md) |
 | loopvectorizeplan | The loop vectorizer's planner: which vectorization factor (VF) and interleave count (IC) a legal loop gets, and the plan the transform runs. | Named by `loopvectorize`, `loopvectorizeearlyexit`, `loopvectorizeinterleave`. | [loopvectorizeplan](loopvectorizeplan.md) |
 | loopvectorizeskeleton | The control flow around a widened loop: the scalar remainder (`InnerLoopVectorizer::createVectorLoopSkeleton`). | Named by `loopunrollpass`, `loopvectorize`, `loopvectorizeearlyexit`, `loopvectorizeinterleave`. | [loopvectorizeskeleton](loopvectorizeskeleton.md) |
 | loopversioning | `LoopVersioning`: a loop copied, the copy kept for when run-time checks find that pointers may overlap, and the original told that they do not. | Called by the loop vectorizer and loop distribution once they are | [loopversioning](loopversioning.md) |
@@ -313,7 +314,7 @@ The order the passes run in: [pipeline](pipeline.md), The MIR optimization pipel
 | tailcallelim | Tail calls are marked, and a function's calls to itself in tail position become a loop, as LLVM's `TailCallElim`. | As `tailrec`, the name its option (`sibcalls`) and slot (`tailrec@688`) | [tailcallelim](tailcallelim.md) |
 | tailmerge | The blocks that end the function with the same terminator become one block each: SimplifyCFG's `tailMergeBlocksWithSimilarFunctionTerminators`. | Named by `fold`, `jumps`, `simplifycfg`. | [tailmerge](tailmerge.md) |
 | transform | The helpers [`crate::gvn`], [`crate::dead`], [`crate::decide`], share: equal calls, liveness of values, and cleanup of phis after an edge goes. | [`crate::gvn`](gvn.md) calls `equal_calls` on each function it numbers; | [transform](transform.md) |
-| trial | The state a target's driver and a pass share for a trial compile: the module is compiled again with one decision of the pass reversed, and the driver keeps whichever result it prices smaller or cheaper. | Named by `inlinecost`, `jumpthreading`, `llc`, `looprotate`, `loopunrollpass`, `price`, `process`, `simpleloopunswitch`, `switchlookup`, `target`, `tti`, `walk`. | [trial](trial.md) |
+| trial | The state a target's driver and a pass share for a trial compile: the module is compiled again with one decision of the pass reversed, and the driver keeps whichever result it prices smaller or cheaper. | Named by `inlinecost`, `jumpthreading`, `llc`, `looprotate`, `loopunrollpass`, `lsr_pass`, `price`, `process`, `simpleloopunswitch`, `switchlookup`, `target`, `tti`, `walk`. | [trial](trial.md) |
 | trivialunswitch | A branch in a loop's header on a loop-invariant condition, one side of which leaves the loop, is decided in the preheader instead of on every trip. | In the function pipeline's fixed point, after `loopmotion` and before | [trivialunswitch](trivialunswitch.md) |
 | trunc_inst_combine | An expression graph that ends in a `trunc` is evaluated at the narrow width, as LLVM's `TruncInstCombine` (a part of `AggressiveInstCombine`). | As `aggressive-instcombine@678`, after `instcombine` and before `tailrec` | [trunc_inst_combine](trunc_inst_combine.md) |
 | twoentryphi | A two-entry phi that a branch chooses between becomes a `select`, the arms' cheap code hoisted into the branch's block: the `foldTwoEntryPHINode` step of SimplifyCFG. | Named by `alwaysundef`, `branchtocommon`, `condstores`, `condtocond`, `constanthoisting`, `hoistcommon`, `icmpchain`, `knownpred`, `loopdeletion`, `simplifycfg`, `sinkcommon`, `speculate`, `switcharms`, `switchdead`, `switchlookup`, `switchopt`, `switchphi`, `switchpow2`, `switchrange`, `switchreduce`, `switchselect`, `switchvalue`, `undefpred`. | [twoentryphi](twoentryphi.md) |

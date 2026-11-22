@@ -43,6 +43,10 @@ impl Machine for M68kMachine {
         Some(Rc::new(M68k::for_cpu(self.cpu)))
     }
 
+    fn tuning(&self) -> llrm_mir::target::Tuning {
+        crate::dagisel::function::tuning()
+    }
+
     /// Frames keep what the shipped targets ask for (m68k Linux, AmigaOS and
     /// TOS: 4) and nothing realigns them (`frame.rs`): an object asking more
     /// is clamped to it, so the optimizer never folds `ptr & 7` to 0 on a
@@ -258,6 +262,14 @@ fn size_letter(bits: u32) -> Option<char> {
 }
 
 impl Tti for M68k {
+    /// `indirectbr` is a `switch` over block numbers (`IndirectBrExpandPass`).
+    /// DEVIATE M68K-INDIRECTBR: the pin's M68k selects `brind` as `jmp (An)`
+    /// of a block's address; this backend has no block-address operand yet.
+    /// Exit 2026-12-21: lower `blockaddress` and `brind` natively.
+    fn expands_indirect_br(&self) -> bool {
+        true
+    }
+
     /// The pin's M68k has no FP register class: `FADD` is not legal on `float`
     /// or `double`, so `getFPOpCost` is `TCC_Expensive` (every float
     /// operation is a soft-float call).

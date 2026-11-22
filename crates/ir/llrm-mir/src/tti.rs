@@ -19,6 +19,26 @@ pub struct Cost {
     pub valid: bool,
 }
 
+/// The inserts of `lanes` priced one by one (`BasicTTIImplBase::
+/// getScalarizationOverhead`).
+pub fn per_lane_insert_overhead<T: Tti + ?Sized>(
+    tti: &T,
+    ty: VectorTy,
+    lanes: &[u32],
+    cost_kind: CostKind,
+) -> Option<Cost> {
+    let mut total = 0;
+    for &index in lanes {
+        let cost =
+            tti.vector_instr_cost(LaneOp::Insert, ty, Some(index), index == 0, VectorInstrContext::None, cost_kind)?;
+        if !cost.valid {
+            return None;
+        }
+        total += cost.value;
+    }
+    Some(Cost::of(total))
+}
+
 impl Cost {
     pub const FREE: Cost = Cost { value: 0, valid: true };
     pub const BASIC: Cost = Cost { value: 1, valid: true };
@@ -192,6 +212,9 @@ pub struct OperandInfo {
     pub constant: bool,
     pub power_of_two: bool,
     pub negated_power_of_two: bool,
+    /// A vector constant whose lanes differ (`OP_NonUniformConstant`); a
+    /// scalar, or a splat, is uniform.
+    pub non_uniform: bool,
     /// The constant, sign-extended from its width, where a target prices the
     /// size of an immediate by it; the pin's `OperandValueInfo` has none, and
     /// no target but the m68k reads it.
@@ -199,8 +222,13 @@ pub struct OperandInfo {
 }
 
 impl OperandInfo {
-    pub const ANY: OperandInfo =
-        OperandInfo { constant: false, power_of_two: false, negated_power_of_two: false, value: None };
+    pub const ANY: OperandInfo = OperandInfo {
+        constant: false,
+        power_of_two: false,
+        negated_power_of_two: false,
+        non_uniform: false,
+        value: None,
+    };
 
     /// A constant operand of this value at `width` bits.
     pub fn constant(
@@ -217,6 +245,7 @@ impl OperandInfo {
             constant: true,
             power_of_two: bits != 0 && bits & (bits - 1) == 0,
             negated_power_of_two: negated != 0 && negated & (negated - 1) == 0,
+            non_uniform: false,
             value: Some(if width >= 128 || width == 0 {
                 value
             } else {
@@ -854,6 +883,14 @@ pub trait Tti {
         true
     }
 
+    /// DEVIATE LV-NARROW-IV (owner llrm-target-x86-m64-b, exit 2026-11-30): a
+    /// loop chosen for widening has its integer chains of the counter
+    /// narrowed first (`loopvectorizenarrow`), as gcc's over-widening pattern
+    /// does.
+    fn narrows_induction_chains(&self) -> bool {
+        false
+    }
+
     /// The backend selects a vector under a register (`<8 x i8>`): the pin's
     /// `TypeWidenVector` makes it one register, as the x86 targets do. A port
     /// whose backend takes none keeps the loop scalar.
@@ -968,6 +1005,20 @@ pub trait Tti {
         None
     }
 
+    /// `getScalarizationOverhead` of the `lanes` of `ty` alone, as
+    /// `BoUpSLP::getGatherCost` asks it: the inserts of the scalars a gather
+    /// packs. The default prices each lane (`getVectorInstrCost`, a lane 0
+    /// insert into poison free); a target whose hook does not (AArch64's
+    /// integer vectors: every lane the same) overrides it.
+    fn demanded_insert_overhead(
+        &self,
+        ty: VectorTy,
+        lanes: &[u32],
+        cost_kind: CostKind,
+    ) -> Option<Cost> {
+        per_lane_insert_overhead(self, ty, lanes, cost_kind)
+    }
+
     /// Whether the SLP vectorizer's tree and store chains run: only where the
     /// target's vector costs are priced against the pin (arm64, and x86-64
     /// where it holds vector values). DEVIATE SLP2 (owner arm64, exit
@@ -1037,6 +1088,14 @@ pub trait Tti {
     /// false: the pin's cost rule decides.
     fn splits_merged_conditions(&self) -> bool {
         false
+    }
+
+    /// DEVIATE SD103: at optsize two compares joined by `and`/`or` stay two
+    /// branches. The pin has no such rule (x86 and the 16-bit table need it
+    /// for their registers); false: the target's cost rule decides at optsize
+    /// as at any level.
+    fn splits_merged_conditions_at_optsize(&self) -> bool {
+        true
     }
 
     /// DEVIATE LSR-OUTER: whether an outer loop's address stepped by `size`
@@ -1210,6 +1269,16 @@ pub trait Tti {
     ) -> Cost {
         let _ = kind;
         Cost::BASIC
+    }
+
+    /// `getAddressComputationCost` of a scalar access's value type, which is
+    /// what `getMemoryInstructionCost` adds to a load or store at VF 1: the
+    /// base model answers 0 (AArch64's 1 is the default here).
+    fn scalar_access_address_cost(
+        &self,
+        kind: CostKind,
+    ) -> Cost {
+        self.address_computation_cost(kind)
     }
 
     /// `getAddressComputationCost` of one lane of a scalarized access
@@ -1431,6 +1500,16 @@ pub trait Tti {
     /// False: only when tuned for size.
     fn string_runs_at_speed(&self) -> bool {
         false
+    }
+
+    /// `MaxStoresPer{Memset,Memcpy,Memmove}` and their `...OptSize` (in that
+    /// order, as [`Tuning`](crate::target::Tuning) has them) where this target
+    /// states them: the DAG builder's limits for a constant fill or copy by
+    /// pieces. A `Described` machine's `tuning()` was the pin's, so a limit set
+    /// only in the target's own table reached the TTI and never the selector
+    /// (an -Os experiment changed nothing until traced). None: the pin's.
+    fn memory_limits(&self) -> Option<[usize; 6]> {
+        None
     }
 
     /// DEVIATE OS-OUTLINE-TRIAL (owner llrm-target-m68k, exit 2026-12-20):
@@ -1904,6 +1983,21 @@ pub trait Tti {
         true
     }
 
+    /// `Tuning::sink_common_at_size`.
+    fn sink_common_at_size(&self) -> bool {
+        false
+    }
+
+    /// `Tuning::late_memcpyopt_at_size`.
+    fn late_memcpyopt_at_size(&self) -> bool {
+        false
+    }
+
+    /// `Tuning::sink_common_phi_cost`.
+    fn sink_common_phi_cost(&self) -> usize {
+        0
+    }
+
     /// What a byte of code is worth in thousandths of a clock at speed, where
     /// the target trades bytes for clocks; 0: it does not.
     fn speed_milliclocks_per_byte(&self) -> i64 {
@@ -2161,6 +2255,11 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE OS-TRIAL-CLOCK-CAP: `Tuning::os_trial_clock_cap_percent`.
+    fn os_trial_clock_cap_percent(&self) -> Option<i64> {
+        None
+    }
+
     /// DEVIATE BFS-1: `Tuning::cold_site_ignores_sinks`.
     fn cold_site_ignores_sinks(&self) -> bool {
         false
@@ -2269,6 +2368,11 @@ pub trait Tti {
     /// `Tuning::rep_movs_at_size_max`.
     fn rep_movs_at_size_max(&self) -> u64 {
         128
+    }
+
+    /// `Tuning::rep_movs_at_speed_max`.
+    fn rep_movs_at_speed_max(&self) -> u64 {
+        0
     }
 
     /// `Tuning::rep_stos_at_size_max`.
@@ -3011,6 +3115,21 @@ pub trait Tti {
         false
     }
 
+    /// DEVIATE LSR-KEY-TRIAL (owner z80, exit 2026-12-15): the target rates
+    /// solutions by a second order (`is_lsr_cost_less` under
+    /// `trial::lsr_alternate_order`) and its driver keeps the module that
+    /// comes out cheaper where the two orders choose differently.
+    fn lsr_alternate_order(&self) -> bool {
+        false
+    }
+
+    /// Whether a global's address as the base of an address is an immediate
+    /// loaded at the access, so it costs no register of its own (DEVIATE
+    /// LU33). Off: it is a base register, as in the pin.
+    fn lsr_global_address_is_free(&self) -> bool {
+        false
+    }
+
     /// DEVIATE LSR-CALL-SCALE (owner z80, exit 2026-11-24; no pin pass: GCC's
     /// ivopts expresses a use as `candidate * ratio`,
     /// `get_computation_cost`): in a loop with a call and
@@ -3264,6 +3383,14 @@ pub trait Tti {
     /// their lowering does.
     /// [pin](https://github.com/llvm/llvm-project/blob/d1106deb71cc/llvm/lib/Transforms/InstCombine/InstCombineCompares.cpp#L1369)
     fn folds_icmp_of_constant_phi(&self) -> bool {
+        false
+    }
+
+    /// DEVIATE X64-TRUTH-XOR (owner llrm-target-x86-m64-b, exit 2026-12-12):
+    /// `zext (icmp ne x, y)` of two values that are each 0 or 1 is `xor x, y`
+    /// (GCC `simplify_truth_ops_using_ranges`). The pin keeps the compare: a
+    /// `cmp`, `setne` and the clearing `xor` for one `xor`.
+    fn xors_truth_value_compare(&self) -> bool {
         false
     }
 

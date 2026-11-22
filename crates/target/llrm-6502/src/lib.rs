@@ -14,6 +14,7 @@ pub mod frame;
 pub mod hotdivision;
 pub mod hotmultiply;
 pub mod ir_lowering;
+pub mod licm;
 pub mod mulimage;
 pub mod opcosts;
 pub mod outline;

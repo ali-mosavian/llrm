@@ -23,7 +23,9 @@
 //! A computed goto (an indirect jump whose every successor has its address
 //! taken) is copied up to ten instructions whatever the size
 //! (`terminatorIsComputedGotoWithSuccessors`): it undoes the factoring of the
-//! `goto *` of an interpreter's dispatch into one block.
+//! `goto *` of an interpreter's dispatch into one block. DEVIATE TL4 (owner
+//! x86-m32-b, exit 2026-11-27): a target may keep it factored at `-Os`, where
+//! bytes come first (m32: QuickrBasic's `exec_loop` +5.1 KB for 138 copies).
 //!
 //! DEVIATE TL1 (owner greedy-subreg, exit 2026-11-27): a tail with a call, a
 //! call's record, a group, a symbol, bytes spread over others, an indirect jump
@@ -35,7 +37,9 @@
 //! DEVIATE TL3 (owner greedy-subreg, exit 2026-11-20): the pin's return block
 //! already holds the frame's teardown, so a framed function's is longer than
 //! the bound and is never copied; here the teardown is emitted after this pass,
-//! so a tail that returns counts the callee-saved registers the body writes.
+//! so a tail that returns counts the callee-saved registers the body writes,
+//! and the frame's own `pop` or `leave` where the function has a frame
+//! register (kept, or addressed by the body).
 //! Without it queens m64 -O2 was +24 B (copies the tail merge joined again).
 //!
 //! DEVIATE TL2 (no number): `Preds` is rebuilt after each tail copied, so a
@@ -84,6 +88,7 @@ fn copied(
     body: &LirBody,
     tail: &Block,
     size: bool,
+    computed_at_size: bool,
     epilogue: usize,
 ) -> Option<Vec<Arc<Insn>>> {
     if can_fall_through(tail) || tail.succ.contains(&tail.at) || !tail.phis.is_empty() {
@@ -98,7 +103,7 @@ fn copied(
     }
     let computed = computed_goto(body, tail);
     let most = if size { 1 } else { SIZE };
-    let most = if computed { most.max(COMPUTED_GOTO_SIZE) } else { most };
+    let most = if computed && (computed_at_size || !size) { most.max(COMPUTED_GOTO_SIZE) } else { most };
     let work = super::jumps::_real(tail);
     let plain = work
         .iter()
@@ -129,10 +134,11 @@ fn tail_duplicate(
     body: &LirBody,
     at: usize,
     size: bool,
+    computed_at_size: bool,
     epilogue: usize,
 ) -> Option<LirBody> {
     let tail = &body.blocks[at];
-    let work = copied(body, tail, size, epilogue)?;
+    let work = copied(body, tail, size, computed_at_size, epilogue)?;
     if is_simple_in(graph, tail) {
         return duplicate_simple(body, at);
     }
@@ -221,20 +227,34 @@ fn tail_duplicate(
 
 /// `tailDuplicateBlocks`: every block but the entry, once, in order.
 pub fn duplicated(
-    mut body: LirBody,
+    body: LirBody,
     size: bool,
     saved: &[RegId],
     free: bool,
     pointer: RegId,
 ) -> LirBody {
-    let epilogue = saved_count(&body, saved, free, pointer);
+    duplicated_with(body, size, true, saved, free, pointer, false)
+}
+
+/// [`duplicated`], where `computed_at_size` says a computed goto is copied at
+/// `-Os` too (the pin) or only where bytes do not come first (TL4).
+pub fn duplicated_with(
+    mut body: LirBody,
+    size: bool,
+    computed_at_size: bool,
+    saved: &[RegId],
+    free: bool,
+    pointer: RegId,
+    frame_kept: bool,
+) -> LirBody {
+    let epilogue = saved_count(&body, saved, free, pointer) + usize::from(framed(&body, frame_kept, free, pointer));
     let mut place = 1;
     let mut graph = Preds::of(&body);
     while place < body.blocks.len() {
         let at = body.blocks[place].at;
         // Most blocks fail the cheap tests: no scan of the body for them.
-        if copied(&body, &body.blocks[place], size, epilogue).is_some()
-            && let Some(made) = tail_duplicate(&graph, &body, place, size, epilogue)
+        if copied(&body, &body.blocks[place], size, computed_at_size, epilogue).is_some()
+            && let Some(made) = tail_duplicate(&graph, &body, place, size, computed_at_size, epilogue)
         {
             body = made;
             graph = Preds::of(&body);
@@ -246,6 +266,20 @@ pub fn duplicated(
         place += 1;
     }
     body
+}
+
+/// Whether the function will have a frame register to restore: `masm`'s
+/// `framed_by` less the reserve, which is not known until after this pass (a
+/// local or a spill is addressed through the frame register, so it shows in
+/// the roots).
+fn framed(
+    body: &LirBody,
+    kept: bool,
+    free: bool,
+    pointer: RegId,
+) -> bool {
+    let found = body.facts.0.get::<super::masm::BodyRoots>(body);
+    kept || found.moves_stack || (!free && found.plain.contains(&body.regs().root(pointer)))
 }
 
 /// How many callee-saved registers the body writes: the pops its returns will
@@ -268,11 +302,17 @@ pub(crate) fn saved_count(
 /// The phase: tail duplication after allocation.
 pub struct TailDuplicate {
     pub size: bool,
+    /// A computed goto is copied at `-Os` too (the pin); off where bytes come
+    /// first (DEVIATE TL4, `CpuTable::skip_computed_goto_copies_at_size`).
+    pub computed_at_size: bool,
     /// The callee-saved registers (whole), whether the frame register is free,
     /// and the frame pointer: what `masm::saved_of` reads.
     pub saved: Vec<RegId>,
     pub free: bool,
     pub pointer: RegId,
+    /// The function keeps its frame register whatever it holds (`kept`); a
+    /// body that addresses it has one too (TL3 counts the frame's `pop`).
+    pub frame_kept: bool,
 }
 
 impl crate::model::passes::LIRTransform for TailDuplicate {
@@ -288,7 +328,15 @@ impl crate::model::passes::LIRTransform for TailDuplicate {
         &mut self,
         body: LirBody,
     ) -> Result<LirBody, String> {
-        Ok(duplicated(body, self.size, &self.saved, self.free, self.pointer))
+        Ok(duplicated_with(
+            body,
+            self.size,
+            self.computed_at_size,
+            &self.saved,
+            self.free,
+            self.pointer,
+            self.frame_kept,
+        ))
     }
 }
 
@@ -418,6 +466,26 @@ mod tests {
         assert!(duplicated(framed, false, &[], false, RegId::default()).blocks.iter().any(|block| block.at == 3));
     }
 
+    /// `double_across_a_call_result` m16 -Os (+2 B): the pin's return block
+    /// holds the frame's `pop bp` as well as the `ret`, two instructions, so
+    /// one at `-Os` is too long to copy; the `ret` alone was copied here.
+    #[test]
+    fn test_a_tail_that_returns_counts_the_frame_pop_where_the_frame_is_kept() {
+        let shape = || {
+            body(vec![
+                block(0, vec![of("jne", Operation::Branch, Some(2)), jump(1)], &[1, 2]),
+                block(1, vec![work(1), jump(3)], &[3]),
+                block(2, vec![work(2), jump(3)], &[3]),
+                block(3, vec![of("ret", Operation::Return, None)], &[]),
+            ])
+        };
+        let copied = |frame_kept| {
+            duplicated_with(shape(), true, true, &[], false, RegId::default(), frame_kept).blocks.len() == 3
+        };
+        assert!(copied(false), "no frame: the lone ret is copied at -Os");
+        assert!(!copied(true), "a kept frame's pop is in the return block: two instructions, kept at -Os");
+    }
+
     /// A call is not copied (TL1): a copy keeps no callee.
     #[test]
     fn test_a_tail_with_a_call_is_kept() {
@@ -514,5 +582,19 @@ mod tests {
     #[test]
     fn test_a_computed_goto_is_copied_at_os() {
         assert!(dup(dispatch(20, 4, true), true).blocks.iter().all(|block| block.at != 99));
+    }
+
+    /// TL4: a target that keeps bytes first (m32: `exec_loop`'s 138 copies are
+    /// +5.1 KB at `-Os`) leaves the dispatch one block at `-Os` only.
+    #[test]
+    fn test_a_target_can_keep_a_computed_goto_factored_at_os() {
+        let kept = |size| {
+            duplicated_with(dispatch(20, 4, true), size, false, &[], false, RegId::default(), false)
+                .blocks
+                .iter()
+                .any(|block| block.at == 99)
+        };
+        assert!(kept(true), "at -Os the dispatch stays one block");
+        assert!(!kept(false), "at -O2 it is copied");
     }
 }

@@ -492,6 +492,17 @@ fn memory_operand(
     };
     // iced spells a 32-bit displacement of a 64-bit address as size 8.
     let displ_size = if displ_size == 4 && (base.is_gpr64() || index.is_gpr64()) { 8 } else { displ_size };
+    // `[rbp + i]` and `[r13 + i]` carry a zero byte of displacement (a base of
+    // those registers has no displacement-free form); at scale 1 the index and
+    // the base are the same address summed either way, so the register that has
+    // the form is the base.
+    let swap = scale == 1
+        && displ == 0
+        && displ_size == 0
+        && matches!(base, RegId::RBP | RegId::R13)
+        && index.is_gpr64()
+        && !matches!(index, RegId::RBP | RegId::R13 | RegId::RSP);
+    let (base, index) = if swap { (index, base) } else { (base, index) };
     MemoryOperand::new(base.iced(), index.iced(), scale as u32, displ, displ_size, false, overriding(base, seg).iced())
 }
 
@@ -2517,7 +2528,14 @@ fn scalar_sse(
     // `cmpss xmm0, xmm1, 0`: the predicate rides as an immediate byte.
     if let ([Loc::Reg(into)], [_, source, Loc::Imm(predicate)]) = (dests.as_slice(), sources.as_slice()) {
         let upper = Upper(name);
-        let bits = if name.ends_with("sd") { 64 } else { 32 };
+        // `shufps`/`shufpd` read the whole register.
+        let bits = if name.ends_with("sd") {
+            64
+        } else if name.ends_with("ss") {
+            32
+        } else {
+            128
+        };
         let code = code_of!(upper, "_XMM_XMMM", bits, "_IMM8")?;
         return match source {
             Loc::Reg(outof) => {
@@ -2548,6 +2566,8 @@ fn scalar_sse(
     };
     let read =
         match name.strip_prefix("cvtt").or_else(|| name.strip_prefix("cvt")).and_then(|rest| rest.split_once('2')) {
+            // The two lanes `cvtdq2pd` and `cvtps2pd` widen are 64 bits.
+            _ if matches!(name, "cvtdq2pd" | "cvtps2pd") => 64,
             Some((source, _)) => scalar(source),
             None => scalar(&name[name.len().saturating_sub(2)..]),
         };

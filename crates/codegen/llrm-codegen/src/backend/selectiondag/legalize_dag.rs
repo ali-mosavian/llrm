@@ -797,8 +797,7 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
                 let (int, name) = routine(ret.size_in_bits(), &|int| {
                     if signed { Libcall::FpToSInt(from, int) } else { Libcall::FpToUInt(from, int) }
                 })?;
-                let (value, out) =
-                    self.lib_call_chained(name, &[source], EVT::Simple(int), signed, chain)?;
+                let (value, out) = self.lib_call_chained(name, &[source], EVT::Simple(int), signed, chain)?;
                 let value =
                     if EVT::Simple(int) == ret { value } else { self.dag.get_node(ISD::Truncate, ret, &[value]) };
                 (value, out)
@@ -1329,13 +1328,53 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         Some(self.dag.get_select(dst, sign_bit_test, slow, fast))
     }
 
+    /// `ExpandLegalINT_TO_FP` of `STRICT_UINT_TO_FP`
+    /// (`TargetLowering::expandUINT_TO_FP` refuses a constrained node, so
+    /// the compiler-rt form is the one): unsigned `i32`/`i64` to `f32` and
+    /// `i64` to `f64`. The input is halved with the lost bit folded into
+    /// bit 0 where its top bit is set, converted by one `STRICT_SINT_TO_FP`
+    /// (a spurious exception must not be raised twice) and doubled by a
+    /// `STRICT_FADD` that never raises one. `None`: no signed conversion, a
+    /// type outside the three, or no strict `fadd`.
+    fn expand_strict_uint_to_fp(
+        &mut self,
+        node: SDValue,
+    ) -> Option<Vec<SDValue>> {
+        let (chain, src) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+        let (src_vt, dst) = (self.dag.value_type(src), self.dag.value_type(node));
+        let EVT::Simple(src_mvt) = src_vt else { return None };
+        let single = matches!(src_mvt, MVT::I32 | MVT::I64) && dst == EVT::Simple(MVT::F32);
+        if !single && !(src_mvt == MVT::I64 && dst == EVT::Simple(MVT::F64)) {
+            return None;
+        }
+        if !self.tli.is_operation_legal_or_custom(ISD::StrictSIntToFp, src_vt)
+            || !self.tli.is_operation_legal_or_custom(ISD::StrictFAdd, dst)
+        {
+            return None;
+        }
+        let bool_vt = self.tli.types.set_cc_result_type(src_vt);
+        let zero = self.dag.get_constant(0, src_vt);
+        let sign_bit_test = self.dag.get_setcc(bool_vt, src, zero, CondCode::SetLt);
+        let one_bit = self.dag.get_constant(1, EVT::I8);
+        let shifted = self.dag.get_node(ISD::Srl, src_vt, &[src, one_bit]);
+        let one = self.dag.get_constant(1, src_vt);
+        let low = self.dag.get_node(ISD::And, src_vt, &[src, one]);
+        let halved = self.dag.get_node(ISD::Or, src_vt, &[low, shifted]);
+        let in_cvt = self.dag.get_select(src_vt, sign_bit_test, halved, src);
+        let fast = self.dag.get_node_multi(ISD::StrictSIntToFp, &[dst, EVT::OTHER], &[chain, in_cvt]);
+        let (value, after) = (SDValue { node: fast.node, res: 0 }, SDValue { node: fast.node, res: 1 });
+        let slow = self.dag.get_node_multi(ISD::StrictFAdd, &[dst, EVT::OTHER], &[after, value, value]);
+        let result = self.dag.get_select(dst, sign_bit_test, SDValue { node: slow.node, res: 0 }, value);
+        Some(vec![result, SDValue { node: slow.node, res: 1 }])
+    }
+
     /// `TargetLowering::expandFP_TO_UINT` of `STRICT_FP_TO_UINT`: the value
     /// less 2^(n-1) where it reaches it, converted as signed on the chain,
     /// with that bit set again:
-    /// `Sel = Src < 2^(n-1); r = fp_to_sint(Src - (Sel ? 0 : 2^(n-1))) ^ (Sel ? 0 : 2^(n-1))`.
-    /// The compare is signaling and the subtract and conversion follow it on
-    /// the node's chain. `None` where the target has no strict `fsub` or
-    /// signed conversion for the types.
+    /// `Sel = Src < 2^(n-1); r = fp_to_sint(Src - (Sel ? 0 : 2^(n-1))) ^ (Sel ?
+    /// 0 : 2^(n-1))`. The compare is signaling and the subtract and
+    /// conversion follow it on the node's chain. `None` where the target
+    /// has no strict `fsub` or signed conversion for the types.
     fn expand_strict_fp_to_uint(
         &mut self,
         node: SDValue,
@@ -1347,8 +1386,8 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         // 2^(bits-1) in the float's own format.
         let power = u128::from(bits - 1);
         let pattern = match float {
-            MVT::F32 if bits <= 32 + 1 => (127 + power) << 23,
-            MVT::F64 if bits <= 64 => (1023 + power) << 52,
+            MVT::F32 if power <= 127 => (127 + power) << 23,
+            MVT::F64 if power <= 1023 => (1023 + power) << 52,
             MVT::F80 => ((16383 + power) << 64) | (1 << 63),
             _ => return None,
         };
@@ -1367,11 +1406,13 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         let sign = self.dag.get_constant(1u128 << (bits - 1), dst);
         let int_offset = self.dag.get_select(dst, below, int_zero, sign);
         let moved = self.dag.get_node_multi(ISD::StrictFSub, &[src_vt, EVT::OTHER], &[chain, src, offset]);
-        let signed = self.dag.get_node_multi(
-            ISD::StrictFpToSInt,
-            &[dst, EVT::OTHER],
-            &[SDValue { node: moved.node, res: 1 }, SDValue { node: moved.node, res: 0 }],
-        );
+        let signed = self
+            .dag
+            .get_node_multi(
+                ISD::StrictFpToSInt,
+                &[dst, EVT::OTHER],
+                &[SDValue { node: moved.node, res: 1 }, SDValue { node: moved.node, res: 0 }],
+            );
         let result = self.dag.get_node(ISD::Xor, dst, &[SDValue { node: signed.node, res: 0 }, int_offset]);
         Some(vec![result, SDValue { node: signed.node, res: 1 }])
     }
@@ -1624,6 +1665,12 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
             | ISD::Sra
             | ISD::Rotl
             | ISD::Rotr
+            // `ExpandREM` finds no vector divide to make a remainder of, so it
+            // unrolls too.
+            | ISD::SDiv
+            | ISD::UDiv
+            | ISD::SRem
+            | ISD::URem
                 if vt.is_vector() =>
             {
                 Some(vec![self.unroll_vector_op(node)])
@@ -1717,6 +1764,7 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
             }
             ISD::UIntToFp => self.expand_uint_to_fp(node).map(|result| vec![result]),
             ISD::StrictFpToUInt => self.expand_strict_fp_to_uint(node),
+            ISD::StrictUIntToFp => self.expand_strict_uint_to_fp(node),
             ISD::BrJT => Some(vec![self.expand_br_jt(node)]),
             ISD::Undef | ISD::Poison => {
                 // `ExpandNode`: zero of the type.

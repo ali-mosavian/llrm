@@ -350,6 +350,9 @@ pub fn managers(
                 one = one.carrying(before);
             }
             one.require::<Summaries>();
+            // `Function::hasOneLiveUse`, read by loop unrolling in the bodies
+            // sent back through.
+            one.require::<llrm_mir::passes::FunctionUses>();
             one.require::<GlobalsModRefAnalysis>();
             // As the first run's: a body sent back through reads what no code
             // outside reaches.

@@ -266,6 +266,14 @@ pub trait Target {
         false
     }
 
+    /// The class an instruction must run in to keep the flag lanes it says it
+    /// keeps ([`crate::mfunc::Inst::flags_kept`]), given the class of its
+    /// operands: `inc` of `a` is `clc; adc #1` on the 6502, which writes carry.
+    /// `None`: every class keeps them.
+    fn keeping_flags(_class: &Self::Class) -> Option<Self::Class> {
+        None
+    }
+
     /// Whether the row `name` loads a frame object a call filled (see
     /// `frame_address`): made again where it is read.
     fn is_buffer_load(_name: &str) -> bool {
@@ -737,6 +745,10 @@ pub fn two_address<C>(function: &mut MFunction<C>) {
 /// A copy of a reserved register into a register defined once is dropped and
 /// the register read in its place, so a stack address is `(4,%sp)` and not
 /// through an address register (`RegisterCoalescer::joinReservedPhysReg`).
+/// Not where the reserved register is written inside the copy's live range
+/// (the pin: "deny any overlapping intervals"): `stackrestore` of a
+/// `stacksave` taken before a `dynamic_stackalloc` would read the lowered
+/// pointer and restore nothing.
 pub fn fold_reserved_copies<T: Target>(function: &mut MFunction<T::Class>) {
     let mut defs = vec![0usize; function.classes.len()];
     for operand in function.blocks.iter().flat_map(|block| &block.insts).flat_map(|inst| &inst.operands) {
@@ -744,23 +756,44 @@ pub fn fold_reserved_copies<T: Target>(function: &mut MFunction<T::Class>) {
             defs[*v as usize] += 1;
         }
     }
+    let mut candidates: HashMap<u32, (usize, usize, RegId)> = HashMap::default();
+    for (b, block) in function.blocks.iter().enumerate() {
+        for (i, inst) in block.insts.iter().enumerate() {
+            if let (Kind::Copy, [Operand::Def(Reg::Virt(v)), Operand::Use(Reg::Phys(p))]) =
+                (inst.kind, &inst.operands[..])
+                && defs[*v as usize] == 1
+                && T::reserved(T::root(*p))
+            {
+                candidates.insert(*v, (b, i, *p));
+            }
+        }
+    }
+    if candidates.is_empty() {
+        return;
+    }
+    let successors = successors(function);
+    let mut predecessors = vec![Vec::new(); function.blocks.len()];
+    for (b, out) in successors.iter().enumerate() {
+        for &to in out {
+            predecessors[to].push(b);
+        }
+    }
     let mut replace: HashMap<u32, RegId> = HashMap::default();
-    for block in &mut function.blocks {
-        block
-            .insts
-            .retain(
-                |inst| {
-                    if let (Kind::Copy, [Operand::Def(Reg::Virt(v)), Operand::Use(Reg::Phys(p))]) =
-                        (inst.kind, &inst.operands[..])
-                        && defs[*v as usize] == 1
-                        && T::reserved(T::root(*p))
-                    {
-                        replace.insert(*v, *p);
-                        return false;
-                    }
-                    true
-                },
-            );
+    for (&v, &(copy_block, copy_at, p)) in &candidates {
+        if !written_in_live_range::<T>(function, &successors, &predecessors, v, copy_block, copy_at, p) {
+            replace.insert(v, p);
+        }
+    }
+    for (b, block) in function.blocks.iter_mut().enumerate() {
+        let mut at = 0;
+        block.insts.retain(|inst| {
+            let here = at;
+            at += 1;
+            !matches!(
+                inst.operands.first(),
+                Some(Operand::Def(Reg::Virt(v))) if replace.contains_key(v) && candidates[v] == (b, here, replace[v])
+            )
+        });
     }
     for operand in function.blocks.iter_mut().flat_map(|block| &mut block.insts).flat_map(|inst| &mut inst.operands) {
         if let Operand::Use(Reg::Virt(v)) = operand
@@ -769,6 +802,77 @@ pub fn fold_reserved_copies<T: Target>(function: &mut MFunction<T::Class>) {
             *operand = Operand::Use(Reg::Phys(*p));
         }
     }
+}
+
+/// Whether `p` is written between the copy that defines `v` and a use of `v`.
+/// A use in a phi counts as written: the edge's end is not placed here.
+fn written_in_live_range<T: Target>(
+    function: &MFunction<T::Class>,
+    successors: &[Vec<usize>],
+    predecessors: &[Vec<usize>],
+    v: u32,
+    copy_block: usize,
+    copy_at: usize,
+    p: RegId,
+) -> bool {
+    let reads =
+        |inst: &Inst| inst.operands.iter().any(|operand| matches!(operand, Operand::Use(Reg::Virt(u)) if *u == v));
+    let writes = |inst: &Inst| {
+        inst.operands
+            .iter()
+            .any(
+                |operand| matches!(
+                    operand,
+                    Operand::Def(Reg::Phys(q)) if T::root(*q) == T::root(p)
+                ),
+            )
+    };
+    if function
+        .blocks
+        .iter()
+        .flat_map(|block| &block.phis)
+        .any(|phi| phi.incoming.iter().any(|(_, r)| *r == Reg::Virt(v)))
+    {
+        return true;
+    }
+    // the last use of `v` in each block, and the blocks `v` is live into
+    let mut last_use = vec![None; function.blocks.len()];
+    let mut live_in = vec![false; function.blocks.len()];
+    let mut work = Vec::new();
+    for (b, block) in function.blocks.iter().enumerate() {
+        for (i, inst) in block.insts.iter().enumerate() {
+            if reads(inst) {
+                last_use[b] = Some(i);
+                if (b, i) != (copy_block, copy_at) && (b != copy_block || i < copy_at) && !live_in[b] {
+                    live_in[b] = true;
+                    work.push(b);
+                }
+            }
+        }
+    }
+    while let Some(b) = work.pop() {
+        for &before in &predecessors[b] {
+            if before != copy_block && !live_in[before] {
+                live_in[before] = true;
+                work.push(before);
+            }
+        }
+    }
+    for (b, block) in function.blocks.iter().enumerate() {
+        let live_out = successors[b].iter().any(|&to| live_in[to]);
+        let from = if b == copy_block { copy_at + 1 } else { 0 };
+        let to = if live_out {
+            block.insts.len()
+        } else if live_in[b] || b == copy_block {
+            last_use[b].map_or(from, |last| (last + 1).max(from))
+        } else {
+            continue;
+        };
+        if block.insts.get(from..to).is_some_and(|range| range.iter().any(writes)) {
+            return true;
+        }
+    }
+    false
 }
 
 /// A node of the interference graph: a virtual register, or a physical one by

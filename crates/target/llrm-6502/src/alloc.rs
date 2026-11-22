@@ -17,6 +17,7 @@ use llrm_codegen::model::ir::Loc;
 use llrm_codegen::model::lir::Insn;
 use llrm_lir::registers::RegId;
 use llrm_spike_mf::commute_accumulator;
+use llrm_spike_mf::mfunc::{FLAG_C, FLAG_N, FLAG_V, FLAG_Z};
 use llrm_spike_mf::regalloc::{successors, two_address};
 use llrm_spike_mf::spill::allocate_spilling;
 use llrm_spike_mf::{
@@ -433,6 +434,12 @@ fn is_cell(register: RegId) -> bool {
 pub struct Mos<const STACK: bool>;
 
 impl<const STACK: bool> Target for Mos<STACK> {
+    /// `inc`/`dec` keep carry in `x`, `y` and a cell; in `a` they are `clc;
+    /// adc #1`.
+    fn keeping_flags(class: &Class) -> Option<Class> {
+        Some(Class(class.0 & !Class::A)).filter(|narrowed| narrowed.0 != 0 && narrowed.0 != class.0)
+    }
+
     /// A shift by one steps a zero-page cell as it is (`asl rc2; rol rc3`).
     fn writes_memory_in_place(name: &str) -> bool {
         matches!(name, "SHL1" | "SRL1")
@@ -1447,6 +1454,11 @@ impl Builder {
         if matches!(inst.kind, Kind::Op("LDI" | "LDS")) {
             inst.sets_flags = true;
         }
+        // `inc` and `dec` set N and Z and keep carry
+        if matches!(inst.kind, Kind::Op("INC" | "DEC")) {
+            inst.sets_flags = true;
+            inst.flags_kept = FLAG_C | FLAG_V;
+        }
         if inst.origin == 0 {
             inst.origin = self.origin;
         }
@@ -2435,8 +2447,9 @@ pub fn build_with_places(
                 b.define(name(&o[0])?);
                 let (d, a) = (b.byte(name(&o[0])?)?, b.byte(name(&o[1])?)?);
                 let step = if inst.opcode == op::INC8 { "INC" } else { "DEC" };
-                b.copy(d, a);
-                b.push(Inst::new(Kind::Op(step), vec![Operand::Def(d), Operand::Use(d)]));
+                let mut bump = Inst::new(Kind::Op(step), vec![Operand::Def(d), Operand::Use(a)]);
+                bump.ties = vec![(0, 1)];
+                b.push(bump);
             }
             op::AND8 => b.alu("AND", None, name(&o[0])?, name(&o[1])?, name(&o[2])?)?,
             op::OR8 => b.alu("ORA", None, name(&o[0])?, name(&o[1])?, name(&o[2])?)?,
@@ -2568,9 +2581,11 @@ pub fn build_with_places(
             // one `x`
             op::LDAX | op::STAX | op::LDAX16 | op::STAX16 => {
                 indexed_address(&o[1], &o[2]).map_err(Unsupported)?;
-                let (acc, x) = (Reg::Phys(reg::A), Reg::Phys(reg::X));
+                let acc = Reg::Phys(reg::A);
                 let index = b.byte(name(&o[3])?)?;
-                b.copy(x, index);
+                // `abs,x` and `abs,y` both exist: the index lives in either
+                // (llvm-mos `LDAAbsIdx`/`STAbsIdx`, index class `XY`)
+                let x = b.copy_to_class(index, Class(Class::X | Class::Y));
                 let wide = matches!(inst.opcode, op::LDAX16 | op::STAX16);
                 let load = matches!(inst.opcode, op::LDAX | op::LDAX16);
                 let halves = if load {
@@ -2989,6 +3004,11 @@ pub fn build_with_places(
                 let mut branch = Inst::new(Kind::Op(mnemonic), vec![target, Operand::Use(Reg::Phys(reg::FLAGS))]);
                 branch.terminator = true;
                 branch.reads_flags = true;
+                branch.flags_read = match code {
+                    op::BEQ | op::BNE => FLAG_Z,
+                    op::BCC | op::BCS => FLAG_C,
+                    _ => FLAG_N,
+                };
                 b.push(branch);
             }
             op::JMP | op::BRA => {
@@ -4231,6 +4251,26 @@ fn save_preserved<const STACK: bool>(
     true
 }
 
+/// The frame is opened before an instruction addresses a slot: a slot is
+/// addressed from the adjusted stack pointer (`slot_offset`), and the
+/// arguments that arrive in `a` are copied out first, so the prologue's
+/// `ADJSP` can come after the copies and under a register save or a spill of
+/// one (arg_registers_abi, hand-sunk `deep`: a save written above the frame
+/// into the caller's slot, and the run HALTs). `ADJSP` keeps an argument still
+/// in `a` on the stack around itself.
+fn open_frame_before_slots(function: &mut MFunction<Class>) {
+    let entry = &mut function.blocks[0].insts;
+    let Some(open) = entry.iter().position(|inst| inst.kind == Kind::Op("ADJSP")) else { return };
+    let addresses_slot = |inst: &Inst| {
+        matches!(inst.kind, Kind::Op("SPILL" | "RELOAD"))
+            || inst.operands.iter().any(|o| matches!(o, Operand::Frame(_)))
+    };
+    if let Some(first) = entry[..open].iter().position(addresses_slot) {
+        let adjust = entry.remove(open);
+        entry.insert(first, adjust);
+    }
+}
+
 /// Whether `inst` tests only the zero or sign flag: `beq`, `bne`, `bmi`, `bpl`,
 /// or a select or set whose condition code (the last immediate, before the
 /// flags it reads) is one of those.
@@ -4245,35 +4285,6 @@ fn reads_zero_or_sign_only(inst: &Inst) -> bool {
             .is_some_and(|code| matches!(code, 0 | 1 | 4 | 5)),
         _ => false,
     }
-}
-
-/// The odds of a branch out of a loop, as `BranchProbabilityInfo`'s loop
-/// heuristic gives them with no profile: the edge that stays in the innermost
-/// loop of its block takes 124 of 128, the edge that leaves it the rest.
-fn loop_odds(function: &MFunction<Class>) -> llrm_spike_mf::placement::Odds {
-    use llrm_mir::blockfrequency::BranchProbability;
-    let cfg = llrm_spike_mf::cfg::Cfg::new(function);
-    let mut odds = llrm_spike_mf::placement::Odds::default();
-    for (from, succs) in cfg.succs.iter().enumerate() {
-        if succs.len() != 2 {
-            continue;
-        }
-        let innermost = cfg
-            .loops()
-            .iter()
-            .filter(|(_, body)| body[from])
-            .min_by_key(|(_, body)| body.iter().filter(|b| **b).count());
-        let Some((_, body)) = innermost else { continue };
-        let leaves: Vec<bool> = succs.iter().map(|&to| !body[to]).collect();
-        if leaves[0] == leaves[1] {
-            continue;
-        }
-        for (rank, &to) in succs.iter().enumerate() {
-            let share = if leaves[rank] { 4 } else { 124 };
-            odds.insert((function.blocks[from].id, function.blocks[to].id), (BranchProbability::new(share, 128), rank));
-        }
-    }
-    odds
 }
 
 /// `labels` with a label for each block the folding added, numbered past the
@@ -4319,6 +4330,10 @@ fn emit_with<const STACK: bool>(
         call_compact_routines(&mut function);
     }
     keep_carry_in_c(&mut function);
+    // `LLRM_6502_NO_LICM` is the kill switch, for an A/B of one binary
+    if std::env::var_os("LLRM_6502_NO_LICM").is_none() {
+        crate::licm::hoist(&mut function);
+    }
     let sunk = sink && machine_sink_in_place::<Mos<STACK>>(&mut function);
     let shared = share && crate::sharecmp::share_compares(&mut function);
     if crate::cmpzero::drop_zero_compares(&mut function) {
@@ -4330,6 +4345,9 @@ fn emit_with<const STACK: bool>(
     two_address(&mut function);
     let (assignment, mut slots) = allocate::<STACK>(&mut function)?;
     save_preserved::<STACK>(&mut function, &assignment, &mut slots);
+    if STACK {
+        open_frame_before_slots(&mut function);
+    }
     let size_of = |class: &Class| if class.0 & Class::P != 0 { 2 } else { 1 };
     // On the stack, spills sit above the locals, in the frame: the bytes of
     // the slots (`spilled`) are added to the frame, and a frame object beyond
@@ -4346,6 +4364,11 @@ fn emit_with<const STACK: bool>(
     let has_frame = all.clone().any(|i| i.kind == Kind::Op("ADJSP"));
     let slot_offset = |slot: i32| -> i64 {
         old + slots.iter().take_while(|(s, _)| *s != slot).map(|(_, class)| size_of(class) as i64).sum::<i64>()
+    };
+    // an incoming argument is read through the stack pointer at its offset from
+    // the entry; the slots added to the frame sit below it
+    let rebase = |pointer: RegId, off: i64| {
+        if STACK && register_name(lane(pointer, 0)) == "rc0" && off >= old { off + spilled } else { off }
     };
     let at = |r: Reg| match r {
         Reg::Virt(v) => assignment.0[v as usize],
@@ -4375,7 +4398,7 @@ fn emit_with<const STACK: bool>(
     // tail merging splits blocks: a block it makes has no label of the source's
     let labels = &labels_with_new_blocks(labels, &function);
     let moved = place && {
-        let odds = loop_odds(&function);
+        let odds = llrm_spike_mf::placement::loop_odds(&function);
         llrm_spike_mf::placement::place_blocks_counting::<Class, Mos<STACK>>(&mut function, &odds, false, true)
     };
     let after = live_after(&function, &at);
@@ -4558,7 +4581,8 @@ fn emit_with<const STACK: bool>(
                     [_, _, _, Operand::Imm(off), _],
                 ) => {
                     let (op, p) = (step[..3].to_lowercase(), register_name(lane(regs[2], 0)));
-                    if cmos && *off == 0 {
+                    let off = rebase(regs[2], *off);
+                    if cmos && off == 0 {
                         writeln!(out, "  {op} ({p})").unwrap()
                     } else {
                         writeln!(out, "  ldy #{off}\n  {op} ({p}),y").unwrap()
@@ -4571,16 +4595,19 @@ fn emit_with<const STACK: bool>(
                 (Kind::Op("STPX"), _) => writeln!(out, "  sta ({}),y", register_name(lane(regs[1], 0))).unwrap(),
                 (Kind::Op("LDPYZ"), [_, _, Operand::Imm(off), _]) => {
                     let p = register_name(lane(regs[1], 0));
-                    if cmos && *off == 0 {
+                    let off = rebase(regs[1], *off);
+                    if cmos && off == 0 {
                         writeln!(out, "  lda ({p})").unwrap()
                     } else {
                         writeln!(out, "  ldy #{off}\n  lda ({p}),y").unwrap()
                     }
                 }
                 (Kind::Op("LDPY"), [_, _, Operand::Imm(off), _]) => {
+                    let off = rebase(regs[1], *off);
                     writeln!(out, "  ldy #{off}\n  lda ({}),y", register_name(lane(regs[1], 0))).unwrap()
                 }
                 (Kind::Op("STPY"), [_, _, Operand::Imm(off), _]) => {
+                    let off = rebase(regs[1], *off);
                     writeln!(out, "  ldy #{off}\n  sta ({}),y", register_name(lane(regs[1], 0))).unwrap()
                 }
                 (Kind::Op("LDP0"), _) => writeln!(out, "  lda ({})", register_name(lane(regs[1], 0))).unwrap(),
@@ -4695,8 +4722,12 @@ fn emit_with<const STACK: bool>(
                 // `x >> 7` and `x << 7` of a byte: four bytes, not seven shifts
                 (Kind::Op("TOPBIT"), _) => out.push_str("  asl a\n  lda #0\n  rol a\n"),
                 (Kind::Op("LOWBIT"), _) => out.push_str("  lsr a\n  lda #0\n  ror a\n"),
-                (Kind::Op("LDAX"), [_, Operand::Symbol(symbol, _), _]) => writeln!(out, "  lda {symbol},x").unwrap(),
-                (Kind::Op("STAX"), [_, Operand::Symbol(symbol, _), _]) => writeln!(out, "  sta {symbol},x").unwrap(),
+                (Kind::Op("LDAX"), [_, Operand::Symbol(symbol, _), _]) => {
+                    writeln!(out, "  lda {symbol},{}", register_name(regs[1])).unwrap()
+                }
+                (Kind::Op("STAX"), [_, Operand::Symbol(symbol, _), _]) => {
+                    writeln!(out, "  sta {symbol},{}", register_name(regs[1])).unwrap()
+                }
                 (Kind::Op("SAVEC"), _) => out.push_str("  lda #0\n  rol a\n"),
                 (Kind::Op("LOADC"), _) => out.push_str("  lsr a\n"),
                 (Kind::Op(step @ ("SHL1" | "SRL1")), _) => {

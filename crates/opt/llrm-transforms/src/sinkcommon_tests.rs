@@ -380,3 +380,146 @@ e:
     assert_eq!(sunk.matches("store i16").count(), 1, "{sunk}");
     assert_eq!(sunk.matches("= load i16").count(), 1, "{sunk}");
 }
+
+/// Whether a size-optimized sink at `phi_cost` changed `@f`, and `@f` after.
+fn sinked(text: &str, phi_cost: usize) -> (bool, String) {
+    let options = Options {
+        speculate_blocks: false,
+        sink_common_insts: true,
+        sink_common_phi_cost: phi_cost,
+        ..Default::default()
+    };
+    let mut module = parsed(text);
+    let outer = Outer::of(&module, None);
+    let layout = DataLayout::default();
+    let spec = Speculation { tti: &llrm_mir::tti::Basic, layout: &layout, outer: &outer };
+    let mut declared = Declared::of(&module);
+    let (context, function) = module.function_mut("f").expect("@f");
+    let changed = simplified_with(&options, context, &spec, &mut declared, function);
+    (changed, printed(&module))
+}
+
+/// A size-optimized sink pays where the instructions it saves outnumber its
+/// phis' moves: one store behind a phi of its two values costs its arms what
+/// the sink saves. In QuickrBasic `exec.c` the one-instruction sinks into the
+/// dispatch loop cost -Os `sng_math` +2.08% and `int_math` +1.92% instructions.
+#[test]
+fn test_a_sink_no_longer_than_its_phis_is_left() {
+    let text = "define void @f(i16 %p, i16 %q, ptr %g, i1 %c) {
+b0:
+  br i1 %c, label %b1, label %b2
+
+b1:
+  store i16 %p, ptr %g
+  br label %e
+
+b2:
+  store i16 %q, ptr %g
+  br label %e
+
+e:
+  ret void
+}
+";
+    let (sunk, _) = sinked(text, 0);
+    assert!(sunk, "a one-instruction sink behind a phi is made where the target prices no phi");
+    let (changed, after) = sinked(text, 1);
+    assert!(!changed, "one saved instruction does not pay for one phi:\n{after}");
+    assert_eq!(after, text);
+}
+
+/// The price is the phis, not the length: a store of the same value on both
+/// arms needs no phi, and is sunk where a phi costs an instruction.
+#[test]
+fn test_a_sink_that_needs_no_phi_pays_at_any_price() {
+    let text = "define void @f(i16 %p, i16 %q, ptr %g, ptr %h, i1 %c) {
+b0:
+  br i1 %c, label %b1, label %b2
+
+b1:
+  store i16 %q, ptr %h
+  store i16 %p, ptr %g
+  br label %e
+
+b2:
+  store i16 %p, ptr %g
+  br label %e
+
+e:
+  ret void
+}
+";
+    let (sunk, after) = sinked(text, 1);
+    assert!(sunk, "{after}");
+    assert_eq!(after.matches("store i16 %p, ptr %g").count(), 1, "{after}");
+}
+
+/// A phi costs a move on every arm: one store of three values into a join of
+/// three jumps saves two stores and adds a phi of three moves. Priced one
+/// instruction per phi, it was sunk: QuickrBasic `exec.c`'s dispatch kept its
+/// -Os `sng_math` +3.1% instructions.
+#[test]
+fn test_a_sink_behind_a_phi_of_many_arms_is_left() {
+    let text = "define void @f(i16 %p, i16 %q, i16 %r, ptr %g, i32 %c) {
+b0:
+  switch i32 %c, label %b3 [
+    i32 0, label %b1
+    i32 1, label %b2
+  ]
+
+b1:
+  store i16 %p, ptr %g
+  br label %e
+
+b2:
+  store i16 %q, ptr %g
+  br label %e
+
+b3:
+  store i16 %r, ptr %g
+  br label %e
+
+e:
+  ret void
+}
+";
+    let (sunk, _) = sinked(text, 0);
+    assert!(sunk, "sunk where the target prices no phi");
+    let (changed, after) = sinked(text, 1);
+    assert!(!changed, "two saved stores do not pay for a phi of three moves:\n{after}");
+}
+
+/// SROA cannot speculate a store through a select of allocas: sinking the
+/// two arms' stores of `a[i++]` / `a[j++]` (counters still on the stack) made
+/// a select of the counters' addresses that SROA turned into a select of
+/// indices and a reload. QuickrBasic-style `x_mergesort` -Os: +22.6% clocks,
+/// 324 -> 352 B. The same arms through plain pointers are still sunk.
+#[test]
+fn test_a_store_through_a_phi_of_allocas_is_not_sunk() {
+    let arms = |i: &str, j: &str| {
+        format!(
+            "define void @f(i32 %p, ptr %u, ptr %v, i1 %c) {{
+b0:
+  %i = alloca i32
+  %j = alloca i32
+  br i1 %c, label %b1, label %b2
+
+b1:
+  store i32 %p, ptr {i}
+  br label %e
+
+b2:
+  store i32 %p, ptr {j}
+  br label %e
+
+e:
+  ret void
+}}
+"
+        )
+    };
+    let (changed, after) = sinked(&arms("%i", "%j"), 0);
+    assert!(!changed, "the alloca pointers get no phi:\n{after}");
+    let (changed, _) = sinked(&arms("%u", "%v"), 0);
+    assert!(changed, "the same arms through plain pointers are sunk");
+}

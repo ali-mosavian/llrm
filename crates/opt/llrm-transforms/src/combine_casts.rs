@@ -54,8 +54,8 @@ use llrm_mir::module::{InstId, Operand, ValueDef};
 use llrm_mir::opcode::{BinaryOp, CastOp, Flags, IntPredicate, Opcode};
 use llrm_mir::simplify::simplify_instruction_in;
 use llrm_mir::types::{Type, TypeId};
-use llrm_mir::valuetracking::pattern::{self, IntrinsicId};
 use llrm_mir::valuetracking::guarantee::SmallSet;
+use llrm_mir::valuetracking::pattern::{self, IntrinsicId};
 use llrm_mir::valuetracking::signbits::{compute_max_significant_bits, compute_num_sign_bits};
 use llrm_mir::valuetracking::{Query, known, nonzero};
 
@@ -524,7 +524,8 @@ fn can_evaluate_truncated(
     ty: TypeId,
     cxt: InstId,
 ) -> bool {
-    let mut evaluator = Evaluator { c, cxt, visited: SmallSet::default(), evaluable: SmallSet::default(), pending: Vec::new() };
+    let mut evaluator =
+        Evaluator { c, cxt, visited: SmallSet::default(), evaluable: SmallSet::default(), pending: Vec::new() };
     // Whether all users of the many-use values were visited is asked last,
     // outside the recursion.
     evaluator.can_evaluate(v, ty, Pred::Truncated) && evaluator.all_pending_visited()
@@ -539,7 +540,8 @@ fn can_evaluate_sextd(
 ) -> bool {
     // The context instruction is read by the truncating predicates only.
     let Some(cxt) = def_of(c, v) else { return can_always_evaluate_in_type(c, v, ty) };
-    let mut evaluator = Evaluator { c, cxt, visited: SmallSet::default(), evaluable: SmallSet::default(), pending: Vec::new() };
+    let mut evaluator =
+        Evaluator { c, cxt, visited: SmallSet::default(), evaluable: SmallSet::default(), pending: Vec::new() };
     evaluator.can_evaluate(v, ty, Pred::SExtd) && evaluator.all_pending_visited()
 }
 
@@ -866,6 +868,47 @@ pub fn common_cast_transforms(
     None
 }
 
+/// The math and bitwise logic cases of `narrowBinOp` (:927), for a scalar or
+/// a vector `trunc`: `op` of `op0` and `op1`, the one-use source of `inst`.
+fn narrow_math(
+    c: &mut Combiner,
+    inst: InstId,
+    op: BinaryOp,
+    op0: Operand,
+    op1: Operand,
+) -> Option<Visit> {
+    let dest_ty = c.function.instruction(inst).ty;
+    // trunc (binop C, X) --> binop (trunc C', X)
+    if matches!(op0, Operand::Constant(_))
+        && let Some(narrow_c) = fold_trunc(c, op0, dest_ty)
+    {
+        let trunc_x = c.create_cast(inst, CastOp::Trunc, op1, dest_ty, Flags::default());
+        return Some(c.replace_with_binop(inst, op, narrow_c, trunc_x, Flags::default()));
+    }
+    // trunc (binop X, C) --> binop (trunc X, C')
+    if matches!(op1, Operand::Constant(_))
+        && let Some(narrow_c) = fold_trunc(c, op1, dest_ty)
+    {
+        let trunc_x = c.create_cast(inst, CastOp::Trunc, op0, dest_ty, Flags::default());
+        return Some(c.replace_with_binop(inst, op, trunc_x, narrow_c, Flags::default()));
+    }
+    let (x0, x1) = {
+        let q = query(c, Some(inst));
+        (ext_from(c, &q, op0, dest_ty), ext_from(c, &q, op1, dest_ty))
+    };
+    // trunc (binop (ext X), Y) --> binop X, (trunc Y)
+    if let Some(x) = x0 {
+        let narrow = c.create_cast(inst, CastOp::Trunc, op1, dest_ty, Flags::default());
+        return Some(c.replace_with_binop(inst, op, x, narrow, Flags::default()));
+    }
+    // trunc (binop Y, (ext X)) --> binop (trunc Y), X
+    if let Some(x) = x1 {
+        let narrow = c.create_cast(inst, CastOp::Trunc, op0, dest_ty, Flags::default());
+        return Some(c.replace_with_binop(inst, op, narrow, x, Flags::default()));
+    }
+    None
+}
+
 /// `narrowBinOp` (:914): pull a truncate ahead of a math or bitwise logic
 /// instruction.
 fn narrow_bin_op(
@@ -889,33 +932,8 @@ fn narrow_bin_op(
     };
     match op {
         BinaryOp::And | BinaryOp::Or | BinaryOp::Xor | BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul => {
-            // trunc (binop C, X) --> binop (trunc C', X)
-            if matches!(op0, Operand::Constant(_))
-                && let Some(narrow_c) = fold_trunc(c, op0, dest_ty)
-            {
-                let trunc_x = c.create_cast(inst, CastOp::Trunc, op1, dest_ty, Flags::default());
-                return Some(c.replace_with_binop(inst, op, narrow_c, trunc_x, Flags::default()));
-            }
-            // trunc (binop X, C) --> binop (trunc X, C')
-            if matches!(op1, Operand::Constant(_))
-                && let Some(narrow_c) = fold_trunc(c, op1, dest_ty)
-            {
-                let trunc_x = c.create_cast(inst, CastOp::Trunc, op0, dest_ty, Flags::default());
-                return Some(c.replace_with_binop(inst, op, trunc_x, narrow_c, Flags::default()));
-            }
-            let (x0, x1) = {
-                let q = query(c, Some(inst));
-                (ext_from(c, &q, op0, dest_ty), ext_from(c, &q, op1, dest_ty))
-            };
-            // trunc (binop (ext X), Y) --> binop X, (trunc Y)
-            if let Some(x) = x0 {
-                let narrow = c.create_cast(inst, CastOp::Trunc, op1, dest_ty, Flags::default());
-                return Some(c.replace_with_binop(inst, op, x, narrow, Flags::default()));
-            }
-            // trunc (binop Y, (ext X)) --> binop (trunc Y), X
-            if let Some(x) = x1 {
-                let narrow = c.create_cast(inst, CastOp::Trunc, op0, dest_ty, Flags::default());
-                return Some(c.replace_with_binop(inst, op, narrow, x, Flags::default()));
+            if let Some(r) = narrow_math(c, inst, op, op0, op1) {
+                return Some(r);
             }
         }
         BinaryOp::LShr | BinaryOp::AShr => {
@@ -1175,11 +1193,78 @@ fn trunc_to_bool(
     None
 }
 
+/// The element type and count of the integer vector `ty`.
+fn int_vector_of(
+    c: &Combiner,
+    ty: TypeId,
+) -> Option<(TypeId, u32)> {
+    let Type::Vector { element, count } = *c.context.types.get(ty) else { return None };
+    c.context.types.int_bits(element).map(|_| (element, count))
+}
+
+/// `visitTrunc` of integer vectors: `narrowBinOp` (:914, the math and bitwise
+/// logic cases), `shrinkSplatShuffle` (:1000) and `shrinkInsertElt` (:1025).
+/// DEVIATE 1: `commonCastTransforms`, `canEvaluateTruncated`, demanded bits
+/// and the shift cases of `narrowBinOp` are not applied to vectors.
+pub(crate) fn visit_vector_trunc(
+    c: &mut Combiner,
+    inst: InstId,
+) -> Option<Visit> {
+    let src = c.function.instruction(inst).operands[0];
+    let dest_ty = c.function.instruction(inst).ty;
+    let (_, src_count) = int_vector_of(c, c.type_of(src))?;
+    let (dest_element, dest_count) = int_vector_of(c, dest_ty)?;
+    if src_count != dest_count || !shared::has_one_use(c, src) {
+        return None;
+    }
+    let (opcode, operands) = {
+        let (_, one) = query(c, Some(inst)).instruction_of(src)?;
+        (one.opcode.clone(), one.operands.clone())
+    };
+    match (opcode, &operands[..]) {
+        // `narrowBinOp`: no `shouldChangeType` test for vectors.
+        (
+            Opcode::Binary(
+                op @ (BinaryOp::And | BinaryOp::Or | BinaryOp::Xor | BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul),
+            ),
+            &[a, b],
+        ) => narrow_math(c, inst, op, a, b),
+        // trunc (shuf X, poison, SplatMask) --> shuf (trunc X), poison,
+        // SplatMask
+        (Opcode::ShuffleVector(mask), &[vector, second]) if c.is_poison_value(second) => {
+            let mut lanes = mask.iter().filter(|&&lane| lane >= 0);
+            let first = lanes.next()?;
+            if !lanes.all(|lane| lane == first) {
+                return None;
+            }
+            let (_, vector_count) = int_vector_of(c, c.type_of(vector))?;
+            if dest_count < vector_count {
+                return None;
+            }
+            let narrow_ty = c.context.types.intern(Type::Vector { element: dest_element, count: vector_count });
+            let narrow = c.create_cast(inst, CastOp::Trunc, vector, narrow_ty, Flags::default());
+            let poison = c.poison(narrow_ty);
+            Some(c.replace_with_new(inst, Opcode::ShuffleVector(mask), dest_ty, vec![narrow, poison], Flags::default()))
+        }
+        // trunc (inselt poison, X, Index) --> inselt poison, (trunc X), Index
+        (Opcode::InsertElement, &[vector, element, index]) if c.is_poison_value(vector) => {
+            let narrow = c.create_cast(inst, CastOp::Trunc, element, dest_element, Flags::default());
+            let poison = c.poison(dest_ty);
+            let operands = vec![poison, narrow, index];
+            Some(c.replace_with_new(inst, Opcode::InsertElement, dest_ty, operands, Flags::default()))
+        }
+        _ => None,
+    }
+}
+
 /// `InstCombinerImpl::visitTrunc` (:1045).
 pub fn visit_trunc(
     c: &mut Combiner,
     inst: InstId,
 ) -> Visit {
+    if let Some(r) = visit_vector_trunc(c, inst) {
+        return r;
+    }
     if too_wide(c, inst) {
         return Visit::None;
     }
@@ -1291,8 +1376,6 @@ pub fn visit_trunc(
     if let Some(r) = narrow_bin_op(c, inst) {
         return r;
     }
-
-    // DEVIATE 1: shrinkSplatShuffle, shrinkInsertElt.
 
     if shared::has_one_use(c, src) && should_change_type(c, src_w, dest_w) {
         // Transform "trunc (shl X, cst)" -> "shl (trunc X), cst" so long as the
@@ -1485,6 +1568,25 @@ fn transform_zext_icmp(
                     return Some(Visit::Replace(create_int_cast(c, inst, value, zext_ty, false)));
                 }
             }
+        }
+    }
+    // DEVIATE X64-TRUTH-XOR: zext (X != Y) --> X ^ Y where X and Y are each 0 or
+    // 1 (GCC `simplify_truth_ops_using_ranges`, `vr-values.cc`).
+    if c.env.hooks.truth_compare_xor
+        && pred == IntPredicate::Ne
+        && op1_const.is_none()
+        && c.context.types.int_bits(c.type_of(op0)).is_some_and(|bits| bits > 1)
+        && shared::has_one_use(c, c.function.instruction(inst).operands[0])
+    {
+        let bits = width(c, op0);
+        let only_low_bit = {
+            let q = query(c, Some(inst));
+            let low = |v| !known::compute_known_bits(&q, v, 0).zero & mask(bits) <= 1;
+            low(op0) && low(op1)
+        };
+        if only_low_bit {
+            let xor = c.create_binop(inst, BinaryOp::Xor, op0, op1, Flags::default());
+            return Some(Visit::Replace(create_int_cast(c, inst, xor, zext_ty, false)));
         }
     }
     if matches!(pred, IntPredicate::Eq | IntPredicate::Ne) {

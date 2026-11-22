@@ -190,7 +190,7 @@ use llrm_mir::facts::{Fact, Facts};
 use llrm_mir::footprint::Footprint;
 use llrm_mir::memory::Callees;
 use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef};
-use llrm_mir::opcode::{Flags, IntPredicate, Opcode, Tail};
+use llrm_mir::opcode::{Attribute, Flags, IntPredicate, Opcode, Tail};
 use llrm_mir::passes::{Analyses, Declared, FunctionPass, PreservedAnalyses, Unit};
 
 use crate::twoentryphi::{self, Speculation};
@@ -232,7 +232,25 @@ impl FunctionPass for SimplifyCfg {
             info: analyses.get::<llrm_mir::passes::Loops>(&*unit.context, unit.layout, &*unit.function),
             cfg_epoch: unit.function.epochs().cfg,
         };
-        if simplified_with_known(&self.options, unit.context, &spec, unit.declared, unit.function, Some(&known)) {
+        // DEVIATE SINK-COMMON-SIZE: where the target asks, a function optimized
+        // for size sinks in every slot (the pin's `-sink-common-insts`), not
+        // the late one only.
+        let mut options = self.options;
+        let for_size = unit
+            .function
+            .attrs
+            .iter()
+            .any(
+                |attr| matches!(
+                    attr,
+                    Attribute::Flag(flag) if flag == "optsize" || flag == "minsize"
+                ),
+            );
+        options.sink_common_insts |= for_size && tti.sink_common_at_size();
+        if for_size {
+            options.sink_common_phi_cost = tti.sink_common_phi_cost();
+        }
+        if simplified_with_known(&options, unit.context, &spec, unit.declared, unit.function, Some(&known)) {
             PreservedAnalyses::none()
         } else {
             PreservedAnalyses::all()
@@ -259,6 +277,9 @@ pub struct Options {
     pub hoist_common_insts: bool,
     /// `SinkCommonInsts`: sink the code every jump into a block shares.
     pub sink_common_insts: bool,
+    /// The cost of each phi a sink creates (the pin: none;
+    /// `Tuning::sink_common_phi_cost`).
+    pub sink_common_phi_cost: usize,
     /// `ForwardSwitchCondToPhi`.
     pub forward_switch_cond_to_phi: bool,
     /// `ConvertSwitchRangeToICmp`.
@@ -283,6 +304,7 @@ impl Options {
         speculate_blocks: true,
         hoist_common_insts: true,
         sink_common_insts: true,
+        sink_common_phi_cost: 0,
         forward_switch_cond_to_phi: true,
         convert_switch_range_to_icmp: true,
         convert_switch_to_arithmetic: true,
@@ -306,6 +328,7 @@ impl Options {
         speculate_blocks: true,
         hoist_common_insts: false,
         sink_common_insts: false,
+        sink_common_phi_cost: 0,
         forward_switch_cond_to_phi: false,
         convert_switch_range_to_icmp: true,
         convert_switch_to_arithmetic: true,
@@ -322,6 +345,7 @@ impl Default for Options {
             speculate_blocks: true,
             hoist_common_insts: false,
             sink_common_insts: false,
+            sink_common_phi_cost: 0,
             forward_switch_cond_to_phi: false,
             convert_switch_range_to_icmp: true,
             convert_switch_to_arithmetic: false,
@@ -507,7 +531,7 @@ fn block_simplified(
     }
     changed |= cfg::merged_into_predecessor(function, block);
     if options.sink_common_insts && function.is_placed(block) {
-        if sinkcommon::sunk(context, spec, function, block) {
+        if sinkcommon::sunk(context, spec, function, block, options.sink_common_phi_cost) {
             return true;
         }
         if !(options.need_canonical_loop && headers.contains(&block))

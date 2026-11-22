@@ -66,6 +66,9 @@ enum Dimension {
     KeepSwitch,
     /// DEVIATE LIR-COPY-TRIAL: a copy loop of an unknown count stays a loop.
     KeepCopyLoop,
+    /// DEVIATE INLINEHINT-GROWTH-TRIAL: the -Os size guard binds an
+    /// `inlinehint` callee too.
+    KeepHintedCalls,
 }
 
 /// What the base compile noted for each dimension.
@@ -77,6 +80,7 @@ struct Noted {
     latched: Vec<String>,
     lookups: usize,
     copied: Vec<String>,
+    hinted: Vec<String>,
 }
 
 impl Noted {
@@ -90,6 +94,7 @@ impl Noted {
             latched: trial::take_latch_copies(),
             lookups: trial::take_lookup_tables(),
             copied: trial::take_copy_calls(),
+            hinted: trial::take_hint_yields(),
         };
         trial::clear_rotated_loops();
         noted
@@ -106,6 +111,7 @@ impl Noted {
             Dimension::KeepLatch => !self.latched.is_empty(),
             Dimension::KeepSwitch => self.lookups > 0,
             Dimension::KeepCopyLoop => !self.copied.is_empty(),
+            Dimension::KeepHintedCalls => !self.hinted.is_empty(),
         }
     }
 }
@@ -133,6 +139,9 @@ impl Dimension {
         if tti.jump_threading_latch_trial_at_size() && !llrm_support::env_flag!("LLRM_NO_JT_LATCH_TRIAL") {
             all.push(Dimension::KeepLatch);
         }
+        if tti.opt_size_inline_guard_yields_to_inlinehint() && !llrm_support::env_flag!("LLRM_NO_INLINEHINT_TRIAL") {
+            all.push(Dimension::KeepHintedCalls);
+        }
         if let Some(limit) = tti.unroll_trial_at_size().filter(|_| !NO_SIZE_UNROLL.with(|one| one.get())) {
             all.push(Dimension::Unroll { limit, bytes_strict: tti.unroll_trial_bytes_strict() });
         }
@@ -151,6 +160,7 @@ impl Dimension {
             Dimension::KeepLatch => trial::with_kept_latches(body),
             Dimension::KeepSwitch => trial::with_refused_lookup_tables(body),
             Dimension::KeepCopyLoop => trial::with_kept_copy_loops(body),
+            Dimension::KeepHintedCalls => trial::with_kept_hinted_calls(body),
         }
     }
 
@@ -163,6 +173,14 @@ impl Dimension {
         matches!(self, Dimension::Unroll { .. })
     }
 
+    /// Whether the two compiles are priced with each callee's body weighted by
+    /// the calls that reach it. A trial that moves work between a function and
+    /// its callees (a hinted callee kept as a call, a table the callee holds)
+    /// is not priced by the function alone.
+    fn prices_called_work(self) -> bool {
+        matches!(self, Dimension::KeepLatch | Dimension::KeepSwitch | Dimension::KeepHintedCalls)
+    }
+
     /// Whether the reversed compile is kept over the base, `bytes` and `work`
     /// being the finished modules'.
     fn keeps(
@@ -170,6 +188,7 @@ impl Dimension {
         noted: &Noted,
         (kept_sizes, kept_work): (Sizes, Option<f64>),
         (other_sizes, other_work): (Sizes, Option<f64>),
+        cap: Option<i64>,
     ) -> bool {
         // A bytes-strict unroll trial compares the code alone: the constants a
         // loop's removal frees are data, which a code-size column does
@@ -180,6 +199,7 @@ impl Dimension {
         let added = other_bytes - kept_bytes;
         let work = |one: Option<f64>| one.unwrap_or(0.0);
         let saved = (work(kept_work) - work(other_work)).round() as i64;
+        let base_work = work(kept_work).round() as i64;
         let measured = kept_work.is_some() && other_work.is_some();
         let (what, pays) = match self {
             // The unrotated object is smaller; the rotated one stays if it
@@ -193,9 +213,14 @@ impl Dimension {
                 ("rotation-hot", measured && trial::keeps_rotation_hot(saved, added, noted.left.1, bytes))
             }
             // The object without the latch copies is smaller.
-            Dimension::KeepLatch => ("keep-latch", trial::keeps_at_size(added)),
-            Dimension::KeepSwitch => ("keep-switch", trial::keeps_at_size(added)),
+            Dimension::KeepLatch => ("keep-latch", trial::keeps_smaller_at_size(added, saved, base_work, cap)),
+            Dimension::KeepSwitch => ("keep-switch", trial::keeps_smaller_at_size(added, saved, base_work, cap)),
+            // The cap does not apply: whether the loop or the call runs less
+            // depends on the words copied, which the compiler does not see
+            // (x_transpose, 32 words a row, runs 14% less as the call;
+            // x_mergesort, a few words, 22% less as the loop).
             Dimension::KeepCopyLoop => ("keep-copy-loop", trial::keeps_at_size(added)),
+            Dimension::KeepHintedCalls => ("keep-hinted-calls", trial::keeps_smaller_at_size(added, saved, base_work, cap)),
             Dimension::Unroll { bytes_strict, .. } => {
                 ("unroll-os", measured && trial::keeps_unroll_at_size(saved, added, noted.unroll.0.len(), bytes_strict))
             }
@@ -230,18 +255,53 @@ fn rotation_work(
     built: &masm::Module,
     options: &Options,
     proven: bool,
+    called: bool,
 ) -> Option<f64> {
     let cpu = options.cpu().ok()?;
-    built
-        .procedures
-        .iter()
-        .map(|one| {
-            let done = if proven { executed::executed(&one.body)? } else { executed::executed_unproven(&one.body)? };
-            let jumps = done.jump_cycles(cpu).ok()?;
-            let exchanges = done.exchange_cycles(cpu).ok()?;
-            Some(done.instructions - done.branches - done.jumps + done.memory + jumps + exchanges)
-        })
-        .sum::<Option<f64>>()
+    let own = |one: &masm::Procedure| -> Option<(f64, Vec<(String, f64)>)> {
+        let done = if proven { executed::executed(&one.body)? } else { executed::executed_unproven(&one.body)? };
+        let jumps = done.jump_cycles(cpu).ok()?;
+        let exchanges = done.exchange_cycles(cpu).ok()?;
+        let work = done.instructions - done.branches - done.jumps + done.memory + jumps + exchanges;
+        let calls = done
+            .calls
+            .iter()
+            .filter_map(|(at, runs)| one.callees.get(at).map(|callee| (callee.name.clone(), *runs)))
+            .collect();
+        Some((work, calls))
+    };
+    let each = built.procedures.iter().map(own).collect::<Option<Vec<_>>>()?;
+    if !called {
+        return Some(each.iter().map(|(work, _)| work).sum());
+    }
+    // Each function's work weighted by how often a call of the module's roots
+    // runs it: a callee body is paid once for every call that reaches it. A
+    // function nothing in the module calls is a root; a call along a cycle
+    // adds nothing (the weights are made in one pass, callers first).
+    let at: std::collections::BTreeMap<&str, usize> =
+        built.procedures.iter().enumerate().map(|(index, one)| (one.name.as_str(), index)).collect();
+    let mut callers = vec![0usize; each.len()];
+    for (index, (_, calls)) in each.iter().enumerate() {
+        for (callee, _) in calls {
+            if let Some(&to) = at.get(callee.as_str()).filter(|&&to| to != index) {
+                callers[to] += 1;
+            }
+        }
+    }
+    let mut weight: Vec<f64> = callers.iter().map(|&n| if n == 0 { 1.0 } else { 0.0 }).collect();
+    let mut ready: Vec<usize> = (0..each.len()).filter(|&index| callers[index] == 0).collect();
+    while let Some(index) = ready.pop() {
+        for (callee, runs) in &each[index].1 {
+            let Some(&to) = at.get(callee.as_str()).filter(|&&to| to != index) else { continue };
+            weight[to] += weight[index] * runs;
+            callers[to] -= 1;
+            if callers[to] == 0 {
+                ready.push(to);
+            }
+        }
+    }
+    // What a cycle left unreached is paid once.
+    Some(each.iter().zip(&weight).map(|((work, _), weight)| work * if *weight == 0.0 { 1.0 } else { *weight }).sum())
 }
 
 /// The unpadded bytes of a finished module: its functions' code and its data
@@ -400,6 +460,7 @@ fn compiled_module_at_size(
     if active.is_empty() {
         return with_leaf_trial(base, name, options, unpadded);
     }
+    let cap = options.cpu().ok().and_then(|cpu| cpu.target().tti()).and_then(|tti| tti.os_trial_clock_cap_percent());
     let mut again = options.clone();
     again.dump = None;
     // A dimension that stays, with its variant assembled whole or the program
@@ -430,12 +491,12 @@ fn compiled_module_at_size(
                 .sum()
         };
         let price =
-            |one: &masm::Module| Some((unpadded(one)?, rotation_work(one, options, dimension.prices_proven_trips())));
+            |one: &masm::Module| Some((unpadded(one)?, rotation_work(one, options, dimension.prices_proven_trips(), dimension.prices_called_work())));
         if 2 * size(&base.program.modules[0], Some(&cut)) >= size(&base.program.modules[0], None) {
             let variant = built(program, name, &again)?;
             let pays = matches!(
                 (price(&base.built), price(&variant.built)),
-                (Some(a), Some(b)) if dimension.keeps(&noted, a, b)
+                (Some(a), Some(b)) if dimension.keeps(&noted, a, b, cap)
             );
             if pays {
                 kept.push((dimension, Ok(variant)));
@@ -446,7 +507,7 @@ fn compiled_module_at_size(
         let (Some(first), Some(second)) = (each(&base.program), each(&program)) else { continue };
         let pays = matches!(
             (price(&first), price(&second)),
-            (Some(a), Some(b)) if dimension.keeps(&noted, a, b)
+            (Some(a), Some(b)) if dimension.keeps(&noted, a, b, cap)
         );
         if pays {
             kept.push((dimension, Err(program)));
@@ -470,10 +531,10 @@ fn compiled_module_at_size(
         let _ = Noted::take();
         let together = built(program, name, &again)?;
         let price =
-            |one: &masm::Module| Some((unpadded(one)?, rotation_work(one, options, dimension.prices_proven_trips())));
+            |one: &masm::Module| Some((unpadded(one)?, rotation_work(one, options, dimension.prices_proven_trips(), dimension.prices_called_work())));
         let pays = matches!(
             (price(&chosen.built), price(&together.built)),
-            (Some(a), Some(b)) if dimension.keeps(&noted, a, b)
+            (Some(a), Some(b)) if dimension.keeps(&noted, a, b, cap)
         );
         if pays {
             chosen = together;

@@ -2399,6 +2399,84 @@ fn compiled(
     crate::llc::compiled(flags, m16_ir(text), name)
 }
 
+/// queens at -O3 panicked in `erase_dead_blocks` ("block N still has users")
+/// on x86_64 and in simplifycfg ("a phi entry for each edge") on arm64. A
+/// non-trivial unswitch removed the cloned parent from its successors' phis
+/// once for each distinct successor, where the pin's `successors(BB)` visits
+/// each edge: a switch with two cases to one block left a stale phi input from
+/// the dead clone.
+#[test]
+fn a_loop_unswitched_over_an_unrolled_recursion_leaves_no_phi_input_from_a_dead_block() {
+    let text = format!(
+        "target datalayout = \"@m64-datalayout@\"\ntarget triple = \"x86_64-unknown-linux-gnu\"\n{}\n",
+        r#"
+define i32 @bench_queens(i32 %0, ptr %1) {
+  %3 = call i32 @place(ptr %1, i32 0, i32 %0)
+  ret i32 %3
+}
+
+define i32 @place(ptr %0, i32 %1, i32 %2) {
+  %4 = icmp eq i32 %1, %2
+  br i1 %4, label %common.ret, label %5
+
+common.ret:                                       ; preds = %5, %3
+  ret i32 0
+
+5:                                                ; preds = %14, %3
+  %.0 = phi i32 [ %15, %14 ], [ 0, %3 ]
+  %6 = icmp slt i32 %.0, %2
+  br i1 %6, label %7, label %common.ret
+
+7:                                                ; preds = %5
+  %8 = call i32 @safe(ptr %0, i32 %1)
+  %.not = icmp eq i32 %8, 0
+  br i1 %.not, label %14, label %9
+
+9:                                                ; preds = %7
+  %10 = sext i32 %1 to i64
+  %11 = getelementptr [4 x i8], ptr %0, i64 %10
+  store i32 %.0, ptr %11, align 4
+  %12 = add i32 %1, 1
+  %13 = call i32 @place(ptr %0, i32 %12, i32 %2)
+  br label %14
+
+14:                                               ; preds = %9, %7
+  %15 = add i32 %.0, 1
+  br label %5
+}
+
+define i32 @safe(ptr %0, i32 %1) {
+  br label %3
+
+3:                                                ; preds = %12, %2
+  %.0 = phi i32 [ 0, %2 ], [ %13, %12 ]
+  %4 = icmp slt i32 %.0, %1
+  br i1 %4, label %5, label %common.ret
+
+5:                                                ; preds = %3
+  %6 = load i32, ptr %0, align 4
+  %7 = icmp eq i32 %6, 1
+  br i1 %7, label %common.ret, label %8
+
+8:                                                ; preds = %5
+  %9 = or i32 0, 0
+  %10 = or i32 0, 0
+  %11 = icmp eq i32 %6, %1
+  br i1 %11, label %common.ret, label %12
+
+common.ret:                                       ; preds = %8, %5, %3
+  %common.ret.op = phi i32 [ 0, %5 ], [ 0, %8 ], [ 1, %3 ]
+  ret i32 %common.ret.op
+
+12:                                               ; preds = %8
+  %13 = add i32 %.0, 1
+  br label %3
+}"#
+    );
+    let (built, _) = compiled(&flags(&["-m64", "-O3", "--isel=dag"]), &text, "bench_queens").unwrap();
+    assert!(llrm_codegen::backend::masm::text(&built).is_ok());
+}
+
 /// A 64-bit function whose frame is one slot (the alignment of its call)
 /// adjusted the stack with `sub rsp, 8` / `add rsp, 8`, six bytes where the pin
 /// has `push rax` / `pop rcx`.
@@ -6646,29 +6724,50 @@ fn constrained_narrow_and_unsigned_conversions_select_to_sse_at_m64() {
     }
 }
 
-/// A constrained unsigned `i64` conversion at m64 stopped the legalizer
-/// ("convert node to libcall"): x86 had no chained library call. The pin calls
-/// `__floatundidf` for `uitofp` and expands `fptoui` inline (`expandFP_TO_UINT`:
-/// a signaling compare, a subtract, two `cvttsd2si`s and an xor).
+/// A constrained `rint` of a `float` or `double` at m64 was refused ("floating instruction has no
+/// conversion rule: frndint"): the x87's instruction was chosen for a value in an SSE register. The
+/// pin calls `rintf`/`rint` (no SSE4.1), on the node's chain.
+#[test]
+fn a_constrained_rint_at_m64_calls_the_routine() {
+    for (ty, short, routine) in [("double", "f64", "rint"), ("float", "f32", "rintf")] {
+        let text = format!(
+            "target datalayout = \"@m64-datalayout@\"\ndefine {ty} @f({ty} %x) strictfp {{\n  %r = call {ty} @llvm.experimental.constrained.rint.{short}({ty} %x, metadata !\"round.dynamic\", metadata !\"fpexcept.strict\") strictfp\n  ret {ty} %r\n}}\ndeclare {ty} @llvm.experimental.constrained.rint.{short}({ty}, metadata, metadata)\n"
+        );
+        let (built, _) = compiled(&flags(&["-m64", "-O1", "--isel=dag"]), &text, "f")
+            .unwrap_or_else(|error| panic!("rint {ty}: {error:?}"));
+        let listing = llrm_codegen::backend::masm::text(&built).unwrap();
+        assert!(listing.contains(&format!("call {routine}")), "rint {ty}: no call {routine}\n{listing}");
+        assert!(!listing.contains("frndint"), "rint {ty}: x87 instruction\n{listing}");
+    }
+}
+
+/// A constrained unsigned `i64` conversion at m64 selected a compiler-rt routine
+/// (`__floatundidf`, `__fixunssfdi`) where the pin's llc emits straight code:
+/// `ExpandLegalINT_TO_FP`'s halve-convert-double with one `cvtsi2sd` and a
+/// strict `addsd` for `uitofp`, and `expandFP_TO_UINT`'s signaling compare,
+/// subtract, `cvtt` and xor for `fptoui`, `f32` sources included.
 #[test]
 fn constrained_unsigned_i64_conversions_select_as_the_pin_does_at_m64() {
-    for (arg, ret, op, wanted, unwanted) in [
-        ("i64", "double", "uitofp", "call __floatundidf", "cvt"),
-        ("double", "i64", "fptoui", "comisd", "call "),
+    for (arg, ret, op, wanted) in [
+        ("i64", "double", "uitofp", "addsd"),
+        ("i64", "float", "uitofp", "addss"),
+        ("double", "i64", "fptoui", "comisd"),
+        ("float", "i64", "fptoui", "comiss"),
     ] {
         let rounding = if op == "uitofp" { ", metadata !\"round.dynamic\"" } else { "" };
         let tail = if op == "uitofp" { "metadata, metadata" } else { "metadata" };
-        let (r, a) = (ret.replace("double", "f64"), arg.replace("double", "f64"));
+        let short = |t: &str| t.replace("double", "f64").replace("float", "f32");
+        let (r, a) = (short(ret), short(arg));
         let text = format!(
             "target datalayout = \"@m64-datalayout@\"\ndefine {ret} @f({arg} %x) strictfp {{\n  %r = call {ret} @llvm.experimental.constrained.{op}.{r}.{a}({arg} %x{rounding}, metadata !\"fpexcept.strict\") strictfp\n  ret {ret} %r\n}}\ndeclare {ret} @llvm.experimental.constrained.{op}.{r}.{a}({arg}, {tail})\n"
         );
         let (built, _) = compiled(&flags(&["-m64", "-O1", "--isel=dag"]), &text, "f")
-            .unwrap_or_else(|error| panic!("{op}: {error:?}"));
+            .unwrap_or_else(|error| panic!("{op} {arg}: {error:?}"));
         let listing = llrm_codegen::backend::masm::text(&built).unwrap();
-        assert!(listing.contains(wanted), "{op}: no {wanted}\n{listing}");
-        assert!(!listing.contains(unwanted), "{op}: has {unwanted}\n{listing}");
-        if op == "fptoui" {
-            assert_eq!(listing.matches("cvttsd2si").count(), 1, "{op}: one signed convert\n{listing}");
-        }
+        assert!(listing.contains(wanted), "{op} {arg}: no {wanted}\n{listing}");
+        assert!(!listing.contains("call "), "{op} {arg}: a routine is called\n{listing}");
+        let converts = if op == "uitofp" { "cvtsi2s" } else { "cvtts" };
+        let count = 1;
+        assert_eq!(listing.matches(converts).count(), count, "{op} {arg}: {converts} count\n{listing}");
     }
 }

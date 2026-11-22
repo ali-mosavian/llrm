@@ -376,3 +376,46 @@ b3:
     let on_x86 = hoisted_with(&X86::of_cpu("i486").expect("a cpu"), &text);
     assert_eq!(on_x86.matches("load i32").count(), 1, "{on_x86}");
 }
+
+/// Two arms ending `br %y, %e, %e` after their blocks merged, hoisted into
+/// their branch: the join's phi takes one input per edge from it. One input
+/// short, `simplifycfg` panicked ("a phi entry for each edge") compiling
+/// queens at `-O3` for arm64.
+#[test]
+fn test_a_hoisted_branch_with_two_edges_to_one_block_gives_the_phi_an_input_for_each() {
+    let text = "define i16 @f(i1 %w, i1 %x, i1 %y) {
+b0:
+  br i1 %w, label %a, label %e
+
+a:
+  br i1 %x, label %b, label %c
+
+b:
+  br i1 %y, label %e, label %d
+
+c:
+  br i1 %y, label %f, label %d
+
+d:
+  br label %e
+
+f:
+  br label %e
+
+e:
+  %p = phi i16 [ 0, %b0 ], [ 1, %b ], [ 1, %d ], [ 1, %f ]
+  ret i16 %p
+}
+";
+    let mut module = parsed(text);
+    let outer = Outer::of(&module, None);
+    let layout = DataLayout::default();
+    let spec = Speculation { tti: &llrm_mir::tti::Basic, layout: &layout, outer: &outer };
+    let mut declared = Declared::of(&module);
+    let (context, function) = module.function_mut("f").expect("@f");
+    simplified_with(&Options::default(), context, &spec, &mut declared, function);
+    assert_eq!(
+        printed(&module),
+        "define i16 @f(i1 %w, i1 %x, i1 %y) {\nb0:\n  %0 = select i1 %w, i16 1, i16 0\n  ret i16 %0\n}\n"
+    );
+}

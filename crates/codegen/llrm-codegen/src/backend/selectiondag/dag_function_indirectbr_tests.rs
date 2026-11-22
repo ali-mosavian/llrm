@@ -76,3 +76,33 @@ fn a_block_address_in_another_function_is_the_symbol() {
         .expect("an address");
     assert!(symbol.index >= 1 << 48, "{symbol:?}");
 }
+
+/// Before: `goto *table[i]` on the segmented 16-bit target jumped through a
+/// 4-byte cell (`JMP16m` was given the 32-bit width): a far jump, which the
+/// object writer refused. A near code pointer is a word.
+#[test]
+fn a_computed_goto_through_a_table_jumps_through_a_word_at_16_bits() {
+    let text = "target datalayout = \"e-p:16:16-p1:32:16:16:16-p2:16:16-p3:32:16:16:32-i32:16-i64:16-f80:16-n8:16:32\"
+@t = internal constant [2 x ptr] [ptr blockaddress(@f, %one), ptr blockaddress(@f, %two)]
+define i16 @f(i16 %x) addrspace(1) {
+entry:
+  %p = getelementptr [2 x ptr], ptr @t, i16 0, i16 %x
+  %a = load ptr, ptr %p
+  indirectbr ptr %a, [label %one, label %two]
+one:
+  ret i16 1
+two:
+  ret i16 2
+}
+";
+    let module = llrm_mir::parse::module(text).expect("parses");
+    let done = selected(&module, "f", &llrm_x86_m16::M16, crate::backend::cpu::profile("386").expect("a cpu"), &[])
+        .unwrap_or_else(|e| panic!("{}", e.0));
+    let insns = done.body.insns();
+    let jump = insns
+        .iter()
+        .filter_map(|one| one.what.as_ref())
+        .find(|what| what.op == Operation::Jump && what.indirect)
+        .expect("an indirect jump");
+    assert!(matches!(&jump.sources[..], [Loc::Mem(cell)] if cell.width == 2), "{:?}", jump.sources);
+}

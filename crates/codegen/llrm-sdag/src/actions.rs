@@ -201,9 +201,10 @@ pub struct TargetLowering {
     /// `isSExtCheaperThanZExt`: `i32` to `i64` where the target extends signed
     /// for free (AArch64's `sxtw` in an addressing mode); no x86 override.
     sext_cheaper_i32_i64: bool,
-    /// `X86TargetLowering::BuildSDIVPow2` builds the `cmov` form of a signed
-    /// divide by a power of two: `Some(is64)`, `i64` too where `is64`.
-    sdiv_pow2_cmov: Option<bool>,
+    /// The types whose signed divide by a power of two `BuildSDIVPow2` builds
+    /// as `buildSDIVPow2WithCMov` (x86: `i16`, `i32`, and `i64` on 64 bits;
+    /// AArch64: `i32`, `i64`).
+    sdiv_pow2_cmov: Vec<MVT>,
     /// DEVIATE WIDE-EQ-BYTES (owner z80, exit 2026-11-30): equality of a wide
     /// integer with a constant is the or of its bytes' xors, not of its
     /// halves' xors. The pin (`IntegerExpandSetCCOperands`) xors the halves;
@@ -247,7 +248,7 @@ impl TargetLowering {
             size_only: false,
             libcall_symbols: HashMap::default(),
             sext_cheaper_i32_i64: false,
-            sdiv_pow2_cmov: None,
+            sdiv_pow2_cmov: Vec::new(),
             byte_equality: false,
             assert_sext_keeps_high: false,
             min_stack_argument_alignment: 1,
@@ -314,6 +315,29 @@ impl TargetLowering {
         for (op, call) in arithmetic {
             for vt in [MVT::F32, MVT::F64] {
                 let name = libcalls::name(call(vt)).expect("the pin names f32 and f64 arithmetic");
+                self.set_libcall_name(op, vt, name);
+            }
+        }
+    }
+
+    /// `RTLIB::RINT_F32` and the other libm routines of `RuntimeLibcalls.def`:
+    /// the C library's names, `f` for `float`, none for `double`, `l` for
+    /// the 80-bit `long double`.
+    pub fn set_libm_libcall_names(&mut self) {
+        const LIBM: [(ISD, [&str; 3]); 10] = [
+            (ISD::FRem, ["fmodf", "fmod", "fmodl"]),
+            (ISD::FRint, ["rintf", "rint", "rintl"]),
+            (ISD::FSqrt, ["sqrtf", "sqrt", "sqrtl"]),
+            (ISD::FMA, ["fmaf", "fma", "fmal"]),
+            (ISD::FSin, ["sinf", "sin", "sinl"]),
+            (ISD::FCos, ["cosf", "cos", "cosl"]),
+            (ISD::FExp, ["expf", "exp", "expl"]),
+            (ISD::FExp2, ["exp2f", "exp2", "exp2l"]),
+            (ISD::FLog, ["logf", "log", "logl"]),
+            (ISD::FLog2, ["log2f", "log2", "log2l"]),
+        ];
+        for (op, names) in LIBM {
+            for (vt, name) in [MVT::F32, MVT::F64, MVT::F80].into_iter().zip(names) {
                 self.set_libcall_name(op, vt, name);
             }
         }
@@ -792,21 +816,14 @@ impl TargetLowering {
         self.cmov
     }
 
-    /// Whether `X86TargetLowering::BuildSDIVPow2` makes the `cmov` form for
-    /// `vt`: `canUseCMOV`, and `i16`, `i32` or (`is64Bit`) `i64` (no `i8`).
+    /// Whether the target's `BuildSDIVPow2` makes the `cmov` form for `vt`.
     /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/X86/X86ISelLowering.cpp#L24348>
+    /// <https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L21097>
     pub fn sdiv_pow2_with_cmov(
         &self,
         vt: EVT,
     ) -> bool {
-        let Some(is64) = self.sdiv_pow2_cmov else {
-            return false;
-        };
-        match vt {
-            EVT::Simple(MVT::I16 | MVT::I32) => true,
-            EVT::Simple(MVT::I64) => is64,
-            _ => false,
-        }
+        matches!(vt, EVT::Simple(mvt) if self.sdiv_pow2_cmov.contains(&mvt))
     }
 
     /// `isOperationLegal`.
@@ -982,9 +999,15 @@ impl TargetLowering {
         // `LowerVSETCC`: the integer compares SSE2 has (`pcmpeq*`, `pcmpgt*`),
         // the others made from them.
         t.set_ops(&[ISD::SetCC], &[MVT::V16I8, MVT::V8I16, MVT::V4I32], Action::Custom);
+        // `LowerVSETCC` of float lanes: `cmpps`, `cmppd`.
+        t.set_ops(&[ISD::SetCC], &[MVT::V4F32, MVT::V2F64], Action::Custom);
         // `LowerVSELECT` without SSE4.1's `pblendvb`: the arms masked by the
         // lanes' sign masks, `pand`, `pandn`, `por` (`ExpandVSELECT`).
-        t.set_ops(&[ISD::VSelect], &[MVT::V16I8, MVT::V8I16, MVT::V4I32, MVT::V2I64], Action::Expand);
+        t.set_ops(
+            &[ISD::VSelect],
+            &[MVT::V16I8, MVT::V8I16, MVT::V4I32, MVT::V2I64, MVT::V4F32, MVT::V2F64],
+            Action::Expand,
+        );
         // `LowerINSERT_VECTOR_ELT`: lane 0 of an undefined or zero vector is a
         // `movd`; another position is `ExpandINSERT_VECTOR_ELT` (the stack).
         // DEVIATE X86V3 (owner llrm-target-x86-m64-b, exit 2026-11-24):
@@ -997,12 +1020,24 @@ impl TargetLowering {
         // No shuffle is selected by pattern: `LegalizeDAG` builds the vector of
         // the lanes the mask picks.
         t.set_ops(&[ISD::VectorShuffle], &[MVT::V16I8, MVT::V8I16, MVT::V4I32, MVT::V2I64], Action::Expand);
-        // `LowerSCALAR_TO_VECTOR`: a byte or a word is widened to a dword for
-        // `movd`.
+        // `LowerEXTRACT_VECTOR_ELT` of the float lanes (a lane other than 0 is a `pshufd` first).
+        t.set_ops(&[ISD::ExtractElement], &[MVT::V4F32, MVT::V2F64], Action::Custom);
+        // The SSE2 float vectors (`v4f32`, `v2f64`): `addps`..`divpd` are patterns; builds, shuffles, lane inserts and
+        // extracts take the expansions (a constant is a pool load, the rest goes through the stack). DEVIATE X86V3
+        // (owner llrm-target-x86-m64-b, exit 2026-11-24): the pin shuffles (`shufps`, `unpcklpd`, `movss`).
+        let float_vectors = [MVT::V4F32, MVT::V2F64];
+        t.set_ops(
+            &[ISD::BuildVector, ISD::VectorShuffle, ISD::InsertVectorElt, ISD::ScalarToVector],
+            &float_vectors,
+            Action::Expand,
+        );
+        // `LowerSINT_TO_FP`: `v2i32` to `v2f64`; `v4i32` to `v4f32` is a pattern.
+        t.set_ops(&[ISD::SIntToFp], &[MVT::V2I32], Action::Custom);
+        // `LowerSCALAR_TO_VECTOR`: a byte or a word is widened to a dword for `movd`.
         t.set_ops(&[ISD::ScalarToVector], &[MVT::V16I8, MVT::V8I16], Action::Custom);
         // `LowerMUL`: `v4i32` without `pmulld` is `pmuludq` on the even and the
-        // odd lanes.
-        t.set_ops(&[ISD::Mul], &[MVT::V4I32, MVT::V16I8], Action::Custom);
+        // odd lanes; `v2i64` without `pmullq` is three `pmuludq`.
+        t.set_ops(&[ISD::Mul], &[MVT::V4I32, MVT::V16I8, MVT::V2I64], Action::Custom);
         // `LowerShift`: every 128-bit integer shift (`psllw`... by a constant
         // or a register, and the sequences for the rest; the 64-bit arithmetic
         // shift, `psraq` being AVX-512, is `srl`/`xor`/`sub`).
@@ -1082,6 +1117,7 @@ impl TargetLowering {
         use ISD::*;
         let mut t = TargetLowering::empty(TargetLoweringInfo::aarch64());
         t.sext_cheaper_i32_i64 = true;
+        t.sdiv_pow2_cmov = vec![MVT::I32, MVT::I64];
         t.init_actions();
         let words = [MVT::I32, MVT::I64];
         // Custom lowerings (`LowerOperation`).
@@ -1115,6 +1151,10 @@ impl TargetLowering {
         // no multiply of its own.
         t.set_ops(&[Mul], &[MVT::V8I16, MVT::V4I32, MVT::V2I64, MVT::V4I16, MVT::V2I32], Custom);
         t.set_ops(&[FpToSInt, FpToUInt, SIntToFp, UIntToFp], &words, Custom);
+        // L673..L687: the constrained forms of the scalar conversions are
+        // `Custom` too, and so are `STRICT_FP_ROUND` (L704) and the `f64`
+        // `STRICT_FP_EXTEND` (L876); the `f32` one is `Legal` (L872).
+        t.set_ops(&[StrictFpToSInt, StrictFpToUInt, StrictSIntToFp, StrictUIntToFp], &words, Custom);
         // `AArch64TargetLowering` (L1637): no vector has an extending load or a
         // truncating store of another vector's memory type.
         for vt in MVT::vectors() {
@@ -1188,6 +1228,8 @@ impl TargetLowering {
             MVT::V2I32,
         ];
         t.set_ops(&[SetCC], &neon, Custom);
+        // `addTypeForNEON` (L2458): NEON has no divide or remainder.
+        t.set_ops(&[UDiv, SDiv, URem, SRem], &neon, Expand);
         // `addTypeForNEON`'s `v1i64`/`v2i64`: "SMAX, SMIN, UMAX, UMIN" are
         // `LowerMinMax`.
         t.set_ops(&[SMax, SMin, UMax, UMin], &[MVT::V2I64], Custom);
@@ -1255,6 +1297,9 @@ impl TargetLowering {
         t.set_ops(&[FpExtend], &[MVT::F32], Legal);
         t.set_ops(&[FpExtend], &[MVT::F64], Custom);
         t.set_ops(&[FpRound], &floats, Custom);
+        t.set_ops(&[StrictFpExtend], &[MVT::F32], Legal);
+        t.set_ops(&[StrictFpExtend], &[MVT::F64], Custom);
+        t.set_ops(&[StrictFpRound], &floats, Custom);
         t.set_ops(&[FRint, LRint], &floats, Legal);
         t.set_ops(&[BitCast], &[MVT::I16], Custom);
         for vt in floats {
@@ -1313,7 +1358,9 @@ impl TargetLowering {
         use ISD::*;
         let mut t = TargetLowering::empty(types);
         t.cmov = features.cmov;
-        t.sdiv_pow2_cmov = features.cmov.then_some(is64);
+        if features.cmov {
+            t.sdiv_pow2_cmov = if is64 { vec![MVT::I16, MVT::I32, MVT::I64] } else { vec![MVT::I16, MVT::I32] };
+        }
         t.init_actions();
         let ints = [MVT::I8, MVT::I16, MVT::I32];
         // `if (VT == MVT::i64 && !Subtarget.is64Bit()) continue;`
@@ -1475,6 +1522,11 @@ impl TargetLowering {
                 t.set_ops(&[PseudoFMin, PseudoFMax], &[vt], Legal);
                 // (no FSINCOS node here: nothing builds one)
                 t.set_ops(&[FSin, FCos], &[vt], Expand);
+                // The pin's strict `rint` of an SSE value is the routine
+                // `rint`/`rintf` (`roundsd` needs
+                // SSE4.1); `frndint` is the x87's, and this type is not in an
+                // x87 register.
+                t.set_ops(&[StrictFRint], &[vt], Expand);
             }
             t.set_ops(&[FpExtend], &[MVT::F32, MVT::F64], Custom);
         } else {
@@ -1488,6 +1540,7 @@ impl TargetLowering {
         t.set_ops(&[Undef, Poison], &[MVT::F80], Expand);
         t.set_operation_action(FCopySign, MVT::F80, Expand);
         t.keeps_f64_constants = features.sse2;
+        t.set_libm_libcall_names();
         // L764..L860: the x87 loads of 0.0 and 1.0 (`fldz`, `fld1`, and `fchs`)
         // L690..L706: SSE has only +0.0 (`xorps`, `xorpd`)
         for (vt, one, sign) in [
@@ -1524,17 +1577,24 @@ mod tests {
 
     /// `initActions` expands every constrained node: a selector that finds a
     /// `STRICT_FADD` legal by default would emit it unchained. Before the
-    /// default, a target that sets nothing read `Legal`.
+    /// default, a target that sets nothing read `Legal`. arm64 customizes the
+    /// scalar conversions and `STRICT_FP_ROUND` and leaves the rest expanded
+    /// (`AArch64ISelLowering.cpp` L673..L705).
     #[test]
     fn a_constrained_node_is_expanded_until_a_target_makes_it_legal() {
         let t = a64();
-        for op in [ISD::StrictFAdd, ISD::StrictFSqrt, ISD::StrictFpRound, ISD::StrictFMA] {
+        for op in [ISD::StrictFAdd, ISD::StrictFSqrt, ISD::StrictFMA] {
             for vt in [MVT::F32, MVT::F64, MVT::F80] {
                 assert_eq!(t.operation_action(op, EVT::Simple(vt)), Action::Expand, "{op:?} {vt:?}");
             }
         }
+        assert_eq!(t.operation_action(ISD::StrictFpRound, EVT::Simple(MVT::F80)), Action::Expand);
         for op in [ISD::StrictFpToSInt, ISD::StrictUIntToFp] {
-            assert_eq!(t.operation_action(op, EVT::Simple(MVT::I32)), Action::Expand);
+            assert_eq!(t.operation_action(op, EVT::Simple(MVT::I32)), Action::Custom, "{op:?}");
+            assert_eq!(t.operation_action(op, EVT::Simple(MVT::I8)), Action::Expand, "{op:?}");
+        }
+        for vt in [MVT::F32, MVT::F64] {
+            assert_eq!(t.operation_action(ISD::StrictFpRound, EVT::Simple(vt)), Action::Custom, "{vt:?}");
         }
     }
 

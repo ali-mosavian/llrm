@@ -201,7 +201,14 @@ pub fn do_instruction_selection_with(
                     continue;
                 }
             }
-            return Err(Refusal::CannotSelect(format!("{:?}", adapter.dag.nodes()[node as usize].opcode)));
+            let opcode = adapter.dag.nodes()[node as usize].opcode;
+            // The lane extract names the vector it reads: the first thing to know of a refusal.
+            let detail = if opcode == ISD::ExtractElement {
+                format!(" of {:?}", adapter.dag.value_type(adapter.dag.operand(at, 0)))
+            } else {
+                String::new()
+            };
+            return Err(Refusal::CannotSelect(format!("{opcode:?}{detail}")));
         }
         if let Some(why) = adapter.refusal() {
             return Err(Refusal::UnknownRegister(why.to_owned()));
