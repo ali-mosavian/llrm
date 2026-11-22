@@ -300,3 +300,25 @@ fn the_pass_does_not_rescan_the_function_for_each_question() {
     let took = start.elapsed();
     assert!(took.as_secs() < 5, "3000 unrelated blocks took {took:?}");
 }
+
+/// Every branch edit of a join's predecessors dropped the block positions, and
+/// the next question walked the whole function again: exec.c's `exec_loop` (a
+/// switch of 100s of blocks) spent 40 % of its compile there. The walks must
+/// not grow with the edits.
+#[test]
+fn branch_edits_do_not_rescan_the_function_for_block_positions() {
+    // 60 joins; each has a predecessor that jumps and one that falls through
+    let mut blocks = vec![vec![branch(1)]];
+    for join in 0..60u32 {
+        let base = 1 + 3 * join;
+        blocks.push(vec![work("a"), jump(base + 2)]);
+        blocks.push(vec![work("b"), work("c")]);
+        blocks.push(vec![work("d"), if join == 59 { ret() } else { branch(base + 3) }]);
+    }
+    let mut function = layout(blocks);
+    let blocks_before = function.blocks.len();
+    let before = llrm_spike_mf::tailmerge::layout_scans();
+    branch_fold::<Two>(&mut function);
+    let scans = llrm_spike_mf::tailmerge::layout_scans() - before;
+    assert!(scans <= blocks_before / 2, "{scans} walks for {blocks_before} blocks");
+}

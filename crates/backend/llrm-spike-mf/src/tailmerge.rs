@@ -630,6 +630,9 @@ struct Mf<'a, C, J> {
     /// Positions and edges of the blocks as they are, built on the first ask
     /// after a change (LLVM keeps these on the block).
     graph: std::cell::RefCell<Option<Graph>>,
+    /// Block id to its place in the layout: rebuilt only when a block is
+    /// inserted, not after every branch edit that drops [`Mf::graph`].
+    positions: std::cell::RefCell<Option<Vec<usize>>>,
     jump: std::marker::PhantomData<J>,
 }
 
@@ -644,6 +647,23 @@ struct Graph {
 }
 
 const ABSENT: usize = usize::MAX;
+
+thread_local! {
+    /// Walks over every block of a function made to answer a position or
+    /// predecessor question.
+    static LAYOUT_SCANS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread's tail merging walked a whole function to place a
+/// block or list the predecessors of one: the cost that grew with every branch
+/// edit (exec.c's `exec_loop`: 40 % of the compile).
+pub fn layout_scans() -> usize {
+    LAYOUT_SCANS.with(std::cell::Cell::get)
+}
+
+fn scanned() {
+    LAYOUT_SCANS.with(|count| count.set(count.get() + 1));
+}
 
 impl<C, J> Mf<'_, C, J> {
     fn with_graph<R>(
@@ -673,6 +693,7 @@ impl<C, J> Mf<'_, C, J> {
     }
 
     fn build_graph(&self) -> Graph {
+        scanned();
         let blocks = &self.function.blocks;
         let size = blocks.iter().map(|block| block.id as usize + 1).max().unwrap_or(0);
         let mut position = vec![ABSENT; size];
@@ -708,12 +729,28 @@ impl<C, J> Mf<'_, C, J> {
         *self.graph.get_mut() = None;
     }
 
+    /// A block was inserted: the positions change with the graph.
+    fn layout_changed(&mut self) {
+        *self.positions.get_mut() = None;
+        self.changed();
+    }
+
     fn at(
         &self,
         id: u32,
     ) -> usize {
-        self.with_graph(|graph| graph.position.get(id as usize).copied().filter(|&at| at != ABSENT))
-            .expect("a block that exists")
+        let mut cached = self.positions.borrow_mut();
+        let positions = cached.get_or_insert_with(|| {
+            scanned();
+            let blocks = &self.function.blocks;
+            let size = blocks.iter().map(|block| block.id as usize + 1).max().unwrap_or(0);
+            let mut position = vec![ABSENT; size];
+            for (at, block) in blocks.iter().enumerate() {
+                position[block.id as usize] = at;
+            }
+            position
+        });
+        positions.get(id as usize).copied().filter(|&at| at != ABSENT).expect("a block that exists")
     }
 }
 
@@ -946,7 +983,7 @@ impl<C, J: Jump> TailMergeFunction for Mf<'_, C, J> {
         }
         let tail = self.function.blocks[position].insts.split_off(at);
         self.function.insert_block(position + 1, Block { id, insts: tail, phis: Vec::new() });
-        self.changed();
+        self.layout_changed();
         Some(id)
     }
 
@@ -1039,6 +1076,7 @@ pub fn merge_tails_crossing<J: Jump, C>(
             _ => None,
         },
         graph: std::cell::RefCell::new(None),
+        positions: std::cell::RefCell::new(None),
         jump: std::marker::PhantomData,
     };
     if !matches!(crossing, Crossing::Always) {
