@@ -196,6 +196,15 @@ let Defs = [P], mayLoad = 1, AddedComplexity = 30 in {
   def OR8M : MOSInst<(outs Imag8:$d), (ins Imag8:$a, absaddr:$m), "or8m $d, $a, $m", [(set i8:$d, (or i8:$a, (load MOSAbs:$m)))]>;
   def XOR8M : MOSInst<(outs Imag8:$d), (ins Imag8:$a, absaddr:$m), "xor8m $d, $a, $m", [(set i8:$d, (xor i8:$a, (load MOSAbs:$m)))]>;
 }
+// The carry forms of the byte global ops, as the pointer forms have them: the bytes of a wide add or subtract are a chain of
+// uaddo / uaddo_carry (usubo / usubo_carry), and only these let `CLC; LDA a; ADC g; ...; LDA a1; ADC g+1` read the operand where it lies.
+// The carry operand comes before the address, as in the pointer forms.
+let mayLoad = 1, AddedComplexity = 30 in {
+  def ADDO8M : MOSInst<(outs Imag8:$d, Carry:$co), (ins Imag8:$a, absaddr:$m), "addo8m $d, $co, $a, $m", [(set i8:$d, i1:$co, (uaddo i8:$a, (load MOSAbs:$m)))]>;
+  def SUBO8M : MOSInst<(outs Imag8:$d, Carry:$co), (ins Imag8:$a, absaddr:$m), "subo8m $d, $co, $a, $m", [(set i8:$d, i1:$co, (usubo i8:$a, (load MOSAbs:$m)))]>;
+  def ADDOC8M : MOSInst<(outs Imag8:$d, Carry:$co), (ins Imag8:$a, Carry:$ci, absaddr:$m), "addoc8m $d, $co, $a, $ci, $m", [(set i8:$d, i1:$co, (uaddo_carry i8:$a, (load MOSAbs:$m), i1:$ci))]>;
+  def SUBOC8M : MOSInst<(outs Imag8:$d, Carry:$co), (ins Imag8:$a, Carry:$ci, absaddr:$m), "suboc8m $d, $co, $a, $ci, $m", [(set i8:$d, i1:$co, (usubo_carry i8:$a, (load MOSAbs:$m), i1:$ci))]>;
+}
 // A word op whose second operand is a word global: CLC; LDA alo; ADC g; STA dlo; LDA ahi; ADC g+1; STA dhi. The same fold
 // rules as the byte forms: one use, no store between.
 let Defs = [P], mayLoad = 1, AddedComplexity = 30 in {
@@ -204,6 +213,13 @@ let Defs = [P], mayLoad = 1, AddedComplexity = 30 in {
   def AND16M : MOSInst<(outs Imag16:$d), (ins Imag16:$a, absaddr:$m), "and16m $d, $a, $m", [(set i16:$d, (and i16:$a, (load MOSAbs:$m)))]>;
   def OR16M : MOSInst<(outs Imag16:$d), (ins Imag16:$a, absaddr:$m), "or16m $d, $a, $m", [(set i16:$d, (or i16:$a, (load MOSAbs:$m)))]>;
   def XOR16M : MOSInst<(outs Imag16:$d), (ins Imag16:$a, absaddr:$m), "xor16m $d, $a, $m", [(set i16:$d, (xor i16:$a, (load MOSAbs:$m)))]>;
+}
+// The carry forms of the word global ops: the halves of a wider add are a chain of uaddo / uaddo_carry on words.
+let mayLoad = 1, AddedComplexity = 30 in {
+  def ADDO16M : MOSInst<(outs Imag16:$d, Carry:$co), (ins Imag16:$a, absaddr:$m), "addo16m $d, $co, $a, $m", [(set i16:$d, i1:$co, (uaddo i16:$a, (load MOSAbs:$m)))]>;
+  def SUBO16M : MOSInst<(outs Imag16:$d, Carry:$co), (ins Imag16:$a, absaddr:$m), "subo16m $d, $co, $a, $m", [(set i16:$d, i1:$co, (usubo i16:$a, (load MOSAbs:$m)))]>;
+  def ADDOC16M : MOSInst<(outs Imag16:$d, Carry:$co), (ins Imag16:$a, Carry:$ci, absaddr:$m), "addoc16m $d, $co, $a, $ci, $m", [(set i16:$d, i1:$co, (uaddo_carry i16:$a, (load MOSAbs:$m), i1:$ci))]>;
+  def SUBOC16M : MOSInst<(outs Imag16:$d, Carry:$co), (ins Imag16:$a, Carry:$ci, absaddr:$m), "suboc16m $d, $co, $a, $ci, $m", [(set i16:$d, i1:$co, (usubo_carry i16:$a, (load MOSAbs:$m), i1:$ci))]>;
 }
 // A compare against a global: LDA a; CMP g (words: LDA alo; CMP g; LDA ahi; SBC g+1). The flags are made where they
 // are read (alloc.rs), which keeps the memory operand only while nothing can change the global before then.
@@ -266,6 +282,20 @@ let Defs = [P], mayLoad = 1, AddedComplexity = 30 in {
   def AND8MX : MOSInst<(outs Imag8:$d), (ins Imag8:$a, absx:$m), "and8mx $d, $a, $m", [(set i8:$d, (and i8:$a, (load MOSAbsX:$m)))]>;
   def OR8MX : MOSInst<(outs Imag8:$d), (ins Imag8:$a, absx:$m), "or8mx $d, $a, $m", [(set i8:$d, (or i8:$a, (load MOSAbsX:$m)))]>;
   def XOR8MX : MOSInst<(outs Imag8:$d), (ins Imag8:$a, absx:$m), "xor8mx $d, $a, $m", [(set i8:$d, (xor i8:$a, (load MOSAbsX:$m)))]>;
+}
+// The carry forms, indexed: the bytes of a wide add from an array of wide values.
+let mayLoad = 1, AddedComplexity = 30 in {
+  def ADDO8MX : MOSInst<(outs Imag8:$d, Carry:$co), (ins Imag8:$a, absx:$m), "addo8mx $d, $co, $a, $m", [(set i8:$d, i1:$co, (uaddo i8:$a, (load MOSAbsX:$m)))]>;
+  def SUBO8MX : MOSInst<(outs Imag8:$d, Carry:$co), (ins Imag8:$a, absx:$m), "subo8mx $d, $co, $a, $m", [(set i8:$d, i1:$co, (usubo i8:$a, (load MOSAbsX:$m)))]>;
+  def ADDOC8MX : MOSInst<(outs Imag8:$d, Carry:$co), (ins Imag8:$a, Carry:$ci, absx:$m), "addoc8mx $d, $co, $a, $ci, $m", [(set i8:$d, i1:$co, (uaddo_carry i8:$a, (load MOSAbsX:$m), i1:$ci))]>;
+  def SUBOC8MX : MOSInst<(outs Imag8:$d, Carry:$co), (ins Imag8:$a, Carry:$ci, absx:$m), "suboc8mx $d, $co, $a, $ci, $m", [(set i8:$d, i1:$co, (usubo_carry i8:$a, (load MOSAbsX:$m), i1:$ci))]>;
+}
+// The same on words, indexed by a byte: LDX i; CLC; LDA alo; ADC g,x; STA dlo; LDA ahi; ADC g+1,x; STA dhi.
+let mayLoad = 1, AddedComplexity = 30 in {
+  def ADDO16MX : MOSInst<(outs Imag16:$d, Carry:$co), (ins Imag16:$a, absx:$m), "addo16mx $d, $co, $a, $m", [(set i16:$d, i1:$co, (uaddo i16:$a, (load MOSAbsX:$m)))]>;
+  def SUBO16MX : MOSInst<(outs Imag16:$d, Carry:$co), (ins Imag16:$a, absx:$m), "subo16mx $d, $co, $a, $m", [(set i16:$d, i1:$co, (usubo i16:$a, (load MOSAbsX:$m)))]>;
+  def ADDOC16MX : MOSInst<(outs Imag16:$d, Carry:$co), (ins Imag16:$a, Carry:$ci, absx:$m), "addoc16mx $d, $co, $a, $ci, $m", [(set i16:$d, i1:$co, (uaddo_carry i16:$a, (load MOSAbsX:$m), i1:$ci))]>;
+  def SUBOC16MX : MOSInst<(outs Imag16:$d, Carry:$co), (ins Imag16:$a, Carry:$ci, absx:$m), "suboc16mx $d, $co, $a, $ci, $m", [(set i16:$d, i1:$co, (usubo_carry i16:$a, (load MOSAbsX:$m), i1:$ci))]>;
 }
 let mayStore = 1, AddedComplexity = 20 in
   def STABS : MOSInst<(outs), (ins Imag8:$s, absaddr:$a), "stabs $s, $a", [(store i8:$s, MOSAbs:$a)]>;

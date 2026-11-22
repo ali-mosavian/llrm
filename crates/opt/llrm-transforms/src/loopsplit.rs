@@ -837,8 +837,11 @@ pub fn split_loops(
     changed | split
 }
 
-/// `pass_loop_split` as a slot of the pipeline.
-pub struct LoopSplit;
+/// `pass_loop_split` as a slot of the pipeline. `cleanup`: gcc's
+/// `TODO_cleanup_cfg`, which the tests of the split itself leave off.
+pub struct LoopSplit {
+    pub cleanup: bool,
+}
 
 impl FunctionPass for LoopSplit {
     fn name(&self) -> &'static str {
@@ -870,11 +873,33 @@ impl FunctionPass for LoopSplit {
         if !tti.loop_split() || small {
             return PreservedAnalyses::all();
         }
-        if split_loops(unit.context, unit.layout, unit.function, &outer) {
-            PreservedAnalyses::none()
-        } else {
-            PreservedAnalyses::all()
+        if !split_loops(unit.context, unit.layout, unit.function, &outer) {
+            return PreservedAnalyses::all();
         }
+        if !self.cleanup {
+            return PreservedAnalyses::none();
+        }
+        // `pass_split_loop` returns `TODO_cleanup_cfg`: the arms of each copy are
+        // folded into straight code, as the vectorizer reads only loops whose
+        // blocks all run.
+        let spec = crate::twoentryphi::Speculation { tti: &*tti, layout: unit.layout, outer: &outer };
+        crate::simplifycfg::simplified_with(
+            &crate::simplifycfg::Options { loop_form_kept: false, ..Default::default() },
+            unit.context,
+            &spec,
+            unit.declared,
+            unit.function,
+        );
+        // The arms are selects now. The combine makes of them what every other
+        // loop reaches the vectorizer as (`sum + select(c, x, 0)`: one compare
+        // per reduction), then simplify form and LCSSA are restored.
+        analyses.invalidate(unit.function, &PreservedAnalyses::none());
+        crate::combine_pass::Combine { enabled: true, phi_constant_users: false }.run(unit, analyses);
+        analyses.invalidate(unit.function, &PreservedAnalyses::none());
+        crate::loopsimplify::LoopSimplify.run(unit, analyses);
+        analyses.invalidate(unit.function, &PreservedAnalyses::none());
+        crate::lcssa::LoopClosedSSA.run(unit, analyses);
+        PreservedAnalyses::none()
     }
 }
 
