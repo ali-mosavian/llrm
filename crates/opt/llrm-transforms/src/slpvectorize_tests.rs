@@ -332,3 +332,16 @@ fn seed_attempts_share_one_scalar_evolution_session_until_a_tree_is_emitted() {
     let made = llrm_analysis::scev::analysis::sessions_made() - before;
     assert!(made <= 3, "{made} sessions");
 }
+
+const TRIM_STORE_TREE: &str = include_str!("../tests/slp/trim_store_tree.ll");
+
+/// object_extent_loop (arm64 -O2): `store (fmul (uitofp (trunc i)), 0.5)` over
+/// two lanes of a 12-trip loop stayed scalar (+23). The pin's `getTreeCost`
+/// trims the `uitofp` subtree to a gather of its two doubles (2 inserts, lane
+/// 0 free): total -12, a `fmul <2 x double>` and one vector store.
+#[test]
+fn a_store_tree_with_an_unprofitable_subtree_is_trimmed_not_dropped() {
+    let text = run(TRIM_STORE_TREE);
+    assert!(text.contains("fmul <2 x double>"), "{text}");
+    assert!(text.contains("store <2 x double>"), "{text}");
+}

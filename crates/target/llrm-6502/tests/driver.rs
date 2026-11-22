@@ -2524,6 +2524,25 @@ fn a_callee_emptied_by_a_fold_in_its_caller_is_inlined_by_the_second_walk() {
     assert!(size(&twice) <= size(&once), "{} instructions against {}", size(&twice), size(&once));
 }
 
+/// second_walk_calls.ll: `main` calls `foo` twice and reads `sum` after each;
+/// at -Os the first walk leaves a `jsr bar` at every site (343 instructions),
+/// and the folds that follow leave nothing for the second walk's sites to do
+/// but go (80). With `-fno-second-inline` they stay: the byvalue_struct_address
+/// test above lost its premise when -Os began to sink common code.
+#[test]
+fn the_second_walk_drops_the_calls_the_first_walk_left() {
+    let ir = include_str!("data/second_walk_calls.ll");
+    let mut request = Request::new(Level::Os);
+    request.passes.push("-fno-second-inline".to_owned());
+    let once = assembly(ir, &request).unwrap();
+    let twice = assembly(ir, &Request::new(Level::Os)).unwrap();
+    let calls = |text: &str| text.lines().filter(|line| line.trim() == "jsr bar").count();
+    let size = |text: &str| text.lines().filter(|line| line.starts_with("  ")).count();
+    assert!(calls(&once) >= 3, "premise: the first walk leaves the calls:\n{once}");
+    assert!(calls(&twice) <= 1, "{} calls of bar remain:\n{twice}", calls(&twice));
+    assert!(size(&twice) * 2 < size(&once), "{} instructions against {}", size(&twice), size(&once));
+}
+
 /// k_itoa -O2 kept `tmp[16]` on the soft stack because the start-up zeroing of
 /// 16 bytes (240 clocks, once) outweighed the 190 clocks a call saves: 312 B
 /// against 291 B at -Os, which was also faster per call. Bytes come first at
@@ -3245,8 +3264,10 @@ fn a_product_by_a_byte_calls_the_byte_entry() {
     }
 }
 
-/// -Os is strict bytes: a word divide links the compact routine in every
-/// module. The aligned one (16 B larger, quicker for a small quotient) made
+/// -Os is strict bytes: a word divide links the compact routine in a module
+/// whose divides do not save twice their byte share (`[share.size]
+/// division16`; at 1 compound_assignment_types went 892 -> 1,044 B, over its
+/// bar). The aligned one (16 B larger, quicker for a small quotient) made
 /// k_tosudivax 82 B, a bare `jmp`, against sdcc's 64 and the compact build's
 /// 58, and digits 151 B against 129.
 #[test]

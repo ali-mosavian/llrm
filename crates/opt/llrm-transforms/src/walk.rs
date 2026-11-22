@@ -87,6 +87,9 @@ pub struct ModuleIpo {
     /// -Os and -Oz: the bar is gcc's, whose IPA-SRA drops the unread parameters
     /// first.
     pub for_size: bool,
+    /// Tail-call elimination is on at this level
+    /// ([`crate::tailcallelim::eliminate_linear_recursion`]).
+    pub tail_recursion: bool,
 }
 
 impl ProgramPass for ModuleIpo {
@@ -105,6 +108,16 @@ impl ProgramPass for ModuleIpo {
         let costs = program.target.size_costs();
         let mut modules = managers(program, analyses);
         let mut changed = false;
+        if self.tail_recursion {
+            for at in 0..count {
+                for &id in &private[at] {
+                    if crate::tailcallelim::eliminate_linear_recursion(&mut program.modules[at], &program.layout, id) {
+                        modules[at].changed(id);
+                        changed = true;
+                    }
+                }
+            }
+        }
         for (at, id) in crate::ipsccp::run_ipsccp_with(program, &mut modules, self.inline.single) {
             modules[at].changed(id);
             changed = true;

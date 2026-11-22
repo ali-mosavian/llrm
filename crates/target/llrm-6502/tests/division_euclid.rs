@@ -59,3 +59,76 @@ fn a_hot_remainder_loop_calls_the_speed_routine_at_o2() {
     let text = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
     assert!(text.contains("__modhi3\n") && !text.contains("__modhi3c"), "the speed remainder at -O2:\n{text}");
 }
+
+/// -Os takes the speed 16-bit division where the share of the module's clocks
+/// it saves is at least twice the share of its bytes it adds (`[share.size]
+/// division16`): a hot remainder loop among 360 B of other code.
+fn hot_rem_loop_with_code(code_stores: usize) -> String {
+    let mut ir = String::new();
+    for i in 0..code_stores {
+        ir += &format!("@g{i} = global i16 0\n");
+    }
+    ir += "define void @ballast() noinline {\n";
+    for i in 0..code_stores {
+        ir += &format!("  store volatile i16 {}, ptr @g{i}\n", 1000 + i * 7);
+    }
+    ir += "  ret void\n}\n";
+    ir += "define i16 @f(i16 %b) {
+entry:
+  call void @ballast()
+  %d = or i16 %b, 1
+  br label %l
+l:
+  %i = phi i16 [ 0, %entry ], [ %in, %l ]
+  %s = phi i16 [ 0, %entry ], [ %sn, %l ]
+  %x = mul i16 %i, 37
+  %r = urem i16 %x, %d
+  %sn = add i16 %s, %r
+  %in = add i16 %i, 1
+  %c = icmp ult i16 %in, 1000
+  br i1 %c, label %l, label %done
+done:
+  ret i16 %sn
+}
+";
+    format!("target datalayout = \"{}\"\n{ir}", datalayout())
+}
+
+/// div_constants_short -Os ran 76.3M clocks against llvm-mos's 65.6M with the
+/// compact remainder in 1000-trip loops: a module whose loop dominates its
+/// clocks takes the speed routine for its 131 B.
+#[test]
+fn a_hot_remainder_loop_among_other_code_calls_the_speed_routine_at_os() {
+    let text = assembly(&hot_rem_loop_with_code(60), &Request::new(Level::Os)).unwrap_or_else(|e| panic!("{e}"));
+    assert!(text.contains("__umodhi3\n") && !text.contains("__umodhi3c"), "the speed remainder at -Os:\n{text}");
+}
+
+/// The same loop alone in its module: the speed routine's 131 B are most of
+/// the module's bytes, so its share is not twice the clocks it saves. The
+/// compact routine stays (bytes first at -Os).
+#[test]
+fn a_remainder_loop_that_is_the_whole_module_keeps_the_compact_routine_at_os() {
+    let text = assembly(&hot_rem_loop_with_code(0), &Request::new(Level::Os)).unwrap_or_else(|e| panic!("{e}"));
+    assert!(text.contains("__umodhi3c\n"), "the compact remainder at -Os:\n{text}");
+}
+
+/// idiv_loop_os at -Os: the Euclid loop saves 1.5 times its byte share by the
+/// estimate (-57% clocks measured): under the rule, so compact. Row
+/// 6502-DIV-16-CALLEE-SAVES.
+#[test]
+fn the_euclid_loop_stays_compact_at_os_under_the_rule() {
+    let ir = format!("target datalayout = \"{}\"\n{GCD_SUM}", datalayout());
+    let text = assembly(&ir, &Request::new(Level::Os)).unwrap_or_else(|e| panic!("{e}"));
+    assert!(text.contains("__modhi3c\n"), "the compact remainder at -Os:\n{text}");
+}
+
+/// A division that runs once repays no byte: -Os keeps the compact routine.
+#[test]
+fn a_cold_remainder_keeps_the_compact_routine_at_os() {
+    let ir = format!(
+        "target datalayout = \"{}\"\ndefine i16 @once(i16 %a, i16 %b) {{\n  %r = srem i16 %a, %b\n  ret i16 %r\n}}\n",
+        datalayout()
+    );
+    let text = assembly(&ir, &Request::new(Level::Os)).unwrap_or_else(|e| panic!("{e}"));
+    assert!(text.contains("__modhi3c\n"), "the compact remainder at -Os:\n{text}");
+}
