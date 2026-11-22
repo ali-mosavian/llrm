@@ -6461,19 +6461,18 @@ fn a_hoisted_one_passed_to_a_call_in_a_loop_stays_in_a_register_at_m32_os() {
     assert!(loop_of("-O1", 1).0.contains("mov edx, 1"), "{}", loop_of("-O1", 1).1);
 }
 
-/// PO1 (m32 -Os): a call's two argument words come off the stack with `add esp, 8`, as the pin does below `minsize`, not
-/// `pop ecx` twice (one byte shorter, eight clocks against one a call). x_hanoi2 -Os spent 245,837 clk against clang's
-/// 221,263 for 4,096 calls.
+/// PO1 (m32): a call's two argument words come off the stack with `add esp, 8` at -O1, and with `pop ecx` twice at -Os, one byte
+/// shorter (#10447 moved -Os from `add` to `pop`; this test still wanted `add` and failed on it).
 #[test]
-fn a_calls_arguments_come_off_the_stack_by_add_at_m32_os() {
+fn a_calls_arguments_come_off_the_stack_by_add_at_o1_and_by_pop_at_m32_os() {
     let text = "target datalayout = \"@m32-datalayout@\"\ntarget triple = \"i486-unknown-linux-gnu\"\n\
                 declare i32 @g(i32, i32)\ndefine i32 @f(i32 %a, i32 %b) {\n  %x = call i32 @g(i32 %a, i32 %b)\n  \
                 %y = call i32 @g(i32 %x, i32 %b)\n  ret i32 %y\n}\n";
-    for level in ["-Os", "-O1"] {
+    for (level, by_add) in [("-Os", false), ("-O1", true)] {
         let (built, _) = compiled(&flags(&["-m32", "-mabi=sysv", level]), text, "f").unwrap();
         let listing = llrm_codegen::backend::masm::text(&built).unwrap();
-        assert!(listing.contains("add esp, 8"), "{level}: arguments are added off:\n{listing}");
-        assert!(!listing.contains("pop ecx"), "{level}: no pop cleans them:\n{listing}");
+        assert_eq!(listing.contains("add esp, 8"), by_add, "{level}: arguments are added off:\n{listing}");
+        assert_eq!(listing.contains("pop ecx"), !by_add, "{level}: a pop cleans them:\n{listing}");
     }
 }
 
