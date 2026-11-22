@@ -32,6 +32,9 @@ percent_per_percent = 4
 division16 = 2
 # The multiply by a constant expanded in line instead of called (`mulimage::expand_when_unshared`).
 mul_expand = 2
+# ... and only where the expansion removes at least this percent of the module's estimated clocks: a module whose
+# clocks are elsewhere keeps its bytes (bytes are first at size; call_keeps +190 B for -21% clocks stays a call).
+mul_expand_floor = 60
 
 [share.speed]
 # The same, at the speed levels (O1-O3), per routine: clocks are the second goal there and a module's bytes

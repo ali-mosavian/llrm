@@ -138,9 +138,10 @@ pub fn expand_when_unshared(
 
 /// Whether, at size, the module with `again` expanded takes the growth in bytes
 /// for the clocks it saves: the share of its clocks saved is at least
-/// `[share] percent_per_percent` times the share of its bytes added, both read
-/// from the module as written, the routines linked counted. A tie in bytes pays
-/// (a module the expansion does not grow).
+/// `[share.size] mul_expand` times the share of its bytes added, and the
+/// expansion removes at least `mul_expand_floor` percent of its clocks, both
+/// read from the module as written, the routines linked counted. A tie in bytes
+/// pays (a module the expansion does not grow).
 ///
 /// DEVIATE 6502-MUL-IMAGE (owner llrm-target-6502, exit 2026-12-12): the pin
 /// decides each multiply alone, so the clocks are never traded for bytes;
@@ -169,9 +170,16 @@ fn expansion_pays_by_share(
     let (before, after) = (clocks(&current)?, clocks(&expanded)?);
     let (kept, tried) =
         (module_bytes(module, names, &current, request)?, module_bytes(module, names, &expanded, request)?);
+    let saved = before.saturating_sub(after);
+    if tried - kept > 0
+        && u128::from(saved) * 100
+            < u128::from(crate::routines::size_share_percent("mul_expand_floor")) * u128::from(before)
+    {
+        return Ok(false);
+    }
     Ok(pays_by_share_at(
         crate::routines::size_share_percent("mul_expand"),
-        (before.saturating_sub(after), tried - kept),
+        (saved, tried - kept),
         before,
         kept.max(1) as u64,
     ))
