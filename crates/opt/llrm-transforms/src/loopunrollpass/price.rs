@@ -55,7 +55,7 @@ pub(super) fn full_unroll_pays(
     // DEVIATE UNROLL-SPEED-TRIAL: the compile that unrolls only what adds no
     // bytes prices every loop, an inlinable callee's too.
     let no_grow = trial::speed_unroll().is_some_and(trial::SpeedUnroll::refuses_unroll_growth);
-    let rate = if no_grow { NO_GROW_RATE } else { run.tti.unroll_milliclocks_per_byte() };
+    let rate = if no_grow { NO_GROW_RATE } else { run.tti.unroll_milliclocks_per_byte_at(run.options.opt_level) };
     // The early LoopFullUnrollPass unrolls a callee before the inliner sees it
     // (the pin's order): a veto in a function the inliner can take leaves a
     // small rolled helper that is then inlined, and unrolled, at every site
@@ -282,7 +282,7 @@ fn root_pays(
     if !uce.can_unroll() {
         return None;
     }
-    let rate = run.tti.unroll_milliclocks_per_byte();
+    let rate = run.tti.unroll_milliclocks_per_byte_at(run.options.opt_level);
     let prices_nest = run.tti.unroll_prices_nest_loops_without_outer_counter();
     Some(priced_verdict(
         run,
