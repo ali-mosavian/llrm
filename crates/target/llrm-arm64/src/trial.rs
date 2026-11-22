@@ -398,6 +398,11 @@ pub fn keeps_unrotated(
 /// callee only where the unit does not grow; the pin's hint threshold lets it
 /// in at any size (QuickrBasic array.c: `arry_esize`, 23 units, into four
 /// callers), and what the copies fold to only the object says.
+///
+/// gcc weighs no clocks there, so the work the calls cost may grow by the
+/// target's `cap` or by a quarter of the percent of bytes the object saves,
+/// whichever is more (sfm16_dbg -Os: `sf_clz32`, 18 units, into six sites,
+/// 2472 -> 2072 B for 1.5% more work, put back by a flat 1% cap).
 pub fn keeps_unhinted(
     kept: Price,
     other: Price,
@@ -407,7 +412,10 @@ pub fn keeps_unhinted(
         return false;
     }
     let saved = (kept.work - other.work).round() as i64;
-    trial::keeps_smaller_at_size(other.bytes - kept.bytes, saved, kept.work.round() as i64, cap)
+    let added = other.bytes - kept.bytes;
+    let share = if kept.bytes > 0 { -added * 100 / kept.bytes / 4 } else { 0 };
+    let cap = cap.map(|cap| cap.max(share));
+    trial::keeps_smaller_at_size(added, saved, kept.work.round() as i64, cap)
 }
 
 /// Whether the compile that also rotates the left loops is kept over `kept`.
