@@ -94,9 +94,9 @@ pub struct CpuTable {
     /// greedy-subreg, exit 2026-11-12): on at m64 only; m32/m16 stay off until
     /// their sfm16 rows (+16/+4 B) are explained; the pin runs it everywhere.
     pub post_ra_tail_duplicate: bool,
-    /// DEVIATE TL4 (owner x86-m32-b, exit 2026-11-27): the stand-alone tail
-    /// duplication leaves a computed goto's dispatch factored at `-Os`, where
-    /// the pin copies it (up to ten instructions) and bytes come first here.
+    /// DEVIATE TL4 (no target states it since m32 dropped it): the stand-alone
+    /// tail duplication leaves a computed goto's dispatch factored at `-Os`,
+    /// where the pin copies it (up to ten instructions).
     pub skip_computed_goto_copies_at_size: bool,
     /// DEVIATE INLINE-FRAME-SIZE (owner x86-m32-b, exit 2026-12-05): inline
     /// code that is only x87 register operations or x87 through a register
