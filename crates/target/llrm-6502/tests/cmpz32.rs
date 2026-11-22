@@ -57,3 +57,34 @@ fn an_equality_of_longs_is_a_value_too() {
     let text = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|why| panic!("{why}"));
     assert!(text.contains("rts"), "{text}");
 }
+
+/// `report(x == k)` for twelve volatile longs and twelve different constants:
+/// the byte compares have branches the outliner cannot share, the word compare
+/// it can (div_constants_long -O1: 13,520 B, 15,431 with every long
+/// equality byte by byte). The module is compiled both ways and the smaller
+/// kept (`long_step_trial`).
+#[test]
+fn many_long_equalities_keep_the_smaller_module() {
+    let mut ir = format!("target datalayout = \"{}\"\ndeclare void @report(i32)\n", datalayout());
+    for i in 0..12 {
+        ir += &format!("@g{i} = global i32 {}\n", 0x01020304 + i * 0x01010101);
+    }
+    ir += "define void @f() {\n";
+    for i in 0..12 {
+        ir += &format!(
+            "  %v{i} = load volatile i32, ptr @g{i}\n  %c{i} = icmp eq i32 %v{i}, {}\n  %z{i} = zext i1 %c{i} to i32\n  call void @report(i32 %z{i})\n",
+            0x01020304 + i * 0x01010101 + 1
+        );
+    }
+    ir += "  ret void\n}\n";
+    let level = Request::new(Level::O2);
+    let kept = assembly(&ir, &level).unwrap();
+    let words = llrm_6502::dagisel::function::with_long_steps(false, || assembly(&ir, &level)).unwrap();
+    let bytes = |text: &str| llrm_6502::timing::estimate(llrm_6502::dagisel::hooks::Cpu::Mos6502, text).unwrap().bytes;
+    assert!(
+        bytes(&kept) <= bytes(&words),
+        "kept {} B against {} B with word compares:\n{kept}",
+        bytes(&kept),
+        bytes(&words)
+    );
+}

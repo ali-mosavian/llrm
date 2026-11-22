@@ -879,7 +879,10 @@ fn lower_setcc(
             other => other,
         };
     }
-    if dag.value_type(op0) == EVT::I32 && matches!(cc, CondCode::SetEq | CondCode::SetNe) {
+    if dag.value_type(op0) == EVT::I32
+        && matches!(cc, CondCode::SetEq | CondCode::SetNe)
+        && super::function::long_steps()
+    {
         let flags = lower_long_equality(dag, cc, op0, op1);
         // the type legalizer expects a value of the type it replaces: a bit is
         // the byte truncated (a branch or a select reads the flags
@@ -917,6 +920,7 @@ fn lower_long_equality(
     a: SDValue,
     b: SDValue,
 ) -> SDValue {
+    super::function::note_step_site();
     let sixteen = dag.get_constant(16, EVT::I8);
     let mut halves = Vec::new();
     for value in [a, b] {
