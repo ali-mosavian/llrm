@@ -872,6 +872,16 @@ pub struct Tuning {
     /// Linux x86-64 stays false: glibc's `memcpy` of 0-32 bytes is 6.4 TSC
     /// ticks a call, `rep movsb` 8.2 (Ryzen 9 9950X3D, fsrm; 2026-11-05).
     pub inline_variable_memcpy: bool,
+    /// DEVIATE MEM-OS-REP (owner x87, exit 2026-12-06): tuned for size, an
+    /// `llvm.memcpy` of a length known only at run time that is no loop's work
+    /// (its block is in no loop) is one `rep movsb`, not a call of `memcpy`.
+    /// gcc's `decide_alg` takes `rep_prefix_1_byte` for any unknown size when
+    /// `optimize_insn_for_size_p`; the pin's `EmitTargetCodeForMemcpy` calls
+    /// `memcpy`. A copy in a loop keeps the call: glibc's `memcpy` is faster
+    /// than the `rep movsb` startup (6.4 against 8.2 ticks for 0-32 bytes).
+    /// m32 only: at m64 QB `localarr` ran 51.0M clk against 44.1M with two
+    /// small copies as `rep movsb` (+15.6%), a worse cell than clang's 40.2M.
+    pub inline_variable_memcpy_at_size: bool,
     /// DEVIATE MEM-OS (owner anyisa, exit 2026-11-14), the neighbour of SD541:
     /// tuned for size, a constant `memcpy`/`memmove` whose load and store
     /// pieces take more bytes than the call of the library routine (`mov
@@ -1090,6 +1100,7 @@ impl Tuning {
         prefixed_16_bit_counters: false,
         partial_libcalls_skip_at_size: false,
         inline_variable_memcpy: false,
+        inline_variable_memcpy_at_size: false,
         size_copy_price: None,
         ipsccp_widen_keeps_sign: false,
         ipsccp_widen_keeps_sign_at_size: false,
@@ -1120,6 +1131,11 @@ pub struct GlobalMerge {
     /// The object format is Mach-O: the merged struct is `internal`, not
     /// `private`.
     pub mach_o: bool,
+    /// `MergeExternalByDefault` (GlobalMerge.cpp: `!MachO` on arm64): defined
+    /// external globals merge too, each name an alias at its member's offset
+    /// (`Alias::offset`). The writer must emit aliases: false where it cannot
+    /// (assembly text), as the target's own flag.
+    pub external: bool,
 }
 
 /// Where the target keeps no program data, as linear addresses: old

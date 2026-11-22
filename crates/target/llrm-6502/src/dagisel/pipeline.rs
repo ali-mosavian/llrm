@@ -156,6 +156,7 @@ pub fn select_block(
     // narrowing of a loaded boolean (`lda g`), leaving `lda (zp),y`.
     drop_assertions_read_as_bytes(dag);
     DagCombiner::new(dag, &mut MosLateCombines, CombineLevel::AfterLegalizeDag).with_tli(&tli).run();
+    super::combine::reload_into_memory_operands(dag);
 
     let selector = Selector::new(match cpu {
         Cpu::Mos6502 => mos_mos6502::TABLE,

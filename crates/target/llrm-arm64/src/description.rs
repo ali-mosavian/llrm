@@ -435,24 +435,32 @@ mod tests {
         let regs = llrm_lir::registers::Regs(Arm64.registers());
         let segments = Segments::of(&Arm64.machine(), regs, Arm64.operand_bytes());
         assert_eq!(segments.data, None);
-        let phases = llrm_codegen::flow::machine_with(
+        let build = |omitted: &[&str]| llrm_codegen::flow::machine_with(
             &Default::default(),
             None,
             None,
             None,
             false,
-            profile,
+            tuned_for(&Arm64, "generic", false).expect("generic has a profile"),
             &segments,
             &std::rc::Rc::new(RegisterClasses::of(&Arm64)),
             &Rules::NONE,
             &Arm64.frame_registers(),
             llrm_codegen::backend::shadow::Selector::Old,
-            &Arm64.omitted_phases().iter().map(|(name, _)| *name).collect::<Vec<_>>(),
+            omitted,
         )
         .unwrap_or_else(|error| panic!("{error}"));
+        let omitted: Vec<&str> = Arm64.omitted_phases().iter().map(|(name, _)| *name).collect();
+        let phases = build(&omitted);
         let names: Vec<&str> = phases.iter().map(|phase| phase.class_name()).collect();
         println!("{} phases: {}", names.len(), names.join(" "));
-        assert_eq!(names.len(), 28, "48 phases less the 20 omitted");
+        // A shared phase added to the registry runs here until it is omitted above: name it, or this fails.
+        let kept = "EarlyTailDuplicate OptimizePHIs DeadMachineInstructionElim SharedConstants ProcessImplicitDefs MachineCombiner \
+            MachineLICM IvShare IvZero MachineCSE MachineSink PeepholeOptimizer LiveRangeShrink PhiElimination TwoAddress \
+            JoinStackPointer Coalescer MachineScheduler RegAlloc ParallelCopy ReserveCallFrame Prologue LateCleanup Peephole \
+            LoopSlots Scheduler BranchFolder ControlFlow CopyPropagation";
+        assert_eq!(names, kept.split_whitespace().collect::<Vec<_>>(), "the phases arm64 runs");
+        assert_eq!(names.len(), build(&[]).len() - omitted.len(), "an omitted phase is one the registry has");
         for (name, why) in Arm64.omitted_phases() {
             assert!(!names.contains(name) && !why.is_empty(), "{name}");
         }

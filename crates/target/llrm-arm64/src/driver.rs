@@ -166,6 +166,23 @@ pub fn lowered_before_selection(program: &mut Program) -> Result<(), String> {
     program.modules.iter_mut().try_for_each(llrm_transforms::lowerconstantintrinsics::module_lowered)
 }
 
+thread_local! {
+    /// Whether the output carries aliases (an object does; assembly text
+    /// refuses them): GlobalMerge names merged externals by alias.
+    static ALIASES_OK: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+}
+
+/// `body` where the output carries aliases only if `ok`.
+fn with_aliases<T>(
+    ok: bool,
+    body: impl FnOnce() -> T,
+) -> T {
+    let before = ALIASES_OK.with(|cell| cell.replace(ok));
+    let out = body();
+    ALIASES_OK.with(|cell| cell.set(before));
+    out
+}
+
 /// `program` through the shared mid-end at `level`.
 pub fn optimized_at(
     program: &mut Program,
@@ -186,6 +203,7 @@ pub fn optimized_at(
         // DEVIATE GM-TRIAL (`crate::trial`): the trial compile merges as the
         // pin does, nothing at -Os.
         merge.optsize_counts &= !crate::trial::unmerged();
+        merge.external &= ALIASES_OK.with(std::cell::Cell::get);
         for module in &mut program.modules {
             let before = module.globals.len();
             if llrm_transforms::globalmerge::merged(module, &program.layout, &merge)? && merge.optsize_counts {
@@ -553,7 +571,7 @@ fn compiled(
             llrm_mir::dbgimport::types_and_globals(&mut program.modules[0]);
         }
         if level != Level::O0 {
-            let run = |program: &mut Program| optimized_at(program, level);
+            let run = |program: &mut Program| with_aliases(!refuse_aliases, || optimized_at(program, level));
             let go = |program: &mut Program| match (unrotated, more) {
                 (true, _) => llrm_transforms::trial::with_unrotated(|| run(program)),
                 (_, true) => llrm_transforms::trial::with_more_rotation(|| run(program)),
