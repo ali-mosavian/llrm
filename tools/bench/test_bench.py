@@ -1581,6 +1581,26 @@ def test_bcc_sh_without_any_dosbox_says_so_not_exit_127(tmp_path):
     assert done.returncode == 2 and "no DOSBox" in done.stderr, (done.returncode, done.stderr)
 
 
+def test_a_borland_level_with_no_c_program_runs_no_job_and_cries_no_failure(tmp_path, monkeypatch, capsys):
+    """A Nib + BASIC run printed "BORLAND JOB FAILED (bcc O1): the job exited 0 and built no object" for each of bcc, tc and tcpp at each level: it had no C program to build."""
+    (tmp_path / "lib").mkdir()
+    monkeypatch.setattr(bench, "BORLAND", {"bcc": (tmp_path, "bcc", {"O1": "-O1"})})
+    monkeypatch.setattr(bench.native, "run_limited", lambda *a, **k: (_ for _ in ()).throw(AssertionError("a job ran")))
+    assert bench.build_borland("bcc", [], "O1", tmp_path / "work") == {}
+    assert "BORLAND JOB FAILED" not in capsys.readouterr().err
+
+
+def test_each_counted_cell_prints_a_stage_line_with_its_place_in_the_level(monkeypatch, capsys):
+    """The 3 h C run printed one line per level and nothing while 3 workers each counted a heavy program for over an hour: slow or stuck could not be told, and no ETA read."""
+    monkeypatch.setattr(bench, "measure", lambda job: {"clocks": job})
+    jobs = [(("a", "c", "O1"), 1), (("b", "c", "O1"), 2), (("c", "c", "O1"), 3)]
+    with bench.ThreadPoolExecutor(max_workers=2) as pool:
+        got = bench.count_cells(pool, jobs, "O1")
+    assert list(got) == [key for key, _ in jobs] and got[("c", "c", "O1")] == {"clocks": 3}
+    lines = [line for line in capsys.readouterr().err.splitlines() if "counted" in line]
+    assert len(lines) == 3 and lines[-1].endswith("O1: counted 3/3 (" + lines[-1].split("(")[1]) and "/3 (" in lines[0], lines
+
+
 def test_a_source_touched_mid_run_refuses_the_next_reference_level_not_the_end(tmp_path, monkeypatch):
     """The m16 C run of 2026-11-22 measured for 3 h, then died at its end ("stale binaries": a checkout in its source tree) and wrote nothing.
     The check now runs before each reference level: a stale tree stops the run at the next one."""
