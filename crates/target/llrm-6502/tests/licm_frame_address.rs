@@ -7,10 +7,14 @@ mod common;
 use common::pipeline::llrm_cc;
 
 fn assembly(level: &str) -> String {
+    assembly_of("frame_address_loop", level)
+}
+
+fn assembly_of(name: &str, level: &str) -> String {
     let dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("licm-frame-address");
     std::fs::create_dir_all(&dir).unwrap();
-    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data/frame_address_loop.c");
-    let out = dir.join(format!("f.{level}.s"));
+    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("tests/data/{name}.c"));
+    let out = dir.join(format!("{name}.{level}.s"));
     let made = Command::new(llrm_cc())
         .current_dir(&dir)
         .args(["--target=6502-sim65", level, "-fno-inline-functions", "-S", "-w", "-o"])
@@ -22,11 +26,12 @@ fn assembly(level: &str) -> String {
     std::fs::read_to_string(out).unwrap()
 }
 
-/// The lines of the loop: from its label to the branch back to it.
+/// The lines of the loop: from its label to the branch (or, past a branch's
+/// reach, the jump) back to it.
 fn loop_body(text: &str) -> Vec<&str> {
     let lines: Vec<&str> = text.lines().collect();
     for (at, line) in lines.iter().enumerate() {
-        let Some(label) = line.trim().strip_prefix("bcc ").or_else(|| line.trim().strip_prefix("bne ")) else { continue };
+        let Some(label) = line.trim().strip_prefix("bcc ").or_else(|| line.trim().strip_prefix("bne ")).or_else(|| line.trim().strip_prefix("jmp ")) else { continue };
         if let Some(start) = lines[..at].iter().position(|l| l.trim() == format!("{label}:")) {
             return lines[start..=at].to_vec();
         }
@@ -43,5 +48,17 @@ fn a_frame_address_is_made_before_the_loop_that_uses_it() {
         let text = assembly(level);
         let body = loop_body(&text);
         assert!(!body.iter().any(|l| l.trim() == "lda rc0"), "{level}: the loop reads rs0 every trip:\n{}", body.join("\n"));
+    }
+}
+
+/// Nine values live across the loop leave no slot for the address: hoisting it
+/// would raise the pressure past `MachineLICM`'s limit (`CanCauseHighRegPressure`),
+/// so the `LEA` stays in the loop.
+#[test]
+fn a_frame_address_is_not_hoisted_into_a_loop_at_the_pressure_limit() {
+    for level in ["-O2", "-Os"] {
+        let text = assembly_of("frame_address_pressure", level);
+        let body = loop_body(&text);
+        assert!(body.iter().any(|l| l.trim() == "adc #70"), "{level}: the address left a loop with no register to spare:\n{}", body.join("\n"));
     }
 }
