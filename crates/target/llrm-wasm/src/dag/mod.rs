@@ -204,7 +204,10 @@ pub fn compile_function_with(
     if options.level != crate::driver::Level::O0 {
         if crate::early_tail_duplicate::early_tail_duplicate(
             &mut f,
-            matches!(options.level, crate::driver::Level::Os | crate::driver::Level::Oz),
+            matches!(
+                options.level,
+                crate::driver::Level::Os | crate::driver::Level::Oz
+            ),
         ) {
             remove_unreachable_blocks(&mut f);
         }

@@ -17,15 +17,15 @@
 //! handler this way; left shared, each handler pays a branch to it.
 //!
 //! DEVIATE 2: `canTailDuplicate` is `analyzeBranch` of the predecessor with no
-//! condition; the pin's `LayoutMode`, indirect-branch (`TailDupIndirectBranchSize`
-//! applies to a block ending in `br_table` only if the instruction table marks
-//! it indirect) and profile paths are the post-RA `tail_duplicate`'s. Exit:
-//! the shared tail duplicator over the neutral machine function (S4); the LIR
-//! copy is `llrm-codegen`'s `earlytaildup`.
+//! condition; the pin's `LayoutMode`, indirect-branch
+//! (`TailDupIndirectBranchSize` applies to a block ending in `br_table` only if
+//! the instruction table marks it indirect) and profile paths are the post-RA
+//! `tail_duplicate`'s. Exit: the shared tail duplicator over the neutral
+//! machine function (S4); the LIR copy is `llrm-codegen`'s `earlytaildup`.
 //!
 //! # See also
-//! `TailDuplicator::{tailDuplicateBlocks, tailDuplicateAndUpdate, tailDuplicate,
-//! shouldTailDuplicate, canCompletelyDuplicateBB, processPHI,
+//! `TailDuplicator::{tailDuplicateBlocks, tailDuplicateAndUpdate,
+//! tailDuplicate, shouldTailDuplicate, canCompletelyDuplicateBB, processPHI,
 //! duplicateInstruction, updateSuccessorsPHIs, isSimpleBB, duplicateSimpleBB}`,
 //! pin d1106deb71cc.
 
@@ -303,7 +303,9 @@ fn should_tail_duplicate(
         indirect: insts.last().is_some_and(|last| has(last, flag::INDIRECT_BRANCH)),
         instructions: counted.clone().filter(|inst| !has(inst, flag::META)).count(),
         phis: insts.len() - counted.clone().count(),
-        duplicable: counted.clone().all(|inst| !has(inst, flag::NOT_DUPLICABLE) && !has(inst, flag::RETURN) && !has(inst, flag::CALL)),
+        duplicable: counted
+            .clone()
+            .all(|inst| !has(inst, flag::NOT_DUPLICABLE) && !has(inst, flag::RETURN) && !has(inst, flag::CALL)),
         preds: preds[tail].len(),
         succs: f.succs[tail].len(),
         successor_phi: f.succs[tail].iter().any(|&s| f.blocks[s].first().is_some_and(|i| i.opcode == PHI)),
@@ -316,10 +318,14 @@ fn incoming(
     phi: &Inst,
     pred: usize,
 ) -> Option<(usize, VReg)> {
-    (1..phi.operands.len()).step_by(2).find_map(|at| match (phi.operands[at], phi.operands[at + 1]) {
-        (Operand::Use(reg), Operand::Block(block)) if block as usize == pred => Some((at, reg)),
-        _ => None,
-    })
+    (1..phi.operands.len())
+        .step_by(2)
+        .find_map(
+            |at| match (phi.operands[at], phi.operands[at + 1]) {
+                (Operand::Use(reg), Operand::Block(block)) if block as usize == pred => Some((at, reg)),
+                _ => None,
+            },
+        )
 }
 
 /// A register defined in the tail and its value in each copy
@@ -358,7 +364,9 @@ fn live_out_defs(
         .filter(|(at, _)| *at != block)
         .flat_map(|(_, insts)| insts.iter())
         .flat_map(|inst| inst.operands.iter())
-        .filter_map(|operand| if let Operand::Use(reg) = operand { defined.contains(reg).then_some(*reg) } else { None })
+        .filter_map(
+            |operand| if let Operand::Use(reg) = operand { defined.contains(reg).then_some(*reg) } else { None },
+        )
         .collect()
 }
 
@@ -484,7 +492,9 @@ fn tail_duplicate_and_update(
     let used_by_phi: HashSet<VReg> = f.blocks[tail]
         .iter()
         .take_while(|inst| inst.opcode == PHI)
-        .flat_map(|phi| phi.operands[1..].chunks(2).filter_map(|pair| if let Operand::Use(r) = pair[0] { Some(r) } else { None }))
+        .flat_map(|phi| {
+            phi.operands[1..].chunks(2).filter_map(|pair| if let Operand::Use(r) = pair[0] { Some(r) } else { None })
+        })
         .collect();
     let live_out = live_out_defs(f, tail);
     let mut updates = Updates::default();
@@ -495,7 +505,8 @@ fn tail_duplicate_and_update(
             continue;
         }
         set_branches(f, pred, None, None, None);
-        Copier { tail, used_by_phi: &used_by_phi, live_out: &live_out, updates: &mut updates, copies: &mut copies }.copy_into(f, pred);
+        Copier { tail, used_by_phi: &used_by_phi, live_out: &live_out, updates: &mut updates, copies: &mut copies }
+            .copy_into(f, pred);
         f.succs[pred] = f.succs[tail].clone();
         f.edge_probs.resize_with(f.blocks.len(), Vec::new);
         f.edge_probs[pred] = f.edge_probs[tail].clone();
@@ -508,11 +519,19 @@ fn tail_duplicate_and_update(
     if let Some(prev) = tail.checked_sub(1) {
         let merge = f.succs[prev] == [tail]
             && remaining == [prev]
-            && ending(f, prev).is_some_and(|end| end.cond.is_none() && end.other.is_none() && end.taken.is_none_or(|t| t == tail));
+            && ending(f, prev)
+                .is_some_and(|end| end.cond.is_none() && end.other.is_none() && end.taken.is_none_or(|t| t == tail));
         if merge {
             set_branches(f, prev, None, None, None);
             if !f.blocks[prev].iter().any(Inst::is_terminator) {
-                Copier { tail, used_by_phi: &used_by_phi, live_out: &live_out, updates: &mut updates, copies: &mut copies }.copy_into(f, prev);
+                Copier {
+                    tail,
+                    used_by_phi: &used_by_phi,
+                    live_out: &live_out,
+                    updates: &mut updates,
+                    copies: &mut copies,
+                }
+                .copy_into(f, prev);
                 f.succs[prev] = f.succs[tail].clone();
                 f.edge_probs.resize_with(f.blocks.len(), Vec::new);
                 f.edge_probs[prev] = f.edge_probs[tail].clone();
@@ -526,11 +545,13 @@ fn tail_duplicate_and_update(
     }
     // A predecessor that kept the tail still has to read the tail's PHIs from
     // a register of its own: the copies of the "nasty case".
-    let kept: Vec<usize> = preds[tail].iter().copied().filter(|p| !done.contains(p) && f.succs[*p].len() == 1).collect();
+    let kept: Vec<usize> =
+        preds[tail].iter().copied().filter(|p| !done.contains(p) && f.succs[*p].len() == 1).collect();
     for pred in kept {
         let mut map = HashMap::new();
         let mut infos = Vec::new();
-        let mut copier = Copier { tail, used_by_phi: &used_by_phi, live_out: &live_out, updates: &mut updates, copies: &mut copies };
+        let mut copier =
+            Copier { tail, used_by_phi: &used_by_phi, live_out: &live_out, updates: &mut updates, copies: &mut copies };
         let phis: Vec<usize> = (0..f.blocks[tail].len()).take_while(|&at| f.blocks[tail][at].opcode == PHI).collect();
         for at in phis {
             let phi = f.blocks[tail][at].clone();
@@ -717,7 +738,8 @@ fn propagate_copies(
         if uses != 1 {
             continue;
         }
-        let Some(at) = f.blocks[block].iter().position(|inst| inst.operands == [Operand::Def(dst), Operand::Use(src)]) else {
+        let Some(at) = f.blocks[block].iter().position(|inst| inst.operands == [Operand::Def(dst), Operand::Use(src)])
+        else {
             continue;
         };
         f.blocks[block].remove(at);
@@ -785,7 +807,10 @@ mod tests {
         // latch and the block that reads its sum.
         let mut table = vec![Operand::Use(sel)];
         table.extend((1..=preds).map(|b| Operand::Block(b as u32)));
-        f.blocks.push(vec![Inst::new(op::CONST_I32, &[Operand::Def(four), Operand::Imm(4)]), Inst::new(op::BR_TABLE_I32, &table)]);
+        f.blocks.push(vec![
+            Inst::new(op::CONST_I32, &[Operand::Def(four), Operand::Imm(4)]),
+            Inst::new(op::BR_TABLE_I32, &table),
+        ]);
         f.succs.push((1..=preds).collect());
         for (at, value) in values.iter().enumerate() {
             f.blocks.push(vec![
@@ -824,7 +849,10 @@ mod tests {
             assert!(f.blocks[latch].is_empty() && f.succs[latch].is_empty(), "the shared latch stayed");
             for handler in 1..=preds {
                 assert_eq!(f.succs[handler], [latch + 2]);
-                assert!(f.blocks[handler].iter().any(|inst| inst.opcode == op::ADD_I32), "handler {handler} has no copy of the add");
+                assert!(
+                    f.blocks[handler].iter().any(|inst| inst.opcode == op::ADD_I32),
+                    "handler {handler} has no copy of the add"
+                );
             }
             let phi = &f.blocks[latch + 2][0];
             assert_eq!(phi.operands.len(), 1 + 2 * preds, "the PHI after the latch reads each copy");
@@ -852,7 +880,10 @@ mod tests {
         f.blocks = vec![
             vec![Inst::new(op::CONST_I32, &[Operand::Def(start), Operand::Imm(5)])],
             vec![
-                Inst::new(PHI, &[Operand::Def(n), Operand::Use(start), Operand::Block(0), Operand::Use(next), Operand::Block(3)]),
+                Inst::new(
+                    PHI,
+                    &[Operand::Def(n), Operand::Use(start), Operand::Block(0), Operand::Use(next), Operand::Block(3)],
+                ),
                 Inst::new(op::BR_IF, &[Operand::Block(3), Operand::Use(n)]),
                 Inst::new(op::BR, &[Operand::Block(2)]),
             ],
