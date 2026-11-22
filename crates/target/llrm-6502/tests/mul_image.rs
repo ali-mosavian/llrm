@@ -86,3 +86,34 @@ fn a_shift_chain_before_an_add_runs_in_a() {
     let bytes = estimate(Cpu::Mos6502, body).unwrap_or_else(|e| panic!("{e}\n{body}")).bytes;
     assert!(bytes <= 34, "{bytes} B\n{body}");
 }
+
+/// A loop of `x * 31` beside a multiply by a variable: the routine is linked
+/// anyway, but the loop ran 2,000+ clocks a trip in calls. At -Os the module
+/// takes the shifts when the clocks they save are worth the bytes they add
+/// (copy_runs 70,059 -> 57,967 clocks and 1,362 -> 1,342 B; mul_constants
+/// 19.4M -> 15.4M, llvm-mos 13.6M): the call stays only for the variable one.
+#[test]
+fn a_constant_multiply_in_a_loop_is_shifts_though_a_variable_multiply_is_linked() {
+    let text = asm("define i32 @hot(i32 %x, i32 %y, i32 %n) minsize nounwind {\n\
+         entry:\n  br label %loop\n\
+         loop:\n  %i = phi i32 [ 0, %entry ], [ %i1, %loop ]\n  %a = phi i32 [ %x, %entry ], [ %a1, %loop ]\n\
+           %a1 = mul i32 %a, 31\n  %i1 = add i32 %i, 1\n  %c = icmp ult i32 %i1, %n\n  br i1 %c, label %loop, label %exit\n\
+         exit:\n  %r = mul i32 %a1, %y\n  ret i32 %r\n}\n");
+    let calls = text.matches("__mulsi3").count();
+    assert_eq!(calls, 1, "{text}");
+}
+
+/// The same multiply run once, in a module whose clocks are somewhere else (a
+/// loop of variable multiplies): the share of the module's clocks it saves does
+/// not pay its bytes, the call stays.
+#[test]
+fn a_constant_multiply_run_once_beside_a_busy_loop_stays_a_call() {
+    let text = asm("define i32 @busy(i32 %x, i32 %y, i32 %n) minsize nounwind {\n\
+         entry:\n  br label %loop\n\
+         loop:\n  %i = phi i32 [ 0, %entry ], [ %i1, %loop ]\n  %a = phi i32 [ %x, %entry ], [ %a1, %loop ]\n\
+           %a1 = mul i32 %a, %y\n  %i1 = add i32 %i, 1\n  %c = icmp ult i32 %i1, %n\n  br i1 %c, label %loop, label %exit\n\
+         exit:\n  ret i32 %a1\n}\n\
+         define i32 @cold(i32 %x) minsize nounwind {\n  %a = mul i32 %x, 31\n  ret i32 %a\n}\n");
+    let cold = &text[text.find("cold:").unwrap_or_else(|| panic!("{text}"))..];
+    assert!(cold.split(".segment").next().unwrap().contains("__mulsi3"), "{text}");
+}
