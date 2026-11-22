@@ -92,3 +92,11 @@ def test_the_bytes_of_a_cell_are_text_plus_data():
     from m68k_clk import loaded_bytes
 
     assert loaded_bytes("   text\t   data\t    bss\t    dec\t    hex\tfilename\n    208\t     56\t      0\t    264\t    108\to.o\n") == "264"
+
+
+def test_gcc_is_hosted_like_ours():
+    """m32_word_vectors -O1 68000: ours (hosted since #10561) called the stub memset for its fused fill loop while gcc, built `-ffreestanding`, inlined the fills and never referenced the stub: the pair compared a libc call with an inline store."""
+    import m68k_clk
+
+    command = m68k_clk.gcc_command("gcc", "/", "68000", "O1", "p.c", "p.o", True)
+    assert "-ffreestanding" not in command, command
