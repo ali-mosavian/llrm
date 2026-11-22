@@ -38,7 +38,7 @@ fn row_of(name: &str) -> Option<(&'static str, bool)> {
 /// The plain load an extending load (any mode, scaled or with a `(An)+`
 /// writeback) is made of, and the bits it loads: `MOVSXd32o8_WB` is `MOV8do_WB`
 /// and 8. Only a sign extension to a long.
-fn plain_of(name: &str) -> Option<(&'static str, u32)> {
+pub(crate) fn plain_of(name: &str) -> Option<(&'static str, u32)> {
     let writeback = name.ends_with("_WB");
     let printed = if writeback { crate::dagisel::indexed::extension_of(name)? } else { name };
     let (stem, scale) = match crate::dagisel::scaled::base_of(printed) {
