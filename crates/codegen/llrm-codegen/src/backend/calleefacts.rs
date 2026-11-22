@@ -160,6 +160,19 @@ impl CalleeFacts {
         Self::of_binding(module, false)
     }
 
+    /// Whether a function of `module` calls one that binds locally but is not
+    /// private: the facts differ with `binds_local`.
+    pub fn local_binding_matters(module: &Module) -> bool {
+        let locals = local_definitions(module);
+        if locals.is_empty() {
+            return false;
+        }
+        let graph = CallGraph::new(module);
+        module.functions().any(|(id, _, function)| {
+            !function.is_declaration() && graph.callees_of(id).iter().any(|callee| *callee != id && locals.contains(callee))
+        })
+    }
+
     /// [`CalleeFacts::of`], where `binds_local` lets a function that binds
     /// locally (`binds_local`) take part too: its callers in the module may
     /// rely on what it writes though others call it by its convention,

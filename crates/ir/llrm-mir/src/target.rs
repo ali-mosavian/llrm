@@ -146,14 +146,22 @@ pub struct Tuning {
     /// smaller, or grows by a few bytes a function and runs less
     /// (`Tti::unroll_trial_at_size`). `None`: no trial.
     pub unroll_trial_at_size: Option<u32>,
-    /// DEVIATE IPRA-DSO-LOCAL (owner llrm-target-x86-m64, exit 2026-11-24): a
-    /// function that binds locally (external linkage, hidden or protected,
+    /// A function that binds locally (external linkage, hidden or protected,
     /// or default visibility in code that is not shared-library code) takes
     /// part in the callee-written-registers facts, as GCC's `-fipa-ra` uses
     /// every definition no other definition can replace; the pin's
     /// `RegUsageInfoCollector` takes local linkage only
-    /// (`isSafeForNoCSROpt`) and is off by default.
+    /// (`isSafeForNoCSROpt`) and is off by default. No target sets it: m64
+    /// had it until 2026-11-22 (QB core, IPRA on minus off: Os +112 B, O2
+    /// +542 B, no executed-instruction gain; row IPRA-DSO-LOCAL). The
+    /// environment variable `LLRM_IPRA_BINDS_LOCAL` turns it on for a run.
     pub ipra_binds_local: bool,
+    /// DEVIATE IPRA-OS-TRIAL (beyond the pin; owner x87-cordic-2, exit
+    /// 2026-12-05): at -Os a module where a function calls a locally binding
+    /// one is assembled again with `ipra_binds_local` and the smaller object
+    /// kept. QB core m64 Os -426 B, tests/c Os -190 B, none worse. false: the
+    /// pin's.
+    pub ipra_trial_at_size: bool,
     /// DEVIATE UNROLL-OS-TRIAL-STRICT (owner llrm-target-x86-m64, exit
     /// 2026-11-24): the -Os unroll trial is kept only where the object is
     /// smaller, never for a few bytes a function that the code runs less
@@ -958,6 +966,7 @@ impl Tuning {
         unroll_trial_nests_only: false,
         unroll_trial_at_size: None,
         ipra_binds_local: false,
+        ipra_trial_at_size: false,
         unroll_trial_bytes_strict: false,
         inline_dying_credit_at_os: true,
         inline_trial_keeps_shrinking_copy: false,

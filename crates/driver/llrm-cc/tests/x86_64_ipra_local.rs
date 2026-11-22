@@ -1,9 +1,10 @@
-//! x86-64: a function that binds locally takes part in the
-//! callee-written-registers facts (DEVIATE IPRA-DSO-LOCAL, gcc `-fipa-ra`),
-//! though it has external linkage. A caller keeps its values across a call of
-//! such a leaf in scratch registers, which cost no push; across a call of one
-//! that calls an unseen routine it still needs the saved registers. Needs
-//! `LLRM_LLC`.
+//! x86-64: with `LLRM_IPRA_BINDS_LOCAL` a function that binds locally takes
+//! part in the callee-written-registers facts (gcc `-fipa-ra`), though it has
+//! external linkage. Off by default, as the pin: QB core IPRA on minus off was
+//! +112 B at Os and +542 B at O2 (row IPRA-DSO-LOCAL). A caller keeps its
+//! values across a call of such a leaf in scratch registers, which cost no
+//! push; across a call of one that calls an unseen routine it still needs the
+//! saved registers. Needs `LLRM_LLC`.
 
 use std::path::Path;
 use std::process::Command;
@@ -18,23 +19,52 @@ fn assembly(source: &str) -> String {
     assembly_with(source, &[])
 }
 
+/// The assembly with the facts of locally binding functions on.
 fn assembly_with(
     source: &str,
     flags: &[&str],
 ) -> String {
+    assembly_env(source, flags, true)
+}
+
+fn assembly_env(
+    source: &str,
+    flags: &[&str],
+    binds_local: bool,
+) -> String {
+    assembly_run(source, "-Os", flags, binds_local, &[])
+}
+
+fn assembly_run(
+    source: &str,
+    level: &str,
+    flags: &[&str],
+    binds_local: bool,
+    env: &[(&str, &str)],
+) -> String {
     let llc = std::env::var_os("LLRM_LLC").expect("LLRM_LLC is not set: this test needs it and does not skip");
     let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!(
-        "ipra-local-{}-{source}-{}",
+        "ipra-local-{}-{source}-{level}-{}-{binds_local}-{}",
         std::process::id(),
-        flags.join("_")
+        flags.join("_"),
+        env.iter().map(|(name, _)| *name).collect::<Vec<_>>().join("_")
     ));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let asm = dir.join("a.s");
-    let run = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_llrm-cc-bin"));
+    if binds_local {
+        command.env("LLRM_IPRA_BINDS_LOCAL", "1");
+    } else {
+        command.env_remove("LLRM_IPRA_BINDS_LOCAL");
+    }
+    for (name, value) in env {
+        command.env(name, value);
+    }
+    let run = command
         .env("LLRM_CC_TARGET", "x86_64-linux")
         .env("LLRM_LLC", llc)
-        .args(["-Os", "-w"])
+        .args([level, "-w"])
         .args(flags)
         .args(["-S", "-o"])
         .arg(&asm)
@@ -43,6 +73,32 @@ fn assembly_with(
         .unwrap();
     assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
     std::fs::read_to_string(&asm).unwrap()
+}
+
+/// Default at -O2 (the pin): a caller keeps values across an external leaf in
+/// saved registers, as `RegUsageInfoCollector` takes private functions only.
+/// IPRA was on for m64 at every level until 2026-11-22: QB core +112 B at Os,
+/// +542 B at O2.
+#[test]
+fn by_default_at_o2_a_caller_saves_registers_across_an_external_leaf() {
+    let text = assembly_run("ipra_local_leaf.c", "-O2", &[], false, &[]);
+    assert!(saves_a_register(&text), "the caller relied on an external leaf's registers at -O2:\n{text}");
+}
+
+/// IPRA-OS-TRIAL: at -Os a module with a locally binding callee is compiled
+/// again with the facts on and the smaller object kept. `ipra_local_leaf.c`
+/// is 95 B without them and 72 B with; `vector_float_compare_loop.c` is 4 B
+/// larger with them, so it stays as the pin has it.
+#[test]
+fn at_os_the_smaller_object_of_the_two_ipra_shapes_is_kept() {
+    let off = [("LLRM_NO_IPRA_TRIAL", "1")];
+    let leaf = assembly_run("ipra_local_leaf.c", "-Os", &[], false, &[]);
+    assert!(!saves_a_register(&leaf), "the trial kept the larger object:\n{leaf}");
+    let pinned = assembly_run("ipra_local_leaf.c", "-Os", &[], false, &off);
+    assert!(saves_a_register(&pinned), "no trial is the pin's shape:\n{pinned}");
+    let compare = assembly_run("vector_float_compare_loop.c", "-Os", &[], false, &[]);
+    let compare_pinned = assembly_run("vector_float_compare_loop.c", "-Os", &[], false, &off);
+    assert_eq!(compare, compare_pinned, "the facts grew this object: it is put back");
 }
 
 /// Five values kept across five calls of an external leaf were pushed to
