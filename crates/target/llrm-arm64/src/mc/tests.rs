@@ -360,7 +360,7 @@ fn branches() {
         }
     }
     for op in [VectorReduce::Addv, VectorReduce::Smaxv, VectorReduce::Sminv, VectorReduce::Umaxv, VectorReduce::Uminv] {
-        for lanes in [Arrangement::B16, Arrangement::H8, Arrangement::S4] {
+        for lanes in [Arrangement::B16, Arrangement::H8, Arrangement::S4, Arrangement::B8, Arrangement::H4] {
             all.push(Inst::VectorReduce { op, lanes, rd: Vreg(3), rn: Vreg(28) });
         }
     }

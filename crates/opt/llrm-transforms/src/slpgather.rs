@@ -26,7 +26,8 @@
 //! `slptree`.
 //!
 //! # Example
-//! A bundle whose lanes repeat is packed once with its distinct lanes and read back through a shuffle mask.
+//! A bundle whose lanes repeat is packed once with its distinct lanes and read
+//! back through a shuffle mask.
 //!
 //! ```text
 //! bundle lanes: (%a, %b, %a, %b)
@@ -153,43 +154,36 @@ fn valid(cost: llrm_mir::tti::Cost) -> Option<i64> {
 /// and poison lanes are free).
 fn inserts_cost(
     tti: &dyn Tti,
+    kind: CostKind,
     vector: VectorTy,
     scalars: impl Iterator<Item = (usize, bool)>,
 ) -> Option<i64> {
-    let mut total = 0;
-    for (index, insert) in scalars {
-        if insert {
-            let cost = tti.vector_instr_cost(
-                LaneOp::Insert,
-                vector,
-                Some(index as u32),
-                index == 0,
-                VectorInstrContext::None,
-                CostKind::RecipThroughput,
-            )?;
-            total += valid(cost)?;
-        }
+    let lanes: Vec<u32> = scalars.filter(|(_, insert)| *insert).map(|(index, _)| index as u32).collect();
+    if lanes.is_empty() {
+        return Some(0);
     }
-    Some(total)
+    valid(tti.demanded_insert_overhead(vector, &lanes, kind)?)
 }
 
 /// The cost of a single-source shuffle by `mask` of `vector` (identity is
 /// free, `ShuffleCostBuilder::createShuffleVector`).
 pub(crate) fn shuffle_cost(
     tti: &dyn Tti,
+    kind: CostKind,
     vector: VectorTy,
     mask: &[i32],
 ) -> Option<i64> {
     if mask.is_empty() || (mask.len() == vector.count as usize && identity(mask)) {
         return Some(0);
     }
-    valid(tti.shuffle_cost(ShuffleKind::PermuteSingleSrc, vector, mask, CostKind::RecipThroughput)?)
+    valid(tti.shuffle_cost(ShuffleKind::PermuteSingleSrc, vector, mask, kind)?)
 }
 
 /// `getBuildVectorCost` of the packed scalars, and the shuffle that reads
 /// them: the cost of a gather entry.
 pub(crate) fn gather_cost(
     tti: &dyn Tti,
+    kind: CostKind,
     lane: Ty,
     lanes: &[Operand],
     reuse: &[i32],
@@ -207,18 +201,24 @@ pub(crate) fn gather_cost(
     if same && !constant_of(present[0].1) {
         // `isSplat`: one insert, and the broadcast where the value repeats.
         let (at, _) = present[0];
-        total += inserts_cost(tti, vector, std::iter::once((at, true)))?;
+        // `ShuffleCostEstimator::gather`'s splat: one `getVectorInstrCost`
+        // insert into poison, free at lane 0 (not the bulk
+        // `getScalarizationOverhead` the other gathers pay).
+        let insert =
+            tti.vector_instr_cost(LaneOp::Insert, vector, Some(at as u32), at == 0, VectorInstrContext::None, kind)?;
+        total += valid(insert)?;
         if present.len() > 1 {
-            total += shuffle_cost(tti, vector, &vec![0; width])?;
+            total += shuffle_cost(tti, kind, vector, &vec![0; width])?;
         }
     } else {
-        total += inserts_cost(tti, vector, present.iter().map(|(at, lane)| (*at, !constant_of(*lane))))?;
+        total += inserts_cost(tti, kind, vector, present.iter().map(|(at, lane)| (*at, !constant_of(*lane))))?;
     }
-    Some(total + shuffle_cost(tti, vector, &mask)?)
+    Some(total + shuffle_cost(tti, kind, vector, &mask)?)
 }
 
 /// What a bundle's lanes are, for `EstimatePackPlusShuffleVsInserts`.
 pub(crate) struct Packing<'a> {
+    pub kind: CostKind,
     pub lanes: &'a [Operand],
     pub unique: &'a [Operand],
     pub reuse: &'a [i32],
@@ -292,7 +292,7 @@ pub(crate) fn estimate_pack(
         return Some((true, true));
     }
     let mask = if u > n / 2 { &[][..] } else { p.reuse };
-    let reuses = valid(tti.shuffle_cost(ShuffleKind::PermuteSingleSrc, vector, mask, CostKind::RecipThroughput)?)?;
+    let reuses = valid(tti.shuffle_cost(ShuffleKind::PermuteSingleSrc, vector, mask, p.kind)?)?;
     if p.state.is_some() && !p.gather_only {
         let one_duplicate = !is_load && u + 1 == n;
         let mostly_unique = u * 2 > n;
@@ -308,9 +308,13 @@ pub(crate) fn estimate_pack(
     } else {
         let demanded = (0..n as usize)
             .filter(|&at| p.reuse.get(at).is_some_and(|&lane| lane != POISON && !constant_of(p.unique[lane as usize])));
-        let inserts = inserts_cost(tti, vector, demanded.map(|at| (at, true)))?;
-        let uniques =
-            inserts_cost(tti, uniques, p.unique.iter().enumerate().map(|(at, lane)| (at, !constant_of(*lane))))?;
+        let inserts = inserts_cost(tti, p.kind, vector, demanded.map(|at| (at, true)))?;
+        let uniques = inserts_cost(
+            tti,
+            p.kind,
+            uniques,
+            p.unique.iter().enumerate().map(|(at, lane)| (at, !constant_of(*lane))),
+        )?;
         (inserts, uniques + reuses)
     };
     if uniques_cost <= inserts {

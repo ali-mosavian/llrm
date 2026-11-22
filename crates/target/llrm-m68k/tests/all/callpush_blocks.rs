@@ -8,8 +8,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use llrm_m68k::callpush::plan;
-use llrm_m68k::driver::{self, Level};
 use llrm_m68k::dagisel::hooks::Cpu;
+use llrm_m68k::driver::{self, Level};
 use llrm_m68k::mfunc::{Inst, Kind, Operand, Reg};
 use llrm_m68k::reg;
 use llrm_m68k::regalloc::Assignment;
@@ -89,7 +89,7 @@ fn arguments_stored_before_a_diamond_stay_pushes_at_68000() {
     ];
     let refs: Vec<&Inst> = insts.iter().collect();
     let blocks = [0, 0, 0, 1, 2, 3, 3];
-    let found = plan(&refs, &blocks, &Assignment::default(), Cpu::M68000, Price::Rate, true, |area| {
+    let found = plan(&refs, &blocks, &Assignment::default(), Cpu::M68000, Price::Rate, true, true, |area| {
         Ok(if area > 0 { (8, 16) } else { (0, 0) })
     })
     .expect("plans");

@@ -1,0 +1,10 @@
+[Unit]
+Description=release/next tip-red monitor (one tick)
+
+[Service]
+Environment=TIPRED_OUTBOX=%h/scratch/w9/tipred/outbox TIPRED_STATE=%h/scratch/w9/tipred/state.json GCC_M68K=%h/scratch/gcc-m68k/root
+Type=oneshot
+Nice=19
+IOSchedulingClass=idle
+ExecStart=/usr/bin/python3 %h/work/personal/llrm/tools/tipred.py --repo %h/scratch/w9/tipred/repo
+TimeoutStartSec=3h

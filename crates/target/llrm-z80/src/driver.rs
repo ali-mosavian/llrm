@@ -113,6 +113,10 @@ pub struct Request {
     /// `compile::effective` keeps the variant whose module is smaller in
     /// bytes, then in clocks.
     pub unroll_variant: Option<llrm_transforms::trial::SpeedUnroll>,
+    /// DEVIATE LSR-KEY-TRIAL (owner z80, exit 2026-12-15): LSR rates by the
+    /// alternate order (`Tti::lsr_alternate_order`); `compile::effective`
+    /// keeps it where the module is cheaper.
+    pub lsr_alternate: bool,
 }
 
 impl Request {
@@ -129,6 +133,7 @@ impl Request {
             optsize_only: false,
             refuse_loop_copies: false,
             unroll_variant: None,
+            lsr_alternate: false,
         }
     }
 }
@@ -149,7 +154,10 @@ pub fn program(
     request: &Request,
 ) -> Result<Program, String> {
     MID_END_RUNS.with(|runs| runs.set(runs.get() + 1));
-    let unrolled = || llrm_transforms::trial::with_speed_unroll(request.unroll_variant, || program_of(text, request));
+    let unrolled = || {
+        let made = || llrm_transforms::trial::with_speed_unroll(request.unroll_variant, || program_of(text, request));
+        if request.lsr_alternate { llrm_transforms::trial::with_lsr_alternate_order(made) } else { made() }
+    };
     let made = if request.refuse_loop_copies {
         llrm_transforms::trial::with_refused_loop_copies(unrolled)
     } else {
@@ -292,7 +300,7 @@ thread_local! {
     static UNROLL_BASE: std::cell::Cell<Option<Fingerprint>> = const { std::cell::Cell::new(None) };
     static LOOP_COPIES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static SPEED_UNROLLS: std::cell::Cell<llrm_transforms::trial::UnrollDecisions> =
-        const { std::cell::Cell::new(llrm_transforms::trial::UnrollDecisions { made: 0, refused: 0, inlined: 0 }) };
+        const { std::cell::Cell::new(llrm_transforms::trial::UnrollDecisions { made: 0, refused: 0, inlined: 0, unswitched: 0, trial_inlined: 0, lsr_orders: 0 }) };
 }
 
 /// The full-unroll decisions the last [`program`] made at -O2 and up: what an
@@ -371,6 +379,7 @@ fn program_of(
         program.modules.iter_mut().for_each(crate::prepare::mark_constant_fills);
         program.modules.iter_mut().for_each(crate::prepare::mark_wide_shifts);
         program.modules.iter_mut().for_each(crate::prepare::mark_long_shifts);
+        program.modules.iter_mut().for_each(crate::prepare::mark_word_products);
         program.modules.iter_mut().for_each(crate::prepare::mark_wide_divides);
         if request.level != Level::O0 {
             program.modules.iter_mut().for_each(crate::prepare::mark_word_chains);
@@ -411,6 +420,43 @@ pub fn selections_with_alternatives(
     text: &str,
     request: &Request,
 ) -> Result<(Vec<Selected>, Vec<Selected>), String> {
+    selections_reusing(text, request, None).map(|(main, alternatives, _)| (main, alternatives))
+}
+
+/// What the mid-end made of each function of a module, hashed by its text.
+thread_local! {
+    /// The functions [`selections_reusing`] selected (not took from `reuse`),
+    /// in order.
+    static SELECTED_NAMES: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// The functions selected since the last call: one run of the selection for
+/// each.
+pub fn take_selected_names() -> Vec<String> {
+    SELECTED_NAMES.with(|held| std::mem::take(&mut *held.borrow_mut()))
+}
+
+pub type Digests = std::rc::Rc<std::collections::HashMap<String, u64>>;
+
+/// The selections of an earlier compile of the module. DEVIATE LSR-KEY-TRIAL
+/// (owner z80, exit 2026-12-01): the twin compile of a module differs from the
+/// base in the functions whose loops LSR rated by the other order; the
+/// others come out of the mid-end as they were, so what was selected for them
+/// is kept (the selection is the bulk of a compile).
+pub struct Reuse<'a> {
+    pub main: &'a [Selected],
+    pub alternatives: &'a [Selected],
+    pub digests: &'a Digests,
+}
+
+/// [`selections_with_alternatives`], taking from `reuse` the selections of the
+/// functions the mid-end left as it left them there, and the digests of this
+/// compile's functions.
+pub fn selections_reusing(
+    text: &str,
+    request: &Request,
+    reuse: Option<Reuse>,
+) -> Result<(Vec<Selected>, Vec<Selected>, Digests), String> {
     let mut program = program(text, request)?;
     // the module's data text, from the mid-end this compile ran:
     // `compile::kept_data_text` is not made to run it again
@@ -423,6 +469,22 @@ pub fn selections_with_alternatives(
         .filter(|global| global.function().is_some_and(|one| !one.is_declaration()))
         .filter_map(|global| global.name.as_deref().map(str::to_owned))
         .collect();
+    let digests: Digests = std::rc::Rc::new(
+        llrm_mir::print::functions(module)
+            .into_iter()
+            .map(|(name, body)| {
+                use std::hash::{Hash, Hasher};
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                body.hash(&mut hasher);
+                (name, hasher.finish())
+            })
+            .collect(),
+    );
+    let kept = |name: &str| {
+        reuse
+            .as_ref()
+            .filter(|before| before.digests.get(name).is_some() && before.digests.get(name) == digests.get(name))
+    };
     let select_form = |module: &llrm_mir::module::Module, name: &str| {
         crate::dagisel::function::FLAT_LOOP_TRIPS.with(|one| one.set(request.flat_loop_trips));
         crate::dagisel::pipeline::STRICT_LEVEL
@@ -444,6 +506,7 @@ pub fn selections_with_alternatives(
     // The selection is scheduled by `Source` and by `ILP` from one DAG.
     let select =
         |module: &llrm_mir::module::Module, name: &str| -> (Result<Selection, String>, Result<Selection, String>) {
+            SELECTED_NAMES.with(|held| held.borrow_mut().push(name.to_owned()));
             crate::dagisel::pipeline::CARRY_OPS.with(|count| count.set(0));
             let mut one = select_form(module, name);
             if crate::dagisel::pipeline::CARRY_OPS.with(std::cell::Cell::get) > 0 {
@@ -465,17 +528,23 @@ pub fn selections_with_alternatives(
     // A function with the routine for its long multiplies
     // (`prepare::mark_long_multiplies`) is also selected the other way: a
     // sized one with every multiply inline (`DECOMPOSE_MULS`), an unsized one
-    // (at -O1 only) with every multiply a call (`CALL_MULS`); the caller
-    // prices the two (`compile::decomposed_functions`).
-    let calls_the_routine = |name: &str| -> Option<bool> {
+    // (at -O1 only) with every multiply a call (`CALL_MULS`); a lone multiply
+    // is inline in a sized function and its call is the other form, the
+    // widening product of two shorts being 163 B of partial products against
+    // the call (`dot` -Os 504 B, -O1 341 B); the caller prices the two
+    // (`compile::decomposed_functions`). Returns (sized, the other form is
+    // inline).
+    let calls_the_routine = |name: &str| -> Option<(bool, bool)> {
         module
             .globals
             .iter()
             .find_map(
                 |global| {
                     let one = global.function().filter(|_| global.name.as_deref() == Some(name))?;
-                    llrm_mir::memory::has(&one.attrs, crate::prepare::LONG_MULTIPLY)
-                        .then(|| ["optsize", "minsize"].into_iter().any(|attr| llrm_mir::memory::has(&one.attrs, attr)))
+                    let sized = ["optsize", "minsize"].into_iter().any(|attr| llrm_mir::memory::has(&one.attrs, attr));
+                    let lone = llrm_mir::memory::has(&one.attrs, crate::prepare::LONE_MULTIPLY);
+                    (llrm_mir::memory::has(&one.attrs, crate::prepare::LONG_MULTIPLY) || lone)
+                        .then_some((sized, sized && !lone))
                 },
             )
     };
@@ -511,6 +580,16 @@ pub fn selections_with_alternatives(
             })
         })
     };
+    // A function with the product of two zero-extended words
+    // (`prepare::mark_word_products`) is also selected with each such product
+    // the routine's call (`CALL_PRODUCTS`); the caller prices the two.
+    let has_products = |name: &str| -> bool {
+        module.globals.iter().any(|global| {
+            global.function().is_some_and(|one| {
+                global.name.as_deref() == Some(name) && llrm_mir::memory::has(&one.attrs, crate::prepare::WORD_PRODUCT)
+            })
+        })
+    };
     // A function with a long divide (`prepare::mark_wide_divides`) is also
     // selected with the speed routines in a function tuned for size
     // (`SPEED_ROUTINES`).
@@ -524,6 +603,11 @@ pub fn selections_with_alternatives(
     let main: Vec<Selected> = names
         .iter()
         .map(|name| {
+            if let Some(before) = kept(name)
+                && let Some(held) = before.main.iter().find(|(one, ..)| one == name)
+            {
+                return held.clone();
+            }
             let (source, ilp) = select(module, name);
             (name.clone(), source, ilp)
         })
@@ -531,20 +615,29 @@ pub fn selections_with_alternatives(
     let mut alternatives: Vec<Selected> = names
         .iter()
         .filter_map(|name| {
+            if let Some(before) = kept(name) {
+                return before.alternatives.iter().find(|(one, ..)| one == name).cloned();
+            }
             // The all-calls form is priced bytes first at every level (it was
             // -O1 only: at 1 B = 3 T the static loop weights, about
             // 5x under the measured ones, made -368 B for +5970 T look like a
             // gain on call_keeps).
-            let muls = calls_the_routine(name).filter(|sized| *sized || request.level != Level::O0);
             let fills = has_fills(name);
             let shifts = has_shifts(name);
             let divides = has_divides(name);
+            // a function has one alternative: the lone multiply's call does not
+            // take it from the speed routines of a long divide
+            // (copy_runs -Os: size routine, 953 -> 767 B, 204k -> 729k T)
+            let muls = calls_the_routine(name)
+                .filter(|(sized, _)| *sized || request.level != Level::O0)
+                .filter(|(sized, inline)| !(*sized && !inline && divides));
             let call_shifts = has_long_shifts(name);
-            if muls.is_none() && !fills && !shifts && !divides && !call_shifts {
+            let products = has_products(name);
+            if muls.is_none() && !fills && !shifts && !divides && !call_shifts && !products {
                 return None;
             }
-            let switch = muls.map(|sized| {
-                if sized { &crate::dagisel::pipeline::DECOMPOSE_MULS } else { &crate::dagisel::pipeline::CALL_MULS }
+            let switch = muls.map(|(_, decompose)| {
+                if decompose { &crate::dagisel::pipeline::DECOMPOSE_MULS } else { &crate::dagisel::pipeline::CALL_MULS }
             });
             if let Some(switch) = switch {
                 switch.with(|one| one.set(true));
@@ -552,17 +645,20 @@ pub fn selections_with_alternatives(
             crate::dagisel::pipeline::INLINE_FILLS.with(|one| one.set(fills));
             crate::dagisel::pipeline::INLINE_SHIFTS.with(|one| one.set(shifts));
             crate::dagisel::pipeline::CALL_SHIFTS.with(|one| one.set(call_shifts));
+            crate::dagisel::pipeline::CALL_PRODUCTS.with(|one| one.set(products));
             // the alternative is one switch for every reason a function has
-            // one: the speed routines ride along only where nothing
-            // else is switched, or the form that decomposes a multiply would
-            // also carry the divide's price
+            // one: the speed routines ride along with the shifts (data_int64
+            // -Os: a divide beside constant shifts was never priced with the
+            // speed routine), not with a multiply's form, which would also
+            // carry the divide's price
             crate::dagisel::pipeline::SPEED_ROUTINES
-                .with(|one| one.set(divides && muls.is_none() && !fills && !shifts && !call_shifts));
+                .with(|one| one.set(divides && muls.is_none() && !fills && !products));
             let (source, ilp) = select(module, name);
             let selected = (name.clone(), source, ilp);
             crate::dagisel::pipeline::INLINE_FILLS.with(|one| one.set(false));
             crate::dagisel::pipeline::INLINE_SHIFTS.with(|one| one.set(false));
             crate::dagisel::pipeline::CALL_SHIFTS.with(|one| one.set(false));
+            crate::dagisel::pipeline::CALL_PRODUCTS.with(|one| one.set(false));
             crate::dagisel::pipeline::SPEED_ROUTINES.with(|one| one.set(false));
             if let Some(switch) = switch {
                 switch.with(|one| one.set(false));
@@ -600,7 +696,24 @@ pub fn selections_with_alternatives(
         }
         MULTI_RECURSIVE.with(|held| held.borrow_mut().clear());
     }
-    Ok((main, alternatives))
+    // the key of each form's finished lines: the function's text, and for an
+    // alternative form another one
+    let stamp = |forms: &mut Vec<Selected>, salt: u64| {
+        for (name, source, ilp) in forms.iter_mut() {
+            let Some(&digest) = digests.get(name.as_str()) else { continue };
+            for form in [source, ilp].into_iter().filter_map(|form| form.as_mut().ok()) {
+                let mut at = Some(form);
+                while let Some(one) = at {
+                    one.digest = digest ^ salt;
+                    at = one.generic.as_deref_mut();
+                }
+            }
+        }
+    };
+    let (mut main, mut alternatives) = (main, alternatives);
+    stamp(&mut main, 0);
+    stamp(&mut alternatives, 0x9e37_79b9_7f4a_7c15);
+    Ok((main, alternatives, digests))
 }
 
 /// The cost model the mid-end reads: the pin's `opt` with no target, whose
@@ -657,6 +770,14 @@ impl llrm_mir::target::Machine for Z80Machine {
     /// Real code bytes for the decisions weighed at a rate (`opcosts.txt`).
     fn byte_costs(&self) -> llrm_mir::target::OperationCosts {
         DESCRIPTION.size_costs()
+    }
+
+    /// The speed trial's growth is priced in the bytes the backend writes
+    /// (`clocks::calibrate`), the table the size trial uses: the forms' own
+    /// bytes are 0.54 of them, so a copy of `sum` that grew the code by
+    /// 98 B read as growing it by 4.
+    fn speed_trial_costs(&self) -> llrm_mir::target::OperationCosts {
+        crate::clocks::trial_bytes()
     }
 
     fn registers(&self) -> i64 {

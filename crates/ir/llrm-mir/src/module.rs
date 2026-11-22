@@ -592,6 +592,11 @@ impl PartialEq for NameIndex {
 }
 
 impl Function {
+    /// The function is built for size (`optsize` or `minsize`).
+    pub fn optimizes_for_size(&self) -> bool {
+        self.attrs.iter().any(|attr| matches!(attr, Attribute::Flag(name) if name == "optsize" || name == "minsize"))
+    }
+
     /// Whether `inst` is a `llvm.experimental.noalias.scope.decl` call, which
     /// MIR spells as a `!noalias.scope.decl` attachment.
     pub fn is_noalias_scope_decl(
@@ -658,6 +663,12 @@ impl Function {
         self.terminator(block).is_some_and(|last| self.instruction(last).opcode == Opcode::IndirectBr)
     }
 
+    /// The blocks whose address is taken and that are still in the function:
+    /// each is where a `blockaddress` of it, or of a block it replaced, lands.
+    pub fn address_taken_blocks(&self) -> impl Iterator<Item = BlockId> + '_ {
+        self.address_taken.iter().filter_map(|&block| self.resolve_block_address(block)).collect::<Vec<_>>().into_iter()
+    }
+
     /// Whether any block has its address taken.
     #[inline]
     pub fn has_any_address_taken(&self) -> bool {
@@ -681,6 +692,13 @@ impl Function {
             }
         }
         None
+    }
+
+    /// No block's address is taken: every `blockaddress` of this function was
+    /// replaced (`IndirectBrExpandPass` makes them integers).
+    pub fn clear_address_taken(&mut self) {
+        self.address_taken.clear();
+        self.address_forward.clear();
     }
 
     /// Records that a `blockaddress` names `block`.
@@ -935,7 +953,7 @@ impl Function {
         &self,
         block: BlockId,
     ) -> bool {
-        self.blocks[block.0 as usize].placed
+        self.blocks.get(block.0 as usize).is_some_and(|one| one.placed)
     }
 
     pub fn entry(&self) -> Option<BlockId> {

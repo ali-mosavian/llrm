@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/inlinecost.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/inlinecost.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/inlinecost.rs sha256:8f9209c5637ba77dbcc8a7d4eda77fc88a78ab3d1ee398cc899f02abe1952b33 -->
+<!-- src: crates/opt/llrm-transforms/src/inlinecost.rs sha256:8b4ea4bfdedf7d66f305938cf36379f3985c304c3198693e58dfd5db84d1b248 -->
 
 # inlinecost
 
@@ -81,12 +81,28 @@ each site's cost and threshold beside the existing decision; with
   local callee, which goes with it, is the pin's. No shape of callee but the
   loop and the one smaller than its call is tested. A target may say the
   guard stands down for an `inlinehint` callee at an `optsize` caller
-  (`Tti::opt_size_inline_guard_yields_to_inlinehint`, arm64 and x86-m32: yes): the
-  pin's `updateThreshold` raises the threshold to `InlineHintThreshold`
-  (325) there, and its cost under that is the verdict (QuickrBasic
-  operands.c -Os `hot_operand` into `hot_int`, 26 units against two 3-unit
-  calls: 15,344 -> 10,400 B, the pin's 9,464). The guard still holds for a
-  callee with no hint.
+  (`Tti::opt_size_inline_guard_yields_to_inlinehint`, arm64 and x86-m32:
+  yes): the pin's `updateThreshold` raises the threshold to
+  `InlineHintThreshold` (325) there, and its cost under that is the verdict
+  (QuickrBasic operands.c -Os `hot_operand` into `hot_int`, 26 units against
+  two 3-unit calls: 15,344 -> 10,400 B, the pin's 9,464). The guard still
+  holds for a callee with no hint.
+- INLINEHINT-GROWTH-TRIAL (beyond the pin; gcc's `-Os` inliner takes a
+  callee only while the unit does not grow, `ipa-inline.cc`
+  `want_inline_small_function_p` over `estimate_edge_growth`; owner
+  x86-m32-b, exit 2026-11-30): where that yield passes a callee the size
+  guard (D11) would refuse, the caller is noted and the module compiled
+  again with the guard binding the hinted callee too
+  (`trial::with_kept_hinted_calls`, `driver/trial.rs`); the finished object
+  decides, because the units cannot see what the copies fold to (QB
+  `sfm16_dbg` -Os: `sf_clz32` inlined at six calls, +388 B).
+  arm64 runs the same trial in its own driver (`llrm-arm64/src/driver.rs`,
+  `trial::keeps_unhinted`; owner m16-b, exit 2026-12-20): QB -Os array.c
+  `arry_esize` copied into four callers, 3,264 -> 2,996 B (gcc 3,036).
+  The same trial reverses the negative-cost yield (`yields_to_negative_cost`,
+  `trial::with_kept_negative_calls`, a second stage priced on top of the first):
+  `code_byte` (a bounds check and a store, cost below zero) was copied into
+  every caller; codegen.c 7,008 -> 6,156 B (gcc 6,832), code.c 1,680 -> 1,380.
 - SZ1-SITE (owner m68k-b, exit 2026-11-24): the size rule (D11) prices a
   callee's instruction with the call site's constant arguments, not only a
   GEP as `isGEPFree` does (z80 `rotate_small` -O1 922 -> 576 B).

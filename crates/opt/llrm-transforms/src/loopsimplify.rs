@@ -200,7 +200,7 @@ impl FunctionPass for LoopSimplify {
         #[cfg(test)]
         SHAPE_COPIES.with(|count| count.set(count.get() + 1));
         let shape = (*held).clone();
-        if _simplified(unit.function, shape) { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
+        if simplified_given(unit.function, Some(shape)) { PreservedAnalyses::none() } else { PreservedAnalyses::all() }
     }
 }
 
@@ -347,16 +347,20 @@ fn _needs_grouping(
     if loop_.latches.len() != 1 {
         return _has_outside(function, loop_);
     }
-    let mut outside = function.predecessors(cfg::block(loop_.header)).into_iter().filter(|at| !loop_.body.contains(&cfg::id(*at)));
+    let mut outside =
+        function.predecessors(cfg::block(loop_.header)).into_iter().filter(|at| !loop_.body.contains(&cfg::id(*at)));
     let Some(parent) = outside.next() else { return false };
     if outside.next().is_some() || function.successors(parent) != [cfg::block(loop_.header)] {
         return true;
     }
-    loop_.body.iter().any(|&at| {
-        function.successors(cfg::block(at)).into_iter().any(|target| {
-            !loop_.body.contains(&cfg::id(target)) && !_reached_only_from(function, cfg::id(target), &loop_.body)
-        })
-    })
+    loop_
+        .body
+        .iter()
+        .any(
+            |&at| function.successors(cfg::block(at)).into_iter().any(|target| {
+                !loop_.body.contains(&cfg::id(target)) && !_reached_only_from(function, cfg::id(target), &loop_.body)
+            }),
+        )
 }
 
 /// Whether the header has a predecessor outside the loop.
@@ -534,6 +538,7 @@ fn separated_nested_loops(
             }
             let header = cfg::block(loop_.header);
             let in_loop = |block: BlockId| loop_.body.contains(&cfg::id(block));
+            fold_degenerate_header_phis(function, header, &in_loop);
             let Some(phi) = find_phi_to_partition_loops(function, header, &in_loop) else { return false };
             let result = function.instruction(phi).result;
             let outer: BTreeSet<i64> = function
@@ -555,6 +560,56 @@ fn separated_nested_loops(
         changed = true;
     }
     (changed, last.unwrap_or_else(|| cfg::Shape::of(function)))
+}
+
+/// The first step of [`findPHIToPartitionLoops`]: "a degenerate PHI already,
+/// don't modify it!" (`simplifyInstruction(PN)`: the phi is replaced by its
+/// value and erased). The case that matters for the partition is a header phi
+/// whose every incoming value but itself is one value `v`: the phi that keeps
+/// a value through the inner loop once the outer edges are split off. Without
+/// it the partition finds the same phi again and splits again, one empty block
+/// a round (`computed_goto` wasm: eleven in front of the dispatch). `v` is a
+/// constant, an argument or a value defined outside the loop, so it dominates
+/// the header; the other simplifications `simplifyInstruction` knows are left
+/// to the instsimplify before.
+fn fold_degenerate_header_phis(
+    function: &mut Function,
+    header: BlockId,
+    in_loop: &dyn Fn(BlockId) -> bool,
+) {
+    for phi in edges::phis(function, header) {
+        let Some(result) = function.instruction(phi).result else { continue };
+        let mut unique: Option<Operand> = None;
+        let mut degenerate = true;
+        for pair in function.instruction(phi).operands.chunks(2) {
+            if pair[0] == Operand::Value(result) {
+                continue;
+            }
+            match unique {
+                None => unique = Some(pair[0]),
+                Some(one) if one == pair[0] => {}
+                Some(_) => {
+                    degenerate = false;
+                    break;
+                }
+            }
+        }
+        let Some(value) = unique.filter(|_| degenerate) else { continue };
+        let outside = match value {
+            Operand::Constant(_) => true,
+            Operand::Value(id) => match function.value(id).def {
+                llrm_mir::module::ValueDef::Argument(_) => true,
+                llrm_mir::module::ValueDef::Instruction(inst) => {
+                    function.parent(inst).is_some_and(|block| !in_loop(block))
+                }
+            },
+            _ => false,
+        };
+        if outside {
+            function.replace_all_uses_with(result, value);
+            function.erase(phi).expect("its uses were replaced");
+        }
+    }
 }
 
 /// [`findPHIToPartitionLoops`](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Transforms/Utils/LoopSimplify.cpp#L297):

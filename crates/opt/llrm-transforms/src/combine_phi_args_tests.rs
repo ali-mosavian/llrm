@@ -374,3 +374,76 @@ m:
     );
     assert_eq!(after.matches("load volatile i32").count(), 2, "{after}");
 }
+
+/// computed_goto: the dispatch sites each made `gep table, load` in their own
+/// block. The pin's phi of them is one `gep` of a phi of the indices
+/// (`foldPHIArgGEPIntoPHI`); ours kept both, 59 instructions after the
+/// mid-end against the pin's 57.
+#[test]
+fn a_phi_of_geps_that_differ_in_one_index_is_a_gep_of_a_phi() {
+    let after = combined(
+        "define ptr @f(i1 %c, ptr %t, i32 %x, i32 %y) {
+b0:
+  br i1 %c, label %l, label %r
+l:
+  %a = getelementptr inbounds [4 x i8], ptr %t, i32 %x
+  br label %m
+r:
+  %b = getelementptr inbounds [4 x i8], ptr %t, i32 %y
+  br label %m
+m:
+  %p = phi ptr [ %a, %l ], [ %b, %r ]
+  ret ptr %p
+}
+",
+    );
+    assert!(after.contains("phi i32"), "{after}");
+    assert!(!after.contains("phi ptr"), "{after}");
+    assert_eq!(after.matches("getelementptr").count(), 1, "{after}");
+}
+
+/// A constant index the other arm varies stays: the constant is the cheaper
+/// arm, and a struct index must be one.
+#[test]
+fn a_phi_of_geps_with_a_constant_index_keeps_both() {
+    let after = combined(
+        "define ptr @f(i1 %c, ptr %t, i32 %y) {
+b0:
+  br i1 %c, label %l, label %r
+l:
+  %a = getelementptr inbounds [4 x i8], ptr %t, i32 2
+  br label %m
+r:
+  %b = getelementptr inbounds [4 x i8], ptr %t, i32 %y
+  br label %m
+m:
+  %p = phi ptr [ %a, %l ], [ %b, %r ]
+  ret ptr %p
+}
+",
+    );
+    assert!(after.contains("phi ptr") && after.matches("getelementptr").count() == 2, "{after}");
+}
+
+/// Two operands that differ would need two phis: more registers where the
+/// phis are, so the geps stay.
+#[test]
+fn a_phi_of_geps_that_differ_in_two_operands_keeps_both() {
+    let after = combined(
+        "define ptr @f(i1 %c, ptr %s, ptr %t, i32 %x, i32 %y) {
+b0:
+  br i1 %c, label %l, label %r
+l:
+  %a = getelementptr inbounds [4 x i8], ptr %s, i32 %x
+  br label %m
+r:
+  %b = getelementptr inbounds [4 x i8], ptr %t, i32 %y
+  br label %m
+m:
+  %p = phi ptr [ %a, %l ], [ %b, %r ]
+  ret ptr %p
+}
+",
+    );
+    assert!(after.contains("phi ptr") && after.matches("getelementptr").count() == 2, "{after}");
+}

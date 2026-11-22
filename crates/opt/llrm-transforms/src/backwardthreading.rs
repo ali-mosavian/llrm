@@ -11,11 +11,12 @@
 //! branch's block, which merges all paths into the predecessor, so a
 //! predecessor that is a join of a known and an unknown path is never threaded.
 //!
-//! Here a path is a predecessor `q` of a join `p` that enters `bb`. The facts
-//! at `q` (the branches that dominate it, and its own edge to `p`) are read as
+//! Here a path is a predecessor `q` of a join `p` that leads to `bb` (through
+//! up to `MAX_CHAIN` blocks). The facts at `q` (the branches that dominate it,
+//! what every way into a block knows, and its own edge to `p`) are read as
 //! ranges of the values `bb`'s compare reads; when they decide the compare and
-//! the facts at `p` do not, `p` and `bb` are copied for the edge `q -> p`, the
-//! copy of `bb` jumps to the arm, and SSA form is restored.
+//! the facts at `p` do not, the blocks and `bb` are copied for the edge `q ->
+//! p`, the copy of `bb` jumps to the arm, and SSA form is restored.
 //!
 //! ```text
 //!   q: ...  (knows x > 0)             q: ...
@@ -33,11 +34,12 @@
 //! also runs before the first SimplifyCFG that makes selects of the branches
 //! (`backthread@1243`).
 //!
-//! DEVIATE (no LLVM pass; GCC `tree-ssa-threadbackward.cc`): paths are `q`,
-//! `p`, `bb` only (GCC's `max-fsm-thread-length` is 10); the facts are the
-//! ranges of branch edges that dominate `q` (GCC asks ranger); the path may
-//! not copy more than `max-jump-thread-duplication-stmts` (15) instructions;
-//! a function with `optsize` or `minsize` is left alone.
+//! DEVIATE (no LLVM pass; GCC `tree-ssa-threadbackward.cc`): a path is `q`,
+//! at most `MAX_CHAIN` (3) blocks and `bb` (GCC's `max-fsm-thread-length` is
+//! 10); the facts are the ranges of branch edges that dominate `q` and what
+//! every way into a block agrees on (`entered_with`; GCC asks ranger); the path
+//! may not copy more than `max-jump-thread-duplication-stmts` (15)
+//! instructions; a function with `optsize` or `minsize` is left alone.
 
 use llrm_analysis::edges::{self, phis, single_predecessor, starts_with_landing_pad};
 use llrm_analysis::occurrence::{arms, from_arms};
@@ -55,6 +57,9 @@ use llrm_mir::types::Type;
 /// GCC `max-jump-thread-duplication-stmts`: the statements a threaded path
 /// may copy (`max-fsm-thread-path-insns`, 100, is for a `switch`).
 const MAX_PATH_INSNS: usize = 15;
+/// The blocks between `q` and `bb` a path copies, at most (GCC's
+/// `max-fsm-thread-length` is 10).
+pub const MAX_CHAIN: usize = 3;
 /// Paths threaded in one function: a cap on the code a run can add.
 pub const MAX_THREADS: usize = 16;
 
@@ -70,6 +75,9 @@ pub struct BackwardThreading {
     /// (`backthread@1243`): the pass runs only where the target threads by
     /// relation, since the branches it reads are selects by the slot after.
     pub early: bool,
+    /// Blocks a path copies between `q` and `bb`, where the target's
+    /// `Tti::backward_threading_chain` is not asked (tests).
+    pub chain: Option<usize>,
 }
 
 impl BackwardThreading {
@@ -79,6 +87,7 @@ impl BackwardThreading {
             max_threads: MAX_THREADS,
             relations: false,
             early: false,
+            chain: None,
         }
     }
 
@@ -111,6 +120,11 @@ impl FunctionPass for BackwardThreading {
         unit: &mut Unit,
         analyses: &mut Analyses,
     ) -> PreservedAnalyses {
+        let chain = self
+            .chain
+            .or_else(|| analyses.outer().target().tti().map(|tti| tti.backward_threading_chain()))
+            .unwrap_or(1)
+            .clamp(1, MAX_CHAIN);
         let relations = !llrm_support::env_flag!("LLRM_NO_BACKTHREAD_REL")
             && (self.relations || analyses.outer().target().tti().is_some_and(|tti| tti.threads_by_relation()));
         if !self.enabled
@@ -129,7 +143,7 @@ impl FunctionPass for BackwardThreading {
         for _ in 0..self.max_threads {
             let dt = DomTree::of(unit.function);
             let loops = LoopInfo::analyze(unit.function, || DomTree::of(unit.function));
-            let Some(path) = find(unit.context, unit.function, &dt, &loops, relations) else { break };
+            let Some(path) = find(unit.context, unit.function, &dt, &loops, relations, chain) else { break };
             thread(unit.context, unit.function, &path);
             changed = true;
         }
@@ -137,11 +151,13 @@ impl FunctionPass for BackwardThreading {
     }
 }
 
-/// One path to thread: `q -> p -> bb`, `bb`'s branch taking `arm`.
+/// One path to thread: `q -> chain... -> bb`, `bb`'s branch taking `arm`. The
+/// chain is the blocks between `q` and `bb`, the first a join of `q` and the
+/// paths that do not decide; empty where `bb` is that join (`join_decided`).
 #[derive(Debug)]
 struct Path {
     q: BlockId,
-    p: BlockId,
+    chain: Vec<BlockId>,
     bb: BlockId,
     arm: BlockId,
 }
@@ -269,6 +285,7 @@ fn range_at(
     value: Operand,
     block: BlockId,
     edge: Option<(BlockId, BlockId)>,
+    ranger: bool,
 ) -> Option<ConstantRange> {
     let width = width_of(context, function, value)?;
     if let Some(constant) = constant_of(context, value) {
@@ -282,10 +299,69 @@ fn range_at(
         }
         at = dt.immediate_dominator(dominator);
     }
+    // A block entered by several edges knows what all of them know (GCC's
+    // ranger, `range_on_entry`): a threaded copy leaves the guard of a loop
+    // with two ways in, each of which passed it.
+    if ranger {
+        let mut budget = MAX_RANGE_BLOCKS;
+        let entered = entered_with(context, function, dt, value, block, &mut Vec::new(), &mut budget);
+        range = range.intersect_with(&entered, PreferredRangeType::Smallest);
+    }
     if let Some((from, to)) = edge {
         range = narrowed(context, function, dt, value, range, from, to);
     }
     Some(range)
+}
+
+/// Blocks `entered_with` reads at most.
+const MAX_RANGE_BLOCKS: usize = 32;
+
+/// The range of `value` where `block` is entered: the union over the edges
+/// into it of what the source knows, narrowed by the edge. An edge from a block
+/// `block` dominates (a back edge) leaves a value defined above `block`
+/// unchanged, so it adds nothing; for any other value the range is not known.
+fn entered_with(
+    context: &Context,
+    function: &Function,
+    dt: &DomTree,
+    value: Operand,
+    block: BlockId,
+    seen: &mut Vec<BlockId>,
+    budget: &mut usize,
+) -> ConstantRange {
+    let width = width_of(context, function, value).expect("an integer value");
+    let full = ConstantRange::full(width);
+    if *budget == 0 || seen.contains(&block) {
+        return full;
+    }
+    *budget -= 1;
+    seen.push(block);
+    let mut union = ConstantRange::empty(width);
+    for pred in function.predecessors(block) {
+        if dt.dominates(block, pred) {
+            if defined_above(function, dt, value, block) {
+                continue;
+            }
+            seen.pop();
+            return full;
+        }
+        let at_pred = entered_with(context, function, dt, value, pred, seen, budget);
+        let at_pred = narrowed(context, function, dt, value, at_pred, pred, block);
+        union = union.union_with(&at_pred, PreferredRangeType::Smallest);
+    }
+    seen.pop();
+    if union.is_empty_set() { full } else { union }
+}
+
+/// Whether `value` is a constant, an argument, or defined in a block that
+/// dominates `block` and is not `block`.
+fn defined_above(
+    function: &Function,
+    dt: &DomTree,
+    value: Operand,
+    block: BlockId,
+) -> bool {
+    stable(function, dt, value, block)
 }
 
 /// The orders two values can stand in: `x < y`, `x == y`, `x > y`, as a set.
@@ -436,10 +512,11 @@ fn decided(
     block: BlockId,
     edge: Option<(BlockId, BlockId)>,
     relations: bool,
+    ranger: bool,
 ) -> Option<BlockId> {
     let by_range = (|| {
-        let lhs = range_at(context, function, dt, branch.lhs, block, edge)?;
-        let rhs = range_at(context, function, dt, branch.rhs, block, edge)?;
+        let lhs = range_at(context, function, dt, branch.lhs, block, edge, ranger)?;
+        let rhs = range_at(context, function, dt, branch.rhs, block, edge, ranger)?;
         if lhs.icmp(branch.pred, &rhs) {
             Some(branch.if_true)
         } else if lhs.icmp(branch.pred.inverse(), &rhs) {
@@ -480,6 +557,61 @@ fn copyable(
     Some(size)
 }
 
+/// The blocks of at most `MAX_CHAIN` that lead to `bb` through unique edges,
+/// nearest to `q` first, whose first block is a join (a path into it can be
+/// told from the others): `[p]` for a predecessor `p` of `bb` that is a join,
+/// then `[p', p]` for a predecessor `p'` of `p`, as GCC's backward walk grows a
+/// path a block at a time (`max-fsm-thread-length`, 10). Every block's
+/// inputs for the compare must read the same wherever the facts hold.
+fn chains_into(
+    function: &Function,
+    bb: BlockId,
+    inputs_stable: &dyn Fn(BlockId) -> bool,
+    limit: usize,
+) -> Vec<Vec<BlockId>> {
+    let mut found = Vec::new();
+    let mut frontier: Vec<Vec<BlockId>> = vec![Vec::new()];
+    for _ in 0..limit {
+        let mut longer = Vec::new();
+        for tail in &frontier {
+            let head = tail.first().copied().unwrap_or(bb);
+            for c in function.predecessors(head) {
+                if c == bb
+                    || tail.contains(&c)
+                    || !inputs_stable(c)
+                    || starts_with_landing_pad(function, c)
+                    || function.edge_predecessors(head).iter().filter(|&&b| b == c).count() != 1
+                {
+                    continue;
+                }
+                let mut chain = vec![c];
+                chain.extend(tail);
+                let preds = function.predecessors(c);
+                if preds.len() >= 2 && !preds.contains(&c) {
+                    found.push(chain.clone());
+                }
+                longer.push(chain);
+            }
+        }
+        frontier = longer;
+    }
+    found
+}
+
+/// Whether the copies on `q -> rest -> arm` keep the loop of `arm` whole:
+/// entering a loop's body past its header would split it, but its header is
+/// entered from inside by a back edge (the column loop's next trip, queens).
+fn stays_in_loop(
+    loops: &LoopInfo<BlockId>,
+    arm: BlockId,
+    q: BlockId,
+    mut rest: impl Iterator<Item = BlockId>,
+    back_edge: bool,
+) -> bool {
+    let Some(l) = loops.get_loop_for(arm) else { return true };
+    l.contains(q) && ((back_edge && l.get_header() == arm) || rest.all(|block| l.contains(block)))
+}
+
 /// The first path the facts at a predecessor decide and the facts at its
 /// join do not.
 fn find(
@@ -488,6 +620,7 @@ fn find(
     dt: &DomTree,
     loops: &LoopInfo<BlockId>,
     relations: bool,
+    chain_limit: usize,
 ) -> Option<Path> {
     for &bb in function.layout() {
         let Some(branch) = branch_of(function, bb) else { continue };
@@ -501,43 +634,44 @@ fn find(
                 && !defined_in(function, branch.rhs, bb)
                 && at != bb
         };
-        for p in function.predecessors(bb) {
-            if p == bb || !inputs_stable(p) || starts_with_landing_pad(function, p) {
+        for chain in chains_into(function, bb, &inputs_stable, chain_limit) {
+            let first = chain[0];
+            let last = *chain.last().expect("a block");
+            // What every path into the chain knows leaves nothing to thread.
+            if decided(context, function, dt, &branch, last, None, relations, chain_limit > 1).is_some() {
                 continue;
             }
-            let join_preds = function.predecessors(p);
-            if join_preds.len() < 2
-                || join_preds.contains(&p)
-                || function.edge_predecessors(bb).iter().filter(|&&b| b == p).count() != 1
-            {
+            let mut size = copyable(function, bb);
+            for &c in &chain {
+                size = size.zip(copyable(function, c)).map(|(total, one)| total + one);
+            }
+            if size.is_none_or(|size| size > MAX_PATH_INSNS) {
                 continue;
             }
-            // What every path into the join knows leaves nothing to thread.
-            if decided(context, function, dt, &branch, p, None, relations).is_some() {
-                continue;
-            }
-            for &q in &join_preds {
-                if q == bb || function.edge_predecessors(p).iter().filter(|&&b| b == q).count() != 1 {
-                    continue;
-                }
-                let Some(arm) = decided(context, function, dt, &branch, q, Some((q, p)), relations) else { continue };
-                if arm == bb || arm == p {
-                    continue;
-                }
-                let (Some(p_size), Some(bb_size)) = (copyable(function, p), copyable(function, bb)) else { continue };
-                if p_size + bb_size > MAX_PATH_INSNS {
-                    continue;
-                }
-                // Entering a loop's body past its header would split the loop.
-                if let Some(l) = loops.get_loop_for(arm)
-                    && !(l.contains(q) && l.contains(p) && l.contains(bb))
+            for &q in &function.predecessors(first) {
+                if q == bb
+                    || chain.contains(&q)
+                    || function.edge_predecessors(first).iter().filter(|&&b| b == q).count() != 1
                 {
                     continue;
                 }
-                return Some(Path { q, p, bb, arm });
+                let Some(arm) =
+                    decided(context, function, dt, &branch, q, Some((q, first)), relations, chain_limit > 1)
+                else {
+                    continue;
+                };
+                if arm == bb || chain.contains(&arm) {
+                    continue;
+                }
+                if !stays_in_loop(loops, arm, q, chain.iter().copied().chain([bb]), chain_limit > 1) {
+                    continue;
+                }
+                return Some(Path { q, chain: chain.clone(), bb, arm });
             }
         }
-        if relations && let Some(path) = join_decided(context, function, dt, loops, bb, &branch, &inputs_stable) {
+        if relations
+            && let Some(path) = join_decided(context, function, dt, loops, bb, &branch, &inputs_stable, chain_limit)
+        {
             return Some(path);
         }
     }
@@ -556,13 +690,14 @@ fn join_decided(
     bb: BlockId,
     branch: &Branch,
     inputs_stable: &dyn Fn(BlockId) -> bool,
+    chain_limit: usize,
 ) -> Option<Path> {
     let preds = function.predecessors(bb);
     if preds.len() < 2 || preds.contains(&bb) || starts_with_landing_pad(function, bb) {
         return None;
     }
     // What every path into the join knows leaves nothing to thread.
-    if decided(context, function, dt, branch, bb, None, true).is_some() {
+    if decided(context, function, dt, branch, bb, None, true, chain_limit > 1).is_some() {
         return None;
     }
     let size = copyable(function, bb)?;
@@ -581,12 +716,10 @@ fn join_decided(
         if arm == bb {
             continue;
         }
-        if let Some(l) = loops.get_loop_for(arm)
-            && !(l.contains(q) && l.contains(bb))
-        {
+        if !stays_in_loop(loops, arm, q, std::iter::once(bb), chain_limit > 1) {
             continue;
         }
-        return Some(Path { q, p: bb, bb, arm });
+        return Some(Path { q, chain: Vec::new(), bb, arm });
     }
     None
 }
@@ -697,37 +830,39 @@ fn remap_input(
     }
 }
 
-/// Copy `p` and `bb` for the edge `q -> p`, the copy of `bb` jumping to the
-/// arm, and restore SSA form.
+/// Copy the chain and `bb` for the edge `q -> chain[0]`, the copy of `bb`
+/// jumping to the arm, and restore SSA form.
 fn thread(
     context: &mut Context,
     function: &mut Function,
     path: &Path,
 ) {
-    let Path { q, p, bb, arm } = *path;
+    let Path { q, ref chain, bb, arm } = *path;
     let mut map = ValueMap::default();
 
-    // The copy of `p`: a block of its own on the edge `q -> p`. Where `p` is
-    // `bb` (the join holds the branch) the copy of `bb` below is the only
+    // The copy of each chain block: a block of its own on the edge from the
+    // copy before it (`q` for the first), keeping the block's own edges.
+    // Where the chain is empty `bb` is the join: its copy below is the only
     // one.
-    let e = if p == bb {
-        q
-    } else {
-        let e = edges::split_block_predecessors(function, p, &[q]);
-        let e_jump = function.terminator(e).expect("a jump");
-        copy_into(function, p, e, q, e, e_jump, &mut map);
+    let mut e = q;
+    let mut copies: Vec<(BlockId, BlockId)> = Vec::new();
+    for &p in chain {
+        let copy = edges::split_block_predecessors(function, p, &[e]);
+        let copy_jump = function.terminator(copy).expect("a jump");
+        copy_into(function, p, copy, e, copy, copy_jump, &mut map);
         let p_term = function.terminator(p).expect("a terminated block");
-        let e_term = function.clone_instruction(p_term);
-        function.insert(e_term, Position::Before(e_jump)).expect("a placed jump");
-        function.remap_instruction(e_term, &map);
-        function.predecessor_removed(context, p, e, true);
-        function.erase(e_jump).expect("a jump nothing uses");
-        for succ in function.successors(e) {
-            edges_copied(function, succ, e, p);
-            remap_input(function, succ, e, &map);
+        let copy_term = function.clone_instruction(p_term);
+        function.insert(copy_term, Position::Before(copy_jump)).expect("a placed jump");
+        function.remap_instruction(copy_term, &map);
+        function.predecessor_removed(context, p, copy, true);
+        function.erase(copy_jump).expect("a jump nothing uses");
+        for succ in function.successors(copy) {
+            edges_copied(function, succ, copy, p);
+            remap_input(function, succ, copy, &map);
         }
-        e
-    };
+        copies.push((p, copy));
+        e = copy;
+    }
 
     // The copy of `bb`: a block on the edge `e -> bb` that jumps to the arm.
     let f = edges::split_block_predecessors(function, bb, &[e]);
@@ -740,8 +875,8 @@ fn thread(
 
     // Uses of the values `p` and `bb` define, below the copies, are of either.
     let mut ssa = SsaUpdaterBulk::new();
-    let copies: &[(BlockId, BlockId)] = if p == bb { &[(bb, f)] } else { &[(p, e), (bb, f)] };
-    for &(block, copy_block) in copies {
+    copies.push((bb, f));
+    for &(block, copy_block) in &copies {
         for inst in function.iter_block(block).collect::<Vec<_>>() {
             let Some(value) = function.instruction(inst).result else { continue };
             let Some(&copy) = map.values.get(&value) else { continue };

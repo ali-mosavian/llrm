@@ -1643,6 +1643,7 @@ fn test_module_ipo_states_the_argument_ranges_the_pins_ipsccp_does() {
                 cloning: Default::default(),
                 speed_rate: false,
                 for_size: false,
+                tail_recursion: false,
             };
             ipo.run(program, &mut Default::default())
         },
@@ -1657,6 +1658,67 @@ fn test_module_ipo_states_the_argument_ranges_the_pins_ipsccp_does() {
     assert!(header("sink").contains("range(i16 -32768, 6) %x"), "{text}");
     assert!(header("place").contains("range(i16 0, 8) %row"), "{text}");
     assert!(text.contains("icmp eq i16 %row, 7"), "{text}");
+}
+
+/// `deep(n - 1, a + n) + n` called once with constants kept its self-call at
+/// IPSCCP, whose argument join then had the call's varying values: 58 B of a
+/// function in arg_registers_abi `-Os` where gcc has `mov eax, 45`. Tail
+/// recursion made a loop first leaves the one caller's constants as the
+/// loop's initial values.
+#[test]
+fn test_a_linear_recursion_is_a_loop_before_ipsccp_reads_its_callers() {
+    use llrm_mir::program::ProgramPass;
+    let source = "define internal i16 @deep(i16 %n, i16 %a) noinline {
+b0:
+  %z = icmp eq i16 %n, 0
+  br i1 %z, label %done, label %more
+
+done:
+  ret i16 %a
+
+more:
+  %m = sub i16 %n, 1
+  %s = add i16 %a, %n
+  %r = call i16 @deep(i16 %m, i16 %s)
+  %t = add i16 %r, %n
+  ret i16 %t
+}
+
+define i16 @top() {
+b0:
+  %r = call i16 @deep(i16 5, i16 1)
+  ret i16 %r
+}
+";
+    let run = |tail_recursion: bool| {
+        let mut module = parsed(source);
+        llrm_mir::program::Program::lend(
+            &mut module,
+            std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()),
+            |program: &mut llrm_mir::program::Program| {
+                let mut ipo = crate::walk::ModuleIpo {
+                    inline: crate::inline::Threshold::none(),
+                    cloning: Default::default(),
+                    speed_rate: false,
+                    for_size: false,
+                    tail_recursion,
+                };
+                ipo.run(program, &mut Default::default())
+            },
+        )
+        .and_then(|done| done)
+        .expect("ModuleIpo runs");
+        crate::testing::printed(&module)
+    };
+    let deep = |text: &str| {
+        let from = text.find("define internal").expect("deep is defined");
+        text[from..].split("\n}\n").next().unwrap_or_default().to_owned()
+    };
+    let kept = run(false);
+    assert!(deep(&kept).contains("call i16 @deep"), "the base keeps the recursion: {kept}");
+    let looped = run(true);
+    assert!(!deep(&looped).contains("call i16 @deep"), "{looped}");
+    assert!(deep(&looped).contains("[ 5,"), "the loop starts at the caller's constant: {looped}");
 }
 
 /// A float kernel called once on stack slots: the trial's copy adds x87 loads,
@@ -2334,6 +2396,7 @@ b0:
                 cloning: Default::default(),
                 speed_rate: false,
                 for_size: false,
+                tail_recursion: false,
             };
             ipo.run(program, &mut Default::default())
         },
@@ -2380,6 +2443,7 @@ b0:
                 cloning: Default::default(),
                 speed_rate: false,
                 for_size: false,
+                tail_recursion: false,
             };
             ipo.run(program, &mut Default::default())
         },
@@ -2432,6 +2496,7 @@ b0:
                 cloning: Default::default(),
                 speed_rate: false,
                 for_size: false,
+                tail_recursion: false,
             };
             ipo.run(program, &mut Default::default())
         },
@@ -3233,21 +3298,21 @@ b1:
 /// +18 B built.
 #[test]
 fn test_an_o1_trial_that_does_not_shrink_the_caller_by_an_eighth_is_refused() {
-    assert!(!super::trial_accepted(true, false, true, false, false, 21, 23, 0, 0, 213, 0, 600, true));
-    assert!(!super::trial_accepted(true, false, true, false, false, 21, 23, 0, 0, -4, 0, 600, true), "a shrink within the model's error is refused");
-    assert!(!super::trial_accepted(true, false, true, false, false, 17, 17, 0, 0, 0, 0, 600, true), "a tie at 0 B gains nothing at -O1");
-    assert!(super::trial_accepted(true, false, true, false, false, 21, 23, 0, 0, -80, 0, 600, true), "a shrink of an eighth of the caller stays");
-    assert!(super::trial_accepted(true, false, true, false, false, 21, 23, 0, 0, 213, 0, 600, false), "-Os keeps the count's verdict");
+    assert!(!super::trial_accepted(true, false, false, true, false, false, 21, 23, 0, 0, 213, 0, 600, true));
+    assert!(!super::trial_accepted(true, false, false, true, false, false, 21, 23, 0, 0, -4, 0, 600, true), "a shrink within the model's error is refused");
+    assert!(!super::trial_accepted(true, false, false, true, false, false, 17, 17, 0, 0, 0, 0, 600, true), "a tie at 0 B gains nothing at -O1");
+    assert!(super::trial_accepted(true, false, false, true, false, false, 21, 23, 0, 0, -80, 0, 600, true), "a shrink of an eighth of the caller stays");
+    assert!(super::trial_accepted(true, false, false, true, false, false, 21, 23, 0, 0, 213, 0, 600, false), "-Os keeps the count's verdict");
 }
 
 /// m68k sfm16_float -Os: five calls to `canon`, 60 instructions against 57 and a credit of 4, so the count accepted the
 /// copies; the byte estimate said +28 B (built +28). A callee that goes with its last calls must not grow the bytes.
 #[test]
 fn test_an_os_trial_that_grows_the_bytes_is_refused_though_the_count_accepts_it() {
-    assert!(!super::trial_accepted(true, false, true, false, false, 60, 57, 4, 0, 28, 0, 756, false));
-    assert!(super::trial_accepted(true, false, true, false, false, 60, 57, 4, 0, -4, 0, 756, false), "a copy that shrinks the code stays");
-    assert!(super::trial_accepted(false, false, true, false, false, 60, 57, 4, 0, 28, 0, 756, false), "off the gate's targets the count decides");
-    assert!(super::trial_accepted(true, false, true, false, false, 57, 57, 4, 0, 12, 0, 756, false), "copies no larger than the caller are decided by the count");
+    assert!(!super::trial_accepted(true, false, false, true, false, false, 60, 57, 4, 0, 28, 0, 756, false));
+    assert!(super::trial_accepted(true, false, false, true, false, false, 60, 57, 4, 0, -4, 0, 756, false), "a copy that shrinks the code stays");
+    assert!(super::trial_accepted(false, false, false, true, false, false, 60, 57, 4, 0, 28, 0, 756, false), "off the gate's targets the count decides");
+    assert!(super::trial_accepted(true, false, false, true, false, false, 57, 57, 4, 0, 12, 0, 756, false), "copies no larger than the caller are decided by the count");
 }
 
 /// z80 frame_address_stack_args -O2: `kernel` (external, so it stays) copied into `line` saved 123 clocks and 63 B, and
@@ -3255,17 +3320,17 @@ fn test_an_os_trial_that_grows_the_bytes_is_refused_though_the_count_accepts_it(
 /// and the clocks stays; one that grows it without a callee going is still refused (jpeg `decode`, +441k instructions).
 #[test]
 fn test_a_priced_trial_that_shrinks_the_module_stays_without_a_dying_callee() {
-    assert!(super::trial_accepted(true, false, true, true, false, 72, 79, 0, 123, -63, 3000, 756, false));
-    assert!(!super::trial_accepted(true, false, true, true, false, 72, 79, 0, 123, 10, 3000, 756, false));
-    assert!(!super::trial_accepted(true, false, true, true, false, 72, 79, 0, 0, -63, 3000, 756, false), "no clocks saved, no copy");
+    assert!(super::trial_accepted(true, false, false, true, true, false, 72, 79, 0, 123, -63, 3000, 756, false));
+    assert!(!super::trial_accepted(true, false, false, true, true, false, 72, 79, 0, 123, 10, 3000, 756, false));
+    assert!(!super::trial_accepted(true, false, false, true, true, false, 72, 79, 0, 0, -63, 3000, 756, false), "no clocks saved, no copy");
 }
 
 /// arm64 -O3 jpeg: a priced trial kept copies that left the module no larger without a callee
 /// going, 5,828 -> 7,324 B and +1.2M instructions. Only a target that asks keeps them.
 #[test]
 fn test_a_shrinking_copy_without_a_dying_callee_stays_only_where_the_target_asks() {
-    assert!(super::trial_accepted(true, false, true, true, false, 72, 79, 0, 123, -63, 3000, 756, false));
-    assert!(!super::trial_accepted(true, false, false, true, false, 72, 79, 0, 123, -63, 3000, 756, false));
+    assert!(super::trial_accepted(true, false, false, true, true, false, 72, 79, 0, 123, -63, 3000, 756, false));
+    assert!(!super::trial_accepted(true, false, false, false, true, false, 72, 79, 0, 123, -63, 3000, 756, false));
 }
 
 /// Whether `self_calls` takes `name` of `text` as a tree recursion.
@@ -3577,18 +3642,18 @@ b0:
 /// (78 against 62 + 13 for the callee) while a byte model said the copies shrink the module.
 #[test]
 fn a_trial_decided_by_bytes_keeps_the_copies_that_shrink_the_module() {
-    assert!(super::trial_accepted(false, true, false, false, false, 78, 62, 13, 0, -23, 0, 400, false), "smaller: kept whatever the units say");
-    assert!(!super::trial_accepted(false, true, false, false, false, 60, 62, 13, 0, 4, 0, 400, false), "larger: refused whatever the units say");
-    assert!(!super::trial_accepted(false, true, false, false, false, 62, 62, 13, 0, 0, 0, 400, false), "no gain: refused");
+    assert!(super::trial_accepted(false, false, true, false, false, false, 78, 62, 13, 0, -23, 0, 400, false), "smaller: kept whatever the units say");
+    assert!(!super::trial_accepted(false, false, true, false, false, false, 60, 62, 13, 0, 4, 0, 400, false), "larger: refused whatever the units say");
+    assert!(!super::trial_accepted(false, false, true, false, false, false, 62, 62, 13, 0, 0, 0, 400, false), "no gain: refused");
 }
 
 /// Two Os trials that tie to the byte were both refused, whatever the copies save: a tied pair is
 /// decided by the clocks, and a tie that saves none stays as written. Bytes never lose to clocks.
 #[test]
 fn a_trial_whose_bytes_tie_is_decided_by_the_clocks_it_saves() {
-    assert!(super::trial_accepted(false, true, false, false, false, 62, 62, 13, 40, 0, 0, 400, false), "tied, faster: kept");
-    assert!(!super::trial_accepted(false, true, false, false, false, 62, 62, 13, 0, 0, 0, 400, false), "tied, no faster: refused");
-    assert!(!super::trial_accepted(false, true, false, false, false, 62, 62, 13, 9999, 4, 0, 400, false), "larger by a byte: refused however fast");
+    assert!(super::trial_accepted(false, false, true, false, false, false, 62, 62, 13, 40, 0, 0, 400, false), "tied, faster: kept");
+    assert!(!super::trial_accepted(false, false, true, false, false, false, 62, 62, 13, 0, 0, 0, 400, false), "tied, no faster: refused");
+    assert!(!super::trial_accepted(false, false, true, false, false, false, 62, 62, 13, 9999, 4, 0, 400, false), "larger by a byte: refused however fast");
 }
 
 /// DEVIATE INL-SPEED-OS: jpeg_fixed -Os `receive` and `extend` (two sites each, 200,699 runs a call, +1 and -1 bytes):
@@ -3806,8 +3871,13 @@ b0:
             std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()),
             |program: &mut llrm_mir::program::Program| {
                 let inline = crate::inline::Threshold { recursive: Some(recursive), limit: 100, ..Default::default() };
-                let mut ipo =
-                    crate::walk::ModuleIpo { inline, cloning: Default::default(), speed_rate: true, for_size };
+                let mut ipo = crate::walk::ModuleIpo {
+                    inline,
+                    cloning: Default::default(),
+                    speed_rate: true,
+                    for_size,
+                    tail_recursion: false,
+                };
                 ipo.run(program, &mut Default::default())
             },
         )
@@ -3858,7 +3928,13 @@ b0:
         std::rc::Rc::new(llrm_x86_m16::Dos::pin_tuned()),
         |program: &mut llrm_mir::program::Program| {
             let inline = crate::inline::Threshold { recursive: Some(false), limit: 100, ..Default::default() };
-            let mut ipo = crate::walk::ModuleIpo { inline, cloning: Default::default(), speed_rate: true, for_size: false };
+            let mut ipo = crate::walk::ModuleIpo {
+                inline,
+                cloning: Default::default(),
+                speed_rate: true,
+                for_size: false,
+                tail_recursion: false,
+            };
             ipo.run(program, &mut Default::default())
         },
     )
@@ -3867,4 +3943,15 @@ b0:
     let text = crate::testing::printed(&module);
     assert!(text.contains("@hanoi(i16 %n)"), "the pegs are still parameters:\n{text}");
     assert!(!text.contains("i16 %a"), "the pegs are still passed:\n{text}");
+}
+
+/// x86-m32 -Os, QB `file.c` `set`: three copies of `justify`, 68 instructions against 60 and a credit of 9, so the
+/// count accepted them; the estimate said +102 B (built +110). A size caller's trial that grows the bytes is refused;
+/// a speed caller's (-Os rows that run as -O1) keeps the count's verdict, as before.
+#[test]
+fn test_a_credit_gate_refuses_a_count_accepted_copy_that_grows_the_bytes_at_a_size_caller() {
+    assert!(!super::trial_accepted(false, true, false, false, false, false, 68, 60, 9, 0, 102, 0, 321, false));
+    assert!(super::trial_accepted(false, true, false, false, false, false, 68, 60, 9, 0, -4, 0, 321, false), "a copy that shrinks stays");
+    assert!(super::trial_accepted(false, true, false, false, false, false, 68, 60, 9, 0, 102, 0, 321, true), "a speed caller keeps the count");
+    assert!(super::trial_accepted(false, false, false, false, false, false, 68, 60, 9, 0, 102, 0, 321, false), "off the gate the count decides");
 }

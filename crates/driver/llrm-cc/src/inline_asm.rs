@@ -440,6 +440,12 @@ fn flat_block(
         }
     }
     source.push('\n');
+    // An x87 input in st(1) that the block neither clobbers nor returns stays
+    // on the stack after it (`fscale` leaves it): `fstp st(1)` pops it, as
+    // `reg-stack` pops a dead stack input.
+    if inputs.iter().any(|one| one == "st1") && !clobbers.iter().chain(&outputs).any(|one| one == "st1") {
+        source.push_str(if intel { "fstp st(1)\n" } else { "fstp %st(1)\n" });
+    }
     let bytes = assemble(&source)?;
     let name = llrm_mir::intrinsics::asm_name(&llrm_mir::intrinsics::AsmBlock {
         bits: flat.bits,

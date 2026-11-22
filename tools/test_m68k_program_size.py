@@ -140,3 +140,15 @@ def test_ours_is_llrm_ccs_own_object_not_gnu_as_on_its_text():
     """Reading ours through GNU as made fcmp_all 68020 Os 544 B too large (5338 against 4794 as an object), loop_copy_directions 622 B: every `lea (sym,%pc)` was an 8 B full-format word where the object has the pin's 4 B `R_68K_PC16`, so most of the 68020 cells 'over gcc' were the assembler."""
     command = size.ours_command("llrm-cc", "Os", [], Path("o.o"), Path("p.c"))
     assert "-c" in command and "-S" not in command and command[command.index("-o") + 1] == "o.o", command
+
+
+def test_gcc_is_hosted_like_ours_so_both_link_the_same_stub_calls():
+    """m32_word_vectors -O1: ours (hosted since #10561) called the stub memset, gcc built `-ffreestanding` inlined its fills: the stub's bytes and clocks counted on one side only."""
+    command = size.gcc_command("", "68000", "O2", Path("p.s"), Path(__file__), [])
+    assert "-ffreestanding" not in command, command
+
+
+def test_the_harness_libc_stubs_are_not_program_bytes_but_compiler_rt_members_are():
+    """mem_length_boundaries_m32 -Os 68000 read gcc 152 B + 454 B of stub memset/memcpy against ours 142 B: a call to the platform's libc counted the harness stand-in; compiler-rt (`__ashldi3`) travels with the compiler and stays counted."""
+    sizes = {"/c/p.o": 100, "/c/stubs_68000.a(mem.o)": 454, "/c/stubs_68000.a(crt.o)": 30, "/c/compiler-rt_68000_Os.a(rt_68000_Os_int_ashldi3.o)": 40}
+    assert size.members_of(sizes) == {"rt_68000_Os_int_ashldi3.o": 40}

@@ -50,9 +50,10 @@
 //!   Exit: none.
 //! - D9 (UJ-EARLY, owner arm64-vec, exit 2026-12-01): a second run, before the
 //!   vectorizer, on a target with vector registers. GCC's `pass_unroll_jam`
-//!   runs before its vectorizer; after the pin's (l.1474) a nest's inner loop is
-//!   a vector loop and its remainder, two loops, and the jam refuses it. particle
-//!   -O3 (arm64): 16,743 instructions run, 11,249 jammed first (gcc 12,539).
+//!   runs before its vectorizer; after the pin's (l.1474) a nest's inner loop
+//!   is a vector loop and its remainder, two loops, and the jam refuses it.
+//!   particle -O3 (arm64): 16,743 instructions run, 11,249 jammed first (gcc
+//!   12,539).
 //! - D2: no loop metadata is made: not `llvm.loop.unroll_and_jam.followup_*`,
 //!   not `setLoopAlreadyUnrolled` (a function pass cannot add metadata nodes),
 //!   not `llvm.loop.unroll.disable` on the epilog. llrm has no partial or
@@ -1107,9 +1108,7 @@ pub(crate) fn unroll_and_jam_loop(
 // ---------------------------------------------------------------------------
 
 use llrm_analysis::aggregate::AggregateAA;
-use llrm_analysis::basicaa::BasicAA;
 use llrm_analysis::scev::expand_cost::MachineCosts;
-use llrm_analysis::typebasedaa::TypeBasedAA;
 use llrm_mir::passes::{Analyses, FunctionPass, PreservedAnalyses, Unit};
 
 use crate::looppeel::PeelingPreferences;
@@ -1355,7 +1354,8 @@ fn compute_unroll_and_jam_count(
         llrm_support::debug!("unroll-jam", "no loop invariant loads");
         return (0, false);
     }
-    // UJ3: a divisor of a known trip count leaves no remainder copy of the nest.
+    // UJ3: a divisor of a known trip count leaves no remainder copy of the
+    // nest.
     if options.on && run.tti.unroll_jam_exact_count() && info.outer_trip_count > 1 && count > 1 {
         if let Some(exact) = (2..=count).rev().find(|d| info.outer_trip_count % d == 0) {
             count = exact;
@@ -1387,7 +1387,7 @@ impl LoopUnrollAndJam {
         let Some(l) = analyzed.loops.get_loop_for(header) else { return Jammed::Unmodified };
         let pragma = LoopOptions::of(run, l);
         let has_calls = loop_has_calls(run, l);
-        let mut up = gather_unrolling_preferences_of_target(run, has_calls);
+        let mut up = gather_unrolling_preferences_of_target(run, has_calls, true);
         // D1, then the `cl::opt`s that set the preferences.
         if self.options.on {
             up.unroll_and_jam = true;
@@ -1442,10 +1442,7 @@ impl LoopUnrollAndJam {
             let cx = senv.cx(&*run.context, &*run.function);
             let Some(l) = cx.loops.get_loop_for(header) else { return Jammed::Unmodified };
             let memory_unit = llrm_analysis::memory::Unit::within(&*run.context, run.layout, &*run.function, run.outer);
-            let mut aa = AggregateAA::new();
-            aa.add_aa_result(BasicAA::new(&memory_unit));
-            aa.add_aa_result(llrm_analysis::scopednoaliasaa::ScopedNoAliasAA::new(&memory_unit));
-            aa.add_aa_result(TypeBasedAA::new(&memory_unit));
+            let mut aa = AggregateAA::default_pipeline(&memory_unit);
             let mut di = DependenceInfo::new(&mut aa, &memory_unit, &cx, self.options.da);
             is_safe_to_unroll_and_jam(&cx, se, &mut di, l)
         };

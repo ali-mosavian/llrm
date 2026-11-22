@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/trial.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/trial.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/trial.rs sha256:41253e58412faa165d7e7c13c73da3d2eeef8ca01870ce1571444690ac575116 -->
+<!-- src: crates/opt/llrm-transforms/src/trial.rs sha256:b2091b815d5af98ab0a7e79c854ead5293e528e35e6282e7089cc1091c01b1f4 -->
 
 # trial
 
@@ -21,7 +21,8 @@ again with every loop under that size unrolled and keeps whichever
 assembly it prices cheaper.
 
 ## Example
-A loop the pass refused to unroll is noted; the driver compiles again with it unrolled and keeps the cheaper assembly.
+A loop the pass refused to unroll is noted; the driver compiles again with
+it unrolled and keeps the cheaper assembly.
 
 ```text
 pass:   loop refused by the threshold -> noted (ELIGIBLE)
@@ -30,4 +31,4 @@ driver: compile 1 (loop kept) vs compile 2 (loop unrolled)
 ```
 
 ## Used by
-Named by `inlinecost`, `jumpthreading`, `llc`, `looprotate`, `loopunrollpass`, `price`, `process`, `switchlookup`, `target`, `tti`, `walk`.
+Named by `inlinecost`, `jumpthreading`, `llc`, `looprotate`, `loopunrollpass`, `lsr_pass`, `price`, `process`, `simpleloopunswitch`, `switchlookup`, `target`, `tti`, `walk`.

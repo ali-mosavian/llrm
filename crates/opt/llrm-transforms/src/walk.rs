@@ -87,6 +87,9 @@ pub struct ModuleIpo {
     /// -Os and -Oz: the bar is gcc's, whose IPA-SRA drops the unread parameters
     /// first.
     pub for_size: bool,
+    /// Tail-call elimination is on at this level
+    /// ([`crate::tailcallelim::eliminate_linear_recursion`]).
+    pub tail_recursion: bool,
 }
 
 impl ProgramPass for ModuleIpo {
@@ -105,6 +108,16 @@ impl ProgramPass for ModuleIpo {
         let costs = program.target.size_costs();
         let mut modules = managers(program, analyses);
         let mut changed = false;
+        if self.tail_recursion {
+            for at in 0..count {
+                for &id in &private[at] {
+                    if crate::tailcallelim::eliminate_linear_recursion(&mut program.modules[at], &program.layout, id) {
+                        modules[at].changed(id);
+                        changed = true;
+                    }
+                }
+            }
+        }
         for (at, id) in crate::ipsccp::run_ipsccp_with(program, &mut modules, self.inline.single) {
             modules[at].changed(id);
             changed = true;
@@ -821,7 +834,7 @@ impl ProgramPass for Walk {
                                     0
                                 };
                                 let (saved, growth) = if size == crate::inlinecost::CallerSize::Speed && rate > 0 {
-                                    let costs = program.target.byte_costs();
+                                    let costs = program.target.speed_trial_costs();
                                     let now = module.global(id).function().expect("a body");
                                     let callees: Vec<&llrm_mir::module::Function> = calls
                                         .iter()
@@ -885,15 +898,22 @@ impl ProgramPass for Walk {
                                     // kernel's copy
                                     // 19 B under its 180 (+5 B built; qmove
                                     // -Os).
-                                    let costs = program.target.trial_costs();
+                                    let mut costs = program.target.trial_costs();
+                                    if size != crate::inlinecost::CallerSize::Speed {
+                                        costs.function += costs.size_caller_function;
+                                        costs.function_scale = costs.function_scale * costs.size_caller_scale / 100;
+                                    }
                                     let now = module.global(id).function().expect("a body");
                                     // DEVIATE (owner softfloat, exit
                                     // 2026-11-20): the callee's bytes are
                                     // summed per
                                     // site off the byte gate's targets, as the
-                                    // x86 model was fit with.
+                                    // x86 model was fit with. The credit gate
+                                    // (x86-m32) credits a dying callee once.
                                     let gone: i64 = if credit > 0
-                                        && (tti.opt_size_inline_byte_gate() || tti.opt_size_inline_trial_by_bytes())
+                                        && (tti.opt_size_inline_byte_gate()
+                                            || tti.opt_size_inline_trial_by_bytes()
+                                            || tti.opt_size_inline_credit_gate())
                                     {
                                         let sites: Vec<GlobalId> =
                                             calls.iter().filter_map(|one| trials[one].callee).collect();
@@ -1035,9 +1055,16 @@ impl ProgramPass for Walk {
                                 } else {
                                     0
                                 };
-                                let ruled = speed_at_size
+                                // DEVIATE UNROLL-SPEED-TRIAL: the variant that takes no growth
+                                // refuses this trial's too, and a base compile notes the growth
+                                // it takes, for the driver to try that variant.
+                                let refuses_growth = priced
+                                    && growth > 0
+                                    && crate::trial::speed_unroll().is_some_and(crate::trial::SpeedUnroll::refuses_trial_growth);
+                                let ruled = !refuses_growth && (speed_at_size
                                     || trial_accepted(
                                         tti.opt_size_inline_byte_gate(),
+                                        tti.opt_size_inline_credit_gate(),
                                         tti.opt_size_inline_trial_by_bytes(),
                                         tti.inline_trial_keeps_shrinking_copy(),
                                         priced,
@@ -1050,7 +1077,18 @@ impl ProgramPass for Walk {
                                         rate,
                                         kept_bytes,
                                         size == crate::inlinecost::CallerSize::Speed,
-                                    );
+                                    ));
+                                if ruled
+                                    && priced
+                                    && growth > 0
+                                    && matches!(
+                                        crate::trial::speed_unroll(),
+                                        None | Some(crate::trial::SpeedUnroll::NoInlineGrowth)
+                                    )
+                                    && tti.unroll_speed_trial()
+                                {
+                                    crate::trial::note_speed_trial_inline();
+                                }
                                 let forced = !ruled
                                     && site
                                         .as_ref()
@@ -2052,6 +2090,7 @@ fn speed_keeps_at_size(
 
 fn trial_accepted(
     byte_gate: bool,
+    credit_gate: bool,
     by_bytes: bool,
     keeps_shrinking: bool,
     priced: bool,
@@ -2081,7 +2120,7 @@ fn trial_accepted(
     // built +18).
     let counted = if byte_gate && strict {
         -growth * 8 >= kept_bytes
-    } else if byte_gate {
+    } else if byte_gate || (credit_gate && !strict) {
         tried <= best || (tried <= best + credit && growth <= 0)
     } else {
         tried <= best + credit

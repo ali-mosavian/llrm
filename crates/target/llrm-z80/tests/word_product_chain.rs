@@ -52,11 +52,16 @@ fn a_constant_word_product_is_the_chain_at_o1_where_the_clocks_repay_the_bytes()
     assert!(!strict(IR, "by_hundred").contains("__mulhi3"));
 }
 
-/// -Os and -Oz take no byte for clocks: the call stays where the chain is larger.
+/// -Os and -Oz paid no byte for clocks: `x * 1000` stayed the call, 6 B and about 1000 T against a chain of 12 B
+/// (word_sign_zero_guard -Os: 371 B / 51701 T, +59.4% T over SDCC's 32430 T with 90 B to spare). A byte at 40 T, as at
+/// -O1, takes the chain: 383 B / 29404 T.
 #[test]
-fn a_constant_word_product_keeps_the_call_at_os_where_the_module_links_the_routine() {
-    let request = Request::new(Level::Os);
-    let prepared = prepare(IR, &request).expect("prepares");
-    let (number, name) = prepared.names().enumerate().find(|(_, name)| *name == "by_hundred").expect("function");
-    assert!(text_in(&prepared, name, number, &request).expect("compiles").contains("__mulhi3"));
+fn a_constant_word_product_is_the_chain_at_os_and_oz_where_the_clocks_repay_the_bytes() {
+    for level in [Level::Os, Level::Oz] {
+        let request = Request::new(level);
+        let prepared = prepare(IR, &request).expect("prepares");
+        let (number, name) = prepared.names().enumerate().find(|(_, name)| *name == "by_hundred").expect("function");
+        let text = text_in(&prepared, name, number, &request).expect("compiles");
+        assert!(!text.contains("__mulhi3"), "{level:?}: {text}");
+    }
 }

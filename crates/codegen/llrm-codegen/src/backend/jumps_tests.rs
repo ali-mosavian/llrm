@@ -477,6 +477,26 @@ fn test_threading_preserves_an_exact_empty_loop_header() {
     assert_eq!(headers, [8, 10].into());
 }
 
+/// A block merged into its only predecessor took its `blockaddress` label
+/// with it: the symbol was defined nowhere and `indirectbr` jumped to it
+/// undefined (the LIR verifier named `jumps` as the first phase to break it).
+#[test]
+fn test_threading_keeps_an_address_taken_block() {
+    let mut source = body(
+        "f",
+        1,
+        vec![
+            block(1, vec![_compare(1), _jump(2, 5)], vec![5]).into(),
+            block(5, vec![_compare(5), _return(6)], vec![]).into(),
+        ],
+    );
+    source.address_symbols = Arc::new([(5, "$BA0_1".to_string())].into());
+
+    let result = threaded(&source);
+
+    assert!(result.blocks.iter().any(|block| block.at == 5));
+}
+
 /// `for (;;);` -- following jumps must not go round forever.
 #[test]
 fn test_a_block_that_jumps_to_itself_stays() {
@@ -2825,7 +2845,7 @@ fn test_the_latch_stays_below_the_inner_loop_it_falls_from() {
         made
     };
     let order = |top: Option<TopClocks>| {
-        let placed = super::_placed_ext(&source, false, false, None, None, top, 0, false).unwrap();
+        let placed = super::_placed_ext(&source, false, false, None, None, top, 0, None).unwrap();
         placed.blocks.iter().map(|one| one.at).collect::<Vec<_>>()
     };
     let at = |order: &[i64], block: i64| order.iter().position(|&one| one == block).unwrap();
@@ -2864,7 +2884,7 @@ fn test_a_latch_copied_into_two_arms_goes_above_the_header() {
         made
     };
     let order = |top: Option<TopClocks>| {
-        let placed = super::_placed_ext(&source, false, false, None, None, top, 0, false).unwrap();
+        let placed = super::_placed_ext(&source, false, false, None, None, top, 0, None).unwrap();
         placed.blocks.iter().map(|one| one.at).collect::<Vec<_>>()
     };
     let at = |order: &[i64], block: i64| order.iter().position(|&one| one == block).unwrap();
@@ -2881,8 +2901,46 @@ fn test_a_latch_copied_into_two_arms_goes_above_the_header() {
 fn test_a_diamond_is_placed_as_the_pin_does_under_the_loop_top_clocks() {
     use super::placement::TopClocks;
     let order = |top: Option<TopClocks>| {
-        let placed = super::_placed_ext(&weighted_diamond(0.7), false, false, None, None, top, 0, false).unwrap();
+        let placed = super::_placed_ext(&weighted_diamond(0.7), false, false, None, None, top, 0, None).unwrap();
         placed.blocks.iter().map(|one| one.at).collect::<Vec<_>>()
     };
     assert_eq!(order(Some(TopClocks { jump_clocks: 3.0, saved_clocks: 2.0 })), order(None));
+}
+
+/// A loop with a rare arm; `hot` is the odds of the fall-through arm.
+fn loop_with_rare_arm(hot: f64) -> LirBody {
+    let mut made = body(
+        "f",
+        1,
+        vec![
+            block(1, vec![_move(1, cx())], vec![3]).into(),
+            block(3, vec![_compare(3), _branch(4, "jge", 90)], vec![90, 8]).into(),
+            block(8, vec![_compare(8), _branch(9, "je", 20)], vec![20, 10]).into(),
+            block(10, vec![_move(10, bx()), _move(11, bx()), _jump(12, 30)], vec![30]).into(),
+            block(20, vec![_move(20, cx()), _move(21, cx()), _move(22, cx()), _jump(23, 30)], vec![30]).into(),
+            block(30, vec![_move(30, ax()), _jump(31, 3)], vec![3]).into(),
+            block(90, vec![_return(90)], vec![]).into(),
+        ],
+    );
+    let fixed = |probability: f64| (probability * crate::model::lir::BlockOdds::CERTAIN) as u32;
+    made.odds.taken.insert((3, 90), fixed(0.1));
+    made.odds.taken.insert((3, 8), fixed(0.9));
+    made.odds.taken.insert((8, 10), fixed(hot));
+    made.odds.taken.insert((8, 20), fixed(1.0 - hot));
+    made
+}
+
+/// -Os layout by unit Ext-TSP weights ended the loop on its latch, so every
+/// pass took a jump back and another into the body; QB's `exec_loop` ran +4%
+/// executed instructions. Weighed by how often a loop's blocks run, the
+/// latch falls into the header and the exit moves out of the way.
+#[test]
+fn test_ext_tsp_at_size_keeps_a_loops_hot_arm_falling_through_the_loop() {
+    let order = |ext_tsp: Option<bool>| {
+        let placed = super::_placed_ext(&loop_with_rare_arm(0.9), true, false, None, None, None, 0, ext_tsp).unwrap();
+        placed.blocks.iter().map(|one| one.at).collect::<Vec<_>>()
+    };
+    let falls = |order: &[i64]| order.windows(2).any(|pair| pair == [30, 3]);
+    assert!(falls(&order(Some(true))), "{:?}", order(Some(true)));
+    assert!(!falls(&order(Some(false))), "control: unit weights {:?}", order(Some(false)));
 }

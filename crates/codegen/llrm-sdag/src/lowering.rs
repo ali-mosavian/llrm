@@ -274,7 +274,18 @@ impl TargetLoweringInfo {
     /// `addRegisterClass(MVT::v16i8, ...)` and the other three).
     pub fn x86_64_sse2() -> TargetLoweringInfo {
         TargetLoweringInfo::new(
-            &[MVT::I8, MVT::I16, MVT::I32, MVT::I64, MVT::V16I8, MVT::V8I16, MVT::V4I32, MVT::V2I64],
+            &[
+                MVT::I8,
+                MVT::I16,
+                MVT::I32,
+                MVT::I64,
+                MVT::V16I8,
+                MVT::V8I16,
+                MVT::V4I32,
+                MVT::V2I64,
+                MVT::V4F32,
+                MVT::V2F64,
+            ],
             false,
         )
         .with_widen_vectors()

@@ -103,7 +103,10 @@ pub fn legalized_with<L: CombineHooks + legalize_dag::Hooks>(
     let types = types.with_hooks(lowering).run();
     types.map_err(|e| refused_legalize(dag, &format!("{e:?}")))?;
     combiner(dag, lowering, CombineLevel::AfterLegalizeTypes)?;
-    let legal = DagLegalizer::new(dag, tli, lowering).run();
+    let legal = match arch {
+        Some(arch) => DagLegalizer::new(dag, tli, lowering).with_target(arch).run(),
+        None => DagLegalizer::new(dag, tli, lowering).run(),
+    };
     legal.map_err(|e| refused_legalize(dag, &format!("{e:?}")))?;
     combiner(dag, lowering, CombineLevel::AfterLegalizeDag)?;
     // `LLRM_DAGDUMP=all` prints every block's DAG as selection will see it.
@@ -198,7 +201,14 @@ pub fn do_instruction_selection_with(
                     continue;
                 }
             }
-            return Err(Refusal::CannotSelect(format!("{:?}", adapter.dag.nodes()[node as usize].opcode)));
+            let opcode = adapter.dag.nodes()[node as usize].opcode;
+            // The lane extract names the vector it reads: the first thing to know of a refusal.
+            let detail = if opcode == ISD::ExtractElement {
+                format!(" of {:?}", adapter.dag.value_type(adapter.dag.operand(at, 0)))
+            } else {
+                String::new()
+            };
+            return Err(Refusal::CannotSelect(format!("{opcode:?}{detail}")));
         }
         if let Some(why) = adapter.refusal() {
             return Err(Refusal::UnknownRegister(why.to_owned()));

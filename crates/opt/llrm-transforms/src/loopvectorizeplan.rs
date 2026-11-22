@@ -375,15 +375,28 @@ fn iteration_cost(
         [register_bits, 2 * register_bits].contains(&bits)
             || (matches!(lane, Ty::Int(_)) && [register_bits / 2, 4 * register_bits, 8 * register_bits].contains(&bits))
     };
-    if backend_limits && vf > 1 && !recipes.iter().flat_map(recipe_lanes).all(taken) {
-        return Err(NotTaken);
+    if backend_limits && vf > 1 {
+        if let Some(lane) = recipes.iter().flat_map(recipe_lanes).find(|&lane| !taken(lane)) {
+            if llrm_support::debug::enabled("loop-vectorize-recipes") {
+                eprintln!("VF {vf} not taken: a vector of {lane:?} lanes is not one or two registers");
+            }
+            return Err(NotTaken);
+        }
     }
     let vector = |ty: Ty| VectorTy { lane: ty, count: vf };
-    let address = tti.address_computation_cost(kind).value;
+    let address = tti.scalar_access_address_cost(kind).value;
     // A vector price this port lacks: nothing in a lower bound, else the factor
     // has no price.
-    let unknown = |priced: Option<Cost>| priced.or(optimistic.then_some(Cost::FREE)).ok_or(NotTaken);
+    let unknown = |priced: Option<Cost>| {
+        if priced.is_none() && !optimistic && llrm_support::debug::enabled("loop-vectorize-recipes") {
+            eprintln!("VF {vf}: a recipe has no vector price");
+        }
+        priced.or(optimistic.then_some(Cost::FREE)).ok_or(NotTaken)
+    };
     for recipe in recipes {
+        if vf > 1 && !optimistic && llrm_support::debug::enabled("loop-vectorize-recipes") {
+            eprintln!("VF {vf}: pricing {recipe:?}");
+        }
         let cost = match *recipe {
             Recipe::Load { lane, align } | Recipe::Store { lane, align } => {
                 let op = if matches!(recipe, Recipe::Load { .. }) { MemoryOp::Load } else { MemoryOp::Store };
@@ -535,6 +548,25 @@ pub fn describe_costs(
         vf *= 2;
     }
     text
+}
+
+/// The price of one iteration at the chosen factor, with that factor: what two
+/// plans of one loop are compared by.
+pub(crate) fn chosen_price(
+    tti: &dyn Tti,
+    facts: &LoopFacts,
+    chosen: Plan,
+) -> Option<(i64, u32)> {
+    iteration_cost(tti, &facts.recipes, chosen.vf, false, true).ok().map(|cost| (cost, chosen.vf))
+}
+
+/// Whether the plan priced `new` costs less per lane than the one priced `old`
+/// (a tie is not less).
+pub(crate) fn cheaper_per_lane(
+    new: (i64, u32),
+    old: (i64, u32),
+) -> bool {
+    new.0 * i64::from(old.1) < old.0 * i64::from(new.1)
 }
 
 /// `expectedCost(VF=1)`: the scalar loop's price.

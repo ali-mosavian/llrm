@@ -450,7 +450,7 @@ fn clone_in_exit_block(
             Some(&phi) => phi,
             None => {
                 let incoming: Vec<Operand> = function
-                    .predecessors(exit)
+                    .edge_predecessors(exit)
                     .into_iter()
                     .flat_map(|pred| [Operand::Value(value), Operand::Block(pred)])
                     .collect();
@@ -610,7 +610,7 @@ fn maybe_insert_lcssa_phi(
     }
     let Operand::Value(source) = value else { return Ok(value) };
     let incoming: Vec<Operand> =
-        function.predecessors(block).into_iter().flat_map(|pred| [value, Operand::Block(pred)]).collect();
+        function.edge_predecessors(block).into_iter().flat_map(|pred| [value, Operand::Block(pred)]).collect();
     let ty = function.value(source).ty;
     let name = function.value(source).name.clone().map(|name| format!("{name}.lcssa"));
     let phi = function.create_instruction(Opcode::Phi, ty, incoming, Flags::default(), name.as_deref());

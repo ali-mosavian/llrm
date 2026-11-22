@@ -1422,6 +1422,10 @@ fn walk<'a>(
                     _ => state[from] = Some(Value::Cell(name.as_str())),
                 }
             }
+            // `stz m` leaves the cell holding the immediate 0 (the
+            // 65C02's `lda #0; sta m` already did): a reload of it while a
+            // register holds 0 goes
+            (Op::Stz, _, Operand::Direct(name)) if operand.is_cell() => cell_imm.push((name.as_str(), "0")),
             // `or` and `xor` of a zero are the load of the operand (the same
             // flags): `tya; ora m` with `y` = 0 is `lda m`, and the transfer
             // is then a dead write

@@ -227,6 +227,7 @@ pub fn machine_with<'a>(
             classes: Rc::clone(classes),
             segments: segments.clone(),
             size: target.size || target.min_size,
+            constrain: None,
         }),
         // After the loop-invariant values are in the preheader: streams that
         // share one index share one pointer (DEVIATE LSR2).
@@ -413,9 +414,11 @@ pub fn machine_with<'a>(
         // The pin's TailDuplicatePass: after allocation, before placement.
         Box::new(crate::backend::latetaildup::TailDuplicate {
             size: target.size || target.min_size,
+            computed_at_size: !target.skip_computed_goto_copies_at_size,
             saved: registers.saved.iter().map(|(whole, _)| *whole).collect(),
             free: registers.free,
             pointer: registers.pointer,
+            frame_kept: registers.kept,
         }),
         // Last: this physical order decides which explicit edge is now
         // fall-through.

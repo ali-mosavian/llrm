@@ -43,6 +43,9 @@ pub struct Cost {
     /// A data-dependent term is at its lower bound (shift by register) or its
     /// published maximum (multiply, divide).
     pub partial: bool,
+    /// `partial` and the omitted term only lowers the clocks: they are a
+    /// published maximum (multiply, divide), the true count is at most this.
+    pub maximum: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -561,7 +564,8 @@ fn priced(
             || (by_register && !counted)
             || (set_on_condition(base) && cpu == Cpu::M68000)
     };
-    Ok(Cost { clocks, partial })
+    let maximum = partial && matches!(base, "mulu" | "muls" | "divu" | "divs") && cpu != Cpu::M68060;
+    Ok(Cost { clocks, partial, maximum })
 }
 
 const BASES: [&str; 63] = [

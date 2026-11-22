@@ -42,6 +42,17 @@ pub struct Aarch64Lowering {
 }
 
 impl CombineHooks for Aarch64Lowering {
+    /// `AArch64TargetLowering::isLegalICmpImmediate`: compares are `subs`, so
+    /// the add/sub immediate (12 bits, optionally shifted left 12), either
+    /// sign:
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L20248
+    fn legal_icmp_immediate(
+        &self,
+        imm: i64,
+    ) -> bool {
+        imm != i64::MIN && crate::tti::is_legal_arith_immediate(imm.unsigned_abs())
+    }
+
     /// `AArch64TargetLowering::isTruncateFree(EVT, EVT)`
     /// (AArch64ISelLowering.cpp#L18949 at d1106deb71cc): any narrower scalar
     /// integer.
@@ -215,6 +226,17 @@ impl CombineHooks for Aarch64Lowering {
         true
     }
 
+    /// `AArch64TargetLowering::isLegalAddressingMode`: a base register and an
+    /// offset that `ldr` takes scaled by the access, or `ldur` unscaled.
+    fn is_legal_address_offset(
+        &self,
+        offset: i128,
+        bytes: u64,
+    ) -> bool {
+        i64::try_from(offset)
+            .is_ok_and(|offset| crate::tti::AArch64::is_legal_addressing_mode_for(bytes, false, offset, true, 0))
+    }
+
     fn fold_or_absorption(&self) -> bool {
         true
     }
@@ -249,6 +271,10 @@ impl CombineHooks for Aarch64Lowering {
     }
 
     fn narrow_zext_setcc(&self) -> bool {
+        true
+    }
+
+    fn simplify_boolean_compare(&self) -> bool {
         true
     }
 
@@ -381,6 +407,20 @@ impl LegalizeHooks for Aarch64Lowering {
         ret: EVT,
         signed: bool,
     ) -> Option<SDValue> {
+        let root = dag.entry_node();
+        self.make_lib_call_chained(dag, name, args, ret, signed, root).map(|(value, _)| value)
+    }
+
+    /// `makeLibCall` on `chain`, the out chain with the result.
+    fn make_lib_call_chained(
+        &mut self,
+        dag: &mut SelectionDAG,
+        name: &'static str,
+        args: &[SDValue],
+        ret: EVT,
+        signed: bool,
+        chain: SDValue,
+    ) -> Option<(SDValue, SDValue)> {
         use llrm_codegen::backend::selectiondag::target_calling::{Ext, In, Out, TargetCalling};
         let ext = if signed { Ext::Sign } else { Ext::Zero };
         // `getCopyToParts` of an `i128`: its two halves, which AAPCS64 passes
@@ -421,13 +461,12 @@ impl LegalizeHooks for Aarch64Lowering {
         let calling = super::call::Aarch64Calling { linux: self.linux };
         calling.accepts(dag, llrm_codegen::backend::selectiondag::target_calling::Site::Call, &outs, &ins).ok()?;
         let callee = dag.get_external_symbol(EVT::I64, name);
-        let root = dag.entry_node();
-        let (_chain, values) = calling.lower_call(dag, root, callee, &outs, &ins);
+        let (out_chain, values) = calling.lower_call(dag, chain, callee, &outs, &ins);
         if ret == quad {
             // `getCopyFromParts`: the halves joined.
-            return Some(dag.get_node(ISD::BuildPair, quad, &[*values.first()?, *values.get(1)?]));
+            return Some((dag.get_node(ISD::BuildPair, quad, &[*values.first()?, *values.get(1)?]), out_chain));
         }
-        values.first().copied()
+        Some((values.first().copied()?, out_chain))
     }
 
     fn lower_operation(
@@ -435,16 +474,69 @@ impl LegalizeHooks for Aarch64Lowering {
         dag: &mut SelectionDAG,
         node: SDValue,
     ) -> Option<SDValue> {
+        // A branch on a constrained `f128` compare: the legalizer meets the
+        // branch before the compare (users first), so the compare is softened
+        // here and the branch reads the routine's result against zero as flags,
+        // as the pin's `BR_CC` of the softened `SETCC` does. The branch may
+        // read the compare through the `xor c, 1` that inverts it. What read
+        // the compare's chain reads the routines' now.
+        if dag.opcode(node) == ISD::BrCond {
+            let cond = dag.operand(node, 1);
+            let inverted = dag.opcode(cond) == ISD::Xor && dag.constant(dag.operand(cond, 1)) == Some(1);
+            let compare = if inverted { dag.operand(cond, 0) } else { cond };
+            let sole_reader = |dag: &SelectionDAG, value: SDValue, reader: u32| dag.users(value).all(|u| u == reader);
+            if matches!(dag.opcode(compare), ISD::StrictFSetCC | ISD::StrictFSetCCS)
+                && compare.res == 0
+                && sole_reader(dag, compare, if inverted { cond.node } else { node.node })
+                && (!inverted || sole_reader(dag, cond, node.node))
+            {
+                let mut chain = dag.operand(compare, 0);
+                let mut call = |dag: &mut SelectionDAG, name: &'static str, args: &[SDValue], ret: EVT| {
+                    let (value, out) = self.make_lib_call_chained(dag, name, args, ret, false, chain)?;
+                    chain = out;
+                    Some(value)
+                };
+                if let Some(Some(value)) = super::f128::compare(dag, compare, &mut call) {
+                    dag.replace_all_uses_with(SDValue { node: compare.node, res: 1 }, chain);
+                    let value = if inverted && dag.opcode(value) == ISD::SetCC {
+                        // `xor (setcc c), 1` is the compare of the inverse
+                        // code.
+                        let (lhs, rhs) = (dag.operand(value, 0), dag.operand(value, 1));
+                        let code = super::lowering::cond_of(dag, dag.operand(value, 2)).inverse_integer();
+                        dag.get_setcc(dag.value_type(value), lhs, rhs, code)
+                    } else if inverted {
+                        let (vt, one) = (dag.value_type(cond), dag.operand(cond, 1));
+                        dag.get_node(ISD::Xor, vt, &[value, one])
+                    } else {
+                        value
+                    };
+                    let (before, dest) = (dag.operand(node, 0), dag.operand(node, 2));
+                    let rebuilt = dag.get_node(ISD::BrCond, EVT::OTHER, &[before, value, dest]);
+                    return super::lowering::lower_brcond(dag, rebuilt).or(Some(rebuilt));
+                }
+            }
+        }
         // `f128`: the routine of its conversion or compare (`LowerF128Call`)
         {
+            // A constrained compare's calls are ordered on its chain, each
+            // after the last; the node's value and that chain are its results.
+            let strict = dag.opcode(node).non_strict().is_some();
+            let mut chain = if strict { dag.operand(node, 0) } else { dag.entry_node() };
             let mut call = |dag: &mut SelectionDAG, name: &'static str, args: &[SDValue], ret: EVT| {
-                self.make_lib_call(dag, name, args, ret, false)
+                let (value, out) = self.make_lib_call_chained(dag, name, args, ret, false, chain)?;
+                chain = out;
+                Some(value)
             };
             let handled =
                 super::f128::convert(dag, node, &mut call).or_else(|| super::f128::compare(dag, node, &mut call));
             if let Some(result) = handled {
                 if result.is_none() {
                     self.custom.get_or_insert_with(|| format!("custom lowering of f128 {:?}", dag.node(node).opcode));
+                }
+                if strict {
+                    let value = result?;
+                    let vt = dag.value_type(value);
+                    return Some(dag.get_node_multi(ISD::MergeValues, &[vt, EVT::OTHER], &[value, chain]));
                 }
                 return result;
             }
@@ -493,6 +585,7 @@ impl LegalizeHooks for Aarch64Lowering {
                 let lanes = u128::from(dag.value_type(node).lanes());
                 dag.constant(dag.operand(node, 2)).filter(|&lane| lane < lanes).map(|_| node)
             }
+            ISD::ExtractElement => super::vector::lower_extract_vector_elt(dag, node),
             ISD::BuildVector => match super::vector::lower_build_vector(dag, node) {
                 Some(done) => Some(done),
                 // The pin's `SDValue()` for a constant that is no splat: the
@@ -525,10 +618,14 @@ impl LegalizeHooks for Aarch64Lowering {
             ISD::FpToSInt | ISD::FpToUInt if dag.value_type(node).is_vector() => {
                 super::vector::lower_vector_fp_to_int(dag, node)
             }
-            ISD::SIntToFp | ISD::UIntToFp => super::lowering::lower_int_to_fp(dag, node),
-            ISD::FpToSInt | ISD::FpToUInt => super::lowering::lower_fp_to_int(dag, node),
-            ISD::FpExtend => super::lowering::lower_fp_extend(dag, node),
-            ISD::FpRound => super::lowering::lower_fp_round(dag, node),
+            ISD::SIntToFp | ISD::UIntToFp | ISD::StrictSIntToFp | ISD::StrictUIntToFp => {
+                super::lowering::lower_int_to_fp(dag, node)
+            }
+            ISD::FpToSInt | ISD::FpToUInt | ISD::StrictFpToSInt | ISD::StrictFpToUInt => {
+                super::lowering::lower_fp_to_int(dag, node)
+            }
+            ISD::FpExtend | ISD::StrictFpExtend => super::lowering::lower_fp_extend(dag, node),
+            ISD::FpRound | ISD::StrictFpRound => super::lowering::lower_fp_round(dag, node),
             ISD::AtomicLoadAnd => super::lowering::lower_atomic_load_and(dag, node),
             // `LowerDYNAMIC_STACKALLOC` answers none off Windows without an
             // inline probe: the legalizer expands it, with the others.
@@ -588,7 +685,9 @@ impl Aarch64Lowering {
         let data = dag.node(node);
         let (ISD::GlobalAddress, NodeData::Global { symbol, offset }) = (data.opcode, data.data) else { return None };
         let vt = dag.value_type(node);
-        if self.globals.get(symbol)?.got {
+        // A block's address is a label of this object, never loaded from the
+        // GOT.
+        if self.globals.get(symbol)?.got && self.globals.block_at(symbol, offset).is_none() {
             let target = dag.get_target_global_address(vt, symbol, 0);
             let loaded = dag.get_node(ISD::Target(aarch64_isd::LOADgot), vt, &[target]);
             return Some(if offset == 0 {

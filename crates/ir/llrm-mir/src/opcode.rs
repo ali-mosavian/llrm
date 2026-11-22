@@ -702,7 +702,7 @@ impl Attribute {
     }
 }
 
-pub const FLAG_ATTRIBUTES: [&str; 58] = [
+pub const FLAG_ATTRIBUTES: [&str; 59] = [
     "alwaysinline",
     "builtin",
     "cold",
@@ -723,6 +723,7 @@ pub const FLAG_ATTRIBUTES: [&str; 58] = [
     "llrm-promoted-in-walk",
     "llrm-self-copied",
     "llrm-wdiv",
+    "llrm-word-product",
     "llrm-wshift",
     "minsize",
     "mustprogress",

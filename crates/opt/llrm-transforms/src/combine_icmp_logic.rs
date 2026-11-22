@@ -84,11 +84,11 @@ fn constant(
     q.int_constant(v).map(|(bits, _)| bits)
 }
 
-fn is_equality(pred: IntPredicate) -> bool {
+pub(crate) fn is_equality(pred: IntPredicate) -> bool {
     matches!(pred, IntPredicate::Eq | IntPredicate::Ne)
 }
 
-fn is_signed(pred: IntPredicate) -> bool {
+pub(crate) fn is_signed(pred: IntPredicate) -> bool {
     matches!(
         pred,
         IntPredicate::Slt | IntPredicate::Sle | IntPredicate::Sgt | IntPredicate::Sge
@@ -560,7 +560,7 @@ fn fold_log_op_of_masked_icmps(
 }
 
 /// `getICmpCode`.
-fn icmp_code(pred: IntPredicate) -> u32 {
+pub(crate) fn icmp_code(pred: IntPredicate) -> u32 {
     match pred {
         IntPredicate::Ugt | IntPredicate::Sgt => 1,
         IntPredicate::Eq => 2,
@@ -572,7 +572,7 @@ fn icmp_code(pred: IntPredicate) -> u32 {
 }
 
 /// `predicatesFoldable`.
-fn predicates_foldable(
+pub(crate) fn predicates_foldable(
     p1: IntPredicate,
     p2: IntPredicate,
 ) -> bool {
@@ -580,7 +580,7 @@ fn predicates_foldable(
 }
 
 /// `getNewICmpValue`: `getPredForICmpCode`, then the compare.
-fn new_icmp_value(
+pub(crate) fn new_icmp_value(
     c: &mut Combiner,
     inst: InstId,
     code: u32,

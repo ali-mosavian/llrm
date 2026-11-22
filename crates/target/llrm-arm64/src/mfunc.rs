@@ -64,6 +64,12 @@ pub enum Op {
         /// The labels of the blocks the entries go to; the table's successors.
         targets: Vec<String>,
     },
+    /// `BR rn` of an `indirectbr`: a jump through a register to one of
+    /// `targets`, the labels of the blocks it may reach (its successors).
+    IndirectJump {
+        rn: Gpr,
+        targets: Vec<String>,
+    },
     /// The end of a block the IR ends in `unreachable`: no code (the pin traps
     /// only for MachO and Windows CFI) and no successor, not even the block
     /// after it. Selection puts it last in the block.
@@ -111,6 +117,7 @@ impl Op {
                 f(RegRef::Gpr(dst), Role::Def);
                 f(RegRef::Gpr(scratch), Role::Def);
             }
+            Op::IndirectJump { rn, .. } => f(RegRef::Gpr(rn), Role::Use),
             Op::Call { callee, uses, defs, .. } => {
                 if let Callee::Register(register) = callee {
                     f(RegRef::Gpr(register), Role::Use);
@@ -419,6 +426,9 @@ pub struct MFunc {
     /// The frame object each source variable lives in (`llvm.dbg.declare` of
     /// an `alloca`), by the variable's metadata node.
     pub declared: Vec<(llrm_mir::MetadataId, u32)>,
+    /// The label of each block whose address is taken, with the symbol that
+    /// names it.
+    pub block_symbols: Vec<(String, String)>,
     /// The constants the function loads from memory (`MachineConstantPool`),
     /// each under the label its address is taken from.
     pub pool: Vec<PoolEntry>,
@@ -435,6 +445,10 @@ pub struct MFunc {
     /// The joins early if-conversion made, `(head, tail)` by label in the
     /// order made: the tail's operations and edges are the head's.
     pub joined: Vec<(String, String)>,
+    /// The blocks conditional-compare formation merged, `(head, cmp block)` by
+    /// label in the order made: the head took the block's operations and
+    /// edges, each edge's odds scaled by the odds of the head's edge to it.
+    pub cmp_merged: Vec<(String, String)>,
     /// The tails early if-conversion left behind a jump: the head's one edge
     /// is to the tail, certain.
     pub branched: Vec<(String, String)>,
@@ -452,6 +466,20 @@ pub struct PoolEntry {
 }
 
 impl MFunc {
+    /// The blocks that end in an `indirectbr`, each with the labels it may
+    /// reach.
+    pub fn indirect_jumps(&self) -> Vec<(String, Vec<String>)> {
+        self.blocks
+            .iter()
+            .filter_map(|block| {
+                block.ops.iter().find_map(|op| match op {
+                    Op::IndirectJump { targets, .. } => Some((block.label.clone(), targets.clone())),
+                    _ => None,
+                })
+            })
+            .collect()
+    }
+
     pub fn new(name: &str) -> Self {
         Self { name: name.to_owned(), next_register: Gpr::FIRST_VIRTUAL, ..Self::default() }
     }
@@ -506,6 +534,7 @@ pub fn falls_through(block: &MBlock) -> bool {
                 Op::I(Inst::Branch { link: false, target: Target::Label(_) })
                     | Op::Return { .. }
                     | Op::JumpTable { .. }
+                    | Op::IndirectJump { .. }
                     | Op::Unreachable
                     | Op::I(Inst::Brk { .. })
             ),
@@ -531,7 +560,7 @@ pub fn successors_of(
             | Op::I(Inst::TestBranch { target: Target::Label(label), .. }) => {
                 out.extend(labels.get(label.as_str()).copied());
             }
-            Op::JumpTable { targets, .. } => {
+            Op::JumpTable { targets, .. } | Op::IndirectJump { targets, .. } => {
                 out.extend(targets.iter().filter_map(|label| labels.get(label.as_str()).copied()));
             }
             _ => {}
@@ -708,6 +737,20 @@ pub fn lower_phis(function: &mut MFunc) -> Result<(), String> {
         let copies = |to: usize| -> Vec<Op> {
             edge_copies[&(from, to)].iter().map(|&(via, value)| Op::Copy { dst: via, src: value }).collect()
         };
+        // An `indirectbr`'s edges are never split (`canSplitCriticalEdge`): the
+        // jump lands on the block's own address, past any block made on the
+        // edge. The copies go before the jump, each into the phi's own fresh
+        // register, so the edges that do not read it are not harmed.
+        if let Some(jump) = function.blocks[from].ops.iter().position(|op| matches!(op, Op::IndirectJump { .. })) {
+            let mut at = jump;
+            for to in carrying {
+                for copy in copies(to) {
+                    function.blocks[from].ops.insert(at, copy);
+                    at += 1;
+                }
+            }
+            continue;
+        }
         if targets.len() == 1 {
             let ops = &mut function.blocks[from].ops;
             let first_branch = ops.iter().rposition(|op| !is_branch(op)).map_or(0, |last| last + 1);
@@ -736,7 +779,7 @@ pub fn lower_phis(function: &mut MFunc) -> Result<(), String> {
                         *target = Target::Label(edge.clone());
                         retargeted = true;
                     }
-                    Op::JumpTable { targets, .. } => {
+                    Op::JumpTable { targets, .. } | Op::IndirectJump { targets, .. } => {
                         for entry in targets.iter_mut().filter(|entry| **entry == label) {
                             *entry = edge.clone();
                             retargeted = true;

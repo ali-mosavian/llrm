@@ -419,6 +419,35 @@ pub trait TargetCalling: Debug + Sync {
         self.emit_memcpy(dag, chain, dst, src, size)
     }
 
+    /// [`Self::emit_memmove`] for a function tuned for size or not, as
+    /// [`Self::emit_memcpy_sized`].
+    #[allow(clippy::too_many_arguments)]
+    fn emit_memmove_sized(
+        &self,
+        dag: &mut SelectionDAG,
+        chain: SDValue,
+        dst: SDValue,
+        src: SDValue,
+        size: SDValue,
+        _opt_size: bool,
+    ) -> Option<SDValue> {
+        self.emit_memmove(dag, chain, dst, src, size)
+    }
+
+    /// [`Self::emit_memset`] for a function tuned for size or not, as
+    /// [`Self::emit_memcpy_sized`].
+    fn emit_memset_sized(
+        &self,
+        dag: &mut SelectionDAG,
+        chain: SDValue,
+        dst: SDValue,
+        value: SDValue,
+        size: SDValue,
+        _opt_size: bool,
+    ) -> Option<SDValue> {
+        self.emit_memset(dag, chain, dst, value, size)
+    }
+
     /// `SelectionDAGTargetInfo::EmitTargetCodeForMemset`.
     fn emit_memset(
         &self,

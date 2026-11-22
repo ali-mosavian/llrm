@@ -37,7 +37,7 @@ pub fn run(function: &mut MFunc) {
                 continue;
             }
             match &op {
-                Op::Call { .. } | Op::Return { .. } | Op::JumpTable { .. } => copies.clear(),
+                Op::Call { .. } | Op::Return { .. } | Op::JumpTable { .. } | Op::IndirectJump { .. } => copies.clear(),
                 _ => {
                     let (defs, _) = op.defs_and_uses();
                     copies.retain(|(d, s)| !defs.contains(d) && !defs.contains(s));

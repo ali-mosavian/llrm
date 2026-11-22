@@ -648,6 +648,8 @@ fn reduction(name: &str) -> Option<(VectorReduce, Arrangement)> {
         "16i8" => Some(Arrangement::B16),
         "8i16" => Some(Arrangement::H8),
         "4i32" => Some(Arrangement::S4),
+        "8i8" => Some(Arrangement::B8),
+        "4i16" => Some(Arrangement::H4),
         _ => None,
     };
     [
@@ -1350,6 +1352,9 @@ struct Emitter<'a> {
     layout: &'a [u32],
     /// The blocks each jump table goes to, by table number.
     tables: &'a [Vec<u32>],
+    /// The blocks the block being emitted may go to: what an `indirectbr`'s
+    /// `BR` reaches.
+    exits: Vec<u32>,
     mf: MFunc,
     /// The virtual register each value is in.
     values: HashMap<(u32, u8), Gpr>,
@@ -1762,6 +1767,10 @@ impl Emitter<'_> {
         addend: i64,
     ) -> Result<(Target, bool), String> {
         let global = self.globals.get(id).ok_or("a global the module does not have")?;
+        if let Some(block) = self.globals.block_at(id, addend) {
+            let name = super::globals::block_symbol(self.globals.local_prefix(), id, block);
+            return Ok((Target::Symbol { name, addend: 0 }, false));
+        }
         Ok((Target::Symbol { name: global.name.clone(), addend }, global.got))
     }
 
@@ -2475,6 +2484,21 @@ impl Emitter<'_> {
                     self.ops.push(Op::JumpTable { dst, scratch, table: *table, index: *index, id: *number, targets });
                     return Ok(());
                 }
+                // `BRIND` of an address that is no jump table's entry: an
+                // `indirectbr`, which reaches the blocks the IR lists.
+                if name == "BR"
+                    && let [Operand::Reg(rn)] = operands.as_slice()
+                {
+                    let mut targets = Vec::new();
+                    for &block in &self.exits {
+                        let Target::Label(label) = self.label(block)? else { return Err("a block without a label".into()) };
+                        if !targets.contains(&label) {
+                            targets.push(label);
+                        }
+                    }
+                    self.ops.push(Op::IndirectJump { rn: *rn, targets });
+                    return Ok(());
+                }
                 if name == "COPY_TO_REGCLASS" || name == "COPY" {
                     return self.copy_to_class(id, &operands);
                 }
@@ -2883,6 +2907,7 @@ pub fn emit(
         function: name,
         layout: &first.layout,
         tables: &first.tables,
+        exits: Vec::new(),
         mf: MFunc::new(name),
         values: HashMap::default(),
         vregs: HashMap::default(),
@@ -2901,6 +2926,10 @@ pub fn emit(
         emitter.mf.slot(size, align);
     }
     emitter.mf.declared.clone_from(&first.declared);
+    for (block, symbol) in &first.address_taken {
+        let Target::Label(label) = emitter.label(*block)? else { return Err("a block without a label".into()) };
+        emitter.mf.block_symbols.push((label, symbol.clone()));
+    }
     // The blocks `F128CSEL` splits make, after the selector's; and where each
     // split block now ends.
     let mut joined: Vec<MBlock> = Vec::new();
@@ -2911,6 +2940,7 @@ pub fn emit(
         emitter.values.clear();
         emitter.fvalues.clear();
         emitter.segment = block_label(name, at);
+        emitter.exits.clone_from(&block.successors);
         for &(reg, vreg) in &block.live_ins {
             let dst = if is_fpr(reg) { Reg::Fpr(emitter.fvreg(vreg)) } else { Reg::Gpr(emitter.vreg(vreg)) };
             emitter.ops.push(Op::Copy { dst, src: reg_of(reg)? });
@@ -3000,6 +3030,7 @@ pub fn emit(
                     Some(
                         Op::Return { .. }
                             | Op::JumpTable { .. }
+                            | Op::IndirectJump { .. }
                             | Op::Unreachable
                             | Op::I(Inst::Branch { link: false, .. } | Inst::Brk { .. })
                     )

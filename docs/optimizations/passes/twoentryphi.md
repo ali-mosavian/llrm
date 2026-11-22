@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/twoentryphi.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/twoentryphi.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/twoentryphi.rs sha256:688826814a99435fbe8d1eaee7c1ca2a5aa6cc9fdd3e93b865fa24097252e82b -->
+<!-- src: crates/opt/llrm-transforms/src/twoentryphi.rs sha256:1c0d265e23c159ede643b12d6ecef967a57139a0fbe0653e25e8edda4c3b2139 -->
 
 # twoentryphi
 
@@ -43,6 +43,16 @@ a block whose first instruction is a phi of two entries.
   `and`/`or` select (`select x, y, false`) is no branch and is not counted:
   the 6502's `isdigit` range test stayed two compares (28 -> 50 B).
 
+- D6. (Tti-gated, off in the pin: `phiopt_one_feeding_statement`) gcc's
+  `empty_bb_or_one_feeding_into_p` (`tree-ssa-phiopt.cc`) bounds an arm to
+  one statement that feeds the phi. It applies only where the phi is on a
+  loop-carried recurrence (`on_recurrence`, a DEVIATE damage limiter, not a
+  priced criterion) and the branch condition is later than the phi's values
+  (`condition_is_later`: `X86CmovConversion::checkForProfitableCmovCandidates`'
+  test that a cmov waits longer for its condition than for its value, on
+  TTI latencies). sfm16_dbg m64 -37..-40% executed instructions; every other
+  bench cell unchanged.
+
 ## Example
 The phi that a branch chooses between becomes a select in the branch's
 block:
@@ -55,4 +65,4 @@ end:   %p = phi i32 [ 1, %then ], [ 2, %entry ]
 ```
 
 ## Used by
-Named by `alwaysundef`, `branchtocommon`, `condstores`, `condtocond`, `constanthoisting`, `hoistcommon`, `icmpchain`, `knownpred`, `loopdeletion`, `simplifycfg`, `sinkcommon`, `speculate`, `switcharms`, `switchdead`, `switchlookup`, `switchopt`, `switchphi`, `switchpow2`, `switchrange`, `switchreduce`, `switchselect`, `switchvalue`, `undefpred`.
+Named by `alwaysundef`, `branchtocommon`, `condstores`, `condtocond`, `constanthoisting`, `hoistcommon`, `icmpchain`, `knownpred`, `loopdeletion`, `loopsplit`, `simplifycfg`, `sinkcommon`, `speculate`, `switcharms`, `switchdead`, `switchlookup`, `switchopt`, `switchphi`, `switchpow2`, `switchrange`, `switchreduce`, `switchselect`, `switchvalue`, `undefpred`.

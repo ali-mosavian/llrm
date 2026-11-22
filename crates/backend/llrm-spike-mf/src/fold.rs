@@ -195,12 +195,16 @@ fn position<C>(
     function.blocks.iter().position(|block| block.id == id).expect("a block that exists")
 }
 
-/// `canFallThrough`: control can run off the end into the next block.
+/// `MachineBasicBlock::canFallThrough`: control can run off the end into the
+/// next block, or a branch names the next block ("it can obviously reach, even
+/// though the branch should get folded to fall through implicitly").
 fn can_fall_through<C>(
     function: &MFunction<C>,
     at: usize,
 ) -> bool {
-    at + 1 < function.blocks.len() && !function.blocks[at].insts.last().is_some_and(|last| last.barrier)
+    let Some(next) = function.blocks.get(at + 1) else { return false };
+    !function.blocks[at].insts.last().is_some_and(|last| last.barrier)
+        || analyze(function, at).is_some_and(|branches| branches.taken == Some(next.id) || branches.other == Some(next.id))
 }
 
 /// The blocks that name `id` in a terminator, and the block before it when

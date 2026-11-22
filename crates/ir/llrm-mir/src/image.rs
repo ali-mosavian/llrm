@@ -6,6 +6,7 @@
 
 use crate::context::signed;
 use crate::datalayout::DataLayout;
+use crate::opcode::CastOp;
 use crate::{ConstantExpr, ConstantId, ConstantKind, FloatKind, GlobalKind, Linkage, Module, Type, TypeId};
 
 /// A pointer in a constant's bytes: where, to what, and the addend.
@@ -23,6 +24,9 @@ pub struct Writer<'a> {
     pub module: &'a Module,
     pub layout: &'a DataLayout,
     pub symbol_of: &'a dyn Fn(&str) -> String,
+    /// What the address of a block is called, for a target that can name one
+    /// (`GetBlockAddressSymbol`); none refuses a `blockaddress`.
+    pub block_symbol: Option<&'a dyn Fn(crate::context::GlobalId, crate::module::BlockId) -> String>,
 }
 
 impl Writer<'_> {
@@ -78,6 +82,35 @@ impl Writer<'_> {
                 for (index, member) in members.iter().enumerate() {
                     self.write(*member, fields[index], out, at + offsets[index] as usize, relocs)?;
                 }
+                Ok(())
+            }
+            (ConstantKind::Expr(ConstantExpr::BlockAddress { function, block }), Type::Pointer(_)) => {
+                let Some(symbol_of) = self.block_symbol else {
+                    return Err("a blockaddress in a constant: this target has no symbol for a block".into());
+                };
+                // The block the address follows to, or LLVM's `inttoptr 1` where
+                // it is gone.
+                let target = match &self.module.global(*function).kind {
+                    GlobalKind::Function(target) => target.resolve_block_address(*block),
+                    _ => None,
+                };
+                match target {
+                    Some(block) => relocs.push(Reloc { at, symbol: symbol_of(*function, block), addend: 0 }),
+                    None => {
+                        let bytes = self.layout.pointer(0).bits as usize / 8;
+                        out[at..at + bytes].copy_from_slice(&1u64.to_le_bytes()[..bytes]);
+                    }
+                }
+                Ok(())
+            }
+            // `inttoptr (iN n)`: the number itself, as an expanded block
+            // address is (`IndirectBrExpandPass`).
+            (ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::IntToPtr, value }), Type::Pointer(_))
+                if matches!(context.get(*value).kind, ConstantKind::Int(_)) =>
+            {
+                let ConstantKind::Int(number) = context.get(*value).kind else { unreachable!() };
+                let bytes = self.layout.pointer(0).bits as usize / 8;
+                self.put(out, at, &number.to_le_bytes()[..bytes]);
                 Ok(())
             }
             (ConstantKind::Global(global), Type::Pointer(_)) => {
@@ -174,6 +207,16 @@ pub fn variables(
     layout: &DataLayout,
     symbol_of: &dyn Fn(&str) -> String,
 ) -> Result<Vec<Variable>, String> {
+    variables_with_blocks(module, layout, symbol_of, None)
+}
+
+/// [`variables`] for a target that names the address of a block.
+pub fn variables_with_blocks(
+    module: &Module,
+    layout: &DataLayout,
+    symbol_of: &dyn Fn(&str) -> String,
+    block_symbol: Option<&dyn Fn(crate::context::GlobalId, crate::module::BlockId) -> String>,
+) -> Result<Vec<Variable>, String> {
     let types = &module.context.types;
     let mut out = Vec::new();
     for global in &module.globals {
@@ -186,7 +229,7 @@ pub fn variables(
         let size = layout.alloc_size(types, variable.ty) as usize;
         let mut bytes = vec![0u8; size];
         let mut relocs = Vec::new();
-        Writer { module, layout, symbol_of }.write(initializer, variable.ty, &mut bytes, 0, &mut relocs)?;
+        Writer { module, layout, symbol_of, block_symbol }.write(initializer, variable.ty, &mut bytes, 0, &mut relocs)?;
         let align = layout.global_align(types, variable.ty, variable.align, false, true, true) as usize;
         let zero = relocs.is_empty() && bytes.iter().all(|byte| *byte == 0);
         out.push(Variable {
@@ -252,7 +295,7 @@ mod tests {
         let mut relocs = Vec::new();
         let ok = module.context.constant(crate::Constant { ty: narrow, kind: ConstantKind::Bytes(vec![1, 2]) });
         let bad = module.context.constant(crate::Constant { ty: wide, kind: ConstantKind::Bytes(vec![1, 2, 3, 4]) });
-        let writer = Writer { module: &module, layout: &layout, symbol_of: &symbol_of };
+        let writer = Writer { module: &module, layout: &layout, symbol_of: &symbol_of, block_symbol: None };
         assert!(writer.write(ok, narrow, &mut out, 0, &mut relocs).is_ok());
         assert_eq!(out[..2], [1, 2]);
         assert!(writer.write(bad, wide, &mut out, 0, &mut relocs).is_err(), "copied unswapped");

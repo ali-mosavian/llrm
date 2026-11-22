@@ -1908,3 +1908,178 @@ b0:
     );
     assert_eq!(priced(&text, 0, false, CallerSize::Speed), (-190, 225));
 }
+
+/// pfpu.c `control(cw)` (`fesetround(modes[cw >> 10 & 3])`) was kept out of
+/// line at -Os on arm64 for six constant-argument sites: the guard counted the
+/// table load (3 units against a call's 2), though the load folds once the
+/// argument is a constant. The pin inlines it at cost 5 against 75; pfpu.o was
+/// +124 B over it.
+#[test]
+fn an_optsize_caller_inlines_a_callee_whose_table_load_folds_on_arm64() {
+    let text = "@modes = internal constant [4 x i32] [i32 0, i32 4194304, i32 8388608, i32 12582912]
+declare i32 @fesetround(i32)
+
+define internal void @callee(i16 %cw) {
+b0:
+  %s = lshr i16 %cw, 10
+  %z = zext i16 %s to i64
+  %p = getelementptr inbounds i32, ptr @modes, i64 %z
+  %m = load i32, ptr %p
+  %r = call i32 @fesetround(i32 %m)
+  ret void
+}
+
+define void @f() {
+b0:
+  call void @callee(i16 0)
+  call void @callee(i16 1024)
+  call void @callee(i16 2048)
+  ret void
+}
+";
+    let arm = llrm_arm64::tti::AArch64::of_cpu("generic").unwrap();
+    let params = InlineParams { compute_full_inline_cost: true, ..InlineParams::from_level(2) };
+    let (cost, threshold) = priced_params(text, 0, false, CallerSize::OptSize, Some(&arm), params, (6, true));
+    assert!(cost < threshold, "{cost} against {threshold}");
+}
+
+/// KEEP-HINTED-CALLS prices bytes alone, so the trial that puts back the
+/// calls an `inlinehint` let in kept them in a computed-goto dispatch loop too:
+/// QuickrBasic `exec.c` -Os, `sng_math` 528.8M instructions against 288.7M with
+/// the calls inlined. A site hotter than its entry is the speed side's: the
+/// hint's yield stands there in the trial, and is not noted for it.
+#[test]
+fn a_hinted_call_in_a_loop_is_inlined_in_the_keep_calls_trial() {
+    use llrm_mir::tti::{InlinePolicy, SizeRule};
+    let policy = InlinePolicy {
+        by_size: Some(SizeRule { min_sites: 2, yields_to_negative_cost: false, yields_to_inlinehint: true }),
+        by_rate: 0,
+    };
+    let tti = PolicyOnly(policy, None, false);
+    let text = ROTATE.replace("@callee(i16 %x, i16 %n) nounwind", "@callee(i16 %x, i16 %n) nounwind inlinehint");
+    let inlined = |frequency, trial: bool| {
+        let params = InlineParams { compute_full_inline_cost: true, ..InlineParams::from_level(2) };
+        let price =
+            || priced_hot(&text, 1, false, CallerSize::OptSize, Some(&tti), params.clone(), (2, false), frequency);
+        let (cost, threshold) = if trial { crate::trial::with_kept_hinted_calls(price) } else { price() };
+        cost < threshold
+    };
+    assert!(inlined(None, false), "premise: the hint's yield lets the growing call in");
+    assert!(!inlined(None, true), "outside a loop the trial puts the call back");
+    assert!(!inlined(Some(0.5), true), "a site colder than its entry is not a loop's");
+    assert!(inlined(Some(4.0), true), "in a loop the call is inlined in the trial too");
+}
+
+const HOT_CALLEE: &str = "define internal void @callee(ptr %p, i32 %c, i32 %m) {
+b0:
+  %a = load i32, ptr %p
+  %b = and i32 %a, %m
+  %d = or i32 %b, %c
+  %e = xor i32 %d, %m
+  %g0 = add i32 %e, %m
+  %g1 = xor i32 %g0, %c
+  %g2 = or i32 %g1, %m
+  %g3 = and i32 %g2, %c
+  %g4 = sub i32 %g3, %m
+  %g5 = add i32 %g4, %c
+  %g6 = xor i32 %g5, %m
+  %g7 = or i32 %g6, %c
+  %g8 = and i32 %g7, %m
+  %g9 = sub i32 %g8, %c
+  %g10 = add i32 %g9, %m
+  %g11 = xor i32 %g10, %c
+  %g12 = or i32 %g11, %m
+  %g13 = and i32 %g12, %c
+  store i32 %g13, ptr %p
+  ret void
+}
+
+define void @f(ptr %p, i32 %c, i32 %m) {
+b0:
+  call void @callee(ptr %p, i32 %c, i32 %m)
+  call void @callee(ptr %p, i32 %m, i32 %c)
+  ret void
+}
+";
+
+/// An x86 -Os target whose size bound yields at a hot site within `percent`.
+fn hot_yield_tti(percent: Option<i64>) -> impl llrm_mir::tti::Tti {
+    use llrm_mir::target::Tuning;
+    llrm_x86::tti::X86::of_cpu("i486").unwrap().with_tuning(Tuning {
+        inline_size_guard_at_size: true,
+        inline_size_hot_growth_percent: percent,
+        ..Tuning::PIN
+    })
+}
+
+/// Whether the first call of `HOT_CALLEE` is inlined at a site `frequency` times its caller's entry.
+fn hot_callee_inlined(percent: Option<i64>, frequency: f64) -> bool {
+    let params = InlineParams { compute_full_inline_cost: true, ..InlineParams::from_level(2) };
+    let (cost, threshold) = priced_hot(
+        HOT_CALLEE,
+        0,
+        false,
+        CallerSize::OptSize,
+        Some(&hot_yield_tti(percent)),
+        params,
+        (2, true),
+        Some(frequency),
+    );
+    cost < threshold
+}
+
+/// The -Os size bound held a call in a pixel loop: QuickrBasic `pixmem.c`
+/// `blend` (52 units, 12 sites) stayed a call at `pm_box`'s inner loop,
+/// frequency 961 times the entry, where the pin's `optsize` threshold takes it
+/// (`q45d25` -Os 2,335,641 instructions against clang's 1,443,306). A locally
+/// hot site now passes the bound where its growth is within the target's share
+/// of the call it removes; a cold site and a site over the share keep it.
+#[test]
+fn a_hot_site_passes_the_size_bound_within_the_growth_budget() {
+    use llrm_mir::target::Tuning;
+    let text = HOT_CALLEE;
+    let tti = |percent: Option<i64>| {
+        llrm_x86::tti::X86::of_cpu("i486").unwrap().with_tuning(Tuning {
+            inline_size_guard_at_size: true,
+            inline_size_hot_growth_percent: percent,
+            ..Tuning::PIN
+        })
+    };
+    let inlined = |percent: Option<i64>, frequency: f64| {
+        let params = InlineParams { compute_full_inline_cost: true, ..InlineParams::from_level(2) };
+        let (cost, threshold) = priced_hot(
+            text,
+            0,
+            false,
+            CallerSize::OptSize,
+            Some(&tti(percent)),
+            params,
+            (2, true),
+            Some(frequency),
+        );
+        cost < threshold
+    };
+    assert!(!inlined(None, 961.0), "premise: the bound holds a hot site where the target states no share");
+    assert!(inlined(Some(1000), 961.0), "a hot site within the share passes the bound");
+    assert!(!inlined(Some(1000), 1.0), "a site below the pin's hot frequency keeps the bound");
+    assert!(!inlined(Some(0), 961.0), "growth over the share keeps the bound");
+}
+
+/// The hot-site yield trusts the units' growth, which credits the callee's death
+/// over all its sites; cold sites that keep it make the inline cost bytes
+/// (QuickrBasic `suggest.c` +92 B, `comp.c` +49 B, `x_idioms` +143 B). The
+/// trial compile that keeps those calls refuses the yield, and notes each
+/// caller where it stood, so the finished object can decide.
+#[test]
+fn a_hot_yield_is_noted_and_refused_in_the_keep_hot_calls_trial() {
+    let _ = crate::trial::take_hot_yields();
+    assert!(hot_callee_inlined(Some(1000), 961.0), "premise: the yield inlines the hot site");
+    assert_eq!(crate::trial::take_hot_yields(), ["f"], "the caller where the yield stood is noted");
+    assert!(
+        !crate::trial::with_kept_hot_calls(|| hot_callee_inlined(Some(1000), 961.0)),
+        "the trial keeps the call"
+    );
+    assert!(crate::trial::take_hot_yields().is_empty(), "the trial notes nothing");
+    assert!(!hot_callee_inlined(Some(1000), 1.0));
+    assert!(crate::trial::take_hot_yields().is_empty(), "a cold site is not a yield");
+}

@@ -707,6 +707,7 @@ fn tail(
     }
     let parts: Vec<(&str, &_)> = names.iter().map(String::as_str).zip(&selections).collect();
     let pieces = module_text(module, &parts)?;
+    let plain_pieces = crate::select::plain_pieces(&pieces);
     let functions = if audit {
         names
             .iter()
@@ -744,8 +745,35 @@ fn tail(
     // outline`)
     let share = matches!(request.level, Level::O1 | Level::O2 | Level::O3)
         .then(|| crate::routines::speed_share_percent("outline"));
-    let text = if outlined { crate::outline::run_priced(&text, rate, share) } else { text };
-    let text = if request.level != Level::O0 { crate::peephole::after_outlining(&text) } else { text };
+    // The outliner is also tried on the module as the allocator wrote it
+    // before the transfer of known constants, which that pass makes differ
+    // between copies of one run; it then runs on the outlined text, and the
+    // smaller module is kept.
+    // `LLRM_6502_OUTLINE_PLAIN=0` is the kill switch, for an A/B of one binary
+    let plain = (outlined
+        && crate::copyprop::enabled(std::env::var_os("LLRM_6502_OUTLINE_PLAIN").as_deref())
+        && plain_pieces.iter().zip(&pieces).any(|(plain, piece)| plain != piece)).then(|| {
+        let mut plain = plain_pieces.concat();
+        for (name, label) in &data.1 {
+            plain = plain.replace(name.as_str(), label);
+        }
+        plain
+    });
+    let after = |text: String| if request.level != Level::O0 { crate::peephole::after_outlining(&text) } else { text };
+    let kept = after(if outlined { crate::outline::run_priced(&text, rate, share) } else { text });
+    let text = match plain {
+        Some(plain) => {
+            let mut outlined = crate::asm::Asm::parse(&crate::outline::run_priced(&plain, rate, share));
+            crate::peephole::drop_known_loads(&mut outlined);
+            let plain = after(outlined.text());
+            let bytes = |text: &str| crate::timing::estimate(request.cpu, &crate::alloc::without_lines(text)).map(|priced| priced.bytes);
+            match (bytes(&kept), bytes(&plain)) {
+                (Ok(kept_bytes), Ok(plain_bytes)) if plain_bytes < kept_bytes => plain,
+                _ => kept,
+            }
+        }
+        None => kept,
+    };
     let text = match request.platform.static_zero_page {
         0 => text,
         // `LLRM_6502_STATIC_ZP=0` is the kill switch, for an A/B of one binary
@@ -763,11 +791,14 @@ fn tail(
     // The bytes a trial prices are the finished text's: the outliner shares
     // the repeated sequences of an unrolled body (static_pointers: 26 B of
     // 174 modelled bytes, 16 of the rolled loop's 181), which the functions'
-    // own bytes leave out.
+    // own bytes leave out. The runtime routines the text calls are linked
+    // bytes too: a rolled loop's `jsr __mulsi3` costs the routine, the unrolled
+    // constants none (tail_calls `framed`: kept at -6 B, then put back at +10 B
+    // against a rolled copy 89 B larger once linked).
     // `LLRM_6502_MODEL_BYTES` is the kill switch, for an A/B of one binary
     if price && std::env::var_os("LLRM_6502_MODEL_BYTES").is_none() {
-        if let Ok(finished) = crate::timing::estimate(request.cpu, &text) {
-            bytes = i64::from(finished.bytes) + data_bytes(&data.0);
+        if let Ok(finished) = image_bytes_of(&text, request) {
+            bytes = finished + data_bytes(&data.0);
         }
     }
     Ok(Assembled { text: equates(&request.platform) + &files + &text + &data.0, clocks, bytes, functions })
@@ -1238,7 +1269,8 @@ fn write_constant(
     at: usize,
     words: &mut Vec<(usize, String, i64)>,
 ) -> Result<(), String> {
-    use llrm_mir::{ConstantKind, Type};
+    use llrm_mir::opcode::CastOp;
+    use llrm_mir::{ConstantExpr, ConstantKind, Type};
     let context = &module.context;
     let types = &context.types;
     if let Some((symbol, addend)) = address_of(module, layout, id)? {
@@ -1261,6 +1293,11 @@ fn write_constant(
             out[at..at + bytes].copy_from_slice(&bits.to_le_bytes()[..bytes]);
             Ok(())
         }
+        // `inttoptr (i16 n)`: the number itself (an expanded block address).
+        (
+            ConstantKind::Expr(ConstantExpr::Cast { op: CastOp::PtrToInt | CastOp::IntToPtr | CastOp::BitCast, value }),
+            _,
+        ) => write_constant(module, layout, *value, context.get(*value).ty, out, at, words),
         (ConstantKind::Bytes(data), _) => {
             out[at..at + data.len()].copy_from_slice(data);
             Ok(())

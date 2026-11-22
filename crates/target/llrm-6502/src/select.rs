@@ -153,7 +153,7 @@ struct TextKey {
     zero_page: u8,
     tuning: (u32, bool),
     source: Option<(String, Option<u32>)>,
-    flags: (bool, bool, bool, bool, bool, bool, bool, bool),
+    flags: (bool, bool, bool, bool, bool, bool, bool, bool, bool, bool),
 }
 
 impl TextKey {
@@ -176,6 +176,9 @@ impl TextKey {
 
 thread_local! {
     static TEXTS: std::cell::RefCell<Option<HashMap<TextKey, String>>> = const { std::cell::RefCell::new(None) };
+    /// The text of a function, and what it was before the transfer of known
+    /// constants; where those differ.
+    static PLAINS: std::cell::RefCell<HashMap<String, String>> = std::cell::RefCell::new(HashMap::default());
     static TEXT_HITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static TEXT_COMPILES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
@@ -189,6 +192,7 @@ pub struct TextCache(alloc::AllocationCache);
 impl TextCache {
     pub fn new() -> TextCache {
         TEXTS.with(|texts| *texts.borrow_mut() = Some(HashMap::default()));
+        PLAINS.with(|plains| plains.borrow_mut().clear());
         TextCache(alloc::AllocationCache::new())
     }
 }
@@ -202,6 +206,7 @@ impl Default for TextCache {
 impl Drop for TextCache {
     fn drop(&mut self) {
         TEXTS.with(|texts| *texts.borrow_mut() = None);
+        PLAINS.with(|plains| plains.borrow_mut().clear());
     }
 }
 
@@ -274,14 +279,32 @@ fn function_text_once(
         selection.tuning,
         selection.source.as_ref().map(|(file, line)| (file.as_str(), *line)),
     )?;
+    let plain = alloc::take_plain();
     let export = module.named(name).is_none_or(|id| exported(module.global(id).linkage));
-    let mut body = format!("{}{code}", if export { format!(".export {name}\n") } else { String::new() });
-    body.push_str(".segment \"BSS\"\n");
-    for (slot, size) in slots {
-        writeln!(body, "{slot}: .res {size}").unwrap();
+    let wrap = |code: &str| {
+        let mut body = format!("{}{code}", if export { format!(".export {name}\n") } else { String::new() });
+        body.push_str(".segment \"BSS\"\n");
+        for (slot, size) in &slots {
+            writeln!(body, "{slot}: .res {size}").unwrap();
+        }
+        body.push_str(".segment \"CODE\"\n");
+        body
+    };
+    let body = wrap(&code);
+    if let Some(plain) = plain {
+        PLAINS.with(|plains| plains.borrow_mut().insert(body.clone(), wrap(&plain)));
     }
-    body.push_str(".segment \"CODE\"\n");
     Ok(body)
+}
+
+/// Each of `pieces` as the allocator wrote it without the transfer of known
+/// constants (`drop_known_loads`), or itself where that pass changed nothing:
+/// the text the module's outliner is also tried on.
+pub fn plain_pieces(pieces: &[String]) -> Vec<String> {
+    PLAINS.with(|plains| {
+        let plains = plains.borrow();
+        pieces.iter().map(|piece| plains.get(piece).cloned().unwrap_or_else(|| piece.clone())).collect()
+    })
 }
 
 /// The functions `parts` of `module` as ca65 text, in order. The callee-save
@@ -297,6 +320,24 @@ pub fn module_text(
     alloc::forget_inline_saves();
     let mut texts =
         parts.iter().map(|(name, selection)| function_text(module, name, selection)).collect::<Result<Vec<_>, _>>()?;
+    // the choices of each function so far: a text written again for another
+    // choice keeps them (a call of `__mulsi3` made the speed multiply and lost
+    // the module's cold-division choice, +230 B in compound_assignment_types)
+    let mut variants = vec![Variants::default(); texts.len()];
+    // the byte multiply entries are bodies of their own (60-70 B each): a
+    // module that also calls the general multiply links that body, and sets
+    // the multiplier's upper bytes at its byte sites too. Before the save
+    // helpers are priced: the cells a function keeps depend on it
+    let general = |text: &str| text.contains(" __mulsi3\n");
+    let byte = |text: &str| text.contains(" __mulsi3_byte\n");
+    if texts.iter().any(|text| general(text)) && texts.iter().any(|text| byte(text)) {
+        for at in 0..texts.len() {
+            if byte(&texts[at]) {
+                variants[at].byte_multiply = false;
+                texts[at] = variants[at].text(module, parts[at])?;
+            }
+        }
+    }
     let cells = |text: &str| -> Option<u32> {
         let (before, _) = text.split_once("\n  jsr __csave")?;
         before.rsplit_once("ldy #")?.1.trim().parse().ok()
@@ -311,7 +352,11 @@ pub fn module_text(
         let mut inline = Vec::new();
         let mut gain = 0;
         for &at in &users {
-            let text = alloc::with_shared_saves(false, || function_text(module, parts[at].0, parts[at].1))?;
+            let text = alloc::with_shared_saves(false, || {
+                alloc::with_byte_multiply(variants[at].byte_multiply, || {
+                    function_text(module, parts[at].0, parts[at].1)
+                })
+            })?;
             gain += bytes(&text)? - bytes(&texts[at])?;
             inline.push(text);
         }
@@ -330,10 +375,6 @@ pub fn module_text(
             .iter()
             .any(|name| text.contains(&format!(" {name}_fast\n")))
     };
-    // the choices of this function so far: a text written again for another
-    // choice keeps them (a call of `__mulsi3` made the speed multiply and lost
-    // the module's cold-division choice, +230 B in compound_assignment_types)
-    let mut variants = vec![Variants::default(); texts.len()];
     if texts.iter().any(|text| wide(text)) && !crate::hotdivision::hot(module) {
         for at in 0..texts.len() {
             if wide(&texts[at]) {
@@ -351,6 +392,11 @@ pub fn module_text(
             .iter()
             .any(|name| text.contains(&format!(" {name}\n")))
     };
+    let small_wide = |text: &str| {
+        ["__udivsi3", "__divsi3", "__umodsi3", "__modsi3", "__divmodsi4", "__udivmodsi4"]
+            .iter()
+            .any(|name| text.contains(&format!(" {name}_fast_small\n")))
+    };
     if size && texts.iter().any(|text| compact_division(text)) {
         let mut faster = texts.clone();
         let mut chosen = variants.clone();
@@ -361,7 +407,55 @@ pub fn module_text(
                 faster[at] = chosen[at].text(module, parts[at])?;
             }
         }
-        if fast_division_pays_at_size(module, parts, &texts, &faster)? {
+        if fast_division_pays_at_size(module, parts, &texts, &faster, crate::hotdivision::SAVED_AT_SIZE)? {
+            texts = faster;
+            variants = chosen;
+            // the wide path too, where the divisions run often enough that its
+            // clocks pay its bytes by the same share rule: copy_runs -Os ran
+            // 123,790 clocks (small path) against 60,901 at -O2 (wide)
+            let mut wide_chosen = variants.clone();
+            let mut wide = texts.clone();
+            for at in 0..wide.len() {
+                if small_wide(&wide[at]) {
+                    wide_chosen[at].wide_division = true;
+                    wide[at] = wide_chosen[at].text(module, parts[at])?;
+                }
+            }
+            if crate::hotdivision::hot(module)
+                && fast_division_pays_at_size(module, parts, &texts, &wide, crate::hotdivision::SAVED_CLOCKS)?
+            {
+                texts = wide;
+                variants = wide_chosen;
+            }
+        }
+    }
+    // at size the 16-bit divisions are the compact bit loop; the speed routine
+    // (a byte divisor takes a short path, a quotient of a few bits stops early)
+    // is the module's choice by the share rule of the long divisions at the
+    // rate of `[share.size] division16`.
+    // DEVIATE 6502-DIV-16-OS (owner llrm-target-6502, exit 2026-12-12): the
+    // pin's `__udivhi3` is one routine.
+    let compact_division16 = |text: &str| {
+        ["__udivhi3c", "__divhi3c", "__umodhi3c", "__modhi3c", "__divmodhi4c"]
+            .iter()
+            .any(|name| text.contains(&format!(" {name}\n")))
+    };
+    if size && texts.iter().any(|text| compact_division16(text)) {
+        let mut faster = texts.clone();
+        let mut chosen = variants.clone();
+        for at in 0..faster.len() {
+            if compact_division16(&faster[at]) {
+                chosen[at].size_fast_division16 = true;
+                faster[at] = chosen[at].text(module, parts[at])?;
+            }
+        }
+        let (saved, growth, clocks, bytes) = division16_terms(module, parts, &faster, &texts)?;
+        if crate::mulimage::pays_by_share_at(
+            crate::routines::size_share_percent("division16"),
+            (saved, growth),
+            clocks,
+            bytes,
+        ) {
             texts = faster;
             variants = chosen;
         }
@@ -390,7 +484,7 @@ pub fn module_text(
     }
     // the speed multiply is 19 bytes linked once: a module whose multiplies
     // are cold keeps the compact routine
-    let calls_multiply = |text: &str| text.contains(" __mulsi3\n");
+    let calls_multiply = |text: &str| text.contains(" __mulsi3\n") || text.contains(" __mulsi3_byte\n");
     if texts.iter().any(|text| calls_multiply(text))
         && crate::hotmultiply::hot(module)
         && (parts.first().is_none_or(|(_, selection)| selection.tuning != alloc::Tuning::SIZE)
@@ -416,13 +510,24 @@ struct Variants {
     size_fast_division: bool,
     /// The 16-bit divisions call their compact routines at speed.
     compact_division16: bool,
+    /// The 16-bit divisions call the speed routines at size.
+    size_fast_division16: bool,
     /// The long multiply calls `__mulsi3_fast`.
     fast_multiply: bool,
+    /// A multiply by a byte calls the byte entry, a routine body of its own.
+    byte_multiply: bool,
 }
 
 impl Default for Variants {
     fn default() -> Self {
-        Variants { wide_division: true, size_fast_division: false, compact_division16: false, fast_multiply: false }
+        Variants {
+            wide_division: true,
+            size_fast_division: false,
+            compact_division16: false,
+            size_fast_division16: false,
+            fast_multiply: false,
+            byte_multiply: true,
+        }
     }
 }
 
@@ -436,7 +541,11 @@ impl Variants {
         alloc::with_fast_division(self.wide_division, || {
             alloc::with_size_fast_division(self.size_fast_division, || {
                 alloc::with_compact_division16(self.compact_division16, || {
-                    alloc::with_fast_multiply(self.fast_multiply, || function_text(module, name, selection))
+                    alloc::with_size_fast_division16(self.size_fast_division16, || {
+                        alloc::with_fast_multiply(self.fast_multiply, || {
+                            alloc::with_byte_multiply(self.byte_multiply, || function_text(module, name, selection))
+                        })
+                    })
                 })
             })
         })
@@ -1186,7 +1295,7 @@ fn fast_multiply_pays_at_size(
 
 /// The module as it stands, in estimated clocks and bytes
 /// (`weights::run_cost`).
-fn priced(
+pub(crate) fn priced(
     module: &Module,
     parts: &[(&str, &Selection)],
     texts: &[String],
@@ -1220,6 +1329,30 @@ fn speed_division16_pays(
     speed: &[String],
     compact: &[String],
 ) -> Result<bool, String> {
+    let (saved, growth, clocks, bytes) = division16_terms(module, parts, speed, compact)?;
+    // a cold division repays nothing: the clocks saved over the run must reach
+    // the rate every size-reducing choice of the target is made at, and
+    // then the share rule holds the growth to the module
+    let repays = saved >= growth.max(0) as u64 * u64::from(crate::alloc::Tuning::SPEED.clocks_per_byte);
+    Ok(repays
+        && crate::mulimage::pays_by_share_at(
+            crate::routines::speed_share_percent("division16"),
+            (saved, growth),
+            clocks,
+            bytes,
+        ))
+}
+
+/// What taking the speed 16-bit divisions (`speed` texts) instead of the
+/// compact ones (`compact` texts) costs and saves: the clocks saved over the
+/// run, the bytes of image it links, and the module's clocks and bytes with the
+/// compact ones.
+fn division16_terms(
+    module: &Module,
+    parts: &[(&str, &Selection)],
+    speed: &[String],
+    compact: &[String],
+) -> Result<(u64, i64, u64, u64), String> {
     let names: Vec<String> = parts.iter().map(|(name, _)| (*name).to_owned()).collect();
     let compact_image = crate::mulimage::image_bytes(&crate::mulimage::image_of_texts(&names, compact));
     let growth = crate::mulimage::image_bytes(&crate::mulimage::image_of_texts(&names, speed)) - compact_image;
@@ -1245,17 +1378,7 @@ fn speed_division16_pays(
     let cpu = parts.first().map_or(crate::dagisel::hooks::Cpu::Mos6502, |(_, selection)| selection.cpu);
     let clocks = clocks + (runs * crate::hotdivision::clocks_compact_16(cpu)) as u64;
     let saved = (runs * crate::hotdivision::saved_at_speed_16(cpu)) as u64;
-    // a cold division repays nothing: the clocks saved over the run must reach
-    // the rate every size-reducing choice of the target is made at, and
-    // then the share rule holds the growth to the module
-    let repays = saved >= growth.max(0) as u64 * u64::from(crate::alloc::Tuning::SPEED.clocks_per_byte);
-    Ok(repays
-        && crate::mulimage::pays_by_share_at(
-            crate::routines::speed_share_percent("division16"),
-            (saved, growth),
-            clocks,
-            bytes,
-        ))
+    Ok((saved, growth, clocks, bytes))
 }
 
 /// At size the speed long divisions (the small wide path, bytes by the image
@@ -1270,6 +1393,7 @@ fn fast_division_pays_at_size(
     parts: &[(&str, &Selection)],
     compact: &[String],
     faster: &[String],
+    saved_per_run: f64,
 ) -> Result<bool, String> {
     let names: Vec<String> = parts.iter().map(|(name, _)| (*name).to_owned()).collect();
     let growth = crate::mulimage::image_bytes(&crate::mulimage::image_of_texts(&names, faster))
@@ -1288,6 +1412,6 @@ fn fast_division_pays_at_size(
             _ => None,
         })
         .collect();
-    let saved = (crate::hotdivision::runs_priced(module, &weights) * crate::hotdivision::SAVED_AT_SIZE) as u64;
+    let saved = (crate::hotdivision::runs_priced(module, &weights) * saved_per_run) as u64;
     Ok(crate::mulimage::pays_by_share((saved, growth), clocks, bytes))
 }

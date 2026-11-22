@@ -104,6 +104,7 @@ impl FunctionPass for Combine {
                 fixed_shift_count: outer.target().tti().is_some_and(|tti| tti.variable_shift_count_in_fixed_register()),
                 select_to_cmp: outer.target().tti().is_some_and(|tti| tti.folds_select_to_cmp()),
                 icmp_of_constant_phi: outer.target().tti().is_some_and(|tti| tti.folds_icmp_of_constant_phi()),
+                truth_compare_xor: outer.target().tti().is_some_and(|tti| tti.xors_truth_value_compare()),
                 keeps_swapped_select_compare: outer
                     .target()
                     .tti()

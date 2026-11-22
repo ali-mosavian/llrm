@@ -342,6 +342,8 @@ pub struct TargetHooks {
     pub select_to_cmp: bool,
     /// `Tti::folds_icmp_of_constant_phi`.
     pub icmp_of_constant_phi: bool,
+    /// DEVIATE X64-TRUTH-XOR (`Tti::xors_truth_value_compare`).
+    pub truth_compare_xor: bool,
     /// DEVIATE PHICONST (`combine_phi.rs`): fold a phi of constants into all
     /// its users. Off where bytes are strict: a phi of constants costs a move
     /// per edge.
@@ -601,9 +603,8 @@ pub fn visit(
     // read integer widths, so an operation on vectors, which the loop
     // vectorizer makes, only simplifies (`add zeroinitializer, x` is `x`); the
     // visitors are enabled by operation, each with its own identity sweep.
-    let operation = c.function.instruction(inst).opcode.clone();
-    let skips_visitors = match operation {
-        Opcode::Binary(op) => !vector_visited(op),
+    let skips_visitors = match &c.function.instruction(inst).opcode {
+        Opcode::Binary(op) => !vector_visited(*op),
         Opcode::Cast(_) => true,
         _ => false,
     };
@@ -617,6 +618,11 @@ pub fn visit(
             && found != Operand::Value(result)
         {
             return Visit::Replace(found);
+        }
+        // `visitTrunc` of integer vectors, audited lane by lane
+        // (`narrowBinOp`, `shrinkSplatShuffle`, `shrinkInsertElt`).
+        if c.function.instruction(inst).opcode == Opcode::Cast(CastOp::Trunc) {
+            return crate::combine_casts::visit_vector_trunc(c, inst).unwrap_or(Visit::None);
         }
         return Visit::None;
     }

@@ -13,12 +13,13 @@ use llrm_support::hash::HashMap;
 mod aggregates;
 mod asmcall;
 mod codecall;
-mod strictfp;
 mod mathops;
 mod memops;
 mod mergedcond;
+mod strictfp;
 mod switch;
 mod tailcall;
+mod vaarg;
 use llrm_lir::registers::RegId;
 pub use tailcall::tail_position;
 
@@ -1777,7 +1778,8 @@ impl Builder<'_> {
                 _ => 0,
             })
             .sum::<usize>();
-        if vector_registers > named_vectors {
+        let vector_unread = vaarg::leaves_vector_save_unread(self.module, self.layout, self.function);
+        if vector_registers > named_vectors && !vector_unread {
             let vreg = self.info.new_reg();
             let count = found.variadic_vector_register.as_deref().expect("a save area with a vector count register");
             self.live_ins.push((self.byte_view(self.arch.register_named(count)), vreg));
@@ -1804,6 +1806,7 @@ impl Builder<'_> {
         }
         let fp_offset = (found.argument_registers.len() * 8 + named_vectors * 16) as u32;
         self.dag.var_args_save = Some((save, named as u32 * 8, fp_offset));
+        self.dag.var_args_fp_unread = vector_unread;
         Ok(())
     }
 
@@ -1883,9 +1886,10 @@ impl Builder<'_> {
     /// What `llrm_mir::atomic::lowered` left for x86: `atomicrmw xchg`, or a
     /// store that must be ordered, is `ATOMIC_SWAP` (the machine locks `xchg`
     /// without asking, so every ordering is met); `add`, `sub`, `and`, `or` and
-    /// `xor` are `ATOMIC_LOAD_*` and a `cmpxchg` is `ATOMIC_CMP_SWAP_WITH_SUCCESS`
-    /// (`visitAtomicRMW`, `visitAtomicCmpXchg`), which the target's tables
-    /// select as `lock xadd`, `lock add` and `lock cmpxchg`.
+    /// `xor` are `ATOMIC_LOAD_*` and a `cmpxchg` is
+    /// `ATOMIC_CMP_SWAP_WITH_SUCCESS` (`visitAtomicRMW`,
+    /// `visitAtomicCmpXchg`), which the target's tables select as `lock
+    /// xadd`, `lock add` and `lock cmpxchg`.
     fn visit_atomic(
         &mut self,
         instruction: &llrm_mir::module::Instruction,
@@ -2215,9 +2219,52 @@ impl Builder<'_> {
             )
             .map_err(|_| Refused("call the convention does not describe"))?
         };
+        // The callee's result as the caller's convention places it, and
+        // whether it is an x87 result nobody reads
+        // (`isEligibleForSiblingCallOpt` asks the pop of such a result
+        // of the call that follows).
+        let as_caller = if hooked || info.calling_convention == self.function.calling_convention {
+            plan.clone()
+        } else {
+            crate::backend::isel::convention_for_abi(
+                self.module,
+                self.layout,
+                self.full_arch()?,
+                first,
+                self.function.calling_convention,
+                result_type,
+                variadic,
+                &arg_types,
+                &info.argument_attrs,
+                self.soft_float(),
+            )
+            .unwrap_or_else(|_| plan.clone())
+        };
+        let unused_x87_result = !hooked
+            && !self.module.context.types.is_void(result_type)
+            && plan.returns.is_empty()
+            && plan.float_result.is_none()
+            && !self.soft_float()
+            && matches!(
+                self.module.context.types.get(result_type),
+                llrm_mir::types::Type::Float(_)
+            )
+            && self
+                .current
+                .and_then(|inst| self.function.instruction(inst).result)
+                .is_none_or(|value| self.function.users(value).is_empty());
         if !hooked
             && let Some(tail) = self.tail_candidate.take()
-            && self.eligible_for_sibling_call(info, &plan, variadic, direct, first, arguments)
+            && self.eligible_for_sibling_call(
+                info,
+                &plan,
+                variadic,
+                direct,
+                first,
+                arguments,
+                &as_caller,
+                unused_x87_result,
+            )
         {
             self.tail_calls.push(tail);
             self.sibcall = self.target.tail_calls;
@@ -3648,6 +3695,20 @@ impl Builder<'_> {
                 let (lhs, rhs) = (self.constant_value(*lhs)?, self.constant_value(*rhs)?);
                 Ok(self.dag.get_node(opcode, vt, &[lhs, rhs]))
             }
+            // `getValueImpl` of a `BlockAddress`: the address of the block's
+            // symbol, or `inttoptr 1` where the block is gone (the printer's).
+            ConstantKind::Expr(llrm_mir::context::ConstantExpr::BlockAddress { function, block }) => {
+                let target = match &self.module.global(*function).kind {
+                    llrm_mir::module::GlobalKind::Function(target) => target.resolve_block_address(*block),
+                    _ => None,
+                };
+                match target {
+                    Some(block) => {
+                        Ok(self.dag.get_global_address(vt, function.0, crate::backend::blockaddress::offset(block)))
+                    }
+                    None => Ok(self.dag.get_constant(1, vt)),
+                }
+            }
             _ => Err(Refused("aggregate constant")),
         }
     }
@@ -3886,6 +3947,7 @@ impl Builder<'_> {
             Opcode::Unreachable => self.visit_unreachable(),
             Opcode::Ret => self.visit_ret(&instruction)?,
             Opcode::Switch => self.visit_switch(&instruction)?,
+            Opcode::IndirectBr => self.visit_indirect_br(&instruction)?,
             Opcode::Call(info) => {
                 self.tail_candidate = self.in_tail_position(inst).then_some(inst);
                 self.visit_call(&instruction, info)?;
@@ -4893,6 +4955,31 @@ impl Builder<'_> {
         let brcond = self.dag.get_node(ISD::BrCond, EVT::OTHER, &[root, cond, dest]);
         let fall = self.dag.get_basic_block(on_false.0);
         let node = self.dag.get_node(ISD::Br, EVT::OTHER, &[brcond, fall]);
+        self.dag.set_root(node);
+        Ok(())
+    }
+
+    /// `visitIndirectBr`: `BRIND` of the address, the listed blocks being
+    /// the successors.
+    fn visit_indirect_br(
+        &mut self,
+        instruction: &llrm_mir::module::Instruction,
+    ) -> Result<(), Refused> {
+        let address = self.get_value(instruction.operands[0])?;
+        let targets: Vec<BlockId> = instruction.operands[1..]
+            .iter()
+            .map(|operand| match operand {
+                Operand::Block(block) => *block,
+                _ => unreachable!("an indirectbr destination is a block"),
+            })
+            .collect();
+        for &target in &targets {
+            let probability = self.edge_probability(self.block, target);
+            self.add_successor_with_prob(self.block, target, probability);
+        }
+        self.info.indirect_targets.push((self.block, targets));
+        let root = self.control_root();
+        let node = self.dag.get_node(ISD::BrInd, EVT::OTHER, &[root, address]);
         self.dag.set_root(node);
         Ok(())
     }

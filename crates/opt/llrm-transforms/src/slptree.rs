@@ -29,11 +29,12 @@
 //! scalar, makes the tree not form (the pin's scheduler may order it).
 //!
 //! DEVIATE SLP3 (owner arm64, exit 2026-11-24): `BlockScheduling`'s dependency
-//! graph is not built: the loads must all stand before the first store, and
-//! nothing else between the first load and the last store may write memory, nor
-//! read it after the first store. A load or store between the window's stores
-//! that `BasicAA`, scoped-noalias and TBAA say cannot touch their bytes may
-//! stay (`StoreSeparation`); a call may not.
+//! graph is not built: a load that stands after one of the window's stores must
+//! be one that `BasicAA`, scoped-noalias and TBAA say cannot read its bytes,
+//! and nothing else between the first load and the last store may write memory,
+//! nor read it after the first store. A load or store between the window's
+//! stores that `BasicAA`, scoped-noalias and TBAA say cannot touch their bytes
+//! may stay (`StoreSeparation`); a call may not.
 //!
 //! # Runs
 //! Under `slpvectorize`, on a window of stores whose values are not all
@@ -43,7 +44,8 @@
 //! `slpvectorize`.
 //!
 //! # Example
-//! Four `fmuladd`s of one scalar and four consecutive loads, plus a constant, stored to four consecutive floats, become one vector chain.
+//! Four `fmuladd`s of one scalar and four consecutive loads, plus a constant,
+//! stored to four consecutive floats, become one vector chain.
 //!
 //! ```text
 //! 4 x (load c[i]; fmuladd a, c[i], 1.0; fadd 128.5; store out[i])
@@ -65,7 +67,8 @@ use llrm_mir::module::{BlockId, Function, InstId, Operand, ValueDef, ValueId};
 use llrm_mir::opcode::{BinaryOp, CallInfo, CastOp, Flags, FloatPredicate, IntPredicate, Opcode, Tail};
 use llrm_mir::passes::Declared;
 use llrm_mir::tti::{
-    ArithOp, CastKind, CmpSel, CostKind, LaneOp, MemoryOp, Predicate, Tti, Ty, VectorInstrContext, VectorTy,
+    ArithOp, CastKind, CmpSel, CostKind, LaneOp, MemoryOp, OperandInfo, Predicate, Tti, Ty, VectorInstrContext,
+    VectorTy,
 };
 use llrm_mir::types::{FloatKind, Type, TypeId};
 
@@ -104,6 +107,11 @@ enum Kind {
     /// The inserts of a chain of `insertelement`s: the root of a tree whose
     /// bundle is the scalars they insert.
     Insert,
+    /// The operations of a horizontal reduction: the root of a tree whose
+    /// bundle is the reduced values (`HorizontalReduction`, `buildTree(VL,
+    /// IgnoreList)`). Its `insts` are the chain's links, which are not
+    /// vectorized and whose uses of the values are not external ones.
+    Reduction,
     /// A vector built from its scalars.
     Gather,
 }
@@ -138,9 +146,15 @@ impl Entry {
 /// A tree that is worth making, ready for [`emit`].
 pub(crate) struct Tree {
     entries: Vec<Entry>,
+    /// A reduction tree's chain.
+    pub(crate) reduction: Option<ReductionInfo>,
     block: BlockId,
     /// The calls of the block that are pure computations (`llvm.fmuladd`).
     pure_calls: IdSet<InstId>,
+    /// The vectors stand where the block's order and what they read allow
+    /// (`BlockScheduling`): a root with scalar users that stand before its
+    /// last lane.
+    reschedule: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -161,7 +175,7 @@ struct Builder<'a, 'u, 's> {
     /// The entry that makes each scalar instruction.
     made: IdMap<InstId, usize>,
     /// Where each instruction of the block stands.
-    position: IdMap<InstId, usize>,
+    position: std::borrow::Cow<'a, IdMap<InstId, usize>>,
     failed: bool,
 }
 
@@ -346,6 +360,7 @@ impl Builder<'_, '_, '_> {
         let half_unique_ok = first.is_some_and(|first| matches!(first.opcode, Opcode::Cast(_)));
         let root_operand = !gather_only && self.entries.len() == 1;
         let packing = slpgather::Packing {
+            kind: cost_kind(self.function),
             lanes,
             unique,
             reuse,
@@ -961,6 +976,17 @@ impl Builder<'_, '_, '_> {
     }
 }
 
+/// The width in bits of an integer lane type.
+fn lane_bits(
+    context: &Context,
+    ty: TypeId,
+) -> u32 {
+    match context.types.get(ty) {
+        Type::Int(bits) => u32::from(*bits),
+        _ => 64,
+    }
+}
+
 fn lane_ty_of(
     context: &Context,
     ty: TypeId,
@@ -991,7 +1017,7 @@ pub(crate) fn try_window(
         block,
         entries: Vec::new(),
         made: IdMap::new(),
-        position,
+        position: std::borrow::Cow::Owned(position),
         failed: false,
     };
     // The root: the stores.
@@ -1027,14 +1053,14 @@ pub(crate) fn try_window(
     }
     let mut entries = builder.entries;
     share_gathers(&mut entries);
-    let tree = Tree { entries, block, pure_calls: Default::default() };
+    let tree = Tree { entries, block, pure_calls: Default::default(), reschedule: false, reduction: None };
     let made = builder.made;
-    let position = builder.position;
+    let position = builder.position.into_owned();
     if !schedulable(unit, function, &tree, &made, &position) {
         llrm_support::debug!("slp", "tree: not schedulable");
         return None;
     }
-    let cost = cost_of(unit, function, &tree, &made, align, tti, scaler)?;
+    let (tree, cost) = trim_non_profitable(unit, function, tree, align, tti, scaler)?;
     llrm_support::debug!("slp", "tree of {} entries x{}: cost {cost}", tree.entries.len(), stores.len());
     (cost < -COST_THRESHOLD).then_some(tree)
 }
@@ -1059,7 +1085,7 @@ pub(crate) fn try_phis(
         block,
         entries: Vec::new(),
         made: IdMap::new(),
-        position,
+        position: std::borrow::Cow::Owned(position),
         failed: false,
     };
     let root = builder.build(values, 0);
@@ -1080,9 +1106,12 @@ pub(crate) fn try_phis(
                 .is_some_and(llrm_analysis::vectorutils::is_trivially_vectorizable)
         })
         .collect();
+    let divides = crate::slpschedule::safe_divides(unit.context, function, block);
+    let mut pure_calls = pure_calls;
+    pure_calls.extend(function.iter_block(block).filter(|inst| divides.contains(inst)));
     let mut entries = builder.entries;
     share_gathers(&mut entries);
-    let tree = Tree { entries, block, pure_calls };
+    let tree = Tree { entries, block, pure_calls, reschedule: false, reduction: None };
     let made = builder.made;
     if tiny_and_not_fully_vectorizable(&tree) {
         llrm_support::debug!("slp", "phi tree x{}: tiny", phis.len());
@@ -1094,6 +1123,88 @@ pub(crate) fn try_phis(
     }
     let cost = cost_of(unit, function, &tree, &made, 0, tti, scaler)?;
     llrm_support::debug!("slp", "phi tree of {} entries x{}: cost {cost}", tree.entries.len(), phis.len());
+    (cost < -COST_THRESHOLD).then_some(tree)
+}
+
+/// The instructions of `block` that compute from their operands alone and may
+/// stand anywhere those do: the calls of a trivially vectorizable intrinsic,
+/// and the divisions whose divisor is a constant that cannot trap
+/// (`isSafeToSpeculativelyExecute`).
+fn pure_instructions(
+    unit: &MemUnit,
+    function: &Function,
+    block: BlockId,
+) -> IdSet<InstId> {
+    let context = unit.context;
+    function
+        .iter_block(block)
+        .filter(|inst| {
+            let instruction = function.instruction(*inst);
+            match instruction.opcode {
+                Opcode::Binary(op @ (BinaryOp::UDiv | BinaryOp::URem | BinaryOp::SDiv | BinaryOp::SRem)) => {
+                    let signed = matches!(op, BinaryOp::SDiv | BinaryOp::SRem);
+                    let Operand::Constant(divisor) = instruction.operands[1] else { return false };
+                    let Some(bits) = context.types.int_bits(instruction.ty) else { return false };
+                    match context.get(divisor).kind {
+                        ConstantKind::Int(value) => {
+                            let ones = if bits >= 128 { u128::MAX } else { (1u128 << bits) - 1 };
+                            value & ones != 0 && !(signed && value & ones == ones)
+                        }
+                        _ => false,
+                    }
+                }
+                _ => llrm_mir::memory::callee(unit.context, function, *inst)
+                    .and_then(|callee| unit.globals.get(callee.0 as usize)?.intrinsic())
+                    .is_some_and(llrm_analysis::vectorutils::is_trivially_vectorizable),
+            }
+        })
+        .collect()
+}
+
+/// `tryToVectorizeList` for the standalone seeds of `vectorizeSeeds`: the tree
+/// whose root is the bundle of `seeds` themselves (their users stay scalar and
+/// read the lanes), if it pays.
+pub(crate) fn try_seeds(
+    unit: &MemUnit,
+    function: &Function,
+    block: BlockId,
+    seeds: &[InstId],
+    position: &IdMap<InstId, usize>,
+    tti: &dyn Tti,
+    scaler: &Scaler,
+) -> Option<Tree> {
+    let values: Vec<Operand> = seeds.iter().map(|seed| result_of(function, *seed)).collect();
+    let mut builder = Builder {
+        scaler,
+        tti,
+        unit,
+        function,
+        block,
+        entries: Vec::new(),
+        made: IdMap::new(),
+        position: std::borrow::Cow::Borrowed(position),
+        failed: false,
+    };
+    let root = builder.build(values, 0);
+    if builder.failed || root != 0 || builder.entries[0].kind == Kind::Gather {
+        llrm_support::debug!("slp", "seed tree x{}: no tree", seeds.len());
+        return None;
+    }
+    let pure_calls = pure_instructions(unit, function, block);
+    let mut entries = builder.entries;
+    share_gathers(&mut entries);
+    let tree = Tree { entries, block, pure_calls, reschedule: true, reduction: None };
+    let made = builder.made;
+    if tiny_and_not_fully_vectorizable(&tree) {
+        llrm_support::debug!("slp", "seed tree x{}: tiny", seeds.len());
+        return None;
+    }
+    if !schedulable_phis(function, &tree) {
+        llrm_support::debug!("slp", "seed tree x{}: not schedulable", seeds.len());
+        return None;
+    }
+    let cost = cost_of(unit, function, &tree, &made, 0, tti, scaler)?;
+    llrm_support::debug!("slp", "seed tree of {} entries x{}: cost {cost}", tree.entries.len(), seeds.len());
     (cost < -COST_THRESHOLD).then_some(tree)
 }
 
@@ -1131,7 +1242,7 @@ pub(crate) fn try_inserts(
         block,
         entries: Vec::new(),
         made: IdMap::new(),
-        position,
+        position: std::borrow::Cow::Owned(position),
         failed: false,
     };
     builder
@@ -1165,9 +1276,12 @@ pub(crate) fn try_inserts(
                 .is_some_and(llrm_analysis::vectorutils::is_trivially_vectorizable)
         })
         .collect();
+    let divides = crate::slpschedule::safe_divides(unit.context, function, block);
+    let mut pure_calls = pure_calls;
+    pure_calls.extend(function.iter_block(block).filter(|inst| divides.contains(inst)));
     let mut entries = builder.entries;
     share_gathers(&mut entries);
-    let tree = Tree { entries, block, pure_calls };
+    let tree = Tree { entries, block, pure_calls, reschedule: false, reduction: None };
     let made = builder.made;
     if tiny_and_not_fully_vectorizable(&tree) {
         llrm_support::debug!("slp", "insert tree x{}: tiny", inserts.len());
@@ -1177,7 +1291,7 @@ pub(crate) fn try_inserts(
         llrm_support::debug!("slp", "insert tree x{}: not schedulable", inserts.len());
         return None;
     }
-    let cost = cost_of(unit, function, &tree, &made, 0, tti, scaler)?;
+    let (tree, cost) = trim_non_profitable(unit, function, tree, 0, tti, scaler)?;
     llrm_support::debug!("slp", "insert tree of {} entries x{}: cost {cost}", tree.entries.len(), inserts.len());
     (cost < -COST_THRESHOLD).then_some(tree)
 }
@@ -1202,7 +1316,10 @@ fn share_gathers(entries: &mut Vec<Entry>) {
         let same = entries
             .iter()
             .position(
-                |one| !matches!(one.kind, Kind::Gather | Kind::Store | Kind::Insert)
+                |one| !matches!(
+                    one.kind,
+                    Kind::Gather | Kind::Store | Kind::Insert | Kind::Reduction
+                )
                     && one.reuse.is_empty()
                     && one.lanes == gather.lanes,
             );
@@ -1245,33 +1362,300 @@ fn share_gathers(entries: &mut Vec<Entry>) {
 /// gathers that only repack scalars, and three entries of which two are
 /// gathers of a few scalars.
 fn tiny_and_not_fully_vectorizable(tree: &Tree) -> bool {
+    tiny_entries(&tree.entries)
+}
+
+/// [`tiny_and_not_fully_vectorizable`] over the bundles of a tree (a reduction
+/// tree's without its chain).
+fn tiny_entries(entries: &[Entry]) -> bool {
     let gather = |entry: &Entry| entry.kind == Kind::Gather;
     let splat = |entry: &Entry| entry.lanes.iter().all(|lane| *lane == entry.lanes[0]);
     let constant = |entry: &Entry| entry.lanes.iter().all(|lane| constant_of(*lane));
     let splat_or_constant = |entry: &Entry| splat(entry) || constant(entry);
     // PHI nodes and gathers only: the vector phi costs nothing, the gathers
     // something.
-    if tree.entries.iter().all(|entry| gather(entry) || entry.kind == Kind::Phi) {
+    if entries.iter().all(|entry| gather(entry) || entry.kind == Kind::Phi) {
         return true;
     }
     // No need to vectorize inserts of gathered values.
-    if tree.entries[0].kind == Kind::Insert
-        && tree.entries.len() == 2
-        && gather(&tree.entries[1])
-        && (tree.entries[1].width() <= 2 || !(splat(&tree.entries[1]) || constant(&tree.entries[1])))
+    if entries[0].kind == Kind::Insert
+        && entries.len() == 2
+        && gather(&entries[1])
+        && (entries[1].width() <= 2 || !(splat(&entries[1]) || constant(&entries[1])))
     {
         return true;
     }
     // The single vectorized node, fed by buildvectors that repack scalars.
-    let vectorized = tree.entries.iter().filter(|entry| !gather(entry)).count();
-    if vectorized == 1 && tree.entries.iter().all(|entry| !gather(entry) || !splat_or_constant(entry)) {
+    let vectorized = entries.iter().filter(|entry| !gather(entry)).count();
+    if vectorized == 1 && entries.iter().all(|entry| !gather(entry) || !splat_or_constant(entry)) {
         return true;
     }
     // Three entries, the last two gathers of up to four scalars.
-    tree.entries.len() == 3
-        && tree.entries[1..]
+    entries.len() == 3
+        && entries[1..]
             .iter()
             .all(|entry| gather(entry) && entry.width() <= 4 && !entry.lanes.iter().all(|lane| constant_of(*lane)))
+}
+
+/// A horizontal reduction's chain (`HorizontalReduction`): the operation, its
+/// links (`ReductionOps`, the root first) and the values left out of the vector
+/// reduction, combined with its result as `op.rdx`.
+#[derive(Clone)]
+pub(crate) struct ReductionInfo {
+    pub(crate) op: BinaryOp,
+    pub(crate) links: Vec<InstId>,
+    pub(crate) leftovers: Vec<Operand>,
+}
+
+/// `tryToReduce`'s tree for the window `values` of a chain: `buildTree(VL,
+/// IgnoreList)`, then `calculateTreeCostAndTrimNonProfitable`, then the
+/// reduction's own cost (`getReductionCost`); the tree if the total is below
+/// the `slp-threshold`.
+pub(crate) fn try_reduction(
+    unit: &MemUnit,
+    function: &Function,
+    block: BlockId,
+    info: &ReductionInfo,
+    values: &[Operand],
+    tti: &dyn Tti,
+    scaler: &Scaler,
+) -> Option<Tree> {
+    let position = positions(function);
+    let root = info.links[0];
+    let mut builder = Builder {
+        scaler,
+        tti,
+        unit,
+        function,
+        block,
+        entries: Vec::new(),
+        made: IdMap::new(),
+        position: std::borrow::Cow::Owned(position),
+        failed: false,
+    };
+    // The root: the chain, whose uses of the values are not external ones.
+    builder
+        .entries
+        .push(
+            Entry {
+                kind: Kind::Reduction,
+                lanes: values.to_vec(),
+                insts: info.links.clone(),
+                operands: Vec::new(),
+                lane_ty: function.instruction(root).ty,
+                reuse: Vec::new(),
+                blocks: Vec::new(),
+                insert: None,
+            },
+        );
+    for link in &info.links {
+        builder.made.insert(*link, 0);
+    }
+    let child = builder.build(values.to_vec(), 1);
+    builder.entries[0].operands = vec![child];
+    if builder.failed || builder.entries.len() < 2 || builder.entries[child].kind == Kind::Gather {
+        llrm_support::debug!(
+            "slp",
+            "reduction tree x{}: {} entries{}",
+            values.len(),
+            builder.entries.len(),
+            if builder.failed { ", a lane used as a gather" } else { "" }
+        );
+        return None;
+    }
+    let mut entries = builder.entries;
+    share_gathers(&mut entries);
+    if tiny_entries(&entries[1..]) {
+        llrm_support::debug!("slp", "reduction tree x{}: tiny", values.len());
+        return None;
+    }
+    let tree = Tree {
+        entries,
+        block,
+        pure_calls: crate::slpschedule::safe_divides(unit.context, function, block),
+        reschedule: false,
+        reduction: Some(info.clone()),
+    };
+    let (tree, total) = trim_non_profitable(unit, function, tree, 0, tti, scaler)?;
+    // Scheduling is of the tree that stays: the trimmed subtrees are scalars.
+    if !schedulable_phis(function, &tree) {
+        llrm_support::debug!("slp", "reduction tree x{}: not schedulable", values.len());
+        return None;
+    }
+    llrm_support::debug!("slp", "reduction tree of {} entries x{}: cost {total}", tree.entries.len() - 1, values.len());
+    (total < -COST_THRESHOLD).then_some(tree)
+}
+
+/// `tree` with the chain's leftovers set (the window is known only once the
+/// tree is made).
+pub(crate) fn with_reduction(
+    mut tree: Tree,
+    info: ReductionInfo,
+) -> Tree {
+    tree.reduction = Some(info);
+    tree
+}
+
+/// The entries that make up the tree, by the instructions they stand for.
+fn made_of(tree: &Tree) -> IdMap<InstId, usize> {
+    let mut made = IdMap::new();
+    for (at, entry) in tree.entries.iter().enumerate() {
+        if entry.kind != Kind::Gather {
+            for inst in &entry.insts {
+                made.insert(*inst, at);
+            }
+        }
+    }
+    made
+}
+
+/// `calculateTreeCostAndTrimNonProfitable`: the subtree under an entry whose
+/// cost, with the extracts of its lanes, is more than the buildvector of the
+/// entry's own scalars is dropped for that gather (DEVIATE SLP-RDX2: no
+/// splat subtrees, gathered loads, `MinBWs` or combined nodes). The trimmed
+/// tree is kept when it costs less than the restored one, or the same when a
+/// subtree cost as much as its gather. The tree and its cost, the reduction's
+/// included.
+///
+/// DEVIATE SLP-TRIM-PHI (owner w11, exit 2026-11-29): the pin trims every
+/// tree; phi trees are not trimmed here. Ours are 39 entries where the pin's
+/// nbody trees are ~90 (a deeper tree, DEVIATE SLP-RDX2 and the gathers it
+/// leaves), and trimming the smaller tree vectorizes a different first group:
+/// nbody_phis gives 1 vector phi pair, the pin's 4.
+fn trim_non_profitable(
+    unit: &MemUnit,
+    function: &Function,
+    tree: Tree,
+    store_align: u64,
+    tti: &dyn Tti,
+    scaler: &Scaler,
+) -> Option<(Tree, i64)> {
+    let made = made_of(&tree);
+    let costs = entry_costs(unit, function, &tree, &made, store_align, tti, scaler)?;
+    let n = tree.entries.len();
+    // The entries under each entry, itself not counted.
+    let under = |at: usize| -> Vec<usize> {
+        let mut seen = vec![false; n];
+        let mut stack: Vec<usize> = tree.entries[at].operands.clone();
+        let mut found = Vec::new();
+        while let Some(next) = stack.pop() {
+            if !std::mem::replace(&mut seen[next], true) {
+                found.push(next);
+                stack.extend(tree.entries[next].operands.iter().copied());
+            }
+        }
+        found
+    };
+    let subtrees: Vec<Vec<usize>> = (0..n).map(under).collect();
+    let own = |at: usize| costs[at].0 + costs[at].1;
+    let total = |at: usize| own(at) + subtrees[at].iter().map(|child| own(*child)).sum::<i64>();
+    // `calculateTreeCostAndTrimNonProfitable`'s early exit: nothing to trim
+    // when the tree already pays.
+    let mut order: Vec<usize> = (0..n).collect();
+    order.sort_by_key(|at| std::cmp::Reverse((total(*at), *at)));
+    let context = unit.context;
+    let mut gather_of: Vec<Option<i64>> = vec![None; n];
+    let mut deleted = vec![false; n];
+    let mut prefer_trimmed = false;
+    for at in order {
+        if total(at) <= 0 {
+            break;
+        }
+        let entry = &tree.entries[at];
+        // The root of the pin's tree (its entry 0) is never trimmed: for a
+        // reduction it is the bundle of the reduced values, here under ours.
+        if entry.kind == Kind::Gather
+            || at == 0
+            || (tree.reduction.is_some() && at == tree.entries[0].operands[0])
+            || deleted[at]
+            || gather_of[at].is_some()
+        {
+            continue;
+        }
+        // The costs of the subtrees already turned into gathers stand in for
+        // their own.
+        let mut subtree_total = total(at);
+        for child in &subtrees[at] {
+            if let Some(gather) = gather_of[*child] {
+                subtree_total -= total(*child);
+                subtree_total += gather;
+            }
+        }
+        if subtree_total < 0 || subtree_total < entry.lanes.len() as i64 {
+            continue;
+        }
+        let lane = lane_ty_of(context, entry.lane_ty)?;
+        let mut gather = slpgather::gather_cost(tti, cost_kind(function), lane, &entry.lanes, &entry.reuse)?;
+        let scale = entry_scale(function, &tree, at, scaler) as i64;
+        gather *= scale;
+        // Non-power-of-2 entries may have inflated costs: a margin of 1.
+        let margin =
+            i64::from(subtrees[at].iter().chain([&at]).any(|one| !tree.entries[*one].lanes.len().is_power_of_two()));
+        if subtree_total > gather + margin {
+            prefer_trimmed |= subtree_total == gather;
+            llrm_support::debug!("slp", "trim #{at}: subtree {subtree_total} against its gather {gather}");
+            gather_of[at] = Some(gather);
+            for child in &subtrees[at] {
+                deleted[*child] = true;
+                gather_of[*child] = None;
+            }
+        }
+    }
+    let trimmed_cost: i64 = (0..n)
+        .filter(|at| !deleted[*at])
+        .map(|at| match gather_of[at] {
+            Some(gather) => gather,
+            None => own(at),
+        })
+        .sum();
+    let restored_cost: i64 = (0..n).map(own).sum();
+    let reverted = gather_of.iter().all(Option::is_none)
+        || trimmed_cost > restored_cost
+        || (!prefer_trimmed && trimmed_cost == restored_cost);
+    if reverted {
+        return Some((tree, restored_cost));
+    }
+    // The trimmed tree: the gathers in place of their subtrees, the rest
+    // renumbered.
+    let mut entries = tree.entries;
+    for (at, gather) in gather_of.iter().enumerate() {
+        if gather.is_some() {
+            let entry = &mut entries[at];
+            entry.kind = Kind::Gather;
+            entry.insts = Vec::new();
+            entry.operands = Vec::new();
+        }
+    }
+    let kept: Vec<usize> = (0..n).filter(|at| !deleted[*at]).collect();
+    let renumber: Vec<usize> = {
+        let mut next = 0;
+        (0..n)
+            .map(|at| {
+                let now = next;
+                if !deleted[at] {
+                    next += 1;
+                }
+                now
+            })
+            .collect()
+    };
+    let mut slots: Vec<Option<Entry>> = entries.into_iter().map(Some).collect();
+    let mut entries: Vec<Entry> = kept.iter().map(|at| slots[*at].take().expect("an entry")).collect();
+    for entry in &mut entries {
+        for operand in &mut entry.operands {
+            *operand = renumber[*operand];
+        }
+    }
+    let tree = Tree {
+        entries,
+        block: tree.block,
+        pure_calls: tree.pure_calls,
+        reschedule: tree.reschedule,
+        reduction: tree.reduction,
+    };
+    let made = made_of(&tree);
+    let total = cost_of(unit, function, &tree, &made, store_align, tti, scaler)?;
+    Some((tree, total))
 }
 
 /// DEVIATE SLP6 (owner arm64, exit 2026-12-01): the scalars of a tree of phis
@@ -1292,6 +1676,7 @@ fn schedulable_phis(
             entry.kind,
             Kind::Phi
                 | Kind::Insert
+                | Kind::Reduction
                 | Kind::Load
                 | Kind::Binary(_)
                 | Kind::FMulAdd
@@ -1321,7 +1706,10 @@ fn schedulable_phis(
     // The bundles are one instruction each: they must not wait on each other.
     let mut bundles: Vec<(Vec<InstId>, Vec<InstId>)> = Vec::new();
     for entry in &tree.entries {
-        if matches!(entry.kind, Kind::Gather | Kind::Phi | Kind::Insert) {
+        if matches!(
+            entry.kind,
+            Kind::Gather | Kind::Phi | Kind::Insert | Kind::Reduction
+        ) {
             continue;
         }
         let gathered = entry
@@ -1437,11 +1825,19 @@ fn schedulable(
         let (first, last) =
             (entry.insts.iter().map(at).min().expect("a bundle"), entry.insts.iter().map(at).max().expect("a bundle"));
         if entry.kind == Kind::Load {
-            // Loads of the seed block stand before its first store; the loads
-            // move down to the last, past nothing that writes.
+            // The loads move to the first, before every store of the window: a
+            // load that stands after a store it may read the bytes of would
+            // read the old ones (`BlockScheduling`'s memory dependence,
+            // `BatchAA`).
             if block == seed && last > first_store {
-                llrm_support::debug!("slp", "tree: a load stands after the first store");
-                return false;
+                for load in entry.insts.iter().filter(|load| at(load) > first_store) {
+                    let mut earlier =
+                        StoreSeparation::new(unit, root.insts.iter().copied().filter(|store| at(store) < at(load)));
+                    if !earlier.clear(function, *load) {
+                        llrm_support::debug!("slp", "tree: a load stands after a store it may read");
+                        return false;
+                    }
+                }
             }
             for (order, inst) in function.iter_block(block).enumerate() {
                 let writes = match function.instruction(inst).opcode {
@@ -1578,7 +1974,7 @@ fn entry_scale(
             }
             1
         }
-        Kind::Store => {
+        Kind::Store | Kind::Reduction => {
             let block = function.parent(entry.insts[0]).expect("a placed store");
             scaler.scale_at(function, block, &[])
         }
@@ -1598,6 +1994,11 @@ fn entry_scale(
 
 /// `getTreeCost`: the entries' vector costs less their scalars', and the
 /// extracts of the lanes used outside. `None`: a price the target lacks.
+/// `getSLPCostKind`: code size at `optsize`, else reciprocal throughput.
+pub(crate) fn cost_kind(function: &Function) -> CostKind {
+    if function.optimizes_for_size() { CostKind::CodeSize } else { CostKind::RecipThroughput }
+}
+
 fn cost_of(
     unit: &MemUnit,
     function: &Function,
@@ -1607,9 +2008,24 @@ fn cost_of(
     tti: &dyn Tti,
     scaler: &Scaler,
 ) -> Option<i64> {
-    let kind = CostKind::RecipThroughput;
+    let costs = entry_costs(unit, function, tree, made, store_align, tti, scaler)?;
+    Some(costs.iter().map(|(priced, extracts)| priced + extracts).sum())
+}
+
+/// Each entry's cost (the vector less the scalars, by the entry's scale) and
+/// the extracts of its lanes some user outside the tree reads.
+fn entry_costs(
+    unit: &MemUnit,
+    function: &Function,
+    tree: &Tree,
+    made: &IdMap<InstId, usize>,
+    store_align: u64,
+    tti: &dyn Tti,
+    scaler: &Scaler,
+) -> Option<Vec<(i64, i64)>> {
+    let kind = cost_kind(function);
     let context = unit.context;
-    let mut total = 0i64;
+    let mut costs: Vec<(i64, i64)> = Vec::with_capacity(tree.entries.len());
     for (at, entry) in tree.entries.iter().enumerate() {
         let Some(priced) = entry_cost(unit, function, tree, entry, store_align, tti) else {
             llrm_support::debug!("slp", "entry {:?} x{}: not priced", entry.kind, entry.lanes.len());
@@ -1625,9 +2041,12 @@ fn cost_of(
             entry.reuse,
             entry.operands
         );
-        total += priced * scale;
+        let mut here = (priced * scale, 0i64);
         // The lanes some user outside the tree reads are extracted.
-        if !matches!(entry.kind, Kind::Gather | Kind::Store | Kind::Insert) {
+        if !matches!(
+            entry.kind,
+            Kind::Gather | Kind::Store | Kind::Insert | Kind::Reduction
+        ) {
             let lane = lane_ty_of(context, entry.lane_ty)?;
             let vector = VectorTy { lane, count: entry.width() as u32 };
             for (index, inst) in entry.insts.iter().enumerate() {
@@ -1653,12 +2072,13 @@ fn cost_of(
                     )?;
                     let block = function.parent(used.user)?;
                     let scale = scaler.scale_at(function, block, &[Operand::Value(result)]);
-                    total += extract.valid.then_some(extract.value)? * scale as i64;
+                    here.1 += extract.valid.then_some(extract.value)? * scale as i64;
                 }
             }
         }
+        costs.push(here);
     }
-    Some(total)
+    Some(costs)
 }
 
 /// `getEntryCost`: the vector of `entry` less its scalars.
@@ -1670,7 +2090,7 @@ fn entry_cost(
     store_align: u64,
     tti: &dyn Tti,
 ) -> Option<i64> {
-    let kind = CostKind::RecipThroughput;
+    let kind = cost_kind(function);
     let context = unit.context;
     {
         let lane = lane_ty_of(context, entry.lane_ty)?;
@@ -1692,14 +2112,29 @@ fn entry_cost(
                 wide - n * valid(tti.memory_op_cost(MemoryOp::Load, lane, kind, false))?
             }
             Kind::Binary(op) => {
-                let wide = valid(tti.vector_arithmetic_cost(arith_of(*op), vector, kind)?)?;
-                wide - n * valid(tti.arithmetic_cost(
-                    arith_of(*op),
-                    lane,
-                    kind,
-                    Default::default(),
-                    Default::default(),
-                ))?
+                // `getEntryCost`'s `Op2Info`: the second operands of the lanes
+                // as constants, and as powers of two where every one is.
+                let second = |inst: InstId| {
+                    let operand = function.instruction(inst).operands[1];
+                    let Operand::Constant(constant) = operand else { return None };
+                    let ConstantKind::Int(value) = context.get(constant).kind else { return None };
+                    let bits = lane_bits(context, entry.lane_ty);
+                    Some(llrm_mir::tti::OperandInfo::constant(value as i128, bits))
+                };
+                let lanes: Option<Vec<_>> = entry.insts.iter().map(|inst| second(*inst)).collect();
+                let vector_second = match lanes {
+                    Some(lanes) => llrm_mir::tti::OperandInfo {
+                        constant: true,
+                        power_of_two: lanes.iter().all(|one| one.power_of_two),
+                        negated_power_of_two: lanes.iter().all(|one| one.negated_power_of_two),
+                        non_uniform: lanes.iter().any(|one| one.value != lanes[0].value),
+                        value: None,
+                    },
+                    None => llrm_mir::tti::OperandInfo::ANY,
+                };
+                let scalar_second = second(entry.insts[0]).unwrap_or(llrm_mir::tti::OperandInfo::ANY);
+                let wide = valid(tti.vector_arithmetic_cost_op2(arith_of(*op), vector, vector_second, kind)?)?;
+                wide - n * valid(tti.arithmetic_cost(arith_of(*op), lane, kind, Default::default(), scalar_second))?
             }
             Kind::FMulAdd => {
                 let wide = valid(tti.vector_arithmetic_cost(ArithOp::FMul, vector, kind)?)?;
@@ -1761,16 +2196,23 @@ fn entry_cost(
                 }
                 -extracts
             }
-            Kind::Gather => slpgather::gather_cost(tti, lane, &entry.lanes, &entry.reuse)?,
+            Kind::Gather => slpgather::gather_cost(tti, kind, lane, &entry.lanes, &entry.reuse)?,
             // `getEntryCost`, `Instruction::PHI`: the vector phi costs what the
             // scalar ones did.
             Kind::Phi => 0,
             Kind::Insert => crate::slpinsert::cost(context, function, tti, &entry.insts, entry.insert.as_ref()?)?,
+            Kind::Reduction => crate::slpreduction::tree_reduction_cost(
+                tti,
+                kind,
+                tree.reduction.as_ref()?.op,
+                lane,
+                entry.lanes.len(),
+            )?,
         };
         // The lanes that repeat are read through a shuffle of the bundle.
         let reuse_cost = match entry.kind {
-            Kind::Gather | Kind::Store | Kind::Insert => 0,
-            _ => slpgather::shuffle_cost(tti, VectorTy { lane, count: entry.width() as u32 }, &entry.reuse)?,
+            Kind::Gather | Kind::Store | Kind::Insert | Kind::Reduction => 0,
+            _ => slpgather::shuffle_cost(tti, kind, VectorTy { lane, count: entry.width() as u32 }, &entry.reuse)?,
         };
         let entry_cost = entry_cost + reuse_cost;
         llrm_support::debug!("slp", "entry {:?} x{}: {}", entry.kind, count, entry_cost);
@@ -1850,7 +2292,7 @@ fn last_phi(
 }
 
 /// Where each instruction stands in its block.
-fn positions(function: &Function) -> IdMap<InstId, usize> {
+pub(crate) fn positions(function: &Function) -> IdMap<InstId, usize> {
     let mut places = IdMap::new();
     for block in function.layout().to_vec() {
         for (at, inst) in function.iter_block(block).enumerate() {
@@ -1950,7 +2392,7 @@ pub(crate) fn emit(
                 let value = result_of(function, phi);
                 Some(reused(context, function, &mut placer, last_phi(function, home), entry, value))
             }
-            Kind::Store | Kind::Insert => None,
+            Kind::Store | Kind::Insert | Kind::Reduction => None,
             kind => {
                 let lead = function.instruction(entry.insts[0]).clone();
                 let mut flags = lead.flags;
@@ -2009,7 +2451,9 @@ pub(crate) fn emit(
                         vectors[at] = Some(reused(context, function, &mut placer, last_of(entry), entry, value));
                         continue;
                     }
-                    Kind::Store | Kind::Insert | Kind::Gather | Kind::Extract(_) | Kind::Phi => unreachable!(),
+                    Kind::Store | Kind::Insert | Kind::Reduction | Kind::Gather | Kind::Extract(_) | Kind::Phi => {
+                        unreachable!()
+                    }
                 };
                 let ops = if matches!(kind, Kind::Load) {
                     vec![function.instruction(entry.insts[0]).operands[0]]
@@ -2050,6 +2494,13 @@ pub(crate) fn emit(
         );
         placer.after(function, last, store);
     }
+    // The reduction: the root vector reduced where the chain's root stood.
+    if root.kind == Kind::Reduction {
+        let info = tree.reduction.as_ref().expect("a reduction root");
+        let vector = vectors[root.operands[0]].expect("the reduced vector");
+        let width = tree.entries[root.operands[0]].width();
+        crate::slpreduction::emit_tree_reduction(context, declared, function, info, vector, width);
+    }
     // The chain's vector: the bundle's vector shuffled into what the chain's
     // first insert inserts into, read where the chain's last insert was.
     if root.kind == Kind::Insert {
@@ -2085,7 +2536,7 @@ pub(crate) fn emit(
     for (at, entry) in tree.entries.iter().enumerate() {
         if matches!(
             entry.kind,
-            Kind::Gather | Kind::Store | Kind::Insert | Kind::Extract(_)
+            Kind::Gather | Kind::Store | Kind::Insert | Kind::Reduction | Kind::Extract(_)
         ) {
             continue;
         }
@@ -2172,7 +2623,7 @@ pub(crate) fn emit(
         }
     }
     // The vectors stand where the block's order and what they read allow.
-    if tree.entries[0].kind == Kind::Insert {
+    if tree.entries[0].kind == Kind::Insert || tree.reschedule {
         reschedule(function, tree, &position);
     }
     let _ = ValueId(0);
@@ -2194,6 +2645,20 @@ fn reschedule(
                 |inst| matches!(function.instruction(*inst).opcode, Opcode::Call(_)) && !position.contains_key(inst),
             ),
     );
+    // A vector division is made only of scalar ones `pure_calls` has: it
+    // cannot trap either, so it is not a write.
+    pure_calls.extend(function.iter_block(home).filter(|inst| {
+        !position.contains_key(inst)
+            && matches!(
+                function.instruction(*inst).opcode,
+                Opcode::Binary(
+                    llrm_mir::opcode::BinaryOp::UDiv
+                        | llrm_mir::opcode::BinaryOp::SDiv
+                        | llrm_mir::opcode::BinaryOp::URem
+                        | llrm_mir::opcode::BinaryOp::SRem
+                )
+            )
+    }));
     let original: IdMap<InstId, usize> =
         function.iter_block(home).filter_map(|inst| position.get(&inst).map(|at| (inst, *at))).collect();
     let scheduled = crate::slpschedule::schedule(function, home, &pure_calls, &original);

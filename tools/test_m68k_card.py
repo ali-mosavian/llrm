@@ -66,3 +66,14 @@ class Rulings(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_a_lower_bound_over_gcc_is_a_clocks_worse_cell_not_unmeasured(tmp_path):
+    """pattern_fill 68000 O1 read `93048*` against gcc 86440 and the card named it unmeasured: the true count is at least 93048, a counted loss."""
+    import m68k_card
+
+    path = tmp_path / "c.tsv"
+    path.write_text("68000\tpattern_fill\tO1\t264\t>=93048\t232\t86440\t0\t0\n68020\tmemmove_overlap\tO2\t794\t<=4668\t250\t8548\t0\t0\n")
+    found = m68k_card.card(m68k_card.read([str(path)]))
+    assert [cell[2] for cell in found["clocks_worse"]] == ["pattern_fill"], found
+    assert [cell[2] for cell in found["at_or_below"]] == ["memmove_overlap"], found

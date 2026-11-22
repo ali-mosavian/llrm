@@ -8,10 +8,14 @@
 //! Copies load a batch before storing it, so `pairs` makes `ldp`/`stp q` of
 //! them. A `memmove` loads all before it stores.
 
-/// Accesses a copy of up to this many may use, and a fill; half of each under
-/// `minsize`.
+/// Accesses a copy of up to this many may use, and a fill. A function tuned for
+/// size (`hasOptSize`) gets the smaller pair: clang -Os calls `memset` from 9
+/// `q` stores (129 bytes) and `memcpy` / `memmove` from 5 (72 bytes), where
+/// -O2 expands 32 and 16 (`MaxStoresPerMem*OptSize`).
 pub(crate) const COPY_OPS: usize = 16;
 pub(crate) const FILL_OPS: usize = 32;
+pub(crate) const COPY_OPS_OPT_SIZE: usize = 4;
+pub(crate) const FILL_OPS_OPT_SIZE: usize = 8;
 /// Loads a copy has in flight before it stores them.
 pub(crate) const BATCH: usize = 4;
 

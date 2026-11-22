@@ -1,5 +1,5 @@
-// flags: -O1 | -O2 | -Os
-// targets: !dos !m68k !z80-sdcc !6502-sim65 !65c02-sim65
+// flags: -O1 | -O2 | -O3 | -Os
+// targets: !dos !z80-sdcc !6502-sim65 !65c02-sim65
 /* arm64 -Os: a stacksave read in one block and restored in another was read again after the alloca lowered sp, so the stackrestore freed nothing and each trip's array sat lower than the last (reports 1 from the fourth trip). */
 extern void report(long value);
 

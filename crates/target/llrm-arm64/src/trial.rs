@@ -376,17 +376,38 @@ pub fn keeps_unrotated(
     other: Price,
     hot: bool,
     loops: usize,
+    cap: Option<i64>,
 ) -> bool {
     if kept.laid_out.is_nan() || other.laid_out.is_nan() || kept.work.is_nan() || other.work.is_nan() {
         return false;
     }
     let added = other.bytes - kept.bytes;
-    let slower = (kept.laid_out - other.laid_out).round() < 0.0;
+    let laid_saved = (kept.laid_out - other.laid_out).round() as i64;
     let saved = (kept.work - other.work).round() as i64;
-    // Strict at -Os on both axes: smaller, and not slower.
-    trial::keeps_at_size(added)
-        && !slower
+    // Smaller, and costing at most the target's cap (DEVIATE
+    // OS-TRIAL-CLOCK-CAP) of the laid-out work: a 0.3% model difference
+    // does not outweigh a 10% smaller object (fib -Os, 124 -> 112 B).
+    trial::keeps_smaller_at_size(added, laid_saved, kept.laid_out.round() as i64, cap)
         && !(hot && trial::keeps_rotation_hot(-saved, -added, loops, trial::ROTATION_HOT_BYTES_PER_LOOP))
+}
+
+/// DEVIATE INLINEHINT-GROWTH-TRIAL (owner m16-b, exit 2026-12-20): whether the
+/// compile that keeps the calls of `inlinehint` callees the -Os size guard
+/// would refuse is kept over `kept`: the object is smaller and the work grows
+/// by at most the target's cap. gcc's `-Os` inlines a declared-`inline`
+/// callee only where the unit does not grow; the pin's hint threshold lets it
+/// in at any size (QuickrBasic array.c: `arry_esize`, 23 units, into four
+/// callers), and what the copies fold to only the object says.
+pub fn keeps_unhinted(
+    kept: Price,
+    other: Price,
+    cap: Option<i64>,
+) -> bool {
+    if kept.work.is_nan() || other.work.is_nan() {
+        return false;
+    }
+    let saved = (kept.work - other.work).round() as i64;
+    trial::keeps_smaller_at_size(other.bytes - kept.bytes, saved, kept.work.round() as i64, cap)
 }
 
 /// Whether the compile that also rotates the left loops is kept over `kept`.

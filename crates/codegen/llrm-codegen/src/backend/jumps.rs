@@ -217,7 +217,7 @@ pub fn optimized_with(
         cpu.tail_dup_hot(),
         cpu.loop_top_clocks(),
         epilogue,
-        cpu.operations.ext_tsp_for_size,
+        cpu.operations.ext_tsp_for_size.then_some(cpu.operations.ext_tsp_by_frequency),
     )?);
     // Tail duplication before the merge, as LLVM places with it: after, the
     // merge would give back what the copy gained.
@@ -238,7 +238,7 @@ pub fn optimized_with(
             cpu.tail_dup_hot(),
             cpu.loop_top_clocks(),
             epilogue,
-            cpu.operations.ext_tsp_for_size,
+            cpu.operations.ext_tsp_for_size.then_some(cpu.operations.ext_tsp_by_frequency),
         )?);
     }
     let done = aligned(&inverted(&placed, size), cpu);
@@ -523,11 +523,11 @@ fn _placed(
     hot: Option<placement::HotTailDup>,
     epilogue: usize,
 ) -> Result<LirBody, masm::Unprintable> {
-    _placed_ext(body, size, aggressive, tail_dup, hot, None, epilogue, false)
+    _placed_ext(body, size, aggressive, tail_dup, hot, None, epilogue, None)
 }
 
 /// `_placed`, with the size order of `-apply-ext-tsp-for-size` where
-/// `ext_tsp` and `size`.
+/// `ext_tsp` and `size`; `Some(true)` weighs it by static frequency.
 fn _placed_ext(
     body: &LirBody,
     size: bool,
@@ -536,7 +536,7 @@ fn _placed_ext(
     hot: Option<placement::HotTailDup>,
     top: Option<placement::TopClocks>,
     epilogue: usize,
-    ext_tsp: bool,
+    ext_tsp: Option<bool>,
 ) -> Result<LirBody, masm::Unprintable> {
     let explicit = _explicit(body)?;
     if body.source_order {
@@ -557,7 +557,7 @@ pub fn placed_explicit(
     hot: Option<placement::HotTailDup>,
     top: Option<placement::TopClocks>,
     epilogue: usize,
-    ext_tsp: bool,
+    ext_tsp: Option<bool>,
 ) -> LirBody {
     let natural = loopy::loops(&explicit, Some(body.entry));
     let busy = Frequency::of(body);
@@ -567,11 +567,22 @@ pub fn placed_explicit(
     _reachable(&LirBody { odds, ..body.clone() }, blocks)
 }
 
+/// The blocks the branch folding must keep as they are: a loop's header, and a
+/// block whose address is taken, which a `blockaddress` names and an
+/// `indirectbr` reaches by it (`MachineBasicBlock::hasAddressTaken`, which
+/// `BranchFolding` checks before it removes or merges a block).
+fn _protected(body: &LirBody) -> BTreeSet<i64> {
+    body.loop_trip_counts
+        .iter()
+        .map(|(header, _count)| *header)
+        .chain(body.address_symbols.keys().copied())
+        .collect()
+}
+
 pub fn threaded(body: &LirBody) -> LirBody {
     let body = _hoisted(body);
     let body = _reachable(&body, body.blocks.clone());
-    let protected: BTreeSet<i64> = body.loop_trip_counts.iter().map(|(header, _count)| *header).collect();
-    branchfold::folded(&body, &protected)
+    branchfold::folded(&body, &_protected(&body))
 }
 
 /// The value `one` is renamed to, through every rename after it.
@@ -1126,8 +1137,7 @@ pub fn _passage_late(block: &LirBlock) -> Option<i64> {
 /// the last reader of values. Exit: delete identity copies at the end of
 /// allocation and drop the anchors' value uses in `machinecp`.
 pub fn threaded_late(body: &LirBody) -> LirBody {
-    let protected: BTreeSet<i64> = body.loop_trip_counts.iter().map(|(header, _count)| *header).collect();
-    branchfold::folded_late(body, &protected)
+    branchfold::folded_late(body, &_protected(body))
 }
 
 pub fn _predecessors(blocks: &[Block]) -> IndexMap<i64, BTreeSet<i64>> {

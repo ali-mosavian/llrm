@@ -43,7 +43,8 @@
 //! `addIRPasses`.
 //!
 //! # Example
-//! A select whose branch form is cheaper becomes a branch and a phi, with a frozen condition.
+//! A select whose branch form is cheaper becomes a branch and a phi, with a
+//! frozen condition.
 //!
 //! ```text
 //! %s = select i1 %c, %a, %b
@@ -853,7 +854,13 @@ impl Analysis<'_> {
                     ty,
                     CostKind::Latency,
                     OperandInfo::ANY,
-                    OperandInfo { constant: true, power_of_two: true, negated_power_of_two: false, value: None },
+                    OperandInfo {
+                        constant: true,
+                        power_of_two: true,
+                        negated_power_of_two: false,
+                        non_uniform: false,
+                        value: None,
+                    },
                 )
         });
         Scaled64::get(cost.value as u64) + cost_of(instruction.operands[1 - select.cond_idx])

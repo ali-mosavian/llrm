@@ -273,12 +273,17 @@ fn common_tail(
 /// Blocks identical from top to bottom merge at any length, as the pin's
 /// `AfterPlacement` rule does (lru -O1: three copies of `mov; b join`, +16 B).
 ///
-/// DEVIATE: the pin also merges a shorter tail where a block is only the
-/// tail and the other can fall into it, and two instructions at -Os; and it
-/// takes the pairs by the hash of their ends, not by the last instruction.
-/// Exit: 11-20. Tried 11-05: taking both on the 148-cell corpus changed no
-/// cell, so they stay out until a cell needs them.
-fn merge_return_tails(blocks: &mut Vec<Lowered>) {
+/// A block that is all tail and sits right after the other merges at any
+/// length, and at optsize two instructions are enough where a block is all tail
+/// (`ProfitableToMerge`'s layout-successor and `OptForSize` rules).
+///
+/// DEVIATE: the pin takes the pairs by the hash of their ends, not by the last
+/// instruction, and the first `TAIL_MERGE_THRESHOLD` predecessors of a block
+/// at a time, not chunks of a group. Exit: 2026-12-11.
+fn merge_return_tails(
+    blocks: &mut Vec<Lowered>,
+    optsize: bool,
+) {
     // The block that is only a return, where there is one: a block that
     // returns, or jumps there, ends the same way.
     let bare = |blocks: &[Lowered]| -> Option<(String, Inst)> {
@@ -315,6 +320,16 @@ fn merge_return_tails(blocks: &mut Vec<Lowered>) {
         }
     };
     loop {
+        // A block merged whole is only a jump now: the branches to it go on
+        // to its target, so that the blocks that led to it end alike
+        // (`BranchFolder` runs `OptimizeBranches` between rounds).
+        let mut forward = forwards(blocks);
+        forward.remove(&blocks[0].label);
+        for block in blocks.iter_mut() {
+            for inst in &mut block.insts {
+                retarget(inst, &forward);
+            }
+        }
         let bare_block = bare(blocks);
         let ending: Vec<(usize, Vec<Inst>)> =
             (0..blocks.len()).filter_map(|at| ends_alike(blocks, at, &bare_block).map(|insts| (at, insts))).collect();
@@ -326,7 +341,12 @@ fn merge_return_tails(blocks: &mut Vec<Lowered>) {
             }
         }
         let mut best: Option<(usize, usize, usize)> = None;
-        for group in groups.values().filter(|group| group.len() > 1 && group.len() <= TAIL_MERGE_THRESHOLD) {
+        // `-tail-merge-threshold`: no more than that many blocks are compared
+        // together; the pin takes the first ones, then the rest in a later
+        // round (here: in chunks, in block order).
+        for group in
+            groups.values().flat_map(|group| group.chunks(TAIL_MERGE_THRESHOLD)).filter(|group| group.len() > 1)
+        {
             for (a, &x) in group.iter().enumerate() {
                 for &y in &group[a + 1..] {
                     let ((one, one_insts), (other, other_insts)) = (&ending[x], &ending[y]);
@@ -341,7 +361,17 @@ fn merge_return_tails(blocks: &mut Vec<Lowered>) {
                     // them whatever their length, since neither falls through.
                     let identical =
                         length == blocks[*one].insts.len() && length == blocks[*other].insts.len() && real >= 1;
-                    if (real >= TAIL_MERGE_SIZE || identical)
+                    // `ProfitableToMerge`: a block that is all tail, with the
+                    // other laid out before it, is merged
+                    // whatever the length (the other falls
+                    // into it); and at optsize two instructions
+                    // are enough where a block is all tail.
+                    let (one_full, other_full) =
+                        (length == blocks[*one].insts.len(), length == blocks[*other].insts.len());
+                    let falls_in =
+                        real >= 2 && ((*other == *one + 1 && other_full) || (*one == *other + 1 && one_full));
+                    let small = optsize && real >= 2 && (one_full || other_full);
+                    if (real >= TAIL_MERGE_SIZE || identical || falls_in || small)
                         && !whole
                         && best.is_none_or(|(a, b, longest)| {
                             length > longest || (length == longest && (found.0, found.1) < (a, b))
@@ -674,7 +704,7 @@ pub fn fold(
     optsize: bool,
     exits: &[crate::mc::visit::Reg],
 ) -> Vec<Lowered> {
-    fold_with_odds(blocks, tables, odds, optsize, exits, &[]).0
+    fold_with_odds(blocks, tables, odds, optsize, exits, &[], &[], &[]).0
 }
 
 /// The odds of the edges between blocks by label, as placement read them.
@@ -689,6 +719,8 @@ pub fn fold_with_odds(
     optsize: bool,
     exits: &[crate::mc::visit::Reg],
     dead_ends: &[String],
+    kept: &[String],
+    indirect: &[(String, Vec<String>)],
 ) -> (Vec<Lowered>, Likelihood) {
     if blocks.is_empty() {
         return (blocks, Likelihood::default());
@@ -711,7 +743,7 @@ pub fn fold_with_odds(
             blocks[at].locs.push(None);
         }
     }
-    merge_return_tails(&mut blocks);
+    merge_return_tails(&mut blocks, optsize);
     hoist_common_code(&mut blocks, tables);
     // The entry is never forwarded away.
     let entry = blocks[0].label.clone();
@@ -743,8 +775,14 @@ pub fn fold_with_odds(
     let table_of: HashMap<&str, &Table> = tables.iter().map(|table| (table.base.as_str(), table)).collect();
     // Reachable blocks, in `MachineBlockPlacement`'s order.
     let index: HashMap<&str, usize> = blocks.iter().enumerate().map(|(at, block)| (block.label.as_str(), at)).collect();
+    // The blocks an `indirectbr` may reach, by the block it ends.
+    let indirect_by_block: HashMap<&str, &Vec<String>> =
+        indirect.iter().map(|(from, to)| (from.as_str(), to)).collect();
     let successors = |at: usize| -> Vec<usize> {
         let mut out: Vec<usize> = Vec::new();
+        if let Some(targets) = indirect_by_block.get(blocks[at].label.as_str()) {
+            out.extend(targets.iter().filter_map(|label| index.get(label.as_str()).copied()));
+        }
         for inst in &blocks[at].insts {
             match inst {
                 // The jump through a table goes to every entry.
@@ -938,7 +976,9 @@ pub fn fold_with_odds(
     // The pin copies in layout order (`TailDuplicator`, then
     // `MachineCopyPropagation`): a jump to the block next to it stays a
     // fall-through.
-    for (jumper, original) in crate::taildup::tail_duplicate(&mut ordered, optsize) {
+    for (jumper, original) in
+        crate::taildup::tail_duplicate(&mut ordered, optsize, &crate::taildup::computed_gotos(indirect, kept), indirect)
+    {
         // The copy keeps the original's edge odds (`addSuccessor` with the
         // original's probabilities), which `optimizeBranches` reads below.
         let edges: Vec<(String, u32)> = likelihood
@@ -950,7 +990,7 @@ pub fn fold_with_odds(
             likelihood.entry((jumper.clone(), to)).or_insert(odds);
         }
     }
-    crate::taildup::drop_unreferenced(&mut ordered, tables);
+    crate::taildup::drop_unreferenced(&mut ordered, tables, kept);
     crate::taildup::propagate_backward(&mut ordered, exits);
     // A branch to the next block falls through; a conditional branch over an
     // unconditional one is the inverse conditional (`cbz`/`tbz` too).
@@ -1054,6 +1094,69 @@ mod tests {
         assert!(targets.iter().all(|label| ret_blocks.contains(label)), "{out:?}");
         assert_eq!(insts().filter(|inst| matches!(inst, Inst::Branch { .. })).count(), 0, "{out:?}");
         assert!(rets <= 2, "{rets} returns: {out:?}");
+    }
+
+    /// `ProfitableToMerge`: at optsize two instructions in common merge where
+    /// one block is all tail (`mov x0, xzr; b join` after a call, and alone:
+    /// `hlf_open` -Os wrote the pair four times); at speed they stay.
+    #[test]
+    fn a_two_instruction_tail_merges_at_optsize_only() {
+        use crate::mc::inst::{Logic, Shift};
+        let jump = |to: &str| Inst::Branch { link: false, target: Target::Label(to.into()) };
+        let zero = || Inst::LogicShifted {
+            op: Logic::Orr,
+            invert: false,
+            width: Width::X,
+            rd: Gpr(0),
+            rn: Gpr(31),
+            rm: Gpr(31),
+            shift: Shift::Lsl,
+            amount: 0,
+        };
+        let blocks = || {
+            vec![
+                block(".Lf.0", vec![cbz(1, ".Lf.2"), jump(".Lf.1")]),
+                block(".Lf.1", vec![Inst::Nop, zero(), jump(".Lf.4")]),
+                block(".Lf.2", vec![cbz(2, ".Lf.5"), jump(".Lf.3")]),
+                block(".Lf.3", vec![Inst::Nop, jump(".Lf.5")]),
+                block(".Lf.5", vec![zero(), jump(".Lf.4")]),
+                block(".Lf.4", vec![Inst::Ret { rn: Gpr(30) }]),
+            ]
+        };
+        let zeroings = |optsize: bool| {
+            let out = fold(blocks(), &mut [], &Odds::default(), optsize, &[]);
+            out.iter().flat_map(|block| &block.insts).filter(|inst| **inst == zero()).count()
+        };
+        assert_eq!(zeroings(true), 1);
+        assert_eq!(zeroings(false), 2);
+    }
+
+    /// `-tail-merge-threshold` bounds the blocks compared at once, not the
+    /// blocks merged: 160 handlers ending in the same store and jump were left
+    /// as 160 copies (QB `exec.o`: 203 handlers, 43 of them `str; mov; b`).
+    #[test]
+    fn more_blocks_than_the_threshold_with_one_tail_still_merge() {
+        use crate::mc::inst::{Logic, Shift};
+        let jump = |to: &str| Inst::Branch { link: false, target: Target::Label(to.into()) };
+        let zero = || Inst::LogicShifted {
+            op: Logic::Orr,
+            invert: false,
+            width: Width::X,
+            rd: Gpr(0),
+            rn: Gpr(31),
+            rm: Gpr(31),
+            shift: Shift::Lsl,
+            amount: 0,
+        };
+        let many = TAIL_MERGE_THRESHOLD + 10;
+        let mut blocks = vec![block(".Lf.0", (0..many).map(|n| cbz(1, &format!(".Lf.{}", n + 1))).collect())];
+        for n in 0..many {
+            blocks.push(block(&format!(".Lf.{}", n + 1), vec![Inst::Nop, zero(), zero(), jump(".Lf.x")]));
+        }
+        blocks.push(block(".Lf.x", vec![Inst::Ret { rn: Gpr(30) }]));
+        let out = fold(blocks, &mut [], &Odds::default(), false, &[]);
+        let zeroings = out.iter().flat_map(|block| &block.insts).filter(|inst| **inst == zero()).count();
+        assert_eq!(zeroings, 2, "the tail is written once: two zeroing instructions");
     }
 
     /// The loop's header test was copied into its latch, and the copy lost the

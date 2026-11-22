@@ -16,7 +16,8 @@
 //! assembly it prices cheaper.
 //!
 //! # Example
-//! A loop the pass refused to unroll is noted; the driver compiles again with it unrolled and keeps the cheaper assembly.
+//! A loop the pass refused to unroll is noted; the driver compiles again with
+//! it unrolled and keeps the cheaper assembly.
 //!
 //! ```text
 //! pass:   loop refused by the threshold -> noted (ELIGIBLE)
@@ -62,6 +63,120 @@ thread_local! {
     static COPY_LOOPS_KEPT: Cell<bool> = const { Cell::new(false) };
     /// The functions in which LoopIdiom turned such a loop into a `memcpy`.
     static COPY_CALLS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    /// Set while the trial compile of INLINEHINT-GROWTH-TRIAL runs: the -Os
+    /// size guard binds an `inlinehint` callee as it does any other.
+    static HINTED_CALLS_KEPT: Cell<bool> = const { Cell::new(false) };
+    static NEGATIVE_CALLS_KEPT: Cell<bool> = const { Cell::new(false) };
+    static NEGATIVE_YIELDS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    /// The callers with a call of an `inlinehint` callee that only the hint's
+    /// yield let the size guard pass.
+    static HINT_YIELDS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    /// Set while the trial compile of HOT-INLINE-TRIAL runs: the -Os size
+    /// bound holds at a locally hot site too.
+    static HOT_CALLS_KEPT: Cell<bool> = const { Cell::new(false) };
+    /// The callers with a call that only the hot-site yield let the size bound
+    /// pass.
+    static HOT_YIELDS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+}
+
+/// DEVIATE HOT-INLINE-TRIAL (beyond the pin; owner x86-m32-b, exit
+/// 2026-12-12): whether the trial compile that keeps the call at a site the
+/// hot-site yield (`Tuning::inline_size_hot_growth_percent`) would inline is
+/// running. The units' growth credits the callee's death over all its sites,
+/// which cold sites that keep it deny, so the finished object decides.
+pub fn keeping_hot_calls() -> bool {
+    HOT_CALLS_KEPT.with(Cell::get)
+}
+
+/// Runs `body` with those calls kept.
+pub fn with_kept_hot_calls<T>(body: impl FnOnce() -> T) -> T {
+    let before = HOT_CALLS_KEPT.with(|cell| cell.replace(true));
+    let value = body();
+    HOT_CALLS_KEPT.with(|cell| cell.set(before));
+    value
+}
+
+/// Notes that the hot-site yield let a call in `function` through the size
+/// bound, which a trial may refuse.
+pub(crate) fn note_hot_yield(function: &str) {
+    HOT_YIELDS.with(|list| {
+        let mut list = list.borrow_mut();
+        if !list.iter().any(|one| one == function) {
+            list.push(function.to_owned());
+        }
+    });
+}
+
+/// The callers [`note_hot_yield`] saw since the last call.
+pub fn take_hot_yields() -> Vec<String> {
+    HOT_YIELDS.with(|list| std::mem::take(&mut *list.borrow_mut()))
+}
+
+/// DEVIATE INLINEHINT-GROWTH-TRIAL (beyond the pin; gcc's `-Os` inliner takes
+/// a callee only while the unit does not grow, `ipa-inline.cc`
+/// `want_inline_small_function_p` over `estimate_edge_growth`; owner x86-m32,
+/// exit 2026-11-30): whether the trial compile that keeps the call of an
+/// `inlinehint` callee the size guard would refuse is running. The pin's hint
+/// threshold (325) lets the callee in whatever it costs in bytes; the units
+/// cannot say what the copies fold to, so the finished object decides.
+pub fn keeping_hinted_calls() -> bool {
+    HINTED_CALLS_KEPT.with(Cell::get)
+}
+
+/// Runs `body` with those calls kept.
+pub fn with_kept_hinted_calls<T>(body: impl FnOnce() -> T) -> T {
+    let before = HINTED_CALLS_KEPT.with(|cell| cell.replace(true));
+    let value = body();
+    HINTED_CALLS_KEPT.with(|cell| cell.set(before));
+    value
+}
+
+/// Whether the trial compile that also keeps the calls the size guard's
+/// negative-cost yield lets through is running (see [`keeping_hinted_calls`]):
+/// a one-line accessor the pin's cost calls a shrinking inline (`code_byte`,
+/// `if (c->out >= c->lim) ...`), and gcc's `-Os` outlines.
+pub fn keeping_negative_calls() -> bool {
+    NEGATIVE_CALLS_KEPT.with(Cell::get)
+}
+
+/// Runs `body` with those calls kept.
+pub fn with_kept_negative_calls<T>(body: impl FnOnce() -> T) -> T {
+    let before = NEGATIVE_CALLS_KEPT.with(|cell| cell.replace(true));
+    let value = body();
+    NEGATIVE_CALLS_KEPT.with(|cell| cell.set(before));
+    value
+}
+
+/// Notes that the negative-cost yield let a call in `function` through the
+/// size guard, which a trial may refuse.
+pub(crate) fn note_negative_yield(function: &str) {
+    NEGATIVE_YIELDS.with(|list| {
+        let mut list = list.borrow_mut();
+        if !list.iter().any(|one| one == function) {
+            list.push(function.to_owned());
+        }
+    });
+}
+
+/// The callers [`note_negative_yield`] saw since the last call.
+pub fn take_negative_yields() -> Vec<String> {
+    NEGATIVE_YIELDS.with(|list| std::mem::take(&mut *list.borrow_mut()))
+}
+
+/// Notes that the hint's yield let a call in `function` through the size
+/// guard, which a trial may refuse.
+pub(crate) fn note_hint_yield(function: &str) {
+    HINT_YIELDS.with(|list| {
+        let mut list = list.borrow_mut();
+        if !list.iter().any(|one| one == function) {
+            list.push(function.to_owned());
+        }
+    });
+}
+
+/// The callers [`note_hint_yield`] saw since the last call.
+pub fn take_hint_yields() -> Vec<String> {
+    HINT_YIELDS.with(|list| std::mem::take(&mut *list.borrow_mut()))
 }
 
 /// DEVIATE SWITCH-LOOKUP-TRIAL (beyond the pin; gcc's `-Os` keeps the compares
@@ -255,7 +370,19 @@ pub fn keeps_at_o1(
 
 #[cfg(test)]
 mod tests {
-    use super::keeps_at_o1;
+    use super::{keeps_at_o1, keeps_smaller_at_size};
+
+    /// x_transpose -Os (m32): the copy loop saved 20 B and added 178,500 of
+    /// about 1.1M work (+16%); x_switch_ranges: 35 B for +11%.
+    #[test]
+    fn a_smaller_shape_is_kept_only_within_the_clock_cap() {
+        assert!(!keeps_smaller_at_size(-20, -178_500, 1_100_000, Some(2)));
+        assert!(keeps_smaller_at_size(-20, -178_500, 1_100_000, None), "no cap: bytes alone");
+        assert!(keeps_smaller_at_size(-23, -1_000, 1_100_000, Some(2)));
+        assert!(keeps_smaller_at_size(-4, 15, 1_100_000, Some(2)), "it runs less");
+        assert!(!keeps_smaller_at_size(0, 100, 1_100_000, Some(2)), "no byte saved");
+        assert!(keeps_smaller_at_size(-4, -50, 0, Some(2)), "no work known: bytes alone");
+    }
 
     /// x_life -O1 (m32): the 3x3 nest unrolled ran half the work (212,914
     /// against 425,704) for 32 B more once the outer loops' counters
@@ -380,6 +507,27 @@ pub const ROTATION_TRIAL_MAX_INSTRUCTIONS: usize = 4096;
 /// axis: it is smaller. A tie keeps the pass's own result.
 pub fn keeps_at_size(added: i64) -> bool {
     added < 0
+}
+
+/// DEVIATE OS-TRIAL-CLOCK-CAP: whether a trial that keeps a smaller shape at
+/// -Os is kept. The object is smaller (`added` < 0) and, where the target caps
+/// the clocks a trial may cost (`cap`, percent of the code's work without it,
+/// `base`), the work it adds (`-saved`) stays within the cap. Where the model
+/// has no work for either shape (`base` 0) bytes alone decide, as without a
+/// cap.
+pub fn keeps_smaller_at_size(
+    added: i64,
+    saved: i64,
+    base: i64,
+    cap: Option<i64>,
+) -> bool {
+    if added >= 0 {
+        return false;
+    }
+    match cap {
+        Some(cap) if base > 0 && saved < 0 => -saved * 100 <= cap * base,
+        _ => true,
+    }
 }
 
 /// DEVIATE UNROLL-OS-TRIAL: whether the -Os unroll trial is kept: the object is
@@ -543,8 +691,9 @@ pub fn take_accepted() -> Vec<Site> {
     ACCEPTED.with(|list| std::mem::take(&mut *list.borrow_mut()))
 }
 
-/// Sites that share a function (a caller or a callee) are decided together: the functions they name, and which of
-/// the refused and the accepted sites (by index) they hold.
+/// Sites that share a function (a caller or a callee) are decided together: the
+/// functions they name, and which of the refused and the accepted sites (by
+/// index) they hold.
 #[derive(Clone, Debug, Default)]
 pub struct Group {
     pub names: std::collections::BTreeSet<String>,
@@ -552,15 +701,22 @@ pub struct Group {
     pub accepted: Vec<usize>,
 }
 
-/// The groups of `refused` and `accepted` sites, sites linked by a shared function name in one group.
+/// The groups of `refused` and `accepted` sites, sites linked by a shared
+/// function name in one group.
 pub fn groups(
     refused: &[Site],
     accepted: &[Site],
 ) -> Vec<Group> {
     let mut found: Vec<Group> = Vec::new();
-    for (index, site, is_refused) in refused.iter().enumerate().map(|(i, s)| (i, s, true)).chain(accepted.iter().enumerate().map(|(i, s)| (i, s, false))) {
+    for (index, site, is_refused) in refused
+        .iter()
+        .enumerate()
+        .map(|(i, s)| (i, s, true))
+        .chain(accepted.iter().enumerate().map(|(i, s)| (i, s, false)))
+    {
         let names: Vec<&String> = std::iter::once(&site.caller).chain(&site.callees).collect();
-        let (hit, rest): (Vec<Group>, Vec<Group>) = found.into_iter().partition(|group| names.iter().any(|name| group.names.contains(*name)));
+        let (hit, rest): (Vec<Group>, Vec<Group>) =
+            found.into_iter().partition(|group| names.iter().any(|name| group.names.contains(*name)));
         found = rest;
         let mut merged = Group::default();
         for group in hit {
@@ -569,7 +725,11 @@ pub fn groups(
             merged.accepted.extend(group.accepted);
         }
         merged.names.extend(names.into_iter().cloned());
-        if is_refused { merged.refused.push(index) } else { merged.accepted.push(index) }
+        if is_refused {
+            merged.refused.push(index)
+        } else {
+            merged.accepted.push(index)
+        }
         found.push(merged);
     }
     found
@@ -783,15 +943,31 @@ pub enum SpeedUnroll {
     /// smaller with one and not the other (idioms -O3: 1856 B with the
     /// unrolls refused, 3229 B with the inlines refused too).
     NoInlineGrowth,
+    /// [`Self::NoInlineGrowth`], and the SZ2 trial (`walk.rs`) refuses a copy
+    /// that adds bytes too, which it otherwise takes by the byte rate: the
+    /// module with the calls where the trial inlines what the policy refused
+    /// (shift_int64_masked_amount -O2: `mix` inlined at three hot sites,
+    /// +81 B and +20% T; shrink_wrapped_frame -O3 is 374 B only through that
+    /// inline, which `NoInlineGrowth` keeps).
+    NoInlineGrowthAll,
     /// Both of the above: switch_table_in_code -O2 is 138 B smaller with both,
     /// 78 B with the inline alone.
     NoGrowBoth,
     /// The full unroll's threshold is this one, where the pin's -O2 is 150 and
     /// its -O3 300.
     Wide(u32),
+    /// No non-trivial unswitch (-O3): the loop is not copied for a condition
+    /// that does not change in it. queens -O3: `place` +93 B and +108745 T
+    /// over -O2, 90 B over the SDCC bar, for one branch a trip.
+    NoUnswitch,
 }
 
 impl SpeedUnroll {
+    /// Whether the variant makes no non-trivial unswitch.
+    pub fn refuses_unswitch(self) -> bool {
+        matches!(self, Self::NoUnswitch)
+    }
+
     /// Whether the variant makes only the full unrolls that add no bytes.
     pub fn refuses_unroll_growth(self) -> bool {
         matches!(self, Self::NoGrow | Self::NoGrowBoth)
@@ -799,7 +975,15 @@ impl SpeedUnroll {
 
     /// Whether the variant makes only the inlines that add no bytes.
     pub fn refuses_inline_growth(self) -> bool {
-        matches!(self, Self::NoInlineGrowth | Self::NoGrowBoth)
+        matches!(
+            self,
+            Self::NoInlineGrowth | Self::NoInlineGrowthAll | Self::NoGrowBoth
+        )
+    }
+
+    /// Whether the SZ2 inline trial also refuses a copy that adds bytes.
+    pub fn refuses_trial_growth(self) -> bool {
+        self == Self::NoInlineGrowthAll
     }
 }
 
@@ -820,13 +1004,56 @@ pub struct UnrollDecisions {
     pub made: usize,
     pub refused: usize,
     pub inlined: usize,
+    /// The non-trivial unswitches that `NoUnswitch` would not make.
+    pub unswitched: usize,
+    /// The inlines the SZ2 trial took that add bytes, which only
+    /// `NoInlineGrowthAll` refuses: a driver tries that variant after a
+    /// `NoInlineGrowth` compile with a count over 0.
+    pub trial_inlined: usize,
+    /// The loops in which the target's alternate LSR order (LSR-KEY-TRIAL)
+    /// picks another solution than its own: a driver compiles the module
+    /// again under that order only where this is not 0.
+    pub lsr_orders: usize,
 }
 
 thread_local! {
     /// The variant of UNROLL-SPEED-TRIAL running, if any.
     static SPEED_UNROLL: Cell<Option<SpeedUnroll>> = const { Cell::new(None) };
     /// The decisions since [`take_speed_unrolls`].
-    static SPEED_UNROLLS: Cell<UnrollDecisions> = const { Cell::new(UnrollDecisions { made: 0, refused: 0, inlined: 0 }) };
+    static SPEED_UNROLLS: Cell<UnrollDecisions> = const { Cell::new(UnrollDecisions { made: 0, refused: 0, inlined: 0, unswitched: 0, trial_inlined: 0, lsr_orders: 0 }) };
+}
+
+thread_local! {
+    /// Set while LSR rates solutions by the target's alternate order.
+    static LSR_ALTERNATE: Cell<bool> = const { Cell::new(false) };
+}
+
+/// DEVIATE LSR-KEY-TRIAL (beyond the pin; gcc's ivopts totals its costs where
+/// LSR ranks `LsrCost` fields in order, `tree-ssa-loop-ivopts.cc`
+/// `iv_ca_cost`; owner z80, exit 2026-12-15): whether LSR rates solutions by
+/// the target's alternate order (`Tti::lsr_alternate_order`). No order of the
+/// fields tells histo's loop (a count-down plus a base add, 291 B) from
+/// sum4's (the same deltas, 8 B worse): what differs is what the allocator
+/// does with the registers, so the finished module decides.
+pub fn lsr_alternate_order() -> bool {
+    LSR_ALTERNATE.with(Cell::get)
+}
+
+/// Runs `body` with LSR rating by the target's alternate order.
+pub fn with_lsr_alternate_order<T>(body: impl FnOnce() -> T) -> T {
+    let held = LSR_ALTERNATE.with(|flag| flag.replace(true));
+    let made = body();
+    LSR_ALTERNATE.with(|flag| flag.set(held));
+    made
+}
+
+/// A loop whose solution differs under the alternate order.
+pub(crate) fn note_lsr_order() {
+    SPEED_UNROLLS.with(|held| {
+        let mut now = held.get();
+        now.lsr_orders += 1;
+        held.set(now);
+    });
 }
 
 /// The UNROLL-SPEED-TRIAL variant in force, if a trial compile is running.
@@ -854,6 +1081,24 @@ pub(crate) fn note_speed_inline() {
     });
 }
 
+/// Notes an SZ2 trial inline that adds bytes.
+pub(crate) fn note_speed_trial_inline() {
+    SPEED_UNROLLS.with(|cell| {
+        let mut seen = cell.get();
+        seen.trial_inlined += 1;
+        cell.set(seen);
+    });
+}
+
+/// Notes a non-trivial unswitch made.
+pub(crate) fn note_speed_unswitch() {
+    SPEED_UNROLLS.with(|cell| {
+        let mut seen = cell.get();
+        seen.unswitched += 1;
+        cell.set(seen);
+    });
+}
+
 /// Notes a loop unrolled (`made`) or, with known trips, refused.
 pub(crate) fn note_speed_unroll(made: bool) {
     SPEED_UNROLLS.with(|cell| {
@@ -876,12 +1121,17 @@ pub fn take_speed_unrolls() -> UnrollDecisions {
 mod group_tests {
     use super::*;
 
-    fn site(caller: &str, callee: &str) -> Site {
+    fn site(
+        caller: &str,
+        callee: &str,
+    ) -> Site {
         Site { caller: caller.to_owned(), callees: vec![callee.to_owned()] }
     }
 
-    /// Two sites with one caller were two verdicts on the caller's bytes, so a trial built both and kept the one
-    /// that paid for the other. Sites that share a function, a refused and an accepted one included, are one group.
+    /// Two sites with one caller were two verdicts on the caller's bytes, so a
+    /// trial built both and kept the one that paid for the other. Sites
+    /// that share a function, a refused and an accepted one included, are one
+    /// group.
     #[test]
     fn sites_that_share_a_function_are_one_group() {
         let refused = [site("main", "a"), site("other", "b")];

@@ -350,15 +350,10 @@ impl<'a> TypeLegalizer<'a> {
         &mut self,
         n: u32,
     ) {
-        let results = self.dag.node(SDValue { node: n, res: 0 }).values.len();
-        let mut users = Vec::new();
-        for res in 0..results as u8 {
-            users.extend(self.dag.users(SDValue { node: n, res }));
-        }
-        users.sort_unstable();
-        users.dedup();
-        for user in users {
-            // One operand slot per read of `n`, whichever of its results.
+        // `N->users()`: newest use first. The worklist is a stack, so the
+        // oldest user is legalized first. A user waits for one operand per
+        // slot that reads `n`, whichever of its results.
+        for user in self.dag.users_of_node_newest_first(n) {
             let slots =
                 self.dag.node(SDValue { node: user, res: 0 }).ops.iter().filter(|op| op.node == n).count() as u32;
             match self.id(user) {
@@ -541,11 +536,34 @@ impl<'a> TypeLegalizer<'a> {
         let vt = self.dag.value_type(value);
         let (_, int) = self.tli.types.type_conversion(vt);
         let result = match self.dag.opcode(value) {
-            op @ (ISD::FAdd | ISD::FSub | ISD::FMul | ISD::FDiv) => {
+            op @ (ISD::FAdd | ISD::FSub | ISD::FMul | ISD::FDiv | ISD::FRem) => {
                 // `SoftenFloatRes_Binary`: `makeLibCall` of the softened
                 // operands.
                 let args =
                     [self.softened_float(self.dag.operand(value, 0)), self.softened_float(self.dag.operand(value, 1))];
+                let call = self.tli.libcall_name(op, vt).and_then(|name| self.soft_call(name, &args, int));
+                call.ok_or(LegalizeError::Unsupported { op, ty: vt, what: "soften: the target names no routine" })?
+            }
+            op @ (ISD::FRint
+            | ISD::FSqrt
+            | ISD::FSin
+            | ISD::FCos
+            | ISD::FExp
+            | ISD::FExp2
+            | ISD::FLog
+            | ISD::FLog2) => {
+                // `SoftenFloatRes_Unary`: the C library's routine over the softened operand (`rint` for `FRINT`).
+                let args = [self.softened_float(self.dag.operand(value, 0))];
+                let call = self.tli.libcall_name(op, vt).and_then(|name| self.soft_call(name, &args, int));
+                call.ok_or(LegalizeError::Unsupported { op, ty: vt, what: "soften: the target names no routine" })?
+            }
+            op @ ISD::FMA => {
+                // `SoftenFloatRes_FMA`: `fma` over the three softened operands.
+                let args = [
+                    self.softened_float(self.dag.operand(value, 0)),
+                    self.softened_float(self.dag.operand(value, 1)),
+                    self.softened_float(self.dag.operand(value, 2)),
+                ];
                 let call = self.tli.libcall_name(op, vt).and_then(|name| self.soft_call(name, &args, int));
                 call.ok_or(LegalizeError::Unsupported { op, ty: vt, what: "soften: the target names no routine" })?
             }
@@ -3180,6 +3198,22 @@ impl<'a> TypeLegalizer<'a> {
             && let Some(pair) = widening(self, true)
         {
             return Ok(pair);
+        }
+        // DEVIATE: the same call for two sign-extended operands, to the target's `SMulLoHi` routine (AVR libgcc's
+        // `__mulhisi3`). The pin has no routine to call; without this the product is the 32 x 32 `__mulsi3` (bench dot:
+        // 7.3M T against SDCC's 3.3M). Exit: none.
+        if super::known_bits::max_significant_bits(self.dag, lhs) <= bits
+            && super::known_bits::max_significant_bits(self.dag, rhs) <= bits
+            && !self.product_fits(lhs, rhs, bits)
+            && ![lhs, rhs].into_iter().filter_map(|one| self.dag.constant(one)).any(|c| self.tli.multiply_by_constant_stays_inline(c))
+            && let Some(name) = self.tli.libcall_name(ISD::SMulLoHi, half)
+        {
+            let vt = self.dag.value_type(value);
+            if let Some(hooks) = self.hooks.as_mut()
+                && let Some(result) = hooks.make_lib_call(self.dag, name, &[ll, rl], vt, false)
+            {
+                return Ok(self.split_integer(result, half));
+            }
         }
         let (lo, hi) = if self.tli.is_operation_legal_or_custom(ISD::UMulLoHi, half) {
             let both = self.dag.get_node_multi(ISD::UMulLoHi, &[half, half], &[ll, rl]);

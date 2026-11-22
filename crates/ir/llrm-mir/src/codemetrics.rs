@@ -185,7 +185,14 @@ impl CodeMetrics {
             let operation = function.instruction(inst);
             if let Opcode::Call(call) | Opcode::Invoke(call) = &operation.opcode {
                 let callee = crate::memory::callee(q.context, function, inst);
-                let no_inline = flag(&call.attrs, "noinline");
+                let callee_attrs: &[Attribute] =
+                    match callee.and_then(|id| q.globals.get(id.0 as usize)).map(|one| &one.kind) {
+                        Some(GlobalKind::Function(function)) => &function.attrs,
+                        _ => &[],
+                    };
+                // `CallBase::isNoInline`: the call or the function it calls
+                // says so.
+                let no_inline = flag(&call.attrs, "noinline") || flag(callee_attrs, "noinline");
                 // A callee a pass has declared and the module's globals do not
                 // hold yet is an external call.
                 if let Some((callee, global)) = callee.and_then(|id| q.globals.get(id.0 as usize).map(|one| (id, one)))
@@ -207,11 +214,6 @@ impl CodeMetrics {
                 } else if prepare_for_lto && !no_inline {
                     self.num_inline_candidates += 1;
                 }
-                let callee_attrs: &[Attribute] =
-                    match callee.and_then(|id| q.globals.get(id.0 as usize)).map(|one| &one.kind) {
-                        Some(GlobalKind::Function(function)) => &function.attrs,
-                        _ => &[],
-                    };
                 if self.convergence == Convergence::None
                     && (flag(&call.attrs, "convergent") || flag(callee_attrs, "convergent"))
                 {

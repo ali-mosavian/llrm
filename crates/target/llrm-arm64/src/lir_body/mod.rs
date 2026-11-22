@@ -187,6 +187,7 @@ fn semantics(
         indirect: false,
         table: Vec::new(),
         table_id: None,
+        computed: false,
         repeat: false,
         lock: false,
         pops: None,

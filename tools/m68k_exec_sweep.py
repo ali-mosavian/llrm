@@ -87,7 +87,7 @@ def cache_dir(cc: str) -> Path:
         path = Path(cc).parent / name
         if path.exists():
             digest.update(path.read_bytes())
-    for source in sorted([*RUNTIME.glob("lib/**/*.[ch]"), *RUNTIME.glob("lib/**/*.inc"), *RUNTIME.glob("include/*.h"), *RUNTIME.glob("config/m68k/*.h"), RUNTIME / "config/m68k/mulsi3.s"]):
+    for source in sorted([*STUBS.glob("*.c"), *RUNTIME.glob("lib/**/*.[ch]"), *RUNTIME.glob("lib/**/*.inc"), *RUNTIME.glob("include/*.h"), *RUNTIME.glob("config/m68k/*.h"), RUNTIME / "config/m68k/mulsi3.s"]):
         digest.update(source.read_bytes())
     digest.update(BUILD_FLAGS.encode())
     base = Path(os.environ.get("M68K_EXEC_CACHE") or Path.home() / ".cache/llrm-m68k-exec")

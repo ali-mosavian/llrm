@@ -112,3 +112,8 @@ float_compare = 0
 prefix = 1
 store_immediate = mov_mi
 argument = 2
+# A size caller's -Os trial, against the assembled objects of 75 QB sources (1416 functions): the estimate ran 1.4 times
+# high with a 21 B median error; actual = 0.59 * (estimate + 18 B) leaves 11 B. The -O1-style callers' bars were
+# fitted on the unscaled estimate and keep it (x86_32-dos -Os vla_callee_constant, memfuncs_runtime).
+size_caller_function = 18
+size_caller_scale = 59

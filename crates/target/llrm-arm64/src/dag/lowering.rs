@@ -737,9 +737,9 @@ pub fn lower_brcond(
         } else {
             (cond, CondCode::SetNe)
         };
-    // `LowerBR_CC`'s `setcc([su]{add,sub,mul}o ==|!= 0|1)`: the branch reads the
-    // flags of the arithmetic, on the condition that says overflow (opposite
-    // for the inverted bit).
+    // `LowerBR_CC`'s `setcc([su]{add,sub,mul}o ==|!= 0|1)`: the branch reads
+    // the flags of the arithmetic, on the condition that says overflow
+    // (opposite for the inverted bit).
     let overflow = bit(dag, tested).unwrap_or(tested);
     if is_xalu_overflow(dag, overflow)
         && let Some((_, flags, overflowed)) = xalu_flags(dag, overflow.node)
@@ -865,13 +865,23 @@ fn is_double_or_single(vt: EVT) -> bool {
     vt.is_floating_point() && matches!(vt.size_in_bits(), 32 | 64)
 }
 
+/// The first operand of the value a conversion reads: operand 0, or 1 behind
+/// the chain of a constrained node.
+fn converted(
+    dag: &SelectionDAG,
+    node: SDValue,
+) -> SDValue {
+    let strict = dag.opcode(node).non_strict().is_some();
+    dag.operand(node, usize::from(strict))
+}
+
 /// `LowerINT_TO_FP`: a scalar `f32`/`f64` from an `i32`/`i64` is legal as it
-/// is.
+/// is, constrained or not.
 pub fn lower_int_to_fp(
     dag: &mut SelectionDAG,
     node: SDValue,
 ) -> Option<SDValue> {
-    let (to, from) = (dag.value_type(node), dag.value_type(dag.operand(node, 0)));
+    let (to, from) = (dag.value_type(node), dag.value_type(converted(dag, node)));
     (is_double_or_single(to) && matches!(from.size_in_bits(), 32 | 64)).then_some(node)
 }
 
@@ -880,7 +890,7 @@ pub fn lower_fp_to_int(
     dag: &mut SelectionDAG,
     node: SDValue,
 ) -> Option<SDValue> {
-    let (to, from) = (dag.value_type(node), dag.value_type(dag.operand(node, 0)));
+    let (to, from) = (dag.value_type(node), dag.value_type(converted(dag, node)));
     (is_double_or_single(from) && matches!(to.size_in_bits(), 32 | 64)).then_some(node)
 }
 
@@ -889,7 +899,7 @@ pub fn lower_fp_extend(
     dag: &mut SelectionDAG,
     node: SDValue,
 ) -> Option<SDValue> {
-    let (to, from) = (dag.value_type(node), dag.value_type(dag.operand(node, 0)));
+    let (to, from) = (dag.value_type(node), dag.value_type(converted(dag, node)));
     (to.size_in_bits() == 64 && from.size_in_bits() == 32 && to.is_floating_point()).then_some(node)
 }
 
@@ -898,7 +908,7 @@ pub fn lower_fp_round(
     dag: &mut SelectionDAG,
     node: SDValue,
 ) -> Option<SDValue> {
-    let (to, from) = (dag.value_type(node), dag.value_type(dag.operand(node, 0)));
+    let (to, from) = (dag.value_type(node), dag.value_type(converted(dag, node)));
     (to.size_in_bits() == 32 && from.size_in_bits() == 64 && to.is_floating_point()).then_some(node)
 }
 
@@ -1128,19 +1138,15 @@ pub fn lower_xalu(
 
 /// `valueToCarryFlag`
 /// ([L4796](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L4796)):
-/// the flags with `C` set from a 0/1 value. Not inverted, `C` is the value; inverted, `C`
-/// is set when it is 0 (a borrow is the absence of a carry).
+/// the flags with `C` set from a 0/1 value. Not inverted, `C` is the value;
+/// inverted, `C` is set when it is 0 (a borrow is the absence of a carry).
 fn value_to_carry_flag(
     dag: &mut SelectionDAG,
     value: SDValue,
     invert: bool,
 ) -> SDValue {
     let vt = dag.value_type(value);
-    let (op0, op1) = if invert {
-        (dag.get_constant(0, vt), value)
-    } else {
-        (value, dag.get_constant(1, vt))
-    };
+    let (op0, op1) = if invert { (dag.get_constant(0, vt), value) } else { (value, dag.get_constant(1, vt)) };
     let subs = dag.get_node_multi(ISD::Target(a64::SUBS), &[vt, EVT::I32], &[op0, op1]);
     SDValue { node: subs.node, res: 1 }
 }
@@ -1270,13 +1276,11 @@ pub fn lower_br_jt(
     Some(dag.get_node(ISD::BrInd, EVT::OTHER, &[info, SDValue { node: destination.node, res: 0 }]))
 }
 
-/// `LowerBRIND`: the `BRIND` of a jump table (`lower_br_jt`) is left as it is;
-/// the other forms (`indirectbr`, pointer authentication) are not ported.
+/// `LowerBRIND`: the `BRIND` of a jump table (`lower_br_jt`) and of an
+/// `indirectbr` are selected as they are; pointer authentication is not ported.
 pub fn lower_br_ind(
-    dag: &mut SelectionDAG,
+    _dag: &mut SelectionDAG,
     node: SDValue,
 ) -> Option<SDValue> {
-    let destination = dag.operand(node, 1);
-    let table = ISD::Machine(u32::from(llrm_dagisel::generated::aarch64::ids::opcode::JumpTableDest32));
-    (dag.opcode(destination) == table).then_some(node)
+    Some(node)
 }

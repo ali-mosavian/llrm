@@ -61,9 +61,30 @@ pub enum CodeModel {
     Small,
     Medium,
     Large,
+    /// No `-mcmodel` given: small, as the pin, unless the module's globals
+    /// together pass what a 16-bit displacement reaches
+    /// ([`CodeModel::SMALL_REACH`]); then medium, as gcc's absolute data.
+    /// Resolved by the driver once the module is known.
+    Auto,
 }
 
 impl CodeModel {
+    /// The bytes of globals past which a `(d16,%pc)` reference cannot be
+    /// assumed to reach.
+    pub const SMALL_REACH: usize = 32768;
+
+    /// `self`, with [`CodeModel::Auto`] settled for globals of `data_bytes`.
+    pub fn resolved(
+        self,
+        data_bytes: usize,
+    ) -> CodeModel {
+        match self {
+            CodeModel::Auto if data_bytes > CodeModel::SMALL_REACH => CodeModel::Medium,
+            CodeModel::Auto => CodeModel::Small,
+            other => other,
+        }
+    }
+
     /// `-mcmodel=NAME`: `small`, `medium` or `large`.
     pub fn parse(name: &str) -> Result<CodeModel, String> {
         match name {
@@ -77,7 +98,7 @@ impl CodeModel {
     /// Whether a global's address is an absolute one.
     pub fn absolute_data(self) -> bool {
         match self {
-            CodeModel::Small => false,
+            CodeModel::Small | CodeModel::Auto => false,
             CodeModel::Medium | CodeModel::Large => true,
         }
     }
@@ -153,6 +174,10 @@ pub struct Options {
     /// before `MachineCSE` ([`crate::regalloc::shared_licm`]). It sees a
     /// loop-invariant only where `direct_copies` made no copy of it.
     pub shared_licm: bool,
+    /// The build the -O1 and -Os trial makes with the shared `MachineLICM` on:
+    /// those builds run it only here, and keep it where it pays
+    /// ([`crate::trial::keeps_faster`] at -O1, [`crate::trial::keeps`] at -Os).
+    pub licm_trial: bool,
     /// The shared flow's `PhiElimination` and `TwoAddress` take the function
     /// from SSA to the allocator, in place of the private `eliminate_phis`,
     /// `commute_tied` and `two_address` ([`crate::regalloc::shared_prelude`]).
@@ -249,6 +274,7 @@ impl Options {
         shared_cse: false,
         direct_copies: false,
         shared_licm: false,
+        licm_trial: false,
         shared_prelude: false,
         tail_duplicate: false,
         rematerialize_arguments: false,
@@ -294,6 +320,7 @@ impl Default for Options {
             shared_cse: true,
             direct_copies: false,
             shared_licm: true,
+            licm_trial: false,
             shared_prelude: false,
             tail_duplicate: true,
             rematerialize_arguments: true,
@@ -375,7 +402,7 @@ pub fn items_with(
     // the relaxation, the shared `MachineCSE` or the slot registers (-O2 68020
     // over 165 programs: no cell passes a gcc/clang clock bar either way).
     let one_build = !wants_size && !options.strict;
-    let finished = |options: Options| -> Result<(Vec<Item>, bool, Options), String> {
+    let finished = |options: Options| -> Result<(Vec<Item>, (bool, bool), Options), String> {
         let (plain, saved, chosen, shared) =
             items_trials(module, name, cpu, Options { relax_classes: false, ..options }, &prefixes)?;
         if !options.relax_classes || !saved || one_build {
@@ -392,7 +419,7 @@ pub fn items_with(
     // on
     let held = options.data_constants && wants_size;
     let options = Options { slot_registers: false, data_constants: false, ..options };
-    let (mut kept, shared, mut kept_options) = finished(options)?;
+    let (mut kept, (shared, licm_changes), mut kept_options) = finished(options)?;
     // The shared `MachineCSE` lengthens live ranges, and across calls they
     // spill. A function it changed is built through the whole sequence both
     // ways (the other trials' choices depend on the shape), the cheaper kept.
@@ -433,6 +460,21 @@ pub fn items_with(
             kept = items;
         }
     }
+    // The pin runs `MachineLICM` at every level; here -O1 and -Os make it a
+    // build, on the choices the other trials ended on, kept only where it pays:
+    // fewer clocks at -O1, fewer bytes (then clocks) at -Os.
+    if licm_changes {
+        let (hoisted, _) = items_once(module, name, cpu, Options { licm_trial: true, ..kept_options }, &prefixes)?;
+        let better = if wants_size {
+            crate::trial::keeps(&hoisted, &kept, cpu, price)
+        } else {
+            crate::trial::keeps_faster(&hoisted, &kept, cpu)
+        };
+        if better {
+            trial_won(name, "licm", true);
+            kept = hoisted;
+        }
+    }
     Ok(kept)
 }
 
@@ -456,7 +498,7 @@ fn items_trials(
     cpu: Cpu,
     options: Options,
     prefixes: &Prefixes,
-) -> Result<(Vec<Item>, bool, Options, bool), String> {
+) -> Result<(Vec<Item>, bool, Options, (bool, bool)), String> {
     let mut options = options;
     let (mut kept, touched) = items_once(module, name, cpu, options, prefixes)?;
     let saved = touched.global_copies;
@@ -484,7 +526,7 @@ fn items_trials(
     // div_constants_short +232 B. -O2 68020 over 165 programs: -154 B, 10
     // smaller, 6 larger; matmul 4472 M to 2258 M instructions.
     if !touched.any() || (!wants_size && !options.strict) {
-        return Ok((kept, saved, options, touched.shared_cse));
+        return Ok((kept, saved, options, (touched.shared_cse, touched.licm)));
     }
     let price = crate::timing::Price::of(wants_size);
     // first: the multiply decides the shape of the rest, and its price counts
@@ -584,7 +626,7 @@ fn items_trials(
             kept = plain;
         }
     }
-    Ok((kept, saved, options, touched.shared_cse))
+    Ok((kept, saved, options, (touched.shared_cse, touched.licm)))
 }
 
 /// Whether `function` carries through the extend flag: an `addx`, `subx` or
@@ -656,6 +698,9 @@ struct Touched {
     data_constants: bool,
     /// The shared `MachineCSE` changed the function.
     shared_cse: bool,
+    /// The shared `MachineLICM`, which this build left off, would change the
+    /// function.
+    licm: bool,
     /// A spill slot moved into an address register ([`crate::slotreg`]).
     slot_registers: bool,
     /// An instruction reads a spill slot in place ([`crate::spillfold`]).
@@ -693,17 +738,28 @@ fn size_build(
             .is_some_and(|one| has(&one.attrs, "optsize") || has(&one.attrs, "minsize"))
 }
 
+/// Whether -O1/-Os, which leave the shared `MachineLICM` off, probe it for a
+/// trial build.
+fn licm_trial_wanted(
+    options: Options,
+    wants_size: bool,
+) -> bool {
+    options.shared_licm && !options.licm_trial && (options.strict || wants_size)
+}
+
 /// Whether the shared `MachineLICM` runs on a function.
 ///
-/// DEVIATE M68K-LICM-SPEED (owner wasm-3, exit 2026-12-10, when `m68k/shared-licm-direct-copies`
-/// lands): speed builds only. A hoisted address holds a register for the loop; at -Os and -O1 the
-/// private passes lose bytes and clocks to the spills it causes (-Os +1.5 KB over 186 programs).
-/// The trial's variants read this too: a stage that does not run must not change the emission.
+/// DEVIATE M68K-LICM-SPEED (owner w9-tests, exit 2026-11-26): the pin runs it
+/// at every level but -O0. -O2/-O3 run it; -O1 and -Os run it in a trial build
+/// (`licm_trial`) kept only where it pays: a hoisted address holds a register
+/// for the loop and the private passes lose bytes to the spills (-Os +1.5 KB
+/// over 186 programs when run unconditionally). The trial's variants read this
+/// too: a stage that does not run must not change the emission.
 fn licm_runs(
     options: Options,
     wants_size: bool,
 ) -> bool {
-    options.shared_licm && !wants_size && !options.strict
+    options.shared_licm && (options.licm_trial || (!wants_size && !options.strict))
 }
 
 fn same_instructions(
@@ -1010,6 +1066,9 @@ fn items_once(
             expand_cmov(&mut function)?;
             if licm_runs(options, wants_size) {
                 function = crate::regalloc::shared_licm(&function, wants_size)?;
+            } else if licm_trial_wanted(options, wants_size) {
+                let hoisted = crate::regalloc::shared_licm(&function, wants_size)?;
+                touched.licm = !same_instructions(&function, &hoisted);
             }
             if options.shared_cse {
                 let shared = crate::regalloc::shared_cse(&function)?;
@@ -1055,6 +1114,7 @@ fn items_once(
     let first_slot = function.locals.iter().map(|local| local.0 + 1).max().unwrap_or(0);
     crate::mirdump::dump("before allocation", &function, None);
     let allocating = llrm_support::debug::span("m68k allocate");
+    let a6_for_calls = options.short && options.call_targets && crate::calltarget::pays(&function, cpu);
     let (assignment, slots) = if std::env::var_os("LLRM_M68K_SPIKE").is_some() {
         crate::regalloc::allocate_spilling_by_frequency(&mut function, first_slot)?
     } else {
@@ -1066,6 +1126,7 @@ fn items_once(
                 options.rematerialize_arguments,
                 options.global_copies,
                 options.loop_carried_first,
+                a6_for_calls,
                 options.shared_prelude.then_some(&crate::regalloc::shared_prelude as llrm_spike_mf::tolir::Prelude),
             )
         })?
@@ -1433,7 +1494,13 @@ pub fn mid_end_for_narrowing(
     narrow_multiplies: NarrowMultiplies,
     narrow_divides: bool,
 ) -> Result<Module, String> {
-    mid_end_narrowing(module, &M68k::for_cpu(cpu), Some(Rc::new(M68kMachine { cpu })), narrow_multiplies, narrow_divides)
+    mid_end_narrowing(
+        module,
+        &M68k::for_cpu(cpu),
+        Some(Rc::new(M68kMachine { cpu })),
+        narrow_multiplies,
+        narrow_divides,
+    )
 }
 
 /// [`mid_end`] with another target description: what a test compares the

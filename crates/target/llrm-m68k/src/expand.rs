@@ -93,6 +93,13 @@ fn frame_op(
             }
             return;
         }
+        // `link.w` takes a 16-bit size: a larger frame links with none and then
+        // opens the rest
+        FrameOp::Link { bytes } if *bytes > 32767 => {
+            out.push(mc::Inst { opcode: "LINK16", operands: vec![R(reg::A6), Imm(0)] });
+            out.push(sp_adjust(-bytes, short));
+            return;
+        }
         // `BuildStackAlignAND`: `and` takes no address register, so
         // through `%d0`
         FrameOp::AlignSp(align) => {
@@ -206,6 +213,22 @@ pub fn frame_ops_choosing(
     key: impl Fn(usize, u32) -> (i64, i64),
 ) -> Result<(Vec<FrameOp>, Vec<FrameOp>), String> {
     let (pin_opening, pin_closing) = (layout.prologue(), layout.epilogue());
+    // `movem` takes a 16-bit displacement: a frame larger than that has no pin
+    // shape to compare with (QuickrBasic `indent.c`: a 65 KB buffer,
+    // `MOVM32pm` operand 65308), and pushes the registers instead
+    let unencodable = |ops: &[FrameOp]| {
+        ops.iter().any(|op| {
+            matches!(
+                op,
+                FrameOp::Save { offset, .. } | FrameOp::Restore { offset, .. } if i16::try_from(*offset).is_err()
+            )
+        })
+    };
+    if unencodable(&pin_opening) || unencodable(&pin_closing) {
+        if let Some(frame) = layout.push_prologue().zip(layout.push_epilogue()) {
+            return Ok(frame);
+        }
+    }
     let mut pushed = Vec::new();
     if push_frame {
         pushed.extend(layout.push_prologue().zip(layout.push_epilogue()));
@@ -273,7 +296,7 @@ fn flush(
         while let Some((_, place)) = marks.next_if(|(at, _)| *at <= index) {
             lines.push(Line::Loc(place));
         }
-        lines.push(Line::Inst(inst));
+        lines.push(Line::Inst(crate::ariform::shorten(inst)));
     }
     lines.extend(marks.map(|(_, place)| Line::Loc(place)));
 }
@@ -317,6 +340,8 @@ pub(crate) struct FrameInputs {
     has_var_sized: bool,
     /// The frame indices, in the order of `objects`.
     pub(crate) frame_indices: Vec<i32>,
+    /// The frame operands that name each, in the same order.
+    uses: Vec<u64>,
 }
 
 impl FrameInputs {
@@ -367,16 +392,18 @@ impl FrameInputs {
             .collect();
         // the pin sets it where a dynamic alloca is built (`visitAlloca`); here
         // the live body shows it
-        let has_var_sized = insts
+        let has_var_sized = writes_stack_pointer(insts.iter().copied(), |r| physical(r, assignment));
+        let uses: Vec<u64> = frame_indices
             .iter()
-            .any(
-                |inst| inst.kind == Kind::Copy
-                    && matches!(
-                        inst.operands.first(),
-                        Some(Operand::Def(r)) if physical(*r, assignment) == reg::SP
-                    ),
-            );
-        FrameInputs { fixed, objects, used, has_calls, short, has_var_sized, frame_indices }
+            .map(|index| {
+                insts
+                    .iter()
+                    .flat_map(|inst| &inst.operands)
+                    .filter(|operand| matches!(operand, Operand::Frame(i) if i == index))
+                    .count() as u64
+            })
+            .collect();
+        FrameInputs { fixed, objects, used, has_calls, short, has_var_sized, frame_indices, uses }
     }
 
     /// The laid-out frame for a call area of `max_call_frame` bytes.
@@ -392,9 +419,48 @@ impl FrameInputs {
             stack_align: if self.short { frame::SHIPPED_STACK_ALIGN } else { 0 },
             adjusts_stack: self.has_calls,
             has_var_sized: self.has_var_sized,
+            uses: self.uses.clone(),
             ..Function::default()
         })
     }
+}
+
+/// `MachineFrameInfo::hasVarSizedObjects`: the pin sets it where a dynamic
+/// `alloca` is built (`visitAlloca`); here a copy into the stack pointer
+/// shows it. `physical` names the register an operand is in.
+fn writes_stack_pointer<'a>(
+    mut insts: impl Iterator<Item = &'a crate::mfunc::Inst>,
+    physical: impl Fn(Reg) -> RegId,
+) -> bool {
+    insts.any(|inst| {
+        inst.kind == Kind::Copy
+            && matches!(
+                inst.operands.first(),
+                Some(Operand::Def(r)) if physical(*r) == reg::SP
+            )
+    })
+}
+
+/// Whether the frame of `function` needs `%a6` (`hasFPImpl`), known before
+/// allocation: a dynamic `alloca` writes the stack pointer, and the
+/// alignment of a local decides the realignment. Where it is false `%a6` is
+/// a general register ([`crate::regalloc`],
+/// `M68kRegisterInfo::getReservedRegs`).
+pub(crate) fn needs_frame_pointer(function: &MFunction) -> bool {
+    let has_var_sized =
+        writes_stack_pointer(function.blocks.iter().flat_map(|block| &block.insts), |register| match register {
+            Reg::Phys(register) => REGISTER_INFO.root(register),
+            Reg::Virt(_) => reg::D0,
+        });
+    frame::needs_frame_pointer(&Function {
+        objects: function
+            .locals
+            .iter()
+            .map(|&(_, size, align)| Object { size, align, offset: 0, callee_saved: false, dead: false })
+            .collect(),
+        has_var_sized,
+        ..Function::default()
+    })
 }
 
 /// The largest `ADJCALLSTACKDOWN` among `insts` whose sequence `kept` keeps.
@@ -463,11 +529,24 @@ pub fn finish_with(
     let frame_of = |max_call_frame: i64| inputs.layout(max_call_frame);
     let wants_size = pushes == Some(crate::timing::Price::Size);
     let allowed = pushes;
+    // `pea (d,%sp)` has a 16-bit displacement: the frame with the widest call
+    // area is within reach
+    let widest_call = insts
+        .iter()
+        .filter_map(|inst| match (inst.kind, &inst.operands[..]) {
+            (Kind::Op("ADJCALLSTACKDOWN"), [Operand::Imm(bytes), ..]) => Some(*bytes),
+            _ => None,
+        })
+        .max()
+        .unwrap_or(0);
+    let frame_reach = frame_of(widest_call).stack_size + widest_call < 32000;
     let pushes = match pushes {
-        Some(price) => crate::callpush::plan(&insts, &blocks, assignment, cpu, price, short, |max_call_frame| {
-            let (opening, closing) = frame_ops(&frame_of(max_call_frame), cpu, push_frame, short, wants_size)?;
-            frame_cost_with(&[opening, closing].concat(), cpu, short)
-        })?,
+        Some(price) => {
+            crate::callpush::plan(&insts, &blocks, assignment, cpu, price, short, frame_reach, |max_call_frame| {
+                let (opening, closing) = frame_ops(&frame_of(max_call_frame), cpu, push_frame, short, wants_size)?;
+                frame_cost_with(&[opening, closing].concat(), cpu, short)
+            })?
+        }
         None => crate::callpush::Plan::default(),
     };
     let kept_area = call_area(&|at| pushes.keeps_frame(at));
@@ -559,8 +638,20 @@ pub fn finish_with(
     // the push of argument store `store`, `pushed` bytes down: of its value,
     // or of the memory the load folded into it reads
     let push_for = |store: usize, pushed: i64| -> Result<mc::Inst, String> {
-        if let Some((base, offset)) = pushes.address_push(store) {
-            return Ok(crate::callpush::address_push(base, offset));
+        match pushes.address_push(store) {
+            Some(crate::callpush::Address::Register(base, offset)) => {
+                return Ok(crate::callpush::address_push(base, offset));
+            }
+            Some(crate::callpush::Address::Frame(lea)) => {
+                let [_, mc::Operand::Imm(offset), mc::Operand::Reg(base)] = convert(insts[lea], pushed)?[..] else {
+                    return Err("a frame address is a displacement and a register".to_owned());
+                };
+                if i16::try_from(offset).is_err() {
+                    return Err("a pushed frame address out of 16 bits".to_owned());
+                }
+                return Ok(crate::callpush::address_push(base, offset));
+            }
+            None => {}
         }
         match pushes.folded_load(store) {
             Some(load) => {
@@ -762,7 +853,24 @@ pub fn finish_with(
                     operands: vec![mc::Operand::Reg(reg::CCR), mc::Operand::Reg(word)],
                 });
             }
-            Kind::Op("ADJCALLSTACKDOWN" | "ADJCALLSTACKUP") => {}
+            // `eliminateCallFramePseudoInstr`: with a variable-sized object
+            // the call frame is not reserved, so a call that keeps its
+            // arguments as stores lowers `%sp` first, below the alloca, and
+            // raises it after.
+            Kind::Op(name @ ("ADJCALLSTACKDOWN" | "ADJCALLSTACKUP")) => {
+                if inputs.has_var_sized {
+                    let align = if short { frame::SHIPPED_STACK_ALIGN } else { frame::STACK_ALIGN };
+                    let bytes = match operands.first() {
+                        Some(mc::Operand::Imm(bytes)) => (*bytes + align - 1) / align * align,
+                        _ => 0,
+                    };
+                    if bytes > 0 {
+                        let down = name == "ADJCALLSTACKDOWN";
+                        frame_op(&if down { FrameOp::SubSp(bytes) } else { FrameOp::AddSp(bytes) }, &mut out, short);
+                        pushed += if down { bytes } else { -bytes };
+                    }
+                }
+            }
             Kind::Op("UNREACHABLE") => {}
             Kind::Op("RET") => {
                 closing.iter().for_each(|op| frame_op(op, &mut out, short));
@@ -791,6 +899,31 @@ pub fn finish_with(
                 out.push(mc::Inst {
                     opcode: "MOVM32mp",
                     operands: vec![mc::Operand::Imm(1 << mask), mc::Operand::Imm(disp), base.clone()],
+                });
+            }
+            // `lea (d16,An)` takes a 16-bit displacement: past it the address
+            // is the base moved into the result and the displacement added (a
+            // stack buffer past 32 KiB; the 68020's `bd32` form has no encoding
+            // here)
+            Kind::Op("LEA32p")
+                if matches!(
+                    operands[..],
+                    [_, mc::Operand::Imm(d), _] if i16::try_from(d).is_err()
+                ) =>
+            {
+                let [mc::Operand::Reg(dst), mc::Operand::Imm(disp), mc::Operand::Reg(base)] = operands[..] else {
+                    return Err("LEA32p operands".to_owned());
+                };
+                if dst != base {
+                    out.push(mc::Inst {
+                        opcode: "MOV32aa",
+                        operands: vec![mc::Operand::Reg(dst), mc::Operand::Reg(base)],
+                    });
+                }
+                let (opcode, bytes) = if disp >= 0 { ("ADD32ai", disp) } else { ("SUB32ai", -disp) };
+                out.push(mc::Inst {
+                    opcode,
+                    operands: vec![mc::Operand::Reg(dst), mc::Operand::Reg(dst), mc::Operand::Imm(bytes)],
                 });
             }
             Kind::Op("MOVI32ri") => {

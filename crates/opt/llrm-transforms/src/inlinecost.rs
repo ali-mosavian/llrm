@@ -76,12 +76,21 @@
 //!   local callee, which goes with it, is the pin's. No shape of callee but the
 //!   loop and the one smaller than its call is tested. A target may say the
 //!   guard stands down for an `inlinehint` callee at an `optsize` caller
-//!   (`Tti::opt_size_inline_guard_yields_to_inlinehint`, arm64 and x86-m32: yes): the
-//!   pin's `updateThreshold` raises the threshold to `InlineHintThreshold`
-//!   (325) there, and its cost under that is the verdict (QuickrBasic
-//!   operands.c -Os `hot_operand` into `hot_int`, 26 units against two 3-unit
-//!   calls: 15,344 -> 10,400 B, the pin's 9,464). The guard still holds for a
-//!   callee with no hint.
+//!   (`Tti::opt_size_inline_guard_yields_to_inlinehint`, arm64 and x86-m32:
+//!   yes): the pin's `updateThreshold` raises the threshold to
+//!   `InlineHintThreshold` (325) there, and its cost under that is the verdict
+//!   (QuickrBasic operands.c -Os `hot_operand` into `hot_int`, 26 units against
+//!   two 3-unit calls: 15,344 -> 10,400 B, the pin's 9,464). The guard still
+//!   holds for a callee with no hint.
+//! - INLINEHINT-GROWTH-TRIAL (beyond the pin; gcc's `-Os` inliner takes a
+//!   callee only while the unit does not grow, `ipa-inline.cc`
+//!   `want_inline_small_function_p` over `estimate_edge_growth`; owner
+//!   x86-m32-b, exit 2026-11-30): where that yield passes a callee the size
+//!   guard (D11) would refuse, the caller is noted and the module compiled
+//!   again with the guard binding the hinted callee too
+//!   (`trial::with_kept_hinted_calls`, `driver/trial.rs`); the finished object
+//!   decides, because the units cannot see what the copies fold to (QB
+//!   `sfm16_dbg` -Os: `sf_clz32` inlined at six calls, +388 B).
 //! - SZ1-SITE (owner m68k-b, exit 2026-11-24): the size rule (D11) prices a
 //!   callee's instruction with the call site's constant arguments, not only a
 //!   GEP as `isGEPFree` does (z80 `rotate_small` -O1 922 -> 576 B).
@@ -1429,6 +1438,17 @@ impl<'a> Analyzer<'a> {
         {
             return false;
         }
+        // The copy folds only where the loop unrolls whole: a bound over the
+        // pin's full-unroll threshold (`pin_full_unroll_threshold`, an
+        // unrolled body of at least one instruction a trip) leaves the copy
+        // as big as the callee (switch -O2: `bench_switch(2000)` kept beside
+        // its call, +402 B for the same clocks).
+        let bound = if from_arguments(lhs) { lhs } else { rhs };
+        if let Some(Simple::Int(_, trips)) = self.constant(bound) {
+            if trips > u128::from(crate::loopunrollpass::pin_full_unroll_threshold(3)) {
+                return false;
+            }
+        }
         let Some(block) = self.callee.parent(inst) else { return false };
         let headers = loop_headers(self.callee);
         // the loop the compare ends: its own header, or the header it branches
@@ -1442,7 +1462,23 @@ impl<'a> Analyzer<'a> {
         // takes a loop with no inner loop): the constant bound of an
         // outer loop leaves its copy as big as the callee (idiv_loop_os -O2:
         // `total(300)` kept beside the call, +128 B).
-        header.is_some_and(|header| is_innermost(self.callee, header, &headers))
+        let Some(body) = header.and_then(|header| innermost_body(self.callee, header, &headers)) else { return false };
+        // The copy folds only where the loop's unrolled size is under the
+        // threshold too: the units of one trip's body, as many times as the
+        // bound (copy_runs -O2: `sum` inlined at two sites beside the calls).
+        if let Some(Simple::Int(_, trips)) = self.constant(bound) {
+            let trip: i64 = body
+                .iter()
+                .flat_map(|&block| self.callee.iter_block(BlockId(block)))
+                .map(|inst| self.code_size_of(inst).max(0))
+                .sum();
+            if trips.saturating_mul(trip.max(1) as u128)
+                > u128::from(crate::loopunrollpass::pin_full_unroll_threshold(3))
+            {
+                return false;
+            }
+        }
+        true
     }
 
     /// `isKnownNonNullInCallee` (:1974).
@@ -1688,8 +1724,10 @@ impl<'a> Analyzer<'a> {
             }
         }
         let target_reads_only = indirect
-            && matches!(&self.site.module.global(target).kind, GlobalKind::Function(function)
-                if !llrm_mir::memory::stated(&function.attrs).writes);
+            && matches!(
+                &self.site.module.global(target).kind,
+                GlobalKind::Function(function) if !llrm_mir::memory::stated(&function.attrs).writes
+            );
         if !(only_reads_memory(&info) || target_reads_only) {
             self.disable_load_elimination();
         }
@@ -1897,6 +1935,41 @@ impl<'a> Analyzer<'a> {
         }
     }
 
+    /// DEVIATE D11 (size units only): a load of a constant global at a constant
+    /// address is no code in the copy. The pin's `visitLoad` prices it
+    /// (`CallAnalyzer` does not fold loads), but `simplifyLoadInst`
+    /// (`ConstantFoldLoadFromConstPtr`) removes it right after the inline, so
+    /// the size guard must not count it: `control(cw)`'s `modes[cw >> 10 & 3]`
+    /// is a constant once `cw` is.
+    fn load_folds_after_inlining(
+        &self,
+        inst: InstId,
+    ) -> bool {
+        let operation = self.callee.instruction(inst);
+        let Opcode::Load { volatile: false, .. } = operation.opcode else { return false };
+        let layout = self.site.layout;
+        let globals = &self.site.module.globals;
+        // The address: a constant, or constant-index geps down to a global.
+        let mut at = operation.operands[0];
+        let mut offset = 0_i64;
+        while let Operand::Value(value) = at {
+            let llrm_mir::module::ValueDef::Instruction(def) = self.callee.value(value).def else { return false };
+            let Some(step) = self.gep_offset(def) else { return false };
+            offset += step;
+            at = self.callee.instruction(def).operands[0];
+        }
+        let Operand::Constant(object) = at else { return false };
+        llrm_mir::constantfolding::constant_fold_load_from_global_object(
+            self.context,
+            layout,
+            globals,
+            object,
+            Some(offset),
+            operation.ty,
+        )
+        .is_some()
+    }
+
     /// `shouldStop` (:1138).
     fn should_stop(&mut self) -> bool {
         if self.params.compute_full_inline_cost || self.cost < self.threshold {
@@ -1930,7 +2003,9 @@ impl<'a> Analyzer<'a> {
             if !self.visit(inst) {
                 // onMissedSimplification (:835)
                 self.add_cost(INSTR_COST);
-                self.size_units += self.code_size_of(inst);
+                if !self.load_folds_after_inlining(inst) {
+                    self.size_units += self.code_size_of(inst);
+                }
             } else if self.free_but_encoded(inst) {
                 self.size_units += self.code_size_of(inst);
             }
@@ -2551,13 +2626,16 @@ impl<'a> Analyzer<'a> {
         }
     }
 
-    /// DEVIATE OS-OUTLINE-TRIAL (`Tti::opt_size_inline_outline_trial`): a cold site the size bound accepts, of a callee
-    /// that goes with its calls, is noted for a second compile that keeps the call, and kept there when the finished
-    /// code is smaller. The units count a copy the lowering makes bigger (constants folded into a loop of byte
-    /// stores). True in that second compile for the sites it outlines.
+    /// DEVIATE OS-OUTLINE-TRIAL (`Tti::opt_size_inline_outline_trial`): a cold
+    /// site the size bound accepts, of a callee that goes with its calls,
+    /// is noted for a second compile that keeps the call, and kept there when
+    /// the finished code is smaller. The units count a copy the lowering
+    /// makes bigger (constants folded into a loop of byte stores). True in
+    /// that second compile for the sites it outlines.
     fn outlined_by_trial(&self) -> bool {
         let Some(tti) = self.site.tti else { return false };
-        // a site in a loop is the speed side's (`inline_hot_dying_credit_at_os`)
+        // a site in a loop is the speed side's
+        // (`inline_hot_dying_credit_at_os`)
         if !tti.opt_size_inline_outline_trial()
             || self.site.caller_size == CallerSize::Speed
             || !self.site.callee_dies
@@ -2713,6 +2791,17 @@ impl<'a> Analyzer<'a> {
             && self.growth_per_site() * 100 <= self.call_size() * percent
     }
 
+    /// DEVIATE SZ1-HOT (`Tti::opt_size_inline_hot_growth_percent`): a locally
+    /// hot site the -Os bound would hold, whose growth is within that share of
+    /// the call sequence it removes.
+    fn hot_site_within_size_growth_budget(&self) -> bool {
+        let Some(percent) = self.site.tti.and_then(|tti| tti.opt_size_inline_hot_growth_percent()) else {
+            return false;
+        };
+        let hot = self.site.relative_frequency.is_some_and(|ratio| ratio >= HOT_CALLSITE_REL_FREQ);
+        hot && self.growth_per_site() * 100 <= self.call_size() * percent
+    }
+
     /// Bytes one inlined site adds to the module: the callee's unfolded size
     /// less the call, spread over the sites when the callee dies with them.
     fn growth_per_site(&self) -> i64 {
@@ -2749,11 +2838,20 @@ impl<'a> Analyzer<'a> {
             && !self.params.o1_bound
             && trial::speed_unroll().is_none()
             && tti.unroll_speed_trial()
-            && self.adds_bytes_to_price()
+            && self.may_add_bytes_to_price()
         {
             trial::note_speed_inline();
         }
         grows
+    }
+
+    /// Whether the inline may add bytes the estimate cannot see: it prices the
+    /// operations alone, a floor (fib -O2: `bench_fib` inlined into `main` is
+    /// 2 B estimated, 8 B built: the call's argument stays for the call the
+    /// body makes, and the sign extension has its register moves), so a growth
+    /// under the call's size is still tried and the module price decides.
+    fn may_add_bytes_to_price(&self) -> bool {
+        self.growth_per_site() > 0 && !self.site.sole_call_to_local && !self.peels_linear_recursion()
     }
 
     /// Whether the inline's growth is one the byte rate prices: over the call
@@ -2775,7 +2873,10 @@ impl<'a> Analyzer<'a> {
         let growth = self.growth_per_site();
         // Growth under one call's size is inside the estimate's resolution: the
         // sites of a dying callee fold differently and must not split.
-        if rate == 0 || !self.adds_bytes_to_price() {
+        // the variant that takes no growth refuses what the estimate may have
+        // under-counted, as the trial noted it
+        let adds = if rate == trial::NO_GROW_RATE { self.may_add_bytes_to_price() } else { self.adds_bytes_to_price() };
+        if rate == 0 || !adds {
             return false;
         }
         let saved = self
@@ -2865,15 +2966,49 @@ impl<'a> Analyzer<'a> {
                         self.site.tti.is_some_and(|tti| tti.inline_o1_weighs_entry()),
                     ))
         } else {
-            let bound = !self.site.sole_call_to_local
-                && self.site.tti.is_some_and(|tti| {
-                    (!at_o1 || tti.opt_size_inline_rule_at_o1()) && tti.inline_policy().by_size.is_some_and(|rule| {
-                        self.site.callee_calls >= rule.min_sites
-                            && !(rule.yields_to_negative_cost && self.cost < 0)
-                            && !(rule.yields_to_inlinehint && self.hint_applied)
+            // `yields`: whether the hint's yield stands at this site; the trial
+            // compile that keeps the calls of a hinted callee does not take it.
+            let bound_with = |yields: bool, negative: bool| {
+                !self.site.sole_call_to_local
+                    && self.site.tti.is_some_and(|tti| {
+                        (!at_o1 || tti.opt_size_inline_rule_at_o1())
+                            && tti.inline_policy().by_size.is_some_and(|rule| {
+                                self.site.callee_calls >= rule.min_sites
+                                    && !(negative && rule.yields_to_negative_cost && self.cost < 0)
+                                    && !(yields && rule.yields_to_inlinehint && self.hint_applied)
+                            })
                     })
-                });
-            let grows = bound && self.grows_the_code() && !(at_o1 && self.hot_site_within_growth_budget());
+            };
+            // A site in a loop is the speed side's: the hint's yield stands
+            // there in the trial too, as `outlined_by_trial` leaves it.
+            let in_loop = self.site.relative_frequency.is_some_and(|ratio| ratio > 1.0);
+            let bound = bound_with(
+                !crate::trial::keeping_hinted_calls() || in_loop,
+                !crate::trial::keeping_negative_calls() || in_loop,
+            );
+            // DEVIATE HOT-INLINE-TRIAL: the hot-site yield stands except in the
+            // trial compile that keeps those calls; each it lets through is
+            // noted for that trial.
+            let mut hot_yield = bound && !at_o1 && self.grows_the_code() && self.hot_site_within_size_growth_budget();
+            if hot_yield && crate::trial::keeping_hot_calls() {
+                hot_yield = false;
+            } else if hot_yield {
+                crate::trial::note_hot_yield(
+                    self.site.module.global(self.site.caller_id).name.as_deref().unwrap_or_default(),
+                );
+            }
+            let grows =
+                bound && self.grows_the_code() && !(at_o1 && self.hot_site_within_growth_budget()) && !hot_yield;
+            // INLINEHINT-GROWTH-TRIAL: noted where only the yield let a growing
+            // call through at -Os, outside a loop.
+            if !bound && !at_o1 && !in_loop && self.grows_the_code() {
+                let name = || self.site.module.global(self.site.caller_id).name.as_deref().unwrap_or_default();
+                if self.hint_applied && bound_with(false, true) {
+                    crate::trial::note_hint_yield(name());
+                } else if self.cost < 0 && bound_with(false, false) {
+                    crate::trial::note_negative_yield(name());
+                }
+            }
             outlined = bound && !grows && self.outlined_by_trial();
             grows
         };
@@ -2883,7 +3018,11 @@ impl<'a> Analyzer<'a> {
             self.threshold = self.threshold.min(self.cost);
         }
         self.decided_by_threshold = true;
-        if self.cost < self.threshold.max(1) && !grows && !outlined { Ok(()) } else { Err("Cost over threshold.".into()) }
+        if self.cost < self.threshold.max(1) && !grows && !outlined {
+            Ok(())
+        } else {
+            Err("Cost over threshold.".into())
+        }
     }
 }
 
@@ -3021,11 +3160,21 @@ pub fn inline_cost(
             blocked: analyzer.blocked_by_bound,
             hot: !analyzer.blocked_by_bound
                 && analyzer.verdict_is_over_threshold()
-                && site.caller_size == CallerSize::Speed
-                && !params.o1_bound
+                && (!params.o1_bound || site.caller_size != CallerSize::Speed)
                 && site
                     .tti
-                    .and_then(|tti| tti.inline_hot_trial_frequency())
+                    .and_then(|tti| {
+                        // a speed caller's INL-HOT trial, or at a size build
+                        // the hot loop INL-SPEED-OS
+                        // keeps (switch_peeled_table -Os:
+                        // `pick` over the -Os threshold, 29429 T inlined at -O1
+                        // against 88421 T called)
+                        if site.caller_size == CallerSize::Speed {
+                            tti.inline_hot_trial_frequency()
+                        } else {
+                            tti.inline_hot_trial_at_size().then(|| tti.inline_trial_speed_at_size()).flatten()
+                        }
+                    })
                     .is_some_and(|least| site.relative_frequency.is_some_and(|ratio| ratio >= least as f64)),
         };
     }
@@ -3200,6 +3349,15 @@ fn is_innermost(
     header: BlockId,
     headers: &IdSet<BlockId>,
 ) -> bool {
+    innermost_body(function, header, headers).is_some()
+}
+
+/// The blocks of the natural loop of `header` where it holds no other loop.
+fn innermost_body(
+    function: &Function,
+    header: BlockId,
+    headers: &IdSet<BlockId>,
+) -> Option<std::collections::HashSet<u32>> {
     let blocks: Vec<BlockId> = function.layout().to_vec();
     let mut predecessors: HashMap<u32, Vec<BlockId>> = HashMap::default();
     for &block in &blocks {
@@ -3224,7 +3382,7 @@ fn is_innermost(
             );
         }
     }
-    body.iter().all(|&block| block == header.0 || !headers.contains(&BlockId(block)))
+    body.iter().all(|&block| block == header.0 || !headers.contains(&BlockId(block))).then_some(body)
 }
 
 /// The headers of the callee's loops: targets of a retreating edge (D7).

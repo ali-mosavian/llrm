@@ -15,6 +15,35 @@ use crate::{REGISTER_INFO, reg};
 const DATA: [RegId; 8] = [reg::D0, reg::D1, reg::D2, reg::D3, reg::D4, reg::D5, reg::D6, reg::D7];
 const ADDRESS: [RegId; 6] = [reg::A0, reg::A1, reg::A2, reg::A3, reg::A4, reg::A5];
 
+/// `%a6` after `a2` to `a5`: the allocator's last address register where the
+/// function has no frame pointer.
+const FRAME_ADDRESS: RegId = reg::A6;
+
+thread_local! {
+    static A6_FREE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// `run` with `%a6` a general register or not, for the allocator it calls:
+/// `M68kRegisterInfo::getReservedRegs` reserves the frame pointer only
+/// where `M68kFrameLowering::hasFP`.
+pub fn a6_free_scoped<R>(
+    free: bool,
+    run: impl FnOnce() -> R,
+) -> R {
+    let before = A6_FREE.with(|one| one.replace(free));
+    let result = run();
+    A6_FREE.with(|one| one.set(before));
+    result
+}
+
+fn address_registers() -> Vec<RegId> {
+    let mut registers = ADDRESS.to_vec();
+    if A6_FREE.with(std::cell::Cell::get) {
+        registers.push(FRAME_ADDRESS);
+    }
+    registers
+}
+
 /// The registers a call leaves unspecified (`CSR_STD` keeps the rest), data
 /// registers first as the pin has them.
 const CALLER_SAVED: [RegId; 4] = [reg::D0, reg::D1, reg::A0, reg::A1];
@@ -120,15 +149,15 @@ impl<const ADDRESS_FIRST: bool, const ARGUMENT_REMAT: bool, const GLOBAL_COPIES:
     fn candidates(class: Class) -> Vec<RegId> {
         match class {
             Class::Dr8 | Class::Dr16 | Class::Dr32 => DATA.to_vec(),
-            Class::Ar32 => ADDRESS.to_vec(),
+            Class::Ar32 => address_registers(),
             // the registers a call clobbers anyway first, then the saved ones:
             // a saved register costs a push and a pop (`RegisterClassInfo`
             // orders the callee-saved last)
             Class::Xr32 => (if ADDRESS_FIRST { CALLER_SAVED_ADDRESS_FIRST } else { CALLER_SAVED })
                 .iter()
                 .chain(DATA.iter().filter(|one| !CALLER_SAVED.contains(one)))
-                .chain(ADDRESS.iter().filter(|one| !CALLER_SAVED.contains(one)))
                 .copied()
+                .chain(address_registers().into_iter().filter(|one| !CALLER_SAVED.contains(one)))
                 .collect(),
         }
     }
@@ -162,7 +191,7 @@ impl<const ADDRESS_FIRST: bool, const ARGUMENT_REMAT: bool, const GLOBAL_COPIES:
     }
 
     fn reserved(root: RegId) -> bool {
-        root == reg::SP || root == reg::A6
+        root == reg::SP || root == reg::A6 && !A6_FREE.with(std::cell::Cell::get)
     }
 
     fn flags_register() -> Option<RegId> {
@@ -275,6 +304,7 @@ pub fn allocate_greedy(
         rematerialize_arguments,
         global_copies,
         loop_carried_first,
+        false,
         None,
     )
 }
@@ -288,6 +318,7 @@ pub fn allocate_greedy_after(
     rematerialize_arguments: bool,
     global_copies: bool,
     loop_carried_first: bool,
+    a6_for_calls: bool,
     prelude: Option<llrm_spike_mf::tolir::Prelude>,
 ) -> Result<(Assignment, Vec<(i32, Class)>), String> {
     // each option is a type parameter: the allocator reads them as constants
@@ -300,24 +331,38 @@ pub fn allocate_greedy_after(
         llrm_spike_mf::tolir::allocate_greedy_after::<Registers<A, R, G, L>>(function, regs, size, prelude)
     }
     let regs = llrm_lir::registers::Regs(&REGISTER_INFO);
-    match (address_first, rematerialize_arguments, global_copies, loop_carried_first) {
-        (true, true, true, true) => run::<true, true, true, true>(function, regs, size, prelude),
-        (true, true, true, false) => run::<true, true, true, false>(function, regs, size, prelude),
-        (true, true, false, true) => run::<true, true, false, true>(function, regs, size, prelude),
-        (true, true, false, false) => run::<true, true, false, false>(function, regs, size, prelude),
-        (true, false, true, true) => run::<true, false, true, true>(function, regs, size, prelude),
-        (true, false, true, false) => run::<true, false, true, false>(function, regs, size, prelude),
-        (true, false, false, true) => run::<true, false, false, true>(function, regs, size, prelude),
-        (true, false, false, false) => run::<true, false, false, false>(function, regs, size, prelude),
-        (false, true, true, true) => run::<false, true, true, true>(function, regs, size, prelude),
-        (false, true, true, false) => run::<false, true, true, false>(function, regs, size, prelude),
-        (false, true, false, true) => run::<false, true, false, true>(function, regs, size, prelude),
-        (false, true, false, false) => run::<false, true, false, false>(function, regs, size, prelude),
-        (false, false, true, true) => run::<false, false, true, true>(function, regs, size, prelude),
-        (false, false, true, false) => run::<false, false, true, false>(function, regs, size, prelude),
-        (false, false, false, true) => run::<false, false, false, true>(function, regs, size, prelude),
-        (false, false, false, false) => run::<false, false, false, false>(function, regs, size, prelude),
+    let a6_free = !a6_for_calls && !crate::expand::needs_frame_pointer(function);
+    let allocated =
+        a6_free_scoped(a6_free, || match (address_first, rematerialize_arguments, global_copies, loop_carried_first) {
+            (true, true, true, true) => run::<true, true, true, true>(function, regs, size, prelude),
+            (true, true, true, false) => run::<true, true, true, false>(function, regs, size, prelude),
+            (true, true, false, true) => run::<true, true, false, true>(function, regs, size, prelude),
+            (true, true, false, false) => run::<true, true, false, false>(function, regs, size, prelude),
+            (true, false, true, true) => run::<true, false, true, true>(function, regs, size, prelude),
+            (true, false, true, false) => run::<true, false, true, false>(function, regs, size, prelude),
+            (true, false, false, true) => run::<true, false, false, true>(function, regs, size, prelude),
+            (true, false, false, false) => run::<true, false, false, false>(function, regs, size, prelude),
+            (false, true, true, true) => run::<false, true, true, true>(function, regs, size, prelude),
+            (false, true, true, false) => run::<false, true, true, false>(function, regs, size, prelude),
+            (false, true, false, true) => run::<false, true, false, true>(function, regs, size, prelude),
+            (false, true, false, false) => run::<false, true, false, false>(function, regs, size, prelude),
+            (false, false, true, true) => run::<false, false, true, true>(function, regs, size, prelude),
+            (false, false, true, false) => run::<false, false, true, false>(function, regs, size, prelude),
+            (false, false, false, true) => run::<false, false, false, true>(function, regs, size, prelude),
+            (false, false, false, false) => run::<false, false, false, false>(function, regs, size, prelude),
+        });
+    let (assignment, slots) = allocated?;
+    // The frame was judged before allocation; a body the allocator left that
+    // needs the frame pointer must not have been given `%a6`.
+    if a6_free && assignment.0.iter().any(|register| REGISTER_INFO.root(*register) == FRAME_ADDRESS) {
+        if crate::expand::needs_frame_pointer(function) {
+            return Err(format!(
+                "{}: %a6 was allocated in a function that needs it as the frame pointer",
+                function.name
+            ));
+        }
     }
+    Ok((assignment, slots))
 }
 
 /// `MachineSinking` over the m68k function.
@@ -419,8 +464,8 @@ pub fn shared_licm(
         llrm_lir::registers::Regs(arch.registers()),
         arch.operand_bytes(),
     );
-    shared_stage(function, |classes, _| {
-        Box::new(llrm_codegen::backend::machinelicm::MachineLicm { classes, segments, size })
+    shared_stage(function, |classes, constrain| {
+        Box::new(llrm_codegen::backend::machinelicm::MachineLicm { classes, segments, size, constrain: Some(constrain) })
     })
 }
 

@@ -271,7 +271,7 @@ whole_program = true
 description = "m68k"
 triple = "m68k-unknown-linux-gnu"
 datalayout = "{datalayout:m68k}"
-clang = ["-target", "m68k-unknown-linux-gnu", "-mcpu=68000", "-ffreestanding"]
+clang = ["-target", "m68k-unknown-linux-gnu", "-mcpu=68000"]
 llc = ["-mcpu=68000"]
 llc_program = "llrm-m68k-llc"
 llc_mcmodel = true
@@ -284,7 +284,7 @@ link = []
 description = "m68k"
 triple = "m68k-unknown-linux-gnu"
 datalayout = "{datalayout:m68k}"
-clang = ["-target", "m68k-unknown-linux-gnu", "-mcpu=68020", "-ffreestanding"]
+clang = ["-target", "m68k-unknown-linux-gnu", "-mcpu=68020"]
 llc = ["-mcpu=68020"]
 llc_program = "llrm-m68k-llc"
 llc_mcmodel = true

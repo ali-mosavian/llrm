@@ -269,6 +269,7 @@ fn the_table_gives_the_effects_the_decoder_does() {
                             repeat: false,
                             lock: false,
                             table_id: None,
+                            computed: false,
                             pops: None,
                             tied: None,
                         };
@@ -351,6 +352,7 @@ fn the_table_follows_the_encoder_into_what_it_lowers_to() {
         repeat: false,
         lock: false,
         table_id: None,
+        computed: false,
         pops: None,
         tied: None,
     };

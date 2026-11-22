@@ -22,8 +22,11 @@
 //! `llvm.vector.reduce.*` of the result is combined with the values left over
 //! as `op.rdx` (flags other than wrap are what `createOp` keeps).
 //!
-//! DEVIATE SLP-RDX1 (owner w11, exit 2026-11-24): the windows of loads that
-//! are already in ascending order and whose scalars have one use; no
+//! DEVIATE SLP-RDX1 (owner w11, exit 2026-11-24): the old load-slice path
+//! runs first and the tree path only when it finds nothing; the tree's total
+//! on jpeg_fixed is -6 where the pin's is -4 (no per-entry oracle yet); the
+//! windows of loads that are already in ascending order and whose scalars
+//! have one use; no
 //! reordered or externally used lanes (`ExternalUses`, the reorder
 //! shuffle), no scale by the loop's trip count (it multiplies every entry and
 //! the reduction alike, so the sign of the total is the one used here), no
@@ -39,7 +42,8 @@
 //! `slpvectorize`.
 //!
 //! # Example
-//! Forty `sext i16` loads of consecutive cells, summed by a chain of `add i64`, become two vector loads and one reduction (the tile test).
+//! Forty `sext i16` loads of consecutive cells, summed by a chain of `add i64`,
+//! become two vector loads and one reduction (the tile test).
 //!
 //! ```text
 //! %x0 = sext i16 (load [i]) to i64 ; ... x39, summed by add i64
@@ -237,13 +241,14 @@ fn lane_ty(bits: u32) -> Ty {
 #[allow(clippy::too_many_arguments)]
 fn worthwhile(
     context: &Context,
+    function: &Function,
     tti: &dyn Tti,
     op: BinaryOp,
     reduced_bits: u32,
     window: &[Leaf],
     first_part: bool,
 ) -> bool {
-    let kind = CostKind::RecipThroughput;
+    let kind = crate::slptree::cost_kind(function);
     let width = window.len() as u32;
     let load_bits = int_ty(context, window[0].loaded).expect("an integer load");
     let load_lane = lane_ty(load_bits);
@@ -414,7 +419,7 @@ fn windows(
         let consecutive = window.windows(2).all(|pair| pair[1].disp == pair[0].disp + i64::from(load_bits / 8));
         if consecutive
             && movable(function, block, window)
-            && worthwhile(context, tti, chain.op, reduced_bits, window, parts.is_empty())
+            && worthwhile(context, function, tti, chain.op, reduced_bits, window, parts.is_empty())
         {
             parts.push(Part { start: pos, width });
             pos += width;
@@ -564,37 +569,7 @@ fn rewrite(
         });
     }
     let (vector, width) = total.expect("a part");
-    let vector_ty = vector_of(context, result_ty, width);
-    let function_type =
-        context.types.intern(Type::Function { returns: result_ty, parameters: vec![vector_ty], variadic: false });
-    let kind = match reduce_kind(chain.op).expect("a reduction") {
-        ReduceKind::Add => "add",
-        ReduceKind::Mul => "mul",
-        ReduceKind::And => "and",
-        ReduceKind::Or => "or",
-        ReduceKind::Xor => "xor",
-        other => unreachable!("not an integer reduction: {other:?}"),
-    };
-    let name = format!("llvm.vector.reduce.{kind}.{}", llrm_mir::intrinsics::mangle(&context.types, vector_ty));
-    let callee = declared.declare(&name, function_type);
-    let pointer = context.types.ptr(0);
-    let callee = Operand::Constant(context.constant(Constant { ty: pointer, kind: ConstantKind::Global(callee) }));
-    let call = function.create_instruction(
-        Opcode::Call(Box::new(CallInfo {
-            function_type,
-            calling_convention: 0,
-            return_attrs: Vec::new(),
-            argument_attrs: vec![Vec::new()],
-            attrs: Vec::new(),
-            tail: Tail::default(),
-        })),
-        result_ty,
-        vec![vector, callee],
-        Flags::default(),
-        Some("rdx"),
-    );
-    function.insert(call, Position::Before(root)).expect("the root's block");
-    let mut done = result_of(function, call);
+    let mut done = reduce_call(context, declared, function, vector, width, chain.op, result_ty, root);
     // The values left over: `op.rdx`, the vector total first.
     let taken: Vec<InstId> = parts
         .iter()
@@ -662,6 +637,138 @@ fn erase_if_dead(
     }
 }
 
+/// `llvm.vector.reduce.<op>` of `vector` (`width` lanes), before `root`.
+#[allow(clippy::too_many_arguments)]
+fn reduce_call(
+    context: &mut Context,
+    declared: &mut Declared,
+    function: &mut Function,
+    vector: Operand,
+    width: usize,
+    op: BinaryOp,
+    result_ty: TypeId,
+    root: InstId,
+) -> Operand {
+    let vector_ty = vector_of(context, result_ty, width);
+    let function_type =
+        context.types.intern(Type::Function { returns: result_ty, parameters: vec![vector_ty], variadic: false });
+    let kind = match reduce_kind(op).expect("a reduction") {
+        ReduceKind::Add => "add",
+        ReduceKind::Mul => "mul",
+        ReduceKind::And => "and",
+        ReduceKind::Or => "or",
+        ReduceKind::Xor => "xor",
+        other => unreachable!("not an integer reduction: {other:?}"),
+    };
+    let name = format!("llvm.vector.reduce.{kind}.{}", llrm_mir::intrinsics::mangle(&context.types, vector_ty));
+    let callee = declared.declare(&name, function_type);
+    let pointer = context.types.ptr(0);
+    let callee = Operand::Constant(context.constant(Constant { ty: pointer, kind: ConstantKind::Global(callee) }));
+    let call = function.create_instruction(
+        Opcode::Call(Box::new(CallInfo {
+            function_type,
+            calling_convention: 0,
+            return_attrs: Vec::new(),
+            argument_attrs: vec![Vec::new()],
+            attrs: Vec::new(),
+            tail: Tail::default(),
+        })),
+        result_ty,
+        vec![vector, callee],
+        Flags::default(),
+        Some("rdx"),
+    );
+    function.insert(call, Position::Before(root)).expect("the root's block");
+    result_of(function, call)
+}
+
+/// `tryToReduce` over the reduced values of `chain`, grouped by what they are
+/// (the same opcode and type, constants, and the rest): each group of
+/// [`REDUCTION_LIMIT`] or more is cut into windows, the width from
+/// `GetVectorFactor` down and each width slid along the group, the first
+/// window whose tree pays is made (DEVIATE SLP-RDX1: one window of a chain; the
+/// rest of the values are combined as `op.rdx`, in the chain's order, not the
+/// pin's later windows and its identity-operation scales).
+#[allow(clippy::too_many_arguments)]
+fn try_tree(
+    context: &mut Context,
+    layout: &DataLayout,
+    function: &mut Function,
+    declared: &mut Declared,
+    outer: &Outer,
+    tti: &dyn Tti,
+    block: BlockId,
+    chain: &Chain,
+) -> bool {
+    let groups = {
+        let mut groups: Vec<Vec<Operand>> = Vec::new();
+        for value in chain.values.iter().rev() {
+            let key = |operand: &Operand| -> (u8, Option<Opcode>, Option<TypeId>) {
+                match operand {
+                    Operand::Value(id) => match function.value(*id).def {
+                        ValueDef::Instruction(inst) if function.parent(inst) == Some(block) => {
+                            (0, Some(function.instruction(inst).opcode.clone()), Some(function.value(*id).ty))
+                        }
+                        _ => (1, None, Some(function.value(*id).ty)),
+                    },
+                    _ => (2, None, None),
+                }
+            };
+            match groups.iter_mut().find(|group| key(&group[0]) == key(value)) {
+                Some(group) => group.push(*value),
+                None => groups.push(vec![*value]),
+            }
+        }
+        groups
+    };
+    let info = crate::slptree::ReductionInfo { op: chain.op, links: chain.links.clone(), leftovers: Vec::new() };
+    let lane_bits = int_ty(context, function.instruction(chain.root).ty).expect("an integer chain");
+    let tree = {
+        let unit = MemUnit::within(context, layout, function, outer);
+        let mut session = llrm_analysis::scev::analysis::ScevSession::of(unit.context, function, outer);
+        session.ask_within(unit.context, layout, &outer.globals, &outer.metadata, function, |se, cx| {
+            let scaler = crate::slptree::Scaler::new(se, cx);
+            for group in &groups {
+                if group.len() < REDUCTION_LIMIT || matches!(group[0], Operand::Constant(_)) {
+                    continue;
+                }
+                let n = group.len();
+                let mut width = vector_factor(tti, lane_bits, n).min(MAX_ELTS);
+                let mut pos = 0;
+                while width >= REDUCTION_LIMIT {
+                    while pos + width <= n {
+                        let window = &group[pos..pos + width];
+                        if let Some(tree) =
+                            crate::slptree::try_reduction(&unit, function, block, &info, window, tti, &scaler)
+                        {
+                            let mut info = info.clone();
+                            // The values left out: the chain's order, the last
+                            // operand first.
+                            info.leftovers =
+                                chain.values.iter().rev().filter(|value| !window.contains(value)).copied().collect();
+                            return Some(crate::slptree::with_reduction(tree, info));
+                        }
+                        pos += 1;
+                    }
+                    pos = 0;
+                    width -= 1;
+                    if width > 1 {
+                        width = vector_factor(tti, lane_bits, width);
+                    }
+                }
+            }
+            None
+        })
+    };
+    match tree {
+        Some(tree) => {
+            crate::slptree::emit(context, layout, declared, function, &tree, None);
+            true
+        }
+        None => false,
+    }
+}
+
 /// The horizontal reductions of `function`; whether any was made.
 pub fn run_function(
     context: &mut Context,
@@ -712,11 +819,62 @@ pub fn run_function(
                 }
                 best
             };
-            let Some((slice, parts)) = plan else { continue };
+            let Some((slice, parts)) = plan else {
+                // Not consecutive loads: the tree of the reduced values.
+                if try_tree(context, layout, function, declared, outer, tti, block, &chain) {
+                    taken.extend(chain.links.iter().copied());
+                    changed = true;
+                }
+                continue;
+            };
             taken.extend(chain.links.iter().copied());
             rewrite(context, declared, function, block, &chain, &slice, &parts);
             changed = true;
         }
     }
     changed
+}
+
+/// `getReductionCost` of a reduction tree's window of `width` values of `lane`:
+/// the vector reduction less the scalar chain it replaces.
+pub(crate) fn tree_reduction_cost(
+    tti: &dyn Tti,
+    kind: CostKind,
+    op: BinaryOp,
+    lane: Ty,
+    width: usize,
+) -> Option<i64> {
+    let valid = |cost: llrm_mir::tti::Cost| cost.valid.then_some(cost.value);
+    let arith = valid(tti.arithmetic_cost(arith_of(op), lane, kind, OperandInfo::default(), OperandInfo::default()))?;
+    let reduce =
+        valid(tti.vector_reduction_cost(reduce_kind(op)?, VectorTy { lane, count: width as u32 }, false, kind)?)?;
+    Some(reduce - arith * (width as i64 - 1))
+}
+
+/// The vector reduction of a reduction tree's root vector, the values left out
+/// combined into it as `op.rdx`, in place of the chain's result.
+pub(crate) fn emit_tree_reduction(
+    context: &mut Context,
+    declared: &mut Declared,
+    function: &mut Function,
+    info: &crate::slptree::ReductionInfo,
+    vector: Operand,
+    width: usize,
+) {
+    let root = info.links[0];
+    let result_ty = function.instruction(root).ty;
+    let mut done = reduce_call(context, declared, function, vector, width, info.op, result_ty, root);
+    for value in &info.leftovers {
+        let made = function.create_instruction(
+            Opcode::Binary(info.op),
+            result_ty,
+            vec![done, *value],
+            Flags::default(),
+            Some("op.rdx"),
+        );
+        function.insert(made, Position::Before(root)).expect("the root's block");
+        done = result_of(function, made);
+    }
+    let root_value = function.instruction(root).result.expect("a chain root's value");
+    function.replace_all_uses_with(root_value, done);
 }

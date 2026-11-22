@@ -43,6 +43,6 @@ fn a_hot_multiply_keeps_the_cold_division_small() {
     let ir = format!("target datalayout = \"{}\"\n{IR}", datalayout());
     let text = assembly(&ir, &Request::new(Level::O2)).unwrap_or_else(|e| panic!("{e}"));
     assert!(text.contains("__mulsi3_fast"), "{text}");
-    assert!(text.contains("__divsi3_fast_small"), "{text}");
+    assert!(text.contains("__divsi3_fast_lean"), "{text}");
     assert!(!text.contains("__divsi3_fast\n"), "{text}");
 }

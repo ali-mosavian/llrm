@@ -121,6 +121,15 @@ pub(super) fn to_op(
                 targets.iter().map(|label| cx.block(&Target::Label(label.clone()))).collect::<Result<_, _>>()?;
             what
         }
+        // Computed: the targets are its successors, and no table is emitted.
+        Op::IndirectJump { rn, targets } => {
+            let mut what = semantics(Operation::Jump, "BR", vec![], vec![gpr_loc(*rn, Width::X)], None);
+            what.indirect = true;
+            what.computed = true;
+            what.table =
+                targets.iter().map(|label| cx.block(&Target::Label(label.clone()))).collect::<Result<_, _>>()?;
+            what
+        }
         Op::DbgValue { .. } => semantics(Operation::Nothing, "DBG_VALUE", vec![], vec![], None),
         _ => return Ok(None),
     }))
@@ -160,6 +169,10 @@ pub(super) fn back(
         "B" => Op::I(Inst::Branch { link: false, target: block()? }),
         "BL" => Op::I(Inst::Branch { link: true, target: cx.target_of(&s[0]) }),
         "Bcc" => Op::I(Inst::BranchCond { cond: member(&CONDS, &s[0]), target: block()? }),
+        "BR" if what.computed => Op::IndirectJump {
+            rn: gpr_of(&s[0]),
+            targets: what.table.iter().map(|&at| cx.template.blocks[at as usize].label.clone()).collect(),
+        },
         "BR" => Op::I(Inst::BranchReg { link: false, rn: gpr_of(&s[0]) }),
         "BLR" => Op::I(Inst::BranchReg { link: true, rn: gpr_of(&s[0]) }),
         "TBZ" | "TBNZ" => Op::I(Inst::TestBranch {

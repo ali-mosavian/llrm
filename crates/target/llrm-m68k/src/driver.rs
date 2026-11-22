@@ -240,6 +240,7 @@ fn lowered(
     let _ = trial::take();
     let _ = trial::take_refused();
     let mut base = lowered_once(text, cpu, level, dump, policy)?;
+    let backend = Options { code_model: model_of(&base, backend.code_model)?, ..backend };
     let (mut noted, mut units) = trial::take();
     let small = matches!(level, Level::Os | Level::Oz);
     // Each side's differing functions are lowered in the side's own module,
@@ -347,7 +348,16 @@ fn lowered(
         }
     }
     let limit = if matches!(level, Level::O1 | Level::Os | Level::Oz) {
-        M68kMachine { cpu }.tti().and_then(|tti| tti.unroll_trial_at_size())
+        M68kMachine { cpu }.tti().and_then(|tti| {
+            let size = tti.unroll_trial_at_size();
+            // DEVIATE UNROLL-NEST-O1: the pin's threshold for a loop
+            // with a subloop.
+            if level == Level::O1 && tti.unroll_trial_nests_at_o1() {
+                size.max(Some(llrm_transforms::loopunrollpass::pin_full_unroll_threshold(1)))
+            } else {
+                size
+            }
+        })
     } else {
         // DEVIATE UNROLL-NEST-TRIAL (-O2, -O3): the pin's threshold, for the
         // loops with a subloop
@@ -542,6 +552,7 @@ pub fn assembly_flagged(
     let backend = Options { debug, code_model: model, ..default_backend(level) };
     let optimized = lowered(text, cpu, level, dump, policy, backend)?;
     let module = &optimized.module;
+    let backend = Options { code_model: model_of(module, model)?, ..backend };
     let mut out = String::new();
     for (name, items) in function_items(module, cpu, backend, optimized.kept.as_ref())? {
         let global = module.global(module.named(&name).ok_or("a function with no global")?);
@@ -556,6 +567,20 @@ pub fn assembly_flagged(
         llrm_mir::datalayout::DataLayout::parse(module.datalayout.as_deref().ok_or("a module with no datalayout")?)?;
     out.push_str(&crate::data::assembly(module, &layout)?);
     Ok(out)
+}
+
+/// `model` with [`CodeModel::Auto`] settled by the bytes of globals `module` defines.
+fn model_of(
+    module: &llrm_mir::module::Module,
+    model: CodeModel,
+) -> Result<CodeModel, String> {
+    if model != CodeModel::Auto {
+        return Ok(model);
+    }
+    let layout =
+        llrm_mir::datalayout::DataLayout::parse(module.datalayout.as_deref().ok_or("a module with no datalayout")?)?;
+    let variables = llrm_mir::image::variables(module, &layout, &|name| crate::data::symbol(name))?;
+    Ok(model.resolved(variables.iter().map(|one| one.bytes.len()).sum()))
 }
 
 /// `text` as an ELF32 big-endian relocatable object: the functions' code in
@@ -604,6 +629,7 @@ pub fn object_flagged(
     let backend = Options { code_model: model, ..default_backend(level) };
     let lowered = lowered(text, cpu, level, dump, policy, backend)?;
     let module = lowered.module;
+    let backend = Options { code_model: model_of(&module, model)?, ..backend };
     let mut items = Vec::new();
     let mut exports = llrm_support::hash::HashMap::default();
     for (function_name, one) in function_items(&module, cpu, backend, lowered.kept.as_ref())? {

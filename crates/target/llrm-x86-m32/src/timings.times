@@ -46,6 +46,13 @@ cache_line             =    =
 # Clocks to fill one such line (a burst): the instruction cache's cost of a code byte once per run; 486 and Pentium state it
 # (their CPU files), later CPUs do not.
 line_fill_clocks             =    = 
+# TailDuplicatePass after allocation (the pin runs it for every x86 target): an interpreter's computed-goto dispatch,
+# factored into one block, is copied into each handler (`terminatorIsComputedGotoWithSuccessors`, up to 10 instructions).
+post_ra_tail_duplicate  1    1
+# The dispatch of a computed goto is copied into its handlers at -Os too, as the pin does (TL4 is
+# dropped): QB exec.c 15,693 -> 17,529 B (gcc16 18,562), host instructions -5..-11%.
+# DEVIATE INLINE-FRAME-SIZE (owner x86-m32-b, exit 2026-12-05): see TimingTable::register_inline_frees_frame_at_size.
+register_inline_frees_frame_at_size 1 1
 # DEVIATE TAILDUP-HOT (owner x86-m32): gcc copies up to 8 instructions where it optimises for speed. Stated cost:
 # x_jpeg_fixed/x_jpeg_single -O2 +32 B at 0 clk (a cold error tail in a loop; static frequency cannot tell). Exit: profile-fed frequencies (program PGO).
 tail_dup_hot_threshold  8    8

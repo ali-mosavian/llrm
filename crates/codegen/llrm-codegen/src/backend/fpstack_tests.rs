@@ -311,6 +311,7 @@ fn test_a_value_stays_on_the_stack_across_a_port_write() {
         repeat: false,
         lock: false,
         table_id: None,
+        computed: false,
         pops: None,
         tied: None,
     };

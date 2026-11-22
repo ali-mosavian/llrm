@@ -416,6 +416,9 @@ impl llrm_target::Target for M64 {
                     .map(|one| {
                         one.with_tuning(llrm_mir::target::Tuning {
                             inline_size_guard_at_size: true,
+                            // DEVIATE LATE-MEMCPYOPT-SIZE (owner x86-m32-b, exit 2026-12-12): see
+                            // Tuning. QB m64 Os -119 B (synth -63, dialog -56), no file worse.
+                            late_memcpyopt_at_size: true,
                             // DEVIATE MEMSET-GAP (owner llrm-target-x86-m16-b, exit 2026-11-27): see Tuning.
                             memset_gap_merge_at_size: true,
                             // DEVIATE LFTR-SIZE (owner llrm-target-x86-m64, exit 2026-11-24; gcc-bar only): see
@@ -426,6 +429,9 @@ impl llrm_target::Target for M64 {
                             inline_trial_defers_to_shared_growth: true,
                             // DEVIATE IPRA-DSO-LOCAL (owner llrm-target-x86-m64, exit 2026-11-24): see Tuning.
                             ipra_binds_local: true,
+                            // DEVIATE PHIOPT-ARM (owner x87-cordic-2, exit 2026-11-28): see
+                            // `Tuning::phiopt_one_feeding_statement`; gcc's phiopt keeps a nested diamond.
+                            phiopt_one_feeding_statement: true,
                             // DEVIATE SD443 (owner w9, exit 2026-11-24: a constant-argument pass
                             // after inlining, as gcc's IPA-CP): see the m32 entry; m64 -O2
                             // memory_expansion.c text -3281 B.
@@ -440,6 +446,8 @@ impl llrm_target::Target for M64 {
                             merge_functions_at_size: true,
                             rep_movs_at_size: true,
                             rep_movs_at_size_max: u64::MAX,
+                            // DEVIATE REP-MOVS-SPEED (owner llrm-target-x86-m64-b, exit 2026-11-30): see Tuning.
+                            rep_movs_at_speed_max: 8192,
                             // DEVIATE IU1 (owner llrm-target-x86-m64, exit 2026-11-24): see
                             // `Tti::lsr_users_in_use_list_order`.
                             lsr_users_in_use_list_order: true,
@@ -447,12 +455,16 @@ impl llrm_target::Target for M64 {
                             // `Tti::lsr_phi_users_first`.
                             lsr_phi_users_first: true,
                             lsr_size_order: true,
+                            // DEVIATE X86V3 (owner llrm-target-x86-m64-b, exit 2026-11-30): see Tuning.
+                            vector_float_costs: true,
                             // DEVIATE LSR-DROP-AT-SIZE (owner llrm-target-x86-m64-b, exit 2026-11-30): see Tuning.
                             lsr_drop_worse_at_size: true,
                             // Pin order: visitADD's or-disjoint, then pushAddIntoCmovOfConsts; see Tuning.
                             add_to_or_disjoint: true,
                             // DEVIATE LV-OS (owner llrm-target-x86-m64, exit 2026-11-24): see Tuning.
                             vectorize_at_size: false,
+                            // The selector has `pcmp*`, `cmpps`, `cmppd` and the mask select.
+                            vector_compares: true,
                             // DEVIATE LV-BW (owner llrm-target-x86-m64-b, exit 2026-11-24): see Tuning.
                             maximize_vector_bandwidth: true,
                             // DEVIATE LV-ACC (owner llrm-target-x86-m64-b, exit 2026-11-30): see Tuning.
@@ -462,6 +474,10 @@ impl llrm_target::Target for M64 {
                             // LI-18 (owner llrm-target-x86-m64-b): `bsr`/`bsf` are one instruction.
                             shift_loop_counts: true,
                             lsr_size_x86_64: true,
+                            // DEVIATE X64-PIE-SCALE (owner llrm-target-x86-m64-b, exit 2026-12-12): see Tuning.
+                            pie_scaled_symbol: true,
+                            // DEVIATE X64-TRUTH-XOR (owner llrm-target-x86-m64-b, exit 2026-12-12): see Tuning.
+                            truth_compare_xor: true,
                             // DEVIATE MUL-OS64 (owner w9, exit 2026-11-20): the m32 MUL-OS entry
                             // at m64; gcc keeps the 3-byte `imul` at -Os where the pin makes
                             // `mov; shl; sub` (x * 31). select_of_constants -Os was +1519 B
@@ -493,6 +509,10 @@ impl llrm_target::Target for M64 {
                             // callee with one site too; the pin copies it (crc, floats,
                             // tile -Os: gcc keeps the call, +40 B each).
                             inline_size_guard_single_site: true,
+                            // The SZ1 guard yields where the pin's `updateThreshold` raises an `inlinehint`
+                            // callee to 325 at an `optsize` caller, as at m32 (QB operands.c `hot_operand`
+                            // into `hot_int`: 16,542 -> 11,101 B).
+                            inline_size_guard_yields_to_inlinehint: true,
                             // DEVIATE UP1-REG at m64 (owner m64, exit 2026-11-20): promoted
                             // arrays that exceed the registers are not free (fpbench -O2
                             // +815 B for -75 clocks). The byte rate follows the clock pricing.

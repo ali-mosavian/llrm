@@ -104,6 +104,29 @@ pub trait Hooks {
         None
     }
 
+    /// `makeLibCall` on `chain`: the call is ordered after what `chain` ends
+    /// and its out chain is returned with the result (a constrained FP node's
+    /// routine must not move across a rounding-mode change). `None` where the
+    /// target cannot make one.
+    /// Whether a routine `make_lib_call_chained` has no answer for is called
+    /// by the target's native C convention (integer and scalar float
+    /// arguments in the registers it names).
+    fn calls_by_native_convention(&self) -> bool {
+        false
+    }
+
+    fn make_lib_call_chained(
+        &mut self,
+        _dag: &mut SelectionDAG,
+        _name: &'static str,
+        _args: &[SDValue],
+        _ret: EVT,
+        _signed: bool,
+        _chain: SDValue,
+    ) -> Option<(SDValue, SDValue)> {
+        None
+    }
+
     /// `makeLibCall` after type legalization, for a result too wide for a
     /// register: the routine `name` with `args`, its result the parts `rets`
     /// (the pin's `MERGE_VALUES` operands, in register order); `None` where the
@@ -143,6 +166,9 @@ pub struct DagLegalizer<'a, H: Hooks> {
     dag: &'a mut SelectionDAG,
     tli: &'a TargetLowering,
     hooks: &'a mut H,
+    /// The target whose C convention a routine is called by, where its hooks
+    /// say so ([`Hooks::calls_by_native_convention`]).
+    target: Option<&'a dyn llrm_target::Target>,
     legalized: HashSet<u32>,
     /// The topological sweeps `run` made.
     pub sweeps: u32,
@@ -155,7 +181,41 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         hooks: &'a mut H,
     ) -> DagLegalizer<'a, H> {
         let legalized = HashSet::with_capacity_and_hasher(dag.nodes().len(), Default::default());
-        DagLegalizer { dag, tli, hooks, legalized, sweeps: 0 }
+        DagLegalizer { dag, tli, hooks, target: None, legalized, sweeps: 0 }
+    }
+
+    /// The target a library routine is called through.
+    pub fn with_target(
+        mut self,
+        target: &'a dyn llrm_target::Target,
+    ) -> Self {
+        self.target = Some(target);
+        self
+    }
+
+    /// `makeLibCall` on `chain`: the hooks' call, else (where they ask for it)
+    /// the routine called by the target's native C convention.
+    fn lib_call_chained(
+        &mut self,
+        name: &'static str,
+        args: &[SDValue],
+        ret: EVT,
+        signed: bool,
+        chain: SDValue,
+    ) -> Option<(SDValue, SDValue)> {
+        if let Some(call) = self.hooks.make_lib_call_chained(self.dag, name, args, ret, signed, chain) {
+            return Some(call);
+        }
+        if !self.hooks.calls_by_native_convention() {
+            return None;
+        }
+        let env = super::libcall::CallEnv {
+            arch: self.target?,
+            pointer: self.dag.config().pointer,
+            call: super::builder::LoweringNodes::installed().call?,
+        };
+        let (values, out) = super::libcall::c_lib_call_on(self.dag, &env, chain, name, None, args, ret)?;
+        Some((*values.first()?, out))
     }
 
     /// `SelectionDAG::Legalize`.
@@ -491,7 +551,9 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         let NodeData::Mem(info) = self.dag.node(node).data else { return false };
         let custom = match self.dag.opcode(node) {
             ISD::Load => match (info.ext, self.dag.value_type(node), info.mem_vt) {
-                (Some(ext), EVT::Simple(wide), EVT::Simple(mem)) => self.tli.load_ext_action(ext, wide, mem) == Action::Custom,
+                (Some(ext), EVT::Simple(wide), EVT::Simple(mem)) => {
+                    self.tli.load_ext_action(ext, wide, mem) == Action::Custom
+                }
                 _ => false,
             },
             ISD::Store => match (self.dag.value_type(self.dag.operand(node, 1)), info.mem_vt) {
@@ -562,7 +624,8 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         {
             action = Action::Expand;
         }
-        // `EXTRACT_VECTOR_ELT` is asked of its vector's type: a target that lowers it by hand says so there.
+        // `EXTRACT_VECTOR_ELT` is asked of its vector's type: a target that
+        // lowers it by hand says so there.
         if self.dag.opcode(node) == ISD::ExtractElement
             && let source @ EVT::Simple(_) = self.dag.value_type(self.dag.operand(node, 0))
             && source.is_vector()
@@ -644,6 +707,22 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
             self.replace_node(node, result);
             return Ok(());
         }
+        if matches!(
+            op,
+            ISD::StrictFAdd
+                | ISD::StrictFSub
+                | ISD::StrictFMul
+                | ISD::StrictFDiv
+                | ISD::StrictFRint
+                | ISD::StrictFpExtend
+                | ISD::StrictFpRound
+                | ISD::StrictFpToSInt
+                | ISD::StrictFpToUInt
+                | ISD::StrictSIntToFp
+                | ISD::StrictUIntToFp
+        ) {
+            return self.convert_strict_node_to_libcall(node, op).ok_or(refused);
+        }
         let (signed, arity) = match op {
             ISD::SDiv | ISD::SRem => (true, 2),
             ISD::UDiv | ISD::URem | ISD::Mul => (false, 2),
@@ -656,6 +735,7 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
             | ISD::FLog2
             | ISD::FExp
             | ISD::FExp2
+            | ISD::FRint
             | ISD::LRint
             | ISD::LLRint => (false, 1),
             _ => return Err(refused),
@@ -668,6 +748,77 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         let Some(result) = self.hooks.make_lib_call(self.dag, name, &args, ret, signed) else { return Err(refused) };
         self.replace_node(node, result);
         Ok(())
+    }
+
+    /// `ConvertNodeToLibcall` for a constrained FP node (`ExpandFPLibCall`,
+    /// the `STRICT_SINT_TO_FP`, `STRICT_FP_TO_SINT`, `STRICT_FP_ROUND` and
+    /// `STRICT_FP_EXTEND` cases): the routine is called on the node's own
+    /// chain, and the node's chain result is the call's. The conversions
+    /// take the narrowest routine the integer type fits, as the pin's loop
+    /// over integer types does. `None`: no routine.
+    fn convert_strict_node_to_libcall(
+        &mut self,
+        node: SDValue,
+        op: ISD,
+    ) -> Option<()> {
+        use llrm_sdag::libcalls::{self, Libcall};
+        let chain = self.dag.operand(node, 0);
+        let source = self.dag.operand(node, 1);
+        let (source_vt, ret) = (self.dag.value_type(source), self.dag.value_type(node));
+        let (EVT::Simple(from), EVT::Simple(to)) = (source_vt, ret) else { return None };
+        let ints = [MVT::I8, MVT::I16, MVT::I32, MVT::I64, MVT::I128];
+        // The narrowest integer type of a routine that holds `bits`.
+        let routine = |bits: u32, call: &dyn Fn(MVT) -> Libcall| {
+            ints.iter().copied().find_map(|int| {
+                (EVT::Simple(int).size_in_bits() >= bits).then(|| libcalls::name(call(int)).map(|name| (int, name)))?
+            })
+        };
+        let (value, out_chain) = match op {
+            ISD::StrictFAdd | ISD::StrictFSub | ISD::StrictFMul | ISD::StrictFDiv | ISD::StrictFRint => {
+                let name = self.tli.libcall_name(op.non_strict()?, ret)?;
+                let args: Vec<SDValue> =
+                    (1..self.dag.node(node).ops.len()).map(|at| self.dag.operand(node, at)).collect();
+                self.lib_call_chained(name, &args, ret, false, chain)?
+            }
+            ISD::StrictFpExtend => {
+                let name = libcalls::name(Libcall::FpExt(from, to))?;
+                self.lib_call_chained(name, &[source], ret, false, chain)?
+            }
+            ISD::StrictFpRound => {
+                // A rounding known not to change the value has no routine.
+                if self.dag.constant(self.dag.operand(node, 2)) != Some(0) {
+                    return None;
+                }
+                let name = libcalls::name(Libcall::FpRound(from, to))?;
+                self.lib_call_chained(name, &[source], ret, false, chain)?
+            }
+            ISD::StrictFpToSInt | ISD::StrictFpToUInt => {
+                let signed = op == ISD::StrictFpToSInt;
+                let (int, name) = routine(ret.size_in_bits(), &|int| {
+                    if signed { Libcall::FpToSInt(from, int) } else { Libcall::FpToUInt(from, int) }
+                })?;
+                let (value, out) = self.lib_call_chained(name, &[source], EVT::Simple(int), signed, chain)?;
+                let value =
+                    if EVT::Simple(int) == ret { value } else { self.dag.get_node(ISD::Truncate, ret, &[value]) };
+                (value, out)
+            }
+            _ => {
+                let signed = op == ISD::StrictSIntToFp;
+                let (int, name) = routine(source_vt.size_in_bits(), &|int| {
+                    if signed { Libcall::SIntToFp(int, to) } else { Libcall::UIntToFp(int, to) }
+                })?;
+                let wide = EVT::Simple(int);
+                let source = if wide == source_vt {
+                    source
+                } else {
+                    self.dag.get_node(if signed { ISD::SignExtend } else { ISD::ZeroExtend }, wide, &[source])
+                };
+                self.lib_call_chained(name, &[source], ret, signed, chain)?
+            }
+        };
+        self.replace_node(SDValue { node: node.node, res: 0 }, value);
+        self.replace_node(SDValue { node: node.node, res: 1 }, out_chain);
+        Some(())
     }
 
     /// `ExpandNode` for `BR_JT`: load the entry at `table + index * size` and
@@ -716,7 +867,12 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         let mask_vt = self.dag.value_type(mask);
         let then_vt = self.dag.value_type(then);
         let tli = self.tli;
-        let expands = |op: ISD| matches!(mask_vt, EVT::Simple(mvt) if tli.operation_action(op, EVT::Simple(mvt)) == Action::Expand);
+        let expands = |op: ISD| {
+            matches!(
+                mask_vt,
+                EVT::Simple(mvt) if tli.operation_action(op, EVT::Simple(mvt)) == Action::Expand
+            )
+        };
         if expands(ISD::And) || expands(ISD::Xor) || expands(ISD::Or) {
             return None;
         }
@@ -732,7 +888,11 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
             return None;
         }
         let as_mask = |this: &mut Self, value: SDValue| {
-            if this.dag.value_type(value) == mask_vt { value } else { this.dag.get_node(ISD::BitCast, mask_vt, &[value]) }
+            if this.dag.value_type(value) == mask_vt {
+                value
+            } else {
+                this.dag.get_node(ISD::BitCast, mask_vt, &[value])
+            }
         };
         let (then, other) = (as_mask(self, then), as_mask(self, other));
         let not_mask = self.dag.get_not(mask, mask_vt);
@@ -767,7 +927,11 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         let lane = self.dag.get_select(bit_vt, cond, ones, zero);
         let mask = self.dag.get_splat_build_vector(mask_vt, lane);
         let as_mask = |this: &mut Self, value: SDValue| {
-            if this.dag.value_type(value) == mask_vt { value } else { this.dag.get_node(ISD::BitCast, mask_vt, &[value]) }
+            if this.dag.value_type(value) == mask_vt {
+                value
+            } else {
+                this.dag.get_node(ISD::BitCast, mask_vt, &[value])
+            }
         };
         let (then, other) = (as_mask(self, then), as_mask(self, other));
         let not_mask = self.dag.get_not(mask, mask_vt);
@@ -812,10 +976,15 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         let flags = self.dag.node(node).flags;
         let EVT::Simple(op_vt) = self.dag.value_type(lhs) else { return None };
         let tli = self.tli;
-        let legal_or_custom = |cc: CondCode| matches!(
-            tli.cond_code_action(cc, op_vt),
-            Action::Legal | Action::Custom
-        );
+        // A code the target lowers by hand (`oeq` and `une` where it reads the
+        // status word) is not one a constrained compare can use: the
+        // target's lowering of that code is the plain compare's (DEVIATE
+        // CFP2), and taking it here would swap an `oeq` for itself without end.
+        let legal_or_custom = |cc: CondCode| match tli.cond_code_action(cc, op_vt) {
+            Action::Legal => true,
+            Action::Custom => !strict,
+            _ => false,
+        };
         let legal = |cc: CondCode| tli.cond_code_action(cc, op_vt) == Action::Legal;
         let float = self.dag.value_type(lhs).is_floating_point();
         // One compare of the node's kind: the value, and for a constrained
@@ -1159,8 +1328,97 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         Some(self.dag.get_select(dst, sign_bit_test, slow, fast))
     }
 
-    /// `ExpandVectorBuildThroughStack`: each defined lane stored to its place in
-    /// a 16-byte stack slot, the slot loaded as the vector. The pin's
+    /// `ExpandLegalINT_TO_FP` of `STRICT_UINT_TO_FP`
+    /// (`TargetLowering::expandUINT_TO_FP` refuses a constrained node, so
+    /// the compiler-rt form is the one): unsigned `i32`/`i64` to `f32` and
+    /// `i64` to `f64`. The input is halved with the lost bit folded into
+    /// bit 0 where its top bit is set, converted by one `STRICT_SINT_TO_FP`
+    /// (a spurious exception must not be raised twice) and doubled by a
+    /// `STRICT_FADD` that never raises one. `None`: no signed conversion, a
+    /// type outside the three, or no strict `fadd`.
+    fn expand_strict_uint_to_fp(
+        &mut self,
+        node: SDValue,
+    ) -> Option<Vec<SDValue>> {
+        let (chain, src) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+        let (src_vt, dst) = (self.dag.value_type(src), self.dag.value_type(node));
+        let EVT::Simple(src_mvt) = src_vt else { return None };
+        let single = matches!(src_mvt, MVT::I32 | MVT::I64) && dst == EVT::Simple(MVT::F32);
+        if !single && !(src_mvt == MVT::I64 && dst == EVT::Simple(MVT::F64)) {
+            return None;
+        }
+        if !self.tli.is_operation_legal_or_custom(ISD::StrictSIntToFp, src_vt)
+            || !self.tli.is_operation_legal_or_custom(ISD::StrictFAdd, dst)
+        {
+            return None;
+        }
+        let bool_vt = self.tli.types.set_cc_result_type(src_vt);
+        let zero = self.dag.get_constant(0, src_vt);
+        let sign_bit_test = self.dag.get_setcc(bool_vt, src, zero, CondCode::SetLt);
+        let one_bit = self.dag.get_constant(1, EVT::I8);
+        let shifted = self.dag.get_node(ISD::Srl, src_vt, &[src, one_bit]);
+        let one = self.dag.get_constant(1, src_vt);
+        let low = self.dag.get_node(ISD::And, src_vt, &[src, one]);
+        let halved = self.dag.get_node(ISD::Or, src_vt, &[low, shifted]);
+        let in_cvt = self.dag.get_select(src_vt, sign_bit_test, halved, src);
+        let fast = self.dag.get_node_multi(ISD::StrictSIntToFp, &[dst, EVT::OTHER], &[chain, in_cvt]);
+        let (value, after) = (SDValue { node: fast.node, res: 0 }, SDValue { node: fast.node, res: 1 });
+        let slow = self.dag.get_node_multi(ISD::StrictFAdd, &[dst, EVT::OTHER], &[after, value, value]);
+        let result = self.dag.get_select(dst, sign_bit_test, SDValue { node: slow.node, res: 0 }, value);
+        Some(vec![result, SDValue { node: slow.node, res: 1 }])
+    }
+
+    /// `TargetLowering::expandFP_TO_UINT` of `STRICT_FP_TO_UINT`: the value
+    /// less 2^(n-1) where it reaches it, converted as signed on the chain,
+    /// with that bit set again:
+    /// `Sel = Src < 2^(n-1); r = fp_to_sint(Src - (Sel ? 0 : 2^(n-1))) ^ (Sel ?
+    /// 0 : 2^(n-1))`. The compare is signaling and the subtract and
+    /// conversion follow it on the node's chain. `None` where the target
+    /// has no strict `fsub` or signed conversion for the types.
+    fn expand_strict_fp_to_uint(
+        &mut self,
+        node: SDValue,
+    ) -> Option<Vec<SDValue>> {
+        let (chain, src) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+        let (src_vt, dst) = (self.dag.value_type(src), self.dag.value_type(node));
+        let EVT::Simple(float) = src_vt else { return None };
+        let bits = dst.size_in_bits();
+        // 2^(bits-1) in the float's own format.
+        let power = u128::from(bits - 1);
+        let pattern = match float {
+            MVT::F32 if power <= 127 => (127 + power) << 23,
+            MVT::F64 if power <= 1023 => (1023 + power) << 52,
+            MVT::F80 => ((16383 + power) << 64) | (1 << 63),
+            _ => return None,
+        };
+        let ready = |legalizer: &Self, op: ISD, vt: EVT| legalizer.tli.is_operation_legal_or_custom(op, vt);
+        if !ready(self, ISD::StrictFSub, src_vt) || !ready(self, ISD::StrictFpToSInt, dst) {
+            return None;
+        }
+        let limit = self.dag.get_constant_fp(pattern, src_vt);
+        let bool_vt = self.tli.types.set_cc_result_type(src_vt);
+        let cc = self.dag.get_cond_code(CondCode::SetLt);
+        let below = self.dag.get_node_multi(ISD::StrictFSetCCS, &[bool_vt, EVT::OTHER], &[chain, src, limit, cc]);
+        let (below, chain) = (SDValue { node: below.node, res: 0 }, SDValue { node: below.node, res: 1 });
+        let zero = self.dag.get_constant_fp(0, src_vt);
+        let offset = self.dag.get_select(src_vt, below, zero, limit);
+        let int_zero = self.dag.get_constant(0, dst);
+        let sign = self.dag.get_constant(1u128 << (bits - 1), dst);
+        let int_offset = self.dag.get_select(dst, below, int_zero, sign);
+        let moved = self.dag.get_node_multi(ISD::StrictFSub, &[src_vt, EVT::OTHER], &[chain, src, offset]);
+        let signed = self
+            .dag
+            .get_node_multi(
+                ISD::StrictFpToSInt,
+                &[dst, EVT::OTHER],
+                &[SDValue { node: moved.node, res: 1 }, SDValue { node: moved.node, res: 0 }],
+            );
+        let result = self.dag.get_node(ISD::Xor, dst, &[SDValue { node: signed.node, res: 0 }, int_offset]);
+        Some(vec![result, SDValue { node: signed.node, res: 1 }])
+    }
+
+    /// `ExpandVectorBuildThroughStack`: each defined lane stored to its place
+    /// in a 16-byte stack slot, the slot loaded as the vector. The pin's
     /// `LowerBUILD_VECTOR` of an x86 splat is a `movd` and a `pshufd`; this is
     /// the target-independent fallback every lane shape takes.
     fn expand_build_vector_through_stack(
@@ -1288,8 +1546,9 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         Some(lanes[0])
     }
 
-    /// `LegalizeDAG::ExpandNode`, `VECTOR_SHUFFLE`: a `build_vector` of the lanes the mask picks, each an
-    /// `extract_vector_elt` of the input it names; an undefined lane stays undefined.
+    /// `LegalizeDAG::ExpandNode`, `VECTOR_SHUFFLE`: a `build_vector` of the
+    /// lanes the mask picks, each an `extract_vector_elt` of the input it
+    /// names; an undefined lane stays undefined.
     fn expand_vector_shuffle(
         &mut self,
         node: SDValue,
@@ -1312,9 +1571,9 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
 
     /// `ExpandBUILD_VECTOR`, constants only: a vector whose lanes are all
     /// constants or undefined is loaded from the constant pool, its lanes laid
-    /// out in memory order (an undefined lane is zero). Any other `BUILD_VECTOR`
-    /// is left to the target (`ExpandVectorBuildThroughStack` is not
-    /// translated).
+    /// out in memory order (an undefined lane is zero). Any other
+    /// `BUILD_VECTOR` is left to the target
+    /// (`ExpandVectorBuildThroughStack` is not translated).
     fn expand_build_vector(
         &mut self,
         node: SDValue,
@@ -1406,6 +1665,12 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
             | ISD::Sra
             | ISD::Rotl
             | ISD::Rotr
+            // `ExpandREM` finds no vector divide to make a remainder of, so it
+            // unrolls too.
+            | ISD::SDiv
+            | ISD::UDiv
+            | ISD::SRem
+            | ISD::URem
                 if vt.is_vector() =>
             {
                 Some(vec![self.unroll_vector_op(node)])
@@ -1498,6 +1763,8 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
                 Some(vec![SDValue { node: both.node, res: 1 }])
             }
             ISD::UIntToFp => self.expand_uint_to_fp(node).map(|result| vec![result]),
+            ISD::StrictFpToUInt => self.expand_strict_fp_to_uint(node),
+            ISD::StrictUIntToFp => self.expand_strict_uint_to_fp(node),
             ISD::BrJT => Some(vec![self.expand_br_jt(node)]),
             ISD::Undef | ISD::Poison => {
                 // `ExpandNode`: zero of the type.
@@ -2092,6 +2359,9 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
     ) -> Result<(), LegalizeError> {
         let op = self.dag.opcode(node);
         let vt = self.dag.value_type(node);
+        if op.is_strict_fp() {
+            return self.promote_strict_conversion(node);
+        }
         let result = match op {
             ISD::SIntToFp | ISD::UIntToFp => {
                 let src = self.dag.operand(node, 0);
@@ -2114,6 +2384,35 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         Ok(())
     }
 
+    /// `PromoteNode` for a constrained conversion: the same node on the
+    /// widened integer, chained as the original; its value is truncated back
+    /// (or widened going in) and its out chain replaces the original's.
+    fn promote_strict_conversion(
+        &mut self,
+        node: SDValue,
+    ) -> Result<(), LegalizeError> {
+        let op = self.dag.opcode(node);
+        let vt = self.dag.value_type(node);
+        let (chain, input) = (self.dag.operand(node, 0), self.dag.operand(node, 1));
+        let into_float = matches!(op, ISD::StrictSIntToFp | ISD::StrictUIntToFp);
+        let narrow = if into_float { self.dag.value_type(input) } else { vt };
+        let EVT::Simple(from) = narrow else { unreachable!("promotion applies to simple types") };
+        let to: EVT = self.tli.type_to_promote_to(op, from).into();
+        let (wide, value) = if into_float {
+            let extend = if op == ISD::StrictSIntToFp { ISD::SignExtend } else { ISD::ZeroExtend };
+            let widened = self.dag.get_node(extend, to, &[input]);
+            (self.dag.get_node_multi(op, &[vt, EVT::OTHER], &[chain, widened]), None)
+        } else {
+            let wide = self.dag.get_node_multi(op, &[to, EVT::OTHER], &[chain, input]);
+            let narrowed = self.dag.get_node(ISD::Truncate, vt, &[SDValue { node: wide.node, res: 0 }]);
+            (wide, Some(narrowed))
+        };
+        let value = value.unwrap_or(SDValue { node: wide.node, res: 0 });
+        self.replace_node(SDValue { node: node.node, res: 0 }, value);
+        self.replace_node(SDValue { node: node.node, res: 1 }, SDValue { node: wide.node, res: 1 });
+        Ok(())
+    }
+
     /// `ReplaceNode(Old, New)` for a node with one value result.
     fn replace_node(
         &mut self,
@@ -2132,7 +2431,14 @@ impl<'a, H: Hooks> DagLegalizer<'a, H> {
         let op = self.dag.opcode(node);
         if matches!(
             op,
-            ISD::SIntToFp | ISD::UIntToFp | ISD::FpToSInt | ISD::FpToUInt
+            ISD::SIntToFp
+                | ISD::UIntToFp
+                | ISD::FpToSInt
+                | ISD::FpToUInt
+                | ISD::StrictSIntToFp
+                | ISD::StrictUIntToFp
+                | ISD::StrictFpToSInt
+                | ISD::StrictFpToUInt
         ) {
             return self.promote_conversion(node);
         }

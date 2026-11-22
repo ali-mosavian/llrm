@@ -38,19 +38,23 @@ impl Builder<'_> {
             fixups.push(self.dag.get_target_global_address(pointer, global.0, offset + fixup.addend));
         }
         let mut registers = Vec::new();
-        // The x87 stack's top has no register to copy to: its value is an
-        // operand of the node, which the emitter stores to st(0) just
-        // before the block.
+        // The x87 stack has no register to copy to: a value of `st0` or `st1`
+        // is an operand of the node, which the emitter pushes before the
+        // block, `st1`'s first (`GetRegistersForValue`'s fixed stack
+        // registers: the stack's entries are the block's operands in place).
         let mut x87 = Vec::new();
         for (operand, register) in inputs.iter().zip(&block.inputs) {
             let value = self.get_value(*operand)?;
             let vt = self.dag.value_type(value);
             match register.as_str() {
-                "st0" => x87.push(self.to_x87(value)?),
-                "st1" => return Err(Refused("inline assembly that takes st(1) as an input")),
+                "st0" => x87.push((0, self.to_x87(value)?)),
+                "st1" => x87.push((1, self.to_x87(value)?)),
                 _ => registers.push((self.sized_register(self.arch.register_named(register), vt), value)),
             }
         }
+        // Top of the stack first, the order the emitter reads them in.
+        x87.sort_by_key(|(position, _)| *position);
+        let x87: Vec<SDValue> = x87.into_iter().map(|(_, value)| value).collect();
         // An output in `st0` or `st1`: the top of the x87 stack, read in turn
         // as a call's float result is (`st1` is what the first read
         // left under it).

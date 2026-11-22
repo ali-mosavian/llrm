@@ -91,9 +91,13 @@ fn a_variant_that_grows_the_module_far_is_not_selected() {
 fn a_modules_code_and_data_are_made_by_one_mid_end_run() {
     let request = Request::new(Level::O1);
     take_mid_end_runs();
-    llrm_z80::compile::text(LOOP_FUSION, "main", 0, &request).expect("compiles");
-    llrm_z80::data::text(LOOP_FUSION, &request).expect("data");
-    assert_eq!(take_mid_end_runs(), 1);
+    // the trials' own compiles (LSR-KEY-TRIAL runs one where a loop's solution
+    // differs) come first
+    let chosen = effective(LOOP_FUSION, &request).expect("chooses");
+    let trials = take_mid_end_runs();
+    llrm_z80::compile::text(LOOP_FUSION, "main", 0, &chosen).expect("compiles");
+    llrm_z80::data::text(LOOP_FUSION, &chosen).expect("data");
+    assert_eq!(take_mid_end_runs(), 0, "after {trials} runs to choose");
 }
 
 /// huffman_decode -O3 (`-fno-inline-functions`): the no-growth variant left the

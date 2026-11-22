@@ -65,7 +65,7 @@ fn cluster(mut ops: OpList) -> OpList {
                             || touch(between).is_some_and(|other| commutes(&touch_of(&first), &other)))
                 }
                 Op::Copy { .. } | Op::Imm { .. } | Op::FrameAddress { .. } | Op::DbgValue { .. } => true,
-                Op::Call { .. } | Op::Return { .. } | Op::JumpTable { .. } | Op::Phi { .. } | Op::Unreachable => false,
+                Op::Call { .. } | Op::Return { .. } | Op::JumpTable { .. } | Op::IndirectJump { .. } | Op::Phi { .. } | Op::Unreachable => false,
             };
             if !passable || defs.contains(&base) || defs.contains(&source) {
                 break;
@@ -117,7 +117,7 @@ fn passes(
                         || touch(inst).is_some_and(|other| commutes(&touch_of(moved), &other)))
             }
             Op::Copy { .. } | Op::Imm { .. } | Op::FrameAddress { .. } | Op::DbgValue { .. } => true,
-            Op::Call { .. } | Op::Return { .. } | Op::JumpTable { .. } | Op::Phi { .. } | Op::Unreachable => false,
+            Op::Call { .. } | Op::Return { .. } | Op::JumpTable { .. } | Op::IndirectJump { .. } | Op::Phi { .. } | Op::Unreachable => false,
         };
         passable && !defs.contains(&base) && !defs.contains(&value) && !uses.contains(&value)
     })

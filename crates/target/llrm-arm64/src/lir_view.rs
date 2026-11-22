@@ -294,6 +294,7 @@ fn view_with(
                 ),
                 Op::FrameAddress { .. } => (Kind::Op("FrameAddress"), false, false, false),
                 Op::JumpTable { .. } => (Kind::Op("JumpTable"), true, true, false),
+                Op::IndirectJump { .. } => (Kind::Op("IndirectJump"), true, true, false),
                 Op::Call { .. } => (Kind::Op("Call"), false, false, true),
                 Op::Return { .. } => (Kind::Op("Return"), true, true, false),
                 Op::Unreachable => (Kind::Op("Unreachable"), true, true, false),
@@ -351,7 +352,7 @@ fn view_with(
             {
                 operands.push(Operand::Block(*target));
             }
-            if let Op::JumpTable { targets, .. } = &op {
+            if let Op::JumpTable { targets, .. } | Op::IndirectJump { targets, .. } = &op {
                 operands
                     .extend(targets.iter().filter_map(|label| labels.get(label.as_str())).map(|&b| Operand::Block(b)));
             }

@@ -90,3 +90,18 @@ done:
         assert!(out.contains("jsr\t__adddf3"), "{cpu:?}: no call of __adddf3:\n{out}");
     }
 }
+
+/// A `float` extended to `x86_fp80` (plain, and the constrained form) panicked
+/// the compiler (`RetCC_M68k_C has a register for every result`, call.rs): the
+/// routine's 10-byte result has no register. The pin rejects it too; the
+/// compile is now an error, not a crash.
+#[test]
+fn a_long_double_result_is_refused_not_a_panic() {
+    for ir in [
+        "define x86_fp80 @f(float %a) { %r = fpext float %a to x86_fp80 ret x86_fp80 %r }",
+        "define x86_fp80 @f(float %a) strictfp { %r = call x86_fp80 @llvm.experimental.constrained.fpext.f80.f32(float %a, metadata !\"fpexcept.strict\") strictfp ret x86_fp80 %r }\ndeclare x86_fp80 @llvm.experimental.constrained.fpext.f80.f32(float, metadata)",
+    ] {
+        let outcome = std::panic::catch_unwind(|| text(ir, "f", Cpu::M68000));
+        assert!(matches!(outcome, Ok(Err(_))), "{ir}: {outcome:?}");
+    }
+}

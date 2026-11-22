@@ -779,7 +779,7 @@ impl Cost {
             if f.has_global() {
                 // Symbolic values are rated conservatively.
                 self.c.imm_cost += 64;
-            } else if offset.is_non_zero() {
+            } else if offset.is_non_zero() && !(lu.kind == Kind::ICmpZero && r.tti.lsr_exit_compare_immediate_is_free()) {
                 let bits = 65 - (offset.0 ^ (offset.0 >> 63)).leading_zeros();
                 self.c.imm_cost += bits;
             }
@@ -954,6 +954,12 @@ impl Cost {
             }
             self.c.add_rec_cost += loop_cost;
             if loop_cost > 0
+                && !lu.all_fixups_unconditional
+                && lu.kind == Kind::Address
+            {
+                self.c.add_rec_cost += r.tti.lsr_conditional_use_step_cost();
+            }
+            if loop_cost > 0
                 && r.se.match_affine_add_rec(reg).is_some_and(|(_, step, _)| r.se.as_constant(step).is_none())
             {
                 self.variable_steps += 1;
@@ -1064,6 +1070,13 @@ impl Cost {
         // it (x86 `isLegalAddressingMode` sees an alloca as a base register).
         if lu.kind == Kind::Address && f.base_regs.len() == 1 && r.tti.frame_address_is_free() && is_stack_slot(r, reg)
         {
+            return;
+        }
+        // DEVIATE LU33: a global's address under an address is an immediate
+        // loaded where it is used (`ld hl,#sym`), so as a base it holds no
+        // register through the loop; the pin counts it one (x86 folds the
+        // symbol into the access, so there it is no base register).
+        if lu.kind == Kind::Address && r.tti.lsr_global_address_is_free() && is_global_address(r, reg) {
             return;
         }
         self.c.num_regs += 1;
@@ -1332,6 +1345,18 @@ fn holds_no_offset(
         }
         _ => false,
     }
+}
+
+/// Whether `s` is the address of a global.
+fn is_global_address(
+    r: &mut Rating,
+    s: Scev,
+) -> bool {
+    let Some(Operand::Constant(id)) = r.se.unknown_value(s) else { return false };
+    matches!(
+        r.cx.context.get(id).kind,
+        llrm_mir::context::ConstantKind::Global(_)
+    )
 }
 
 /// Whether `s` is the address of a stack slot: an `alloca`.

@@ -51,6 +51,18 @@ pub fn share_percent() -> u64 {
         .expect("share.percent_per_percent is a count")
 }
 
+/// The same for `routine` at the size levels (`[share.size]`), where a routine
+/// has a rate of its own; the general one otherwise.
+pub fn size_share_percent(routine: &str) -> u64 {
+    share_table()
+        .get("size")
+        .and_then(|t| t.as_table())
+        .and_then(|t| t.get(routine))
+        .and_then(|v| v.as_integer())
+        .and_then(|v| u64::try_from(v).ok())
+        .unwrap_or_else(share_percent)
+}
+
 /// The same for `routine` at the speed levels (`[share.speed]`).
 pub fn speed_share_percent(routine: &str) -> u64 {
     share_table()

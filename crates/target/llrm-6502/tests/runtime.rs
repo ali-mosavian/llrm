@@ -323,6 +323,18 @@ fn long(
     common::long_call(name, routine, a, b, common::Result32::Value)
 }
 
+/// A multiply by a byte reads rc4 and nothing of rc5..rc7 (`long_args` leaves
+/// 0xA5 there): the product is the general one.
+#[test]
+fn the_byte_multiplies_give_the_general_products_and_read_only_rc4() {
+    let a = 0x1234_5678u32;
+    for routine in ["__mulsi3_byte", "__mulsi3_fast_byte"] {
+        for b in [0u32, 11, 255] {
+            assert_eq!(long(&format!("{routine}-{b}"), routine, a, b), a.wrapping_mul(b), "{routine} {a} * {b}");
+        }
+    }
+}
+
 /// Low 32 bits of the product: 70000 * 3 = 0x33450; 65535 * 65537 = 0xFFFFFFFF;
 /// 100000 * 100000 = 10^10 = 0x2_540BE400, so 0x540BE400.
 #[test]
@@ -815,9 +827,14 @@ fn the_small_speed_division_links_no_wide_path_and_divides_like_the_hot_one() {
         ("__umodsi3_fast_small", "__umodsi3_fast"),
         ("__divsi3_fast_small", "__divsi3_fast"),
         ("__modsi3_fast_small", "__modsi3_fast"),
+        ("__udivsi3_fast_lean", "__udivsi3_fast"),
+        ("__umodsi3_fast_lean", "__umodsi3_fast"),
+        ("__divsi3_fast_lean", "__divsi3_fast"),
+        ("__modsi3_fast_lean", "__modsi3_fast"),
     ] {
         let text = common::pipeline::reachable_runtime(&format!("  jsr {routine}\n"));
-        assert!(text.contains("udivmod32_fast_small:") && !text.contains("udivmod32_wide:"), "{routine}: {text}");
+        let body = if routine.ends_with("_lean") { "udivmod32_fast_lean:" } else { "udivmod32_fast_small:" };
+        assert!(text.contains(body) && !text.contains("udivmod32_wide:"), "{routine}: {text}");
         let hot_text = common::pipeline::reachable_runtime(&format!("  jsr {hot}\n"));
         let wide = if routine.contains("mod") { "umod32_wide:" } else { "udivmod32_wide:" };
         assert!(hot_text.contains(wide) && !hot_text.contains("_small"), "{hot}: {hot_text}");
@@ -826,6 +843,36 @@ fn the_small_speed_division_links_no_wide_path_and_divides_like_the_hot_one() {
             assert_eq!(long(&name, routine, a, b), long(&format!("h{name}"), hot, a, b), "{routine} {a} {b}");
         }
     }
+}
+
+/// The wide path of the small speed division moved the dividend one byte up
+/// with seven load/store pairs; every cold program at -O1..-O3 that divides a
+/// signed long linked them (`compound_assignment_types`: +15 B over sdcc). The
+/// lean variant, which those programs call, moves it in an indexed loop over
+/// the eight-byte chain in 15 B; the small one, which -Os chooses, is unchanged.
+#[test]
+fn the_lean_speed_signed_division_links_in_few_bytes() {
+    let linked = |name: &str, call: &str| {
+        let platform = llrm_6502::platform::Platform::parse(llrm_6502::platform::SIM65).expect("sim65 row");
+        let dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("rt-size-{name}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        let text = format!("{}.export _main\n_main:\n{call}  rts\n", llrm_6502::emit::equates(&platform));
+        let source = format!("{text}{}", common::pipeline::reachable_runtime(call));
+        std::fs::write(dir.join("p.s"), source).unwrap();
+        let built = std::process::Command::new("cl65")
+            .args(["-t", "sim6502", "-o"])
+            .arg(dir.join("p.bin"))
+            .arg(dir.join("p.s"))
+            .output()
+            .expect("cl65");
+        assert!(built.status.success(), "cl65: {}", String::from_utf8_lossy(&built.stderr));
+        std::fs::metadata(dir.join("p.bin")).unwrap().len()
+    };
+    let floor = linked("floor", "");
+    let lean = linked("divsi3-lean", "  jsr __divsi3_fast_lean\n") - floor;
+    let small = linked("divsi3-small", "  jsr __divsi3_fast_small\n") - floor;
+    assert!(lean <= 370, "__divsi3_fast_lean links {lean} B");
+    assert!(lean + 25 <= small, "the lean division links {lean} B, the small one {small} B");
 }
 
 /// The hot threshold is derived from what the pin-structure wide path saves a

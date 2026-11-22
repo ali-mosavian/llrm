@@ -866,3 +866,91 @@ out:
     manager.run_module(&mut module, std::rc::Rc::new(llrm_mir::target::Neutral)).unwrap();
     assert_eq!(super::SHAPE_COPIES.with(std::cell::Cell::get), 0, "the shape was copied");
 }
+
+/// A header phi that only keeps its value (`%sp`: the start, or itself) is
+/// "a degenerate PHI already" (`findPHIToPartitionLoops`: `simplifyInstruction`
+/// replaces it first). Not folded, the partition found it again after each
+/// split and made a new empty outer block every round.
+#[test]
+fn test_a_phi_that_only_keeps_its_value_does_not_split_the_loop_over_and_over() {
+    let text = "define i32 @f(i32 %n, i32 %s) {
+b0:
+  br label %b1
+
+b1:
+  %sp = phi i32 [ %s, %b0 ], [ %sp, %b2 ], [ %sp, %b3 ]
+  %i = phi i32 [ 0, %b0 ], [ %i2, %b2 ], [ %i3, %b3 ]
+  %c = icmp ult i32 %i, %n
+  br i1 %c, label %b4, label %b5
+
+b4:
+  %odd = and i32 %i, 1
+  %t = icmp eq i32 %odd, 0
+  br i1 %t, label %b2, label %b3
+
+b2:
+  %i2 = add i32 %i, 1
+  br label %b1
+
+b3:
+  %i3 = add i32 %i, 2
+  br label %b1
+
+b5:
+  ret i32 %sp
+}
+";
+    let mut module = parsed(text);
+    let (_, function) = module.function_mut("f").expect("@f");
+    let before = function.layout().len();
+    simplified(function);
+    let after = function.layout().len();
+    assert!(after <= before + 1, "{before} blocks became {after}: the unique back edge is one block");
+}
+
+/// The pass made no nested loops: `LoopSimplify::run` never called the
+/// separation, only `simplified_given` did (the unroller's). A dispatch loop
+/// whose handlers keep `%sp` or move it stayed one loop with six latches;
+/// the pin makes an outer loop of the handlers that move it
+/// (`separateNestedLoop`), and `computed_goto` on wasm kept 12 more
+/// instructions than the pin's.
+#[test]
+fn test_the_pass_separates_a_nested_loop_by_a_header_phi_one_back_edge_keeps() {
+    let (before, after) = simplify(
+        "define i32 @f(i32 %n) {
+b0:
+  br label %h
+
+h:
+  %sp = phi i32 [ 0, %b0 ], [ %sp1, %a ], [ %sp, %b ]
+  %i = phi i32 [ 0, %b0 ], [ %i1, %a ], [ %i2, %b ]
+  %c = icmp ult i32 %i, %n
+  br i1 %c, label %t, label %out
+
+t:
+  %o = and i32 %i, 1
+  %z = icmp eq i32 %o, 0
+  br i1 %z, label %a, label %b
+
+a:
+  %sp1 = add i32 %sp, 1
+  %i1 = add i32 %i, 1
+  br label %h
+
+b:
+  %i2 = add i32 %i, 2
+  br label %h
+
+out:
+  ret i32 %sp
+}
+",
+    );
+    let count = |module: &Module| {
+        let (_, _, function) =
+            module.functions().find(|(_, global, _)| global.name.as_deref() == Some("f")).expect("@f");
+        let graph = cfg::graph(function);
+        loops::loops(&graph, function.entry().map(cfg::id)).len()
+    };
+    assert_eq!((count(&before), count(&after)), (1, 2), "one loop with two back edges becomes an outer and an inner");
+}

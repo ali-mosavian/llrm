@@ -669,6 +669,7 @@ pub fn lower(
                         Some(Callee::Register(register)) => Inst::BranchReg { link: false, rn: *register },
                     });
                 }
+                Op::IndirectJump { rn, .. } => emitter.insts.push(Inst::BranchReg { link: false, rn: *rn }),
                 Op::JumpTable { dst, scratch, table, index, id, .. } => {
                     emitter.insts.extend(crate::jumptable::dest32(&function.name, *id, *dst, *scratch, *table, *index));
                 }

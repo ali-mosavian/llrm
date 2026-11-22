@@ -151,10 +151,28 @@ fn binary(
     KnownBits::from_mir(op(&lhs.to_mir(), &rhs.to_mir()))
 }
 
+/// `KnownBits::computeForAddSub` of an add without a carry in.
+fn add_bits(
+    lhs: KnownBits,
+    rhs: KnownBits,
+    width: u32,
+) -> KnownBits {
+    let all = mask(width);
+    let max = |k: KnownBits| !k.zero & all;
+    let sum_zero = max(lhs).wrapping_add(max(rhs)).wrapping_add(0) & all;
+    let sum_one = lhs.one.wrapping_add(rhs.one) & all;
+    let carry_zero = !(sum_zero ^ lhs.zero ^ rhs.zero);
+    let carry_one = sum_one ^ lhs.one ^ rhs.one;
+    let known = (lhs.zero | lhs.one) & (rhs.zero | rhs.one) & (carry_zero | carry_one) & all;
+    KnownBits { zero: !sum_zero & known, one: sum_one & known, width }
+}
+
 /// The bits of a lane of an integer vector, the same in every lane the
 /// demanded elements name (all of them here): `BUILD_VECTOR` (the operands'
-/// common bits, an operand wider than the lane implicitly truncated),
-/// `ZERO_EXTEND`, and the logical operations; the rest is unknown.
+/// common bits, an operand wider than the lane implicitly truncated), the
+/// extensions and truncate, the logical and arithmetic operations and the
+/// shifts, as the pin's `computeKnownBits` takes them lane by lane; the rest is
+/// unknown.
 fn walk_vector(
     dag: &SelectionDAG,
     value: SDValue,
@@ -186,6 +204,26 @@ fn walk_vector(
         ISD::Or => {
             let (lhs, rhs) = (lane(0), lane(1));
             KnownBits { zero: lhs.zero & rhs.zero, one: lhs.one | rhs.one, width }
+        }
+        ISD::Add => add_bits(lane(0), lane(1), width),
+        ISD::Sub => binary(lane(0), lane(1), |a, b| Bits::sub(a, b, false, false)),
+        ISD::Mul => binary(lane(1), lane(0), |a, b| Bits::mul(a, b, false)),
+        ISD::Shl => binary(lane(0), lane(1), |a, b| Bits::shl(a, b, false, false, b.is_non_zero())),
+        ISD::Srl => binary(lane(0), lane(1), |a, b| Bits::lshr(a, b, false, false)),
+        ISD::Sra => binary(lane(0), lane(1), |a, b| Bits::ashr(a, b, false, false)),
+        ISD::SignExtend => {
+            let inner = lane(0);
+            let high = all & !mask(inner.width);
+            let sign = 1u128 << (inner.width - 1);
+            KnownBits {
+                zero: inner.zero | if inner.zero & sign != 0 { high } else { 0 },
+                one: inner.one | if inner.one & sign != 0 { high } else { 0 },
+                width,
+            }
+        }
+        ISD::Truncate => {
+            let inner = lane(0);
+            KnownBits { zero: inner.zero & all, one: inner.one & all, width }
         }
         _ => KnownBits::unknown(width),
     }
@@ -220,6 +258,14 @@ fn walk(
             // A compare is 0 or 1 where the target's boolean contents say so.
             let zero_or_one =
                 dag.config().boolean_contents_of(dag.value_type(value)) == BooleanContents::ZeroOrOne && width > 1;
+            KnownBits { zero: if zero_or_one { all & !1 } else { 0 }, one: 0, width }
+        }
+        // `computeKnownBits` of `STRICT_FSETCC` and `STRICT_FSETCCS`: the
+        // compare's operands are 1 and 2 (0 is the chain).
+        ISD::StrictFSetCC | ISD::StrictFSetCCS if value.res == 0 => {
+            let zero_or_one = dag.config().boolean_contents_of(dag.value_type(dag.operand(value, 1)))
+                == BooleanContents::ZeroOrOne
+                && width > 1;
             KnownBits { zero: if zero_or_one { all & !1 } else { 0 }, one: 0, width }
         }
         // `X86TargetLowering::computeKnownBitsForTargetNode`:
@@ -291,17 +337,7 @@ fn walk(
             };
             KnownBits { zero: aligned.map_or(0, |align| mask(align.trailing_zeros()) & all), one: 0, width }
         }
-        ISD::Add => {
-            // `KnownBits::computeForAddSub` without a carry in.
-            let (lhs, rhs) = (operand(0), operand(1));
-            let max = |k: KnownBits| !k.zero & all;
-            let sum_zero = max(lhs).wrapping_add(max(rhs)).wrapping_add(0) & all;
-            let sum_one = lhs.one.wrapping_add(rhs.one) & all;
-            let carry_zero = !(sum_zero ^ lhs.zero ^ rhs.zero);
-            let carry_one = sum_one ^ lhs.one ^ rhs.one;
-            let known = (lhs.zero | lhs.one) & (rhs.zero | rhs.one) & (carry_zero | carry_one) & all;
-            KnownBits { zero: !sum_zero & known, one: sum_one & known, width }
-        }
+        ISD::Add => add_bits(operand(0), operand(1), width),
         ISD::SignExtend => {
             let inner = operand(0);
             let high = all & !mask(inner.width);
@@ -421,6 +457,13 @@ fn num_sign_bits_at(
     if dag.opcode(value) == ISD::SetCC
         && value.res == 0
         && dag.config().boolean_contents_of(dag.value_type(value)) == BooleanContents::ZeroOrNegativeOne
+    {
+        return width;
+    }
+    // The same for the constrained compares, asked of the operand's type.
+    if matches!(dag.opcode(value), ISD::StrictFSetCC | ISD::StrictFSetCCS)
+        && value.res == 0
+        && dag.config().boolean_contents_of(dag.value_type(dag.operand(value, 1))) == BooleanContents::ZeroOrNegativeOne
     {
         return width;
     }

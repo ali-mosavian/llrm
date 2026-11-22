@@ -86,6 +86,9 @@ thread_local! {
     pub static INLINE_FILLS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// Set while a function is selected at a level that allows no trade between
     /// bytes and clocks (-O1, -Os, -Oz).
+    /// Select every product of two zero-extended words as the routine's call
+    /// (`prepare::WORD_PRODUCT`), where the form is partial products.
+    pub static CALL_PRODUCTS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     pub static STRICT_LEVEL: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// The level is -O1: strict about bytes, but judged by clocks too, so a
     /// byte is paid at 40 T where -Os and -Oz pay none.
@@ -237,9 +240,8 @@ fn word_chain_price(chain: &[(&'static str, i64)]) -> (i64, i64) {
 /// A word multiplied by a constant as the shifts and adds of `chain_search`
 /// (Bernstein 1986), where the pin leaves every constant but `2^k +- 1` to the
 /// `__mulhi3` call: `ld de, #c; call` is 6 B and a loop of about 65 T a bit of
-/// the constant. Taken where the chain is no larger and no slower (-Os, -Oz),
-/// or by the rate 1 B = 3 T (1 B = 40 T at -O1: word_sign_zero_guard's
-/// `* 1000` is 12 B for 43% of the clocks).
+/// the constant. Taken by the rate 1 B = 3 T, and 1 B = 40 T at -O1, -Os and -Oz
+/// (word_sign_zero_guard's `* 1000` is 12 B for 43% of the clocks).
 ///
 /// DEVIATE Z80-MUL-CHAIN (owner z80, exit 2026-11-24): the pin has no such
 /// search; AArch64's `performMulCombine` and X86's `combineMul` are the
@@ -269,8 +271,6 @@ pub(crate) fn word_chain(
     let price = word_chain_price(&chain);
     let wins = if forced {
         price.1 <= call.1
-    } else if strict && !o1 {
-        price.0 <= call.0 && price.1 <= call.1
     } else {
         weight * price.0 + price.1 < limit
     };
@@ -576,8 +576,11 @@ pub fn select_block(
     // for its long products, the call is `__umulhisi3` for two words too: the
     // same call, half the steps. At -O2 and -O3 a loop's products stay
     // inline (DEVIATE Z80-COLD-LIBCALL: the pin sizes per function only).
-    if (cold || STRICT_LEVEL.with(std::cell::Cell::get) || long_multiply) && !sized {
+    if (cold || STRICT_LEVEL.with(std::cell::Cell::get) || long_multiply || CALL_PRODUCTS.with(std::cell::Cell::get))
+        && !sized
+    {
         tli.set_libcall_name(ISD::UMulLoHi, MVT::I16, "__umulhisi3");
+        tli.set_libcall_name(ISD::SMulLoHi, MVT::I16, "__mulhisi3");
     }
     let mut lowering = Z80Lowering { sized: sized && !speed_routines };
     let mut combines = Z80Combines {

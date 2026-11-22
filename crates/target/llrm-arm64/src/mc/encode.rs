@@ -648,7 +648,7 @@ pub fn encode(inst: &Inst) -> Result<Encoded, Error> {
         // pairwise class: `size` 3 and `Q` clear.
         Inst::VectorReduce { op, lanes, rd, rn } => {
             let (u, opcode) = op.fields();
-            let base = if *op == VectorReduce::Addp { 0x5E30_0800 } else { 0x4E30_0800 };
+            let base = if *op == VectorReduce::Addp { 0x5E30_0800 } else { 0x0E30_0800 | lanes.q() << 30 };
             base | u << 29 | lanes.size() << 22 | opcode << 12 | vreg(*rn)? << 5 | vreg(*rd)?
         }
         Inst::VectorDupLane { lanes, rd, rn, index } => {

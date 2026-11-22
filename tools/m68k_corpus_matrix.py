@@ -170,9 +170,9 @@ class Tools:
                     [self.cc, f"-{level}", "-w", "-S", *flags, "-isystem", str(POSIX), path, "-o", out + ".s"],
                     [self.as_, "--fatal-warnings", f"-m{cpu}", "-o", out + ".gas.o", out + ".s"]]
         if compiler == "gcc":
-            return [[self.gcc, f"-B{self.root}/usr/lib/gcc-cross/m68k-linux-gnu/15/", f"-B{self.root}/usr/m68k-linux-gnu/bin/", "-ffreestanding", "-nostdlib", "-w", *GCC_FLOAT,
+            return [[self.gcc, f"-B{self.root}/usr/lib/gcc-cross/m68k-linux-gnu/15/", f"-B{self.root}/usr/m68k-linux-gnu/bin/", "-nostdlib", "-w", *GCC_FLOAT,
                      *(["-isystem", self.headers] if self.headers else []), *self.gcc_flags, f"-mcpu={cpu}", f"-{level}", *gcc_program_flags(flags, Path(path).read_text(errors="replace") if Path(path).is_file() else ""), "-isystem", str(POSIX), "-c", path, "-o", out + ".o"]]
-        return [[self.clang, "--target=m68k-linux-gnu", "-ffreestanding", "-fno-pic", "-w", *self.clang_flags, f"-mcpu={cpu}", f"-{level}", *flags, "-isystem", str(POSIX), "-S", "-emit-llvm", path, "-o", out + ".ll"],
+        return [[self.clang, "--target=m68k-linux-gnu", "-fno-pic", "-w", *self.clang_flags, f"-mcpu={cpu}", f"-{level}", *flags, "-isystem", str(POSIX), "-S", "-emit-llvm", path, "-o", out + ".ll"],
                 [self.llc, "-mtriple=m68k-linux-gnu", "-relocation-model=static", "-O2", "-filetype=obj", f"-mcpu=M{cpu}", out + ".ll", "-o", out + ".o"]]
 
     def stamps(self) -> str:

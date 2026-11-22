@@ -389,14 +389,15 @@ impl Context<'_> {
 }
 
 /// `mergeUpdateInsn`: the access becomes its post-increment form, the update
-/// goes, and a home pair gets a copy of `hl` after the access.
+/// goes, and a home pair gets a copy of `hl` after the access. Where the access
+/// is now: the `ld` of the step's constant may have been ahead of it.
 fn merge_update(
     function: &mut MFunction,
     block: usize,
     at: usize,
     access: &Access,
     update: Update,
-) {
+) -> usize {
     let hl = Reg::Phys(reg::HL);
     let old = function.blocks[block].insts[at].clone();
     let mut merged = old.clone();
@@ -412,15 +413,18 @@ fn merge_update(
         _ => unreachable!("planned from an access"),
     };
     merged.ties = vec![];
+    let removed_ahead = if update.block == block { update.gone.iter().filter(|&&one| one < at).count() } else { 0 };
     for &gone in update.gone.iter().rev() {
         function.blocks[update.block].insts.remove(gone);
     }
+    let at = at - removed_ahead;
     function.blocks[block].insts[at] = merged;
     if let Some(home) = access.home {
         let mut copy = Inst::new(Kind::Copy, vec![Operand::Def(Reg::Phys(home)), Operand::Use(hl)]);
         copy.cheap_as_move = true;
         function.blocks[block].insts.insert(at + 1, copy);
     }
+    at
 }
 
 /// `AArch64LoadStoreOpt::optimizeBlock` for the updates: each word access with
@@ -451,8 +455,7 @@ pub fn fold(
                     if why_enabled() {
                         eprintln!("post-update merged");
                     }
-                    merge_update(function, block, at, &access, update);
-                    at += 1 + usize::from(access.home.is_some());
+                    at = merge_update(function, block, at, &access, update) + 1 + usize::from(access.home.is_some());
                     live = std::cell::OnceCell::new();
                     changed = true;
                 }

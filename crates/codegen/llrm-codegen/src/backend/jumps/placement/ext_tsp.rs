@@ -738,14 +738,21 @@ pub(super) fn apply_for_size(
     blocks: &[crate::model::lir::Block],
     index: &crate::support::hash::IndexMap<i64, usize>,
     entry: usize,
+    busy: Option<&crate::analysis::frequency::Frequency>,
 ) -> Option<Vec<usize>> {
     if blocks.len() < 3 || entry != 0 {
         return None;
     }
     let sizes: Vec<u64> =
         blocks.iter().map(|block| 4 * block.insns.iter().filter(|insn| !insn.is_meta()).count() as u64).collect();
-    let counts = vec![1; blocks.len()];
-    let edges = size_edges(blocks, index);
+    // DEVIATE: the pin's size mode weighs every block 1 and every jump 100/110
+    // (`OptForSize`). With `busy` a block or jump that runs more than once per
+    // call (a loop) is weighed by how often, as the profile path does with
+    // `MBFI`, and the rest stays at the unit weights: a hot loop keeps its
+    // fall-throughs, everything else packs for size.
+    let counts: Vec<u64> =
+        blocks.iter().map(|block| times(busy.map(|busy| busy.block(block.at))).round() as u64).collect();
+    let edges = size_edges(blocks, index, busy);
     let order = compute_layout(&sizes, &counts, &edges);
     let original: Vec<usize> = (0..blocks.len()).collect();
     if score(&original, &sizes, &edges) > score(&order, &sizes, &edges) {
@@ -754,12 +761,18 @@ pub(super) fn apply_for_size(
     Some(order)
 }
 
+/// How often a block or jump runs per call, at least once.
+fn times(per_call: Option<f64>) -> f64 {
+    per_call.map_or(1.0, |count| count.max(1.0))
+}
+
 /// The jumps `applyExtTsp` counts at `OptForSize`. A block `analyzeBranch`
 /// gives up on (a jump table: hundreds of successors made the layout
 /// quadratic, minutes on an interpreter's dispatch) has none, as in the pin.
 fn size_edges(
     blocks: &[crate::model::lir::Block],
     index: &crate::support::hash::IndexMap<i64, usize>,
+    busy: Option<&crate::analysis::frequency::Frequency>,
 ) -> Vec<EdgeCount> {
     let mut edges = Vec::new();
     for (src, block) in blocks.iter().enumerate() {
@@ -774,8 +787,11 @@ fn size_edges(
                 }
             }
         }
-        let count = if seen.len() == 1 { 110 } else { 100 };
-        edges.extend(seen.into_iter().map(|dst| EdgeCount { src, dst, count }));
+        let flat = if seen.len() == 1 { 110 } else { 100 };
+        edges.extend(seen.into_iter().map(|dst| {
+            let count = (flat as f64 * times(busy.map(|busy| busy.edge(block.at, blocks[dst].at)))).round() as u64;
+            EdgeCount { src, dst, count }
+        }));
     }
     edges
 }
@@ -848,7 +864,7 @@ mod tests {
             blocks.push(Block::from(one));
         }
         let index = (0..blocks.len()).map(|place| (place as i64, place)).collect();
-        let edges = size_edges(&blocks, &index);
+        let edges = size_edges(&blocks, &index, None);
         assert!(edges.iter().all(|edge| edge.src != 0), "the dispatch has {} jumps", edges.iter().filter(|edge| edge.src == 0).count());
         assert_eq!(edges.len(), 400, "each case still jumps back to the dispatch");
     }

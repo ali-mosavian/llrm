@@ -177,6 +177,21 @@ impl Default for Z80Tti {
 pub const SPEED_MILLICLOCKS_PER_BYTE: i64 = 3000;
 
 impl Tti for Z80Tti {
+    /// DEVIATE COMMON-INSTS-O1 (owner wasm-3, exit 2026-12-12, row
+    /// COMMON-INSTS-O1): the -O2 function pipeline's hoisting and sinking
+    /// SimplifyCFG (L832) also runs at -O1, as before the pin's plain one (L621)
+    /// was mirrored; the flip is not measured here (computed_goto -O1 +369 B,
+    /// word_compare_branches +265 B on 6502 without it).
+    fn common_insts_at_o1(&self) -> bool {
+        true
+    }
+
+    /// No jump through a register: `indirectbr` is a `switch` over block
+    /// numbers (`IndirectBrExpandPass`).
+    fn expands_indirect_br(&self) -> bool {
+        true
+    }
+
     /// DEVIATE VASTART-PROMOTE (owner x86-m32, exit 2026-11-27; z80 joins it):
     /// `va_list` is `char *`, so `va_start` is a store of the first
     /// variadic argument's address and the list lives in a register, as SDCC
@@ -226,6 +241,18 @@ impl Tti for Z80Tti {
     /// the accumulator's old value for the exit took a frame (74 B, now 37 B).
     fn should_drop_lsr_solution_if_less_profitable(&self) -> bool {
         true
+    }
+
+    fn lsr_alternate_order(&self) -> bool {
+        true
+    }
+
+    /// DEVIATE LU33 (owner z80, exit 2026-12-15): `ld hl,#sym` is an
+    /// immediate, not a register the loop keeps. Part of the alternate order
+    /// (LSR-KEY-TRIAL): under Z80L3's order it moved lz4's match copy to a
+    /// base add (the second `ldir` lost).
+    fn lsr_global_address_is_free(&self) -> bool {
+        llrm_transforms::trial::lsr_alternate_order()
     }
 
     fn lsr_dropped_solution_spares_addresses(&self) -> bool {
@@ -375,6 +402,16 @@ impl Tti for Z80Tti {
         a: &LsrCost,
         b: &LsrCost,
     ) -> bool {
+        // DEVIATE LSR-KEY-TRIAL (owner z80, exit 2026-12-15): the pin's order,
+        // registers first, which the driver tries against the one below
+        // (`compile::effective`): histo -O1 348 -> 291 B, and sum4 -O2 loses
+        // its `djnz` (lz4's second `ldir`) where the registers tie.
+        if llrm_transforms::trial::lsr_alternate_order() {
+            let key = |c: &LsrCost| {
+                (c.num_regs, c.add_rec_cost, c.num_iv_muls, c.num_base_adds, c.scale_cost, c.imm_cost, c.setup_cost)
+            };
+            return key(a) < key(b);
+        }
         let key = |c: &LsrCost| {
             (
                 c.spills.saturating_add(c.num_base_adds),
@@ -536,6 +573,19 @@ impl Tti for Z80Tti {
     /// backend's byte-for-clock choices): one place, not an inliner-only 3000.
     fn speed_milliclocks_per_byte(&self) -> i64 {
         SPEED_MILLICLOCKS_PER_BYTE
+    }
+
+    /// DEVIATE INL-SPEED-OS (owner z80, exit 2026-12-05): see
+    /// `Tti::inline_trial_speed_at_size`. A call in a loop of 16 trips or
+    /// more is tried inlined at -Os and -Oz and kept where the module shrinks
+    /// or the copy saves clocks for a few bytes.
+    fn inline_trial_speed_at_size(&self) -> Option<i64> {
+        Some(16)
+    }
+
+    /// `Tti::inline_hot_trial_at_size`.
+    fn inline_hot_trial_at_size(&self) -> bool {
+        true
     }
 
     /// A loop whose bound the call's constants fix unrolls and folds in the

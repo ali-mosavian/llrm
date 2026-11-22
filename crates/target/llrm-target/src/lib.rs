@@ -262,6 +262,21 @@ struct Described {
 }
 
 impl llrm_mir::target::Machine for Described {
+    fn tuning(&self) -> llrm_mir::target::Tuning {
+        let mut tuning = llrm_mir::target::Tuning::PIN;
+        if let Some([set, set_size, copy, copy_size, mov, mov_size]) =
+            self.tti.as_ref().and_then(|tti| tti.memory_limits())
+        {
+            tuning.max_stores_per_memset = set;
+            tuning.max_stores_per_memset_opt_size = set_size;
+            tuning.max_stores_per_memcpy = copy;
+            tuning.max_stores_per_memcpy_opt_size = copy_size;
+            tuning.max_stores_per_memmove = mov;
+            tuning.max_stores_per_memmove_opt_size = mov_size;
+        }
+        tuning
+    }
+
     fn has_vector_mir(&self) -> bool {
         self.tti.as_ref().is_some_and(|tti| tti.vector_values())
     }
@@ -697,6 +712,22 @@ pub trait Target {
     /// port has not measured it; the allocator makes a constant again where it wants it.
     fn hoists_register_free_ops(&self) -> bool {
         false
+    }
+
+    /// Whether the opcode `name` is flagged `isReMaterializable` in the
+    /// target's description: `IsProfitableToHoist` hoists such an
+    /// instruction whatever the pressure. The pin's M68k flags none
+    /// (`LEA32*`, `MOVE32ri`), so there the pressure check decides.
+    fn rematerializable_opcode(&self) -> fn(&str) -> bool {
+        |_| true
+    }
+
+    /// The register class (a name in `pressure.sets`) the opcode `name`
+    /// constrains its result to, where the target's selected opcodes carry
+    /// one (`MCOperandInfo::RegClass`): a vreg takes the class of its
+    /// definition (M68k's `LEA32*` define `AR32`).
+    fn def_register_class(&self) -> fn(&str) -> Option<&'static str> {
+        |_| None
     }
 
     /// The pressure sets of the register classes and each set's limit, for a

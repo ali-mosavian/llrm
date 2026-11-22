@@ -1730,3 +1730,90 @@ b0:
     let made = llrm_mir::counts::get(llrm_mir::counts::Event::FactSets) - before;
     assert_eq!(made, 0, "{made} fact sets made to ask noreturn");
 }
+
+/// The fold on `Flagged` with gcc's phiopt arm rule (`phiopt_one_statement`).
+fn folded_with_phiopt_rule(
+    text: &str,
+    on: bool,
+) -> String {
+    let flagged = crate::testing::Flagged { phiopt_one_statement: on, ..Default::default() };
+    let mut module = parsed(text);
+    let outer = Outer::of(&module, None);
+    let layout = DataLayout::default();
+    let spec = Speculation { tti: &flagged, layout: &layout, outer: &outer };
+    let mut declared = Declared::of(&module);
+    let (context, function) = module.function_mut("f").expect("@f");
+    super::simplified(context, &spec, &mut declared, function);
+    printed(&module)
+}
+
+/// sfm16_dbg's `if (c) { if (bad == 0) first = i; bad++; }` in a loop: after the
+/// inner diamond became a select the outer arm holds two statements. The pin
+/// folds it (cost 2 of 4) and the loop-carried `bad` waits on a select each
+/// iteration, +64.8% against gcc, whose phiopt
+/// (`empty_bb_or_one_feeding_into_p`) takes only an arm of one statement and
+/// keeps the branch. Off the recurrence, or with one statement, it still folds.
+#[test]
+fn test_gcc_phiopt_arm_rule_keeps_a_two_statement_arm_of_a_recurrence_a_branch() {
+    let looped = "define i64 @f(i64 %n) {
+b0:
+  br label %b1
+
+b1:
+  %i = phi i64 [ 0, %b0 ], [ %i2, %b4 ]
+  %acc = phi i64 [ 0, %b0 ], [ %p, %b4 ]
+  %m = and i64 %i, 1
+  %m1 = xor i64 %m, %n
+  %m2 = add i64 %m1, 3
+  %m3 = mul i64 %m2, 5
+  %c = icmp eq i64 %m3, 0
+  br i1 %c, label %b2, label %b3
+
+b2:
+  %a = add i64 %acc, 1
+  %y = add i64 %a, 1
+  br label %b4
+
+b3:
+  br label %b4
+
+b4:
+  %p = phi i64 [ %y, %b2 ], [ %acc, %b3 ]
+  %i2 = add i64 %i, 1
+  %d = icmp eq i64 %i2, %n
+  br i1 %d, label %b5, label %b1
+
+b5:
+  ret i64 %p
+}
+";
+    assert!(folded_with_phiopt_rule(looped, false).contains("select i1 %c"), "the pin folds it");
+    let kept = folded_with_phiopt_rule(looped, true);
+    assert!(!kept.contains("select i1 %c"), "{kept}");
+    let shallow = looped
+        .replace("  %m1 = xor i64 %m, %n\n  %m2 = add i64 %m1, 3\n  %m3 = mul i64 %m2, 5\n  %c = icmp eq i64 %m3, 0\n", "  %c = icmp eq i64 %m, 0\n");
+    assert!(
+        folded_with_phiopt_rule(&shallow, true).contains("select i1 %c"),
+        "a condition no later than the values keeps the select (sfm16_float_f2i: the convert is the later)"
+    );
+    let one = looped.replace("  %y = add i64 %a, 1\n", "").replace("[ %y, %b2 ]", "[ %a, %b2 ]");
+    assert!(folded_with_phiopt_rule(&one, true).contains("select i1 %c"), "one statement feeding the phi folds");
+    let straight = "define i64 @f(i64 %x, i1 %c) {
+b0:
+  br i1 %c, label %b1, label %b2
+
+b1:
+  %a = add i64 %x, 1
+  %y = add i64 %a, 1
+  br label %b3
+
+b2:
+  br label %b3
+
+b3:
+  %p = phi i64 [ %y, %b1 ], [ %x, %b2 ]
+  ret i64 %p
+}
+";
+    assert!(folded_with_phiopt_rule(straight, true).contains("select i1 %c"), "off a recurrence the pin's fold stands");
+}

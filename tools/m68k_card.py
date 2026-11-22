@@ -14,11 +14,16 @@ counts huffman_decode -O2 (1440 B, 136430 clk against gcc 526 B, 145262 clk) as 
 """
 import sys
 
+sys.path.insert(0, __file__.rsplit("/", 1)[0])
+from m68k_worse_cells import settle_bounds  # noqa: E402
+
 OVER = 101  # at most 1% over: ours * 100 <= best * 101
 
 
 def number(text):
-    return int(text) if text.strip().isdigit() else None
+    """An exact clocks or bytes cell; a bound (`<=N`, `>=N`) is kept as text for `settle_bounds`."""
+    text = text.strip()
+    return int(text) if text.isdigit() else text if text[:2] in ("<=", ">=") and text[2:].isdigit() else None
 
 
 def over(ours, best):
@@ -66,6 +71,9 @@ def read(paths):
             cpu, program, level = cells[:3]
             ours_bytes, ours_clocks, gcc_bytes, gcc_clocks = (number(cell) for cell in cells[3:7])
             ours_lib, gcc_lib = (number(cells[at]) if len(cells) > at else 0 for at in (7, 8))
+            sides = {"ours": (0, ours_clocks), "gcc": (0, gcc_clocks)}
+            settle_bounds(sides)
+            ours_clocks, gcc_clocks = sides["ours"][1], sides["gcc"][1]
             rows.append((cpu, program, level, whole(ours_bytes, ours_lib), ours_clocks, whole(gcc_bytes, gcc_lib), gcc_clocks))
     return rows
 

@@ -4,10 +4,11 @@
 //! # How it works
 //! Registers are chosen. Each block is walked twice and alone, backward then
 //! forward, with a tracker keyed by the byte lanes of the general registers
-//! (28 of them, LLVM's register units). The tracker knows, per lane, the copy
-//! that last defined it, whether that copy is still available (neither side
-//! written since), the lanes it defines, and the instructions that read a
-//! copy's source (`src_users`).
+//! (87 of them with the segment registers, LLVM's register units: a root's four
+//! bytes and, for a 64-bit view, the upper half as one lane). The tracker
+//! knows, per lane, the copy that last defined it, whether that copy is still
+//! available (neither side written since), the lanes it defines, and the
+//! instructions that read a copy's source (`src_users`).
 //!
 //! Forward (`forwardCopyPropagateBlock`): a copy that repeats an available one
 //! (`ax = bx ... bx = ax` too) is dropped; a read of a copy's destination
@@ -67,15 +68,24 @@ use crate::model::ir::{self, Loc, Operation, Reg, Semantics};
 use crate::model::lir::{self, Block, Insn, LirBody};
 use crate::support::hash::IndexMap;
 
-/// The byte lanes of the general registers (seven roots of four bytes, then
-/// the eight roots long mode adds), then of the six segment registers. A
-/// segment register is tracked as the source of a copy, never as its
-/// destination: a string instruction reads `es`, which its effect does not say,
-/// so a dead-looking `mov es, bx` must stay.
-const UNITS: usize = 72;
+/// The lanes of the general registers (the fifteen roots, each of four bytes
+/// and the upper half a 64-bit view adds as one lane: `lanes::UPPER`), then of
+/// the six segment registers. A segment register is tracked as the source of a
+/// copy, never as its destination: a string instruction reads `es`, which its
+/// effect does not say, so a dead-looking `mov es, bx` must stay.
+const UNITS: usize = 87;
 
 /// The units of the general registers.
-const GENERAL: usize = 60;
+const GENERAL: usize = 75;
+
+/// The lanes of a root: its four bytes and the upper half.
+const ROOT_LANES: usize = 5;
+
+/// The lanes a register of `width` bytes holds: one for each of the first four
+/// bytes, and the one the rest share.
+fn lanes_of_width(width: u32) -> usize {
+    if width > 4 { ROOT_LANES } else { width as usize }
+}
 
 /// A set of units.
 type Mask = u128;
@@ -415,7 +425,7 @@ enum Place {
 struct Machine {
     regs: Regs,
     bits: u32,
-    places: Vec<[u8; 4]>,
+    places: Vec<[u8; ROOT_LANES]>,
     lanes: Vec<Lane>,
     register_for: IndexMap<Vec<Lane>, RegId>,
     /// Every lane: what an instruction of unknown effect may read.
@@ -434,14 +444,9 @@ impl Machine {
         let lanes: Vec<Lane> = if crate::backend::lanes::is_x86(regs) {
             // The long-mode roots are units in every body so a segment register
             // keeps its unit; a body without them never names these lanes.
-            let roots64 = llrm_x86::registers::ROOTS64.into_iter().flat_map(|one| {
-                let lanes: Vec<Lane> = _lanes(regs, one).into_iter().collect();
-                if lanes.is_empty() { (0..4).map(|byte| (one, byte)).collect() } else { lanes }
-            });
-            let lanes: Vec<Lane> = llrm_x86::registers::ROOTS
-                .into_iter()
-                .flat_map(|one| _lanes(regs, one))
-                .chain(roots64)
+            let roots = llrm_x86::registers::ROOTS.into_iter().chain(llrm_x86::registers::ROOTS64);
+            let lanes: Vec<Lane> = roots
+                .flat_map(|one| (0..ROOT_LANES as u32).map(move |byte| (one, byte)))
                 .chain(segments.iter().copied().flat_map(|one| _lanes(regs, one)))
                 .collect();
             assert_eq!(lanes.len(), UNITS, "the general registers' byte lanes");
@@ -450,11 +455,14 @@ impl Machine {
             // Another file: the lanes its table gives each general root, in
             // the file's order (arm64: one per `x` register).
             let roots = regs.entries().filter(|(id, one)| one.root == *id).map(|(id, _)| id);
-            let lanes: Vec<Lane> = roots.flat_map(|one| _lanes(regs, one)).chain(segments.iter().copied().flat_map(|one| _lanes(regs, one))).collect();
+            let lanes: Vec<Lane> = roots
+                .flat_map(|one| _lanes(regs, one))
+                .chain(segments.iter().copied().flat_map(|one| _lanes(regs, one)))
+                .collect();
             assert!(lanes.len() <= UNITS, "{} lanes of a register file are more than the {UNITS} units", lanes.len());
             lanes
         };
-        let mut places = vec![[u8::MAX; 4]; 512];
+        let mut places = vec![[u8::MAX; ROOT_LANES]; 512];
         for (unit, (register, byte)) in lanes.iter().enumerate() {
             places[register.index()][*byte as usize] = unit as u8;
         }
@@ -590,7 +598,7 @@ impl Machine {
             _lanes(self.regs, dest.register).into_iter().collect(),
             _lanes(self.regs, source.register).into_iter().collect(),
         );
-        if destinations.len() != dest.width as usize || sources.len() != destinations.len() {
+        if destinations.len() != lanes_of_width(dest.width) || sources.len() != destinations.len() {
             return None;
         }
         let pairs = destinations
@@ -946,8 +954,16 @@ impl<'a> Walk<'a> {
             match self.effects[at].clone() {
                 // Unknown: it may read any register and write any.
                 None => {
-                    for copy in self.maybe_dead.drain(..) {
-                        self.dead[copy] = false;
+                    // It may read any register: a copy whose destination still
+                    // holds it is read. One already overwritten is dead: the
+                    // value it made is gone (an indirect `jmp`, whose effect
+                    // is unknown, kept `esi = ebx` before the reload of `esi`).
+                    for copy in std::mem::take(&mut self.maybe_dead) {
+                        if self.holds(copy) {
+                            self.dead[copy] = false;
+                        } else {
+                            self.maybe_dead.push(copy);
+                        }
                     }
                     self.tracker.clear();
                     self.writer = [Some(usize::MAX); UNITS];
@@ -984,6 +1000,18 @@ impl<'a> Walk<'a> {
             }
         }
         self.tracker.clear();
+    }
+
+    /// Whether the tracker still has `copy` defining one of its destination
+    /// lanes (nothing has overwritten them all since).
+    fn holds(
+        &self,
+        copy: usize,
+    ) -> bool {
+        let Some(rec) = &self.copies[copy] else {
+            return false;
+        };
+        units_of(rec.dst).any(|unit| self.tracker.copy_for(unit, false) == Some(copy))
     }
 
     /// What is live after each instruction, given what is live out.

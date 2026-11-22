@@ -1,0 +1,31 @@
+# m68k register pressure sets, from the pin's M68kGenRegisterInfoTargetDesc.inc (d1106deb71cc): getRegPressureSetLimit,
+# getLargestRegClassForRegPressureSet, RCWeightTable and RCSetsTable. Format as x86-m32's pressure.sets.
+#
+#   set <index> <name> <limit> <largest class>   the raw limit, before the reserved registers are taken off
+#   class <name> <weight> <registers in the class> <sets, comma separated> <visible registers, comma separated>
+# FPDR*, CCRC, SRC and the FP system classes hold no value the allocator places here and are left out.
+
+set 0 SPC 1 SPC
+set 1 XR16_TC 4 XR16_TC
+set 2 FPDR32 8 FPDR32
+set 3 DR8 10 DR8
+set 4 AR16 10 AR16
+set 5 XR16 16 XR16
+
+class DR8 1 8 3,5 bd0,bd1,bd2,bd3,bd4,bd5,bd6,bd7
+class XR16 1 16 5 wd0,wd1,wd2,wd3,wd4,wd5,wd6,wd7,wa0,wa1,wa2,wa3,wa4,wa5,wa6,wsp
+class AR16 1 8 4,5 wa0,wa1,wa2,wa3,wa4,wa5,wa6,wsp
+class DR16 1 8 3,5 wd0,wd1,wd2,wd3,wd4,wd5,wd6,wd7
+class XR16_TC 1 4 1,3,4,5 wd0,wd1,wa0,wa1
+class AR16_TC 1 2 1,3,4,5 wa0,wa1
+class DR16_TC 1 2 1,3,4,5 wd0,wd1
+class SPILL 1 16 5 d0,d1,d2,d3,d4,d5,d6,d7,a0,a1,a2,a3,a4,a5,a6,sp
+class SPILL_R 1 16 5 d0,d1,d2,d3,d4,d5,d6,d7,a0,a1,a2,a3,a4,a5,a6,sp
+class XR32 1 16 5 d0,d1,d2,d3,d4,d5,d6,d7,a0,a1,a2,a3,a4,a5,a6,sp
+class AR32 1 8 4,5 a0,a1,a2,a3,a4,a5,a6,sp
+class DR32 1 8 3,5 d0,d1,d2,d3,d4,d5,d6,d7
+class AR32_NOSP 1 7 4,5 a0,a1,a2,a3,a4,a5,a6
+class XR32_TC 1 4 1,3,4,5 d0,d1,a0,a1
+class AR32_TC 1 2 1,3,4,5 a0,a1
+class DR32_TC 1 2 1,3,4,5 d0,d1
+class SPC 1 1 0,4,5 sp

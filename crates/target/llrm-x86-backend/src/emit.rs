@@ -66,6 +66,8 @@ use llrm_x86_dagisel::x86_classes::{Role, class_tag};
 struct Emitter<'a, 'd> {
     dag: &'d SelectionDAG,
     ctx: &'a EmitContext<'a>,
+    /// Where the MIR block being emitted starts.
+    entry_at: i64,
     /// `VRBaseMap`: the value each emitted result is.
     values: HashMap<SDValue, u32>,
     /// The LIR value a virtual register number of the DAG is.
@@ -178,6 +180,7 @@ pub fn emit_in(
     let mut emitter = Emitter {
         dag,
         ctx,
+        entry_at: first_at,
         values: HashMap::default(),
         es_copies: HashMap::default(),
         state,
@@ -1654,7 +1657,12 @@ impl Emitter<'_, '_> {
             };
             // a shift by `cl` has the amount as the value the `CopyToReg` glued
             // to it wrote to `CL`; the form pins that source to `cx`
+            // and one by one (`ROR32r1`, `SHL8m1`) has the amount 1 in the name
             let implicit = || {
+                if name.ends_with("r1") || name.ends_with("m1") {
+                    return matches!(form.name.as_str(), "shl" | "shr" | "sar" | "sal" | "rol" | "ror" | "rcl" | "rcr")
+                        .then(|| Loc::Imm(Imm { value: 1, width: 8, address: None }));
+                }
                 (name.ends_with("rCL") || name.ends_with("mCL"))
                     .then(|| self.accumulator.get(&llrm_lir::registers::RegId::CL).map(|held| Loc::Held(*held)))
                     .flatten()
@@ -2101,7 +2109,7 @@ impl Emitter<'_, '_> {
             // vector constant): the bitwise SSE instruction reads all of it.
             EVT::Simple(MVT::I128) => 16,
             // A vector constant `ExpandBUILD_VECTOR` loads whole (`movups`).
-            EVT::Simple(MVT::V16I8 | MVT::V8I16 | MVT::V4I32 | MVT::V2I64) => 16,
+            EVT::Simple(MVT::V16I8 | MVT::V8I16 | MVT::V4I32 | MVT::V2I64 | MVT::V4F32 | MVT::V2F64) => 16,
             _ => return Err(EmitError::Unsupported(format!("a constant pool entry of {vt:?}"))),
         };
         Ok(self.ctx.constants.cell(bits.to_le_bytes()[..size].to_vec()))
@@ -2143,7 +2151,7 @@ impl Emitter<'_, '_> {
         n: u32,
     ) -> Option<u32> {
         let users = |value: SDValue| self.glue_users.get(&value).into_iter().flatten().copied();
-        let status = users(SDValue { node: n, res: 0 })
+        let status = users(self.compare_glue(n))
             .find(|&user| self.is_machine_named(SDValue { node: user, res: 0 }, "FNSTSW16r"))?;
         users(SDValue { node: status, res: 0 })
             .flat_map(|byte| users(SDValue { node: byte, res: 0 }))
@@ -2156,11 +2164,22 @@ impl Emitter<'_, '_> {
         n: u32,
     ) -> Option<u32> {
         self.glue_users
-            .get(&SDValue { node: n, res: 0 })
+            .get(&self.compare_glue(n))
             .into_iter()
             .flatten()
             .copied()
             .find(|&user| self.is_machine_named(SDValue { node: user, res: 0 }, "FNSTSW16r"))
+    }
+
+    /// The glue result of the compare `n`: its last value. A constrained
+    /// compare has its chain first, so the glue is result 1, not 0; reading
+    /// result 0 found no `sahf` and emitted the `fcom` ahead of whatever the
+    /// scheduler put between `fnstsw` and `sahf`.
+    fn compare_glue(
+        &self,
+        n: u32,
+    ) -> SDValue {
+        SDValue { node: n, res: (self.dag.node(SDValue { node: n, res: 0 }).values.len() - 1) as u8 }
     }
 
     /// What the instruction at the end of the glue chain from the `CopyToReg`
@@ -2801,18 +2820,23 @@ impl Emitter<'_, '_> {
                 if !block.fixups.is_empty() {
                     return Err(EmitError::Unsupported("inline assembly naming symbols".to_owned()));
                 }
-                // The value an `st0` input takes is the stack's top and the
-                // only thing on it: the unnamed store the
-                // stackifier reads as `handleReturn`, which
-                // consumes it, so the block sees it in
-                // st(0) with the stack otherwise empty.
+                // The values the `st0` and `st1` inputs take are the stack's
+                // two top entries and the only ones on it: the unnamed store
+                // the stackifier reads as `handleReturn`, which
+                // consumes them, so the block sees them in
+                // st(0), st(1) with the stack otherwise empty.
                 let registers = block.inputs.iter().filter(|one| !one.starts_with("st")).count();
                 let first = 2 + block.fixups.len() + registers;
-                for &op in node.ops.iter().skip(first).take(block.inputs.iter().filter(|one| *one == "st0").count()) {
+                let count = block.inputs.iter().filter(|one| one.starts_with("st")).count();
+                let mut stack = Vec::new();
+                for &op in node.ops.iter().skip(first).take(count) {
                     match self.operand(op)? {
-                        Loc::Held(value) => self.push(Operation::FloatStore, "", Vec::new(), vec![Loc::Held(value)]),
-                        _ => return Err(EmitError::Unsupported("an st0 input that is no x87 value".to_owned())),
+                        Loc::Held(value) => stack.push(Loc::Held(value)),
+                        _ => return Err(EmitError::Unsupported("an st input that is no x87 value".to_owned())),
                     }
+                }
+                if !stack.is_empty() {
+                    self.push(Operation::FloatStore, "", Vec::new(), stack);
                 }
                 let callee = Callee::Named(name);
                 let at = self.push_call(
@@ -3395,9 +3419,21 @@ impl Emitter<'_, '_> {
                 let group = node.ops.get(..5).ok_or_else(|| EmitError::Unsupported("a short jump".to_owned()))?;
                 // The table is the displacement, or the base is its address.
                 let base = self.dag.node(group[0]).ops.first().map(|op| self.dag.node(*op).data.clone());
+                // The entry's size: the jump's own, 2, 4 or 8.
+                let entry = match name {
+                    "JMP16m" => 2,
+                    "JMP64m" => 8,
+                    _ => 4,
+                };
                 let table = match (self.dag.node(group[3]).data.clone(), base) {
                     (NodeData::JumpTable(table), _) | (_, Some(NodeData::JumpTable(table))) => table,
-                    _ => return Err(EmitError::Unsupported("an indirect jump through memory".to_owned())),
+                    // Not a switch's table: an `indirectbr` through memory
+                    // (`goto *table[i]`), which names the blocks it may reach.
+                    _ => {
+                        let cell = self.cell(group, entry)?;
+                        self.indirect_jump(Loc::Mem(cell));
+                        return Ok(Some(()));
+                    }
                 };
                 let jump = self.jump_table(table)?;
                 // The cell is `$J + index * entry` whichever way the table's
@@ -3406,11 +3442,6 @@ impl Emitter<'_, '_> {
                 let scale = self.constant(group[1])?;
                 let mut address = Addr::new(llrm_codegen::model::ir::Space::Segment, 0);
                 address.index = jump.id;
-                let entry = match name {
-                    "JMP16m" => 2,
-                    "JMP64m" => 8,
-                    _ => 4,
-                };
                 // At real mode a lone register is the address's base, as the
                 // old selector makes it (16-bit addressing has no scale).
                 let (base, index) =
@@ -3425,11 +3456,13 @@ impl Emitter<'_, '_> {
             // (the position-independent table of 64-bit code): the table is
             // the one the register's sum was made from.
             "JMP16r" | "JMP32r" | "JMP64r" => {
-                let table = self
-                    .jump_table_behind(node.ops[0], 8)
-                    .ok_or_else(|| EmitError::Unsupported("an indirect jump through a register".to_owned()))?;
                 let Loc::Held(target) = self.operand(node.ops[0])? else {
                     return Err(EmitError::Unsupported("a jump through a non-register".to_owned()));
+                };
+                // Not a switch's table: an `indirectbr` through a register.
+                let Some(table) = self.jump_table_behind(node.ops[0], 8) else {
+                    self.indirect_jump(Loc::Held(target));
+                    return Ok(Some(()));
                 };
                 let jump = self.jump_table(table)?;
                 // The table is relative only where the DAG made it so (64-bit
@@ -4163,6 +4196,16 @@ impl Emitter<'_, '_> {
             return None;
         }
         self.dag.node(value).ops.iter().find_map(|&op| self.jump_table_behind(op, depth - 1))
+    }
+
+    /// An `indirectbr`'s jump: through `source`, to the blocks it names.
+    fn indirect_jump(
+        &mut self,
+        source: Loc,
+    ) {
+        let targets = self.ctx.indirect.get(&self.entry_at).cloned().unwrap_or_default();
+        let what = Semantics { indirect: true, computed: true, table: targets, ..Semantics::new(Operation::Jump) };
+        self.push_semantics(Semantics { name: Some("jmp".into()), sources: vec![source], ..what });
     }
 
     fn jump_table(

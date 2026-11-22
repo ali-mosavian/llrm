@@ -104,6 +104,13 @@ pub struct Executed {
     /// x87 `fxch`es executed: one instruction here, `x87_exchange` clocks on
     /// the CPU.
     pub exchanges: f64,
+    /// Calls and returns executed (a sibling call's `jmp` is neither).
+    pub near_calls: f64,
+    pub near_returns: f64,
+    /// Each call and jump instruction (its `at`, the key of
+    /// `Procedure::callees`) with how often per call it runs: what weights a
+    /// callee's own work (a tail call is a jump).
+    pub calls: Vec<(i64, f64)>,
 }
 
 impl Executed {
@@ -131,6 +138,17 @@ impl Executed {
             return Ok(0.0);
         }
         Ok(self.exchanges * (cpu.cost("x87_exchange")? as f64 - 1.0))
+    }
+
+    /// What the calls and returns cost over the one unit an instruction
+    /// counts: a 486 `call` is 3 clocks and a `ret` 5. A CPU with no price for
+    /// them states none (the work alone stands).
+    pub fn call_cycles(
+        &self,
+        cpu: &Profile,
+    ) -> f64 {
+        let over = |form: &str| cpu.cost(form).map_or(0.0, |one| one as f64 - 1.0);
+        self.near_calls * over("call_near") + self.near_returns * over("ret_near")
     }
 }
 
@@ -253,6 +271,7 @@ fn executed_over(
     }
     let frequency = if proven { Frequency::counted(body) } else { Frequency::over(body, &body.blocks) };
     let x87 = |one: &Insn| one.what.as_ref().is_some_and(|what| what.op.is_x87());
+    let is_jmp = |one: &Insn| one.what.as_ref().is_some_and(|what| what.name.as_deref() == Some("jmp"));
     let is_fxch = |one: &Insn| one.what.as_ref().is_some_and(|what| what.name.as_deref() == Some("fxch"));
     let slots: IndexSet<Addr> = body
         .blocks
@@ -311,6 +330,19 @@ fn executed_over(
                         (out.branches + reaching, out.taken + taken, reaching - taken);
                 }
                 Some((Operation::Jump, _)) => out.jumps += reaching,
+                // A sibling call leaves by a `jmp` the body holds as a return:
+                // listed with the calls (`Procedure::callees` tells which
+                // returns those are).
+                Some((Operation::Return, _)) => {
+                    out.calls.push((one.at, reaching));
+                    if !is_jmp(one) {
+                        out.near_returns += reaching;
+                    }
+                }
+                Some((Operation::Call, _)) => {
+                    out.calls.push((one.at, reaching));
+                    out.near_calls += reaching;
+                }
                 Some((Operation::Exchange, _)) if is_fxch(one) => out.exchanges += reaching,
                 _ => {}
             }

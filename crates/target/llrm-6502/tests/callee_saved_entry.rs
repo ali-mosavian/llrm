@@ -23,12 +23,20 @@ fn assembly(source: &str) -> String {
 }
 
 /// `mix(long, long, long)` copied its first byte from A into `rc8` and then pushed A as "the old
-/// `rc8`": the caller's `rc8` was lost and `frameless` -O2 printed 1011 for 499 (2026-11-14).
+/// `rc8`": the caller's `rc8` was lost and `frameless` -O2 printed 1011 for 499 (2026-11-14). The
+/// fixture has no multiply: the shape (an argument in A copied into a callee-saved cell) must not
+/// depend on how a multiply is called.
 #[test]
 fn a_cell_an_argument_is_copied_into_is_pushed_before_the_copy() {
     let text = assembly("saved_cell_arg.c");
     let body = &text[text.find("\nmix:").expect("mix")..];
     let body = body.split(".segment").next().unwrap();
     let store = body.find("  sta rc8\n").unwrap_or_else(|| panic!("no copy into rc8:\n{body}"));
-    assert!(body[..store].contains("  lda rc8\n"), "rc8 is overwritten before its old value is pushed:\n{body}");
+    let before = &body[..store];
+    assert!(before.contains("  lda rc8\n  pha\n"), "rc8 is overwritten before its old value is pushed:\n{body}");
+    // the argument waits in an index register while the cells are pushed, and comes back for the copy
+    let held = ["  tay\n", "  tax\n"].iter().zip(["  tya\n", "  txa\n"]).any(|(save, back)| {
+        before.find(save).zip(before.find("  lda rc8\n")).is_some_and(|(at, push)| at < push) && before.ends_with(back)
+    });
+    assert!(held, "the argument in A is lost across the pushes:\n{body}");
 }

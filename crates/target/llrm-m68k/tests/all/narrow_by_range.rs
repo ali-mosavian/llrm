@@ -27,6 +27,37 @@ fn the_libcall_stays_where_the_extensions_cost_more_bytes() {
     assert_eq!(calls("68020", Level::O2, "__udivsi3"), 0, "the 68020 has divu.l: nothing to narrow to, no call either");
 }
 
+/// Calls of `routine` with no constant operand, direct or through the address
+/// register the call-target pass loaded it into (`lea routine, %aN`, `jsr
+/// (%aN)`): a count by name saw none while that pass held `%a6`, and none of
+/// the 26 constant multiplies of the kernel either way.
+fn variable_calls(
+    cpu: &str,
+    level: Level,
+    routine: &str,
+) -> usize {
+    let asm = assembly(KERNEL, cpu_of(cpu).unwrap(), level).unwrap_or_else(|why| panic!("{why}"));
+    let lines: Vec<&str> = asm.lines().map(str::trim).collect();
+    let mut held = None;
+    let mut count = 0;
+    for (at, line) in lines.iter().enumerate() {
+        if let Some(rest) = line.strip_prefix("lea") {
+            held = rest
+                .trim()
+                .strip_prefix(routine)
+                .and_then(|r| r.trim_start_matches(',').trim().strip_prefix('%'))
+                .map(str::to_owned);
+        }
+        let through = held.as_ref().is_some_and(|register| *line == format!("jsr\t(%{register})"));
+        if (through || line.starts_with("jsr") && line.contains(routine))
+            && !lines[at.saturating_sub(2)..at].iter().any(|push| push.contains('#'))
+        {
+            count += 1;
+        }
+    }
+    count
+}
+
 /// `u - (u / v) * v` of two byte counters kept `__mulsi3` for `q * v` (u8b: 1
 /// call per trip, 68000 -O2): the quotient is a byte, the counter a
 /// range-proved byte, and the narrowing wrapper the pipeline made was folded
@@ -34,7 +65,7 @@ fn the_libcall_stays_where_the_extensions_cost_more_bytes() {
 /// selection. Made after it, selection sees two halves and emits `mulu`.
 #[test]
 fn a_quotient_times_a_counter_is_a_half_multiply_at_o2() {
-    assert_eq!(calls("68000", Level::O2, "__mulsi3"), 0);
+    assert_eq!(variable_calls("68000", Level::O2, "__mulsi3"), 0);
     let asm = assembly(KERNEL, cpu_of("68000").unwrap(), Level::O2).unwrap();
     assert!(asm.lines().any(|line| line.trim_start().starts_with("mulu")), "{asm}");
 }

@@ -524,7 +524,11 @@ pub(crate) fn vector_divide_by_constant_cost(
         return None;
     }
     let (_, lane) = vector_pieces(ty)?;
-    if lane == 64 || u64::from(lane) * u64::from(ty.count) < 64 {
+    // A power of two needs no multiply-high: a 64-bit lane is priced there
+    // (`usra` and one `sshr` for a quotient, `LT.second.getScalarType() ==
+    // i64`).
+    let signed_power_of_two = signed && (second.power_of_two || second.negated_power_of_two);
+    if (lane == 64 && !signed_power_of_two) || u64::from(lane) * u64::from(ty.count) < 64 {
         return None;
     }
     let price = |op| vector_arithmetic_cost(op, ty, kind).map(|cost| cost.value);
@@ -533,13 +537,14 @@ pub(crate) fn vector_divide_by_constant_cost(
         // and `usra` (two shifts), the remainder's multiply and subtract not
         // priced; a power of two is `cmlt`, `usra` and `sshr` (a remainder:
         // `usra`, `and`, `sub`).
-        let (mul, add, shr) = (price(ArithOp::Mul)?, price(ArithOp::Add)?, price(ArithOp::AShr)?);
+        let (add, shr) = (price(ArithOp::Add)?, price(ArithOp::AShr)?);
         let usra = 2 * shr;
-        if second.power_of_two || second.negated_power_of_two {
+        if signed_power_of_two {
             let negate = if second.negated_power_of_two && op == ArithOp::SDiv { shr } else { 0 };
-            return Some(Cost::of(negate + usra + if op == ArithOp::SDiv { 2 * shr } else { 2 * add }));
+            let quotient = if lane == 64 { shr } else { 2 * shr };
+            return Some(Cost::of(negate + usra + if op == ArithOp::SDiv { quotient } else { 2 * add }));
         }
-        return Some(Cost::of(2 * mul + add + shr + usra));
+        return Some(Cost::of(2 * price(ArithOp::Mul)? + add + shr + usra));
     }
     if second.power_of_two {
         return price(if op == ArithOp::UDiv { ArithOp::LShr } else { ArithOp::And }).map(Cost::of);
@@ -553,6 +558,20 @@ pub(crate) fn vector_divide_by_constant_cost(
 }
 
 impl Tti for AArch64 {
+    /// DEVIATE OS-TRIAL-CLOCK-CAP (owner arm64, exit 2026-12-21): the -Os
+    /// unrotated trial keeps a smaller object that costs at most 1% of the
+    /// laid-out work (the strict rule put back fib's 12 B for 0.3%).
+    fn os_trial_clock_cap_percent(&self) -> Option<i64> {
+        Some(1)
+    }
+
+    /// DEVIATE LATE-MEMCPYOPT-SIZE (owner x86-m32-b, exit 2026-12-12): see
+    /// `Tuning::late_memcpyopt_at_size`. QB arm64 Os -116 B (dialog -92), no
+    /// file worse.
+    fn late_memcpyopt_at_size(&self) -> bool {
+        true
+    }
+
     /// `isProfitableToSinkOperands`: see [`crate::tti_sink`].
     fn is_profitable_to_sink_operands(
         &self,
@@ -796,6 +815,17 @@ impl Tti for AArch64 {
         self.unroll_rate
     }
 
+    /// DEVIATE UP1-O3 (owner arm64, exit 2026-12-21): at -O3 the pin's
+    /// threshold alone decides a full unroll. matmul -O3: the outer loop of
+    /// the checksum nest saves 157 clk for 370 B, under the 500 mclk/B rate,
+    /// was kept rolled where the pin unrolls all six loops (+9.8% clocks).
+    fn unroll_milliclocks_per_byte_at(
+        &self,
+        opt_level: u32,
+    ) -> i64 {
+        if opt_level >= 3 { 0 } else { self.unroll_rate }
+    }
+
     /// DEVIATE IND-MASK (arm64, owner w15, exit 2026-11-30): see the trait.
     fn indvars_widens_narrow_counter_through_masks(&self) -> bool {
         true
@@ -972,6 +1002,18 @@ impl Tti for AArch64 {
         ty: VectorTy,
         kind: CostKind,
     ) -> Option<Cost> {
+        // [L4992]: no `mul.2d` without SVE; the multiply of an `i64` vector is
+        // scalarized, each lane two extracts, a multiply and an insert (14 for
+        // a `v2i64`, 28 for a `v4i64`).
+        if op == ArithOp::Mul && kind == CostKind::RecipThroughput && matches!(ty.lane, Ty::Int(64)) {
+            let lane_op = |lane_op| self.vector_instr_cost(lane_op, ty, None, false, VectorInstrContext::None, kind);
+            let (extract, insert) = (lane_op(LaneOp::Extract)?, lane_op(LaneOp::Insert)?);
+            let scalar = self.arithmetic_cost(op, ty.lane, kind, OperandInfo::ANY, OperandInfo::ANY);
+            if !(extract.valid && insert.valid && scalar.valid) {
+                return None;
+            }
+            return Some(Cost::of(i64::from(ty.count) * (scalar.value + 2 * extract.value + insert.value)));
+        }
         vector_arithmetic_cost(op, ty, kind)
     }
 
@@ -982,7 +1024,25 @@ impl Tti for AArch64 {
         second: OperandInfo,
         kind: CostKind,
     ) -> Option<Cost> {
-        vector_divide_by_constant_cost(op, ty, second, kind).or_else(|| vector_arithmetic_cost(op, ty, kind))
+        // [L5129]: a signed divide by a vector constant whose lanes differ is
+        // priced as scalarized (`FIXME` in the pin): two extracts of the
+        // dividend's lanes, one insert, and a scalar divide for each lane.
+        if second.constant
+            && second.non_uniform
+            && matches!(op, ArithOp::SDiv | ArithOp::SRem)
+            && !ty.lane.is_float()
+            && let Ty::Int(_) = ty.lane
+        {
+            let lane_op = |lane_op| self.vector_instr_cost(lane_op, ty, None, false, VectorInstrContext::None, kind);
+            let (extract, insert) = (lane_op(LaneOp::Extract)?, lane_op(LaneOp::Insert)?);
+            let by = OperandInfo { constant: true, non_uniform: true, ..OperandInfo::ANY };
+            let scalar = self.arithmetic_cost(op, ty.lane, kind, OperandInfo::ANY, by);
+            if !(extract.valid && insert.valid && scalar.valid) {
+                return None;
+            }
+            return Some(Cost::of(2 * extract.value + insert.value + i64::from(ty.count) * scalar.value));
+        }
+        vector_divide_by_constant_cost(op, ty, second, kind).or_else(|| self.vector_arithmetic_cost(op, ty, kind))
     }
 
     fn vectorizes_size_priced(&self) -> bool {
@@ -1122,6 +1182,27 @@ impl Tti for AArch64 {
         false
     }
 
+    /// `AArch64TTIImpl::getScalarizationOverhead`: an integer vector pays
+    /// `popcount(lanes) * base` whatever the lane (the lane 0 insert into
+    /// poison is free only through `getVectorInstrCost`, and a float vector
+    /// goes to the base class's per-lane price).
+    fn demanded_insert_overhead(
+        &self,
+        ty: VectorTy,
+        lanes: &[u32],
+        cost_kind: CostKind,
+    ) -> Option<Cost> {
+        if ty.lane.is_float() {
+            return llrm_mir::tti::per_lane_insert_overhead(self, ty, lanes, cost_kind);
+        }
+        crate::tti_vector::scalarization_overhead(ty, true, false, cost_kind).map(|_| {
+            Cost::of(
+                lanes.len() as i64
+                    * if cost_kind == CostKind::CodeSize { 1 } else { crate::tti_vector::INSERT_EXTRACT_BASE_COST },
+            )
+        })
+    }
+
     fn scalarization_overhead(
         &self,
         ty: VectorTy,
@@ -1172,6 +1253,12 @@ impl Tti for AArch64 {
         // `FeatureFastLD1Single`, in the Apple A14 tune apple-m1 takes.
         let fast_ld1_single = self.cpu == Cpu::AppleM1;
         crate::tti_vector::vector_instr_cost(op, ty, index, into_poison, context, cost_kind, fast_ld1_single)
+    }
+
+    /// The pin has no optsize rule for merged conditions: its cost rule
+    /// decides at `-Os` as at `-O2`.
+    fn splits_merged_conditions_at_optsize(&self) -> bool {
+        false
     }
 
     /// `AArch64TargetLowering::getJumpConditionMergingParams`: a base of
@@ -1518,6 +1605,41 @@ impl Tti for AArch64 {
         imm != i64::MIN && is_legal_arith_immediate(imm.unsigned_abs())
     }
 
+    /// Consider splitting the large offset of a struct or an array:
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L20344
+    fn should_consider_gep_offset_split(&self) -> bool {
+        true
+    }
+
+    /// `getPreferredLargeGEPBaseOffset`: the offsets that share their bits
+    /// above 12 rebase to a multiple of 4096 (one `add`), else the smallest
+    /// offset:
+    /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L20333
+    fn preferred_large_gep_base_offset(
+        &self,
+        min: i64,
+        max: i64,
+    ) -> i64 {
+        let high = min & !0xfff;
+        if min >> 12 == max >> 12 && self.is_legal_add_immediate(high) { high } else { 0 }
+    }
+
+    /// GCC's backward threader grows a path a block at a time and asks ranger
+    /// what every way into a block knows: queens -O2's column loop skips its
+    /// guard on the path that ran the inner loop (`max-fsm-thread-length` is
+    /// 10; 3 here).
+    fn backward_threading_chain(&self) -> usize {
+        3
+    }
+
+    /// DEVIATE LASTCALL-COLD (gcc `-finline-functions-called-once`): a static
+    /// function with one caller is inlined at -Os wherever its call sits, as
+    /// gcc does; the pin drops the bonus at a cold site (`ColdCallSiteRelFreq`
+    /// 2%), so the cases of a large switch each keep their callee out.
+    fn inline_last_call_in_cold_site(&self) -> bool {
+        true
+    }
+
     /// Integer comparisons are implemented with ADDS/SUBS:
     /// https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L20248
     fn is_legal_icmp_immediate(
@@ -1672,7 +1794,9 @@ impl Tti for AArch64 {
                 // ~O(Bitwidth^2).
                 if bits_of(ty) > 64 { count * lt.count } else { count }
             }
-            SDiv | SRem if second.constant && matches!(ty, Ty::Int(bits) if bits <= 64) => {
+            // `Op2Info.isUniform()`: a lane of a vector constant whose lanes
+            // differ is not.
+            SDiv | SRem if second.constant && !second.non_uniform && matches!(ty, Ty::Int(bits) if bits <= 64) => {
                 let add = self.arithmetic_cost(Add, ty, kind, none, none);
                 let asr = self.arithmetic_cost(AShr, ty, kind, none, none);
                 let mul = self.arithmetic_cost(Mul, ty, kind, none, none);

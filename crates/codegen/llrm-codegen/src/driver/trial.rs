@@ -36,6 +36,7 @@ use llrm_mir::program::Program;
 use llrm_transforms::trial::{self, differing, only};
 
 use super::{Options, assembled, assembled_module, compiled_module, optimized_program, stage_files};
+use crate::backend::cpu::Profile;
 use crate::backend::{executed, masm};
 
 /// The -O1 trial's loop-size limit, on a target that states one.
@@ -66,6 +67,12 @@ enum Dimension {
     KeepSwitch,
     /// DEVIATE LIR-COPY-TRIAL: a copy loop of an unknown count stays a loop.
     KeepCopyLoop,
+    /// DEVIATE INLINEHINT-GROWTH-TRIAL: the -Os size guard binds an
+    /// `inlinehint` callee too.
+    KeepHintedCalls,
+    /// DEVIATE HOT-INLINE-TRIAL: the -Os size bound holds at a locally hot
+    /// site too.
+    KeepHotCalls,
 }
 
 /// What the base compile noted for each dimension.
@@ -77,6 +84,8 @@ struct Noted {
     latched: Vec<String>,
     lookups: usize,
     copied: Vec<String>,
+    hinted: Vec<String>,
+    hot: Vec<String>,
 }
 
 impl Noted {
@@ -90,6 +99,8 @@ impl Noted {
             latched: trial::take_latch_copies(),
             lookups: trial::take_lookup_tables(),
             copied: trial::take_copy_calls(),
+            hinted: trial::take_hint_yields(),
+            hot: trial::take_hot_yields(),
         };
         trial::clear_rotated_loops();
         noted
@@ -106,6 +117,8 @@ impl Noted {
             Dimension::KeepLatch => !self.latched.is_empty(),
             Dimension::KeepSwitch => self.lookups > 0,
             Dimension::KeepCopyLoop => !self.copied.is_empty(),
+            Dimension::KeepHintedCalls => !self.hinted.is_empty(),
+            Dimension::KeepHotCalls => !self.hot.is_empty(),
         }
     }
 }
@@ -133,6 +146,14 @@ impl Dimension {
         if tti.jump_threading_latch_trial_at_size() && !llrm_support::env_flag!("LLRM_NO_JT_LATCH_TRIAL") {
             all.push(Dimension::KeepLatch);
         }
+        if tti.opt_size_inline_guard_yields_to_inlinehint() && !llrm_support::env_flag!("LLRM_NO_INLINEHINT_TRIAL") {
+            all.push(Dimension::KeepHintedCalls);
+        }
+        if tti.opt_size_inline_hot_growth_percent().is_some()
+            && !llrm_support::env_flag!("LLRM_NO_HOT_INLINE_TRIAL")
+        {
+            all.push(Dimension::KeepHotCalls);
+        }
         if let Some(limit) = tti.unroll_trial_at_size().filter(|_| !NO_SIZE_UNROLL.with(|one| one.get())) {
             all.push(Dimension::Unroll { limit, bytes_strict: tti.unroll_trial_bytes_strict() });
         }
@@ -151,6 +172,8 @@ impl Dimension {
             Dimension::KeepLatch => trial::with_kept_latches(body),
             Dimension::KeepSwitch => trial::with_refused_lookup_tables(body),
             Dimension::KeepCopyLoop => trial::with_kept_copy_loops(body),
+            Dimension::KeepHintedCalls => trial::with_kept_hinted_calls(body),
+            Dimension::KeepHotCalls => trial::with_kept_hot_calls(body),
         }
     }
 
@@ -163,6 +186,17 @@ impl Dimension {
         matches!(self, Dimension::Unroll { .. })
     }
 
+    /// Whether the two compiles are priced with each callee's body weighted by
+    /// the calls that reach it. A trial that moves work between a function and
+    /// its callees (a hinted callee kept as a call, a table the callee holds)
+    /// is not priced by the function alone.
+    fn prices_called_work(self) -> bool {
+        matches!(
+            self,
+            Dimension::KeepLatch | Dimension::KeepSwitch | Dimension::KeepHintedCalls | Dimension::KeepHotCalls
+        )
+    }
+
     /// Whether the reversed compile is kept over the base, `bytes` and `work`
     /// being the finished modules'.
     fn keeps(
@@ -170,6 +204,7 @@ impl Dimension {
         noted: &Noted,
         (kept_sizes, kept_work): (Sizes, Option<f64>),
         (other_sizes, other_work): (Sizes, Option<f64>),
+        cap: Option<i64>,
     ) -> bool {
         // A bytes-strict unroll trial compares the code alone: the constants a
         // loop's removal frees are data, which a code-size column does
@@ -180,6 +215,7 @@ impl Dimension {
         let added = other_bytes - kept_bytes;
         let work = |one: Option<f64>| one.unwrap_or(0.0);
         let saved = (work(kept_work) - work(other_work)).round() as i64;
+        let base_work = work(kept_work).round() as i64;
         let measured = kept_work.is_some() && other_work.is_some();
         let (what, pays) = match self {
             // The unrotated object is smaller; the rotated one stays if it
@@ -193,9 +229,13 @@ impl Dimension {
                 ("rotation-hot", measured && trial::keeps_rotation_hot(saved, added, noted.left.1, bytes))
             }
             // The object without the latch copies is smaller.
-            Dimension::KeepLatch => ("keep-latch", trial::keeps_at_size(added)),
-            Dimension::KeepSwitch => ("keep-switch", trial::keeps_at_size(added)),
-            Dimension::KeepCopyLoop => ("keep-copy-loop", trial::keeps_at_size(added)),
+            Dimension::KeepLatch => ("keep-latch", trial::keeps_smaller_at_size(added, saved, base_work, cap)),
+            Dimension::KeepSwitch => ("keep-switch", trial::keeps_smaller_at_size(added, saved, base_work, cap)),
+            // The loop is the smaller object; it stays where the call's clocks (priced at the loop's own trip weight,
+            // see `library_cycles`) do not beat it past the cap.
+            Dimension::KeepCopyLoop => ("keep-copy-loop", trial::keeps_smaller_at_size(added, saved, base_work, cap)),
+            Dimension::KeepHintedCalls => ("keep-hinted-calls", trial::keeps_smaller_at_size(added, saved, base_work, cap)),
+            Dimension::KeepHotCalls => ("keep-hot-calls", trial::keeps_smaller_at_size(added, saved, base_work, cap)),
             Dimension::Unroll { bytes_strict, .. } => {
                 ("unroll-os", measured && trial::keeps_unroll_at_size(saved, added, noted.unroll.0.len(), bytes_strict))
             }
@@ -221,6 +261,29 @@ fn compiled_with<T>(
     }
 }
 
+/// The words a copy of unknown length is priced at: the trips the frequency model gives a loop of unknown count
+/// (a branch to stay of 31 in 32).
+const UNKNOWN_COPY_WORDS: f64 = 32.0;
+
+/// The clocks the library's copy routines take that `done` calls, which the module does not define and the work
+/// would otherwise price as a call and return alone: `memcpy` is `rep movsd` (startup, then a cell a word) over
+/// the words a loop of unknown count runs, so a copy loop and the call LoopIdiom made of it are priced alike.
+fn library_cycles(
+    one: &masm::Procedure,
+    done: &executed::Executed,
+    cpu: &Profile,
+) -> f64 {
+    let (Ok(startup), Ok(cell)) = (cpu.cost("rep_movs"), cpu.cost("rep_movs_cell")) else { return 0.0 };
+    let runs: f64 = done
+        .calls
+        .iter()
+        .filter_map(|(at, runs)| one.callees.get(at).map(|callee| (callee.name.trim_start_matches('_'), runs)))
+        .filter(|(name, _)| matches!(*name, "memcpy" | "memmove"))
+        .map(|(_, runs)| runs)
+        .sum();
+    runs * (startup as f64 + cell as f64 * UNKNOWN_COPY_WORDS)
+}
+
 /// What a finished module is expected to execute: instructions and memory
 /// operands as `executed::work`, the branches, jumps and x87 exchanges at their
 /// clocks on the CPU (a rotation trades a taken `jmp` for a copied guard, and
@@ -230,18 +293,54 @@ fn rotation_work(
     built: &masm::Module,
     options: &Options,
     proven: bool,
+    called: bool,
 ) -> Option<f64> {
     let cpu = options.cpu().ok()?;
-    built
-        .procedures
-        .iter()
-        .map(|one| {
-            let done = if proven { executed::executed(&one.body)? } else { executed::executed_unproven(&one.body)? };
-            let jumps = done.jump_cycles(cpu).ok()?;
-            let exchanges = done.exchange_cycles(cpu).ok()?;
-            Some(done.instructions - done.branches - done.jumps + done.memory + jumps + exchanges)
-        })
-        .sum::<Option<f64>>()
+    let own = |one: &masm::Procedure| -> Option<(f64, Vec<(String, f64)>)> {
+        let done = if proven { executed::executed(&one.body)? } else { executed::executed_unproven(&one.body)? };
+        let jumps = done.jump_cycles(cpu).ok()?;
+        let exchanges = done.exchange_cycles(cpu).ok()?;
+        let work = done.instructions - done.branches - done.jumps + done.memory + jumps + exchanges + done.call_cycles(cpu);
+        let work = work + library_cycles(one, &done, cpu);
+        let calls = done
+            .calls
+            .iter()
+            .filter_map(|(at, runs)| one.callees.get(at).map(|callee| (callee.name.clone(), *runs)))
+            .collect();
+        Some((work, calls))
+    };
+    let each = built.procedures.iter().map(own).collect::<Option<Vec<_>>>()?;
+    if !called {
+        return Some(each.iter().map(|(work, _)| work).sum());
+    }
+    // Each function's work weighted by how often a call of the module's roots
+    // runs it: a callee body is paid once for every call that reaches it. A
+    // function nothing in the module calls is a root; a call along a cycle
+    // adds nothing (the weights are made in one pass, callers first).
+    let at: std::collections::BTreeMap<&str, usize> =
+        built.procedures.iter().enumerate().map(|(index, one)| (one.name.as_str(), index)).collect();
+    let mut callers = vec![0usize; each.len()];
+    for (index, (_, calls)) in each.iter().enumerate() {
+        for (callee, _) in calls {
+            if let Some(&to) = at.get(callee.as_str()).filter(|&&to| to != index) {
+                callers[to] += 1;
+            }
+        }
+    }
+    let mut weight: Vec<f64> = callers.iter().map(|&n| if n == 0 { 1.0 } else { 0.0 }).collect();
+    let mut ready: Vec<usize> = (0..each.len()).filter(|&index| callers[index] == 0).collect();
+    while let Some(index) = ready.pop() {
+        for (callee, runs) in &each[index].1 {
+            let Some(&to) = at.get(callee.as_str()).filter(|&&to| to != index) else { continue };
+            weight[to] += weight[index] * runs;
+            callers[to] -= 1;
+            if callers[to] == 0 {
+                ready.push(to);
+            }
+        }
+    }
+    // What a cycle left unreached is paid once.
+    Some(each.iter().zip(&weight).map(|((work, _), weight)| work * if *weight == 0.0 { 1.0 } else { *weight }).sum())
 }
 
 /// The unpadded bytes of a finished module: its functions' code and its data
@@ -400,6 +499,7 @@ fn compiled_module_at_size(
     if active.is_empty() {
         return with_leaf_trial(base, name, options, unpadded);
     }
+    let cap = options.cpu().ok().and_then(|cpu| cpu.target().tti()).and_then(|tti| tti.os_trial_clock_cap_percent());
     let mut again = options.clone();
     again.dump = None;
     // A dimension that stays, with its variant assembled whole or the program
@@ -430,12 +530,12 @@ fn compiled_module_at_size(
                 .sum()
         };
         let price =
-            |one: &masm::Module| Some((unpadded(one)?, rotation_work(one, options, dimension.prices_proven_trips())));
+            |one: &masm::Module| Some((unpadded(one)?, rotation_work(one, options, dimension.prices_proven_trips(), dimension.prices_called_work())));
         if 2 * size(&base.program.modules[0], Some(&cut)) >= size(&base.program.modules[0], None) {
             let variant = built(program, name, &again)?;
             let pays = matches!(
                 (price(&base.built), price(&variant.built)),
-                (Some(a), Some(b)) if dimension.keeps(&noted, a, b)
+                (Some(a), Some(b)) if dimension.keeps(&noted, a, b, cap)
             );
             if pays {
                 kept.push((dimension, Ok(variant)));
@@ -446,7 +546,7 @@ fn compiled_module_at_size(
         let (Some(first), Some(second)) = (each(&base.program), each(&program)) else { continue };
         let pays = matches!(
             (price(&first), price(&second)),
-            (Some(a), Some(b)) if dimension.keeps(&noted, a, b)
+            (Some(a), Some(b)) if dimension.keeps(&noted, a, b, cap)
         );
         if pays {
             kept.push((dimension, Err(program)));
@@ -470,10 +570,10 @@ fn compiled_module_at_size(
         let _ = Noted::take();
         let together = built(program, name, &again)?;
         let price =
-            |one: &masm::Module| Some((unpadded(one)?, rotation_work(one, options, dimension.prices_proven_trips())));
+            |one: &masm::Module| Some((unpadded(one)?, rotation_work(one, options, dimension.prices_proven_trips(), dimension.prices_called_work())));
         let pays = matches!(
             (price(&chosen.built), price(&together.built)),
-            (Some(a), Some(b)) if dimension.keeps(&noted, a, b)
+            (Some(a), Some(b)) if dimension.keeps(&noted, a, b, cap)
         );
         if pays {
             chosen = together;

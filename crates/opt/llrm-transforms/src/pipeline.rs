@@ -1148,7 +1148,7 @@ pub(crate) fn llvm_order(
             // DEVIATE LSPLIT (owner arm64, exit 2026-11-24): GCC's
             // `-fsplit-loops` runs after loop-invariant motion and before the
             // vectorizer; the pin has no such pass.
-            slot("loop-split@gcc", Box::new(crate::loopsplit::LoopSplit)),
+            slot("loop-split@gcc", Box::new(crate::loopsplit::LoopSplit { cleanup: true })),
             // DEVIATE UJ-EARLY (owner arm64-vec, exit 2026-12-01): GCC's
             // `pass_unroll_jam` runs before its vectorizer, where a nest is
             // one inner loop; after the vectorizer (l.1474) the inner loop is
@@ -1451,13 +1451,18 @@ pub(crate) fn llvm_order(
             list.extend([
                 licm("licm@823", true),
                 // L832: hoistCommonInsts and sinkCommonInsts on, besides
-                // convertSwitchRangeToICmp and convertSwitchToArithmetic.
+                // convertSwitchRangeToICmp and convertSwitchToArithmetic. The
+                // pin's `default<O1>` ends its function pipeline with a plain
+                // `SimplifyCFGPass(convertSwitchRangeToICmp)` (L621): at -O1 the
+                // pass drops the three unless the target asks
+                // (`Tti::common_insts_at_o1`).
                 simplify_cfg_with(
                     "decide@832",
                     simplifycfg::Options {
                         hoist_common_insts: true,
                         sink_common_insts: true,
                         convert_switch_to_arithmetic: true,
+                        plain_at_o1: !applied.options.pre,
                         ..Default::default()
                     },
                 ),
@@ -1756,6 +1761,9 @@ pub fn recorded(
     manager.require_cached::<GlobalsAA>();
     manager.require_cached::<GlobalsModRefAnalysis>();
     manager.require::<Summaries>();
+    // `Function::hasOneLiveUse`, which loop unrolling reads of an internal
+    // callee.
+    manager.require::<llrm_mir::passes::FunctionUses>();
     manager.require_program::<ProgramSummaries>();
     // As LLVM's module pipeline starts with InferFunctionAttrs
     // (PassBuilderPipelines.cpp#L1169), then GlobalOpt.
@@ -1821,6 +1829,8 @@ pub fn recorded(
                 cloning: cloning.clone(),
                 speed_rate: applied.options.prices_bytes(),
                 for_size: applied.options.prefers_size(),
+                tail_recursion: applied.options.sibcalls
+                    && (applied.options.pre || applied.options.tail_recursion_early),
             });
         }
     }
@@ -1892,6 +1902,12 @@ pub fn recorded(
     // What only fed those stores (their loads, arithmetic) is dead with them;
     // LLVM's GlobalOpt runs before the late function passes that sweep it.
     manager.add(dead::Dead);
+    // A callee those stores were all that it did is empty now: its stamped
+    // `llrm.reads` are stale and the calls of it stay. Stated again, it is
+    // `memory(none)` and the next sweep takes the calls (`foo` of
+    // byvalue_struct_address, -Os: 56 B against clang's 17).
+    manager.add_program(crate::interprocedural::Stamp);
+    manager.add(dead::Dead);
     // A loop whose only effect was those stores is dead now: LLVM's second
     // function round (LoopDeletion, PassBuilderPipelines.cpp:1628) follows its
     // GlobalOpt.
@@ -1958,6 +1974,14 @@ pub fn recorded(
     // `AArch64PassConfig::addIRPasses`, after AtomicExpand and before LSR.
     if applied.options.atomic_cfg_tidy && applied.options.simplifycfg {
         manager.add(simplifycfg::SimplifyCfg { options: simplifycfg::Options::ATOMIC_TIDY });
+    }
+    // DEVIATE LATE-MEMCPYOPT-SIZE (owner x86-m32-b, exit 2026-12-12): the pin
+    // runs MemCpyOpt once, before the sink and the phi folds that leave a
+    // compound literal as `memset(tmp); ...; memcpy(dst, tmp)`; run again, the
+    // copy is a memset of `dst` and `tmp` is dead.
+    if applied.options.prefers_size() && program.target.tti().is_some_and(|tti| tti.late_memcpyopt_at_size()) {
+        manager.add(memcpyopt::MemCpyOpt);
+        manager.add(deadstore::DeadStoreElimination);
     }
     // Before LSR: a factor of two or a scale the product carries still shows as
     // a shift.
@@ -2105,6 +2129,10 @@ pub fn recorded(
     }
     if applied.options.stored_homes {
         manager.add_module(crate::homes::Homes);
+    }
+    // `addIRPasses`: the last IR pass, as the pin's `IndirectBrExpandPass`.
+    if program.target.tti().is_some_and(|tti| tti.expands_indirect_br()) {
+        manager.add_module(crate::indirectbrexpand::IndirectBrExpand);
     }
     let done = manager.run(program);
     if llrm_support::env_flag!("LLRM_CHECK_CAPTURES_MODULE") {
