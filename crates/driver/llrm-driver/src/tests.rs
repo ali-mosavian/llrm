@@ -409,6 +409,62 @@ fn identical_dispatch_arms_are_merged_before_the_dispatch_is_copied_into_them() 
     assert_eq!(arms, 1, "{listing}");
 }
 
+/// gcc -Os copies or fills a length known at run time with one `rep movsb`/`stosb` (`decide_alg`); the pin and clang
+/// call `memcpy`/`memset`. m32 -Os QB had 28 calls of them to gcc's 0, -638 B with them inline. In no loop it is the
+/// `rep`; in a loop and at -O2 it stays a call. m64 stays a call: QB `localarr` ran 51.0M clk against 44.1M (clang
+/// 40.2M) with `arry_dim`'s two small copies as `rep movsb`.
+#[test]
+fn a_variable_copy_or_fill_at_m32_os_is_rep_outside_loops_and_a_call_otherwise() {
+    let ir = |target: &str, ty: &str, body: &str, attrs: &str| {
+        let (layout, triple) = if target == "m32" {
+            ("@m32-datalayout@", "i486-unknown-linux-gnu")
+        } else {
+            ("@m64-datalayout@", "x86_64-unknown-linux-gnu")
+        };
+        format!(
+            "target datalayout = \"{layout}\"\ntarget triple = \"{triple}\"\n\
+             declare void @llvm.memcpy.p0.p0.{ty}(ptr, ptr, {ty}, i1)\n\
+             declare void @llvm.memset.p0.{ty}(ptr, i8, {ty}, i1)\n\
+             define void @f(ptr %d, ptr %s, {ty} %n) {attrs} nounwind {{\nentry:\n{body}  ret void\n}}\n"
+        )
+    };
+    let copy = |ty: &str| {
+        format!("  call void @llvm.memcpy.p0.p0.{ty}(ptr align 1 %d, ptr align 1 %s, {ty} %n, i1 false)\n")
+    };
+    let fill = |ty: &str| format!("  call void @llvm.memset.p0.{ty}(ptr align 1 %d, i8 0, {ty} %n, i1 false)\n");
+    // the operation in a loop, its destination moving with the trip so the loop stays
+    let looped = |ty: &str, op: &str| {
+        let op = op.replace("ptr align 1 %d", "ptr align 1 %p");
+        format!(
+            "  br label %loop\nloop:\n  %i = phi {ty} [ 0, %entry ], [ %j, %loop ]\n  \
+             %p = getelementptr i8, ptr %d, {ty} %i\n{op}  %j = add {ty} %i, 1\n  \
+             %c = icmp ult {ty} %j, 8\n  br i1 %c, label %loop, label %out\nout:\n"
+        )
+    };
+    let listing = |target: &str, level: &str, source: &str| {
+        let mut args = if target == "m32" { vec!["-m32", "-mabi=sysv"] } else { vec!["-m64"] };
+        args.extend([level, "--isel=dag"]);
+        let (built, _) = compiled(&flags(&args), source, "f").unwrap();
+        llrm_codegen::backend::masm::text(&built).unwrap()
+    };
+    let count = |text: &str, needle: &str| text.lines().filter(|line| line.contains(needle)).count();
+    let reps = |text: &str| count(text, "rep movs") + count(text, "rep stos");
+    let calls = |text: &str| {
+        text.lines().filter(|line| (line.contains("call") || line.contains("jmp")) && line.contains("mem")).count()
+    };
+    for (kind, op) in [("copy", copy("i32")), ("fill", fill("i32"))] {
+        let os = listing("m32", "-Os", &ir("m32", "i32", &op, "optsize"));
+        assert_eq!((reps(&os), calls(&os)), (1, 0), "{kind} outside a loop: one rep\n{os}");
+        let os = listing("m32", "-Os", &ir("m32", "i32", &looped("i32", &op), "optsize"));
+        assert_eq!((reps(&os), calls(&os)), (0, 1), "{kind} in a loop: the call\n{os}");
+    }
+    // not tuned for size: a fill is the call (a copy is MEM-1's `rep movsd`)
+    let fast = listing("m32", "-O2", &ir("m32", "i32", &fill("i32"), ""));
+    assert_eq!((reps(&fast), calls(&fast)), (0, 1), "a fill at -O2 is the call\n{fast}");
+    let m64 = listing("m64", "-Os", &ir("m64", "i64", &copy("i64"), "optsize"));
+    assert_eq!((reps(&m64), calls(&m64)), (0, 1), "m64 keeps the call (QB localarr +15.6% clk with rep)\n{m64}");
+}
+
 /// A symbol's address passed to four calls in one block was made four times
 /// (`mov rdi, offset src` before each): the greedy input held one def per use,
 /// where the pin's DAG selects the `LEA64r` once and its users share it, so the
@@ -6478,10 +6534,10 @@ fn a_calls_arguments_come_off_the_stack_by_add_at_o1_and_by_pop_at_m32_os() {
 
 /// LoopIdiomRecognize forms the `memcpy` of a copy loop whose length is known at run time and the target calls it (m32 has a
 /// libc; `Tuning::libc_memcpy`), as the pin does. At -Os the object decides (LIR-COPY-TRIAL, #10220): the call stays only where it
-/// is fewer bytes, and here a 19-byte loop is fewer than 3 pushes, a call and `add esp`. At -O2 the `memcpy` is always formed (here
-/// the 64-word bound expands it inline, as `rep movsd`).
+/// is fewer bytes, and a cold `rep movsb` (MEM-OS-REP) is fewer than the 19-byte loop or a call. At -O2 the `memcpy` is always
+/// formed (here the 64-word bound expands it inline, as `rep movsd`).
 #[test]
-fn a_copy_loop_of_run_time_length_is_a_memcpy_at_m32_o2_and_a_loop_at_os_when_smaller() {
+fn a_copy_loop_of_run_time_length_is_a_memcpy_at_m32_o2_and_rep_movsb_at_os() {
     let text = "target datalayout = \"@m32-datalayout@\"\ntarget triple = \"i486-unknown-linux-gnu\"\n\
                 @d = external global [64 x i32]\n@s = external global [64 x i32]\n                define void @f(i32 %n) {\nentry:\n  %e = icmp eq i32 %n, 0\n  br i1 %e, label %done, label %body\n\
                 body:\n  %i = phi i32 [ 0, %entry ], [ %j, %body ]\n  %a = getelementptr i32, ptr @s, i32 %i\n  %v = load i32, ptr %a\n  \
@@ -6493,8 +6549,12 @@ fn a_copy_loop_of_run_time_length_is_a_memcpy_at_m32_o2_and_a_loop_at_os_when_sm
     };
     let o2 = listing("-O2");
     assert!(o2.contains("memcpy") || o2.contains("rep movsd"), "-O2: the loop is a memcpy:\n{o2}");
+    // MEM-OS-REP: the copy outside every loop is one `rep movsb`, fewer bytes than the loop's 19.
     let os = listing("-Os");
-    assert!(!os.contains("memcpy") && !os.contains("rep movs"), "-Os: the 19-byte loop is smaller than the memcpy:\n{os}");
+    assert!(
+        !os.contains("memcpy") && os.contains("rep movsb") && !os.contains("loop"),
+        "-Os: one `rep movsb`, no loop or call:\n{os}"
+    );
 }
 
 /// REP-MOVS-OS (m32 -Os): a constant copy is `rep movs` in the widest block its size and alignment allow, not `movsb`:

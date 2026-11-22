@@ -626,6 +626,8 @@ pub fn optimized(
         let rep_movsb = options.cpu()?.min_size
             || (options.cpu()?.size && options.cpu()?.target().tti().is_some_and(|tti| tti.rep_movs_at_size()));
         let rep_movs_speed_max = options.cpu()?.target().tti().map_or(0, |tti| tti.rep_movs_at_speed_max());
+        let inline_variable_unlooped = options.cpu()?.size
+            && options.cpu()?.target().tti().is_some_and(|tti| tti.inlines_variable_memcpy_at_size());
         timed("mir memcpy calls", || {
             program.modules.iter_mut().try_for_each(|module| {
                 crate::backend::memcpycall::expanded(
@@ -635,6 +637,7 @@ pub fn optimized(
                     inline_variable,
                     rep_movsb,
                     rep_movs_speed_max,
+                    inline_variable_unlooped,
                 )
             })
         })?;
