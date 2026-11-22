@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/codegen/llrm-codegen/src/backend/latetaildup.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/codegen/llrm-codegen/src/backend/latetaildup.rs); edit the header, not this file.
-<!-- src: crates/codegen/llrm-codegen/src/backend/latetaildup.rs sha256:3b0a1b8ff4674d53e31436838c4854028cfe666bbb1e9e1a9a5490bc20241a56 -->
+<!-- src: crates/codegen/llrm-codegen/src/backend/latetaildup.rs sha256:94acf98688eb6942a1d4934efd0c29b490679e26d22055d52b2e22347b19b45a -->
 
 # latetaildup
 
@@ -41,7 +41,9 @@ is named by the instruction's id) and claims no source bytes of its own
 DEVIATE TL3 (owner greedy-subreg, exit 2026-11-20): the pin's return block
 already holds the frame's teardown, so a framed function's is longer than
 the bound and is never copied; here the teardown is emitted after this pass,
-so a tail that returns counts the callee-saved registers the body writes.
+so a tail that returns counts the callee-saved registers the body writes,
+and the frame's own `pop` or `leave` where the function has a frame
+register (kept, or addressed by the body).
 Without it queens m64 -O2 was +24 B (copies the tail merge joined again).
 
 DEVIATE TL2 (no number): `Preds` is rebuilt after each tail copied, so a
