@@ -519,8 +519,18 @@ pub fn finish_with(
     let frame_of = |max_call_frame: i64| inputs.layout(max_call_frame);
     let wants_size = pushes == Some(crate::timing::Price::Size);
     let allowed = pushes;
+    // `pea (d,%sp)` has a 16-bit displacement: the frame with the widest call area is within reach
+    let widest_call = insts
+        .iter()
+        .filter_map(|inst| match (inst.kind, &inst.operands[..]) {
+            (Kind::Op("ADJCALLSTACKDOWN"), [Operand::Imm(bytes), ..]) => Some(*bytes),
+            _ => None,
+        })
+        .max()
+        .unwrap_or(0);
+    let frame_reach = frame_of(widest_call).stack_size + widest_call < 32000;
     let pushes = match pushes {
-        Some(price) => crate::callpush::plan(&insts, &blocks, assignment, cpu, price, short, |max_call_frame| {
+        Some(price) => crate::callpush::plan(&insts, &blocks, assignment, cpu, price, short, frame_reach, |max_call_frame| {
             let (opening, closing) = frame_ops(&frame_of(max_call_frame), cpu, push_frame, short, wants_size)?;
             frame_cost_with(&[opening, closing].concat(), cpu, short)
         })?,
@@ -615,8 +625,20 @@ pub fn finish_with(
     // the push of argument store `store`, `pushed` bytes down: of its value,
     // or of the memory the load folded into it reads
     let push_for = |store: usize, pushed: i64| -> Result<mc::Inst, String> {
-        if let Some((base, offset)) = pushes.address_push(store) {
-            return Ok(crate::callpush::address_push(base, offset));
+        match pushes.address_push(store) {
+            Some(crate::callpush::Address::Register(base, offset)) => {
+                return Ok(crate::callpush::address_push(base, offset));
+            }
+            Some(crate::callpush::Address::Frame(lea)) => {
+                let [_, mc::Operand::Imm(offset), mc::Operand::Reg(base)] = convert(insts[lea], pushed)?[..] else {
+                    return Err("a frame address is a displacement and a register".to_owned());
+                };
+                if i16::try_from(offset).is_err() {
+                    return Err("a pushed frame address out of 16 bits".to_owned());
+                }
+                return Ok(crate::callpush::address_push(base, offset));
+            }
+            None => {}
         }
         match pushes.folded_load(store) {
             Some(load) => {

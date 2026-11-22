@@ -89,7 +89,7 @@ fn arguments_stored_before_a_diamond_stay_pushes_at_68000() {
     ];
     let refs: Vec<&Inst> = insts.iter().collect();
     let blocks = [0, 0, 0, 1, 2, 3, 3];
-    let found = plan(&refs, &blocks, &Assignment::default(), Cpu::M68000, Price::Rate, true, |area| {
+    let found = plan(&refs, &blocks, &Assignment::default(), Cpu::M68000, Price::Rate, true, true, |area| {
         Ok(if area > 0 { (8, 16) } else { (0, 0) })
     })
     .expect("plans");

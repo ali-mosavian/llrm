@@ -230,6 +230,7 @@ mod os_size_trial;
 mod pc_calls;
 mod rint_libcall;
 mod tst_memory_operand;
+mod pea_frame_address;
 mod pea_offset;
 mod pea_push;
 mod phi_extra_edges;
