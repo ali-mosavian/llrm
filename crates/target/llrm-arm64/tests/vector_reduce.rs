@@ -133,6 +133,14 @@ fn add_v8i8_is_addv() {
     assert_eq!(count(&text, "addv", ".8b"), 1, "{text}");
 }
 
+/// The two lanes of a `v2i32` are combined as scalars (no pairwise form here).
+#[test]
+fn a_v2i32_reduction_selects() {
+    for op in ["add", "smax", "smin", "umax", "umin", "and", "or", "xor"] {
+        ours(&ir(op, 2, 32)).unwrap_or_else(|why| panic!("{op} v2i32 refused: {why}"));
+    }
+}
+
 #[test]
 fn minmax_of_64_bit_vectors_are_across_lanes() {
     for (op, mnemonic, lanes, lane, suffix) in
@@ -223,7 +231,7 @@ fn bitwise_reductions_fold_the_halves_with_the_scalar_operation() {
 }
 
 /// The kind, lane width and lane count of each reduction run below.
-const CASES: [(&str, u32, u32); 35] = [
+const CASES: [(&str, u32, u32); 40] = [
     ("add", 8, 16),
     ("add", 16, 8),
     ("add", 32, 4),
@@ -259,6 +267,11 @@ const CASES: [(&str, u32, u32); 35] = [
     ("and", 16, 4),
     ("or", 8, 8),
     ("xor", 16, 4),
+    ("add", 32, 2),
+    ("smax", 32, 2),
+    ("smin", 32, 2),
+    ("umax", 32, 2),
+    ("umin", 32, 2),
 ];
 
 fn run_command(command: &mut Command) -> String {

@@ -1209,6 +1209,8 @@ impl TargetLowering {
             &[MVT::V8I8, MVT::V4I16],
             Custom,
         );
+        // `v2i32` has no across-lanes form: `pair_reduce` (DEVIATE VEC10).
+        t.set_ops(&[VecReduceAdd, VecReduceSMax, VecReduceSMin, VecReduceUMax, VecReduceUMin], &[MVT::V2I32], Custom);
         t.set_ops(&[VecReduceAnd, VecReduceOr, VecReduceXor], &[MVT::V8I8, MVT::V4I16, MVT::V2I32], Custom);
         // `addTypeForNEON`: the conversions of a vector are
         // `LowerVectorINT_TO_FP` and `LowerVectorFP_TO_INT`, by the

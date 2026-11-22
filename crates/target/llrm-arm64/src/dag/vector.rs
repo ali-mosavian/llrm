@@ -897,6 +897,27 @@ fn bitwise_reduce(
     Some(dag.get_any_ext_or_trunc(result, dag.value_type(node)))
 }
 
+/// A `v2i32` reduction: the register read whole, its two lanes combined as
+/// scalars.
+///
+/// DEVIATE VEC10 (owner llrm-arm64-vec, exit 2026-11-24): the pin selects
+/// `ADDPv2i32`/`SMAXPv2i32` and reads lane 0; the pairwise forms of a
+/// 64-bit vector are not here, so `fmov`, `lsr` and the scalar operation take
+/// their place (the same result, more instructions).
+fn pair_reduce(
+    dag: &mut SelectionDAG,
+    node: SDValue,
+) -> SDValue {
+    let base = dag.opcode(node).vec_reduce_base_opcode().expect("a reduction");
+    let whole = dag.get_node(ISD::BitCast, EVT::I64, &[dag.operand(node, 0)]);
+    let low = dag.get_node(ISD::Truncate, EVT::I32, &[whole]);
+    let amount = dag.get_constant(32, EVT::I64);
+    let shifted = dag.get_node(ISD::Srl, EVT::I64, &[whole, amount]);
+    let high = dag.get_node(ISD::Truncate, EVT::I32, &[shifted]);
+    let both = dag.get_node(base, EVT::I32, &[low, high]);
+    dag.get_any_ext_or_trunc(both, dag.value_type(node))
+}
+
 /// `AArch64TargetLowering::LowerVECREDUCE`
 /// ([L18443](https://github.com/llvm/llvm-project/blob/d1106deb71cc81016406a1917d0508d2df296266/llvm/lib/Target/AArch64/AArch64ISelLowering.cpp#L18443)),
 /// the NEON arm: `LowerReductionToSVE` answers none with SVE off, and there
@@ -907,6 +928,7 @@ pub fn lower_vec_reduce(
 ) -> Option<SDValue> {
     let across_lanes = match dag.opcode(node) {
         ISD::VecReduceAnd | ISD::VecReduceOr | ISD::VecReduceXor => return bitwise_reduce(dag, node),
+        _ if dag.value_type(dag.operand(node, 0)) == EVT::Simple(MVT::V2I32) => return Some(pair_reduce(dag, node)),
         ISD::VecReduceAdd => aarch64_isd::UADDV,
         ISD::VecReduceSMax => aarch64_isd::SMAXV,
         ISD::VecReduceSMin => aarch64_isd::SMINV,
