@@ -166,6 +166,7 @@ mod jump_thread_o1;
 mod kernels;
 mod lanes;
 mod large_frame_reach;
+mod last_call_cold;
 mod latch_flags;
 mod lea_add;
 mod lftr_budget;

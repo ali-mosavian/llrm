@@ -493,10 +493,21 @@ impl Tti for M68k {
         true
     }
 
+    /// DEVIATE LASTCALL-COLD (gcc `-finline-functions-called-once`): a static
+    /// function with one caller is inlined at -Os wherever its call sits;
+    /// the pin drops the bonus at a cold site.
+    fn inline_last_call_in_cold_site(&self) -> bool {
+        true
+    }
+
+    /// DEVIATE INLINEHINT-GROWTH-TRIAL: the size bound stands down for the
+    /// pin's `inlinehint` threshold; `driver::lowered` compiles the module
+    /// with those calls kept too and keeps the fewer bytes.
     fn opt_size_inline_guard_yields_to_inlinehint(&self) -> bool {
         true
     }
 
+    /// The same for a call the pin's cost counts as shrinking the caller.
     fn opt_size_inline_guard_yields_to_negative_cost(&self) -> bool {
         true
     }
