@@ -395,7 +395,6 @@ fn sorted(
     seeds
 }
 
-
 /// The operands of the stores and the once-used seeds of every block of
 /// `function`, as vectors; whether any was made.
 pub(crate) fn run_function(
