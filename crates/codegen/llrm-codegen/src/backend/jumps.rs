@@ -174,9 +174,15 @@ impl LIRTransform for BranchFolder<'_> {
             return Ok(body);
         }
         let hoisted = _hoisted(&body);
-        let (merged, _) =
-            tails_merged(hoisted, self.cpu.size, self.calls.as_ref(), false, self.cpu.tail_merge_pin_faithful)
-                .map_err(|error| error.0)?;
+        let (merged, _) = tails_merged(
+            hoisted,
+            self.cpu.size,
+            self.calls.as_ref(),
+            false,
+            self.cpu.tail_merge_pin_faithful,
+            self.cpu.tail_merge_pairs_at_size,
+        )
+        .map_err(|error| error.0)?;
         Ok(merged)
     }
 }
@@ -254,7 +260,11 @@ pub fn optimized_folded(
     // `OptimizeBranches` changes the function whether or not a tail merged: the
     // placement sees a select's empty `copy0MBB` gone, not a block to fall
     // into.
-    let early = if folded { hoisted } else { tails_merged(hoisted, size, calls, false, cpu.tail_merge_pin_faithful)?.0 };
+    let early = if folded {
+        hoisted
+    } else {
+        tails_merged(hoisted, size, calls, false, cpu.tail_merge_pin_faithful, cpu.tail_merge_pairs_at_size)?.0
+    };
     let start = early.with_blocks(_explicit(&early)?);
     let mut placed = threaded(&_placed_ext(
         &start,
@@ -271,7 +281,8 @@ pub fn optimized_folded(
     // `BranchFolder::OptimizeFunction` after placement: the tails merged, then
     // the branches optimised (`threaded`), until neither changes anything. A
     // merge can leave a compare nothing selects on; LLVM leaves it (T6).
-    let (merged, any) = tails_merged(placed, size, calls, true, cpu.tail_merge_pin_faithful)?;
+    let (merged, any) =
+        tails_merged(placed, size, calls, true, cpu.tail_merge_pin_faithful, cpu.tail_merge_pairs_at_size)?;
     placed = merged;
     if any {
         // `MachineBlockPlacement::runOnMachineFunction`: "Redo the layout if
@@ -305,11 +316,12 @@ fn tails_merged(
     calls: Option<&IndexMap<i64, String>>,
     after_placement: bool,
     faithful: bool,
+    pairs: bool,
 ) -> Result<(LirBody, bool), masm::Unprintable> {
     let mut any = false;
     for _round in 0..std::cmp::max(1, placed.blocks.len() + placed.insns().len()) {
         let explicit = placed.with_blocks(_explicit(&placed)?);
-        let Some(merged) = tailmerge::merged_in(&explicit, size, calls, after_placement, faithful)? else {
+        let Some(merged) = tailmerge::merged_in(&explicit, size, calls, after_placement, faithful, pairs)? else {
             // `OptimizeFunction`: the branches optimised after each merge
             // attempt, and the merge tried again if they changed anything. A
             // body that was not threaded yet (before placement) has edge
@@ -336,6 +348,7 @@ pub fn tails_merged_after_exits(
     size: bool,
     calls: Option<&IndexMap<i64, String>>,
     faithful: bool,
+    pairs: bool,
 ) -> Result<LirBody, masm::Unprintable> {
     // Only the blocks that return gained something to share.
     let returns = body
@@ -348,7 +361,7 @@ pub fn tails_merged_after_exits(
     if returns < 2 {
         return Ok(body);
     }
-    let (merged, any) = tails_merged(body.clone(), size, calls, true, faithful)?;
+    let (merged, any) = tails_merged(body.clone(), size, calls, true, faithful, pairs)?;
     Ok(if any { inverted(&merged, size) } else { body })
 }
 
@@ -359,7 +372,11 @@ fn aligned(
     body: &LirBody,
     cpu: &cpu::Profile,
 ) -> LirBody {
-    if cpu.size || cpu.loop_alignment == 0 || body.blocks.len() < 2 || !((cpu.speed_rate && cpu.speed_level) || cpu.align_loops_at_o1) {
+    if cpu.size
+        || cpu.loop_alignment == 0
+        || body.blocks.len() < 2
+        || !((cpu.speed_rate && cpu.speed_level) || cpu.align_loops_at_o1)
+    {
         return body.clone();
     }
     const COLD: f64 = 0.2;
@@ -387,7 +404,12 @@ fn aligned(
         let before = &blocks[place - 1];
         let enters = before.succ.contains(&at);
         if !enters || busy.edge(before.at, at) <= here * COLD {
-            blocks[place] = LirBlock { align: cpu.loop_alignment, max_skip: cpu.loop_max_skip, ..blocks[place].clone().into_inner() }.into();
+            blocks[place] = LirBlock {
+                align: cpu.loop_alignment,
+                max_skip: cpu.loop_max_skip,
+                ..blocks[place].clone().into_inner()
+            }
+            .into();
         }
     }
     body.with_blocks(blocks)
@@ -619,11 +641,7 @@ pub fn placed_explicit(
 /// `indirectbr` reaches by it (`MachineBasicBlock::hasAddressTaken`, which
 /// `BranchFolding` checks before it removes or merges a block).
 fn _protected(body: &LirBody) -> BTreeSet<i64> {
-    body.loop_trip_counts
-        .iter()
-        .map(|(header, _count)| *header)
-        .chain(body.address_symbols.keys().copied())
-        .collect()
+    body.loop_trip_counts.iter().map(|(header, _count)| *header).chain(body.address_symbols.keys().copied()).collect()
 }
 
 pub fn threaded(body: &LirBody) -> LirBody {

@@ -1,5 +1,5 @@
 > Generated from the `//!` header of [`crates/opt/llrm-transforms/src/rangesplit.rs`](https://github.com/ali-mosavian/llrm/blob/main/crates/opt/llrm-transforms/src/rangesplit.rs); edit the header, not this file.
-<!-- src: crates/opt/llrm-transforms/src/rangesplit.rs sha256:c9965476e590e6e5e1b1c6673dd8b0d94b59be73de11267ad144062964173eee -->
+<!-- src: crates/opt/llrm-transforms/src/rangesplit.rs sha256:12f3ab7b15788defa139f2e73af9dca6072d26997e64d61031e88787d68dd9ad -->
 
 # rangesplit
 
@@ -19,6 +19,9 @@ LLVM's. The pin has the join (`foldRangeChecks`, `SimplifyBranchOnICmpChain`)
 and no inverse; llvm-mos keeps the two compares of `c >= 'a' && c <= 'z'`
 (k_strupper, 47 B / 412 clocks). Exit: the target's own cost for the join in
 SimplifyCFG's `FoldBranchToCommonDest`, once it can tell a branch from a value.
+
+## Runs
+In the 6502 driver, per function, priced with and without the split (`rangesplit::unmerged`).
 
 ## Example
 ```text

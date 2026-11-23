@@ -1674,6 +1674,15 @@ impl<'a> TypeLegalizer<'a> {
                 let updated = self.dag.update_node_operands(n, &[vector, element, index]);
                 SDValue { node: updated, res: 0 }
             }
+            ISD::ExtractElement if at == 0 => {
+                // `PromoteIntOp_EXTRACT_VECTOR_ELT`: the lane read from the
+                // promoted vector at its own lane type, then narrowed or
+                // widened to the node's type.
+                let (promoted, index) = (self.promoted_integer(self.dag.operand(node, 0)), self.dag.operand(node, 1));
+                let lane = self.dag.value_type(promoted).element();
+                let read = self.dag.get_node(ISD::ExtractElement, lane, &[promoted, index]);
+                self.dag.get_any_ext_or_trunc(read, self.dag.value_type(node))
+            }
             ISD::ScalarToVector => {
                 // `PromoteIntOp_SCALAR_TO_VECTOR`.
                 let element = self.promoted_integer(self.dag.operand(node, 0));

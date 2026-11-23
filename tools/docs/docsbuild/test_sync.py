@@ -313,6 +313,13 @@ def test_every_file_of_a_required_directory_has_a_header():
     assert passdocs.check(HEADERS_REQUIRED, build.ROOT) == []
 
 
+def test_a_licence_line_above_the_header_does_not_hide_it():
+    """`// SPDX-...` on line 1 ended the header scan there: 5 GPL passes read as headerless and the required-header test went red unseen."""
+    import passdocs
+    src = "// SPDX-License-Identifier: GPL-3.0-or-later\n//! Sum.\n//!\n//! # How it works\n//! Body.\n\nfn f() {}\n"
+    assert passdocs.header_of(src) == ["Sum.", "", "# How it works", "Body."]
+
+
 def test_docs_name_a_pass_through_its_page_not_its_source_file():
     """Docs linked `fold.rs` on GitHub where a page explains the pass; a permalink to a line is a code citation and stays."""
     import re
