@@ -545,6 +545,12 @@ impl Fps<'_> {
             self.vacate();
         } else if what.op == Operation::FloatStore && unnamed(&what) && what.dests.is_empty() && !operands.is_empty() {
             self.handle_stack_values(&operands)?;
+        } else if what.op == Operation::Select
+            && operands.len() == 2
+            && results.len() == 1
+            && what.name.as_deref().is_some_and(|name| name.starts_with("fcmov"))
+        {
+            self.handle_cond_mov_fp(step, what, operands[0], operands[1], results[0])?;
         } else if what.op == Operation::Compare && operands.len() == 2 && results.is_empty() {
             self.handle_compare_fp(step, operands[0], operands[1])?;
         } else if what.op == Operation::Compare
@@ -859,6 +865,32 @@ impl Fps<'_> {
             self.duplicate_to_top(source, result)?;
         }
         self.emit(what);
+        Ok(())
+    }
+
+    /// `handleCondMovFP`: `result := cond ? right : left` as `fcmovcc st(0),
+    /// st(i)`, the false value `left` on top and replaced by the result.
+    fn handle_cond_mov_fp(
+        &mut self,
+        step: &Step,
+        what: Semantics,
+        left: u32,
+        right: u32,
+        result: u32,
+    ) -> Result<(), Raised> {
+        self.slot(right)?;
+        let kills_right = step.kills(right);
+        if step.kills(left) {
+            self.move_to_top(left)?;
+            self.values[0] = result;
+        } else {
+            self.duplicate_to_top(left, result)?;
+        }
+        let slot = if right == left { 0 } else { self.slot(right)? };
+        self.emit(Semantics { dests: vec![st(0)], sources: vec![st(0), st(slot)], ..what });
+        if left != right && kills_right {
+            self.free_stack_slot_after(right)?;
+        }
         Ok(())
     }
 
